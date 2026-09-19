@@ -2,7 +2,7 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { createElement } from 'react'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NOVEL_CSS } from '../../src/client/styles.js'
 import { CTRL_Z, ReaderView } from '../../src/client/views/ReaderView.js'
@@ -51,6 +51,11 @@ function ruleBody(selector: string): string {
 function strip(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 }
+
+/** vitest 未开 globals ⇒ RTL 的自动 cleanup 不注册（同目录别的文件都显式挂了这一行）。
+ *  本文件此前漏了，于是上一个用例的 DOM 一直留在 body 里，`screen.*` 能命中别人的元素：
+ *  「命中行是可聚焦按钮」那条实际读到的是**书架卡片**（搜索命中的断言从未成立，假绿）。 */
+afterEach(cleanup)
 
 describe('token 层自足守卫（引用未定义的本层 token 即红）', () => {
   it('NOVEL_CSS 与视图里每个 var(--novel-*) 都在 token 层有定义', () => {
@@ -172,6 +177,18 @@ describe('布局单位与视口约束（阅读器不能被正文高度绑架）'
     expect(ruleBody('.novel-tr.src'), '操作列轨道必须定宽（148px）').toMatch(/148px/)
   })
 
+  it('状态带：容器查询退化在位（窄列掉 .slim 留「共 N · 已启用 M」），但整条带子不许被隐藏', () => {
+    // 状态带是读数的唯一住址（2026-09：待办卡可忽略之后读数不能跟着提示一起消失）——
+    // 窄列只能牺牲 .slim 那几项，把它们全隐了等于把整块台账抹掉。
+    expect(ruleBody('.novel-list-head'), '列表头必须是容器查询锚（量自身宽度，会话列可拖——与 .novel-table 收地址列同一理由）')
+      .toMatch(/container-type:\s*inline-size/)
+    const degrade = strip(NOVEL_CSS).match(/@container[^{]*\{\s*\.novel-src-stats \.slim\s*\{([^}]*)\}/)
+    expect(degrade, '缺窄列退化规则（.novel-src-stats .slim）').not.toBeNull()
+    expect(degrade![1], '退化=隐藏 .slim 那几项').toMatch(/display:\s*none/)
+    expect(ruleBody('.novel-src-stats'), '状态带本体不能被整体隐藏/绝对定位（读数必须常驻列表头）')
+      .not.toMatch(/display:\s*none|position:\s*absolute/)
+  })
+
   it('书源管理：待办箱 = auto-fit 任务卡网格（长条在宽列下是悬浮碎片）；⋯菜单是浮层；导入弹层宽档', () => {
     const grid = ruleBody('.novel-inbox-grid')
     expect(grid, '待办必须是 auto-fit 卡片网格——横跨整列的长条在 1600px 内容列下中间空、动作钮孤悬列尾（用户实机反馈）')
@@ -281,10 +298,19 @@ describe('键盘可达的承载元素（主操作不许只绑鼠标）', () => {
       sourceId: 's1', sourceName: 'S', status: 'verified',
       hits: [{ title: '斗罗', author: null, url: 'https://s.com/b/1', coverUrl: null, intro: null, lastChapterName: null }],
     }
-    const deps = makeCoreDeps({ apiGet: vi.fn(async () => [group]) })
-    routeStore.set({ route: { name: 'search', keyword: '斗罗' } as never })   // 带关键词挂载即自动搜一次
+    let reads = 0
+    const deps = makeCoreDeps({
+      apiGet: vi.fn(async () => ({
+        job: ++reads === 1 ? null : {
+          id: 'j1', keyword: '斗罗', phase: 'done', total: 1, done: 1, added: [group], next: 1, startedAt: 0,
+        },
+      })),
+      apiSend: vi.fn(async () => ({ jobId: 'j1' })),
+    })
+    routeStore.set({ route: { name: 'search', keyword: '斗罗' } as never })   // 带关键词挂载即提交一轮后台任务
     const { container } = render(createElement(SearchView, { deps }))
     await waitFor(() => expect(screen.getByText('斗罗')).toBeTruthy())
+    expect(deps.apiSend).toHaveBeenCalledWith('POST', 'search/job', { keyword: '斗罗' })
     const hit = screen.getByText('斗罗').closest('button')
     expect(hit, '命中行标题该落在真 <button> 里').not.toBeNull()
     expect(hit!.querySelectorAll('button'), '按钮里不套按钮').toHaveLength(0)

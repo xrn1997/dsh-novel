@@ -2,14 +2,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
-import { useJobStatus } from '../../src/client/jobs.js'
+import { refreshJob, resetJobSurface, useJobPolling, useJobSurface } from '../../src/client/jobs.js'
 import type { JobStatusDeps } from '../../src/client/jobs.js'
 import type { JobState } from '../../src/client/views/types.js'
 
 /**
- * 任务轮询 hook 的接线测试：`useJobStatus` 此前直接调模块函数 `fetchJobStatus()`
- * ——SettingsDeps.fetchJobStatus 是个「承诺可换成确定性时钟」却无人消费的假 seam。
- * 现在取数走注入 deps：挂载即拉一次、refresh 触发重拉、卸载后轮询终止，三条时序全部可测。
+ * 任务轮询驱动的接线测试：取数走注入 deps（`SettingsDeps.fetchJobStatus` 不是假 seam），
+ * 挂载即拉一次、`refreshJob()` 触发重拉、卸载后轮询终止，三条时序全部可测。
+ * 2026-09 住址变更：驱动从 `useJobStatus`（hook 局部 state）改为 `useJobPolling` + `jobSurface`
+ * 模块镜像——轮询单实例搬到 shell.overlay 的常驻层，视图环内的消费者只读镜像。
+ * 本文件钉的是**驱动行为**（节拍 / 卸载停 / stale），与住在哪个组件无关，故钉子逐条保留。
  */
 
 const probeJob = (done: number): JobState => ({
@@ -19,22 +21,24 @@ const probeJob = (done: number): JobState => ({
 })
 
 function Harness({ deps }: { deps: JobStatusDeps }): ReactNode {
-  const { job, refresh, stale } = useJobStatus(deps)
+  useJobPolling(deps)
+  const { job, stale } = useJobSurface()
   return (
     <div>
       <span data-testid="state">{job === null ? '无任务' : `${job.done}/${job.total}`}</span>
       <span data-testid="stale">{stale ? '连接异常' : ''}</span>
-      <button onClick={refresh}>刷新</button>
+      <button onClick={refreshJob}>刷新</button>
     </div>
   )
 }
 
 afterEach(() => {
   cleanup()
+  resetJobSurface()
   vi.useRealTimers()
 })
 
-describe('useJobStatus 轮询（deps seam 驱动）', () => {
+describe('任务轮询驱动 useJobPolling（deps seam 驱动，结果进 jobSurface）', () => {
   it('挂载即拉一次：假 fetchJobStatus 的首轮结果进状态', async () => {
     const fetchJobStatus = vi.fn(async () => probeJob(3))
     render(<Harness deps={{ fetchJobStatus }} />)

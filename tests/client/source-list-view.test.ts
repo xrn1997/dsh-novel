@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { deriveSourceListView } from '../../src/client/source-list-view.js'
+import { sourceInbox } from '../../src/client/source-inbox.js'
 import type { SourceListUi } from '../../src/client/source-list.js'
 import type { SourcePublic } from '../../src/client/views/types.js'
 
@@ -9,8 +10,10 @@ import type { SourcePublic } from '../../src/client/views/types.js'
  * 尤其是「分组选项集不随状态过滤缩水」这个语义决策（改了它过滤器就不可组合）。
  *
  * 2026 调度台改版的口径变化（本文件随之更新）：状态 chips 退役 → 状态下拉（不带计数），
- * chipCount 从 view-model 移除（读数职责归待办收件箱与列表头部 meta）；坏源/未验证的
- * id 集合归 source-inbox.ts（待办派生唯一住址），本 view-model 不再重复派生 brokenIds/unverifiedIds。
+ * chipCount 从 view-model 移除；坏源/未验证的 id 集合归 source-inbox.ts（待办派生唯一住址），
+ * 本 view-model 不再重复派生 brokenIds/unverifiedIds。
+ * 2026-09 续：读数落点从「待办箱与列表头部 meta」收敛为**仅列表头部状态带**（stats，本文件
+ * 钉死），因为待办卡改成可忽略——读数不能跟着提示一起消失。
  */
 
 const src = (over: Partial<SourcePublic> & { id: string }): SourcePublic => ({
@@ -113,5 +116,31 @@ describe('deriveSourceListView：登录态计数（删除确认模态的点名�
     expect(vm.authCountOf(['b', 'c', 'd'])).toBe(0)
     expect(vm.authCountOf(['a', 'e'])).toBe(2)
     expect(vm.authCountOf([])).toBe(0)
+  })
+})
+
+/** 列表头**状态带**（2026-09）：读数从待办卡搬来此处唯一住址——卡可被忽略，读数不能跟着消失。
+ *  启用/停用是 enabled 维、未验证/坏源是 status 维，两个正交维并列显示，不做合计约束。 */
+describe('deriveSourceListView：stats（状态带计数）', () => {
+  it('五个读数为真：共 5 · 已启用 3 · 已停用 2 · 未验证 1 · 坏源 2', () => {
+    expect(deriveSourceListView(ALL, ui0, 100).stats).toEqual({ total: 5, enabled: 3, disabled: 2, unverified: 1, broken: 2 })
+  })
+
+  it('算**全库**不算过滤结果：状态/分组/文本过滤都不改状态带（它是资产总读数，「当前过滤」另有其位）', () => {
+    for (const over of [{ statusFilter: 'broken' as const }, { groupFilter: '小说' }, { query: 'a' }]) {
+      expect(deriveSourceListView(ALL, ui(over), 100).stats).toEqual({ total: 5, enabled: 3, disabled: 2, unverified: 1, broken: 2 })
+    }
+  })
+
+  it('停用 ≠ 免验：停用的坏源/未验证照样计入（与待办集合同一口径）', () => {
+    const onlyOff = [src({ id: 'z', status: 'broken', enabled: false }), src({ id: 'w', status: 'unverified', enabled: false })]
+    expect(deriveSourceListView(onlyOff, ui0, 100).stats).toEqual({ total: 2, enabled: 0, disabled: 2, unverified: 1, broken: 1 })
+  })
+
+  it('防漂移钉：stats.broken / stats.unverified 必须等于两张待办卡的成员数（两处各算一份迟早对不上）', () => {
+    const vm = deriveSourceListView(ALL, ui0, 100)
+    const inbox = sourceInbox(ALL)
+    expect(vm.stats.broken).toBe(inbox.broken.length)
+    expect(vm.stats.unverified).toBe(inbox.unverified.length)
   })
 })

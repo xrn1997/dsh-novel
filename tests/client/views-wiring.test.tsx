@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { createElement } from 'react'
+import { createElement, StrictMode } from 'react'
 import { ApiClientError } from '../../src/client/api.js'
 import { ProbePane } from '../../src/client/views/SettingsSection.js'
 import { SettingsSection } from '../../src/client/views/SettingsSection.js'
@@ -9,7 +9,10 @@ import { NovelView } from '../../src/client/views/NovelView.js'
 import { ReaderView } from '../../src/client/views/ReaderView.js'
 import { ShelfView } from '../../src/client/views/ShelfView.js'
 import { SearchView } from '../../src/client/views/SearchView.js'
-import { navigate } from '../../src/client/store.js'
+import { resetSourceInboxUi } from '../../src/client/source-inbox-ui.js'
+import { navigate, routeStore } from '../../src/client/store.js'
+import { ROUTES, queries } from '../../src/shared/wire.js'
+import type { SearchJobSnapshot } from '../../src/shared/wire.js'
 import { makeCoreDeps, makeDeps, makeReaderDeps } from './fake-deps.js'
 import type { CoreDepsOverrides, FakeCoreDeps, FakeReaderDeps, FakeSettingsDeps, ReaderDepsOverrides, SettingsDepsOverrides } from './fake-deps.js'
 import type { JobState, SourcePublic } from '../../src/client/views/types.js'
@@ -102,55 +105,235 @@ describe('ShelfView 接线（deps seam 驱动）', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(deps.apiSend).not.toHaveBeenCalled()
   })
-})
 
-describe('SearchView 接线：陈旧回调防线（历史 bug 形态：一轮迟到批次污染二轮结果）', () => {
-  const group = (title: string) => ({
-    sourceId: 's1', sourceName: 'S', status: 'verified',
-    hits: [{ title, author: null, url: 'https://s.com/book/1', coverUrl: null, intro: null, lastChapterName: null }],
+  /** 本地 TXT 导入：上传是异步的，落地那一刻用户可能已经不在书架（切 tab / 去书源管理）。 */
+  const txtFile = (): File => new File(['第一章\n正文'], '斗罗.txt', { type: 'text/plain' })
+  const imported = { bookKey: 'local:u1', title: '斗罗', sourceId: '__local__' }
+
+  it('本地 TXT 导入：仍在书架时，成功即进阅读器（既有行为回归钉）', async () => {
+    navigate({ name: 'shelf' })
+    const deps = coreDeps({
+      apiGet: vi.fn(async () => []),
+      apiUpload: vi.fn(async () => imported),
+    })
+    render(createElement(ShelfView, { deps }))
+    fireEvent.change(document.querySelector('.novel-file-hidden')!, { target: { files: [txtFile()] } })
+    await waitFor(() => expect(routeStore.get().route.name).toBe('reader'))
+    navigate({ name: 'shelf' })                       // 路由是模块级 store，测后必须复位
   })
 
-  it('第二轮搜索后，第一轮的迟到批次被丢弃（runId 防线经 seam 可测）', async () => {
-    let resolveFirst: (v: unknown) => void = () => {}
-    const firstCall = { pending: true }
+  it('导入落地时用户已切走 → 不许越权把他拽进阅读器，改进 ok 泳道', async () => {
+    navigate({ name: 'shelf' })
+    let settle: (v: unknown) => void = () => {}
+    const pushOk = vi.fn()
     const deps = coreDeps({
-      apiGet: vi.fn((path: string) => {
-        if (path === 'search/plan') return Promise.resolve({ sourceIds: ['s1'] })   // 参与集归服务端
-        if (path.includes(encodeURIComponent('第一'))) {
-          firstCall.pending = false
-          return new Promise((res) => { resolveFirst = res })
-        }
-        if (path.includes(encodeURIComponent('第二'))) return Promise.resolve([group('第二轮书')])
-        return Promise.resolve([])
+      apiGet: vi.fn(async () => []),
+      apiUpload: vi.fn(() => new Promise((res) => { settle = res })),
+      pushOk,
+    })
+    const view = render(createElement(ShelfView, { deps }))
+    fireEvent.change(document.querySelector('.novel-file-hidden')!, { target: { files: [txtFile()] } })
+    view.unmount()
+    navigate({ name: 'sources' })                     // 用户自己去了别处
+    settle(imported)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(routeStore.get().route.name).toBe('sources')          // 不被强行拽进 reader
+    expect(pushOk).toHaveBeenCalledWith(expect.stringContaining('斗罗'))  // 但成功要有交代
+    navigate({ name: 'shelf' })
+  })
+
+  it('导入失败且用户已切走 → 错误进 error 泳道，不落空', async () => {
+    navigate({ name: 'shelf' })
+    let reject: (e: unknown) => void = () => {}
+    const pushError = vi.fn()
+    const deps = coreDeps({
+      apiGet: vi.fn(async () => []),
+      apiUpload: vi.fn(() => new Promise((_res, rej) => { reject = rej })),
+      pushError,
+    })
+    const view = render(createElement(ShelfView, { deps }))
+    fireEvent.change(document.querySelector('.novel-file-hidden')!, { target: { files: [txtFile()] } })
+    view.unmount()
+    reject(new Error('文件读不动'))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(pushError).toHaveBeenCalledWith(expect.stringContaining('文件读不动'))
+    navigate({ name: 'shelf' })
+  })
+})
+
+/** 命中分组桩（`SearchGroup` 的最小可渲染形态） */
+const hitGroup = (title: string) => ({
+  sourceId: 's1', sourceName: 'S', status: 'verified' as const,
+  hits: [{ title, author: null, url: 'https://s.com/book/1', coverUrl: null, intro: null, lastChapterName: null }],
+})
+
+/** 后台搜索任务快照桩：默认「已结束、一家源、零增量」，各用例只覆写自己在意的那几项 */
+const snap = (over: Partial<SearchJobSnapshot> = {}): SearchJobSnapshot => ({
+  id: 'j1', keyword: '斗罗', phase: 'done', cancelled: false, total: 1, done: 1, added: [], next: 0, startedAt: 0, ...over,
+})
+
+describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游标读快照）', () => {
+  it('提交 = POST search/job，此后只读 job-status——浏览器半不再打批请求', async () => {
+    let submitted = false
+    const reads: string[] = []
+    const deps = coreDeps({
+      apiSend: vi.fn(async () => { submitted = true; return { jobId: 'j1' } }),
+      apiGet: vi.fn(async (path: string) => {
+        reads.push(path)
+        return { job: submitted ? snap({ added: [hitGroup('后台命中')], next: 1 }) : null }
       }),
     })
     render(createElement(SearchView, { deps }))
-
-    // 第一轮提交（批次挂起）
-    fireEvent.change(screen.getByPlaceholderText('书名 / 作者'), { target: { value: '第一' } })
+    fireEvent.change(screen.getByPlaceholderText('书名 / 作者'), { target: { value: '斗罗' } })
     fireEvent.submit(screen.getByRole('form'))
-    await waitFor(() => expect(firstCall.pending).toBe(false))    // 第一轮已发出批次请求
+    await waitFor(() => expect(screen.getByText('后台命中')).toBeTruthy())
+    expect(deps.apiSend).toHaveBeenCalledWith('POST', ROUTES.searchJob.path, { keyword: '斗罗' })
+    // 全部读取都是快照：没有任何一次 search?keyword= 的批请求从浏览器半发出
+    expect(reads.every((r) => r.startsWith(`${ROUTES.searchJobStatus.path}?`))).toBe(true)
+  })
 
-    // 第二轮提交（批次立即回来）
-    fireEvent.change(screen.getByPlaceholderText('书名 / 作者'), { target: { value: '第二' } })
+  it('挂载即恢复：服务端持有本轮结果 → 直接渲染且不重新提交', async () => {
+    const deps = coreDeps({
+      apiGet: vi.fn(async () => ({
+        job: snap({ keyword: '上一轮', phase: 'done', added: [hitGroup('上一轮的命中')], next: 1 }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText('上一轮的命中')).toBeTruthy())
+    expect(deps.apiSend).not.toHaveBeenCalled()          // 恢复不是重打：一轮都不必提交
+    expect(screen.getByText(/本轮搜过/)).toBeTruthy()     // 收尾留痕同样从快照复算
+  })
+
+  it('陈旧快照防线：第二轮落地后，第一轮的迟到响应不许污染结果', async () => {
+    let posts = 0
+    let resolveStale: (v: unknown) => void = () => {}
+    const deps = coreDeps({
+      apiSend: vi.fn(async () => { posts++; return { jobId: posts === 1 ? 'A' : 'B' } }),
+      apiGet: vi.fn((path: string) => {
+        if (path !== `${ROUTES.searchJobStatus.path}?since=0`) return Promise.resolve({ job: null })
+        if (posts === 0) return Promise.resolve({ job: null })                  // 挂载读：还没有任务
+        if (posts === 1) return new Promise((res) => { resolveStale = res })     // 第一轮首拍挂起
+        return Promise.resolve({                                               // 第二轮秒回且已终态
+          job: snap({ id: 'B', keyword: '第二', added: [hitGroup('第二轮书')], next: 1 }),
+        })
+      }),
+    })
+    render(createElement(SearchView, { deps }))
+    const input = screen.getByPlaceholderText('书名 / 作者')
+    fireEvent.change(input, { target: { value: '第一轮' } })
+    fireEvent.submit(screen.getByRole('form'))
+    await waitFor(() => expect(deps.apiGet).toHaveBeenCalledTimes(2))            // 挂载读 + 第一轮首拍
+    fireEvent.change(input, { target: { value: '第二轮' } })
     fireEvent.submit(screen.getByRole('form'))
     await waitFor(() => expect(screen.getByText('第二轮书')).toBeTruthy())
 
-    // 第一轮迟到批次此刻才回来——必须被丢弃，不许污染二轮结果
-    resolveFirst([group('第一轮书')])
+    resolveStale({ job: snap({ id: 'A', keyword: '第一轮', added: [hitGroup('第一轮书')], next: 1 }) })
     await new Promise((r) => setTimeout(r, 20))
     expect(screen.queryByText('第一轮书')).toBeNull()
     expect(screen.getByText('第二轮书')).toBeTruthy()
   })
 
-   it('plan 返回 0 源 → 显式空态，不再只剩 0% 进度条', async () => {
+  it('空参与集与「搜了没命中」分得清：total=0 → 引导导入书源；total>0 零分组 → 换关键词', async () => {
+    const view = render(createElement(SearchView, {
+      deps: coreDeps({ apiGet: vi.fn(async () => ({ job: snap({ total: 0, done: 0, next: 0 }) })) }),
+    }))
+    await waitFor(() => expect(screen.getByText(/没有参与搜索的书源/)).toBeTruthy())
+    view.unmount()
+    render(createElement(SearchView, {
+      deps: coreDeps({ apiGet: vi.fn(async () => ({ job: snap({ added: [], next: 0 }) })) }),
+    }))
+    await waitFor(() => expect(screen.getByText('没有结果')).toBeTruthy())
+  })
+
+  it('读面失败：显式「搜索中断」且不再排下一次轮询（历史形态：spinner 到天荒地老）', async () => {
+    let reads = 0
     const deps = coreDeps({
-      apiGet: vi.fn(async (path: string) => (path === 'search/plan' ? { sourceIds: [] } : [])),
+      apiGet: vi.fn(async () => {
+        reads++
+        if (reads === 1) return { job: null }                 // 挂载读：还没有任务
+        throw new Error('连接断了')                            // 提交后的首拍失败
+      }),
+      apiSend: vi.fn(async () => ({ jobId: 'j1' })),
     })
     render(createElement(SearchView, { deps }))
     fireEvent.change(screen.getByPlaceholderText('书名 / 作者'), { target: { value: '斗罗' } })
     fireEvent.submit(screen.getByRole('form'))
-    await waitFor(() => expect(screen.getByText(/没有参与搜索的书源/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByText(/搜索中断：搜索结果读取失败：连接断了/)).toBeTruthy())
+    await new Promise((r) => setTimeout(r, 900))
+    expect(reads).toBe(2)                                     // 读不到就收手：不再刷屏
+  })
+
+  it('提交失败：如实报错，且不清掉已在手上的上一轮结果', async () => {
+    const deps = coreDeps({
+      apiGet: vi.fn(async () => ({ job: snap({ keyword: '上一轮', added: [hitGroup('上一轮命中')], next: 1 }) })),
+      apiSend: vi.fn(async () => { throw new Error('服务未挂载') }),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText('上一轮命中')).toBeTruthy())
+    fireEvent.change(screen.getByPlaceholderText('书名 / 作者'), { target: { value: '斗罗' } })
+    fireEvent.submit(screen.getByRole('form'))
+    await waitFor(() => expect(screen.getByText(/搜索提交失败：服务未挂载/)).toBeTruthy())
+    expect(screen.getByText('上一轮命中')).toBeTruthy()        // 服务端没起新轮 → 旧结果仍是真相
+  })
+
+  it('停止搜索：跑着才有钮、点它只发 job-cancel、已搜出的命中留着且不报红条', async () => {
+    const frames: Array<(data: string) => void> = []
+    const deps = coreDeps({
+      apiSend: vi.fn(async () => ({ jobId: 'j1' })),
+      apiGet: vi.fn(async () => ({ job: null })),
+      apiEventStream: vi.fn(async (_p: string, onFrame: (d: string) => void) => {
+        frames.push(onFrame)
+        return new Promise<void>(() => {})              // 流一直开着：读数只可能来自帧
+      }),
+    })
+    render(createElement(SearchView, { deps }))
+    expect(screen.queryByRole('button', { name: '停止搜索' })).toBeNull()   // 还没这一轮：不给死钮
+    fireEvent.change(screen.getByPlaceholderText('书名 / 作者'), { target: { value: '斗罗' } })
+    fireEvent.submit(screen.getByRole('form'))
+    await waitFor(() => expect(frames.length).toBe(1))
+    // 提交后立刻有钮（不必等第一帧）：用户随时可以说「别再往下搜了」
+    expect(screen.getByRole('button', { name: '停止搜索' })).toBeTruthy()
+    frames[0](JSON.stringify({ job: snap({ phase: 'running', total: 3, done: 1, next: 1, added: [hitGroup('先回来的书')] }) }))
+    await waitFor(() => expect(screen.getByText('先回来的书')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: '停止搜索' }))
+    expect(deps.apiSend).toHaveBeenLastCalledWith('POST', ROUTES.searchJobCancel.path, {})
+    frames[0](JSON.stringify({ job: snap({ phase: 'failed', cancelled: true, error: '任务已取消：用户停止了搜索',
+      total: 3, done: 2, next: 2, added: [hitGroup('停止前又回来一本')] }) }))
+    await waitFor(() => expect(screen.getByText(/已停止 · 本轮搜过/)).toBeTruthy())
+    // 收口数字只算**真搜完的**：计划 3 家、停止前只回来 2 组，就不许报「搜过 3 家」；
+    // 进度条同理，停止的轮次不倒填 100%（真机实测出的谎报：431 家计划 / 29 家实搜）
+    expect(screen.getByText(/本轮搜过/).textContent).toMatch(/本轮搜过 2 家/)
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('67')
+    expect(screen.getByText('先回来的书')).toBeTruthy()               // 停止 ≠ 放弃已经搜出来的
+    expect(screen.getByText('停止前又回来一本')).toBeTruthy()
+    expect(screen.queryByText(/搜索中断/)).toBeNull()                 // 自己按的停止不是错误
+    expect(screen.queryByRole('button', { name: '停止搜索' })).toBeNull()   // 收口行不留死钮
+    expect(screen.getByRole('button', { name: '搜索' })).toBeTruthy()       // 再搜是新一轮
+  })
+
+  it('推送可用时读数从帧里来：本轮零次快照轮询，终态帧自己关流', async () => {
+    let closed = false
+    const frames: Array<(data: string) => void> = []
+    const deps = coreDeps({
+      apiSend: vi.fn(async () => ({ jobId: 'j1' })),
+      apiGet: vi.fn(async () => ({ job: null })),                 // 只有挂载那一次读
+      apiEventStream: vi.fn(async (_path: string, onFrame: (d: string) => void, signal: AbortSignal) => {
+        frames.push(onFrame)
+        await new Promise<void>((r) => signal.addEventListener('abort', () => { closed = true; r() }))
+      }),
+    })
+    render(createElement(SearchView, { deps }))
+    fireEvent.change(screen.getByPlaceholderText('书名 / 作者'), { target: { value: '斗罗' } })
+    fireEvent.submit(screen.getByRole('form'))
+    await waitFor(() => expect(frames.length).toBe(1))
+    frames[0](JSON.stringify({ job: snap({ phase: 'running', total: 2, done: 1, next: 1, added: [hitGroup('推送来的书')] }) }))
+    await waitFor(() => expect(screen.getByText('推送来的书')).toBeTruthy())
+    await new Promise((r) => setTimeout(r, 900))                  // 越过两个 POLL_MS 节拍
+    expect(deps.apiGet).toHaveBeenCalledTimes(1)                  // 一轮都没轮：流在，就不必问
+    frames[0](JSON.stringify({ job: snap({ phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('收尾的书')] }) }))
+    await waitFor(() => expect(screen.getByText(/本轮搜过/)).toBeTruthy())
+    expect(screen.getByText('收尾的书')).toBeTruthy()
+    await waitFor(() => expect(closed).toBe(true))                // 终态帧后自己关流，不留着占连接
   })
 })
 
@@ -171,6 +354,10 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
   const settingsDeps = (over: SettingsDepsOverrides = {}, sources: SourcePublic[] = [unverifiedSrc]): FakeSettingsDeps =>
     makeDeps({ apiGet: vi.fn(async (path: string) => (path === 'sources' ? sources : null)), ...over })
 
+  // 忽略现场是模块级 store（source-inbox-ui.ts）：不复位会让上一个用例的「已忽略」漏进
+  // 下一个用例的「卡该在」（先例 resetSourceListUi / resetTransient）
+  beforeEach(resetSourceInboxUi)
+
   it('源列表经 deps.apiGet 加载（整壳注入后子组件不吃 prodDeps 缺省）', async () => {
     const deps = settingsDeps()
     render(createElement(SettingsSection, { deps }))
@@ -179,16 +366,128 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
     expect(deps.apiGet).toHaveBeenCalledWith('sources')
   })
 
-  it('待办收件箱：坏源/未验证成任务卡（反常置顶）；「一键验证」走注入 deps', async () => {
+  it('批量启停成功后源列表按服务端重取数：行开关即刻翻转（实机 bug：界面停在旧态，须重开视图）', async () => {
+    // 假服务端：启停写口真的改内存里的 enabled，取数口回读——只有客户端重新 GET 过，
+    // 行开关的 aria-label 才会从「停用 X」变成「启用 X」。
+    const server: SourcePublic[] = [{ ...unverifiedSrc }]
+    const deps = makeDeps({
+      apiGet: vi.fn(async (path: string) => (path === 'sources' ? server.map((s) => ({ ...s })) : null)),
+      apiSend: vi.fn(async (_m: 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown) => {
+        if (path === ROUTES.sourcesBatchEnabled.path) {
+          const { ids, enabled } = body as { ids: string[]; enabled: boolean }
+          for (const s of server) if (ids.includes(s.id)) s.enabled = enabled
+        }
+        return {}
+      }),
+    })
+    render(createElement(SettingsSection, { deps }))
+    await screen.findByRole('switch', { name: '停用 未验源' })          // 初始 enabled:true
+    fireEvent.click(screen.getByText('编辑'))
+    fireEvent.click(screen.getByLabelText('选择 未验源'))
+    fireEvent.click(screen.getByText('停用所选'))
+    await waitFor(() => expect(deps.apiSend).toHaveBeenCalledWith(
+      'POST', ROUTES.sourcesBatchEnabled.path, { ids: ['u1'], enabled: false }))
+    await screen.findByRole('switch', { name: '启用 未验源' })           // 服务端已停用 → 界面跟上
+  })
+
+  it('待办收件箱：坏源/未验证成任务卡（反常置顶，卡面不印计数）；「一键验证」走注入 deps', async () => {
     const deps = settingsDeps({}, [unverifiedSrc, brokenSrc])
     render(createElement(SettingsSection, { deps }))
-    expect(await screen.findByText('? 未验证 1')).toBeTruthy()
-    expect(screen.getByText('✗ 坏源 1')).toBeTruthy()
+    expect(await screen.findByText('? 未验证')).toBeTruthy()
+    expect(screen.getByText('✗ 坏源')).toBeTruthy()
+    // 读数只印一遍：卡标题带计数 = 与状态带各说各话（2026-09 读数唯一住址收敛到状态带）
+    expect(screen.queryByText('✗ 坏源 1')).toBeNull()
+    expect(screen.queryByText('? 未验证 1')).toBeNull()
     const brokenCard = document.querySelector('[data-novel-todo="broken"]')
     expect(brokenCard, '坏源任务卡未渲染').not.toBeNull()
     expect(within(brokenCard as HTMLElement).getByText('坏源甲')).toBeTruthy()   // 名单在卡内
     fireEvent.click(screen.getByText('一键验证'))
     await waitFor(() => expect(deps.startBatchProbeJob).toHaveBeenCalledWith(['u1']))
+  })
+
+  it('待办卡可忽略：卡收起而读数留在状态带；「重新显示」把忽略掉的卡全开回来（不留黑洞）', async () => {
+    const deps = settingsDeps({}, [unverifiedSrc, brokenSrc])
+    render(createElement(SettingsSection, { deps }))
+    await screen.findByText('批量重验')
+    fireEvent.click(screen.getByLabelText('忽略 坏源 提示'))
+    expect(document.querySelector('[data-novel-todo="broken"]')).toBeNull()
+    expect(screen.getByText('一键验证')).toBeTruthy()              // 只收起点的那一张
+    expect(screen.getByText('坏源 1')).toBeTruthy()                // 提示能关，读数不能跟着消失
+    expect(screen.getByText(/已忽略 1 张/)).toBeTruthy()           // 忽略态看得见
+    fireEvent.click(screen.getByText('重新显示'))
+    expect(document.querySelector('[data-novel-todo="broken"]')).not.toBeNull()
+  })
+
+  it('列表头状态带：五个读数按全库算，非 0 的 未验证/坏源 带语义色类', async () => {
+    const deps = settingsDeps({}, [unverifiedSrc, brokenSrc, { ...unverifiedSrc, id: 'u2', name: '未验源二', enabled: false }])
+    const { container } = render(createElement(SettingsSection, { deps }))
+    const band = await waitFor(() => {
+      const el = container.querySelector<HTMLElement>('[data-novel-src-stats]')
+      if (el === null) throw new Error('状态带未渲染')     // throw 而非 expect(null)：waitFor 的返回类型才收窄到 HTMLElement
+      return el
+    })
+    expect(band.textContent).toContain('共 3 个源')
+    expect(band.textContent).toContain('已启用 2')
+    expect(band.textContent).toContain('已停用 1')
+    expect(band.textContent).toContain('未验证 2')      // 停用源照旧计入（停用 ≠ 免验）
+    expect(band.textContent).toContain('坏源 1')
+    const brokenStat = [...band.querySelectorAll('span')].find((s) => s.textContent === '坏源 1')
+    expect(brokenStat?.className).toContain('err')      // 非 0 → 吃 err 色
+  })
+
+  it('0 源（删光了）：列表头与「＋ 导入书源」必须在场，且能点开弹层', async () => {
+    // 病史（2026-09 实机）：0 源时组件 early-return 一句「点右上『＋ 导入书源』」，而整个列表头
+    // 连同那颗钮根本没渲染——提示在指一个不存在的控件（与 docs-pinned-copy 守的同一类罪）。
+    // **先等取数落定再查按钮**：sources 还是 null 的首帧照样渲染完整列表头，边等边查会拿到
+    // 一个随后被卸载的节点，点它没反应——那条假绿比这条红更贵。
+    const deps = settingsDeps({}, [])
+    render(createElement(SettingsSection, { deps }))
+    await screen.findByText(/还没有书源/)
+    const btn = screen.getByRole('button', { name: '＋ 导入书源' })
+    fireEvent.click(btn)
+    await waitFor(() => expect(screen.getByText(/选择或拖入 legado 书源文件/)).toBeTruthy())
+  })
+
+  it('取数失败：不把失败伪装成「还没有书源」，且同一句错误只说一遍、导入入口照样可达', async () => {
+    const deps = settingsDeps({ apiGet: vi.fn(async () => { throw new Error('boom') }) })
+    render(createElement(SettingsSection, { deps }))
+    await waitFor(() => expect(screen.getByText(/源列表加载失败：boom/)).toBeTruthy())
+    expect(screen.queryByText(/还没有书源/)).toBeNull()          // 失败不许伪装成空态（宁炸不猜）
+    expect(screen.queryByText(/源列表暂时不可用/)).toBeNull()      // 同一个失败不在两处各抄一句
+    expect(screen.getByRole('button', { name: '＋ 导入书源' })).toBeTruthy()
+  })
+
+  it('加载中（sources 仍为 null）不报读数：状态带不在场，也不许出现「共 0 个源」', async () => {
+    const deps = makeDeps({ apiGet: vi.fn(() => new Promise<never>(() => {})) })
+    const { container } = render(createElement(SettingsSection, { deps }))
+    await new Promise((r) => setTimeout(r, 30))
+    expect(container.querySelector('[data-novel-src-stats]')).toBeNull()
+    expect(container.textContent).not.toContain('共 0 个源')      // 未知不冒充「0 个源」这条结论
+    expect(container.querySelector('[data-novel-source-list]')).not.toBeNull()
+  })
+
+  it('全健康源 → 待办区整块不渲染（零待办不常驻；「查过了且没事」由状态带的 0 来说）', async () => {
+    const healthy: SourcePublic = { ...unverifiedSrc, id: 'h1', name: '健康源', status: 'verified' }
+    const deps = settingsDeps({}, [healthy])
+    const { container } = render(createElement(SettingsSection, { deps }))
+    await waitFor(() => expect(container.querySelector('[data-novel-src-stats]')).not.toBeNull())
+    expect(container.querySelector('[data-novel-inbox]')).toBeNull()
+    expect(screen.getByText('未验证 0')).toBeTruthy()
+    expect(screen.getByText('坏源 0')).toBeTruthy()
+  })
+
+  it('顺序不变量：待办区在源列表表格之前（反常置顶）', async () => {
+    const deps = settingsDeps({}, [unverifiedSrc, brokenSrc])
+    const { container } = render(createElement(SettingsSection, { deps }))
+    await screen.findByText('批量重验')
+    // 顺序断言走 DOM 比较而非 innerHTML.indexOf——innerHTML 里 <style>（NovelStyles）注入的
+    // CSS 文本先出现，字符串匹配会打到规则文本上（`.novel-table` 规则在 `.novel-inbox` 之前=假红）
+    const inbox = container.querySelector('[data-novel-inbox]')
+    const table = container.querySelector('.novel-table')
+    expect(inbox, '待办区未渲染').not.toBeNull()
+    expect(table, '表格未渲染').not.toBeNull()
+    expect((inbox as Element).compareDocumentPosition(table as Element) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBeTruthy()
   })
 
   it('「批量重验」= 坏源集合的处置动作（ids 经 source-inbox 纯派生，点击时快照）', async () => {
@@ -248,21 +547,6 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
     fireEvent.click(await screen.findByText(/去验证 1 个未验证源/))
     await waitFor(() => expect(deps.pushError).toHaveBeenCalledWith(expect.stringContaining('启动验证失败')))
     expect(String(deps.pushError.mock.calls[0][0])).toContain('网络失败')
-  })
-
-  it('全健康源 → 待办箱空态「✓ 全部源状态良好」；顺序不变量：待办箱在表格之前', async () => {
-    const healthy: SourcePublic = { ...unverifiedSrc, id: 'h1', name: '健康源', status: 'verified' }
-    const deps = settingsDeps({}, [healthy])
-    const { container } = render(createElement(SettingsSection, { deps }))
-    await waitFor(() => expect(screen.getByText(/全部源状态良好/)).toBeTruthy())
-    // 顺序断言走 DOM 比较而非 innerHTML.indexOf——innerHTML 里 <style>（NovelStyles）注入的
-    // CSS 文本先出现，字符串匹配会打到规则文本上（`.novel-table` 规则在 `.novel-inbox` 之前=假红）
-    const inbox = container.querySelector('[data-novel-inbox]')
-    const table = container.querySelector('.novel-table')
-    expect(inbox, '待办箱未渲染').not.toBeNull()
-    expect(table, '表格未渲染').not.toBeNull()
-    expect((inbox as Element).compareDocumentPosition(table as Element) & Node.DOCUMENT_POSITION_FOLLOWING)
-      .toBeTruthy()
   })
 
   it('导入弹层焦点不被壳层重渲染劫持（useJobStatus 1s 轮询 tick → 新 onClose 闭包；mount-scoped 口径）', async () => {
@@ -342,3 +626,65 @@ describe('NovelView 顶部 tab 导航（书架|书城|书源管理 并列；sett
     await waitFor(() => expect(screen.getByPlaceholderText(/搜书名/)).toBeTruthy())
   })
 })
+
+/**
+ * 「离开界面即完蛋」的正面解法（旧实测缺陷：卸载时 3 批、卸载后又发 2 批，结果清零、重挂载整轮重打）。
+ * 批循环搬到 Node 半之后，卸载只意味着「没人看了」：轮询停掉，服务端那一轮继续跑完并持有结果。
+ */
+describe('SearchView 离开界面：停看不停工（结果由服务端持有）', () => {
+  it('卸载后不再发任何请求；重挂载从 since=0 重读即恢复，且不再提交一轮', async () => {
+    const reads: string[] = []
+    const deps = coreDeps({
+      apiSend: vi.fn(async () => ({ jobId: 'j1' })),
+      apiGet: vi.fn(async (path: string) => {
+        reads.push(path)
+        return { job: snap({ phase: 'running', done: 0, next: 0 }) }   // 一直「在跑」：轮询不会自己收
+      }),
+    })
+    const view = render(createElement(SearchView, { deps }))
+    fireEvent.change(screen.getByPlaceholderText('书名 / 作者'), { target: { value: '斗罗' } })
+    fireEvent.submit(screen.getByRole('form'))
+    await waitFor(() => expect(reads.length).toBeGreaterThan(0))
+    const atUnmount = reads.length
+    view.unmount()
+    await new Promise((r) => setTimeout(r, 900))               // 越过 POLL_MS 节拍
+    expect(reads).toHaveLength(atUnmount)                      // 卸载即停表：一条都不再发
+
+    reads.length = 0
+    deps.apiGet.mockImplementation(async (path: string) => {
+      reads.push(path)
+      return { job: snap({ phase: 'done', done: 1, next: 1, added: [hitGroup('切走期间搜完的书')] }) }
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText('切走期间搜完的书')).toBeTruthy())
+    expect(reads[0]).toBe(queries.searchJobStatus(0))          // 重挂载 = 从游标零点重读
+    expect(deps.apiSend).toHaveBeenCalledTimes(1)              // 恢复不重打：第二轮都没提交
+  })
+
+  it('StrictMode 双挂载：两次恢复读只许落地一次（分组不重复累加）', async () => {
+    let reads = 0
+    const deps = coreDeps({
+      apiGet: vi.fn(async () => {
+        reads++
+        return { job: snap({ phase: 'done', done: 1, next: 1, added: [hitGroup('只该出现一次的书')] }) }
+      }),
+    })
+    render(createElement(StrictMode, null, createElement(SearchView, { deps })))
+    await waitFor(() => expect(reads).toBeGreaterThanOrEqual(2))   // 同实例二次 effect：确实读了两次
+    expect(screen.getAllByText('只该出现一次的书')).toHaveLength(1)
+  })
+
+  it('服务端宣布任务已不可读（重启 / 过保留期）→ 如实说明，不伪装成「搜了没命中」', async () => {
+    let reads = 0
+    const deps = coreDeps({
+      apiSend: vi.fn(async () => ({ jobId: 'j1' })),
+      apiGet: vi.fn(async () => ({ job: (++reads === 1 ? snap({ phase: 'running', done: 0, next: 0 }) : null) })),
+    })
+    render(createElement(SearchView, { deps }))
+    fireEvent.change(screen.getByPlaceholderText('书名 / 作者'), { target: { value: '斗罗' } })
+    fireEvent.submit(screen.getByRole('form'))
+    await waitFor(() => expect(screen.getByText(/后台搜索任务已不可读/)).toBeTruthy())
+    expect(screen.queryByText('没有结果')).toBeNull()
+  })
+})
+

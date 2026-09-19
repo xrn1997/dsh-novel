@@ -37,6 +37,14 @@ export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): R
   // 本地 TXT 导入：隐藏 file input + 上传后直进阅读器
   const [importError, setImportError] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)   // 导入入口的触发方 = 网格引导卡/空架兜底卡
+  /** 本视图是否仍在场。`navigate` 是模块级 store 的动作、与组件存活无关，所以在卸载后的
+   *  `.then` 里照样会执行——导入落地时用户若已切到别的 tab，就会被强行拽进阅读器（实测缺陷）。
+   *  两个半场都不许静默：在场走场景内提示（可就地重试），切走走瞬态层。 */
+  const aliveRef = useRef(true)
+  useEffect(() => {
+    aliveRef.current = true
+    return () => { aliveRef.current = false }
+  }, [])
   // 删除书籍（卡片 ✕ → 模态确认 → DELETE shelf/:key；本地书服务端连删磁盘文件）
   const [pendingDel, setPendingDel] = useState<ShelfBook | null>(null)
   const [delError, setDelError] = useState<string | null>(null)
@@ -154,8 +162,14 @@ export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): R
               setImportError(null)
               void deps.apiUpload<{ bookKey: string; title: string; sourceId: string }>(
                 queries.localImport({ name: f.name }), f,
-              ).then((book) => navigate({ name: 'reader', sourceId: book.sourceId, bookKey: book.bookKey, title: book.title }),
-                (err) => { setImportError(err instanceof Error ? err.message : String(err)) })
+              ).then((book) => {
+                if (!aliveRef.current) { deps.pushOk(`《${book.title}》已导入，在书架可见`); return }
+                navigate({ name: 'reader', sourceId: book.sourceId, bookKey: book.bookKey, title: book.title })
+              }, (err) => {
+                const text = err instanceof Error ? err.message : String(err)
+                if (aliveRef.current) setImportError(text)
+                else deps.pushError(`本地书籍导入失败：${text}`)
+              })
             }} />
         </header>
         {/* 错误面：导入/加载两处场景内提示；删除错误在确认模态内就地呈现，不散落页面流 */}

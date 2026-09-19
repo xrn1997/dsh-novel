@@ -69,6 +69,10 @@ export function setEditMode(editMode: boolean): void {
   // 退出编辑态顺带清选择——选择集只在编辑态有意义
   sourceListUi.set(editMode ? { editMode } : { editMode, selection: [] })
 }
+/** 只清勾选、不动编辑态：「清空选择」钮 + 删除成功后的收尾（对象没了，勾选留着是幽灵 id）。
+ *  批量启停**不**用它——那批源还在列表里，勾选是它们的现场（2026-09 用户裁定）。
+ *  此原语此前不存在，调用点只能借 `setEditMode(false)` 顺手清，连带把编辑态一起退掉。 */
+export function clearSelection(): void { sourceListUi.set({ selection: [] }) }
 export function toggleSelect(id: string): void {
   const cur = sourceListUi.get().selection
   sourceListUi.set({ selection: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] })

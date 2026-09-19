@@ -6,10 +6,11 @@
 
 | 文件 | 职责 | 关键导出 |
 | --- | --- | --- |
-| `services/reading.ts` | 阅读链路门面：HTTP / 工具 / UI 三面的**唯一**业务入口 | `ReadingService.create/from`、`search/searchPlan`、`getDetail/getToc/getChapter`、`probe`、`shelfAdd/shelfPatch/shelfSaveProgress/removeBook`、`localImport/removeLocalBook`、`startImportJob/startBatchProbeJob/jobStatus`、`*Source*` 写侧动词、`flush`、`tocUrlOf`、`normalizeChapterText` |
+| `services/reading.ts` | 阅读链路门面：HTTP / 工具 / UI 三面的**唯一**业务入口 | `ReadingService.create/from`、`search/searchProgressive/searchPlan`、`startSearchJob/searchJobSnapshot`、`getDetail/getToc/getChapter`、`probe`、`shelfAdd/shelfPatch/shelfSaveProgress/removeBook`、`localImport/removeLocalBook`、`startImportJob/startBatchProbeJob/jobStatus`、`*Source*` 写侧动词、`flush`、`tocUrlOf`、`normalizeChapterText` |
 | `services/sources.ts` | 书源注册表：加载 / 原子变更 / 只读投影 / 合并落盘 | `SourceRegistry.load`、`edit/flush/list/get/toPublic`、`SourceEdit` |
 | `services/intake.ts` | 源入库：normalize → 批内留首条 → 按址去重 → add/replace | `SourceIntake`、`IntakeDecision`、`dedupKey` |
-| `services/import-job.ts` | 后台任务单槽（导入 / 批量验证） | `SourceJobs`、`JobRunningError`、`JobKind`、`ImportFile` |
+| `services/import-job.ts` | 后台写任务单槽（导入 / 批量验证）；生命周期登记给宿主 `ctx.jobs`（`host?: JobHost` 窄面，协作式取消） | `SourceJobs`、`JobRunningError`、`JobKind`、`ImportFile`、`JobHost`、`JobOutcome` |
+| `services/search-job.ts` | 聚合搜索的**读任务**槽：Node 半持有整轮结果 + 游标增量读面，生命周期同样登记给宿主 `ctx.jobs`（kind `novel-search`） | `SearchJobs`、`SearchJobRun` |
 | `services/normalize.ts` | 三方言（legado 平铺 / legado 对象 / Native）→ 规范化规则集 | `normalizeSource`、`NormalizeResult`、`splitGroups`、`stripLeadingIcons`、`isNativeSource`、`SOURCE_KIND_LABEL` |
 | `services/request.ts` | 请求组装：模板 + 变量 + baseUrl → 可执行请求计划 | `assembleRequest`、`fetchInitOf`、`parseUrlOption`、`stripUrlOption`、`splitUrlOption`、`absUrlKeepOption`、`canonUrl`、`buildSearchRequest`、`RequestPlan` |
 | `services/search-face.ts` | 搜索面：JS 模板解析 → 组装 → 抓取解码 → 列表求值 → 条目 | `fetchSearchPage`、`searchErrorCodeOf`、`SearchFaceResult` |
@@ -66,10 +67,19 @@
 
 `list()` 返回**活体数组**（不是快照）：intake 的地址索引与 import-job 的状态判定依赖活引用。快照化读面是另一张卡的事。
 
-### 4. 后台任务是单槽，不是队列（`services/import-job.ts`）
+### 4. 后台任务：写任务单槽、读任务另开一槽（`services/import-job.ts` + `services/search-job.ts`）
 
-`SourceJobs` 只有一个 `current: JobState`。运行中再提交（任意 kind）→ `JobRunningError` → 路由 409 `JobRunning`。任务结束后结果**保留在槽内**直到下一个任务开始——关设置页、刷新浏览器后重挂载查一次 `job-status` 就能恢复展示。
+`SourceJobs` 只有一个 `current: JobState`。运行中再提交（任意 kind）→ `JobRunningError` → 路由 409 `JobRunning`。任务结束后结果**保留在槽内**直到下一个任务开始——关设置页、刷新浏览器后重挂载查一次 `job-status` 就能恢复展示。**这条互斥只管两个写任务**；聚合搜索是读，另开一槽（见下面 `novel-search`）。
 
+**生命周期已登记给宿主 `ctx.jobs`（2026-09），单槽互斥与 counts 仍归本模块**。分工是刻意的两半：宿主注册表管**身份与生命周期**（`<kind>-N`、`running → completed|killed|failed`、owner 栅栏、随服务卸载而 cancel），`SourceJobs` 管**业务计数与明细**（`counts` / `issues` / `fileErrors`——宿主只有 `label` + `detail` 一行，装不下 642 源的失败分桶）。要点：
+- `kind` 用 `novel-import` / `novel-probe` / `novel-search`（宿主对 kind 的唯一判据是「非空字符串」，按不透明命名空间处理，不需要类型包合并）；`label` 写清工作量（`导入书源 N 个文件` / `批量验证书源 N 家` / `聚合搜索「kw」（N 家书源）`）。
+- **类型面是本地窄镜像** `JobHost`（`src/index.ts` 的 `NovelContext` + `*Like` 先例）：npm 上的 `@deepseek-ai/dsh-jobs` 停在 `0.0.1-rc.3` 而宿主跑 `0.1.5-rc.1`，装它等于拿一套不同代的契约。**`host` 缺席即不登记**（单测直构与无 jobs 的组合都走这条路，任务语义不变）。
+- 入口在 `ctx.effect` 里 `attachController('dsh-novel')`：宿主 `start` 的准入闸要求「有已挂载 controller 服务该 owner」，而本机 profile 里第一方的 `tool-jobs` 是 disabled 的（证据见 `docs/reference/dsh-plugin-api.md` 风险第 10 条）。
+- **取消是协作式的**：宿主 `cancel(reason)` 只把旗子立起来，运行器在**取下一条之前**收手——在途的网络探针/入库不打断（打断半路写回的源更脏）。收手时已入库/已验证的结果一律保留 + `flush()` 等齐，`JobState` 落 `phase='failed'` + `error='任务已取消：…'`。**wire 的 `phase` 不加 `killed`**：对 UI 的判据（`phase !== 'running'`）两个终态无区别，加一态要动跨半契约与三处判据，收益为零。宿主侧则如实结算 `status:'killed'`。
+- 收尾三处写口（`completed` / `killed` / `failed`）集中在 `settle()` 一处——漏掉一处就是「小说 UI 显示已结束，宿主注册表里还挂着 running」。终态词汇 `JobOutcome` 也只此一处声明（`search-job.ts` 复用同一别名，不各写一份联合类型）。
+- **`novel-search` 不进写槽**：搜索是**读**，与导入 / 验证挤同一个 `current` 等于「搜一本书能挡住一次导入」——那是惩罚探索动作。所以读任务有自己的持有者 `SearchJobs`（`services/search-job.ts`），与 `SourceJobs` 各持一个槽，两者都把生命周期登记给宿主。代价如实记着：宿主侧可同时存在两条 novel 任务（`maxConcurrentJobsPerOwner` 缺省 10，够用），而浏览器半「任何任务在途即禁用」那条判据只管两个写任务。
+- **`SearchJobs` 比写任务多持有一件事：整轮结果 + 游标**（宿主只有一个 `detail` 字符串，装不下 642 家源的分组命中）。三条上限都是在这里定的，不在浏览器半：**只留最近一轮**（新提交即替换上一轮，上一轮若在跑则协作式收手并结算 `killed`）、每源 hits 截 `SEARCH_HITS_CAP_PER_SOURCE`（50）、结束后 `SEARCH_JOB_RETENTION_MS`（30 分钟）内可读，**过期读作「无任务」而不是空结果**（不把过期伪装成「搜了没命中」）。
+- **SSE 不引入第二套状态**：`SearchJobs.subscribe(listener)` 只发「本轮变了」的信号，**不带数据**——每条连接自己带游标 `snapshot(cursor)` 取增量，所以推送帧与快照查询共用同一份合并代码、同一个 `phase !== running` 判据。任一时刻只有一条通道在推进游标（两条同时在飞会把同一批命中累加两遍），这条约束归客户端（`client/search-job.ts` 的「流在就不问，流断才轮询」）。信号口在 `end()`（终态）也要响一次，否则关不掉流。
 - 任务态**只在内存**：DSH 重启即丢（`status()` 返回 null，UI 回落空闲态）；但源已按批落盘，导入本身幂等可重跑，故不做任务持久化。
 - 导入管线：逐文件 `JSON.parse(stripBom(text))`，坏文件记 `fileErrors` 继续，其余照常；`Array.isArray` 摊平后逐条交 `SourceIntake`。**导入不探针**——新源一律 `unverified`，验证归批量验证任务（并发 5 路，对齐 `searchParallel` 的限流敬畏）。
 - `issues` 截断 200 条（内存不膨胀），**计数字段不受截断影响**。
@@ -108,6 +118,8 @@
 `fetchSearchPage(source, keyword, fetcher, timeoutMs)` 是「发一次书源搜索请求并取回条目」的唯一实现，page 固定 1（搜索面无翻页）：规则缺失判定 → `resolveSearchTemplate`（`@js:`/`<js>` 沙箱求值 + `{{…}}` 按 JS 预求值，纯变量占位原样留给 `interpolateUrl`）→ `assembleRequest`（Native 时 `trimFirstPage`）→ `fetchTextPage` → 列表规则求值 → `extractItems`。返回 `landedUrl`（跟随重定向后的 finalUrl）——**规则求值与相对链接一律以落地地址为基准**，与目录 / 正文面同口径（重定向站点不再错位）。
 
 错误策略：抓取 / 解码 / 沙箱错误**上抛**（调用方各自 catch，用 `searchErrorCodeOf` 归类）；**规则缺失是结果**（`{ok:false, code:'RuleMissing'}`），因为两个 adapter 都把它当正常分支而非异常。
+
+**聚合编排也只有一份（`services/reading.ts`）**：`searchProgressive(keyword, {sourceIds, onGroup, shouldStop})` 是批循环的唯一主人——`onGroup` 按**完成序**逐源交付（谁先求值完谁先出），返回值仍按**参搜源序**排列。`search()` 是它的薄壳（收齐全部命中），HTTP 面与 `novel_search_books` 工具都走这一份；`startSearchJob()` 是第三个消费方（同一个循环，换 `onGroup` 交给 `SearchJobs.emit`、`shouldStop` 交给它的协作式取消）。**这一侧不许出现第二个批循环**——浏览器半那套分批只为拿增量与进度条而存在，2026-09 后台化落地时已随之下线（口径见 `docs/design/client.md` 的「搜索」节）。
 
 ### 8. 探针（`services/probe.ts`）
 
@@ -158,9 +170,11 @@
 
 ### 14. wire 契约（`shared/wire.ts`）
 
-**21 条路由**（16 条静态 `ROUTES` + 5 条参数 `paramRoutes`），**计数由 `tests/shared/wire-builders.test.ts` 钉死**——此前的「17 条路由」注释既腐烂又无测试。`route(...segs)` 同时给出 `path`（客户端 fetch 用）与 `segs`（服务端段匹配与一致性测试用），同一构造保证一致。`SEG` 是路由段的唯一字面量来源，`PARAMS` 是 query 参数名的唯一字面量来源（此前参数名散在 dispatch 与四个 client 文件里各写一份，改名无处编译报错；`SearchView` 曾手拼 `shelf/${...}` 绕过 `paramRoutes`——活漂移）。
+**25 条路由**（20 条静态 `ROUTES` + 5 条参数 `paramRoutes`），**计数由 `tests/shared/wire-builders.test.ts` 钉死**——此前的「17 条路由」注释既腐烂又无测试。`route(...segs)` 同时给出 `path`（客户端 fetch 用）与 `segs`（服务端段匹配与一致性测试用），同一构造保证一致。`SEG` 是路由段的唯一字面量来源，`PARAMS` 是 query 参数名的唯一字面量来源（此前参数名散在 dispatch 与四个 client 文件里各写一份，改名无处编译报错；`SearchView` 曾手拼 `shelf/${...}` 绕过 `paramRoutes`——活漂移）。
 
 **统一信封**：成功 `{ ok: true, value }`，失败 `{ ok: false, error: { code, message, segment? } }`。`segment = { facet, segmentIndex, segmentRaw }` 是**段级定位**——错误定位到出错的规则段，而不是产出错误的结果。
+
+**后台搜索任务的读面形状**：`SearchJobSnapshot`（`id / keyword / phase / total / done / added / next / startedAt / finishedAt? / error?`）+ 两个上限常量 `SEARCH_HITS_CAP_PER_SOURCE`（每源 50 条）、`SEARCH_JOB_RETENTION_MS`（结果保留 30 分钟）。`cancelled: boolean` 是**给用户按「停止」准备的**：本轮立即 `phase=failed` + `error=任务已取消…`，但 UI 判「这是用户停的不是搜挂了」只认这个字段，不去比那句中文（刷新后重读同一轮也要能分清）。`phase` 与写任务的 `JobState.phase` 同一套词汇，所以 UI 的「还在跑吗」判据（`!== 'running'`）只有一种写法；`added`/`next` 是官方要求的可恢复游标（baseline / cursor / 显式 query 里的 cursor）。整轮结果本身**不上 wire**——那是服务层持有物。
 
 **错误→HTTP 两分法**（不是「状态映射只许一处」）：
 
@@ -196,7 +210,7 @@ services/reading.ts（ReadingService）── 唯一业务入口，部件装配�
         └─ engineContextOf / makeSubEval ── engine evaluate（段级错误追踪、@js 沙箱）
 ```
 
-- **搜索**：`search(keyword, {sourceIds})` 过滤 `enabled` 源（`[]` = 未限定 = 搜全部启用源）→ 按 `searchParallel` 分批 `Promise.all` → 每源独立 `searchOne`（catch 后只写该组 `error`，单源失败不拖垮整批）。`searchPlan()` 是同一参与集判定的唯一主人——客户端分批与进度条按它走，不再自行重推导启停 invariant。
+- **搜索**：`searchProgressive(keyword, {sourceIds, onGroup, shouldStop})` 过滤 `enabled` 源（`[]` = 未限定 = 搜全部启用源）→ 按 `searchParallel` 分批 `Promise.all` → 每源独立 `searchOne`（catch 后只写该组 `error`，单源失败不拖垮整批）；`search()` 是收齐全部的薄壳。`searchPlan()` 是参与集判定的唯一主人（`startSearchJob` 也经它算 `total`，别处不再抄一份启停谓词）。后台任务面另有两个动词：`startSearchJob(keyword, {sourceIds})` 提交一轮（交 `SearchJobs` 持有整轮结果）、`searchJobSnapshot(since)` 按游标读增量。
 - **阅读**：`getToc` 缓存优先（`refresh` 跳过）+ **in-flight 去重**（同书并发只拉一次，`tocInflight`）；`getChapter` 缓存优先 + 目录越界守卫（双边：负数与超长都拦，HTTP 面有 `^\d+$`、工具面无下限，守门必须盖住两面入口）+ 多页串接 + Miss 抛 `RuleEvalError` 不吞。
 - **目录 / 正文的翻页**：`followOrSingle` 在 next 规则为 `null` 时短路单页（无翻页发现能力），否则走 `followPages`（CONTEXT.md「判到底」）。next 规则按**列表语义**求值（legado getStringList(isUrl=true)）：单候选链式跟进、多候选全部抓取不递归；停止判据 = URL 防环 → 零新增（本页 0 条）→ 回环（本页有条目但 0 新增；**部分重复不停**——此前「出现重复即停」把站点页间重叠的真实页截断）→ 上限（`tocMaxPages` 200 / `contentMaxPages` 50）。正文面串章闸：**目录知识优先**（候选「下一页」canon 后 == 目录里其他章节 URL → `chapter-boundary`；legado「下一页 == 下一章 URL 即 break」正判据）——路径启发式 `isSameChapterPage` 只在无目录知识时兜底，因为 `?id=..&cid=..&page=2` 这类非页码键分页会被启发式误拦（「一章只解析出一页」的根因之一）。
 - **章节 URL 保留 `,{option}` 后缀**（legado BookChapter.getAbsoluteURL 口径）：目录落库不再 strip 选项（`absUrlKeepOption`：URL 部分绝对化、选项原文接回）；抓取时 `reading.fetchPage` 经 `assembleRequest` 单点解释选项（POST method/body、charset 进解码链、headers 合并）——API 型章节端点（POST body 模板）不再退化成裸 GET。`canonUrl` 是串章闸/防环的比对口径（剥选项 + URL 归一化）。
@@ -245,17 +259,18 @@ services/reading.ts（ReadingService）── 唯一业务入口，部件装配�
 
 | 测试文件 | 钉死什么 |
 | --- | --- |
-| `tests/shared/wire-builders.test.ts` | 路由计数 16 + 5、`LOCAL_SOURCE_ID` 持久化值与跨半同源、`encodeQuery` / `queries` / `shelfBody` 的参数名与字段取舍、`SHELF_META` 键集、`pickShelfMeta` 判别与归一化、shelf 路径必须走 `paramRoutes.shelfKey` |
+| `tests/shared/wire-builders.test.ts` | 路由计数 20 + 5、`LOCAL_SOURCE_ID` 持久化值与跨半同源、`encodeQuery` / `queries`（含 `searchJobStatus(since)` / `searchJobStream(since)` 同一条游标）、`searchJobCancel` 的 path/segs/ `shelfBody` 的参数名与字段取舍、`SHELF_META` 键集、`pickShelfMeta` 判别与归一化、shelf 路径必须走 `paramRoutes.shelfKey` |
 | `tests/api/routes.test.ts` | `ROUTES` → 真实 dispatch 落点逐条；405 / 404 / 400 三态；local part 缺席 → 503；`SEG` 无孤儿段 |
 | `tests/api/wire.test.ts` | 同源 fence 四态；`readJsonBody` 的 400 / 413；`errorStatusOf` 全类目映射与 segment |
 | `tests/api/dispatch-sources.test.ts` | 导入任务 → jobId → job-status → done；结果保留；409 JobRunning；旧同步路由 405；body 校验；大包不 413 |
-| `tests/api/dispatch-reading.test.ts` | search / book / toc / chapter 落点与 400；shelf 三形态 PUT 与 `patch` 单字段回写；`sourceId` 必填；progress 值域 |
+| `tests/api/dispatch-reading.test.ts` | search / book / toc / chapter 落点与 400；**search/job 面：提交/快照/SSE/取消四条路由的方法守卫、keyword 与 sourceIds 校验、终态快照形状、`since` 游标语义（超前夹到末尾、非法当作 0）、只留最近一轮；SSE 帧体=同一份快照、只含本轮、终帧后服务端关流；`POST search/job-cancel` → `{cancelled}`，取消后本轮分组仍整轮可读、二次点击是空操作**；shelf 三形态 PUT 与 `patch` 单字段回写；`sourceId` 必填；progress 值域 |
 | `tests/api/dispatch-local.test.ts` | 本地导入自动加书架（`sourceId=__local__`）、GBK 回显、400 / 413、删书连带删文件 |
 | `tests/api/dispatch-export.test.ts` | 流式头（BOM / Content-Disposition / X-Novel-Total-Chapters）与两章正文；toc 失败走错误信封（非流） |
 | `tests/services/intake.test.ts` | 入库四裁决（added / replaced / skipped×2）与替换复用 id、清同键残留、`dedupKey` 口径 |
 | `tests/services/sources.test.ts` | `edit` 原子性与合并落盘（不 flush 磁盘未写、20 次阈值强制落盘、并发 edit 不交错、recipe 抛错仍标脏）；`toPublic` 凭据红线；load 四条存量归一 |
-| `tests/services/import-job.test.ts` | 单槽互斥与结果保留、issues 截断 200、坏文件不拖垮、导入不探针、批量验证并发 ≤5 与运行中删源 |
-| `tests/services/reading.test.ts` | 搜索分组与空数组语义、重定向按落地地址、目录两页翻页闸与缓存、正文规约与零命中报错不写缓存、**目录 URL：逐章回退保留但整本全回退 → `RuleEvalError` 点名 ruleChapterUrl**、ruleDetail* 回退、`__local__` 分流、防孤儿删书、探针同耐心 |
+| `tests/services/import-job.test.ts` | 单槽互斥与结果保留、issues 截断 200、坏文件不拖垮、导入不探针、批量验证并发 ≤5 与运行中删源；**宿主登记三钉**（kind/label、取消 → 宿主结算 `killed`、自然收尾 → `completed`） |
+| `tests/services/search-job.test.ts` | 游标增量读面（`added`/`next` 跟着走、超前只给空增量不报错）、**subscribe 事件口（新一轮 / 每次 emit / 终态各响一次、退订后不再打扰）**、每源命中截断而 `done` 计数不受截断影响、只留最近一轮（新提交替换旧的、旧的读不出来）、结束过保留期读作「无任务」不伪装成零命中、`cancel` 立协作式旗并落 failed 带原因、宿主登记 kind `novel-search` 与 `completed`/`killed` 两种结算；**停止的另一半**：`cancel()` 置 `cancelled` 后已 emit 的分组照旧整轮可读、再点为 `false` 空操作 |
+| `tests/services/reading.test.ts` | 搜索分组与空数组语义、重定向按落地地址、目录两页翻页闸与缓存、正文规约与零命中报错不写缓存、**目录 URL：逐章回退保留但整本全回退 → `RuleEvalError` 点名 ruleChapterUrl**、ruleDetail* 回退、`__local__` 分流、防孤儿删书、探针同耐心；**`searchProgressive` 的增量出口与 `shouldStop`（批头收手 / 条目头跳过该源）** |
 | `tests/services/probe.test.ts` | 逐词重试与 broken 口径、规则缺失是结果、charset 解不出 `DecodeError`、超时覆盖、**书名 usage 与搜索面一致**（`ruleBookName` 以属性终端收尾时不误判 `broken: 首条书名为空`） |
 | `tests/services/search-face.test.ts` | 条目提取 + landedUrl、规则缺失结果形态、按次超时、POST 选项透传、错误码投影 |
 | `tests/services/request.test.ts` | 选项切分（含逗号空格、单引号 JSON、双重编码 headers）、POST 表单默认头、charset 透传、相对 URL 绝对化、`trimFirstPage`、`stripUrlOption`、`@js` 模板三形态 |
@@ -273,7 +288,7 @@ services/reading.ts（ReadingService）── 唯一业务入口，部件装配�
 | `tests/services/normalize.test.ts` | 三方言映射、必填校验、warning 口径、`bookSourceType` 拒绝非文本、分组拆分与图标剥离 |
 | `tests/tools/schema-contract.test.ts` | execute 输出过 harness 同款校验；schema 在 harness 强制子集内；wire 绑定只对 shelf 成立（表派生），其余四份是手抄快照 |
 | `tests/tools/tools.test.ts` / `project.test.ts` | 五工具名与输出形状、注册与 disposer、投影的整键省略与不可变性 |
-| `tests/index.test.ts` | 插件身份与 Config schema、值域校验加载期失败、ready 后注册与 disposer 摘净、双重启用防御 |
+| `tests/index.test.ts` | 插件身份与 Config schema、值域校验加载期失败、ready 后注册与 disposer 摘净、双重启用防御；**三类任务真抵达宿主**（假 `ctx.jobs` + 真 http 口跑 `sources/import`、`sources/batch-probe`、`search/job` → 记到 `job-start` 的 kind 恰是 `novel-import`/`novel-probe`/`novel-search`）——`create → from → SourceJobs/SearchJobs` 这条 host 传递链上任一跳丢参数，其余 1042 条仍然绿（各单测直构持有者、门面测试不传 host），只有这条红 |
 
 ## 已知开口
 
@@ -291,4 +306,7 @@ services/reading.ts（ReadingService）── 唯一业务入口，部件装配�
 10. **`tests/api/routes.test.ts` 以中文文案前缀「未知路由」为判据**（钉措辞而非结构码）：文案一改即整套误红。暂无可替代的机器可读判据——「未知路由 404」与「域 404」的错误码都是 `NotFound`。
 11. **任务态不持久化**：DSH 重启后 `job-status` 返回 null，正在跑的导入进度不可恢复（已落盘的源不丢，导入幂等可重跑）。这是 YAGNI 决策，不是缺口；但「重启后 UI 显示空闲而用户以为任务还在跑」的可能性留给下一个人判断。
 12. **探针 verified 只证明搜索面**：正文链路（目录/正文规则、翻页、js 沙箱语义）的可用性由 `DSH_CONTENT_AUDIT=1` 全链路审计实测（读报告分桶，非通过率门；数据点：2026-09 实测：228 源全 verified，正文全链路修复前仅 25 源全通；三轮 legado 语义补齐后见门控报告——js 段 scriptForm / 沙箱 sloppy 作用域与变量绑定 / 元素包装对象 / **java.ajax 同步语义（worker+SAB RPC 桥）** / AES 解密桥 / cache 垫片 / 取值用途与属性终端 / 模板字面段 / `text.<串>` 选择 / `@put` 裸值键访问 / AllInOne 行内标志 / 方括号索引 / `##` 尾插值 / 中链 jsonpath / 翻页闸（列表 next + 目录知识串章闸）/ 章节 URL 选项保留 / 目录 URL 缺失逐章回退（**整本全回退即如实抛错**）/ 正文 img 保留与实体解码，全部落地，语义与理由见 `docs/design/engine.md`「legado 正文链路语义补齐」）。残余失败的已知边界：`@webjs:`/`sourceRegex`/`webView:true`（WebView 面——legado 本身也只在章节 URL 带 `webView:true` 时走 WebView，属「需要登录/JS 渲染」类，与用户口径一致不计入规则引擎欠账）、`<p1,p2>` URL 页码、`contentRule.subContent`/`title`、方括号索引多条目、jsLib 用 `eval` 的源（Code generation disallowed——安全边界不降级）。网络层失败（FetchError/EmptyToc）需逐源人工甄别死站/反爬/代理，非引擎问题。
+    **第二个数据点（2026-09-19 本机全量重探，`DSH_REPROBE=1`，79s 跑完）**：库已长到 **431 源**，verified **161（37.4%）**；失败分布 `FetchError 121` / `RuleEvalError 96` / `JsSandboxError 50` / `UnsupportedRuleError 3`。与上面那条「228 源全 verified」不是同一批源，也不能读成引擎退化——但 **146 个规则/沙箱类失败值得单独甄别**（同一次跑里出现多条「URL 选项不是合法 JSON，整串按纯 URL 处理」的 warn，形态是 `'单引号键` 与「JSON 后再跟 `@js:`」两类；选项失效会直接改变 method/body/charset，因而完全可能是 RuleEvalError 的上游而非站点问题）。这条不在本轮范围内改，另卡一次甄别。
 13. **正文串章只有一道闸**：`pagination.ts` 的串章判定是 `stopUrls`（目录知识）**取代**路径启发式，不是叠加（`else if` 形态，接口注释与 `chapter-page.ts` 头注都写明了理由：启发式判不准时宁漏页不串章，而它误拦的 `?id=..&cid=..&page=2` 实测就是一批源「一章只解析出一页」的根因）。残余缺口如实记着：`canonUrl` 会剥 `,{option}` 后缀并按 WHATWG 归一相对地址，但**不归一尾斜杠与 query 参数顺序**——站点「下一页」若与目录条目差在这两处，`stopSet` 漏判且没有第二道闸，下一章正文会被接在本章后面。2026-09 审查复议提议「stopSet 未命中时再走收窄到路径变化的启发式」，**已否决**：收窄后仍会误拦 `/book/1/1.html → /book/1/2.html` 这类路径式同章分页（比现行更糟）。钉子钉住优先级本身（`tests/services/pagination.test.ts` 的 `it('两闸同供时目录知识优先…')`），改双闸必须先过这条钉；漏判的实际发生率只有 `DSH_CONTENT_AUDIT=1` 能出数（本轮未跑）。
+
+14. **聚合搜索后台化已落地（2026-09）**：读 / 写分槽（§4）、结果只留最近一轮 + 每源 50 条 + 收尾 30 分钟（§4）、投递走「带游标的显式快照查询 + 同一份快照的 SSE 推送」（§4 末与 §14）。通道选自有 SSE 的理由与 `EventSource` 被否的理由都写在 `docs/design/client.md` 的「搜索」节。仍开着的只剩一件：UI 该不该给「取消搜索」钮（`SearchJobs.cancel()` 与宿主 kill 都已在位）。

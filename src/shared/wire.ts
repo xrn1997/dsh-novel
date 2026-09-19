@@ -106,6 +106,38 @@ export interface SearchGroup {
   error?: { code: string; message: string }
 }
 
+/** 聚合搜索后台任务的**读面快照**（跨半契约形状；服务端如何持有整轮结果属服务层，不上 wire）。
+ *  为什么是「服务端持有 + 显式快照查询」：`conversation.view` 是「一次只渲染一个」的座位，
+ *  浏览器半自持在途循环 ⇒ 切界面即丢结果（实测：卸载后剩余批次还发完、重挂载整轮重打）。
+ *  官方另要求「需要可靠恢复的 stateful domain 必须提供 baseline、cursor 或显式 query」
+ *  （`docs/reference/dsh-plugin-api.md` §9）——`added`/`next` 就是那个 cursor。
+ *  `phase` 与 `JobState` 同一套词汇：UI 的「还在跑吗」判据（`phase !== 'running'`）只此一种。 */
+export interface SearchJobSnapshot {
+  id: string
+  keyword: string
+  phase: 'running' | 'done' | 'failed'
+  /** 用户主动「停止」（`phase='failed'` 而**不是失败**）：UI 据此不报红条、文案说「已停止」，
+   *  已搜出的命中一律保留。为什么不靠 `error` 文案判：那是把 UI 语义寄在一条中文串上，
+   *  且刷新后重读同一轮还得再猜一次——判据要上契约。 */
+  cancelled: boolean
+  /** 本轮真实参搜源数（searchPlan 说了算，与「批数」无关） */
+  total: number
+  /** 已完成的源数（= 服务端已累积的组数，完成序） */
+  done: number
+  /** `since` 之后的增量分组（谁先搜完谁先可见）；客户端把 `next` 当作下次的 `since` */
+  added: SearchGroup[]
+  next: number
+  startedAt: number
+  finishedAt?: number
+  error?: string
+}
+
+/** 每源命中上限（后台搜索任务的持有截断；站点侧搜索面本就只取首页） */
+export const SEARCH_HITS_CAP_PER_SOURCE = 50
+
+/** 一轮搜索结果的保留期（结束后过此时点读作「无任务」，不伪装成「搜了没命中」） */
+export const SEARCH_JOB_RETENTION_MS = 30 * 60 * 1000
+
 export interface ChapterEntry { name: string; url: string }
 
 /** 搜索参与计划：本次聚合搜索的真实参与者——参与集唯一主人在服务端，
@@ -211,6 +243,9 @@ export const SEG = {
   enabled: 'enabled',
   search: 'search',
   plan: 'plan',
+  job: 'job',
+  jobCancel: 'job-cancel',
+  jobStream: 'job-stream',
   book: 'book',
   toc: 'toc',
   chapter: 'chapter',
@@ -223,7 +258,7 @@ export const SEG = {
 export interface Route { path: string; segs: string[] }
 export function route(...segs: string[]): Route { return { path: segs.join('/'), segs } }
 
-/** 静态路由表（无参数的部分，共 16 条；另有 5 条参数路由见 paramRoutes）——
+/** 静态路由表（无参数的部分，共 20 条；另有 5 条参数路由见 paramRoutes）——
  *  路由总数由 tests/shared/wire-builders.test.ts 钉死（此前的「17 条路由」注释既烂又无测试）。 */
 export const ROUTES = {
   health: route(),
@@ -237,6 +272,13 @@ export const ROUTES = {
   /** 搜索参与计划：本次聚合搜索的真实参与者 ids——参与集的唯一主人在服务端，
    *  客户端不再为进度条自行重推导「哪些源参搜」（启停 invariant 单一定义） */
   searchPlan: route(SEG.search, SEG.plan),
+  /** 聚合搜索后台任务：提交即由 Node 半跑完并持有结果（离开界面不影响它），读用 searchJobStatus，
+   *  要「不等下一拍就看到」就用 searchJobStream（同一份快照的 SSE 推送，首帧是 baseline） */
+  searchJob: route(SEG.search, SEG.job),
+  searchJobStatus: route(SEG.search, SEG.jobStatus),
+  searchJobStream: route(SEG.search, SEG.jobStream),
+  /** 停止本轮聚合搜索：只停「还要去搜的源」，已搜出的命中一律保留（读面照旧可读） */
+  searchJobCancel: route(SEG.search, SEG.jobCancel),
   book: route(SEG.book),
   toc: route(SEG.toc),
   chapter: route(SEG.chapter),
@@ -272,6 +314,8 @@ export const PARAMS = {
   id: 'id',
   title: 'title',
   refresh: 'refresh',
+  /** 搜索任务快照的增量游标：只回 `groups[since..]`（完成序累积，见 SearchJobState） */
+  since: 'since',
 } as const
 
 /** query 序列化：编码 + 去 undefined/null（null = 键缺席，与 wire 可空口径一致） */
@@ -287,10 +331,21 @@ export function encodeQuery(params: Record<string, string | number | boolean | n
 /** book/toc/chapter/export 的共用入参（bookKey 在 wire 上叫 url——历史口径，别改名） */
 export interface SourceUrlParams { sourceId: string; url: string }
 
+/** `?since=` 的拼接单点（快照查询与 SSE 流共用同一游标口径） */
+function withSince(path: string, since?: number): string {
+  return `${path}${since === undefined ? '' : `?${encodeQuery({ [PARAMS.since]: since })}`}`
+}
+
 /** 带 query 的路径构造器（`path?query`，不含 /novel-api 前缀——前缀归 api.ts 单点） */
 export const queries = {
   search: (p: { keyword: string; sourceIds?: string[] }): string =>
     `${ROUTES.search.path}?${encodeQuery({ [PARAMS.keyword]: p.keyword, [PARAMS.sourceIds]: p.sourceIds?.join(',') })}`,
+  /** 搜索任务快照：`since` = 客户端已收到的组数（完成序累积），服务端只回 `groups[since..]`；
+   *  缺省 = 全量（首帧/重连用，官方口径要求 stateful domain 必须有显式 query 兜底）。 */
+  searchJobStatus: (since?: number): string => withSince(ROUTES.searchJobStatus.path, since),
+  /** 搜索任务的 SSE 流（同一份快照的推送版）：`since` 是首帧的游标——首帧就是 baseline，
+   *  断线重连后重新带上它即可补回错过的增量（官方明写 notification 不 replay）。 */
+  searchJobStream: (since?: number): string => withSince(ROUTES.searchJobStream.path, since),
   book: (p: SourceUrlParams): string =>
     `${ROUTES.book.path}?${encodeQuery({ [PARAMS.sourceId]: p.sourceId, [PARAMS.url]: p.url })}`,
   toc: (p: SourceUrlParams & { refresh?: boolean }): string =>

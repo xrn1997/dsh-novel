@@ -3,22 +3,35 @@ import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import { createApiHandler } from './api/dispatch.js'
 import { ensureUnhandledGuard } from './engine/js-sandbox.js'
+import type { JobHost } from './services/import-job.js'
 import { readSystemProxy, resolveProxyUrl } from './services/proxy.js'
 import { ReadingService } from './services/reading.js'
 import { novelDir } from './services/storage.js'
 import { NOVEL_API_PREFIX } from './shared/wire.js'
 import { registerTools } from './tools/tools.js'
 
-/** 结构镜像（docs/reference/dsh-plugin-api.md 策略）：webServer/tools 的 declare module 增强来自未安装的宿主包——
+/** 结构镜像（docs/reference/dsh-plugin-api.md 策略）：webServer/tools/jobs 的 declare module 增强来自未安装的宿主包——
  * 本仓库不装 dsh-host-webserver（peer，运行时由宿主提供），类型面按 d.ts 证据镜像最小形状。
- * 注意不能 extends Context（dsh-tools 已对 tools 做了更宽的增强，交叉会冲突）——独立形状 + 强转。 */
+ * 注意不能 extends Context（dsh-tools 已对 tools 做了更宽的增强，交叉会冲突）——独立形状 + 强转。
+ * `jobs` = 宿主后台任务注册表（ctx.jobs）：只镜像我们用到的两成员，且 `start` 的形状与
+ * services/import-job.ts 的 JobHost 对齐（kind 是自由字符串——注册表按不透明命名空间处理，
+ * 唯一判据非空，见 `dsh-jobs-local` 的 `invalid job kind: expected a non-empty string`）。 */
 interface WebServerLike { register(route: { kind: 'prefix'; path: string; handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void> }): () => void }
 interface ToolsRuntimeLike { register(tool: unknown): () => void }
-interface NovelContext { webServer: WebServerLike; tools: ToolsRuntimeLike }
+interface JobsRuntimeLike extends JobHost {
+  /** 准入闸：`start` 拒绝「没有已挂载 controller 服务该 owner」的工作。
+   *  从本插件（非 scoped 上下文）挂的 controller 进 global layer，对所有 owner 有效
+   *  （`dsh-jobs-local` 的 `servesOwner` 首行即查 global layer）。宿主自带的 `tool-jobs`
+   *  在本机 web profile 里是 `disabled: true`，所以这一句必须由我们自己来。 */
+  attachController(name: string): () => void
+}
+interface NovelContext { webServer: WebServerLike; tools: ToolsRuntimeLike; jobs: JobsRuntimeLike }
 
 export const name = '@xrn1997/dsh-novel'
-/** 挂载前必须就绪的服务：webserver 路由与工具注册表（docs/reference/dsh-plugin-api.md 证据 2b 同构） */
-export const inject = ['webServer', 'tools']
+/** 挂载前必须就绪的服务：webserver 路由、工具注册表、宿主任务注册表
+ *  （docs/reference/dsh-plugin-api.md 证据 2b 同构；`jobs` 由 `dsh-base/cordis.patch.yml`
+ *  的 `id: jobs → @deepseek-ai/dsh-jobs-local` 常带，与 webServer 同一档硬依赖，缺了就该响亮失败） */
+export const inject = ['webServer', 'tools', 'jobs']
 
 /** 插件配置（官方 config 页规范形态：schemastery Standard Schema）。
  * .default({}) 防御：cordis 的 resolveConfig 在 patch 行没写 config: 时传的是 undefined，
@@ -98,6 +111,12 @@ export function apply(ctx: Context, config?: NovelConfig): void {
     return () => { detach() }
   }, 'dsh-novel: unhandledRejection guard')
 
+  // 宿主任务注册表的 controller：`start` 的准入闸要求「有已挂载 controller 服务该 owner」。
+  // 本机 web profile 里宿主自带的 `tool-jobs` 是 `disabled: true`（宿主注释：注册表留在 host plane，
+  // 搬走的只是模型侧控件），不挂这一句我们的 start 会被拒（报 "background jobs unavailable…"）。
+  // 从本插件这种非 scoped 上下文挂载 → 进 global layer → 对所有 owner 有效（disposer 随 fiber 走）。
+  ctx.effect(() => c.jobs.attachController('dsh-novel'), 'dsh-novel: job controller')
+
   // ready 失败吞掉不炸整树（源数据损坏不值得整个 profile 起不来）——收敛为 null，日志留痕一次；
   // 派生 then 链若不带 catch 会产生 unhandled rejection（实测钉死）。
   // LocalBooks 初始化失败同样不炸树——与 ReadingService 同口径 catch 语义，合并进同一 catch。
@@ -118,6 +137,9 @@ export function apply(ctx: Context, config?: NovelConfig): void {
       cacheMaxBytes: config?.cacheMaxBytes ?? DEFAULTS.cacheMaxBytes,
       localImportMaxBytes: config?.localImportMaxBytes ?? DEFAULTS.localImportMaxBytes,
       proxyUrl,
+      // 任务生命周期交宿主注册表（身份 `<kind>-N` / running→终态 / 取消入口）；
+      // 本插件的 JobState 仍是计数与明细的唯一载体，单任务槽互斥也不变。
+      jobHost: c.jobs,
     })
     return { service }
   })().catch((e: unknown) => {

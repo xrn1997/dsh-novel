@@ -80,13 +80,14 @@ describe('路由契约：ROUTES → 真实 dispatch 落点', () => {
   })
 
   it('已知 POST-only 子路由用错方法 → 405（此前 404-未知路由）', async () => {
-    for (const r of [ROUTES.sourcesImport, ROUTES.sourcesBatchProbe, ROUTES.sourcesBatchEnabled, ROUTES.sourcesBatchDelete, ROUTES.localImport]) {
+    for (const r of [ROUTES.sourcesImport, ROUTES.sourcesBatchProbe, ROUTES.sourcesBatchEnabled, ROUTES.sourcesBatchDelete, ROUTES.localImport, ROUTES.searchJob, ROUTES.searchJobCancel]) {
       const res = await call(r.path, 'GET')
       expect(res.status, r.path).toBe(405)
       expect(res.json.error.code, r.path).toBe('MethodNotAllowed')
     }
-    const job = await call(ROUTES.sourcesJobStatus.path, 'POST')
-    expect(job.status).toBe(405)
+    for (const r of [ROUTES.sourcesJobStatus, ROUTES.searchJobStatus]) {
+      expect((await call(r.path, 'POST')).status, r.path).toBe(405)
+    }
   })
 
   it('shelf key 非法百分号编码 → 400（此前 URIError 归 other → 500）', async () => {
@@ -104,6 +105,13 @@ describe('路由契约：ROUTES → 真实 dispatch 落点', () => {
     const plan = await call(ROUTES.searchPlan.path, 'GET')
     expect(plan.status).toBe(200)
     expect(plan.json.value).toEqual({ sourceIds: [] })
+
+    // 后台搜索任务：空库提交 → total 0，读面即刻终态（提交/读取都零源可用）
+    const sj = await call(ROUTES.searchJob.path, 'POST', { keyword: 'k' })
+    expect(sj.status).toBe(200)
+    const snap = await call(ROUTES.searchJobStatus.path, 'GET')
+    expect(snap.status).toBe(200)
+    expect(snap.json.value.job).toMatchObject({ keyword: 'k', total: 0, next: 0 })
 
     for (const r of [ROUTES.book, ROUTES.toc, ROUTES.chapter]) {
       const q = `sourceId=x&url=${encodeURIComponent('https://x/b')}${r === ROUTES.chapter ? '&index=0' : ''}`

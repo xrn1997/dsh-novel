@@ -12,9 +12,15 @@ describe('LOCAL_SOURCE_ID（跨半契约常量的唯一主人）', () => {
 })
 
 describe('路由表计数钉死（「17 条路由」注释曾腐烂且无测试）', () => {
-  it('静态路由 16 条、参数路由 5 条', () => {
-    expect(Object.keys(ROUTES)).toHaveLength(16)
+  it('静态路由 20 条、参数路由 5 条', () => {
+    expect(Object.keys(ROUTES)).toHaveLength(20)
     expect(Object.keys(paramRoutes)).toHaveLength(5)
+  })
+  it('搜索任务两面：path 与 segs 同源（服务端段匹配读 segs）', () => {
+    expect(ROUTES.searchJob).toEqual({ path: 'search/job', segs: ['search', 'job'] })
+    expect(ROUTES.searchJobStatus).toEqual({ path: 'search/job-status', segs: ['search', 'job-status'] })
+    expect(ROUTES.searchJobStream).toEqual({ path: 'search/job-stream', segs: ['search', 'job-stream'] })
+    expect(ROUTES.searchJobCancel).toEqual({ path: 'search/job-cancel', segs: ['search', 'job-cancel'] })
   })
 })
 
@@ -31,6 +37,16 @@ describe('encodeQuery', () => {
 describe('queries（路径 + query 构造）', () => {
   it('search：sourceIds 逗号拼接', () => {
     expect(queries.search({ keyword: '斗罗', sourceIds: ['a', 'b'] })).toBe('search?keyword=%E6%96%97%E7%BD%97&sourceIds=a%2Cb')
+  })
+  it('searchJobStatus：缺省 = 全量快照（无 query），带 since = 增量游标', () => {
+    expect(queries.searchJobStatus()).toBe('search/job-status')
+    expect(queries.searchJobStatus(0)).toBe('search/job-status?since=0')
+    expect(queries.searchJobStatus(37)).toBe('search/job-status?since=37')
+  })
+  it('searchJobStream：与快照查询同一游标口径（推送与查询共用一条游标，读数才不会分叉）', () => {
+    expect(queries.searchJobStream()).toBe('search/job-stream')
+    expect(queries.searchJobStream(0)).toBe('search/job-stream?since=0')
+    expect(queries.searchJobStream(37)).toBe('search/job-stream?since=37')
   })
   it('search：不限源时 sourceIds 缺席', () => {
     expect(queries.search({ keyword: 'x' })).toBe('search?keyword=x')

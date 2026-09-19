@@ -11,6 +11,8 @@
     - https://raw.githubusercontent.com/omdsh-dev/DSH-better-sidebar/main/tsdown.config.ts
     - https://raw.githubusercontent.com/omdsh-dev/DSH-better-sidebar/main/tsconfig.json
 - 本机版本快照：host checkout `@deepseek-ai/dsh` 0.1.5-rc.1；profile 里官方包 devDependency 多为 0.1.5-rc.2（样例插件编译期）。API 以 0.1.5-rc 系为准。
+- **官方文档站（2026-09 复核补充，本节 §9/§10 的主要来源）**：`https://deepseek-harness.github.io/deepseek-harness/`，逐页读的是 `reference/subsystems/{jobs,slots,conversation,web-client,session-projection,schedule}`、`reference/api-gateway`、`reference/capability-seams`。静态 HTML，可 curl 后本地读全文。
+- **本机 host checkout 路径与上文 57224 那台机器不同**：本机是 `C:\software\nodejs\node_modules\@deepseek-ai\dsh\`，官方运行时包在其 `node_modules\@deepseek-ai\` 下（`dsh-jobs`、`dsh-jobs-local`、`dsh-client-ui-jobs`、`dsh-client-ui-layout`、`dsh-cordis-client-runner` 等）。§9/§10 的证据一律给「文档站原文 + 本机包内可 grep 的符号」。
 
 ---
 
@@ -536,14 +538,107 @@ Node 半头注释（`…\dsh-better-archive\lib\index.js:30-32`）：「The brow
 
 ---
 
+## 9. 后台任务与进度投递（ctx.jobs 与三条通道）
+
+### 结论
+
+宿主有**一等公民的后台任务运行时**：`ctx.jobs`（Service Definition 在 `@deepseek-ai/dsh-jobs`，进程内实现是 `@deepseek-ai/dsh-jobs-local` 的 `LocalJobRegistry`）。它管身份、访问权与生命周期，生产方保留执行资源——正是本插件 `services/import-job.ts` 里 `SourceJobs` 自造的那一套的官方版。
+
+但它**没有连续进度通道**。官方 `reference/subsystems/jobs` 页与本仓实测一致：`JobSnapshot.detail` 注释「usually terminal」，`onJobsChanged` 只在「注册 / stopping 转换 / 结算 / owner-disposal 移除 / 服务卸载清空」时触发。面向模型的消费方是 `dsh-tool-jobs`（list / read / kill）。
+
+进度要进浏览器，规范给了三条通道，**它们不是一条路的不同写法，是三种不同归属语义**（对照见证据 9c）。
+
+### 证据 9a：`ctx.jobs` 的公开面与准入
+
+抽象 `JobRegistry`：`start(spec): JobId`、`list(caller?)`、`get(id, caller?)`、`read(id, caller?)`、`kill(id, caller?, reason?)`、`wait(id, timeoutMs, caller?, signal?)`、`onJobDone(listener)`、`onJobsChanged(listener)`、`attachController(name)`。
+
+- `JobStart = { kind, label, outputLimitBytes?, owner?: Agent, run(): JobHooks }`；`JobHooks = { cancel(reason?), done: Promise<JobOutcome>, readOutput?() }`。`done` 的口径是「在生产方**释放资源**后 resolve，而不是仅在工作完成时」。
+- `JobKindMap` 原文：「Plugins extend this map by **declaration merging**; the registry treats every value as an opaque id namespace」——插件加 kind 是设计内动作，id 形如 `<kind>-N`。
+- `owner` 省略 = 无主任务，「open to any caller until service disposal」；有 owner 则访问按会话 id 栅栏（`dsh-jobs-local` 的 `assertAccess`：「an unowned job is open, and a no-agent caller can never match an owned one」）。
+- **准入闸**：`start refuses work while no attached job controller serves the spec's owner`。出路写在同页：从**非 scoped 上下文**注册的 controller 进 global layer，服务所有 owner（`dsh-jobs-local` 的 `servesOwner` 首行 `if (!this.layers.global.controllers.isEmpty()) return true`）。拒绝时报错原文「background jobs unavailable: no job controller serves this agent (load @deepseek-ai/dsh-tool-jobs in its composition)」。
+- **并发配额**：`LocalJobRegistry` 的 `maxConcurrentJobsPerOwner` 缺省 **10**，按确切 owner 统计 `running`+`stopping`，「所有无 owner 任务共享一个服务级桶」。**这与本插件的「单任务槽」不是同一语义**——用 `ctx.jobs` 不等于拿到互斥，自有单槽策略仍要自己持有。
+- 存活口径：「Registrations outlive producer and controller fibers」，但 owner 或服务 dispose 会 cancel 并等待合规生产方；任务态不跨 DSH 重启（本插件既有 YAGNI 决策同向）。
+
+### 证据 9b：浏览器怎么知道 job 在跑（第一方实现）
+
+`dsh-client-ui-jobs` 的浏览器半只做一件事：`ctx.slots.inject("conversation.session.header.actions", …)` 注册一个会话头部动作，组件 `JobListAction({ sessionId, useSessions, t })` 里 `useSessions((state) => state.jobsBySession[sessionId])`。其包注释原文：「The data arrives entirely through the `jobsBySession` list mirror, so the plugin issues no RPC and holds no state of its own beyond popover visibility」，且「renders nothing at all until the session has at least one job」。
+
+镜像的来源是 Session control 流：`SessionControlFrame` 的 `{ type: 'jobs', sessionId, jobs: SessionJob[] }` 帧 + 每代一次 baseline（`reference/subsystems/session` 口径：「瞬态 control stream 每代以完整 baseline 开始，随后应用 queue、job 与 projection update」）。`SessionJob = { id, kind, label, status, detail?, startedAt, finishedAt? }`——**再次确认没有百分比字段**。
+
+### 证据 9c：三条进度投递通道对照
+
+| 通道 | 官方依据 | 语义与代价 |
+|---|---|---|
+| **自有精确路由（SSE / 轮询）** | §3 的 `webServer` handler「Owns the full response lifecycle (may hold the response open, e.g. SSE)」；`reference/api-gateway` 边界节「需要流式或浏览器原生响应的功能注册精确的 Connection Fetch 路由，而不定义 Remote 方法」 | 任务与应用同生命周期、与会话无关。**代价是重连语义自己兜**：`reference/subsystems/web-client` 写死「普通 forwarded notification 不会 replay。需要可靠恢复的 stateful domain 必须提供 baseline、cursor 或显式 query」→ 推送只能当加速器，必须另有一条显式快照查询口 |
+| **Session 事件 + Session projection** | `reference/subsystems/session-projection`：「领域 host 插件经由它向客户端载体供给按会话的**日志派生状态的当前全量值**」；`ctx.sessionProjections.register({ key, stateSchema, init(header, inheritedEventCount), apply(state, event), wire?: { viewSchema, view(state) }, stateVersion })`；客户端在 `session` 作用域的 slot 里收 `useProjection` 标准 prop | 白拿：按会话水位、重连 baseline、历史可回放、last-wins 全量值。硬约束：折叠函数**必须同步**（「an async unit would tear the carriers' consistency cut」）、`state` 必须是纯 JSON、**携带状态的日志事件必须携带变更后的完整状态而非裸增量**。归属约束：事件要 `Session.append()`（`ctx.sessions`「拥有仅追加的 Session 实例，并发出持久的会话事件流」），冷会话不投递是宿主既定口径（`reference/subsystems/schedule`：「cold Session 不执行任何工作」） |
+| **只挂 `ctx.jobs`** | 证据 9b 的第一方 UI | 最省事、与模型侧天然一致；但只有存在性与终态，**无百分比**（面板实测：一行 `kind` + `label` + 终态 `detail` + 相对时间，条目**不可点**）。原推断「无主任务没有会话可挂 ⇒ 任何会话里都不出现」**已被真机推翻**（2026-09-19）：我们的 `novel-search` 与四条 `novel-probe` 都出现在会话头部的任务面板里（头部计数一路涨到「8 个后台任务」）。`jobsBySession` 的按会话键控约束的是**授权与归属**（`list(caller)` 原文「List caller-owned and unowned jobs」），不是可见性——无主任务对每个会话都呈现 |
+
+`reference/subsystems/conversation` 整页范例就是一个「带 progress 的后台 job」怎么写：`review/start | review/progress | review/end` 三条持久事件 + `ConversationNodeDefinition` 折叠成 Chat 节点，`publication` 对高频 delta 用 `'animation-frame'`。那是**时间线呈现**这条路（进度出现在对话流里，不在我们的视图内）。
+
+### 证据 9d：out-of-tree 插件用不上 Typert Remote（推断，标注为推断）
+
+`reference/api-gateway`：Remote 方法由宿主根构建的 `@deepseek-ai/dsh-typert-generator` 从宿主 `ts.Program` 严格分析生成（产物写进业务包自己的 `lib/typert.*`），Client 侧由 `@deepseek-ai/dsh-api-remotes` 「以运行时值导入被选业务包的 /remote 子路径」挂载，且「增加一个 Host Remote 包是 **Client 组合所有者**的显式选择」。三处都锚在宿主仓库的构建与装配上，未见外部 npm 插件的贡献路径 → 本插件的合规传输面就是 §3 的 `ctx.webServer` 自有前缀路由。**这是推论不是官方禁令**，若将来出现外部贡献 Remote 的先例，本节要改。
+
+### 对 dsh-novel 的直接含义
+
+- `SourceJobs` 的正解是**变成 `ctx.jobs` 的生产方**（kind 走 declaration merging，`run()` 返回 `{cancel, done}`，`readOutput` 可选），生命周期/取消/隔离白拿；**单槽互斥与 counts/issues 仍是本插件的私有口径**，不因接入宿主而消失。
+- Node 半要 `attachController`（自己的非 scoped 上下文），否则 `start` 直接拒。第一方唯一的 `attachController` 调用点在 `dsh-tool-jobs`（agent 组合侧，`attachController("tool-jobs")`），不替我们挂——而本机 profile 把 `tool-jobs` 关着（见「风险与不确定项」第 10 条），这一句更必须由生产方自己来。
+- **kind 是自由字符串**：`dsh-jobs-local` 对 spec.kind 的唯一校验是「非空字符串」（`invalid job kind: expected a non-empty string`），随后直接拼 `<kind>-N` 当 id。所以自定义 kind 不需要宿主的 `JobKindMap` 合并，也就不需要装类型包。
+- **本仓已落地（2026-09）**：`services/import-job.ts` 的 `SourceJobs` 接 `host?: JobHost`（本地窄面），`src/index.ts` 里 `attachController('dsh-novel')` 挂在 effect 上、`inject` 加 `jobs`；`kind` 用 `novel-import` / `novel-probe`，`label` 写清工作量（`导入书源 N 个文件` / `批量验证书源 N 家`）。取消是**协作式**（宿主 cancel 只拦「取下一条」，在途探针/入库不打断），终态映射 `completed|killed|failed → done|failed|failed`，wire 的 `phase` 不加 `killed`（对 UI 判据 `phase !== running` 无区别，加一态要动契约与三处判据）。
+- **聚合搜索这一路同样已落地（2026-09 同轮）**：kind `novel-search` 走**独立的读槽**（`services/search-job.ts`，与两个写任务分开——读不该挡住写）。进度投递**两条都用**：地基是显式快照查询（`GET /novel-api/search/job-status?since=N` → `{added, next}`），加速器是本表的第 1 行——自有 SSE 路由（`GET /novel-api/search/job-stream`，帧体就是同一份 `{ job }` 快照）。客户端规则是「流在就不问、流断或无流才回落到 600ms 轮询」，任一时刻只有一条通道推进游标。用户的「停止」走 `POST /novel-api/search/job-cancel` → 同一个 `SearchJobs.cancel()`（宿主 kill 亦通向它）：本轮立即终态、已搜出的结果全留，读面另出 `cancelled: boolean` 让 UI 分清「用户停的」与「搜挂了」——判据在契约上，不寄在错误文案里。**通道选自有 SSE 而不选 Session 事件 + projection**，理由是被 ② 逼出来的：常驻呈现位在 `shell.overlay`（root 作用域、会话无关），projection 的读面按会话作用域走，挂上去正好与「在任何界面都说得出口」冲突；且 projection 那条路仍需一条同样的显式快照查询兜底（通知不 replay），等于两条都要写。**也刻意不用 `EventSource`**：它自带重连与 `Last-Event-ID`，把游标交给浏览器，与本仓「游标握在客户端、两条通道同源」的口径相反——故走 `fetch` + 流读取。
+- **任务刻意注册成「无 owner」**（2026-09 决策，三类 kind 同一口径）：`JobStart.owner` 的官方语义是「拥有者是活 agent，其析构会 cancel 并等待该任务」，Service Definition 同向（「Owner and service disposal cancel live work」）。本插件的任务由**浏览器的 HTTP 请求**触发，手里没有 live agent 实例；硬凑一个 agent 当 owner，等于把「切走界面就完蛋」换个形式请回来——切会话 / 关窗口 → agent 析构 → 任务被杀。代价是宿主面向模型的那块 UI 不显示我们（`dsh-tool-jobs` 在本机 profile 里 `disabled: true`）；会话头部那块**实测是显示的**（见 9c 第 3 行被推翻的那条推断）。所以常驻层的独有价值不是「让任务被看见」——存在性与终态宿主白送——而是**数字进度与一键跳回现场**，这两样宿主面板都没有。所以**可见性与取消由本插件自己提供**（`shell.overlay` 常驻状态层 + `POST /novel-api/search/job-cancel`），`ctx.jobs` 在这里拿的是身份、生命周期与「随服务卸载而终止」，不是呈现。`attachController('dsh-novel')` 从我们自己的非 scoped 上下文挂 = 证据 9a 准入闸那条官方出路（global layer 服务所有 owner），不是绕路。
+- **类型不可从 npm 拿**（2026-09 实测）：`npm view @deepseek-ai/dsh-jobs version` → `0.0.1-rc.3`，而本机宿主带的是 `dsh-jobs / dsh-jobs-local / dsh-tool-jobs / dsh-client-ui-jobs` 全部 `0.1.5-rc.1`，且该包在本仓 `require.resolve` 失败（`MODULE_NOT_FOUND`，只存在于宿主的嵌套 `node_modules`）。引 npm 版本 = 拿一套与运行中宿主不同代的契约。正解沿用本仓既有先例：`src/index.ts` 的 `interface NovelContext { webServer: WebServerLike; tools: ToolsRuntimeLike }` + `ctx as unknown as NovelContext`——**再加一个本地窄面镜像**（`JobsRuntimeLike`：只声明我们用到的 `start / list / kill / attachController` 子集），版本差异在运行时暴露而不是类型层假装对齐。
+- 连续进度只能走三条通道之一。**通道选择的真正上游问题是「任务归属谁」**：应用级（→ 自有路由 + 常驻呈现位）还是会话级（→ projection + 会话头部）。选错的一侧要改回来代价是整条投递链。
+- 常驻呈现位的核实结论见 §10（`shell.overlay` 是 `list` + `root` 作用域，会话无关，成立）。
+
+---
+
+## 10. Slot 层级与常驻呈现位（为什么视图环里的东西活不过切 tab）
+
+### 结论
+
+`slots` 是类型化的 React 组合系统，每个座位有 `kind`（cardinality）与 `scope` 两个维度。本插件「离开界面就看不见任务进度」的根因是纯粹结构性的：**我们的状态条住在 `conversation.view` 里，而该座位官方语义是「一次只渲染一个」**。视图环之外的常驻位另有其人。
+
+### 证据 10a：三个座位的确切声明（本机生成的 Client inspect catalog）
+
+`dsh-cordis-client-runner/lib/client.js` 内嵌着由 `SlotMap` 声明生成的 catalog（`reference/subsystems/slots` 称之为「每个 key 的完整参考，包含 cardinality、scope、owner props、标准 props、当前 occupant、声明 owner 与替换风险」；运行时可用 `cordis_inspect what:"client"` 查同一棵树）：
+
+- `conversation.view`：`kind: "list"`, `scope: "session"`，summary 原文「Registered Conversation target Views, **rendered one at a time**」。壳层侧对应 `renderSlot("conversation.view", …, { only: active.id })`（§5 证据 5c）→ 切 tab / 切会话即卸载我们整棵 `NovelView`。
+- `shell.overlay`：`kind: 'list'`, `scope: 'root'`。声明处 JSDoc 原文（`dsh-client-ui-layout` 的 `AppFrame` 声明的四个 root 子级之一，与 `sidebar` / `main` / `rightbar` 并列）：「Frame-wide floating layer, **above every column and outside their scroll containers**. Deliberately generic and unowned by any feature: a badge, a toast stack or a status pill all belong here… The layer itself is **click-through** — entries opt back into pointer events… This is **the additive seat for a frame-wide surface of your own**: a fresh `id` is added beside the shipped entries instead of replacing them.」注册范例（catalog 内原文）：`ctx.slots.register({ name: 'shell.overlay', id: 'my-entry', order: 100, label: 'My entry' }, Comp)`。
+- `conversation.session.header.actions`：`kind: "list"`, `scope: "session"`，「Title-adjacent Session actions in ascending order」→ 拿得到 `sessionId` / `useSession` / `useProjection` 标准 prop，但**要求可解析的 Session**（`session` scope 定义）。第一方 jobs UI 就住这里。
+- 反例存档：`root` 是 `single`——catalog 明写「DO NOT register here… a second entry does not sit beside the frame — it shadows it」。
+
+### 证据 10b：状态该住哪（官方扩展规则原文）
+
+`reference/subsystems/slots` 扩展规则四条与本插件直接相关的：
+
+1. 「另一个功能包只能通过 `import type` 引入声明；绝不导入或转发它的运行时值」——= 本仓构建期纯度门，同一条红线。
+2. 「**业务与传输状态留在所属 Cordis service 或 Client model 中。Slot store 只承载共享的视图与交互状态**」。
+3. 「需要跨 entry 共享或**跨重新挂载保留**的可变视图状态走**声明的 store**」（注册项 `store` 选项 → 组件收 `PropsStore<H>`）——这是"切走再回来现场还在"的正规机制。
+4. 「组件绝不会收到 `ctx`」；父组件已知的值走 owner props，单 entry 的 callback 与私有 observable 走注册项 `inject`，`inject` 返回值里的 `hooks` 对象由 renderer 绑成 `useXxx(selector)`。
+
+`reference/subsystems/web-client` 分层表配套：Host 应用「拥有权威状态、持久化、mutation 顺序、访问策略与 stream 生产」；Client model「维护不依赖 React 的 Host 状态镜像……保持 object identity」；「UI 包消费这些 Client service，**不在 component store 中复制 transport state**」。
+
+### 对 dsh-novel 的直接含义
+
+- 全局常驻的呈现位是 `shell.overlay`（root scope，无会话也渲染；list 基数 → 不遮蔽任何第一方 entry）。两个必须付的代价：层级在**所有列之上**，且**默认 click-through**——我们的状态条要自己声明 `pointer-events`，`z` 序也要重新判一次（现 `--novel-z-status` 是在小说视图内部的相对层级，overlay 里等于换了坐标系）。
+- 会话头部 `conversation.session.header.actions` 是次选：与第一方 jobs UI 同位、天然带 `sessionId`，代价是 `session` scope——无会话时那个座位整体不存在。
+- 视图环内的 `useState` 只准留渲染期派生；跨卸载要活的**业务**状态归 Host service（真相）+ 一份 Client model 镜像，跨卸载要活的**交互**状态归注册项声明的 `store`。本仓 `client.md`「业务数据不进 store / 组件内 useState 持有」那条口径与此冲突，需要重新定性（动机不变：不留第二真相；手段要换：一份镜像 ≠ 每组件一份且卸载即清零）。
+
+
+
+---
+
 ## 风险与不确定项
 
-1. **版本漂移**：host checkout 是 0.1.5-rc.1，样例插件编译于 0.1.5-rc.2；`ui-slots`/`slots` 服务的包体未在本机两个 node_modules 中找到独立目录（`@deepseek-ai/dsh-client-ui-slots` 在 host `@deepseek-ai\` 清单中缺席，推断已被并入 web shell 平台基线、只以模块表种子存在——dsh-context tsdown.config 注释「Since dsh 0.1.2 the preloaded-client-externals channel is gone … dsh-client-store joined the platform baseline」支持该推断）。若 dsh-novel 的 client 要 `import { … } from '@deepseek-ai/dsh-client-ui-slots'` 的类型，需从 devDependency 装同版本包拿 d.ts。
-2. **`conversation.view` slot 的确切 props 运行时形状**只从 d.ts（`PropsRuntime<'conversation.view'>`）与编译产物反推；`ConvViewProps` 的完整展开（hooks 注入面）没逐字段展开。实施时先写最小组件（忽略 props）验证 tab 出现，再按需取 `viewRequest`/`openView`。
+1. **版本漂移**：host checkout 是 0.1.5-rc.1，样例插件编译于 0.1.5-rc.2；`ui-slots`/`slots` 服务的包体未在本机两个 node_modules 中找到独立目录（`@deepseek-ai/dsh-client-ui-slots` 在 host `@deepseek-ai\` 清单中缺席，推断已被并入 web shell 平台基线、只以模块表种子存在——dsh-context tsdown.config 注释「Since dsh 0.1.2 the preloaded-client-externals channel is gone … dsh-client-store joined the platform baseline」支持该推断）。若 dsh-novel 的 client 要 `import { … } from '@deepseek-ai/dsh-client-ui-slots'` 的类型，需从 devDependency 装同版本包拿 d.ts。**2026-09 本机复核**：`dsh-client-ui-slots` / `dsh-client-store` / `dsh-client-ui-primitives` 三个目录在本机 host 下同样缺席（推断成立）；但 `SlotMap` 的**声明**散在功能包里，经 declaration merging 写入——例如 `shell.overlay` 与 `rightbar` 的 `kind`/`scope` 就住在 `dsh-client-ui-layout/lib/types/client/index.d.ts`。所以核查某个座位的基数与作用域，正确动作是在 host 各包里 grep 座位名的**引号字面量**（`'shell.overlay'`），而不是找 slots 包。
+2. **`conversation.view` slot 的确切 props 运行时形状**只从 d.ts（`PropsRuntime<'conversation.view'>`）与编译产物反推；`ConvViewProps` 的完整展开（hooks 注入面）没逐字段展开。实施时先写最小组件（忽略 props）验证 tab 出现，再按需取 `viewRequest`/`openView`。**2026-09 收敛一半**：该座位的 `kind: "list"` / `scope: "session"` / 「rendered one at a time」已从本机生成的 Client inspect catalog 直接读到（见 §10 证据 10a），"切 tab 是否卸载"这一问不再是悬念；剩余悬念只有 owner props 的逐字段形状。
 3. **order 语义**：chat=0、trajectory=10，order 小者在前（推断）；novel 用 20 排最后。未在源码中找到 order 相同值时的次序保证。
 4. **信任 fence**：样例插件全部自带同源/trustedHosts 检查，但没有官方统一 helper 包；dsh-novel 需自写（better-archive 的 referer/host 判定 6 行足够起步）。若 API 只服务自己的 client 半，这是必须项而非可选项。
 5. **`dsh.bundle.patch` 与手工 cordis.patch.yml 双挂载**：better-sidebar 的 `disabled: !!js` 守卫表明「同一包被 aggregate bundle 与自身 bundle 双挂载 = 整树 boot 失败（duplicate prefix route）」。dsh-novel 单包单挂载无此风险，但如果将来进 aggregate 需加同款守卫。
 6. **`webRuntime` 服务**（trustedHosts 提供者）类型面只从 better-sidebar 的结构镜像看到（`src\context-types.ts:100+`），未读其实现包；dsh-novel 若不用它的 fence 可不 inject 该服务。
 7. **apply 的 config 校验**：loader 拿插件 `export Config` 校验 patch 行 `config:`；dsh-novel 用 zod（dsh-context 式）或 schemastery（better-sidebar 式）皆可，但必须真的导出——否则 loader 无 schema 可校（推断：未找到「无 Config 导出时行为」的直接证据，样例两族都导出了）。
-8. **Windows 本地路径安装**：`dsh plugin add` 的 anchorPathSpec 处理了相对路径；本机尚未实测 `dsh plugin --profile web add C:\develop\GitHub\dsh-novel`（DoD 第一条），实施阶段首要验证。
+8. **Windows 本地路径安装**：`dsh plugin add` 的 anchorPathSpec 处理了相对路径；**已实测**（2026-09-16 起本机 web profile 的 `node_modules/@xrn1997/dsh-novel` 就是指向仓库目录的 link，`dsh profile.bundles` 含本插件）——link 语义意味着 `lib/` 不入库也不由对端构建，改完源码必须 `pnpm build`（AGENTS.md「环境坑」第一条）。门控 `DSH_INSTALL_CHECK` 另用一次性 profile `novel-smoke` 跑 add/remove，不碰日常 web profile。
 9. **`patchReload: "live"`** 的热重载语义（web profile 现配）意味着改 cordis.patch.yml/插件版本后可能免重启，但 client bundle 变更仍需浏览器刷新 + 服务端 rebuild（DSH 自身 system prompt 亦提示 client 插件 HMR 的限制）。
+10. **`ctx.jobs` 在本机 web 组合里在册——已判定（2026-09）**：判定路径不是 grep 宿主 bundle（官方包都并进聚合产物，`dsh plugin list` 只列 11 个外部包，两条路都是死胡同），而是**读 profile 自己的组合声明**：`~/.dsh/profiles/web/package.json` 的 `dsh.profile.bundles` 列出层（首位 `@deepseek-ai/dsh-base`），而 `dsh-base/cordis.patch.yml` 里有 `- id: jobs / name: '@deepseek-ai/dsh-jobs-local'`，故注册表常带。**同时钉住一个反直觉事实**：同文件里的 `- id: tool-jobs` 在 `dsh-web-app/cordis.patch.yml` 被 `- id: tool-jobs / disabled: true` 关掉（宿主注释：注册表留在 host plane，搬走的只是模型侧控件）——两点后果：① 唯一的 `attachController` 调用点随 tool-jobs 一起没了，**生产方必须自己挂 controller**；② 「AI 助手能看见/终止我们的任务」这条白拿的收益在本机 profile 下不成立，要等 tool-jobs 启用。
+    **2026-09-19 复核（逐字 + 最小 profile）**：`@deepseek-ai/dsh-base@0.1.5-rc.1` 的 `cordis.patch.yml` 第 81-82 行就是裸的 `- id: jobs` / `name: '@deepseek-ai/dsh-jobs-local'`（无 `disabled:`、无注释），与 `webServer`、`tools` 同档常带；而 `DSH_INSTALL_CHECK=1` 用的一次性 profile `novel-smoke` 的 `dsh.profile.bundles` **只有 `@deepseek-ai/dsh-base` 一项**也照样具备——所以把 `jobs` 加进 `inject` 不缩窄兼容面（凡有 dsh-base 即有 jobs）。**代价写清**：`jobs` 是硬 inject，宿主若早于带该条的 0.1.5-rc 系，整棵插件树会因缺依赖拒绝挂载（AGENTS.md 的 `plugin tree failed to load` 形态），而不是降级运行。同日 `DSH_INSTALL_CHECK=1` 在 `novel-smoke` 上跑绿（build → add → bundles 与 `lib/client.js`/`cordis.patch.yml` 在场 → remove 摘除）。**仍未验证的只剩运行时两件事**：宿主接受我们的 `attachController('dsh-novel')` 调用，以及 `shell.overlay` 里那条状态条的实际落位（层级 / 指针事件）。

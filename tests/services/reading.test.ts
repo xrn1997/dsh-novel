@@ -490,3 +490,42 @@ describe('门面直测（invariant 与 loginPlan 不再只穿 HTTP 测）', () =
     expect(saved?.progress).toMatchObject({ chapterIndex: 2, offsetRatio: 0.25 })
   })
 })
+
+describe('searchProgressive：给唯一实现加增量出口（不许出现第二个批循环）', () => {
+  it('单源完成即回调（快的先出，不等慢的）；返回值仍按参搜源序，与 search() 同值', async () => {
+    const dir = await makeTempDir('novel-sp-')
+    const registry = trackService(await SourceRegistry.load(dir))
+    const shelf = trackService(await Shelf.load(dir))
+    let arm = false                                   // 探针也走搜索 URL：只在搜索阶段才拖慢
+    let releaseSlow: () => void = () => {}
+    const slow = new Promise<void>((r) => { releaseSlow = r })
+    const plain = route(() => SEARCH_HTML('斗罗'))
+    const fetchImpl = async (input: RequestInfo | URL): Promise<Response> => {
+      const u = String(input)
+      if (arm && u.includes('b-late.com')) await slow
+      return plain(u)
+    }
+    const svc = trackService(await ReadingService.from({
+      registry, shelf, cache: new PageCache(dir),
+      fetcher: createFetcher({ fetchImpl: fetchImpl as never }),
+    }))
+    await svc.importOne(rawSource)
+    await svc.importOne({ ...rawSource, bookSourceName: 'B', bookSourceUrl: 'https://b-late.com', searchUrl: 'https://b-late.com/search?q={{key}}' })
+    const order = registry.list().map((s) => s.name)                 // ['S','B']＝参搜源序
+    arm = true
+    const seen: string[] = []
+    const running = svc.searchProgressive('斗罗', { onGroup: (g) => { seen.push(g.sourceName) } })
+    await new Promise((r) => setTimeout(r, 30))
+    expect(seen).toEqual(['S'])                                      // 增量：慢源未回，快源已交付
+    releaseSlow()
+    const groups = await running
+    expect(seen.slice().sort()).toEqual(order.slice().sort())         // 两条都回调过
+    expect(groups.map((g) => g.sourceName)).toEqual(order)            // 返回序 = 参搜源序（不是完成序）
+    expect(await svc.search('斗罗')).toEqual(groups)                  // 防漂移：薄壳与 progressive 同值
+  })
+
+  it('无回调时 searchProgressive 与 search 完全等价（既有调用方零改动）', async () => {
+    const { svc } = await makeService((u) => (u.includes('/search') ? SEARCH_HTML('斗罗') : null))
+    expect(await svc.searchProgressive('斗罗')).toEqual(await svc.search('斗罗'))
+  })
+})

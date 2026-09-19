@@ -156,6 +156,58 @@ async function route(
     writeOk(res, service.searchPlan())
     return
   }
+  if (a === SEG.search && b === SEG.job) {
+    // 提交即由 Node 半跑完并持有整轮结果——浏览器半只负责看，切界面不再作废在途搜索
+    guard(method, 'POST', ROUTES.searchJob.path)
+    const body = await readJsonBody<{ keyword?: unknown; sourceIds?: unknown } | null>(req, null)
+    const keyword = typeof body?.keyword === 'string' ? body.keyword.trim() : ''
+    if (keyword === '') throw new ApiError(`缺 body 字段 ${PARAMS.keyword}`, 400, 'BadRequest')
+    const raw = body?.sourceIds
+    if (raw !== undefined && (!Array.isArray(raw) || !raw.every((x) => typeof x === 'string'))) {
+      throw new ApiError(`body.${PARAMS.sourceIds} 需为 string[]`, 400, 'BadRequest')
+    }
+    writeOk(res, service.startSearchJob(keyword, raw === undefined ? undefined : { sourceIds: raw as string[] }))
+    return
+  }
+  if (a === SEG.search && b === SEG.jobCancel) {
+    // 停止 ≠ 放弃：本轮立即进终态（不再开新的源），已搜出的分组仍留在读面可翻
+    guard(method, 'POST', ROUTES.searchJobCancel.path)
+    writeOk(res, service.cancelSearchJob())
+    return
+  }
+  if (a === SEG.search && b === SEG.jobStream) {
+    // 进度推送的加速器（SSE）：首帧 = 带 `since` 的同一份快照（baseline），此后每次状态变化补一帧，
+    // 终态即关流。断线重连 = 重新起一条并带上已收到的游标——「推送不 replay、显式 query 才是真相」
+    // 这条官方口径（`docs/reference/dsh-plugin-api.md` §9）由两个通道共用同一游标来兑现，
+    // 所以推送在或不在、快或慢，客户端的合并代码是同一份。
+    guard(method, 'GET', ROUTES.searchJobStream.path)
+    const raw = Number(url.searchParams.get(PARAMS.since) ?? '0')
+    let cursor = Number.isInteger(raw) && raw > 0 ? raw : 0
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',          // 经代理不许攒帧：攒了就不是「即时」，而是「整批迟到」
+    })
+    let off: (() => void) | null = null
+    const pump = (): void => {
+      if (res.writableEnded || res.destroyed) return
+      const job = service.searchJobSnapshot(cursor)
+      if (job !== null) cursor = job.next
+      res.write(`data: ${JSON.stringify({ job })}\n\n`)
+      if (job !== null && job.phase !== 'running') { off?.(); res.end() }
+    }
+    off = service.subscribeSearchJob(pump)
+    res.on('close', () => { off?.() })    // 关页/断连即退订：不给死连接攒帧，也不让监听器长驻持有者
+    pump()                                // 首帧（可能是 `{job:null}`：还没提交过，流继续等）
+    return
+  }
+  if (a === SEG.search && b === SEG.jobStatus) {
+    guard(method, 'GET', ROUTES.searchJobStatus.path)
+    const since = Number(url.searchParams.get(PARAMS.since) ?? '0')
+    writeOk(res, { job: service.searchJobSnapshot(Number.isInteger(since) && since > 0 ? since : 0) })
+    return
+  }
   if (a === SEG.search && b === undefined) {
     guard(method, 'GET', ROUTES.search.path)
     const keyword = url.searchParams.get(PARAMS.keyword)?.trim() ?? ''

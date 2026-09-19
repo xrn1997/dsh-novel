@@ -32,11 +32,47 @@ const PROBE_CONCURRENCY = 5
 // 落盘粒度已内聚进注册表（edit 合并写：每 20 次变更强制落盘 + 尾沿防抖）——
 // 任务运行器不再持有 persist 节流常量
 
+/** 宿主后台任务注册表（`ctx.jobs`）在本插件用到的子集。
+ *  **本地窄面镜像，不引类型包**：npm 上 `@deepseek-ai/dsh-jobs` 停在 `0.0.1-rc.3`，宿主跑的是
+ *  `0.1.5-rc.1`，且本仓解析不到该包（`docs/reference/dsh-plugin-api.md` 证据 9a + 风险第 10 条）。
+ *  照 `src/index.ts` 既有的 `NovelContext` + `*Like` 先例办：只声明用到的成员。
+ *  `kind` 用 `string` 是刻意的——注册表把 kind 当作不透明的 id 命名空间（唯一判据是「非空字符串」），
+ *  所以自定义 kind 不需要宿主的 `JobKindMap` 合并，id 直接长成 `novel-import-1`。
+ *  缺席即不接线（headless 组合与单测直构都走这条），任务语义不受影响。 */
+export interface JobHostSpec {
+  kind: string
+  /** 模型可见的一行说明（宿主 UI / `job_*` 工具读它） */
+  label: string
+  run(): {
+    /** 宿主请求终止：**协作式**——不打断在途网络请求，只在取下一条前收手 */
+    cancel(reason?: string): void
+    done: Promise<JobOutcome>
+  }
+}
+
+export interface JobHost {
+  start(spec: JobHostSpec): string
+}
+
+/** 宿主登记任务的终态词汇（唯一住址：本文件与 `search-job.ts` 共用，别各写一份联合类型） */
+export type JobOutcome = { status: 'completed' | 'killed' | 'failed'; detail?: string }
+
+/** 与宿主登记的那条任务的私有挂点（wire 的 `JobState` 不为此加字段：
+ *  它是跨半契约，而取消/结算纯属 Node 半与宿主之间的事）。 */
+interface HostTie {
+  requested: boolean
+  reason: string
+  settle: (outcome: JobOutcome) => void
+}
+
 export class SourceJobs {
   private current: JobState | null = null
+  private readonly ties = new WeakMap<JobState, HostTie>()
   constructor(private readonly deps: {
     registry: SourceRegistry
     probe(source: NovelSource): Promise<ProbeResult>
+    /** 宿主 `ctx.jobs` 的窄面；缺省即不登记（任务照跑） */
+    host?: JobHost
     now?: () => number
     uuid?: () => string
   }) {}
@@ -44,29 +80,51 @@ export class SourceJobs {
   status(): JobState | null { return this.current }
 
   startImport(files: ImportFile[]): { jobId: string } {
-    const state = this.begin('import')
+    const state = this.begin('import', `导入书源 ${files.length} 个文件`)
     void this.runImport(state, files).catch((e: unknown) => {
-      state.phase = 'failed'
-      state.error = e instanceof Error ? e.message : String(e)
-      state.finishedAt = this.now()
+      this.fail(state, e instanceof Error ? e.message : String(e))
     })
     return { jobId: state.id }
   }
 
   startBatchProbe(ids: string[]): { jobId: string } {
-    const state = this.begin('batch-probe')
+    const state = this.begin('batch-probe', `批量验证书源 ${ids.length} 家`)
     state.total = ids.length
     void this.runBatchProbe(state, ids).catch((e: unknown) => {
-      state.phase = 'failed'
-      state.error = e instanceof Error ? e.message : String(e)
-      state.finishedAt = this.now()
+      this.fail(state, e instanceof Error ? e.message : String(e))
     })
     return { jobId: state.id }
   }
 
   private now(): number { return this.deps.now?.() ?? Date.now() }
 
-  private begin(kind: JobKind): JobState {
+  /** 收尾的三处写口（done / fail / cancel）集中在这里，宿主登记的那条一并结算——
+   *  漏掉一处就是「UI 显示已结束而宿主还挂着 running」。 */
+  private settle(state: JobState, status: 'completed' | 'killed' | 'failed', detail: string, error?: string): void {
+    state.phase = status === 'completed' ? 'done' : 'failed'
+    if (error !== undefined) state.error = error
+    state.finishedAt = this.now()
+    this.ties.get(state)?.settle({ status, ...(detail === '' ? {} : { detail }) })
+  }
+
+  private fail(state: JobState, error: string): void {
+    this.settle(state, 'failed', error, error)
+  }
+
+  /** 宿主是否已请求收手（协作式：在途网络请求不打断，只拦下一条）。 */
+  private cancelled(state: JobState): boolean { return this.ties.get(state)?.requested === true }
+
+  /** 取消落地点：已入库/已验证的结果一律保留（导入幂等、验证是逐条写回的），
+   *  只等齐落盘后收工。wire 的 `phase` 不设 'killed'——两个终态对本插件的 UI 判据
+   *  （`phase !== 'running'`）没有区别，加一态要动 wire + 三处 UI 判据，收益为零。 */
+  private cancelledOut(state: JobState): Promise<void> {
+    const reason = this.ties.get(state)?.reason ?? '已取消'
+    return this.deps.registry.flush().then(() => {
+      this.settle(state, 'killed', `任务已取消：${reason}`, `任务已取消：${reason}`)
+    })
+  }
+
+  private begin(kind: JobKind, label: string): JobState {
     if (this.current !== null && this.current.phase === 'running') throw new JobRunningError(this.current)
     const state: JobState = {
       id: (this.deps.uuid ?? randomUUID)(), kind, phase: 'running',
@@ -75,6 +133,25 @@ export class SourceJobs {
       issues: [], fileErrors: [], startedAt: this.now(),
     }
     this.current = state
+    // 宿主登记：身份/生命周期归 ctx.jobs（`<kind>-N`、running→终态、按 owner 栅栏），
+    // 本插件的 JobState 继续是计数与明细的唯一载体。kind 用 novel-* 前缀与 bash/subagent 分namespace。
+    const host = this.deps.host
+    if (host !== undefined) {
+      const tie: HostTie = { requested: false, reason: '', settle: () => {} }
+      const done = new Promise<{ status: 'completed' | 'killed' | 'failed'; detail?: string }>((res) => {
+        tie.settle = (o): void => { res(o) }
+      })
+      // 宿主契约：start() 内同步调 run() 取回 hooks，所以 tie/done 必须先建好再调 start。
+      host.start({
+        kind: kind === 'import' ? 'novel-import' : 'novel-probe',
+        label,
+        run: () => ({
+          cancel: (reason): void => { tie.requested = true; tie.reason = reason ?? '已取消' },
+          done,
+        }),
+      })
+      this.ties.set(state, tie)
+    }
     return state
   }
 
@@ -99,6 +176,7 @@ export class SourceJobs {
     state.total = items.length
     const intake = new SourceIntake(this.deps.registry)
     for (const item of items) {
+      if (this.cancelled(state)) return this.cancelledOut(state)   // 协作式收手：已入库的保留
       const d = await intake.intake(item)
       switch (d.kind) {
         case 'failed':
@@ -122,8 +200,7 @@ export class SourceJobs {
       state.done++
     }
     await this.deps.registry.flush()                       // 任务完成 ⇒ 结果已落盘（既有语义不变）
-    state.phase = 'done'
-    state.finishedAt = this.now()
+    this.settle(state, 'completed', '')
   }
 
   /**
@@ -142,6 +219,7 @@ export class SourceJobs {
     let settled = 0
     const worker = async (): Promise<void> => {
       for (;;) {
+        if (this.cancelled(state)) return                 // 协作式收手：取下一条前查一次
         const i = cursor++
         if (i >= valid.length) return
         const id = valid[i]
@@ -167,9 +245,9 @@ export class SourceJobs {
       }
     }
     await Promise.all(Array.from({ length: Math.min(PROBE_CONCURRENCY, Math.max(valid.length, 1)) }, worker))
+    if (this.cancelled(state)) return this.cancelledOut(state)   // 已写回的状态不抹除，只等落盘收工
     await this.deps.registry.flush()                       // 任务完成 ⇒ 结果已落盘（既有语义不变）
-    state.phase = 'done'
-    state.finishedAt = this.now()
+    this.settle(state, 'completed', '')
   }
 }
 

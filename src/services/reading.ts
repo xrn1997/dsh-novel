@@ -10,6 +10,8 @@ import { ChapterNotFoundError, LocalNotMountedError, RuleMissingError, SourceNot
 import { createFetcher, decodeBody, fetchTextPage, headerOf } from './fetcher.js'
 import type { Fetcher } from './fetcher.js'
 import { SourceJobs } from './import-job.js'
+import { SearchJobs } from './search-job.js'
+import type { JobHost } from './import-job.js'
 import type { ImportFile, JobState } from './import-job.js'
 import { SourceIntake } from './intake.js'
 import { isLocalBookKey, LOCAL_SOURCE_ID, LocalBooks } from './localbooks.js'
@@ -27,8 +29,8 @@ import type { NovelSource, SourceAuth } from './types.js'
 // ── 公开类型（冻结：HTTP 面 / 工具面 / UI 只准用这套）──────────────────
 // 值形状定义在 wire 契约（src/shared/wire.ts）——
 // 此处 re-export 保持既有 import 路径可用；改形状请去 shared，别在这里加第二份。
-export type { SearchHit, SearchGroup, ChapterEntry, BookDetail } from '../shared/wire.js'
-import type { BookDetail, SearchGroup, SearchHit, SearchPlan, ChapterEntry, ShelfBook, ShelfMetaPatch, SourcePublic } from '../shared/wire.js'
+export type { SearchHit, SearchGroup, ChapterEntry, BookDetail, SearchJobSnapshot } from '../shared/wire.js'
+import type { BookDetail, SearchGroup, SearchHit, SearchPlan, SearchJobSnapshot, ChapterEntry, ShelfBook, ShelfMetaPatch, SourcePublic } from '../shared/wire.js'
 export interface ReadingServiceOptions {
   dir: string                       // novel 根目录（测试注入 mkdtemp）
   fetchImpl?: typeof globalThis.fetch
@@ -41,6 +43,8 @@ export interface ReadingServiceOptions {
   localImportMaxBytes?: number
   /** 出站代理（见 proxy.ts：Node 的 fetch 不读系统代理）；null/缺省 = 直连 */
   proxyUrl?: string | null
+  /** 宿主 `ctx.jobs` 窄面：任务身份与生命周期交它（见 import-job.ts 的 JobHost），缺省不登记 */
+  jobHost?: JobHost
 }
 export interface ImportOutcome {
   sourceId: string | null; name: string; ok: boolean
@@ -69,6 +73,8 @@ export class ReadingService {
     private readonly cache: PageCache,
     private readonly fetcher: Fetcher,
     private readonly jobs: SourceJobs,
+    /** 聚合搜索的后台持有者（读任务，与写的 `jobs` 分槽——见 services/search-job.ts 的理由） */
+    private readonly searchJobs: SearchJobs,
     private readonly local: LocalBooks | null,
   ) {}
 
@@ -89,6 +95,7 @@ export class ReadingService {
       local: await LocalBooks.create(opts.dir, { maxImportBytes: localImportMaxBytes }),
       localImportMaxBytes,
       searchParallel: opts.searchParallel,
+      jobHost: opts.jobHost,
       tocMaxPages: opts.tocMaxPages,
       contentMaxPages: opts.contentMaxPages,
       searchTimeoutMs: opts.searchTimeoutMs,
@@ -108,6 +115,8 @@ export class ReadingService {
     cache: PageCache
     fetcher: Fetcher
     local?: LocalBooks
+    /** 宿主 `ctx.jobs` 的窄面（见 import-job.ts 的 JobHost）；缺省即不登记，任务语义不变 */
+    jobHost?: JobHost
     localImportMaxBytes?: number
     searchParallel?: number
     tocMaxPages?: number
@@ -132,7 +141,9 @@ export class ReadingService {
       new SourceJobs({
         registry: parts.registry,
         probe: (s) => probeSource(s, parts.fetcher, { timeoutMs: searchTimeoutMs }),
+        ...(parts.jobHost === undefined ? {} : { host: parts.jobHost }),
       }),
+      new SearchJobs(parts.jobHost === undefined ? {} : { host: parts.jobHost }),
       parts.local ?? null,
     )
   }
@@ -354,19 +365,40 @@ export class ReadingService {
 
   // ── 搜索 ─────────────────────────────────────────────────────────────
 
-  /** 聚合搜索：启用源按批并行（批大小 searchParallel），逐源独立分组——单源失败只写 group.error。
+  /** 聚合搜索的**唯一实现**。`onGroup` 是增量出口：单源求值完成即按完成序交付，
+   *  返回值仍按参搜源序——HTTP 面与工具面的既有形状一字不改，而后台任务/将来做任务的
+   *  那一路可以边跑边被看见（浏览器半原先自持的分批循环只为拿这个增量，随之后退）。
    *  sourceIds 缺省**或空数组**都视为「未限定」= 搜全部启用源（工具描述承诺「缺省搜全部启用源」；
    *  此前空数组静默变成「搜零个源」——`!opts?.sourceIds` 对 [] 为 false，零分组空结果）。 */
-  async search(keyword: string, opts?: { sourceIds?: string[] }): Promise<SearchGroup[]> {
+  async searchProgressive(keyword: string, opts?: {
+    sourceIds?: string[]
+    onGroup?: (group: SearchGroup, index: number) => void
+    /** 协作式停止：置位后**不再开新的源**（在途的不撤回）。搜索做成后台任务时的取消出口。 */
+    shouldStop?: () => boolean
+  }): Promise<SearchGroup[]> {
     const want = opts?.sourceIds
     const sources = this.registry.list().filter((s) =>
       s.enabled && (want === undefined || want.length === 0 || want.includes(s.id)))
     const groups: SearchGroup[] = new Array(sources.length)
     for (let i = 0; i < sources.length; i += this.cfg.searchParallel) {
+      if (opts?.shouldStop?.() === true) break
       const batch = sources.slice(i, i + this.cfg.searchParallel)
-      await Promise.all(batch.map(async (s, j) => { groups[i + j] = await this.searchOne(s, keyword) }))
+      await Promise.all(batch.map(async (s, j) => {
+        if (opts?.shouldStop?.() === true) return         // 收手：该源不发了，结果里也就没有它
+        const index = i + j
+        const group = await this.searchOne(s, keyword)
+        groups[index] = group
+        opts?.onGroup?.(group, index)
+      }))
     }
-    return groups
+    // 停止时数组可能有洞（filter 天然跳过洞位）；未停止时无洞，与旧行为逐字相同
+    return groups.filter((g): g is SearchGroup => g !== undefined)
+  }
+
+  /** 一次性收齐全部命中：`searchProgressive` 的薄壳。**批循环只此一处**——
+   *  搜索后台化的正确动作是给上面那份加消费方，不是再写第二个循环。 */
+  search(keyword: string, opts?: { sourceIds?: string[] }): Promise<SearchGroup[]> {
+    return this.searchProgressive(keyword, opts)
   }
 
   /** 搜索参与计划：search 的参与集判定的唯一主人——客户端分批/进度按此走，
@@ -374,6 +406,31 @@ export class ReadingService {
   searchPlan(): SearchPlan {
     return { sourceIds: this.registry.list().filter((s) => s.enabled).map((s) => s.id) }
   }
+
+  /** 提交一轮**后台**搜索：参与集判定与 `total` 同源（都是 searchPlan 那一条启停 invariant），
+   *  运行体是**同一份** `searchProgressive`——批循环只此一处，这里只是换了个消费方。
+   *  结果由 `SearchJobs` 持有，所以切界面 / 切 tab 都不影响它跑完。 */
+  startSearchJob(keyword: string, opts?: { sourceIds?: string[] }): { jobId: string } {
+    const want = opts?.sourceIds
+    const plan = this.searchPlan().sourceIds                 // 参与集单主人：启停 invariant 不在此抄第二份
+    const ids = want === undefined || want.length === 0 ? plan : plan.filter((id) => want.includes(id))
+    return this.searchJobs.start(keyword, ids.length,
+      (emit, shouldStop) => this.searchProgressive(keyword, {
+        sourceIds: ids,
+        onGroup: (g): void => { emit(g) },
+        shouldStop,
+      }))
+  }
+
+  /** 停止本轮搜索：只停「还要去搜的源」，已搜出的命中留在读面（保留期照旧）。返回 false = 本轮早已收尾
+   *  （点了个空钮），不是错误；在途的最多 `searchParallel` 条不撤回，回来照旧计入。 */
+  cancelSearchJob(): { cancelled: boolean } { return { cancelled: this.searchJobs.cancel('用户停止了搜索') } }
+
+  /** 搜索任务读面：`since` = 客户端已收到的组数（完成序游标）；null = 无任务或已过保留期 */
+  searchJobSnapshot(since = 0): SearchJobSnapshot | null { return this.searchJobs.snapshot(since) }
+
+  /** 搜索任务的「变了」信号口（SSE 路由用它拉增量；信号不带数据，游标归每条连接）。返回退订口。 */
+  subscribeSearchJob(listener: () => void): () => void { return this.searchJobs.subscribe(listener) }
 
   private async searchOne(s: NovelSource, keyword: string): Promise<SearchGroup> {
     const base = {

@@ -4,7 +4,7 @@ import { parseCookieString } from '../importer.js'
 import { paramRoutes, ROUTES } from '../../shared/wire.js'
 import { prodDeps } from '../deps.js'
 import type { SettingsDeps } from '../deps.js'
-import { groupIcon, selectMany, setEditMode, setGroupFilter, setQuery, setStatusFilter, sourceListUi, toggleSelect, UNGROUPED } from '../source-list.js'
+import { clearSelection, groupIcon, selectMany, setEditMode, setGroupFilter, setQuery, setStatusFilter, sourceListUi, toggleSelect, UNGROUPED } from '../source-list.js'
 import type { StatusFilter } from '../source-list.js'
 import { deriveSourceListView } from '../source-list-view.js'
 import { useStore } from '../store.js'
@@ -15,10 +15,12 @@ import type { JobState, SourcePublic } from './types.js'
 
 /**
  * 源列表（书源管理 tab 的资产清单，2026 调度台 IA）：
- * 列表头（标题 + meta + 文本/状态/分组过滤 + 编辑切换 + ＋导入书源）+ 编辑态批量条
+ * 列表头（标题 + **状态带**（全库读数唯一住址，窄列退化见样式层）+ 文本/状态/分组过滤 +
+ * 编辑切换 + ＋导入书源）+ 编辑态批量条
  * + 六列表格（名称/状态/分组/地址/操作/启停）+ 前端分页。
  *
- * 与旧版的差异（用户逐项裁定）：状态 chips → **状态下拉**（读数职责移交待办收件箱）；
+ * 与旧版的差异（用户逐项裁定）：状态 chips → **状态下拉**（下拉只过滤不总览；读数 2026-09 起
+ * 只住本组件的状态带，待办箱改成可忽略后不再兼职读数）；
  * 危险区专区 + 手输「删除」→ **统一模态二次确认**（点名后果 + Esc/遮罩取消零写口 + 焦点闭环
  * + 确认在途防重（delBusy，双击只发一次 POST）+ ids 点击时快照；失败即收模态、错误进全局条
  * ——与书架「失败留在框内重试」的一处刻意差异，理由记 docs/design/client.md 调度台 IA 节）；
@@ -45,7 +47,8 @@ export function SourceList({ sources, job, refresh, onChanged, onProbe, onImport
   onChanged: () => void; onProbe: (id: string) => void
   /** 打开导入弹层（壳层持有弹层现场） */
   onImport: () => void
-  /** 上层取数失败信息：有错时不得渲染「还没有书源」空态（把失败伪装成确定结论） */
+  /** 上层取数失败信息：有错时既不渲染「还没有书源」空态（不许把失败伪装成确定结论），
+   *  也不渲染表格——失败由壳层那条红字统一说一遍，本组件不再抄第二份（2026-09） */
   loadError?: string | null
   /** 依赖束：缺省生产实现；测试注入假 adapter 驱动接线层 */
   deps?: SettingsDeps
@@ -56,32 +59,53 @@ export function SourceList({ sources, job, refresh, onChanged, onProbe, onImport
   // document.activeElement——⋯ 菜单项在模态挂载前就随菜单卸载了，activeElement 已是 body
   const [pending, setPending] = useState<{ ids: string[]; title: string; opener: HTMLElement | null } | null>(null)
   const [delBusy, setDelBusy] = useState(false)     // 删除提交在途：确认钮禁用 + 重入口拒绝（与书架 delBusy 同款）
-  if (sources !== null && sources.length === 0) {
-    return loadError === null
-      ? <div className="novel-muted">还没有书源——点右上「＋ 导入书源」，或在对话里让 AI 助手帮你导入</div>
-      : <div className="novel-err novel-note-md">源列表暂时不可用：{loadError}</div>
-  }
+  // 0 源与取数失败**不换掉列表头**（2026-09 实机 bug：这里曾整块 early-return 一句
+  // 「点右上『＋ 导入书源』」，而那颗钮就在被跳过的表头里——提示指向一个不存在的控件）。
+  // 表头是工具条（导入是与源数无关的顶层动作），只有表体换内容。
   const all = sources ?? []
+  const loaded = sources !== null
+  /** 空态成立的唯一条件：**确实取到了** 0 个源。加载中（sources 仍 null）与取数失败都不是空
+   *  ——前者没有真相，后者会把失败伪装成「还没有书源」这条确定结论（宁炸不猜）。 */
+  const showEmpty = loaded && all.length === 0 && loadError === null
   // 派生计算归纯函数 module（过滤管线/分组选项集/选中态/登录态计数）——语义在那边单测钉死
   const vm = deriveSourceListView(all, ui, limit)
   const { filtered, shown, selected: selection } = vm
-  const { groupCounts, groupLegend, authCountOf, allFilteredSelected, ungroupedCount } = vm
+  const { groupCounts, groupLegend, authCountOf, allFilteredSelected, ungroupedCount, stats } = vm
   // 任务在途 → 三个批量写口禁用：服务端是**单任务槽**（import-job.begin 运行中抛
   // JobRunningError，import/probe 互斥），在途再提交本就无处可去。删除所选不禁：
   // 删除不是任务（同步 sourcesBatchDelete），且 runBatchProbe 对任务中被删的源点名
   // 跳过（「源不存在（运行中被删除，已跳过）」）——服务端明确支持验证途中删源；
   // 模态确认即是二次确认（实现裁定，2026 审查后补记，见 client.md 调度台 IA 节）。
   const probing = job?.phase === 'running'
-  const submitJob = (fn: () => Promise<unknown>): void => {
-    void fn().then(refresh, (e) => deps.pushError(`操作失败：${e instanceof Error ? e.message : String(e)}`))
+  /** 批量写口提交：成功后**重读哪一面由调用点指定**，两者不可互换——
+   *  启停改的是源本身 → `onChanged`（重新 GET sources）；验证起的是后台任务 → `refresh`
+   *  （重启任务轮询）。此前统一走 `refresh`，于是批量启停写完没人重取源列表：行开关、
+   *  「已启用 M」计数、「停用」过滤全停在点之前的值，只有重开视图才跟上（2026-09 实机报）。 */
+  const submit = <T,>(fn: () => Promise<T>, after: (res: T) => void): void => {
+    void fn().then(after, (e) => deps.pushError(`操作失败：${e instanceof Error ? e.message : String(e)}`))
+  }
+  /** 批量启停：ids 点击时快照；成功只重取源列表，**留在编辑态且勾选保留**——这批源做完
+   *  启停仍在列表里，勾选就是它们的现场，接着点「验证所选」或改主意再停用都不必重勾
+   *  （2026-09 用户裁定）。清勾选只在「删除所选」成功后做：对象已不存在，勾选留着是幽灵 id。
+   *  成功进反馈条：`transient.ts` 的「开关翻转即反馈，不进条」只对单行成立——642 行分页 +
+   *  过滤下被改的那几行可能在屏幕外，批量必须有一条与视口无关的确认（同一文件头注已补记）。
+   *  计数用服务端回包的 `updated`（未知 id 会被静默跳过，报"我勾了几个"会说谎）。 */
+  const batchEnabled = (enabled: boolean): void => {
+    const ids = [...ui.selection]
+    submit(() => deps.apiSend<{ updated: number }>('POST', ROUTES.sourcesBatchEnabled.path, { ids, enabled }), (r) => {
+      deps.pushOk(`${enabled ? '已启用' : '已停用'} ${r.updated} 个源`)
+      onChanged()
+    })
   }
   const confirmDelete = (): void => {
     if (pending === null || delBusy) return          // 在途防重：双击「确认删除」不许双 POST（审查 2026 发现的双写窗口）
     const ids = pending.ids                          // 点击时快照，不随列表变化重算
     setDelBusy(true)
-    void deps.apiSend<{ removed: number }>('POST', ROUTES.sourcesBatchDelete.path, { ids }).then(() => {
+    void deps.apiSend<{ removed: number }>('POST', ROUTES.sourcesBatchDelete.path, { ids }).then((r) => {
       setPending(null)
       setDelBusy(false)
+      clearSelection()                               // 已删的 id 留在选择集里是幽灵勾选（动作条计数虚高、后续批量动作带死 id）
+      deps.pushOk(`已删除 ${r.removed} 个源`)
       onChanged()
     }, (e) => {
       setPending(null)
@@ -108,10 +132,23 @@ export function SourceList({ sources, job, refresh, onChanged, onProbe, onImport
     <div data-novel-source-list className="novel-group">
       <div className="novel-list-head">
         <strong>源列表</strong>
-        <span className="novel-muted">
-          共 {all.length} 个源 · 已启用 {all.filter((s) => s.enabled).length}
-          {filtered.length === all.length ? '' : ` · 当前过滤 ${filtered.length}`}
-        </span>
+        {/* 状态带（2026-09）：全库读数的**唯一**住址——待办卡改成可忽略后，读数不能跟着
+            提示一起消失。0 也显示（「坏源 0」是结论，且数字位忽隐忽现这条带子会一直抖）；
+            非 0 的 未验证/坏源 吃 warn/err 色；纯读数不可点（过滤归同一行的三个下拉，
+            「带计数的状态 chips」是 2026 已否决的设计，不复活）。
+            窄列退化为「共 N · 已启用 M」，规则在样式层（@container 量这条带子自身宽度）。
+            **只在真有数据可报时在场**：加载中（sources 仍 null）不报 = 不拿未知冒充结论；
+            0 源不报 = 空态那句话已经把同一件事说了。 */}
+        {loaded && all.length > 0 && (
+          <span className="novel-src-stats" data-novel-src-stats>
+            <span>共 {stats.total} 个源</span>
+            <span>已启用 {stats.enabled}</span>
+            <span className="slim">已停用 {stats.disabled}</span>
+            <span className={stats.unverified > 0 ? 'slim warn' : 'slim'}>未验证 {stats.unverified}</span>
+            <span className={stats.broken > 0 ? 'slim err' : 'slim'}>坏源 {stats.broken}</span>
+            {filtered.length === stats.total ? null : <span>当前过滤 {filtered.length}</span>}
+          </span>
+        )}
         <span className="novel-grow" />
         <input
           data-novel-source-filter
@@ -160,16 +197,14 @@ export function SourceList({ sources, job, refresh, onChanged, onProbe, onImport
         {ui.selection.length > 0 && (
           <div data-novel-selbar className="novel-selbar">
             <strong>已选 {ui.selection.length}</strong>
-            <button className="novel-btn sm" disabled={probing}
-              onClick={() => submitJob(() => deps.apiSend('POST', ROUTES.sourcesBatchEnabled.path, { ids: ui.selection, enabled: true }).then(() => setEditMode(false)))}>
+            <button className="novel-btn sm" disabled={probing} onClick={() => batchEnabled(true)}>
               启用所选
             </button>
-            <button className="novel-btn sm" disabled={probing}
-              onClick={() => submitJob(() => deps.apiSend('POST', ROUTES.sourcesBatchEnabled.path, { ids: ui.selection, enabled: false }).then(() => setEditMode(false)))}>
+            <button className="novel-btn sm" disabled={probing} onClick={() => batchEnabled(false)}>
               停用所选
             </button>
             <button className="novel-btn sm primary" disabled={probing}
-              onClick={() => submitJob(() => deps.startBatchProbeJob(ui.selection))}>
+              onClick={() => submit(() => deps.startBatchProbeJob(ui.selection), refresh)}>
               验证所选
             </button>
             <button className="novel-btn sm danger"
@@ -177,7 +212,7 @@ export function SourceList({ sources, job, refresh, onChanged, onProbe, onImport
               删除所选
             </button>
             <span className="novel-grow" />
-            <button className="novel-btn sm" onClick={() => setEditMode(false)}>清空选择</button>
+            <button className="novel-btn sm" onClick={clearSelection}>清空选择</button>
           </div>
         )}
 
@@ -193,39 +228,49 @@ export function SourceList({ sources, job, refresh, onChanged, onProbe, onImport
           />
         )}
 
-        {/* 表格：列宽归 .novel-tr.src（样式层单点），窄表由 @container 收掉地址列 */}
-        <div className="novel-table">
-          <div className="novel-tr src head">
-            <span>
-              {ui.editMode && (
-                <input type="checkbox" checked={allFilteredSelected} aria-label="全选当前过滤结果"
-                  onChange={() => { if (!allFilteredSelected) selectMany(filtered.map((s) => s.id)) }} />
-              )} 名称
-            </span>
-            <span>状态</span>
-            <span>
-              分组
-              {/* 「?」图例：分组列只显示图标，悬停解释每个图标对应哪个组 */}
-              {groupLegend === '' ? null : (
-                <span data-novel-group-legend className="novel-muted novel-group-legend" title={groupLegend}
-                  aria-label="图标图例">?</span>
-              )}
-            </span>
-            <span className="col-url">地址</span>
-            <span className="novel-cell-end">操作</span>
-            <span className="novel-cell-right">启用</span>
-          </div>
-          {shown.map((s) => (
-            <SourceRow key={s.id} source={s} editMode={ui.editMode} selected={selection.has(s.id)}
-              probing={probing} onChanged={onChanged} onProbe={onProbe} onToggleEnabled={toggleEnabled}
-              onDelete={(src, opener) => setPending({ ids: [src.id], title: `删除《${src.name}》？`, opener })}
-              deps={deps} />
-          ))}
-        </div>
-        {filtered.length > shown.length && (
-          <button className="novel-btn" onClick={() => setLimit(limit + PAGE_SIZE)}>
-            显示更多（还有 {filtered.length - shown.length} 个）
-          </button>
+        {/* 表体三态（2026-09 实机 bug 后定）：0 源 → 空态引导，而它指的「＋ 导入书源」就在
+            上面的表头里（这里曾整块 early-return，把表头连同那颗钮一起跳过 = 提示指向一个
+            不存在的控件）；取数失败 → 这里不出声，壳层那条红字更全（同一个失败不抄两遍，
+            也不许把失败伪装成「还没有书源」）；其余（含加载中）→ 表格。 */}
+        {loadError !== null ? null : showEmpty ? (
+          <div className="novel-muted">还没有书源——点右上「＋ 导入书源」，或在对话里让 AI 助手帮你导入</div>
+        ) : (
+          <>
+            {/* 表格：列宽归 .novel-tr.src（样式层单点），窄表由 @container 收掉地址列 */}
+            <div className="novel-table">
+              <div className="novel-tr src head">
+                <span>
+                  {ui.editMode && (
+                    <input type="checkbox" checked={allFilteredSelected} aria-label="全选当前过滤结果"
+                      onChange={() => { if (!allFilteredSelected) selectMany(filtered.map((s) => s.id)) }} />
+                  )} 名称
+                </span>
+                <span>状态</span>
+                <span>
+                  分组
+                  {/* 「?」图例：分组列只显示图标，悬停解释每个图标对应哪个组 */}
+                  {groupLegend === '' ? null : (
+                    <span data-novel-group-legend className="novel-muted novel-group-legend" title={groupLegend}
+                      aria-label="图标图例">?</span>
+                  )}
+                </span>
+                <span className="col-url">地址</span>
+                <span className="novel-cell-end">操作</span>
+                <span className="novel-cell-right">启用</span>
+              </div>
+              {shown.map((s) => (
+                <SourceRow key={s.id} source={s} editMode={ui.editMode} selected={selection.has(s.id)}
+                  probing={probing} onChanged={onChanged} onProbe={onProbe} onToggleEnabled={toggleEnabled}
+                  onDelete={(src, opener) => setPending({ ids: [src.id], title: `删除《${src.name}》？`, opener })}
+                  deps={deps} />
+              ))}
+            </div>
+            {filtered.length > shown.length && (
+              <button className="novel-btn" onClick={() => setLimit(limit + PAGE_SIZE)}>
+                显示更多（还有 {filtered.length - shown.length} 个）
+              </button>
+            )}
+          </>
         )}
       </div>
     </div>

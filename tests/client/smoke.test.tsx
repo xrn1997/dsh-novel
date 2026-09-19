@@ -76,10 +76,11 @@ describe('NovelView smoke（renderToString 不炸——数据获取在 effect，
     expect(html).toContain('data-novel-style')
     expect(html).toContain('.novel-btn')
   })
-  it('状态条不吃布局（闪烁修复）：条身 absolute、宿主锚 relative', () => {
+  it('状态条不吃布局（闪烁修复）：条身 absolute、锚是铺满视口的常驻层（默认 click-through）', () => {
     // 病因：状态条曾以流内元素挂在区块首，一次启停就把整块顶下去 35px 再弹回（真机逐帧实测）
     expect(NOVEL_CSS).toMatch(/\.novel-status-bar\s*\{[^}]*position:\s*absolute/)
-    expect(NOVEL_CSS).toMatch(/\.novel-status-host\s*\{[^}]*position:\s*relative/)
+    expect(NOVEL_CSS).toMatch(/\.novel-shell-status\s*\{[^}]*pointer-events:\s*none/)
+    expect(NOVEL_CSS).toMatch(/\.novel-shell-status \.novel-status-bar\s*\{[^}]*pointer-events:\s*auto/)
   })
   it('样式层注入：渲染含 <style data-novel-style> 与基础类', () => {
     routeStore.set({ route: { name: 'shelf' } as any })

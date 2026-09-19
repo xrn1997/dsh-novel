@@ -154,6 +154,26 @@ describe('ReaderSession 进度落盘策略', () => {
     await new Promise((r) => setTimeout(r, 40))    // 防抖窗口过
     expect(h.saves).toEqual([[1, 0.2], [1, 0.5]])
   })
+
+  it('dispose 把防抖窗口内的进度 flush 掉，不静默丢（离开阅读器即丢最后一段位置的回归钉）', async () => {
+    const h = makeSession({ debounceMs: 5000 })     // 窗口拉长：让「未到期」成为确定前提
+    await h.session.open('src', 'https://s.com/book/1')
+    h.port.anchors = [{ index: 0, start: 0 }, { index: 1, start: 1000 }, { index: 2, start: 2000 }]
+    h.port.top = 1200
+    h.session.handleViewportChange('src')           // 切章：强制存
+    h.port.top = 1500
+    h.session.handleViewportChange('src')           // 同章滚动：挂防抖
+    expect(h.saves).toEqual([[1, 0.2]])             // 5s 未到，确实还没落
+    h.session.dispose()
+    expect(h.saves).toEqual([[1, 0.2], [1, 0.5]])   // 退出即落盘（旧实现 cancel → 这行丢进度）
+  })
+
+  it('dispose 无待发进度 → 不造幽灵写口（flush 只在真有 pending 时发）', async () => {
+    const h = makeSession({ debounceMs: 5000 })
+    await h.session.open('src', 'https://s.com/book/1')
+    h.session.dispose()
+    expect(h.saves).toEqual([])
+  })
 })
 
 describe('ReaderSession 预取与目录直达', () => {

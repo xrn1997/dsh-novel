@@ -68,3 +68,44 @@ export async function apiUpload<T>(pathWithQuery: string, body: Blob): Promise<T
   }
   return unwrap<T>(await jsonOf(res), res.status)
 }
+
+/**
+ * SSE 读流：起一条事件流，每帧把 `data:` 原文交给 `onFrame`；流正常结束 resolve、
+ * 连不上 / 断线 / abort 则 reject（调用方据此回落到快照轮询）。
+ *
+ * 为什么不用 `EventSource`：它自带重连与 `Last-Event-ID`，等于把游标交给浏览器——
+ * 而本仓的进度口径是「推送只是加速器，显式查询才是真相」（`docs/reference/dsh-plugin-api.md` §9：
+ * 通知不 replay，必须提供 baseline / cursor / 显式 query）。游标握在客户端手里，
+ * 两条通道才能共用同一份合并代码而不产生第二真相。
+ */
+export async function apiEventStream(
+  pathWithQuery: string,
+  onFrame: (data: string) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const res = await fetch(PREFIX + pathWithQuery, { signal, headers: { accept: 'text/event-stream' } })
+  if (!res.ok || res.body === null) {
+    throw new ApiClientError('NetworkError', res.status, `事件流不可用（HTTP ${res.status}）`)
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) return
+    buf += decoder.decode(value, { stream: true })
+    let at = buf.indexOf('\n\n')
+    while (at >= 0) {
+      frameOf(buf.slice(0, at), onFrame)
+      buf = buf.slice(at + 2)
+      at = buf.indexOf('\n\n')
+    }
+  }
+}
+
+/** 一个事件块 → 帧体：`data:` 行按规范以 \n 拼接；注释行与其它字段忽略 */
+function frameOf(block: string, onFrame: (data: string) => void): void {
+  const lines = block.split('\n').filter((l) => l.startsWith('data:'))
+  if (lines.length === 0) return
+  onFrame(lines.map((l) => l.slice('data:'.length).trimStart()).join('\n'))
+}

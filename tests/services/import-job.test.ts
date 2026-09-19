@@ -254,3 +254,77 @@ describe('批量验证任务', () => {
     expect(j.issues.some((i) => i.detail.includes('TypeError'))).toBe(false)
   })
 })
+// ── 宿主后台任务注册表（ctx.jobs）接线：生命周期归宿主，counts 与单槽仍归本插件 ──
+import type { JobHost, JobHostSpec } from '../../src/services/import-job.js'
+
+type Settled = { status: string; detail?: string }
+interface Tie { spec: JobHostSpec; cancel: (reason?: string) => void; done: Promise<Settled> }
+
+/** 假注册表：记下每次 start 的 spec 与生产方交回的 hooks（宿主对我们说的话只有这两句） */
+function fakeHost(): { host: JobHost; ties: Tie[] } {
+  const ties: Tie[] = []
+  const host: JobHost = {
+    start: (spec) => {
+      const hooks = spec.run()
+      ties.push({ spec, cancel: hooks.cancel, done: hooks.done })
+      return `${spec.kind}-${ties.length}`
+    },
+  }
+  return { host, ties }
+}
+
+const filesOf = (n: number) => [{
+  name: 'x.json',
+  text: JSON.stringify(Array.from({ length: n }, (_, i) => raw(`S${i}`, `https://s${i}.com`))),
+}]
+
+describe('任务生命周期归 ctx.jobs（生产方接线 + 协作式取消）', () => {
+  it('导入任务在宿主登记：kind novel-import、label 说清条数，收尾兑现 completed', async () => {
+    const dir = await makeTempDir('novel-job-h1-')
+    const registry = await SourceRegistry.load(dir)
+    const { host, ties } = fakeHost()
+    const jobs = new SourceJobs({ registry, probe: async () => okProbe, host })
+    jobs.startImport([
+      { name: 'a.json', text: JSON.stringify([raw('A', 'https://a.com')]) },
+      { name: 'b.json', text: JSON.stringify([raw('B', 'https://b.com')]) },
+    ])
+    expect(ties).toHaveLength(1)
+    expect(ties[0].spec.kind).toBe('novel-import')
+    expect(ties[0].spec.label).toContain('2')                     // 宿主/模型看得见这活有多大
+    const j = await waitDone(jobs)
+    expect(j.phase).toBe('done')                                  // 自有 JobState 语义一字未改
+    await expect(ties[0].done).resolves.toMatchObject({ status: 'completed' })
+  })
+
+  it('批量验证登记为 novel-probe；宿主 cancel 后在取下一条前收手，跑过的不抹除', async () => {
+    const dir = await makeTempDir('novel-job-h2-')
+    const registry = await SourceRegistry.load(dir)
+    const { host, ties } = fakeHost()
+    const seeder = new SourceJobs({ registry, probe: async () => okProbe, host })
+    seeder.startImport(filesOf(8))                                // 8 源 > PROBE_CONCURRENCY 5
+    await waitDone(seeder)
+    const ids = registry.list().map((s) => s.id)
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => { release = r })
+    const jobs = new SourceJobs({ registry, probe: async () => { await gate; return okProbe }, host })
+    jobs.startBatchProbe(ids)
+    const tie = ties[ties.length - 1]
+    expect(tie.spec.kind).toBe('novel-probe')
+    await new Promise((r) => setTimeout(r, 5))
+    tie.cancel('用户从宿主取消')                                    // 在途 5 发探针不打断，只拦后续取条目
+    release()
+    const j = await waitDone(jobs)
+    expect(j.phase).toBe('failed')
+    expect(j.error ?? '').toContain('已取消')
+    expect(j.error ?? '').toContain('用户从宿主取消')
+    expect(j.done).toBeLessThan(j.total)                          // 确实没跑完全部
+    await expect(tie.done).resolves.toMatchObject({ status: 'killed' })
+    expect(registry.list().some((s) => s.status === 'verified')).toBe(true)  // 跑过的那批保留
+  })
+
+  it('宿主缺席（单测直构 / 无 jobs 的组合）→ 任务照跑，不因缺注册表而炸', async () => {
+    const { jobs } = await mkJobs()
+    jobs.startImport(filesOf(1))
+    expect((await waitDone(jobs)).phase).toBe('done')
+  })
+})

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { parseCookieString, validateSourceJson } from '../../src/client/importer.js'
-import { filterByGroup, filterByStatus, filterSources, groupIcon, selectMany, setEditMode, setGroupFilter, setQuery, setStatusFilter, resetSourceListUi, sourceListUi, toggleSelect, UNGROUPED } from '../../src/client/source-list.js'
+import { clearSelection, filterByGroup, filterByStatus, filterSources, groupIcon, selectMany, setEditMode, setGroupFilter, setQuery, setStatusFilter, resetSourceListUi, sourceListUi, toggleSelect, UNGROUPED } from '../../src/client/source-list.js'
 import type { SourcePublic } from '../../src/client/views/types.js'
 
 /** 登录面板输入解析（原埋在 SourceAuthPane 的 JSX 里无人能测——拆出即测） */
@@ -163,6 +163,14 @@ describe('sourceListUi store', () => {
     setEditMode(false)
     expect(sourceListUi.get().editMode).toBe(false)
     expect(sourceListUi.get().selection).toEqual([])
+  })
+  it('clearSelection：只清勾选、编辑态不动（批量动作做完的收尾——借 setEditMode(false) 清会连带退出编辑态）', () => {
+    setEditMode(true)
+    toggleSelect('a')
+    selectMany(['b'])
+    clearSelection()
+    expect(sourceListUi.get().selection).toEqual([])
+    expect(sourceListUi.get().editMode).toBe(true)
   })
   it('query/chip 状态跨调用存活（模块级——组件卸载不重置）', () => {
     setQuery('笔趣')

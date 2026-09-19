@@ -5,11 +5,11 @@
 ## 功能特性
 
 - **书源导入**：拖入或选择 .json 文件（可多选）或粘贴 legado 书源 JSON，导入跑在**服务端后台任务**——关掉页面不打断，进度与汇总随时回看；按书源地址自动去重（可用源优先保留）
-- **阅读体验**：封面网格书架（带阅读进度）、分批搜索（进度可见、失败源折叠）、连续滚动阅读（滚动到底自动预取下一章）、目录抽屉跳章、字号 / 行距 / 栏宽 / 纸张色可调、深浅主题自适应
+- **阅读体验**：封面网格书架（带阅读进度）、聚合搜索跑在服务端（进度实时推送、可中途**停止**且保留已搜出的结果、**切走界面不丢结果**、失败源折叠）、连续滚动阅读（滚动到底自动预取下一章）、目录抽屉跳章、字号 / 行距 / 栏宽 / 纸张色可调、深浅主题自适应
 - **AI 助手工具**：搜索、读章、导入书源、试跑书源、查书架五个工具，与 UI 共用同一条链路
 - **整本导出**：一键导出全书 TXT（流式下载、显示进度、可随时取消）
 - **本地 TXT 导入**：本地小说文件（GBK / UTF-8 自动识别）解析章节后入架阅读
-- **书源管理**（调度台 IA，入口在「小说」视图顶部「书源管理」tab）：**待办收件箱**把坏源/未验证置顶成任务卡（批量重验 / 一键验证，读数与动作同框，处理完自动消解）；源列表支持文本/状态/分组过滤、行内启停开关（停用源不参与搜索，随时开回）、编辑模式批量启停/验证/删除、单源试跑下钻、登录支持（`POST /sources/:id/auth` 支持 cookie 录入与 `loginUrl` 脚本执行；「去登录」当前只打开源首页——见 `docs/design/client.md` 已知开口）；导入是弹层（拖放/粘贴），完成事项回流待办箱；删除统一模态二次确认（点名登录态失效，危险区/手输口令退役）
+- **书源管理**（调度台 IA，入口在「小说」视图顶部「书源管理」tab）：**待办收件箱**把坏源/未验证置顶成任务卡（批量重验 / 一键验证，处理完自动消解；卡可「✕ 忽略」——待办是提示，成员集一变会自动回来），读数集中在源列表头的**状态带**（共 N · 已启用 · 已停用 · 未验证 · 坏源）；源列表支持文本/状态/分组过滤、行内启停开关（停用源不参与搜索，随时开回）、编辑模式批量启停/验证/删除（做完留在编辑态、勾选保留，成功进反馈条）、单源试跑下钻、登录支持（`POST /sources/:id/auth` 支持 cookie 录入与 `loginUrl` 脚本执行；「去登录」当前只打开源首页——见 `docs/design/client.md` 已知开口）；导入是弹层（拖放/粘贴），完成事项回流待办箱；删除统一模态二次确认（点名登录态失效，危险区/手输口令退役）
 
 ## 快速开始
 
@@ -68,7 +68,7 @@ dsh plugin --profile web remove @xrn1997/dsh-novel
 | --- | --- |
 | 健康检查 | `GET /novel-api` |
 | 书源 | `GET /sources`、`POST /sources/import`（后台任务，body `{files:[{name,text}]}`，上限 32MB）、`GET /sources/job-status`（任务进度/汇总）、`POST /sources/batch-probe`（批量验证后台任务）、`POST /sources/batch-enabled`（批量启停）、`POST /sources/batch-delete`、`POST /sources/:id/probe`、`POST /sources/:id/enabled`（启停）、`POST /sources/:id/auth`、`DELETE /sources/:id` |
-| 阅读 | `GET /search`、`GET /search/plan`（本次聚合搜索的参搜源集——参与集的唯一主人在服务端）、`GET /book`、`GET /toc`、`GET /chapter`（`?refresh=1` 绕过缓存） |
+| 阅读 | `GET /search`（一次性收齐全部命中）、`GET /search/plan`（本次聚合搜索的参搜源集——参与集的唯一主人在服务端）、**`POST /search/job`（把聚合搜索交给后台任务跑，body `{keyword, sourceIds?}` → `{jobId}`；离开界面不影响它跑完）**、**`GET /search/job-status?since=N`（按游标读增量：`added` 是新完成的分组、`next` 是下次该带的游标；整轮结果保留 30 分钟）**、**`GET /search/job-stream?since=N`（同一份快照的 SSE 推送：首帧即 baseline，终帧后服务端关流；推送不可用时客户端自动回落到上面的快照轮询）**、**`POST /search/job-cancel`（停止本轮：不再往下搜，已搜出的命中一律保留）**、`GET /book`、`GET /toc`、`GET /chapter`（`?refresh=1` 绕过缓存） |
 | 书架 | `GET /shelf`、`PUT /shelf/:key`（带 `title` 加书 / 带 `progress` 更新进度 / 带 `patch` 对在架书改元数据）、`DELETE /shelf/:key` |
 | 导出 | `GET /export`（流式 TXT，响应头 `X-Novel-Total-Chapters` 为总章数，连接断开即停止抓取） |
 | 本地书 | `POST /local/import?name=…`、`DELETE /local?id=…` |

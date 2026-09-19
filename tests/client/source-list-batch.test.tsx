@@ -19,6 +19,10 @@ import type { JobState, SourcePublic } from '../../src/client/views/types.js'
  *   对应 describe 从 logic.test.ts 移除；
  * - 行内「⋯」溢出菜单提供单源删除入口（低频动作收纳）。
  * 启停/验证批量的写口载荷、失败上报、在途防重复提交口径不变。
+ *
+ * **refresh / onChanged 在此文件必须是可区分的 Mock**：两者分别是「重启任务轮询」与
+ * 「重取源列表」的出口，曾经在这里全传空函数，于是批量启停接错出口（该重取源列表却只
+ * 重启了轮询）在本文件完全测不出来，实机表现为点完启停界面停在旧值（2026-09 回归）。
  */
 
 const src = (over: Partial<SourcePublic> & { id: string }): SourcePublic => ({
@@ -37,8 +41,13 @@ const runningProbe: JobState = {
   issues: [], fileErrors: [], startedAt: 0,
 }
 
+/** 两个「成功后重读什么」的出口：整壳共用，逐用例断言谁该被调（不可区分的空函数是本文件
+ *  曾漏掉 2026-09 启停接错出口的根因） */
+let refresh: ReturnType<typeof vi.fn>
+let onChanged: ReturnType<typeof vi.fn>
+
 const view = (deps: FakeSettingsDeps, sources: SourcePublic[] = [S1, S2, S3], job: JobState | null = null): ReactNode =>
-  <SourceList sources={sources} job={job} refresh={() => {}} onChanged={() => {}} onProbe={() => {}} onImport={() => {}} deps={deps} />
+  <SourceList sources={sources} job={job} refresh={refresh} onChanged={onChanged} onProbe={() => {}} onImport={() => {}} deps={deps} />
 
 /** 进编辑态并勾选指定行（复选框 aria-label = `选择 ${name}`） */
 function selectRows(names: string[]): void {
@@ -55,51 +64,77 @@ function selbarButton(label: string): HTMLElement {
   return btn as HTMLElement
 }
 
-beforeEach(() => resetSourceListUi())
+beforeEach(() => { resetSourceListUi(); refresh = vi.fn(); onChanged = vi.fn() })
 afterEach(cleanup)
 
-describe('选中动作条：启用/停用/验证所选（写口载荷 + 成功刷新 + 失败上报）', () => {
-  it('启用所选：POST batch-enabled {ids, enabled:true}，回包后 refresh 并退出编辑态', async () => {
-    const deps = makeDeps()
+describe('选中动作条：启用/停用/验证所选（写口载荷 + 成功重读对出口 + 失败上报）', () => {
+  it('启用所选：POST batch-enabled {ids, enabled:true} → 重取源列表（onChanged）+ 反馈条报服务端计数，留在编辑态且勾选保留', async () => {
+    // 服务端只改了 1 个（未知 id 静默跳过是其契约）：条上要说 updated，不是"我勾了 2 个"
+    const deps = makeDeps({ apiSend: vi.fn(async () => ({ updated: 1 })) })
     render(view(deps))
     selectRows(['源一', '源二'])
     fireEvent.click(screen.getByText('启用所选'))
 
     await waitFor(() => expect(deps.apiSend).toHaveBeenCalledWith(
       'POST', ROUTES.sourcesBatchEnabled.path, { ids: ['s1', 's2'], enabled: true }))
-    await waitFor(() => expect(document.querySelector('[data-novel-selbar]')).toBeNull())
+    // 启停改的是源本身 → 必须重取 sources（onChanged）。曾经这里调的是 refresh（只重启任务
+    // 轮询），写成功后没人重读，界面停在旧值、要重开视图才对（2026-09 实机 bug）。
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
+    expect(refresh).not.toHaveBeenCalled()
+    expect(deps.pushOk).toHaveBeenCalledWith('已启用 1 个源')   // 批量必须有条：被改的行可能在屏幕外
+    // 这批源做完启停**还在列表里**，勾选就是它们的现场：留着才能连着点「验证所选」/改主意
+    // 再停用，不必重勾（2026-09 用户裁定：清勾选「不应该」）
+    expect(screen.getByText('完成')).toBeTruthy()                      // 还在编辑态
+    expect(document.querySelector('[data-novel-selbar]')).not.toBeNull()
+    expect((screen.getByLabelText('选择 源一') as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByLabelText('选择 源二') as HTMLInputElement).checked).toBe(true)
     expect(deps.pushError).not.toHaveBeenCalled()
   })
 
-  it('停用所选：同端点 enabled:false', async () => {
+  it('停用所选：同端点 enabled:false，同样走重取源列表', async () => {
     const deps = makeDeps()
     render(view(deps))
     selectRows(['源三'])
     fireEvent.click(screen.getByText('停用所选'))
     await waitFor(() => expect(deps.apiSend).toHaveBeenCalledWith(
       'POST', ROUTES.sourcesBatchEnabled.path, { ids: ['s3'], enabled: false }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
+    expect(document.querySelector('[data-novel-selbar]')).not.toBeNull()
   })
 
-  it('验证所选：startBatchProbeJob(选中 ids) 经注入 deps 提交', async () => {
+  it('验证所选：startBatchProbeJob(选中 ids) 经注入 deps 提交；成功重启任务轮询（不重取源列表）', async () => {
     const deps = makeDeps()
     render(view(deps))
     selectRows(['源一', '源三'])
     fireEvent.click(screen.getByText('验证所选'))
     await waitFor(() => expect(deps.startBatchProbeJob).toHaveBeenCalledWith(['s1', 's3']))
+    // 与启停的分工：验证起的是后台任务，源状态要等任务收尾才变 → 此处该重启轮询，
+    // 重取源列表反而是无用功（收尾 reload 另有记账，见 SettingsSection 的 reloadedJob）
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1))
+    expect(onChanged).not.toHaveBeenCalled()
   })
 
-  it('失败半场：pushError 上报「操作失败」+ 原因；不触发 refresh（服务端没变就不重拉）', async () => {
+  it('清空选择：只退勾选，不退出编辑态（钮写的是「清空选择」，此前连带把编辑态一起退了）', () => {
+    render(view(makeDeps()))
+    selectRows(['源一'])
+    fireEvent.click(screen.getByText('清空选择'))
+    expect(document.querySelector('[data-novel-selbar]')).toBeNull()
+    expect(screen.getByText('完成')).toBeTruthy()          // 还在编辑态
+    fireEvent.click(screen.getByLabelText('选择 源二'))      // 复选框仍在，直接接着勾
+    expect(document.querySelector('[data-novel-selbar]')).not.toBeNull()
+  })
+
+  it('失败半场：pushError 上报「操作失败」+ 原因；两个重读出口都不触发（服务端没变就不重拉），勾选留着可重试', async () => {
     const deps = makeDeps({ apiSend: vi.fn(() => Promise.reject(new Error('boom'))) })
-    const refresh = vi.fn()
-    render(
-      <SourceList sources={[S1, S2, S3]} job={null} refresh={refresh} onChanged={() => {}} onProbe={() => {}} onImport={() => {}} deps={deps} />
-    )
+    render(view(deps))
     selectRows(['源一'])
     fireEvent.click(screen.getByText('启用所选'))
     await waitFor(() => expect(deps.pushError).toHaveBeenCalledTimes(1))
     expect(String(deps.pushError.mock.calls[0][0])).toContain('操作失败')
     expect(String(deps.pushError.mock.calls[0][0])).toContain('boom')
     expect(refresh).not.toHaveBeenCalled()
+    expect(onChanged).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-novel-selbar]')).not.toBeNull()   // 勾选留着：失败不许把现场一起清掉
   })
 
   it('在途防重复提交：批量任务运行中（probing）三个写按钮禁用；删除走模态确认仍可打开（可先攒着）', async () => {
@@ -114,12 +149,9 @@ describe('选中动作条：启用/停用/验证所选（写口载荷 + 成功�
 })
 
 describe('删除：统一模态二次确认（2026 改版——手输口令与危险区退役）', () => {
-  it('删除所选 → 模态点名数量；确认后 POST batch-delete {ids}（点击时快照）', async () => {
-    const deps = makeDeps()
-    const onChanged = vi.fn()
-    render(
-      <SourceList sources={[S1, S2, S3]} job={null} refresh={() => {}} onChanged={onChanged} onProbe={() => {}} onImport={() => {}} deps={deps} />
-    )
+  it('删除所选 → 模态点名数量；确认后 POST batch-delete {ids}（点击时快照）+ 勾选清空 + 反馈条', async () => {
+    const deps = makeDeps({ apiSend: vi.fn(async () => ({ removed: 2 })) })
+    render(view(deps))
     selectRows(['源一', '源二'])
     fireEvent.click(screen.getByText('删除所选'))
 
@@ -132,7 +164,12 @@ describe('删除：统一模态二次确认（2026 改版——手输口令与�
       'POST', ROUTES.sourcesBatchDelete.path, { ids: ['s1', 's2'] }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(onChanged).toHaveBeenCalledTimes(1)
+    expect(deps.pushOk).toHaveBeenCalledWith('已删除 2 个源')
     expect(deps.pushError).not.toHaveBeenCalled()
+    // 已删 id 留在选择集里 = 幽灵勾选：动作条还喊「已选 2」而表里只剩 1 行，
+    // 下一轮批量动作会把死 id 一起提交
+    await waitFor(() => expect(document.querySelector('[data-novel-selbar]')).toBeNull())
+    expect(screen.getByText('完成')).toBeTruthy()               // 删除也不弹回浏览态（与启停同口径）
   })
 
   it('带登录态源点名：模态提示 cookie 失效（authCount 经派生 view-model）', () => {
@@ -175,12 +212,9 @@ describe('删除：统一模态二次确认（2026 改版——手输口令与�
     expect(document.activeElement?.textContent).toBe('删除所选')
   })
 
-  it('confirmDelete 失败半场：pushError 上报「批量删除失败」，模态照常收起，onChanged 不触发', async () => {
+  it('confirmDelete 失败半场：pushError 上报「批量删除失败」，模态照常收起，onChanged 不触发且勾选留着', async () => {
     const deps = makeDeps({ apiSend: vi.fn(() => Promise.reject(new Error('磁盘只读'))) })
-    const onChanged = vi.fn()
-    render(
-      <SourceList sources={[S1, S2, S3]} job={null} refresh={() => {}} onChanged={onChanged} onProbe={() => {}} onImport={() => {}} deps={deps} />
-    )
+    render(view(deps))
     selectRows(['源一'])
     fireEvent.click(screen.getByText('删除所选'))
     fireEvent.click(screen.getByText('确认删除'))
@@ -190,6 +224,7 @@ describe('删除：统一模态二次确认（2026 改版——手输口令与�
     expect(String(deps.pushError.mock.calls[0][0])).toContain('磁盘只读')
     expect(screen.queryByRole('dialog')).toBeNull()       // 失败也收模态（错误进全局条，可重开）
     expect(onChanged).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-novel-selbar]')).not.toBeNull()   // 没删成就不清勾选（现场留着重试）
   })
 
   it('确认在途防重：双击「确认删除」只发一次 POST（危险动作不许有双写窗口——与书架 delBusy 同款口径）', async () => {

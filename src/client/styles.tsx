@@ -197,10 +197,23 @@ export const NOVEL_CSS = `
    毫秒再弹回（节流 400ms 实测：泳道连续绘制 26 帧 ≈ 416ms）。
    修法：宿主容器 position:relative + 状态条 position:absolute —— 泳道来去不再参与布局，
    慢操作与错误条也不再顶动内容。代价：条目在场时它浮在区块头上方一小条（自带底/描边/投影
-   以便与正文分离），条目仍可点（任务条=跳转、错误条=定位/忽略）。 */
-.novel-status-host { position: relative; }
+   以便与正文分离），条目仍可点（任务条=跳转、错误条=定位/忽略）。
+   2026-09 住址变更：锚点从「小说视图内的 .novel-status-host」换成「宿主 shell.overlay 里的
+   .novel-shell-status」——conversation.view 一次只渲染一个 tab，状态条住在视图环内就等于切走
+   tab 即失去读数。那一层默认 click-through（官方声明：entries opt back into pointer events），
+   故条目自己收回 pointer-events。
+   但**条身不能沿用原来那套顶部通栏偏移**：原锚点在小说视图内部的区块头，宽满 = 视图宽；换到
+   overlay 后容器铺满整个 frame（宿主 .pI_x6G_overlayLayer 是 inset: 0，含会话顶栏），
+   「top + left + right」的真机读数就是「y=6、左右各 8、全宽 1264、高 26」的一条——正好盖在
+   宿主会话标题行上，而它是 pointer-events:auto，于是任务在跑期间那一条带子里宿主自己的钮都点不到。
+   改锚右下并限宽：角落无宿主 chrome，观感是「一颗浮在内容之上的状态胶囊」。 */
+.novel-shell-status {
+  position: fixed; inset: 0; pointer-events: none; z-index: var(--novel-z-status);
+}
+.novel-shell-status .novel-status-bar { pointer-events: auto; }
 .novel-status-bar {
-  position: absolute; top: var(--novel-sp-2); left: var(--novel-sp-3); right: var(--novel-sp-3);
+  position: absolute; bottom: var(--novel-sp-3); right: var(--novel-sp-3);
+  max-width: min(420px, calc(100% - 2 * var(--novel-sp-3)));
   z-index: var(--novel-z-status);
   display: flex; flex-direction: column;
   background: var(--novel-layer-2); border: 1px solid var(--novel-border);
@@ -351,17 +364,38 @@ export const NOVEL_CSS = `
   padding: var(--novel-sp-3) var(--novel-sp-4); display: flex; flex-direction: column; gap: var(--novel-sp-2); align-items: flex-start; }
 .novel-todo-card.err { box-shadow: inset 3px 0 0 var(--novel-err); }
 .novel-todo-card.warn { box-shadow: inset 3px 0 0 var(--novel-warn); }
+/* 卡内首行：状态名 + 忽略钮（右锚）。卡标题不印计数——读数唯一住址是列表头状态带 */
+.novel-todo-head { display: flex; align-items: center; gap: var(--novel-sp-3); width: 100%; }
 .novel-todo-label { font-weight: 600; font-size: var(--novel-fs-md); white-space: nowrap; }
 .novel-todo-label.err { color: var(--novel-err); }
 .novel-todo-label.warn { color: var(--novel-warn); }
 .novel-todo-names { color: var(--novel-text-3); font-size: var(--novel-fs-sm); line-height: 1.5;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.novel-inbox-ok { padding: var(--novel-sp-4); color: var(--novel-ok); font-size: var(--novel-fs-base);
-  background: color-mix(in srgb, var(--novel-ok) 10%, transparent); }
-/* 源列表头（标题 + meta + 过滤工具 + 编辑切换 + 导入入口）与列表体 */
+/* 源列表头（标题 + 状态带 + 过滤工具 + 编辑切换 + 导入入口）与列表体。
+   container-type: inline-size 让下面的状态带退化按**这条头行自身宽度**判定（宿主会话列可拖窄，
+   视口断点量不准——与 .novel-table 收地址列同一套理由）。 */
 .novel-list-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--novel-sp-3) var(--novel-sp-4);
-  padding: var(--novel-sp-3) var(--novel-sp-4); border-bottom: 1px solid var(--novel-border-faint); }
+  padding: var(--novel-sp-3) var(--novel-sp-4); border-bottom: 1px solid var(--novel-border-faint);
+  container-type: inline-size; }
 .novel-list-head strong { font-size: var(--novel-fs-base); }
+/* 状态带（2026-09）：全库读数的唯一住址（待办卡可忽略，读数不能跟着提示一起消失）。
+   点号是分隔符不是内容，故走 ::before——加一条数就多一个点，视图里不抄分隔符。
+   非 0 的 未验证/坏源 才吃 warn/err 色（0 是"没事"，不该红）；.slim 是窄列可牺牲的部分 */
+.novel-src-stats { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: var(--novel-sp-2);
+  color: var(--novel-text-2); font-size: var(--novel-fs-sm); }
+.novel-src-stats > span { white-space: nowrap; }
+.novel-src-stats > span:not(:first-child)::before { content: '·'; margin-right: var(--novel-sp-2); color: var(--novel-text-3); }
+.novel-src-stats .warn { color: var(--novel-warn); }
+.novel-src-stats .err { color: var(--novel-err); }
+/* 窄列退化：留「共 N 个源 · 已启用 M」，掉 已停用/未验证/坏源（丢了能从下拉再筛回来，宽列也在同一屏）。
+   1000px = 渲染台实测（2026-09-19，out/settings.light.html，浏览器改 .novel-root 宽后量
+   .novel-list-head 的 content-box，量的是**出厂 CSS**、非注入覆盖）：状态带五项自然宽 326px、
+   退化后 140px；整行还含标题 + 文本框 + 三个下拉 + 两个钮——内容宽 1004 时五项同线，
+   五项常驻则在 984 就把钮挤下第二行；退化后单线能撑到 814，再窄由 flex-wrap 自然折行（不裁字）。
+   即退化买回 ~170px 单线余量。宿主内容列文档实测 ~1600（此处内容宽 1544）→ 正常态全五项同线。 */
+@container (max-width: 1000px) {
+  .novel-src-stats .slim { display: none; }
+}
 .novel-list-body { display: flex; flex-direction: column; gap: var(--novel-sp-3); padding: var(--novel-sp-3) var(--novel-sp-4) var(--novel-sp-4); }
 /* 行内「⋯」溢出菜单：低频动作收纳（登录态/试跑/删除）——行内只留当下要用的；
    锚点是 .novel-actions（position:relative），菜单浮在该格下方 */

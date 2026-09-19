@@ -55,7 +55,7 @@ export interface ReaderSessionState {
   currentChapter: number
 }
 
-type DebouncedSave = ((chapterIndex: number, offsetRatio: number) => void) & { cancel(): void }
+type DebouncedSave = ((chapterIndex: number, offsetRatio: number) => void) & { cancel(): void; flush(): void }
 
 export class ReaderSession {
   private readonly store = createStore<ReaderSessionState>({
@@ -82,7 +82,7 @@ export class ReaderSession {
     const d = debounce((chapterIndex: number, offsetRatio: number): void => {
       deps.saveProgress(chapterIndex, offsetRatio)
     }, saveDebounceMs)
-    this.save = Object.assign((i: number, r: number): void => d(i, r), { cancel: () => d.cancel() })
+    this.save = Object.assign((i: number, r: number): void => d(i, r), { cancel: () => d.cancel(), flush: () => d.flush() })
   }
 
   get state(): ReaderSessionState { return this.store.get() }
@@ -232,7 +232,9 @@ export class ReaderSession {
     this.anchorsNow = this.port.measureAnchors()
   }
 
-  dispose(): void { this.save.cancel() }
+  /** 退出阅读器：把防抖窗口里的进度补落盘再走。cancel 会静默丢最后一段章内偏移（实测缺陷），
+   *  而 fetch 在组件卸载后照样完成——这里没有「来不及存」的结构理由，只有存与不存。 */
+  dispose(): void { this.save.flush() }
 }
 
 function toErrorInfo(e: unknown): { code?: string; message?: string } {

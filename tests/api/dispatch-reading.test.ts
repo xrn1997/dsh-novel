@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ReadingService } from '../../src/services/reading.js'
+import { queries, ROUTES } from '../../src/shared/wire.js'
 import { startServer } from './helpers.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
 
@@ -202,3 +203,138 @@ describe('reading/shelf 面', () => {
     expect(r.status).toBe(404)
   })
 })
+
+/**
+ * 搜索后台任务的传输层：提交即由 Node 半跑完并持有整轮结果，读面带游标增量。
+ * 这里只验路由的形状与判据（405/400/游标语义）；持有与替换的分期逻辑在
+ * tests/services/search-job.test.ts 直测持有者。
+ */
+describe('search/job 面（后台搜索任务的提交与快照读取）', () => {
+  const post = async (body: unknown): Promise<{ status: number; json: any }> => {
+    const r = await fetch(`${base}/novel-api/${ROUTES.searchJob.path}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    })
+    return { status: r.status, json: await r.json() as any }
+  }
+  const get = async (since?: number): Promise<any> => {
+    const r = await fetch(`${base}/novel-api/${queries.searchJobStatus(since)}`)
+    expect(r.status).toBe(200)
+    return ((await r.json() as any).value as { job: any }).job
+  }
+  /** 轮询到本轮收尾（在途 vs 终态的判据就是 phase，UI 也用这一个） */
+  const apiSendOf = async (path: string): Promise<{ status: number; body: any }> => {
+    const r = await fetch(`${base}/novel-api/${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+    return { status: r.status, body: await r.json() as any }
+  }
+  const settle = async (): Promise<any> => {
+    for (let i = 0; i < 500; i++) {
+      const job = await get()
+      if (job.phase !== 'running') return job
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    throw new Error('搜索任务未在限时内收尾')
+  }
+
+  it('方法守卫：提交只收 POST、快照只收 GET', async () => {
+    expect((await fetch(`${base}/novel-api/${ROUTES.searchJob.path}`)).status).toBe(405)
+    expect((await fetch(`${base}/novel-api/${ROUTES.searchJobStatus.path}`, { method: 'POST' })).status).toBe(405)
+  })
+  it('入参校验：缺/空白 keyword → 400；sourceIds 非 string[] → 400', async () => {
+    for (const body of [{}, { keyword: '' }, { keyword: '   ' }, { keyword: 7 },
+      { keyword: '斗罗', sourceIds: 's1' }, { keyword: '斗罗', sourceIds: [1] }]) {
+      const r = await post(body)
+      expect(r.status, JSON.stringify(body)).toBe(400)
+      expect(r.json.error.code, JSON.stringify(body)).toBe('BadRequest')
+    }
+  })
+  it('提交 → { jobId }；终态快照带整轮结果（total/done/added/next）', async () => {
+    const { status, json } = await post({ keyword: '斗罗' })
+    expect(status).toBe(200)
+    expect(typeof json.value.jobId).toBe('string')
+    const job = await settle()
+    expect(job).toMatchObject({
+      keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1,
+    })
+    expect(job.added[0].hits[0]).toMatchObject({ title: '斗罗', author: '唐家' })
+  })
+  it('游标：since=next → 零增量；since 超前 → 夹到末尾（不是 400）；since 非法 → 当作 0', async () => {
+    expect((await get(1)).added).toEqual([])
+    expect((await get(999)).added).toEqual([])
+    expect((await get(999)).next).toBe(1)
+    const r = await fetch(`${base}/novel-api/${ROUTES.searchJobStatus.path}?since=abc`)
+    expect(((await r.json() as any).value.job.added) as any[]).toHaveLength(1)
+  })
+  it('只留最近一轮：新提交后读面指向新一轮，上一轮结果不再可读', async () => {
+    const { json } = await post({ keyword: '斗罗' })
+    expect(json.value.jobId).toBeTruthy()
+    const before = await settle()
+    const again = await post({ keyword: 'tail' })
+    expect(again.json.value.jobId).not.toBe(before.id)
+    const after = await settle()
+    expect(after.id).toBe(again.json.value.jobId)
+    expect(after.keyword).toBe('tail')
+  })
+
+  /** SSE 是「不等下一拍」的加速器：帧体就是快照查询的那一份 `{ job }`，游标同一条。
+   *  增量真的逐帧流出由 `tests/services/search-job.test.ts` 的 subscribe 钉；这里钉形状与关流。 */
+  it('POST search/job-cancel → {cancelled}；取消不改读面形状（快照仍可整轮翻）', async () => {
+    const { json } = await post({ keyword: '斗罗' })
+    await settle()                                   // 假 fetch 秒回：本轮通常早已终态
+    const r = await apiSendOf(ROUTES.searchJobCancel.path)
+    expect(r.status).toBe(200)
+    expect(typeof r.body.value.cancelled).toBe('boolean')      // true=真停在半路；false=空钮（本轮已收尾）
+    expect(r.body.value.cancelled).toBe(false)                 // settle() 已等到终态 → 只能是空钮
+    const twice = await apiSendOf(ROUTES.searchJobCancel.path)
+    expect(twice.body.value.cancelled).toBe(false)             // 再点还是空钮，不会二次结算
+    const after = await get(0)
+    expect(after.id).toBe(json.value.jobId)               // 取消不许抹掉本轮结果
+    expect(after.added.length).toBeGreaterThan(0)
+  })
+
+  it('SSE 流：每帧都是同一份快照、只含本轮、终帧后服务端关流', async () => {
+    const { json } = await post({ keyword: '斗罗' })
+    const res = await fetch(`${base}/novel-api/${queries.searchJobStream()}`)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('text/event-stream')
+    expect(res.headers.get('x-accel-buffering')).toBe('no')         // 经代理不许攒帧，否则「即时」变「整批迟到」
+    const frames = await readSse(res)
+    expect(frames.length).toBeGreaterThanOrEqual(1)
+    expect(frames.every((f) => f?.id === json.value.jobId)).toBe(true)   // 不许夹带上一轮的帧
+    expect(frames[frames.length - 1].phase).not.toBe('running')
+    expect(res.body).not.toBeNull()                                  // readSse 读到 done = 服务端已 end
+
+    const snap = await get(0)
+    expect(frames[frames.length - 1].added.map((g: any) => g.sourceId))
+      .toEqual(snap.added.map((g: any) => g.sourceId))               // 推送与查询读数一字不差
+  })
+
+  it('SSE 的方法守卫与游标兜底（非法 since 当作 0，不炸）', async () => {
+    expect((await fetch(`${base}/novel-api/${ROUTES.searchJobStream.path}`, { method: 'POST' })).status).toBe(405)
+    const res = await fetch(`${base}/novel-api/${ROUTES.searchJobStream.path}?since=abc`)
+    expect(res.status).toBe(200)
+    const frames = await readSse(res)
+    expect(frames[0].added.length).toBeGreaterThan(0)                // since 非法 → 全量首帧
+  })
+})
+
+/** 把一条 SSE 响应读成帧数组，直到服务端关流（`done`）——不自己掐表，交给服务端判定结束 */
+async function readSse(res: Response): Promise<any[]> {
+  const reader = res.body!.getReader()
+  const dec = new TextDecoder()
+  const out: any[] = []
+  let buf = ''
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buf += dec.decode(value, { stream: true })
+    let at = buf.indexOf('\n\n')
+    while (at >= 0) {
+      const chunk = buf.slice(0, at)
+      buf = buf.slice(at + 2)
+      const line = chunk.split('\n').find((l) => l.startsWith('data: '))
+      if (line !== undefined) out.push(JSON.parse(line.slice(6)).job)
+      at = buf.indexOf('\n\n')
+    }
+  }
+  return out
+}

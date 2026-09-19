@@ -51,6 +51,7 @@ export type FakeCoreDeps = ClientCoreDeps & {
   apiGet: Mock
   apiSend: Mock
   apiUpload: Mock
+  apiEventStream: Mock
   pushError: Mock
 }
 
@@ -61,6 +62,7 @@ export function makeDeps(over: Overrides<SettingsDeps> = {}): FakeSettingsDeps {
     apiGet: vi.fn(async () => null),
     apiSend: vi.fn(async () => ({})),
     apiUpload: vi.fn(async () => ({})),
+    apiEventStream: vi.fn(async () => {}),
     pushError: vi.fn(),
     pushOk: vi.fn(),
     startImportJob: vi.fn(async () => ({ jobId: 'j-fake' })),
@@ -84,6 +86,7 @@ export function makeReaderDeps(over: Overrides<ReaderDeps> = {}): FakeReaderDeps
     }),
     apiSend: vi.fn(async () => ({})),
     apiUpload: vi.fn(async () => ({})),
+    apiEventStream: vi.fn(async () => {}),
     pushError: vi.fn(),
     streamExport: vi.fn(async () => new Blob(['正文'])),
     saveBlob: vi.fn(),
@@ -91,13 +94,16 @@ export function makeReaderDeps(over: Overrides<ReaderDeps> = {}): FakeReaderDeps
   } as FakeReaderDeps
 }
 
-/** 核心束假依赖：pushError 恒为 Mock；apiGet/apiSend 缺省空实现，over 覆写 */
+/** 核心束假依赖：pushError 恒为 Mock；apiGet/apiSend 缺省空实现，over 覆写。
+ *  `apiEventStream` 缺省「立刻结束、一帧不发」= 服务端没有推送可用 ⇒ 用例默认走轮询那条地基；
+ *  要测推送就覆写它（帧由用例自己喂）。 */
 export function makeCoreDeps(over: Overrides<ClientCoreDeps> = {}): FakeCoreDeps {
   return {
     ...prodCoreDeps,
     apiGet: vi.fn(async () => null),
     apiSend: vi.fn(async () => ({})),
     apiUpload: vi.fn(async () => ({})),
+    apiEventStream: vi.fn(async () => {}),
     pushError: vi.fn(),
     ...over,
   } as FakeCoreDeps
