@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type { NovelSource, SourceAuth, SourceContentKind, SourceStatus } from './types.js'
 import type { NormalizeResult } from './normalize.js'
-import { splitGroups, stripLeadingIcons } from './normalize.js'
+import { contentTypeOfRaw, rawHeaderRule, rawRuleDetailInit, SOURCE_KIND_LABEL, splitGroups, stripLeadingIcons } from './normalize.js'
 import { readJson, writeJsonAtomic } from './storage.js'
 
 /**
@@ -64,13 +64,39 @@ export class SourceRegistry {
    *  type 缺省归一为 'text'——早期数据无此字段（当时 bookSourceType 根本没读）；
    *  groups 拆分迁移——早期只按 `\` 拆，真实导出的逗号粘连组合串（「A,B」一段）在此按
    *  splitGroups 收敛成多段（幂等：干净数据拆完原样）；
-   *  name 前缀图标迁移——上游分组装饰前缀（「⚡📂xx」）按 stripLeadingIcons 剥掉（幂等）。 */
+   *  name 前缀图标迁移——上游分组装饰前缀（「⚡📂xx」）按 stripLeadingIcons 剥掉（幂等）；
+   *  type 按 raw.bookSourceType 重推——legado 真值 1=音频/2=图片/3=文件，旧映射读反且
+   *  「非文本拒绝」口径晚于存量入库，漫画/短剧源被误标 text 混进聚合搜索与文字书架
+   *  （书架诊断实证）；**认不出的编码 → 'unknown'**（2026-09 裁定：读不懂不等于文本源，退出
+   *  参与集；不打 status——探针按搜索面判 verified，坏源那条道会被下一次重验洗白）。 */
   static async load(dir: string): Promise<SourceRegistry> {
     const sources = await readJson<NovelSource[]>(path.join(dir, 'sources.json'), [])
     let changed = false
     for (const s of sources) {
       if (typeof s.enabled !== 'boolean') { s.enabled = true; changed = true }
-      if (s.type !== 'image' && s.type !== 'audio' && s.type !== 'file') { s.type = 'text'; changed = true }
+      if (!(s.type in SOURCE_KIND_LABEL)) { s.type = 'text'; changed = true }
+      const derived = contentTypeOfRaw(s.raw)
+      if (derived !== undefined && s.type !== derived) { s.type = derived; changed = true }
+      // ⑥ ruleDetailInit 按 raw 重推（init 换根映射的存量收敛）：normalize 只在入库时映射 ruleBookInfo.init，
+      // 存量 rules 是旧版派生、缺此键——缺键则详情换根静默不生效、tocUrl 模板 Miss 回退到详情页
+      // 地址 → 目录 `$.rows` 空 → EmptyToc（QQ 源真机判别实证）。raw 是真相、rules 是派生；
+      // 定点补这一个字段，不整链重 normalize（那可能拒绝存量源）。raw 非对象 → 不动；
+      // raw 在场：键恒落成 string | null（NormalizedRules 是 required 形状）。
+      const wantInit = rawRuleDetailInit(s.raw)
+      if (wantInit !== undefined && s.rules.ruleDetailInit !== wantInit) {
+        s.rules.ruleDetailInit = wantInit; changed = true
+      } else if (s.rules.ruleDetailInit === undefined) {
+        s.rules.ruleDetailInit = null; changed = true
+      }
+      // ⑦ headerRule 按 raw 重推（与 ⑥ 同构）：旧版 normalize 把 `@js:` header 当坏 JSON 丢弃
+      // （rules.header=null、规则原文只活在 raw 里）——不重推则动态头永远不生效（顶点类源 4004）。
+      // raw 非对象 → 不动；raw 在场：键恒落成 string | null。
+      const wantHeaderRule = rawHeaderRule(s.raw)
+      if (wantHeaderRule !== undefined && s.rules.headerRule !== wantHeaderRule) {
+        s.rules.headerRule = wantHeaderRule; changed = true
+      } else if (s.rules.headerRule === undefined) {
+        s.rules.headerRule = null; changed = true
+      }
       if (Array.isArray(s.groups)) {
         const migrated = s.groups.flatMap(splitGroups)
         if (migrated.length !== s.groups.length || migrated.some((g, i) => g !== s.groups[i])) {
@@ -152,7 +178,7 @@ export class SourceRegistry {
       statusDetail: s.statusDetail,
       importedAt: s.importedAt,
       lastProbedAt: s.lastProbedAt,
-      hasHeader: s.rules.header !== null,
+      hasHeader: s.rules.header != null || s.rules.headerRule != null,
       hasAuth: !!s.auth,
       authExpired: s.auth?.expired ?? false,
     }

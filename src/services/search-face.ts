@@ -1,9 +1,9 @@
 import { RuleEvalError } from '../engine/index.js'
-import { extractItems, makeSubEval } from './bridge.js'
+import { extractItems, makeSubEval, resolveHeaders } from './bridge.js'
 import type { SubRuleEval } from './bridge.js'
 import { classify } from './errors.js'
 import type { ErrorCategory } from './errors.js'
-import { fetchTextPage, headerOf } from './fetcher.js'
+import { fetchTextPage } from './fetcher.js'
 import type { Fetcher } from './fetcher.js'
 import { isNativeSource } from './normalize.js'
 import { buildSearchRequest, fetchInitOf } from './request.js'
@@ -36,7 +36,7 @@ export type SearchFaceResult =
  * 一律以它为基准，与目录/正文面（page.url = finalUrl）同口径。
  */
 export async function fetchSearchPage(
-  source: NovelSource, keyword: string, fetcher: Fetcher, timeoutMs?: number,
+  source: NovelSource, keyword: string, fetcher: Fetcher, timeoutMs?: number, jsTimeoutMs?: number,
 ): Promise<SearchFaceResult> {
   const { searchUrl, ruleBookList, ruleBookName } = source.rules
   if (searchUrl === null || ruleBookList === null || ruleBookName === null) {
@@ -47,12 +47,12 @@ export async function fetchSearchPage(
     ].filter((x): x is string => x !== null)
     return { ok: false, code: 'RuleMissing', message: `搜索规则缺失或形态不支持：缺 ${missing.join('、')}` }
   }
-  const subEval = makeSubEval(fetcher, source)
-  const template = await resolveSearchTemplate(source, searchUrl, keyword, 1, fetcher)
+  const subEval = makeSubEval(fetcher, source, jsTimeoutMs === undefined ? undefined : { jsTimeoutMs })
+  const template = await resolveSearchTemplate(source, searchUrl, keyword, 1, fetcher, jsTimeoutMs)
   const plan = buildSearchRequest(template, { key: keyword, page: 1 }, source.baseUrl,
     { trimFirstPage: isNativeSource(source.raw) })
   const { text, landedUrl } = await fetchTextPage(fetcher, plan.url,
-    { ...fetchInitOf(plan, headerOf(source)), timeoutMs }, plan.charset)
+    { ...fetchInitOf(plan, await resolveHeaders(fetcher, source, { jsTimeoutMs })), timeoutMs }, plan.charset)
   const items = extractItems(await subEval(ruleBookList, { html: text, baseUrl: landedUrl }, 'search', 'list'))
   return { ok: true, items, landedUrl, subEval }
 }

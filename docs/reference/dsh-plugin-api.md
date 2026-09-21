@@ -407,7 +407,7 @@ children: active !== void 0 && renderSlot("conversation.view", { viewRequest, op
 
 ### 对 dsh-novel 的直接含义
 
-- 「小说」tab = client 入口里 `ctx.slots.inject('conversation.view', () => ctx.slots.register({ name: 'conversation.view', id: 'novel', order: 20, label: () => '小说' }, NovelView))`。`label` 可以是函数（走 locale）也可以直接字符串。
+- ~~「小说」tab = client 入口里 `ctx.slots.inject('conversation.view', () => ctx.slots.register({ name: 'conversation.view', id: 'novel', order: 20, label: () => '小说' }, NovelView))`~~ **已废止（2026-09）**：小说视图迁到全局面板（`sidebar.panellist` + `main`，见 §10 证据 10c），`conversation.view` 注册已撤除。此条保留作**宿主契约参考**——若将来还要在对话区开自己的 tab，形态仍是上面这句；`label` 可以是函数（走 locale）也可以直接字符串。
 - **不需要** `uiConversation.views.register` / `events.register`——novel view 是独立应用，从 `/novel-api` 拉数据；`activateTarget` 对无定义 target 宽容已被第一方代码证实。规范 §10 的「snapshot builder 空投影」开放问题可以关掉：走 slot-only 路线。
 - 从 view 内部发起会话动作用 `ctx.conversation.send(text)`（`IConversation`，`…\service.d.ts:38`）——「阅读状态进 session」如需反向注入可用它或 agent 工具面。
 - 全局阅读进度不随 session 切换：view 组件自持 store，slot 的 `inject: (sessionId) => …` 只在需要 session-scoped 数据时用。
@@ -619,9 +619,18 @@ Node 半头注释（`…\dsh-better-archive\lib\index.js:30-32`）：「The brow
 
 `reference/subsystems/web-client` 分层表配套：Host 应用「拥有权威状态、持久化、mutation 顺序、访问策略与 stream 生产」；Client model「维护不依赖 React 的 Host 状态镜像……保持 object identity」；「UI 包消费这些 Client service，**不在 component store 中复制 transport state**」。
 
+### 证据 10c：全局面板双座位（2026-09 迁移采信，本机 host checkout 实证）
+
+dsh-novel 的小说视图 2026-09 从 `conversation.view` 迁到全局面板，采信的座位契约：
+
+- `sidebar.panellist`：`kind: 'list'`, `scope: 'root'`（`dsh-client-ui-sidebar/lib/types/client/contract/slots.d.ts`；runner catalog `dsh-cordis-client-runner/lib/client.js` 同名条目）。注册项 `{ id（必填；自有 id 并列于 shipped entries，复用 shipped id = 替换该格）, order?, label?（string | thunk）}`；占用者组件收 owner props `SidebarPanelIconOwnerProps { size, active }`——**行本体归宿主**：`ui-sidebar` 的 `PanelRow` 自带按钮、`aria-label`、`aria-current`、Tooltip 与点击 `ctx.layout.selectPanel(id)`，插件只出图标（无障碍名取注册项 label）。README 原文：「With no registrations, neither the list nor spacing for it is rendered. The shipped composition registers no example panel.」
+- `main`：`kind: 'keyed'`, `scope: 'root'`，summary「Central panel selected by sidebar entry id」，注册项 `{ key }`（runner catalog；声明在 `dsh-client-ui-layout`——AppFrame 的四个 root 子级 `sidebar`/`main`/`rightbar`/`shell.overlay` 之一）。keyDomain 原文：「open: any string the owner dispatches …, already taken: conversation」；占用者 `client-ui-conversation ConversationPanel key 'conversation'`；**其余 key 无 Session 绑定**（doc 原文「The reserved `conversation` key hosts the Conversation; other keys receive no Session binding」）。
+- 选中态与抛错口径：布局服务 `ctx.layout`（`dsh-client-ui-layout/lib/types/client/service.d.ts`：`activePanelId: MainPanelId | null`、`selectPanel(panelId)`、`hasMainPanel(id)`；`MainPanelId = Branded<'MainPanelId'>`）。ui-sidebar README 原文：「The same id addresses the component registered in the layout's root-scoped `main` keyed slot; **selecting a missing main entry throws without changing the current selection**」⇒ `sidebar.panellist` 与 `main` 必须同批注册（dsh-novel 在 `apply` 内同步双注册，无半注册窗口）。
+- 运行时（`dsh-client-ui-sidebar/lib/client.js`）：`entriesOfSlot('sidebar.panellist')` 投影成行元数据 `{id, order, label}`（order 升序、label 缺省回落 id），每行 `renderSlot('sidebar.panellist', { size, active }, { only: id })` 取图标；`usePanelInfo((info) => info.activePanelId === id)` 每行只订阅自己的选中态。
+
 ### 对 dsh-novel 的直接含义
 
-- 全局常驻的呈现位是 `shell.overlay`（root scope，无会话也渲染；list 基数 → 不遮蔽任何第一方 entry）。两个必须付的代价：层级在**所有列之上**，且**默认 click-through**——我们的状态条要自己声明 `pointer-events`，`z` 序也要重新判一次（现 `--novel-z-status` 是在小说视图内部的相对层级，overlay 里等于换了坐标系）。
+- **2026-09 迁移落地（用户拍板）**：小说视图从 `conversation.view` 迁到全局面板——`sidebar.panellist` 图标行 + `main` keyed 槽同 id（`'novel'`）双注册（`src/client/index.tsx`；注册面钉子 `tests/client/panel-registration.test.tsx`）。`conversation.view` 注册撤除；`shell.overlay` 常驻层不动（任务读数与面板选中正交）。真机验证（重启宿主后侧栏出现「小说」行、点击在中央面板渲染视图）属用户实盘动作，自动化只证注册面。两个必须付的代价：层级在**所有列之上**，且**默认 click-through**——我们的状态条要自己声明 `pointer-events`，`z` 序也要重新判一次（现 `--novel-z-status` 是在小说视图内部的相对层级，overlay 里等于换了坐标系）。
 - 会话头部 `conversation.session.header.actions` 是次选：与第一方 jobs UI 同位、天然带 `sessionId`，代价是 `session` scope——无会话时那个座位整体不存在。
 - 视图环内的 `useState` 只准留渲染期派生；跨卸载要活的**业务**状态归 Host service（真相）+ 一份 Client model 镜像，跨卸载要活的**交互**状态归注册项声明的 `store`。本仓 `client.md`「业务数据不进 store / 组件内 useState 持有」那条口径与此冲突，需要重新定性（动机不变：不留第二真相；手段要换：一份镜像 ≠ 每组件一份且卸载即清零）。
 
@@ -632,7 +641,7 @@ Node 半头注释（`…\dsh-better-archive\lib\index.js:30-32`）：「The brow
 ## 风险与不确定项
 
 1. **版本漂移**：host checkout 是 0.1.5-rc.1，样例插件编译于 0.1.5-rc.2；`ui-slots`/`slots` 服务的包体未在本机两个 node_modules 中找到独立目录（`@deepseek-ai/dsh-client-ui-slots` 在 host `@deepseek-ai\` 清单中缺席，推断已被并入 web shell 平台基线、只以模块表种子存在——dsh-context tsdown.config 注释「Since dsh 0.1.2 the preloaded-client-externals channel is gone … dsh-client-store joined the platform baseline」支持该推断）。若 dsh-novel 的 client 要 `import { … } from '@deepseek-ai/dsh-client-ui-slots'` 的类型，需从 devDependency 装同版本包拿 d.ts。**2026-09 本机复核**：`dsh-client-ui-slots` / `dsh-client-store` / `dsh-client-ui-primitives` 三个目录在本机 host 下同样缺席（推断成立）；但 `SlotMap` 的**声明**散在功能包里，经 declaration merging 写入——例如 `shell.overlay` 与 `rightbar` 的 `kind`/`scope` 就住在 `dsh-client-ui-layout/lib/types/client/index.d.ts`。所以核查某个座位的基数与作用域，正确动作是在 host 各包里 grep 座位名的**引号字面量**（`'shell.overlay'`），而不是找 slots 包。
-2. **`conversation.view` slot 的确切 props 运行时形状**只从 d.ts（`PropsRuntime<'conversation.view'>`）与编译产物反推；`ConvViewProps` 的完整展开（hooks 注入面）没逐字段展开。实施时先写最小组件（忽略 props）验证 tab 出现，再按需取 `viewRequest`/`openView`。**2026-09 收敛一半**：该座位的 `kind: "list"` / `scope: "session"` / 「rendered one at a time」已从本机生成的 Client inspect catalog 直接读到（见 §10 证据 10a），"切 tab 是否卸载"这一问不再是悬念；剩余悬念只有 owner props 的逐字段形状。
+2. **`conversation.view` slot 的确切 props 运行时形状**只从 d.ts（`PropsRuntime<'conversation.view'>`）与编译产物反推；`ConvViewProps` 的完整展开（hooks 注入面）没逐字段展开。实施时先写最小组件（忽略 props）验证 tab 出现，再按需取 `viewRequest`/`openView`。**2026-09 收敛一半**：该座位的 `kind: "list"` / `scope: "session"` / 「rendered one at a time」已从本机生成的 Client inspect catalog 直接读到（见 §10 证据 10a），"切 tab 是否卸载"这一问不再是悬念；剩余悬念只有 owner props 的逐字段形状——**2026-09 关掉**：本插件已迁出该座位（§10 证据 10c），它不再是本插件的悬念；留在档里只为将来要在对话区开 tab 时少反推一遍。
 3. **order 语义**：chat=0、trajectory=10，order 小者在前（推断）；novel 用 20 排最后。未在源码中找到 order 相同值时的次序保证。
 4. **信任 fence**：样例插件全部自带同源/trustedHosts 检查，但没有官方统一 helper 包；dsh-novel 需自写（better-archive 的 referer/host 判定 6 行足够起步）。若 API 只服务自己的 client 半，这是必须项而非可选项。
 5. **`dsh.bundle.patch` 与手工 cordis.patch.yml 双挂载**：better-sidebar 的 `disabled: !!js` 守卫表明「同一包被 aggregate bundle 与自身 bundle 双挂载 = 整树 boot 失败（duplicate prefix route）」。dsh-novel 单包单挂载无此风险，但如果将来进 aggregate 需加同款守卫。

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ReadingService } from '../../src/services/reading.js'
+import { detailContextOf } from '../../src/services/reading.js'
+import type { SubRuleEval } from '../../src/services/bridge.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
 import { createFetcher } from '../../src/services/fetcher.js'
 import { PageCache } from '../../src/services/cache.js'
@@ -107,6 +109,19 @@ describe('ReadingService', () => {
       await svc.setEnabled(a.id, false)
       expect(svc.searchPlan().sourceIds).toEqual([b])                        // 停用即出参与集
     })
+  it('searchPlan/聚合搜索参与集：非文本源不参搜（当前仅支持小说文本面；源留库不删不改启用态）', async () => {
+    const { svc, registry } = await makeService((u) => (u.includes('/search') ? SEARCH_HTML('斗罗') : null))
+    const [a] = registry.list()
+    const bId = (await svc.importOne({ ...rawSource, bookSourceName: '漫画源', bookSourceUrl: 'https://manga.example.com' })).sourceId!
+    expect(svc.searchPlan().sourceIds.sort()).toEqual([a.id, bId].sort())    // 文本源照旧参搜
+    const b = registry.list().find((s) => s.id === bId)!
+    await registry.edit(() => { b.type = 'image' })                         // 模拟存量非文本源（intake 拒非文本入库，只能注册表侧造）
+    expect(svc.searchPlan().sourceIds).toEqual([a.id])                       // 参与集唯一判定 excludes 非文本
+    await registry.edit(() => { b.type = 'unknown' })                        // 表外编码同档：读不懂不等于文本
+    expect(svc.searchPlan().sourceIds).toEqual([a.id])
+    const groups = await svc.search('斗罗')
+    expect(groups.map((g) => g.sourceId)).toEqual([a.id])
+  })
   })
 
   it('search 命中并分组；broken 单源失败不拖垮他源', async () => {
@@ -350,6 +365,262 @@ describe('ReadingService', () => {
   })
 })
 
+// ── 书 URL 承载请求选项（`url,{option}` 随身份存取——legado AnalyzeUrl 口径）────────
+// 修复背景（书架诊断实证）：米读类 API 源的 ruleBookUrl 是 `端点,{"method":"POST","body":"…book_id=…"}`，
+// 此前搜索面 stripUrlOption 剥掉选项才落库 → bookKey 只剩裸端点、book_id 随 POST body 永久丢失，
+// 详情/目录/正文全链路 405。口径：URL 字符串即请求规格——命中/书架/抓取全程不剥离，
+// 抓取时由 assembleRequest 单点解释（与章节 URL 保留选项的既有口径同源）。
+describe('书 URL 承载请求选项（,{option} 随身份存取）', () => {
+  const OPT = ',{"method":"POST","body":"app=x&book_id=42"}'
+  const API_BOOK = `https://api.example.com/fiction/book/getDetail${OPT}`
+  const API_RAW = {
+    ...rawSource,
+    bookSourceName: 'API源', bookSourceUrl: 'https://api.example.com',
+    searchUrl: 'https://api.example.com/search?q={{key}}',
+    ruleBookList: '@css:.b', ruleBookName: 'tag.a@text', ruleAuthor: 'tag.span@text', ruleBookUrl: 'tag.a@href',
+    ruleDetailName: '$.name', ruleDetailAuthor: '$.author',
+    ruleTocUrl: undefined, ruleChapterName: 'tag.a@text', ruleChapterUrl: 'tag.a@href',
+    ruleContent: '@css:#content@textNodes', nextTocUrl: undefined, nextPageUrl: undefined,
+  }
+  // href 属性里的双引号须实体编码（cheerio 解析时还原）
+  const SEARCH_HTML_OPT = `<html><body><div class="b"><a href="${API_BOOK.replace(/"/g, '&quot;')}">斗破苍穹</a><span>天蚕土豆</span></div></body></html>`
+
+  it('搜索命中 url 保留 ,{option} 后缀——bookKey 即请求规格，不剥离', async () => {
+    const { svc } = await makeService((u) => (u.includes('/search') ? SEARCH_HTML_OPT : null))
+    await svc.importOne(API_RAW)
+    const groups = await svc.search('斗破')
+    const g = groups.find((x) => x.sourceName === 'API源')!
+    expect(g.error).toBeUndefined()
+    expect(g.hits[0].url).toBe(API_BOOK)   // 修复前被剥成裸端点，book_id 随 body 丢失
+  })
+
+  it('getDetail 按 bookKey 的 ,{option} 真发 POST 并带 body（此前 fetchText 裸抓带选项 URL 必炸）', async () => {
+    const calls: Array<{ url: string; method: string; body?: string }> = []
+    const dir = await makeTempDir('novel-rd-')
+    const registry = trackService(await SourceRegistry.load(dir))
+    const shelf = trackService(await Shelf.load(dir))
+    const svc = trackService(await ReadingService.from({
+      registry,
+      shelf,
+      cache: new PageCache(dir),
+      fetcher: createFetcher({
+        fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+          const u = String(input)
+          calls.push({ url: u, method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: init.body } : {}) })
+          if (u.includes('/search')) {
+            return new Response(SEARCH_HTML_OPT, { headers: { 'content-type': 'text/html; charset=utf-8' } })
+          }
+          if (u === 'https://api.example.com/fiction/book/getDetail') {
+            return new Response(JSON.stringify({ name: '斗破苍穹', author: '天蚕土豆' }),
+              { headers: { 'content-type': 'application/json' } })
+          }
+          return new Response('', { status: 404 })
+        }) as never,
+      }),
+    }))
+    await svc.importOne(API_RAW)
+    const src = registry.list().find((s) => s.name === 'API源')!
+    const d = await svc.getDetail(src.id, API_BOOK)
+    expect(calls.some((c) =>
+      c.url === 'https://api.example.com/fiction/book/getDetail' && c.method === 'POST' && c.body === 'app=x&book_id=42',
+    )).toBe(true)   // 抓取解释选项：URL 剥选项、method/body 按选项发
+    expect(d.title).toBe('斗破苍穹')
+    expect(d.author).toBe('天蚕土豆')
+  })
+})
+
+// ── 详情上下文 ruleBookInfo.init + tocUrl 模板过引擎插值（legado BookInfo 口径）────────
+// 修复背景（书架诊断实证，QQ 阅读/松鹤庭沐源）：详情规则依赖 init（`$.data.bookInfo`）换上下文、
+// tocUrl 是 `…all-chapter?bookId={{$.resourceID}}` 模板。此前 init 未实现（normalize 不映射、
+// 详情字段在根 JSON 上全 Miss），tocUrl 模板走 interpolateUrl(空 vars)——插值段原样留下，
+// 目录请求打到字面 `{{$.resourceID}}` 地址 → 0 章。口径（legado BookInfo.kt）：init 先求值，
+// 其结果**替换**后续详情规则的求值上下文；URL 模板过规则引擎按该上下文插值；
+// init 非空但零命中 → RuleEvalError 点名 ruleDetailInit（宁炸不猜：静默降级整页会把
+// 「规则与站点不符」伪装成「源什么都没有」）。
+describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
+  const DETAIL_URL = 'https://qb.example.com/book/1100468914'
+  const TOC_URL = 'https://qb.example.com/qbread/api/book/all-chapter?bookId=1100468914'
+  const CH1_URL = 'https://qb.example.com/c/1.html'
+  const QQ_RAW = {
+    bookSourceName: '正版源', bookSourceUrl: 'https://qb.example.com',
+    searchUrl: 'https://qb.example.com/s?k={{key}}',
+    ruleBookList: '@css:.b', ruleBookName: 'tag.a@text', ruleAuthor: 'tag.span@text', ruleBookUrl: 'tag.a@href',
+    ruleBookInfo: {
+      init: '$.data.bookInfo',
+      name: '$.resourceName', author: '$.author', intro: '$.summary',
+      tocUrl: 'https://qb.example.com/qbread/api/book/all-chapter?bookId={{$.resourceID}}',
+    },
+    ruleToc: {
+      chapterList: '$.rows', chapterName: '$.serialName',
+      chapterUrl: 'https://qb.example.com/c/{{$.serialID}}.html',
+    },
+    ruleContent: '@css:#content@textNodes',
+  }
+  const SEARCH_QQ = `<html><body><div class="b"><a href="${DETAIL_URL}">斗破苍穹</a><span>天蚕土豆</span></div></body></html>`
+
+  async function makeQq(detailBody: string): Promise<{
+    svc: ReadingService; registry: SourceRegistry; calls: string[]
+  }> {
+    const calls: string[] = []
+    const dir = await makeTempDir('novel-rd-')
+    const registry = trackService(await SourceRegistry.load(dir))
+    const shelf = trackService(await Shelf.load(dir))
+    const svc = trackService(await ReadingService.from({
+      registry,
+      shelf,
+      cache: new PageCache(dir),
+      fetcher: createFetcher({
+        fetchImpl: (async (input: RequestInfo | URL) => {
+          const u = String(input)
+          calls.push(u)
+          const json = (body: string) => new Response(body, { headers: { 'content-type': 'application/json' } })
+          if (u.includes('/s?')) return new Response(SEARCH_QQ, { headers: { 'content-type': 'text/html; charset=utf-8' } })
+          if (u === DETAIL_URL) return json(detailBody)
+          if (u === TOC_URL) return json(JSON.stringify({ rows: [{ serialID: 1, serialName: '第1章 陨落的天才' }] }))
+          if (u === CH1_URL) {
+            return new Response('<html><body><div id="content">斗之力，三段！</div></body></html>',
+              { headers: { 'content-type': 'text/html; charset=utf-8' } })
+          }
+          return new Response('', { status: 404 })
+        }) as never,
+      }),
+    }))
+    await svc.importOne(QQ_RAW)
+    return { svc, registry, calls }
+  }
+
+  const DETAIL_JSON = JSON.stringify({
+    ret: 0,
+    data: { bookInfo: { resourceID: '1100468914', resourceName: '斗破苍穹', author: '天蚕土豆', summary: '斗气世界简介' } },
+  })
+
+  it('getDetail 经 ruleBookInfo.init 换上下文：$.resourceName/$.author/$.summary 在 init 子 JSON 上命中', async () => {
+    const { svc, registry } = await makeQq(DETAIL_JSON)
+    const src = registry.list().find((s) => s.name === '正版源')!
+    const d = await svc.getDetail(src.id, DETAIL_URL)
+    expect(d.title).toBe('斗破苍穹')
+    expect(d.author).toBe('天蚕土豆')
+    expect(d.intro).toBe('斗气世界简介')
+  })
+
+  it('tocUrl 模板 {{$.resourceID}} 过引擎按 init 上下文插值：目录请求打到真实 bookId 地址', async () => {
+    const { svc, registry, calls } = await makeQq(DETAIL_JSON)
+    const src = registry.list().find((s) => s.name === '正版源')!
+    const toc = await svc.getToc(src.id, DETAIL_URL)
+    expect(calls).toContain(TOC_URL)                       // 插值出真实 bookId，不是字面 {{$.resourceID}}
+    expect(toc).toHaveLength(1)
+    expect(toc[0]).toMatchObject({ name: '第1章 陨落的天才', url: CH1_URL })
+  })
+
+  it('ruleDetailInit 非空但零命中 → RuleEvalError 点名 ruleDetailInit（宁炸：不拿整页冒充上下文）', async () => {
+    const { svc, registry } = await makeQq(JSON.stringify({ ret: 0, data: {} }))   // init 路径不存在
+    const src = registry.list().find((s) => s.name === '正版源')!
+    await expect(svc.getDetail(src.id, DETAIL_URL)).rejects.toThrowError(/ruleDetailInit/)
+  })
+
+  it('存量数据兼容：detailContextOf(undefined) 按缺规则直通——老 sources.json 无 ruleDetailInit 键不炸', async () => {
+    const neverEval: SubRuleEval = async () => { throw new Error('缺规则不应求值') }
+    await expect(detailContextOf(undefined as never, '<html><body/></html>', 'https://s.com', neverEval))
+      .resolves.toEqual({ html: '<html><body/></html>' })
+  })
+})
+
+// ── js 沙箱预算走配置出口（jsTimeoutMs）──────────────────────────────────────────
+// 修复背景（书架诊断实证，听小说APP/txs12 源）：目录 @js 脚本需两次 java.ajax 往返 + md5 签名
+// （源作者按 legado 运行时设计——legado Rhino 无硬超时），2s 写死预算实测必炸「脚本超时（>2000ms）」。
+// 口径（用户拍板）：插件配置 jsTimeoutMs（缺省 15000）经 ReadingService → bridge → EvalContext
+// 透传（引擎 `ctx.jsTimeoutMs ?? DEFAULT_JS_TIMEOUT_MS` 零改动）；搜索面/探针同口径。
+describe('js 沙箱预算走配置出口（jsTimeoutMs）', () => {
+  const slowJs = (ms: number, url: string): string =>
+    `@js: var t = Date.now(); while (Date.now() - t < ${ms}) {}; '${url}'`
+
+  async function makeJsService(opts: {
+    jsTimeoutMs?: number
+    ruleTocUrl?: string
+    searchUrl?: string
+  }): Promise<{ svc: ReadingService; registry: SourceRegistry }> {
+    const dir = await makeTempDir('novel-rd-')
+    const registry = trackService(await SourceRegistry.load(dir))
+    const shelf = trackService(await Shelf.load(dir))
+    const svc = trackService(await ReadingService.from({
+      registry,
+      shelf,
+      cache: new PageCache(dir),
+      fetcher: createFetcher({
+        fetchImpl: (async (input: RequestInfo | URL) => {
+          const u = String(input)
+          if (u.includes('/s?')) {
+            return new Response('<html><body><div class="b"><a href="/book/1/">斗罗</a><span>唐家</span></div></body></html>',
+              { headers: { 'content-type': 'text/html; charset=utf-8' } })
+          }
+          if (u === 'https://js.example.com/toc') {
+            return new Response('<html><body><div class="ch"><a href="/c/1.html">第一章</a></div></body></html>',
+              { headers: { 'content-type': 'text/html; charset=utf-8' } })
+          }
+          if (u === 'https://js.example.com/book/1') {
+            return new Response('<html><body>详情页</body></html>',
+              { headers: { 'content-type': 'text/html; charset=utf-8' } })
+          }
+          return new Response('', { status: 404 })
+        }) as never,
+      }),
+      ...(opts.jsTimeoutMs === undefined ? {} : { jsTimeoutMs: opts.jsTimeoutMs }),
+    }))
+    await svc.importOne({
+      bookSourceName: 'JS源', bookSourceUrl: 'https://js.example.com',
+      searchUrl: opts.searchUrl ?? 'https://js.example.com/s?q={{key}}',
+      ruleBookList: '@css:.b', ruleBookName: 'tag.a@text', ruleAuthor: 'tag.span@text', ruleBookUrl: 'tag.a@href',
+      ...(opts.ruleTocUrl === undefined ? {} : { ruleTocUrl: opts.ruleTocUrl }),
+      ruleChapterList: '@css:.ch', ruleChapterName: 'tag.a@text', ruleChapterUrl: 'tag.a@href',
+      ruleContent: '@css:#content@textNodes',
+    })
+    return { svc, registry }
+  }
+
+  it('小预算（jsTimeoutMs:300）下 >300ms 的目录脚本 → JsSandboxError 点名「脚本超时（>300ms）」', async () => {
+    const { svc, registry } = await makeJsService({
+      jsTimeoutMs: 300,
+      ruleTocUrl: slowJs(800, 'https://js.example.com/toc'),
+    })
+    const src = registry.list().find((s) => s.name === 'JS源')!
+    await expect(svc.getToc(src.id, 'https://js.example.com/book/1'))
+      .rejects.toThrowError(/脚本超时（>300ms）/)
+  })
+
+  it('缺省预算放行 legado 级脚本（>2s 的多请求目录脚本不再被 2s 写死预算卡死）', async () => {
+    const { svc, registry } = await makeJsService({
+      ruleTocUrl: slowJs(2400, 'https://js.example.com/toc'),
+    })
+    const src = registry.list().find((s) => s.name === 'JS源')!
+    const toc = await svc.getToc(src.id, 'https://js.example.com/book/1')
+    expect(toc.map((c) => c.name)).toEqual(['第一章'])
+  }, 20_000)
+
+  it('搜索面同口径：searchUrl @js 脚本吃同一个 jsTimeoutMs 预算', async () => {
+    const { svc } = await makeJsService({
+      jsTimeoutMs: 300,
+      searchUrl: `@js: var t = Date.now(); while (Date.now() - t < 800) {}; 'https://js.example.com/s?q=' + key`,
+    })
+    const groups = await svc.search('斗罗')
+    expect(groups[0].error?.code).toBe('JsSandboxError')
+    expect(groups[0].error?.message).toMatch(/脚本超时（>300ms）/)
+  })
+
+  // 标题曾写「搜索面/探针同口径」却只钉了搜索面——门面 probe 漏传 jsTimeoutMs 正是在这条
+  // 假覆盖的影子里活下来的（同一个源在导入期探针与门面探针拿回两个 verdict）。
+  it('探针面同口径：门面 probe 的 @js 脚本也吃 jsTimeoutMs（漏传即落回引擎 2s）', async () => {
+    const { svc, registry } = await makeJsService({
+      jsTimeoutMs: 300,
+      searchUrl: `@js: var t = Date.now(); while (Date.now() - t < 800) {}; 'https://js.example.com/s?q=' + key`,
+    })
+    const src = registry.list().find((s) => s.name === 'JS源')!
+    const r = await svc.probe(src.id)
+    expect(r.ok).toBe(false)
+    expect(r.error?.code).toBe('JsSandboxError')
+    expect(r.error?.message).toMatch(/脚本超时（>300ms）/)
+  })
+})
+
 describe('同步导入走 intake 入库规则（此前工具面导入无去重，同址可重复入库）', () => {
   // 组合根 seam：测试自持 registry 部件（setStatus 播种是测试关注点，不为它开门面洞）
   const mk = async (): Promise<{ svc: ReadingService; registry: SourceRegistry }> => {
@@ -489,6 +760,32 @@ describe('门面直测（invariant 与 loginPlan 不再只穿 HTTP 测）', () =
     const saved = svc.shelfSaveProgress('k1', 2, 0.25)
     expect(saved?.progress).toMatchObject({ chapterIndex: 2, offsetRatio: 0.25 })
   })
+
+  it('removeBooks：批量删书沿用「本地书连带删副本」invariant，未知键静默跳过', async () => {
+    const svc = await mk()
+    const { book: local } = await svc.localImport(Buffer.from('第1章 A\n内容', 'utf8'), 'x.txt')
+    svc.shelfAdd('k1', { sourceId: 's', title: 'T1' })
+    svc.shelfAdd('k2', { sourceId: 's', title: 'T2' })
+    expect(await svc.removeBooks(['k1', 'k2', local.bookKey, 'nope'])).toEqual({ removed: 3 })
+    expect(svc.shelfList()).toHaveLength(0)
+    // 防孤儿：本地副本随条目一起清掉——再删一次本地书 id 返回 removed:false（文件已不在）
+    expect((await svc.removeLocalBook(local.bookKey)).removed).toBe(false)
+  })
+
+  it('shelfList 来源投影：源名实时 join——源删了投影跟着变 null，本地书恒 null', async () => {
+    const svc = await mk()
+    const src = await svc.importOne(rawSource)                       // bookSourceName: 'S'
+    svc.shelfAdd('k1', { sourceId: src.sourceId!, title: 'T' })
+    svc.shelfAdd('k2', { sourceId: 'no-such-source', title: 'U' })   // 已被删的源
+    const { book: local } = await svc.localImport(Buffer.from('第1章 A\n内容', 'utf8'), 'x.txt')
+    const nameOf = (k: string): string | null | undefined => svc.shelfList().find((b) => b.bookKey === k)?.sourceName
+    expect(nameOf('k1')).toBe('S')
+    expect(nameOf('k2')).toBeNull()
+    expect(nameOf(local.bookKey)).toBeNull()
+    // 实时 join 不是快照：源一删，同一本书读面投影即刻变 null
+    await svc.removeSource(src.sourceId!)
+    expect(nameOf('k1')).toBeNull()
+  })
 })
 
 describe('searchProgressive：给唯一实现加增量出口（不许出现第二个批循环）', () => {
@@ -527,5 +824,108 @@ describe('searchProgressive：给唯一实现加增量出口（不许出现第�
   it('无回调时 searchProgressive 与 search 完全等价（既有调用方零改动）', async () => {
     const { svc } = await makeService((u) => (u.includes('/search') ? SEARCH_HTML('斗罗') : null))
     expect(await svc.searchProgressive('斗罗')).toEqual(await svc.search('斗罗'))
+  })
+})
+
+describe('缓存有效性：代际随规则走、槽位随章名走', () => {
+  it('同 id 换规则后默认读取即新目录：代际随规则走，不要求用户手动刷新', async () => {
+    const dir = await makeTempDir('novel-epoch-')
+    const svc = trackService(await ReadingService.create({
+      dir,
+      fetchImpl: (async () => new Response(
+        '<div class="old"><a href="/c/1.html">旧目录</a></div><div class="new"><a href="/c/2.html">新目录</a></div>',
+      )) as never,
+    }))
+    const raw = {
+      bookSourceName: 'fixture', bookSourceUrl: 'https://fixture.invalid',
+      searchUrl: '/search?q={{key}}',
+      ruleBookList: '@css:.old', ruleBookName: 'tag.a@text', ruleBookUrl: 'tag.a@href',
+      ruleChapterName: 'tag.a@text', ruleChapterUrl: 'tag.a@href', ruleContent: '@css:p@text',
+    }
+    const bookKey = 'https://fixture.invalid/book'
+    const first = await svc.importOne(raw)
+    expect(first.ok).toBe(true)
+    const sourceId = first.sourceId as string
+    expect((await svc.getToc(sourceId, bookKey))[0]?.name).toBe('旧目录')
+
+    const second = await svc.importOne({ ...raw, ruleBookList: '@css:.new' })
+    expect(second.sourceId).toBe(sourceId)                 // 同址替换复用 id：既有裁决不动
+    expect((await svc.getToc(second.sourceId as string, bookKey))[0]?.name).toBe('新目录')
+  })
+
+  it('同 id 换正文规则后默认读取即新正文：正文代际端到端随 ruleContent 走', async () => {
+    const dir = await makeTempDir('novel-epoch-content-')
+    // 单页同时充当目录页与正文页：两个可区分容器 .v1 / .v2，让两版 ruleContent 取出不同文本
+    const svc = trackService(await ReadingService.create({
+      dir,
+      fetchImpl: (async () => new Response(
+        '<div class="b ch"><a href="/c/1.html">第一章</a></div><div class="v1">正文旧规则</div><div class="v2">正文新规则</div>',
+      )) as never,
+    }))
+    const raw = {
+      bookSourceName: 'fixture', bookSourceUrl: 'https://fixture.invalid',
+      searchUrl: '/search?q={{key}}',
+      ruleBookList: '@css:.b', ruleBookName: 'tag.a@text', ruleBookUrl: 'tag.a@href',
+      ruleChapterName: 'tag.a@text', ruleChapterUrl: 'tag.a@href', ruleContent: '@css:.v1@text',
+    }
+    const bookKey = 'https://fixture.invalid/book'
+    const first = await svc.importOne(raw)
+    expect(first.ok).toBe(true)
+    const sourceId = first.sourceId as string
+    expect(await svc.getChapter(sourceId, bookKey, 0)).toContain('正文旧规则')
+
+    // 只改 ruleContent（'content' 影响面）→ 正文代际变 → 槽位变 → 不带 refresh 也读不到旧正文
+    const second = await svc.importOne({ ...raw, ruleContent: '@css:.v2@text' })
+    expect(second.sourceId).toBe(sourceId)                 // 同址替换复用 id：钉住 replace 而非 skip 路径
+    expect(await svc.getChapter(second.sourceId as string, bookKey, 0)).toContain('正文新规则')
+  })
+
+  it('目录刷新导致章序变化：按章序的正文缓存不串配（正文键含章名）', async () => {
+    let tocRows = '<div class="b ch"><a href="/c/1.html">第一章</a></div><div class="b ch"><a href="/c/2.html">第二章</a></div>'
+    const { svc, registry } = await makeService((url) => {
+      if (url.endsWith('/c/1.html')) return '<html><body><div id="content">正文一</div></body></html>'
+      if (url.endsWith('/c/2.html')) return '<html><body><div id="content">正文二</div></body></html>'
+      return `<html><body>${tocRows}</body></html>`
+    })
+    const sourceId = registry.list()[0]!.id
+    const bookKey = `${BASE}/book/1/`
+    expect(await svc.getChapter(sourceId, bookKey, 0)).toContain('正文一')
+
+    // 站点把顺序换了（规则没变）：刷新目录后第 0 章已是「第二章」
+    tocRows = '<div class="b ch"><a href="/c/2.html">第二章</a></div><div class="b ch"><a href="/c/1.html">第一章</a></div>'
+    await svc.getToc(sourceId, bookKey, { refresh: true })
+    expect(await svc.getChapter(sourceId, bookKey, 0)).toContain('正文二')
+  })
+
+  it('换目录规则而章名一字不变：正文代际仍跟着走，不端旧地址抓来的正文', async () => {
+    const dir = await makeTempDir('novel-epoch-tocrule-')
+    // 两版目录页各列一条**同名**章节，但地址不同：旧地址 /wrong.html、新地址 /c/1.html。
+    // 章名不变 ⇒ 槽位（代际 + 章名）的章名那一半挡不住，只有代际能挡。
+    const svc = trackService(await ReadingService.create({
+      dir,
+      fetchImpl: (async (input: RequestInfo | URL) => {
+        const u = String(input)
+        if (u.endsWith('/wrong.html')) return new Response('<div id="content">正文旧地址</div>')
+        if (u.endsWith('/c/1.html')) return new Response('<div id="content">正文新地址</div>')
+        if (u.endsWith('/toc2')) return new Response('<div class="b ch"><a href="/c/1.html">第一章</a></div>')
+        return new Response('<div class="b ch"><a href="/wrong.html">第一章</a></div>')
+      }) as never,
+    }))
+    const raw = {
+      bookSourceName: 'fixture', bookSourceUrl: 'https://fixture.invalid',
+      searchUrl: '/search?q={{key}}',
+      ruleBookList: '@css:.b', ruleBookName: 'tag.a@text', ruleBookUrl: 'tag.a@href',
+      ruleChapterName: 'tag.a@text', ruleChapterUrl: 'tag.a@href', ruleContent: '@css:#content@text',
+    }
+    const bookKey = 'https://fixture.invalid/book'
+    const first = await svc.importOne(raw)
+    expect(first.ok).toBe(true)
+    const sourceId = first.sourceId as string
+    expect(await svc.getChapter(sourceId, bookKey, 0)).toContain('正文旧地址')
+
+    const second = await svc.importOne({ ...raw, ruleTocUrl: 'https://fixture.invalid/toc2' })
+    expect(second.sourceId).toBe(sourceId)                 // 同址替换复用 id：钉住 replace 而非 skip 路径
+    expect((await svc.getToc(second.sourceId as string, bookKey))[0]?.name).toBe('第一章')   // 章名确实没变
+    expect(await svc.getChapter(second.sourceId as string, bookKey, 0)).toContain('正文新地址')
   })
 })

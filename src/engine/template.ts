@@ -1,5 +1,14 @@
 import { splitVarExpr } from './grammar.js'
 
+/** URL 与 `,{json}` 选项的分界（legado `AnalyzeUrl.paramPattern` 原文）：逗号后紧跟花括号即选项
+ *  起点，故 URL 自身含逗号时不受影响；逗号两侧允许空白——真实源大量写 `, {...}` 带空格，
+ *  不许空格会把选项串并进 URL（此前 165 条源的 POST/charset 选项全部失效）。
+ *  **单点**：服务半 `services/request.ts` 的选项切分与引擎 `engine/js-protocol.ts` 的
+ *  downloadFile 去后缀共用此式。放引擎侧是因为 `js-protocol` 不能 import services（分层禁环），
+ *  而两处各抄一份已经漂移过一次（downloadFile 那份少了前导 `\s*`，带空格的 URL 会把尾空格
+ *  带进扩展名推断）。 */
+export const URL_OPTION_SPLIT = /\s*,\s*(?=\{)/
+
 export function interpolateUrl(
   template: string,
   vars: Record<string, string | number>,

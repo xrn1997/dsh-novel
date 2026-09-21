@@ -27,9 +27,18 @@ export interface NormalizedRules {
   ruleDetailName: string | null; ruleDetailAuthor: string | null
   ruleDetailCoverUrl: string | null; ruleDetailIntro: string | null
   ruleDetailLastChapter: string | null
+  /** 详情初始化规则（对象方言 ruleBookInfo.init，legado BookInfo 口径）：先求值，结果**替换**
+   *  后续详情规则的求值上下文（JSON 换根进 ctx.json）——QQ 类正版 API 源的 `$.data.bookInfo`
+   *  全靠它；tocUrl 模板 `{{$.…}}` 同在换根后的上下文上插值（reading.detailContextOf 唯一实现） */
+  ruleDetailInit: string | null
   ruleContent: string | null
   nextTocUrl: string | null; nextPageUrl: string | null
   header: Record<string, string> | null; loginUrl: string | null
+  /** 动态请求头规则（legado `header` 字段的 `@js:`/`<js>` 形态——BaseSource.getHeaderMap 的
+   *  evalJS 口径）：与 header 互斥同源（同一 raw.header 字段二选一），请求前经沙箱求值得到
+   *  JSON 头表（顶点小说的 device-id/Authorization 全靠它，静态形态 4004）。唯一求值点
+   *  `services/bridge.ts` 的 resolveHeaders；存量由 SourceRegistry.load 按 raw 重推。 */
+  headerRule: string | null
   /** legado jsLib：源级全局 JS 函数库（函数定义拼在每段 @js 代码前执行——
    *  真实源 urlUserFavorite/host/qmSearchUrl 等函数定义在此，缺它整段 js 必炸 not defined） */
   jsLib: string | null

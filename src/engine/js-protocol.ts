@@ -20,6 +20,7 @@
 import crypto from 'node:crypto'
 import type { EngineValue, EvalContext, Facet, SegmentLoc } from './types.js'
 import { JsSandboxError, UnsupportedRuleError } from './errors.js'
+import { URL_OPTION_SPLIT } from './template.js'
 import type { EvaluateRef, SourceSession } from './js-sandbox.js'
 import {
   base64Decode,
@@ -28,6 +29,8 @@ import {
   engineValueToStrings,
   fmtTime,
   hexDecodeToString,
+  javaDecode,
+  javaEncode,
   md5Hex,
   md5Hex16,
   uriEncode,
@@ -104,8 +107,10 @@ export const JAVA_PROTOCOL = [
     if (!fetchFn) {
       throw new JsSandboxError('该源未提供网络能力（ctx.fetch 缺失）', { ...d.loc, facet: d.facet, script: d.code })
     }
-    // 如实失败：fire-and-forget 防线不在这里挂——唯一一层在引导脚本的 ajax 包装内
-    // （受 DSH_NOVEL_NO_GUARD 开关控制），进程级 guard 是常驻最后防线。见 js-sandbox BOOTSTRAP 注释。
+    // 如实失败：ajax 这里不挂任何 rejection 防线——主线程形态已改为在发起宿主调用前抛哨兵
+    // （由 evalJs 换 worker 重跑），worker 形态同步返回，两条路都不产生悬空 Promise。
+    // 进程级 ensureUnhandledGuard 是常驻最后防线，管的是脚本**自建**又 fire-and-forget 的
+    // 异步工作。见 js-sandbox 的 BOOTSTRAP 注释与 docs/design/engine.md。
     return fetchFn(url).then((r) => r?.body ?? '')
   }, 'async'),
   // ── 沙箱变量（java.get/put）─────────────────────────────────────────
@@ -214,7 +219,84 @@ export const JAVA_PROTOCOL = [
   method('cacheDelete', { obj: 'cache', as: 'delete' }, (d) => (key: string): void => {
     sourceVars(d).delete(`cache:${String(key)}`)
   }),
+  // ── cache 内存三别名（legado CacheManager.putMemory/getFromMemory/deleteMemory）──
+  // legado 里 put = 内存+磁盘双写、putMemory 仅写内存 LRU、get 先内存后磁盘——本仓的 cache
+  // 垫片**本来就是进程内键值表**（没有第二层磁盘存储），三个内存别名与 get/put/delete 同存储：
+  // 语义差异（内存 vs SQLite）在这里不存在，别名只为真实源脚本的调用名而在。
+  // 真机实证：novel.cooks.tw 目录脚本 `cache.putMemory('articleid', …)` 此前报 not a function。
+  method('cachePutMemory', { obj: 'cache', as: 'putMemory' }, (d) => (key: string, value: unknown): void => {
+    sourceVars(d).set(`cache:${String(key)}`, value === null || value === undefined ? '' : String(value))
+  }),
+  method('cacheGetFromMemory', { obj: 'cache', as: 'getFromMemory' }, (d) => (key: string): string | null =>
+    sourceVars(d).get(`cache:${String(key)}`) ?? null),
+  method('cacheDeleteMemory', { obj: 'cache', as: 'deleteMemory' }, (d) => (key: string): void => {
+    sourceVars(d).delete(`cache:${String(key)}`)
+  }),
+  // ── 纯工具（续）────────────────────────────────────────────────────
+  // legado JsExtensions.randomUUID：UUID.randomUUID().toString()（小写带连字符）——
+  // `@js` 动态请求头生成 device id 的真实形态（顶点小说 header 规则实证）
+  method('randomUUID', { obj: 'java' }, () => (): string => crypto.randomUUID()),
+  // ── 字节组（legado JsExtensions：strToBytes/hex·base64 ToByteArray）──
+  // 脚本侧字节统一用 number[]（0-255）承载：JSON 可序列化（跨 SAB RPC 安全）、`& 0xff` 语义不变。
+  method('strToBytes', { obj: 'java' }, () => (s: string, charset?: string): number[] =>
+    Array.from(javaEncode(String(s), charset ?? 'UTF-8'))),
+  method('hexDecodeToByteArray', { obj: 'java' }, () => (hex: string): number[] => {
+    const clean = String(hex).trim()
+    if (clean === '' ) return []
+    if (clean.length % 2 !== 0 || /[^0-9a-fA-F]/.test(clean)) {
+      throw new JsSandboxError(`hexDecodeToByteArray：非法 hex 串（长度 ${clean.length}）`, { facet: 'rule', segmentIndex: -1, segmentRaw: clean.slice(0, 64), script: '' })
+    }
+    return Array.from(Buffer.from(clean, 'hex'))
+  }),
+  method('base64DecodeToByteArray', { obj: 'java' }, () => (b64: string): number[] =>
+    Array.from(Buffer.from(String(b64), 'base64'))),
+  // ── 文件下载（legado JsExtensions.downloadFile / readTxtFile）────────
+  // **进程内暂存**（非真实磁盘）：downloadFile 取字节存表、readTxtFile 取表解码——
+  // 刻意**不暴露真实文件系统**（书源脚本可读任意本地路径 = 数据外泄面）；
+  // 路径形态 `/dsh-cache/<md5>.<ext>` 对脚本是不透明令牌（只被传回 readTxtFile）。
+  // downloadFile 需要网络 → async 行：主线程抛哨兵换 worker 同步桥（与 java.ajax 同款）。
+  method('downloadFile', { obj: 'java' }, (d) => async (url: string): Promise<string> => {
+    const raw = d.ctx.fetchRaw
+    if (!raw) {
+      throw new JsSandboxError('该源未提供二进制抓取能力（ctx.fetchRaw 缺失）', { ...d.loc, facet: d.facet, script: d.code })
+    }
+    const u = String(url)
+    // 选项后缀 `,{…}` 不参与文件名推断——分界式与 services/request.ts 同源（engine/template.ts
+    // 的 URL_OPTION_SPLIT；此处只剥不解释，抓取本身由 engineFetchRaw 经 assembleRequest 解释）
+    const cut = URL_OPTION_SPLIT.exec(u)
+    const clean = (cut === null ? u : u.slice(0, cut.index)).trimEnd()
+    const ext = (clean.split(/[?#]/)[0].match(/\.[A-Za-z0-9]{1,6}$/) ?? ['.bin'])[0]
+    const bytes = await raw(u)
+    const path = `/dsh-cache/${md5Hex(u)}${ext}`
+    storeFile(path, bytes)
+    return path
+  }, 'async'),
+  method('readTxtFile', { obj: 'java' }, () => (path: string, charset?: string): string => {
+    const bytes = FILE_STORE.get(String(path))
+    if (bytes === undefined) {
+      throw new JsSandboxError(`readTxtFile：文件不存在（只支持本进程 downloadFile 的产物，未暴露真实文件系统）：${String(path)}`, { facet: 'rule', segmentIndex: -1, segmentRaw: String(path).slice(0, 200), script: '' })
+    }
+    return javaDecode(bytes, charset ?? 'UTF-8')
+  }),
 ] as const
+
+/** downloadFile 暂存表：条数上限（Map 插入序淘汰最旧）+ 单文件字节上限。如实说清它挡的是什么：
+ *  这两道闸限的是**条目数与单文件大小**，不是总常驻字节——64 × 64MB 的最坏情况仍达 4GB，
+ *  要收总盘子得再加一道字节计数淘汰；当前没加，因为真实源下载的是 KB 级密钥图。 */
+const FILE_STORE = new Map<string, Uint8Array>()
+const FILE_STORE_CAP = 64
+const FILE_BYTES_CAP = 64 * 1024 * 1024
+
+function storeFile(path: string, bytes: Uint8Array): void {
+  if (bytes.byteLength > FILE_BYTES_CAP) {
+    throw new JsSandboxError(`downloadFile：文件超过 ${FILE_BYTES_CAP / 1024 / 1024}MB 上限`, { facet: 'rule', segmentIndex: -1, segmentRaw: path, script: '' })
+  }
+  if (FILE_STORE.size >= FILE_STORE_CAP) {
+    const oldest = FILE_STORE.keys().next().value
+    if (oldest !== undefined) FILE_STORE.delete(oldest)
+  }
+  FILE_STORE.set(path, bytes)
+}
 
 /** AES 解密（base64 密文 → utf8 明文）：transformation 形如 `AES/CBC/PKCS5Padding`；
  *  模式不识别 / 密钥或 IV 长度不合法 → 宁炸（JsSandboxError 带定位，不返回假明文） */

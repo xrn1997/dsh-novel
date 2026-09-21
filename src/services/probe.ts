@@ -19,11 +19,11 @@ const PROBE_KEYS = ['书', '小说', '的'] as const
  * timeoutMs 缺省时探针与搜索同认 ReadingService 的 searchTimeoutMs（此前探针只靠 fetcher 固定 15s）。
  */
 export async function probeSource(
-  source: NovelSource, fetcher: Fetcher, opts?: { timeoutMs?: number },
+  source: NovelSource, fetcher: Fetcher, opts?: { timeoutMs?: number; jsTimeoutMs?: number },
 ): Promise<ProbeResult> {
   try {
     for (const key of PROBE_KEYS) {
-      const page = await fetchSearchPage(source, key, fetcher, opts?.timeoutMs)
+      const page = await fetchSearchPage(source, key, fetcher, opts?.timeoutMs, opts?.jsTimeoutMs)
       if (!page.ok) return fail('RuleMissing', page.message, 0)
       if (page.items.length === 0) continue // 换下一词（0 命中可能是词被停用，非源坏）
       const nameRule = source.rules.ruleBookName

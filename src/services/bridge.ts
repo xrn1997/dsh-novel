@@ -1,7 +1,10 @@
 import render from 'dom-serializer'
 import { evaluate, RuleEvalError } from '../engine/index.js'
 import type { EngineValue, Facet, RuleUsage } from '../engine/index.js'
-import { engineFetch } from './engine-fetch.js'
+// runScript 深引（与 search-template 同口径）：header 规则求值走沙箱完成值语义，
+// 引擎 barrel 刻意不收 runScript（公开面只有 evaluate）——服务半第二个深引消费点。
+import { runScript } from '../engine/js-sandbox.js'
+import { engineFetch, engineFetchRaw } from './engine-fetch.js'
 import { headerOf } from './fetcher.js'
 import type { Fetcher } from './fetcher.js'
 import type { NovelSource } from './types.js'
@@ -70,11 +73,16 @@ export function engineContextOf(
     book?: Record<string, unknown>
     /** legado `chapter` 变量（章节身份：title/index/url） */
     chapter?: Record<string, unknown>
+    /** js 沙箱预算透传（EvalContext.jsTimeoutMs；缺省时引擎回退 DEFAULT_JS_TIMEOUT_MS） */
+    jsTimeoutMs?: number
   },
 ): {
   html?: string; json?: unknown; baseUrl: string; source: string
-  vars?: Record<string, string>; fetch: ReturnType<typeof engineFetch>; jsLib?: string
-  book?: Record<string, unknown>; chapter?: Record<string, unknown>
+  vars?: Record<string, string>
+  fetch: ReturnType<typeof engineFetch>
+  fetchRaw: ReturnType<typeof engineFetchRaw>
+  jsLib?: string
+  book?: Record<string, unknown>; chapter?: Record<string, unknown>; jsTimeoutMs?: number
 } {
   return {
     ...(opts.html === undefined ? {} : { html: opts.html }),
@@ -82,10 +90,66 @@ export function engineContextOf(
     baseUrl: opts.baseUrl,
     source: source.baseUrl,
     ...(opts.vars === undefined ? {} : { vars: opts.vars }),
-    fetch: engineFetch(fetcher, headerOf(source)),
+    // 头走惰性 provider：`@js` 动态头每请求现算（legado getHeaderMap 每请求求值口径）；
+    // 规则求值自身用的静态头在 resolveHeaders 内单独构造——不递归回 provider。
+    fetch: engineFetch(fetcher, () => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs })),
+    fetchRaw: engineFetchRaw(fetcher, () => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs })),
     ...(source.rules.jsLib === null ? {} : { jsLib: source.rules.jsLib }),
     ...(opts.book === undefined ? {} : { book: opts.book }),
     ...(opts.chapter === undefined ? {} : { chapter: opts.chapter }),
+    ...(opts.jsTimeoutMs === undefined ? {} : { jsTimeoutMs: opts.jsTimeoutMs }),
+  }
+}
+
+/**
+ * 请求头解析（legado `BaseSource.getHeaderMap` 口径）：静态 header 直答；`headerRule`
+ * （`@js:`/`<js>` 动态头）经沙箱求值得到 JSON 头表，再叠 auth/cookie（与静态形态同序：auth 在后占优）。
+ *
+ * 失败语义对齐 legado 的 try/catch：规则求值抛错或产物不是合法 JSON 对象 → **warn 后回退
+ * 静态头**（动态头缺失 = 站点按无 device 鉴权处理，下游自然报错——不吞请求也不炸整条链；
+ * legado 同款 catch 后继续发请求）。**不递归**：规则脚本自身的 fetch 用静态头（provider 不进场），
+ * 否则头规则里一次 java.ajax 就会重新求值头规则。
+ */
+export async function resolveHeaders(
+  fetcher: Fetcher, source: NovelSource, opts?: { jsTimeoutMs?: number },
+): Promise<Record<string, string>> {
+  const rule = source.rules.headerRule
+  const staticHeaders = headerOf(source)
+  if (rule == null || rule.trim() === '') return staticHeaders
+  // 规则前缀剥离（legado getHeaderMap：@js: → substring(4)；<js>…</js> → 两标记之间）
+  let code = rule
+  if (/^@js:/i.test(rule)) code = rule.slice(4)
+  else if (/^<js>/i.test(rule)) {
+    const close = rule.lastIndexOf('<')
+    code = close > 4 ? rule.slice(4, close) : rule.slice(4)
+  }
+  try {
+    const outcome = await runScript({
+      code,
+      baseUrl: source.baseUrl,
+      source: source.baseUrl,
+      // 规则脚本自身的网络能力：静态头打底（见上：不递归）
+      fetch: engineFetch(fetcher, staticHeaders),
+      fetchRaw: engineFetchRaw(fetcher, staticHeaders),
+      jsLib: source.rules.jsLib ?? undefined,
+      jsTimeoutMs: opts?.jsTimeoutMs,
+      loc: { segmentIndex: 0, segmentRaw: rule },
+      facet: 'rule',
+      scriptForm: true,
+    })
+    const text = firstValue(outcome.value, 'rule')
+    if (text === null || text === '') throw new Error('动态头规则产物为空')
+    const parsed: unknown = JSON.parse(text) // 非 JSON（脚本产出坏串）→ 落到下方 catch
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error('动态头规则产物不是 JSON 对象')
+    }
+    const dynamic: Record<string, string> = {}
+    for (const [k, v] of Object.entries(parsed)) if (typeof v === 'string') dynamic[k] = v
+    return { ...dynamic, ...staticHeaders }
+  } catch (e) {
+    console.warn(`[dsh-novel] 动态头规则求值失败，回退静态头（${source.name}）：`,
+      e instanceof Error ? e.message : String(e))
+    return staticHeaders
   }
 }
 
@@ -93,7 +157,7 @@ export function engineContextOf(
  *  第三参兼容两形态：`Record<string,string>`（历史 vars 形态）或 opts 对象（vars/book/chapter）。 */
 export function makeSubEval(
   fetcher: Fetcher, source: NovelSource,
-  optsOrVars?: Record<string, string> | { vars?: Record<string, string>; book?: Record<string, unknown>; chapter?: Record<string, unknown> },
+  optsOrVars?: Record<string, string> | { vars?: Record<string, string>; book?: Record<string, unknown>; chapter?: Record<string, unknown>; jsTimeoutMs?: number },
 ): SubRuleEval {
   const opts = optsOrVars === undefined
     ? {}
@@ -104,15 +168,16 @@ export function makeSubEval(
       ...(opts.vars === undefined ? {} : { vars: opts.vars }),
       ...(opts.book === undefined ? {} : { book: opts.book }),
       ...(opts.chapter === undefined ? {} : { chapter: opts.chapter }),
+      ...(opts.jsTimeoutMs === undefined ? {} : { jsTimeoutMs: opts.jsTimeoutMs }),
     }), facet, usage ?? 'list')
 }
 
-/** 历史 vars 形态判别：全值 string 的对象按 vars 处理（与 opts 对象的键不重叠——vars/book/chapter） */
+/** 历史 vars 形态判别：全值 string 的对象按 vars 处理（与 opts 对象的键不重叠——vars/book/chapter/jsTimeoutMs） */
 function isVarsShaped(
-  v: Record<string, string> | { vars?: Record<string, string>; book?: Record<string, unknown>; chapter?: Record<string, unknown> },
+  v: Record<string, string> | { vars?: Record<string, string>; book?: Record<string, unknown>; chapter?: Record<string, unknown>; jsTimeoutMs?: number },
 ): v is Record<string, string> {
   const keys = Object.keys(v)
-  return keys.length > 0 && keys.every((k) => !['vars', 'book', 'chapter'].includes(k))
+  return keys.length > 0 && keys.every((k) => !['vars', 'book', 'chapter', 'jsTimeoutMs'].includes(k))
 }
 
 /** 链终点不该剩节点集：带 facet 与节点数的段级错误（segmentIndex -1 = 服务层规约层） */

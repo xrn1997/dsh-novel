@@ -12,9 +12,12 @@ describe('LOCAL_SOURCE_ID（跨半契约常量的唯一主人）', () => {
 })
 
 describe('路由表计数钉死（「17 条路由」注释曾腐烂且无测试）', () => {
-  it('静态路由 20 条、参数路由 5 条', () => {
-    expect(Object.keys(ROUTES)).toHaveLength(20)
+  it('静态路由 21 条、参数路由 5 条', () => {
+    expect(Object.keys(ROUTES)).toHaveLength(21)
     expect(Object.keys(paramRoutes)).toHaveLength(5)
+  })
+  it('书架批量删除：path 与 segs 同源（复用 batch-delete 段，与书源批删同段名）', () => {
+    expect(ROUTES.shelfBatchDelete).toEqual({ path: 'shelf/batch-delete', segs: ['shelf', 'batch-delete'] })
   })
   it('搜索任务两面：path 与 segs 同源（服务端段匹配读 segs）', () => {
     expect(ROUTES.searchJob).toEqual({ path: 'search/job', segs: ['search', 'job'] })
@@ -56,6 +59,10 @@ describe('queries（路径 + query 构造）', () => {
     expect(queries.toc({ sourceId: 's', url: 'u', refresh: true })).toContain('refresh=1')
     expect(queries.chapter({ sourceId: 's', url: 'u', index: 3 })).toBe('chapter?sourceId=s&url=u&index=3')
     expect(queries.chapter({ sourceId: 's', url: 'u', index: 3, refresh: false })).not.toContain('refresh')
+  })
+  it('exportBook：from/to 只在传入时出现（缺省 = 全本，向后兼容零参数旧链接）', () => {
+    expect(queries.exportBook({ sourceId: 's', url: 'u', title: 't' })).toBe('export?sourceId=s&url=u&title=t')
+    expect(queries.exportBook({ sourceId: 's', url: 'u', title: 't', from: 5, to: 80 })).toBe('export?sourceId=s&url=u&title=t&from=5&to=80')
   })
   it('localImport / localDelete：参数名归 PARAMS', () => {
     expect(queries.localImport({ name: '我的书.txt' })).toBe(`local/import?${PARAMS.name}=${encodeURIComponent('我的书.txt')}`)

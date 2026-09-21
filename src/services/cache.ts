@@ -20,6 +20,11 @@ export function safeKey(bookKey: string): string {
 /**
  * 正文/目录文件缓存（novel 根目录下 `cache/toc` 与 `cache/content`）。
  * 写入后触发 prune：两目录总字节超上限 → 按 mtime 最旧先删（LRU 近似）。
+ *
+ * 本模块只回答「放在哪」，不回答「何时有效」：`epoch` / `slot` 是调用方给的不透明串
+ * （算式在 `cache-epoch.ts`，裁决在 `reading.ts`）。旧代际文件不删——此后不再被写，
+ * mtime 只可能更早，因此排在**新写入**之前；但 prune 是 mtime 近似、`read()` 不刷新 mtime，
+ * 长期只读的热条目同样不会被读操作续命，可能先于旧代际被淘汰（如实记，不假装挤不掉热数据）。
  */
 export class PageCache {
   private readonly tocDir: string
@@ -32,22 +37,31 @@ export class PageCache {
     this.maxBytes = maxBytes
   }
 
-  async getToc(sourceId: string, bookKey: string): Promise<string | null> {
-    return this.read(path.join(this.tocDir, `${sourceId}-${safeKey(bookKey)}.json`))
+  async getToc(sourceId: string, bookKey: string, epoch: string): Promise<string | null> {
+    return this.read(this.tocFile(sourceId, bookKey, epoch))
   }
 
-  async setToc(sourceId: string, bookKey: string, data: string): Promise<void> {
-    await writeFileAtomic(path.join(this.tocDir, `${sourceId}-${safeKey(bookKey)}.json`), data)
+  async setToc(sourceId: string, bookKey: string, epoch: string, data: string): Promise<void> {
+    await writeFileAtomic(this.tocFile(sourceId, bookKey, epoch), data)
     await this.prune()
   }
 
-  async getContent(sourceId: string, bookKey: string, chIndex: number): Promise<string | null> {
-    return this.read(path.join(this.contentDir, `${sourceId}-${safeKey(bookKey)}-${chIndex}.txt`))
+  async getContent(sourceId: string, bookKey: string, chIndex: number, slot: string): Promise<string | null> {
+    return this.read(this.contentFile(sourceId, bookKey, chIndex, slot))
   }
 
-  async setContent(sourceId: string, bookKey: string, chIndex: number, data: string): Promise<void> {
-    await writeFileAtomic(path.join(this.contentDir, `${sourceId}-${safeKey(bookKey)}-${chIndex}.txt`), data)
+  async setContent(sourceId: string, bookKey: string, chIndex: number, slot: string, data: string): Promise<void> {
+    await writeFileAtomic(this.contentFile(sourceId, bookKey, chIndex, slot), data)
     await this.prune()
+  }
+
+  /** 文件名形状单点：代际 / 槽位是**不透明串**，本模块不解释它（有效性归 cache-epoch + reading） */
+  private tocFile(sourceId: string, bookKey: string, epoch: string): string {
+    return path.join(this.tocDir, `${sourceId}-${safeKey(bookKey)}-${epoch}.json`)
+  }
+
+  private contentFile(sourceId: string, bookKey: string, chIndex: number, slot: string): string {
+    return path.join(this.contentDir, `${sourceId}-${safeKey(bookKey)}-${chIndex}-${slot}.txt`)
   }
 
   /** 总字节超上限 → 按 mtimeMs 升序删除直到 ≤ 上限；目录不存在直接返回 */

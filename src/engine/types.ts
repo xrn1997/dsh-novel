@@ -25,6 +25,9 @@ export interface EvalContext {
   source?: string
   vars?: Record<string, string>
   fetch?: (url: string) => Promise<{ body: string; contentType?: string }>
+  /** 二进制抓取（`java.downloadFile` 用）：与 fetch 同请求语义但返回**原始字节**——
+   *  经字符集解码链的字符串会损坏 PNG 等二进制（密钥图提取实证）。缺省缺席 → 下载类方法如实报错。 */
+  fetchRaw?: (url: string) => Promise<Uint8Array>
   jsTimeoutMs?: number
   /** legado jsLib：源级全局 JS 函数库——先于每段 @js 代码在同上下文执行（函数定义全局可见） */
   jsLib?: string

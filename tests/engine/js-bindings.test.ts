@@ -145,4 +145,54 @@ describe('沙箱 legado 绑定与作用域（本轮修复钉子）', () => {
     })
     expect(out.value).toEqual({ kind: 'value', text: '2|第一章|/c/1' })
   })
+  it('等价写法同语义：java["ajax"] 与注释干扰都不再改变返回类型', async () => {
+    let ajaxCalls = 0
+    const fetchImpl = async (url: string): Promise<{ body: string }> => { ajaxCalls++; return { body: `BODY:${url}` } }
+    const base = {
+      loc, facet: 'content' as const, scriptForm: true,
+      baseUrl: 'https://x.com', source: 'https://x.com', fetch: fetchImpl,
+    }
+    // 修复前这三条分别是 string / object / string——源码文本选择了语义。
+    // 三种拼写现在都被放宽后的 SYNC_WORKER_RE 直接送进 worker（下标访问命中 `java[`）。
+    const direct = await runScript({ ...base, code: 'typeof java.ajax("https://x.com/p")' })
+    const bracket = await runScript({ ...base, code: 'typeof java["ajax"]("https://x.com/p")' })
+    const commented = await runScript({ ...base, code: '/* java.ajax( */ typeof java["ajax"]("https://x.com/p")' })
+    expect(direct.value).toEqual({ kind: 'value', text: 'string' })
+    expect(bracket.value).toEqual({ kind: 'value', text: 'string' })
+    expect(commented.value).toEqual({ kind: 'value', text: 'string' })
+    expect(ajaxCalls).toBe(3)                                    // 每段各一次：不多打站点
+    // 同步链式消费形态在别名写法下同样成立（真实源主导写法）
+    const chained = await runScript({ ...base, code: 'java["ajax"]("https://x.com/q").match(/^BODY:(.*)$/)[1]' })
+    expect(chained.value).toEqual({ kind: 'value', text: 'https://x.com/q' })
+  })
+
+  it('哨兵重跑不重复计日志、不多打站点，也不把哨兵当脚本错误上报', async () => {
+    let ajaxCalls = 0
+    const fetchImpl = async (url: string): Promise<{ body: string }> => { ajaxCalls++; return { body: `BODY:${url}` } }
+    // 解构写法：SYNC_WORKER_RE 认不出（既无 `.ajax(` 也无 `java[`），故真走「主线程撞哨兵 →
+    // worker 重跑」这条路——别名/下标写法已被放宽的正则直接送进 worker，钉不到哨兵。
+    const out = await runScript({
+      loc, facet: 'content', scriptForm: true,
+      baseUrl: 'https://x.com', source: 'https://x.com', fetch: fetchImpl,
+      code: 'console.log("只一次"); const { ajax } = java; ajax("https://x.com/p"); "done"',
+    })
+    expect(out.logs).toEqual(['只一次'])
+    expect(out.value).toEqual({ kind: 'value', text: 'done' })
+    // 哨兵在**发起宿主调用之前**抛：主线程那趟没打出请求，重跑才打——合计一次。
+    // 哨兵若挪到宿主调用之后，这条即变 2。
+    expect(ajaxCalls).toBe(1)
+  })
+
+  it('别名写法被脚本自己的 try/catch 包住也拿到同步语义（放宽正则后压根不抛哨兵）', async () => {
+    const fetchImpl = async (url: string): Promise<{ body: string }> => ({ body: `BODY:${url}` })
+    // 哨兵靠「抛出」传递，脚本自己的 catch 会在 vm 内吞掉它 → 那段脚本静默走 catch 分支。
+    // 现实的别名写法（下标访问）被正则直接送进 worker，就走不到抛哨兵那一步；
+    // 仍漏的是解构 / with 这类不含那三个字面量的间接形态；计算键 java[...] 字面含 java[，已被下标分支捞走。
+    const out = await runScript({
+      loc, facet: 'content', scriptForm: true,
+      baseUrl: 'https://x.com', source: 'https://x.com', fetch: fetchImpl,
+      code: 'try { java["ajax"]("https://x.com/p").match(/^BODY:(.*)$/)[1] } catch (e) { "caught:" + e.message }',
+    })
+    expect(out.value).toEqual({ kind: 'value', text: 'https://x.com/p' })
+  })
 })

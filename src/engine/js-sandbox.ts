@@ -1,4 +1,5 @@
 import vm from 'node:vm'
+import crypto from 'node:crypto'
 import { isTag } from 'domhandler'
 import type { Element } from 'domhandler'
 import { DEFAULT_JS_TIMEOUT_MS } from './types.js'
@@ -7,6 +8,7 @@ import { JsSandboxError } from './errors.js'
 import { SANDBOX_MOUNTS, invokeJavaMethod } from './js-protocol.js'
 import type { BridgeDeps } from './js-protocol.js'
 import { loadHtml, nodeText } from './dom.js'
+import { decodePngToArgb, javaDecode } from './js-utils.js'
 
 /** JavaBridge 协议的**唯一登记点**在 js-protocol.ts 的 JAVA_PROTOCOL 表（方法名·sync/async·
  *  挂载点·实现四元组收于一行，interface/BOOTSTRAP 名单/宿主分派全部从表派生）。
@@ -59,6 +61,7 @@ export interface RunScriptOptions {
   header?: string
   vars?: Record<string, string>
   fetch?: (url: string) => Promise<{ body: string; contentType?: string }>
+  fetchRaw?: (url: string) => Promise<Uint8Array>
   jsLib?: string
   jsTimeoutMs?: number
   loc: SegmentLoc
@@ -76,6 +79,7 @@ export function runScript(o: RunScriptOptions): Promise<JsOutcome> {
     ...(o.source === undefined ? {} : { source: o.source }),
     ...(o.vars === undefined ? {} : { vars: o.vars }),
     ...(o.fetch === undefined ? {} : { fetch: o.fetch }),
+    ...(o.fetchRaw === undefined ? {} : { fetchRaw: o.fetchRaw }),
     ...(o.jsLib === undefined ? {} : { jsLib: o.jsLib }),
     ...(o.jsTimeoutMs === undefined ? {} : { jsTimeoutMs: o.jsTimeoutMs }),
   }
@@ -104,10 +108,12 @@ export type EvaluateRef = (rule: string, data: unknown) => EngineValue
 const TIMEOUT = Symbol('js-sandbox-timeout')
 
 /** 进程级 unhandledRejection 防线（加载期常驻，幂等挂载一次）。
- *  沙箱里 `java.ajax()` 每次调用都新建一个 async IIFE promise；脚本常 fire-and-forget（不 await 不 catch），
- *  其 rejection 在 **ajax fetch settle 之后**才悬空触发。Node 20+ 默认把这类 unhandled rejection 当致命错误，
- *  直接干掉整个 dsh 进程——尤其在**导入书源**时：探针逐源跑 @js，命中一个 fire-and-forget ajax 源就崩，
+ *  vm realm 的 Promise 与宿主同一 isolate，脚本自建又 fire-and-forget（不 await 不 catch）的异步工作，
+ *  其 rejection 在 **settle 之后**才悬空触发（晚于 evalJs 返回）。Node 20+ 默认把这类 unhandled rejection
+ *  当致命错误，直接干掉整个 dsh 进程——尤其在**导入书源**时：探针逐源跑 @js，命中一个 fire-and-forget 源就崩，
  *  用户看到的「fatal load failure / 请求失败 403 / 404」正是这条 rejection 冒到进程顶层。
+ *  历史触发源曾是主线程 `java.ajax` 包装返回的 async IIFE promise；那个 Promise 已随哨兵改造消失
+ *  （见 BOOTSTRAP 的 `__dsh_sync_ajax_required__`），但本防线照旧常驻——它拦的是脚本自建的其余异步工作。
  *  早前实现是「evalJs 期间挂、finally 摘」——但 rejection 晚于 evalJs 返回才触发，摘早了照样漏。故改为
  *  加载期常驻：只需拦住进程默认的 throw 行为，插件 dispose 时才摘（不给进程留永久监听器）。 */
 let guardInstalled = false
@@ -150,6 +156,17 @@ const BOOTSTRAP = `;(function (g) {
   }
   hide('__host_call__')
   hide('__init__')
+  // JSON.parse 对象幂等 wrap（真实源两形态共存的兼容口径）：JSON 页的 result 按已解析**对象**
+  // 绑定（字段访问形态 result.data.list 全靠它——本仓既定口径），而 cooks.tw 类 init 脚本写
+  // JSON.parse(result)（legado 的 result 常是 String，两种形态在各自环境都活）。对象直传
+  // JSON.parse 会被 ToString 成 "[object Object]" → SyntaxError → 目录全灭。此处对**已解析对象**
+  // 先 stringify 回原文再 parse（深拷贝幂等，语义=「parse 的逆」），字符串/标量走原生不变——
+  // bootstrap 自身与用户脚本的 JSON.parse(字符串) 行为零变化。
+  const nativeJsonParse = JSON.parse
+  JSON.parse = function (text, reviver) {
+    return nativeJsonParse.call(this,
+      (typeof text === 'object' && text !== null) ? JSON.stringify(text) : text, reviver)
+  }
   const ser = function (a) { return JSON.stringify(a) }
   const msg = function (e) { return (e && e.message) ? String(e.message) : String(e) }
   const invoke = function (name, a) {
@@ -167,24 +184,166 @@ const BOOTSTRAP = `;(function (g) {
       const r = invoke('ajax', [].slice.call(arguments))
       try { return JSON.parse(r) } catch (e) { throw new Error(msg(e)) }
     }
-    // 主线程形态：异步 promise（fire-and-forget 防线见下）
-    : function () {
-    const args = [].slice.call(arguments)
-    const p = (async function () {
-      const r = invoke('ajax', args)
-      try { return JSON.parse(await r) } catch (e) { throw new Error(msg(e)) }
-    })()
-    // fire-and-forget 防线（bridge 内**唯一**一层，受 DSH_NOVEL_NO_GUARD 开关控制）：
-    // 脚本常不 await 也不 catch，给外层 promise 挂空 catch，让拒绝在 vm realm 内就地消化
-    // （不逃逸到宿主 realm 成 unhandled）。await 方照常收到拒绝——空 catch 不影响 p 本身，
-    // 只是多一个已消化的派生分支。
-    // 防线口径（三层职责收敛）：
-    //   ① 本层 = bridge 内防线，开关控制（DSH_NOVEL_NO_GUARD=1 时裸奔便于排障）；
-    //   ② 协议表 ajax 实现（js-protocol）只管发起请求并如实失败，不再各挂一层空 catch
-    //      （旧实现此处与 makeJavaBridge 各一层、口径不一——已合并到本层）；
-    //   ③ 进程级 unhandledRejection guard（ensureUnhandledGuard）是常驻最后防线，另有所司，不动。
-    if (!__d__.noGuard) p.catch(function () {})
-    return p
+    // 主线程形态：**没有同步桥就不猜异步语义**。legado 的 java.ajax 是 runBlocking 同步返回
+    // body，主线程物理上无法阻塞；曾在此返回 Promise，于是 java["ajax"](u) 这类等价写法静默
+    // 换类型（.match(...) 直接炸），而 SYNC_WORKER_RE 认不认得拼写成了语义开关。现在改为在
+    // **发起宿主调用之前**抛哨兵：evalJs 捕获后换 worker 重跑同一段（见 needsSyncBridge）。
+    // 请求因此没有发出去——重跑不多打站点。正则从此只决定性能（要不要白跑一趟主线程），
+    // 不决定语义。口径见 docs/design/engine.md。
+    : function () { throw new Error('__dsh_sync_ajax_required__') }
+  // java.downloadFile 同款网络同步语义（legado 同步下载返回路径）：worker 直通、主线程哨兵换道。
+  const downloadFile = d.syncAjax
+    ? function () {
+      const r = invoke('downloadFile', [].slice.call(arguments))
+      try { return JSON.parse(r) } catch (e) { throw new Error(msg(e)) }
+    }
+    : function () { throw new Error('__dsh_sync_ajax_required__') }
+  // ── Packages.*（legado Rhino 的 Java 包路径仿真）─────────────────────
+  // 真实源正文解密链用它组织 JVM/Android 类调用（爱腐文 favicon 密钥图实证：
+  // ByteArrayInputStream → BitmapFactory → javax.crypto AES/HMAC）。重活（PNG 解码、
+  // AES、HMAC、charset 解码）全走宿主调用 __pkg.*（JSON 序列化边界，与 __elem.* 同款纪律）；
+  // 轻活（流/数组/包装）留在 vm realm 纯 JS。未知路径 → 如实报「不支持」。
+  const pkgCall = function (op, payload) {
+    try { return JSON.parse(call('__pkg.' + op, ser(payload))) } catch (e) { throw new Error(msg(e)) }
+  }
+  const mkBytesStream = function (bytes) {
+    const buf = Array.isArray(bytes) ? bytes : []
+    let pos = 0
+    // 游标必须自增：没有它 while((b=s.read())!=-1) 是第一死循环（read 恒回首字节），
+    // 而唯一出口是 js 超时——脚本表现为「目录脚本超时」而不是「我读错了」。
+    // _bytes 仍是全量视图（BitmapFactory.decodeStream 侧按它取整包，见 pkgHostOp）。
+    return {
+      _bytes: buf,
+      available: function () { return buf.length - pos },
+      read: function () { return pos < buf.length ? buf[pos++] : -1 },
+      toString: function () { return '[ByteArrayInputStream len=' + buf.length + ' pos=' + pos + ']' },
+    }
+  }
+  g.Packages = {
+    java: {
+      io: {
+        ByteArrayInputStream: function (bytes) { return mkBytesStream(bytes) },
+        ByteArrayOutputStream: function () {
+          const b = []
+          return {
+            write: function (x) {
+              if (Array.isArray(x)) { for (let i = 0; i < x.length; i++) b.push(x[i] & 0xff) }
+              else b.push((+x) & 0xff)
+            },
+            toByteArray: function () { return b.slice() },
+            size: function () { return b.length },
+          }
+        },
+      },
+      lang: {
+        // new Packages.java.lang.String(bytes, 'UTF-8') → String(obj) 走 valueOf/toString 还原文本
+        String: function (bytes, charset) {
+          const s = JSON.parse(call('__pkg.b2s', ser({ bytes: bytes, charset: charset || 'UTF-8' })))
+          return { toString: function () { return s }, valueOf: function () { return s } }
+        },
+      },
+      util: {
+        Arrays: {
+          // Java copyOfRange 语义（负索引从尾数、越长补 0）——脚本用 (0,48)/(48,len) 两形态
+          copyOfRange: function (arr, from, to) {
+            const n = arr.length
+            let f = from | 0, t = (to === undefined ? n : to) | 0
+            if (f < 0) f += n
+            if (t < 0) t += n
+            if (f < 0) f = 0
+            if (t < f) t = f
+            const out = []
+            for (let i = f; i < t; i++) out.push(i < n ? arr[i] & 0xff : 0)
+            return out
+          },
+        },
+      },
+    },
+    javax: {
+      crypto: {
+        Cipher: {
+          ENCRYPT_MODE: 1,
+          DECRYPT_MODE: 2,
+          getInstance: function (trans) {
+            // 注意：BOOTSTRAP 是模板字符串，正则字面量里的 \/ 会被模板层解转义成 / 截断正则——
+            // 用 new RegExp 构造（同理此处任何含 / 的模式都不得用字面量）
+            if (!new RegExp('^AES/CBC/PKCS[57]Padding$', 'i').test(String(trans))) {
+              throw new Error('不支持的加密变换：' + trans + '（v1 实现 AES/CBC/PKCS5|7Padding）')
+            }
+            const st = { key: null, iv: null, mode: 1 }
+            return {
+              init: function (mode, keySpec, ivSpec) {
+                st.mode = mode | 0
+                st.key = keySpec && keySpec._bytes ? keySpec._bytes : null
+                st.iv = ivSpec && ivSpec._bytes ? ivSpec._bytes : null
+              },
+              doFinal: function (data) {
+                if (st.key === null || st.iv === null) throw new Error('Cipher 未 init')
+                if ((st.mode | 0) !== 2) throw new Error('v1 仅实现解密（DECRYPT_MODE）')
+                return JSON.parse(call('__pkg.aes', ser({ key: st.key, iv: st.iv, data: data })))
+              },
+            }
+          },
+        },
+        Mac: {
+          getInstance: function (algo) {
+            const a = String(algo)
+            if (!/^HmacSHA(1|256|512)$/.test(a)) throw new Error('不支持的 Mac 算法：' + algo)
+            const st = { key: null, parts: [] }
+            // Java 的 Mac 契约：update(byte[]) 累加、update(byte) 追加单字节、doFinal() 结算后复位、
+            // doFinal(input) ≡ update(input) + doFinal()。此前 update 静默丢弃非数组、doFinal 干脆不接
+            // 参数——m.doFinal(java.strToBytes(body)) 于是对零字节签名，站点拒 → 空/乱正文，
+            // 是静默出错值而不是报错。认不出的形态如实抛（字节有符号与否由宿主 toBytes 统一 & 0xff）。
+            const push = function (v) {
+              if (Array.isArray(v)) st.parts.push(v)
+              else if (typeof v === 'number') st.parts.push([v])
+              else throw new Error('Mac 不接受的字节载荷形态：' + (v === undefined ? 'undefined' : typeof v))
+            }
+            return {
+              init: function (keySpec) { st.key = keySpec && keySpec._bytes ? keySpec._bytes : null; st.parts = [] },
+              update: function (b) { push(b) },
+              doFinal: function (input) {
+                if (st.key === null) throw new Error('Mac 未 init')
+                if (input !== undefined) push(input)
+                let data = []
+                for (const p of st.parts) data = data.concat(p)
+                st.parts = []
+                return JSON.parse(call('__pkg.hmac', ser({ algo: a, key: st.key, data: data })))
+              },
+            }
+          },
+        },
+        spec: {
+          SecretKeySpec: function (bytes, algo) {
+            return { _bytes: Array.isArray(bytes) ? bytes : [], _algo: String(algo || 'AES') }
+          },
+          IvParameterSpec: function (bytes) {
+            return { _bytes: Array.isArray(bytes) ? bytes : [] }
+          },
+        },
+      },
+    },
+    android: {
+      graphics: {
+        BitmapFactory: {
+          // PNG 解码全在宿主（node:zlib）；bitmap 包装对象持像素数组，getPixel 纯 vm 内取——
+          // ARGB int 位移语义与 Java int 一致（脚本 (rgb>>16)&0xFF 取 R 通道成立）
+          decodeStream: function (src) {
+            const bytes = src && src._bytes ? src._bytes : src
+            const r = pkgCall('png', { bytes: bytes })
+            return {
+              getWidth: function () { return r.width },
+              getHeight: function () { return r.height },
+              getPixel: function (x, y) {
+                const xi = x | 0, yi = y | 0
+                if (xi < 0 || yi < 0 || xi >= r.width || yi >= r.height) return 0
+                return r.pixels[yi * r.width + xi]
+              },
+            }
+          },
+        },
+      },
+    },
   }
   const log = function (kind) {
     return function () {
@@ -222,6 +381,8 @@ const BOOTSTRAP = `;(function (g) {
   g.__mkElem__ = mkElem
   g.java = {
     ajax: ajax,
+    // async 网络行（协议表 mode:'async' 不进 javaSync 名单）——与 ajax 同款手工挂载
+    downloadFile: downloadFile,
     log: log('console.log'),
     toast: function(){}, longToast: function(){}, copyText: function(){},
     startBrowser: function(){}, open: function(){},
@@ -253,7 +414,7 @@ const BOOTSTRAP = `;(function (g) {
   })
   ;['webView','startBrowserAwait','refreshTocUrl','ajaxAll','createAsymmetricCrypto',
     'aesBase','queryTTF','queryBase','replaceFont','digestHex','digestBase64Str','HMacHex','HMacBase64',
-    'createSign','strToBytes'].forEach(function (n) {
+    'createSign'].forEach(function (n) {
     g.java[n] = function () { throw new Error('java.' + n + ' 不支持：需要安卓宿主环境（WebView/加密/系统服务无法仿真）') }
   })
   g.cookie = {}
@@ -313,6 +474,9 @@ const BOOTSTRAP = `;(function (g) {
  *   （timer 已 unref，不拖住事件循环）。
  * - 返回值映射：string→Value；array→List（元素 String()）；null/undefined/''→Miss；对象→JSON.stringify 的 Value。
  * - `console.log/error` 收集进返回的 logs（join(' ')），不外泄打印。
+ * - `java.ajax` 语义唯一（legado runBlocking 同步返回 body）：脚本认不出拼写而落在主线程时，ajax 包装
+ *   **在发起宿主调用之前**抛哨兵，本函数捕获后换 worker 重跑同一段（请求没发出去，不多打站点；已收集
+ *   的 logs 丢弃，不重复计）。正则只决定性能，不决定语义——口径与残余见 docs/design/engine.md。
  */
 export async function evalJs(
   code: string,
@@ -346,6 +510,8 @@ export async function evalJs(
   // 主线程服务（fetch / java.getString 引擎递归都在主线程照常异步跑），JS 视角同步拿到 body 字符串，
   // `java.ajax(url).match(...)` / `let b = java.ajax(u); b.indexOf(...)` 这类真实源主导形态成立。
   // 无 ajax 的脚本仍走主线程 vm（零开销）。bootstrap 的 ajax 包装按 syncAjax 标志二选一（同一份代码）。
+  // **这条正则只是性能启发，不是语义开关**：认不出的等价写法（java["ajax"] / 解构 / 动态键）会先在
+  // 主线程白跑一趟、再由哨兵兜回 worker（见 needsSyncBridge），拿到的语义与直写形态一致。
   const jsLibCode = ctx.jsLib ?? ''
   const useWorker = SYNC_WORKER_RE.test(jsLibCode + '\n' + code)
   // JSON 页的 `result` 绑定（legado setContent isJSON 口径）：整页/条目上下文是合法 JSON 时，
@@ -356,7 +522,9 @@ export async function evalJs(
   const resultJson = host.resultKind === 'page'
     && ((trimmedResult.startsWith('{') && trimmedResult.endsWith('}')) || (trimmedResult.startsWith('[') && trimmedResult.endsWith(']')))
     ? pageRaw : ''
-  const init = JSON.stringify({
+  // init 按 syncAjax 参数化：worker 重跑（哨兵路线）必须拿 syncAjax:true 的那一份，
+  // 复用主线程的 init 会让 worker 里的 ajax 包装再抛一次哨兵。
+  const initOf = (syncAjax: boolean): string => JSON.stringify({
     result: pageRaw, resultKind: host.resultKind ?? '', resultJson,
     baseUrl: ctx.baseUrl ?? '', source: ctx.source ?? '',
     key: host.key ?? '', page: host.page ?? 1, header: host.header ?? '{}',
@@ -366,96 +534,120 @@ export async function evalJs(
     // legado `book` / `chapter` 变量：目录/正文面脚本常见 `book.bookUrl`、`chapter.title`——
     // 服务层按面注入（缺席给空对象：脚本读字段得 undefined，与 legado 未设置时同形）
     book: ctx.book ?? {}, chapter: ctx.chapter ?? {},
-    noGuard: process.env.DSH_NOVEL_NO_GUARD === '1',
-    syncAjax: useWorker,
+    syncAjax,
     // 沙箱挂载清单从协议表派生（见 js-protocol.SANDBOX_MOUNTS）
     mounts: SANDBOX_MOUNTS,
   })
+  const init = initOf(useWorker)
   if (useWorker) {
     return evalJsInWorker({
       bootstrap: BOOTSTRAP, init, code, jsLib: jsLibCode, timeout,
       scriptForm: opts?.scriptForm ?? true, call, logs, loc, facet,
     })
   }
-  const context = vm.createContext(
-    { __host_call__: call, __init__: init } as unknown as vm.Context,
-    { codeGeneration: { strings: false, wasm: false } },
-  )
-
+  // 主线程整段包一层哨兵捕获：四个可能冒出哨兵的位置（BOOTSTRAP init / jsLib / 同步执行 /
+  // await 到的完成值——`await` 形态下哨兵是 rejection）都要能兜住，故包在最外层而不是逐处判定。
   try {
-    vm.runInContext(BOOTSTRAP, context, { timeout })
-  } catch (e) {
-    throw jsErr(e, code, loc, facet, '沙箱初始化失败')
-  }
+    const context = vm.createContext(
+      { __host_call__: call, __init__: init } as unknown as vm.Context,
+      { codeGeneration: { strings: false, wasm: false } },
+    )
 
-  // jsLib（legado 源级全局函数库）：先于用户代码在同一上下文执行——函数定义落全局，
-  // 用户 @js 里直接调用（真实源 urlUserFavorite/host/qmSearchUrl 等都定义在这里）。
-  // 它本身不是求值目标：抛错如实上报（jsLib 坏了整源的 js 都不可信）。
-  const jsLib = ctx.jsLib
-  if (jsLib !== undefined && jsLib.trim() !== '') {
     try {
-      vm.runInContext(jsLib, context, { timeout })
+      vm.runInContext(BOOTSTRAP, context, { timeout })
     } catch (e) {
-      if (isVmTimeout(e)) throw jsTimeoutErr(timeout, jsLib.slice(0, 200), loc, facet)
-      throw jsErr(e, jsLib.slice(0, 200), loc, facet, 'jsLib 执行失败')
+      throw jsErr(e, code, loc, facet, '沙箱初始化失败')
     }
-  }
 
-  // key/page/result/baseUrl/source/src/book/chapter 已由 bootstrap 注入为全局（g.key=…）——
-  // wrapper 不再声明同名参数：真实源有 `let page = java.get("page")` 的重声明形态，
-  // 参数位会与之冲突（Identifier already declared）。
-  // **非严格模式（钉死）**：legado 的 JS 宿主（Rhino/QuickJS）按 sloppy 语义执行——
-  // `next = []` 这类未声明赋值就是写全局，真实源大量依赖（实测 13 源目录脚本首行即
-  // `next = []`，严格模式下 ReferenceError 全灭）。逃逸防御不靠严格模式：vm realm 隔离 +
-  // codeGeneration 关闭 + 宿主入口锁死才是边界，见 BOOTSTRAP 顶注。
-  const wrapped = `;(async function (result, baseUrl, source, java, cookie, console) {\n${code}\n}).apply(undefined, [__d__.result, __d__.baseUrl, __src__, java, cookie, console])`
+    // jsLib（legado 源级全局函数库）：先于用户代码在同一上下文执行——函数定义落全局，
+    // 用户 @js 里直接调用（真实源 urlUserFavorite/host/qmSearchUrl 等都定义在这里）。
+    // 它本身不是求值目标：抛错如实上报（jsLib 坏了整源的 js 都不可信）。
+    const jsLib = ctx.jsLib
+    if (jsLib !== undefined && jsLib.trim() !== '') {
+      try {
+        vm.runInContext(jsLib, context, { timeout })
+      } catch (e) {
+        if (isVmTimeout(e)) throw jsTimeoutErr(timeout, jsLib.slice(0, 200), loc, facet)
+        throw jsErr(e, jsLib.slice(0, 200), loc, facet, 'jsLib 执行失败')
+      }
+    }
 
-  let started: unknown
-  try {
-    started = opts?.scriptForm === true
-      // legado @js 口径：代码是脚本，最后一个表达式的值即结果（顶层 return/await → SyntaxError → 回落函数体）
-      ? runAsScript(code, wrapped, context, timeout)
-      : vm.runInContext(wrapped, context, { timeout })
+    // key/page/result/baseUrl/source/src/book/chapter 已由 bootstrap 注入为全局（g.key=…）——
+    // wrapper 不再声明同名参数：真实源有 `let page = java.get("page")` 的重声明形态，
+    // 参数位会与之冲突（Identifier already declared）。
+    // **非严格模式（钉死）**：legado 的 JS 宿主（Rhino/QuickJS）按 sloppy 语义执行——
+    // `next = []` 这类未声明赋值就是写全局，真实源大量依赖（实测 13 源目录脚本首行即
+    // `next = []`，严格模式下 ReferenceError 全灭）。逃逸防御不靠严格模式：vm realm 隔离 +
+    // codeGeneration 关闭 + 宿主入口锁死才是边界，见 BOOTSTRAP 顶注。
+    const wrapped = `;(async function (result, baseUrl, source, java, cookie, console) {\n${code}\n}).apply(undefined, [__d__.result, __d__.baseUrl, __src__, java, cookie, console])`
+
+    let started: unknown
+    try {
+      started = opts?.scriptForm === true
+        // legado @js 口径：代码是脚本，最后一个表达式的值即结果（顶层 return/await → SyntaxError → 回落函数体）
+        ? runAsScript(code, wrapped, context, timeout)
+        : vm.runInContext(wrapped, context, { timeout })
+    } catch (e) {
+      if (isVmTimeout(e)) throw jsTimeoutErr(timeout, code, loc, facet)
+      throw jsErr(e, code, loc, facet, '脚本编译/同步执行失败')
+    }
+
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const ret = await Promise.race([
+        started,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(TIMEOUT), timeout)
+          timer?.unref?.()
+        }),
+      ])
+      return { value: toEngineValue(ret), logs }
+    } catch (e) {
+      if (e === TIMEOUT || isVmTimeout(e)) throw jsTimeoutErr(timeout, code, loc, facet)
+      if (e instanceof JsSandboxError) throw e
+      throw jsErr(e, code, loc, facet, '脚本执行抛错')
+    } finally {
+      if (timer) clearTimeout(timer)
+      // unhandledRejection 防线常驻（不再此处摘除）——见 ensureUnhandledGuard
+    }
   } catch (e) {
-    if (isVmTimeout(e)) throw jsTimeoutErr(timeout, code, loc, facet)
-    throw jsErr(e, code, loc, facet, '脚本编译/同步执行失败')
-  }
-
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    const ret = await Promise.race([
-      started,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(TIMEOUT), timeout)
-        timer?.unref?.()
-      }),
-    ])
-    return { value: toEngineValue(ret), logs }
-  } catch (e) {
-    if (e === TIMEOUT || isVmTimeout(e)) throw jsTimeoutErr(timeout, code, loc, facet)
-    if (e instanceof JsSandboxError) throw e
-    throw jsErr(e, code, loc, facet, '脚本执行抛错')
-  } finally {
-    if (timer) clearTimeout(timer)
-    // unhandledRejection 防线常驻（不再此处摘除）——见 ensureUnhandledGuard
+    if (!needsSyncBridge(e)) throw e
+    // 别名写法调 ajax（java["ajax"] / 解构 / 动态键）：主线程给不出 legado 的同步语义，
+    // 换 worker 重跑同一段。已产生的日志丢弃——否则同一段脚本的 console.log 会出现两遍。
+    logs.length = 0
+    return evalJsInWorker({
+      bootstrap: BOOTSTRAP, init: initOf(true), code, jsLib: jsLibCode, timeout,
+      scriptForm: opts?.scriptForm ?? true, call, logs, loc, facet,
+    })
   }
 }
 
-/** 脚本形态执行：完成值即结果；顶层 return/await 的 SyntaxError 回落 async IIFE 函数体形态。
+/** 脚本形态执行：完成值即结果；**编译期** SyntaxError（顶层 return/await）回落 async IIFE 函数体形态。
+ *  判别必须在**编译期**（new vm.Script 只编译不执行）：旧实现直接 runInContext 再按异常类名判——
+ *  运行时抛的 SyntaxError（最典型：JSON.parse 坏串 / 对象 ToString 后坏串）被误判成「顶层 return 形态」
+ *  静默回落 wrapped，而表达式脚本在 wrapped 里没有 return → 完成值 undefined → **恒 Miss**（真机实证：
+ *  cooks.tw init 脚本经 evaluate 链路整段静默取空，比报错更坏）。编译通过的脚本执行期错误直接上抛。
  *  vm 抛的错误来自 vm realm——跨 realm `instanceof SyntaxError` 不成立，按 constructor.name 判定。 */
 function runAsScript(code: string, wrapped: string, context: vm.Context, timeout: number): unknown {
   try {
-    return vm.runInContext(code, context, { timeout })
+    // 只编译不执行：SyntaxError = 语法层（含顶层 return/await）→ 回落 wrapped
+    new vm.Script(code)
   } catch (e) {
-    if ((e as { constructor?: { name?: string } })?.constructor?.name !== 'SyntaxError') throw e
-    return vm.runInContext(wrapped, context, { timeout })
+    if ((e as { constructor?: { name?: string } })?.constructor?.name === 'SyntaxError') {
+      return vm.runInContext(wrapped, context, { timeout })
+    }
+    throw e
   }
+  return vm.runInContext(code, context, { timeout })
 }
 
 // ── java.ajax 同步桥（worker + SharedArrayBuffer RPC）────────────────────
 //
 // legado 的 `java.ajax` 是 runBlocking 同步返回响应 body；Node 主线程 vm 无法阻塞 await。
-// 凡脚本（含 jsLib）出现 `java.ajax(` 调用，evalJs 把**整段求值**路由进 worker 线程：
+// 进 worker 有两条路，语义相同、只差一趟白跑：① `SYNC_WORKER_RE` 命中脚本（含 jsLib）里任何
+// **可能**是 ajax 的形态 → evalJs 直接把整段求值路由进 worker（性能启发，认得就不必白跑主线程）；
+// ② 正则认不出的等价写法在主线程撞上 ajax 哨兵 → evalJs 捕获后换 worker 重跑同一段（见
+// needsSyncBridge）。语义由**桥**给（worker 同步返回 / 主线程抛哨兵），不由正则给。
 // worker 里的 __host_call__ 把 (name, argsJson) 写进请求 SAB 后 `Atomics.wait` 阻塞，
 // 主线程经 message 唤醒后照常用同一个 `call`（fetch / java.getString 引擎递归 / console 日志 /
 // 元素桥——全部现成）异步服务，响应回写响应 SAB + Atomics.notify 唤醒 worker。
@@ -466,7 +658,15 @@ function runAsScript(code: string, wrapped: string, context: vm.Context, timeout
 // worker 代码以**字符串**交付（`new Worker(src, {eval:true})`）——tsdown 打包后不存在
 // 独立 worker 文件可解析；BOOTSTRAP/init/code 全走 workerData，不产生第二份引导代码抄本。
 
-const SYNC_WORKER_RE = /java\s*\.\s*ajax\s*\(/
+/** 路由启发式（**只影响性能与稳健性，不影响语义**——语义由桥给）。刻意过近似而不求精确，三支：
+ *  ① `\.ajax\s*\(` 认任何 `.ajax(`（`java.ajax(` 以及别名对象上的 ajax）；② `downloadFile\s*\(`
+ *  认 `java.downloadFile(`（与 ajax 同款的 async 哨兵桥，见 `js-protocol.ts` 的 downloadFile 行）；
+ *  ③ `java\s*\[` 认任何对 java 桥的下标访问（`java["ajax"]` 与一切动态键）。放宽的动机不只是省一趟白跑：
+ *  哨兵是靠「抛出」传递的，脚本自己的 try/catch 会在 vm 内把它吞掉，那段脚本于是静默走 catch 分支
+ *  而不是拿到 legado 语义——现实的别名写法直接进 worker，就压根走不到抛哨兵那一步。
+ *  代价实测（本机 228 源真实库）：放宽前后同样 28 源命中，**多路由 0 个**。仍漏的只有真正的
+ *  间接形态（解构 `const {ajax} = java`、`with`）——注意计算键 `java[...]` 字面含 `java[`，已被支③捞进 worker，撞不到哨兵。 */
+const SYNC_WORKER_RE = /\.ajax\s*\(|downloadFile\s*\(|java\s*\[/
 const SAB_REQ_BYTES = 4 * 1024 * 1024
 const SAB_RESP_BYTES = 16 * 1024 * 1024
 
@@ -667,6 +867,11 @@ function makeHostCall(
     if (name.startsWith('__elem.')) {
       return JSON.stringify(elemHostOp(name.slice('__elem.'.length), JSON.parse(argsJson))) ?? 'null'
     }
+    // Packages.* 的宿主重活（__pkg.*）：PNG 解码 / AES-CBC / HMAC / 字节→串——同 __elem 纪律，
+    // 不进协议表（它是 Packages 包路径面，不是 java.* 方法），返回纯 JSON
+    if (name.startsWith('__pkg.')) {
+      return JSON.stringify(pkgHostOp(name.slice('__pkg.'.length), JSON.parse(argsJson))) ?? 'null'
+    }
     const args: unknown[] = JSON.parse(argsJson)
     const out = invokeJavaMethod(deps, name, args)
     if (out instanceof Promise) return out.then((v) => JSON.stringify(v))
@@ -728,6 +933,50 @@ function elemHostOp(op: string, payload: { html?: unknown; name?: unknown; rule?
     }
     default:
       throw new Error(`未知元素桥操作：${op}`)
+  }
+}
+
+/** `__pkg.*` 宿主实现（Packages.* 的重活）：入参/出参纯 JSON（字节 = number[]，0-255）。
+ *  png → decodePngToArgb（node:zlib）；aes → AES-CBC 解密（DECRYPT 单向——v1 只做正文解密）；
+ *  hmac → HmacSHA*；b2s → 字节按 charset 解码。未知操作与非法输入一律抛错（宁炸不猜）。 */
+
+/** PNG 像素上限（400 万）：策略值住宿主这层，解码器只提供闸口——**在 IHDR 处判**而不是解完再判，
+ *  否则挡不住它守的那次分配（膨胀 + `height × rowBytes` 的图像缓冲 + 逐像素 ARGB 数组）。 */
+const MAX_PNG_PIXELS = 4_000_000
+
+function pkgHostOp(op: string, payload: Record<string, unknown>): unknown {
+  const toBytes = (v: unknown): Uint8Array => {
+    if (!Array.isArray(v)) throw new Error('字节载荷需为 number[]')
+    return Uint8Array.from(v.map((n) => (Number(n) || 0) & 0xff))
+  }
+  switch (op) {
+    case 'png': {
+      return decodePngToArgb(toBytes(payload.bytes), MAX_PNG_PIXELS)
+    }
+    case 'aes': {
+      const key = toBytes(payload.key)
+      const iv = toBytes(payload.iv)
+      const data = toBytes(payload.data)
+      if (![16, 24, 32].includes(key.length)) throw new Error(`AES 密钥长度不合法（${key.length} 字节）`)
+      if (iv.length !== 16) throw new Error(`AES-CBC IV 长度不合法（${iv.length} 字节，需 16）`)
+      try {
+        const d = crypto.createDecipheriv(`aes-${key.length * 8}-cbc`, Buffer.from(key), Buffer.from(iv))
+        return Array.from(Buffer.concat([d.update(Buffer.from(data)), d.final()])) // PKCS7 自动校验（=PKCS5）
+      } catch (e) {
+        throw new Error(`AES-CBC 解密失败（${e instanceof Error ? e.message : String(e)}）`)
+      }
+    }
+    case 'hmac': {
+      const algoOf: Record<string, string> = { HmacSHA1: 'sha1', HmacSHA256: 'sha256', HmacSHA512: 'sha512' }
+      const nodeAlgo = algoOf[String(payload.algo)]
+      if (nodeAlgo === undefined) throw new Error(`不支持的 Mac 算法：${String(payload.algo)}`)
+      return Array.from(crypto.createHmac(nodeAlgo, Buffer.from(toBytes(payload.key)))
+        .update(Buffer.from(toBytes(payload.data))).digest())
+    }
+    case 'b2s':
+      return javaDecode(toBytes(payload.bytes), typeof payload.charset === 'string' ? payload.charset : 'UTF-8')
+    default:
+      throw new Error(`未知 Packages 桥操作：${op}`)
   }
 }
 
@@ -795,6 +1044,13 @@ function jsTimeoutErr(timeout: number, code: string, loc: SegmentLoc, facet: Fac
 
 function isVmTimeout(e: unknown): boolean {
   return (e as NodeJS.ErrnoException | undefined)?.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT'
+}
+
+/** 主线程 ajax 分支的哨兵（见 BOOTSTRAP）。内层 catch 会把它包成 JsSandboxError，
+ *  但 jsErr 是 `${prefix}：${msg}` 拼接，原文仍在 message 里，故按子串判定即可。 */
+const SYNC_AJAX_SENTINEL = '__dsh_sync_ajax_required__'
+function needsSyncBridge(e: unknown): boolean {
+  return String((e as { message?: unknown })?.message ?? '').includes(SYNC_AJAX_SENTINEL)
 }
 
 function parseLineFromStack(stack: string): number | undefined {

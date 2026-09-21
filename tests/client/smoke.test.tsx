@@ -105,12 +105,15 @@ describe('NovelView smoke（renderToString 不炸——数据获取在 effect，
     expect(css).toContain('.novel-root')                  // 样式串含 flex 列定义
     expect(css).toContain('flex-direction: column')
   })
-  it('阅读器：正文承载在宿主 scrollport 上——根容器带 data-novel-view 标记（sticky 工具栏的 :has 钩子）', () => {
+  it('阅读器：不放开 overflow——.novel-main 自己是 scrollport（放开曾致整条宿主链没人滚）', () => {
     routeStore.set({ route: { name: 'reader', sourceId: 's', bookKey: 'k', title: 'T' } as any })
     const html = renderToString(createElement(NovelView))
     expect(html).toContain('data-novel-view="reader"')
-    expect(html).toContain('.novel-root:has(')             // 该视图下放开祖先 overflow，否则 sticky 落在自己身上
-    expect(html).toContain('.novel-main:has(')
+    // 回归钉子：曾有 `.novel-root/.novel-main:has([data-novel-view="reader"])` 放开规则，
+    // 迁全局面板（a9f35f7）后宿主链 centerCol/frame 双 overflow:hidden、链上无 scrollport，
+    // 放开即滚轮无效（病史见 docs/design/client.md）。放开 = 回归。
+    expect(NOVEL_CSS).not.toContain('.novel-root:has([data-novel-view="reader"])')
+    expect(NOVEL_CSS).not.toContain('.novel-main:has([data-novel-view="reader"])')
   })
   it('阅读器：未载章节不进 DOM（旧实现渲染 912 个占位块 → scrollHeight 被撑成整本书高，预取判据失效）', () => {
     routeStore.set({ route: { name: 'reader', sourceId: 's', bookKey: 'k', title: 'T' } as any })

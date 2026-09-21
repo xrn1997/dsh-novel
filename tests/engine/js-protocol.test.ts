@@ -63,7 +63,7 @@ describe('JavaBridge 协议表（表驱动登记）', () => {
 
   it('async 行不进 javaSync 名单（ajax 走引导层特制包装）', () => {
     const asyncNames = JAVA_PROTOCOL.flatMap((r) => (r.mode === 'async' ? [r.name] : []))
-    expect(asyncNames).toEqual(['ajax'])
+    expect(asyncNames).toEqual(['ajax', 'downloadFile'])
     expect(SANDBOX_MOUNTS.javaSync).not.toContain('ajax')
     expect(SANDBOX_MOUNTS.javaSync).toContain('get')
   })

@@ -4,6 +4,7 @@ import { parseCookieString } from '../importer.js'
 import { paramRoutes, ROUTES } from '../../shared/wire.js'
 import { prodDeps } from '../deps.js'
 import type { SettingsDeps } from '../deps.js'
+import { startSourceVerification } from '../jobs.js'
 import { clearSelection, groupIcon, selectMany, setEditMode, setGroupFilter, setQuery, setStatusFilter, sourceListUi, toggleSelect, UNGROUPED } from '../source-list.js'
 import type { StatusFilter } from '../source-list.js'
 import { deriveSourceListView } from '../source-list-view.js'
@@ -42,8 +43,8 @@ const STATUS_OPTIONS: Array<{ key: StatusFilter; label: string }> = [
   { key: 'disabled', label: '停用' },
 ]
 
-export function SourceList({ sources, job, refresh, onChanged, onProbe, onImport, loadError = null, deps = prodDeps }: {
-  sources: SourcePublic[] | null; job: JobState | null; refresh: () => void
+export function SourceList({ sources, job, onChanged, onProbe, onImport, loadError = null, deps = prodDeps }: {
+  sources: SourcePublic[] | null; job: JobState | null
   onChanged: () => void; onProbe: (id: string) => void
   /** 打开导入弹层（壳层持有弹层现场） */
   onImport: () => void
@@ -78,9 +79,11 @@ export function SourceList({ sources, job, refresh, onChanged, onProbe, onImport
   // 模态确认即是二次确认（实现裁定，2026 审查后补记，见 client.md 调度台 IA 节）。
   const probing = job?.phase === 'running'
   /** 批量写口提交：成功后**重读哪一面由调用点指定**，两者不可互换——
-   *  启停改的是源本身 → `onChanged`（重新 GET sources）；验证起的是后台任务 → `refresh`
-   *  （重启任务轮询）。此前统一走 `refresh`，于是批量启停写完没人重取源列表：行开关、
-   *  「已启用 M」计数、「停用」过滤全停在点之前的值，只有重开视图才跟上（2026-09 实机报）。 */
+   *  启停改的是源本身 → `onChanged`（重新 GET sources）；验证起的是后台任务 → **不走本
+   *  helper**：它收进了 `jobs.ts` 的领域动作 `startSourceVerification`（提交 →
+   *  催任务读面 / 失败一处反馈，三个验证入口同一条路）。此前统一走「重启轮询」出口时
+   *  批量启停写完没人重取源列表：行开关、「已启用 M」计数、「停用」过滤全停在点之前的值，
+   *  只有重开视图才跟上（2026-09 实机报）。 */
   const submit = <T,>(fn: () => Promise<T>, after: (res: T) => void): void => {
     void fn().then(after, (e) => deps.pushError(`操作失败：${e instanceof Error ? e.message : String(e)}`))
   }
@@ -204,7 +207,7 @@ export function SourceList({ sources, job, refresh, onChanged, onProbe, onImport
               停用所选
             </button>
             <button className="novel-btn sm primary" disabled={probing}
-              onClick={() => submit(() => deps.startBatchProbeJob(ui.selection), refresh)}>
+              onClick={() => void startSourceVerification(ui.selection, deps)}>
               验证所选
             </button>
             <button className="novel-btn sm danger"
@@ -377,10 +380,11 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
     })
   }
   /** 行内验证/重验（单源批量探针口与待办箱同一条路）：失败 pushError 显式呈现 */
+  /** 行内「验证/重验」：与待办箱、批量条同一条领域动作——本入口只表达
+   *  「验证这一源」，提交后的催任务读面 / 失败反馈归 `jobs.ts` 的 `startSourceVerification`；
+   *  源列表随任务终态整体刷新（`SettingsSection` 按 job.id 记账），不再就地 `onChanged`。 */
   const verifyThis = (): void => {
-    void deps.startBatchProbeJob([s.id]).then(() => onChanged(), (e: unknown) => {
-      deps.pushError(`启动验证失败：${e instanceof Error ? e.message : String(e)}`)
-    })
+    void startSourceVerification([s.id], deps)
   }
   return (
     <Fragment>

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import { createElement, StrictMode } from 'react'
 import { ApiClientError } from '../../src/client/api.js'
 import { ProbePane } from '../../src/client/views/SettingsSection.js'
@@ -10,6 +10,7 @@ import { ReaderView } from '../../src/client/views/ReaderView.js'
 import { ShelfView } from '../../src/client/views/ShelfView.js'
 import { SearchView } from '../../src/client/views/SearchView.js'
 import { resetSourceInboxUi } from '../../src/client/source-inbox-ui.js'
+import { resetJobSurface, useJobPolling } from '../../src/client/jobs.js'
 import { navigate, routeStore } from '../../src/client/store.js'
 import { ROUTES, queries } from '../../src/shared/wire.js'
 import type { SearchJobSnapshot } from '../../src/shared/wire.js'
@@ -104,6 +105,25 @@ describe('ShelfView 接线（deps seam 驱动）', () => {
     fireEvent.click(document.querySelector('.novel-modal-mask')!)
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(deps.apiSend).not.toHaveBeenCalled()
+  })
+
+  /** 来源投影（服务端读取时 join 出 sourceName）：卡片显示源名；源被删 → 灰字「来源已删除」；
+   *  本地书不出 chip（本地身份已由封面「本地」与角标承担）。 */
+  it('来源 chip：显示源名；join 不到 → 「来源已删除」；本地书不出 chip', async () => {
+    const deps = coreDeps({
+      apiGet: vi.fn(async () => [
+        { ...book, bookKey: 'k1', title: '斗罗', sourceName: '笔趣阁' },
+        { ...book, bookKey: 'k2', title: '剑来', sourceName: null },
+        { ...book, bookKey: 'local:u1', title: '本地书', sourceId: '__local__', sourceName: null },
+      ]),
+    })
+    render(createElement(ShelfView, { deps }))
+    await waitFor(() => expect(screen.getByText('斗罗')).toBeTruthy())
+    expect(screen.getByText('笔趣阁')).toBeTruthy()
+    expect(screen.getByText('来源已删除')).toBeTruthy()
+    const localCell = [...document.querySelectorAll('.novel-cell')]
+      .find((c) => c.textContent?.includes('本地书'))!
+    expect(localCell.querySelector('.novel-src-tag')).toBeNull()
   })
 
   /** 本地 TXT 导入：上传是异步的，落地那一刻用户可能已经不在书架（切 tab / 去书源管理）。 */
@@ -355,8 +375,9 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
     makeDeps({ apiGet: vi.fn(async (path: string) => (path === 'sources' ? sources : null)), ...over })
 
   // 忽略现场是模块级 store（source-inbox-ui.ts）：不复位会让上一个用例的「已忽略」漏进
-  // 下一个用例的「卡该在」（先例 resetSourceListUi / resetTransient）
-  beforeEach(resetSourceInboxUi)
+  // 下一个用例的「卡该在」（先例 resetSourceListUi / resetTransient）；jobSurface 同理——
+  // 本文件的验证编排用例经 useJobPolling 驱动真实轮询写镜像。
+  beforeEach(() => { resetSourceInboxUi(); resetJobSurface() })
 
   it('源列表经 deps.apiGet 加载（整壳注入后子组件不吃 prodDeps 缺省）', async () => {
     const deps = settingsDeps()
@@ -497,6 +518,42 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
     await waitFor(() => expect(deps.startBatchProbeJob).toHaveBeenCalledWith(['b1']))
   })
 
+  it('待办处置动作（三入口同口径）：提交成功即催任务读面；源列表等任务收尾才刷新', async () => {
+    const fetchJobStatus = vi.fn(async () => null)
+    const deps = settingsDeps({ fetchJobStatus }, [unverifiedSrc, brokenSrc])
+    render(createElement(SettingsSection, { deps }))
+    renderHook(() => useJobPolling({ fetchJobStatus }))    // 观测面：常驻层同款轮询驱动
+    await waitFor(() => expect(fetchJobStatus).toHaveBeenCalledTimes(1))
+    fireEvent.click(await screen.findByText('批量重验'))
+    await waitFor(() => expect(deps.startBatchProbeJob).toHaveBeenCalledWith(['b1']))
+    // 验证起任务 → 读任务：提交成功催读面（jobs.ts 领域动作缺省 refresh → 立刻重拉，不等 1s 拍）
+    await waitFor(() => expect(fetchJobStatus).toHaveBeenCalledTimes(2))
+    // 不就地重取源列表：源状态要等任务收尾（终态 reload 另有按 job.id 的记账，下方用例钉）
+    expect(deps.apiGet.mock.calls.filter((c) => c[0] === 'sources').length).toBe(1)
+  })
+
+  it('任务终态 → 源列表刷新按 job.id 只记一次；同一终态轮询再多拍不重复 reload，新一轮终态再刷一次', async () => {
+    let current: JobState | null = null
+    const fetchJobStatus = vi.fn(async () => current)
+    const deps = settingsDeps({ fetchJobStatus })
+    const readsOf = (): number => deps.apiGet.mock.calls.filter((c) => c[0] === 'sources').length
+    render(createElement(SettingsSection, { deps }))
+    renderHook(() => useJobPolling({ fetchJobStatus }))
+    await waitFor(() => expect(readsOf()).toBe(1))                    // 挂载 reload
+    const doneProbe: JobState = {
+      id: 'p1', kind: 'batch-probe', phase: 'done', total: 2, done: 2,
+      counts: { ok: 2, failed: 0, dupSkipped: 0, replaced: 0 },
+      issues: [], fileErrors: [], startedAt: 0,
+    }
+    current = doneProbe
+    await waitFor(() => expect(readsOf()).toBe(2), { timeout: 4000 }) // 终态落地 → reload 恰一次
+    current = { ...doneProbe }                                        // 同 id 终态再来几拍（轮询每拍写新对象）
+    await new Promise((r) => setTimeout(r, 2500))
+    expect(readsOf()).toBe(2)                                         // 记账不重复
+    current = { ...doneProbe, id: 'p2' }                              // 新一轮终态 → 再刷一次
+    await waitFor(() => expect(readsOf()).toBe(3), { timeout: 4000 })
+  })
+
   it('导入弹层：默认关闭；「＋ 导入书源」打开（拖放区在场），Esc 收起', async () => {
     const deps = settingsDeps()
     render(createElement(SettingsSection, { deps }))
@@ -569,7 +626,7 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
   })
 })
 
-describe('ReaderView 接线（ReaderDeps 注入 + 整本导出流经 export-run）', () => {
+describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run）', () => {
   const readerDeps = (over: ReaderDepsOverrides = {}): FakeReaderDeps => makeReaderDeps(over)
 
   const reader = (deps: FakeReaderDeps): ReturnType<typeof createElement> =>
@@ -582,13 +639,32 @@ describe('ReaderView 接线（ReaderDeps 注入 + 整本导出流经 export-run�
     expect(String(deps.apiGet.mock.calls[0][0])).toContain('toc')
   })
 
-  it('点「⤓ 下载」→ streamExport 经 deps 在途，成功后 saveBlob 按书名落盘', async () => {
+  it('点「⤓ 下载」→ 弹范围面板（此时不开流）；点面板「下载」→ streamExport 在途，成功后 saveBlob 按书名落盘', async () => {
     const deps = readerDeps()
     render(reader(deps))
+    await waitFor(() => expect(screen.getByText(/共 1 章/)).toBeTruthy())   // 目录未就绪时确认钮本就该禁用
     fireEvent.click(screen.getByText('⤓ 下载'))
+    expect(screen.getByRole('dialog', { name: '导出范围' })).toBeTruthy()   // 第一步只开面板
+    expect(deps.streamExport).not.toHaveBeenCalled()
+    fireEvent.click(within(screen.getByRole('dialog', { name: '导出范围' })).getByText('⤓ 下载'))
     await waitFor(() => expect(deps.streamExport).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(deps.saveBlob).toHaveBeenCalledTimes(1))
     expect(String(deps.saveBlob.mock.calls[0][1])).toBe('斗罗.txt')
+  })
+
+  it('面板范围校验：输入倒置 → 确认钮禁用，改回合法才可点', async () => {
+    const deps = readerDeps()
+    render(reader(deps))
+    await waitFor(() => expect(screen.getByText(/共 1 章/)).toBeTruthy())   // toc 就绪才有 total
+    fireEvent.click(screen.getByText('⤓ 下载'))
+    const dlg = screen.getByRole('dialog', { name: '导出范围' })
+    const inputs = within(dlg).getAllByRole('spinbutton')                  // type="number" → spinbutton
+    fireEvent.change(inputs[0], { target: { value: '3' } })                // 3 > 1 倒置
+    const confirm = within(dlg).getByText('⤓ 下载')
+    expect((confirm as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(inputs[0], { target: { value: '1' } })
+    expect((confirm as HTMLButtonElement).disabled).toBe(false)
+    expect(deps.streamExport).not.toHaveBeenCalled()                       // 校验期零请求
   })
 
   it('导出失败：错误条呈现 code（导出错误与阅读链路 error 分家，历史形态：整段硬 import 零覆盖）', async () => {
@@ -596,7 +672,9 @@ describe('ReaderView 接线（ReaderDeps 注入 + 整本导出流经 export-run�
       streamExport: vi.fn(async () => { throw new ApiClientError('ExportFailed', 500, '服务端导出失败') }),
     })
     render(reader(deps))
+    await waitFor(() => expect(screen.getByText(/共 1 章/)).toBeTruthy())
     fireEvent.click(screen.getByText('⤓ 下载'))
+    fireEvent.click(within(screen.getByRole('dialog', { name: '导出范围' })).getByText('⤓ 下载'))
     await waitFor(() => expect(screen.getByText(/ExportFailed/)).toBeTruthy())
   })
 })
@@ -659,6 +737,29 @@ describe('SearchView 离开界面：停看不停工（结果由服务端持有�
     await waitFor(() => expect(screen.getByText('切走期间搜完的书')).toBeTruthy())
     expect(reads[0]).toBe(queries.searchJobStatus(0))          // 重挂载 = 从游标零点重读
     expect(deps.apiSend).toHaveBeenCalledTimes(1)              // 恢复不重打：第二轮都没提交
+  })
+
+  it('退出小说界面再进：route 仍带关键词的重挂载也只恢复，不重新提交（真机 bug：整轮从头重搜）', async () => {
+    // 真机路径：书架搜索框 navigate({name:'search', keyword}) 进搜索页；routeStore 是跨卸载
+    // 存活的现场（store.ts），退出小说界面再进 = route 还带着关键词重新挂载。
+    // 旧行为：挂载 effect 无条件 submit → POST 替换单槽里在跑的同一轮 → 整轮从头重搜（用户实测）。
+    navigate({ name: 'search', keyword: '斗罗' })
+    const deps = coreDeps({
+      apiSend: vi.fn(async () => ({ jobId: 'j1' })),
+      apiGet: vi.fn(async () => ({
+        job: snap({ phase: 'running', done: 3, total: 10, next: 3, added: [hitGroup('切走前已搜到的书')] }),
+      })),
+    })
+    const view = render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(deps.apiSend).toHaveBeenCalledTimes(1))   // 从书架新鲜跳入：提交一轮
+    view.unmount()                                                       // 退出小说界面（服务端那轮照跑）
+
+    render(createElement(SearchView, { deps }))                          // 再进小说界面
+    await waitFor(() => expect(screen.getByText('切走前已搜到的书')).toBeTruthy())
+    // 进度从服务端快照恢复不从零开始（已搜 3/10 被 <b> 拆元素，按 textContent 断言）
+    expect(document.querySelector('.novel-prog-text')?.textContent ?? '').toMatch(/已搜 3\/10/)
+    expect(deps.apiSend).toHaveBeenCalledTimes(1)                        // 恢复不重打：重挂载零提交
+    navigate({ name: 'shelf' })
   })
 
   it('StrictMode 双挂载：两次恢复读只许落地一次（分组不重复累加）', async () => {

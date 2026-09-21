@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createExportRun } from '../../src/client/export-run.js'
+import { createExportRun, parseRange } from '../../src/client/export-run.js'
 import type { ExportRunDeps, ExportRunState } from '../../src/client/export-run.js'
 import { ApiClientError } from '../../src/client/api.js'
 
 /**
- * 整本导出流编排：此前整段住在 ReaderView（硬 import streamExport/saveBlob），
+ * 范围导出流编排：此前整段住在 ReaderView（硬 import streamExport/saveBlob），
  * 零测试。现在收成独立 module——start/cancel/状态三态 + 卸载 abort 全部可被假 streamExport 驱动。
  */
 
@@ -54,9 +54,47 @@ describe('createExportRun：成功 / 失败（错误类目投影）/ 取消 / �
     await vi.waitFor(() => expect(run.state.running).toBe(false))
 
     expect(saveBlob).toHaveBeenCalledWith(blob, '斗罗.txt')
-    expect(states[0]).toEqual({ running: true, kb: 0, total: '', error: null })       // 起步即复位
+    expect(states[0]).toEqual({ running: true, kb: 0, total: '', range: null, error: null })   // 起步即复位（无参 start = 全本）
     expect(states.some((s) => s.kb === 2 && s.total === '12')).toBe(true)             // 1536B → 2KB
     expect(run.state.error).toBeNull()
+  })
+
+  it('带范围 start：range 进状态、流收 from/to、文件名带范围后缀', async () => {
+    const blob = new Blob(['正文'])
+    const saveBlob = vi.fn()
+    const streamExport = vi.fn(async (opts: Parameters<ExportRunDeps['streamExport']>[0]) => {
+      opts.onProgress(1024, '76')
+      return blob
+    })
+    const { states, run } = setup({ streamExport, saveBlob })
+    run.start({ from: 5, to: 80, total: 100 })
+    await vi.waitFor(() => expect(run.state.running).toBe(false))
+
+    expect(streamExport.mock.calls[0][0]).toMatchObject({ from: 5, to: 80 })
+    expect(saveBlob).toHaveBeenCalledWith(blob, '斗罗（第5-80章）.txt')
+    expect(states[0].range).toEqual({ from: 5, to: 80, total: 100 })
+    expect(run.state.total).toBe('76')                     // total-chapters 头 = 段内章数
+  })
+
+  it('整本范围 start（1..total）→ 文件名仍 书名.txt（全覆盖不是部分导出）', async () => {
+    const saveBlob = vi.fn()
+    const streamExport = vi.fn(async (opts: Parameters<ExportRunDeps['streamExport']>[0]) => {
+      opts.onProgress(1, '100')
+      return new Blob(['x'])
+    })
+    const { run } = setup({ streamExport, saveBlob })
+    run.start({ from: 1, to: 100, total: 100 })
+    await vi.waitFor(() => expect(run.state.running).toBe(false))
+    expect(saveBlob.mock.calls[0][1]).toBe('斗罗.txt')
+  })
+
+  it('parseRange：倒置 / 越界 / 非整数 → 拒；合法 → ok（面板确认钮的判据）', () => {
+    expect(parseRange('3', '1', 10)).toMatchObject({ ok: false })
+    expect(parseRange('1', '11', 10)).toMatchObject({ ok: false })
+    expect(parseRange('abc', '2', 10)).toMatchObject({ ok: false })
+    expect(parseRange('', '2', 10)).toMatchObject({ ok: false })   // Number('') = 0 < 1
+    expect(parseRange('2', '2', 0)).toMatchObject({ ok: false })   // 目录未就绪
+    expect(parseRange('5', '80', 100)).toEqual({ ok: true, from: 5, to: 80 })
   })
 
   it('失败（ApiClientError 带 code）：错误类目投影——code + message 都进状态', async () => {

@@ -111,9 +111,9 @@ describe('headerOf', () => {
       ruleBookUrl: null, ruleCoverUrl: null, ruleIntro: null, ruleLastChapter: null, ruleTocUrl: null,
       ruleChapterList: null, ruleChapterName: null, ruleChapterUrl: null,
       ruleDetailName: null, ruleDetailAuthor: null, ruleDetailCoverUrl: null,
-      ruleDetailIntro: null, ruleDetailLastChapter: null,
+      ruleDetailIntro: null, ruleDetailLastChapter: null, ruleDetailInit: null,
       ruleContent: 'x', nextTocUrl: null, nextPageUrl: null,
-      header: null, loginUrl: null, jsLib: null },
+      header: null, loginUrl: null, jsLib: null, headerRule: null },
     status: 'unverified', importedAt: 0, ...over,
   })
   it('auth.cookies 拼成 Cookie 头', () => {

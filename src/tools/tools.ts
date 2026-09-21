@@ -19,10 +19,10 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
 
   const searchBooks = defineTool({
     name: 'novel_search_books',
-    description: '在已启用的书源里聚合搜索书籍，结果逐源分组（一源挂了不影响他源）。返回的 url 字段是详情页地址，可作为其他 novel 工具的 bookKey。结果可能较长，按需使用。',
+    description: '在已启用的文本书源里聚合搜索书籍（本插件当前仅支持小说文本面），结果逐源分组（一源挂了不影响他源）。返回的 url 字段是详情页地址，可作为其他 novel 工具的 bookKey。结果可能较长，按需使用。',
     parameters: {
       keyword: { type: 'string', required: true, description: '书名/作者关键词' },
-      sourceIds: { type: 'array', description: '限定源 id 列表（缺省搜全部启用源）' },
+      sourceIds: { type: 'array', description: '限定源 id 列表（缺省搜全部启用的文本源）' },
     },
     output: {
       schema: {

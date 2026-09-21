@@ -1,16 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { coverTintClass } from '../../src/client/util.js'
-import { filterShelfBooks, shelfCardMeta } from '../../src/client/shelf-view-model.js'
-import type { ShelfBook } from '../../src/client/views/types.js'
+import { coverTintClass, sourceTintClass } from '../../src/client/util.js'
+import { filterShelfBooks, shelfCardMeta, shelfSourceTag } from '../../src/client/shelf-view-model.js'
+import type { ShelfBook, ShelfEntry } from '../../src/client/views/types.js'
 
 /** 书架 view-model 钉子：筛选口径（reading/unread/local 正交）+ 卡片元信息/百分比唯一算式
- *  + 首字色块档位派生。客户端逻辑层测试口径：纯函数、零 React（client.md 模块地图）。 */
+ *  + 首字色块档位派生 + 来源投影（chip 文案与色点档位）。客户端逻辑层测试口径：
+ *  纯函数、零 React（client.md 模块地图）。 */
 
 const book = (over: Partial<ShelfBook>): ShelfBook => ({
   bookKey: 'k', sourceId: 's', title: '书', addedAt: 1,
   progress: { chapterIndex: 0, offsetRatio: 0, updatedAt: 1 },
   ...over,
 } as ShelfBook)
+
+/** 读取面条目：书架条目 + 服务端 join 出来的源名投影 */
+const entry = (over: Partial<ShelfEntry>): ShelfEntry =>
+  ({ ...book({}), sourceName: null, ...over } as ShelfEntry)
 
 describe('filterShelfBooks（筛选口径）', () => {
   const list = [
@@ -60,6 +65,32 @@ describe('coverTintClass（首字色块四档派生）', () => {
   })
   it('不同书可落不同档（四档真的被用起来）', () => {
     const set = new Set(['诡秘之主', '剑来', '赤心巡天', '道诡异仙', '深海余烬'].map(coverTintClass))
+    expect(set.size).toBeGreaterThan(1)
+  })
+})
+
+describe('shelfSourceTag（来源 chip 展示口径）', () => {
+  it('在线书：源名直出、非「已删」态', () => {
+    expect(shelfSourceTag(entry({ sourceId: 's1', sourceName: '笔趣阁' })))
+      .toEqual({ text: '笔趣阁', deleted: false })
+  })
+  it('源已被删（服务端 join 不到）→ 灰字「来源已删除」', () => {
+    expect(shelfSourceTag(entry({ sourceId: 'gone', sourceName: null })))
+      .toEqual({ text: '来源已删除', deleted: true })
+  })
+  it('本地书 → null（本地身份由封面「本地」与角标承担，不重复出 chip）', () => {
+    expect(shelfSourceTag(entry({ sourceId: '__local__', sourceName: null }))).toBeNull()
+  })
+})
+
+describe('sourceTintClass（来源色点四档派生）', () => {
+  it('空 id 回 t1（与 coverTintClass 同防）', () => expect(sourceTintClass('')).toBe('novel-src-t1'))
+  it('同源恒同档、可复现', () => {
+    expect(sourceTintClass('s1')).toBe(sourceTintClass('s1'))
+    expect(sourceTintClass('https://a.com')).toBe(sourceTintClass('https://a.com'))
+  })
+  it('不同源可落不同档（四档真的被用起来）', () => {
+    const set = new Set(['s1', 's2', 's3', 's4', 's5', 's6'].map(sourceTintClass))
     expect(set.size).toBeGreaterThan(1)
   })
 })

@@ -117,6 +117,21 @@ describe('streamExport', () => {
   })
 })
 
+describe('streamExport 范围参数', () => {
+  it('from/to 传入时进 query（缺省不出现——全本旧链接零参数）', async () => {
+    const fetchMock = vi.fn(async (_url: unknown, _init?: unknown) => new Response(
+      new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('x')); c.close() } }),
+      { status: 200, headers: { 'content-type': 'text/plain' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await streamExport({
+      sourceId: 's', bookKey: 'b', title: '书', from: 5, to: 80,
+      onProgress: () => {}, signal: new AbortController().signal,
+    })
+    expect(String(fetchMock.mock.calls[0][0])).toContain('from=5&to=80')
+    vi.unstubAllGlobals()
+  })
+})
+
 describe('apiUpload 信封', () => {
   it('POST 原始 Blob（无 content-type）；ok → value；error → ApiClientError；非 JSON → NetworkError', async () => {
     const fetchMock = vi.fn(async () => new Response(

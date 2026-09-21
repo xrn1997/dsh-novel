@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { paramRoutes, shelfBody } from '../../shared/wire.js'
 import { prodCoreDeps } from '../deps.js'
 import type { ClientCoreDeps } from '../deps.js'
@@ -39,7 +39,28 @@ export function SearchView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): 
   const initialKeyword = route.name === 'search' ? route.keyword ?? '' : ''
   const [keyword, setKeyword] = useState(initialKeyword)
   const { round, error, submit, cancel } = useSearchJob(deps)
-  useEffect(() => { if (initialKeyword !== '') submit(initialKeyword) }, [])   // eslint-disable-line react-hooks/exhaustive-deps
+  /** mount 提交的一次性闸：ref 防 StrictMode 同实例二次 effect；防重挂载的防线不在这里，
+   *  在下面提交后立刻把 route.keyword 摘掉。 */
+  const consumed = useRef<string | null>(null)
+  useEffect(() => {
+    if (initialKeyword === '' || consumed.current === initialKeyword) return
+    consumed.current = initialKeyword
+    submit(initialKeyword)
+    // route.keyword 只消费一次，提交即摘除：routeStore 是跨卸载存活的现场（store.ts），
+    // 不摘的话「退出小说界面再进（route 还带着关键词重新挂载）」与「从书架新鲜跳入」在
+    // 挂载时不可分——重挂载会无条件重新提交，而服务端搜索读面是单槽（services/search-job.ts
+    // 的 start：新提交即替换，旧轮在跑则被杀），整轮从头重搜（真机实测 bug）。摘除后重挂载
+    // 只剩 search-job.ts 的「挂载即恢复」一条路：读 since=0 快照、零提交。
+    navigate({ name: 'search' })
+  }, [])   // eslint-disable-line react-hooks/exhaustive-deps
+  /** 恢复轮次时回填搜索框（每挂载至多一次、只在框为空时）：重挂载 route 已无关键词，
+   *  恢复出的结果若配一个空输入框，看起来像没搜过；不抢用户正在输入的内容。 */
+  const filled = useRef(false)
+  useEffect(() => {
+    if (round === null || filled.current || keyword !== '') return
+    filled.current = true
+    setKeyword(round.keyword)
+  }, [round])   // eslint-disable-line react-hooks/exhaustive-deps
 
   const running = round !== null && round.running
   const progress = round !== null && round.running ? { done: round.done, total: round.total } : null

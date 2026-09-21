@@ -19,7 +19,7 @@ export const isJsSearchUrl = isJsForm
  *  `{{java.encodeURI(key)}}`、`{{page*2}}`、`{{java.base64Encode("/s?k="+key)}}` 等形态
  *  （此前只做纯变量替换，JS 表达式被原样拼进 URL 必炸）。纯变量形态不动。 */
 export async function preEvaluateUrlJs(
-  source: NovelSource, template: string, key: string, page: number, fetcher: Fetcher,
+  source: NovelSource, template: string, key: string, page: number, fetcher: Fetcher, jsTimeoutMs?: number,
 ): Promise<string> {
   if (!template.includes('{{') || !template.includes('}}')) return template
   const re = /\{\{([^{}]*)\}\}/g
@@ -42,7 +42,7 @@ export async function preEvaluateUrlJs(
   let out = ''
   for (const part of parts) {
     if (part.kind === 'text') { out += part.text; continue }
-    const outcome = await runScript(scriptOf(source, part.expr, key, page, fetcher, `{{${part.expr}}}`.slice(0, 200)))
+    const outcome = await runScript(scriptOf(source, part.expr, key, page, fetcher, `{{${part.expr}}}`.slice(0, 200), jsTimeoutMs))
     const v = outcome.value
     out += v.kind === 'value' ? v.text : v.kind === 'list' ? v.items.join('\n') : ''
   }
@@ -52,25 +52,25 @@ export async function preEvaluateUrlJs(
 /** searchUrl 统一解析入口：JS 形态先沙箱求值出模板，再预求值 {{...}} JS 表达式
  *  （两步都可能产出 `url,{json}` 选项串——交由 assembleRequest 的 parseUrlOption 统一收口）。 */
 export async function resolveSearchTemplate(
-  source: NovelSource, template: string, key: string, page: number, fetcher: Fetcher,
+  source: NovelSource, template: string, key: string, page: number, fetcher: Fetcher, jsTimeoutMs?: number,
 ): Promise<string> {
   const base = isJsSearchUrl(template)
-    ? await resolveJsSearchTemplate(source, template, key, page, fetcher)
+    ? await resolveJsSearchTemplate(source, template, key, page, fetcher, jsTimeoutMs)
     : template
-  return preEvaluateUrlJs(source, base, key, page, fetcher)
+  return preEvaluateUrlJs(source, base, key, page, fetcher, jsTimeoutMs)
 }
 
 /** JS 形态 searchUrl → URL 模板串：沙箱脚本求值（legado 口径：完成值即结果，key/page 为全局变量），
  *  产出的模板再走 assembleRequest（可能自带 `url,{json}` 选项——parseUrlOption 统一收口）。
  *  求值失败（JsSandboxError/FetchError 等）如实上抛——宁炸不猜，不拿假 URL 发请求。 */
 export async function resolveJsSearchTemplate(
-  source: NovelSource, template: string, key: string, page: number, fetcher: Fetcher,
+  source: NovelSource, template: string, key: string, page: number, fetcher: Fetcher, jsTimeoutMs?: number,
 ): Promise<string> {
   const trimmed = template.trim()
   const code = trimmed.startsWith('<js>')
     ? trimmed.replace(/^<js>/i, '').replace(/<\/js>$/i, '')
     : trimmed.replace(/^@?\s*js:/i, '')
-  const outcome = await runScript(scriptOf(source, code, key, page, fetcher, trimmed.slice(0, 200)))
+  const outcome = await runScript(scriptOf(source, code, key, page, fetcher, trimmed.slice(0, 200), jsTimeoutMs))
   const v = outcome.value
   const out = v.kind === 'value' ? v.text : v.kind === 'list' ? v.items.join('\n') : ''
   if (out.trim() === '') {
@@ -84,12 +84,15 @@ export async function resolveJsSearchTemplate(
 // ── runScript 入参构造的单点（此前两处各写一遍近逐字的 host/ctx 双拼——已收口）────────
 
 function scriptOf(
-  source: NovelSource, code: string, key: string, page: number, fetcher: Fetcher, segmentRaw: string,
+  source: NovelSource, code: string, key: string, page: number, fetcher: Fetcher, segmentRaw: string, jsTimeoutMs?: number,
 ): Parameters<typeof runScript>[0] {
   return {
-    // 重叠字段（baseUrl/source/vars/fetch/jsLib）走 engineContextOf 单点——
+    // 重叠字段（baseUrl/source/vars/fetch/jsLib/jsTimeoutMs）走 engineContextOf 单点——
     // runScript 面独有的字段（code/key/page/header/loc/facet/scriptForm）在此补齐
-    ...engineContextOf(fetcher, source, { baseUrl: source.baseUrl, vars: { key, page: String(page) } }),
+    ...engineContextOf(fetcher, source, {
+      baseUrl: source.baseUrl, vars: { key, page: String(page) },
+      ...(jsTimeoutMs === undefined ? {} : { jsTimeoutMs }),
+    }),
     code,
     key,
     page,

@@ -5,9 +5,9 @@
 ## 功能特性
 
 - **书源导入**：拖入或选择 .json 文件（可多选）或粘贴 legado 书源 JSON，导入跑在**服务端后台任务**——关掉页面不打断，进度与汇总随时回看；按书源地址自动去重（可用源优先保留）
-- **阅读体验**：封面网格书架（带阅读进度）、聚合搜索跑在服务端（进度实时推送、可中途**停止**且保留已搜出的结果、**切走界面不丢结果**、失败源折叠）、连续滚动阅读（滚动到底自动预取下一章）、目录抽屉跳章、字号 / 行距 / 栏宽 / 纸张色可调、深浅主题自适应
+- **阅读体验**：封面网格书架（带阅读进度、**每本书标注来源书源**——同源同色色点 + 源名，源被删则如实标「来源已删除」；支持「选择」进多选态**批量删除**）、聚合搜索跑在服务端（进度实时推送、可中途**停止**且保留已搜出的结果、**切走界面不丢结果**、失败源折叠）、连续滚动阅读（滚动到底自动预取下一章）、目录抽屉跳章、字号 / 行距 / 栏宽 / 纸张色可调、深浅主题自适应
 - **AI 助手工具**：搜索、读章、导入书源、试跑书源、查书架五个工具，与 UI 共用同一条链路
-- **整本导出**：一键导出全书 TXT（流式下载、显示进度、可随时取消）
+- **章节范围导出**：点「⤓ 下载」先弹范围面板（起止章输入 +「整本 / 当前章起」快捷），确认才开下；部分导出文件名带范围后缀（流式下载、显示进度、可随时取消）
 - **本地 TXT 导入**：本地小说文件（GBK / UTF-8 自动识别）解析章节后入架阅读
 - **书源管理**（调度台 IA，入口在「小说」视图顶部「书源管理」tab）：**待办收件箱**把坏源/未验证置顶成任务卡（批量重验 / 一键验证，处理完自动消解；卡可「✕ 忽略」——待办是提示，成员集一变会自动回来），读数集中在源列表头的**状态带**（共 N · 已启用 · 已停用 · 未验证 · 坏源）；源列表支持文本/状态/分组过滤、行内启停开关（停用源不参与搜索，随时开回）、编辑模式批量启停/验证/删除（做完留在编辑态、勾选保留，成功进反馈条）、单源试跑下钻、登录支持（`POST /sources/:id/auth` 支持 cookie 录入与 `loginUrl` 脚本执行；「去登录」当前只打开源首页——见 `docs/design/client.md` 已知开口）；导入是弹层（拖放/粘贴），完成事项回流待办箱；删除统一模态二次确认（点名登录态失效，危险区/手输口令退役）
 
@@ -19,7 +19,7 @@
 dsh plugin --profile web add @xrn1997/dsh-novel
 ```
 
-然后重启 `dsh web`，对话区顶部视图环会出现「小说」tab。
+然后重启 `dsh web`，左侧栏会出现「小说」全局面板入口（图标行；点击即在中央面板打开小说视图）。
 
 npm 安装使用预构建产物，秒装、无需构建授权。也可从 GitHub 源码安装（`dsh plugin --profile web add github:xrn1997/dsh-novel`）：`prepare` 脚本会自动构建，但 pnpm ≥10 首次安装可能报构建脚本被拦截（依赖已装但 `lib/` 未生成），需先在 profile 目录执行 `pnpm approve-builds --all` 再重跑安装命令。
 
@@ -40,7 +40,7 @@ dsh plugin --profile web remove @xrn1997/dsh-novel
 
 | 工具 | 用途 |
 | --- | --- |
-| `novel_search_books` | 在已启用的书源中聚合搜索，结果逐源分组（单个源失败不影响其他源）；返回的 `url` 字段可作为其他工具的 `bookKey` |
+| `novel_search_books` | 在已启用的**文本**书源中聚合搜索（本插件当前仅支持小说文本面），结果逐源分组（单个源失败不影响其他源）；返回的 `url` 字段可作为其他工具的 `bookKey` |
 | `novel_read_chapter` | 获取某本书第 N 章（0 起）的正文纯文本（含章名） |
 | `novel_add_source` | 导入 legado 书源 JSON（对象或数组）；导入只做规范化 + 落盘不探针（新源状态「未验证」），逐条返回 `ok` / `missing` / `dupSkipped`（同址已有可用源，保留已有未新增）结果；可用性结论用 `novel_probe_source` 获取 |
 | `novel_probe_source` | 对已有书源实际发起一次搜索请求，返回实测结论与失败定位 |
@@ -55,22 +55,23 @@ dsh plugin --profile web remove @xrn1997/dsh-novel
 | `dataDir` | `$DSH_HOME/novel/` | 数据根目录（见「数据存储」） |
 | `searchTimeoutMs` | `15000` | 单源搜索超时（毫秒） |
 | `searchParallel` | `5` | 搜索并发源数 |
+| `jsTimeoutMs` | `15000` | js 沙箱预算（毫秒，阅读/搜索/探针/登录全链路共用）。legado 书源的多请求目录脚本（多次 `java.ajax` + 签名）需要秒级预算；缺省 2000ms 会把这类源卡死成「脚本超时」 |
 | `cacheMaxBytes` | `209715200`（200MB） | 目录 / 正文缓存上限（字节，LRU 淘汰） |
-| `exportDelayMs` | `300` | 整本导出的章节间抓取间隔（毫秒，串行限速以避免给站点造成压力） |
+| `exportDelayMs` | `300` | 范围导出的章节间抓取间隔（毫秒，串行限速以避免给站点造成压力） |
 | `localImportMaxBytes` | `52428800`（50MB） | 本地 TXT 导入大小上限（字节） |
 | `proxyUrl` | 自动探测 | 出站代理，见[常见问题](#常见问题)；`'direct'` 强制直连，或显式指定如 `'http://127.0.0.1:7897'` |
 
 ## HTTP API
 
-所有路由以 `/novel-api` 为前缀（仅接受本机 loopback 且 **Origin/Referer 同源**的请求），响应为统一信封 `{ ok, value | error }`，错误附带 `code` 与可选的规则段级定位。共 21 条路由（16 条静态 + 5 条参数，计数由 `tests/shared/wire-builders.test.ts` 钉死）。**路由名与值形状的代码真相在 `src/shared/wire.ts`**（Node 半与浏览器半共用同一份定义，契约测试逐条把守）：
+所有路由以 `/novel-api` 为前缀（仅接受本机 loopback 且 **Origin/Referer 同源**的请求），响应为统一信封 `{ ok, value | error }`，错误附带 `code` 与可选的规则段级定位。共 26 条路由（21 条静态 + 5 条参数，计数由 `tests/shared/wire-builders.test.ts` 钉死）。**路由名与值形状的代码真相在 `src/shared/wire.ts`**（Node 半与浏览器半共用同一份定义，契约测试逐条把守）：
 
 | 面 | 路由 |
 | --- | --- |
 | 健康检查 | `GET /novel-api` |
 | 书源 | `GET /sources`、`POST /sources/import`（后台任务，body `{files:[{name,text}]}`，上限 32MB）、`GET /sources/job-status`（任务进度/汇总）、`POST /sources/batch-probe`（批量验证后台任务）、`POST /sources/batch-enabled`（批量启停）、`POST /sources/batch-delete`、`POST /sources/:id/probe`、`POST /sources/:id/enabled`（启停）、`POST /sources/:id/auth`、`DELETE /sources/:id` |
 | 阅读 | `GET /search`（一次性收齐全部命中）、`GET /search/plan`（本次聚合搜索的参搜源集——参与集的唯一主人在服务端）、**`POST /search/job`（把聚合搜索交给后台任务跑，body `{keyword, sourceIds?}` → `{jobId}`；离开界面不影响它跑完）**、**`GET /search/job-status?since=N`（按游标读增量：`added` 是新完成的分组、`next` 是下次该带的游标；整轮结果保留 30 分钟）**、**`GET /search/job-stream?since=N`（同一份快照的 SSE 推送：首帧即 baseline，终帧后服务端关流；推送不可用时客户端自动回落到上面的快照轮询）**、**`POST /search/job-cancel`（停止本轮：不再往下搜，已搜出的命中一律保留）**、`GET /book`、`GET /toc`、`GET /chapter`（`?refresh=1` 绕过缓存） |
-| 书架 | `GET /shelf`、`PUT /shelf/:key`（带 `title` 加书 / 带 `progress` 更新进度 / 带 `patch` 对在架书改元数据）、`DELETE /shelf/:key` |
-| 导出 | `GET /export`（流式 TXT，响应头 `X-Novel-Total-Chapters` 为总章数，连接断开即停止抓取） |
+| 书架 | `GET /shelf`（条目附 `sourceName` 来源投影——服务端读取时 join 书源注册表）、`PUT /shelf/:key`（带 `title` 加书 / 带 `progress` 更新进度 / 带 `patch` 对在架书改元数据）、`DELETE /shelf/:key`、**`POST /shelf/batch-delete`（多选批量删，body `{keys:[bookKey]}`；本地书连带删副本，未知键静默跳过）** |
+| 导出 | `GET /export`（流式 TXT，`from`/`to` 选段（1 基含端，缺席 = 全本），响应头 `X-Novel-Total-Chapters` 为**本次范围**章数、`X-Novel-Range` 为 `from-to`；倒置范围 422 `BadRange`，连接断开即停止抓取） |
 | 本地书 | `POST /local/import?name=…`、`DELETE /local?id=…` |
 
 ## 数据存储
@@ -87,7 +88,7 @@ dsh plugin --profile web remove @xrn1997/dsh-novel
 
 ## 兼容哪些书源
 
-兼容 legado 书源的声明式子集：取值链 / 组合符（`||`、`&&`、`%%`）/ `##` 替换 / AllInOne / JSONPath（含 `.*` 属性通配，且当页面是 JSON 文本时对内容按需解析）/ XPath 子集 / `@put` / `@get` / `@js` 沙箱（脚本完成值语义 + 顶层 `return`/`await` 回落）/ `jsLib` 源级函数库 / `searchUrl` 的 `@js`/`<js>` 形态（沙箱求值出 URL）/ 对象形态方言 / `url,{json}` POST 请求 / 相对 URL / 隐式 CSS 选择器（`#id` / `.class` / 裸 tag / `tag.类` / `tag>子` 组合链 / 纯属性选择器 / 位置索引 `a.0`）/ `!` 排除语法，以及 `@js` 宿主垫片（`java.log` / `getElement` / `setContent` / `cookie` / `source.getVariable` / `source` 等对象）。缺省请求带浏览器 UA（部分站点 WAF 无 UA 直接 403）。
+兼容 legado 书源的声明式子集：取值链 / 组合符（`||`、`&&`、`%%`）/ `##` 替换 / AllInOne / JSONPath（含 `.*` 属性通配，且当页面是 JSON 文本时对内容按需解析）/ XPath 子集 / `@put` / `@get` / `@js` 沙箱（脚本完成值语义 + 顶层 `return`/`await` 回落）/ `jsLib` 源级函数库 / `searchUrl` 的 `@js`/`<js>` 形态（沙箱求值出 URL）/ 对象形态方言（**含 `ruleBookInfo.init` 详情上下文初始化**——init 先求值、结果替换后续详情规则与 tocUrl 模板的上下文，`{{$.…}}` 插值按换根后的 JSON 解析）/ `url,{json}` POST 请求（**选项随书 URL 与章节 URL 全程保留**——身份即请求规格，抓取时统一解释）/ 相对 URL / 隐式 CSS 选择器（`#id` / `.class` / 裸 tag / `tag.类` / `tag>子` 组合链 / 纯属性选择器 / 位置索引 `a.0`）/ `!` 排除语法，以及 `@js` 宿主垫片（`java.log` / `getElement` / `setContent` / `cookie` / `source.getVariable` / `source` 等对象）。缺省请求带浏览器 UA（部分站点 WAF 无 UA 直接 403）。
 
 URL 模板语义与 legado 源码（[legado-with-MD3](https://github.com/gedoor/legado) 续作）逐条对齐：`url,{json}` 选项的逗号两侧允许空白（`,` / `, ` 均可）；模板内 `{{...}}` 按 JS 求值（`{{java.encodeURI(key)}}`、`{{page*2}}` 等），纯变量占位 `{{key}}`/`{{page}}` 保持原有的 URL 编码口径；`&&`/`%%` 组合符对空或 Miss 的分支静默跳过、只合并非空结果（与 legado 的并集语义一致，而非全命中）。
 
@@ -109,7 +110,7 @@ URL 模板语义与 legado 源码（[legado-with-MD3](https://github.com/gedoor/
 
 该源的 `jsLib` 里用了 `eval` / `new Function` 动态执行字符串——本插件的 JS 沙箱出于逃逸防御显式禁用了字符串代码生成（legado 的 Rhino 环境允许），这类源无法仿真。
 
-**安装后对话区没有出现「小说」tab？**
+**安装后侧栏没有出现「小说」面板入口？**
 
 重启 `dsh web` 后生效。如果你是从源码目录安装的，确认已先执行 `pnpm build` 生成 `lib/`（构建产物缺失会让整个插件树拒绝挂载，`dsh web` 直接启动失败而非静默降级），详见[本地源码调试](#本地源码调试)。
 

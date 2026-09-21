@@ -54,10 +54,15 @@ describe('parseUrlOption', () => {
   it('webView 标志透传（我们不支持，调用方 warning）', () => {
     expect(parseUrlOption('/x,{"webView":true}').option?.webView).toBe(true)
   })
-  it('选项 JSON 非法 → 整串当纯 URL（诚实失败于请求层，不半途猜）', () => {
+  it('选项 JSON 非法 → URL 仍无条件切分，只是没有选项（legado analyzeUrl 口径）', () => {
+    // legado 在解析选项**之前**就把 URL 切干净——解析失败只意味着「没有选项」，不意味着
+    // 「整串是 URL」。旧行为把 `,{…}` 留在 URL 里 → 站点 404（年代小说弯引号选项实证）。
     const r = parseUrlOption('/x,{not json at all}')
-    expect(r.urlPart).toBe('/x,{not json at all}')
+    expect(r.urlPart).toBe('/x')
     expect(r.option).toBeUndefined()
+    const curly = parseUrlOption('/c/1.html,{webView:“true”}')
+    expect(curly.urlPart).toBe('/c/1.html')
+    expect(curly.option).toBeUndefined()
   })
   // legado paramPattern = \s*,\s*(?=\{)——逗号两侧允许空白（165 条源写 `, {...}` 带空格）
   it('逗号两侧空白的选项形态（legado paramPattern 考证）', () => {
@@ -144,8 +149,8 @@ describe('resolveJsSearchTemplate', () => {
       ruleBookUrl: null, ruleCoverUrl: null, ruleIntro: null, ruleLastChapter: null, ruleTocUrl: null,
       ruleChapterList: null, ruleChapterName: null, ruleChapterUrl: null,
       ruleDetailName: null, ruleDetailAuthor: null, ruleDetailCoverUrl: null,
-      ruleDetailIntro: null, ruleDetailLastChapter: null,
-      ruleContent: 'x', nextTocUrl: null, nextPageUrl: null, header, loginUrl: null, jsLib: null },
+      ruleDetailIntro: null, ruleDetailLastChapter: null, ruleDetailInit: null,
+      ruleContent: 'x', nextTocUrl: null, nextPageUrl: null, header, loginUrl: null, jsLib: null, headerRule: null },
     status: 'unverified', importedAt: 0,
   })
   // 探针只需网络能力占位：@js 不发请求时 fetch 不会被调用
@@ -189,8 +194,8 @@ describe('preEvaluateUrlJs', () => {
       ruleBookUrl: null, ruleCoverUrl: null, ruleIntro: null, ruleLastChapter: null, ruleTocUrl: null,
       ruleChapterList: null, ruleChapterName: null, ruleChapterUrl: null,
       ruleDetailName: null, ruleDetailAuthor: null, ruleDetailCoverUrl: null,
-      ruleDetailIntro: null, ruleDetailLastChapter: null,
-      ruleContent: 'x', nextTocUrl: null, nextPageUrl: null, header: null, loginUrl: null, jsLib: null },
+      ruleDetailIntro: null, ruleDetailLastChapter: null, ruleDetailInit: null,
+      ruleContent: 'x', nextTocUrl: null, nextPageUrl: null, header: null, loginUrl: null, jsLib: null, headerRule: null },
     status: 'unverified', importedAt: 0,
   })
   const fetcher: Fetcher = { fetchPage: async () => { throw new Error('不应触网') } }

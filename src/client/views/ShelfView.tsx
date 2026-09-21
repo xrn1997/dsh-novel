@@ -4,12 +4,12 @@ import { LOCAL_SOURCE_ID, paramRoutes, queries, ROUTES } from '../../shared/wire
 import { prodCoreDeps } from '../deps.js'
 import type { ClientCoreDeps } from '../deps.js'
 import { navigate } from '../store.js'
-import type { ShelfBook } from './types.js'
+import type { ShelfEntry } from './types.js'
 import { coverFallbackChar, EmptyState, ProgressBar, SearchIcon } from './bits.js'
-import { deleteBookCopy } from '../shelf-delete.js'
-import { filterShelfBooks, SHELF_FILTERS, shelfCardMeta } from '../shelf-view-model.js'
+import { deleteBookCopy, deleteBooksCopy } from '../shelf-delete.js'
+import { filterShelfBooks, SHELF_FILTERS, shelfCardMeta, shelfSourceTag } from '../shelf-view-model.js'
 import type { ShelfFilterKey } from '../shelf-view-model.js'
-import { coverTintClass } from '../util.js'
+import { coverTintClass, sourceTintClass } from '../util.js'
 
 /** 本地书保留源 id 归 wire 契约（第四轮卡「顺带」项）：此前此处手抄 '__local__'——
  *  服务端单主人在 src/services/localbooks.ts，client 纯度门禁拦跨半 import，字面量双份即漂移隐患。 */
@@ -27,9 +27,17 @@ import { coverTintClass } from '../util.js'
  *  确认条文案与空态/错误文案原文（views-wiring + smoke）。
  *  承载元素口径：卡片与引导卡是真 <button>（Enter/Space 原生可用），删除钮是其
  *  **兄弟**而非后代——div[role=button] 只绑 onClick，键盘按不动且读屏念「按钮含按钮」。
- *  守卫在 tests/client/ui-system.test.tsx。布局与配色一律归样式类，本文件零行内 style。 */
+ *  守卫在 tests/client/ui-system.test.tsx。布局与配色一律归样式类，本文件零行内 style。
+ *
+ * 多选态（批量删除，2026 新需求）：行3 的「选择」入态——筛选簇让位给批量条（复用书源管理
+ *  同款 `.novel-selbar` 与同款词汇：已选 N / 清空选择 / 删除所选），卡片点击改为勾选、
+ *  单本 ✕ 与导入引导卡退场（同一职责不留第二个入口）。「全选」= 当前筛选可见的书——
+ *  筛选在多选态定格，这条口径才有唯一答案。选择态是**现场**（组件 state，不进 store）：
+ *  切 tab 重挂载即清零，残留一批旧勾选去撞下一次删除比丢失现场危险得多。
+ *  批量走一次 POST shelf/batch-delete（keys 点击时快照），不是循环 DELETE。 */
+
 export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): ReactNode {
-  const [books, setBooks] = useState<ShelfBook[] | null>(null)
+  const [books, setBooks] = useState<ShelfEntry[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [keyword, setKeyword] = useState('')
   const [filter, setFilter] = useState<ShelfFilterKey>('all')
@@ -46,11 +54,19 @@ export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): R
     return () => { aliveRef.current = false }
   }, [])
   // 删除书籍（卡片 ✕ → 模态确认 → DELETE shelf/:key；本地书服务端连删磁盘文件）
-  const [pendingDel, setPendingDel] = useState<ShelfBook | null>(null)
+  const [pendingDel, setPendingDel] = useState<{ books: ShelfEntry[]; batch: boolean } | null>(null)
   const [delError, setDelError] = useState<string | null>(null)
   const [delBusy, setDelBusy] = useState(false)
+  // 多选现场：selectMode + 已勾选的 bookKey（勾选序只是集合的存法；批请求的 targets 由 books
+  // 过滤得出 = 书架序，别指望它是点选顺序）
+  const [selectMode, setSelectMode] = useState(false)
+  const [selected, setSelected] = useState<string[]>([])
   const modalRef = useRef<HTMLDivElement | null>(null)
   const cancelDel = (): void => { setPendingDel(null); setDelError(null); setDelBusy(false) }
+  const exitSelect = (): void => { setSelectMode(false); setSelected([]) }
+  const toggleSelect = (bookKey: string): void => {
+    setSelected((prev) => prev.includes(bookKey) ? prev.filter((k) => k !== bookKey) : [...prev, bookKey])
+  }
   /** 模态在场期间的键盘接管：Esc 取消 + Tab 圈在框内（焦点在关闭后还给触发它的那张卡片 ✕）。
    *  旧实现只有 Esc，Tab 一路走下去就走到遮罩背后的书架——对话框还在屏幕上，人已出去。 */
   useEffect(() => {
@@ -76,12 +92,21 @@ export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): R
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingDel])
+  /** 确认删除：**入口决定路径**——单本 ✕ 走 DELETE shelf/:key，多选「删除所选」走一次
+   *  POST shelf/batch-delete（哪怕只勾了 1 本：载荷与文案跟用户点的那个钮一致）。
+   *  成功才本地过滤 + 清勾选（失败半场卡片保留——乐观删除的回滚半场归接线测试钉死）。 */
   const confirmDelete = (): void => {
     if (pendingDel === null || delBusy) return
+    const { books: targets, batch } = pendingDel
+    const targetKeys = new Set(targets.map((b) => b.bookKey))
     setDelBusy(true)
-    void deps.apiSend('DELETE', paramRoutes.shelfKey(pendingDel.bookKey)).then(() => {
-      // 成功才本地过滤（失败半场卡片保留——乐观删除的回滚半场归接线测试钉死）
-      setBooks((prev) => (prev ?? []).filter((b) => b.bookKey !== pendingDel.bookKey))
+    void (batch
+      ? deps.apiSend('POST', ROUTES.shelfBatchDelete.path, { keys: [...targetKeys] })
+      : deps.apiSend('DELETE', paramRoutes.shelfKey(targets[0].bookKey))
+    ).then(() => {
+      setBooks((prev) => (prev ?? []).filter((b) => !targetKeys.has(b.bookKey)))
+      setSelected((prev) => prev.filter((k) => !targetKeys.has(k)))
+      if (batch) setSelectMode(false)          // 批量成功即收工（这一批现场已消费完）
       cancelDel()
     }, (e) => {
       // 失败留在模态内：错误就地呈现，可重试可取消（错误不再散落到页面流里粘屏）
@@ -91,7 +116,7 @@ export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): R
   }
   useEffect(() => {
     // 失败不许伪装成空架（历史 bug：网络失败 setBooks([]) → 渲染「书架空空」误导）
-    void deps.apiGet<ShelfBook[]>(ROUTES.shelf.path).then((list) => {
+    void deps.apiGet<ShelfEntry[]>(ROUTES.shelf.path).then((list) => {
       setBooks(list)
       setLoadError(null)
     }, (e) => {
@@ -101,6 +126,17 @@ export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): R
   }, [])   // eslint-disable-line react-hooks/exhaustive-deps
   const search = (): void => {
     if (keyword.trim() !== '') navigate({ name: 'search', keyword: keyword.trim() })
+  }
+  /** 当前筛选下的可见条目（网格、全选、计数共用同一份派生） */
+  const shown = books === null ? [] : filterShelfBooks(books, filter)
+  /** 「全选」= 当前筛选可见的书（筛选在多选态定格，故这条口径有唯一答案） */
+  const selectAllVisible = (): void => setSelected(shown.map((b) => b.bookKey))
+  /** 「删除所选」→ 开模态：**点击时刻快照**选中项（模态在场期间书架怎么变都不改这批目标） */
+  const openBatchConfirm = (): void => {
+    const targets = (books ?? []).filter((b) => selected.includes(b.bookKey))
+    if (targets.length === 0) return
+    setDelError(null)
+    setPendingDel({ books: targets, batch: true })
   }
   const importCard = (
     <button className="novel-card novel-card-ghost" aria-label="导入本地书籍"
@@ -137,8 +173,20 @@ export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): R
             </form>
             <span className="novel-shelf-search-note">聚合全部书源</span>
           </div>
-          {/* 行3：书架筛选簇（有书才渲染——空架/加载中没有可筛的东西）；排序灰字跟簇尾 */}
-          {books === null || books.length === 0 ? null : (
+          {/* 行3：书架筛选簇（有书才渲染——空架/加载中没有可筛的东西）；排序灰字跟簇尾。
+              多选态里这一行让位给批量条（复用书源管理的 .novel-selbar 与同款词汇）——筛选
+              随入场定格，「全选」的口径才有唯一答案。 */}
+          {books === null || books.length === 0 ? null : selectMode ? (
+            <div data-novel-selbar className="novel-selbar">
+              <strong>已选 {selected.length}</strong>
+              <button className="novel-btn sm" onClick={selectAllVisible}>全选</button>
+              <button className="novel-btn sm" onClick={() => setSelected([])}>清空选择</button>
+              <button className="novel-btn sm danger" disabled={selected.length === 0}
+                onClick={openBatchConfirm}>删除所选</button>
+              <span className="novel-grow" />
+              <button className="novel-btn sm" onClick={exitSelect}>退出</button>
+            </div>
+          ) : (
             <div className="novel-shelf-filter">
               <div className="novel-seg" role="group" aria-label="按阅读状态筛选">
                 {SHELF_FILTERS.map((f) => (
@@ -150,6 +198,7 @@ export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): R
                   >{f.label}</button>
                 ))}
               </div>
+              <button className="novel-btn sm" onClick={() => setSelectMode(true)}>选择</button>
               <span className="novel-shelf-sort">最近阅读排序 · 进度自动保存</span>
             </div>
           )}
@@ -175,9 +224,13 @@ export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): R
         {/* 错误面：导入/加载两处场景内提示；删除错误在确认模态内就地呈现，不散落页面流 */}
         {importError === null ? null : <div className="novel-err novel-note-sm">{importError}</div>}
         {/* 删除确认模态：遮罩 + 居中对话框 + 危险色确认钮；Esc/点遮罩取消，失败留在框内重试。
-            测试钉子：✕ 的 title「删除本书」、按钮文案「确认删除」、失败文案「删除失败：…」。 */}
+            文案两形态同住 shelf-delete.ts（纯函数）：单本点名书名，批量点名本数并在含本地书时
+            点名副本连删。测试钉子：✕ 的 title「删除本书」、按钮文案「确认删除」、
+            失败文案「删除失败：…」、批量标题「删除选中的 N 本书？」。 */}
         {pendingDel === null ? null : (() => {
-          const copy = deleteBookCopy(pendingDel.title, pendingDel.sourceId === LOCAL_SOURCE_ID)
+          const copy = pendingDel.batch
+            ? deleteBooksCopy(pendingDel.books)
+            : deleteBookCopy(pendingDel.books[0].title, pendingDel.books[0].sourceId === LOCAL_SOURCE_ID)
           return (
             <div className="novel-modal-mask" onClick={(e) => { if (e.target === e.currentTarget) cancelDel() }}>
               <div ref={modalRef} className="novel-modal" role="dialog" aria-modal="true" aria-labelledby="novel-del-title">
@@ -217,37 +270,61 @@ export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): R
               : <EmptyState title="书架暂时不可用（见上方错误）" hint="书源在「小说 → 书源管理」中导入" />)
             : (
               <div className="novel-grid">
-                {filterShelfBooks(books, filter).map((b) => {
+                {shown.map((b) => {
                   const isLocal = b.sourceId === LOCAL_SOURCE_ID
                   const failed = imgFailed[b.bookKey] === true
                   const meta = shelfCardMeta(b)
+                  const srcTag = shelfSourceTag(b)
+                  const picked = selected.includes(b.bookKey)
                   return (
-                    <div key={b.bookKey} className="novel-cell">
-                      <button className="novel-card" aria-label={`阅读 ${b.title}`}
-                        onClick={() => navigate({ name: 'reader', sourceId: b.sourceId, bookKey: b.bookKey, title: b.title })}>
-                        {isLocal
-                          // 本地书专属呈现：封面位直接写「本地」（源身份固定，与在线书区分）
-                          ? <span className="novel-cover-fallback sm">本地</span>
-                          : b.coverUrl !== undefined && !failed
-                            ? <img className="novel-cover" src={b.coverUrl} alt="" loading="lazy"
-                                onError={() => setImgFailed((m) => ({ ...m, [b.bookKey]: true }))} />
-                            : <span className={`novel-cover-fallback ${coverTintClass(b.title)}`}>{coverFallbackChar(b.title)}</span>}
+                    <div key={b.bookKey} className={`novel-cell${selectMode ? ' sel' : ''}${picked ? ' on' : ''}`}>
+                      <button className="novel-card"
+                        // 多选态里卡片就是勾选件（aria-pressed 如实）；常态是「阅读」入口。
+                        // 两种态下都是真 <button>——勾选标记是卡内装饰 span，不再嵌一个可交互控件。
+                        aria-label={selectMode ? `${picked ? '取消选择' : '选择'}《${b.title}》` : `阅读 ${b.title}`}
+                        aria-pressed={selectMode ? picked : undefined}
+                        onClick={() => {
+                          if (selectMode) { toggleSelect(b.bookKey); return }
+                          navigate({ name: 'reader', sourceId: b.sourceId, bookKey: b.bookKey, title: b.title })
+                        }}>
+                        <span className="novel-cover-box">
+                          {isLocal
+                            // 本地书专属呈现：封面位直接写「本地」（源身份固定，与在线书区分）
+                            ? <span className="novel-cover-fallback sm">本地</span>
+                            : b.coverUrl !== undefined && !failed
+                              ? <img className="novel-cover" src={b.coverUrl} alt="" loading="lazy"
+                                  onError={() => setImgFailed((m) => ({ ...m, [b.bookKey]: true }))} />
+                              : <span className={`novel-cover-fallback ${coverTintClass(b.title)}`}>{coverFallbackChar(b.title)}</span>}
+                          {/* 来源 chip：色点按 sourceId 派生四档（一眼分得出源不同）+ 源名（超长省略，
+                              title 给全名）。本地书不出（本地身份归封面「本地」与角标）。 */}
+                          {srcTag === null ? null : (
+                            <span className={`novel-src-tag${srcTag.deleted ? ' gone' : ''}`} title={srcTag.text}>
+                              <span className={`novel-src-dot ${sourceTintClass(b.sourceId)}`} />
+                              {srcTag.text}
+                            </span>
+                          )}
+                        </span>
                         <span className="novel-card-title">{b.title}</span>
                         <span className="novel-card-meta">{meta.text}</span>
                         {meta.pct === null ? null : <ProgressBar pct={meta.pct} />}
                       </button>
-                      {!isLocal ? null : <span className="novel-local-tag">本地</span>}
-                      <button
-                        className="novel-btn sm novel-card-x"
-                        title="删除本书"
-                        aria-label={`删除 ${b.title}`}
-                        onClick={() => { setDelError(null); setPendingDel(b) }}
-                      >✕</button>
+                      {/* 多选态：本地角标把左上让给勾选标记；单本 ✕ 退场（同一职责不留第二个入口） */}
+                      {selectMode || !isLocal ? null : <span className="novel-local-tag">本地</span>}
+                      {!selectMode ? null : <span className="novel-check" aria-hidden="true">{picked ? '✓' : ''}</span>}
+                      {!selectMode ? (
+                        <button
+                          className="novel-btn sm novel-card-x"
+                          title="删除本书"
+                          aria-label={`删除 ${b.title}`}
+                          onClick={() => { setDelError(null); setPendingDel({ books: [b], batch: false }) }}
+                        >✕</button>
+                      ) : null}
                     </div>
                   )
                 })}
-                {/* 网格末位常驻引导卡 = 导入本地书籍（「搜一本书」退役：搜索已由行2搜索框显式承担） */}
-                {importCard}
+                {/* 网格末位常驻引导卡 = 导入本地书籍（「搜一本书」退役：搜索已由行2搜索框显式承担）。
+                    多选态里它也退场：正在挑要删的书时，末位摆一张「导入」卡是纯粹误触面。 */}
+                {selectMode ? null : importCard}
               </div>
             )}
       </div>

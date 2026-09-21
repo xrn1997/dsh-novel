@@ -53,12 +53,24 @@ export function paperInk(paper: string): string {
   return L > 0.35 ? '#222' : '#e8e8ea'
 }
 
+/** 字符串 → 四档档位（1..4）：按 codePoint 求和取模——同一输入恒同档、可复现。
+ *  封面色块与来源色点共用同一份四档色板，派生机制也必须同一份（否则两处会各自漂移）。 */
+function tintTier(text: string): 1 | 2 | 3 | 4 {
+  let sum = 0
+  for (const ch of text.trim()) sum = (sum + (ch.codePointAt(0) ?? 0)) % 4
+  return (sum + 1) as 1 | 2 | 3 | 4
+}
+
 /** 无封面降级的首字色块档位（token 层 --novel-cover-1..4 的类名映射；hex 不出 token 层，
  *  theme-tokens 守卫口径）。按首字符 codePoint 求和派生——同书恒同色、可复现；
  *  空标题回 t1（与 coverFallbackChar 的「书」同防）。 */
 export function coverTintClass(title: string): 'novel-cover-t1' | 'novel-cover-t2' | 'novel-cover-t3' | 'novel-cover-t4' {
-  const t = title.trim()
-  let sum = 0
-  for (const ch of t) sum = (sum + (ch.codePointAt(0) ?? 0)) % 4
-  return `novel-cover-t${sum + 1}` as 'novel-cover-t1' | 'novel-cover-t2' | 'novel-cover-t3' | 'novel-cover-t4'
+  return `novel-cover-t${tintTier(title)}` as 'novel-cover-t1' | 'novel-cover-t2' | 'novel-cover-t3' | 'novel-cover-t4'
+}
+
+/** 来源色点的档位（书架卡片「来源 chip」的色点）：按 **sourceId** 派生——同一书源在整架书上是同一个颜色，
+ *  一屏之内一眼分得出来源不同。类名刻意不复用 cover 的（色点是点、封面是块，同一张卡上两块颜色可以不同），
+ *  但档位色仍是同四档 token（hex 不出 token 层）。空 id 回 t1。 */
+export function sourceTintClass(sourceId: string): 'novel-src-t1' | 'novel-src-t2' | 'novel-src-t3' | 'novel-src-t4' {
+  return `novel-src-t${tintTier(sourceId)}` as 'novel-src-t1' | 'novel-src-t2' | 'novel-src-t3' | 'novel-src-t4'
 }

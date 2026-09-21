@@ -6,7 +6,7 @@
 
 | 文件 | 职责 | 关键导出 |
 | --- | --- | --- |
-| `services/reading.ts` | 阅读链路门面：HTTP / 工具 / UI 三面的**唯一**业务入口 | `ReadingService.create/from`、`search/searchProgressive/searchPlan`、`startSearchJob/searchJobSnapshot`、`getDetail/getToc/getChapter`、`probe`、`shelfAdd/shelfPatch/shelfSaveProgress/removeBook`、`localImport/removeLocalBook`、`startImportJob/startBatchProbeJob/jobStatus`、`*Source*` 写侧动词、`flush`、`tocUrlOf`、`normalizeChapterText` |
+| `services/reading.ts` | 阅读链路门面：HTTP / 工具 / UI 三面的**唯一**业务入口 | `ReadingService.create/from`、`search/searchProgressive/searchPlan`、`startSearchJob/searchJobSnapshot`、`getDetail/getToc/getChapter`、`probe`、`shelfList/shelfAdd/shelfPatch/shelfSaveProgress/removeBook/removeBooks`、`localImport/removeLocalBook`、`startImportJob/startBatchProbeJob/jobStatus`、`*Source*` 写侧动词、`flush`、`tocUrlOf`、`normalizeChapterText` |
 | `services/sources.ts` | 书源注册表：加载 / 原子变更 / 只读投影 / 合并落盘 | `SourceRegistry.load`、`edit/flush/list/get/toPublic`、`SourceEdit` |
 | `services/intake.ts` | 源入库：normalize → 批内留首条 → 按址去重 → add/replace | `SourceIntake`、`IntakeDecision`、`dedupKey` |
 | `services/import-job.ts` | 后台写任务单槽（导入 / 批量验证）；生命周期登记给宿主 `ctx.jobs`（`host?: JobHost` 窄面，协作式取消） | `SourceJobs`、`JobRunningError`、`JobKind`、`ImportFile`、`JobHost`、`JobOutcome` |
@@ -17,23 +17,24 @@
 | `services/search-template.ts` | searchUrl 的 JS 形态与 `{{…}}` 预求值 | `resolveSearchTemplate`、`resolveJsSearchTemplate`、`preEvaluateUrlJs`、`isJsSearchUrl` |
 | `services/fetcher.ts` | 守门抓取器（唯一出站口）+ 解码链 + 出站头合并 | `createFetcher`、`decodeBody`、`fetchTextPage`、`headerOf`、`Fetcher`、`FetchedPage` |
 | `services/engine-fetch.ts` | `@js` 里 `java.ajax` 的守门出口 | `engineFetch` |
-| `services/bridge.ts` | 引擎↔服务桥：值规约、条目提取、源级求值上下文 | `firstValue`、`listValue`、`extractItems`、`engineContextOf`、`makeSubEval`、`Page`、`SubRuleEval` |
+| `services/bridge.ts` | 引擎↔服务桥：值规约、条目提取、源级求值上下文、**请求头解析** | `firstValue`、`listValue`、`extractItems`、`engineContextOf`、`makeSubEval`、`resolveHeaders`、`Page`、`SubRuleEval` |
 | `services/pagination.ts` | 翻页闸（URL 防环 / 零新增 / 回环 / 上限 + 串章）+ next 列表语义 | `followPages`、`FollowResult` |
 | `services/chapter-page.ts` | 章节分页判定（防串章闸判据） | `isSameChapterPage`、`stripExtension` |
 | `services/content.ts` | 正文取值收口（HTML → 纯文本，幂等） | `contentToText`、`htmlToText`、`looksLikeHtml` |
 | `services/localbooks.ts` | 本地 TXT 书库：解码 / 切章 / 偏移切片 / 内存 LRU / 删除 | `LocalBooks`、`decodeLocalText`、`splitChapters`、`isLocalBookKey`、`ChapterSpan` |
-| `services/shelf.ts` | 书架：元数据写口（add = patch 语义 / update = 补丁）+ 进度 | `Shelf`、`AddBookInput`、`BookPatch` |
-| `services/cache.ts` | 目录 / 正文文件缓存 + LRU 淘汰 | `PageCache`、`safeKey` |
+| `services/shelf.ts` | 书架：元数据写口（add = patch 语义 / update = 补丁）+ 进度 + 批量删 | `Shelf`、`AddBookInput`、`BookPatch` |
+| `services/cache.ts` | 目录 / 正文文件缓存 + LRU 淘汰（只回答「放在哪」，有效性归 `cache-epoch.ts` + `reading.ts`） | `PageCache`、`safeKey` |
+| `services/cache-epoch.ts` | 缓存有效性唯一算式：规则指纹 → 目录代际 / 正文槽位 | `rulesEpoch`、`contentSlot`、`RULE_EPOCH_IMPACT`、`EpochImpact`、`CacheFacet` |
 | `services/storage.ts` | 数据根、原子写与并发串行、读 JSON 的损坏判别、防抖写 | `novelDir`、`readJson`、`writeJsonAtomic`、`writeFileAtomic`、`createDebouncedWriter`、`CorruptJsonError` |
 | `services/errors.ts` | 错误类与**分类学单点** | `classify`、`ErrorCategory`、`SourceNotFoundError`、`ChapterNotFoundError`、`RuleMissingError`、`FetchError`、`DecodeError`、`LocalNotMountedError` |
 | `services/probe.ts` | 探针：真发一次搜索请求（关键词逐词重试） | `probeSource` |
-| `services/export.ts` | 整本导出核心：串行 + 节流 + 失败即停 + abort 即停 | `exportBook`、`ExportDeps`、`ExportOptions` |
+| `services/export.ts` | 章节范围导出核心：from/to 裁剪与倒置校验 + 串行 + 节流 + 失败即停 + abort 即停 | `exportBook`、`ExportDeps`、`ExportOptions` |
 | `services/proxy.ts` | 出站代理判定（config > 环境变量 > Windows 系统代理 > 直连） | `resolveProxyUrl`、`proxyFromEnv`、`normalizeProxyServer`、`readSystemProxy` |
 | `services/types.ts` | 持久化模型（sources.json 形状） | `NovelSource`、`NormalizedRules`、`SourceAuth`；`SourceStatus` / `SourceContentKind` / `ShelfBook` / `ShelfProgress` 反向 re-export `shared/wire.ts` |
 | `services/url.ts` | URL 绝对化（拆 request↔bridge 环的纯工具） | `absUrl` |
 | `api/dispatch.ts` | `/novel-api` 前缀路由内部分发 | `createApiHandler`、`ApiHandlerOptions` |
 | `api/wire.ts` | 同源 fence / body 读取 / 信封写出 / 错误→HTTP 映射 | `isTrustedRequest`、`readJsonBody`、`writeOk`、`writeError`、`errorStatusOf`、`ApiError` |
-| `shared/wire.ts` | **跨半契约**：值形状、路由常量、query/body 构造器、书目字段集 | `ROUTES`、`paramRoutes`、`SEG`、`PARAMS`、`queries`、`shelfBody`、`SHELF_META`、`pickShelfMeta`、`LOCAL_SOURCE_ID`、`NOVEL_API_PREFIX`、全部 DTO |
+| `shared/wire.ts` | **跨半契约**：值形状、路由常量、query/body 构造器、书目字段集 | `ROUTES`、`paramRoutes`、`SEG`、`PARAMS`、`queries`、`shelfBody`、`SHELF_META`、`pickShelfMeta`、`ShelfEntry`、`LOCAL_SOURCE_ID`、`NOVEL_API_PREFIX`、全部 DTO |
 | `tools/tools.ts` | agent 五工具（与 HTTP 共用 service 层） | `buildTools`、`registerTools` |
 | `tools/project.ts` | 缺键投影唯一实现 | `project` |
 
@@ -54,6 +55,7 @@
 - 已有条目里**存在 verified** → 保留已有、跳过新条，`skipped{reason:'verified'}`。取 `existing.find(verified) ?? existing[0]`——不能让一条历史脏的 unverified 条目把可用源挤掉。**verified 跳过同样占批内键**（与旧任务口径一致，后续同址条目一律 batch 跳过）。
 - **无可用的**（全 broken / unverified）→ 新条 `tx.replace(preferred.id, result)` **复用旧 id**（书架与既有引用不断），并 `tx.removeAll(rest)` 清掉同键其余条目。历史脏数据在此收敛成一条。
 - 缺地址的条目（normalize 失败）不参与去重，按 missing 口径逐条报。
+- **内容形态是入库闸，不是状态**（2026-09 裁定）：`bookSourceType` 不是文本（legado 侧该字段是 Int——`1`/`2`/`3` 是音频/图片/文件，认不出的值同样算非文本）→ normalize 出 `missing` → `ok:false` → 不入库；存量误标由 `SourceRegistry.load` 按 raw 重推成 `unknown`。两个被否决的方案：① **读不懂就当文本**（曾如此：warning + 按文本处理）——误标 text 的漫画/短剧源照样进聚合搜索与文字书架（书架诊断实证），且没有任何门会拦住它；② **打成坏源**（`status='broken'`）——探针只验搜索面，而这类源搜索面恰恰是好的，一次「验证/重验」就把标记洗白。`unknown` 的唯一职责是让 `participates` 不认它；列表、状态带、待办都不读 `type`。
 
 `replace` 的语义在注册表侧：原位 splice 保列表序、`status` 复位 `unverified`、`importedAt` 更新为现在——**新规则需重验**，且只收 `ok:true` 的 normalize 产物（与 `add` 同口径）。
 
@@ -63,7 +65,7 @@
 
 落盘策略住在 module 内部，调用方不知道粒度存在：累计 ≥20 次变更的那次 `edit` **等写落地**，否则 100ms 尾沿防抖后台合并；任务收尾与测试断言用 `flush()`。**被否决的方案**：9 处调用点手工配对「mutator + persist」（注释里的顺序约束），加上住在任务运行器里的 `IMPORT_PERSIST_EVERY` / `PROBE_PERSIST_EVERY` 两个节流常量——谁忘了 persist 就是静默丢数据。
 
-`load()` 承担**存量归一**并在改动时立即落盘收敛：`enabled` 缺省 → true（早期数据无此字段，缺省即启用，否则搜索面 `s.enabled &&` 会静默排除老源）；`type` 缺省 → `'text'`；`groups` 按 `splitGroups` 拆分（逗号粘连收敛）；`name` 按 `stripLeadingIcons` 剥前缀图标。四条迁移都幂等。
+`load()` 承担**存量归一**并在改动时立即落盘收敛：`enabled` 缺省 → true（早期数据无此字段，缺省即启用，否则搜索面 `s.enabled &&` 会静默排除老源）；`type` 缺省 → `'text'`；`type` 按 `raw.bookSourceType` 重推（读不懂 → `'unknown'`，退出参与集）；`groups` 按 `splitGroups` 拆分（逗号粘连收敛）；`name` 按 `stripLeadingIcons` 剥前缀图标；`ruleDetailInit`（第六条）与 `headerRule`（第七条）按 raw 重推。**七条迁移都幂等**。
 
 `list()` 返回**活体数组**（不是快照）：intake 的地址索引与 import-job 的状态判定依赖活引用。快照化读面是另一张卡的事。
 
@@ -79,7 +81,7 @@
 - 收尾三处写口（`completed` / `killed` / `failed`）集中在 `settle()` 一处——漏掉一处就是「小说 UI 显示已结束，宿主注册表里还挂着 running」。终态词汇 `JobOutcome` 也只此一处声明（`search-job.ts` 复用同一别名，不各写一份联合类型）。
 - **`novel-search` 不进写槽**：搜索是**读**，与导入 / 验证挤同一个 `current` 等于「搜一本书能挡住一次导入」——那是惩罚探索动作。所以读任务有自己的持有者 `SearchJobs`（`services/search-job.ts`），与 `SourceJobs` 各持一个槽，两者都把生命周期登记给宿主。代价如实记着：宿主侧可同时存在两条 novel 任务（`maxConcurrentJobsPerOwner` 缺省 10，够用），而浏览器半「任何任务在途即禁用」那条判据只管两个写任务。
 - **`SearchJobs` 比写任务多持有一件事：整轮结果 + 游标**（宿主只有一个 `detail` 字符串，装不下 642 家源的分组命中）。三条上限都是在这里定的，不在浏览器半：**只留最近一轮**（新提交即替换上一轮，上一轮若在跑则协作式收手并结算 `killed`）、每源 hits 截 `SEARCH_HITS_CAP_PER_SOURCE`（50）、结束后 `SEARCH_JOB_RETENTION_MS`（30 分钟）内可读，**过期读作「无任务」而不是空结果**（不把过期伪装成「搜了没命中」）。
-- **SSE 不引入第二套状态**：`SearchJobs.subscribe(listener)` 只发「本轮变了」的信号，**不带数据**——每条连接自己带游标 `snapshot(cursor)` 取增量，所以推送帧与快照查询共用同一份合并代码、同一个 `phase !== running` 判据。任一时刻只有一条通道在推进游标（两条同时在飞会把同一批命中累加两遍），这条约束归客户端（`client/search-job.ts` 的「流在就不问，流断才轮询」）。信号口在 `end()`（终态）也要响一次，否则关不掉流。
+- **SSE 不引入第二套状态**：`SearchJobs.subscribe(listener)` 只发「本轮变了」的信号，**不带数据**——每条连接自己带游标 `snapshot(cursor)` 取增量，所以推送帧与快照查询共用同一份合并代码、同一个 `phase !== running` 判据。任一时刻只有一条通道在推进游标（两条同时在飞会把同一批命中累加两遍），这条约束归客户端（`client/search-job.ts` 的「流在就不问，流断才轮询」）；**跨观察者的换轮裁决同样归客户端观察 module**（读面单槽 + 数字游标：旧观察者读回来的是新轮按旧游标切的片——身份闸与基线恢复的口径见 `docs/design/client.md` 搜索节「轮次身份与游标不可分开」）。信号口在 `end()`（终态）也要响一次，否则关不掉流。
 - 任务态**只在内存**：DSH 重启即丢（`status()` 返回 null，UI 回落空闲态）；但源已按批落盘，导入本身幂等可重跑，故不做任务持久化。
 - 导入管线：逐文件 `JSON.parse(stripBom(text))`，坏文件记 `fileErrors` 继续，其余照常；`Array.isArray` 摊平后逐条交 `SourceIntake`。**导入不探针**——新源一律 `unverified`，验证归批量验证任务（并发 5 路，对齐 `searchParallel` 的限流敬畏）。
 - `issues` 截断 200 条（内存不膨胀），**计数字段不受截断影响**。
@@ -91,7 +93,7 @@
 `assembleRequest(template, vars, baseUrl, opts)` → `RequestPlan`。这里一次性解释完：
 
 - **切分**：`,{`（允许逗号两侧空白——legado `paramPattern` 是 `\s*,\s*(?=\{)`；真实源大量写 `, {...}`，此前不许空格会把选项串并进 URL，POST/charset 选项成片失效）。选项 JSON 严格优先，失败回退单引号交换（`{'a':'b'}` 真实源大量存在）；`headers` 支持字符串双重编码。
-- **选项解析不了 → 整串当纯 URL**（诚实失败于请求层，不半途猜结构），但 **`console.warn` 留痕**——静默改语义（GET 打向含 `,{...}` 的地址）极难排障。
+- **切分无条件、选项尽力解析**（2026-09 对齐 legado `AnalyzeUrl.analyzeUrl`）：paramPattern 命中即把 URL 切干净，**选项 JSON 是否合法只决定「拿没拿到选项」，不决定「URL 干不干净」**——解析失败 → `option: undefined` + `console.warn` 留痕，请求按无选项发出。被否决的旧行为：解析失败把整串（含 `,{…}`）当纯 URL——「诚实失败」听起来克制，实际把站点 404 当成了失败原因（年代小说 chapterUrl 拼 `,{webView:“true”}` 弯引号形态实证：legado 对它同样解析失败，但 URL 已在解析之前切干净）。弯引号/单引号/裸键选项仍走 `parseOptionJson` 的宽容链尽力还原。
 - **method 判定**：`(option.method ?? 'GET').toUpperCase() === 'POST'` 才 POST，其余一律 GET。
 - **body 插值**：`option.body` 同样过 `interpolateUrl`。
 - **POST 表单默认头**：有 body 且 headers 里没有（任意大小写）`content-type` → 补 `application/x-www-form-urlencoded`。不补的话 Node fetch 发 `text/plain`，PHP 类表单端点 `$_POST` 解析不到字段（帝国 CMS 搜索收空关键词返回空页）。
@@ -101,7 +103,7 @@
 
 `fetchInitOf(plan, baseHeaders)` 是 init 姿态单点：GET **不带 method 键**（fetch 缺省即 GET）；POST 带 method 与插值后的 body；`baseHeaders`（如源级 `headerOf`）打底、计划 headers 覆盖同名。**被否决的方案**：`buildSearchRequest` 与 `engineFetch` 各写一份、靠「与对方同口径」注释同步。
 
-`stripUrlOption(href)` 剥 URL 尾部的 `,{"webView":true}` 选项后缀（legado 嗅探语义）：只认「逗号 + 完整 JSON 对象收尾」，正文里的 `{a,b}` 不误剥。本插件不支持 WebView——剥掉后缀让普通请求照常尝试，而不是 URL 解析必炸。**现仅详情页书 URL 一处用它**（`reading.getDetail`）：章节 / 下一页 URL 已改为落库保留选项（见下节「章节 URL 保留 `,{option}` 后缀」），比对口径另有 `canonUrl` 剥选项归一。
+`stripUrlOption(href)` 剥 URL 尾部的 `,{…}` 选项后缀（legado 嗅探语义）：**逗号 + `{` 开头即切**（legado `BookChapter.getAbsoluteURL` 无条件 `substringBefore(paramPattern)` 口径，不校验尾段 JSON——2026-09 放宽，与 `parseUrlOption` 同源），选项合法性由抓取时的 `assembleRequest` 负责（解析失败 → 无选项 + warn）；正文里的 `{a,b}` 不误剥（逗号后不是 `{`，paramPattern 不命中）。本插件不支持 WebView——剥掉后缀让普通请求照常尝试，而不是 URL 解析必炸。**落库的书 URL 与章节 URL 一样保留选项**（2026-09 修复：URL 即请求规格——米读类 POST API 源的 `ruleBookUrl` 是 `端点,{"method":"POST","body":"…book_id=…"}`，book_id 藏在选项 body 里；搜索面此前 `stripUrlOption` 剥掉才落库，bookKey 只剩裸端点、详情/目录/正文全链路 405。现 `reading.searchOne` 走 `absUrlKeepOption`，与章节 URL「落库保留选项」同源）。`stripUrlOption` 现在只出现在**解析 base**（`reading.getDetail` 的引擎上下文与封面绝对化、`tocUrlOf` 的相对链接解析——选项不属于链接解析域）与比对口径（`canonUrl` 剥选项归一）；抓取解释选项全走 `assembleRequest` 单点——`reading.fetchText` 已由裸抓改为经 `assembleRequest` + `plan.charset` 解码（书 URL / 详情页 / tocUrl 回退都可能是 POST 端点）。钉子：`tests/services/reading.test.ts` 的 `describe('书 URL 承载请求选项（,{option} 随身份存取）')`。
 
 ### 6. 守门 fetcher（`services/fetcher.ts`）——唯一出站口
 
@@ -112,6 +114,7 @@
 - **解码链**（`decodeBody`，禁默认 UTF-8 硬解）：⓪ 声明覆盖（searchUrl 选项 charset）→ ① Content-Type charset → ② 缺位且内容（去 BOM/前导空白后）以 `<!doctype`/`<html`/`<head`/`<?xml` 开头 → 前 1024 字节 latin1 嗅探 `<meta charset>` / `<meta content=…charset=…>` → ③ 兜底 UTF-8。**声明的 charset iconv 不认识 → `DecodeError`**（宁可报「这页编码解不出」，不拿乱码冒充正文）；空串 charset 声明视为缺位（真实源存在 `charset=` 空值），不炸。
 - `fetchTextPage(fetcher, url, init, declaredCharset)` 是「抓取 + 解码 + 落地地址」的单点，超时归 fetcher 自身（**被否决的方案**：`fetchTimed` 在 fetcher 之外再竞速一个**不 abort** 的定时器，两套超时并存、错误文案却一字不差）。
 - `headerOf(source)`：源静态 `rules.header` 打底 → 非 expired 的 `auth.headers` 覆盖同名 → Cookie 段合并（静态段按名去重、auth 名占优并在后）。
+- **请求头解析单点 `resolveHeaders(fetcher, source, {jsTimeoutMs})`**（`services/bridge.ts`，2026-09）：`rules.headerRule`（`@js:`/`<js>` 动态头——legado `BaseSource.getHeaderMap` 的 evalJS 口径）经沙箱求值得 JSON 头表，叠在 `headerOf` 之上（同序：auth/cookie 在后占优）；无规则直答静态头。**失败语义对齐 legado 的 try/catch**：求值抛错 / 产物非 JSON 对象 → `console.warn` 后回退静态头（动态头缺失 = 站点按无 device 鉴权处理，下游自然报错——不吞请求也不炸整条链）。**不递归**：规则脚本自身的 fetch 用静态头打底，否则头规则里一次 `java.ajax` 就会重新求值头规则。三个抓取调用点（`reading.fetchPage/fetchText`、`search-face`）与引擎上下文（`engineContextOf` 的惰性 provider 形态）都走它——`engineFetch` 的 `HeadersInput` 因此支持静态表或 provider 双形态，`@js` 动态头**每请求现算**（device-id 逐请求刷新，legado 每请求 getHeaderMap 口径）。header 单字段两形态互斥同源：raw.header 是规则 → `rules.headerRule`（`normalizeHeaderRule`）；否则 JSON → `rules.header`；存量由 `SourceRegistry.load` 第七条迁移按 raw 重推（与 `ruleDetailInit` 第六条同构）。
 
 ### 7. 搜索面（`services/search-face.ts`）——探针与聚合搜索共用一条请求语义
 
@@ -125,11 +128,18 @@
 
 真发一次搜索请求，关键词按 `PROBE_KEYS = ['书','小说','的']` 逐词重试——单字「书」在个别站被搜索程序停用（实测 aijjxs 对「书」0 命中、其余词 1 命中）。**只有「请求成功但 0 命中」才换词**；网络 / 规则异常立即返回，不多打请求。`ruleBookList ≥1 条目且首条 ruleBookName 非空` → `verified`，否则 `broken` 并如实透出（引擎错误 message 已含段级定位）。书名求值的 `usage` 必须与搜索面一致（`'value'`）：规则以属性终端收尾（`@title`/`@onclick`/`@_src`）时两种用途结果不同——探针曾按缺省 `'list'` 求值，把搜索面读得出书名的源判成「首条书名为空」的坏源（2026-09 审查修，钉子 `tests/services/probe.test.ts`）。CONTEXT.md「搜索面」的「探针与聚合搜索共用一次请求语义」全靠这一条成立。
 
-**探针与搜索同一个耐心值**：`opts.timeoutMs` 缺省走 `ReadingService.searchTimeoutMs`，门面 `probe()` 显式传入。「配了 5s 就都是 5s」是既有承诺——修复前门面 `probe` 漏传，落回 fetcher 固定 15s。
+**探针与搜索同一个耐心值**：`opts.timeoutMs` 缺省走 `ReadingService.searchTimeoutMs`，门面 `probe()` 显式传入。「配了 5s 就都是 5s」是既有承诺——修复前门面 `probe` 漏传，落回 fetcher 固定 15s。**js 沙箱预算同口径**：探针与搜索/阅读/登录共用插件配置 `jsTimeoutMs`（缺省 15000）——`probeSource` opts → `fetchSearchPage` → `makeSubEval`/`resolveSearchTemplate` → `EvalContext.jsTimeoutMs`，引擎 `ctx.jsTimeoutMs ?? DEFAULT_JS_TIMEOUT_MS` 消费，引擎零改动。
 
-### 9. 缓存（`services/cache.ts`）与落盘（`services/storage.ts`）
+### 9. 缓存（`services/cache.ts` + `services/cache-epoch.ts`）与落盘（`services/storage.ts`）
 
-`PageCache` 把目录与正文写成 `cache/toc/<sourceId>-<safeKey>.json`、`cache/content/<sourceId>-<safeKey>-<idx>.txt`，每次 `set*` 后 `prune()`：两目录总字节超上限（缺省 200MB）→ 按 `mtimeMs` 升序删到 ≤ 上限（**LRU 近似**，不维护访问计数）。`safeKey` = `encodeURIComponent(bookKey)`；超 100 字符改前 60 字符 + `~` + sha1 前 10 位（确定性，规避文件名长度上限）。
+`PageCache` 把目录与正文写成 `cache/toc/<sourceId>-<safeKey>-<epoch>.json`、`cache/content/<sourceId>-<safeKey>-<idx>-<slot>.txt`，每次 `set*` 后 `prune()`：两目录总字节超上限（缺省 200MB）→ 按 `mtimeMs` 升序删到 ≤ 上限（**LRU 近似**，不维护访问计数）。`safeKey` = `encodeURIComponent(bookKey)`；超 100 字符改前 60 字符 + `~` + sha1 前 10 位（确定性，规避文件名长度上限）。`epoch` / `slot` 对 `PageCache` 是**不透明串**——本模块只回答「放在哪」，不回答「何时有效」。
+
+**缓存有效性**：算式唯一实现是 `cache-epoch.ts`，裁决在 `reading.ts`（读与写共用同一次算出的值）。根因是同址替换复用 `sourceId` 保书架引用（§2 既有裁决），于是「身份没变」被当成了「内容仍有效」——换规则后目录 / 正文照旧命中旧代际，而全仓没有清缓存的出口、阅读器也从不发 `refresh=1`，脏命中是永久的。
+
+- **代际入键而不是删除式失效**：在途请求写的是它起飞时那个代际的文件名，新规则的读永远看不见它——「旧在途写回」自动无害，不需要墓碑也不需要取消通道。删除式失效必须额外挡回写，且 `intake` 有两个调用方（`reading.importOne` 与 `import-job` 批量），任一处忘了调就重新漏。旧代际文件不删：此后不再被写，mtime 只可能更早，因此排在**新写入**之前；但 prune 是 mtime 近似、`read()` 不刷新 mtime，长期只读的热条目同样不会被读操作续命，可能先于旧代际被淘汰（不假装「挤不掉热数据」）。
+- **按面细分指纹**：`rulesEpoch(rules, baseUrl, facet)` 只哈希与该面相关的规则字段（facet 名与 baseUrl 也入指纹）；`facet` 是引擎面 `CacheFacet`（只有 toc / content 两个引擎面有文件缓存，故从 `Facet` 收窄出这两值）。归类表 `RULE_EPOCH_IMPACT` 给每个字段一个**影响面** `EpochImpact`（toc / content / both / none，是「改这个字段会作废哪些面的缓存」这条轴，与引擎「面」刻意换词，见 CONTEXT.md），`FACES_OF` 把影响面映射到它作废的引擎面。**编译器强制穷尽有两处**：`Record<keyof NormalizedRules, …>` 保证每个字段**都有一行**（加字段没归类 → `pnpm typecheck` 红）、`Record<EpochImpact, …>` 保证每个影响面**都配了面集**。但**把字段归错行 tsc 抓不住**——归类的对错没有机器守卫，只能靠给字段归类前核对 `getTocInner` / `getChapter` / `followOrSingle` 是否真消费它（`ruleBookList` 行的注释就是这条自查的范例；逐字段翻转钉子见 `tests/services/cache-epoch.test.ts`）。正文代际**同时收目录面字段**（`FACES_OF` 的 `toc` 行含 `content`）：正文的输入是目录的产物，改 `ruleChapterUrl` 这类规则时章名可能一字不变而章节地址已换，旧正文是用旧地址抓的——槽位（代际 + 章名）的章名那一半挡不住，只有代际能挡。这与「槽位刻意不含章节 url」不矛盾：那里排除的是**站点侧**的 url 抖动（时效 token，每次刷目录都换，入键等于正文缓存永不命中），这里是**规则侧**的 url 变更（钉子 `tests/services/reading.test.ts`「换 ruleChapterUrl 而章名不变」）。刻意**不含** `NovelSource.auth`：登录态刷新会让指纹变，整源缓存每次登录后全灭。**被否决的方案**：`JSON.stringify(rules)` 整体入指纹——赌键序、且改一条只影响搜索面的规则会连带清掉全部阅读缓存（过度失效）。
+- **正文槽位含章名、不含章节 url**（`contentSlot(epoch, chapterName)`）：这是与代际正交的独立缺陷——正文曾按 `chIndex` 存，站点在前面插一章则全体 index 位移，旧文件端给读者的是**另一章**。代际管「规则变了」，章名管「站点侧目录变了」。刻意不含章节 url：带时效 token 的站点每次刷目录都换 url，入键等于正文缓存永不命中；章名 + index 稳定即命中，且串配照样挡住。为此 `getChapter` 的目录读取上移到缓存读取**之前**（槽位需要章名）。如实记代价：目录缓存命中时是一次文件读 + JSON.parse；目录缺失（首次 / 被 prune 淘汰，而 prune 是 mtime 近似、toc 文件写一次就不再被 touch 故淘汰得早）时会真发一次目录抓取——**热正文缓存不再能单独服务一章**。这是「槽位含章名」的必然代价，不是可优化掉的疏忽（章名只存在于目录里）。行为变化：越界 `chIndex` 现在先抛 `ChapterNotFoundError`，不再可能命中越界 index 的旧缓存文件。
+- 钉子：`tests/services/cache-epoch.test.ts`（不过度失效 / 逐字段翻转——每个字段只影响它声称影响的面 / header 键序无关 / null 与空串不共用指纹 / baseUrl 入指纹）+ `tests/services/reading.test.ts` 的 `describe('缓存有效性：代际随规则走、槽位随章名走')`（同 id 换规则默认读取即新目录、换正文规则默认读取即新正文；章序位移不串配）。
 
 落盘只有一条低层路径 `writeFileAtomic`：tmp + rename，**并按文件名排队串行**——并发 rename 同一目标在 Windows 上会 EPERM（实测 642 源并发导入时 25 次炸在 sources.json rename）。`writeJsonAtomic` 与 `PageCache` 共用它（历史分叉：PageCache 曾自抄一份无排队的 writeAtomic，阅读 + 导出并发抓同章实测 30/80 EPERM→500）。入队必须先于任何 `await`（含 mkdir），否则「最后写的最后落盘」不成立。
 
@@ -144,6 +154,8 @@
 - `bookKey`（身份）与 `progress` / `addedAt`（系统字段）不属于元数据写口，**不进表**。
 - `pickShelfMeta` 的口径：类型不符 / null / undefined / 未知键一律缺席；`totalChapters` 取 `Math.max(0, Math.floor(v))`，非有限数缺席；**空串保留**——「title 非空才加书」的分叉判别归调用方（`dispatch.shelfPut`）。
 - 两种元数据写口：`add` = 不在架才插入、已在架即 **patch 语义**；`update` = 对在架书打补丁、不在架返回 `null`（不静默造书）。两者共用 `applyPatch`：**缺席 / 空值键跳过（保值），带值键覆盖**——新书构造也走同一函数，可选元数据缺席不落键。**被否决的方案**：`{...existing, ...input}` 展开——`: undefined` 的自有键会抹掉已有元数据。
+- **来源投影（`ShelfEntry`）**：读取面条目 = 落盘 `ShelfBook` + `sourceName`，源名在 `shelfList()` 里**实时 join 书源注册表**（与 `SearchGroup.sourceName` 同一口径）；本地书与「源已被删」都投影成 `null`，客户端分别落成「本地」角标与灰字「来源已删除」。**刻意不进 `SHELF_META`**——那张表是「可 patch 的书目字段」的名册，投影既不可写也不落盘（进表 = 它变成能被 PUT 写进 shelf.json 的假元数据）。**被否决的方案**：加书那刻把源名快照进 shelf.json——零新机制、源删了也还留名，但 **按址去重会复用旧 id**（同址换规则/换源不换 id，见 §2），于是同一本书的来源名会静默陈旧，且刷新它需要重加书。代价如实记：源被删后书架只剩「来源已删除」，用户看不出当初是哪一家（要留名只能靠快照那条路）。
+- **批量删（多选）**：写口 `Shelf.removeMany(keys)` 一趟裁掉命中项并**返回被删条目**（不是计数），因为连带副作用只该对真在架的书做；`ReadingService.removeBooks(keys)` 据此沿用单删那条「本地书连带删 `dataDir/local/` 副本」的 invariant（幽灵键不去动磁盘），返回 `{ removed }` 供前端如实报数。未知键静默跳过、重复键幂等——与源批路由同口径。**被否决的方案**：客户端循环 N 次 `DELETE shelf/:key`——一次「全选」就是几百个请求，且半途失败后前端手上没有可报的整批结论。
 
 ### 11. 规范值与缺键投影（`tools/project.ts`）
 
@@ -160,17 +172,17 @@
 - bookKey 形态 `local:<uuid>`，`BOOK_KEY_RE` 严格 uuid 校验**兼防路径穿越**。
 - 本地解码链与 fetcher 不同（`decodeLocalText`）：BOM 优先 → **UTF-8 `fatal:true` 严格探测** → GBK 回退。不复用 `fetcher.decodeBody`——它的兜底是 UTF-8，GBK 文件会乱码；本地文件也没有 Content-Type。`Buffer.toString('utf8')` 会把非法字节静默换成 U+FFFD，故必须用 fatal TextDecoder。
 - 原文落盘（重解码路径保留）+ 元数据 JSON（含章节字符偏移表 `ChapterSpan[]`）；读取按偏移切片，**解码全文内存 LRU 上限 3 本**（Map 迭代序即 LRU 序）。退化 span（相邻标题行 / 文末孤标题）`start > end` 时夹紧边界，保证只切出 `''` 而非负长度。
-- `__local__` 的书在门面内分流：`getToc` / `getChapter` 见 `sourceId === LOCAL_SOURCE_ID` 走本地书面、**不查注册表**；路由层零 LOCAL 知识。「删书不留孤儿文件」的 invariant 也归门面 `removeBook`（本地书连带删文件 + 删书架条目）。
+- `__local__` 的书在门面内分流：`getToc` / `getChapter` 见 `sourceId === LOCAL_SOURCE_ID` 走本地书面、**不查注册表**；路由层零 LOCAL 知识。「删书不留孤儿文件」的 invariant 也归门面 `removeBook`（本地书连带删文件 + 删书架条目）与 `removeBooks`（批量，同一条 invariant——按 `removeMany` 的返回条目逐个删副本，没真在架的键不碰磁盘）。
 
-### 13. 整本导出（`services/export.ts` + `api/dispatch.ts`）
+### 13. 章节范围导出（`services/export.ts` + `api/dispatch.ts`）
 
-`exportBook` 是异步生成器：BOM 开头（Windows 记事本兼容）→ 逐章 `getChapter`（**缓存优先语义即天然断点续传**）→ 每章后 `sleep(delayMs)`（N-1 次，最后一章不睡）。**限流敬畏是第一原则：绝不并行抓章**。两个停止条件都落在生成器内：单章抛错 → 输出 `[导出中断于第 k 章《名》：原因]` 后 `return`（失败即停，重跑只补缺章）；`signal.aborted` → 直接返回。
+`exportBook` 是异步生成器：BOM 开头（Windows 记事本兼容）→ 按 `from/to`（1 基含端，**由调用方裁好**——见下「范围判据单点」）逐章 `getChapter`（**缓存优先语义即天然断点续传**）→ 段内每章后 `sleep(delayMs)`（k-1 次，段末章不睡）。**限流敬畏是第一原则：绝不并行抓章**。生成器内三条退出路径：`[from, to]` 不是 `toc` 的一段（空目录、越界、倒置合起来判）→ 抛 `导出范围越界：…`；单章抛错 → 输出 `[导出中断于第 k 章《名》：原因]` 后 `return`（失败即停，重跑只补缺章；**k 是全书绝对章号**，与目录、阅读器进度同一套坐标，不是段内序号）；`signal.aborted` → 直接返回。
 
-路由侧：toc 为空 → 首包前走错误信封（422 `EmptyToc`）；否则发 200 + `X-Novel-Total-Chapters` 后逐块写。`res.on('close')` → abort（浏览器关页 / 取消即停抓取）。背压等待 `drain` **前先查死连接**——destroyed 的响应不会再发 `drain`，挂等会吞掉断连取消。200 头已发后异常**不能走 `writeError`**（二次 writeHead 报 `ERR_HTTP_HEADERS_SENT`），就地补中断标记。
+**范围判据单点在 `dispatch`**（它要在首包前拿这些数写 `X-Novel-Total-Chapters` / `X-Novel-Range`，本来就必须自己算一遍）：`from/to` 非整数 → 400 `BadRequest`（先于目录抓取，快速失败）；toc 为空 → 首包前走错误信封（422 `EmptyToc`）；越界各自裁剪到 `[1, 目录长]`、裁剪后倒置 → 422 `BadRange`；否则发 200 + `X-Novel-Total-Chapters`（**本次范围章数，非全书章数**——面板进度标题按它显示）+ `X-Novel-Range: from-to` 后逐块写。被否决的旧形状：`exportBook` 里再抄一份 `clip` 与同一句「导出范围非法」——对唯一调用方恒等（`clip(clip(x)) === clip(x)`），是判据的第二份抄本；它换来的却是两条**静默**出口（空目录只发一个 BOM、倒置靠 clip 折回来），而「只有 BOM 的文件」在用户手里与「导完的空书」没区别。**空目录 / 越界 / 倒置三件事合并成一个前置校验**（说的是同一件事：范围不是目录的一段），既不留静默也不留第二份策略。`res.on('close')` → abort（浏览器关页 / 取消即停抓取）。背压等待 `drain` **前先查死连接**——destroyed 的响应不会再发 `drain`，挂等会吞掉断连取消。200 头已发后异常**不能走 `writeError`**（二次 writeHead 报 `ERR_HTTP_HEADERS_SENT`），就地补中断标记。
 
 ### 14. wire 契约（`shared/wire.ts`）
 
-**25 条路由**（20 条静态 `ROUTES` + 5 条参数 `paramRoutes`），**计数由 `tests/shared/wire-builders.test.ts` 钉死**——此前的「17 条路由」注释既腐烂又无测试。`route(...segs)` 同时给出 `path`（客户端 fetch 用）与 `segs`（服务端段匹配与一致性测试用），同一构造保证一致。`SEG` 是路由段的唯一字面量来源，`PARAMS` 是 query 参数名的唯一字面量来源（此前参数名散在 dispatch 与四个 client 文件里各写一份，改名无处编译报错；`SearchView` 曾手拼 `shelf/${...}` 绕过 `paramRoutes`——活漂移）。
+**26 条路由**（21 条静态 `ROUTES` + 5 条参数 `paramRoutes`），**计数由 `tests/shared/wire-builders.test.ts` 钉死**——此前的「17 条路由」注释既腐烂又无测试。`route(...segs)` 同时给出 `path`（客户端 fetch 用）与 `segs`（服务端段匹配与一致性测试用），同一构造保证一致。`SEG` 是路由段的唯一字面量来源，`PARAMS` 是 query 参数名的唯一字面量来源（此前参数名散在 dispatch 与四个 client 文件里各写一份，改名无处编译报错；`SearchView` 曾手拼 `shelf/${...}` 绕过 `paramRoutes`——活漂移）。批路由的 body 字段名随身份走：源批路由收 `{ ids }`（书源 id），书架批路由收 `{ keys }`（bookKey）——**bookKey 是 URL，走 JSON body 不必编码**（走路径就得 `paramRoutes.shelfKey`）。`shelf/:key` 与 `shelf/batch-delete` 的第二段不会撞：bookKey 形态只有 URL 与 `local:<uuid>`，都不等于 `batch-delete`。
 
 **统一信封**：成功 `{ ok: true, value }`，失败 `{ ok: false, error: { code, message, segment? } }`。`segment = { facet, segmentIndex, segmentRaw }` 是**段级定位**——错误定位到出错的规则段，而不是产出错误的结果。
 
@@ -210,8 +222,8 @@ services/reading.ts（ReadingService）── 唯一业务入口，部件装配�
         └─ engineContextOf / makeSubEval ── engine evaluate（段级错误追踪、@js 沙箱）
 ```
 
-- **搜索**：`searchProgressive(keyword, {sourceIds, onGroup, shouldStop})` 过滤 `enabled` 源（`[]` = 未限定 = 搜全部启用源）→ 按 `searchParallel` 分批 `Promise.all` → 每源独立 `searchOne`（catch 后只写该组 `error`，单源失败不拖垮整批）；`search()` 是收齐全部的薄壳。`searchPlan()` 是参与集判定的唯一主人（`startSearchJob` 也经它算 `total`，别处不再抄一份启停谓词）。后台任务面另有两个动词：`startSearchJob(keyword, {sourceIds})` 提交一轮（交 `SearchJobs` 持有整轮结果）、`searchJobSnapshot(since)` 按游标读增量。
-- **阅读**：`getToc` 缓存优先（`refresh` 跳过）+ **in-flight 去重**（同书并发只拉一次，`tocInflight`）；`getChapter` 缓存优先 + 目录越界守卫（双边：负数与超长都拦，HTTP 面有 `^\d+$`、工具面无下限，守门必须盖住两面入口）+ 多页串接 + Miss 抛 `RuleEvalError` 不吞。
+- **搜索**：`searchProgressive(keyword, {sourceIds, onGroup, shouldStop})` 过滤 `enabled ∧ type==='text'` 源（参与集唯一判定 `ReadingService.participates` 谓词——**启用 ∧ 文本源**，本插件当前仅支持小说文本面；`[]` = 未限定 = 搜全部启用文本源）→ 按 `searchParallel` 分批 `Promise.all` → 每源独立 `searchOne`（catch 后只写该组 `error`，单源失败不拖垮整批）；`search()` 是收齐全部的薄壳。`searchPlan()` 是参与集判定的唯一主人（`startSearchJob` 也经它算 `total`，别处不再抄一份启停/形态谓词）。后台任务面另有两个动词：`startSearchJob(keyword, {sourceIds})` 提交一轮（交 `SearchJobs` 持有整轮结果）、`searchJobSnapshot(since)` 按游标读增量。
+- **阅读**：`getToc` 缓存优先（`refresh` 跳过；缓存键含规则代际，见 §9「缓存有效性」）+ **in-flight 去重**（同书并发只拉一次，`tocInflight`——键刻意**不含代际**：加宽它得把 `requireSource` 上移进公开 `getToc`，同步抛错会变成非 rejected promise、破坏 dispatch 的错误映射；缓存两侧都不可能脏，残余只是「与替换赛跑的那一次请求拿回旧目录」）；`getChapter` 先读目录（槽位需要章名）→ 越界守卫（双边：负数与超长都拦，HTTP 面有 `^\d+$`、工具面无下限，守门必须盖住两面入口；**先于缓存读取**）→ 缓存优先 + 多页串接 + Miss 抛 `RuleEvalError` 不吞。
 - **目录 / 正文的翻页**：`followOrSingle` 在 next 规则为 `null` 时短路单页（无翻页发现能力），否则走 `followPages`（CONTEXT.md「判到底」）。next 规则按**列表语义**求值（legado getStringList(isUrl=true)）：单候选链式跟进、多候选全部抓取不递归；停止判据 = URL 防环 → 零新增（本页 0 条）→ 回环（本页有条目但 0 新增；**部分重复不停**——此前「出现重复即停」把站点页间重叠的真实页截断）→ 上限（`tocMaxPages` 200 / `contentMaxPages` 50）。正文面串章闸：**目录知识优先**（候选「下一页」canon 后 == 目录里其他章节 URL → `chapter-boundary`；legado「下一页 == 下一章 URL 即 break」正判据）——路径启发式 `isSameChapterPage` 只在无目录知识时兜底，因为 `?id=..&cid=..&page=2` 这类非页码键分页会被启发式误拦（「一章只解析出一页」的根因之一）。
 - **章节 URL 保留 `,{option}` 后缀**（legado BookChapter.getAbsoluteURL 口径）：目录落库不再 strip 选项（`absUrlKeepOption`：URL 部分绝对化、选项原文接回）；抓取时 `reading.fetchPage` 经 `assembleRequest` 单点解释选项（POST method/body、charset 进解码链、headers 合并）——API 型章节端点（POST body 模板）不再退化成裸 GET。`canonUrl` 是串章闸/防环的比对口径（剥选项 + URL 归一化）。
 - **目录 URL 缺失逐章回退**：`ruleChapterUrl` 取空 → 该章地址回退**目录页地址**（legado BookChapterList「未获取到url,使用baseUrl替代」）——此前「url null → 整条丢弃」把这类源的目录清成 0 章（EmptyToc 桶的成因之一）。**但整本每一条都回退就不是缺链接，而是规则整体失效**：静默产出 N 条指向目录页自身的 toc 等于拿合法形状冒充成功（本仓镜像的宁炸不猜），故 `extract` 收口处判 `fellBack === out.length` → 抛 `RuleEvalError` 点名 `ruleChapterUrl` 与回退条数（2026-09 审查；钉子 `tests/services/reading.test.ts` 成对——混合形态仍逐章回退，不许改回整条丢弃）。
@@ -259,36 +271,37 @@ services/reading.ts（ReadingService）── 唯一业务入口，部件装配�
 
 | 测试文件 | 钉死什么 |
 | --- | --- |
-| `tests/shared/wire-builders.test.ts` | 路由计数 20 + 5、`LOCAL_SOURCE_ID` 持久化值与跨半同源、`encodeQuery` / `queries`（含 `searchJobStatus(since)` / `searchJobStream(since)` 同一条游标）、`searchJobCancel` 的 path/segs/ `shelfBody` 的参数名与字段取舍、`SHELF_META` 键集、`pickShelfMeta` 判别与归一化、shelf 路径必须走 `paramRoutes.shelfKey` |
+| `tests/shared/wire-builders.test.ts` | 路由计数 21 + 5、`LOCAL_SOURCE_ID` 持久化值与跨半同源、`encodeQuery` / `queries`（含 `searchJobStatus(since)` / `searchJobStream(since)` 同一条游标）、`searchJobCancel` / `shelfBatchDelete` 的 path/segs、`shelfBody` 的参数名与字段取舍、`SHELF_META` 键集、`pickShelfMeta` 判别与归一化、shelf 路径必须走 `paramRoutes.shelfKey` |
 | `tests/api/routes.test.ts` | `ROUTES` → 真实 dispatch 落点逐条；405 / 404 / 400 三态；local part 缺席 → 503；`SEG` 无孤儿段 |
 | `tests/api/wire.test.ts` | 同源 fence 四态；`readJsonBody` 的 400 / 413；`errorStatusOf` 全类目映射与 segment |
 | `tests/api/dispatch-sources.test.ts` | 导入任务 → jobId → job-status → done；结果保留；409 JobRunning；旧同步路由 405；body 校验；大包不 413 |
-| `tests/api/dispatch-reading.test.ts` | search / book / toc / chapter 落点与 400；**search/job 面：提交/快照/SSE/取消四条路由的方法守卫、keyword 与 sourceIds 校验、终态快照形状、`since` 游标语义（超前夹到末尾、非法当作 0）、只留最近一轮；SSE 帧体=同一份快照、只含本轮、终帧后服务端关流；`POST search/job-cancel` → `{cancelled}`，取消后本轮分组仍整轮可读、二次点击是空操作**；shelf 三形态 PUT 与 `patch` 单字段回写；`sourceId` 必填；progress 值域 |
+| `tests/api/dispatch-reading.test.ts` | search / book / toc / chapter 落点与 400；**search/job 面：提交/快照/SSE/取消四条路由的方法守卫、keyword 与 sourceIds 校验、终态快照形状、`since` 游标语义（超前夹到末尾、非法当作 0）、只留最近一轮；SSE 帧体=同一份快照、只含本轮、终帧后服务端关流；`POST search/job-cancel` → `{cancelled}`，取消后本轮分组仍整轮可读、二次点击是空操作**；shelf 三形态 PUT 与 `patch` 单字段回写；`sourceId` 必填；progress 值域；**`POST shelf/batch-delete`：一趟删多本 + 未知键静默跳过、body 非法（空/缺 keys/非字符串）400 与 GET 405、`GET /shelf` 的 `sourceName` 投影（join 到源名 / join 不到 null）** |
 | `tests/api/dispatch-local.test.ts` | 本地导入自动加书架（`sourceId=__local__`）、GBK 回显、400 / 413、删书连带删文件 |
 | `tests/api/dispatch-export.test.ts` | 流式头（BOM / Content-Disposition / X-Novel-Total-Chapters）与两章正文；toc 失败走错误信封（非流） |
 | `tests/services/intake.test.ts` | 入库四裁决（added / replaced / skipped×2）与替换复用 id、清同键残留、`dedupKey` 口径 |
-| `tests/services/sources.test.ts` | `edit` 原子性与合并落盘（不 flush 磁盘未写、20 次阈值强制落盘、并发 edit 不交错、recipe 抛错仍标脏）；`toPublic` 凭据红线；load 四条存量归一 |
+| `tests/services/sources.test.ts` | `edit` 原子性与合并落盘（不 flush 磁盘未写、20 次阈值强制落盘、并发 edit 不交错、recipe 抛错仍标脏）；`toPublic` 凭据红线；load 七条存量归一 |
 | `tests/services/import-job.test.ts` | 单槽互斥与结果保留、issues 截断 200、坏文件不拖垮、导入不探针、批量验证并发 ≤5 与运行中删源；**宿主登记三钉**（kind/label、取消 → 宿主结算 `killed`、自然收尾 → `completed`） |
 | `tests/services/search-job.test.ts` | 游标增量读面（`added`/`next` 跟着走、超前只给空增量不报错）、**subscribe 事件口（新一轮 / 每次 emit / 终态各响一次、退订后不再打扰）**、每源命中截断而 `done` 计数不受截断影响、只留最近一轮（新提交替换旧的、旧的读不出来）、结束过保留期读作「无任务」不伪装成零命中、`cancel` 立协作式旗并落 failed 带原因、宿主登记 kind `novel-search` 与 `completed`/`killed` 两种结算；**停止的另一半**：`cancel()` 置 `cancelled` 后已 emit 的分组照旧整轮可读、再点为 `false` 空操作 |
-| `tests/services/reading.test.ts` | 搜索分组与空数组语义、重定向按落地地址、目录两页翻页闸与缓存、正文规约与零命中报错不写缓存、**目录 URL：逐章回退保留但整本全回退 → `RuleEvalError` 点名 ruleChapterUrl**、ruleDetail* 回退、`__local__` 分流、防孤儿删书、探针同耐心；**`searchProgressive` 的增量出口与 `shouldStop`（批头收手 / 条目头跳过该源）** |
+| `tests/services/reading.test.ts` | 搜索分组与空数组语义、重定向按落地地址、目录两页翻页闸与缓存、正文规约与零命中报错不写缓存、**目录 URL：逐章回退保留但整本全回退 → `RuleEvalError` 点名 ruleChapterUrl**、ruleDetail* 回退、`__local__` 分流、防孤儿删书、探针同耐心；**`searchProgressive` 的增量出口与 `shouldStop`（批头收手 / 条目头跳过该源）**；**缓存有效性（同 id 换规则默认读取即新目录、同 id 换正文规则默认读取即新正文、章序位移正文不串配）**；**书 URL 承载请求选项（命中保留 `,{option}` + getDetail 按选项真发 POST）**；**详情上下文 init（换根命中字段 / 零命中宁炸点名 ruleDetailInit）+ tocUrl 模板按 init 上下文插值 + 存量缺键直通**；**js 预算三态（jsTimeoutMs 小预算点名「脚本超时（>Nms）」/ 缺省放行 >2s legado 级脚本 / 搜索面与探针同口径）**；**门面直测：`removeBooks` 批量删沿用「本地书连带删副本」invariant（未知键静默跳过）+ `shelfList` 来源投影（源名实时 join、源一删投影即刻 null、本地书恒 null）** |
 | `tests/services/probe.test.ts` | 逐词重试与 broken 口径、规则缺失是结果、charset 解不出 `DecodeError`、超时覆盖、**书名 usage 与搜索面一致**（`ruleBookName` 以属性终端收尾时不误判 `broken: 首条书名为空`） |
 | `tests/services/search-face.test.ts` | 条目提取 + landedUrl、规则缺失结果形态、按次超时、POST 选项透传、错误码投影 |
 | `tests/services/request.test.ts` | 选项切分（含逗号空格、单引号 JSON、双重编码 headers）、POST 表单默认头、charset 透传、相对 URL 绝对化、`trimFirstPage`、`stripUrlOption`、`@js` 模板三形态 |
 | `tests/services/fetcher.test.ts` | 非 2xx / 网络 / 超时 → `FetchError`；代理 dispatcher 有无；缺省 UA 与调用方覆盖；解码链四优先级 + 空串声明；`headerOf` 的 Cookie 合并 |
-| `tests/services/cache.test.ts` | toc / content 往返与按章隔离、prune 按 mtime 淘汰、`safeKey` 长短形态 |
+| `tests/services/cache.test.ts` | toc / content 往返与按章 + 槽位隔离（换代际 / 换槽位即换文件）、prune 按 mtime 淘汰、`safeKey` 长短形态 |
+| `tests/services/cache-epoch.test.ts` | 指纹按面细分（改搜索面字段不动阅读代际、改目录 URL 规则不动正文代际——正文对目录的依赖走槽位章名、改正文规则不动目录代际）、header 键序无关、baseUrl 入指纹、逐字段翻转（每个字段只影响它声称影响的面）、null 与空串不共用指纹、槽位随章名 / 代际变 |
 | `tests/services/storage.test.ts` | `novelDir` 两态、原子写无 `.tmp` 残留、并发写串行、损坏文件抛 `CorruptJsonError` + `.bak`、防抖合并 |
-| `tests/services/shelf.test.ts` | add 往返与 patch 语义（缺席键保值、显式 undefined 不抹值）、progress 防抖、不在架 `null` |
+| `tests/services/shelf.test.ts` | add 往返与 patch 语义（缺席键保值、显式 undefined 不抹值）、progress 防抖、不在架 `null`、`removeMany`（返回被删条目、未知键跳过、重复键幂等、落盘一次） |
 | `tests/services/localbooks.test.ts` | 解码链四态、切章正则诸形态、`local:` 形态防穿越、LRU 3 本、越界明确报错、零内容章不产生负长度 |
 | `tests/services/pagination.test.ts` | URL 防环 / 零新增 / 回环（整页零新增）/ 上限 / 串章（stopUrls 目录知识**取代**启发式——两闸同供时启发式不参与，非页码键分页照常跟进）/ next 列表语义（多候选不递归）/ 页间部分重叠不停 逐一 |
 | `tests/services/chapter-page.test.ts` | 同章后缀形态、下一章拦下、标准页码查询放行、判不准拦下 |
 | `tests/services/url-option.test.ts` | `,{option}` 后缀切分（严格/单引号 JSON、正文 `{a,b}` 不误剥）、`absUrlKeepOption` 绝对化接回、`canonUrl` 比对口径 |
 | `tests/services/content.test.ts` | `looksLikeHtml` 白名单（纯文本正文不误伤）、`htmlToText` 块级换行与脚本/样式整树丢弃、`contentToText` 的 **img 保留为地址行 / noscript 内 img 取回地址而非字面标签 / 预转义实体就地解码且未知实体原样**、**幂等：产物不含标签，二次收口必直通（含 `&lt;p&gt;` 预转义 HTML 串）** |
-| `tests/services/export.test.ts` | N-1 次节流与章格式、失败即停无后续请求、abort 零请求、toc 抛错透传 |
+| `tests/services/export.test.ts` | N-1 次节流与章格式、失败即停无后续请求、abort 零请求、toc 抛错透传、**范围由调用方裁好 + 空目录/越界/倒置合并成一个前置抛（不再有「只发 BOM」的静默出口），且校验在任何抓取之前（零请求）** |
 | `tests/services/error-taxonomy.test.ts` | 每个错误类的类目 / HTTP / ProbeErrorCode 三投影；新类目忘进表编译期报错 |
-| `tests/services/normalize.test.ts` | 三方言映射、必填校验、warning 口径、`bookSourceType` 拒绝非文本、分组拆分与图标剥离 |
+| `tests/services/normalize.test.ts` | 三方言映射、必填校验、warning 口径、`bookSourceType` 拒绝非文本**与认不出的编码（`unknown`）**、分组拆分与图标剥离 |
 | `tests/tools/schema-contract.test.ts` | execute 输出过 harness 同款校验；schema 在 harness 强制子集内；wire 绑定只对 shelf 成立（表派生），其余四份是手抄快照 |
 | `tests/tools/tools.test.ts` / `project.test.ts` | 五工具名与输出形状、注册与 disposer、投影的整键省略与不可变性 |
-| `tests/index.test.ts` | 插件身份与 Config schema、值域校验加载期失败、ready 后注册与 disposer 摘净、双重启用防御；**三类任务真抵达宿主**（假 `ctx.jobs` + 真 http 口跑 `sources/import`、`sources/batch-probe`、`search/job` → 记到 `job-start` 的 kind 恰是 `novel-import`/`novel-probe`/`novel-search`）——`create → from → SourceJobs/SearchJobs` 这条 host 传递链上任一跳丢参数，其余 1042 条仍然绿（各单测直构持有者、门面测试不传 host），只有这条红 |
+| `tests/index.test.ts` | 插件身份与 Config schema、值域校验加载期失败、ready 后注册与 disposer 摘净、双重启用防御；**三类任务真抵达宿主**（假 `ctx.jobs` + 真 http 口跑 `sources/import`、`sources/batch-probe`、`search/job` → 记到 `job-start` 的 kind 恰是 `novel-import`/`novel-probe`/`novel-search`）——`create → from → SourceJobs/SearchJobs` 这条 host 传递链上任一跳丢参数，其余 1042 条仍然绿（各单测直构持有者、门面测试不传 host），只有这条红；**jsTimeoutMs schema 透传与值域（≤0 加载期响亮）** |
 
 ## 已知开口
 
@@ -302,11 +315,16 @@ services/reading.ts（ReadingService）── 唯一业务入口，部件装配�
 6. **同址已 verified 的源被新导入跳过时，新条目的规则改进被丢弃**：这是「以可用者为准」的既定口径（用户拍板），不是 bug；但 UI / 工具只报 `dupSkipped`，用户若想采纳新规则需先删旧源。
 7. **工具输出 schema 与 wire 的绑定只成立五分之一**：`tests/tools/schema-contract.test.ts` 的用例「② schema 属性集 ≡ wire 类型字段集」仅对 shelf 从 `SHELF_META` 派生比对，其余四份 schema 是手抄快照——wire 字段改名不会让它们报红，只能人工同步（该测试文件头注已如实声明这条局限）。
 8. **已确认的刻意保留（不改代码）**：`services/request.ts` 的 `SearchRequest` 类型别名全仓零引用；`services/bridge.ts` 的 `listValue` 无生产消费者（唯二引用是测试当归约器）；`localbooks.ts` 的 `ChapterSpan` / `BOOK_KEY_RE` / `LocalImportResult` 只在模块内用；`reading.ts` 的 `tocUrlOf` / `normalizeChapterText` 注释自称「供测试/复用」但无测试 import；`normalize.ts` 的两张方言映射表的 `ruleBookInfo` 整块逐字相同（方言是两条独立演化线，强抽有 speculative generality 风险）。`request.ts` 的 `buildSearchRequest` 虽只是 `assembleRequest` 的薄壳，但 `search-face.ts` 的 `fetchSearchPage` 在用它，属历史名字兼容、保留。
-9. **缺省值多份复制**：`50 * 1024 * 1024`（本地导入上限）在 `index.ts` DEFAULTS、`reading.ts` 的 `create` 与 `from`、`localbooks.ts` 的 `create` 各写一份；`15000` 在 `reading.ts` 与 `fetcher.ts` 各一份；`exportDelayMs` 的 `300` 在 `index.ts` 与 `dispatch.ts` 各一份；`readJsonBody` 的 1MiB 与本地导入的手写流式上限循环是两份字节上限逻辑。生产路径始终显式传值，改错一处不会静默改变业务规则——但这类复制正是「靠注释对齐」的温床。
+9. **缺省值多份复制**：`50 * 1024 * 1024`（本地导入上限）在 `index.ts` DEFAULTS、`reading.ts` 的 `create` 与 `from`、`localbooks.ts` 的 `create` 各写一份；`15000` 在 `reading.ts` 与 `fetcher.ts` 各一份，**`jsTimeoutMs` 的 `15000` 在 `index.ts` DEFAULTS 与 `reading.ts` `from()` 各一份**（同 `searchTimeoutMs` 形态——生产路径 `index.ts` 显式传值，测试直构 `from()` 用缺省）；`exportDelayMs` 的 `300` 在 `index.ts` 与 `dispatch.ts` 各一份；`readJsonBody` 的 1MiB 与本地导入的手写流式上限循环是两份字节上限逻辑。生产路径始终显式传值，改错一处不会静默改变业务规则——但这类复制正是「靠注释对齐」的温床。
 10. **`tests/api/routes.test.ts` 以中文文案前缀「未知路由」为判据**（钉措辞而非结构码）：文案一改即整套误红。暂无可替代的机器可读判据——「未知路由 404」与「域 404」的错误码都是 `NotFound`。
 11. **任务态不持久化**：DSH 重启后 `job-status` 返回 null，正在跑的导入进度不可恢复（已落盘的源不丢，导入幂等可重跑）。这是 YAGNI 决策，不是缺口；但「重启后 UI 显示空闲而用户以为任务还在跑」的可能性留给下一个人判断。
 12. **探针 verified 只证明搜索面**：正文链路（目录/正文规则、翻页、js 沙箱语义）的可用性由 `DSH_CONTENT_AUDIT=1` 全链路审计实测（读报告分桶，非通过率门；数据点：2026-09 实测：228 源全 verified，正文全链路修复前仅 25 源全通；三轮 legado 语义补齐后见门控报告——js 段 scriptForm / 沙箱 sloppy 作用域与变量绑定 / 元素包装对象 / **java.ajax 同步语义（worker+SAB RPC 桥）** / AES 解密桥 / cache 垫片 / 取值用途与属性终端 / 模板字面段 / `text.<串>` 选择 / `@put` 裸值键访问 / AllInOne 行内标志 / 方括号索引 / `##` 尾插值 / 中链 jsonpath / 翻页闸（列表 next + 目录知识串章闸）/ 章节 URL 选项保留 / 目录 URL 缺失逐章回退（**整本全回退即如实抛错**）/ 正文 img 保留与实体解码，全部落地，语义与理由见 `docs/design/engine.md`「legado 正文链路语义补齐」）。残余失败的已知边界：`@webjs:`/`sourceRegex`/`webView:true`（WebView 面——legado 本身也只在章节 URL 带 `webView:true` 时走 WebView，属「需要登录/JS 渲染」类，与用户口径一致不计入规则引擎欠账）、`<p1,p2>` URL 页码、`contentRule.subContent`/`title`、方括号索引多条目、jsLib 用 `eval` 的源（Code generation disallowed——安全边界不降级）。网络层失败（FetchError/EmptyToc）需逐源人工甄别死站/反爬/代理，非引擎问题。
     **第二个数据点（2026-09-19 本机全量重探，`DSH_REPROBE=1`，79s 跑完）**：库已长到 **431 源**，verified **161（37.4%）**；失败分布 `FetchError 121` / `RuleEvalError 96` / `JsSandboxError 50` / `UnsupportedRuleError 3`。与上面那条「228 源全 verified」不是同一批源，也不能读成引擎退化——但 **146 个规则/沙箱类失败值得单独甄别**（同一次跑里出现多条「URL 选项不是合法 JSON，整串按纯 URL 处理」的 warn，形态是 `'单引号键` 与「JSON 后再跟 `@js:`」两类；选项失效会直接改变 method/body/charset，因而完全可能是 RuleEvalError 的上游而非站点问题）。这条不在本轮范围内改，另卡一次甄别。
+    **第三个数据点（2026-09-20「书源适配四修」后，两门控背靠背真跑，与前两批不是同一批源、勿跨批比读数）**：`DSH_REPROBE=1` 38s——228 源 verified **127（55.7%）**，失败分布 `FetchError 61 / 导入失败 38 / JsSandboxError 1 / RuleEvalError 1`；`DSH_CONTENT_AUDIT=1` 216s——阶段分布 `ok 46 / content-partial 3 / content-error 4 / toc 44 / no-book-url 40 / search 91`，报告落 `.superpowers/content-audit/`。四修=书 URL 保留 `,{option}`、`ruleDetailInit` 换根 + tocUrl 模板过引擎插值、`jsTimeoutMs` 配置出口、bookSourceType 编码订正 + 存量重推 + 参与集仅文本源。四修的真机判别与新残余如实记：① **QQ 类 EmptyToc 的根因=存量 rules 缺 `ruleDetailInit` 键**（normalize 只在入库时映射 `ruleBookInfo.init`）——已补 `SourceRegistry.load` 第六条迁移（按 raw 重推，键恒落 string|null），真机复验 `all-chapter?bookId=真实id` rows=2290 通；② **米读类 `@js` 段体内字符串的 `{{$.…}}` 不插值**（legado makeUpRule 对全 mode 规则先插值，本仓 js 段当纯代码执行——QQ 类纯 URL 模板已修，`@js` 包裹模板仍断，见 `engine.md`「仍开口」，独立工单）；③ 书架 9 源在本轮审计的分桶：bqquge/无极书院 `ok`，QQ 卡 EmptyToc（已由①解释并修复），米读卡 toc=`{{$.book_id}}` 字面 URL（已由②解释、残余=②-②），漫画两源 `no-book-url`（审计关键词命中无 bookUrl，站点侧），book15/txs12/miaobige 三源 `search` 网络瞬断（同源前序实测均通，疑两门控背靠背打站点所致）——大桶 `[70] search|FetchError` 与 `no-book-url 40` 属站点/网络侧，非引擎问题。
+    **第四个数据点（2026-09-20「legado 缺口五修 + 三修」后，`DSH_CONTENT_AUDIT=1` 131s，与前三批不同批、勿跨批比读数）**：`total=158`（参与集仅文本源）——`ok 56 / toc 38 / search 52 / content-partial 5 / content-error 4 / no-book-url 3`。大桶仍是站点/网络侧（`search|FetchError fetch failed 43` = 无代理直连被重置、`toc|FetchError 13`）；引擎侧修复消掉的桶：`cache.putMemory` not a function（cache 内存三别名）、`tag.li.` 尾点号炸选择器（看书）、URL 选项非法整串进 404（legado 无条件切分）、`@js` 动态头被当坏 JSON 丢弃（顶点小说 4004 → headerRule 全链 + load 第七条迁移）、`{{$.novelId}}` 被 XPath 截走（classifySegment 插值优先）、`JSON.parse(result)` 对象 ToString → 运行时 SyntaxError 被误判顶层 return 静默 Miss（幂等 wrap + 编译期判别）、init 换根 html 不同步（setContent 全换口径）、`downloadFile`/`readTxtFile`/`Packages.*` 沙箱面（爱腐文密钥图链）。书架 29 条真机复测：目录 21/29、正文对目录 OK 本 20/21 可读；残余 8 条目录失败全部为站点/网络侧（反爬跳转页 3、死站/超时 2、坏 bookUrl 2、站点返回不同内容 1）。报告落 `.superpowers/content-audit/`。
+    **第五个数据点（2026-09-21「评审余项修 + 未知形态闸」后，两门控真跑，与前任各批同源不同网络条件、只作回归对照不作读数对比）**：`DSH_REPROBE=1` 45s——214 源 verified **117（54.7%）**，失败分布 `FetchError 56 / 导入失败 40 / RuleEvalError 1`；`DSH_CONTENT_AUDIT=1` 222s——阶段分布 `ok 80 / toc 67 / no-book-url 42 / content-partial 7 / content-error 5 / search 13`。库从 228 缩到 214（用户删了 14 条），且 `search` 桶 91→13 主要是站点/代理侧脸色，**不要当成修复收益**。本轮改动自己的真机证据只有两条：① `toc` 里 `详情初始化规则未取到上下文`（`$.data` / `$.coverInfo`，猫眼看书 / 宜搜小说）两批都是 2 条——init 换根没有把新失败引进来；② 探针 js 预算打通后 `JsSandboxError` 从 1 归零（单样本，只是方向一致）。**门控盲区（如实）**：`content-audit` 的用例「sources.json 全量正文审计」直读 `sources.json` 并把 `enabled` 全置 true（它自己那条「把真实 sources.json 拷进临时数据根直接加载（生产同口径——不重导 normalize）」注释就是依据），**既绕开 `SourceRegistry.load` 的存量迁移也绕开 `participates`**——所以「未知形态不参搜」这条闸没有任何真机读数，只有单测（`normalize` 拒入库 / `load` 重推 / `participates` 排除三处）。它的真实影响面是拿数据数出来的：本库 214 源里 `raw.bookSourceType=4` 恰 **4 条**（七猫短剧、黄豆短剧、非凡资源网、量子资源网，持久形态全是 `text` + `verified`），`null` 2 条仍按文本——即参与集从 178 条文本源收到 174 条，无附带伤害。
 13. **正文串章只有一道闸**：`pagination.ts` 的串章判定是 `stopUrls`（目录知识）**取代**路径启发式，不是叠加（`else if` 形态，接口注释与 `chapter-page.ts` 头注都写明了理由：启发式判不准时宁漏页不串章，而它误拦的 `?id=..&cid=..&page=2` 实测就是一批源「一章只解析出一页」的根因）。残余缺口如实记着：`canonUrl` 会剥 `,{option}` 后缀并按 WHATWG 归一相对地址，但**不归一尾斜杠与 query 参数顺序**——站点「下一页」若与目录条目差在这两处，`stopSet` 漏判且没有第二道闸，下一章正文会被接在本章后面。2026-09 审查复议提议「stopSet 未命中时再走收窄到路径变化的启发式」，**已否决**：收窄后仍会误拦 `/book/1/1.html → /book/1/2.html` 这类路径式同章分页（比现行更糟）。钉子钉住优先级本身（`tests/services/pagination.test.ts` 的 `it('两闸同供时目录知识优先…')`），改双闸必须先过这条钉；漏判的实际发生率只有 `DSH_CONTENT_AUDIT=1` 能出数（本轮未跑）。
 
-14. **聚合搜索后台化已落地（2026-09）**：读 / 写分槽（§4）、结果只留最近一轮 + 每源 50 条 + 收尾 30 分钟（§4）、投递走「带游标的显式快照查询 + 同一份快照的 SSE 推送」（§4 末与 §14）。通道选自有 SSE 的理由与 `EventSource` 被否的理由都写在 `docs/design/client.md` 的「搜索」节。仍开着的只剩一件：UI 该不该给「取消搜索」钮（`SearchJobs.cancel()` 与宿主 kill 都已在位）。
+14. **聚合搜索后台化已落地（2026-09）**：读 / 写分槽（§4）、结果只留最近一轮 + 每源 50 条 + 收尾 30 分钟（§4）、投递走「带游标的显式快照查询 + 同一份快照的 SSE 推送」（§4 末与 §14）。通道选自有 SSE 的理由与 `EventSource` 被否的理由都写在 `docs/design/client.md` 的「搜索」节。「取消搜索」钮已在 UI 在位（`POST search/job-cancel`，钉子见 `docs/design/client.md` 测试钉子节的 `views-wiring.test.tsx`）；跨观察者换轮的身份裁决也已收进客户端观察 module（`client/search-job.ts`，钉子 `tests/client/search-job-round-identity.test.tsx`）。本节不再有开着的搜索开口。
+
+15. **缓存有效性的三条接受残余（不改代码，如实记）**：① 热正文缓存不再能单独服务一章——`getChapter` 先读目录拿章名算槽位，目录缓存缺失（首次 / 被 prune 淘汰）时一次章读会退化成一次目录抓取（或抛 `FetchError`），正文缓存命中不再等于可离线读。② `getChapter` 注入的 `book.name` / `book.author` 取自**书架**而非规则，故正文脚本用到 `book.name` 时，改书架书名后旧正文照样命中缓存、吐旧书名（把书架元数据入槽位会让每次改名全缓存 miss，更糟——记录不修）。③ 代际只覆盖规则、不覆盖代码版本，升级后仍可能读到旧提取代码写下的条目（`reading.getChapter` 出边界用 `contentToText` 再收一次口，靠它幂等才无害）。

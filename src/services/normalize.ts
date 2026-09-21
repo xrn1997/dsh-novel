@@ -31,6 +31,7 @@ const DIALECT_MAP: Record<string, Record<string, string>> = {
     coverUrl: 'ruleCoverUrl', intro: 'ruleIntro', lastChapter: 'ruleLastChapter',
   },
   ruleBookInfo: {
+    init: 'ruleDetailInit',
     name: 'ruleDetailName', author: 'ruleDetailAuthor', coverUrl: 'ruleDetailCoverUrl',
     intro: 'ruleDetailIntro', lastChapter: 'ruleDetailLastChapter', tocUrl: 'ruleTocUrl',
   },
@@ -51,6 +52,7 @@ const NATIVE_MAP: Record<string, Record<string, string>> = {
     coverUrl: 'ruleCoverUrl', intro: 'ruleIntro', lastChapter: 'ruleLastChapter',
   },
   ruleBookInfo: {
+    init: 'ruleDetailInit',
     name: 'ruleDetailName', author: 'ruleDetailAuthor', coverUrl: 'ruleDetailCoverUrl',
     intro: 'ruleDetailIntro', lastChapter: 'ruleDetailLastChapter', tocUrl: 'ruleTocUrl',
   },
@@ -83,10 +85,12 @@ export function normalizeSource(raw: unknown): NormalizeResult {
   const name = nameRaw === null ? null : stripLeadingIcons(nameRaw)
   const baseUrl = str(r.bookSourceUrl); if (!baseUrl) missing.push({ field: 'bookSourceUrl', message: '缺书源地址' })
   // bookSourceType：非文本源点名拒绝——图片/音频/文件源规则体系完全不同，落到 ruleContent 校验
-  // 会报「缺正文规则」，语义误导（它不是缺规则，是本插件不支持）
-  const type = parseContentType(r.bookSourceType, warnings)
+  // 会报「缺正文规则」，语义误导（它不是缺规则，是本插件不支持）。认不出的编码同样拒绝：
+  // 读不懂不等于文本，宁可不入库也不拿它当文本源参搜（书架诊断实证：误标 text 的短剧源混进了文字书架）。
+  const type = kindOfSourceValue(r.bookSourceType)
   if (type !== 'text') {
-    missing.push({ field: 'bookSourceType', message: `类型「${SOURCE_KIND_LABEL[type]}」——本插件仅支持文本源（0）` })
+    missing.push({ field: 'bookSourceType', message:
+      `类型 ${JSON.stringify(r.bookSourceType)}（${SOURCE_KIND_LABEL[type]}）——本插件仅支持文本源（0）` })
   }
   const ruleContent = str(r.ruleContent); if (!ruleContent) missing.push({ field: 'ruleContent', message: '缺正文规则（ruleContent 需为字符串，或对象形态下含非空 content 子字段）' })
   if (missing.length > 0) return { ok: false, missing, warnings }
@@ -94,13 +98,17 @@ export function normalizeSource(raw: unknown): NormalizeResult {
   const rules = {} as NormalizedRules
   for (const f of RULE_FIELDS) (rules as unknown as Record<string, unknown>)[f] = str(r[f])
   rules.searchUrl = normalizeSearchUrl(r.searchUrl, warnings)
-  rules.header = normalizeHeader(r.header, warnings)
+  // header 单字段两形态（legado BaseSource.getHeaderMap 口径）：`@js:`/`<js>` 规则 → headerRule；
+  // JSON 对象/JSON 串 → header。两者互斥（同一 raw.header 二选一），规则形态不再是「非法 JSON」警告。
+  rules.headerRule = normalizeHeaderRule(r.header)
+  rules.header = rules.headerRule === null ? normalizeHeader(r.header, warnings) : null
   // ruleDetail*/ruleChapterList 非 RULE_FIELDS 成员（legado 平铺无此字段名），单独落位
   rules.ruleDetailName = str(r.ruleDetailName)
   rules.ruleDetailAuthor = str(r.ruleDetailAuthor)
   rules.ruleDetailCoverUrl = str(r.ruleDetailCoverUrl)
   rules.ruleDetailIntro = str(r.ruleDetailIntro)
   rules.ruleDetailLastChapter = str(r.ruleDetailLastChapter)
+  rules.ruleDetailInit = str(r.ruleDetailInit)
   rules.ruleChapterList = str(r.ruleChapterList)
   rules.jsLib = str(r.jsLib)
 
@@ -119,9 +127,11 @@ export function normalizeSource(raw: unknown): NormalizeResult {
   }
 }
 
-/** 内容形态中文名（错误文案与列表徽标共用口径） */
+/** 内容形态中文名（只服务导入拒绝文案——列表不渲染 type）。Record 由编译器强制穷尽，
+ *  故它同时是**值域见证**：`SourceRegistry.load` 用 `type in SOURCE_KIND_LABEL` 判旧数据的
+ *  type 还在不在域内，不再手写第三份形态清单。 */
 export const SOURCE_KIND_LABEL: Record<SourceContentKind, string> = {
-  text: '文本', image: '图片', audio: '音频', file: '文件',
+  text: '文本', image: '图片', audio: '音频', file: '文件', unknown: '未知',
 }
 
 /** 分组串拆分（修复 2026-09-16：一个源可属多个分组，此前只按 `\` 拆——真实导出用的是
@@ -146,21 +156,45 @@ export function stripLeadingIcons(name: string): string {
   return stripped === '' ? name : stripped
 }
 
-/** legado bookSourceType → 内容形态：0/-1/缺省=文本（-1=ALL 在源里罕见，按文本放行）；
- *  1/2/3 → image/audio/file；非整数/未知数值 warning 后按文本（宁吵不瞒，不拦） */
-function parseContentType(v: unknown, warnings: NormalizeIssue[]): SourceContentKind {
+/** legado bookSourceType → 内容形态（真值锚点：legado-with-MD3 `constant/BookSourceType.kt`
+ *  「1 音频、2 图片、3 文件」；此前本仓把 1/2 读反成 image/audio——漫画/短剧源被误标后混进
+ *  聚合搜索与文字书架，书架诊断实证）：0/-1/缺省=文本（-1=ALL 在源里罕见，按文本放行）。
+ *  **唯一映射表**：normalize 的拒绝文案与 SourceRegistry.load 的存量重推共用这一份，
+ *  不存在第二份编码抄本（wire 单点纪律）。认不出的值 → 'unknown'：读不懂不等于文本。 */
+export const CONTENT_KIND_OF: Record<number, SourceContentKind> = {
+  0: 'text', [-1]: 'text', 1: 'audio', 2: 'image', 3: 'file',
+}
+
+/** bookSourceType 原始值 → 内容形态。**认得出才算数**：0/-1/缺省=文本，1/2/3=音频/图片/文件，
+ *  其余一律 unknown（legado 侧该字段是 Int，非 number 的形态本身就不是合法编码——不必再分
+ *  「表外值」与「脏值」两类）。`typeof` 那道闸是必需的：数值键会强转，`CONTENT_KIND_OF['0']`
+ *  竟返回 'text'。导入预检与存量重推共用此单点，两侧「读不懂」的判据不分岔。 */
+function kindOfSourceValue(v: unknown): SourceContentKind {
   if (v === undefined || v === null) return 'text'
-  if (typeof v !== 'number' || !Number.isInteger(v)) {
-    warnings.push({ field: 'bookSourceType', message: `类型值不是整数（${JSON.stringify(v)}），按文本处理` })
-    return 'text'
-  }
-  if (v === 0 || v === -1) return 'text'
-  const kind = v === 1 ? 'image' : v === 2 ? 'audio' : v === 3 ? 'file' : undefined
-  if (kind === undefined) {
-    warnings.push({ field: 'bookSourceType', message: `未知类型值 ${v}，按文本处理` })
-    return 'text'
-  }
-  return kind
+  return typeof v === 'number' ? CONTENT_KIND_OF[v] ?? 'unknown' : 'unknown'
+}
+
+/** raw.bookSourceType → 内容形态（quiet 版，供 SourceRegistry.load 存量重推）：
+ *  缺省/0/-1 → 'text'，其余（1/2/3 与认不出的值）→ 对应形态或 'unknown'——旧数据当年按
+ *  文本入库的误标在此按 raw 重推收敛出去，不再当文本源参搜；raw 不是对象 → undefined（别动）。 */
+export function contentTypeOfRaw(raw: unknown): SourceContentKind | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  return kindOfSourceValue((raw as Record<string, unknown>).bookSourceType)
+}
+
+/** raw 的详情初始化规则原文（quiet 版，供 SourceRegistry.load 存量重推——normalize 只在
+ *  入库时映射 `ruleBookInfo.init → ruleDetailInit`，存量 rules 是旧版派生、缺此键，
+ *  缺键则详情换根静默不生效、tocUrl 模板 Miss 回退 → EmptyToc（QQ 源真机判别实证）。
+ *  返回：init 原文 / 'null'（raw 在场但没有 init）/ undefined（raw 不是对象，调用方别动）。 */
+export function rawRuleDetailInit(raw: unknown): string | null | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const r = raw as Record<string, unknown>
+  const info = r.ruleBookInfo
+  const init = typeof info === 'object' && info !== null
+    ? (info as Record<string, unknown>).init
+    : r.ruleDetailInit
+  if (typeof init === 'string' && init.trim() !== '') return init
+  return null
 }
 
 /**
@@ -238,6 +272,24 @@ function normalizeHeader(v: unknown, warnings: NormalizeIssue[]): Record<string,
   const out: Record<string, string> = {}
   for (const [k, val] of Object.entries(obj)) if (typeof val === 'string') out[k] = val
   return out
+}
+
+/** 动态请求头规则判别（**合并视图版**，normalize 入库时用）：header 值是 `@js:`/`<js>` 规则
+ *  （BaseSource.getHeaderMap 的 `startsWith("@js:", true)` 考证）→ 返回规则原文；否则 null。 */
+function normalizeHeaderRule(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  return v.startsWith('@js:') || v.startsWith('<js>')
+    || v.startsWith('@JS:') || v.startsWith('@Js:') || v.toUpperCase().startsWith('<JS>')
+    ? v : null
+}
+
+/** 动态请求头规则判别（**raw 源版**，供 SourceRegistry.load 存量重推）：
+ *  raw.header 是规则字符串 → 原文；raw 在场但非规则 → null；raw 不是对象 → undefined（调用方别动）。
+ *  规则形态**不是**「非法 JSON」——它是 legado 的合法 header 形态，旧版 normalize 当坏 JSON
+ *  丢弃（顶点小说 4004 的根因），存量靠 load 第七条迁移按 raw 重推。 */
+export function rawHeaderRule(raw: unknown): string | null | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  return normalizeHeaderRule((raw as Record<string, unknown>).header)
 }
 
 // ── Native（android-ebook 原生规则格式）────────────────────────────────

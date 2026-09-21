@@ -91,11 +91,24 @@ export class Shelf {
 
   /** 移除并防抖落盘；返回是否命中 */
   remove(bookKey: string): boolean {
-    const idx = this.books.findIndex((b) => b.bookKey === bookKey)
-    if (idx === -1) return false
-    this.books.splice(idx, 1)
+    return this.removeMany([bookKey]).length === 1
+  }
+
+  /** 批量移除（书架多选删除的写口）：一趟扫描裁掉全部命中项，**返回被删条目**（调用方据此
+   *  处理连带副作用——本地书副本连删只该对本就在架的键做，与单删的 `removed && isLocal` 同一条）；
+   *  未知键静默跳过、重复键幂等，只 schedule 一次落盘。 */
+  removeMany(bookKeys: readonly string[]): ShelfBook[] {
+    const want = new Set(bookKeys)
+    if (want.size === 0) return []
+    const gone: ShelfBook[] = []
+    this.books = this.books.filter((b) => {
+      if (!want.has(b.bookKey)) return true
+      gone.push(b)
+      return false
+    })
+    if (gone.length === 0) return gone
     this.writer.schedule(this.file, this.books)
-    return true
+    return gone
   }
 
   /** 等待防抖写落地（测试/进程退出前调用） */

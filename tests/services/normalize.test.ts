@@ -123,6 +123,15 @@ describe('对象形态方言（legado 嵌套导出）', () => {
     expect(rules.ruleDetailLastChapter).toBe('tag.a.last@text')
     expect(rules.ruleTocUrl).toBe('tag.a.toc@href')
   })
+  it('ruleBookInfo.init → ruleDetailInit（详情上下文初始化规则——legado BookInfo.init 口径，2026-09 补）', () => {
+    const r = normalizeSource({
+      bookSourceName: 'A', bookSourceUrl: 'https://a', ruleContent: 'x',
+      ruleBookInfo: { init: '$.data.bookInfo', name: '$.name' },
+    })
+    expect(r.ok).toBe(true)
+    expect(r.source!.rules.ruleDetailInit).toBe('$.data.bookInfo')
+    expect(r.source!.rules.ruleDetailName).toBe('$.name')   // 同上下文其余字段照常映射
+  })
   it('ruleToc → ruleChapterList/Name/Url + nextTocUrl；ruleContent → ruleContent/nextPageUrl', () => {
     const rules = normalizeSource(objectSource).source!.rules
     expect(rules.ruleChapterList).toBe('@css:#chs@li')
@@ -288,28 +297,25 @@ describe('bookSourceType（内容形态，增补 2026-09-16）', () => {
       expect(r.warnings).toHaveLength(0)
     }
   })
-  it('1/2/3 → image/audio/file，点名拒绝——文案是「类型不支持」而非「缺正文规则」', () => {
+  it('1/2/3 → audio/image/file（legado BookSourceType 真值：1=音频、2=图片、3=文件——此前映射读反），点名拒绝', () => {
     const msgOf = (v: number): string => {
       const r = normalizeSource({ ...base, bookSourceType: v })
       expect(r.ok).toBe(false)
       return r.missing.find((m) => m.field === 'bookSourceType')?.message ?? '(无)'
     }
-    expect(msgOf(1)).toContain('图片')
-    expect(msgOf(2)).toContain('音频')
+    expect(msgOf(1)).toContain('音频')
+    expect(msgOf(2)).toContain('图片')
     expect(msgOf(3)).toContain('文件')
   })
   it('非文本源即便带 ruleContent 也拒绝——不是缺不缺正文的问题，是规则体系不同', () => {
     expect(normalizeSource({ ...base, bookSourceType: 2 }).ok).toBe(false)
   })
-  it('未知数值/非整数 → text + warning（宁吵不瞒，不拦）', () => {
-    const r7 = normalizeSource({ ...base, bookSourceType: 7 })
-    expect(r7.ok).toBe(true)
-    expect(r7.source!.type).toBe('text')
-    expect(r7.warnings.some((w) => w.field === 'bookSourceType')).toBe(true)
-    const rS = normalizeSource({ ...base, bookSourceType: '2' })
-    expect(rS.ok).toBe(true)
-    expect(rS.source!.type).toBe('text')
-    expect(rS.warnings.some((w) => w.field === 'bookSourceType')).toBe(true)
+  it('认不出的编码 → unknown 并拒绝：读不懂不等于文本（书架诊断实证）', () => {
+    for (const v of [4, 7] as const) {
+      const r = normalizeSource({ ...base, bookSourceType: v })
+      expect(r.ok).toBe(false)
+      expect(r.missing.find((m) => m.field === 'bookSourceType')?.message).toContain('未知')
+    }
   })
 })
 describe('分组拆分 splitGroups（修复 2026-09-16：真实导出是逗号分隔）', () => {

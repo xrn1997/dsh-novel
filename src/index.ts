@@ -44,6 +44,10 @@ export interface NovelConfig {
   dataDir?: string
   searchTimeoutMs?: number
   searchParallel?: number
+  /** js 沙箱预算（vm 同步闸与异步总时长共用；引擎缺省 2000ms 只作回退）。
+   *  缺省 15000：legado Rhino 无硬超时，真实源的多请求目录脚本（java.ajax×2 + md5 签名，
+   *  txs12 源实测）2s 预算必炸——探针 verified 只证明搜索面，正文链路靠这个预算放行。 */
+  jsTimeoutMs?: number
   cacheMaxBytes?: number
   exportDelayMs?: number
   localImportMaxBytes?: number
@@ -54,6 +58,7 @@ export const Config = Schema.object({
   dataDir: Schema.string(),
   searchTimeoutMs: Schema.number(),
   searchParallel: Schema.number(),
+  jsTimeoutMs: Schema.number(),
   cacheMaxBytes: Schema.number(),
   exportDelayMs: Schema.number(),
   localImportMaxBytes: Schema.number(),
@@ -65,6 +70,7 @@ export const Config = Schema.object({
 const DEFAULTS = {
   searchTimeoutMs: 15_000,
   searchParallel: 5,
+  jsTimeoutMs: 15_000,
   cacheMaxBytes: 200 * 1024 * 1024,
   exportDelayMs: 300,
   localImportMaxBytes: 50 * 1024 * 1024,
@@ -84,6 +90,7 @@ function assertConfig(c: NovelConfig): void {
   }
   check('searchParallel', c.searchParallel, Number.isInteger(c.searchParallel) && (c.searchParallel ?? 0) >= 1)
   check('searchTimeoutMs', c.searchTimeoutMs, (c.searchTimeoutMs ?? 0) > 0)
+  check('jsTimeoutMs', c.jsTimeoutMs, (c.jsTimeoutMs ?? 0) > 0)
   check('cacheMaxBytes', c.cacheMaxBytes, (c.cacheMaxBytes ?? 0) >= 0)
   check('exportDelayMs', c.exportDelayMs, (c.exportDelayMs ?? 0) >= 0)
   check('localImportMaxBytes', c.localImportMaxBytes, (c.localImportMaxBytes ?? 0) > 0)
@@ -102,9 +109,11 @@ export function apply(ctx: Context, config?: NovelConfig): void {
   applied = true
   const c = ctx as unknown as NovelContext
 
-  // 沙箱 unhandledRejection 常驻防线：导入书源时探针逐源跑 @js，脚本常 fire-and-forget 调
-  // java.ajax（不 await 不 catch），其 rejection 在 ajax settle 后才悬空触发。Node 20+ 默认
-  // 把这类 unhandled rejection 当致命 → 整个 dsh 进程死（用户看到「请求失败 403/404」fatal）。
+  // 沙箱 unhandledRejection 常驻防线：脚本在 vm realm 里**自建**又 fire-and-forget 的异步工作
+  // （Promise 与宿主同一 isolate），其 rejection 会悬空冒到进程顶层。Node 20+ 默认把这类
+  // unhandled rejection 当致命 → 整个 dsh 进程死（用户看到「请求失败 403/404」fatal），
+  // 尤其在导入书源时（探针逐源跑 @js）。java.ajax 本身已不再产出 Promise（同步语义唯一，
+  // 见 engine/js-sandbox.ts 的哨兵口径），但这条防线仍然必需。
   // 挂上后常驻至插件 dispose——早前「evalJs 期间挂、finally 摘」摘早了照样漏。
   ctx.effect(() => {
     const detach = ensureUnhandledGuard()
@@ -134,6 +143,7 @@ export function apply(ctx: Context, config?: NovelConfig): void {
       dir,
       searchTimeoutMs: config?.searchTimeoutMs ?? DEFAULTS.searchTimeoutMs,
       searchParallel: config?.searchParallel ?? DEFAULTS.searchParallel,
+      jsTimeoutMs: config?.jsTimeoutMs ?? DEFAULTS.jsTimeoutMs,
       cacheMaxBytes: config?.cacheMaxBytes ?? DEFAULTS.cacheMaxBytes,
       localImportMaxBytes: config?.localImportMaxBytes ?? DEFAULTS.localImportMaxBytes,
       proxyUrl,

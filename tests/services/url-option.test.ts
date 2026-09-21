@@ -19,6 +19,13 @@ describe('URL 选项后缀（splitUrlOption / absUrlKeepOption / canonUrl）', (
     expect(splitUrlOption('https://x.com/read/{a,b}')).toEqual({ url: 'https://x.com/read/{a,b}', suffix: null })
     expect(stripUrlOption('https://x.com/c/1.html')).toBe('https://x.com/c/1.html')
   })
+  it('选项尾段不是合法 JSON 也切分（legado 无条件 substringBefore(paramPattern) 口径）', () => {
+    // 弯引号形态 `,{webView:“true”}`（真实源 @js 拼接）此前不剥 → 整串进 URL → 章节 404
+    const r = splitUrlOption('/c/4.html,{webView:“true”}')
+    expect(r).toEqual({ url: '/c/4.html', suffix: ',{webView:“true”}' })
+    const malformed = splitUrlOption('/c/5.html,{not json}')
+    expect(malformed).toEqual({ url: '/c/5.html', suffix: ',{not json}' })
+  })
   it('绝对化并保留选项（章节 URL 组装口径）', () => {
     expect(absUrlKeepOption('/c/2.html,{"method":"POST","body":"cid={{id}}"}', 'https://x.com/c/1.html'))
       .toBe('https://x.com/c/2.html,{"method":"POST","body":"cid={{id}}"}')

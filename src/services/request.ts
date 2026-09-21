@@ -1,4 +1,4 @@
-import { interpolateUrl } from '../engine/index.js'
+import { interpolateUrl, URL_OPTION_SPLIT } from '../engine/index.js'
 import { absUrl } from './url.js'
 
 /** legado URL 模板请求形态（官方文档 §URL必知必会 钉死）：
@@ -34,23 +34,22 @@ export interface RequestPlan {
 /** 兼容别名：历史名字（搜索面/详情面旧 import 路径不改） */
 export type SearchRequest = RequestPlan
 
-/** `,{` 切分（逗号后紧跟花括号——URL 本身含逗号时不受影响）。
- *  允许逗号两侧空白（legado paramPattern `\s*,\s*(?=\{)` 考证：真实源大量写 `, {...}` 带空格——
- *  此前不许空格导致选项串被并进 URL，165 条源的 POST/charset 选项全部失效）。 */
-const OPTION_SPLIT = /\s*,\s*(?=\{)/
-
+/** `,{` 切分单点在 `engine/template.ts` 的 `URL_OPTION_SPLIT`（legado paramPattern 原文、
+ *  「不许空格曾让 165 条源的选项失效」病史都记在那里）——本文件与 `engine/js-protocol.ts`
+ *  共用同一式，不再各抄一份。 */
 /** searchUrl → { URL 部分, 选项 }。不含 `,{` → 选项 undefined。 */
 export function parseUrlOption(template: string): { urlPart: string; option: RequestOption | undefined } {
-  const m = OPTION_SPLIT.exec(template)
+  const m = URL_OPTION_SPLIT.exec(template)
   if (m === null) return { urlPart: template, option: undefined }
+  // legado `AnalyzeUrl.analyzeUrl` 口径：paramPattern（`\s*,\s*(?=\{)`）命中即**无条件切分** URL——
+  // 选项 JSON 是否合法只决定「拿没拿到选项」，不决定「URL 干不干净」。旧行为解析失败时把整串
+  // （含 `,{…}`）当 URL 发出 → 站点 404（年代小说 chapterUrl 拼 `,{webView:“true”}` 弯引号形态实证；
+  // legado 对它同样解析失败，但 URL 已在解析**之前**切干净，只是没有选项）。
   const urlPart = template.slice(0, m.index).trimEnd()
   const option = parseOptionJson(template.slice(m.index + m[0].length))
-  // 选项解析不了 → 整串当纯 URL（诚实失败于请求层，不半途猜结构）。
-  // 但**留痕**：同仓 normalize 对非法的 header 是 warning+忽略，此处此前完全静默——
-  // 静默改语义（GET 打向含 ,{...} 的地址）难以排障，warn 让「选项没生效」可见而不改变委托。
   if (option === undefined) {
-    console.warn(`[dsh-novel] URL 选项不是合法 JSON，整串按纯 URL 处理（选项未生效）：${JSON.stringify(template)}`)
-    return { urlPart: template, option: undefined }
+    // 留痕（同 normalize 的 header 口径）：让「选项没生效」可见，但不改变已切分的 URL。
+    console.warn(`[dsh-novel] URL 选项不是合法 JSON，按无选项请求（URL 已切分）：${JSON.stringify(template)}`)
   }
   return { urlPart, option }
 }
@@ -140,18 +139,12 @@ export function fetchInitOf(
  *  只认「逗号 + 完整 JSON 对象收尾」形态（严格 JSON 或单引号形态），正文里的 `{a,b}` 不误剥。
  *  `suffix` 是**原文**（含逗号），绝对化后原样接回——选项语义由 assembleRequest 在抓取时解释。 */
 export function splitUrlOption(href: string): { url: string; suffix: string | null } {
-  const m = OPTION_SPLIT.exec(href)
+  const m = URL_OPTION_SPLIT.exec(href)
   if (m === null) return { url: href, suffix: null }
-  const tail = href.slice(m.index + m[0].length).trim()
-  if (!tail.startsWith('{') || !tail.endsWith('}')) return { url: href, suffix: null }
-  const objOf = (t: string): unknown => {
-    try { return JSON.parse(t) as unknown } catch { return undefined }
-  }
-  const v = objOf(tail) ?? objOf(tail.replace(/'/g, '"'))
-  if (typeof v === 'object' && v !== null && !Array.isArray(v)) {
-    return { url: href.slice(0, m.index).trimEnd(), suffix: href.slice(m.index) }
-  }
-  return { url: href, suffix: null }
+  // 同 parseUrlOption 的 legado 口径（BookChapter.getAbsoluteURL 无条件 substringBefore(paramPattern)）：
+  // paramPattern 命中即切、**不校验尾段是不是合法 JSON**——后缀原文保留给抓取时的 assembleRequest
+  // 解释（解析失败 → 无选项 + warn，URL 已干净）；`{a,b}` 形态不受影响（逗号后不是 `{`，正则不命中）。
+  return { url: href.slice(0, m.index).trimEnd(), suffix: href.slice(m.index) }
 }
 
 /** URL 尾部的 `,{"webView":true}` 选项后缀剥离（兼容入口——语义即 splitUrlOption().url）。

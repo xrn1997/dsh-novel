@@ -12,7 +12,7 @@ export type {
   // 阅读面
   SearchHit, SearchGroup, ChapterEntry, BookDetail,
   // 书架面
-  ShelfProgress, ShelfBook,
+  ShelfProgress, ShelfBook, ShelfEntry,
   // 信封
   ApiEnvelope, ApiErrorBody,
 } from '../../shared/wire.js'

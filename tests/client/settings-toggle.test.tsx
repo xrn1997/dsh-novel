@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import type { ReactNode } from 'react'
 import { SourceList } from '../../src/client/views/SettingsSourceList.js'
 import { makeDeps } from './fake-deps.js'
-import type { FakeSettingsDeps } from './fake-deps.js'
+import type { FakeSettingsDeps, SettingsDepsOverrides } from './fake-deps.js'
 import { resetSourceListUi, UNGROUPED } from '../../src/client/source-list.js'
 import type { SourcePublic } from '../../src/client/views/types.js'
 
@@ -21,7 +21,7 @@ const src: SourcePublic = {
 }
 
 const view = (deps: FakeSettingsDeps): ReactNode =>
-  <SourceList sources={[src]} job={null} refresh={() => {}} onChanged={() => {}} onProbe={() => {}} onImport={() => {}} deps={deps} />
+  <SourceList sources={[src]} job={null} onChanged={() => {}} onProbe={() => {}} onImport={() => {}} deps={deps} />
 
 const checked = (): string | null => screen.getByRole('switch').getAttribute('aria-checked')
 
@@ -84,7 +84,7 @@ describe('SourceList 启停开关接线（deps seam 驱动）', () => {
     const deps = makeDeps()                                  // apiSend 缺省成功
     const off: SourcePublic = { ...src, enabled: false }
     const panel = (sources: SourcePublic[]): ReactNode =>
-      <SourceList sources={sources} job={null} refresh={() => {}} onChanged={() => {}} onProbe={() => {}} onImport={() => {}} deps={deps} />
+      <SourceList sources={sources} job={null} onChanged={() => {}} onProbe={() => {}} onImport={() => {}} deps={deps} />
     const { rerender } = render(panel([off]))
     expect(checked()).toBe('false')                          // 初始：停用
 
@@ -103,18 +103,36 @@ describe('SourceList 启停开关接线（deps seam 驱动）', () => {
 /** 停用 ≠ 免验（2026-09 用户裁定）：停用只摘掉「参与聚合搜索」这一件事——行内验证入口
  *  按状态出，不随 enabled 消失（病史：`!enabled` 门让停用源既点不动单源验证，又照样出现在
  *  待办收件箱的批量重验 id 集里，两个入口口径打架）。 */
-describe('SourceList 行内验证入口与启停正交', () => {
-  const panel = (over: Partial<SourcePublic>): { node: ReactNode; deps: FakeSettingsDeps } => {
-    const deps = makeDeps()
-    const node = <SourceList sources={[{ ...src, ...over }]} job={null} refresh={() => {}} onChanged={() => {}} onProbe={() => {}} onImport={() => {}} deps={deps} />
-    return { node, deps }
+describe('SourceList 行内验证入口与启停正交（编排收进 jobs.ts 领域动作）', () => {
+  const panel = (over: Partial<SourcePublic>, depsOver: SettingsDepsOverrides = {}): {
+    node: ReactNode; deps: FakeSettingsDeps; onChanged: ReturnType<typeof vi.fn>
+  } => {
+    const deps = makeDeps(depsOver)
+    const onChanged = vi.fn()
+    const node = <SourceList sources={[{ ...src, ...over }]} job={null} onChanged={onChanged} onProbe={() => {}} onImport={() => {}} deps={deps} />
+    return { node, deps, onChanged }
   }
 
-  it('停用 + 未验证 → 仍出「验证」钮，点击只验这一源', async () => {
-    const { node, deps } = panel({ enabled: false, status: 'unverified' })
+  it('停用 + 未验证 → 仍出「验证」钮，点击只验这一源；提交成功不就地重取源列表', async () => {
+    const { node, deps, onChanged } = panel({ enabled: false, status: 'unverified' })
     render(node)
     fireEvent.click(screen.getByText('验证'))
     await waitFor(() => expect(deps.startBatchProbeJob).toHaveBeenCalledWith(['s1']))
+    // 验证起任务 → 读任务。旧行为 verifyThis `.then(() => onChanged())` 与
+    // 待办/批量入口的 `.then(refreshJob)` 打架；提交成功后「催任务读面」的观测钉在
+    // jobs-verify.test.ts（缺省 refresh = refreshJob → 轮询立刻重拉）。
+    await new Promise((r) => setTimeout(r, 20))
+    expect(onChanged).not.toHaveBeenCalled()
+  })
+
+  it('行内验证失败 → 与其余入口同一份反馈文案「启动验证失败：…」（不再有第二份抄本）', async () => {
+    const { node, deps } = panel({ status: 'unverified' },
+      { startBatchProbeJob: vi.fn(async () => { throw new Error('boom') }) })
+    render(node)
+    fireEvent.click(screen.getByText('验证'))
+    await waitFor(() => expect(deps.pushError).toHaveBeenCalledTimes(1))
+    expect(String(deps.pushError.mock.calls[0][0])).toContain('启动验证失败')
+    expect(String(deps.pushError.mock.calls[0][0])).toContain('boom')
   })
 
   it('停用 + 坏源 → 仍出「重验」钮（异常还在，停用不是免验理由）', () => {
@@ -133,7 +151,7 @@ describe('SourceList 行内验证入口与启停正交', () => {
 describe('SourceList 分组下拉「未分组」伪选项', () => {
   const ungrouped: SourcePublic = { ...src, id: 's2', name: '源B', baseUrl: 'https://b.com', groups: [] }
   const renderWith = (sources: SourcePublic[]): HTMLSelectElement => {
-    render(<SourceList sources={sources} job={null} refresh={() => {}} onChanged={() => {}} onProbe={() => {}} onImport={() => {}} deps={makeDeps()} />)
+    render(<SourceList sources={sources} job={null} onChanged={() => {}} onProbe={() => {}} onImport={() => {}} deps={makeDeps()} />)
     return screen.getByLabelText('按分组过滤') as HTMLSelectElement
   }
 

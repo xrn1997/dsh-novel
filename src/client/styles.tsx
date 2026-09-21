@@ -104,14 +104,16 @@ export const NOVEL_CSS = `
   color: var(--novel-text);
 }
 /* ── 布局与宿主壳收口（与配色无关，别在改主题时弄丢：commit e25ff8e / ab2391d）──────
-   .novel-root 定高滚动；阅读器正文由宿主 resident scrollport 承载（会话视图区在 data-phase=active
-   下内容撑高，阅读器自己的容器 clientHeight == scrollHeight 永不滚动——见 src/client/reader-load.ts
-   头注）。工具栏要 sticky 就得让祖先链上没有别的滚动容器：这两层在本视图下放开 overflow。
-   其余视图（书架/搜索）保持原样：内容撑高时它们照样由宿主滚，定高时仍自带滚动条。 */
+   五分支共用同一条 overflow 链：.novel-root 定高 overflow:hidden、.novel-main
+   flex:1 + overflow-y:auto 自己滚（阅读器一视同仁），谁在滚由 src/client/scrollport.ts
+   向上探测判定（现即 .novel-main）。注意本文件是模板字符串：注释里不写反引号。
+   病史——**别把放开规则加回来**：阅读器曾放过这两层 overflow、把正文交给宿主 resident
+   scrollport（[data-conversation-scroll]）承载，那是 conversation.view 时代的前提；
+   a9f35f7 迁全局面板后祖先链是 centerCol/frame 双 overflow:hidden，链上再无 scrollport，
+   放开 = 整条链没人滚：滚轮无效、正文裁在首屏、scroll 事件永不发生（进度落盘/预取/回跳
+   一并死）。三链差分实测与病史细节见 docs/design/client.md「控制器层与正文层」。 */
 .novel-root { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 .novel-main { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-.novel-root:has([data-novel-view="reader"]) { overflow: visible; }
-.novel-main:has([data-novel-view="reader"]) { overflow-y: visible; }
 /* 「小说」视图在场时收掉宿主常驻 composer（AI 输入框）：它是会话壳的固定座位
    （scrollBody > [data-composer-seat]，data-phase=active 下 sticky bottom），view 环切换不卸载它，
    所以切到小说 tab 后它仍贴在底部、还压在正文上。宿主没有「本视图不需要输入框」的钩子
@@ -560,7 +562,7 @@ export const NOVEL_CSS = `
      ③ 现方案的上一版（兄弟 + 视口上限）：锚对了，但**flex 列里的条目会在滚动发生前先被
         flex-shrink 压扁**——实测每条 12px 高（60 条 850px 内容塞进 678px 容器），文字互相咬住。
         ③ 的两处修正：条目 flex: none（守卫钉住）+ 槽宽 0。
-   sticky 在本环境已被工具栏证明可用（同一祖先链、同一放开 overflow 的口径）。 */
+   sticky 在本环境已被工具栏证明可用（同一祖先链、同一 .novel-main 滚动口径）。 */
 .novel-drawer-slot {
   position: sticky; align-self: flex-start; top: calc(var(--novel-sp-7) + var(--novel-sp-1));
   flex: none; width: 0; height: 0; z-index: var(--novel-z-panel);
@@ -766,6 +768,39 @@ export const NOVEL_CSS = `
   background: color-mix(in srgb, var(--novel-bg) 60%, transparent);
   border-radius: var(--novel-r-xs); padding: var(--novel-sp-0) var(--novel-sp-2);
 }
+/* ── 来源 chip + 多选态（2026 书架两条新需求）────────────────────────────
+   来源 chip 钉在封面**左下**：右上归删除 ✕、左上归本地角标，四个角各司其职。
+   色点按 sourceId 派生四档——复用无封面降级那四档 token（hex 仍不出本层），
+   于是「同源同色、异源异色」在整架书上一眼可辨。源名超长省略（全名走 title 提示）。 */
+.novel-cover-box { position: relative; display: block; margin-bottom: var(--novel-sp-3); }
+.novel-cover-box > .novel-cover, .novel-cover-box > .novel-cover-fallback { margin-bottom: 0; }
+.novel-src-tag {
+  position: absolute; left: var(--novel-sp-2); bottom: var(--novel-sp-2); z-index: 1;
+  display: inline-flex; align-items: center; gap: var(--novel-sp-2);
+  max-width: calc(100% - var(--novel-sp-4));
+  font-size: var(--novel-fs-xs); color: var(--novel-text);
+  background: color-mix(in srgb, var(--novel-bg) 68%, transparent);
+  border-radius: var(--novel-r-xs); padding: var(--novel-sp-0) var(--novel-sp-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.novel-src-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.novel-src-t1 .novel-src-dot { background: var(--novel-cover-1); }
+.novel-src-t2 .novel-src-dot { background: var(--novel-cover-2); }
+.novel-src-t3 .novel-src-dot { background: var(--novel-cover-3); }
+.novel-src-t4 .novel-src-dot { background: var(--novel-cover-4); }
+/* 源已被删（服务端 join 不到）：灰字 + 灰点，不冒充一个还活着的来源 */
+.novel-src-tag.gone { color: var(--novel-text-3); }
+.novel-src-tag.gone .novel-src-dot { background: var(--novel-text-3); opacity: .55; }
+/* 多选态：勾选标记占左上（本地角标让位），选中卡片描边走强调色 */
+.novel-check {
+  position: absolute; top: var(--novel-sp-2); left: var(--novel-sp-2); z-index: 1;
+  width: 18px; height: 18px; border-radius: var(--novel-r-xs);
+  display: grid; place-items: center; line-height: 1; font-size: var(--novel-fs-xs);
+  background: color-mix(in srgb, var(--novel-bg) 62%, transparent);
+  border: 1px solid var(--novel-border-strong); color: var(--novel-on-solid);
+}
+.novel-cell.on .novel-check { background: var(--novel-brand); border-color: var(--novel-brand); }
+.novel-cell.on .novel-card { border-color: var(--novel-brand); }
 /* ── 模态确认（删除书籍等危险操作）：遮罩 + 居中对话框 + 危险色确认钮；
    Esc / 点遮罩取消，失败留在框内可重试（错误不再散落在页面流里）。── */
 .novel-modal-mask {

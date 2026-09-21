@@ -8,13 +8,23 @@ import { NOVEL_API_PREFIX, PARAMS, paramRoutes, pickShelfMeta, ROUTES, SEG } fro
 /** 「书不在架上」文案单点（此前 shelfPut 两形态逐字两份） */
 const NOT_ON_SHELF = '书不在架上，先带 title 调用加入'
 
-/** 非空 string[] body 校验单点（三处批路由同口径的手写块收口） */
-function requireIds(body: Record<string, unknown> | null): string[] {
-  const ids = body?.ids
-  if (!Array.isArray(ids) || ids.length === 0 || !ids.every((x) => typeof x === 'string')) {
-    throw new ApiError('body 需为非空 { ids: string[] }', 400, 'BadRequest')
+/** 非空 string[] body 校验单点（批路由同口径的手写块收口）；字段名是唯一变量（ids / keys） */
+function requireStringList(body: Record<string, unknown> | null, field: string): string[] {
+  const v = body?.[field]
+  if (!Array.isArray(v) || v.length === 0 || !v.every((x) => typeof x === 'string')) {
+    throw new ApiError(`body 需为非空 { ${field}: string[] }`, 400, 'BadRequest')
   }
-  return ids as string[]
+  return v as string[]
+}
+
+/** 源批路由的键集（书源 id） */
+function requireIds(body: Record<string, unknown> | null): string[] {
+  return requireStringList(body, 'ids')
+}
+
+/** 书架批路由的键集（bookKey——不是源 id，字段名也就不同名） */
+function requireKeys(body: Record<string, unknown> | null): string[] {
+  return requireStringList(body, 'keys')
 }
 
 /** 路由级可调参数。
@@ -242,6 +252,14 @@ async function route(
 
   // ── shelf 面 ────────────────────────────────────────────────────────
   if (a === SEG.shelf) {
+    if (b === SEG.batchDelete) {
+      // 书架批量删除（多选）：一趟删一批。本地书副本连删的 invariant 归门面 removeBooks——
+      // 与单删 removeBook 同一条，路由只做 body 校验与信封。bookKey 走 JSON body，不必编码。
+      guard(method, 'POST', ROUTES.shelfBatchDelete.path)
+      const body = await readJsonBody<Record<string, unknown> | null>(req, null)
+      writeOk(res, await service.removeBooks(requireKeys(body)))
+      return
+    }
     if (b === undefined && method === 'GET') {
       writeOk(res, service.shelfList())
       return
@@ -258,21 +276,39 @@ async function route(
     throw new ApiError(`方法不允许: ${method} ${NOVEL_API_PREFIX}/shelf${b === undefined ? '' : '/:key'}`, 405, 'MethodNotAllowed')
   }
 
-  // ── 整本导出（流式）───────────────────────────────────────────────────
+  // ── 章节范围导出（流式，from/to 缺席 = 全本）──────────────────────────
   if (a === SEG.export) {
     guard(method, 'GET', ROUTES.exportBook.path)
     const { sourceId, url: bookUrl } = requireSourceUrl(url)
     const title = url.searchParams.get(PARAMS.title)?.trim() || '未命名'
+    // 范围参数（1 基含端）：非整数 = 400（先于目录抓取，快速失败）；缺席 = 全本默认
+    const parseEdge = (name: string): number | null => {
+      const raw = url.searchParams.get(name)
+      if (raw === null || raw.trim() === '') return null
+      const n = Number(raw)
+      if (!Number.isInteger(n)) throw new ApiError(`缺或非法 query 参数 ${name}（需整数）`, 400, 'BadRequest')
+      return n
+    }
+    const fromRaw = parseEdge(PARAMS.from) ?? 1
+    const toRaw = parseEdge(PARAMS.to)
     // 首包前拿 toc：空目录走错误信封；同时喂 X-Novel-Total-Chapters。
-    // exportBook 内部会再 getToc 一次——目录已进 PageCache，零网络流量。
+    // exportBook 每章都会触发一次 getToc（getChapter 的正文槽位含章名，须先读目录，见 cache-epoch.contentSlot）——
+    // 目录已进 PageCache，这些调用全部命中缓存，零网络流量。
     const toc = await service.getToc(sourceId, bookUrl)
     if (toc.length === 0) throw new ApiError('目录为空，无内容可导出', 422, 'EmptyToc')
+    // 越界裁剪到 [1, 目录长]；裁剪后倒置 → 422。**范围判据的这一处即单点**：exportBook 只
+    // 接受裁好的 from/to（它另有一条越界即抛的前置校验，防的是未来新调用方，不是第二份策略）。
+    const clip = (n: number): number => Math.min(Math.max(n, 1), toc.length)
+    const from = clip(fromRaw)
+    const to = toRaw === null ? toc.length : clip(toRaw)
+    if (from > to) throw new ApiError(`导出范围非法：from(${from}) > to(${to})`, 422, 'BadRange')
     const ctrl = new AbortController()
     res.on('close', () => ctrl.abort())                    // 浏览器关页/取消 → 停止后续章节
     res.writeHead(200, {
       'content-type': 'text/plain; charset=utf-8',
       'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(title)}.txt`,
-      'x-novel-total-chapters': String(toc.length),
+      'x-novel-total-chapters': String(to - from + 1),      // 本次范围章数（非全书章数）
+      'x-novel-range': `${from}-${to}`,
     })
     const gen = exportBook(
       {
@@ -280,7 +316,7 @@ async function route(
         getChapter: (s, b, i) => service.getChapter(s, b, i),
       },
       sourceId, bookUrl,
-      { title, delayMs: opts.exportDelayMs ?? 300, signal: ctrl.signal },
+      { title, delayMs: opts.exportDelayMs ?? 300, from, to, signal: ctrl.signal },
     )
     try {
       for await (const chunk of gen) {

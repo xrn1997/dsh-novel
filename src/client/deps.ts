@@ -17,7 +17,7 @@ import { pushError, pushOk } from './transient.js'
  * SettingsDeps = ClientCoreDeps 超集（设置区再加任务面）——
  * 既有注入点与测试（makeDeps spread prodDeps）不受影响。
  *
- * ReaderDeps = ClientCoreDeps 超集（阅读区再加整本导出流）——三主视图自此同口径：
+ * ReaderDeps = ClientCoreDeps 超集（阅读区再加导出流）——三主视图自此同口径：
  * ShelfView/SearchView 吃核心束，ReaderView 吃阅读束，都 props 注入 + prod* 缺省。
  */
 export interface ClientCoreDeps {
@@ -58,7 +58,7 @@ export const prodDeps: SettingsDeps = {
   fetchJobStatus,
 }
 
-/** 阅读区依赖束：核心束超集 + 整本导出流（streamExport/saveBlob）。
+/** 阅读区依赖束：核心束超集 + 导出流（streamExport/saveBlob）。
  *  ReaderView 此前是三个主视图里唯一不吃 ClientCoreDeps 的——口径自此与 ShelfView/SearchView 齐平。 */
 export interface ReaderDeps extends ClientCoreDeps {
   /** 流式导出（fetch 流读取 → Blob）与落盘下载；编排归 export-run.ts */

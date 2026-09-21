@@ -33,6 +33,8 @@ const PINNED = [
   '选择或拖入 legado 书源文件',
   '导入是后台任务——提交后本窗自动关闭，任务在服务端继续',
   '停止搜索',
+  '来源已删除',
+  '删除所选',
 ]
 
 function collectText(dir: string, ext: RegExp): string {

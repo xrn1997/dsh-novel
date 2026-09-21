@@ -1,10 +1,12 @@
 /**
- * 真实滚动容器探测（宿主 resident scrollport 适配层）。
+ * 真实滚动容器探测（「谁在滚就按谁算」适配层）。
  *
- * 实测：DSH 会话视图区在 `data-phase=active` 下内容撑高，滚动条落在宿主的
- * `[data-conversation-scroll]` 上；阅读器自己的容器（`.novel-main` / 正文层）clientHeight 等于
- * scrollHeight，永不滚动。进度锚点与目录回跳若按自己的容器算，`scrollTop` 恒 0 → 进度永停第 0 章、
- * 跳章不移动。判据是纯函数（可单测），探测本身是薄 DOM 壳。
+ * 阅读器不假设滚动发生在哪个容器：从正文向上找第一个真正在滚的祖先（现即 `.novel-main`
+ * 自己——五分支共用 `.novel-main` 的 overflow-y:auto）。历史：conversation.view 时代阅读器
+ * 放开自己两层 overflow、滚动落在宿主 resident scrollport（`[data-conversation-scroll]`）上，
+ * 向上探测正是为它而做；a9f35f7 迁全局面板后宿主链上再无 scrollport，放开规则已删
+ * （病史见 docs/design/client.md），但探测保持通用——进度锚点与目录回跳一律按探测结果算，
+ * 不赌容器身份。找不到 → null（= 文档自身在滚）。判据是纯函数（可单测），探测本身是薄 DOM 壳。
  */
 
 /** 一个元素算不算「真正在滚」的滚动容器：overflow-y 可滚且内容确实超出 */

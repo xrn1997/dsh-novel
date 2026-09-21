@@ -17,9 +17,15 @@
 /** 书源状态：未验证 / 探针通过 / 探针判坏 */
 export type SourceStatus = 'unverified' | 'verified' | 'broken'
 
-/** 书源内容形态（legado bookSourceType：0/-1/缺省=文本，1=图片，2=音频，3=文件）。
- *  本插件只支持文本源——非文本在导入预检点名拒绝。 */
-export type SourceContentKind = 'text' | 'image' | 'audio' | 'file'
+/** 书源内容形态（legado bookSourceType：0/-1/缺省=文本，**1=音频，2=图片，3=文件**——
+ *  真值锚点 legado-with-MD3 `constant/BookSourceType.kt`；此前本仓注释与映射把 1/2 读反）。
+ *  `unknown` = **编码读不懂**（不是 legado 认得的整数值），不是第五种媒介而是「这本文源不规范」：
+ *  读不懂不等于文本，一律不进参与集（2026-09 裁定，推翻此前「warning 后按文本处理」——
+ *  误标 text 的短剧/漫画源一直混进聚合搜索与文字书架）。它也不写 `status`：探针按搜索面
+ *  重判 verified/broken，而这类源的搜索面恰恰是好的，用状态承载会被下一次重验洗白。
+ *  本插件当前只支持文本源：导入预检点名拒绝非文本与未知；聚合搜索参与集 = enabled ∧ type==='text'
+ *  （判定单点在 reading 的 participates 谓词）；存量误标由 SourceRegistry.load 按 raw 重推收敛。 */
+export type SourceContentKind = 'text' | 'image' | 'audio' | 'file' | 'unknown'
 
 /** 探针失败原因：引擎三类 + 抓取两类 + 规则缺失；'Error' 为兜底（出现即分类漏了） */
 export type ProbeErrorCode =
@@ -107,8 +113,9 @@ export interface SearchGroup {
 }
 
 /** 聚合搜索后台任务的**读面快照**（跨半契约形状；服务端如何持有整轮结果属服务层，不上 wire）。
- *  为什么是「服务端持有 + 显式快照查询」：`conversation.view` 是「一次只渲染一个」的座位，
- *  浏览器半自持在途循环 ⇒ 切界面即丢结果（实测：卸载后剩余批次还发完、重挂载整轮重打）。
+ *  为什么是「服务端持有 + 显式快照查询」：中央呈现座位一次只渲染一个面板（`main` keyed 槽；
+ *  此前 `conversation.view`），浏览器半自持在途循环 ⇒ 切走即丢结果（实测：卸载后剩余批次还
+ * 发完、重挂载整轮重打）。
  *  官方另要求「需要可靠恢复的 stateful domain 必须提供 baseline、cursor 或显式 query」
  *  （`docs/reference/dsh-plugin-api.md` §9）——`added`/`next` 就是那个 cursor。
  *  `phase` 与 `JobState` 同一套词汇：UI 的「还在跑吗」判据（`phase !== 'running'`）只此一种。 */
@@ -179,7 +186,8 @@ export interface ShelfBook {
  *  「名称 × wire 类型判别 × 归一化」只准活在这张表 + pickShelfMeta 里。
  *  消费方三面：Shelf.applyPatch（保值覆盖遍历表）、shelfBody（客户端 body 构造）、
  *  dispatch.shelfPut（未知 JSON body → 归一化字段）。加一个书目字段 = 改这张表。
- *  bookKey（身份）/ progress、addedAt（系统字段）不属于元数据写口，不进表。 */
+ *  bookKey（身份）/ progress、addedAt（系统字段）不属于元数据写口，不进表；
+ *  来源投影（sourceName，见 ShelfEntry）也不进——它不可 patch、不落盘。 */
 export const SHELF_META = {
   sourceId: 'string',
   title: 'string',
@@ -191,6 +199,13 @@ export const SHELF_META = {
 } as const
 
 export type ShelfMetaField = keyof typeof SHELF_META
+
+/** 书架**读取面**条目：落盘的 ShelfBook + 来源投影 sourceName。
+ *  来源投影 = 服务端 list 时拿 sourceId 去书源注册表 join 出来的源名（与 SearchGroup.sourceName 同一口径）：
+ *  源已被删 → null（UI 灰字「来源已删除」），本地书恒 null（本地身份归 LOCAL_SOURCE_ID 判别）。
+ *  它不是书目字段：不可 patch、绝不进 shelf.json——所以刻意不进 SHELF_META（进表 = 变成可写元数据）。
+ *  加书那刻快照源名是**被否决的方案**：源改名/同址替换复用 id 后名字会陈旧（intake 复用旧 id 见 services.md）。 */
+export type ShelfEntry = ShelfBook & { sourceName: string | null }
 
 /** 书目元数据 patch：null/undefined 键 = 保值（Shelf.update 的 interface 语义，见 shelf.ts） */
 export type ShelfMetaPatch = { [K in ShelfMetaField]?: ShelfBook[K] | null }
@@ -258,7 +273,7 @@ export const SEG = {
 export interface Route { path: string; segs: string[] }
 export function route(...segs: string[]): Route { return { path: segs.join('/'), segs } }
 
-/** 静态路由表（无参数的部分，共 20 条；另有 5 条参数路由见 paramRoutes）——
+/** 静态路由表（无参数的部分，共 21 条；另有 5 条参数路由见 paramRoutes）——
  *  路由总数由 tests/shared/wire-builders.test.ts 钉死（此前的「17 条路由」注释既烂又无测试）。 */
 export const ROUTES = {
   health: route(),
@@ -283,6 +298,9 @@ export const ROUTES = {
   toc: route(SEG.toc),
   chapter: route(SEG.chapter),
   shelf: route(SEG.shelf),
+  /** 书架批量删除（多选）：body `{ keys: string[] }`（keys = bookKey，走 JSON body 故无需编码）；
+   *  一趟删一批，替代客户端循环 N 次 DELETE shelf/:key——本地书连带删副本的 invariant 同单删一条 */
+  shelfBatchDelete: route(SEG.shelf, SEG.batchDelete),
   exportBook: route(SEG.export),
   localImport: route(SEG.local, SEG.import),
   local: route(SEG.local),
@@ -314,6 +332,9 @@ export const PARAMS = {
   id: 'id',
   title: 'title',
   refresh: 'refresh',
+  /** 导出范围（1 基含端章号）：缺席 = 全本（向后兼容零参数旧链接） */
+  from: 'from',
+  to: 'to',
   /** 搜索任务快照的增量游标：只回 `groups[since..]`（完成序累积，见 SearchJobState） */
   since: 'since',
 } as const
@@ -352,8 +373,8 @@ export const queries = {
     `${ROUTES.toc.path}?${encodeQuery({ [PARAMS.sourceId]: p.sourceId, [PARAMS.url]: p.url, [PARAMS.refresh]: p.refresh === true ? '1' : undefined })}`,
   chapter: (p: SourceUrlParams & { index: number; refresh?: boolean }): string =>
     `${ROUTES.chapter.path}?${encodeQuery({ [PARAMS.sourceId]: p.sourceId, [PARAMS.url]: p.url, [PARAMS.index]: p.index, [PARAMS.refresh]: p.refresh === true ? '1' : undefined })}`,
-  exportBook: (p: SourceUrlParams & { title?: string }): string =>
-    `${ROUTES.exportBook.path}?${encodeQuery({ [PARAMS.sourceId]: p.sourceId, [PARAMS.url]: p.url, [PARAMS.title]: p.title })}`,
+  exportBook: (p: SourceUrlParams & { title?: string; from?: number; to?: number }): string =>
+    `${ROUTES.exportBook.path}?${encodeQuery({ [PARAMS.sourceId]: p.sourceId, [PARAMS.url]: p.url, [PARAMS.title]: p.title, [PARAMS.from]: p.from, [PARAMS.to]: p.to })}`,
   localImport: (p: { name: string }): string =>
     `${ROUTES.localImport.path}?${encodeQuery({ [PARAMS.name]: p.name })}`,
   localDelete: (p: { id: string }): string =>

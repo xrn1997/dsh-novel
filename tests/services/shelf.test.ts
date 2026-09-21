@@ -70,6 +70,26 @@ describe('Shelf', () => {
     expect((await Shelf.load(dir)).list()).toHaveLength(0)
   })
 
+  // ── 批量删（书架多选删除的服务端写口；N 次 remove 的替身）──────────────────
+  describe('removeMany（一趟删多本）', () => {
+    it('返回被删条目（按架内序）、未点名的留着，落盘一次', async () => {
+      const { s, dir } = await tmpShelf()
+      for (const k of ['a', 'b', 'c']) s.add({ sourceId: 'u', bookKey: k, title: k.toUpperCase() })
+      const gone = s.removeMany(['a', 'c'])
+      expect(gone.map((b) => b.bookKey)).toEqual(['a', 'c'])
+      expect(s.list().map((b) => b.bookKey)).toEqual(['b'])
+      await s.flush()
+      expect((await Shelf.load(dir)).list().map((b) => b.bookKey)).toEqual(['b'])
+    })
+    it('未知键静默跳过、重复键幂等（不产出重复条目）', async () => {
+      const { s } = await tmpShelf()
+      s.add({ sourceId: 'u', bookKey: 'a', title: 'A' })
+      expect(s.removeMany(['a', 'a', 'nope']).map((b) => b.bookKey)).toEqual(['a'])
+      expect(s.removeMany(['nope', 'nope'])).toEqual([])
+      expect(s.list()).toHaveLength(0)
+    })
+  })
+
   // ── patch 写口：「null/undefined 键 = 保值」语义在 interface 上，
   //    不再是调用方民俗（此前三处复读同一纪律，该用例覆盖的两处已修缺陷）─────────────
   describe('update（patch 写口）', () => {

@@ -249,7 +249,12 @@ function classifySegment(el: string, ctx: ParseCtx, isLast: boolean): Segment {
   if (raw.startsWith('$')) return { kind: 'jsonpath', path: raw }
   // XPath：@XPath:/@xpath: 前缀 或 //、.//、/ 开头（274 条真实规则形态）
   if (low.startsWith('xpath:')) return { kind: 'xpath', path: raw.slice(6) }
-  if (raw.startsWith('//') || raw.startsWith('.//') || raw.startsWith('/')) return { kind: 'xpath', path: raw }
+  // `/` 开头**但含 `{{}}` 插值 → 是 URL 模板不是 XPath**：插值优先于前缀判定，落到下方
+  // isLiteralForm 成为字面段。真机实证：顶点小说 tocUrl `/…/{{$.novelId}}/chapters` 被本分支
+  // 抢先截走 → 插值步报「XPath 步骤不支持」。显式 @xpath: 前缀仍优先（上一行已先行返回）。
+  if ((raw.startsWith('//') || raw.startsWith('.//') || raw.startsWith('/')) && !raw.includes('{{')) {
+    return { kind: 'xpath', path: raw }
+  }
   if (low.startsWith('js:')) return { kind: 'js', code: raw.slice(3), form: 'at-js' }
   if (low.startsWith('put:')) return { kind: 'put', pairsRaw: raw.slice(4) }
   if (low.startsWith('get:')) return { kind: 'getvar', name: raw.slice(4) }
@@ -381,7 +386,12 @@ function classifyDefault(raw: string, exclude: number[] | undefined, el: string,
 
   // 位置后缀：从最后一个 . 起，取第一个能解析为 IndexSpec 的后缀；
   // 都不成立则整串是名称（class.note.clearfix → arg 'note.clearfix'，不许在第一个 . 截断）
-  const { base: name, index: dotIndex } = splitIndexSuffix(target)
+  const { base: rawName, index: dotIndex } = splitIndexSuffix(target)
+  // 尾点号剥离（legado ElementsSingle 口径）：`tag.li.!0:1:-1` 的 !排除 切走后 base 是 `tag.li.`——
+  // legado 对 beforeRule 是 split(".") 后**逐段取用**，尾部空串自然丢弃；我们把 `li.` 整段当
+  // arg 喂给 css-select 就炸「Expected name, found .」（看书源 nextTocUrl 实证）。只剥**尾部**
+  // 连续点号：中段点仍是名称/选择器的一部分（class.note.clearfix 语义不动）。
+  const name = rawName.replace(/\.+$/, '')
   const index = bracket?.index ?? dotIndex
 
   const dot = name.indexOf('.')

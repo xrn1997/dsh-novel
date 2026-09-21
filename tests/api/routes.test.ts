@@ -80,7 +80,7 @@ describe('路由契约：ROUTES → 真实 dispatch 落点', () => {
   })
 
   it('已知 POST-only 子路由用错方法 → 405（此前 404-未知路由）', async () => {
-    for (const r of [ROUTES.sourcesImport, ROUTES.sourcesBatchProbe, ROUTES.sourcesBatchEnabled, ROUTES.sourcesBatchDelete, ROUTES.localImport, ROUTES.searchJob, ROUTES.searchJobCancel]) {
+    for (const r of [ROUTES.sourcesImport, ROUTES.sourcesBatchProbe, ROUTES.sourcesBatchEnabled, ROUTES.sourcesBatchDelete, ROUTES.shelfBatchDelete, ROUTES.localImport, ROUTES.searchJob, ROUTES.searchJobCancel]) {
       const res = await call(r.path, 'GET')
       expect(res.status, r.path).toBe(405)
       expect(res.json.error.code, r.path).toBe('MethodNotAllowed')

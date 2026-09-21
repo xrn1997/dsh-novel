@@ -132,8 +132,71 @@ describe('SourceRegistry', () => {
   })
 })
 
-describe('load 分组迁移（逗号粘连存量收敛）', () => {
-  it('早期形态「A,B 一段」在 load 时拆开并落盘；幂等', async () => {
+describe('load 内容形态迁移（bookSourceType 编码订正的存量收敛）', () => {
+  it('raw.bookSourceType=2 的存量源：type 由误标的 text 重推为 image（legado 2=图片）；enabled 不动', async () => {
+    const dir = await tmp()
+    const reg = await SourceRegistry.load(dir)
+    await reg.edit((tx) => tx.add(normalizeSource(raw)))
+    await reg.edit(() => {
+      const s = reg.list()[0]
+      s.type = 'text'                                    // 迁移前的存量误标形态
+      s.raw = { ...(s.raw as Record<string, unknown>), bookSourceType: 2 }
+    })
+    await reg.flush()
+    const re = (await SourceRegistry.load(dir)).list()[0]
+    expect(re.type).toBe('image')                        // legado BookSourceType 真值：2=图片
+    expect(re.enabled).toBe(true)                        // 迁移不动启用态
+  })
+  it('未知数值（如 4）的存量源：按 raw 重推为 unknown——退出参与集，但不打 status（探针会洗白）', async () => {
+    const dir = await tmp()
+    const reg = await SourceRegistry.load(dir)
+    await reg.edit((tx) => tx.add(normalizeSource(raw)))
+    await reg.edit(() => {
+      const s = reg.list()[0]
+      s.raw = { ...(s.raw as Record<string, unknown>), bookSourceType: 4 }
+    })
+    await reg.flush()
+    const re = (await SourceRegistry.load(dir)).list()[0]
+    expect(re.type).toBe('unknown')
+    expect(re.enabled).toBe(true)                         // 只出参与集，不动启用态
+  })
+  it('存量 raw 无 bookSourceType 字段 → text（Native 方言根本不产这个字段，缺省是合法形态）', async () => {
+    const dir = await tmp()
+    const reg = await SourceRegistry.load(dir)
+    await reg.edit((tx) => tx.add(normalizeSource(raw)))
+    await reg.flush()
+    const re = (await SourceRegistry.load(dir)).list()[0]
+    expect(re.type).toBe('text')
+  })
+  it('raw.ruleBookInfo.init 存在而 rules 缺 ruleDetailInit → load 按 raw 重推（init 换根映射的存量收敛——QQ 源真机判别实证：缺键则换根静默不生效、tocUrl 回退 → EmptyToc）', async () => {
+    const dir = await tmp()
+    const reg = await SourceRegistry.load(dir)
+    await reg.edit((tx) => tx.add(normalizeSource({
+      bookSourceName: 'QQ', bookSourceUrl: 'https://qq.example.com', ruleContent: 'x',
+      ruleBookInfo: { init: '$.data.bookInfo', name: '$.name' },
+    })))
+    expect(reg.list()[0].rules.ruleDetailInit).toBe('$.data.bookInfo')   // 入库时已映射
+    await reg.edit(() => {
+      const s = reg.list()[0]
+      delete (s.rules as unknown as Record<string, unknown>).ruleDetailInit          // 模拟旧版派生的存量形态
+    })
+    await reg.flush()
+    expect((await SourceRegistry.load(dir)).list()[0].rules.ruleDetailInit).toBe('$.data.bookInfo')
+  })
+  it('raw 无 init 而 rules 键缺席 → load 补 null（NormalizedRules 是 required 形状，键应恒在场）', async () => {
+    const dir = await tmp()
+    const reg = await SourceRegistry.load(dir)
+    await reg.edit((tx) => tx.add(normalizeSource(raw)))
+    await reg.edit(() => {
+      const s = reg.list()[0]
+      delete (s.rules as unknown as Record<string, unknown>).ruleDetailInit
+    })
+    await reg.flush()
+    expect((await SourceRegistry.load(dir)).list()[0].rules.ruleDetailInit).toBeNull()
+  })
+})
+
+describe('load 分组迁移（逗号粘连存量收敛）', () => {  it('早期形态「A,B 一段」在 load 时拆开并落盘；幂等', async () => {
     const dir = await tmp()
     const reg = await SourceRegistry.load(dir)
     const src = await reg.edit((tx) => tx.add(normalizeSource(raw)))

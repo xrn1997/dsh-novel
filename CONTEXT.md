@@ -34,6 +34,7 @@ _Avoid_: 规则格式
 
 **搜索面（search face）**:
 从「书源搜索规则 + 关键词」到「命中条目 + 首条书名」的完整请求语义；聚合搜索与探针共用同一份。
+聚合搜索的参与集 = **启用 ∧ 文本源**（`type === 'text'`——本插件当前仅支持小说文本面；将来支持其他媒介只扩 reading 的 `participates` 谓词一处，不许散落第二处判别；非文本源留库、不删、不改启用态，只是不参搜。**未知形态 `unknown`** = `bookSourceType` 不是 legado 认得的整数值（0/-1/1/2/3 之外）：读不懂不等于文本，同样不参搜，导入预检点名拒绝（文案印成「类型 4（未知）」），存量由 `SourceRegistry.load` 按 raw 重推收敛。刻意**不写成 `status: 'broken'`**——探针按搜索面判 verified，坏源那条道会被下一次重验洗白）。
 _Avoid_: 搜索服务
 
 **请求组装（request assembly）**:
@@ -44,7 +45,7 @@ _Avoid_: 请求工具、fetch 封装（抓取与解码归守门 fetcher）
 
 **面（facet）**:
 规则求值的上下文之一：rule / search / detail / toc / content。
-_Avoid_: 场景、模式
+_Avoid_: 场景、模式（`EpochImpact`「影响面」是**另一条轴**——改一个规则字段会作废哪些面的缓存，刻意换个词，不是「面」的第二名，见「缓存代际」）
 
 **段（segment）**:
 取值链的一段。失败定位以「面 + 段序 + 段原文」表达（段级定位）。
@@ -70,6 +71,14 @@ _Avoid_: URL 规则（太泛——不只 URL，任何含插值的字面段都是
 默认方言 `text.<串>`（**带参数**）= 选择段：命中「直系文本包含该串」的元素（legado getElementsContainingOwnText；`ownText.<串>` 对称取「后代文本包含」）。不带参数的 `text` 才是取值终端（全部后代文本）。唯一实现在 `engine/select.ts` 的 `evalDefault` textContaining 分支。真实源 `text.下一页@href`、`text.章节目录@href` 全靠它。
 _Avoid_: 文本过滤（太泛——判据是「含文本的元素」，链上位置是选择段）
 
+**详情上下文初始化（ruleDetailInit）**:
+legado `ruleBookInfo.init` 的内部名：详情面先求值，其结果**整体替换**后续详情规则与 tocUrl 模板的求值上下文**与 html**（legado `setContent(init 产物)` 是 content 单点全换：JSON 产物 → html 与 `ctx.json` 同步换根，`{{result.articleid}}` 这类模板的 `result`/`pageText` 与 jsonpath 同源；非 JSON 产物 → 作为 html 上下文）；唯一实现 `services/reading.ts` 的 `detailContextOf`（init 非空但零命中 → `RuleEvalError` 点名 ruleDetailInit——宁炸不猜，不拿整页冒充上下文）。tocUrl 模板 `{{$.…}}` 在换根后的上下文上过引擎插值（`tocUrlOf`：静态 URL 直答，其余一律经详情上下文求值；插值段 Miss → 回退 bookUrl，不发残 URL）。
+_Avoid_: init 规则（与 fetch 的 init 姿态易混，交流用内部名）
+
+**动态请求头（headerRule）**:
+legado `header` 字段的 `@js:`/`<js>` 规则形态的内部名（与静态 JSON 形态互斥同源——同一 raw.header 二选一）：请求前经沙箱求值得到 JSON 头表，叠加 auth/cookie 后发出（device-id 逐请求刷新）；求值失败 → warn 后回退静态头，不吞请求也不炸整链（legado `BaseSource.getHeaderMap` 的 try/catch 口径）。唯一求值点 `services/bridge.ts` 的 `resolveHeaders`；存量由 `SourceRegistry.load` 第七条迁移按 raw 重推。
+_Avoid_: header 规则、动态 header（说内部名）
+
 **探针（probe）**:
 对一个书源真发一次搜索请求，得出可用性实测结论。
 _Avoid_: 自测、健康检查
@@ -93,8 +102,12 @@ _Avoid_: 删除、隐藏
 _Implementation_: `src/client/source-inbox.ts`（派生）+ `src/client/views/SettingsSection.tsx`（`SourceInbox` 渲染）
 _Avoid_: 舰队快照（黑话，已否决）、状态总览 chips（读数与过滤混杂，已退役）
 
+**换轮（round switch）**:
+搜索观察者发现读面身份已变（快照 `job.id` ≠ 观察中的轮次 id——服务端单槽，别的观察者提交了新一轮）时的唯一裁决：旧累积整体丢弃、`since=0` 重读新轮完整基线、旧连接 abort、按新轮重建观察；旧观察者**跟随最近一轮**。唯一实现 `src/client/search-job.ts` 的 `apply` 身份闸 + `rebaseline`。
+_Avoid_: 重连（重连是同一轮的通道恢复；换轮是身份变了）、重置（太泛）
+
 **bookKey**:
-书籍身份：详情页 URL；本地书为 `local:<uuid>`。
+书籍身份：详情页 URL，**可带 `,{option}` 请求选项后缀**（legado 嗅探语义：URL 即请求规格——米读类 POST API 源的 book_id 在选项 body 里；搜索面 `absUrlKeepOption` 保留、抓取时 `assembleRequest` 解释、引擎解析 base 与比对口径 `canonUrl` 各自剥选项）；本地书为 `local:<uuid>`。
 _Avoid_: id、url（太泛）
 
 **本地书（local book）**:
@@ -116,11 +129,23 @@ _Avoid_: 翻页循环、重复过滤（太泛——判据是「本页零新增�
 阅读会话同一时刻只允许一个章节加载在途（`inflight`）；滚动风暴与目录直达都只记意图（`pendingJump`），在途释放后由 `settlePendingLoad()` 补拉（否则那次点击无声消失）。刚失败过的同一章不自动重试——等用户点「重试」。唯一实现 `client/reader-session.ts`。
 _Avoid_: 请求去重（那是网络层语义；这是会话级时序）
 
+**缓存代际（epoch）**:
+「这份目录 / 正文缓存还有效吗」的唯一算式：按面细分的规则指纹 + baseUrl，**入缓存文件名**而不是删除式失效——换规则后旧代际的文件自然读不到，在途请求写的是它起飞时那个代际（旧在途写回自动无害）。唯一实现 `services/cache-epoch.ts` 的 `rulesEpoch`；裁决在 `services/reading.ts` 的 `getTocInner` / `getChapter`（读与写共用同一次算出的值）。刻意不含 `NovelSource.auth`（登录态刷新会整源缓存全灭）。
+_Avoid_: 版本号（代际是规则指纹，不是自增版本）、缓存键（太泛——文件名还含 safeKey / 章序 / 槽位）
+
+**正文槽位（slot）**:
+正文缓存文件名的有效性段 = 代际 + 章名。代际管「规则变了」，章名管「站点侧目录变了」（站点前插一章 → 章序位移 → 旧文件端给读者**另一章**）；刻意**不含章节 url**（带时效 token 的站点每次刷目录都换 url，入键等于正文缓存永不命中）。唯一实现 `services/cache-epoch.ts` 的 `contentSlot`。
+_Avoid_: 正文键、章节 id（槽位是「代际 × 章名」的指纹，既不是章序也不是 url）
+
 ### 跨半契约
 
 **书目字段集（shelf metadata field-set）**:
 书架条目 7 个元数据字段（sourceId/title/author/coverUrl/intro/lastChapterName/totalChapters）的「名称 × 类型判别 × 归一化」唯一主人：`shared/wire.ts` 的 `SHELF_META` 表 + `pickShelfMeta`。Shelf.applyPatch 遍历表保值覆盖，shelfBody 与 dispatch.shelfPut 都从 pick 派生；加字段只改这张表。
 _Avoid_: 逐字段 typeof 筛键（那是这张表的抄本）
+
+**来源投影（source projection）**:
+书架读取面上由服务端 join 出的源名：`shared/wire.ts` 的 `ShelfEntry.sourceName`，算式唯一实现在 `services/reading.ts` 的私有 `sourceNameOf`（读面入口是同一文件的 `shelfList`）。源已被删（join 不到）与本地书都投影成 `null`，客户端分别落成灰字「来源已删除」与不出 chip。它是**读取面投影**、不是书目字段——不可 patch、不落盘，故刻意不进 `SHELF_META`（进表 = 变成能被 PUT 写进 shelf.json 的假元数据）。
+_Avoid_: 来源字段（那是落盘书目字段的说法）、来源快照（加书那刻定死的旧名——本项目故意不要：同址替换会复用 sourceId，快照会静默陈旧）
 
 **wire 契约（wire contract）**:
 `/novel-api` 规范 JSON 的值形状与路由名——Node 半与浏览器半之间的唯一真相，代码只许有一个主人。

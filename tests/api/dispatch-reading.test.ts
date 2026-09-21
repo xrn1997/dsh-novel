@@ -202,6 +202,59 @@ describe('reading/shelf 面', () => {
     const r = await fetch(`${base}/novel-api/book?sourceId=nope&url=${encodeURIComponent(`${BASE}/book/1/`)}`)
     expect(r.status).toBe(404)
   })
+
+  // ── 书架批量删除（多选：一次请求删一批 bookKey）─────────────────────────────
+  const addBook = async (key: string, title = key): Promise<void> => {
+    await fetch(`${base}/novel-api/shelf/${encodeURIComponent(key)}`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sourceId: 's1', title }),
+    })
+  }
+  const shelfKeys = async (): Promise<string[]> => {
+    const { value } = await (await fetch(`${base}/novel-api/shelf`)).json() as any
+    return value.map((b: any) => b.bookKey)
+  }
+  const batchDelete = (body: unknown): Promise<Response> => fetch(`${base}/novel-api/shelf/batch-delete`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  })
+
+  it('POST /shelf/batch-delete：一趟删多本，返回实际命中数（未知键静默跳过）', async () => {
+    await addBook(`${BASE}/bd/1`, '批一')
+    await addBook(`${BASE}/bd/2`, '批二')
+    await addBook(`${BASE}/bd/3`, '批三')
+    const r = await batchDelete({ keys: [`${BASE}/bd/1`, `${BASE}/bd/2`, `${BASE}/bd/nope`] })
+    expect(r.status).toBe(200)
+    expect((await r.json() as any).value).toEqual({ removed: 2 })
+    const left = await shelfKeys()
+    expect(left).not.toContain(`${BASE}/bd/1`)
+    expect(left).not.toContain(`${BASE}/bd/2`)
+    expect(left).toContain(`${BASE}/bd/3`)          // 未点名的不动（本文件前序用例的书架条目也不动）
+  })
+
+  it('POST /shelf/batch-delete：body 非法（空/缺 keys/非字符串）→ 400；GET → 405', async () => {
+    for (const body of [{}, { keys: [] }, { keys: [1] }, { keys: 'x' }]) {
+      const r = await batchDelete(body)
+      expect(r.status, JSON.stringify(body)).toBe(400)
+      expect((await r.json() as any).error.code).toBe('BadRequest')
+    }
+    const wrongMethod = await fetch(`${base}/novel-api/shelf/batch-delete`)
+    expect(wrongMethod.status).toBe(405)
+  })
+
+  it('GET /shelf：条目带来源投影 sourceName（源名读取时 join；join 不到为 null）', async () => {
+    const { value: src } = await (await fetch(`${base}/novel-api/sources`)).json() as any
+    const key = `${BASE}/bd/with-source`
+    await fetch(`${base}/novel-api/shelf/${encodeURIComponent(key)}`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sourceId: src[0].id, title: '带来源' }),
+    })
+    await addBook(`${BASE}/bd/orphan`, '孤儿来源')
+    // 后者挂的 sourceId 不在注册表里（本文件前序 PUT 均用 's1' 这类假 id）
+    const { value } = await (await fetch(`${base}/novel-api/shelf`)).json() as any
+    const byKey = new Map(value.map((b: any) => [b.bookKey, b.sourceName]))
+    expect(byKey.get(key)).toBe(src[0].name)
+    expect(byKey.get(`${BASE}/bd/orphan`)).toBeNull()
+  })
 })
 
 /**

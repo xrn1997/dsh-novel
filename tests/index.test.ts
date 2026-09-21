@@ -51,6 +51,7 @@ describe('Cordis 插件入口', () => {
     expect(Config({})).toEqual({})
     expect(Config({ dataDir: 'D:/x' })).toEqual({ dataDir: 'D:/x' })
     expect(Config({ exportDelayMs: 500 })).toEqual({ exportDelayMs: 500 })
+    expect(Config({ jsTimeoutMs: 30000 })).toEqual({ jsTimeoutMs: 30000 })   // js 沙箱预算出口（③）
     expect(() => Config({ dataDir: 1 } as any)).toThrow()       // 类型错在加载期响亮
     expect(Config(undefined as any)).toEqual({})                // .default({}) 防御：cordis 缺省 config 行
   })
@@ -58,6 +59,7 @@ describe('Cordis 插件入口', () => {
     expect(() => apply(fakeCtx().ctx, { dataDir: 'D:/x', searchParallel: 0 })).toThrow(/searchParallel/)
     expect(() => apply(fakeCtx().ctx, { dataDir: 'D:/x', searchParallel: -1 })).toThrow(/searchParallel/)
     expect(() => apply(fakeCtx().ctx, { dataDir: 'D:/x', searchTimeoutMs: 0 })).toThrow(/searchTimeoutMs/)
+    expect(() => apply(fakeCtx().ctx, { dataDir: 'D:/x', jsTimeoutMs: 0 })).toThrow(/jsTimeoutMs/)
   })
   it('apply：ready 后注册 prefix 路由 + 5 工具；disposer 摘干净', async () => {
     const dir = await makeTempDir('novel-entry-')

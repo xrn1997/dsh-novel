@@ -11,9 +11,9 @@ import { GlobalStatusBar } from './SettingsStatusBar.js'
  * stack or a status pill all belong here」），做的事只有一件——把「任务还在跑 / 出了错」这句话
  * 在**任何界面**都说得出口。
  *
- * 为什么不能住在小说视图里：`conversation.view` 是「一次只渲染一个」的座位（壳层
- * `renderSlot('conversation.view', …, { only: active.id })`），住在里面的状态条一切 tab 就没了，
- * 而任务其实在服务端照跑——「任务在服务端继续」那句文案原先只在人坐着不动时成立。
+ * 为什么不能住在小说视图里：中央呈现座位一次只渲染一个面板（旧 `conversation.view`「rendered
+ * one at a time」；2026-09 迁移后的 `main` keyed 槽同样按侧栏选中渲染），住在面板内的状态条
+ * 一切走就没了，而任务其实在服务端照跑——「任务在服务端继续」那句文案原先只在人坐着不动时成立。
  * 轮询单实例也一起搬到这里：它是这份现场的唯一读者与写者（`useJobPolling` → `jobSurface`），
  * 视图环内的书源管理区只读镜像，不再各自轮询。
  *

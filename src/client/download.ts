@@ -3,15 +3,17 @@ import type { ApiEnvelope } from '../shared/wire.js'
 import { NOVEL_API_PREFIX, queries } from '../shared/wire.js'
 
 /**
- * 整本导出下载：fetch 流式读取 → Blob；进度按已收字节回调；
+ * 范围导出下载：fetch 流式读取 → Blob；进度按已收字节回调（from/to 缺席 = 全本）；
  * 失败（headers 未发）为 JSON 信封 → ApiClientError；signal 取消即断。
  */
 export async function streamExport(opts: {
   sourceId: string; bookKey: string; title: string
+  /** 导出范围（1 基含端，缺省全本——两个键都缺席即零参数旧链接） */
+  from?: number; to?: number
   onProgress: (bytes: number, totalChapters: string | null) => void
   signal: AbortSignal
 }): Promise<Blob> {
-  const q = queries.exportBook({ sourceId: opts.sourceId, url: opts.bookKey, title: opts.title })
+  const q = queries.exportBook({ sourceId: opts.sourceId, url: opts.bookKey, title: opts.title, from: opts.from, to: opts.to })
   let res: Response
   try {
     res = await fetch(`${NOVEL_API_PREFIX}/${q}`, { signal: opts.signal })

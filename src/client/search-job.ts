@@ -7,8 +7,8 @@ import type { ClientCoreDeps } from './deps.js'
  * 浏览器半的「聚合搜索后台任务」接线：提交一轮 → 盯住它（SSE 推送优先，快照轮询兜底）→
  * 按游标累积增量分组。
  *
- * 为什么不在这里跑批：`conversation.view` 是「一次只渲染一个」的座位，切 tab 即卸载组件——
- * 在途循环与结果都握在 `useState` 里的话，离开界面就两头丢（结果清零 + 站点白挨剩余请求，
+ * 为什么不在这里跑批：中央呈现座位一次只渲染一个面板（`main` keyed 槽；此前
+ * `conversation.view`），切走即卸载组件——在途循环与结果都握在 `useState` 里的话，离开界面就两头丢（结果清零 + 站点白挨剩余请求，
  * 实测见 `docs/design/client.md`）。批循环、结果持有都在 Node 半（`services/search-job.ts`），
  * 本模块只读：卸载只是停止「看」，重挂载从 `since=0` 重新拉一遍就全回来了。
  *
@@ -16,6 +16,13 @@ import type { ClientCoreDeps } from './deps.js'
  * - **快照轮询是地基**：`GET search/job-status?since=`，断开、连不上、无推送时全靠它；
  * - **SSE 是加速器**：`GET search/job-stream`，帧体就是同一份 `{ job }` 快照，所以合并代码只有一份。
  * 任一时刻只有一条通道在推进游标——两条同时在飞会把同一批命中累加两遍。
+ *
+ * **轮次身份与游标不可分开**（口径见 docs/design/client.md 同名条）：服务端读面是单槽 + 数字游标——别的页面（或本页
+ * 另一次提交）启动新一轮后，旧连接 / 旧游标读回来的快照是**新轮按旧游标切的片**。回包先验
+ * `job.id === acc.id`，不一致即换轮：旧累积整体丢弃、从 `since=0` 显式重读新轮完整基线、
+ * 重新建立观察（旧连接 abort）。被否决的两种写法：只改 id 继续追加（A/B 结果混排、B 的头几组
+ * 被旧游标吃掉）；只丢帧继续等旧任务（服务端单槽，旧轮永远等不到下一帧）。裁决：旧观察者
+ * **跟随最近一轮**（服务端只保留一轮，跟随是唯一能收敛的语义）。
  */
 
 /** 轮询节奏：600ms 足够「边搜边出」的观感，又不会把 `/novel-api` 打成刷屏 */
@@ -70,12 +77,18 @@ export function useSearchJob(deps: ClientCoreDeps): SearchJobView {
     setRound({ id: a.id, keyword: a.keyword, total: a.total, done: a.since, groups: [...a.groups], running, cancelled: a.cancelled })
   }
 
-  /** 快照 → 累积 → 视图态。推送帧与轮询回包共用，返回「本轮是否还在跑」。 */
+  /** 快照 → 累积 → 视图态。推送帧与轮询回包共用，返回「本轮是否还在跑」。
+   *  身份闸：`job.id !== a.id` 说明服务端读面已经换了轮（别的观察者提交了新一轮），
+   *  这份快照是**新轮按本观察者旧游标切的片**——增量对新轮无意义，走换轮收尾，不许合并。 */
   const apply = (a: Acc, job: SearchJobSnapshot | null): boolean => {
     if (job === null) {
       setError('后台搜索任务已不可读（服务重启或结果已过保留期）')
       publish(a, false)
       return false
+    }
+    if (job.id !== a.id) {
+      void rebaseline(a)
+      return false                              // 旧轮到此为止：不再为它排轮询/续帧
     }
     a.keyword = job.keyword
     a.total = job.total
@@ -87,6 +100,32 @@ export function useSearchJob(deps: ClientCoreDeps): SearchJobView {
     setError(running || job.cancelled === true ? null : job.error ?? null)
     publish(a, running)
     return running
+  }
+
+  /** 换轮收尾（身份切换 + 基线恢复 + 重新观察，一个职责一处裁决）：
+   *  从 `since=0` 显式重读服务端当前槽的完整基线，整体替换累积器。快照自带身份，
+   *  读回来的基线自洽（若重读间隙又换了一轮，下一次帧/轮询的身份闸会再次触发，同样收敛）。 */
+  const rebaseline = async (stale: Acc): Promise<void> => {
+    stream.current?.abort()                       // 旧连接属旧轮：先断，防它的迟到帧再进来
+    stream.current = null
+    let job: SearchJobSnapshot | null
+    try {
+      job = (await deps.apiGet<{ job: SearchJobSnapshot | null }>(queries.searchJobStatus(0))).job
+    } catch (e) {
+      if (acc.current !== stale || !alive.current) return
+      setError(`搜索结果读取失败：${errText(e)}`)
+      publish(stale, false)
+      return
+    }
+    if (!alive.current || acc.current !== stale) return   // 已卸载，或本页提交已落地（POST 说了算）
+    if (job === null) {                                    // 服务端连新一轮也没了：如实说，不伪装
+      setError('后台搜索任务已不可读（服务重启或结果已过保留期）')
+      publish(stale, false)
+      return
+    }
+    begin({ id: job.id, keyword: job.keyword, total: job.total, cancelled: job.cancelled === true,
+      since: job.next, groups: [...job.added] }, job.phase === 'running')
+    if (job.error !== undefined) setError(job.error)      // 终态轮次的失败原因（若新轮已终态）
   }
 
   const armPoll = (): void => {

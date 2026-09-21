@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { paramRoutes, ROUTES } from '../../shared/wire.js'
 import { prodDeps } from '../deps.js'
 import type { SettingsDeps } from '../deps.js'
-import { refreshJob, takeJobOpen, useJobOpenRequest, useJobSurface } from '../jobs.js'
+import { refreshJob, startSourceVerification, takeJobOpen, useJobOpenRequest, useJobSurface } from '../jobs.js'
 import { inboxCards, inboxIds, sourceInbox, visibleInboxCards } from '../source-inbox.js'
 import type { InboxKind } from '../source-inbox.js'
 import { inboxUi, muteInboxCard, pruneInboxMuted, unmuteAllInboxCards } from '../source-inbox-ui.js'
@@ -80,13 +80,12 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
 
   // 待办集合唯一派生口在 source-inbox.ts：导入弹层的「去验证」也走它，视图不另抄一份按状态筛
   const unverifiedIds = sources === null ? [] : inboxIds(sourceInbox(sources), 'unverified')
-  /** 待办处置动作（批量重验/一键验证/导入后「去验证」）的统一提交口：
-   *  ids 点击时快照；失败走 pushError 显式呈现（历史 bug：此处曾是 () => undefined 吞掉
-   *  rejection，「去验证」点了没反应还留 unhandled） */
+  /** 待办处置动作（批量重验/一键验证/导入后「去验证」）的统一提交口：ids 点击时快照；
+   *  提交后的编排（成功催任务读面 / 失败一处反馈）收在 `jobs.ts` 的领域动作
+   *  `startSourceVerification`（三个验证入口同一条路，不再各记一种回调；
+   *  历史 bug：此处曾是 () => undefined 吞掉 rejection，「去验证」点了没反应还留 unhandled） */
   const verifyIds = (ids: string[]): void => {
-    void deps.startBatchProbeJob(ids).then(refreshJob, (e: unknown) => {
-      deps.pushError(`启动验证失败：${e instanceof Error ? e.message : String(e)}`)
-    })
+    void startSourceVerification(ids, deps)
   }
 
   if (sub.name === 'probe') {
@@ -117,7 +116,6 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
       <SourceList
         sources={sources}
         job={job}
-        refresh={refreshJob}
         onChanged={reload}
         onProbe={(id) => setSub({ name: 'probe', sourceId: id })}
         onImport={() => setImportOpen(true)}

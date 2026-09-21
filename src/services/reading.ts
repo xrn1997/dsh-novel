@@ -1,13 +1,14 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { evaluate, interpolateUrl, RuleEvalError } from '../engine/index.js'
+import { evaluate, RuleEvalError } from '../engine/index.js'
 import type { Facet } from '../engine/index.js'
-import { absUrl, engineContextOf, extractItems, firstValue, makeSubEval } from './bridge.js'
+import { absUrl, engineContextOf, extractItems, firstValue, makeSubEval, resolveHeaders } from './bridge.js'
 import type { Page, SubRuleEval } from './bridge.js'
 import { PageCache } from './cache.js'
+import { contentSlot, rulesEpoch } from './cache-epoch.js'
 import { contentToText } from './content.js'
 import { ChapterNotFoundError, LocalNotMountedError, RuleMissingError, SourceNotFoundError } from './errors.js'
-import { createFetcher, decodeBody, fetchTextPage, headerOf } from './fetcher.js'
+import { createFetcher, decodeBody, fetchTextPage } from './fetcher.js'
 import type { Fetcher } from './fetcher.js'
 import { SourceJobs } from './import-job.js'
 import { SearchJobs } from './search-job.js'
@@ -30,12 +31,15 @@ import type { NovelSource, SourceAuth } from './types.js'
 // 值形状定义在 wire 契约（src/shared/wire.ts）——
 // 此处 re-export 保持既有 import 路径可用；改形状请去 shared，别在这里加第二份。
 export type { SearchHit, SearchGroup, ChapterEntry, BookDetail, SearchJobSnapshot } from '../shared/wire.js'
-import type { BookDetail, SearchGroup, SearchHit, SearchPlan, SearchJobSnapshot, ChapterEntry, ShelfBook, ShelfMetaPatch, SourcePublic } from '../shared/wire.js'
+import type { BookDetail, SearchGroup, SearchHit, SearchPlan, SearchJobSnapshot, ChapterEntry, ShelfBook, ShelfEntry, ShelfMetaPatch, SourcePublic } from '../shared/wire.js'
 export interface ReadingServiceOptions {
   dir: string                       // novel 根目录（测试注入 mkdtemp）
   fetchImpl?: typeof globalThis.fetch
   searchParallel?: number           // 默认 5
   searchTimeoutMs?: number          // 默认 15000
+  /** js 沙箱预算（透传 EvalContext.jsTimeoutMs；缺省 15000——引擎 2000 只作回退）：
+   *  legado Rhino 无硬超时，多请求目录脚本（java.ajax×2 + md5，txs12 源实测）2s 必炸 */
+  jsTimeoutMs?: number
   tocMaxPages?: number              // 默认 200
   contentMaxPages?: number          // 默认 50
   cacheMaxBytes?: number            // 默认 200MB
@@ -66,6 +70,8 @@ export class ReadingService {
   private constructor(
     private readonly cfg: { searchParallel: number; tocMaxPages: number; contentMaxPages: number },
     private readonly searchTimeoutMs: number,
+    /** js 沙箱预算（engineContextOf/求值上下文组装时带上——引擎 `ctx.jsTimeoutMs ?? DEFAULT` 消费） */
+    private readonly jsTimeoutMs: number,
     /** 本地书导入上限（传输层流式计数与本地书 domain 上限同一配置值——index 只传一次） */
     readonly localImportMaxBytes: number,
     private readonly registry: SourceRegistry,
@@ -99,6 +105,7 @@ export class ReadingService {
       tocMaxPages: opts.tocMaxPages,
       contentMaxPages: opts.contentMaxPages,
       searchTimeoutMs: opts.searchTimeoutMs,
+      jsTimeoutMs: opts.jsTimeoutMs,
     })
   }
 
@@ -122,8 +129,10 @@ export class ReadingService {
     tocMaxPages?: number
     contentMaxPages?: number
     searchTimeoutMs?: number
+    jsTimeoutMs?: number
   }): Promise<ReadingService> {
     const searchTimeoutMs = parts.searchTimeoutMs ?? 15000
+    const jsTimeoutMs = parts.jsTimeoutMs ?? 15000
     // searchParallel ≤ 0 → 批循环 `i += 0` 永不终止（组合根直装也必须炸，不能挂起）
     const searchParallel = parts.searchParallel ?? 5
     if (!Number.isInteger(searchParallel) || searchParallel < 1) {
@@ -136,11 +145,12 @@ export class ReadingService {
         contentMaxPages: parts.contentMaxPages ?? 50,
       },
       searchTimeoutMs,
+      jsTimeoutMs,
       parts.localImportMaxBytes ?? 50 * 1024 * 1024,
       parts.registry, parts.shelf, parts.cache, parts.fetcher,
       new SourceJobs({
         registry: parts.registry,
-        probe: (s) => probeSource(s, parts.fetcher, { timeoutMs: searchTimeoutMs }),
+        probe: (s) => probeSource(s, parts.fetcher, { timeoutMs: searchTimeoutMs, jsTimeoutMs }),
         ...(parts.jobHost === undefined ? {} : { host: parts.jobHost }),
       }),
       new SearchJobs(parts.jobHost === undefined ? {} : { host: parts.jobHost }),
@@ -194,11 +204,12 @@ export class ReadingService {
   }
 
   /** 探针已有源（API/tools 的 probe 路由/工具用）：与 importOne 的探针段同口径。
-   *  超时必须与搜索同耐心（search-timeout 单点）——批量验证闭包已传 searchTimeoutMs，
-   *  门面 probe 曾漏传落回 fetcher 固定 15s（「配了 5s 就都是 5s」的分歧原样残留）。 */
+   *  超时与 js 预算都必须与搜索同耐心（`searchTimeoutMs` / `jsTimeoutMs` 两个单点）——
+   *  两者都曾在这条门面上漏传：fetcher 侧落回固定 15s、js 侧落回引擎 2s，于是同一个源
+   *  在导入期探针（带预算）与门面探针（不带）拿回两个 verdict。 */
   async probe(id: string): Promise<ProbeResult> {
     const s = this.requireSource(id)
-    const r = await probeSource(s, this.fetcher, { timeoutMs: this.searchTimeoutMs })
+    const r = await probeSource(s, this.fetcher, { timeoutMs: this.searchTimeoutMs, jsTimeoutMs: this.jsTimeoutMs })
     await this.registry.edit((tx) => tx.setStatus(id, r.ok ? 'verified' : 'broken', r.error?.message, r.probedAt))
     return r
   }
@@ -250,7 +261,7 @@ export class ReadingService {
     const s = this.requireSource(id)
     const loginUrl = s.rules.loginUrl
     if (loginUrl === null) throw new Error(`源「${s.name}」未声明 loginUrl`)
-    const v = await evaluate('@js:' + loginUrl, engineContextOf(this.fetcher, s, { baseUrl: s.baseUrl }), 'rule')
+    const v = await evaluate('@js:' + loginUrl, engineContextOf(this.fetcher, s, { baseUrl: s.baseUrl, jsTimeoutMs: this.jsTimeoutMs }), 'rule')
     const text = firstValue(v, 'rule') ?? ''
     const cookies: Record<string, string> = {}
     for (const seg of text.split(';')) {
@@ -285,8 +296,18 @@ export class ReadingService {
 
   // ── 书架动词 ──
 
-  shelfList(): ShelfBook[] {
-    return this.shelf.list()
+  /** 书架读取面：落盘条目 + **来源投影**（sourceName）。
+   *  源名在这里实时 join 注册表（与 SearchGroup.sourceName 同一口径）——落盘快照会在源改名 /
+   *  同址替换复用 id 后陈旧（intake 复用旧 id，见按址去重）。join 不到 = 源已被删 → null。 */
+  shelfList(): ShelfEntry[] {
+    return this.shelf.list().map((b) => ({ ...b, sourceName: this.sourceNameOf(b.sourceId) }))
+  }
+
+  /** 来源投影的唯一算式：本地书恒 null（本地身份归 LOCAL_SOURCE_ID 判别，不查注册表）；
+   *  注册表里没有该 id（源被删/从未存在）→ null。 */
+  private sourceNameOf(sourceId: string): string | null {
+    if (sourceId === LOCAL_SOURCE_ID) return null
+    return this.registry.get(sourceId)?.name ?? null
   }
 
   /** 加书（title 形态）：字段判别归 pickShelfMeta，此处只管「入架」语义。
@@ -313,6 +334,19 @@ export class ReadingService {
     const removed = this.shelf.remove(bookKey)
     if (removed && isLocalBookKey(bookKey) && this.local !== null) await this.local.remove(bookKey)
     return { removed }
+  }
+
+  /** 批量删书（书架多选）：与逐本 removeBook 同一条 invariant——本地书副本连删**只对真在架的键**做
+   *  （故取 removeMany 的返回条目而不是把请求键全过一遍：幽灵键不该去动磁盘）。
+   *  未知键静默跳过、重复键幂等，返回实际删除数（与批路由同口径）。 */
+  async removeBooks(bookKeys: readonly string[]): Promise<{ removed: number }> {
+    const gone = this.shelf.removeMany(bookKeys)
+    if (this.local !== null) {
+      for (const b of gone) {
+        if (isLocalBookKey(b.bookKey)) await this.local.remove(b.bookKey)
+      }
+    }
+    return { removed: gone.length }
   }
 
   // ── 任务动词 ──
@@ -378,7 +412,7 @@ export class ReadingService {
   }): Promise<SearchGroup[]> {
     const want = opts?.sourceIds
     const sources = this.registry.list().filter((s) =>
-      s.enabled && (want === undefined || want.length === 0 || want.includes(s.id)))
+      ReadingService.participates(s) && (want === undefined || want.length === 0 || want.includes(s.id)))
     const groups: SearchGroup[] = new Array(sources.length)
     for (let i = 0; i < sources.length; i += this.cfg.searchParallel) {
       if (opts?.shouldStop?.() === true) break
@@ -401,10 +435,18 @@ export class ReadingService {
     return this.searchProgressive(keyword, opts)
   }
 
+  /** 聚合搜索参与集判定（**唯一**实现）：启用 ∧ 文本源。本插件当前仅支持小说文本面
+   *  （wire `SourceContentKind` 注释同口径）；将来支持其他媒介时**只在此扩参与集**，
+   *  不许散落第二处判别（用户拍板 2026-09：「未来未必不支持其他类型，现在只支持小说」）。
+   *  非文本源留库、不删、不改启用态——只是不参搜（漫画/短剧书不再混进文字书架）。 */
+  private static participates(s: NovelSource): boolean {
+    return s.enabled && s.type === 'text'
+  }
+
   /** 搜索参与计划：search 的参与集判定的唯一主人——客户端分批/进度按此走，
-   *  「哪些源参搜」（启停 invariant）不再在 wire 两侧各定义一份。 */
+   *  「哪些源参搜」（启停 ∧ 内容形态 invariant）不再在 wire 两侧各定义一份。 */
   searchPlan(): SearchPlan {
-    return { sourceIds: this.registry.list().filter((s) => s.enabled).map((s) => s.id) }
+    return { sourceIds: this.registry.list().filter((s) => ReadingService.participates(s)).map((s) => s.id) }
   }
 
   /** 提交一轮**后台**搜索：参与集判定与 `total` 同源（都是 searchPlan 那一条启停 invariant），
@@ -439,7 +481,7 @@ export class ReadingService {
     }
     try {
       // 请求语义全走搜索面（search-face.ts，与探针同一实现）：模板解析/组装/超时/解码/列表求值
-      const page = await fetchSearchPage(s, keyword, this.fetcher, this.searchTimeoutMs)
+      const page = await fetchSearchPage(s, keyword, this.fetcher, this.searchTimeoutMs, this.jsTimeoutMs)
       if (!page.ok) {
         return { ...base, error: { code: 'RuleMissing', message: page.message } }
       }
@@ -459,7 +501,9 @@ export class ReadingService {
         ])
         hits.push({
           title, author,
-          url: href === null ? null : absUrl(stripUrlOption(href), page.landedUrl),
+          // 书 URL 保留 `,{option}` 后缀落库（legado 口径：URL 即请求规格——米读类 POST API 源的
+          // book_id 藏在选项 body 里，剥掉即身份残废；与章节 URL「保留选项」同源，见 request.absUrlKeepOption）
+          url: href === null ? null : absUrlKeepOption(href, page.landedUrl),
           coverUrl: cover === null ? null : absUrl(cover, page.landedUrl),
           intro, lastChapterName: last,
         })
@@ -474,13 +518,23 @@ export class ReadingService {
 
   async getDetail(sourceId: string, url: string): Promise<BookDetail> {
     const s = this.requireSource(sourceId)
+    // 引擎上下文（相对链接解析/字段求值）用剥选项的地址；抓取用全串——选项由 assembleRequest 解释
+    const base = stripUrlOption(url)
     // legado `book` 变量：详情面规则常见 `book.bookUrl`/`book.origin` 引用（脚本/模板段）
-    const subEval = makeSubEval(this.fetcher, s, { book: { bookUrl: url, origin: s.baseUrl } })
+    const subEval = makeSubEval(this.fetcher, s, { book: { bookUrl: url, origin: s.baseUrl }, jsTimeoutMs: this.jsTimeoutMs })
     const html = await this.fetchText(s, url)
-    const ctx = { html, baseUrl: url }
+    const { rules } = s
+    // 详情上下文：ruleBookInfo.init（ruleDetailInit）先求值换根（legado BookInfo.kt 口径），
+    // 字段规则与 tocUrl 模板都在换根后的上下文上求值——QQ 类正版 API 源的 $.data.bookInfo 全靠它。
+    // 已知重复：下面 tocUrlOf 会再算一次同样的 init（它收的是规则原文 + 惰性 html，形态与这里不同）。
+    // 刻意不为它改签名：init 绝大多数是纯 JSONPath（`$.data.bookInfo` 一类，不触网），代价是一次求值；
+    // 而 tocUrlOf 的两个调用点里只有一侧手里已有 html，硬并要把惰性 provider 换成可空入参——
+    // 那换来的是签名变宽与「谁负责 html」易主，不是少一次 CPU。真源若用 js 形态的 init 会双打站点，
+    // 届时按那个源来改，而不是现在为假想情况加一层缓存。
+    const dctx = await detailContextOf(rules.ruleDetailInit, html, base, subEval)
+    const ctx = { html: dctx.html, json: dctx.json, baseUrl: base }
     // 详情面上下文优先 ruleDetail*（对象方言 ruleBookInfo——与搜索条目上下文实测 508/541 不同）；
     // 平铺方言无 ruleDetail* 时回退共用字段（原 v1 行为）
-    const { rules } = s
     const [title, author, cover, intro, last] = await Promise.all([
       fieldOf(subEval, rules.ruleDetailName ?? rules.ruleBookName, ctx, 'detail'),
       fieldOf(subEval, rules.ruleDetailAuthor ?? rules.ruleAuthor, ctx, 'detail'),
@@ -488,10 +542,10 @@ export class ReadingService {
       fieldOf(subEval, rules.ruleDetailIntro ?? rules.ruleIntro, ctx, 'detail'),
       fieldOf(subEval, rules.ruleDetailLastChapter ?? rules.ruleLastChapter, ctx, 'detail'),
     ])
-    const tocUrl = await tocUrlOf(s.rules.ruleTocUrl, url, async () => html, subEval)
+    const tocUrl = await tocUrlOf(s.rules.ruleTocUrl, rules.ruleDetailInit, url, async () => html, subEval)
     return {
       title, author,
-      coverUrl: cover === null ? null : absUrl(cover, url),
+      coverUrl: cover === null ? null : absUrl(cover, base),
       intro, lastChapterName: last, tocUrl,
     }
   }
@@ -514,8 +568,11 @@ export class ReadingService {
 
   private async getTocInner(sourceId: string, bookUrl: string, opts?: { refresh?: boolean }): Promise<ChapterEntry[]> {
     const s = this.requireSource(sourceId)
+    // 代际在取到源之后算一次，读与写共用同一个值：在途请求写的就是它起飞时的代际，
+    // 换规则后的读永远看不见（这就是「旧在途写回」不需要取消通道的原因）
+    const epoch = rulesEpoch(s.rules, s.baseUrl, 'toc')
     if (opts?.refresh !== true) {
-      const cached = await this.cache.getToc(sourceId, bookUrl)
+      const cached = await this.cache.getToc(sourceId, bookUrl, epoch)
       if (cached !== null) return JSON.parse(cached) as ChapterEntry[]
     }
     // 订正：目录三规则任一缺失不得降级 `?? ''`——空串规则返回整页文本，宁炸不猜
@@ -529,8 +586,9 @@ export class ReadingService {
     }
     // legado `book` 变量：目录规则常见 `book.bookUrl`（36小说网 chapterUrl）与 `book.origin`
     // （努努书坊 ruleTocUrl `{{book.origin}}/e/...`——源站点域名即注册表 baseUrl）
-    const subEval = makeSubEval(this.fetcher, s, { book: { bookUrl, origin: s.baseUrl, tocUrl: bookUrl } })
-    const tocUrl = await tocUrlOf(s.rules.ruleTocUrl, bookUrl, () => this.fetchText(s, bookUrl), subEval)
+    const subEval = makeSubEval(this.fetcher, s, { book: { bookUrl, origin: s.baseUrl, tocUrl: bookUrl }, jsTimeoutMs: this.jsTimeoutMs })
+    const tocUrl = await tocUrlOf(s.rules.ruleTocUrl, s.rules.ruleDetailInit, bookUrl,
+      () => this.fetchText(s, bookUrl), subEval)
     const extract = async (page: Page): Promise<ChapterEntry[]> => {
       const listV = await subEval(listRule, { html: page.body, json: page.json, baseUrl: page.url }, 'toc', 'list')
       const out: ChapterEntry[] = []
@@ -572,7 +630,7 @@ export class ReadingService {
       subEval,
     )
     const chapters = result.items
-    await this.cache.setToc(sourceId, bookUrl, JSON.stringify(chapters))
+    await this.cache.setToc(sourceId, bookUrl, epoch, JSON.stringify(chapters))
     return chapters
   }
 
@@ -583,26 +641,33 @@ export class ReadingService {
   async getChapter(sourceId: string, bookKey: string, chIndex: number, opts?: { refresh?: boolean }): Promise<string> {
     if (sourceId === LOCAL_SOURCE_ID) return this.localChapter(bookKey, chIndex)
     const s = this.requireSource(sourceId)
+    const epoch = rulesEpoch(s.rules, s.baseUrl, 'content')
+    // 目录上移到缓存读取之前：正文槽位含章名（挡章序位移串配，见 cache-epoch.contentSlot）。
+    // 如实记代价：目录缓存命中时是一次文件读 + JSON.parse；目录缺失（首次 / 被 prune 淘汰）时
+    // 会真发一次目录抓取——热正文缓存不再能单独服务一章。这是「槽位含章名」的必然代价，
+    // 不是可以优化掉的疏忽（章名只存在于目录里）。
+    const toc = await this.getToc(sourceId, bookKey)
+    // 双边守卫：负数曾绕过单边 `>= toc.length` → toc[-1].name TypeError → 500。
+    // HTTP 面有 /^\d+$/，工具面 chapterIndex 无下限——守卫必须盖住两面的入口。
+    if (chIndex < 0 || chIndex >= toc.length) throw new ChapterNotFoundError(chIndex, toc.length)
+    const target = toc[chIndex]
+    const slot = contentSlot(epoch, target.name)
     if (opts?.refresh !== true) {
-      const cached = await this.cache.getContent(sourceId, bookKey, chIndex)
+      const cached = await this.cache.getContent(sourceId, bookKey, chIndex, slot)
       if (cached !== null) {
-        // 缓存可能存着本次修复前的带标签正文（@html 源）——出边界再收一次口（幂等）
+        // 代际只覆盖规则、不覆盖代码版本：升级后仍会读到旧提取代码写下的条目（如 @html 源的
+        // 带标签正文）——出边界再收一次口（contentToText 幂等），旧条目照样无害。
         const text = contentToText(cached)
         // 空正文一律当未命中：修复前「站点跳转落地页零命中」会被静默写成 0 字节缓存（笔趣阁 27 章全空），
         // 旧条目也就地失效重取，不再永远吐空
         if (text.trim() !== '') return text
       }
     }
-    const toc = await this.getToc(sourceId, bookKey)
-    // 双边守卫：负数曾绕过单边 `>= toc.length` → toc[-1].name TypeError → 500。
-    // HTTP 面有 /^\d+$/，工具面 chapterIndex 无下限——守卫必须盖住两面的入口。
-    if (chIndex < 0 || chIndex >= toc.length) throw new ChapterNotFoundError(chIndex, toc.length)
     const ruleContent = s.rules.ruleContent
     if (ruleContent === null) {
       // 订正：正文规则缺失不得降级 `?? ''`
       throw new RuleMissingError('content', 'ruleContent', `源「${s.name}」缺正文规则 ruleContent`)
     }
-    const target = toc[chIndex]
     // legado 变量注入：`book`（bookUrl/name…——36小说网 ruleChapterUrl 用 book.bookUrl.replace）
     // 与 `chapter`（title/index/url——正文脚本 `chapter.title` 广泛使用）
     const shelfBook = this.shelf.get(bookKey)
@@ -615,6 +680,7 @@ export class ReadingService {
         ...(shelfBook?.author === undefined ? {} : { author: shelfBook.author }),
       },
       chapter: { title: target.name, index: chIndex, url: target.url, baseUrl: target.url },
+      jsTimeoutMs: this.jsTimeoutMs,
     })
     const extract = async (page: Page): Promise<string[]> => {
       const v = await subEval(ruleContent, { html: page.body, json: page.json, baseUrl: page.url }, 'content', 'value')
@@ -657,7 +723,7 @@ export class ReadingService {
       },
     )
     const text = result.items.join('\n')
-    await this.cache.setContent(sourceId, bookKey, chIndex, text)
+    await this.cache.setContent(sourceId, bookKey, chIndex, slot, text)
     return text
   }
 
@@ -699,33 +765,73 @@ export class ReadingService {
    *  charset 声明进解码链（优先级最高）。webView 选项不支持——按普通请求照常尝试（如实）。 */
   private async fetchPage(s: NovelSource, url: string): Promise<Page> {
     const plan = assembleRequest(url, {}, s.baseUrl)
-    const page = await this.fetcher.fetchPage(plan.url, fetchInitOf(plan, headerOf(s)))
+    const page = await this.fetcher.fetchPage(plan.url, fetchInitOf(plan, await resolveHeaders(this.fetcher, s, { jsTimeoutMs: this.jsTimeoutMs })))
     // url = 落地地址（相对链接基准，浏览器语义）；requestedUrl 仅诊断用（被跳转走时报错点名）
     return { url: page.finalUrl, requestedUrl: plan.url, body: decodeBody(page, plan.charset) }
   }
 
-  /** fetchText：抓取+解码+超时委托 fetcher.fetchTextPage（超时单点；POST 选项形态由 search-face 编排） */
+  /** fetchText：抓取 + 解码 + 超时——请求语义经 assembleRequest 单点：URL 可带 `,{option}`，
+   *  书 URL / 详情页 / tocUrl 回退都可能是 POST 型 API 端点（method/body/charset/headers 全在选项里），
+   *  此前 fetchTextPage 裸抓带选项的 URL——真实源表现为米读类 getDetail 405（选项里的 book_id 才是身份）。 */
   private async fetchText(s: NovelSource, url: string, timeoutMs?: number): Promise<string> {
-    const { text } = await fetchTextPage(this.fetcher, url, { headers: headerOf(s), timeoutMs })
+    const plan = assembleRequest(url, {}, s.baseUrl)
+    const { text } = await fetchTextPage(this.fetcher, plan.url,
+      { ...fetchInitOf(plan, await resolveHeaders(this.fetcher, s, { jsTimeoutMs: this.jsTimeoutMs })), ...(timeoutMs === undefined ? {} : { timeoutMs }) }, plan.charset)
     return text
   }
 }
 
 // ── 纯函数助手（独立导出供测试/复用）──────────────────────────────────
 
-/** tocUrl 三分支（钉死）：null→bookUrl；纯 URL 形态→字面（不进规则求值——引擎对裸词解析期必炸）；规则→详情页求值 Miss 回退。
- *  求值走调用方的 subEval（完整上下文单点——jsLib/vars/fetch/source 全可见，不再裸 {html,baseUrl}） */
+/** 详情上下文解析（legado `ruleBookInfo.init` 口径，BookInfo.kt：init 先求值，其结果**整体替换**
+ *  后续详情规则的求值上下文**与 html**——legado `setContent(init 产物)` 是 content 单点全换）：
+ *  JSON 产物 → html 与 ctx.json **同步换根**（此前 html 留原页只换 json：`{{result.articleid}}`
+ *  这类 tocUrl 模板的 result=pageText=原页 → 插值 Miss → tocUrl 回退详情页 → 目录空，
+ *  novel.cooks.tw 真机实证——setContent 后 legado 的 result/content 就是 init 产物本身）；
+ *  非 JSON 文本/HTML 片段 → 作为 html 上下文（同前）。
+ *  init 非空但零命中 → RuleEvalError 点名 ruleDetailInit——不拿整页冒充上下文（宁炸不猜：
+ *  静默降级会让详情字段全 Miss 伪装成「源什么都没有」，QQ 类正版 API 源实测形态）。 */
+export async function detailContextOf(
+  ruleDetailInit: string | null | undefined, html: string, baseUrl: string, subEval: SubRuleEval,
+): Promise<{ html: string; json?: unknown }> {
+  // `== null`：存量 sources.json 可能缺 ruleDetailInit 键（undefined）——按缺规则直通
+  if (ruleDetailInit == null || ruleDetailInit.trim() === '') return { html }
+  const v = await subEval(ruleDetailInit, { html, baseUrl }, 'detail', 'list')
+  const parts = extractItems(v)
+  if (parts.length === 0) {
+    throw new RuleEvalError(`详情初始化规则未取到上下文（段 ruleDetailInit: ${ruleDetailInit}）`, {
+      facet: 'detail', segmentIndex: 0, segmentRaw: ruleDetailInit, hits: 0,
+    })
+  }
+  const text = parts.join('\n')
+  // JSON 产物：html 同步换成产物文本（legado setContent 全换口径——result/pageText 与 json 同源）
+  try { return { html: text, json: JSON.parse(text) as unknown } } catch { return { html: text } }
+}
+
+/** tocUrl 解析（钉死）：null→bookUrl **全串**（回退即「目录在本书地址上」——抓取仍按选项发请求）；
+ *  纯静态 URL（URL 形态且无插值段）→字面绝对化，不抓详情页（引擎对裸词解析期必炸的边界仍在）；
+ *  其余（带 `{{$.…}}` 插值段的 URL 模板与一切规则形态）→ 按**详情上下文**过规则引擎求值
+ *  （legado BookInfo.kt `analyzeRule.getString(infoRule.tocUrl, isUrl=true)` 口径——init 换根后
+ *  `{{$.resourceID}}` 这类嵌套字段才有解；此前 `interpolateUrl(空 vars)` 把插值段原样留下，
+ *  目录请求打到字面 `{{…}}` 残地址 → 0 章，QQ 源实测）。引擎 literal 口径：任一插值段 Miss →
+ *  整段 Miss → 回退 bookUrl（门面明确失败，不发残 URL）。解析 base 剥 `,{option}`
+ *  （选项不属于链接解析域）。求值走调用方的 subEval（完整上下文单点——jsLib/vars/fetch/source 全可见）。 */
 export async function tocUrlOf(
-  ruleTocUrl: string | null, bookUrl: string, detailHtml: () => Promise<string | null>, subEval: SubRuleEval,
+  ruleTocUrl: string | null, ruleDetailInit: string | null,
+  bookUrl: string, detailHtml: () => Promise<string | null>, subEval: SubRuleEval,
 ): Promise<string> {
+  const base = stripUrlOption(bookUrl)
   if (ruleTocUrl === null) return bookUrl
-  if (/^(https?:)?\/\//i.test(ruleTocUrl) || ruleTocUrl.startsWith('/')) {
-    return absUrl(interpolateUrl(ruleTocUrl, {}), bookUrl) ?? bookUrl
+  const urlShaped = /^(https?:)?\/\//i.test(ruleTocUrl) || ruleTocUrl.startsWith('/')
+  if (urlShaped && !ruleTocUrl.includes('{')) {
+    // 走到这里必无插值段（`{` 判过），interpolateUrl 恒等 → 直接绝对化
+    return absUrl(ruleTocUrl, base) ?? bookUrl
   }
   const html = await detailHtml()
   if (html === null) return bookUrl
-  const v = await subEval(ruleTocUrl, { html, baseUrl: bookUrl }, 'detail', 'value')
-  return absUrl(firstValue(v, 'detail'), bookUrl) ?? bookUrl
+  const dctx = await detailContextOf(ruleDetailInit, html, base, subEval)
+  const v = await subEval(ruleTocUrl, { html: dctx.html, json: dctx.json, baseUrl: base }, 'detail', 'value')
+  return absUrl(firstValue(v, 'detail'), base) ?? bookUrl
 }
 
 /** 正文规约：逐行 trim → 去首尾空行 → 相邻空行折叠一个 */

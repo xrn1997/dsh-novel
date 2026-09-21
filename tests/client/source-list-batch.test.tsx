@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
+import { useJobPolling } from '../../src/client/jobs.js'
 import { SourceList } from '../../src/client/views/SettingsSourceList.js'
 import { makeDeps } from './fake-deps.js'
 import type { FakeSettingsDeps } from './fake-deps.js'
@@ -20,9 +21,12 @@ import type { JobState, SourcePublic } from '../../src/client/views/types.js'
  * - 行内「⋯」溢出菜单提供单源删除入口（低频动作收纳）。
  * 启停/验证批量的写口载荷、失败上报、在途防重复提交口径不变。
  *
- * **refresh / onChanged 在此文件必须是可区分的 Mock**：两者分别是「重启任务轮询」与
- * 「重取源列表」的出口，曾经在这里全传空函数，于是批量启停接错出口（该重取源列表却只
- * 重启了轮询）在本文件完全测不出来，实机表现为点完启停界面停在旧值（2026-09 回归）。
+ * **onChanged 是「重取源列表」的出口 Mock**（启停/删除成功后必须被调）。自验证编排收拢起
+ * 「验证 → 催任务读面」不再走 props——收进 `jobs.ts` 的领域动作 `startSourceVerification`
+ * （缺省 refresh = refreshJob），读面观测经 `useJobPolling` 轮询驱动的取数计数。
+ * 病史：曾经 refresh/onChanged 都传空函数，于是批量启停接错出口（该重取源列表却只重启了
+ * 轮询）在本文件完全测不出来，实机表现为点完启停界面停在旧值（2026-09 回归）——
+ * 「启停 → 源列表 / 验证 → 任务读面」的分工断言仍钉在两个用例里，只是观测面换了。
  */
 
 const src = (over: Partial<SourcePublic> & { id: string }): SourcePublic => ({
@@ -41,13 +45,11 @@ const runningProbe: JobState = {
   issues: [], fileErrors: [], startedAt: 0,
 }
 
-/** 两个「成功后重读什么」的出口：整壳共用，逐用例断言谁该被调（不可区分的空函数是本文件
- *  曾漏掉 2026-09 启停接错出口的根因） */
-let refresh: ReturnType<typeof vi.fn>
+/** 「重取源列表」出口 Mock：启停/删除成功后必须被调（验证的「催任务读面」不走 props） */
 let onChanged: ReturnType<typeof vi.fn>
 
 const view = (deps: FakeSettingsDeps, sources: SourcePublic[] = [S1, S2, S3], job: JobState | null = null): ReactNode =>
-  <SourceList sources={sources} job={job} refresh={refresh} onChanged={onChanged} onProbe={() => {}} onImport={() => {}} deps={deps} />
+  <SourceList sources={sources} job={job} onChanged={onChanged} onProbe={() => {}} onImport={() => {}} deps={deps} />
 
 /** 进编辑态并勾选指定行（复选框 aria-label = `选择 ${name}`） */
 function selectRows(names: string[]): void {
@@ -64,7 +66,7 @@ function selbarButton(label: string): HTMLElement {
   return btn as HTMLElement
 }
 
-beforeEach(() => { resetSourceListUi(); refresh = vi.fn(); onChanged = vi.fn() })
+beforeEach(() => { resetSourceListUi(); onChanged = vi.fn() })
 afterEach(cleanup)
 
 describe('选中动作条：启用/停用/验证所选（写口载荷 + 成功重读对出口 + 失败上报）', () => {
@@ -77,10 +79,10 @@ describe('选中动作条：启用/停用/验证所选（写口载荷 + 成功�
 
     await waitFor(() => expect(deps.apiSend).toHaveBeenCalledWith(
       'POST', ROUTES.sourcesBatchEnabled.path, { ids: ['s1', 's2'], enabled: true }))
-    // 启停改的是源本身 → 必须重取 sources（onChanged）。曾经这里调的是 refresh（只重启任务
-    // 轮询），写成功后没人重读，界面停在旧值、要重开视图才对（2026-09 实机 bug）。
+    // 启停改的是源本身 → 必须重取 sources（onChanged）。曾经这里走的是「重启任务轮询」
+    // 的出口，写成功后没人重读，界面停在旧值、要重开视图才对（2026-09 实机 bug）；
+    // 对向断言（验证 → 催任务读面、不重取源列表）在「验证所选」用例，经轮询取数计数观测。
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
-    expect(refresh).not.toHaveBeenCalled()
     expect(deps.pushOk).toHaveBeenCalledWith('已启用 1 个源')   // 批量必须有条：被改的行可能在屏幕外
     // 这批源做完启停**还在列表里**，勾选就是它们的现场：留着才能连着点「验证所选」/改主意
     // 再停用，不必重勾（2026-09 用户裁定：清勾选「不应该」）
@@ -102,16 +104,37 @@ describe('选中动作条：启用/停用/验证所选（写口载荷 + 成功�
     expect(document.querySelector('[data-novel-selbar]')).not.toBeNull()
   })
 
-  it('验证所选：startBatchProbeJob(选中 ids) 经注入 deps 提交；成功重启任务轮询（不重取源列表）', async () => {
+  it('验证所选：startBatchProbeJob(选中 ids) 经注入 deps 提交；成功催任务读面（不重取源列表）', async () => {
+    const fetchJobStatus = vi.fn(async () => null)
     const deps = makeDeps()
     render(view(deps))
+    renderHook(() => useJobPolling({ fetchJobStatus }))   // 观测面：常驻轮询驱动（生产同款读面）
+    await waitFor(() => expect(fetchJobStatus).toHaveBeenCalledTimes(1))
     selectRows(['源一', '源三'])
     fireEvent.click(screen.getByText('验证所选'))
     await waitFor(() => expect(deps.startBatchProbeJob).toHaveBeenCalledWith(['s1', 's3']))
-    // 与启停的分工：验证起的是后台任务，源状态要等任务收尾才变 → 此处该重启轮询，
-    // 重取源列表反而是无用功（收尾 reload 另有记账，见 SettingsSection 的 reloadedJob）
-    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1))
+    // 与启停的分工不变：验证起的是后台任务 → 催任务读面（编排收进 jobs.ts 领域
+    // 动作的缺省 refresh）；源列表要等任务收尾才变（收尾 reload 归 SettingsSection 的
+    // reloadedJob 记账，另行钉在 views-wiring）。读数即刻重拉 = 轮询取数 +1（不等 1s 拍）。
+    await waitFor(() => expect(fetchJobStatus).toHaveBeenCalledTimes(2))
     expect(onChanged).not.toHaveBeenCalled()
+  })
+
+  it('验证所选失败：与其余入口同一份反馈「启动验证失败：…」；任务读面与源列表都不动，勾选留着可重试', async () => {
+    const fetchJobStatus = vi.fn(async () => null)
+    const deps = makeDeps({ startBatchProbeJob: vi.fn(async () => { throw new Error('boom') }) })
+    render(view(deps))
+    renderHook(() => useJobPolling({ fetchJobStatus }))
+    await waitFor(() => expect(fetchJobStatus).toHaveBeenCalledTimes(1))
+    selectRows(['源一'])
+    fireEvent.click(screen.getByText('验证所选'))
+    await waitFor(() => expect(deps.pushError).toHaveBeenCalledTimes(1))
+    expect(String(deps.pushError.mock.calls[0][0])).toContain('启动验证失败')
+    expect(String(deps.pushError.mock.calls[0][0])).toContain('boom')
+    expect(onChanged).not.toHaveBeenCalled()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(fetchJobStatus).toHaveBeenCalledTimes(1)                     // 失败不催读面
+    expect(document.querySelector('[data-novel-selbar]')).not.toBeNull() // 勾选留着：失败不许清现场
   })
 
   it('清空选择：只退勾选，不退出编辑态（钮写的是「清空选择」，此前连带把编辑态一起退了）', () => {
@@ -132,7 +155,6 @@ describe('选中动作条：启用/停用/验证所选（写口载荷 + 成功�
     await waitFor(() => expect(deps.pushError).toHaveBeenCalledTimes(1))
     expect(String(deps.pushError.mock.calls[0][0])).toContain('操作失败')
     expect(String(deps.pushError.mock.calls[0][0])).toContain('boom')
-    expect(refresh).not.toHaveBeenCalled()
     expect(onChanged).not.toHaveBeenCalled()
     expect(document.querySelector('[data-novel-selbar]')).not.toBeNull()   // 勾选留着：失败不许把现场一起清掉
   })
