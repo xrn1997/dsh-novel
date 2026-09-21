@@ -1,6 +1,6 @@
 {
   "name": "@xrn1997/dsh-novel",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "在 DeepSeek Harness Web GUI 里读网络小说：legado 书源导入、书架与连续滚动阅读，附五个 AI 助手工具",
   "keywords": [
     "dsh-plugin",
