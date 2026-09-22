@@ -2,6 +2,8 @@
 
 在 DeepSeek Harness（DSH）的 Web GUI 里读网络小说：导入 [legado](https://github.com/gedoor/legado) 书源 → 搜索 → 加书架 → 连续滚动阅读。AI 助手同时获得六个小说工具（`dshnovel_` 前缀），一句「帮我找本书并读第 N 章」就能在对话里完成搜索与阅读。
 
+![左侧栏「小说」面板：书架 / 书城 / 书源管理三个 tab](https://raw.githubusercontent.com/xrn1997/dsh-novel/main/docs/screenshots/screenshot-01.png)
+
 ## 功能特性
 
 - **书源导入**：拖入或选择 .json 文件（可多选）或粘贴 legado 书源 JSON，导入跑在**服务端后台任务**——关掉页面不打断，进度与汇总随时回看；按书源地址自动去重（可用源优先保留）
