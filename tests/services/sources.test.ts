@@ -194,6 +194,69 @@ describe('load 内容形态迁移（bookSourceType 编码订正的存量收敛�
     await reg.flush()
     expect((await SourceRegistry.load(dir)).list()[0].rules.ruleDetailInit).toBeNull()
   })
+  it('存量 rules 缺 bookUrlPattern 而 raw 带值 → load 按 raw 重推（详情页嗅探是后来才读的字段：不重推则 27 个声明了它的源照旧只跑列表规则）', async () => {
+    const dir = await tmp()
+    const reg = await SourceRegistry.load(dir)
+    await reg.edit((tx) => tx.add(normalizeSource({
+      bookSourceName: '嗅探', bookSourceUrl: 'https://sniff.example.com', ruleContent: 'x',
+      bookUrlPattern: 'https://sniff\\.example\\.com/book/\\d+/',
+    })))
+    expect(reg.list()[0].rules.bookUrlPattern).toBe('https://sniff\\.example\\.com/book/\\d+/')
+    await reg.edit(() => {
+      delete (reg.list()[0].rules as unknown as Record<string, unknown>).bookUrlPattern  // 旧版派生的存量形态
+    })
+    await reg.flush()
+    expect((await SourceRegistry.load(dir)).list()[0].rules.bookUrlPattern)
+      .toBe('https://sniff\\.example\\.com/book/\\d+/')
+  })
+  it('存量 rules 缺 kind/wordCount 四键 → load 按 raw 补推（审计真机读数：不补则已入库的源到货率恒为 0）', async () => {
+    const dir = await tmp()
+    const reg = await SourceRegistry.load(dir)
+    await reg.edit((tx) => tx.add(normalizeSource({
+      bookSourceName: '分类', bookSourceUrl: 'https://kind.example.com', ruleContent: 'x',
+      searchUrl: 'https://kind.example.com/s?q={{key}}',
+      ruleSearch: { bookList: '.b', name: 'tag.a@text', kind: 'tag.span@class', wordCount: '12345' },
+      ruleBookInfo: { name: 'tag.h1@text', kind: '.cat@text' },
+    })))
+    expect(reg.list()[0].rules.ruleKind).toBe('tag.span@class')       // 入库时已映射
+    await reg.edit(() => {
+      const rules = reg.list()[0].rules as unknown as Record<string, unknown>
+      for (const k of ['ruleKind', 'ruleWordCount', 'ruleDetailKind', 'ruleDetailWordCount']) delete rules[k]
+    })
+    await reg.flush()
+    const rules = (await SourceRegistry.load(dir)).list()[0].rules as unknown as Record<string, unknown>
+    expect(rules.ruleKind).toBe('tag.span@class')
+    expect(rules.ruleWordCount).toBe('12345')
+    expect(rules.ruleDetailKind).toBe('.cat@text')
+    expect(rules.ruleDetailWordCount).toBeNull()                       // raw 没有 → 键恒在场为 null
+  })
+  it('补推只填缺席键：新入库源已有的值不被第二条路改写', async () => {
+    const dir = await tmp()
+    const reg = await SourceRegistry.load(dir)
+    // 两条读路的**优先级不同**：导入侧平铺优先（setIfVacant），raw 重推侧容器优先（inBox 先取）——
+    // 夹具要让两处给出**不同的值**，这条用例才有可证伪性：同值夹具下「只填缺席」与「恒覆盖」同绿
+    // （曾用字符串化容器当夹具，两路算出同一个值，改坏了也照绿）。
+    await reg.edit((tx) => tx.add(normalizeSource({
+      bookSourceName: '两说', bookSourceUrl: 'https://two.example.com', ruleContent: 'x',
+      ruleKind: 'tag.flat@text',
+      ruleSearch: { bookList: '.b', name: 'tag.a@text', kind: 'tag.nested@text' },
+    })))
+    expect(reg.list()[0].rules.ruleKind).toBe('tag.flat@text')        // 导入侧：平铺优先
+    await reg.flush()
+    const rules = (await SourceRegistry.load(dir)).list()[0].rules as unknown as Record<string, unknown>
+    expect(rules.ruleKind).toBe('tag.flat@text')                      // 恒覆盖的实现会把它改成 tag.nested@text
+  })
+  it('字符串化容器的值照旧由导入侧解析，load 不推翻它', async () => {
+    const dir = await tmp()
+    const reg = await SourceRegistry.load(dir)
+    await reg.edit((tx) => tx.add(normalizeSource({
+      bookSourceName: '字符串容器', bookSourceUrl: 'https://str.example.com', ruleContent: 'x',
+      ruleSearch: JSON.stringify({ bookList: '.b', name: 'tag.a@text', kind: 'tag.i@text' }),
+    })))
+    expect(reg.list()[0].rules.ruleKind).toBe('tag.i@text')
+    await reg.flush()
+    expect((await SourceRegistry.load(dir)).list()[0].rules.ruleKind).toBe('tag.i@text')
+  })
 })
 
 describe('load 分组迁移（逗号粘连存量收敛）', () => {  it('早期形态「A,B 一段」在 load 时拆开并落盘；幂等', async () => {

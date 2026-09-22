@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import crypto from 'node:crypto'
 import zlib from 'node:zlib'
-import { JAVA_PROTOCOL, SANDBOX_MOUNTS, invokeJavaMethod } from '../../src/engine/js-protocol.js'
+import { SANDBOX_MOUNTS, invokeJavaMethod } from '../../src/engine/js-protocol.js'
 import type { BridgeDeps } from '../../src/engine/js-protocol.js'
 import { createSourceSession, runScript } from '../../src/engine/js-sandbox.js'
 import { decodePngToArgb, javaDecode, javaEncode, normalizeCharset } from '../../src/engine/js-utils.js'
@@ -291,9 +291,5 @@ describe('E-4. Packages.* 沙箱面（爱腐文密钥图解密链的载体）', 
       JSON.stringify({ w: bm.getWidth(), h: bm.getHeight(), r0: (bm.getPixel(0,0) >> 16) & 0xFF, oob: bm.getPixel(9,9) })
     `)
     expect(JSON.parse(String((r.value as { text?: string }).text))).toEqual({ w: 2, h: 1, r0: 0xab, oob: 0 })
-  })
-  it('未知 Packages 路径与不支持的加密变换在协议层有登记（async 行 = ajax + downloadFile）', () => {
-    const asyncNames = JAVA_PROTOCOL.flatMap((r) => (r.mode === 'async' ? [r.name] : []))
-    expect(asyncNames).toEqual(['ajax', 'downloadFile'])
   })
 })

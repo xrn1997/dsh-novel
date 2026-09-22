@@ -396,14 +396,11 @@ async function shelfPut(
 ): Promise<void> {
   const body = await readJsonBody<Record<string, unknown> | null>(req, null)
   if (body === null || typeof body !== 'object') throw new ApiError('body 需为 JSON 对象', 400, 'BadRequest')
-  // 字段判别/归一化全走 pickShelfMeta；入架/补丁/进度语义归门面动词
+  // 字段判别/归一化全走 pickShelfMeta；入架/补丁/进度语义与其**值域门**都归门面动词
+  // （门住门面而不是这里：同一条判断要同时护 HTTP 面与 agent 工具面）
   const meta = pickShelfMeta(body)
   if (typeof meta.title === 'string' && meta.title !== '') {
-    // 加书必需非空 sourceId（缺源/型错此前被静默兜底成 '' → 写入 200、读取才炸）
-    if (typeof meta.sourceId !== 'string' || meta.sourceId === '') {
-      throw new ApiError('加书需带非空 sourceId', 400, 'BadRequest')
-    }
-    writeOk(res, service.shelfAdd(bookKey, { ...meta, title: meta.title, sourceId: meta.sourceId }))
+    writeOk(res, service.shelfAdd(bookKey, { ...meta, title: meta.title }))
     return
   }
   if (body.patch !== undefined && typeof body.patch === 'object' && body.patch !== null) {
@@ -415,12 +412,6 @@ async function shelfPut(
   const progress = body.progress as { chapterIndex?: unknown; offsetRatio?: unknown } | undefined
   if (progress !== undefined && typeof progress === 'object'
     && typeof progress.chapterIndex === 'number' && typeof progress.offsetRatio === 'number') {
-    // 值域校验（与 pickShelfMeta 的 isFinite 同款纪律）：JSON.parse('1e999') = Infinity 会一路
-    // 写入书架并落盘成 null（JSON.stringify(Infinity) === 'null'）——静默数据损坏。
-    if (!Number.isInteger(progress.chapterIndex) || progress.chapterIndex < 0
-      || !Number.isFinite(progress.offsetRatio) || progress.offsetRatio < 0 || progress.offsetRatio > 1) {
-      throw new ApiError('progress.chapterIndex 需为非负整数、offsetRatio 需为 [0,1] 有限数', 400, 'BadRequest')
-    }
     const saved = service.shelfSaveProgress(bookKey, progress.chapterIndex, progress.offsetRatio)
     if (saved === null) {
       throw new ApiError(NOT_ON_SHELF, 400, 'BadRequest')

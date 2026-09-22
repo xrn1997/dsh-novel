@@ -60,3 +60,57 @@ function decodeBasicEntities(s: string): string {
 function safeFromCodePoint(code: number): string {
   try { return String.fromCodePoint(code) } catch { return '' }
 }
+
+// ── 简介（展示文本）─────────────────────────────────────────────────────
+
+/** 对面 Java 正则里的 `\s` 是 **ASCII 空白**（不含 U+3000 全角空格），JS 的 `\s` 含它——
+ *  直接照抄会让两地的段首缩进行为不同。移植时一律用这个显式字符类。 */
+const AW = '[ \t\n\r\f\v]'
+/** 换行连同前后 ASCII 空白（对面 indent1Regex = `\s*\n+\s*`）；对面全局替换，故带 g */
+const NL_RUN = new RegExp(AW + '*\\n+' + AW + '*', 'g')
+/** 串首空白（对面 indent2Regex = `^[\n\s]+`）。这里**额外含全角空格**：对面 `format` 先把换行
+ *  换成「换行 + 缩进」，再给串首补一次缩进，首行就成了四个全角空格——它自己后来在
+ *  `formatDisplayText` 里以「各来源的段首缩进宽度不一，先清空再统一补两个全角空格」修掉了，
+ *  本仓按修好的形状出（`formatIntro` 的第二条有意偏差，只裁空白不动文字）。 */
+const LEAD_WS = /^[\s　]+/
+/** 串尾空白——本仓额外含全角空格，见 formatIntro 的「有意偏差」 */
+const TAIL_WS = /[\s　]+$/
+
+/** 渲染指令前缀（对面 `HtmlFormatter.introPrefixRegex` 与 BookInfo 的三判据）：命中即**整段原样保留**，
+ *  交给渲染层按前缀选 HTML/Markdown/WebView 渲染器；本仓没有那三种渲染器，保留前缀的意义在于
+ *  「不把书源的交互标记与样式源码当纯文本净化掉」——现库 1 源（米读小说 ruleBookInfo.intro）。 */
+const INTRO_DIRECTIVE = new RegExp('^<(?:usehtml|useweb|md)>', 'i')
+
+/**
+ * 简介净化——对面 `HtmlFormatter.format` 的正则流水线逐条移植 + `take(5000)`：
+ * `&nbsp;`/`&ensp;`/`&emsp;` → 空格、`&thinsp;`/`&zwnj;`/`&zwj;` 与 U+2009–200D 删除 →
+ * 块级标签（div/p/br/hr/hN/article/dd/dl）换行 → 注释删除 → 其余标签连同属性删除 →
+ * 换行前后空白折叠成「换行 + 两个全角空格」、串首同补缩进、串尾 ASCII 空白删除。
+ *
+ * 与对面的两处**有意偏差**（都只裁/补空白，不动任何文字）：
+ * ① 串尾再收一次空白（含全角空格）——对面因 Java `\s` 不认全角空格，产物以「换行 + 缩进」
+ *    收尾，本仓的展示与导出契约是不留尾空行（见 `normalizeChapterText`）；
+ * ② 串首缩进统一成两个全角空格——对面 `format` 会先补一次再补一次，首行成四个全角空格，
+ *    它自己后来在 `formatDisplayText` 里以「先清空再统一补」修掉，本仓按修好的形状出。
+ *
+ * 两个取值点的差别（对面原样）：**搜索结果**恒净化（`model/webBook/BookList.kt` 的
+ * `HtmlFormatter.format(...).take(5000)`，**不认**渲染指令前缀）；**详情页**才先 `trimStart`
+ * 判前缀、命中就原样保留（`model/webBook/BookInfo.kt`）。所以 `keepDirective` 由调用方按面传，不在这里统一。
+ */
+export function formatIntro(raw: string, opts?: { keepDirective?: boolean }): string {
+  const trimmed = raw.trimStart()
+  if (opts?.keepDirective === true && INTRO_DIRECTIVE.test(trimmed)) return trimmed
+  const out = trimmed
+    .replace(/(&nbsp;)+/g, ' ')
+    .replace(/(&ensp;|&emsp;)/g, ' ')
+    .replace(/(&thinsp;|&zwnj;|&zwj;| |‌|‍)/g, '')
+    .replace(/<\/?(?:div|p|br|hr|h\d|article|dd|dl)[^>]*>/g, '\n')
+    .replace(/<!--[^>]*-->/g, '')
+    .replace(/<\/?[a-zA-Z]+(?=[ >])[^<>]*>/g, '')
+    .replace(NL_RUN, '\n　　')
+    .replace(LEAD_WS, '　　')
+    .replace(TAIL_WS, '')
+    .slice(0, 5000)
+  return out
+}
+

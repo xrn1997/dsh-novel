@@ -3,10 +3,10 @@ import { contentSlot, RULE_EPOCH_IMPACT, rulesEpoch } from '../../src/services/c
 import type { NormalizedRules } from '../../src/services/types.js'
 
 const NULLS: NormalizedRules = {
-  searchUrl: null, exploreUrl: null, ruleBookList: null, ruleBookName: null, ruleAuthor: null,
-  ruleBookUrl: null, ruleCoverUrl: null, ruleIntro: null, ruleLastChapter: null, ruleTocUrl: null,
+  searchUrl: null, exploreUrl: null, probeKeyword: null, bookUrlPattern: null, ruleBookList: null, ruleBookName: null, ruleAuthor: null,
+  ruleBookUrl: null, ruleCoverUrl: null, ruleIntro: null, ruleLastChapter: null, ruleKind: null, ruleWordCount: null, ruleTocUrl: null,
   ruleChapterList: null, ruleChapterName: null, ruleChapterUrl: null, ruleDetailName: null,
-  ruleDetailAuthor: null, ruleDetailCoverUrl: null, ruleDetailIntro: null, ruleDetailLastChapter: null,
+  ruleDetailAuthor: null, ruleDetailCoverUrl: null, ruleDetailIntro: null, ruleDetailLastChapter: null, ruleDetailKind: null, ruleDetailWordCount: null,
   ruleDetailInit: null,
   ruleContent: null, nextTocUrl: null, nextPageUrl: null, header: null, loginUrl: null, jsLib: null,
   headerRule: null,

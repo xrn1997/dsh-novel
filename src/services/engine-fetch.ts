@@ -31,6 +31,38 @@ export function engineFetch(
   }
 }
 
+/** `java.post(url, body, headers)` 的引擎桥（对面 `help/JsExtensions.kt` 的 `post(...)` →
+ *  `Jsoup.connect(url).headers(h).method(POST).reqBody(body).execute()`，返回 **Connection.Response**）。
+ *  请求语义仍走 assembleRequest + fetchInitOf（与 engineFetch 同一份，不自持第二套）；只有三件事不同：
+ *  方法恒为 POST、body 由脚本给、脚本那三份 header **叠在源级头之上**（jsoup `headers(map)` 的覆盖语义）。
+ *  返回的是 Response 的**数据面**——`res.body()` / `res.cookies()` 那层方法壳在沙箱 BOOTSTRAP 里包
+ *  （宿主桥只走 JSON 序列化边界，不跨边界传函数）。 */
+export function engineFetchPost(
+  fetcher: Fetcher, headers: HeadersInput, vars?: Record<string, string | number>,
+): (url: string, body: string, hdrs?: Record<string, string>) => Promise<{
+  url: string; body: string; contentType?: string; statusCode: number; cookies: Record<string, string>
+}> {
+  return async (rawUrl, body, hdrs) => {
+    const plan = assembleRequest(rawUrl, vars ?? {}, null)
+    const init = fetchInitOf(
+      { ...plan, method: 'POST', body, headers: { ...plan.headers, ...(hdrs ?? {}) } },
+      await resolveHeadersInput(headers),
+    )
+    const page = await fetcher.fetchPage(plan.url, init)
+    return {
+      url: page.finalUrl,
+      body: decodeBody(page, plan.charset),
+      contentType: page.contentType,
+      statusCode: page.status,
+      // Jsoup 的 cookies() = 响应 cookie 表（name → value）；取每条 Set-Cookie 的第一个 `;` 前段
+      cookies: Object.fromEntries(page.setCookie.map(h => h.split(';')[0]).map(p => {
+        const i = p.indexOf('=')
+        return i < 0 ? [p, ''] : [p.slice(0, i), p.slice(i + 1)]
+      })),
+    }
+  }
+}
+
 /** 二进制抓取桥（`java.downloadFile` 用）：与 engineFetch 同请求语义（选项/头/守门），
  *  但**不解码**——返回原始字节（PNG 密钥图经字符集解码链会直接损坏字节）。
  *  baseUrl = null 同 engineFetch（URL 由脚本拼好）。 */

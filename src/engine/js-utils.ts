@@ -22,6 +22,55 @@ export function md5Hex16(s: string): string {
   return md5Hex(s).slice(8, 24)
 }
 
+/**
+ * JCA 算法名 → node 摘要名。对面把 Java 的算法名直接传进来（`MessageDigest.getInstance(name)` /
+ * `Mac.getInstance(name)`：`MD5`/`SHA-256`/`HmacSHA512`…），node 的名字族不一样，且
+ * 名字对不上时对面抛 NoSuchAlgorithmException —— 所以**认不出就点名抛错**，绝不静默退成 md5。
+ * 刻意用显式表而不是 `crypto.getHashNames()`：后者在部分运行时里不存在（本仓实测 vitest 的
+ * node realm 就没有该方法），拿它当白名单会让整桥在加载期炸。
+ */
+const JCA_TO_NODE_HASH: Record<string, string> = {
+  md5: 'md5',
+  sha1: 'sha1', sha224: 'sha224', sha256: 'sha256', sha384: 'sha384', sha512: 'sha512',
+  sha3224: 'sha3-224', sha3256: 'sha3-256', sha3384: 'sha3-384', sha3512: 'sha3-512',
+  ripemd160: 'ripemd160',
+}
+
+/** `stripHmac` 为 HMAC 族而设：JCA 叫 `HmacSHA256`，node 的 `createHmac` 要的是摘要名 `sha256`
+ *  （对面 `CryptoUtils.hmac` 亦然——算法名只承担「用哪个摘要」）。 */
+export function jcaHashName(algorithm: string, stripHmac = false): string {
+  const raw = String(algorithm)
+  const base = stripHmac ? raw.replace(/^hmac[-_]?/i, '') : raw
+  const key = base.replace(/[-_\s]/g, '').toLowerCase()
+  const hit = JCA_TO_NODE_HASH[key]
+  if (hit === undefined) {
+    throw new Error(`不支持的摘要算法：${raw}（本桥认 MD5/SHA-1/SHA-256/…/SHA3-256/…，HMAC 族写 HmacSHA256 这类名字）`)
+  }
+  return hit
+}
+
+/** 对面 `JsEncodeUtils.digestHex(data, algorithm)`：**data 在前、算法在后**，data 按 UTF-8 取字节 */
+export function digestHex(data: string, algorithm: string): string {
+  return crypto.createHash(jcaHashName(algorithm)).update(String(data), 'utf8').digest('hex')
+}
+
+/** 对面 `digestBase64Str`：标准 base64、无换行（Android `Base64.NO_WRAP`） */
+export function digestBase64(data: string, algorithm: string): string {
+  return crypto.createHash(jcaHashName(algorithm)).update(String(data), 'utf8').digest('base64')
+}
+
+/** 对面 `HMacHex(data, algorithm, key)`：key 与 data 都按 UTF-8 取字节 */
+export function hMacHex(data: string, algorithm: string, key: string): string {
+  return crypto.createHmac(jcaHashName(algorithm, true), Buffer.from(String(key), 'utf8'))
+    .update(String(data), 'utf8').digest('hex')
+}
+
+/** 对面 `HMacBase64(data, algorithm, key)` */
+export function hMacBase64(data: string, algorithm: string, key: string): string {
+  return crypto.createHmac(jcaHashName(algorithm, true), Buffer.from(String(key), 'utf8'))
+    .update(String(data), 'utf8').digest('base64')
+}
+
 /** base64 编码（UTF-8 字节） */
 export function base64Encode(s: string): string {
   return Buffer.from(String(s), 'utf8').toString('base64')
@@ -248,4 +297,57 @@ export function javaDecode(bytes: Uint8Array, charset: string): string {
   if (cs === 'utf8' || cs === 'latin1' || cs === 'ascii') return Buffer.from(bytes).toString(cs)
   if (!iconv.encodingExists(cs)) throw new Error(`不支持的 charset=${charset}`)
   return iconv.decode(Buffer.from(bytes), cs)
+}
+
+// ── 中文数字（legado StringUtils.chineseNumToInt / JsExtensions.toNumChapter）──────────
+// 逐字抄对面的算法而不是自写一个「更聪明」的：`一千一` 在对面算出 1100（末位数字跟在「千」后按
+// 「补一位」处理 = 1×1000/10，而 `一千二百` 是 1200），源作者要的就是这个输出——换一套算法会
+// 静默改掉他们排序与标题规整的结果。两个样例都钉在 `tests/engine/js-utils.test.ts`。
+const CHN_MAP: Record<string, number> = {}
+for (const [i, ch] of [...'零一二三四五六七八九十'].entries()) CHN_MAP[ch] = i
+for (const [i, ch] of [...'〇壹贰叁肆伍陆柒捌玖拾'].entries()) CHN_MAP[ch] = i
+Object.assign(CHN_MAP, { 两: 2, 百: 100, 佰: 100, 千: 1000, 仟: 1000, 万: 10000, 萬: 10000, 亿: 100000000 })
+
+/** 中文数字 → 整数；含认不出的字符 → -1（对面 `runCatching{…}.getOrDefault(-1)`） */
+export function chineseNumToInt(chNum: string): number {
+  const cn = [...chNum]
+  let result = 0
+  let tmp = 0
+  let billion = 0
+  for (let i = 0; i < cn.length; i++) {
+    const num = CHN_MAP[cn[i]]
+    if (num === undefined) return -1
+    if (num === 100000000) {
+      result = (result + tmp) * num
+      billion = billion * 100000000 + result
+      result = 0
+      tmp = 0
+    } else if (num === 10000) {
+      result = (result + tmp) * num
+      tmp = 0
+    } else if (num >= 10) {
+      if (tmp === 0) tmp = 1
+      result += num * tmp
+      tmp = 0
+    } else {
+      tmp = (i >= 2 && i === cn.length - 1 && (CHN_MAP[cn[i - 1]] ?? 0) > 10)
+        ? (num * (CHN_MAP[cn[i - 1]] ?? 0)) / 10
+        : tmp * 10 + num
+    }
+  }
+  return result + tmp + billion
+}
+
+/** 字符串 → 整数（先半角化后 parseInt，失败走中文数字；空 → -1） */
+export function stringToInt(str: string): number {
+  const num = str.replace(/[０-９]/g, (d) => String(d.charCodeAt(0) - 0xff10)).replace(/\s+/g, '')
+  if (num === '') return -1
+  return /^-?\d+$/.test(num) ? Number(num) : chineseNumToInt(num)
+}
+
+/** legado `java.toNumChapter`：把标题里第一个「第…章」的数字段换成阿拉伯数字，无匹配原样返回 */
+export function toNumChapter(s: string): string {
+  const m = /(第)(.+?)(章)/.exec(s)
+  if (m === null) return s
+  return `${m[1]}${stringToInt(m[2])}${m[3]}`
 }

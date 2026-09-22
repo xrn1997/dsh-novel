@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type { NovelSource, SourceAuth, SourceContentKind, SourceStatus } from './types.js'
 import type { NormalizeResult } from './normalize.js'
-import { contentTypeOfRaw, rawHeaderRule, rawRuleDetailInit, SOURCE_KIND_LABEL, splitGroups, stripLeadingIcons } from './normalize.js'
+import { contentTypeOfRaw, rawBookMetaFields, rawHeaderRule, rawRuleDetailInit, rawRulePattern, SOURCE_KIND_LABEL, splitGroups, stripLeadingIcons } from './normalize.js'
 import { readJson, writeJsonAtomic } from './storage.js'
 
 /**
@@ -96,6 +96,25 @@ export class SourceRegistry {
         s.rules.headerRule = wantHeaderRule; changed = true
       } else if (s.rules.headerRule === undefined) {
         s.rules.headerRule = null; changed = true
+      }
+      // ⑧ bookUrlPattern 按 raw 重推（与 ⑥⑦ 同构）：详情页嗅探字段是后来才读的，存量 rules 缺键
+      // → 27/158 声明了它的源搜索时照旧只跑列表规则（对面命中即按详情页解析）。
+      const wantPattern = rawRulePattern(s.raw)
+      if (wantPattern !== undefined && s.rules.bookUrlPattern !== wantPattern) {
+        s.rules.bookUrlPattern = wantPattern; changed = true
+      } else if (s.rules.bookUrlPattern === undefined) {
+        s.rules.bookUrlPattern = null; changed = true
+      }
+      // ⑨ kind / wordCount 按 raw 补推（与 ⑥⑦⑧ 同族的存量收敛）：这两个字段后来才接进取值链路，
+      // 老数据的 rules 根本没这四个键 → 对面读得出的分类/字数对已入库的源永远是 null。
+      // **与 ⑥⑦⑧ 的差别**：只补 `undefined` 的键、不覆盖已有值——新入库的源由 normalize 正确派生
+      // （含字符串化容器那条路径），这里再按 raw 读一遍是第二条路，覆盖会把对的改成错的。
+      const wantMeta = rawBookMetaFields(s.raw)
+      if (wantMeta !== undefined) {
+        for (const [k, v] of Object.entries(wantMeta)) {
+          const rules = s.rules as unknown as Record<string, string | null | undefined>
+          if (rules[k] === undefined) { rules[k] = v; changed = true }
+        }
       }
       if (Array.isArray(s.groups)) {
         const migrated = s.groups.flatMap(splitGroups)

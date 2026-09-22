@@ -100,6 +100,11 @@ export interface SearchHit {
   coverUrl: string | null
   intro: string | null
   lastChapterName: string | null
+  /** 分类（对面 `ruleSearch.kind`；现库 150 源带规则）：原样字符串，不猜成数组 */
+  kind: string | null
+  /** 字数（对面 `ruleSearch.wordCount`；现库 42 源带规则）：对面也是"取到什么串给什么"，
+   *  「x.x万字」那层格式化在对面属 App 展示轴（矩阵 `e-word-count-format` 记不适用） */
+  wordCount: string | null
 }
 
 /** 逐源搜索分组：单源失败只写 error，不拖垮整批 */
@@ -159,6 +164,10 @@ export interface BookDetail {
   intro: string | null
   lastChapterName: string | null
   tocUrl: string | null
+  /** 与 SearchHit 同源的两个字段（对面 BookInfoRule 的 kind/wordCount；详情规则缺席时
+   *  回退搜索规则，与 name/author/coverUrl 同一条回落链） */
+  kind: string | null
+  wordCount: string | null
 }
 
 // ── 书架面 ──────────────────────────────────────────────────────────────
@@ -166,6 +175,14 @@ export interface BookDetail {
 /** type 别名而非 interface：工具输出 schema 会把它推断进 Record<string, JsonValue>，
  *  interface 无隐式 index signature 会在这里炸（实测）——别改回 interface。 */
 export type ShelfProgress = { chapterIndex: number; offsetRatio: number; updatedAt: number }
+
+/** 「这本书读过没有」——存档恢复与书架卡片（在读/未读筛选、进度行）共用这一份判定。
+ *  口径是「章 > 0 **或** 章内比例 > 0」：第 0 章里的位置同样是进度。此前两处各写一份且相反
+ *  （卡片侧算了比例、阅读器恢复只看 chapterIndex>0），于是同一条存档「在读」与「没读过」
+ *  互相矛盾——读第 1 章的人进度永远恢复不了，还会被进书后的视口读数抹平。 */
+export function hasProgress(p: ShelfProgress): boolean {
+  return p.chapterIndex > 0 || p.offsetRatio > 0
+}
 
 /** 书架条目：元数据 + 阅读进度 */
 export interface ShelfBook {
@@ -176,6 +193,8 @@ export interface ShelfBook {
   coverUrl?: string
   intro?: string
   lastChapterName?: string
+  kind?: string
+  wordCount?: string
   /** 全书章数（可选——旧数据无此字段；首页进度条用） */
   totalChapters?: number
   progress: ShelfProgress
@@ -195,6 +214,8 @@ export const SHELF_META = {
   coverUrl: 'string',
   intro: 'string',
   lastChapterName: 'string',
+  kind: 'string',
+  wordCount: 'string',
   totalChapters: 'number',
 } as const
 
@@ -393,7 +414,8 @@ export const shelfBody = {
   addBook: (b: {
     sourceId: string; title: string
     author?: string | null; coverUrl?: string | null; intro?: string | null
-    lastChapterName?: string | null; totalChapters?: number | null
+    lastChapterName?: string | null; kind?: string | null; wordCount?: string | null
+    totalChapters?: number | null
   }): { sourceId: string; title: string } & Record<string, string | number> => {
     // 字段取舍走 pickShelfMeta 单点：null/undefined 缺席、totalChapters 客户端即归一化；
     // sourceId/title 必填后写，保证取值恒为入参本值（pick 的运行时值无 null——断言只剥类型面的可空）

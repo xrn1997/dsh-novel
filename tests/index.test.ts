@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
-import { promises as fs } from 'node:fs'
+import { describe, expect, it, vi } from 'vitest'
+import { existsSync, promises as fs } from 'node:fs'
 import http from 'node:http'
+import path from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { Config, apply, inject, name } from '../src/index.js'
 import { ROUTES } from '../src/shared/wire.js'
@@ -61,7 +62,7 @@ describe('Cordis 插件入口', () => {
     expect(() => apply(fakeCtx().ctx, { dataDir: 'D:/x', searchTimeoutMs: 0 })).toThrow(/searchTimeoutMs/)
     expect(() => apply(fakeCtx().ctx, { dataDir: 'D:/x', jsTimeoutMs: 0 })).toThrow(/jsTimeoutMs/)
   })
-  it('apply：ready 后注册 prefix 路由 + 5 工具；disposer 摘干净', async () => {
+  it('apply：ready 后注册 prefix 路由 + 6 工具；disposer 摘干净', async () => {
     const dir = await makeTempDir('novel-entry-')
     const { ctx, calls, disposeAll } = fakeCtx()
     try {
@@ -74,13 +75,37 @@ describe('Cordis 插件入口', () => {
       expect(routes).toHaveLength(1)
       expect(routes[0].route).toMatchObject({ kind: 'prefix', path: '/novel-api' })
       expect(typeof routes[0].route.handler).toBe('function')
-      await waitFor(() => calls.filter((c) => c.kind === 'tool').length === 5)
-      expect(calls.filter((c) => c.kind === 'tool')).toHaveLength(5)
+      await waitFor(() => calls.filter((c) => c.kind === 'tool').length === 6)
+      expect(calls.filter((c) => c.kind === 'tool')).toHaveLength(6)
       disposeAll()
       expect(calls.filter((c) => c.kind === 'off-route')).toHaveLength(1)
-      expect(calls.filter((c) => c.kind === 'off-tool')).toHaveLength(5)
+      expect(calls.filter((c) => c.kind === 'off-tool')).toHaveLength(6)
       expect(calls.some((c) => c.kind === 'off-attach')).toBe(true)   // controller 随 fiber 摘掉
     } finally { disposeAll() }        // 断言失败也要复位 applied 守卫，别污染后续用例（目录归 setup.ts 登记簿）
+  })
+  it('dispose：书架防抖写落地（宿主重启前的最后一条进度不许丢在窗口里）', async () => {
+    const dir = await makeTempDir('novel-flush-')
+    const { ctx, calls, disposeAll } = fakeCtx()
+    try {
+      apply(ctx, { dataDir: dir })
+      await waitFor(() => calls.filter((c) => c.kind === 'tool').length === 6)
+      const shelf = calls.find((c) => c.kind === 'tool' && c.tool.name === 'dshnovel_shelf')!.tool
+      // **冻结防抖窗口**再写入：定时器一旦被假造，100ms 那笔永远不会自己到点——此后文件只可能由
+      // 「卸载即落盘」写出来。旧口径靠 wall-clock 判（6×10ms 压在 100ms 窗口内），负载下会抖：
+      // 慢机器上窗口先到点，断言的就不是这条性质了。setImmediate 留给真实 I/O 轮询。
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+      await shelf.execute({ action: 'add', bookKey: 'k', title: '书', sourceId: 's' }, {})
+      await shelf.execute({ action: 'save_progress', bookKey: 'k', chapterIndex: 7, offsetRatio: 0.5 }, {})
+      disposeAll()                                   // 立刻卸载
+      const file = path.join(dir, 'shelf.json')
+      for (let i = 0; i < 2000 && !existsSync(file); i++) await new Promise((r) => setImmediate(r))
+      expect(existsSync(file), '卸载后防抖窗口里的进度没有落盘（flush 未接线）').toBe(true)
+      const onDisk = JSON.parse(await fs.readFile(file, 'utf8'))
+      expect(onDisk[0].progress).toMatchObject({ chapterIndex: 7, offsetRatio: 0.5 })
+    } finally {
+      vi.useRealTimers()
+      disposeAll()
+    }
   })
   it('ready 前 disposer：不注册也不漏', async () => {
     const dir = await makeTempDir('novel-entry2-')

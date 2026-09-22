@@ -28,7 +28,7 @@ describe('fetchSearchPage', () => {
     const f = createFetcher({ fetchImpl: async () => html(SEARCH_HTML) })
     const r = await fetchSearchPage(src(), '书', f)
     expect(r.ok).toBe(true)
-    if (!r.ok) return
+    if (!r.ok || r.shape !== 'list') return
     expect(r.items).toHaveLength(2)
     expect(r.landedUrl).toBe('https://s.com/search?q=%E4%B9%A6')
   })

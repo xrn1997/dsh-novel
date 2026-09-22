@@ -1,8 +1,32 @@
 import { describe, expect, it } from 'vitest'
-import { assembleRequest, buildSearchRequest, fetchInitOf, parseUrlOption, stripUrlOption } from '../../src/services/request.js'
+import { assembleRequest, buildSearchRequest, fetchInitOf, parseUrlOption, stripUrlOption, absUrlKeepOption } from '../../src/services/request.js'
 import { isJsSearchUrl, preEvaluateUrlJs, resolveJsSearchTemplate } from '../../src/services/search-template.js'
 import type { Fetcher } from '../../src/services/fetcher.js'
 import type { NovelSource } from '../../src/services/types.js'
+
+/** 宁吵不瞒：选项里的未知键不许静默丢弃（本库 5 源带 retry/bodyJs/type 等键） */
+describe('URL 选项的未知键留痕', () => {
+  const captureWarn = (run: () => unknown): string[] => {
+    const warns: string[] = []
+    const orig = console.warn
+    console.warn = (...a: unknown[]) => { warns.push(a.join(' ')) }
+    try { run() } finally { console.warn = orig }
+    return warns
+  }
+
+  it('含本插件不支持的键 → 点名这些键', () => {
+    const warns = captureWarn(() => assembleRequest(
+      'https://x/api,{"method":"POST","retry":3,"bodyJs":"@js:1"}', {}, 'https://x'))
+    expect(warns.join('\n')).toMatch(/retry/)
+    expect(warns.join('\n')).toMatch(/bodyJs/)
+  })
+
+  it('只含支持的键 → 一条 warn 都不发', () => {
+    const warns = captureWarn(() => assembleRequest(
+      'https://x/api,{"method":"POST","body":"a=1","charset":"gbk","headers":{"Referer":"https://x"}}', {}, 'https://x'))
+    expect(warns).toEqual([])
+  })
+})
 
 /** legado URL 模板请求形态（官方文档钉死）：纯 URL / url,{json} 选项 / 相对 URL 按 baseUrl 解析 */
 describe('assembleRequest + fetchInitOf（选项语义唯一主人）', () => {
@@ -145,11 +169,11 @@ describe('isJsSearchUrl', () => {
 describe('resolveJsSearchTemplate', () => {
   const mkSource = (header: Record<string, string> | null = null): NovelSource => ({
     id: 'i', name: 'n', baseUrl: 'https://a.com', enabled: true, groups: [], type: 'text', raw: {},
-    rules: { searchUrl: null, exploreUrl: null, ruleBookList: null, ruleBookName: null, ruleAuthor: null,
-      ruleBookUrl: null, ruleCoverUrl: null, ruleIntro: null, ruleLastChapter: null, ruleTocUrl: null,
+    rules: { searchUrl: null, exploreUrl: null, probeKeyword: null, bookUrlPattern: null, ruleBookList: null, ruleBookName: null, ruleAuthor: null,
+      ruleBookUrl: null, ruleCoverUrl: null, ruleIntro: null, ruleLastChapter: null, ruleKind: null, ruleWordCount: null, ruleTocUrl: null,
       ruleChapterList: null, ruleChapterName: null, ruleChapterUrl: null,
       ruleDetailName: null, ruleDetailAuthor: null, ruleDetailCoverUrl: null,
-      ruleDetailIntro: null, ruleDetailLastChapter: null, ruleDetailInit: null,
+      ruleDetailIntro: null, ruleDetailLastChapter: null, ruleDetailKind: null, ruleDetailWordCount: null, ruleDetailInit: null,
       ruleContent: 'x', nextTocUrl: null, nextPageUrl: null, header, loginUrl: null, jsLib: null, headerRule: null },
     status: 'unverified', importedAt: 0,
   })
@@ -190,11 +214,11 @@ describe('resolveJsSearchTemplate', () => {
 describe('preEvaluateUrlJs', () => {
   const mkSource = (): NovelSource => ({
     id: 'i', name: 'n', baseUrl: 'https://a.com', enabled: true, groups: [], type: 'text', raw: {},
-    rules: { searchUrl: null, exploreUrl: null, ruleBookList: null, ruleBookName: null, ruleAuthor: null,
-      ruleBookUrl: null, ruleCoverUrl: null, ruleIntro: null, ruleLastChapter: null, ruleTocUrl: null,
+    rules: { searchUrl: null, exploreUrl: null, probeKeyword: null, bookUrlPattern: null, ruleBookList: null, ruleBookName: null, ruleAuthor: null,
+      ruleBookUrl: null, ruleCoverUrl: null, ruleIntro: null, ruleLastChapter: null, ruleKind: null, ruleWordCount: null, ruleTocUrl: null,
       ruleChapterList: null, ruleChapterName: null, ruleChapterUrl: null,
       ruleDetailName: null, ruleDetailAuthor: null, ruleDetailCoverUrl: null,
-      ruleDetailIntro: null, ruleDetailLastChapter: null, ruleDetailInit: null,
+      ruleDetailIntro: null, ruleDetailLastChapter: null, ruleDetailKind: null, ruleDetailWordCount: null, ruleDetailInit: null,
       ruleContent: 'x', nextTocUrl: null, nextPageUrl: null, header: null, loginUrl: null, jsLib: null, headerRule: null },
     status: 'unverified', importedAt: 0,
   })
@@ -214,5 +238,26 @@ describe('preEvaluateUrlJs', () => {
   it('求值结果拼回原位（混合纯变量与 JS 表达式）', async () => {
     const t = await preEvaluateUrlJs(mkSource(), '/s?q={{key}}&n={{1+2}}', 'x', 1, fetcher)
     expect(t).toBe('/s?q={{key}}&n=3')
+  })
+})
+
+describe('absUrlKeepOption 不吃换行（多值拼出来的 URL 宁可取不到，也不拼成路径重复的假 URL）', () => {
+  it('值内部有换行 → null（真机实证：条目里 4 个 a 同 href，去重前以 \n 拼接后被 new URL 吃掉换行）', () => {
+    expect(absUrlKeepOption('/a/b\n/a/b', 'https://x.com/search')).toBeNull()
+    expect(absUrlKeepOption('/a/b\n/c,{"method":"POST"}', 'https://x.com/search')).toBeNull()
+  })
+  it('正常相对 URL + 选项后缀照旧保留', () => {
+    expect(absUrlKeepOption('/a/b,{"method":"POST"}', 'https://x.com/search')).toBe('https://x.com/a/b,{"method":"POST"}')
+  })
+})
+
+describe('搜索 URL 的页码角列表接线（`<a,b,c>` 走 assembleRequest）', () => {
+  it('page=1 时整段消失（恩京的书房形态：两侧发的 URL 从此一致）', () => {
+    const p = buildSearchRequest('https://e.example/<,page/{{page}}/>?s={{key}}', { key: '书', page: 1 }, 'https://e.example')
+    expect(p.url).toBe('https://e.example/?s=%E4%B9%A6')
+  })
+  it('page=2 落在第二项上（末斜杠在角括号内，属被选中项的一部分）', () => {
+    const p = buildSearchRequest('https://e.example/<,page/{{page}}/>?s=k', { key: 'x', page: 2 }, 'https://e.example')
+    expect(p.url).toBe('https://e.example/page/2/?s=k')
   })
 })

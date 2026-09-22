@@ -141,7 +141,7 @@ function HitRow({ sourceId, hit, deps }: { sourceId: string; hit: SearchHit; dep
     const bookKey = hit.url ?? ''
     return deps.apiSend('PUT', paramRoutes.shelfKey(bookKey), shelfBody.addBook({
       sourceId, title: hit.title, author: hit.author, coverUrl: hit.coverUrl,
-      intro: hit.intro, lastChapterName: hit.lastChapterName,
+      intro: hit.intro, lastChapterName: hit.lastChapterName, kind: hit.kind, wordCount: hit.wordCount,
     })).then(() => { setAdded(true) })
   }
   const read = (): void => {

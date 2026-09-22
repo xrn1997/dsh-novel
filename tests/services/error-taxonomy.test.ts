@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { classify } from '../../src/services/errors.js'
 import type { ErrorCategory } from '../../src/services/errors.js'
-import { ChapterNotFoundError, DecodeError, FetchError, LocalNotMountedError, RuleMissingError, SourceNotFoundError } from '../../src/services/errors.js'
+import { ChapterNotFoundError, DecodeError, FetchError, InvalidRequestError, LocalNotMountedError, RuleMissingError, SourceNotFoundError } from '../../src/services/errors.js'
 import { JsSandboxError, RuleEvalError, UnsupportedRuleError } from '../../src/engine/index.js'
 import { LocalFileTooLargeError, LocalImportError } from '../../src/services/localbooks.js'
 import { JobRunningError } from '../../src/services/import-job.js'
@@ -35,6 +35,8 @@ const TABLE: Array<[unknown, ErrorCategory, number, string, string]> = [
   [new DecodeError('bad', { url: 'https://a', charset: 'gbk-x' }), 'fetch', 502, 'DecodeError', 'DecodeError'],
   [new SourceNotFoundError('s1'), 'not-found', 404, 'NotFound', 'Error'],
   [new ChapterNotFoundError(9, 42), 'not-found', 404, 'NotFound', 'Error'],
+  // 值域错（非空 / 非负整数 / 比例在 [0,1]）：门住门面动词，两个调用面（HTTP、agent 工具）共用
+  [new InvalidRequestError('加书需带非空 sourceId'), 'bad-request', 400, 'BadRequest', 'Error'],
   // 新收三类目（此前：LocalImportError 自带 status / JobRunningError 409 特判包装 / 本地未挂载靠路由 catch）
   [new LocalImportError('文件为空'), 'local-import', 400, 'BadRequest', 'Error'],
   [new LocalFileTooLargeError('文件超限'), 'local-too-large', 413, 'PayloadTooLarge', 'Error'],
@@ -68,7 +70,7 @@ describe('错误分类学表（classify → 双投影）', () => {
     // satisfies Record<ErrorCategory, true>：给 ErrorCategory 加成员而不在此列出 → **编译期**报错
     // （此前是手写字面量数组，新类目加了它还是 9 项、用例照绿）
     const all = {
-      'rule-eval': true, 'rule-missing': true, fetch: true, 'not-found': true,
+      'rule-eval': true, 'rule-missing': true, fetch: true, 'not-found': true, 'bad-request': true,
       'local-import': true, 'local-too-large': true, unavailable: true, 'job-running': true, other: true,
     } satisfies Record<ErrorCategory, true>
     expect([...covered].sort()).toEqual(Object.keys(all).sort())

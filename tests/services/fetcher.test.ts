@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createFetcher, decodeBody, headerOf } from '../../src/services/fetcher.js'
+import { createFetcher, decodeBody, effectiveUserAgent, headerOf } from '../../src/services/fetcher.js'
 import { FetchError, DecodeError } from '../../src/services/errors.js'
 import type { NovelSource } from '../../src/services/types.js'
 
@@ -70,12 +70,35 @@ describe('fetchPage', () => {
     const headers2 = (seen as { headers: Record<string, string> }).headers
     expect(headers2['User-Agent']).toBe('MyBot/1.0')
   })
+
+  it('源声明**小写** user-agent 同样覆盖缺省 UA（头名不敏感；两键并存会合成畸形头）', async () => {
+    // 裸 {...DEFAULT_HEADERS, ...init} 会让 User-Agent 与 user-agent 并存，undici 把它们并成一条
+    // `"默认, 源"`（本机实测服务端收到的就是这串）——源声明的 UA 就此失效，比覆盖更坏。
+    let seen: Record<string, unknown> | undefined
+    const f = createFetcher({
+      fetchImpl: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        seen = init as unknown as Record<string, unknown>
+        return new Response('ok', { status: 200 })
+      }) as unknown as typeof globalThis.fetch,
+    })
+    await f.fetchPage('https://a.com/x', { headers: { 'user-agent': 'SrcBot/1.0' } })
+    const headers = (seen as { headers: Record<string, string> }).headers
+    expect(headers['user-agent']).toBe('SrcBot/1.0')
+    expect(Object.keys(headers).filter((k) => k.toLowerCase() === 'user-agent')).toHaveLength(1)
+  })
+
+  it('effectiveUserAgent 认小写声明（它的承诺是「我们真发出去的那条」）', () => {
+    const src = (header: Record<string, string>) => ({ rules: { header }, auth: undefined }) as unknown as NovelSource
+    expect(effectiveUserAgent(src({ 'user-agent': 'SrcBot/1.0' }))).toBe('SrcBot/1.0')
+    expect(effectiveUserAgent(src({}))).toContain('Mozilla/5.0')
+  })
 })
 
 describe('decodeBody 解码链', () => {
   const page = (buf: Buffer, contentType?: string) => ({
     raw: buf, finalUrl: 'https://a.com', contentType,
     charset: contentType?.match(/charset=([^;\s]+)/i)?.[1]?.toLowerCase(),
+    status: 200, setCookie: [],
   })
   const gbkHello = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]) // iconv gbk「你好」
 
@@ -107,11 +130,11 @@ describe('decodeBody 解码链', () => {
 describe('headerOf', () => {
   const src = (over: Partial<NovelSource>): NovelSource => ({
     id: 'i', name: 'n', baseUrl: 'https://a.com', enabled: true, groups: [], type: 'text', raw: {},
-    rules: { searchUrl: null, exploreUrl: null, ruleBookList: null, ruleBookName: null, ruleAuthor: null,
-      ruleBookUrl: null, ruleCoverUrl: null, ruleIntro: null, ruleLastChapter: null, ruleTocUrl: null,
+    rules: { searchUrl: null, exploreUrl: null, probeKeyword: null, bookUrlPattern: null, ruleBookList: null, ruleBookName: null, ruleAuthor: null,
+      ruleBookUrl: null, ruleCoverUrl: null, ruleIntro: null, ruleLastChapter: null, ruleKind: null, ruleWordCount: null, ruleTocUrl: null,
       ruleChapterList: null, ruleChapterName: null, ruleChapterUrl: null,
       ruleDetailName: null, ruleDetailAuthor: null, ruleDetailCoverUrl: null,
-      ruleDetailIntro: null, ruleDetailLastChapter: null, ruleDetailInit: null,
+      ruleDetailIntro: null, ruleDetailLastChapter: null, ruleDetailKind: null, ruleDetailWordCount: null, ruleDetailInit: null,
       ruleContent: 'x', nextTocUrl: null, nextPageUrl: null,
       header: null, loginUrl: null, jsLib: null, headerRule: null },
     status: 'unverified', importedAt: 0, ...over,

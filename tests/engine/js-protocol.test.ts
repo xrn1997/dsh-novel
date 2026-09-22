@@ -29,7 +29,10 @@ type Eq<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
 type Assert<T extends true> = T
 
 // 类型别名仅作编译期断言（tsc --noEmit 覆盖 tests；形状回归即红）
-type _Ajax = Assert<Eq<JavaBridge['ajax'], (url: string) => Promise<string>>>
+// 形参是 unknown 而非 string：对面 Rhino 按 String 形参强制转换，脚本常把上一段的值
+// （JSONPath 的单元素数组最常见）直接递给 ajax——桥侧统一 String()，空值点名（钉子见
+// tests/engine/js-bindings.test.ts 的「java.ajax 参数规约」）。
+type _Ajax = Assert<Eq<JavaBridge['ajax'], (url: unknown) => Promise<string>>>
 type _Get = Assert<Eq<JavaBridge['get'], (key: string) => string | undefined>>
 type _Put = Assert<Eq<JavaBridge['put'], (key: string, value: unknown) => void>>
 type _GetString = Assert<Eq<JavaBridge['getString'], (rule: string, isUrl?: boolean) => string>>
@@ -61,9 +64,9 @@ describe('JavaBridge 协议表（表驱动登记）', () => {
     expect([...unmounted].sort()).toEqual([...asyncRows].sort())
   })
 
-  it('async 行不进 javaSync 名单（ajax 走引导层特制包装）', () => {
+  it('async 行不进 javaSync 名单（ajax/downloadFile/connect/post 走引导层特制包装）', () => {
     const asyncNames = JAVA_PROTOCOL.flatMap((r) => (r.mode === 'async' ? [r.name] : []))
-    expect(asyncNames).toEqual(['ajax', 'downloadFile'])
+    expect(asyncNames).toEqual(['ajax', 'connect', 'post', 'downloadFile'])
     expect(SANDBOX_MOUNTS.javaSync).not.toContain('ajax')
     expect(SANDBOX_MOUNTS.javaSync).toContain('get')
   })
@@ -171,5 +174,49 @@ describe('invokeJavaMethod 分派（不进 vm 的直测）', () => {
     expect(invokeJavaMethod(depsOf(), 'encodeURI', ['书'])).toBe('%E4%B9%A6')
     expect(invokeJavaMethod(depsOf(), 'base64Encode', ['abc'])).toBe('YWJj')
     expect(invokeJavaMethod(depsOf(), 'hexDecodeToString', ['e4bda0'])).toBe('你')
+  })
+})
+
+/**
+ * 摘要 / HMAC 族（对面 `help/JsEncodeUtils.kt`：`digestHex(data, algorithm)` /
+ * `digestBase64Str(data, algorithm)` / `HMacHex(data, algorithm, key)` / `HMacBase64(...)`——
+ * **实参顺序是 data 在前、算法在后**，且 `data.toByteArray()` 是 UTF-8）。
+ *
+ * 期望值全部由 **openssl 3.5.6 独立算出**（不是 node crypto——那等于拿实现自证）；
+ * `HMacHex('Hi There', 'HmacSHA256', 0x0b×20)` 那一条同时是 RFC 4231 test case 2 的公开值，
+ * 两条来路对得上，才敢说这不是「按实现反推的期望」。
+ */
+describe('摘要与 HMAC 族（java.digestHex / digestBase64Str / HMacHex / HMacBase64）', () => {
+  it('digestHex：MD5 / SHA-256，与中文按 UTF-8 摘要的 SHA-512', () => {
+    expect(invokeJavaMethod(depsOf(), 'digestHex', ['abc', 'MD5']))
+      .toBe('900150983cd24fb0d6963f7d28e17f72')
+    expect(invokeJavaMethod(depsOf(), 'digestHex', ['abc', 'SHA-256']))
+      .toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
+    expect(invokeJavaMethod(depsOf(), 'digestHex', ['中文测试', 'SHA-512']))
+      .toBe('1fea9aee07bd0ab66604ef4f079d6b109a0e625c3bc38fe8f850111a9ee6b4a689f3cb454dfd8a16cbd35963382f4ca5d91cdcff2dd473028e6cfee256812eec')
+  })
+  it('digestBase64Str：标准 base64 单行（NO_WRAP），换行一个都不许多', () => {
+    expect(invokeJavaMethod(depsOf(), 'digestBase64Str', ['abc', 'SHA-1']))
+      .toBe('qZk+NkcGgWq6PiVxeFDCbJzQ2J0=')
+    const b64 = String(invokeJavaMethod(depsOf(), 'digestBase64Str', ['中文测试', 'SHA-256']))
+    expect(b64).toBe('41BUXRhzXF3S3sUNy5cfPrTN2iS5Wnm9trVT9qAc64c=')
+    expect(b64).not.toContain('\n')
+  })
+  it('HMacHex / HMacBase64：算法名去掉 Hmac 前缀后当摘要算法，key 按 UTF-8 取字节', () => {
+    const key = '\u000b'.repeat(20)   // RFC 4231 tc2：20 字节 0x0b
+    expect(invokeJavaMethod(depsOf(), 'HMacHex', ['Hi There', 'HmacSHA256', key]))
+      .toBe('b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7')
+    expect(invokeJavaMethod(depsOf(), 'HMacBase64', ['Hi There', 'HmacSHA256', key]))
+      .toBe('sDRMYdjbOFNcqK/OrwvxK4gdwgDJgz2nJuk3bC4yz/c=')
+    expect(invokeJavaMethod(depsOf(), 'HMacHex',
+      ['The quick brown fox jumps over the lazy dog', 'HmacSHA512', 'John']))
+      .toBe('effb80facca98c2983c290ab650583605433dff09eed7e72edb189bbff35808e2a77e3010794021db77e4595c95a2571db2b6afc5c65b4efe3ad56b85c528572')
+  })
+  it('认不出的算法名 → 点名该算法（不静默换成 md5，也不拿原样喂给 node）', () => {
+    const run = (args: unknown[]): unknown => invokeJavaMethod(depsOf(), 'digestHex', args)
+    expect(() => run(['abc', 'WHIRLPOOL-9'])).toThrow(/WHIRLPOOL-9/)
+  })
+  it('digestHex 拿到 HMAC 算法名 → 同样报「不支持的算法」（对面 MessageDigest 也抛 NoSuchAlgorithmException，不许当成 HMAC 悄悄算）', () => {
+    expect(() => invokeJavaMethod(depsOf(), 'digestHex', ['abc', 'HmacSHA256'])).toThrow(/HmacSHA256/)
   })
 })

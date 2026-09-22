@@ -27,6 +27,9 @@ const html = `<html><body>
 <a href="/read/9.html">阅读</a>
 <div id="content"><p>第一段正文</p><p>第二段正文</p><span>尾段</span></div>
 <ul class="novel_list"><li class="novel_li">甲</li><li class="other">乙</li></ul>
+<div id="reader"><div class="hint"><span>上一章</span></div><div class="bar"><div class="row"><div class="cell"><a id="pgnext" href="/p/2">下页</a></div></div></div></div>
+<ul class="vols"><li class="deep">甲<span><b><a href="/v/7">链</a></b></span></li><li class="flat">乙<span>无链接</span></li></ul>
+<ul class="pages"><li><a id="pgcur" href="/p/1">本页</a></li><li><a href="/v/8">影八</a></li><li><a href="/v/9">影九</a></li></ul>
 </body></html>`
 
 const $ = load(html)
@@ -132,6 +135,31 @@ describe('XPath：与引擎链协作', () => {
   })
 })
 
+describe('XPath 父步 `..`（真机新暴露：本机库 2 源 4 条规则、两种形态，2026-09 步骤普查）', () => {
+  // 真源原文：//a[text()="下一页"]/../../../preceding-sibling::div[1]（正文）
+  //          //a[text()="下一页"]/../following-sibling::li/a（目录）
+  it(' 三级父步后接逆向兄弟轴：preceding-sibling::div[1] = 最近前序兄弟', () => {
+    const v = evalX('//a[@id="pgnext"]/../../../preceding-sibling::div[1]')
+    expect(v.kind).toBe('nodes')
+    expect((v as any).nodes.text().trim()).toBe('上一章')
+  })
+  it(' 两级父步后接正向兄弟轴再接子步 → 该 li 之后的兄弟 li 的 a（节点集，目录面形态）', () => {
+    const v = evalX('//a[@id="pgcur"]/../following-sibling::li/a')
+    expect(v.kind).toBe('nodes')
+    expect((v as any).nodes.toArray().map((n: any) => n.attribs.href)).toEqual(['/v/8', '/v/9'])
+  })
+  it(' 单父步取父元素；父步后接属性末段 = 提取父的属性', () => {
+    expect((evalX('//a[@id="pgnext"]/..') as any).nodes.attr('class')).toBe('cell')
+    expect(texts(evalX('//a[@id="pgnext"]/../@class'))).toEqual(['cell'])
+  })
+  it(' 攀过文档根：文档节点不是元素 → 零命中 Miss（不猜成 html）', () => {
+    expect(evalX('//a[@id="next"]/../../..').kind).toBe('miss')
+  })
+  it(' 父步上的谓词按分组生效：..[1] 仍取到父（单元素组第 1 个）', () => {
+    expect((evalX('//a[@id="pgnext"]/..[1]') as any).nodes.attr('class')).toBe('cell')
+  })
+})
+
 describe('XPath：宁炸不猜的边界', () => {
   it(' 未支持函数（count/sum 等）→ UnsupportedRuleError', () => {
     expect(() => evalX('//dd[count(a)>0]')).toThrow(UnsupportedRuleError)
@@ -140,11 +168,35 @@ describe('XPath：宁炸不猜的边界', () => {
     expect(() => evalX('//a[1]/ancestor::div/@id')).toThrow(UnsupportedRuleError)
   })
   it(' 属性步在末段 = 提取（文档序全量）', () => {
-    const v = evalX('//a/@href')   // 文档序：sitebox(3) → vodlist(2) → allchapter(3) → bookbox(1) → next/阅读(2)
-    expect(texts(v)).toEqual(['/book/1/', '/book/2/', '/book/3/', '/v/1', '/v/2', '/c/1.html', '/c/2.html', '/c/3.html', '/b/9', '/toc/2.html', '/read/9.html'])
+    const v = evalX('//a/@href')   // 文档序：sitebox(3) → vodlist(2) → allchapter(3) → bookbox(1) → next/阅读(2) → reader/pages(3)
+    expect(texts(v)).toEqual(['/book/1/', '/book/2/', '/book/3/', '/v/1', '/v/2', '/c/1.html', '/c/2.html', '/c/3.html', '/b/9', '/toc/2.html', '/read/9.html', '/p/2', '/v/7', '/p/1', '/v/8', '/v/9'])
   })
   it(' 空路径/畸形 → UnsupportedRuleError', () => {
     expect(() => evalX('//')).toThrow(UnsupportedRuleError)
     expect(() => evalX('//dd[unclosed')).toThrow(UnsupportedRuleError)
+  })
+})
+
+describe('相对路径存在性谓词（li[.//a] 一类，真源 搬山人小说网 ruleChapterList）', () => {
+  const vols = '//ul[@class=\'vols\']'
+  it('.//a 命中「后代里有 a」的 li（直系谓词 [a] 命不中，差的就是这一层）', () => {
+    const v = evalX(`${vols}/li[.//a]`)
+    expect(v.kind).toBe('nodes')
+    expect((v as any).nodes.length).toBe(1)
+    expect((v as any).nodes.text()).toContain('甲')
+    expect(evalX(`${vols}/li[a]`).kind).toBe('miss')
+  })
+  it('谓词里的路径可以带属性步：[.//a/@href] = 后代里有带 href 的 a', () => {
+    const v = evalX(`${vols}/li[.//a/@href]`)
+    expect(v.kind).toBe('nodes')
+    expect((v as any).nodes.length).toBe(1)
+  })
+  it('与 and/@attr 组合照常走（谓词树递归复用同一求值）', () => {
+    const v = evalX(`${vols}/li[.//a and @class]`)
+    expect((v as any).nodes.length).toBe(1)
+    expect(evalX(`${vols}/li[not(.//a)]`).kind).toBe('nodes')
+  })
+  it('谓词内 // 起步如实抛（文档根绝对轴不在本求值器的上下文里）', () => {
+    expect(() => evalX(`${vols}/li[//a]`)).toThrow(/谓词路径起步不支持/)
   })
 })

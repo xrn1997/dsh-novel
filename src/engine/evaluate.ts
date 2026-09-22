@@ -3,7 +3,7 @@ import type { AnyNode } from 'domhandler'
 import type { Branch, EngineValue, EvalContext, Facet, ParsedRule, RuleUsage, Segment, SegmentLoc } from './types.js'
 import { parseRule } from './parse.js'
 import { evalCss } from './css.js'
-import { evalDefault } from './select.js'
+import { evalDefault, isGetValueSegment } from './select.js'
 import { evalJsonPath } from './jsonpath.js'
 import { evalXPath } from './xpath.js'
 import { evalAllInOne } from './allinone.js'
@@ -76,6 +76,8 @@ export async function evaluateWithTrace(
 interface Runtime {
   ctx: EvalContext
   facet: Facet
+  /** 本条规则的用途（getElements / getString 两条路径的身份）——js 段 result 绑定形态按它分派 */
+  usage: RuleUsage
   /** 懒加载的页面 DOM（jsonpath/js-only 规则不付 cheerio 成本） */
   $(): CheerioAPI
   /** 整页文本：ctx.html ?? String(ctx.json ?? '')（allinone / 独立净化用） */
@@ -88,7 +90,7 @@ interface Runtime {
   evaluateRef: EvaluateRef
 }
 
-function makeRuntime(ctx: EvalContext, facet: Facet): Runtime {
+function makeRuntime(ctx: EvalContext, facet: Facet, usage: RuleUsage): Runtime {
   let api: CheerioAPI | null = null
   let page: string | null = null
   let jsonParsed = false
@@ -96,6 +98,7 @@ function makeRuntime(ctx: EvalContext, facet: Facet): Runtime {
   return {
     ctx,
     facet,
+    usage,
     $: () => (api ??= loadHtml(ctx.html ?? '')),
     pageText: () => (page ??= ctx.html ?? String(ctx.json ?? '')),
     jsonData: () => {
@@ -137,7 +140,7 @@ type JsOutcome = Awaited<ReturnType<typeof evalJs>>
 function* ruleGen(
   parsed: ParsedRule, ctx: EvalContext, facet: Facet, collect: TraceStep[] | null,
 ): Generator<JsCall, EngineValue, JsOutcome> {
-  const rt = makeRuntime(ctx, facet)
+  const rt = makeRuntime(ctx, facet, parsed.usage)
   if (parsed.branches.length === 0) return finalize(parsed, [standaloneBase(rt)], facet, rt)
   const values: EngineValue[] = []
   let offset = 0 // 全规则连续段号（与 parse 的 counter 口径一致）
@@ -163,8 +166,25 @@ function* branchGen(
         // scriptForm:true（legado @js 口径）：**最后一个表达式的值即结果**——此前链内 js 段
         // 走 wrapped async IIFE（无 return 的表达式形态恒 undefined → Miss），
         // 真实源 `$.id@js:"…"+result` 这类主导形态整批静默取空（正文链路审计归因）。
+        // **对面 makeUpRule 在按 mode 分发之前重写规则文本**，故 js 段代码里的 `{{…}}` /
+        // `{$…}` 先按当前链上下文插值（全库 158 源里 28 源靠它拼 URL：米读小说的
+        // `@js:"https://…/chapter_list/100/{{$.book_id}}.txt"` 实证不插值就把字面花括号
+        // 发上网，打到 404 残地址）。插值段 Miss → 整段 Miss，与模板字面段同一口径。
+        let code = seg.code
+        if (code.includes('{{')) {
+          // **只认双花括号**：单括号 `{$…}` 在 js 文本里通常是 JS 模板字面量 `${expr}`
+          // 的一部分（中文书城 ruleToc.chapterList 的 `${$.bookid}` 实证——把它当 JSONPath
+          // 插值会让整段 Miss、目录 0 章），`@get:` 同理由脚本自己处理。
+          const rewritten: EngineValue = yield* interpolateTemplate(code, cur, rt, loc, { doubleBraceOnly: true })
+          if (rewritten.kind === 'miss') {
+            cur = rewritten
+            if (collect) collect.push(stepOf(seg, loc, rewritten))
+            continue
+          }
+          code = engineValueToString(rewritten, 'inner')
+        }
         const outcome: JsOutcome = yield [
-          seg.form === 'tail' ? `return (${seg.code})` : seg.code, // 链尾 (…) 是表达式形态
+          code,
           jsHostOf(prev, rt), rt.ctx, loc, rt.facet, rt.evaluateRef,
           { scriptForm: true },
         ]
@@ -178,38 +198,18 @@ function* branchGen(
         continue
       }
       if (seg.kind === 'put') {
-        // @put 是副作用段：写 ctx.vars 后链值透传，不替换 cur（legado 口径）
-        evalPut(seg.pairsRaw, rt.ctx, loc, rt.facet)
+        // @put 是副作用段：写 ctx.vars 后链值透传，不替换 cur（legado 口径）。
+        // 值按 getString 求值（legado putRule = put(key, getString(value))）：基内容 = 当前链值，
+        // 未起链则是整页原文——真实源 `@put:{n:"[property$=x]@content"}` 作 ruleBookInfo.init 全靠这条。
+        evalPut(seg.pairsRaw, rt.ctx, loc, rt.facet,
+          (rule) => rt.evaluateRef(rule, cur === null ? rt.pageText() : engineValueToString(cur, 'inner')))
         if (collect) collect.push(putStepOf(loc, cur))
         continue
       }
       if (seg.kind === 'literal') {
         // 模板字面段：{{expr}} 插值（js 部分经驱动器求值）后整段产出 Value——链值被替换
         // （legado `else -> rule` 字面返回语义；`{{result}}` 引用当前链值）
-        // 插值命中 Miss → 整段 Miss：把 Miss 折成空串会产出语法合法的残 URL
-        // （`http://api/novel/{{$.id}}` → `http://api/novel/`），拿它发请求比报错更坏。
-        let out = ''
-        let missPart: EngineValue | null = null
-        for (const part of splitLiteral(seg.raw)) {
-          let piece: EngineValue
-          switch (part.kind) {
-            case 'text': piece = { kind: 'value', text: part.text }; break
-            case 'getvar': piece = evalGetVar(part.text, rt.ctx); break
-            case 'jsonpath': piece = evalJsonPath(part.text, literalJsonData(rt, cur), loc, rt.facet); break
-            case 'rule': {
-              piece = runParsedSync(parseRule(part.text, rt.facet), literalSubCtx(rt, cur), rt.facet)
-              break
-            }
-            case 'js': {
-              const outcome: JsOutcome = yield [part.text, jsHostOf(cur, rt), rt.ctx, loc, rt.facet, rt.evaluateRef, { scriptForm: true }]
-              piece = outcome.value
-              break
-            }
-          }
-          if (piece.kind === 'miss') { missPart = piece; break }
-          out += engineValueToString(piece, 'inner')
-        }
-        cur = missPart ?? { kind: 'value', text: out }
+        cur = yield* interpolateTemplate(seg.raw, cur, rt, loc)
         if (collect) collect.push(stepOf(seg, loc, cur))
         continue
       }
@@ -221,6 +221,45 @@ function* branchGen(
     }
   }
   return cur ?? { kind: 'miss', detail: '空分支' }
+}
+
+/**
+ * 模板内嵌段插值（**字面段与 js 段代码文本共用这一份**）：把 `{{expr}}` 与 `{$.path}`
+ * 换成字符串后拼回原文。
+ *
+ * 对面顺序是 `putRule → makeUpRule(result) → 按 mode 分发`（`model/analyzeRule/AnalyzeRule.kt` getString），
+ * `makeUpRule` 重写的是**规则文本本身**，所以对 `@js:` / `<js>` 代码里的字符串字面量同样生效。
+ *
+ * 任一插值段 Miss → 返回该 Miss（调用方整段失败）：把 Miss 折成空串会产出**语法合法的残 URL**
+ * （`http://api/novel/{{$.id}}` → `http://api/novel/`），拿它发请求比报错更坏——
+ * 真机实证：米读小说的 toc 请求打到 `…/chapter_list/100/` + 字面 `{{$.book_id}}` + `.txt`。
+ */
+function* interpolateTemplate(
+  raw: string, cur: EngineValue | null, rt: Runtime, loc: SegmentLoc,
+  opts?: { doubleBraceOnly?: boolean },
+): Generator<JsCall, EngineValue, JsOutcome> {
+  let out = ''
+  let missPart: EngineValue | null = null
+  for (const part of splitLiteral(raw, opts)) {
+    let piece: EngineValue
+    switch (part.kind) {
+      case 'text': piece = { kind: 'value', text: part.text }; break
+      case 'getvar': piece = evalGetVar(part.text, rt.ctx); break
+      case 'jsonpath': piece = evalJsonPath(part.text, literalJsonData(rt, cur), loc, rt.facet); break
+      case 'rule': {
+        piece = runParsedSync(parseRule(part.text, rt.facet), literalSubCtx(rt, cur), rt.facet)
+        break
+      }
+      case 'js': {
+        const outcome: JsOutcome = yield [part.text, jsHostOf(cur, rt), rt.ctx, loc, rt.facet, rt.evaluateRef, { scriptForm: true }]
+        piece = outcome.value
+        break
+      }
+    }
+    if (piece.kind === 'miss') { missPart = piece; break }
+    out += engineValueToString(piece, 'inner')
+  }
+  return missPart ?? { kind: 'value', text: out }
 }
 
 /** 异步驱动：js 段 await evalJs 回喂；evalJs 失败经 gen.throw 投回 generator（错误步单点在内） */
@@ -301,7 +340,19 @@ function evalNonJs(
     }
     case 'default': {
       if (cur?.kind === 'miss') return cur
-      return evalDefault(seg, $(), requireNodes(cur, rt, loc), loc, rt.facet)
+      // 链首未起链：**取值段**以文档根为上下文取一次（legado `content.text()` 口径）。按 `$('*')`
+      // 全集会让每个祖先各出一份——真源 `ruleToc.chapterName: "text"` 实测章名三遍。
+      // 选择段（class/tag/`text.串`）仍从全集往下选。
+      // 裸词终端在 JSON 条目上 = 属性读（见 jsonObjectOf）：`url` 与 `href`/`src` 两种形态
+      const propName = seg.mode === 'attr' ? seg.arg
+        : (seg.mode === 'href' || seg.mode === 'src') && seg.arg === null ? seg.mode
+          : null
+      const jsonBase = propName !== null && seg.index === null && !seg.exclude
+        ? jsonObjectOf(cur, rt)
+        : undefined
+      if (jsonBase !== undefined) return evalJsonPath(`$.${propName}`, jsonBase, loc, rt.facet)
+      const nodes = cur === null && isGetValueSegment(seg) ? $().root() : requireNodes(cur, rt, loc)
+      return evalDefault(seg, $(), nodes, loc, rt.facet)
     }
     case 'jsonpath': {
       if (cur?.kind === 'miss') return cur
@@ -340,6 +391,21 @@ function tryParseJson(text: string): unknown {
   try { return JSON.parse(text) as unknown } catch { return undefined }
 }
 
+/** **裸词终端的 JSON 上下文**：对面按内容类型分派——`isJSON` 时整条规则走
+ *  `AnalyzeByJSonPath.getString`（`model/analyzeRule/AnalyzeRule.kt`），于是真源里 `ruleChapterUrl: url`、
+ *  `ruleBookUrl: url` 这类**不带 `$.` 的属性名**在 JSON 条目上是属性读。本仓条目上下文里
+ *  JSON 条目以原文串落在 html（`services/reading.ts` 逐条 ctx），该段被当 HTML 属性终端在 DOM
+ *  上找同名属性 → 恒 0 命中 → 逐章回退目录页 → 「未取到任何章节地址」RuleEvalError
+ *  （2026-09 审计 3 源：麻豆传媒AI / 中文书城 / 全本小说型）。
+ *  只在**当前内容本身是合法 JSON 对象**时改走 JSONPath；数组与 HTML 片段一律返回 undefined，
+ *  因此 `img@_src` 这类 DOM 形态（对面同一条规则也只在字符串路径上取属性）不受影响。 */
+function jsonObjectOf(cur: EngineValue | null, rt: Runtime): unknown {
+  const text = cur === null ? rt.pageText() : cur.kind === 'value' ? cur.text : undefined
+  if (text === undefined || !text.trimStart().startsWith('{')) return undefined
+  const parsed = tryParseJson(text)
+  return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : undefined
+}
+
 /** 模板字面段的 JSON 数据源：链上有值 → 优先按上游文本解析（toc 条目 JSON 形态）；否则整页口径 */
 function literalJsonData(rt: Runtime, cur: EngineValue | null): unknown {
   if (cur?.kind === 'value') return tryParseJson(cur.text)
@@ -376,12 +442,29 @@ function requireNodes(cur: EngineValue | null, rt: Runtime, loc: SegmentLoc): Ch
 function finalize(parsed: ParsedRule, values: EngineValue[], facet: Facet, rt: Runtime): EngineValue {
   let value = combine(values, parsed.combinator, { facet, segmentIndex: -1, segmentRaw: '%%（组合符）' })
   if (parsed.reverse) value = reverseList(value)
+  // 取值用途的链终点串化**先于** ## 替换（对面 replaceRegex 作用于已转成字符串的结果）
+  if (rt.usage === 'value' && value.kind === 'nodes') value = nodesAsString(value.nodes)
   if (parsed.replaces.length > 0) {
     // `##` 尾的 `{{chapter.title}}` 类插值（legado makeUpRule：替换规则串同样先插值再当正则——
     // 真实源 `##...|{{chapter.title}}|...##` 去章标题行全靠它）；绑定缺位保持原文字面
     value = applyReplaces(value, parsed.replaces, parsed.onlyOne, { facet }, interpBindings(rt))
   }
   return value
+}
+
+/**
+ * 取值用途的链终点节点集 → 字符串（对面 getString 出口从不因「剩节点集」而失败）：
+ * 逐元素 **outerHTML**、以换行拼接——对面 XPath 模式在段内就把命中集按换行 join，
+ * 每个节点转字符串取的是 jsoup `Element.toString()` = outerHtml；外层 `getString`
+ * 兜底同样只 `toString()`（cheerio 的 `selection.toString()` = 逐个 outerHTML **无分隔**
+ * 拼接，与对面 `Elements.toString()` 同形，但对面 XPath 的换行分隔在值面上更常见）。
+ * 只在这一处发生：`nodes` 作为中间值仍是节点集（选择段接选择段照常），列表用途
+ * （`ruleBookList`/`ruleChapterList`）也照旧交服务层逐条目求值。
+ */
+function nodesAsString(nodes: Cheerio<AnyNode>): EngineValue {
+  const parts: string[] = []
+  for (let i = 0; i < nodes.length; i++) parts.push(nodes.eq(i).toString())
+  return { kind: 'value', text: parts.join('\n') }
 }
 
 /** 替换尾插值绑定：ctx 里的 book/chapter/vars/baseUrl（简单点路径查询，不进 JS 沙箱） */
@@ -406,11 +489,17 @@ function interpBindings(rt: Runtime): Record<string, string> {
 // ── trace 组装 ─────────────────────────────────────────────────────────
 
 /** js 宿主注入：host.result = 上一段结果的序列化；首个段 → 整页原文（pageText：html ?? String(json)，与独立净化同口径）。
- *  resultKind 随行：nodes/page(html) 时沙箱把 result 包成元素包装对象（`result.attr()` 形态） */
+ *  resultKind 随行：nodes/page(html) 时沙箱把 result 包成元素包装对象（`result.attr()` 形态）。
+ *  **列表用途下的 Miss 也报 nodes**：对面 getElements 路径上 `result` 恒是 org.jsoup.Elements，
+ *  零命中只是**空集合**（`.toArray()` / `.size()` 照样在），而本仓若按原文字符串绑定，真源共用的
+ *  toc 模板 `list = result.toArray()` 会当场炸成 JsSandboxError（废纸文学 / 新龙小说 / PO5），
+ *  把一个「站点页面没有该结构」的站点侧事实误记成引擎侧失败。取值路径不变（String 语义）。 */
 function jsHostOf(prev: EngineValue | null, rt: Runtime): JsHost {
+  const kind = prev === null ? 'page' : prev.kind
   return {
     result: prev === null ? rt.pageText() : serialize(prev),
-    resultKind: prev === null ? 'page' : prev.kind,
+    resultKind: kind === 'miss' && rt.usage === 'list' ? 'nodes' : kind,
+    resultCtx: rt.usage,
     baseUrl: rt.ctx.baseUrl ?? '',
     source: rt.ctx.source ?? '',
   }

@@ -59,8 +59,10 @@ describe('② 属性终端与取值用途', () => {
     const parsed = parseRule('ul.list li', 'toc', 'list')
     expect(parsed.branches[0].segments[0]).toEqual({ kind: 'css', selector: 'ul.list li' })
   })
-  it('词.词形态（nonsense.x）仍解析期抛错——宁炸不猜边界不外扩', () => {
-    try { parseRule('nonsense.x', 'toc', 'value'); expect.unreachable() }
+  it('词.词形态（nonsense.x）按对面兜底定性为 css 段；含非法字符的段仍解析期抛', () => {
+    expect(parseRule('nonsense.x', 'toc', 'value').branches[0].segments[0])
+      .toMatchObject({ kind: 'css', selector: 'nonsense.x' })
+    try { parseRule('nonsense$.x', 'toc', 'value'); expect.unreachable() }
     catch (e) { expect(e).toBeInstanceOf(UnsupportedRuleError) }
   })
 })
@@ -173,6 +175,24 @@ describe('⑥ 二轮补齐（元素包装 / AllInOne 行内标志 / 方括号索
     expect(await evaluate('li[!0]@text', { html }, 'toc', 'list'))
       .toEqual({ kind: 'list', items: ['二', '三'] })
   })
+  it('方括号多条目：并集按文档序、部分越界只留合法项、全越界 → Miss；[!0,2] 多值排除', async () => {
+    // legado ElementsSingle 把条目收进 `indexSet: MutableSet<Int>`（越界的静默丢弃），
+    // 最后按文档序遍历 elements 过滤——故 `[3,1]` 与 `[1,3]` 同结果，重复项只出一份。
+    const html = '<ul><li>一</li><li>二</li><li>三</li><li>四</li></ul>'
+    expect(await evaluate('li[2,3]@text', { html }, 'toc', 'list'))
+      .toEqual({ kind: 'list', items: ['三', '四'] })
+    expect(await evaluate('li[3,1]@text', { html }, 'toc', 'list'))
+      .toEqual({ kind: 'list', items: ['二', '四'] })
+    expect(await evaluate('li[1,9]@text', { html }, 'toc', 'value'))
+      .toEqual({ kind: 'value', text: '二' })   // 只剩合法的一项（单子项结果的形状同 `li[1]`）
+    expect((await evaluate('li[7,9]@text', { html }, 'toc', 'list')).kind).toBe('miss')
+    expect(await evaluate('li[!0,2]@text', { html }, 'toc', 'list'))
+      .toEqual({ kind: 'list', items: ['二', '四'] })
+    // 真源形态（免费小说 ruleContent.content）：选择段多条目 + 下一段继续选
+    expect(await evaluate('li[0,2]@text', { html }, 'content', 'value'))
+      .toEqual({ kind: 'list', items: ['一', '三'] })
+  })
+
   it('cache 垫片：搜索面 put、目录面 get（按源隔离——快看漫画跨面形态）', async () => {
     const { runScript, createSourceSession } = await import('../../src/engine/js-sandbox.js')
     const session = createSourceSession()
@@ -186,3 +206,81 @@ describe('⑥ 二轮补齐（元素包装 / AllInOne 行内标志 / 方括号索
   })
 })
 
+
+describe('XPath 裸 @ 终端整链（腐小说 ruleContent 实证形态，真机审计 2026-09）', () => {
+  const HTML = '<div id="pager"><div class="tips">本章完，点击下一页</div><div class="bar"><div class="row"><div class="cell"><a href="/p/2">下一页</a></div></div></div></div>'
+  it('`//a[text()="下一页"]/../../../preceding-sibling::div[1]@html` → 取到前序 div 的 html', async () => {
+    const v = await evaluate('//a[text()="下一页"]/../../../preceding-sibling::div[1]@html', { html: HTML }, 'content', 'value')
+    expect(v.kind === 'value' && v.text.includes('本章完')).toBe(true)
+  })
+})
+
+describe('`{{@@规则}}`：花括号区内的 @ 不是段界（真源 intro 四例，2026-09 解析普查）', () => {
+  const HTML = '<html><head><meta property="og:description" content="少年林动，一夜蜕变"></head><body><p class="sum">正文摘要</p></body></html>'
+  it('整段字面 + 区内规则递归求值（对面 makeUpRule 先于 @ 切分）', async () => {
+    const v = await evaluate('&nbsp;{{@@[property$=description]@content}}', { html: HTML }, 'detail', 'value')
+    expect(v).toEqual({ kind: 'value', text: '&nbsp;少年林动，一夜蜕变' })
+  })
+  it('多个 `{{@@…}}` 与字面文本混排（错层小说 / 次元姬子形态）', async () => {
+    const v = await evaluate('📜 {{@@p.sum@text}} · {{@@p.sum@html}}', { html: HTML }, 'detail', 'value')
+    expect(v.kind === 'value' && v.text.startsWith('📜 正文摘要')).toBe(true)
+  })
+  it('模板段带 ## 替换尾 → 先展开后替换，不从页面另取根（对面「整段翻转为 Regex」口径）', async () => {
+    const v = await evaluate('{{@@[property$=description]@content}}##少年##青年', { html: HTML }, 'detail', 'value')
+    expect(v).toEqual({ kind: 'value', text: '青年林动，一夜蜕变' })
+  })
+  it('`@get:` 段带 ## 替换尾 → 同口径（变量值直接进替换，不回头取值）', async () => {
+    const v = await evaluate('@put:{t:"p.sum@text"}@get:t##正文##简介', { html: HTML }, 'detail', 'value')
+    expect(v).toEqual({ kind: 'value', text: '简介摘要' })
+  })
+})
+
+describe('JSON 条目上的裸词终端（真源 ruleChapterUrl: url / href，2026-09 审计 3 源）', () => {
+  // 对面按内容类型分派：isJSON 时整条规则走 AnalyzeByJSonPath（model/analyzeRule/AnalyzeRule.kt），
+  // 所以裸词 `url` 在 JSON 条目上是**属性读**；本仓此前只在 DOM 上找同名属性 → 恒 0 命中
+  // → 逐章回退目录页 → 「未取到任何章节地址」RuleEvalError。
+  const ITEM = '{"url":"/c/123.html","href":"/c/124.html","name":"第十二章","id":7}'
+  it('取值用途 + 链尾裸词 → 读 JSON 属性', async () => {
+    const v = await evaluate('url', { html: ITEM }, 'toc', 'value')
+    expect(v).toEqual({ kind: 'value', text: '/c/123.html' })
+  })
+  it('href 终端同理（JSON 条目上是属性，不是 HTML 的 href 属性）', async () => {
+    const v = await evaluate('href', { html: ITEM }, 'toc', 'value')
+    expect(v).toEqual({ kind: 'value', text: '/c/124.html' })
+  })
+  it('裸词 `id` 仍是 id 选择器（对面 getElementsSingle 同样按关键字认，须写 $.id）', async () => {
+    const v = await evaluate('id', { html: ITEM }, 'toc', 'value')
+    expect(v.kind).not.toBe('value')
+  })
+  it('HTML 条目不受影响：裸词仍是属性终端（img@_src 形态，DOM 上有值）', async () => {
+    const v = await evaluate('img@_src', { html: '<img _src="/lazy/1.jpg">' }, 'search', 'value')
+    expect(v).toEqual({ kind: 'value', text: '/lazy/1.jpg' })
+  })
+  it('HTML 条目上的 href 仍读 href 属性（不被 JSON 分支抢走）', async () => {
+    const v = await evaluate('href', { html: '<a href="/r/9.html">读</a>' }, 'search', 'value')
+    expect(v).toEqual({ kind: 'value', text: '/r/9.html' })
+  })
+  it('取不到的属性仍如实 Miss（不静默成空串）', async () => {
+    const v = await evaluate('nosuch', { html: ITEM }, 'toc', 'value')
+    expect(v.kind).toBe('miss')
+  })
+})
+
+describe('属性取值的去重（对面 getResultLast else 分支 textS.contains 口径；漏去重会把 URL 拼成重复路径）', () => {
+  // 真机实证：久久小说 ruleBookList=class.block + ruleBookUrl=tag.a@href，条目里 4 个 <a> 同一个 href；
+  // 我们收 4 份 → firstValue 以 \n 拼接 → new URL() 吃掉换行 → `/article/…/article/…`（书 URL 被复制）。
+  const ITEM = '<div class="block"><div class="bi"><a href="/article/detail/id/6534.html"><img src="/t.png"></a></div>' +
+    '<a href="/article/detail/id/6534.html">书名</a><a href="/article/detail/id/6534.html">作者</a></div>'
+  it('href：同一值的多个元素只出一份', async () => {
+    const v = await evaluate('tag.a@href', { html: ITEM }, 'search', 'value')
+    expect(v).toEqual({ kind: 'list', items: ['/article/detail/id/6534.html'] })
+  })
+  it('text 不去重（对面具名分支无 contains；空文本条目按对面空值丢弃）', async () => {
+    const v = await evaluate('tag.a@text', { html: ITEM }, 'toc', 'list')
+    expect(v.kind === 'list' && v.items.length).toBe(2)
+  })
+  it('text 重复值照收（钉住「只有属性型终端去重」的边界）', async () => {
+    const v = await evaluate('tag.a@text', { html: '<div><a>甲</a><a>甲</a></div>' }, 'toc', 'list')
+    expect(v).toEqual({ kind: 'list', items: ['甲', '甲'] })
+  })
+})

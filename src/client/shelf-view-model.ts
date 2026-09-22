@@ -1,11 +1,12 @@
-import { LOCAL_SOURCE_ID } from '../shared/wire.js'
+import { hasProgress, LOCAL_SOURCE_ID } from '../shared/wire.js'
 import type { ShelfBook, ShelfEntry } from './views/types.js'
 
 /** 书架视图派生（纯函数、零 React）：筛选与卡片元信息的唯一口径。
  *
  *  pct 是书架卡片百分比的**唯一算式**（client.md 已知开口「百分比算式已收敛一处、剩两处」
  *  原记三处各算一份，shelf 分量已收敛到此）。口径：
- *   - reading = 有实质阅读进度（chapterIndex > 0 || offsetRatio > 0）；unread = 其补集；
+ *   - reading = 有实质阅读进度（判据单点 `wire.hasProgress`，与阅读器的存档恢复同源）；
+ *     unread = 其补集；
  *   - local = sourceId === LOCAL_SOURCE_ID——**正交维度**：本地书是要做文件级操作
  *     （连删磁盘 txt）的对象，与读没读过无关；
  *   - 未读书 pct 归 null：简约版呈现口径「未读不出进度条」，卡片元信息只留文字。 */
@@ -18,14 +19,12 @@ export const SHELF_FILTERS: Array<{ key: ShelfFilterKey; label: string }> = [
   { key: 'local', label: '本地' },
 ]
 
-const hasProgress = (b: ShelfBook): boolean => b.progress.chapterIndex > 0 || b.progress.offsetRatio > 0
-
 /** 筛选：泛型保住入参的具体条目类型（ShelfEntry 的来源投影不许被这里擦成 ShelfBook——
  *  「筛选后的书还要拿去渲染来源 chip」是常态用法，擦掉就得在视图里再断言一次）。 */
 export function filterShelfBooks<T extends ShelfBook>(books: readonly T[], key: ShelfFilterKey): T[] {
   if (key === 'all') return [...books]
   if (key === 'local') return books.filter((b) => b.sourceId === LOCAL_SOURCE_ID)
-  return books.filter((b) => (key === 'reading' ? hasProgress(b) : !hasProgress(b)))
+  return books.filter((b) => (key === 'reading' ? hasProgress(b.progress) : !hasProgress(b.progress)))
 }
 
 /** 卡片元信息：text = 卡片下的灰色一行；pct = 进度条百分比（null = 不渲染进度条）。
@@ -33,7 +32,7 @@ export function filterShelfBooks<T extends ShelfBook>(books: readonly T[], key: 
 export function shelfCardMeta(b: ShelfBook): { text: string; pct: number | null } {
   const total = typeof b.totalChapters === 'number' ? b.totalChapters : 0
   const isLocal = b.sourceId === LOCAL_SOURCE_ID
-  if (!hasProgress(b)) {
+  if (!hasProgress(b.progress)) {
     return { text: isLocal ? '本地 TXT' : total > 0 ? `未开始 · ${total} 章` : '未开始', pct: null }
   }
   const pct = total > 0

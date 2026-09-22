@@ -296,7 +296,7 @@ describe('键盘可达的承载元素（主操作不许只绑鼠标）', () => {
   it('命中行是可聚焦按钮，「＋ 加书架」是兄弟而非后代', async () => {
     const group = {
       sourceId: 's1', sourceName: 'S', status: 'verified',
-      hits: [{ title: '斗罗', author: null, url: 'https://s.com/b/1', coverUrl: null, intro: null, lastChapterName: null }],
+      hits: [{ title: '斗罗', author: null, url: 'https://s.com/b/1', coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null }],
     }
     let reads = 0
     const deps = makeCoreDeps({

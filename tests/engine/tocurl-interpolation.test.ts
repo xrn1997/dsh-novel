@@ -19,4 +19,10 @@ describe('URL 模板插值 vs XPath 前缀（classifySegment 判定次序）', (
     const v = await evaluate('/novel/{{$.novelId}}/chapters', ctx, 'rule', 'value')
     expect(v).toEqual({ kind: 'value', text: '/novel/12345/chapters' })
   })
+  // 悦读小说 ruleBookUrl 实证：对面 `{$.rule}` 是内嵌 JSONPath（AnalyzeByJSonPath.innerRule），
+  // 与 `{{}}` 同样是插值——单反斜杠前缀判定必须一起让位，否则整条 URL 被当 XPath 截走。
+  it('单花括号内嵌形态 /books?bookId={$.bookId}', async () => {
+    const v = await evaluate('/books?bookId={$.bookId}', { json: { bookId: 'b7' }, baseUrl: 'http://a.com' }, 'rule', 'value')
+    expect(v).toEqual({ kind: 'value', text: '/books?bookId=b7' })
+  })
 })

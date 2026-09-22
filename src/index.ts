@@ -157,6 +157,15 @@ export function apply(ctx: Context, config?: NovelConfig): void {
     return null
   })
 
+  // 卸载时把防抖写落地：书架与源注册表的落盘都带防抖窗口（shelf = 100ms），
+  // 宿主重启（SIGINT → fiber 卸载）会把窗口里的最后一条写丢掉——「刚读到的位置」正好死在
+  // 窗口里（进度是高频写，退出那一刻往往就是最后一次）。注册得早 ⇒ 拆得晚。
+  ctx.effect(() => {
+    let service: ReadingService | null = null
+    void ready.then((r) => { service = r?.service ?? null })
+    return () => { if (service !== null) void service.flush() }
+  }, 'dsh-novel: flush shelf on dispose')
+
   ctx.effect(() => {
     let dispose: (() => void) | null = null
     let cancelled = false

@@ -1,3 +1,5 @@
+import { braceRegion } from './grammar.js'
+
 /**
  * 模板字面段（CONTEXT.md「模板字面段」）的识别与切分——构词（normalize/服务层拼串）与
  * 解析（parse/evaluate 消费）共用同一份认知，唯一实现住这里。
@@ -28,7 +30,13 @@ export function isLiteralForm(raw: string): boolean {
 }
 
 /** `{{...}}` 平衡括号切分（引号内的花括号不计深——legado chompCodeBalanced 同口径的最小版） */
-export function splitLiteral(raw: string): LiteralPart[] {
+export function splitLiteral(raw: string, opts?: { doubleBraceOnly?: boolean }): LiteralPart[] {
+  // doubleBraceOnly：js 段代码文本的插值口径——只认 `{{…}}`。JS 自己就有模板字面量
+  // `${expr}` 与对象字面量 `{{…}}`（少见），把单括号 `{$…}` 当插值点会把脚本里的
+  // `${$.id}`（map 回调参数 `$` 的属性）撕成 JSONPath（真机实证：中文书城
+  // ruleToc.chapterList 因此整段 Miss、目录 0 章）。对面 js 文本重写走 makeUpRule
+  // 的双花括号模式，语义与之一致。
+  const doubleOnly = opts?.doubleBraceOnly === true
   const parts: LiteralPart[] = []
   let buf = ''
   let i = 0
@@ -37,7 +45,7 @@ export function splitLiteral(raw: string): LiteralPart[] {
   }
   while (i < raw.length) {
     // @get:{key} / @get:key 形态（legado evalPattern 同款插值点）
-    if (raw.startsWith('@get:', i)) {
+    if (!doubleOnly && raw.startsWith('@get:', i)) {
       let name = ''
       let j: number
       if (raw[i + 5] === '{') {
@@ -52,39 +60,18 @@ export function splitLiteral(raw: string): LiteralPart[] {
       flushText(); parts.push({ kind: 'getvar', text: name }); i = j; continue
     }
     if (raw.startsWith('{{', i)) {
-      // 平衡括号找 }}（内容里可能有 JS 对象/正则量化的 { }）。
-      // 表达式内容 = 第二个开括号之后、到「深度 2→1 的那个闭括号」为止——
-      // `{{$.x}}` 的首个 `}` 是内容终点，第二个 `}` 才闭合外层（此前把首个 `}` 并进表达式
-      // → `$.x}` JSONPath 报错 / `baseUrl}` JS 语法错）
-      let depth = 2
-      let j = i + 2
-      let quote: string | null = null
-      let contentEnd = -1
-      while (j < raw.length && depth > 0) {
-        const ch = raw[j]
-        if (quote !== null) {
-          if (ch === '\\') { j += 2; continue }
-          if (ch === quote) quote = null
-        } else if (ch === '"' || ch === "'" || ch === '`') {
-          quote = ch
-        } else if (ch === '{') {
-          depth++
-        } else if (ch === '}') {
-          if (depth === 2) contentEnd = j
-          depth--
-        }
-        if (depth === 0) break
-        j++
-      }
-      if (depth !== 0 || contentEnd === -1) { buf += raw.slice(i); i = raw.length; continue } // 未闭合：按字面（不猜）
-      const expr = raw.slice(i + 2, contentEnd).trim()
+      // 括号扫描归 grammar.braceRegion（与 parse 的段切分共用同一份认知——两处各写一份时，
+      // 段切分先把区内的 `@` 当段界，`{{@@规则}}` 就永远进不到字面段，这里曾长期错报「无法识别的段类型」）
+      const region = braceRegion(raw, i)
+      if (region === null) { buf += raw.slice(i); i = raw.length; continue } // 未闭合：按字面（不猜）
+      const expr = raw.slice(i + 2, region.contentEnd).trim()
       flushText()
       parts.push(classifyExpr(expr))
-      i = j + 1
+      i = region.end
       continue
     }
     // 单括号 JSONPath 内嵌：{$.path}
-    const single = /^\{\$([^{}]+)\}/.exec(raw.slice(i))
+    const single = doubleOnly ? null : /^\{\$([^{}]+)\}/.exec(raw.slice(i))
     if (single !== null) {
       flushText(); parts.push({ kind: 'jsonpath', text: `$${single[1]}` }); i += single[0].length; continue
     }

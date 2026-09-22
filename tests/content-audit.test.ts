@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { ReadingService } from '../src/services/reading.js'
 import { readSystemProxy, resolveProxyUrl } from '../src/services/proxy.js'
 import { makeTempDir, trackService } from './temp-dir.js'
+import { classifyAudits, messageSkeleton } from './content-audit-classify.js'
 
 // 正文链路全量审计（DSH_CONTENT_AUDIT=1 才跑——全量真打网络，十几分钟量级；不进常规集）
 //
@@ -43,6 +44,9 @@ interface SourceAudit {
   tocCount?: number
   chapters?: ChapterSample[]
   error?: ErrInfo
+  /** 搜索面书目字段的到货读数（`fieldsOf` 在选中那一轮上数出来的）：
+   *  `declaresKind` = 该源 raw 里 `ruleSearch.kind` 非空（分母按对面真正读的这一位算） */
+  fields?: { hits: number; withKind: number; withWordCount: number; declaresKind: boolean; declaresWordCount: boolean }
 }
 
 function errInfo(e: unknown): ErrInfo {
@@ -58,15 +62,10 @@ function errInfo(e: unknown): ErrInfo {
   }
 }
 
-/** 错误归一化成桶键：URL/数字/引号内容压掉，保留语义骨架 */
+/** 错误归一化成桶键：URL/数字/引号内容压掉，保留语义骨架（骨架单点在 content-audit-classify） */
 function bucketKey(stage: string, err?: ErrInfo): string {
   if (err === undefined) return stage
-  const msg = err.message
-    .replace(/https?:\/\/\S+/g, '<url>')
-    .replace(/\d+/g, '#')
-    .replace(/"[^"]{8,}"/g, '"…"')
-    .slice(0, 120)
-  return `${stage} | ${err.name} | ${msg}`
+  return `${stage} | ${err.name} | ${messageSkeleton(err.message ?? '')}`
 }
 
 describe.skipIf(process.env.DSH_CONTENT_AUDIT !== '1')('正文链路全量审计（search → toc → content）', () => {
@@ -85,12 +84,22 @@ describe.skipIf(process.env.DSH_CONTENT_AUDIT !== '1')('正文链路全量审计
     console.log(`[audit] 源总数 ${raws.length}；出站代理 ${proxyUrl ?? '(直连)'}`)
 
     // 注册表直读：每条源的 id/name/baseUrl 来自 sources.json 本身（生产同口径）
-    const ids: Array<{ id: string | null; name: string; baseUrl: string; raw: unknown }> =
+    // 声明位按对面读的**两处**算：对象方言 `ruleSearch.kind` 与平铺方言顶层 `ruleKind`
+    // （本库现量平铺为 0，但分母漏一处会让到货率虚高——instrument 不能跟着本库形状走）
+    const nonEmpty = (v: unknown) => typeof v === 'string' && v.trim() !== ''
+    const declares = (raw: unknown, nested: string, flat: string) => {
+      const o = raw as Record<string, unknown> | undefined
+      const box = o?.ruleSearch as Record<string, unknown> | undefined
+      return nonEmpty(box?.[nested]) || nonEmpty(o?.[flat])
+    }
+    const ids: Array<{ id: string | null; name: string; baseUrl: string; raw: unknown; declaresKind: boolean; declaresWordCount: boolean }> =
       raws.map((s) => ({
         id: typeof s.id === 'string' ? s.id : null,
         name: typeof s.name === 'string' ? s.name : '(未命名)',
         baseUrl: typeof s.baseUrl === 'string' ? s.baseUrl : '',
         raw: s.raw,
+        declaresKind: declares(s.raw, 'kind', 'ruleKind'),
+        declaresWordCount: declares(s.raw, 'wordCount', 'ruleWordCount'),
       }))
     await svc.flush()
 
@@ -126,12 +135,34 @@ describe.skipIf(process.env.DSH_CONTENT_AUDIT !== '1')('正文链路全量审计
     const outDir = path.resolve(fileURLToPath(new URL('..', import.meta.url)), '.superpowers', 'content-audit')
     await fs.mkdir(outDir, { recursive: true })
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    // 归因单点在 content-audit-classify：引擎类失败按「本仓缺口 / 刻意闸口 / 站点侧 / 网络侧」
+    // 分开计数，residual = host-gap + unattributed——兼容目标判据读的是这个数，不是三种
+    // error name 混在一起的大数（混着读会把「页面没这结构」算成本仓欠账，也把本仓缺口藏起来）
+    const classified = classifyAudits(audits)
+    // 书目字段到货读数（只算搜索面）：kind/wordCount 的读取异常按对面口径被吞成 null，
+    // 失败分桶查不到它们——「字段接进了链路」与「值真的到了」是两件事，这一条量后者。
+    // 分母用 `ruleSearch.kind` 非空（对面读的就是这一位；详情面的 kind 不在这条链路里）。
+    const arrival = (field: 'withKind' | 'withWordCount', declares: 'declaresKind' | 'declaresWordCount') => {
+      const withHits = audits.filter(a => a.fields?.[declares] === true && (a.fields?.hits ?? 0) > 0)
+      const arrived = withHits.filter(a => (a.fields?.[field] ?? 0) > 0)
+      const declaredTotal = audits.filter(a => a.fields?.[declares] === true).length
+      return {
+        declares: declaredTotal,
+        searchedWithHits: withHits.length,
+        arrivedSources: arrived.length,
+        hitRatio: withHits.reduce((n, a) => n + (a.fields?.[field] ?? 0), 0)
+          + '/' + withHits.reduce((n, a) => n + (a.fields?.hits ?? 0), 0),
+      }
+    }
     const report = {
       generatedAt: new Date().toISOString(),
       proxy: proxyUrl,
       keywords,
       total: audits.length,
       stageCount: Object.fromEntries(stageCount),
+      attribution: { byKind: classified.byAttribution, residual: classified.residual },
+      fieldArrival: { kind: arrival('withKind', 'declaresKind'), wordCount: arrival('withWordCount', 'declaresWordCount') },
+      residualItems: classified.items.filter((i) => i.attribution === 'host-gap' || i.attribution === 'unattributed'),
       buckets: Object.fromEntries([...buckets].sort((a, b) => b[1] - a[1])),
       audits: audits.sort((a, b) => a.stage.localeCompare(b.stage) || a.name.localeCompare(b.name)),
     }
@@ -144,6 +175,14 @@ describe.skipIf(process.env.DSH_CONTENT_AUDIT !== '1')('正文链路全量审计
     console.log(`阶段分布：${[...stageCount].map(([k, v]) => `${k}=${v}`).join('  ')}`)
     console.log('失败分桶（前 40）：')
     for (const [k, v] of [...buckets].sort((a, b) => b[1] - a[1]).slice(0, 40)) console.log(`  [${v}] ${k}`)
+    console.log(`引擎类归因：${Object.entries(classified.byAttribution).map(([k, v]) => `${k}=${v}`).join('  ')}`)
+    console.log(`residual（host-gap + unattributed，兼容目标判据读这一条）：${classified.residual}`)
+    for (const [k, v] of Object.entries(report.fieldArrival)) {
+      console.log(`字段到货率[${k}]：声明 ${v.declares} 源 → 本轮出条目 ${v.searchedWithHits} 源，其中取到值的 ${v.arrivedSources} 源；逐条 ${v.hitRatio}`)
+    }
+    for (const i of classified.items.filter((x) => x.attribution === 'host-gap' || x.attribution === 'unattributed')) {
+      console.log(`  ! ${i.name} [${i.attribution}] ${messageSkeleton(i.message)}`)
+    }
     console.log(`报告：${reportPath}`)
     // 审计完整性：注册表里每个源都必须落进某一个 stage——漏审（循环中断 / 提前 return）
     // 会让「通过率」读数失真，那是本文件唯一能机器判的事。
@@ -153,7 +192,7 @@ describe.skipIf(process.env.DSH_CONTENT_AUDIT !== '1')('正文链路全量审计
 
 async function auditOne(
   svc: ReadingService,
-  src: { id: string | null; name: string; baseUrl: string },
+  src: { id: string | null; name: string; baseUrl: string; declaresKind: boolean; declaresWordCount: boolean },
   keywords: string[],
   chapterIdxs: string[],
 ): Promise<SourceAudit> {
@@ -163,6 +202,7 @@ async function auditOne(
   // ── 搜索面（逐词重试，口径同 probe）────────────────────────────────────
   let hit: { title: string; url: string | null } | null = null
   let usedKeyword = ''
+  let fields: SourceAudit['fields']
   for (const kw of keywords) {
     try {
       const groups = await svc.search(kw, { sourceIds: [src.id] })
@@ -172,7 +212,20 @@ async function auditOne(
         return { ...base, stage: 'search', searchKeyword: kw, error: { name: g.error.code, message: g.error.message.slice(0, 400) } }
       }
       const h = g.hits.find((x) => x.url !== null) ?? null
-      if (h !== null) { hit = { title: h.title, url: h.url }; usedKeyword = kw; break }
+      if (h !== null) {
+        hit = { title: h.title, url: h.url }
+        usedKeyword = kw
+        // 书目字段到货读数：字段级异常已被 kindFieldOf/wordCountFieldOf 吞成 null，
+        // 审计的失败分桶看不见它们——「实现了」与「值到了」的差别只能靠这一行现量。
+        fields = {
+          hits: g.hits.length,
+          withKind: g.hits.filter((x) => x.kind !== null && x.kind !== '').length,
+          withWordCount: g.hits.filter((x) => x.wordCount !== null && x.wordCount !== '').length,
+          declaresKind: src.declaresKind,
+          declaresWordCount: src.declaresWordCount,
+        }
+        break
+      }
     } catch (e) {
       return { ...base, stage: 'search', searchKeyword: kw, error: errInfo(e) }
     }
@@ -180,7 +233,7 @@ async function auditOne(
   if (hit === null || hit.url === null) {
     return { ...base, stage: 'no-book-url', searchKeyword: keywords.join('/') }
   }
-  const withBook = { ...base, searchKeyword: usedKeyword, bookTitle: hit.title, bookKey: hit.url }
+  const withBook = { ...base, searchKeyword: usedKeyword, bookTitle: hit.title, bookKey: hit.url, ...(fields === undefined ? {} : { fields }) }
 
   let toc: Array<{ name: string; url: string }>
   try {

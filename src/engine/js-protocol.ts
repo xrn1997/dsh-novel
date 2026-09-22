@@ -22,17 +22,23 @@ import type { EngineValue, EvalContext, Facet, SegmentLoc } from './types.js'
 import { JsSandboxError, UnsupportedRuleError } from './errors.js'
 import { URL_OPTION_SPLIT } from './template.js'
 import type { EvaluateRef, SourceSession } from './js-sandbox.js'
+import { getRuleVar } from './variables.js'
 import {
   base64Decode,
   base64Encode,
+  digestBase64,
+  digestHex,
   engineValueToString,
   engineValueToStrings,
   fmtTime,
+  hMacBase64,
+  hMacHex,
   hexDecodeToString,
   javaDecode,
   javaEncode,
   md5Hex,
   md5Hex16,
+  toNumChapter,
   uriEncode,
 } from './js-utils.js'
 
@@ -102,20 +108,88 @@ const sourceVars = (d: BridgeDeps): Map<string, string> => d.session.sourceVars(
  */
 export const JAVA_PROTOCOL = [
   // ── 网络 ────────────────────────────────────────────────────────────
-  method('ajax', { obj: 'java' }, (d) => (url: string): Promise<string> => {
+  method('ajax', { obj: 'java' }, (d) => (url: unknown): Promise<string> => {
     const fetchFn = d.ctx.fetch
     if (!fetchFn) {
       throw new JsSandboxError('该源未提供网络能力（ctx.fetch 缺失）', { ...d.loc, facet: d.facet, script: d.code })
+    }
+    // 参数规约对齐 Rhino 的 String 形参强制转换：`java.ajax(result)` 传进来的常是上一段的
+    // 值——JSONPath 给单元素数组时，对面按 toString 拼成那条 URL（`['https://x']` → `https://x`），
+    // 本仓此前把原值直接交给请求组装层，炸成 `template.replace is not a function`
+    // （灯读文学 detail init 段实证：既没线索，结果也和对面不同）。
+    // null/undefined 不猜成字符串 "null" 去打站点：对面拿它 new URL 也是抛，本仓点名参数缺失。
+    if (url === null || url === undefined) {
+      throw new JsSandboxError('java.ajax 参数为空（脚本传进 null/undefined）', { ...d.loc, facet: d.facet, script: d.code })
     }
     // 如实失败：ajax 这里不挂任何 rejection 防线——主线程形态已改为在发起宿主调用前抛哨兵
     // （由 evalJs 换 worker 重跑），worker 形态同步返回，两条路都不产生悬空 Promise。
     // 进程级 ensureUnhandledGuard 是常驻最后防线，管的是脚本**自建**又 fire-and-forget 的
     // 异步工作。见 js-sandbox 的 BOOTSTRAP 注释与 docs/design/engine.md。
-    return fetchFn(url).then((r) => r?.body ?? '')
+    return fetchFn(String(url)).then((r) => r?.body ?? '')
   }, 'async'),
+  // java.connect：对面返回 `StrResponse{url, body}`（对象，脚本写 `connect(u).body`），
+  // 与 ajax 只差一层壳。两点**刻意分歧**：
+  // ① 对面第二/三参接 header JSON 与 callTimeout——本仓 ctx.fetch 没有请求头通道（头由请求
+  //    组装层按源规则统一装配），传了非空 header 就点名，不静默丢掉脚本的意图；
+  // ② 对面 `runCatching` 把异常塞进 body（StrResponse(url, stackTraceStr)）——错误文本冒充
+  //    正文是本仓定义的最高罪，失败照旧抛出。见矩阵 `h-java-connect`。
+  method('connect', { obj: 'java' }, (d) => async (url: unknown, header?: unknown): Promise<{ url: string; body: string }> => {
+    const fetchFn = d.ctx.fetch
+    if (!fetchFn) {
+      throw new JsSandboxError('该源未提供网络能力（ctx.fetch 缺失）', { ...d.loc, facet: d.facet, script: d.code })
+    }
+    if (url === null || url === undefined) {
+      throw new JsSandboxError('java.connect 参数为空（脚本传进 null/undefined）', { ...d.loc, facet: d.facet, script: d.code })
+    }
+    if (typeof header === 'string' && header.trim() !== '') {
+      throw new JsSandboxError(
+        `java.connect 的 header 参数在本仓没有通道（请求头由源规则经请求组装层装配）：${header.slice(0, 60)}`,
+        { ...d.loc, facet: d.facet, script: d.code },
+      )
+    }
+    const u = String(url)
+    return fetchFn(u).then((r) => ({ url: u, body: r?.body ?? '' }))
+  }, 'async'),
+  // java.post：对面 `help/JsExtensions.kt:post(urlStr, body, headers, timeout)` → Jsoup 的
+  // Connection.Response（**对象**，脚本写 `res.body()` / `res.cookies()`）。独立书源合集现量 9 源在用
+  // （解析面普查第 23 批：本库 214 源一条都没有，所以此前从未暴露）。
+  // 宿主侧返回数据面，`.body()` 那层壳在 BOOTSTRAP 里包（跨 worker 只走 JSON，不传函数）。
+  // 与 connect 同两条刻意分歧：本仓没有源级 header 之外的通道时**不静默丢**——这里 headers 是
+  // 对面签名里就有的参数，故照收并叠到源级头之上；对面 `timeout` 第四参本仓走进程级超时，忽略之。
+  method('post', { obj: 'java' }, (d) => async (
+    url: unknown, body?: unknown, headersArg?: unknown,
+  ): Promise<{ url: string; body: string; contentType?: string; statusCode: number; cookies: Record<string, string> }> => {
+    const postFn = d.ctx.fetchPost
+    if (!postFn) {
+      throw new JsSandboxError('该源未提供 POST 网络能力（ctx.fetchPost 缺失）', { ...d.loc, facet: d.facet, script: d.code })
+    }
+    if (url === null || url === undefined) {
+      throw new JsSandboxError('java.post 参数为空（脚本传进 null/undefined）', { ...d.loc, facet: d.facet, script: d.code })
+    }
+    // 对面形参是 Map<String,String>：脚本常给 JSON 串（`'{"Content-Type":"..."}'`）， Rhino 侧
+    // 由 Gson 转；本仓两种都收，认不出的形状点名而不是当 header 发出去。
+    let hdrs: Record<string, string> | undefined
+    if (typeof headersArg === 'string' && headersArg.trim() !== '') {
+      try { hdrs = JSON.parse(headersArg) as Record<string, string> } catch {
+        throw new JsSandboxError(`java.post 的 header 参数不是 JSON：${headersArg.slice(0, 60)}`, { ...d.loc, facet: d.facet, script: d.code })
+      }
+    } else if (headersArg !== null && typeof headersArg === 'object' && headersArg !== undefined) {
+      hdrs = headersArg as Record<string, string>
+    }
+    return postFn(String(url), body === null || body === undefined ? '' : String(body), hdrs)
+  }, 'async'),
+  // java.getWebViewUA：对面返回 WebView 的默认 UA。本仓没有 WebView —— 返回**我们实际发出去的
+  // 那条 UA**：对拼 headers 的脚本可用，但它不是设备/内核真实的 WebView UA，属**近似**（矩阵
+  // `h-java-webview-ua` 记着这条差）。ctx.userAgent 未接线时点名抛错，绝不编一个串冒充。
+  method('getWebViewUA', { obj: 'java' }, (d) => (): string => {
+    if (!d.ctx.userAgent) {
+      throw new JsSandboxError('java.getWebViewUA 取不到出站 UA（ctx.userAgent 未接线）', { ...d.loc, facet: d.facet, script: d.code })
+    }
+    return d.ctx.userAgent()
+  }),
   // ── 沙箱变量（java.get/put）─────────────────────────────────────────
   method('get', { obj: 'java' }, (d) => (key: string): string | undefined =>
-    d.ctx.vars?.[String(key)]),
+    getRuleVar(d.ctx, String(key))),
   method('put', { obj: 'java' }, (d) => (key: string, value: unknown): void => {
     d.ctx.vars ??= {}
     d.ctx.vars[String(key)] = String(value)
@@ -167,6 +241,19 @@ export const JAVA_PROTOCOL = [
   method('base64Decode', { obj: 'java' }, () => (s: string): string => base64Decode(String(s))),
   method('md5Encode', { obj: 'java' }, () => (s: string): string => md5Hex(String(s))),
   method('md5Encode16', { obj: 'java' }, () => (s: string): string => md5Hex16(String(s))),
+  // ── 摘要 / HMAC 族（对面 JsEncodeUtils 的「消息摘要/散列消息鉴别码」段，实参都是 data 在前）──
+  method('digestHex', { obj: 'java' }, () => (data: string, algorithm: string): string =>
+    digestHex(String(data), String(algorithm))),
+  method('digestBase64Str', { obj: 'java' }, () => (data: string, algorithm: string): string =>
+    digestBase64(String(data), String(algorithm))),
+  // 名字大写 H 是**对面的原样**（`JsEncodeUtils.HMacHex/HMacBase64` 靠 @Suppress("FunctionName")
+  // 保住这个畸形名）——脚本里怎么写就得怎么 callable，改名等于把这条 API 弄没
+  method('HMacHex', { obj: 'java' }, () => (data: string, algorithm: string, key: string): string =>
+    hMacHex(String(data), String(algorithm), String(key))),
+  method('HMacBase64', { obj: 'java' }, () => (data: string, algorithm: string, key: string): string =>
+    hMacBase64(String(data), String(algorithm), String(key))),
+  // 章节标题中文数字规整（legado JsExtensions.toNumChapter；真实源用它把「第五百章」写成「第500章」）
+  method('toNumChapter', { obj: 'java' }, () => (s: string): string => toNumChapter(String(s))),
   method('encodeURI', { obj: 'java' }, () => (s: string): string => uriEncode(String(s))),
   method('hexDecodeToString', { obj: 'java' }, () => (hex: string): string => hexDecodeToString(String(hex))),
   // ── AES 解密桥（legado java.aesBase64DecodeToString：真实源正文解密形态

@@ -1,17 +1,19 @@
 import render from 'dom-serializer'
-import { evaluate, RuleEvalError } from '../engine/index.js'
+import { evaluate, isPutOnlyRule, RuleEvalError } from '../engine/index.js'
 import type { EngineValue, Facet, RuleUsage } from '../engine/index.js'
 // runScript 深引（与 search-template 同口径）：header 规则求值走沙箱完成值语义，
 // 引擎 barrel 刻意不收 runScript（公开面只有 evaluate）——服务半第二个深引消费点。
 import { runScript } from '../engine/js-sandbox.js'
-import { engineFetch, engineFetchRaw } from './engine-fetch.js'
-import { headerOf } from './fetcher.js'
+import { engineFetch, engineFetchPost, engineFetchRaw } from './engine-fetch.js'
+import { headerOf, effectiveUserAgent } from './fetcher.js'
 import type { Fetcher } from './fetcher.js'
+import { absUrl } from './url.js'
+import { formatIntro } from './content.js'
 import type { NovelSource } from './types.js'
 
 // 兼容 re-export：absUrl 迁至 url.ts（拆 request↔bridge 环）、engineFetch 迁至 engine-fetch.ts
 // （请求组装语义归 request.assembleRequest）——既有 import 路径保持可用。
-export { absUrl } from './url.js'
+export { absUrl }
 export { engineFetch } from './engine-fetch.js'
 
 /** 页面快照（URL + 解码后正文 + 可选解析好的 JSON）——门面层传给字段求值的输入。
@@ -81,6 +83,9 @@ export function engineContextOf(
   vars?: Record<string, string>
   fetch: ReturnType<typeof engineFetch>
   fetchRaw: ReturnType<typeof engineFetchRaw>
+  fetchPost: ReturnType<typeof engineFetchPost>
+  /** java.getWebViewUA 用（口径见 src/engine/types.ts 的 EvalContext.userAgent） */
+  userAgent?: () => string
   jsLib?: string
   book?: Record<string, unknown>; chapter?: Record<string, unknown>; jsTimeoutMs?: number
 } {
@@ -94,6 +99,10 @@ export function engineContextOf(
     // 规则求值自身用的静态头在 resolveHeaders 内单独构造——不递归回 provider。
     fetch: engineFetch(fetcher, () => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs })),
     fetchRaw: engineFetchRaw(fetcher, () => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs })),
+    // java.post 的出站口：与 ajax/connect 同一个守门 fetcher（不开第二出口），差别只有 POST + 脚本头
+    fetchPost: engineFetchPost(fetcher, () => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs })),
+    // java.getWebViewUA 的口径：本仓真发出去的那条 UA（同步取，与 fetch 同一套静态头解析）
+    userAgent: () => effectiveUserAgent(source),
     ...(source.rules.jsLib === null ? {} : { jsLib: source.rules.jsLib }),
     ...(opts.book === undefined ? {} : { book: opts.book }),
     ...(opts.chapter === undefined ? {} : { chapter: opts.chapter }),
@@ -188,4 +197,183 @@ function nodesError(v: Extract<EngineValue, { kind: 'nodes' }>, facet: Facet): R
     segmentRaw: '(服务层规约)',
     hits: v.nodes.length,
   })
+}
+
+/** 字段子规则求值 + 规约：rule null → null（源没这条信息）。usage 缺省 'value'——字段规则都是取值用途 */
+export async function fieldOf(
+  subEval: SubRuleEval, rule: string | null, ctx: { html: string; baseUrl: string }, facet: Facet,
+): Promise<string | null> {
+  if (rule === null) return null
+  return firstValue(await subEval(rule, ctx, facet, 'value'), facet)
+}
+
+/** 辅助元数据字段的对面口径：**读不出来 = 留空，书目照收**。
+ *  `model/webBook/BookList.kt`（getSearchItem）与 `model/webBook/BookInfo.kt` 各自包
+ *  `try { … } catch (e) { Debug.log(错误) }` 的恰是这五项：kind / wordCount / lastChapter / intro /
+ *  coverUrl；**裸奔的是 name / author / bookUrl / tocUrl**（对面那四个不在 try 里——空即丢条目、
+ *  炸即整次失败）。所以一条坏掉的简介规则在对面**不会**让整页书目消失。 */
+async function metaFieldOf<T>(
+  subEval: SubRuleEval, rule: string | null, ctx: { html: string; baseUrl: string }, facet: Facet,
+  read: (v: EngineValue) => T | null,
+): Promise<T | null> {
+  if (rule === null) return null
+  try {
+    return read(await subEval(rule, ctx, facet, 'value'))
+  } catch {
+    return null
+  }
+}
+
+/** 对面那五项里的「单值」三件（最新章节 / 简介 / 封面）：值规约同 `fieldOf`，
+ *  差别只在读取抛错时留空而不是带走整组书目（对面 try/catch 口径，见 `metaFieldOf`）。 */
+export function auxFieldOf(
+  subEval: SubRuleEval, rule: string | null, ctx: { html: string; baseUrl: string }, facet: Facet,
+): Promise<string | null> {
+  return metaFieldOf(subEval, rule, ctx, facet, (v) => firstValue(v, facet))
+}
+
+/** 分类（对面 `analyzeRule.getStringList(ruleKind)?.joinToString(",")?.take(1000)`）：
+ *  **多命中是逗号串，不是首值**——`class.tags a@text`、`$.categoryNames[*]className` 这类规则
+ *  对面给出「玄幻,都市」，取首值会让两边读到不同的值。`take(1000)` 是 UTF-16 code unit 截断，
+ *  与 JS `String.prototype.slice` 同单位。 */
+export function kindFieldOf(
+  subEval: SubRuleEval, rule: string | null, ctx: { html: string; baseUrl: string }, facet: Facet,
+): Promise<string | null> {
+  return metaFieldOf(subEval, rule, ctx, facet, (v) => {
+    const items = listValue(v, facet)
+    return items === null ? null : items.join(',').slice(0, 1000)
+  })
+}
+
+/** 字数格式化（对面 `utils/StringUtils.kt` 的 `wordCountFormat(wc: String?)`，在 **webBook 解析层**
+ *  调用——存进 book 的已经是格式化后的串，不是「只在 UI 格式化」）：
+ *  整串是 `-?[0-9]+` 才转换；>10000 → `DecimalFormat("#.#")` 除一万 +「万字」，≤10000 → 原数 +「字」，
+ *  ≤0 → 空；认不出数字则原样给回（「120万字」「连载中」这些站点文案本来就是字符串）。
+ *  `words * 1.0f` 的 Float 中间态用 `Math.fround` 复现（超大字数下两边取整一致）。 */
+export function formatWordCount(wc: string | null): string | null {
+  if (wc === null) return null
+  if (!/^-?[0-9]+$/.test(wc)) return wc
+  const words = Number.parseInt(wc, 10)
+  if (!(words > 0)) return ''
+  if (words <= 10000) return `${words}字`
+  return `${formatHalfEven(Math.fround(words) / 10000)}万字`
+}
+
+/** Java `DecimalFormat("#.#")`：最多一位小数、整数不留 `.0`、恰好一位时去掉尾零（1.50→"1.5"、
+ *  1.0001→"1"），舍入为 HALF_EVEN（`1.25`→`1.2`、`1.35`→`1.4`）。 */
+function formatHalfEven(value: number): string {
+  const scaled = value * 10
+  // 浮点噪声先归到 1e-9，再对 .5 走偶数舍入
+  const nearest = Math.round(scaled * 1e9) / 1e9
+  const rounded = Math.abs(nearest % 1) === 0.5
+    ? (Math.trunc(nearest) % 2 === 0 ? Math.trunc(nearest) : Math.trunc(nearest) + (nearest > 0 ? 1 : -1))
+    : Math.round(nearest)
+  const text = (rounded / 10).toString()
+  return text.endsWith('.0') ? text.slice(0, -2) : text
+}
+
+/** 字数（对面 `wordCountFormat(analyzeRule.getString(ruleWordCount))`，同样包在 try/catch 里）。 */
+export async function wordCountFieldOf(
+  subEval: SubRuleEval, rule: string | null, ctx: { html: string; baseUrl: string }, facet: Facet,
+): Promise<string | null> {
+  return metaFieldOf(subEval, rule, ctx, facet, (v) => formatWordCount(firstValue(v, facet)))
+}
+
+/** 详情上下文解析（legado `ruleBookInfo.init` 口径，model/webBook/BookInfo.kt：init 先求值，其结果**整体替换**
+ *  后续详情规则的求值上下文**与 html**——legado `setContent(init 产物)` 是 content 单点全换）：
+ *  JSON 产物 → html 与 ctx.json **同步换根**（此前 html 留原页只换 json：`{{result.articleid}}`
+ *  这类 tocUrl 模板的 result=pageText=原页 → 插值 Miss → tocUrl 回退详情页 → 目录空，
+ *  novel.cooks.tw 真机实证——setContent 后 legado 的 result/content 就是 init 产物本身）；
+ *  非 JSON 文本/HTML 片段 → 作为 html 上下文（同前）。
+ *  init 非空但零命中 → 默认 RuleEvalError 点名 ruleDetailInit——不拿整页冒充上下文（宁炸不猜：
+ *  静默降级会让详情字段全 Miss 伪装成「源什么都没有」，QQ 类正版 API 源实测形态）。
+ *  `onEmptyInit: 'no-context'` 给「这页**可能**是详情页」的嗅探路径用（见 detailFieldsOf 同名参数）：
+ *  对面在 init 取空时 `setContent(null)`，后续字段自然全空 → 没有书目，而不是整次搜索失败。 */
+export async function detailContextOf(
+  ruleDetailInit: string | null | undefined, html: string, baseUrl: string, subEval: SubRuleEval,
+  opts: { onEmptyInit: 'no-context' },
+): Promise<{ html: string; json?: unknown } | null>
+export async function detailContextOf(
+  ruleDetailInit: string | null | undefined, html: string, baseUrl: string, subEval: SubRuleEval,
+  opts?: { onEmptyInit?: 'error' },
+): Promise<{ html: string; json?: unknown }>
+export async function detailContextOf(
+  ruleDetailInit: string | null | undefined, html: string, baseUrl: string, subEval: SubRuleEval,
+  opts?: { onEmptyInit?: 'error' | 'no-context' },
+): Promise<{ html: string; json?: unknown } | null> {
+  // `== null`：存量 sources.json 可能缺 ruleDetailInit 键（undefined）——按缺规则直通
+  if (ruleDetailInit == null || ruleDetailInit.trim() === '') return { html }
+  // 纯 `@put` 的 init（本机 4 源的详情面主导写法）：**只设变量、不换根**——legado 剥掉 @put 后
+  // 规则为空，取不到新根；打成「零命中」等于把这条合法规则判成失效（引擎 isPutOnlyRule 给结论）。
+  if (isPutOnlyRule(ruleDetailInit)) {
+    await subEval(ruleDetailInit, { html, baseUrl }, 'detail', 'list')
+    return { html }
+  }
+  const v = await subEval(ruleDetailInit, { html, baseUrl }, 'detail', 'list')
+  const parts = extractItems(v)
+  if (parts.length === 0) {
+    if (opts?.onEmptyInit === 'no-context') return null
+    throw new RuleEvalError(`详情初始化规则未取到上下文（段 ruleDetailInit: ${ruleDetailInit}）`, {
+      facet: 'detail', segmentIndex: 0, segmentRaw: ruleDetailInit, hits: 0,
+    })
+  }
+  const text = parts.join('\n')
+  // JSON 产物：html 同步换成产物文本（legado setContent 全换口径——result/pageText 与 json 同源）
+  try { return { html: text, json: JSON.parse(text) as unknown } } catch { return { html: text } }
+}
+
+/** 详情页五字段（对面 `BookInfo.analyzeBookInfo` 的取值段）：init 换根 → 书名/作者/封面/简介/
+ *  最新章节，`ruleDetail*` 优先、平铺方言回退同名共用字段（原 v1 行为）。封面按 base 绝对化、
+ *  简介按详情面口径净化（`<usehtml>`/`<md>`/`<useweb>` 前缀原样保留，其余 format + 5000 截断）。
+ *
+ *  两个消费点共用这一份：`ReadingService.getDetail`（详情面）与搜索面的 **info 形态**
+ *  （`bookUrlPattern` 命中 / 列表为空回落——对面 `BookList.getInfoItem` 调的就是同一个
+ *  `analyzeBookInfo`）。第二处若各写一份 `ruleDetailName ?? ruleBookName` 的回落链，
+ *  两上下文的分野就会开始各自漂移（那是本仓定过的重复罪）。
+ *
+ *  `onEmptyInit: 'no-book'` 正是为第二处准备的：那里的「这是详情页」只是**嗅探出来的猜测**
+ *  （对面 `getInfoItem` 的守卫就是 `name.isNotBlank()`——init 取空即没有书目）。让它在搜索面
+ *  抛错，会把一次正常的「这个词没搜到东西」升级成整源搜索失败（第 19 批真机抓回：快手趣阁
+ *  `$.data` 在结果响应里取空 → 对面静默无条目，本仓报 RuleEvalError）。 */
+/** 详情页七字段的取值面（`detailFieldsOf` 的返回形状） */
+export interface DetailFields {
+  title: string | null; author: string | null; coverUrl: string | null
+  intro: string | null; lastChapterName: string | null
+  kind: string | null; wordCount: string | null
+}
+
+export async function detailFieldsOf(
+  s: NovelSource, subEval: SubRuleEval, html: string, baseUrl: string,
+  opts: { onEmptyInit: 'no-book' },
+): Promise<DetailFields | null>
+export async function detailFieldsOf(
+  s: NovelSource, subEval: SubRuleEval, html: string, baseUrl: string,
+  opts?: { onEmptyInit?: 'error' },
+): Promise<DetailFields>
+export async function detailFieldsOf(
+  s: NovelSource, subEval: SubRuleEval, html: string, baseUrl: string,
+  opts?: { onEmptyInit?: 'error' | 'no-book' },
+): Promise<DetailFields | null> {
+  const { rules } = s
+  const dctx = opts?.onEmptyInit === 'no-book'
+    ? await detailContextOf(rules.ruleDetailInit, html, baseUrl, subEval, { onEmptyInit: 'no-context' })
+    : await detailContextOf(rules.ruleDetailInit, html, baseUrl, subEval)
+  if (dctx === null) return null
+  const ctx = { html: dctx.html, json: dctx.json, baseUrl }
+  const [title, author, cover, intro, last, kind, wordCount] = await Promise.all([
+    fieldOf(subEval, rules.ruleDetailName ?? rules.ruleBookName, ctx, 'detail'),
+    fieldOf(subEval, rules.ruleDetailAuthor ?? rules.ruleAuthor, ctx, 'detail'),
+    auxFieldOf(subEval, rules.ruleDetailCoverUrl ?? rules.ruleCoverUrl, ctx, 'detail'),
+    auxFieldOf(subEval, rules.ruleDetailIntro ?? rules.ruleIntro, ctx, 'detail'),
+    auxFieldOf(subEval, rules.ruleDetailLastChapter ?? rules.ruleLastChapter, ctx, 'detail'),
+    kindFieldOf(subEval, rules.ruleDetailKind ?? rules.ruleKind, ctx, 'detail'),
+    wordCountFieldOf(subEval, rules.ruleDetailWordCount ?? rules.ruleWordCount, ctx, 'detail'),
+  ])
+  return {
+    title, author,
+    coverUrl: cover === null ? null : absUrl(cover, baseUrl),
+    intro: intro === null ? null : formatIntro(intro, { keepDirective: true }),
+    lastChapterName: last,
+    kind, wordCount,
+  }
 }

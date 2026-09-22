@@ -1,6 +1,6 @@
 import type { ProbeErrorCode, ProbeResult } from '../shared/wire.js'
 export type { ProbeResult, ProbeErrorCode } from '../shared/wire.js'
-import { firstValue } from './bridge.js'
+import { detailFieldsOf, firstValue } from './bridge.js'
 import { fetchSearchPage, searchErrorCodeOf } from './search-face.js'
 import type { Fetcher } from './fetcher.js'
 import type { NovelSource } from './types.js'
@@ -22,10 +22,27 @@ export async function probeSource(
   source: NovelSource, fetcher: Fetcher, opts?: { timeoutMs?: number; jsTimeoutMs?: number },
 ): Promise<ProbeResult> {
   try {
-    for (const key of PROBE_KEYS) {
+    // 源自带校验关键词（legado `ruleSearch.checkKeyWord`）时先打它：「只搜得到自家书名」的站
+    // 对通用词恒 0 命中，会被误判坏源（本库 31/158 源带值）。`?? null`：存量 sources.json 缺键。
+    const own = source.rules.probeKeyword ?? null
+    const keys = own === null || own.trim() === '' ? [...PROBE_KEYS] : [own, ...PROBE_KEYS]
+    for (const key of keys) {
       const page = await fetchSearchPage(source, key, fetcher, opts?.timeoutMs, opts?.jsTimeoutMs)
       if (!page.ok) return fail('RuleMissing', page.message, 0)
-      if (page.items.length === 0) continue // 换下一词（0 命中可能是词被停用，非源坏）
+      if (page.shape === 'info' && page.via === 'pattern') {
+        // 搜索响应即详情页（bookUrlPattern 命中）：书名走**详情规则**，与聚合搜索的 info 形态
+        // 同一实现（bridge.detailFieldsOf，含 init 换根）。拿 ruleBookName 在详情页上求值会读出
+        // 链接文字，或干脆 Miss 把好源判成坏源。
+        const fields = await detailFieldsOf(source, page.subEval, page.body, page.landedUrl,
+          { onEmptyInit: 'no-book' })
+        const title = fields === null ? null : fields.title
+        if (title === null || title.trim() === '') {
+          return fail('RuleEvalError', `详情页书名为空（段 ruleDetailName: ${source.rules.ruleDetailName}）`, 1)
+        }
+        return { ok: true, itemCount: 1, firstTitle: title, probedAt: Date.now() }
+      }
+      // empty-list 回落来的 info 与 0 条目同义：那个词可能被站点停用了，换下一词再打
+      if (page.shape === 'info' || page.items.length === 0) continue
       const nameRule = source.rules.ruleBookName
       if (nameRule === null) return fail('RuleMissing', '源未声明 ruleBookName', 0)   // 搜索面已拦；此处为类型收窄
       // usage='value'：与搜索面取书名同口径（`reading.ts` 对同一 ruleBookName、同一 item
@@ -38,7 +55,7 @@ export async function probeSource(
       return { ok: true, itemCount: page.items.length, firstTitle: first, probedAt: Date.now() }
     }
     return fail('RuleEvalError',
-      `搜索列表 0 命中（关键词${PROBE_KEYS.map((k) => `「${k}」`).join('')}均无结果；段 ruleBookList: ${source.rules.ruleBookList}）`, 0)
+      `搜索列表 0 命中（关键词${keys.map((k) => `「${k}」`).join('')}均无结果；段 ruleBookList: ${source.rules.ruleBookList}）`, 0)
   } catch (e) {
     return { ok: false, itemCount: 0, firstTitle: null, error: { code: searchErrorCodeOf(e), message: messageOf(e) }, probedAt: Date.now() }
   }

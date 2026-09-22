@@ -196,12 +196,16 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   /** DOM 测量口：会话只读不碰 DOM——测量语义（两套坐标系不许混用）全在这一个对象里 */
   const readerPort = useMemo<ReaderPort>(() => ({
     measureAnchors: (): ChapterAnchor[] => {
-      // 锚点 = 章块相对「滚动内容原点」的偏移。不能用 offsetTop：宿主的滚动容器在阅读器之外，
+      // 锚点 = 章块相对「滚动内容原点」的偏移 + **该章渲染高度**（跨度的唯一来源：存与取
+      // 都用它，两个方向才互逆）。不能用 offsetTop：宿主的滚动容器在阅读器之外，
       // 两套坐标系混用会让 locateChapter 恒判第 0 章（进度不落地）
       const origin = contentOriginTop(portRef.current)
       const list: ChapterAnchor[] = []
       chapterRefs.current.forEach((el, i) => {
-        if (el !== null && el !== undefined) list.push({ index: i, start: el.getBoundingClientRect().top - origin })
+        if (el !== null && el !== undefined) {
+          const rect = el.getBoundingClientRect()
+          list.push({ index: i, start: rect.top - origin, height: rect.height })
+        }
       })
       return list
     },
@@ -458,7 +462,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
             ))}
           {toc !== null && (
             <div ref={sentinelRef} data-novel-sentinel className="novel-sentinel">
-              {loadingIdx !== null ? '加载中…' : nextChapterIndex(chapters) === -1 ? '— 全书完 —' : '…'}
+              {loadingIdx !== null ? '加载中…' : nextChapterIndex(chapters, currentChapter) === -1 ? '— 全书完 —' : '…'}
             </div>
           )}
         </div>

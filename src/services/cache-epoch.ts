@@ -31,10 +31,15 @@ export type CacheFacet = Extract<Facet, 'toc' | 'content'>
 
 export const RULE_EPOCH_IMPACT: Record<keyof NormalizedRules, EpochImpact> = {
   searchUrl: 'none', exploreUrl: 'none',
+  // 探针关键词只影响「验证」这一步，不参与任何面的取值 → 不进缓存指纹
+  probeKeyword: 'none',
+  // 详情页嗅探只改搜索面「这条响应是不是详情页」，目录/正文取值与它无关
+  bookUrlPattern: 'none',
   // 目录面在缺 ruleChapterList 时回退 ruleBookList（reading.getTocInner 的既有口径）
   ruleBookList: 'toc',
   ruleBookName: 'none', ruleAuthor: 'none', ruleBookUrl: 'none',
   ruleCoverUrl: 'none', ruleIntro: 'none', ruleLastChapter: 'none',
+  ruleKind: 'none', ruleWordCount: 'none', ruleDetailKind: 'none', ruleDetailWordCount: 'none',
   ruleTocUrl: 'toc', ruleChapterList: 'toc', ruleChapterName: 'toc', ruleChapterUrl: 'toc',
   ruleDetailName: 'none', ruleDetailAuthor: 'none', ruleDetailCoverUrl: 'none',
   ruleDetailIntro: 'none', ruleDetailLastChapter: 'none',

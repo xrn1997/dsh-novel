@@ -165,7 +165,10 @@ describe('对象形态方言（legado 嵌套导出）', () => {
     expect(warn).toContain('ruleContent.webJs')     // 未支持子字段点名
     expect(warn).toContain('ruleContent.callBackJs')
     expect(r.warnings.some((w) => w.field === 'ruleExplore')).toBe(true)  // v1 无 explore 面
-    expect(r.warnings.some((w) => w.field === 'ruleSearch.kind')).toBe(false) // kind 被点名而非漏掉
+    // kind/wordCount 已接入取值链路（`ruleKind`/`ruleWordCount`），不再是"未支持字段"
+    expect(warn).not.toContain('ruleSearch.kind')
+    expect(r.source!.rules.ruleKind).toBe('玄幻')
+    expect(r.source!.rules.ruleWordCount).toBe('100万字')
   })
 })
 
@@ -198,6 +201,68 @@ const nativeSource = {
   ruleRank: { url: '/paihang' },
   charset: 'utf-8',
 }
+
+// ── 字符串化的规则容器（对面每个 rule 对象的 JsonDeserializer 都吃这一形态）────────
+describe('规则容器的字符串化形态', () => {
+  const strung = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    bookSourceName: 'S', bookSourceUrl: 'https://s.com', ruleContent: 'x',
+    ruleSearch: JSON.stringify({ bookList: '.sl li', name: 'a@text', author: 'span@text' }),
+    ...over,
+  })
+  it('ruleSearch 是 JSON 字符串 → 子字段照常展平（此前整块被当非对象跳过 → 搜索面规则全丢）', () => {
+    const r = normalizeSource(strung())
+    expect(r.ok).toBe(true)
+    expect(r.source!.rules.ruleBookList).toBe('.sl li')
+    expect(r.source!.rules.ruleBookName).toBe('a@text')
+    expect(r.source!.rules.ruleAuthor).toBe('span@text')
+  })
+  it('字符串化的 ruleToc / ruleBookInfo 同样生效（五块共用一条口径）', () => {
+    const rules = normalizeSource(strung({
+      ruleToc: JSON.stringify({ chapterList: '#chs a', chapterName: 'a@text', chapterUrl: 'a@href' }),
+      ruleBookInfo: JSON.stringify({ init: '$.data.bookInfo', name: '$.name' }),
+    })).source!.rules
+    expect(rules.ruleChapterList).toBe('#chs a')
+    expect(rules.ruleDetailInit).toBe('$.data.bookInfo')
+    expect(rules.ruleDetailName).toBe('$.name')
+  })
+  it('字符串化里的 replaceRegex → ##净化尾照样追加（解析后的对象与真对象走同一条路径）', () => {
+    const rules = normalizeSource({
+      bookSourceName: 'S', bookSourceUrl: 'https://s.com',
+      ruleContent: JSON.stringify({ content: '@css:#c@textNodes', replaceRegex: '/广告/' }),
+    }).source!.rules
+    expect(rules.ruleContent).toBe('@css:#c@textNodes##/广告/##')
+  })
+  it('值是 "null" 字面量 → 按缺席处理，不产 warning（对面 GSON 同样解出 null）', () => {
+    const r = normalizeSource(strung({ ruleToc: 'null' }))
+    expect(r.ok).toBe(true)
+    expect(r.source!.rules.ruleChapterList).toBeNull()
+    expect(r.warnings.filter((w) => w.field === 'ruleToc')).toEqual([])
+  })
+  it('值不是合法 JSON → warning 点名并按缺席处理（不静默丢，也不让一块坏字符串炸掉整源导入）', () => {
+    const r = normalizeSource(strung({ ruleSearch: '{"bookList":' }))
+    expect(r.ok).toBe(true)
+    expect(r.source!.rules.ruleBookList).toBeNull()
+    expect(r.warnings.some((w) => w.field === 'ruleSearch' && /不是合法 JSON/.test(w.message))).toBe(true)
+  })
+  it('读不出的 ruleContent 容器不许冒充规则串（键名本身就是规则位）', () => {
+    // 曾经只清「读得出的」那种容器原文：读不出的留在合并视图里，被当成正文规则一路带到求值期
+    // （表现成「有规则但一读就炸」），而不是本仓要的缺席。清掉之后走的是既有的诚实拦截。
+    const r = normalizeSource(strung({ ruleContent: '{"content":' }))
+    expect(r.ok).toBe(false)
+    expect(r.missing.map((m) => m.field)).toContain('ruleContent')
+    expect(r.warnings.some((w) => w.field === 'ruleContent' && /不是合法 JSON/.test(w.message))).toBe(true)
+  })
+  it('读不出的非必填容器（ruleToc）→ 该位缺席，不影响整源导入', () => {
+    const r = normalizeSource(strung({ ruleToc: '{"chapterList":' }))
+    expect(r.ok).toBe(true)
+    expect(r.source!.rules.ruleChapterList).toBeNull()
+  })
+  it('解析出来是数组 → 按缺席处理且不 warning（对面 deserializer 的 else 分支同样落 null）', () => {
+    const r = normalizeSource(strung({ ruleSearch: '[1,2]' }))
+    expect(r.source!.rules.ruleBookList).toBeNull()
+    expect(r.warnings.filter((w) => w.field === 'ruleSearch')).toEqual([])
+  })
+})
 
 describe('Native 格式（android-ebook 原生规则）', () => {
   it('判别与顶层映射：name/url → bookSource*；headers → header；group → groups', () => {
@@ -247,12 +312,17 @@ describe('Native 格式（android-ebook 原生规则）', () => {
     expect(rules.ruleDetailIntro).toBe('.left@text||.right@text') // 每个 || 分支各自补
     expect(rules.ruleContent).toBe('@css:#c@textNodes')
   })
-  it('ruleFind/ruleRank/kind/charset → 聚合 warning（宁吵不瞒），不阻塞导入', () => {
+  it('Native 的 kind/wordCount → 直通 ruleKind/ruleWordCount（隐式终端补 @text）', () => {
+    const rules = normalizeSource(nativeSource).source!.rules
+    expect(rules.ruleKind).toBe('.itemtxt p span:last-child@text')
+    expect(rules.ruleDetailKind).toBe('.booktxt p:nth-child(2)@text')
+    expect(rules.ruleWordCount).toBeNull()   // 该 fixture 不带 wordCount
+  })
+  it('ruleFind/ruleRank/charset → 聚合 warning（宁吵不瞒），不阻塞导入', () => {
     const r = normalizeSource(nativeSource)
     expect(r.ok).toBe(true)
     const warn = r.warnings.map((w) => w.message).join(' ')
-    expect(warn).toContain('ruleSearch.kind')
-    expect(warn).toContain('ruleBookInfo.kind')
+    expect(warn).not.toContain('kind')     // 已支持，不再算未支持字段
     expect(warn).toContain('ruleFind')
     expect(warn).toContain('ruleRank')
     expect(warn).toContain('charset')

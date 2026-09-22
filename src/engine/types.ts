@@ -24,10 +24,24 @@ export interface EvalContext {
   baseUrl?: string
   source?: string
   vars?: Record<string, string>
+  /** 变量链的 **source 层**（跨门面调用、按源隔离；由 js-sandbox 从 SourceSession 接线）。
+   *  对面 `AnalyzeRule.get` 四级读：chapter→book→ruleData→source，每级空串继续下找。
+   *  本仓 `vars` = 本次调用的 ruleData/chapter 层，`sourceVar` = source 层的只读访问器；
+   *  chapter/book 两层要持久化宿主（对面 `Book.variable` 落库），未接 → 矩阵 `a-var-scope-chain` 仍记开口。 */
+  sourceVar?: (key: string) => string | undefined
   fetch?: (url: string) => Promise<{ body: string; contentType?: string }>
+  /** 本仓**实际出站**的 User-Agent（惰性取，源规则可覆盖）。对面 `java.getWebViewUA()` 返回
+   *  WebView 默认 UA，本仓没有 WebView：给"我们真发出去的那条 UA"是**近似**而非等价，
+   *  未接线时桥点名抛错而不编一个值（矩阵 `h-java-webview-ua`）。 */
+  userAgent?: () => string
   /** 二进制抓取（`java.downloadFile` 用）：与 fetch 同请求语义但返回**原始字节**——
    *  经字符集解码链的字符串会损坏 PNG 等二进制（密钥图提取实证）。缺省缺席 → 下载类方法如实报错。 */
   fetchRaw?: (url: string) => Promise<Uint8Array>
+  /** `java.post(url, body, headers)` 的出站口（对面 Jsoup Response 的数据面；实现在
+   *  `services/engine-fetch.ts` 的 engineFetchPost——**同一个守门 fetcher**，不开第二出口）。 */
+  fetchPost?: (url: string, body: string, headers?: Record<string, string>) => Promise<{
+    url: string; body: string; contentType?: string; statusCode: number; cookies: Record<string, string>
+  }>
   jsTimeoutMs?: number
   /** legado jsLib：源级全局 JS 函数库——先于每段 @js 代码在同上下文执行（函数定义全局可见） */
   jsLib?: string
@@ -49,6 +63,8 @@ export type IndexSpec =
   // 半开切片不同口径——legado bracket 语义），step 缺省按方向自动（from>to → -1）；负数从尾数。
   // `[-1:0]` = 整表倒序（legado 文档「特殊用法 tag.div[-1:0] 可在任意地方让列表反向」）
   | { kind: 'range'; from: number; to: number; step?: number }
+  // 方括号多条目并集（legado ElementsSingle `[a,b,…]`：条目收进去重 Set，越界静默丢弃，按文档序过滤）
+  | { kind: 'multi'; entries: IndexSpec[] }
 
 export type Segment =
   | { kind: 'default'; mode: string; arg: string | null; index: IndexSpec | null; exclude?: number[] }
@@ -58,7 +74,7 @@ export type Segment =
   | { kind: 'jsonpath'; path: string }
   | { kind: 'xpath'; path: string }
   | { kind: 'allinone'; pattern: string; flags: string }
-  | { kind: 'js'; code: string; form: 'at-js' | 'inline' | 'tail' }
+  | { kind: 'js'; code: string; form: 'at-js' | 'inline' }
   | { kind: 'put'; pairsRaw: string }
   | { kind: 'getvar'; name: string }
   // 模板字面段（CONTEXT.md「模板字面段」）：URL/文本模板——`{{expr}}`（JS 或规则递归）与
@@ -73,6 +89,9 @@ export interface ReplaceStep { pattern: string; flags: string; replacement: stri
 
 export interface ParsedRule {
   branches: Branch[]
+  /** 解析时的用途（对面 getElements / getString 两条路径的身份）——js 段的 `result`
+   *  绑定形态按它决定：列表用途下前段零命中仍是空元素集，取值用途下仍是字符串 */
+  usage: RuleUsage
   /** || → 'first'；&& → 'and'；%% → 'zip'；无连接符 → 'first' */
   combinator: 'first' | 'and' | 'zip'
   reverse: boolean

@@ -327,9 +327,9 @@ register(defineTool({
 
 ### 对 dsh-novel 的直接含义
 
-- 5 个工具全走 `defineTool`；**返回值是规范 JSON**（正文长就让它长，description 里说明），模型面文本由 `render` 投影。
+- 6 个工具（全锁 `dshnovel_` 前缀）全走 `defineTool`；**返回值是规范 JSON**（正文长就让它长，description 里说明），模型面文本由 `render` 投影。
 - 工具内不要模型传 sessionId——用 `exec.agent.session.id`（better-sidebar 全部工具如此）；这正是「阅读状态进 session」的正确挂点。
-- 注册函数返回 disposer：把 5 个工具的注册包一个 `registerTools(ctx, service)` 返回 `() => void`，apply 里 `ctx.effect(() => registerTools(…))`。
+- 注册函数返回 disposer：把 6 个工具的注册包一个 `registerTools(ctx, service)` 返回 `() => void`，apply 里 `ctx.effect(() => registerTools(…))`。
 - 输出 schema 用同一套 spec DSL（`oneOf` 也支持，见 terminal_wait_for 的四分支输出）。
 
 ---

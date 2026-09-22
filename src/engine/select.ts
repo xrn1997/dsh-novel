@@ -10,6 +10,13 @@ type DefaultSegment = Extract<Segment, { kind: 'default' }>
 const SELECT_MODES = ['class', 'id', 'tag', 'child', 'children'] as const
 const GET_MODES = ['text', 'textAll', 'ownText', 'html', 'all', 'href', 'src', 'content', 'textNodes'] as const
 
+/** 该 default 段是否是**取值段**（终端，不再向下选）：mode 属 GET_MODES/attr 且不带参数——
+ *  `text.<串>` 那种带参数的「按文本选元素」是选择段。链首未起链时取哪个上下文，由此决定
+ *  （evaluate 的 default 分支消费）。 */
+export function isGetValueSegment(seg: DefaultSegment): boolean {
+  return seg.arg === null && (seg.mode === 'attr' || (GET_MODES as readonly string[]).includes(seg.mode))
+}
+
 /**
  * 位置后缀统一口径：
  * - null / all → 整个数组
@@ -18,29 +25,44 @@ const GET_MODES = ['text', 'textAll', 'ownText', 'html', 'all', 'href', 'src', '
  *
  * 设计文档：docs/design/engine.md
  */
-export function applyIndex<T>(arr: T[], index: IndexSpec | null): T[] | 'miss' {
-  if (index === null || index.kind === 'all') return arr
+/** 索引条目 → **位置**集合（越界位置按 legado 口径静默丢弃；`multi` 的并集在此展开） */
+function positionsFor(len: number, index: IndexSpec): number[] {
+  if (index.kind === 'all') return [...Array(len).keys()]
   if (index.kind === 'index') {
-    const i = index.value < 0 ? arr.length + index.value : index.value
-    if (i < 0 || i >= arr.length) return 'miss'
-    return [arr[i]]
+    const i = index.value < 0 ? len + index.value : index.value
+    return i < 0 || i >= len ? [] : [i]
+  }
+  if (index.kind === 'multi') {
+    // legado ElementsSingle：条目收进 `MutableSet<Int>`（去重、越界静默丢弃），最后按文档序过滤
+    const set = new Set<number>()
+    for (const spec of index.entries) for (const p of positionsFor(len, spec)) set.add(p)
+    return [...set].sort((a, b) => a - b)
   }
   if (index.kind === 'range') {
     // 方括号区间（legado ElementsSingle 口径）：闭区间 + 负数从尾数 + 端点越界钳到边界；
     // step 缺省按方向自动（from>to → -1，即倒序取）——`[-1:0]` = 整表倒序
-    const len = arr.length
-    if (len === 0) return 'miss'
+    if (len === 0) return []
     const norm = (v: number): number => (v < 0 ? len + v : v)
     const from = Math.min(len - 1, Math.max(0, norm(index.from)))
     const to = Math.min(len - 1, Math.max(0, norm(index.to)))
     const step = index.step !== undefined && index.step !== 0 ? index.step : (from > to ? -1 : 1)
-    const out: T[] = []
-    for (let i = from; step > 0 ? i <= to : i >= to; i += step) out.push(arr[i])
-    return out.length === 0 ? 'miss' : out
+    const out: number[] = []
+    for (let i = from; step > 0 ? i <= to : i >= to; i += step) out.push(i)
+    return out
   }
-  const from = index.from === null ? 0 : (index.from < 0 ? arr.length + index.from : index.from)
-  const to = index.to === null ? arr.length : (index.to < 0 ? arr.length + index.to : index.to)
-  return arr.slice(Math.max(from, 0), Math.max(to, 0))
+  const from = index.from === null ? 0 : (index.from < 0 ? len + index.from : index.from)
+  const to = index.to === null ? len : (index.to < 0 ? len + index.to : index.to)
+  const out: number[] = []
+  for (let i = Math.max(from, 0); i < Math.max(to, 0); i++) if (i < len) out.push(i)
+  return out
+}
+
+export function applyIndex<T>(arr: T[], index: IndexSpec | null): T[] | 'miss' {
+  if (index === null || index.kind === 'all') return arr
+  const out = positionsFor(arr.length, index).map((i) => arr[i])
+  // 选择段四态一律 Miss（分叉①裁决）；slice 的「裁空」不是取位失败，保持 arr.slice 旧口径给空数组
+  if (out.length === 0 && index.kind !== 'slice') return 'miss'
+  return out
 }
 
 /**
@@ -236,9 +258,21 @@ function getValue(
   }
 
   const texts: string[] = []
+  // 属性型终端（href/src/content）与 attr 同一条对面口径：`getResultLast` 的 else 分支
+  // `if (url.isBlank() || textS.contains(url)) continue` —— **空值丢弃 + 去重**。漏去重的后果不是
+  // 难看而是错数据：真源 ruleBookUrl `tag.a@href` 在一个条目里 4 个 <a> 指向同一 href，收 4 份后
+  // 服务层 firstValue 以 \n 拼接，`new URL()` 吃掉换行 → 书 URL 变成路径重复（久久小说/成人小说网
+  // 真机实证）。text/html/all 等**具名**分支对面不去重（重复的章节名、正文段是合法内容），故只这一组去重。
+  const dedupe = seg.mode === 'href' || seg.mode === 'src' || seg.mode === 'content'
+  const seenVal = new Set<string>()
   for (const el of applied) {
     const t = extract($, el, seg.mode)
-    if (t !== '') texts.push(t)
+    if (t === '') continue
+    if (dedupe) {
+      if (seenVal.has(t)) continue
+      seenVal.add(t)
+    }
+    texts.push(t)
   }
   if (texts.length === 0) return { kind: 'list', items: [] } // 取到空（合法零条目），区别于 Miss
   if (applied.length === 1 && arr.length === 1) return { kind: 'value', text: texts[0] }

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { firstValue, listValue, extractItems, absUrl, engineFetch } from '../../src/services/bridge.js'
+import { evaluate } from '../../src/engine/index.js'
+import type { SubRuleEval } from '../../src/services/bridge.js'
+import {
+  extractItems, absUrl, engineFetch, firstValue, formatWordCount, kindFieldOf, listValue, wordCountFieldOf,
+} from '../../src/services/bridge.js'
 
 describe('值规约', () => {
   it('miss → null（源没这条信息）', () => {
@@ -85,5 +89,86 @@ describe('engineFetch（java.ajax 出口）', () => {
     await f('https://m.a.com/plain.json')
     expect(seen[0].url).toBe('https://m.a.com/plain.json')
     expect(seen[0].init?.method).toBeUndefined()
+  })
+})
+
+/**
+ * 分类 / 字数两个字段的对面口径（`model/webBook/BookList.kt` 的 getSearchItem 与
+ * `model/webBook/BookInfo.kt`）。三条都不是本仓可以自行简化的：
+ * kind 是 **getStringList 的逗号串**（多命中取首值 = 两边读到不同的值）、
+ * wordCount 在**解析层**就过 `wordCountFormat`（对面存进 book 的已是「1.2万字」这种串），
+ * 且这一族的读取对面包在 try/catch 里（一条坏分类规则不许带走整页书目）。
+ */
+describe('分类字段 kindFieldOf（对面 getStringList → joinToString(",") → take(1000)）', () => {
+  /** 走真引擎的 subEval + 同一段片段上下文：字段语义的钉子要真求值，不造桩 */
+  const at = (html: string) => ({
+    sub: ((rule, ctx, facet, usage) =>
+      evaluate(rule, { html: ctx.html, baseUrl: ctx.baseUrl }, facet, usage ?? 'value')) as SubRuleEval,
+    ctx: { html, baseUrl: 'https://a.com/book/1/' },
+  })
+  const BASE = 'https://a.com/book/1/'
+
+  it('多命中 → 逗号串（不是首值）', async () => {
+    const f = at('<p><a>玄幻</a><a>都市</a><a>连载</a></p>')
+    expect(await kindFieldOf(f.sub, 'tag.a@text', f.ctx, 'search')).toBe('玄幻,都市,连载')
+  })
+  it('单命中 / miss → 单值 / null', async () => {
+    expect(await kindFieldOf(at('<p><a>玄幻</a></p>').sub, 'tag.a@text', { html: '<p><a>玄幻</a></p>', baseUrl: BASE }, 'search')).toBe('玄幻')
+    const miss = at('<p><em>无</em></p>')
+    expect(await kindFieldOf(miss.sub, 'tag.a@text', miss.ctx, 'search')).toBeNull()
+    const any = at('<p></p>')
+    expect(await kindFieldOf(any.sub, null, any.ctx, 'search')).toBeNull()   // 规则缺席
+  })
+  it('截断到 1000 个字符（对面 String.take(1000) 与 JS slice 同为 UTF-16 code unit）', async () => {
+    const f = at(`<p>${Array.from({ length: 200 }, () => '<a>0123456789</a>').join('')}</p>`)
+    const v = await kindFieldOf(f.sub, 'tag.a@text', f.ctx, 'search')
+    expect(v).not.toBeNull()
+    expect((v as string).length).toBe(1000)
+  })
+  it('对面 try/catch 那一半：本仓认不出的规则形态只让该字段留空，书目照收', async () => {
+    const f = at('<p><a>玄幻</a></p>')
+    // `kind: "0"` / `kind: "k"` 是真库形态（现量见 docs/design/legado-compat.md 的需求量表）：
+    // 无 `@` 单段在解析期抛 UnsupportedRuleError——吞掉它才与对面一致，抛出即整组书目变 error。
+    expect(await kindFieldOf(f.sub, '0', f.ctx, 'search')).toBeNull()
+    // 求值期炸掉（这里是宿主桩抛「需要安卓宿主环境」）同样只让该字段留空
+    expect(await kindFieldOf(f.sub, '@js:java.getVerificationCode("x")', f.ctx, 'search')).toBeNull()
+  })
+})
+
+describe('字数字段 wordCountFieldOf（对面 utils/StringUtils.kt 的 wordCountFormat）', () => {
+  const at = (html: string) => ({
+    sub: ((rule, ctx, facet, usage) =>
+      evaluate(rule, { html: ctx.html, baseUrl: ctx.baseUrl }, facet, usage ?? 'value')) as SubRuleEval,
+    ctx: { html, baseUrl: 'https://a.com/book/1/' },
+  })
+
+  it('整串是整数才转换：≤10000 加「字」，>10000 除一万加「万字」', () => {
+    expect(formatWordCount('8000')).toBe('8000字')
+    expect(formatWordCount('10000')).toBe('10000字')       // 边界：不 >
+    expect(formatWordCount('10001')).toBe('1万字')          // DecimalFormat("#.#") 去掉 .0001
+    expect(formatWordCount('12345')).toBe('1.2万字')
+    expect(formatWordCount('198765')).toBe('19.9万字')
+  })
+  it('舍入是 HALF_EVEN（Java DecimalFormat 默认），不是四舍五入', () => {
+    expect(formatWordCount('12500')).toBe('1.2万字')        // 1.25 → 偶数 1.2
+    expect(formatWordCount('13500')).toBe('1.4万字')        // 1.35 → 1.4
+  })
+  it('非数字原样给回；≤0 变空串；null 仍是 null', () => {
+    expect(formatWordCount('120万字')).toBe('120万字')
+    expect(formatWordCount('连载中')).toBe('连载中')
+    expect(formatWordCount('1,234')).toBe('1,234')         // 带千分位 = 不整串匹配 -?[0-9]+
+    expect(formatWordCount('0')).toBe('')
+    expect(formatWordCount('-5')).toBe('')                 // 数字但 ≤0
+    expect(formatWordCount(null)).toBeNull()
+  })
+  it('取到值才格式化 + 取不出即留空（与 kind 同一条对面闸口）', async () => {
+    const hit = at('<span>12345</span>')
+    expect(await wordCountFieldOf(hit.sub, 'tag.span@text', hit.ctx, 'detail')).toBe('1.2万字')
+    const empty = at('<span></span>')
+    // 空元素取到的是空串而非 Miss：对面 searchBook.wordCount = wordCountFormat("") = ""（照赋值），
+    // BookInfo 面才用 isNotEmpty 挡住——本仓两边都给空串，不折成 null（Miss 与空值是两种东西）
+    expect(await wordCountFieldOf(empty.sub, 'tag.span@text', empty.ctx, 'detail')).toBe('')
+    const bad = at('<span>123</span>')
+    expect(await wordCountFieldOf(bad.sub, '0', bad.ctx, 'detail')).toBeNull()
   })
 })

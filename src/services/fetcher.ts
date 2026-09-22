@@ -10,6 +10,12 @@ export interface FetchedPage {
   contentType: string | undefined
   /** 从 Content-Type 提取的 charset（无则 undefined） */
   charset: string | undefined
+  /** HTTP 状态码。守门 fetcher 对非 2xx 抛 FetchError，所以在成功返回的页里它恒为 2xx/3xx；
+   *  它存在的理由是 `java.post(...).statusCode()`（对面 Jsoup Response 有这一项，缺它就只能编一个）。 */
+  status: number
+  /** 响应 `Set-Cookie` 头原文数组（无则空数组）——`java.post(...).cookies()` 的数据源。
+   *  本仓**不**实现对面 enabledCookieJar 那套自动回带（见矩阵 `b-cookie-jar`）：这里只给脚本自己读。 */
+  setCookie: string[]
 }
 
 export interface FetcherOptions {
@@ -46,6 +52,38 @@ const DEFAULT_HEADERS: Record<string, string> = {
 }
 
 /**
+ * 本源**实际发出去**的 User-Agent：源静态头 / auth 头覆盖 → 缺省 UA 打底。
+ * **大小写不敏感**（HTTP 头名本就不敏感）：`user-agent` 与 `User-Agent` 是同一条头，
+ * 只按原样查键会让声明了小写形态的源（现库 2/214）被误报成缺省 UA。
+ * 唯一消费者是 `java.getWebViewUA()` 的 ctx 接线（对面返回 WebView 默认 UA，本仓以"我们真发的
+ * 这条"近似承接；见矩阵 `h-java-webview-ua`）。同步取值，不含 `@js:` 动态头——那是 fetch 时才算的，
+ * 脚本要的通常是"给我一个能用的 UA"，不是"给我一个和下一个请求逐字节一致的头"。
+ */
+export function effectiveUserAgent(source: Pick<NovelSource, 'rules' | 'auth'>): string {
+  for (const [k, v] of Object.entries(headerOf(source))) {
+    if (k.toLowerCase() === 'user-agent') return v
+  }
+  return DEFAULT_HEADERS['User-Agent'] ?? ''
+}
+
+/**
+ * 出站头合并单点：缺省头打底，调用方声明同名头时**按大小写不敏感的同一性覆盖**。
+ * 裸 `{...DEFAULT_HEADERS, ...init}` 会让 `user-agent` 与缺省 `User-Agent` 并存，undici 把重名
+ * 合成一条 `"默认, 源"` 的畸形头（本机实测：服务端收到 `user-agent: "DEFAULT, SOURCE"`），
+ * 源声明的 UA / Accept 就此失效——比覆盖更坏。同表内的重名（如 auth 声明的 `cookie`）同样归并。
+ */
+function mergeHeaders(init?: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = { ...DEFAULT_HEADERS }
+  for (const [k, v] of Object.entries(init ?? {})) {
+    for (const key of Object.keys(out)) {
+      if (key !== k && key.toLowerCase() === k.toLowerCase()) delete out[key]
+    }
+    out[k] = v
+  }
+  return out
+}
+
+/**
  * 守门抓取器：唯一出站口。超时/网络层失败/HTTP 非 2xx 分别类型化为 FetchError，
  * 绝不把未分类异常漏给上层。
  */
@@ -74,7 +112,7 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
       try {
         const res = await Promise.race([
           fetchImpl(url, {
-            headers: { ...DEFAULT_HEADERS, ...(init?.headers ?? {}) },
+            headers: mergeHeaders(init?.headers),
             ...(init?.method === undefined ? {} : { method: init.method }),
             ...(init?.body === undefined ? {} : { body: init.body }),
             signal: ctrl.signal,
@@ -92,6 +130,8 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
           finalUrl: res.url || url,
           contentType,
           charset,
+          status: res.status,
+          setCookie: typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [],
         }
       } catch (e) {
         if (e instanceof FetchError) throw e

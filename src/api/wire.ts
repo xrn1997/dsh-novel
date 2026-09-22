@@ -97,6 +97,7 @@ const STATUS_OF: Record<ErrorCategory, { status: number; code: string }> = {
   'rule-missing': { status: 422, code: 'RuleMissing' },
   fetch: { status: 502, code: '' },              // code 用 e.name（FetchError/DecodeError）
   'not-found': { status: 404, code: 'NotFound' },
+  'bad-request': { status: 400, code: 'BadRequest' },
   // 收进本表的三路由侧映射：本地导入两态 / 本地未挂载 / 任务互斥
   'local-import': { status: 400, code: 'BadRequest' },
   'local-too-large': { status: 413, code: 'PayloadTooLarge' },

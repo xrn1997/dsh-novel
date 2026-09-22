@@ -17,8 +17,10 @@ export interface NormalizeResult {
 }
 
 const RULE_FIELDS = [
-  'searchUrl', 'exploreUrl', 'ruleBookList', 'ruleBookName', 'ruleAuthor', 'ruleBookUrl',
-  'ruleCoverUrl', 'ruleIntro', 'ruleLastChapter', 'ruleTocUrl', 'ruleChapterName',
+  'searchUrl', 'exploreUrl', 'probeKeyword', 'bookUrlPattern',
+  'ruleBookList', 'ruleBookName', 'ruleAuthor', 'ruleBookUrl',
+  'ruleCoverUrl', 'ruleIntro', 'ruleLastChapter', 'ruleKind', 'ruleWordCount',
+  'ruleDetailKind', 'ruleDetailWordCount', 'ruleTocUrl', 'ruleChapterName',
   'ruleChapterUrl', 'ruleContent', 'nextTocUrl', 'nextPageUrl', 'loginUrl',
 ] as const
 
@@ -29,11 +31,14 @@ const DIALECT_MAP: Record<string, Record<string, string>> = {
   ruleSearch: {
     bookList: 'ruleBookList', name: 'ruleBookName', author: 'ruleAuthor', bookUrl: 'ruleBookUrl',
     coverUrl: 'ruleCoverUrl', intro: 'ruleIntro', lastChapter: 'ruleLastChapter',
+    kind: 'ruleKind', wordCount: 'ruleWordCount',
+    checkKeyWord: 'probeKeyword',
   },
   ruleBookInfo: {
     init: 'ruleDetailInit',
     name: 'ruleDetailName', author: 'ruleDetailAuthor', coverUrl: 'ruleDetailCoverUrl',
     intro: 'ruleDetailIntro', lastChapter: 'ruleDetailLastChapter', tocUrl: 'ruleTocUrl',
+    kind: 'ruleDetailKind', wordCount: 'ruleDetailWordCount',
   },
   ruleToc: {
     chapterList: 'ruleChapterList', chapterName: 'ruleChapterName', chapterUrl: 'ruleChapterUrl',
@@ -50,11 +55,13 @@ const NATIVE_MAP: Record<string, Record<string, string>> = {
   ruleSearch: {
     list: 'ruleBookList', name: 'ruleBookName', author: 'ruleAuthor', bookUrl: 'ruleBookUrl',
     coverUrl: 'ruleCoverUrl', intro: 'ruleIntro', lastChapter: 'ruleLastChapter',
+    kind: 'ruleKind', wordCount: 'ruleWordCount',
   },
   ruleBookInfo: {
     init: 'ruleDetailInit',
     name: 'ruleDetailName', author: 'ruleDetailAuthor', coverUrl: 'ruleDetailCoverUrl',
     intro: 'ruleDetailIntro', lastChapter: 'ruleDetailLastChapter', tocUrl: 'ruleTocUrl',
+    kind: 'ruleDetailKind', wordCount: 'ruleDetailWordCount',
   },
   ruleToc: {
     list: 'ruleChapterList', name: 'ruleChapterName', url: 'ruleChapterUrl', nextPage: 'nextTocUrl',
@@ -197,14 +204,101 @@ export function rawRuleDetailInit(raw: unknown): string | null | undefined {
   return null
 }
 
+/** raw.bookUrlPattern（对面 BookSource 的**顶层**字段，不在任何 rule 对象里）：
+ *  `SourceRegistry.load` 的存量重推口——旧数据的 rules 没这个键，不重推则嗅探对老源永不生效。
+ *  raw 非对象 → undefined（不动）；空白 → null。 */
+export function rawRulePattern(raw: unknown): string | null | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const v = (raw as Record<string, unknown>).bookUrlPattern
+  return typeof v === 'string' && v.trim() !== '' ? v : null
+}
+
+/** 存量重推用的四个模型键（键名直接取自 DIALECT_MAP，不再抄第二份映射）：
+ *  平铺方言的 raw 顶层键与模型键同名（`ruleKind` 等），对象/Native 方言住在容器里。 */
+const BOOK_META_KEYS = [
+  { container: 'ruleSearch', nested: 'kind', model: DIALECT_MAP.ruleSearch.kind },
+  { container: 'ruleSearch', nested: 'wordCount', model: DIALECT_MAP.ruleSearch.wordCount },
+  { container: 'ruleBookInfo', nested: 'kind', model: DIALECT_MAP.ruleBookInfo.kind },
+  { container: 'ruleBookInfo', nested: 'wordCount', model: DIALECT_MAP.ruleBookInfo.wordCount },
+] as const
+
+/** raw 的分类 / 字数四项（供 `SourceRegistry.load` 存量重推，与 `rawRuleDetailInit` /
+ *  `rawHeaderRule` / `rawRulePattern` 同构）。这两个字段是后来才接进取值链路的，存量 rules
+ *  没这四个键 → 对面读得出的分类/字数对老库**永远是 null**（真机读数实证：接入后审计
+ *  字段到货率 0/82 源，缺的就是这一步）。
+ *  读口复用导入时的同一套材料：容器走 `ruleContainer`（字符串化容器照解析，不另立规矩）、
+ *  键名走 `DIALECT_MAP`、Native 的裸选择器补隐式 `@text`（`withImplicitText`，与 flattenNative 同口径）。
+ *  raw 不是对象 → undefined（调用方别动）。 */
+export function rawBookMetaFields(raw: unknown): Record<string, string | null> | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const r = raw as Record<string, unknown>
+  const native = isNativeSource(raw)
+  const out: Record<string, string | null> = {}
+  for (const { container, nested, model } of BOOK_META_KEYS) {
+    const box = ruleContainer(r[container])
+    const inBox = 'obj' in box ? (box.obj as Record<string, unknown>)[nested] : undefined
+    const v = typeof inBox === 'string' ? inBox : (typeof r[model] === 'string' ? r[model] as string : undefined)
+    const trimmed = v === undefined || v.trim() === '' ? null : v
+    out[model] = trimmed !== null && native ? withImplicitText(trimmed) : trimmed
+  }
+  return out
+}
+
+/** 规则容器的三态解析结果：拿到对象 / 明确缺席（静默）/ 看着像容器但读不出来（点名）。 */
+type Container = { obj: Record<string, unknown> } | { absent: true } | { unreadable: string }
+/**
+ * 规则容器解析（对面给**每一个** rule 对象都写了 JsonDeserializer，两条分支一致：
+ * `json.isJsonObject -> fromJson(json, X::class)`、`json.isJsonPrimitive -> fromJson(json.asString, X::class)`
+ * ——见 `data/entities/rule/BookInfoRule.kt` 等五份）。也就是**整块规则可以是一段 JSON 字符串**，
+ * 公开书源分享里常这么存；本仓此前对非对象容器直接 continue，这类源导入后搜索/目录/正文规则全丢，
+ * 表现成「RuleMissing / 缺正文规则」，读起来像源坏了而不是格式没接。
+ *
+ * 判定边界刻意收窄：只有**以 `{` 开头**的字符串才是容器候选。`ruleContent` 这一键位还有本仓支持的
+ * 平铺形态（值就是规则串），不以 `{` 开头的串一律照旧当规则用；`"null"`（对面 Converters 会把缺席
+ * 对象序列化成这个字面量）与非串非对象都按缺席静默处理。
+ * 解析不出对象 → `unreadable`（原文截断带回点名）：对面在这里是 GSON 抛错、整源导入失败，
+ * 本仓不拿一段坏 JSON 冒充规则串——`ruleContainer` 与展平后的 `delete` 是一件事的两半，缺了后者
+ * 那段坏串会以「规则串」身份活到求值期（`ruleContent` 这个键名本身就是规则位），既不是本仓要的
+ * 缺席，也让一块坏字符串连带废掉整源导入。
+ */
+function ruleContainer(v: unknown): Container {
+  if (typeof v === 'object' && v !== null && !Array.isArray(v)) return { obj: v as Record<string, unknown> }
+  if (typeof v !== 'string') return { absent: true }
+  const t = v.trim()
+  if (!t.startsWith('{')) return { absent: true }
+  try {
+    const p = JSON.parse(t) as unknown
+    if (p !== null && typeof p === 'object' && !Array.isArray(p)) return { obj: p as Record<string, unknown> }
+  } catch { /* 落到下面的 unreadable */ }
+  return { unreadable: t.slice(0, 60) }
+}
+
+/** 一次导入里每块容器只解析一遍（DIALECT_MAP / replaceRegex / ruleExplore 三处都要看它） */
+function ruleContainers(raw: Record<string, unknown>, warnings: NormalizeIssue[]): Record<string, Record<string, unknown> | undefined> {
+  const out: Record<string, Record<string, unknown> | undefined> = {}
+  for (const field of ['ruleSearch', 'ruleExplore', 'ruleBookInfo', 'ruleToc', 'ruleContent']) {
+    const c = ruleContainer(raw[field])
+    if ('obj' in c) out[field] = c.obj
+    else {
+      out[field] = undefined
+      if ('unreadable' in c) {
+        warnings.push({ field, message: `看着像字符串化的规则容器但读不出对象（不是合法 JSON 或不是对象），整块按缺席处理：${c.unreadable}` })
+      }
+    }
+  }
+  return out
+}
+
 /**
  * 对象方言展平：五个规则字段（ruleSearch/ruleExplore/ruleBookInfo/ruleToc/ruleContent）
- * 为对象时，把已映射子字段填进合并视图的目标位（平铺字段已占的位不覆盖——平铺优先）。
+ * 为对象时（**或为字符串化的 JSON**，见 ruleContainer），把已映射子字段填进合并视图的目标位
+ * （平铺字段已占的位不覆盖——平铺优先）。
  * 未映射且非空的子字段如实聚合 warning（宁吵不瞒）；ruleExplore 整块 v1 未支持（无 explore 面）。
  * ruleContent.replaceRegex 追加 `##regex##` 净化尾（legado 语义：匹配替换为空串）。
  */
 function flattenDialect(raw: Record<string, unknown>, warnings: NormalizeIssue[]): Record<string, unknown> {
   const out: Record<string, unknown> = { ...raw }
+  const containers = ruleContainers(raw, warnings)
   const setIfVacant = (field: string, value: unknown): void => {
     const cur = out[field]
     const occupied = typeof cur === 'string' && cur.length > 0
@@ -212,8 +306,13 @@ function flattenDialect(raw: Record<string, unknown>, warnings: NormalizeIssue[]
   }
   const unsupported: string[] = []
   for (const [objField, mapping] of Object.entries(DIALECT_MAP)) {
-    const obj = raw[objField]
-    if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) continue
+    const obj = containers[objField]
+    // 字符串形态的容器值本身住在这一键上（`ruleContent: '{"content":"…"}'`）——它是容器原文，
+    // 不是平铺规则；不清掉就会挡住 setIfVacant，甚至把整段 JSON 当规则串用下去。
+    // **读不出的那种同样要清**（`ruleContent: '{"content":'`）：那才是「拿一段坏 JSON 冒充规则串」——
+    // 这个键名本身就是规则位，留着它等于给正文面塞一条永远炸的规则，而读数上却像「有规则」。
+    if (typeof raw[objField] === 'string' && raw[objField].trim().startsWith('{')) delete out[objField]
+    if (obj === undefined) continue
     for (const [sub, v] of Object.entries(obj)) {
       const field = mapping[sub]
       if (field !== undefined) {
@@ -223,12 +322,17 @@ function flattenDialect(raw: Record<string, unknown>, warnings: NormalizeIssue[]
       }
     }
   }
-  // replaceRegex：仅当正文规则来自对象 content 时追加（本分支即「raw.ruleContent 是对象」——不存在
-  // 「对象 content 被平铺 ruleContent 顶掉」的形态，同一键不可能又对象又平铺字符串）；
-  // 拼串归 grammar.appendTail（round-trip 自校验，越界当场 warning）
-  const contentObj = raw.ruleContent
-  if (typeof contentObj === 'object' && contentObj !== null && !Array.isArray(contentObj)) {
-    const rr = (contentObj as Record<string, unknown>).replaceRegex
+  // checkKeyWord → 探针关键词：legado `BookSource.getCheckKeyword` 对含 `http`/`::`/`++`/`--`
+  // 的值弃用回默认（那些串与调试输入语法冲突）。同口径丢弃，探针自然回落通用词序列。
+  if (typeof out.probeKeyword === 'string' && /http|::|\+\+|--/.test(out.probeKeyword)) {
+    delete out.probeKeyword
+  }
+  // replaceRegex：仅当正文规则来自容器 content 时追加（容器 = 对象形态或字符串化的 JSON，
+  // 见 ruleContainer；纯字符串的平铺 ruleContent 不在此列）；拼串归 grammar.appendTail
+  // （round-trip 自校验，越界当场 warning）
+  const contentObj = containers.ruleContent
+  if (contentObj !== undefined) {
+    const rr = contentObj.replaceRegex
     if (typeof rr === 'string' && rr.length > 0 && typeof out.ruleContent === 'string') {
       const t = appendTail(out.ruleContent, rr, '')
       if (t.warning !== null) warnings.push({ field: 'ruleContent.replaceRegex', message: t.warning })
@@ -236,9 +340,9 @@ function flattenDialect(raw: Record<string, unknown>, warnings: NormalizeIssue[]
     }
   }
   // ruleExplore：v1 无发现面，整块不映射——有非空子字段就如实报
-  const explore = raw.ruleExplore
-  if (typeof explore === 'object' && explore !== null && !Array.isArray(explore)) {
-    const nonEmpty = Object.entries(explore as Record<string, unknown>)
+  const explore = containers.ruleExplore
+  if (explore !== undefined) {
+    const nonEmpty = Object.entries(explore)
       .filter(([, v]) => typeof v === 'string' && v.length > 0).map(([k]) => k)
     if (nonEmpty.length > 0) {
       warnings.push({ field: 'ruleExplore', message: `v1 无发现（explore）面，规则未启用：${nonEmpty.join('、')}` })
@@ -310,8 +414,9 @@ export function isNativeSource(r: unknown): boolean {
  * （legado 规则文档（android-ebook）常用模式表），不补的话引擎链终点剩节点集、服务层按规约抛错。
  * list/attr 字段不在列（ruleBookList/ruleChapterList 要节点集、coverUrl/bookUrl 要属性）。 */
 const NATIVE_TEXT_FIELDS = [
-  'ruleBookName', 'ruleAuthor', 'ruleIntro', 'ruleLastChapter',
+  'ruleBookName', 'ruleAuthor', 'ruleIntro', 'ruleLastChapter', 'ruleKind', 'ruleWordCount',
   'ruleDetailName', 'ruleDetailAuthor', 'ruleDetailIntro', 'ruleDetailLastChapter',
+  'ruleDetailKind', 'ruleDetailWordCount',
   'ruleChapterName', 'ruleContent',
 ] as const
 
@@ -324,7 +429,7 @@ const NATIVE_TEXT_FIELDS = [
  * searchUrl 占位符 `{{keyword}}` 改写为内部 `{{key}}`（`{{page}}` 同名不动）；
  * `authorPrefix` 追加 `##^前缀##` 净化尾到详情面作者规则（正则转义）；
  * 取值字段裸选择器补隐式 `@text` 终端（NATIVE_TEXT_FIELDS）。
- * v1 无发现/排序/POST 面：ruleFind/ruleRank/kind/pageUrl/reverse/charset 等如实聚合 warning（宁吵不瞒）。
+ * v1 无发现/排序/POST 面：ruleFind/ruleRank/pageUrl/reverse/charset 等如实聚合 warning（宁吵不瞒）。
  */
 function flattenNative(raw: Record<string, unknown>, warnings: NormalizeIssue[]): Record<string, unknown> {
   const out: Record<string, unknown> = {

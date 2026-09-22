@@ -14,6 +14,15 @@ const $ = cheerio.load(html)
 const root = () => $('#wrap') as any
 const loc = (i: number, raw: string) => ({ segmentIndex: i, segmentRaw: raw })
 
+describe('链首裸取值终端的上下文（真源 ruleToc.chapterName = "text"）', () => {
+  it('整篇取一次文本，不是逐祖先各出一份', async () => {
+    const { evaluate } = await import('../../src/engine/evaluate.js')
+    const v = await evaluate('text', { html: '<div id="c"><a href="/1.html">第1章 蜕变</a></div>' }, 'toc')
+    const items = v.kind === 'list' ? v.items : v.kind === 'value' ? [v.text] : []
+    expect(items).toEqual(['第1章 蜕变'])
+  })
+})
+
 describe('default 选择段', () => {
   it('class / tag / id / child / children', () => {
     const v = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: null }, $, root(), loc(0, 'class.item'), 'toc')

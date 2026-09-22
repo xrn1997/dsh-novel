@@ -72,6 +72,18 @@ export class DecodeError extends Error {
   }
 }
 
+/** 调用方给的参数本身不成立（API 层映射 400 BadRequest）——**值域**判据，不是 body 形状判据：
+ *  形状（缺字段、类型不对、JSON 不合法）归路由自检的 `ApiError`，值域（非空、非负整数、比例在
+ *  [0,1]）归本类。两者分开是因为值域要护的是**每一个调用方**：门面动词被 HTTP 面与 agent 工具面
+ *  同时调用，门长在路由里等于只护了一半（工具面可直接写入 Infinity —— JSON.stringify 落盘成
+ *  null 的静默数据损坏）。 */
+export class InvalidRequestError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = new.target.name
+  }
+}
+
 /** 本地书服务未挂载（API 层映射 503 Unavailable）——门面动词在 local part 缺席时抛出，
  *  路由层不再各自判 `opts.local === undefined`（判据归门面） */
 export class LocalNotMountedError extends Error {
@@ -92,6 +104,7 @@ export class LocalNotMountedError extends Error {
  *  路由侧 catch 全部收进本表——错误→HTTP 的 egress 只剩 classify 一处。 */
 export type ErrorCategory =
   | 'rule-eval' | 'rule-missing' | 'fetch' | 'not-found'
+  | 'bad-request'
   | 'local-import' | 'local-too-large' | 'unavailable' | 'job-running'
   | 'other'
 
@@ -102,6 +115,7 @@ export function classify(e: unknown): ErrorCategory {
   if (e instanceof RuleMissingError) return 'rule-missing'
   if (e instanceof FetchError || e instanceof DecodeError) return 'fetch'
   if (e instanceof SourceNotFoundError || e instanceof ChapterNotFoundError) return 'not-found'
+  if (e instanceof InvalidRequestError) return 'bad-request'
   if (e instanceof LocalImportError) return 'local-import'
   if (e instanceof LocalFileTooLargeError) return 'local-too-large'
   if (e instanceof LocalNotMountedError) return 'unavailable'

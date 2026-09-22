@@ -90,8 +90,27 @@ describe('沙箱 legado 绑定与作用域（本轮修复钉子）', () => {
     }).then(() => null, (e) => e)
     expect(String(err.message)).toContain('站点挂了')
   })
-  it('worker 路线自身的逃逸防御与超时（不是主线程用例的复述）', async () => {
-    // 只有脚本提到 java.ajax( 才走 worker + SAB RPC（`SYNC_WORKER_RE`）——本用例靠 fetch 计数
+  it('java.ajax 参数规约：非串按 String(值) 交下去（Rhino 的 String 形参转换），空值点名且不发请求', async () => {
+    const seen: unknown[] = []
+    const fetchImpl = async (url: string): Promise<{ body: string }> => { seen.push(url); return { body: 'OK' } }
+    // 真源形态：上一段 JSONPath 产出 `['https://…']`，脚本直接 java.ajax(result)——
+    // 对面（Rhino）按 String 形参转换，单元素数组的 toString 就是那条 URL；本仓此前把原值
+    // 交给请求组装层，炸成 `template.replace is not a function`（灯读文学 init 段实证）。
+    const out = await runScript({
+      code: 'java.ajax(["https://x.com/one"]); java.ajax(42); "done"',
+      loc, facet: 'content', scriptForm: true,
+      baseUrl: 'https://x.com', source: 'https://x.com', fetch: fetchImpl,
+    })
+    expect(out.value).toEqual({ kind: 'value', text: 'done' })
+    expect(seen).toEqual(['https://x.com/one', '42'])
+    const err = await runScript({
+      code: 'java.ajax(null)', loc, facet: 'content', scriptForm: true,
+      baseUrl: 'https://x.com', source: 'https://x.com', fetch: fetchImpl,
+    }).then(() => null, (e: unknown) => e)
+    expect(String((err as Error).message)).toMatch(/java\.ajax 参数为空/)
+    expect(seen).toHaveLength(2)   // 空值不拿 "null" 去打站点
+  })
+  it('worker 路线自身的逃逸防御与超时（不是主线程用例的复述）', async () => {    // 只有脚本提到 java.ajax( 才走 worker + SAB RPC（`SYNC_WORKER_RE`）——本用例靠 fetch 计数
     // 自证确实走了这条路：主线程路径不会调 fetch，计数为 0 即说明钉错了地方。
     let ajaxCalls = 0
     const fetchImpl = async (url: string): Promise<{ body: string }> => { ajaxCalls++; return { body: `BODY:${url}` } }

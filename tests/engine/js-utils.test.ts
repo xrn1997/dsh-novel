@@ -88,3 +88,29 @@ describe('js-utils 纯工具', () => {
     expect(engineValueToStrings({ kind: 'miss', detail: 'x' })).toEqual([])
   })
 })
+
+describe('toNumChapter（legado JsExtensions.toNumChapter / StringUtils.chineseNumToInt 口径）', () => {
+  it('第X章 的中文数字转阿拉伯数字；无匹配原样返回', async () => {
+    const { toNumChapter } = await import('../../src/engine/js-utils.js')
+    expect(toNumChapter('第一千零二十五章 离别')).toBe('第1025章') // 对面只回「第+数字+章」，标题尾部丢弃（源里它当 replace 的替换串用）
+    expect(toNumChapter('第十二章 蜕变')).toBe('第12章')
+    expect(toNumChapter('第两千章')).toBe('第2000章')
+    expect(toNumChapter('第12章 已是数字')).toBe('第12章')
+    expect(toNumChapter('没有章节号')).toBe('没有章节号')
+  })
+  it('中文数字的「补一位」边界：一千一 = 1100，一千二百 = 1200（照抄对面的算法，不是四则运算）', async () => {
+    const { chineseNumToInt } = await import('../../src/engine/js-utils.js')
+    expect(chineseNumToInt('一千一')).toBe(1100)
+    expect(chineseNumToInt('一千二百')).toBe(1200)
+    expect(chineseNumToInt('十二万三千四百五十六')).toBe(123456)
+    expect(chineseNumToInt('认不出的字')).toBe(-1)
+  })
+  it('沙箱可见：java.toNumChapter（真实源用它规整正文/目录标题）', async () => {
+    const { runScript, createSourceSession } = await import('../../src/engine/js-sandbox.js')
+    const r = await runScript({
+      code: 'java.toNumChapter("第五百章 起点")', loc: { segmentIndex: 0, segmentRaw: '@js' },
+      facet: 'content', source: 'https://x.com', session: createSourceSession(),
+    })
+    expect(r.value).toEqual({ kind: 'value', text: '第500章' })
+  })
+})

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { resolveHeaders } from '../../src/services/bridge.js'
-import { headerOf } from '../../src/services/fetcher.js'
+import { headerOf, effectiveUserAgent } from '../../src/services/fetcher.js'
 import type { Fetcher } from '../../src/services/fetcher.js'
 import { normalizeSource, rawHeaderRule } from '../../src/services/normalize.js'
 import type { NovelSource } from '../../src/services/types.js'
@@ -15,11 +15,11 @@ import type { NovelSource } from '../../src/services/types.js'
 const mkSource = (over: Partial<NovelSource> = {}): NovelSource => ({
   id: 'i', name: '顶点小说', baseUrl: 'https://a.com', enabled: true, groups: [], type: 'text', raw: {},
   rules: {
-    searchUrl: null, exploreUrl: null, ruleBookList: null, ruleBookName: null, ruleAuthor: null,
-    ruleBookUrl: null, ruleCoverUrl: null, ruleIntro: null, ruleLastChapter: null, ruleTocUrl: null,
+    searchUrl: null, exploreUrl: null, probeKeyword: null, bookUrlPattern: null, ruleBookList: null, ruleBookName: null, ruleAuthor: null,
+    ruleBookUrl: null, ruleCoverUrl: null, ruleIntro: null, ruleLastChapter: null, ruleKind: null, ruleWordCount: null, ruleTocUrl: null,
     ruleChapterList: null, ruleChapterName: null, ruleChapterUrl: null,
     ruleDetailName: null, ruleDetailAuthor: null, ruleDetailCoverUrl: null,
-    ruleDetailIntro: null, ruleDetailLastChapter: null, ruleDetailInit: null,
+    ruleDetailIntro: null, ruleDetailLastChapter: null, ruleDetailKind: null, ruleDetailWordCount: null, ruleDetailInit: null,
     ruleContent: 'x', nextTocUrl: null, nextPageUrl: null, header: null, loginUrl: null, jsLib: null,
     headerRule: null,
   },
@@ -114,5 +114,13 @@ describe('resolveHeaders（legado getHeaderMap 口径）', () => {
       const h = await resolveHeaders(fetcher, s)
       expect(h).toEqual(headerOf(s))
     } finally { console.warn = warn }
+  })
+})
+
+describe('effectiveUserAgent（java.getWebViewUA 的取值口径）', () => {
+  it('源静态头里的 User-Agent 优先；没覆盖时回落缺省 UA（与 fetch 实际发的一致）', () => {
+    expect(effectiveUserAgent(mkSource())).toMatch(/^Mozilla\/5\.0/)
+    const s = mkSource({ rules: { ...mkSource().rules, header: { 'User-Agent': 'UA-from-source' } } as NovelSource['rules'] })
+    expect(effectiveUserAgent(s)).toBe('UA-from-source')
   })
 })

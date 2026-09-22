@@ -22,12 +22,16 @@ describe('evaluateWithTrace 端到端', () => {
     expect(t.steps[0].error?.code).toBeUndefined()   // css 零命中是 miss，不是 error——miss 在 steps 里以 hits=0 呈现
     expect(t.steps[0].hits).toBe(0)
   })
-  it('链尾 js + @@Default 组合', async () => {
-    const t = await evaluateWithTrace('class.name@text(result.replace(/凡人/,"某凡"))', { html: searchHtml }, 'search')
-    expect((t.value as any).items[0]).toBe('某凡修仙传')
+  it('链尾 (…) 不当 js 改写（对面从不切它：这条形态与 text下一页 同族，如实失败）', async () => {
+    // 对面 `SourceRule.init` 只在 @js:/<js>/@XPath:/@Json: 等前缀上定模式，`RuleAnalyzer.splitRule`
+    // 遇 `(` 是跳过平衡组；Default 链末段整串落进 `getResultLast` 的 `else -> attr(lastRule)` → 取空。
+    // 本仓曾把 (…) 当链尾 js 表达式（detectTailJs），实测会把耽美小说 `/text()` 切碎；已移除。
+    // 移除后这条形态落到「认不出的末段」——与 `text下一页` 同族，抛错而不是静默改写值。
+    await expect(evaluateWithTrace('class.name@text(result.replace(/凡人/,"某凡"))', { html: searchHtml }, 'search'))
+      .rejects.toThrow(/text\(result\.replace/)
   })
-  it('段级错误定位：未知语法在 trace 中带索引与原文', async () => {
-    await expect(evaluateWithTrace('@css:.x@weird.thing', { html: searchHtml }, 'toc')).rejects.toThrow(/段1/)
+  it('段级错误定位：未知语法在 trace 中带索引与原文（取"构不成选择器"的形态——`词.词` 已按对面兜底交 CSS）', async () => {
+    await expect(evaluateWithTrace('@css:.x@weird$.thing', { html: searchHtml }, 'toc')).rejects.toThrow(/段1/)
   })
   it('AllInOne + 反序', async () => {
     const page = '<a href="/c/1.html">第一章</a><a href="/c/2.html">第二章</a>'
@@ -136,5 +140,17 @@ describe('JSONPath 对 JSON 文本（html 回退）——搜索链路只传 html
   it('html 是非法 JSON（{ 开头但解析失败）→ Miss 不抛', async () => {
     const v = await evaluate('$.data', { html: '{"data": [破损' }, 'search')
     expect(v.kind).toBe('miss')
+  })
+})
+
+describe('对面兜底口径的行为面（解析过≠取对值：钉的是求值结果）', () => {
+  const boxHtml = '<div><span class="T-R-T-B2-Box1">甲</span><clasd class="T-R-T-B2-Box1">乙</clasd><p>丙</p></div>'
+  it('`词.词` 当 CSS 求值：非标签首词一样命中元素（对面 select 同款）', async () => {
+    const t = await evaluateWithTrace('clasd.T-R-T-B2-Box1@text', { html: boxHtml }, 'detail', 'value')
+    expect(t.value).toEqual({ kind: 'value', text: '乙' })
+  })
+  it('中文 tag 选择器零命中 → Miss（对面同样取空，但本仓不再在解析期判死整条）', async () => {
+    const t = await evaluateWithTrace('option@value||text下一页@href', { html: '<option value="V1">x</option>' }, 'toc', 'value')
+    expect(t.value).toEqual({ kind: 'value', text: 'V1' })
   })
 })

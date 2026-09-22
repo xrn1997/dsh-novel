@@ -17,9 +17,22 @@ export interface SourceAuth {
  * 平铺方言无 ruleDetail* 时详情面回退共用字段（原 v1 行为）。 */
 export interface NormalizedRules {
   searchUrl: string | null; exploreUrl: string | null
+  /** 校验/探针关键词（legado `ruleSearch.checkKeyWord`）：探针的第一个关键词——固定词序列
+   *  在「只搜得到自家书名」的站上是误判源（本库 31/158 源带值）。含 `http`/`::`/`++`/`--` 的
+   *  值按 legado `getCheckKeyword` 的口径弃用（那些串与调试输入语法冲突），回落到通用词。
+   *  唯一消费者 `services/probe.ts`。 */
+  probeKeyword: string | null
   ruleBookList: string | null; ruleBookName: string | null; ruleAuthor: string | null
   ruleBookUrl: string | null; ruleCoverUrl: string | null; ruleIntro: string | null
   ruleLastChapter: string | null; ruleTocUrl: string | null
+  /** 条目级分类/字数（对面 ruleSearch.kind / wordCount；现库 150 / 42 源带规则） */
+  ruleKind: string | null; ruleWordCount: string | null
+  /** 详情页嗅探（legado 顶层 `bookUrlPattern`，不在 rules 里）：搜索的**落地地址**整串命中它
+   *  即「这条 URL 就是详情页」，对面在跑列表规则**之前**就把整段响应按详情规则展开成一条书目
+   *  （`model/webBook/BookList.kt` 的 `bookUrlPattern?.let`）；未声明时列表为空才有同款回落
+   *  （对面那条日志原文「列表为空,按详情页解析」）。
+   *  唯一消费者 `services/search-face.ts`（判定）＋ `services/reading.ts`（info 形态展开）。 */
+  bookUrlPattern: string | null
   /** 目录列表选择器（对象方言 ruleToc.chapterList；平铺方言缺 → 目录面回退 ruleBookList） */
   ruleChapterList: string | null
   ruleChapterName: string | null; ruleChapterUrl: string | null
@@ -27,9 +40,10 @@ export interface NormalizedRules {
   ruleDetailName: string | null; ruleDetailAuthor: string | null
   ruleDetailCoverUrl: string | null; ruleDetailIntro: string | null
   ruleDetailLastChapter: string | null
+  ruleDetailKind: string | null; ruleDetailWordCount: string | null
   /** 详情初始化规则（对象方言 ruleBookInfo.init，legado BookInfo 口径）：先求值，结果**替换**
    *  后续详情规则的求值上下文（JSON 换根进 ctx.json）——QQ 类正版 API 源的 `$.data.bookInfo`
-   *  全靠它；tocUrl 模板 `{{$.…}}` 同在换根后的上下文上插值（reading.detailContextOf 唯一实现） */
+   *  全靠它；tocUrl 模板 `{{$.…}}` 同在换根后的上下文上插值（bridge.detailContextOf 唯一实现） */
   ruleDetailInit: string | null
   ruleContent: string | null
   nextTocUrl: string | null; nextPageUrl: string | null

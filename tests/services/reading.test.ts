@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ReadingService } from '../../src/services/reading.js'
-import { detailContextOf } from '../../src/services/reading.js'
+import { detailContextOf } from '../../src/services/bridge.js'
 import type { SubRuleEval } from '../../src/services/bridge.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
 import { createFetcher } from '../../src/services/fetcher.js'
@@ -140,6 +140,30 @@ describe('ReadingService', () => {
     const bad = g2.find((g) => g.sourceName === 'B')!
     expect(bad.error?.code).toBe('FetchError')
     expect(bad.hits).toEqual([])
+  })
+
+  it('辅助字段的坏规则只丢该字段（对面 try/catch 那五项）；裸奔项仍整组报错', async () => {
+    // 对面 `model/webBook/BookList.kt` 的 getSearchItem：intro / coverUrl / lastChapter / kind /
+    // wordCount 各包 try/catch，name / author / bookUrl 裸奔。边界两侧都要钉：
+    // 只钉「吞」会放行「什么都吞」，只钉「抛」会把对面读得出的源判死。
+    const { svc } = await makeService((u) => (u.includes('/search') ? SEARCH_HTML('斗罗') : null))
+    await svc.importOne({
+      ...rawSource, bookSourceName: '坏简介', bookSourceUrl: 'https://bad-intro.example.com',
+      searchUrl: 'https://bad-intro.example.com/search?q={{key}}',
+      ruleIntro: '0',            // 无 @ 无 $ 的单段：本仓解析期抛 UnsupportedRuleError
+      ruleCoverUrl: '0', ruleLastChapter: '0',
+    })
+    const soft = (await svc.search('斗罗')).find((g) => g.sourceName === '坏简介')!
+    expect(soft.error, '对面读得出（书目在场、这三个字段空），本仓不许把整组判死').toBeUndefined()
+    expect(soft.hits[0]).toMatchObject({ title: '斗罗·斗罗', intro: null, coverUrl: null, lastChapterName: null })
+
+    await svc.importOne({
+      ...rawSource, bookSourceName: '坏作者', bookSourceUrl: 'https://bad-author.example.com',
+      searchUrl: 'https://bad-author.example.com/search?q={{key}}', ruleAuthor: '0',
+    })
+    const hard = (await svc.search('斗罗')).find((g) => g.sourceName === '坏作者')!
+    expect(hard.error?.code).toBeDefined()        // 作者裸奔：宁炸不猜的口径不变
+    expect(hard.hits).toEqual([])
   })
 
   it('search sourceIds 为空数组 = 未限定（搜全部启用源），与工具描述一致', async () => {
@@ -433,7 +457,7 @@ describe('书 URL 承载请求选项（,{option} 随身份存取）', () => {
 // 修复背景（书架诊断实证，QQ 阅读/松鹤庭沐源）：详情规则依赖 init（`$.data.bookInfo`）换上下文、
 // tocUrl 是 `…all-chapter?bookId={{$.resourceID}}` 模板。此前 init 未实现（normalize 不映射、
 // 详情字段在根 JSON 上全 Miss），tocUrl 模板走 interpolateUrl(空 vars)——插值段原样留下，
-// 目录请求打到字面 `{{$.resourceID}}` 地址 → 0 章。口径（legado BookInfo.kt）：init 先求值，
+// 目录请求打到字面 `{{$.resourceID}}` 地址 → 0 章。口径（legado model/webBook/BookInfo.kt）：init 先求值，
 // 其结果**替换**后续详情规则的求值上下文；URL 模板过规则引擎按该上下文插值；
 // init 非空但零命中 → RuleEvalError 点名 ruleDetailInit（宁炸不猜：静默降级整页会把
 // 「规则与站点不符」伪装成「源什么都没有」）。
@@ -510,6 +534,66 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
     expect(calls).toContain(TOC_URL)                       // 插值出真实 bookId，不是字面 {{$.resourceID}}
     expect(toc).toHaveLength(1)
     expect(toc[0]).toMatchObject({ name: '第1章 陨落的天才', url: CH1_URL })
+  })
+
+  // 真机分桶实证（2026-09，本机库 4 源：万象书城/夜伴书屋/圣墟小说/全本小说）：
+  // ruleBookInfo.init 是**纯 @put**（只设变量），详情面每条规则都是 `@get:{k}`——
+  // 三件事必须同时成立：init 不换根、vars 在这次 getDetail 内共享、`@get:{}` 花括号形态认。
+  const META_URL = 'https://meta.example.com/book/77'
+  const META_PAGE = `<html><head>
+    <meta property="og:novel:book_name" content="武动乾坤">
+    <meta property="og:novel:author" content="天蚕土豆">
+    <meta property="og:description" content="少年林动，一夜蜕变">
+    <meta property="og:novel:latest_chapter_name" content="第1章 蜕变">
+  </head><body><div id="all-chapter"><a href="/c/1.html">第1章 蜕变</a></div></body></html>`
+  const META_RAW = {
+    bookSourceName: '元信息源', bookSourceUrl: 'https://meta.example.com',
+    searchUrl: 'https://meta.example.com/s?q={{key}}',
+    ruleBookList: '@css:.r', ruleBookName: 'tag.a@text', ruleBookUrl: 'tag.a@href',
+    ruleBookInfo: {
+      init: '@put:{n:"[property$=book_name]@content", a:"[property$=author]@content",'
+        + ' i:"[property$=description]@content", l:"[property$=latest_chapter_name]@content"}',
+      name: '@get:{n}', author: '@get:{a}', intro: '@get:{i}', lastChapter: '@get:{l}',
+    },
+    ruleToc: { chapterList: '#all-chapter a', chapterName: 'text', chapterUrl: 'href' },
+    ruleContent: '@css:#all-chapter@html',
+  }
+
+  async function makeMeta(): Promise<{ svc: ReadingService; registry: SourceRegistry }> {
+    const dir = await makeTempDir('novel-rd-')
+    const registry = trackService(await SourceRegistry.load(dir))
+    const shelf = trackService(await Shelf.load(dir))
+    const svc = trackService(await ReadingService.from({
+      registry, shelf, cache: new PageCache(dir),
+      fetcher: createFetcher({
+        fetchImpl: (async (input: RequestInfo | URL) => {
+          const u = String(input)
+          if (u === META_URL || u === 'https://meta.example.com/book/77') {
+            return new Response(META_PAGE, { headers: { 'content-type': 'text/html; charset=utf-8' } })
+          }
+          return new Response('', { status: 404 })
+        }) as never,
+      }),
+    }))
+    await svc.importOne(META_RAW)
+    return { svc, registry }
+  }
+
+  it('纯 @put 的 ruleDetailInit：只设变量、不换根——详情四字段经 @get:{k} 全部取到', async () => {
+    const { svc, registry } = await makeMeta()
+    const src = registry.list().find((s) => s.name === '元信息源')!
+    const d = await svc.getDetail(src.id, META_URL)
+    expect(d).toMatchObject({
+      title: '武动乾坤', author: '天蚕土豆', intro: '少年林动，一夜蜕变', lastChapterName: '第1章 蜕变',
+    })
+  })
+
+  it('纯 @put 的 init 之后目录仍在原详情页上求值（换根会把目录打成空）', async () => {
+    const { svc, registry } = await makeMeta()
+    const src = registry.list().find((s) => s.name === '元信息源')!
+    const toc = await svc.getToc(src.id, META_URL)
+    expect(toc).toHaveLength(1)
+    expect(toc[0]).toMatchObject({ name: '第1章 蜕变', url: 'https://meta.example.com/c/1.html' })
   })
 
   it('ruleDetailInit 非空但零命中 → RuleEvalError 点名 ruleDetailInit（宁炸：不拿整页冒充上下文）', async () => {

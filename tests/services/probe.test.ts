@@ -35,6 +35,31 @@ describe('probeSource（search 面）', () => {
     expect(r.ok).toBe(true)
     expect(r.firstTitle).toBe('斗罗大陆')
   })
+  it('源带 checkKeyWord → 探针第一个打它（本库 31/158 源实证，固定词会误判坏源）', async () => {
+    const seen: string[] = []
+    const f = createFetcher({
+      fetchImpl: (async (input: RequestInfo | URL) => {
+        const u = decodeURIComponent(String(input))
+        seen.push(u)
+        return new Response(u.includes('q=勇者') ? SEARCH_HTML : '<html></html>',
+          { headers: { 'content-type': 'text/html; charset=utf-8' } })
+      }) as never,
+    })
+    const r = await probeSource(src({ ruleSearch: { checkKeyWord: '勇者' } }), f)
+    expect(r.ok).toBe(true)
+    expect(seen[0]).toContain('q=勇者')
+  })
+
+  it('checkKeyWord 含 http/::/++/-- → 按 legado 弃用，回固定词序列', async () => {
+    const n = normalizeSource({
+      bookSourceName: 'S', bookSourceUrl: 'https://s.com', searchUrl: 'https://s.com/q={{key}}',
+      ruleBookList: '@css:.b', ruleBookName: 'tag.a@text', ruleContent: '@css:#c@text',
+      ruleSearch: { checkKeyWord: 'https://s.com/book/1' },
+    })
+    expect(n.source!.rules.probeKeyword).toBeNull()
+  })
+
+
   it('规则取不到条目 → broken 口径（RuleEvalError 语义：0 命中）', async () => {
     const f = createFetcher({ fetchImpl: async () => new Response('<html></html>') })
     const r = await probeSource(src({ ruleBookList: '@css:.nope' }), f)
@@ -42,9 +67,11 @@ describe('probeSource（search 面）', () => {
     expect(r.error?.code).toBe('RuleEvalError')
     expect(r.error?.message).toMatch(/段/)
   })
-  it('不支持的规则语法 → UnsupportedRuleError 如实透出', async () => {
+  it('不支持的规则语法 → UnsupportedRuleError 如实透出（探针不冒充空结果）', async () => {
     const f = createFetcher({ fetchImpl: async () => new Response(SEARCH_HTML) })
-    const r = await probeSource(src({ ruleBookName: 'weirdsyntax.x@text' }), f)
+    // 取真·构不成选择器的形态：`词.词`（如 weirdsyntax.x）自 2026-09-22 起按对面
+    // ElementsSingle 的 else 分支交 CSS 求值，不再是解析期错误
+    const r = await probeSource(src({ ruleBookName: 'weirdsyntax$.x@text' }), f)
     expect(r.ok).toBe(false)
     expect(r.error?.code).toBe('UnsupportedRuleError')
   })

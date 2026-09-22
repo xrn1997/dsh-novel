@@ -1,8 +1,9 @@
 /**
  * 文档引用可解析——`docs/design/*.md` 是三个子系统的现状真相，它们指着不存在的文件就是误导。
  *
- * 为什么只校「文件存在」不校行号：`file.ts:123` 会随上方任何一次编辑漂移，校行号等于造一道天天假红的门，
+ * 为什么只校「文件存在」不校行号：`file.ts:<行号>` 会随上方任何一次编辑漂移，校行号等于造一道天天假红的门，
  * 人一旦习惯性忽略它，守卫就等于没有；文件级引用只在重命名 / 删除时失效——那是需要人明确处理的动作。
+ * （行号形态本身由 `tests/legado-coverage/citation-liveness.test.ts` 禁掉。）
  *
  * 覆盖面：三份现状真相文档里出现的每个 `xxx.ts` / `xxx.tsx` / `xxx.mjs` 路径（模块地图、测试钉子表、
  * 已知开口的逐处引用都算）。外部项目的路径（第三方仓库、legado 官方文档）不写成仓内路径，故不受影响。
@@ -16,10 +17,10 @@ import { describe, expect, it } from 'vitest'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const DESIGN_DIR = join(ROOT, 'docs', 'design')
-const DESIGN_DOCS = ['engine.md', 'services.md', 'client.md']
+const DESIGN_DOCS = ['engine.md', 'services.md', 'client.md', 'legado-compat.md']
 const SKIP_DIRS = new Set(['node_modules', 'lib', '.git'])
 const SOURCE_EXT = /\.(?:tsx|ts|mjs)$/
-/** `path/to/file.ts` 或 `path/to/file.tsx:123`——行号只用来定位，不参与断言。 */
+/** `path/to/file.ts` 或带行号的写法（后者已被 citation-liveness 禁掉，这里只做定位剥离）。 */
 const REF = /([A-Za-z0-9_\-./]+\.(?:tsx|ts|mjs))(?::\d+(?:-\d+)?)?/g
 
 /** 仓库内所有可被文档引用的源文件（仓库相对路径，统一正斜杠）。 */

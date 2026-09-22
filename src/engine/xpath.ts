@@ -10,10 +10,11 @@ type XPathSegment = Extract<Segment, { kind: 'xpath' }>
  * XPath 子集求值器（630 源 274 条 XPath 规则的实测语法边界驱动）：
  * - 路径：`//` 与 `.//`（上下文内后代——条目作用域语义）/ `/`（子步）；
  * - 节点测试：元素名 / `*` / `text()` / `@attr`（仅限末段——中段属性步宁炸不猜）；
- * - 轴：child（默认）/ following-sibling / preceding-sibling；其他轴（ancestor 等）不支持。
+ * - 轴：child（默认）/ parent（`..`）/ following-sibling / preceding-sibling；其他轴（ancestor 等）不支持。
  *   `preceding-sibling` 为逆向轴，位置谓词按逆文档序编号（XPath 1.0 §2.4）：`[1]`=最近前序兄弟。
  * - 谓词：位置数字、`@attr='v'`、`text()='v'`、`contains(...)`、`starts-with(...)`、`not(...)`、
- *   `position()` 比较、子元素存在（`[dd[a]]`）、`and`/`or` 组合；
+ *   `position()` 比较、子元素存在（`[dd[a]]`）、相对路径存在性（`[.//a]`、`[a/@href]`
+ *   ——XPath 的节点集谓词，非空即真）、`and`/`or` 组合；
  * - 函数白名单外（count/sum 等）→ UnsupportedRuleError。
  * 实现：直接在 domhandler 节点树上求值（cheerio 底层 DOM）——HTML→XML 重解析会错位。
  * 近似说明：谓词里的 text() 用元素 textContent（拼接后代文本）——真实样本全落此口径。
@@ -59,26 +60,7 @@ export function evalXPath(
       for (const c of candidates) collect(c)
       return valuesList(values)
     }
-    const next: AnyNode[] = []
-    const seen = new Set<AnyNode>()
-    for (const ctx of candidates) {
-      const pool = axisPool(ctx, step.axis)
-      const matched = pool.filter((n) => testNode(n, step.test))
-      // 谓词按父分组求值（真 XPath 语义：//dd[2] = 每父第 2 个 dd，不是全局第 2 个）
-      const groups = new Map<AnyNode, AnyNode[]>()
-      for (const n of matched) {
-        const p = (n as Element).parent ?? n
-        const g = groups.get(p)
-        if (g === undefined) groups.set(p, [n])
-        else g.push(n)
-      }
-      for (const group of groups.values()) {
-        for (const n of applyPredicates(group, step.preds)) {
-          if (!seen.has(n)) { seen.add(n); next.push(n) }
-        }
-      }
-    }
-    candidates = next
+    candidates = stepForward(candidates, step)
   }
   // 理论不可达（末段必为提取或元素）——防御：空 → Miss
   if (candidates.length === 0) return { kind: 'miss', detail: `XPath ${seg.path} 零命中` }
@@ -98,7 +80,7 @@ type Test =
   | { kind: 'star' }
   | { kind: 'text' }
   | { kind: 'attr'; name: string }
-type Axis = 'child' | 'descendant' | 'fwd' | 'bwd'
+type Axis = 'child' | 'descendant' | 'parent' | 'fwd' | 'bwd'
 interface Step { axis: Axis; test: Test; preds: Predicate[] }
 
 type Predicate =
@@ -112,8 +94,7 @@ type Predicate =
   | { kind: 'not'; inner: Predicate }
   | { kind: 'and'; parts: Predicate[] }
   | { kind: 'or'; parts: Predicate[] }
-
-const AXES: Record<string, Axis> = { 'following-sibling': 'fwd', 'preceding-sibling': 'bwd' }
+  | { kind: 'pathExists'; steps: Step[] }
 
 function parseXPath(path: string): Step[] {
   const p = path.trim()
@@ -181,12 +162,14 @@ function parseStep(token: string, axis: Axis): Step {
   }
   let test = body
   let effAxis = axis
+  // 父步 `..`：axis 换成 parent，节点测试用 `*`（文档根不是元素，自然被 filter 掉 → 零命中而非猜成 html）
+  if (body === '..') return { axis: 'parent', test: { kind: 'star' }, preds }
   const dbl = test.indexOf('::')
   if (dbl !== -1) {
     const name = test.slice(0, dbl)
     const mapped = AXIS_NAMES[name]
     if (mapped === undefined) {
-      throw new UnsupportedRuleError(`XPath 轴不支持: ${name}::（子集：child/following-sibling/preceding-sibling）`, {
+      throw new UnsupportedRuleError(`XPath 轴不支持: ${name}::（子集：child/parent(..)/following-sibling/preceding-sibling）`, {
         facet: 'rule', segmentIndex: -1, segmentRaw: token,
       })
     }
@@ -250,6 +233,18 @@ function parsePredicate(content: string): Predicate {
   if (c === 'text()') return { kind: 'textExists' }
   // 子元素存在（[dd[a]]）
   if (/^[A-Za-z_][\w.-]*$/.test(c)) return { kind: 'elemExists', name: c }
+  // 相对路径存在性谓词（XPath 1.0 的节点集谓词：**非空即真**）。真机实证 li[.//a]
+  // （搬山人小说网 ruleChapterList：卷里「有链接的 li」才是章节行）。属性步按属性节点
+  // 存在性判（testNode 的 attr 分支就是「该元素有这个属性」），故 [a/@href] 同样成立。
+  // `//` 起步在谓词里是**文档根**绝对轴，本求值器手里只有上下文节点，不猜成后代——如实抛。
+  if (c.startsWith('//')) {
+    throw new UnsupportedRuleError(`谓词路径起步不支持: ${content}（谓词内 // 要从文档根取，本求值器只在上下文节点内走轴）`, {
+      facet: 'rule', segmentIndex: -1, segmentRaw: content,
+    })
+  }
+  if (c.startsWith('.//') || c.startsWith('./') || (/^[A-Za-z_@*]/.test(c) && c.includes('/'))) {
+    return { kind: 'pathExists', steps: parseXPath(c.startsWith('./') ? c.slice(1) : c) }
+  }
   // 白名单外函数（count/sum 等）→ 宁炸不猜
   if (/^[A-Za-z-]+\s*\(/.test(c)) {
     throw new UnsupportedRuleError(`XPath 函数不支持: ${c.split('(')[0].trim()}（子集：contains/starts-with/not/position/last）`, {
@@ -307,6 +302,10 @@ function axisPool(ctx: AnyNode, axis: Axis): AnyNode[] {
   switch (axis) {
     case 'child': return nodeChildren(ctx)
     case 'descendant': return descendants(ctx)
+    case 'parent': {
+      const p = (ctx as Element).parent
+      return p ? [p] : []
+    }
     case 'fwd': {
       const parent = (ctx as Element).parent
       if (parent === null) return []
@@ -341,6 +340,45 @@ function applyPredicates(nodes: AnyNode[], preds: Predicate[]): AnyNode[] {
   return nodes.filter((n, i) => preds.every((p) => evalPredicate(p, n, i + 1, nodes.length)))
 }
 
+/** 走一步（主链与谓词内相对路径共用这份实现——两处各写一遍必然漂移）：
+ *  取轴 → 节点测试 → **按父分组**过谓词（真 XPath 语义：//dd[2] = 每父第 2 个 dd，不是全局第 2 个）→ 去重。 */
+function stepForward(candidates: AnyNode[], step: Step): AnyNode[] {
+  const next: AnyNode[] = []
+  const seen = new Set<AnyNode>()
+  for (const ctx of candidates) {
+    const pool = axisPool(ctx, step.axis)
+    const matched = pool.filter((n) => testNode(n, step.test))
+    const groups = new Map<AnyNode, AnyNode[]>()
+    for (const n of matched) {
+      const p = (n as Element).parent ?? n
+      const g = groups.get(p)
+      if (g === undefined) groups.set(p, [n])
+      else g.push(n)
+    }
+    for (const group of groups.values()) {
+      for (const n of applyPredicates(group, step.preds)) {
+        if (!seen.has(n)) { seen.add(n); next.push(n) }
+      }
+    }
+  }
+  return next
+}
+
+/** 谓词内相对路径的命中集（existence 判据 = 非空）。
+ *  属性步特判：XPath 的 `a/@href` 选的是 a **自己的**属性节点，不是「a 的子节点里测试 href」
+ *  ——属性不在子节点链上。故属性步按「当前集合中该属性存在者」过滤，不沿轴移动。
+ *  （主链上的属性步由 evalXPath 的末段提取分支处理，同一口径。） */
+function pathHits(ctx: AnyNode, steps: Step[]): AnyNode[] {
+  let cur: AnyNode[] = [ctx]
+  for (const step of steps) {
+    cur = step.test.kind === 'attr'
+      ? applyPredicates(cur.filter((n) => testNode(n, step.test)), step.preds)
+      : stepForward(cur, step)
+    if (cur.length === 0) return cur
+  }
+  return cur
+}
+
 /** 谓词内 text() 口径：元素 textContent（拼接后代文本 trim）——近似已文档化（真实样本全落此口径） */
 function predText(n: AnyNode): string {
   if (n.type === 'text') return cleanText((n as Text).data ?? '')
@@ -369,6 +407,7 @@ function evalPredicate(p: Predicate, n: AnyNode, pos: number, size: number): boo
     case 'attrExists': return n.type === 'tag' && (n as Element).attribs?.[p.attr] !== undefined
     case 'textExists': return predText(n) !== ''
     case 'elemExists': return nodeChildren(n).some((c) => c.type === 'tag' && (c as Element).tagName?.toLowerCase() === p.name.toLowerCase())
+    case 'pathExists': return pathHits(n, p.steps).length > 0
     case 'attrEq': return n.type === 'tag' && ((n as Element).attribs?.[p.attr] ?? '') === p.lit
     case 'textEq': return predText(n) === p.lit
     case 'fn': {

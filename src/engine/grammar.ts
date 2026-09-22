@@ -99,8 +99,57 @@ export function jsRegionEnd(s: string, i: number): number | null {
   return null
 }
 
-/** 该分支是否含 JS 区域（`<js>…</js>` 或 `js:`/`@js:` 末段）——是则不再补隐式 `@text`（JS 已是终端） */
-function hasJsRegion(s: string): boolean {
+/**
+ * `@put:{…}` 区域终点（legado `splitPutRule` 口径：`@put:(\{[^}]+?\})` 在**任何**切分之前先剥离，
+ * 所以体内 `@` 不是段界）。真实源 `ruleBookInfo.init` 的主导形态
+ * `@put:{n:"[property$=book_name]@content", …}` 六个体内 `@` 曾被 splitElements 撕成七段，
+ * 当场解析期抛错（2026-09 真机审计）。吃到第一个 `}` 为止——legado 的正则同样不嵌套，
+ * 值里带 `}` 的规则在 legado 那边也是残规则，不另造更宽的判据。
+ * 只在段首成立（链首或前一字符是段界 `@`；`@@` 是字面 @，不起段）。
+ */
+export function putRegionEnd(s: string, i: number): number | null {
+  const atSegStart = i === 0 || (s[i - 1] === '@' && s[i - 2] !== '@')
+  if (!atSegStart) return null
+  const rest = s.slice(i)
+  if (!/^put:/i.test(rest)) return null
+  const open = rest.indexOf('{')
+  if (open === -1) return null
+  const close = rest.indexOf('}', open)
+  return close === -1 ? null : i + close + 1
+}
+
+/** `{{…}}` 模板区（legado `makeUpRule` 在任何 `@` 切分**之前**插值，故区内的 `@` 不是段界）。
+ *  返回内容终点（第一个闭合 `}` 处，`{{$.x}}` 的表达式是 `$.x`）与整区终点（`}}` 之后）；
+ *  未闭合 → null（调用方按字面处理，不猜）。引号内的花括号不计深——对面 `chompCodeBalanced` 同口径。
+ *  **唯一一份花括号扫描**：`literal.splitLiteral` 与 `parse.splitElements` 都从这里取。 */
+export interface BraceRegion { contentEnd: number; end: number }
+
+export function braceRegion(s: string, i: number): BraceRegion | null {
+  if (!s.startsWith('{{', i)) return null
+  let depth = 2
+  let j = i + 2
+  let quote: string | null = null
+  let contentEnd = -1
+  while (j < s.length) {
+    const ch = s[j]
+    if (quote !== null) {
+      if (ch === '\\') { j += 2; continue }
+      if (ch === quote) quote = null
+    } else if (ch === '"' || ch === "'" || ch === '`') {
+      quote = ch
+    } else if (ch === '{') {
+      depth++
+    } else if (ch === '}') {
+      if (depth === 2) contentEnd = j
+      depth--
+    }
+    if (depth === 0) return contentEnd === -1 ? null : { contentEnd, end: j + 1 }
+    j++
+  }
+  return null
+}
+
+/** 该分支是否含 JS 区域（`<js>…</js>` 或 `js:`/`@js:` 末段）——是则不再补隐式 `@text`（JS 已是终端） */function hasJsRegion(s: string): boolean {
   let i = 0
   while (i < s.length) {
     const end = jsRegionEnd(s, i)

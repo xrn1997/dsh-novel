@@ -23,6 +23,9 @@ export interface JsHost {
   result: string
   /** 上一段结果的值形态（nodes/page 时沙箱把 result 包成元素包装对象——`result.attr()` 等形态） */
   resultKind?: string
+  /** 上一段结果所在的**路径**（对面 getElements / getString）：list → 节点结果绑成元素**集合**
+   *  （`forEach`/`length`/下标），value → 仍是字符串对象（对面给的是 String） */
+  resultCtx?: 'list' | 'value'
   baseUrl: string
   source: string
   /** searchUrl @js 形态：搜索关键词与页码（legado 沙箱全局变量 key/page） */
@@ -198,6 +201,31 @@ const BOOTSTRAP = `;(function (g) {
       try { return JSON.parse(r) } catch (e) { throw new Error(msg(e)) }
     }
     : function () { throw new Error('__dsh_sync_ajax_required__') }
+  // java.connect 与 ajax/downloadFile 同款网络同步语义（对面 runBlocking 返回 StrResponse 对象）：
+  // worker 直通拿 {url, body}，主线程抛哨兵换道——不在没有同步桥时返回 Promise 换类型。
+  const connect = d.syncAjax
+    ? function () {
+      const r = invoke('connect', [].slice.call(arguments))
+      try { return JSON.parse(r) } catch (e) { throw new Error(msg(e)) }
+    }
+    : function () { throw new Error('__dsh_sync_ajax_required__') }
+  // java.post：对面返回 Jsoup 的 Connection.Response（**方法**壳：脚本写 res.body() / res.cookies()）。
+  // 跨桥只走 JSON 数据，所以数据包在沙箱内包成方法对象——函数不外传，也不跨边界。
+  // 刻意只给有真数据支撑的四个访问器：对面还有 header(name)/statusCode() 等，本仓没带响应头表，
+  // 就不编一个空壳给脚本（宁缺毋假值）；调到不存在的名字会照实 TypeError。
+  const post = d.syncAjax
+    ? function () {
+      let r
+      try { r = JSON.parse(invoke('post', [].slice.call(arguments))) } catch (e) { throw new Error(msg(e)) }
+      return {
+        body: function () { return r.body },
+        statusCode: function () { return r.statusCode },
+        contentType: function () { return r.contentType === undefined ? '' : r.contentType },
+        url: function () { return r.url },
+        cookies: function () { return r.cookies === undefined ? {} : r.cookies },
+      }
+    }
+    : function () { throw new Error('__dsh_sync_ajax_required__') }
   // ── Packages.*（legado Rhino 的 Java 包路径仿真）─────────────────────
   // 真实源正文解密链用它组织 JVM/Android 类调用（爱腐文 favicon 密钥图实证：
   // ByteArrayInputStream → BitmapFactory → javax.crypto AES/HMAC）。重活（PNG 解码、
@@ -220,6 +248,9 @@ const BOOTSTRAP = `;(function (g) {
     }
   }
   g.Packages = {
+    // Packages.org.jsoup.Jsoup.parse(html)：对面 Rhino 的 Java 包路径写法，与下方 g.org.jsoup.Jsoup.parse
+    // 同一份实现（脚本两种写法在真实源里都有；BOOTSTRAP 是模板字符串，注释里不能出现反引号）。
+    org: { jsoup: { Jsoup: { parse: function (html) { return mkElem(String(html)) } } } },
     java: {
       io: {
         ByteArrayInputStream: function (bytes) { return mkBytesStream(bytes) },
@@ -357,35 +388,80 @@ const BOOTSTRAP = `;(function (g) {
   const elemOps = function (op, payload) {
     try { return JSON.parse(call('__elem.' + op, ser(payload))) } catch (e) { throw new Error(msg(e)) }
   }
-  const wrapElems = function (arr) {
+  // owner = { box, rule }：这个集合是「哪个片段的哪条选择器」选出来的。元素桥的片段住在
+  // box.html 里（不是构造时常量），select().remove() 把摘除后的片段回写进 owner.box——
+  // 产出它的那个元素此后所有读法（html/text/select/String）都看见净化后的树。
+  const wrapElems = function (arr, owner) {
     const out = []
     for (let i = 0; i < arr.length; i++) out.push(mkElem(String(arr[i])))
-    out.toArray = function () { return out.slice() }
-    out.size = function () { return out.length }
-    out.get = function (i) { return out[i] !== undefined ? out[i] : mkElem('') }
-    out.first = function () { return out.length > 0 ? out[0] : mkElem('') }
-    out.toString = function () { return out.join('\\n') }
+    // 集合助手挂成**不可枚举**：Rhino 下 result.toArray() 给的是 Java 数组，for (i in list)
+    // 只遍历下标；真源（废纸文学 / 新龙小说 / PO5 共用的 toc 模板）正是
+    // for(i in list){ l[s[i]] = list[i] } 形态——可枚举的助手会被当元素遍历，当场炸
+    // 「list[i].text is not a function」。（BOOTSTRAP 是模板字符串，注释里不能出现反引号。）
+    const all = function () { return mkElem(out.join('\\n')) }   // 聚合口径共用元素桥（attr=首个、text=拼接）
+    const helpers = {
+      toArray: function () { return out.slice() },
+      size: function () { return out.length },
+      get: function (i) { return out[i] !== undefined ? out[i] : mkElem('') },
+      eq: function (i) { return out[i] !== undefined ? out[i] : mkElem('') },
+      first: function () { return out.length > 0 ? out[0] : mkElem('') },
+      last: function () { return out.length > 0 ? out[out.length - 1] : mkElem('') },
+      each: function (fn) { for (var i = 0; i < out.length; i++) fn(out[i], i); return out },
+      // jsoup Elements 的聚合读法：attr/text/html/select 走整段拼接后的元素桥
+      attr: function (n) { return all().attr(n) },
+      text: function () { return all().text() },
+      html: function () { return out.length > 0 ? out[0].html() : '' },
+      select: function (rule) { return wrapElems(all().select(rule)) },
+      hasAttr: function (n) { var a = all().attr(n); return a !== '' && a !== undefined },
+      // 对面 Elements.remove()：逐个从父上摘掉、返回 this。没有 owner 的集合（java.getElements、
+      // toArray、集合级 select 的临时聚合）背后没有可回写的片段 → 如实抛：静默 no-op 等于把
+      // 脏节点当已净化交给正文。
+      remove: function () {
+        if (owner === undefined || owner === null) {
+          throw new Error('remove() 需要可回写的宿主片段：本桥只支持 元素.select(规则).remove() 形态')
+        }
+        owner.box.html = elemOps('remove', { html: owner.box.html, rule: owner.rule })
+        return out
+      },
+      toString: function () { return out.join('') },   // Elements.toString() = 各元素 outerHtml 拼接、无分隔
+    }
+    for (const k in helpers) Object.defineProperty(out, k, { value: helpers[k], enumerable: false, writable: true })
     return out
   }
+  // 元素集包装：对面 result 在 getElements 路径上是 org.jsoup.Elements（集合），不是单个
+  // Element——所以 size()/get()/each() 必须按**顶层元素数**算，而不是恒 1。
+  // 同时保留 String 对象身份（match/replace/test/模板串在真源脚本里直接作用于 result）。
+  // 片段住 box 而非构造常量：活文档树上的摘除要能被后续读法看见（悦读小说 remove 完直接
+  // 把 doc 当值返回，全靠 String(doc) 走 toString 取到回写后的 html）。
   const mkElem = function (raw) {
-    const s = new String(raw)
-    s.attr = function (name) { return elemOps('attr', { html: raw, name: String(name) }) }
-    s.text = function () { return elemOps('text', { html: raw }) }
-    s.html = function () { return elemOps('html', { html: raw }) }
-    s.select = function (rule) { return wrapElems(elemOps('select', { html: raw, rule: String(rule) })) }
-    s.toArray = function () { return wrapElems(elemOps('split', { html: raw })) }
-    s.first = function () { return s }
-    s.size = function () { return 1 }
+    const box = { html: String(raw) }
+    const s = new String(box.html)
+    s.toString = function () { return box.html }
+    s.valueOf = function () { return box.html }
+    s.attr = function (name) { return elemOps('attr', { html: box.html, name: String(name) }) }
+    s.text = function () { return elemOps('text', { html: box.html }) }
+    s.html = function () { return elemOps('html', { html: box.html }) }
+    s.select = function (rule) { return wrapElems(elemOps('select', { html: box.html, rule: String(rule) }), { box: box, rule: String(rule) }) }
+    s.toArray = function () { return wrapElems(elemOps('split', { html: box.html })) }
+    s.size = function () { return s.toArray().length }
+    s.get = function (i) { var a = s.toArray(); return a[i] !== undefined ? a[i] : mkElem('') }
+    s.eq = function (i) { return s.get(i) }
+    s.first = function () { var a = s.toArray(); return a.length > 0 ? a[0] : mkElem('') }
+    s.last = function () { var a = s.toArray(); return a.length > 0 ? a[a.length - 1] : mkElem('') }
+    s.each = function (fn) { var a = s.toArray(); for (var i = 0; i < a.length; i++) fn(a[i], i); return s }
     return s
   }
   g.__mkElem__ = mkElem
+  g.__wrapElems__ = wrapElems
   g.java = {
     ajax: ajax,
     // async 网络行（协议表 mode:'async' 不进 javaSync 名单）——与 ajax 同款手工挂载
     downloadFile: downloadFile,
+    connect: connect,
+    post: post,
     log: log('console.log'),
     toast: function(){}, longToast: function(){}, copyText: function(){},
-    startBrowser: function(){}, open: function(){},
+    startBrowser: function(){}, open: function(){}, openUrl: function(){},
     // createSymmetricCrypto：legado 链式解密形态（java.createSymmetricCrypto(t,k,iv).decryptStr(data)）——
     // 解密实现在协议表 aesBase64DecodeToString（Node crypto），此处只做链式外壳
     createSymmetricCrypto: function (transformation, key, iv) {
@@ -412,8 +488,12 @@ const BOOTSTRAP = `;(function (g) {
       return mkElem(String(r && r.html !== undefined ? r.html : r))
     }
   })
+  // 宿主桩名单：只放**本仓真没有对应实现**的名字（对面 JsExtensions 有、但需安卓宿主/WebView/
+  // 字体栈）。摘要与 HMAC 族（digestHex/digestBase64Str/HMacHex/HMacBase64）曾误留在此——
+  // 协议表已有真实现（js-utils.ts，期望值由 openssl 独立算出），但本循环在 sync 挂载之后运行，
+  // 把真实现覆盖成抛错桩：协议表测试全绿而脚本一调就「需要安卓宿主环境」。现由普查面 C 钉住不许复发。
   ;['webView','startBrowserAwait','refreshTocUrl','ajaxAll','createAsymmetricCrypto',
-    'aesBase','queryTTF','queryBase','replaceFont','digestHex','digestBase64Str','HMacHex','HMacBase64',
+    'aesBase','queryTTF','queryBase','replaceFont','androidId',
     'createSign'].forEach(function (n) {
     g.java[n] = function () { throw new Error('java.' + n + ' 不支持：需要安卓宿主环境（WebView/加密/系统服务无法仿真）') }
   })
@@ -453,9 +533,35 @@ const BOOTSTRAP = `;(function (g) {
   g.result = d.resultJson
     // JSON 页/条目：result 按解析后的对象绑定（legado isJSON content 口径——字段访问形态）
     ? (function () { try { return JSON.parse(d.resultJson) } catch (e) { return d.result } })()
-    : (d.resultKind === 'nodes' || (d.resultKind === 'page' && /<[a-zA-Z]/.test(d.result)))
-      ? g.__mkElem__(d.result)
-      : d.result
+    : (d.resultKind === 'nodes' && d.resultCtx === 'list')
+      // 列表路径（对面 getElements）：result 是**元素集合**——forEach/length/下标/size/get 全能用
+      ? wrapElems(elemOps('split', { html: d.result }))
+      : (d.resultKind === 'nodes' || (d.resultKind === 'page' && /<[a-zA-Z]/.test(d.result)))
+        ? g.__mkElem__(d.result)
+        : d.result
+  // legado 的 book 是实体对象（Rhino 直绑 Kotlin Book），脚本既读字段也调方法：
+  // book.setType(0)（终极全栖接口聚合）、book.getVariable("custom")（穿越小说）。
+  // 本仓 book/chapter 是服务层按面注入的**镜像**，这里补齐方法面：
+  // - type 落回镜像自身字段（本次调用内可读，落库不在本层职责）；
+  // - variable 用**镜像自带的一张局部表**，不与源级变量表（source.getVariable）混用——
+  //   对面 Book.variables 与 BookSource.variables 是两个存储，合并会把用户级开关串味。
+  //   本仓没有 Book 级持久变量存储，所以它跨一次规则调用不保留（真源用途是读用户手设的
+  //   "custom"，取不到即空串走默认分支——与对面未设置时同形；持久化见开口 c-toc-flags 一族）。
+  const mkHostObj = function (o) {
+    const t = o && typeof o === 'object' ? o : {}
+    const own = Object.create(null)
+    t.getVariable = function (k) { const v = own[String(k)]; return v === undefined ? '' : v }
+    t.putVariable = function (k, v) { own[String(k)] = String(v); return v }
+    t.removeVariable = function (k) { delete own[String(k)] }
+    t.getType = function () { return t.type === undefined ? 0 : t.type }
+    t.setType = function (n) { t.type = n }
+    t.getName = function () { return String(t.name ?? t.title ?? '') }
+    t.getBookUrl = function () { return String(t.bookUrl ?? '') }
+    t.getOrigin = function () { return String(t.origin ?? t.baseUrl ?? d.source) }
+    return t
+  }
+  g.book = mkHostObj(d.book)
+  g.chapter = mkHostObj(d.chapter)
   g.baseUrl = d.baseUrl
   g.source = g.__src__
   g.key = d.key
@@ -493,6 +599,13 @@ export async function evalJs(
   ensureUnhandledGuard()
   const session = opts?.session ?? processSession
   // 协议实现的闭包依赖（原 makeJavaBridge 的参数+可变态收成一个对象；实现本体在协议表）
+  // 变量读链的 source 层（对面 AnalyzeRule.get 的第四级）：与 source.get/put 同一张按源隔离的表。
+  // 用 peek（非建档）而不是 sourceVars()——后者一调就建表，会改掉 source.getVariable「从未设置」的语义；
+  // 惰性取值还顺带覆盖「同一次调用里先 source.put 再 java.get」的形态。
+  if (ctx.sourceVar === undefined) {
+    const varKey = ctx.source ?? ctx.baseUrl ?? ''
+    ctx.sourceVar = (k: string): string | undefined => session.peekSourceVars(varKey)?.get(k)
+  }
   const deps: BridgeDeps = {
     ctx,
     code,
@@ -512,7 +625,7 @@ export async function evalJs(
   // 无 ajax 的脚本仍走主线程 vm（零开销）。bootstrap 的 ajax 包装按 syncAjax 标志二选一（同一份代码）。
   // **这条正则只是性能启发，不是语义开关**：认不出的等价写法（java["ajax"] / 解构 / 动态键）会先在
   // 主线程白跑一趟、再由哨兵兜回 worker（见 needsSyncBridge），拿到的语义与直写形态一致。
-  const jsLibCode = ctx.jsLib ?? ''
+  const jsLibCode = await resolveJsLib(ctx.jsLib, ctx, loc, facet)
   const useWorker = SYNC_WORKER_RE.test(jsLibCode + '\n' + code)
   // JSON 页的 `result` 绑定（legado setContent isJSON 口径）：整页/条目上下文是合法 JSON 时，
   // 脚本首段 `result` 按**解析后的对象**绑定——真实源 `result.chapterTitle`、`result.data.list`
@@ -526,6 +639,7 @@ export async function evalJs(
   // 复用主线程的 init 会让 worker 里的 ajax 包装再抛一次哨兵。
   const initOf = (syncAjax: boolean): string => JSON.stringify({
     result: pageRaw, resultKind: host.resultKind ?? '', resultJson,
+    resultCtx: host.resultCtx ?? 'value',
     baseUrl: ctx.baseUrl ?? '', source: ctx.source ?? '',
     key: host.key ?? '', page: host.page ?? 1, header: host.header ?? '{}',
     // legado 沙箱全局 `src` = 当前页面原文（html 优先；纯 JSON 页给序列化文本——与 host.result 的
@@ -562,8 +676,10 @@ export async function evalJs(
     // jsLib（legado 源级全局函数库）：先于用户代码在同一上下文执行——函数定义落全局，
     // 用户 @js 里直接调用（真实源 urlUserFavorite/host/qmSearchUrl 等都定义在这里）。
     // 它本身不是求值目标：抛错如实上报（jsLib 坏了整源的 js 都不可信）。
-    const jsLib = ctx.jsLib
-    if (jsLib !== undefined && jsLib.trim() !== '') {
+    // 用**已解析**的库文本（URL 字典形态在 evalJs 顶部下载拼好）——主线程与 worker 两条路必须同一份，
+    // 否则同一源在两条路上少一层库（crypto-js 一类直接 not defined）。
+    const jsLib = jsLibCode
+    if (jsLib.trim() !== '') {
       try {
         vm.runInContext(jsLib, context, { timeout })
       } catch (e) {
@@ -928,8 +1044,30 @@ function elemHostOp(op: string, payload: { html?: unknown; name?: unknown; rule?
       }
     }
     case 'split': {
-      // 片段的顶层元素集（Elements.toArray 口径）
-      return $.root().children().toArray().filter((n) => isTag(n)).map((n) => $.html(n) ?? '')
+      // 片段的顶层元素集（Elements.toArray 口径）。parse5 把片段挂进 body，直接取
+      // root().children() 只会得到一个 html——那会让真源 toc 模板的 result.toArray() 恒为 1 个
+      // 「元素」，其 text() 反而是整段拼接（size/get/each 全错位）。
+      const body = $('body')
+      const kids = body.length > 0 ? body.children() : $.root().children()
+      return kids.toArray().filter((n) => isTag(n)).map((n) => $.html(n) ?? '')
+    }
+    case 'remove': {
+      // 元素桥的摘除回写：对面 jsoup 的 remove() 只把节点从**父**上摘掉、子树跟着节点走，
+      // 所以「环安小说网 el.select("p,script,div").remove()」把 el 自己也摘走之后，
+      // el.html() 仍要读到没被命中的 em。做法：先按原形状记下顶层节点，摘完再串化它们——
+      // 顶层若整个被摘走，节点对象还在，串化即为净化后的片段。
+      // 文档级片段（Jsoup.parse 出来的整页）串化整份文档，其余串化 body 顶层子节点。
+      const rule = String(payload.rule ?? '')
+      const isDoc = /^\s*(?:<!doctype\s|<html[\s>])/i.test(html)
+      const top = (isDoc ? $.root().contents() : $('body').contents()).toArray()
+      if (rule !== '') {
+        try {
+          $(rule).remove()
+        } catch (e) {
+          throw new Error(`选择器无法解析：${rule}（${(e as Error).message}）`)
+        }
+      }
+      return isDoc ? ($.html() ?? '') : top.map((n) => $(n).toString()).join('')
     }
     default:
       throw new Error(`未知元素桥操作：${op}`)
@@ -1062,4 +1200,50 @@ function parseLineFromStack(stack: string): number | undefined {
   if (noCol) return Math.max(1, Number(noCol[1]) - 1)
   // 无行号信息 → undefined（此前返回 1 会**谎报「第 1 行」**；errors 侧 `loc.line ?` 判定据此省略行号）
   return undefined
+}
+
+// ── jsLib 两形态（legado SharedJsScope）───────────────────────────────
+// 裸 JS 文本，或 `{"名字":"https://…/x.js"}` URL 字典（下载后按 URL 缓存，对面缓存键是 md5(url)）。
+// 解析发生在 evalJs 顶部——worker 路由的 SYNC_WORKER_RE 因此能看到**下载后**的库代码，
+// 库里含 java.ajax 的源才会被正确送进 worker。
+const JSLIB_URL_CACHE_MAX = 32
+const jsLibUrlCache = new Map<string, string>()
+
+/** 值是 URL 字典才返回清单；否则 null（裸 JS 文本里出现 `{` 开头对象字面量的形态不当字典解析） */
+function jsLibUrlDict(jsLib: string): string[] | null {
+  if (!jsLib.trim().startsWith('{')) return null
+  let obj: unknown
+  try { obj = JSON.parse(jsLib) } catch { return null }
+  if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) return null
+  const values = Object.values(obj as Record<string, unknown>)
+  if (values.length === 0 || !values.every((v) => typeof v === 'string' && /^https?:\/\//i.test(v))) return null
+  return values as string[]
+}
+
+async function resolveJsLib(
+  jsLib: string | undefined, ctx: EvalContext, loc: SegmentLoc, facet: Facet,
+): Promise<string> {
+  if (jsLib === undefined || jsLib.trim() === '') return ''
+  const urls = jsLibUrlDict(jsLib)
+  if (urls === null) return jsLib
+  if (ctx.fetch === undefined) {
+    throw new JsSandboxError('jsLib 是 URL 字典但本源未提供网络能力（ctx.fetch 缺失）', { ...loc, facet, script: jsLib.slice(0, 200) })
+  }
+  const parts: string[] = []
+  for (const url of urls) {
+    let body = jsLibUrlCache.get(url)
+    if (body === undefined) {
+      try {
+        body = (await ctx.fetch(url)).body
+      } catch (e) {
+        // 下载失败如实抛（对面同样抛「下载jsLib-<url>失败」）：少一层库会让后面的脚本
+        // 报「xxx is not a function」，把库缺失伪装成脚本错误
+        throw new JsSandboxError(`jsLib 下载失败：${url}（${e instanceof Error ? e.message : String(e)}）`, { ...loc, facet, script: jsLib.slice(0, 200) })
+      }
+      if (jsLibUrlCache.size >= JSLIB_URL_CACHE_MAX) jsLibUrlCache.delete(jsLibUrlCache.keys().next().value as string)
+      jsLibUrlCache.set(url, body)
+    }
+    parts.push(body)
+  }
+  return parts.join('\n')
 }

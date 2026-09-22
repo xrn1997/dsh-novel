@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { evalGetVar, evalPut } from '../../src/engine/variables.js'
+import { evalGetVar, evalPut, getScopedVar, getRuleVar } from '../../src/engine/variables.js'
 import { UnsupportedRuleError } from '../../src/engine/errors.js'
 import type { EvalContext } from '../../src/engine/types.js'
 
@@ -31,10 +31,10 @@ describe('@put / @get 变量', () => {
     expect(ctx.vars!.title).toBe('凡人')
   })
 
-  it('$.. 递归下降仍被路由到 JSONPath（$. 前缀覆盖；末段集合型 → List → 抛错）', () => {
+  it('$.. 递归下降仍被路由到 JSONPath（$. 前缀覆盖；集合型末段 → List → \\n 拼接存）', () => {
     const ctx: EvalContext = { vars: {}, json: { a: { bid: '42' } } }
-    expect(() => evalPut('{bid:"$..bid"}', ctx, L, 'detail')).toThrow(UnsupportedRuleError)
-    expect(ctx.vars).toEqual({}) // 不是把 '$..bid' 当普通字符串存
+    evalPut('{bid:"$..bid"}', ctx, L, 'detail')
+    expect(ctx.vars).toEqual({ bid: '42' }) // 不是把 '$..bid' 当普通字符串存
   })
 
   it('不以 $. 开头的 $ 值（裸 $、$99）是普通字符串，原样存', () => {
@@ -51,9 +51,34 @@ describe('@put / @get 变量', () => {
     expect(evalGetVar('nope', ctx).kind).toBe('miss')
   })
 
-  it('JSONPath 求值结果为列表 → v1 变量只存单值，抛 UnsupportedRuleError', () => {
+  it('JSONPath 求值结果为列表 → 变量存 \n 拼接（legado put(key, getString(value)) 口径）', () => {
     const ctx: EvalContext = { vars: {}, json: { chapters: ['c1', 'c2'] } }
-    expect(() => evalPut('{cs:"$.chapters[*]"}', ctx, L, 'detail')).toThrow(UnsupportedRuleError)
+    evalPut('{cs:"$.chapters[*]"}', ctx, L, 'detail')
+    expect(ctx.vars).toEqual({ cs: 'c1\nc2' })
+  })
+
+  it('值为规则串（CSS + @content 终端）→ 走子规则求值落盘（真实源 ruleBookInfo.init 形态）', async () => {
+    const { evaluate } = await import('../../src/engine/evaluate.js')
+    const ctx: EvalContext = {
+      vars: {},
+      html: '<head><meta property="og:novel:book_name" content="凡人修仙传"></head>',
+    }
+    const res = await evaluate('@put:{n:"[property$=book_name]@content"}@get:n', ctx, 'detail')
+    expect(res).toEqual({ kind: 'value', text: '凡人修仙传' })
+    expect(ctx.vars).toEqual({ n: '凡人修仙传' })
+  })
+
+  it('值为规则串且子规则命中多值 → 变量存 \n 拼接', async () => {
+    const { evaluate } = await import('../../src/engine/evaluate.js')
+    const ctx: EvalContext = { vars: {}, html: '<i>a</i><i>b</i>' }
+    const res = await evaluate('@put:{t:"i@text"}@get:t', ctx, 'detail')
+    expect(res).toEqual({ kind: 'value', text: 'a\nb' })
+  })
+
+  it('值为 js 形态 → 同步子环路不支持，如实抛（不静默取空）', async () => {
+    const { evaluate } = await import('../../src/engine/evaluate.js')
+    await expect(evaluate('@put:{t:"<js>1+1</js>"}@get:t', { vars: {} }, 'detail'))
+      .rejects.toThrow(/js 段/)
   })
 
   it('get 未 put → Miss（detail 提到键名）', () => {
@@ -129,5 +154,43 @@ describe('@put / @get 变量', () => {
     expect(evalGetVar('constructor', { vars: { a: '1' } }).kind).toBe('miss')
     expect(evalGetVar('__proto__', { vars: {} }).kind).toBe('miss')
     expect(evalGetVar('a', { vars: { a: '1' } })).toEqual({ kind: 'value', text: '1' }) // 正路不受影响
+  })
+})
+
+describe('变量读链的 source 层兜底（对面 AnalyzeRule.get：每级空串继续下找）', () => {
+  it('本层没有该键 → 落到 source 层', () => {
+    const ctx = { vars: {}, sourceVar: () => '7' } as EvalContext
+    expect(getScopedVar(ctx, 'cid')).toBe('7')
+  })
+  it('本层是空串 → 继续下找（对面 takeIf{isNotEmpty}）', () => {
+    const ctx = { vars: { cid: '' }, sourceVar: (k: string) => (k === 'cid' ? '9' : undefined) } as EvalContext
+    expect(getScopedVar(ctx, 'cid')).toBe('9')
+  })
+  it('本层有值优先——顺序不许反（对面 chapter→…→source）', () => {
+    const ctx = { vars: { cid: '本层' }, sourceVar: () => '源层' } as EvalContext
+    expect(getScopedVar(ctx, 'cid')).toBe('本层')
+  })
+  it('两层都没有 → undefined；原型链成员名不算变量', () => {
+    const ctx = { vars: {}, sourceVar: () => undefined } as EvalContext
+    expect(getScopedVar(ctx, 'cid')).toBeUndefined()
+    expect(getScopedVar(ctx, 'constructor')).toBeUndefined()
+  })
+  it('@get: 段走同一条链（只有 source 层有值时也读得出）', () => {
+    const ctx = { vars: {}, sourceVar: (k: string) => (k === 'tok' ? 'T1' : undefined) } as EvalContext
+    expect(evalGetVar('tok', ctx)).toEqual({ kind: 'value', text: 'T1' })
+    expect(evalGetVar('nope', ctx)).toEqual({ kind: 'miss', detail: '变量未定义：nope' })
+  })
+})
+
+describe("内建伪变量（对面 get() 的两个 when 特例）", () => {
+  it("bookName → book.name；title → chapter.title（宿主在场才生效）", () => {
+    const ctx = { vars: { bookName: '本层的假值' }, book: { name: '剑来' }, chapter: { title: '第 3 章' } } as EvalContext
+    expect(getRuleVar(ctx, 'bookName')).toBe('剑来')
+    expect(getRuleVar(ctx, 'title')).toBe('第 3 章')
+  })
+  it("宿主缺席 → 不猜，落回读链（对面 book?.let / chapter?.let 同形）", () => {
+    const ctx = { vars: { bookName: '兜底值' } } as EvalContext
+    expect(getRuleVar(ctx, 'bookName')).toBe('兜底值')
+    expect(getRuleVar(ctx, 'title')).toBeUndefined()
   })
 })

@@ -181,10 +181,13 @@ describe('ShelfView 接线（deps seam 驱动）', () => {
   })
 })
 
-/** 命中分组桩（`SearchGroup` 的最小可渲染形态） */
-const hitGroup = (title: string) => ({
-  sourceId: 's1', sourceName: 'S', status: 'verified' as const,
-  hits: [{ title, author: null, url: 'https://s.com/book/1', coverUrl: null, intro: null, lastChapterName: null }],
+/** 命中分组桩（`SearchGroup` 的最小可渲染形态）。
+ *  `sourceId` 一轮内必须一源一个：服务端 `searchProgressive` 对每个源只 `emit` 一组，分组在
+ *  `SearchView` 里按 `key={g.sourceId}` 渲染——同一轮塞两个同 id 的桩等于造出对面协议给不出的形状
+ *  （React 会报 duplicate key）。多组用例显式传第二个 id。 */
+const hitGroup = (title: string, sourceId = 's1') => ({
+  sourceId, sourceName: 'S', status: 'verified' as const,
+  hits: [{ title, author: null, url: 'https://s.com/book/1', coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null }],
 })
 
 /** 后台搜索任务快照桩：默认「已结束、一家源、零增量」，各用例只覆写自己在意的那几项 */
@@ -318,7 +321,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     fireEvent.click(screen.getByRole('button', { name: '停止搜索' }))
     expect(deps.apiSend).toHaveBeenLastCalledWith('POST', ROUTES.searchJobCancel.path, {})
     frames[0](JSON.stringify({ job: snap({ phase: 'failed', cancelled: true, error: '任务已取消：用户停止了搜索',
-      total: 3, done: 2, next: 2, added: [hitGroup('停止前又回来一本')] }) }))
+      total: 3, done: 2, next: 2, added: [hitGroup('停止前又回来一本', 's2')] }) }))
     await waitFor(() => expect(screen.getByText(/已停止 · 本轮搜过/)).toBeTruthy())
     // 收口数字只算**真搜完的**：计划 3 家、停止前只回来 2 组，就不许报「搜过 3 家」；
     // 进度条同理，停止的轮次不倒填 100%（真机实测出的谎报：431 家计划 / 29 家实搜）
@@ -350,7 +353,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     await waitFor(() => expect(screen.getByText('推送来的书')).toBeTruthy())
     await new Promise((r) => setTimeout(r, 900))                  // 越过两个 POLL_MS 节拍
     expect(deps.apiGet).toHaveBeenCalledTimes(1)                  // 一轮都没轮：流在，就不必问
-    frames[0](JSON.stringify({ job: snap({ phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('收尾的书')] }) }))
+    frames[0](JSON.stringify({ job: snap({ phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('收尾的书', 's2')] }) }))
     await waitFor(() => expect(screen.getByText(/本轮搜过/)).toBeTruthy())
     expect(screen.getByText('收尾的书')).toBeTruthy()
     await waitFor(() => expect(closed).toBe(true))                // 终态帧后自己关流，不留着占连接

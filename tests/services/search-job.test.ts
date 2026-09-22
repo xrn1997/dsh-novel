@@ -10,6 +10,7 @@ import type { JobHost } from '../../src/services/import-job.js'
 
 const hit = (i: number): SearchHit => ({
   title: `t${i}`, author: null, url: `https://x/${i}`, coverUrl: null, intro: null, lastChapterName: null,
+  kind: null, wordCount: null,
 })
 const group = (src: string, hits: number): SearchGroup => ({
   sourceId: src, sourceName: src, status: 'verified',

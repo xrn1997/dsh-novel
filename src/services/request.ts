@@ -1,4 +1,4 @@
-import { interpolateUrl, URL_OPTION_SPLIT } from '../engine/index.js'
+import { interpolateUrl, expandPageAngleList, URL_OPTION_SPLIT } from '../engine/index.js'
 import { absUrl } from './url.js'
 
 /** legado URL 模板请求形态（官方文档 §URL必知必会 钉死）：
@@ -55,6 +55,9 @@ export function parseUrlOption(template: string): { urlPart: string; option: Req
 }
 
 /** 选项 JSON：严格 JSON 优先；失败回退单引号交换（`{'a':'b'}` → `{"a":"b"}`——真实源大量存在） */
+/** 本插件实现的 UrlOption 键集（legado 的键集更大：retry/type/js/bodyJs/dnsIp/serverID/webJs/origin…） */
+const KNOWN_OPTION_KEYS = ['method', 'body', 'charset', 'headers', 'webView']
+
 function parseOptionJson(text: string): RequestOption | undefined {
   const tryParse = (t: string): Record<string, unknown> | undefined => {
     try {
@@ -64,6 +67,12 @@ function parseOptionJson(text: string): RequestOption | undefined {
   }
   const obj = tryParse(text) ?? tryParse(text.replace(/'/g, '"'))
   if (obj === undefined) return undefined
+  // 未知键留痕（宁吵不瞒——与「选项 JSON 非法」那条 warn 同一先例）：静默丢弃会让人以为选项生效了。
+  // 本库 5 源带这类键，多数还是 POST 型 API 源，method/body 生效而 retry 不生效。
+  const unknown = Object.keys(obj).filter((k) => !KNOWN_OPTION_KEYS.includes(k))
+  if (unknown.length > 0) {
+    console.warn(`[dsh-novel] URL 选项含本插件未实现的键，已忽略：${unknown.join('、')}`)
+  }
   const option: RequestOption = {}
   if (typeof obj.method === 'string') option.method = obj.method
   if (typeof obj.body === 'string') option.body = obj.body
@@ -104,7 +113,10 @@ export function assembleRequest(
     ? urlPart.slice(0, -'/{{page}}'.length)
     : urlPart
   const interpolated = interpolateUrl(effective, vars)
-  const url = baseUrl === null ? interpolated : (absUrl(interpolated, baseUrl) ?? interpolated)
+  // 页码角列表 `<a,b,c>`：对面在 key/js 之后、选项切分之前替换（`AnalyzeUrl.replaceKeyPageJs`）。
+  // 本仓放在插值之后（同一位置），只对 URL 段生效——选项 JSON 里含尖括号者现库 0 源，差异不可观测。
+  const withPageList = expandPageAngleList(interpolated, typeof vars.page === 'number' ? vars.page : null)
+  const url = baseUrl === null ? withPageList : (absUrl(withPageList, baseUrl) ?? withPageList)
   const method = (option?.method ?? 'GET').toUpperCase() === 'POST' ? 'POST' : 'GET'
   const plan: RequestPlan = { url, method, headers: { ...(option?.headers ?? {}) }, webView: option?.webView === true }
   if (option?.body !== undefined) plan.body = interpolateUrl(option.body, vars)

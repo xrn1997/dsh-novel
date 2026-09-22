@@ -19,20 +19,34 @@ describe('首页封面降级', () => {
 })
 
 describe('progress 数学', () => {
-  const anchors = [{ index: 0, start: 0 }, { index: 1, start: 1000 }, { index: 2, start: 2500 }]
+  // 跨度口径：**该章的实测高度**。不借「到下一章的距离」——那个口径下最后一个已载章的
+  // 比例算不出来（next 缺失 → 恒 0），而最后一个已载章正是用户正在读的那一章。
+  const anchors = [
+    { index: 0, start: 0, height: 1000 },
+    { index: 1, start: 1000, height: 1500 },
+    { index: 2, start: 2500, height: 800 },
+  ]
   it('locateChapter：锚点边界与章内比例', () => {
     expect(locateChapter(anchors, 0)).toEqual({ chapterIndex: 0, offsetRatio: 0 })
     expect(locateChapter(anchors, 999)).toEqual({ chapterIndex: 0, offsetRatio: 0.999 })
     expect(locateChapter(anchors, 1000)).toEqual({ chapterIndex: 1, offsetRatio: 0 })
     expect(locateChapter(anchors, 1750)).toEqual({ chapterIndex: 1, offsetRatio: 0.5 })
-    expect(locateChapter(anchors, 99999)).toMatchObject({ chapterIndex: 2 })
   })
-  it('anchorTop 反函数往返（尾章除外）', () => {
-    for (const i of [0, 1]) {
-      const { offsetRatio } = locateChapter(anchors, anchors[i].start + (i === 0 ? 300 : 500))
-      expect(anchorTop(anchors, i, offsetRatio, 4000, 500)).toBeCloseTo(anchors[i].start + (i === 0 ? 300 : 500), 5)
+  it('尾章也有章内比例（旧口径 next 缺失 → 恒 0）', () => {
+    expect(locateChapter(anchors, 2900)).toEqual({ chapterIndex: 2, offsetRatio: 0.5 })
+    expect(locateChapter(anchors, 99999)).toEqual({ chapterIndex: 2, offsetRatio: 1 })   // 滚过头夹到 1
+  })
+  it('anchorTop 与 locateChapter 互逆（尾章同样往返——旧版本尾章取回章顶）', () => {
+    for (const [i, inside] of [[0, 300], [1, 750], [2, 400]] as const) {
+      const at = anchors[i].start + inside
+      const { offsetRatio } = locateChapter(anchors, at)
+      expect(anchorTop(anchors, i, offsetRatio, 4000, 500)).toBeCloseTo(at, 5)
     }
-    expect(anchorTop(anchors, 99, 0.5, 4000, 500)).toBe(0)   // 越界回 0
+  })
+  it('anchorTop：越界章回 0；结果夹在可滚动范围内', () => {
+    expect(anchorTop(anchors, 99, 0.5, 4000, 500)).toBe(0)
+    expect(anchorTop(anchors, 2, 1, 3000, 500)).toBe(2500)          // 原始 3300 → 夹到 scrollHeight-clientHeight
+    expect(anchorTop(anchors, 0, 0.5, 4000, 500)).toBe(500)
   })
   it('debounce：合并调用 + flush/cancel', () => {
     vi.useFakeTimers()

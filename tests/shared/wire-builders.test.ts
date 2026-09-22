@@ -74,7 +74,7 @@ describe('SHELF_META 字段集（书目元数据的唯一主人）', () => {
   it('字段集与 wire 形状同源：表里每个键都是 ShelfBook 元数据键（bookKey/进度/时间戳除外）', () => {
     // 表 = 元数据写口可写的键全集；bookKey 是身份、progress/addedAt 是系统字段，不属于元数据写口
     expect(Object.keys(SHELF_META).sort()).toEqual(
-      ['author', 'coverUrl', 'intro', 'lastChapterName', 'sourceId', 'title', 'totalChapters'],
+      ['author', 'coverUrl', 'intro', 'kind', 'lastChapterName', 'sourceId', 'title', 'totalChapters', 'wordCount'],
     )
   })
 })

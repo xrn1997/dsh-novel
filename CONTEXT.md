@@ -72,15 +72,22 @@ _Avoid_: URL 规则（太泛——不只 URL，任何含插值的字面段都是
 _Avoid_: 文本过滤（太泛——判据是「含文本的元素」，链上位置是选择段）
 
 **详情上下文初始化（ruleDetailInit）**:
-legado `ruleBookInfo.init` 的内部名：详情面先求值，其结果**整体替换**后续详情规则与 tocUrl 模板的求值上下文**与 html**（legado `setContent(init 产物)` 是 content 单点全换：JSON 产物 → html 与 `ctx.json` 同步换根，`{{result.articleid}}` 这类模板的 `result`/`pageText` 与 jsonpath 同源；非 JSON 产物 → 作为 html 上下文）；唯一实现 `services/reading.ts` 的 `detailContextOf`（init 非空但零命中 → `RuleEvalError` 点名 ruleDetailInit——宁炸不猜，不拿整页冒充上下文）。tocUrl 模板 `{{$.…}}` 在换根后的上下文上过引擎插值（`tocUrlOf`：静态 URL 直答，其余一律经详情上下文求值；插值段 Miss → 回退 bookUrl，不发残 URL）。
+legado `ruleBookInfo.init` 的内部名：详情面先求值，其结果**整体替换**后续详情规则与 tocUrl 模板的求值上下文**与 html**（legado `setContent(init 产物)` 是 content 单点全换：JSON 产物 → html 与 `ctx.json` 同步换根，`{{result.articleid}}` 这类模板的 `result`/`pageText` 与 jsonpath 同源；非 JSON 产物 → 作为 html 上下文）；唯一实现 `services/bridge.ts` 的 `detailContextOf`（init 非空但零命中 → `RuleEvalError` 点名 ruleDetailInit——宁炸不猜，不拿整页冒充上下文；嗅探来的「这页**可能**是详情页」那条路例外，传 `onEmptyInit: 'no-context'`：取空即「没有书目」而不是把整次搜索升级成错误）。详情五字段的取值单点是同文件的 `detailFieldsOf`（`getDetail` 与搜索面 info 形态共用一份回落链）。tocUrl 模板 `{{$.…}}` 在换根后的上下文上过引擎插值（`tocUrlOf`：静态 URL 直答，其余一律经详情上下文求值；插值段 Miss → 回退 bookUrl，不发残 URL）。
 _Avoid_: init 规则（与 fetch 的 init 姿态易混，交流用内部名）
+
+**纯 `@put` 的 init 是例外**：整条规则只设变量时**不换根**（legado 剥掉 `@put:{…}` 后规则为空，取不到新根），判据归引擎——`engine/parse.ts` 的 `isPutOnlyRule`。
+
+**规则变量表（`ctx.vars`）**:
+`@put` / `@get` 与沙箱 `java.put`/`java.get` 共用的那张键值表（引擎零内部状态，表由调用方持有并跨规则共享——本机库的纯 `@put` init + `@get:{k}` 字段全靠它）。读写唯一实现 `engine/variables.ts` 的 `evalPut`/`evalGetVar`；作用域主人是门面（`reading.getDetail` 一次调用一张表，跨面不传——见 `docs/design/services.md` 已知开口）。
+_Avoid_: 变量池（太泛）、缓存（`cache` 是按源隔离的另一套键值表，别混）
+
 
 **动态请求头（headerRule）**:
 legado `header` 字段的 `@js:`/`<js>` 规则形态的内部名（与静态 JSON 形态互斥同源——同一 raw.header 二选一）：请求前经沙箱求值得到 JSON 头表，叠加 auth/cookie 后发出（device-id 逐请求刷新）；求值失败 → warn 后回退静态头，不吞请求也不炸整链（legado `BaseSource.getHeaderMap` 的 try/catch 口径）。唯一求值点 `services/bridge.ts` 的 `resolveHeaders`；存量由 `SourceRegistry.load` 第七条迁移按 raw 重推。
 _Avoid_: header 规则、动态 header（说内部名）
 
 **探针（probe）**:
-对一个书源真发一次搜索请求，得出可用性实测结论。
+对一个书源真发一次搜索请求，得出可用性实测结论。关键词序列的**第一位是源自带的校验词**（legado `ruleSearch.checkKeyWord` → `rules.probeKeyword`），其后才是通用词。
 _Avoid_: 自测、健康检查
 
 ### 身份与状态
@@ -129,6 +136,10 @@ _Avoid_: 翻页循环、重复过滤（太泛——判据是「本页零新增�
 阅读会话同一时刻只允许一个章节加载在途（`inflight`）；滚动风暴与目录直达都只记意图（`pendingJump`），在途释放后由 `settlePendingLoad()` 补拉（否则那次点击无声消失）。刚失败过的同一章不自动重试——等用户点「重试」。唯一实现 `client/reader-session.ts`。
 _Avoid_: 请求去重（那是网络层语义；这是会话级时序）
 
+**阅读位置（reading position）**:
+「这本书读到哪儿」——章 + 章内比例（`{chapterIndex, offsetRatio}`，存档形态见 `shared/wire.ts` 的 `ShelfProgress`）。**在会话里是状态**：`reader-session.ts` 的 `position` 是唯一真相，滚动测量 / 目录选中 / 存档恢复都只是修正它；落盘时机由单点 `commit(cause)` 判定（`restore` 站定不写、`jump`/`cross` 立即落、`scroll` 防抖落）。换算（位置 ⇄ 像素）唯一实现在 `client/progress.ts`（`locateChapter` / `anchorTop`，跨度同取章高，互逆）。「有没有读过」唯一实现 `shared/wire.ts` 的 `hasProgress`（存档恢复与书架卡片同消费）。服务端落盘口径是 **last-write-wins**：`updatedAt` 只写不读，没有冲突裁决——「只有一个读者」是本设计的前提（两窗口同开同一本会互相覆盖）。
+_Avoid_: 进度（太泛，且要区分「元数据」与「阅读位置」）、阅读记录（那是服务端落盘那一份的别称）、scrollTop（像素是测量值，不是位置本身）
+
 **缓存代际（epoch）**:
 「这份目录 / 正文缓存还有效吗」的唯一算式：按面细分的规则指纹 + baseUrl，**入缓存文件名**而不是删除式失效——换规则后旧代际的文件自然读不到，在途请求写的是它起飞时那个代际（旧在途写回自动无害）。唯一实现 `services/cache-epoch.ts` 的 `rulesEpoch`；裁决在 `services/reading.ts` 的 `getTocInner` / `getChapter`（读与写共用同一次算出的值）。刻意不含 `NovelSource.auth`（登录态刷新会整源缓存全灭）。
 _Avoid_: 版本号（代际是规则指纹，不是自增版本）、缓存键（太泛——文件名还含 safeKey / 章序 / 槽位）
@@ -140,7 +151,7 @@ _Avoid_: 正文键、章节 id（槽位是「代际 × 章名」的指纹，既�
 ### 跨半契约
 
 **书目字段集（shelf metadata field-set）**:
-书架条目 7 个元数据字段（sourceId/title/author/coverUrl/intro/lastChapterName/totalChapters）的「名称 × 类型判别 × 归一化」唯一主人：`shared/wire.ts` 的 `SHELF_META` 表 + `pickShelfMeta`。Shelf.applyPatch 遍历表保值覆盖，shelfBody 与 dispatch.shelfPut 都从 pick 派生；加字段只改这张表。
+书架条目 9 个元数据字段（sourceId/title/author/coverUrl/intro/lastChapterName/kind/wordCount/totalChapters）的「名称 × 类型判别 × 归一化」唯一主人：`shared/wire.ts` 的 `SHELF_META` 表 + `pickShelfMeta`。Shelf.applyPatch 遍历表保值覆盖，shelfBody 与 dispatch.shelfPut 都从 pick 派生；加字段只改这张表。
 _Avoid_: 逐字段 typeof 筛键（那是这张表的抄本）
 
 **来源投影（source projection）**:
@@ -154,6 +165,15 @@ _Avoid_: API 文档（文档是它的抄本）
 **缺键投影（missing-key projection）**:
 工具面把空值字段从规范值中省略的投影——harness 的 lossless-JSON 约束下的职责，不是 wire 口径。
 _Avoid_: 字段过滤
+
+**语义覆盖矩阵（legado coverage matrix）**:
+「本插件对 legado 书源格式做到哪一步」的唯一读数口：一行一条 legado 语义，归属只能是 实现 / 环境不适用 / 待拍板开口 三态（不设「未知」）。唯一实现 `tests/legado-coverage/matrix.ts`（数据）+ `coverage.test.ts`（逐行验证据可回查：实现符号在不在、测试标题在不在、不适用口径在不在文档里）。
+_Avoid_: 兼容性清单、TODO 表（那是会话里的临时说法，机器不认）
+
+**环境不适用（not-applicable）**:
+一条 legado 语义本插件**判为不接并写明理由**的归属；理由只准写在 `docs/design/legado-compat.md`（对面自己没实现的字段也归这里，防止「对面没有」被当成「我们该补」）。判「不适用」而不写文档 = 把裁决写成遗忘，矩阵会红。
+_Avoid_: 不支持（太泛——没说清是裁决还是欠账）、做不了
+
 
 **规范值（canonical value）**:
 工具输出的完整 JSON 值；render 只是它的文本投影。

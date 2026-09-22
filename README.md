@@ -1,12 +1,12 @@
 # @xrn1997/dsh-novel
 
-在 DeepSeek Harness（DSH）的 Web GUI 里读网络小说：导入 [legado](https://github.com/gedoor/legado) 书源 → 搜索 → 加书架 → 连续滚动阅读。AI 助手同时获得五个小说工具，一句「帮我找本书并读第 N 章」就能在对话里完成搜索与阅读。
+在 DeepSeek Harness（DSH）的 Web GUI 里读网络小说：导入 [legado](https://github.com/gedoor/legado) 书源 → 搜索 → 加书架 → 连续滚动阅读。AI 助手同时获得六个小说工具（`dshnovel_` 前缀），一句「帮我找本书并读第 N 章」就能在对话里完成搜索与阅读。
 
 ## 功能特性
 
 - **书源导入**：拖入或选择 .json 文件（可多选）或粘贴 legado 书源 JSON，导入跑在**服务端后台任务**——关掉页面不打断，进度与汇总随时回看；按书源地址自动去重（可用源优先保留）
 - **阅读体验**：封面网格书架（带阅读进度、**每本书标注来源书源**——同源同色色点 + 源名，源被删则如实标「来源已删除」；支持「选择」进多选态**批量删除**）、聚合搜索跑在服务端（进度实时推送、可中途**停止**且保留已搜出的结果、**切走界面不丢结果**、失败源折叠）、连续滚动阅读（滚动到底自动预取下一章）、目录抽屉跳章、字号 / 行距 / 栏宽 / 纸张色可调、深浅主题自适应
-- **AI 助手工具**：搜索、读章、导入书源、试跑书源、查书架五个工具，与 UI 共用同一条链路
+- **AI 助手工具**：搜索、读章、目录、书架（含写）、书源管理、导入书源六个工具（`dshnovel_` 前缀），与 UI 共用同一条链路
 - **章节范围导出**：点「⤓ 下载」先弹范围面板（起止章输入 +「整本 / 当前章起」快捷），确认才开下；部分导出文件名带范围后缀（流式下载、显示进度、可随时取消）
 - **本地 TXT 导入**：本地小说文件（GBK / UTF-8 自动识别）解析章节后入架阅读
 - **书源管理**（调度台 IA，入口在「小说」视图顶部「书源管理」tab）：**待办收件箱**把坏源/未验证置顶成任务卡（批量重验 / 一键验证，处理完自动消解；卡可「✕ 忽略」——待办是提示，成员集一变会自动回来），读数集中在源列表头的**状态带**（共 N · 已启用 · 已停用 · 未验证 · 坏源）；源列表支持文本/状态/分组过滤、行内启停开关（停用源不参与搜索，随时开回）、编辑模式批量启停/验证/删除（做完留在编辑态、勾选保留，成功进反馈条）、单源试跑下钻、登录支持（`POST /sources/:id/auth` 支持 cookie 录入与 `loginUrl` 脚本执行；「去登录」当前只打开源首页——见 `docs/design/client.md` 已知开口）；导入是弹层（拖放/粘贴），完成事项回流待办箱；删除统一模态二次确认（点名登录态失效，危险区/手输口令退役）
@@ -40,11 +40,14 @@ dsh plugin --profile web remove @xrn1997/dsh-novel
 
 | 工具 | 用途 |
 | --- | --- |
-| `novel_search_books` | 在已启用的**文本**书源中聚合搜索（本插件当前仅支持小说文本面），结果逐源分组（单个源失败不影响其他源）；返回的 `url` 字段可作为其他工具的 `bookKey` |
-| `novel_read_chapter` | 获取某本书第 N 章（0 起）的正文纯文本（含章名） |
-| `novel_add_source` | 导入 legado 书源 JSON（对象或数组）；导入只做规范化 + 落盘不探针（新源状态「未验证」），逐条返回 `ok` / `missing` / `dupSkipped`（同址已有可用源，保留已有未新增）结果；可用性结论用 `novel_probe_source` 获取 |
-| `novel_probe_source` | 对已有书源实际发起一次搜索请求，返回实测结论与失败定位 |
-| `novel_shelf` | 查询书架与阅读进度（当前仅 `list`；加书 / 更新进度走阅读器 UI） |
+| `dshnovel_search` | 在已启用的**文本**书源中聚合搜索（本插件当前仅支持小说文本面），结果逐源分组（单个源失败不影响其他源）；返回的 `url` 字段可作为其他工具的 `bookKey` |
+| `dshnovel_read` | 获取某本书第 N 章（0 起）的正文纯文本（含章名）；章序从 `dshnovel_toc` 查 |
+| `dshnovel_toc` | 获取书籍目录：逐章返回章名与 0 起 `chapterIndex`（章名→下标的映射处）与章节 URL |
+| `dshnovel_shelf` | 书架与阅读进度：`list` 列书与进度 / `add` 加书 / `save_progress` 存进度 / `remove` 删书 |
+| `dshnovel_source` | 书源管理：`list` 源清单 / `probe` 实测验证可用性（真实搜索请求 + 失败定位）/ `enable`·`disable` 启停 / `remove` 删除 |
+| `dshnovel_import_source` | 导入 legado 书源 JSON（对象或数组）；导入只做规范化 + 落盘不探针（新源状态「未验证」），逐条返回 `ok` / `missing` / `dupSkipped`（同址已有可用源，保留已有未新增）结果；可用性结论用 `dshnovel_source` 的 `probe` 获取 |
+
+工具名全部锁 `dshnovel_` 前缀——宿主对工具重名直接抛错，插件专属前缀是与生态其他插件的硬边界（名字集合由 `tests/tools/tools.test.ts` 断言钉住）。
 
 ## 配置
 
@@ -156,6 +159,14 @@ pnpm test:pack     # 构建 + 产物自检
 pnpm typecheck     # tsc --noEmit
 ```
 
+**legado 兼容判据三门（`pnpm test` 默认就跑，但依赖本地对面 checkout）**：`tests/legado-coverage/` 里
+`upstream-fields.test.ts`（对面 `data/entities/rule/*.kt` 每个字段都要在覆盖矩阵有归属）与
+`citation-liveness.test.ts`（引用活性：对面 `.kt` 要带目录、任何引用不带行号、不拿不入库笔记当证据）
+**现读对面仓**。默认路径 `C:/develop/GitHub/legado-with-MD3`，不是这里就设
+`DSH_LEGADO_REF=<对面 checkout 路径>`；仓不在场这两门**直接红**（不静默跳过），只有显式
+`DSH_LEGADO_REF=off` 才跳过，且跳过会写进用例名。判据口径与被裁决的缺席面见
+`docs/design/legado-compat.md`。
+
 **默认跳过、需显式打开的四条真链路门控**——`pnpm test` 全绿**不覆盖**它们（真实网络 / 真实安装）：
 
 ```powershell
@@ -164,7 +175,9 @@ $env:DSH_REPROBE='1'; pnpm vitest run tests/reprobe.test.ts
 
 # 正文链路全量审计（搜索→目录→正文逐段实测 + 失败分桶；「verified」只证明搜索面，
 # 正文可用率以本审计为准——它是**报告**：分桶读数靠人判，代码不设通过率断言，
-# 只断言每个注册源都进了审计；报告落 .superpowers/content-audit/，耗时十几分钟）
+# 只断言每个注册源都进了审计；另出「字段到货率」一行（ruleSearch.kind/wordCount 声明源里
+# 真取到值的比例——这两个字段的读取异常按对面 try/catch 吞掉，失败分桶查不到它们）；
+# 报告落 .superpowers/content-audit/，耗时十几分钟）
 $env:DSH_CONTENT_AUDIT='1'; pnpm vitest run tests/content-audit.test.ts
 
 # 真采集上游（把真实站点抓成 compat fixture 快照）
@@ -177,6 +190,36 @@ $env:DSH_INSTALL_CHECK='1'; pnpm vitest run tests/packaging-install.test.ts
 > 说明：常规集证明了引擎 / 服务 / 契约 / 前端逻辑，**不证明任何真实站点可用性、也不证明安装链路**。
 > 这四条门控是这些承诺的唯一自动化验证，需在改动相应链路后手动跑。
 
+**解析面普查（离线，读本地书源库；不属上面四条真链路门控）**——「legado 能解析的书源本插件也能解析」
+这条目标的进度读数口：把现库**每一条规则串**过 `parseRule`、把**每一个脚本里的 `java.*` 调用**与沙箱
+实际挂载面（对面一侧现读 `help/JsExtensions.kt`）对账，落盘报告并断言「未在册的新形态 = 0」。
+
+```powershell
+$env:DSH_PARSE_CENSUS='1'; pnpm vitest run tests/engine/parse-census.test.ts
+```
+
+读出来的是「本仓当场拒绝的语法族」与「脚本在调、对面有、我们没挂的桥方法」两张清单（各带条数与源数）。
+
+**分母要定期换，本库不是判据的全部**。「对面能解析的」这个集合比手上这批源大得多：只跑本机库，
+一条从未出现过的写法就永远不会露出来。把另一批**独立**公开书源灌进同一个门（离线，不联网）：
+
+```powershell
+# 现取两份公开合集（第三方数据，不入库——判据分母不能架在会蒸发的文件上，所以要留下取法）
+#   github.com/jiwangyihao/source-j-legado   （按站分文件的合集，main 分支）
+#   github.com/entr0pia/MyLegadoSource       （单一 bookSource.json）
+# raw.githubusercontent.com 在本机不可达，走 api 的 raw 头：
+#   curl -H "Accept: application/vnd.github.raw" -H "User-Agent: <任意>" `
+#     https://api.github.com/repos/<owner>/<repo>/contents/<path> -o .superpowers/corpus/<file>.json
+# 拼成一个数组（每项 {raw: <legado 源对象>, name: <源名>}）后：
+$env:DSH_PARSE_CENSUS='1'; $env:DSH_PARSE_CENSUS_FILE="$PWD\.superpowers\corpus\all.json"
+pnpm vitest run tests/engine/parse-census.test.ts
+```
+
+2026-09-22 第一次换分母（67 条独立源）的产出：`java.post`（9 源在用，已实现）、`java.t2s` /
+`cacheFile` / `toURL` 三条登记入册，规则语法面**未在册新形态仍为 0**。
+数据源或对面 checkout 读不到即红，不静默跳过；在册条目见该文件顶部的 `KNOWN_RULE_SHAPES` /
+`KNOWN_BRIDGE_GAPS`，实现一条就删一条。
+
 ### 架构速览
 
 ```
@@ -184,7 +227,7 @@ src/
 ├── engine/     # legado 规则引擎（纯函数：解析 → 求值；段级错误追踪；@js 沙箱）
 ├── services/   # 业务门面：抓取（编码检测 / 代理）/ 书源注册表 / 书架 / 缓存 / 本地书
 ├── api/        # /novel-api/* HTTP 路由
-├── tools/      # AI 助手五工具（与 HTTP 共用同一 service 层）
+├── tools/      # AI 助手六工具（与 HTTP 共用同一 service 层）
 ├── index.ts    # Node 侧插件入口（Cordis）
 └── client/     # 浏览器侧：「小说」视图（书架 / 书城 / 书源管理三 tab）
 ```
