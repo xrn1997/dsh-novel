@@ -35,7 +35,7 @@
 
 **取位失败 → Miss；解析到空集合 → 空 List。**
 
-- 选择段（`default` 的 class/id/tag/child/children 与 `css` 段）：`engine/select.ts` 的 `reducePicked` 把 `exclude` 过滤 → `index` 取位 → 空态裁决串成一处，四种失败态 `zero`/`excluded`/`oob`/`sliced` **一律判「选择失败」→ Miss**。
+- 选择段（`default` 的 class/id/tag/child/children 与 `css` 段）：`engine/select.ts` 的 `reducePicked` 把 `exclude` 过滤 → `index` 取位 → 空态裁决串成一处，三种失败态 `zero`/`excluded`/`oob` **一律判「选择失败」→ Miss**（曾有第四态 `sliced`——那是 `.a:b` 被当半开切片的产物，对面没有这种形态，见「legado 取值语义订正」）。
 - 取值段（`engine/select.ts` 的 `getValue`）：同样消费 `reducePicked` 做取位；只有「元素在、取值全空」（`texts.length === 0`）才给空 List。`textNodes` 是唯一恒产 List 的取值段（`select.ts` 的 `textNodes` 分支）。
 - JSONPath 同口径（`engine/jsonpath.ts` 的 `evalJsonPath`）：零命中/取到 `null`/下标越界/切片裁空 → Miss；**解析到空集合**（`[*]` 与 `[]` 是同一通配的两种写法，打在空数组上）→ 空 List。集合型末段（`[*]`、`[a:b]`、`..name`）哪怕只收一项也恒产 List（`jsonpath.ts` 的 `collection` 判定）。
 - **中链 jsonpath 逐项目空态**（`evaluate.ts` 的 `jsonpath` case，「List → 逐项求值合并」分支）：上游是 List 时逐条目按 JSON 求值后**合并**——`miss` 条目不贡献（那是取位失败）；`list` 条目展平合并（空集合贡献零个条目，而不是一个空串条目）；其余（`value`/`matches`/`nodes`）命中即收，**空串也是值**。终局裁决：上游 List 为空 → 空 List（链首已判「解析到空集合」，逐项无物可求，中链不许改口）；非空上游逐条目**全部** `miss` 才是 Miss。链首与中链对同一输入必须给同一种值，否则 `||` 的兜底语义会随链长漂移。
@@ -52,13 +52,13 @@
 
 ## 取值链文法
 
-- **切分次序**（`parse.ts` 顶注「切分次序（钉死）」与 `parseRule`，顺序固定）：② 剥 `##` 净化尾（`parseTails`，`###` 先记 OnlyOne 再剥尾部一个 `#`）→ ③ 剥链首 `-` 反序前缀 → ① 剥完上面两步仍以 `:` 开头 → 整链一个 allinone 段 → ④ 按 `||`/`&&`/`%%` 从左到右分支切分（**混用抛错**）→ ⑤⑥ 段切分与识别（`globalIndex` 全规则连续编号，写进错误定位）→ ⑦ 链尾 `(jsCode)` 与 `js` 末位限制。
+- **切分次序**（`parse.ts` 顶注「切分次序（钉死）」与 `parseRule`，顺序固定）：② 剥 `##` 净化尾（`parseTails`，`###` 先记 OnlyOne 再剥尾部一个 `#`）→ ③ 剥链首 `-` 反序前缀 → ③b **列表用途**剥链首 `+`（对面 `model/webBook/BookList.kt` 与 `model/webBook/BookChapterList.kt` 的列表入口先剥 `-` 再剥 `+`，剥完照常 `getElements`；本仓不剥时该规则恒 Miss = 列表/目录一条不出，2026-09-23 由「不适用」改判）→ ① 剥完上面仍以 `:` 开头 → 整链一个 allinone 段 → ④ 按 `||`/`&&`/`%%` 从左到右分支切分（**混用抛错**）→ ⑤⑥ 段切分与识别（`globalIndex` 全规则连续编号，写进错误定位）→ ⑦ 链尾 `(jsCode)` 与 `js` 末位限制。
 - **分支切分跳过 JS 区域**（`splitTop` → `grammar.jsRegionEnd`）：`js:` 在链首或段界 `@` 后吃到链尾；`<js>…</js>` 块整体是一段。
 - **段切分**（`splitElements`）：单 `@` 是段界，`@@` 是字面 `@`（显式声明形态，段内剥一个 `@`）。XPath 主导规则（`@xpath:`/`//`/`.//`/`/` 开头）的谓词 `@class` 与属性步 `@href` **不切段**，只在 `@已知特殊前缀` 处切；切过一段后回归普通模式（`//x@css:y@text` 成立）。
 - **段识别**（`classifySegment`）：前缀大小写不敏感（真实源有 `@CSS:`/`@JS:`）。白名单 `KNOWN_MODES`（`parse.ts`）之外、又不构成选择器形态 → 解析期 `UnsupportedRuleError`。
 - **终端**：`text`（**全部后代文本**，块级边界落 `\n`）、`textAll`（归一单行）、`ownText`（严格直系文本）、`textNodes`（逐文本节点一条）、`html`（内层）、`all`（outerHTML）、`href`/`src`（自身属性，空则向下兜底第一个含该属性的后代，但 `html`/`body` 包装元素一律不兜底）、`content`（自身属性，兜底第一个 `meta[content]`）。
-- **位置后缀与排除**：`splitIndexSuffix` 从**最后一个** `.` 起取第一个能解析为 `IndexSpec` 的后缀（`all`/整数/`a:b` 切片，均支持负数）；解析不了则整串是名称（`class.note.clearfix` → arg `note.clearfix`）。`!0:2:-1` 是排除，只对选择段（`default` 选择段与 `css`）合法，且与位置索引**不并存**（解析期抛错）。
-- **位置后缀的落点差异**：`default` 段的位置后缀挂在**名称**上（`class.item.5:9` → 选择 5:9 个 `.item`）；隐式 CSS 回落把后缀带进 `css` 段（`a.0` = 选 `a` 再取第 0 个——真实源高频形态，曾被并进选择器 `a.0` 当 class 选择 → 恒零命中 → 首条书名为空）；显式 `@css:` 形态**没有**位置后缀概念，恒整集（`css.ts` 注释「css 显式形态无位置后缀（恒整集）」）。取值段后缀挂在终端后（`@text.5:9`），与选择段同口径裁决。
+- **位置后缀与排除**：`splitIndexSuffix` 从**最后一个** `.` 起取第一个能解析为 `IndexSpec` 的后缀（`all`/整数/**冒号分隔的索引列表**，均支持负数）；解析不了则整串是名称（`class.note.clearfix` → arg `note.clearfix`）。`!0:2:-1` 是排除，只对选择段（`default` 选择段与 `css`）合法，且与位置索引**不并存**（解析期抛错）。
+- **位置后缀的落点差异**：`default` 段的位置后缀挂在**名称**上（`class.item.5:9` → 取索引 5 与 9 两个 `.item`）；隐式 CSS 回落把后缀带进 `css` 段（`a.0` = 选 `a` 再取第 0 个——真实源高频形态，曾被并进选择器 `a.0` 当 class 选择 → 恒零命中 → 首条书名为空）；显式 `@css:` 形态**没有**位置后缀概念，恒整集（`css.ts` 注释「css 显式形态无位置后缀（恒整集）」）。取值段后缀挂在终端后（`@text.5:9`），与选择段同口径裁决。
 - **排除语法与 JS 段的边界**：排除切分用 `/^(.+?)!(-?\d+(?::-?\d+)*)$/`，只对选择段生效；`js:` 段代码里的 `!0`（布尔取反）在段前缀识别时先行返回，不受影响（`parse.ts` 的 `classifySegment`：`js:` 分支先于 `splitExclude`）。
 - **隐式 CSS 回落**（`parse.ts` 的 `isImplicitCss`）：`#id`/`.class` 简写、裸 tag 词、`tag[attr]`、纯属性选择器、`tag.类` 组合、`tag+伪类/组合链`（首词须是 `HTML_TAGS` 成员）、**含选择器特征字符者**（串里有 `#` `[` `>` `+` `~` `=` `,` 任一，或以 `*` 开头——真实源 `ul#ncp3_ul li`、`*[href*=book/chapter]`、`li[style~=width:100%;]`）。这一条放宽的是**「哪串字符像选择器」**：交 `css-select` 求值后，非法选择器仍在求值层抛 `RuleEvalError`（带段定位），只有**合法 CSS 但零命中**才降为 Miss——即「认不出」与「认得但没找到」两种值依旧不折叠（2026-09 审查补记，边界钉在 `tests/engine/parse.test.ts` 的 `it('选择器特征字符 → css 段…')` 与 `it('放宽的边界：无选择器特征的未知串仍在解析期抛…')`）。首词非标签的「词.词」形态（`weirdsyntax.x`、`nonsense:x`）与无特征的未知串（`nonsense span`）与 default 方言有歧义 → **仍抛错**。
 - **构词与解析同属一处**：`normalize` 三个方言分支与 `search-template`/`template` 的 `||` 拆分一律不可自写。`appendTail` 拼串后**用 `parseTails` 回读自校验**（round-trip）：pattern/replacement 含 `##`、与拼接边界 `#` 粘连、追加到 `###` 结尾的 OnlyOne 规则等情况，当场拒绝返回原 rule + warning，由调用方进 `normalize.warnings`。`withImplicitText` 也复用 `jsRegionEnd`，不再按 `||` 盲切 JS 体。
@@ -120,7 +120,7 @@ Native 特有的**隐式终端构词**：`NATIVE_TEXT_FIELDS`（`normalize.ts`�
 | `js-sandbox.ts` 的 no-op 名单：`需要安卓宿主环境` | `java.webView`/crypto/`android.*`/`org.*` → 报「需要安卓宿主环境」 | 不静默 no-op；纯 UI 副作用（toast/copyText/startBrowser/open）则明确 no-op |
 | `xpath.ts` + `js-protocol.ts` | 解析不到、宿主桥未接线（`evaluateRef` 缺失）→ 抛 | 缺接线不降级 |
 
-**例外（规则承认的静默）**：位置越界、切片越界**不抛**（`applyIndex` 静默裁剪），越界定位取不到值 → Miss。这是 legado 行为，也是「越界不抛、语法不认识才抛」的边界。同类静默还有三处，都是**如实**而非掩盖：`@put` 的 JSONPath 求值 Miss → 变量不落盘（`@get` 时自然 Miss，`variables.ts` 的 `putJsonPath`：`if (res.kind === 'miss') return`）；`resolveJsonData` 解析失败 → `undefined` → JSONPath 如实 Miss（`variables.ts` 的 `resolveJsonData` 注释「非法 JSON → undefined」）；`normalize` 对未映射子字段与 v1 未支持字段聚合 warning（宁吵不瞒，不拦导入）。
+**例外（规则承认的静默）**：位置索引越界**不抛**（`applyIndex` 把越界位置逐个丢掉，对面 `if (it in 0 until len)` 同款），全部越界时取不到值 → Miss。这是 legado 行为，也是「越界不抛、语法不认识才抛」的边界。同类静默还有三处，都是**如实**而非掩盖：`@put` 的 JSONPath 求值 Miss → 变量不落盘（`@get` 时自然 Miss，`variables.ts` 的 `putJsonPath`：`if (res.kind === 'miss') return`）；`resolveJsonData` 解析失败 → `undefined` → JSONPath 如实 Miss（`variables.ts` 的 `resolveJsonData` 注释「非法 JSON → undefined」）；`normalize` 对未映射子字段与 v1 未支持字段聚合 warning（宁吵不瞒，不拦导入）。
 
 **字符串化口径**（`EngineValue → 串` 只有一个实现 `js-utils.engineValueToString`）：`value`→text、`list`→`\n` 拼接、`matches`→行内 `\t`、`miss`→`''`，`nodes` 由参数区分 `inner`（`html()`，`java.getString` 口径）与 `outer`（`toString()`，`@js` 的 `host.result` 口径）。`engineValueToStrings`（`java.getStringList`）另把 `value` 按换行切分并滤空行。
 
@@ -159,7 +159,7 @@ Native 特有的**隐式终端构词**：`NATIVE_TEXT_FIELDS`（`normalize.ts`�
 | `tests/engine/reduce.test.ts` | 取值规约单点：`reducePicked` 四态、选择段/取值段同口径、取值段 `!` 排除生效、「取到空」仍是空 List、中链 jsonpath 的「上游空 List 保持空 List / 命中空串不收进 Miss / 逐项全 Miss 才是 Miss / 空子集不贡献空串条目」 |
 | `tests/engine/content-facet.test.ts` | `text.<串>` 选择语义、属性终端与取值用途（含**命名空间属性名向下兜底不泄漏裸 Error**）、模板字面段（识别/切分/求值/链值引用/**插值 Miss 即整段 Miss**）、`##` 尾 `{{chapter.title}}` 插值、中链 jsonpath、**方括号多条目并集（文档序 / 越界条目丢弃 / 全越界 → Miss）** |
 | `tests/engine/js-bindings.test.ts` | 沙箱非严格模式（未声明赋值）、`src`/`book`/`chapter` 绑定、**worker 路线自身的逃逸防御与超时**（`require`/`process`/`Function()` 与 `脚本超时（>Nms）` 口径两条路一致）、**`java.ajax` 语义唯一**（别名/注释干扰拼写一律同步返回，哨兵重跑不多打站点、不重复计日志）、**`java.ajax` 实参规约**（非串按 `String(值)` 交下去、`null` 点名不发请求） |
-| `tests/engine/select.test.ts` | default 段选择/取值、位置与切片、`text`(后代) vs `ownText`(直系) vs `textAll` vs `textNodes`、块级换行、属性缺失→空 List、**链首裸取值终端以文档根为上下文（真源 `chapterName:"text"` 不再逐祖先重复三遍）** |
+| `tests/engine/select.test.ts` | default 段选择/取值、点号位置索引列表（写入序、越界逐个丢、全越界 Miss）、`text`(后代) vs `ownText`(直系) vs `textAll` vs `textNodes`、块级换行、属性缺失→空 List、**链首裸取值终端以文档根为上下文（真源 `chapterName:"text"` 不再逐祖先重复三遍）** |
 | `tests/engine/css.test.ts` | `@css` 段在当前节点集内 find、`!` 排除、非法选择器 → `RuleEvalError`(hits=0) |
 | `tests/engine/parse.test.ts` | 切分次序、位置后缀、`!` 识别、大小写不敏感前缀、隐式 CSS 全形态（含**选择器特征字符放宽与其边界**）、未知段/裸词解析期抛错、`<js>` 块可非末位、`@js:` 吞链尾、**`@put:{…}` 体内 `@` 不切段、`@get:{name}` 剥括号** |
 | `tests/engine/tocurl-interpolation.test.ts` | 斜杠开头 URL 模板插值优先于 XPath 前缀（顶点小说 `{{$.novelId}}` 实证） |
@@ -221,7 +221,7 @@ legado 的 `java.ajax` 是 runBlocking 同步返回响应 body，Node 主线程 
 4. **AES 解密桥**（协议表 `aesBase64DecodeToString` + 引导层 `createSymmetricCrypto(t,k,iv).decryptStr` 链式外壳）：legado 正文解密形态，Node crypto 实现（AES-CBC/ECB + PKCS5/7，key/iv utf8）；密文/密钥不合法 → `JsSandboxError('AES 解密失败…')` 宁炸，`encryptStr` v1 不支持。原先两者都在「需要安卓宿主环境」名单里。
 5. **`@put` 裸值与键访问**（`variables.ts`）：无引号值收（真实源 `@put:{cid:ComicID}`），且按 legado LinkedTreeMap 口径**先按键访问当前 JSON 条目**（`{img:pic}` → `vars.img = 条目.pic`），未命中/非 JSON 上下文 → 字面存。**带引号的值不参与这层推断**（`{img:"pic"}` → `vars.img = 'pic'`）：引号是作者显式表达「我要字面量」的唯一记号，`parsePairs` 第三元把它带到 `evalPut`——丢了它，同一份数据下字面量与键访问两种写法会互相覆盖（2026-09 审查修，钉子「带引号的值是显式字面量」）。豁免只到键访问为止：`$.`/`@json:` 前缀与不支持的规则形态即便带引号仍按声明处理（那是显式语法记号，不是推断）。
 6. **AllInOne 行内标志**（`allinone.ts`）：模式开头 `(?s)`/`(?i)`/`(?si)` 剥离转 JS flags（Java 正则写法，JS 无行内标志——此前直接编译必炸 Invalid group）。
-7. **方括号索引**（`parse.ts` 的 `splitBracketSuffix` + `select.ts` 的 `applyIndex` range 分支）：legado ElementsSingle `[n]` / `[a:b[:c]]`（**闭区间**、负数从尾数、端点越界钳边、step 缺省按方向自动——`[-1:0]` = 整表倒序）/ `[!n…]` 排除；**多条目并集 `[a,b,…]`（可与区间混写）已收**——`select.ts` 的 `positionsFor` multi 分支按 legado `indexSet` 口径：去重、越界条目静默丢弃、结果按文档序，全越界 → Miss（写序不影响结果，与对面「收进 Set 后顺序过滤」一致）。
+7. **方括号索引**（`parse.ts` 的 `splitBracketSuffix` + `select.ts` 的 `applyIndex` range 分支）：legado ElementsSingle `[n]` / `[a:b[:c]]`（**闭区间**、负数从尾数、端点越界钳边、step 缺省按方向自动——`[-1:0]` = 整表倒序）/ `[!n…]` 排除；**多条目并集 `[a,b,…]`（可与区间混写）已收**——`select.ts` 的 `positionsFor` multi 分支按 legado `indexSet` 口径：去重、越界条目静默丢弃、**按写入序取位**（对面 `for (pcInt in indexSet)` 走 LinkedHashSet 插入序），全越界 → Miss。点号形态 `tag.li.0:2` 走同一个 multi（冒号是索引分隔符，见「legado 取值语义订正」）。
 8. **book 变量补字段**（`services/reading.ts`）：`origin`（源 baseUrl——努努书坊 `{{book.origin}}/e/...`）、`tocUrl`、书架上的 `name`/`author`。
 9. **摘要 / HMAC 族**（`js-utils.ts` 的 `jcaHashName` + 协议表四行 `digestHex`/`digestBase64Str`/`HMacHex`/`HMacBase64`）：对面 `help/JsEncodeUtils.kt` 的「消息摘要/散列消息鉴别码」段。**三条不显然的口径**：① 实参顺序是 **data 在前、算法在后**（照抄签名，反过来等于把 API 做坏）；② `HMacHex`/`HMacBase64` 是**大写 H 开头**的畸形名——照搬对面（它靠 `@Suppress("FunctionName")` 保住这个名字），不许"顺手规范化"成 `hMacHex`；③ 算法名是 **JCA 名**（`SHA-256`/`HmacSHA512`）而 node 要 `sha256`/`sha512` → 显式映射表，认不出**点名原样算法名**抛错（对面此时是 `NoSuchAlgorithmException`；静默退成 md5 会产出看着合法的错摘要）。刻意不用 `crypto.getHashNames()` 当白名单：本仓实测 vitest 的 node realm 没有该方法，拿它做判据会让整桥在加载期炸。**期望值全部由 openssl 3.5.6 独立算出**（node crypto 就是实现本身，自证无效），其中 `HMacHex('Hi There','HmacSHA256',0x0b×20)` 那条与 RFC 4231 test case 2 的公开值一致——两条来路对得上才敢钉。钉子：`tests/engine/js-protocol.test.ts` 的「摘要与 HMAC 族」。
 
@@ -305,6 +305,27 @@ legado 的 `java.ajax` 是 runBlocking 同步返回响应 body，Node 主线程 
 
 **book/chapter 是实体不是字典**（同批续）：对面 Rhino 直绑 Kotlin `Book`，脚本会调 `book.setType(4)`（终极全栖）、`book.getVariable("custom")`（穿越小说）。`mkHostObj` 在沙箱里给镜像补上 `getType/setType`、`getVariable/putVariable/removeVariable`、`getName/getBookUrl/getOrigin`。两处刻意分开：Book 变量表与 source 变量表**互不串味**（对面 `Book.variables` 与 `BookSource.variables` 本来就是两个存储，钉子钉住），以及 type 只落回镜像字段——**落库不在本层职责**，本仓也没有 Book 级持久变量存储，所以变量只活一次规则调用（对面跨启动持久；穿越小说恰好只读用户手设值，取不到即空串走默认分支，与对面"未设置"同形）。
 
+## legado 取值语义订正（2026-09-23，与对面同输入对读）
+
+背景：兼容目标判据是「对面能正确解析的书源，本仓也能」，而覆盖矩阵只验**证据存在**（实现符号在代码里、测试标题在用例里），**不验两边取值是否相同**（`tests/legado-coverage/coverage.test.ts` 头注自己写着「覆盖矩阵绿 ≠ 本插件什么都能干」）。这一批是把三条**已标 implemented、实际给错值**的语义按对面改齐——三条都在本仓 HEAD 上离线复现过，对面的期望值出自 `model/analyzeRule/AnalyzeByJSoup.kt` 与 `model/analyzeRule/AnalyzeRule.kt` 的代码路径。
+
+1. **点号位置后缀的冒号是索引分隔符，不是区间**（`parse.ts` 的 `parseIndexSuffix` → `select.ts` 的 `positionsFor` multi）。对面 `ElementsSingle.findIndexSet` 的 legacy 分支对 `.`/`:`/`!` 一律「下一个数字进 `indexDefault`」（它自己的文档注释给的例子就是 `tag.div.-1:10:2` = 三个索引）。本仓此前把 `.a:b` 读成半开切片：四项列表上 `tag.li.0:2@text` 出 A、B，对面出 A、C；`-1:10:2` 这种对面合法的写法更被当选择器当场炸掉。**IndexSpec 的 `slice` 形态随之删除**（对面没有这个概念，`reducePicked` 因此从四态收为三态；JSONPath 自己的切片是另一套 token，不动）。
+2. **多条目取位按写入序，不按文档序**（同一个 `positionsFor`）。对面 `for (pcInt in indexSet) es.add(elements[pcInt])` 走 LinkedHashSet 的插入序，所以 `[3,1]` 出「第4个、第2个」。此前本仓 `sort` 成文档序，并在文档里写成「写序不影响结果」——那是一句把差异讲没的话。**订正**：矩阵 `a-bracket-multi` 与本文的方括号索引节都改了；`select.test.ts`/`content-facet.test.ts` 里钉文档序的预期同步改判。
+3. **OnlyOne（`###`）= 先截取首个匹配、再在其内替换**（`replace.ts`）。对面 `AnalyzeRule.replaceRegex` 的 replaceFirst 分支：`regex.find(result)` 拿 `match.value`，再 `match.value.replaceFirst(regex, replacement)`，无匹配给**空串**。本仓此前做成「原文里只改第一处」——`aXaX` 经 `##X##-###` 对面得 `-`、本仓得 `a-aX`，净化尾留下本该被裁掉的尾巴。捕获组引用（`$1`）因此在**截出的那段**内解析。
+4. **组合符按用途分派形状**（`combine.ts` 新增 `CombineOpts.usage`，取 `ParsedRule.usage`，与沙箱 `resultCtx` 同一份分派轴、不新建第三份）。对面两条路径的合并代码各写一份且不同：列表路径 `getElements` 每支产出 Elements、`&&` 是 `elements.addAll(es)`、`%%` 的驱动长度取 `elementsList[0].size`（**空首支也占第一位** ⇒ 整条为空）；取值路径 `getStringList` 的 `results` 只收非空支、`%%` 驱动取 `results[0]`。本仓此前：`&&`/`%%` 的合并循环只认 value/list 两种 kind ⇒ **节点分支什么也不贡献**，`tag.li&&tag.ul`（3 个 li + 1 个 ul）在列表用途下合并成空 List = 目录整块消失且不报错；`%%` 又循环到 maxLen，把长分支尾项多产出来。现在：全节点 → 合并/交叉出节点集，混节点与字符串 → `UnsupportedRuleError`。
+   **为什么混形状要炸而不是「谁有用取谁」**：对面列表路径的分支只会是 Elements、取值路径只会是 `List<String>`，混形状在对面**没有对应语义**；静默丢一侧正是本仓定的最高罪（空结果冒充失败）。被否决的替代方案：把字符串分支按 HTML 解析成节点再合并——那是给对面没有的形态发明行为，且会让 `&&` 的产物随分支顺序漂移。
+
+**同批对读出来、刻意没在这一批动的**（都已在矩阵登记为 open，附对面锚点）：
+
+- `a-allinone-group-zero`：对面 AllInOne 的行**含 group 0**（`AnalyzeByRegex` 从 `groupValues` 下标 0 起收），字段规则的 `$1`/`$2` 由 `SourceRule.splitRegex` + `makeUpRule` 按组号从那一行取值。本仓行里只有 group 1..n，且**没有 `$n` 映射**（`bridge.firstValue` 取 `rows[i][0]`、`extractItems` 把整行 `join('\t')` 当条目上下文）。**两件事耦合**：只补 group 0 会让 firstValue 从「首捕获组」变「整段」、extractItems 出重复内容——把现在能读的源改坏，所以按「一起做」排队。
+- `a-replace-tail-single-pair`：对面一条规则**只有一对** `##pattern##replacement`，存在第 4 段仅表示 `replaceFirst=true`（第 4 段内容作废）；本仓 `parseTails` 把尾部两两配对成多步。改它要连带重做 `appendTail` 的 round-trip 自校验与 normalize 的方言拼串（`authorPrefix`/`replaceRegex` 都走那条口）。
+- 惰性 `||` 分支（`a-lazy-branch-parse`）：对面 `getStringList`/`getElements` 的分支循环是「取一支、非空即 break」，本仓 `ruleGen` 先把所有分支求完再 combine——首支已命中时，坏分支仍会把整条炸掉。**这条不是取值差，是求值策略差**（对面同一支坏语法同样会抛，只是抛不到），排在上面这些之后。
+- 元素/桥侧的三条契约错值（`h-get-string-unescape-flag`、`h-source-variable`、`b-opt-method-head`）与正文 `replaceRegex` 的阶段错位，属服务层与沙箱桥，见 `docs/design/services.md` 与矩阵行本身的 note。
+
+**门况**：`pnpm test`（含 `tests/legado-coverage/` 五道门）+ `pnpm typecheck` 全绿；改动落在规则引擎，按 AGENTS.md 的纪律另跑真链路门（`DSH_REPROBE` / `DSH_CONTENT_AUDIT`），读数如实写进汇报，不拿「没有异常」当兼容证明。
+
+
+
 ## 已知开口
 
 **历史里已被推翻的结论（别按它们改回去）**
@@ -325,7 +346,7 @@ legado 的 `java.ajax` 是 runBlocking 同步返回响应 body，Node 主线程 
 
 **代码内仍开口的**
 
-10. `engine/types.ts` 的 `Facet` 含 `'explore'`，全仓无生产者/消费者（`normalize.ts` 的 `field: 'ruleExplore'` warning）。`engine/combine.ts` 的 `combine`/`combineAnd`/`combineZip` 三处 `loc` 参数都复制了 facet 字面量联合而不是引 `Facet`——加面时四处要改。
+10. `engine/types.ts` 的 `Facet` 含 `'explore'`，全仓无生产者/消费者（`normalize.ts` 的 `field: 'ruleExplore'` warning）。
 11. `engine/evaluate.ts` 的 `evalNonJs` 里 `case 'allinone'` 与 `case 'getvar'` 不校验链位（只有 `allinone` 经 `evaluate.ts` 的 `checkChainStart` 判「必须是分支首位」），但 `allinone` 实际靠 parse 的「整链以 `:` 开头」保证唯一性；`@get:name` 允许出现在链中段并替换链值（`evaluate.ts` 的 `case 'getvar'`）。`jsonpath` 中链已合法化（上游修复后 legado 语义，见「段链衔接的显式检查」）。
 12. `engine/js-protocol.ts` 的 `BridgeDeps.contentBase` 是可变捕获状态：`java.setContent` 写它（`js-protocol.ts` 的 `method('setContent')`：`d.contentBase = …`）、`java.getString*` 读它（`js-protocol.ts` 的 `d.contentBase ?? d.result`）——同一次求值内多次 `setContent` 会互相影响（legado 同款，但未写进任何文档）。
 13. 两项**需要拍板的未决口径**（`AuthRequiredError` 声明未落地、探针「分段 trace」无结构化字段）属服务层与 wire 面——不在本文重复，见 `docs/design/services.md` 的「已知开口」。引擎侧相关事实只有一条：`TraceStep` 目前只被 `evaluateWithTrace` 的生产者内部消费，没有第二个消费者。

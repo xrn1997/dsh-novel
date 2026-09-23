@@ -17,18 +17,33 @@ describe('applyReplaces 净化（## 替换）', () => {
       .toEqual({ kind: 'value', text: 'a-b-c' })
   })
 
-  it('OnlyOne 只替换第一个匹配（逐项各自首配）', () => {
+  it('OnlyOne 先截取首个匹配、再在该匹配内替换（对面 replaceRegex 的 replaceFirst 分支）', () => {
+    // 对面 AnalyzeRule.replaceRegex：`regex.find(result)` 取 match.value，
+    // 再 `match.value.replaceFirst(regex, replacement)`——**替换作用在截取出来的那一小段上**，
+    // 产物就是那一小段（不是「原文里只改第一处」）。此前本仓按后者实现：'aXaX' → 'a-aX'（错值，
+    // 净化尾因此留下本该被裁掉的尾巴）。
     const v = { kind: 'value', text: 'aXaX' } as const
     expect(applyReplaces(v as unknown as EngineValue, [step('X', '-')], true))
-      .toEqual({ kind: 'value', text: 'a-aX' })
+      .toEqual({ kind: 'value', text: '-' })
     const list = { kind: 'list', items: ['aXaX', 'bXbX'] } as const
     expect(applyReplaces(list as unknown as EngineValue, [step('X', '-')], true))
-      .toEqual({ kind: 'list', items: ['a-aX', 'b-bX'] })
+      .toEqual({ kind: 'list', items: ['-', '-'] })
   })
 
-  it('OnlyOne 下即使 flags 带 g 也被剥掉（只配首处）', () => {
+  it('OnlyOne 无匹配 → 空串（对面 `else -> ""`，不保留原文）', () => {
+    expect(applyReplaces({ kind: 'value', text: 'abc' }, [step('X', '-')], true))
+      .toEqual({ kind: 'value', text: '' })
+  })
+
+  it('OnlyOne 的捕获组引用在截取的匹配内解析', () => {
+    // 'xabyab' 首个匹配是 'ab'，在其内 $2$1 → 'ba'（保留原文两处的那条旧实现给不出这个值）
+    expect(applyReplaces({ kind: 'value', text: 'xabyab' }, [step('(a)(b)', '$2$1')], true))
+      .toEqual({ kind: 'value', text: 'ba' })
+  })
+
+  it('OnlyOne 下即使 flags 带 g 也在匹配内只配首处（剥 g 的那一侧改成截取语义）', () => {
     expect(applyReplaces({ kind: 'value', text: 'aXaX' }, [step('X', '-', 'g')], true))
-      .toEqual({ kind: 'value', text: 'a-aX' })
+      .toEqual({ kind: 'value', text: '-' })
   })
 
   it('多个替换步按顺序串联（前一步结果喂给下一步）', () => {

@@ -2,7 +2,7 @@ import type { Cheerio, CheerioAPI } from 'cheerio'
 import { isTag } from 'domhandler'
 import type { AnyNode, Element, Text } from 'domhandler'
 import type { EngineValue, Facet, IndexSpec, Segment, SegmentLoc } from './types.js'
-import { RuleEvalError } from './errors.js'
+import { RuleEvalError, UnsupportedRuleError } from './errors.js'
 import { cleanText, isNodeValue, nodeText } from './dom.js'
 
 type DefaultSegment = Extract<Segment, { kind: 'default' }>
@@ -20,8 +20,10 @@ export function isGetValueSegment(seg: DefaultSegment): boolean {
 /**
  * 位置后缀统一口径：
  * - null / all → 整个数组
- * - index：第 n 个（负数从尾数）；越界 → 'miss'（不抛）
- * - slice：半开区间 [from,to)，负数从尾数，越界静默裁剪
+ * - index：第 n 个（负数从尾数）；越界 → 该位置不入选
+ * - multi：条目**逐个**展开、去重靠 Set、**保持写入序**（对面 `for (pcInt in indexSet)`）；
+ *   越界者静默丢弃（对面 `if (it in 0 until len)`）
+ * - 取位结果为空 → 'miss'（选择失败语义，不抛、也不回退全集）
  *
  * 设计文档：docs/design/engine.md
  */
@@ -33,10 +35,11 @@ function positionsFor(len: number, index: IndexSpec): number[] {
     return i < 0 || i >= len ? [] : [i]
   }
   if (index.kind === 'multi') {
-    // legado ElementsSingle：条目收进 `MutableSet<Int>`（去重、越界静默丢弃），最后按文档序过滤
+    // legado ElementsSingle：条目收进 `MutableSet<Int>`（去重、越界静默丢弃），
+    // 取位时按**插入序**遍历（LinkedHashSet）——写序影响结果，不是「按文档序过滤」。
     const set = new Set<number>()
     for (const spec of index.entries) for (const p of positionsFor(len, spec)) set.add(p)
-    return [...set].sort((a, b) => a - b)
+    return [...set]
   }
   if (index.kind === 'range') {
     // 方括号区间（legado ElementsSingle 口径）：闭区间 + 负数从尾数 + 端点越界钳到边界；
@@ -50,19 +53,19 @@ function positionsFor(len: number, index: IndexSpec): number[] {
     for (let i = from; step > 0 ? i <= to : i >= to; i += step) out.push(i)
     return out
   }
-  const from = index.from === null ? 0 : (index.from < 0 ? len + index.from : index.from)
-  const to = index.to === null ? len : (index.to < 0 ? len + index.to : index.to)
-  const out: number[] = []
-  for (let i = Math.max(from, 0); i < Math.max(to, 0); i++) if (i < len) out.push(i)
-  return out
+  // 形态穷尽由编译器把住：新增 IndexSpec 形态而忘了在这里落位 ⇒ 下面这行编译不过
+  // （不留「认不出就当空集合」的兜底——那正是本仓定的「空结果冒充失败」）。
+  const impossible: never = index
+  throw new UnsupportedRuleError(`未知索引形态 ${JSON.stringify(impossible)}`, {
+    facet: 'rule', segmentIndex: -1, segmentRaw: '位置后缀',
+  })
 }
 
 export function applyIndex<T>(arr: T[], index: IndexSpec | null): T[] | 'miss' {
   if (index === null || index.kind === 'all') return arr
   const out = positionsFor(arr.length, index).map((i) => arr[i])
-  // 选择段四态一律 Miss（分叉①裁决）；slice 的「裁空」不是取位失败，保持 arr.slice 旧口径给空数组
-  if (out.length === 0 && index.kind !== 'slice') return 'miss'
-  return out
+  // 取位为空 = 「选择失败」语义 → Miss（空 List 不是节点集，中链必抛「上游结果不是节点集」）
+  return out.length === 0 ? 'miss' : out
 }
 
 /**
@@ -78,13 +81,13 @@ export function applyExclude<T>(arr: T[], exclude: number[] | undefined): T[] {
 /** 选择失败原因（规约单点） */
 export type PickedOutcome<T> =
   | { ok: true; items: T[] }
-  | { ok: false; reason: 'zero' | 'excluded' | 'oob' | 'sliced' }
+  | { ok: false; reason: 'zero' | 'excluded' | 'oob' }
 
 /**
  * 选择结果后处理单点（规约单点）：exclude 过滤 → index 取位 → 空态裁决，唯一实现
- * （default 选择段与 css 段同源——此前两处各写一份且已语义分叉：切片裁空 default 给空 List、
- * css 给 Miss，而空 List 不是节点集、中链必抛「上游结果不是节点集」）。
- * 口径：四态皆「选择失败」语义，调用方按 reason 组 Miss detail；
+ * （default 选择段与 css 段同源——此前两处各写一份且已语义分叉：同一种取位在两段给两种结果，
+ * 而空 List 不是节点集、中链必抛「上游结果不是节点集」）。
+ * 口径：三态皆「选择失败」语义，调用方按 reason 组 Miss detail；
  * 「合法零条目（空 List）」只属于取值段（getValue：元素在、取值全空）。legado：先排除再取位。
  */
 export function reducePicked<T>(
@@ -95,7 +98,6 @@ export function reducePicked<T>(
   if (excluded.length === 0) return { ok: false, reason: 'excluded' }
   const applied = applyIndex(excluded, index)
   if (applied === 'miss') return { ok: false, reason: 'oob' }
-  if (applied.length === 0) return { ok: false, reason: 'sliced' }
   return { ok: true, items: applied }
 }
 
@@ -164,8 +166,7 @@ function pickNodes(
     const detail =
       reduced.reason === 'zero' ? `选择 ${label} 未命中节点`
         : reduced.reason === 'excluded' ? `选择 ${label} 排除 ${JSON.stringify(seg.exclude)} 后为空`
-          : reduced.reason === 'oob' ? `位置 ${JSON.stringify(seg.index)} 越界`
-            : `位置 ${JSON.stringify(seg.index)} 切片裁空（原集合 ${pickedArr.length} 项）`
+          : `位置 ${JSON.stringify(seg.index)} 全部越界（原集合 ${pickedArr.length} 项）`
     return { kind: 'miss', detail }
   }
   return { kind: 'nodes', nodes: $(reduced.items) }
@@ -219,8 +220,7 @@ function getValue(
     const detail =
       reduced.reason === 'zero' ? '取值时上游节点集为空'
         : reduced.reason === 'excluded' ? `取值排除 ${JSON.stringify(seg.exclude)} 后为空`
-          : reduced.reason === 'oob' ? `位置 ${JSON.stringify(seg.index)} 越界`
-            : `位置 ${JSON.stringify(seg.index)} 切片裁空（原集合 ${arr.length} 项）`
+          : `位置 ${JSON.stringify(seg.index)} 全部越界（原集合 ${arr.length} 项）`
     return { kind: 'miss', detail }
   }
   const applied = reduced.items

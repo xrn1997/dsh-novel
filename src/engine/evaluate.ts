@@ -440,7 +440,11 @@ function requireNodes(cur: EngineValue | null, rt: Runtime, loc: SegmentLoc): Ch
 // ── 分支结果 → 组合 → 反序 → 替换尾 ─────────────────────────────────────
 
 function finalize(parsed: ParsedRule, values: EngineValue[], facet: Facet, rt: Runtime): EngineValue {
-  let value = combine(values, parsed.combinator, { facet, segmentIndex: -1, segmentRaw: '%%（组合符）' })
+  // 组合按**用途**分派（对面 getElements / getStringList 两条路径的合并形状不同，见 combine.ts）
+  let value = combine(values, parsed.combinator, {
+    usage: parsed.usage,
+    loc: { facet, segmentIndex: -1, segmentRaw: '%%（组合符）' },
+  })
   if (parsed.reverse) value = reverseList(value)
   // 取值用途的链终点串化**先于** ## 替换（对面 replaceRegex 作用于已转成字符串的结果）
   if (rt.usage === 'value' && value.kind === 'nodes') value = nodesAsString(value.nodes)

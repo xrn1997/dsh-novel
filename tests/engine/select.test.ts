@@ -23,6 +23,46 @@ describe('链首裸取值终端的上下文（真源 ruleToc.chapterName = "text
   })
 })
 
+describe('点号位置后缀 = 索引列表（对面 ElementsSingle.findIndexSet 的 legacy 分支）', () => {
+  // 对面把 `.` / `:` / `!` 分隔的**每个数字都收成一个索引**（`tag.div.-1:10:2` = 倒数第一、第十、第二），
+  // 冒号不是区间符。本仓原先把 `.a:b` 读成半开切片 → `.0:2` 在四项上取 A、B（对面取 A、C），
+  // 落在目录/列表规则上就是**少一章、错一章**的静默错值。
+  const FOUR = '<ul><li>A</li><li>B</li><li>C</li><li>D</li></ul>'
+  const at = (rule: string) => import('../../src/engine/evaluate.js')
+    .then(({ evaluate }) => evaluate(rule, { html: FOUR, baseUrl: 'https://a.com' }, 'toc', 'value'))
+
+  it('tag.li.0:2@text → 索引 0 与 2（写入序），不是 [0,2) 切片', async () => {
+    expect(await at('tag.li.0:2@text')).toEqual({ kind: 'list', items: ['A', 'C'] })
+  })
+  it('负数从尾数、越界者逐个丢弃（对面 if it in 0 until len）', async () => {
+    expect(await at('tag.li.-1:10:2@text')).toEqual({ kind: 'list', items: ['D', 'C'] })
+  })
+  it('全部越界 → Miss（不回退全集）', async () => {
+    expect((await at('tag.li.7:9@text')).kind).toBe('miss')
+  })
+})
+
+describe('列表规则链首 `+` 前缀（对面 BookList / BookChapterList 的入口剥除）', () => {
+  // 对面在**列表入口**先剥 `-`（置 reverse）再剥 `+`（不做事），剥完照常 `getElements(ruleList)`——
+  // 所以 `+tag.li` 在对面出的是整个列表，不是「认不出」。本仓此前不认它：链尾当 CSS/属性段处理
+  // ⇒ 恒 Miss ⇒ 搜索列表与目录**一条都不出**（矩阵 a-plus-prefix 原先写「本仓会在解析期炸」，
+  // 那句对本仓行为也不成立——本轮实测是 Miss）。
+  const html = '<ul><li>A</li><li>B</li></ul>'
+  const run = (rule: string, usage: 'list' | 'value') => import('../../src/engine/evaluate.js')
+    .then(({ evaluate }) => evaluate(rule, { html, baseUrl: 'https://a.com' }, 'toc', usage))
+
+  it('列表用途下 `+tag.li@text` 出全部条目（与不带 + 的同一条规则同形）', async () => {
+    expect(await run('+tag.li@text', 'list')).toEqual(await run('tag.li@text', 'list'))
+    expect((await run('+tag.li@text', 'list') as { items: string[] }).items).toEqual(['A', 'B'])
+  })
+  it('`-` 与 `+` 同时在前时按对面次序：先剥 - 反序、再剥 +', async () => {
+    expect((await run('-+tag.li@text', 'list') as { items: string[] }).items).toEqual(['B', 'A'])
+  })
+  it('取值用途不在对面的剥除点上（只列表入口剥 +），本仓不扩大豁免', async () => {
+    expect((await run('+tag.li@text', 'value')).kind).not.toBe('list')
+  })
+})
+
 describe('default 选择段', () => {
   it('class / tag / id / child / children', () => {
     const v = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: null }, $, root(), loc(0, 'class.item'), 'toc')
@@ -47,15 +87,13 @@ describe('default 选择段', () => {
     expect(at({ kind: 'index', value: 5 }).kind).toBe('miss')     // 越界不抛 → Miss
     expect(at({ kind: 'index', value: -9 }).kind).toBe('miss')   // 负数越界同样 → Miss
   })
-  it('切片半开区间，越界裁剪', () => {
-    const v = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: { kind: 'slice', from: 1, to: 99 } }, $, root(), loc(0, 'x'), 'toc')
-    expect((v as any).nodes).toHaveLength(2)                       // [1,99) → 裁到末尾
-    const neg = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: { kind: 'slice', from: -2, to: null } }, $, root(), loc(0, 'x'), 'toc')
-    expect((neg as any).nodes).toHaveLength(2)                     // 负 from 从尾数
-  })
-  it('切片裁空（原集合非空）→ Miss（选择失败语义——空 List 不是节点集，中链必抛）', () => {
-    const v = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: { kind: 'slice', from: 5, to: 99 } }, $, root(), loc(0, 'x'), 'toc')
-    expect(v.kind).toBe('miss')
+  it('多索引取位：写入序、越界者逐个丢弃、全越界 → Miss', () => {
+    const multi = (...v: number[]) => ({ kind: 'multi', entries: v.map((x) => ({ kind: 'index', value: x })) })
+    const at = (index: any) => evalDefault({ kind: 'default', mode: 'class', arg: 'item', index }, $, root(), loc(0, 'x'), 'toc')
+    // 对面 `for (pcInt in indexSet)` 走 LinkedHashSet 插入序：写 [2,0] 出的是「第3个、第1个」
+    expect((at(multi(2, 0)) as any).nodes.toArray().map((n: any) => n.attribs.class)).toEqual(['item odd', 'item'])
+    expect((at(multi(1, 99)) as any).nodes).toHaveLength(1)          // 越界的 99 静默丢弃
+    expect(at(multi(5, 9)).kind).toBe('miss')                        // 全越界 → 选择失败
   })
 })
 
@@ -95,9 +133,9 @@ describe('default 取值段', () => {
     const v = evalDefault({ kind: 'default', mode: 'text', arg: null, index: { kind: 'index', value: 9 } }, $, all.nodes, loc(1, 'text'), 'toc')
     expect(v.kind).toBe('miss')
   })
-  it('取值段切片裁空 → Miss（与选择段同口径；此前分叉给空 List）', () => {
+  it('取值段索引全越界 → Miss（与选择段同口径；此前分叉给空 List）', () => {
     const all = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: null }, $, root(), loc(0, 'class.item'), 'toc') as any
-    const v = evalDefault({ kind: 'default', mode: 'text', arg: null, index: { kind: 'slice', from: 5, to: 9 } }, $, all.nodes, loc(1, 'text'), 'toc')
+    const v = evalDefault({ kind: 'default', mode: 'text', arg: null, index: { kind: 'multi', entries: [{ kind: 'index', value: 5 }, { kind: 'index', value: 9 }] } }, $, all.nodes, loc(1, 'text'), 'toc')
     expect(v.kind).toBe('miss')
   })
   it('text 清洗：全角空格与连续空白', () => {

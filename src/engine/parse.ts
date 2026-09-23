@@ -42,6 +42,13 @@ export function parseRule(rule: string, facet: Facet = 'rule', usage: RuleUsage 
     reverse = true
     rest = rest.slice(1).trimStart()
   }
+  // ③b 列表用途的 `+` 前缀：对面在**列表入口**（model/webBook/BookList.kt 与
+  //  model/webBook/BookChapterList.kt 的 bookList/chapterList）先剥 `-` 置反序、再剥 `+`（剥完不做事），
+  //  剥完照常 getElements——所以 `+tag.li` 在对面出的是整个列表。本仓不剥时它会落成 CSS/属性段
+  //  ⇒ 恒 Miss ⇒ 列表与目录一条都不出。只在 list 用途剥：取值路径对面没有这条剥除，不扩大豁免。
+  if (usage === 'list' && rest.startsWith('+')) {
+    rest = rest.slice(1).trimStart()
+  }
 
   // ① AllInOne：剥完替换尾与反序前缀后仍以 : 开头 → 整链一个 allinone 段
   if (rest.startsWith(':')) {
@@ -458,13 +465,16 @@ function classifyDefault(raw: string, exclude: number[] | undefined, el: string,
   throw new UnsupportedRuleError('无法识别的段类型（default 段白名单之外）', { facet: ctx.facet, segmentIndex: ctx.counter, segmentRaw: el })
 }
 
-/** 位置后缀解析：all | 整数（含负） | a:b / a: / :b 切片（含负；半开区间） */
+/** 位置后缀解析：`all` | 整数（含负） | 冒号分隔的**索引列表**（`0:2` = 第0与第2个）
+ *  对面 `ElementsSingle.findIndexSet` 的 legacy 分支对 `.`/`:`/`!` 一律「取下一个数字进集合」，
+ *  冒号不是区间运算符——本仓曾把它读成半开切片（`.0:2` 出 [0,1) = A、B，对面出 A、C），
+ *  且 `-1:10:2` 这种对面合法的写法整个被当选择器炸掉。 */
 function parseIndexSuffix(suffix: string): IndexSpec | null {
   if (suffix === 'all') return { kind: 'all' }
   if (/^-?\d+$/.test(suffix)) return { kind: 'index', value: Number(suffix) }
-  const m = /^(-?\d*):(-?\d*)$/.exec(suffix)
-  if (m && (m[1] !== '' || m[2] !== '')) {
-    return { kind: 'slice', from: m[1] === '' ? null : Number(m[1]), to: m[2] === '' ? null : Number(m[2]) }
+  const nums = suffix.split(':')
+  if (nums.length > 1 && nums.every((n) => /^-?\d+$/.test(n))) {
+    return { kind: 'multi', entries: nums.map((n) => ({ kind: 'index', value: Number(n) })) }
   }
   return null
 }

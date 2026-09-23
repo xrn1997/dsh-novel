@@ -52,7 +52,7 @@ _Avoid_: 场景、模式（`EpochImpact`「影响面」是**另一条轴**——
 _Avoid_: 步骤
 
 **取值规约（reduction）**:
-链上空态裁决口径（**取位失败 → Miss；解析到空集合 → 空 List**）。Miss = 失败：选择零命中 / 排除后空 / 下标越界 / 切片裁空——链中穿透；空 List = 合法零条目：元素在而取值全空，或键存在且值为空数组。选择段（default/css）与取值段（getValue）的取位/空态裁决唯一实现在 `engine/select.ts` 的 `reducePicked`（zero/excluded/oob/sliced 四态皆「取位失败」）；取值段的「元素在、取值全空 → 空 List」住 `getValue`。JSONPath（`engine/jsonpath.ts`）同口径：零命中/越界/切片裁空 → Miss，空数组 → 空 List；下标与切片均支持负数从尾数（与 `select.applyIndex` 一致）。
+链上空态裁决口径（**取位失败 → Miss；解析到空集合 → 空 List**）。Miss = 失败：选择零命中 / 排除后空 / 下标越界 / 索引列表全部越界——链中穿透；空 List = 合法零条目：元素在而取值全空，或键存在且值为空数组。选择段（default/css）与取值段（getValue）的取位/空态裁决唯一实现在 `engine/select.ts` 的 `reducePicked`（zero/excluded/oob 三态皆「取位失败」——原第四态 `sliced` 随「`.a:b` 是半开切片」这个误读一起删，对面冒号是**索引分隔符**）；取值段的「元素在、取值全空 → 空 List」住 `getValue`。多条目取位（点号 `.a:b` 与方括号 `[a,b]`）按**写入序**，与对面 LinkedHashSet 的插入序同形。JSONPath（`engine/jsonpath.ts`）同口径：零命中/越界/切片裁空 → Miss，空数组 → 空 List；下标与切片均支持负数从尾数（与 `select.applyIndex` 一致）。
 _Avoid_: 空结果（太泛——Miss 与空 List 是两种值）
 
 **取值用途（rule usage）**:

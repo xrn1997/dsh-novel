@@ -58,12 +58,14 @@ export const DEFAULT_JS_TIMEOUT_MS = 2000
 export type IndexSpec =
   | { kind: 'all' }
   | { kind: 'index'; value: number }
-  | { kind: 'slice'; from: number | null; to: number | null }
-  // 方括号索引区间（legado ElementsSingle `[a:b[:c]]` 形态）：**闭区间**（含两端，与 `.` 点号
-  // 半开切片不同口径——legado bracket 语义），step 缺省按方向自动（from>to → -1）；负数从尾数。
+  // 方括号索引区间（legado ElementsSingle `[a:b[:c]]` 形态）：**闭区间**（含两端），
+  // step 缺省按方向自动（from>to → -1）；负数从尾数。
   // `[-1:0]` = 整表倒序（legado 文档「特殊用法 tag.div[-1:0] 可在任意地方让列表反向」）
   | { kind: 'range'; from: number; to: number; step?: number }
-  // 方括号多条目并集（legado ElementsSingle `[a,b,…]`：条目收进去重 Set，越界静默丢弃，按文档序过滤）
+  // 多条目并集（legado ElementsSingle）：点号/冒号形态 `.0:2` 与方括号形态 `[0,2]` 都收成它——
+  // 对面 `findIndexSet` 对 `.`/`:`/`!` 与 `[a,b]` 两条路都是**逐个数字累进 indexSet**，
+  // 冒号不是区间符。取位走 `for (pcInt in indexSet)`（LinkedHashSet 插入序）⇒ **写入序**，
+  // 去重靠 Set、越界静默丢弃。
   | { kind: 'multi'; entries: IndexSpec[] }
 
 export type Segment =

@@ -48,17 +48,55 @@ describe('&& 合并', () => {
     const m: EngineValue = { kind: 'matches', rows: [['a', 'b']] }
     expect(() => combine([m, m], 'and')).toThrow(UnsupportedRuleError)
   })
+  it('&& 列表用途合并节点集（对面 getElements 的 addAll），不再把节点丢成空列表', () => {
+    // 对面列表路径每个分支产出 Elements，`&&` 走 `elements.addAll(es)` —— 节点是**在场的数据**。
+    // 本仓此前在合并里只认 value/list 两种 kind，节点分支什么也不贡献：
+    // `tag.li&&tag.ul`（3 个 li + 1 个 ul）合并成空 List ⇒ 目录整块消失，且不带任何错误。
+    const $ = cheerio.load('<ul><li>A</li><li>B</li><li>C</li></ul>')
+    const a: EngineValue = { kind: 'nodes', nodes: $('li') }
+    const b: EngineValue = { kind: 'nodes', nodes: $('ul') }
+    const v = combine([a, b], 'and', { usage: 'list' })
+    expect(v.kind).toBe('nodes')
+    if (v.kind !== 'nodes') return
+    expect(v.nodes.toArray().map((n) => (n as Element).name)).toEqual(['li', 'li', 'li', 'ul'])
+  })
+  it('&& 列表用途混节点与字符串 → UnsupportedRuleError（宁炸，不静默丢其中一侧）', () => {
+    const $ = cheerio.load('<ul><li>A</li></ul>')
+    expect(() => combine([{ kind: 'nodes', nodes: $('li') }, { kind: 'value', text: '乙' }], 'and', { usage: 'list' }))
+      .toThrow(UnsupportedRuleError)
+  })
 })
 
 describe('%% 交叉合并', () => {
-  it('三个列表轮流取第 i 个，最长列表剩余项按次序追加', () => {
-    // 注意：期望值必须含 'b2x'——「最长列表剩余项按次序追加」的语义（双重循环到 maxLen）
+  it('驱动长度 = **首个参与分支**的长度（对面 results[0].indices），更长分支的尾项不产出', () => {
+    // 本仓此前循环到 maxLen，把 b2x 也带出来：对面 `for (i in results[0].indices)` 只走第一支的长度，
+    // 尾项**被丢弃**——交叉合并的产物长度由第一支决定，这是规则作者用来对齐条数的机制。
     const v = combine([
       { kind: 'list', items: ['a1', 'a2'] },
       { kind: 'list', items: ['b1', 'b2', 'b2x'] },
       { kind: 'list', items: ['c1'] },
     ], 'zip')
-    expect(v).toEqual({ kind: 'list', items: ['a1', 'b1', 'c1', 'a2', 'b2', 'b2x'] })
+    expect(v).toEqual({ kind: 'list', items: ['a1', 'b1', 'c1', 'a2', 'b2'] })
+  })
+  it('首支为空时由下一个非空支驱动（取值路径 results 只收非空分支）', () => {
+    expect(combine([
+      { kind: 'list', items: [] },
+      { kind: 'list', items: ['b1', 'b2'] },
+      { kind: 'value', text: 'c1' },
+    ], 'zip')).toEqual({ kind: 'list', items: ['b1', 'c1', 'b2'] })
+  })
+  it('列表用途：节点集交叉合并后仍是节点集；首支为空 ⇒ 整体为空（对面 elementsList[0]）', () => {
+    const $ = cheerio.load('<ul><li class="a">A1</li><li class="a">A2</li><li class="b">B1</li><li class="b">B2</li></ul>')
+    const v = combine([{ kind: 'nodes', nodes: $('li.a') }, { kind: 'nodes', nodes: $('li.b') }], 'zip', { usage: 'list' })
+    expect(v.kind).toBe('nodes')
+    if (v.kind !== 'nodes') return
+    expect(v.nodes.toArray().map((n) => $(n).text())).toEqual(['A1', 'B1', 'A2', 'B2'])
+    // 对面列表路径把**每个**分支结果都收进 elementsList（空的也收），驱动长度取 elementsList[0]
+    const emptyFirst = combine([
+      { kind: 'nodes', nodes: $('li.nope') },
+      { kind: 'nodes', nodes: $('li.b') },
+    ], 'zip', { usage: 'list' })
+    expect(emptyFirst.kind).toBe('miss')
   })
   it('miss 分支静默跳过（legado 语义：results 只收非空分支）', () => {
     expect(combine([{ kind: 'list', items: ['a'] }, { kind: 'miss', detail: 'x' }], 'zip'))

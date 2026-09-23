@@ -69,11 +69,12 @@ describe('@put / @get 链语义', () => {
 })
 
 describe('evaluate 总装（引擎语义复查）', () => {
-  it('Miss ≠ 空列表：css 零命中链透传 Miss；取位失败（切片裁空）也是 Miss；合法零条目才是空 List', async () => {
+  it('Miss ≠ 空列表：css 零命中链透传 Miss；取位失败（索引越界）也是 Miss；合法零条目才是空 List', async () => {
     const miss = await evaluate('@css:.nope@text', { html: searchHtml }, 'search')
     expect(miss.kind).toBe('miss')
-    // 取值段切片裁空 = 取位失败 → Miss（与选择段 reducePicked 同口径；此前误判「合法空 List」）
-    const empty = await evaluate('@css:.name@text.0:0', { html: searchHtml }, 'search')
+    // 取值段索引全越界 = 取位失败 → Miss（与选择段 reducePicked 同口径；此前误判「合法空 List」）。
+    // 用单个 .name 的确定页面：`.5:9` 对面逐个越界 → 集合空 → Miss。
+    const empty = await evaluate('@css:.name@text.5:9', { html: '<p class="name">甲</p>' }, 'search')
     expect(empty.kind).toBe('miss')
     // 合法零条目：元素在、取值全空（属性缺失/ownText 无直系文本）→ 空 List
     const legit = await evaluate('@css:.name@ownText', { html: '<p class="name"></p>' }, 'search')

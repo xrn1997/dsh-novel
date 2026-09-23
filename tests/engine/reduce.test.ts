@@ -18,11 +18,13 @@ const ctx = { html: HTML, baseUrl: 'https://a.com' }
 
 describe('reducePicked（选择结果后处理单点：exclude → index → 空态裁决）', () => {
   const arr = [1, 2, 3]
-  it('四态：zero / excluded / oob / sliced 全部是「选择失败」', () => {
+  it('三态：zero / excluded / oob 全部是「选择失败」', () => {
     expect(reducePicked<number>([], undefined, null)).toEqual({ ok: false, reason: 'zero' })
     expect(reducePicked(arr, [0, 1, 2], null)).toEqual({ ok: false, reason: 'excluded' })
     expect(reducePicked(arr, undefined, { kind: 'index', value: 9 })).toEqual({ ok: false, reason: 'oob' })
-    expect(reducePicked(arr, undefined, { kind: 'slice', from: 5, to: 9 })).toEqual({ ok: false, reason: 'sliced' })
+    // 多索引逐个越界 ⇒ 集合空 ⇒ 同样是「选择失败」（不是合法空列表）
+    expect(reducePicked(arr, undefined, { kind: 'multi', entries: [{ kind: 'index', value: 5 }, { kind: 'index', value: 9 }] }))
+      .toEqual({ ok: false, reason: 'oob' })
   })
   it('命中：exclude 先过滤、index 再取位（legado 先排除再取位）', () => {
     expect(reducePicked(arr, [0], null)).toEqual({ ok: true, items: [2, 3] })
@@ -31,15 +33,15 @@ describe('reducePicked（选择结果后处理单点：exclude → index → 空
 })
 
 describe('选择段空态裁决统一（分叉①修复）', () => {
-  it('default 选择段切片裁空 → Miss 穿透（此前 List{[]} 中链必抛「不是节点集」）', async () => {
+  it('default 选择段索引全越界 → Miss 穿透（此前 List{[]} 中链必抛「不是节点集」）', async () => {
     const v = await evaluate('class.item.5:9@text', ctx, 'toc')
     expect(v.kind).toBe('miss')
   })
-  it('css 段（隐式回落）切片裁空 → Miss——与 default 同口径', async () => {
+  it('css 段（隐式回落）索引全越界 → Miss——与 default 同口径', async () => {
     const v = await evaluate('li.item.5:9@text', ctx, 'toc')
     expect(v.kind).toBe('miss')
   })
-  it('选择段切片裁空在链尾同样 Miss（不再伪装合法空列表）', async () => {
+  it('选择段索引全越界在链尾同样 Miss（不再伪装合法空列表）', async () => {
     const v = await evaluate('class.item.5:9', ctx, 'toc')
     expect(v.kind).toBe('miss')
   })

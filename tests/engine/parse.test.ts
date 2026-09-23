@@ -56,11 +56,14 @@ describe('⑥ 段识别', () => {
     expect(s[1]).toEqual({ kind: 'default', mode: 'class', arg: 'odd', index: { kind: 'index', value: 2 } })
     expect(s[2]).toEqual({ kind: 'default', mode: 'text', arg: null, index: null })
   })
-  it('位置后缀：all / 负索引 / 切片半开区间', () => {
+  it('位置后缀：all / 负索引 / 冒号索引列表（对面 indexDefault 逐个收集，冒号不是区间符）', () => {
     const segs = parseRule('tag.a.all@tag.a.-2@tag.a.1:5').branches[0].segments
     expect((segs[0] as any).index).toEqual({ kind: 'all' })
     expect((segs[1] as any).index).toEqual({ kind: 'index', value: -2 })
-    expect((segs[2] as any).index).toEqual({ kind: 'slice', from: 1, to: 5 })
+    expect((segs[2] as any).index).toEqual({
+      kind: 'multi',
+      entries: [{ kind: 'index', value: 1 }, { kind: 'index', value: 5 }],
+    })
   })
   it('css / jsonpath / AllInOne 识别', () => {
     expect(parseRule('@css:li.clearfix').branches[0].segments[0].kind).toBe('css')
@@ -177,7 +180,10 @@ describe('隐式 CSS 新形态（642 源重探归因驱动）', () => {
     expect(parseRule('class.odd.0@tag.a@text').branches[0].segments[0])
       .toEqual({ kind: 'default', mode: 'class', arg: 'odd', index: { kind: 'index', value: 0 } })
     expect(parseRule('td.1:3').branches[0].segments[0])
-      .toEqual({ kind: 'css', selector: 'td', index: { kind: 'slice', from: 1, to: 3 } })
+      .toEqual({
+        kind: 'css', selector: 'td',
+        index: { kind: 'multi', entries: [{ kind: 'index', value: 1 }, { kind: 'index', value: 3 }] },
+      })
   })
   it('后代/子代组合链 → css 段（tbody>tr、dd>h3>a、li.chapter span——Jsoup 常用）', () => {
     expect(parseRule('tbody>tr@text').branches[0].segments[0])

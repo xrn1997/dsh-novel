@@ -175,14 +175,15 @@ describe('⑥ 二轮补齐（元素包装 / AllInOne 行内标志 / 方括号索
     expect(await evaluate('li[!0]@text', { html }, 'toc', 'list'))
       .toEqual({ kind: 'list', items: ['二', '三'] })
   })
-  it('方括号多条目：并集按文档序、部分越界只留合法项、全越界 → Miss；[!0,2] 多值排除', async () => {
+  it('方括号多条目：并集按**写入序**、部分越界只留合法项、全越界 → Miss；[!0,2] 多值排除', async () => {
     // legado ElementsSingle 把条目收进 `indexSet: MutableSet<Int>`（越界的静默丢弃），
-    // 最后按文档序遍历 elements 过滤——故 `[3,1]` 与 `[1,3]` 同结果，重复项只出一份。
+    // 取位时 `for (pcInt in indexSet) es.add(elements[pcInt])` —— LinkedHashSet 的**插入序**，
+    // 所以 `[3,1]` 出的是「第4个、第2个」，不是文档序。（本仓此前 sort 成文档序：写序影响结果才叫保真。）
     const html = '<ul><li>一</li><li>二</li><li>三</li><li>四</li></ul>'
     expect(await evaluate('li[2,3]@text', { html }, 'toc', 'list'))
       .toEqual({ kind: 'list', items: ['三', '四'] })
     expect(await evaluate('li[3,1]@text', { html }, 'toc', 'list'))
-      .toEqual({ kind: 'list', items: ['二', '四'] })
+      .toEqual({ kind: 'list', items: ['四', '二'] })
     expect(await evaluate('li[1,9]@text', { html }, 'toc', 'value'))
       .toEqual({ kind: 'value', text: '二' })   // 只剩合法的一项（单子项结果的形状同 `li[1]`）
     expect((await evaluate('li[7,9]@text', { html }, 'toc', 'list')).kind).toBe('miss')
