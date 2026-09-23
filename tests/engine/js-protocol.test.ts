@@ -35,11 +35,14 @@ type Assert<T extends true> = T
 type _Ajax = Assert<Eq<JavaBridge['ajax'], (url: unknown) => Promise<string>>>
 type _Get = Assert<Eq<JavaBridge['get'], (key: string) => string | undefined>>
 type _Put = Assert<Eq<JavaBridge['put'], (key: string, value: unknown) => void>>
-type _GetString = Assert<Eq<JavaBridge['getString'], (rule: string, isUrl?: boolean) => string>>
+// getString 的三个位置各有语义（对面两个重载 + 四参缺省）：第二参布尔 = unescape 开关，
+// 非布尔 = mContent 基内容，第三参布尔 = isUrl 绝对化。**没有「取 URL 后再抓」这条**。
+type _GetString = Assert<Eq<JavaBridge['getString'], (rule: unknown, arg2?: unknown, isUrl?: unknown) => string>>
 type _GetElement = Assert<Eq<JavaBridge['getElement'], (rule: string) => { html: string; text: string } | null>>
 type _SetContent = Assert<Eq<JavaBridge['setContent'], (content: unknown) => void>>
 type _CookieGet = Assert<Eq<JavaBridge['cookieGet'], (name: string) => string | null>>
-type _SourceVarPut = Assert<Eq<JavaBridge['sourceVarPut'], (key: string, value: string) => void>>
+type _SourceVarPut = Assert<Eq<JavaBridge['sourceVarPut'], (key: string, value: string) => string>>
+type _SourceVarGet = Assert<Eq<JavaBridge['sourceVarGet'], (key: string) => string>>
 
 describe('JavaBridge 协议表（表驱动登记）', () => {
   it('方法名唯一（重复登记 → 红）', () => {
@@ -121,10 +124,47 @@ describe('invokeJavaMethod 分派（不进 vm 的直测）', () => {
     }
   })
 
-  it('getString(isUrl=true) → UnsupportedRuleError（v1 守门）', () => {
-    const fake = (): EngineValue => ({ kind: 'value', text: 'X' })
-    expect(() => invokeJavaMethod(depsOf({ evaluateRef: fake }), 'getString', ['@css:h1', true]))
-      .toThrow(UnsupportedRuleError)
+  it('getString 重载分派：二参布尔是 unescape（对面双参重载），不是 isUrl，也不再抛', () => {
+    // 对面 model/analyzeRule/AnalyzeRule.kt：`getString(ruleStr, unescape: Boolean)` 与
+    // `getString(ruleStr, mContent, isUrl)` 是两个不同重载，四参版 unescape **缺省 true**。
+    // 本仓此前把第二参当 isUrl：`true` 当场 UnsupportedRuleError，`false` 不抛但把
+    // 「不要反转义」的意图静默反做（对面要原文，本仓给解码后的值）。
+    const fake = (): EngineValue => ({ kind: 'value', text: 'A&amp;B' })
+    const deps = depsOf({ evaluateRef: fake })
+    expect(invokeJavaMethod(deps, 'getString', ['tag.p@text', false])).toBe('A&amp;B')
+    expect(invokeJavaMethod(deps, 'getString', ['tag.p@text', true])).toBe('A&B')
+    // 缺省 = 对面 unescape=true（再解一次实体）
+    expect(invokeJavaMethod(deps, 'getString', ['tag.p@text'])).toBe('A&B')
+  })
+
+  it('getString 三参 isUrl：基内容走 mContent、产物按 baseUrl 绝对化，**不发请求**', () => {
+    // 对面 isUrl 分支只做 `NetworkUtils.getAbsoluteURL(redirectUrl, str)`，
+    // 空白结果回退 baseUrl——「取到 URL 后再抓一次」这条语义在对面不存在。
+    // 本 deps 的 ctx 没有 fetch：实现若去抓站点会当场抛「网络能力」，用例即红 ⇒ 零抓取是断言出来的。
+    const seen: unknown[] = []
+    const fake = (rule: string, data: unknown): EngineValue => {
+      seen.push(data)
+      return { kind: 'value', text: rule === 'blank' ? '' : '/book/1' }
+    }
+    const deps = depsOf({
+      ctx: { vars: {}, baseUrl: 'https://m.example.com/read/index.html' } satisfies EvalContext,
+      result: 'ignored', evaluateRef: fake,
+    })
+    expect(invokeJavaMethod(deps, 'getString', ['tag.a@href', '<html>x</html>', true])).toBe('https://m.example.com/book/1')
+    expect(seen).toEqual(['<html>x</html>'])           // mContent 接管基内容，不是脚本的上一段 result
+    expect(invokeJavaMethod(deps, 'getString', ['blank', '<html>x</html>', true])).toBe('https://m.example.com/read/index.html')
+  })
+
+  it('getStringList 三参 isUrl：逐项绝对化 + 去重（对面 urlList 分支），空串按其口径变 base', () => {
+    const fake = (): EngineValue => ({ kind: 'list', items: ['/b/1', '/b/1', 'https://x.test/b/2', ''] })
+    const deps = depsOf({
+      ctx: { vars: {}, baseUrl: 'https://m.example.com/read/index.html' } satisfies EvalContext,
+      evaluateRef: fake,
+    })
+    // 对面 `for (url in result)` 逐项 getAbsoluteURL(redirectUrl, url)：空串走 `URL(base, "")`
+    // ⇒ 得到 base 本身（非空 ⇒ 收进列表）。这条不"顺手修正"成过滤空项——那是与对面不同的产出。
+    expect(invokeJavaMethod(deps, 'getStringList', ['tag.a@href', null, true]))
+      .toEqual(['https://m.example.com/b/1', 'https://x.test/b/2', 'https://m.example.com/read/index.html'])
   })
 
   it('getString/getStringList 经 evaluateRef 递归求值（基内容 = contentBase ?? result）', () => {
@@ -156,15 +196,24 @@ describe('invokeJavaMethod 分派（不进 vm 的直测）', () => {
     expect(invokeJavaMethod(deps, 'cookieGet', ['token'])).toBeNull()
   })
 
-  it('源变量四件套：getVariable/整表 JSON 与 get/put 同一存储', () => {
+  it('源状态三张表互不串味：单串槽 / 键值表 / 缓存（对面 BaseSource 本就是两处存储）', () => {
     const deps = depsOf()
-    expect(invokeJavaMethod(deps, 'sourceGetVariable', [])).toBe('') // 从未设置 → ''
-    invokeJavaMethod(deps, 'sourceSetVariable', [JSON.stringify({ host: 'x.com' })])
-    expect(invokeJavaMethod(deps, 'sourceVarGet', ['host'])).toBe('x.com')
-    expect(JSON.parse(String(invokeJavaMethod(deps, 'sourceGetVariable', [])))).toEqual({ host: 'x.com' })
-    // 非 JSON 对象串 → 按单值表落位（键 ''，legado 同口径）
-    invokeJavaMethod(deps, 'sourceSetVariable', ['raw-string'])
-    expect(invokeJavaMethod(deps, 'sourceVarGet', [''])).toBe('raw-string')
+    // 对面 data/entities/BaseSource.kt：setVariable/getVariable 是**一个字符串槽**
+    // （CacheManager 键 sourceVariable_<key>，getVariable 直返那串、未设返 ""）；
+    // put(key,value)/get(key) 是另一套命名空间（键 v_<key>_<name>，缺键返 ""）。
+    expect(invokeJavaMethod(deps, 'sourceGetVariable', [])).toBe('')          // 从未设置 → ''
+    invokeJavaMethod(deps, 'sourceSetVariable', ['abc'])
+    expect(invokeJavaMethod(deps, 'sourceGetVariable', [])).toBe('abc')       // 直返原串，不是整表 JSON
+    expect(invokeJavaMethod(deps, 'sourceVarGet', ['abc'])).toBe('')          // 串槽的**值**不是键值表的键
+    invokeJavaMethod(deps, 'sourceVarPut', ['k', 'v'])
+    invokeJavaMethod(deps, 'sourceSetVariable', ['第二次'])
+    // 旧实现把两件事塞进同一张 Map，setVariable 先 clear() 整表 ⇒ 这里曾是 ''（键值被顺手清空）
+    expect(invokeJavaMethod(deps, 'sourceVarGet', ['k'])).toBe('v')
+    expect(invokeJavaMethod(deps, 'sourceGetVariable', [])).toBe('第二次')
+    // cache 又是第三处：对面 CacheManager 全局表（本仓按源隔离是在册裁决），不许漏进键值表
+    invokeJavaMethod(deps, 'cachePut', ['ck', 'cv'])
+    expect(invokeJavaMethod(deps, 'cacheGet', ['ck'])).toBe('cv')
+    expect(invokeJavaMethod(deps, 'sourceVarGet', ['cache:ck'])).toBe('')
   })
 
   it('纯工具行透传 js-utils（md5/timeFormatUTC/encodeURI）', () => {

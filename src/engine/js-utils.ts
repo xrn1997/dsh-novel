@@ -93,6 +93,88 @@ export function hexDecodeToString(hex: string): string {
   return Buffer.from(clean, 'hex').toString('utf8')
 }
 
+/**
+ * HTML 实体反转义（对面 `StringEscapeUtils.unescapeHtml4` 的**近似承接**，不是全表）：
+ * 数字引用（`&#n;` / `&#xhh;`）+ HTML4 常用命名集。**未知实体原样留**——与本页 `engine/dom`
+ * 的实体口径同一条纪律（不猜），差集是「对面能解、我们留原样」，不是解错。
+ * 用途：`java.getString` 的 unescape 开关（对面缺省 true，在已解码的取值上**再解一次**，
+ * 专治 JSON API 源把 `<p>&amp;lt;</p>` 这类二次转义文本当内容返回的站点）。
+ */
+const NAMED_ENTITIES: Record<string, string> = {
+  quot: '"', amp: '&', apos: "'", lt: '<', gt: '>', nbsp: '\u00a0', iexcl: '¡', cent: '¢',
+  pound: '£', curren: '¤', yen: '¥', brvbar: '¦', sect: '§', uml: '¨', copy: '©', ordf: 'ª',
+  laquo: '«', not: '¬', shy: '­', reg: '®', macr: '¯', deg: '°', plusmn: '±', sup2: '²',
+  sup3: '³', acute: '´', micro: 'µ', para: '¶', middot: '·', cedil: '¸', sup1: '¹',
+  ordm: 'º', raquo: '»', frac14: '¼', frac12: '½', frac34: '¾', iquest: '¿', Agrave: 'À',
+  Aacute: 'Á', Acirc: 'Â', Atilde: 'Ã', Auml: 'Ä', Aring: 'Å', AElig: 'Æ', Ccedil: 'Ç',
+  Egrave: 'È', Eacute: 'É', Ecirc: 'Ê', Euml: 'Ë', Igrave: 'Ì', Iacute: 'Í', Icirc: 'Î',
+  Iuml: 'Ï', ETH: 'Ð', Ntilde: 'Ñ', Ograve: 'Ò', Oacute: 'Ó', Ocirc: 'Ô', Otilde: 'Õ',
+  Ouml: 'Ö', times: '×', Oslash: 'Ø', Ugrave: 'Ù', Uacute: 'Ú', Ucirc: 'Û', Uuml: 'Ü',
+  Yacute: 'Ý', THORN: 'Þ', szlig: 'ß', agrave: 'à', aacute: 'á', acirc: 'â', atilde: 'ã',
+  auml: 'ä', aring: 'å', aelig: 'æ', ccedil: 'ç', egrave: 'è', eacute: 'é', ecirc: 'ê',
+  euml: 'ë', igrave: 'ì', iacute: 'í', icirc: 'î', iuml: 'ï', eth: 'ð', ntilde: 'ñ',
+  ograve: 'ò', oacute: 'ó', ocirc: 'ô', otilde: 'õ', ouml: 'ö', divide: '÷', oslash: 'ø',
+  ugrave: 'ù', uacute: 'ú', ucirc: 'û', uuml: 'ü', yacute: 'ý', thorn: 'þ', yuml: 'ÿ',
+  OElig: 'Œ', oelig: 'œ', Scaron: 'Š', scaron: 'š', tilde: '˜', ensp: ' ', emsp: ' ',
+  thinsp: ' ', zwnj: '‌', zwj: '‍', lrm: '‎', rlm: '‏', ndash: '–', mdash: '—',
+  lsquo: '‘', rsquo: '’', sbquo: '‚', ldquo: '“', rdquo: '”', bdquo: '„', dagger: '†',
+  Dagger: '‡', bull: '•', hellip: '…', permil: '‰', prime: '′', Prime: '″', overline: '‾',
+  euro: '€', trade: '™', larr: '←', uarr: '↑', rarr: '→', harr: '↔', crarr: '↵',
+  lceil: '⌈', rceil: '⌉', lfloor: '⌊', rfloor: '⌋', loz: '◊', spades: '♠', clubs: '♣',
+  hearts: '♥', diams: '♦',
+}
+
+export function unescapeHtml4(s: string): string {
+  if (!s.includes('&')) return s
+  return s.replace(/&(#x[0-9a-fA-F]+|#\d+|[\w:]+);?/g, (m, body: string) => {
+    if (body.startsWith('#x') || body.startsWith('#X')) {
+      const code = Number.parseInt(body.slice(2), 16)
+      return Number.isNaN(code) || !Number.isFinite(code) ? m : safeFromCodePoint(code, m)
+    }
+    if (body.startsWith('#')) {
+      const code = Number.parseInt(body.slice(1), 10)
+      return Number.isNaN(code) || !Number.isFinite(code) ? m : safeFromCodePoint(code, m)
+    }
+    const hit = NAMED_ENTITIES[body]
+    // 对面遇到解不了的实体是**原样留**（commons-text 的 unescapeHtml4 不认识的串不替换）；
+    // 无分号尾的形态（`&nbsp` 后不跟 ;）对面也不解——本表按带分号才认，同形。
+    return hit === undefined ? m : hit
+  })
+}
+
+/** 码点越界/代理区/非法 → 原样留（不猜、不产出乱码字符） */
+function safeFromCodePoint(code: number, fallback: string): string {
+  if (code < 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return fallback
+  try {
+    return String.fromCodePoint(code)
+  } catch {
+    return fallback
+  }
+}
+
+/**
+ * 相对地址绝对化（对面 `utils/NetworkUtils.kt` 的 getAbsoluteURL 五条口径）：
+ *  ① base 空 → 返回 trim 后的相对串（**不猜**成任何站点）；
+ *  ② base 先剥 `,` 之后的请求选项（`substringBefore(",")`——URL 即请求规格那条通用教训）；
+ *  ③ 相对串已是绝对地址 / data URI → 原样；
+ *  ④ `javascript` 开头 → 空串（对面就是返回 ""，不是原样透出）；
+ *  ⑤ 其余按 base 解析，解析失败回退 trim 原串。
+ * 桥侧用它承接 `getString(..., isUrl=true)`：base 传 EvalContext.baseUrl（对面传 redirectUrl，
+ * 本仓的重定向落地地址在请求层丢弃，此处以规则求值的 base 为最近似，差异记在矩阵 `h-abs-urls`）。
+ */
+export function absolutizeUrl(base: string | null | undefined, relative: string): string {
+  const rel = String(relative).trim()
+  if (base === undefined || base === null || base === '') return rel
+  const baseUrl = base.split(',')[0]
+  if (/^(?:https?|ftp|file|mailto|tel):/i.test(rel) || /^data:/i.test(rel)) return rel
+  if (rel.startsWith('javascript')) return ''
+  try {
+    return new URL(rel, baseUrl).toString()
+  } catch {
+    return rel
+  }
+}
+
 /** 时间格式化：yyyy/MM/dd HH:mm（utc 标志决定取 UTC 还是本地分量；非法输入 → ''） */
 export function fmtTime(ts: number | string, utc: boolean): string {
   const d = new Date(Number(ts))

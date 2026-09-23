@@ -37,20 +37,21 @@ describe('源会话：脚本可见状态经 session 注入', () => {
     expect(await cookieOf(session, 'https://a.com', 'token')).toBe('v')
   })
 
-  it('源变量同样按 session/源建档：A 源写 dom 变量，B 源与新实例都读不到', async () => {
+  it('源变量按 session/源建档：A 源写的键值与串槽，B 源与新实例都读不到', async () => {
     const session = createSourceSession()
     const other = createSourceSession()
     await runScript({
-      code: 'source.setVariable(JSON.stringify({ dom: "x.com" })); "ok"',
+      // 对面是两处存储（v_<source>_<key> 与 sourceVariable_<source>），本仓三张表都按源建档
+      code: 'source.put("dom", "x.com"); source.setVariable("SLOT"); "ok"',
       source: 'https://a.com', session, loc, facet: 'rule',
     })
     const read = async (s: typeof session, source: string): Promise<string> => {
-      const out = await runScript({ code: 'source.get("dom") ?? "(未设)"', source, session: s, loc, facet: 'rule' })
+      const out = await runScript({ code: 'source.get("dom") + "|" + source.getVariable()', source, session: s, loc, facet: 'rule' })
       return out.value.kind === 'value' ? out.value.text : '(未设)'
     }
-    expect(await read(session, 'https://a.com')).toBe('x.com')
-    expect(await read(session, 'https://b.com')).toBe('(未设)')
-    expect(await read(other, 'https://a.com')).toBe('(未设)')
+    expect(await read(session, 'https://a.com')).toBe('x.com|SLOT')
+    expect(await read(session, 'https://b.com')).toBe('|')       // 换源即空（缺键 "" 与未设串槽 ""）
+    expect(await read(other, 'https://a.com')).toBe('|')          // 换实例即全新状态（可重置）
   })
 
   it('缺省 session = 进程级实例：不传 session 时既有行为不变（跨调用存活）', async () => {

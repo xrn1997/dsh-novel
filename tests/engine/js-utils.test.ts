@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { load } from 'cheerio'
 import {
+  absolutizeUrl,
   base64Decode,
   base64Encode,
   engineValueToString,
@@ -9,6 +10,7 @@ import {
   hexDecodeToString,
   md5Hex,
   md5Hex16,
+  unescapeHtml4,
   uriEncode,
 } from '../../src/engine/js-utils.js'
 
@@ -112,5 +114,35 @@ describe('toNumChapter（legado JsExtensions.toNumChapter / StringUtils.chineseN
       facet: 'content', source: 'https://x.com', session: createSourceSession(),
     })
     expect(r.value).toEqual({ kind: 'value', text: '第500章' })
+  })
+})
+
+describe('unescapeHtml4 / absolutizeUrl（getString 重载落地面）', () => {
+  // 对面 unescape：`StringEscapeUtils.unescapeHtml4`（commons-text 全表）。本仓是**近似承接**：
+  // 数字引用 + HTML4 常用命名集，**认不出的一律原样留**（不猜、也不解错）——差集是
+  // 「对面能解、我们留原文」，与 engine/dom 的实体口径同一条纪律，登记在矩阵 g-unescape-html4。
+  it('数字引用与命名集都解；二次转义串（JSON API 源常见）解一层', () => {
+    expect(unescapeHtml4('&#65;|&#x41;|&amp;|&lt;|&nbsp;')).toBe('A|A|&|<| ')
+    expect(unescapeHtml4('&amp;lt;')).toBe('&lt;')
+  })
+  it('认不出的实体与裸 & 原样留；无 & 直接返回同串（对面的短路条件）', () => {
+    expect(unescapeHtml4('&notanentity;')).toBe('&notanentity;')
+    expect(unescapeHtml4('Tom & Jerry')).toBe('Tom & Jerry')
+    expect(unescapeHtml4('普通文本')).toBe('普通文本')
+  })
+  it('码点越界/落在代理区 → 原样留（不产出乱码字符冒充成功）', () => {
+    expect(unescapeHtml4('&#xD800;')).toBe('&#xD800;')
+    expect(unescapeHtml4('&#x110000;')).toBe('&#x110000;')
+  })
+  it('absolutizeUrl 五条约口径（对面 NetworkUtils.getAbsoluteURL）', () => {
+    const base = 'https://b.test/read/index.html'
+    expect(absolutizeUrl(base, '/b/1')).toBe('https://b.test/b/1')
+    expect(absolutizeUrl(base, 'https://other.test/x')).toBe('https://other.test/x')
+    expect(absolutizeUrl(base, 'data:text/plain,hi')).toBe('data:text/plain,hi')
+    expect(absolutizeUrl(base, 'javascript:void(0)')).toBe('')       // 对面这里返回 ""，不是原样
+    expect(absolutizeUrl('', ' /b/1 ')).toBe('/b/1')                  // base 空 → trim 原样，不猜站点
+    expect(absolutizeUrl(base, '')).toBe(base)                        // URL(base,"") = base（对面同形）
+    // base 带 `,{option}` 请求选项后缀时先剥（URL 即请求规格那条通用教训）
+    expect(absolutizeUrl('https://b.test/api,{"method":"POST"}', '/b/1')).toBe('https://b.test/b/1')
   })
 })

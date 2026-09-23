@@ -19,11 +19,12 @@
  */
 import crypto from 'node:crypto'
 import type { EngineValue, EvalContext, Facet, SegmentLoc } from './types.js'
-import { JsSandboxError, UnsupportedRuleError } from './errors.js'
+import { JsSandboxError } from './errors.js'
 import { URL_OPTION_SPLIT } from './template.js'
 import type { EvaluateRef, SourceSession } from './js-sandbox.js'
 import { getRuleVar } from './variables.js'
 import {
+  absolutizeUrl,
   base64Decode,
   base64Encode,
   digestBase64,
@@ -39,6 +40,7 @@ import {
   md5Hex,
   md5Hex16,
   toNumChapter,
+  unescapeHtml4,
   uriEncode,
 } from './js-utils.js'
 
@@ -87,8 +89,10 @@ function method<N extends string, F extends HostFn>(
   return mode === undefined ? { name, mount, make } : { name, mode, mount, make }
 }
 
-/** java.getString* 的递归求值（evaluateRef 未注入 → 宁炸不猜） */
-function evalRule(d: BridgeDeps, rule: string): EngineValue {
+/** java.getString* 的递归求值（evaluateRef 未注入 → 宁炸不猜）
+ *  第三参 content 是**对面的 mContent**：显式给值即以它为基（`mContent ?: this.content`），
+ *  null/undefined 回落到本仓的 contentBase ?? result（java.setContent 那条路）。 */
+function evalRule(d: BridgeDeps, rule: string, content?: unknown): EngineValue {
   if (!d.evaluateRef) {
     throw new JsSandboxError(`java 递归求值需要引擎接线（evaluateRef 未注入，规则: ${JSON.stringify(rule)}）`, {
       ...d.loc,
@@ -96,11 +100,23 @@ function evalRule(d: BridgeDeps, rule: string): EngineValue {
       script: d.code,
     })
   }
-  return d.evaluateRef(rule, d.contentBase ?? d.result)
+  const base = content === undefined || content === null ? d.contentBase ?? d.result : content
+  return d.evaluateRef(rule, base)
+}
+
+/** getString / getStringList 的实参分派：对面是**两个重载**，位置语义不同。
+ *  · `getString(rule, unescape)` —— 第二参布尔就是「要不要再做一次 HTML 反转义」；
+ *  · `getString(rule, mContent, isUrl)` —— 第二参是基内容、第三参才是 isUrl。
+ *  本仓此前只有一个 `(rule, isUrl?)` 签名：`true` 被当未实现直接抛，`false` 不抛但把
+ *  「不要反转义」静默反做（对面 `false` 出原文、本仓出解码后的值）。 */
+function parseGetStringArgs(arg2?: unknown, arg3?: unknown): { content?: unknown; isUrl: boolean; unescape: boolean } {
+  if (typeof arg2 === 'boolean') return { content: undefined, isUrl: false, unescape: arg2 }
+  return { content: arg2, isUrl: arg3 === true, unescape: true }
 }
 
 const jar = (d: BridgeDeps): Map<string, string> => d.session.cookieJar(d.sourceKey)
 const sourceVars = (d: BridgeDeps): Map<string, string> => d.session.sourceVars(d.sourceKey)
+const sourceCache = (d: BridgeDeps): Map<string, string> => d.session.cacheStore(d.sourceKey)
 
 /**
  * JavaBridge 协议表：**唯一登记点**。行序即文档序（与 legado 宿主 API 分组一致）。
@@ -194,20 +210,30 @@ export const JAVA_PROTOCOL = [
     d.ctx.vars ??= {}
     d.ctx.vars[String(key)] = String(value)
   }),
-  // ── 递归求值 ────────────────────────────────────────────────────────
-  method('getString', { obj: 'java' }, (d) => (rule: string, isUrl?: boolean): string => {
-    if (isUrl === true) {
-      // legado 的 isUrl=true 表示「这条规则产出的是 URL，取到后还要再抓取一次」。
-      // v1 桥不实现 fetch-in-bridge；静默把 URL 串当内容返回是错误结果 → 宁炸不猜
-      throw new UnsupportedRuleError('getString 的 isUrl=true 在 v1 不支持（不支持取 URL 后自动抓取）', {
-        ...d.loc,
-        facet: d.facet,
-      })
+  // ── 递归求值（对面两个重载：二参布尔 = unescape 开关，三参布尔 = isUrl 绝对化）────────
+  method('getString', { obj: 'java' }, (d) => (rule: unknown, arg2?: unknown, isUrlArg?: unknown): string => {
+    const { content, isUrl, unescape } = parseGetStringArgs(arg2, isUrlArg)
+    let s = engineValueToString(evalRule(d, String(rule), content))
+    // 对面次序：先 unescapeHtml4（缺省 true、且只在含 '&' 时做），再按 isUrl 决定返回形态
+    if (unescape) s = unescapeHtml4(s)
+    if (isUrl) {
+      // 对面的 isUrl **不发请求**：空白回退 baseUrl，否则按 redirectUrl 绝对化
+      // （本仓 base 取 EvalContext.baseUrl，差异记在矩阵 h-abs-urls）
+      return s.trim() === '' ? d.ctx.baseUrl ?? '' : absolutizeUrl(d.ctx.baseUrl, s)
     }
-    return engineValueToString(evalRule(d, String(rule)))
+    return s
   }),
-  method('getStringList', { obj: 'java' }, (d) => (rule: string): string[] =>
-    engineValueToStrings(evalRule(d, String(rule)))),
+  method('getStringList', { obj: 'java' }, (d) => (rule: unknown, content?: unknown, isUrlArg?: unknown): string[] => {
+    const list = engineValueToStrings(evalRule(d, String(rule), content))
+    if (isUrlArg !== true) return list
+    // 对面 getStringList 的 isUrl 分支：逐项绝对化，非空且未见过才收（去重按产出序）
+    const out: string[] = []
+    for (const item of list) {
+      const abs = absolutizeUrl(d.ctx.baseUrl, item)
+      if (abs !== '' && !out.includes(abs)) out.push(abs)
+    }
+    return out
+  }),
   method('getElements', { obj: 'java' }, (d) => (rule: string): Array<{ html: string; text: string }> => {
     const v = evalRule(d, String(rule))
     if (v.kind === 'nodes') {
@@ -271,40 +297,31 @@ export const JAVA_PROTOCOL = [
   method('cookieRemove', { obj: 'cookie', as: 'removeCookie' }, (d) => (name: string): void => {
     jar(d).delete(String(name))
   }),
-  // ── 源变量垫片（挂 source.getVariable/setVariable/get/put）───────────
-  method('sourceGetVariable', { obj: 'source', as: 'getVariable' }, (d) => (): string => {
-    const m = d.session.peekSourceVars(d.sourceKey)
-    if (m === undefined) return ''
-    return JSON.stringify(Object.fromEntries(m))
+  // ── 源级状态（挂 source.getVariable/setVariable/get/put 与 cache.*）─────
+  // 对面是**三处存储**（data/entities/BaseSource.kt：sourceVariable_<s> 单串槽 / v_<s>_<key> 键值表；
+  // CacheManager 全局表）。本仓三张表按源建档、互不串味——旧实现把前两处塞进同一张 Map，
+  // setVariable 先 clear() 整表（清空 source.put 写过的键）且把 getVariable 做成整表 JSON 壳。
+  method('sourceGetVariable', { obj: 'source', as: 'getVariable' }, (d) => (): string =>
+    d.session.sourceString(d.sourceKey)),
+  method('sourceSetVariable', { obj: 'source', as: 'setVariable' }, (d) => (value: string | null): void => {
+    d.session.setSourceString(d.sourceKey, value === null || value === undefined ? null : String(value))
   }),
-  method('sourceSetVariable', { obj: 'source', as: 'setVariable' }, (d) => (value: string): void => {
-    const m = sourceVars(d)
-    const raw = String(value)
-    try {
-      const obj = JSON.parse(raw) as Record<string, unknown>
-      if (typeof obj === 'object' && obj !== null && !Array.isArray(obj)) {
-        m.clear()
-        for (const [k, v] of Object.entries(obj)) m.set(k, String(v))
-        return
-      }
-    } catch { /* 非 JSON 对象串：legado 同样存任意串——按单值表落位（键 ''） */ }
-    m.clear()
-    if (raw !== '') m.set('', raw)
-  }),
-  method('sourceVarGet', { obj: 'source', as: 'get' }, (d) => (key: string): string | null =>
-    sourceVars(d).get(String(key)) ?? null),
-  method('sourceVarPut', { obj: 'source', as: 'put' }, (d) => (key: string, value: string): void => {
-    sourceVars(d).set(String(key), String(value))
+  method('sourceVarGet', { obj: 'source', as: 'get' }, (d) => (key: string): string =>
+    sourceVars(d).get(String(key)) ?? ''),
+  method('sourceVarPut', { obj: 'source', as: 'put' }, (d) => (key: string, value: string): string => {
+    const v = String(value)
+    sourceVars(d).set(String(key), v)
+    return v          // 对面 put 返回写入的值（脚本有 `var x = source.put(k,v)` 的连写形态）
   }),
   // ── cache 垫片（legado CacheManager 最小仿真：按源隔离的进程内键值表，
   //    真实源 `cache.put('kkmh', …)` 搜索面写、目录面 `cache.get('kkmh')` 读的跨面形态）──
   method('cacheGet', { obj: 'cache', as: 'get' }, (d) => (key: string): string | null =>
-    sourceVars(d).get(`cache:${String(key)}`) ?? null),
+    sourceCache(d).get(String(key)) ?? null),
   method('cachePut', { obj: 'cache', as: 'put' }, (d) => (key: string, value: unknown): void => {
-    sourceVars(d).set(`cache:${String(key)}`, value === null || value === undefined ? '' : String(value))
+    sourceCache(d).set(String(key), value === null || value === undefined ? '' : String(value))
   }),
   method('cacheDelete', { obj: 'cache', as: 'delete' }, (d) => (key: string): void => {
-    sourceVars(d).delete(`cache:${String(key)}`)
+    sourceCache(d).delete(String(key))
   }),
   // ── cache 内存三别名（legado CacheManager.putMemory/getFromMemory/deleteMemory）──
   // legado 里 put = 内存+磁盘双写、putMemory 仅写内存 LRU、get 先内存后磁盘——本仓的 cache
@@ -312,12 +329,12 @@ export const JAVA_PROTOCOL = [
   // 语义差异（内存 vs SQLite）在这里不存在，别名只为真实源脚本的调用名而在。
   // 真机实证：novel.cooks.tw 目录脚本 `cache.putMemory('articleid', …)` 此前报 not a function。
   method('cachePutMemory', { obj: 'cache', as: 'putMemory' }, (d) => (key: string, value: unknown): void => {
-    sourceVars(d).set(`cache:${String(key)}`, value === null || value === undefined ? '' : String(value))
+    sourceCache(d).set(String(key), value === null || value === undefined ? '' : String(value))
   }),
   method('cacheGetFromMemory', { obj: 'cache', as: 'getFromMemory' }, (d) => (key: string): string | null =>
-    sourceVars(d).get(`cache:${String(key)}`) ?? null),
+    sourceCache(d).get(String(key)) ?? null),
   method('cacheDeleteMemory', { obj: 'cache', as: 'deleteMemory' }, (d) => (key: string): void => {
-    sourceVars(d).delete(`cache:${String(key)}`)
+    sourceCache(d).delete(String(key))
   }),
   // ── 纯工具（续）────────────────────────────────────────────────────
   // legado JsExtensions.randomUUID：UUID.randomUUID().toString()（小写带连字符）——

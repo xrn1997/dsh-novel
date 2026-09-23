@@ -1143,9 +1143,14 @@ function pkgHostOp(op: string, payload: Record<string, unknown>): unknown {
  *  存储本体归 SourceSession：这两个 Map 是进程级缺省实例的后仓。 */
 const COOKIE_JARS = new Map<string, Map<string, string>>()
 
-/** source.getVariable()/setVariable() 存储：按源隔离（legado 源级变量——真实源存用户自定义
- *  配置项（如自定义域名），下次执行读回的形态。键值表结构：getVariable 序列化整表，
- *  get/put 直接按键读写（legado BookSource 变量表同构）。进程内仿真，不落盘） */
+/** 源级状态的三张进程级表（对面是三个不同前缀，本仓按源建档）：
+ *  · COOKIE_JARS —— cookie 垫片；
+ *  · SOURCE_VARS —— BaseSource.put/get 的**键值表**（对面键 `v_<source>_<key>`）；
+ *  · SOURCE_STRINGS —— BaseSource.setVariable/getVariable 的**单串槽**（对面键 `sourceVariable_<source>`）；
+ *  · CACHE_STORES —— CacheManager 的 cache 垫片（对面全局表，本仓按源隔离是在册裁决）。
+ *  先前两件事塞在同一张 Map 里，`setVariable` 还顺手 clear() 整表 ⇒ 写串槽清空 source.put 的键、
+ *  getVariable 返回整表 JSON 壳而不是原串（2026-09-23 对读 data/entities/BaseSource.kt 后拆开）。
+ *  全部进程内仿真，不落盘（跨重启落盘是另一件事，登记在矩阵 h-source-variable）。 */
 const SOURCE_VARS = new Map<string, Map<string, string>>()
 
 /**
@@ -1157,11 +1162,23 @@ const SOURCE_VARS = new Map<string, Map<string, string>>()
 export interface SourceSession {
   /** 某源的 cookie 垫片（键值表，缺省建档） */
   cookieJar(sourceKey: string): Map<string, string>
-  /** 某源的变量表（键值表，缺省建档——写口用） */
+  /** 某源的**键值变量表**（对面 BaseSource.put/get → CacheManager 键 `v_<source>_<key>`） */
   sourceVars(sourceKey: string): Map<string, string>
-  /** 某源变量表的非建档读口：从未碰过 → undefined（getVariable 语义区分「从未设置」与「显式清空」） */
+  /** 某源键值表的非建档读口：从未碰过 → undefined（java.get 的 source 层要区分「从未设置」） */
   peekSourceVars(sourceKey: string): Map<string, string> | undefined
+  /** 某源的**自定义变量单串槽**（对面 BaseSource.setVariable/getVariable → 键 `sourceVariable_<source>`）。
+   *  与键值表是两个存储：写串槽不许动键值表，反之亦然（此前两者塞在同一张 Map 里，
+   *  `setVariable` 顺手 clear() 把 source.put 写过的键全清了，且 getVariable 返回的是整表 JSON 壳）。 */
+  sourceString(sourceKey: string): string
+  setSourceString(sourceKey: string, value: string | null): void
+  /** 某源的 cache 垫片表（对面 CacheManager 是**全局**表；本仓按源隔离是在册裁决，见矩阵 h-cache-ttl）。
+   *  第三处存储：此前它借 sourceVars 加 `cache:` 前缀，脚本用 `source.get('cache:x')` 就串味。 */
+  cacheStore(sourceKey: string): Map<string, string>
 }
+
+/** 进程级三张表（生产）：按源建档、跨调用/跨服务实例存活——与旧实现同生命周期 */
+const SOURCE_STRINGS = new Map<string, string>()
+const CACHE_STORES = new Map<string, Map<string, string>>()
 
 function keyedStore(get: () => Map<string, Map<string, string>>): (sourceKey: string) => Map<string, string> {
   return (sourceKey: string): Map<string, string> => {
@@ -1172,22 +1189,36 @@ function keyedStore(get: () => Map<string, Map<string, string>>): (sourceKey: st
   }
 }
 
-/** 进程级缺省会话（生产）：按源建档、跨调用/跨服务实例存活——与旧实现行为一致 */
-export const processSession: SourceSession = {
-  cookieJar: keyedStore(() => COOKIE_JARS),
-  sourceVars: keyedStore(() => SOURCE_VARS),
-  peekSourceVars: (sourceKey) => SOURCE_VARS.get(sourceKey),
-}
-
-/** 全新隔离会话（测试）：与进程级实例、与其他隔离实例互不可见——跨源污染用例的入口 */
-export function createSourceSession(): SourceSession {
-  const jars = new Map<string, Map<string, string>>()
-  const vars = new Map<string, Map<string, string>>()
+/** 三张表的会话装配（进程级与隔离实例只差在取哪一组 Map） */
+function sessionOf(
+  jars: Map<string, Map<string, string>>,
+  vars: Map<string, Map<string, string>>,
+  strings: Map<string, string>,
+  caches: Map<string, Map<string, string>>,
+): SourceSession {
   return {
     cookieJar: keyedStore(() => jars),
     sourceVars: keyedStore(() => vars),
     peekSourceVars: (sourceKey) => vars.get(sourceKey),
+    sourceString: (sourceKey) => strings.get(sourceKey) ?? '',
+    setSourceString: (sourceKey, value) => {
+      // 对面 setVariable(null) → CacheManager.delete（清空即回「从未设置」），不是存 "null"
+      if (value === null) strings.delete(sourceKey)
+      else strings.set(sourceKey, value)
+    },
+    cacheStore: keyedStore(() => caches),
   }
+}
+
+/** 进程级缺省会话（生产）：按源建档、跨调用/跨服务实例存活——与旧实现行为一致 */
+export const processSession: SourceSession = sessionOf(COOKIE_JARS, SOURCE_VARS, SOURCE_STRINGS, CACHE_STORES)
+
+/** 全新隔离会话（测试）：与进程级实例、与其他隔离实例互不可见——跨源污染用例的入口 */
+export function createSourceSession(): SourceSession {
+  return sessionOf(
+    new Map<string, Map<string, string>>(), new Map<string, Map<string, string>>(),
+    new Map<string, string>(), new Map<string, Map<string, string>>(),
+  )
 }
 
 function jsErr(e: unknown, code: string, loc: SegmentLoc, facet: Facet, prefix: string): JsSandboxError {

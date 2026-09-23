@@ -266,15 +266,17 @@ describe('@js 沙箱', () => {
     expect(v.value).toEqual({ kind: 'value', text: '1|标题|<h1 class="t">标题</h1>|t|' })
   })
 
-  it('getString(rule, isUrl=true)：v1 守门必炸（宁炸不猜，不静默把 URL 当内容返回）', async () => {
-    // 订正：isUrl=true 曾被桥静默忽略，URL 串被当内容返回（静默错误）
+  it('getString 二参布尔 = unescape 开关（对面双参重载），不再被当 isUrl 抛错', async () => {
+    // 本行原先钉的是「isUrl=true 守门必炸」——那条守门建在误读上：对面第二参是 unescape，
+    // isUrl 在第三参，且 isUrl 也**不抓取**（只绝对化）。见 matrix h-get-string-is-url。
     const fake = (): EngineValue => ({ kind: 'value', text: 'X' })
-    const err = await run('return java.getString("@css:h1", true)', hostOf(), ctxOf(), fake).then(() => null, (e) => e)
-    expect(String(err.message)).toMatch(/isUrl=true 在 v1 不支持/)
-    // 段级定位随消息跨界（宿主 UnsupportedRuleError 的 message 含 [facet#段N] 与规则片段；
-    // 错误对象本身按沙箱逃逸防御只取 message 字符串，在 evalJs 出口包成 JsSandboxError）
-    expect(String(err.message)).toMatch(/\[content#段0\]/)
-    // isUrl=false / 省略 → 照常递归求值
+    const unescapeOn = await run('return java.getString("@css:h1", true)', hostOf(), ctxOf(), fake)
+    expect(unescapeOn.value).toEqual({ kind: 'value', text: 'X' })
+    // 第三参才是 isUrl：产物按 base 绝对化（相对段落在 base 的目录下——对面同样是 `URL(base, rel)`），
+    // 全程不碰网络：这条路径没有任何 fetch 通道，实现若去抓取会当场抛「该源未提供网络能力」
+    const isUrl = await run('return java.getString("@css:h1", null, true)', hostOf(), ctxOf(), fake)
+    expect(isUrl.value).toEqual({ kind: 'value', text: 'https://m.example.com/read/X' })
+    // unescape=false 与缺省同样走递归求值（对面缺省是 true：本例文本不含实体，两种取值同形）
     expect((await run('return java.getString("@css:h1", false)', hostOf(), ctxOf(), fake)).value)
       .toEqual({ kind: 'value', text: 'X' })
     expect((await run('return java.getString("@css:h1")', hostOf(), ctxOf(), fake)).value)
@@ -353,23 +355,33 @@ describe('宿主垫片（真实源用到的缺失 API）', () => {
     const err2 = await run(`return java.createSymmetricCrypto("AES/CBC/PKCS5Padding","${key}","${key}").encryptStr("x")`).then(() => null, (e) => e)
     expect(String(err2.message)).toMatch(/不支持/)
   })
-  it('source.getVariable/setVariable 垫片（按源隔离——真实源存自定义域名的形态）', async () => {
+  it('source.getVariable/setVariable 是**单串槽**（对面 BaseSource 的 sourceVariable_<key>）', async () => {
     const ctx = ctxOf()
     expect((await run('return source.getVariable() || "(空)"', hostOf(), ctx)).value).toEqual({ kind: 'value', text: '(空)' })
-    await run('source.setVariable(JSON.stringify({host:"x.com"})); return "ok"', hostOf(), ctx)
+    // 对面 getVariable 直返那串——本仓曾把它做成「整表 JSON.stringify」，脚本按字符串用就拿到
+    // 一层 JSON 壳（存自定义域名的源正是直接把这串拼进 URL 的写法）
+    await run('source.setVariable("x.com"); return "ok"', hostOf(), ctx)
+    expect((await run('return source.getVariable()', hostOf(), ctx)).value).toEqual({ kind: 'value', text: 'x.com' })
+    await run('source.setVariable(JSON.stringify({host:"y.com"})); return "ok"', hostOf(), ctx)
     expect((await run('return JSON.parse(source.getVariable()).host', hostOf(), ctx)).value)
-      .toEqual({ kind: 'value', text: 'x.com' })
+      .toEqual({ kind: 'value', text: 'y.com' })
   })
-  it('source.get/put 键值读写（与 getVariable 同一存储——legado 变量表同构）', async () => {
+  it('source.get/put 键值表：与串槽、cache 各自一处（对面是三个不同前缀）', async () => {
     const ctx = ctxOf()
     await run('source.put("token", "t123"); source.put("searchMode", "author"); return "ok"', hostOf(), ctx)
     expect((await run('return source.get("token")', hostOf(), ctx)).value).toEqual({ kind: 'value', text: 't123' })
-    // getVariable 视角：整表 JSON 可见（键值互通）
-    expect((await run('return JSON.parse(source.getVariable()).searchMode', hostOf(), ctx)).value)
-      .toEqual({ kind: 'value', text: 'author' })
-    // 未设键 → null（`source.get("x") || ""` 形态自然求值）
-    expect((await run('return source.get("missing") || "def"', hostOf(), ctx)).value)
-      .toEqual({ kind: 'value', text: 'def' })
+    // 对面 get 缺键返 ""（不是 null）；脚本 `source.get("x") || "def"` 两种形状同结果，
+    // 但 `source.get("x") === ""` 这类判等只有对面形状才对
+    expect((await run('return source.get("missing") === "" ? "空串" : String(source.get("missing"))', hostOf(), ctx)).value)
+      .toEqual({ kind: 'value', text: '空串' })
+    // 写串槽**不清**键值表（旧实现同一张 Map，setVariable 顺手 clear()）
+    await run('source.setVariable("S"); return "ok"', hostOf(), ctx)
+    expect((await run('return source.get("searchMode")', hostOf(), ctx)).value).toEqual({ kind: 'value', text: 'author' })
+    expect((await run('return source.getVariable()', hostOf(), ctx)).value).toEqual({ kind: 'value', text: 'S' })
+    // cache 与键值表也不互通
+    await run('cache.put("ck","CV"); return "ok"', hostOf(), ctx)
+    expect((await run('return cache.get("ck") + "|" + (source.get("ck") === "" ? "未串" : source.get("ck"))', hostOf(), ctx)).value)
+      .toEqual({ kind: 'value', text: 'CV|未串' })
   })
   it('source.header / source.bookSourceName 可读（JSON.parse(source.header) 形态）', async () => {
     const host = hostOf({ header: '{"User-Agent":"Bot"}' })
