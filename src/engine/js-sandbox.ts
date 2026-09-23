@@ -653,9 +653,12 @@ export async function evalJs(
     mounts: SANDBOX_MOUNTS,
   })
   const init = initOf(useWorker)
+  // wrapped（函数体形态）文本在这里一次构造，主线程与 worker 共用同一份（worker 走 workerData）：
+  // 在 WORKER_SRC 里再拼一遍等于养第二份，两处转义口径不同（worker 字符串里要写 `\\n`），改一处漏一处。
+  const wrapped = wrappedFormOf(code)
   if (useWorker) {
     return evalJsInWorker({
-      bootstrap: BOOTSTRAP, init, code, jsLib: jsLibCode, timeout,
+      bootstrap: BOOTSTRAP, init, code, wrapped, jsLib: jsLibCode, timeout,
       scriptForm: opts?.scriptForm ?? true, call, logs, loc, facet,
     })
   }
@@ -695,7 +698,7 @@ export async function evalJs(
     // `next = []` 这类未声明赋值就是写全局，真实源大量依赖（实测 13 源目录脚本首行即
     // `next = []`，严格模式下 ReferenceError 全灭）。逃逸防御不靠严格模式：vm realm 隔离 +
     // codeGeneration 关闭 + 宿主入口锁死才是边界，见 BOOTSTRAP 顶注。
-    const wrapped = `;(async function (result, baseUrl, source, java, cookie, console) {\n${code}\n}).apply(undefined, [__d__.result, __d__.baseUrl, __src__, java, cookie, console])`
+    // wrapped 文本在 evalJs 顶部构造（与 worker 共用同一份）。
 
     let started: unknown
     try {
@@ -732,7 +735,7 @@ export async function evalJs(
     // 换 worker 重跑同一段。已产生的日志丢弃——否则同一段脚本的 console.log 会出现两遍。
     logs.length = 0
     return evalJsInWorker({
-      bootstrap: BOOTSTRAP, init: initOf(true), code, jsLib: jsLibCode, timeout,
+      bootstrap: BOOTSTRAP, init: initOf(true), code, wrapped, jsLib: jsLibCode, timeout,
       scriptForm: opts?.scriptForm ?? true, call, logs, loc, facet,
     })
   }
@@ -743,7 +746,10 @@ export async function evalJs(
  *  运行时抛的 SyntaxError（最典型：JSON.parse 坏串 / 对象 ToString 后坏串）被误判成「顶层 return 形态」
  *  静默回落 wrapped，而表达式脚本在 wrapped 里没有 return → 完成值 undefined → **恒 Miss**（真机实证：
  *  cooks.tw init 脚本经 evaluate 链路整段静默取空，比报错更坏）。编译通过的脚本执行期错误直接上抛。
- *  vm 抛的错误来自 vm realm——跨 realm `instanceof SyntaxError` 不成立，按 constructor.name 判定。 */
+ *  vm 抛的错误来自 vm realm——跨 realm `instanceof SyntaxError` 不成立，按 constructor.name 判定。
+ *  **worker 里有这份的文本抄本**（WORKER_SRC 的 runAsScript——worker 代码以字符串交付，够不到本函数）：
+ *  改这里必须同时改那里，两路口径由 `tests/engine/json-parse-object-idempotent.test.ts` 的
+ *  「worker 路与主线程同口径」跨路钉子钉住（fetch 计数：重跑即多打站点一次）。 */
 function runAsScript(code: string, wrapped: string, context: vm.Context, timeout: number): unknown {
   try {
     // 只编译不执行：SyntaxError = 语法层（含顶层 return/await）→ 回落 wrapped
@@ -755,6 +761,12 @@ function runAsScript(code: string, wrapped: string, context: vm.Context, timeout
     throw e
   }
   return vm.runInContext(code, context, { timeout })
+}
+
+/** 函数体形态（wrapped）文本：把用户代码包进 async IIFE，`return` 有处可去。
+ *  主线程与 worker 共用这一份构造（worker 经 workerData 拿成品串，见 evalJs）。 */
+function wrappedFormOf(code: string): string {
+  return `;(async function (result, baseUrl, source, java, cookie, console) {\n${code}\n}).apply(undefined, [__d__.result, __d__.baseUrl, __src__, java, cookie, console])`
 }
 
 // ── java.ajax 同步桥（worker + SharedArrayBuffer RPC）────────────────────
@@ -772,7 +784,8 @@ function runAsScript(code: string, wrapped: string, context: vm.Context, timeout
 // SAB 上流动的只有 JSON 字符串。超时双闸：worker 内 vm timeout 杀同步死循环，
 // 主线程 Promise.race（timeout + 5s）后 worker.terminate()。
 // worker 代码以**字符串**交付（`new Worker(src, {eval:true})`）——tsdown 打包后不存在
-// 独立 worker 文件可解析；BOOTSTRAP/init/code 全走 workerData，不产生第二份引导代码抄本。
+// 独立 worker 文件可解析；BOOTSTRAP/init/code/wrapped 全走 workerData，不产生第二份引导代码抄本。
+// 唯一无法共用的那份是 runAsScript（它要在 worker realm 里调 host 的 vm），见 WORKER_SRC 内注释。
 
 /** 路由启发式（**只影响性能与稳健性，不影响语义**——语义由桥给）。刻意过近似而不求精确，三支：
  *  ① `\.ajax\s*\(` 认任何 `.ajax(`（`java.ajax(` 以及别名对象上的 ajax）；② `downloadFile\s*\(`
@@ -789,7 +802,7 @@ const SAB_RESP_BYTES = 16 * 1024 * 1024
 const WORKER_SRC = `
 const { parentPort, workerData } = require('node:worker_threads')
 const vm = require('node:vm')
-const { bootstrap, init, code, jsLib, timeout, scriptForm } = workerData
+const { bootstrap, init, code, wrapped, jsLib, timeout, scriptForm } = workerData
 const reqSab = workerData.reqSab, respSab = workerData.respSab
 const reqFlag = new Int32Array(workerData.reqFlagSab)
 const respFlag = new Int32Array(workerData.respFlagSab)
@@ -825,6 +838,20 @@ function sanitize(v) {
   }
   return v
 }
+// 脚本形态判别：**编译期**（new vm.Script 只编译不执行），与主线程的 runAsScript 同口径。
+// 这里是那份的文本抄本——worker 代码以字符串交付，够不到宿主函数；改一处必须改两处，
+// 两路一致由 tests/engine/json-parse-object-idempotent.test.ts 的跨路钉子（fetch 计数）钉住。
+// 按「执行 code 后捕获到的异常类名」判会把**运行时** SyntaxError（JSON.parse 坏串一类）误当
+// 顶层 return 形态：脚本已经跑了一遍（ajax 已发出去、非幂等写入已落），重跑 = 站点两趟，
+// 第二遍恰好不抛时 wrapped 里无 return → 完成值 undefined → 静默 Miss。
+function runAsScript(code, wrapped, context, timeout) {
+  try { new vm.Script(code) }
+  catch (e) {
+    if (e && e.constructor && e.constructor.name === 'SyntaxError') return vm.runInContext(wrapped, context, { timeout })
+    throw e
+  }
+  return vm.runInContext(code, context, { timeout })
+}
 ;(function () {
   const context = vm.createContext(
     { __host_call__: hostCall, __init__: init },
@@ -833,18 +860,9 @@ function sanitize(v) {
   try {
     vm.runInContext(bootstrap, context, { timeout })
     if (jsLib.trim() !== '') vm.runInContext(jsLib, context, { timeout })
-    const wrapped = ';(async function (result, baseUrl, source, java, cookie, console) {\\n' + code + '\\n}).apply(undefined, [__d__.result, __d__.baseUrl, __src__, java, cookie, console])'
-    let started
-    if (scriptForm) {
-      try {
-        started = vm.runInContext(code, context, { timeout })
-      } catch (e) {
-        if (e && e.constructor && e.constructor.name === 'SyntaxError') started = vm.runInContext(wrapped, context, { timeout })
-        else throw e
-      }
-    } else {
-      started = vm.runInContext(wrapped, context, { timeout })
-    }
+    const started = scriptForm
+      ? runAsScript(code, wrapped, context, timeout)
+      : vm.runInContext(wrapped, context, { timeout })
     Promise.resolve(started).then(
       function (ret) { parentPort.postMessage({ ok: true, ret: sanitize(ret) }) },
       function (e) { parentPort.postMessage({ ok: false, message: e && e.message ? String(e.message) : String(e), stack: e && e.stack ? String(e.stack) : '' }) },
@@ -859,6 +877,8 @@ interface WorkerRunArgs {
   bootstrap: string
   init: string
   code: string
+  /** 函数体形态文本（wrappedFormOf 的产物）：主线程一次构造，worker 不在字符串里再拼一份 */
+  wrapped: string
   jsLib: string
   timeout: number
   scriptForm: boolean
@@ -878,7 +898,7 @@ async function evalJsInWorker(a: WorkerRunArgs): Promise<JsOutcome> {
   const worker = new Worker(WORKER_SRC, {
     eval: true,
     workerData: {
-      bootstrap: a.bootstrap, init: a.init, code: a.code, jsLib: a.jsLib,
+      bootstrap: a.bootstrap, init: a.init, code: a.code, wrapped: a.wrapped, jsLib: a.jsLib,
       timeout: a.timeout, scriptForm: a.scriptForm,
       reqSab, respSab, reqFlagSab, respFlagSab,
     },

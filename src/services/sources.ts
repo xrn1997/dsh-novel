@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type { NovelSource, SourceAuth, SourceContentKind, SourceStatus } from './types.js'
 import type { NormalizeResult } from './normalize.js'
-import { contentTypeOfRaw, rawBookMetaFields, rawHeaderRule, rawRuleDetailInit, rawRulePattern, SOURCE_KIND_LABEL, splitGroups, stripLeadingIcons } from './normalize.js'
+import { contentTypeOfRaw, deriveRuleField, rawBookMetaFields, rawHeaderRule, rawRulePattern, SOURCE_KIND_LABEL, splitGroups, stripLeadingIcons } from './normalize.js'
 import { readJson, writeJsonAtomic } from './storage.js'
 
 /**
@@ -82,7 +82,9 @@ export class SourceRegistry {
       // 地址 → 目录 `$.rows` 空 → EmptyToc（QQ 源真机判别实证）。raw 是真相、rules 是派生；
       // 定点补这一个字段，不整链重 normalize（那可能拒绝存量源）。raw 非对象 → 不动；
       // raw 在场：键恒落成 string | null（NormalizedRules 是 required 形状）。
-      const wantInit = rawRuleDetailInit(s.raw)
+      // **读路必须是导入侧那一份**（deriveRuleField 直接跑 flattenDialect/flattenNative）：恒覆盖
+      // 配第二份解释会把对的改成错的，见 normalize.ts 该函数的注释与 ⑨ 的差别说明。
+      const wantInit = deriveRuleField(s.raw, 'ruleDetailInit')
       if (wantInit !== undefined && s.rules.ruleDetailInit !== wantInit) {
         s.rules.ruleDetailInit = wantInit; changed = true
       } else if (s.rules.ruleDetailInit === undefined) {

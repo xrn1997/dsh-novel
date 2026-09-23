@@ -37,3 +37,47 @@ describe('JSON.parse 对象幂等 + 编译期 SyntaxError 判别', () => {
     expect(v).toEqual({ kind: 'value', text: 'ret-ok' })
   })
 })
+
+/**
+ * 同一族 bug 的**另一条路**（2026-09 审查实证）：上面那条编译期判别只修在主线程的 `runAsScript`
+ * 里，worker 的 WORKER_SRC 仍按「执行 code → 捕获到 SyntaxError 就重跑 wrapped」判别。
+ * 编译期 SyntaxError（顶层 return）在两条路上都不执行脚本，所以只有**运行时** SyntaxError
+ * 会暴露分叉：worker 已经把脚本跑了一遍（ajax 已发出去）才拿到异常，重跑 = 站点两趟 +
+ * 非幂等写入两遍；若第二遍恰好不抛，wrapped 形态无 return → 完成值 undefined → **静默 Miss**
+ * ——本仓定的最高罪（空结果冒充失败）。fetch 计数自证真走了 worker 那条路。
+ */
+/** 走 worker 路的上下文：fetch 计数自证真进了 worker（主线程那条路不碰 fetch）。 */
+function workerCtx(counts: { fetch: number }): EvalContext {
+  return {
+    html: '', baseUrl: 'https://x.com', source: 'https://x.com',
+    fetch: async () => { counts.fetch++; return { body: 'BODY' } },
+  }
+}
+
+describe('worker 路与主线程同口径（运行时 SyntaxError 不靠重跑判别）', () => {
+  it('运行时 SyntaxError → 如实上抛，脚本只执行一遍（fetch 计数为 1）', async () => {
+    const counts = { fetch: 0 }
+    const run = evaluate('@js:java.ajax("https://x.com/p"); JSON.parse("{bad"); "done"',
+      workerCtx(counts), 'detail', 'list')
+    await expect(run).rejects.toThrow()
+    expect(counts.fetch).toBe(1)
+  })
+
+  it('脚本自带状态、第二遍不抛时，也不许把首遍的运行时 SyntaxError 洗成 Miss', async () => {
+    const counts = { fetch: 0 }
+    const code = 'java.ajax("https://x.com/p");'
+      + ' source.put("attempt", String(Number(source.get("attempt") || "0") + 1));'
+      + ' if (source.get("attempt") === "1") JSON.parse("{bad"); "done";'
+    const run = evaluate('@js:' + code, workerCtx(counts), 'detail', 'list')
+    await expect(run).rejects.toThrow()
+    expect(counts.fetch).toBe(1)
+  })
+
+  it('worker 路的顶层 return 仍回落 wrapped，且回落不多打站点', async () => {
+    const counts = { fetch: 0 }
+    const v = await evaluate('@js:java.ajax("https://x.com/p"); return "ret-ok"',
+      workerCtx(counts), 'detail', 'list')
+    expect(v).toEqual({ kind: 'value', text: 'ret-ok' })
+    expect(counts.fetch).toBe(1)
+  })
+})

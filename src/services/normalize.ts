@@ -189,19 +189,21 @@ export function contentTypeOfRaw(raw: unknown): SourceContentKind | undefined {
   return kindOfSourceValue((raw as Record<string, unknown>).bookSourceType)
 }
 
-/** raw 的详情初始化规则原文（quiet 版，供 SourceRegistry.load 存量重推——normalize 只在
- *  入库时映射 `ruleBookInfo.init → ruleDetailInit`，存量 rules 是旧版派生、缺此键，
- *  缺键则详情换根静默不生效、tocUrl 模板 Miss 回退 → EmptyToc（QQ 源真机判别实证）。
- *  返回：init 原文 / 'null'（raw 在场但没有 init）/ undefined（raw 不是对象，调用方别动）。 */
-export function rawRuleDetailInit(raw: unknown): string | null | undefined {
-  if (typeof raw !== 'object' || raw === null) return undefined
-  const r = raw as Record<string, unknown>
-  const info = r.ruleBookInfo
-  const init = typeof info === 'object' && info !== null
-    ? (info as Record<string, unknown>).init
-    : r.ruleDetailInit
-  if (typeof init === 'string' && init.trim() !== '') return init
-  return null
+/** raw → 单个模型字段的派生值：与 `normalizeSource` 共用**同一份**展平实现（方言识别、字符串化
+ *  容器、平铺/嵌套优先级、Native 隐式 `@text` 全在导入侧那一份里），只是不跑准入（缺必填 / 非文本
+ *  源照样读得出该字段——补推不许顺手拒掉存量源）。
+ *  返回：派生到的非空串 / null（raw 是对象但派生到空）/ undefined（raw 不是对象，调用方别动）。
+ *  新增需要存量收敛的规则字段时**只加调用点**，不要再写第二个读 raw 的函数：`SourceRegistry.load`
+ *  的 ⑥ 原先自带一份自解释（只认对象容器、容器优先于平铺，两处都与导入侧不同），而补推是恒覆盖，
+ *  于是那条路会把导入侧派生的正确值改写掉并落盘——读数上看不出来（2026-09 审查实证）。
+ *  `rawBookMetaFields` 是这条纪律之前的产物：它自带优先级，故只能只填缺席键。 */
+export function deriveRuleField(raw: unknown, field: string): string | null | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const r = isNativeSource(raw)
+    ? flattenNative(raw as Record<string, unknown>, [])
+    : flattenDialect(raw as Record<string, unknown>, [])
+  const v = (r as Record<string, unknown>)[field]
+  return typeof v === 'string' && v.length > 0 ? v : null
 }
 
 /** raw.bookUrlPattern（对面 BookSource 的**顶层**字段，不在任何 rule 对象里）：
@@ -222,8 +224,8 @@ const BOOK_META_KEYS = [
   { container: 'ruleBookInfo', nested: 'wordCount', model: DIALECT_MAP.ruleBookInfo.wordCount },
 ] as const
 
-/** raw 的分类 / 字数四项（供 `SourceRegistry.load` 存量重推，与 `rawRuleDetailInit` /
- *  `rawHeaderRule` / `rawRulePattern` 同构）。这两个字段是后来才接进取值链路的，存量 rules
+/** raw 的分类 / 字数四项（供 `SourceRegistry.load` 存量重推，与 `rawHeaderRule` /
+ *  `rawRulePattern` 同族）。这两个字段是后来才接进取值链路的，存量 rules
  *  没这四个键 → 对面读得出的分类/字数对老库**永远是 null**（真机读数实证：接入后审计
  *  字段到货率 0/82 源，缺的就是这一步）。
  *  读口复用导入时的同一套材料：容器走 `ruleContainer`（字符串化容器照解析，不另立规矩）、

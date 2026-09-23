@@ -194,6 +194,48 @@ describe('load 内容形态迁移（bookSourceType 编码订正的存量收敛�
     await reg.flush()
     expect((await SourceRegistry.load(dir)).list()[0].rules.ruleDetailInit).toBeNull()
   })
+  // ⑥ 的读原先是自己解释 raw 的**第二份**规则解释：只认对象容器、且容器优先于平铺——
+  // 与导入侧（flattenDialect：字符串化容器照解析、平铺优先）在两种形态上分岔。恒覆盖
+  // 于是会把导入侧派生的正确值改写掉（抹成 null 或换成另一处的值），且落盘后看不出来。
+  it('⑥ init 往返：字符串化 ruleBookInfo 容器不被 load 抹成 null', async () => {
+    const dir = await tmp()
+    const reg = await SourceRegistry.load(dir)
+    await reg.edit((tx) => tx.add(normalizeSource({
+      bookSourceName: '字符串容器 init', bookSourceUrl: 'https://str-init.example.com', ruleContent: 'x',
+      ruleBookInfo: JSON.stringify({ init: '$.data', name: '$.name' }),
+    })))
+    expect(reg.list()[0].rules.ruleDetailInit).toBe('$.data')     // 导入侧解析了字符串化容器
+    await reg.flush()
+    expect((await SourceRegistry.load(dir)).list()[0].rules.ruleDetailInit).toBe('$.data')
+  })
+  it('⑥ init 往返：平铺与容器并存时 load 与导入侧同一优先级（平铺优先）', async () => {
+    const dir = await tmp()
+    const reg = await SourceRegistry.load(dir)
+    await reg.edit((tx) => tx.add(normalizeSource({
+      bookSourceName: '两说 init', bookSourceUrl: 'https://two-init.example.com', ruleContent: 'x',
+      ruleDetailInit: '$.flat',
+      ruleBookInfo: { init: '$.nested' },
+    })))
+    expect(reg.list()[0].rules.ruleDetailInit).toBe('$.flat')     // 导入侧：平铺优先（setIfVacant）
+    await reg.flush()
+    expect((await SourceRegistry.load(dir)).list()[0].rules.ruleDetailInit).toBe('$.flat')
+  })
+  it('⑥ 单一读路后恒覆盖是幂等的：已被第二条读路抹成 null 的存量在 load 时按 raw 修复', async () => {
+    const dir = await tmp()
+    const reg = await SourceRegistry.load(dir)
+    await reg.edit((tx) => tx.add(normalizeSource({
+      bookSourceName: '受损存量', bookSourceUrl: 'https://damaged.example.com', ruleContent: 'x',
+      ruleBookInfo: JSON.stringify({ init: '$.data', name: '$.name' }),
+    })))
+    await reg.edit(() => {
+      const s = reg.list()[0]
+      s.rules.ruleDetailInit = null                              // 模拟旧实现已经写坏并落盘的存量
+    })
+    await reg.flush()
+    const re = (await SourceRegistry.load(dir)).list()[0]
+    expect(re.rules.ruleDetailInit).toBe('$.data')
+    expect((await SourceRegistry.load(dir)).list()[0].rules.ruleDetailInit).toBe('$.data')  // 二次 load 幂等
+  })
   it('存量 rules 缺 bookUrlPattern 而 raw 带值 → load 按 raw 重推（详情页嗅探是后来才读的字段：不重推则 27 个声明了它的源照旧只跑列表规则）', async () => {
     const dir = await tmp()
     const reg = await SourceRegistry.load(dir)
