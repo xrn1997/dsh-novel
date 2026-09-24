@@ -34,7 +34,7 @@ const PROBE_CONCURRENCY = 5
 
 /** 宿主后台任务注册表（`ctx.jobs`）在本插件用到的子集。
  *  **本地窄面镜像，不引类型包**：npm 上 `@deepseek-ai/dsh-jobs` 停在 `0.0.1-rc.3`，宿主跑的是
- *  `0.1.5-rc.1`，且本仓解析不到该包（`docs/reference/dsh-plugin-api.md` 证据 9a + 风险第 10 条）。
+ *  `0.1.7-rc.1`（2026-09-23 复核），且本仓解析不到该包（`docs/reference/dsh-plugin-api.md` 证据 9a + 风险第 10 条）。
  *  照 `src/index.ts` 既有的 `NovelContext` + `*Like` 先例办：只声明用到的成员。
  *  `kind` 用 `string` 是刻意的——注册表把 kind 当作不透明的 id 命名空间（唯一判据是「非空字符串」），
  *  所以自定义 kind 不需要宿主的 `JobKindMap` 合并，id 直接长成 `novel-import-1`。

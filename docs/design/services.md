@@ -75,7 +75,7 @@
 
 **生命周期已登记给宿主 `ctx.jobs`（2026-09），单槽互斥与 counts 仍归本模块**。分工是刻意的两半：宿主注册表管**身份与生命周期**（`<kind>-N`、`running → completed|killed|failed`、owner 栅栏、随服务卸载而 cancel），`SourceJobs` 管**业务计数与明细**（`counts` / `issues` / `fileErrors`——宿主只有 `label` + `detail` 一行，装不下 642 源的失败分桶）。要点：
 - `kind` 用 `novel-import` / `novel-probe` / `novel-search`（宿主对 kind 的唯一判据是「非空字符串」，按不透明命名空间处理，不需要类型包合并）；`label` 写清工作量（`导入书源 N 个文件` / `批量验证书源 N 家` / `聚合搜索「kw」（N 家书源）`）。
-- **类型面是本地窄镜像** `JobHost`（`src/index.ts` 的 `NovelContext` + `*Like` 先例）：npm 上的 `@deepseek-ai/dsh-jobs` 停在 `0.0.1-rc.3` 而宿主跑 `0.1.5-rc.1`，装它等于拿一套不同代的契约。**`host` 缺席即不登记**（单测直构与无 jobs 的组合都走这条路，任务语义不变）。
+- **类型面是本地窄镜像** `JobHost`（`src/index.ts` 的 `NovelContext` + `*Like` 先例）：npm 上的 `@deepseek-ai/dsh-jobs` 停在 `0.0.1-rc.3`（2026-09-23 复核：npm 仍是这个号）而宿主跑 `0.1.7-rc.1`，装它等于拿一套不同代的契约。**`host` 缺席即不登记**（单测直构与无 jobs 的组合都走这条路，任务语义不变）。
 - 入口在 `ctx.effect` 里 `attachController('dsh-novel')`：宿主 `start` 的准入闸要求「有已挂载 controller 服务该 owner」，而本机 profile 里第一方的 `tool-jobs` 是 disabled 的（证据见 `docs/reference/dsh-plugin-api.md` 风险第 10 条）。
 - **取消是协作式的**：宿主 `cancel(reason)` 只把旗子立起来，运行器在**取下一条之前**收手——在途的网络探针/入库不打断（打断半路写回的源更脏）。收手时已入库/已验证的结果一律保留 + `flush()` 等齐，`JobState` 落 `phase='failed'` + `error='任务已取消：…'`。**wire 的 `phase` 不加 `killed`**：对 UI 的判据（`phase !== 'running'`）两个终态无区别，加一态要动跨半契约与三处判据，收益为零。宿主侧则如实结算 `status:'killed'`。
 - 收尾三处写口（`completed` / `killed` / `failed`）集中在 `settle()` 一处——漏掉一处就是「小说 UI 显示已结束，宿主注册表里还挂着 running」。终态词汇 `JobOutcome` 也只此一处声明（`search-job.ts` 复用同一别名，不各写一份联合类型）。

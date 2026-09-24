@@ -25,6 +25,8 @@ dsh plugin --profile web add @xrn1997/dsh-novel
 
 npm 安装使用预构建产物，秒装、无需构建授权。也可从 GitHub 源码安装（`dsh plugin --profile web add github:xrn1997/dsh-novel`）：`prepare` 脚本会自动构建，但 pnpm ≥10 首次安装可能报构建脚本被拦截（依赖已装但 `lib/` 未生成），需先在 profile 目录执行 `pnpm approve-builds --all` 再重跑安装命令。
 
+**兼容宿主**：声明分两层，别混。**安装许可**在 `peerDependencies`——`@deepseek-ai/dsh-tools` 逐代显式开口，覆盖 `0.0.1-rc.5` 起 24 个已发宿主（全部 26 个里只除外最早的 `0.0.1-rc.1` / `-rc.2`：它们缺本插件硬注入的 `jobs` 服务，装进去整树会拒绝挂载）。**实测声明**在 `dsh.compatibility.dshReleases`，只写真跑过的两版：`0.1.7-rc.1`（`dsh --profile web --dump-config` 组合树含本插件、六个 `dshnovel_` 工具真调用通过、`DSH_INSTALL_CHECK` 装载链路绿）与 `0.1.5-rc.1`（此前的真机运行记录）。两层都由 `tests/packaging.test.ts` 看住：编译期 devDependency 必须被 peer 区间放行、且必须在实测声明里。宿主发新版后要做三件事——bump 编译版本、给 peer 区间开这一代的口、加实测条目，少一步测试就红。
+
 卸载：
 
 ```powershell
