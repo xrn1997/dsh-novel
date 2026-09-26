@@ -3,17 +3,17 @@ import * as rawBufferCrc32 from 'buffer-crc32'
 import { fromBuffer, type Entry, type ZipFile } from 'yauzl'
 import { EpubImportError } from './errors.js'
 
-/** 本层只用增量累计这一个方法，不必把上游那份声明拖进来 */
+/** 本层只用增量累计这一个方法，不必把 buffer-crc32 那份声明拖进来 */
 type Crc32 = { readonly unsigned: (buffer: Buffer, partial?: number) => number }
 
 /**
- * buffer-crc32@1.0.0 的两副面孔（上游打包缺陷，不是本仓偏好）：声明（dist/index.d.mts）写的是 `export =`，
+ * buffer-crc32@1.0.0 的两副面孔（该包的打包缺陷，不是本仓偏好）：声明（dist/index.d.mts）写的是 `export =`，
  * 运行时（dist/index.mjs）只导出 `default`。两种「干净」写法实测都不通：
  * `import crc32 from 'buffer-crc32'` 在 skipLibCheck 下被 .d.mts 判成「模块没有 default 导出」（TS1192，
  * typecheck 红）；`import { unsigned as x } from 'buffer-crc32'` 类型上过得去，但运行时拿不到东西
  * （解析到只导出 default 的 ESM 入口，一读条目就炸）。
  * 所以取 default、取不到退回 namespace：两条解析路径（ESM 入口 / 内联 CJS）下 default 都指同一个函数对象，
- * 这里是本文件唯一为上游缺陷让路的地方。
+ * 这里是本文件唯一为依赖包缺陷让路的地方。
  */
 const crc32 = ((rawBufferCrc32 as unknown as { default?: Crc32 }).default ?? (rawBufferCrc32 as unknown as Crc32))
 
@@ -21,7 +21,7 @@ const crc32 = ((rawBufferCrc32 as unknown as { default?: Crc32 }).default ?? (ra
  * 增量 CRC32（`unsigned` 的取值口径：partial 传上一次的返回值）。
  *
  * 为什么要对外露这一行：正文层核 PNG chunk 的 CRC 也要算同一件事（「不信元数据」在归档层是
- * 条目 CRC，在图片层是 chunk CRC）。那一层再抄一份上游缺陷的让路代码就会长出第二个让路点，
+ * 条目 CRC，在图片层是 chunk CRC）。那一层再抄一份依赖包缺陷的让路代码就会长出第二个让路点，
  * 所以让路只留在本文件，别的层从这里取。
  */
 export function crc32Unsigned(buffer: Buffer, partial = 0): number {

@@ -6,20 +6,21 @@ import { parseRule } from '../../src/engine/parse.js'
 import { evalJs } from '../../src/engine/js-sandbox.js'
 import { JAVA_PROTOCOL } from '../../src/engine/js-protocol.js'
 import { messageSkeleton } from '../content-audit-classify.js'
+import { readSnapshot } from '../legado-coverage/upstream-facts.js'
 
 /**
  * **解析面全库普查（`DSH_PARSE_CENSUS=1` 才跑；离线、不联网，秒级）**——「彻底适配 legado 书源规则」
  * 这条目标的**进度读数口**。
  *
- * 目标口径不是「矩阵行都标了 implemented」，而是：**legado 能正确解析的书源，本插件也能正确解析**。
+ * 目标口径不是「矩阵行都标了 implemented」，而是：**凡书源里写下的规则形态，本插件都能正确解析**。
  * 要按这个口径推进，必须先有一个不靠人想、不靠站点今天是否活着的清单：现库里到底有哪些规则
  * 是本仓**当场拒绝**的。此前这件事靠一份一次性脚本（写在不入库目录里，已经消失过一次），
  * 且只跑了 `parseRule` 一面。本文件把它做成在册的门，并补齐第二面：
  *
  * **面 A · 规则语法**：把现库每一条规则串（从 `raw` 的 rule 容器取，含本仓字段映射**没接**的那些——
- *  那正是「对面读得懂、我们连字段都没取」的一批）过本仓真实入口 `parseRule`，收集抛错骨架。
+ *  那正是「书源写得出、本仓连字段都没映射」的一批）过本仓真实入口 `parseRule`，收集抛错骨架。
  * **面 B · js 宿主调用**：静态抽出全库脚本里的 `java.<m>(` 与 `Packages.<a.b.C>` 调用名，
- *  比对桥表（`SANDBOX_MOUNTS.javaSync`）。对面 Rhino 有的方法我们没挂 → 脚本跑到那句就抛错。
+ *  比对桥表（`SANDBOX_MOUNTS.javaSync`）。脚本约定该有的方法我们没挂 → 脚本跑到那句就抛错。
  *  这是静态抽名：注释与死分支里的调用也会被采到，所以**读数按名字给数量与样例、由人判**，
  *  断言只对「抽到且不在已知集合」的形态开火。
  * **面 C · 桥可达性**：协议表里已登记实现的名字，绝不允许在沙箱里仍被「需要安卓宿主环境」桩覆盖。
@@ -39,20 +40,18 @@ import { messageSkeleton } from '../content-audit-classify.js'
  * 在覆盖矩阵 B 组在册。
  */
 const ON = process.env.DSH_PARSE_CENSUS === '1'
-/** 对面参考实现 checkout（判据分母，缺席即红） */
-const UPSTREAM_REF = process.env.DSH_LEGADO_REF ?? 'C:/develop/GitHub/legado-with-MD3'
 
-/** 对面的 rule 容器：本仓只映射其中一部分，这里取全集（含未映射字段） */
+/** 书源的 rule 容器：本仓只映射其中一部分，这里取全集（含未映射字段） */
 const RULE_CONTAINERS = ['rules', 'ruleSearch', 'ruleBookInfo', 'ruleToc', 'ruleContent', 'ruleExplore']
 
 /**
- * **字段 → 对面实际用什么消费它**。只有走 `AnalyzeRule`（`model/analyzeRule/AnalyzeRule.kt`）的字段
+ * **字段 → 实际由哪条消费者读它**。只有进规则引擎求值的字段
  * 才是「规则串」，才该过 `parseRule`；其余各有消费者，硬塞进规则引擎只会造假阳性
  * （普查第一版就因此把 `checkKeyWord ← 我的` 这类词表报成了「本仓拒绝的语法」）。
  *
- * 每条都在对面源码里核过，锚点写在值里：
+ * 每条都按取值语义归过类，锚点写在值里：
  * - `rule-list` / `rule-value`：过 `getElements` / `getString`，差别是取值用途。
- * - `js`：脚本，进 Rhino（本仓进 `node:vm`）——由本普查的**面 B** 管。
+ * - `js`：脚本，进沙箱（本仓用 `node:vm`）——由本普查的**面 B** 管。
  * - `regex`：Java 正则，不进规则引擎。
  * - `words`：逗号分隔词表。
  * - `flag`：布尔 / 排版字符串。
@@ -67,12 +66,12 @@ const FIELD_CONSUMERS: Record<string, 'rule-list' | 'rule-value' | 'js' | 'regex
   sourceRegex: 'regex', replaceRegex: 'regex', ruleReplaceRegex: 'regex', ruleSourceRegex: 'regex',
   checkKeyWord: 'words', ruleCheckKeyWord: 'words',
   canReName: 'flag', isVolume: 'flag', isVip: 'flag', isPay: 'flag', imageStyle: 'flag', ruleImageStyle: 'flag',
-  // authorPrefix / authorPattern / ruleBookAuthor 这类是**字面量前后缀**，对面直接拼接，不过规则引擎
+  // authorPrefix / authorPattern / ruleBookAuthor 这类是**字面量前后缀**，直接拼接，不过规则引擎
   authorPrefix: 'flag', ruleBookAuthor: 'flag', authorPattern: 'flag', bookListUrl: 'flag',
   init: 'rule-value', ruleInit: 'rule-value',
 }
 
-/** 非规则字段不计入 parseRule 分母，但要报出来：它们是「对面读得懂、我们字段都没取」的候选面 */
+/** 非规则字段不计入 parseRule 分母，但要报出来：它们是「书源读得出、本仓字段都没取」的候选面 */
 const isRuleField = (field: string) => {
   const kind = FIELD_CONSUMERS[field]
   return !kind || kind.startsWith('rule-')
@@ -80,7 +79,7 @@ const isRuleField = (field: string) => {
 
 interface RuleSite { src: string; where: string; rule: string; usage: 'list' | 'value' }
 
-/** 收集一个源里所有「会被对面当规则求值」的字符串（数组元素逐个收，如 nextContentUrl: [..]） */
+/** 收集一个源里所有「会当规则求值」的字符串（数组元素逐个收，如 nextContentUrl: [..]） */
 function collectRules(entry: any): RuleSite[] {
   const raw = entry?.raw ?? entry ?? {}
   const src = String(entry?.name ?? raw.bookSourceName ?? '?')
@@ -88,7 +87,7 @@ function collectRules(entry: any): RuleSite[] {
   for (const container of RULE_CONTAINERS) {
     const box = raw[container]
     if (typeof box === 'string') {
-      // 字符串化容器（本仓导入时二次 parse；对面每个容器都写了 isJsonPrimitive 分支）
+      // 字符串化容器（本仓导入时二次 parse；容器本身也可能是 JSON 文本，两种形态都要接）
       try { collectBox(container, JSON.parse(box), src, out) } catch { /* 坏 JSON 由导入面点名，不在这里重复判 */ }
       continue
     }
@@ -123,20 +122,20 @@ function allStrings(node: unknown, acc: string[] = []): string[] {
  * **同族内的新样例不会报红**，所以每次跑普查要看「N× M源」读数变化，别只盯红/绿。
  *
  * 在册的是**仍在被拒的族**：普查头一跑（2026-09-22）在这里登记过 4 族，其余 3 族逐一收口——
- * 空白分支按对面吞分支（`a-blank-branch-dropped`）、纯数字段是 children 索引
+ * 空白分支按吞分支（`a-blank-branch-dropped`）、纯数字段是 children 索引
  * （`a-bare-index-segment`）、`clasd.T-R-T-B2-Box1` 与 `text下一页` 本就不是"认不出"而是 CSS
- * 选择器——对面 `ElementsSingle` 的 else 分支就是 `select(beforeRule)`（边界订正见
+ * 选择器——白名单外的段本就该交 CSS（`select(beforeRule)`，边界订正见
  * `a-unknown-segment-throws`）。留下的这一族每次跑都要看「N× M源」读数变化，别只盯红/绿。
  * 这张表留着只为让**新**形态冒出来即红：加条目必须先有矩阵行 id，实现了就删条目——
  * 留着当墓碑会被下一轮误读成「这是裁决」。
  */
 const KNOWN_RULE_SHAPES: Record<string, string> = {
   '无法识别的段类型（default 段白名单之外）（规则片段: "#"':
-    '无 `@` 单段（`kind: "0"` 等）——对面取值路径 = `attr(整串)` → 也取空；矩阵 `a-bare-index-segment` 记为不适用（guard 族），非欠账',
+    '无 `@` 单段（`kind: "0"` 等）——取值路径 = `attr(整串)` → 也取空；矩阵 `a-bare-index-segment` 记为不适用（guard 族），非欠账',
 }
 
 /**
- * 在册已知桥缺口：对面 JsExtensions 有、本仓没挂、且已在矩阵行排队的 `java.*` 方法名。
+ * 在册已知桥缺口：书源脚本用得到、本仓没挂、且已在矩阵行排队的 `java.*` 方法名。
  * 普查头两批抓出的 connect / getWebViewUA / androidId 各自有了去处（前两个实现，
  * `androidId` 走宿主桩点名抛错）。这张表留着是为了让**新**缺口冒出来即红，不是给存量挡红：
  * 往里加条目必须先有矩阵行 id。
@@ -147,9 +146,9 @@ const KNOWN_RULE_SHAPES: Record<string, string> = {
  * 它不登记在这里：已经实现了（矩阵 `h-java-post`）。
  */
 const KNOWN_BRIDGE_GAPS: Record<string, string> = {
-  t2s: '繁简词典不在本仓，对面还先跑自家 fixT2sDict——换轮子（opencc 一类）得到的文本与对面不逐字相等，要拍板：矩阵 h-java-t2s',
+  t2s: '繁简词典不在本仓，且对面在转换前还会跑自家补丁词典——换轮子（opencc 一类）得到的文本与对面不逐字相等，要拍板：矩阵 h-java-t2s',
   cacheFile: '裁决已有（真实文件 API = 数据外泄面），这一条的作用是确认该裁决真有需求方：矩阵 h-java-cache-file',
-  toURL: '对面返回 JVM URL 对象；先看清那 1 源真调了哪些成员再造壳：矩阵 h-java-tourl',
+  toURL: '返回的是 JVM URL 对象；先看清那 1 源真调了哪些成员再造壳：矩阵 h-java-tourl',
 }
 
 /**
@@ -185,22 +184,12 @@ async function probeJavaSurface(): Promise<{ names: Set<string>; stubs: Set<stri
   return { names, stubs }
 }
 
-/** 对面脚本侧 `java` 对象的权威定义：help/JsExtensions.kt 的公开 fun 名（含重载去重） */
-function upstreamJavaNames(ref: string): Set<string> {
-  // 引用写成「带目录的相对路径」这一种形态（相对对面 app 包根）：既是最小改动，
-  // 也让引用活性守卫能真去对面核这个文件在不在——逐段拼字面量时它只看得见裸文件名
-  const p = path.join(ref, 'app/src/main/java/io/legado/app', 'help/JsExtensions.kt')
-  if (!fs.existsSync(p)) {
-    throw new Error(
-      `读不到对面 java 面定义：${p}\n` +
-      '  普查的「对面有没有这个方法」判据以它为准，不做静默降级——设 DSH_LEGADO_REF 指到 checkout。',
-    )
-  }
-  const out = new Set<string>()
-  for (const m of fs.readFileSync(p, 'utf8').matchAll(/^\s{4}(?:@\w+(?:\([^)]*\))?\s+)*(?:open |override |suspend )*fun ([a-zA-Z][A-Za-z0-9]*)\s*\(/gm)) {
-    out.add(m[1])
-  }
-  expect(out.size, `对面 JsExtensions 抽到的方法名过少（${out.size}），判据已失效`).toBeGreaterThan(50)
+/** 脚本侧 `java` 对象的权威定义：从**仓内快照**读公开 fun 名（含重载去重）。
+ *  快照由 `tests/legado-coverage/capture-upstream-snapshot.test.ts` 在开发阶段生成——
+ *  本普查（连同其他两条判据）运行时不依赖任何外部 checkout。 */
+function upstreamJavaNames(): Set<string> {
+  const out = new Set(readSnapshot().javaMethods)
+  expect(out.size, `快照里的 java 方法名过少（${out.size}），判据已失效——刷新快照`).toBeGreaterThan(50)
   return out
 }
 
@@ -237,7 +226,7 @@ describe.skipIf(!ON)('解析面全库普查（DSH_PARSE_CENSUS=1）', () => {
 
     // ── 面 B：js 宿主调用 ───────────────────────────────────────────
     const { names: mounted, stubs } = await probeJavaSurface()
-    const upstream = upstreamJavaNames(UPSTREAM_REF)
+    const upstream = upstreamJavaNames()
     const javaCalls = new Map<string, { n: number; srcs: Set<string> }>()
     const packages = new Map<string, { n: number; srcs: Set<string> }>()
     entries.forEach((e, i) => {
@@ -252,7 +241,7 @@ describe.skipIf(!ON)('解析面全库普查（DSH_PARSE_CENSUS=1）', () => {
         }
       }
     })
-    // 缺口只在「对面确实有这个公开方法」时才成立；对面也没有的名字（脚本写错、别的 fork、
+    // 缺口只在「这个公开方法确实在脚本面上」时才成立；本来就没有的名字（脚本写错、别的 fork、
     // 私有扩展）只报读数，不判红——否则把源脚本的坏冒成我们的欠。
     const notMounted = [...javaCalls.entries()].filter(([n]) => !mounted.has(n))
     const bridgeGaps = notMounted.filter(([n]) => upstream.has(n))
@@ -273,11 +262,11 @@ describe.skipIf(!ON)('解析面全库普查（DSH_PARSE_CENSUS=1）', () => {
       }
     }
     if (bridgeGaps.length) {
-      console.log(`[parse-census] 脚本调了、对面有、本仓没挂的 java.* 方法 ${bridgeGaps.length} 种：`)
+      console.log(`[parse-census] 脚本调了、快照里有、本仓没挂的 java.* 方法 ${bridgeGaps.length} 种：`)
       console.log(fmt(new Map(bridgeGaps), 'name'))
     }
     if (notUpstream.length) {
-      console.log(`[parse-census] 对面 JsExtensions 也没有的调用名 ${notUpstream.length} 种（不判红，只报）：`)
+      console.log(`[parse-census] 快照的 java 方法集里也没有的调用名 ${notUpstream.length} 种（不判红，只报）：`)
       console.log(fmt(new Map(notUpstream), 'name'))
     }
     if (packages.size) {

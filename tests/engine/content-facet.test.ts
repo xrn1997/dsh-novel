@@ -6,11 +6,11 @@ import { applyReplaces } from '../../src/engine/replace.js'
 import { UnsupportedRuleError } from '../../src/engine/errors.js'
 
 // 本轮正文链路修复的引擎钉子：
-// ① default 方言 `text.<串>` 选择语义（legado getElementsContainingOwnText）
-// ② 属性终端（legado getResultLast else：链尾未知提取指令 = HTML 属性名）+ 取值用途
+// ① default 方言 `text.<串>` 选择语义（按文本选元素）
+// ② 属性终端（链尾未知提取指令 = HTML 属性名）+ 取值用途
 // ③ 模板字面段（URL 模板 / {{expr}} 插值 / {$.path} 内嵌）
 // ④ `##` 尾 {{chapter.title}} 插值
-// ⑤ 中链 jsonpath（JS 返回对象再取字段——上游修复后 legado 语义）
+// ⑤ 中链 jsonpath（JS 返回对象再取字段——链上有认得出的 JSON 就按 JSON 走）
 
 const tocHtml = `<div id="wrap"><ul class="list">
   <li><a href="/b/1.html">第一章 起点</a></li>
@@ -111,7 +111,7 @@ describe('③ 模板字面段', () => {
       { html: JSON.stringify({ id: 5 }), baseUrl: 'https://x.com/' }, 'search', 'value')
     expect(v2).toEqual({ kind: 'value', text: 'https://q.com/intro?bookid=1100000005' })
     const v3 = await evaluate('https://x.com/list/{{page-1}}', { html: '' }, 'search', 'value')
-    expect(v3).toEqual({ kind: 'value', text: 'https://x.com/list/0' }) // page 缺省 1（legado 同款）
+    expect(v3).toEqual({ kind: 'value', text: 'https://x.com/list/0' }) // page 缺省 1
   })
   it('evaluate：链中模板段替换链值（$.path 后接 URL 模板——多看阅读形态）', async () => {
     const item = JSON.stringify({ source_id: '9527' })
@@ -141,7 +141,7 @@ describe('⑤ 中链 jsonpath（JS 返回对象再取字段）', () => {
     const page = JSON.stringify({ rows: [{ t: '甲' }, { t: '乙' }] })
     const v = await evaluate('$.rows[*]@$.t', { html: page }, 'toc', 'list')
     expect(v).toEqual({ kind: 'list', items: ['甲', '乙'] })
-    // js 段产出 JSON 文本 → 中链 jsonpath 按 JSON 求值（上游修复后 legado 语义）
+    // js 段产出 JSON 文本 → 中链 jsonpath 按 JSON 求值（链上有认得出的 JSON 就按 JSON 走）
     const v2 = await evaluate('<js>JSON.stringify({a:{b:7}})</js>$.a.b', { html: '' }, 'search', 'value')
     expect(v2).toEqual({ kind: 'value', text: '7' })
   })
@@ -176,8 +176,7 @@ describe('⑥ 二轮补齐（元素包装 / AllInOne 行内标志 / 方括号索
       .toEqual({ kind: 'list', items: ['二', '三'] })
   })
   it('方括号多条目：并集按**写入序**、部分越界只留合法项、全越界 → Miss；[!0,2] 多值排除', async () => {
-    // legado ElementsSingle 把条目收进 `indexSet: MutableSet<Int>`（越界的静默丢弃），
-    // 取位时 `for (pcInt in indexSet) es.add(elements[pcInt])` —— LinkedHashSet 的**插入序**，
+    // 条目收进 Set（越界的静默丢弃），取位时按**插入序**遍历，
     // 所以 `[3,1]` 出的是「第4个、第2个」，不是文档序。（本仓此前 sort 成文档序：写序影响结果才叫保真。）
     const html = '<ul><li>一</li><li>二</li><li>三</li><li>四</li></ul>'
     expect(await evaluate('li[2,3]@text', { html }, 'toc', 'list'))
@@ -237,7 +236,7 @@ describe('`{{@@规则}}`：花括号区内的 @ 不是段界（真源 intro 四�
 })
 
 describe('JSON 条目上的裸词终端（真源 ruleChapterUrl: url / href，2026-09 审计 3 源）', () => {
-  // 对面按内容类型分派：isJSON 时整条规则走 AnalyzeByJSonPath（model/analyzeRule/AnalyzeRule.kt），
+  // 按内容类型分派：条目是 JSON 时整条规则按 JSON 解析，
   // 所以裸词 `url` 在 JSON 条目上是**属性读**；本仓此前只在 DOM 上找同名属性 → 恒 0 命中
   // → 逐章回退目录页 → 「未取到任何章节地址」RuleEvalError。
   const ITEM = '{"url":"/c/123.html","href":"/c/124.html","name":"第十二章","id":7}'

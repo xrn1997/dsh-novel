@@ -54,7 +54,7 @@ describe('fetchPage', () => {
     await f.fetchPage('https://a.com/x')
     expect(seen?.dispatcher).toBeUndefined()
   })
-  // Node fetch 默认不带 User-Agent——站点 WAF 按 UA 过滤直接 403（实测 26 源；legado WebView 同理默认带）
+  // Node fetch 默认不带 User-Agent——站点 WAF 按 UA 过滤直接 403（实测 26 源；浏览器口径默认带）
   it('缺省带浏览器 UA/Accept 头；调用方声明的同名头优先', async () => {
     let seen: Record<string, unknown> | undefined
     const f = createFetcher({

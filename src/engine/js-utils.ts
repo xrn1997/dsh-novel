@@ -17,15 +17,15 @@ export function md5Hex(s: string): string {
   return crypto.createHash('md5').update(String(s), 'utf8').digest('hex')
 }
 
-/** legado md5Encode16 语义：32 位 md5 取中 16 位（slice(8, 24)） */
+/** java.md5Encode16 语义：32 位 md5 取中 16 位（slice(8, 24)） */
 export function md5Hex16(s: string): string {
   return md5Hex(s).slice(8, 24)
 }
 
 /**
- * JCA 算法名 → node 摘要名。对面把 Java 的算法名直接传进来（`MessageDigest.getInstance(name)` /
- * `Mac.getInstance(name)`：`MD5`/`SHA-256`/`HmacSHA512`…），node 的名字族不一样，且
- * 名字对不上时对面抛 NoSuchAlgorithmException —— 所以**认不出就点名抛错**，绝不静默退成 md5。
+ * JCA 算法名 → node 摘要名。脚本按 Java 的算法名传参（JCA 的 `MessageDigest.getInstance(name)` /
+ * `Mac.getInstance(name)` 命名族：`MD5`/`SHA-256`/`HmacSHA512`…），node 的名字族不一样，且
+ * 名字对不上在 Java 侧要抛 NoSuchAlgorithmException —— 所以**认不出就点名抛错**，绝不静默退成 md5。
  * 刻意用显式表而不是 `crypto.getHashNames()`：后者在部分运行时里不存在（本仓实测 vitest 的
  * node realm 就没有该方法），拿它当白名单会让整桥在加载期炸。
  */
@@ -37,7 +37,7 @@ const JCA_TO_NODE_HASH: Record<string, string> = {
 }
 
 /** `stripHmac` 为 HMAC 族而设：JCA 叫 `HmacSHA256`，node 的 `createHmac` 要的是摘要名 `sha256`
- *  （对面 `CryptoUtils.hmac` 亦然——算法名只承担「用哪个摘要」）。 */
+ *  （HMAC 族的算法名只承担「用哪个摘要」，`Hmac` 前缀是冗余的）。 */
 export function jcaHashName(algorithm: string, stripHmac = false): string {
   const raw = String(algorithm)
   const base = stripHmac ? raw.replace(/^hmac[-_]?/i, '') : raw
@@ -49,23 +49,23 @@ export function jcaHashName(algorithm: string, stripHmac = false): string {
   return hit
 }
 
-/** 对面 `JsEncodeUtils.digestHex(data, algorithm)`：**data 在前、算法在后**，data 按 UTF-8 取字节 */
+/** java.digestHex(data, algorithm)：**data 在前、算法在后**，data 按 UTF-8 取字节 */
 export function digestHex(data: string, algorithm: string): string {
   return crypto.createHash(jcaHashName(algorithm)).update(String(data), 'utf8').digest('hex')
 }
 
-/** 对面 `digestBase64Str`：标准 base64、无换行（Android `Base64.NO_WRAP`） */
+/** java.digestBase64Str：标准 base64、无换行（形态同 Android `Base64.NO_WRAP`） */
 export function digestBase64(data: string, algorithm: string): string {
   return crypto.createHash(jcaHashName(algorithm)).update(String(data), 'utf8').digest('base64')
 }
 
-/** 对面 `HMacHex(data, algorithm, key)`：key 与 data 都按 UTF-8 取字节 */
+/** java.HMacHex(data, algorithm, key)：key 与 data 都按 UTF-8 取字节 */
 export function hMacHex(data: string, algorithm: string, key: string): string {
   return crypto.createHmac(jcaHashName(algorithm, true), Buffer.from(String(key), 'utf8'))
     .update(String(data), 'utf8').digest('hex')
 }
 
-/** 对面 `HMacBase64(data, algorithm, key)` */
+/** java.HMacBase64(data, algorithm, key)：输出 base64（取字节口径同 HMacHex） */
 export function hMacBase64(data: string, algorithm: string, key: string): string {
   return crypto.createHmac(jcaHashName(algorithm, true), Buffer.from(String(key), 'utf8'))
     .update(String(data), 'utf8').digest('base64')
@@ -81,7 +81,7 @@ export function base64Decode(s: string): string {
   return Buffer.from(String(s), 'base64').toString('utf8')
 }
 
-/** java.encodeURI 垫片：legado 实际语义 = encodeURIComponent（中文/空格/斜杠全部转义） */
+/** java.encodeURI 垫片：语义 = encodeURIComponent（中文/空格/斜杠全部转义） */
 export function uriEncode(s: string): string {
   return encodeURIComponent(String(s))
 }
@@ -94,10 +94,10 @@ export function hexDecodeToString(hex: string): string {
 }
 
 /**
- * HTML 实体反转义（对面 `StringEscapeUtils.unescapeHtml4` 的**近似承接**，不是全表）：
- * 数字引用（`&#n;` / `&#xhh;`）+ HTML4 常用命名集。**未知实体原样留**——与本页 `engine/dom`
- * 的实体口径同一条纪律（不猜），差集是「对面能解、我们留原样」，不是解错。
- * 用途：`java.getString` 的 unescape 开关（对面缺省 true，在已解码的取值上**再解一次**，
+ * HTML 实体反转义（**白名单近似**，不是全表）：数字引用（`&#n;` / `&#xhh;`）+ HTML4 常用命名集。
+ * **未知实体原样留**——与本页 `engine/dom` 的实体口径同一条纪律（不猜），差集只是「原样留」，
+ * 不是解错。
+ * 用途：`java.getString` 的 unescape 开关（该开关缺省 true，在已解码的取值上**再解一次**，
  * 专治 JSON API 源把 `<p>&amp;lt;</p>` 这类二次转义文本当内容返回的站点）。
  */
 const NAMED_ENTITIES: Record<string, string> = {
@@ -136,8 +136,8 @@ export function unescapeHtml4(s: string): string {
       return Number.isNaN(code) || !Number.isFinite(code) ? m : safeFromCodePoint(code, m)
     }
     const hit = NAMED_ENTITIES[body]
-    // 对面遇到解不了的实体是**原样留**（commons-text 的 unescapeHtml4 不认识的串不替换）；
-    // 无分号尾的形态（`&nbsp` 后不跟 ;）对面也不解——本表按带分号才认，同形。
+    // 解不了的实体一律**原样留**（不替换、不清洗）；
+    // 无分号尾的形态（`&nbsp` 后不跟 ;）同样不解——本表按带分号才认，口径一致。
     return hit === undefined ? m : hit
   })
 }
@@ -153,14 +153,14 @@ function safeFromCodePoint(code: number, fallback: string): string {
 }
 
 /**
- * 相对地址绝对化（对面 `utils/NetworkUtils.kt` 的 getAbsoluteURL 五条口径）：
+ * 相对地址绝对化（五条口径）：
  *  ① base 空 → 返回 trim 后的相对串（**不猜**成任何站点）；
  *  ② base 先剥 `,` 之后的请求选项（`substringBefore(",")`——URL 即请求规格那条通用教训）；
  *  ③ 相对串已是绝对地址 / data URI → 原样；
- *  ④ `javascript` 开头 → 空串（对面就是返回 ""，不是原样透出）；
+ *  ④ `javascript` 开头 → 空串（口径是返回空串，不是原样透出）；
  *  ⑤ 其余按 base 解析，解析失败回退 trim 原串。
- * 桥侧用它承接 `getString(..., isUrl=true)`：base 传 EvalContext.baseUrl（对面传 redirectUrl，
- * 本仓的重定向落地地址在请求层丢弃，此处以规则求值的 base 为最近似，差异记在矩阵 `h-abs-urls`）。
+ * 桥侧用它承接 `getString(..., isUrl=true)`：base 传 EvalContext.baseUrl（本仓的重定向落地地址不在
+ * 这一步的上下文里，此处以规则求值的 base 为最近似，差异记在矩阵 `h-abs-urls`）。
  */
 export function absolutizeUrl(base: string | null | undefined, relative: string): string {
   const rel = String(relative).trim()
@@ -227,7 +227,7 @@ export function engineValueToStrings(v: EngineValue): string[] {
 
 /**
  * PNG → ARGB 像素数组（`Packages.android.graphics.BitmapFactory.decodeStream` 宿主实现）。
- * legado 跑在 Android 上由系统解码；本仓以 node:zlib 解 IDAT + 逐行去滤波自实现——
+ * Android 那套系统解码在本仓不可用；改以 node:zlib 解 IDAT + 逐行去滤波自实现——
  * 支持位深 1/2/4/8/16（16 取高字节）、颜色类型 0/2/3/4/6、tRNS 透明、非隔行。
  * 隔行（Adam7）/未知滤波/数据不足 → 抛错（宁炸不猜：给错位像素比报错坏得多）。
  *
@@ -354,7 +354,7 @@ function paeth(a: number, b: number, c: number): number {
   return pa <= pb && pa <= pc ? a : (pb <= pc ? b : c)
 }
 
-/** Java charset 名归一（legado 脚本传 `ISO8859_1` 这类 Java 别名）：剥分隔符小写后查表，
+/** Java charset 名归一（legado 书源脚本传 `ISO8859_1` 这类 Java 别名）：剥分隔符小写后查表，
  *  未命中回传原名交给 iconv 判定（encodingExists 不成立 → 调用方如实报错，不猜编码）。 */
 export function normalizeCharset(raw: string): string {
   const s = String(raw).trim().replace(/[-_\s]/g, '').toLowerCase()
@@ -381,8 +381,8 @@ export function javaDecode(bytes: Uint8Array, charset: string): string {
   return iconv.decode(Buffer.from(bytes), cs)
 }
 
-// ── 中文数字（legado StringUtils.chineseNumToInt / JsExtensions.toNumChapter）──────────
-// 逐字抄对面的算法而不是自写一个「更聪明」的：`一千一` 在对面算出 1100（末位数字跟在「千」后按
+// ── 中文数字（chineseNumToInt / toNumChapter 共用的一条算法）────────────────────────────
+// 照搬这条既有算法而不是自写一个「更聪明」的：`一千一` 按它算出 1100（末位数字跟在「千」后按
 // 「补一位」处理 = 1×1000/10，而 `一千二百` 是 1200），源作者要的就是这个输出——换一套算法会
 // 静默改掉他们排序与标题规整的结果。两个样例都钉在 `tests/engine/js-utils.test.ts`。
 const CHN_MAP: Record<string, number> = {}
@@ -390,7 +390,7 @@ for (const [i, ch] of [...'零一二三四五六七八九十'].entries()) CHN_MA
 for (const [i, ch] of [...'〇壹贰叁肆伍陆柒捌玖拾'].entries()) CHN_MAP[ch] = i
 Object.assign(CHN_MAP, { 两: 2, 百: 100, 佰: 100, 千: 1000, 仟: 1000, 万: 10000, 萬: 10000, 亿: 100000000 })
 
-/** 中文数字 → 整数；含认不出的字符 → -1（对面 `runCatching{…}.getOrDefault(-1)`） */
+/** 中文数字 → 整数；含认不出的字符 → -1（失败给哨兵值，不抛错） */
 export function chineseNumToInt(chNum: string): number {
   const cn = [...chNum]
   let result = 0
@@ -427,7 +427,7 @@ export function stringToInt(str: string): number {
   return /^-?\d+$/.test(num) ? Number(num) : chineseNumToInt(num)
 }
 
-/** legado `java.toNumChapter`：把标题里第一个「第…章」的数字段换成阿拉伯数字，无匹配原样返回 */
+/** java.toNumChapter：把标题里第一个「第…章」的数字段换成阿拉伯数字，无匹配原样返回 */
 export function toNumChapter(s: string): string {
   const m = /(第)(.+?)(章)/.exec(s)
   if (m === null) return s

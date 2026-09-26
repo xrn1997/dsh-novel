@@ -5,8 +5,8 @@ import { engineValueToString } from './js-utils.js'
 
 /**
  * JSONPath 求值数据解析（evaluate 的 Runtime 与 @put 共用）：ctx.json 优先；缺席且 html 是合法
- * JSON 时回退解析 html（legado `isJSON = content.toString().isJson()` → `JsonPath.parse(content)` 口径——
- * 搜索链路只传 html 不传 json，不回退的话所有 $. 规则对 JSON API 源恒 Miss）。
+ * JSON 时回退解析 html（内容合法即为 JSON 数据——搜索链路只传 html 不传 json，
+ * 不回退的话所有 $. 规则对 JSON API 源恒 Miss）。
  * 住址从 evaluate 迁来：evaluate 值 import 本模块、本模块又值 import evaluate 形成唯一运行时环
  * ——本函数只依赖 EvalContext，搬来即打破环。
  */
@@ -21,25 +21,25 @@ export function resolveJsonData(ctx: EvalContext): unknown {
 }
 
 /**
- * `@put:` / `@get:` 变量（照 legado 文档口径）。
+ * `@put:` / `@get:` 变量（语义见下）。
  *
  * `ctx.vars` 由调用方持有、跨规则共享（引擎零内部状态）。
  *
- * `@put:{k1:"v1", k2:"ruleOrJsonPath"}` 值语义（钉死，legado `putRule` = `put(key, getString(value))`）：
+ * `@put:{k1:"v1", k2:"ruleOrJsonPath"}` 值语义（钉死：put = 先按当前取值口径求值、再存其字符串）：
  *   - 规则形态的值 → **按子规则求值**（`subEval` 由 evaluate 的链上下文接线，基内容 = 当前链值，
- *     未起链则整页原文）：Value → 存文本、List → `\n` 拼接存（legado getString 从不返列表）、
+ *     未起链则整页原文）：Value → 存文本、List → `\n` 拼接存（取值出口只产字符串、从不返列表）、
  *     Miss → 不落盘（@get 自然 Miss，Miss≠空串）；
  *   - 以 `$.` 或 `@json:` 开头 → JSONPath（`$.` 前缀天然覆盖 `$..`；`@json:` 剥前缀后即路径），
- *     与子规则同一条 getString 出口；
- *   - 其余（`123`、`凡人修仙传,全本`、`pic`）不构成规则形态 → 字面存；**裸值**先按 legado
- *     LinkedTreeMap 口径对当前 JSON 条目做键访问（引号是显式字面量记号，不参与这层推断）。
+ *     与子规则同一条取值出口；
+ *   - 其余（`123`、`凡人修仙传,全本`、`pic`）不构成规则形态 → 字面存；**裸值**先对当前 JSON
+ *     条目做键访问（引号是显式字面量记号，不参与这层推断）。
  *   - js 形态的值（`<js>`/`@js:`）在同步子环路里求值不了 → 如实抛「子规则内不支持 js 段」，
  *     不静默取空；调用方未接线 subEval（直测/桥缺位）→ 抛错点名，不降级成字面存。
  *
- * pairs 解析（手写小 parser，不用 JSON.parse——legado 的值不保证是严格 JSON）：
+ * pairs 解析（手写小 parser，不用 JSON.parse——值不保证是严格 JSON）：
  *   `{` 开头 `}` 结尾；顶层逗号切分（引号内逗号不切）；每项 `key:"value"` 或 `key:裸值`。
- *   引号有意义：带引号 = 显式字面量；裸值 = 先当 JSONPath（`$.`/`@json:`），否则按 legado
- *   口径对当前条目做**键访问**，键不在才字面存。（「值必须带双引号，否则抛错」是 v1 旧口径，
+ *   引号有意义：带引号 = 显式字面量；裸值 = 先当 JSONPath（`$.`/`@json:`），否则对当前条目
+ *   做**键访问**，键不在才字面存。（「值必须带双引号，否则抛错」是 v1 旧口径，
  *   实测 2 源直接炸，已废——但引号与裸值的这条分界必须保住，见 `evalPut` 的键访问分支。）
  *
  * `@get:name` → 读 `ctx.vars[name]`；未 put 过 / vars 未初始化 → Miss（detail 提到键名）。
@@ -50,7 +50,7 @@ function reject(detail: string, pairsRaw: string, loc: SegmentLoc, facet: Facet)
 }
 
 /** 手写 pairs 解析：顶层逗号切分（引号内不切），每项 key:"value" 或 key:裸值
- *  （legado 真实源 `@put:{cid:ComicID}`、`@put:{img:pic}` 无引号形态——v1 曾要求必带引号，
+ *  （真实源 `@put:{cid:ComicID}`、`@put:{img:pic}` 无引号形态——v1 曾要求必带引号，
  *  实测 2 源直接抛错；现两种形态都收：引号值处理转义，裸值读到顶层逗号为止） */
 function parsePairs(pairsRaw: string, loc: SegmentLoc, facet: Facet): Array<[string, string, boolean]> {
   const s = pairsRaw.trim()
@@ -89,7 +89,7 @@ function parsePairs(pairsRaw: string, loc: SegmentLoc, facet: Facet): Array<[str
       }
       if (!closed) reject('@put 值引号未闭合', pairsRaw, loc, facet)
     } else {
-      // 裸值：读到顶层逗号为止（key:value 形态——legado LinkedTreeMap 键访问/字面串）
+      // 裸值：读到顶层逗号为止（key:value 形态——键访问/字面串）
       const vStart = i
       while (i < n && inner[i] !== ',') i++
       value = inner.slice(vStart, i).trim()
@@ -105,7 +105,7 @@ function parsePairs(pairsRaw: string, loc: SegmentLoc, facet: Facet): Array<[str
 
 /** 值是否构成规则形态（决定「按子规则求值」还是「字面存」）。判据刻意从宽在「含段界 @ / 组合符 /
  *  规则起始符」这三类记号上——它们不出现在真实源的普通字面值里；反过来 `123`、`凡人修仙传,全本`
- *  这类字面值不能被误打成规则（legado 对它们取不到东西，本仓按字面存是超集且如实）。 */
+ *  这类字面值不能被误打成规则（它们取不到东西；本仓按字面存是超集且如实）。 */
 function isRuleFormValue(v: string): boolean {
   return /[@|]|\|\||&&|%%/.test(v) || /^[@/[<.#]/.test(v)
 }
@@ -114,7 +114,7 @@ function isRuleFormValue(v: string): boolean {
  * `@put:` 段求值：解析 pairs 并写入 `ctx.vars`（未初始化则自动建）。
  * subEval = 子规则求值口（evaluate 接线，基内容 = 当前链值）；缺席时规则形态的值如实抛错。
  * 返回值：原样回显 pairsRaw（Value）——**仅供直测读取**；规则链里 @put 是副作用段，
- * evaluate 丢弃其返回并以透传的上游值为链值（legado 口径），故生产路径不消费该返回值。
+ * evaluate 丢弃其返回并以透传的上游值为链值，故生产路径不消费该返回值。
  */
 export function evalPut(
   pairsRaw: string, ctx: EvalContext, loc: SegmentLoc, facet: Facet,
@@ -123,13 +123,13 @@ export function evalPut(
   const pairs = parsePairs(pairsRaw, loc, facet)
   // 先全部求值进 staged，全成功才落盘 ctx.vars——中途抛错不留下半截写入
   const staged: Record<string, string> = {}
-  /** getString 出口（legado put(key, getString(value))）：Value → 存文本、List → `\n` 拼接、
+  /** 取值出口（put 先按取值口径求值、再存其字符串）：Value → 存文本、List → `\n` 拼接、
    *  Miss → 不落盘（@get 时自然 Miss；Miss≠空串） */
   const putString = (key: string, res: EngineValue): void => {
     if (res.kind === 'miss') return
     staged[key] = res.kind === 'list' ? res.items.join('\n') : engineValueToString(res, 'inner')
   }
-  /** JSONPath 值：数据源与 JSONPath 段同口径（ctx.json 缺席时回退解析 ctx.html，legado isJSON 口径） */
+  /** JSONPath 值：数据源与 JSONPath 段同口径（ctx.json 缺席时回退解析 ctx.html——内容合法即为 JSON 数据） */
   const putJsonPath = (key: string, path: string): void => {
     putString(key, evalJsonPath(path, resolveJsonData(ctx), loc, facet))
   }
@@ -143,15 +143,14 @@ export function evalPut(
       putJsonPath(key, value.slice('@json:'.length))
     } else if (isRuleFormValue(value)) {
       // 规则形态的值（`[property$=x]@content`、`//xpath`、`@css:`、`i@text`…）→ 按子规则求值。
-      // legado 的 putRule 就是 getString；真实源 ruleBookInfo.init 的六键形态全靠这条
+      // put 的值就是一次取值，故与取值段同一条出口；真实源 ruleBookInfo.init 的六键形态全靠这条
       // （2026-09 真机审计：曾被段切分撕开 + 被 v1 白名单拒掉）。
       if (!subEval) {
         reject(`@put 值是规则串但调用方未接线子规则求值口（evaluate 的 subEval）：${JSON.stringify(value)}`, pairsRaw, loc, facet)
       }
       putString(key, subEval(value))
     } else {
-      // legado 口径（AnalyzeRule.getString 的 LinkedTreeMap 分支「键值直接访问」）：
-      // **裸值** = 对当前 JSON 条目按键取值（`@put:{img:pic}` → vars.img = 条目.pic）；
+      // 键值直接访问口径：**裸值** = 对当前 JSON 条目按键取值（`@put:{img:pic}` → vars.img = 条目.pic）；
       // 键不存在 / 非 JSON 上下文 → 字面存（比空串如实——@get 拿到原文可诊断）。
       // 带双引号的值是用户显式写的字面量，**不做这层推断**（`@put:{img:"pic"}` 存 'pic'）：
       // 引号是「我要字面量」的唯一记号，把它当裸值会让同一份数据两种结果互相覆盖（2026-09 审查）。
@@ -172,16 +171,16 @@ export function evalPut(
 }
 
 /**
- * 变量**读链**（对面 `AnalyzeRule.get`）：本次调用的 `vars`（ruleData/chapter 层）→ source 层，
- * 每级「空串则继续下找」（对面 `.takeIf { it.isNotEmpty() }`）。全空 → undefined，
- * 由调用方决定是 Miss 还是 ""（对面 get 返 ""，而 `@get:` 段保自有 Miss 口径）。
+ * 变量**读链**：本次调用的 `vars`（ruleData/chapter 层）→ source 层，
+ * 每级「空串则继续下找」。全空 → undefined，由调用方决定是 Miss 还是 ""
+ * （`@get:` 段保自有 Miss 口径：未定义即 Miss）。
  * 自有键判定不能省：`ctx.vars?.[name]` 顺原型链会把 `Object.prototype.toString` 当变量值返回
  * （声明是 string 实为函数，一路带进正文），且永远算不上「未 put 过」。
  */
 /**
- * 对面 `AnalyzeRule.get` 的完整口径：**先两个内建伪变量**（`bookName`→book.name、
- * `title`→chapter.title，且只在对应宿主存在时生效），再走四级读链。
- * 宿主缺席时不猜：`java.get("bookName")` 在搜索面（无 book）落回读链，与对面 `book?.let{}` 同形。
+ * 变量读取的完整口径：**先两个内建伪变量**（`bookName`→book.name、
+ * `title`→chapter.title，且只在对应宿主存在时生效），再走读链。
+ * 宿主缺席时不猜：`java.get("bookName")` 在搜索面（无 book）落回读链，与「宿主在才取」同形。
  */
 export function getRuleVar(ctx: EvalContext, name: string): string | undefined {
   if (name === "bookName" && ctx.book !== undefined) return String(ctx.book.name ?? "")

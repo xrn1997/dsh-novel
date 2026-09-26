@@ -29,13 +29,13 @@ type Eq<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
 type Assert<T extends true> = T
 
 // 类型别名仅作编译期断言（tsc --noEmit 覆盖 tests；形状回归即红）
-// 形参是 unknown 而非 string：对面 Rhino 按 String 形参强制转换，脚本常把上一段的值
+// 形参是 unknown 而非 string：脚本侧按字符串形参强制转换，脚本常把上一段的值
 // （JSONPath 的单元素数组最常见）直接递给 ajax——桥侧统一 String()，空值点名（钉子见
 // tests/engine/js-bindings.test.ts 的「java.ajax 参数规约」）。
 type _Ajax = Assert<Eq<JavaBridge['ajax'], (url: unknown) => Promise<string>>>
 type _Get = Assert<Eq<JavaBridge['get'], (key: string) => string | undefined>>
 type _Put = Assert<Eq<JavaBridge['put'], (key: string, value: unknown) => void>>
-// getString 的三个位置各有语义（对面两个重载 + 四参缺省）：第二参布尔 = unescape 开关，
+// getString 的三个位置各有语义（二参重载 + 三参形态）：第二参布尔 = unescape 开关，
 // 非布尔 = mContent 基内容，第三参布尔 = isUrl 绝对化。**没有「取 URL 后再抓」这条**。
 type _GetString = Assert<Eq<JavaBridge['getString'], (rule: unknown, arg2?: unknown, isUrl?: unknown) => string>>
 type _GetElement = Assert<Eq<JavaBridge['getElement'], (rule: string) => { html: string; text: string } | null>>
@@ -125,21 +125,21 @@ describe('invokeJavaMethod 分派（不进 vm 的直测）', () => {
   })
 
   it('getString 重载分派：二参布尔是 unescape（对面双参重载），不是 isUrl，也不再抛', () => {
-    // 对面 model/analyzeRule/AnalyzeRule.kt：`getString(ruleStr, unescape: Boolean)` 与
-    // `getString(ruleStr, mContent, isUrl)` 是两个不同重载，四参版 unescape **缺省 true**。
-    // 本仓此前把第二参当 isUrl：`true` 当场 UnsupportedRuleError，`false` 不抛但把
-    // 「不要反转义」的意图静默反做（对面要原文，本仓给解码后的值）。
+    // `getString(ruleStr, unescape: Boolean)` 与 `getString(ruleStr, mContent, isUrl)`
+    // 是两个不同形态，后者的 unescape **缺省 true**。本仓此前把第二参当 isUrl：
+    // `true` 当场 UnsupportedRuleError，`false` 不抛但把「不要反转义」的意图静默反做
+    // （本意要原文，本仓给解码后的值）。
     const fake = (): EngineValue => ({ kind: 'value', text: 'A&amp;B' })
     const deps = depsOf({ evaluateRef: fake })
     expect(invokeJavaMethod(deps, 'getString', ['tag.p@text', false])).toBe('A&amp;B')
     expect(invokeJavaMethod(deps, 'getString', ['tag.p@text', true])).toBe('A&B')
-    // 缺省 = 对面 unescape=true（再解一次实体）
+    // 缺省 = unescape=true（再解一次实体）
     expect(invokeJavaMethod(deps, 'getString', ['tag.p@text'])).toBe('A&B')
   })
 
   it('getString 三参 isUrl：基内容走 mContent、产物按 baseUrl 绝对化，**不发请求**', () => {
-    // 对面 isUrl 分支只做 `NetworkUtils.getAbsoluteURL(redirectUrl, str)`，
-    // 空白结果回退 baseUrl——「取到 URL 后再抓一次」这条语义在对面不存在。
+    // isUrl 分支只把产物按 base 绝对化，空白结果回退 baseUrl——
+    // 「取到 URL 后再抓一次」这条语义不存在。
     // 本 deps 的 ctx 没有 fetch：实现若去抓站点会当场抛「网络能力」，用例即红 ⇒ 零抓取是断言出来的。
     const seen: unknown[] = []
     const fake = (rule: string, data: unknown): EngineValue => {
@@ -161,8 +161,8 @@ describe('invokeJavaMethod 分派（不进 vm 的直测）', () => {
       ctx: { vars: {}, baseUrl: 'https://m.example.com/read/index.html' } satisfies EvalContext,
       evaluateRef: fake,
     })
-    // 对面 `for (url in result)` 逐项 getAbsoluteURL(redirectUrl, url)：空串走 `URL(base, "")`
-    // ⇒ 得到 base 本身（非空 ⇒ 收进列表）。这条不"顺手修正"成过滤空项——那是与对面不同的产出。
+    // 逐项绝对化：空串走 `URL(base, "")` ⇒ 得到 base 本身（非空 ⇒ 收进列表）。
+    // 这条不"顺手修正"成过滤空项——那会是另一种产出。
     expect(invokeJavaMethod(deps, 'getStringList', ['tag.a@href', null, true]))
       .toEqual(['https://m.example.com/b/1', 'https://x.test/b/2', 'https://m.example.com/read/index.html'])
   })
@@ -196,11 +196,10 @@ describe('invokeJavaMethod 分派（不进 vm 的直测）', () => {
     expect(invokeJavaMethod(deps, 'cookieGet', ['token'])).toBeNull()
   })
 
-  it('源状态三张表互不串味：单串槽 / 键值表 / 缓存（对面 BaseSource 本就是两处存储）', () => {
+  it('源状态三张表互不串味：单串槽 / 键值表 / 缓存（三处本可分开的存储）', () => {
     const deps = depsOf()
-    // 对面 data/entities/BaseSource.kt：setVariable/getVariable 是**一个字符串槽**
-    // （CacheManager 键 sourceVariable_<key>，getVariable 直返那串、未设返 ""）；
-    // put(key,value)/get(key) 是另一套命名空间（键 v_<key>_<name>，缺键返 ""）。
+    // setVariable/getVariable 是**一个字符串槽**（直返那串、未设返 ""）；
+    // put(key,value)/get(key) 是另一套命名空间（缺键返 ""）。
     expect(invokeJavaMethod(deps, 'sourceGetVariable', [])).toBe('')          // 从未设置 → ''
     invokeJavaMethod(deps, 'sourceSetVariable', ['abc'])
     expect(invokeJavaMethod(deps, 'sourceGetVariable', [])).toBe('abc')       // 直返原串，不是整表 JSON
@@ -210,7 +209,7 @@ describe('invokeJavaMethod 分派（不进 vm 的直测）', () => {
     // 旧实现把两件事塞进同一张 Map，setVariable 先 clear() 整表 ⇒ 这里曾是 ''（键值被顺手清空）
     expect(invokeJavaMethod(deps, 'sourceVarGet', ['k'])).toBe('v')
     expect(invokeJavaMethod(deps, 'sourceGetVariable', [])).toBe('第二次')
-    // cache 又是第三处：对面 CacheManager 全局表（本仓按源隔离是在册裁决），不许漏进键值表
+    // cache 又是第三处：缓存本是全局表（本仓按源隔离是在册裁决），不许漏进键值表
     invokeJavaMethod(deps, 'cachePut', ['ck', 'cv'])
     expect(invokeJavaMethod(deps, 'cacheGet', ['ck'])).toBe('cv')
     expect(invokeJavaMethod(deps, 'sourceVarGet', ['cache:ck'])).toBe('')
@@ -227,9 +226,9 @@ describe('invokeJavaMethod 分派（不进 vm 的直测）', () => {
 })
 
 /**
- * 摘要 / HMAC 族（对面 `help/JsEncodeUtils.kt`：`digestHex(data, algorithm)` /
- * `digestBase64Str(data, algorithm)` / `HMacHex(data, algorithm, key)` / `HMacBase64(...)`——
- * **实参顺序是 data 在前、算法在后**，且 `data.toByteArray()` 是 UTF-8）。
+ * 摘要 / HMAC 族（`digestHex(data, algorithm)` / `digestBase64Str(data, algorithm)` /
+ * `HMacHex(data, algorithm, key)` / `HMacBase64(...)`——
+ * **实参顺序是 data 在前、算法在后**，且入参按 UTF-8 取字节）。
  *
  * 期望值全部由 **openssl 3.5.6 独立算出**（不是 node crypto——那等于拿实现自证）；
  * `HMacHex('Hi There', 'HmacSHA256', 0x0b×20)` 那一条同时是 RFC 4231 test case 2 的公开值，

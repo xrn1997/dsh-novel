@@ -3,7 +3,7 @@ import { htmlToText, looksLikeHtml } from '../engine/dom.js'
 /**
  * 正文文本收口（服务层）。
  *
- * legado 源常以 `@html` 收正文（元素 HTML 原样返回），而本插件的正文契约是**纯文本**：
+ * 书源常以 `@html` 收正文（元素 HTML 原样返回），而本插件的正文契约是**纯文本**：
  * 阅读器按 `\n` 分段渲染 `<p>`、导出写 .txt、agent 工具直接回文本。不转换就会把标签
  * 当正文打出来——久久小说网 `#view_content_txt@html` 实测：2603 字里 21 个 `<p>` 原样落库。
  *
@@ -14,10 +14,10 @@ import { htmlToText, looksLikeHtml } from '../engine/dom.js'
  * 写入的带标签正文也能就地自愈。幂等靠的是「解码后仍像 HTML 就同趟转完」：预转义
  * HTML 串（`&lt;p&gt;…`）解出标签来却直接返回，会让第二次收口把段落当标签吞掉。
  *
- * 两个正文面口径（对齐 legado BookContent/HtmlFormatter）：
- * - **img 保留**（HtmlFormatter.formatKeepImg「仅 img 保留」）：`<img src>` 输出为独立行的
+ * 两个正文面口径：
+ * - **img 保留**（仅 img 保留，其余标签一律剥掉）：`<img src>` 输出为独立行的
  *   图片地址——漫画/图片型章节（ruleContent 产出 `<img>` 串）不再整章零命中报错；
- * - **实体解码**（legado 正文在 HtmlFormatter 后整体 unescapeHtml4）：JSON API 源的正文串
+ * - **实体解码**（转纯文本后整串再解一次实体）：JSON API 源的正文串
  *   常带 `&nbsp;`/`&#8220;` 等预转义实体，非 HTML 形态时就地解码（白名单实体 + 数字实体，
  *   未知实体原样保留——不猜）。
  */
@@ -63,39 +63,37 @@ function safeFromCodePoint(code: number): string {
 
 // ── 简介（展示文本）─────────────────────────────────────────────────────
 
-/** 对面 Java 正则里的 `\s` 是 **ASCII 空白**（不含 U+3000 全角空格），JS 的 `\s` 含它——
- *  直接照抄会让两地的段首缩进行为不同。移植时一律用这个显式字符类。 */
+/** Java 正则里的 `\s` 是 **ASCII 空白**（不含 U+3000 全角空格），JS 的 `\s` 含它——
+ *  直接照抄会让段首缩进行为不同。这里一律用这个显式字符类。 */
 const AW = '[ \t\n\r\f\v]'
-/** 换行连同前后 ASCII 空白（对面 indent1Regex = `\s*\n+\s*`）；对面全局替换，故带 g */
+/** 换行连同前后 ASCII 空白（`\s*\n+\s*` 的显式展开）；全局替换，故带 g */
 const NL_RUN = new RegExp(AW + '*\\n+' + AW + '*', 'g')
-/** 串首空白（对面 indent2Regex = `^[\n\s]+`）。这里**额外含全角空格**：对面 `format` 先把换行
- *  换成「换行 + 缩进」，再给串首补一次缩进，首行就成了四个全角空格——它自己后来在
- *  `formatDisplayText` 里以「各来源的段首缩进宽度不一，先清空再统一补两个全角空格」修掉了，
- *  本仓按修好的形状出（`formatIntro` 的第二条有意偏差，只裁空白不动文字）。 */
+/** 串首空白（`^[\n\s]+`）。这里**额外含全角空格**：若先把换行换成「换行 + 缩进」、再给串首补一次
+ *  缩进，首行就成了四个全角空格；本仓按「各来源的段首缩进宽度不一，先清空再统一补两个全角空格」
+ *  的终态出（`formatIntro` 的第二条有意偏差，只裁空白不动文字）。 */
 const LEAD_WS = /^[\s　]+/
 /** 串尾空白——本仓额外含全角空格，见 formatIntro 的「有意偏差」 */
 const TAIL_WS = /[\s　]+$/
 
-/** 渲染指令前缀（对面 `HtmlFormatter.introPrefixRegex` 与 BookInfo 的三判据）：命中即**整段原样保留**，
+/** 渲染指令前缀（`usehtml`/`useweb`/`md` 三判据）：命中即**整段原样保留**，
  *  交给渲染层按前缀选 HTML/Markdown/WebView 渲染器；本仓没有那三种渲染器，保留前缀的意义在于
  *  「不把书源的交互标记与样式源码当纯文本净化掉」——现库 1 源（米读小说 ruleBookInfo.intro）。 */
 const INTRO_DIRECTIVE = new RegExp('^<(?:usehtml|useweb|md)>', 'i')
 
 /**
- * 简介净化——对面 `HtmlFormatter.format` 的正则流水线逐条移植 + `take(5000)`：
+ * 简介净化——正则流水线（顺序固定）+ 截 5000 字：
  * `&nbsp;`/`&ensp;`/`&emsp;` → 空格、`&thinsp;`/`&zwnj;`/`&zwj;` 与 U+2009–200D 删除 →
  * 块级标签（div/p/br/hr/hN/article/dd/dl）换行 → 注释删除 → 其余标签连同属性删除 →
  * 换行前后空白折叠成「换行 + 两个全角空格」、串首同补缩进、串尾 ASCII 空白删除。
  *
- * 与对面的两处**有意偏差**（都只裁/补空白，不动任何文字）：
- * ① 串尾再收一次空白（含全角空格）——对面因 Java `\s` 不认全角空格，产物以「换行 + 缩进」
+ * 两处**有意偏差**（都只裁/补空白，不动任何文字）：
+ * ① 串尾再收一次空白（含全角空格）——Java `\s` 不认全角空格，照搬的产物会以「换行 + 缩进」
  *    收尾，本仓的展示与导出契约是不留尾空行（见 `normalizeChapterText`）；
- * ② 串首缩进统一成两个全角空格——对面 `format` 会先补一次再补一次，首行成四个全角空格，
- *    它自己后来在 `formatDisplayText` 里以「先清空再统一补」修掉，本仓按修好的形状出。
+ * ② 串首缩进统一成两个全角空格——补缩进本身会叠一次（首行成四个全角空格），本仓按
+ *    「先清空再统一补」的终态出。
  *
- * 两个取值点的差别（对面原样）：**搜索结果**恒净化（`model/webBook/BookList.kt` 的
- * `HtmlFormatter.format(...).take(5000)`，**不认**渲染指令前缀）；**详情页**才先 `trimStart`
- * 判前缀、命中就原样保留（`model/webBook/BookInfo.kt`）。所以 `keepDirective` 由调用方按面传，不在这里统一。
+ * 两个取值点的差别：**搜索结果**恒净化（格式化后截 5000 字，**不认**渲染指令前缀）；**详情页**
+ * 才先 `trimStart` 判前缀、命中就原样保留。所以 `keepDirective` 由调用方按面传，不在这里统一。
  */
 export function formatIntro(raw: string, opts?: { keepDirective?: boolean }): string {
   const trimmed = raw.trimStart()

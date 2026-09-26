@@ -11,9 +11,9 @@ import { makeTempDir, trackService } from '../temp-dir.js'
 import type { NovelSource } from '../../src/services/types.js'
 
 /**
- * bookUrlPattern 嗅探（对面 `model/webBook/BookList.kt`：`analyzeBookList` 命中 pattern 即按详情页
- * 解析并 return、`collections.isEmpty()` 且**未声明 pattern** 时回落详情、`getInfoItem` 取字段与定
- * URL）。Kotlin `String.matches(Regex)` 是**整串**匹配——JS 侧必须锚定，不能裸 `RegExp.test`。
+ * bookUrlPattern 嗅探（命中 pattern 即按详情页
+ * 解析并 return、列表为空且**未声明 pattern** 时回落详情、info 形态取字段与定
+ * URL）。pattern 判定是**整串**匹配——JS 侧必须锚定，不能裸 `RegExp.test`。
  */
 
 const BASE = 'https://s.com'

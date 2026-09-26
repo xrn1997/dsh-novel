@@ -50,7 +50,7 @@ describe('absUrl', () => {
 })
 
 describe('engineFetch（java.ajax 出口）', () => {
-  // legado 语义：java.ajax 的 URL 可带 `url,{json}` 请求选项（AnalyzeUrl 考证）。
+  // java.ajax 的 URL 可带 `url,{json}` 请求选项。
   // 此前不解析选项、整串当 URL 发出 → 站点 403/404（真实崩溃案例：@js 脚本拼
   // `search.php,{'body':...}` 传给 java.ajax）。
   const mkFetcher = () => {
@@ -93,11 +93,10 @@ describe('engineFetch（java.ajax 出口）', () => {
 })
 
 /**
- * 分类 / 字数两个字段的对面口径（`model/webBook/BookList.kt` 的 getSearchItem 与
- * `model/webBook/BookInfo.kt`）。三条都不是本仓可以自行简化的：
- * kind 是 **getStringList 的逗号串**（多命中取首值 = 两边读到不同的值）、
- * wordCount 在**解析层**就过 `wordCountFormat`（对面存进 book 的已是「1.2万字」这种串），
- * 且这一族的读取对面包在 try/catch 里（一条坏分类规则不许带走整页书目）。
+ * 分类 / 字数两个字段的取值口径（搜索面与详情面各一处）。三条都不是本仓可以自行简化的：
+ * kind 是 **逗号串**（不是首值——多命中取首值等于换一个值）、
+ * wordCount 在**解析层**就格式化（存进书目的已是「1.2万字」这种串），
+ * 且这一族的读取包在 try/catch 里（一条坏分类规则不许带走整页书目）。
  */
 describe('分类字段 kindFieldOf（对面 getStringList → joinToString(",") → take(1000)）', () => {
   /** 走真引擎的 subEval + 同一段片段上下文：字段语义的钉子要真求值，不造桩 */
@@ -128,14 +127,14 @@ describe('分类字段 kindFieldOf（对面 getStringList → joinToString(",") 
   it('对面 try/catch 那一半：本仓认不出的规则形态只让该字段留空，书目照收', async () => {
     const f = at('<p><a>玄幻</a></p>')
     // `kind: "0"` / `kind: "k"` 是真库形态（现量见 docs/design/legado-compat.md 的需求量表）：
-    // 无 `@` 单段在解析期抛 UnsupportedRuleError——吞掉它才与对面一致，抛出即整组书目变 error。
+    // 无 `@` 单段在解析期抛 UnsupportedRuleError——吞掉它才符合「坏字段不带走整页」，抛出即整组书目变 error。
     expect(await kindFieldOf(f.sub, '0', f.ctx, 'search')).toBeNull()
     // 求值期炸掉（这里是宿主桩抛「需要安卓宿主环境」）同样只让该字段留空
     expect(await kindFieldOf(f.sub, '@js:java.getVerificationCode("x")', f.ctx, 'search')).toBeNull()
   })
 })
 
-describe('字数字段 wordCountFieldOf（对面 utils/StringUtils.kt 的 wordCountFormat）', () => {
+describe('字数字段 wordCountFieldOf（数字串 → x字 / x.x万字）', () => {
   const at = (html: string) => ({
     sub: ((rule, ctx, facet, usage) =>
       evaluate(rule, { html: ctx.html, baseUrl: ctx.baseUrl }, facet, usage ?? 'value')) as SubRuleEval,
@@ -145,7 +144,7 @@ describe('字数字段 wordCountFieldOf（对面 utils/StringUtils.kt 的 wordCo
   it('整串是整数才转换：≤10000 加「字」，>10000 除一万加「万字」', () => {
     expect(formatWordCount('8000')).toBe('8000字')
     expect(formatWordCount('10000')).toBe('10000字')       // 边界：不 >
-    expect(formatWordCount('10001')).toBe('1万字')          // DecimalFormat("#.#") 去掉 .0001
+    expect(formatWordCount('10001')).toBe('1万字')          // 保留一位小数、不补零
     expect(formatWordCount('12345')).toBe('1.2万字')
     expect(formatWordCount('198765')).toBe('19.9万字')
   })
@@ -165,8 +164,8 @@ describe('字数字段 wordCountFieldOf（对面 utils/StringUtils.kt 的 wordCo
     const hit = at('<span>12345</span>')
     expect(await wordCountFieldOf(hit.sub, 'tag.span@text', hit.ctx, 'detail')).toBe('1.2万字')
     const empty = at('<span></span>')
-    // 空元素取到的是空串而非 Miss：对面 searchBook.wordCount = wordCountFormat("") = ""（照赋值），
-    // BookInfo 面才用 isNotEmpty 挡住——本仓两边都给空串，不折成 null（Miss 与空值是两种东西）
+    // 空元素取到的是空串而非 Miss：formatWordCount("") = ""（照赋值，不折成空值），
+    // 详情面才用非空判定挡住——本仓两边都给空串，不折成 null（Miss 与空值是两种东西）
     expect(await wordCountFieldOf(empty.sub, 'tag.span@text', empty.ctx, 'detail')).toBe('')
     const bad = at('<span>123</span>')
     expect(await wordCountFieldOf(bad.sub, '0', bad.ctx, 'detail')).toBeNull()

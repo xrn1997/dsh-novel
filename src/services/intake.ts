@@ -15,7 +15,7 @@ import type { NovelSource } from './types.js'
  * 现状真相与口径：docs/design/services.md。
  */
 
-/** 去重键：trim + 去尾部斜杠——不改大小写（legado 地址区分路径大小写，魔改会误判） */
+/** 去重键：trim + 去尾部斜杠——不改大小写（站点地址区分路径大小写，魔改会误判） */
 export function dedupKey(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, '')
 }

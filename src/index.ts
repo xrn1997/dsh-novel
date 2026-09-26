@@ -45,8 +45,8 @@ export interface NovelConfig {
   searchTimeoutMs?: number
   searchParallel?: number
   /** js 沙箱预算（vm 同步闸与异步总时长共用；引擎缺省 2000ms 只作回退）。
-   *  缺省 15000：legado Rhino 无硬超时，真实源的多请求目录脚本（java.ajax×2 + md5 签名，
-   *  txs12 源实测）2s 预算必炸——探针 verified 只证明搜索面，正文链路靠这个预算放行。 */
+   *  缺省 15000：真实源的多请求目录脚本（java.ajax×2 + md5 签名，txs12 源实测）
+   *  2s 预算必炸——探针 verified 只证明搜索面，正文链路靠这个预算放行。 */
   jsTimeoutMs?: number
   cacheMaxBytes?: number
   exportDelayMs?: number

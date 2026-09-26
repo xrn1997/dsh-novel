@@ -94,7 +94,7 @@ describe('沙箱 legado 绑定与作用域（本轮修复钉子）', () => {
     const seen: unknown[] = []
     const fetchImpl = async (url: string): Promise<{ body: string }> => { seen.push(url); return { body: 'OK' } }
     // 真源形态：上一段 JSONPath 产出 `['https://…']`，脚本直接 java.ajax(result)——
-    // 对面（Rhino）按 String 形参转换，单元素数组的 toString 就是那条 URL；本仓此前把原值
+    // 脚本侧按 String 形参转换，单元素数组的 toString 就是那条 URL；本仓此前把原值
     // 交给请求组装层，炸成 `template.replace is not a function`（灯读文学 init 段实证）。
     const out = await runScript({
       code: 'java.ajax(["https://x.com/one"]); java.ajax(42); "done"',

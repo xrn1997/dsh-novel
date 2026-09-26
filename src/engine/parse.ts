@@ -42,10 +42,9 @@ export function parseRule(rule: string, facet: Facet = 'rule', usage: RuleUsage 
     reverse = true
     rest = rest.slice(1).trimStart()
   }
-  // ③b 列表用途的 `+` 前缀：对面在**列表入口**（model/webBook/BookList.kt 与
-  //  model/webBook/BookChapterList.kt 的 bookList/chapterList）先剥 `-` 置反序、再剥 `+`（剥完不做事），
-  //  剥完照常 getElements——所以 `+tag.li` 在对面出的是整个列表。本仓不剥时它会落成 CSS/属性段
-  //  ⇒ 恒 Miss ⇒ 列表与目录一条都不出。只在 list 用途剥：取值路径对面没有这条剥除，不扩大豁免。
+  // ③b 列表用途的 `+` 前缀：**列表入口**先剥 `-` 置反序、再剥 `+`（剥完不做事），剥完照常取元素
+  //  ——所以 `+tag.li` 出的应是整个列表。本仓不剥时它会落成 CSS/属性段 ⇒ 恒 Miss ⇒ 列表与目录
+  //  一条都不出。只在 list 用途剥：取值路径没有这条剥除，不扩大豁免。
   if (usage === 'list' && rest.startsWith('+')) {
     rest = rest.slice(1).trimStart()
   }
@@ -73,9 +72,9 @@ export function parseRule(rule: string, facet: Facet = 'rule', usage: RuleUsage 
   const combinator: ParsedRule['combinator'] =
     seen.size === 1 ? COMBINATOR_MAP[[...seen][0] as CombToken] : 'first'
 
-  // ⑤⑥ 段切分与识别。**空白分支照对面吞掉**：`RuleAnalyzer.splitRule` 不过滤空串，`A&&&&B` 产出
-  // `["A","","B"]`，而空规则取值是 `getElements("")` → 空列表，合并时自然不贡献——等价于丢分支，
-  // 不是整条失败。全空（`&&`、纯空白）与上面 `rest === ''` 同路：零分支，求值即空。
+  // ⑤⑥ 段切分与识别。**空白分支照吞掉**：分支切分不过滤空串，`A&&&&B` 产出 `["A","","B"]`，
+  // 而空规则取值是空列表，合并时自然不贡献——等价于丢分支，不是整条失败。全空（`&&`、纯空白）
+  // 与上面 `rest === ''` 同路：零分支，求值即空。
   const ctx: ParseCtx = { facet, counter: 0, usage }
   const branches = parts
     .map(p => parseBranch(p.text, ctx))
@@ -88,9 +87,9 @@ export function parseRule(rule: string, facet: Facet = 'rule', usage: RuleUsage 
 interface TopPart { text: string; comb: CombToken | null }
 
 /** 按 || / && / %% 从左到右切分（算符不嵌套；JS 段整体跳过——块内的算符是 JS 代码不是连接符；
- *  `{{…}}` 模板区同样整体跳过——区内的 `&&`/`||` 属于插值表达式，legado 的 makeUpRule 在
- *  splitRule 之前先完成插值，故这些算符从不到达切分器。JS 区域探测与括号区扫描分别住在
- *  grammar.ts（jsRegionEnd / braceRegion），此处只消费）。 */
+ *  `{{…}}` 模板区同样整体跳过——区内的 `&&`/`||` 属于插值表达式，插值先于任何切分完成，
+ *  故这些算符从不到达切分器。JS 区域探测与括号区扫描分别住在 grammar.ts
+ *  （jsRegionEnd / braceRegion），此处只消费）。 */
 function splitTop(s: string): TopPart[] {
   const parts: TopPart[] = []
   let start = 0
@@ -120,7 +119,7 @@ function splitTop(s: string): TopPart[] {
 /** 按 @ 切分分支段：单个 @ 是段边界；连续 @@ 是字面 @（@@ 显式声明形态——
  *  段内剥一个 @ 后按常规识别）。首个元素若是空串则跳过（链首 @ 的边界残留）。
  *  XPath 主导规则（//、.//、/、@XPath: 开头——274 条真实规则形态）：谓词里的 `[@id]` 与
- *  斜杠属性步 `/@href` 不是段边界（前者在括号深度内、后者按对面口径留在 path 里），
+ *  斜杠属性步 `/@href` 不是段边界（前者在括号深度内、后者原样留在 path 里），
  *  但**裸 @ 终端**（`//div[1]@html`、`//a@js:`）是下一级规则——切，切完回归普通模式。 */
 const XPATH_HEAD = /^(@xpath:|\/\/|\.\/\/|\/)/i
 
@@ -128,7 +127,7 @@ function splitElements(s: string): string[] {
   const out: string[] = []
   let cur = ''
   // 括号/引号深度：XPath 主导链里 `[@id="x"]` 的 @ 是选择器的一部分，不是段界——
-  // 对面 RuleAnalyzer.splitRule 用 chompBalanced 拉出 `[...]`/`(...)` 平衡组后才在 @ 处切。
+  // 先把 `[...]`/`(...)` 平衡组整体拉出，@ 才在深度 0 处成为段界。
   let depth = 0
   let quote = ''
   let xpathPending = XPATH_HEAD.test(s)
@@ -161,7 +160,7 @@ function splitElements(s: string): string[] {
       continue
     }
     // `{{…}}` 模板区整体留在当前段：区内的 `@`（`{{@@h1@text}}` 这类真源形态）不是段界——
-    // legado 的 makeUpRule 在任何 `@` 切分之前先插值。扫描与 literal 共用 grammar.braceRegion。
+    // 插值先于任何 `@` 切分。扫描与 literal 共用 grammar.braceRegion。
     const brace = braceRegion(s, i)
     if (brace !== null) {
       cur += s.slice(i, brace.end)
@@ -170,7 +169,7 @@ function splitElements(s: string): string[] {
     }
     if (s[i] === '@') {
       if (s[i + 1] === '@') { cur += '@'; i += 2; continue }
-      // 吃掉两个 @：只进一位会让第二个 @ 变成段界，于是 `@@css:.x`（legado「@@<rule> 强制按
+      // 吃掉两个 @：只进一位会让第二个 @ 变成段界，于是 `@@css:.x`（「`@@<rule>` 强制按
       // Default 处理」形态）被切成 ['@', 'css:.x'] 两段，第一段认不出就抛错——链首形态必炸。
       if (xpathPending && !(i > 0 && depth === 0 && quote === '' && s[i - 1] !== '/')) {
         cur += s[i] // 谓词 @class / 属性步 /@href：字面保留
@@ -191,12 +190,12 @@ function splitElements(s: string): string[] {
     }
   }
   out.push(cur)
-  // 空白段丢掉：`</js>` 后残留的 `\n`、`@` 边界留下的空串都不该成为段——对面 RuleAnalyzer.trim
-  // 跳过 `<'!'` 字符、列表切分 filterNot isBlank，同一份认知。
+  // 空白段丢掉：`</js>` 后残留的 `\n`、`@` 边界留下的空串都不该成为段——段内 trim 后为空的
+  // 一律不算段（列表切分同样滤掉空白），同一份认知。
   return out.filter((el) => el.trim() !== '')
 }
 
-/** 空白分支（对面 splitRule 不滤空串、但空规则取值即空列表）→ 返回 null，由调用方丢掉 */
+/** 空白分支（切分不滤空串、但空规则取值即空列表）→ 返回 null，由调用方丢掉 */
 function parseBranch(text: string, ctx: ParseCtx): Branch | null {
   const els = splitElements(text)
   if (els.length === 0) return null
@@ -206,11 +205,9 @@ function parseBranch(text: string, ctx: ParseCtx): Branch | null {
     const el = els[i]
     const isLast = i === els.length - 1
 
-    // 链尾没有「(jsCode) 表达式形态」这一切法——对面从不切它：`SourceRule.init` 里 `/` 开头
-    // 整条就是 Mode.XPath（`/text()` 原样进 XPath 求值），`RuleAnalyzer.splitRule` 遇到
-    // `(` 是 **跳过平衡组**（`findToAny('[', '(')` + `chompBalanced`）而不是切分点；
-    // Default 链末段落进 `getResultLast` 的 `else -> attr(lastRule)`，取不到属性就是空。
-    // 本仓曾有 detectTailJs，实测把耽美小说 `ruleToc.chapterName: "/text()"` 切成
+    // 链尾没有「(jsCode) 表达式形态」这一切法——`/` 开头的整条就是 XPath（`/text()` 原样进
+    // XPath 求值），而切分遇到 `(` 是**整体跳过平衡组**而不是切分点；Default 链末段取不到属性
+    // 就是空。本仓曾有 detectTailJs，实测把耽美小说 `ruleToc.chapterName: "/text()"` 切成
     // `/text` + `()` 两段（`() ` 当脚本编译 → Unexpected token），而全库 158 源需要它的为 0。
     const seg = classifySegment(el, ctx, isLast)
     segments.push(seg)
@@ -248,8 +245,8 @@ function classifySegment(el: string, ctx: ParseCtx, isLast: boolean): Segment {
   if (low.startsWith('xpath:')) return { kind: 'xpath', path: raw.slice(6) }
   // `/` 开头**但含插值区（`{{…}}` 或 `{$.…}`）→ 是 URL 模板不是 XPath**：插值优先于前缀判定，
   // 落到下方 isLiteralForm 成为字面段。真机实证两例：顶点小说 tocUrl `/…/{{$.novelId}}/chapters`、
-  // 悦读小说 ruleBookUrl `/books?bookId={$.bookId}`（对面 `{$.rule}` 是内嵌 JSONPath——
-  // AnalyzeByJSonPath.innerRule），两者此前都被本分支抢先截走 →「XPath 步骤不支持」。
+  // 悦读小说 ruleBookUrl `/books?bookId={$.bookId}`（`{$.rule}` 是内嵌 JSONPath），
+  // 两者此前都被本分支抢先截走 →「XPath 步骤不支持」。
   // 显式 @xpath: 前缀仍优先（上一行已先行返回）。
   const interpolated = raw.includes('{{') || raw.includes('{$')
   if ((raw.startsWith('//') || raw.startsWith('.//') || raw.startsWith('/')) && !interpolated) {
@@ -258,7 +255,7 @@ function classifySegment(el: string, ctx: ParseCtx, isLast: boolean): Segment {
   if (low.startsWith('js:')) return { kind: 'js', code: raw.slice(3), form: 'at-js' }
   if (low.startsWith('put:')) return { kind: 'put', pairsRaw: raw.slice(4) }
   if (low.startsWith('get:')) {
-    // 花括号形态（legado evalPattern `@get:\{[^}]+?\}`）：真实源详情面整条规则就是 `@get:{n}`
+    // 花括号形态（`@get:\{[^}]+?\}` 这一壳）：真实源详情面整条规则就是 `@get:{n}`
     const name = raw.slice(4).trim().replace(/^\{(.*)\}$/, '$1').trim()
     return { kind: 'getvar', name }
   }
@@ -275,8 +272,8 @@ function classifySegment(el: string, ctx: ParseCtx, isLast: boolean): Segment {
   return classifyDefault(base, exclude, el, ctx, isLast)
 }
 
-/** `Json:` 前缀路径归一：真实源有 `Json:data.list`（无 $ 前缀）形态——legado 的 JSONPath
- *  从根起算，无 $ 视为根相对路径补 `$.`（data.list → $.data.list）；@ 开头保持原样如实报错。 */
+/** `Json:` 前缀路径归一：真实源有 `Json:data.list`（无 $ 前缀）形态——JSONPath 从根起算，
+ *  无 `$` 视为根相对路径补 `$.`（data.list → $.data.list）；@ 开头保持原样如实报错。 */
 function normalizeJsonPath(path: string): string {
   const p = path.trim()
   if (p.startsWith('$') || p.startsWith('@')) return p
@@ -300,12 +297,12 @@ const HTML_TAGS = new Set([
 /** 隐式 CSS 判定（官方简写考证：class.x≡.x、id.x≡#x；社区知识库：裸词=tag 选择器，
  *  `class.xxx@li@a@text` ≡ `.xxx li a@text`）：`#id` / `.class` 简写、裸 tag 词（li/a/div）、
  *  tag+属性（div[itemscope]）、**tag.类 组合**（li.chapter——189 条真实规则，首词是合法标签名）、
- *  **tag+伪类/组合**（a:contains(在线阅读)、li:first-child a——Jsoup/legado 常用，css-select 原生求值）、
+ *  **tag+伪类/组合**（a:contains(在线阅读)、li:first-child a——真实源常用，css-select 原生求值）、
  *  **纯属性选择器**（[class="col-12 col-md-6"]）、**后代/子代组合链**（tbody>tr、dd>h3>a、div span）。
  *  首词非标签的词.词形态（weirdsyntax.x）与 default 方言歧义——仍抛错（宁炸不猜边界）。 */
 /**
  * CSS 标识词（jsoup / cheerio 都接受非 ASCII 与自造 tag 名）与「词.词」链判定：
- * 每一段都是合法 CSS 标识符 ⇒ 整段可交给选择器求值。数字开头的段**不算**（那是对面的索引形态）。
+ * 每一段都是合法 CSS 标识符 ⇒ 整段可交给选择器求值。数字开头的段**不算**（那是位置索引形态）。
  */
 const CSS_IDENT = /^[\p{L}_][\p{L}\p{N}_-]*$/u
 function isCssWordChain(name: string, sep: string): boolean {
@@ -323,10 +320,10 @@ function isImplicitCss(name: string): boolean {
   // 解析不了在求值层如实 RuleEvalError，不再在解析期误报「无法识别的段类型」
   if (name.startsWith('*')) return true
   if (/[#[\]>+~=,]/.test(name)) return true
-  // tag.类 组合（li.chapter / a.list-group-item）：**对面兜底口径**——`ElementsSingle.getElementsSingle`
-  // 的 else 分支是 `temp.select(beforeRule)`，白名单外的段在对面的无名不是"认不出"，而是整段交给
-  // jsoup 当 CSS 选择器。故首词不必是合法 HTML 标签：`clasd.T-R-T-B2-Box1`（真源错字，2 源）、
-  // 中文 tag（`text下一页`，1 源）都按 CSS 走，命中与否由文档决定，零命中就是 Miss（对面同款）。
+  // tag.类 组合（li.chapter / a.list-group-item）：**兜底口径**——白名单外的段不是「认不出」，
+  // 而是整段当 CSS 选择器交给求值层（元素提取的兜底就是这么来的）。故首词不必是合法 HTML 标签：
+  // `clasd.T-R-T-B2-Box1`（真源错字，2 源）、中文 tag（`text下一页`，1 源）都按 CSS 走，
+  // 命中与否由文档决定，零命中就是 Miss（同一口径）。
   if (isCssWordChain(name, '.')) return true
   const dotIdx = name.indexOf('.')
   if (dotIdx > 0) {
@@ -352,16 +349,16 @@ function splitIndexSuffix(raw: string): { base: string; index: IndexSpec | null 
   return { base: raw, index: null }
 }
 
-/** 属性名形态（legado getResultLast else 分支：链尾未知提取指令 = HTML 属性名，如 onclick/value/_src）。
+/** 属性名形态（链尾未知提取指令 = HTML 属性名，如 onclick/value/_src；只在取值用途认，见 classifyDefault）。
  *  含 `.` 的「词.词」不在此列——nonsense.x 仍按宁炸不猜抛错（doctrine 不变）。 */
 function isAttrName(name: string): boolean {
   return /^[@a-zA-Z_][-\w:]*$/.test(name)
 }
 
-/** 方括号索引形态（legado ElementsSingle `[it,it,…]` / `[!it,…]`）：`li[-1:0]`、`tag.a[!0]`。
+/** 方括号索引形态（`[it,it,…]` / `[!it,…]`）：`li[-1:0]`、`tag.a[!0]`。
  *  内容只认整数 / `a:b[:c]` 区间 / 逗号 / `!`（含字母即不匹配——CSS 属性选择器不误伤）。
- *  v1 口径：单条目（闭区间 + step 自动，负数从尾数）与 `!` 整数排除收；**多条目按对面语义
- *  收成并集**（去重、越界丢弃、最终按文档序过滤，见 `parseBracketEntry` 的 multi 分支）。 */
+ *  v1 口径：单条目（闭区间 + step 自动，负数从尾数）与 `!` 整数排除收；**多条目收成并集**
+ *  （去重、越界丢弃、最终按文档序过滤，见 `parseBracketEntry` 的 multi 分支）。 */
 const BRACKET_RE = /^(.+?)\[(!?)([-\d:\s,]+)\]$/
 
 /** 单个方括号条目 → IndexSpec（认不出 → null，交回常规识别，与单条目同口径） */
@@ -392,7 +389,7 @@ function splitBracketSuffix(
     return { base, index: null, exclude: nums }
   }
   if (entries.length > 1) {
-    // 多条目并集（legado ElementsSingle：条目收进去重 Set，越界的静默丢弃，最终按文档序过滤）
+    // 多条目并集（条目收进去重 Set，越界的静默丢弃，最终按文档序过滤）
     const specs: IndexSpec[] = []
     for (const e of entries) {
       const spec = parseBracketEntry(e)
@@ -405,7 +402,7 @@ function splitBracketSuffix(
 }
 
 function classifyDefault(raw: string, exclude: number[] | undefined, el: string, ctx: ParseCtx, isLast: boolean): Segment {
-  // 方括号索引（legado `[a:b]`/`[!0]` 形态）优先于点号后缀：`li[-1:0]` → css `li` + range
+  // 方括号索引（`[a:b]`/`[!0]` 形态）优先于点号后缀：`li[-1:0]` → css `li` + range
   const bracket = splitBracketSuffix(raw)
   const target = bracket === null ? raw : bracket.base
   const bracketExclude = bracket?.exclude
@@ -414,10 +411,10 @@ function classifyDefault(raw: string, exclude: number[] | undefined, el: string,
   // 位置后缀：从最后一个 . 起，取第一个能解析为 IndexSpec 的后缀；
   // 都不成立则整串是名称（class.note.clearfix → arg 'note.clearfix'，不许在第一个 . 截断）
   const { base: rawName, index: dotIndex } = splitIndexSuffix(target)
-  // 尾点号剥离（legado ElementsSingle 口径）：`tag.li.!0:1:-1` 的 !排除 切走后 base 是 `tag.li.`——
-  // legado 对 beforeRule 是 split(".") 后**逐段取用**，尾部空串自然丢弃；我们把 `li.` 整段当
-  // arg 喂给 css-select 就炸「Expected name, found .」（看书源 nextTocUrl 实证）。只剥**尾部**
-  // 连续点号：中段点仍是名称/选择器的一部分（class.note.clearfix 语义不动）。
+  // 尾点号剥离（句点分段口径）：`tag.li.!0:1:-1` 的 !排除 切走后 base 是 `tag.li.`——名字按 `.`
+  // 分成段后**逐段取用**，尾部空串自然丢弃；我们把 `li.` 整段当 arg 喂给 css-select 就炸
+  // 「Expected name, found .」（看书源 nextTocUrl 实证）。只剥**尾部**连续点号：中段点仍是
+  // 名称/选择器的一部分（class.note.clearfix 语义不动）。
   const name = rawName.replace(/\.+$/, '')
   const index = bracket?.index ?? dotIndex
 
@@ -427,19 +424,18 @@ function classifyDefault(raw: string, exclude: number[] | undefined, el: string,
 
   if (KNOWN_MODES.has(mode)) {
     if (effExclude !== undefined && index !== null) {
-      throw new UnsupportedRuleError('位置索引与 ! 排除语法不并存（legado 二选一）', { facet: ctx.facet, segmentIndex: ctx.counter, segmentRaw: el })
+      throw new UnsupportedRuleError('位置索引与 ! 排除语法不并存（两语法互斥）', { facet: ctx.facet, segmentIndex: ctx.counter, segmentRaw: el })
     }
     return effExclude === undefined ? { kind: 'default', mode, arg, index } : { kind: 'default', mode, arg, index, exclude: effExclude }
   }
 
-  // 属性终端（CONTEXT.md「属性终端」）：**取值用途 + 链尾**的未知提取指令 = HTML 属性名——
-  // legado AnalyzeByJSoup.getResultLast 的 else 分支 `element.attr(lastRule)`（空值丢弃、去重在求值层）。
-  // 此前这类段（真实源 ruleBookUrl `@onclick`、`_src`、`value`）落进隐式 CSS 按标签选择器求值
-  // → 恒零命中 → Miss → 「搜索能搜到但书目 URL 全空」。列表用途（getElements 口径）链尾未知词
-  // 仍是选择器（css），与 legado ElementsSingle else 分支同口径。
+  // 属性终端（CONTEXT.md「属性终端」）：**取值用途 + 链尾**的未知提取指令 = HTML 属性名，
+  // 按该属性取值（空值丢弃、去重在求值层）。此前这类段（真实源 ruleBookUrl `@onclick`、
+  // `_src`、`value`）落进隐式 CSS 按标签选择器求值 → 恒零命中 → Miss → 「搜索能搜到但书目
+  // URL 全空」。列表用途（取元素口径）链尾未知词仍是选择器（css）——列表入口只出元素、不取属性。
   if (ctx.usage === 'value' && isLast && isAttrName(name)) {
     if (effExclude !== undefined && index !== null) {
-      throw new UnsupportedRuleError('位置索引与 ! 排除语法不并存（legado 二选一）', { facet: ctx.facet, segmentIndex: ctx.counter, segmentRaw: el })
+      throw new UnsupportedRuleError('位置索引与 ! 排除语法不并存（两语法互斥）', { facet: ctx.facet, segmentIndex: ctx.counter, segmentRaw: el })
     }
     return effExclude === undefined ? { kind: 'default', mode: 'attr', arg: name, index } : { kind: 'default', mode: 'attr', arg: name, index, exclude: effExclude }
   }
@@ -450,7 +446,7 @@ function classifyDefault(raw: string, exclude: number[] | undefined, el: string,
   // 无索引时不带 index 字段（AST 精确形态，toEqual 口径）
   if (isImplicitCss(name)) {
     if (effExclude !== undefined && index !== null) {
-      throw new UnsupportedRuleError('位置索引与 ! 排除语法不并存（legado 二选一）', { facet: ctx.facet, segmentIndex: ctx.counter, segmentRaw: el })
+      throw new UnsupportedRuleError('位置索引与 ! 排除语法不并存（两语法互斥）', { facet: ctx.facet, segmentIndex: ctx.counter, segmentRaw: el })
     }
     const seg: Segment = { kind: 'css', selector: name }
     if (effExclude !== undefined) seg.exclude = effExclude
@@ -458,17 +454,17 @@ function classifyDefault(raw: string, exclude: number[] | undefined, el: string,
     return seg
   }
 
-  // 纯索引段（`kind: "0"` 这类，3 源）**未实现**：对面 `beforeRule` 为空 ⇒ `temp.children()` 再取索引，
-  // 但本仓的 `children` 在根上下文上已与对面分叉（见矩阵 `a-bare-index-segment` 与 engine.md 开口）——
+  // 纯索引段（`kind: "0"` 这类，3 源）**未实现**：裸索引＝根的子元素再取索引，但本仓的
+  // `children` 在根上下文上已与之分叉（见矩阵 `a-bare-index-segment` 与 engine.md 开口）——
   // 不把这个映射接在一个可疑的基座上，先修 `children` 再放行。此处继续走解析期抛错（宁炸不猜）。
   // 白名单之外、又不构成选择器形态（含空格/非法字符，如 'weird head.x'）→ 解析期抛（宁炸不猜）
   throw new UnsupportedRuleError('无法识别的段类型（default 段白名单之外）', { facet: ctx.facet, segmentIndex: ctx.counter, segmentRaw: el })
 }
 
 /** 位置后缀解析：`all` | 整数（含负） | 冒号分隔的**索引列表**（`0:2` = 第0与第2个）
- *  对面 `ElementsSingle.findIndexSet` 的 legacy 分支对 `.`/`:`/`!` 一律「取下一个数字进集合」，
- *  冒号不是区间运算符——本仓曾把它读成半开切片（`.0:2` 出 [0,1) = A、B，对面出 A、C），
- *  且 `-1:10:2` 这种对面合法的写法整个被当选择器炸掉。 */
+ *  位置后缀的集合口径：对 `.`/`:`/`!` 一律「取下一个数字进集合」，冒号不是区间运算符——
+ *  本仓曾把它读成半开切片（`.0:2` 出 [0,1) = A、B，正确口径出 A、C），
+ *  且 `-1:10:2` 这种合法写法整个被当选择器炸掉。 */
 function parseIndexSuffix(suffix: string): IndexSpec | null {
   if (suffix === 'all') return { kind: 'all' }
   if (/^-?\d+$/.test(suffix)) return { kind: 'index', value: Number(suffix) }
@@ -481,11 +477,10 @@ function parseIndexSuffix(suffix: string): IndexSpec | null {
 
 /**
  * 这条规则是否**只设变量**（全链只有 `@put` 段，没有任何取值段）。
- * 为什么服务层要问引擎这句话：legado 的 `splitPutRule` 在任何切分之前把 `@put:{…}` 剥掉，
- * 剥完为空 ⇒ `getElement` 取不到新根（`AnalyzeByJSoup.getElements` 对空规则返空集），
- * 于是「纯 @put 的 ruleBookInfo.init」= 只设变量、不换根。本仓若把它当「零命中」报错，
- * 就是拿合法形状冒充规则失效——本机库 4 源（万象书城/夜伴书屋/圣墟小说/全本小说）的详情面
- * 整片是这个写法。判据归引擎（文法问题），服务层只消费结论。
+ * 为什么服务层要问引擎这句话：`@put:{…}` 在任何切分之前就被整体剥掉，剥完为空 ⇒ 取不到新根
+ * （空规则求值返空集），于是「纯 @put 的 ruleBookInfo.init」= 只设变量、不换根。本仓若把它当
+ * 「零命中」报错，就是拿合法形状冒充规则失效——本机库 4 源（万象书城/夜伴书屋/圣墟小说/
+ * 全本小说）的详情面整片是这个写法。判据归引擎（文法问题），服务层只消费结论。
  */
 export function isPutOnlyRule(rule: string, facet: Facet = 'rule'): boolean {
   const parsed = parseRule(rule, facet)

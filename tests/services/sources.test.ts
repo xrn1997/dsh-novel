@@ -144,7 +144,7 @@ describe('load 内容形态迁移（bookSourceType 编码订正的存量收敛�
     })
     await reg.flush()
     const re = (await SourceRegistry.load(dir)).list()[0]
-    expect(re.type).toBe('image')                        // legado BookSourceType 真值：2=图片
+    expect(re.type).toBe('image')                        // 书源格式的 bookSourceType 真值：2=图片
     expect(re.enabled).toBe(true)                        // 迁移不动启用态
   })
   it('未知数值（如 4）的存量源：按 raw 重推为 unknown——退出参与集，但不打 status（探针会洗白）', async () => {

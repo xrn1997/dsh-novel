@@ -4,11 +4,10 @@ import { braceRegion } from './grammar.js'
  * 模板字面段（CONTEXT.md「模板字面段」）的识别与切分——构词（normalize/服务层拼串）与
  * 解析（parse/evaluate 消费）共用同一份认知，唯一实现住这里。
  *
- * legado 语义（AnalyzeRule.SourceRule.makeUpRule + getString 的 `else -> rule` 分支）：
- * 规则串里出现 `{{expr}}` 时逐段插值——expr 以 `@`/`$.`/`$[`/`//` 开头按**规则递归求值**
- * （SourceRule.isRule），否则按 **JS 表达式**求值（绑定 result/baseUrl/book/chapter/key/page…）；
+ * 口径：规则串里出现 `{{expr}}` 时逐段插值——expr 以 `@`/`$.`/`$[`/`//` 开头按**规则递归求值**，
+ * 否则按 **JS 表达式**求值（绑定 result/baseUrl/book/chapter/key/page…）；
  * 插值后整段不构成选择器 → 原样作为字面串产出。`{$.path}`（单括号）是 JSONPath 内嵌形态
- * （RuleAnalyzer.innerRule("{$.")——平衡括号切分）。
+ * （平衡括号切分）。
  *
  * 为什么单独成段：真实源大量形态是「URL 模板」型规则——`http://api/novel/{{$.novelId}}`、
  * `{{baseUrl}}catalog/`、`https://...?id={{(baseUrl.match(...)||['',''])[1]}}`——它们不是
@@ -29,13 +28,13 @@ export function isLiteralForm(raw: string): boolean {
   return false
 }
 
-/** `{{...}}` 平衡括号切分（引号内的花括号不计深——legado chompCodeBalanced 同口径的最小版） */
+/** `{{...}}` 平衡括号切分（引号内的花括号不计深） */
 export function splitLiteral(raw: string, opts?: { doubleBraceOnly?: boolean }): LiteralPart[] {
   // doubleBraceOnly：js 段代码文本的插值口径——只认 `{{…}}`。JS 自己就有模板字面量
   // `${expr}` 与对象字面量 `{{…}}`（少见），把单括号 `{$…}` 当插值点会把脚本里的
   // `${$.id}`（map 回调参数 `$` 的属性）撕成 JSONPath（真机实证：中文书城
-  // ruleToc.chapterList 因此整段 Miss、目录 0 章）。对面 js 文本重写走 makeUpRule
-  // 的双花括号模式，语义与之一致。
+  // ruleToc.chapterList 因此整段 Miss、目录 0 章）。js 段代码文本的插值统一只认双花括号，
+  // 与本口径一致。
   const doubleOnly = opts?.doubleBraceOnly === true
   const parts: LiteralPart[] = []
   let buf = ''
@@ -44,7 +43,7 @@ export function splitLiteral(raw: string, opts?: { doubleBraceOnly?: boolean }):
     if (buf !== '') { parts.push({ kind: 'text', text: buf }); buf = '' }
   }
   while (i < raw.length) {
-    // @get:{key} / @get:key 形态（legado evalPattern 同款插值点）
+    // @get:{key} / @get:key 形态（求值期的变量插值点）
     if (!doubleOnly && raw.startsWith('@get:', i)) {
       let name = ''
       let j: number
@@ -81,7 +80,7 @@ export function splitLiteral(raw: string, opts?: { doubleBraceOnly?: boolean }):
   return parts
 }
 
-/** `{{expr}}` 内容分类（legado SourceRule.isRule：`@`/`$.`/`$[`/`//` 开头按规则，否则 JS） */
+/** `{{expr}}` 内容分类（`@`/`$.`/`$[`/`//` 开头按规则，否则 JS） */
 function classifyExpr(expr: string): LiteralPart {
   if (expr === '') return { kind: 'text', text: '' }
   if (expr.startsWith('@') || expr.startsWith('$.') || expr.startsWith('$[') || expr.startsWith('//')) {

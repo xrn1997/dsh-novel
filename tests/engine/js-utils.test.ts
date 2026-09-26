@@ -91,10 +91,10 @@ describe('js-utils 纯工具', () => {
   })
 })
 
-describe('toNumChapter（legado JsExtensions.toNumChapter / StringUtils.chineseNumToInt 口径）', () => {
+describe('toNumChapter（中文数字 → 阿拉伯数字）', () => {
   it('第X章 的中文数字转阿拉伯数字；无匹配原样返回', async () => {
     const { toNumChapter } = await import('../../src/engine/js-utils.js')
-    expect(toNumChapter('第一千零二十五章 离别')).toBe('第1025章') // 对面只回「第+数字+章」，标题尾部丢弃（源里它当 replace 的替换串用）
+    expect(toNumChapter('第一千零二十五章 离别')).toBe('第1025章') // 只回「第+数字+章」，标题尾部丢弃（源里它当 replace 的替换串用）
     expect(toNumChapter('第十二章 蜕变')).toBe('第12章')
     expect(toNumChapter('第两千章')).toBe('第2000章')
     expect(toNumChapter('第12章 已是数字')).toBe('第12章')
@@ -118,9 +118,9 @@ describe('toNumChapter（legado JsExtensions.toNumChapter / StringUtils.chineseN
 })
 
 describe('unescapeHtml4 / absolutizeUrl（getString 重载落地面）', () => {
-  // 对面 unescape：`StringEscapeUtils.unescapeHtml4`（commons-text 全表）。本仓是**近似承接**：
-  // 数字引用 + HTML4 常用命名集，**认不出的一律原样留**（不猜、也不解错）——差集是
-  // 「对面能解、我们留原文」，与 engine/dom 的实体口径同一条纪律，登记在矩阵 g-unescape-html4。
+  // unescapeHtml4 是**近似承接**：数字引用 + HTML4 常用命名集，
+  // **认不出的一律原样留**（不猜、也不解错）——差集是「能解的我们不认，故留原文」，
+  // 与 engine/dom 的实体口径同一条纪律，登记在矩阵 g-unescape-html4。
   it('数字引用与命名集都解；二次转义串（JSON API 源常见）解一层', () => {
     expect(unescapeHtml4('&#65;|&#x41;|&amp;|&lt;|&nbsp;')).toBe('A|A|&|<| ')
     expect(unescapeHtml4('&amp;lt;')).toBe('&lt;')
@@ -139,9 +139,9 @@ describe('unescapeHtml4 / absolutizeUrl（getString 重载落地面）', () => {
     expect(absolutizeUrl(base, '/b/1')).toBe('https://b.test/b/1')
     expect(absolutizeUrl(base, 'https://other.test/x')).toBe('https://other.test/x')
     expect(absolutizeUrl(base, 'data:text/plain,hi')).toBe('data:text/plain,hi')
-    expect(absolutizeUrl(base, 'javascript:void(0)')).toBe('')       // 对面这里返回 ""，不是原样
+    expect(absolutizeUrl(base, 'javascript:void(0)')).toBe('')       // 这里返回 ""，不是原样
     expect(absolutizeUrl('', ' /b/1 ')).toBe('/b/1')                  // base 空 → trim 原样，不猜站点
-    expect(absolutizeUrl(base, '')).toBe(base)                        // URL(base,"") = base（对面同形）
+    expect(absolutizeUrl(base, '')).toBe(base)                        // URL(base,"") = base
     // base 带 `,{option}` 请求选项后缀时先剥（URL 即请求规格那条通用教训）
     expect(absolutizeUrl('https://b.test/api,{"method":"POST"}', '/b/1')).toBe('https://b.test/b/1')
   })

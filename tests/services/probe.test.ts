@@ -69,8 +69,8 @@ describe('probeSource（search 面）', () => {
   })
   it('不支持的规则语法 → UnsupportedRuleError 如实透出（探针不冒充空结果）', async () => {
     const f = createFetcher({ fetchImpl: async () => new Response(SEARCH_HTML) })
-    // 取真·构不成选择器的形态：`词.词`（如 weirdsyntax.x）自 2026-09-22 起按对面
-    // ElementsSingle 的 else 分支交 CSS 求值，不再是解析期错误
+    // 取真·构不成选择器的形态：`词.词`（如 weirdsyntax.x）自 2026-09-22 起
+    // 交 CSS 求值，不再是解析期错误
     const r = await probeSource(src({ ruleBookName: 'weirdsyntax$.x@text' }), f)
     expect(r.ok).toBe(false)
     expect(r.error?.code).toBe('UnsupportedRuleError')
@@ -139,7 +139,7 @@ describe('probeSource（search 面）', () => {
     expect(r.error?.code).toBe('DecodeError')
   })
 
-  // ── legado 请求形态（官方文档钉死；真实源 300 条失败的根因）──────────
+  // ── 请求形态（真实源 300 条失败的根因）──────────
   it('相对 searchUrl 按 bookSourceUrl 解析成绝对 URL（此前直接喂 fetch 必炸）', async () => {
     let seen = ''
     const f = createFetcher({ fetchImpl: async (input) => {

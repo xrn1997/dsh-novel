@@ -2,11 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { evaluate } from '../../src/engine/index.js'
 
 /**
- * **js 段代码文本里的 `{{…}}` 要先被替换，再交给脚本执行**（对面 `SourceRule.makeUpRule`）。
+ * **js 段代码文本里的 `{{…}}` 要先被替换，再交给脚本执行**。
  *
- * 对面段循环的顺序是 `putRule → makeUpRule(result) → 按 mode 分发`
- * （`model/analyzeRule/AnalyzeRule.kt` 的 getString：先 `sourceRule.makeUpRule(result)`，再
- * `Mode.Js -> evalJS(rule, result)`）——`makeUpRule` 重写的是**规则文本本身**，
+ * 段循环的顺序是先对**规则文本本身**做插值（把 `{{…}}` 替换掉），再按 mode 分发到脚本执行——
  * 所以对 js 段里的字符串字面量同样生效。真实源大量靠这条拼 URL：
  * 米读小说的 `ruleBookInfo.tocUrl` 与 `ruleToc.chapterUrl` 都是
  * `@js: "https://…/chapter_list/100/{{$.book_id}}.txt"`（try/catch 选主备域名）。

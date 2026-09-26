@@ -24,9 +24,11 @@ DeepSeek Harness（DSH）的「小说」插件：导入 legado 书源 → 聚合
 
 跑 `pnpm test` 前确认依赖装全：缺 `jsdom` / `@testing-library/react` 会让 6 个前端测试假红（报 `Cannot find module`）。
 
-**`tests/legado-coverage/` 的兼容判据三门随 `pnpm test` 默认跑**，其中 `upstream-fields.test.ts` 与
-`citation-liveness.test.ts` 现读对面仓（`DSH_LEGADO_REF`，默认 `C:/develop/GitHub/legado-with-MD3`）：
-对面仓不在场即红，**不要**改成 skip-if-missing——那正是本轮删掉的旧失效模式（见上一条纪律）。
+**`tests/legado-coverage/` 的兼容判据三门随 `pnpm test` 默认跑，且运行时不依赖任何外部 checkout**——
+它们的分母是**仓内快照** `compat/upstream/snapshot.json`（对面源根路径集 / 7 个规则实体的字段表 /
+java 宿主方法名集）。快照由 `capture-upstream-snapshot.test.ts` 在**开发阶段**从对面 checkout 抽一次
+（`DSH_CAPTURE_UPSTREAM=1`，需 `DSH_LEGADO_REF` 指路）；日常跑门只读快照，快照不在场即红，
+**不要**改成 skip-if-missing——那正是本仓删掉的旧失效模式（见下一条纪律）。
 
 ## 文档纪律
 
@@ -36,9 +38,10 @@ DeepSeek Harness（DSH）的「小说」插件：导入 legado 书源 → 聚合
 - **代码注释自足**：注释讲清口径与理由即可；要引用就引仓内存活文档（`docs/design/*`、`docs/reference/*`、`README.md`、`CONTEXT.md`），不写已出库文档的章节号或任务号。
 - **文档引用用可 grep 的锚点，不写行号**：符号名、抛错消息原文、测试标题片段——行号会随注释的任何一次编辑漂移（本仓踩过：注释一剥，`parse.ts` 里那个行号就从 throw 变成了 `}`）。这条有机器守卫：`tests/legado-coverage/citation-liveness.test.ts` 扫跟踪文本里的 `.md/.ts/.tsx/.mjs`，`file.ext:123` 形态即红（`docs/reference/` 豁免——那里的行号指宿主发布物，属外部事实记录；裸 `:123`（不带文件名）机器认不出，靠本纪律管）。
 - **引用活性：不许指着读者拿不到的东西**（同上一门的另一半，2026-09-22 实证——兼容判据的分母原先写在不入库的手抄笔记里，笔记一消失检查静默转 skip，无一物变红）：
-  - 引对面 legado 的文件必须写成**带目录的相对路径**（相对 `app/src/{main,test}/java/io/legado/app/`）。光凭文件名不算：对面有 `help/book/BookContent.kt`（18 行）与 `model/webBook/BookContent.kt`（265 行）两份同名文件，那条引用指的是后者、命中的是前者。
-  - `.superpowers/` 只许是**工具自己写出的输出目录**（在 `citation-liveness.test.ts` 的 `OUTPUT_DIRS` 登记理由），拿过程产物当证据即红——读数写进文档本身，或引对面仓。
-  - 判据的分母只能是在册数据或可配置的参考仓（`DSH_LEGADO_REF`，默认 `C:/develop/GitHub/legado-with-MD3`）。对面仓不在场即**红**，不许 skip；`DSH_LEGADO_REF=off` 是唯一显式退路，且退路会写进用例名。
+  - **外部出处只许出现在四处**：`README.md`（致谢与门控说明）、`tests/legado-coverage/matrix.ts`、`docs/design/legado-compat.md`（裁决表）、以及刷新工具 `tests/legado-coverage/upstream-facts.ts` 与 `capture-upstream-snapshot.test.ts`。其余所有地方（`src/**` 注释、`docs/design/engine.md`/`services.md`/`client.md`、测试注释）**讲本仓口径与理由，不点对面文件与符号**；要给出处就指矩阵行 id。这条有机器守卫（`citation-liveness.test.ts` 的白名单断言）。
+  - 引对面 legado 的文件必须写成**带目录的相对路径**（相对 `app/src/{main,test}/java/io/legado/app/`），且必须能在**快照路径集**里现查。光凭文件名不算：同名文件在对面不止一份（`help/book/` 与 `model/webBook/` 下各有一份内容实体类，行数差一个数量级），不带目录的引用会落到另一份上。
+  - `.superpowers/` 只许是**工具自己写出的输出目录**（在 `citation-liveness.test.ts` 的 `OUTPUT_DIRS` 登记理由），拿过程产物当证据即红——读数写进文档本身，或引仓内在册的东西。
+  - 判据的分母只能是在册数据或**仓内快照**（`compat/upstream/snapshot.json`）。快照不在场即**红**，不许 skip——它是入库内容，谁 clone 都拿得到。
 - **书源「现量」一律按 `raw`（原始书源 JSON）数，别按规范化后的顶层键数**（2026-09-22 实证：`lastChapter` 按顶层键量是 0 源、按 `raw` 量是 142 源非空——导入改名成 `ruleLastChapter`/`ruleDetailLastChapter` 了）。分母随用户增删漂，引用前先重数。
 - **形态计数要用真入口，别用正则**（同日实证：正则数「JSONPath 过滤器 24 源在用」全是假阳性——命中的是 js 里 `new RegExp('[?&]…')` 这类字面量；真把 4170 条规则串过 `parseRule` 后该形态零命中）。规则语法面与 js 桥面的现量口径是 `DSH_PARSE_CENSUS=1 pnpm vitest run tests/engine/parse-census.test.ts`：它顺带断言「本仓拒绝的语法族 / 脚本在调而桥没挂的方法 ⊆ 在册集合」，新形态冒出来即红。
 - **提交**：conventional commits（`feat|fix|test|docs|refactor|chore(scope): 中文说明`），正文讲**为什么**——本仓的历史风格是长正文 + 证据串联。

@@ -78,7 +78,7 @@ function onlinePage(url: string): string | null {
     return `<html><body><div class="b"><a href="/book/1/">${key}·在线样本</a><span>假作者</span></div></body></html>`
   }
   if (u.pathname === '/book/1/') {
-    // 目录页的条目 class 用 `.b`（legado 口径：目录列表与搜索结果共用 ruleBookList），
+    // 目录页的条目 class 用 `.b`（目录列表与搜索结果共用 ruleBookList），
     // 不是一个自造的 `.c`——写错了列表就是空的，而「空目录」长得很像「这本书没有章节」。
     return '<html><body>' + ONLINE_CHAPTERS.map((name, i) => `<div class="b c"><a href="/c/${i + 1}.html">${name}</a></div>`).join('') + '</body></html>'
   }

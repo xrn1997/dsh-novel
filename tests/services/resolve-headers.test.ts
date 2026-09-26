@@ -6,7 +6,7 @@ import { normalizeSource, rawHeaderRule } from '../../src/services/normalize.js'
 import type { NovelSource } from '../../src/services/types.js'
 
 /**
- * 动态请求头（headerRule）回归钉子：legado BaseSource.getHeaderMap 口径——
+ * 动态请求头（headerRule）回归钉子：
  * `@js:`/`<js>` header 规则经沙箱求值得 JSON 头表；求值失败 → warn 回退静态头（不炸请求）。
  * 真机实证：顶点小说（device-id/Authorization 全在 @js 规则里）此前被 normalize 当坏 JSON 丢弃
  * → 请求 4004 → ruleDetailInit `$.data` 空 → 详情/目录全链路失败。

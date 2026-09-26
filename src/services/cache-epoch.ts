@@ -43,7 +43,7 @@ export const RULE_EPOCH_IMPACT: Record<keyof NormalizedRules, EpochImpact> = {
   ruleTocUrl: 'toc', ruleChapterList: 'toc', ruleChapterName: 'toc', ruleChapterUrl: 'toc',
   ruleDetailName: 'none', ruleDetailAuthor: 'none', ruleDetailCoverUrl: 'none',
   ruleDetailIntro: 'none', ruleDetailLastChapter: 'none',
-  // init 决定详情字段与 tocUrl 模板 `{{$.…}}` 的求值上下文（legado BookInfo.init 换根）——
+  // init 决定详情字段与 tocUrl 模板 `{{$.…}}` 的求值上下文（详情 init 换根）——
   // 改 init 即换目录地址的插值来源 → 目录代际必须失效；正文经 FACES_OF 的 toc 行连带
   ruleDetailInit: 'toc',
   ruleContent: 'content', nextTocUrl: 'toc', nextPageUrl: 'content',

@@ -72,7 +72,7 @@ describe('warning 口径', () => {
   })
 })
 
-// legado 嵌套对象方言（阅读系 App 主流导出形态）：五个规则字段是对象不是字符串。
+// 嵌套对象方言（阅读系 App 主流导出形态）：五个规则字段是对象不是字符串。
 // 子字段拍平到模型；搜索上下文（ruleSearch）与详情上下文（ruleBookInfo）分别落位
 // ——实测真实源包 541 条共有源里 508 条两上下文规则不同，混用会造垃圾标题（open item ③ 同款陷阱）。
 const objectSource = {
@@ -172,9 +172,9 @@ describe('对象形态方言（legado 嵌套导出）', () => {
   })
 })
 
-// Native（android-ebook 原生规则格式，legado 规则文档（android-ebook））：name/url 顶层、
+// Native（android-ebook 原生规则格式）：name/url 顶层、
 // ruleSearch.list 三件套、ruleToc.list/name/url、ruleContent.nextPage/replaceRules[]、{{keyword}} 占位。
-// 与 legado 字段体系不同——判别走 Native 映射，语义直通内部模型。
+// 与书源字段体系不同——判别走 Native 映射，语义直通内部模型。
 const nativeSource = {
   name: '笔趣阁', url: 'https://www.bqquge.com',
   headers: { 'User-Agent': 'UA' },
@@ -202,7 +202,7 @@ const nativeSource = {
   charset: 'utf-8',
 }
 
-// ── 字符串化的规则容器（对面每个 rule 对象的 JsonDeserializer 都吃这一形态）────────
+// ── 字符串化的规则容器（规则字段既可是对象，也可是 JSON 文本）────────
 describe('规则容器的字符串化形态', () => {
   const strung = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
     bookSourceName: 'S', bookSourceUrl: 'https://s.com', ruleContent: 'x',

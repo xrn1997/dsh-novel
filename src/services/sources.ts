@@ -64,8 +64,8 @@ export class SourceRegistry {
    *  type 缺省归一为 'text'——早期数据无此字段（当时 bookSourceType 根本没读）；
    *  groups 拆分迁移——早期只按 `\` 拆，真实导出的逗号粘连组合串（「A,B」一段）在此按
    *  splitGroups 收敛成多段（幂等：干净数据拆完原样）；
-   *  name 前缀图标迁移——上游分组装饰前缀（「⚡📂xx」）按 stripLeadingIcons 剥掉（幂等）；
-   *  type 按 raw.bookSourceType 重推——legado 真值 1=音频/2=图片/3=文件，旧映射读反且
+   *  name 前缀图标迁移——书源包惯用的分组装饰前缀（「⚡📂xx」）按 stripLeadingIcons 剥掉（幂等）；
+   *  type 按 raw.bookSourceType 重推——书源格式真值 1=音频/2=图片/3=文件，旧映射读反且
    *  「非文本拒绝」口径晚于存量入库，漫画/短剧源被误标 text 混进聚合搜索与文字书架
    *  （书架诊断实证）；**认不出的编码 → 'unknown'**（2026-09 裁定：读不懂不等于文本源，退出
    *  参与集；不打 status——探针按搜索面判 verified，坏源那条道会被下一次重验洗白）。 */
@@ -100,7 +100,7 @@ export class SourceRegistry {
         s.rules.headerRule = null; changed = true
       }
       // ⑧ bookUrlPattern 按 raw 重推（与 ⑥⑦ 同构）：详情页嗅探字段是后来才读的，存量 rules 缺键
-      // → 27/158 声明了它的源搜索时照旧只跑列表规则（对面命中即按详情页解析）。
+      // → 27/158 声明了它的源搜索时照旧只跑列表规则（补推后命中即按详情页解析）。
       const wantPattern = rawRulePattern(s.raw)
       if (wantPattern !== undefined && s.rules.bookUrlPattern !== wantPattern) {
         s.rules.bookUrlPattern = wantPattern; changed = true
@@ -108,7 +108,7 @@ export class SourceRegistry {
         s.rules.bookUrlPattern = null; changed = true
       }
       // ⑨ kind / wordCount 按 raw 补推（与 ⑥⑦⑧ 同族的存量收敛）：这两个字段后来才接进取值链路，
-      // 老数据的 rules 根本没这四个键 → 对面读得出的分类/字数对已入库的源永远是 null。
+      // 老数据的 rules 根本没这四个键 → 不补推则读得出的分类/字数对已入库的源永远是 null。
       // **与 ⑥⑦⑧ 的差别**：只补 `undefined` 的键、不覆盖已有值——新入库的源由 normalize 正确派生
       // （含字符串化容器那条路径），这里再按 raw 读一遍是第二条路，覆盖会把对的改成错的。
       const wantMeta = rawBookMetaFields(s.raw)

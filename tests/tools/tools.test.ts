@@ -84,7 +84,7 @@ describe('agent 工具六件套', () => {
   })
   it('dshnovel_import_source：规范化失败的 outcome 缺键而非 undefined（失败原因能报出来，不被 harness 吞掉）', async () => {
     const s = await svc()
-    // Native 判别边界外的残缺源：既无 bookSource* 也无 name+url → legado 路径报三件套缺失
+    // Native 判别边界外的残缺源：既无 bookSource* 也无 name+url → 书源路径报三件套缺失
     const bad = await run(s, 'dshnovel_import_source', { sourceJson: '[{"name":"X"}]' })
     expect(bad.outcomes[0].ok).toBe(false)
     expect(bad.outcomes[0].missing.length).toBeGreaterThan(0)

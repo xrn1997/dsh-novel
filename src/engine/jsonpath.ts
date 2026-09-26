@@ -6,7 +6,7 @@ import { UnsupportedRuleError } from './errors.js'
  *
  * 支持：`$`、`.name`、`..name`（递归下降，按文档序收集）、`[n]`（下标，**负数从尾数**）、
  * `[a:b]`（半开切片 [a,b)，负数从尾数）、`[*]`（全部）、`[]`（与 `[*]` 同义）、
- * 以及 legado 真实源冗余点形态 `.[*]`（`[` 前允许一个 `.`）。
+ * 以及真实源里的冗余点形态 `.[*]`（`[` 前允许一个 `.`）。
  *
  * 明确拒绝（宁炸不猜 → UnsupportedRuleError，段级定位）：
  * 过滤器 `[?(…)]`、脚本 `[(…)]`、`@`/`&` 特殊符号、以及任何不匹配上述语法的内容。
@@ -55,7 +55,7 @@ function tokenize(path: string, loc: SegmentLoc, facet: Facet): Token[] {
       }
       i++
       if (path[i] === '[') continue // 冗余点：`.[` —— 吃掉点，下轮走括号分支
-      if (path[i] === '*') { // `.*` 属性通配（legado 真实源：$.data.* / $.comics.*——取对象全部值）
+      if (path[i] === '*') { // `.*` 属性通配（真实源形态：$.data.* / $.comics.*——取对象全部值）
         i++
         tokens.push({ kind: 'wildcard' })
         continue
@@ -144,7 +144,7 @@ function applyToken(cur: unknown[], tok: Token): unknown[] {
           for (const el of v) if (el !== null && el !== undefined) out.push(el)
           break
         }
-        // `.*` 属性通配作用于对象：取全部值（legado $.data.* —— data 为对象时取其值集合）
+        // `.*` 属性通配作用于对象：取全部值（data 为对象时取其值集合）
         if (isObjectLike(v)) {
           for (const el of Object.values(v)) if (el !== null && el !== undefined) out.push(el)
         }

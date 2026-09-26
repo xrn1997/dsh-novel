@@ -60,7 +60,7 @@ _Avoid_: 空结果（太泛——Miss 与空 List 是两种值）
 _Avoid_: 模式、场景（太泛——这是「链尾未知词」的裁决轴）
 
 **属性终端（attr terminal）**:
-取值用途链尾的未知提取指令按 HTML 属性名取值（legado AnalyzeByJSoup.getResultLast 的 `else -> element.attr(rule)`）：自身属性为空向下兜底第一个含该属性的后代（html/body 包装不兜底），空值丢弃 + 去重。唯一实现在 `engine/select.ts` 的 `getValue` `mode === 'attr'` 分支。真实源 `ruleBookUrl: tag.div@onclick`、`@value`、`@_src` 全靠它。
+取值用途链尾的未知提取指令按 HTML 属性名取值：自身属性为空向下兜底第一个含该属性的后代（html/body 包装不兜底），空值丢弃 + 去重。唯一实现在 `engine/select.ts` 的 `getValue` `mode === 'attr'` 分支。真实源 `ruleBookUrl: tag.div@onclick`、`@value`、`@_src` 全靠它。
 _Avoid_: 自定义属性（太泛——这是链尾语义，不是属性语法）
 
 **模板字面段（literal segment）**:
@@ -83,7 +83,7 @@ _Avoid_: 变量池（太泛）、缓存（`cache` 是按源隔离的另一套键
 
 
 **动态请求头（headerRule）**:
-legado `header` 字段的 `@js:`/`<js>` 规则形态的内部名（与静态 JSON 形态互斥同源——同一 raw.header 二选一）：请求前经沙箱求值得到 JSON 头表，叠加 auth/cookie 后发出（device-id 逐请求刷新）；求值失败 → warn 后回退静态头，不吞请求也不炸整链（legado `BaseSource.getHeaderMap` 的 try/catch 口径）。唯一求值点 `services/bridge.ts` 的 `resolveHeaders`；存量由 `SourceRegistry.load` 第七条迁移按 raw 重推。
+legado `header` 字段的 `@js:`/`<js>` 规则形态的内部名（与静态 JSON 形态互斥同源——同一 raw.header 二选一）：请求前经沙箱求值得到 JSON 头表，叠加 auth/cookie 后发出（device-id 逐请求刷新）；求值失败 → warn 后回退静态头，不吞请求也不炸整链。唯一求值点 `services/bridge.ts` 的 `resolveHeaders`；存量由 `SourceRegistry.load` 第七条迁移按 raw 重推。
 _Avoid_: header 规则、动态 header（说内部名）
 
 **探针（probe）**:

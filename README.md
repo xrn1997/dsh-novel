@@ -131,11 +131,17 @@ dsh plugin --profile web remove @xrn1997/dsh-novel
 
 兼容 legado 书源的声明式子集：取值链 / 组合符（`||`、`&&`、`%%`）/ `##` 替换 / AllInOne / JSONPath（含 `.*` 属性通配，且当页面是 JSON 文本时对内容按需解析）/ XPath 子集 / `@put` / `@get` / `@js` 沙箱（脚本完成值语义 + 顶层 `return`/`await` 回落）/ `jsLib` 源级函数库 / `searchUrl` 的 `@js`/`<js>` 形态（沙箱求值出 URL）/ 对象形态方言（**含 `ruleBookInfo.init` 详情上下文初始化**——init 先求值、结果替换后续详情规则与 tocUrl 模板的上下文，`{{$.…}}` 插值按换根后的 JSON 解析）/ `url,{json}` POST 请求（**选项随书 URL 与章节 URL 全程保留**——身份即请求规格，抓取时统一解释）/ 相对 URL / 隐式 CSS 选择器（`#id` / `.class` / 裸 tag / `tag.类` / `tag>子` 组合链 / 纯属性选择器 / 位置索引 `a.0`）/ `!` 排除语法，以及 `@js` 宿主垫片（`java.log` / `getElement` / `setContent` / `cookie` / `source.getVariable` / `source` 等对象）。缺省请求带浏览器 UA（部分站点 WAF 无 UA 直接 403）。
 
-URL 模板语义与 legado 源码（[legado-with-MD3](https://github.com/gedoor/legado) 续作）逐条对齐：`url,{json}` 选项的逗号两侧允许空白（`,` / `, ` 均可）；模板内 `{{...}}` 按 JS 求值（`{{java.encodeURI(key)}}`、`{{page*2}}` 等），纯变量占位 `{{key}}`/`{{page}}` 保持原有的 URL 编码口径；`&&`/`%%` 组合符对空或 Miss 的分支静默跳过、只合并非空结果（与 legado 的并集语义一致，而非全命中）。
+URL 模板语义按 legado 书源格式对齐：`url,{json}` 选项的逗号两侧允许空白（`,` / `, ` 均可）；模板内 `{{...}}` 按 JS 求值（`{{java.encodeURI(key)}}`、`{{page*2}}`、源级 `jsLib` 定义的全局如 `{{host}}` 等），变量占位 `{{key}}`/`{{page}}` 保持原有的 URL 编码口径；URL 模板里的 js 块可出现在任意位置（`<js>…</js>` 闭区间、`@js:` 吃到串尾、块间字面文本按 `@result` 拼接）；`url,{json}` 里的 `charset` 同时用于**请求体编码**与响应解码（表格体按该 charset 转义，GBK 站点才搜得到）；`&&`/`%%` 组合符对空或 Miss 的分支静默跳过、只合并非空结果（并集语义，而非全命中）。
 
 遇到不认识的语法，本插件选择**报错而不是猜测**——错误信息精确定位到出错的规则段，而不是产出错误的结果。依赖安卓 WebView 或加解密 API 的书源无法在本环境仿真，会明确报告不支持。
 
 项目带有可离线复算的兼容性回放测试（真实源快照 → 搜索 / 目录 / 正文全链路），详见 [compat/README.md](compat/README.md)。
+
+## 致谢
+
+书源兼容语义的开发阶段对读，参考了 legado 及其续作 [legado-with-MD3](https://github.com/HapeLee/legado-with-MD3)（上游 `gedoor/legado` 已下架）。对读的结论以**仓内快照**形式留存：`compat/upstream/snapshot.json`（源根路径集 / 规则实体字段表 / java 宿主方法名集），由开发阶段的门控工具抽取一次；**运行与 CI 都不依赖任何外部 checkout**。
+
+外部出处只允许出现在四处：本文件、`tests/legado-coverage/matrix.ts`（覆盖矩阵）、`docs/design/legado-compat.md`（裁决表）与刷新工具本身；其余地方只讲本插件自己的口径与理由。这条有机器守卫（`tests/legado-coverage/citation-liveness.test.ts`）。
 
 ## 常见问题
 
@@ -197,13 +203,17 @@ pnpm test:pack     # 构建 + 产物自检
 pnpm typecheck     # tsc --noEmit
 ```
 
-**legado 兼容判据三门（`pnpm test` 默认就跑，但依赖本地对面 checkout）**：`tests/legado-coverage/` 里
-`upstream-fields.test.ts`（对面 `data/entities/rule/*.kt` 每个字段都要在覆盖矩阵有归属）与
-`citation-liveness.test.ts`（引用活性：对面 `.kt` 要带目录、任何引用不带行号、不拿不入库笔记当证据）
-**现读对面仓**。默认路径 `C:/develop/GitHub/legado-with-MD3`，不是这里就设
-`DSH_LEGADO_REF=<对面 checkout 路径>`；仓不在场这两门**直接红**（不静默跳过），只有显式
-`DSH_LEGADO_REF=off` 才跳过，且跳过会写进用例名。判据口径与被裁决的缺席面见
-`docs/design/legado-compat.md`。
+**legado 兼容判据三门（`pnpm test` 默认就跑，运行时不需要任何外部 checkout）**：`tests/legado-coverage/` 里
+`upstream-fields.test.ts`（规则实体每个字段都要在覆盖矩阵有归属）、`citation-liveness.test.ts`（引用活性：
+外部出处只许在白名单四处、对面 `.kt` 要带目录、任何引用不带行号、不拿不入库笔记当证据）与
+`parse-census` 的 js 面——三者的分母都是**仓内快照** `compat/upstream/snapshot.json`。
+快照由**开发阶段**的门控抽取（需要一份对面 checkout）：
+
+```powershell
+$env:DSH_CAPTURE_UPSTREAM='1'; $env:DSH_LEGADO_REF='<对面 checkout 路径>'; pnpm vitest run tests/legado-coverage/capture-upstream-snapshot.test.ts
+```
+
+快照不在场这三门**直接红**（不静默跳过）。判据口径与被裁决的缺席面见 `docs/design/legado-compat.md`。
 
 **默认跳过、需显式打开的门控（四条真实网络 / 真实安装 + 一条真浏览器）**——`pnpm test` 全绿**不覆盖**它们：
 

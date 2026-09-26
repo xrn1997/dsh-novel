@@ -283,7 +283,7 @@ describe('ShelfView 接线（deps seam 驱动）', () => {
 
 /** 命中分组桩（`SearchGroup` 的最小可渲染形态）。
  *  `sourceId` 一轮内必须一源一个：服务端 `searchProgressive` 对每个源只 `emit` 一组，分组在
- *  `SearchView` 里按 `key={g.sourceId}` 渲染——同一轮塞两个同 id 的桩等于造出对面协议给不出的形状
+ *  `SearchView` 里按 `key={g.sourceId}` 渲染——同一轮塞两个同 id 的桩等于造出服务端给不出的形状
  *  （React 会报 duplicate key）。多组用例显式传第二个 id。 */
 const hitGroup = (title: string, sourceId = 's1') => ({
   sourceId, sourceName: 'S', status: 'verified' as const,

@@ -10,7 +10,7 @@ import { JsSandboxError } from '../../src/engine/errors.js'
 import type { EvalContext, Facet, SegmentLoc } from '../../src/engine/types.js'
 
 /**
- * legado 真机缺口修复的回归钉子（29 条书架实测诊断的五处修复）：
+ * 真机缺口修复的回归钉子（29 条书架实测诊断的五处修复）：
  * A. cache.putMemory/getFromMemory/deleteMemory 三别名 + java.randomUUID
  * B. `tag.li.` 尾点号（!排除 切走 base 后的尾巴）不再炸选择器
  * E. 字节组方法 / downloadFile↔readTxtFile / Packages.*（PNG/AES/HMAC）沙箱面
@@ -81,7 +81,7 @@ describe('B. 段尾点号剥离（看书源 tag.li.!0:1:-1 实证）', () => {
   })
 })
 
-describe('E-1. 字节组方法（legado JsExtensions）', () => {
+describe('E-1. 字节组方法（桥面 hex / bytes 互转）', () => {
   it('strToBytes：ISO8859_1 字节往返无损（java 别名 → latin1）', () => {
     const d = depsOf()
     const bytes = invokeJavaMethod(d, 'strToBytes', ['héllo', 'ISO8859_1']) as number[]

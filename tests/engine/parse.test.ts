@@ -75,7 +75,7 @@ describe('⑥ 段识别', () => {
   })
   it('put / getvar 识别', () => {
     expect(parseRule('@put:{bid:"123"}').branches[0].segments[0]).toEqual({ kind: 'put', pairsRaw: '{bid:"123"}' })
-    // 体内 @ 不是段界（legado splitPutRule 在任何切分之前先剥离 @put:{…}）——
+    // 体内 @ 不是段界（`@put:{…}` 在任何切分之前先整块剥离）——
     // 真实源 ruleBookInfo.init 形态 @put:{n:"[property$=x]@content", …} 曾被撕成六段
     const put = parseRule('@put:{n:"[property$=book_name]@content", a:"[property$=author]@content"}@get:n')
     expect(put.branches[0].segments[0]).toEqual({
@@ -85,7 +85,7 @@ describe('⑥ 段识别', () => {
     expect(put.branches[0].segments[1]).toEqual({ kind: 'getvar', name: 'n' })
 
     expect(parseRule('@get:bid').branches[0].segments[0]).toEqual({ kind: 'getvar', name: 'bid' })
-    // 花括号形态（legado evalPattern `@get:\{[^}]+?\}`——真实源详情面整条规则就是 `@get:{n}`）
+    // 花括号形态（`@get:{…}` 也是合法写法——真实源详情面整条规则就是 `@get:{n}`）
     expect(parseRule('@get:{n}').branches[0].segments[0]).toEqual({ kind: 'getvar', name: 'n' })
   })
   it('js 三种形态；@js: 吞链尾、<js> 块可非末位', () => {
@@ -113,8 +113,8 @@ describe('⑥ 段识别', () => {
     }
   })
   it('白名单外的段在**解析期**定性：构成选择器的即 css 段，构不成的仍当场抛（都不留到 eval 才炸）', () => {
-    // 对面 ElementsSingle 的 else 分支 = temp.select(beforeRule)：`nonsense.x` 在它那里是
-    // 「tag=nonsense + class=x」，不是认不出。本仓此前抛错、把对面读得出的规则判死。
+    // 白名单外的段交 CSS 选择：`nonsense.x` 落到选择器上是
+    // 「tag=nonsense + class=x」，不是认不出。本仓此前抛错、把读得出的规则判死。
     const ok = parseRule('nonsense.x', 'toc')
     expect(ok.branches[0].segments[0]).toMatchObject({ kind: 'css', selector: 'nonsense.x' })
     // 真认不出的（`$` 不是 CSS 标识符字符）依旧在解析期 UnsupportedRuleError——
@@ -313,11 +313,9 @@ describe('覆盖矩阵补钉：既有抛错口径此前无标题级钉子', () =
 
 describe('链尾 (…) 不是 js 形态（对面从不切它）', () => {
   /**
-   * 对面两处证据：① `SourceRule.init` 的模式判定里 `ruleStr.startsWith("/")` 直接整条
-   * `mode = Mode.XPath` 并把 **原文**当 rule（`/text()` 从头到尾没被再切）；
-   * ② `RuleAnalyzer.splitRule` 找分隔符时 `findToAny('[', '(')` + `chompBalanced` 是
-   * **跳过平衡组**，不是在 `(` 处切开。Default 链的末段落进 `getResultLast` 的
-   * `else -> element.attr(lastRule)`，取不到属性就是空。
+   * 两条依据：① 规则形态判定里 `ruleStr.startsWith("/")` 即整条按 XPath，并把 **原文**当 rule
+   * （`/text()` 从头到尾没被再切）；② 分段找分隔符时括号是**平衡组**，跳过而非在 `(` 处切开。
+   * Default 链的末尾段是属性读（取不到属性就是空）。
    * 本仓曾把「末元素以 ) 结尾」当 js 表达式形态（`detectTailJs`），真机实证它把
    * 耽美小说 `ruleToc.chapterName: "/text()"` 切成 `/text` + `()` 两段，`() ` 当脚本编译
    * 当场 Unexpected token。全库普查（158 源）里需要这条形态的源为 **0**。
@@ -344,10 +342,10 @@ describe('链尾 (…) 不是 js 形态（对面从不切它）', () => {
 
 describe('单斜杠开头仍是 XPath（与对面 SourceRule.init 同判据）', () => {
   /**
-   * 对面两处判据各管一层，容易混：
-   * - `SourceRule.init`（model/analyzeRule/AnalyzeRule.kt）：**顶层规则** `ruleStr.startsWith("/")` 即整条
-   *   `mode = Mode.XPath`——所以 `/text()`、`/p/text()` 这类单斜杠规则是 XPath，不是本仓多做的事。
-   * - `SourceRule.isRule`（同文件 `private fun isRule`）：只管 **`{{…}}` 内表达式**的规则/JS 二分，那里才只认 `//`。
+   * 两处判据各管一层，容易混：
+   * - **顶层规则** `ruleStr.startsWith("/")` 即整条按 XPath——所以 `/text()`、`/p/text()` 这类
+   *   单斜杠规则是 XPath，不是本仓多做的事。
+   * - **`{{…}}` 内表达式**的规则/JS 二分只管那一层，那里才只认 `//`。
    * 本仓 classifyExpr 与之逐字对齐（`@` / `$.` / `$[` / `//`），单斜杠在插值里按 JS 走。
    * 现库量：以 `./` 或 `.//` 开头的顶层规则 **0 源**（本仓额外接受 `.//` 是更宽的一侧，无源依赖）；
    * 以单斜杠开头的规则串 84 条，全部是 URL 形态（`{{…}}` 或选项后缀已先行豁免）。

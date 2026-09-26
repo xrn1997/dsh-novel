@@ -2,13 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { formatIntro } from '../../src/services/content.js'
 
 /**
- * **简介的展示文本规约**（对面 `HtmlFormatter.format` + `take(5000)`）。
+ * **简介的展示文本规约**（净化 + 截断到 5000 字符）。
  *
- * 对面两个取值点用的是同一条净化，只有一处差别：
- * - 搜索结果（`model/webBook/BookList.kt`）：`intro = HtmlFormatter.format(getString(ruleIntro)).take(5000)`
- * - 详情页（`model/webBook/BookInfo.kt`）：先 `trimStart` 判渲染指令前缀
- *   `<usehtml>` / `<md>` / `<useweb>`，命中就**原样保留**（注释写明：否则 `<button>@onclick`
- *   等书源交互标记会被清理掉，交给渲染层按前缀选渲染器）；否则同样 `format().take(5000)`。
+ * 两个取值点用的是同一条净化，只有一处差别：
+ * - 搜索结果：净化后截断到 5000 字符。
+ * - 详情页：先 `trimStart` 判渲染指令前缀
+ *   `<usehtml>` / `<md>` / `<useweb>`，命中就**原样保留**（否则 `<button>@onclick`
+ *   等书源交互标记会被清理掉，交给渲染层按前缀选渲染器）；否则同样净化后截断。
  *
  * 本仓此前两侧都是**原样透出**：普通 HTML 简介带着一堆 `<div>`/`<span>` 标签进 UI，
  * 而指令前缀那条（现库 1 源：米读小说的整页 CSS + 卡片 HTML）也没有任何地方认识它。

@@ -23,8 +23,8 @@ describe('evaluateWithTrace 端到端', () => {
     expect(t.steps[0].hits).toBe(0)
   })
   it('链尾 (…) 不当 js 改写（对面从不切它：这条形态与 text下一页 同族，如实失败）', async () => {
-    // 对面 `SourceRule.init` 只在 @js:/<js>/@XPath:/@Json: 等前缀上定模式，`RuleAnalyzer.splitRule`
-    // 遇 `(` 是跳过平衡组；Default 链末段整串落进 `getResultLast` 的 `else -> attr(lastRule)` → 取空。
+    // 只在 @js:/<js>/@XPath:/@Json: 等前缀上定模式，找分隔符时 `(` 是平衡组（跳过、不是切开）；
+    // Default 链末段整串走属性读 → 取空。
     // 本仓曾把 (…) 当链尾 js 表达式（detectTailJs），实测会把耽美小说 `/text()` 切碎；已移除。
     // 移除后这条形态落到「认不出的末段」——与 `text下一页` 同族，抛错而不是静默改写值。
     await expect(evaluateWithTrace('class.name@text(result.replace(/凡人/,"某凡"))', { html: searchHtml }, 'search'))
@@ -73,7 +73,7 @@ describe('evaluate 总装（引擎语义复查）', () => {
     const miss = await evaluate('@css:.nope@text', { html: searchHtml }, 'search')
     expect(miss.kind).toBe('miss')
     // 取值段索引全越界 = 取位失败 → Miss（与选择段 reducePicked 同口径；此前误判「合法空 List」）。
-    // 用单个 .name 的确定页面：`.5:9` 对面逐个越界 → 集合空 → Miss。
+    // 用单个 .name 的确定页面：`.5:9` 逐个越界 → 集合空 → Miss。
     const empty = await evaluate('@css:.name@text.5:9', { html: '<p class="name">甲</p>' }, 'search')
     expect(empty.kind).toBe('miss')
     // 合法零条目：元素在、取值全空（属性缺失/ownText 无直系文本）→ 空 List
@@ -95,7 +95,7 @@ describe('evaluate 总装（引擎语义复查）', () => {
   })
   it('jsonpath 中链：节点集上游如实求值错；Value 上游按 JSON 求值（上游修复后 legado 语义）', async () => {
     // 节点集不是 JSON → 求值期如实 RuleEvalError（此前在解析期以「非分支首位」预拒——
-    // legado fork 对 JS 返回对象不分发 Mode 的快捷路径是上游已修复的 bug，TS 按修复后语义走）
+    // 那条预拒建在旧 bug 语义上：JS 返回对象不分发 Mode，本仓按修复后语义走）
     await expect(evaluate('@css:.name@json:$..x', { html: searchHtml, json: {} }, 'search'))
       .rejects.toThrow(/无法按 JSON 求值/)
     // 「js 返回对象再取字段」形态现在合法：<js> 产出 JSON 文本 → 中链 jsonpath 按 JSON 求值
@@ -117,7 +117,7 @@ describe('evaluate 总装（引擎语义复查）', () => {
 })
 
 describe('JSONPath 对 JSON 文本（html 回退）——搜索链路只传 html 不传 json 的真实场景', () => {
-  // legado 口径：isJSON = content.toString().isJson() → JsonPath.parse(content)。
+  // 口径：内容是合法 JSON 文本 → 按 JSON.parse 读成数据（非法 JSON 不抛，走 Miss）。
   // 我们的搜索链路只喂 ctx.html（JSON 源的 body 是 JSON 字符串、ctx.json 缺席），
   // 引擎必须在 ctx.json 缺席时回退解析 ctx.html，否则所有 $. 规则对 JSON API 源恒 Miss。
   const apiBody = '{"data":[{"name":"凡人修仙传","author":"忘语"},{"name":"仙逆","author":"耳根"}]}'

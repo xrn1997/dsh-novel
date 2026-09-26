@@ -17,8 +17,8 @@
 /** 书源状态：未验证 / 探针通过 / 探针判坏 */
 export type SourceStatus = 'unverified' | 'verified' | 'broken'
 
-/** 书源内容形态（legado bookSourceType：0/-1/缺省=文本，**1=音频，2=图片，3=文件**——
- *  真值锚点 legado-with-MD3 `constant/BookSourceType.kt`；此前本仓注释与映射把 1/2 读反）。
+/** 书源内容形态（legado 书源格式的 bookSourceType：0/-1/缺省=文本，**1=音频，2=图片，3=文件**
+ *  ——此前本仓注释与映射把 1/2 读反）。
  *  `unknown` = **编码读不懂**（不是 legado 认得的整数值），不是第五种媒介而是「这本文源不规范」：
  *  读不懂不等于文本，一律不进参与集（2026-09 裁定，推翻此前「warning 后按文本处理」——
  *  误标 text 的短剧/漫画源一直混进聚合搜索与文字书架）。它也不写 `status`：探针按搜索面
@@ -101,10 +101,10 @@ export interface SearchHit {
   coverUrl: string | null
   intro: string | null
   lastChapterName: string | null
-  /** 分类（对面 `ruleSearch.kind`；现库 150 源带规则）：原样字符串，不猜成数组 */
+  /** 分类（书源格式的 `ruleSearch.kind`；现库 150 源带规则）：原样字符串，不猜成数组 */
   kind: string | null
-  /** 字数（对面 `ruleSearch.wordCount`；现库 42 源带规则）：对面也是"取到什么串给什么"，
-   *  「x.x万字」那层格式化在对面属 App 展示轴（矩阵 `e-word-count-format` 记不适用） */
+  /** 字数（书源格式的 `ruleSearch.wordCount`；现库 42 源带规则）：取到什么串就给什么，
+   *  「x.x万字」那层格式化属 App 展示轴（矩阵 `e-word-count-format` 记不适用） */
   wordCount: string | null
 }
 
@@ -165,8 +165,7 @@ export interface BookDetail {
   intro: string | null
   lastChapterName: string | null
   tocUrl: string | null
-  /** 与 SearchHit 同源的两个字段（对面 BookInfoRule 的 kind/wordCount；详情规则缺席时
-   *  回退搜索规则，与 name/author/coverUrl 同一条回落链） */
+  /** 与 SearchHit 同源的两个字段（详情规则缺席时回退搜索规则，与 name/author/coverUrl 同一条回落链） */
   kind: string | null
   wordCount: string | null
 }

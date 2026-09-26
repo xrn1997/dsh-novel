@@ -45,7 +45,7 @@ interface SourceAudit {
   chapters?: ChapterSample[]
   error?: ErrInfo
   /** 搜索面书目字段的到货读数（`fieldsOf` 在选中那一轮上数出来的）：
-   *  `declaresKind` = 该源 raw 里 `ruleSearch.kind` 非空（分母按对面真正读的这一位算） */
+   *  `declaresKind` = 该源 raw 里 `ruleSearch.kind` 非空（分母按真正落到链路里的这一位算） */
   fields?: { hits: number; withKind: number; withWordCount: number; declaresKind: boolean; declaresWordCount: boolean }
 }
 
@@ -84,7 +84,7 @@ describe.skipIf(process.env.DSH_CONTENT_AUDIT !== '1')('正文链路全量审计
     console.log(`[audit] 源总数 ${raws.length}；出站代理 ${proxyUrl ?? '(直连)'}`)
 
     // 注册表直读：每条源的 id/name/baseUrl 来自 sources.json 本身（生产同口径）
-    // 声明位按对面读的**两处**算：对象方言 `ruleSearch.kind` 与平铺方言顶层 `ruleKind`
+    // 声明位按**两处**算：对象方言 `ruleSearch.kind` 与平铺方言顶层 `ruleKind`
     // （本库现量平铺为 0，但分母漏一处会让到货率虚高——instrument 不能跟着本库形状走）
     const nonEmpty = (v: unknown) => typeof v === 'string' && v.trim() !== ''
     const declares = (raw: unknown, nested: string, flat: string) => {
@@ -139,9 +139,9 @@ describe.skipIf(process.env.DSH_CONTENT_AUDIT !== '1')('正文链路全量审计
     // 分开计数，residual = host-gap + unattributed——兼容目标判据读的是这个数，不是三种
     // error name 混在一起的大数（混着读会把「页面没这结构」算成本仓欠账，也把本仓缺口藏起来）
     const classified = classifyAudits(audits)
-    // 书目字段到货读数（只算搜索面）：kind/wordCount 的读取异常按对面口径被吞成 null，
+    // 书目字段到货读数（只算搜索面）：kind/wordCount 的读取异常被吞成 null，
     // 失败分桶查不到它们——「字段接进了链路」与「值真的到了」是两件事，这一条量后者。
-    // 分母用 `ruleSearch.kind` 非空（对面读的就是这一位；详情面的 kind 不在这条链路里）。
+    // 分母用 `ruleSearch.kind` 非空（读的就是这一位；详情面的 kind 不在这条链路里）。
     const arrival = (field: 'withKind' | 'withWordCount', declares: 'declaresKind' | 'declaresWordCount') => {
       const withHits = audits.filter(a => a.fields?.[declares] === true && (a.fields?.hits ?? 0) > 0)
       const arrived = withHits.filter(a => (a.fields?.[field] ?? 0) > 0)

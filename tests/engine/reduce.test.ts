@@ -7,7 +7,7 @@ import { reducePicked } from '../../src/engine/select.js'
  * ① 切片裁空（原集合非空）：default 选择段给 List{[]}、css 段给 Miss——同语义两种结果。
  *   裁决：**选择段四态一律「选择失败」语义（Miss）**——List{[]} 不是节点集，中链必抛
  *   「上游结果不是节点集」（真实源 `class.x.5:9@text` 直接炸），css 的 Miss 穿透才符合
- *   legado「空选择 → 下游取值为 null」口径。
+ *   「空选择 → 下游取值为 null」口径。
  * ② 取值段的 `!` 排除被静默丢弃：parse 对 text/href… 也挂 exclude（`parse.ts` 里 `if (exclude !== undefined) seg.exclude = exclude`），
  *   但 getValue 从不读——`@text!0` 的排除无声消失（违反宁炸不猜）。修复：exclude 生效。
  * 取值段「取到空 → 空 List」（合法零条目，区别于 Miss）保持不变——那是取值规约不是选择规约。

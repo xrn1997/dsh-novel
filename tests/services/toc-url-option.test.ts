@@ -16,8 +16,8 @@ import { SourceRegistry } from '../../src/services/sources.js'
  *
  * 根因不在选项解析，而在**绝对化早于切分**：`tocUrlOf` 求值后用 `absUrl`（即 `new URL()`），
  * 而 WHATWG 解析器吃掉换行、把花括号百分号编码，于是 `,{` 形状先被破坏，抓取层的
- * `URL_OPTION_SPLIT` 再也切不到。搜索结果里的 bookUrl 与章节 URL 早已按对面
- * `BookChapter.getAbsoluteURL` 的口径走 `absUrlKeepOption`（URL 部分绝对化、`,{option}` 原样接回），
+ * `URL_OPTION_SPLIT` 再也切不到。搜索结果里的 bookUrl 与章节 URL 早已按同一口径
+ * 走 `absUrlKeepOption`（URL 部分绝对化、`,{option}` 原样接回），
  * tocUrl 这条出口漏了同一层处理。
  *
  * fixture 与原文的一处差异：正则用数字字符类而不是转义写法——写文件的工具层会吃掉反斜杠，

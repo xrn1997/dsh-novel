@@ -22,7 +22,7 @@ export async function probeSource(
   source: NovelSource, fetcher: Fetcher, opts?: { timeoutMs?: number; jsTimeoutMs?: number },
 ): Promise<ProbeResult> {
   try {
-    // 源自带校验关键词（legado `ruleSearch.checkKeyWord`）时先打它：「只搜得到自家书名」的站
+    // 源自带校验关键词（`ruleSearch.checkKeyWord`）时先打它：「只搜得到自家书名」的站
     // 对通用词恒 0 命中，会被误判坏源（本库 31/158 源带值）。`?? null`：存量 sources.json 缺键。
     const own = source.rules.probeKeyword ?? null
     const keys = own === null || own.trim() === '' ? [...PROBE_KEYS] : [own, ...PROBE_KEYS]
