@@ -215,6 +215,18 @@ describe('布局单位与视口约束（阅读器不能被正文高度绑架）'
     expect(ruleBody('.novel-modal.wide'), '导入弹层用宽档（删除确认保持 400px 紧凑档）').toMatch(/width:\s*min\(680px/)
   })
 
+  it('源列表表格不许自己裁：圆角落首/末行，不靠 .novel-table 的 overflow:hidden', () => {
+    // 病史（2026-09-26 用户实机 + 真 NOVEL_CSS/真 Edge 实测）：.novel-table 曾带 overflow:hidden
+    // 收圆角，而 ⋯ 菜单的包含块 .novel-actions 就在表内 ⇒ 菜单被锁进表格盒，超表底的部分
+    // 点不到：末行菜单可达率 **5% → 去掉裁剪后 100%**（逐点命中测试；残余 = 长列表滚到底仍被
+    // .novel-main 裁，读数与开口登记在 docs/design/client.md）。
+    expect(ruleBody('.novel-table'), '表格一裁，行内浮层就出不去（菜单/将来的下拉同族）').not.toMatch(/overflow:\s*hidden/)
+    expect(ruleBody('.novel-table'), '圆角仍在——裁剪换成首/末行自持，不等于放弃圆角').toMatch(/border-radius:/)
+    for (const [sel, corner] of [['.novel-table > .novel-tr:first-child', 'top'], ['.novel-table > .novel-tr:last-child', 'bottom']] as const) {
+      expect(ruleBody(sel), `缺 ${corner} 行圆角（${sel}）——少了它表头/末行底色会溢出表格圆角`).toMatch(new RegExp(`border-${corner}`))
+    }
+  })
+
   it('书架筛选簇不贴右；顶部 tab 导航在场且有激活态（IA：书架|书城|书源管理 并列）', () => {
     // 病史：排序灰字 margin-left:auto 在 1600px 内容列里被钉到最右端（实测 x1472 vs pills x75）＝悬浮碎片；
     // 书城预留位 chip 已随 tab 化退役——占位不如真导航（书城未上线点开是 CityView 占位空态）

@@ -303,11 +303,21 @@ export const NOVEL_CSS = `
 }
 .novel-group-legend { cursor: help; margin-left: var(--novel-sp-0); }
 /* 表头「?」图例（cursor:help 是「这里有解释」的唯一提示） */
-.novel-table { border: 1px solid var(--novel-border); border-radius: var(--novel-r-md); overflow: hidden;
+/* 圆角**不能**靠 overflow: hidden 收：行内「⋯」菜单（.novel-menu 绝对定位）的包含块
+   .novel-actions 就在表内，一裁就把菜单锁进表格盒、超出表底的部分点不到——实测（真
+   NOVEL_CSS + 真 Edge）末行菜单 89px 只可见 **21px**，越出表底 68px；库里源一少、菜单
+   每次都在末行时必现（2026-09-26 用户实机）。改为首/末行各自带圆角裁自己的背景，
+   浮层语义归浮层、圆角归圆角。 */
+.novel-table { border: 1px solid var(--novel-border); border-radius: var(--novel-r-md);
   /* 容器查询锚：源列表按**表格自身宽度**（不是视口宽度）收列——宿主会话列可拖窄，
      视口断点在分栏布局下量不准。inline-size containment 同时把表格的布局影响范围关住。 */
   container-type: inline-size;
 }
+/* 圆角落在行上（表头背景 / hover 底色由行自己裁）。:only-child 写在最后——它与 :first-child
+   同特异度，靠次序覆盖「一行成表」（.novel-tr.one 空态行）的四个角。 */
+.novel-table > .novel-tr:first-child { border-top-left-radius: var(--novel-r-md); border-top-right-radius: var(--novel-r-md); }
+.novel-table > .novel-tr:last-child { border-bottom-left-radius: var(--novel-r-md); border-bottom-right-radius: var(--novel-r-md); }
+.novel-table > .novel-tr:only-child { border-radius: var(--novel-r-md); }
 .novel-tr {
   display: grid; gap: var(--novel-sp-3); align-items: center;
   padding: var(--novel-sp-2) var(--novel-sp-4); font-size: var(--novel-fs-md);
