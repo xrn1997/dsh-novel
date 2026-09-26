@@ -113,7 +113,7 @@ describe('路由契约：ROUTES → 真实 dispatch 落点', () => {
     expect(snap.status).toBe(200)
     expect(snap.json.value.job).toMatchObject({ keyword: 'k', total: 0, next: 0 })
 
-    for (const r of [ROUTES.book, ROUTES.toc, ROUTES.chapter]) {
+    for (const r of [ROUTES.book, ROUTES.toc, ROUTES.chapter, ROUTES.navigation]) {
       const q = `sourceId=x&url=${encodeURIComponent('https://x/b')}${r === ROUTES.chapter ? '&index=0' : ''}`
       const res = await call(`${r.path}?${q}`, 'GET')
       expect(landed(res)).toBe(true)                       // 落在源不存在（requireSourceUrl 通过后）
@@ -134,6 +134,13 @@ describe('路由契约：ROUTES → 真实 dispatch 落点', () => {
     expect(landed(li)).toBe(true)
     const ld = await call(`${ROUTES.local.path}?id=x`, 'DELETE')
     expect(landed(ld)).toBe(true)
+
+    // 本地三读口：参数齐全但书不存在 → 落在「本地产物不存在」404（不是未知路由）
+    for (const r of [`${ROUTES.localDocument.path}?id=x&documentId=d0`, `${ROUTES.localResource.path}?id=x&resourceId=r0`, `${ROUTES.localWarnings.path}?id=x`]) {
+      const res = await call(r, 'GET')
+      expect(res.status, r).toBe(404)
+      expect(landed(res), r).toBe(true)
+    }
   })
 
   it('local part 缺席（from() 不传 local）→ 503 Unavailable（判据归门面动词）', async () => {
@@ -146,7 +153,12 @@ describe('路由契约：ROUTES → 真实 dispatch 落点', () => {
     }))
     const { base: b2, close: c2 } = await startServer(bare)
     try {
-      for (const [route, method] of [[`${ROUTES.localImport.path}?name=a.txt`, 'POST'], [`${ROUTES.local.path}?id=x`, 'DELETE']] as const) {
+      for (const [route, method] of [
+        [`${ROUTES.localImport.path}?name=a.txt`, 'POST'], [`${ROUTES.local.path}?id=x`, 'DELETE'],
+        [`${ROUTES.localDocument.path}?id=x&documentId=d0`, 'GET'],
+        [`${ROUTES.localResource.path}?id=x&resourceId=r0`, 'GET'],
+        [`${ROUTES.localWarnings.path}?id=x`, 'GET'],
+      ] as const) {
         const r = await fetch(`${b2}${NOVEL_API_PREFIX}/${route}`, { method })
         expect(r.status, route).toBe(503)
         expect((await r.json() as any).error.code).toBe('Unavailable')

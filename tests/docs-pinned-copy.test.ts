@@ -35,6 +35,11 @@ const PINNED = [
   '停止搜索',
   '来源已删除',
   '删除所选',
+  // 本地书（TXT / EPUB）导入面（2026-09）：上传入口收两种格式、导入说明可在阅读器重看、
+  // 导出面板点明只有文字。三条都是用户照着文档找得到的控件/口径，双侧必须同源。
+  '导入 TXT / EPUB',
+  '导入说明',
+  'TXT 文字导出，不包含图片',
 ]
 
 function collectText(dir: string, ext: RegExp): string {

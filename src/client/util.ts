@@ -3,6 +3,50 @@
  * 「阅读进度」也不属于「轻量 store」——此前住在这两个 module 里，找它们要靠 grep。
  */
 
+/** 正文节点的 DOM 钩子（`ChapterBody` 渲染时写在每个可定位节点上）。
+ *  查找一律**遍历属性比较**，绝不把节点 ID 拼进选择器：wire 的 ID 是不透明串，
+ *  拼一次就等于给未净化的书内字符串开了一条进 DOM 查询的路。三处消费（章内定位 / 注释面板落位 /
+ *  视口顶采点）共用下面两个函数，免得同一个钩子名与同一条纪律各写一份。 */
+export const NOVEL_NODE_ATTR = 'data-novel-node'
+
+/** root 内所有已登记节点（文档顺序）；root 缺席（未挂载）→ 空表 */
+export function novelNodes(root: Element | null | undefined): Element[] {
+  if (root === null || root === undefined) return []
+  return [...root.querySelectorAll(`[${NOVEL_NODE_ATTR}]`)]
+}
+
+/** root 内按节点 ID 找元素：nodeId 为 null（新文档无锚点）或找不到 → null */
+export function findNovelNode(root: Element | null | undefined, nodeId: string | null): Element | null {
+  if (nodeId === null) return null
+  for (const el of novelNodes(root)) {
+    if (el.getAttribute(NOVEL_NODE_ATTR) === nodeId) return el
+  }
+  return null
+}
+
+/**
+ * 在**给定这一个**滚动容器里把目标摆进视野——落位只此一个实现（抽屉、注释面板共用）：
+ * 装得下就居中，装不下（目标比容器还高）就**顶对齐**。
+ *
+ * 为什么不用 `scrollIntoView`：那个 API 会一路向上把**每个可滚祖先**都滚到位，于是「打开一个只读
+ * 浮层」改写了主阅读位置、还顺带落一笔进度（真浏览器实测两条缺陷的同一根因，读数与记录见
+ * docs/design/client.md「已知开口」）。位移按两份视口盒现算，容器没有滚动范围时浏览器自己夹住；
+ * 增量恰为 0 时一次写入都不发（不为「已经在中间」制造一轮 scroll 事件）。
+ *
+ * 顶对齐那一条不是边角：脚注的锚点常常是一个**装着好几段的容器**（`<div id="fn1">`），居中它
+ * 等于把开头推到视口上方（实测 3066px 的目标在 771px 的面板里从 scrollTop 1144 开始，第一段
+ * 在视口上方一千多像素）。内容比视口长时，「从哪儿开始读」只有顶对齐答得对。
+ */
+export function centerInScroller(scroller: Element, target: Element | null): void {
+  if (target === null) return
+  const box = scroller.getBoundingClientRect()
+  const at = target.getBoundingClientRect()
+  const delta = at.height > box.height
+    ? at.top - box.top                                   // 目标装不下：露头，不露腹
+    : (at.top + at.height / 2) - (box.top + box.height / 2)
+  if (delta !== 0) scroller.scrollTop += delta
+}
+
 /** 防抖：ms 窗口内合并调用只留最后一次；flush 立即触发挂起调用；cancel 丢弃 */
 export function debounce<A extends unknown[]>(
   fn: (...args: A) => void, ms: number,

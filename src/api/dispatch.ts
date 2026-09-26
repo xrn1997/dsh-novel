@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ReadingService } from '../services/reading.js'
 import { exportBook } from '../services/export.js'
 import { SourceNotFoundError } from '../services/errors.js'
+import { SVG_MEDIA_TYPE } from '../services/epub/resources.js'
 import { ApiError, isTrustedRequest, readJsonBody, writeError, writeOk } from './wire.js'
 import { NOVEL_API_PREFIX, PARAMS, paramRoutes, pickShelfMeta, ROUTES, SEG } from '../shared/wire.js'
 
@@ -239,6 +240,13 @@ async function route(
     writeOk(res, await service.getToc(sourceId, bookUrl, { refresh: url.searchParams.get(PARAMS.refresh) === '1' }))
     return
   }
+  if (a === SEG.navigation && b === undefined) {
+    guard(method, 'GET', ROUTES.navigation.path)
+    const { sourceId, url: bookUrl } = requireSourceUrl(url)
+    // 目录树读面：chapters 线性 + items 展示树（EPUB 原生目录；其他书由 toc 派生平面导航）
+    writeOk(res, await service.getNavigation(sourceId, bookUrl))
+    return
+  }
   if (a === SEG.chapter && b === undefined) {
     guard(method, 'GET', ROUTES.chapter.path)
     const { sourceId, url: bookUrl } = requireSourceUrl(url)
@@ -246,7 +254,8 @@ async function route(
     if (indexRaw === null || !/^\d+$/.test(indexRaw)) {
       throw new ApiError(`缺或非法 query 参数 ${PARAMS.index}（需非负整数）`, 400, 'BadRequest')
     }
-    writeOk(res, await service.getChapter(sourceId, bookUrl, Number(indexRaw), { refresh: url.searchParams.get(PARAMS.refresh) === '1' }))
+    // 正文一律是 ChapterContent（文字支 / 图文支由来源与服务层决定，不做旧新双形态兼容）
+    writeOk(res, await service.getChapterContent(sourceId, bookUrl, Number(indexRaw), { refresh: url.searchParams.get(PARAMS.refresh) === '1' }))
     return
   }
 
@@ -338,7 +347,7 @@ async function route(
     return
   }
 
-  // ── 本地 TXT 书 ───────────────────────────────────────────────────────
+  // ── 本地书（TXT / EPUB）面 ────────────────────────────────────────────
   if (a === SEG.local) {
     if (b === SEG.import) {
       guard(method, 'POST', ROUTES.localImport.path)
@@ -354,9 +363,48 @@ async function route(
         chunks.push(chunk as Buffer)
       }
       if (over) throw new ApiError(`文件超过 ${Math.round(max / 1024 / 1024)}MB 上限`, 413, 'PayloadTooLarge')
-      // ingest + 自动上架归门面动词——路由只做流读与信封
-      const imported = await service.localImport(Buffer.concat(chunks), name)
-      writeOk(res, { ...imported.book, chapterCount: imported.chapterCount, encoding: imported.encoding })
+      // 分流（TXT/EPUB 按内容）、发布与自动上架全归门面；回执就是 wire 的 LocalImportResponse
+      writeOk(res, await service.localImport(Buffer.concat(chunks), name))
+      return
+    }
+    if (b === SEG.document) {
+      // 补充文档（脚注/附录）的图文正文：`id=bookKey` + `documentId`
+      guard(method, 'GET', ROUTES.localDocument.path)
+      const [id, documentId] = requireQuery(url, PARAMS.id, PARAMS.documentId)
+      writeOk(res, await service.getLocalSupplement(id, documentId))
+      return
+    }
+    if (b === SEG.warnings) {
+      // 导入说明按需查看（不随每次取章重复携带）
+      guard(method, 'GET', ROUTES.localWarnings.path)
+      const [id] = requireQuery(url, PARAMS.id)
+      writeOk(res, await service.getLocalImportWarnings(id))
+      return
+    }
+    if (b === SEG.resource) {
+      guard(method, 'GET', ROUTES.localResource.path)
+      const [id, resourceId] = requireQuery(url, PARAMS.id, PARAMS.resourceId)
+      // 资源读口只认不透明 ID（查资源表 → 打开文件）：查不到/文件不在都在**发头之前**抛（404）
+      const resource = await service.getLocalResource(id, resourceId)
+      res.writeHead(200, resourceHeaders(resource.mediaType, resource.bytes))
+      const { stream } = resource
+      // 断连即销毁本条流（不动别的请求）；头已发，流上出错只能断连，不能再补错误信封——
+      // 但错误必须留痕（吞成静默断连会让人对着「读了一半没了」猜原因），两侧各管对端的收尾。
+      // 上面那次 await（查资源表 + 打开文件）期间客户端可能已经断开：那时 'close' 早发过了，
+      // 挂监听也等不到第二次，而这条流源自 FileHandle——没人销毁就挂到 GC，Node 把「GC 期关闭
+      // FileHandle」当未捕获错误抛出（表现为整轮测试在收尾时红）。故监听挂上后立刻补查已断连，
+      // 让「断开即销毁」在任何时序下都成立，而不是只在监听器抢到 close 之前断开的时序下成立。
+      res.on('close', () => stream.destroy())
+      if (res.destroyed) stream.destroy()
+      stream.on('error', (e: unknown) => {
+        console.error(`[dsh-novel] 本地资源流出错（${resourceId}，响应头已发，只能断连）:`, e)
+        res.destroy()
+      })
+      res.on('error', (e: unknown) => {
+        console.error(`[dsh-novel] 本地资源响应出错（${resourceId}）:`, e)
+        stream.destroy()
+      })
+      stream.pipe(res)
       return
     }
     // 注：id 在 query（DELETE /novel-api/local?id=…，测试钉死），不是路径段——b === 'id' 不匹配任何 segs
@@ -385,6 +433,32 @@ function requireSourceUrl(url: URL): { sourceId: string; url: string } {
     throw new ApiError(`缺 query 参数 ${PARAMS.sourceId} / ${PARAMS.url}`, 400, 'BadRequest')
   }
   return { sourceId, url: bookUrl }
+}
+
+/** 本地读口共用：按序取必填 query 参数（缺/空串 → 400）；参数名一律来自 wire 的 PARAMS */
+function requireQuery(url: URL, ...names: string[]): string[] {
+  return names.map((name) => {
+    const v = url.searchParams.get(name)?.trim() ?? ''
+    if (v === '') throw new ApiError(`缺 query 参数 ${name}`, 400, 'BadRequest')
+    return v
+  })
+}
+
+/**
+ * 本地资源响应头（安全口径单点）：MIME 用导入期的**验证结果**、禁嗅探、同源 CORP、私有缓存。
+ * 独立 SVG 额外附强 CSP：书内 SVG 是重建过的静态文本，仍按「不可信文档」对待——一旦作为文档被
+ * 直接打开，默认全部禁掉（`sandbox` 连带禁脚本/表单/插件），不给它任何同源能力。
+ * 不在这里拼路径、不设 content-disposition：资源口只服务 `<img>`，不提供原文下载。
+ */
+function resourceHeaders(mediaType: string, bytes: number): Record<string, string> {
+  return {
+    'content-type': mediaType,
+    'content-length': String(bytes),
+    'x-content-type-options': 'nosniff',
+    'cross-origin-resource-policy': 'same-origin',
+    'cache-control': 'private, max-age=3600',
+    ...(mediaType === SVG_MEDIA_TYPE ? { 'content-security-policy': "default-src 'none'; sandbox" } : {}),
+  }
 }
 
 /** PUT /shelf/:key：body 带 title → 加书；带 patch → 在架书打补丁（不在架 400）；

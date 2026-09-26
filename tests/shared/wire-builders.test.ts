@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { encodeQuery, LOCAL_SOURCE_ID, PARAMS, paramRoutes, pickShelfMeta, queries, ROUTES, SHELF_META, shelfBody } from '../../src/shared/wire.js'
+import { encodeQuery, LOCAL_SOURCE_ID, PARAMS, paramRoutes, pickShelfMeta, planarNavigation, queries, ROUTES, SHELF_META, shelfBody } from '../../src/shared/wire.js'
 import { LOCAL_SOURCE_ID as NODE_LOCAL_SOURCE_ID } from '../../src/services/localbooks.js'
 
 describe('LOCAL_SOURCE_ID（跨半契约常量的唯一主人）', () => {
@@ -12,8 +12,8 @@ describe('LOCAL_SOURCE_ID（跨半契约常量的唯一主人）', () => {
 })
 
 describe('路由表计数钉死（「17 条路由」注释曾腐烂且无测试）', () => {
-  it('静态路由 21 条、参数路由 5 条', () => {
-    expect(Object.keys(ROUTES)).toHaveLength(21)
+  it('静态路由 25 条、参数路由 5 条', () => {
+    expect(Object.keys(ROUTES)).toHaveLength(25)
     expect(Object.keys(paramRoutes)).toHaveLength(5)
   })
   it('书架批量删除：path 与 segs 同源（复用 batch-delete 段，与书源批删同段名）', () => {
@@ -24,6 +24,12 @@ describe('路由表计数钉死（「17 条路由」注释曾腐烂且无测试�
     expect(ROUTES.searchJobStatus).toEqual({ path: 'search/job-status', segs: ['search', 'job-status'] })
     expect(ROUTES.searchJobStream).toEqual({ path: 'search/job-stream', segs: ['search', 'job-stream'] })
     expect(ROUTES.searchJobCancel).toEqual({ path: 'search/job-cancel', segs: ['search', 'job-cancel'] })
+  })
+  it('导航与本地三读口：path 与 segs 同源（本地读口不用路径段——bookKey 里的 / 不必编码成段）', () => {
+    expect(ROUTES.navigation).toEqual({ path: 'navigation', segs: ['navigation'] })
+    expect(ROUTES.localDocument).toEqual({ path: 'local/document', segs: ['local', 'document'] })
+    expect(ROUTES.localResource).toEqual({ path: 'local/resource', segs: ['local', 'resource'] })
+    expect(ROUTES.localWarnings).toEqual({ path: 'local/warnings', segs: ['local', 'warnings'] })
   })
 })
 
@@ -67,6 +73,22 @@ describe('queries（路径 + query 构造）', () => {
   it('localImport / localDelete：参数名归 PARAMS', () => {
     expect(queries.localImport({ name: '我的书.txt' })).toBe(`local/import?${PARAMS.name}=${encodeURIComponent('我的书.txt')}`)
     expect(queries.localDelete({ id: 'x1' })).toBe('local?id=x1')
+  })
+  it('navigation / 本地三读口：参数名归 PARAMS，本地读口的 id 一律是 bookKey', () => {
+    expect(queries.navigation({ sourceId: 's', url: 'https://a/1' })).toBe('navigation?sourceId=s&url=https%3A%2F%2Fa%2F1')
+    expect(queries.localDocument({ id: 'local:x', documentId: 'd2' })).toBe('local/document?id=local%3Ax&documentId=d2')
+    expect(queries.localResource({ id: 'local:x', resourceId: 'r0' })).toBe('local/resource?id=local%3Ax&resourceId=r0')
+    expect(queries.localWarnings({ id: 'local:x' })).toBe('local/warnings?id=local%3Ax')
+  })
+})
+
+describe('planarNavigation（线性目录 → 平面树，唯一实现）', () => {
+  it('逐章一个叶、无分组层级；id 稳定、target 指整章（无锚点）', () => {
+    expect(planarNavigation([{ name: '一', url: 'u#0' }, { name: '二', url: 'u#1' }])).toEqual([
+      { id: 't0', label: '一', target: { kind: 'chapter', index: 0, anchorId: null }, children: [] },
+      { id: 't1', label: '二', target: { kind: 'chapter', index: 1, anchorId: null }, children: [] },
+    ])
+    expect(planarNavigation([])).toEqual([])
   })
 })
 

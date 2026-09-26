@@ -1,13 +1,26 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { promises as fsPromises } from 'node:fs'
+import path from 'node:path'
+import type { Readable } from 'node:stream'
 import { ReadingService } from '../../src/services/reading.js'
 import { detailContextOf } from '../../src/services/bridge.js'
 import type { SubRuleEval } from '../../src/services/bridge.js'
+import { chapterContentToText } from '../../src/services/chapter-content.js'
+import { LocalArtifactNotFoundError } from '../../src/services/localbooks.js'
+import type { ChapterContent } from '../../src/shared/wire.js'
+import { IMAGE_SAMPLES, makeEpubFixture } from '../fixtures/epub.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
 import { createFetcher } from '../../src/services/fetcher.js'
 import { PageCache } from '../../src/services/cache.js'
 import { Shelf } from '../../src/services/shelf.js'
 import { SourceRegistry } from '../../src/services/sources.js'
 import { ChapterNotFoundError, RuleMissingError, SourceNotFoundError } from '../../src/services/errors.js'
+
+async function streamToBuffer(stream: Readable): Promise<Buffer> {
+  const chunks: Buffer[] = []
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk as Buffer))
+  return Buffer.concat(chunks)
+}
 
 const BASE = 'https://s.com'
 const SEARCH_HTML = (q: string) => `<html><body><div class="b"><a href="/book/1/">${q}·斗罗</a><span>唐家</span></div></body></html>`
@@ -828,7 +841,7 @@ describe('门面直测（invariant 与 loginPlan 不再只穿 HTTP 测）', () =
 
   it('localImport 自动上架 + removeBook 防孤儿文件（两 invariant 门面直测）', async () => {
     const svc = await mk()
-    const { book } = await svc.localImport(Buffer.from('第1章 A\n内容', 'utf8'), 'x.txt')
+    const book = await svc.localImport(Buffer.from('第1章 A\n内容', 'utf8'), 'x.txt')
     expect(book.sourceId).toBe('__local__')
     expect(svc.shelfList().some((b) => b.bookKey === book.bookKey)).toBe(true)
     await svc.removeBook(book.bookKey)
@@ -847,7 +860,7 @@ describe('门面直测（invariant 与 loginPlan 不再只穿 HTTP 测）', () =
 
   it('removeBooks：批量删书沿用「本地书连带删副本」invariant，未知键静默跳过', async () => {
     const svc = await mk()
-    const { book: local } = await svc.localImport(Buffer.from('第1章 A\n内容', 'utf8'), 'x.txt')
+    const local = await svc.localImport(Buffer.from('第1章 A\n内容', 'utf8'), 'x.txt')
     svc.shelfAdd('k1', { sourceId: 's', title: 'T1' })
     svc.shelfAdd('k2', { sourceId: 's', title: 'T2' })
     expect(await svc.removeBooks(['k1', 'k2', local.bookKey, 'nope'])).toEqual({ removed: 3 })
@@ -861,7 +874,7 @@ describe('门面直测（invariant 与 loginPlan 不再只穿 HTTP 测）', () =
     const src = await svc.importOne(rawSource)                       // bookSourceName: 'S'
     svc.shelfAdd('k1', { sourceId: src.sourceId!, title: 'T' })
     svc.shelfAdd('k2', { sourceId: 'no-such-source', title: 'U' })   // 已被删的源
-    const { book: local } = await svc.localImport(Buffer.from('第1章 A\n内容', 'utf8'), 'x.txt')
+    const local = await svc.localImport(Buffer.from('第1章 A\n内容', 'utf8'), 'x.txt')
     const nameOf = (k: string): string | null | undefined => svc.shelfList().find((b) => b.bookKey === k)?.sourceName
     expect(nameOf('k1')).toBe('S')
     expect(nameOf('k2')).toBeNull()
@@ -869,6 +882,113 @@ describe('门面直测（invariant 与 loginPlan 不再只穿 HTTP 测）', () =
     // 实时 join 不是快照：源一删，同一本书读面投影即刻变 null
     await svc.removeSource(src.sourceId!)
     expect(nameOf('k1')).toBeNull()
+  })
+})
+
+describe('本地 EPUB 门面：导入回执、图文读取、导航与资源', () => {
+  const mk = async (): Promise<{ svc: ReadingService; dir: string }> => {
+    const dir = await makeTempDir('novel-rde-')
+    return { svc: trackService(await ReadingService.create({ dir, fetchImpl: route(() => null) as any })), dir }
+  }
+  const contentOf = async (svc: ReadingService, bookKey: string, index: number): Promise<ChapterContent> => {
+    const content = await svc.getChapterContent('__local__', bookKey, index)
+    if (content.kind !== 'rich') throw new Error(`第 ${index} 章应是图文树`)
+    return content
+  }
+
+  it('图文读取与现有文字读取共用内容', async () => {
+    const { svc } = await mk()
+    const book = await svc.localImport(makeEpubFixture('epub3-rich'), '样本.epub')
+    const content = await svc.getChapterContent('__local__', book.bookKey, 0)
+    expect(content.kind).toBe('rich')
+    expect(await svc.getChapter('__local__', book.bookKey, 0))
+      .toBe(chapterContentToText(content))
+    // 文字面不泄露存储身份：投影里没有 local:<uuid>、没有资源 ID、没有磁盘路径
+    const text = await svc.getChapter('__local__', book.bookKey, 0)
+    expect(text).not.toContain('local:')
+    expect(text).not.toContain('r0')
+  })
+
+  it('导入回执是 LocalImportResponse：书目字段走既有 SHELF_META，encoding 不伪称整本', async () => {
+    const { svc } = await mk()
+    const book = await svc.localImport(makeEpubFixture('epub3-rich'), '样本.epub')
+    expect(book).toMatchObject({
+      sourceId: '__local__', title: '图文样本', author: '样本作者',
+      totalChapters: 2, chapterCount: 2, format: 'epub', encoding: null, warnings: [],
+    })
+    expect(book.coverUrl).toBe(`/novel-api/local/resource?id=${encodeURIComponent(book.bookKey)}&resourceId=r0`)
+    // 入架那条与回执同源（同一份书目字段），不是两套元数据
+    expect(svc.shelfList().find((b) => b.bookKey === book.bookKey)).toMatchObject({ author: '样本作者', totalChapters: 2 })
+  })
+
+  it('TXT 回执照旧：encoding 如实回显、书目字段不新增（既有行为不变）', async () => {
+    const { svc } = await mk()
+    const book = await svc.localImport(Buffer.from('第1章 A\n内容', 'utf8'), 'x.txt')
+    expect(book).toMatchObject({ format: 'txt', encoding: 'utf-8', chapterCount: 1, warnings: [] })
+    expect(book.totalChapters).toBeUndefined()
+  })
+
+  it('getNavigation：EPUB 给原生目录树；TXT 由线性序列派生平面导航（toc 旧响应不动）', async () => {
+    const { svc } = await mk()
+    const epub = await svc.localImport(makeEpubFixture('epub3-rich'), '样本.epub')
+    const nav = await svc.getNavigation('__local__', epub.bookKey)
+    expect(nav.chapters.map((c) => c.name)).toEqual(['第一章', '第二章'])
+    expect(nav.items.map((i) => i.label)).toEqual(['第一卷'])
+    expect(await svc.getToc('__local__', epub.bookKey)).toEqual(nav.chapters)   // toc 仍是线性列表
+
+    const txt = await svc.localImport(Buffer.from('第1章 A\n内容\n第2章 B\n尾', 'utf8'), 'y.txt')
+    expect(await svc.getNavigation('__local__', txt.bookKey)).toEqual({
+      chapters: [{ name: '第1章 A', url: `${txt.bookKey}#0` }, { name: '第2章 B', url: `${txt.bookKey}#1` }],
+      items: [
+        { id: 't0', label: '第1章 A', target: { kind: 'chapter', index: 0, anchorId: null }, children: [] },
+        { id: 't1', label: '第2章 B', target: { kind: 'chapter', index: 1, anchorId: null }, children: [] },
+      ],
+    })
+  })
+
+  it('getLocalSupplement / getLocalResource / getLocalImportWarnings：补充文档、验证过的 MIME 与流、告警', async () => {
+    const { svc } = await mk()
+    const book = await svc.localImport(makeEpubFixture('epub3-rich'), '样本.epub')
+    expect(chapterContentToText(await svc.getLocalSupplement(book.bookKey, 'd2'))).toContain('脚注一')
+    const res = await svc.getLocalResource(book.bookKey, 'r0')
+    expect(res.mediaType).toBe('image/png')
+    expect(res.bytes).toBe(IMAGE_SAMPLES.png.length)
+    expect((await streamToBuffer(res.stream)).equals(IMAGE_SAMPLES.png)).toBe(true)
+    expect(await svc.getLocalImportWarnings(book.bookKey)).toEqual([])
+    await expect(svc.getLocalResource(book.bookKey, 'nope')).rejects.toBeInstanceOf(LocalArtifactNotFoundError)
+  })
+
+  it('removeBook / removeBooks：EPUB 整棵目录（documents+resources+原文）随书架条目一起走', async () => {
+    const { svc, dir } = await mk()
+    const a = await svc.localImport(makeEpubFixture('epub3-rich'), 'a.epub')
+    const b = await svc.localImport(makeEpubFixture('epub2-basic'), 'b.epub')
+    expect(await svc.removeBook(a.bookKey)).toEqual({ removed: true })
+    expect((await fsPromises.readdir(path.join(dir, 'local'))).sort())
+      .toEqual([b.bookKey.slice(6), `${b.bookKey.slice(6)}.json`])
+    expect(await svc.removeBooks([b.bookKey, 'nope'])).toEqual({ removed: 1 })
+    expect(await fsPromises.readdir(path.join(dir, 'local'))).toEqual([])
+  })
+
+  it('提交标记写失败：本次 UUID 落盘物回收、不造书架条目、既有书照读', async () => {
+    const { svc, dir } = await mk()
+    const keep = await svc.localImport(Buffer.from('第1章 A\n内容', 'utf8'), '既有.txt')
+    const shelfBefore = svc.shelfList().length
+    const realRename = fsPromises.rename
+    // 只拦「EPUB 顶层元数据」那一次 rename（shelf.json 与 staging→最终目录都不匹配这条形状）
+    const spy = vi.spyOn(fsPromises, 'rename').mockImplementation(async (from, to) => {
+      if (/[\\/]local[\\/][0-9a-f-]{36}\.json$/.test(String(to))) throw new Error('模拟提交标记写失败')
+      return realRename(from, to)
+    })
+    try {
+      await expect(svc.localImport(makeEpubFixture('epub3-rich'), '样本.epub')).rejects.toThrow('模拟提交标记写失败')
+    } finally {
+      spy.mockRestore()
+    }
+    expect(svc.shelfList()).toHaveLength(shelfBefore)
+    // 刚发布的目录与元数据（含原子写的临时残留）都回收了：只剩既有那本的 TXT 两件
+    const id = keep.bookKey.slice('local:'.length)
+    expect((await fsPromises.readdir(path.join(dir, 'local'))).sort()).toEqual([`${id}.json`, `${id}.txt`])
+    expect(await svc.getChapter('__local__', keep.bookKey, 0)).toBe('内容')
   })
 })
 

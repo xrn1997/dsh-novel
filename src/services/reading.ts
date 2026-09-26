@@ -6,6 +6,7 @@ import { absUrl, auxFieldOf, detailContextOf, detailFieldsOf, engineContextOf, e
 import type { Page, SubRuleEval } from './bridge.js'
 import { PageCache } from './cache.js'
 import { contentSlot, rulesEpoch } from './cache-epoch.js'
+import { chapterContentToText } from './chapter-content.js'
 import { contentToText, formatIntro } from './content.js'
 import { ChapterNotFoundError, InvalidRequestError, LocalNotMountedError, RuleMissingError, SourceNotFoundError } from './errors.js'
 import { createFetcher, decodeBody, fetchTextPage } from './fetcher.js'
@@ -16,6 +17,7 @@ import type { JobHost } from './import-job.js'
 import type { ImportFile, JobState } from './import-job.js'
 import { SourceIntake } from './intake.js'
 import { isLocalBookKey, LOCAL_SOURCE_ID, LocalBooks } from './localbooks.js'
+import type { LocalResource } from './localbooks.js'
 import type { NormalizeIssue } from './normalize.js'
 import { followPages } from './pagination.js'
 import type { FollowResult } from './pagination.js'
@@ -32,7 +34,13 @@ import type { NovelSource, SourceAuth } from './types.js'
 // 值形状定义在 wire 契约（src/shared/wire.ts）——
 // 此处 re-export 保持既有 import 路径可用；改形状请去 shared，别在这里加第二份。
 export type { SearchHit, SearchGroup, ChapterEntry, BookDetail, SearchJobSnapshot } from '../shared/wire.js'
-import type { BookDetail, SearchGroup, SearchHit, SearchPlan, SearchJobSnapshot, ChapterEntry, ShelfBook, ShelfEntry, ShelfMetaPatch, SourcePublic } from '../shared/wire.js'
+/** 本地资源读口（含流/MIME 的 Node 内部形状）：api 层从本模块取用，不去 localbooks 抄第二处 */
+export type { LocalResource } from './localbooks.js'
+import { planarNavigation } from '../shared/wire.js'
+import type {
+  BookDetail, BookNavigation, ChapterContent, LocalImportResponse, LocalImportWarning, SearchGroup, SearchHit,
+  SearchPlan, SearchJobSnapshot, ChapterEntry, ShelfBook, ShelfEntry, ShelfMetaPatch, SourcePublic,
+} from '../shared/wire.js'
 export interface ReadingServiceOptions {
   dir: string                       // novel 根目录（测试注入 mkdtemp）
   fetchImpl?: typeof globalThis.fetch
@@ -44,7 +52,7 @@ export interface ReadingServiceOptions {
   tocMaxPages?: number              // 默认 200
   contentMaxPages?: number          // 默认 50
   cacheMaxBytes?: number            // 默认 200MB
-  /** 本地 TXT 导入上限（传输层流式计数与本地书 domain 上限同一配置值；默认 50MB） */
+  /** 本地文件导入上限（TXT / EPUB 共用：传输层流式计数与本地书 domain 上限同一配置值；默认 50MB） */
   localImportMaxBytes?: number
   /** 出站代理（见 proxy.ts：Node 的 fetch 不读系统代理）；null/缺省 = 直连 */
   proxyUrl?: string | null
@@ -381,11 +389,28 @@ export class ReadingService {
 
   // ── 本地书动词 ──
 
-  /** 本地 TXT 导入 + 自动上架（此前「ingest + shelf.add」两步住路由分支） */
-  async localImport(bytes: Buffer, name: string): Promise<{ book: ShelfBook; chapterCount: number; encoding: string }> {
+  /** 本地导入（TXT / EPUB 按**内容**分流）+ 自动上架，返回 wire 的 `LocalImportResponse`
+   *  （dispatch 直接回显，不再逐字段拼装）。书目字段（作者/封面/总章数）走既有 SHELF_META 字段集；
+   *  本地格式不新增可 patch 字段。 */
+  async localImport(bytes: Buffer, name: string): Promise<LocalImportResponse> {
     const imported = await this.requireLocal().import(bytes, name)
-    const book = this.shelf.add({ sourceId: LOCAL_SOURCE_ID, bookKey: imported.bookKey, title: imported.title })
-    return { book, chapterCount: imported.chapterCount, encoding: imported.encoding }
+    let book: ShelfBook
+    try {
+      book = this.shelf.add({
+        sourceId: LOCAL_SOURCE_ID, bookKey: imported.bookKey, title: imported.title, ...imported.book,
+      })
+    } catch (e) {
+      // 发布已成功、入架却失败：不回滚就会留一份「长得像书但没人认识」的副本（EPUB 是一整棵目录）
+      await this.requireLocal().remove(imported.bookKey)
+      throw e
+    }
+    return {
+      ...book,
+      chapterCount: imported.chapterCount,
+      format: imported.format,
+      encoding: imported.encoding,
+      warnings: imported.warnings,
+    }
   }
 
   /** 本地书目录（bookKey 即本地书 id）——私有：分流归 getToc，路由层不再持 LOCAL 知识 */
@@ -393,9 +418,19 @@ export class ReadingService {
     return this.requireLocal().getToc(bookKey)
   }
 
-  /** 本地书章节正文——私有：分流归 getChapter */
-  private localChapter(bookKey: string, index: number): Promise<string> {
-    return this.requireLocal().getChapter(bookKey, index)
+  /** 补充文档（脚注/附录）图文正文：本地 EPUB 专有（「文档」这一层只有它有） */
+  getLocalSupplement(bookKey: string, documentId: string): Promise<ChapterContent> {
+    return this.requireLocal().getSupplement(bookKey, documentId)
+  }
+
+  /** 本地资源读口（流/MIME/字节数；磁盘路径不出服务层） */
+  getLocalResource(bookKey: string, resourceId: string): Promise<LocalResource> {
+    return this.requireLocal().getResource(bookKey, resourceId)
+  }
+
+  /** 本地导入告警（阅读器按需重看导入说明）：非 EPUB 恒空数组 */
+  getLocalImportWarnings(bookKey: string): Promise<LocalImportWarning[]> {
+    return this.requireLocal().getImportWarnings(bookKey)
   }
 
   /** 删本地书：文件 + 书架条目一并删（任一命中即 removed） */
@@ -601,6 +636,15 @@ export class ReadingService {
     return p
   }
 
+  /** 目录导航：`chapters` 是线性阅读序列（与 getToc 同一份），`items` 是展示用树。
+   *  本地书读持久化导航（EPUB 原生 nav/NCX；TXT 由线性序列派生），其他书按 getToc 派生平面导航——
+   *  派生单点在 wire 的 `planarNavigation`，不在这里另造一棵树，也不在客户端重推导。 */
+  async getNavigation(sourceId: string, bookUrl: string): Promise<BookNavigation> {
+    if (sourceId === LOCAL_SOURCE_ID) return this.requireLocal().getNavigation(bookUrl)
+    const chapters = await this.getToc(sourceId, bookUrl)
+    return { chapters, items: planarNavigation(chapters) }
+  }
+
   private async getTocInner(sourceId: string, bookUrl: string, opts?: { refresh?: boolean }): Promise<ChapterEntry[]> {
     const s = this.requireSource(sourceId)
     // 代际在取到源之后算一次，读与写共用同一个值：在途请求写的就是它起飞时的代际，
@@ -671,10 +715,28 @@ export class ReadingService {
 
   // ── 正文 ─────────────────────────────────────────────────────────────
 
-  /** 正文：缓存优先（refresh 跳过）；目录缺章报错；多页串接；Miss 抛 RuleEvalError 不吞。
-   *  本地书分流在门面内：__local__ 走本地书面，不查注册表 */
+  /** 章节正文（**文字面**）：现有 AI 工具 / TXT 导出 / 阅读器的文字出口——经**唯一**投影
+   *  `chapterContentToText`（TXT 与在线文本逐字通过，幂等），不写第二份文字实现。 */
   async getChapter(sourceId: string, bookKey: string, chIndex: number, opts?: { refresh?: boolean }): Promise<string> {
-    if (sourceId === LOCAL_SOURCE_ID) return this.localChapter(bookKey, chIndex)
+    return chapterContentToText(await this.getChapterContent(sourceId, bookKey, chIndex, opts))
+  }
+
+  /**
+   * 章节正文（**图文面**）：本地 EPUB 返回规范化图文树（按需读该章的文档 JSON），
+   * 本地 TXT 与在线书返回文字章。
+   *
+   * 在线那条**仍走既有私有文本路径** `onlineChapterText`：不在这里第二次规范化，也不让两者互调
+   * （互调 = 递归 + 双份归一，正文会按调用方向被处理两遍）。本地书的分流也归门面：
+   * dispatch 与工具面都不持 LOCAL 知识。
+   */
+  getChapterContent(sourceId: string, bookKey: string, chIndex: number, opts?: { refresh?: boolean }): Promise<ChapterContent> {
+    if (sourceId === LOCAL_SOURCE_ID) return this.requireLocal().getChapterContent(bookKey, chIndex)
+    return this.onlineChapterText(sourceId, bookKey, chIndex, opts).then((text) => ({ kind: 'text', text }))
+  }
+
+  /** 在线正文的**唯一文本路径**（既有实现，签名外的一切行为未变）：缓存优先（refresh 跳过）；
+   *  目录缺章报错；多页串接；Miss 抛 RuleEvalError 不吞。本地书不走这里。 */
+  private async onlineChapterText(sourceId: string, bookKey: string, chIndex: number, opts?: { refresh?: boolean }): Promise<string> {
     const s = this.requireSource(sourceId)
     const epoch = rulesEpoch(s.rules, s.baseUrl, 'content')
     // 目录上移到缓存读取之前：正文槽位含章名（挡章序位移串配，见 cache-epoch.contentSlot）。

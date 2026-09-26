@@ -22,7 +22,7 @@ const PRELOAD_SCREENS = 2
  * @param chapters 已载正文数组（null/空洞 = 未载）
  * @param from 视口所在章下标（会话的阅读位置）
  */
-export function nextChapterIndex(chapters: ReadonlyArray<string | null>, from: number): number {
+export function nextChapterIndex(chapters: ReadonlyArray<unknown | null>, from: number): number {
   if (chapters.length === 0) return -1
   const start = Math.min(Math.max(0, from), chapters.length - 1)
   if (chapters[start] === null || chapters[start] === undefined) return start
@@ -35,6 +35,8 @@ export function nextChapterIndex(chapters: ReadonlyArray<string | null>, from: n
 
 /**
  * 应发起加载的章下标；不该加载 → null（无未载章 / 已有在途章 / 边界还没进预取区）。
+ * `chapters` 的元素类型是 `unknown`：**懒加载只问「在不在」**，正文是纯文本串还是图文树与它无关
+ * （EPUB 接入时这里若收窄成 `ChapterContent`，等于让加载算法认识载荷形态——那是第二份算法要长的样子）。
  * @param sentinelTop 未载边界哨兵相对视口顶的距离（已滚过头为负）
  * @param viewportHeight 视口高（滚动容器 clientHeight）
  * @param opts.chapters 已载正文数组  @param opts.loading 在途章下标（单在途槽；空闲传 null）
@@ -42,7 +44,7 @@ export function nextChapterIndex(chapters: ReadonlyArray<string | null>, from: n
  */
 export function nextLoadTarget(
   sentinelTop: number, viewportHeight: number,
-  opts: { chapters: ReadonlyArray<string | null>; loading: number | null; from: number },
+  opts: { chapters: ReadonlyArray<unknown | null>; loading: number | null; from: number },
 ): number | null {
   if (opts.loading !== null) return null                          // 单在途：滚动风暴去重
   const next = nextChapterIndex(opts.chapters, opts.from)

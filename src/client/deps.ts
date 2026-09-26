@@ -11,7 +11,7 @@ import { pushError, pushOk } from './transient.js'
  * 历史上真正的 bug（乐观态不回滚、陈旧回调、误导性空态）全住在这里。现在视图**接受**依赖：
  * 生产缺省 prodCoreDeps（接线不变），测试给假 adapter，interface 即测试面。
  *
- * pushOk 从 SettingsDeps 下移到核心束：书架的本地 TXT 导入是异步的，落地时用户可能已切走，
+ * pushOk 从 SettingsDeps 下移到核心束：书架的本地上传（TXT / EPUB）是异步的，落地时用户可能已切走，
  * 那条成功必须有地方说（见 ShelfView 的 alive 闸）——成功反馈不是设置区独有的奢侈。
  *
  * SettingsDeps = ClientCoreDeps 超集（设置区再加任务面）——
@@ -25,7 +25,7 @@ export interface ClientCoreDeps {
   apiGet: typeof apiGet
   /** wire 请求（PUT/POST/DELETE 信封面） */
   apiSend: typeof apiSend
-  /** 原始字节上传（本地 TXT 导入） */
+  /** 原始字节上传（本地书导入：TXT / EPUB 按内容分流） */
   apiUpload: typeof apiUpload
   /** SSE 读流（搜索进度的推送加速器；连不上时调用方回落快照轮询） */
   apiEventStream: typeof apiEventStream

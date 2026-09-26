@@ -9,7 +9,9 @@ import { CTRL_Z, ReaderView } from '../../src/client/views/ReaderView.js'
 import { ShelfView } from '../../src/client/views/ShelfView.js'
 import { SearchView } from '../../src/client/views/SearchView.js'
 import { routeStore } from '../../src/client/store.js'
+import { planarNavigation } from '../../src/shared/wire.js'
 import { makeCoreDeps, makeReaderDeps } from './fake-deps.js'
+import { rect, stubLayout } from './scroll-stub.js'
 
 /**
  * UI 系统守卫：呈现层的不变量（token 自足 / 标度 / 焦点与键盘可达 / 布局单位）。
@@ -42,8 +44,16 @@ function clientSources(): Array<{ file: string; text: string }> {
 
 /** 取出某条规则声明块内的文本：`/\.-?类名\s*\{([^}]*)\}/` */
 function ruleBody(selector: string): string {
-  const m = NOVEL_CSS.match(new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`))
-  return m === null ? '' : m[1]
+  // 逐条规则取体，**逗号选择器组里的每一条都算命中**——同一份几何给两块浮层共用是惯用写法，
+  // 守卫不该逼着把它抄成两条（抄两份才会漂移，且本仓的纪律是「唯一实现」）。
+  // 先剥注释再切：样式注释里写着 `style={{background}}` 这类带花括号的字面量，不剥就把规则切断。
+  const wanted = selector.trim()
+  const re = /([^{}]+)\{([^{}]*)\}/g
+  const css = strip(NOVEL_CSS)
+  for (let m = re.exec(css); m !== null; m = re.exec(css)) {
+    if (m[1].split(',').some((s) => s.trim() === wanted)) return m[2]
+  }
+  return ''
 }
 
 /** 剥掉注释再扫：守卫管的是**声明**，不是文档。本文件与 styles.tsx 的注释里
@@ -148,6 +158,13 @@ describe('布局单位与视口约束（阅读器不能被正文高度绑架）'
     expect(drawer, '无 100vh 上限时抽屉高度由正文高决定，锚到正文开头').toMatch(/max-height:\s*calc\(\s*100vh/)
   })
 
+  it('注释面板与目录抽屉共用同一份槽几何（各抄一份 sticky 规则必漂移）', () => {
+    // 缺陷的根子是两块同族浮层走了两套不同的锚定（抽屉锚视口、面板锚内容盒）。
+    // 修好之后本体各自的规则仍管自己的尺寸，但**槽**必须共用同一条。
+    expect(ruleBody('.novel-notes-slot')).not.toBe('')
+    expect(ruleBody('.novel-notes-slot')).toBe(ruleBody('.novel-drawer-slot'))
+  })
+
   it('抽屉条目拒绝 flex 收缩（可滚动 flex 列里，滚动发生前条目会先被压扁）', () => {
     // 真实回归：给抽屉加视口上限后，60 条目录各被压到 12px 高、文字互相咬住
     expect(ruleBody('.novel-drawer-item')).toMatch(/flex:\s*none/)
@@ -239,11 +256,20 @@ describe('进度动画不吃布局', () => {
   })
 })
 
-describe('表格列定义单点（两处抄同一串 grid-template-columns 即漂移）', () => {
+describe('呈现层的单点（两处抄同一串东西必漂移）', () => {
   it('源列表列宽住在样式层，视图不再携带列字面量', () => {
     expect(ruleBody('.novel-tr.src')).toMatch(/grid-template-columns:/)
     const src = viewSource('SettingsSourceList.tsx')
     expect(src, 'gridTemplateColumns 字面量该收进样式类').not.toContain('minmax(130px')
+  })
+
+  it('告警清单的标记只住 bits.tsx（两处各抄一份 JSX 必漂移）', () => {
+    // CSS（.novel-warn-list / -code）原先就是共享的，**标记**却是两份：
+    // 阅读器的导入说明面板与书架的导入回执各写一遍一条告警长什么样。
+    for (const view of ['ReaderView.tsx', 'ShelfView.tsx']) {
+      expect(viewSource(view), `${view} 里又出现一份告警清单的 JSX——改一条口径必漏另一处`).not.toContain('novel-warn-list')
+    }
+    expect(viewSource('bits.tsx')).toContain('novel-warn-list')
   })
 })
 
@@ -254,8 +280,8 @@ describe('目录抽屉：当前章可见 + 打开即定位到当前章', () => {
     routeStore.set({ route: { name: 'reader', sourceId: 's1', bookKey: 'k1', title: 'T' } as never })
     const deps = makeReaderDeps({
       apiGet: vi.fn(async (p: string) => {
-        if (String(p).includes('toc')) return toc
-        if (String(p).includes('chapter')) return '正文段落'
+        if (String(p).includes('navigation')) return { chapters: toc, items: planarNavigation(toc) }
+        if (String(p).includes('chapter')) return { kind: 'text', text: '正文段落' }
         return []
       }),
     })
@@ -268,6 +294,31 @@ describe('目录抽屉：当前章可见 + 打开即定位到当前章', () => {
     })
     expect(container.querySelectorAll('.novel-drawer-item[aria-current="true"]')).toHaveLength(1)
     expect(cur.closest('.novel-drawer')).not.toBeNull()
+  })
+
+  it('开抽屉只滚抽屉自己：按当前项几何定位，绝不借 scrollIntoView 滚到祖先', async () => {
+    // 几何由本用例给出（jsdom 无排版）：抽屉容器视口 0..400、当前项中心 910 → 该滚 710。
+    // 「开抽屉不得改写主阅读位置并落盘」的端到端判据在 tests/browser/epub-reader.test.ts；
+    // 这里钉的是组件用的是哪一个 API——scrollIntoView 一旦被叫，可滚祖先就跑不掉。
+    const stub = stubLayout((el) => el.classList.contains('novel-drawer') ? rect(0, 400)
+      : el.matches('.novel-drawer-item[aria-current="true"]') ? rect(900, 20) : null)
+    try {
+      routeStore.set({ route: { name: 'reader', sourceId: 's1', bookKey: 'k1', title: 'T' } as never })
+      const deps = makeReaderDeps({
+        apiGet: vi.fn(async (p: string) => {
+          if (String(p).includes('navigation')) return { chapters: toc, items: planarNavigation(toc) }
+          if (String(p).includes('chapter')) return { kind: 'text', text: '正文段落' }
+          return []
+        }),
+      })
+      const { container } = render(createElement(ReaderView, { sourceId: 's1', bookKey: 'k1', title: 'T', deps }))
+      fireEvent.click(screen.getByRole('button', { name: '目录' }))
+      await waitFor(() => expect(container.querySelector('.novel-drawer-item[aria-current="true"]')).not.toBeNull())
+      await waitFor(() => expect(stub.scrolls.map((w) => [w.el.className, w.to])).toEqual([['novel-drawer', 710]]))
+      expect(stub.into).toEqual([])
+    } finally {
+      stub.restore()
+    }
   })
 })
 

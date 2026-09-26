@@ -1,5 +1,6 @@
 import { vi } from 'vitest'
 import type { Mock } from 'vitest'
+import { planarNavigation } from '../../src/shared/wire.js'
 import { prodCoreDeps, prodDeps, prodReaderDeps } from '../../src/client/deps.js'
 import type { ClientCoreDeps, ReaderDeps, SettingsDeps } from '../../src/client/deps.js'
 
@@ -73,15 +74,20 @@ export function makeDeps(over: Overrides<SettingsDeps> = {}): FakeSettingsDeps {
   } as FakeSettingsDeps
 }
 
-/** 阅读区假依赖（apiGet 按路径分流的缺省：toc/chapter 各回一条——阅读会话挂载即取数）。
+/** 阅读区假依赖（apiGet 按路径分流的缺省：navigation/chapter 各回一条——阅读会话挂载即取数）。
+ *  目录读面是 `BookNavigation`（线性 chapters + 展示树 items），正文是 `ChapterContent`
+ *  （阅读器只吃这一种形状；返回裸字符串的假实现会让阅读器当图文树解，直接崩）。
  *  ReaderDeps 是 ClientCoreDeps 超集，apiUpload/pushError 也必须盖成假实现，否则 spread
  *  prodReaderDeps 会把生产真实现带进来（真发 fetch / 写模块级 store）——与文件头「零网络」自述矛盾。 */
 export function makeReaderDeps(over: Overrides<ReaderDeps> = {}): FakeReaderDeps {
   return {
     ...prodReaderDeps,
     apiGet: vi.fn(async (path: string) => {
-      if (path.includes('toc')) return [{ name: '第一章', url: 'u1' }]
-      if (path.includes('chapter')) return '第一章正文'
+      if (path.includes('navigation')) {
+        const chapters = [{ name: '第一章', url: 'u1' }]
+        return { chapters, items: planarNavigation(chapters) }
+      }
+      if (path.includes('chapter')) return { kind: 'text', text: '第一章正文' }
       return []
     }),
     apiSend: vi.fn(async () => ({})),

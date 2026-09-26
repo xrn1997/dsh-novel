@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from 'react'
-import type { JobState } from './types.js'
+import type { JobState, LocalImportWarning } from './types.js'
 
 /** 小组件集：状态徽标 / 错误横幅（带段级定位徽标）/ 空态 / 运行卡与进度段——六视图共用。
  *  颜色一律走 `--novel-*` 局部 token（由 NovelStyles 的 token 层定义，见 styles.tsx 头注）：
@@ -111,5 +111,22 @@ export function RunCard({ label, meta, pct, counts }: {
       <ProgressBar pct={pct} />
       <div className="novel-toolbar">{counts}</div>
     </div>
+  )
+}
+
+/** 导入告警清单：一条 = 码 + 资源 + 人读的交代。**标记的唯一住址**在这里——
+ *  阅读器的导入说明面板与书架的导入回执原先各抄一份 JSX（CSS 共享而标记不共享，改一条口径必漏
+ *  另一处），现在两处都渲染这一个组件；样式仍住样式层（.novel-warn-list / -code）。 */
+export function WarningList({ warnings }: { warnings: readonly LocalImportWarning[] }): ReactNode {
+  return (
+    <ul className="novel-warn-list">
+      {warnings.map((w, i) => (
+        <li key={`${w.code}-${String(i)}`}>
+          <span className="novel-warn-code">{w.code}</span>
+          {w.resource === null ? null : <span className="novel-muted novel-note-sm"> · {w.resource}</span>}
+          <div className="novel-muted novel-note-sm">{w.message}</div>
+        </li>
+      ))}
+    </ul>
   )
 }

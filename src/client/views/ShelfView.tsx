@@ -4,10 +4,10 @@ import { LOCAL_SOURCE_ID, paramRoutes, queries, ROUTES } from '../../shared/wire
 import { prodCoreDeps } from '../deps.js'
 import type { ClientCoreDeps } from '../deps.js'
 import { navigate } from '../store.js'
-import type { ShelfEntry } from './types.js'
-import { coverFallbackChar, EmptyState, ProgressBar, SearchIcon } from './bits.js'
+import type { LocalImportResponse, ShelfEntry } from './types.js'
+import { coverFallbackChar, EmptyState, ProgressBar, SearchIcon, WarningList } from './bits.js'
 import { deleteBookCopy, deleteBooksCopy } from '../shelf-delete.js'
-import { filterShelfBooks, SHELF_FILTERS, shelfCardMeta, shelfSourceTag } from '../shelf-view-model.js'
+import { filterShelfBooks, localImportLabel, localImportNote, SHELF_FILTERS, shelfCardMeta, shelfSourceTag } from '../shelf-view-model.js'
 import type { ShelfFilterKey } from '../shelf-view-model.js'
 import { coverTintClass, sourceTintClass } from '../util.js'
 
@@ -34,7 +34,13 @@ import { coverTintClass, sourceTintClass } from '../util.js'
  *  单本 ✕ 与导入引导卡退场（同一职责不留第二个入口）。「全选」= 当前筛选可见的书——
  *  筛选在多选态定格，这条口径才有唯一答案。选择态是**现场**（组件 state，不进 store）：
  *  切 tab 重挂载即清零，残留一批旧勾选去撞下一次删除比丢失现场危险得多。
- *  批量走一次 POST shelf/batch-delete（keys 点击时快照），不是循环 DELETE。 */
+ *  批量走一次 POST shelf/batch-delete（keys 点击时快照），不是循环 DELETE。
+ *
+ * 本地书导入（2026-09 扩到 EPUB）：引导卡收 `.txt,.epub`，分流按**内容**在服务端做（ZIP 魔数），
+ * 客户端不判格式。回执是 wire 的 `LocalImportResponse`——书名/作者/封面/格式/章数/warnings 全在
+ * 里面，本视图**原样消费**（不另猜书名、不按后缀推格式）。两种半场：无告警照旧直接进阅读器
+ * （既有行为一字不动）；**有持久告警时不跳**，就地把回执摆出来（服务端真相 + 逐条说明 + 开始阅读），
+ * 跳走等于把「这本书的有损事项」吞掉。海报性的成功/失败两半仍归 alive 闸与瞬态层。 */
 
 export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): ReactNode {
   const [books, setBooks] = useState<ShelfEntry[] | null>(null)
@@ -42,8 +48,12 @@ export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): R
   const [keyword, setKeyword] = useState('')
   const [filter, setFilter] = useState<ShelfFilterKey>('all')
   const [imgFailed, setImgFailed] = useState<Record<string, boolean>>({})
-  // 本地 TXT 导入：隐藏 file input + 上传后直进阅读器
+  // 本地书导入（TXT / EPUB 按内容分流，服务端说了算）：隐藏 file input + 上传后直进阅读器
   const [importError, setImportError] = useState<string | null>(null)
+  /** 导入回执现场（**只在有持久警告时**）：服务端回执原样持有（书名/作者/封面/格式/章数/warnings），
+   *  不复制成第二份形状。有警告时不自动进阅读器——跳进阅读器就把「这本书带着降级/剥除事项」这条
+   *  交代吞了（用户看不到任何迹象）；无警告时一分钱不花，行为与从前一字不差。 */
+  const [imported, setImported] = useState<LocalImportResponse | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)   // 导入入口的触发方 = 网格引导卡/空架兜底卡
   /** 本视图是否仍在场。`navigate` 是模块级 store 的动作、与组件存活无关，所以在卸载后的
    *  `.then` 里照样会执行——导入落地时用户若已切到别的 tab，就会被强行拽进阅读器（实测缺陷）。
@@ -114,8 +124,9 @@ export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): R
       setDelBusy(false)
     })
   }
-  useEffect(() => {
-    // 失败不许伪装成空架（历史 bug：网络失败 setBooks([]) → 渲染「书架空空」误导）
+  /** 取书架（挂载一次 + 有警告的导入留在本页后一次）：
+   *  失败不许伪装成空架（历史 bug：网络失败 setBooks([]) → 渲染「书架空空」误导） */
+  const loadShelf = (): void => {
     void deps.apiGet<ShelfEntry[]>(ROUTES.shelf.path).then((list) => {
       setBooks(list)
       setLoadError(null)
@@ -123,7 +134,8 @@ export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): R
       setBooks([])
       setLoadError(e instanceof Error ? e.message : String(e))
     })
-  }, [])   // eslint-disable-line react-hooks/exhaustive-deps
+  }
+  useEffect(() => { loadShelf() }, [])   // eslint-disable-line react-hooks/exhaustive-deps
   const search = (): void => {
     if (keyword.trim() !== '') navigate({ name: 'search', keyword: keyword.trim() })
   }
@@ -143,9 +155,16 @@ export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): R
       onClick={() => fileRef.current?.click()}>
       <span className="novel-ghost-cover">＋</span>
       <span className="novel-card-title">导入本地书籍</span>
-      <span className="novel-card-meta">TXT 文件</span>
+      <span className="novel-card-meta">导入 TXT / EPUB</span>
     </button>
   )
+  /** 有警告的导入留在本页：先把新书摆进网格（服务端真相，含来源投影），再让用户自己点进阅读器 */
+  const openImported = (): void => {
+    const b = imported
+    if (b === null) return
+    setImported(null)
+    navigate({ name: 'reader', sourceId: b.sourceId, bookKey: b.bookKey, title: b.title })
+  }
   return (
     <div data-novel-view="shelf" className="novel-view">
       <div className="novel-wrap">
@@ -202,19 +221,28 @@ export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): R
               <span className="novel-shelf-sort">最近阅读排序 · 进度自动保存</span>
             </div>
           )}
-          {/* 隐藏 file input（布局零参与）：触发方只有引导卡 */}
-          <input ref={fileRef} type="file" accept=".txt,text/plain" className="novel-file-hidden"
+          {/* 隐藏 file input（布局零参与）：触发方只有引导卡。accept 收 TXT 与 EPUB——分流按**内容**
+              （ZIP 魔数）在服务端做，这里只负责让选择器别把 .epub 藏起来 */}
+          <input ref={fileRef} type="file" accept=".txt,.epub" className="novel-file-hidden"
             onChange={(e) => {
               const f = e.target.files?.[0]
               e.target.value = ''
               if (f === undefined) return
               setImportError(null)
-              void deps.apiUpload<{ bookKey: string; title: string; sourceId: string }>(
+              void deps.apiUpload<LocalImportResponse>(
                 queries.localImport({ name: f.name }), f,
               ).then((book) => {
-                if (!aliveRef.current) { deps.pushOk(`《${book.title}》已导入，在书架可见`); return }
+                if (!aliveRef.current) { deps.pushOk(`《${book.title}》已导入，在书架可见${localImportNote(book)}`); return }
+                if (book.warnings.length > 0) {
+                  setImported(book)               // 跳走就吞了交代：留在本页把它说完
+                  loadShelf()
+                  return
+                }
                 navigate({ name: 'reader', sourceId: book.sourceId, bookKey: book.bookKey, title: book.title })
               }, (err) => {
+                // 导入失败的具体原因由服务端给（固定版式 / 加密条目 / 是 ZIP 魔数但读不成 EPUB 归档 /
+                // 超限），这里原样透出——换成「导入失败」一句泛话，用户与我们都无从下手；
+                // 非 ZIP 字节不走这条路（它照 TXT 解码链导入）
                 const text = err instanceof Error ? err.message : String(err)
                 if (aliveRef.current) setImportError(text)
                 else deps.pushError(`本地书籍导入失败：${text}`)
@@ -223,6 +251,32 @@ export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): R
         </header>
         {/* 错误面：导入/加载两处场景内提示；删除错误在确认模态内就地呈现，不散落页面流 */}
         {importError === null ? null : <div className="novel-err novel-note-sm">{importError}</div>}
+        {/* 导入回执（只在有持久警告时）：书名/作者/封面直接用服务端回执（不是本地猜的），
+            格式取回执的 format 字段；警告逐条点名 code 与资源，读完可以「开始阅读」或「稍后再看」。
+            封面位与卡片同一条分支、共用同一份 `imgFailed`（键都是 `local:<uuid>` 这类 bookKey）：
+            资源文件被清掉时落「本地」占位而不是破图。 */}
+        {imported === null ? null : (
+          <div className="novel-import-note" role="status">
+            <div className="novel-import-head">
+              {imported.coverUrl === undefined || imgFailed[imported.bookKey] === true
+                ? <span className="novel-cover-fallback sm">本地</span>
+                : <img className="novel-cover" src={imported.coverUrl} alt="" loading="lazy"
+                    onError={() => setImgFailed((m) => ({ ...m, [imported.bookKey]: true }))} />}
+              <div className="novel-import-who">
+                <div className="novel-card-title">《{imported.title}》已导入</div>
+                <div className="novel-muted novel-note-sm">
+                  {imported.author === undefined ? localImportLabel(imported) : `${imported.author} · ${localImportLabel(imported)}`}
+                </div>
+              </div>
+            </div>
+            <div className="novel-prefs-label">导入说明（{imported.warnings.length} 条）</div>
+            <WarningList warnings={imported.warnings} />
+            <div className="novel-import-acts">
+              <button className="novel-btn sm" onClick={() => setImported(null)}>稍后再看</button>
+              <button className="novel-btn sm primary" onClick={openImported}>开始阅读</button>
+            </div>
+          </div>
+        )}
         {/* 删除确认模态：遮罩 + 居中对话框 + 危险色确认钮；Esc/点遮罩取消，失败留在框内重试。
             文案两形态同住 shelf-delete.ts（纯函数）：单本点名书名，批量点名本数并在含本地书时
             点名副本连删。测试钉子：✕ 的 title「删除本书」、按钮文案「确认删除」、
@@ -288,12 +342,14 @@ export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): R
                           navigate({ name: 'reader', sourceId: b.sourceId, bookKey: b.bookKey, title: b.title })
                         }}>
                         <span className="novel-cover-box">
-                          {isLocal
-                            // 本地书专属呈现：封面位直接写「本地」（源身份固定，与在线书区分）
-                            ? <span className="novel-cover-fallback sm">本地</span>
-                            : b.coverUrl !== undefined && !failed
-                              ? <img className="novel-cover" src={b.coverUrl} alt="" loading="lazy"
-                                  onError={() => setImgFailed((m) => ({ ...m, [b.bookKey]: true }))} />
+                          {/* 封面只有**这一条** img 分支（在线书与本地书共用）：本地 EPUB 的封面就是
+                              服务端落盘的封面资源 URL（SHELF_META 的 coverUrl），能显示就显示；
+                              本地书没有封面（或图挂了）才落「本地」占位——不发明第二条封面路。 */}
+                          {b.coverUrl !== undefined && !failed
+                            ? <img className="novel-cover" src={b.coverUrl} alt="" loading="lazy"
+                                onError={() => setImgFailed((m) => ({ ...m, [b.bookKey]: true }))} />
+                            : isLocal
+                              ? <span className="novel-cover-fallback sm">本地</span>
                               : <span className={`novel-cover-fallback ${coverTintClass(b.title)}`}>{coverFallbackChar(b.title)}</span>}
                           {/* 来源 chip：色点按 sourceId 派生四档（一眼分得出源不同）+ 源名（超长省略，
                               title 给全名）。本地书不出（本地身份归封面「本地」与角标）。 */}

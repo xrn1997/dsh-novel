@@ -25,6 +25,13 @@ describe('nextChapterIndex（前向窗口：视口章之后第一个未载章）
   it('读尽 → -1', () => {
     expect(nextChapterIndex(['a', 'b'], 1)).toBe(-1)
   })
+  it('已载判据只问「在不在」：图文对象与文字串同等对待（载哪一章与正文形态无关）', () => {
+    const rich = { kind: 'rich', documentId: 'd0', nodes: [] }
+    const text = { kind: 'text', text: '正文' }
+    expect(nextChapterIndex([rich, text, null], 1)).toBe(2)
+    expect(nextChapterIndex([rich, text], 1)).toBe(-1)
+    expect(nextLoadTarget(0, 500, { chapters: [rich, null], loading: null, from: 0 })).toBe(1)
+  })
 })
 
 describe('nextLoadTarget（哨兵进预取区才加载——旧口径 scrollHeight/scrollTop 已废弃）', () => {

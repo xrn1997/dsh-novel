@@ -9,7 +9,7 @@ export function CityView(): ReactNode {
     <div data-novel-view="city" className="novel-view">
       <EmptyState
         title="书城未上线，敬请期待"
-        hint="上线后这里会聚合各书源的榜单与分类；现在可以先在书架搜索，或经「书源管理」导入书源 / 本地 TXT"
+        hint="上线后这里会聚合各书源的榜单与分类；现在可以先在书架搜索，或经「书源管理」导入书源 / 本地 TXT 与 EPUB"
       />
     </div>
   )

@@ -36,15 +36,35 @@ describe('本地书路由', () => {
     const { value: book } = await (await importTxt(TXT, 'x.txt')).json() as any
     const { value: toc } = await (await fetch(`${base}/novel-api/toc?sourceId=__local__&url=${encodeURIComponent(book.bookKey)}`)).json() as any
     expect(toc.map((c: any) => c.name)).toEqual(['第1章 起', '第2章 续'])
-    const { value: text } = await (await fetch(`${base}/novel-api/chapter?sourceId=__local__&url=${encodeURIComponent(book.bookKey)}&index=1`)).json() as any
-    expect(text).toBe('内容二')
+    const { value: content } = await (await fetch(`${base}/novel-api/chapter?sourceId=__local__&url=${encodeURIComponent(book.bookKey)}&index=1`)).json() as any
+    expect(content).toEqual({ kind: 'text', text: '内容二' })
   })
   it('GBK 文件导入：解码正确回显 encoding', async () => {
     const r = await importTxt(iconv.encode('第1章 夜\n挑灯看剑', 'gbk'), 'gbk书.txt')
     const { value: book } = await r.json() as any
     expect(book).toMatchObject({ title: 'gbk书' })
-    const { value: text } = await (await fetch(`${base}/novel-api/chapter?sourceId=__local__&url=${encodeURIComponent(book.bookKey)}&index=0`)).json() as any
-    expect(text).toBe('挑灯看剑')
+    const { value: content } = await (await fetch(`${base}/novel-api/chapter?sourceId=__local__&url=${encodeURIComponent(book.bookKey)}&index=0`)).json() as any
+    expect(content).toEqual({ kind: 'text', text: '挑灯看剑' })
+  })
+  it('本地读口在 TXT 上：warnings 空数组（告警面通用），document/resource 是 404', async () => {
+    const { value: book } = await (await importTxt(TXT, 'ports.txt')).json() as any
+    const enc = encodeURIComponent(book.bookKey)
+    const w = await fetch(`${base}/novel-api/local/warnings?id=${enc}`)
+    expect(w.status).toBe(200)
+    expect(((await w.json()) as any).value).toEqual([])
+    for (const route of [`local/document?id=${enc}&documentId=d0`, `local/resource?id=${enc}&resourceId=r0`]) {
+      const r = await fetch(`${base}/novel-api/${route}`)
+      expect(r.status, route).toBe(404)
+      expect(((await r.json()) as any).error.code, route).toBe('NotFound')
+    }
+    // 未知书（元数据不在）同样是 404，而不是 500
+    expect((await fetch(`${base}/novel-api/local/warnings?id=${encodeURIComponent('local:123e4567-e89b-12d3-a456-426614174000')}`)).status).toBe(404)
+  })
+  it('本地读口缺参 → 400；方法不对 → 405', async () => {
+    expect((await fetch(`${base}/novel-api/local/resource?id=x`)).status).toBe(400)
+    expect((await fetch(`${base}/novel-api/local/document?id=x`)).status).toBe(400)
+    expect((await fetch(`${base}/novel-api/local/warnings`)).status).toBe(400)
+    expect((await fetch(`${base}/novel-api/local/resource?id=x&resourceId=r0`, { method: 'DELETE' })).status).toBe(405)
   })
   it('空文件 → 400；超限 → 413（信封）', async () => {
     expect((await importTxt('', 'e.txt')).status).toBe(400)

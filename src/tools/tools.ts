@@ -95,7 +95,7 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
 
   const readChapter = defineTool({
     name: 'dshnovel_read',
-    description: '取某本书第 N 章（0 起）的正文纯文本。chapterIndex 从 dshnovel_toc 的结果查（章名→下标只在那里映射）；bookKey 用 dshnovel_search 返回的 url 字段。正文可能很长（数千字），只有用户确实需要全文时再读。',
+    description: '取某本书第 N 章（0 起）的正文纯文本。chapterIndex 从 dshnovel_toc 的结果查（章名→下标只在那里映射）；bookKey 用 dshnovel_search 返回的 url 字段。正文可能很长（数千字），只有用户确实需要全文时再读。图文书（本地 EPUB）同样只给文字：插图落成 [图片：替代文字] 占位（没有替代文字则 [图片]），不包含图片本身。',
     parameters: {
       sourceId: { type: 'string', required: true, description: '源 id（来自搜索结果/源列表）' },
       bookKey: { type: 'string', required: true, description: '书籍详情页 URL' },

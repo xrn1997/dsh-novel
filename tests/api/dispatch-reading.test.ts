@@ -69,13 +69,26 @@ describe('reading/shelf 面', () => {
     await fetch(`${u}&refresh=1`)
     expect(tocFetches).toBeGreaterThan(before)
   })
-  it('GET /chapter 缺 index → 400；正常 → 文本；越界 → 404', async () => {
+  it('GET /chapter 缺 index → 400；正常 → 显式 {kind:text,text} 图文契约；越界 → 404', async () => {
     const { value: src } = await (await fetch(`${base}/novel-api/sources`)).json() as any
     const u = `${base}/novel-api/chapter?sourceId=${src[0].id}&url=${encodeURIComponent(`${BASE}/book/1/`)}`
     expect((await fetch(u)).status).toBe(400)
-    const { value: text } = await (await fetch(`${u}&index=0`)).json() as any
-    expect(text).toBe('正文一\n第二段\n第三段\n尾段')
+    const { value: content } = await (await fetch(`${u}&index=0`)).json() as any
+    // 单形态、不做旧/新自动猜测：正文一律是 ChapterContent（在线书恒文字支）
+    expect(content).toEqual({ kind: 'text', text: '正文一\n第二段\n第三段\n尾段' })
     expect((await fetch(`${u}&index=99`)).status).toBe(404)
+  })
+  it('GET /navigation → chapters 线性 + items 平面派生树（在线书没有原生目录）', async () => {
+    const { value: src } = await (await fetch(`${base}/novel-api/sources`)).json() as any
+    const r = await fetch(`${base}/novel-api/navigation?sourceId=${src[0].id}&url=${encodeURIComponent(`${BASE}/book/1/`)}`)
+    const { value: nav } = await r.json() as any
+    expect(nav.chapters.map((c: any) => c.name)).toEqual(['第一章', '第二章', '第三章'])
+    expect(nav.items.map((i: any) => [i.label, i.target])).toEqual([
+      ['第一章', { kind: 'chapter', index: 0, anchorId: null }],
+      ['第二章', { kind: 'chapter', index: 1, anchorId: null }],
+      ['第三章', { kind: 'chapter', index: 2, anchorId: null }],
+    ])
+    expect(nav.items.every((i: any) => i.children.length === 0 && typeof i.id === 'string')).toBe(true)
   })
   it('shelf 三路由 + key 的 URI 编码往返', async () => {
     const bookKey = 'https://s.com/book/1/?a=1&b=2'

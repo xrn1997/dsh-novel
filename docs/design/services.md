@@ -6,7 +6,7 @@
 
 | 文件 | 职责 | 关键导出 |
 | --- | --- | --- |
-| `services/reading.ts` | 阅读链路门面：HTTP / 工具 / UI 三面的**唯一**业务入口 | `ReadingService.create/from`、`search/searchProgressive/searchPlan`、`startSearchJob/searchJobSnapshot`、`getDetail/getToc/getChapter`、`probe`、`shelfList/shelfAdd/shelfPatch/shelfSaveProgress/removeBook/removeBooks`、`localImport/removeLocalBook`、`startImportJob/startBatchProbeJob/jobStatus`、`*Source*` 写侧动词、`flush`、`tocUrlOf`、`normalizeChapterText` |
+| `services/reading.ts` | 阅读链路门面：HTTP / 工具 / UI 三面的**唯一**业务入口 | `ReadingService.create/from`、`search/searchProgressive/searchPlan`、`startSearchJob/searchJobSnapshot`、`getDetail/getToc/getChapter/getChapterContent/getNavigation/getLocalSupplement/getLocalResource/getLocalImportWarnings`、`probe`、`shelfList/shelfAdd/shelfPatch/shelfSaveProgress/removeBook/removeBooks`、`localImport/removeLocalBook`、`startImportJob/startBatchProbeJob/jobStatus`、`*Source*` 写侧动词、`flush`、`tocUrlOf`、`normalizeChapterText` |
 | `services/sources.ts` | 书源注册表：加载 / 原子变更 / 只读投影 / 合并落盘 | `SourceRegistry.load`、`edit/flush/list/get/toPublic`、`SourceEdit` |
 | `services/intake.ts` | 源入库：normalize → 批内留首条 → 按址去重 → add/replace | `SourceIntake`、`IntakeDecision`、`dedupKey` |
 | `services/import-job.ts` | 后台写任务单槽（导入 / 批量验证）；生命周期登记给宿主 `ctx.jobs`（`host?: JobHost` 窄面，协作式取消） | `SourceJobs`、`JobRunningError`、`JobKind`、`ImportFile`、`JobHost`、`JobOutcome` |
@@ -21,7 +21,16 @@
 | `services/pagination.ts` | 翻页闸（URL 防环 / 零新增 / 回环 / 上限 + 串章）+ next 列表语义 | `followPages`、`FollowResult` |
 | `services/chapter-page.ts` | 章节分页判定（防串章闸判据） | `isSameChapterPage`、`stripExtension` |
 | `services/content.ts` | 正文取值收口（HTML → 纯文本，幂等）+ **简介展示文本** | `contentToText`、`htmlToText`、`looksLikeHtml`、`formatIntro` |
-| `services/localbooks.ts` | 本地 TXT 书库：解码 / 切章 / 偏移切片 / 内存 LRU / 删除 | `LocalBooks`、`decodeLocalText`、`splitChapters`、`isLocalBookKey`、`ChapterSpan` |
+| `services/localbooks.ts` | 本地书库（TXT / EPUB）：按内容分流 / 发布提交 / 正文·导航·资源·告警读取 / 删除 | `LocalBooks`、`decodeLocalText`、`splitChapters`、`isLocalBookKey`、`ChapterSpan`、`LocalImportResult`、`LocalResource` |
+| `services/epub/archive.ts` | 受限 ZIP 条目读取：路径闸、重名、加密位、CRC 与实际字节预算 | `openEpubArchive`、`EpubArchive`、`EpubLimits`、`DEFAULT_EPUB_LIMITS` |
+| `services/epub/xml.ts` | EPUB 的**只读 XML 面**（包 / 导航 / 正文共用）：字节事实解码（BOM > 声明 > UTF-8，无猜测链）+ 静态闸门（**先摘注释与 CDATA**，再判 DOCTYPE 内部子集、实体声明与未声明引用）+ 良构性（**多根元素即拒**：只取第一个会静默丢内容）+ 单文档 DOM 预算 + 本地名 DOM 小工具 | `decodeEpubXml`、`parseXml`、`xmlBudget`、`textOf`、`descendants` |
+| `services/epub/package.ts` | 包结构：container→OPF、manifest、spine 主序列、nav/NCX 目录、封面候选、编码与路径解析 | `readEpubPackage`、`resolveEpubHref`、`EpubPackage` |
+| `services/epub/warnings.ts` | **告警层**（与转换 / 资源验证都不相干）：同类告警合并器（**处数不设限、例子最多三个**）+ 跨模块共享的那几个码 | `EpubWarningLog`、`WARN_REMOVED`、`WARN_ACTIVE_ATTR`、`WARN_CSS_ATTR`、`WARN_INLINE_SVG` |
+| `services/epub/documents.ts` | XHTML → 白名单图文树 + 锚点/链接映射（两遍走；活动内容剥除并记告警） | `scanXhtml`、`convertXhtml` |
+| `services/epub/resources.ts` | 图片类型/尺寸/像素验证与受限 SVG 重建（白名单外可见元素报错） | `validateImage`、`SVG_MEDIA_TYPE` |
+| `services/epub/import.ts` | 导入编排：串起包/文档/资源，只写指定暂存目录，返回索引（不发布、不认识书架与 HTTP） | `importEpub`、`EpubImportData` |
+| `services/epub/errors.ts` | EPUB 子树的异常类（避免 localbooks ↔ epub 成环） | `EpubImportError` |
+| `services/chapter-content.ts` | 规范正文 → 纯文本的**唯一投影**（图 = `[图片：替代文字]` 占位，不追链接） | `chapterContentToText` |
 | `services/shelf.ts` | 书架：元数据写口（add = patch 语义 / update = 补丁）+ 进度 + 批量删 | `Shelf`、`AddBookInput`、`BookPatch` |
 | `services/cache.ts` | 目录 / 正文文件缓存 + LRU 淘汰（只回答「放在哪」，有效性归 `cache-epoch.ts` + `reading.ts`） | `PageCache`、`safeKey` |
 | `services/cache-epoch.ts` | 缓存有效性唯一算式：规则指纹 → 目录代际 / 正文槽位 | `rulesEpoch`、`contentSlot`、`RULE_EPOCH_IMPACT`、`EpochImpact`、`CacheFacet` |
@@ -34,7 +43,7 @@
 | `services/url.ts` | URL 绝对化（拆 request↔bridge 环的纯工具） | `absUrl` |
 | `api/dispatch.ts` | `/novel-api` 前缀路由内部分发 | `createApiHandler`、`ApiHandlerOptions` |
 | `api/wire.ts` | 同源 fence / body 读取 / 信封写出 / 错误→HTTP 映射 | `isTrustedRequest`、`readJsonBody`、`writeOk`、`writeError`、`errorStatusOf`、`ApiError` |
-| `shared/wire.ts` | **跨半契约**：值形状、路由常量、query/body 构造器、书目字段集 | `ROUTES`、`paramRoutes`、`SEG`、`PARAMS`、`queries`、`shelfBody`、`SHELF_META`、`pickShelfMeta`、`ShelfEntry`、`LOCAL_SOURCE_ID`、`NOVEL_API_PREFIX`、全部 DTO |
+| `shared/wire.ts` | **跨半契约**：值形状、路由常量、query/body 构造器、书目字段集 | `ROUTES`、`paramRoutes`、`SEG`、`PARAMS`、`queries`、`resourceUrl`、`shelfBody`、`SHELF_META`、`pickShelfMeta`、`ShelfEntry`、`LOCAL_SOURCE_ID`、`NOVEL_API_PREFIX`、全部 DTO |
 | `tools/tools.ts` | agent 六工具，全锁 `dshnovel_` 前缀（与 HTTP 共用 service 层） | `buildTools`、`registerTools` |
 | `tools/project.ts` | 缺键投影唯一实现 | `project` |
 
@@ -75,7 +84,7 @@
 
 **生命周期已登记给宿主 `ctx.jobs`（2026-09），单槽互斥与 counts 仍归本模块**。分工是刻意的两半：宿主注册表管**身份与生命周期**（`<kind>-N`、`running → completed|killed|failed`、owner 栅栏、随服务卸载而 cancel），`SourceJobs` 管**业务计数与明细**（`counts` / `issues` / `fileErrors`——宿主只有 `label` + `detail` 一行，装不下 642 源的失败分桶）。要点：
 - `kind` 用 `novel-import` / `novel-probe` / `novel-search`（宿主对 kind 的唯一判据是「非空字符串」，按不透明命名空间处理，不需要类型包合并）；`label` 写清工作量（`导入书源 N 个文件` / `批量验证书源 N 家` / `聚合搜索「kw」（N 家书源）`）。
-- **类型面是本地窄镜像** `JobHost`（`src/index.ts` 的 `NovelContext` + `*Like` 先例）：npm 上的 `@deepseek-ai/dsh-jobs` 停在 `0.0.1-rc.3`（2026-09-23 复核：npm 仍是这个号）而宿主跑 `0.1.7-rc.1`，装它等于拿一套不同代的契约。**`host` 缺席即不登记**（单测直构与无 jobs 的组合都走这条路，任务语义不变）。
+- **类型面是本地窄镜像** `JobHost`（`src/index.ts` 的 `NovelContext` + `*Like` 先例）：npm 上的 `@deepseek-ai/dsh-jobs` 停在 `0.0.1-rc.3`（2026-09-23 与 2026-09-26 两次复核：npm 仍是这个号）而宿主跑 `0.1.7-rc.2`，装它等于拿一套不同代的契约。**`host` 缺席即不登记**（单测直构与无 jobs 的组合都走这条路，任务语义不变）。
 - 入口在 `ctx.effect` 里 `attachController('dsh-novel')`：宿主 `start` 的准入闸要求「有已挂载 controller 服务该 owner」，而本机 profile 里第一方的 `tool-jobs` 是 disabled 的（证据见 `docs/reference/dsh-plugin-api.md` 风险第 10 条）。
 - **取消是协作式的**：宿主 `cancel(reason)` 只把旗子立起来，运行器在**取下一条之前**收手——在途的网络探针/入库不打断（打断半路写回的源更脏）。收手时已入库/已验证的结果一律保留 + `flush()` 等齐，`JobState` 落 `phase='failed'` + `error='任务已取消：…'`。**wire 的 `phase` 不加 `killed`**：对 UI 的判据（`phase !== 'running'`）两个终态无区别，加一态要动跨半契约与三处判据，收益为零。宿主侧则如实结算 `status:'killed'`。
 - 收尾三处写口（`completed` / `killed` / `failed`）集中在 `settle()` 一处——漏掉一处就是「小说 UI 显示已结束，宿主注册表里还挂着 running」。终态词汇 `JobOutcome` 也只此一处声明（`search-job.ts` 复用同一别名，不各写一份联合类型）。
@@ -189,14 +198,53 @@
 
 代价如实记录：投影**改变类型**（可空字段变为缺席），故出参类型由调用方断言；schema 侧一致性由 `tests/tools/schema-contract.test.ts` 钉住（execute 输出过 harness 同款校验）。但**注意这条钉子的成色**：schema 属性集只有 **shelf 那一条**是从 `SHELF_META` 表真派生出来的（`schema-contract.test.ts` 的「这一条**从 wire 的 SHELF_META 表派生**」用例），其余五份是**手抄快照**——wire 改名时它们不会自动报错，需人工同步（机构上无法从擦除后的 TS 类型反推）。
 
-### 12. 本地书身份 `__local__`（`services/localbooks.ts` + `shared/wire.ts`）
+### 12. 本地书身份（`services/localbooks.ts` + `shared/wire.ts` + `services/epub/`）
 
-`LOCAL_SOURCE_ID = '__local__'` 的**唯一主人是 `shared/wire.ts`**（跨半契约常量）：client 半与测试直接 import，服务半 re-export 保留既有路径——**不再有第二份声明**。为什么服务半可以有第二份而这里不许：client 纯度门拦不住服务半（`services/types.ts`、`reading.ts` 本就在引 shared），所以服务端那份从来不是构建约束逼出来的。
+本地书有 **TXT 与 EPUB** 两支，落盘形态不同但身份与读取面同一套：`LOCAL_SOURCE_ID = '__local__'` 的**唯一主人是 `shared/wire.ts`**（跨半契约常量）：client 半与测试直接 import，服务半 re-export 保留既有路径——**不再有第二份声明**。为什么服务半可以有第二份而这里不许：client 纯度门拦不住服务半（`services/types.ts`、`reading.ts` 本就在引 shared），所以服务端那份从来不是构建约束逼出来的。bookKey 形态 `local:<uuid>`，`BOOK_KEY_RE` 严格 uuid 校验**兼防路径穿越**。
 
-- bookKey 形态 `local:<uuid>`，`BOOK_KEY_RE` 严格 uuid 校验**兼防路径穿越**。
-- 本地解码链与 fetcher 不同（`decodeLocalText`）：BOM 优先 → **UTF-8 `fatal:true` 严格探测** → GBK 回退。不复用 `fetcher.decodeBody`——它的兜底是 UTF-8，GBK 文件会乱码；本地文件也没有 Content-Type。`Buffer.toString('utf8')` 会把非法字节静默换成 U+FFFD，故必须用 fatal TextDecoder。
-- 原文落盘（重解码路径保留）+ 元数据 JSON（含章节字符偏移表 `ChapterSpan[]`）；读取按偏移切片，**解码全文内存 LRU 上限 3 本**（Map 迭代序即 LRU 序）。退化 span（相邻标题行 / 文末孤标题）`start > end` 时夹紧边界，保证只切出 `''` 而非负长度。
-- `__local__` 的书在门面内分流：`getToc` / `getChapter` 见 `sourceId === LOCAL_SOURCE_ID` 走本地书面、**不查注册表**；路由层零 LOCAL 知识。「删书不留孤儿文件」的 invariant 也归门面 `removeBook`（本地书连带删文件 + 删书架条目）与 `removeBooks`（批量，同一条 invariant——按 `removeMany` 的返回条目逐个删副本，没真在架的键不碰磁盘）。
+**① 按内容分流（唯一判据：文件头 4 字节）**。`PK\x03\x04`（ZIP 本地头签名）→ EPUB 路径；此后归档层与包层的**任何**失败都照原样上抛（加密位 / 符号链接 / 非 store-deflate / 重名 / zip-slip / 条目与解压超限 / 缺 mimetype / 坏 XML 都是这条路径上的失败），**不做 TXT 兜底**。不是 ZIP 魔数的字节才走既有 TXT 解码链（BOM → **UTF-8 `fatal:true` 严格探测** → GBK 回退，一字不改）。**被否决的方案**：「先试着开归档，失败就当 TXT」——那正是把归档层明令的**安全拒绝**吞成「不是 EPUB」，再让 GBK 兜底与「无标题单章」把一份加密 ZIP 落成整本乱码、以 200 入架，即本仓「失败冒充成功」的最坏形态。所以判据只看文件头，不看任何解析结果；缺 mimetype 的普通 ZIP 同属 EPUB 路径的失败，不为它开第二条路。另一面同样刻意：**不新增「二进制即拒收」的启发式**——那会让现网本来能读的 TXT（GBK 短篇、含控制字符的导出文件）变成拒收，比乱码更坏。TXT 解码链为什么不能复用 `fetcher.decodeBody`：它的兜底是 UTF-8，GBK 文件会乱码；本地文件也没有 Content-Type。`Buffer.toString('utf8')` 会把非法字节静默换成 U+FFFD，故必须用 fatal TextDecoder。
+
+**② 落盘身份（两代形态，旧书零迁移）**：
+
+| 格式 | 落盘 | 元数据（本地书目录下） |
+| --- | --- | --- |
+| TXT（既有形态） | `local/<uuid>.txt`（原文，重解码路径保留） | `local/<uuid>.json`：**没有 `schemaVersion`**——元数据缺席它就是 TXT，含 `ChapterSpan[]` 偏移表 |
+| EPUB（新增） | `local/<uuid>/original.epub` + `local/<uuid>/documents/<opaqueId>.json` + `local/<uuid>/resources/<opaqueId>.<safeExt>` | `local/<uuid>.json`：`schemaVersion: 2` + `format: 'epub'`，含阅读序列、文档表、资源表、导航树、告警 |
+
+- EPUB 的元数据**既是提交标记也是格式判据**（`isEpubMeta`）：缺 `schemaVersion` 的旧元数据继续按既有 TXT 读取，**不为 EPUB 改写旧偏移与进度**。
+- 索引形状（`chapters` / `documents` / `resources` / `quality`）直接复用导入层的类型（形状主人是 `services/epub/import.ts`），本地库**不抄一份字段表**——抄一份的下场是导入端加字段、读端不知道。
+- 书目元数据（作者 / 封面 / 总章数）**不进本地元数据**：它们走既有 `SHELF_META` 字段集落 `shelf.json`（`bookMetaOf` 只挑 `author`/`coverUrl`/`totalChapters`）。**本地格式不新增可 patch 字段**——加一个 `format` 进 `SHELF_META` 就多一个能被 `PUT shelf/:key` 随意改写、与磁盘真相脱节的假字段（客户端卡片因此只说「本地」，见 `docs/design/client.md`）。
+- 读取口径：TXT 按偏移切片 + **解码全文内存 LRU 上限 3 本**（Map 迭代序即 LRU 序；退化 span（相邻标题行 / 文末孤标题）`start > end` 时夹紧边界，保证只切出 `''` 而非负长度）；**EPUB 正文按文档读 JSON，不进这个 LRU**（整本塞进去等于两份缓存与两套失效口径），资源流式读取。
+
+**③ 发布/提交协议（staging → rename → 原子元数据 → 入架）**。导入先在 `local/<uuid>.importing/` 建全部产物（导入器只写 `documents/` 与 `resources/`），原字节另存 `original.epub`，一次 `rename` 成最终目录，再原子写顶层元数据（**提交标记**），最后由门面 `localImport` 交 `ReadingService` 入架。失败只清理**本次 UUID** 的路径（staging / 已发布目录 / 元数据与它的 `.bak` / 同名 TXT 两件 / 原子写残留），绝不删 `local/` 之外的东西、绝不碰别的书的文件，也**不造书架条目**。**如实记的边界**：本地目录与 `shelf.json` 之间**没有**跨文件事务，不假装有——强杀恰在「元数据写完、书架落盘前」会留一份完整但未入架的副本，本轮不建恢复扫描器、也不用自动删除掩盖（见「已知开口」）。
+
+**④ 读取面（门面动词，路由层与工具面都不持 LOCAL 知识）**：
+
+- `getToc`：线性阅读序列（TXT 的旧响应一字不改；EPUB 按 spine 主序列，章名取文档标题），进度 / 逐章 API / 导出范围都按它。
+- `getNavigation`：`chapters`（同一份线性序列）+ `items`（展示树）——EPUB 读持久化的原生 nav/NCX 目录，其他书（TXT / 在线）按 `planarNavigation` 派生平面树（单点在 wire，不在客户端重推导）。
+- `getChapterContent`：EPUB 返回 `{kind:'rich'}`（按需读该章的文档 JSON），TXT 与在线书返回 `{kind:'text'}`。
+- `getChapter`（文字面）：一律 `chapterContentToText(getChapterContent(...))`——**唯一投影**，导出、AI 工具与阅读器的文字出口共用它，不写第二份文字实现；rich 不另存一份文字（第二份字段一旦落盘就会与树分叉）。
+- `getSupplement`：补充文档（脚注 / 附录）按 opaque 文档 ID 读规范化 JSON——不在阅读流里、不计章号。
+- `getResource`：**只认不透明 ID**——先查持久化的资源表（查不到 = 404 类错误），再按表里的相对名打开文件；路径从不来自请求，打开成功后才返回流。字节数取**打开后 stat 的真实 size**（元数据里那份是导入期记的，文件被截断时按它发 `content-length` 会头体不一致）。表是 `JSON.parse` 出的普通对象，故一律 `Object.hasOwn` 查自有键——`constructor`/`__proto__`/`toString` 会命中继承成员，`ref.file` 取到 `undefined` 再 `path.resolve` 会抛成 500，而这里要的是 404。
+- `readDocument`（章正文与补充文档共用）分两种缺席，**不是一条 404 兜到底**：表里没这个文档 ID → `LocalArtifactNotFoundError`（404，读者问的是这本书里没有的东西）；表说有、读出来的内容却对不上号（`kind` 不是 rich、或 `documentId` 与表不符）→ **裸 `Error` = 500，显式选定的**。为什么不是 404：那是服务端自己的存储坏了，报成 404 会把自损伪装成「没这份文档」，用户与我们都无从下手（宁炸不猜）。这条判定写在代码注释里，不是「分类器没管到所以落 500」。
+- `getImportWarnings`：非 EPUB 恒空数组。
+
+**⑤ 资源响应的安全头单点在 `api/dispatch.resourceHeaders`**：MIME 用**导入期的验证结果**（不是 manifest 声明），`x-content-type-options: nosniff`、`cross-origin-resource-policy: same-origin`、`cache-control: private, max-age=3600`；独立 SVG 额外附 `content-security-policy: default-src 'none'; sandbox`（重建过的静态文本仍按不可信文档对待）。不设 `content-disposition`——资源口只服务 `<img>`，**不提供任意原文下载**。断连即销毁本条流（不动别的请求）；头已发之后流上出错只能断连，但必须 `console.error` 留痕（吞成静默断连会让人对着「读了一半没了」猜原因）。
+
+**⑥ 删除 invariant**：TXT 是两件文件、EPUB 是整棵 `local/<uuid>/` 目录加顶层元数据——两者都走同一份 `discard` 清点，**不会留下「只删了顶层 JSON、documents/resources 还在」的残骸**。存在性只看元数据文件在不在（不解析：损坏的元数据不该让删除/恢复路径也炸）。门面侧：`removeLocalBook` 与 `removeBooks`（批量）共用同一条「删副本 + 删书架条目」，**没真在架的键不碰磁盘**（幽灵键不去动文件）。
+
+**⑦ EPUB 导入期的三条裁决（写下来才算裁决，否则与遗忘同形）**：
+
+- **被剥除的活动内容只记告警，可见图形不支持才报错**——两者不是一回事。告警码（稳定标识，服务层原样持久化并展示；用户看 message、程序按 code 分流，同类同资源同动作会合并计数并把处数写在开头，免得成百上千处 `style` 属性把告警面变成噪声）：`epub-removed-active-content`（脚本 / 内嵌框 / 对象 / 表单 / 音视频 / 文档级装载指令）、`epub-active-attribute`（事件属性）、`epub-css-attribute`（`style` 属性与出版方 CSS）、`epub-link-not-followable`（`javascript:`/`data:`/`file:` 等不可跟随 scheme）、`epub-external-link`（书外链接取消可点击性、指向书内不可读资源的链接）、`epub-svg-image-page`（**整页只有一棵内联 SVG** 的图形页按其内唯一一张书内图导入，见下一条裁决）、`epub-navigation-synthesized`（无 nav/NCX，按 spine 合成平面导航）、`epub-navigation-degraded`（EPUB3 无 nav 退用 NCX）、`epub-encrypted-resource`（**未被用到**的资源被加密：留一条点名资源的说明；真被正文用到时导入失败并点名「被加密」而不是按混淆字节说成「损坏」）。前三条的铸造点在 `services/epub/documents.ts`（SVG 资源侧同码，见 `resources.ts`），中间三条（含 `epub-svg-image-page`）在 `services/epub/import.ts`，后三条在 `services/epub/package.ts`。
+- **正文内联 `<svg>` 是「剥离 + 告警」，只有它是该文档唯一内容时才交回候选**（`epub-removed-inline-svg`）。理由是对称性：设计里的 SVG 条款讲的是交给浏览器的 `image/svg+xml` **资源**，而正文里的一层花饰/首字下沉若按「拒整本」处理，与同层的其它装饰性失败（`style` 属性、未知容器）极不对称，也与「纯图片阅读单元是有效正文」之外的一切「不静默」口径不符；代价如实记（这些文档会丢掉内联矢量图形，有告警点名文档与处数）。**剥离后没有任何别的可见节点时**，文档层**不再自己判生死**，而是交回 `svgOnly` 候选（那棵 `svg` 元素）——**裁决在编排层**，因为「这一页有没有内容」取决于里面那张图落不落得下，而资源事实只 `import.ts` 有：SVG 里恰好只剩一张 `<image>`（`resources.ts` 的 `soleRasterHref`，与独立 SVG 的**单图包装**同一份判据、不许有第二份抄本）且其 href 指书内可加载资源 → **导成单图章节** + 一条 `epub-svg-image-page` 说明；不是「只剩一张图」仍按 `svgOnlyPageReason` 拒整本，图在书外则点名「指向书外」拒（两种落不下的情形各说各的话）。**这条改判由真书反例推动（2026-09-26，Gutenberg #7337 图像版 `pg7337-images-3.epub`）**：EPUB3 推荐的整页封面写法就是「一层 div 包一棵 SVG，SVG 里一张 `<image>` 指向书内封面图」，而且同一张图另以 `properties="cover-image"` 声明——旧判据把这种书的**第一章**判成空章节，整本拒掉。「有没有可见内容」仍是**递归判**的（`documents.ts` 的 `hasVisibleContent`）：容器本身不算内容，`<p><svg/></p>` 与裸 `<svg/>` 走同一条路（只看一层的判据会被「包一层」绕过——2026 整分支评审定为合入前必修）；图算可见、非空白文本算、孤立的 `br` / `hr` 不算（那只是渲染出的一条空隙，没有可读的字）。候选面刻意**只认「恰好一棵」内联 SVG**（两棵就不是"整页图形"），也刻意**不在有正文的页里多落一张图**——钉子见 `tests/services/epub-import.test.ts` 的「有正文的页里夹一棵单图 SVG」。独立 SVG **资源**仍走白名单重建，白名单外的可见元素（`foreignObject` / `use` 外链 / 未登记的渐变引用）报错点名资源。
+- **锚点随被剥离内容消失 → 降级 + 告警，不拒整本**（`epub-degraded-anchor`）：扫描期把被剥离子树里的锚点名单独记成 `strippedAnchors`（「这个锚点曾经存在」是一份事实），绑定期据此**导航目标降级成「该文档 + 无片段」**（跳到文档开头，导航仍可用）、**正文内链降级成纯文本**（只留子内容、不出 link 节点）。两者各自成条（同码不同动作是两件事），点名文档与锚点。**拼写错、指向从未存在的 id 仍然按坏书拒收**——降级只认「被剥离的内容里确实有过这个名字」；「宁炸不猜」针对的是「我们读不懂 / 没有这个目标」。
+- **整页 SVG 页的两条配套口径**：① 被顶替掉的容器（`body → svg` 路径上那些带 `id` 的 `div`）各自的锚点**由替代出来的那张图承接**（`SvgOnlyPage.carriedAnchors` + `containerNode` 逐层包一层 div）——锚点是扫描期铸的，承载它的容器随整页 SVG 一起没了，不承接就是悬空锚点（落位退化成章首、目录当前项量不到）；② SVG **资源**按 **XML 类别的字节预算**读（`xmlBytes`，与 container/OPF/正文同档），不是图片那一档（`entryBytes` 32 MiB）——它要进解析器，按图片档读等于这道闸不存在。
+- **SVG 里带命名空间前缀的 `href` 是引用、不是元数据**（`resources.ts`）：`xlink:href` 在渐变上是**继承**（引用另一处渐变的 stop），静默丢掉会让图形失去填充却报成功且无告警——照本层口径点名报错（与 `url(...)`、白名单外元素同一条）；`xmlns:*` 声明仍按元数据丢弃。
+- **EPUB2 命名锚点（`<a name="x">`）也认**：元素声明的锚点名 = `id` + **仅 `a` 元素的 `name` 属性**（EPUB2/HTML 时代的命名锚点，锚点最终都重映射成 opaque ID，安全面没有差别）。别的元素上的 `name` 另有含义（表单控件名、`meta name=…`），把它当锚点是凭空发明。同一文档内重复锚点明确拒绝（目标会有歧义）。
+
+其余导入期口径（章按 spine 主序列、补充文档**可达才解析**、图片先验证再转换、远程/损坏/超预算/被加密的引用图片报错点名资源、封面声明了却读不出即失败、未使用的 manifest 条目不要求受支持、所有条目先过路径/重名/加密/压缩方式闸再解压、CRC 与字节预算按实际累加）见 `services/epub/import.ts` 与 `services/epub/archive.ts` 的头注。
+
+**⑧ 本地书的文字输出**：EPUB 的插图在文字面是 `[图片：替代文字]`（无替代文字则 `[图片]`）占位，不泄露资源 ID 与磁盘地址；导出面板与 AI 工具都只给文字（口径见 §13 与 `docs/design/client.md`）。
 
 ### 13. 章节范围导出（`services/export.ts` + `api/dispatch.ts`）
 
@@ -204,9 +252,18 @@
 
 **范围判据单点在 `dispatch`**（它要在首包前拿这些数写 `X-Novel-Total-Chapters` / `X-Novel-Range`，本来就必须自己算一遍）：`from/to` 非整数 → 400 `BadRequest`（先于目录抓取，快速失败）；toc 为空 → 首包前走错误信封（422 `EmptyToc`）；越界各自裁剪到 `[1, 目录长]`、裁剪后倒置 → 422 `BadRange`；否则发 200 + `X-Novel-Total-Chapters`（**本次范围章数，非全书章数**——面板进度标题按它显示）+ `X-Novel-Range: from-to` 后逐块写。被否决的旧形状：`exportBook` 里再抄一份 `clip` 与同一句「导出范围非法」——对唯一调用方恒等（`clip(clip(x)) === clip(x)`），是判据的第二份抄本；它换来的却是两条**静默**出口（空目录只发一个 BOM、倒置靠 clip 折回来），而「只有 BOM 的文件」在用户手里与「导完的空书」没区别。**空目录 / 越界 / 倒置三件事合并成一个前置校验**（说的是同一件事：范围不是目录的一段），既不留静默也不留第二份策略。`res.on('close')` → abort（浏览器关页 / 取消即停抓取）。背压等待 `drain` **前先查死连接**——destroyed 的响应不会再发 `drain`，挂等会吞掉断连取消。200 头已发后异常**不能走 `writeError`**（二次 writeHead 报 `ERR_HTTP_HEADERS_SENT`），就地补中断标记。
 
+**导出的正文一律走 `getChapter`（文字面）**，所以图文书在这里是 `[图片：替代文字]` 占位（唯一投影 `chapterContentToText`，见 §12「本地书的文字输出」）：导出面板与 README 都明写「TXT 文字导出，不包含图片」，本轮不新增 EPUB / 图片导出（用户已确认的范围）。
+
 ### 14. wire 契约（`shared/wire.ts`）
 
-**26 条路由**（21 条静态 `ROUTES` + 5 条参数 `paramRoutes`），**计数由 `tests/shared/wire-builders.test.ts` 钉死**——此前的「17 条路由」注释既腐烂又无测试。`route(...segs)` 同时给出 `path`（客户端 fetch 用）与 `segs`（服务端段匹配与一致性测试用），同一构造保证一致。`SEG` 是路由段的唯一字面量来源，`PARAMS` 是 query 参数名的唯一字面量来源（此前参数名散在 dispatch 与四个 client 文件里各写一份，改名无处编译报错；`SearchView` 曾手拼 `shelf/${...}` 绕过 `paramRoutes`——活漂移）。批路由的 body 字段名随身份走：源批路由收 `{ ids }`（书源 id），书架批路由收 `{ keys }`（bookKey）——**bookKey 是 URL，走 JSON body 不必编码**（走路径就得 `paramRoutes.shelfKey`）。`shelf/:key` 与 `shelf/batch-delete` 的第二段不会撞：bookKey 形态只有 URL 与 `local:<uuid>`，都不等于 `batch-delete`。
+**30 条路由**（25 条静态 `ROUTES` + 5 条参数 `paramRoutes`），**计数由 `tests/shared/wire-builders.test.ts` 钉死**——此前的「17 条路由」注释既腐烂又无测试，此前的「26 条」也是同一族腐烂（EPUB 面落地后补正）。`route(...segs)` 同时给出 `path`（客户端 fetch 用）与 `segs`（服务端段匹配与一致性测试用），同一构造保证一致。`SEG` 是路由段的唯一字面量来源，`PARAMS` 是 query 参数名的唯一字面量来源（此前参数名散在 dispatch 与四个 client 文件里各写一份，改名无处编译报错；`SearchView` 曾手拼 `shelf/${...}` 绕过 `paramRoutes`——活漂移）。批路由的 body 字段名随身份走：源批路由收 `{ ids }`（书源 id），书架批路由收 `{ keys }`（bookKey）——**bookKey 是 URL，走 JSON body 不必编码**（走路径就得 `paramRoutes.shelfKey`）。`shelf/:key` 与 `shelf/batch-delete` 的第二段不会撞：bookKey 形态只有 URL 与 `local:<uuid>`，都不等于 `batch-delete`。
+
+**本地图文面（EPUB）的契约升级是一批同源的改名与新增，不做旧/新响应自动猜测**：
+
+- `ChapterContent` 是正文的**唯一形状**（`{kind:'text'; text}` 或 `{kind:'rich'; documentId; nodes}`）：**`GET chapter` 已改回 `ChapterContent`**（原先只回纯文本），浏览器调用方与测试同批更新，不做「字符串 / 对象」双形态兼容——双形态兼容等于让客户端按形状猜语义。AI 工具与导出的文字面不受影响：它们走 `ReadingService.getChapter`，投影在服务端。
+- 新增 `GET navigation`（`BookNavigation` = 线性 `chapters` + 展示树 `items`；入参与 `GET toc` 相同）——`GET toc` 的旧响应一字不改（工具面与导出仍按线性序列）。
+- 新增本地三条读口，**路径段都不用 bookKey**（`id=bookKey` 走 query：`local:<uuid>` 里的 `:` 与 URL 里的 `/` 不必编码成段）：`GET local/document?id=&documentId=`（补充文档正文）、`GET local/resource?id=&resourceId=`（资源流，只认不透明 ID）、`GET local/warnings?id=`（导入说明，**按需查看**，不随每次取章重复携带）。`PARAMS.documentId` / `resourceId` 与 `id` 同归 wire 单点。
+- 部署口径：Node 半与浏览器半是同一插件的**配套契约升级**，需 Node 重启后浏览器刷新，不能只热更新 client（`GET chapter` 的返回形状变了）。
 
 **统一信封**：成功 `{ ok: true, value }`，失败 `{ ok: false, error: { code, message, segment? } }`。`segment = { facet, segmentIndex, segmentRaw }` 是**段级定位**——错误定位到出错的规则段，而不是产出错误的结果。
 
@@ -240,13 +297,15 @@ services/reading.ts（ReadingService）── 唯一业务入口，部件装配�
    ├─ SourceIntake ── normalizeSource（三方言 → NormalizedRules）
    ├─ SourceJobs（单任务槽）── probeSource ── fetchSearchPage
    ├─ Shelf（SHELF_META 派生的保值补丁）+ PageCache（LRU）
-   ├─ LocalBooks（偏移表 + 解码 LRU）
+   ├─ LocalBooks（TXT 偏移表 + 解码 LRU；EPUB 发布/读取/资源流）
+   │    └─ epub/（archive / package / documents / resources / import：只解析与规范化，不认识书架与 HTTP）
    └─ Fetcher（唯一出站口：超时 / 代理 / UA / 解码链）
         ▲
         └─ engineContextOf / makeSubEval ── engine evaluate（段级错误追踪、@js 沙箱）
 ```
 
 - **搜索**：`searchProgressive(keyword, {sourceIds, onGroup, shouldStop})` 过滤 `enabled ∧ type==='text'` 源（参与集唯一判定 `ReadingService.participates` 谓词——**启用 ∧ 文本源**，本插件当前仅支持小说文本面；`[]` = 未限定 = 搜全部启用文本源）→ 按 `searchParallel` 分批 `Promise.all` → 每源独立 `searchOne`（catch 后只写该组 `error`，单源失败不拖垮整批）；`search()` 是收齐全部的薄壳。`searchPlan()` 是参与集判定的唯一主人（`startSearchJob` 也经它算 `total`，别处不再抄一份启停/形态谓词）。后台任务面另有两个动词：`startSearchJob(keyword, {sourceIds})` 提交一轮（交 `SearchJobs` 持有整轮结果）、`searchJobSnapshot(since)` 按游标读增量。
+- **本地书**（`__local__`）：`getToc` / `getNavigation` / `getChapterContent` / `getChapter` / `getSupplement` / `getResource` / `getImportWarnings` 见 `sourceId === LOCAL_SOURCE_ID` 走本地书面、**不查注册表**；路由层零 LOCAL 知识（口径与落盘形态见 §12）。
 - **阅读**：`getToc` 缓存优先（`refresh` 跳过；缓存键含规则代际，见 §9「缓存有效性」）+ **in-flight 去重**（同书并发只拉一次，`tocInflight`——键刻意**不含代际**：加宽它得把 `requireSource` 上移进公开 `getToc`，同步抛错会变成非 rejected promise、破坏 dispatch 的错误映射；缓存两侧都不可能脏，残余只是「与替换赛跑的那一次请求拿回旧目录」）；`getChapter` 先读目录（槽位需要章名）→ 越界守卫（双边：负数与超长都拦，HTTP 面有 `^\d+$`、工具面无下限，守门必须盖住两面入口；**先于缓存读取**）→ 缓存优先 + 多页串接 + Miss 抛 `RuleEvalError` 不吞。
 - **目录 / 正文的翻页**：`followOrSingle` 在 next 规则为 `null` 时短路单页（无翻页发现能力），否则走 `followPages`（CONTEXT.md「判到底」）。next 规则按**列表语义**求值（legado getStringList(isUrl=true)）：单候选链式跟进、多候选全部抓取不递归；停止判据 = URL 防环 → 零新增（本页 0 条）→ 回环（本页有条目但 0 新增；**部分重复不停**——此前「出现重复即停」把站点页间重叠的真实页截断）→ 上限（`tocMaxPages` 200 / `contentMaxPages` 50）。正文面串章闸：**目录知识优先**（候选「下一页」canon 后 == 目录里其他章节 URL → `chapter-boundary`；legado「下一页 == 下一章 URL 即 break」正判据）——路径启发式 `isSameChapterPage` 只在无目录知识时兜底，因为 `?id=..&cid=..&page=2` 这类非页码键分页会被启发式误拦（「一章只解析出一页」的根因之一）。
 - **章节 URL 保留 `,{option}` 后缀**（legado BookChapter.getAbsoluteURL 口径）：目录落库不再 strip 选项（`absUrlKeepOption`：URL 部分绝对化、选项原文接回）；抓取时 `reading.fetchPage` 经 `assembleRequest` 单点解释选项（POST method/body、charset 进解码链、headers 合并）——API 型章节端点（POST body 模板）不再退化成裸 GET。`canonUrl` 是串章闸/防环的比对口径（剥选项 + URL 归一化）。
@@ -299,8 +358,8 @@ services/reading.ts（ReadingService）── 唯一业务入口，部件装配�
 | `tests/api/routes.test.ts` | `ROUTES` → 真实 dispatch 落点逐条；405 / 404 / 400 三态；local part 缺席 → 503；`SEG` 无孤儿段 |
 | `tests/api/wire.test.ts` | 同源 fence 四态；`readJsonBody` 的 400 / 413；`errorStatusOf` 全类目映射与 segment |
 | `tests/api/dispatch-sources.test.ts` | 导入任务 → jobId → job-status → done；结果保留；409 JobRunning；旧同步路由 405；body 校验；大包不 413 |
-| `tests/api/dispatch-reading.test.ts` | search / book / toc / chapter 落点与 400；**search/job 面：提交/快照/SSE/取消四条路由的方法守卫、keyword 与 sourceIds 校验、终态快照形状、`since` 游标语义（超前夹到末尾、非法当作 0）、只留最近一轮；SSE 帧体=同一份快照、只含本轮、终帧后服务端关流；`POST search/job-cancel` → `{cancelled}`，取消后本轮分组仍整轮可读、二次点击是空操作**；shelf 三形态 PUT 与 `patch` 单字段回写；`sourceId` 必填；progress 值域；**`POST shelf/batch-delete`：一趟删多本 + 未知键静默跳过、body 非法（空/缺 keys/非字符串）400 与 GET 405、`GET /shelf` 的 `sourceName` 投影（join 到源名 / join 不到 null）** |
-| `tests/api/dispatch-local.test.ts` | 本地导入自动加书架（`sourceId=__local__`）、GBK 回显、400 / 413、删书连带删文件 |
+| `tests/api/dispatch-reading.test.ts` | search / book / toc / **navigation** / chapter 落点与 400（`GET chapter` 回的是 `ChapterContent`，契约升级后不做双形态兼容）；**search/job 面：提交/快照/SSE/取消四条路由的方法守卫、keyword 与 sourceIds 校验、终态快照形状、`since` 游标语义（超前夹到末尾、非法当作 0）、只留最近一轮；SSE 帧体=同一份快照、只含本轮、终帧后服务端关流；`POST search/job-cancel` → `{cancelled}`，取消后本轮分组仍整轮可读、二次点击是空操作**；shelf 三形态 PUT 与 `patch` 单字段回写；`sourceId` 必填；progress 值域；**`POST shelf/batch-delete`：一趟删多本 + 未知键静默跳过、body 非法（空/缺 keys/非字符串）400 与 GET 405、`GET /shelf` 的 `sourceName` 投影（join 到源名 / join 不到 null）** |
+| `tests/api/dispatch-local.test.ts` | 本地 TXT 的 HTTP 面：导入自动加书架（`sourceId=__local__`）、toc/chapter 分流（`__local__` 不查注册表）、GBK 回显、本地读口（warnings 空数组 + document/resource 404）、缺参 400 / 方法 405、空文件 400 与超限 413、`DELETE local`（删文件 + 书架条目消失）、shelf DELETE 连带删副本 |
 | `tests/api/dispatch-export.test.ts` | 流式头（BOM / Content-Disposition / X-Novel-Total-Chapters）与两章正文；toc 失败走错误信封（非流） |
 | `tests/services/intake.test.ts` | 入库四裁决（added / replaced / skipped×2）与替换复用 id、清同键残留、`dedupKey` 口径 |
 | `tests/services/sources.test.ts` | `edit` 原子性与合并落盘（不 flush 磁盘未写、20 次阈值强制落盘、并发 edit 不交错、recipe 抛错仍标脏）；`toPublic` 凭据红线；load 九条存量归一 |
@@ -314,9 +373,17 @@ services/reading.ts（ReadingService）── 唯一业务入口，部件装配�
 | `tests/services/fetcher.test.ts` | 非 2xx / 网络 / 超时 → `FetchError`；代理 dispatcher 有无；缺省 UA 与调用方覆盖；解码链四优先级 + 空串声明；`headerOf` 的 Cookie 合并 |
 | `tests/services/cache.test.ts` | toc / content 往返与按章 + 槽位隔离（换代际 / 换槽位即换文件）、prune 按 mtime 淘汰、`safeKey` 长短形态 |
 | `tests/services/cache-epoch.test.ts` | 指纹按面细分（改搜索面字段不动阅读代际、改目录 URL 规则不动正文代际——正文对目录的依赖走槽位章名、改正文规则不动目录代际）、header 键序无关、baseUrl 入指纹、逐字段翻转（每个字段只影响它声称影响的面）、null 与空串不共用指纹、槽位随章名 / 代际变 |
-| `tests/services/storage.test.ts` | `novelDir` 两态、原子写无 `.tmp` 残留、并发写串行、损坏文件抛 `CorruptJsonError` + `.bak`、防抖合并 |
+| `tests/services/storage.test.ts` | `novelDir` 两态、原子写无 `.tmp` 残留、并发写串行、损坏文件抛 `CorruptJsonError` + `.bak`、防抖合并、**命名约定的唯一住址**（`tempPathOf` 产出的裸名恰是 `isAtomicTemp` 认的那一个；备份名与 `readJson` 实际留下的一致——删书的清点按这两个判据扫残留，不再各抄字面量） |
 | `tests/services/shelf.test.ts` | add 往返与 patch 语义（缺席键保值、显式 undefined 不抹值）、progress 防抖、不在架 `null`、`removeMany`（返回被删条目、未知键跳过、重复键幂等、落盘一次） |
-| `tests/services/localbooks.test.ts` | 解码链四态、切章正则诸形态、`local:` 形态防穿越、LRU 3 本、越界明确报错、零内容章不产生负长度 |
+| `tests/services/localbooks.test.ts` | 解码链四态、切章正则诸形态、`local:` 形态防穿越、LRU 3 本、越界明确报错、零内容章不产生负长度（HTTP 码与错误体不归本文件，见 `tests/api/dispatch-local.test.ts` 与 `tests/services/error-taxonomy.test.ts`）；**按内容分流**（ZIP 魔数走 EPUB、**归档失败不被吞成 TXT 乱码书**、GBK 回退维持原样不新增「二进制即拒收」启发式）；**发布/提交**（归档失败回收本次 UUID、提交标记写失败回收刚发布的目录（用例标题「提交标记（顶层元数据）写失败」）、旧 TXT 无 schemaVersion 照读、EPUB 可重启读）；**整棵删除**（EPUB 目录 + 元数据 + 损坏备份一次清光，只删顶层 JSON 留残骸即红） |
+| `tests/services/epub-archive.test.ts` | ZIP 安全边界：zip-slip / 绝对路径 / 盘符 / 反斜杠 / 重名 / 符号链接 / 加密位 / 非 store-deflate / CRC 损坏 / 声称大小不符 / 条目与字节预算（**含真实 10_000 边界两向实证**：正好 10_000 条打得开、10_001 条被拒并点名越界那条）、截断包——每项精确断言错误且**无成功输出** |
+| `tests/services/epub-package.test.ts` | 包结构：按 spine 阅读（不按 ZIP 顺序或目录叶数）、linear=no 不进主序列、同文档多锚点各自成条、landmarks/page-list 不混入、EPUB2 NCX / EPUB3 nav 优先级与降级、命名空间前缀、路径与百分号解码、BOM/声明编码（非法字节不猜） |
+| `tests/services/epub-documents.test.ts` | 文档层（XHTML → 白名单图文树，不碰文件系统也不认识包）：b/i 规范成 strong/em、数字属性只认合法整数、raw attributes 一律不上树、实体只解一次、原书 id 只进锚点映射（节点 ID 一律 opaque）、纯插图文档是有效正文、没有 body 的文档报错；**剥离必须留告警**（脚本等活动内容 / 事件与 style 属性 / 内联 SVG 剥整棵子树，同类多处合并计数）、**内联 SVG 是文档唯一内容 → 交回 `svgOnly` 候选**（本层不裁决：那张图落不落得下要问资源；两棵 SVG 不算候选、仍报错）、**空壳容器不算内容**（`<div><section><script/></section></div>` / `<p><br/></p>` 一律拒；深处真有字或图才成立。`<p><svg/></p>` 走候选——`<p>` 包一层不改变"整页就是一棵图"这件事）、被剥离子树里的锚点名进 `strippedAnchors`（锚点降级的事实来源）、**EPUB2 命名锚点 `<a name>`**、同文档重复锚点即拒、**只读解析的三条边界**（注释里的 `&nbsp;` 不是引用、多根元素即拒「不按半途结果读」、十几万节点的宽文档逐项追加不撞参数上限） |
+| `tests/services/epub-import.test.ts` | 图文规范化与资源：主序列计章 + 补充文档不计章、目录目标绑锚点且锚点真在产物里、粗斜体/列表/表格跨行跨列/pre/sup/sub、共享图片只落一份、封面优先 cover-image、**安全面拒绝要精确点名**（远程图 / 损坏图 / 坏封面 / 重复锚点 / 失效锚点 / 失效链接 / 内联 SVG 是唯一内容且里面不是一张书内图 / 整页 SVG 那张图在书外（点名「书外」而不是泛话）/ foreignObject / use 外链 / 加密资源 / 超深超宽 / 像素超预算）、**安全去除项必须有告警**（脚本等剥除、内联 SVG 剥离 + 告警、**锚点随剥离内容消失 → 降级 + 告警**、锚点从未存在仍拒整本）、**整页图形页按那张图书导入**（真书 fixture `epub3-svg-cover-page`＝Gutenberg #7337 的封面页形状：章按 spine 照计、图与声明的封面共用一份资源、留 `epub-svg-image-page` 且**不再**报「移除了内联 SVG」；反例钉子：有正文的页里夹一棵单图 SVG 仍只剥离+告警，`resources` 一个都不许多落；**容器带的锚点随图落到树上**——目录指向 `#cover` 时不是悬空锚点）、**SVG 资源按 XML 类别的字节预算读**（默认预算下同一份样本导入成功、`xmlBytes` 收到 1 KB 即拒——只断言「拒了」证明不了拒的是这一类上限）、EPUB2 命名锚点 |
+| `tests/services/epub-resources.test.ts` | 图片验证与受限 SVG 重建：魔数/MIME/尺寸/像素预算、EXIF 旋转、白名单外可见元素报错、**命名空间 `href` 引用（渐变继承 `xlink:href="#base"`）报错不静默丢**（`xmlns:*` 声明照旧按元数据丢弃） |
+| `tests/services/epub-warnings.test.ts` | 告警合并器的两条边界：处数如实累加（同码同资源同动作合并、重复细节不重复占例子位、键不同各成一条）、**例子最多三个且不限制处数**（无界收集实测会把三万条外链的正文同步阻塞十几秒） |
+| `tests/services/chapter-content.test.ts` | `chapterContentToText` 唯一投影：text 分支逐字通过、块级换行、表格单元格制表符、链接只留文字、**图片输出 `[图片：替代文字]` / `[图片]` 且不泄露资源 ID**、**行内上下文（链接/行内元素）里的块级内容仍按块投影**（pre 逐字、表格行制表符、`rule` 收行） |
+| `tests/api/dispatch-epub.test.ts` | 真实 HTTP 上的图文链路：导入回执 = `LocalImportResponse`（书名/作者/封面 + 章数/格式/编码/告警，并自动上架，用例标题「导入回执是 LocalImportResponse」）→ `GET navigation` / `GET chapter`（`ChapterContent`）/ `GET local/document` / `GET local/resource`（MIME 与安全头、404）/ `GET local/warnings`；图文读取与文字读取共用同一份内容；失败面（坏 EPUB 400 不留痕、ZIP 加密条目 400 不入架、`.txt` 名字的合法 EPUB 走图文）；删除（`DELETE local` / shelf 单删 / 批删）连带删整棵目录与元数据 |
 | `tests/services/pagination.test.ts` | URL 防环 / 零新增 / 回环（整页零新增）/ 上限 / 串章（stopUrls 目录知识**取代**启发式——两闸同供时启发式不参与，非页码键分页照常跟进）/ next 列表语义（多候选不递归）/ 页间部分重叠不停 逐一 |
 | `tests/services/chapter-page.test.ts` | 同章后缀形态、下一章拦下、标准页码查询放行、判不准拦下 |
 | `tests/services/url-option.test.ts` | `,{option}` 后缀切分（严格/单引号 JSON、正文 `{a,b}` 不误剥）、`absUrlKeepOption` 绝对化接回、`canonUrl` 比对口径 |
@@ -340,7 +407,7 @@ services/reading.ts（ReadingService）── 唯一业务入口，部件装配�
 4. **旧 spec 称探针返回「分段 trace」，实际 `ProbeResult` 无结构化 trace 字段**（只有 `error.message` 里的段级文本 + HTTP 面的 `segment`）。修法需先定探针输出形状。
 5. **`compat/sources/` 为空、分母只有 1 条合成 fixture**：真实站点兼容率**无数字支撑**，需要真实可联网站点与人工采集（`COMPAT_CAPTURE=1` + 脱敏人工过目）。验收口径已讲清是「率可复算」，但「率」目前不代表站点。
 6. **同址已 verified 的源被新导入跳过时，新条目的规则改进被丢弃**：这是「以可用者为准」的既定口径（用户拍板），不是 bug；但 UI / 工具只报 `dupSkipped`，用户若想采纳新规则需先删旧源。
-7. **工具输出 schema 与 wire 的绑定只成立六分之一**：`tests/tools/schema-contract.test.ts` 的用例「② schema 属性集 ≡ wire 类型字段集」仅对 shelf 从 `SHELF_META` 派生比对，其余五份 schema 是手抄快照——wire 字段改名不会让它们报红，只能人工同步（该测试文件头注已如实声明这条局限）。**同条附记（2026-09 六工具化后仍开）**：`getDetail`（书籍详情）与 `localImport`/`removeLocalBook`（本地 TXT 导入/删除）没有对应工具——本地书管理走 UI，agent 的书源/书架闭环已齐；批探针（`startBatchProbeJob`）同样只在 UI 面，工具面 `dshnovel_source` 只有单源 `probe`。要不要补投影属产品拍板，非遗漏即修。
+7. **工具输出 schema 与 wire 的绑定只成立六分之一**：`tests/tools/schema-contract.test.ts` 的用例「② schema 属性集 ≡ wire 类型字段集」仅对 shelf 从 `SHELF_META` 派生比对，其余五份 schema 是手抄快照——wire 字段改名不会让它们报红，只能人工同步（该测试文件头注已如实声明这条局限）。**同条附记（2026-09 六工具化后仍开）**：`getDetail`（书籍详情）与 `localImport`/`removeLocalBook`（本地书 TXT / EPUB 的导入与删除）没有对应工具——本地书管理走 UI，agent 的书源/书架闭环已齐；批探针（`startBatchProbeJob`）同样只在 UI 面，工具面 `dshnovel_source` 只有单源 `probe`。要不要补投影属产品拍板，非遗漏即修。
 8. **已确认的刻意保留（不改代码）**：`services/request.ts` 的 `SearchRequest` 类型别名全仓零引用；`localbooks.ts` 的 `ChapterSpan` / `BOOK_KEY_RE` / `LocalImportResult` 只在模块内用；`reading.ts` 的 `tocUrlOf` / `normalizeChapterText` 注释自称「供测试/复用」但无测试 import；`normalize.ts` 的两张方言映射表的 `ruleBookInfo` 整块逐字相同（方言是两条独立演化线，强抽有 speculative generality 风险）。`request.ts` 的 `buildSearchRequest` 虽只是 `assembleRequest` 的薄壳，但 `search-face.ts` 的 `fetchSearchPage` 在用它，属历史名字兼容、保留。
 9. **缺省值多份复制**：`50 * 1024 * 1024`（本地导入上限）在 `index.ts` DEFAULTS、`reading.ts` 的 `create` 与 `from`、`localbooks.ts` 的 `create` 各写一份；`15000` 在 `reading.ts` 与 `fetcher.ts` 各一份，**`jsTimeoutMs` 的 `15000` 在 `index.ts` DEFAULTS 与 `reading.ts` `from()` 各一份**（同 `searchTimeoutMs` 形态——生产路径 `index.ts` 显式传值，测试直构 `from()` 用缺省）；`exportDelayMs` 的 `300` 在 `index.ts` 与 `dispatch.ts` 各一份；`readJsonBody` 的 1MiB 与本地导入的手写流式上限循环是两份字节上限逻辑。生产路径始终显式传值，改错一处不会静默改变业务规则——但这类复制正是「靠注释对齐」的温床。
 10. **`tests/api/routes.test.ts` 以中文文案前缀「未知路由」为判据**（钉措辞而非结构码）：文案一改即整套误红。暂无可替代的机器可读判据——「未知路由 404」与「域 404」的错误码都是 `NotFound`。
@@ -359,3 +426,19 @@ services/reading.ts（ReadingService）── 唯一业务入口，部件装配�
 15. **缓存有效性的三条接受残余（不改代码，如实记）**：① 热正文缓存不再能单独服务一章——`getChapter` 先读目录拿章名算槽位，目录缓存缺失（首次 / 被 prune 淘汰）时一次章读会退化成一次目录抓取（或抛 `FetchError`），正文缓存命中不再等于可离线读。② `getChapter` 注入的 `book.name` / `book.author` 取自**书架**而非规则，故正文脚本用到 `book.name` 时，改书架书名后旧正文照样命中缓存、吐旧书名（把书架元数据入槽位会让每次改名全缓存 miss，更糟——记录不修）。③ 代际只覆盖规则、不覆盖代码版本，升级后仍可能读到旧提取代码写下的条目（`reading.getChapter` 出边界用 `contentToText` 再收一次口，靠它幂等才无害）。
 
 16. **规则变量表（`ctx.vars`）的作用域只到「一次门面调用」**：`reading.getDetail` 给这次调用一张表（`makeSubEval(…, { vars: {} })`），于是纯 `@put` 的 `ruleDetailInit` 写的变量能被随后的 `@get:{k}` 字段与目录读到；`getToc` / `getChapter` 各自新建，**跨面不传递**。legado 是四级作用域链 `chapter → book → ruleData → source`（写取各按第一个非空宿主，另有 10000 字符大变量分流）。真源若在目录里 `@put`、正文里 `@get`（本机库暂无此形态），再按那一源定形状——不预先造作用域层（预造的是没有需求方的机制，自带清理与可见性两套失败模式）。
+
+17. **本地发布与书架落盘之间的跨文件窗口（如实披露，本轮不修）**：EPUB 的发布完成判据是「顶层元数据写完」（提交标记），而入架是随后由门面 `localImport` 调 `Shelf.add` 写 `shelf.json`（防抖写）。这两步之间**没有跨文件事务**：进程在「元数据已写、书架未落盘」之间被杀，就会在 `local/<uuid>/` 留下一份**完整但未入架**的副本——用户看不到它（书架没这条），磁盘上却占着空间（一部书 = 原 EPUB + 派生文档 + 资源）。**被否决的修法**：加一个启动扫描器「扫 `local/` 里没有对应书架条目的 uuid 就删」——它把「未入架」与「用户手动清过书架但想留文件」「多窗口/多进程同时写同一数据根」这些情形一起误杀，代价比收益大；本轮不建通用存储事务 / 后台恢复系统。运维口径：副本不会自己消失，也不会被自动复用（`<uuid>` 每次导入新铸），要清就人工清 `local/`（数据根以 `dataDir` 为准）。
+
+18. **`coverUrl` 的形态（已裁：维持快照；重开条件写在末段）**：本地 EPUB 的封面 URL 现在是**导入那刻的快照**——`bookMetaOf` 用 `wire.resourceUrl` 拼出带 `/novel-api` 前缀与 `bookKey` 的完整 URL，写进 `SHELF_META.coverUrl` 落 `shelf.json`。
+    - **① 维持快照（选定）**：零改动，客户端拿到的就是可直接 `<img>` 的地址；代价是「路由前缀」这一层**传输面**知识进了持久化数据——前缀归 `NOVEL_API_PREFIX`（wire），换挂载前缀就会与旧 `shelf.json` 里的封面 URL 脱节，而它看起来仍是个合法 URL，坏得无声（不会报错，只会不显示）。
+    - **② 读取面投影（否决）**：`shelf.json` 只存不透明身份（`bookKey` + 资源 ID），URL 在 `shelfList()` 读取时按当前前缀拼出来——前缀知识只活在传输面；代价是要给「本地书封面」在读取面上开一个投影口径（要么让它挤进 `coverUrl`，把写口「写的是 URL」那条假设打破；要么新增一个读面字段——`ShelfEntry.sourceName` 是同类先例，但它也不进 `SHELF_META`）。
+    **为什么这么裁（2026-09-24 现查）**：② 要防的那件事今天**不存在**——`NOVEL_API_PREFIX` 是 `shared/wire.ts` 的硬字面量，`src/index.ts` 直接拿它 `register({ kind: 'prefix' })`，全仓没有任何配置口能让前缀变；而 ② 的代价是现在就付的（给一个不存在的旋钮改数据形状，并在读取面开第二类投影口径）。**重开条件**：一旦前缀成为可配置项（宿主换挂载点、多实例、或 `dataDir` 之外新增挂载配置），① 的失效就是静默的（封面不显示、无报错），那时必须走 ②——这条判断由「前缀会不会变」独扛，所以把它写成条件而不是结论。
+
+19. **「先 await、再挂断连收尾」会漏掉断开窗口（已修，口径留档）**：本地资源口原先只写 `res.on('close', () => stream.destroy())`，而这条流的源头是 `getResource` 里 `handle.createReadStream()` 返回的 `FileHandle` 流。`close` 监听器是在 `await service.getLocalResource(...)`（查资源表 + 打开文件）**之后**才挂上的——客户端若在那次 await 期间就断开，`close` 早已发过、挂监听也等不到第二次，于是那条流没人销毁，fd 一直挂到 GC；Node ≥22 把「GC 期关闭仍打开的 FileHandle」从弃用警告升格成**未捕获错误**（`ERR_INVALID_STATE`），表现为整轮测试在收尾处变红而不是某条用例失败（`tests/api/dispatch-epub.test.ts` 的「断连的请求只销毁自己那条流」正是最容易命中这个窗口的现场：`ctrl.abort()` 紧随 `fetch`）。修法：监听挂上后立刻补查一次已断连（`if (res.destroyed) stream.destroy()`），让「断开即销毁」与监听器抢没抢到 `close` 无关。**为什么留档**：这类「await 之后才挂收尾监听」的形态是通用陷阱，同族的流式路由（导出）写新代码时按同一条口径自查——收尾必须对「监听器挂上之前就已断开」这一时序成立，而不是靠监听器一定抢在前面。**未选**的掩盖法：吞掉错误、加 try/catch 兜住未捕获异常、放宽断言——三条都只是把 fd 泄漏藏起来。
+
+20. **EPUB 解析/存储层的未修项（整分支评审逐条记录；每条都小，合起来是一次清理）**：
+    - **验收门的残余**：原先那两条**诚实红**（开目录抽屉 / 开注释面板把主滚动拉回内容顶部并落盘）已修 —— 落位改走 `client/util.ts` 的 `centerInScroller`（只滚浮层自己的身体）、注释面板与抽屉共用同一条 sticky 槽几何；两条用例转绿，墓碑与 client.md 的记录一并撤下（墓碑这套机制留着：下次再登记诚实红仍照那条流程走）。门自身的残余：失败侧的位置读数量在插图**之前**的节点（量不到图框塌陷导致的位移，框不塌由比值断言另行钉住）；插图例依赖一个 2.5s 的有界窗口（极慢机器会**响亮**假红，不会假绿）；第 19 条的 fd 修复没有常驻机器钉子（只有一次性探针 + 本条留档）。另：`DSH_INSTALL_CHECK` 与真宿主冒烟**尚未跑**（会写用户 profile / 需重启用户宿主，待授权）；浏览器门覆盖的是测试壳，不证明真宿主。
+    - **`package.ts` 的三处窄口径**：NCX 的 `navPoint` 缺 `<content>` 一律硬拒（EPUB3 的 span 分组是允许的，两者不对称）；`itemref` 上的固定版式声明一律拒、不分 `linear`（真机若撞到「仅封面 pre-paginated 的流式书」需要改判）；降级范围按**子树**而非按元素种类——被移除的 `form`/`canvas` 等子树里的锚点同样走降级（与裁定措辞一致，仅作宽度记录）。**2026-09-24 裁：挂判据不动**——放宽拒绝面需要反例，而当时本机数据根 `local/` 里只有 1 本书且是 TXT（EPUB 侧这三处没有任何真书读数），没有证据就松手等于拿没量过的形态换假安全。**2026-09-26 更新（真书读数的口径变了，裁定没变）**：第一本真书（Gutenberg #7337 图像版 `pg7337-images-3.epub`）在离线探针里真读过——它撞出的反例是「内联 SVG 整页封面」那一类，已按证据改判（裁决与理由见 §12 ⑦）；而这三处（NCX 缺 `<content>`、`itemref` 固定版式、降级按子树宽度）**没有被这本真书触到**，仍无反例，继续挂判据。教训随读数一起记：**「没有读数」不等于「形态不存在」**，一条判据该不该放宽要看真书，而第一本真书就可能推翻它。
+    - **一批小口径项**：「同一归档可被两个 wrapper 引用」会重复校验（只浪费）；GIF 只校验 trailer（真解码与「长度自洽的截断」由浏览器门覆盖，见第 9 条的既定分工）；crc32 的 `as unknown as` interop 归一化保留（实测 `import crc32 from 'buffer-crc32'` 报 TS1192、具名 import 运行时不导出，结论写在代码注释里）。
+    - **本批已收（留档，别当开口再找）**：`readDocument` 的 404 / 500 分家写进「读口」一节；`xml.ts` 两处走法的计数口径在注释里点明（共用阈值与报错、各数各的节点）；`chapter-content.ts` 的 `SOURCE_WS` 头注改为点名 `nodeText`（并说明同文件 `cleanText` 是**另一条** NBSP 口径）；`EPUB_MIMETYPE_VALUE` 收成模块私有（它从来只被本模块用）；`importRejection` 把 fixture 构造移出 `catch`（拼错样本名不再被报成「类型不符的拒绝」）；**告警层独立成 `services/epub/warnings.ts`**（`EpubWarningLog` 不再住在转换模块被资源模块按类型回头看，顺带消灭 `resources.ts` 里那三个抄自 `documents.ts` 的码字面量）；**原子写与备份的命名约定收进 `storage.ts`**（`tempPathOf`/`backupPathOf`/`isAtomicTemp`，`localbooks.discard` 改用判据而不是自己写死 `.tmp`/`.bak`）；**真实 10_000 条目边界补了两向实证**（原先只有缩小预算的用例）；**告警例子有界**（无界收集实测把三万条外链的正文同步阻塞 13.3 秒，处数仍如实累加）；**行内上下文里的块级内容按块投影**（见上条）；**只读解析的多根与注释边界**（见模块表与测试行）。
+    - **行内上下文里的块级内容（2026-09-26 已收）**：原先记的三条残余（行内元素里嵌 `pre` 丢逐字空白、嵌 `rule` 不收行、`link` 里嵌 `tr` 丢制表符）已按「块级内容在行内上下文仍走块自己的投影」修掉。**它不是非规范 XHTML 的边角**：XHTML5 的 `<a>` 是透明内容模型，块级子节点是合法书写（EPUB3 就是 XHTML5），真书里 `link` 包 `pre`/表格会走到这条路；`chapter-content.ts` 的投影改成「软文本 / 块文本」两种片段，块文本（pre 逐字、表格行制表符）不再进外层行的空白规约。三条钉子见 `tests/services/chapter-content.test.ts`。

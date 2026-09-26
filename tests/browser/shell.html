@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>dsh-novel 浏览器验收壳</title>
+<!-- 空 favicon：否则浏览器自动请求 /favicon.ico，控制台里多一条与验收无关的 404 -->
+<link rel="icon" href="data:,">
+<!--
+  最小宿主壳（**测试夹具，不是真宿主**）。它只做四件真宿主也做的事：
+  ① 给出定高的挂载点（小说视图靠祖先链上的定高 + .novel-main 的 overflow-y:auto 才滚得起来）；
+  ② 种下 `window.__ModuleLoader__.load`（lib/client.js 唯一入口，见 tsdown.config.ts 的三段式 banner）；
+  ③ 冻结模块表：把平台模块表内的 specifier 解答成本页加载的 React（宿主冻结表的最小替身）；
+  ④ 造一个只带 effect/slots 的 cordis 上下文，按 index.tsx 的注册取 `main` 槽占用者挂进挂载点。
+
+  `__novelUnmount/__novelMount` 是这套壳唯一的额外能力：模拟宿主「切走小说面板 → 再切回来」
+  （keyed 槽切走即卸载组件树）。真宿主由侧栏选中态驱动，这里只能手摇——口径一致，代价是它
+  只证明「卸载/重挂」这一半契约，不证明宿主的选中态与槽位路由（那归真实宿主冒烟）。
+-->
+<style>
+  html, body { margin: 0; height: 100%; font-family: Arial, "Microsoft YaHei", sans-serif; }
+  #host { height: 100vh; display: flex; overflow: hidden; }
+  /* 挂载点 = 宿主中央面板的替身：**必须是块级容器**（不能 display:flex）。
+     flex 容器会把小说视图根变成 flex item——宽度退化成 max-content（实测 1100px 视口下
+     阅读区只剩 327px，字号/栏宽怎么调都不变），读数会指向一个只存在于壳里的窄屏。
+     块级 + 定高 + overflow:hidden 才是宿主面板的真实几何（视图根的 width:auto 铺满）。 */
+  #mount { flex: 1 1 auto; min-width: 0; height: 100%; overflow: hidden; }
+  body {
+    --dsw-alias-bg-base: #ffffff; --dsw-alias-bg-layer-1: #ffffff; --dsw-alias-bg-layer-2: #f5f5f5;
+    --dsw-alias-text-primary: #222222; --dsw-alias-text-secondary: #555555; --dsw-alias-border-l2: #cccccc;
+  }
+</style>
+</head>
+<body>
+<div id="host"><div id="mount"></div></div>
+
+<script src="/vendor/react.js"></script>
+<script src="/vendor/react-dom.js"></script>
+<script>
+  // 平台模块表的最小替身：bundle 里留给 `require` 的 specifier 全解答到本页的 React 全局。
+  // jsx-runtime 用 createElement 手搓——但**必须把 children 展开成可变参数**（不能整包成
+  // `createElement(type, {children: [...]})`）：后者的 dev 校验路径是空的，React 渲染时会把静态
+  // 多子节点当「无 key 的数组子节点」逐条告警（实测本台第一版就被这一条刷屏，十几条 key 警告
+  // 全是壳造出来的假象）。展开成可变参数后走的是 createElement 的逐子节点校验，与真
+  // jsx/jsxs 运行时的行为一致（jsxs 也只对数组里每一项分别校验）。jsx/jsxs 的第三参是
+  // `key`，写在不显式传时即 undefined——恰是「静态子节点不需要 key」的语义。
+  function makeElement(type, props, key) {
+    var rest = Object.assign({}, props || {});
+    var kids = rest.children;
+    delete rest.children;
+    if (key !== undefined) rest.key = key;
+    var args = [type, rest];
+    if (Array.isArray(kids)) args.push.apply(args, kids);
+    else if (kids !== undefined) args.push(kids);
+    return React.createElement.apply(null, args);
+  }
+  window.__ModuleLoader__ = {
+    load: function (mod) {
+      window.__novelPlugin = mod.factory(function (name) {
+        if (name === 'react') return React;
+        if (name === 'react/jsx-runtime') return { jsx: makeElement, jsxs: makeElement, Fragment: React.Fragment };
+        throw new Error('壳的模块表里没有：' + name);
+      });
+    },
+  };
+</script>
+<script src="/client.js"></script>
+<script>
+  // 造上下文：effect 立即求值（注册同步完成），slots.register 收进数组后按名字取占用者
+  var registered = [];
+  window.__novelPlugin.apply({
+    effect: function (fn) { return fn(); },
+    slots: {
+      inject: function (_name, fn) { return fn(); },
+      register: function (options, component) { registered.push({ options: options, component: component }); return function () {}; },
+    },
+  });
+  var mainSlot = registered.filter(function (r) { return r.options.name === 'main'; });
+  if (mainSlot.length !== 1) throw new Error('main 槽占用者应恰有一个，实得 ' + mainSlot.length);
+  window.__novelSlots = registered.map(function (r) { return r.options.name + ':' + (r.options.key || r.options.id); });
+
+  var root = null;
+  window.__novelMount = function () {
+    if (root !== null) return false;
+    root = ReactDOM.createRoot(document.getElementById('mount'));
+    root.render(React.createElement(mainSlot[0].component));
+    return true;
+  };
+  window.__novelUnmount = function () {
+    if (root === null) return false;
+    root.unmount();
+    root = null;
+    return true;
+  };
+  window.__novelMount();
+</script>
+</body>
+</html>

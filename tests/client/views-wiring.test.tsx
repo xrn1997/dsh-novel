@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import { createElement, StrictMode } from 'react'
 import { ApiClientError } from '../../src/client/api.js'
 import { ProbePane } from '../../src/client/views/SettingsSection.js'
@@ -11,12 +11,15 @@ import { ShelfView } from '../../src/client/views/ShelfView.js'
 import { SearchView } from '../../src/client/views/SearchView.js'
 import { resetSourceInboxUi } from '../../src/client/source-inbox-ui.js'
 import { resetJobSurface, useJobPolling } from '../../src/client/jobs.js'
-import { navigate, routeStore } from '../../src/client/store.js'
-import { ROUTES, queries } from '../../src/shared/wire.js'
+import { navigate, routeStore, setPref } from '../../src/client/store.js'
+import { LOCAL_SOURCE_ID, ROUTES, queries } from '../../src/shared/wire.js'
 import type { SearchJobSnapshot } from '../../src/shared/wire.js'
 import { makeCoreDeps, makeDeps, makeReaderDeps } from './fake-deps.js'
 import type { CoreDepsOverrides, FakeCoreDeps, FakeReaderDeps, FakeSettingsDeps, ReaderDepsOverrides, SettingsDepsOverrides } from './fake-deps.js'
-import type { JobState, SourcePublic } from '../../src/client/views/types.js'
+import type {
+  ChapterContent, ChapterEntry, ContentNode, JobState, LocalImportResponse, LocalImportWarning,
+  NavigationItem, ReadingTarget, SourcePublic,
+} from '../../src/client/views/types.js'
 
 /**
  * 接线层交互测试·第二梯队：
@@ -53,6 +56,20 @@ describe('ShelfView 接线（deps seam 驱动）', () => {
   const book = {
     bookKey: 'k1', sourceId: 's1', title: '斗罗', addedAt: 1,
     progress: { chapterIndex: 0, offsetRatio: 0, updatedAt: 1 },
+  }
+
+  /** EPUB 导入（2026-09）：上传面从「只收 TXT」扩到两种格式，导入回执还要把**持久 warnings**
+   *  交代出来——它们是这本书的真实状态（被剥离的活动内容、降级的锚点），跳过就等于吞掉。 */
+  const epubFile = (): File => new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], '图文书.epub', { type: 'application/epub+zip' })
+  const localImport = (over: Partial<LocalImportResponse> = {}): LocalImportResponse => ({
+    bookKey: 'local:u1', sourceId: '__local__', title: '斗罗', addedAt: 1,
+    progress: { chapterIndex: 0, offsetRatio: 0, updatedAt: 1 },
+    chapterCount: 3, format: 'epub', encoding: null, warnings: [],
+    ...over,
+  })
+  const svgWarning: LocalImportWarning = {
+    code: 'epub-removed-inline-svg', resource: 'OEBPS/ch1.xhtml',
+    message: '2 处：正文内联 SVG 已剥离（装饰图形不参与阅读）',
   }
 
   it('加载失败 → 显示错误而非「书架空空」误导性空态（历史 bug 钉死）', async () => {
@@ -128,7 +145,8 @@ describe('ShelfView 接线（deps seam 驱动）', () => {
 
   /** 本地 TXT 导入：上传是异步的，落地那一刻用户可能已经不在书架（切 tab / 去书源管理）。 */
   const txtFile = (): File => new File(['第一章\n正文'], '斗罗.txt', { type: 'text/plain' })
-  const imported = { bookKey: 'local:u1', title: '斗罗', sourceId: '__local__' }
+  /** TXT 回执（无告警）：格式/章数/警告面都是服务端回执的一部分，桩要与 wire 同形 */
+  const imported = localImport({ title: '斗罗', format: 'txt', chapterCount: 1, encoding: 'utf-8' })
 
   it('本地 TXT 导入：仍在书架时，成功即进阅读器（既有行为回归钉）', async () => {
     navigate({ name: 'shelf' })
@@ -178,6 +196,88 @@ describe('ShelfView 接线（deps seam 驱动）', () => {
     await new Promise((r) => setTimeout(r, 20))
     expect(pushError).toHaveBeenCalledWith(expect.stringContaining('文件读不动'))
     navigate({ name: 'shelf' })
+  })
+
+  it('导入入口收 .txt 与 .epub（accept 是用户唯一的格式提示）', async () => {
+    const deps = coreDeps({ apiGet: vi.fn(async () => []) })
+    render(createElement(ShelfView, { deps }))
+    const input = document.querySelector('.novel-file-hidden') as HTMLInputElement
+    // 卡片随空架加载完成才渲染（books===null 时是骨架）
+    await waitFor(() => expect(screen.getByText('导入 TXT / EPUB')).toBeTruthy())
+    expect(input.accept).toContain('.txt')
+    expect(input.accept).toContain('.epub')
+  })
+
+  it('导入带回持久警告：不自动跳阅读器，就地把服务端书名/作者与格式交代清楚', async () => {
+    navigate({ name: 'shelf' })
+    const deps = coreDeps({
+      apiGet: vi.fn(async () => []),
+      apiUpload: vi.fn(async () => localImport({ title: '图文书', author: '作者甲', warnings: [svgWarning] })),
+    })
+    render(createElement(ShelfView, { deps }))
+    fireEvent.change(document.querySelector('.novel-file-hidden')!, { target: { files: [epubFile()] } })
+    await waitFor(() => expect(screen.getByText(/图文书/)).toBeTruthy())
+    expect(routeStore.get().route.name).toBe('shelf')                    // 跳走就把交代吞了
+    expect(screen.getByText(/作者甲/)).toBeTruthy()                       // 服务端真相，不是本地猜的书名
+    expect(screen.getByText(/EPUB · 3 章/)).toBeTruthy()                  // 格式来自服务端 format 字段
+    expect(screen.getByText(/导入说明（1 条）/)).toBeTruthy()
+    expect(screen.getByText(/正文内联 SVG 已剥离/)).toBeTruthy()
+    fireEvent.click(screen.getByText('开始阅读'))                          // 交代完了，入口仍在
+    expect(routeStore.get().route.name).toBe('reader')
+    navigate({ name: 'shelf' })
+  })
+
+  it('无警告的导入一字不动：成功即进阅读器，且书架上不再多一块提示', async () => {
+    navigate({ name: 'shelf' })
+    const deps = coreDeps({
+      apiGet: vi.fn(async () => []),
+      apiUpload: vi.fn(async () => localImport()),
+    })
+    render(createElement(ShelfView, { deps }))
+    fireEvent.change(document.querySelector('.novel-file-hidden')!, { target: { files: [epubFile()] } })
+    await waitFor(() => expect(routeStore.get().route.name).toBe('reader'))
+    expect(screen.queryByText(/导入说明（/)).toBeNull()
+    navigate({ name: 'shelf' })
+  })
+
+  it('导入回执的封面挂图 → 落「本地」占位（复用卡片的 imgFailed，不显破图）', async () => {
+    navigate({ name: 'shelf' })
+    const cover = '/novel-api/local/resource?id=local%3Au1&resourceId=r0'
+    const deps = coreDeps({
+      apiGet: vi.fn(async () => []),
+      apiUpload: vi.fn(async () => localImport({ coverUrl: cover, warnings: [svgWarning] })),
+    })
+    render(createElement(ShelfView, { deps }))
+    fireEvent.change(document.querySelector('.novel-file-hidden')!, { target: { files: [epubFile()] } })
+    await waitFor(() => expect(screen.getByText(/导入说明（1 条）/)).toBeTruthy())
+    const note = document.querySelector('.novel-import-note')!
+    const img = note.querySelector('img.novel-cover') as HTMLImageElement
+    expect(img.getAttribute('src')).toBe(cover)
+    // 资源文件被清掉 → img 挂图：回执与卡片同一条降级路（占位而不是破图）
+    fireEvent.error(img)
+    await waitFor(() => expect(note.querySelector('img.novel-cover')).toBeNull())
+    expect(note.querySelector('.novel-cover-fallback')?.textContent).toBe('本地')
+    navigate({ name: 'shelf' })
+  })
+
+  it('本地书有封面走已有封面 img 分支；无封面仍是本地占位（不发明第二条封面路）', async () => {
+    const cover = '/novel-api/local/resource?id=local%3Au1&resourceId=r0'
+    const deps = coreDeps({
+      apiGet: vi.fn(async () => [
+        { ...book, bookKey: 'local:u1', sourceId: '__local__', sourceName: null, title: '有封面', coverUrl: cover },
+        { ...book, bookKey: 'local:u2', sourceId: '__local__', sourceName: null, title: '无封面' },
+      ]),
+    })
+    render(createElement(ShelfView, { deps }))
+    await waitFor(() => expect(screen.getByText('有封面')).toBeTruthy())
+    const cells = [...document.querySelectorAll('.novel-cell')]
+    const withCover = cells.find((c) => c.textContent?.includes('有封面'))!
+    const img = withCover.querySelector('img.novel-cover') as HTMLImageElement | null
+    expect(img?.getAttribute('src')).toBe(cover)
+    expect(withCover.querySelector('.novel-cover-fallback')).toBeNull()   // 有封面就不写「本地」占位
+    const noCover = cells.find((c) => c.textContent?.includes('无封面'))!
+    expect(noCover.querySelector('img.novel-cover')).toBeNull()
+    expect(noCover.querySelector('.novel-cover-fallback')?.textContent).toBe('本地')
   })
 })
 
@@ -635,11 +735,11 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
   const reader = (deps: FakeReaderDeps): ReturnType<typeof createElement> =>
     createElement(ReaderView, { sourceId: 's1', bookKey: 'k1', title: '斗罗', deps })
 
-  it('阅读会话的网络取数走注入 deps（toc 经 deps.apiGet，不再硬 import apiGet）', async () => {
+  it('阅读会话的网络取数走注入 deps（目录走 navigation 读面，不再硬 import apiGet）', async () => {
     const deps = readerDeps()
     render(reader(deps))
     await waitFor(() => expect(deps.apiGet).toHaveBeenCalled())
-    expect(String(deps.apiGet.mock.calls[0][0])).toContain('toc')
+    expect(String(deps.apiGet.mock.calls[0][0])).toContain('navigation')
   })
 
   it('点「⤓ 下载」→ 弹范围面板（此时不开流）；点面板「下载」→ streamExport 在途，成功后 saveBlob 按书名落盘', async () => {
@@ -679,6 +779,345 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
     fireEvent.click(screen.getByText('⤓ 下载'))
     fireEvent.click(within(screen.getByRole('dialog', { name: '导出范围' })).getByText('⤓ 下载'))
     await waitFor(() => expect(screen.getByText(/ExportFailed/)).toBeTruthy())
+  })
+
+  /** 导出是文字面：图文书里的插图只有占位文字（`chapterContentToText` 的投影），面板要先把这句话说清，
+   *  否则用户以为下载下来的是原书图文。 */
+  it('导出面板点明只有 TXT 文字、不含图片', async () => {
+    const deps = readerDeps()
+    render(reader(deps))
+    await waitFor(() => expect(screen.getByText(/共 1 章/)).toBeTruthy())
+    fireEvent.click(screen.getByText('⤓ 下载'))
+    expect(within(screen.getByRole('dialog', { name: '导出范围' })).getByText('TXT 文字导出，不包含图片')).toBeTruthy()
+  })
+})
+
+describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面板 / 排版复位）', () => {
+  /** jsdom 的 window.scrollTo 是「未实现」桩（调用即往 stderr 灌一行 error）。
+   *  本组的落位断言（排版复位）正是看它收到什么，所以直接换成确定性假实现——顺带保持输出干净。 */
+  let scrollTo: ReturnType<typeof vi.spyOn>
+  beforeEach(() => { scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined) })
+  afterEach(() => { scrollTo.mockRestore() })
+
+  /** 整组的确定性视口：第 1 段落在视口里、其余排在它下方（见下面那条「地基」用例的理由——
+   *  零排版会让会话在挂载期落一笔伪进度，本组所有「不写主进度」的断言都站在它上面）。
+   *  体内要**改**这套几何的两条用例（内链跨章的返回采点、排版复位的重排前后）自己换桩、
+   *  并在 finally 还原到这一条，所以这里存的是真 jsdom 的实现、在 afterEach 统一收回。 */
+  const realGetBoundingClientRect = Element.prototype.getBoundingClientRect
+  beforeEach(() => {
+    ;(Element.prototype as unknown as { getBoundingClientRect: () => DOMRect }).getBoundingClientRect = function (this: Element): DOMRect {
+      const top = this.getAttribute('data-novel-node') === 'p1' ? -50 : 400
+      return { top, bottom: top, left: 0, right: 0, width: 0, height: 0, x: 0, y: top, toJSON: () => ({}) } as DOMRect
+    }
+  })
+  afterEach(() => {
+    (Element.prototype as unknown as { getBoundingClientRect: () => DOMRect }).getBoundingClientRect
+      = realGetBoundingClientRect
+  })
+
+  /**
+   * 本组「不写主进度」那几条断言的**地基**：jsdom 没有排版，`getBoundingClientRect` 全返回 0，
+   * 会话的视口采点就把「读到哪儿」认成最后一个块 → 挂载期落一笔伪进度（实测章号还跳到最后一章）。
+   * 于是「面板开合前后 apiSend 计数不变」量的不是行为，而是那笔伪写落在基线前还是落在基线后——
+   * 整轮并发下（worker 抢 CPU）它会跨过去，单跑却永远绿（2026-09-26 实证：先只有「导入说明」一条
+   * 红，补了它的桩之后「导入说明与脚注面板互斥」在同批断言处整轮红、单跑绿）。
+   * 修法是给整组一条确定性视口（第 1 段在视口里、其余排在下方），让伪写根本不产生。
+   */
+  it('挂载期不落任何进度：本组「零写」断言的地基（没有确定性视口时这条会红）', async () => {
+    const deps = richDeps()
+    render(richReader(deps))
+    await screen.findByText('第一章第一段')
+    // 等过会话的帧调度（双 rAF）与进度 debounce：伪进度若要落，就落在这个窗口里
+    await act(async () => { await new Promise((r) => setTimeout(r, 400)) })
+    expect(deps.apiSend.mock.calls.map((c) => c[2])).toEqual([])
+  })
+
+  const chapters: ChapterEntry[] = [
+    { name: '第一章', url: 'u0' }, { name: '第二章', url: 'u1' }, { name: '第三章', url: 'u2' },
+  ]
+  /** 目录树：一个分组 + 三条叶（分组标题没有可去的地方，不许渲染成点了没反应的按钮；
+   *  「附录」指向补充文档——目录条目也能直接把读者送进注释面板） */
+  const navItems: NavigationItem[] = [
+    {
+      id: 'g', label: '第一卷', target: null,
+      children: [
+        { id: 'n0', label: '第一章', target: { kind: 'chapter', index: 0, anchorId: null }, children: [] },
+        { id: 'n1', label: '第二章', target: { kind: 'chapter', index: 1, anchorId: null }, children: [] },
+        { id: 'n2', label: '附录', target: { kind: 'supplement', documentId: 's1', anchorId: null }, children: [] },
+      ],
+    },
+  ]
+  const t = (text: string): ContentNode => ({ kind: 'text', text })
+  const para = (id: string, text: string, extra: ContentNode[] = []): ContentNode => ({
+    kind: 'element', id, tag: 'p', children: [t(text), ...extra],
+    rowSpan: null, colSpan: null, start: null, value: null,
+  })
+  const link = (id: string, target: ReadingTarget, role: 'normal' | 'noteref', label: string): ContentNode =>
+    ({ kind: 'link', id, target, role, children: [t(label)] })
+  /** 第一章：一条主序列内链 + 一条脚注引用（两条都从正文里出来）。p1/p2 是排版复位的可见节点锚。 */
+  const rich0: ChapterContent = {
+    kind: 'rich', documentId: 'd0', nodes: [
+      para('p1', '第一章第一段'),
+      para('p2', '第一章第二段', [
+        link('l1', { kind: 'chapter', index: 1, anchorId: null }, 'normal', '见第二章'),
+        link('l2', { kind: 'supplement', documentId: 's1', anchorId: 'f1' }, 'noteref', '脚注一'),
+      ]),
+    ],
+  }
+  const rich1: ChapterContent = {
+    kind: 'rich', documentId: 'd1',
+    nodes: [para('q1', '第二章正文', [
+      // 第 2 章里也有一条脚注引用：实测路径（跟内链过去 → 在新章点脚注）要它才走得通
+      link('l4', { kind: 'supplement', documentId: 's1', anchorId: 'f2' }, 'noteref', '脚注二'),
+    ])],
+  }
+  // 第 3 章另给一份**不同**的正文：jsdom 视口处处为 0 ⇒ 哨兵恒在预取区，第 3 章也会被预取出来；
+  // 若它与第 1 章同文，页面里就会出现两个「见第二章」按钮（用例要按角色取唯一元素）。
+  const rich2: ChapterContent = { kind: 'rich', documentId: 'd2', nodes: [para('r1', '第三章正文')] }
+
+  const richDeps = (over: ReaderDepsOverrides = {}): FakeReaderDeps => makeReaderDeps({
+    apiGet: vi.fn(async (p: string) => {
+      if (String(p).includes('navigation')) return { chapters, items: navItems }
+      if (String(p).includes('local/document')) return { kind: 'text', text: '脚注正文' }
+      if (String(p).includes('chapter')) {
+        const index = Number(new URLSearchParams(String(p).split('?')[1] ?? '').get('index'))
+        return index === 1 ? rich1 : index === 2 ? rich2 : rich0
+      }
+      return []
+    }),
+    ...over,
+  })
+  /** 本地书的源身份就是跨半契约常量（生产路径由 ShelfView 的导入回执带来）——桩也要用同一个值：
+   *  阅读器按它判断「这本书有没有本地产物读口」（导入说明走 `local/warnings`，只有本地书有）。 */
+  const richReader = (deps: FakeReaderDeps): ReturnType<typeof createElement> =>
+    createElement(ReaderView, { sourceId: LOCAL_SOURCE_ID, bookKey: 'local:b1', title: '图文书', deps })
+  /** 从第 `from` 条起的新 PUT 落在哪些章（去重保序）。
+   *  jsdom 视口处处为 0：哨兵恒在视口顶 ⇒ 会话一定把后续章都预取出来，`recalcAnchors` 量到的
+   *  每个章块 top 也都是 0，于是 handleViewportChange 会自己发几笔「跨章」读数噪声。
+   *  本组断言只认**导航落到了哪一章**，不认「总共发了几笔」——时序笔数归 reader-session.test.ts。 */
+  const jumpedTo = (deps: FakeReaderDeps, from: number): number[] => [...new Set(
+    deps.apiSend.mock.calls.slice(from).map((c) => {
+      const body = c[2] as { progress: { chapterIndex: number } }
+      return body.progress.chapterIndex
+    }),
+  )]
+
+  it('目录抽屉改用导航树：分组不可点、叶条目跳章（纯导航不押返回项）', async () => {
+    const deps = richDeps()
+    render(richReader(deps))
+    await screen.findByText('第一章第一段')
+    fireEvent.click(screen.getByRole('button', { name: '目录' }))
+    const dlg = await screen.findByRole('dialog', { name: '目录' })
+    expect(within(dlg).getByText('第一卷')).toBeTruthy()                     // 分组标题在场
+    expect(within(dlg).queryByRole('button', { name: '第一卷' })).toBeNull() // 但不是「点了没反应」的按钮
+    expect(dlg.querySelectorAll('.novel-nav .novel-nav')).toHaveLength(1)    // 层级靠嵌套列表（结构即层级）
+
+    const before = deps.apiSend.mock.calls.length
+    fireEvent.click(within(dlg).getByRole('button', { name: '第二章' }))
+    expect(jumpedTo(deps, before)).toEqual([1])                              // 选中即落盘，落在第 2 章
+    expect(await screen.findByText('第二章正文')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /返回原处/ })).toBeNull()    // 目录点击不是「链接跟随」
+  })
+
+  it('正文内链：跳走前采点 → 工具栏出现「返回原处」；返回回到来源章并消费掉那条栈', async () => {
+    const deps = richDeps()
+    render(richReader(deps))
+    await screen.findByText('第一章第一段')
+    const open = deps.apiSend.mock.calls.length
+    fireEvent.click(screen.getByRole('button', { name: '见第二章' }))
+    expect(jumpedTo(deps, open)).toEqual([1])                                // 章号意图即时落盘
+    const back = await screen.findByRole('button', { name: /返回原处/ })      // 采点建立的那条返回项
+    const returned = deps.apiSend.mock.calls.length
+    fireEvent.click(back)
+    expect(jumpedTo(deps, returned)).toEqual([0])                            // 回到来源章
+    await waitFor(() => expect(screen.queryByRole('button', { name: /返回原处/ })).toBeNull())
+  })
+
+  it('脚注引用开注释面板：面板取 local/document，主阅读进度零写；关闭即回引用处（消费那条返回项）', async () => {
+    const deps = richDeps()
+    render(richReader(deps))
+    await screen.findByText('第一章第一段')
+    const before = deps.apiSend.mock.calls.length
+    fireEvent.click(screen.getByRole('button', { name: '脚注一' }))
+    expect(deps.apiSend.mock.calls.length).toBe(before)                      // 开面板不写主序列进度
+    const panel = await screen.findByRole('dialog', { name: '注释' })
+    await waitFor(() => expect(String(deps.apiGet.mock.calls.map((c) => String(c[0])).join('\n'))).toContain('local/document'))
+    expect(within(panel).getByText('脚注正文')).toBeTruthy()                  // 面板自己取补充文档
+    // 正文内链跳走前采了返回点：脚注面板开着的这段时间也有「回引用处」可走（面板里能再点主序列）
+    expect(await screen.findByRole('button', { name: /返回原处/ })).toBeTruthy()
+
+    const closed = deps.apiSend.mock.calls.length
+    fireEvent.click(within(panel).getByRole('button', { name: '关闭' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '注释' })).toBeNull())
+    expect(jumpedTo(deps, closed)).toEqual([0])                              // 回到引用处（同一章同一节点）
+    await waitFor(() => expect(screen.queryByRole('button', { name: /返回原处/ })).toBeNull())
+  })
+
+  it('导入说明与脚注面板互斥：只收脚注面板、不消费返回项、不写主进度', async () => {
+    // 两块面板同住右上角（同一套 `.novel-notes` 几何），同场谁也读不了。收脚注面板**不按关闭语义走**
+    // （不调 closeNote）：那是弹栈回引用处 + 落一笔存档，而「看一眼导入说明」是只读动作。
+    const deps = withWarnings([degraded])
+    render(richReader(deps))
+    await screen.findByText('第一章第一段')
+    fireEvent.click(screen.getByRole('button', { name: '脚注一' }))
+    await screen.findByRole('dialog', { name: '注释' })
+    const before = deps.apiSend.mock.calls.length
+    fireEvent.click(await screen.findByRole('button', { name: '导入说明' }))
+    const warnPanel = await screen.findByRole('dialog', { name: '导入说明' })
+    expect(within(warnPanel).getByText(/导入说明（1 条）/)).toBeTruthy()
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '注释' })).toBeNull())
+    expect(deps.apiSend.mock.calls.length).toBe(before)                     // 不跳章、不写进度
+    expect(await screen.findByRole('button', { name: /返回原处/ })).toBeTruthy()   // 返回项仍在，由工具栏承接
+  })
+
+  it('目录与脚注面板互斥：点目录收掉脚注面板（否则它盖住目录、条目点不动）', async () => {
+    // 两块浮层同住右上角、且脚注面板更宽：同场时命中测试打到的是面板头，目录条目根本点不动
+    // （真浏览器实测：点第一条命中的是注释面板标题）。与导入说明同一条口径——只收面板、
+    // 不消费返回项（返回项仍由工具栏承接）、不写主进度。
+    const deps = richDeps()
+    render(richReader(deps))
+    await screen.findByText('第一章第一段')
+    fireEvent.click(screen.getByRole('button', { name: '脚注一' }))
+    await screen.findByRole('dialog', { name: '注释' })
+    const before = deps.apiSend.mock.calls.length
+
+    fireEvent.click(screen.getByRole('button', { name: '目录' }))
+    const dlg = await screen.findByRole('dialog', { name: '目录' })
+    expect(within(dlg).getByText('第一卷')).toBeTruthy()                     // 目录真的能读了
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '注释' })).toBeNull())
+    expect(deps.apiSend.mock.calls.length).toBe(before)                     // 开目录不跳章、不写进度
+    expect(await screen.findByRole('button', { name: /返回原处/ })).toBeTruthy()   // 返回项留在栈里
+  })
+
+  it('工具栏返回之后关面板：不许再替用户跳一次（面板的「回引用处」只认它打开时压入的那条）', async () => {
+    // 实测路径：跟正文链去第 2 章 → 在新章点脚注引用 → 点工具栏「↩ 返回原处」→ 关面板。
+    // 旧实现按「面板是内链开的」弹栈，弹掉的是**更早那条**（别人记的原处）→ 主序列被送回上一章，
+    // 这一跳还会被 commit('jump') 写进存档。修法是记条目身份：栈顶换了人，关闭就只关面板。
+    // jsdom 无排版：所有 rect 都是 0，会话的视口采点认不出「读到哪儿」——这里用**可切换**的 rect 桩
+    // 顶替排版引擎（第 1 章读 p1、跳到第 2 章后读 q1；真实浏览器里这两次读天然发生在两处布局上）。
+    const proto = Element.prototype as unknown as { getBoundingClientRect: () => DOMRect }
+    const original = proto.getBoundingClientRect
+    let readingChapter2 = false
+    proto.getBoundingClientRect = function (this: Element): DOMRect {
+      const node = this.getAttribute('data-novel-node')
+      const vis = readingChapter2 ? 'q1' : 'p1'
+      const top = node === vis ? -50 : 400
+      return { top, bottom: top, left: 0, right: 0, width: 0, height: 0, x: 0, y: top, toJSON: () => ({}) } as DOMRect
+    }
+    try {
+      const deps = richDeps()
+      render(richReader(deps))
+      await screen.findByText('第一章第一段')
+      const atLink = deps.apiSend.mock.calls.length
+      fireEvent.click(screen.getByRole('button', { name: '见第二章' }))         // ① 押下 E1（第 1 章那处）
+      expect(jumpedTo(deps, atLink)).toEqual([1])                             // 内链跳章：意图即时落盘
+      readingChapter2 = true                                                  // 视口已在第 2 章（真排版自己会表达这件事）
+      fireEvent.click(await screen.findByRole('button', { name: '脚注二' }))     // ② 押下 E2（第 2 章）并开面板
+      const panel = await screen.findByRole('dialog', { name: '注释' })
+      const back = await screen.findByRole('button', { name: /返回原处/ })
+      const atBack = deps.apiSend.mock.calls.length
+      fireEvent.click(back)                                                   // ③ 工具栏返回：消费 E2
+      expect(jumpedTo(deps, atBack)).toEqual([1])                             // 回到引用处（第 2 章）
+      const atClose = deps.apiSend.mock.calls.length
+      fireEvent.click(within(panel).getByRole('button', { name: '关闭' }))      // ④ 关面板
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: '注释' })).toBeNull())
+      expect(jumpedTo(deps, atClose)).toEqual([])                             // 旧实现：[0]（把用户送回上一章）
+      expect(screen.getByRole('button', { name: /返回原处/ })).toBeTruthy()     // E1 还在（没被误消费）
+    } finally {
+      proto.getBoundingClientRect = original
+    }
+  })
+
+  it('目录直接点进补充文档：开注释面板但不押返回项（没有引用处可回，关掉就只是关掉）', async () => {
+    const deps = richDeps()
+    render(richReader(deps))
+    await screen.findByText('第一章第一段')
+    fireEvent.click(screen.getByRole('button', { name: '目录' }))
+    const dlg = await screen.findByRole('dialog', { name: '目录' })
+    const before = deps.apiSend.mock.calls.length
+    fireEvent.click(within(dlg).getByRole('button', { name: '附录' }))
+    const panel = await screen.findByRole('dialog', { name: '注释' })
+    await waitFor(() => expect(within(panel).getByText('脚注正文')).toBeTruthy())
+    expect(deps.apiSend.mock.calls.length).toBe(before)                      // 目录导航不写进度
+    expect(screen.queryByRole('button', { name: /返回原处/ })).toBeNull()     // 也不押「返回原处」
+
+    fireEvent.click(within(panel).getByRole('button', { name: '关闭' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '注释' })).toBeNull())
+    expect(deps.apiSend.mock.calls.length).toBe(before)                      // 关掉不消费任何返回项、也不写进度
+    expect(screen.queryByRole('button', { name: /返回原处/ })).toBeNull()
+  })
+
+  it('排版（字号）变化：按变化前的可见节点把视口拉回同一相对位置，且不自我触发重定位', async () => {
+    // jsdom 没有排版引擎：这里用一个**按读取次序改值**的 rect 桩顶替它——第 1 次读 = 变化前的布局，
+    // 之后 = 重排后的布局（真实浏览器里这两次读天然发生在两套布局上）。本用例钉的是采点时刻与算式；
+    // 「字号变了正文停在同一句」只能由浏览器门（真 client bundle + 真排版）证明。
+    const proto = Element.prototype as unknown as { getBoundingClientRect: () => DOMRect }
+    const original = proto.getBoundingClientRect
+    let p1Reads = 0
+    proto.getBoundingClientRect = function (this: Element): DOMRect {
+      const node = this.getAttribute('data-novel-node')
+      // 只有 p1/p2 给出有意义的 top；其余（链接等）排在视口之下就不会被当成「可见节点」
+      const top = node === 'p1' ? (++p1Reads === 1 ? -50 : -70) : node === 'p2' ? 300 : 400
+      return { top, bottom: top, left: 0, right: 0, width: 0, height: 0, x: 0, y: top, toJSON: () => ({}) } as DOMRect
+    }
+    try {
+      const deps = richDeps()
+      render(richReader(deps))
+      await screen.findByText('第一章第一段')
+      scrollTo.mockClear()
+      setPref({ fontSize: 22 })                                              // 采点在 setPref 的同步栈里发生
+      await waitFor(() => expect(scrollTo).toHaveBeenCalledTimes(1))          // 重排后的复位
+      expect(scrollTo.mock.calls[0][1]).toBe(-70 + 50)                       // 重排后 -70，采点时为 -50
+      setPref({ fontSize: 22 })                                              // 同值再设一次：不重排、不再定位
+      await new Promise((r) => setTimeout(r, 20))
+      expect(scrollTo).toHaveBeenCalledTimes(1)
+    } finally {
+      proto.getBoundingClientRect = original
+      setPref({ fontSize: 18 })
+    }
+  })
+
+  /** 持久导入说明（`GET local/warnings`）：导入时落盘的 warnings 是这本书的真实状态，
+   *  切走后回来看不到就等于没说过——入口随书取一次，有告警才出现（无警告不新增干扰），
+   *  点开复用注释面板的浮层几何（.novel-notes，自带上限与内滚）。 */
+  const degraded: LocalImportWarning = {
+    code: 'epub-degraded-anchor', resource: 'OEBPS/ch1.xhtml',
+    message: '正文链接的目标锚点随被剥离的内容（内联 SVG 等）一起消失，已降级成纯文本：OEBPS/ch1.xhtml#f1',
+  }
+  const withWarnings = (list: LocalImportWarning[]): FakeReaderDeps => richDeps({
+    apiGet: vi.fn(async (p: string) => {
+      if (String(p).includes('local/warnings')) return list
+      if (String(p).includes('navigation')) return { chapters, items: navItems }
+      if (String(p).includes('local/document')) return { kind: 'text', text: '脚注正文' }
+      if (String(p).includes('chapter')) {
+        const index = Number(new URLSearchParams(String(p).split('?')[1] ?? '').get('index'))
+        return index === 1 ? rich1 : index === 2 ? rich2 : rich0
+      }
+      return []
+    }),
+  })
+
+  it('导入说明：本地书有持久警告才出入口，点开可重看、可关掉', async () => {
+    const deps = withWarnings([degraded])
+    render(richReader(deps))
+    await screen.findByText('第一章第一段')
+    const before = deps.apiSend.mock.calls.length
+    fireEvent.click(await screen.findByRole('button', { name: '导入说明' }))
+    const panel = await screen.findByRole('dialog', { name: '导入说明' })
+    expect(within(panel).getByText(/导入说明（1 条）/)).toBeTruthy()
+    expect(within(panel).getByText(/已降级成纯文本/)).toBeTruthy()
+    expect(within(panel).getByText('epub-degraded-anchor')).toBeTruthy()
+    fireEvent.click(within(panel).getByRole('button', { name: '关闭' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '导入说明' })).toBeNull())
+    expect(deps.apiSend.mock.calls.length).toBe(before)                      // 看说明不写任何进度
+  })
+
+  it('导入说明：没有警告的本地书不出入口（正常无警告不新增干扰）', async () => {
+    const deps = richDeps()                                                   // 缺省假实现把 local/warnings 答成 []
+    render(richReader(deps))
+    await screen.findByText('第一章第一段')
+    await waitFor(() => expect(String(deps.apiGet.mock.calls.map((c) => String(c[0])).join('\n'))).toContain('local/warnings'))
+    expect(screen.queryByRole('button', { name: '导入说明' })).toBeNull()
   })
 })
 

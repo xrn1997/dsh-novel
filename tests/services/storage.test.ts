@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { CorruptJsonError, novelDir, readJson, writeFileAtomic, writeJsonAtomic, createDebouncedWriter } from '../../src/services/storage.js'
+import { CorruptJsonError, backupPathOf, isAtomicTemp, novelDir, readJson, tempPathOf, writeFileAtomic, writeJsonAtomic, createDebouncedWriter } from '../../src/services/storage.js'
 import { makeTempDir } from '../temp-dir.js'
 
 async function tmp(): Promise<string> { return makeTempDir('novel-st-') }
@@ -70,5 +70,30 @@ describe('createDebouncedWriter', () => {
     await w.flush()
     expect(await readJson(a, null)).toEqual({ x: 1 })
     expect(await readJson(b, null)).toEqual({ x: 2 })
+  })
+})
+
+describe('原子写与备份的命名约定（唯一住址在 storage.ts）', () => {
+  // 病根：删书的清点原先自己写死 `.tmp` / `.bak` 两个字面量去猜低层写的命名——今天两处都对，
+  // 靠的是「没人改过命名」，不是有守卫。命名收在一处之后，改命名只会红一处。
+  const target = path.join(path.sep + 'x', 'local', 'b1.json')
+
+  it('tempPathOf 产出的裸名，正是 isAtomicTemp 认的那一个', () => {
+    expect(isAtomicTemp(target, path.basename(tempPathOf(target)))).toBe(true)
+  })
+
+  it('四种「不是这本书的原子写残留」都不误认', () => {
+    expect(isAtomicTemp(target, 'b1.json.bak')).toBe(false)          // 备份不是 temp
+    expect(isAtomicTemp(target, 'b2.json.1.abc.tmp')).toBe(false)    // 别的书的残留
+    expect(isAtomicTemp(target, 'b1.json.tmp.1')).toBe(false)        // 后缀不在末尾
+    expect(isAtomicTemp(target, 'b1.txt')).toBe(false)               // 连前缀都不对
+  })
+
+  it('backupPathOf 与 readJson 实际留下的备份同名', async () => {
+    const dir = await tmp()
+    const file = path.join(dir, 'c.json')
+    await fs.writeFile(file, '{这不是 JSON', 'utf8')
+    await expect(readJson(file, null)).rejects.toBeInstanceOf(CorruptJsonError)
+    expect(await fs.readFile(backupPathOf(file), 'utf8')).toBe('{这不是 JSON')
   })
 })

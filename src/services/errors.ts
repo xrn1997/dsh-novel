@@ -1,5 +1,6 @@
 import { isEngineError } from '../engine/index.js'
-import { LocalFileTooLargeError, LocalImportError } from './localbooks.js'
+import { LocalArtifactNotFoundError, LocalFileTooLargeError, LocalImportError } from './localbooks.js'
+import { EpubImportError } from './epub/errors.js'
 import { JobRunningError } from './import-job.js'
 
 /**
@@ -115,8 +116,12 @@ export function classify(e: unknown): ErrorCategory {
   if (e instanceof RuleMissingError) return 'rule-missing'
   if (e instanceof FetchError || e instanceof DecodeError) return 'fetch'
   if (e instanceof SourceNotFoundError || e instanceof ChapterNotFoundError) return 'not-found'
+  // 本地产物缺席（书元数据/章号/文档/资源查不到）与「源不存在」「章不存在」同一读数：404。
+  // 判定放在 local-import 之前：**更窄的判据先问**——将来若给本地异常改继承关系，
+  // 顺序错了会把 404 读成 400 而无人察觉
+  if (e instanceof LocalArtifactNotFoundError) return 'not-found'
   if (e instanceof InvalidRequestError) return 'bad-request'
-  if (e instanceof LocalImportError) return 'local-import'
+  if (e instanceof LocalImportError || e instanceof EpubImportError) return 'local-import'
   if (e instanceof LocalFileTooLargeError) return 'local-too-large'
   if (e instanceof LocalNotMountedError) return 'unavailable'
   if (e instanceof JobRunningError) return 'job-running'

@@ -3,7 +3,8 @@ import { classify } from '../../src/services/errors.js'
 import type { ErrorCategory } from '../../src/services/errors.js'
 import { ChapterNotFoundError, DecodeError, FetchError, InvalidRequestError, LocalNotMountedError, RuleMissingError, SourceNotFoundError } from '../../src/services/errors.js'
 import { JsSandboxError, RuleEvalError, UnsupportedRuleError } from '../../src/engine/index.js'
-import { LocalFileTooLargeError, LocalImportError } from '../../src/services/localbooks.js'
+import { LocalArtifactNotFoundError, LocalFileTooLargeError, LocalImportError } from '../../src/services/localbooks.js'
+import { EpubImportError } from '../../src/services/epub/errors.js'
 import { JobRunningError } from '../../src/services/import-job.js'
 import type { JobState } from '../../src/shared/wire.js'
 import { errorStatusOf } from '../../src/api/wire.js'
@@ -42,6 +43,10 @@ const TABLE: Array<[unknown, ErrorCategory, number, string, string]> = [
   [new LocalFileTooLargeError('文件超限'), 'local-too-large', 413, 'PayloadTooLarge', 'Error'],
   [new LocalNotMountedError(), 'unavailable', 503, 'Unavailable', 'Error'],
   [new JobRunningError(RUNNING_JOB), 'job-running', 409, 'JobRunning', 'Error'],
+  // EPUB 导入失败并入既有 local-import 类目（不新增类目）：解析失败与 TXT 导入失败同一出口
+  [new EpubImportError('EPUB 归档缺 mimetype 条目'), 'local-import', 400, 'BadRequest', 'Error'],
+  // 本地产物缺席（书/文档/资源查不到）归既有 not-found 类目 → 404：与 ChapterNotFoundError 同一读数
+  [new LocalArtifactNotFoundError('本地书不存在: local:x'), 'not-found', 404, 'NotFound', 'Error'],
   [new Error('惊喜'), 'other', 500, 'InternalError', 'Error'],
   // 分类权在类型上不在文案上：裸 Error 写同样的中文句子不改类目
   [new Error('源不存在: s1'), 'other', 500, 'InternalError', 'Error'],

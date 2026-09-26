@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { paramRoutes, queries, ROUTES, shelfBody } from '../../shared/wire.js'
+import { LOCAL_SOURCE_ID, paramRoutes, queries, ROUTES, shelfBody } from '../../shared/wire.js'
 import { prodReaderDeps } from '../deps.js'
 import type { ReaderDeps } from '../deps.js'
 import { createExportRun, IDLE_EXPORT, parseRange } from '../export-run.js'
@@ -9,14 +9,18 @@ import { navigate, prefsStore, setPref, useStore } from '../store.js'
 import { FONT_STEPS, LINE_HEIGHTS, MEASURES, PAPER_PRESETS } from '../prefs-ui.js'
 import type { ChapterAnchor } from '../progress.js'
 import { ReaderSession } from '../reader-session.js'
-import type { ReaderPort } from '../reader-session.js'
+import type { ReaderPort, VisibleNode } from '../reader-session.js'
 import { nextChapterIndex } from '../reader-load.js'
 import {
   contentOriginTop, findScrollport, portScrollHeight, portScrollTop, portViewHeight, portViewTop, setPortScrollTop,
 } from '../scrollport.js'
-import { paperInk } from '../util.js'
-import { ErrorBanner } from './bits.js'
-import type { ChapterEntry, ShelfBook } from './types.js'
+import { paperInk, findNovelNode, novelNodes, centerInScroller } from '../util.js'
+import { ErrorBanner, WarningList } from './bits.js'
+import { ChapterBody } from './ChapterBody.js'
+import { ReaderNavigation } from './ReaderNavigation.js'
+import { ReaderNotes } from './ReaderNotes.js'
+import type { SupplementTarget } from './ReaderNotes.js'
+import type { BookNavigation, ChapterContent, LinkRole, LocalImportWarning, ReadingTarget, ShelfBook } from './types.js'
 
 /** 正文层字色由纸张色算：纯函数住址在 util.ts，此处只接线。 */
 
@@ -158,6 +162,9 @@ export function ExportPanel(props: {
             <button className="novel-chip" onClick={() => props.onPreset('rest')}>当前章起</button>
           </div>
           {!valid.ok && <div className="novel-prefs-label" role="status">{valid.reason}</div>}
+          {/* 导出面只有文字：图文书的插图在投影里是占位文字（`chapterContentToText`），
+              这句话必须在下手之前说，而不是等用户对着下载到的文件发现插图没了。 */}
+          <div className="novel-prefs-label">TXT 文字导出，不包含图片</div>
           <div className="novel-chips">
             <button className="novel-chip" disabled={!valid.ok} onClick={props.onConfirm}>⤓ 下载</button>
             <button className="novel-chip" onClick={props.onClose}>取消</button>
@@ -169,6 +176,52 @@ export function ExportPanel(props: {
 }
 
 /**
+ * 导入说明面板（EPUB 有损导入的持久交代）：复用注释面板的浮层几何
+ * （`.novel-notes`：右上、视口封顶、正文区内滚），与它同属阅读器浮层家族（互斥、Esc 可关）。
+ *
+ * 内容只有一件事——**服务端持久化的 warnings**：code（程序判据）+ 资源（哪份文档 / 哪张图）+
+ * message（人读的交代）。面板**不发请求**：告警在进入阅读器时按书取一次（`GET local/warnings`
+ * 刻意不随每次取章重复携带），这里是重看入口而不是第二次读盘。它**不碰主阅读进度**：
+ * 没有一处 apiSend，与脚注面板同一条纪律。
+ */
+export function ImportNotesPanel({ warnings, onClose }: {
+  warnings: LocalImportWarning[]
+  onClose: () => void
+}): ReactNode {
+  return (
+    <div className="novel-notes-slot">
+      <div className="novel-notes" role="dialog" aria-label="导入说明">
+        <div className="novel-toolbar novel-notes-head">
+          <span className="novel-notes-title">导入说明（{warnings.length} 条）</span>
+          <button type="button" className="novel-btn sm" onClick={onClose}>关闭</button>
+        </div>
+        <div className="novel-notes-body">
+          <WarningList warnings={warnings} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** 视口顶所在的正文节点：取「视口顶已越过」的节点里最靠下的那个（视口顶就在它内部或它之后）；
+ *  一个都没越过（视口还在第一个节点之上）→ 取文档顺序里第一个。没有可定位节点（文字章）→ null。 */
+function currentNodeOf(blocks: Array<HTMLDivElement | null>, viewTop: number): VisibleNode | null {
+  let best: { index: number; nodeId: string; top: number } | undefined
+  let first: { index: number; nodeId: string; top: number } | undefined
+  blocks.forEach((block, index) => {
+    for (const el of novelNodes(block)) {
+      const nodeId = el.getAttribute('data-novel-node')
+      if (nodeId === null) continue
+      const cand = { index, nodeId, top: el.getBoundingClientRect().top - viewTop }
+      if (first === undefined) first = cand
+      if (cand.top <= 0 && (best === undefined || cand.top > best.top)) best = cand
+    }
+  })
+  const hit = best ?? first
+  return hit === undefined ? null : { index: hit.index, nodeId: hit.nodeId, offsetWithinNode: -hit.top }
+}
+
+/**
  * 阅读器：连续滚动流（章章首尾相接）。
  *
  * 时序编排归「阅读会话」（reader-session.ts）：目录→存档恢复→懒加载→预取→
@@ -176,6 +229,10 @@ export function ExportPanel(props: {
  * 把 scroll/resize 事件喂给会话。滚动容器由 findScrollport 向上探测（现即 .novel-main 自己，
  * 见 scrollport.ts 头注）：滚动、进度、回跳一律按「真正在滚的容器」算；
  * 只渲染已载章节，预取自限。
+ *
+ * 图文（EPUB）：正文走 ChapterBody（文字章逐行成段、图文章按白名单映射），目录抽屉走
+ * ReaderNavigation（目录树——多个条目可指向同一章的不同锚点），脚注/附录走 ReaderNotes 面板。
+ * 三处都只**接线**：去哪一章哪个锚点、进度何时落盘仍然是会话的事。
  *
  * 呈现层（简约版）：细工具栏（‹书架 · 居中书名 · ⤓/Aa/目录）+ 正文居中窄列
  * （布局归 .novel-rdr-body；prefs 色/字号/行距仍行内——正文层永不接宿主 token）
@@ -218,17 +275,23 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
       if (sentinel === null) return null
       return sentinel.getBoundingClientRect().top - portViewTop(portRef.current)
     },
-    chapterOffset: (index) => {
-      const el = chapterRefs.current[index]
-      if (el === null || el === undefined) return null
-      return el.getBoundingClientRect().top - portViewTop(portRef.current)
+    /** 目标 = 章块顶（anchorId null）或章内那个锚点节点；两者相对**滚动视口顶**。
+     *  章块/节点不在 DOM → null（会话据此不落位、等下一轮）。 */
+    targetOffset: (index, anchorId) => {
+      const block = chapterRefs.current[index]
+      if (block === null || block === undefined) return null
+      const target = anchorId === null ? block : findNovelNode(block, anchorId)
+      if (target === null) return null
+      return target.getBoundingClientRect().top - portViewTop(portRef.current)
     },
+    currentNode: () => currentNodeOf(chapterRefs.current, portViewTop(portRef.current)),
   }), [])
 
-  /** 会话依赖束：网络 + 帧调度（rAF 双帧 = 等布局落定再测量）；网络走注入 deps */
+  /** 会话依赖束：网络 + 帧调度（rAF 双帧 = 等布局落定再测量）；网络走注入 deps。
+   *  目录走 navigation 读面（线性 chapters + 展示树 items 同一份响应），正文一律 ChapterContent。 */
   const session = useMemo(() => new ReaderSession({
-    fetchToc: (s, b) => deps.apiGet<ChapterEntry[]>(queries.toc({ sourceId: s, url: b })),
-    fetchChapter: (s, b, i) => deps.apiGet<string>(queries.chapter({ sourceId: s, url: b, index: i })),
+    fetchNavigation: (s, b) => deps.apiGet<BookNavigation>(queries.navigation({ sourceId: s, url: b })),
+    fetchChapter: (s, b, i) => deps.apiGet<ChapterContent>(queries.chapter({ sourceId: s, url: b, index: i })),
     fetchShelf: () => deps.apiGet<ShelfBook[]>(ROUTES.shelf.path),
     saveProgress: (chapterIndex, offsetRatio) => {
       void deps.apiSend('PUT', paramRoutes.shelfKey(bookKey), shelfBody.progress(chapterIndex, offsetRatio)).catch(() => undefined)
@@ -244,51 +307,80 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
 
   // 第三参 = getServerSnapshot：renderToString（smoke/SSR）必需，缺了直接抛
   const st = useSyncExternalStore(session.subscribe, () => session.state, () => session.state)
-  const { toc, chapters, loadingIdx, error, currentChapter } = st
+  const { toc, navigation, chapters, loadingIdx, error, currentChapter, returnDepth } = st
 
   const [drawer, setDrawer] = useState(false)
   const [ctrlOpen, setCtrlOpen] = useState(false)
   // 导出范围面板现场（纯视图状态）：开合 + 起止章字符串（输入态保字符串，校验单点在 parseRange）。
-  // 声明在 Esc effect 之前——浮层三兄弟（ctrlOpen/drawer/expOpen）共用一条 Esc，顺序即 TDZ 边界
+  // 声明在 Esc effect 之前——浮层四兄弟（ctrlOpen/drawer/expOpen/note）共用一条 Esc，顺序即 TDZ 边界
   const [expOpen, setExpOpen] = useState(false)
   const [expFrom, setExpFrom] = useState('1')
   const [expTo, setExpTo] = useState('')
+  /** 注释面板现场（脚注/附录）：目标 + **开面板时压入的那条返回项**（会话给的句柄）+ 打开意图序号。
+   *  `entry` 决定关闭语义：非 null = 正文内链打开的（关闭即回引用处，消费那一条）；null = 目录直接
+   *  点进来的（没有引用处可回，关掉就只是关掉）。关闭时把这句柄交回会话——只有栈顶仍是它才会消费，
+   *  期间用户按过工具栏返回或跟了别的链接，那条就记着**别人的原处**，弹它会把主序列送错地方。
+   *  `seq` 每次「外层重新指向」都 +1：面板内部栈按它重置（同一个脚注被点第二次时目标值不变，
+   *  只比目标值会漏掉重置——期间用户可能已经在面板里跟到了别的文档）。 */
+  const [note, setNote] = useState<{ target: SupplementTarget; entry: VisibleNode | null; seq: number } | null>(null)
+  const noteSeqRef = useRef(0)
+  /** 打开注释面板：序号自增（面板按它重置内部栈），目标与返回项句柄一起记下 */
+  const openNote = (target: SupplementTarget, entry: VisibleNode | null): void => {
+    noteSeqRef.current += 1
+    setNote({ target, entry, seq: noteSeqRef.current })
+  }
+  /** 只收**面板这一层浮层**，不消费返回栈条目：用来做「开另一个角落浮层」时的互斥。
+   *  为什么不走 `closeNote`：那一条的语义是「关闭 = 回引用处」（经会话弹栈、还会 commit 一笔位置），
+   *  而「我要开目录」不是对阅读位置的表态——借它收面板等于开个抽屉把正文跳走。那条返回项留在栈里，
+   *  工具栏「↩ 返回原处」照常可用（同样的口径见下方导入说明面板）。 */
+  const hideNoteSurface = (): void => {
+    if (note !== null) setNote(null)
+  }
+  /** 持久导入说明（本地书专属）与它的面板现场：null = 还没问到 / 这本书没有这份东西。
+   *  入口只在**真有告警**时出现（正常无警告不新增干扰），面板只展示已取到的清单。 */
+  const [importNotes, setImportNotes] = useState<LocalImportWarning[] | null>(null)
+  const [notesOpen, setNotesOpen] = useState(false)
   const drawerRef = useRef<HTMLDivElement | null>(null)
-  /** 抽屉条目：元素引用只在目录变化时重建。**不是微优化**：抽屉挂在 ReaderView 里，
-   *  会话每次 notify（载章 / 清错 / 跨章）都会重跑本组件；逐条现造 = 每次 notify 白造
-   *  toc.length 个 React 元素（千章书 = 每跨一章多一次 912 元素的构造 + 比对），
-   *  而多数时候抽屉是关着的。当前章高亮因此不进元素（会把依赖搅浑），
-   *  走下面的 aria-current 单点移动。 */
-  const drawerItems = useMemo<ReactNode[]>(() => (toc ?? []).map((c, i) => (
-    <button key={c.url} data-idx={i} className="novel-drawer-item"
-      onClick={() => { setDrawer(false); session.requestJump(sourceId, i) }}>
-      {c.name}
-    </button>
-  )), [toc, session, sourceId])
-  // 浮层（Aa 面板 / 目录抽屉 / 导出面板）共用一条 Esc：三者互斥，永不同场
+  /** 排版变化前的可见节点采点（字号/行距/栏宽变化 → 复位用） */
+  const visibleRef = useRef<VisibleNode | null>(null)
+  /** 目录当前项：会话按「当前章内最近的已登记导航锚点」裁决，视图只负责在被问到时取一次 */
+  const [navActive, setNavActive] = useState<string | null>(null)
+  /** 关闭注释面板：内链打开的回到引用处（位置提交与返回栈都归会话） */
+  const closeNote = (): void => {
+    if (note !== null) session.closeSupplement(sourceId, note.entry)
+    setNote(null)
+  }
+  // 浮层（Aa 面板 / 目录抽屉 / 导出面板 / 注释面板 / 导入说明面板）共用一条 Esc：任一在场就装监听。
+  // Esc 关闭面板与「关闭」钮同一条语义（内链打开的会回引用处）——两条入口不许分叉。
   useEffect(() => {
-    if (!ctrlOpen && !drawer && !expOpen) return
+    if (!ctrlOpen && !drawer && !expOpen && note === null && !notesOpen) return
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
       setCtrlOpen(false)
       setDrawer(false)
       setExpOpen(false)
+      setNotesOpen(false)
+      closeNote()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [ctrlOpen, drawer, expOpen])
-  /** 当前章：把 aria-current 移到那一条（样式与语义同一个源）。
-   *  scrollIntoView 存在性判断不是防生产：jsdom 无排版引擎、该方法缺席（与 util.ls
-   *  挡「无 DOM」同一类环境守卫）——缺了它，任何开抽屉的组件测试都会炸在 effect 里。 */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ctrlOpen, drawer, expOpen, note, notesOpen, session, sourceId])
+  /** 目录高亮：只在抽屉开着时取（一次 DOM 测量，不在滚动路径上）。
+   *  低频刷新是既有口径——只在**跨章**与换书时重算（`currentChapter` 变才醒），
+   *  同章内滚动不重算：那是每帧的量，为一条 aria-current 把整棵阅读器按帧唤醒不值当。 */
   useEffect(() => {
     if (!drawer) return
-    const root = drawerRef.current
-    root?.querySelector('[aria-current="true"]')?.removeAttribute('aria-current')
-    const cur = root?.querySelector<HTMLElement>(`[data-idx="${currentChapter}"]`)
-    if (cur === null || cur === undefined) return
-    cur.setAttribute('aria-current', 'true')
-    cur.scrollIntoView?.({ block: 'center' })
-  }, [drawer, currentChapter])
+    setNavActive(session.activeNavId())
+  }, [drawer, currentChapter, navigation, session])
+  /** 打开抽屉即把当前项摆到抽屉视野的中间——**只滚抽屉自己**。不借 `scrollIntoView`：那个 API 会连
+   *  可滚祖先一起滚，实测把主阅读位置拉回内容顶部还顺手落一笔进度（`centerInScroller` 的口径与
+   *  被否决的掩盖法见 util.ts；缺陷读数在 docs/design/client.md「已知开口」）。 */
+  useEffect(() => {
+    const drawerEl = drawerRef.current
+    if (!drawer || drawerEl === null) return
+    centerInScroller(drawerEl, drawerEl.querySelector('[aria-current="true"]'))
+  }, [drawer, navActive])
   // 范围导出：编排归 export-run.ts——start(范围)/cancel/状态三态 + 卸载 abort
   // 在那边可单测；本视图只接线：状态经 onChange 进 state，⤓ 钮开范围面板、面板确认才 start。
   // 导出失败单独一条（会话 error 归阅读链路）
@@ -298,17 +390,70 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   }), [deps, sourceId, bookKey, title])
   useEffect(() => () => exportRun.dispose(), [exportRun])   // 卸载即取消——不许孤儿抓取
   const expTotal = toc?.length ?? 0
-  /** 开面板：默认整本（1..N），并收掉互斥浮层（Aa / 目录与面板永不同场） */
+  /** 开面板：默认整本（1..N），并收掉互斥浮层（Aa / 目录 / 导入说明与面板永不同场） */
   const openExport = (): void => {
     setCtrlOpen(false)
     setDrawer(false)
+    setNotesOpen(false)
+    hideNoteSurface()
     setExpFrom('1')
     setExpTo(String(expTotal))
     setExpOpen(true)
   }
 
+  /** 持久导入说明：**只有本地书有这份东西**，按书取一次（`local/warnings` 刻意不随取章携带）。
+   *  取不到就不出入口（不拿未知当「有」），但**不静默**——它失败说明本地产物读不了，
+   *  该报的那句要报（与本仓「两个半场都不许静默」同一条：入口不出现是降级，静默是欺骗）。 */
+  useEffect(() => {
+    if (sourceId !== LOCAL_SOURCE_ID) { setImportNotes(null); return }
+    let alive = true
+    void deps.apiGet<LocalImportWarning[]>(queries.localWarnings({ id: bookKey })).then(
+      (list) => { if (alive) setImportNotes(list) },
+      (e: unknown) => {
+        if (!alive) return
+        setImportNotes(null)
+        deps.pushError(`导入说明读取失败：${e instanceof Error ? e.message : String(e)}`)
+      },
+    )
+    return () => { alive = false }
+  }, [deps, sourceId, bookKey])
+  const hasImportNotes = importNotes !== null && importNotes.length > 0
+  /** 导入说明面板与别的浮层互斥：两者同住右上角（`.novel-notes` 同一套几何与 z），叠在一起谁也读不了
+   *  ——与目录 / Aa / 导出面板同一条纪律。脚注面板在这里**只收面板、不消费返回项**（不调 `closeNote`）：
+   *  从正文内链打开的脚注面板一旦按关闭语义走，会经会话弹栈并把主序列**跳回**引用处、还落一笔存档——
+   *  而「看一眼导入说明」是只读动作，不该动主阅读位置（那条返回项仍留在栈里，工具栏「↩ 返回原处」照常可用）。 */
+  const toggleImportNotes = (): void => {
+    setCtrlOpen(false)
+    setDrawer(false)
+    setExpOpen(false)
+    hideNoteSurface()
+    setNotesOpen((open) => !open)
+  }
+
   /** 刷新滚动容器缓存（内容变化/视口变化时） */
   const refreshPort = (): void => { portRef.current = findScrollport(bodyRef.current) }
+
+  /** 目标分发：主序列目标走会话跳章（含章内锚点），补充文档开注释面板。
+   *  **目录点击是纯导航**（不押返回项）——只有正文内链才建立「返回原处」。 */
+  const openTarget = (target: ReadingTarget): void => {
+    if (target.kind === 'chapter') { session.requestJump(sourceId, target.index, target.anchorId); return }
+    setNotesOpen(false)                                  // 注释面板与导入说明同处一层浮层
+    openNote(target, null)                               // 目录进来：没有引用处可回
+  }
+
+  /** 正文内链（ChapterBody 的链接节点）：先由会话采点/消费返回项，再按目标分流。
+   *  角色必须带过去——`backlink` 本身就是「回正文」，会话据此不压新栈；
+   *  采点返回的那条要随面板一起记下来：关闭面板时只说「消费我打开面板时压的那条」。 */
+  const bodyLink = (target: ReadingTarget, role: LinkRole): void => {
+    const entry = session.followLink(sourceId, target, role)
+    if (target.kind === 'supplement') { setNotesOpen(false); openNote(target, entry) }
+  }
+
+  /** 注释面板里点到主序列：面板退场、由会话跳（返回项归那次采点，不新押一条） */
+  const panelLink = (target: ReadingTarget, role: LinkRole): void => {
+    setNote(null)
+    session.followLink(sourceId, target, role)
+  }
 
   // 进入：开会话（目录→恢复→懒加载）；卸载：关会话（清防抖定时器）
   useEffect(() => {
@@ -356,6 +501,25 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chapters, st.pendingJump])
 
+  /** 排版变化前的采点：prefsStore 的订阅者在 `setPref` 的同步调用栈里执行——那一刻 React 还没重渲染、
+   *  DOM 还是旧排版，这是唯一能拿到「变化前位置」的时刻（任何 effect 都在新排版落定之后才跑）。 */
+  useEffect(() => prefsStore.subscribe(() => { visibleRef.current = readerPort.currentNode() }), [readerPort])
+
+  /** 字号/行距/栏宽变化 → 重排：把「变化前视口顶所在的那个节点」拉回同一视口相对位置。
+   *  插图框已按可信宽高预留（ChapterBody），所以这里不必等图片下载完；这里也不轮询图片。
+   *  自限：effect 只依赖三个排版量、自己不写 prefs，所以不可能自我触发成重定位环。
+   *  位置提交仍归会话——复位后喂一次视口读数，由会话按真实读数修正比例（此处不写进度）。 */
+  useEffect(() => {
+    const snap = visibleRef.current
+    if (snap === null) return
+    const off = readerPort.targetOffset(snap.index, snap.nodeId)
+    if (off === null) return
+    readerPort.setScrollTop(readerPort.scrollTop() + off + snap.offsetWithinNode)
+    visibleRef.current = readerPort.currentNode()        // 复位后重采：连调两次排版也各有正确锚
+    session.handleViewportChange(sourceId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefs.fontSize, prefs.lineHeight, prefs.measure, readerPort, session, sourceId])
+
   const shownError = error ?? exportState.error
   return (
     <div data-novel-view="reader" className="novel-rdr">
@@ -370,10 +534,22 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
       <div className={prefs.darkController ? 'novel-dark novel-rdr-bar' : 'novel-rdr-bar'}
         style={{ position: 'sticky', top: 0, zIndex: CTRL_Z.toolbar }}>
         <button className="novel-btn sm" onClick={() => navigate({ name: 'shelf' })}>‹ 书架</button>
+        {/* 正文内链的返回入口：**一次返回一条**（重复跟随链接才有多层）。栈在会话里、只活在窗口内；
+            没押返回项时不渲染——不给一个点了没反应的按钮。位置在「‹ 书架」之后，左侧主次分明。 */}
+        {returnDepth > 0 && (
+          <button className="novel-btn sm" onClick={() => session.goBack(sourceId)}
+            title="回到跟随链接前的位置">↩ 返回原处</button>
+        )}
         <div className="novel-rdr-title">
           <span className="novel-rdr-book">{title}</span>{toc === null ? '' : ` · 共 ${toc.length} 章`}
         </div>
         <div className="novel-rdr-acts">
+          {/* 导入说明入口：**只在真有持久告警的本地书上出现**（有损导入的交代是这本书的真实状态；
+              没告警就一个字都不多说）。点开是只读面板——重看入口，不重复取数、不写进度。 */}
+          {hasImportNotes && (
+            <button className="novel-btn sm" aria-expanded={notesOpen} aria-label="导入说明"
+              onClick={toggleImportNotes} title={`导入说明（${importNotes.length} 条）`}>导入说明</button>
+          )}
           <button
             className="novel-btn sm"
             onClick={() => { if (exportState.running) exportRun.cancel(); else openExport() }}
@@ -411,10 +587,12 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
             />
           )}
           <button className="novel-btn sm" aria-expanded={ctrlOpen} aria-label="阅读设置"
-            onClick={() => { setExpOpen(false); setCtrlOpen(!ctrlOpen) }} title="阅读设置">Aa</button>
-          {/* 目录与 Aa/导出面板互斥：工具栏已在遮罩之上（CTRL_Z），点目录不再被遮罩顺手关面板——自己关 */}
+            onClick={() => { setExpOpen(false); setNotesOpen(false); hideNoteSurface(); setCtrlOpen(!ctrlOpen) }}
+            title="阅读设置">Aa</button>
+          {/* 目录与 Aa/导出/注释面板互斥：工具栏已在遮罩之上（CTRL_Z），点目录不再被遮罩顺手关面板——自己关。
+              注释面板必须一起收：它同住右上角、且更宽，叠在上面会让目录**点不动**（实测命中测试打到面板头）。 */}
           <button className="novel-btn sm" aria-expanded={drawer} aria-label="目录"
-            onClick={() => { setCtrlOpen(false); setExpOpen(false); setDrawer(!drawer) }}
+            onClick={() => { setCtrlOpen(false); setExpOpen(false); setNotesOpen(false); hideNoteSurface(); setDrawer(!drawer) }}
             title={toc === null ? '目录' : `目录（${toc.length}）`}>目录</button>
           {ctrlOpen && <PrefsPanel />}
         </div>
@@ -447,7 +625,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
         >
           {toc === null && <div className="novel-rdr-loading">目录加载中…</div>}
           {/* 只渲染已载章节：未载章节不进 DOM——scrollHeight 才等于「已读内容高」，预取判据才成立 */}
-          {chapters.map((text, i) => text === null
+          {chapters.map((content, i) => content === null
             ? null
             : (
               <div
@@ -457,7 +635,9 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
               >
                 {/* h2 不是 h3：阅读器这一屏没有更高的标题占位，从 h3 起等于给读屏一份断了头的大纲 */}
                 <h2>{toc?.[i]?.name ?? `第 ${i + 1} 章`}</h2>
-                {text.split('\n').map((para, j) => <p key={j}>{para}</p>)}
+                {/* 正文两种形态都在 ChapterBody 里（文字章逐行成段、图文章按白名单映射）：
+                    会话把 ChapterContent 原样搬进来，形态分支只在这一处 */}
+                <ChapterBody content={content} bookKey={bookKey} onNavigate={bodyLink} />
               </div>
             ))}
           {toc !== null && (
@@ -466,13 +646,33 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
             </div>
           )}
         </div>
-        {/* 抽屉：0 宽 sticky 槽 + absolute 本体（锚视口、且不切走正文宽度；三版死法见样式层注释） */}
+        {/* 抽屉：0 宽 sticky 槽 + absolute 本体（锚视口、且不切走正文宽度；三版死法见样式层注释）。
+            内容 = 目录树（分组标题不可点；同一章可以有多条锚点条目）。 */}
         {drawer && (
           <div className="novel-drawer-slot">
             <div ref={drawerRef} className="novel-drawer" role="dialog" aria-label="目录">
-              {drawerItems}
+              <ReaderNavigation
+                items={navigation ?? []}
+                activeId={navActive}
+                onNavigate={(target) => { setDrawer(false); openTarget(target) }}
+              />
             </div>
           </div>
+        )}
+        {/* 导入说明面板（本地书持久告警）：与注释面板同几何、同 z、互斥——只读，不写任何进度 */}
+        {notesOpen && hasImportNotes && (
+          <ImportNotesPanel warnings={importNotes} onClose={() => setNotesOpen(false)} />
+        )}
+        {/* 注释面板（脚注/附录）：面板是浮层，主阅读位置不受它影响；内链打开的关闭即回引用处 */}
+        {note !== null && (
+          <ReaderNotes
+            bookKey={bookKey}
+            target={note.target}
+            requestSeq={note.seq}
+            deps={deps}
+            onNavigate={panelLink}
+            onClose={closeNote}
+          />
         )}
       </div>
     </div>

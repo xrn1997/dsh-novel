@@ -58,7 +58,7 @@ export function apiSend<T>(method: 'POST' | 'PUT' | 'DELETE', path: string, body
   return request<T>(path, method, body)
 }
 
-/** 原始字节上传（本地 TXT 导入，UI）：octet-stream body，响应仍走信封 */
+/** 原始字节上传（本地书导入 TXT / EPUB，UI）：octet-stream body，响应仍走信封 */
 export async function apiUpload<T>(pathWithQuery: string, body: Blob): Promise<T> {
   let res: Response
   try {

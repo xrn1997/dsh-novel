@@ -32,7 +32,8 @@ export type ProbeErrorCode =
   | 'UnsupportedRuleError' | 'RuleEvalError' | 'JsSandboxError'
   | 'FetchError' | 'DecodeError' | 'RuleMissing' | 'Error'
 
-/** 本地书（本地 TXT 导入）的保留源 id——跨半契约常量的**唯一主人**：
+/** 本地书（TXT / EPUB 两支，按内容分流；口径见 `docs/design/services.md`「本地书身份」）的保留
+ *  源 id——跨半契约常量的**唯一主人**：
  *  client 半与测试直接 import 本处；服务半（src/services/localbooks.ts）也 import 后 re-export，
  *  不再自带第二份声明（服务半不受 client 纯度门禁约束，可直接引 shared）。改名只需改这一行。 */
 export const LOCAL_SOURCE_ID = '__local__'
@@ -245,6 +246,99 @@ export function pickShelfMeta(raw: Record<string, unknown>): ShelfMetaPatch {
   return out as ShelfMetaPatch
 }
 
+// ── 本地图文面（EPUB 导入；现状真相与口径：docs/design/services.md「本地书身份」）──────
+// 图文正文、目录导航与导入回执的唯一跨半形状：Node 半（导入/读取）与浏览器半（阅读器/书架）
+// 消费同一份，别处不得私造平行版本。
+
+/** 图文树的元素白名单（唯一字面量来源）：原书的 b/i 与结构容器在导入期已规范为
+ *  strong/em/div——客户端按白名单映射，认不出的标签在导入期就已被拒绝或降级，不在这里兜底 */
+export type ContentTag =
+  | 'p' | 'div' | 'span' | 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6'
+  | 'strong' | 'em' | 'ul' | 'ol' | 'li' | 'blockquote' | 'pre' | 'code'
+  | 'sup' | 'sub' | 'table' | 'caption' | 'thead' | 'tbody' | 'tfoot'
+  | 'tr' | 'th' | 'td'
+
+/** 阅读目标：主序列章（章号 + 可空章内锚点）或补充文档（文档 ID + 可空锚点）。
+ *  为什么分成两支而不是「章号可空 + 文档 ID 可空」：补充文档（脚注/附录）不在阅读流里、
+ *  不计正文章数，是可打开但不参与连续阅读的另一类东西；合成一支会把「书里第几章」
+ *  变成到处可空推断的字段。锚点 null = 该目标指向整章/整份文档。 */
+export type ReadingTarget =
+  | { kind: 'chapter'; index: number; anchorId: string | null }
+  | { kind: 'supplement'; documentId: string; anchorId: string | null }
+
+/** 图文节点：六类，带稳定节点 ID 的是白名单元素、图片、链接、换行与分隔线。
+ *  **不携带任意属性字典**——只按种类保留明确字段：`start` 只对 ol 生效、`value` 只对 li、
+ *  `rowSpan`/`colSpan` 只对单元格，其余位置恒 `null`（null = 无该属性，不输出 DOM 属性）。
+ *  不设通用 attributes 袋是安全边界：原书未净化属性一旦上 wire 就有被客户端展开进 DOM 的机会。
+ *  `id` 是导入期生成的 opaque 稳定串，不是原书 ID（原锚点另经映射表转成本仓 ID）。 */
+export type ContentNode =
+  | { kind: 'text'; text: string }
+  | {
+      kind: 'element'; id: string; tag: ContentTag; children: ContentNode[]
+      rowSpan: number | null; colSpan: number | null; start: number | null; value: number | null
+    }
+  | { kind: 'image'; id: string; resourceId: string; alt: string; width: number; height: number }
+  | {
+      kind: 'link'; id: string; target: ReadingTarget
+      role: 'normal' | 'noteref' | 'backlink'; children: ContentNode[]
+    }
+  | { kind: 'break'; id: string }
+  | { kind: 'rule'; id: string }
+
+/** 章节正文：文字面是纯文本章（TXT / 在线书 / 存量缓存），图文面是导入期规范化后的树。
+ *  两形态不做自动猜测，由来源与服务层显式决定，客户端按 kind 分支。
+ *  rich **不另存一份文字**：文字面是 `chapterContentToText` 的投影，第二份文本字段一旦落盘
+ *  就会与树分叉（同一本书导出、AI 工具与阅读器读到不同正文）。 */
+export type ChapterContent =
+  | { kind: 'text'; text: string }
+  | { kind: 'rich'; documentId: string; nodes: ContentNode[] }
+
+/** 目录条目：`target` 为 null **只**用于有子节点的分组标题（例如只有卷名的卷）。
+ *  叶条目指向「阅读单元 + 文档内锚点」——EPUB 目录条目数可多于阅读单元数，
+ *  同一 XHTML 的多个锚点是各自跳转的条目，不复制成多章。 */
+export interface NavigationItem {
+  id: string
+  label: string
+  target: ReadingTarget | null
+  children: NavigationItem[]
+}
+
+/** 目录读面两列表：`chapters` 是线性阅读序列（原有 toc 口径，进度/逐章 API/导出范围按它），
+ *  `items` 是展示用树。两者不是一一对应（见 NavigationItem）——界面与导入说明都不得
+ *  宣称目录叶条数与章数相等。 */
+export interface BookNavigation {
+  chapters: ChapterEntry[]
+  items: NavigationItem[]
+}
+
+/** 线性目录 → 平面导航树（**唯一实现**）：没有原生目录的书（本地 TXT、在线源）由线性序列派生，
+ *  逐章一个叶、无分组层级。`id` 是稳定 opaque 串（`t<章号>`），客户端只当列表 key 用；
+ *  有原生目录的书（EPUB）不走这里——它的树是导入期从 nav/NCX 建出来并持久化的。 */
+export function planarNavigation(chapters: ChapterEntry[]): NavigationItem[] {
+  return chapters.map((c, i) => ({
+    id: `t${i}`,
+    label: c.name,
+    target: { kind: 'chapter', index: i, anchorId: null },
+    children: [],
+  }))
+}
+
+/** 导入告警：`resource` 是书内逻辑名（离书即无意义），不含主机绝对路径与磁盘布局 */
+export interface LocalImportWarning {
+  code: string
+  message: string
+  resource: string | null
+}
+
+/** 本地导入回执：`ShelfBook` + 章数/格式/编码/告警。
+ *  `encoding` 为 null = 不适用（EPUB 各文档可能各自编码，不伪称整本 UTF-8）。 */
+export type LocalImportResponse = ShelfBook & {
+  chapterCount: number
+  format: 'txt' | 'epub'
+  encoding: string | null
+  warnings: LocalImportWarning[]
+}
+
 // ── 信封与错误 ──────────────────────────────────────────────────────────
 
 /** 统一失败信封的 error 载荷（引擎错误带段级定位 segment） */
@@ -285,16 +379,22 @@ export const SEG = {
   book: 'book',
   toc: 'toc',
   chapter: 'chapter',
+  /** 目录导航读面（`chapters` 线性 + `items` 展示树）——与 toc 分开：toc 的旧响应一字不改 */
+  navigation: 'navigation',
   shelf: 'shelf',
   export: 'export',
   local: 'local',
+  /** 本地 EPUB 的三条读口（都带 `id=bookKey`）：补充文档 / 资源流 / 导入说明 */
+  document: 'document',
+  resource: 'resource',
+  warnings: 'warnings',
 } as const
 
 /** 双形态路由：path（客户端 fetch 用）与 segs（服务端段匹配/一致性测试用），同一构造保证一致 */
 export interface Route { path: string; segs: string[] }
 export function route(...segs: string[]): Route { return { path: segs.join('/'), segs } }
 
-/** 静态路由表（无参数的部分，共 21 条；另有 5 条参数路由见 paramRoutes）——
+/** 静态路由表（无参数的部分，共 25 条；另有 5 条参数路由见 paramRoutes）——
  *  路由总数由 tests/shared/wire-builders.test.ts 钉死（此前的「17 条路由」注释既烂又无测试）。 */
 export const ROUTES = {
   health: route(),
@@ -318,6 +418,9 @@ export const ROUTES = {
   book: route(SEG.book),
   toc: route(SEG.toc),
   chapter: route(SEG.chapter),
+  /** 目录导航：`chapters` 线性（旧 toc 口径）+ `items` 展示树（EPUB 原生 nav/NCX，
+   *  其他书由 toc 派生）——沿用 toc 的 sourceId+url 入参 */
+  navigation: route(SEG.navigation),
   shelf: route(SEG.shelf),
   /** 书架批量删除（多选）：body `{ keys: string[] }`（keys = bookKey，走 JSON body 故无需编码）；
    *  一趟删一批，替代客户端循环 N 次 DELETE shelf/:key——本地书连带删副本的 invariant 同单删一条 */
@@ -325,6 +428,12 @@ export const ROUTES = {
   exportBook: route(SEG.export),
   localImport: route(SEG.local, SEG.import),
   local: route(SEG.local),
+  /** 补充文档（脚注/附录）的图文正文：`id=bookKey` + `documentId` */
+  localDocument: route(SEG.local, SEG.document),
+  /** 本地资源（插图/封面）：`id=bookKey` + `resourceId`；只认不透明 ID，不接收路径 */
+  localResource: route(SEG.local, SEG.resource),
+  /** 导入说明（告警）：`id=bookKey`——按需查看，不随每次取章重复携带 */
+  localWarnings: route(SEG.local, SEG.warnings),
 } as const
 
 /** 参数路由（客户端填参；服务端按 SEG 段位匹配）。id 为注册表 uuid（无需编码）；
@@ -358,6 +467,10 @@ export const PARAMS = {
   to: 'to',
   /** 搜索任务快照的增量游标：只回 `groups[since..]`（完成序累积，见 SearchJobState） */
   since: 'since',
+  /** 本地三种读口（document/resource/warnings）在 query 里带的第二个参数——`id` 一律是 bookKey
+   *  （与既有 `DELETE local?id=` 同参数名；本地读口不用路径段，bookKey 里的 `:`/`/` 不必编码成段） */
+  documentId: 'documentId',
+  resourceId: 'resourceId',
 } as const
 
 /** query 序列化：编码 + 去 undefined/null（null = 键缺席，与 wire 可空口径一致） */
@@ -394,13 +507,36 @@ export const queries = {
     `${ROUTES.toc.path}?${encodeQuery({ [PARAMS.sourceId]: p.sourceId, [PARAMS.url]: p.url, [PARAMS.refresh]: p.refresh === true ? '1' : undefined })}`,
   chapter: (p: SourceUrlParams & { index: number; refresh?: boolean }): string =>
     `${ROUTES.chapter.path}?${encodeQuery({ [PARAMS.sourceId]: p.sourceId, [PARAMS.url]: p.url, [PARAMS.index]: p.index, [PARAMS.refresh]: p.refresh === true ? '1' : undefined })}`,
+  /** 目录导航树：与 toc 同一入参（sourceId+url）——本地书与在线书同一构造器 */
+  navigation: (p: SourceUrlParams): string =>
+    `${ROUTES.navigation.path}?${encodeQuery({ [PARAMS.sourceId]: p.sourceId, [PARAMS.url]: p.url })}`,
   exportBook: (p: SourceUrlParams & { title?: string; from?: number; to?: number }): string =>
     `${ROUTES.exportBook.path}?${encodeQuery({ [PARAMS.sourceId]: p.sourceId, [PARAMS.url]: p.url, [PARAMS.title]: p.title, [PARAMS.from]: p.from, [PARAMS.to]: p.to })}`,
   localImport: (p: { name: string }): string =>
     `${ROUTES.localImport.path}?${encodeQuery({ [PARAMS.name]: p.name })}`,
   localDelete: (p: { id: string }): string =>
     `${ROUTES.local.path}?${encodeQuery({ [PARAMS.id]: p.id })}`,
+  /** 本地三条读口：`id` 一律是 bookKey（本地书身份），第二个参数各自归 PARAMS 单点 */
+  localDocument: (p: { id: string; documentId: string }): string =>
+    `${ROUTES.localDocument.path}?${encodeQuery({ [PARAMS.id]: p.id, [PARAMS.documentId]: p.documentId })}`,
+  localResource: (p: { id: string; resourceId: string }): string =>
+    `${ROUTES.localResource.path}?${encodeQuery({ [PARAMS.id]: p.id, [PARAMS.resourceId]: p.resourceId })}`,
+  localWarnings: (p: { id: string }): string =>
+    `${ROUTES.localWarnings.path}?${encodeQuery({ [PARAMS.id]: p.id })}`,
 } as const
+
+/**
+ * 本地资源（插图 / 封面）的**唯一 URL 构造器**：`/novel-api` 前缀 + 资源读口的路径与 query。
+ *
+ * 为什么必须是 wire 的 helper 而不是各拼一份：服务端要在导入回执里给封面 URL
+ * （`services/localbooks.ts` 的 `bookMetaOf` → `SHELF_META.coverUrl`），客户端要给正文插图
+ * 一个 `src`（`views/ChapterBody.tsx`）——两处各拼一次，前缀或参数名一改就分叉成两个半场各说各话。
+ * `resourceId` 只是不透明 ID，经 `encodeQuery` 编码后当查询参数：书内字符串拼不出第二个参数、
+ * 也换不来协议（与「资源 ID 不进磁盘路径」同一条安全面的正面）。
+ */
+export function resourceUrl(bookKey: string, resourceId: string): string {
+  return `${NOVEL_API_PREFIX}/${queries.localResource({ id: bookKey, resourceId })}`
+}
 
 /**
  * `PUT shelf/:key` 的 body 构造器（三种形态）：

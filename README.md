@@ -10,8 +10,41 @@
 - **阅读体验**：封面网格书架（带阅读进度、**每本书标注来源书源**——同源同色色点 + 源名，源被删则如实标「来源已删除」；支持「选择」进多选态**批量删除**）、聚合搜索跑在服务端（进度实时推送、可中途**停止**且保留已搜出的结果、**切走界面不丢结果**、失败源折叠）、连续滚动阅读（滚动到底自动预取下一章）、目录抽屉跳章、字号 / 行距 / 栏宽 / 纸张色可调、深浅主题自适应
 - **AI 助手工具**：搜索、读章、目录、书架（含写）、书源管理、导入书源六个工具（`dshnovel_` 前缀），与 UI 共用同一条链路
 - **章节范围导出**：点「⤓ 下载」先弹范围面板（起止章输入 +「整本 / 当前章起」快捷），确认才开下；部分导出文件名带范围后缀（流式下载、显示进度、可随时取消）
-- **本地 TXT 导入**：本地小说文件（GBK / UTF-8 自动识别）解析章节后入架阅读
+- **本地书导入（TXT / EPUB）**：TXT 走 GBK / UTF-8 自动识别后切章入架；EPUB 2/3 流式排版按 spine 计章，保留原书目录树、正文插图、脚注跳转与返回、基本格式。有损项（被剥离的活动内容、降级的锚点等）落成**持久导入说明**——导入时就地交代，进书后还能在阅读器里重看（见[本地书格式](#本地书格式txt--epub)）
 - **书源管理**（调度台 IA，入口在「小说」视图顶部「书源管理」tab）：**待办收件箱**把坏源/未验证置顶成任务卡（批量重验 / 一键验证，处理完自动消解；卡可「✕ 忽略」——待办是提示，成员集一变会自动回来），读数集中在源列表头的**状态带**（共 N · 已启用 · 已停用 · 未验证 · 坏源）；源列表支持文本/状态/分组过滤、行内启停开关（停用源不参与搜索，随时开回）、编辑模式批量启停/验证/删除（做完留在编辑态、勾选保留，成功进反馈条）、单源试跑下钻、登录支持（`POST /sources/:id/auth` 支持 cookie 录入与 `loginUrl` 脚本执行；「去登录」当前只打开源首页——见 `docs/design/client.md` 已知开口）；导入是弹层（拖放/粘贴），完成事项回流待办箱；删除统一模态二次确认（点名登录态失效，危险区/手输口令退役）
+
+## 本地书格式（TXT / EPUB）
+
+「书架」末位的**导入本地书籍**卡收 `.txt` 与 `.epub`；分流由服务端**按内容**做（文件头是 ZIP 就按 EPUB 解析）。
+
+| 格式 | 支持 | 明确不做 / 已知边界 |
+| --- | --- | --- |
+| TXT | BOM 优先 → UTF-8 严格探测 → GBK 回退；标题行切章（第X章 / 卷 / 回 / 节 / 章外篇目 …） | 自定义章名正则（对面 legado 那套「按内容打分挑规则」未接，本仓是一条钉死的正则） |
+| EPUB 2 / 3（流式排版） | 阅读顺序按 **spine 主序列**计章；原书目录树（EPUB3 nav / EPUB2 NCX，含章内锚点与 EPUB2 命名锚点）；封面；正文插图（JPEG/PNG/GIF/WebP 与受限静态 SVG）；基本格式（段落、标题、粗斜体、列表、引用、分隔线、基本表格、换行、上下标、预格式文本）；脚注与附录（补充文档面板，可跟随可返回） | **不加载出版方 CSS 与字体**（字号 / 行距 / 栏宽 / 纸张色归本插件阅读设置）；**固定版式**、需 DRM 解密的正文、脚本驱动的交互与音视频不宣称支持（明确拒绝或告警）；正文内联 `<svg>` 装饰图形剥离并记说明（**整页是一棵只包一张书内图的 SVG 时——EPUB3 推荐的封面页写法——那一章按这张图读**，图与封面共用一份；里面不是一张可加载的书内图仍拒整本）；远程图片一律拒绝（只加载书内资源） |
+
+- **文字输出只有文字**：图片只在 EPUB 阅读器里显示；TXT 导出与六个 AI 工具把插图投影成 `[图片：替代文字]` 占位（无替代文字则 `[图片]`），导出面板明写「TXT 文字导出，不包含图片」。本轮不提供 EPUB / 图片导出。
+- **按内容分流、不互相兜底**：文件头是 ZIP 就按 EPUB 解析，失败**不会**回退成 TXT——否则一份加密压缩包会以「一本乱码书」入架；不是 ZIP 的字节才走 TXT 解码链。
+- **有损导入的交代是持久的**：`GET /local/warnings` 可回看（导入时在书架就地显示，进书后在阅读器工具栏的「导入说明」入口重看），不静默丢内容。
+- **导入失败说具体原因**：固定版式 / 加密条目 / 是 ZIP 魔数但读不成 EPUB 归档（缺 `mimetype`、条目越界或重名、CRC 对不上、截断）/ 超限由服务端逐条点名（导入面原样透出，不折叠成「导入失败」一句泛话）。**非 ZIP 字节不在此列**——它不是 EPUB 的失败，而是照 TXT 解码链导入。
+- **有持久导入说明的导入不自动跳进阅读器**：先在书架把书名 / 作者 / 格式 / 章数与逐条说明摆出来，读者自己点「开始阅读」——跳走等于把这些交代吞掉。
+
+本功能的验收命令（离线：真实 EPUB 字节 → 真实 HTTP handler → 真实组件，不访问网络；最后一条把同一份链路搬进真浏览器）：
+
+```powershell
+pnpm test          # tests/services/epub-*.test.ts、tests/api/dispatch-epub.test.ts、
+                   # tests/client/{chapter-body,reader-navigation,reader-notes}.test.tsx、tests/client/reader-epub.test.ts
+pnpm typecheck     # 与 pnpm test 同批跑：props 缝加宽只有 tsc 抓得住
+pnpm test:pack     # 构建 + 产物自检（lib/client.js 里含本地图文面）
+$env:DSH_INSTALL_CHECK='1'; pnpm vitest run tests/packaging-install.test.ts   # 插件树挂载（含 epub 子树）
+$env:DSH_EPUB_BROWSER='1'; pnpm vitest run tests/browser/epub-reader.test.ts  # 真浏览器（先 pnpm build）
+```
+
+> 前四条离线证明服务端链路与组件逻辑（jsdom 无排版引擎、不解码图片）：**真实浏览器里的渲染、图片解码、
+> 排版位置稳定与真下载字节**由最后一条量——真 `ReadingService` + 真路由跑在随机 loopback 端口、驱动构建
+> 产物 `lib/client.js`，浏览器只用**已安装的** Edge/Chrome（`DSH_BROWSER_EXECUTABLE` 可指定，**从不下载**）；
+> 门开着缺浏览器 / 缺产物即红。它证的仍是「跟踪的最小宿主壳」这一半契约，真 DSH 宿主的侧栏选中与槽位路由
+> 不在其中。该门允许带**按应有口径写的「诚实红」**（已知缺陷的读数不削成绿，配套墓碑断言），
+> 缺陷与读数登记在 `docs/design/client.md` 的「已知开口」；修好时按那条记录一起撤下。
 
 ## 快速开始
 
@@ -25,7 +58,7 @@ dsh plugin --profile web add @xrn1997/dsh-novel
 
 npm 安装使用预构建产物，秒装、无需构建授权。也可从 GitHub 源码安装（`dsh plugin --profile web add github:xrn1997/dsh-novel`）：`prepare` 脚本会自动构建，但 pnpm ≥10 首次安装可能报构建脚本被拦截（依赖已装但 `lib/` 未生成），需先在 profile 目录执行 `pnpm approve-builds --all` 再重跑安装命令。
 
-**兼容宿主**：声明分两层，别混。**安装许可**在 `peerDependencies`——`@deepseek-ai/dsh-tools` 逐代显式开口，覆盖 `0.0.1-rc.5` 起 24 个已发宿主（全部 26 个里只除外最早的 `0.0.1-rc.1` / `-rc.2`：它们缺本插件硬注入的 `jobs` 服务，装进去整树会拒绝挂载）。**实测声明**在 `dsh.compatibility.dshReleases`，只写真跑过的两版：`0.1.7-rc.1`（`dsh --profile web --dump-config` 组合树含本插件、六个 `dshnovel_` 工具真调用通过、`DSH_INSTALL_CHECK` 装载链路绿）与 `0.1.5-rc.1`（此前的真机运行记录）。两层都由 `tests/packaging.test.ts` 看住：编译期 devDependency 必须被 peer 区间放行、且必须在实测声明里。宿主发新版后要做三件事——bump 编译版本、给 peer 区间开这一代的口、加实测条目，少一步测试就红。
+**兼容宿主**：声明分两层，别混。**安装许可**在 `peerDependencies`——`@deepseek-ai/dsh-tools` 逐代显式开口，覆盖 `0.0.1-rc.5` 起 25 个已发宿主（全部 27 个里只除外最早的 `0.0.1-rc.1` / `-rc.2`：它们缺本插件硬注入的 `jobs` 服务，装进去整树会拒绝挂载）。**实测声明**在 `dsh.compatibility.dshReleases`，只写真跑过的三版：`0.1.7-rc.2`（2026-09-26 编译所依 bump 到这一代：`typecheck` 清、全量门 1800 passed、真浏览器图文门 20/20 全在 rc.2 的类型面与产物上重跑；真机侧走**桌面版 0.1.7-rc.2 应用内 `link:` 装入**，宿主带的共享包正与本仓 peer 对齐——`cordis 4.0.4` / `schemastery 3.18.4`。注意这一代**没有** CLI 侧的 `--profile web --dump-config` 与六工具真调用读数：桌面 profile 被应用独占、CLI 拒写，那条组合树证据仍属 rc.1）、`0.1.7-rc.1`（`dsh --profile web --dump-config` 组合树含本插件、六个 `dshnovel_` 工具真调用通过、`DSH_INSTALL_CHECK` 装载链路绿）与 `0.1.5-rc.1`（此前的真机运行记录）。**同代内 bump 不需要新开 peer 段**（semver 预发布规则按 `major.minor.patch` 认代，见 `docs/reference/dsh-plugin-api.md` 风险第 1 条）。两层都由 `tests/packaging.test.ts` 看住：编译期 devDependency 必须被 peer 区间放行、且必须在实测声明里。宿主发新版后要做三件事——bump 编译版本、给 peer 区间开这一代的口、加实测条目，少一步测试就红。
 
 卸载：
 
@@ -37,7 +70,7 @@ dsh plugin --profile web remove @xrn1997/dsh-novel
 
 1. **导入书源**：「小说」视图 → 顶部「书源管理」tab → 选择 .json 文件（可多选，选中即开始导入）或粘贴 legado 书源 JSON。导入是**服务端后台任务**——关掉页面不影响导入，回来即可看到进度与汇总；同一书源地址自动去重（已有可用源则跳过，坏源/未验证源被新条替换）。
 2. **批量验证**：导入不逐条探针（新源状态为「未验证」）——「书源管理」tab 顶部的**待办收件箱**把坏源/未验证置顶成任务卡，「一键验证」「批量重验」即点即跑；任意集合（状态/分组/文本过滤 + 编辑态勾选 +「验证所选」）同样可发起，慢速后台自测，并发 5 路限流，进度走全局状态条（任务在服务端跑，关页面不打断）。
-3. **找书读**：「小说」视图 →「书架」tab 搜索书名 / 作者 → 点封面进入阅读器。阅读进度自动记住。
+3. **找书读**：「小说」视图 →「书架」tab 搜索书名 / 作者 → 点封面进入阅读器。阅读进度自动记住。手上已有文件就走书架末位的**导入本地书籍**（TXT / EPUB）。
 4. **让 AI 助手干活**：在对话里直接说「帮我找一本《XX》读第三章」「看看 XX 书源为什么坏了」。
 
 ## AI 助手工具
@@ -45,7 +78,7 @@ dsh plugin --profile web remove @xrn1997/dsh-novel
 | 工具 | 用途 |
 | --- | --- |
 | `dshnovel_search` | 在已启用的**文本**书源中聚合搜索（本插件当前仅支持小说文本面），结果逐源分组（单个源失败不影响其他源）；返回的 `url` 字段可作为其他工具的 `bookKey` |
-| `dshnovel_read` | 获取某本书第 N 章（0 起）的正文纯文本（含章名）；章序从 `dshnovel_toc` 查 |
+| `dshnovel_read` | 获取某本书第 N 章（0 起）的正文纯文本（含章名）；章序从 `dshnovel_toc` 查。图文书同样只给文字：插图落成 `[图片：替代文字]` 占位（无替代文字则 `[图片]`），不包含图片本身 |
 | `dshnovel_toc` | 获取书籍目录：逐章返回章名与 0 起 `chapterIndex`（章名→下标的映射处）与章节 URL |
 | `dshnovel_shelf` | 书架与阅读进度：`list` 列书与进度 / `add` 加书 / `save_progress` 存进度 / `remove` 删书 |
 | `dshnovel_source` | 书源管理：`list` 源清单 / `probe` 实测验证可用性（真实搜索请求 + 失败定位）/ `enable`·`disable` 启停 / `remove` 删除 |
@@ -65,21 +98,21 @@ dsh plugin --profile web remove @xrn1997/dsh-novel
 | `jsTimeoutMs` | `15000` | js 沙箱预算（毫秒，阅读/搜索/探针/登录全链路共用）。legado 书源的多请求目录脚本（多次 `java.ajax` + 签名）需要秒级预算；缺省 2000ms 会把这类源卡死成「脚本超时」 |
 | `cacheMaxBytes` | `209715200`（200MB） | 目录 / 正文缓存上限（字节，LRU 淘汰） |
 | `exportDelayMs` | `300` | 范围导出的章节间抓取间隔（毫秒，串行限速以避免给站点造成压力） |
-| `localImportMaxBytes` | `52428800`（50MB） | 本地 TXT 导入大小上限（字节） |
+| `localImportMaxBytes` | `52428800`（50MB） | 本地文件导入大小上限（字节，TXT / EPUB 共用） |
 | `proxyUrl` | 自动探测 | 出站代理，见[常见问题](#常见问题)；`'direct'` 强制直连，或显式指定如 `'http://127.0.0.1:7897'` |
 
 ## HTTP API
 
-所有路由以 `/novel-api` 为前缀（仅接受本机 loopback 且 **Origin/Referer 同源**的请求），响应为统一信封 `{ ok, value | error }`，错误附带 `code` 与可选的规则段级定位。共 26 条路由（21 条静态 + 5 条参数，计数由 `tests/shared/wire-builders.test.ts` 钉死）。**路由名与值形状的代码真相在 `src/shared/wire.ts`**（Node 半与浏览器半共用同一份定义，契约测试逐条把守）：
+所有路由以 `/novel-api` 为前缀（仅接受本机 loopback 且 **Origin/Referer 同源**的请求），响应为统一信封 `{ ok, value | error }`，错误附带 `code` 与可选的规则段级定位。共 30 条路由（25 条静态 + 5 条参数，计数由 `tests/shared/wire-builders.test.ts` 钉死）。**路由名与值形状的代码真相在 `src/shared/wire.ts`**（Node 半与浏览器半共用同一份定义，契约测试逐条把守）：
 
 | 面 | 路由 |
 | --- | --- |
 | 健康检查 | `GET /novel-api` |
 | 书源 | `GET /sources`、`POST /sources/import`（后台任务，body `{files:[{name,text}]}`，上限 32MB）、`GET /sources/job-status`（任务进度/汇总）、`POST /sources/batch-probe`（批量验证后台任务）、`POST /sources/batch-enabled`（批量启停）、`POST /sources/batch-delete`、`POST /sources/:id/probe`、`POST /sources/:id/enabled`（启停）、`POST /sources/:id/auth`、`DELETE /sources/:id` |
-| 阅读 | `GET /search`（一次性收齐全部命中）、`GET /search/plan`（本次聚合搜索的参搜源集——参与集的唯一主人在服务端）、**`POST /search/job`（把聚合搜索交给后台任务跑，body `{keyword, sourceIds?}` → `{jobId}`；离开界面不影响它跑完）**、**`GET /search/job-status?since=N`（按游标读增量：`added` 是新完成的分组、`next` 是下次该带的游标；整轮结果保留 30 分钟）**、**`GET /search/job-stream?since=N`（同一份快照的 SSE 推送：首帧即 baseline，终帧后服务端关流；推送不可用时客户端自动回落到上面的快照轮询）**、**`POST /search/job-cancel`（停止本轮：不再往下搜，已搜出的命中一律保留）**、`GET /book`、`GET /toc`、`GET /chapter`（`?refresh=1` 绕过缓存） |
+| 阅读 | `GET /search`（一次性收齐全部命中）、`GET /search/plan`（本次聚合搜索的参搜源集——参与集的唯一主人在服务端）、**`POST /search/job`（把聚合搜索交给后台任务跑，body `{keyword, sourceIds?}` → `{jobId}`；离开界面不影响它跑完）**、**`GET /search/job-status?since=N`（按游标读增量：`added` 是新完成的分组、`next` 是下次该带的游标；整轮结果保留 30 分钟）**、**`GET /search/job-stream?since=N`（同一份快照的 SSE 推送：首帧即 baseline，终帧后服务端关流；推送不可用时客户端自动回落到上面的快照轮询）**、**`POST /search/job-cancel`（停止本轮：不再往下搜，已搜出的命中一律保留）**、`GET /book`、`GET /toc`、**`GET /navigation`（线性 `chapters` + 展示树 `items`——EPUB 原生目录，其他书由 toc 派生）**、`GET /chapter`（回 `ChapterContent`：文字章 `{kind:'text'}` 或图文树 `{kind:'rich'}`；`?refresh=1` 绕过缓存） |
 | 书架 | `GET /shelf`（条目附 `sourceName` 来源投影——服务端读取时 join 书源注册表）、`PUT /shelf/:key`（带 `title` 加书 / 带 `progress` 更新进度 / 带 `patch` 对在架书改元数据）、`DELETE /shelf/:key`、**`POST /shelf/batch-delete`（多选批量删，body `{keys:[bookKey]}`；本地书连带删副本，未知键静默跳过）** |
 | 导出 | `GET /export`（流式 TXT，`from`/`to` 选段（1 基含端，缺席 = 全本），响应头 `X-Novel-Total-Chapters` 为**本次范围**章数、`X-Novel-Range` 为 `from-to`；倒置范围 422 `BadRange`，连接断开即停止抓取） |
-| 本地书 | `POST /local/import?name=…`、`DELETE /local?id=…` |
+| 本地书 | `POST /local/import?name=…`（TXT / EPUB 按内容分流，回 `LocalImportResponse`：书名/作者/封面/章数/格式/编码/导入说明）、`DELETE /local?id=…`（连带删整份副本）、`GET /local/document?id=&documentId=`（补充文档：脚注 / 附录）、`GET /local/resource?id=&resourceId=`（插图与封面，只认不透明资源 ID）、`GET /local/warnings?id=`（持久化的导入说明，按需查看） |
 
 ## 数据存储
 
@@ -90,7 +123,8 @@ dsh plugin --profile web remove @xrn1997/dsh-novel
 ├── sources.json   # 书源清单（含登录态，仅存本机、不会外传）
 ├── shelf.json     # 书架与阅读进度
 ├── cache/         # 目录 / 正文缓存（LRU，默认上限 200MB）
-└── local/         # 导入的本地 TXT（原文 + 元数据与章节偏移表）
+└── local/         # 导入的本地书：TXT 是 <uuid>.txt + <uuid>.json（章节偏移表）；
+                   #                EPUB 是 <uuid>/ 目录（原文 + 派生文档 + 资源）+ <uuid>.json
 ```
 
 ## 兼容哪些书源
@@ -171,7 +205,7 @@ pnpm typecheck     # tsc --noEmit
 `DSH_LEGADO_REF=off` 才跳过，且跳过会写进用例名。判据口径与被裁决的缺席面见
 `docs/design/legado-compat.md`。
 
-**默认跳过、需显式打开的四条真链路门控**——`pnpm test` 全绿**不覆盖**它们（真实网络 / 真实安装）：
+**默认跳过、需显式打开的门控（四条真实网络 / 真实安装 + 一条真浏览器）**——`pnpm test` 全绿**不覆盖**它们：
 
 ```powershell
 # 真机全量重探（改动抓取/规则引擎后实测书源搜索面可用率；真实访问网络，耗时数分钟）
@@ -189,10 +223,16 @@ $env:COMPAT_CAPTURE='1'; pnpm vitest run --config vitest.compat.config.ts tests/
 
 # 真安装链路（dsh plugin add → profile bundles 挂载 + lib/client.js/cordis.patch.yml 就位）
 $env:DSH_INSTALL_CHECK='1'; pnpm vitest run tests/packaging-install.test.ts
+
+# 真浏览器门（EPUB 图文阅读：真图片解码 / 真排版位置 / 真下载字节；**离线**——本地随机端口起真服务、
+# 驱动构建产物 lib/client.js，浏览器只用已安装的 Edge/Chrome，从不下载；缺浏览器或缺 lib 即红）
+$env:DSH_EPUB_BROWSER='1'; pnpm vitest run tests/browser/epub-reader.test.ts
 ```
 
 > 说明：常规集证明了引擎 / 服务 / 契约 / 前端逻辑，**不证明任何真实站点可用性、也不证明安装链路**。
-> 这四条门控是这些承诺的唯一自动化验证，需在改动相应链路后手动跑。
+> 这些门控是这些承诺的唯一自动化验证，需在改动相应链路后手动跑。真浏览器门另有一条纪律：它是**报告**
+> 也是断言——若某条已知缺陷按应有口径写着读数，它就诚实红着、不改成绿（登记见 `docs/design/client.md`
+> 的「已知开口」）；它证明的宿主侧只是仓内最小壳。
 
 **解析面普查（离线，读本地书源库；不属上面四条真链路门控）**——「legado 能解析的书源本插件也能解析」
 这条目标的进度读数口：把现库**每一条规则串**过 `parseRule`、把**每一个脚本里的 `java.*` 调用**与沙箱

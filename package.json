@@ -53,7 +53,8 @@
     "compatibility": {
       "dshReleases": {
         "0.1.5-rc.1": "compatible",
-        "0.1.7-rc.1": "compatible"
+        "0.1.7-rc.1": "compatible",
+        "0.1.7-rc.2": "compatible"
       }
     }
   },
@@ -68,15 +69,18 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "buffer-crc32": "1.0.0",
     "cheerio": "^1.0.0",
     "dom-serializer": "^3.0.0",
     "domhandler": "^5.0.3",
     "iconv-lite": "^0.7.3",
-    "undici": "7.29.1"
+    "image-size": "2.0.4",
+    "undici": "7.29.1",
+    "yauzl": "3.4.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
-    "@deepseek-ai/dsh-tools": "0.1.7-rc.1",
+    "@deepseek-ai/dsh-tools": "0.1.7-rc.2",
     "@deepseek-ai/schemastery": "^3.18.4",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
@@ -84,7 +88,10 @@
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
     "@types/semver": "^7.5.0",
+    "@types/yauzl": "3.4.0",
+    "fflate": "0.8.3",
     "jsdom": "^30.0.1",
+    "playwright": "1.63.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "semver": "^7.7.0",

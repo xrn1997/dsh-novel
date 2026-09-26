@@ -118,7 +118,9 @@ _Avoid_: 重连（重连是同一轮的通道恢复；换轮是身份变了）�
 _Avoid_: id、url（太泛）
 
 **本地书（local book）**:
-从本地 TXT 导入的书，源身份固定 `__local__`，与在线书源正交。
+从本地文件导入的书，**TXT 与 EPUB 2/3 两支**：分流按**内容**（文件头是 ZIP 魔数就走 EPUB 路径，其余字节走既有 TXT 解码链；两条互不兜底），源身份固定 `__local__`，与在线书源正交；bookKey 形态 `local:<uuid>`，落盘在 `dataDir/local/` 下（TXT 是原文 + 元数据两件；EPUB 是 `<uuid>/` 目录加顶层元数据），删除连带删整份副本。
+_Implementation_: `src/services/localbooks.ts`（身份、分流、发布提交、读取与删除）+ `src/services/epub/`（EPUB 解析与规范化——不认识书架与 HTTP）
+_Avoid_: 本地 TXT（口径已覆盖两种格式，TXT 只是其中一支；书架卡片文案因此只说「本地」，真实格式由导入回执的 `format` 字段交代）、上传文件（那是文件，不是书）
 
 **后台任务（background job）**:
 跑在服务端的耗时任务，三种 kind：`novel-import` / `novel-probe`（写，共用一个槽、运行中互斥）与 `novel-search`（读，**另开一槽**——搜索不该挡住导入）。结果保留到下一个同类任务开始（搜索另有 30 分钟保留期），关页面、切界面都不影响它跑完。身份与生命周期登记给宿主的 `ctx.jobs`（`<kind>-N`、协作式取消、随服务卸载而终止），**停止（cancel）不是失败也不是放弃**：本轮立即进终态、不再开新的源，已搜出的结果留在读面。业务计数与明细仍归本仓的持有者（`SourceJobs` / `SearchJobs`）——宿主只有 `label` 与一行 `detail`，装不下 642 源的失败分桶，也装不下整轮搜索结果。
