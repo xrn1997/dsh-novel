@@ -130,13 +130,24 @@ describe('@js 沙箱', () => {
     // androidId 现在也是点名桩（不是 TypeError: is not a function）——脚本能看懂差在哪
     await expect(run('return java.androidId()')).rejects.toThrow(/需要安卓宿主环境/)
   })
-  it('java.connect(url) → 对面 StrResponse 形态（对象 {url, body}，不是串）', async () => {
+  it('java.connect(url) → 响应对象形态（对象 {url, body}，不是串）', async () => {
     const ctx = ctxOf({ fetch: async (u) => ({ body: 'B:' + u }) })
     const v = await run(
       'const r = await java.connect("https://m.example.com/a"); return r.url + "|" + r.body',
       hostOf(), ctx,
     )
     expect(v.value).toEqual({ kind: 'value', text: 'https://m.example.com/a|B:https://m.example.com/a' })
+  })
+  // `connect(...)` 的返回对象上，`.url` 与 `.raw().request().url()` 是**同一个值**（跟随重定向后的
+  // 末次请求）；全本同人小说网的 searchUrl 脚本靠 `connect(so).raw().request().url()`
+  // 取落地地址再拼分页 URL（此前本仓报 `raw is not a function`，源整条判坏）。
+  it('java.connect(...).raw().request().url() → 落地地址，且与 .url 同值（重定向后的末次请求）', async () => {
+    const ctx = ctxOf({ fetch: async () => ({ body: 'B', finalUrl: 'https://m.example.com/final' }) })
+    const v = await run(
+      'const r = await java.connect("https://m.example.com/a"); return r.url + "|" + r.raw().request().url()',
+      hostOf(), ctx,
+    )
+    expect(v.value).toEqual({ kind: 'value', text: 'https://m.example.com/final|https://m.example.com/final' })
   })
   it('java.connect 的第二实参（对面是 header JSON）本仓无请求头通道 → 点名，不静默丢掉', async () => {
     const ctx = ctxOf({ fetch: async () => ({ body: 'z' }) })
@@ -157,8 +168,8 @@ describe('@js 沙箱', () => {
       hostOf(), ctx,
     )
     expect(v.value).toEqual({ kind: 'value', text: 'BODY|200|https://m.example.com/final|abc' })
-    // 第三参：对面形参是 Map<String,String>——脚本内联给 JS 对象（独立合集里的真形态），
-    // 也接受 JSON 串（Rhino 侧由 Gson 转）；两种都要落到同一份头表
+    // 第三参：脚本内联给 JS 对象（独立合集里的真形态），也接受 JSON 串；
+    // 两种都要落到同一份头表
     expect(seen[0][0]).toBe('https://m.example.com/a')
     expect(seen[0][1]).toBe('k=1')
     expect(seen[0][2]).toEqual({ 'Content-Type': 'application/x-www-form-urlencoded' })
@@ -220,7 +231,7 @@ describe('@js 沙箱', () => {
     expect((await run('return java.md5Encode("abc")')).value)
       .toEqual({ kind: 'value', text: '900150983cd24fb0d6963f7d28e17f72' }) // md5("abc") 标准向量
     expect((await run('return java.md5Encode16("abc")')).value)
-      .toEqual({ kind: 'value', text: '3cd24fb0d6963f7d' }) // 32 位 md5 取中 16 位（legado 语义）
+      .toEqual({ kind: 'value', text: '3cd24fb0d6963f7d' }) // 32 位 md5 取中 16 位（slice(8,24)：存量源签名口径）
   })
 
   it('java.timeFormat：yyyy/MM/dd HH:mm（本地时区手排）', async () => {
@@ -267,16 +278,16 @@ describe('@js 沙箱', () => {
   })
 
   it('getString 二参布尔 = unescape 开关（对面双参重载），不再被当 isUrl 抛错', async () => {
-    // 本行原先钉的是「isUrl=true 守门必炸」——那条守门建在误读上：对面第二参是 unescape，
+    // 本行原先钉的是「isUrl=true 守门必炸」——那条守门建在误读上：第二参是 unescape，
     // isUrl 在第三参，且 isUrl 也**不抓取**（只绝对化）。见 matrix h-get-string-is-url。
     const fake = (): EngineValue => ({ kind: 'value', text: 'X' })
     const unescapeOn = await run('return java.getString("@css:h1", true)', hostOf(), ctxOf(), fake)
     expect(unescapeOn.value).toEqual({ kind: 'value', text: 'X' })
-    // 第三参才是 isUrl：产物按 base 绝对化（相对段落在 base 的目录下——对面同样是 `URL(base, rel)`），
+    // 第三参才是 isUrl：产物按 base 绝对化（相对段落在 base 的目录下，`URL(base, rel)` 语义），
     // 全程不碰网络：这条路径没有任何 fetch 通道，实现若去抓取会当场抛「该源未提供网络能力」
     const isUrl = await run('return java.getString("@css:h1", null, true)', hostOf(), ctxOf(), fake)
     expect(isUrl.value).toEqual({ kind: 'value', text: 'https://m.example.com/read/X' })
-    // unescape=false 与缺省同样走递归求值（对面缺省是 true：本例文本不含实体，两种取值同形）
+    // unescape=false 与缺省同样走递归求值（缺省是 true：本例文本不含实体，两种取值同形）
     expect((await run('return java.getString("@css:h1", false)', hostOf(), ctxOf(), fake)).value)
       .toEqual({ kind: 'value', text: 'X' })
     expect((await run('return java.getString("@css:h1")', hostOf(), ctxOf(), fake)).value)
@@ -355,10 +366,10 @@ describe('宿主垫片（真实源用到的缺失 API）', () => {
     const err2 = await run(`return java.createSymmetricCrypto("AES/CBC/PKCS5Padding","${key}","${key}").encryptStr("x")`).then(() => null, (e) => e)
     expect(String(err2.message)).toMatch(/不支持/)
   })
-  it('source.getVariable/setVariable 是**单串槽**（对面 BaseSource 的 sourceVariable_<key>）', async () => {
+  it('source.getVariable/setVariable 是**单串槽**（与 source.put 的键值表分开存）', async () => {
     const ctx = ctxOf()
     expect((await run('return source.getVariable() || "(空)"', hostOf(), ctx)).value).toEqual({ kind: 'value', text: '(空)' })
-    // 对面 getVariable 直返那串——本仓曾把它做成「整表 JSON.stringify」，脚本按字符串用就拿到
+    // getVariable 直返那串——本仓曾把它做成「整表 JSON.stringify」，脚本按字符串用就拿到
     // 一层 JSON 壳（存自定义域名的源正是直接把这串拼进 URL 的写法）
     await run('source.setVariable("x.com"); return "ok"', hostOf(), ctx)
     expect((await run('return source.getVariable()', hostOf(), ctx)).value).toEqual({ kind: 'value', text: 'x.com' })
@@ -370,8 +381,8 @@ describe('宿主垫片（真实源用到的缺失 API）', () => {
     const ctx = ctxOf()
     await run('source.put("token", "t123"); source.put("searchMode", "author"); return "ok"', hostOf(), ctx)
     expect((await run('return source.get("token")', hostOf(), ctx)).value).toEqual({ kind: 'value', text: 't123' })
-    // 对面 get 缺键返 ""（不是 null）；脚本 `source.get("x") || "def"` 两种形状同结果，
-    // 但 `source.get("x") === ""` 这类判等只有对面形状才对
+    // get 缺键返 ""（不是 null）；脚本 `source.get("x") || "def"` 两种形状同结果，
+    // 但 `source.get("x") === ""` 这类判等只有这一形状才对
     expect((await run('return source.get("missing") === "" ? "空串" : String(source.get("missing"))', hostOf(), ctx)).value)
       .toEqual({ kind: 'value', text: '空串' })
     // 写串槽**不清**键值表（旧实现同一张 Map，setVariable 顺手 clear()）
@@ -570,7 +581,7 @@ describe('元素桥 remove()：对面在活文档树上摘节点，摘完再读�
   })
   it('元素上 select().remove() 后 html() 看见净化结果（环安小说网形态）', async () => {
     const t = await runJs('var el=java.getElement(".art");el.select("p,script,div").remove();String(el.html())')
-    // 对面 Element.remove() 只把节点从父上摘掉、不删子树：div.art 自己也被这条 select 命中，
+    // remove() 只把节点从父上摘掉、不删子树：div.art 自己也被这条 select 命中，
     // 摘走之后 el 仍持有没被命中的 <em>——净化后只剩它
     expect(t).toContain('丙')
     expect(t).not.toContain('正文一')

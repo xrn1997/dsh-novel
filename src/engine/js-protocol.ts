@@ -90,7 +90,7 @@ function method<N extends string, F extends HostFn>(
 }
 
 /** java.getString* 的递归求值（evaluateRef 未注入 → 宁炸不猜）
- *  第三参 content 是**对面的 mContent**：显式给值即以它为基（`mContent ?: this.content`），
+ *  第三参 content 是**显式基内容**：给了就以它为基（优先于上一段结果），
  *  null/undefined 回落到本仓的 contentBase ?? result（java.setContent 那条路）。 */
 function evalRule(d: BridgeDeps, rule: string, content?: unknown): EngineValue {
   if (!d.evaluateRef) {
@@ -104,11 +104,11 @@ function evalRule(d: BridgeDeps, rule: string, content?: unknown): EngineValue {
   return d.evaluateRef(rule, base)
 }
 
-/** getString / getStringList 的实参分派：对面是**两个重载**，位置语义不同。
+/** getString / getStringList 的实参分派：**两个重载**的位置语义不同。
  *  · `getString(rule, unescape)` —— 第二参布尔就是「要不要再做一次 HTML 反转义」；
- *  · `getString(rule, mContent, isUrl)` —— 第二参是基内容、第三参才是 isUrl。
+ *  · `getString(rule, content, isUrl)` —— 第二参是基内容、第三参才是 isUrl。
  *  本仓此前只有一个 `(rule, isUrl?)` 签名：`true` 被当未实现直接抛，`false` 不抛但把
- *  「不要反转义」静默反做（对面 `false` 出原文、本仓出解码后的值）。 */
+ *  「不要反转义」静默反做（`false` 本意是出原文，当时却出了解码后的值）。 */
 function parseGetStringArgs(arg2?: unknown, arg3?: unknown): { content?: unknown; isUrl: boolean; unescape: boolean } {
   if (typeof arg2 === 'boolean') return { content: undefined, isUrl: false, unescape: arg2 }
   return { content: arg2, isUrl: arg3 === true, unescape: true }
@@ -119,7 +119,7 @@ const sourceVars = (d: BridgeDeps): Map<string, string> => d.session.sourceVars(
 const sourceCache = (d: BridgeDeps): Map<string, string> => d.session.cacheStore(d.sourceKey)
 
 /**
- * JavaBridge 协议表：**唯一登记点**。行序即文档序（与 legado 宿主 API 分组一致）。
+ * JavaBridge 协议表：**唯一登记点**。行序即文档序（网络 / 变量 / 递归求值 / 工具 / 垫片分组）。
  * 添加方法只改此处一行（含实现）——类型面/BOOTSTRAP 名单/宿主分派全部派生跟随。
  */
 export const JAVA_PROTOCOL = [
@@ -129,11 +129,11 @@ export const JAVA_PROTOCOL = [
     if (!fetchFn) {
       throw new JsSandboxError('该源未提供网络能力（ctx.fetch 缺失）', { ...d.loc, facet: d.facet, script: d.code })
     }
-    // 参数规约对齐 Rhino 的 String 形参强制转换：`java.ajax(result)` 传进来的常是上一段的
-    // 值——JSONPath 给单元素数组时，对面按 toString 拼成那条 URL（`['https://x']` → `https://x`），
+    // 参数规约按 String 形参强制转换：`java.ajax(result)` 传进来的常是上一段的值——
+    // JSONPath 给单元素数组时按 toString 拼成那条 URL（`['https://x']` → `https://x`），
     // 本仓此前把原值直接交给请求组装层，炸成 `template.replace is not a function`
-    // （灯读文学 detail init 段实证：既没线索，结果也和对面不同）。
-    // null/undefined 不猜成字符串 "null" 去打站点：对面拿它 new URL 也是抛，本仓点名参数缺失。
+    // （灯读文学 detail init 段实证：既没线索，结果也不对）。
+    // null/undefined 不猜成字符串 "null" 去打站点：拿它 new URL 也是抛，本仓点名参数缺失。
     if (url === null || url === undefined) {
       throw new JsSandboxError('java.ajax 参数为空（脚本传进 null/undefined）', { ...d.loc, facet: d.facet, script: d.code })
     }
@@ -143,12 +143,14 @@ export const JAVA_PROTOCOL = [
     // 异步工作。见 js-sandbox 的 BOOTSTRAP 注释与 docs/design/engine.md。
     return fetchFn(String(url)).then((r) => r?.body ?? '')
   }, 'async'),
-  // java.connect：对面返回 `StrResponse{url, body}`（对象，脚本写 `connect(u).body`），
-  // 与 ajax 只差一层壳。两点**刻意分歧**：
-  // ① 对面第二/三参接 header JSON 与 callTimeout——本仓 ctx.fetch 没有请求头通道（头由请求
+  // java.connect：返回带结果对象的响应（脚本写 `connect(u).body` / `connect(u).raw().request().url()`），
+  // 与 ajax 只差一层壳。三点**刻意取舍**：
+  // ① 第二/三参不接 header JSON 与 callTimeout——本仓 ctx.fetch 没有请求头通道（头由请求
   //    组装层按源规则统一装配），传了非空 header 就点名，不静默丢掉脚本的意图；
-  // ② 对面 `runCatching` 把异常塞进 body（StrResponse(url, stackTraceStr)）——错误文本冒充
-  //    正文是本仓定义的最高罪，失败照旧抛出。见矩阵 `h-java-connect`。
+  // ② 不把异常塞进 body——错误文本冒充正文是本仓定义的最高罪，失败照旧抛出。
+  //    见矩阵 `h-java-connect`。
+  // ③ `url` 给**落地地址**（重定向后末次请求的地址）——`raw()` 那层壳在 BOOTSTRAP 里包，
+  //    `raw().request().url()` 与 `.url` 同源同值。
   method('connect', { obj: 'java' }, (d) => async (url: unknown, header?: unknown): Promise<{ url: string; body: string }> => {
     const fetchFn = d.ctx.fetch
     if (!fetchFn) {
@@ -164,14 +166,13 @@ export const JAVA_PROTOCOL = [
       )
     }
     const u = String(url)
-    return fetchFn(u).then((r) => ({ url: u, body: r?.body ?? '' }))
+    return fetchFn(u).then((r) => ({ url: r?.finalUrl ?? u, body: r?.body ?? '' }))
   }, 'async'),
-  // java.post：对面 `help/JsExtensions.kt:post(urlStr, body, headers, timeout)` → Jsoup 的
-  // Connection.Response（**对象**，脚本写 `res.body()` / `res.cookies()`）。独立书源合集现量 9 源在用
-  // （解析面普查第 23 批：本库 214 源一条都没有，所以此前从未暴露）。
+  // java.post：脚本以 POST 发请求、拿响应对象（写 `res.body()` / `res.cookies()`）。
+  // 独立书源合集现量 9 源在用（解析面普查第 23 批：本库 214 源一条都没有，所以此前从未暴露）。
   // 宿主侧返回数据面，`.body()` 那层壳在 BOOTSTRAP 里包（跨 worker 只走 JSON，不传函数）。
-  // 与 connect 同两条刻意分歧：本仓没有源级 header 之外的通道时**不静默丢**——这里 headers 是
-  // 对面签名里就有的参数，故照收并叠到源级头之上；对面 `timeout` 第四参本仓走进程级超时，忽略之。
+  // 与 connect 同两条刻意取舍：本仓没有源级 header 之外的通道时**不静默丢**——headers 照收并叠到
+  // 源级头之上（后者覆盖同名）；`timeout` 一类的实参本仓走进程级超时，忽略之。
   method('post', { obj: 'java' }, (d) => async (
     url: unknown, body?: unknown, headersArg?: unknown,
   ): Promise<{ url: string; body: string; contentType?: string; statusCode: number; cookies: Record<string, string> }> => {
@@ -182,8 +183,8 @@ export const JAVA_PROTOCOL = [
     if (url === null || url === undefined) {
       throw new JsSandboxError('java.post 参数为空（脚本传进 null/undefined）', { ...d.loc, facet: d.facet, script: d.code })
     }
-    // 对面形参是 Map<String,String>：脚本常给 JSON 串（`'{"Content-Type":"..."}'`）， Rhino 侧
-    // 由 Gson 转；本仓两种都收，认不出的形状点名而不是当 header 发出去。
+    // header 实参脚本常给 JSON 串（`'{"Content-Type":"..."}'`）或对象字面量：本仓两种都收，
+    // 认不出的形状点名而不是当 header 发出去。
     let hdrs: Record<string, string> | undefined
     if (typeof headersArg === 'string' && headersArg.trim() !== '') {
       try { hdrs = JSON.parse(headersArg) as Record<string, string> } catch {
@@ -194,8 +195,8 @@ export const JAVA_PROTOCOL = [
     }
     return postFn(String(url), body === null || body === undefined ? '' : String(body), hdrs)
   }, 'async'),
-  // java.getWebViewUA：对面返回 WebView 的默认 UA。本仓没有 WebView —— 返回**我们实际发出去的
-  // 那条 UA**：对拼 headers 的脚本可用，但它不是设备/内核真实的 WebView UA，属**近似**（矩阵
+  // java.getWebViewUA：本仓没有 WebView，给的是**我们实际发出去的那条 UA**：
+  // 对拼 headers 的脚本可用，但它不是设备/内核真实的 WebView UA，属**近似**（矩阵
   // `h-java-webview-ua` 记着这条差）。ctx.userAgent 未接线时点名抛错，绝不编一个串冒充。
   method('getWebViewUA', { obj: 'java' }, (d) => (): string => {
     if (!d.ctx.userAgent) {
@@ -210,14 +211,14 @@ export const JAVA_PROTOCOL = [
     d.ctx.vars ??= {}
     d.ctx.vars[String(key)] = String(value)
   }),
-  // ── 递归求值（对面两个重载：二参布尔 = unescape 开关，三参布尔 = isUrl 绝对化）────────
+  // ── 递归求值（两个重载：二参布尔 = unescape 开关，三参布尔 = isUrl 绝对化）──────────
   method('getString', { obj: 'java' }, (d) => (rule: unknown, arg2?: unknown, isUrlArg?: unknown): string => {
     const { content, isUrl, unescape } = parseGetStringArgs(arg2, isUrlArg)
     let s = engineValueToString(evalRule(d, String(rule), content))
-    // 对面次序：先 unescapeHtml4（缺省 true、且只在含 '&' 时做），再按 isUrl 决定返回形态
+    // 次序：先 unescapeHtml4（缺省 true、且只在含 '&' 时做），再按 isUrl 决定返回形态
     if (unescape) s = unescapeHtml4(s)
     if (isUrl) {
-      // 对面的 isUrl **不发请求**：空白回退 baseUrl，否则按 redirectUrl 绝对化
+      // isUrl **不发请求**：空白回退 baseUrl，否则按落地地址（重定向后末次请求的 URL）绝对化
       // （本仓 base 取 EvalContext.baseUrl，差异记在矩阵 h-abs-urls）
       return s.trim() === '' ? d.ctx.baseUrl ?? '' : absolutizeUrl(d.ctx.baseUrl, s)
     }
@@ -226,7 +227,7 @@ export const JAVA_PROTOCOL = [
   method('getStringList', { obj: 'java' }, (d) => (rule: unknown, content?: unknown, isUrlArg?: unknown): string[] => {
     const list = engineValueToStrings(evalRule(d, String(rule), content))
     if (isUrlArg !== true) return list
-    // 对面 getStringList 的 isUrl 分支：逐项绝对化，非空且未见过才收（去重按产出序）
+    // isUrl 分支：逐项绝对化，非空且未见过才收（去重按产出序）
     const out: string[] = []
     for (const item of list) {
       const abs = absolutizeUrl(d.ctx.baseUrl, item)
@@ -239,8 +240,8 @@ export const JAVA_PROTOCOL = [
     if (v.kind === 'nodes') {
       return v.nodes.toArray().map((_, i) => ({ html: v.nodes.eq(i).toString(), text: v.nodes.eq(i).text() }))
     }
-    // 非节点集产物（jsonpath/js 的 value/list）按条目如实映射——legado getElements 对 JSON 数据
-    // 求值的形态（`java.getElements('$.data[*].comicList[*]')`）：条目文本即 html 上下文
+    // 非节点集产物（jsonpath/js 的 value/list）按条目如实映射——JSON 数据求值时
+    // （`java.getElements('$.data[*].comicList[*]')`）条目文本即 html 上下文
     if (v.kind === 'list') return v.items.map((it) => ({ html: it, text: it }))
     if (v.kind === 'value') return [{ html: v.text, text: v.text }]
     return []
@@ -257,7 +258,7 @@ export const JAVA_PROTOCOL = [
     return { html: v.nodes.eq(0).toString(), text: v.nodes.eq(0).text() }
   }),
   method('setContent', { obj: 'java' }, (d) => (content: unknown): void => {
-    // legado：后续 getString* 以设定内容为基，而非上一段 result
+    // 后续 getString* 以设定内容为基，而非上一段 result
     d.contentBase = content === null || content === undefined ? null : String(content)
   }),
   // ── 纯工具（实现走 js-utils，可直测）────────────────────────────────
@@ -267,22 +268,22 @@ export const JAVA_PROTOCOL = [
   method('base64Decode', { obj: 'java' }, () => (s: string): string => base64Decode(String(s))),
   method('md5Encode', { obj: 'java' }, () => (s: string): string => md5Hex(String(s))),
   method('md5Encode16', { obj: 'java' }, () => (s: string): string => md5Hex16(String(s))),
-  // ── 摘要 / HMAC 族（对面 JsEncodeUtils 的「消息摘要/散列消息鉴别码」段，实参都是 data 在前）──
+  // ── 摘要 / HMAC 族（实参都是 data 在前）────────────────────────────────
   method('digestHex', { obj: 'java' }, () => (data: string, algorithm: string): string =>
     digestHex(String(data), String(algorithm))),
   method('digestBase64Str', { obj: 'java' }, () => (data: string, algorithm: string): string =>
     digestBase64(String(data), String(algorithm))),
-  // 名字大写 H 是**对面的原样**（`JsEncodeUtils.HMacHex/HMacBase64` 靠 @Suppress("FunctionName")
-  // 保住这个畸形名）——脚本里怎么写就得怎么 callable，改名等于把这条 API 弄没
+  // 名字大写 H 是**原样保留的畸形名**（`HMacHex` / `HMacBase64`）——脚本里怎么写就得怎么
+  // callable，改名等于把这条 API 弄没
   method('HMacHex', { obj: 'java' }, () => (data: string, algorithm: string, key: string): string =>
     hMacHex(String(data), String(algorithm), String(key))),
   method('HMacBase64', { obj: 'java' }, () => (data: string, algorithm: string, key: string): string =>
     hMacBase64(String(data), String(algorithm), String(key))),
-  // 章节标题中文数字规整（legado JsExtensions.toNumChapter；真实源用它把「第五百章」写成「第500章」）
+  // 章节标题中文数字规整（真实源用它把「第五百章」写成「第500章」）
   method('toNumChapter', { obj: 'java' }, () => (s: string): string => toNumChapter(String(s))),
   method('encodeURI', { obj: 'java' }, () => (s: string): string => uriEncode(String(s))),
   method('hexDecodeToString', { obj: 'java' }, () => (hex: string): string => hexDecodeToString(String(hex))),
-  // ── AES 解密桥（legado java.aesBase64DecodeToString：真实源正文解密形态
+  // ── AES 解密桥（真实源正文解密形态
   //    `java.aesBase64DecodeToString(data, key, transformation, iv)`——key/iv 为 utf8 字符串，
   //    PKCS5Padding ≡ PKCS7，Node crypto 原生支持）──
   method('aesBase64DecodeToString', { obj: 'java' }, (d) =>
@@ -298,9 +299,9 @@ export const JAVA_PROTOCOL = [
     jar(d).delete(String(name))
   }),
   // ── 源级状态（挂 source.getVariable/setVariable/get/put 与 cache.*）─────
-  // 对面是**三处存储**（data/entities/BaseSource.kt：sourceVariable_<s> 单串槽 / v_<s>_<key> 键值表；
-  // CacheManager 全局表）。本仓三张表按源建档、互不串味——旧实现把前两处塞进同一张 Map，
-  // setVariable 先 clear() 整表（清空 source.put 写过的键）且把 getVariable 做成整表 JSON 壳。
+  // 口径是**三处独立存储**：单串槽 / 键值表 / 缓存表。本仓三张表按源建档、互不串味——旧实现
+  // 把前两处塞进同一张 Map，`setVariable` 先 clear() 整表（清空 source.put 写过的键）且把
+  // `getVariable` 做成整表 JSON 壳而不是原串。
   method('sourceGetVariable', { obj: 'source', as: 'getVariable' }, (d) => (): string =>
     d.session.sourceString(d.sourceKey)),
   method('sourceSetVariable', { obj: 'source', as: 'setVariable' }, (d) => (value: string | null): void => {
@@ -311,9 +312,9 @@ export const JAVA_PROTOCOL = [
   method('sourceVarPut', { obj: 'source', as: 'put' }, (d) => (key: string, value: string): string => {
     const v = String(value)
     sourceVars(d).set(String(key), v)
-    return v          // 对面 put 返回写入的值（脚本有 `var x = source.put(k,v)` 的连写形态）
+    return v          // put 返回写入的值（脚本有 `var x = source.put(k,v)` 的连写形态）
   }),
-  // ── cache 垫片（legado CacheManager 最小仿真：按源隔离的进程内键值表，
+  // ── cache 垫片（最小仿真：按源隔离的进程内键值表，
   //    真实源 `cache.put('kkmh', …)` 搜索面写、目录面 `cache.get('kkmh')` 读的跨面形态）──
   method('cacheGet', { obj: 'cache', as: 'get' }, (d) => (key: string): string | null =>
     sourceCache(d).get(String(key)) ?? null),
@@ -323,10 +324,10 @@ export const JAVA_PROTOCOL = [
   method('cacheDelete', { obj: 'cache', as: 'delete' }, (d) => (key: string): void => {
     sourceCache(d).delete(String(key))
   }),
-  // ── cache 内存三别名（legado CacheManager.putMemory/getFromMemory/deleteMemory）──
-  // legado 里 put = 内存+磁盘双写、putMemory 仅写内存 LRU、get 先内存后磁盘——本仓的 cache
-  // 垫片**本来就是进程内键值表**（没有第二层磁盘存储），三个内存别名与 get/put/delete 同存储：
-  // 语义差异（内存 vs SQLite）在这里不存在，别名只为真实源脚本的调用名而在。
+  // ── cache 内存三别名（putMemory/getFromMemory/deleteMemory）──
+  // 内存/磁盘分层在本仓不存在：cache 垫片**本来就是进程内键值表**（没有第二层磁盘存储），
+  // 三个内存别名与 get/put/delete 同存储：语义差异（内存 vs 磁盘）在这里不存在，
+  // 别名只为真实源脚本的调用名而在。
   // 真机实证：novel.cooks.tw 目录脚本 `cache.putMemory('articleid', …)` 此前报 not a function。
   method('cachePutMemory', { obj: 'cache', as: 'putMemory' }, (d) => (key: string, value: unknown): void => {
     sourceCache(d).set(String(key), value === null || value === undefined ? '' : String(value))
@@ -337,10 +338,10 @@ export const JAVA_PROTOCOL = [
     sourceCache(d).delete(String(key))
   }),
   // ── 纯工具（续）────────────────────────────────────────────────────
-  // legado JsExtensions.randomUUID：UUID.randomUUID().toString()（小写带连字符）——
+  // randomUUID：小写带连字符的 UUID（crypto.randomUUID()）——
   // `@js` 动态请求头生成 device id 的真实形态（顶点小说 header 规则实证）
   method('randomUUID', { obj: 'java' }, () => (): string => crypto.randomUUID()),
-  // ── 字节组（legado JsExtensions：strToBytes/hex·base64 ToByteArray）──
+  // ── 字节组（strToBytes / hex·base64 ToByteArray）─────────────────────
   // 脚本侧字节统一用 number[]（0-255）承载：JSON 可序列化（跨 SAB RPC 安全）、`& 0xff` 语义不变。
   method('strToBytes', { obj: 'java' }, () => (s: string, charset?: string): number[] =>
     Array.from(javaEncode(String(s), charset ?? 'UTF-8'))),
@@ -354,7 +355,7 @@ export const JAVA_PROTOCOL = [
   }),
   method('base64DecodeToByteArray', { obj: 'java' }, () => (b64: string): number[] =>
     Array.from(Buffer.from(String(b64), 'base64'))),
-  // ── 文件下载（legado JsExtensions.downloadFile / readTxtFile）────────
+  // ── 文件下载（downloadFile / readTxtFile）───────────────────────────
   // **进程内暂存**（非真实磁盘）：downloadFile 取字节存表、readTxtFile 取表解码——
   // 刻意**不暴露真实文件系统**（书源脚本可读任意本地路径 = 数据外泄面）；
   // 路径形态 `/dsh-cache/<md5>.<ext>` 对脚本是不透明令牌（只被传回 readTxtFile）。
@@ -448,7 +449,7 @@ export const SANDBOX_MOUNTS = {
   cookie: JAVA_PROTOCOL.flatMap((r) => (r.mount.obj === 'cookie' ? [{ name: r.name, key: r.mount.as }] : [])),
   /** source 对象（__src__）：{ name: 宿主调用名, key: 脚本属性名 } */
   source: JAVA_PROTOCOL.flatMap((r) => (r.mount.obj === 'source' ? [{ name: r.name, key: r.mount.as }] : [])),
-  /** cache 对象（legado CacheManager 最小仿真）：{ name: 宿主调用名, key: 脚本属性名 } */
+  /** cache 对象（最小仿真的按源进程内键值表）：{ name: 宿主调用名, key: 脚本属性名 } */
   cache: JAVA_PROTOCOL.flatMap((r) => (r.mount.obj === 'cache' ? [{ name: r.name, key: r.mount.as }] : [])),
 }
 

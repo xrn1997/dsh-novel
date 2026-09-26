@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  appendTail, isJsForm, isPureVarExpr, parseTails, splitVarExpr, withImplicitText,
+  appendTail, isJsForm, parseTails, splitVarExpr, withImplicitText,
 } from '../../src/engine/grammar.js'
 
 /**
@@ -35,7 +35,7 @@ describe('parseTails（## 尾解析——构词的回程口径）', () => {
 describe('appendTail（构词）→ parseTails round-trip 性质：构词→解析 ≡ 原三元组', () => {
   // 三种方言拼串形态（normalize 三个现场）逐一体验
   const dialectCases: Array<[string, string, string]> = [
-    ['@css:#content@textNodes', '广告\\S*', ''],                     // legado replaceRegex → ##正则##
+    ['@css:#content@textNodes', '广告\\S*', ''],                     // 替换规则（replaceRegex）→ ##正则##
     ['.con@text', '天才一秒记住.*?地址', '请收藏本站.*?地址'],         // Native replaceRules[]
     ['.booktxt p a[href^="/zuozhe"]@text', '^作者\\(a\\)：', ''],      // Native authorPrefix → ##^前缀##
   ]
@@ -125,7 +125,7 @@ describe('withImplicitText（隐式终端构词——Native 取值字段语义�
   })
 })
 
-describe('词法单点：isJsForm / splitVarExpr / isPureVarExpr（template.ts 与搜索面共用同一事实）', () => {
+describe('词法单点：isJsForm / splitVarExpr（template.ts 与搜索面共用同一事实）', () => {
   it('isJsForm：@js: / js: / <js> 开头（容前导空白），其余形态 false', () => {
     expect(isJsForm('@js:key+"x"')).toBe(true)
     expect(isJsForm('  <js>key</js>')).toBe(true)
@@ -138,11 +138,5 @@ describe('词法单点：isJsForm / splitVarExpr / isPureVarExpr（template.ts �
     expect(splitVarExpr('key||默认')).toEqual({ name: 'key', fallback: '默认' })
     expect(splitVarExpr(' key ||默认')).toEqual({ name: 'key', fallback: '默认' })
     expect(splitVarExpr('key||')).toEqual({ name: 'key', fallback: '' })
-  })
-  it('isPureVarExpr：变量名是标识符 → 纯变量（其余 JS 表达式按 JS 求值）', () => {
-    expect(isPureVarExpr('key')).toBe(true)
-    expect(isPureVarExpr('key||fallback')).toBe(true)
-    expect(isPureVarExpr('java.encodeURI(key)')).toBe(false)
-    expect(isPureVarExpr('page*2')).toBe(false)
   })
 })

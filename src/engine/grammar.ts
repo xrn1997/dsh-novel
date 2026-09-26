@@ -8,8 +8,8 @@ import type { ReplaceStep } from './types.js'
  *
  * 本 module 持有：`##` 尾的解析（parseTails）与构词（appendTail）、Native 隐式终端
  * 构词（withImplicitText）、URL 模板 JS 形态判定（isJsForm）与 `{{…}}` 变量词法
- * （splitVarExpr / isPureVarExpr）。parse.ts 消费解析口，normalize/search-template/
- * template 消费构词与词法口。
+ * （splitVarExpr）。parse.ts 消费解析口，normalize/search-template/template 消费构词与词法口；
+ * 「是不是变量占位」的判定归 template.isPlaceholderExpr（要看 vars，不只看词法）。
  *
  * 构词期越界不进求值期：appendTail 用 parseTails 回读比对（round-trip 自校验）——
  * pattern/replacement 含 `##`、与拼接边界 `#` 粘连、追加到 OnlyOne 规则等情况当场
@@ -54,7 +54,7 @@ export interface TailResult {
 }
 
 /**
- * 构词口：追加一个 `##pattern##replacement` 替换尾（legado 净化语义的唯一拼串点——
+ * 构词口：追加一个 `##pattern##replacement` 替换尾（净化语义的唯一拼串点——
  * normalize 三个方言分支此前各拼各的）。round-trip 自校验：拼串后用 parseTails 回读，
  * 与「原解析 + 新增一步」逐字段比对；不等即构词越界（如 pattern 含 `##` 拆出多余配对、
  * pattern 以 `#` 结尾与分隔符粘连致回程错位、规则原以 `###` 结尾时新尾被 OnlyOne 误伤），
@@ -100,11 +100,11 @@ export function jsRegionEnd(s: string, i: number): number | null {
 }
 
 /**
- * `@put:{…}` 区域终点（legado `splitPutRule` 口径：`@put:(\{[^}]+?\})` 在**任何**切分之前先剥离，
+ * `@put:{…}` 区域终点（`@put:{…}` 在**任何**切分之前先剥离，
  * 所以体内 `@` 不是段界）。真实源 `ruleBookInfo.init` 的主导形态
  * `@put:{n:"[property$=book_name]@content", …}` 六个体内 `@` 曾被 splitElements 撕成七段，
- * 当场解析期抛错（2026-09 真机审计）。吃到第一个 `}` 为止——legado 的正则同样不嵌套，
- * 值里带 `}` 的规则在 legado 那边也是残规则，不另造更宽的判据。
+ * 当场解析期抛错（2026-09 真机审计）。吃到第一个 `}` 为止——不嵌套，
+ * 值里带 `}` 的规则本就不合法，不另造更宽的判据。
  * 只在段首成立（链首或前一字符是段界 `@`；`@@` 是字面 @，不起段）。
  */
 export function putRegionEnd(s: string, i: number): number | null {
@@ -118,9 +118,9 @@ export function putRegionEnd(s: string, i: number): number | null {
   return close === -1 ? null : i + close + 1
 }
 
-/** `{{…}}` 模板区（legado `makeUpRule` 在任何 `@` 切分**之前**插值，故区内的 `@` 不是段界）。
+/** `{{…}}` 模板区（插值发生在任何 `@` 切分**之前**，故区内的 `@` 不是段界）。
  *  返回内容终点（第一个闭合 `}` 处，`{{$.x}}` 的表达式是 `$.x`）与整区终点（`}}` 之后）；
- *  未闭合 → null（调用方按字面处理，不猜）。引号内的花括号不计深——对面 `chompCodeBalanced` 同口径。
+ *  未闭合 → null（调用方按字面处理，不猜）。引号内的花括号不计深。
  *  **唯一一份花括号扫描**：`literal.splitLiteral` 与 `parse.splitElements` 都从这里取。 */
 export interface BraceRegion { contentEnd: number; end: number }
 
@@ -161,7 +161,7 @@ export function braceRegion(s: string, i: number): BraceRegion | null {
 
 /**
  * 构词口：链体每个 `||` 分支无 `@` 且不含 JS 区域 → 补 `@text` 终端（Native 取值字段语义——
- * 裸选择器即「取元素文本」，legado 规则文档（android-ebook）常用模式表）；`##` 净化尾不动（只处理链体）。
+ * 裸选择器即「取元素文本」，真实源常用写法）；`##` 净化尾不动（只处理链体）。
  * `||` 切分跳过 JS 区域（复用 jsRegionEnd）——`<js>return a||b</js>` 不得被撕成
  * `<js>return a@text||b</js>@text`（正文规则一旦命中即整本书读不出正文且不报错）。
  */
@@ -199,17 +199,11 @@ export interface VarExpr {
   fallback: string | null
 }
 
-/** `{{inner}}` 词法拆分：变量名 + 缺省值。template.interpolateUrl 与搜索面 isPureVarExpr
+/** `{{inner}}` 词法拆分：变量名 + 缺省值。template.interpolateUrl 与 isPlaceholderExpr
  *  共用此拆分——此前两边各写一份 `indexOf('||')`，文法一改靠注释同步。 */
 export function splitVarExpr(inner: string): VarExpr {
   const orIdx = inner.indexOf('||')
   return orIdx === -1
     ? { name: inner.trim(), fallback: null }
     : { name: inner.slice(0, orIdx).trim(), fallback: inner.slice(orIdx + 2) }
-}
-
-/** 纯变量形态：变量名是标识符（`{{key}}` / `{{key||fallback}}`）——其余按 JS 求值
- *  （legado replaceKeyPageJs 口径：`{{java.encodeURI(key)}}` 等在搜索面预求值）。 */
-export function isPureVarExpr(inner: string): boolean {
-  return /^[\w$]+$/.test(splitVarExpr(inner).name)
 }

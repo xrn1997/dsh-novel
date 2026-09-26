@@ -10,7 +10,7 @@
 export { evaluate, evaluateWithTrace } from './evaluate.js'
 export type { TraceStep, TraceResult } from './evaluate.js'
 export { isPutOnlyRule } from './parse.js'
-export { interpolateUrl, expandPageAngleList, URL_OPTION_SPLIT } from './template.js'
+export { interpolateUrl, isPlaceholderExpr, expandPageAngleList, URL_OPTION_SPLIT } from './template.js'
 export { isEngineError } from './errors.js'
 export { EngineError, UnsupportedRuleError, RuleEvalError, JsSandboxError } from './errors.js'
 export type { EngineValue, EvalContext, Facet, RuleUsage } from './types.js'
