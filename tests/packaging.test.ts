@@ -83,15 +83,19 @@ describe('包形态声明', () => {
     // 写成一个看着覆盖的大区间，实际只开了最低那代一层（本仓踩过：`>=0.1.5-rc.1 <0.1.6-0 ||
     // >=0.1.6-rc.1 <0.2.0-0` 只放行 0.1.5 系 3 个版本，连正在跑的 0.1.7-rc.1 都挡在外面）。
     // 判据走真解析器而不是查字符串形状：正则能证明「写了预发布」，证明不了「放行了这一代」。
-    expect(semver.satisfies(dev, range)).toBe(true)
-    // 上界必须挡住下一代：否则 0.2.0 一发就自动变成「被兼容」
-    expect(semver.satisfies('0.2.0-rc.1', range)).toBe(false)
+    // **比较模式必须与宿主一致**：宿主的安装闸 `evaluatePluginCompatibility` 用
+    // `semver.satisfies(runtime, range, { includePrerelease: true })`——不开这一项时预发布版
+    // 默认被排除，下面那两条「上界挡住了」会在另一种模式下被证明，读起来像绿而宿主照放。
+    const asHost = (v: string): boolean => semver.satisfies(v, range, { includePrerelease: true })
+    expect(asHost(dev)).toBe(true)
+    // 上界必须挡住**下一代**：否则下一代一发就自动变成「被兼容」
+    expect(asHost('0.2.1-rc.1')).toBe(false)
     // 下限的理由：三个硬 inject 里只有 `jobs` 有下限——`webServer`（补丁 id 写的是 `webserver`，
     // 按 camelCase grep 会漏）在 dsh-web-app 每个已发版本里都在，`tools` 连 0.0.1-rc.1 就有。
     // `jobs` 行在 dsh-base 侧从 0.0.1-rc.3 起就有，但那一版只有组件侧发过（`@deepseek-ai/dsh`
     // 与 dsh-web-app 都没有这版），所以**可安装的宿主**里最低带 jobs 的是 0.0.1-rc.5。
     // 故 0.0.1-rc.1 / -rc.2 必须挡在外面：缺 jobs 的宿主插进去整树拒绝挂载。
-    expect(semver.satisfies('0.0.1-rc.2', range)).toBe(false)
+    expect(asHost('0.0.1-rc.2')).toBe(false)
   })
   it('cordis.patch.yml：单条 insert，name=包名', () => {
     expect(patch.trimStart().startsWith('- insert:')).toBe(true)

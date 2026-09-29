@@ -1,12 +1,20 @@
 import { builtinModules } from 'node:module'
 import { defineConfig } from 'tsdown'
 
-/** 官方平台模块表（tsdown-config-reference.md 存证：镜像 deepseek-harness packages/client/web/src/platform.ts；
- *  shell 把这些 specifier 种进冻结浏览器模块表，client bundle 一律留给注入的 require，不得 inline）。
- *  两份官方样例清单不一致（dsh-context 有 @deepseek-ai/cordis；better-sidebar 有裸 'cordis'）——取并集。 */
+/** 官方平台模块表（镜像宿主 web shell 的 `staticModules()`：它把这些 specifier 种进冻结浏览器模块表，
+ *  client bundle 一律留给注入的 require，不得 inline）。
+ *  **收录判据是「我们声明兼容的每一代宿主都答得上」（交集），不是把见过的清单并起来**：
+ *  - 跨代都在的八个：`react` / `react/jsx-runtime` / `react-dom` / `react-dom/client`、
+ *    `@deepseek-ai/cordis`、`@deepseek-ai/dsh-client-store` / `-ui-slots` / `-ui-primitives`。
+ *  - 裸 `cordis` **已撤**：0.2.0-rc.2 的 `staticModules()` 里没有它（只有 `@deepseek-ai/cordis`），
+ *    而本插件对 cordis 从头到尾只有 type-only import。留在允许表里 = 允许一次「构建通过、
+ *    浏览器 require 落空」——允许表必须比运行时表**窄**，宽出来的每一条都是纯度门的豁免。
+ *  - `@deepseek-ai/dsh-client-ui-dockkit`（0.2.0-rc.2 新种进来的）不收：本插件不用它，
+ *    而 0.1.x 代没有它，收了就等于用新宿主的表给老宿主放行。
+ *  这个方向错了，纯度门就从守卫变成共犯：它证明的从来不是「官方表长这样」，而是「我们只 require 这些」。 */
 const PLATFORM_MODULES = [
   'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client',
-  '@deepseek-ai/cordis', 'cordis',
+  '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-client-ui-primitives',

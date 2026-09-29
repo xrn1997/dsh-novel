@@ -12,13 +12,13 @@
 3. **`define` 四键**（`process.env`、`process.env.NODE_ENV`、`import.meta.env.MODE`、`import.meta.env`）缺一不可——inline 进来的 node 习惯依赖会在浏览器 boot 抛 ReferenceError。
 4. **纯度门是构建期插件**（`resolveId` 里对非白名单 `@deepseek-ai/*` 直接 throw），不是构建后断言；type-only import 已被擦除、到不了这道门。
 
-另注：官方 PLATFORM_MODULES 清单不含裸 `cordis`（只有 `@deepseek-ai/cordis`）；官方配置还带 Tailwind/lightningcss 的 CSS 通道插件与 cssModules 虚拟模块——dsh-novel v1 用内联样式 + 主题变量，**不引入**这些通道。
+另注：官方 PLATFORM_MODULES 清单不含裸 `cordis`（只有 `@deepseek-ai/cordis`）——**本仓最终按这一条办**（2026-09-29：宿主 `0.2.0-rc.2` 的 web shell `staticModules()` 里也确实没有裸 `cordis`，见 `dsh-plugin-api.md` 同日复核）；官方配置还带 Tailwind/lightningcss 的 CSS 通道插件与 cssModules 虚拟模块——dsh-novel v1 用内联样式 + 主题变量，**不引入**这些通道。
 
 ## 第二数据点：dsh-better-sidebar tsdown.config.ts（互补差异）
 
 - 抓取时间：2026-09-14；来源：https://raw.githubusercontent.com/omdsh-dev/DSH-better-sidebar/main/tsdown.config.ts
 - 与 dsh-context 的差异（已并入本仓 `tsdown.config.ts`）：
-  1. 其 CLIENT_EXTERNALS 用**裸 `'cordis'`**（无 `@deepseek-ai/cordis`、无 dsh-client-store）——两官方样例清单不一致，**取并集**最稳；
+  1. 其 CLIENT_EXTERNALS 用**裸 `'cordis'`**（无 `@deepseek-ai/cordis`、无 dsh-client-store）——两官方样例清单不一致。本仓**不取并集**：样例清单只代表它编译时那一代，运行时的模块表才是分母，并集里多出来的每一条都是纯度门的一次豁免（现行判据与理由写在 `tsdown.config.ts` 的 `PLATFORM_MODULES` 上）；
   2. 纯度门额外拦 **Node builtin**（`node:fs` 等闯进浏览器 bundle 直接 throw）；
   3. `define` 追加 `'import.meta.resolve': 'undefined'`（browser CJS 无 loader，防 stray 解析到 Node）；
   4. `inputOptions.resolve.conditionNames = ['browser','import','require','default']`——CJS 输出防传递依赖解析到 Node 入口；

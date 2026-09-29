@@ -58,7 +58,7 @@ dsh plugin --profile web add @xrn1997/dsh-novel
 
 npm 安装使用预构建产物，秒装、无需构建授权。也可从 GitHub 源码安装（`dsh plugin --profile web add github:xrn1997/dsh-novel`）：`prepare` 脚本会自动构建，但 pnpm ≥10 首次安装可能报构建脚本被拦截（依赖已装但 `lib/` 未生成），需先在 profile 目录执行 `pnpm approve-builds --all` 再重跑安装命令。
 
-**兼容宿主**：声明分两层，别混。**安装许可**在 `peerDependencies`——`@deepseek-ai/dsh-tools` 逐代显式开口，覆盖 `0.0.1-rc.5` 起 25 个已发宿主（27 个里只除外最早的 `0.0.1-rc.1` / `-rc.2`：它们缺本插件硬注入的 `jobs` 服务，装进去整树会拒绝挂载）。**实测声明**在 `dsh.compatibility.dshReleases`，只写真跑过的三版：`0.1.7-rc.2`（2026-09-26 编译所依：`typecheck` 清、全量门 **1844 passed / 0 failed / 26 skipped**、真浏览器图文门 **21/21**；真机走**桌面版应用内 `link:` 装入**，宿主共享包 `cordis 4.0.4` / `schemastery 3.18.4` 与本仓 peer 对齐——这一代**没有** CLI 侧 `--profile web --dump-config` 与六工具真调用读数，那条组合树证据仍属 rc.1）、`0.1.7-rc.1`（`dsh --profile web --dump-config` 组合树含本插件、六个 `dshnovel_` 工具真调用通过、`DSH_INSTALL_CHECK` 装载链路绿）与 `0.1.5-rc.1`（此前的真机运行记录）。**同代内 bump 不需要新开 peer 段**（semver 预发布规则按 `major.minor.patch` 认代，见 `docs/reference/dsh-plugin-api.md` 风险第 1 条）。两层都由 `tests/packaging.test.ts` 看住：编译期 devDependency 必须被 peer 区间放行、且必须在实测声明里。宿主发新版后要做三件事——bump 编译版本、给 peer 区间开这一代的口、加实测条目，少一步测试就红。
+**兼容宿主**：声明分两层，别混。**安装许可**在 `peerDependencies`——`@deepseek-ai/dsh-tools` 逐代显式开口，覆盖 `0.0.1-rc.5` 起 27 个已发宿主（29 个里只除外最早的 `0.0.1-rc.1` / `-rc.2`：它们缺本插件硬注入的 `jobs` 服务，装进去整树会拒绝挂载）。**这一层不是自述，是宿主的安装闸**（2026-09-29 实证）：`dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间（`semver.satisfies(..., { includePrerelease: true })`），不满足即 `installation rejected` 并拒绝安装，出路只有放宽区间、或对该「包@版本 × 宿主版本」开 `allow-version` 精确豁免——区间写窄了，插件在真宿主上**装都装不进去**（`0.2.0-rc.2` 就是这么被挡在门外的：区间上界停在 `<0.2.0-0`）。**实测声明**在 `dsh.compatibility.dshReleases`，只写真跑过的四版：`0.2.0-rc.2`（2026-09-29 编译所依：`typecheck` 清、全量门 **1937 passed / 0 failed / 26 skipped**（125 passed | 6 skipped 文件）；真机走 CLI 可写的一次性 profile（`dsh.profile.bundles` = `dsh-base` + `dsh-web-app` + 本插件，桌面版自己的 profile 仍是 CLI 不可写）——`dsh plugin add` 放行、`--dump-config` 组合树在册、`dsh web` 起得来且插件激活、`/novel-api` 在册（`GET /novel-api` 与 `/shelf` `/sources` `/search/plan` 均 200）、真浏览器（Edge）里侧栏「小说」入口渲染 + 点开中央面板三 tab 挂上 + **页面零 console error**；工具面真调用取到两个（`dshnovel_shelf` 与 `dshnovel_source` 的 `list` 在真会话里返回「书架 0 / 书源 0」），**其余四个工具的调用读数本轮未取**——它们与这两个共用同一注册路径，名字集合由 `tests/tools/tools.test.ts` 钉住）、`0.1.7-rc.2`（2026-09-26 编译所依：`typecheck` 清、全量门 **1844 passed / 0 failed / 26 skipped**、真浏览器图文门 **21/21**；真机走**桌面版应用内 `link:` 装入**，宿主共享包 `cordis 4.0.4` / `schemastery 3.18.4` 与本仓 peer 对齐——这一代**没有** CLI 侧 `--profile web --dump-config` 与六工具真调用读数，那条组合树证据仍属 rc.1）、`0.1.7-rc.1`（`dsh --profile web --dump-config` 组合树含本插件、六个 `dshnovel_` 工具真调用通过、`DSH_INSTALL_CHECK` 装载链路绿）与 `0.1.5-rc.1`（此前的真机运行记录）。**同代内 bump 不需要新开 peer 段**（semver 预发布规则按 `major.minor.patch` 认代，见 `docs/reference/dsh-plugin-api.md` 风险第 1 条）。两层都由 `tests/packaging.test.ts` 看住：编译期 devDependency 必须被 peer 区间放行、且必须在实测声明里。宿主发新版后要做四件事——升级编译所依、给 peer 区间开这一代的口、加实测条目、把新宿主的浏览器模块表（web shell 的 `staticModules()`）重读一遍并对齐 `PLATFORM_MODULES`（0.2.0-rc.2 那代撤了裸 `cordis`、新种了 `dockkit`）；前两件漏了就红，后两件只有真机与人工核对抓得住。
 
 卸载：
 
@@ -275,6 +275,9 @@ $env:DSH_EPUB_BROWSER='1'; pnpm vitest run tests/browser/epub-reader.test.ts
 2. **装载与挂载**：`dsh plugin --profile web add github:xrn1997/dsh-novel`（源码装首次要
    `pnpm approve-builds --all`，否则依赖已装而 `lib/` 没生成）→ `dsh --profile web --dump-config`
    的组合树里出现本插件 → 起 `dsh web`，看组合树里没有 `plugin tree failed to load`。
+   桌面版 profile 写不动时，改用 CLI 自建的一次性 profile（`dsh plugin --profile <名> add <本地路径>`
+   初始化它，再把 `@deepseek-ai/dsh-web-app` 加进 `dsh.profile.bundles`）——它组出的是同一棵 web 树，
+   `0.2.0-rc.2` 这一轮的读数就是这么取的。
 3. **工具面与一条真路径**：六个 `dshnovel_` 工具各真调一次；再走一条真实业务：搜→详情→目录→正文
    并翻一页（这一条顺带覆盖出站代理与解码链，代理型站点要按 `proxyUrl` 配好再测）。
 

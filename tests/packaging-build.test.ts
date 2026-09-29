@@ -26,9 +26,12 @@ describe.skipIf(!hasLib)('构建产物（先跑 pnpm build 或 pnpm test:pack）
   it('client 半纯度：require 白名单外零泄漏', () => {
     const js = readFileSync('lib/client.js', 'utf8')
     const requires = [...js.matchAll(/require\("([^"]+)"\)/g)].map((m) => m[1])
+    // 这份清单是**独立抄本**（不 import tsdown.config.ts 的 PLATFORM_MODULES），否则「配置写宽了」
+    // 会连同测试一起变宽，守卫退化成回声。分母是宿主 web shell 的 `staticModules()`：裸 `cordis`
+    // 在 0.2.0-rc.2 的运行时表里没有（只有 `@deepseek-ai/cordis`），抄本与允许表都不许留它。
     const allowed = [
       'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client',
-      '@deepseek-ai/cordis', 'cordis',
+      '@deepseek-ai/cordis',
       '@deepseek-ai/dsh-client-store', '@deepseek-ai/dsh-client-ui-slots', '@deepseek-ai/dsh-client-ui-primitives',
     ]
     expect(requires.filter((r) => !allowed.includes(r))).toEqual([])
