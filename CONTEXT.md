@@ -1,8 +1,10 @@
 # dsh-novel
 
-在 DeepSeek Harness Web GUI 里读网络小说的插件：导入 legado 书源 → 聚合搜索 → 书架 → 连续滚动阅读。本文件是领域词汇表——写 spec / 改代码 / 命名新 module 时用这里的词，别自造。
+在 DeepSeek Harness Web GUI 里读网络小说的插件：导入 legado 书源 → 聚合搜索 → 书架 → 连续滚动阅读。
 
-词之外的**现状真相**（模块地图、关键口径与「为什么」、被否决的方案、已知开口）住三份子系统文档：`docs/design/engine.md`（规则引擎）、`docs/design/services.md`（服务层 / HTTP 面 / wire 契约 / 工具面）、`docs/design/client.md`（浏览器半）。
+本文件是**领域词汇表**：只回答「这个词指什么、它的唯一实现在哪个符号」。写 spec、改代码、命名新 module 之前先查这里——自造同义词会让同一概念长出第二份抄本。
+
+**这里不装口径论证。** 每条口径的「为什么、被否决的方案、真机读数」的家：就地住实现它的代码注释，读数住 `tests/legado-coverage/matrix.ts` 的行 `note`，用户可见的事实住 `README.md`。本表只留一句判据和一个锚点；看到某条口径想追问「为什么这么定」，去实现它的那个符号头上读。
 
 ## Language
 
@@ -10,18 +12,21 @@
 
 **书源（book source）**:
 一个 legado 规则包：某站点的搜索 / 详情 / 目录 / 正文取值规则与其登录态的载体。
+_唯一实现_: `services/types.ts` 的 `NovelSource`（规范化后的形状）+ `shared/wire.ts`（跨半投影）
 _Avoid_: 站点、书站（书源是规则，不是站点本身）
 
 **源入库（source intake）**:
-「书源进入系统」的唯一语义：normalize → 按址去重 → add/replace（`services/intake.ts` 的 SourceIntake）。调用方只做呈现映射（任务 counts/issues、工具 ImportOutcome 投影）。
-_Avoid_: 导入逻辑（导入是调用方，不是规则本身）
+「书源进入系统」的唯一语义：normalize → 批内去重 → 按址去重 → add/replace。调用方只做呈现映射。
+_唯一实现_: `services/intake.ts` 的 `SourceIntake`
+_Avoid_: 导入逻辑（导入是调用方，不是入库规则本身）
 
 **方言（dialect）**:
-书源导出的三种形态——legado 平铺 / legado 对象（ruleSearch、ruleBookInfo…）/ Native（android-ebook 原生格式）。
+书源导出的三种形态——legado 平铺 / legado 对象（`ruleSearch`、`ruleBookInfo`…）/ Native（android-ebook 原生格式）。
+_唯一实现_: `services/normalize.ts`
 _Avoid_: 格式、模板
 
 **取值链（rule chain）**:
-书源规则的形态：`||` 分支、组合符与终端（@text / @href / @html…）构成的链。
+书源规则的形态：`||` 分支、组合符与终端（`@text` / `@href` / `@html`…）构成的链。
 _Avoid_: 选择器链（选择器只是链的一段）
 
 **净化尾（replacement tail）**:
@@ -29,167 +34,194 @@ _Avoid_: 选择器链（选择器只是链的一段）
 _Avoid_: 替换规则
 
 **规则文法（rule grammar）**:
-规则串的构词法——分支、终端、净化尾、占位符如何组合成一条规则。构词与解析应同属一处：唯一实现在 `engine/grammar.ts`（构词 appendTail/withImplicitText + 解析 parseTails + 词法 isJsForm/splitVarExpr），normalize 的方言拼串走 appendTail 的 round-trip 自校验，越界当场进 warning。
+规则串的构词法——分支、终端、净化尾、占位符如何组合成一条规则。判据：构词与解析同属一处，方言拼串走 round-trip 自校验，越界当场进 warning。
+_唯一实现_: `engine/grammar.ts`（构词 `appendTail`/`withImplicitText` + 解析 `parseTails` + 词法 `isJsForm`/`splitVarExpr`）
 _Avoid_: 规则格式
 
 **搜索面（search face）**:
-从「书源搜索规则 + 关键词」到「命中条目 + 首条书名」的完整请求语义；聚合搜索与探针共用同一份。
-聚合搜索的参与集 = **启用 ∧ 文本源**（`type === 'text'`），唯一判定在 reading 的 `participates` 谓词——将来支持其他媒介只扩这一处，不许散落第二处判别；非文本源留库、不删、不改启用态，只是不参搜。**未知形态 `unknown`**（`bookSourceType` 不是 legado 认得的整数值）读不懂也不等于文本，同样不参搜、导入预检点名拒绝，存量由 `SourceRegistry.load` 按 raw 重推。刻意**不写成 `status: 'broken'`**：探针按搜索面判 verified，坏源那条道会被下一次重验洗白。
+「书源搜索规则 + 关键词」到「命中条目 + 首条书名」的完整请求语义；聚合搜索与探针共用同一份。参与集判据：**启用 ∧ 文本源**。
+_唯一实现_: `services/search-face.ts`；参与集谓词 `participates`（`services/reading.ts`）
 _Avoid_: 搜索服务
 
 **请求组装（request assembly）**:
-「URL 模板 + 变量 + baseUrl」到「可执行请求计划」的唯一语义解释——method 判定、body 插值、POST 表单默认头、charset、init 姿态全在一处（services/request.ts 的 assembleRequest / fetchInitOf）。
+「URL 模板 + 变量 + baseUrl」到「可执行请求计划」的唯一语义解释——method 判定、body 插值、POST 默认头、charset、init 姿态全在一处。
+_唯一实现_: `services/request.ts` 的 `assembleRequest` / `fetchInitOf`
 _Avoid_: 请求工具、fetch 封装（抓取与解码归守门 fetcher）
 
 ### 面与段
 
 **面（facet）**:
 规则求值的上下文之一：rule / search / detail / toc / content。
-_Avoid_: 场景、模式（`EpochImpact`「影响面」是**另一条轴**——改一个规则字段会作废哪些面的缓存，刻意换个词，不是「面」的第二名，见「缓存代际」）
+_Avoid_: 场景、模式；也别与「影响面」（`EpochImpact`，缓存那一轴）混称
 
 **段（segment）**:
-取值链的一段。失败定位以「面 + 段序 + 段原文」表达（段级定位）。
+取值链的一段。失败定位以「面 + 段序 + 段原文」表达，即段级定位。
+_唯一实现_: `engine/types.ts` 的 `Segment` 与 `SegmentLoc`
 _Avoid_: 步骤
 
 **取值规约（reduction）**:
-链上空态裁决口径（**取位失败 → Miss；解析到空集合 → 空 List**）。Miss = 失败：选择零命中 / 排除后空 / 下标越界 / 索引列表全部越界——链中穿透；空 List = 合法零条目：元素在而取值全空，或键存在且值为空数组。选择段（default/css）与取值段（getValue）的取位/空态裁决唯一实现在 `engine/select.ts` 的 `reducePicked`（zero/excluded/oob 三态皆「取位失败」——原第四态 sliced 随「`.a:b` 是半开切片」这个误读一起删，对面冒号是**索引分隔符**）；取值段的「元素在、取值全空 → 空 List」住 `getValue`。多条目取位（点号 `.a:b` 与方括号 `[a,b]`）按**写入序**，与对面 LinkedHashSet 的插入序同形。JSONPath（`engine/jsonpath.ts`）同口径：零命中/越界/切片裁空 → Miss，空数组 → 空 List；下标与切片均支持负数从尾数（与 `select.applyIndex` 一致）。
+链上空态的裁决口径，两种值绝不折叠：**取位失败 → Miss；解析到空集合 → 空 List**。
+_唯一实现_: `engine/select.ts` 的 `reducePicked`（选择段与取值段共用）；JSONPath 侧 `engine/jsonpath.ts` 同口径
 _Avoid_: 空结果（太泛——Miss 与空 List 是两种值）
 
 **值投影（value projection）**:
-服务层把链尾 `EngineValue` 收成业务串的三种口径，唯一实现全在 `services/bridge.ts`：`firstValue`（单值文本位：miss→null、value→text、list→`join('\n')`、matches→每行首列）、`firstUrlValue`（**URL 位**：list 取**首项**，其余四态同 `firstValue`）、`listValue`（多值位：分类 join(',') 截断、翻页候选逐项绝对化）。**URL 位取首项不是本仓自选的口径**：对面的 URL 取值取 `list[0]`，多值 join 只服务非 URL 取值——URL 里不可能有换行，把多命中地址 join 起来必被 `absUrl` 的换行守卫判死（对读证据与逐源读数见矩阵行 `b-url-value-first-item`）。字段侧的三个入口同名分家：`fieldOf`/`urlFieldOf`（不吞错）与 `auxFieldOf`/`auxUrlFieldOf`（读不出留空）。
-_Avoid_: 取值规约（那是**引擎层**的空态裁决，见上条；这条是服务层的值收口）
+服务层把链尾 `EngineValue` 收成业务串的三种口径：单值文本位、URL 位、多值位。
+_唯一实现_: `services/bridge.ts` 的 `firstValue` / `firstUrlValue` / `listValue`（字段侧入口同名分家：`fieldOf`/`urlFieldOf` 不吞错，`auxFieldOf`/`auxUrlFieldOf` 读不出留空）
+_Avoid_: 取值规约（那是引擎层的空态裁决；这条是服务层的值收口）
 
 **取值用途（rule usage）**:
-同一条规则串在两种用途下**链尾未知词**语义不同，调用方按用途显式声明（`evaluate`/`SubRuleEval` 的 `usage` 参数，缺省 `'list'`）：`'value'`（legado getString 口径）链尾未知提取指令 = **HTML 属性名**（属性终端）；`'list'`（legado getElements 口径）链尾未知选择器 = **CSS**。唯一实现在 `engine/parse.ts` 的 `classifyDefault`（`ctx.usage === 'value' && isLast && isAttrName(name)`）。
+同一条规则串在两种用途下**链尾未知词**的语义不同，调用方显式声明：`'value'` → 未知词按 HTML 属性名；`'list'` → 未知词按 CSS。
+_唯一实现_: `engine/parse.ts` 的 `classifyDefault`
 _Avoid_: 模式、场景（太泛——这是「链尾未知词」的裁决轴）
 
 **属性终端（attr terminal）**:
-取值用途链尾的未知提取指令按 HTML 属性名取值：自身属性为空向下兜底第一个含该属性的后代（html/body 包装不兜底），空值丢弃 + 去重。唯一实现在 `engine/select.ts` 的 `getValue` `mode === 'attr'` 分支。真实源 `ruleBookUrl: tag.div@onclick`、`@value`、`@_src` 全靠它。
+取值用途下链尾的未知提取指令按 HTML 属性名取值：自身为空向下兜底第一个含该属性的后代。
+_唯一实现_: `engine/select.ts` 的 `getValue`（`mode === 'attr'` 分支）
 _Avoid_: 自定义属性（太泛——这是链尾语义，不是属性语法）
 
 **模板字面段（literal segment）**:
-规则段里出现 `{{expr}}`（JS 表达式或规则递归——以 `@`/`$.`/`$[`/`//` 开头按规则求值）、`{$.path}`（单括号 JSONPath 内嵌）或 `http(s)://` URL 模板 → 整段是字面模板：插值后产出 Value（对面规则语言「认不出即字面返回 + 插值」那条同形）。识别与切分唯一实现在 `engine/literal.ts`（`isLiteralForm`/`splitLiteral`，`{{}}` 平衡括号感知）；求值在 `engine/evaluate.ts` 的 `branchGen` literal 分支（js 部分经沙箱、`{{result}}` 引用链值）。
+规则段含 `{{expr}}`、`{$.path}` 或 URL 模板时整段按字面模板插值求值，产出 Value 而不报「认不出」。
+_唯一实现_: 识别与切分 `engine/literal.ts`（`isLiteralForm`/`splitLiteral`），求值 `engine/evaluate.ts` 的 `branchGen` literal 分支
 _Avoid_: URL 规则（太泛——不只 URL，任何含插值的字面段都是）
 
 **AllInOne 行模板（row template）**:
-AllInOne 条目下**字段规则**的形态：支文本（`##` 之前那半）出现 `$\d{1,2}` 时，整支是**行组引用模板**——值 = 用当前行把 `$n` 绑好后的**原文**（`$0` = 整段匹配），不再按规则解析；没有行（非 AllInOne 条目）时给原文。行 = `[整段, 组 1..n]`（`engine/allinone.ts`），未参与的 `(x)?` 组落空串；行经**条目上下文**（`services/bridge.ts` 的 `ItemContext`，由 `itemContextsOf` 生产，与 `extractItems` 同源同序）传给字段规则。js 区域豁免：脚本里的 `$1` 是正则反向引用、不是行组。唯一实现 `engine/parse.ts` 的模板判定 + `engine/regex-row.ts` 的 `bindRegexRow` + `engine/evaluate.ts` 的 regexRow 分支。需求方：库内 `若夏` 的目录三件套。
-_Avoid_: 变量替换、`$n` 展开（说「行模板」）；与「模板字面段」混称——两者是按**触发形态**分家的两半（`{{expr}}`/`{$.path}`/URL 走字面段，`$\d` 走行模板），出处见矩阵行 `a-allinone-group-zero`
-
-**同族**：`$\d` 的行组引用**不走本条**，走「AllInOne 行模板」——两者按触发形态分家（出处见矩阵行 `a-allinone-group-zero`）。
+AllInOne 条目下字段规则的形态：支文本出现 `$\d{1,2}` 时整支是行组引用模板，值 = 用当前行把 `$n` 绑好后的原文，不再按规则解析。js 区域豁免。
+_唯一实现_: 判定 `engine/parse.ts`，绑定 `engine/regex-row.ts` 的 `bindRegexRow`，求值 `engine/evaluate.ts` 的 regexRow 分支；行经 `services/bridge.ts` 的 `ItemContext` 传入
+_Avoid_: 变量替换、`$n` 展开（说「行模板」）；与「模板字面段」混称（两者按**触发形态**分家，出处见矩阵行 `a-allinone-group-zero`）
 
 **按文本选元素（text selection）**:
-默认方言 `text.<串>`（**带参数**）= 选择段：命中「直系文本包含该串」的元素（legado getElementsContainingOwnText；`ownText.<串>` 对称取「后代文本包含」）。不带参数的 `text` 才是取值终端（全部后代文本）。唯一实现在 `engine/select.ts` 的 `evalDefault` textContaining 分支。真实源 `text.下一页@href`、`text.章节目录@href` 全靠它。
+默认方言 `text.<串>`（带参数）是选择段：命中「直系文本包含该串」的元素；不带参数的 `text` 才是取值终端。
+_唯一实现_: `engine/select.ts` 的 `evalDefault`（textContaining 分支）
 _Avoid_: 文本过滤（太泛——判据是「含文本的元素」，链上位置是选择段）
 
 **详情上下文初始化（ruleDetailInit）**:
-legado `ruleBookInfo.init` 的内部名：详情面先求值，其结果**整体替换**后续详情规则与 tocUrl 模板的求值上下文**与 html**（legado `setContent(init 产物)` 是 content 单点全换：JSON 产物 → html 与 `ctx.json` 同步换根，`{{result.articleid}}` 这类模板的 `result`/`pageText` 与 jsonpath 同源；非 JSON 产物 → 作为 html 上下文）；唯一实现 `services/bridge.ts` 的 `detailContextOf`（init 非空但零命中 → `RuleEvalError` 点名 ruleDetailInit——宁炸不猜，不拿整页冒充上下文；嗅探来的「这页**可能**是详情页」那条例外传 `onEmptyInit: 'no-context'`：取空即「没有书目」，不把整次搜索升级成错误）。详情七字段（`DetailFields`）的取值单点是同文件的 `detailFieldsOf`（`getDetail` 与搜索面 info 形态共用一份回落链）。tocUrl 模板在换根后的上下文上过引擎插值（`tocUrlOf`：能绝对化的静态 URL 直答，其余经详情上下文求值；`/`、`//` 是 URL 与 XPath 的**歧义前缀**，解不出就按规则求值——见矩阵行 `b-toc-url-xpath-vs-url`；插值段 Miss → 回退 bookUrl，不发残 URL）。
+legado `ruleBookInfo.init` 的内部名：详情面先求值，其产物**整体替换**后续详情规则与 tocUrl 模板的求值上下文与 html。init 非空但零命中 → 抛错点名，不拿整页冒充上下文。
+_唯一实现_: `services/bridge.ts` 的 `detailContextOf`（详情七字段取值单点同文件 `detailFieldsOf`；tocUrl 单点 `tocUrlOf`）
 _Avoid_: init 规则（与 fetch 的 init 姿态易混，交流用内部名）
 
-**纯 `@put` 的 init 是例外**：整条规则只设变量时**不换根**（legado 剥掉 `@put:{…}` 后规则为空，取不到新根），判据归引擎——`engine/parse.ts` 的 `isPutOnlyRule`。
+**纯 `@put` 的 init**:
+整条规则只设变量时**不换根**——判据归引擎。
+_唯一实现_: `engine/parse.ts` 的 `isPutOnlyRule`
 
 **规则变量表（`ctx.vars`）**:
-`@put` / `@get` 与沙箱 `java.put`/`java.get` 共用的那张键值表（引擎零内部状态，表由调用方持有并跨规则共享——本机库的纯 `@put` init + `@get:{k}` 字段全靠它）。读写唯一实现 `engine/variables.ts` 的 `evalPut`/`evalGetVar`；作用域主人是门面（`reading.getDetail` 一次调用一张表，跨面不传——见 `docs/design/services.md` 已知开口）。
-_Avoid_: 变量池（太泛）、缓存（`cache` 是按源隔离的另一套键值表，别混）
-
+`@put` / `@get` 与沙箱 `java.put`/`java.get` 共用的那张键值表；引擎零内部状态，表由调用方持有并跨规则共享。作用域主人是门面：一次详情调用一张表，跨面不传。
+_读写实现_: `engine/variables.ts` 的 `evalPut`/`evalGetVar`
+_Avoid_: 变量池（太泛）、缓存（`cache` 是按源隔离的另一套键值表）
 
 **动态请求头（headerRule）**:
-legado `header` 字段的 `@js:`/`<js>` 规则形态的内部名（与静态 JSON 形态互斥同源——同一 raw.header 二选一）：请求前经沙箱求值得到 JSON 头表，叠加 auth/cookie 后发出（device-id 逐请求刷新）；求值失败 → warn 后回退静态头，不吞请求也不炸整链。唯一求值点 `services/bridge.ts` 的 `resolveHeaders`；存量由 `SourceRegistry.load` 第七条迁移按 raw 重推。
+legado `header` 字段的 `@js:`/`<js>` 规则形态的内部名（与静态 JSON 形态互斥同源）。求值失败 → warn 后回退静态头，不吞请求也不炸整链。
+_唯一实现_: `services/bridge.ts` 的 `resolveHeaders`
 _Avoid_: header 规则、动态 header（说内部名）
 
 **探针（probe）**:
-对一个书源真发一次搜索请求，得出可用性实测结论。关键词序列的**第一位是源自带的校验词**（legado `ruleSearch.checkKeyWord` → `rules.probeKeyword`），其后才是通用词。
+对一个书源真发一次搜索请求，得出可用性实测结论。关键词序列第一位是源自带的校验词，其后才是通用词。
+_唯一实现_: `services/probe.ts`（校验词来自 `rules.probeKeyword`）
 _Avoid_: 自测、健康检查
 
 ### 身份与状态
 
 **书源注册表（source registry）**:
-书源清单的唯一载体（sources.json，含登录态，仅存本机）。
+书源清单的唯一载体（`sources.json`，含登录态，仅存本机）。
+_唯一实现_: `services/sources.ts` 的 `SourceRegistry`
 _Avoid_: 源列表（UI 里的列表只是它的投影）
 
 **按址去重（dedup by address）**:
-书源入库规则：同一 baseUrl 已有**可用**源时保留已有、不新增（`skipped`）；同一 baseUrl 已有**不可用**源时用新条替换，并在替换时顺带清掉其余同键条目。唯一实现在 `services/intake.ts`（SourceIntake：normalize → 批内留首条 → 按址去重 → add/replace）——同步导入（工具面）与后台导入任务同一条路。
+同一 baseUrl 已有**可用**源时保留已有（`skipped`）；已有**不可用**源时新条替换并清掉其余同键条目。以可用者为准，是新条目规则改进被丢弃的既定口径。
+_唯一实现_: `services/intake.ts` 的 `SourceIntake`
 _Avoid_: URL 去重
 
 **启停（enable / disable）**:
-停用的书源不参与聚合搜索；探针与试跑不受影响。停用不等于删除。
+停用的书源不参与聚合搜索；探针与试跑不受影响。停用 ≠ 删除，也 ≠ 免验。
+_唯一实现_: `services/sources.ts` 的 `setEnabled`
 _Avoid_: 删除、隐藏
 
 **书源待办（source inbox）**:
-书源管理 tab 的首屏任务面：全库源清单派生出的「坏源 / 未验证」两集合，反常置顶成任务卡（处置动作：批量重验 / 一键验证），任务收尾自动消解。待办**只看状态、不看启停**（停用只是不参与聚合搜索，停用的坏源/未验证照样置顶——停用 ≠ 免验）；加载失败不渲染待办（不拿未知当「全部良好」）。
-_Implementation_: `src/client/source-inbox.ts`（派生）+ `src/client/views/SettingsSection.tsx`（`SourceInbox` 渲染）
+书源管理 tab 的首屏任务面：全库源清单派生出「坏源 / 未验证」两集合，反常置顶成任务卡，任务收尾自动消解。只看状态、不看启停；加载失败不渲染待办（不拿未知当「全部良好」）。
+_唯一实现_: `src/client/source-inbox.ts`（派生）+ `src/client/views/SettingsSection.tsx`（渲染）
 _Avoid_: 舰队快照（黑话，已否决）、状态总览 chips（读数与过滤混杂，已退役）
 
 **换轮（round switch）**:
-搜索观察者发现读面身份已变（快照 `job.id` ≠ 观察中的轮次 id——服务端单槽，别的观察者提交了新一轮）时的唯一裁决：旧累积整体丢弃、`since=0` 重读新轮完整基线、旧连接 abort、按新轮重建观察；旧观察者**跟随最近一轮**。唯一实现 `src/client/search-job.ts` 的 `apply` 身份闸 + `rebaseline`。
-_Avoid_: 重连（重连是同一轮的通道恢复；换轮是身份变了）、重置（太泛）
+搜索观察者发现读面身份已变（快照 `job.id` ≠ 观察中的轮次 id）时的唯一裁决：旧累积整体丢弃、`since=0` 重读新轮基线、旧连接 abort、按新轮重建观察。
+_唯一实现_: `src/client/search-job.ts` 的 `apply` 身份闸 + `rebaseline`
+_Avoid_: 重连（重连是同一轮的通道恢复；换轮是身份变了）、重置
 
 **bookKey**:
-书籍身份：详情页 URL，**可带 `,{option}` 请求选项后缀**（legado 嗅探语义：URL 即请求规格——米读类 POST API 源的 book_id 在选项 body 里；搜索面 `absUrlKeepOption` 保留、抓取时 `assembleRequest` 解释、引擎解析 base 与比对口径 `canonUrl` 各自剥选项）；本地书为 `local:<uuid>`。
+书籍身份：详情页 URL，**可带 `,{option}` 请求选项后缀**（URL 即请求规格）；本地书为 `local:<uuid>`。
+_相关实现_: `services/request.ts` 的 `assembleRequest`（解释选项）、`shared/wire.ts`（URL 剥选项与比对口径）
 _Avoid_: id、url（太泛）
 
 **本地书（local book）**:
-从本地文件导入的书，**TXT 与 EPUB 2/3 两支**：分流按**内容**（文件头是 ZIP 魔数就走 EPUB 路径，其余字节走既有 TXT 解码链；两条互不兜底），源身份固定 `__local__`，与在线书源正交；bookKey 形态 `local:<uuid>`，落盘在 `dataDir/local/` 下（TXT 是原文 + 元数据两件；EPUB 是 `<uuid>/` 目录加顶层元数据），删除连带删整份副本。
-_Implementation_: `src/services/localbooks.ts`（身份、分流、发布提交、读取与删除）+ `src/services/epub/`（EPUB 解析与规范化——不认识书架与 HTTP）
-_Avoid_: 本地 TXT（口径已覆盖两种格式，TXT 只是其中一支；书架卡片文案因此只说「本地」，真实格式由导入回执的 `format` 字段交代）、上传文件（那是文件，不是书）
+从本地文件导入的书，**TXT 与 EPUB 2/3 两支**，分流按**内容**（ZIP 魔数走 EPUB 路径，其余走 TXT 解码链），两条互不兜底；源身份固定 `__local__`，与在线书源正交。
+_唯一实现_: `src/services/localbooks.ts`（身份、分流、提交、读取、删除）+ `src/services/epub/`（解析与规范化——不认识书架与 HTTP）
+_Avoid_: 本地 TXT（口径覆盖两种格式，书架卡片因此只说「本地」，真格式由导入回执的 `format` 交代）、上传文件
 
 **后台任务（background job）**:
-跑在服务端的耗时任务，三种 kind：`novel-import` / `novel-probe`（写，共用一个槽、运行中互斥）与 `novel-search`（读，**另开一槽**——搜索不该挡住导入）。结果保留到下一个同类任务开始（搜索另有 30 分钟保留期），关页面、切界面都不影响它跑完。身份与生命周期登记给宿主的 `ctx.jobs`（`<kind>-N`、协作式取消、随服务卸载而终止），**停止（cancel）不是失败也不是放弃**：本轮立即进终态、不再开新的源，已搜出的结果留在读面。业务计数与明细仍归本仓的持有者（`SourceJobs` / `SearchJobs`）——宿主只有 `label` 与一行 `detail`，装不下几百源规模的失败分桶，也装不下整轮搜索结果。
-_Avoid_: 队列（不是队列，是单槽）、前端任务（在途循环不在浏览器半）
+跑在服务端的耗时任务，三种 kind：`novel-import` / `novel-probe`（写，共用一槽）与 `novel-search`（读，另开一槽）。身份与生命周期登记给宿主 `ctx.jobs`；业务计数与明细归本仓持有者。**停止（cancel）不是失败也不是放弃**。
+_唯一实现_: `services/import-job.ts` / `services/probe.ts` / `services/search-job.ts`
+_Avoid_: 队列（是单槽不是队列）、前端任务（在途循环不在浏览器半）
 
 **阅读会话（reader session）**:
-「目录 → 存档恢复 → 逐章懒加载 → 预取 → 进度落盘」的时序编排持有者（client/reader-session.ts）；DOM 测量经 ReaderPort 注入，视图只渲染与接线。
+「目录 → 存档恢复 → 逐章懒加载 → 预取 → 进度落盘」的时序持有者；DOM 测量经 `ReaderPort` 注入，视图只渲染与接线。同一时刻只允许一章在途（`inflight`），滚动风暴与目录直达只记意图（`pendingJump`），刚失败过的同一章不自动重试。
+_唯一实现_: `client/reader-session.ts`
 _Avoid_: 阅读器状态管理（视图里的 state 只是它的投影）
 
 **判到底（翻页闸）**:
-「下一页 / 下一目录页」何时停的唯一语义，唯一实现 `services/pagination.ts` 的 `followPages`（`stoppedBy` 五态）。next 规则按**取值用途**求值、结果按**列表形状**处理（逐项绝对化 + 去重 + 丢空）：1 个候选链式跟进，多个候选全部抓取但**不递归翻页**（legado getNextPageUrl=false）；两用途只在链尾裸词上分岔，现库 next 规则里裸词尾 0 条、该分岔不可观测。**停止判据次序与代码同序**（每轮先防环、再判上限，然后才取条目）：**URL 防环**（候选地址已抓过不入队）→ **上限闸**（`maxPages`：目录 200 / 正文 50，判在 extract 之前）→ **零新增闸**（本页提取 0 条）→ **回环闸**（有条目但 0 新增＝到底/软404；**部分重复不停**——站点页间重叠是常态）。正文面串章闸：候选「下一页」== 目录里**其他章节 URL** → 停（`stopUrls` 目录知识优先）；无目录知识才回退路径启发式（`services/chapter-page.ts` 的 `isSameChapterPage`，判不准时宁漏页不串章）。
-_Avoid_: 翻页循环、重复过滤（太泛——判据是「本页零新增」与「URL 已见」，不是「出现重复就停」）
-
-**单在途槽（reader session）**:
-阅读会话同一时刻只允许一个章节加载在途（`inflight`）；滚动风暴与目录直达都只记意图（`pendingJump`），在途释放后由 `settlePendingLoad()` 补拉（否则那次点击无声消失）。刚失败过的同一章不自动重试——等用户点「重试」。唯一实现 `client/reader-session.ts`。
-_Avoid_: 请求去重（那是网络层语义；这是会话级时序）
+「下一页 / 下一目录页」何时停的唯一语义：next 规则按取值用途求值、结果按列表形状处理。停止判据次序与代码同序——防环 → 上限 → 零新增 → 回环；正文面另串章闸。
+_唯一实现_: `services/pagination.ts` 的 `followPages`（`stoppedBy` 五态）；串章启发式 `services/chapter-page.ts` 的 `isSameChapterPage`
+_Avoid_: 翻页循环、重复过滤（判据是「本页零新增」与「URL 已见」，不是「出现重复就停」）
 
 **阅读位置（reading position）**:
-「这本书读到哪儿」——章 + 章内比例（`{chapterIndex, offsetRatio}`，存档形态见 `shared/wire.ts` 的 `ShelfProgress`）。**在会话里是状态**：`reader-session.ts` 的 `position` 是唯一真相，滚动测量 / 目录选中 / 存档恢复都只是修正它；落盘时机由单点 `commit(cause)` 判定（`restore` 站定不写、`jump`/`cross` 立即落、`scroll` 防抖落）。换算（位置 ⇄ 像素）唯一实现在 `client/progress.ts`（`locateChapter` / `anchorTop`，跨度同取章高，互逆）。「有没有读过」唯一实现 `shared/wire.ts` 的 `hasProgress`（存档恢复与书架卡片同消费）。服务端落盘是 **last-write-wins**：`updatedAt` 只写不读——「只有一个读者」是本设计的前提（两窗口同开同一本会互相覆盖）。
-_Avoid_: 进度（太泛，且要区分「元数据」与「阅读位置」）、阅读记录（那是服务端落盘那一份的别称）、scrollTop（像素是测量值，不是位置本身）
+「这本书读到哪儿」= 章 + 章内比例（`{chapterIndex, offsetRatio}`）。在会话里是状态：`position` 是唯一真相，滚动测量 / 目录选中 / 存档恢复都只是修正它；落盘由单点 `commit(cause)` 判定。服务端 last-write-wins，前提是「只有一个读者」。
+_唯一实现_: `client/reader-session.ts`（状态）+ `client/progress.ts`（位置 ⇄ 像素）+ `shared/wire.ts` 的 `ShelfProgress`、`hasProgress`
+_Avoid_: 进度（要区分「元数据」与「阅读位置」）、scrollTop（像素是测量值，不是位置本身）
 
 **缓存代际（epoch）**:
-「这份目录 / 正文缓存还有效吗」的唯一算式：按面细分的规则指纹 + baseUrl，**入缓存文件名**而不是删除式失效——换规则后旧代际的文件自然读不到，在途请求写的是它起飞时那个代际（旧在途写回自动无害）。唯一实现 `services/cache-epoch.ts` 的 `rulesEpoch`；裁决在 `services/reading.ts` 的 `getTocInner` / `getChapter`（读与写共用同一次算出的值）。刻意不含 `NovelSource.auth`（登录态刷新会整源缓存全灭）。
-_Avoid_: 版本号（代际是规则指纹，不是自增版本）、缓存键（太泛——文件名还含 safeKey / 章序 / 槽位）
+「这份目录 / 正文缓存还有效吗」的唯一算式：按面细分的规则指纹 + baseUrl，**入缓存文件名**而不是删除式失效。刻意不含 `auth`（登录态刷新会整源缓存全灭）。
+_唯一实现_: `services/cache-epoch.ts` 的 `rulesEpoch`；裁决在 `services/reading.ts` 的 `getTocInner` / `getChapter`
+_Avoid_: 版本号（是规则指纹不是自增版本）、缓存键
 
 **正文槽位（slot）**:
-正文缓存文件名的有效性段 = 代际 + 章名。代际管「规则变了」，章名管「站点侧目录变了」（站点前插一章 → 章序位移 → 旧文件端给读者**另一章**）；刻意**不含章节 url**（带时效 token 的站点每次刷目录都换 url，入键等于正文缓存永不命中）。唯一实现 `services/cache-epoch.ts` 的 `contentSlot`。
-_Avoid_: 正文键、章节 id（槽位是「代际 × 章名」的指纹，既不是章序也不是 url）
+正文缓存文件名的有效性段 = 代际 + 章名：代际管「规则变了」，章名管「站点侧目录变了」。刻意**不含章节 url**（带时效 token 的站点每次刷目录都换 url）。
+_唯一实现_: `services/cache-epoch.ts` 的 `contentSlot`
+_Avoid_: 正文键、章节 id
 
 ### 跨半契约
 
 **书目字段集（shelf metadata field-set）**:
-书架条目 9 个元数据字段（sourceId/title/author/coverUrl/intro/lastChapterName/kind/wordCount/totalChapters）的「名称 × 类型判别 × 归一化」唯一主人：`shared/wire.ts` 的 `SHELF_META` 表 + `pickShelfMeta`。Shelf.applyPatch 遍历表保值覆盖，shelfBody 与 dispatch.shelfPut 都从 pick 派生；加字段只改这张表。
+书架条目元数据的「名称 × 类型判别 × 归一化」唯一主人；加字段只改这张表。
+_唯一实现_: `shared/wire.ts` 的 `SHELF_META` + `pickShelfMeta`
 _Avoid_: 逐字段 typeof 筛键（那是这张表的抄本）
 
 **来源投影（source projection）**:
-书架读取面上由服务端 join 出的源名：`shared/wire.ts` 的 `ShelfEntry.sourceName`，算式唯一实现在 `services/reading.ts` 的私有 `sourceNameOf`（读面入口是同一文件的 `shelfList`）。源已被删（join 不到）与本地书都投影成 `null`，客户端分别落成灰字「来源已删除」与不出 chip。它是**读取面投影**、不是书目字段——不可 patch、不落盘，故刻意不进 `SHELF_META`（进表 = 变成能被 PUT 写进 shelf.json 的假元数据）。
-_Avoid_: 来源字段（那是落盘书目字段的说法）、来源快照（加书那刻定死的旧名——本项目故意不要：同址替换会复用 sourceId，快照会静默陈旧）
+书架读取面上由服务端 join 出的源名 `ShelfEntry.sourceName`。它是**读取面投影、不是书目字段**——不可 patch、不落盘，故刻意不进 `SHELF_META`。
+_唯一实现_: `services/reading.ts` 的 `sourceNameOf`（读面入口 `shelfList`）
+_Avoid_: 来源字段（那是落盘书目字段的说法）、来源快照（同址替换会复用 sourceId，快照会静默陈旧）
 
 **wire 契约（wire contract）**:
 `/novel-api` 规范 JSON 的值形状与路由名——Node 半与浏览器半之间的唯一真相，代码只许有一个主人。
+_唯一实现_: `shared/wire.ts`
 _Avoid_: API 文档（文档是它的抄本）
 
 **缺键投影（missing-key projection）**:
-工具面把空值字段从规范值中省略的投影——harness 的 lossless-JSON 约束下的职责，不是 wire 口径。
+工具面把空值字段从规范值中整键省略的投影——harness 的 lossless-JSON 约束下的职责，不是 wire 口径。
+_唯一实现_: `tools/project.ts`
 _Avoid_: 字段过滤
-
-**语义覆盖矩阵（legado coverage matrix）**:
-「本插件对 legado 书源格式做到哪一步」的唯一读数口：一行一条 legado 语义，归属只能是 实现 / 环境不适用 / 待拍板开口 三态（不设「未知」）。唯一实现 `tests/legado-coverage/matrix.ts`（数据）+ `coverage.test.ts`（逐行验证据可回查：实现符号在不在、测试标题在不在、不适用口径在不在文档里）。
-_Avoid_: 兼容性清单、TODO 表（那是会话里的临时说法，机器不认）
-
-**环境不适用（not-applicable）**:
-一条 legado 语义本插件**判为不接并写明理由**的归属；理由只准写在 `docs/design/legado-compat.md`（对面自己没实现的字段也归这里，防止「对面没有」被当成「我们该补」）。判「不适用」而不写文档 = 把裁决写成遗忘，矩阵会红。
-_Avoid_: 不支持（太泛——没说清是裁决还是欠账）、做不了
-
 
 **规范值（canonical value）**:
 工具输出的完整 JSON 值；render 只是它的文本投影。
+_唯一实现_: `tools/tools.ts` 各工具的 `render`（投影侧）与 `tools/project.ts` 的 `project`（缺键省略侧）
+_Avoid_: 渲染结果（值与投影不是一回事）
+
+**语义覆盖矩阵（legado coverage matrix）**:
+「本插件对 legado 书源格式做到哪一步」的唯一读数口：一行一条 legado 语义，归属只能是 实现 / 环境不适用 / 待拍板 三态（不设「未知」）。
+_唯一实现_: `tests/legado-coverage/matrix.ts`（数据）；能力单元清单 `tests/legado-coverage/inventory-coverage.test.ts`
+_Avoid_: 兼容性清单、TODO 表
+
+**环境不适用（not-applicable）**:
+一条 legado 语义被判为**不接**的归属；理由写在该矩阵行的 `note` 里（对面自己没实现的字段也归这里，防止「对面没有」被当成「我们该补」）。
+_Avoid_: 不支持（太泛——没说清是裁决还是欠账）、做不了
 
 **构建期纯度门（bundle purity gate）**:
-client bundle 的构建期守卫：平台模块表之外的 `@deepseek-ai/*` **值** import、或 Node 内建闯进浏览器 bundle → 构建立刻失败（type-only import 已被擦除，到不了这道门）。唯一实现 `tsdown.config.ts` 的 `dsh-novel-bundle-purity` 插件（`resolveId` 直接 throw）+ 平台模块表 `PLATFORM_MODULES`（两份官方样例的并集）。后果：`src/shared/wire.ts` 必须零运行时依赖——它被整个 inline 进 client bundle。
+client bundle 的构建期守卫：平台模块表之外的 `@deepseek-ai/*` **值** import、或 Node 内建闯进浏览器 bundle → 构建立刻失败。后果：`src/shared/wire.ts` 必须零运行时依赖（它被整个 inline 进 client bundle）。
+_唯一实现_: `tsdown.config.ts` 的 `dsh-novel-bundle-purity` 插件 + 平台模块表 `PLATFORM_MODULES`
 _Avoid_: external / noExternal 配置（那是宿主侧 bundler 的事）

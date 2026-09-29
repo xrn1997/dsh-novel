@@ -21,6 +21,9 @@ pids
 *.seed
 *.pid.lock
 
+# 门控产物：test:compat 每次覆盖写，不入库（入库会让它随跑门漂）
+compat/report.md
+
 # 覆盖率（istanbul/nyc/jest）
 coverage
 *.lcov
