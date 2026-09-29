@@ -14,7 +14,7 @@ import { novelDir } from './services/storage.js'
 import { NOVEL_API_PREFIX } from './shared/wire.js'
 import { registerTools } from './tools/tools.js'
 
-/** 结构镜像（docs/reference/dsh-plugin-api.md 策略）：webServer/tools/jobs 的 declare module 增强来自未安装的宿主包——
+/** 结构镜像：webServer/tools/jobs 的 declare module 增强来自未安装的宿主包——
  * 本仓库不装 dsh-host-webserver（peer，运行时由宿主提供），类型面按 d.ts 证据镜像最小形状。
  * 注意不能 extends Context（dsh-tools 已对 tools 做了更宽的增强，交叉会冲突）——独立形状 + 强转。
  * `jobs` = 宿主后台任务注册表（ctx.jobs）：只镜像我们用到的两成员，且 `start` 的形状与
@@ -33,8 +33,8 @@ interface NovelContext { webServer: WebServerLike; tools: ToolsRuntimeLike; jobs
 
 export const name = '@xrn1997/dsh-novel'
 /** 挂载前必须就绪的服务：webserver 路由、工具注册表、宿主任务注册表
- *  （docs/reference/dsh-plugin-api.md 证据 2b 同构；`jobs` 由 `dsh-base/cordis.patch.yml`
- *  的 `id: jobs → @deepseek-ai/dsh-jobs-local` 常带，与 webServer 同一档硬依赖，缺了就该响亮失败） */
+ *  （宿主 base 补丁以 id `jobs` 注册 `@deepseek-ai/dsh-jobs-local`，与 webServer 同一档硬依赖，
+ *  缺了就该响亮失败；名字集合由 `tests/index.test.ts` 钉住） */
 export const inject = ['webServer', 'tools', 'jobs']
 
 /** 插件配置（官方 config 页规范形态：schemastery Standard Schema）。

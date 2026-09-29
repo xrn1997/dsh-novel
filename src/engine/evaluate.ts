@@ -17,7 +17,6 @@ import { loadHtml } from './dom.js'
 import { engineValueToString } from './js-utils.js'
 import { splitLiteral } from './literal.js'
 
-/** 设计文档：docs/design/engine.md */
 import { JsSandboxError, RuleEvalError, UnsupportedRuleError, isEngineError } from './errors.js'
 
 // ── trace 类型（冻结：服务层 / 工具面 / UI 只准用这套）──────────────────
@@ -164,8 +163,8 @@ function* branchGen(
         // scriptForm:true（@js 段口径）：最后一个表达式的值即结果（曾走 wrapped async IIFE，
         // 无 return 的表达式恒 undefined → Miss，`$.id@js:"…"+result` 主导形态整批静默取空）。
         // **插值先重写规则文本本身，再按 mode 分发**，故 js 段代码里的 `{{…}}` 先按当前链上下文
-        // 插值（不插值就把字面花括号发上网打到 404；形态计数只能按真入口重算，故不写「N 源在用」，
-        // 实证见 docs/design/engine.md）。插值段 Miss → 整段 Miss，与模板字面段同一口径。
+        // 插值（不插值就把字面花括号发上网打到 404；形态计数只能按真入口重算，故不写「N 源在用」）。
+        // 插值段 Miss → 整段 Miss，与模板字面段同一口径。
         let code = seg.code
         if (code.includes('{{')) {
           // **只认双花括号**（口径住 literal.splitLiteral 的 doubleBraceOnly）：js 文本里的

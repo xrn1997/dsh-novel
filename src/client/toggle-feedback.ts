@@ -14,7 +14,7 @@ export interface ToggleFeedbackDeps {
  * 策略：**秒级乐观操作不进泳道**。行内已有在途装饰（开关降透明 + wait + title「保存中…」），
  * 只有**失败**才进 error 泳道（带行锚点 = 全局条「定位 →」+ 行内红边）。这与瞬态层「ok 少而淡
  * ——开关翻转本身即反馈」是同一条原则的延伸。配套第二半修复在 styles.tsx：状态条改成不吃布局的
- * 浮层。抽成纯函数是 client 惯例：策略可单测，视图只做接线。口径详见 `docs/design/client.md`。
+ * 浮层。抽成纯函数是 client 惯例：策略可单测，视图只做接线。
  */
 export interface ToggleFeedback {
   /** 请求在途：**零占用**（不进泳道——挂载即顶动布局，秒级操作会闪） */

@@ -115,7 +115,7 @@ describe('@js 沙箱', () => {
     // 本仓 `java.get` 返 undefined，于是：`String(java.get('userId'))` → 字面量 **"undefined"**（移动阅读
     // `userId=userId||String(java.get('userId'))` 会把它拼进 DES 密钥/URL——**静默错值**），
     // `java.get('list').split('\n')` → 抛 TypeError（海棠搜书；对面是 `''.split()` = ['']，脚本继续往下跑）。
-    // 注意这条与上面那条**不冲突**：完成值 '' 与 undefined 在值映射里同样落 Miss（engine.md 的返回值映射），
+    // 注意这条与上面那条**不冲突**：完成值 '' 与 undefined 在值映射里同样落 Miss（返回值映射的口径），
     // 所以观察点必须**带上分隔符**——`String(...)` 的结果本身要看得到（'' vs 'null'）。
     expect((await run('return "[" + String(java.get("nope")) + "]"')).value).toEqual({ kind: 'value', text: '[]' })
     expect((await run('return java.get("nope").split("\\n").length')).value).toEqual({ kind: 'value', text: '1' })

@@ -5,7 +5,7 @@ import type { NormalizedRules } from './types.js'
 /**
  * 缓存代际：规则指纹是「这份缓存还有效吗」的唯一算式。
  *
- * 为什么要它（详见 docs/design/services.md §「缓存有效性」）：同址替换复用 sourceId 保书架引用
+ * 为什么要它：同址替换复用 sourceId 保书架引用
  * （既有裁决），于是「身份没变」被当成了「内容仍有效」——换规则后目录/正文照旧命中旧代际，
  * 而全仓没有清缓存的出口、阅读器也从不发 refresh=1，脏命中是永久的。
  *
@@ -21,7 +21,7 @@ import type { NormalizedRules } from './types.js'
  * 刻意**不含** `NovelSource.auth`：登录态刷新会让指纹变，整源缓存每次登录后全灭。
  */
 
-/** 影响面：改一个规则字段会作废哪些**引擎面**的缓存。与 CONTEXT.md 的「面（facet）」**不是同一条轴**——
+/** 影响面：改一个规则字段会作废哪些**引擎面**的缓存。与「面（facet）」**不是同一条轴**——
  *  「面」是规则求值的上下文（引擎 `Facet`，六值），「影响面」是一个字段变更波及的缓存面集合（四值）。
  *  刻意换个词，避免给「面」长出第二个同义词。 */
 export type EpochImpact = 'toc' | 'content' | 'both' | 'none'
@@ -101,7 +101,7 @@ export function rulesEpoch(rules: NormalizedRules, baseUrl: string, facet: Cache
 /**
  * 正文槽位：代际 + 章名。
  *
- * 为什么带章名（详见 docs/design/services.md §「缓存有效性」）：正文按 chIndex 存，
+ * 为什么带章名：正文按 chIndex 存，
  * 站点在前面插一章 → 全体 index 位移 → 旧文件端给读者的是**另一章**。代际管「规则变了」，
  * 章名管「站点侧目录变了」，两者正交、都需要。刻意**不含章节 url**：带时效 token 的
  * 站点每次刷目录都换 url，入键等于正文缓存永不命中；章名 + index 稳定即命中，

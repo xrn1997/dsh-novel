@@ -7,8 +7,7 @@ import { absUrl } from './url.js'
  *  ① 纯 URL：`/search?q={{key}}`（支持相对 URL——按 bookSourceUrl 解析）
  *  ② URL+选项：`url,{"method":"POST","body":"...","charset":"gbk","headers":"{...}","webView":true}`
  *  选项 JSON 允许单引号形态（真实源大量存在——宽容引号但不猜结构）；
- *  headers 可为 JSON 字符串（双重编码——真实源常见形态）。
- *  现状真相与口径：docs/design/services.md。 */
+ *  headers 可为 JSON 字符串（双重编码——真实源常见形态）。 */
 export interface RequestOption {
   method?: string
   body?: string
@@ -93,7 +92,7 @@ function parseHeaders(v: unknown): Record<string, string> | undefined {
  * （`option.charset` 在场即转义——当前**没有**「这份 body 是不是表单」的形状判别，默认
  * `urlencoded` 头还是在转义之后才补（`assembleRequest`）；「只在体非 JSON/XML 且未显式声明
  * Content-Type 才转义」是还没落地的意图，连同「逐字段编码」「`escape` 特例」两件事一起登记在
- * 矩阵 `b-opt-charset-form-fidelity`（本仓这条只是子集，`docs/design/services.md`「已知开口」指同一行）。
+ * 矩阵 `b-opt-charset-form-fidelity`（本仓这条只是子集）。
  * JSON 体不是表单，转义它只会毁掉它——故那里要拍板的是补判别还是删这句）。
  * 为什么只重编码**非 ASCII**：本仓的体已过 interpolateUrl 的 UTF-8 转义，若对整串按 charset 重编码，
  * 会把 `%E4%B9%A6` 二次编码成 `%25E4%B9%A6`；故转义段先按 UTF-8 解码、直写字符直接用，再按 charset

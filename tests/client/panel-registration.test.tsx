@@ -6,7 +6,7 @@ import { apply } from '../../src/client/index.js'
 
 /**
  * 客户端注册面：小说 = **全局面板**（2026-09 迁移，用户拍板），不再是对话区 tab。
- * 宿主契约（`docs/reference/dsh-plugin-api.md` §10 证据 10c）：`sidebar.panellist` 每条 entry 是
+ * 宿主契约：`sidebar.panellist` 每条 entry 是
  * 侧栏一行（注册 `{ id, order?, label? }`，占用者只收 owner props `{ size, active }`）；`main` 是
  * 同 id 选中后按 `{ key }` 渲染的占用者；「selecting a missing main entry throws」⇒ 两个座位必须
  * 同批注册（apply 内同步完成）。

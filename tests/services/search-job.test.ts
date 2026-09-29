@@ -6,7 +6,7 @@ import type { SearchGroup, SearchHit } from '../../src/shared/wire.js'
 import type { JobHost } from '../../src/services/import-job.js'
 
 /** 搜索后台任务的持有者：整轮结果住服务端，读面给游标增量。它存在的理由是实测缺陷——
- *  浏览器半自持在途循环，切界面即丢结果（见 `docs/design/client.md` 已知开口）。 */
+ *  浏览器半自持在途循环，切界面即丢结果。 */
 
 const hit = (i: number): SearchHit => ({
   title: `t${i}`, author: null, url: `https://x/${i}`, coverUrl: null, intro: null, lastChapterName: null,

@@ -111,7 +111,7 @@ export function evalCss(
   const reduced = reducePicked(picked.toArray(), seg.exclude, seg.index ?? null)
   if (!reduced.ok) {
     // reason 只有三态（`PickedOutcome`）：zero / excluded / oob——本层没有「切片」取位可言，
-    // 曾有第四态随那个误读一起删（口径见 `select.ts` 的 reducePicked 与 CONTEXT.md「取值规约」）。
+    // 曾有第四态随那个误读一起删（口径见 `select.ts` 的 reducePicked）。
     const detail =
       reduced.reason === 'zero' ? `css 选择器 ${seg.selector} 零命中`
         : reduced.reason === 'excluded' ? `css 选择器 ${seg.selector} 排除 ${JSON.stringify(seg.exclude)} 后为空`

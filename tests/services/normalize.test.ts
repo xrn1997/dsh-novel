@@ -74,7 +74,7 @@ describe('warning 口径', () => {
 
 // 嵌套对象方言（阅读系 App 主流导出形态）：五个规则字段是对象不是字符串。
 // 子字段拍平到模型；搜索上下文（ruleSearch）与详情上下文（ruleBookInfo）分别落位
-// ——实测真实源包 541 条共有源里 508 条两上下文规则不同，混用会造垃圾标题（同一处陷阱在 `docs/design/services.md` 的详情上下文那一节写着）。
+// ——实测真实源包 541 条共有源里 508 条两上下文规则不同，混用会造垃圾标题（详情上下文与搜索上下文不可混用）。
 const objectSource = {
   bookSourceName: '对象源', bookSourceUrl: 'https://o.com',
   searchUrl: 'https://o.com/s?wd={{key}}',

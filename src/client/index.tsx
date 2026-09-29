@@ -8,8 +8,7 @@ export const inject = ['slots', 'sessions']
 /**
  * 浏览器半入口：把「小说」注册为**全局面板**（2026-09 迁移，用户拍板）——侧栏
  * `sidebar.panellist` 一行图标 + `main` keyed 槽同 id 的中央面板，不再是对话区
- * `conversation.view` tab。宿主契约（本机 host checkout 实证，`docs/reference/dsh-plugin-api.md`
- * §10 证据 10c）：
+ * `conversation.view` tab。宿主契约（本机 host checkout 实证）：
  *
  * - `sidebar.panellist`（root 作用域 list）：注册项 `{ id, order?, label? }`；宿主 sidebar
  *   shell 自带行按钮、`aria-current` 选中态、折叠 tooltip，点击 = `ctx.layout.selectPanel(id)`；

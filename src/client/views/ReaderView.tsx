@@ -228,7 +228,7 @@ function currentNodeOf(blocks: Array<HTMLDivElement | null>, viewTop: number): V
  *
  * 呈现层：细工具栏 + 正文居中窄列（布局归样式类；prefs 色/字号/行距行内——正文层永不接宿主
  * token），z 序归 CTRL_Z。deps 走 ReaderDeps（与 ShelfView/SearchView 齐平），导出编排归
- * export-run.ts。口径详见 `docs/design/client.md`。
+ * export-run.ts。
  */
 export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: {
   sourceId: string; bookKey: string; title: string; deps?: ReaderDeps
@@ -360,8 +360,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     setNavActive(session.activeNavId())
   }, [drawer, currentChapter, navigation, session])
   /** 打开抽屉即把当前项摆到视野中间——**只滚抽屉自己**，不借 `scrollIntoView`（它连可滚祖先一起
-   *  滚，会改写主阅读位置）。口径与被否决方案见 util.ts 的 centerInScroller，读数见
-   *  docs/design/client.md「只读浮层的落位只滚自己」。 */
+   *  滚，会改写主阅读位置）。口径与被否决方案见 util.ts 的 `centerInScroller`。 */
   useEffect(() => {
     const drawerEl = drawerRef.current
     if (!drawer || drawerEl === null) return

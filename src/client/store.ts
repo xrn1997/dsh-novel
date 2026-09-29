@@ -1,8 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { ls } from './util.js'
 
-/** 轻量 store（useSyncExternalStore 驱动）：业务数据不进 store——每次挂载经 api 拉取，组件内 useState 持有
- *  口径详见 `docs/design/client.md`。 */
+/** 轻量 store（useSyncExternalStore 驱动）：业务数据不进 store——每次挂载经 api 拉取，组件内 useState 持有。 */
 export interface Store<T> {
   get(): T
   set(patch: Partial<T>): void

@@ -381,7 +381,7 @@ describe('⋯ 菜单的开合方向：下方放不下就朝上开（长列表滚
 })
 
 describe('「去登录」接线（runLogin 两形态 / 未声明回站点）', () => {
-  // 病史（docs/design/client.md 已知开口 1）：这个钮原先恒 `window.open(source.baseUrl)`——
+  // 病史：这个钮原先恒 `window.open(source.baseUrl)`——
   // 既没问服务端要真 loginUrl，也从没触发 JS 形态的登录脚本，而 README 已宣称两者都支持。
   // 判据是服务端投影出来的事实 `hasLoginUrl`，不在客户端按错误文案猜分支。
   beforeEach(() => { vi.spyOn(window, 'open').mockImplementation(() => null) })

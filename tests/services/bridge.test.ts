@@ -138,7 +138,7 @@ describe('分类字段 kindFieldOf（对面 getStringList → joinToString(",") 
   })
   it('对面 try/catch 那一半：本仓认不出的规则形态只让该字段留空，书目照收', async () => {
     const f = at('<p><a>玄幻</a></p>')
-    // `kind: "0"` / `kind: "k"` 是真库形态（现量见 docs/design/legado-compat.md 的需求量表）：
+    // `kind: "0"` / `kind: "k"` 是真库形态（现量由 `DSH_PARSE_CENSUS` 读数表重算）：
     // 无 `@` 单段在解析期抛 UnsupportedRuleError——吞掉它才符合「坏字段不带走整页」，抛出即整组书目变 error。
     expect(await kindFieldOf(f.sub, '0', f.ctx, 'search')).toBeNull()
     // 求值期炸掉（这里是宿主桩抛「需要安卓宿主环境」）同样只让该字段留空

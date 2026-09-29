@@ -8,7 +8,7 @@ import { DEFAULT_MAX_IMPORT_BYTES } from '../../src/services/localbooks.js'
 import { DEFAULT_JS_BUDGET_MS, DEFAULT_SEARCH_PARALLEL } from '../../src/services/reading.js'
 
 /**
- * 可调参数的**缺省值单点化**（口径与病史见 `docs/design/services.md` 已知开口 9：同一批数字原先在
+ * 可调参数的**缺省值单点化**（病史：同一批数字原先在
  * 四处各写一份，生产路径显式传值，所以改岔了不会当场报错，只会让「配置表看到的默认值」与「服务层
  * 实际回退值」悄悄分叉）。
  *
@@ -31,7 +31,7 @@ describe('可调参数的缺省值单点化', () => {
     const src = readFileSync(new URL('../../src/index.ts', import.meta.url), 'utf8')
     const block = /const DEFAULTS = \{[\s\S]*?\n\}/.exec(src)?.[0] ?? ''
     expect(block, 'DEFAULTS 块没匹配到（改名或改形状时同步这条守卫）').not.toBe('')
-    expect(block, '缺省值的主人各自在消费模块（见 services.md 已知开口 9）——在这里写回数字就是第二个主人')
+    expect(block, '缺省值的主人各自在消费模块——在这里写回数字就是第二个主人')
       .not.toMatch(/\d/)
   })
 })

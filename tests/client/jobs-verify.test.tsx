@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetJobSurface, startSourceVerification, useJobPolling } from '../../src/client/jobs.js'
 
 /**
- * 书源验证领域动作（验证编排收拢，口径见 docs/design/client.md）的 seam 测试。
+ * 书源验证领域动作（验证编排收拢）的 seam 测试。
  * 评审缺陷：三个验证入口的提交后编排散落调用者（有的催任务读面、有的重拉源列表，维护者必须
  * 记住何时用哪种；失败文案两份抄本一改即漂）。修法：`startSourceVerification` 收拢「提交 → 成功
  * 催读面 / 失败一处反馈」，入口只表达「验证哪些源」；终态的源列表刷新归 `reloadedJob` 记账

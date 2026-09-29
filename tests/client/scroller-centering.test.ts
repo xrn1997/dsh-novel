@@ -3,8 +3,8 @@
  * 浮层落位的唯一实现：`centerInScroller`。
  *
  * 它存在的理由是**不用** `scrollIntoView`：后者会一路向上滚完所有可滚祖先，于是「打开一个只读
- * 浮层」（目录抽屉 / 注释面板）改写了主阅读位置并落盘——真浏览器实测的两条缺陷同一根因，读数与
- * 记录见 docs/design/client.md「已知开口」。这里钉算式与「只碰这一个容器」；真排版几何的判据在
+ * 浮层」（目录抽屉 / 注释面板）改写了主阅读位置并落盘——真浏览器实测的两条缺陷同一根因。
+ * 这里钉算式与「只碰这一个容器」；真排版几何的判据在
  * tests/browser/epub-reader.test.ts。
  */
 import { describe, expect, it } from 'vitest'

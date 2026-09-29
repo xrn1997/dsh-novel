@@ -39,7 +39,7 @@ const HOST_GAP = [
 const GUARD = [
   '目录 URL 规则未取到任何章节地址',          // reading.ts：逐条回退目录页即判定整体失效
   '无法解码 charset',                         // 声明了非法 charset 时不猜
-  '需要安卓宿主环境',                         // java.webView 等——见 legado-compat.md 不适用表
+  '需要安卓宿主环境',                         // java.webView 等——安卓宿主面对本仓环境不适用
   '缺目录规则',                               // RuleMissingError
 ]
 

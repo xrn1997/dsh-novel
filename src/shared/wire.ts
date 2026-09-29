@@ -1,5 +1,5 @@
 /**
- * 跨半 wire 契约（现状真相与口径：docs/design/services.md 的「wire 契约」节）：
+ * 跨半 wire 契约：
  * /novel-api 规范 JSON 的值形状、路由名、错误信封——Node 半与浏览器半之间的唯一真相。
  *
  * 两条硬约束（构建期事实，不是偏好）：
@@ -30,7 +30,7 @@ export type ProbeErrorCode =
   | 'UnsupportedRuleError' | 'RuleEvalError' | 'JsSandboxError'
   | 'FetchError' | 'DecodeError' | 'RuleMissing' | 'Error'
 
-/** 本地书（TXT / EPUB 两支，按内容分流；口径见 `docs/design/services.md`「本地书身份」）的保留
+/** 本地书（TXT / EPUB 两支，按内容分流）的保留
  *  源 id——跨半契约常量的**唯一主人**：
  *  client 半与测试直接 import 本处；服务半（src/services/localbooks.ts）也 import 后 re-export，
  *  不再自带第二份声明（服务半不受 client 纯度门禁约束，可直接引 shared）。改名只需改这一行。 */
@@ -120,8 +120,8 @@ export interface SearchGroup {
 }
 
 /** 聚合搜索后台任务的**读面快照**（跨半契约形状；服务端如何持有整轮结果属服务层，不上 wire）。
- *  为什么是「服务端持有 + 显式快照查询」：浏览器半自持在途循环会切走即丢结果；官方另要求
- *  stateful domain 必须提供 baseline、cursor 或显式 query（docs/reference/dsh-plugin-api.md §9）
+ *  为什么是「服务端持有 + 显式快照查询」：浏览器半自持在途循环会切走即丢结果；读面还须
+ *  提供 baseline、cursor 或显式 query（SEG.jobStream 首帧 = 带 since 的 baseline 快照）
  *  ——`added`/`next` 就是那个 cursor。`phase` 与 `JobState` 同一套词汇：「还在跑吗」判据只此一种。 */
 export interface SearchJobSnapshot {
   id: string
@@ -220,7 +220,7 @@ export type ShelfMetaField = keyof typeof SHELF_META
 /** 书架**读取面**条目：落盘的 ShelfBook + 来源投影 sourceName。
  *  来源投影 = 服务端 list 时拿 sourceId join 出来的源名：源已删 → null（UI 灰字），本地书恒 null。
  *  它不是书目字段：不可 patch、绝不进 shelf.json——所以刻意不进 SHELF_META。加书那刻快照源名是
- *  **被否决的方案**：源改名/同址替换复用 id 后名字会陈旧（见 services.md）。 */
+ *  **被否决的方案**：源改名 / 同址替换复用 id 后名字会陈旧。 */
 export type ShelfEntry = ShelfBook & { sourceName: string | null }
 
 /** 书目元数据 patch：null/undefined 键 = 保值（Shelf.update 的 interface 语义，见 shelf.ts） */
@@ -240,7 +240,7 @@ export function pickShelfMeta(raw: Record<string, unknown>): ShelfMetaPatch {
   return out as ShelfMetaPatch
 }
 
-// ── 本地图文面（EPUB 导入；现状真相与口径：docs/design/services.md「本地书身份」）──────
+// ── 本地图文面（EPUB 导入；身份锚在保留源 id LOCAL_SOURCE_ID）──────────────────────
 // 图文正文、目录导航与导入回执的唯一跨半形状：Node 半（导入/读取）与浏览器半（阅读器/书架）
 // 消费同一份，别处不得私造平行版本。
 
@@ -389,7 +389,8 @@ export const SEG = {
   warnings: 'warnings',
 } as const
 
-/** 双形态路由：path（客户端 fetch 用）与 segs（服务端段匹配/一致性测试用），同一构造保证一致 */
+/** 双形态路由：path（客户端 fetch 用）与 segs（结构自洽校验用——服务端段匹配读的是运行时 URL
+ *  切出来的段，不读这份 `ROUTES.*.segs`；把它当第二份权威是错的） */
 export interface Route { path: string; segs: string[] }
 export function route(...segs: string[]): Route { return { path: segs.join('/'), segs } }
 

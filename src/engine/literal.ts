@@ -1,7 +1,7 @@
 import { braceRegion } from './grammar.js'
 
 /**
- * 模板字面段（CONTEXT.md「模板字面段」）的识别与切分——构词（normalize/服务层拼串）与
+ * 模板字面段的识别与切分——构词（normalize/服务层拼串）与
  * 解析（parse/evaluate 消费）共用同一份认知，唯一实现住这里。
  *
  * 口径：规则串里出现 `{{expr}}` 时逐段插值——expr 以 `@`/`$.`/`$[`/`//` 开头按**规则递归求值**，

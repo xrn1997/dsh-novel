@@ -9,7 +9,6 @@ import { readJson, writeJsonAtomic } from './storage.js'
  * 书源对外视图：**绝不含 raw / rules / auth**——凭据与原文只落盘，不出现在服务层对外返回值。
  * hasHeader/hasAuth/authExpired 只给布尔状态位，UI 据此提示「已登录/已过期」。
  * 形状定义在 wire 契约（src/shared/wire.ts）；此处 re-export 保持 import 路径可用。
- * 现状真相与口径：docs/design/services.md。
  */
 export type { SourcePublic } from '../shared/wire.js'
 import type { SourcePublic } from '../shared/wire.js'
@@ -87,7 +86,7 @@ export class SourceRegistry {
       } else if (s.rules.ruleDetailInit === undefined) {
         s.rules.ruleDetailInit = null; changed = true
       }
-      // ⑦ headerRule 按 raw 重推（CONTEXT.md「第七条迁移」指的就是这一条；与上面 ruleDetailInit 那条同构）：
+      // ⑦ headerRule 按 raw 重推（与上面 ruleDetailInit 那条同构）：
       // 旧版 normalize 把 `@js:` header 当坏 JSON 丢弃（rules.header=null、原文只活在 raw 里）——
       // 不重推则动态头永远不生效。raw 非对象 → 不动；raw 在场：键恒落成 string | null。
       const wantHeaderRule = rawHeaderRule(s.raw)

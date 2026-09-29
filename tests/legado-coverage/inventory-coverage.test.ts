@@ -11,7 +11,7 @@ import { COVERAGE } from './matrix.js'
  *
  * 曾经的第 3 层「从不入库的手抄笔记现读小节集合做双向比对」已**删除**——笔记一消失这层就静默转
  * skip（实测 1338|3 → 1337|4，无一物变红）：分母不能架在会蒸发的文件上。「对面新增了什么」改由
- * `upstream-fields.test.ts` 判，「引用还指得到吗」归 `citation-liveness.test.ts`。
+ * `upstream-fields.test.ts` 判。
  *
  * `UNITS` 是**自足**的在册清单（不指向仓外文档）；编号在这里只是**键**，别处不引用，小节怎么切
  * 不影响任何判据。

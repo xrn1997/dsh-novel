@@ -13,7 +13,7 @@ import type { JobState, SourcePublic } from '../../src/client/views/types.js'
  * 常驻状态层（`shell.overlay` 位）的接线钉子。
  * 为什么要存在：`conversation.view` 是 list 基数且壳层只渲染当前激活 entry（官方 slots 层级表 +
  * 宿主壳层 `renderSlot('conversation.view', …, { only: active.id })`），状态条原先住在
- * `SettingsSection` 里 ⇒ 用户一切 tab 就看不见仍在服务端跑的任务（docs/design/client.md 已知开口）。
+ * `SettingsSection` 里 ⇒ 用户一切 tab 就看不见仍在服务端跑的任务。
  * 本文件钉死新住址的三件事：常驻层自带任务泳道、空闲零占用、点击把用户送回现场并记下要看什么。
  */
 

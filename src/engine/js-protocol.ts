@@ -3,7 +3,7 @@
  * 曾要同步改 4 处（interface / BOOTSTRAP 名单 / switch 分派 / 实现），现全部从表派生：
  * JavaBridge 类型用 mapped type 推导（不存在第二份手写 interface）、SANDBOX_MOUNTS 供引导脚本挂载、
  * invokeJavaMethod 按名查行分派。加一个方法 = 本表加一行。
- * 纪律：本文件不进 engine barrel——仅由 js-sandbox 内部引用。设计文档：docs/design/engine.md
+ * 纪律：本文件不进 engine barrel——仅由 js-sandbox 内部引用。
  */
 import crypto from 'node:crypto'
 import type { EngineValue, EvalContext, Facet, SegmentLoc } from './types.js'

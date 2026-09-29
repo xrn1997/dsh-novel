@@ -23,7 +23,7 @@ interface SearchSummary { sources: number; hits: number; found: number; failed: 
 
 /** 收口算式：sources = **真搜完并回来的组数**（不是本轮计划家数——停止的轮次里两者不等，
  *  报计划数就是谎报）；命中本数 = 各命中组之和；found = 有命中的源数；failed = 带 error 的组数。
- *  与 `docs/design/client.md`「百分比算式已收敛一处、剩两处（已裁：不合并）」那条不同源——
+ *  与 `views/bits.tsx` 的 `jobPct` / `searchPct` 百分比算式不同源——
  *  这是**计数**不是百分比，只此一处。 */
 function sumRound(groups: SearchGroup[]): SearchSummary {
   let hits = 0
@@ -132,8 +132,7 @@ export function SearchView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): 
  * 结构：容器 .novel-row + 主钮 .novel-row-main + 兄弟动作钮（**不嵌套**）。
  * apiSend 经 deps 透传（行内接线同样可被测试驱动）。
  * url 守卫：undefined/null 渲染不可点行；空串 `''` **产不出来**（命中行的 `url` 只出自服务端
- * 搜索链，空输入在那里就已落 `null`），于是「无身份」在浏览器半只有一种形状可认——完整论证见
- * `docs/design/client.md`「搜索」节。 */
+ * 搜索链，空输入在那里就已落 `null`），于是「无身份」在浏览器半只有一种形状可认。 */
 function HitRow({ sourceId, hit, deps }: { sourceId: string; hit: SearchHit; deps: ClientCoreDeps }): ReactNode {
   const [added, setAdded] = useState(false)
   const add = (): Promise<void> => {

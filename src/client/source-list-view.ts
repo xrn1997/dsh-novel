@@ -15,7 +15,6 @@ import type { SourcePublic } from './views/types.js'
  * - 状态下拉**不带计数**（2026 调度台改版）：下拉只做过滤不做总览；全部读数的唯一住址是
  *   列表头**状态带**（`stats`，本 view-model 派生）——2026-09 起待办卡可被忽略，读数不能再
  *   住在那里；坏源/未验证的 id 集合归 source-inbox.ts（待办派生的唯一住址），本层不重复派生。
- * 口径详见 `docs/design/client.md`。
  */
 
 /** 列表头状态带的五个读数：`enabled/disabled` 是 enabled 维，`unverified/broken` 是 status 维

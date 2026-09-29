@@ -5,14 +5,12 @@ import type { NovelSource } from './types.js'
 
 /**
  * 源入库（intake）：「书源进入系统」规则的唯一实现——
- * normalize → 批内去重（留首条）→ 按址去重（CONTEXT.md 入库规则：同 baseUrl 只留一条，
+ * normalize → 批内去重（留首条）→ 按址去重（同 baseUrl 只留一条，
  * 已有 verified 优先保留；无可用者 → 新条替换 preferred，复用旧 id，清同键脏数据）。
  *
  * 此前这套规则只住在后台导入任务（import-job.runImport）里，同步 importOne（工具面）
  * 缺去重——同一 baseUrl 可重复入库，入库规则半套。现在两条调用路（同步 / 任务）都只是调用方。
  * 批 = 一个 SourceIntake 实例的生命周期：库内快照在构造时冻结，批内新键实时并入。
- *
- * 现状真相与口径：docs/design/services.md。
  */
 
 /** 去重键：trim + 去尾部斜杠——不改大小写（站点地址区分路径大小写，魔改会误判） */

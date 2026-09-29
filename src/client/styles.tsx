@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react'
 
-/** 基础样式层：视图环各视图 + 宿主设置区块共用的 design token、标度与组件类
- *  （口径详见 `docs/design/client.md`）。
+/** 基础样式层：视图环各视图 + 宿主设置区块共用的 design token、标度与组件类。
  *
  *  ── 配色契约（宿主 `@deepseek-ai/dsh-client-ui-theme` 的 alias 语义层）─────────────
  *  宿主把调色板与语义层都挂在 `body` / `body[data-ds-dark-theme]` 上，本插件**只需引用语义
@@ -104,8 +103,7 @@ export const NOVEL_CSS = `
    向上探测判定（现即 .novel-main）。注意本文件是模板字符串：注释里不写反引号。
    **别把放开规则加回来**：阅读器曾放过这两层 overflow 交给宿主 scrollport 承载——那是
    conversation.view 时代的前提，迁全局面板后链上再无 scrollport，放开 = 整条链没人滚
-   （滚轮无效、正文裁在首屏、scroll 事件永不发生，进度落盘/预取/回跳一并死）。
-   病史与三链差分实测见 docs/design/client.md「控制器层与正文层」。 */
+   （滚轮无效、正文裁在首屏、scroll 事件永不发生，进度落盘/预取/回跳一并死）。 */
 .novel-root { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 .novel-main { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 /* 「小说」视图在场时收掉宿主常驻 composer（AI 输入框）：它是会话壳的固定座位，view 环切换不卸载
@@ -278,7 +276,7 @@ export const NOVEL_CSS = `
 /* 圆角**不能**靠 overflow: hidden 收：行内「⋯」菜单（.novel-menu 绝对定位）的包含块
    .novel-actions 就在表内，一裁就把菜单锁进表格盒、超出表底的部分点不到（末行菜单只可见
    约 1/4，2026-09-26 用户实机）。改为首/末行各自带圆角裁自己的背景——浮层归浮层、圆角归
-   圆角（判据与第二档翻转见 client.md「已知开口」行内 ⋯ 菜单落位条）。 */
+   圆角（判据：浮层归浮层、圆角归圆角——第二档「表格自身 overflow」翻转已实测排除）。 */
 .novel-table { border: 1px solid var(--novel-border); border-radius: var(--novel-r-md);
   /* 容器查询锚：源列表按**表格自身宽度**（不是视口宽度）收列——宿主会话列可拖窄，
      视口断点在分栏布局下量不准。inline-size containment 同时把表格的布局影响范围关住。 */
@@ -514,7 +512,7 @@ export const NOVEL_CSS = `
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .novel-rdr-book { color: var(--novel-text); font-weight: 500; }
-/* 章进度细线：挂在 sticky 工具栏下沿（跨章才变——低频量，见 client.md「跨章可见性」）。
+/* 章进度细线：挂在 sticky 工具栏下沿（跨章才变——低频量，故不进每帧读数的滚动路径）。
    width: 100% 不是冗余——绝对定位 + 无内容的元素 shrink-to-fit 成 0 宽，scaleX 再大也画不出线。 */
 .novel-rdr-trail {
   position: absolute; left: 0; bottom: -1px; width: 100%; height: 2px; background: var(--novel-brand);
@@ -540,7 +538,7 @@ export const NOVEL_CSS = `
    为什么外层宽度给 0：抽屉当「有宽度的 flex 兄弟」会从正文列里切走宽度（实测 766px 视口下
    38 字/行 → 22 字/行）。0 宽槽 + 绝对定位子件 = sticky 跟随性保留、正文列不缩水、窄屏时
    抽屉压在正文上（选章是瞬时态，压字可接受，挤列不可接受）。
-   三版死法（逐版读数记在 client.md「控制器层与正文层」目录抽屉条）：
+   三版死法（各自错在哪一条前提上）：
      ① flex 兄弟 + sticky 无高度上限 → 整页被目录撑到两万多 px；
      ② absolute 锚 .novel-rdr-main → 锚的是内容盒起点（读到第 500 章点目录画在头顶上方），
         且 max-height 的 100% 也是正文高度，形同虚设；

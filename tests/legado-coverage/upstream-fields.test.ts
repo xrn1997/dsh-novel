@@ -25,7 +25,7 @@ const ROOT = fileURLToPath(new URL('../..', import.meta.url))
  * 整块裁决 / 换名归属：字段 → 它由哪条矩阵行承担。每条都要理由，理由里点出锚点。
  */
 const FIELD_OWNERSHIP: Record<string, { row: string; why: string }> = {
-  avatarRule: { row: 'j-review', why: '段评面整块不接，见 docs/design/legado-compat.md「不适用：评论与段评面」' },
+  avatarRule: { row: 'j-review', why: '段评面整块不接：评论与段评对本仓环境不适用' },
   postTimeRule: { row: 'j-review', why: '同上：段评面整块不接' },
   reviewQuoteUrl: { row: 'j-review', why: '同上：段评面整块不接' },
   voteUpUrl: { row: 'j-review', why: '同上：段评面整块不接' },

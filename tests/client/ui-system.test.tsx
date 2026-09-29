@@ -212,7 +212,7 @@ describe('布局单位与视口约束（阅读器不能被正文高度绑架）'
       .toMatch(/grid-template-columns:\s*repeat\(auto-fit/)
     expect(ruleBody('.novel-todo-card'), '任务卡自包含（读数 + 名单 + 处置动作）').toMatch(/display:\s*flex/)
     expect(ruleBody('.novel-menu'), '行内「⋯」菜单是浮层（锚点 .novel-actions position:relative）').toMatch(/position:\s*absolute/)
-    expect(ruleBody('.novel-menu.up'), '向下放不下时朝上开：`.up` 必须锚底（top 让位）——长列表滚到滚动口底那档，见 docs/design/client.md')
+    expect(ruleBody('.novel-menu.up'), '向下放不下时朝上开：`.up` 必须锚底（top 让位）——长列表滚到滚动口底那档')
       .toMatch(/bottom:\s*calc\(100% - 6px\)/)
     expect(ruleBody('.novel-modal.wide'), '导入弹层用宽档（删除确认保持 400px 紧凑档）').toMatch(/width:\s*min\(680px/)
   })
@@ -221,7 +221,7 @@ describe('布局单位与视口约束（阅读器不能被正文高度绑架）'
     // 病史（2026-09-26 用户实机 + 真 NOVEL_CSS/真 Edge 实测）：.novel-table 曾带 overflow:hidden
     // 收圆角，而 ⋯ 菜单的包含块 .novel-actions 就在表内 ⇒ 菜单被锁进表格盒，超表底的部分
     // 点不到：末行菜单可达率 **5% → 去掉裁剪后 100%**（逐点命中测试；残余 = 长列表滚到底仍被
-    // .novel-main 裁，读数与开口登记在 docs/design/client.md）。
+    // .novel-main 裁）。
     expect(ruleBody('.novel-table'), '表格一裁，行内浮层就出不去（菜单/将来的下拉同族）').not.toMatch(/overflow:\s*hidden/)
     expect(ruleBody('.novel-table'), '圆角仍在——裁剪换成首/末行自持，不等于放弃圆角').toMatch(/border-radius:/)
     for (const [sel, corner] of [['.novel-table > .novel-tr:first-child', 'top'], ['.novel-table > .novel-tr:last-child', 'bottom']] as const) {

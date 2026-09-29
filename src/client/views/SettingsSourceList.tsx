@@ -22,7 +22,8 @@ import type { JobState, SourcePublic } from './types.js'
  *
  * 与旧版的差异（用户逐项裁定）：状态下拉只过滤不总览（读数归状态带）；删除走**统一模态二次确认**
  * （点名后果 + Esc/遮罩零写口 + 焦点闭环 + 在途防重 + ids 点击时快照；失败即收模态、错误进全局
- * 条——与书架「失败留在框内」是刻意差异，理由见 client.md 调度台 IA 节）；行内动作浏览态常驻
+ * 条——与书架「失败留在框内」是刻意差异：删源失败必须停在模态里等人处置，不能像搜索失败那样
+ * 留在结果框里被忽略）；行内动作浏览态常驻
  * （验证/重验按状态 + 试跑 +「⋯」菜单），启停唯一入口 = 最右开关，「验证全部未验证」上移待办箱。
  *
  * 现场（query/过滤/勾选/编辑态）在模块级 sourceListUi store（试跑下钻/重开不丢）；派生计算归
@@ -69,8 +70,7 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
   const { filtered, shown, selected: selection } = vm
   const { groupCounts, groupLegend, authCountOf, allFilteredSelected, ungroupedCount, stats } = vm
   // 任务在途 → 三个批量写口禁用：服务端是**单任务槽**，在途再提交无处可去。删除所选不禁：
-  // 删除不是任务，且服务端明确支持验证途中删源，模态确认即是二次确认（口径见 client.md
-  // 「书源管理 tab 的 IA」的批量动作收尾）。
+  // 删除不是任务，且服务端明确支持验证途中删源，模态确认即是二次确认。
   const probing = job?.phase === 'running'
   /** 批量写口提交：成功后**重读哪一面由调用点指定**，两者不可互换——
    *  启停改的是源本身 → `onChanged`（重新 GET sources）；验证起的是后台任务 → **不走本
@@ -349,7 +349,7 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
    * 开菜单前定一次方向：长列表滚到滚动口底时，末行菜单向下展开会越过滚动口的可见底——是它
    * 伸到了容器外面。判据用「真正会裁它的盒子」= 滚动口而不是视口（宿主面板比视口小，拿视口
    * 判会把「其实放不下」算成放得下）。量不到触发件时不翻转——默认方向就是原行为
-   * （病史读数见 client.md「已知开口」行内 ⋯ 菜单落位条）。
+   * （病史：这一档原先拿视口判，用户实机两次才发现菜单伸出滚动口外）。
    */
   const toggleMenu = (): void => {
     if (menuOpen) { setMenuOpen(false); return }

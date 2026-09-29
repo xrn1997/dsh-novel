@@ -184,7 +184,7 @@ const STAGING_SUFFIX = '.importing'
  * ① **分流只看魔数**：文件头是 ZIP 本地头签名 `PK\x03\x04` 即走 EPUB 路径，此后归档层与包层的
  *    **任何**失败都照原样上抛（`EpubImportError` → 400），**不做 TXT 兜底**；不是 ZIP 魔数的才走
  *    既有 TXT 解码链（BOM → UTF-8 严格 → GBK 回退，一字不改）。理由与被否决方案
- *    （「先试着开归档、失败就当 TXT」）见 `hasZipMagic` 的注与 `docs/design/services.md`。
+ *    （「先试着开归档、失败就当 TXT」）见 `hasZipMagic` 的注。
  * ② **顶层元数据是提交标记**：EPUB 先在 `local/<uuid>.importing/` 建全部产物，一次 rename 到
  *    `local/<uuid>/`，再原子写 `local/<uuid>.json`，最后才由门面入架。本地目录与 shelf.json 之间
  *    **没有**跨文件事务，不假装有：强杀恰在「元数据写完、书架落盘前」会留一份完整但未入架的副本，
@@ -518,7 +518,7 @@ function bookMetaOf(data: EpubImportData, bookKey: string): LocalBookMeta {
  * 给出结果（GBK 兜底 + 无标题单章）——一份加密 ZIP 会变成 200 的整本乱码。ZIP 就是 ZIP，
  * 是 EPUB 与否由 EPUB 路径自己判并对失败负责。
  *
- * 另一面同样刻意（裁决见 `docs/design/services.md` 的本地书分流一节）：**不新增「二进制即拒收」
+ * 另一面同样刻意：**不新增「二进制即拒收」
  * 的启发式**——那会让现网本来能读的 TXT（GBK 短篇、含控制字符的导出文件）变成拒收，比乱码更坏。
  * 判据是白名单式的：只有 ZIP 签名改道，其余字节一律走既有 TXT 解码链。
  */

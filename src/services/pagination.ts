@@ -1,4 +1,4 @@
-/** 翻页闸跟进（目录/正文共用）：现状真相与口径见 docs/design/services.md 与 CONTEXT.md「判到底」。 */
+/** 翻页闸跟进（目录/正文共用）：「判到底」即停机必归五态之一（`FollowResult.stoppedBy`），口径见 `followPages` 的注。 */
 import { listValue } from './bridge.js'
 import type { Page, SubRuleEval } from './bridge.js'
 import { isSameChapterPage } from './chapter-page.js'

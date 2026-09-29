@@ -74,7 +74,7 @@ export async function apiUpload<T>(pathWithQuery: string, body: Blob): Promise<T
  * 连不上 / 断线 / abort 则 reject（调用方据此回落到快照轮询）。
  *
  * 为什么不用 `EventSource`：它自带重连与 `Last-Event-ID`，等于把游标交给浏览器——
- * 而本仓的进度口径是「推送只是加速器，显式查询才是真相」（`docs/reference/dsh-plugin-api.md` §9：
+ * 而本仓的进度口径是「推送只是加速器，显式查询才是真相」（宿主契约：
  * 通知不 replay，必须提供 baseline / cursor / 显式 query）。游标握在客户端手里，
  * 两条通道才能共用同一份合并代码而不产生第二真相。
  */

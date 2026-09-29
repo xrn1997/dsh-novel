@@ -16,7 +16,7 @@ import { makeTempDir, trackService } from '../temp-dir.js'
  * ② **从 wire 派生的字段清单是三面钉死**（2026-09-28 收紧）：`SearchGroup`/`SearchHit`、`ChapterEntry`、
  *    `ShelfBook` 的字段清单住在 `*_FIELDS` 常量里——**运行时**拿它与 schema 的属性集比、
  *    **编译期**再用 `Assert<Eq<keyof Wire, …>>` 把同一份清单绑回 wire 类型；于是 wire 加/改字段会让
- *    `pnpm typecheck` 红（此前只有字面快照，wire 改名要人工记得同步——`services.md` #7 那条缺口）。
+ *    `pnpm typecheck` 红（此前只有字面快照，wire 改名要人工记得同步，缺口就在那里）。
  *    另三份（`dshnovel_read`/`dshnovel_import_source`/`dshnovel_source`）是**工具自己的**投影形状，
  *    没有对应 wire 类型可绑，仍是字面清单（照旧由 ① 的校验兜底）；
  * ③ schema 本体在 harness 的强制子集内（assertSupportedJsonSchema）。

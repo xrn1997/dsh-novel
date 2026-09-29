@@ -1,7 +1,7 @@
 import type { ReplaceStep } from './types.js'
 
 /**
- * 规则文法（CONTEXT.md「规则文法」）：同一文法的构词与解析同属一处——此前构词散在三个
+ * 规则文法：同一文法的构词与解析同属一处——此前构词散在三个
  * 跨半 module、没有任何东西验证「normalize 拼出来的正是 parse 认的」，文法一改全靠注释同步。
  *
  * 本 module 持有：`##` 尾的解析（parseTails）与构词（appendTail）、Native 隐式终端构词
@@ -10,8 +10,6 @@ import type { ReplaceStep } from './types.js'
  *
  * 构词期越界不进求值期：appendTail 用 parseTails 回读比对（round-trip 自校验），粘连/OnlyOne
  * 误伤当场返回 warning（进 normalize warnings），不产出求值期谜之结果。
- *
- * 设计文档：docs/design/engine.md
  */
 
 export interface ParsedTails {

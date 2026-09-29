@@ -16,8 +16,6 @@ import { UnsupportedRuleError } from './errors.js'
  * - 空数组、键存在且值为 `[]`（空集合已解析）→ List{items:[]}（合法空，区别于 Miss）；
  * - 非空数组 → List；直接标量（string/number/bool）→ Value。
  * 元素转字符串：字符串原样；对象/数组 JSON.stringify；number/bool → String()。
- *
- * 设计文档：docs/design/engine.md
  */
 
 type Token =

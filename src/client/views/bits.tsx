@@ -80,8 +80,8 @@ export function jobPct(job: Pick<JobState, 'done' | 'total'>): number {
  * 被停止的轮次照实停在它真正走到的位置。clamp 到 100 是因为 done 可能超过 total（跑到一半源被
  * 停用/删掉，分母缩了、分子没缩）。
  *
- * **与 `jobPct` 不是同一口径**（那个按任务条目、不 clamp），已裁各自具名不合并——见
- * `docs/design/client.md` 已知开口第 3 条。
+ * **与 `jobPct` 不是同一口径**（那个按任务条目、不 clamp），已裁各自具名不合并——两式分母
+ * 语义不同（任务条目 vs 参搜源数），折叠成一个算式必有一面谎报进度。
  */
 export function searchPct(round: { done: number; total: number } | null): number {
   if (round === null || round.total === 0) return 0

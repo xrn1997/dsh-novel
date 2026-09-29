@@ -8,7 +8,7 @@ import type { BookNavigation, ChapterContent, ChapterEntry, LinkRole, Navigation
 
 /**
  * 阅读会话：「目录 → 存档恢复 → 逐章加载 → 预取 → 进度落盘」的**时序唯一持有者**，
- * 经 interface 可测（口径详见 `docs/design/client.md`「阅读会话」）。
+ * 经 interface 可测。
  *
  * 为什么不留在视图：真 bug（在途被占、两帧未落定、切章强制存 vs 防抖、陈旧闭包）全住在
  * 命令式协调里，抽纯函数只把复杂度挪走、无 seam 可测。DOM 测量经 ReaderPort 注入
@@ -94,7 +94,7 @@ export class ReaderSession {
   private inflight: number | null = null
   /** 阅读位置：**唯一真相**（章 + 章内比例）。滚动测量 / 目录选中 / 存档恢复都只是「修正」它，
    *  落盘策略只由 `commit` 判定——读数若只是每次滚动现算的一次性输出，每条时序路径就会各自
-   *  决定何时落盘，缺陷全出在这一族（口径见 client.md「阅读会话」）。 */
+   *  决定何时落盘，缺陷全出在这一族。 */
   private position = { chapterIndex: 0, offsetRatio: 0 }
   private bookKey = ''
   private sourceId = ''
@@ -302,7 +302,7 @@ export class ReaderSession {
     // 没有新信息，落盘只是把同一个数写回去——挂载期的第一次视口读数正是这一形态（位置刚从
     // 存档站定，读数再算一遍还是同一个值）。不闸住它，「浮层开合不写进度」这类断言就要跟
     // 挂起的冗余写抢时间。只闸 `scroll`：`jump`/`cross` 是导航事件，「选中即落盘」不因值恰好
-    // 相同而放弃（病史与判据见 client.md「阅读会话」幽灵写闸）。
+    // 相同而放弃。
     if (cause === 'scroll' && chapterIndex === this.position.chapterIndex && offsetRatio === this.position.offsetRatio) {
       return
     }

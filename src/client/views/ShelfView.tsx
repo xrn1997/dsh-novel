@@ -32,7 +32,7 @@ import { coverTintClass, sourceTintClass } from '../util.js'
  * 摆出回执——跳走等于把「这本书的有损事项」吞掉。成功/失败两半归 alive 闸与瞬态层。
  *
  * 测试钉子（不可动）：搜索框 placeholder「搜书名 / 作者」、删除 title「删除本书」、确认条文案与
- * 空态/错误文案原文（views-wiring + smoke）。口径详见 `docs/design/client.md`「书架 + 进度」。 */
+ * 空态/错误文案原文（views-wiring + smoke）。 */
 
 export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): ReactNode {
   const [books, setBooks] = useState<ShelfEntry[] | null>(null)

@@ -4,7 +4,7 @@
  * 触发口径用「未载边界哨兵相对视口的 top」，**不用**容器 scrollTop/scrollHeight。理由两层：
  * ① 容器 scrollTop/scrollHeight 口径在阅读器自己的容器 `clientHeight == scrollHeight`（永不滚）
  * 时两个方向都失效，且占位块会把 scrollHeight 撑成整本书高——哨兵在任何 scrollport 下都成立；
- * ② 判据与「谁在滚」解耦（滚动容器身份随宿主挂载点变过一次，病史见 docs/design/client.md）。
+ * ② 判据与「谁在滚」解耦（滚动容器身份随宿主挂载点变过一次）。
  * 渲染只出**已载章节**（未载章节不进 DOM），未载边界由哨兵元素表达。
  */
 

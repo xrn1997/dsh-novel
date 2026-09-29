@@ -9,7 +9,6 @@ import type { SourcePublic } from './views/types.js'
  *
  * 抽纯函数的理由与 source-list-view.ts 同：派生逻辑可单测，视图只做接线；
  * 用户现场（哪张卡被忽略）不在此处，住 `source-inbox-ui.ts`。
- * 口径详见 `docs/design/client.md`「书源管理 tab 的 IA」。
  */
 
 export interface SourceInbox {

@@ -171,7 +171,7 @@ describe('颜色字面量守卫（派生色只准住 token 层，视图内联即
     expect(scanColorLiterals([{ file: 'util.ts', text: "return '#123'" }])).toEqual(['util.ts: #123'])
   })
 
-  // 2026-09-28 补：此前只扫 hex，`rgba(...)`/`color-mix(...)` 写进视图能绕过守卫（登记的已知开口 #2）
+  // 2026-09-28 补：此前只扫 hex，`rgba(...)`/`color-mix(...)` 写进视图能绕过守卫（那曾是登记的已知开口）
   it('负断言：函数形态同样抓——视图里写死 rgba() 即红', () => {
     expect(scanColorLiterals([{ file: 'views/Fake.tsx', text: 'style={{ background: "rgba(0,0,0,.45)" }}' }]))
       .toEqual(['views/Fake.tsx: rgba('])

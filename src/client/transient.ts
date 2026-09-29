@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react'
 import { createStore, useStore } from './store.js'
 
 /**
- * 全局瞬态状态层（「全局状态条」；口径详见 `docs/design/client.md`「瞬态层」）：
+ * 全局瞬态状态层（「全局状态条」）：
  * 此前「保存中/成功/失败」散在七个位置、同一语义有三种长相——本层收进一个有序条目队列：
  * - `pending` 进行中：settle 即移除，多条聚合计数展示；
  * - `ok` 成功：**少而淡**——单行开关翻转本身即反馈不进条，显式保存类才进条，TTL 自动退场；

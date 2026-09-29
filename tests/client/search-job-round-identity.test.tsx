@@ -8,7 +8,7 @@ import { makeCoreDeps } from './fake-deps.js'
 import type { CoreDepsOverrides } from './fake-deps.js'
 
 /**
- * 搜索观察 module 的**轮次身份**测试（身份与游标不可分开，口径见 docs/design/client.md）。
+ * 搜索观察 module 的**轮次身份**测试（身份与游标不可分开）。
  * Seam：`useSearchJob` 一个观察 interface 驱动两种传输 adapter（SSE 帧 / 快照查询），「服务端」
  * 是真实的 `SearchJobs` 持有者（单槽：新提交即替换旧轮），假的只有传输。
  * 缺陷形态：甲看 A 轮、乙启动 B 轮，甲带 A 的旧游标读到 B 的切片，观察者只验累积不验 `job.id`

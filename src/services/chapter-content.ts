@@ -1,7 +1,7 @@
 import type { ChapterContent, ContentNode } from '../shared/wire.js'
 
 /**
- * 规范图文 → 纯文本的**唯一投影**（scripts 与设计口径见 docs/design/services.md「本地书身份」）。
+ * 规范图文 → 纯文本的**唯一投影**。
  *
  * 为什么必须唯一：文字面（getChapter 的返回、TXT 导出、六个 AI 工具）与图文面（阅读器）
  * 是同一批内容的两个出口——各写一份投影，同一本书的导出与 AI 读到的正文就会分叉。

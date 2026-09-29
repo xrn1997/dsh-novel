@@ -30,8 +30,6 @@ export interface CombineOpts {
  * Matches 在 `first` 下透传原样；`and` 下单分支透传、多分支混合 → UnsupportedRuleError（与 `%%` 同款宁炸不猜）。
  * 节点集与字符串分支混在一起合并 → UnsupportedRuleError：列表用途的分支只会是节点集、
  * 取值用途只会是字符串列表，混形状没有对应语义，静默丢掉一侧正是本仓定的「空结果冒充失败」。
- *
- * 设计文档：docs/design/engine.md
  */
 export function combine(values: EngineValue[], combinator: Combinator, opts?: CombineOpts): EngineValue {
   const usage = opts?.usage ?? 'value'

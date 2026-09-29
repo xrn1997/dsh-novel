@@ -188,8 +188,8 @@ async function route(
   }
   if (a === SEG.search && b === SEG.jobStream) {
     // 进度推送的加速器（SSE）：首帧 = 带 `since` 的同一份快照（baseline），此后每次状态变化补一帧，
-    // 终态即关流。断线重连 = 重起一条并带已收到的游标——「推送不 replay、显式 query 才是真相」的
-    // 官方口径（见 `docs/reference/dsh-plugin-api.md`）由推送与轮询两通道共用同一游标兑现，
+    // 终态即关流。断线重连 = 重起一条并带已收到的游标——「推送不 replay、显式 query 才是真相」这
+    // 条口径由推送与轮询两通道共用同一游标兑现（since 语义与游标兜底由 tests/api/dispatch-reading.test.ts 钉住），
     // 客户端的合并代码因此只有一份。
     guard(method, 'GET', ROUTES.searchJobStream.path)
     const raw = Number(url.searchParams.get(PARAMS.since) ?? '0')

@@ -5,7 +5,7 @@ import type { LocalImportResponse, ShelfBook, ShelfEntry } from '../../src/clien
 
 /** 书架 view-model 钉子：筛选口径（reading/unread/local 正交）+ 卡片元信息/百分比唯一算式
  *  + 首字色块档位派生 + 来源投影（chip 文案与色点档位）。客户端逻辑层测试口径：
- *  纯函数、零 React（client.md 模块地图）。 */
+ *  纯函数、零 React。 */
 
 const book = (over: Partial<ShelfBook>): ShelfBook => ({
   bookKey: 'k', sourceId: 's', title: '书', addedAt: 1,
@@ -46,7 +46,7 @@ describe('shelfCardMeta（卡片元信息与百分比唯一算式）', () => {
     expect(shelfCardMeta(book({}))).toEqual({ text: '未开始', pct: null })
   })
   /** 本地书不再点名格式：本地书现在有 TXT 与 EPUB 两种（格式不落书架条目——它是「可 patch 的书目字段」
-   *  的反面，见 docs/design/client.md 的本地书导入节），卡片刻意只说「本地」；
+   *  的反面），卡片刻意只说「本地」；
    *  真实格式由导入回执与阅读器的导入说明显示（那里有从服务端拿到的 format 字段）。 */
   it('本地 → 「本地」不点名格式（格式不在书架条目上）', () => {
     expect(shelfCardMeta(book({ sourceId: '__local__', progress: { chapterIndex: 20, offsetRatio: 0.5, updatedAt: 1 }, totalChapters: 700 })))

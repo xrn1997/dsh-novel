@@ -22,7 +22,7 @@ import type { JobState, ProbeResult, SourcePublic } from './types.js'
  * 组件职责边界：本文件只做接线与现场——sources 每次挂载经 api 拉取、组件内 useState（业务数据
  * 不进 store）；任务轮询单实例**不在本视图**（`useJobPolling` 住 `NovelStatusOverlay`，本区只读
  * `jobSurface` 镜像）；deps 整壳注入向下透传。派生逻辑归纯函数：待办 → source-inbox.ts，
- * 列表 → source-list-view.ts。口径详见 `docs/design/client.md`「书源管理 tab 的 IA」。
+ * 列表 → source-list-view.ts。
  */
 export function SettingsSection({ deps = prodDeps, withStyles = true }: {
   /** 注入的 deps seam（缺省走生产实现） */

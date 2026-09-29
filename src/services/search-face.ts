@@ -13,7 +13,7 @@ import type { ProbeErrorCode } from '../shared/wire.js'
 import type { NovelSource } from './types.js'
 
 /**
- * 搜索面（CONTEXT.md「搜索面」）：
+ * 搜索面：
  * 「发一次书源搜索请求并取回条目」的唯一实现——JS 形态 searchUrl 沙箱求值 → `{{…}}` 预求值
  * → `url,{json}` 选项 → Native 首页裁页码 → 带超时抓取 → charset 解码 → 列表规则求值 → 条目提取。
  * 聚合搜索（reading.searchOne）与探针（probe.probeSource）是消费它的两个 adapter：

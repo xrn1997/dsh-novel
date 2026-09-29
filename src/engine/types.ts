@@ -3,7 +3,7 @@ import type { AnyNode } from 'domhandler'
 
 export type Facet = 'search' | 'detail' | 'toc' | 'content' | 'explore' | 'rule'
 
-/** 取值用途（CONTEXT.md「取值用途」）：同一条规则串在「取值」与「列表选择」两种用途下，
+/** 取值用途：同一条规则串在「取值」与「列表选择」两种用途下，
  *  链尾未知词的语义不同——取值用途（value）把链尾未知提取指令当 **HTML 属性名**，
  *  列表用途（list）把链尾未知选择器按 **CSS** 求值。
  *  调用方（服务层）按规则用途显式声明；缺省 'list'（与旧口径同）。 */
@@ -89,7 +89,7 @@ export type Segment =
   | { kind: 'js'; code: string; form: 'at-js' | 'inline' }
   | { kind: 'put'; pairsRaw: string }
   | { kind: 'getvar'; name: string }
-  // 模板字面段（CONTEXT.md「模板字面段」）：URL/文本模板——`{{expr}}`（JS 或规则递归）与
+  // 模板字面段：URL/文本模板——`{{expr}}`（JS 或规则递归）与
   // `{$.path}`（单括号 JSONPath 内嵌）插值后整段产出 Value（整段字面返回 + 插值语义）
   | { kind: 'literal'; raw: string }
   // AllInOne 行模板段（矩阵 a-allinone-group-zero 那一行的实现）：支文本里出现 `$\d{1,2}` 时，

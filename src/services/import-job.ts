@@ -33,7 +33,7 @@ const PROBE_CONCURRENCY = 5
 // 任务运行器不再持有 persist 节流常量
 
 /** 宿主后台任务注册表（`ctx.jobs`）在本插件用到的子集。
- *  **本地窄面镜像，不引类型包**（宿主版本快照与不引包的理由：`docs/reference/dsh-plugin-api.md`）：
+ *  **本地窄面镜像，不引类型包**：
  *  照 `src/index.ts` 既有的 `NovelContext` + `*Like` 先例办，只声明用到的成员。
  *  `kind` 用 `string` 是刻意的——注册表把 kind 当作不透明的 id 命名空间（唯一判据是「非空字符串」），
  *  自定义 kind 不需要宿主的 `JobKindMap` 合并，id 直接长成 `novel-import-1`。

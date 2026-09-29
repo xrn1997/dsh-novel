@@ -28,7 +28,7 @@ export interface VerifyDeps {
   refresh?: () => void
 }
 
-/** 书源验证的领域动作（验证编排收拢，口径见 docs/design/client.md「批量动作的收尾口径」）。
+/** 书源验证的领域动作（验证编排收拢于此）。
  *  三个入口（待办箱 / 行内「验证/重验」/ 批量「验证所选」）只表达「验证哪些源」；提交后的编排
  *  收在这一处：成功 → 催任务读面（源列表刷新归任务终态，`SettingsSection` 按 job.id 记账一次）；
  *  失败 → 一处反馈（文案单点「启动验证失败：…」，此前三处各持一份，一改即漂移）。
@@ -65,8 +65,7 @@ const prodJobStatusDeps: JobStatusDeps = { fetchJobStatus }
 // ── 任务现场的唯一镜像 ────────────────────────────────────────────────
 /** 为什么住模块 store 而不是 props/hook 局部 state：轮询单实例住在**面板之外**的常驻状态层
  *  （`shell.overlay`），与书源管理区不在同一分支，props 传不过去；轮询若住面板内则切走即停、
- *  读数即消失。口径与 transient / sourceListUi 同类：跨卸载要活的现场走模块级 store，
- *  测试有复位口（背景见 client.md「装载面」常驻状态层条）。 */
+ *  读数即消失。口径与 transient / sourceListUi 同类：跨卸载要活的现场走模块级 store，测试有复位口。 */
 const jobSurface = createStore<{ job: JobState | null; stale: boolean }>({ job: null, stale: false })
 const jobTick = createStore<{ n: number }>({ n: 0 })
 const jobOpen = createStore<{ pending: OpenTarget }>({ pending: null })

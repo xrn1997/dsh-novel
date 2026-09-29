@@ -22,7 +22,7 @@ import { attrOf, firstDescendant, isElement, localName, textOf, type XmlBudget }
  *    拒整本与同层装饰性失败极不对称）——代价如实记：这类文档丢掉内联矢量图形（有告警点名，不是
  *    静默丢）。**唯一例外**：内联 SVG 是该文档**唯一**内容时本层**不判**，交回 `svgOnly` 候选让
  *    编排层裁决——真书这一页通常是 EPUB3 推荐的整页封面，按空章节拒会把标准写法当坏书整本杀掉；
- *    裁决口径、真书反例与拒绝原话（`svgOnlyPageReason`）见 `docs/design/services.md` 与 `import.ts`。
+ *    裁决口径、真书反例与拒绝原话（`svgOnlyPageReason`）见 `import.ts`。
  *    独立 SVG **资源**仍走白名单重建，白名单外的可见元素（`foreignObject`/`use`/嵌套 `image`…）
  *    报错点名资源（见 `resources.ts`）。
  * ④ **被剥离子树里的锚点是一份事实，不是「没有这个锚点」**：`scanXhtml` 把它们记进 `strippedAnchors`

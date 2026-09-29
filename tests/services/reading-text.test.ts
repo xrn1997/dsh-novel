@@ -4,7 +4,7 @@ import { normalizeChapterText } from '../../src/services/reading.js'
 /**
  * `normalizeChapterText` 的三条口径（`reading.ts` 的注释也这么写）此前**没有直接钉子**——
  * 它只被 `getChapter` 间接走到，而它塑造的是**每一章**的文字输出（正文/导出/工具三面同源）。
- * `services.md` #8 把它记成「注释自称供测试/复用但无测试 import」，本文件把那句话兑现。
+ * 早前的登记笔记把它记成「注释自称供测试/复用但无测试 import」，本文件把那句话兑现。
  */
 describe('normalizeChapterText（逐行 trim → 去首尾空行 → 相邻空行折叠一个）', () => {
   it('逐行 trim：行首行尾空白（含 CRLF 的 \\r）都去掉，行内空白保留', () => {

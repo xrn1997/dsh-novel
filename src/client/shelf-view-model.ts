@@ -2,7 +2,8 @@ import { hasProgress, LOCAL_SOURCE_ID } from '../shared/wire.js'
 import type { LocalImportResponse, ShelfBook, ShelfEntry } from './views/types.js'
 
 /** 书架视图派生（纯函数、零 React）：筛选与卡片元信息的唯一口径（pct 是书架卡片百分比的
- *  **唯一算式**，三分家的裁决见 client.md 已知开口第 3 条）。口径：
+ *  **唯一算式**，与 `views/bits.tsx` 的 `jobPct` / `searchPct` 三分家、刻意不合并：三者的分母
+ *  语义不同——已读章数 / 任务条目数 / 参搜源数，折叠成一个算式必有一面谎报进度）。口径：
  *   - reading = 有实质阅读进度（判据单点 `wire.hasProgress`，与阅读器的存档恢复同源）；
  *     unread = 其补集；
  *   - local = 来自本地书源（LOCAL_SOURCE_ID）——**正交维度**：本地书是文件级操作的对象；

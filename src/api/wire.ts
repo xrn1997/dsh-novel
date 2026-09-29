@@ -4,8 +4,7 @@ import { classify } from '../services/errors.js'
 import type { ErrorCategory } from '../services/errors.js'
 
 /** 统一失败信封的 error 载荷（成功信封 `{ ok: true, value }` 由 writeOk 落地）。
- *  形状定义在 wire 契约（src/shared/wire.ts）；此处 re-export 保持 import 路径可用。
- *  现状真相与口径：docs/design/services.md。 */
+ *  形状定义在 wire 契约（src/shared/wire.ts）；此处 re-export 保持 import 路径可用。 */
 export type { ApiErrorBody, ApiEnvelope } from '../shared/wire.js'
 import type { ApiErrorBody } from '../shared/wire.js'
 

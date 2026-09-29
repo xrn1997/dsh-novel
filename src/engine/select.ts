@@ -23,8 +23,6 @@ export function isGetValueSegment(seg: DefaultSegment): boolean {
  * - index：第 n 个（负数从尾数）；越界 → 该位置不入选
  * - multi：条目**逐个**展开、去重靠 Set、**保持写入序**；越界者静默丢弃
  * - 取位结果为空 → 'miss'（选择失败语义，不抛、也不回退全集）
- *
- * 设计文档：docs/design/engine.md
  */
 /** 索引条目 → **位置**集合（越界位置静默丢弃；`multi` 的并集在此展开） */
 function positionsFor(len: number, index: IndexSpec): number[] {
@@ -232,7 +230,7 @@ function getValue(
   }
   const applied = reduced.items
 
-  // attr 终端（CONTEXT.md「属性终端」）：取元素自身属性，空则向下兜底第一个含该属性的后代
+  // attr 终端：取元素自身属性，空则向下兜底第一个含该属性的后代
   // （与 href/src 同口径，html/body 包装不兜底）；**空值丢弃 + 去重**。
   // 真实源 ruleBookUrl `@onclick`、`@value`、`@_src` 全靠它。
   if (seg.mode === 'attr') {

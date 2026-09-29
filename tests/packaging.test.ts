@@ -40,7 +40,7 @@ describe('包形态声明', () => {
     expect(pkg.dsh.client.platform).toBe('web')
     expect(Array.isArray(pkg.dsh.client.inject)).toBe(true)
     expect(pkg.dsh.client.inject).toContain('@deepseek-ai/dsh-client-ui-primitives')
-    // 对话区 tab 注册已撤（docs/design/client.md 的单一归属口径）：dsh.client.inject 只是
+    // 对话区 tab 注册已撤（单一归属口径）：dsh.client.inject 只是
     // boot graph 排序边——留一个运行时不再 import 的包 = 给极简 profile 留一条解析不开的死边
     expect(pkg.dsh.client.inject).not.toContain('@deepseek-ai/dsh-client-ui-conversation')
   })

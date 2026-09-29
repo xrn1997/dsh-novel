@@ -430,7 +430,7 @@ function classifyDefault(raw: string, exclude: number[] | undefined, el: string,
     return effExclude === undefined ? { kind: 'default', mode, arg, index } : { kind: 'default', mode, arg, index, exclude: effExclude }
   }
 
-  // 属性终端（CONTEXT.md「属性终端」）：**取值用途 + 链尾**的未知提取指令 = HTML 属性名，按该属性
+  // 属性终端：**取值用途 + 链尾**的未知提取指令 = HTML 属性名，按该属性
   // 取值（空值丢弃、去重在求值层）。曾落进隐式 CSS 按标签选择器求值 → 恒零命中 → 搜索能搜到但
   // 书目 URL 全空。列表用途链尾未知词仍是选择器——列表入口只出元素、不取属性。
   if (ctx.usage === 'value' && isLast && isAttrName(name)) {
@@ -455,7 +455,7 @@ function classifyDefault(raw: string, exclude: number[] | undefined, el: string,
   }
 
   // 纯索引段（`kind: "0"` 这类）**未实现**：裸索引＝根的子元素再取索引，但本仓的
-  // `children` 在根上下文上已与之分叉（见矩阵 `a-bare-index-segment` 与 engine.md 开口）——
+  // `children` 在根上下文上已与之分叉（见矩阵 `a-bare-index-segment`）——
   // 不把这个映射接在一个可疑的基座上，先修 `children` 再放行。此处继续走解析期抛错（宁炸不猜）。
   // 白名单之外、又不构成选择器形态（含空格/非法字符，如 'weird head.x'）→ 解析期抛（宁炸不猜）
   throw new UnsupportedRuleError('无法识别的段类型（default 段白名单之外）', { facet: ctx.facet, segmentIndex: ctx.counter, segmentRaw: el })

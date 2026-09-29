@@ -10,8 +10,7 @@ import type { BridgeDeps } from './js-protocol.js'
 import { loadHtml, nodeText } from './dom.js'
 import { decodePngToArgb, javaDecode } from './js-utils.js'
 
-/** JavaBridge 协议的唯一登记点在 js-protocol.ts 的 JAVA_PROTOCOL 表；此处只 re-export 类型。
- *  设计文档：docs/design/engine.md */
+/** JavaBridge 协议的唯一登记点在 js-protocol.ts 的 JAVA_PROTOCOL 表；此处只 re-export 类型。 */
 export type { JavaBridge } from './js-protocol.js'
 
 /** 沙箱宿主注入面。（曾设 `java?: JavaBridge` 覆盖点，全仓零生产者的假 seam，已删除：桥始终由
@@ -181,7 +180,7 @@ const BOOTSTRAP = `;(function (g) {
     // 主线程形态：**没有同步桥就不猜异步语义**。ajax 语义是同步返回 body，主线程物理上无法阻塞；
     // 曾在此返回 Promise，等价写法静默换类型（已改抛哨兵）。现于**发起宿主调用之前**抛哨兵，
     // evalJs 捕获后换 worker 重跑同一段（请求没发出去，不多打站点）——正则只决定性能，不决定语义。
-    // 全貌见本文件「java.ajax 同步桥」一节与 docs/design/engine.md。
+    // 全貌见本文件「java.ajax 同步桥」一节。
     : function () { throw new Error('__dsh_sync_ajax_required__') }
   // java.downloadFile 同款网络同步语义（同步下载、返回路径）：worker 直通、主线程哨兵换道。
   const downloadFile = d.syncAjax
@@ -608,7 +607,7 @@ const BOOTSTRAP = `;(function (g) {
  * - 返回值映射：string→Value；array→List（元素 String()）；null/undefined/''→Miss；对象→JSON.stringify 的 Value。
  * - `console.log/error` 收集进返回的 logs（join(' ')），不外泄打印。
  * - `java.ajax` 语义唯一（同步返回 body）：主线程撞哨兵即换 worker 重跑同一段（见下方
- *   「java.ajax 同步桥」一节）；正则只决定性能，不决定语义——口径与残余见 docs/design/engine.md。
+ *   「java.ajax 同步桥」一节）；正则只决定性能，不决定语义。
  */
 export async function evalJs(
   code: string,
@@ -802,7 +801,7 @@ function wrappedFormOf(code: string): string {
  *  ① `\.ajax\s*\(` 认任何 `.ajax(`；② `downloadFile\s*\(`（与 ajax 同款的哨兵桥，见 js-protocol.ts）；
  *  ③ `java\s*\[` 认任何对 java 桥的下标访问。放宽的动机不只是省一趟白跑：哨兵靠「抛出」传递，
  *  脚本自己的 try/catch 会在 vm 内把它吞掉——现实的别名写法直接进 worker，压根走不到抛哨兵那步。
- *  仍漏的只有真正间接形态（解构、with）。口径与实测读数见 docs/design/engine.md。 */
+ *  仍漏的只有真正间接形态（解构、with）。 */
 const SYNC_WORKER_RE = /\.ajax\s*\(|downloadFile\s*\(|java\s*\[/
 const SAB_REQ_BYTES = 4 * 1024 * 1024
 const SAB_RESP_BYTES = 16 * 1024 * 1024
