@@ -2,18 +2,14 @@ import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { withoutComments } from '../without-comments.js'
 import { NOVEL_CSS } from '../../src/client/styles.js'
 
 /**
- * 宿主设计 token 词表守卫（防「引用了宿主根本不存在的 token」这类静默失败）。
- *
- * 病根：宿主别名层是 l1/l2/l3/l4 四级 + 语义名若干，并没有 `--dsw-alias-border-l`
- * 这个「看起来很像」的名字——引用了它，CSS 不会报错，只会静默落回硬编码 fallback，
- * 于是深浅两态都不跟随宿主（本次深色适配就是被它拖住的）。
- *
- * 词表来自宿主 `@deepseek-ai/dsh-client-ui-theme` 的 design-platform CSS（光/暗两套同名，
- * 各 163 项，无「仅单态存在」的 token）。冻结在此，避免测试依赖宿主安装路径。
- * 宿主升级若新增/改名 token：更新本词表即可（这是「宿主契约变了」的信号，应当人工过目）。
+ * 宿主设计 token 词表守卫（防「引用了宿主根本不存在的 token」这类静默失败）：不存在的别名
+ * 不报错、只静默落回硬编码 fallback，深浅两态都不再跟随宿主（深色适配曾被它拖住）。
+ * 词表取自宿主 `@deepseek-ai/dsh-client-ui-theme` 的 design-platform CSS（光/暗两套同名），冻结
+ * 在此以免测试依赖宿主安装路径；宿主升级改名 token 时更新本词表（那是契约变了的信号）。
  */
 const HOST_TOKENS = new Set<string>([
   "--dsw-alias-bg-base", "--dsw-alias-bg-layer-1", "--dsw-alias-bg-layer-2",
@@ -137,33 +133,58 @@ const HEX_ALLOWED: Record<string, string[] | '*'> = {
   'store.ts': ['#f7f3e8'],                                          // DEFAULT_PREFS.paperColor（正文层）
 }
 
-function scanHex(sources: Array<{ file: string; text: string }>): string[] {
+/** 颜色字面量的**两种形态**都算：hex，以及带字面量成分的颜色函数（`rgb()/rgba()/hsl()/hsla()/color-mix()`）。
+ *  口径是「**派生色只准住 token 层**」，所以 `color-mix(in srgb, var(--novel-brand) 8%, transparent)`
+ *  这种「基于 token 的派生」同样只准写在 token 层，写在视图里即红。
+ *  白名单（`HEX_ALLOWED`）只列 hex 值，函数形态没有白名单——只有整文件 `'*'`（token 层）放行。 */
+const COLOR_LITERAL_RE = /#[0-9a-fA-F]{3,8}\b|(?:rgba?|hsla?|color-mix)\s*\(/g
+
+/** 注释先剥掉再扫（`tests/without-comments.ts` 单点）：口径是「**代码里**不准内联颜色」，
+ *  注释里提一句 `rgb()` 不是内联色。 */
+
+function scanColorLiterals(sources: Array<{ file: string; text: string }>): string[] {
   const bad: string[] = []
   for (const { file, text } of sources) {
     const allowed = HEX_ALLOWED[file]
-    for (const m of text.matchAll(/#[0-9a-fA-F]{3,8}\b/g)) {
-      const hex = m[0].toLowerCase()
+    for (const m of withoutComments(text).matchAll(COLOR_LITERAL_RE)) {
+      const lit = m[0].toLowerCase().replace(/\s+$/, '')
       if (allowed === '*') continue
-      if (allowed !== undefined && allowed.includes(hex)) continue
-      bad.push(`${file}: ${hex}`)
+      if (allowed !== undefined && allowed.includes(lit)) continue
+      bad.push(`${file}: ${lit}`)
     }
   }
   return bad
 }
 
-describe('hex 字面量守卫（派生色只准住 token 层，视图内联即红）', () => {
-  it('client 全源码除白名单外零 hex 字面量', () => {
-    const bad = scanHex(clientSources())
-    expect(bad, `视图/逻辑层出现内联 hex（应改引 --novel-* token；正文层色值加白名单）：\n${bad.join('\n')}`).toEqual([])
+describe('颜色字面量守卫（派生色只准住 token 层，视图内联即红）', () => {
+  it('client 全源码除白名单外零颜色字面量（hex 与 rgb()/hsl()/color-mix() 两种形态）', () => {
+    const bad = scanColorLiterals(clientSources())
+    expect(bad, `视图/逻辑层出现内联颜色（应改引 --novel-* token；正文层色值加白名单）：\n${bad.join('\n')}`).toEqual([])
   })
 
   it('负断言：守卫自身有效——假视图里的 brand hex 会被抓出来', () => {
-    expect(scanHex([{ file: 'views/Fake.tsx', text: "style={{ background: '#2f6feb14' }} " }]))
+    expect(scanColorLiterals([{ file: 'views/Fake.tsx', text: "style={{ background: '#2f6feb14' }} " }]))
       .toEqual(['views/Fake.tsx: #2f6feb14'])
   })
 
   it('负断言：白名单文件里的非白名单 hex 也照抓（util.ts 再写 #123 就红）', () => {
-    expect(scanHex([{ file: 'util.ts', text: "return '#123'" }])).toEqual(['util.ts: #123'])
+    expect(scanColorLiterals([{ file: 'util.ts', text: "return '#123'" }])).toEqual(['util.ts: #123'])
+  })
+
+  // 2026-09-28 补：此前只扫 hex，`rgba(...)`/`color-mix(...)` 写进视图能绕过守卫（登记的已知开口 #2）
+  it('负断言：函数形态同样抓——视图里写死 rgba() 即红', () => {
+    expect(scanColorLiterals([{ file: 'views/Fake.tsx', text: 'style={{ background: "rgba(0,0,0,.45)" }}' }]))
+      .toEqual(['views/Fake.tsx: rgba('])
+  })
+
+  it('负断言：基于 token 的 color-mix() 派生写在视图里也抓（派生色只准住 token 层）', () => {
+    expect(scanColorLiterals([{ file: 'views/Fake.tsx', text: 'background: color-mix(in srgb, var(--novel-brand) 8%, transparent);' }]))
+      .toEqual(['views/Fake.tsx: color-mix('])
+  })
+
+  it('注释里的颜色提法不抓（口径是「代码里不准内联」）——util.ts 的 `// … rgb()` 说明就是这一条', () => {
+    expect(scanColorLiterals([{ file: 'views/Fake.tsx', text: '// 非 hex（color input 也可能给 rgb()）：退回原行为\nconst a = 1' }]))
+      .toEqual([])
   })
 
   it('白名单与正文层字色对齐：正文层字色两端成对存在（#222 深字 / #e8e8ea 浅字）', () => {

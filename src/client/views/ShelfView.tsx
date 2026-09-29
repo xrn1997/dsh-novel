@@ -11,36 +11,28 @@ import { filterShelfBooks, localImportLabel, localImportNote, SHELF_FILTERS, she
 import type { ShelfFilterKey } from '../shelf-view-model.js'
 import { coverTintClass, sourceTintClass } from '../util.js'
 
-/** 本地书保留源 id 归 wire 契约（第四轮卡「顺带」项）：此前此处手抄 '__local__'——
+/** 本地书保留源 id 归 wire 契约（`LOCAL_SOURCE_ID`）：此前此处手抄 '__local__'——
  *  服务端单主人在 src/services/localbooks.ts，client 纯度门禁拦跨半 import，字面量双份即漂移隐患。 */
 
-/** 书架 tab 内容（IA：书架/书城/书源管理是 NovelView 顶部的并列 tab，2026 变更用户拍板）：
- *  行1 = 内容标题「书架」+ 灰字计数「N 本」（.novel-shelf-count span，与批准的交互 mock 同构）；
- *  行2 搜索框单独一行且整簇居中（聚合搜索 = 找新书入口）；
- *  行3 = 书架筛选簇（pills + 簇尾排序灰字，有书才渲染）。
- *  网格末位常驻引导卡 =「导入本地书籍」——工具栏导入钮移除后它是唯一导入入口，空书架以
- *  .novel-grid.solo 单卡兜底（EmptyState 分支不渲染整网格）。旧「搜一本书」引导卡退役：
- *  搜索职责已由行2搜索框显式承担，同一职责不留第二个入口。
- *  筛选与卡片元信息口径归 shelf-view-model（纯函数）；首字色块档位归 util.coverTintClass。
- * deps 注入：接线层可被测试驱动——加载失败/删除失败的半场此前不可达。
- *  测试钉子（不可动）：搜索框 placeholder「搜书名 / 作者」、删除 title「删除本书」、
- *  确认条文案与空态/错误文案原文（views-wiring + smoke）。
- *  承载元素口径：卡片与引导卡是真 <button>（Enter/Space 原生可用），删除钮是其
- *  **兄弟**而非后代——div[role=button] 只绑 onClick，键盘按不动且读屏念「按钮含按钮」。
- *  守卫在 tests/client/ui-system.test.tsx。布局与配色一律归样式类，本文件零行内 style。
+/** 书架 tab 内容（IA：书架/书城/书源管理是 NovelView 顶部的并列 tab，用户拍板）：
+ *  行1 内容标题 + 灰字计数；行2 搜索框单独一行且整簇居中（聚合搜索 = 找新书入口）；
+ *  行3 筛选簇（有书才渲染）；网格末位常驻「导入本地书籍」引导卡（空书架以 .novel-grid.solo
+ *  单卡兜底）。旧「搜一本书」引导卡退役——同一职责不留第二个入口。
+ *  筛选与卡片元信息归 shelf-view-model（纯函数）；首字色块档位归 util.coverTintClass。
+ *  承载元素口径：卡片与引导卡是真 <button>，删除钮是其**兄弟**而非后代（守卫
+ *  tests/client/ui-system.test.tsx）；布局与配色归样式类，本文件零行内 style。
  *
- * 多选态（批量删除，2026 新需求）：行3 的「选择」入态——筛选簇让位给批量条（复用书源管理
- *  同款 `.novel-selbar` 与同款词汇：已选 N / 清空选择 / 删除所选），卡片点击改为勾选、
- *  单本 ✕ 与导入引导卡退场（同一职责不留第二个入口）。「全选」= 当前筛选可见的书——
- *  筛选在多选态定格，这条口径才有唯一答案。选择态是**现场**（组件 state，不进 store）：
- *  切 tab 重挂载即清零，残留一批旧勾选去撞下一次删除比丢失现场危险得多。
- *  批量走一次 POST shelf/batch-delete（keys 点击时快照），不是循环 DELETE。
+ * 多选态（批量删除）：行3 的「选择」入态——筛选簇让位给批量条，卡片点击改为勾选、单本 ✕ 与
+ *  导入引导卡退场。「全选」= 当前筛选可见的书（筛选在多选态定格，口径才有唯一答案）。选择态是
+ *  **现场**（组件 state，不进 store）：切 tab 清零比残留旧勾选安全。批量走一次
+ *  POST shelf/batch-delete（keys 点击时快照），不是循环 DELETE。
  *
- * 本地书导入（2026-09 扩到 EPUB）：引导卡收 `.txt,.epub`，分流按**内容**在服务端做（ZIP 魔数），
- * 客户端不判格式。回执是 wire 的 `LocalImportResponse`——书名/作者/封面/格式/章数/warnings 全在
- * 里面，本视图**原样消费**（不另猜书名、不按后缀推格式）。两种半场：无告警照旧直接进阅读器
- * （既有行为一字不动）；**有持久告警时不跳**，就地把回执摆出来（服务端真相 + 逐条说明 + 开始阅读），
- * 跳走等于把「这本书的有损事项」吞掉。海报性的成功/失败两半仍归 alive 闸与瞬态层。 */
+ * 本地书导入（TXT / EPUB）：分流按**内容**在服务端做（ZIP 魔数），客户端不判格式；回执是 wire 的
+ * `LocalImportResponse`，本视图**原样消费**。无告警照旧直接进阅读器；**有持久告警时不跳**，就地
+ * 摆出回执——跳走等于把「这本书的有损事项」吞掉。成功/失败两半归 alive 闸与瞬态层。
+ *
+ * 测试钉子（不可动）：搜索框 placeholder「搜书名 / 作者」、删除 title「删除本书」、确认条文案与
+ * 空态/错误文案原文（views-wiring + smoke）。口径详见 `docs/design/client.md`「书架 + 进度」。 */
 
 export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): ReactNode {
   const [books, setBooks] = useState<ShelfEntry[] | null>(null)
@@ -50,14 +42,13 @@ export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): R
   const [imgFailed, setImgFailed] = useState<Record<string, boolean>>({})
   // 本地书导入（TXT / EPUB 按内容分流，服务端说了算）：隐藏 file input + 上传后直进阅读器
   const [importError, setImportError] = useState<string | null>(null)
-  /** 导入回执现场（**只在有持久警告时**）：服务端回执原样持有（书名/作者/封面/格式/章数/warnings），
-   *  不复制成第二份形状。有警告时不自动进阅读器——跳进阅读器就把「这本书带着降级/剥除事项」这条
-   *  交代吞了（用户看不到任何迹象）；无警告时一分钱不花，行为与从前一字不差。 */
+  /** 导入回执现场（**只在有持久警告时**）：服务端回执原样持有，不复制成第二份形状。
+   *  有警告时不自动进阅读器——跳走就把「这本书带着降级/剥除事项」的交代吞了。 */
   const [imported, setImported] = useState<LocalImportResponse | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)   // 导入入口的触发方 = 网格引导卡/空架兜底卡
-  /** 本视图是否仍在场。`navigate` 是模块级 store 的动作、与组件存活无关，所以在卸载后的
-   *  `.then` 里照样会执行——导入落地时用户若已切到别的 tab，就会被强行拽进阅读器（实测缺陷）。
-   *  两个半场都不许静默：在场走场景内提示（可就地重试），切走走瞬态层。 */
+  /** 本视图是否仍在场。`navigate` 是模块级 store 的动作、与组件存活无关，卸载后的 `.then` 里
+   *  照样会执行——不加闸，导入落地时用户已被切到别的 tab 却会被强行拽进阅读器。
+   *  两个半场都不许静默：在场走场景内提示，切走走瞬态层。 */
   const aliveRef = useRef(true)
   useEffect(() => {
     aliveRef.current = true
@@ -77,8 +68,8 @@ export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): R
   const toggleSelect = (bookKey: string): void => {
     setSelected((prev) => prev.includes(bookKey) ? prev.filter((k) => k !== bookKey) : [...prev, bookKey])
   }
-  /** 模态在场期间的键盘接管：Esc 取消 + Tab 圈在框内（焦点在关闭后还给触发它的那张卡片 ✕）。
-   *  旧实现只有 Esc，Tab 一路走下去就走到遮罩背后的书架——对话框还在屏幕上，人已出去。 */
+  /** 模态在场期间的键盘接管：Esc 取消 + Tab 圈在框内（关闭后焦点还给触发它的那张卡片 ✕）。
+   *  只挡 Esc 不够——Tab 一路走下去就走到遮罩背后的书架，对话框还挂着、人已出去。 */
   useEffect(() => {
     if (pendingDel === null) return
     const opener = document.activeElement
@@ -172,11 +163,9 @@ export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): R
           <h1 className="novel-shelf-title">
             书架{books === null || books.length === 0 ? null : <span className="novel-shelf-count">{books.length} 本</span>}
           </h1>
-          {/* 行1：内容标题。书架/书城/书源管理的并列导航在 NovelView 顶部 tab（IA 变更），
-              原「书城预留位」占位 chip 随之退役——占位不如真导航。 */}
           {/* 行2：搜索框单独一行（聚合搜索 = 找新书入口，与书架筛选不是同一语义组）。
-              「搜索」钮与搜索页同款（type=submit + novel-btn primary）：Enter 是隐藏交互，
-              可见按钮才是显式入口（用户提议；搜索页早有同款先例，书架缺它是不一致） */}
+              「搜索」钮与搜索页同款（type=submit + primary）：Enter 是隐藏交互，可见按钮才是
+              显式入口（用户提议；搜索页早有同款先例）。 */}
           <div className="novel-shelf-search">
             <form onSubmit={(e) => { e.preventDefault(); search() }} aria-label="搜索书籍">
               <label className="novel-searchbox">

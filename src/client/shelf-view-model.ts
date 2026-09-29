@@ -1,15 +1,12 @@
 import { hasProgress, LOCAL_SOURCE_ID } from '../shared/wire.js'
 import type { LocalImportResponse, ShelfBook, ShelfEntry } from './views/types.js'
 
-/** 书架视图派生（纯函数、零 React）：筛选与卡片元信息的唯一口径。
- *
- *  pct 是书架卡片百分比的**唯一算式**（client.md 已知开口「百分比算式已收敛一处、剩两处」
- *  原记三处各算一份，shelf 分量已收敛到此）。口径：
+/** 书架视图派生（纯函数、零 React）：筛选与卡片元信息的唯一口径（pct 是书架卡片百分比的
+ *  **唯一算式**，三分家的裁决见 client.md 已知开口第 3 条）。口径：
  *   - reading = 有实质阅读进度（判据单点 `wire.hasProgress`，与阅读器的存档恢复同源）；
  *     unread = 其补集；
- *   - local = sourceId === LOCAL_SOURCE_ID——**正交维度**：本地书是要做文件级操作
- *     （连删磁盘 txt）的对象，与读没读过无关；
- *   - 未读书 pct 归 null：简约版呈现口径「未读不出进度条」，卡片元信息只留文字。 */
+ *   - local = 来自本地书源（LOCAL_SOURCE_ID）——**正交维度**：本地书是文件级操作的对象；
+ *   - 未读书 pct 归 null：「未读不出进度条」，卡片元信息只留文字。 */
 export type ShelfFilterKey = 'all' | 'reading' | 'unread' | 'local'
 
 export const SHELF_FILTERS: Array<{ key: ShelfFilterKey; label: string }> = [

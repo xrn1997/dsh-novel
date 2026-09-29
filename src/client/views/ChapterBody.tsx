@@ -18,17 +18,11 @@ import type { ChapterContent, ContentNode, ContentTag, LinkRole, ReadingTarget }
  * 注释面板是控制器层 token），组件自己钉色必然在另一处不可读。视觉规则住 `styles.tsx`。
  */
 
-/** 链接角色（normal | noteref | backlink）的住址在 types.ts 的再导出桶——它从 wire 的 link 节点派生，
- *  这里只是它的消费方；此处再导出一次，是为了让既有的 `from './ChapterBody.js'` 引用继续可用。 */
-export type { LinkRole }
-
 /** 白名单标签 → DOM 元素名。恒等映射不是冗余：`Record<ContentTag, …>` 让白名单漏一个即编译红。
  *
- *  查表**先过 `Object.hasOwn`**：落盘文档是本分支别处已按不可信输入加固过的东西
- *  （`services/localbooks.ts` 的 `getResource`/`readDocument` 只认自有键），而这里原先直接
- *  `TAG_OF[node.tag]` 会走原型链——被篡改的 `tag: 'constructor'` 取到的是函数而不是元素名，
- *  `createElement` 抛错把整个阅读器打崩。`Object.hasOwn` 之后「认不出的标签」走的仍是
- *  下面那条保留子内容的降级路（与白名单外的标签同一个出口）。 */
+ *  查表**先过 `Object.hasOwn`**：直接 `TAG_OF[node.tag]` 会走原型链——被篡改的
+ *  `tag: 'constructor'` 取到函数而不是元素名，`createElement` 抛错把整个阅读器打崩。
+ *  之后「认不出的标签」走保留子内容的降级路（与白名单外的标签同一个出口）。 */
 const TAG_OF: Record<ContentTag, string> = {
   p: 'p', div: 'div', span: 'span', h1: 'h1', h2: 'h2', h3: 'h3', h4: 'h4', h5: 'h5', h6: 'h6',
   strong: 'strong', em: 'em', ul: 'ul', ol: 'ol', li: 'li', blockquote: 'blockquote',
@@ -63,10 +57,9 @@ const keyOf = (node: ContentNode, index: number): string => (node.kind === 'text
 /**
  * 链接内容里有块级内容吗（插图 / 分隔线 / 非短语级元素）。
  *
- * 有的话链接自己必须是**块级容器**（`.novel-ref-block`）：`<button>` 缺省按内容收缩包裹，于是
- * 里面那个 `width: 100%` 的插图框解析成 auto——图还没解码时没有内在尺寸，框塌成 0（实测链接里的
- * 600×900 图在到手前量到 0×0、到手后跳到 600×900，后文位移近一屏，「图片延迟不改变恢复位置」失效）。
- * XHTML5 的 `<a>` 是透明内容模型——含块内容的链接在渲染上本来就是块级，这里只是把它显式化。
+ * 有的话链接自己必须是**块级容器**（`.novel-ref-block`）：`<button>` 缺省按内容收缩包裹，里面
+ * `width: 100%` 的插图框会解析成 auto——图未解码时框塌成 0，到手后后文位移（实测），「图片延迟
+ * 不改变恢复位置」失效。XHTML5 的 `<a>` 是透明内容模型，含块内容的链接本来就是块级，这里显式化。
  */
 function hasBlockChild(children: readonly ContentNode[]): boolean {
   return children.some((n) => n.kind === 'image' || n.kind === 'rule'

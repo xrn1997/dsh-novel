@@ -206,7 +206,7 @@ describe('批量验证任务', () => {
     expect(peak).toBeGreaterThan(1)
     expect(peak).toBeLessThanOrEqual(5)
   })
-  it('运行中删源（洞3）：worker 重查不到 → 记「运行中被删除」跳过，不产生垃圾失败', async () => {
+  it('运行中删源（曾在途源被删会记成垃圾失败）：worker 重查不到 → 记「运行中被删除」跳过，不产生垃圾失败', async () => {
     let n = 0
     let victimId = ''
     const { jobs, registry } = await mkJobs(async () => {
@@ -236,7 +236,7 @@ describe('批量验证任务', () => {
     const { jobs, registry } = await mkJobs(async () => {
       n++
       if (n === 1) {                                 // 第一发探针（源 A 自己）在途期间删掉 A
-        void registry.edit((tx) => tx.remove(victimId))   // edit recipe 同步生效（与「洞3」用例同款手法）
+        void registry.edit((tx) => tx.remove(victimId))   // edit recipe 同步生效（与上面「运行中删源」那条用例同款手法）
         await new Promise((r) => setTimeout(r, 5))
       }
       return okProbe

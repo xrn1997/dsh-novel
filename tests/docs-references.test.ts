@@ -1,14 +1,10 @@
 /**
- * 文档引用可解析——`docs/design/*.md` 是三个子系统的现状真相，它们指着不存在的文件就是误导。
- *
- * 为什么只校「文件存在」不校行号：`file.ts:<行号>` 会随上方任何一次编辑漂移，校行号等于造一道天天假红的门，
- * 人一旦习惯性忽略它，守卫就等于没有；文件级引用只在重命名 / 删除时失效——那是需要人明确处理的动作。
- * （行号形态本身由 `tests/legado-coverage/citation-liveness.test.ts` 禁掉。）
- *
- * 覆盖面：三份现状真相文档里出现的每个 `xxx.ts` / `xxx.tsx` / `xxx.mjs` 路径（模块地图、测试钉子表、
- * 已知开口的逐处引用都算）。外部项目的路径（第三方仓库、legado 官方文档）不写成仓内路径，故不受影响。
- *
- * 这就是「文档跟着实现走」的机器守卫：改了文件名而文档还指着旧名字，这里会红。
+ * 文档引用可解析——`docs/design/*.md` 是三个子系统的现状真相，指着不存在的文件就是误导。
+ * 只校「文件存在」不校行号：行号随任何一次编辑漂移，校它等于造一道天天假红、终被习惯性忽略的门；
+ * （行号形态本身由 `citation-liveness.test.ts` 禁掉。）
+ * 覆盖面：`docs/design/*.md` **加 `CONTEXT.md` 与 `README.md`**（后两者 2026-09-28 补入，口径同
+ * 一份）里出现的每个 `xxx.ts|tsx|mjs` 仓内路径。这就是「文档跟着实现走」的机器守卫：改了文件名
+ * 而文档还指旧名字，这里会红。
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
@@ -18,6 +14,9 @@ import { describe, expect, it } from 'vitest'
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const DESIGN_DIR = join(ROOT, 'docs', 'design')
 const DESIGN_DOCS = ['engine.md', 'services.md', 'client.md', 'legado-compat.md']
+/** 除四份现状真相之外的跟踪文档：`CONTEXT.md` 每条词条都点名实现位置、`README.md` 是用户面真相——
+ *  两者此前不在扫描面内（引用了改名/删掉的文件不会红）。2026-09-28 补进来：口径与设计文档**同一条**。 */
+const OTHER_DOCS = ['CONTEXT.md', 'README.md']
 const SKIP_DIRS = new Set(['node_modules', 'lib', '.git'])
 const SOURCE_EXT = /\.(?:tsx|ts|mjs)$/
 /** `path/to/file.ts` 或带行号的写法（后者已被 citation-liveness 禁掉，这里只做定位剥离）。 */
@@ -45,14 +44,14 @@ describe('文档引用可解析（docs/design/*.md）', () => {
     const known = new Set(files)
     const unresolved: string[] = []
 
-    for (const doc of DESIGN_DOCS) {
-      const lines = readFileSync(join(DESIGN_DIR, doc), 'utf8').split(/\r?\n/)
+    for (const doc of [...DESIGN_DOCS.map((d) => join(DESIGN_DIR, d)), ...OTHER_DOCS.map((d) => join(ROOT, d))]) {
+      const lines = readFileSync(doc, 'utf8').split(/\r?\n/)
       lines.forEach((line, i) => {
         for (const m of line.matchAll(REF)) {
           const ref = m[1]
           if (ref.includes('*') || ref.startsWith('.')) continue // glob 或片段，不是路径
           if (known.has(ref) || files.some((f) => f.endsWith(`/${ref}`))) continue
-          unresolved.push(`${doc}:${i + 1} → ${ref}`)
+          unresolved.push(`${relative(ROOT, doc).split(sep).join('/')}:${i + 1} → ${ref}`)
         }
       })
     }

@@ -3,35 +3,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { useJobPolling } from '../../src/client/jobs.js'
-import { SourceList } from '../../src/client/views/SettingsSourceList.js'
+import { MENU_ITEM_COUNT, SourceList } from '../../src/client/views/SettingsSourceList.js'
 import { makeDeps } from './fake-deps.js'
 import type { FakeSettingsDeps } from './fake-deps.js'
 import { resetSourceListUi } from '../../src/client/source-list.js'
-import { ROUTES } from '../../src/shared/wire.js'
+import { paramRoutes, ROUTES } from '../../src/shared/wire.js'
 import type { JobState, SourcePublic } from '../../src/client/views/types.js'
 
 /**
- * 选中动作条 + 删除确认流的接线测试。
- * 2026 调度台改版（用户逐项裁定）的口径变化，本文件随之重写：
- * - 删除确认统一为**模态二次确认**（与书架删书同款口径：点名后果 + 登录态提示 +
- *   Esc/遮罩取消 + 焦点闭环 + ids 点击时快照）；
- * - 「>20 条手输『删除』」双强度确认与「危险区（整库级快捷批量）」退役——
- *   batchConfirmKind 已随之删除（`source-batch.ts` 整模块退役，取数口归 `source-inbox.ts`），
- *   对应 describe 从 logic.test.ts 移除；
- * - 行内「⋯」溢出菜单提供单源删除入口（低频动作收纳）。
- * 启停/验证批量的写口载荷、失败上报、在途防重复提交口径不变。
+ * 选中动作条 + 删除确认流的接线测试。2026 调度台改版（用户逐项裁定）后本文件随之重写：
+ * - 删除确认统一为**模态二次确认**（与书架删书同款：点名后果 + Esc/遮罩取消 + ids 点击时快照）；
+ * - 「>20 条手输删除」双强度确认与危险区退役（`source-batch.ts` 整模块退役）；行内「⋯」菜单提供
+ *   单源删除入口。启停/验证批量的写口载荷、失败上报、防重复提交口径不变。
  *
- * **onChanged 是「重取源列表」的出口 Mock**（启停/删除成功后必须被调）。自验证编排收拢起
- * 「验证 → 催任务读面」不再走 props——收进 `jobs.ts` 的领域动作 `startSourceVerification`
- * （缺省 refresh = refreshJob），读面观测经 `useJobPolling` 轮询驱动的取数计数。
- * 病史：曾经 refresh/onChanged 都传空函数，于是批量启停接错出口（该重取源列表却只重启了
- * 轮询）在本文件完全测不出来，实机表现为点完启停界面停在旧值（2026-09 回归）——
- * 「启停 → 源列表 / 验证 → 任务读面」的分工断言仍钉在两个用例里，只是观测面换了。
+ * **onChanged 是「重取源列表」的出口 Mock**（启停/删除成功后必须被调）；「验证 → 催任务读面」收进
+ * `jobs.ts` 的领域动作，读面观测经 `useJobPolling` 的取数计数。病史：曾因 refresh/onChanged 都传
+ * 空函数，批量启停接错出口（该重取却只重启轮询）在本文件测不出、实机界面停在旧值（2026-09 回归）
+ * ——分工断言仍钉在两个用例里，观测面换了。
  */
 
 const src = (over: Partial<SourcePublic> & { id: string }): SourcePublic => ({
   name: over.id, baseUrl: `https://${over.id}.com`, enabled: true, groups: [],
-  type: 'text', status: 'verified', importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false,
+  type: 'text', status: 'verified', importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false, hasLoginUrl: false,
   ...over,
 })
 
@@ -283,7 +276,7 @@ describe('删除：统一模态二次确认（2026 改版——手输口令与�
     expect(document.activeElement?.textContent).toBe('取消')   // 入场焦点
     ;(screen.getByText('确认删除') as HTMLElement).focus()      // 用户把焦点移进模态
     expect(document.activeElement?.textContent).toBe('确认删除')
-    // 壳层重渲染 × 2（模拟 useJobStatus 轮询 tick：新 job 对象 → SourceList 重渲染 → 新 onCancel 闭包）。
+    // 壳层重渲染 × 2（模拟 useJobPolling 轮询 tick：新 job 对象 → SourceList 重渲染 → 新 onCancel 闭包）。
     // 旧实现：effect 依赖 [onCancel] → 每次重渲染 cleanup+重跑 → 焦点被劫回「取消」、
     // opener 被重捕获成模态内按钮（关闭时焦点落 body）。挂载作用域化后焦点必须原地不动。
     rerender(view(deps))
@@ -313,5 +306,127 @@ describe('删除：统一模态二次确认（2026 改版——手输口令与�
     expect(screen.getByRole('menu')).toBeTruthy()
     fireEvent.click(document.body)
     expect(screen.queryByRole('menu')).toBeNull()
+  })
+})
+
+describe('⋯ 菜单的开合方向：下方放不下就朝上开（长列表滚到滚动口底）', () => {
+  // 病史（2026-09-26 用户实机 + 真 Edge 逐点命中）：表格自身的裁剪修掉后仍有一档——列表很长、
+  // 滚到滚动口底再点末行的 ⋯，菜单向下展开会越出滚动口的可见底：3 项菜单可达率只有 23%，
+  // 菜单越长越差（4 项 16% / 6 项 11%）。修法是按剩余空间翻方向，判据用「真正会裁它的盒子」
+  // = 滚动口（宿主面板比视口小，拿视口判会把「放不下」算成放得下）。
+  // jsdom 无排版：滚动口身份靠 overflow-y + 可滚高度认（与 `scrollport.findScrollport` 同一判据），
+  // 几何由用例给——这里让 body 当那个滚动口，触发件与它的 rect 按用例摆布。
+  const realGBCR = Element.prototype.getBoundingClientRect
+  const realScrollHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight')
+  const realClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+  let port: { top: number; bottom: number }
+  let trigger: { top: number; bottom: number }
+
+  beforeEach(() => {
+    vi.spyOn(window, 'getComputedStyle').mockImplementation(
+      ((el: Element) => ({ overflowY: el === document.body ? 'auto' : 'visible' })) as unknown as typeof window.getComputedStyle)
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+      configurable: true, get(this: HTMLElement): number { return this === document.body ? 1000 : 0 },
+    })
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+      configurable: true, get(this: HTMLElement): number { return this === document.body ? 100 : 0 },
+    })
+    Element.prototype.getBoundingClientRect = function (this: Element): DOMRect {
+      const box = this === document.body ? port
+        : this.getAttribute('aria-label')?.startsWith('更多动作') === true ? trigger
+          : { top: 0, bottom: 0 }
+      return { ...box, left: 0, right: 0, width: 0, height: 0, x: 0, y: box.top, toJSON: () => ({}) } as DOMRect
+    }
+  })
+  afterEach(() => {
+    Element.prototype.getBoundingClientRect = realGBCR
+    vi.restoreAllMocks()
+    if (realScrollHeight !== undefined) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', realScrollHeight)
+    if (realClientHeight !== undefined) Object.defineProperty(HTMLElement.prototype, 'clientHeight', realClientHeight)
+  })
+
+  const menuClass = (): string => screen.getByRole('menu').className
+
+  it('菜单项数守卫：渲染出的 menuitem 数与 MENU_ITEM_COUNT 一致（翻转预算按它推导）', () => {
+    port = { top: 0, bottom: 600 }
+    trigger = { top: 100, bottom: 130 }
+    render(view(makeDeps()))
+    fireEvent.click(screen.getByLabelText('更多动作 源一'))
+    expect(screen.getAllByRole('menuitem')).toHaveLength(MENU_ITEM_COUNT)
+  })
+
+  it('末行落在滚动口底（下方放不下、上方更宽裕）→ 加 up', () => {
+    port = { top: 0, bottom: 600 }
+    trigger = { top: 560, bottom: 590 }        // 下方只剩 10px，放不下
+    render(view(makeDeps()))
+    fireEvent.click(screen.getByLabelText('更多动作 源一'))
+    expect(menuClass()).toContain('up')
+  })
+
+  it('行在滚动口中部（下方放得下）→ 维持向下（不加 up）', () => {
+    port = { top: 0, bottom: 600 }
+    trigger = { top: 100, bottom: 130 }        // 下方 470px，够
+    render(view(makeDeps()))
+    fireEvent.click(screen.getByLabelText('更多动作 源一'))
+    expect(menuClass()).not.toContain('up')
+  })
+
+  it('上方也不比下方宽裕时维持向下（不来回跳）', () => {
+    port = { top: 0, bottom: 100 }
+    trigger = { top: 30, bottom: 60 }          // 下方 40 不够，但上方 30 更窄
+    render(view(makeDeps()))
+    fireEvent.click(screen.getByLabelText('更多动作 源一'))
+    expect(menuClass()).not.toContain('up')
+  })
+})
+
+describe('「去登录」接线（runLogin 两形态 / 未声明回站点）', () => {
+  // 病史（docs/design/client.md 已知开口 1）：这个钮原先恒 `window.open(source.baseUrl)`——
+  // 既没问服务端要真 loginUrl，也从没触发 JS 形态的登录脚本，而 README 已宣称两者都支持。
+  // 判据是服务端投影出来的事实 `hasLoginUrl`，不在客户端按错误文案猜分支。
+  beforeEach(() => { vi.spyOn(window, 'open').mockImplementation(() => null) })
+  afterEach(() => { vi.restoreAllMocks() })
+
+  const openAuthPane = (): void => {
+    fireEvent.click(screen.getByLabelText('更多动作 源一'))
+    fireEvent.click(screen.getByRole('menuitem', { name: '登录态…' }))
+  }
+
+  it('声明了 loginUrl（URL 形态）→ 问服务端要 URL 并开它，不开 baseUrl', async () => {
+    const apiSend = vi.fn(async () => ({ mode: 'manual', loginUrl: 'https://login.example/x' }))
+    render(view(makeDeps({ apiSend }), [src({ id: 's1', name: '源一', hasLoginUrl: true })]))
+    openAuthPane()
+    fireEvent.click(screen.getByText('去登录'))
+    await waitFor(() => expect(apiSend).toHaveBeenCalledWith('POST', paramRoutes.sourceAuth('s1'), { runLogin: true }))
+    await waitFor(() => expect(window.open).toHaveBeenCalledWith('https://login.example/x', '_blank', 'noopener,noreferrer'))
+    expect(window.open).not.toHaveBeenCalledWith('https://s1.com', '_blank', 'noopener,noreferrer')
+  })
+
+  it('声明了 loginUrl（JS 形态）→ 服务端跑完脚本：报成功、收起面板、不开任何页面', async () => {
+    const deps = makeDeps({ apiSend: vi.fn(async () => ({ auth: true })) })
+    render(view(deps, [src({ id: 's1', name: '源一', hasLoginUrl: true })]))
+    openAuthPane()
+    fireEvent.click(screen.getByText('去登录'))
+    await waitFor(() => expect(deps.pushOk).toHaveBeenCalledWith('登录脚本已执行，登录态已保存'))
+    expect(window.open).not.toHaveBeenCalled()
+    await waitFor(() => expect(screen.queryByText('去登录')).toBeNull())
+  })
+
+  it('未声明 loginUrl → 不问服务端，直接开站点自身（保留本按钮原来的行为）', () => {
+    const apiSend = vi.fn()
+    render(view(makeDeps({ apiSend }), [src({ id: 's1', name: '源一', hasLoginUrl: false })]))
+    openAuthPane()
+    fireEvent.click(screen.getByText('去登录'))
+    expect(window.open).toHaveBeenCalledWith('https://s1.com', '_blank', 'noopener,noreferrer')
+    expect(apiSend).not.toHaveBeenCalled()
+  })
+
+  it('服务端拒绝（如 JS 形态未产出 cookie → 422）→ 如实报错并带行锚点', async () => {
+    const deps = makeDeps({ apiSend: vi.fn(() => Promise.reject(new Error('loginUrl 未产出 cookie'))) })
+    render(view(deps, [src({ id: 's1', name: '源一', hasLoginUrl: true })]))
+    openAuthPane()
+    fireEvent.click(screen.getByText('去登录'))
+    await waitFor(() => expect(deps.pushError).toHaveBeenCalledWith(expect.stringContaining('去登录失败：loginUrl 未产出 cookie'), expect.anything()))
+    expect(window.open).not.toHaveBeenCalled()
   })
 })

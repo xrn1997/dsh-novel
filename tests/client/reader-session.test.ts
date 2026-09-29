@@ -115,10 +115,9 @@ describe('ReaderSession.open（目录 → 存档恢复 → 载后定位）', () 
   })
 
   it('进书：目录一发布就来的预取不许抢走存档恢复的在途槽', async () => {
-    // 视图侧事实（ReaderView）：toc 一发布，[chapters] effect 立刻 recalcAnchors + checkPreload；
-    // 此刻哨兵是正文里唯一元素、就在视口顶 → 预取目标 = 第 0 章。而存档章要等 fetchShelf
-    // 回来才知道。这中间在途槽若被预取抢走，open() 的恢复 load 会半路静默短路
-    // （`if (this.inflight !== null) return`）——整条恢复丢失，真机表现即「切走再回来变第一章」。
+    // 视图侧事实：toc 一发布就 recalcAnchors + checkPreload，此刻哨兵在视口顶 → 预取目标 = 第 0 章，
+    // 而存档章要等 fetchShelf 回来才知道。在途槽若被预取抢走，open() 的恢复 load 会半路静默短路
+    // （`if (this.inflight !== null) return`）——真机表现即「切走再回来变第一章」。
     const port = fakePort()
     const fetched: number[] = []
     let releaseShelf = (): void => {}
@@ -151,9 +150,9 @@ describe('ReaderSession.open（目录 → 存档恢复 → 载后定位）', () 
   })
 
   it('进书：第 0 章的章内位置也算进度（存档 (0, 0.9) 要落回章内，不许当成「无存档」）', async () => {
-    // 判据口径：第 0 章里的位置同样是「读过」。此前用手写条件 chapterIndex>0 判「有没有存档」，
-    // 与书架卡片侧（算了比例）相反——读第 1 章的人进度永远恢复不了，且进书后视图那一次
-    // 视口读数（0,0）会把存档抹平（真机存档被观测成 (0, 0.9999) → (0,0)）。
+    // 判据口径：第 0 章里的位置同样是「读过」。此前 `chapterIndex>0` 判「有没有存档」，与书架卡片侧
+    // 相反——读第 1 章的进度永远恢复不了，进书后那次视口读数（0,0）还会把存档抹平
+    // （真机观测：(0, 0.9999) → (0,0)）。
     const h = makeSession({ shelf: [shelfBook({ chapterIndex: 0, offsetRatio: 0.9, updatedAt: 1 })] })
     h.port.anchors = [{ index: 0, start: 0, height: 2000 }]
     h.port.scrollH = 3000; h.port.height = 1000
@@ -236,10 +235,8 @@ describe('ReaderSession 进度落盘策略', () => {
   })
 
   it('切章强制存要作废同章防抖窗里的旧值（旧值迟到落盘 = 存档回退到上一章）', async () => {
-    // 真机链路：同章滚动挂起一次防抖存 → 用户从目录直达后面的章（跨章强制存）
-    // → 2s 后那条旧值才到期落盘，把刚存下的新章覆盖回旧章。
-    // 用户侧症状：存档永远停在「跳章前的章」，再进就是那一章（真机存档被观测成
-    // 跳章前的 (0, ~1.0)——同一条迟到写）。
+    // 真机链路：同章滚动挂起防抖存 → 目录直达后面的章（跨章强制存）→ 旧值迟到落盘覆盖回旧章。
+    // 用户侧症状：存档永远停在「跳章前的章」（真机观测到的正是这条迟到写）。
     const h = makeSession({ debounceMs: 40 })
     await h.session.open('src', 'https://s.com/book/1')
     h.port.anchors = [{ index: 0, start: 0, height: 1000 }, { index: 1, start: 1000, height: 1000 }, { index: 2, start: 2000, height: 1000 }, { index: 3, start: 3000, height: 1000 }]

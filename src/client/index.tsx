@@ -29,19 +29,15 @@ export const inject = ['slots', 'sessions']
 
 /** 全局面板行的图标：宿主行给 `{ size, active }`（`SidebarPanelIconOwnerProps`），
  *  行本体（按钮、aria-current、tooltip、选中底色）全归宿主 sidebar shell——我们只出图，
- *  `active` 刻意不用（不自造第二套选中态；宿主行的 `panelActive` 类 + `aria-current` 已是
- *  唯一选中呈现，契约字段留在类型里即可）。
+ *  `active` 刻意不用（宿主行已是唯一选中呈现，契约字段留在类型里即可）。
  *
- * 字形 = **android-ebook 的启动器前景**（用户指定，2026-09）：外部资产原文
- * `xrn1997/android-ebook @ master` 的 `module_app/src/main/res/drawable-v24/
- * ic_launcher_foreground.xml`（blob 80f575c：viewport 2178.7234 + group translate
- * 577.3617，fillColor 为不透明黑 0xFF000000）。搬运用法：pathData **原样**保留，裁掉
- * 自适应图标的安全区留白——viewBox 取 group 坐标系 `0 0 1025 1025`（字形 bbox 约
- * 39..986 × 20..979，原 canvas 里字形只占 ~47%，16px 行图标下会糊成一点），
- * `fill="currentColor"` 写在 path 上（随宿主行前景色走明暗主题；hex 不进本仓——
- * theme-tokens 守卫扫到即红，色值主人始终是宿主行）。背景层（`ic_launcher_background.xml`
- * = 纯白方块，blob b5cd46e）刻意不搬：侧栏行自带底色，白方块在暗色主题下是块白斑。
- * 机器钉子在 `tests/client/panel-registration.test.tsx`（pathData 来源防随手换回通用图标）。 */
+ * 字形 = **android-ebook 的启动器前景**（用户指定，2026-09）：几何读数与出处记在
+ * `tests/client/panel-registration.test.tsx` 的「面板图标 = android-ebook 启动器前景字形」用例里。
+ * 搬运用法：pathData **原样**保留、裁掉自适应图标的安全区留白——viewBox 取 group 坐标系
+ * `0 0 1025 1025`（原 canvas 里字形只占约一半，16px 行图标下会糊成一点）；`fill="currentColor"`
+ * 写在 path 上（随宿主行前景色走明暗；hex 不进本仓，theme-tokens 守卫扫到即红）。背景层
+ * （原资产那面是纯白方块）刻意不搬：侧栏行自带底色，白方块在暗色主题下是块白斑。
+ * 机器钉子同在那份测试（pathData 来源防随手换回通用图标）。 */
 function NovelPanelIcon({ size = 16 }: { size?: number; active?: boolean }): ReactNode {
   return (
     <svg

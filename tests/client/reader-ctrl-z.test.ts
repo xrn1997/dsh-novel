@@ -26,7 +26,7 @@ describe('Aa 控制器层 z 序守卫（「能弹出但点不了」防回归）'
     // 面板（导出组件单渲染）：挂载于工具栏内是结构前提——源码里它是工具栏的子元素
     const panel = renderToString(createElement(PrefsPanel))
     expect(panel).toContain(`z-index:${CTRL_Z.panel}`)
-    // 遮罩只在 ctrlOpen 时渲染，renderToString（闭态）拿不到——扫源码确认用的是常量而非散写字面量
+    // 遮罩只在两个控制器面板都闭着时不渲染（ctrlOpen / expOpen 同候），renderToString（闭态）拿不到——扫源码确认用的是常量而非散写字面量
     const src = readFileSync(fileURLToPath(new URL('../../src/client/views/ReaderView.tsx', import.meta.url)), 'utf8')
     expect(src).toContain('zIndex: CTRL_Z.mask')
   })

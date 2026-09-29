@@ -55,7 +55,7 @@ describe('validateSourceJson', () => {
 describe('filterSources', () => {
   const src = (name: string, baseUrl: string, groups: string[] = []): SourcePublic => ({
     id: name, name, baseUrl, enabled: true, groups, type: 'text', status: 'unverified',
-    importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false,
+    importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false, hasLoginUrl: false,
   })
   const list = [src('笔趣阁', 'https://m.biqu.com', ['热门']), src('SiS文学', 'https://b.sis.la', ['特殊'])]
   it('空 query → 原样全量', () => {
@@ -77,7 +77,7 @@ describe('filterSources', () => {
 describe('filterByStatus', () => {
   const src = (name: string, over: Partial<SourcePublic> = {}): SourcePublic => ({
     id: name, name, baseUrl: `https://${name}.com`, enabled: true, groups: [], type: 'text', status: 'unverified',
-    importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false, ...over,
+    importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false, hasLoginUrl: false, ...over,
   })
   const list = [
     src('a', { status: 'verified' }),
@@ -106,7 +106,7 @@ describe('filterByStatus', () => {
 describe('filterByGroup', () => {
   const src = (name: string, groups: string[]): SourcePublic => ({
     id: name, name, baseUrl: `https://${name}.com`, enabled: true, groups, type: 'text', status: 'unverified',
-    importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false,
+    importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false, hasLoginUrl: false,
   })
   const list = [src('a', ['热门']), src('b', ['热门', '本地']), src('c', [])]
   it('空串 → 原样全量', () => {

@@ -2,21 +2,21 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { evaluate, RuleEvalError } from '../engine/index.js'
 import type { Facet } from '../engine/index.js'
-import { absUrl, auxFieldOf, detailContextOf, detailFieldsOf, engineContextOf, extractItems, fieldOf, firstValue, kindFieldOf, makeSubEval, resolveHeaders, wordCountFieldOf } from './bridge.js'
+import { absUrl, auxFieldOf, auxUrlFieldOf, detailContextOf, detailFieldsOf, engineContextOf, fieldOf, firstUrlValue, firstValue, itemContextsOf, kindFieldOf, makeSubEval, resolveHeaders, urlFieldOf, wordCountFieldOf } from './bridge.js'
 import type { Page, SubRuleEval } from './bridge.js'
 import { PageCache } from './cache.js'
 import { contentSlot, rulesEpoch } from './cache-epoch.js'
 import { chapterContentToText } from './chapter-content.js'
 import { contentToText, formatIntro } from './content.js'
 import { ChapterNotFoundError, InvalidRequestError, LocalNotMountedError, RuleMissingError, SourceNotFoundError } from './errors.js'
-import { createFetcher, decodeBody, fetchTextPage } from './fetcher.js'
+import { createFetcher, decodeBody, fetchTextPage, DEFAULT_TIMEOUT_MS } from './fetcher.js'
 import type { Fetcher } from './fetcher.js'
 import { SourceJobs } from './import-job.js'
 import { SearchJobs } from './search-job.js'
 import type { JobHost } from './import-job.js'
 import type { ImportFile, JobState } from './import-job.js'
 import { SourceIntake } from './intake.js'
-import { isLocalBookKey, LOCAL_SOURCE_ID, LocalBooks } from './localbooks.js'
+import { DEFAULT_MAX_IMPORT_BYTES, isLocalBookKey, LOCAL_SOURCE_ID, LocalBooks } from './localbooks.js'
 import type { LocalResource } from './localbooks.js'
 import type { NormalizeIssue } from './normalize.js'
 import { followPages } from './pagination.js'
@@ -41,13 +41,18 @@ import type {
   BookDetail, BookNavigation, ChapterContent, LocalImportResponse, LocalImportWarning, SearchGroup, SearchHit,
   SearchPlan, SearchJobSnapshot, ChapterEntry, ShelfBook, ShelfEntry, ShelfMetaPatch, SourcePublic,
 } from '../shared/wire.js'
+/** 聚合搜索并发（缺省 5）与 js 沙箱预算（缺省 15s）：**这两个数的唯一主人**——组合根 DEFAULTS
+ *  与本文件 `from()` 回退都引这里，别处不再写字面量。15s 而非引擎 2s：多请求目录脚本 2s 必炸；
+ *  名字带「预算」以别于引擎 `DEFAULT_JS_TIMEOUT_MS`，两层各有默认，同名会让按名 import 落错主人。 */
+export const DEFAULT_SEARCH_PARALLEL = 5
+export const DEFAULT_JS_BUDGET_MS = 15_000
+
 export interface ReadingServiceOptions {
   dir: string                       // novel 根目录（测试注入 mkdtemp）
   fetchImpl?: typeof globalThis.fetch
   searchParallel?: number           // 默认 5
   searchTimeoutMs?: number          // 默认 15000
-  /** js 沙箱预算（透传 EvalContext.jsTimeoutMs；缺省 15000——引擎 2000 只作回退）：
-   *  legado Rhino 无硬超时，多请求目录脚本（java.ajax×2 + md5，txs12 源实测）2s 必炸 */
+  /** js 沙箱预算（透传 EvalContext.jsTimeoutMs；缺省 15000——理由见 DEFAULT_JS_BUDGET_MS） */
   jsTimeoutMs?: number
   tocMaxPages?: number              // 默认 200
   contentMaxPages?: number          // 默认 50
@@ -63,8 +68,8 @@ export interface ImportOutcome {
   sourceId: string | null; name: string; ok: boolean
   missing: NormalizeIssue[]; warnings: NormalizeIssue[]
   probe: ProbeResult | null
-  /** 按址去重命中（intake 入库规则）：同 baseUrl 已有可用源，保留已有条目未新增——
-   *  sourceId 给可用的那条。此前同步导入无去重（规则只在任务路径），同一地址可重复入库。 */
+  /** 按址去重命中（intake 入库规则，矩阵行 `k-import-dedup`）：同 baseUrl 已有可用源则保留已有条目、
+   *  未新增，sourceId 给可用的那条（曾只在任务路径去重，同步导入可重复入库）。 */
   dupSkipped?: boolean
 }
 
@@ -101,7 +106,7 @@ export class ReadingService {
   static async create(opts: ReadingServiceOptions): Promise<ReadingService> {
     // 主动建数据目录：保证存在 + 快速失败（dir 指向文件时 mkdir 抛错——ready 拒绝，入口层零注册）
     await fs.mkdir(opts.dir, { recursive: true })
-    const localImportMaxBytes = opts.localImportMaxBytes ?? 50 * 1024 * 1024
+    const localImportMaxBytes = opts.localImportMaxBytes ?? DEFAULT_MAX_IMPORT_BYTES
     return ReadingService.from({
       fetcher: createFetcherWith(opts.fetchImpl, opts.proxyUrl),
       registry: await SourceRegistry.load(opts.dir),
@@ -140,10 +145,10 @@ export class ReadingService {
     searchTimeoutMs?: number
     jsTimeoutMs?: number
   }): Promise<ReadingService> {
-    const searchTimeoutMs = parts.searchTimeoutMs ?? 15000
-    const jsTimeoutMs = parts.jsTimeoutMs ?? 15000
+    const searchTimeoutMs = parts.searchTimeoutMs ?? DEFAULT_TIMEOUT_MS
+    const jsTimeoutMs = parts.jsTimeoutMs ?? DEFAULT_JS_BUDGET_MS
     // searchParallel ≤ 0 → 批循环 `i += 0` 永不终止（组合根直装也必须炸，不能挂起）
-    const searchParallel = parts.searchParallel ?? 5
+    const searchParallel = parts.searchParallel ?? DEFAULT_SEARCH_PARALLEL
     if (!Number.isInteger(searchParallel) || searchParallel < 1) {
       throw new RangeError(`searchParallel 必须为正整数，收到 ${String(searchParallel)}`)
     }
@@ -155,7 +160,7 @@ export class ReadingService {
       },
       searchTimeoutMs,
       jsTimeoutMs,
-      parts.localImportMaxBytes ?? 50 * 1024 * 1024,
+      parts.localImportMaxBytes ?? DEFAULT_MAX_IMPORT_BYTES,
       parts.registry, parts.shelf, parts.cache, parts.fetcher,
       new SourceJobs({
         registry: parts.registry,
@@ -213,9 +218,8 @@ export class ReadingService {
   }
 
   /** 探针已有源（API/tools 的 probe 路由/工具用）：与 importOne 的探针段同口径。
-   *  超时与 js 预算都必须与搜索同耐心（`searchTimeoutMs` / `jsTimeoutMs` 两个单点）——
-   *  两者都曾在这条门面上漏传：fetcher 侧落回固定 15s、js 侧落回引擎 2s，于是同一个源
-   *  在导入期探针（带预算）与门面探针（不带）拿回两个 verdict。 */
+   *  超时与 js 预算必须与搜索同耐心（`searchTimeoutMs`/`jsTimeoutMs` 两个单点）——漏传曾让
+   *  同一源在导入期与门面两处探针拿回两个 verdict。 */
   async probe(id: string): Promise<ProbeResult> {
     const s = this.requireSource(id)
     const r = await probeSource(s, this.fetcher, { timeoutMs: this.searchTimeoutMs, jsTimeoutMs: this.jsTimeoutMs })
@@ -263,8 +267,7 @@ export class ReadingService {
 
   /** loginUrl JS 形态：沙箱执行取 cookie 串 → 解析 k=v; → setAuth + persist。
    *  空产出（脚本没 return 出 cookie，或只用 cookie.setCookie 垫片——该 jar 从不回读）**不算登录**：
-   *  返回 null 且不写 auth。此前仍构造空 SourceAuth 落库 → `hasAuth: !!s.auth` 变 true、
-   *  UI 显示「已登录」而零凭据（状态位如实）。
+   *  返回 null 且不写 auth（曾落空 auth 把 hasAuth 点亮成「已登录」而零凭据）。
    * URL 形态由调用侧分流（不在此处理——开新 tab + cookie 录入，不注入 WebView）。 */
   async runLogin(id: string): Promise<SourceAuth | null> {
     const s = this.requireSource(id)
@@ -320,9 +323,8 @@ export class ReadingService {
   }
 
   /** 加书（title 形态）：字段判别归 pickShelfMeta，此处只管「入架」语义。
-   *  title / sourceId 必填非空——曾用 `meta.sourceId ?? ''` 静默兜底：缺源/型错的加书返回 200 落
-   *  一条永远读不了的书（`getToc('') → SourceNotFoundError`），写入静默、读取才炸。
-   *  值域门住在这里而不是路由：本动词 HTTP 面与 agent 工具面共用，门长在路由只护了一半。 */
+   *  title / sourceId 必填非空（曾静默兜底 `?? ''`：写入 200、读取才炸的死书）；
+   *  值域门在这里而不是路由——HTTP 面与工具面共用本动词，门长在路由只护一半。 */
   shelfAdd(bookKey: string, meta: ShelfMetaPatch & { title: string }): ShelfBook {
     const sourceId = meta.sourceId
     if (typeof sourceId !== 'string' || sourceId === '') {
@@ -338,8 +340,8 @@ export class ReadingService {
   }
 
   /** 存进度（progress 形态）：不在架 → null（路由映射 400）；返回更新后的条目。
-   *  值域门住在这里（同 shelfAdd）：`JSON.parse('1e999')` = Infinity 会一路落盘成 null
-   *  （`JSON.stringify(Infinity) === 'null'`）——静默数据损坏，只护 HTTP 面护不住工具面。 */
+   *  值域门在这里（同 shelfAdd）：Infinity 会被 `JSON.stringify` 落盘成 null 静默损坏，
+   *  只护 HTTP 面护不住工具面。 */
   shelfSaveProgress(bookKey: string, chapterIndex: number, offsetRatio: number): ShelfBook | null {
     if (!Number.isInteger(chapterIndex) || chapterIndex < 0
       || !Number.isFinite(offsetRatio) || offsetRatio < 0 || offsetRatio > 1) {
@@ -450,8 +452,8 @@ export class ReadingService {
   /** 聚合搜索的**唯一实现**。`onGroup` 是增量出口：单源求值完成即按完成序交付，
    *  返回值仍按参搜源序——HTTP 面与工具面的既有形状一字不改，而后台任务/将来做任务的
    *  那一路可以边跑边被看见（浏览器半原先自持的分批循环只为拿这个增量，随之后退）。
-   *  sourceIds 缺省**或空数组**都视为「未限定」= 搜全部启用源（工具描述承诺「缺省搜全部启用源」；
-   *  此前空数组静默变成「搜零个源」——`!opts?.sourceIds` 对 [] 为 false，零分组空结果）。 */
+   *  sourceIds 缺省**或空数组**都视为「未限定」= 搜全部启用源（曾把空数组当「搜零个源」，
+   *  零分组空结果冒充成功）。 */
   async searchProgressive(keyword: string, opts?: {
     sourceIds?: string[]
     onGroup?: (group: SearchGroup, index: number) => void
@@ -534,23 +536,25 @@ export class ReadingService {
         return { ...base, error: { code: 'RuleMissing', message: page.message } }
       }
       if (page.shape === 'info') {
-        // 整段响应就是详情页（对面 BookList.getInfoItem）：按详情规则展开成**一条**书目
+        // 整段响应就是详情页（搜索结果即详情页的形态）：按详情规则展开成**一条**书目
         const hit = await this.infoHitOf(s, page)
         return { ...base, hits: hit === null ? [] : [hit] }
       }
       const hits: SearchHit[] = []
-      for (const item of page.items) {
-        // 求值与相对链接基准 = 落地地址（浏览器语义，与目录/正文面同口径——重定向站点不再错位）
-        const ctx = { html: item, baseUrl: page.landedUrl }
+      // 求值与相对链接基准 = 落地地址（浏览器语义，与目录/正文面同口径——重定向站点不再错位）；
+      // 上下文由搜索面按条目产出（AllInOne 条目带行，字段规则的 `$n` 在引擎入口绑定）
+      for (const ctx of page.contexts) {
         // ruleBookName 的非空保障在搜索面（缺规则整体 RuleMissing，不降级 `?? ''`——空串规则返回整页文本会造垃圾标题）
         const title = firstValue(await page.subEval(s.rules.ruleBookName ?? '', ctx, 'search', 'value'), 'search')
         if (title === null || title.trim() === '') continue // 书名非空才算书目
         const [author, href, cover, intro, last, kind, wordCount] = await Promise.all([
-          // 作者/书地址 = 对面的裸奔项（不吞：空书名才丢条目，作者与 URL 照原口径）
+          // 作者/书地址 = 裸奔项（不吞：空书名才丢条目）；书地址走 URL 位取首项（理由单点在
+          // bridge.urlFieldOf，矩阵行 `b-url-value-first-item`）
           fieldOf(page.subEval, s.rules.ruleAuthor, ctx, 'search'),
-          fieldOf(page.subEval, s.rules.ruleBookUrl, ctx, 'search'),
-          // 下面五项在对面各包 try/catch：坏规则只丢该字段，不带走整页书目（bridge.metaFieldOf）
-          auxFieldOf(page.subEval, s.rules.ruleCoverUrl, ctx, 'search'),
+          urlFieldOf(page.subEval, s.rules.ruleBookUrl, ctx, 'search'),
+          // 下面五项各自包 try/catch：坏规则只丢该字段，不带走整页书目（bridge.metaFieldOf）；
+          // 封面是 URL 位，只多一层「读不出来留空」
+          auxUrlFieldOf(page.subEval, s.rules.ruleCoverUrl, ctx, 'search'),
           auxFieldOf(page.subEval, s.rules.ruleIntro, ctx, 'search'),
           auxFieldOf(page.subEval, s.rules.ruleLastChapter, ctx, 'search'),
           // 分类/字数：同上，另注意 kind 是多值逗号串、wordCount 在解析层就格式化
@@ -559,12 +563,12 @@ export class ReadingService {
         ])
         hits.push({
           title, author,
-          // 书 URL 保留 `,{option}` 后缀落库（legado 口径：URL 即请求规格——米读类 POST API 源的
+          // 书 URL 保留 `,{option}` 后缀落库（URL 即请求规格——米读类 POST API 源的
           // book_id 藏在选项 body 里，剥掉即身份残废；与章节 URL「保留选项」同源，见 request.absUrlKeepOption）
           url: href === null ? null : absUrlKeepOption(href, page.landedUrl),
           coverUrl: cover === null ? null : absUrl(cover, page.landedUrl),
-          // 简介是**展示文本**：对面 BookList 走 HtmlFormatter.format(...).take(5000)（搜索面
-          // **不认**渲染指令前缀，那是详情面的事）。Miss 仍是 null，不折成空串。
+          // 简介是**展示文本**：净化 + 截 5000 字（搜索面**不认**渲染指令前缀，那是详情面的事）。
+          // Miss 仍是 null，不折成空串。
           intro: intro === null ? null : formatIntro(intro),
           lastChapterName: last,
           kind, wordCount,
@@ -577,9 +581,9 @@ export class ReadingService {
   }
 
   /** 搜索面 info 形态的一条书目：字段走 bridge.detailFieldsOf（与 getDetail 同一份实现，
-   *  含 init 换根——对面 BookList.getInfoItem 调的就是同一个 analyzeBookInfo），求值基准是
-   *  落地地址（对面 setBaseUrl(res.url)），书地址用面算好的 bookUrl。
-   *  书名为空 → null：对面 `book.name.isNotBlank()` 才收这一条，「0 命中」是**结果**不是失败。 */
+   *  含 init 换根），求值基准是落地地址（重定向后按落地地址解析相对链接），
+   *  书地址用面算好的 bookUrl。
+   *  书名为空 → null：只有书名非空才收这一条，「0 命中」是**结果**不是失败。 */
   private async infoHitOf(
     s: NovelSource, page: Extract<SearchFaceResult, { ok: true; shape: 'info' }>,
   ): Promise<SearchHit | null> {
@@ -598,23 +602,19 @@ export class ReadingService {
     const s = this.requireSource(sourceId)
     // 引擎上下文（相对链接解析/字段求值）用剥选项的地址；抓取用全串——选项由 assembleRequest 解释
     const base = stripUrlOption(url)
-    // legado `book` 变量：详情面规则常见 `book.bookUrl`/`book.origin` 引用（脚本/模板段）
-    // legado 的变量住在 chapter/book/ruleData 上，跨规则可见——这里给这次 getDetail 一张
-    // 共享 vars 表：init 的 `@put:{n:"[property$=book_name]@content"}` 写进去，
+    // `book` 变量：详情面规则常见 `book.bookUrl`/`book.origin` 引用（脚本/模板段），
+    // 且跨规则可见（`book`/`chapter` 绑定与 vars 表随求值上下文传递）——这里给这次 getDetail
+    // 一张共享 vars 表：init 的 `@put:{n:"[property$=book_name]@content"}` 写进去，
     // 随后的 `@get:{n}` 字段规则与 tocUrl 模板才读得到（各次调用新建，不跨门面共享）。
     const subEval = makeSubEval(this.fetcher, s, {
-      vars: {}, book: { bookUrl: url, origin: s.baseUrl }, jsTimeoutMs: this.jsTimeoutMs,
+      vars: {}, book: bookMirrorOf(url, s.baseUrl, this.shelf.get(url)), jsTimeoutMs: this.jsTimeoutMs,
     })
     const html = await this.fetchText(s, url)
     const { rules } = s
-    // 详情五字段（init 换根 + ruleDetail* 优先、平铺回退 + 简介详情面口径）单点在
-    // bridge.detailFieldsOf：对面 BookList.getInfoItem 调的就是同一个 analyzeBookInfo，
-    // 搜索面的 info 形态（bookUrlPattern 嗅探）与本方法共用，不各写一份回落链。
-    // 已知重复：下面 tocUrlOf 会再算一次同样的 init（它收的是规则原文 + 惰性 html，形态与这里不同）。
-    // 刻意不为它改签名：init 绝大多数是纯 JSONPath（`$.data.bookInfo` 一类，不触网），代价是一次求值；
-    // 而 tocUrlOf 的两个调用点里只有一侧手里已有 html，硬并要把惰性 provider 换成可空入参——
-    // 那换来的是签名变宽与「谁负责 html」易主，不是少一次 CPU。真源若用 js 形态的 init 会双打站点，
-    // 届时按那个源来改，而不是现在为假想情况加一层缓存。
+    // 详情七字段（init 换根 + ruleDetail* 优先、平铺回退 + 简介详情面口径）单点在
+    // bridge.detailFieldsOf：搜索面的 info 形态与本方法共用同一份，不各写回落链。
+    // 已知重复：下面 tocUrlOf 会再算一次 init——刻意不并签名（并了要宽入参、让「谁负责 html」易主，
+    // 换来的只是省一次纯 JSONPath 求值）；真源若用 js 形态 init 双打站点，届时按那个源改。
     const fields = await detailFieldsOf(s, subEval, html, base)
     const tocUrl = await tocUrlOf(s.rules.ruleTocUrl, rules.ruleDetailInit, url, async () => html, subEval)
     return { ...fields, tocUrl }
@@ -654,32 +654,32 @@ export class ReadingService {
       const cached = await this.cache.getToc(sourceId, bookUrl, epoch)
       if (cached !== null) return JSON.parse(cached) as ChapterEntry[]
     }
-    // 订正：目录三规则任一缺失不得降级 `?? ''`——空串规则返回整页文本，宁炸不猜
-    // 列表选择器：ruleChapterList（对象方言 ruleToc.chapterList——实测 631/637 与搜索列表不同）；
-    // 平铺方言缺它时回退 ruleBookList（legado 平铺口径：搜索/目录共用列表规则）
+    // 目录三规则任一缺失不得降级 `?? ''`——空串规则返回整页文本，宁炸不猜
+    // 列表选择器：ruleChapterList（对象方言）；平铺方言缺它时回退 ruleBookList（平铺口径：
+    // 搜索/目录共用列表规则，两方言列表不同——矩阵行 `d-book-list-fallback`）
     const { ruleChapterName, ruleChapterUrl } = s.rules
     const listRule = s.rules.ruleChapterList ?? s.rules.ruleBookList
     if (listRule === null || ruleChapterName === null || ruleChapterUrl === null) {
       throw new RuleMissingError('toc', 'ruleChapterList/ruleBookList',
         `源「${s.name}」缺目录规则（ruleChapterList/ruleBookList 之一 + ruleChapterName/ruleChapterUrl）——无法构建目录`)
     }
-    // legado `book` 变量：目录规则常见 `book.bookUrl`（36小说网 chapterUrl）与 `book.origin`
+    // `book` 变量：目录规则常见 `book.bookUrl`（36小说网 chapterUrl）与 `book.origin`
     // （努努书坊 ruleTocUrl `{{book.origin}}/e/...`——源站点域名即注册表 baseUrl）
-    const subEval = makeSubEval(this.fetcher, s, { book: { bookUrl, origin: s.baseUrl, tocUrl: bookUrl }, jsTimeoutMs: this.jsTimeoutMs })
+    const subEval = makeSubEval(this.fetcher, s, { book: bookMirrorOf(bookUrl, s.baseUrl, this.shelf.get(bookUrl), bookUrl), jsTimeoutMs: this.jsTimeoutMs })
     const tocUrl = await tocUrlOf(s.rules.ruleTocUrl, s.rules.ruleDetailInit, bookUrl,
       () => this.fetchText(s, bookUrl), subEval)
     const extract = async (page: Page): Promise<ChapterEntry[]> => {
       const listV = await subEval(listRule, { html: page.body, json: page.json, baseUrl: page.url }, 'toc', 'list')
       const out: ChapterEntry[] = []
       let fellBack = 0
-      for (const item of extractItems(listV)) {
-        const ctx = { html: item, baseUrl: page.url }
+      for (const ctx of itemContextsOf(listV, page.url)) {
         const name = firstValue(await subEval(ruleChapterName, ctx, 'toc', 'value'), 'toc')
-        const href = firstValue(await subEval(ruleChapterUrl, ctx, 'toc', 'value'), 'toc')
-        // 章节 URL 常带 `,{"webView":true}` 等选项后缀（legado 嗅探语义）——**保留后缀落库**，
-        // 抓取时由 fetchPage → assembleRequest 解释（POST/charset/headers 选项不再被丢弃）；
-        // URL 取不到时 legado 回退目录页地址（BookChapterList「未获取到url,使用baseUrl替代」）——
-        // 不再整条丢弃（此前「url null → 跳过」把整站目录清成 0 章）
+        // 章地址是 URL 位（多命中取首项，理由单点在 bridge.urlFieldOf，矩阵行 `b-url-value-first-item`）
+        const href = await urlFieldOf(subEval, ruleChapterUrl, ctx, 'toc')
+        // 章节 URL 常带 `,{"webView":true}` 等选项后缀（嗅探语义）——**保留后缀落库**，
+        // 抓取时由 fetchPage → assembleRequest 解释（矩阵行 `b-url-option-on-chapter-url`）；
+        // URL 取不到时回退目录页地址——不整条丢弃（曾「url null → 跳过」把整站目录清成 0 章，
+        // 矩阵行 `f-toc-url-fallback`）
         const missing = href === null || href.trim() === ''
         const url = href !== null && href.trim() !== '' ? absUrlKeepOption(href, page.url) : page.url
         if (name !== null && url !== null) {
@@ -687,9 +687,8 @@ export class ReadingService {
           out.push({ name, url })
         }
       }
-      // 逐章回退服务的是「个别条目缺链接」；**每一条都回退**就不是缺链接，而是 ruleChapterUrl
-      // 整体失效——静默产出 N 条指向目录页自身的 toc 等于拿合法形状冒充成功（本仓镜像的
-      // 宁炸不猜），且正文面每次都在目录页上求值，读者只看到「点开没内容」。
+      // 逐章回退只服务「个别条目缺链接」；**每一条都回退** = ruleChapterUrl 整体失效，
+      // 静默产出指向目录页自身的 toc 是拿合法形状冒充成功（宁炸不猜）。
       if (out.length > 0 && fellBack === out.length) {
         throw new RuleEvalError(
           `目录 URL 规则未取到任何章节地址（段 ruleChapterUrl: ${ruleChapterUrl}；${out.length} 条全部回退目录页 ${page.url}）`,
@@ -702,7 +701,7 @@ export class ReadingService {
       tocUrl,
       (u) => this.fetchPage(s, u),
       extract,
-      s.rules.nextTocUrl,          // null → 短路单页（open item ③ 钉死）
+      s.rules.nextTocUrl,          // null → 短路单页（该源无翻页发现能力，不做 next 跟进）
       (c) => c.url,
       this.cfg.tocMaxPages,
       'toc',
@@ -739,13 +738,12 @@ export class ReadingService {
   private async onlineChapterText(sourceId: string, bookKey: string, chIndex: number, opts?: { refresh?: boolean }): Promise<string> {
     const s = this.requireSource(sourceId)
     const epoch = rulesEpoch(s.rules, s.baseUrl, 'content')
-    // 目录上移到缓存读取之前：正文槽位含章名（挡章序位移串配，见 cache-epoch.contentSlot）。
-    // 如实记代价：目录缓存命中时是一次文件读 + JSON.parse；目录缺失（首次 / 被 prune 淘汰）时
-    // 会真发一次目录抓取——热正文缓存不再能单独服务一章。这是「槽位含章名」的必然代价，
-    // 不是可以优化掉的疏忽（章名只存在于目录里）。
+    // 目录上移到缓存读取之前：正文槽位含章名（挡章序位移串配，见 cache-epoch.contentSlot，
+    // 矩阵行 `g-cache-slot-chapter-name`）。代价如实记：热正文缓存不再能单独服务一章——
+    // 目录缺失时会真发一次目录抓取（章名只存在于目录里，这是必然代价不是疏忽）。
     const toc = await this.getToc(sourceId, bookKey)
-    // 双边守卫：负数曾绕过单边 `>= toc.length` → toc[-1].name TypeError → 500。
-    // HTTP 面有 /^\d+$/，工具面 chapterIndex 无下限——守卫必须盖住两面的入口。
+    // 双边守卫：负数曾绕过只拦上界的旧守卫 → toc[-1].name TypeError → 500；
+    // HTTP 面有 /^\d+$/ 而工具面无下限，守卫必须盖住两面入口。
     if (chIndex < 0 || chIndex >= toc.length) throw new ChapterNotFoundError(chIndex, toc.length)
     const target = toc[chIndex]
     const slot = contentSlot(epoch, target.name)
@@ -755,8 +753,7 @@ export class ReadingService {
         // 代际只覆盖规则、不覆盖代码版本：升级后仍会读到旧提取代码写下的条目（如 @html 源的
         // 带标签正文）——出边界再收一次口（contentToText 幂等），旧条目照样无害。
         const text = contentToText(cached)
-        // 空正文一律当未命中：修复前「站点跳转落地页零命中」会被静默写成 0 字节缓存（笔趣阁 27 章全空），
-        // 旧条目也就地失效重取，不再永远吐空
+        // 空正文一律当未命中：0 字节缓存会永远吐空（曾被静默写入），借此失效重取
         if (text.trim() !== '') return text
       }
     }
@@ -765,17 +762,11 @@ export class ReadingService {
       // 订正：正文规则缺失不得降级 `?? ''`
       throw new RuleMissingError('content', 'ruleContent', `源「${s.name}」缺正文规则 ruleContent`)
     }
-    // legado 变量注入：`book`（bookUrl/name…——36小说网 ruleChapterUrl 用 book.bookUrl.replace）
+    // 变量注入：`book`（bookUrl/name…——36小说网 ruleChapterUrl 用 book.bookUrl.replace）
     // 与 `chapter`（title/index/url——正文脚本 `chapter.title` 广泛使用）
     const shelfBook = this.shelf.get(bookKey)
     const subEval = makeSubEval(this.fetcher, s, {
-      book: {
-        bookUrl: bookKey,
-        origin: s.baseUrl,
-        tocUrl: bookKey,
-        ...(shelfBook?.title === undefined ? {} : { name: shelfBook.title }),
-        ...(shelfBook?.author === undefined ? {} : { author: shelfBook.author }),
-      },
+      book: bookMirrorOf(bookKey, s.baseUrl, shelfBook, bookKey),
       chapter: { title: target.name, index: chIndex, url: target.url, baseUrl: target.url },
       jsTimeoutMs: this.jsTimeoutMs,
     })
@@ -787,13 +778,12 @@ export class ReadingService {
           facet: 'content', segmentIndex: 0, segmentRaw: ruleContent, hits: 0,
         })
       }
-      // 正文契约是纯文本：@html 类规则收回来的是 HTML 片段（久久小说网 #view_content_txt@html
-      // 实测 21 个 <p> 原样打给读者）——先转纯文本，再走行规约
+      // 正文契约是纯文本：@html 类规则收回的是 HTML 片段（否则一串 <p> 原样打给读者）——
+      // 先转纯文本再走行规约（矩阵行 `g-html-to-text`）
       const plain = normalizeChapterText(contentToText(text))
       if (plain.trim() === '') {
-        // 零命中不得静默：空正文曾被当正常结果写进缓存——站点整站 302 到 google 的落地页里
-        // 恰好有元素命中 .con 但无文本，27 章 0 字节缓存、用户只看到「不出正文」。
-        // 报错带上规则与落点（请求地址 + 实际落地地址，两者不同即说明被跳转走了）。
+        // 零命中不得静默：空正文曾被当正常结果写进缓存（整章 0 字节，用户只见「不出正文」）。
+        // 报错带规则与落点（请求地址 + 实际落地地址，两者不同即被跳转走了）——矩阵行 `g-content-empty-exception`。
         const landed = page.requestedUrl === undefined || page.requestedUrl === page.url
           ? page.url
           : `${page.requestedUrl} → ${page.url}`
@@ -807,13 +797,13 @@ export class ReadingService {
       target.url,
       (u) => this.fetchPage(s, u),
       extract,
-      s.rules.nextPageUrl,         // null → 短路单页（open item ③ 钉死）
+      s.rules.nextPageUrl,         // null → 短路单页（该源无翻页发现能力，不做 next 跟进）
       (text) => text,              // 整页文本做 key：重复页触发回环闸
       this.cfg.contentMaxPages,
       'content',
       subEval,
       {
-        // 串章闸（legado 口径）：候选「下一页」== 目录里其他章节 URL → 到底。
+        // 串章闸：候选「下一页」== 目录里其他章节 URL → 到底。
         // 目录知识是正判据——路径启发式会把 `?id=..&cid=..&page=2` 这类非页码键分页误判成串章
         // （「一章只解析出一页」的根因之一）；启发式仅在无目录知识时兜底（见 pagination.ts）
         stopUrls: new Set(toc.map((c) => canonUrl(c.url)).filter((u) => u !== canonUrl(target.url))),
@@ -857,9 +847,9 @@ export class ReadingService {
     return s
   }
 
-  /** 抓取一页：URL 可带 `,{option}` 选项后缀（章节/下一页/目录 URL 的 legado 嗅探语义）——
-   *  选项语义走 assembleRequest 单点（POST method/body、charset、headers 全在此解释），
-   *  charset 声明进解码链（优先级最高）。webView 选项不支持——按普通请求照常尝试（如实）。 */
+  /** 抓取一页：URL 可带 `,{option}` 选项后缀（章节/下一页/目录 URL 的嗅探语义）——
+   *  选项语义走 assembleRequest 单点，charset 声明进解码链（优先级最高）；
+   *  webView 选项不支持——按普通请求照常尝试（如实，矩阵行 `b-opt-webview`）。 */
   private async fetchPage(s: NovelSource, url: string): Promise<Page> {
     const plan = assembleRequest(url, {}, s.baseUrl)
     const page = await this.fetcher.fetchPage(plan.url, fetchInitOf(plan, await resolveHeaders(this.fetcher, s, { jsTimeoutMs: this.jsTimeoutMs })))
@@ -867,9 +857,8 @@ export class ReadingService {
     return { url: page.finalUrl, requestedUrl: plan.url, body: decodeBody(page, plan.charset) }
   }
 
-  /** fetchText：抓取 + 解码 + 超时——请求语义经 assembleRequest 单点：URL 可带 `,{option}`，
-   *  书 URL / 详情页 / tocUrl 回退都可能是 POST 型 API 端点（method/body/charset/headers 全在选项里），
-   *  此前 fetchTextPage 裸抓带选项的 URL——真实源表现为米读类 getDetail 405（选项里的 book_id 才是身份）。 */
+  /** fetchText：抓取 + 解码 + 超时——请求语义同走 assembleRequest 单点（理由见 fetchPage；
+   *  书 URL / 详情页 / tocUrl 回退都可能是 POST 型 API 端点——曾裸抓带选项的 URL 而得 405）。 */
   private async fetchText(s: NovelSource, url: string, timeoutMs?: number): Promise<string> {
     const plan = assembleRequest(url, {}, s.baseUrl)
     const { text } = await fetchTextPage(this.fetcher, plan.url,
@@ -880,34 +869,63 @@ export class ReadingService {
 
 // ── 纯函数助手（独立导出供测试/复用）──────────────────────────────────
 
+/** 脚本可见的 `book` 镜像（对面脚本里的 `book` 是书架上那本书）。三项身份由本仓按面给
+ *  （`bookUrl`/`origin`/目录面的 `tocUrl`），其余字段取**书架那条**（`title` 映射成脚本读的 `name`）；
+ *  书架没有的字段不注入（读到 undefined 与「未设置」同形，不编值）。
+ *  逐面实读与缺口病史：矩阵行 `h-book-mirror-fields`。 */
+function bookMirrorOf(
+  bookUrl: string, origin: string, shelfBook: ShelfBook | undefined, tocUrl?: string,
+): Record<string, unknown> {
+  const s = shelfBook
+  return {
+    bookUrl,
+    origin,
+    ...(tocUrl === undefined ? {} : { tocUrl }),
+    ...(s?.title === undefined ? {} : { name: s.title }),
+    ...(s?.author === undefined ? {} : { author: s.author }),
+    ...(s?.kind === undefined ? {} : { kind: s.kind }),
+    ...(s?.intro === undefined ? {} : { intro: s.intro }),
+    ...(s?.coverUrl === undefined ? {} : { coverUrl: s.coverUrl }),
+    ...(s?.lastChapterName === undefined ? {} : { lastChapterName: s.lastChapterName }),
+    ...(s?.wordCount === undefined ? {} : { wordCount: s.wordCount }),
+  }
+}
+
 /** tocUrl 解析（钉死）：null→bookUrl **全串**（回退即「目录在本书地址上」——抓取仍按选项发请求）；
- *  纯静态 URL（URL 形态且无插值段）→字面绝对化，不抓详情页（引擎对裸词解析期必炸的边界仍在）；
- *  其余（带 `{{$.…}}` 插值段的 URL 模板与一切规则形态）→ 按**详情上下文**过规则引擎求值
- *  （legado model/webBook/BookInfo.kt `analyzeRule.getString(infoRule.tocUrl, isUrl=true)` 口径——init 换根后
- *  `{{$.resourceID}}` 这类嵌套字段才有解；此前 `interpolateUrl(空 vars)` 把插值段原样留下，
- *  目录请求打到字面 `{{…}}` 残地址 → 0 章，QQ 源实测）。引擎 literal 口径：任一插值段 Miss →
- *  整段 Miss → 回退 bookUrl（门面明确失败，不发残 URL）。解析 base 剥 `,{option}`
- *  （选项不属于链接解析域）。求值走调用方的 subEval（完整上下文单点——jsLib/vars/fetch/source 全可见）。 */
+ *  纯静态 URL（URL 形态且无插值段）→ 字面绝对化，不抓详情页；其余（带 `{{$.…}}` 插值段的 URL
+ *  模板与一切规则形态）→ 按**详情上下文**过规则引擎求值（init 换根后嵌套字段才有解；曾按空 vars
+ *  插值留下残地址 → 0 章）。引擎 literal 口径：任一插值段 Miss → 整段 Miss → 回退 bookUrl
+ *  （明确失败，不发残 URL）。解析 base 剥 `,{option}`（选项不属于链接解析域）；
+ *  求值走调用方的 subEval（完整上下文单点——jsLib/vars/fetch/source 全可见）。 */
 export async function tocUrlOf(
   ruleTocUrl: string | null, ruleDetailInit: string | null,
   bookUrl: string, detailHtml: () => Promise<string | null>, subEval: SubRuleEval,
 ): Promise<string> {
   const base = stripUrlOption(bookUrl)
   if (ruleTocUrl === null) return bookUrl
+  // 静态 URL 短路的歧义前缀按两档分（完整病史与钉子：矩阵行 `b-toc-url-xpath-vs-url`）：
+  // ① `//`/`.//` 开头（非插值）= 绝对 XPath **绝不短路**——「absUrl 解得出」分不开它与协议相对
+  //    地址（裸标签 XPath 会被 `new URL` 解成 `https://div/a/@href` 野地址）；
+  // ② 单 `/` 开头（非插值）= 站点相对静态 URL，**解得出才短路**（单 `/` 纯路径 XPath 与它同形
+  //    不可分——现量 0 条，残余如实记在矩阵行）。
+  // 与 grammar.isXPathForm 的结论**不同是口径而非漂移**：规则语言里 `/static/list.html` 是 XPath
+  // 形态，tocUrl 位上它是静态 URL（URL 读法在能绝对化时优先）。
   const urlShaped = /^(https?:)?\/\//i.test(ruleTocUrl) || ruleTocUrl.startsWith('/')
-  if (urlShaped && !ruleTocUrl.includes('{')) {
-    // 走到这里必无插值段（`{` 判过），interpolateUrl 恒等 → 直接绝对化
-    return absUrl(ruleTocUrl, base) ?? bookUrl
+  const absoluteXPath = ruleTocUrl.startsWith('//') || ruleTocUrl.startsWith('.//')
+  if (urlShaped && !absoluteXPath && !ruleTocUrl.includes('{')) {
+    // 走到这里必无插值段（`{` 判过），interpolateUrl 恒等 → 直接绝对化。
+    const abs = absUrl(ruleTocUrl, base)
+    if (abs !== null) return abs
   }
   const html = await detailHtml()
   if (html === null) return bookUrl
   const dctx = await detailContextOf(ruleDetailInit, html, base, subEval)
   const v = await subEval(ruleTocUrl, { html: dctx.html, json: dctx.json, baseUrl: base }, 'detail', 'value')
-  const href = firstValue(v, 'detail')
-  // 绝对化**只作用在 URL 部分**，`,{option}` 原样接回（对面 BookChapter.getAbsoluteURL 同款口径，
-  // 与搜索结果 bookUrl、章节 URL 同一层处理）。先 absUrl 等于让 `new URL()` 先碰选项串：它吃掉
-  // 换行、把 `{` 百分号编码，`,{` 形状一坏，抓取层的 URL_OPTION_SPLIT 就再也切不到
-  // （悦读小说 / 新小书亭 两条 POST 型 tocUrl 实证：一路退化成把整串当路径发出去）。
+  const href = firstUrlValue(v, 'detail')
+  // 绝对化**只作用在 URL 部分**，`,{option}` 原样接回（与搜索结果 bookUrl、章节 URL 同一层
+  // 处理）。先 absUrl 等于让 `new URL()` 先碰选项串：换行被吃、`{` 被百分号编码，`",{`
+  // 形状一坏、抓取层就再也切不到选项 → 整串当路径发出去（两条 POST 型 tocUrl 源实证，
+  // 矩阵行 `b-url-option-on-toc-url`）。
   if (href === null) return bookUrl
   return absUrlKeepOption(href, base) ?? bookUrl
 }

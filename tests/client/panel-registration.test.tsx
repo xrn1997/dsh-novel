@@ -6,18 +6,12 @@ import { apply } from '../../src/client/index.js'
 
 /**
  * 客户端注册面：小说 = **全局面板**（2026-09 迁移，用户拍板），不再是对话区 tab。
- *
- * 宿主契约（本机 host checkout 实证，`docs/reference/dsh-plugin-api.md` §10 证据 10c）：
- * - `sidebar.panellist`：root 作用域 list——每条 entry 是侧栏一行全局面板图标，注册项
- *   `{ id, order?, label? }`；宿主 sidebar shell 自带按钮/aria-current/tooltip，占用者组件
- *   只收 owner props `{ size, active }` 出图；
- * - `main`：root 作用域 keyed——「Central panel selected by sidebar entry id」，注册项
- *   `{ key }`，**同 id 的 panellist 行选中后 AppFrame 按 key 渲染 main 里的占用者**；
- *   保留键 `conversation` 归 Conversation，其余 key 无 Session 绑定；
- * - 「selecting a missing main entry throws」→ 两个座位必须同批注册（apply 内同步完成）。
- *
- * 本文件钉注册面本身（seam = `apply(ctx)` + 假 slots 服务）：座位名、id/key 一致性、
- * 图标组件吃得下 owner props、main 占用者真的渲染 NovelView、`conversation.view` 撤除。
+ * 宿主契约（`docs/reference/dsh-plugin-api.md` §10 证据 10c）：`sidebar.panellist` 每条 entry 是
+ * 侧栏一行（注册 `{ id, order?, label? }`，占用者只收 owner props `{ size, active }`）；`main` 是
+ * 同 id 选中后按 `{ key }` 渲染的占用者；「selecting a missing main entry throws」⇒ 两个座位必须
+ * 同批注册（apply 内同步完成）。
+ * 本文件钉注册面本身（seam = `apply(ctx)` + 假 slots）：座位名、id/key 一致性、owner props、
+ * main 占用者渲染 NovelView、`conversation.view` 撤除。
  */
 
 interface Registration { name: string; options: Record<string, unknown>; component: unknown }
@@ -97,10 +91,10 @@ describe('客户端注册面：小说 = 全局面板（main keyed + sidebar.pane
 
   it('面板图标 = android-ebook 启动器前景字形（用户指定资产）：pathData 原样来自其 ic_launcher_foreground', () => {
     // 资产来源（external facts）：xrn1997/android-ebook @ master
-    // `module_app/src/main/res/drawable-v24/ic_launcher_foreground.xml`（blob 80f575c，viewport
+    // `module_app/src/main/res/drawable-v24/ic_launcher_foreground.xml`（viewport
     // 2178.7234 + group translate 577.3617）——本仓按字形本体裁 viewBox（group 坐标系
     // 0..1025，字形 bbox 约 39..986 × 20..979），fill 用 currentColor 随宿主行前景色；
-    // 背景层（ic_launcher_background.xml = 纯白方块，blob b5cd46e）刻意不搬：侧栏行自带底色，
+    // 背景层（原资产那面是纯白方块的 ic_launcher_background）刻意不搬：侧栏行自带底色，
     // 白方块在暗色主题下是块白斑。此钉防「图标被随手换回通用书本 stroke」。
     const s = fakeSlots()
     apply(fakeCtx(s) as never)

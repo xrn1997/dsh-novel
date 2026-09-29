@@ -1,5 +1,5 @@
 import type { AnyNode, Element } from 'domhandler'
-import type { ContentNode, ContentTag, ReadingTarget } from '../../shared/wire.js'
+import type { ContentNode, ContentTag, LinkRole, ReadingTarget } from '../../shared/wire.js'
 import { EpubImportError } from './errors.js'
 import type { EpubWarningLog } from './warnings.js'
 import { WARN_ACTIVE_ATTR, WARN_CSS_ATTR, WARN_INLINE_SVG, WARN_REMOVED } from './warnings.js'
@@ -16,28 +16,21 @@ import { attrOf, firstDescendant, isElement, localName, textOf, type XmlBudget }
  * ② **原书属性不上树**：只有 `id`（转成 opaque 锚点 ID）、表格的 rowSpan/colSpan、ol 的 start、
  *    li 的 value 进节点；`class`/`title`/`data-*` 这类与渲染无关的属性静默丢掉，**事件属性与 style
  *    属性丢掉并记告警**（前者是活动内容，后者是出版方 CSS）。
- * ③ **可见内容不许静默消失**：认得出的白名单元素照转，未知元素保留子内容（带锚点的另包一层 span
- *    以留住锚点），活动/交互元素连子树剥除但**必须记告警**。
- *    **正文内联 SVG 是「剥离 + 告警」，不是报错**：设计里的 SVG 条款讲的是交给浏览器的 `image/svg+xml`
- *    **资源**；正文里的一层花饰/首字下沉若按「拒整本」处理，与同层其它装饰性失败（style 属性、
- *    未知容器）极不对称，也与「纯图片阅读单元是有效正文」之外的一切「不静默」口径不符。
- *    代价如实记：这些文档会丢掉内联矢量图形（有告警点名文档与处数，不是静默丢）。
- *    **唯一例外**：内联 SVG 是该文档**唯一**内容（剥离后没有别的可见节点）时，本层**不判**——
- *    交回 `svgOnly` 候选让编排层裁决。真书里这一页通常是 EPUB3 推荐的整页封面（一层 div 包一棵
- *    SVG，SVG 里只有一张 `<image>` 指向书内那张封面图），它**有内容**，按空章节拒掉会把标准写法
- *    当坏书整本杀掉（2026-09-26 真书反例：Gutenberg #7337 图像版）。裁决口径与那条拒绝的原话
- *    （`svgOnlyPageReason`）在 `import.ts`：图落得下就导成单图章节并留降级说明，落不下仍拒整本。
- *    独立 SVG **资源**仍走白名单重建，白名单外的
- *    可见元素（`foreignObject`/`use`/嵌套 `image`…）报错点名资源（见 `resources.ts`）。
+ * ③ **可见内容不许静默消失**：白名单元素照转，未知元素保留子内容（带锚点的另包一层 span 以留住
+ *    锚点），活动/交互元素连子树剥除但**必须记告警**。
+ *    **正文内联 SVG 是「剥离 + 告警」，不是报错**（设计里的 SVG 条款讲的是交给浏览器的**资源**；
+ *    拒整本与同层装饰性失败极不对称）——代价如实记：这类文档丢掉内联矢量图形（有告警点名，不是
+ *    静默丢）。**唯一例外**：内联 SVG 是该文档**唯一**内容时本层**不判**，交回 `svgOnly` 候选让
+ *    编排层裁决——真书这一页通常是 EPUB3 推荐的整页封面，按空章节拒会把标准写法当坏书整本杀掉；
+ *    裁决口径、真书反例与拒绝原话（`svgOnlyPageReason`）见 `docs/design/services.md` 与 `import.ts`。
+ *    独立 SVG **资源**仍走白名单重建，白名单外的可见元素（`foreignObject`/`use`/嵌套 `image`…）
+ *    报错点名资源（见 `resources.ts`）。
  * ④ **被剥离子树里的锚点是一份事实，不是「没有这个锚点」**：`scanXhtml` 把它们记进 `strippedAnchors`
  *    （不是 `anchors`——那段内容不在树上，落不到）。绑定期据此把目标**降级**（导航跳到文档开头、
- *    正文内链降级成纯文本）并记告警，而不是按「锚点不存在」拒整本：锚点确实在源文档里，是**我们
- *    自己**剥掉了承载它的图形，事实清楚（降级口径与告警码见 `import.ts`）。反过来，拼写错、指向
- *    从未存在的 id 仍然是坏书——「宁炸不猜」针对的是「我们读不懂/没有这个目标」。
+ *    正文内链降级成纯文本）并记告警，而不是按「锚点不存在」拒整本——是**我们自己**剥掉了承载它的
+ *    图形，事实清楚（降级口径与告警码见 `import.ts`）。反过来，拼写错、指向从未存在的 id 仍然
+ *    是坏书——「宁炸不猜」针对的是「我们读不懂/没有这个目标」。
  */
-
-/** 链接角色：从 `epub:type` 读（脚注引用 / 反向链接），其余为普通链接 */
-export type LinkRole = 'normal' | 'noteref' | 'backlink'
 
 /** 图片绑定结果：资源 ID 与**显示**宽高（EXIF 旋转已由资源层折算） */
 export interface ImageBinding {
@@ -52,10 +45,9 @@ export interface ImageBinding {
  * `anchors` 的键是原书 id、值是 opaque 锚点 ID——它同时就是承载该锚点的那个节点的节点 ID，
  * 因为富文本树里没有第二张「锚点表」：客户端只能按节点 ID 定位（wire 的 `ReadingTarget.anchorId`）。
  *
- * `strippedAnchors` 是与 `anchors` **分开的一份事实**：这些名字在被剥离的子树里（内联 SVG、活动
- * 内容），那段内容不在树上、没有可落的位置，所以不铸 ID；但「这个锚点曾经存在」正是绑定期区分
- * 两种失败所依据的判据——「锚点从未存在」（坏书，拒整本）与「锚点存在过、是本插件自己剥掉了承载
- * 它的图形」（降级 + 告警，见 `import.ts` 口径②）。两件事折叠成一件事就会让一层装饰杀掉整本书。
+ * `strippedAnchors` 是与 `anchors` **分开的一份事实**：这些名字在被剥离的子树里，内容不在树上、
+ * 没有可落的位置所以不铸 ID，但「它曾经存在」是绑定期降级而非拒整本的判据（口径见文件头注④）——
+ * 两件事折叠成一件就会让一层装饰杀掉整本书。
  *
  * `images` 与 `links` 都是**原始 href**（还没按文档目录解释）：调用方要在转换之前把它们全部
  * 解析/验证完（图片尤其：转换是同步遍历，读盘与验证必须在之前做完），转换期只查表。
@@ -135,11 +127,9 @@ export interface SvgOnlyPage {
   /**
    * 被这棵树顶替掉的容器（body → svg 这条路径上）各自承载的锚点 ID，外层在前。
    *
-   * 为什么要带出去：扫描期已把这些容器的锚点铸成 ID（`scanXhtml` 只对**被整棵剥除**的子树里的锚点
-   * 另走 `strippedAnchors`；一层包着 SVG 的 `div` 是普通容器，它的锚点在 `anchors` 里），于是目录与
-   * 正文里指向 `#cover` 这类锚点的目标会绑到一个**树上不存在的 ID**——落位退化成章首、目录当前项
-   * 也量不到。编排层拿这份清单在替代出来的那张图上逐层包容器，身份这才有着落（实测：只有图片节点、
-   * 锚点悬空）。
+   * 为什么要带出去：包着 SVG 的 `div` 是普通容器，它的锚点在 `anchors` 里已铸成 ID；整页被一张图
+   * 顶替后这些容器不在树上了，不带出去就会绑到**树上不存在的 ID**（落位退化成章首、目录量不到）。
+   * 编排层拿这份清单在那张图上逐层包容器，身份这才有着落。
    */
   readonly carriedAnchors: readonly string[]
 }
@@ -260,9 +250,8 @@ export function convertXhtml(root: Element, opts: XhtmlConvertOptions): Converte
     warnStrippedInlineSvg(ctx)
     return { nodes, title, svgOnly: null }
   }
-  // 剥完什么都不剩：先分清「整页就是一棵图」与「真的空」。前者交回候选让编排层裁决——真书里
-  // 这一页是 EPUB3 推荐的封面写法（一层 div 包一棵 SVG，SVG 里一张 `<image>` 指向书内封面图），
-  // 按空章节拒掉会把整本正常书杀掉（2026-09-26 真书反例）。
+  // 剥完什么都不剩：先分清「整页就是一棵图」与「真的空」——前者交回候选让编排层裁决
+  // （理由与真书反例见文件头注③，裁决在 import.ts）。
   const svgOnly = soleInlineSvg(body)
   if (svgOnly !== null) return { nodes: [], title, svgOnly: { element: svgOnly, carriedAnchors: droppedAnchorIds(body, svgOnly, ctx) } }
   warnStrippedInlineSvg(ctx)
@@ -362,9 +351,8 @@ export function documentTitle(root: Element, budget: XmlBudget): string | null {
 }
 
 /** 逐子节点转换：文本/CDATA 保字面、注释不进树、元素按下面那张表分流。
- *  一个元素可能展开成多个节点，**逐项追加**而不是 `push(...nodes)`：未知容器的子内容会被上提成
- *  一个很大的数组（实测一棵七万项的 `<dl>` 完全在节点预算内），展平传参就会撞 JavaScript 的参数
- *  上限，抛出一个裸 `RangeError`——那是宿主异常，服务层按类分流时会把它漏成 500。 */
+ *  一个元素可能展开成多个节点，**逐项追加**而不是 `push(...nodes)`：大容器的子内容展平传参会撞
+ *  JavaScript 参数上限，抛裸 `RangeError`——宿主异常，服务层按类分出会漏成 500。 */
 function convertChildren(children: readonly AnyNode[], ctx: Ctx): ContentNode[] {
   const out: ContentNode[] = []
   for (const child of children) {
@@ -436,6 +424,8 @@ function linkOrHoist(el: Element, anchorId: string | null, ctx: Ctx): ContentNod
   return [{ kind: 'link', id: anchorId ?? ctx.nextNodeId(), target, role: linkRole(el), children }]
 }
 
+/** 链接角色：从 `epub:type` 读（脚注引用 / 反向链接），其余为普通链接。
+ *  取值集合的主人不在这里——`LinkRole` 住 `shared/wire.ts`，铸造方与消费方共用一份。 */
 function linkRole(el: Element): LinkRole {
   const type = attrOf(el, 'type')
   if (type !== null) {

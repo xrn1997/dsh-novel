@@ -377,3 +377,55 @@ describe('EPUB 发布、重启读取与资源读口', () => {
     expect(await again.getImportWarnings(r.bookKey)).toEqual(r.warnings)
   })
 })
+
+/**
+ * 删一本**正在被流式读取**的书。资源读口的句柄是刻意不关的（所有权交给响应流，见 `getResource`），
+ * 所以「边读边删」是本仓唯一真实存在的持句柄现场——它与 services.md #26 那个 rename EPERM 是同一族
+ * 共享锁机制、不同的系统调用（那边改名覆盖被打开的目标，这边删掉正被打开的件）。
+ *
+ * 钉的是**收尾顺序**而不是错误码：`discard` 把元数据与产物目录**并行**删，一旦哪一支删不动，
+ * 就会出现「元数据没了、产物还剩半棵」——书从架上消失，而删除的存在性判据看的正是元数据，
+ * 于是没有任何入口能再删它（永久孤儿字节）。两条断言：① 没删干净时元数据必须在场（书还看得见、
+ * 能再删一次）且失败如实上抛；② 释放句柄后再删一次必须一点残骸不留（自愈路径成立）。
+ */
+describe('删一本正在被读的书（资源句柄 × 落盘收尾顺序）', () => {
+  const mk = async (): Promise<{ lb: LocalBooks; dir: string }> => {
+    const dir = await makeTempDir('novel-lbd-')
+    return { lb: await LocalBooks.create(dir), dir }
+  }
+
+  it('第一次删不干净时元数据必须还在场；释放句柄后再删必须整棵清干净', async () => {
+    const { lb, dir } = await mk()
+    const r = await lb.import(makeEpubFixture('epub3-rich'), '样本.epub')
+    const id = r.bookKey.slice('local:'.length)
+    const meta = path.join(dir, 'local', `${id}.json`)
+    const bookDir = path.join(dir, 'local', id)
+
+    const res = await lb.getResource(r.bookKey, 'r0')        // 真读口：句柄在流手里，故意不关
+    let firstError: unknown = null
+    let firstOk = true
+    try {
+      expect(await lb.remove(r.bookKey)).toBe(true)
+    } catch (e) {
+      firstOk = false
+      firstError = e
+    }
+
+    const dirGone = await fs.stat(bookDir).then(() => false, () => true)
+    const metaGone = await fs.stat(meta).then(() => false, () => true)
+    if (dirGone) {
+      // 这台机器删得动（POSIX 语义）：整棵必须一起走，不许留下元数据指向空气
+      expect(metaGone, '产物目录已删而元数据还在 ⇒ 读口会指向不存在的件').toBe(true)
+      expect(firstOk).toBe(true)
+    } else {
+      // 删不动的那一半时序：书必须仍然在架（元数据在场）+ 失败如实上抛
+      expect(metaGone, `产物还在却已删掉元数据 ⇒ 这本书成了看不见也删不掉的孤儿（首删错误：${String(firstError)}）`).toBe(false)
+      expect(firstOk, '删不干净必须如实上抛，不许静默当成删成功').toBe(false)
+    }
+
+    // ② 自愈：释放句柄后再删一次，必须一点残骸都不留
+    res.stream.destroy()
+    await lb.remove(r.bookKey)
+    expect(await fs.readdir(path.join(dir, 'local'))).toEqual([])
+  })
+})

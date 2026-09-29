@@ -6,20 +6,17 @@ import { fileURLToPath } from 'node:url'
 import { ReadingService } from '../src/services/reading.js'
 import { readSystemProxy, resolveProxyUrl } from '../src/services/proxy.js'
 import { makeTempDir, trackService } from './temp-dir.js'
-import { classifyAudits, messageSkeleton } from './content-audit-classify.js'
+import { classifyAudits, messageSkeleton, searchFaceStageOf } from './content-audit-classify.js'
 
-// 正文链路全量审计（DSH_CONTENT_AUDIT=1 才跑——全量真打网络，十几分钟量级；不进常规集）
+// 正文链路全量审计（DSH_CONTENT_AUDIT=1 才跑——全量真打网络，十几分钟量级；不进常规集）。
+// 探针（DSH_REPROBE）只验搜索面：「verified」≠ 正文可读。本审计补后半条链：每源「搜索 → 目录 →
+// 正文（多章采样）」逐段实测，失败按 stage + 错误类分桶落盘 .superpowers/content-audit/（不入库）。
 //
-// 探针（DSH_REPROBE）只验搜索面：「verified」≠ 正文可读。本审计补的是后半条链：
-// 每源「搜索 → 目录 → 正文（多章采样）」逐段实测，失败按 stage + 错误类 + 段级定位
-// 分桶落盘到 .superpowers/content-audit/（过程产物，不入库）。
+// **它是审计报告，不是通过率门**：分桶读数靠人判，代码只断言审计完整性（每个选中源都得出 stage），
+// 红即工具坏——通过率读报告的 stageCount / buckets。
 //
-// **它是审计报告，不是通过率门**：站点侧抖动与规则失效在分桶里靠人看，代码不替读者判
-// 「多少算够」——所以本文件唯一的断言是审计完整性（每个注册源都得出 stage），红即工具坏。
-// 通过率口径读报告（`stageCount` / `buckets`），README 与 AGENTS 也按「审计报告」描述它。
-//
-// 出站姿态与生产同口径：resolveProxyUrl（config > 环境变量 > 系统代理 > 直连），
-// 否则「浏览器能开、读者打不开」的代理源会被误报成规则失败。
+// 出站姿态与生产同口径（resolveProxyUrl），否则代理源会被误报成规则失败。
+// 旋钮：DSH_AUDIT_KEYWORDS / WORKERS / CHAPTERS / ONLY（`DSH_AUDIT_ONLY='名字1,名字2'` 桶级复跑）。
 
 interface ErrInfo {
   name: string
@@ -37,15 +34,18 @@ interface SourceAudit {
   id: string | null
   name: string
   baseUrl: string
-  stage: 'import' | 'search' | 'no-book-url' | 'toc' | 'content-error' | 'content-partial' | 'ok'
+  stage: 'import' | 'search' | 'search-no-hit' | 'no-book-url' | 'toc' | 'content-error' | 'content-partial' | 'ok'
   searchKeyword?: string
   bookTitle?: string
   bookKey?: string
   tocCount?: number
   chapters?: ChapterSample[]
   error?: ErrInfo
+  /** 搜索面收到的条目数（书名为空被丢的不算）——没取到带地址的条目时，这一位就是
+   *  `search-no-hit`(0) 与 `no-book-url`(>0) 的分家依据 */
+  hits?: number
   /** 搜索面书目字段的到货读数（`fieldsOf` 在选中那一轮上数出来的）：
-   *  `declaresKind` = 该源 raw 里 `ruleSearch.kind` 非空（分母按对面真正读的这一位算） */
+   *  `declaresKind` = 该源 raw 里 `ruleSearch.kind` 非空（分母按真正落到链路里的这一位算） */
   fields?: { hits: number; withKind: number; withWordCount: number; declaresKind: boolean; declaresWordCount: boolean }
 }
 
@@ -72,9 +72,8 @@ describe.skipIf(process.env.DSH_CONTENT_AUDIT !== '1')('正文链路全量审计
   it('sources.json 全量正文审计 → 逐段失败分桶 + 报告落盘', { timeout: 7_200_000 }, async () => {
     const sj = path.join(process.env.DSH_HOME ?? path.join(os.homedir(), '.dsh'), 'novel', 'sources.json')
     const dir = await makeTempDir('novel-audit-')
-    // 审计口径：把真实 sources.json 拷进临时数据根直接加载（生产同口径——不重导 normalize），
-    // 并把 enabled 全置 true：用户注册表里 227/228 源被停用（正因为读不出正文），
-    // 审计要回答的是「这些源的链路到底通不通」——启停状态不参与判定
+    // 审计口径：拷真实 sources.json 进临时数据根直接加载（生产同口径，不重导 normalize），
+    // enabled 全置 true——审计问「链路通不通」，启停状态不参与判定
     const raws = JSON.parse(await fs.readFile(sj, 'utf8')) as Array<Record<string, unknown>>
     for (const s of raws) s.enabled = true
     await fs.writeFile(path.join(dir, 'sources.json'), JSON.stringify(raws), 'utf8')
@@ -83,9 +82,8 @@ describe.skipIf(process.env.DSH_CONTENT_AUDIT !== '1')('正文链路全量审计
     const svc = trackService(await ReadingService.create({ dir, proxyUrl }))
     console.log(`[audit] 源总数 ${raws.length}；出站代理 ${proxyUrl ?? '(直连)'}`)
 
-    // 注册表直读：每条源的 id/name/baseUrl 来自 sources.json 本身（生产同口径）
-    // 声明位按对面读的**两处**算：对象方言 `ruleSearch.kind` 与平铺方言顶层 `ruleKind`
-    // （本库现量平铺为 0，但分母漏一处会让到货率虚高——instrument 不能跟着本库形状走）
+    // 注册表直读（生产同口径）。声明位按**两处**算：对象方言 `ruleSearch.kind` 与平铺顶层 `ruleKind`
+    // ——分母漏一处会让到货率虚高，instrument 不能跟着本库形状走
     const nonEmpty = (v: unknown) => typeof v === 'string' && v.trim() !== ''
     const declares = (raw: unknown, nested: string, flat: string) => {
       const o = raw as Record<string, unknown> | undefined
@@ -109,7 +107,13 @@ describe.skipIf(process.env.DSH_CONTENT_AUDIT !== '1')('正文链路全量审计
     const chapterIdxs = (process.env.DSH_AUDIT_CHAPTERS ?? '0,2,5,mid')
       .split(',').map((s) => s.trim()).filter((s) => s !== '')
 
-    const queue = [...ids.entries()]
+    // 桶级复跑：DSH_AUDIT_ONLY 只审名字含任一子串的源——没有过滤口就只能整轮重打，
+    // 网络噪声还会把复跑读数冲掉。
+    const only = (process.env.DSH_AUDIT_ONLY ?? '').split(',').map((s) => s.trim()).filter((s) => s !== '')
+    const selected = only.length === 0 ? ids : ids.filter((s) => only.some((o) => s.name.includes(o)))
+    console.log(`[audit] 待审源 ${selected.length}/${ids.length}${only.length === 0 ? '' : `（DSH_AUDIT_ONLY=${only.join('|')}）`}`)
+
+    const queue = [...selected.entries()]
     let done = 0
     await Promise.all(Array.from({ length: workers }, async () => {
       for (;;) {
@@ -135,13 +139,11 @@ describe.skipIf(process.env.DSH_CONTENT_AUDIT !== '1')('正文链路全量审计
     const outDir = path.resolve(fileURLToPath(new URL('..', import.meta.url)), '.superpowers', 'content-audit')
     await fs.mkdir(outDir, { recursive: true })
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-    // 归因单点在 content-audit-classify：引擎类失败按「本仓缺口 / 刻意闸口 / 站点侧 / 网络侧」
-    // 分开计数，residual = host-gap + unattributed——兼容目标判据读的是这个数，不是三种
-    // error name 混在一起的大数（混着读会把「页面没这结构」算成本仓欠账，也把本仓缺口藏起来）
+    // 归因单点在 content-audit-classify：residual = host-gap + unattributed，兼容目标判据读这个数
+    // 而不是三种 error name 混着的大数（混读会把「页面没这结构」算成本仓欠账）
     const classified = classifyAudits(audits)
-    // 书目字段到货读数（只算搜索面）：kind/wordCount 的读取异常按对面口径被吞成 null，
-    // 失败分桶查不到它们——「字段接进了链路」与「值真的到了」是两件事，这一条量后者。
-    // 分母用 `ruleSearch.kind` 非空（对面读的就是这一位；详情面的 kind 不在这条链路里）。
+    // 书目字段到货读数（只算搜索面）：字段级异常被吞成 null，失败分桶看不见——量的是「值真的到了」
+    // 而非「接进了链路」；分母用 `ruleSearch.kind` 非空（详情面的 kind 不在这条链路）。
     const arrival = (field: 'withKind' | 'withWordCount', declares: 'declaresKind' | 'declaresWordCount') => {
       const withHits = audits.filter(a => a.fields?.[declares] === true && (a.fields?.hits ?? 0) > 0)
       const arrived = withHits.filter(a => (a.fields?.[field] ?? 0) > 0)
@@ -184,9 +186,9 @@ describe.skipIf(process.env.DSH_CONTENT_AUDIT !== '1')('正文链路全量审计
       console.log(`  ! ${i.name} [${i.attribution}] ${messageSkeleton(i.message)}`)
     }
     console.log(`报告：${reportPath}`)
-    // 审计完整性：注册表里每个源都必须落进某一个 stage——漏审（循环中断 / 提前 return）
-    // 会让「通过率」读数失真，那是本文件唯一能机器判的事。
-    expect(audits.length).toBe(ids.length)
+    // 审计完整性：每个**被选中的**源都必须落进某个 stage——漏审会让通过率读数失真，
+    // 这是本文件唯一能机器判的事。
+    expect(audits.length).toBe(selected.length)
   })
 })
 
@@ -203,6 +205,9 @@ async function auditOne(
   let hit: { title: string; url: string | null } | null = null
   let usedKeyword = ''
   let fields: SourceAudit['fields']
+  // 逐词重试期间见过的**最大条目数**：没取到带地址的条目时，靠它把「一条都没出」
+  // （列表规则零命中）与「出了条目但地址全 null」（bookUrl 规则）分开——两者下一步动作不同
+  let maxHits = 0
   for (const kw of keywords) {
     try {
       const groups = await svc.search(kw, { sourceIds: [src.id] })
@@ -211,12 +216,12 @@ async function auditOne(
       if (g.error !== undefined && g.error !== null) {
         return { ...base, stage: 'search', searchKeyword: kw, error: { name: g.error.code, message: g.error.message.slice(0, 400) } }
       }
+      maxHits = Math.max(maxHits, g.hits.length)
       const h = g.hits.find((x) => x.url !== null) ?? null
       if (h !== null) {
         hit = { title: h.title, url: h.url }
         usedKeyword = kw
-        // 书目字段到货读数：字段级异常已被 kindFieldOf/wordCountFieldOf 吞成 null，
-        // 审计的失败分桶看不见它们——「实现了」与「值到了」的差别只能靠这一行现量。
+        // 字段到货现量：字段级异常被吞成 null，失败分桶看不见——「实现了」与「值到了」的差别靠这行
         fields = {
           hits: g.hits.length,
           withKind: g.hits.filter((x) => x.kind !== null && x.kind !== '').length,
@@ -231,7 +236,7 @@ async function auditOne(
     }
   }
   if (hit === null || hit.url === null) {
-    return { ...base, stage: 'no-book-url', searchKeyword: keywords.join('/') }
+    return { ...base, stage: searchFaceStageOf(maxHits), searchKeyword: keywords.join('/'), hits: maxHits }
   }
   const withBook = { ...base, searchKeyword: usedKeyword, bookTitle: hit.title, bookKey: hit.url, ...(fields === undefined ? {} : { fields }) }
 

@@ -13,7 +13,7 @@ const PAGES: Record<string, string> = {
   'https://s.com/book/1/': '<html><body><div class="b ch"><a href="/c/1.html">第一章</a></div></body></html>',
   'https://s.com/c/1.html': '<html><body><div id="content">正文</div></body></html>',
 }
-async function makeCaseDir(): Promise<string> {
+async function makeCaseDir(capturedAt = 1): Promise<string> {
   const dir = await makeTempDir('compat-h-')
   await fs.mkdir(path.join(dir, 'pages'), { recursive: true })
   let i = 0
@@ -24,7 +24,7 @@ async function makeCaseDir(): Promise<string> {
     pages[url] = f
   }
   await fs.writeFile(path.join(dir, 'source.json'), JSON.stringify(rawSource), 'utf8')
-  await fs.writeFile(path.join(dir, 'manifest.json'), JSON.stringify({ keyword: '书', capturedAt: 1, pages }), 'utf8')
+  await fs.writeFile(path.join(dir, 'manifest.json'), JSON.stringify({ keyword: '书', capturedAt, pages }), 'utf8')
   return dir
 }
 
@@ -53,6 +53,16 @@ describe('compat harness（离线自测）', () => {
     const md = renderReport([ok])
     expect(md).toContain('全链路跑通 1 条')
     expect(md).toContain(`| ${ok.caseName} | ✅ |`)
+    // 分母构成按数据自述：树里只有手写基线时，报告头**不许**宣称有真站采集（红检：把
+    // `renderReport` 的头注改回写死「两类」措辞即红）。详情面读数列同口径——断言了就要看得见。
+    expect(md).toContain('本批 0 条真站采集 + 1 条合成基线')
+    expect(md).toContain('| 详情 kind/wordCount |')
+  })
+  it('renderReport：采集来的 case（manifest 带真采集时刻）计入真站侧', async () => {
+    const [c] = loadCases(await makeCaseDir(Date.now()))
+    const ok = await runCase(c)
+    expect(ok.fromCapture, '采集时刻在 manifest 里，判据却读不到——分母构成会报错').toBe(true)
+    expect(renderReport([ok])).toContain('本批 1 条真站采集 + 0 条合成基线')
   })
   it('makeReplayFetch 未命中 URL 的确定性报错（补 capture 的指引）', async () => {
     const [c] = loadCases(await makeCaseDir())

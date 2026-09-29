@@ -3,7 +3,7 @@ import type { LocalImportWarning } from '../../shared/wire.js'
 /**
  * 告警层：与「XHTML 转换」「资源验证」都不相干的一层，只放两样——同类告警的**合并器**与**码表**。
  *
- * 为什么单独一层（2026 评审记的耦合）：`EpubWarningLog` 原先住在 `documents.ts`，只做资源验证的
+ * 为什么单独一层（此前的一处耦合）：`EpubWarningLog` 原先住在 `documents.ts`，只做资源验证的
  * `resources.ts` 就得按类型回头看转换模块取日志形状；更糟的是三个码字面量在两个模块各抄了一份
  * （`epub-removed-active-content` / `epub-active-attribute` / `epub-css-attribute`）。码是**稳定
  * 标识**（服务层原样持久化、UI 按它分流、文档按它记账），抄两份等于让同一件事有两个名字。
@@ -13,8 +13,7 @@ import type { LocalImportWarning } from '../../shared/wire.js'
 
 /**
  * 每个键最多留几条**细节例子**：`list()` 只展示前三，留更多既没人读，也把 `add` 拖成 O(n²)——
- * 实测一部含三万条互不相同外链的正文（79 KB，远在各项字节预算内）会在这里同步阻塞 13 秒，
- * 而那期间宿主线程什么都不干。
+ * 细节互不相同的大部头曾把这里拖成十几秒的同步阻塞，而那期间宿主线程什么都不干。
  */
 const MAX_DETAILS = 3
 

@@ -6,10 +6,11 @@ import { RuleEvalError } from './errors.js'
  *
  * 语义钉死：
  * - 对整页文本全局扫描（自动补 `g`；已有 `g` 不重复加）。
- * - 每个匹配 → 一行 `rows`，行内是捕获组 group 1..n；
- *   无捕获组 → 单元素行 `[fullMatch]`。
+ * - 每个匹配 → 一行 `rows`，行内是 **group 0（整段）+ 捕获组 1..n**；
+ *   无捕获组 → 单元素行 `[fullMatch]`（整段即全部）；未参与的 `(x)?` 组落 `''`。
  * - 产物 `rows: string[][]` 永不压平——字段映射按组号由调用方做
- *   （service/工具层用 `rows[i][n]`）。
+ *   （`service`/工具层的条目取值走 `bridge.rowParts`：条目 = 组 1..n，
+ *   group 0 只供字段规则的 `$n` 绑定用，见 `regex-row.ts`）。
  * - 零匹配 → `List{items:[]}`（AllInOne 整页扫不到的合法零条目，
  *   区别于段级 Miss）。
  * - 非法正则 → RuleEvalError（hits=0，段级定位，消息含坏 pattern）。
@@ -18,9 +19,9 @@ import { RuleEvalError } from './errors.js'
  * - 零长度匹配强制 `lastIndex++` 前进，防死循环。
  */
 /**
- * 行内标志前缀（Java/legado 正则写法 `(?s)` / `(?i)` / `(?si)`——JS 无行内标志语法）：
+ * 行内标志前缀（正则的行内标志写法 `(?s)` / `(?i)` / `(?si)`——JS 无行内标志语法）：
  * 出现在模式开头时剥掉并转成 JS flags（s=dotAll、i、m、u；其余字符不剥，编译期如实报错）。
- * 真实源若夏 `:(?s)(\d+)" class="…` 全靠它——此前直接喂 new RegExp 必炸 Invalid group。
+ * 真实源有 `:(?s)(\d+)" class="…` 形态——曾直接喂 new RegExp 必炸 Invalid group。
  */
 const INLINE_FLAG_RE = /^\(\?([imsu]+)\)/
 
@@ -50,7 +51,8 @@ export function evalAllInOne(
   const rows: string[][] = []
   let m: RegExpExecArray | null
   while ((m = re.exec(page)) !== null) {
-    rows.push(m.length > 1 ? m.slice(1) : [m[0]])
+    // 未参与的 `(x)?` 组在 JS 里是 undefined，对面给 ""——按空串收，`$n` 才能直接拼
+    rows.push(Array.from(m, (v) => v ?? ''))
     if (m[0] === '') re.lastIndex++ // 零长度匹配强制前进，防死循环
   }
   return rows.length > 0 ? { kind: 'matches', rows } : { kind: 'list', items: [] }

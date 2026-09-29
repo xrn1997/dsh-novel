@@ -41,7 +41,7 @@ describe('源会话：脚本可见状态经 session 注入', () => {
     const session = createSourceSession()
     const other = createSourceSession()
     await runScript({
-      // 对面是两处存储（v_<source>_<key> 与 sourceVariable_<source>），本仓三张表都按源建档
+      // 键值表与串槽本是两处存储，本仓三张表都按源建档
       code: 'source.put("dom", "x.com"); source.setVariable("SLOT"); "ok"',
       source: 'https://a.com', session, loc, facet: 'rule',
     })

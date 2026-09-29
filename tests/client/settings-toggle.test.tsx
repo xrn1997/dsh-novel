@@ -17,7 +17,7 @@ import type { SourcePublic } from '../../src/client/views/types.js'
 
 const src: SourcePublic = {
   id: 's1', name: '源A', baseUrl: 'https://a.com', enabled: true, groups: ['小说'],
-  type: 'text', status: 'verified', importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false,
+  type: 'text', status: 'verified', importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false, hasLoginUrl: false,
 }
 
 const view = (deps: FakeSettingsDeps): ReactNode =>

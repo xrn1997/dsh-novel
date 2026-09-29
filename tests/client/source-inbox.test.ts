@@ -5,7 +5,7 @@ import type { SourcePublic } from '../../src/client/views/types.js'
 
 const src = (over: Partial<SourcePublic> & { id: string }): SourcePublic => ({
   name: over.id, baseUrl: `https://${over.id}.com`, enabled: true, groups: [],
-  type: 'text', status: 'verified', importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false,
+  type: 'text', status: 'verified', importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false, hasLoginUrl: false,
   ...over,
 })
 

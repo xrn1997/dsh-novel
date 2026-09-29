@@ -11,7 +11,7 @@
 - **AI 助手工具**：搜索、读章、目录、书架（含写）、书源管理、导入书源六个工具（`dshnovel_` 前缀），与 UI 共用同一条链路
 - **章节范围导出**：点「⤓ 下载」先弹范围面板（起止章输入 +「整本 / 当前章起」快捷），确认才开下；部分导出文件名带范围后缀（流式下载、显示进度、可随时取消）
 - **本地书导入（TXT / EPUB）**：TXT 走 GBK / UTF-8 自动识别后切章入架；EPUB 2/3 流式排版按 spine 计章，保留原书目录树、正文插图、脚注跳转与返回、基本格式。有损项（被剥离的活动内容、降级的锚点等）落成**持久导入说明**——导入时就地交代，进书后还能在阅读器里重看（见[本地书格式](#本地书格式txt--epub)）
-- **书源管理**（调度台 IA，入口在「小说」视图顶部「书源管理」tab）：**待办收件箱**把坏源/未验证置顶成任务卡（批量重验 / 一键验证，处理完自动消解；卡可「✕ 忽略」——待办是提示，成员集一变会自动回来），读数集中在源列表头的**状态带**（共 N · 已启用 · 已停用 · 未验证 · 坏源）；源列表支持文本/状态/分组过滤、行内启停开关（停用源不参与搜索，随时开回）、编辑模式批量启停/验证/删除（做完留在编辑态、勾选保留，成功进反馈条）、单源试跑下钻、登录支持（`POST /sources/:id/auth` 支持 cookie 录入与 `loginUrl` 脚本执行；「去登录」当前只打开源首页——见 `docs/design/client.md` 已知开口）；导入是弹层（拖放/粘贴），完成事项回流待办箱；删除统一模态二次确认（点名登录态失效，危险区/手输口令退役）
+- **书源管理**（调度台 IA，入口在「小说」视图顶部「书源管理」tab）：**待办收件箱**把坏源/未验证置顶成任务卡（批量重验 / 一键验证，处理完自动消解；卡可「✕ 忽略」——待办是提示，成员集一变会自动回来），读数集中在源列表头的**状态带**（共 N · 已启用 · 已停用 · 未验证 · 坏源）；源列表支持文本/状态/分组过滤、行内启停开关（停用源不参与搜索，随时开回）、编辑模式批量启停/验证/删除（做完留在编辑态、勾选保留，成功进反馈条）、单源试跑下钻、登录支持（`POST /sources/:id/auth` 支持 cookie 录入与 `loginUrl` 脚本执行两形态，按钮按服务端投影分支——见 `docs/design/client.md` 已知开口第 1 条）；导入是弹层（拖放/粘贴），完成事项回流待办箱；删除统一模态二次确认（点名登录态失效，危险区/手输口令退役）
 
 ## 本地书格式（TXT / EPUB）
 
@@ -58,7 +58,7 @@ dsh plugin --profile web add @xrn1997/dsh-novel
 
 npm 安装使用预构建产物，秒装、无需构建授权。也可从 GitHub 源码安装（`dsh plugin --profile web add github:xrn1997/dsh-novel`）：`prepare` 脚本会自动构建，但 pnpm ≥10 首次安装可能报构建脚本被拦截（依赖已装但 `lib/` 未生成），需先在 profile 目录执行 `pnpm approve-builds --all` 再重跑安装命令。
 
-**兼容宿主**：声明分两层，别混。**安装许可**在 `peerDependencies`——`@deepseek-ai/dsh-tools` 逐代显式开口，覆盖 `0.0.1-rc.5` 起 25 个已发宿主（全部 27 个里只除外最早的 `0.0.1-rc.1` / `-rc.2`：它们缺本插件硬注入的 `jobs` 服务，装进去整树会拒绝挂载）。**实测声明**在 `dsh.compatibility.dshReleases`，只写真跑过的三版：`0.1.7-rc.2`（2026-09-26 编译所依 bump 到这一代：`typecheck` 清、全量门 **1826 passed / 2 failed / 25 skipped**、真浏览器图文门 **21/21** 全在 rc.2 的类型面与产物上重跑；那两条失败是 legado 参考仓不在场的**环境红**（`tests/legado-coverage/` 现读对面 checkout，仓不在场即红、不静默跳过），与本插件无关；真机侧走**桌面版 0.1.7-rc.2 应用内 `link:` 装入**，宿主带的共享包正与本仓 peer 对齐——`cordis 4.0.4` / `schemastery 3.18.4`。注意这一代**没有** CLI 侧的 `--profile web --dump-config` 与六工具真调用读数：桌面 profile 被应用独占、CLI 拒写，那条组合树证据仍属 rc.1）、`0.1.7-rc.1`（`dsh --profile web --dump-config` 组合树含本插件、六个 `dshnovel_` 工具真调用通过、`DSH_INSTALL_CHECK` 装载链路绿）与 `0.1.5-rc.1`（此前的真机运行记录）。**同代内 bump 不需要新开 peer 段**（semver 预发布规则按 `major.minor.patch` 认代，见 `docs/reference/dsh-plugin-api.md` 风险第 1 条）。两层都由 `tests/packaging.test.ts` 看住：编译期 devDependency 必须被 peer 区间放行、且必须在实测声明里。宿主发新版后要做三件事——bump 编译版本、给 peer 区间开这一代的口、加实测条目，少一步测试就红。
+**兼容宿主**：声明分两层，别混。**安装许可**在 `peerDependencies`——`@deepseek-ai/dsh-tools` 逐代显式开口，覆盖 `0.0.1-rc.5` 起 25 个已发宿主（27 个里只除外最早的 `0.0.1-rc.1` / `-rc.2`：它们缺本插件硬注入的 `jobs` 服务，装进去整树会拒绝挂载）。**实测声明**在 `dsh.compatibility.dshReleases`，只写真跑过的三版：`0.1.7-rc.2`（2026-09-26 编译所依：`typecheck` 清、全量门 **1844 passed / 0 failed / 26 skipped**、真浏览器图文门 **21/21**；真机走**桌面版应用内 `link:` 装入**，宿主共享包 `cordis 4.0.4` / `schemastery 3.18.4` 与本仓 peer 对齐——这一代**没有** CLI 侧 `--profile web --dump-config` 与六工具真调用读数，那条组合树证据仍属 rc.1）、`0.1.7-rc.1`（`dsh --profile web --dump-config` 组合树含本插件、六个 `dshnovel_` 工具真调用通过、`DSH_INSTALL_CHECK` 装载链路绿）与 `0.1.5-rc.1`（此前的真机运行记录）。**同代内 bump 不需要新开 peer 段**（semver 预发布规则按 `major.minor.patch` 认代，见 `docs/reference/dsh-plugin-api.md` 风险第 1 条）。两层都由 `tests/packaging.test.ts` 看住：编译期 devDependency 必须被 peer 区间放行、且必须在实测声明里。宿主发新版后要做三件事——bump 编译版本、给 peer 区间开这一代的口、加实测条目，少一步测试就红。
 
 卸载：
 
@@ -129,13 +129,19 @@ dsh plugin --profile web remove @xrn1997/dsh-novel
 
 ## 兼容哪些书源
 
-兼容 legado 书源的声明式子集：取值链 / 组合符（`||`、`&&`、`%%`）/ `##` 替换 / AllInOne / JSONPath（含 `.*` 属性通配，且当页面是 JSON 文本时对内容按需解析）/ XPath 子集 / `@put` / `@get` / `@js` 沙箱（脚本完成值语义 + 顶层 `return`/`await` 回落）/ `jsLib` 源级函数库 / `searchUrl` 的 `@js`/`<js>` 形态（沙箱求值出 URL）/ 对象形态方言（**含 `ruleBookInfo.init` 详情上下文初始化**——init 先求值、结果替换后续详情规则与 tocUrl 模板的上下文，`{{$.…}}` 插值按换根后的 JSON 解析）/ `url,{json}` POST 请求（**选项随书 URL 与章节 URL 全程保留**——身份即请求规格，抓取时统一解释）/ 相对 URL / 隐式 CSS 选择器（`#id` / `.class` / 裸 tag / `tag.类` / `tag>子` 组合链 / 纯属性选择器 / 位置索引 `a.0`）/ `!` 排除语法，以及 `@js` 宿主垫片（`java.log` / `getElement` / `setContent` / `cookie` / `source.getVariable` / `source` 等对象）。缺省请求带浏览器 UA（部分站点 WAF 无 UA 直接 403）。
+兼容 legado 书源的声明式子集：取值链 / 组合符（`||`、`&&`、`%%`）/ `##` 替换 / AllInOne / JSONPath（含 `.*` 属性通配，且当页面是 JSON 文本时对内容按需解析）/ XPath 子集 / `@put` / `@get` / `@js` 沙箱（脚本完成值语义 + 顶层 `return`/`await` 回落）/ `jsLib` 源级函数库 / `searchUrl` 的 `@js`/`<js>` 形态（沙箱求值出 URL）/ 对象形态方言（**含 `ruleBookInfo.init` 详情上下文初始化**——先求值、结果替换后续详情规则与 tocUrl 模板的上下文）/ `url,{json}` POST 请求（**选项随书 URL 与章节 URL 全程保留**——身份即请求规格）/ 相对 URL / 隐式 CSS 选择器（`#id` / `.class` / 裸 tag / `tag.类` / `tag>子` 组合链 / 纯属性选择器 / 位置索引 `a.0`）/ `!` 排除语法，以及 `@js` 宿主垫片（`java.log` / `getElement` / `setContent` / `cookie` / `source.getVariable` / `source` 等对象）。缺省请求带浏览器 UA（部分站点 WAF 无 UA 直接 403）。
 
-URL 模板语义与 legado 源码（[legado-with-MD3](https://github.com/gedoor/legado) 续作）逐条对齐：`url,{json}` 选项的逗号两侧允许空白（`,` / `, ` 均可）；模板内 `{{...}}` 按 JS 求值（`{{java.encodeURI(key)}}`、`{{page*2}}` 等），纯变量占位 `{{key}}`/`{{page}}` 保持原有的 URL 编码口径；`&&`/`%%` 组合符对空或 Miss 的分支静默跳过、只合并非空结果（与 legado 的并集语义一致，而非全命中）。
+URL 模板语义按 legado 书源格式对齐：`url,{json}` 选项的逗号两侧允许空白（`,` / `, ` 均可）；模板内 `{{...}}` 按 JS 求值（`{{java.encodeURI(key)}}`、`{{page*2}}`、源级 `jsLib` 定义的全局如 `{{host}}` 等），变量占位 `{{key}}`/`{{page}}` 保持原有的 URL 编码口径；URL 模板里的 js 块可出现在任意位置（`<js>…</js>` 闭区间、`@js:` 吃到串尾、块间字面文本按 `@result` 拼接）；`url,{json}` 里的 `charset` 同时用于**请求体编码**与响应解码（表格体按该 charset 转义，GBK 站点才搜得到）；`&&`/`%%` 组合符对空或 Miss 的分支静默跳过、只合并非空结果（并集语义，而非全命中）。
 
 遇到不认识的语法，本插件选择**报错而不是猜测**——错误信息精确定位到出错的规则段，而不是产出错误的结果。依赖安卓 WebView 或加解密 API 的书源无法在本环境仿真，会明确报告不支持。
 
 项目带有可离线复算的兼容性回放测试（真实源快照 → 搜索 / 目录 / 正文全链路），详见 [compat/README.md](compat/README.md)。
+
+## 致谢
+
+书源兼容语义的开发阶段对读，参考了 legado 及其续作 [legado-with-MD3](https://github.com/HapeLee/legado-with-MD3)（上游 `gedoor/legado` 已下架）。对读的结论以**仓内快照**形式留存：`compat/upstream/snapshot.json`（源根路径集 / 规则实体字段表 / java 宿主方法名集），由开发阶段的门控工具抽取一次；**运行与 CI 都不依赖任何外部 checkout**。
+
+外部出处只允许出现在四处：本文件、`tests/legado-coverage/matrix.ts`（覆盖矩阵）、`docs/design/legado-compat.md`（裁决表）与刷新工具本身；其余地方只讲本插件自己的口径与理由。这条有机器守卫（`tests/legado-coverage/citation-liveness.test.ts`）。
 
 ## 常见问题
 
@@ -197,13 +203,30 @@ pnpm test:pack     # 构建 + 产物自检
 pnpm typecheck     # tsc --noEmit
 ```
 
-**legado 兼容判据三门（`pnpm test` 默认就跑，但依赖本地对面 checkout）**：`tests/legado-coverage/` 里
-`upstream-fields.test.ts`（对面 `data/entities/rule/*.kt` 每个字段都要在覆盖矩阵有归属）与
-`citation-liveness.test.ts`（引用活性：对面 `.kt` 要带目录、任何引用不带行号、不拿不入库笔记当证据）
-**现读对面仓**。默认路径 `C:/develop/GitHub/legado-with-MD3`，不是这里就设
-`DSH_LEGADO_REF=<对面 checkout 路径>`；仓不在场这两门**直接红**（不静默跳过），只有显式
-`DSH_LEGADO_REF=off` 才跳过，且跳过会写进用例名。判据口径与被裁决的缺席面见
-`docs/design/legado-compat.md`。
+**legado 兼容判据六门（`pnpm test` 默认就跑，运行时不需要任何外部 checkout）**：`tests/legado-coverage/` 里
+`coverage.test.ts`（矩阵每行的证据要可回查：实现符号在代码里、测试标题在用例里、不适用锚点在裁决表里；另含
+一挡反向断言——协议表已挂载的宿主方法不得同时被列成「不适用」；还有一挡 **读数时效戳**——每条 `open` 行的
+note 里必须有一个 `2026-MM-DD` 形态的复核日期，且**任何状态**的行只要 note 写了 `N 源` 这类现量读数就必须带日期锚
+（今日复核或写明出处批次皆可，唯独不许没有日期）：`open` 行是待办队列，最危险的不是「还没做」，是旧批读数被当现状用）、
+`inventory-coverage.test.ts`（每个能力单元
+都映射到真实矩阵行）、`upstream-fields.test.ts`（规则实体每个字段都要在覆盖矩阵有归属）与
+`citation-liveness.test.ts`（引用活性：外部出处只许在白名单四处、对面 `.kt` 要带目录、任何引用不带行号、
+不拿不入库笔记当证据、「已知开口第 N 条」那个号必须还在）与 `host-methods.test.ts`（对面 `java` 宿主方法名集的
+归属：每个名字要么挂在沙箱自报的方法面上、要么在矩阵里逐字点名；挂载面探针与 `parse-census` 共用
+`tests/java-surface.ts` 这一份，两处各探一次就会各漂各的）与 `matrix-pointers.test.ts`（矩阵行 id 这个锚的两侧：
+「矩阵 `<id>`」形态的指针必须指到在册的行，反向则要求每条 `open` 行的 id 在设计文档这一侧可达——
+只活在矩阵里的裁决等于没写进那三份文档）。其中 **`upstream-fields` / `citation-liveness` / `host-methods` 三门的分母是仓内快照**
+`compat/upstream/snapshot.json`（规则实体字段表 / 源根路径集与实体类名 / java 宿主方法名集，各一扇门），其余三门
+（`coverage` / `inventory-coverage` / `matrix-pointers`）吃的是矩阵与设计文档本身——`inventory-coverage` 尤其**不读快照**，
+别把它当成路径集那扇门。
+规则语法面与 js 桥面的形态普查（`parse-census`）是**另一条门控**，默认不跑（见下面的 `DSH_PARSE_CENSUS`）。
+快照由**开发阶段**的门控抽取（需要一份对面 checkout）：
+
+```powershell
+$env:DSH_CAPTURE_UPSTREAM='1'; $env:DSH_LEGADO_REF='<对面 checkout 路径>'; pnpm vitest run tests/legado-coverage/capture-upstream-snapshot.test.ts
+```
+
+快照不在场这三门**直接红**（不静默跳过）。判据口径与被裁决的缺席面见 `docs/design/legado-compat.md`。
 
 **默认跳过、需显式打开的门控（四条真实网络 / 真实安装 + 一条真浏览器）**——`pnpm test` 全绿**不覆盖**它们：
 
@@ -217,6 +240,11 @@ $env:DSH_REPROBE='1'; pnpm vitest run tests/reprobe.test.ts
 # 真取到值的比例——这两个字段的读取异常按对面 try/catch 吞掉，失败分桶查不到它们）；
 # 报告落 .superpowers/content-audit/，耗时十几分钟）
 $env:DSH_CONTENT_AUDIT='1'; pnpm vitest run tests/content-audit.test.ts
+# 审计门四个旋钮（都可不设走缺省）：关键词表 / 并发 / 每本抽哪几章 / 只审名字匹配的源
+$env:DSH_AUDIT_KEYWORDS='小说,完本,的'   # 缺省就是三个通用词
+$env:DSH_AUDIT_WORKERS='5'               # 缺省 5 路
+$env:DSH_AUDIT_CHAPTERS='0,2,5,mid'      # 缺省这四档；mid = 目录中点那一章
+$env:DSH_AUDIT_ONLY='书名1,书名2'        # 只审名字含任一子串的源（桶级逐源复跑用；缺省全量）
 
 # 真采集上游（把真实站点抓成 compat fixture 快照）
 $env:COMPAT_CAPTURE='1'; pnpm vitest run --config vitest.compat.config.ts tests/compat/capture.test.ts
@@ -234,15 +262,45 @@ $env:DSH_EPUB_BROWSER='1'; pnpm vitest run tests/browser/epub-reader.test.ts
 > 也是断言——若某条已知缺陷按应有口径写着读数，它就诚实红着、不改成绿（登记见 `docs/design/client.md`
 > 的「已知开口」）；它证明的宿主侧只是仓内最小壳。
 
+### 真宿主冒烟（手工，动的是宿主与环境，属授权项——仓内没有自动化替代）
+
+上面那条 `DSH_INSTALL_CHECK` 只证明**源码装入这一格**：一次性 profile `novel-smoke`、自建 `lib/`、
+断言 bundles 与 `lib/client.js` / `cordis.patch.yml` 就位，跑完自己 `remove`。它**不起宿主**，
+所以不证明插件树真能被挂载、也不证明六个 `dshnovel_` 工具在宿主里跑得通。那两件事只能手工做：
+
+1. **前置**：先 `pnpm build`（`lib/` 是构建产物且不入库，缺它整树拒绝挂载，报
+   `plugin tree failed to load` + `ERR_MODULE_NOT_FOUND`）。宿主 profile 必须**可由 CLI 写**——
+   桌面版应用会独占自己的 profile、CLI 拒写（见上面「兼容宿主」一节对 `0.1.7-rc.2` 的实录），
+   那种情况下这一步做不了，只能按那一格记的「应用内 `link:` 装入」口径走。
+2. **装载与挂载**：`dsh plugin --profile web add github:xrn1997/dsh-novel`（源码装首次要
+   `pnpm approve-builds --all`，否则依赖已装而 `lib/` 没生成）→ `dsh --profile web --dump-config`
+   的组合树里出现本插件 → 起 `dsh web`，看组合树里没有 `plugin tree failed to load`。
+3. **工具面与一条真路径**：六个 `dshnovel_` 工具各真调一次；再走一条真实业务：搜→详情→目录→正文
+   并翻一页（这一条顺带覆盖出站代理与解码链，代理型站点要按 `proxyUrl` 配好再测）。
+
+**它证明什么**：当前宿主版本上「装得进、挂得上、工具面活着、业务链路走得通一次」。
+**它不证明**：任何站点的正文可读率（那是 `DSH_CONTENT_AUDIT` 的分桶报告，且报告不等于通过率）、
+浏览器里的渲染与图片解码（那是 `DSH_EPUB_BROWSER`），也不证明其它宿主版本——每次 bump 宿主版本
+都要重跑这三步，并把结果如实加进上面「兼容宿主」那节的实测名单（`dsh.compatibility.dshReleases`
+由 `tests/packaging.test.ts` 看住，漏一步就红）。
+
 **解析面普查（离线，读本地书源库；不属上面四条真链路门控）**——「legado 能解析的书源本插件也能解析」
 这条目标的进度读数口：把现库**每一条规则串**过 `parseRule`、把**每一个脚本里的 `java.*` 调用**与沙箱
-实际挂载面（对面一侧现读 `help/JsExtensions.kt`）对账，落盘报告并断言「未在册的新形态 = 0」。
+实际挂载面（分母是快照里的 java 宿主方法名集 `javaMethods`；那一名集抽自对面 `help/JsExtensions.kt`，跑这扇门不需要 checkout）对账，落盘报告并断言「未在册的新形态 = 0」。
 
 ```powershell
 $env:DSH_PARSE_CENSUS='1'; pnpm vitest run tests/engine/parse-census.test.ts
 ```
 
-读出来的是「本仓当场拒绝的语法族」与「脚本在调、对面有、我们没挂的桥方法」两张清单（各带条数与源数）。
+读出来的是「本仓当场拒绝的语法族」、「脚本在调、对面有、我们没挂的桥方法」两张清单（各带条数与源数），
+外加一张**需求读数表**：登记册里那些「N 源带值」（发现面 / 搜索翻页 / 章节标记 / 限速 / 登录面 / 桥面方法…）
+一条命令重算一遍，**每行把判据印在数字旁边**（同一个键常有两种数法）。登记册的 open 行还有一张
+`ROW_DEMAND` 绑定表把 note 里引用的数挂到这张表（或桥面的调用名集）上：**数不一致只打印漂移、不判红**——
+分母随用户增删漂，把读数钉死等于每次改库都要改测试；判红的是**绑定本身落空**（行 id 被改名/删掉、
+或那个键再也算不出来），那才是"假判据"级别的错。这张表防的是"复数只能靠某人手写一次性脚本"。
+**零读数另有一条硬判定**：当下数出 0 的判据，必须在一条合成样品（`KITCHEN_SINK`，什么形状都沾一点）
+上数得出非 0——否则那个 0 分不清「真没人用」与「判据接不上任何东西」，而表里多半的键要表达的就是零
+（若干 open 行的重开条件就是"这里的数冒出 1"）。加新的零读数判据时，把它的形状也塞进那条样品。
 
 **分母要定期换，本库不是判据的全部**。「对面能解析的」这个集合比手上这批源大得多：只跑本机库，
 一条从未出现过的写法就永远不会露出来。把另一批**独立**公开书源灌进同一个门（离线，不联网）：
@@ -261,7 +319,7 @@ pnpm vitest run tests/engine/parse-census.test.ts
 
 2026-09-22 第一次换分母（67 条独立源）的产出：`java.post`（9 源在用，已实现）、`java.t2s` /
 `cacheFile` / `toURL` 三条登记入册，规则语法面**未在册新形态仍为 0**。
-数据源或对面 checkout 读不到即红，不静默跳过；在册条目见该文件顶部的 `KNOWN_RULE_SHAPES` /
+数据源或仓内快照 `compat/upstream/snapshot.json` 不在场即红，不静默跳过；在册条目见该文件顶部的 `KNOWN_RULE_SHAPES` /
 `KNOWN_BRIDGE_GAPS`，实现一条就删一条。
 
 ### 架构速览

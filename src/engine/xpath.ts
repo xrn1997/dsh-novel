@@ -7,7 +7,7 @@ import { cleanText } from './dom.js'
 type XPathSegment = Extract<Segment, { kind: 'xpath' }>
 
 /**
- * XPath 子集求值器（630 源 274 条 XPath 规则的实测语法边界驱动）：
+ * XPath 子集求值器（哪几处边界是裁决、为什么不给现量读数，见矩阵行 `a-xpath-subset`）：
  * - 路径：`//` 与 `.//`（上下文内后代——条目作用域语义）/ `/`（子步）；
  * - 节点测试：元素名 / `*` / `text()` / `@attr`（仅限末段——中段属性步宁炸不猜）；
  * - 轴：child（默认）/ parent（`..`）/ following-sibling / preceding-sibling；其他轴（ancestor 等）不支持。
@@ -233,9 +233,8 @@ function parsePredicate(content: string): Predicate {
   if (c === 'text()') return { kind: 'textExists' }
   // 子元素存在（[dd[a]]）
   if (/^[A-Za-z_][\w.-]*$/.test(c)) return { kind: 'elemExists', name: c }
-  // 相对路径存在性谓词（XPath 1.0 的节点集谓词：**非空即真**）。真机实证 li[.//a]
-  // （搬山人小说网 ruleChapterList：卷里「有链接的 li」才是章节行）。属性步按属性节点
-  // 存在性判（testNode 的 attr 分支就是「该元素有这个属性」），故 [a/@href] 同样成立。
+  // 相对路径存在性谓词（XPath 1.0 的节点集谓词：**非空即真**，真源 `li[.//a]` 形态）。属性步按
+  // 属性节点存在性判（testNode 的 attr 分支就是「该元素有这个属性」），故 [a/@href] 同样成立。
   // `//` 起步在谓词里是**文档根**绝对轴，本求值器手里只有上下文节点，不猜成后代——如实抛。
   if (c.startsWith('//')) {
     throw new UnsupportedRuleError(`谓词路径起步不支持: ${content}（谓词内 // 要从文档根取，本求值器只在上下文节点内走轴）`, {

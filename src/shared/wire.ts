@@ -17,13 +17,11 @@
 /** 书源状态：未验证 / 探针通过 / 探针判坏 */
 export type SourceStatus = 'unverified' | 'verified' | 'broken'
 
-/** 书源内容形态（legado bookSourceType：0/-1/缺省=文本，**1=音频，2=图片，3=文件**——
- *  真值锚点 legado-with-MD3 `constant/BookSourceType.kt`；此前本仓注释与映射把 1/2 读反）。
- *  `unknown` = **编码读不懂**（不是 legado 认得的整数值），不是第五种媒介而是「这本文源不规范」：
- *  读不懂不等于文本，一律不进参与集（2026-09 裁定，推翻此前「warning 后按文本处理」——
- *  误标 text 的短剧/漫画源一直混进聚合搜索与文字书架）。它也不写 `status`：探针按搜索面
- *  重判 verified/broken，而这类源的搜索面恰恰是好的，用状态承载会被下一次重验洗白。
- *  本插件当前只支持文本源：导入预检点名拒绝非文本与未知；聚合搜索参与集 = enabled ∧ type==='text'
+/** 书源内容形态（书源格式的 bookSourceType：0/-1/缺省=文本，**1=音频，2=图片，3=文件**）。
+ *  `unknown` = **编码读不懂**（不是认得的整数值），不是第五种媒介而是「这本文源不规范」：
+ *  读不懂不等于文本，一律不进参与集（曾按文本处理，误标的短剧/漫画源混进聚合搜索——已推翻）。
+ *  它也不写 `status`：探针按搜索面重判，这类源的搜索面恰恰是好的，用状态承载会被下一次重验洗白。
+ *  本插件当前只支持文本源：导入预检点名拒绝非文本与未知；参与集 = enabled ∧ type==='text'
  *  （判定单点在 reading 的 participates 谓词）；存量误标由 SourceRegistry.load 按 raw 重推收敛。 */
 export type SourceContentKind = 'text' | 'image' | 'audio' | 'file' | 'unknown'
 
@@ -57,6 +55,9 @@ export interface SourcePublic {
   hasHeader: boolean
   hasAuth: boolean
   authExpired: boolean
+  /** 源是否声明了 loginUrl（派生自 `rules.loginUrl !== null`，与门面 `loginPlan` 同一判据）。
+   *  给 UI 分支用：把「有没有」投影出来，UI 不必靠错误文案猜（服务端 400 是给 API 调用方的）。 */
+  hasLoginUrl: boolean
 }
 
 /** 探针结论（search 面）：verified/broken 口径 + 段级原因透出 */
@@ -101,10 +102,10 @@ export interface SearchHit {
   coverUrl: string | null
   intro: string | null
   lastChapterName: string | null
-  /** 分类（对面 `ruleSearch.kind`；现库 150 源带规则）：原样字符串，不猜成数组 */
+  /** 分类（书源格式的 `ruleSearch.kind`）：原样字符串，不猜成数组 */
   kind: string | null
-  /** 字数（对面 `ruleSearch.wordCount`；现库 42 源带规则）：对面也是"取到什么串给什么"，
-   *  「x.x万字」那层格式化在对面属 App 展示轴（矩阵 `e-word-count-format` 记不适用） */
+  /** 字数（书源格式的 `ruleSearch.wordCount`）：取到什么串就给什么，「x.x万字」那层格式化
+   *  属 App 展示轴（矩阵 `e-word-count-format` 记不适用） */
   wordCount: string | null
 }
 
@@ -119,19 +120,15 @@ export interface SearchGroup {
 }
 
 /** 聚合搜索后台任务的**读面快照**（跨半契约形状；服务端如何持有整轮结果属服务层，不上 wire）。
- *  为什么是「服务端持有 + 显式快照查询」：中央呈现座位一次只渲染一个面板（`main` keyed 槽；
- *  此前 `conversation.view`），浏览器半自持在途循环 ⇒ 切走即丢结果（实测：卸载后剩余批次还
- * 发完、重挂载整轮重打）。
- *  官方另要求「需要可靠恢复的 stateful domain 必须提供 baseline、cursor 或显式 query」
- *  （`docs/reference/dsh-plugin-api.md` §9）——`added`/`next` 就是那个 cursor。
- *  `phase` 与 `JobState` 同一套词汇：UI 的「还在跑吗」判据（`phase !== 'running'`）只此一种。 */
+ *  为什么是「服务端持有 + 显式快照查询」：浏览器半自持在途循环会切走即丢结果；官方另要求
+ *  stateful domain 必须提供 baseline、cursor 或显式 query（docs/reference/dsh-plugin-api.md §9）
+ *  ——`added`/`next` 就是那个 cursor。`phase` 与 `JobState` 同一套词汇：「还在跑吗」判据只此一种。 */
 export interface SearchJobSnapshot {
   id: string
   keyword: string
   phase: 'running' | 'done' | 'failed'
-  /** 用户主动「停止」（`phase='failed'` 而**不是失败**）：UI 据此不报红条、文案说「已停止」，
-   *  已搜出的命中一律保留。为什么不靠 `error` 文案判：那是把 UI 语义寄在一条中文串上，
-   *  且刷新后重读同一轮还得再猜一次——判据要上契约。 */
+  /** 用户主动「停止」（`phase='failed'` 而**不是失败**）：UI 据此不报红条，已搜出的命中保留。
+   *  判据要上契约——靠 `error` 中文文案判是把 UI 语义寄在一条会变的字符串上。 */
   cancelled: boolean
   /** 本轮真实参搜源数（searchPlan 说了算，与「批数」无关） */
   total: number
@@ -165,8 +162,7 @@ export interface BookDetail {
   intro: string | null
   lastChapterName: string | null
   tocUrl: string | null
-  /** 与 SearchHit 同源的两个字段（对面 BookInfoRule 的 kind/wordCount；详情规则缺席时
-   *  回退搜索规则，与 name/author/coverUrl 同一条回落链） */
+  /** 与 SearchHit 同源的两个字段（详情规则缺席时回退搜索规则，与 name/author/coverUrl 同一条回落链） */
   kind: string | null
   wordCount: string | null
 }
@@ -178,9 +174,8 @@ export interface BookDetail {
 export type ShelfProgress = { chapterIndex: number; offsetRatio: number; updatedAt: number }
 
 /** 「这本书读过没有」——存档恢复与书架卡片（在读/未读筛选、进度行）共用这一份判定。
- *  口径是「章 > 0 **或** 章内比例 > 0」：第 0 章里的位置同样是进度。此前两处各写一份且相反
- *  （卡片侧算了比例、阅读器恢复只看 chapterIndex>0），于是同一条存档「在读」与「没读过」
- *  互相矛盾——读第 1 章的人进度永远恢复不了，还会被进书后的视口读数抹平。 */
+ *  口径是「章 > 0 **或** 章内比例 > 0」：第 0 章里的位置同样是进度。曾两处各写一份且相反，
+ *  同一条存档「在读」与「没读过」互相矛盾——单点在此。 */
 export function hasProgress(p: ShelfProgress): boolean {
   return p.chapterIndex > 0 || p.offsetRatio > 0
 }
@@ -202,7 +197,7 @@ export interface ShelfBook {
   addedAt: number
 }
 
-/** 书目元数据字段集（唯一主人）：7 个元数据字段的
+/** 书目元数据字段集（唯一主人）：9 个元数据字段的
  *  「名称 × wire 类型判别 × 归一化」只准活在这张表 + pickShelfMeta 里。
  *  消费方三面：Shelf.applyPatch（保值覆盖遍历表）、shelfBody（客户端 body 构造）、
  *  dispatch.shelfPut（未知 JSON body → 归一化字段）。加一个书目字段 = 改这张表。
@@ -223,10 +218,9 @@ export const SHELF_META = {
 export type ShelfMetaField = keyof typeof SHELF_META
 
 /** 书架**读取面**条目：落盘的 ShelfBook + 来源投影 sourceName。
- *  来源投影 = 服务端 list 时拿 sourceId 去书源注册表 join 出来的源名（与 SearchGroup.sourceName 同一口径）：
- *  源已被删 → null（UI 灰字「来源已删除」），本地书恒 null（本地身份归 LOCAL_SOURCE_ID 判别）。
- *  它不是书目字段：不可 patch、绝不进 shelf.json——所以刻意不进 SHELF_META（进表 = 变成可写元数据）。
- *  加书那刻快照源名是**被否决的方案**：源改名/同址替换复用 id 后名字会陈旧（intake 复用旧 id 见 services.md）。 */
+ *  来源投影 = 服务端 list 时拿 sourceId join 出来的源名：源已删 → null（UI 灰字），本地书恒 null。
+ *  它不是书目字段：不可 patch、绝不进 shelf.json——所以刻意不进 SHELF_META。加书那刻快照源名是
+ *  **被否决的方案**：源改名/同址替换复用 id 后名字会陈旧（见 services.md）。 */
 export type ShelfEntry = ShelfBook & { sourceName: string | null }
 
 /** 书目元数据 patch：null/undefined 键 = 保值（Shelf.update 的 interface 语义，见 shelf.ts） */
@@ -271,6 +265,11 @@ export type ReadingTarget =
  *  `rowSpan`/`colSpan` 只对单元格，其余位置恒 `null`（null = 无该属性，不输出 DOM 属性）。
  *  不设通用 attributes 袋是安全边界：原书未净化属性一旦上 wire 就有被客户端展开进 DOM 的机会。
  *  `id` 是导入期生成的 opaque 稳定串，不是原书 ID（原锚点另经映射表转成本仓 ID）。 */
+/** 内部链接角色（normal 交叉引用 / noteref 脚注引用 / backlink 返回链接）。
+ *  刻意**具名**而不是把字面量埋在 link 变体里：铸造方（EPUB 文档层按 `epub:type` 判）与消费方
+ *  （阅读会话 / 视图）都要引它——两处各抄一份字面量，加一个角色时就只改到一边，另一边静默窄化。 */
+export type LinkRole = 'normal' | 'noteref' | 'backlink'
+
 export type ContentNode =
   | { kind: 'text'; text: string }
   | {
@@ -280,7 +279,7 @@ export type ContentNode =
   | { kind: 'image'; id: string; resourceId: string; alt: string; width: number; height: number }
   | {
       kind: 'link'; id: string; target: ReadingTarget
-      role: 'normal' | 'noteref' | 'backlink'; children: ContentNode[]
+      role: LinkRole; children: ContentNode[]
     }
   | { kind: 'break'; id: string }
   | { kind: 'rule'; id: string }
@@ -527,12 +526,9 @@ export const queries = {
 
 /**
  * 本地资源（插图 / 封面）的**唯一 URL 构造器**：`/novel-api` 前缀 + 资源读口的路径与 query。
- *
- * 为什么必须是 wire 的 helper 而不是各拼一份：服务端要在导入回执里给封面 URL
- * （`services/localbooks.ts` 的 `bookMetaOf` → `SHELF_META.coverUrl`），客户端要给正文插图
- * 一个 `src`（`views/ChapterBody.tsx`）——两处各拼一次，前缀或参数名一改就分叉成两个半场各说各话。
- * `resourceId` 只是不透明 ID，经 `encodeQuery` 编码后当查询参数：书内字符串拼不出第二个参数、
- * 也换不来协议（与「资源 ID 不进磁盘路径」同一条安全面的正面）。
+ * 服务端（导入回执的封面 URL）与客户端（正文插图 src）都必须走这里——各拼一份，前缀或参数名
+ * 一改就分叉。`resourceId` 是不透明 ID，经 `encodeQuery` 编码后当查询参数：书内字符串拼不出
+ * 第二个参数、也换不来协议（与「资源 ID 不进磁盘路径」同一条安全面）。
  */
 export function resourceUrl(bookKey: string, resourceId: string): string {
   return `${NOVEL_API_PREFIX}/${queries.localResource({ id: bookKey, resourceId })}`

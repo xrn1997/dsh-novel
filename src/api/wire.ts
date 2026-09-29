@@ -44,21 +44,35 @@ export function isTrustedRequest(req: Pick<IncomingMessage, 'headers' | 'socket'
   try { return new URL(referer).host === host } catch { return false }
 }
 
+/** JSON 信封体的字节上限（缺省 1MiB）。**这个数是唯一主人**：调用方要放宽就传参，别再写第二个字面量。 */
+export const DEFAULT_JSON_BODY_MAX_BYTES = 1024 * 1024
+
 /**
- * 聚合请求体为 JSON。空 body → fallback；超限 → 413；非法 JSON → 400。
+ * 带上限的流式读 body：**两份字节上限逻辑的唯一实现**（JSON 信封体与本地导入的原始字节共用它——
+ * 此前各写一份流式计数循环）。超限即抛 413；`overMessage` 由调用方给，因为两处的用户措辞不同
+ * （信封体说字节数、上传文件说 MB）。
  * 钉死：超限只 throw 不 destroy（destroy 会断 PassThrough 流）。
  */
-export async function readJsonBody<T>(req: IncomingMessage, fallback: T, maxBytes = 1024 * 1024): Promise<T> {
+export async function readCappedBody(
+  req: IncomingMessage, maxBytes: number, overMessage: (max: number) => string,
+): Promise<Buffer> {
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of req) {
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string)
     size += buf.length
-    if (size > maxBytes) throw new ApiError(`body 超过 ${maxBytes} 字节上限`, 413, 'PayloadTooLarge')
+    if (size > maxBytes) throw new ApiError(overMessage(maxBytes), 413, 'PayloadTooLarge')
     chunks.push(buf)
   }
-  if (chunks.length === 0) return fallback
-  const text = Buffer.concat(chunks).toString('utf8').trim()
+  return Buffer.concat(chunks)
+}
+
+/**
+ * 聚合请求体为 JSON。空 body → fallback；超限 → 413；非法 JSON → 400。
+ * 流读与上限判据归 `readCappedBody`，本函数只管「读出来的字节是不是 JSON」。
+ */
+export async function readJsonBody<T>(req: IncomingMessage, fallback: T, maxBytes = DEFAULT_JSON_BODY_MAX_BYTES): Promise<T> {
+  const text = (await readCappedBody(req, maxBytes, (max) => `body 超过 ${max} 字节上限`)).toString('utf8').trim()
   if (text === '') return fallback
   try {
     return JSON.parse(text) as T

@@ -2,12 +2,9 @@
  * 阅读器懒加载决策（纯函数——缺陷修复抽出，可单测）。
  *
  * 触发口径用「未载边界哨兵相对视口的 top」，**不用**容器 scrollTop/scrollHeight。理由两层：
- * ① 历史实测（conversation.view 时代）——滚动落在宿主 resident scrollport 上、阅读器自己的
- * 容器 `clientHeight == scrollHeight` 永不滚（无头实测 97541 = 97541），旧口径
- * `scrollHeight - scrollTop - clientHeight < 2 屏` 两个方向都失效：容器不滚 → 事件不来；
- * 912 章占位块又把 scrollHeight 撑成整本书高（97579px）→ 真滚了也只在全书末尾 1% 才触发。
- * ② 判据与「谁在滚」解耦——滚动容器身份随宿主挂载点变过一次（a9f35f7 迁全局面板，
- * 病史见 docs/design/client.md），视口相对的哨兵在任何 scrollport 下都成立。
+ * ① 容器 scrollTop/scrollHeight 口径在阅读器自己的容器 `clientHeight == scrollHeight`（永不滚）
+ * 时两个方向都失效，且占位块会把 scrollHeight 撑成整本书高——哨兵在任何 scrollport 下都成立；
+ * ② 判据与「谁在滚」解耦（滚动容器身份随宿主挂载点变过一次，病史见 docs/design/client.md）。
  * 渲染只出**已载章节**（未载章节不进 DOM），未载边界由哨兵元素表达。
  */
 

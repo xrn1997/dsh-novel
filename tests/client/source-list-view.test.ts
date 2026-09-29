@@ -5,20 +5,16 @@ import type { SourceListUi } from '../../src/client/source-list.js'
 import type { SourcePublic } from '../../src/client/views/types.js'
 
 /**
- * 源列表派生 view-model 的纯函数单测：
- * SettingsSourceList 曾把这些计算写成组件体闭包——零直接覆盖。抽纯函数后逐条钉语义，
- * 尤其是「分组选项集不随状态过滤缩水」这个语义决策（改了它过滤器就不可组合）。
- *
- * 2026 调度台改版的口径变化（本文件随之更新）：状态 chips 退役 → 状态下拉（不带计数），
- * chipCount 从 view-model 移除；坏源/未验证的 id 集合归 source-inbox.ts（待办派生唯一住址），
- * 本 view-model 不再重复派生 brokenIds/unverifiedIds。
- * 2026-09 续：读数落点从「待办箱与列表头部 meta」收敛为**仅列表头部状态带**（stats，本文件
- * 钉死），因为待办卡改成可忽略——读数不能跟着提示一起消失。
+ * 源列表派生 view-model 的纯函数单测（曾是组件体闭包、零直接覆盖）。逐条钉语义，尤其「分组选项集
+ * 不随状态过滤缩水」这个语义决策——改了它过滤器就不可组合。
+ * 2026 调度台改版口径：状态 chips 退役 → 下拉，chipCount 移除；坏源/未验证 id 集合归
+ * source-inbox.ts，本 view-model 不再重复派生。2026-09 续：读数落点收敛为**仅列表头部状态带**
+ * （待办卡可忽略后，读数不能跟着提示一起消失）。
  */
 
 const src = (over: Partial<SourcePublic> & { id: string }): SourcePublic => ({
   name: over.id, baseUrl: `https://${over.id}.com`, enabled: true, groups: [],
-  type: 'text', status: 'verified', importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false,
+  type: 'text', status: 'verified', importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false, hasLoginUrl: false,
   ...over,
 })
 

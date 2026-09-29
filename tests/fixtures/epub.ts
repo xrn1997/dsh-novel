@@ -1,19 +1,14 @@
 import { strToU8, zipSync, type Zippable } from 'fflate'
 
 /**
- * 合成 EPUB（ZIP）fixture 的**唯一表**：`epub2-basic` / `epub3-rich` 这类「内容样本」由包层与正文层的
- * 任务在**同一张表**里追加，未知名字一律抛错——表是封闭的，测试不能凭空造名字，也不能有内容尚不成立
- * 的预留条目（登记了却造不出来，等于给后来者留一个必炸的名字）。
+ * 合成 EPUB（ZIP）fixture 的**唯一表**：内容样本由各层任务在同一张表里追加，未知名字一律抛错——
+ * 表是封闭的，不许有造不出来的预留条目。两条不可让渡的口径：
+ * ① **写与读不同实现**：这里用 fflate 写、生产读取器走 yauzl——用被验方的库造样本，「读得回来」
+ *    只证明那个库自洽；
+ * ② **异常样本由小范围字节修改制造**：在**有效** fixture 的中央目录上改若干字节（每条注释写明改的
+ *    是哪个字段），不手搓整份 ZIP——手搓布局错了，测的就是 fixture 作者的笔误而不是解析器。
  *
- * 本表两条不可让渡的口径：
- * ① **写与读不同实现**：这里用 fflate 写 ZIP，生产读取器走 yauzl——用被验方的库造样本，
- *    「读得回来」只证明那个库自洽；
- * ② **异常样本由小范围字节修改制造**：在**有效** fixture 的中央目录上改若干字节（每条样本的注释
- *    写明改的是哪个字段），而不是手搓整份 ZIP——手搓的字节布局一旦错了，测的就是 fixture 作者的笔误
- *    而不是解析器。
- *
- * mimetype 由 zipOf 强制放首项、store 方式（EPUB OCF 的硬要求：首项未压缩，读端不必解压就能嗅探），
- * 其余条目 deflate；调用方只列自己的条目，不重复声明 mimetype。
+ * mimetype 由 zipOf 强制首项、store（OCF 硬要求），其余 deflate；调用方只列自己的条目。
  */
 
 /** EPUB OCF 的 mimetype 条目名与取值（首项、store） */
@@ -245,23 +240,18 @@ function pngPayloadOf(buf: Buffer, type: string): Buffer {
   throw new Error(`fixture 内部错误：TINY_PNG 里没有 ${type} chunk`)
 }
 
-/** 2×3 PNG，**结构逐项自洽**（签名、IHDR、IDAT、IEND 齐备，三个 CRC 全对）但 IHDR 的位深字段写成 3：
- *  RGBA（色型 6）只许 8/16，任何合规解码器都拒。这是「容器结构过关、字节却渲染不出来」的**最小样本**——
- *  本仓的图片校验只看容器结构（逐 chunk 核 CRC 到 IEND），它会照常放行；真解码归浏览器验收门。
- *  比「截断」更贴近真站上的坏图：被 CDN/分词工具重排过的字节常常长度自洽、语义全坏。 */
+/** 2×3 PNG，**结构逐项自洽**（三个 CRC 全对到 IEND）但 IHDR 位深写成 3（RGBA 只许 8/16，合规解码器
+ *  都拒）：「容器结构过关、字节却渲染不出来」的**最小样本**——本仓校验只看容器结构会照常放行，
+ *  真解码归浏览器验收门。比截断更贴近真站坏图（CDN 重排过的字节常长度自洽、语义全坏）。 */
 const PNG_INVALID_IHDR = (() => {
   const ihdr = Buffer.from(pngPayloadOf(TINY_PNG, 'IHDR'))
   ihdr[8] = 3                                                   // 位深
   return pngOfChunks([['IHDR', ihdr], ['IDAT', pngPayloadOf(TINY_PNG, 'IDAT')], ['IEND', Buffer.alloc(0)]])
 })()
 
-/** 1×1 GIF89a 的**帧数据与扩展尾巴都不存在**，末尾补一个 trailer 0x3B（头与尾都对、长度 33 > 14）：
- *  前 32 字节 = 头(6)+逻辑屏描述符(7)+全局色表(6)+图形控制扩展的前 6 字节（该扩展本应 8 字节，
- *  后面才是图像描述符与数据子块），**从扩展中段截断后直接封尾**。
- *  本仓的 GIF 核对只认魔数与末字节 0x3B（见 `services/epub/resources.ts` 的 verifyGif），所以它会被
- *  当可读资源放行。真解码的裁决在浏览器验收门（`tests/browser/epub-reader.test.ts`）：实测（2026-09
- *  无头 Edge）浏览器**拒绝**这一份——截在扩展中段是结构性坏，阅读器如实报加载失败且不塌预留框。
- *  这条钉子钉的正是这个差异：容器结构过关 ≠ 能渲染，两侧各管一段。 */
+/** 1×1 GIF89a：**帧数据与扩展尾巴都不存在**，从扩展中段截断后直接补 trailer 0x3B（头与尾都对）。
+ *  本仓 GIF 核对只认魔数与末字节，会当可读资源放行；真解码归浏览器验收门——那边实测（2026-09
+ *  无头 Edge）**拒绝**这一份，如实报加载失败且不塌预留框。钉的就是这个差异：结构过关 ≠ 能渲染。 */
 const GIF_DATA_LOST = Buffer.concat([TINY_GIF.subarray(0, 32), Buffer.from([0x3b])])
 
 /** 最小 WebP（RIFF + 单个 VP8L chunk，3×2，25 字节）：VP8L 头里 14 位宽/14 位高按位打包 */
@@ -290,12 +280,9 @@ function be16(value: number): Buffer {
 }
 
 /**
- * 自造的最小 JPEG：SOI + EXIF APP1（可带 Orientation）+ SOF0 + SOS + 熵数据 + EOI。
- *
- * 为什么要自造而不是塞一份真实照片：EXIF 旋转这条判据**只有真的带 Orientation 标签**才触发，
- * 而「无旋转」的对照组又必须是同一套结构——手写段表才能让两张图只差一个字段。段长逐段写足，
- * 读图库（image-size）与资源层的容器核对都按 JPEG 的段规则读；熵数据只是占位字节，
- * 本插件不做像素解码（真解码归浏览器验收门）。
+ * 自造的最小 JPEG：SOI + EXIF APP1（可带 Orientation）+ SOF0 + SOS + 熵数据 + EOI。自造不塞真照片
+ * 是因为 EXIF 旋转判据**只有真带 Orientation 标签**才触发，而对照组必须同一套结构——手写段表才能
+ * 让两张图只差一个字段。段长逐段写足；熵数据是占位字节，本插件不做像素解码。
  */
 function tinyJpeg(opts: { width: number; height: number; orientation: number }): Buffer {
   // TIFF 内部按它自己声明的字节序走：头是小端（`II`），所以 IFD 里的多字节字段也得小端写
@@ -551,8 +538,8 @@ const FIXTURES: Record<string, () => Buffer> = {
   /** 6 条条目：配合缩小的 entries 预算触发条目上限 */
   'entry-limit': () => zipOf([...baselineEntries(), ['OEBPS/ch2.xhtml', chapterXml(2)], ['OEBPS/ch3.xhtml', chapterXml(3)]]),
 
-  // 真实上限的实证（各用例只缩小预算，走的是同一条代码路径，却从没量过设计定的那个数）：
-  // 基线含 mimetype 共 4 条， filler 补到边界两侧各一条。
+  // 真实上限的实证（各用例只缩小预算、从没量过设计定的那个数）：基线含 mimetype 共 4 条，
+  // filler 补到边界两侧各一条。
   /** 恰好 10_000 条：默认预算下必须打得开（边界不许把「等于上限」判成越界） */
   'entry-limit-exact': () => zipOf([...baselineEntries(), ...fillerEntries(10_000 - 4)]),
 
@@ -959,12 +946,10 @@ const FIXTURES: Record<string, () => Buffer> = {
 
   /**
    * 独立 SVG 插图（重建）+ SVG 单图包装封面（解析成它包的那张栅格）：
-   * ① fig.svg 里有渐变引用、style/script 与普通图形——重建时只留白名单，渐变 ID 重写。
-   *    引用写成大写 `URL(#grad)`：CSS 的 url() 大小写不敏感，识别不到就会留下一条指向已改写 ID 的死链
-   *    （图形静默消失），这里把它钉住；
-   * ② cover.svg 只是把 cover.png 缩放包了一层——封面资源应是那张 PNG，而不是这份 SVG 包装。
-   *    cover.svg 里另有一份**不渲染**的 `<defs><linearGradient/></defs>`：包装识别必须跳过 defs，
-   *    否则它会被误判成「不止一张图」而整本报错（真实封面常见这种写法）。
+   * ① fig.svg 有渐变引用、style/script——重建只留白名单、渐变 ID 重写；引用写成大写 `URL(#grad)`
+   *    钉住「CSS url() 大小写不敏感、识别不到就留死链（图形静默消失）」；
+   * ② cover.svg 只是包了一层 cover.png，封面资源应是那张 PNG；它里面**不渲染**的 `<defs>` 必须被
+   *    包装识别跳过，否则误判「不止一张图」而整本报错（真实封面常见这种写法）。
    */
   'epub3-svg-figure': () => zipOf([
     ['META-INF/container.xml', CONTAINER_OPF],
@@ -993,11 +978,9 @@ const FIXTURES: Record<string, () => Buffer> = {
   ]),
 
   /**
-   * 整页 SVG 封面页 + **容器带锚点** + 目录指向它（`wrap0000.xhtml#cover`）。
-   *
-   * 这是真书里的常见写法（一层 `div id="cover"` 包着整页 SVG）。容器在转换后被那张图顶替，
-   * 它承载的锚点必须仍有落点：否则目录那条目标绑到一个树上不存在的 ID——落位退化成章首、
-   * 目录当前项也量不到（锚点是扫描期铸的，而承载它的容器随整页 SVG 一起没了）。
+   * 整页 SVG 封面页 + **容器带锚点** + 目录指向它（`wrap0000.xhtml#cover`，真书常见写法）。
+   * 容器在转换后被那张图顶替，它承载的锚点必须仍有落点——否则目录目标绑到树上不存在的 ID，
+   * 落位退化成章首、目录当前项量不到（锚点是扫描期铸的，而承载它的容器随整页 SVG 没了）。
    */
   'epub3-svg-cover-anchor': () => zipOf([
     ['META-INF/container.xml', CONTAINER_OPF],
@@ -1019,11 +1002,9 @@ const FIXTURES: Record<string, () => Buffer> = {
   ]),
 
   /**
-   * SVG 资源**超过 XML 类别的字节预算**（注释撑到 4 KB，样本整体很小）。
-   *
-   * SVG 是要进解析器的 XML 文档，按 `xmlBytes`（8 MiB 那一档）读；`entryBytes` 是 32 MiB 那一档，
-   * 按它读等于这道闸不存在。两向可验：默认预算下导入成功，预算收到 1 KB 即拒——只断言「拒了」
-   * 证明不了拒的是**这一类**上限。
+   * SVG 资源**超过 XML 类别的字节预算**（注释撑到 4 KB，样本整体很小）。SVG 是进解析器的 XML，
+   * 按 `xmlBytes`（8 MiB 档）读；按 `entryBytes`（32 MiB 档）读等于这道闸不存在。两向可验：默认
+   * 预算导入成功、收到 1 KB 即拒——只断言「拒了」证明不了拒的是**这一类**上限。
    */
   'epub3-svg-oversize': () => svgFigureBook(
     '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">'
@@ -1031,12 +1012,9 @@ const FIXTURES: Record<string, () => Buffer> = {
   ),
 
   /**
-   * 链接里的插图（XHTML5 的 `<a>` 是透明内容模型，图在链接里是**合法书写**）。
-   *
-   * 链接渲染成 `<button>`，缺省按内容**收缩包裹**——里面 `width: 100%` 的插图框于是解析成 auto，
-   * 图未解码时没有内在尺寸，框塌成 0（实测：链接里的 600×900 图在到手前量到 0×0、到手后跳到
-   * 600×900，后文位移近一屏，「图片延迟不改变恢复位置」那条不变量失效）。真排版下的读数在
-   * tests/browser/epub-reader.test.ts。
+   * 链接里的插图（XHTML5 的 `<a>` 是透明内容模型，图在链接里是**合法书写**）。链接渲染成
+   * `<button>` 缺省收缩包裹——里面 `width: 100%` 的框解析成 auto，图未解码时框塌成 0、到手后
+   * 后文位移（真排版读数在 tests/browser/epub-reader.test.ts）。
    */
   'epub3-link-image': () => zipOf([
     ['META-INF/container.xml', CONTAINER_OPF],
@@ -1083,10 +1061,9 @@ const FIXTURES: Record<string, () => Buffer> = {
     '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4"/></svg>')]])),
 
   /**
-   * **真书反例（2026-09-26，Gutenberg #7337 图像版 `pg7337-images-3.epub`）**：spine 第一项是一页
-   * 封面页——整页只有一棵内联 SVG，SVG 里只有一张 `<image>` 指向书内那张封面 PNG。这是 EPUB3 推荐的
-   * 封面写法（同一张 PNG 另以 `properties="cover-image"` + `meta name="cover"` 声明为封面），
-   * 真实出版方与 Gutenberg 都这样发。它原先被「内联 SVG 是唯一内容即拒整本」那条判据杀掉整本书。
+   * **真书反例（2026-09-26，Gutenberg #7337 图像版）**：spine 第一项是封面页——整页一棵内联 SVG、
+   * 只包书内那张封面 PNG。这是 EPUB3 推荐的封面写法（同图另以 `properties="cover-image"` 声明），
+   * 真实出版方都这么发；它原先被「内联 SVG 是唯一内容即拒整本」那条判据杀掉整本书。
    */
   'epub3-svg-cover-page': () => zipOf([
     ['META-INF/container.xml', CONTAINER_OPF],
@@ -1147,13 +1124,9 @@ const FIXTURES: Record<string, () => Buffer> = {
   ]),
 
   /**
-   * 目标锚点落在**内联 SVG 内部**：nav 的一条叶与正文的一条内链都指到 `#ornament`（花饰里的那个 id），
-   * 另一条叶指正文的真锚点 `#top` 当对照组。
-   *
-   * 这份书必须能读：锚点确实在源文档里，是本插件自己把承载它的图形剥掉了（口径见 documents.ts 注③），
-   * 事实清楚 —— 导航目标降级到文档开头（导航仍可用）、正文内链降级成纯文本，各留一条告警；
-   * 若按「锚点不存在」处理，一层装饰性花饰就能把整本拒掉（这正是本样本要钉住的回归）。
-   * 文档里另有可显示文字，所以不触发「内联 SVG 是文档唯一内容」那条拒绝。
+   * 目标锚点落在**内联 SVG 内部**（nav 一叶 + 正文一内链都指 `#ornament`，另有一叶指真锚点 `#top`
+   * 当对照）。这份书必须能读：锚点确实在源文档里，是本插件自己剥掉了承载它的图形——所以导航降级到
+   * 文档开头、内链降级成纯文本，各留告警；按「锚点不存在」处理会让一层花饰拒掉整本（要钉的回归）。
    */
   'epub3-inline-svg-anchor': () => zipOf([
     ['META-INF/container.xml', CONTAINER_OPF],
@@ -1231,10 +1204,9 @@ const FIXTURES: Record<string, () => Buffer> = {
 
   /**
    * **结构完整、浏览器解不开**的两张图（真解码归浏览器验收门 `tests/browser/epub-reader.test.ts`）。
-   * 它们与 `epub3-broken-image`（缺 IEND，导入期就拒）刻意不同：这两份字节逐项过得了本仓的容器结构
-   * 核对（PNG 三个 chunk 的 CRC 全对到 IEND；GIF 头与 trailer 齐备），却没有任何解码器能渲染
-   * （PNG 的 IHDR 位深/色型组合非法；GIF 的帧数据整段不存在）。真站上被 CDN 重排过的图正是这一形态。
-   * 阅读器必须把「解不开」如实显示成加载失败，且**不许塌掉预留的那块盒子**（跳版）。
+   * 与 `epub3-broken-image`（缺 IEND，导入期就拒）刻意不同：这两份过得了本仓容器结构核对（CRC 全对 /
+   * 头与 trailer 齐备），却没有任何解码器能渲染（IHDR 位深非法 / 帧数据整段不存在）——真站上被 CDN
+   * 重排过的图正是这一形态。阅读器必须如实显示加载失败，且**不许塌掉预留框**。
    */
   'epub3-undecodable-image': () => zipOf(pkgEntries(opfOf({
     title: '解不开的图样本',

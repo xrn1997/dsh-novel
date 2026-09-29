@@ -109,15 +109,15 @@ describe('@put / @get 变量', () => {
     expect(ctx1.vars!.bid).toBe('9527') // 裸 JSONPath 照常求值
     const ctx2: EvalContext = { vars: {}, html: JSON.stringify({ ComicID: '88' }) }
     evalPut('{cid:ComicID}', ctx2, L, 'search')
-    expect(ctx2.vars!.cid).toBe('88') // 键访问（legado LinkedTreeMap「键值直接访问」口径）
+    expect(ctx2.vars!.cid).toBe('88') // 键访问：裸值当当前 JSON 条目的字段名取（键不在才字面存）
     const ctx3: EvalContext = { vars: {} }
     evalPut('{img:pic}', ctx3, L, 'toc')
     expect(ctx3.vars!.img).toBe('pic') // 非 JSON 上下文 → 字面存（如实，@get 可诊断）
   })
 
   it('带引号的值是显式字面量，不吃裸值的键访问（@put:{img:"pic"} ≠ @put:{img:pic}）', () => {
-    // 病史（2026-09 审查）：parsePairs 丢掉「值是否带引号」，于是显式字面量也被 legado
-    // LinkedTreeMap 键访问分支接管，静默变成条目里的 pic 字段——用户写的字面量拿不到。
+    // 病史（2026-09 审查）：parsePairs 丢掉「值是否带引号」，于是显式字面量也被
+    // 键访问分支接管，静默变成条目里的 pic 字段——用户写的字面量拿不到。
     const quoted: EvalContext = { vars: {}, html: JSON.stringify({ pic: '不该被取到' }) }
     evalPut('{img:"pic"}', quoted, L, 'search')
     expect(quoted.vars!.img).toBe('pic')                       // 字面量原样落盘
@@ -157,7 +157,7 @@ describe('@put / @get 变量', () => {
   })
 })
 
-describe('变量读链的 source 层兜底（对面 AnalyzeRule.get：每级空串继续下找）', () => {
+describe('变量读链的 source 层兜底（每级空串继续下找）', () => {
   it('本层没有该键 → 落到 source 层', () => {
     const ctx = { vars: {}, sourceVar: () => '7' } as EvalContext
     expect(getScopedVar(ctx, 'cid')).toBe('7')

@@ -8,28 +8,28 @@ export type Combinator = 'first' | 'and' | 'zip'
 export interface CombineOpts {
   /** 抛错时的段级定位（组合符没有自己的段，调用方给 -1 + 原文） */
   loc?: { facet?: Facet; segmentIndex: number; segmentRaw: string }
-  /** 对面两条路径的合并形状不同，必须按用途分派：
-   *  `list`（getElements）分支产出 **Elements**，`&&` 走 `elements.addAll(es)`、`%%` 的驱动长度
-   *  取 `elementsList[0]`（空首支也算一支 ⇒ 整条为空）；
-   *  `value`（getStringList）分支产出 **List&lt;String&gt;**，空/Miss 分支根本不入 `results`，
-   *  驱动长度取 `results[0]`（第一个非空支）。缺省 'value'。 */
+  /** 列表 / 取值两条用途的合并形状不同，必须分派：
+   *  `list` 分支产出**节点集**：`&&` 合并全部节点、`%%` 的驱动长度取**首支**
+   *  （空首支也算一支 ⇒ 整条为空）；
+   *  `value` 分支产出**字符串列表**：空/Miss 分支根本不参与，驱动长度取**第一个非空支**。
+   *  缺省 'value'。 */
   usage?: RuleUsage
 }
 
 /**
- * 组合符求值（语义钉死；`&&`/`%%` 口径按 legado-with-MD3 AnalyzeByJSoup/JSonPath 考证修正）：
+ * 组合符求值（语义钉死）：
  * - `first`（||）：左→右返回首个既非 Miss 也非空 List 的分支；空 List 视为「未取到」继续向右；
  *   全 Miss → Miss；全空 List（无 Miss）→ 空 List（不折叠成 Miss——Miss≠空 List）。
- * - `and`（&&）：legado 语义是「合并所有非空分支」——**空/Miss 分支静默跳过**（`if (!temp.isNullOrEmpty()) results.add`），
+ * - `and`（&&）：语义是「合并所有非空分支」——**空/Miss 分支静默跳过**，
  *   非空结果按序拼接（Value 间 `\n` 连接，List 摊平，**nodes 合并成节点集**）；全空/Miss → Miss。
- *   （此前实现为「任一 Miss → 整体 Miss」——与 legado 相反；而 nodes 分支在这段什么也不贡献，
+ *   （此前实现为「任一 Miss → 整体 Miss」——与本口径相反；而 nodes 分支在这段什么也不贡献，
  *   于是 `tag.li&&tag.ul` 在列表用途下合并成空列表 = 目录整块消失且不报错。）
  * - `zip`（%%）：交叉合并——第 i 轮按分支顺序各取第 i 项，**驱动长度 = 首个参与分支的长度**
- *   （对面两条路径各自的首支，见 CombineOpts.usage），更长分支的尾项不产出。
+ *   （列表 / 取值两条用途各自的首支，见 CombineOpts.usage），更长分支的尾项不产出。
  *   遇 Matches（AllInOne 2-D）→ UnsupportedRuleError（宁炸不猜）。
  * Matches 在 `first` 下透传原样；`and` 下单分支透传、多分支混合 → UnsupportedRuleError（与 `%%` 同款宁炸不猜）。
- * 节点集与字符串分支混在一起合并 → UnsupportedRuleError：对面列表路径的分支只会是 Elements、
- * 取值路径只会是 List&lt;String&gt;，混形状没有对应语义，静默丢掉一侧正是本仓定的「空结果冒充失败」。
+ * 节点集与字符串分支混在一起合并 → UnsupportedRuleError：列表用途的分支只会是节点集、
+ * 取值用途只会是字符串列表，混形状没有对应语义，静默丢掉一侧正是本仓定的「空结果冒充失败」。
  *
  * 设计文档：docs/design/engine.md
  */
@@ -54,7 +54,7 @@ function combineFirst(values: EngineValue[]): EngineValue {
   return { kind: 'list', items: [] } // 全空 List 或零分支 → 空 List（保留 Miss≠空 List 区分）
 }
 
-/** legado `&&`：跳过 Miss/空 List 分支，其余按序合并（全 Value → `\n` 连接单 Value；全 nodes → 节点集；混合形状 → 抛） */
+/** `&&`：跳过 Miss/空 List 分支，其余按序合并（全 Value → `\n` 连接单 Value；全 nodes → 节点集；混合形状 → 抛） */
 function combineAnd(
   values: EngineValue[], usage: RuleUsage,
   loc?: { facet?: Facet; segmentIndex: number; segmentRaw: string },
@@ -70,7 +70,7 @@ function combineAnd(
   }
   if (kept.some((v) => v.kind === 'nodes')) {
     if (!kept.every((v) => v.kind === 'nodes')) {
-      throw new UnsupportedRuleError('&& 混合节点集与字符串结果无法合并（对面列表路径的分支只会是 Elements）', mergeErrCtx(usage, loc))
+      throw new UnsupportedRuleError('&& 混合节点集与字符串结果无法合并（列表路径的分支只会是节点集）', mergeErrCtx(usage, loc))
     }
     return mergeNodes(kept.map((v) => (v as { kind: 'nodes'; nodes: Cheerio<AnyNode> }).nodes))
   }
@@ -89,11 +89,10 @@ function combineZip(
   values: EngineValue[], usage: RuleUsage,
   loc?: { facet?: Facet; segmentIndex: number; segmentRaw: string },
 ): EngineValue {
-  // 参与分支按用途分派（对面两份代码的差别就是行为差别）：
-  //  · 取值路径 getStringList：`if (!temp.isNullOrEmpty()) results.add(temp)` → 空/Miss 不入集合，
-  //    驱动长度 = results[0]（第一个非空支）。
-  //  · 列表路径 getElements：`elementsList.add(el)` 无条件 → 空首支也占第一位，
-  //    驱动长度 = elementsList[0].size（首支为空 ⇒ 整条为空）。
+  // 参与分支按用途分派（两条用途的行为差别就在这）：
+  //  · 取值用途：空/Miss 不入集合，驱动长度 = 第一个非空支。
+  //  · 列表用途：分支无条件入列 → 空首支也占第一位，
+  //    驱动长度 = 首支长度（首支为空 ⇒ 整条为空）。
   const branches = (usage === 'list'
     ? values.map((v) => (v.kind === 'miss' ? { kind: 'list', items: [] } as EngineValue : v))
     : values.filter((v) => v.kind !== 'miss' && !(v.kind === 'list' && v.items.length === 0)))
@@ -104,13 +103,13 @@ function combineZip(
   }
   if (branches.some((v) => v.kind === 'nodes')) {
     if (!branches.every((v) => v.kind === 'nodes')) {
-      throw new UnsupportedRuleError('%% 混合节点集与字符串结果无法合并（对面列表路径的分支只会是 Elements）', mergeErrCtx(usage, loc))
+      throw new UnsupportedRuleError('%% 混合节点集与字符串结果无法合并（列表路径的分支只会是节点集）', mergeErrCtx(usage, loc))
     }
     const sets = branches.map((v) => (v as { kind: 'nodes'; nodes: Cheerio<AnyNode> }).nodes)
     const driver = sets[0]?.length ?? 0
     const out: AnyNode[] = []
     for (let i = 0; i < driver; i++) for (const s of sets) if (i < s.length) out.push(s.toArray()[i])
-    // 首支为空 = 驱动 0 轮 = 整条无条目（对面 elementsList[0]），取位为空即选择失败
+    // 首支为空 = 驱动 0 轮 = 整条无条目，取位为空即选择失败
     if (out.length === 0) return { kind: 'miss', detail: '%% 首个分支为空，交叉取数无从驱动' }
     return mergeNodes(sets, out)
   }

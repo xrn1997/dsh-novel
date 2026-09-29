@@ -15,7 +15,7 @@ import type { NormalizedRules } from './types.js'
  *
  * `Record<keyof NormalizedRules, …>` 只保证**每个字段都有一行**（往 NormalizedRules 加字段
  * 而没在此归类 → `pnpm typecheck` 红）；但**把字段归错行 tsc 抓不住**。所以给一个字段归类前，
- * 先核对 `getTocInner` / `getChapter` / `followOrSingle` 是否真的消费它（`ruleBookList` 行的
+ * 先核对 `getTocInner` / `onlineChapterText` / `followOrSingle` 是否真的消费它（`ruleBookList` 行的
  * 注释就是这条自查的范例）。
  *
  * 刻意**不含** `NovelSource.auth`：登录态刷新会让指纹变，整源缓存每次登录后全灭。
@@ -43,7 +43,7 @@ export const RULE_EPOCH_IMPACT: Record<keyof NormalizedRules, EpochImpact> = {
   ruleTocUrl: 'toc', ruleChapterList: 'toc', ruleChapterName: 'toc', ruleChapterUrl: 'toc',
   ruleDetailName: 'none', ruleDetailAuthor: 'none', ruleDetailCoverUrl: 'none',
   ruleDetailIntro: 'none', ruleDetailLastChapter: 'none',
-  // init 决定详情字段与 tocUrl 模板 `{{$.…}}` 的求值上下文（legado BookInfo.init 换根）——
+  // init 决定详情字段与 tocUrl 模板 `{{$.…}}` 的求值上下文（详情 init 换根）——
   // 改 init 即换目录地址的插值来源 → 目录代际必须失效；正文经 FACES_OF 的 toc 行连带
   ruleDetailInit: 'toc',
   ruleContent: 'content', nextTocUrl: 'toc', nextPageUrl: 'content',

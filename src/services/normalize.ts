@@ -4,7 +4,7 @@ import type { NormalizedRules, SourceContentKind } from './types.js'
 export interface NormalizeIssue { field: string; message: string }
 export interface NormalizeResult {
   ok: boolean
-  /** 必填缺失（bookSourceName/bookSourceUrl/ruleContent） */
+  /** 必填缺失（bookSourceName/bookSourceUrl/ruleContent；非文本源的 bookSourceType 也记在这里） */
   missing: NormalizeIssue[]
   /** header 解析失败、searchUrl 形态不支持等 */
   warnings: NormalizeIssue[]
@@ -24,9 +24,10 @@ const RULE_FIELDS = [
   'ruleChapterUrl', 'ruleContent', 'nextTocUrl', 'nextPageUrl', 'loginUrl',
 ] as const
 
-/** 对象方言子字段 → 模型字段映射（legado 嵌套导出形态）。
- * 搜索上下文（ruleSearch）落搜索面字段；详情上下文（ruleBookInfo）落 ruleDetail*——
- * 实测 508/541 两上下文规则不同，混用会造垃圾标题（open item ③ 同款陷阱）。 */
+/** 对象方言子字段 → 模型字段映射（书源 JSON 的嵌套导出形态）。
+ * 搜索上下文（ruleSearch）落搜索面字段；详情上下文（ruleBookInfo）落 ruleDetail*——两上下文
+ * 规则不同，混用会把搜索条目规则套到详情页造垃圾标题；详情面只由 `ruleDetail*` 承载，
+ * 回落只在 `bridge.detailFieldsOf` 一处。 */
 const DIALECT_MAP: Record<string, Record<string, string>> = {
   ruleSearch: {
     bookList: 'ruleBookList', name: 'ruleBookName', author: 'ruleAuthor', bookUrl: 'ruleBookUrl',
@@ -49,8 +50,8 @@ const DIALECT_MAP: Record<string, Record<string, string>> = {
   },
 }
 
-/** Native（android-ebook 原生规则格式）子字段 → 模型字段映射（legado 规则文档（android-ebook））。
- * 与 legado 方言同构但键名不同：list/name/url 三件套、ruleContent.nextPage/replaceRules[]。 */
+/** Native（android-ebook 原生规则格式）子字段 → 模型字段映射。
+ * 与上面的对象方言同构但键名不同：list/name/url 三件套、ruleContent.nextPage/replaceRules[]。 */
 const NATIVE_MAP: Record<string, Record<string, string>> = {
   ruleSearch: {
     list: 'ruleBookList', name: 'ruleBookName', author: 'ruleAuthor', bookUrl: 'ruleBookUrl',
@@ -81,14 +82,14 @@ export function normalizeSource(raw: unknown): NormalizeResult {
   }
   const obj = raw as Record<string, unknown>
   // 对象方言先展平进一个合并视图（平铺字段优先，对象只填空缺；raw 不动）
-  // Native 判别（与安卓端「顶层含 bookSourceUrl → 脚本格式」互补）：顶层 name+url 且无
-  // bookSourceName → android-ebook 原生规则格式，走 Native 映射；两形态字段并存时 legado 优先。
+  // Native 判别（与「顶层含 bookSourceUrl → 脚本格式」的判别互补）：顶层 name+url 且无
+  // bookSourceName → android-ebook 原生规则格式，走 Native 映射；两形态字段并存时对象方言优先。
   const r = isNativeSource(obj) ? flattenNative(obj, warnings) : flattenDialect(obj, warnings)
   const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null)
 
   const nameRaw = str(r.bookSourceName); if (!nameRaw) missing.push({ field: 'bookSourceName', message: '缺书源名称' })
-  // 名称前缀图标剥离（修复 2026-09-16）：上游书源包惯用分组图标打头（「⚡📂听小说APP」——图标就是
-  // 它自己分组的图标，给 legado 界面看的）；本插件分组已独立成列，名字再带一遍是重复。
+  // 名称前缀图标剥离：真实书源包惯用分组图标打头（「⚡📂听小说APP」——图标是它自己分组的图标，
+  // 给阅读端界面看的）；本插件分组已独立成列，名字再带一遍是重复。
   const name = nameRaw === null ? null : stripLeadingIcons(nameRaw)
   const baseUrl = str(r.bookSourceUrl); if (!baseUrl) missing.push({ field: 'bookSourceUrl', message: '缺书源地址' })
   // bookSourceType：非文本源点名拒绝——图片/音频/文件源规则体系完全不同，落到 ruleContent 校验
@@ -105,11 +106,13 @@ export function normalizeSource(raw: unknown): NormalizeResult {
   const rules = {} as NormalizedRules
   for (const f of RULE_FIELDS) (rules as unknown as Record<string, unknown>)[f] = str(r[f])
   rules.searchUrl = normalizeSearchUrl(r.searchUrl, warnings)
-  // header 单字段两形态（legado BaseSource.getHeaderMap 口径）：`@js:`/`<js>` 规则 → headerRule；
+  // header 单字段两形态：`@js:`/`<js>` 规则 → headerRule；
   // JSON 对象/JSON 串 → header。两者互斥（同一 raw.header 二选一），规则形态不再是「非法 JSON」警告。
   rules.headerRule = normalizeHeaderRule(r.header)
   rules.header = rules.headerRule === null ? normalizeHeader(r.header, warnings) : null
-  // ruleDetail*/ruleChapterList 非 RULE_FIELDS 成员（legado 平铺无此字段名），单独落位
+  // 这里的 ruleDetail*（Name/Author/CoverUrl/Intro/LastChapter/Init）与 ruleChapterList
+  // 非 RULE_FIELDS 成员（平铺方言无此字段名，上面循环取不到），单独落位；
+  // ruleDetailKind/ruleDetailWordCount 已在 RULE_FIELDS 里，不在此列。
   rules.ruleDetailName = str(r.ruleDetailName)
   rules.ruleDetailAuthor = str(r.ruleDetailAuthor)
   rules.ruleDetailCoverUrl = str(r.ruleDetailCoverUrl)
@@ -141,10 +144,9 @@ export const SOURCE_KIND_LABEL: Record<SourceContentKind, string> = {
   text: '文本', image: '图片', audio: '音频', file: '文件', unknown: '未知',
 }
 
-/** 分组串拆分（修复 2026-09-16：一个源可属多个分组，此前只按 `\` 拆——真实导出用的是
- *  半角逗号 `,`（实测本库 201 源全为逗号、零个反斜杠），逗号粘连把多组并成一个假组名，
- *  下拉/筛选全错位。兼容三种分隔符：`,`（主流）/`\`（阅读 App 文档口径）/`，`（全角）；
- *  trim + 去空段 + 段内去重。存量脏数据由 SourceRegistry.load 迁移收敛。 */
+/** 分组串拆分：一个源可属多个分组，兼容三种分隔符 `,`（主流导出）/`\`（旧阅读端写法）/
+ *  `，`（全角）+ trim + 去空段 + 段内去重（曾只按 `\` 拆，逗号粘连把多组并成一个假组名）。
+ *  存量脏数据由 SourceRegistry.load 迁移收敛。 */
 export function splitGroups(raw: string): string[] {
   const out: string[] = []
   for (const part of raw.split(/[\\,，]/)) {
@@ -154,18 +156,16 @@ export function splitGroups(raw: string): string[] {
   return out
 }
 
-/** 名称前缀图标剥离（修复 2026-09-16）：只剥「开头连续的装饰符号段」——\p{So}\p{Sk} 覆盖
- *  ⚡📂🎬 等全部杂项符号，FE0F(变体选择符)/200D(ZWJ) 是 emoji 组合件。实测本库 55 个前缀、
- *  0 个尾部、0 个中部——只剥前缀零误伤；【】等括号是 Po/Ps 不在列（可能是名字本体装饰）。
- *  剥完为空（整名都是图标）→ 保留原名（宁丑不空）。 */
+/** 名称前缀图标剥离：只剥「开头连续的装饰符号段」——\p{So}\p{Sk} 覆盖 ⚡📂🎬 等全部杂项符号，
+ *  FE0F(变体选择符)/200D(ZWJ) 是 emoji 组合件；【】等括号是 Po/Ps 不在列（可能是名字本体装饰），
+ *  尾部/中部不动。剥完为空（整名都是图标）→ 保留原名（宁丑不空）。 */
 export function stripLeadingIcons(name: string): string {
   const stripped = name.replace(/^[\s\p{So}\p{Sk}\uFE0F\u200D]+/u, '').trimStart()
   return stripped === '' ? name : stripped
 }
 
-/** legado bookSourceType → 内容形态（真值锚点：legado-with-MD3 `constant/BookSourceType.kt`
- *  「1 音频、2 图片、3 文件」；此前本仓把 1/2 读反成 image/audio——漫画/短剧源被误标后混进
- *  聚合搜索与文字书架，书架诊断实证）：0/-1/缺省=文本（-1=ALL 在源里罕见，按文本放行）。
+/** 书源内容形态取值（由书源格式定义：0/-1/缺省=文本，**1=音频，2=图片，3=文件**——曾把 1/2
+ *  读反，漫画/短剧源被误标后混进聚合搜索与文字书架）：-1=ALL 在源里罕见，按文本放行。
  *  **唯一映射表**：normalize 的拒绝文案与 SourceRegistry.load 的存量重推共用这一份，
  *  不存在第二份编码抄本（wire 单点纪律）。认不出的值 → 'unknown'：读不懂不等于文本。 */
 export const CONTENT_KIND_OF: Record<number, SourceContentKind> = {
@@ -173,7 +173,7 @@ export const CONTENT_KIND_OF: Record<number, SourceContentKind> = {
 }
 
 /** bookSourceType 原始值 → 内容形态。**认得出才算数**：0/-1/缺省=文本，1/2/3=音频/图片/文件，
- *  其余一律 unknown（legado 侧该字段是 Int，非 number 的形态本身就不是合法编码——不必再分
+ *  其余一律 unknown（该字段在书源格式里是 Int，非 number 的形态本身就不是合法编码——不必再分
  *  「表外值」与「脏值」两类）。`typeof` 那道闸是必需的：数值键会强转，`CONTENT_KIND_OF['0']`
  *  竟返回 'text'。导入预检与存量重推共用此单点，两侧「读不懂」的判据不分岔。 */
 function kindOfSourceValue(v: unknown): SourceContentKind {
@@ -193,9 +193,8 @@ export function contentTypeOfRaw(raw: unknown): SourceContentKind | undefined {
  *  容器、平铺/嵌套优先级、Native 隐式 `@text` 全在导入侧那一份里），只是不跑准入（缺必填 / 非文本
  *  源照样读得出该字段——补推不许顺手拒掉存量源）。
  *  返回：派生到的非空串 / null（raw 是对象但派生到空）/ undefined（raw 不是对象，调用方别动）。
- *  新增需要存量收敛的规则字段时**只加调用点**，不要再写第二个读 raw 的函数：`SourceRegistry.load`
- *  的 ⑥ 原先自带一份自解释（只认对象容器、容器优先于平铺，两处都与导入侧不同），而补推是恒覆盖，
- *  于是那条路会把导入侧派生的正确值改写掉并落盘——读数上看不出来（2026-09 审查实证）。
+ *  新增需要存量收敛的规则字段时**只加调用点**，不要再写第二个读 raw 的函数（曾有第三份自解释，
+ *  与导入侧口径不同、补推恒覆盖 → 把正确值改写落盘，读数上看不出来）。
  *  `rawBookMetaFields` 是这条纪律之前的产物：它自带优先级，故只能只填缺席键。 */
 export function deriveRuleField(raw: unknown, field: string): string | null | undefined {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
@@ -206,7 +205,7 @@ export function deriveRuleField(raw: unknown, field: string): string | null | un
   return typeof v === 'string' && v.length > 0 ? v : null
 }
 
-/** raw.bookUrlPattern（对面 BookSource 的**顶层**字段，不在任何 rule 对象里）：
+/** raw.bookUrlPattern（书源格式的**顶层**字段，不在任何 rule 对象里）：
  *  `SourceRegistry.load` 的存量重推口——旧数据的 rules 没这个键，不重推则嗅探对老源永不生效。
  *  raw 非对象 → undefined（不动）；空白 → null。 */
 export function rawRulePattern(raw: unknown): string | null | undefined {
@@ -225,9 +224,8 @@ const BOOK_META_KEYS = [
 ] as const
 
 /** raw 的分类 / 字数四项（供 `SourceRegistry.load` 存量重推，与 `rawHeaderRule` /
- *  `rawRulePattern` 同族）。这两个字段是后来才接进取值链路的，存量 rules
- *  没这四个键 → 对面读得出的分类/字数对老库**永远是 null**（真机读数实证：接入后审计
- *  字段到货率 0/82 源，缺的就是这一步）。
+ *  `rawRulePattern` 同族）。这两个字段后接进取值链路，存量 rules 没这四个键 → 源里读得出的
+ *  分类/字数对老库**永远是 null**（缺这一步时审计到货率为零）。
  *  读口复用导入时的同一套材料：容器走 `ruleContainer`（字符串化容器照解析，不另立规矩）、
  *  键名走 `DIALECT_MAP`、Native 的裸选择器补隐式 `@text`（`withImplicitText`，与 flattenNative 同口径）。
  *  raw 不是对象 → undefined（调用方别动）。 */
@@ -249,19 +247,15 @@ export function rawBookMetaFields(raw: unknown): Record<string, string | null> |
 /** 规则容器的三态解析结果：拿到对象 / 明确缺席（静默）/ 看着像容器但读不出来（点名）。 */
 type Container = { obj: Record<string, unknown> } | { absent: true } | { unreadable: string }
 /**
- * 规则容器解析（对面给**每一个** rule 对象都写了 JsonDeserializer，两条分支一致：
- * `json.isJsonObject -> fromJson(json, X::class)`、`json.isJsonPrimitive -> fromJson(json.asString, X::class)`
- * ——见 `data/entities/rule/BookInfoRule.kt` 等五份）。也就是**整块规则可以是一段 JSON 字符串**，
- * 公开书源分享里常这么存；本仓此前对非对象容器直接 continue，这类源导入后搜索/目录/正文规则全丢，
- * 表现成「RuleMissing / 缺正文规则」，读起来像源坏了而不是格式没接。
+ * 规则容器解析（书源格式里**每一个** rule 对象都允许两种形态：JSON 对象，或一段 JSON
+ * **字符串**——公开书源分享里常这么存；曾对非对象容器直接 continue，这类源导入后规则全丢，
+ * 表现成「缺正文规则」，读起来像源坏了而不是格式没接）。
  *
- * 判定边界刻意收窄：只有**以 `{` 开头**的字符串才是容器候选。`ruleContent` 这一键位还有本仓支持的
- * 平铺形态（值就是规则串），不以 `{` 开头的串一律照旧当规则用；`"null"`（对面 Converters 会把缺席
- * 对象序列化成这个字面量）与非串非对象都按缺席静默处理。
- * 解析不出对象 → `unreadable`（原文截断带回点名）：对面在这里是 GSON 抛错、整源导入失败，
- * 本仓不拿一段坏 JSON 冒充规则串——`ruleContainer` 与展平后的 `delete` 是一件事的两半，缺了后者
- * 那段坏串会以「规则串」身份活到求值期（`ruleContent` 这个键名本身就是规则位），既不是本仓要的
- * 缺席，也让一块坏字符串连带废掉整源导入。
+ * 判定边界刻意收窄：只有**以 `{` 开头**的字符串才是容器候选——`ruleContent` 这一键位还有本仓
+ * 支持的平铺形态（值就是规则串），不以 `{` 开头的串一律照旧当规则用；`"null"` 与非串非对象按
+ * 缺席静默处理。解析不出对象 → `unreadable`（原文截断带回点名）：不拿一段坏 JSON 冒充规则串。
+ * `ruleContainer` 与展平后的 `delete` 是一件事的两半，缺了后者坏串会以「规则串」身份活到求值期，
+ * 既不是缺席也让整源导入连带废掉。
  */
 function ruleContainer(v: unknown): Container {
   if (typeof v === 'object' && v !== null && !Array.isArray(v)) return { obj: v as Record<string, unknown> }
@@ -296,7 +290,7 @@ function ruleContainers(raw: Record<string, unknown>, warnings: NormalizeIssue[]
  * 为对象时（**或为字符串化的 JSON**，见 ruleContainer），把已映射子字段填进合并视图的目标位
  * （平铺字段已占的位不覆盖——平铺优先）。
  * 未映射且非空的子字段如实聚合 warning（宁吵不瞒）；ruleExplore 整块 v1 未支持（无 explore 面）。
- * ruleContent.replaceRegex 追加 `##regex##` 净化尾（legado 语义：匹配替换为空串）。
+ * ruleContent.replaceRegex 追加 `##regex##` 净化尾（语义：匹配替换为空串）。
  */
 function flattenDialect(raw: Record<string, unknown>, warnings: NormalizeIssue[]): Record<string, unknown> {
   const out: Record<string, unknown> = { ...raw }
@@ -309,10 +303,9 @@ function flattenDialect(raw: Record<string, unknown>, warnings: NormalizeIssue[]
   const unsupported: string[] = []
   for (const [objField, mapping] of Object.entries(DIALECT_MAP)) {
     const obj = containers[objField]
-    // 字符串形态的容器值本身住在这一键上（`ruleContent: '{"content":"…"}'`）——它是容器原文，
-    // 不是平铺规则；不清掉就会挡住 setIfVacant，甚至把整段 JSON 当规则串用下去。
-    // **读不出的那种同样要清**（`ruleContent: '{"content":'`）：那才是「拿一段坏 JSON 冒充规则串」——
-    // 这个键名本身就是规则位，留着它等于给正文面塞一条永远炸的规则，而读数上却像「有规则」。
+    // 字符串形态的容器值住在这一键上——它是容器原文不是平铺规则，不清掉会挡住 setIfVacant、
+    // 甚至把整段 JSON 当规则串用下去；读不出的坏串同清（那才是「坏 JSON 冒充规则串」，
+    // 这个键名本身就是规则位）。两半的另一半见 ruleContainer。
     if (typeof raw[objField] === 'string' && raw[objField].trim().startsWith('{')) delete out[objField]
     if (obj === undefined) continue
     for (const [sub, v] of Object.entries(obj)) {
@@ -320,12 +313,12 @@ function flattenDialect(raw: Record<string, unknown>, warnings: NormalizeIssue[]
       if (field !== undefined) {
         if (typeof v === 'string' && v.length > 0) setIfVacant(field, v)
       } else if (typeof v === 'string' && v.length > 0) {
-        unsupported.push(`${objField}.${sub}`)   // 非空才点名（legado 导出空字段一大片，全列是噪音）
+        unsupported.push(`${objField}.${sub}`)   // 非空才点名（书源导出空字段一大片，全列是噪音）
       }
     }
   }
-  // checkKeyWord → 探针关键词：legado `BookSource.getCheckKeyword` 对含 `http`/`::`/`++`/`--`
-  // 的值弃用回默认（那些串与调试输入语法冲突）。同口径丢弃，探针自然回落通用词序列。
+  // checkKeyWord → 探针关键词：含 `http`/`::`/`++`/`--` 的值弃用回默认
+  // （那些串与调试输入语法冲突）。同口径丢弃，探针自然回落通用词序列。
   if (typeof out.probeKeyword === 'string' && /http|::|\+\+|--/.test(out.probeKeyword)) {
     delete out.probeKeyword
   }
@@ -366,22 +359,58 @@ function normalizeSearchUrl(v: unknown, warnings: NormalizeIssue[]): string | nu
 
 function normalizeHeader(v: unknown, warnings: NormalizeIssue[]): Record<string, string> | null {
   if (v == null) return null
-  let obj: unknown = v
-  if (typeof v === 'string') {
-    try { obj = JSON.parse(v) } catch {
-      warnings.push({ field: 'header', message: 'header 不是合法 JSON，已忽略' }); return null
-    }
+  const obj = parseObjectJson(v)
+  if (obj === undefined) {
+    warnings.push({ field: 'header', message: 'header 不是合法 JSON（严格与单引号两种都不行），已忽略' }); return null
   }
-  if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
-    warnings.push({ field: 'header', message: 'header 形态不是对象，已忽略' }); return null
+  return stringTableOf(obj)
+}
+
+/**
+ * 「对象 JSON」的唯一宽松解析（**头与 URL 选项共用这一份**）：严格 JSON 优先，失败再按
+ * 单引号交换试一次（`{'a':'b'}` → `{"a":"b"}`——真实源大量存在），两种都不行或形状不是对象
+ * 才判失败。**只宽在引号形态，不猜结构**：补逗号、去尾逗号、剥注释都不做。
+ *
+ * 为什么要单点：对面把头 JSON 做成**两段解析**（严格 → 宽松），口径与出处记在矩阵行
+ * `b-header-js` / `b-header-static`；本仓头两条路原先都只有一步 `JSON.parse` ⇒ 单引号形态的头
+ * 对面读得出、我们静默丢。`request.ts` 的选项 JSON 早就允许单引号，头这条是漏掉的第二处，
+ * 故解析口收在这里共用。
+ */
+export function parseObjectJson(v: unknown): Record<string, unknown> | undefined {
+  const tryParse = (t: string): Record<string, unknown> | undefined => {
+    try {
+      const parsed = JSON.parse(t) as unknown
+      return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown> : undefined
+    } catch { return undefined }
   }
+  if (typeof v === 'object' && v !== null && !Array.isArray(v)) return v as Record<string, unknown>
+  if (typeof v !== 'string') return undefined
+  const t = v.trim()
+  if (t === '') return undefined
+  return tryParse(t) ?? tryParse(t.replace(/'/g, '"'))
+}
+
+/** 对象 → 字符串表（只收字符串值；非串值丢弃）——「哪些头条目活着」的唯一筛子：
+ *  `normalizeHeader`、`rawHeaderFields` 与 `request.ts` 的选项内嵌 headers 共用这一份，
+ *  值类型口径（现在是「只收 string」）改一处即三处同改。 */
+export function stringTableOf(obj: Record<string, unknown>): Record<string, string> {
   const out: Record<string, string> = {}
   for (const [k, val] of Object.entries(obj)) if (typeof val === 'string') out[k] = val
   return out
 }
 
+/** 存量补推用：按 raw 现读静态头表（规则形态 `@js:`/`<js>` 返回 undefined = 别动这一格） */
+export function rawHeaderFields(raw: unknown): Record<string, string> | undefined {
+  const v = (raw as { header?: unknown } | null | undefined)?.header
+  if (typeof v === 'string' && /^\s*(@js:|<js>)/i.test(v)) return undefined
+  const obj = parseObjectJson(v)
+  if (obj === undefined) return undefined
+  return stringTableOf(obj)
+}
+
 /** 动态请求头规则判别（**合并视图版**，normalize 入库时用）：header 值是 `@js:`/`<js>` 规则
- *  （BaseSource.getHeaderMap 的 `startsWith("@js:", true)` 考证）→ 返回规则原文；否则 null。 */
+ *  （判别大小写不敏感）→ 返回规则原文；否则 null。 */
 function normalizeHeaderRule(v: unknown): string | null {
   if (typeof v !== 'string') return null
   return v.startsWith('@js:') || v.startsWith('<js>')
@@ -391,8 +420,8 @@ function normalizeHeaderRule(v: unknown): string | null {
 
 /** 动态请求头规则判别（**raw 源版**，供 SourceRegistry.load 存量重推）：
  *  raw.header 是规则字符串 → 原文；raw 在场但非规则 → null；raw 不是对象 → undefined（调用方别动）。
- *  规则形态**不是**「非法 JSON」——它是 legado 的合法 header 形态，旧版 normalize 当坏 JSON
- *  丢弃（顶点小说 4004 的根因），存量靠 load 第七条迁移按 raw 重推。 */
+ *  规则形态**不是**「非法 JSON」——它是书源的合法 header 形态（曾被当坏 JSON 丢弃，存量靠
+ *  load 迁移按 raw 重推）。 */
 export function rawHeaderRule(raw: unknown): string | null | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined
   return normalizeHeaderRule((raw as Record<string, unknown>).header)
@@ -401,7 +430,7 @@ export function rawHeaderRule(raw: unknown): string | null | undefined {
 // ── Native（android-ebook 原生规则格式）────────────────────────────────
 
 /** 判别：顶层字符串 name+url 且无 bookSourceName → Native。
- * legado 标准源必带 bookSourceName，畸形源并存两形态时 legado 优先（标准形态先认）。
+ * 标准形态的源必带 bookSourceName，畸形源并存两形态时标准形态优先（先认）。
  * 导出给请求层：Native 分页语义首页裁页码段（buildSearchRequest.trimFirstPage）依赖此判定。 */
 export function isNativeSource(r: unknown): boolean {
   if (typeof r !== 'object' || r === null || Array.isArray(r)) return false
@@ -412,8 +441,8 @@ export function isNativeSource(r: unknown): boolean {
 }
 
 /** Native 取值字段（终端语义=取元素文本）：裸选择器补隐式 `@text`。
- * legado 规则显式写 `@text`/`@textNodes` 终端；Native 方言裸选择器即「取文本」
- * （legado 规则文档（android-ebook）常用模式表），不补的话引擎链终点剩节点集、服务层按规约抛错。
+ * 对象方言规则显式写 `@text`/`@textNodes` 终端；Native 方言裸选择器即「取文本」
+ * （android-ebook 原生规则格式的常用模式），不补的话引擎链终点剩节点集、服务层按规约抛错。
  * list/attr 字段不在列（ruleBookList/ruleChapterList 要节点集、coverUrl/bookUrl 要属性）。 */
 const NATIVE_TEXT_FIELDS = [
   'ruleBookName', 'ruleAuthor', 'ruleIntro', 'ruleLastChapter', 'ruleKind', 'ruleWordCount',
@@ -426,7 +455,7 @@ const NATIVE_TEXT_FIELDS = [
  *  实现归 grammar.withImplicitText（构词与解析同属一处）。 */
 
 /**
- * Native → 合并视图（与 flattenDialect 同构的目标位）：按 legado 规则文档（android-ebook）语义映射
+ * Native → 合并视图（与 flattenDialect 同构的目标位）：按 android-ebook 原生规则格式语义映射
  * name/url/headers/group、三个规则对象的 list 三件套、ruleContent.nextPage/replaceRules[]；
  * searchUrl 占位符 `{{keyword}}` 改写为内部 `{{key}}`（`{{page}}` 同名不动）；
  * `authorPrefix` 追加 `##^前缀##` 净化尾到详情面作者规则（正则转义）；
@@ -467,7 +496,7 @@ function flattenNative(raw: Record<string, unknown>, warnings: NormalizeIssue[])
   } else {
     put('ruleContent', content) // 字符串形态直通
   }
-  // authorPrefix：详情面作者规则追加 `##^前缀##` 尾（legado ##净化语义；前缀正则转义；
+  // authorPrefix：详情面作者规则追加 `##^前缀##` 尾（## 净化语义；前缀正则转义；
   // 拼串归 grammar.appendTail——越界当场 warning 不产出）
   const info = raw.ruleBookInfo
   if (typeof info === 'object' && info !== null && !Array.isArray(info)) {
@@ -505,7 +534,7 @@ function flattenNative(raw: Record<string, unknown>, warnings: NormalizeIssue[])
   return out
 }
 
-/** replaceRules[] → 逐条 appendTail（##正则##替换 尾；安卓语义：pattern 匹配正则、
+/** replaceRules[] → 逐条 appendTail（##正则##替换 尾；语义：pattern 匹配正则、
  *  replacement 缺省空串=删除、enabled 缺省 true 跳过 false）。构词越界（pattern 含 ## 等）
  *  由 appendTail round-trip 拦下，进 normalize warnings（宁吵不瞒）。 */
 function nativeReplaceTails(base: string, v: unknown, warnings: NormalizeIssue[]): string {

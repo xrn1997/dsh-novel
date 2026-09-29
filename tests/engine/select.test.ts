@@ -24,8 +24,8 @@ describe('链首裸取值终端的上下文（真源 ruleToc.chapterName = "text
 })
 
 describe('点号位置后缀 = 索引列表（对面 ElementsSingle.findIndexSet 的 legacy 分支）', () => {
-  // 对面把 `.` / `:` / `!` 分隔的**每个数字都收成一个索引**（`tag.div.-1:10:2` = 倒数第一、第十、第二），
-  // 冒号不是区间符。本仓原先把 `.a:b` 读成半开切片 → `.0:2` 在四项上取 A、B（对面取 A、C），
+  // `.` / `:` / `!` 分隔的**每个数字都收成一个索引**（`tag.div.-1:10:2` = 倒数第一、第十、第二），
+  // 冒号不是区间符。本仓原先把 `.a:b` 读成半开切片 → `.0:2` 在四项上取 A、B（应为 A、C），
   // 落在目录/列表规则上就是**少一章、错一章**的静默错值。
   const FOUR = '<ul><li>A</li><li>B</li><li>C</li><li>D</li></ul>'
   const at = (rule: string) => import('../../src/engine/evaluate.js')
@@ -42,9 +42,9 @@ describe('点号位置后缀 = 索引列表（对面 ElementsSingle.findIndexSet
   })
 })
 
-describe('列表规则链首 `+` 前缀（对面 BookList / BookChapterList 的入口剥除）', () => {
-  // 对面在**列表入口**先剥 `-`（置 reverse）再剥 `+`（不做事），剥完照常 `getElements(ruleList)`——
-  // 所以 `+tag.li` 在对面出的是整个列表，不是「认不出」。本仓此前不认它：链尾当 CSS/属性段处理
+describe('列表规则链首 `+` 前缀（列表入口剥除）', () => {
+  // **列表入口**先剥 `-`（置 reverse）再剥 `+`（不做事），剥完照常求值后续规则——
+  // 所以 `+tag.li` 出的是整个列表，不是「认不出」。本仓此前不认它：链尾当 CSS/属性段处理
   // ⇒ 恒 Miss ⇒ 搜索列表与目录**一条都不出**（矩阵 a-plus-prefix 原先写「本仓会在解析期炸」，
   // 那句对本仓行为也不成立——本轮实测是 Miss）。
   const html = '<ul><li>A</li><li>B</li></ul>'
@@ -76,6 +76,20 @@ describe('default 选择段', () => {
     const v5 = evalDefault({ kind: 'default', mode: 'children', arg: null, index: null }, $, root(), loc(4, 'children'), 'toc')
     expect((v5 as any).nodes).toHaveLength(2)
   })
+  it('`class.a b` = 同时含两个类（不是后代选择器，也不是把整串当一个类名）', () => {
+    // 三种读法里只有一种能读出现库的真实源：对面把整串当一个类名交给 jsoup（`getElementsByClass`），
+    // 带空格的类名在按空白分词比对 class 属性时不可能命中；曾经直译成 `.x y`（后代选择器）也恒零命中
+    // ——两个类在同一元素上时，后代里没有满足 `.x y` 的东西。本仓解成 `.a.b`（同时含所有类）。
+    // 这一侧是**库里 78 段 / 27 源**（2026-09-28 按 raw 全串重数；旧注「3 源」是当时的读数）赖以读出的语义。
+    // 红检：把 `case 'class'` 改回 `.x y` 的直译即红（同一元素两个类 → 后代选择器零命中）。
+    const H = cheerio.load('<div id="w"><div class="col-12 col-md-6 x"><span>甲</span></div></div>')
+    const hit = evalDefault({ kind: 'default', mode: 'class', arg: 'col-12 col-md-6', index: null }, H, H('#w') as any, loc(0, 'class.col-12 col-md-6'), 'toc')
+    expect(hit.kind).toBe('nodes')
+    expect((hit as any).nodes).toHaveLength(1)
+    // 只含其中一个类 → 不命中（是「同时含」，不是「含任一」）
+    const miss = evalDefault({ kind: 'default', mode: 'class', arg: 'col-12 col-lg-3', index: null }, H, H('#w') as any, loc(1, 'class.col-12 col-lg-3'), 'toc')
+    expect(miss.kind).toBe('miss')
+  })
   it('零命中选择 → Miss', () => {
     const v = evalDefault({ kind: 'default', mode: 'class', arg: 'nope', index: null }, $, root(), loc(0, 'class.nope'), 'toc')
     expect(v.kind).toBe('miss')
@@ -90,7 +104,7 @@ describe('default 选择段', () => {
   it('多索引取位：写入序、越界者逐个丢弃、全越界 → Miss', () => {
     const multi = (...v: number[]) => ({ kind: 'multi', entries: v.map((x) => ({ kind: 'index', value: x })) })
     const at = (index: any) => evalDefault({ kind: 'default', mode: 'class', arg: 'item', index }, $, root(), loc(0, 'x'), 'toc')
-    // 对面 `for (pcInt in indexSet)` 走 LinkedHashSet 插入序：写 [2,0] 出的是「第3个、第1个」
+    // 取位按**插入序**（不是文档序）：写 [2,0] 出的是「第3个、第1个」
     expect((at(multi(2, 0)) as any).nodes.toArray().map((n: any) => n.attribs.class)).toEqual(['item odd', 'item'])
     expect((at(multi(1, 99)) as any).nodes).toHaveLength(1)          // 越界的 99 静默丢弃
     expect(at(multi(5, 9)).kind).toBe('miss')                        // 全越界 → 选择失败
@@ -118,8 +132,8 @@ describe('default 取值段', () => {
     const as = evalDefault({ kind: 'default', mode: 'tag', arg: 'a', index: null }, $, all.nodes, loc(1, 'tag.a'), 'toc') as any
     const texts = evalDefault({ kind: 'default', mode: 'text', arg: null, index: null }, $, as.nodes, loc(2, 'text'), 'toc')
     expect(texts).toEqual({ kind: 'list', items: ['第一章 起点', '第二章 转折', '第三章 高潮'] })
-    // 直接对 li 取 text：legado/Jsoup 口径 = 全部后代文本，故 <a> 与 <span> 的文本都在（粘连：
-    // Jsoup 只在块级元素间补空格，行内元素之间不补——这里与 legado 同形，想要纯章名就 select 到 a）
+    // 直接对 li 取 text：口径 = 全部后代文本，故 <a> 与 <span> 的文本都在（粘连：
+    // 只在块级元素间补空格，行内元素之间不补——想要纯章名就 select 到 a）
     const liText = evalDefault({ kind: 'default', mode: 'text', arg: null, index: null }, $, all.nodes, loc(1, 'text'), 'toc')
     expect(liText).toEqual({ kind: 'list', items: ['第一章 起点2024-01-01', '第二章 转折2024-01-02', '第三章 高潮2024-01-03'] })
   })
@@ -160,7 +174,7 @@ describe('default 取值段', () => {
     expect(v).toEqual({ kind: 'list', items: [] })
   })
   it('text 取后代文本（li 内的 <a> 也算）；ownText 严格直系 → List{[]}', () => {
-    // legado/Jsoup 口径：element.text() 含全部后代；ownText 才是直系。
+    // 口径：text 含全部后代；ownText 才是直系。
     // （曾按「text 亦直系」实现——真实源打不动：笔趣阁正文 `.con@text` 而 .con 里全是 <p>）
     const all = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: null }, $, root(), loc(0, 'class.item'), 'toc') as any
     const t = evalDefault({ kind: 'default', mode: 'text', arg: null, index: null }, $, all.nodes, loc(1, 'text'), 'toc')

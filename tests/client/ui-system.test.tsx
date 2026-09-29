@@ -212,6 +212,8 @@ describe('布局单位与视口约束（阅读器不能被正文高度绑架）'
       .toMatch(/grid-template-columns:\s*repeat\(auto-fit/)
     expect(ruleBody('.novel-todo-card'), '任务卡自包含（读数 + 名单 + 处置动作）').toMatch(/display:\s*flex/)
     expect(ruleBody('.novel-menu'), '行内「⋯」菜单是浮层（锚点 .novel-actions position:relative）').toMatch(/position:\s*absolute/)
+    expect(ruleBody('.novel-menu.up'), '向下放不下时朝上开：`.up` 必须锚底（top 让位）——长列表滚到滚动口底那档，见 docs/design/client.md')
+      .toMatch(/bottom:\s*calc\(100% - 6px\)/)
     expect(ruleBody('.novel-modal.wide'), '导入弹层用宽档（删除确认保持 400px 紧凑档）').toMatch(/width:\s*min\(680px/)
   })
 

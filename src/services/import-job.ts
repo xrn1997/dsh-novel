@@ -33,11 +33,10 @@ const PROBE_CONCURRENCY = 5
 // 任务运行器不再持有 persist 节流常量
 
 /** 宿主后台任务注册表（`ctx.jobs`）在本插件用到的子集。
- *  **本地窄面镜像，不引类型包**：npm 上 `@deepseek-ai/dsh-jobs` 停在 `0.0.1-rc.3`，宿主跑的是
- *  `0.1.7-rc.1`（2026-09-23 复核），且本仓解析不到该包（`docs/reference/dsh-plugin-api.md` 证据 9a + 风险第 10 条）。
- *  照 `src/index.ts` 既有的 `NovelContext` + `*Like` 先例办：只声明用到的成员。
+ *  **本地窄面镜像，不引类型包**（宿主版本快照与不引包的理由：`docs/reference/dsh-plugin-api.md`）：
+ *  照 `src/index.ts` 既有的 `NovelContext` + `*Like` 先例办，只声明用到的成员。
  *  `kind` 用 `string` 是刻意的——注册表把 kind 当作不透明的 id 命名空间（唯一判据是「非空字符串」），
- *  所以自定义 kind 不需要宿主的 `JobKindMap` 合并，id 直接长成 `novel-import-1`。
+ *  自定义 kind 不需要宿主的 `JobKindMap` 合并，id 直接长成 `novel-import-1`。
  *  缺席即不接线（headless 组合与单测直构都走这条），任务语义不受影响。 */
 export interface JobHostSpec {
   kind: string
@@ -223,7 +222,8 @@ export class SourceJobs {
         const i = cursor++
         if (i >= valid.length) return
         const id = valid[i]
-        // 重查（洞3 修复）：任务运行期间源可能被删——取不到就点名跳过，不产生 TypeError 垃圾失败
+        // 重查：任务运行期间源可能被删——取不到就点名跳过，不产生 TypeError 垃圾失败
+        // （此前的缺陷正是这里不重查，undefined 喂给探针 → 抛 TypeError 冒充正常失败）
         const s = this.deps.registry.get(id)
         if (s === undefined) {
           this.issue(state, 'failed', id, '源不存在（运行中被删除，已跳过）')

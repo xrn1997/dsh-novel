@@ -3,10 +3,9 @@ import { saveBlob, streamExport } from './download.js'
 /**
  * 范围导出流编排（从 ReaderView 的 ExportPanel 收出）：start(范围) / cancel / 状态三态 + 卸载 abort。
  *
- * 此前整段住在 ReaderView 里并硬 import streamExport/saveBlob——阅读器因此是三个主视图里
- * 唯一不吃 deps 的（ShelfView/SearchView 都吃且有 views-wiring 测试），导出时序零覆盖。
- * 现在编排自持、依赖经参数注入：视图只接线（onProgress → setState、按钮 → start/cancel、
- * 卸载 → dispose），时序归本 module 单测。
+ * 为什么收出来：整段原先住在 ReaderView 里硬 import 真实现，导出时序零测试覆盖。现编排自持、
+ * 依赖经参数注入：视图只接线（onProgress → setState、按钮 → start/cancel、卸载 → dispose），
+ * 时序归本 module 单测。
  */
 
 /** 导出流依赖（ReaderDeps 的子面）：流式抓取 + 落盘 */

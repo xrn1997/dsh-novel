@@ -13,7 +13,7 @@ export function filterSources(sources: SourcePublic[], query: string): SourcePub
 }
 
 /** 状态下拉过滤：五维单选，与文本过滤交集（先 filterByStatus 再 filterSources）。
- *  读数职责已归待办箱（`source-inbox.ts`），下拉不带计数——旧状态 chips 随改版退役。
+ *  读数归列表头**状态带**（`source-list-view.ts` 的 `stats`），下拉不带计数——旧状态 chips 随改版退役。
  *  'disabled' 维度是 enabled 布尔而非 status——停用与坏源是两个正交维度。 */
 export type StatusFilter = 'all' | 'verified' | 'broken' | 'unverified' | 'disabled'
 

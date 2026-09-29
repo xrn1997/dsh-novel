@@ -5,6 +5,11 @@ import type { ChapterEntry } from './reading.js'
  * （判据单点在 `api/dispatch.ts`），本 module 只在越界时抛——见 `ExportOptions.from` 注。
  * 限流敬畏是第一原则——绝不并行抓章；getChapter 缓存优先语义即天然断点续传。
  */
+/** 范围导出的章间节流（缺省 300ms）。**这个数是唯一主人**：组合根 `index.ts` 的 DEFAULTS
+ *  与 `api/dispatch.ts` 的回退都引它。为什么要有节流：限流敬畏是第一原则——导出是**逐章真抓**，
+ *  不睡就是拿用户的 IP 去打目标站点。 */
+export const DEFAULT_EXPORT_DELAY_MS = 300
+
 export interface ExportDeps {
   getToc(sourceId: string, bookKey: string): Promise<ChapterEntry[]>
   getChapter(sourceId: string, bookKey: string, index: number): Promise<string>

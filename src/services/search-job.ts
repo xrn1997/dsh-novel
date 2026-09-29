@@ -42,7 +42,7 @@ interface Held {
   settle: (outcome: JobOutcome) => void
 }
 
-/** 命中截断：内存上限要有主——640 家不截是无上界（站点侧搜索面本就只取首页） */
+/** 命中截断：内存上限要有主——逐源不截是无上界（站点侧搜索面本就只取首页） */
 function capHits(group: SearchGroup): SearchGroup {
   return group.hits.length <= SEARCH_HITS_CAP_PER_SOURCE
     ? group
@@ -141,7 +141,7 @@ export class SearchJobs {
 
   /** 取消当前这轮（宿主 cancel 与 UI 的「取消搜索」都走这条）。返回：是否真有个在跑的轮次。
    *  刻意**立即结算终态**而不等运行器收手：搜索是读，没有半途写脏的顾虑，读方要的是
-   *  「这一轮到此为止」的确定答复；在途请求回来时因 `phase !== 'running'` 被忽略。 */
+   *  「这一轮到此为止」的确定答复；终态后在途请求不再收货。 */
   cancel(reason?: string): boolean {
     const h = this.current
     if (h === null || h.phase !== 'running') return false

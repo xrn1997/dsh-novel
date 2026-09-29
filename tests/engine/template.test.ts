@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { interpolateUrl, expandPageAngleList } from '../../src/engine/template.js'
+import { interpolateUrl, isPlaceholderExpr, expandPageAngleList } from '../../src/engine/template.js'
 
 describe('URL 模板插值', () => {
   it('基础替换', () => {
@@ -23,7 +23,25 @@ describe('URL 模板插值', () => {
   })
 })
 
-describe('expandPageAngleList（`<a,b,c>` 按页取值，对面 AnalyzeUrl 的 page 段）', () => {
+// 「是不是占位」= 标识符 **且** 在 vars 里或带 `||` 兜底——搜索面照它决定走 JS 求值还是原样编码。
+// 只看词法（旧口径）会把源级 jsLib 定义的全局也当占位（`{{host}}` 得间小说实证：404）。
+describe('isPlaceholderExpr', () => {
+  it('vars 里的标识符与带 || 兜底的形态是占位', () => {
+    expect(isPlaceholderExpr('key', { key: 'x', page: 1 })).toBe(true)
+    expect(isPlaceholderExpr('key||home', {})).toBe(true)
+  })
+  it('裸标识符但不在 vars 里 → 不是占位（交给沙箱按 JS 求值，jsLib 全局靠这条）', () => {
+    expect(isPlaceholderExpr('host', { key: 'x', page: 1 })).toBe(false)
+    expect(isPlaceholderExpr('baseUrl', { key: 'x' })).toBe(false)
+  })
+  it('JS 表达式与原型链成员名都不是占位', () => {
+    expect(isPlaceholderExpr('java.encodeURI(key)', { key: 'x' })).toBe(false)
+    expect(isPlaceholderExpr('page*2', { page: 1 })).toBe(false)
+    expect(isPlaceholderExpr('toString', {})).toBe(false)
+  })
+})
+
+describe('expandPageAngleList（`<a,b,c>` 按页取值）', () => {
   it('page=1 取首项（真源恩京的书房：首项是空串 ⇒ 整段消失）', () => {
     expect(expandPageAngleList('/<,page/2/>?s=k', 1)).toBe('/?s=k')
   })

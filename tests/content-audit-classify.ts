@@ -1,19 +1,13 @@
 /**
- * 正文链路审计的**失败归因**单点（判据②的可机读形式）。
- *
- * 判据原文是「UnsupportedRuleError / RuleEvalError / JsSandboxError 三类引擎侧失败清零
- * （站点与网络侧失败不计）」。问题是：这三种 error name 里既装着「本仓不认这条语法」，
- * 也装着「站点页面上没有这个结构」和「源脚本自己的正则没匹配上」——只按 error name 计数
- * 会把三类成因混成一个数字，读它的人无法判断还剩多少欠账。
- *
- * 归因按**消息锚点**判，锚点全部是本仓自己写下的抛错措辞（改措辞会让这里失配，
- * 由 `tests/content-audit-classify.test.ts` 钉住）：
- *  - `host-gap`：本仓宿主面/语法缺口——点名缺方法、缺段形态、未接的选项。这是要被清零的那一栏。
- *  - `guard`：本仓**刻意闸口**（宁炸不猜）——对面静默取空或整本回退，我们明确失败。
- *  - `site-side`：站点/脚本侧——同一规则在同源其它章能出值、页面上没这结构、站点自己的
- *    脚本正则取到 null。对面（安卓 Rhino + 同一份页面）同样读不出。
- *  - `network`：请求失败/超时/解码失败（站点侧的一种，单列以便与「站点没这结构」区分）。
- *  - `unattributed`：以上都不匹配——**这一栏必须逐条人判并按判例补锚点**，不许长期非零。
+ * 正文链路审计的**失败归因**单点（判据②的可机读形式）。判据原文是「三类引擎侧失败清零、
+ * 站点与网络侧不计」，而那三种 error name 里混着三种成因（本仓不认语法 / 页面没这结构 / 源脚本
+ * 正则没匹配上），按 name 计数分不开——所以归因按**消息锚点**判，锚点全是本仓自己的抛错措辞，
+ * 失配由 `tests/content-audit-classify.test.ts` 钉住：
+ *  - `host-gap`：本仓宿主面/语法缺口——要被清零的那一栏。
+ *  - `guard`：本仓**刻意闸口**（宁炸不猜），本可静默的场合明确失败。
+ *  - `site-side`：页面/脚本侧——换任何 JS 引擎 + 同一份页面同样读不出。
+ *  - `network`：请求失败/超时（站点侧的一种，单列）。
+ *  - `unattributed`：都不匹配——**必须逐条人判补锚点**，不许长期非零。
  */
 
 export type Attribution = 'host-gap' | 'guard' | 'site-side' | 'network' | 'unattributed'
@@ -28,7 +22,8 @@ const HOST_GAP = [
   'is not a function',                       // 沙箱里缺某个 jsoup/宿主方法（如曾经的 Elements.remove）
   '无法识别的段类型',                         // 解析期不认的段形态
   '未知 java 方法',                           // js-protocol：脚本调了没登记的 java.*
-  '未知 Packages 桥操作',                     // Packages.* 未登记的路径
+  '未知 Packages 桥操作',                     // Packages.* 未登记的路径（重活通道 `__pkg.*`）
+  '未知 Packages 包路径',                     // 包路径整体未实现（如 java.net / android.webkit）——此前是裸 TypeError，归因认不出
   '未知元素桥操作',                           // 元素桥未实现的操作
   'XPath 步骤不支持',                         // 求值层未实现的 XPath 形态
   'XPath 轴不支持',                           // 轴子集之外
@@ -37,10 +32,10 @@ const HOST_GAP = [
   '子规则内不支持 js 段',                     // 同步子环路未接线
   '调用方未接线子规则求值口',                 // 同上（@put 值形态）
   '结果不是取值而是节点集',                   // 服务层规约误用到链终点
-  '脚本编译/同步执行失败：Unexpected token',  // 本仓解析器接不住对面能接的写法（人判后归档）
+  '脚本编译/同步执行失败：Unexpected token',  // 本仓解析器接不住的写法（人判后归档）
 ]
 
-/** 本仓刻意闸口（对面静默、我们明确失败）的消息锚点 */
+/** 本仓刻意闸口（本可静默、我们明确失败）的消息锚点 */
 const GUARD = [
   '目录 URL 规则未取到任何章节地址',          // reading.ts：逐条回退目录页即判定整体失效
   '无法解码 charset',                         // 声明了非法 charset 时不猜
@@ -50,7 +45,7 @@ const GUARD = [
 
 /** 站点/脚本侧：页面上没这结构、源脚本自己的匹配取到 null */
 const SITE_SIDE = [
-  'Cannot read properties of null',           // 源脚本 match(...) 取到 null（对面 Rhino 同炸）
+  'Cannot read properties of null',           // 源脚本 match(...) 取到 null（任何 JS 引擎同炸）
   'Cannot read property',                     // 同上（不同引擎措辞）
   'is not defined',                           // 源脚本引用了页面里不存在的变量
   '正文规则零命中',                           // 选择器在页面上没有落点
@@ -61,9 +56,8 @@ const SITE_SIDE = [
 
 const NETWORK = [
   '网络错误', '请求超时', '请求失败', 'fetch failed', 'Failed to parse URL', 'ETIMEDOUT', 'ECONNREFUSED',
-  // js 段超时是**策略闸口**（jsTimeoutMs 上限），对面安卓同一条脚本在同一慢链路上同样会超——
-  // 真机实证：脚本首行就是 java.ajax(登录页) 的那一类。代价是死循环也走这条文案，
-  // 所以读数时这一栏要人看一眼：只有当某源在提速后仍超时，才可能是本仓问题。
+  // js 段超时是**策略闸口**（jsTimeoutMs 上限，同脚本同慢链路同样会超），代价是死循环也走这条文案
+  // ——读数时这栏要人看一眼：提速后仍超时才可能是本仓问题。
   '脚本超时',
 ]
 
@@ -71,14 +65,13 @@ const matches = (msg: string, anchors: string[]): boolean => anchors.some((a) =>
 
 /** 归因顺序：error name 先粗筛，消息锚点再细分（同一 name 下三种成因都要能分开） */
 export function attributeError(err: ClassifiableErr | undefined): Attribution {
-  // 没有错误对象可判 → 如实落**待判**那一栏：把「没东西可归因」静默算进 site-side 是给自己放水
-  // （本文件的口径是 site-side 须有页面/脚本侧的证据；调用方 `classifyAudits` 已经先滤掉这种条目，
-  // 所以这条只在函数边界上成立——不变量写在这里，不靠调用方记得）
+  // 没有错误对象 → 如实落**待判**栏：静默算进 site-side 是给自己放水。不变量写在这里，
+  // 不靠调用方（classifyAudits 已先滤掉这种条目）记得
   if (err === undefined) return 'unattributed'
   const name = err.name ?? ''
   const msg = err.message ?? ''
-  // 网络/站点错里嵌着的脚本错（`java.ajax` 打不通）同样归网络，不算本仓缺口——所以这一跳同时按
-  // error name 与消息锚点判，不再重复一次锚点判断（那次重复曾是不可达代码）
+  // 网络错里嵌着的脚本错（`java.ajax` 打不通）同样归网络、不算本仓缺口——这一跳同时按 error name
+  // 与消息锚点判（此处曾重复一次锚点判断，是不可达代码）
   if (name === 'FetchError' || matches(msg, NETWORK)) return 'network'
   if (name === 'RuleMissingError') return 'guard'
   if (matches(msg, HOST_GAP)) return 'host-gap'
@@ -145,12 +138,23 @@ export function messageSkeleton(msg: string): string {
 }
 
 /**
- * 锚点里两类东西要分开：
- *  - `RUNTIME_ANCHORS`：JS/Node 运行时自己的措辞（`is not a function`、
- *    `Cannot read properties of null`、`fetch failed`…），源码里搜不到，也不该搜。
- *  - 其余全部是本仓**写下的抛错文案**——它们若与源码失配，归因就会静默跑偏（把本仓缺口
- *    读成站点侧，等于给自己放水），所以由 `tests/content-audit-classify.test.ts` 逐条
- *    要求在 `src/` 里真实存在。
+ * 搜索面「没给出任何带地址的条目」时的 stage 判据。**桶名不是归因**（2026-09-28 教训：
+ * `no-book-url` 曾同时罩住两件事，15 条文本源被笼统写成站点侧）——
+ *  - `search-no-hit`：列表规则零命中，条目**根**就没出来 → 查列表规则与站点；
+ *  - `no-book-url`：条目出来了、地址全 null → 查 bookUrl 规则。
+ * 两者下一步动作不同，合成一个桶就只能靠再跑一次才发现是谁。
+ */
+export type SearchFaceStage = 'search-no-hit' | 'no-book-url'
+
+/** `hits` = 该源搜索面收到的条目数（含无地址的，即书名为空被丢的不算） */
+export function searchFaceStageOf(hits: number): SearchFaceStage {
+  return hits === 0 ? 'search-no-hit' : 'no-book-url'
+}
+
+/**
+ * 锚点分两类：`RUNTIME_ANCHORS` 是 JS/Node 运行时自己的措辞（源码里搜不到，也不该搜）；
+ * 其余是本仓**写下的抛错文案**——与源码失配会让归因静默跑偏（本仓缺口读成站点侧＝放水），
+ * 所以由 `tests/content-audit-classify.test.ts` 逐条要求在 `src/` 里真实存在。
  */
 export const RUNTIME_ANCHORS = new Set<string>([
   'is not a function',

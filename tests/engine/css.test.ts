@@ -91,3 +91,49 @@ describe('! 排除语法（求值层：官方「!是排除，0 是第1个，负�
     expect(v.kind).toBe('miss')
   })
 })
+
+/**
+ * jsoup 的 `[attr~=regex]`——库里 26 处这么写：`[property~=category|status|update_time]`、
+ * `[property~=las?test_chapter_name]`、`[property~=image]`、`[href~=/read/\d+]`、
+ * `[style~=width:100%;]`（`s?` 的可选与 `a|b|c` 的择一只有**正则**读法讲得通）。
+ * 标准 CSS 的 `~=` 是「属性值按空白分词后含该词」，拿它比 `og:novel:category` 恒不命中；
+ * 本仓选择器引擎走标准 CSS，故在求值前把 `~=` 谓词摘出来按正则筛（jsoup 的口径）。
+ */
+describe('jsoup 的 [attr~=regex]（正则匹配，不是 CSS 的词表包含）', () => {
+  const h = `<html><head>
+    <meta property="og:novel:category" content="都市">
+    <meta property="og:novel:latest_chapter_name" content="第9章 收尾">
+    <meta property="og:image" content="https://x/cover.jpg">
+  </head><body><ul><li><a href="/read/123.html">第一章</a><a href="/other/1.html">别的</a></li></ul></body></html>`
+  const $h = cheerio.load(h)
+  const hroot = () => $h('html') as any
+
+  it('择一正则（category|status|update_time）命中', () => {
+    const v = evalCss(seg('meta[property~=category|status|update_time]'), $h, hroot(), loc(0, 'meta[property~=…]'), 'detail')
+    expect(v.kind).toBe('nodes')
+    expect((v as any).nodes).toHaveLength(1)
+    expect((v as any).nodes.attr('content')).toBe('都市')
+  })
+
+  it('可选字符正则（las?test_chapter_name）命中', () => {
+    const v = evalCss(seg('meta[property~=las?test_chapter_name]'), $h, hroot(), loc(0, 'meta[property~=…]'), 'detail')
+    expect((v as any).nodes.attr('content')).toBe('第9章 收尾')
+  })
+
+  it('路径正则（a[href~=/read/\\d+]）只留命中项', () => {
+    // 用 String.raw 保住正则里的 `\d`（普通字符串里 `'\d'` 会被 JS 吃成 `d`）
+    const sel = String.raw`a[href~=/read/\d+]`
+    const v = evalCss(seg(sel), $h, hroot(), loc(0, 'a[href~=…]'), 'toc')
+    expect((v as any).nodes).toHaveLength(1)
+    expect((v as any).nodes.attr('href')).toBe('/read/123.html')
+  })
+
+  it('正则不匹配 → 零命中 Miss（不是把属性值当词表比）', () => {
+    const v = evalCss(seg('meta[property~=og:novel:title]'), $h, hroot(), loc(0, 'meta[property~=…]'), 'detail')
+    expect(v.kind).toBe('miss')
+  })
+
+  it('非法正则 → RuleEvalError（选择器写错如实报，不静默零命中）', () => {
+    expect(() => evalCss(seg('meta[property~=(]'), $h, hroot(), loc(0, 'meta[property~=(]'), 'detail')).toThrow(RuleEvalError)
+  })
+})

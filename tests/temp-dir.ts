@@ -3,15 +3,11 @@ import os from 'node:os'
 import path from 'node:path'
 
 /**
- * 测试临时目录登记簿：单一 owner 管 mkdtemp 的生命周期。
- *
- * 每个用例自己 `fs.mkdtemp` 用完即弃——实测单文件跑一次漏 10 个目录进 %TEMP%，
- * 全量跑漏上百个（一次实测 507 个）。清理纪律散在几十处调用点无法收敛，故收进一处：
- * helper 只登记，setup.ts 在每个测试文件结束时统一 rm。
- *
- * 为什么不在此文件直接 afterAll：helper 在调用点惰性 import 时才首次求值，
- * 那时顶层 suite 已开始收集，afterAll 挂不到文件级生命周期（实测钩子不触发、目录照漏）。
- * setupFiles 在每个测试文件前求值，注册的 afterAll 属于该文件的根 suite——必触发。
+ * 测试临时目录登记簿：单一 owner 管 mkdtemp 的生命周期。用例各自 mkdtemp 用完即弃会往 %TEMP% 漏
+ * 上百个目录，清理纪律散在几十处无法收敛——故收进一处：helper 只登记，setup.ts 每个测试文件
+ * 结束时统一 rm。
+ * 不在此文件直接 afterAll：helper 惰性 import 时顶层 suite 已开始收集，afterAll 挂不到文件级
+ * 生命周期（实测钩子不触发、目录照漏）；setupFiles 每个文件前求值，注册的 afterAll 必触发。
  */
 
 const dirs = new Set<string>()
@@ -31,14 +27,9 @@ export function takeRegisteredDirs(): string[] {
 }
 
 /**
- * 登记「写侧收尾」——删目录之前必须先等这些 promise 落地。
- *
- * 为什么删之前必须等写：Shelf 用 100ms 尾沿防抖写（`writeJsonAtomic` 会 `mkdir -p` 父目录）。
- * 用例 `add()` 之后没 await flush 就结束，写挂在 timer 上；钩子此时把目录删掉，timer 随后
- * 触发又把父目录建回来——目录「复活」。这不是「删失败」，重试治不了（删是成功的，复活在后）。
- * 唯一口径：先 flush 全部写侧，再删。测试自持的 Shelf/ReadingService 用 `trackService` 登记。
- *
- * 注：删除本身仍有二次 rm 兜底（见 setup.ts），用于覆盖「登记之外的迟到写」。
+ * 登记「写侧收尾」——删目录前必须先等这些 promise 落地。Shelf 用 100ms 尾沿防抖写，钩子先删、
+ * timer 随后触发又把父目录建回来（「复活」不是删失败，重试治不了）；唯一步骤是先 flush 再删。
+ * 测试自持的 Shelf/ReadingService 用 `trackService` 登记；删除本身另有二次 rm 兜底（setup.ts）。
  */
 const cleanups: Array<() => Promise<void>> = []
 

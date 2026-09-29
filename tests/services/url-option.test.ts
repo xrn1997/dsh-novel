@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { absUrlKeepOption, canonUrl, splitUrlOption, stripUrlOption } from '../../src/services/request.js'
 
-// 章节/下一页 URL 的 `,{option}` 后缀语义（legado BookChapter.getAbsoluteURL 对齐）：
+// 章节/下一页 URL 的 `,{option}` 后缀语义（URL 部分绝对化、选项后缀原样接回）：
 // URL 部分绝对化、选项后缀原文接回、抓取时由 assembleRequest 解释——
 // 此前目录落库前 strip 选项 → POST/charset 型章节端点全部退化成裸 GET。
 

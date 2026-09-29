@@ -3,60 +3,45 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { parseRule } from '../../src/engine/parse.js'
-import { evalJs } from '../../src/engine/js-sandbox.js'
+import { parseObjectJson } from '../../src/services/normalize.js'
+import { probeJavaSurface } from '../java-surface.js'
 import { JAVA_PROTOCOL } from '../../src/engine/js-protocol.js'
 import { messageSkeleton } from '../content-audit-classify.js'
+import { readSnapshot } from '../legado-coverage/upstream-facts.js'
+import { COVERAGE, ROW_DEMAND } from '../legado-coverage/matrix.js'
 
 /**
- * **解析面全库普查（`DSH_PARSE_CENSUS=1` 才跑；离线、不联网，秒级）**——「彻底适配 legado 书源规则」
- * 这条目标的**进度读数口**。
+ * **解析面全库普查（`DSH_PARSE_CENSUS=1` 才跑；离线、秒级）**——「书源里写下的规则形态，本插件
+ * 都能正确解析」这条目标的**进度读数口**（此前靠一份会消失的一次性脚本，且只跑了 `parseRule` 一面）：
+ * - **面 A · 规则语法**：现库每条规则串（`raw` 的 rule 容器全集，含本仓字段映射没接的）过真实入口
+ *   `parseRule`，收抛错骨架。
+ * - **面 B · js 宿主调用**：静态抽 `java.<m>(` / `Packages.<a.b.C>` 调用名比对桥表。静态抽名连注释、
+ *   死分支也采到，所以**读数给数量与样例、由人判**，断言只对「抽到且不在已知集合」的形态开火。
+ * - **面 C · 桥可达性**：面 B 只问「挂没挂」，问不出「挂的是实现还是桩」——协议表有实现的名字
+ *   不许在沙箱里仍被「需要安卓宿主环境」桩覆盖（`digestHex` 一族曾实现了却够不着）。
+ * - **面 D · 需求读数表**：登记册那些「N 源带值」的复数入口一条命令全出，判据跟着数字印。**读数本身
+ *   不判红**（分母随增删漂，钉死等于每次改库改测试；要防的是复数只能靠不入库的手写脚本）。判红三件
+ *   与分母无关的事：表短了/整表全 0（空转）、`ROW_DEMAND` 绑定落空、零读数判据在合成样品上也为 0。
  *
- * 目标口径不是「矩阵行都标了 implemented」，而是：**legado 能正确解析的书源，本插件也能正确解析**。
- * 要按这个口径推进，必须先有一个不靠人想、不靠站点今天是否活着的清单：现库里到底有哪些规则
- * 是本仓**当场拒绝**的。此前这件事靠一份一次性脚本（写在不入库目录里，已经消失过一次），
- * 且只跑了 `parseRule` 一面。本文件把它做成在册的门，并补齐第二面：
+ * 判断言：未知形态必须为 0——本仓拒绝过的语法、脚本调过的缺失桥方法，要么实现了，要么在在册集合里
+ * 点名并写明去处，**新形态冒出来即红**。与 `upstream-fields.test.ts`（字段面有主吗）互补：那道门管
+ * 字段归属，本门管规则串与脚本调用真能不能跑。数据源缺失即红不静默 skip；取值语义等价性归
+ * `DSH_CONTENT_AUDIT` 真链路，URL 与请求侧形态在覆盖矩阵 B 组在册。
  *
- * **面 A · 规则语法**：把现库每一条规则串（从 `raw` 的 rule 容器取，含本仓字段映射**没接**的那些——
- *  那正是「对面读得懂、我们连字段都没取」的一批）过本仓真实入口 `parseRule`，收集抛错骨架。
- * **面 B · js 宿主调用**：静态抽出全库脚本里的 `java.<m>(` 与 `Packages.<a.b.C>` 调用名，
- *  比对桥表（`SANDBOX_MOUNTS.javaSync`）。对面 Rhino 有的方法我们没挂 → 脚本跑到那句就抛错。
- *  这是静态抽名：注释与死分支里的调用也会被采到，所以**读数按名字给数量与样例、由人判**，
- *  断言只对「抽到且不在已知集合」的形态开火。
- * **面 C · 桥可达性**：协议表里已登记实现的名字，绝不允许在沙箱里仍被「需要安卓宿主环境」桩覆盖。
- *  面 B 只问"挂没挂"，问不出"挂的是实现还是桩"——`digestHex` 一族正是这样实现了却够不着
- *  （协议表测试全绿、脚本一调就抛），所以这一面单独对账。
- *
- * **两面的断言同一条**：未知形态必须为 0。也就是说——本仓拒绝过的语法 / 脚本调过的缺失桥方法，
- * 要么已被实现，要么在下面的在册集合里被点名并写明为什么排在那儿；**新形态冒出来即红**，
- * 不靠任何人记得去查。这与 `tests/legado-coverage/upstream-fields.test.ts`（字段面有主吗）互补：
- * 那道门管「字段有没有归属」，本门管「规则串与脚本调用真能不能跑」。
- *
- * 数据源缺失即红（不静默 skip）：判据的分母架在会消失的文件上等于没有判据
- * （见 AGENTS.md「引用活性」与 docs/design/legado-compat.md 判据①一节）。
- *
- * 覆盖面如实声明：本门只判**离线可判**的两面。取值语义是否等价（同一条规则两边取出的值一样吗）
- * 仍归 `DSH_CONTENT_AUDIT` 真链路审计；URL 构造与请求侧形态（`<a,b,c>`、`@result`、`retry`）
- * 在覆盖矩阵 B 组在册。
+ * **为什么没有「扫代码注释里的现量」这道门**（dry-run 后判不加，别再试）：`src/**` 上 19/41 处命中
+ * 多半不是库读数（UI 空态、文件大小、审计分母、正则切词假命中），做对就得养四类豁免表——正是本仓
+ * 拒绝的宽判据形状。注释里的数靠两件事管：本表那条命令（能被引用的数必须有键）+ AGENTS「引用前先重数」。
  */
 const ON = process.env.DSH_PARSE_CENSUS === '1'
-/** 对面参考实现 checkout（判据分母，缺席即红） */
-const UPSTREAM_REF = process.env.DSH_LEGADO_REF ?? 'C:/develop/GitHub/legado-with-MD3'
 
-/** 对面的 rule 容器：本仓只映射其中一部分，这里取全集（含未映射字段） */
+/** 书源的 rule 容器：本仓只映射其中一部分，这里取全集（含未映射字段） */
 const RULE_CONTAINERS = ['rules', 'ruleSearch', 'ruleBookInfo', 'ruleToc', 'ruleContent', 'ruleExplore']
 
 /**
- * **字段 → 对面实际用什么消费它**。只有走 `AnalyzeRule`（`model/analyzeRule/AnalyzeRule.kt`）的字段
- * 才是「规则串」，才该过 `parseRule`；其余各有消费者，硬塞进规则引擎只会造假阳性
- * （普查第一版就因此把 `checkKeyWord ← 我的` 这类词表报成了「本仓拒绝的语法」）。
- *
- * 每条都在对面源码里核过，锚点写在值里：
- * - `rule-list` / `rule-value`：过 `getElements` / `getString`，差别是取值用途。
- * - `js`：脚本，进 Rhino（本仓进 `node:vm`）——由本普查的**面 B** 管。
- * - `regex`：Java 正则，不进规则引擎。
- * - `words`：逗号分隔词表。
- * - `flag`：布尔 / 排版字符串。
- * 未列出的字段按 `rule-value` 处理（新字段冒出来会被上游字段门 `upstream-fields.test.ts` 拦住）。
+ * **字段 → 实际由哪条消费者读它**。只有进规则引擎求值的字段才该过 `parseRule`，硬塞进来的都是
+ * 假阳性（普查第一版把词表 `checkKeyWord` 报成了「本仓拒绝的语法」）。取值语义写在值里：
+ * `rule-list`/`rule-value` 过 getElements/getString；`js` 进沙箱（面 B 管）；`regex`/`words`/`flag`
+ * 各有消费者。未列出的按 `rule-value`（新字段冒出来由上游字段门拦）。
  */
 const FIELD_CONSUMERS: Record<string, 'rule-list' | 'rule-value' | 'js' | 'regex' | 'words' | 'flag'> = {
   bookList: 'rule-list', chapterList: 'rule-list', ruleBookList: 'rule-list', ruleChapterList: 'rule-list',
@@ -67,12 +52,12 @@ const FIELD_CONSUMERS: Record<string, 'rule-list' | 'rule-value' | 'js' | 'regex
   sourceRegex: 'regex', replaceRegex: 'regex', ruleReplaceRegex: 'regex', ruleSourceRegex: 'regex',
   checkKeyWord: 'words', ruleCheckKeyWord: 'words',
   canReName: 'flag', isVolume: 'flag', isVip: 'flag', isPay: 'flag', imageStyle: 'flag', ruleImageStyle: 'flag',
-  // authorPrefix / authorPattern / ruleBookAuthor 这类是**字面量前后缀**，对面直接拼接，不过规则引擎
+  // authorPrefix / authorPattern / ruleBookAuthor 这类是**字面量前后缀**，直接拼接，不过规则引擎
   authorPrefix: 'flag', ruleBookAuthor: 'flag', authorPattern: 'flag', bookListUrl: 'flag',
   init: 'rule-value', ruleInit: 'rule-value',
 }
 
-/** 非规则字段不计入 parseRule 分母，但要报出来：它们是「对面读得懂、我们字段都没取」的候选面 */
+/** 非规则字段不计入 parseRule 分母，但要报出来：它们是「书源读得出、本仓字段都没取」的候选面 */
 const isRuleField = (field: string) => {
   const kind = FIELD_CONSUMERS[field]
   return !kind || kind.startsWith('rule-')
@@ -80,7 +65,7 @@ const isRuleField = (field: string) => {
 
 interface RuleSite { src: string; where: string; rule: string; usage: 'list' | 'value' }
 
-/** 收集一个源里所有「会被对面当规则求值」的字符串（数组元素逐个收，如 nextContentUrl: [..]） */
+/** 收集一个源里所有「会当规则求值」的字符串（数组元素逐个收，如 nextContentUrl: [..]） */
 function collectRules(entry: any): RuleSite[] {
   const raw = entry?.raw ?? entry ?? {}
   const src = String(entry?.name ?? raw.bookSourceName ?? '?')
@@ -88,7 +73,7 @@ function collectRules(entry: any): RuleSite[] {
   for (const container of RULE_CONTAINERS) {
     const box = raw[container]
     if (typeof box === 'string') {
-      // 字符串化容器（本仓导入时二次 parse；对面每个容器都写了 isJsonPrimitive 分支）
+      // 字符串化容器（本仓导入时二次 parse；容器本身也可能是 JSON 文本，两种形态都要接）
       try { collectBox(container, JSON.parse(box), src, out) } catch { /* 坏 JSON 由导入面点名，不在这里重复判 */ }
       continue
     }
@@ -117,90 +102,206 @@ function allStrings(node: unknown, acc: string[] = []): string[] {
 }
 
 /**
- * 在册已知形态（**按族**登记，不是按整条骨架）：本仓当前会拒绝、且已在覆盖矩阵 / 设计文档排队或
- * 被裁决的规则语法骨架。按族是因为骨架里的规则片段被 messageSkeleton 归一成长度类
- * （`"#"` 数字、`"…"` 长串），逐条精确登记会把门变成天天要改的白名单。代价如实写明：
- * **同族内的新样例不会报红**，所以每次跑普查要看「N× M源」读数变化，别只盯红/绿。
- *
- * 在册的是**仍在被拒的族**：普查头一跑（2026-09-22）在这里登记过 4 族，其余 3 族逐一收口——
- * 空白分支按对面吞分支（`a-blank-branch-dropped`）、纯数字段是 children 索引
- * （`a-bare-index-segment`）、`clasd.T-R-T-B2-Box1` 与 `text下一页` 本就不是"认不出"而是 CSS
- * 选择器——对面 `ElementsSingle` 的 else 分支就是 `select(beforeRule)`（边界订正见
- * `a-unknown-segment-throws`）。留下的这一族每次跑都要看「N× M源」读数变化，别只盯红/绿。
- * 这张表留着只为让**新**形态冒出来即红：加条目必须先有矩阵行 id，实现了就删条目——
- * 留着当墓碑会被下一轮误读成「这是裁决」。
+ * **零读数的反空转样品**：真库上的 0 有两种成因——真没人用，或判据接不上任何东西，表里长得一样。
+ * 每条「当下为 0」的判据都必须在这条样品上数出非 0；加新的零读数判据时把形状塞进来。
+ */
+const KITCHEN_SINK: any = {
+  bookSourceName: '反空转样品',
+  searchUrl: '/search?q={{key}}&retry=1&charset=gbk',
+  preUpdateJs: '@js:1',
+  ruleToc: { formatJs: '@js:title', chapterUrl: 'a@href##reSegment##paragraphTitle' },
+  ruleContent: { content: 'java.refreshExplore("x"); source.setVariable("k", "v")' },
+  // 节点导航形状：`jsoupNodeNav` 判据当下为 0，按上方的规矩塞进样品
+  ruleBookInfo: { intro: 'result.parent().children(0).elementSiblingIndex()' },
+}
+
+/**
+ * **面 D · 需求读数表**：登记册「N 源带值」的复数入口（这些数是裁定的输入，分母天天漂，而临时
+ * 手写脚本活不过一轮——`canReName` 3→5、桥面把独立合集的数当本库等三处漂都是这么来的）。
+ * 读数不进断言，钉的是「复数有一条命令」：`DSH_PARSE_CENSUS=1` 出全表。每条都带**判据原文**——
+ * 同一个键经常有两种数法（非空 168 vs 带发现面 172、`head` 子串撞 `header`），抄数就连判据一起抄。
+ */
+const nonEmpty = (v: unknown): boolean => typeof v === 'string' ? v.trim() !== '' : v !== undefined && v !== null && v !== ''
+const boxField = (raw: any, box: string, field: string): boolean => {
+  const b = raw?.[box]
+  return !!b && typeof b === 'object' && (b as any)[field] !== undefined && nonEmpty((b as any)[field])
+}
+const rawField = (raw: any, field: string): boolean => nonEmpty(raw?.[field])
+const anyStr = (raw: any, re: RegExp): boolean => allStrings(raw).some((s) => re.test(s))
+/** 任一层键叫 `name` 且值非空（`boxField` 只到顶层的一个容器，而 `rules` 那种归一化容器在更深处） */
+const hasKeyDeep = (node: unknown, name: string): boolean => {
+  if (Array.isArray(node)) return node.some((v) => hasKeyDeep(v, name))
+  if (node && typeof node === 'object') {
+    const rec = node as Record<string, unknown>
+    if (name in rec && nonEmpty(rec[name])) return true
+    return Object.values(rec).some((v) => hasKeyDeep(v, name))
+  }
+  return false
+}
+
+/**
+ * CSS 选择器位的取值路径（矩阵 `a-css-case-insensitive-match` 的上界判据用）。必须限路径：
+ * 整串 raw 扫会把文件后缀、URL 段、js 属性访问算进来（曾量出 107 源的假读数）；取这些字段前
+ * 先剥 js 片段。
+ */
+const CSS_SELECTOR_PATHS = [
+  'searchUrl', 'exploreUrl',
+  'ruleSearch.bookList', 'ruleSearch.name', 'ruleSearch.author', 'ruleSearch.bookUrl', 'ruleSearch.coverUrl',
+  'ruleSearch.intro', 'ruleSearch.kind', 'ruleSearch.lastChapter', 'ruleSearch.wordCount',
+  'ruleBookInfo.init', 'ruleBookInfo.name', 'ruleBookInfo.author', 'ruleBookInfo.kind', 'ruleBookInfo.wordCount',
+  'ruleBookInfo.intro', 'ruleBookInfo.coverUrl', 'ruleBookInfo.lastChapter', 'ruleBookInfo.bookUrl', 'ruleBookInfo.canReName',
+  'ruleToc.chapterList', 'ruleToc.chapterName', 'ruleToc.chapterUrl', 'ruleToc.updateTime', 'ruleToc.isVolume', 'ruleToc.isVip',
+  'ruleContent.content', 'ruleContent.title', 'ruleContent.replaceRegex', 'ruleContent.nextContentUrl', 'ruleContent.subContent',
+]
+const cssSelectorStrings = (raw: any): string[] => CSS_SELECTOR_PATHS.map((p) =>
+  p.split('.').reduce<any>((o, k) => (o == null ? undefined : o[k]), raw),
+).filter((v): v is string => typeof v === 'string' && v.trim() !== '')
+  .map((v) => v.replace(/\{\{[\s\S]*?\}\}|<js>[\s\S]*?<\/js>|@js:[\s\S]*/gi, ''))
+
+export const DEMAND_KEYS: Array<{ key: string; label: string; test: (raw: any) => boolean }> = [
+  { key: 'exploreUrl', label: '顶层 exploreUrl 非空（D1 的主判据）', test: (r) => rawField(r, 'exploreUrl') },
+  { key: 'exploreUrlRuleExploreOnly', label: '只带 ruleExplore 容器、exploreUrl 为空（D1 的"另一半"）', test: (r) => !rawField(r, 'exploreUrl') && allStrings(r?.ruleExplore).some((s) => s.trim() !== '') },
+  { key: 'exploreBookList', label: 'ruleExplore.bookList 非空（自带列表规则的发现面源）', test: (r) => boxField(r, 'ruleExplore', 'bookList') },
+  { key: 'searchUrlPage', label: 'searchUrl 含 {{page}}（D2 搜索翻页）', test: (r) => anyStr(r?.searchUrl ?? r?.ruleSearch, /\{\{\s*page\s*\}\}/) },
+  { key: 'tocIsVip', label: 'ruleToc.isVip 非空（D3 / 审计唯一 residual）', test: (r) => boxField(r, 'ruleToc', 'isVip') },
+  { key: 'tocIsVolume', label: 'ruleToc.isVolume 非空（D3）', test: (r) => boxField(r, 'ruleToc', 'isVolume') },
+  { key: 'tocUpdateTime', label: 'ruleToc.updateTime 非空（D3）', test: (r) => boxField(r, 'ruleToc', 'updateTime') },
+  { key: 'contentTitle', label: 'ruleContent.title 非空（D4）', test: (r) => boxField(r, 'ruleContent', 'title') },
+  { key: 'contentSubContent', label: 'ruleContent.subContent 非空', test: (r) => boxField(r, 'ruleContent', 'subContent') },
+  { key: 'concurrentRate', label: 'concurrentRate 非空（D5 源级限速）', test: (r) => rawField(r, 'concurrentRate') },
+  { key: 'enabledCookieJar', label: 'enabledCookieJar 为真（布尔，不是串）', test: (r) => r?.enabledCookieJar === true || r?.enabledCookieJar === 'true' },
+  // 这两条是**子串宽判据**不是权威读数（真口径按 URL 尾 `,{…}` 切分，权威见矩阵
+  // b-opt-charset-form-fidelity 与 b-opt-retry）；这里没有 URL 上下文可复用，两边数字本就该不同。
+  { key: 'charsetOption', label: '某处字符串含 charset 字样（子串宽判据，权威见矩阵 b-opt-charset-form-fidelity）', test: (r) => anyStr(r, /charset/i) },
+  { key: 'retryOption', label: '某处字符串含 retry 字样（同上；矩阵 b-opt-retry 记的是按真入口 0 源）', test: (r) => anyStr(r, /retry/i) },
+  { key: 'loginUrl', label: 'loginUrl 非空（登录面：URL 形态 vs js 形态见下两条）', test: (r) => rawField(r, 'loginUrl') },
+  { key: 'loginUrlJsForm', label: 'loginUrl 是 js 形态（含 @js: 或 <js>）', test: (r) => anyStr(r?.loginUrl, /@js:|<js>/) },
+  { key: 'loginCheckJs', label: 'loginCheckJs 非空', test: (r) => rawField(r, 'loginCheckJs') },
+  { key: 'loginUi', label: 'loginUi 非空', test: (r) => rawField(r, 'loginUi') },
+  { key: 'searchKind', label: 'ruleSearch.kind 非空', test: (r) => boxField(r, 'ruleSearch', 'kind') },
+  { key: 'searchWordCount', label: 'ruleSearch.wordCount 非空', test: (r) => boxField(r, 'ruleSearch', 'wordCount') },
+  { key: 'detailKind', label: 'ruleBookInfo.kind 非空', test: (r) => boxField(r, 'ruleBookInfo', 'kind') },
+  { key: 'detailWordCount', label: 'ruleBookInfo.wordCount 非空', test: (r) => boxField(r, 'ruleBookInfo', 'wordCount') },
+  { key: 'canReName', label: 'ruleBookInfo.canReName 非空（值形态是字符串 "1"/"true"）', test: (r) => boxField(r, 'ruleBookInfo', 'canReName') },
+  { key: 'preUpdateJs', label: 'preUpdateJs 非空（任一容器）', test: (r) => boxField(r, 'ruleToc', 'preUpdateJs') || rawField(r, 'preUpdateJs') },
+  { key: 'bookSourceComment', label: 'bookSourceComment 非空（脚本经 source.* 读它）', test: (r) => rawField(r, 'bookSourceComment') },
+  // 下面五条把「本库 0 需求方」的行也纳入同一入口：零读数比非零更容易悄悄失效
+  // （非零要动手做才会发现错，零只需要下一个人信它）。
+  { key: 'tocFormatJs', label: '任一层 ruleToc.formatJs 非空（含归一化 rules 容器；矩阵 c-toc-format-js 的重开条件就是这条冒出 1 源）', test: (r) => hasKeyDeep(r?.ruleToc, 'formatJs') || boxField(r, 'ruleToc', 'formatJs') },
+  { key: 'reSegment', label: 'raw 全串含 reSegment 字样（子串宽判据；矩阵 g-paragraph-title 另一侧判据是快照规则实体字段表面，两边本就不同）', test: (r) => anyStr(r, /reSegment/) },
+  { key: 'paragraphTitle', label: 'raw 全串含 paragraphTitle 字样（同上）', test: (r) => anyStr(r, /paragraphTitle/) },
+  { key: 'javaRefreshExplore', label: '调用名 `java.refreshExplore(` 出现（按 raw 全串；「会不会被执行」要逐处读上下文，本表只给上界，见矩阵 h-source-refresh-explore）', test: (r) => anyStr(r, /java\.refreshExplore\s*\(/) },
+  { key: 'sourceStateStore', label: '调用名 `source.{setVariable,getVariable,getKey,put,get}(` 出现（上界：静态写容器≠需要跨重启存活）', test: (r) => anyStr(r, /\bsource\.(?:setVariable|getVariable|getKey|put|get)\s*\(/) },
+  { key: 'jsLib', label: 'jsLib 非空', test: (r) => rawField(r, 'jsLib') },
+  // 探针关键词：`services/types.ts` 的 probeKeyword 词条曾引一个漂掉的数——注释里的数没有复数
+  // 入口就会这样过期。键放这儿，词条只指这条命令。
+  { key: 'probeKeyword', label: 'ruleSearch.checkKeyWord 非空（顶层 checkKeyWord 也算；探针首词的需求方）', test: (r) => boxField(r, 'ruleSearch', 'checkKeyWord') || rawField(r, 'checkKeyWord') },
+  { key: 'nonTextSource', label: '非文本源（bookSourceType 有值且不是 0/"0"）', test: (r) => r?.bookSourceType !== undefined && r?.bookSourceType !== 0 && r?.bookSourceType !== '0' && r?.bookSourceType !== null && r?.bookSourceType !== '' },
+  // URL 页码形态 `<a,b,c>`：判据在**这里唯一地**写死（分桶重叠曾造出假负结果，订正见矩阵
+  // d-search-paging）——剥 js 与 `{{}}` 后 URL 位仍含 `<…>` 组，按**源**去重；别的宽度只作历史
+  // 读数留在矩阵行，不当第二个主人。
+  {
+    key: 'pageAngleListUrl',
+    label: 'URL 位（searchUrl/exploreUrl）剥掉 js 片段与 {{}} 后仍含 <…> 组（按源去重；矩阵 b-page-angle-list 的主判据）',
+    test: (r) => [r?.searchUrl, r?.exploreUrl].some((v) =>
+      typeof v === 'string'
+      && /<[^<>]+>/.test(v.replace(/\{\{[\s\S]*?\}\}|<js>[\s\S]*?<\/js>|@js:[\s\S]*/gi, ''))),
+  },
+  {
+    key: 'headerLenientOnly',
+    label: '静态 header 严格 JSON 解析不了、但单引号宽松能解析（按源；矩阵 b-header-static 的主判据——这类头对面读得出、旧版本仓静默丢）',
+    test: (r) => {
+      const h = r?.header
+      if (typeof h !== 'string' || /^\s*(@js:|<js>)/i.test(h)) return false
+      // 「严格解析不了、宽松能解析」的宽松半边走 normalize.parseObjectJson 单点
+      //（严格 → 单引号交换两步都在里面；这里只需判「严格这步失败」）
+      try { JSON.parse(h); return false } catch {
+        return parseObjectJson(h) !== undefined
+      }
+    },
+  },
+  {
+    key: 'uppercaseCssSelector',
+    label: '选择器位出现含大写的 class / 属性值 token（**上界、不是需求方**：只有页面里实际大小写不一致才是受害者，判据与来历见矩阵 a-css-case-insensitive-match）',
+    test: (r) => cssSelectorStrings(r).some((s) => {
+      const re = /\.([A-Za-z_][\w-]*)|\[\s*[\w-]+\s*[=~^$*|]?=\s*["']?([^\]"']+)/g
+      let m: RegExpExecArray | null
+      while ((m = re.exec(s)) !== null) { if (/[A-Z]/.test(m[1] ?? m[2] ?? '')) return true }
+      return false
+    }),
+  },
+  // 节点导航（矩阵 h-jsoup-live-node-navigation）：判据是**调用形**，当下为 0 故形状已塞进
+  // KITCHEN_SINK。命中不等于受害者（可能包在 try 里），但「有没有人写这个形状」只有它能回答。
+  {
+    key: 'jsoupNodeNav',
+    label: '调用形 `.parent(|.children(|.elementSiblingIndex(|.nextElementSibling(|.previousElementSibling(|.siblings(|.closest(|.next(|.prev(|.index(` 出现（上界：会不会被执行要逐处读上下文；矩阵 h-jsoup-live-node-navigation）',
+    test: (r) => anyStr(r, /\.(?:parent|children|elementSiblingIndex|nextElementSibling|previousElementSibling|siblings|closest|next|prev|index)\s*\(/),
+  },
+  // 登录面三档形态（矩阵 b-login-ui）：非空总数已有键 `loginUi`，这两条把「形态」也变成可重算的
+  {
+    key: 'loginUiRowUiJson',
+    label: 'loginUi 非空且以 [ 开头（RowUi JSON 数组形态；矩阵 b-login-ui 三档之一）',
+    test: (r) => typeof r?.loginUi === 'string' && r.loginUi.trim().startsWith('['),
+  },
+  {
+    key: 'loginUiJsForm',
+    label: 'loginUi 非空且以 @js: 或 <js> 开头（脚本生成形态；矩阵 b-login-ui 三档之二）',
+    test: (r) => typeof r?.loginUi === 'string' && /^\s*(@js:|<js>)/i.test(r.loginUi),
+  },
+  // 发现面 exploreUrl 三档形态（矩阵 d-explore-three-forms；分母＝非空 exploreUrl）。**优先级写死**：
+  // js → JSON（`[`/`{` 开头）→ 剩下含 `::` 算文本——次序是三档互斥且和等于非空总数的前提。
+  // 2026-09-28 复算与行里读数一致（37 / 71 / 60，和 168）。
+  {
+    key: 'exploreFormJs',
+    label: 'exploreUrl 非空且以 @js: 或 <js> 开头（要过沙箱；矩阵 d-explore-three-forms 三档之一）',
+    test: (r) => { const t = typeof r?.exploreUrl === 'string' ? r.exploreUrl.trim() : ''
+      return t !== '' && /^(@js:|<js>)/i.test(t) },
+  },
+  {
+    key: 'exploreFormJson',
+    label: 'exploreUrl 非空、不是 js 形态且以 [ 或 { 开头（声明式 JSON；矩阵 d-explore-three-forms 三档之二）',
+    test: (r) => { const t = typeof r?.exploreUrl === 'string' ? r.exploreUrl.trim() : ''
+      return t !== '' && !/^(@js:|<js>)/i.test(t) && (t.startsWith('[') || t.startsWith('{')) },
+  },
+  {
+    key: 'exploreFormTitleUrl',
+    label: 'exploreUrl 非空、非 js、非 JSON 且含 :: （声明式「标题::URL」多行；矩阵 d-explore-three-forms 三档之三）',
+    test: (r) => { const t = typeof r?.exploreUrl === 'string' ? r.exploreUrl.trim() : ''
+      return t !== '' && !/^(@js:|<js>)/i.test(t) && !(t.startsWith('[') || t.startsWith('{')) && t.includes('::') },
+  },
+]
+
+/**
+ * 在册已知形态（**按族**登记，不是按整条骨架——骨架被 messageSkeleton 归一成长度类，逐条登记会把门
+ * 变成天天改的白名单）。代价如实：**同族内的新样例不报红**，所以每次跑要看「N× M源」读数变化，
+ * 别只盯红/绿。普查头一跑登记过 4 族，3 族已逐一收口（见各矩阵行），留下的这一族仍在被拒。
+ * 表只为让**新**形态冒出来即红：加条目必须先有矩阵行 id，实现了就删条目——留着当墓碑会被误读成裁决。
  */
 const KNOWN_RULE_SHAPES: Record<string, string> = {
   '无法识别的段类型（default 段白名单之外）（规则片段: "#"':
-    '无 `@` 单段（`kind: "0"` 等）——对面取值路径 = `attr(整串)` → 也取空；矩阵 `a-bare-index-segment` 记为不适用（guard 族），非欠账',
+    '无 `@` 单段（`kind: "0"` 等）——取值路径 = `attr(整串)` → 也取空；矩阵 `a-bare-index-segment` 记为不适用（guard 族），非欠账',
 }
 
 /**
- * 在册已知桥缺口：对面 JsExtensions 有、本仓没挂、且已在矩阵行排队的 `java.*` 方法名。
- * 普查头两批抓出的 connect / getWebViewUA / androidId 各自有了去处（前两个实现，
- * `androidId` 走宿主桩点名抛错）。这张表留着是为了让**新**缺口冒出来即红，不是给存量挡红：
- * 往里加条目必须先有矩阵行 id。
- *
- * 下面三条全部来自**换分母**那一次（2026-09-22 第 23 批：本库 214 源之外另取两份独立公开合集
- * 共 67 源跑同一条普查，`DSH_PARSE_CENSUS_FILE` 指过去即可复现）——本库从未用过它们，
- * 所以「当前为空」那句话只对旧分母成立。`java.post` 也在同一次被发现（9 源在用），
- * 它不登记在这里：已经实现了（矩阵 `h-java-post`）。
+ * 在册已知桥缺口：脚本用得到、本仓没挂、已在矩阵行排队的 `java.*` 方法名。只为让**新**缺口冒出来
+ * 即红、不给存量挡红：加条目必须先有矩阵行 id。下面三条全部来自换分母那批（2026-09-22，本库之外
+ * 另取两份公开合集，`DSH_PARSE_CENSUS_FILE` 指过去可复现）——本库从未用过它们。
  */
 const KNOWN_BRIDGE_GAPS: Record<string, string> = {
-  t2s: '繁简词典不在本仓，对面还先跑自家 fixT2sDict——换轮子（opencc 一类）得到的文本与对面不逐字相等，要拍板：矩阵 h-java-t2s',
+  t2s: '繁简词典不在本仓，且对面在转换前还会跑自家补丁词典——换轮子（opencc 一类）得到的文本与对面不逐字相等，要拍板：矩阵 h-java-t2s',
   cacheFile: '裁决已有（真实文件 API = 数据外泄面），这一条的作用是确认该裁决真有需求方：矩阵 h-java-cache-file',
-  toURL: '对面返回 JVM URL 对象；先看清那 1 源真调了哪些成员再造壳：矩阵 h-java-tourl',
+  toURL: '返回的是 JVM URL 对象；先看清那 1 源真调了哪些成员再造壳：矩阵 h-java-tourl',
 }
 
-/**
- * 本仓 `java` 挂载面：**在沙箱里跑一句探针，让真对象自己报**，并顺带标出哪些是「需要安卓宿主」桩。
- * 不抄协议表、也不正则抠 BOOTSTRAP 源码——两者都是第二份抄本，必漂：
- * 普查第一版拿 `SANDBOX_MOUNTS.javaSync` 当分母，把 async 行（`ajax`）与 BOOTSTRAP 手工挂载的
- * no-op 族（`toast`/`log`/`startBrowser`…）全误报成缺口；改成正则抠源码后又漏了「一行挂两个键」
- * 的 `longToast`。真挂载面只住在沙箱对象里。
- *
- * 顺带产出的**桩名单**用于面 C：2026-09-22 实证 `digestHex`/`digestBase64Str`/`HMacHex`/`HMacBase64`
- * 同时在协议表（真实现）与 BOOTSTRAP 桩名单里，而后挂的桩覆盖了真实现——协议表测试全绿，脚本一调
- * 就抛「需要安卓宿主环境」。这类"实现了但够不着"的缺陷，只有问沙箱本体才查得出来。
- */
-async function probeJavaSurface(): Promise<{ names: Set<string>; stubs: Set<string> }> {
-  const url = 'https://census.example.com/read/1'
-  const out = await evalJs(
-    'var o = []; for (var n in java) { var f = java[n]; o.push(n + (typeof f === "function" ' +
-    '&& String(f).indexOf("\u9700\u8981\u5b89\u5353\u5bbf\u4e3b\u73af\u5883") >= 0 ? "\\tSTUB" : "")); } return o.join("\\n")',
-    { result: '', baseUrl: url, source: 'https://census.example.com' },
-    { baseUrl: url, source: 'https://census.example.com', vars: {} },
-    { segmentIndex: 0, segmentRaw: '@js:parse-census' },
-    'content',
-  )
-  const text = out.value.kind === 'value' ? out.value.text : ''
-  const names = new Set<string>()
-  const stubs = new Set<string>()
-  for (const line of text.split('\n').filter(Boolean)) {
-    const [n, tag] = line.split('\t')
-    names.add(n)
-    if (tag === 'STUB') stubs.add(n)
-  }
-  expect(names.size, `沙箱报出的 java 方法名只有 ${names.size} 个，探针或挂载面出了问题`).toBeGreaterThan(20)
-  return { names, stubs }
-}
+/** 本仓 `java` 挂载面：**问沙箱本体**，探钢单点在 `tests/java-surface.ts`——第二个消费者
+ * （`host-methods.test.ts`）出现后两处各探必漂；为什么只能问沙箱本体写在那个文件头上。 */
 
-/** 对面脚本侧 `java` 对象的权威定义：help/JsExtensions.kt 的公开 fun 名（含重载去重） */
-function upstreamJavaNames(ref: string): Set<string> {
-  // 引用写成「带目录的相对路径」这一种形态（相对对面 app 包根）：既是最小改动，
-  // 也让引用活性守卫能真去对面核这个文件在不在——逐段拼字面量时它只看得见裸文件名
-  const p = path.join(ref, 'app/src/main/java/io/legado/app', 'help/JsExtensions.kt')
-  if (!fs.existsSync(p)) {
-    throw new Error(
-      `读不到对面 java 面定义：${p}\n` +
-      '  普查的「对面有没有这个方法」判据以它为准，不做静默降级——设 DSH_LEGADO_REF 指到 checkout。',
-    )
-  }
-  const out = new Set<string>()
-  for (const m of fs.readFileSync(p, 'utf8').matchAll(/^\s{4}(?:@\w+(?:\([^)]*\))?\s+)*(?:open |override |suspend )*fun ([a-zA-Z][A-Za-z0-9]*)\s*\(/gm)) {
-    out.add(m[1])
-  }
-  expect(out.size, `对面 JsExtensions 抽到的方法名过少（${out.size}），判据已失效`).toBeGreaterThan(50)
+/** 脚本侧 `java` 对象的权威定义：从**仓内快照**读公开 fun 名（含重载去重）。
+ *  快照由 `tests/legado-coverage/capture-upstream-snapshot.test.ts` 在开发阶段生成——
+ *  本普查（连同其他两条判据）运行时不依赖任何外部 checkout。 */
+function upstreamJavaNames(): Set<string> {
+  const out = new Set(readSnapshot().javaMethods)
+  expect(out.size, `快照里的 java 方法名过少（${out.size}），判据已失效——刷新快照`).toBeGreaterThan(50)
   return out
 }
 
@@ -237,7 +338,7 @@ describe.skipIf(!ON)('解析面全库普查（DSH_PARSE_CENSUS=1）', () => {
 
     // ── 面 B：js 宿主调用 ───────────────────────────────────────────
     const { names: mounted, stubs } = await probeJavaSurface()
-    const upstream = upstreamJavaNames(UPSTREAM_REF)
+    const upstream = upstreamJavaNames()
     const javaCalls = new Map<string, { n: number; srcs: Set<string> }>()
     const packages = new Map<string, { n: number; srcs: Set<string> }>()
     entries.forEach((e, i) => {
@@ -252,7 +353,7 @@ describe.skipIf(!ON)('解析面全库普查（DSH_PARSE_CENSUS=1）', () => {
         }
       }
     })
-    // 缺口只在「对面确实有这个公开方法」时才成立；对面也没有的名字（脚本写错、别的 fork、
+    // 缺口只在「这个公开方法确实在脚本面上」时才成立；本来就没有的名字（脚本写错、别的 fork、
     // 私有扩展）只报读数，不判红——否则把源脚本的坏冒成我们的欠。
     const notMounted = [...javaCalls.entries()].filter(([n]) => !mounted.has(n))
     const bridgeGaps = notMounted.filter(([n]) => upstream.has(n))
@@ -273,11 +374,16 @@ describe.skipIf(!ON)('解析面全库普查（DSH_PARSE_CENSUS=1）', () => {
       }
     }
     if (bridgeGaps.length) {
-      console.log(`[parse-census] 脚本调了、对面有、本仓没挂的 java.* 方法 ${bridgeGaps.length} 种：`)
+      console.log(`[parse-census] 脚本调了、快照里有、本仓没挂的 java.* 方法 ${bridgeGaps.length} 种：`)
       console.log(fmt(new Map(bridgeGaps), 'name'))
+      // **两类分开展印**：在册那几条**只报不红**（登记过的缺席）——「需求方出现了」只在这行的
+      // 非 0 里看得见，别以为门会替它响（矩阵 h-java-unmounted-uncalled 的重开条件曾误写成「门会红」）。
+      const rostered = bridgeGaps.filter(([n]) => KNOWN_BRIDGE_GAPS[n]).map(([n]) => n)
+      const unlisted = bridgeGaps.filter(([n]) => !KNOWN_BRIDGE_GAPS[n]).map(([n]) => n)
+      console.log(`    在册只报：${rostered.join(' / ') || '无'} ｜ 未在册即红：${unlisted.join(' / ') || '无'}`)
     }
     if (notUpstream.length) {
-      console.log(`[parse-census] 对面 JsExtensions 也没有的调用名 ${notUpstream.length} 种（不判红，只报）：`)
+      console.log(`[parse-census] 快照的 java 方法集里也没有的调用名 ${notUpstream.length} 种（不判红，只报）：`)
       console.log(fmt(new Map(notUpstream), 'name'))
     }
     if (packages.size) {
@@ -285,12 +391,51 @@ describe.skipIf(!ON)('解析面全库普查（DSH_PARSE_CENSUS=1）', () => {
       console.log(fmt(packages, 'pkg'))
     }
 
-    // ── 面 C：桥可达性对账（协议表有真实现的名字，不许在沙箱里仍是抛错桩）──────────
-    // 病史：digestHex/HMacHex 一族同时存在于协议表与 BOOTSTRAP 桩名单，桩后挂覆盖真实现——
-    // 协议表测试全绿，脚本一调就抛。见 probeJavaSurface 的注释。
+    // ── 面 D：需求读数表（登记册那些「N 源带值」的复数入口）────────────
+    const demand = DEMAND_KEYS.map((d) => ({ key: d.key, label: d.label, test: d.test, hits: entries.filter((e: any) => d.test(e?.raw ?? e)).length }))
+    // 当下数出 0 的判据，必须在反空转样品上数得出东西来——否则那个 0 分不清「没人用」与「判据坏了」。
+    const silentZero = demand.filter((d) => d.hits === 0 && !d.test(KITCHEN_SINK)).map((d) => d.key)
+    console.log(`[parse-census] 需求读数（分母 ${entries.length} 源；括号内是判据，不是键名——同一个键常有两种数法）：`)
+    for (const d of demand) console.log(`    ${String(d.hits).padStart(4)} 源  ${d.label}`)
+    // `##` 这条**故意标注分母**：本表只数「过规则引擎的字段」，矩阵 a-replace-tail-* 是「raw 全容器扫」，
+    // 两边数字本就该不同——在这里另写一条更弱的判据就是给同一个量造第二份抄本。
+    console.log(`    ${String(sites.filter((s) => s.rule.includes('##')).length).padStart(4)} 条  含 ## 的规则串（判据=过规则引擎的字段集，窄于矩阵行的 raw 全容器口径）`)
+
+    // ── 面 D 对账：矩阵 ROW_DEMAND 把「note 里引用的数」绑到可复算的来源 ──────
+    // 键取自本表 hits 与**面 B 已算好的调用名集**（`java.<名>` 走后者，不另立判据）。断言只有一条
+    // 硬的：绑的东西必须存在（行 id 在册、键算得出）；**数不一致只打印漂移不判红**——那是某天的
+    // 现量，增删源后必然不等，判红等于把门变成天天改的白名单。
+    const hitsByKey = new Map<string, number>(demand.map((d) => [d.key, d.hits]))
+    // `java.<名>` 一类键：先按快照方法名铺 0（没人调就是 0，正是绑定要回答的），再用面 B 实测覆盖
+    // ——只从 javaCalls 起步会让「零调用」的键算不出来，而零恰恰是绑定要能表达的值。
+    for (const name of upstream) hitsByKey.set('java.' + name, 0)
+    for (const [name, v] of javaCalls) hitsByKey.set('java.' + name, v.srcs.size)
+    const rowIds = new Set(COVERAGE.map((r) => r.id))
+    const badBinding: string[] = []
+    const drift: string[] = []
+    for (const [id, list] of Object.entries(ROW_DEMAND)) {
+      if (!rowIds.has(id)) badBinding.push(`ROW_DEMAND 里的行 id「${id}」在矩阵里不存在（改名/删行没同步绑定表）`)
+      for (const b of list) {
+        const live = hitsByKey.get(b.key)
+        if (live === undefined) { badBinding.push(`${id} 绑的键「${b.key}」面 D 与面 B 都算不出来`); continue }
+        if (live !== b.n) drift.push(`${id} · ${b.key}：记的 ${b.n}（截至 ${b.asOf}）→ 现算 ${live}`)
+      }
+    }
+    console.log(drift.length
+      ? `[parse-census] 需求读数漂移 ${drift.length} 处（只提示，不判红）：\n  ${drift.join('\n  ')}`
+      : `[parse-census] 需求读数对账：${Object.keys(ROW_DEMAND).length} 行绑定的读数与现算一致`)
+    expect(badBinding, `读数绑定指向了不存在的东西：\n  ${badBinding.join('\n  ')}`).toEqual([])
+
+    // ── 面 C：桥可达性对账（协议表有真实现的名字，不许在沙箱里仍是抛错桩；病史见文件头面 C）──
     const clobbered = JAVA_PROTOCOL.map(r => r.name).filter(n => stubs.has(n))
 
     // ── 断言：未知形态为 0 ─────────────────────────────────────────
+    // 读数不判红，判据的**形状**判红：表短了、整表全 0、或零读数判据在合成样品上也数不出。
+    expect(demand.length, '需求读数表条目过少，判据在空转').toBeGreaterThan(15)
+    expect(demand.some((d) => d.hits > 0), '需求读数表整表为 0：键名或判据错了').toBe(true)
+    // 逐条零读数防空转：真库数出 0 的判据必须在合成样品上数出非 0——「0 需求方」那几行的裁决
+    // 整条架在「0 是真 0」上，而判据接不上东西时也会报 0。
+    expect(silentZero, `这些判据当下为 0、在反空转样品上也为 0（分不清「没人用」与「判据坏了」）：${silentZero.join(', ')}`).toEqual([])
     const knownFamilies = Object.keys(KNOWN_RULE_SHAPES)
     const unknownShapes = [...ruleRejects.keys()].filter(s => !knownFamilies.some(k => s.includes(k)))
     const unknownBridge = bridgeGaps.map(([n]) => n).filter(n => !KNOWN_BRIDGE_GAPS[n])

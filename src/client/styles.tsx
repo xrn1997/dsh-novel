@@ -4,31 +4,23 @@ import type { ReactNode } from 'react'
  *  （口径详见 `docs/design/client.md`）。
  *
  *  ── 配色契约（宿主 `@deepseek-ai/dsh-client-ui-theme` 的 alias 语义层）─────────────
- *  宿主把调色板与语义层都挂在 `body` / `body[data-ds-dark-theme]` 上（两套同名 token，
- *  暗态靠选择器特异性覆盖），所以本插件**只需引用语义 token**，光/暗自动跟随，不必自己
- *  判深浅、不该写死任何主题色。踩过的坑（本次修复的病根）：
- *    ① `--dsw-alias-border-l` 在宿主里**根本不存在**（宿主是 l1/l2/l3/l4 四级）——
- *       引用它 = 永远落到硬编码 fallback，边框在光/暗两态都不跟随宿主（暗态还偏浅）。
- *    ② `rgba(255,255,255,.0x)` 这类写死的白色叠层只在暗底成立，光态下 hover/表头/进度槽
- *       全部与底色无对比（实测对比度 ≈ 1.00，肉眼不可见）。
- *    ③ 状态色（可用/不可用）写死 `#3fb950/#f85149` = 钉死一套主题的观感。
- *    ④ 同罪但换了主语：**引用本层自己不存在的 token**。`.novel-searchbox` 曾写
- *       `var(--novel-layer)`（层板只有 `-1/-2/-3`），CSS 不报错，而是让整条 `background`
- *       简写落到 `unset` → 实测计算值 `rgba(0,0,0,0)`，搜索框从此没有底。
- *       守卫在 `tests/client/ui-system.test.tsx`：本层每个 `var(--novel-*)` 引用都必须有定义。
- *  本文件因此把用到的 token 先收进 `.novel-root, [data-novel-scope]` 一层局部变量：
- *  视觉规则只读局部变量（读起来是自解释的语义名），token→宿主、fallback→暗底老观感。
- *  自定义属性覆盖 `.novel-root` 与 `[data-novel-scope]` 两个根：病史是宿主设置区块曾渲染在
- *  **独立 React 树**（`SettingsSection` 在宿主设置页，拿不到 `NovelView` 的根节点，坑见
- *  ab2391d）；2026 IA 后设置区块搬进小说视图（已同树），双根覆盖与组件自带 `data-novel-scope`
- *  的自足性**保留**——组件在哪棵树渲染都成立，可测性不受挂载点影响。
+ *  宿主把调色板与语义层都挂在 `body` / `body[data-ds-dark-theme]` 上，本插件**只需引用语义
+ *  token**，光/暗自动跟随，不判深浅、不写死主题色。踩过的坑（修复的病根）：
+ *    ① 引用**不存在的宿主 token**（如 `--dsw-alias-border-l`，宿主只有 l1..l4）——CSS 不报错，
+ *       只落到硬编码 fallback，光/暗都不跟随；
+ *    ② 写死白色叠层 / 状态色 hex = 钉死一套主题的观感（暗底值在光态下对比度 ≈ 1.00）；
+ *    ③ 引用**本层自己不存在的 token**（如 `var(--novel-layer)`，层板只有 -1/-2/-3）——整条
+ *       background 简写静默落 `unset`。守卫在 `tests/client/ui-system.test.tsx`：本层每个
+ *       `var(--novel-*)` 引用都必须有定义。
+ *  本文件因此把用到的 token 先收进 `.novel-root, [data-novel-scope]` 一层局部变量：视觉规则
+ *  只读局部变量，token→宿主、fallback→暗底老观感。双根覆盖与组件自带 `data-novel-scope` 的
+ *  自足性**保留**（设置区块曾在独立 React 树，现虽已同树，组件在哪棵树渲染都应成立）。
  *
  *  ── 标度（sp/fs/r/shadow/z/dur）───────────────────────────────────────────────
- *  间距、字阶、圆角、阴影、层级、动效时长各有一套 named 标度，视觉规则里不再散写像素：
- *  散值的代价不是「不美观」，是**同一层里 2/3/5/7/11/13/18/22px 混用**时读者无法判断
- *  哪一档才是意图，改一处无从对齐其余三十处。中文最小可读字阶取 11px（10px 的「本地」角标
- *  笔画会糊）。z 序见「浮层层级」一节，与本层 `--novel-z-*` 同表——`CTRL_Z` 是控制器层的
- *  JS 侧主人（`reader-ctrl-z.test.ts` 钉），两者的相对次序由 `ui-system.test.tsx` 钉死。
+ *  间距、字阶、圆角、阴影、层级、动效各有一套 named 标度，视觉规则里不散写像素：散值的代价
+ *  是同一层里 2/3/5/7/11/13/18/22px 混用时读者判断不出哪一档是意图。中文最小可读字阶 11px。
+ *  z 序与本层 `--novel-z-*` 同表——`CTRL_Z` 是控制器层的 JS 侧主人（`reader-ctrl-z.test.ts` 钉），
+ *  相对次序由 `ui-system.test.tsx` 钉死。
  *
  *  以 <style data-novel-style> 注入（renderToString 友好；HMR 重载随 bundle 整体替换）。 */
 export const NOVEL_CSS = `
@@ -106,34 +98,26 @@ export const NOVEL_CSS = `
   --novel-cover-4: #443a4d;
   color: var(--novel-text);
 }
-/* ── 布局与宿主壳收口（与配色无关，别在改主题时弄丢：commit e25ff8e / ab2391d）──────
+/* ── 布局与宿主壳收口（与配色无关，别在改主题时弄丢）──────────────────────
    五分支共用同一条 overflow 链：.novel-root 定高 overflow:hidden、.novel-main
    flex:1 + overflow-y:auto 自己滚（阅读器一视同仁），谁在滚由 src/client/scrollport.ts
    向上探测判定（现即 .novel-main）。注意本文件是模板字符串：注释里不写反引号。
-   病史——**别把放开规则加回来**：阅读器曾放过这两层 overflow、把正文交给宿主 resident
-   scrollport（[data-conversation-scroll]）承载，那是 conversation.view 时代的前提；
-   a9f35f7 迁全局面板后祖先链是 centerCol/frame 双 overflow:hidden，链上再无 scrollport，
-   放开 = 整条链没人滚：滚轮无效、正文裁在首屏、scroll 事件永不发生（进度落盘/预取/回跳
-   一并死）。三链差分实测与病史细节见 docs/design/client.md「控制器层与正文层」。 */
+   **别把放开规则加回来**：阅读器曾放过这两层 overflow 交给宿主 scrollport 承载——那是
+   conversation.view 时代的前提，迁全局面板后链上再无 scrollport，放开 = 整条链没人滚
+   （滚轮无效、正文裁在首屏、scroll 事件永不发生，进度落盘/预取/回跳一并死）。
+   病史与三链差分实测见 docs/design/client.md「控制器层与正文层」。 */
 .novel-root { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 .novel-main { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-/* 「小说」视图在场时收掉宿主常驻 composer（AI 输入框）：它是会话壳的固定座位
-   （scrollBody > [data-composer-seat]，data-phase=active 下 sticky bottom），view 环切换不卸载它，
-   所以切到小说 tab 后它仍贴在底部、还压在正文上。宿主没有「本视图不需要输入框」的钩子
-   （轨迹视图用的是 data-conversation-composer-overlay 浮层），故由本样式层用 :has 判在场性：
-   只有 data-novel-root 进了 DOM（= 小说 tab 被选中渲染）才命中，切回「对话」样式随之卸载、输入框即时恢复。
-   只藏「默认 composer」那一层（chain 的 overlay fallback 包裹层）而不是整个 [data-composer-seat]——
-   未选中接管时宿主给该层写的是 inline display:contents，故必须 !important；而 ui-approval /
+/* 「小说」视图在场时收掉宿主常驻 composer（AI 输入框）：它是会话壳的固定座位，view 环切换不卸载
+   它，切到小说 tab 后仍贴在底部压在正文上；宿主没有「本视图不需要输入框」的钩子，故本样式层用
+   :has 判在场性（data-novel-root 进 DOM 才命中，切回「对话」即时恢复）。
+   只藏「默认 composer」那一层（chain 的 overlay fallback 包裹层）而不是整个 [data-composer-seat]
+   ——宿主给该层写的是 inline display:contents 故必须 !important；而 ui-approval /
    ui-user-questions / ui-subagent 的接管组件是它的**兄弟节点**，照样渲染：小说 tab 里 agent 提问与
-   审批提示不会因为本规则被吞掉（整座 display:none 会吞掉，用户在等待中看不到提问 → 卡死）。
-   宿主 DOM 钩子 [data-conversation-scroll]/[data-composer-seat]/[data-chain-overlay-fallback]
-   与 src/client/scrollport.ts 的 [data-conversation-scroll] 同源。 */
+   审批提示不会被吞掉（整座 display:none 会吞掉，用户在等待中看不到提问 → 卡死）。 */
 [data-conversation-scroll]:has([data-novel-root]) [data-chain-overlay-fallback="conversation.composer"] { display: none !important; }
-/* 配套控件：会话列宽拖拽把手。宿主在 .wSkVaW_body 里 [data-conversation-scroll] 之后渲染左右两条
-   div[data-width-handle]（宿主自己的覆盖场景也是 hide 它：:has([data-conversation-composer-overlay]) → display:none）。
-   它是 40px 透明 col-resize 条，hover 出竖光条，拖动写 --dsh-chat-user-width → --dsh-composer-card-max-width
-   = 「调 AI 输入框宽度」；输入框收掉后它没对象可调，留着只剩一条会在正文上冒光标的假控件。
-   用兄弟选择器而非后代：对话视图（chat）里的同名把手不受影响。 */
+/* 配套控件：会话列宽拖拽把手（40px 透明 col-resize 条，调 AI 输入框宽度）。输入框收掉后它没对象
+   可调，留着只剩一条会在正文上冒光标的假控件。用兄弟选择器而非后代：对话视图里的同名把手不受影响。 */
 [data-conversation-scroll]:has([data-novel-root]) ~ [data-width-handle] { display: none; }
 /* 「控制器层跟随深色」：勾上即把本层局部 token 钉成暗底值（正文纸张色不受影响）。
    宿主没有「强制暗层」的现成 token，故这一处允许字面量——它表达的是用户显式选择，不是主题推导。
@@ -167,13 +151,10 @@ export const NOVEL_CSS = `
 }
 [data-novel] { font-size: var(--novel-fs-base); }
 /* ── border-box 守卫（作用域：插件自己的两棵树，不碰宿主）──
-   病史（探针实测）：本样式层此前没有 box-sizing 声明 → 默认 content-box，
-   .novel-wrap（width:100% / max-width:1600px + padding:0 24px）的外廓恒比容器宽 48px——
-   vp=1670 时 main cw=1670 ≥ wrap 外廓 1648 侥幸无恙；vp=970 时实测 main cw=970 sw=1002、
-   overflowing=novel-wrap；.novel-main 的 overflow-y:auto 按 CSS 规范把另一轴也算成
-   auto → 底部横向滚动条 + 网格右侧被截断（用户真机反馈「书架宽度怎么回事」的根因）。
-   同病还波及一切「显式 width/max-width + padding」件（modal/drawer/prefs 定宽都肥一圈）。
-   reset 只圈 .novel-root 与 [data-novel-scope] 两棵树——宿主其余区域不受影响。
+   没有 box-sizing 声明则默认 content-box，凡「显式 width/max-width + padding」的件外廓都比
+   容器宽（padding 量）——.novel-wrap 窄列下横向溢出 + .novel-main 把另一轴也算成可滚 →
+   底部横滚条 + 网格右侧截断（用户真机反馈「书架宽度怎么回事」的根因）；modal/drawer/prefs
+   定宽同病都肥一圈。reset 只圈 .novel-root 与 [data-novel-scope] 两棵树。
    （本文件注释里别写反引号：NOVEL_CSS 是模板字符串，反引号会当场截断它。） */
 .novel-root, .novel-root *, .novel-root *::before, .novel-root *::after,
 [data-novel-scope], [data-novel-scope] *, [data-novel-scope] *::before, [data-novel-scope] *::after {
@@ -194,24 +175,15 @@ export const NOVEL_CSS = `
 }
 .novel-tabs button:hover { color: var(--novel-text); }
 .novel-tabs button.on { color: var(--novel-brand-strong); background: var(--novel-brand-tint); font-weight: 600; }
-/* ── 全局状态条＝浮层（真机逐帧实测）─────────────────────────
-   病根：状态条原本是区块里的**普通流内**元素。一次启停就推一条泳道 → 挂上即把下面所有内容
-   顶下去、settle 再弹回（实测区块头 y 116→151、源列表首行 y 361→396，整块 **+35px**，每次
-   启停 2 条 layout-shift）。单源启停往返本机只有 13~20ms（≈1 帧），于是肉眼看到的是「一帧的
-   下沉回弹」＝闪烁；服务端事件循环被占（LLM 流式/导入验证）时往返变长，就变成整块下移几百
-   毫秒再弹回（节流 400ms 实测：泳道连续绘制 26 帧 ≈ 416ms）。
-   修法：宿主容器 position:relative + 状态条 position:absolute —— 泳道来去不再参与布局，
-   慢操作与错误条也不再顶动内容。代价：条目在场时它浮在区块头上方一小条（自带底/描边/投影
-   以便与正文分离），条目仍可点（任务条=跳转、错误条=定位/忽略）。
-   2026-09 住址变更：锚点从「小说视图内的 .novel-status-host」换成「宿主 shell.overlay 里的
-   .novel-shell-status」——conversation.view 一次只渲染一个 tab，状态条住在视图环内就等于切走
-   tab 即失去读数。那一层默认 click-through（官方声明：entries opt back into pointer events），
-   故条目自己收回 pointer-events。
-   但**条身不能沿用原来那套顶部通栏偏移**：原锚点在小说视图内部的区块头，宽满 = 视图宽；换到
-   overlay 后容器铺满整个 frame（宿主 .pI_x6G_overlayLayer 是 inset: 0，含会话顶栏），
-   「top + left + right」的真机读数就是「y=6、左右各 8、全宽 1264、高 26」的一条——正好盖在
-   宿主会话标题行上，而它是 pointer-events:auto，于是任务在跑期间那一条带子里宿主自己的钮都点不到。
-   改锚右下并限宽：角落无宿主 chrome，观感是「一颗浮在内容之上的状态胶囊」。 */
+/* ── 全局状态条＝浮层 ─────────────────────────
+   病根：状态条原本是**普通流内**元素，泳道一挂就把下面内容顶下去、settle 再弹回（逐帧实测
+   +35px、每次启停 2 条 layout-shift），而单源启停往返 ≈1 帧 = 肉眼可见的闪烁。
+   修法：容器 position:relative + 状态条 absolute——泳道来去不再参与布局。代价是条目浮在上方
+   一小条（自带底/描边/投影），仍可点（任务条=跳转、错误条=定位/忽略）。
+   2026-09 住址变更：锚点从视图内换成宿主 shell.overlay 的 .novel-shell-status——中央呈现座位
+   一次只渲染一个面板，住在视图环内切走即失去读数。该层默认 click-through，故条目自己收回
+   pointer-events。**条身锚右下而非顶部通栏**：overlay 铺满整个 frame，顶部通栏实测正盖在宿主
+   会话标题行上（pointer-events:auto ⇒ 任务在跑时宿主钮点不到）；右下角落无宿主 chrome。 */
 .novel-shell-status {
   position: fixed; inset: 0; pointer-events: none; z-index: var(--novel-z-status);
 }
@@ -304,10 +276,9 @@ export const NOVEL_CSS = `
 .novel-group-legend { cursor: help; margin-left: var(--novel-sp-0); }
 /* 表头「?」图例（cursor:help 是「这里有解释」的唯一提示） */
 /* 圆角**不能**靠 overflow: hidden 收：行内「⋯」菜单（.novel-menu 绝对定位）的包含块
-   .novel-actions 就在表内，一裁就把菜单锁进表格盒、超出表底的部分点不到——实测（真
-   NOVEL_CSS + 真 Edge）末行菜单 89px 只可见 **21px**，越出表底 68px；库里源一少、菜单
-   每次都在末行时必现（2026-09-26 用户实机）。改为首/末行各自带圆角裁自己的背景，
-   浮层语义归浮层、圆角归圆角。 */
+   .novel-actions 就在表内，一裁就把菜单锁进表格盒、超出表底的部分点不到（末行菜单只可见
+   约 1/4，2026-09-26 用户实机）。改为首/末行各自带圆角裁自己的背景——浮层归浮层、圆角归
+   圆角（判据与第二档翻转见 client.md「已知开口」行内 ⋯ 菜单落位条）。 */
 .novel-table { border: 1px solid var(--novel-border); border-radius: var(--novel-r-md);
   /* 容器查询锚：源列表按**表格自身宽度**（不是视口宽度）收列——宿主会话列可拖窄，
      视口断点在分栏布局下量不准。inline-size containment 同时把表格的布局影响范围关住。 */
@@ -403,21 +374,22 @@ export const NOVEL_CSS = `
 .novel-src-stats > span:not(:first-child)::before { content: '·'; margin-right: var(--novel-sp-2); color: var(--novel-text-3); }
 .novel-src-stats .warn { color: var(--novel-warn); }
 .novel-src-stats .err { color: var(--novel-err); }
-/* 窄列退化：留「共 N 个源 · 已启用 M」，掉 已停用/未验证/坏源（丢了能从下拉再筛回来，宽列也在同一屏）。
-   1000px = 渲染台实测（2026-09-19，out/settings.light.html，浏览器改 .novel-root 宽后量
-   .novel-list-head 的 content-box，量的是**出厂 CSS**、非注入覆盖）：状态带五项自然宽 326px、
-   退化后 140px；整行还含标题 + 文本框 + 三个下拉 + 两个钮——内容宽 1004 时五项同线，
-   五项常驻则在 984 就把钮挤下第二行；退化后单线能撑到 814，再窄由 flex-wrap 自然折行（不裁字）。
-   即退化买回 ~170px 单线余量。宿主内容列文档实测 ~1600（此处内容宽 1544）→ 正常态全五项同线。 */
+/* 窄列退化：留「共 N 个源 · 已启用 M」，掉 已停用/未验证/坏源（丢了能从下拉再筛回来，宽列
+   也在同一屏）；再窄由 flex-wrap 自然折行（不裁字）。断点 1000px 由渲染台实测（2026-09-19：
+   五项自然宽 326px、退化后 140px，退化买回约 170px 单线余量；宿主内容列常态 ~1600 全五项
+   同线）。 */
 @container (max-width: 1000px) {
   .novel-src-stats .slim { display: none; }
 }
 .novel-list-body { display: flex; flex-direction: column; gap: var(--novel-sp-3); padding: var(--novel-sp-3) var(--novel-sp-4) var(--novel-sp-4); }
 /* 行内「⋯」溢出菜单：低频动作收纳（登录态/试跑/删除）——行内只留当下要用的；
-   锚点是 .novel-actions（position:relative），菜单浮在该格下方 */
+   锚点是 .novel-actions（position:relative），菜单浮在该格下方。
+   .up = 向下放不下时朝上开（判据与理由在 SettingsSourceList 的 toggleMenu）：
+   长列表滚到滚动口底，末行菜单向下展开会越出容器可见底——菜单本身没错，是它伸到了外面。 */
 .novel-menu { position: absolute; right: 0; top: calc(100% - 6px); z-index: var(--novel-z-panel); min-width: 168px;
   background: var(--novel-layer-3); border: 1px solid var(--novel-border-strong); border-radius: var(--novel-r-md);
   box-shadow: var(--novel-shadow-2); overflow: hidden; }
+.novel-menu.up { top: auto; bottom: calc(100% - 6px); }
 .novel-menu button { display: block; width: 100%; text-align: left; background: none; border: none; color: var(--novel-text-2);
   font: inherit; font-size: var(--novel-fs-md); padding: var(--novel-sp-2) var(--novel-sp-4); cursor: pointer; }
 .novel-menu button:hover { background: var(--novel-hover); color: var(--novel-text); }
@@ -565,16 +537,14 @@ export const NOVEL_CSS = `
 .novel-rdr-loading { padding: var(--novel-sp-7) 0; text-align: center; color: var(--novel-text-3); font-size: var(--novel-fs-md); }
 .novel-sentinel { opacity: .5; font-size: var(--novel-fs-sm); padding: var(--novel-sp-6) 0; text-align: center; }
 /* 目录抽屉：锚视口靠**外层 .novel-drawer-slot 的 sticky**，抽屉本体 absolute 浮在正文右缘。
-   为什么外层宽度给 0：抽屉若按老办法当「有宽度的 flex 兄弟」，它会从正文列里切走 293px
-   （实测视口 766px 下正文 38 字/行 → 22 字/行）。0 宽槽 + 绝对定位子件 = sticky 的跟随性
-   保留、正文列不缩水、窄屏时抽屉压在正文上（选章是瞬时态，压字可接受，挤列不可接受）。
-   三版死法各不同，记全：
-     ① flex 兄弟 + sticky，高度无上限：912 条比正文高，行高 = max(正文, 目录) → 整页撑到两万多 px。
-     ② absolute 锚 .novel-rdr-main：不撑页了，但锚的是**内容盒起点**（正文开头），读到第 500 章
-        点目录，抽屉画在你头顶上方两万 px 处；且 max-height 的 100% 也是正文高度
-        （复刻实测：父高 2400px、视口 766px 时约束算出 2380px，形同虚设）。
-     ③ 现方案的上一版（兄弟 + 视口上限）：锚对了，但**flex 列里的条目会在滚动发生前先被
-        flex-shrink 压扁**——实测每条 12px 高（60 条 850px 内容塞进 678px 容器），文字互相咬住。
+   为什么外层宽度给 0：抽屉当「有宽度的 flex 兄弟」会从正文列里切走宽度（实测 766px 视口下
+   38 字/行 → 22 字/行）。0 宽槽 + 绝对定位子件 = sticky 跟随性保留、正文列不缩水、窄屏时
+   抽屉压在正文上（选章是瞬时态，压字可接受，挤列不可接受）。
+   三版死法（逐版读数记在 client.md「控制器层与正文层」目录抽屉条）：
+     ① flex 兄弟 + sticky 无高度上限 → 整页被目录撑到两万多 px；
+     ② absolute 锚 .novel-rdr-main → 锚的是内容盒起点（读到第 500 章点目录画在头顶上方），
+        且 max-height 的 100% 也是正文高度，形同虚设；
+     ③ 兄弟 + 视口上限 → flex 列里的条目在滚动发生前先被 flex-shrink 压扁（每条只剩 12px）。
         ③ 的两处修正：条目 flex: none（守卫钉住）+ 槽宽 0。
    sticky 在本环境已被工具栏证明可用（同一祖先链、同一 .novel-main 滚动口径）。
    槽几何是**共用的一条**（选择器组）：目录抽屉与右上角那两块面板（注释 / 导入说明）同住阅读区，
@@ -737,26 +707,22 @@ export const NOVEL_CSS = `
 .novel-shelf-count { color: var(--novel-text-3); font-size: var(--novel-fs-md); margin-left: var(--novel-sp-3); font-weight: 400; }
 /* 书架 tab 顶栏（三行）：行1 内容标题「书架 · N 本」；行2 搜索框独占一行且整簇居中；
    行3 书架筛选簇（pills + 簇尾排序灰字）。
-   为什么不做「工具组与标题同行」：实测 Chrome 把同行 flex item（旧 .novel-shelf-tools）
-   的假设主尺寸算成 min-content 量级——四件东西需要 706px 被算成 651px、只剩两件时被挤到
-   215px（探针实测），搜索框与导入钮在标题旁折行堆叠。显式三行后不存在这条折行路径。
-   margin-left:auto 在书架顶栏已无用武之地：书城预留位 chip 随 tab 化退役（书架/书城/
-   书源管理并列后，占位不如真导航）；筛选簇与排序灰字禁止贴右——灰字曾被钉到 1600px 列
-   最右端（实测 x1472 vs pills x75）＝悬浮碎片。
+   为什么不做「工具组与标题同行」：Chrome 把同行 flex item 的假设主尺寸算成 min-content 量级
+   （探针实测四件东西 706px 被算成 651px），搜索框与导入钮在标题旁折行堆叠——显式三行后不存在
+   这条折行路径。书架顶栏禁止 margin-left:auto（灰字曾被钉到列最右端＝悬浮碎片，已删）。
    （本文件注释里别写反引号：NOVEL_CSS 是模板字符串，反引号会当场截断它。） */
 /* 行2：搜索框单独一行（聚合搜索 = 找新书入口，与书架筛选不是同一语义组）。
-   form = 搜索框 + 「搜索」提交钮（与搜索页同款 type=submit + novel-btn primary；Enter 仍是
-   快捷径——可见按钮才是显式入口，用户提议）。基准 460px（380 框 + 钮 + 间距）、可收缩、
-   不写死宽（守卫钉 flex 0 1 Npx + 无固定 width）。整簇居中（用户实机反馈拍板）。 */
+   form = 搜索框 + 「搜索」提交钮（与搜索页同款 type=submit + primary；可见按钮才是显式入口）。
+   基准 460px、可收缩、不写死宽（守卫钉 flex 0 1 Npx + 无固定 width）。整簇居中（用户拍板）。 */
 .novel-shelf-search { flex: 1 1 100%; display: flex; align-items: center; justify-content: center; gap: var(--novel-sp-3); }
 .novel-shelf-search form { display: flex; align-items: center; gap: var(--novel-sp-2); flex: 0 1 460px; min-width: 0; }
 .novel-shelf-search .novel-searchbox { flex: 1 1 auto; min-width: 0; }
 .novel-shelf-search form .novel-btn { flex: none; }
 .novel-shelf-search-note { color: var(--novel-text-3); font-size: var(--novel-fs-sm); }
 /* 搜索框：放大镜图标 + 无边框输入装进层底圆角容器，focus 描边走强调色；
-   宽度弹性（1 1 180px）而非死 260px——宿主会话列可拖窄，实测死宽会把标题压成一个字一行。
-   底色必须读 --novel-layer-2：本轮病根就是这里引用了不存在的 --novel-layer，
-   background 整条落 unset → 实测 rgba(0,0,0,0)（空心框）。 */
+   宽度弹性（1 1 180px）而非死宽——宿主会话列可拖窄，死宽会把标题压成一字一行。
+   底色必须读存在的 token：这里曾引用不存在的 --novel-layer，background 整条落 unset
+   （空心框）。 */
 .novel-searchbox {
   display: flex; align-items: center; gap: var(--novel-sp-3); background: var(--novel-layer-2);
   border: 1px solid var(--novel-border); border-radius: var(--novel-r-md);
@@ -1004,7 +970,7 @@ export const NOVEL_CSS = `
 `
 
 /** 样式注入组件。`NovelView` 在根上注入一次；`SettingsSection` 单飞渲染时自带（`withStyles`
- *  缺省 true），被 NovelView 挂载时让位——同一棵树里注两遍等于 45KB CSS 进 DOM 两次。 */
+ *  缺省 true），被 NovelView 挂载时让位——同一棵树里注两遍等于 58KB CSS 进 DOM 两次。 */
 export function NovelStyles(): ReactNode {
   return <style data-novel-style>{NOVEL_CSS}</style>
 }

@@ -5,17 +5,10 @@ import { prodCoreDeps, prodDeps, prodReaderDeps } from '../../src/client/deps.js
 import type { ClientCoreDeps, ReaderDeps, SettingsDeps } from '../../src/client/deps.js'
 
 /**
- * 测试假依赖束——桩工厂唯一住址。
- *
- * 此前三处测试文件各造一份形状略异的桩（import-pane.test / settings-toggle.test /
- * views-wiring.test），SettingsDeps 加一个成员要同步多处且漂移无编译信号。现在：
- * - 返回类型绑主干束（SettingsDeps / ReaderDeps / ClientCoreDeps）——主干加成员，
- *   工厂靠 `...prod*` spread 自动跟上，缺一个成员声明处即红（「只动一处桩」的类型保障）；
- * - 覆写键集绑 `keyof <主干束>`——写错成员名即红；
- * - 缺省值全为确定性 vi.fn 假实现（零网络），成员级 Mock 可直接断言调用次数/载荷。
- *
- * `as` 收在本文件内各一处：Mock 与真实现的泛化签名（如 apiGet<T>）互不兼容，
- * 测试侧不该逐处 cast——那是工厂的职责。
+ * 测试假依赖束——桩工厂唯一住址（此前三处测试各造一份形状略异的桩，主干加成员要同步多处且漂移
+ * 无编译信号）。现在：返回类型绑主干束、靠 `...prod*` spread 自动跟上（缺成员声明处即红），
+ * 覆写键绑 `keyof 主干束`（写错成员名即红），缺省值全是确定性 vi.fn 假实现（零网络）。
+ * `as` 收在本文件内各一处——Mock 与真实现的泛化签名互不兼容，逐处 cast 是工厂的职责。
  */
 
 /** 覆写集：键绑主干束成员名；值放宽 unknown（测试传 vi.fn() 不必逐处 cast） */

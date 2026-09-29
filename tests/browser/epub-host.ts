@@ -1,24 +1,18 @@
 /**
  * 浏览器验收台：真服务 + 真 bundle + 真浏览器（`tests/browser/epub-reader.test.ts` 的底座）。
+ * 只提供**事实与开关**，不含断言：
+ * ① 真 `ReadingService` + 真 `createApiHandler` 挂在 127.0.0.1 随机端口——`/novel-api` 全过真路由，
+ *    「导入链被绕开」的假绿在结构上不可能；
+ * ② 页面侧 `lib/client.js` 是**构建产物**：缺即报错，比 `src/**` 旧也报错（陈旧产物的绿最难发现）；
+ *    React 取本仓依赖的 UMD 构建，壳是仓内跟踪的 `shell.html`（最小宿主替身）；
+ * ③ 可控故障注入（**挂起**：释放后走真路由或以指定状态码收尾；**有界延迟**），量「图片未到时的位置」
+ *    「章节在途时切走」这类只有真时序才存在的现场；
+ * ④ 请求记录（含 PUT 进度体原文）：「导航事件即落盘」「删后 404」用的都是真流量。
  *
- * 这台子只提供**事实与开关**，不含断言：
- * ① 真 `ReadingService`（临时数据根 `makeTempDir`）+ 真 `createApiHandler` 挂在 127.0.0.1 随机端口上——
- *    `/novel-api` 一律过真路由，没有假响应；「导入链被绕开」这种假绿在结构上不可能发生；
- * ② 页面侧的 `lib/client.js` 是**构建产物**（`pnpm build` 之后才有；缺即报错，不静默降级到源码；
- *    比 `src/**` 旧也报错——陈旧产物跑出的绿是最难发现的一类假绿）；
- *    React 从本仓依赖的 UMD 构建现取；壳是仓内跟踪的 `shell.html`（最小宿主替身，不是真宿主）；
- * ③ 可控故障注入（**挂起**——缺省释放后走真路由、可指定释放后以某个状态码收尾；**有界延迟**）
- *    ——按「下 n 次命中某路径的请求」计数，用于量「图片未到时的位置」「章节在途时切走」
- *    与「同一张图在途 → 失败」这几类只有真时序才存在的现场；
- * ④ 请求记录（含 PUT 进度体的原文）：断言「导航事件即落盘」「删书后资源 404」用的都是真流量。
- *
- * 三条纪律（本台刻意不做的事）：
- * - **不触网**：注入的 `fetchImpl` 只答假书源那几张页面，别的 URL 一律 599 并带上原因——
- *   测试里任何一次真实出站都会当场变成可见失败，而不是靠「反正没人看」蒙过去；
- * - **不 import `.superpowers/` 与全局 npm 模块**：浏览器从仓内 devDependency `playwright` 来，
- *   可执行文件只用**已安装的**浏览器（`DSH_BROWSER_EXECUTABLE` 或 Edge/Chrome 通道），从不下载；
- * - **不替宿主说话**：壳证明了「挂载 / 卸载 / 槽位注册」在这一页成立，不证明真 DSH 宿主的
- *   侧栏选中与槽位路由；后者归真宿主冒烟（本轮未获授权，见任务报告）。
+ * 三条纪律：**不触网**（注入 fetchImpl 只答假书源，别的 URL 一律 599——真实出站当场可见失败）、
+ * **不 import `.superpowers/` 与全局 npm 模块**（浏览器只用仓内 devDependency playwright + 已安装的
+ * Edge/Chrome 或 `DSH_BROWSER_EXECUTABLE`，不下载）、**不替宿主说话**（壳只证明这一页的挂载与槽位
+ * 注册，真宿主侧栏路由归真宿主冒烟）。
  */
 import { promises as fs } from 'node:fs'
 import { existsSync } from 'node:fs'
@@ -78,7 +72,7 @@ function onlinePage(url: string): string | null {
     return `<html><body><div class="b"><a href="/book/1/">${key}·在线样本</a><span>假作者</span></div></body></html>`
   }
   if (u.pathname === '/book/1/') {
-    // 目录页的条目 class 用 `.b`（legado 口径：目录列表与搜索结果共用 ruleBookList），
+    // 目录页的条目 class 用 `.b`（目录列表与搜索结果共用 ruleBookList），
     // 不是一个自造的 `.c`——写错了列表就是空的，而「空目录」长得很像「这本书没有章节」。
     return '<html><body>' + ONLINE_CHAPTERS.map((name, i) => `<div class="b c"><a href="/c/${i + 1}.html">${name}</a></div>`).join('') + '</body></html>'
   }
@@ -179,9 +173,8 @@ export async function launchBrowser(): Promise<Browser> {
 export interface FaultMatch { pathIncludes: string; method?: string }
 
 /**
- * 挂起注入的结局口径：缺省 = 释放后交回真路由（真响应）；给了 `status` = 释放后以它收尾。
- * 「同一张图在途 → 以失败告终」这条时序必须有同一个挂起窗口的两种结局才拼得出来：
- * 分成两个注入器（挂起 + 立即失败）就变成「挂到一半换了个请求」，量不到同一张图在途时的位置。
+ * 挂起注入的结局口径：缺省 = 释放后交回真路由；给了 `status` = 释放后以它收尾。「同一张图在途 →
+ * 失败」必须是**同一个挂起窗口**的两种结局——拆成两个注入器就成了「挂到一半换了个请求」。
  */
 export interface HoldOptions { status?: number; body?: string }
 
@@ -378,10 +371,9 @@ function resolveAssets(missing: string[]): Record<string, string> {
 }
 
 /**
- * 构建产物的新鲜度：`lib/client.js` 比 `src/**` 里任何一份文件**旧** = 陈旧产物。
- * 只查「在不在」会留一条最难发现的假绿：改了源码没重新构建，门照样拿旧 bundle 全绿通过。
- * 判据取 mtime 而不是内容哈希——`pnpm build` 每次都会重写产物，mtime 单调可靠；
- * 源码被检出/改写的时刻晚于产物，就说明产物没有覆盖当前源码。
+ * 构建产物新鲜度：`lib/client.js` 比 `src/**` 任何一份旧 = 陈旧产物——只查「在不在」会留最难发现的
+ * 假绿（改了源码没重建，门拿旧 bundle 全绿）。判据取 mtime 不取内容哈希：`pnpm build` 每次重写
+ * 产物、mtime 单调；源码的时刻晚于产物就说明产物没覆盖当前源码。
  */
 async function assertBundleFresh(): Promise<void> {
   const entry = path.join(REPO, 'lib', 'client.js')
@@ -419,9 +411,9 @@ async function bufferBody(req: IncomingMessage): Promise<Buffer> {
 }
 
 /**
- * 把已读进内存的请求体回放给真 handler：dispatch 只依赖 `method/url/headers/socket` 与
- * 「req 可异步迭代」这几件事，所以一条已结束的 PassThrough + 原请求的四个字段就是忠实替身。
- * 为什么要先读干（而不是边转发边记）：PUT 进度体与上传字节都要作为**事实**记进 `requests`。
+ * 把已读进内存的请求体回放给真 handler：dispatch 只依赖 `method/url/headers/socket` 与可异步迭代，
+ * 已结束的 PassThrough + 原请求四字段就是忠实替身。先读干再回放是因为 PUT 进度体与上传字节都要
+ * 作为**事实**记进 `requests`。
  */
 function replay(orig: IncomingMessage, body: Buffer): IncomingMessage {
   const stream = new PassThrough()

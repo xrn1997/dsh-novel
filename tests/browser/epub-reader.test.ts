@@ -1,20 +1,11 @@
 /**
- * 浏览器验收门（`DSH_EPUB_BROWSER=1` 打开；默认整门跳过——`pnpm test` 不跑它，跑通它也不代表别的门）。
+ * 浏览器验收门（`DSH_EPUB_BROWSER=1` 打开；默认整门跳过，`pnpm test` 不跑它）。量 jsdom 量不出的
+ * 那几件事：真图片解码、真排版下的位置稳定、真滚动容器、真下载文件。底座是 `tests/browser/epub-host.ts`
+ * （真服务 + 真 `lib/client.js` + 已装浏览器）——门开着时**缺浏览器 / 缺 lib / 缺 fixture 一律红**。
  *
- * 这里量的是 jsdom 量不出的那几件事：真图片解码、真排版下的位置稳定、真滚动容器、真下载文件。
- * 底座是 `tests/browser/epub-host.ts`（真服务 + 真路由 + 真 `lib/client.js` + 已安装的浏览器）——
- * 门开着时**缺浏览器 / 缺 lib / 缺 fixture 一律红**（缺件即报错，不静默转绿）。
- *
- * 三条断言纪律：
- * ① 导入一律走 UI 的文件 input（真 `POST local/import`）——不塞一个「富响应」跳过导入链，
- *    否则被测的是本文件的想象力而不是发布链路；
- * ② 读数取自**真 DOM / 真响应 / 真下载字节**：图片看 naturalWidth（不是「img 在场」），
- *    导出比 golden 全文（不是「有几行」），进度看真 PUT 体；
- * ③ **每个用例一台自己的服务与数据根**：书架上只有这一例导入的书。共用服务时标题会撞车
- *    （同一本书导两次 = 两张同名卡片），「删掉某一本」这类断言会指到别人身上。
- *
- * 末两个用例是**缺陷读数**（诚实红）：真浏览器里量出的两个位置被改写的行为。
- * 断言按应有口径写、不改成绿；修好了自然转绿。
+ * 三条断言纪律：① 导入一律走 UI 的文件 input（真 `POST local/import`），否则测的是想象力不是发布链路；
+ * ② 读数取自**真 DOM / 真响应 / 真下载字节**（图片看 naturalWidth、导出比 golden 全文、进度看真 PUT 体）；
+ * ③ **每个用例一台自己的服务与数据根**——共用服务时同名书标题撞车，「删掉某一本」会指到别人身上。
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { Browser } from 'playwright'
@@ -29,10 +20,9 @@ import {
 const ENABLED = process.env.DSH_EPUB_BROWSER === '1'
 
 /**
- * React **开发版**告警（`Warning: …`）不算应用错误——它由本壳选的 development UMD 构建引入。
- * 但**不许当背景噪音吞掉**：本门把它当「现读清单」——清单外的每一条（含将来新增的 React 告警）即红。
- * 清单里这一条对应白名单把 `tr` 直挂 `table` 下（无 `tbody`）的现实：真 DOM 就是 `table > tr`
- * （React 用 createElement 建节点，浏览器不会像解析 HTML 那样补 tbody），第一个用例把这条断言成事实。
+ * React **开发版**告警不算应用错误（development UMD 构建引入），但**不许当背景噪音吞掉**：本门按
+ * 「现读清单」管——清单外每条即红。清单里这条对应 `tr` 直挂 `table` 下（无 tbody）的现实
+ * （React 走 createElement 不补 tbody），第一个用例把它断言成事实。
  */
 const KNOWN_REACT_WARNINGS: RegExp[] = [/validateDOMNesting[\s\S]*<tr>[\s\S]*table/]
 
@@ -112,10 +102,9 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
     apiJson<ChapterContent>(host, `/novel-api/${queries.chapter({ sourceId: LOCAL_SOURCE_ID, url: key, index })}`)
 
   /**
-   * 视口顶所在的章与节点（视口顶 = .novel-main 的 rect.top）。
-   * 两条口径都**照产品自己的判据**（`ReaderView.currentNodeOf`）：视口顶已越过的最靠下那个；
-   * 一个都没越过（正文列有上内边距、或刚挂载还没滚）→ 取文档顺序里的第一个。
-   * 亚像素落位按 0.5px 容差算「已在顶」。
+   * 视口顶所在的章与节点（视口顶 = .novel-main 的 rect.top）。两条口径都**照产品判据**
+   * （`ReaderView.currentNodeOf`）：视口顶已越过的最靠下那个；都没越过 → 文档顺序第一个。
+   * 亚像素按 0.5px 容差算「已在顶」。
    */
   const probe = (s: PageSession) => s.page.evaluate(() => {
     const main = document.querySelector('[data-novel-main]') as HTMLElement
@@ -147,9 +136,20 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
     return el === null ? null : el.getBoundingClientRect().top - main.getBoundingClientRect().top
   }, nodeId)
 
-  /** 某章块的几何：顶相对视口顶的偏移 + 渲染高度。
-   *  **恢复位用章块量，不用节点身份量**——重挂后只载入存档那一章（预取只向前，上一章不会回来），
-   *  重挂前「视口顶已越过的最后一个节点」可能正是上一章尾部的那个，它整块消失，节点身份跨剪枝不可比。 */
+  /** 指定节点**之后**第一个正文节点的 id。图片位置读数必须量它：图**之前**的节点在「框塌陷 /
+   *  框到手才撑开」时一动不动，量它抓不到「正文被推走」——那正是预留框要保的事
+   *  （2026-09-28 整改过读数：原读数量的是图前段落，断言触达面比措辞窄）。 */
+  const nodeBelow = (s: PageSession, nodeId: string): Promise<string | null> => s.page.evaluate((id) => {
+    const fig = document.querySelector(`[data-novel-node="${id}"]`)
+    if (fig === null) return null
+    const bottom = fig.getBoundingClientRect().bottom
+    const all = [...document.querySelectorAll('[data-chapter] [data-novel-node]')]
+    const after = all.find((el) => el !== fig && el.getBoundingClientRect().top >= bottom)
+    return after?.getAttribute('data-novel-node') ?? null
+  }, nodeId)
+
+  /** 某章块的几何：顶相对视口顶的偏移 + 渲染高度。**恢复位用章块量不用节点身份**——重挂后只载入
+   *  存档章（预取只向前），上一章尾部那个节点整块消失，节点身份跨剪枝不可比。 */
   const blockBox = (s: PageSession, index: number): Promise<{ top: number; height: number } | null> =>
     s.page.evaluate((i) => {
       const main = document.querySelector('[data-novel-main]') as HTMLElement
@@ -179,9 +179,8 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
     s.page.$$eval('.novel-drawer-item', (els) => els.map((e) => e.textContent as string))
 
   /**
-   * 工具栏章进度细线的 `--novel-pct` = (currentChapter + 1) / 章数——**会话「读到第几章」的 DOM 投影**
-   * （跨章才写，低频呈现）。章很短的在线书里滚动会被 clamp，「哪一块在视口顶」量不出阅读位置，
-   * 而这个值来自会话自己的 truth，正好补上那一格。
+   * 工具栏细线 `--novel-pct` = (章号+1)/章数——**会话「读到第几章」的 DOM 投影**。短章在线书里
+   * 滚动被 clamp，「哪块在视口顶」量不出阅读位置，这个值来自会话自己的 truth，正好补上那一格。
    */
   const currentPct = (s: PageSession): Promise<string> =>
     s.page.evaluate(() => (document.querySelector('.novel-rdr-trail') as HTMLElement).style.getPropertyValue('--novel-pct'))
@@ -424,13 +423,13 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
 
   it('EPUB3：插图真解码出 2×3、预留框按可信比例；图到手前后同一节点的视口偏移 ≤2px', async () => {
     await withHost(async (s, host) => {
-      // 「慢图片」走**有界延迟**：在途窗口里量一次图之后那段正文的位置，等图真到手再量一次。
-      // 延迟给得比「量框 + 取读数」这几步宽得多（2.5s）；「图确实还没到」这条前提不靠时长赌，
-      // 由下面那条 naturalWidth === 0 自己守（提前解码了会当场红，而不是量到两个「都已到手」的读数）。
-      host.delayNext({ pathIncludes: '/novel-api/local/resource' }, 2_500)
+      // 「慢图片」走**可显式释放的挂起**（不是有界延迟）：在途窗口里量一次读数，随后 release 让图真到手
+      // 再量一次。延迟那版的读数是「窗口够不够宽」的赌注——极慢机器上会响亮假红（2026-09-28 改成挂起）。
+      const holdImage = host.hold({ pathIncludes: '/novel-api/local/resource' })
       await uploadFixture(s, 'epub3-rich', '图文样本.epub')
       await s.page.waitForSelector('[data-chapter] [data-novel-node]', { timeout: 20_000 })
-      await settle(700)
+      await withTimeout(holdImage.arrived, 15_000, '插图的资源请求没到（挂起注入没生效？）')
+      await settle(500)
       const key = await keyOf(host, '图文样本')
       const figs = imagesOf(await chapterOf(host, key, 0))
       expect(figs).toHaveLength(2)
@@ -443,13 +442,17 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
         const r = el.getBoundingClientRect()
         return { h: r.height, ratio: r.width / r.height, hasImg: img !== null, natural: img?.naturalWidth ?? null }
       }, figs[0].id)
-      const offBefore = await offsetOf(s, 'a2')
+      // 量**图之后**的节点：框「到手才撑开」会把它推下去，图前的节点对这件事无感
+      const belowId = await nodeBelow(s, figs[0].id)
+      expect(belowId, '图之后必须有正文节点（否则这条读数证明不了正文没被推走）').not.toBeNull()
+      const offBefore = await offsetOf(s, belowId!)
       expect(boxBefore.hasImg).toBe(true)
-      // 本样本的封面与两张插图共用同一份 png：**必须量到目标图自己是 0**，否则「一次延迟就全都未解码」
-      // 会让这条读数与目标资源无关（换一张只有插图、封面另用的书，这里就会静默变成恒真）
+      // 封面与插图共用同一份 png：**必须量到目标图自己是 0**——否则「一次延迟全都未解码」会让这条
+      // 读数与目标资源无关（换一份封面另用的书就会静默变成恒真）
       expect(boxBefore.natural, '图到手前目标插图必须尚未解码（naturalWidth === 0）').toBe(0)
       expect(offBefore, '图未到时也该量得到图之后那段正文的位置').not.toBeNull()
 
+      holdImage.release()
       await s.page.waitForFunction((id) => {
         const img = document.querySelector(`[data-novel-node="${id}"] img`) as HTMLImageElement | null
         return img !== null && img.complete && img.naturalWidth > 0
@@ -470,21 +473,20 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       expect({ w: decoded.w, h: decoded.h }, '图片必须**真被浏览器解码**（naturalWidth 来自解码结果）').toEqual({ w: 2, h: 3 })
       expect(decoded.src, '图片走本地资源口（同源，不落书内路径）').toContain('/novel-api/local/resource')
       expect(decoded.ratio, '框按可信比例 2/3 预留（不是加载后才跳出来）').toBeCloseTo(2 / 3, 2)
-      // 框宽的现状读数：**恒铺满正文栏**（高度由可信比例折算，框不随图缩窄、也不用居中小盒包住窄图）。
-      // 这条钉的是「换实现时别悄悄改口径」——竖长图铺满整栏会很高，是当前刻意的取舍，不是渲染漏算。
+      // 框宽现状：**恒铺满正文栏**（高度由可信比例折算）——竖长图铺满会很高，是刻意取舍不是漏算；
+      // 这条钉的是「换实现时别悄悄改口径」。
       expect(Math.abs(decoded.boxW - decoded.column), '插图框宽度 = 正文栏宽（现状：铺满整栏）').toBeLessThanOrEqual(2)
       expect(Math.abs(decoded.boxH - boxBefore.h), '图到手后预留框高度不变（不跳版）').toBeLessThanOrEqual(1)
-      const offAfter = await offsetOf(s, 'a2')
-      expect(Math.abs(offAfter! - offBefore!), '同一文本节点的视口相对偏移在图片到手前后 ≤2 CSS px').toBeLessThanOrEqual(2)
+      const offAfter = await offsetOf(s, belowId!)
+      expect(Math.abs(offAfter! - offBefore!), '图到手前后**图之后**的正文视口相对偏移 ≤2 CSS px（框预留住了，没把正文推下去）').toBeLessThanOrEqual(2)
       expect(host.pendingFaults(), '注入的挂起必须真的被吃掉（否则上面的读数只是「图本来就没在请求」）').toBe(0)
     })
   }, 180_000)
 
   it('EPUB3：链接里的插图也先占位（链接是块级容器，收缩包裹会让框塌成 0）', async () => {
-    // 链接（`<button>`）缺省按内容收缩包裹，里面 `width: 100%` 的插图框会解析成 auto——图还没解码
-    // 就没有内在尺寸，框塌成 0，图一到手后文整段位移（实测 0×0 → 600×900）。修法是把含块内容的
-    // 链接变成块级容器（XHTML5 的透明内容模型本来就允许），于是百分比宽度有确定基准。
-    // 这条只有真排版量得出来：jsdom 里 rect 恒 0，塌不塌都一样。
+    // 链接（`<button>`）缺省收缩包裹，里面 `width: 100%` 的插图框解析成 auto——图未解码时无内在尺寸，
+    // 框塌成 0、到手后整段位移（实测 0×0 → 600×900）。修法：含块内容的链接改块级容器。这条只有真
+    // 排版量得出来——jsdom 里 rect 恒 0，塌不塌都一样。
     await withHost(async (s, host) => {
       host.delayNext({ pathIncludes: '/novel-api/local/resource' }, 2_500)
       // 本样本没有原生目录 → 导入留一条「合成目录」告警，先停在回执页
@@ -542,7 +544,14 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       await withTimeout(hold.arrived, 15_000, '插图的资源请求没到（挂起注入没生效？）')
       await settle(500)
       const fig = imagesOf(await chapterOf(host, await keyOf(host, '图文样本'), 0))[0]
-      const offBefore = await offsetOf(s, 'a2')
+      // 量**图之后**的节点 + 框高：图前的节点对「框塌陷」无感，只比值也证明不了框高没变
+      const boxBefore = await s.page.evaluate((id) => {
+        const el = document.querySelector(`[data-novel-node="${id}"]`) as HTMLElement
+        return el.getBoundingClientRect().height
+      }, fig.id)
+      const belowId = await nodeBelow(s, fig.id)
+      expect(belowId, '图之后必须有正文节点（否则这条读数证明不了正文没被推走）').not.toBeNull()
+      const offBefore = await offsetOf(s, belowId!)
       expect(offBefore, '失败响应还没发时就该量得到图之后那段正文的位置').not.toBeNull()
       expect(await s.page.$(`[data-novel-node="${fig.id}"] img`), '前置：失败响应还没发，img 还在请求中').not.toBeNull()
 
@@ -553,15 +562,16 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
         const el = document.querySelector(`[data-novel-node="${id}"]`) as HTMLElement
         const box = el.getBoundingClientRect()
         const label = el.querySelector('.novel-fig-fail') as HTMLElement
-        return { ratio: box.width / box.height, text: label.textContent, aria: label.getAttribute('aria-label'), imgs: el.querySelectorAll('img').length }
+        return { h: box.height, ratio: box.width / box.height, text: label.textContent, aria: label.getAttribute('aria-label'), imgs: el.querySelectorAll('img').length }
       }, fig.id)
       expect(failed.text).toBe('图片加载失败')
       expect(failed.aria).toBe('图片加载失败：插图')
       expect(failed.imgs).toBe(0)
       expect(failed.ratio, '失败时仍是同一块按比例预留的框').toBeCloseTo(2 / 3, 2)
-      const offAfter = await offsetOf(s, 'a2')
+      expect(Math.abs(failed.h - boxBefore), '失败时框高不变（比值相同不代表高度相同）').toBeLessThanOrEqual(1)
+      const offAfter = await offsetOf(s, belowId!)
       expect(offAfter, '失败后同一文本节点仍量得到（没有整块消失）').not.toBeNull()
-      expect(Math.abs(offAfter! - offBefore!), '图片请求失败不得移动正文：同一文本节点的视口相对偏移差 ≤2 CSS px')
+      expect(Math.abs(offAfter! - offBefore!), '图片请求失败不得移动正文：**图之后**节点的视口相对偏移差 ≤2 CSS px')
         .toBeLessThanOrEqual(2)
       expect(host.pendingFaults(), '失败注入必须真的被吃掉').toBe(0)
     }, { networkReports: 1 })
@@ -764,9 +774,9 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       await openDrawer(s)
       await clickLeaf(s, '第二章')
       await settle(1_100)
-      // 末章在这个高度下够不到视口顶：整本渲高 680px、视口 420px ⇒ 可滚范围只有 260px，而第 2 章块顶
-      // 在 311px 处——落位被钳住，「视口顶所在的章」按产品口径仍是第 1 章（readings 2026-09 无头 Edge）。
-      // 短书里可测的口径是「目标章真的进了视野」+「导航事件立刻落盘」（这两条钳位改不掉）。
+      // 末章在这个高度下够不到视口顶：可滚范围小于章块顶位置——落位被钳，「视口顶所在的章」按产品
+      // 口径仍是第 1 章（2026-09 无头 Edge 实测，几何读数详见那次现场）。短书里可测的口径是
+      // 「目标章真的进了视野」+「导航事件立刻落盘」（这两条钳位改不掉）。
       expect(await chapterVisible(s, 1), '点第 2 章后它必须真的进入视野（落位被钳 ≠ 没跳）').toBe(true)
       expect(await s.page.$$eval('[data-chapter]', (els) => els.map((e) => e.getAttribute('data-chapter'))),
         '目标章进了 DOM').toContain('1')
@@ -926,9 +936,8 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       // 阅读位置 = 存档章（只有被读的那一章进 DOM：未载章不渲染）
       expect(await s.page.textContent('[data-chapter="2"]'), '恢复到存档章（第 3 章）而不是从头').toContain(ONLINE_CHAPTERS[2])
       expect(await s.page.textContent('[data-chapter="2"]')).toContain('假站点的第 3 章正文第一段')
-      // 「不从头」的硬证据 = 载入集**从存档章起**（第 0 章不在 DOM 里）。
-      // 但不能要求「只有一章在 DOM」：在线章很短，未载边界哨兵始终落在预取区，预取会把后面几章
-      // 一并联进来（自限到书末）；可测的不变量是「已载章按书序连续、无空洞」。
+      // 「不从头」的硬证据 = 载入集**从存档章起**（第 0 章不在 DOM）。但不能要求「只有一章」：
+      // 在线章短，边界哨兵恒在预取区、后面几章会被一并联进来；可测不变量是「已载章连续无空洞」。
       const loaded = await loadedChapters(s)
       expect(loaded[0], '恢复后从存档章（第 3 章）开始载入，第 0 章不回来').toBe(2)
       expect(loaded, '已载章按书序连续（正文渲染顺序 = 书的顺序）').toEqual(loaded.map((_, k) => loaded[0] + k))
@@ -979,13 +988,10 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
   // ══ 9. 只读浮层不改写主阅读位置（开面板 / 开抽屉不是导航事件）════════════
 
   /**
-   * 打开目录抽屉**不得**移动主阅读位置，也不得因此多落一笔进度。
-   *
-   * 这条钉子原先是「诚实红」——它对着一处实测缺陷写：开抽屉的 effect 对当前项调
-   * `scrollIntoView({ block: 'center' })`，抽屉本体装得下内容 ⇒ 浏览器接着去居中**下一个能滚的祖先**
-   * `.novel-main`，实测 scrollTop 216 → 0 并把章号改写成第 0 章。修法是落位只滚抽屉自己
-   * （口径与理由见 `src/client/util.ts` 的 `centerInScroller`）。jsdom 侧只能钉 API 选择
-   * （tests/client/ui-system.test.tsx 那条），几何与「有没有多落盘」只有真浏览器量得到。
+   * 打开目录抽屉**不得**移动主阅读位置，也不得因此多落一笔进度。曾对一处实测缺陷写成「诚实红」：
+   * 开抽屉的 `scrollIntoView` 让浏览器居中**下一个能滚的祖先** `.novel-main`，scrollTop 216 → 0
+   * 并改写章号；修法是落位只滚抽屉自己（口径见 `src/client/util.ts` 的 `centerInScroller`）。
+   * jsdom 侧只能钉 API 选择，几何与「有没有多落盘」只有真浏览器量得到。
    */
   it('打开目录抽屉不改写主阅读位置，也不产生进度落盘', async () => {
     await withHost(async (s, host) => {
@@ -1010,14 +1016,10 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
   }, 180_000)
 
   /**
-   * 注释面板是**视口浮层**：打开它不动主阅读位置，主序列往下滚时它留在视口里。
-   *
-   * 这条原先也对着实测缺陷写（诚实红）：`.novel-notes` 曾 absolute 挂在 `.novel-rdr-main`（正文
-   * **内容盒**）上，内容盒一滚面板就跟着走 —— 读到章末开面板，实测 scrollTop 2016 → 0，
-   * 面板还飘到视口上方。两处修法：与目录抽屉**共用同一条槽几何**（styles 的
-   * `.novel-drawer-slot, .novel-notes-slot`，锚视口的 sticky 槽），落位走 `centerInScroller`
-   * （只滚面板自己的身体）。同族浮层并存两套锚定就是这条缺陷的根子，防漂移的钉子在
-   * tests/client/ui-system.test.tsx。
+   * 注释面板是**视口浮层**：打开不动主阅读位置，主序列滚动时它留在视口里。原先也对着实测缺陷写
+   * （诚实红）：`.novel-notes` 曾 absolute 挂在正文**内容盒**上，内容盒一滚面板跟着走（scrollTop
+   * 2016 → 0）。修法：与目录抽屉**共用同一条锚视口的 sticky 槽**，落位只滚面板自己的身体——
+   * 同族浮层并存两套锚定就是缺陷的根子，防漂移的钉子在 tests/client/ui-system.test.tsx。
    */
   it('注释面板按视口定位：开面板不动主阅读位置，主序列滚动后它仍留在视口里', async () => {
     await withHost(async (s, host) => {

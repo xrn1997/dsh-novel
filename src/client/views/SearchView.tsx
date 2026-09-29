@@ -5,7 +5,7 @@ import { prodCoreDeps } from '../deps.js'
 import type { ClientCoreDeps } from '../deps.js'
 import { useSearchJob } from '../search-job.js'
 import { navigate, routeStore, useStore } from '../store.js'
-import { EmptyState, ProgressBar, SearchIcon, StatusBadge } from './bits.js'
+import { EmptyState, ProgressBar, SearchIcon, searchPct, StatusBadge } from './bits.js'
 import type { SearchGroup, SearchHit } from './types.js'
 
 /** 搜索：提交一轮**后台任务**（Node 半跑完并持有整轮结果）+ 按游标轮询增量渲染 + 逐源分组（失败组折叠）。
@@ -23,7 +23,8 @@ interface SearchSummary { sources: number; hits: number; found: number; failed: 
 
 /** 收口算式：sources = **真搜完并回来的组数**（不是本轮计划家数——停止的轮次里两者不等，
  *  报计划数就是谎报）；命中本数 = 各命中组之和；found = 有命中的源数；failed = 带 error 的组数。
- *  与 known-开口 #4 的「三处百分比各算一份」不同源——这是**计数**不是百分比，只此一处。 */
+ *  与 `docs/design/client.md`「百分比算式已收敛一处、剩两处（已裁：不合并）」那条不同源——
+ *  这是**计数**不是百分比，只此一处。 */
 function sumRound(groups: SearchGroup[]): SearchSummary {
   let hits = 0
   let found = 0
@@ -69,11 +70,8 @@ export function SearchView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): 
   // 空参与集与「搜了没命中」是两件事：前者 total=0（源全停用/未导入），后者有源但零分组
   const emptyPlan = progress === null && round !== null && round.total === 0
 
-  // 进度只此一个算式：自然收尾时 done==total，满格是**算出来的**而不是写死的；
-  // 被停止的轮次于是照实停在它真正走到的位置（曾写死收尾态 100%，29/431 也显示满格）
-  const pct = round === null || round.total === 0
-    ? 0
-    : Math.min(100, Math.round((round.done / round.total) * 100))
+  // 进度算式的单点在 bits.searchPct（按源数算 + clamp；与任务式的 jobPct 不同口径，已裁各自具名不合并）
+  const pct = searchPct(round === null ? null : { done: round.done, total: round.total })
   const live = progress !== null
     ? (progress.total === 0
       ? <>正在启动搜索…</>
@@ -133,8 +131,9 @@ export function SearchView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): 
 /** 命中行：行内双动作——主按钮 = 加架并直接阅读；「＋ 加书架」只加架。
  * 结构：容器 .novel-row + 主钮 .novel-row-main + 兄弟动作钮（**不嵌套**）。
  * apiSend 经 deps 透传（行内接线同样可被测试驱动）。
- * url 守卫口径现状：undefined/null 渲染不可点行；空串 '' 的问题是 client.md 已知开口
- * 「`hit.url` 是空串时会用空 bookKey 加书」，本轮呈现层重构不改该口径（修法需 wire/守卫二选一拍板）。 */
+ * url 守卫：undefined/null 渲染不可点行；空串 `''` **产不出来**（命中行的 `url` 只出自服务端
+ * 搜索链，空输入在那里就已落 `null`），于是「无身份」在浏览器半只有一种形状可认——完整论证见
+ * `docs/design/client.md`「搜索」节。 */
 function HitRow({ sourceId, hit, deps }: { sourceId: string; hit: SearchHit; deps: ClientCoreDeps }): ReactNode {
   const [added, setAdded] = useState(false)
   const add = (): Promise<void> => {

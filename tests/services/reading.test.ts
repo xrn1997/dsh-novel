@@ -24,10 +24,9 @@ async function streamToBuffer(stream: Readable): Promise<Buffer> {
 
 const BASE = 'https://s.com'
 const SEARCH_HTML = (q: string) => `<html><body><div class="b"><a href="/book/1/">${q}·斗罗</a><span>唐家</span></div></body></html>`
-// fixture 订正（内联执行时发现三处缺陷）：①目录条目 class 必须命中 ruleBookList
-// （@css:.b）——legado 口径搜索与目录共用 ruleBookList，章节 div 用 "b ch" 双类；
-// ②getChapter 用例的路由必须同时服务目录页（getChapter 依赖 getToc）；
-// ③正文 div 的 id 必须与规则选择器 #content 一致（div id="c" 对 #content，必零命中）。
+// fixture 形态由三处实测缺陷钉出：①目录条目 class 必须命中 ruleBookList（@css:.b，搜索与目录共用）；
+// ②getChapter 用例的路由必须同时服务目录页（getChapter 依赖 getToc）；③正文 div 的 id 必须与规则
+// 选择器 #content 一致（对不上必零命中）。
 const TOC_HTML = `<html><body><div class="b ch"><a href="/c/1.html">第一章</a></div><div class="b ch"><a href="/c/2.html">第二章</a></div><a class="tn" href="/toc2.html">下一页</a></body></html>`
 const TOC2_HTML = `<html><body><div class="b ch"><a href="/c/3.html">第三章</a></div></body></html>`
 const CONTENT1_HTML = `<html><body><div id="content">正文一<p></p><p>  第二段  </p><p></p><p></p><p>第三段</p></div><a class="np" href="/c/1p2.html">下页</a></body></html>`
@@ -155,10 +154,45 @@ describe('ReadingService', () => {
     expect(bad.hits).toEqual([])
   })
 
+  it('URL 位取值取 list 首项：条目里多个 <a> 时不再拼成多行串（真源 八一中文网 / Royalroad 的 a@href）', async () => {
+    // 真源形态（2026-09-28 审计 `no-book-url` 桶）：条目 = 封面链 + 标题链 + 最新章节链，
+    // `tag.a@href` 命中 2..n 个不同 href。值规约原先一律 `join('\n')`，而 `absUrl` 有换行守卫
+    // （`/[\t\n\r]/` 即 null）→ **整条书目丢地址**——不报错，而是「搜到了却打不开」，在审计里与
+    // 「列表规则零命中」混在同一个桶。对面的口径是 URL 位一律取 `list[0]`（矩阵行
+    // `b-url-value-first-item`），join 只用于非 URL 取值：URL 里不可能有换行。
+    const MULTI_A = (q: string): string => '<html><body><div class="b">'
+      + '<a href="/book/1/"><img src="/1.jpg"></a>'
+      + `<h3><a href="/book/1/">${q}·斗罗</a></h3>`
+      + '<a href="/book/1/9.html">最新章节</a></div></body></html>'
+    const { svc } = await makeService((u) => (u.includes('/search') ? MULTI_A('斗罗') : null))
+    await svc.importOne({ ...rawSource, ruleBookName: 'h3@text' })
+    const g = (await svc.search('斗罗')).find((x) => x.sourceName === 'S')!
+    expect(g.error).toBeUndefined()
+    expect(g.hits[0]).toMatchObject({ title: '斗罗·斗罗', url: `${BASE}/book/1/` })
+  })
+
+  it('源实体字段 `bookSourceComment` 脚本可见（涩涩俱乐部把解密脚本存在那里）', async () => {
+    // 对面脚本里的 `source` 就是 BookSource 实体 → `source.bookSourceComment` 可读；本仓此前不投影
+    // 该字段，脚本拿到 undefined（静默不映射、不报错），现库按 raw 全串扫的命中样本是
+    // 涩涩俱乐部 ruleContent.replaceRegex 里的插值。用请求 URL 做观测点：把注释拼进 searchUrl。
+    let seen = ''
+    const { svc } = await makeService((u) => {
+      if (u.includes('/search')) { seen = u; return SEARCH_HTML('斗罗') }
+      return null
+    })
+    await svc.importOne({
+      ...rawSource, bookSourceName: '带注释', bookSourceUrl: 'https://cmt.example.com',
+      searchUrl: "@js:'https://cmt.example.com/search?q='+key+'&c='+source.bookSourceComment",
+      bookSourceComment: 'COMMENTMARK',
+    })
+    const g = (await svc.search('斗罗')).find((x) => x.sourceName === '带注释')!
+    expect(g.error).toBeUndefined()
+    expect(seen).toContain('c=COMMENTMARK')
+  })
   it('辅助字段的坏规则只丢该字段（对面 try/catch 那五项）；裸奔项仍整组报错', async () => {
-    // 对面 `model/webBook/BookList.kt` 的 getSearchItem：intro / coverUrl / lastChapter / kind /
-    // wordCount 各包 try/catch，name / author / bookUrl 裸奔。边界两侧都要钉：
-    // 只钉「吞」会放行「什么都吞」，只钉「抛」会把对面读得出的源判死。
+    // 辅助字段（intro / coverUrl / lastChapter / kind / wordCount）各包 try/catch，
+    // name / author / bookUrl 裸奔——一条坏辅助规则不许带走整页书目。边界两侧都要钉：
+    // 只钉「吞」会放行「什么都吞」，只钉「抛」会把读得出的源判死。
     const { svc } = await makeService((u) => (u.includes('/search') ? SEARCH_HTML('斗罗') : null))
     await svc.importOne({
       ...rawSource, bookSourceName: '坏简介', bookSourceUrl: 'https://bad-intro.example.com',
@@ -167,7 +201,7 @@ describe('ReadingService', () => {
       ruleCoverUrl: '0', ruleLastChapter: '0',
     })
     const soft = (await svc.search('斗罗')).find((g) => g.sourceName === '坏简介')!
-    expect(soft.error, '对面读得出（书目在场、这三个字段空），本仓不许把整组判死').toBeUndefined()
+    expect(soft.error, '书目在场、这三个字段空：不许把整组判死').toBeUndefined()
     expect(soft.hits[0]).toMatchObject({ title: '斗罗·斗罗', intro: null, coverUrl: null, lastChapterName: null })
 
     await svc.importOne({
@@ -348,7 +382,7 @@ describe('ReadingService', () => {
   })
 
   it('整本取不到章节 URL → 如实抛错，不产出全指目录页的假目录（2026-09 审查）', async () => {
-    // 逐章回退（legado BookChapterList「未获取到url,使用baseUrl替代」）保留，但「每一条都
+    // 逐章回退（未取到 url 时用 baseUrl 替代）保留，但「每一条都
     // 回退」不是缺个别链接，而是 ruleChapterUrl 整体失效——静默产出 200 条指向目录页的
     // toc 等于拿合法形状冒充成功（本仓镜像的宁炸不猜）。
     const noHref = '<html><body><div class="b ch"><a>第一章</a></div><div class="b ch"><a>第二章</a></div></body></html>'
@@ -381,6 +415,21 @@ describe('ReadingService', () => {
     expect(detail.title).toBe('详情标题')   // 走 ruleDetailName
   })
 
+  it('详情面脚本读得到书架镜像字段（`{{book.name}}` 不再渲染成空；快看漫画 detail intro 形态）', async () => {
+    // 对面脚本里的 `book` 是 Book 实体：详情面脚本常拿它拼模板（`{{book.name}}`/`{{book.author}}`/
+    // `{{book.kind}}`），还把 `book.kind` 当 kind 规则的**首选值**（`book.kind || get(…)`）。
+    // 本仓 book 镜像此前只有正文面带 name/author，详情/目录两面 → 这些读法全是静默空。
+    const { svc, registry } = await makeService((u) => (u === `${BASE}/book/1/` ? '<html><body><h1>详情标题</h1></body></html>' : null))
+    await svc.importOne({
+      ...rawSource, bookSourceName: '带镜像', bookSourceUrl: 'https://mirror.example.com',
+      searchUrl: undefined, ruleDetailName: 'tag.h1@text',
+      ruleDetailIntro: '书名：{{book.name}}｜标签：{{book.kind}}',
+    })
+    const src = registry.list().at(-1)!
+    svc.shelfAdd(`${BASE}/book/1/`, { sourceId: src.id, title: '镜像书名', kind: '都市' })
+    const detail = await svc.getDetail(src.id, `${BASE}/book/1/`)
+    expect(detail.intro).toBe('书名：镜像书名｜标签：都市')
+  })
   it('相对 searchUrl 按 baseUrl 解析 + POST 选项形态真发 POST（searchOne 与 probe 同口径）', async () => {
     const methods: string[] = []
     const svc = trackService(await ReadingService.create({
@@ -402,11 +451,10 @@ describe('ReadingService', () => {
   })
 })
 
-// ── 书 URL 承载请求选项（`url,{option}` 随身份存取——legado AnalyzeUrl 口径）────────
-// 修复背景（书架诊断实证）：米读类 API 源的 ruleBookUrl 是 `端点,{"method":"POST","body":"…book_id=…"}`，
-// 此前搜索面 stripUrlOption 剥掉选项才落库 → bookKey 只剩裸端点、book_id 随 POST body 永久丢失，
-// 详情/目录/正文全链路 405。口径：URL 字符串即请求规格——命中/书架/抓取全程不剥离，
-// 抓取时由 assembleRequest 单点解释（与章节 URL 保留选项的既有口径同源）。
+// ── 书 URL 承载请求选项（`url,{option}` 随身份存取——URL 字符串即请求规格）────────
+// 修复背景（书架诊断实证）：API 源的 ruleBookUrl 是 `端点,{"method":"POST",…}`，此前搜索面剥掉选项
+// 才落库 → bookKey 只剩裸端点、POST body 里的 id 永久丢失，全链路 405。口径：URL 字符串即请求规格，
+// 命中/书架/抓取全程不剥离，抓取时由 assembleRequest 单点解释。
 describe('书 URL 承载请求选项（,{option} 随身份存取）', () => {
   const OPT = ',{"method":"POST","body":"app=x&book_id=42"}'
   const API_BOOK = `https://api.example.com/fiction/book/getDetail${OPT}`
@@ -466,14 +514,12 @@ describe('书 URL 承载请求选项（,{option} 随身份存取）', () => {
   })
 })
 
-// ── 详情上下文 ruleBookInfo.init + tocUrl 模板过引擎插值（legado BookInfo 口径）────────
-// 修复背景（书架诊断实证，QQ 阅读/松鹤庭沐源）：详情规则依赖 init（`$.data.bookInfo`）换上下文、
-// tocUrl 是 `…all-chapter?bookId={{$.resourceID}}` 模板。此前 init 未实现（normalize 不映射、
-// 详情字段在根 JSON 上全 Miss），tocUrl 模板走 interpolateUrl(空 vars)——插值段原样留下，
-// 目录请求打到字面 `{{$.resourceID}}` 地址 → 0 章。口径（legado model/webBook/BookInfo.kt）：init 先求值，
-// 其结果**替换**后续详情规则的求值上下文；URL 模板过规则引擎按该上下文插值；
-// init 非空但零命中 → RuleEvalError 点名 ruleDetailInit（宁炸不猜：静默降级整页会把
-// 「规则与站点不符」伪装成「源什么都没有」）。
+// ── 详情上下文 ruleBookInfo.init + tocUrl 模板过引擎插值 ────────
+// 修复背景（书架诊断实证）：详情规则依赖 init 换上下文、tocUrl 是带 `{{$.resourceID}}` 的模板。
+// 此前 init 未实现、模板走 interpolateUrl(空 vars)——插值段原样留下，目录打到字面地址 → 0 章。
+// 口径：init 先求值，其结果**替换**后续详情规则的求值上下文；URL 模板按该上下文过规则引擎插值；
+// init 非空但零命中 → RuleEvalError 点名 ruleDetailInit（宁炸不猜：静默降级会把「规则与站点不符」
+// 伪装成「源什么都没有」）。
 describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
   const DETAIL_URL = 'https://qb.example.com/book/1100468914'
   const TOC_URL = 'https://qb.example.com/qbread/api/book/all-chapter?bookId=1100468914'
@@ -549,9 +595,8 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
     expect(toc[0]).toMatchObject({ name: '第1章 陨落的天才', url: CH1_URL })
   })
 
-  // 真机分桶实证（2026-09，本机库 4 源：万象书城/夜伴书屋/圣墟小说/全本小说）：
-  // ruleBookInfo.init 是**纯 @put**（只设变量），详情面每条规则都是 `@get:{k}`——
-  // 三件事必须同时成立：init 不换根、vars 在这次 getDetail 内共享、`@get:{}` 花括号形态认。
+  // 真机分桶实证（2026-09）：ruleBookInfo.init 是**纯 @put**（只设变量），详情面每条规则都是
+  // `@get:{k}`——三件事必须同时成立：init 不换根、vars 在这次 getDetail 内共享、`@get:{}` 花括号形态认。
   const META_URL = 'https://meta.example.com/book/77'
   const META_PAGE = `<html><head>
     <meta property="og:novel:book_name" content="武动乾坤">
@@ -623,10 +668,9 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
 })
 
 // ── js 沙箱预算走配置出口（jsTimeoutMs）──────────────────────────────────────────
-// 修复背景（书架诊断实证，听小说APP/txs12 源）：目录 @js 脚本需两次 java.ajax 往返 + md5 签名
-// （源作者按 legado 运行时设计——legado Rhino 无硬超时），2s 写死预算实测必炸「脚本超时（>2000ms）」。
-// 口径（用户拍板）：插件配置 jsTimeoutMs（缺省 15000）经 ReadingService → bridge → EvalContext
-// 透传（引擎 `ctx.jsTimeoutMs ?? DEFAULT_JS_TIMEOUT_MS` 零改动）；搜索面/探针同口径。
+// 修复背景（书架诊断实证）：目录 @js 脚本需多次 java.ajax 往返 + md5 签名，2s 写死预算必炸
+// 「脚本超时」。口径（用户拍板）：插件配置 jsTimeoutMs（缺省 15000）经 ReadingService → bridge →
+// EvalContext 透传（引擎零改动）；搜索面/探针同口径。
 describe('js 沙箱预算走配置出口（jsTimeoutMs）', () => {
   const slowJs = (ms: number, url: string): string =>
     `@js: var t = Date.now(); while (Date.now() - t < ${ms}) {}; '${url}'`

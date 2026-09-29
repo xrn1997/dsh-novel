@@ -71,6 +71,21 @@ describe('createDebouncedWriter', () => {
     expect(await readJson(a, null)).toEqual({ x: 1 })
     expect(await readJson(b, null)).toEqual({ x: 2 })
   })
+  it('flush 排到静默：第一轮在途期间新调度的写也必须在返回前落地', async () => {
+    // 病根：flush 原先排的是**调用那一刻的快照**（`[...pending.keys()]` 一次），不是「等齐」。
+    // 于是「第一轮 I/O 在途时又来一次 schedule」的写会留在计时器里——测试收尾把临时目录删了
+    // 它才烧，rename 撞上 Windows 的 EPERM（全量门里那种「1920 全绿但 exit≠0」的现场）。
+    // 窗口刻意放到 10_000ms：这条用例里 b 绝不可能靠计时器落地，只能靠 flush 排干净——
+    // 既不需要 sleep，也不给「放宽断言」留余地。
+    const dir = await tmp()
+    const a = path.join(dir, 'a.json'); const b = path.join(dir, 'b.json')
+    const w = createDebouncedWriter(10_000)
+    w.schedule(a, { v: 1 })
+    const p = w.flush()               // 第一轮只看见 a；a 的 mkdir/write 仍在途
+    w.schedule(b, { v: 2 })           // 就落在这个窗口里
+    await p
+    expect(await readJson(b, null)).toEqual({ v: 2 })
+  })
 })
 
 describe('原子写与备份的命名约定（唯一住址在 storage.ts）', () => {

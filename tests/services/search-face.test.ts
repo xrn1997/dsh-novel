@@ -24,12 +24,12 @@ function src(over: Record<string, unknown> = {}): NovelSource {
 const html = (text: string): Response => new Response(text, { headers: { 'content-type': 'text/html; charset=utf-8' } })
 
 describe('fetchSearchPage', () => {
-  it('条目提取：ok 结果含 items 与 landedUrl（合成 Response 无重定向 → 回落请求址）', async () => {
+  it('条目提取：ok 结果含 contexts 与 landedUrl（合成 Response 无重定向 → 回落请求址）', async () => {
     const f = createFetcher({ fetchImpl: async () => html(SEARCH_HTML) })
     const r = await fetchSearchPage(src(), '书', f)
     expect(r.ok).toBe(true)
     if (!r.ok || r.shape !== 'list') return
-    expect(r.items).toHaveLength(2)
+    expect(r.contexts).toHaveLength(2)
     expect(r.landedUrl).toBe('https://s.com/search?q=%E4%B9%A6')
   })
   it('规则缺失 → ok:false RuleMissing（点名缺失字段）', async () => {

@@ -10,7 +10,11 @@ const keywordOfFirst = cases[0]?.manifest.keyword
 
 describe('compat 全链路回放', () => {
   if (cases.length === 0) {
-    it('无 compat case（compat/ 为空）', () => { expect(true).toBe(true) })
+    // 空分母不许当通过：`compat/fixtures/` 里那条手写基线是**入库内容**，它不见了就等于回放面
+    // 整条不再验证任何东西——报红，不给「跑了一个空测试」的机会（skip-if-missing 是本仓删掉的旧失效模式）。
+    it('compat case 为空——分母消失，回放面没在验证任何东西', () => {
+      expect(cases.length, 'compat/fixtures 下数不到 case：手写基线被删/挪走？采集与入库口径见 compat/README.md').toBeGreaterThan(0)
+    })
   }
   for (const c of cases) {
     it(`${c.caseName} 全链路`, async () => {

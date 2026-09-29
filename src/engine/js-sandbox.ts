@@ -10,25 +10,23 @@ import type { BridgeDeps } from './js-protocol.js'
 import { loadHtml, nodeText } from './dom.js'
 import { decodePngToArgb, javaDecode } from './js-utils.js'
 
-/** JavaBridge 协议的**唯一登记点**在 js-protocol.ts 的 JAVA_PROTOCOL 表（方法名·sync/async·
- *  挂载点·实现四元组收于一行，interface/BOOTSTRAP 名单/宿主分派全部从表派生）。
- *  此处仅 re-export 推导出的类型，保持既有导入路径可用。
+/** JavaBridge 协议的唯一登记点在 js-protocol.ts 的 JAVA_PROTOCOL 表；此处只 re-export 类型。
  *  设计文档：docs/design/engine.md */
 export type { JavaBridge } from './js-protocol.js'
 
-/** 沙箱宿主注入面。注：旧版此处有 `java?: JavaBridge` 覆盖点——全仓零生产者（一个 adapter
- *  都没有的假 seam），已删除：桥始终由 evalJs 内部按协议表构造。 */
+/** 沙箱宿主注入面。（曾设 `java?: JavaBridge` 覆盖点，全仓零生产者的假 seam，已删除：桥始终由
+ *  evalJs 内部按协议表构造。） */
 export interface JsHost {
   /** 上一段结果序列化（Value.text / List.items.join('\n') / 页面原文） */
   result: string
   /** 上一段结果的值形态（nodes/page 时沙箱把 result 包成元素包装对象——`result.attr()` 等形态） */
   resultKind?: string
-  /** 上一段结果所在的**路径**（对面 getElements / getString）：list → 节点结果绑成元素**集合**
-   *  （`forEach`/`length`/下标），value → 仍是字符串对象（对面给的是 String） */
+  /** 上一段结果所在的**路径**（列表取元素 / 取值取字符串）：list → 节点结果绑成元素**集合**
+   *  （`forEach`/`length`/下标），value → 仍是字符串对象 */
   resultCtx?: 'list' | 'value'
   baseUrl: string
   source: string
-  /** searchUrl @js 形态：搜索关键词与页码（legado 沙箱全局变量 key/page） */
+  /** searchUrl @js 形态：搜索关键词与页码（沙箱全局变量 key/page） */
   key?: string
   page?: number
   /** 源静态 header 的 JSON 串（真实源 `JSON.parse(source.header)` 的形态） */
@@ -37,7 +35,7 @@ export interface JsHost {
 }
 
 export interface EvalJsOptions {
-  /** 脚本完成值语义（legado @js 口径）：代码作为脚本执行，最后一个表达式的值即结果；
+  /** 脚本完成值语义：代码作为脚本执行，最后一个表达式的值即结果；
    *  顶层 return/await 触发 SyntaxError 时自动回落函数体（async IIFE）形态。 */
   scriptForm?: boolean
   /** 脚本可见的源会话状态（cookie 垫片/源变量）——缺省进程级实例（跨调用存活）；
@@ -46,11 +44,8 @@ export interface EvalJsOptions {
 }
 
 /**
- * runScript：evalJs 的单对象入口。
- *
- * evalJs 的 JsHost 与 EvalContext 字段重叠（baseUrl/source 双份、key/page/header vs vars/jsLib），
- * 调用方此前必须双拼两份上下文（request.ts 里近逐字写了两遍）。本入口把重叠字段**收进一个
- * 对象**，host/ctx 在此合并构造——调用方学一个形状；evalJs 保持原样（引擎内部逐段求值仍用它）。
+ * runScript：evalJs 的单对象入口。evalJs 的 JsHost 与 EvalContext 字段重叠，调用方此前必须双拼
+ * 两份上下文；本入口把重叠字段收进一个对象、host/ctx 在此合并构造。evalJs 保持原样（引擎内部仍用它）。
  */
 export interface RunScriptOptions {
   code: string
@@ -58,18 +53,21 @@ export interface RunScriptOptions {
   result?: string
   baseUrl?: string
   source?: string
-  /** legado 沙箱全局变量（searchUrl @js 形态用 key/page；header 为源静态头 JSON 串） */
+  /** 沙箱全局变量（searchUrl @js 形态用 key/page；header 为源静态头 JSON 串） */
   key?: string
   page?: number
   header?: string
   vars?: Record<string, string>
+  /** 脚本可见的源实体字段（透传给 EvalContext，见 engine/types.ts 的同名注释） */
+  sourceComment?: string
+  sourceName?: string
   fetch?: (url: string) => Promise<{ body: string; contentType?: string }>
   fetchRaw?: (url: string) => Promise<Uint8Array>
   jsLib?: string
   jsTimeoutMs?: number
   loc: SegmentLoc
   facet: Facet
-  /** 缺省 true：完成值即结果（legado @js 口径） */
+  /** 缺省 true：完成值即结果 */
   scriptForm?: boolean
   evaluateRef?: EvaluateRef
   /** 脚本可见的源会话（cookie 垫片/源变量）：缺省进程级实例；测试注入 createSourceSession() */
@@ -85,6 +83,8 @@ export function runScript(o: RunScriptOptions): Promise<JsOutcome> {
     ...(o.fetchRaw === undefined ? {} : { fetchRaw: o.fetchRaw }),
     ...(o.jsLib === undefined ? {} : { jsLib: o.jsLib }),
     ...(o.jsTimeoutMs === undefined ? {} : { jsTimeoutMs: o.jsTimeoutMs }),
+    ...(o.sourceComment === undefined ? {} : { sourceComment: o.sourceComment }),
+    ...(o.sourceName === undefined ? {} : { sourceName: o.sourceName }),
   }
   const host: JsHost = {
     result: o.result ?? '',
@@ -105,20 +105,15 @@ export interface JsOutcome {
 
 /** 规则递归求值回调（避免与求值层循环依赖，由求值层注入真实现）。
  *  两个参数：rule + data（data 作为子规则的 html 上下文）。baseUrl 由外层 EvalContext
- *  经 `{...ctx, html}` 继承——此前声明的第三参 `baseUrl?` 两处实现都丢弃（死参数）。 */
+ *  经 `{...ctx, html}` 继承（第三参 baseUrl? 曾是两处实现都丢弃的死参数，已删）。 */
 export type EvaluateRef = (rule: string, data: unknown) => EngineValue
 
 const TIMEOUT = Symbol('js-sandbox-timeout')
 
 /** 进程级 unhandledRejection 防线（加载期常驻，幂等挂载一次）。
- *  vm realm 的 Promise 与宿主同一 isolate，脚本自建又 fire-and-forget（不 await 不 catch）的异步工作，
- *  其 rejection 在 **settle 之后**才悬空触发（晚于 evalJs 返回）。Node 20+ 默认把这类 unhandled rejection
- *  当致命错误，直接干掉整个 dsh 进程——尤其在**导入书源**时：探针逐源跑 @js，命中一个 fire-and-forget 源就崩，
- *  用户看到的「fatal load failure / 请求失败 403 / 404」正是这条 rejection 冒到进程顶层。
- *  历史触发源曾是主线程 `java.ajax` 包装返回的 async IIFE promise；那个 Promise 已随哨兵改造消失
- *  （见 BOOTSTRAP 的 `__dsh_sync_ajax_required__`），但本防线照旧常驻——它拦的是脚本自建的其余异步工作。
- *  早前实现是「evalJs 期间挂、finally 摘」——但 rejection 晚于 evalJs 返回才触发，摘早了照样漏。故改为
- *  加载期常驻：只需拦住进程默认的 throw 行为，插件 dispose 时才摘（不给进程留永久监听器）。 */
+ *  脚本自建又 fire-and-forget 的异步工作，其 rejection 在 settle 之后才悬空触发（晚于 evalJs 返回），
+ *  Node 20+ 默认当致命错误干掉整个 dsh 进程（探针逐源跑 @js 时命中一个 fire-and-forget 源就崩）。
+ *  所以不能「evalJs 期间挂、finally 摘」——摘早了照样漏；加载期常驻拦住默认 throw，插件 dispose 才摘。 */
 let guardInstalled = false
 function unhandledGuardHandler(reason: unknown): void {
   console.warn('[dsh-novel] 沙箱脚本产生未处理的 rejection（已捕获，不影响进程）:',
@@ -142,12 +137,10 @@ export function ensureUnhandledGuard(): () => void {
 /**
  * 沙箱引导脚本（在 vm 上下文内执行一次）。
  *
- * 逃逸防御核心：宿主**绝不**把函数/对象直接交给用户代码。唯一入口 `__host_call__`
- * （宿主函数）被本闭包捕获后即从全局移除并锁死（不可恢复）；暴露给用户的 `java`/`console`
- * 全部是 vm  realm 的包装函数，参数与返回值经 JSON 双向序列化（原始值/纯数据），
- * 宿主抛出的错误对象只取 `.message` 字符串后以 vm  realm 的 Error 重抛。
- * 因此用户代码无法沿 `.constructor`（跨 realm Function）或错误对象触达宿主 realm；
- * 而 vm realm 内 codeGeneration:{strings:false} 使 eval / Function 构造器一律 EvalError。
+ * 逃逸防御核心：宿主绝不把函数/对象直接交给用户代码——唯一入口 `__host_call__` 被本闭包捕获后
+ * 即从全局锁死；暴露给用户的 `java`/`console` 全是 vm realm 包装函数，参数与返回值 JSON 双向序列化，
+ * 宿主错误只取 `.message` 后以 vm realm Error 重抛。故用户代码沿 `.constructor` 或错误对象都够不到
+ * 宿主 realm；vm realm 内 codeGeneration:{strings:false} 另使 eval / Function 构造器一律 EvalError。
  */
 const BOOTSTRAP = `;(function (g) {
   'use strict'
@@ -159,12 +152,10 @@ const BOOTSTRAP = `;(function (g) {
   }
   hide('__host_call__')
   hide('__init__')
-  // JSON.parse 对象幂等 wrap（真实源两形态共存的兼容口径）：JSON 页的 result 按已解析**对象**
-  // 绑定（字段访问形态 result.data.list 全靠它——本仓既定口径），而 cooks.tw 类 init 脚本写
-  // JSON.parse(result)（legado 的 result 常是 String，两种形态在各自环境都活）。对象直传
-  // JSON.parse 会被 ToString 成 "[object Object]" → SyntaxError → 目录全灭。此处对**已解析对象**
-  // 先 stringify 回原文再 parse（深拷贝幂等，语义=「parse 的逆」），字符串/标量走原生不变——
-  // bootstrap 自身与用户脚本的 JSON.parse(字符串) 行为零变化。
+  // JSON.parse 对象幂等 wrap（两形态共存的兼容口径）：对象直传 JSON.parse 会被 ToString 成
+  // "[object Object]" → SyntaxError → 目录全灭（JSON 页 result 按已解析对象绑定、而 init 脚本又写
+  // JSON.parse(result)）。对已解析对象先 stringify 回原文再 parse（parse 的逆，深拷贝幂等），
+  // 字符串/标量走原生不变。
   const nativeJsonParse = JSON.parse
   JSON.parse = function (text, reviver) {
     return nativeJsonParse.call(this,
@@ -181,37 +172,45 @@ const BOOTSTRAP = `;(function (g) {
     return function () { return JSON.parse(invoke(name, [].slice.call(arguments))) }
   }
   const ajax = d.syncAjax
-    // worker 同步桥形态（legado runBlocking 口径）：__host_call__ 经 SAB RPC 阻塞等待主线程
+    // worker 同步桥形态（脚本视角同步）：__host_call__ 经 SAB RPC 阻塞等待主线程
     // fetch 落地，JS 视角同步返回响应 body 字符串——java.ajax(url).match(...) 直接成立
     ? function () {
       const r = invoke('ajax', [].slice.call(arguments))
       try { return JSON.parse(r) } catch (e) { throw new Error(msg(e)) }
     }
-    // 主线程形态：**没有同步桥就不猜异步语义**。legado 的 java.ajax 是 runBlocking 同步返回
-    // body，主线程物理上无法阻塞；曾在此返回 Promise，于是 java["ajax"](u) 这类等价写法静默
-    // 换类型（.match(...) 直接炸），而 SYNC_WORKER_RE 认不认得拼写成了语义开关。现在改为在
-    // **发起宿主调用之前**抛哨兵：evalJs 捕获后换 worker 重跑同一段（见 needsSyncBridge）。
-    // 请求因此没有发出去——重跑不多打站点。正则从此只决定性能（要不要白跑一趟主线程），
-    // 不决定语义。口径见 docs/design/engine.md。
+    // 主线程形态：**没有同步桥就不猜异步语义**。ajax 语义是同步返回 body，主线程物理上无法阻塞；
+    // 曾在此返回 Promise，等价写法静默换类型（已改抛哨兵）。现于**发起宿主调用之前**抛哨兵，
+    // evalJs 捕获后换 worker 重跑同一段（请求没发出去，不多打站点）——正则只决定性能，不决定语义。
+    // 全貌见本文件「java.ajax 同步桥」一节与 docs/design/engine.md。
     : function () { throw new Error('__dsh_sync_ajax_required__') }
-  // java.downloadFile 同款网络同步语义（legado 同步下载返回路径）：worker 直通、主线程哨兵换道。
+  // java.downloadFile 同款网络同步语义（同步下载、返回路径）：worker 直通、主线程哨兵换道。
   const downloadFile = d.syncAjax
     ? function () {
       const r = invoke('downloadFile', [].slice.call(arguments))
       try { return JSON.parse(r) } catch (e) { throw new Error(msg(e)) }
     }
     : function () { throw new Error('__dsh_sync_ajax_required__') }
-  // java.connect 与 ajax/downloadFile 同款网络同步语义（对面 runBlocking 返回 StrResponse 对象）：
-  // worker 直通拿 {url, body}，主线程抛哨兵换道——不在没有同步桥时返回 Promise 换类型。
+  // java.connect 与 ajax/downloadFile 同款网络同步语义（脚本侧是同步调用、拿到对象）：
+  // worker 直通拿数据面，主线程抛哨兵换道——不在没有同步桥时返回 Promise 换类型。
+  // 壳：raw() 与 url() 是**同一值**关系，脚本链 connect(so).raw().request().url() 取的就是落地地址
+  // （跟随重定向后的末次请求）——故 raw 壳直接复用数据面的 url，不额外跨桥带字段。
   const connect = d.syncAjax
     ? function () {
-      const r = invoke('connect', [].slice.call(arguments))
-      try { return JSON.parse(r) } catch (e) { throw new Error(msg(e)) }
+      const raw = invoke('connect', [].slice.call(arguments))
+      let r
+      try { r = JSON.parse(raw) } catch (e) { throw new Error(msg(e)) }
+      return {
+        url: r.url,
+        body: r.body,
+        raw: function () {
+          return { request: function () { return { url: function () { return r.url } } } }
+        },
+      }
     }
     : function () { throw new Error('__dsh_sync_ajax_required__') }
-  // java.post：对面返回 Jsoup 的 Connection.Response（**方法**壳：脚本写 res.body() / res.cookies()）。
+  // java.post：返回响应对象的**方法**壳（脚本写 res.body() / res.cookies()）。
   // 跨桥只走 JSON 数据，所以数据包在沙箱内包成方法对象——函数不外传，也不跨边界。
-  // 刻意只给有真数据支撑的四个访问器：对面还有 header(name)/statusCode() 等，本仓没带响应头表，
+  // 刻意只给有真数据支撑的四个访问器：还有 header(name) 等，本仓没带响应头表，
   // 就不编一个空壳给脚本（宁缺毋假值）；调到不存在的名字会照实 TypeError。
   const post = d.syncAjax
     ? function () {
@@ -226,18 +225,17 @@ const BOOTSTRAP = `;(function (g) {
       }
     }
     : function () { throw new Error('__dsh_sync_ajax_required__') }
-  // ── Packages.*（legado Rhino 的 Java 包路径仿真）─────────────────────
-  // 真实源正文解密链用它组织 JVM/Android 类调用（爱腐文 favicon 密钥图实证：
-  // ByteArrayInputStream → BitmapFactory → javax.crypto AES/HMAC）。重活（PNG 解码、
-  // AES、HMAC、charset 解码）全走宿主调用 __pkg.*（JSON 序列化边界，与 __elem.* 同款纪律）；
-  // 轻活（流/数组/包装）留在 vm realm 纯 JS。未知路径 → 如实报「不支持」。
+  // ── Packages.*（书源脚本里的 Java 包路径仿真）─────────────────────
+  // 真实源正文解密链用它组织 JVM/Android 类调用。重活（PNG 解码、AES、HMAC、charset 解码）走宿主
+  // 调用 __pkg.*（JSON 序列化边界，与 __elem.* 同款纪律）；轻活（流/数组/包装）留在 vm realm 纯 JS。
+  // 未知路径 → 如实报「不支持」。
   const pkgCall = function (op, payload) {
     try { return JSON.parse(call('__pkg.' + op, ser(payload))) } catch (e) { throw new Error(msg(e)) }
   }
   const mkBytesStream = function (bytes) {
     const buf = Array.isArray(bytes) ? bytes : []
     let pos = 0
-    // 游标必须自增：没有它 while((b=s.read())!=-1) 是第一死循环（read 恒回首字节），
+    // 游标必须自增：没有它读循环恒在首字节死转（read 恒回首字节），
     // 而唯一出口是 js 超时——脚本表现为「目录脚本超时」而不是「我读错了」。
     // _bytes 仍是全量视图（BitmapFactory.decodeStream 侧按它取整包，见 pkgHostOp）。
     return {
@@ -248,7 +246,7 @@ const BOOTSTRAP = `;(function (g) {
     }
   }
   g.Packages = {
-    // Packages.org.jsoup.Jsoup.parse(html)：对面 Rhino 的 Java 包路径写法，与下方 g.org.jsoup.Jsoup.parse
+    // Packages.org.jsoup.Jsoup.parse(html)：脚本里的 Java 包路径写法，与下方 g.org.jsoup.Jsoup.parse
     // 同一份实现（脚本两种写法在真实源里都有；BOOTSTRAP 是模板字符串，注释里不能出现反引号）。
     org: { jsoup: { Jsoup: { parse: function (html) { return mkElem(String(html)) } } } },
     java: {
@@ -322,9 +320,8 @@ const BOOTSTRAP = `;(function (g) {
             if (!/^HmacSHA(1|256|512)$/.test(a)) throw new Error('不支持的 Mac 算法：' + algo)
             const st = { key: null, parts: [] }
             // Java 的 Mac 契约：update(byte[]) 累加、update(byte) 追加单字节、doFinal() 结算后复位、
-            // doFinal(input) ≡ update(input) + doFinal()。此前 update 静默丢弃非数组、doFinal 干脆不接
-            // 参数——m.doFinal(java.strToBytes(body)) 于是对零字节签名，站点拒 → 空/乱正文，
-            // 是静默出错值而不是报错。认不出的形态如实抛（字节有符号与否由宿主 toBytes 统一 & 0xff）。
+            // doFinal(input) ≡ update(input) + doFinal()。认不出的字节载荷形态如实抛，不静默丢弃
+            // （曾静默丢弃 → 零字节签名 → 站点拒给空/乱正文，是静默出错值而不是报错）。
             const push = function (v) {
               if (Array.isArray(v)) st.parts.push(v)
               else if (typeof v === 'number') st.parts.push([v])
@@ -374,14 +371,50 @@ const BOOTSTRAP = `;(function (g) {
           },
         },
       },
+      // Packages.android.util.Base64.decode(text, flags) → 字节组。解码复用协议表里的
+      // base64DecodeToByteArray（单一实现）。flags 在这里不构成可观测分支；与上游解码器的偏离与
+      // 判据见 tests/engine/legado-gaps.test.ts 的 E-4，别在这儿再写一份判据。
+      util: {
+        Base64: { decode: sync('base64DecodeToByteArray') },
+      },
     },
   }
+  // 未知包路径**如实点名**（上游 Rhino 的 Packages 是惰性命名空间：取到名字不炸、用到才炸——本代理同语义）。
+  // 曾是普通对象字面量：未实现路径取到 undefined → 抛裸 TypeError，既说不清是哪条包路径，也不在审计
+  // 归因的任何锚点里。现库真量（2026-09-28 扫）：java.net 2 处、android.webkit / io.legado 各 1 处。
+  // 注意：本段是 BOOTSTRAP 模板字符串的一部分——注释里不许出现反引号与美元花括号。
+  var pkgUnknownPath = function (path) {
+    var boom = function () { throw new Error('未知 Packages 包路径：' + path) }
+    return new Proxy(boom, {
+      get: function (t, k) {
+        if (typeof k === 'symbol' || k === 'toString' || k === 'valueOf' || k === 'name' || k === 'length') return t[k]
+        return pkgUnknownPath(path + '.' + String(k))
+      },
+      apply: boom,
+      construct: boom,
+    })
+  }
+  var pkgWrap = function (obj, path) {
+    if (obj === null || typeof obj !== 'object') return obj
+    return new Proxy(obj, {
+      get: function (t, k) {
+        if (typeof k === 'symbol' || k === 'toString' || k === 'valueOf') return t[k]
+        var next = path === '' ? String(k) : path + '.' + String(k)
+        if (k in t) {
+          var v = t[k]
+          return (v !== null && typeof v === 'object') ? pkgWrap(v, next) : v
+        }
+        return pkgUnknownPath(next)
+      },
+    })
+  }
+  g.Packages = pkgWrap(g.Packages, '')
   const log = function (kind) {
     return function () {
       try { call(kind, ser([].slice.call(arguments))) } catch (e) {}
     }
   }
-  // ── 元素包装对象（legado JSoup Element/Elements 的最小仿真）──────────────
+  // ── 元素包装对象（jsoup Element/Elements 的最小仿真）──────────────
   // 真实源 result.attr('href')、result.select('.x').first().text()、java.getElements(r).toArray()
   // 等形态：String 对象包装（字符串方法照常可用：match/replace/indexOf/模板串），
   // 属性/文本/选择器方法经 __elem.* 宿主调用（cheerio 求值，同步桥）。
@@ -394,10 +427,9 @@ const BOOTSTRAP = `;(function (g) {
   const wrapElems = function (arr, owner) {
     const out = []
     for (let i = 0; i < arr.length; i++) out.push(mkElem(String(arr[i])))
-    // 集合助手挂成**不可枚举**：Rhino 下 result.toArray() 给的是 Java 数组，for (i in list)
-    // 只遍历下标；真源（废纸文学 / 新龙小说 / PO5 共用的 toc 模板）正是
-    // for(i in list){ l[s[i]] = list[i] } 形态——可枚举的助手会被当元素遍历，当场炸
-    // 「list[i].text is not a function」。（BOOTSTRAP 是模板字符串，注释里不能出现反引号。）
+    // 集合助手挂成**不可枚举**：上游 result.toArray() 给的是数组、for (i in list) 只遍历下标；
+    // 真源 toc 模板正是 for-in 形态，可枚举的助手会被当元素遍历（list[i].text is not a function）。
+    // （BOOTSTRAP 是模板字符串，注释里不能出现反引号。）
     const all = function () { return mkElem(out.join('\\n')) }   // 聚合口径共用元素桥（attr=首个、text=拼接）
     const helpers = {
       toArray: function () { return out.slice() },
@@ -413,9 +445,8 @@ const BOOTSTRAP = `;(function (g) {
       html: function () { return out.length > 0 ? out[0].html() : '' },
       select: function (rule) { return wrapElems(all().select(rule)) },
       hasAttr: function (n) { var a = all().attr(n); return a !== '' && a !== undefined },
-      // 对面 Elements.remove()：逐个从父上摘掉、返回 this。没有 owner 的集合（java.getElements、
-      // toArray、集合级 select 的临时聚合）背后没有可回写的片段 → 如实抛：静默 no-op 等于把
-      // 脏节点当已净化交给正文。
+      // 集合的 remove()：没有 owner 的集合（临时聚合）背后没有可回写的片段 → 如实抛——
+      // 静默 no-op 等于把脏节点当已净化交给正文。
       remove: function () {
         if (owner === undefined || owner === null) {
           throw new Error('remove() 需要可回写的宿主片段：本桥只支持 元素.select(规则).remove() 形态')
@@ -428,11 +459,9 @@ const BOOTSTRAP = `;(function (g) {
     for (const k in helpers) Object.defineProperty(out, k, { value: helpers[k], enumerable: false, writable: true })
     return out
   }
-  // 元素集包装：对面 result 在 getElements 路径上是 org.jsoup.Elements（集合），不是单个
-  // Element——所以 size()/get()/each() 必须按**顶层元素数**算，而不是恒 1。
-  // 同时保留 String 对象身份（match/replace/test/模板串在真源脚本里直接作用于 result）。
-  // 片段住 box 而非构造常量：活文档树上的摘除要能被后续读法看见（悦读小说 remove 完直接
-  // 把 doc 当值返回，全靠 String(doc) 走 toString 取到回写后的 html）。
+  // 元素集包装：列表路径上的 result 是元素**集合**（Elements）而非单个 Element——size()/get()/each()
+  // 按顶层元素数算，不是恒 1；同时保留 String 对象身份（match/replace/模板串照常可用）。
+  // 片段住 box 而非构造常量：活文档树上的摘除要能被后续读法看见。
   const mkElem = function (raw) {
     const box = { html: String(raw) }
     const s = new String(box.html)
@@ -462,7 +491,7 @@ const BOOTSTRAP = `;(function (g) {
     log: log('console.log'),
     toast: function(){}, longToast: function(){}, copyText: function(){},
     startBrowser: function(){}, open: function(){}, openUrl: function(){},
-    // createSymmetricCrypto：legado 链式解密形态（java.createSymmetricCrypto(t,k,iv).decryptStr(data)）——
+    // createSymmetricCrypto：链式解密形态（java.createSymmetricCrypto(t,k,iv).decryptStr(data)）——
     // 解密实现在协议表 aesBase64DecodeToString（Node crypto），此处只做链式外壳
     createSymmetricCrypto: function (transformation, key, iv) {
       return {
@@ -488,10 +517,9 @@ const BOOTSTRAP = `;(function (g) {
       return mkElem(String(r && r.html !== undefined ? r.html : r))
     }
   })
-  // 宿主桩名单：只放**本仓真没有对应实现**的名字（对面 JsExtensions 有、但需安卓宿主/WebView/
-  // 字体栈）。摘要与 HMAC 族（digestHex/digestBase64Str/HMacHex/HMacBase64）曾误留在此——
-  // 协议表已有真实现（js-utils.ts，期望值由 openssl 独立算出），但本循环在 sync 挂载之后运行，
-  // 把真实现覆盖成抛错桩：协议表测试全绿而脚本一调就「需要安卓宿主环境」。现由普查面 C 钉住不许复发。
+  // 宿主桩名单：只放本仓真没有对应实现的名字（书源会调、但需安卓宿主/WebView/字体栈）。
+  // 曾把协议表已有真实现的摘要/HMAC 族误列在此、被本循环覆盖成抛错桩（协议表测试全绿而脚本一调就报
+  // 「需要安卓宿主环境」）——现由普查面 C 钉住不许复发。
   ;['webView','startBrowserAwait','refreshTocUrl','ajaxAll','createAsymmetricCrypto',
     'aesBase','queryTTF','queryBase','replaceFont','androidId',
     'createSign'].forEach(function (n) {
@@ -499,7 +527,7 @@ const BOOTSTRAP = `;(function (g) {
   })
   g.cookie = {}
   d.mounts.cookie.forEach(function (p) { g.cookie[p.key] = sync(p.name) })
-  // cache（legado CacheManager 最小仿真——按源隔离的进程内键值表，搜索面写目录面读的跨面形态）
+  // cache（进程内键值表最小仿真——按源隔离，搜索面写、目录面读的跨面形态）
   g.cache = {}
   d.mounts.cache.forEach(function (p) { g.cache[p.key] = sync(p.name) })
   const noHost = function (name) {
@@ -509,7 +537,7 @@ const BOOTSTRAP = `;(function (g) {
     } })
   }
   g.android = noHost('android.*')
-  // org.jsoup.Jsoup.parse 最小仿真（legado 真实源脚本直接 org.jsoup.Jsoup.parse(result) 再
+  // org.jsoup.Jsoup.parse 最小仿真（真实源脚本直接 org.jsoup.Jsoup.parse(result) 再
   // .select(...)——安卓 classpath 里 Jsoup 可用；我们以 cheerio 元素包装等价承接 parse 入口，
   // 其余 org.* 仍如实报需要安卓宿主）
   g.org = new Proxy({ jsoup: { Jsoup: { parse: function (html) { return mkElem(String(html)) } } } }, {
@@ -521,32 +549,30 @@ const BOOTSTRAP = `;(function (g) {
   })
   g.console = { log: log('console.log'), error: log('console.error') }
   g.__d__ = d
-  g.__src__ = { key: d.source, bookSourceUrl: d.source, bookSourceName: d.sourceName || '', loginUrl: '',
+  g.__src__ = { key: d.source, bookSourceUrl: d.source, bookSourceName: d.sourceName || '',
+    // 脚本可见的源实体字段（对面脚本里的 source 就是书源实体）；只投影现库真读到的那个
+    bookSourceComment: d.sourceComment || '', loginUrl: '',
     header: d.header || '{}',
     getKey: function () { return d.source },
-    // getLoginInfoMap：legado 登录信息表（用户在 loginUi 录入的键值）。我们无 loginUi——
+    // getLoginInfoMap：登录信息表（用户在 loginUi 录入的键值）。我们无 loginUi——
     // 返回空表如实仿真（脚本取不到配置走默认分支；不伪造假配置）
     getLoginInfoMap: function () { return {} },
     toString: function () { return d.source }, valueOf: function () { return d.source } }
   // 源变量垫片方法（getVariable/setVariable/get/put）同样从协议表派生
   d.mounts.source.forEach(function (p) { g.__src__[p.key] = sync(p.name) })
   g.result = d.resultJson
-    // JSON 页/条目：result 按解析后的对象绑定（legado isJSON content 口径——字段访问形态）
+    // JSON 页/条目：result 按解析后的对象绑定（字段访问形态）
     ? (function () { try { return JSON.parse(d.resultJson) } catch (e) { return d.result } })()
     : (d.resultKind === 'nodes' && d.resultCtx === 'list')
-      // 列表路径（对面 getElements）：result 是**元素集合**——forEach/length/下标/size/get 全能用
+      // 列表路径：result 是**元素集合**——forEach/length/下标/size/get 全能用
       ? wrapElems(elemOps('split', { html: d.result }))
       : (d.resultKind === 'nodes' || (d.resultKind === 'page' && /<[a-zA-Z]/.test(d.result)))
         ? g.__mkElem__(d.result)
         : d.result
-  // legado 的 book 是实体对象（Rhino 直绑 Kotlin Book），脚本既读字段也调方法：
-  // book.setType(0)（终极全栖接口聚合）、book.getVariable("custom")（穿越小说）。
-  // 本仓 book/chapter 是服务层按面注入的**镜像**，这里补齐方法面：
-  // - type 落回镜像自身字段（本次调用内可读，落库不在本层职责）；
-  // - variable 用**镜像自带的一张局部表**，不与源级变量表（source.getVariable）混用——
-  //   对面 Book.variables 与 BookSource.variables 是两个存储，合并会把用户级开关串味。
-  //   本仓没有 Book 级持久变量存储，所以它跨一次规则调用不保留（真源用途是读用户手设的
-  //   "custom"，取不到即空串走默认分支——与对面未设置时同形；持久化见开口 c-toc-flags 一族）。
+  // book/chapter 是服务层按面注入的**镜像**，这里补齐脚本要调的方法面（setType/getVariable 等）：
+  // type 落回镜像自身字段（本次调用内可读，落库不在本层职责）；variable 用镜像自带的局部表，
+  // 不与源级变量表混用——book 级与 source 级是两个存储，合并会把用户级开关串味。本仓没有 Book 级
+  // 持久变量存储，跨一次规则调用不保留（取不到即空串走默认分支，与「从未设置」同形）。
   const mkHostObj = function (o) {
     const t = o && typeof o === 'object' ? o : {}
     const own = Object.create(null)
@@ -572,7 +598,8 @@ const BOOTSTRAP = `;(function (g) {
 })(globalThis)`
 
 /**
- * 在 node:vm 受限上下文中执行用户 JS 片段（`@js` / `<js>` / 链尾 `(…)`）。
+ * 在 node:vm 受限上下文中执行用户 JS 片段（`js:` 前缀段 / `<js>…</js>` 内联段两种形态；
+ * 链尾没有 `(…)` 切法，见 parse.ts 的 `parseBranch`）。
  *
  * - 上下文 codeGeneration:{strings:false,wasm:false}：eval / Function 构造器一律 EvalError。
  * - wrapper 为 async IIFE：顶层 `await` 可用；单次 `vm.runInContext` 同时覆盖编译与同步段
@@ -580,9 +607,8 @@ const BOOTSTRAP = `;(function (g) {
  *   （timer 已 unref，不拖住事件循环）。
  * - 返回值映射：string→Value；array→List（元素 String()）；null/undefined/''→Miss；对象→JSON.stringify 的 Value。
  * - `console.log/error` 收集进返回的 logs（join(' ')），不外泄打印。
- * - `java.ajax` 语义唯一（legado runBlocking 同步返回 body）：脚本认不出拼写而落在主线程时，ajax 包装
- *   **在发起宿主调用之前**抛哨兵，本函数捕获后换 worker 重跑同一段（请求没发出去，不多打站点；已收集
- *   的 logs 丢弃，不重复计）。正则只决定性能，不决定语义——口径与残余见 docs/design/engine.md。
+ * - `java.ajax` 语义唯一（同步返回 body）：主线程撞哨兵即换 worker 重跑同一段（见下方
+ *   「java.ajax 同步桥」一节）；正则只决定性能，不决定语义——口径与残余见 docs/design/engine.md。
  */
 export async function evalJs(
   code: string,
@@ -598,10 +624,9 @@ export async function evalJs(
   // 幂等挂载进程级 unhandledRejection 防线（多次调用只挂一次；挂上后常驻至插件 dispose）
   ensureUnhandledGuard()
   const session = opts?.session ?? processSession
-  // 协议实现的闭包依赖（原 makeJavaBridge 的参数+可变态收成一个对象；实现本体在协议表）
-  // 变量读链的 source 层（对面 AnalyzeRule.get 的第四级）：与 source.get/put 同一张按源隔离的表。
-  // 用 peek（非建档）而不是 sourceVars()——后者一调就建表，会改掉 source.getVariable「从未设置」的语义；
-  // 惰性取值还顺带覆盖「同一次调用里先 source.put 再 java.get」的形态。
+  // 变量读链的 source 层（四级读链的最外级）：与 source.get/put 同一张按源隔离的表。用 peek
+  // （非建档）而不是 sourceVars()——后者一调就建表，会改掉「从未设置」的语义；惰性取值还顺带
+  // 覆盖「同一次调用里先 source.put 再 java.get」的形态。
   if (ctx.sourceVar === undefined) {
     const varKey = ctx.source ?? ctx.baseUrl ?? ''
     ctx.sourceVar = (k: string): string | undefined => session.peekSourceVars(varKey)?.get(k)
@@ -618,18 +643,14 @@ export async function evalJs(
     contentBase: null,
   }
   const call = makeHostCall(deps, logs, host.console)
-  // java.ajax 同步语义路由（legado runBlocking 口径）：代码（含 jsLib）里出现 `java.ajax(` 调用
-  // → 整体进 worker 线程执行——worker 的 __host_call__ 经 SharedArrayBuffer RPC **同步阻塞**等待
-  // 主线程服务（fetch / java.getString 引擎递归都在主线程照常异步跑），JS 视角同步拿到 body 字符串，
-  // `java.ajax(url).match(...)` / `let b = java.ajax(u); b.indexOf(...)` 这类真实源主导形态成立。
-  // 无 ajax 的脚本仍走主线程 vm（零开销）。bootstrap 的 ajax 包装按 syncAjax 标志二选一（同一份代码）。
-  // **这条正则只是性能启发，不是语义开关**：认不出的等价写法（java["ajax"] / 解构 / 动态键）会先在
-  // 主线程白跑一趟、再由哨兵兜回 worker（见 needsSyncBridge），拿到的语义与直写形态一致。
+  // java.ajax 同步语义路由：命中 SYNC_WORKER_RE 即整段进 worker（SAB RPC 同步阻塞拿 body），
+  // 无 ajax 的脚本仍走主线程 vm（零开销）。**正则只是性能启发，不是语义开关**——认不出的等价写法
+  // 会先白跑主线程、再由哨兵兜回 worker（见 needsSyncBridge），语义一致。总口径见下方「同步桥」一节。
   const jsLibCode = await resolveJsLib(ctx.jsLib, ctx, loc, facet)
   const useWorker = SYNC_WORKER_RE.test(jsLibCode + '\n' + code)
-  // JSON 页的 `result` 绑定（legado setContent isJSON 口径）：整页/条目上下文是合法 JSON 时，
-  // 脚本首段 `result` 按**解析后的对象**绑定——真实源 `result.chapterTitle`、`result.data.list`
-  // 这类字段访问形态全靠它（此前 result 恒为原文字符串 → 字段全 undefined → 目录脚本产空）。
+  // JSON 页的 `result` 绑定：整页/条目上下文是合法 JSON 时按**解析后的对象**绑定——
+  // `result.chapterTitle`、`result.data.list` 这类字段访问形态全靠它（曾恒为原文字符串 → 字段全
+  // undefined → 目录脚本产空）。
   const pageRaw = host.result ?? ''
   const trimmedResult = pageRaw.trim()
   const resultJson = host.resultKind === 'page'
@@ -642,11 +663,13 @@ export async function evalJs(
     resultCtx: host.resultCtx ?? 'value',
     baseUrl: ctx.baseUrl ?? '', source: ctx.source ?? '',
     key: host.key ?? '', page: host.page ?? 1, header: host.header ?? '{}',
-    // legado 沙箱全局 `src` = 当前页面原文（html 优先；纯 JSON 页给序列化文本——与 host.result 的
+    // 源实体字段（脚本可见的 `source.bookSourceComment` / `source.bookSourceName`）：只投影脚本真读到的
+    sourceComment: ctx.sourceComment ?? '', sourceName: ctx.sourceName ?? '',
+    // 沙箱全局 `src` = 当前页面原文（html 优先；纯 JSON 页给序列化文本——与 host.result 的
     // 首段口径同源）。真实源 `JSON.parse(src)` / `src.match(...)` 全靠它。
     src: ctx.html ?? (ctx.json === undefined ? '' : String(ctx.json)),
-    // legado `book` / `chapter` 变量：目录/正文面脚本常见 `book.bookUrl`、`chapter.title`——
-    // 服务层按面注入（缺席给空对象：脚本读字段得 undefined，与 legado 未设置时同形）
+    // `book` / `chapter` 变量：目录/正文面脚本常见 `book.bookUrl`、`chapter.title`——
+    // 服务层按面注入（缺席给空对象：脚本读字段得 undefined，与「未设置」同形）
     book: ctx.book ?? {}, chapter: ctx.chapter ?? {},
     syncAjax,
     // 沙箱挂载清单从协议表派生（见 js-protocol.SANDBOX_MOUNTS）
@@ -676,11 +699,9 @@ export async function evalJs(
       throw jsErr(e, code, loc, facet, '沙箱初始化失败')
     }
 
-    // jsLib（legado 源级全局函数库）：先于用户代码在同一上下文执行——函数定义落全局，
-    // 用户 @js 里直接调用（真实源 urlUserFavorite/host/qmSearchUrl 等都定义在这里）。
-    // 它本身不是求值目标：抛错如实上报（jsLib 坏了整源的 js 都不可信）。
-    // 用**已解析**的库文本（URL 字典形态在 evalJs 顶部下载拼好）——主线程与 worker 两条路必须同一份，
-    // 否则同一源在两条路上少一层库（crypto-js 一类直接 not defined）。
+    // jsLib（源级全局函数库）：先于用户代码在同一上下文执行——函数定义落全局，用户 @js 里直接
+    // 调用。它本身不是求值目标：抛错如实上报（jsLib 坏了整源的 js 都不可信）。用**已解析**的库
+    // 文本（URL 字典在 evalJs 顶部下载拼好）——两条路必须同一份，否则同一源在两路少一层库。
     const jsLib = jsLibCode
     if (jsLib.trim() !== '') {
       try {
@@ -691,19 +712,17 @@ export async function evalJs(
       }
     }
 
-    // key/page/result/baseUrl/source/src/book/chapter 已由 bootstrap 注入为全局（g.key=…）——
-    // wrapper 不再声明同名参数：真实源有 `let page = java.get("page")` 的重声明形态，
-    // 参数位会与之冲突（Identifier already declared）。
-    // **非严格模式（钉死）**：legado 的 JS 宿主（Rhino/QuickJS）按 sloppy 语义执行——
-    // `next = []` 这类未声明赋值就是写全局，真实源大量依赖（实测 13 源目录脚本首行即
-    // `next = []`，严格模式下 ReferenceError 全灭）。逃逸防御不靠严格模式：vm realm 隔离 +
-    // codeGeneration 关闭 + 宿主入口锁死才是边界，见 BOOTSTRAP 顶注。
+    // key/page/result/baseUrl/source/src/book/chapter 已由 bootstrap 注入为全局——wrapper 不再声明
+    // 同名参数（真源有 `let page = java.get("page")` 的重声明形态，参数位会撞 Identifier already declared）。
+    // **非严格模式（钉死）**：书源脚本按 sloppy 语义执行，`next = []` 这类未声明赋值就是写全局，
+    // 真实源大量依赖（现库 18/214 源某处规则串含 `next = [`，2026-09-28 按 raw 扫、判据不限首行）。
+    // 逃逸防御不靠严格模式：vm realm 隔离 + codeGeneration 关闭 + 宿主入口锁死才是边界，见 BOOTSTRAP 顶注。
     // wrapped 文本在 evalJs 顶部构造（与 worker 共用同一份）。
 
     let started: unknown
     try {
       started = opts?.scriptForm === true
-        // legado @js 口径：代码是脚本，最后一个表达式的值即结果（顶层 return/await → SyntaxError → 回落函数体）
+        // 完成值语义：代码是脚本，最后一个表达式的值即结果（顶层 return/await → SyntaxError → 回落函数体）
         ? runAsScript(code, wrapped, context, timeout)
         : vm.runInContext(wrapped, context, { timeout })
     } catch (e) {
@@ -731,7 +750,7 @@ export async function evalJs(
     }
   } catch (e) {
     if (!needsSyncBridge(e)) throw e
-    // 别名写法调 ajax（java["ajax"] / 解构 / 动态键）：主线程给不出 legado 的同步语义，
+    // 别名写法调 ajax（java["ajax"] / 解构 / 动态键）：主线程给不出同步语义，
     // 换 worker 重跑同一段。已产生的日志丢弃——否则同一段脚本的 console.log 会出现两遍。
     logs.length = 0
     return evalJsInWorker({
@@ -742,14 +761,11 @@ export async function evalJs(
 }
 
 /** 脚本形态执行：完成值即结果；**编译期** SyntaxError（顶层 return/await）回落 async IIFE 函数体形态。
- *  判别必须在**编译期**（new vm.Script 只编译不执行）：旧实现直接 runInContext 再按异常类名判——
- *  运行时抛的 SyntaxError（最典型：JSON.parse 坏串 / 对象 ToString 后坏串）被误判成「顶层 return 形态」
- *  静默回落 wrapped，而表达式脚本在 wrapped 里没有 return → 完成值 undefined → **恒 Miss**（真机实证：
- *  cooks.tw init 脚本经 evaluate 链路整段静默取空，比报错更坏）。编译通过的脚本执行期错误直接上抛。
- *  vm 抛的错误来自 vm realm——跨 realm `instanceof SyntaxError` 不成立，按 constructor.name 判定。
- *  **worker 里有这份的文本抄本**（WORKER_SRC 的 runAsScript——worker 代码以字符串交付，够不到本函数）：
- *  改这里必须同时改那里，两路口径由 `tests/engine/json-parse-object-idempotent.test.ts` 的
- *  「worker 路与主线程同口径」跨路钉子钉住（fetch 计数：重跑即多打站点一次）。 */
+ *  判别必须在编译期（new vm.Script 只编译不执行）——曾按执行后的异常类名判，运行时 SyntaxError
+ *  （JSON.parse 坏串等）被误判成顶层 return 形态静默回落 wrapped，表达式脚本恒 Miss（比报错更坏）。
+ *  跨 realm `instanceof SyntaxError` 不成立，按 constructor.name 判定。
+ *  **worker 里有这份的文本抄本**（WORKER_SRC 的 runAsScript，worker 代码以字符串交付够不到本函数）：
+ *  改这里必须同时改那里，两路一致由 `tests/engine/json-parse-object-idempotent.test.ts` 钉住。 */
 function runAsScript(code: string, wrapped: string, context: vm.Context, timeout: number): unknown {
   try {
     // 只编译不执行：SyntaxError = 语法层（含顶层 return/await）→ 回落 wrapped
@@ -771,30 +787,22 @@ function wrappedFormOf(code: string): string {
 
 // ── java.ajax 同步桥（worker + SharedArrayBuffer RPC）────────────────────
 //
-// legado 的 `java.ajax` 是 runBlocking 同步返回响应 body；Node 主线程 vm 无法阻塞 await。
-// 进 worker 有两条路，语义相同、只差一趟白跑：① `SYNC_WORKER_RE` 命中脚本（含 jsLib）里任何
-// **可能**是 ajax 的形态 → evalJs 直接把整段求值路由进 worker（性能启发，认得就不必白跑主线程）；
-// ② 正则认不出的等价写法在主线程撞上 ajax 哨兵 → evalJs 捕获后换 worker 重跑同一段（见
-// needsSyncBridge）。语义由**桥**给（worker 同步返回 / 主线程抛哨兵），不由正则给。
-// worker 里的 __host_call__ 把 (name, argsJson) 写进请求 SAB 后 `Atomics.wait` 阻塞，
-// 主线程经 message 唤醒后照常用同一个 `call`（fetch / java.getString 引擎递归 / console 日志 /
-// 元素桥——全部现成）异步服务，响应回写响应 SAB + Atomics.notify 唤醒 worker。
-// JS 视角：同步拿到 body 字符串（bootstrap 的 ajax 包装按 init.syncAjax 走同步分支）。
-// 逃逸防御不变：worker 里跑的是同一份 BOOTSTRAP + 同样的 vm codeGeneration 锁死；
-// SAB 上流动的只有 JSON 字符串。超时双闸：worker 内 vm timeout 杀同步死循环，
-// 主线程 Promise.race（timeout + 5s）后 worker.terminate()。
-// worker 代码以**字符串**交付（`new Worker(src, {eval:true})`）——tsdown 打包后不存在
-// 独立 worker 文件可解析；BOOTSTRAP/init/code/wrapped 全走 workerData，不产生第二份引导代码抄本。
-// 唯一无法共用的那份是 runAsScript（它要在 worker realm 里调 host 的 vm），见 WORKER_SRC 内注释。
+// `java.ajax` 的语义是同步返回响应 body；Node 主线程 vm 无法阻塞 await——语义由**桥**给
+// （worker 同步返回 / 主线程抛哨兵），不由正则给。两条路：① SYNC_WORKER_RE 认出可能的 ajax 形态
+// → evalJs 直接把整段路由进 worker（性能启发，省一趟白跑）；② 认不出的等价写法在主线程撞哨兵 →
+// evalJs 捕获后换 worker 重跑同一段（见 needsSyncBridge，请求没发出去，不多打站点）。
+// worker 里的 __host_call__ 把 (name, argsJson) 写进请求 SAB 后 Atomics.wait 阻塞，主线程经
+// message 唤醒后用同一个 `call` 异步服务（fetch / 引擎递归 / console / 元素桥），响应回写 + notify。
+// 逃逸防御不变：同一份 BOOTSTRAP + vm codeGeneration 锁死，SAB 上只有 JSON 字符串。超时双闸：
+// worker 内 vm timeout 杀同步死循环，主线程 Promise.race（timeout + 5s）后 terminate。
+// worker 代码以字符串交付（tsdown 打包后无独立文件可解析），BOOTSTRAP/init/code/wrapped 全走
+// workerData，不产生第二份引导抄本；唯一无法共用的是 runAsScript（见 WORKER_SRC 内注释）。
 
 /** 路由启发式（**只影响性能与稳健性，不影响语义**——语义由桥给）。刻意过近似而不求精确，三支：
- *  ① `\.ajax\s*\(` 认任何 `.ajax(`（`java.ajax(` 以及别名对象上的 ajax）；② `downloadFile\s*\(`
- *  认 `java.downloadFile(`（与 ajax 同款的 async 哨兵桥，见 `js-protocol.ts` 的 downloadFile 行）；
- *  ③ `java\s*\[` 认任何对 java 桥的下标访问（`java["ajax"]` 与一切动态键）。放宽的动机不只是省一趟白跑：
- *  哨兵是靠「抛出」传递的，脚本自己的 try/catch 会在 vm 内把它吞掉，那段脚本于是静默走 catch 分支
- *  而不是拿到 legado 语义——现实的别名写法直接进 worker，就压根走不到抛哨兵那一步。
- *  代价实测（本机 228 源真实库）：放宽前后同样 28 源命中，**多路由 0 个**。仍漏的只有真正的
- *  间接形态（解构 `const {ajax} = java`、`with`）——注意计算键 `java[...]` 字面含 `java[`，已被支③捞进 worker，撞不到哨兵。 */
+ *  ① `\.ajax\s*\(` 认任何 `.ajax(`；② `downloadFile\s*\(`（与 ajax 同款的哨兵桥，见 js-protocol.ts）；
+ *  ③ `java\s*\[` 认任何对 java 桥的下标访问。放宽的动机不只是省一趟白跑：哨兵靠「抛出」传递，
+ *  脚本自己的 try/catch 会在 vm 内把它吞掉——现实的别名写法直接进 worker，压根走不到抛哨兵那步。
+ *  仍漏的只有真正间接形态（解构、with）。口径与实测读数见 docs/design/engine.md。 */
 const SYNC_WORKER_RE = /\.ajax\s*\(|downloadFile\s*\(|java\s*\[/
 const SAB_REQ_BYTES = 4 * 1024 * 1024
 const SAB_RESP_BYTES = 16 * 1024 * 1024
@@ -838,12 +846,10 @@ function sanitize(v) {
   }
   return v
 }
-// 脚本形态判别：**编译期**（new vm.Script 只编译不执行），与主线程的 runAsScript 同口径。
-// 这里是那份的文本抄本——worker 代码以字符串交付，够不到宿主函数；改一处必须改两处，
-// 两路一致由 tests/engine/json-parse-object-idempotent.test.ts 的跨路钉子（fetch 计数）钉住。
-// 按「执行 code 后捕获到的异常类名」判会把**运行时** SyntaxError（JSON.parse 坏串一类）误当
-// 顶层 return 形态：脚本已经跑了一遍（ajax 已发出去、非幂等写入已落），重跑 = 站点两趟，
-// 第二遍恰好不抛时 wrapped 里无 return → 完成值 undefined → 静默 Miss。
+// 脚本形态判别：**编译期**判 SyntaxError，与主线程 runAsScript 同口径。这里是那份的文本抄本
+// （worker 代码以字符串交付，够不到宿主函数）——改一处必须改两处，两路一致由
+// tests/engine/json-parse-object-idempotent.test.ts 钉住。曾按执行后异常类名判，会把运行时
+// SyntaxError 误当顶层 return 形态并重跑（ajax 重发、站点两趟，且可能静默 Miss）。
 function runAsScript(code, wrapped, context, timeout) {
   try { new vm.Script(code) }
   catch (e) {
@@ -1072,11 +1078,9 @@ function elemHostOp(op: string, payload: { html?: unknown; name?: unknown; rule?
       return kids.toArray().filter((n) => isTag(n)).map((n) => $.html(n) ?? '')
     }
     case 'remove': {
-      // 元素桥的摘除回写：对面 jsoup 的 remove() 只把节点从**父**上摘掉、子树跟着节点走，
-      // 所以「环安小说网 el.select("p,script,div").remove()」把 el 自己也摘走之后，
-      // el.html() 仍要读到没被命中的 em。做法：先按原形状记下顶层节点，摘完再串化它们——
-      // 顶层若整个被摘走，节点对象还在，串化即为净化后的片段。
-      // 文档级片段（Jsoup.parse 出来的整页）串化整份文档，其余串化 body 顶层子节点。
+      // 元素桥的摘除回写：remove() 只把节点从**父**上摘掉、子树跟着节点走——el.select(...).remove()
+      // 把 el 自己摘走后，el.html() 仍要读到没被命中的内容。做法：先按原形状记下顶层节点，摘完再
+      // 串化它们（节点还在，串化即为净化后的片段）。文档级片段串化整份文档，其余串化 body 顶层子节点。
       const rule = String(payload.rule ?? '')
       const isDoc = /^\s*(?:<!doctype\s|<html[\s>])/i.test(html)
       const top = (isDoc ? $.root().contents() : $('body').contents()).toArray()
@@ -1143,36 +1147,30 @@ function pkgHostOp(op: string, payload: Record<string, unknown>): unknown {
  *  存储本体归 SourceSession：这两个 Map 是进程级缺省实例的后仓。 */
 const COOKIE_JARS = new Map<string, Map<string, string>>()
 
-/** 源级状态的三张进程级表（对面是三个不同前缀，本仓按源建档）：
- *  · COOKIE_JARS —— cookie 垫片；
- *  · SOURCE_VARS —— BaseSource.put/get 的**键值表**（对面键 `v_<source>_<key>`）；
- *  · SOURCE_STRINGS —— BaseSource.setVariable/getVariable 的**单串槽**（对面键 `sourceVariable_<source>`）；
- *  · CACHE_STORES —— CacheManager 的 cache 垫片（对面全局表，本仓按源隔离是在册裁决）。
- *  先前两件事塞在同一张 Map 里，`setVariable` 还顺手 clear() 整表 ⇒ 写串槽清空 source.put 的键、
- *  getVariable 返回整表 JSON 壳而不是原串（2026-09-23 对读 data/entities/BaseSource.kt 后拆开）。
- *  全部进程内仿真，不落盘（跨重启落盘是另一件事，登记在矩阵 h-source-variable）。 */
+/** 源级状态的四张进程级表（本仓按源建档）：COOKIE_JARS（cookie 垫片）、SOURCE_VARS（source.put/get
+ *  的键值表）、SOURCE_STRINGS（source.setVariable/getVariable 的单串槽）、CACHE_STORES（cache 垫片）。
+ *  四者必须分开——曾把串槽与键值表塞同一张 Map，setVariable 顺手 clear() 整表（见 SourceSession 注释）。
+ *  全部进程内仿真，不落盘（跨重启落盘登记在矩阵 h-source-variable）。 */
 const SOURCE_VARS = new Map<string, Map<string, string>>()
 
 /**
- * 源会话：脚本可见的按源状态——cookie 垫片与源变量。
- * 此前这两个存储是模块级进程 Map，「按源隔离」只写在注释里：无 reset 导出、跨服务实例永生，
- * 跨源污染类用例写不出来。现在它是显式 interface：生产缺省 processSession（跨调用存活，
- * 行为与从前一字不差），测试注入 createSourceSession() 隔离实例——两个 adapter 即真 seam。
+ * 源会话：脚本可见的按源状态——cookie 垫片与源变量。显式 interface 而非裸模块 Map（后者无 reset、
+ * 跨服务实例永生，跨源污染用例写不出来）：生产缺省 processSession，测试注入 createSourceSession()。
  */
 export interface SourceSession {
   /** 某源的 cookie 垫片（键值表，缺省建档） */
   cookieJar(sourceKey: string): Map<string, string>
-  /** 某源的**键值变量表**（对面 BaseSource.put/get → CacheManager 键 `v_<source>_<key>`） */
+  /** 某源的**键值变量表**（source.put/get 落这里） */
   sourceVars(sourceKey: string): Map<string, string>
   /** 某源键值表的非建档读口：从未碰过 → undefined（java.get 的 source 层要区分「从未设置」） */
   peekSourceVars(sourceKey: string): Map<string, string> | undefined
-  /** 某源的**自定义变量单串槽**（对面 BaseSource.setVariable/getVariable → 键 `sourceVariable_<source>`）。
-   *  与键值表是两个存储：写串槽不许动键值表，反之亦然（此前两者塞在同一张 Map 里，
-   *  `setVariable` 顺手 clear() 把 source.put 写过的键全清了，且 getVariable 返回的是整表 JSON 壳）。 */
+  /** 某源的**自定义变量单串槽**（source.setVariable/getVariable 落这里）。
+   *  与键值表是两个存储：写串槽不许动键值表，反之亦然（曾塞同一张 Map，setVariable 顺手 clear()
+   *  把 source.put 的键全清了，getVariable 还返回整表 JSON 壳）。 */
   sourceString(sourceKey: string): string
   setSourceString(sourceKey: string, value: string | null): void
-  /** 某源的 cache 垫片表（对面 CacheManager 是**全局**表；本仓按源隔离是在册裁决，见矩阵 h-cache-ttl）。
-   *  第三处存储：此前它借 sourceVars 加 `cache:` 前缀，脚本用 `source.get('cache:x')` 就串味。 */
+  /** 某源的 cache 垫片表（缓存本是全局表；本仓按源隔离是在册裁决，见矩阵 h-cache-ttl）。
+   *  独立于键值表——曾借 sourceVars 加 `cache:` 前缀，脚本用 `source.get('cache:x')` 就串味。 */
   cacheStore(sourceKey: string): Map<string, string>
 }
 
@@ -1202,7 +1200,7 @@ function sessionOf(
     peekSourceVars: (sourceKey) => vars.get(sourceKey),
     sourceString: (sourceKey) => strings.get(sourceKey) ?? '',
     setSourceString: (sourceKey, value) => {
-      // 对面 setVariable(null) → CacheManager.delete（清空即回「从未设置」），不是存 "null"
+      // setVariable(null) 即删除（清空即回「从未设置」），不是存 "null"
       if (value === null) strings.delete(sourceKey)
       else strings.set(sourceKey, value)
     },
@@ -1253,10 +1251,9 @@ function parseLineFromStack(stack: string): number | undefined {
   return undefined
 }
 
-// ── jsLib 两形态（legado SharedJsScope）───────────────────────────────
-// 裸 JS 文本，或 `{"名字":"https://…/x.js"}` URL 字典（下载后按 URL 缓存，对面缓存键是 md5(url)）。
-// 解析发生在 evalJs 顶部——worker 路由的 SYNC_WORKER_RE 因此能看到**下载后**的库代码，
-// 库里含 java.ajax 的源才会被正确送进 worker。
+// ── jsLib 两形态（裸文本 / URL 字典）───────────────────────────────
+// 裸 JS 文本，或 `{"名字":"https://…/x.js"}` URL 字典（下载后按 URL 原文缓存）。解析发生在 evalJs
+// 顶部——SYNC_WORKER_RE 因此能看到下载后的库代码，库里含 java.ajax 的源才会被正确送进 worker。
 const JSLIB_URL_CACHE_MAX = 32
 const jsLibUrlCache = new Map<string, string>()
 
@@ -1287,7 +1284,7 @@ async function resolveJsLib(
       try {
         body = (await ctx.fetch(url)).body
       } catch (e) {
-        // 下载失败如实抛（对面同样抛「下载jsLib-<url>失败」）：少一层库会让后面的脚本
+        // 下载失败如实抛（错误文案「下载jsLib-<url>失败」）：少一层库会让后面的脚本
         // 报「xxx is not a function」，把库缺失伪装成脚本错误
         throw new JsSandboxError(`jsLib 下载失败：${url}（${e instanceof Error ? e.message : String(e)}）`, { ...loc, facet, script: jsLib.slice(0, 200) })
       }

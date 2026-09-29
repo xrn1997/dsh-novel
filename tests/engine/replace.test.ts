@@ -18,9 +18,8 @@ describe('applyReplaces 净化（## 替换）', () => {
   })
 
   it('OnlyOne 先截取首个匹配、再在该匹配内替换（对面 replaceRegex 的 replaceFirst 分支）', () => {
-    // 对面 AnalyzeRule.replaceRegex：`regex.find(result)` 取 match.value，
-    // 再 `match.value.replaceFirst(regex, replacement)`——**替换作用在截取出来的那一小段上**，
-    // 产物就是那一小段（不是「原文里只改第一处」）。此前本仓按后者实现：'aXaX' → 'a-aX'（错值，
+    // 先取**首个匹配**的那一小段，替换再作用在该小段上——产物就是那一小段
+    // （不是「原文里只改第一处」）。此前本仓按后者实现：'aXaX' → 'a-aX'（错值，
     // 净化尾因此留下本该被裁掉的尾巴）。
     const v = { kind: 'value', text: 'aXaX' } as const
     expect(applyReplaces(v as unknown as EngineValue, [step('X', '-')], true))
@@ -93,7 +92,7 @@ describe('applyReplaces 净化（## 替换）', () => {
 
 describe('interp 查表只认自有键（不许顺原型链捞 Object.prototype 成员）', () => {
   const b = { baseUrl: 'https://x.com' } as Record<string, string>
-  // 插值作用在 pattern/replacement 串上（legado makeUpRule：替换规则先插值再当正则），
+  // 插值作用在 pattern/replacement 串上（替换规则先插值再当正则），
   // 所以钉子把 {{键}} 放进 replacement——放进正文文本是测不到 interpolate 的。
   it.each(['toString', 'constructor', '__proto__', 'hasOwnProperty', 'valueOf'])('%s 保持字面', (key) => {
     const replacement = `前{{${key}}}后`

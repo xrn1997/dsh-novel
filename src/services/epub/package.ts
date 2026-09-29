@@ -83,9 +83,7 @@ export type EpubNavigationSource = 'nav' | 'ncx' | 'spine'
  * 里的全部目标：spine 里的那些在本层直接拒整本，**其余带出去**——正文层真要用到某个被加密的图片时，
  * 报错原因必须是「被加密（本插件不解密）」，而不是按混淆后的字节说成「图片损坏」（那是误导读者去换图）。
  *
- * `warnings` 的 code 取值（稳定标识）：`epub-navigation-synthesized`（无目录，按 spine 合成）、
- * `epub-navigation-degraded`（EPUB3 退用 NCX）、`epub-encrypted-resource`（**未被用到**的资源被加密：
- * 留一条点名资源的说明；真被正文用到时由正文层按 `encryptedPaths` 拒绝并点名）。`resource` 一律是书内逻辑名。
+ * `warnings` 的 code 取值见上面三个 `WARN_*` 常量（稳定标识，`resource` 一律是书内逻辑名）。
  */
 export interface EpubPackage {
   readonly title: string | null
@@ -132,8 +130,8 @@ export async function readEpubPackage(archive: EpubArchive, limits: Partial<Epub
   // ② OPF：结构、拒绝项与元数据（都在 parseOpf 里判完，外面拿到的是干净数据）
   const opf = parseOpf(await readXmlText(archive, opfPath, xmlBytes), opfPath, names, domLimits)
 
-  // ③ 内容加密：命中 spine 里任一文档即拒（正文读不出就算失败）；其余（未使用的字体等）只留告警，
-  //    但目标集合要带出去——正文里真用到某份被加密的资源时，报错原因必须是「被加密」而不是「字节坏了」
+  // ③ 内容加密：命中 spine 里任一文档即拒（正文读不出就算失败）；其余只留告警但目标集合要带出去
+  //    （理由见 `encryptedPaths` 字段注：报错原因必须是「被加密」而不是「字节坏了」）
   const encryptedPaths = new Set<string>()
   if (names.has(ENCRYPTION_PATH)) {
     const spinePaths = new Set(opf.spineItems.map((s) => s.path))

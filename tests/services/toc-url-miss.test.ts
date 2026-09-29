@@ -36,3 +36,37 @@ describe('tocUrl 模板插值的两种情形', () => {
     expect(url).not.toContain('{{')
   })
 })
+
+/**
+ * 绝对 XPath 形态的 tocUrl：`//…` 既像 URL（协议相对形态）又是 XPath 的绝对形态。
+ *
+ * 库内 `若夏` / `思兔阅读` / `爱丽丝书屋` 的 `ruleBookInfo.tocUrl` 都是这种规则。旧实现的
+ * 「静态 URL 短路」（`^(https?:)?//` 命中 → `absUrl(...) ?? bookUrl`）把它们当 URL：`absUrl`
+ * 对这种串解不出 → **回退 bookUrl**，于是目录请求打到书籍页、一条章节也列不出。
+ * 真机读数（2026-09-28，经本地代理）：若夏 `getDetail().tocUrl` 恒为 bookUrl、`getToc` 0 章、
+ * 审计把它分在 `EmptyToc` 桶里；而这条规则单独求值是好的（`…/chapter/123313`）。
+ */
+describe('tocUrl 是绝对 XPath 规则时不许被当静态 URL', () => {
+  const RULE = "//*[@property='og:novel:read_url']/@content@js:result.replace('/book/','/chapter/')"
+  const HTML = '<html><head><meta property="og:novel:read_url" content="https://www.heiyan.com/book/123313"></head></html>'
+
+  it('绝对 XPath 规则照常求值（不再拿 bookUrl 冒充）', async () => {
+    const url = await tocUrlOf(RULE, null, BOOK, async () => HTML, subEval)
+    expect(url).toBe('https://www.heiyan.com/chapter/123313')
+  })
+
+  it('真静态 URL（无插值且能绝对化）仍走短路——不因本修改去抓详情页', async () => {
+    const url = await tocUrlOf('/static/list.html', null, BOOK,
+      async () => { throw new Error('静态 URL 不该触发详情页抓取') }, subEval)
+    expect(url).toBe('https://api.example.com/static/list.html')
+  })
+
+  it('裸标签绝对 XPath（`//div/a/@href`）同样不短路——new URL 解得出野地址不代表它是 URL', async () => {
+    // 二段收口的回归形态（矩阵 b-toc-url-xpath-vs-url）：`new URL` 会把 `//div/a/@href` 解成
+    // `https://div/a/@href`（host 被认成标签名），「absUrl 解得出才短路」这道闸拦不住它——
+    // `//` 家族在 tocUrl 位一律按绝对 XPath 不短路（单 `/` 仍走「解得出才短路」，见上面那条钉子）。
+    const html = '<html><body><div><a href="/chapter/1">第一章</a></div></body></html>'
+    const url = await tocUrlOf('//div/a/@href', null, BOOK, async () => html, subEval)
+    expect(url).toBe('https://api.example.com/chapter/1')
+  })
+})

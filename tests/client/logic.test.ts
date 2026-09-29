@@ -7,7 +7,7 @@ import { debounce } from '../../src/client/util.js'
 import { createStore } from '../../src/client/store.js'
 import { ApiClientError, apiGet, apiUpload } from '../../src/client/api.js'
 import { streamExport } from '../../src/client/download.js'
-import { coverFallbackChar } from '../../src/client/views/bits.js'
+import { coverFallbackChar, searchPct } from '../../src/client/views/bits.js'
 import { LOCAL_SOURCE_ID } from '../../src/shared/wire.js'
 
 describe('首页封面降级', () => {
@@ -223,5 +223,17 @@ describe('styles token 迁移', () => {
         expect(text, `${f} 含旧假 token ${stale}`).not.toContain(stale)
       }
     }
+  })
+})
+
+describe('搜索进度百分比（搜索面的唯一算式，bits.searchPct）', () => {
+  it('按源数算：满格是算出来的，被停止的轮次停在它真实走到的位置', () => {
+    expect(searchPct(null)).toBe(0)
+    expect(searchPct({ done: 0, total: 0 }), '空参与集（源全停用/未导入）不许显示成满格').toBe(0)
+    expect(searchPct({ done: 29, total: 431 }), '曾写死收尾态 100%：29/431 也显示满格').toBe(7)
+    expect(searchPct({ done: 431, total: 431 })).toBe(100)
+  })
+  it('done 越过 total（跑到一半源被停用/删掉）clamp 到 100，不出现 >100 的读数', () => {
+    expect(searchPct({ done: 5, total: 2 })).toBe(100)
   })
 })

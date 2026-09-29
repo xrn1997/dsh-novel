@@ -8,6 +8,7 @@ import { startSourceVerification } from '../jobs.js'
 import { clearSelection, groupIcon, selectMany, setEditMode, setGroupFilter, setQuery, setStatusFilter, sourceListUi, toggleSelect, UNGROUPED } from '../source-list.js'
 import type { StatusFilter } from '../source-list.js'
 import { deriveSourceListView } from '../source-list-view.js'
+import { findScrollport } from '../scrollport.js'
 import { useStore } from '../store.js'
 import { useTransientFlag } from '../transient.js'
 import { rowAnchorOf, toggleFeedback } from '../toggle-feedback.js'
@@ -17,24 +18,20 @@ import type { JobState, SourcePublic } from './types.js'
 /**
  * 源列表（书源管理 tab 的资产清单，2026 调度台 IA）：
  * 列表头（标题 + **状态带**（全库读数唯一住址，窄列退化见样式层）+ 文本/状态/分组过滤 +
- * 编辑切换 + ＋导入书源）+ 编辑态批量条
- * + 六列表格（名称/状态/分组/地址/操作/启停）+ 前端分页。
+ * 编辑切换 + ＋导入书源）+ 编辑态批量条 + 六列表格 + 前端分页。
  *
- * 与旧版的差异（用户逐项裁定）：状态 chips → **状态下拉**（下拉只过滤不总览；读数 2026-09 起
- * 只住本组件的状态带，待办箱改成可忽略后不再兼职读数）；
- * 危险区专区 + 手输「删除」→ **统一模态二次确认**（点名后果 + Esc/遮罩取消零写口 + 焦点闭环
- * + 确认在途防重（delBusy，双击只发一次 POST）+ ids 点击时快照；失败即收模态、错误进全局条
- * ——与书架「失败留在框内重试」的一处刻意差异，理由记 docs/design/client.md 调度台 IA 节）；
- * 行内动作浏览态常驻：验证/重验按状态出现 + 试跑 +「⋯」溢出菜单收纳低频动作（登录态/删除）；
- * 启停唯一入口 = 最右开关（不渲染重复的「启用」文字钮）；「验证全部未验证」上移待办箱。
+ * 与旧版的差异（用户逐项裁定）：状态下拉只过滤不总览（读数归状态带）；删除走**统一模态二次确认**
+ * （点名后果 + Esc/遮罩零写口 + 焦点闭环 + 在途防重 + ids 点击时快照；失败即收模态、错误进全局
+ * 条——与书架「失败留在框内」是刻意差异，理由见 client.md 调度台 IA 节）；行内动作浏览态常驻
+ * （验证/重验按状态 + 试跑 +「⋯」菜单），启停唯一入口 = 最右开关，「验证全部未验证」上移待办箱。
  *
- * 现场口径不变：query/statusFilter/groupFilter/selection/editMode 在模块级 sourceListUi
- * store（试跑下钻/重开视图不丢）；派生计算归 source-list-view.ts 纯函数；任务经 props 注入。
+ * 现场（query/过滤/勾选/编辑态）在模块级 sourceListUi store（试跑下钻/重开不丢）；派生计算归
+ * source-list-view.ts 纯函数；任务经 props 注入。
  */
 
 const PAGE_SIZE = 100
 /** 状态下拉：五维单选（'disabled' 维是 enabled 布尔，与 status 正交——口径归 source-list.ts）。
- *  不带计数（2026 改版）：读数归待办收件箱与列表头部 meta。 */
+ *  不带计数：全库读数唯一住址是列表头**状态带**（`source-list-view.ts` 的 `stats`），下拉只过滤。 */
 const STATUS_OPTIONS: Array<{ key: StatusFilter; label: string }> = [
   { key: 'all', label: '全部状态' },
   { key: 'verified', label: '可用' },
@@ -48,8 +45,7 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
   onChanged: () => void; onProbe: (id: string) => void
   /** 打开导入弹层（壳层持有弹层现场） */
   onImport: () => void
-  /** 上层取数失败信息：有错时既不渲染「还没有书源」空态（不许把失败伪装成确定结论），
-   *  也不渲染表格——失败由壳层那条红字统一说一遍，本组件不再抄第二份（2026-09） */
+  /** 上层取数失败信息：有错时既不渲染空态也不渲染表格——失败由壳层红字统一说一遍（三态见下方表体注释） */
   loadError?: string | null
   /** 依赖束：缺省生产实现；测试注入假 adapter 驱动接线层 */
   deps?: SettingsDeps
@@ -72,27 +68,21 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
   const vm = deriveSourceListView(all, ui, limit)
   const { filtered, shown, selected: selection } = vm
   const { groupCounts, groupLegend, authCountOf, allFilteredSelected, ungroupedCount, stats } = vm
-  // 任务在途 → 三个批量写口禁用：服务端是**单任务槽**（import-job.begin 运行中抛
-  // JobRunningError，import/probe 互斥），在途再提交本就无处可去。删除所选不禁：
-  // 删除不是任务（同步 sourcesBatchDelete），且 runBatchProbe 对任务中被删的源点名
-  // 跳过（「源不存在（运行中被删除，已跳过）」）——服务端明确支持验证途中删源；
-  // 模态确认即是二次确认（实现裁定，2026 审查后补记，见 client.md 调度台 IA 节）。
+  // 任务在途 → 三个批量写口禁用：服务端是**单任务槽**，在途再提交无处可去。删除所选不禁：
+  // 删除不是任务，且服务端明确支持验证途中删源，模态确认即是二次确认（口径见 client.md
+  // 「书源管理 tab 的 IA」的批量动作收尾）。
   const probing = job?.phase === 'running'
   /** 批量写口提交：成功后**重读哪一面由调用点指定**，两者不可互换——
    *  启停改的是源本身 → `onChanged`（重新 GET sources）；验证起的是后台任务 → **不走本
-   *  helper**：它收进了 `jobs.ts` 的领域动作 `startSourceVerification`（提交 →
-   *  催任务读面 / 失败一处反馈，三个验证入口同一条路）。此前统一走「重启轮询」出口时
-   *  批量启停写完没人重取源列表：行开关、「已启用 M」计数、「停用」过滤全停在点之前的值，
-   *  只有重开视图才跟上（2026-09 实机报）。 */
+   *  helper**：归 `jobs.ts` 的 `startSourceVerification`（提交 → 催任务读面 / 失败一处反馈）。
+   *  启停若走错出口，写完没人重取源列表，行开关与计数全停在点之前的值（2026-09 实机报）。 */
   const submit = <T,>(fn: () => Promise<T>, after: (res: T) => void): void => {
     void fn().then(after, (e) => deps.pushError(`操作失败：${e instanceof Error ? e.message : String(e)}`))
   }
-  /** 批量启停：ids 点击时快照；成功只重取源列表，**留在编辑态且勾选保留**——这批源做完
-   *  启停仍在列表里，勾选就是它们的现场，接着点「验证所选」或改主意再停用都不必重勾
-   *  （2026-09 用户裁定）。清勾选只在「删除所选」成功后做：对象已不存在，勾选留着是幽灵 id。
-   *  成功进反馈条：`transient.ts` 的「开关翻转即反馈，不进条」只对单行成立——642 行分页 +
-   *  过滤下被改的那几行可能在屏幕外，批量必须有一条与视口无关的确认（同一文件头注已补记）。
-   *  计数用服务端回包的 `updated`（未知 id 会被静默跳过，报"我勾了几个"会说谎）。 */
+  /** 批量启停：ids 点击时快照；成功只重取源列表，**留在编辑态且勾选保留**（2026-09 用户裁定：
+   *  这批源还在列表里，勾选是它们的现场）。清勾选只在「删除所选」成功后做——对象已不存在。
+   *  成功进反馈条：分页 + 过滤下被改的行可能在屏幕外，批量必须有一条与视口无关的确认。
+   *  计数用服务端回包的 `updated`（未知 id 会被静默跳过，报「我勾了几个」会说谎）。 */
   const batchEnabled = (enabled: boolean): void => {
     const ids = [...ui.selection]
     submit(() => deps.apiSend<{ updated: number }>('POST', ROUTES.sourcesBatchEnabled.path, { ids, enabled }), (r) => {
@@ -101,7 +91,7 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
     })
   }
   const confirmDelete = (): void => {
-    if (pending === null || delBusy) return          // 在途防重：双击「确认删除」不许双 POST（审查 2026 发现的双写窗口）
+    if (pending === null || delBusy) return          // 在途防重：双击「确认删除」不许双 POST（修过的真双写窗口）
     const ids = pending.ids                          // 点击时快照，不随列表变化重算
     setDelBusy(true)
     void deps.apiSend<{ removed: number }>('POST', ROUTES.sourcesBatchDelete.path, { ids }).then((r) => {
@@ -135,13 +125,10 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
     <div data-novel-source-list className="novel-group">
       <div className="novel-list-head">
         <strong>源列表</strong>
-        {/* 状态带（2026-09）：全库读数的**唯一**住址——待办卡改成可忽略后，读数不能跟着
-            提示一起消失。0 也显示（「坏源 0」是结论，且数字位忽隐忽现这条带子会一直抖）；
-            非 0 的 未验证/坏源 吃 warn/err 色；纯读数不可点（过滤归同一行的三个下拉，
-            「带计数的状态 chips」是 2026 已否决的设计，不复活）。
-            窄列退化为「共 N · 已启用 M」，规则在样式层（@container 量这条带子自身宽度）。
-            **只在真有数据可报时在场**：加载中（sources 仍 null）不报 = 不拿未知冒充结论；
-            0 源不报 = 空态那句话已经把同一件事说了。 */}
+        {/* 状态带：全库读数的**唯一**住址（待办卡可忽略，读数不能跟着提示消失）。0 也显示
+            （「坏源 0」是结论）；纯读数不可点——过滤归同一行的下拉与文本框，「带计数的状态
+            chips」是 2026 已否决的设计。窄列退化规则在样式层（@container）。
+            **只在真有数据可报时在场**：加载中不报 = 不拿未知冒充结论；0 源不报 = 空态已说同一件事。 */}
         {loaded && all.length > 0 && (
           <span className="novel-src-stats" data-novel-src-stats>
             <span>共 {stats.total} 个源</span>
@@ -231,10 +218,9 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
           />
         )}
 
-        {/* 表体三态（2026-09 实机 bug 后定）：0 源 → 空态引导，而它指的「＋ 导入书源」就在
-            上面的表头里（这里曾整块 early-return，把表头连同那颗钮一起跳过 = 提示指向一个
-            不存在的控件）；取数失败 → 这里不出声，壳层那条红字更全（同一个失败不抄两遍，
-            也不许把失败伪装成「还没有书源」）；其余（含加载中）→ 表格。 */}
+        {/* 表体三态：0 源 → 空态引导（它指的「＋ 导入书源」就在上面的表头里——曾整块 early-return
+            把表头一起跳过 = 提示指向不存在的控件）；取数失败 → 这里不出声，壳层红字更全（同一
+            失败不抄两遍，也不许伪装成「还没有书源」）；其余（含加载中）→ 表格。 */}
         {loadError !== null ? null : showEmpty ? (
           <div className="novel-muted">还没有书源——点右上「＋ 导入书源」，或在对话里让 AI 助手帮你导入</div>
         ) : (
@@ -282,13 +268,11 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
 
 /** 删除二次确认模态（与书架删书同款口径）：点名后果 + 危险色确认钮 + 焦点闭环
  *  （入场焦点在取消、Tab 圈在框内、关闭后焦点还给触发件）+ Esc / 点遮罩取消 + 在途禁双击。
- *  危险性由文案与确认动作表达，不再设「危险区」专区（2026 改版，用户裁定）。
- *  焦点 effect **挂载作用域**（空依赖 + 回调走 ref）：父层每个 render 都是新闭包
- *  （useJobStatus 轮询 1s 一次 setJob 新对象 → SourceList 重渲染），闭包进依赖数组会
- *  每秒重跑 effect——焦点被劫回「取消」、opener 被重捕获成模态内按钮（关闭后焦点落 body）。
- *  审查（2026）发现的真缺陷；回归钉在 source-list-batch「重渲染不扰焦点」用例。
- *  opener 由调用方显式传入而非挂载时读 `document.activeElement`：⋯ 菜单里那个触发项
- *  在模态挂载前就随菜单卸载了，读到的是 body（焦点闭环对「⋯ → 删除」这条路曾是空的）。 */
+ *  危险性由文案与确认动作表达，不设「危险区」专区（用户裁定）。
+ *  焦点 effect **挂载作用域**（空依赖 + 回调走 ref）：轮询每秒重渲染父层，闭包进依赖数组会
+ *  每秒把焦点劫回「取消」、opener 被重捕获成模态内按钮（修过的真缺陷；回归钉在
+ *  source-list-batch「重渲染不扰焦点」）。opener 由调用方显式传入——⋯ 菜单项在模态挂载前
+ *  已随菜单卸载，挂载时读 `document.activeElement` 只会读到 body。 */
 function DeleteModal({ title, opener, authCount, busy, onConfirm, onCancel }: {
   title: string; opener: HTMLElement | null; authCount: number; busy: boolean; onConfirm: () => void; onCancel: () => void
 }): ReactNode {
@@ -335,6 +319,16 @@ function DeleteModal({ title, opener, authCount, busy, onConfirm, onCancel }: {
   )
 }
 
+/** 「⋯」菜单的固定项数（登录态… / 试跑 trace / 删除）——**加减菜单项改这里**。
+ *  空间预算按它推导（见下），测试钉「渲染出的 menuitem 数 = 此数」（source-list-batch 的项数守卫）：
+ *  加一项而没改这个数会当场红，不会让翻转预算静默过期、末行菜单再被滚动口裁掉。 */
+export const MENU_ITEM_COUNT = 3
+
+/** 行：「⋯」菜单向下展开所需的最小可用高度 = 项数 × 单项行高（真 Edge 实测 3 项 ≈ 120px ⇒
+ *  单项 ≈ 40px）+ 盒体余量 40px。判据是「下方够不够」而非「是不是最后一行」——够不够只跟
+ *  剩余空间有关，行在不在末尾只是最常见的那种不够。 */
+const MENU_SPACE_MIN = MENU_ITEM_COUNT * 40 + 40
+
 /** 行：状态/分组/地址常驻；操作列按状态给当下要用的动作（验证/重验按状态出现 + 试跑；
  *  无「启用」文字钮——启停唯一入口 = 最右开关）+「⋯」溢出菜单（登录态/试跑 trace/删除
  *  ——低频动作收纳）；编辑态加复选框；启停开关右对齐常驻（高频决策不进编辑态）。 */
@@ -347,8 +341,29 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
 }): ReactNode {
   const [authOpen, setAuthOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
+  /** 菜单开合方向：false = 向下（默认），true = 向上。 */
+  const [menuUp, setMenuUp] = useState(false)
   // ⋯ 钮本体：作为删除模态的焦点归还对象——菜单项点完即卸载，触发件是这颗钮不是菜单项
   const menuRef = useRef<HTMLButtonElement | null>(null)
+  /**
+   * 开菜单前定一次方向：长列表滚到滚动口底时，末行菜单向下展开会越过滚动口的可见底——是它
+   * 伸到了容器外面。判据用「真正会裁它的盒子」= 滚动口而不是视口（宿主面板比视口小，拿视口
+   * 判会把「其实放不下」算成放得下）。量不到触发件时不翻转——默认方向就是原行为
+   * （病史读数见 client.md「已知开口」行内 ⋯ 菜单落位条）。
+   */
+  const toggleMenu = (): void => {
+    if (menuOpen) { setMenuOpen(false); return }
+    const trigger = menuRef.current
+    const port = findScrollport(trigger)
+    const box = (port ?? document.documentElement).getBoundingClientRect()
+    const rect = trigger?.getBoundingClientRect()
+    if (rect !== undefined) {
+      const below = box.bottom - rect.bottom
+      const above = rect.top - box.top
+      setMenuUp(below < MENU_SPACE_MIN && above > below)
+    }
+    setMenuOpen(true)
+  }
   // 菜单开着时点页面任意处收起（行内菜单是浮层，不设「点两次才关」的谜题）
   useEffect(() => {
     if (!menuOpen) return
@@ -356,14 +371,12 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
     document.addEventListener('click', close)
     return () => document.removeEventListener('click', close)
   }, [menuOpen])
-  // 乐观态：点击即翻转本地展示——642 行列表的全量 reload 有一拍延迟，没有乐观反馈
-  // 用户会以为「点不动」。失败（resolve false）即刻清零回滚，不等 reload。
+  // 乐观态：点击即翻转本地展示——642 行列表的全量 reload 有一拍延迟，没有乐观反馈用户会
+  // 以为「点不动」。失败即刻清零回滚，不等 reload。
   const [optimistic, setOptimistic] = useState<boolean | null>(null)
-  // 服务端值落地即让位（s.enabled 变化 = reload 结果到达 → 清残余乐观值）：此前乐观值
-  // 只在失败时清——另一入口（selbar 批量停用 / AI 工具）改了服务端后，残留的 optimistic
-  // 会永久顶住服务端真相（审查 2026 发现，注释承诺过「reload 后以服务端为准」但没实现）。
-  // 「ok = 服务端已应用」是本仓契约（宁炸不猜的对偶），故同值 reload 无需清、也不该清
-  // （清了会在 reload 落地前闪回旧态）。
+  // 服务端值落地即让位（s.enabled 变化 = reload 结果到达 → 清残余乐观值）：只在失败时清的话，
+  // 另一入口（批量停用 / AI 工具）改了服务端后残留值会永久顶住真相（修过的真缺陷）。
+  // 「ok = 服务端已应用」是本仓契约，故同值 reload 无需清（清了会在落地前闪回旧态）。
   useEffect(() => { setOptimistic(null) }, [s.enabled])
   const [savingN, setSavingN] = useState(0)             // 在途请求数：「保存中」装饰的精确生命周期
   const rowAnchor = rowAnchorOf(s.id)
@@ -379,10 +392,8 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
       if (!ok) setOptimistic(null)                    // 失败即刻回滚（历史 bug：乐观态无人清零 → 开关永久停错态）
     })
   }
-  /** 行内验证/重验（单源批量探针口与待办箱同一条路）：失败 pushError 显式呈现 */
-  /** 行内「验证/重验」：与待办箱、批量条同一条领域动作——本入口只表达
-   *  「验证这一源」，提交后的催任务读面 / 失败反馈归 `jobs.ts` 的 `startSourceVerification`；
-   *  源列表随任务终态整体刷新（`SettingsSection` 按 job.id 记账），不再就地 `onChanged`。 */
+  /** 行内「验证/重验」：与待办箱、批量条同一条领域动作——本入口只表达「验证这一源」，提交后的
+   *  编排归 `jobs.ts` 的 `startSourceVerification`；源列表随任务终态整体刷新，不就地 `onChanged`。 */
   const verifyThis = (): void => {
     void startSourceVerification([s.id], deps)
   }
@@ -411,13 +422,11 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
         </span>
         <span className="novel-actions">
           {/* 操作列：浏览态常驻（试跑是排查主路径）；异常态多一个状态动作钮（验证/重验）。
-              **不渲染「启用」文字钮**：启停唯一入口 = 最右开关——重复入口曾让操作列内容宽
-              随状态漂移、右缘按钮组不对齐（用户实机反馈）；列轨道定宽右锚（styles.tsx
-              `.novel-tr.src` 第5轨）。批量任务在途时禁验证类动作（防重复提交），
-              试跑不受影响（独立单源请求）。
-              验证钮**不看 enabled**（2026-09 裁定）：停用只是不参与聚合搜索，源有效与否照旧
-              要验。曾在此挂过 `!enabled` 门，而同样的停用源仍在待办箱的批量重验 id 集里——
-              等于「批量能验、单点不能验」，两个入口自相矛盾。 */}
+              **不渲染「启用」文字钮**：启停唯一入口 = 最右开关——重复入口曾让列宽随状态漂移、
+              右缘按钮组不对齐（用户实机反馈）。列轨道定宽右锚在 styles.tsx `.novel-tr.src`。
+              批量任务在途时禁验证类动作（防重复提交），试跑不受影响（独立请求）。
+              验证钮**不看 enabled**（2026-09 裁定）：停用 ≠ 免验——曾挂过的 `!enabled` 门造成
+              「批量能验、单点不能验」，与待办箱入口自相矛盾。 */}
           {s.status === 'unverified'
             ? <button className="novel-btn sm" disabled={probing} onClick={verifyThis}>验证</button>
             : s.status === 'broken'
@@ -425,9 +434,9 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
               : null}
           <button className="novel-btn sm" onClick={() => onProbe(s.id)}>试跑</button>
           <button className="novel-btn sm" aria-label={`更多动作 ${s.name}`} aria-haspopup="menu" ref={menuRef}
-            onClick={(e) => { e.stopPropagation(); setMenuOpen(!menuOpen) }}>⋯</button>
+            onClick={(e) => { e.stopPropagation(); toggleMenu() }}>⋯</button>
           {menuOpen && (
-            <div className="novel-menu" role="menu">
+            <div className={menuUp ? 'novel-menu up' : 'novel-menu'} role="menu">
               <button role="menuitem" onClick={() => { setMenuOpen(false); setAuthOpen(!authOpen) }}>登录态…</button>
               <button role="menuitem" onClick={() => { setMenuOpen(false); onProbe(s.id) }}>试跑 trace</button>
               <button role="menuitem" className="danger" onClick={() => { setMenuOpen(false); onDelete(s, menuRef.current) }}>
@@ -456,12 +465,29 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
   )
 }
 
-/** 登录配置：cookie 录入（输入值不进 store，直接 POST）+ 去登录新 tab。
+/** 登录配置：cookie 录入（输入值不进 store，直接 POST）+ 去登录。
  *  反馈全走全局状态条——成功条自动退场。 */
 function SourceAuthPane({ source, onDone, deps = prodDeps }: {
   source: SourcePublic; onDone: () => void; deps?: SettingsDeps
 }): ReactNode {
   const [cookie, setCookie] = useState('')
+  /** 「去登录」按源是否有登录脚本分岔（`hasLoginUrl` 是服务端投影的事实，不在客户端猜分支）：
+   *  ① 声明了 loginUrl：问服务端要计划——URL 形态开那个 URL，JS 形态服务端沙箱跑完存登录态，
+   *     这里只报成功并刷新；② 未声明：站点的登录页就是它自己，直接开 baseUrl（本按钮原行为）。 */
+  const goLogin = (): void => {
+    if (!source.hasLoginUrl) {
+      window.open(source.baseUrl, '_blank', 'noopener,noreferrer')
+      return
+    }
+    void deps.apiSend<{ mode?: string; loginUrl?: string }>('POST', paramRoutes.sourceAuth(source.id), { runLogin: true }).then((r) => {
+      if (r.mode === 'manual' && typeof r.loginUrl === 'string' && r.loginUrl !== '') {
+        window.open(r.loginUrl, '_blank', 'noopener,noreferrer')
+        return
+      }
+      deps.pushOk('登录脚本已执行，登录态已保存')
+      onDone()
+    }, (e) => deps.pushError(`去登录失败：${e instanceof Error ? e.message : String(e)}`, rowAnchorOf(source.id)))
+  }
   const save = (): void => {
     void deps.apiSend('POST', paramRoutes.sourceAuth(source.id), { cookies: parseCookieString(cookie) }).then(() => {
       setCookie('')                      // 输入值即刻清空
@@ -473,7 +499,7 @@ function SourceAuthPane({ source, onDone, deps = prodDeps }: {
     <span className="novel-auth-pane" onClick={(e) => e.stopPropagation()}>
       {/* 书源是任意第三方站点：显式 noopener,noreferrer 关掉新页对 DSH GUI tab 的反向
           tabnabbing（Chromium ≥88 对 _blank 已隐式 noopener，显式写是零成本保险） */}
-      <button className="novel-btn sm" onClick={() => window.open(source.baseUrl, '_blank', 'noopener,noreferrer')}>去登录</button>
+      <button className="novel-btn sm" onClick={goLogin}>去登录</button>
       <input
         className="novel-input"
         value={cookie}

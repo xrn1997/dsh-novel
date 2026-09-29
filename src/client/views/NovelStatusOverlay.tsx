@@ -21,10 +21,9 @@ import { GlobalStatusBar } from './SettingsStatusBar.js'
  * `SettingsSection` 消费意图（开弹层 / 滚到任务卡）。不靠 querySelector 隔空点钮。
  *
  * 样式层与 token 锚点**必须自带**，不能借小说视图那份：本层与视图不同分支，切到「对话」tab 即
- * 视图卸载、`<style data-novel-style>` 随之消失（真机实测：状态条剥成 16px 裸文字、
- * `z-index` 塌成 `auto`）。而 `--novel-*` 定义在 `.novel-root, [data-novel-scope]` 上，
- * 宿主 overlay 子树里没有 `.novel-root` 祖先 ⇒ 不给 `data-novel-scope` 就整棵取不到值
- * （同「独立挂载点自带样式层」的 `SettingsSection` 先例）。
+ * 视图卸载、样式层随之消失（真机：状态条剥成裸文字、`z-index` 塌成 `auto`）。`--novel-*` 定义
+ * 在 `.novel-root, [data-novel-scope]` 上，overlay 子树没有 `.novel-root` 祖先 ⇒ 不给
+ * `data-novel-scope` 就整棵取不到值（同「独立挂载点自带样式层」的 `SettingsSection` 先例）。
  */
 export function NovelStatusOverlay({ deps = prodDeps }: { deps?: SettingsDeps } = {}): ReactNode {
   useJobPolling(deps)

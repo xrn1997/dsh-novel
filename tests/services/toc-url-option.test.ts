@@ -7,18 +7,12 @@ import { Shelf } from '../../src/services/shelf.js'
 import { SourceRegistry } from '../../src/services/sources.js'
 
 /**
- * `ruleBookInfo.tocUrl` 带 `,{option}` 后缀时的组装口径（真机实证 2 源：悦读小说、新小书亭）。
- *
- * 悦读小说的原文规则：一个绝对 URL 端点 + 换行写的选项 JSON（method POST、body 里带
- * 从 baseUrl 正则取出的 bookId 插值段）。正文链路审计里它的形态是
- * `toc | FetchError | 请求失败 400`，实际打出去的地址形如
- * `…/getChapterList,%7B%22method%22:%20%22POST%22,…` —— 选项串整个并进了 URL。
- *
- * 根因不在选项解析，而在**绝对化早于切分**：`tocUrlOf` 求值后用 `absUrl`（即 `new URL()`），
- * 而 WHATWG 解析器吃掉换行、把花括号百分号编码，于是 `,{` 形状先被破坏，抓取层的
- * `URL_OPTION_SPLIT` 再也切不到。搜索结果里的 bookUrl 与章节 URL 早已按对面
- * `BookChapter.getAbsoluteURL` 的口径走 `absUrlKeepOption`（URL 部分绝对化、`,{option}` 原样接回），
- * tocUrl 这条出口漏了同一层处理。
+ * `ruleBookInfo.tocUrl` 带 `,{option}` 后缀时的组装口径（真机实证：悦读小说、新小书亭）。
+ * 病态：选项 JSON 写在换行后，实际打出去的地址把选项串整个并进了 URL（审计里是
+ * `toc | FetchError | 请求失败 400`）。根因不在选项解析而在**绝对化早于切分**：`tocUrlOf` 求值后
+ * 用 `absUrl`，WHATWG 解析器吃掉换行并把花括号百分号编码，`,{` 形状先被破坏、`URL_OPTION_SPLIT`
+ * 再也切不到——bookUrl 与章节 URL 早已走 `absUrlKeepOption`（URL 绝对化、`,{option}` 原样接回），
+ * tocUrl 这条出口漏了同一层。
  *
  * fixture 与原文的一处差异：正则用数字字符类而不是转义写法——写文件的工具层会吃掉反斜杠，
  * 转义写法在这里等于静默改了规则语义（实测会退化成匹配字母 d）。

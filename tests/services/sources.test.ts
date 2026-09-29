@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { SourceRegistry } from '../../src/services/sources.js'
@@ -29,6 +29,25 @@ describe('SourceRegistry', () => {
     await reg.flush()
     expect((await SourceRegistry.load(dir)).get(src.id)).toMatchObject({ status: 'broken', statusDetail: '[search#段0] 没取到' })
   })
+  it('flush 返回后不留挂起的待写：flush 在途期间发生的 edit 也算在内', async () => {
+    // 病根与 `createDebouncedWriter.flush` 同族（那条已在 `tests/services/storage.test.ts` 钉住）：
+    // flush 原先只 await「调用那一刻」的写链尾，于是落在那次写 I/O 期间的 edit 会换成一枚新的
+    // 防抖计时器挂着——进程/测试收尾把数据根删掉之后它才烧，rename 被系统拒绝成为未处理拒绝
+    // （全量门里那种「用例全绿但 exit≠0」的现场）。计时器用 fake 钟**数**出来：不靠 sleep，
+    // 也不给「放宽断言」留余地。
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const dir = await tmp()
+      const reg = await SourceRegistry.load(dir)
+      const first = await reg.edit((tx) => tx.add(normalizeSource(raw))) // 挂上一枚防抖计时器（尚未落地）
+      const p = reg.flush()                                             // 第一次真写开始
+      await reg.edit((tx) => tx.setStatus(first.id, 'verified'))        // 落在那次写的在途窗口里
+      await p
+      expect(vi.getTimerCount(), 'flush 已返回，但还挂着一笔待写的计时器（收尾时它会自己烧）').toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
   it('setStatus 转 verified（无 detail）时清空旧 statusDetail，不残留失败原因', async () => {
     const dir = await tmp()
     const reg = await SourceRegistry.load(dir)
@@ -46,7 +65,15 @@ describe('SourceRegistry', () => {
     expect(pub).not.toHaveProperty('raw')
     expect(pub).not.toHaveProperty('auth')
     expect(pub).not.toHaveProperty('rules')
-    expect(pub).toMatchObject({ hasHeader: true, hasAuth: true, authExpired: true })
+    expect(pub).toMatchObject({ hasHeader: true, hasAuth: true, authExpired: true, hasLoginUrl: false })
+  })
+  it('hasLoginUrl 是「有没有登录脚本」的投影（UI 靠它决定「去登录」要不要问服务端）', async () => {
+    const dir = await tmp()
+    const reg = await SourceRegistry.load(dir)
+    const plain = await reg.edit((tx) => tx.add(normalizeSource(raw)))
+    expect(reg.toPublic(plain).hasLoginUrl, '未声明 loginUrl').toBe(false)
+    const withLogin = await reg.edit((tx) => tx.add(normalizeSource({ ...raw, bookSourceUrl: 'https://b.com', loginUrl: 'https://b.com/login' })))
+    expect(reg.toPublic(withLogin).hasLoginUrl, '声明了 loginUrl').toBe(true)
   })
   it('setAuth 录入后 flush 重载可见；toPublic 仍只给布尔位', async () => {
     const dir = await tmp()
@@ -144,7 +171,7 @@ describe('load 内容形态迁移（bookSourceType 编码订正的存量收敛�
     })
     await reg.flush()
     const re = (await SourceRegistry.load(dir)).list()[0]
-    expect(re.type).toBe('image')                        // legado BookSourceType 真值：2=图片
+    expect(re.type).toBe('image')                        // 书源格式的 bookSourceType 真值：2=图片
     expect(re.enabled).toBe(true)                        // 迁移不动启用态
   })
   it('未知数值（如 4）的存量源：按 raw 重推为 unknown——退出参与集，但不打 status（探针会洗白）', async () => {

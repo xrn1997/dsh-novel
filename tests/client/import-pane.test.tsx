@@ -74,7 +74,7 @@ describe('ImportPane 接线（deps seam 驱动）', () => {
     const textarea = screen.getByPlaceholderText('粘贴 legado 书源 JSON（对象或数组）')
     fireEvent.change(textarea, { target: { value: '[{"bookSourceName":"A","bookSourceUrl":"https://a.com","ruleContent":"x"}]' } })
 
-    // 预检有 300ms 防抖——等校验条出现后按钮才放行（disabled 条件 check?.ok !== true）
+    // 预检有 300ms 防抖——等校验条出现、校验通过后按钮才放行
     const btn = await screen.findByText('导入粘贴内容', {}, { timeout: 2000 })
     await waitFor(() => expect(btn.getAttribute('disabled')).toBeNull())
     fireEvent.click(btn)

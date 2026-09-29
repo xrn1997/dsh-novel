@@ -21,13 +21,12 @@ export function isGetValueSegment(seg: DefaultSegment): boolean {
  * 位置后缀统一口径：
  * - null / all → 整个数组
  * - index：第 n 个（负数从尾数）；越界 → 该位置不入选
- * - multi：条目**逐个**展开、去重靠 Set、**保持写入序**（对面 `for (pcInt in indexSet)`）；
- *   越界者静默丢弃（对面 `if (it in 0 until len)`）
+ * - multi：条目**逐个**展开、去重靠 Set、**保持写入序**；越界者静默丢弃
  * - 取位结果为空 → 'miss'（选择失败语义，不抛、也不回退全集）
  *
  * 设计文档：docs/design/engine.md
  */
-/** 索引条目 → **位置**集合（越界位置按 legado 口径静默丢弃；`multi` 的并集在此展开） */
+/** 索引条目 → **位置**集合（越界位置静默丢弃；`multi` 的并集在此展开） */
 function positionsFor(len: number, index: IndexSpec): number[] {
   if (index.kind === 'all') return [...Array(len).keys()]
   if (index.kind === 'index') {
@@ -35,14 +34,14 @@ function positionsFor(len: number, index: IndexSpec): number[] {
     return i < 0 || i >= len ? [] : [i]
   }
   if (index.kind === 'multi') {
-    // legado ElementsSingle：条目收进 `MutableSet<Int>`（去重、越界静默丢弃），
-    // 取位时按**插入序**遍历（LinkedHashSet）——写序影响结果，不是「按文档序过滤」。
+    // 条目收进 Set（去重、越界静默丢弃），取位时按**插入序**遍历——
+    // 写序影响结果，不是「按文档序过滤」。
     const set = new Set<number>()
     for (const spec of index.entries) for (const p of positionsFor(len, spec)) set.add(p)
     return [...set]
   }
   if (index.kind === 'range') {
-    // 方括号区间（legado ElementsSingle 口径）：闭区间 + 负数从尾数 + 端点越界钳到边界；
+    // 方括号区间：闭区间 + 负数从尾数 + 端点越界钳到边界；
     // step 缺省按方向自动（from>to → -1，即倒序取）——`[-1:0]` = 整表倒序
     if (len === 0) return []
     const norm = (v: number): number => (v < 0 ? len + v : v)
@@ -88,7 +87,7 @@ export type PickedOutcome<T> =
  * （default 选择段与 css 段同源——此前两处各写一份且已语义分叉：同一种取位在两段给两种结果，
  * 而空 List 不是节点集、中链必抛「上游结果不是节点集」）。
  * 口径：三态皆「选择失败」语义，调用方按 reason 组 Miss detail；
- * 「合法零条目（空 List）」只属于取值段（getValue：元素在、取值全空）。legado：先排除再取位。
+ * 「合法零条目（空 List）」只属于取值段（getValue：元素在、取值全空）。顺序：先排除再取位。
  */
 export function reducePicked<T>(
   arr: T[], exclude: number[] | undefined, index: IndexSpec | null,
@@ -104,10 +103,9 @@ export function reducePicked<T>(
 /**
  * default 段求值：选择段（class/id/tag/child/children）产出节点集；
  * 取值段（text/textAll/ownText/html/all/href/src/content/textNodes/attr）产出字符串值。
- * `text.<串>` / `ownText.<串>`（**带参数**）是选择段——legado 默认方言「按文本选元素」：
- * AnalyzeByJSoup.getElementsSingle 的 `"text" -> temp.getElementsContainingOwnText(rules[1])`
- * （不带参数的 `text` 才是取值终端）。真实源 `text.下一页@href`、`text.章节目录@href` 全靠它——
- * 此前带参数的 text 被当取值段忽略参数，产出整页文本后 `@href` 落空（实测 27 源目录/正文全灭）。
+ * `text.<串>` / `ownText.<串>`（**带参数**）是选择段——「按文本选元素」的形态
+ * （不带参数的 `text` 才是取值终端）。`text.下一页@href` 这类全靠它——曾把带参数的 text 当取值段
+ * 忽略参数，产出整页文本后 `@href` 落空。
  * 第 2 参 $（CheerioAPI）用于重建节点集与逐节点取值。
  */
 export function evalDefault(
@@ -121,9 +119,9 @@ export function evalDefault(
     throw new RuleEvalError('上游结果不是节点集，无法继续选择', { ...loc, facet, hits: 0 })
   }
 
-  // 按文本选元素（选择段语义）：text.x = 含该文本的元素（legado 口径：own text 包含、忽略大小写）；
-  // ownText.x 是对称形态（legado 默认方言无此选择语义、会落 CSS 恒零命中——我们给「后代文本包含」，
-  // 与 ownText 终端的「直系」口径互为镜像，实测无源依赖、按更有用的方向实现）
+  // 按文本选元素（选择段语义）：text.x = 含该文本的元素（own text 包含、忽略大小写）；
+  // ownText.x 是对称形态（此形态落到 CSS 上恒零命中，故本仓自定为「后代文本包含」，
+  // 与 ownText 终端的「直系」口径互为镜像——实测无源依赖，按更有用的方向实现）
   if ((seg.mode === 'text' || seg.mode === 'ownText') && seg.arg !== null && seg.arg !== '') {
     const picked = textContaining($, cur, seg.arg, seg.mode === 'text' ? 'own' : 'descendant')
     return pickNodes(seg, $, picked.toArray(), loc, facet, `${seg.mode}.${seg.arg}`)
@@ -140,8 +138,9 @@ export function evalDefault(
   let picked: Cheerio<AnyNode>
   try {
     switch (seg.mode) {
-      // legado `class.x y` = getElementsByClassName("x y") = 同时含所有类 → CSS `.x.y` 链
-      // （此前直译 `.x y` 后代选择器 → 恒零命中——真实源 class.col-12 col-md-6 3 源）
+      // `class.x y` = 同时含所有类 → CSS `.x.y` 链（直译后代选择器恒零命中；上游把整串当**一个**
+      // 类名交给 jsoup 同样读不出——本仓这一侧更宽，矩阵行 `a-class-multi-token-arg`；
+      // 钉子 `tests/engine/select.test.ts` 的「同时含两个类」）
       case 'class': picked = cur.find('.' + (seg.arg ?? '').trim().split(/\s+/).filter(Boolean).join('.')); break
       case 'id': picked = cur.find('#' + seg.arg); break
       case 'tag': picked = cur.find(seg.arg!); break
@@ -174,7 +173,7 @@ function pickNodes(
 
 /**
  * 按文本选元素：候选 = 当前节点集的全部后代元素（含自身，文档序），
- * own 口径 = 元素**直系文本**包含 needle（Jsoup getElementsContainingOwnText 同款，忽略大小写）；
+ * own 口径 = 元素**直系文本**包含 needle（忽略大小写）；
  * descendant 口径 = 全部后代文本包含 needle。
  */
 function textContaining(
@@ -192,20 +191,28 @@ function textContaining(
     if (kids !== undefined) for (const c of kids) visit(c as AnyNode)
   }
   for (const n of cur.toArray()) visit(n)
-  const low = needle.toLowerCase()
-  const hit = candidates.filter((el) => {
-    const text = scope === 'own' ? directText($, el) : $(el).text()
-    return text.toLowerCase().includes(low)
-  })
-  return $(hit)
+  return $(candidates.filter((el) => containsText(textOf($, el, scope), needle)))
+}
+
+/** 元素文本按口径取：own = 直系文本节点合并（`directText`），descendant = 全部后代文本。
+ *  `text.x`/`ownText.x` 选择段与 jsoup `:contains`/`:containsOwn` 伪类（css.ts）共用——
+ *  「直系文本」的定义只住这里。 */
+export function textOf($: CheerioAPI, el: AnyNode, scope: 'own' | 'descendant'): string {
+  return scope === 'own' ? directText($, el) : $(el).text()
+}
+
+/** 「文本包含」判定单点：忽略大小写的**字面**包含（非正则）。大小写折叠只住这里——
+ *  各折各的会让 `li:contains(x)` 与 `text.x` 对同一可见文本选出不同元素集。 */
+export function containsText(hay: string, needle: string): boolean {
+  return hay.toLowerCase().includes(needle.toLowerCase())
 }
 
 /**
  * 取值段：单节点 → Value；多节点 → List；零节点/取位失败 → Miss；取到空（合法零条目）→ 空 List。
  * 空态/取位裁决复用 reducePicked 单点：此前本函数自写一份排除+applyIndex+空态逻辑，
  * 与选择段分叉——切片裁空在选择段给 Miss、取值段给空 List（同一 `x.5:9` 后缀两种结果）。
- * 现与选择段同口径：zero/excluded/oob/sliced 一律「取位失败」→ Miss；
- * 「合法零条目（元素在、取值全空）」仍是空 List（见函数末尾 texts.length === 0 分支）。
+ * 现与选择段同口径：zero/excluded/oob 三态一律「取位失败」→ Miss（切片裁空也归 `oob`）；
+ * 「合法零条目（元素在、取值全空）」仍是空 List（非 Miss）。
  */
 function getValue(
   seg: DefaultSegment,
@@ -225,9 +232,9 @@ function getValue(
   }
   const applied = reduced.items
 
-  // attr 终端（CONTEXT.md「属性终端」）：legado getResultLast else 分支 `element.attr(name)`——
-  // 元素自身属性，空则向下兜底第一个含该属性的后代（与 href/src 同口径，html/body 包装不兜底）；
-  // **空值丢弃 + 去重**（legado 同款）。真实源 ruleBookUrl `@onclick`、`@value`、`@_src` 全靠它。
+  // attr 终端（CONTEXT.md「属性终端」）：取元素自身属性，空则向下兜底第一个含该属性的后代
+  // （与 href/src 同口径，html/body 包装不兜底）；**空值丢弃 + 去重**。
+  // 真实源 ruleBookUrl `@onclick`、`@value`、`@_src` 全靠它。
   if (seg.mode === 'attr') {
     const name = seg.arg ?? ''
     const seen = new Set<string>()
@@ -258,11 +265,9 @@ function getValue(
   }
 
   const texts: string[] = []
-  // 属性型终端（href/src/content）与 attr 同一条对面口径：`getResultLast` 的 else 分支
-  // `if (url.isBlank() || textS.contains(url)) continue` —— **空值丢弃 + 去重**。漏去重的后果不是
-  // 难看而是错数据：真源 ruleBookUrl `tag.a@href` 在一个条目里 4 个 <a> 指向同一 href，收 4 份后
-  // 服务层 firstValue 以 \n 拼接，`new URL()` 吃掉换行 → 书 URL 变成路径重复（久久小说/成人小说网
-  // 真机实证）。text/html/all 等**具名**分支对面不去重（重复的章节名、正文段是合法内容），故只这一组去重。
+  // 属性型终端（href/src/content）与 attr 同口径：**空值丢弃 + 去重**。漏去重不是难看而是错数据：
+  // 同一条目里多个 <a> 指向同一 href，收多份后服务层以 \n 拼接、`new URL()` 吃掉换行 → 书 URL 变成
+  // 路径重复。text/html/all 等**具名**分支不去重（重复的章节名、正文段是合法内容），故只这一组去重。
   const dedupe = seg.mode === 'href' || seg.mode === 'src' || seg.mode === 'content'
   const seenVal = new Set<string>()
   for (const el of applied) {
@@ -312,14 +317,12 @@ function attrFallback($: CheerioAPI, el: AnyNode, name: string, fallbackSel?: st
 
 function extract($: CheerioAPI, el: AnyNode, mode: string): string {
   switch (mode) {
-    // text：**全部后代文本**（legado/Jsoup `element.text()` 口径），块级边界落成换行。
-    // 此前实现按「严格直系文本」收（与 ownText 同义），实测打不动真实源：
-    // 笔趣阁正文规则 `.con@text` 而 `.con` 里全是 <p> 子元素 → 直系文本为空 → 正文零命中。
-    // legado 侧 li/div 容器取文本同样是后代文本（JvSoup .text()），android-ebook 同源语义。
+    // text：**全部后代文本**，块级边界落成换行。曾按「严格直系文本」收（与 ownText 同义），
+    // 正文规则 `.con@text` 里全是 <p> 子元素 → 直系文本为空 → 零命中；容器自身往往不带直系文本。
     case 'text':
       return nodeText(el)
     // ownText：严格直系文本节点（排除后代元素内的文本，如 <p>外<b>内</b>尾</p> → 外尾）。
-    // 与 text 的区别就在这里（legado 的 ownText 语义），无直系文本 → 空，不做后代兜底。
+    // 与 text 的区别就在这里，无直系文本 → 空，不做后代兜底。
     case 'ownText':
       return cleanText(directText($, el))
     case 'textAll':
@@ -329,7 +332,7 @@ function extract($: CheerioAPI, el: AnyNode, mode: string): string {
     case 'all':
       return $.html(el) ?? ''
     // 原样属性值（相对 URL 的绝对化由 service 层负责，引擎不拼）。
-    // legado 口径：自身属性为空时向下兜底——href/src 取第一个含该属性的后代，
+    // 自身属性为空时向下兜底——href/src 取第一个含该属性的后代，
     // content 取第一个 meta 的 content（钉死语义：li 上 @href → 内层 a 的 href）。
     // 但 html/body 是片段加载的人造包装（非用户规则所指）：链首 $('*') 上下文里它们的
     // 兜底会与目标元素自身属性重复出多份同值（@href ×3 → \n 拼接 → URL 解析剥换行拼接成事故），

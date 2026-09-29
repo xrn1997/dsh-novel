@@ -184,7 +184,7 @@ describe('sources 面（后台任务版）', () => {
     })).status).toBe(400)
   })
   it('大包（>1MB，真实 legado 多源导出量级）→ 200 不 413', async () => {
-    // 真实用户文件 4.8MB/642 源；默认 1MB 上限会把最大流量的多源包挡在门外
+    // 真实用户文件 4.8MB（多源导出包的量级）；默认 1MB 上限会把最大流量的包挡在门外
     const big = { ...rawSource, bookSourceName: 'Big', bookSourceUrl: 'https://big.com', bookSourceComment: 'x'.repeat(2 * 1024 * 1024) }
     const job = await importAndDone([{ name: 'big.json', text: JSON.stringify([big]) }])
     expect(job.counts.ok).toBe(1)

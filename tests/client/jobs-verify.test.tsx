@@ -5,14 +5,10 @@ import { resetJobSurface, startSourceVerification, useJobPolling } from '../../s
 
 /**
  * 书源验证领域动作（验证编排收拢，口径见 docs/design/client.md）的 seam 测试。
- *
- * 评审缺陷：三个验证入口的提交后编排散落调用者——待办/批量 `.then(refreshJob)`（催任务
- * 读面）、行内 `.then(() => onChanged())`（重拉源列表），维护者必须记住两种回调何时用
- * 哪种；失败文案两份抄本一改即漂移。
- *
- * 修法的 seam：`startSourceVerification`（`jobs.ts`）收拢「提交 → 成功催任务读面 /
- * 失败一处反馈」；三个入口只表达「验证哪些源」。任务终态的源列表刷新归
- * `SettingsSection` 的 `reloadedJob` 记账（另钉在 views-wiring），提交口不再各选回调。
+ * 评审缺陷：三个验证入口的提交后编排散落调用者（有的催任务读面、有的重拉源列表，维护者必须
+ * 记住何时用哪种；失败文案两份抄本一改即漂）。修法：`startSourceVerification` 收拢「提交 → 成功
+ * 催读面 / 失败一处反馈」，入口只表达「验证哪些源」；终态的源列表刷新归 `reloadedJob` 记账
+ * （另钉在 views-wiring）。
  */
 
 describe('startSourceVerification：验证提交的编排单点', () => {

@@ -6,7 +6,7 @@ import { normalizeSource, rawHeaderRule } from '../../src/services/normalize.js'
 import type { NovelSource } from '../../src/services/types.js'
 
 /**
- * 动态请求头（headerRule）回归钉子：legado BaseSource.getHeaderMap 口径——
+ * 动态请求头（headerRule）回归钉子：
  * `@js:`/`<js>` header 规则经沙箱求值得 JSON 头表；求值失败 → warn 回退静态头（不炸请求）。
  * 真机实证：顶点小说（device-id/Authorization 全在 @js 规则里）此前被 normalize 当坏 JSON 丢弃
  * → 请求 4004 → ruleDetailInit `$.data` 空 → 详情/目录全链路失败。
@@ -122,5 +122,36 @@ describe('effectiveUserAgent（java.getWebViewUA 的取值口径）', () => {
     expect(effectiveUserAgent(mkSource())).toMatch(/^Mozilla\/5\.0/)
     const s = mkSource({ rules: { ...mkSource().rules, header: { 'User-Agent': 'UA-from-source' } } as NovelSource['rules'] })
     expect(effectiveUserAgent(s)).toBe('UA-from-source')
+  })
+})
+
+/**
+ * 头 JSON 的**宽松度**（对面把头做成两段解析：严格 → 宽松，口径与出处记在矩阵行 `b-header-js`）。
+ * 本仓此前只有一步 `JSON.parse`，于是
+ * 「单引号形态的头」对面读得出、我们静默丢（样本：阅读书屋 / 猫眼看书 / PO5）。
+ * 选项 JSON 早就允许单引号（`request.ts` 的 parseOptionJson 注释即此），头这条是漏掉的第二处。
+ */
+describe('头 JSON 的单引号宽松度（与选项 JSON 同一口径）', () => {
+  it('静态 header 是单引号 JSON → 派生成头表，不再当坏 JSON 丢弃', () => {
+    const r = normalizeSource({
+      bookSourceName: 'X', bookSourceUrl: 'https://a.com', ruleContent: 'id.c@text',
+      header: "{'Referer':'https://r','User-Agent':'UA-x'}",
+    })
+    expect(r.ok).toBe(true)
+    expect(r.source?.rules.header).toEqual({ Referer: 'https://r', 'User-Agent': 'UA-x' })
+  })
+
+  it('动态头规则产出单引号 JSON → 同样生效（对面宽松解析那一段的等价）', async () => {
+    const s = mkSource({
+      rules: { ...mkSource().rules, headerRule: "@js:\"{'X-Dev':'d1'}\"" },
+    })
+    expect(await resolveHeaders(fetcher, s)).toMatchObject({ 'X-Dev': 'd1' })
+  })
+
+  it('两种解析都不行的头串仍然回退静态、并点名（不猜结构）', async () => {
+    const s = mkSource({
+      rules: { ...mkSource().rules, headerRule: '@js:"{not json at all"}' },
+    })
+    expect(await resolveHeaders(fetcher, s)).toEqual(headerOf(s))
   })
 })

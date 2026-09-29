@@ -10,7 +10,7 @@ import { JsSandboxError } from '../../src/engine/errors.js'
 import type { EvalContext, Facet, SegmentLoc } from '../../src/engine/types.js'
 
 /**
- * legado 真机缺口修复的回归钉子（29 条书架实测诊断的五处修复）：
+ * 真机缺口修复的回归钉子（29 条书架实测诊断的五处修复）：
  * A. cache.putMemory/getFromMemory/deleteMemory 三别名 + java.randomUUID
  * B. `tag.li.` 尾点号（!排除 切走 base 后的尾巴）不再炸选择器
  * E. 字节组方法 / downloadFile↔readTxtFile / Packages.*（PNG/AES/HMAC）沙箱面
@@ -81,7 +81,7 @@ describe('B. 段尾点号剥离（看书源 tag.li.!0:1:-1 实证）', () => {
   })
 })
 
-describe('E-1. 字节组方法（legado JsExtensions）', () => {
+describe('E-1. 字节组方法（桥面 hex / bytes 互转）', () => {
   it('strToBytes：ISO8859_1 字节往返无损（java 别名 → latin1）', () => {
     const d = depsOf()
     const bytes = invokeJavaMethod(d, 'strToBytes', ['héllo', 'ISO8859_1']) as number[]
@@ -238,6 +238,56 @@ describe('E-4. Packages.* 沙箱面（爱腐文密钥图解密链的载体）', 
       String(new Packages.java.lang.String(c.doFinal(ct), 'UTF-8'));
     `)
     expect(String((r.value as { text?: string }).text)).toBe('斗破苍穹正文'.repeat(8))
+  })
+  it('Packages.android.util.Base64.decode 出字节组：真源的「解 base64 拿真地址」链（Hi歌曲音乐网 ruleContent.content）', async () => {
+    // 现库真量（2026-09-28 按 raw 全串扫）：`Packages.android.util.Base64.decode` **1 源 1 处**——
+    // Hi歌曲音乐网 的正文规则从页面里的 `let code = "…"` 抠出 base64，解成字节再按 UTF-8 还原成
+    // 真正的地址。此前 `android.util` 整条路径未挂载 ⇒ 抛「未知 Packages 包路径：android.util.Base64」
+    // ⇒ 整条正文规则失败（对面 Rhino 有真 android.util.Base64，对面读得出）。
+    const realUrl = 'https://higequ.com/play/12345'
+    const b64 = Buffer.from(realUrl, 'utf8').toString('base64')
+    const r = await run(
+      'var bytes = Packages.android.util.Base64.decode(' + JSON.stringify(b64) + ', 0);' +
+      "String(new Packages.java.lang.String(bytes, 'UTF-8'))",
+    )
+    expect(String((r.value as { text?: string }).text)).toBe(realUrl)
+  })
+  it('decode 的 flags 不改变常规解码；URL 字母表也收（**比对面宽的刻意子集**，理由见注释）', async () => {
+    // Android `Base64.decode(text, flags)` 里 flags 只有 URL_SAFE(8) 会换字母表，DEFAULT(0) 遇到
+    // `-`/`_` 判坏输入抛错。本仓走 Node 的 base64 解码器——它**两种字母表都收**（实测 `-_-_fwA` 与
+    // `+/+/fwA=` 同解），所以「标志位换字母表」这一条在这里**不可观测**，硬写成断言等于自证 Node 行为。
+    // 维持宽容并记下偏离：现库那条真源的正则已把输入限死在 `[A-Za-z0-9+/=]+`，没有任何源靠「拒 -_」行事，
+    // 因此不为此加一条 stricter-than-needed 的校验（宁缺毋滥的反面是给没需求方的形态发明行为）。
+    const bytes = [0xfb, 0xff, 0xbf, 0x7f, 0x00]
+    const std = Buffer.from(bytes).toString('base64')     // 含 + 与 /
+    const urlAlph = Buffer.from(bytes).toString('base64url') // 含 - 与 _
+    for (const [flag, input] of [[0, std], [8, urlAlph], [8, std], [0, urlAlph]] as const) {
+      const r = await run('JSON.stringify(Packages.android.util.Base64.decode(' + JSON.stringify(input) + ', ' + flag + '))')
+      expect(JSON.parse(String((r.value as { text?: string }).text)), 'flag=' + flag + ' input=' + input).toEqual(bytes)
+    }
+  })
+  it('decode 容忍缺填充与内嵌换行（与 Android 解码器同向）', async () => {
+    const six = [104, 105, 103, 101, 113, 117]   // 'higequ'
+    const a = await run('JSON.stringify(Packages.android.util.Base64.decode("aGlnZXF1", 2))')
+    expect(JSON.parse(String((a.value as { text?: string }).text))).toEqual(six)
+    const b = await run('JSON.stringify(Packages.android.util.Base64.decode("aGlnZXF", 1))')   // 无 padding
+    expect(JSON.parse(String((b.value as { text?: string }).text))).toEqual(six.slice(0, 5))
+    const c = await run('JSON.stringify(Packages.android.util.Base64.decode("aGln\\nZXF1", 0))') // 折行
+    expect(JSON.parse(String((c.value as { text?: string }).text))).toEqual(six)
+  })
+  it('未实现的包路径如实点名——不是裸 TypeError（对面取到包名不炸、用到才炸）', async () => {
+    // 现库真量（2026-09-28 按 raw 全串扫）：`Packages.java.net` 2 处（海棠搜书 loginUrl 的
+    // `new Packages.java.net.URL(u)` 加 openConnection 那一路）、`android.util` / `android.webkit` /
+    // `io.legado` 各 1 处。语义对齐对面 Rhino：`Packages.x.y` 是**惰性命名空间**（truthy，可探测），
+    // 只有真去 new/调用才抛 ClassNotFound。此前本仓的 `g.Packages` 是普通对象字面量，未实现路径
+    // 取到的是 `undefined` → 抛裸 `TypeError: Cannot read properties of undefined`：既没说是哪条包路径，
+    // 也让审计归因认不出（那条消息不在任何锚点里 → 会落 `unattributed` 而不是 `host-gap`）。
+    const probe = await run('String(typeof Packages.java.net)')
+    expect(String((probe.value as { text?: string }).text)).not.toBe('undefined')  // 包名可探测
+    const e = await run("new Packages.java.net.URL('https://x')").catch((x: Error) => x)
+    expect(String((e as Error).message)).toMatch(/未知 Packages 包路径：java\.net\.URL/)
+    const e2 = await run('new Packages.android.webkit.WebView()').catch((x: Error) => x)
+    expect(String((e2 as Error).message)).toMatch(/未知 Packages 包路径：android\.webkit\.WebView/)
   })
   it('不支持的变换/仅解密 → 如实报错', async () => {
     const e1 = await run('Packages.javax.crypto.Cipher.getInstance("DES/ECB/PKCS5Padding")').catch((x: Error) => x)

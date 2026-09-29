@@ -4,7 +4,9 @@ import path from 'node:path'
 import { writeFileAtomic } from './storage.js'
 
 /** 容量上限默认 200MB */
-const DEFAULT_MAX_BYTES = 200 * 1024 * 1024
+/** 磁盘缓存上限（缺省 200MB）。**这个数是唯一主人**：组合根 `index.ts` 的 DEFAULTS 也引它，
+ *  别在配置表里再写一遍字面量（两份会被改岔）。 */
+export const DEFAULT_CACHE_MAX_BYTES = 200 * 1024 * 1024
 
 /**
  * 文件名安全键：`encodeURIComponent(bookKey)`；结果 >100 字符时改为
@@ -31,7 +33,7 @@ export class PageCache {
   private readonly contentDir: string
   private readonly maxBytes: number
 
-  constructor(private readonly dir: string, maxBytes: number = DEFAULT_MAX_BYTES) {
+  constructor(private readonly dir: string, maxBytes: number = DEFAULT_CACHE_MAX_BYTES) {
     this.tocDir = path.join(dir, 'cache', 'toc')
     this.contentDir = path.join(dir, 'cache', 'content')
     this.maxBytes = maxBytes

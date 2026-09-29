@@ -28,13 +28,11 @@ export interface VerifyDeps {
   refresh?: () => void
 }
 
-/** 书源验证的领域动作（验证编排收拢，口径见 docs/design/client.md「批量动作的收尾口径」）。三个入口——待办箱处置动作、行内
- *  「验证/重验」、批量「验证所选」——只表达「验证哪些源」；提交后的编排知识收在这一处：
- *  成功 → 催任务读面（保持「启停改源 → 读源，验证起任务 → 读任务」的既定裁决；源列表的
- *  刷新归任务终态，`SettingsSection` 按 job.id 记账一次，提交口不再抢跑）；失败 → 一处
- *  反馈（文案单点——此前壳层与行内各持一份「启动验证失败：…」，批量条又是第三种
- *  「操作失败：…」，一改即漂移）。ids 在此按点击时快照：调用方传进来的数组
- *  （如列表现场的 selection）可能随后变异，POST 载荷不许跟着动。 */
+/** 书源验证的领域动作（验证编排收拢，口径见 docs/design/client.md「批量动作的收尾口径」）。
+ *  三个入口（待办箱 / 行内「验证/重验」/ 批量「验证所选」）只表达「验证哪些源」；提交后的编排
+ *  收在这一处：成功 → 催任务读面（源列表刷新归任务终态，`SettingsSection` 按 job.id 记账一次）；
+ *  失败 → 一处反馈（文案单点「启动验证失败：…」，此前三处各持一份，一改即漂移）。
+ *  ids 在此按点击时快照：调用方传进来的数组可能随后变异，POST 载荷不许跟着动。 */
 export async function startSourceVerification(ids: string[], deps: VerifyDeps): Promise<void> {
   try {
     await deps.startBatchProbeJob([...ids])
@@ -66,10 +64,9 @@ const prodJobStatusDeps: JobStatusDeps = { fetchJobStatus }
 
 // ── 任务现场的唯一镜像 ────────────────────────────────────────────────
 /** 为什么住模块 store 而不是 props/hook 局部 state：轮询单实例住在**面板之外**的常驻状态层
- *  （`shell.overlay`，见 `views/NovelStatusOverlay.tsx`），而书源管理区是小说面板内部的另一棵
- *  子树——两侧不在同一分支，props 传不过去。中央呈现座位一次只渲染一个面板（`main` keyed 槽；
- *  此前 `conversation.view`），轮询若住面板内则切走即停、读数即消失（这是本轮要解决的正题）。
- *  口径与 transient / sourceListUi 同类：跨卸载要活的现场走模块级 store，测试有复位口。 */
+ *  （`shell.overlay`），与书源管理区不在同一分支，props 传不过去；轮询若住面板内则切走即停、
+ *  读数即消失。口径与 transient / sourceListUi 同类：跨卸载要活的现场走模块级 store，
+ *  测试有复位口（背景见 client.md「装载面」常驻状态层条）。 */
 const jobSurface = createStore<{ job: JobState | null; stale: boolean }>({ job: null, stale: false })
 const jobTick = createStore<{ n: number }>({ n: 0 })
 const jobOpen = createStore<{ pending: OpenTarget }>({ pending: null })

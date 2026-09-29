@@ -110,7 +110,7 @@ describe('NovelView smoke（renderToString 不炸——数据获取在 effect，
     const html = renderToString(createElement(NovelView))
     expect(html).toContain('data-novel-view="reader"')
     // 回归钉子：曾有 `.novel-root/.novel-main:has([data-novel-view="reader"])` 放开规则，
-    // 迁全局面板（a9f35f7）后宿主链 centerCol/frame 双 overflow:hidden、链上无 scrollport，
+    // 2026-09 迁全局面板后宿主链 centerCol/frame 双 overflow:hidden、链上无 scrollport，
     // 放开即滚轮无效（病史见 docs/design/client.md）。放开 = 回归。
     expect(NOVEL_CSS).not.toContain('.novel-root:has([data-novel-view="reader"])')
     expect(NOVEL_CSS).not.toContain('.novel-main:has([data-novel-view="reader"])')

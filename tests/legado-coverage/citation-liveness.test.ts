@@ -1,43 +1,26 @@
 /**
- * **引用活性守卫**：仓里每一个指向「别处的文件」的引用，都必须能被读者在**他自己有的东西**里查到。
- *
- * 为什么要单独一道门（2026-09-22 实证）：兼容判据的分母原先写成
- * `.superpowers/legado-ref-inventory.md`——一份不入库的手抄笔记。笔记一消失，那道「清单加节即报红」
- * 的检查就静默转 skip，读数从 `1338 passed | 3 skipped` 变成 `1337 | 4`，而**没有任何东西变红**。
- * 同一族病还有对面侧：`matrix.ts` 一行指着 `BookContent.kt:164-186`，而对面上名叫
- * `BookContent.kt` 的文件有两份，其中 `help/book/BookContent.kt` 只有 18 行——那条引用从来没指向过
- * 它声称的那段代码（真身在 `model/webBook/BookContent.kt`）。
+ * **引用活性守卫**：仓里每个指向「别处的文件」的引用，都必须能被读者在**他自己有的东西**里查到。
+ * 教训（2026-09-22）：兼容判据的分母曾写在不入库的手抄笔记里，笔记一消失检查静默转 skip、
+ * 没有任何东西变红——**证据必须落在读者拿得到的地方**。
  *
  * 四条断言：
- * ① 对面 Kotlin 引用必须写成**带目录的相对路径**（相对 `app/src/{main,test}/java/io/legado/app/`），
- *    且在参考仓里真实存在——光凭文件名不算，因为对面有同名文件。
- * ② 任何引用都**不许带行号**（`.kt:164-186` / `.ts:787-792` 同理）：行号随对面合并上游、
- *    随本仓加注释即漂移，且没有任何自动化守得住（AGENTS.md 同一条纪律，这里补机器那一半）。
- *    要精确定位就写**可 grep 的代码原文**（`val titleRule = contentRule.title`）。
- * ③ 仓内出现的 `.superpowers/...` 只允许是 OUTPUT_DIRS 里登记过的**工具输出目录**；
- *    把不入库笔记当证据即红——正确做法是把读数写进文档本身，或引对面仓 / 仓内存活文件。
- * ④ 参考仓不在场即**红**（不静默 skip）：这台机器上它一直在，换机器的人被点名一次即可解决。
+ * ① 对面 Kotlin 引用写**带目录的相对路径**（相对 `app/src/{main,test}/java/io/legado/app/`）且在
+ *    仓内快照的路径集里——光文件名不算，对面有同名文件。
+ * ② 引用**不许带行号**（`.kt:164-186` 同理）：行号必漂且没有自动化守得住——精确定位写可 grep 的原文。
+ * ③ `.superpowers/...` 只许是 OUTPUT_DIRS 登记过的工具输出目录——拿不入库的笔记当证据即红。
+ * ④ 快照不在场即**红**不静默 skip：快照是入库内容，缺了是仓库坏了、不是环境缺东西。
  *
- * 参考仓路径：`DSH_LEGADO_REF`，默认 `C:/develop/GitHub/legado-with-MD3`。
- * 显式 `DSH_LEGADO_REF=off` 才允许跳过断言①，且跳过会被写进用例名里。
+ * 快照是判据的分母：开发阶段从对面 checkout 抽一次，之后判据不依赖任何外部 checkout。
  */
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { parseOpenItems } from './known-open.js'
+import { readSnapshot } from './upstream-facts.js'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
-/** 对面参考实现默认位置（本地 checkout，非入库内容） */
-const DEFAULT_REF = 'C:/develop/GitHub/legado-with-MD3'
-const REF = process.env.DSH_LEGADO_REF ?? DEFAULT_REF
-const REF_OFF = REF === 'off'
-
-/** 对面源码根：主源与测试源都要认（`AnalyzeRuleFastPathReproTest.kt` 只在测试源根） */
-const UPSTREAM_ROOTS = [
-  'app/src/main/java/io/legado/app',
-  'app/src/test/java/io/legado/app',
-]
 
 /**
  * 允许在文档 / 代码里出现的 `.superpowers/` 路径——**只限工具自己写出的输出目录**。
@@ -50,8 +33,10 @@ const OUTPUT_DIRS: Record<string, string> = {
 }
 
 const TEXT_EXT = /\.(?:md|ts|tsx|mjs)$/
-/** 指向别处的文件引用：对面 .kt 与本仓 .ts/.tsx/.mjs，含可选行号后缀（行号即违规） */
-const FILE_REF = /(?:^|[^A-Za-z0-9_./-])((?:[A-Za-z0-9_.\-]+\/)*[A-Za-z0-9_.\-]+\.(?:kt|ts|tsx|mjs))(:\d+(?:-\d+)?)?/g
+/** 指向别处的文件引用：对面 .kt、本仓 .ts/.tsx/.mjs 与**文档 .md**，含可选行号后缀（行号即违规）。
+ *  `.md` 必须在内——`AGENTS.md` 承诺「跟踪文本里的 `.md/.ts/.tsx/.mjs`，`file.ext:123` 形态即红」，
+ *  漏掉 `.md` 就是门比承诺窄：跨文档的行号引用恰好最常出现在散文里。 */
+const FILE_REF = /(?:^|[^A-Za-z0-9_./-])((?:[A-Za-z0-9_.\-]+\/)*[A-Za-z0-9_.\-]+\.(?:kt|ts|tsx|mjs|md))(:\d+(?:-\d+)?)?/g
 const SUPERPOWERS_REF = /\.superpowers\/[A-Za-z0-9_.\-]*|\.superpowers/g
 /** 本门自身：它得能照着规则**逐字写出**被判违规的形态（行号后缀、未登记路径、裸文件名），
  *  否则规则讲不清——所以整文件排除在扫描之外（两条涉及它的断言都按这一条跳过）。
@@ -59,9 +44,10 @@ const SUPERPOWERS_REF = /\.superpowers\/[A-Za-z0-9_.\-]*|\.superpowers/g
  *  与 rel() 的规范化形式永不相等 ⇒ 排除静默失效、门开始自证其罪（2026-09-22 实测踩过）。 */
 const SELF = 'tests/legado-coverage/citation-liveness.test.ts'
 
-/** 参与扫描的文本文件：仓内跟踪的 md/ts/tsx/mjs（lib 与 node_modules 除外） */
+/** 参与扫描的文本文件：**跟踪的 + 未跟踪但未忽略的** md/ts/tsx/mjs。带上未跟踪是因为只扫
+ *  `git ls-files` 时新写的文件提交前扫不到——守卫要拦的正是「刚敲进去的那句出处」（本门踩过）。 */
 function trackedTextFiles(): string[] {
-  const out = execFileSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf8' })
+  const out = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], { cwd: ROOT, encoding: 'utf8' })
     .split('\0')
     .filter(p => p && TEXT_EXT.test(p))
   return out
@@ -69,15 +55,6 @@ function trackedTextFiles(): string[] {
 
 function rel(p: string): string {
   return p.split(path.sep).join('/')
-}
-
-/** 对面文件解析：先按「带目录的相对路径」精确查，再退到按源根拼接；命中即返回该根下的相对路径 */
-function resolveUpstream(cited: string): string | null {
-  for (const root of UPSTREAM_ROOTS) {
-    const abs = path.resolve(REF, root, cited)
-    if (fs.existsSync(abs)) return `${root}/${cited}`
-  }
-  return null
 }
 
 /**
@@ -137,15 +114,60 @@ describe('引用活性（仓内每个外部引用都能现查）', () => {
     expect(zombie, `已无人引用：${zombie.join(' / ')}（请连同理由一并删掉，别留着当地图）`).toEqual([])
   })
 
-  const upstream = REF_OFF ? it.skip : it
-  upstream(`对面 Kotlin 引用带目录且在 ${REF} 里真实存在`, () => {
-    if (!fs.existsSync(REF)) {
-      throw new Error(
-        `对面参考仓不在场：${REF}\n` +
-        '  兼容判据要以它为分母，不能静默降级——请 checkout legado-with-MD3 并设 DSH_LEGADO_REF，' +
-        '或显式 DSH_LEGADO_REF=off（跳过会记在用例名里）。',
-      )
+  /** 「对面 `.kt` 引用」的白名单——正文纪律的机器那一半，白名单外出现 `.kt` 即红。
+   *  四处各司其职（README 致谢 / 矩阵对照面 / 裁决表 / 快照刷新工具），本门自身也在名单里：
+   *  它得能逐字写出被判违规的形态。 */
+  const UPSTREAM_CITATION_ALLOWED = [
+    'README.md',
+    'tests/legado-coverage/matrix.ts',
+    'docs/design/legado-compat.md',
+    'tests/legado-coverage/upstream-facts.ts',
+    'tests/legado-coverage/capture-upstream-snapshot.test.ts',
+    SELF,
+  ]
+
+  it('对面 .kt 引用只许出现在四处（外部出处白名单）', () => {
+    const bad: string[] = []
+    for (const f of files) {
+      if (UPSTREAM_CITATION_ALLOWED.includes(rel(f))) continue
+      const text = fs.readFileSync(path.join(ROOT, f), 'utf8')
+      for (const m of text.matchAll(FILE_REF)) {
+        if (m[1].endsWith('.kt')) bad.push(`${rel(f)} → ${m[1]}`)
+      }
     }
+    expect(
+      bad,
+      `外部出处只许出现在：${UPSTREAM_CITATION_ALLOWED.join(' / ')}\n` +
+      '  其余地方讲本仓口径与理由，要给出处就指矩阵行 id。违规：\n  ' + bad.join('\n  '),
+    ).toEqual([])
+  })
+
+  /** 对面**符号名**（R2 的另一半）：白名单外同样不许出现。规则实体类名从**快照**取（机械、
+   *  不会漂），其余是判据文档里出现过的上游类型名；加这条前白名单外 0 处，误报面为零。 */
+  const UPSTREAM_SYMBOLS = [
+    ...Object.keys(readSnapshot().ruleFields),
+    'AnalyzeUrl', 'AnalyzeRule', 'AnalyzeByJSoup', 'AnalyzeByJSonPath', 'AnalyzeByRegex', 'AnalyzeByXPath',
+    'JsExtensions', 'StrResponse', 'AppPattern', 'BaseSource', 'BookChapterList', 'BookContent',
+  ]
+
+  it('对面符号名同样只许出现在四处（外部出处白名单）', () => {
+    const bad: string[] = []
+    for (const f of files) {
+      if (UPSTREAM_CITATION_ALLOWED.includes(rel(f))) continue
+      const text = fs.readFileSync(path.join(ROOT, f), 'utf8')
+      for (const s of UPSTREAM_SYMBOLS) {
+        if (new RegExp(`\\b${s}\\b`).test(text)) bad.push(`${rel(f)} → ${s}`)
+      }
+    }
+    expect(
+      bad,
+      `外部出处只许出现在：${UPSTREAM_CITATION_ALLOWED.join(' / ')}\n` +
+      '  其余地方讲本仓口径与理由（要给出处就指矩阵行 id）。违规：\n  ' + bad.join('\n  '),
+    ).toEqual([])
+  })
+
+  it('对面 Kotlin 引用带目录，且能在仓内快照里现查', () => {
+    const paths = new Set(readSnapshot().paths)
     const cited = new Set<string>()
     for (const f of files) {
       if (rel(f) === SELF) continue
@@ -158,11 +180,44 @@ describe('引用活性（仓内每个外部引用都能现查）', () => {
     const bad: string[] = []
     for (const c of [...cited].sort()) {
       if (!c.includes('/')) {
-        bad.push(`${c}：只有文件名，对面有同名文件（如 BookContent.kt 有两份），必须带相对源根的目录`)
+        bad.push(`${c}：只有文件名，同名文件在对面不止一份，必须带相对源根的目录`)
         continue
       }
-      if (!resolveUpstream(c)) bad.push(`${c}：${REF} 的两个源根下都没有这个文件`)
+      if (!paths.has(c)) bad.push(`${c}：快照的路径集里没有这个文件（刷新快照，或改指仓内存活文件）`)
     }
+    expect(bad, bad.join('\n  ')).toEqual([])
+  })
+
+  it('按编号引用「已知开口第 N 条」的，那个号必须还存在（编号漂移＝静默指错东西）', () => {
+    // 行号必漂，**列表编号**是同一种脆弱：重排某一节后「第 N 条」的引用不会报找不到，而是**指向
+    // 另一条**——删已收口条目时「留空洞不重排」的判断不该靠下一个人记得，所以钉成门。
+    const RE = /(engine|services|client|legado-compat)\.md[^\n]{0,40}?已知开口第\s*(\d+)\s*条/g
+    const cache = new Map<string, Set<string> | null>()
+    // 编号表从 known-open.parseOpenItems 派生（与 coverage 同一份解析器）——自己再扫一遍「## 已知
+    // 开口」会与它口径漂（首/末标题、何时停都漂过）。
+    const numberingOf = (doc: string): Set<string> | null => {
+      if (cache.has(doc)) return cache.get(doc) ?? null
+      const p = path.join(ROOT, 'docs', 'design', `${doc}.md`)
+      if (!fs.existsSync(p)) { cache.set(doc, null); return null }
+      const items = parseOpenItems(fs.readFileSync(p, 'utf8'))
+      const nums = items === null ? null : new Set(items.map((it) => it.num))
+      cache.set(doc, nums)
+      return nums
+    }
+
+    const bad: string[] = []
+    let citations = 0
+    for (const f of trackedTextFiles()) {
+      if (rel(f) === SELF) continue
+      const text = fs.readFileSync(f, 'utf8')
+      for (const m of [...text.matchAll(RE)]) {
+        citations++
+        const nums = numberingOf(m[1])
+        if (nums === null) { bad.push(`${rel(f)}：引了 ${m[1]}.md 的编号，但那一份文档没有「已知开口」节`); continue }
+        if (!nums.has(m[2])) bad.push(`${rel(f)}：${m[1]}.md 已知开口没有第 ${m[2]} 条（现有编号：${[...nums].join(', ')}）`)
+      }
+    }
+    expect(citations, '一条按编号的引用都没扫到，判据在空转').toBeGreaterThan(5)
     expect(bad, bad.join('\n  ')).toEqual([])
   })
 })

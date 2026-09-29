@@ -11,10 +11,10 @@ export interface FetchedPage {
   /** 从 Content-Type 提取的 charset（无则 undefined） */
   charset: string | undefined
   /** HTTP 状态码。守门 fetcher 对非 2xx 抛 FetchError，所以在成功返回的页里它恒为 2xx/3xx；
-   *  它存在的理由是 `java.post(...).statusCode()`（对面 Jsoup Response 有这一项，缺它就只能编一个）。 */
+   *  它存在的理由是 `java.post(...).statusCode()`（响应对象要能给出这一项，缺它就只能编一个）。 */
   status: number
   /** 响应 `Set-Cookie` 头原文数组（无则空数组）——`java.post(...).cookies()` 的数据源。
-   *  本仓**不**实现对面 enabledCookieJar 那套自动回带（见矩阵 `b-cookie-jar`）：这里只给脚本自己读。 */
+   *  本仓**不**实现 cookie jar 自动回带（见矩阵 `b-cookie-jar`）：这里只给脚本自己读。 */
   setCookie: string[]
 }
 
@@ -37,14 +37,16 @@ export interface Fetcher {
 type FetchInit = RequestInit & { dispatcher?: unknown }
 type FetchLike = (url: string, init?: FetchInit) => Promise<Response>
 
-const DEFAULT_TIMEOUT_MS = 15000
+/** 出站默认耐心（缺省 15s）。**这个数是唯一主人**：组合根 DEFAULTS 与 reading.from() 的回退
+ *  都引它——多请求目录脚本一轮要连打数个请求，窄超时必炸，缺省给得比一般 HTTP 客户端宽。 */
+export const DEFAULT_TIMEOUT_MS = 15_000
 const CHARSET_RE = /charset=([^;\s"']+)/i
 /** 嗅探用：`<meta charset=…>`（HTML5）与 `<meta http-equiv content="…charset=…">`（遗留形态） */
 const META_CHARSET_RE = /<meta[^>]+charset\s*=\s*["']?([\w-]+)/i
 const META_CONTENT_CHARSET_RE = /<meta[^>]+content\s*=\s*["'][^"']*charset=([\w-]+)/i
 
-/** 缺省请求头：Node fetch 默认不带 User-Agent——站点 WAF 按 UA 过滤直接 403（实测 26 源）。
- *  legado 的 WebView 同样默认带浏览器 UA；调用方显式声明的同名头永远优先。 */
+/** 缺省请求头：Node fetch 默认不带 User-Agent——站点 WAF 按 UA 过滤直接 403。
+ *  带浏览器 UA 是常态；调用方显式声明的同名头永远优先。 */
 const DEFAULT_HEADERS: Record<string, string> = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -54,9 +56,9 @@ const DEFAULT_HEADERS: Record<string, string> = {
 /**
  * 本源**实际发出去**的 User-Agent：源静态头 / auth 头覆盖 → 缺省 UA 打底。
  * **大小写不敏感**（HTTP 头名本就不敏感）：`user-agent` 与 `User-Agent` 是同一条头，
- * 只按原样查键会让声明了小写形态的源（现库 2/214）被误报成缺省 UA。
- * 唯一消费者是 `java.getWebViewUA()` 的 ctx 接线（对面返回 WebView 默认 UA，本仓以"我们真发的
- * 这条"近似承接；见矩阵 `h-java-webview-ua`）。同步取值，不含 `@js:` 动态头——那是 fetch 时才算的，
+ * 只按原样查键会让声明了小写形态的源被误报成缺省 UA。
+ * 唯一消费者是 `java.getWebViewUA()` 的 ctx 接线（本仓以"我们真发的这条"承接
+ * 「浏览器默认 UA」的语义；见矩阵 `h-java-webview-ua`）。同步取值，不含 `@js:` 动态头——那是 fetch 时才算的，
  * 脚本要的通常是"给我一个能用的 UA"，不是"给我一个和下一个请求逐字节一致的头"。
  */
 export function effectiveUserAgent(source: Pick<NovelSource, 'rules' | 'auth'>): string {
@@ -91,7 +93,7 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
   const fetchImpl = (opts?.fetchImpl ?? globalThis.fetch) as FetchLike
   const defaultTimeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS
   // 代理走 undici 的 ProxyAgent（dispatcher）：Node 的 fetch 不认系统代理，有代理才通的站点
-  // 直连会被站点 302/重置（实测笔趣阁）——浏览器能开、读者打不开的根因
+  // 直连会被站点 302/重置——「浏览器能开、插件打不开」的根因
   const dispatcher = opts?.proxyUrl === undefined || opts?.proxyUrl === null || opts.proxyUrl === ''
     ? undefined
     : new ProxyAgent(opts.proxyUrl)
@@ -149,7 +151,7 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
 
 /**
  * Buffer 层显式解码链（禁默认 UTF-8 硬解）：
- * ⓪ 声明覆盖（searchUrl 选项 charset——legado 口径，优先级最高）→
+ * ⓪ 声明覆盖（searchUrl 选项 charset，优先级最高）→
  * ① Content-Type charset → ② 缺位且内容（去 BOM/前导空白后）是 HTML/XML 开头 → 前 1024 字节 latin1 嗅探 meta
  * → ③ 兜底 UTF-8。声明的 charset 解不出 → DecodeError（宁可报错，不拿乱码冒充正文）。
  */
@@ -163,9 +165,8 @@ export function decodeBody(page: FetchedPage, declaredCharset?: string): string 
 }
 
 /**
- * 抓取 + 解码 + 落地地址的单点（原 search-face.fetchTimed 迁入，超时改由 fetcher 自身收口——
- * 此前 fetchTimed 在 fetcher 之外再竞速一个**不 abort** 的定时器，与 fetcher 内部超时并存两套，
- * 错误文案却一字不差）。调用方只学这一个入口；charset 为选项声明的解码优先级。
+ * 抓取 + 解码 + 落地地址的单点；调用方只学这一个入口；charset 为选项声明的解码优先级。
+ * 超时收口在 fetcher 自身（曾在这里再竞速一个**不 abort** 的定时器，两套超时并存、文案相同）。
  */
 export async function fetchTextPage(
   fetcher: Fetcher, url: string,

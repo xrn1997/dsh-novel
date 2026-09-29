@@ -22,10 +22,9 @@ import type {
 } from '../../src/client/views/types.js'
 
 /**
- * 接线层交互测试·第二梯队：
-  * deps seam 此前只盖设置区——书架/搜索的接线（陈旧回调、乐观删除、误导性空态）
- * 与试跑器（失败假死）仍是 bug 巢穴且无 seam。本文件用核心依赖束（ClientCoreDeps）
- * 驱动这些历史 bug 形态，逐条钉死。桩工厂统一到 fake-deps.ts。
+ * 接线层交互测试·第二梯队：deps seam 此前只盖设置区，书架/搜索/试跑器的历史 bug 形态
+ * （陈旧回调、乐观删除、误导性空态、失败假死）用核心依赖束（ClientCoreDeps）逐条钉死。
+ * 桩工厂统一到 fake-deps.ts。
  */
 
 const coreDeps = (over: CoreDepsOverrides): FakeCoreDeps => makeCoreDeps(over)
@@ -202,7 +201,7 @@ describe('ShelfView 接线（deps seam 驱动）', () => {
     const deps = coreDeps({ apiGet: vi.fn(async () => []) })
     render(createElement(ShelfView, { deps }))
     const input = document.querySelector('.novel-file-hidden') as HTMLInputElement
-    // 卡片随空架加载完成才渲染（books===null 时是骨架）
+    // 卡片随空架加载完成才渲染（加载中是骨架）
     await waitFor(() => expect(screen.getByText('导入 TXT / EPUB')).toBeTruthy())
     expect(input.accept).toContain('.txt')
     expect(input.accept).toContain('.epub')
@@ -283,7 +282,7 @@ describe('ShelfView 接线（deps seam 驱动）', () => {
 
 /** 命中分组桩（`SearchGroup` 的最小可渲染形态）。
  *  `sourceId` 一轮内必须一源一个：服务端 `searchProgressive` 对每个源只 `emit` 一组，分组在
- *  `SearchView` 里按 `key={g.sourceId}` 渲染——同一轮塞两个同 id 的桩等于造出对面协议给不出的形状
+ *  `SearchView` 里按 `key={g.sourceId}` 渲染——同一轮塞两个同 id 的桩等于造出服务端给不出的形状
  *  （React 会报 duplicate key）。多组用例显式传第二个 id。 */
 const hitGroup = (title: string, sourceId = 's1') => ({
   sourceId, sourceName: 'S', status: 'verified' as const,
@@ -463,11 +462,11 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
 describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层闭环；SettingsDeps 注入）', () => {
   const unverifiedSrc: SourcePublic = {
     id: 'u1', name: '未验源', baseUrl: 'https://u.com', enabled: true, groups: [],
-    type: 'text', status: 'unverified', importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false,
+    type: 'text', status: 'unverified', importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false, hasLoginUrl: false,
   }
   const brokenSrc: SourcePublic = {
     id: 'b1', name: '坏源甲', baseUrl: 'https://b.com', enabled: true, groups: [],
-    type: 'text', status: 'broken', importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false,
+    type: 'text', status: 'broken', importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false, hasLoginUrl: false,
   }
   const doneImportJob: JobState = {
     id: 'imp1', kind: 'import', phase: 'done', total: 1, done: 1,
@@ -560,10 +559,10 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
   })
 
   it('0 源（删光了）：列表头与「＋ 导入书源」必须在场，且能点开弹层', async () => {
-    // 病史（2026-09 实机）：0 源时组件 early-return 一句「点右上『＋ 导入书源』」，而整个列表头
-    // 连同那颗钮根本没渲染——提示在指一个不存在的控件（与 docs-pinned-copy 守的同一类罪）。
-    // **先等取数落定再查按钮**：sources 还是 null 的首帧照样渲染完整列表头，边等边查会拿到
-    // 一个随后被卸载的节点，点它没反应——那条假绿比这条红更贵。
+    // 病史（2026-09 实机）：0 源时组件 early-return 提示「点右上『＋ 导入书源』」，而列表头连同
+    // 那颗钮根本没渲染——提示在指一个不存在的控件（与 docs-pinned-copy 守的同一类罪）。
+    // **先等取数落定再查按钮**：sources 为 null 的首帧照样渲染列表头，边等边查会拿到随后被卸载
+    // 的节点，点它没反应的假绿比红更贵。
     const deps = settingsDeps({}, [])
     render(createElement(SettingsSection, { deps }))
     await screen.findByText(/还没有书源/)
@@ -709,10 +708,10 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
     expect(String(deps.pushError.mock.calls[0][0])).toContain('网络失败')
   })
 
-  it('导入弹层焦点不被壳层重渲染劫持（useJobStatus 1s 轮询 tick → 新 onClose 闭包；mount-scoped 口径）', async () => {
-    // 病史（审查 2026）：ImportModal 的焦点/Esc effect 依赖 [onClose]，而 onClose 是壳层
-    // 每 render 新造的内联箭头；任务记录在场时 useJobStatus 每秒 setJob 新对象 → 壳层重渲染
-    // → effect cleanup+重跑 → 用户焦点被每秒劫回「关闭」钮。挂载作用域化后焦点必须原地不动。
+  it('导入弹层焦点不被壳层重渲染劫持（useJobPolling 1s 轮询 tick → 新 onClose 闭包；mount-scoped 口径）', async () => {
+    // 病史（当时是真回归）：ImportModal 的焦点 effect 依赖 [onClose]，而 onClose 是壳层每 render
+    // 新造的内联箭头 → 轮询每秒重渲染 → effect 重跑 → 焦点每秒被劫回「关闭」钮。挂载作用域化后
+    // 焦点必须原地不动。
     const deps = settingsDeps()
     const { rerender } = render(createElement(SettingsSection, { deps }))
     fireEvent.click(await screen.findByText('＋ 导入书源'))
@@ -816,19 +815,19 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
   })
 
   /**
-   * 本组「不写主进度」那几条断言的**地基**：jsdom 没有排版，`getBoundingClientRect` 全返回 0，
-   * 会话的视口采点就把「读到哪儿」认成最后一个块 → 挂载期落一笔伪进度（实测章号还跳到最后一章）。
-   * 于是「面板开合前后 apiSend 计数不变」量的不是行为，而是那笔伪写落在基线前还是落在基线后——
-   * 整轮并发下（worker 抢 CPU）它会跨过去，单跑却永远绿（2026-09-26 实证：先只有「导入说明」一条
-   * 红，补了它的桩之后「导入说明与脚注面板互斥」在同批断言处整轮红、单跑绿）。
-   * 修法是给整组一条确定性视口（第 1 段在视口里、其余排在下方），让伪写根本不产生。
+   * 本组「不写主进度」断言的**地基**，病史两段：① jsdom 无排版、rect 全 0，视口采点把「读到哪儿」
+   * 认成最后一块 → 挂载期落伪进度，整组因此换确定性视口（第 1 段在视口里）；② 确定视口消掉的是
+   * 乱参数，不是「站定也写」的冗余 PUT——那正是 2026-09-26 偶发红的机制（墙钟超防抖窗时挂起的写
+   * 跨进观察窗），根因按「不写幽灵写」收在会话侧，本用例窗口随之放宽到整个防抖窗。
+   * ③ 观察窗不必拿真墙钟买：防抖窗可注入（`ReaderDeps.saveDebounceMs`，jobs 轮询同款先例），
+   * 此处收紧到 50ms——幽灵写若有必落在 50ms+双帧内，等 300ms 观察的是同一段语义。
    */
-  it('挂载期不落任何进度：本组「零写」断言的地基（没有确定性视口时这条会红）', async () => {
-    const deps = richDeps()
+  it('挂载期不落任何进度：本组「零写」断言的地基（防抖窗整段零写）', async () => {
+    const deps = richDeps({ saveDebounceMs: 50 })
     render(richReader(deps))
     await screen.findByText('第一章第一段')
-    // 等过会话的帧调度（双 rAF）与进度 debounce：伪进度若要落，就落在这个窗口里
-    await act(async () => { await new Promise((r) => setTimeout(r, 400)) })
+    // 等过会话的帧调度（双 rAF）**与整个进度防抖窗**：要落的话就落在这个窗口里
+    await act(async () => { await new Promise((r) => setTimeout(r, 300)) })
     expect(deps.apiSend.mock.calls.map((c) => c[2])).toEqual([])
   })
 
@@ -891,10 +890,8 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
    *  阅读器按它判断「这本书有没有本地产物读口」（导入说明走 `local/warnings`，只有本地书有）。 */
   const richReader = (deps: FakeReaderDeps): ReturnType<typeof createElement> =>
     createElement(ReaderView, { sourceId: LOCAL_SOURCE_ID, bookKey: 'local:b1', title: '图文书', deps })
-  /** 从第 `from` 条起的新 PUT 落在哪些章（去重保序）。
-   *  jsdom 视口处处为 0：哨兵恒在视口顶 ⇒ 会话一定把后续章都预取出来，`recalcAnchors` 量到的
-   *  每个章块 top 也都是 0，于是 handleViewportChange 会自己发几笔「跨章」读数噪声。
-   *  本组断言只认**导航落到了哪一章**，不认「总共发了几笔」——时序笔数归 reader-session.test.ts。 */
+  /** 从第 `from` 条起的新 PUT 落在哪些章（去重保序）。jsdom 视口处处为 0，会话会发出几笔「跨章」
+   *  读数噪声——本组只认**导航落到了哪一章**，不认总笔数（时序笔数归 reader-session.test.ts）。 */
   const jumpedTo = (deps: FakeReaderDeps, from: number): number[] => [...new Set(
     deps.apiSend.mock.calls.slice(from).map((c) => {
       const body = c[2] as { progress: { chapterIndex: number } }
@@ -955,7 +952,7 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
 
   it('导入说明与脚注面板互斥：只收脚注面板、不消费返回项、不写主进度', async () => {
     // 两块面板同住右上角（同一套 `.novel-notes` 几何），同场谁也读不了。收脚注面板**不按关闭语义走**
-    // （不调 closeNote）：那是弹栈回引用处 + 落一笔存档，而「看一眼导入说明」是只读动作。
+    // （不调 closeNote：那是弹栈回引用处 + 落存档），「看一眼导入说明」是只读动作。
     const deps = withWarnings([degraded])
     render(richReader(deps))
     await screen.findByText('第一章第一段')
@@ -971,9 +968,8 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
   })
 
   it('目录与脚注面板互斥：点目录收掉脚注面板（否则它盖住目录、条目点不动）', async () => {
-    // 两块浮层同住右上角、且脚注面板更宽：同场时命中测试打到的是面板头，目录条目根本点不动
-    // （真浏览器实测：点第一条命中的是注释面板标题）。与导入说明同一条口径——只收面板、
-    // 不消费返回项（返回项仍由工具栏承接）、不写主进度。
+    // 两块浮层同住右上角且脚注面板更宽：同场时命中测试打到面板头，目录条目根本点不动（真浏览器
+    // 实测过）。与导入说明同一口径——只收面板、不消费返回项、不写主进度。
     const deps = richDeps()
     render(richReader(deps))
     await screen.findByText('第一章第一段')
@@ -990,11 +986,9 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
   })
 
   it('工具栏返回之后关面板：不许再替用户跳一次（面板的「回引用处」只认它打开时压入的那条）', async () => {
-    // 实测路径：跟正文链去第 2 章 → 在新章点脚注引用 → 点工具栏「↩ 返回原处」→ 关面板。
-    // 旧实现按「面板是内链开的」弹栈，弹掉的是**更早那条**（别人记的原处）→ 主序列被送回上一章，
-    // 这一跳还会被 commit('jump') 写进存档。修法是记条目身份：栈顶换了人，关闭就只关面板。
-    // jsdom 无排版：所有 rect 都是 0，会话的视口采点认不出「读到哪儿」——这里用**可切换**的 rect 桩
-    // 顶替排版引擎（第 1 章读 p1、跳到第 2 章后读 q1；真实浏览器里这两次读天然发生在两处布局上）。
+    // 实测路径：内链去第 2 章 → 点脚注 → 工具栏返回 → 关面板。旧实现按「面板是内链开的」弹栈，
+    // 弹掉的是**更早那条**（别人记的原处）→ 主序列被送回上一章且写进存档；修法是记条目身份，
+    // 栈顶换了人就只关面板。jsdom 无排版，用**可切换**的 rect 桩顶替布局（第 1 章读 p1、第 2 章读 q1）。
     const proto = Element.prototype as unknown as { getBoundingClientRect: () => DOMRect }
     const original = proto.getBoundingClientRect
     let readingChapter2 = false
@@ -1048,9 +1042,8 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
   })
 
   it('排版（字号）变化：按变化前的可见节点把视口拉回同一相对位置，且不自我触发重定位', async () => {
-    // jsdom 没有排版引擎：这里用一个**按读取次序改值**的 rect 桩顶替它——第 1 次读 = 变化前的布局，
-    // 之后 = 重排后的布局（真实浏览器里这两次读天然发生在两套布局上）。本用例钉的是采点时刻与算式；
-    // 「字号变了正文停在同一句」只能由浏览器门（真 client bundle + 真排版）证明。
+    // jsdom 无排版：用**按读取次序改值**的 rect 桩顶替（第 1 次读=变化前、之后=重排后）。本用例钉
+    // 采点时刻与算式；「字号变了正文停在同一句」只能由浏览器门证明。
     const proto = Element.prototype as unknown as { getBoundingClientRect: () => DOMRect }
     const original = proto.getBoundingClientRect
     let p1Reads = 0
@@ -1148,8 +1141,8 @@ describe('NovelView 顶部 tab 导航（书架|书城|书源管理 并列；sett
 })
 
 /**
- * 「离开界面即完蛋」的正面解法（旧实测缺陷：卸载时 3 批、卸载后又发 2 批，结果清零、重挂载整轮重打）。
- * 批循环搬到 Node 半之后，卸载只意味着「没人看了」：轮询停掉，服务端那一轮继续跑完并持有结果。
+ * 「离开界面即完蛋」的正面解法（旧实测缺陷：卸载后又发请求、重挂载整轮重打）。批循环搬到 Node 半
+ * 之后，卸载只意味着「没人看了」：轮询停掉，服务端那轮继续跑完并持有结果。
  */
 describe('SearchView 离开界面：停看不停工（结果由服务端持有）', () => {
   it('卸载后不再发任何请求；重挂载从 since=0 重读即恢复，且不再提交一轮', async () => {
@@ -1182,9 +1175,8 @@ describe('SearchView 离开界面：停看不停工（结果由服务端持有�
   })
 
   it('退出小说界面再进：route 仍带关键词的重挂载也只恢复，不重新提交（真机 bug：整轮从头重搜）', async () => {
-    // 真机路径：书架搜索框 navigate({name:'search', keyword}) 进搜索页；routeStore 是跨卸载
-    // 存活的现场（store.ts），退出小说界面再进 = route 还带着关键词重新挂载。
-    // 旧行为：挂载 effect 无条件 submit → POST 替换单槽里在跑的同一轮 → 整轮从头重搜（用户实测）。
+    // 真机路径：书架搜索框带 keyword 进搜索页；routeStore 跨卸载存活，退出再进 = route 还带关键词
+    // 重新挂载。旧行为：挂载 effect 无条件 submit → POST 替换单槽里在跑的同一轮 → 整轮从头重搜。
     navigate({ name: 'search', keyword: '斗罗' })
     const deps = coreDeps({
       apiSend: vi.fn(async () => ({ jobId: 'j1' })),

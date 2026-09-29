@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type { NovelSource, SourceAuth, SourceContentKind, SourceStatus } from './types.js'
 import type { NormalizeResult } from './normalize.js'
-import { contentTypeOfRaw, deriveRuleField, rawBookMetaFields, rawHeaderRule, rawRulePattern, SOURCE_KIND_LABEL, splitGroups, stripLeadingIcons } from './normalize.js'
+import { contentTypeOfRaw, deriveRuleField, rawBookMetaFields, rawHeaderFields, rawHeaderRule, rawRulePattern, SOURCE_KIND_LABEL, splitGroups, stripLeadingIcons } from './normalize.js'
 import { readJson, writeJsonAtomic } from './storage.js'
 
 /**
@@ -58,17 +58,15 @@ export class SourceRegistry {
   }
 
   /** dir = novel 根；sources.json **缺失** → 空表（首启是常态）；**损坏** → CorruptJsonError 响亮失败
-   *  （绝不折叠成空表——那会让下一次 edit 覆盖整文件，642 条源静默消失，见 storage.readJson）。
+   *  （绝不折叠成空表——那会让下一次 edit 覆盖整文件，本机库的源静默消失，见 storage.readJson）。
    *  存量归一（改了就落盘收敛）：
    *  enabled 缺省归一为 true——早期数据无此字段，缺省即「启用」，否则搜索面 `s.enabled &&` 静默排除老源；
    *  type 缺省归一为 'text'——早期数据无此字段（当时 bookSourceType 根本没读）；
-   *  groups 拆分迁移——早期只按 `\` 拆，真实导出的逗号粘连组合串（「A,B」一段）在此按
-   *  splitGroups 收敛成多段（幂等：干净数据拆完原样）；
-   *  name 前缀图标迁移——上游分组装饰前缀（「⚡📂xx」）按 stripLeadingIcons 剥掉（幂等）；
-   *  type 按 raw.bookSourceType 重推——legado 真值 1=音频/2=图片/3=文件，旧映射读反且
-   *  「非文本拒绝」口径晚于存量入库，漫画/短剧源被误标 text 混进聚合搜索与文字书架
-   *  （书架诊断实证）；**认不出的编码 → 'unknown'**（2026-09 裁定：读不懂不等于文本源，退出
-   *  参与集；不打 status——探针按搜索面判 verified，坏源那条道会被下一次重验洗白）。 */
+   *  groups 拆分迁移——早期只按 `\` 拆，真实导出的逗号粘连组合串按 splitGroups 收敛成多段（幂等）；
+   *  name 前缀图标迁移——书源包惯用的分组装饰前缀按 stripLeadingIcons 剥掉（幂等）；
+   *  type 按 raw.bookSourceType 重推——旧映射把 1/2 读反，漫画/短剧源被误标 text 混进聚合搜索与
+   *  文字书架；**认不出的编码 → 'unknown'**（读不懂不等于文本源，退出参与集；不打 status——
+   *  探针按搜索面判 verified，坏源那条道会被下一次重验洗白）。 */
   static async load(dir: string): Promise<SourceRegistry> {
     const sources = await readJson<NovelSource[]>(path.join(dir, 'sources.json'), [])
     let changed = false
@@ -77,39 +75,46 @@ export class SourceRegistry {
       if (!(s.type in SOURCE_KIND_LABEL)) { s.type = 'text'; changed = true }
       const derived = contentTypeOfRaw(s.raw)
       if (derived !== undefined && s.type !== derived) { s.type = derived; changed = true }
-      // ⑥ ruleDetailInit 按 raw 重推（init 换根映射的存量收敛）：normalize 只在入库时映射 ruleBookInfo.init，
-      // 存量 rules 是旧版派生、缺此键——缺键则详情换根静默不生效、tocUrl 模板 Miss 回退到详情页
-      // 地址 → 目录 `$.rows` 空 → EmptyToc（QQ 源真机判别实证）。raw 是真相、rules 是派生；
-      // 定点补这一个字段，不整链重 normalize（那可能拒绝存量源）。raw 非对象 → 不动；
-      // raw 在场：键恒落成 string | null（NormalizedRules 是 required 形状）。
+      // ruleDetailInit 按 raw 重推（init 换根映射的存量收敛）：normalize 只在入库时映射 ruleBookInfo.init，
+      // 存量 rules 缺此键 → 详情换根静默不生效、tocUrl 模板 Miss 回退详情页地址 → EmptyToc（真机实证）。
+      // raw 是真相、rules 是派生；定点补这一个字段，不整链重 normalize（那可能拒绝存量源）。
+      // raw 非对象 → 不动；raw 在场：键恒落成 string | null（NormalizedRules 是 required 形状）。
       // **读路必须是导入侧那一份**（deriveRuleField 直接跑 flattenDialect/flattenNative）：恒覆盖
-      // 配第二份解释会把对的改成错的，见 normalize.ts 该函数的注释与 ⑨ 的差别说明。
+      // 配第二份解释会把对的改成错的，见 normalize.ts 该函数的注释与下面 kind/wordCount 补推那条的差别说明。
       const wantInit = deriveRuleField(s.raw, 'ruleDetailInit')
       if (wantInit !== undefined && s.rules.ruleDetailInit !== wantInit) {
         s.rules.ruleDetailInit = wantInit; changed = true
       } else if (s.rules.ruleDetailInit === undefined) {
         s.rules.ruleDetailInit = null; changed = true
       }
-      // ⑦ headerRule 按 raw 重推（与 ⑥ 同构）：旧版 normalize 把 `@js:` header 当坏 JSON 丢弃
-      // （rules.header=null、规则原文只活在 raw 里）——不重推则动态头永远不生效（顶点类源 4004）。
-      // raw 非对象 → 不动；raw 在场：键恒落成 string | null。
+      // ⑦ headerRule 按 raw 重推（CONTEXT.md「第七条迁移」指的就是这一条；与上面 ruleDetailInit 那条同构）：
+      // 旧版 normalize 把 `@js:` header 当坏 JSON 丢弃（rules.header=null、原文只活在 raw 里）——
+      // 不重推则动态头永远不生效。raw 非对象 → 不动；raw 在场：键恒落成 string | null。
       const wantHeaderRule = rawHeaderRule(s.raw)
       if (wantHeaderRule !== undefined && s.rules.headerRule !== wantHeaderRule) {
         s.rules.headerRule = wantHeaderRule; changed = true
       } else if (s.rules.headerRule === undefined) {
         s.rules.headerRule = null; changed = true
       }
-      // ⑧ bookUrlPattern 按 raw 重推（与 ⑥⑦ 同构）：详情页嗅探字段是后来才读的，存量 rules 缺键
-      // → 27/158 声明了它的源搜索时照旧只跑列表规则（对面命中即按详情页解析）。
+      // bookUrlPattern 按 raw 重推（与上面 ruleDetailInit / headerRule 两条同构）：详情页嗅探字段是
+      // 后来才读的，存量 rules 缺键 → 声明了它的源搜索时照旧只跑列表规则（补推后命中即按详情页解析）。
       const wantPattern = rawRulePattern(s.raw)
       if (wantPattern !== undefined && s.rules.bookUrlPattern !== wantPattern) {
         s.rules.bookUrlPattern = wantPattern; changed = true
       } else if (s.rules.bookUrlPattern === undefined) {
         s.rules.bookUrlPattern = null; changed = true
       }
-      // ⑨ kind / wordCount 按 raw 补推（与 ⑥⑦⑧ 同族的存量收敛）：这两个字段后来才接进取值链路，
-      // 老数据的 rules 根本没这四个键 → 对面读得出的分类/字数对已入库的源永远是 null。
-      // **与 ⑥⑦⑧ 的差别**：只补 `undefined` 的键、不覆盖已有值——新入库的源由 normalize 正确派生
+      // ⑩ 静态头按 raw 补推（与 ⑦ headerRule 成对）：单引号形态的头曾被判成坏 JSON 丢弃，只改解析器
+      // 不动存量则受害源的头仍然是空的（现量见矩阵行 `b-header-static`）。
+      // 触发条件刻意收窄到「规则形态为 null 且头表也是 null」：那是旧版判失败的唯一形状，
+      // 不会覆盖任何今天被判为有效的值（合法空对象 `{}` 派生出来是 {}，不是 null）。
+      if (s.rules.headerRule === null && s.rules.header === null) {
+        const wantHeader = rawHeaderFields(s.raw)
+        if (wantHeader !== undefined) { s.rules.header = wantHeader; changed = true }
+      }
+      // kind / wordCount 按 raw 补推（与上面几条同族的存量收敛）：这两个字段后来才接进取值链路，
+      // 老数据的 rules 根本没这四个键 → 不补推则读得出的分类/字数对已入库的源永远是 null。
+      // **与上面三条的差别**：只补 `undefined` 的键、不覆盖已有值——新入库的源由 normalize 正确派生
       // （含字符串化容器那条路径），这里再按 raw 读一遍是第二条路，覆盖会把对的改成错的。
       const wantMeta = rawBookMetaFields(s.raw)
       if (wantMeta !== undefined) {
@@ -149,10 +154,18 @@ export class SourceRegistry {
     }
   }
 
-  /** 等待全部待写落地（任务收尾 / 测试断言）；无脏零开销 */
+  /** 等待全部待写落地（任务收尾 / 测试断言）；无脏零开销。
+   *  **排到静默，不是排调用那一刻的链尾**：只 await 一次的话，落在那次写 I/O 期间的 `edit` 会换成
+   *  一枚新的防抖计时器挂着——flush 已返回、数据根删掉之后它才烧，rename 被系统拒绝成为未处理拒绝。
+   *  终止条件是「这一轮既没有新链尾也没有脏」；**不设轮次上限**——`flush` 的合同就是等齐落盘，
+   *  加上限等于把同一个逃逸窗口藏回注释里。 */
   async flush(): Promise<void> {
-    this.mutations = 0
-    await this.writeNow()
+    for (;;) {
+      this.mutations = 0
+      const before = this.chain
+      await this.writeNow()
+      if (this.chain === before && !this.dirty) return
+    }
   }
 
   /** 标脏 + 调度写：阈值到点 → 立即写并等齐（await 语义在 edit 的 finally 里）；否则尾沿防抖后台写 */
@@ -202,6 +215,7 @@ export class SourceRegistry {
       hasHeader: s.rules.header != null || s.rules.headerRule != null,
       hasAuth: !!s.auth,
       authExpired: s.auth?.expired ?? false,
+      hasLoginUrl: s.rules.loginUrl !== null,
     }
   }
 

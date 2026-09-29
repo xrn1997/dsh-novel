@@ -25,19 +25,15 @@ import type { BookNavigation, ChapterContent, LinkRole, LocalImportWarning, Read
 /** 正文层字色由纸张色算：纯函数住址在 util.ts，此处只接线。 */
 
 /** 控制器层 z 序（不变量：**工具栏 > 遮罩**，面板在工具栏内）：
- *  面板嵌在 sticky 工具栏里，而 position:sticky + z-index 的工具栏**自成 stacking context**——
- *  面板自己的 z-index 只在工具栏内部有效，对外整层按工具栏的 z 参与排序。工具栏若 ≤ 遮罩，
- *  透明遮罩反压整层：面板看得见，但 elementFromPoint 打到的是遮罩，每个点击都被它吞掉直接
- *  关面板 = 「Aa 能弹出但点不了」（f0a0b0e 把工具栏改 sticky 时引入的真回归；无头 Edge 实测：
- *  工具栏 z5 → HIT=mask，z12 → HIT=opt。守卫见 tests/client/reader-ctrl-z.test.ts）。
- *  目录抽屉同用 panel 值（抽屉与 Aa 面板互斥、永不同场；遮罩只在 ctrlOpen 时渲染）。 */
+ *  面板嵌在 sticky 工具栏里，而 sticky + z-index 的工具栏**自成 stacking context**——面板自己的
+ *  z-index 只在工具栏内部有效。工具栏若 ≤ 遮罩，透明遮罩反压整层：面板看得见但点不了（「Aa 能
+ *  弹出但点不了」）。守卫见 tests/client/reader-ctrl-z.test.ts；目录抽屉同用 panel 值
+ *  （抽屉与 Aa/导出面板互斥、永不同场，遮罩由 `ctrlOpen` 与 `expOpen` 同候渲染）。 */
 export const CTRL_Z = { toolbar: 12, mask: 10, panel: 11 } as const
 
-/** 阅读控制器面板（android-ebook 同款概念）：悬浮于工具栏下（挂 sticky 工具栏内，
- *  定位与滚动都锚在工具栏上；z 序不变量见 CTRL_Z）；点遮罩关闭——遮罩在 reader 根容器。
- *  简约版：chip 式控件（novel-chip/.on），布局归样式类 .novel-prefs；
- *  行内只留定位与 z（ctrl-z 守卫断言面板渲染含 z-index:11）。
- *  role=dialog + aria-label：这层是能开能关的浮层，不是页面上普通一块（Esc 关，见 ReaderView）。 */
+/** 阅读控制器面板：挂 sticky 工具栏内（定位与滚动锚在工具栏上；z 序见 CTRL_Z），点遮罩关闭。
+ *  chip 式控件，布局归样式类 .novel-prefs，行内只留定位与 z；role=dialog + aria-label
+ *  （能开能关的浮层，Esc 关，共用 ReaderView 的一条 Esc）。 */
 export function PrefsPanel(): ReactNode {
   const prefs = useStore(prefsStore)
   const step = (delta: number): void => {
@@ -222,24 +218,17 @@ function currentNodeOf(blocks: Array<HTMLDivElement | null>, viewTop: number): V
 }
 
 /**
- * 阅读器：连续滚动流（章章首尾相接）。
+ * 阅读器：连续滚动流（章章首尾相接）。时序编排归「阅读会话」（reader-session.ts）——
+ * 本视图只做三件事：渲染会话状态、把 DOM 测量实现成 ReaderPort、把 scroll/resize 喂给会话。
+ * 滚动容器由 findScrollport 向上探测（现即 .novel-main 自己），滚动、进度、回跳一律按探测
+ * 结果算；只渲染已载章节，预取自限。
  *
- * 时序编排归「阅读会话」（reader-session.ts）：目录→存档恢复→懒加载→预取→
- * 进度落盘全在会话里并可单测；本视图只做三件事——渲染会话状态、把 DOM 测量实现成 ReaderPort、
- * 把 scroll/resize 事件喂给会话。滚动容器由 findScrollport 向上探测（现即 .novel-main 自己，
- * 见 scrollport.ts 头注）：滚动、进度、回跳一律按「真正在滚的容器」算；
- * 只渲染已载章节，预取自限。
+ * 图文（EPUB）三个组件只做呈现、只**接线**：正文 ChapterBody、目录树 ReaderNavigation、
+ * 脚注/附录 ReaderNotes——去哪一章哪个锚点、进度何时落盘仍是会话的事。
  *
- * 图文（EPUB）：正文走 ChapterBody（文字章逐行成段、图文章按白名单映射），目录抽屉走
- * ReaderNavigation（目录树——多个条目可指向同一章的不同锚点），脚注/附录走 ReaderNotes 面板。
- * 三处都只**接线**：去哪一章哪个锚点、进度何时落盘仍然是会话的事。
- *
- * 呈现层（简约版）：细工具栏（‹书架 · 居中书名 · ⤓/Aa/目录）+ 正文居中窄列
- * （布局归 .novel-rdr-body；prefs 色/字号/行距仍行内——正文层永不接宿主 token）
- * + 目录抽屉 = 正文的 flex 兄弟（sticky + 视口上限，锚视口不锚正文）。z 序仍归 CTRL_Z 常量行内。
- *
- * deps 注入：apiGet/apiSend/streamExport/saveBlob 全走 ReaderDeps——与 ShelfView/
- * SearchView 口径齐平；导出的时序编排归 export-run.ts，此处只接线。
+ * 呈现层：细工具栏 + 正文居中窄列（布局归样式类；prefs 色/字号/行距行内——正文层永不接宿主
+ * token），z 序归 CTRL_Z。deps 走 ReaderDeps（与 ShelfView/SearchView 齐平），导出编排归
+ * export-run.ts。口径详见 `docs/design/client.md`。
  */
 export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: {
   sourceId: string; bookKey: string; title: string; deps?: ReaderDeps
@@ -303,7 +292,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
         shelfBody.patch({ totalChapters: total })).catch(() => undefined)
     },
     afterFrames: (cb) => { requestAnimationFrame(() => requestAnimationFrame(cb)) },
-  }, readerPort), [readerPort, deps, sourceId, bookKey, title])
+  }, readerPort, deps.saveDebounceMs), [readerPort, deps, sourceId, bookKey, title])
 
   // 第三参 = getServerSnapshot：renderToString（smoke/SSR）必需，缺了直接抛
   const st = useSyncExternalStore(session.subscribe, () => session.state, () => session.state)
@@ -312,16 +301,15 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   const [drawer, setDrawer] = useState(false)
   const [ctrlOpen, setCtrlOpen] = useState(false)
   // 导出范围面板现场（纯视图状态）：开合 + 起止章字符串（输入态保字符串，校验单点在 parseRange）。
-  // 声明在 Esc effect 之前——浮层四兄弟（ctrlOpen/drawer/expOpen/note）共用一条 Esc，顺序即 TDZ 边界
+  // 声明在 Esc effect 之前——浮层五兄弟（ctrlOpen/drawer/expOpen/note/notesOpen）共用一条 Esc，顺序即 TDZ 边界
   const [expOpen, setExpOpen] = useState(false)
   const [expFrom, setExpFrom] = useState('1')
   const [expTo, setExpTo] = useState('')
   /** 注释面板现场（脚注/附录）：目标 + **开面板时压入的那条返回项**（会话给的句柄）+ 打开意图序号。
-   *  `entry` 决定关闭语义：非 null = 正文内链打开的（关闭即回引用处，消费那一条）；null = 目录直接
-   *  点进来的（没有引用处可回，关掉就只是关掉）。关闭时把这句柄交回会话——只有栈顶仍是它才会消费，
-   *  期间用户按过工具栏返回或跟了别的链接，那条就记着**别人的原处**，弹它会把主序列送错地方。
-   *  `seq` 每次「外层重新指向」都 +1：面板内部栈按它重置（同一个脚注被点第二次时目标值不变，
-   *  只比目标值会漏掉重置——期间用户可能已经在面板里跟到了别的文档）。 */
+   *  `entry` 决定关闭语义：非 null = 内链打开（关闭即回引用处）；null = 目录直接点进来（只关面板）。
+   *  句柄交回会话时只有栈顶仍是它才被消费——期间跟了别的链接，那条记的是别人的原处。
+   *  `seq` 每次「外层重新指向」都 +1，面板内部栈按它重置（只比目标值会漏：同一脚注被点第二次时
+   *  目标值不变，但期间用户可能已在面板里跟到别的文档）。 */
   const [note, setNote] = useState<{ target: SupplementTarget; entry: VisibleNode | null; seq: number } | null>(null)
   const noteSeqRef = useRef(0)
   /** 打开注释面板：序号自增（面板按它重置内部栈），目标与返回项句柄一起记下 */
@@ -329,10 +317,9 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     noteSeqRef.current += 1
     setNote({ target, entry, seq: noteSeqRef.current })
   }
-  /** 只收**面板这一层浮层**，不消费返回栈条目：用来做「开另一个角落浮层」时的互斥。
-   *  为什么不走 `closeNote`：那一条的语义是「关闭 = 回引用处」（经会话弹栈、还会 commit 一笔位置），
-   *  而「我要开目录」不是对阅读位置的表态——借它收面板等于开个抽屉把正文跳走。那条返回项留在栈里，
-   *  工具栏「↩ 返回原处」照常可用（同样的口径见下方导入说明面板）。 */
+  /** 只收**面板这一层浮层**，不消费返回栈条目——开另一个角落浮层（目录/Aa/导出/导入说明）时的
+   *  互斥用它，不走 `closeNote`：「我要开目录」不是对阅读位置的表态，借关闭语义收面板等于开个
+   *  抽屉把正文跳走。返回项留在栈里由「↩ 返回原处」承接（同口径见 toggleImportNotes）。 */
   const hideNoteSurface = (): void => {
     if (note !== null) setNote(null)
   }
@@ -366,16 +353,15 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     return () => document.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ctrlOpen, drawer, expOpen, note, notesOpen, session, sourceId])
-  /** 目录高亮：只在抽屉开着时取（一次 DOM 测量，不在滚动路径上）。
-   *  低频刷新是既有口径——只在**跨章**与换书时重算（`currentChapter` 变才醒），
-   *  同章内滚动不重算：那是每帧的量，为一条 aria-current 把整棵阅读器按帧唤醒不值当。 */
+  /** 目录高亮：只在抽屉开着时取（一次 DOM 测量，不在滚动路径上）；只在**跨章**与换书时重算
+   *  （`currentChapter` 变才醒）——同章内滚动是每帧的量，不值得为一条 aria-current 按帧唤醒。 */
   useEffect(() => {
     if (!drawer) return
     setNavActive(session.activeNavId())
   }, [drawer, currentChapter, navigation, session])
-  /** 打开抽屉即把当前项摆到抽屉视野的中间——**只滚抽屉自己**。不借 `scrollIntoView`：那个 API 会连
-   *  可滚祖先一起滚，实测把主阅读位置拉回内容顶部还顺手落一笔进度（`centerInScroller` 的口径与
-   *  被否决的掩盖法见 util.ts；缺陷读数在 docs/design/client.md「已知开口」）。 */
+  /** 打开抽屉即把当前项摆到视野中间——**只滚抽屉自己**，不借 `scrollIntoView`（它连可滚祖先一起
+   *  滚，会改写主阅读位置）。口径与被否决方案见 util.ts 的 centerInScroller，读数见
+   *  docs/design/client.md「只读浮层的落位只滚自己」。 */
   useEffect(() => {
     const drawerEl = drawerRef.current
     if (!drawer || drawerEl === null) return
@@ -402,8 +388,8 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   }
 
   /** 持久导入说明：**只有本地书有这份东西**，按书取一次（`local/warnings` 刻意不随取章携带）。
-   *  取不到就不出入口（不拿未知当「有」），但**不静默**——它失败说明本地产物读不了，
-   *  该报的那句要报（与本仓「两个半场都不许静默」同一条：入口不出现是降级，静默是欺骗）。 */
+   *  取不到就不出入口（不拿未知当「有」），但**不静默**：入口不出现是降级，失败仍上报（两个
+   *  半场都不许静默）。 */
   useEffect(() => {
     if (sourceId !== LOCAL_SOURCE_ID) { setImportNotes(null); return }
     let alive = true
@@ -418,10 +404,9 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     return () => { alive = false }
   }, [deps, sourceId, bookKey])
   const hasImportNotes = importNotes !== null && importNotes.length > 0
-  /** 导入说明面板与别的浮层互斥：两者同住右上角（`.novel-notes` 同一套几何与 z），叠在一起谁也读不了
-   *  ——与目录 / Aa / 导出面板同一条纪律。脚注面板在这里**只收面板、不消费返回项**（不调 `closeNote`）：
-   *  从正文内链打开的脚注面板一旦按关闭语义走，会经会话弹栈并把主序列**跳回**引用处、还落一笔存档——
-   *  而「看一眼导入说明」是只读动作，不该动主阅读位置（那条返回项仍留在栈里，工具栏「↩ 返回原处」照常可用）。 */
+  /** 导入说明面板与别的浮层互斥（同住右上角，与目录/Aa/导出同一条纪律）。脚注面板在这里
+   *  **只收面板、不消费返回项**（不调 `closeNote`）：「看一眼导入说明」是只读动作，按关闭语义走
+   *  会把主序列跳回引用处、还落一笔存档（口径同 hideNoteSurface）。 */
   const toggleImportNotes = (): void => {
     setCtrlOpen(false)
     setDrawer(false)
@@ -523,7 +508,8 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   const shownError = error ?? exportState.error
   return (
     <div data-novel-view="reader" className="novel-rdr">
-      {/* 偏好/导出面板遮罩：挂 reader 根容器（position:relative 定位参照）盖满整个阅读区——只盖工具栏条时点正文关不掉面板（T4 修复）；导出面板同用（互斥浮层同一把 Esc + 同一层遮罩） */}
+      {/* 偏好/导出面板遮罩：挂 reader 根容器盖满整个阅读区——只盖工具栏条时点正文关不掉面板；
+          导出面板同用（互斥浮层同一把 Esc + 同一层遮罩） */}
       {(ctrlOpen || expOpen) && (
         <div data-novel-ctrl-mask onClick={() => { setCtrlOpen(false); setExpOpen(false) }}
           style={{ position: 'absolute', inset: 0, zIndex: CTRL_Z.mask }} />
@@ -544,8 +530,8 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
           <span className="novel-rdr-book">{title}</span>{toc === null ? '' : ` · 共 ${toc.length} 章`}
         </div>
         <div className="novel-rdr-acts">
-          {/* 导入说明入口：**只在真有持久告警的本地书上出现**（有损导入的交代是这本书的真实状态；
-              没告警就一个字都不多说）。点开是只读面板——重看入口，不重复取数、不写进度。 */}
+          {/* 导入说明入口：**只在真有持久告警的本地书上出现**（没告警一个字都不多说）。
+              点开是只读面板——重看入口，不重复取数、不写进度。 */}
           {hasImportNotes && (
             <button className="novel-btn sm" aria-expanded={notesOpen} aria-label="导入说明"
               onClick={toggleImportNotes} title={`导入说明（${importNotes.length} 条）`}>导入说明</button>
@@ -590,7 +576,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
             onClick={() => { setExpOpen(false); setNotesOpen(false); hideNoteSurface(); setCtrlOpen(!ctrlOpen) }}
             title="阅读设置">Aa</button>
           {/* 目录与 Aa/导出/注释面板互斥：工具栏已在遮罩之上（CTRL_Z），点目录不再被遮罩顺手关面板——自己关。
-              注释面板必须一起收：它同住右上角、且更宽，叠在上面会让目录**点不动**（实测命中测试打到面板头）。 */}
+              注释面板同住右上角且更宽，叠着会让目录**点不动**（命中测试打到面板头）。 */}
           <button className="novel-btn sm" aria-expanded={drawer} aria-label="目录"
             onClick={() => { setCtrlOpen(false); setExpOpen(false); setNotesOpen(false); hideNoteSurface(); setDrawer(!drawer) }}
             title={toc === null ? '目录' : `目录（${toc.length}）`}>目录</button>
@@ -601,8 +587,8 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
         <i className="novel-rdr-trail" aria-hidden="true"
           style={{ '--novel-pct': String(toc === null ? 0 : (currentChapter + 1) / toc.length) } as CSSProperties} />
       </div>
-      {/* 会话错误的重试必须真的重拉（此前 onRetry 接到 setExportState(IDLE_EXPORT)——导出态专用，
-          对会话错误是空操作，红色错误条永久粘屏）；导出错误才走导出态复位。 */}
+      {/* 会话错误的重试必须真的重拉（接到导出态复位对会话错误是空操作、红条会永久粘屏）；
+          导出错误才走导出态复位。 */}
       {shownError !== null && (
         <ErrorBanner error={shownError} onRetry={() => {
           if (error !== null) session.retry()

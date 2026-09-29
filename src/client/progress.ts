@@ -15,7 +15,7 @@ export function ratioWithin(a: ChapterAnchor, scrollTop: number): number {
   return a.height > 0 ? Math.min(1, Math.max(0, (scrollTop - a.start) / a.height)) : 0
 }
 
-/** 定位当前章与章内比例：取 start <= scrollTop 的最大锚点；比例 = 章内已滚过的高度占比 */
+/** 定位当前章与章内比例：取起点不晚于滚动位的最大锚点；比例 = 章内已滚过的高度占比 */
 export function locateChapter(anchors: ChapterAnchor[], scrollTop: number): { chapterIndex: number; offsetRatio: number } {
   if (anchors.length === 0) return { chapterIndex: 0, offsetRatio: 0 }
   let idx = anchors[0].index

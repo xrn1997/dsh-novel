@@ -9,17 +9,11 @@ import type { CoreDepsOverrides } from './fake-deps.js'
 
 /**
  * 搜索观察 module 的**轮次身份**测试（身份与游标不可分开，口径见 docs/design/client.md）。
- *
- * Seam（评审预先圈定）：`useSearchJob` 这一个观察 interface，两种传输 adapter
- * （SSE 帧 `apiEventStream` / 快照查询 `apiGet`）都从它驱动；「服务端」是真实的
- * `SearchJobs` 持有者（单槽：新提交即替换旧轮），假的只有传输。
- *
- * 缺陷形态（评审复现）：页面甲看 A 轮，页面乙启动 B 轮；甲的连接/轮询带着 A 的
- * 旧游标读到 B 的切片快照，观察者只验 `acc.current === a` 不验 `job.id` →
- * B-first 被旧游标吃掉、A/B 结果混排、keyword 与 id 各说各话。
- *
- * 修复口径：换轮在观察 module 内收尾——丢弃旧累积、从 `since=0` 恢复新轮完整基线、
- * 重新建立观察（旧连接 abort）；既不「只改 id 继续追加」，也不「只丢帧等旧任务等到天荒地老」。
+ * Seam：`useSearchJob` 一个观察 interface 驱动两种传输 adapter（SSE 帧 / 快照查询），「服务端」
+ * 是真实的 `SearchJobs` 持有者（单槽：新提交即替换旧轮），假的只有传输。
+ * 缺陷形态：甲看 A 轮、乙启动 B 轮，甲带 A 的旧游标读到 B 的切片，观察者只验累积不验 `job.id`
+ * → B-first 被吃掉、A/B 混排。修复口径：换轮在观察 module 内收尾（丢旧累积、从 `since=0` 恢复
+ * 新轮基线、重连观察），既不「只改 id 继续追加」也不「只丢帧等旧任务」。
  */
 
 afterEach(cleanup)

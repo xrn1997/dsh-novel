@@ -3,9 +3,13 @@ import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import { createApiHandler } from './api/dispatch.js'
 import { ensureUnhandledGuard } from './engine/js-sandbox.js'
+import { DEFAULT_CACHE_MAX_BYTES } from './services/cache.js'
+import { DEFAULT_EXPORT_DELAY_MS } from './services/export.js'
+import { DEFAULT_TIMEOUT_MS } from './services/fetcher.js'
 import type { JobHost } from './services/import-job.js'
+import { DEFAULT_MAX_IMPORT_BYTES } from './services/localbooks.js'
 import { readSystemProxy, resolveProxyUrl } from './services/proxy.js'
-import { ReadingService } from './services/reading.js'
+import { DEFAULT_JS_BUDGET_MS, DEFAULT_SEARCH_PARALLEL, ReadingService } from './services/reading.js'
 import { novelDir } from './services/storage.js'
 import { NOVEL_API_PREFIX } from './shared/wire.js'
 import { registerTools } from './tools/tools.js'
@@ -45,8 +49,8 @@ export interface NovelConfig {
   searchTimeoutMs?: number
   searchParallel?: number
   /** js 沙箱预算（vm 同步闸与异步总时长共用；引擎缺省 2000ms 只作回退）。
-   *  缺省 15000：legado Rhino 无硬超时，真实源的多请求目录脚本（java.ajax×2 + md5 签名，
-   *  txs12 源实测）2s 预算必炸——探针 verified 只证明搜索面，正文链路靠这个预算放行。 */
+   *  缺省 15000：真实源的多请求目录脚本（java.ajax×2 + md5 签名，txs12 源实测）
+   *  2s 预算必炸——探针 verified 只证明搜索面，正文链路靠这个预算放行。 */
   jsTimeoutMs?: number
   cacheMaxBytes?: number
   exportDelayMs?: number
@@ -66,14 +70,16 @@ export const Config = Schema.object({
   // 空对象缺省：ObjectT 静态要求全字段（库的类型偏严），运行时缺省由 apply 侧 coalesce DEFAULTS
 }).default({} as any)
 
-/** 无硬编码可调参数原则的缺省面——cordis.yml 可覆盖每一项 */
+/** 无硬编码可调参数原则的缺省面——cordis.yml 可覆盖每一项。
+ *  **字面量只出现在各自的消费模块里**（本表全部引常量）：这里再写一遍数字，就等于给同一个口径
+ *  开了第二个主人——改一处漏一处时，配置文件看到的默认值与服务层实际回退值会分叉。 */
 const DEFAULTS = {
-  searchTimeoutMs: 15_000,
-  searchParallel: 5,
-  jsTimeoutMs: 15_000,
-  cacheMaxBytes: 200 * 1024 * 1024,
-  exportDelayMs: 300,
-  localImportMaxBytes: 50 * 1024 * 1024,
+  searchTimeoutMs: DEFAULT_TIMEOUT_MS,
+  searchParallel: DEFAULT_SEARCH_PARALLEL,
+  jsTimeoutMs: DEFAULT_JS_BUDGET_MS,
+  cacheMaxBytes: DEFAULT_CACHE_MAX_BYTES,
+  exportDelayMs: DEFAULT_EXPORT_DELAY_MS,
+  localImportMaxBytes: DEFAULT_MAX_IMPORT_BYTES,
 }
 
 /** 双重启用防御：bundles+插槽双启用时重复注册 /novel-api 会崩 dsh web（dsh-reader 验证过的坑）。

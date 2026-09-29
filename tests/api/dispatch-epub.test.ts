@@ -1,5 +1,6 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
+import { Readable } from 'node:stream'
 import path from 'node:path'
 import { ReadingService } from '../../src/services/reading.js'
 import { chapterContentToText } from '../../src/services/chapter-content.js'
@@ -163,6 +164,42 @@ describe('EPUB 导入 → 阅读（真实 HTTP）', () => {
     const r = await fetch(api(queries.localResource({ id: book.bookKey, resourceId: 'r0' })))
     expect(r.status).toBe(200)
     expect(Buffer.from(await r.arrayBuffer()).equals(IMAGE_SAMPLES.png)).toBe(true)
+  })
+
+  it('断开发生在「打开资源」那次 await 之内：那条流也必须被销毁（不留 fd 到 GC）', async () => {
+    // 上面那条是概率性的（abort 与请求谁先到不确定）；这条把窗口变成**确定性**的：
+    // 资源口的收尾监听挂在 `await getLocalResource(...)`（查表 + 打开文件/stat）**之后**，
+    // 客户端若在那次 await 期间就断开，`close` 早已发过、挂监听也等不到第二次——旧实现那条流
+    // 没人销毁，fd 挂到 GC，而 Node ≥22 把「GC 期关闭仍打开的 FileHandle」升格成未捕获错误
+    // （表现为整轮测试在收尾处红，不是某条用例失败）。这里把那次 await 拉成一个显式闸，
+    // 在闸里断开，再放行——断言的是**返回的那条流被销毁了**。
+    const book = await importBook('epub3-rich', '断开窗口.epub')
+    let entered: () => void = () => undefined
+    const reached = new Promise<void>((resolve) => { entered = resolve })
+    let openGate: () => void = () => undefined
+    const held = new Promise<void>((resolve) => { openGate = resolve })
+    const stream = new Readable({ read() {} })
+    const spy = vi.spyOn(svc, 'getLocalResource').mockImplementation(async () => {
+      entered()                 // 告诉用例：服务端已经进到这次 await 里了
+      await held                // 闸：断开就发生在这里面
+      return { mediaType: 'image/png', bytes: 10, stream }
+    })
+    try {
+      const ctrl = new AbortController()
+      const aborted = fetch(api(queries.localResource({ id: book.bookKey, resourceId: 'r0' })), { signal: ctrl.signal })
+        .catch(() => undefined)
+      await reached
+      ctrl.abort()
+      // 让服务端先观察到 socket 断开（close 在 abort 之后到达），再放行这次「打开」
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      openGate()
+      await aborted
+      // 旧实现：这条流永远不被销毁（断言在 2s 内保持 false → 红）
+      await vi.waitFor(() => expect(stream.destroyed, '断开后返回的流必须被就地销毁').toBe(true), { timeout: 2_000 })
+    } finally {
+      spy.mockRestore()
+      stream.destroy()
+    }
   })
 })
 

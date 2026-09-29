@@ -9,7 +9,7 @@ export function novelDir(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /** 原子写与损坏备份的命名约定——**唯一住址在这里**。
- *  病根（2026 评审记的隐式耦合）：删书的清点原先自己写死 `.tmp` / `.bak` 去猜低层留下的名字，
+ *  病根（一处隐式耦合）：删书的清点原先自己写死 `.tmp` / `.bak` 去猜低层留下的名字，
  *  「今天两处都对」靠的是没人改过命名，而不是有守卫。改成一个名字的现在：低层写与消费方
  *  （`localbooks.discard`）都从这里取值，改名只红一处。 */
 const TEMP_SUFFIX = '.tmp'
@@ -45,7 +45,7 @@ export class CorruptJsonError extends Error {
  * - **存在但解析失败** → 备份为 `<file>.bak` + 打日志 + 抛 CorruptJsonError。
  *
  * 解析失败绝不能折叠成 fallback：SourceRegistry.load 会把截断/损坏的 sources.json 读成空注册表，
- * 随后任一次 edit 落盘都会用新状态覆盖整文件——用户的 642 条源无告警消失（数据丢失方向）。
+ * 随后任一次 edit 落盘都会用新状态覆盖整文件——用户整库的源无告警消失（数据丢失方向）。
  */
 export async function readJson<T>(file: string, fallback: T): Promise<T> {
   let raw: string
@@ -64,11 +64,10 @@ export async function readJson<T>(file: string, fallback: T): Promise<T> {
   }
 }
 
-/** 同文件写串行化：并发 rename 同一目标在 Windows 上互斥失败（EPERM——
- *  实测批量导入 642 源并发 importOne 时 25 次炸在 sources.json rename）。按文件名排队，
- *  后写等前写落地再 rename，语义不变（最终落盘的仍是最后一次写的数据）。
- *  这是**所有**落盘的唯一低层写路径：注册表/书架 JSON 与 PageCache 正文共用（历史分叉：
- *  PageCache 曾自抄一份无排队的 writeAtomic，阅读 + 导出/工具并发抓同章实测 30/80 EPERM→500）。 */
+/** 同文件写串行化：并发 rename 同一目标在 Windows 上互斥失败（EPERM——批量导入与并发读正文
+ *  都实测炸过）。按文件名排队，后写等前写落地再 rename，语义不变（最终落盘的仍是最后一次写的
+ *  数据）。这是**所有**落盘的唯一低层写路径：注册表/书架 JSON 与 PageCache 正文共用
+ *  （PageCache 曾自抄一份无排队的写，与导出/工具并发抓同章即 EPERM→500）。 */
 const renameChains = new Map<string, Promise<void>>()
 
 /** 临时文件 + rename 原子写（低层、纯文本）；自动建父目录。序列化归调用方。
@@ -114,9 +113,17 @@ export function createDebouncedWriter(delayMs = 100) {
       const entry = { data, timer: setTimeout(() => void flushOne(file), delayMs), waiters: old?.waiters ?? [] }
       pending.set(file, entry)
     },
-    flush(file?: string): Promise<void> {
-      const files = file ? [file] : [...pending.keys()]
-      return Promise.all(files.map(flushOne)).then(() => undefined)
+    /** 等齐落盘：排到**静默**，不是排「调用那一刻的快照」。
+     *  只取一次快照的话，第一轮 I/O 在途时新 `schedule` 的那笔写留在计时器里——flush 已返回、
+     *  进程收尾后它才自己烧：Windows 上表现为 `rename` 撞 EPERM 的未处理拒绝（门绿 exit≠0 的现场）。
+     *  终止条件是「这一轮没有挂起写」，**刻意不设轮次上限**：加上限等于把同一个逃逸窗口藏回去。
+     *  指定 file 时只等那一支（没有它的挂起写就立即 resolve）。 */
+    async flush(file?: string): Promise<void> {
+      for (;;) {
+        const files = file === undefined ? [...pending.keys()] : pending.has(file) ? [file] : []
+        if (files.length === 0) return
+        await Promise.all(files.map(flushOne))
+      }
     },
   }
 }

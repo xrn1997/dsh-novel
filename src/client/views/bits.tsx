@@ -75,6 +75,19 @@ export function jobPct(job: Pick<JobState, 'done' | 'total'>): number {
   return job.total === 0 ? 0 : Math.round((job.done / job.total) * 100)
 }
 
+/**
+ * 搜索轮次的完成百分比（**搜索面的唯一算式**）。按**源数**算：满格是算出来的而不是写死的——
+ * 被停止的轮次照实停在它真正走到的位置。clamp 到 100 是因为 done 可能超过 total（跑到一半源被
+ * 停用/删掉，分母缩了、分子没缩）。
+ *
+ * **与 `jobPct` 不是同一口径**（那个按任务条目、不 clamp），已裁各自具名不合并——见
+ * `docs/design/client.md` 已知开口第 3 条。
+ */
+export function searchPct(round: { done: number; total: number } | null): number {
+  if (round === null || round.total === 0) return 0
+  return Math.min(100, Math.round((round.done / round.total) * 100))
+}
+
 /** 进度段（.novel-progress）：运行卡、状态条迷你条与书架卡片同源——role/aria 三件套只写这一份。
  *  推进走 `--novel-pct` → 样式层 `transform: scaleX()`：改 width 每次触发布局，
  *  一屏几十张卡 + 搜索条 + 运行卡同时在途就是逐帧重排（合成层只改 transform）。

@@ -166,6 +166,11 @@ export interface LocalResource {
   readonly stream: Readable
 }
 
+/** 本地导入上限（缺省 50MB）。**这个数是唯一主人**：传输层（`api/dispatch.ts` 读 `service.localImportMaxBytes`）、
+ *  门面（`reading.ts` 的 create/from 回退）与组合根 DEFAULTS 全部走它——两侧同一值是有意的：
+ *  流读时按它计数，解析层再按它判一次，两边不一致就会出现「读进来了却拒不解析」的错觉。 */
+export const DEFAULT_MAX_IMPORT_BYTES = 50 * 1024 * 1024
+
 const MAX_CACHED_BOOKS = 3
 /** EPUB 原文在书目录里的名字（重解析路径保留上传字节） */
 const ORIGINAL_EPUB = 'original.epub'
@@ -177,13 +182,9 @@ const STAGING_SUFFIX = '.importing'
  *
  * 三条口径（改这一层先读它们）：
  * ① **分流只看魔数**：文件头是 ZIP 本地头签名 `PK\x03\x04` 即走 EPUB 路径，此后归档层与包层的
- *    **任何**失败都照原样上抛（`EpubImportError` → 400）——加密位 / 符号链接 / 非 store-deflate /
- *    重名 / zip-slip / 条目与解压超限 / 缺 mimetype / 坏 XML 都是这条路径上的失败，**不做 TXT 兜底**。
- *    不是 ZIP 魔数的才走既有 TXT 解码链（BOM → UTF-8 严格 → GBK 回退，一字不改）。
- *    为什么不去「先试着开归档、失败就当 TXT」：那正是把归档层明令的**安全拒绝**吞成「不是 EPUB」，
- *    再让 GBK 兜底与「无标题单章」把一份加密 ZIP 落成一整本乱码、以 200 入架——本仓
- *    「失败冒充成功」的最坏形态。分流判据因此只认文件头 4 字节，不看任何解析结果；
- *    缺 mimetype 的普通 ZIP 同属 EPUB 路径的失败，不为它开第二条路。
+ *    **任何**失败都照原样上抛（`EpubImportError` → 400），**不做 TXT 兜底**；不是 ZIP 魔数的才走
+ *    既有 TXT 解码链（BOM → UTF-8 严格 → GBK 回退，一字不改）。理由与被否决方案
+ *    （「先试着开归档、失败就当 TXT」）见 `hasZipMagic` 的注与 `docs/design/services.md`。
  * ② **顶层元数据是提交标记**：EPUB 先在 `local/<uuid>.importing/` 建全部产物，一次 rename 到
  *    `local/<uuid>/`，再原子写 `local/<uuid>.json`，最后才由门面入架。本地目录与 shelf.json 之间
  *    **没有**跨文件事务，不假装有：强杀恰在「元数据写完、书架落盘前」会留一份完整但未入架的副本，
@@ -206,7 +207,7 @@ export class LocalBooks {
   }
 
   static async create(dir: string, opts?: { maxImportBytes?: number }): Promise<LocalBooks> {
-    const lb = new LocalBooks(dir, opts?.maxImportBytes ?? 50 * 1024 * 1024)
+    const lb = new LocalBooks(dir, opts?.maxImportBytes ?? DEFAULT_MAX_IMPORT_BYTES)
     await fs.mkdir(lb.localDir, { recursive: true })
     return lb
   }
@@ -513,13 +514,13 @@ function bookMetaOf(data: EpubImportData, bookKey: string): LocalBookMeta {
  * 分流的**唯一判据**（口径①）：ZIP 本地头签名 `PK\x03\x04`。
  *
  * 为什么只看文件头 4 字节、不看任何解析结果：把「打不开的 ZIP」也算成「不是 EPUB」就等于让归档层
- * 明令的安全拒绝（加密、符号链接、非 store-deflate、重名、zip-slip、超限）与包层失败统统落回 TXT 链，
- * 而 TXT 链对任何字节都能给出结果（GBK 兜底 + 无标题单章）——一份加密 ZIP 会变成 200 的整本乱码。
- * 判定「是 EPUB」不再比判定「不是」更严：ZIP 就是 ZIP，是 EPUB 与否由 EPUB 路径自己判并对失败负责。
+ * 明令的安全拒绝（加密、zip-slip、超限……）与包层失败统统落回 TXT 链，而 TXT 链对任何字节都能
+ * 给出结果（GBK 兜底 + 无标题单章）——一份加密 ZIP 会变成 200 的整本乱码。ZIP 就是 ZIP，
+ * 是 EPUB 与否由 EPUB 路径自己判并对失败负责。
  *
- * 另一面（brief 明令）：**不新增「二进制即拒收」的启发式**——那会让现网本来能读的 TXT（GBK 短篇、
- * 含控制字符的导出文件）变成拒收，比乱码更坏。这里的判据是白名单式的：只有 ZIP 签名改道，
- * 其余字节一律走既有 TXT 解码链（GBK 回退维持原样）。
+ * 另一面同样刻意（裁决见 `docs/design/services.md` 的本地书分流一节）：**不新增「二进制即拒收」
+ * 的启发式**——那会让现网本来能读的 TXT（GBK 短篇、含控制字符的导出文件）变成拒收，比乱码更坏。
+ * 判据是白名单式的：只有 ZIP 签名改道，其余字节一律走既有 TXT 解码链。
  */
 function hasZipMagic(buf: Buffer): boolean {
   return buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04

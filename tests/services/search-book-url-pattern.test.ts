@@ -11,9 +11,9 @@ import { makeTempDir, trackService } from '../temp-dir.js'
 import type { NovelSource } from '../../src/services/types.js'
 
 /**
- * bookUrlPattern 嗅探（对面 `model/webBook/BookList.kt`：`analyzeBookList` 命中 pattern 即按详情页
- * 解析并 return、`collections.isEmpty()` 且**未声明 pattern** 时回落详情、`getInfoItem` 取字段与定
- * URL）。Kotlin `String.matches(Regex)` 是**整串**匹配——JS 侧必须锚定，不能裸 `RegExp.test`。
+ * bookUrlPattern 嗅探（命中 pattern 即按详情页
+ * 解析并 return、列表为空且**未声明 pattern** 时回落详情、info 形态取字段与定
+ * URL）。pattern 判定是**整串**匹配——JS 侧必须锚定，不能裸 `RegExp.test`。
  */
 
 const BASE = 'https://s.com'
@@ -68,7 +68,7 @@ describe('fetchSearchPage 的 bookUrlPattern 判定', () => {
     const r = await fetchSearchPage(src({ bookUrlPattern: 'https://s\\.com/search' }), '书', f)
     expect(r.ok && r.shape).toBe('list')
     if (!r.ok || r.shape !== 'list') return
-    expect(r.items).toHaveLength(2)
+    expect(r.contexts).toHaveLength(2)
   })
   it('命中判定用**落地地址**（重定向后的 res.url，与对面 baseUrl=res.url 同口径）', async () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage(DETAIL_BODY, `${BASE}/book/123/`) })
@@ -87,7 +87,7 @@ describe('fetchSearchPage 的 bookUrlPattern 判定', () => {
     const r = await fetchSearchPage(src({ bookUrlPattern: 'https://s\\.com/x/\\d+' }), '书', f)
     expect(r.ok && r.shape).toBe('list')
     if (!r.ok || r.shape !== 'list') return
-    expect(r.items).toEqual([])
+    expect(r.contexts).toEqual([])
   })
   it('缺 ruleBookList 不再是 RuleMissing（对面 getElements("") = 空列表 → 详情回落）', async () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage(DETAIL_BODY) })
@@ -103,7 +103,7 @@ describe('fetchSearchPage 的 bookUrlPattern 判定', () => {
     }), '书', f)
     expect(r.ok && r.shape).toBe('list')
     if (!r.ok || r.shape !== 'list') return
-    expect(r.items).toEqual([])
+    expect(r.contexts).toEqual([])
   })
   it('未声明 ruleBookInfo.name（平铺方言）→ 不开详情形态：嗅探命中也只 0 条，不拿搜索规则造假书目', async () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage(DETAIL_BODY) })
@@ -112,7 +112,7 @@ describe('fetchSearchPage 的 bookUrlPattern 判定', () => {
     }), '书', f)
     expect(r.ok && r.shape).toBe('list')
     if (!r.ok || r.shape !== 'list') return
-    expect(r.items).toEqual([])
+    expect(r.contexts).toEqual([])
   })
   it('pattern 不是合法正则 → warn 点名 + 按未声明处理（列表照旧，不静默也不炸搜索）', async () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage(LIST_BODY) })

@@ -36,14 +36,13 @@ import { decodeEpubXml, parseXml, xmlBudget, type XmlBudget, type XmlLimits } fr
  * ② **失效目标一律失败**：导航/正文链接指到的文档与锚点必须真的存在（坏目标不冒充成功），
  *    重复锚点在扫描期就报错，远程图片与损坏/超预算/**被加密**（原因必须点名加密，不许按混淆字节
  *    说成「损坏」）的图片让导入失败并点名资源。
- *    **唯一例外**：锚点存在过、却随**被剥离的内容**（正文内联 SVG 等，口径见 `documents.ts` 注③④）
- *    一起不在树上了。那不是「我们读不懂这个目标」——锚点确实在源文档里，是**我们自己**剥掉了承载
- *    它的图形，事实清楚——所以走降级 + 告警（`epub-degraded-anchor`）而不是拒整本：
- *    **导航目标**降级成「该文档 + 无片段」（跳到该文档开头，导航仍然可用），**正文内链**降级成
- *    纯文本（只留子内容、不出 link 节点）。两者的告警都点名文档与锚点，用户看得见降级事实。
- *    拼写错、指向从未存在的 id 仍然按坏书拒收：降级只认「被剥离的内容里确实有过这个名字」。
+ *    **唯一例外**：锚点存在过、却随**被剥离的内容**一起不在树上了（口径见 `documents.ts` 头注③④）
+ *    ——那是**我们自己**剥掉了承载它的图形，不是「没有目标」，所以走降级 + 告警
+ *    （`epub-degraded-anchor`）：**导航目标**降级成「该文档 + 无片段」（跳到文档开头），
+ *    **正文内链**降级成纯文本。两者告警都点名文档与锚点。拼写错、指向从未存在的 id 仍拒收：
+ *    降级只认「被剥离的内容里确实有过这个名字」。
  * ③ **被剥除的活动内容只记告警**（丢了什么看得见），**可见图形不支持则报错**——两者不是一回事。
- *    例外是正文内联 SVG：剥离 + 告警，只有它是该文档唯一内容时才报错（口径与理由见 `documents.ts` 头注③）。
+ *    例外是正文内联 SVG：剥离 + 告警，只有它是该文档唯一内容时才报错（理由见 `documents.ts` 头注③）。
  */
 
 /** 认得的正文媒体类型（唯一一项）：spine 或链接指向别的类型即「不是可读正文」 */
@@ -293,9 +292,8 @@ async function orchestrate(archive: EpubArchive, outputDir: string, limits: Part
   /**
    * 查锚点：先查树上那张表，再查「被剥离的锚点」名单。
    *
-   * 两边都不在才是坏书（拼写错、指向不存在的 id）：我们读不懂这个目标就不猜。**在名单里**意味着
-   * 锚点确实在源文档里、是我们自己剥掉了承载它的图形（内联 SVG 等）——那不是「没有目标」，
-   * 所以由调用方降级 + 告警，不在这里抛错。
+   * 两边都不在才是坏书（拼写错、指向不存在的 id）：读不懂这个目标就不猜。**在名单里** = 锚点确实
+   * 存在过、是我们自己剥掉了承载它的图形——由调用方降级 + 告警，不在这里抛错（口径见头注②）。
    */
   const lookupAnchor = (doc: ScannedDocument, fragment: string, context: string): AnchorLookup => {
     const anchorId = doc.anchors.get(fragment)
@@ -379,9 +377,8 @@ async function orchestrate(archive: EpubArchive, outputDir: string, limits: Part
       kind: 'image', id: ids.node(), resourceId: registered.ref.id, alt: '',
       width: registered.width, height: registered.height,
     }
-    // 被顶替掉的容器各自留着锚点：目录与正文指向它们（`#cover` 这类）的目标必须有落点，
-    // 否则那个锚点 ID 在树上不存在——落位退化成章首、目录当前项也量不到（锚点是扫描期铸的，
-    // 而承载它的容器随整页 SVG 一起没了）。由内到外逐层包一个 div，身份一一承接。
+    // 被顶替掉的容器各自留着锚点，必须有落点（否则绑到树上不存在的 ID，落位退化成章首）——
+    // 由内到外逐层包一个 div，身份一一承接（理据见 documents.ts 的 `SvgOnlyPage.carriedAnchors`）。
     return [[...page.carriedAnchors].reverse().reduce<ContentNode>(
       (child, anchorId) => containerNode(anchorId, [child]), image,
     )]

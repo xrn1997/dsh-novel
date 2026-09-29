@@ -1,9 +1,9 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ReadingService } from '../services/reading.js'
-import { exportBook } from '../services/export.js'
+import { exportBook, DEFAULT_EXPORT_DELAY_MS } from '../services/export.js'
 import { SourceNotFoundError } from '../services/errors.js'
 import { SVG_MEDIA_TYPE } from '../services/epub/resources.js'
-import { ApiError, isTrustedRequest, readJsonBody, writeError, writeOk } from './wire.js'
+import { ApiError, isTrustedRequest, readCappedBody, readJsonBody, writeError, writeOk } from './wire.js'
 import { NOVEL_API_PREFIX, PARAMS, paramRoutes, pickShelfMeta, ROUTES, SEG } from '../shared/wire.js'
 
 /** 「书不在架上」文案单点（此前 shelfPut 两形态逐字两份） */
@@ -82,7 +82,7 @@ async function route(
     }
     if (b === SEG.import) {
       guard(method, 'POST', ROUTES.sourcesImport.path)
-      // 真实 legado 多源导出常见数 MB（实测用户文件 4.8MB/642 源）——上限 32MB，默认 1MB 会把最大流量的包挡在门外
+      // 真实多源导出常见数 MB 级——上限 32MB，默认 1MB 会把最大流量的包挡在门外
       const body = await readJsonBody<{ files?: unknown } | null>(req, null, 32 * 1024 * 1024)
       const files = body?.files
       if (!Array.isArray(files) || files.length === 0
@@ -188,9 +188,9 @@ async function route(
   }
   if (a === SEG.search && b === SEG.jobStream) {
     // 进度推送的加速器（SSE）：首帧 = 带 `since` 的同一份快照（baseline），此后每次状态变化补一帧，
-    // 终态即关流。断线重连 = 重新起一条并带上已收到的游标——「推送不 replay、显式 query 才是真相」
-    // 这条官方口径（`docs/reference/dsh-plugin-api.md` §9）由两个通道共用同一游标来兑现，
-    // 所以推送在或不在、快或慢，客户端的合并代码是同一份。
+    // 终态即关流。断线重连 = 重起一条并带已收到的游标——「推送不 replay、显式 query 才是真相」的
+    // 官方口径（见 `docs/reference/dsh-plugin-api.md`）由推送与轮询两通道共用同一游标兑现，
+    // 客户端的合并代码因此只有一份。
     guard(method, 'GET', ROUTES.searchJobStream.path)
     const raw = Number(url.searchParams.get(PARAMS.since) ?? '0')
     let cursor = Number.isInteger(raw) && raw > 0 ? raw : 0
@@ -325,7 +325,7 @@ async function route(
         getChapter: (s, b, i) => service.getChapter(s, b, i),
       },
       sourceId, bookUrl,
-      { title, delayMs: opts.exportDelayMs ?? 300, from, to, signal: ctrl.signal },
+      { title, delayMs: opts.exportDelayMs ?? DEFAULT_EXPORT_DELAY_MS, from, to, signal: ctrl.signal },
     )
     try {
       for await (const chunk of gen) {
@@ -354,17 +354,10 @@ async function route(
       const name = url.searchParams.get(PARAMS.name)?.trim() ?? ''
       if (name === '') throw new ApiError('缺 query 参数 name（文件名）', 400, 'BadRequest')
       const max = service.localImportMaxBytes
-      const chunks: Buffer[] = []
-      let size = 0
-      let over = false
-      for await (const chunk of req) {
-        size += (chunk as Buffer).length
-        if (size > max) { over = true; break }             // 流式计数，不整buf再查
-        chunks.push(chunk as Buffer)
-      }
-      if (over) throw new ApiError(`文件超过 ${Math.round(max / 1024 / 1024)}MB 上限`, 413, 'PayloadTooLarge')
+      // 流读与上限判据归 readCappedBody（与 JSON 信封体同一份实现），本处只给措辞
+      const bytes = await readCappedBody(req, max, (m) => `文件超过 ${Math.round(m / 1024 / 1024)}MB 上限`)
       // 分流（TXT/EPUB 按内容）、发布与自动上架全归门面；回执就是 wire 的 LocalImportResponse
-      writeOk(res, await service.localImport(Buffer.concat(chunks), name))
+      writeOk(res, await service.localImport(bytes, name))
       return
     }
     if (b === SEG.document) {
@@ -388,12 +381,10 @@ async function route(
       const resource = await service.getLocalResource(id, resourceId)
       res.writeHead(200, resourceHeaders(resource.mediaType, resource.bytes))
       const { stream } = resource
-      // 断连即销毁本条流（不动别的请求）；头已发，流上出错只能断连，不能再补错误信封——
-      // 但错误必须留痕（吞成静默断连会让人对着「读了一半没了」猜原因），两侧各管对端的收尾。
-      // 上面那次 await（查资源表 + 打开文件）期间客户端可能已经断开：那时 'close' 早发过了，
-      // 挂监听也等不到第二次，而这条流源自 FileHandle——没人销毁就挂到 GC，Node 把「GC 期关闭
-      // FileHandle」当未捕获错误抛出（表现为整轮测试在收尾时红）。故监听挂上后立刻补查已断连，
-      // 让「断开即销毁」在任何时序下都成立，而不是只在监听器抢到 close 之前断开的时序下成立。
+      // 断连即销毁本条流、流上出错即断连（头已发补不了错误信封，但错误必须留痕，不能吞成静默
+      // 断连）。监听挂上后**立刻补查已断连**：上面 await（查资源表 + 打开文件）期间客户端可能
+      // 已断开、'close' 不会再来，而这条流源自 FileHandle——没人销毁会挂到 GC，Node 把
+      // 「GC 期关闭 FileHandle」当未捕获错误抛（表现为测试收尾时红）。
       res.on('close', () => stream.destroy())
       if (res.destroyed) stream.destroy()
       stream.on('error', (e: unknown) => {

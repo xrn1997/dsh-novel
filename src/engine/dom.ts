@@ -21,8 +21,8 @@ export function isNodeValue(v: unknown): v is Cheerio<AnyNode> {
 // ── 块级感知的纯文本（本插件的正文契约：按 \n 分段）─────────────────────
 //
 // 为什么不是 cheerio 的 .text()：它把整棵子树拼成一整行（`<p>a</p><p>b</p>` → `ab`），
-// 阅读器/导出按 \n 分段就只剩一个巨型段落。legado 的 Jsoup `.text()` 也归一成一行——
-// 本插件的信息量与之一致，只是把块级边界落成换行（可读性，不丢字）。
+// 阅读器/导出按 \n 分段就只剩一个巨型段落。本插件不丢字（信息量与「整块一行」一致），
+// 只是把块级边界落成换行（可读性）。
 // 另见 services/content.ts：@html 规则收回来的是 HTML 片段，同一套口径转纯文本。
 
 /** 块级元素：边界即换行（浏览器渲染语义） */
@@ -45,7 +45,7 @@ const SKIP_TAGS = new Set([
 /**
  * 节点子树 → 纯文本：块级边界换行、行内标签只留文本、实体解码、逐行收敛空白（空行不留）。
  * 直接吃 domhandler 节点（cheerio 的活节点，不重新解析）。
- * `keepImages`（正文面专用，legado HtmlFormatter.formatKeepImg「仅 img 保留」口径）：
+ * `keepImages`（正文面专用：仅 img 保留，其余标签只留文本）：
  * `<img src>`（缺 src 取 data-src）输出为独立行的图片地址——漫画/图片章节不再整章零命中。
  */
 export function nodeText(node: AnyNode, opts?: { keepImages?: boolean }): string {
@@ -70,7 +70,7 @@ export function nodeText(node: AnyNode, opts?: { keepImages?: boolean }): string
     const tag = el.name.toLowerCase()
     if (tag === 'img') {
       if (keepImages) {
-        // legado HtmlFormatter.formatImagePattern 三形态：src / data-src|src / 任意 data-*——
+        // img 取址三形态：src / data-src|src / 任意 data-*——
         // 懒加载漫画站大量只有 data-original/data-echo/data-page-image-url
         const a = el.attribs ?? {}
         const src = a.src ?? a['data-src'] ?? a['data-original'] ?? a['data-echo']
@@ -116,7 +116,7 @@ export function looksLikeHtml(s: string): boolean {
   return HTML_TAG_RE.test(s)
 }
 
-/** 任意 data-* 属性兜底（legado「任意 data-*」形态：取第一个非空值） */
+/** 任意 data-* 属性兜底（取第一个非空值） */
 function firstDataAttr(attribs: Record<string, string>): string {
   for (const [k, v] of Object.entries(attribs)) {
     if (k.startsWith('data-') && v.trim() !== '') return v

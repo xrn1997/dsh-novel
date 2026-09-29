@@ -3,7 +3,7 @@ import { load } from 'cheerio'
 import { evalXPath } from '../../src/engine/xpath.js'
 import { UnsupportedRuleError } from '../../src/engine/errors.js'
 
-// 样本取自真实源包（630 源 274 条 XPath 规则的代表性形态）；fixture 规整化以钉死语义
+// 样本取自真实源包里 XPath 规则的代表性形态；fixture 规整化以钉死语义
 const html = `<html><body>
 <div id="sitebox">
   <dl class="book"><dt><a href="/book/1/">书一</a></dt><dd class="info">作者甲</dd></dl>

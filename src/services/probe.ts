@@ -5,7 +5,7 @@ import { fetchSearchPage, searchErrorCodeOf } from './search-face.js'
 import type { Fetcher } from './fetcher.js'
 import type { NovelSource } from './types.js'
 
-/** 探针关键词序列：单字「书」在个别站被搜索程序停用（实测 aijjxs 对「书」0 命中、其余词 1 命中）——
+/** 探针关键词序列：单字「书」在个别站被搜索程序停用（实测有站对「书」0 命中、换词即命中）——
  * 首词 0 命中时逐词重试，任一命中即 verified；全部 0 命中才判 broken。 */
 const PROBE_KEYS = ['书', '小说', '的'] as const
 
@@ -22,8 +22,9 @@ export async function probeSource(
   source: NovelSource, fetcher: Fetcher, opts?: { timeoutMs?: number; jsTimeoutMs?: number },
 ): Promise<ProbeResult> {
   try {
-    // 源自带校验关键词（legado `ruleSearch.checkKeyWord`）时先打它：「只搜得到自家书名」的站
-    // 对通用词恒 0 命中，会被误判坏源（本库 31/158 源带值）。`?? null`：存量 sources.json 缺键。
+    // 源自带校验关键词（`ruleSearch.checkKeyWord`）时先打它：「只搜得到自家书名」的站
+    // 对通用词恒 0 命中，会被误判坏源（现量按 `DSH_PARSE_CENSUS=1` 的 `probeKeyword` 行重算）。
+    // （存量 sources.json 缺键与 null 同路。）
     const own = source.rules.probeKeyword ?? null
     const keys = own === null || own.trim() === '' ? [...PROBE_KEYS] : [own, ...PROBE_KEYS]
     for (const key of keys) {
@@ -42,17 +43,17 @@ export async function probeSource(
         return { ok: true, itemCount: 1, firstTitle: title, probedAt: Date.now() }
       }
       // empty-list 回落来的 info 与 0 条目同义：那个词可能被站点停用了，换下一词再打
-      if (page.shape === 'info' || page.items.length === 0) continue
+      if (page.shape === 'info' || page.contexts.length === 0) continue
       const nameRule = source.rules.ruleBookName
       if (nameRule === null) return fail('RuleMissing', '源未声明 ruleBookName', 0)   // 搜索面已拦；此处为类型收窄
       // usage='value'：与搜索面取书名同口径（`reading.ts` 对同一 ruleBookName、同一 item
       // 用 'value'）。规则以属性终端收尾（`@onclick`/`@_src`）时两种用途结果不同——
       // 探针漏传该参数会把搜索面读得出书名的源判成「首条书名为空」的坏源（2026-09 审查）。
-      const first = firstValue(await page.subEval(nameRule, { html: page.items[0], baseUrl: page.landedUrl }, 'search', 'value'), 'search')
+      const first = firstValue(await page.subEval(nameRule, page.contexts[0], 'search', 'value'), 'search')
       if (first === null || first.trim() === '') {
-        return fail('RuleEvalError', `首条书名为空（段 ruleBookName: ${nameRule}）`, page.items.length)
+        return fail('RuleEvalError', `首条书名为空（段 ruleBookName: ${nameRule}）`, page.contexts.length)
       }
-      return { ok: true, itemCount: page.items.length, firstTitle: first, probedAt: Date.now() }
+      return { ok: true, itemCount: page.contexts.length, firstTitle: first, probedAt: Date.now() }
     }
     return fail('RuleEvalError',
       `搜索列表 0 命中（关键词${keys.map((k) => `「${k}」`).join('')}均无结果；段 ruleBookList: ${source.rules.ruleBookList}）`, 0)

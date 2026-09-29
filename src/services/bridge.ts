@@ -8,6 +8,7 @@ import { engineFetch, engineFetchPost, engineFetchRaw } from './engine-fetch.js'
 import { headerOf, effectiveUserAgent } from './fetcher.js'
 import type { Fetcher } from './fetcher.js'
 import { absUrl } from './url.js'
+import { parseObjectJson, stringTableOf } from './normalize.js'
 import { formatIntro } from './content.js'
 import type { NovelSource } from './types.js'
 
@@ -25,7 +26,22 @@ export interface Page { url: string; requestedUrl?: string; body: string; json?:
  *  usage（取值用途）：'value'（getString 口径——链尾未知词 = HTML 属性名）/ 'list'（getElements
  *  口径——链尾未知词 = 选择器）。服务层按规则用途显式传，缺省沿用引擎的 'list'。 */
 export interface SubRuleEval {
-  (rule: string, ctx: { html?: string; json?: unknown; baseUrl: string }, facet: Facet, usage?: RuleUsage): Promise<EngineValue>
+  (rule: string, ctx: ItemContextPartial, facet: Facet, usage?: RuleUsage): Promise<EngineValue>
+}
+
+/** 条目求值上下文：字段规则在**一个条目**上求值时的输入。
+ *  `regexRow` 只在 AllInOne 条目上出现（`itemContextsOf`）——字段规则文本里的 `$n`
+ *  按它绑定（`engine/regex-row.ts`），其余条目形态没有行。 */
+export interface ItemContext { html: string; baseUrl: string; regexRow?: string[] }
+
+/** SubRuleEval 的入参形态：html/json 都可缺（详情 init 换根给 json、目录条目给 html） */
+interface ItemContextPartial { html?: string; json?: unknown; baseUrl: string; regexRow?: string[] }
+
+/** matches 行 → **条目组**。行是 `[group 0(整段), 组 1..n]`（`engine/allinone.ts`），
+ *  条目取组 1..n；无捕获组时整段即条目。group 0 只供给字段规则的 `$n` 绑定，
+ *  **不**参与条目取值——否则条目上下文会混进整段、字段规则在重复内容上求值。 */
+function rowParts(r: readonly string[]): readonly string[] {
+  return r.length > 1 ? r.slice(1) : r
 }
 
 /** 值规约（链终点取值）：miss→null；value→text；list→join('\n')；matches→取每行首列 join。 */
@@ -34,9 +50,20 @@ export function firstValue(v: EngineValue, facet: Facet = 'rule'): string | null
     case 'miss': return null
     case 'value': return v.text
     case 'list': return v.items.join('\n')
-    case 'matches': return v.rows.map((r) => r[0] ?? '').join('\n')
+    case 'matches': return v.rows.map((r) => rowParts(r)[0] ?? '').join('\n')
     case 'nodes': throw nodesError(v, facet)
   }
+}
+
+/** **URL 位**的值规约：与 `firstValue` 只差一处——`list` 取**首项**而不是 `join('\n')`。
+ *
+ *  对面「URL 取值」那一支一律取 `list[0]`，多值 join 只服务非 URL 取值（对读证据与实测读数：
+ *  矩阵行 `b-url-value-first-item`）。本仓曾一律 join：一个条目里多个 `<a>` 的源把地址拼成多行串，
+ *  被 `absUrl` 换行守卫判死 → **整条书目丢地址**（表现不是报错而是「搜到了打不开」）。
+ *  URL 里不可能有换行——join 在 URL 位上永远是错的，这不是口径分歧。 */
+export function firstUrlValue(v: EngineValue, facet: Facet = 'rule'): string | null {
+  if (v.kind === 'list') return v.items[0] ?? ''
+  return firstValue(v, facet)
 }
 
 /** 多值规约：miss→null；value→[text]；list→items；matches→每行首列。 */
@@ -45,7 +72,7 @@ export function listValue(v: EngineValue, facet: Facet = 'rule'): string[] | nul
     case 'miss': return null
     case 'value': return [v.text]
     case 'list': return v.items
-    case 'matches': return v.rows.map((r) => r[0] ?? '')
+    case 'matches': return v.rows.map((r) => rowParts(r)[0] ?? '')
     case 'nodes': throw nodesError(v, facet)
   }
 }
@@ -56,24 +83,42 @@ export function extractItems(v: EngineValue): string[] {
     case 'miss': return []
     case 'value': return [v.text]
     case 'list': return [...v.items]
-    case 'matches': return v.rows.map((r) => r.join('\t'))
+    case 'matches': return v.rows.map((r) => rowParts(r).join('\t'))
     // encodeEntities:'utf8'：默认选项把 CJK 全部编码成 &#x…; 数字实体；'utf8' 只转义 &<> 保留可读原文
     case 'nodes': return v.nodes.toArray().map((n) => render(n, { encodeEntities: 'utf8' }))
   }
 }
 
+/** 逐条目求值上下文（列表页 / 目录页共用）：html 直接取自 `extractItems`（同源同序是**构造**保证：
+ *  同一次派生、同一下标），AllInOne 条目额外带行（`$n` 绑定用），其余形态只有 html/baseUrl。 */
+export function itemContextsOf(v: EngineValue, baseUrl: string): ItemContext[] {
+  return extractItems(v).map((html, i) => ({
+    html,
+    baseUrl,
+    ...(v.kind === 'matches' ? { regexRow: v.rows[i] } : {}),
+  }))
+}
+
 /** 源级求值上下文组装单点：「引擎上下文该有哪些字段」的唯一实现——
  *  fetch（守门 + auth 头合并）/ source / vars / jsLib 全在此拼装；面（facet）只决定
- *  html/json/baseUrl 的取值。此前 makeSubEval 与 search-template.scriptOf 各拼一份，
- *  runLogin 手拼漏 jsLib/vars（@js 登录调 jsLib 函数只在登录那一刻炸 not defined），
- *  tocUrlOf 连 source/fetch 都没有。新面接入 = 传参数，不 = 再手拼一份字段。 */
+ *  html/json/baseUrl 的取值（曾多处各拼一份，漏字段只在特定路径炸——新面接入 = 传参数，
+ *  不 = 再手拼一份）。 */
+/** 源 raw 里的字符串字段（缺 / 非串 → 空串）。本仓对源实体字段一律**按 raw 现读**、不落副本：
+ *  脚本可见的 `source` 要的是导入时那份原文（改名 / 重推迁移都只动 raw 之外的投影）。 */
+function rawStringField(raw: unknown, field: string): string {
+  const v = raw === null || typeof raw !== 'object' ? undefined : (raw as Record<string, unknown>)[field]
+  return typeof v === 'string' ? v : ''
+}
+
 export function engineContextOf(
   fetcher: Fetcher, source: NovelSource,
   opts: {
     baseUrl: string; html?: string; json?: unknown; vars?: Record<string, string>
-    /** legado `book` 变量（脚本可见的书籍身份——目录/正文面常见 `book.bookUrl`） */
+    /** AllInOne 行的 `$n` 绑定用（只有「按整页正则列出的条目」链路带；见 engine/types.ts 的 EvalContext.regexRow） */
+    regexRow?: string[]
+    /** `book` 变量（脚本可见的书籍身份——目录/正文面常见 `book.bookUrl`） */
     book?: Record<string, unknown>
-    /** legado `chapter` 变量（章节身份：title/index/url） */
+    /** `chapter` 变量（章节身份：title/index/url） */
     chapter?: Record<string, unknown>
     /** js 沙箱预算透传（EvalContext.jsTimeoutMs；缺省时引擎回退 DEFAULT_JS_TIMEOUT_MS） */
     jsTimeoutMs?: number
@@ -86,16 +131,21 @@ export function engineContextOf(
   fetchPost: ReturnType<typeof engineFetchPost>
   /** java.getWebViewUA 用（口径见 src/engine/types.ts 的 EvalContext.userAgent） */
   userAgent?: () => string
+  /** 脚本可见的源实体字段（见 src/engine/types.ts 的 EvalContext.sourceComment / sourceName） */
+  sourceName: string
+  sourceComment: string
   jsLib?: string
   book?: Record<string, unknown>; chapter?: Record<string, unknown>; jsTimeoutMs?: number
+  regexRow?: string[]
 } {
   return {
     ...(opts.html === undefined ? {} : { html: opts.html }),
     ...(opts.json === undefined ? {} : { json: opts.json }),
+    ...(opts.regexRow === undefined ? {} : { regexRow: opts.regexRow }),
     baseUrl: opts.baseUrl,
     source: source.baseUrl,
     ...(opts.vars === undefined ? {} : { vars: opts.vars }),
-    // 头走惰性 provider：`@js` 动态头每请求现算（legado getHeaderMap 每请求求值口径）；
+    // 头走惰性 provider：`@js` 动态头每请求现算（头规则在请求期求值，不缓存结果）；
     // 规则求值自身用的静态头在 resolveHeaders 内单独构造——不递归回 provider。
     fetch: engineFetch(fetcher, () => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs })),
     fetchRaw: engineFetchRaw(fetcher, () => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs })),
@@ -103,6 +153,10 @@ export function engineContextOf(
     fetchPost: engineFetchPost(fetcher, () => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs })),
     // java.getWebViewUA 的口径：本仓真发出去的那条 UA（同步取，与 fetch 同一套静态头解析）
     userAgent: () => effectiveUserAgent(source),
+    // 脚本可见的源实体字段：**按 raw 现读**，只投影脚本真读到的（对面脚本里的 source 是字段面
+    // 很大的书源实体，本仓按现库需求逐字段接线——现量见矩阵行 `h-source-entity-fields`）。
+    sourceName: source.name,
+    sourceComment: rawStringField(source.raw, 'bookSourceComment'),
     ...(source.rules.jsLib === null ? {} : { jsLib: source.rules.jsLib }),
     ...(opts.book === undefined ? {} : { book: opts.book }),
     ...(opts.chapter === undefined ? {} : { chapter: opts.chapter }),
@@ -111,12 +165,12 @@ export function engineContextOf(
 }
 
 /**
- * 请求头解析（legado `BaseSource.getHeaderMap` 口径）：静态 header 直答；`headerRule`
+ * 请求头解析（源级动态头口径）：静态 header 直答；`headerRule`
  * （`@js:`/`<js>` 动态头）经沙箱求值得到 JSON 头表，再叠 auth/cookie（与静态形态同序：auth 在后占优）。
  *
- * 失败语义对齐 legado 的 try/catch：规则求值抛错或产物不是合法 JSON 对象 → **warn 后回退
- * 静态头**（动态头缺失 = 站点按无 device 鉴权处理，下游自然报错——不吞请求也不炸整条链；
- * legado 同款 catch 后继续发请求）。**不递归**：规则脚本自身的 fetch 用静态头（provider 不进场），
+ * 失败语义是「warn 后回退静态头」：规则求值抛错、产物不是合法 JSON 对象，都只降级不取消请求
+ * （动态头缺失 = 站点按无 device 鉴权处理，下游自然报错——不吞请求也不炸整条链，回退后照常发出去）。
+ * **不递归**：规则脚本自身的 fetch 用静态头（provider 不进场），
  * 否则头规则里一次 java.ajax 就会重新求值头规则。
  */
 export async function resolveHeaders(
@@ -125,7 +179,7 @@ export async function resolveHeaders(
   const rule = source.rules.headerRule
   const staticHeaders = headerOf(source)
   if (rule == null || rule.trim() === '') return staticHeaders
-  // 规则前缀剥离（legado getHeaderMap：@js: → substring(4)；<js>…</js> → 两标记之间）
+  // 规则前缀剥离（`@js:` 去前 4 字符；`<js>…</js>` 取两标记之间的内容）
   let code = rule
   if (/^@js:/i.test(rule)) code = rule.slice(4)
   else if (/^<js>/i.test(rule)) {
@@ -148,13 +202,11 @@ export async function resolveHeaders(
     })
     const text = firstValue(outcome.value, 'rule')
     if (text === null || text === '') throw new Error('动态头规则产物为空')
-    const parsed: unknown = JSON.parse(text) // 非 JSON（脚本产出坏串）→ 落到下方 catch
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-      throw new Error('动态头规则产物不是 JSON 对象')
-    }
-    const dynamic: Record<string, string> = {}
-    for (const [k, v] of Object.entries(parsed)) if (typeof v === 'string') dynamic[k] = v
-    return { ...dynamic, ...staticHeaders }
+    // 与静态头共用同一宽松度（严格 JSON → 单引号交换）与同一键值筛（stringTableOf）——
+    // 「哪些头条目活着」的口径只住 normalize 一处
+    const parsed = parseObjectJson(text)
+    if (parsed === undefined) throw new Error('动态头规则产物不是对象 JSON')
+    return { ...stringTableOf(parsed), ...staticHeaders }
   } catch (e) {
     console.warn(`[dsh-novel] 动态头规则求值失败，回退静态头（${source.name}）：`,
       e instanceof Error ? e.message : String(e))
@@ -174,6 +226,7 @@ export function makeSubEval(
   return (rule, ctx, facet, usage) =>
     evaluate(rule, engineContextOf(fetcher, source, {
       baseUrl: ctx.baseUrl, html: ctx.html, json: ctx.json,
+      ...(ctx.regexRow === undefined ? {} : { regexRow: ctx.regexRow }),
       ...(opts.vars === undefined ? {} : { vars: opts.vars }),
       ...(opts.book === undefined ? {} : { book: opts.book }),
       ...(opts.chapter === undefined ? {} : { chapter: opts.chapter }),
@@ -201,19 +254,18 @@ function nodesError(v: Extract<EngineValue, { kind: 'nodes' }>, facet: Facet): R
 
 /** 字段子规则求值 + 规约：rule null → null（源没这条信息）。usage 缺省 'value'——字段规则都是取值用途 */
 export async function fieldOf(
-  subEval: SubRuleEval, rule: string | null, ctx: { html: string; baseUrl: string }, facet: Facet,
+  subEval: SubRuleEval, rule: string | null, ctx: ItemContext, facet: Facet,
 ): Promise<string | null> {
   if (rule === null) return null
   return firstValue(await subEval(rule, ctx, facet, 'value'), facet)
 }
 
-/** 辅助元数据字段的对面口径：**读不出来 = 留空，书目照收**。
- *  `model/webBook/BookList.kt`（getSearchItem）与 `model/webBook/BookInfo.kt` 各自包
- *  `try { … } catch (e) { Debug.log(错误) }` 的恰是这五项：kind / wordCount / lastChapter / intro /
- *  coverUrl；**裸奔的是 name / author / bookUrl / tocUrl**（对面那四个不在 try 里——空即丢条目、
- *  炸即整次失败）。所以一条坏掉的简介规则在对面**不会**让整页书目消失。 */
+/** 辅助元数据字段的口径：**读不出来 = 留空，书目照收**。
+ *  走这条的恰是这五项：kind / wordCount / lastChapter / intro / coverUrl；**裸奔的是
+ *  name / author / bookUrl / tocUrl**（那四个空即丢条目、炸即整次失败）。所以一条坏掉的简介规则
+ *  **不会**让整页书目消失。 */
 async function metaFieldOf<T>(
-  subEval: SubRuleEval, rule: string | null, ctx: { html: string; baseUrl: string }, facet: Facet,
+  subEval: SubRuleEval, rule: string | null, ctx: ItemContext, facet: Facet,
   read: (v: EngineValue) => T | null,
 ): Promise<T | null> {
   if (rule === null) return null
@@ -224,20 +276,36 @@ async function metaFieldOf<T>(
   }
 }
 
-/** 对面那五项里的「单值」三件（最新章节 / 简介 / 封面）：值规约同 `fieldOf`，
- *  差别只在读取抛错时留空而不是带走整组书目（对面 try/catch 口径，见 `metaFieldOf`）。 */
+/** 辅助字段里的「文本」两件（最新章节 / 简介）：值规约同 `fieldOf`，
+ *  差别只在读取抛错时留空而不是带走整组书目（口径见 `metaFieldOf`）；封面这类 **URL 位**走 `auxUrlFieldOf`。 */
 export function auxFieldOf(
-  subEval: SubRuleEval, rule: string | null, ctx: { html: string; baseUrl: string }, facet: Facet,
+  subEval: SubRuleEval, rule: string | null, ctx: ItemContext, facet: Facet,
 ): Promise<string | null> {
   return metaFieldOf(subEval, rule, ctx, facet, (v) => firstValue(v, facet))
 }
 
-/** 分类（对面 `analyzeRule.getStringList(ruleKind)?.joinToString(",")?.take(1000)`）：
+/** **URL 字段**的取值：与 `fieldOf` 同一处差别——规约走 `firstUrlValue`（list 取首项）。
+ *  书地址 / 封面 / 目录页 / 章地址这些位上的产物马上就要进 `absUrl*`，多行串必被它的换行守卫判死。 */
+export async function urlFieldOf(
+  subEval: SubRuleEval, rule: string | null, ctx: ItemContext, facet: Facet,
+): Promise<string | null> {
+  if (rule === null) return null
+  return firstUrlValue(await subEval(rule, ctx, facet, 'value'), facet)
+}
+
+/** URL 位的辅助字段（封面）：`urlFieldOf` 的规约 + `metaFieldOf` 的「读不出来留空」。 */
+export function auxUrlFieldOf(
+  subEval: SubRuleEval, rule: string | null, ctx: ItemContext, facet: Facet,
+): Promise<string | null> {
+  return metaFieldOf(subEval, rule, ctx, facet, (v) => firstUrlValue(v, facet))
+}
+
+/** 分类（多值列表 join(',') 后截前 1000 个 UTF-16 code unit）：
  *  **多命中是逗号串，不是首值**——`class.tags a@text`、`$.categoryNames[*]className` 这类规则
- *  对面给出「玄幻,都市」，取首值会让两边读到不同的值。`take(1000)` 是 UTF-16 code unit 截断，
+ *  的产物是「玄幻,都市」，取首值只剩「玄幻」，与规则写法不符。截断按 UTF-16 code unit 计，
  *  与 JS `String.prototype.slice` 同单位。 */
 export function kindFieldOf(
-  subEval: SubRuleEval, rule: string | null, ctx: { html: string; baseUrl: string }, facet: Facet,
+  subEval: SubRuleEval, rule: string | null, ctx: ItemContext, facet: Facet,
 ): Promise<string | null> {
   return metaFieldOf(subEval, rule, ctx, facet, (v) => {
     const items = listValue(v, facet)
@@ -245,9 +313,8 @@ export function kindFieldOf(
   })
 }
 
-/** 字数格式化（对面 `utils/StringUtils.kt` 的 `wordCountFormat(wc: String?)`，在 **webBook 解析层**
- *  调用——存进 book 的已经是格式化后的串，不是「只在 UI 格式化」）：
- *  整串是 `-?[0-9]+` 才转换；>10000 → `DecimalFormat("#.#")` 除一万 +「万字」，≤10000 → 原数 +「字」，
+/** 字数格式化（在**解析层**调用——存进 book 的已经是格式化后的串，不是「只在 UI 格式化」）：
+ *  整串是 `-?[0-9]+` 才转换；>10000 → 除一万保留一位 +「万字」，≤10000 → 原数 +「字」，
  *  ≤0 → 空；认不出数字则原样给回（「120万字」「连载中」这些站点文案本来就是字符串）。
  *  `words * 1.0f` 的 Float 中间态用 `Math.fround` 复现（超大字数下两边取整一致）。 */
 export function formatWordCount(wc: string | null): string | null {
@@ -272,23 +339,22 @@ function formatHalfEven(value: number): string {
   return text.endsWith('.0') ? text.slice(0, -2) : text
 }
 
-/** 字数（对面 `wordCountFormat(analyzeRule.getString(ruleWordCount))`，同样包在 try/catch 里）。 */
+/** 字数（先按取值口径读出串，再交给 `formatWordCount`；读取抛错同样留空）。 */
 export async function wordCountFieldOf(
-  subEval: SubRuleEval, rule: string | null, ctx: { html: string; baseUrl: string }, facet: Facet,
+  subEval: SubRuleEval, rule: string | null, ctx: ItemContext, facet: Facet,
 ): Promise<string | null> {
   return metaFieldOf(subEval, rule, ctx, facet, (v) => formatWordCount(firstValue(v, facet)))
 }
 
-/** 详情上下文解析（legado `ruleBookInfo.init` 口径，model/webBook/BookInfo.kt：init 先求值，其结果**整体替换**
- *  后续详情规则的求值上下文**与 html**——legado `setContent(init 产物)` 是 content 单点全换）：
- *  JSON 产物 → html 与 ctx.json **同步换根**（此前 html 留原页只换 json：`{{result.articleid}}`
- *  这类 tocUrl 模板的 result=pageText=原页 → 插值 Miss → tocUrl 回退详情页 → 目录空，
- *  novel.cooks.tw 真机实证——setContent 后 legado 的 result/content 就是 init 产物本身）；
+/** 详情上下文解析（`ruleBookInfo.init` 口径：init 先求值，其结果**整体替换**后续详情规则的求值上下文
+ *  **与 html**——内容单点全换）：
+ *  JSON 产物 → html 与 ctx.json **同步换根**（曾 html 留原页只换 json，`{{result.…}}` 模板插值 Miss
+ *  → tocUrl 回退详情页 → 目录空；换根后的 result/content 就是 init 产物本身）；
  *  非 JSON 文本/HTML 片段 → 作为 html 上下文（同前）。
- *  init 非空但零命中 → 默认 RuleEvalError 点名 ruleDetailInit——不拿整页冒充上下文（宁炸不猜：
- *  静默降级会让详情字段全 Miss 伪装成「源什么都没有」，QQ 类正版 API 源实测形态）。
+ *  init 非空但零命中 → 默认 RuleEvalError 点名 ruleDetailInit——不拿整页冒充上下文（静默降级会让
+ *  详情字段全 Miss 伪装成「源什么都没有」）。
  *  `onEmptyInit: 'no-context'` 给「这页**可能**是详情页」的嗅探路径用（见 detailFieldsOf 同名参数）：
- *  对面在 init 取空时 `setContent(null)`，后续字段自然全空 → 没有书目，而不是整次搜索失败。 */
+ *  init 取空即内容置空，后续字段自然全空 → 没有书目，而不是整次搜索失败。 */
 export async function detailContextOf(
   ruleDetailInit: string | null | undefined, html: string, baseUrl: string, subEval: SubRuleEval,
   opts: { onEmptyInit: 'no-context' },
@@ -301,9 +367,10 @@ export async function detailContextOf(
   ruleDetailInit: string | null | undefined, html: string, baseUrl: string, subEval: SubRuleEval,
   opts?: { onEmptyInit?: 'error' | 'no-context' },
 ): Promise<{ html: string; json?: unknown } | null> {
-  // `== null`：存量 sources.json 可能缺 ruleDetailInit 键（undefined）——按缺规则直通
+  // 存量 sources.json 可能缺 ruleDetailInit 键——缺席与 null 同路，按缺规则直通
   if (ruleDetailInit == null || ruleDetailInit.trim() === '') return { html }
-  // 纯 `@put` 的 init（本机 4 源的详情面主导写法）：**只设变量、不换根**——legado 剥掉 @put 后
+  // 纯 `@put` 的 init（本机详情面的主导写法之一，现量见矩阵 `c-rule-book-info-init`）：
+  // **只设变量、不换根**——剥掉 `@put` 后
   // 规则为空，取不到新根；打成「零命中」等于把这条合法规则判成失效（引擎 isPutOnlyRule 给结论）。
   if (isPutOnlyRule(ruleDetailInit)) {
     await subEval(ruleDetailInit, { html, baseUrl }, 'detail', 'list')
@@ -318,23 +385,21 @@ export async function detailContextOf(
     })
   }
   const text = parts.join('\n')
-  // JSON 产物：html 同步换成产物文本（legado setContent 全换口径——result/pageText 与 json 同源）
+  // JSON 产物：html 同步换成产物文本（内容全换口径——result/pageText 与 json 同源）
   try { return { html: text, json: JSON.parse(text) as unknown } } catch { return { html: text } }
 }
 
-/** 详情页五字段（对面 `BookInfo.analyzeBookInfo` 的取值段）：init 换根 → 书名/作者/封面/简介/
- *  最新章节，`ruleDetail*` 优先、平铺方言回退同名共用字段（原 v1 行为）。封面按 base 绝对化、
+/** 详情页七字段（详情面字段规则的取值段，见 `DetailFields`）：init 换根 → 书名/作者/封面/简介/
+ *  最新章节/分类/字数，`ruleDetail*` 优先、平铺方言回退同名共用字段（原 v1 行为）。封面按 base 绝对化、
  *  简介按详情面口径净化（`<usehtml>`/`<md>`/`<useweb>` 前缀原样保留，其余 format + 5000 截断）。
  *
  *  两个消费点共用这一份：`ReadingService.getDetail`（详情面）与搜索面的 **info 形态**
- *  （`bookUrlPattern` 命中 / 列表为空回落——对面 `BookList.getInfoItem` 调的就是同一个
- *  `analyzeBookInfo`）。第二处若各写一份 `ruleDetailName ?? ruleBookName` 的回落链，
- *  两上下文的分野就会开始各自漂移（那是本仓定过的重复罪）。
+ *  （`bookUrlPattern` 命中 / 列表为空回落——两处走同一套字段口径）。第二处若各写一份
+ *  `ruleDetailName ?? ruleBookName` 的回落链，两上下文的分野就会开始各自漂移（那是本仓定过的重复罪）。
  *
  *  `onEmptyInit: 'no-book'` 正是为第二处准备的：那里的「这是详情页」只是**嗅探出来的猜测**
- *  （对面 `getInfoItem` 的守卫就是 `name.isNotBlank()`——init 取空即没有书目）。让它在搜索面
- *  抛错，会把一次正常的「这个词没搜到东西」升级成整源搜索失败（第 19 批真机抓回：快手趣阁
- *  `$.data` 在结果响应里取空 → 对面静默无条目，本仓报 RuleEvalError）。 */
+ *  （守卫是「书名为空即没有书目」——init 取空 → 书名 Miss → 无书目）。让它在搜索面抛错，
+ *  会把一次正常的「这个词没搜到东西」升级成整源搜索失败（真机源的 `$.data` 在结果响应里取空）。 */
 /** 详情页七字段的取值面（`detailFieldsOf` 的返回形状） */
 export interface DetailFields {
   title: string | null; author: string | null; coverUrl: string | null
@@ -363,7 +428,7 @@ export async function detailFieldsOf(
   const [title, author, cover, intro, last, kind, wordCount] = await Promise.all([
     fieldOf(subEval, rules.ruleDetailName ?? rules.ruleBookName, ctx, 'detail'),
     fieldOf(subEval, rules.ruleDetailAuthor ?? rules.ruleAuthor, ctx, 'detail'),
-    auxFieldOf(subEval, rules.ruleDetailCoverUrl ?? rules.ruleCoverUrl, ctx, 'detail'),
+    auxUrlFieldOf(subEval, rules.ruleDetailCoverUrl ?? rules.ruleCoverUrl, ctx, 'detail'),
     auxFieldOf(subEval, rules.ruleDetailIntro ?? rules.ruleIntro, ctx, 'detail'),
     auxFieldOf(subEval, rules.ruleDetailLastChapter ?? rules.ruleLastChapter, ctx, 'detail'),
     kindFieldOf(subEval, rules.ruleDetailKind ?? rules.ruleKind, ctx, 'detail'),

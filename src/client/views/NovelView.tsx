@@ -13,7 +13,7 @@ import { ShelfView } from './ShelfView.js'
  *  书源管理 = 原宿主设置「小说」区块整体（slots 的 settings.section 注册已撤，单一归属：
  *  轮询单实例、现场 store 单份）。书城未上线 → CityView 占位空态，内容上线后填充该分支。
  *  reader/search 是 tab 之下的沉浸内容流（各有自己的返回导航），顶部 tab 不随行。
- *  布局钉死：根 = flex 列；视图区（flex:1 + overflowY:auto）——此前 height:100% 挤出视口的坑见 21a5432。 */
+ *  布局钉死：根 = flex 列；视图区（flex:1 + overflowY:auto）——视图区曾写 height:100% 而被挤出视口。 */
 
 /** tab 常量：key = Route['name'] 的 tab 子集；route 是无参路由对象（点击即 navigate） */
 const TABS: Array<{ key: 'shelf' | 'city' | 'sources'; label: string; route: Route }> = [
@@ -51,7 +51,7 @@ export function NovelView(): ReactNode {
               ? <CityView />
               : route.name === 'sources'
                 // 样式层本视图根已注入（`<NovelStyles/>` 在上面），这里显式让位——两处各注一份
-                // 就是 45KB CSS 在 DOM 里出现两遍（SettingsSection 单飞时仍自带，默认 true）
+                // 就是 58KB CSS 在 DOM 里出现两遍（SettingsSection 单飞时仍自带，默认 true）
                 ? <SettingsSection withStyles={false} />
                 : <ShelfView />}
       </div>

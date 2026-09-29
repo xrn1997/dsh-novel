@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
-  ANCHOR_FREE_TEXT, CODE_ANCHORS, attributeError, classifyAudits, isEngineKind,
+  ANCHOR_FREE_TEXT, CODE_ANCHORS, attributeError, classifyAudits, isEngineKind, searchFaceStageOf,
 } from './content-audit-classify.js'
 
 /**
@@ -88,6 +88,13 @@ describe('审计失败归因', () => {
     expect(r.items.map((i) => i.name)).toEqual(['A', 'B', 'C'])
     expect(isEngineKind(realMessages.plainFetch)).toBe(false)
     expect(isEngineKind(realMessages.hostGapSegment)).toBe(true)
+  })
+
+  it('搜索面「没有带地址的条目」按条目数分家（桶名不算归因）', () => {
+    // 0 条 = 列表规则零命中，条目的根就没有（站点/列表规则侧）；
+    // 有条目 = 书名都出来了、只是地址全 null（bookUrl 规则侧）。两件事的下一步动作不同。
+    expect(searchFaceStageOf(0)).toBe('search-no-hit')
+    expect(searchFaceStageOf(3)).toBe('no-book-url')
   })
 
   it('本仓抛错锚点逐条在 src/ 里真实存在（锚点失配＝归因静默跑偏）', () => {

@@ -4,6 +4,7 @@ import type { JsonSchemaNode } from '@deepseek-ai/dsh-tools'
 import { ReadingService } from '../../src/services/reading.js'
 import { buildTools } from '../../src/tools/tools.js'
 import { SHELF_META } from '../../src/shared/wire.js'
+import type { ChapterEntry, SearchGroup, SearchHit, ShelfBook } from '../../src/shared/wire.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
 
 /**
@@ -12,10 +13,31 @@ import { makeTempDir, trackService } from '../temp-dir.js'
  * wire 类型加一个字段，整个工具调用被 lossless-JSON 校验拒收）。此前 project.ts 声称
  * 「schema 侧的一致性由 tools 的用例钉住」但并不存在——本文件把声明证成：
  * ① 每工具 execute 输出过 harness 同款校验（validateJsonSchemaValue）；
- * ② schema 属性集 = 声明字段集**手抄快照**（机构上无法从擦除后的 TS 类型反推；能绑 wire 的唯一处
- *    是 shelf 的 SHELF_META 表——那一条从表派生，其余是快照，wire 改名需人工同步）；
+ * ② **从 wire 派生的字段清单是三面钉死**（2026-09-28 收紧）：`SearchGroup`/`SearchHit`、`ChapterEntry`、
+ *    `ShelfBook` 的字段清单住在 `*_FIELDS` 常量里——**运行时**拿它与 schema 的属性集比、
+ *    **编译期**再用 `Assert<Eq<keyof Wire, …>>` 把同一份清单绑回 wire 类型；于是 wire 加/改字段会让
+ *    `pnpm typecheck` 红（此前只有字面快照，wire 改名要人工记得同步——`services.md` #7 那条缺口）。
+ *    另三份（`dshnovel_read`/`dshnovel_import_source`/`dshnovel_source`）是**工具自己的**投影形状，
+ *    没有对应 wire 类型可绑，仍是字面清单（照旧由 ① 的校验兜底）；
  * ③ schema 本体在 harness 的强制子集内（assertSupportedJsonSchema）。
  */
+
+/** 编译期等值断言（与 `tests/engine/js-protocol.test.ts` 的 `_Ajax`/`_Get` 同一手法） */
+type Eq<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
+type Assert<T extends true> = T
+
+/** 下面这份清单是**唯一**一份：运行时比 schema，编译期比 wire 类型 */
+const GROUP_FIELDS = ['sourceId', 'sourceName', 'status', 'statusDetail', 'hits', 'error'] as const
+const HIT_FIELDS = ['title', 'author', 'url', 'coverUrl', 'intro', 'lastChapterName', 'kind', 'wordCount'] as const
+const CHAPTER_FIELDS = ['chapterIndex', 'name', 'url'] as const
+/** 工具刻意**不投影**的书目元数据（超集会被 harness 拒） */
+const SHELF_EXCLUDED = ['coverUrl', 'intro', 'totalChapters'] as const
+const SHELF_FIELDS = ['sourceId', 'bookKey', 'title', 'author', 'lastChapterName', 'kind', 'wordCount', 'progress', 'addedAt'] as const
+
+type _GroupWire = Assert<Eq<keyof SearchGroup, typeof GROUP_FIELDS[number]>>
+type _HitWire = Assert<Eq<keyof SearchHit, typeof HIT_FIELDS[number]>>
+type _ChapterWire = Assert<Eq<keyof ChapterEntry, Extract<typeof CHAPTER_FIELDS[number], 'name' | 'url'>>>
+type _ShelfWire = Assert<Eq<keyof ShelfBook, typeof SHELF_FIELDS[number] | typeof SHELF_EXCLUDED[number]>>
 
 const SEARCH_HTML = '<html><body><div class="b"><a href="/book/1/" title="120万字">斗罗</a><span class="z">唐家</span></div><div class="b"><a href="/book/2/">无名书</a></div></body></html>'
 const TOC_HTML = '<html><body><div class="b ch"><a href="/c/1.html">第一章</a></div></body></html>'
@@ -97,10 +119,11 @@ describe('工具 schema 契约（execute 输出 ≡ 声明 schema；schema ≡ w
     const s = await svc()
     const search = schemaOf(s, 'dshnovel_search')
     // ── dshnovel_search ≡ SearchGroup/SearchHit（`shared/wire.ts` 的两个 interface）──
+    // 清单住在 GROUP_FIELDS/HIT_FIELDS：运行时比 schema、编译期比 wire 类型（见文件头 ② ）
     expect(propsOf(search, 'groups', '[]'))
-      .toEqual(new Set(['sourceId', 'sourceName', 'status', 'statusDetail', 'error', 'hits']))
+      .toEqual(new Set(GROUP_FIELDS))
     expect(propsOf(search, 'groups', '[]', 'hits', '[]'))
-      .toEqual(new Set(['title', 'author', 'url', 'coverUrl', 'intro', 'lastChapterName', 'kind', 'wordCount']))
+      .toEqual(new Set(HIT_FIELDS))
     // 必填差集：wire 上 nullable 的字段（author/url/coverUrl/intro/lastChapterName）经缺键投影后可缺席
     expect(requiredOf(search, 'groups', '[]')).toEqual(['hits', 'sourceId', 'sourceName', 'status'])
     expect(requiredOf(search, 'groups', '[]', 'hits', '[]')).toEqual(['title'])
@@ -113,7 +136,7 @@ describe('工具 schema 契约（execute 输出 ≡ 声明 schema；schema ≡ w
     expect(propsOf(schemaOf(s, 'dshnovel_toc')))
       .toEqual(new Set(['sourceId', 'bookKey', 'total', 'chapters']))
     expect(propsOf(schemaOf(s, 'dshnovel_toc'), 'chapters', '[]'))
-      .toEqual(new Set(['chapterIndex', 'name', 'url']))
+      .toEqual(new Set(CHAPTER_FIELDS))
     expect(requiredOf(schemaOf(s, 'dshnovel_toc'), 'chapters', '[]')).toEqual(['chapterIndex', 'name', 'url'])
 
     // ── dshnovel_import_source ≡ ImportOutcome 投影（name/ok/sourceId/missing/warnings + 按址去重 dupSkipped）──
@@ -126,14 +149,13 @@ describe('工具 schema 契约（execute 输出 ≡ 声明 schema；schema ≡ w
     expect(propsOf(schemaOf(s, 'dshnovel_source'), 'sources', '[]'))
       .toEqual(new Set(['sourceId', 'name', 'baseUrl', 'enabled', 'type', 'status', 'statusDetail']))
 
-    // ── dshnovel_shelf ≡ ShelfBook 投影（`shared/wire.ts` 的 ShelfBook；intro/totalChapters 故意不在 schema——超集会被拒）──
-    // 这一条**从 wire 的 SHELF_META 表派生**（唯一能真绑 wire 的处）：表里改键名/加键，这里跟着变。
+    // ── dshnovel_shelf ≡ ShelfBook 投影（`shared/wire.ts` 的 ShelfBook；coverUrl/intro/totalChapters 刻意不投影——超集会被拒）──
+    // 两层都钉住：`SHELF_FIELDS` ⊆ `SHELF_META`（写面孔径，表里改键名/加键这里跟着动）
+    // ＋ `SHELF_FIELDS ∪ SHELF_EXCLUDED ≡ keyof ShelfBook`（编译期类型钉，见文件头 ②）
     const shelfMeta = new Set(Object.keys(SHELF_META))
-    const excluded = ['coverUrl', 'intro', 'totalChapters']   // 刻意不投影进工具 schema
-    const shelfItem = new Set([
-      ...[...shelfMeta].filter((k) => !excluded.includes(k)),
-      'bookKey', 'progress', 'addedAt',                         // 身份 / 系统字段（非 SHELF_META 元数据写口）
-    ])
+    const shelfItem = new Set<string>(SHELF_FIELDS)
+    expect(shelfItem, 'SHELF_FIELDS 必须与「SHELF_META 减去刻意不投影的三项」逐键相等')
+      .toEqual(new Set([...[...shelfMeta].filter((k) => !(SHELF_EXCLUDED as readonly string[]).includes(k)), 'bookKey', 'progress', 'addedAt']))
     expect(propsOf(schemaOf(s, 'dshnovel_shelf'), 'books', '[]')).toEqual(shelfItem)
     // add/save_progress 的单本回执与 list 的条目同形（同一投影，不长第二份）
     expect(propsOf(schemaOf(s, 'dshnovel_shelf'), 'book')).toEqual(shelfItem)
