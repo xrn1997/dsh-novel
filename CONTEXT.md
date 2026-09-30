@@ -1,6 +1,6 @@
 # dsh-novel
 
-在 DeepSeek Harness Web GUI 里读网络小说的插件：导入 legado 书源 → 聚合搜索 → 书架 → 连续滚动阅读。
+在 DeepSeek Harness（DSH）里读网络小说的插件：导入 legado 书源 → 聚合搜索 → 书架 → 连续滚动阅读。
 
 本文件是**领域词汇表**：只回答「这个词指什么、它的唯一实现在哪个符号」。写 spec、改代码、命名新 module 之前先查这里——自造同义词会让同一概念长出第二份抄本。
 

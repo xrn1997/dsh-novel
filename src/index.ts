@@ -82,7 +82,7 @@ const DEFAULTS = {
   localImportMaxBytes: DEFAULT_MAX_IMPORT_BYTES,
 }
 
-/** 双重启用防御：bundles+插槽双启用时重复注册 /novel-api 会崩 dsh web（dsh-reader 验证过的坑）。
+/** 双重启用防御：bundles+插槽双启用时重复注册 /novel-api 会崩宿主进程（dsh-reader 验证过的坑）。
  * 语义钉死「当前有一份实例已注册」——dispose 复位，使 cordis 配置热替换（unload→load）后
  * 新实例可正常注册（dsh-reader 原模式无复位，HMR 场景会误拦）。 */
 let applied = false

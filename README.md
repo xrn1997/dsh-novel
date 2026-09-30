@@ -1,10 +1,10 @@
 # @xrn1997/dsh-novel
 
-在 DeepSeek Harness（DSH）的 Web GUI 里读网络小说：导入 [legado](https://github.com/gedoor/legado) 书源 → 聚合搜索 → 加书架 → 连续滚动阅读。AI 助手同时获得六个小说工具（`dshnovel_` 前缀），一句「帮我找本书并读第 N 章」就能在对话里完成搜索与阅读。
+在 DeepSeek Harness（DSH）里读网络小说：导入 [legado](https://github.com/gedoor/legado) 书源 → 聚合搜索 → 加书架 → 连续滚动阅读。AI 助手同时获得六个小说工具（`dshnovel_` 前缀），一句「帮我找本书并读第 N 章」就能在对话里完成搜索与阅读。
 
 ![左侧栏「小说」面板：书架 / 书城 / 书源管理三个 tab](https://raw.githubusercontent.com/xrn1997/dsh-novel/main/docs/screenshots/screenshot-01.png)
 
-- 安装：`dsh plugin --profile web add @xrn1997/dsh-novel`
+- 安装：`dsh plugin --profile <profile> add @xrn1997/dsh-novel`
 - 许可：[Apache-2.0](LICENSE)
 - 数据：全部留在本机 `~/.dsh/novel/`，插件不内置任何书源
 
@@ -37,21 +37,23 @@
 
 ## 安装
 
+插件装进哪个 profile，就在那个 profile 里生效——本插件不绑定宿主的发行形态，只认 DSH 的插件生态。
+
 ```powershell
-dsh plugin --profile web add @xrn1997/dsh-novel
+dsh plugin --profile <profile> add @xrn1997/dsh-novel
 ```
 
-重启 `dsh web`，左侧栏出现「小说」全局面板入口（图标行；点击即在中央面板打开书架 / 书城 / 书源管理三个 tab）。
+重启宿主后，左侧栏出现「小说」全局面板入口（图标行；点击即在中央面板打开书架 / 书城 / 书源管理三个 tab）。侧栏入口要求该 profile 的 bundles 里有 `@deepseek-ai/dsh-web-app`；不带它的 profile 只挂 Node 半与六个 AI 工具，界面上不会多出入口。
 
-npm 安装使用预构建产物，秒装、无需构建授权。从 GitHub 源码安装（`dsh plugin --profile web add github:xrn1997/dsh-novel`）时 `prepare` 脚本会自动构建，但 pnpm ≥10 首次安装可能拦下构建脚本（依赖已装而 `lib/` 未生成），需先在 profile 目录执行 `pnpm approve-builds --all` 再重跑。
+npm 安装使用预构建产物，秒装、无需构建授权。从 GitHub 源码安装（`dsh plugin --profile <profile> add github:xrn1997/dsh-novel`）时 `prepare` 脚本会自动构建，但 pnpm ≥10 首次安装可能拦下构建脚本（依赖已装而 `lib/` 未生成），需先在 profile 目录执行 `pnpm approve-builds --all` 再重跑。
 
 卸载：
 
 ```powershell
-dsh plugin --profile web remove @xrn1997/dsh-novel
+dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 ```
 
-**宿主兼容声明分两层，别混**：安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`（区间写窄了，插件在真宿主上装都装不进去）。实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本。两层由 `tests/packaging.test.ts` 同时看住：编译期 devDependency 必须被 peer 区间放行，且必须出现在实测声明里。宿主发新版要做四件事——升级编译所依、给 peer 区间开这一代的口、加实测条目、把新宿主的浏览器模块表（web shell 的 `staticModules()`）重读一遍并对齐 `PLATFORM_MODULES`；前两件漏了会红，后两件靠真机与人工核对。
+**宿主兼容声明分两层，别混**：安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`（区间写窄了，插件在真宿主上装都装不进去）。实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本。两层由 `tests/packaging.test.ts` 同时看住：编译期 devDependency 必须被 peer 区间放行，且必须出现在实测声明里。宿主发新版要做四件事——升级编译所依、给 peer 区间开这一代的口、加实测条目、把新宿主的浏览器模块表（宿主前端的 `staticModules()`）重读一遍并对齐 `PLATFORM_MODULES`；前两件漏了会红，后两件靠真机与人工核对。
 
 ## 首次使用
 
@@ -150,7 +152,7 @@ URL 模板语义按 legado 书源格式对齐：`url,{json}` 选项的逗号两�
 该源的 `jsLib` 里用了 `eval` / `new Function` 动态执行字符串——本插件的 JS 沙箱出于逃逸防御显式禁用字符串代码生成（legado 的 Rhino 环境允许），这类源无法仿真。
 
 **安装后侧栏没有出现「小说」入口？**
-重启 `dsh web` 后生效。若从源码目录安装，确认已先 `pnpm build` 生成 `lib/`（构建产物缺失会让整个插件树拒绝挂载，`dsh web` 直接启动失败而非静默降级），详见[本地源码调试](#本地源码调试)。
+先重启宿主。若从源码目录安装，确认已先 `pnpm build` 生成 `lib/`（构建产物缺失会让整个插件树拒绝挂载，宿主直接启动失败而非静默降级），详见[本地源码调试](#本地源码调试)；装进了 bundles 里没有 `@deepseek-ai/dsh-web-app` 的 profile，则本就只有工具面、没有侧栏入口。
 
 ## 开发
 
@@ -158,7 +160,7 @@ URL 模板语义按 legado 书源格式对齐：`url,{json}` 选项的逗号两�
 git clone https://github.com/xrn1997/dsh-novel.git
 cd dsh-novel
 pnpm install
-pnpm build        # 构建 lib/（Node 半 + 浏览器半）；改动源码后、重启 dsh web 前必须执行
+pnpm build        # 构建 lib/（Node 半 + 浏览器半）；改动源码后、重启宿主前必须执行
 pnpm dev          # = tsdown --watch，日常开发建议挂着
 ```
 
@@ -167,13 +169,13 @@ pnpm dev          # = tsdown --watch，日常开发建议挂着
 **`lib/` 是构建产物且不入库，任何从源码目录链进 profile 的安装方式都不会替你构建它。**
 
 ```powershell
-dsh plugin --profile web add link:C:/path/to/dsh-novel
-pnpm build        # 必须在源码目录手动跑一次，缺这步 dsh web 起不来
+dsh plugin --profile <profile> add link:C:/path/to/dsh-novel
+pnpm build        # 必须在源码目录手动跑一次，缺这步宿主起不来
 ```
 
 `link:` 只建目录链接、绝不触碰对端目录，pnpm 不会在对端执行 `prepare`，反复重跑也不会生成 `lib/`。缺失时的报错是 `dsh: plugin tree failed to load` + `ERR_MODULE_NOT_FOUND`，指向 `lib/index.js`。
 
-改动生效分两半：**浏览器半**（`src/client/`）由 `dsh-client-hmr`（500ms stat 轮询 + SSE）在 `lib/client.js` 的 mtime / size 变化时自动推给浏览器热更新，无需重启；**Node 半**不在热重载链路内，需重启 `dsh web`。
+改动生效分两半：**浏览器半**（`src/client/`）由 `dsh-client-hmr`（500ms stat 轮询 + SSE）在 `lib/client.js` 的 mtime / size 变化时自动推给浏览器热更新，无需重启；**Node 半**不在热重载链路内，需重启宿主。
 
 ### 架构速览
 
@@ -259,8 +261,8 @@ pnpm vitest run tests/legado-coverage/capture-upstream-snapshot.test.ts
 
 `DSH_INSTALL_CHECK` 只证明**源码装入这一格**（一次性 profile、自建 `lib/`、断言 bundles 与产物就位，跑完自己 `remove`）。它不起宿主，所以不证明插件树真能被挂载、也不证明六个工具在宿主里跑得通。那两件事只能手工做：
 
-1. **前置**：先 `pnpm build`。宿主 profile 必须**可由 CLI 写**——桌面版应用会独占自己的 profile、CLI 拒写，那种情况下改用 CLI 自建的一次性 profile（`dsh plugin --profile <名> add <本地路径>` 初始化它，再把 `@deepseek-ai/dsh-web-app` 加进 `dsh.profile.bundles`），它组出同一棵 web 树。
-2. **装载与挂载**：`dsh plugin --profile web add github:xrn1997/dsh-novel`（源码装首次要 `pnpm approve-builds --all`）→ `dsh --profile web --dump-config` 的组合树里出现本插件 → 起 `dsh web`，看组合树里没有 `plugin tree failed to load`。
+1. **前置**：先 `pnpm build`。宿主 profile 必须**可由 CLI 写**——保留名 `desktop` 归宿主应用独占，普通 CLI 会以 `profile "desktop" is managed exclusively by the Electron application` 拒写；写不了就改用 CLI 自建的一次性 profile（`dsh plugin --profile <名> add <本地路径>` 初始化它，再把 `@deepseek-ai/dsh-web-app` 加进 `dsh.profile.bundles`），它组出同一棵树。
+2. **装载与挂载**：`dsh plugin --profile <名> add github:xrn1997/dsh-novel`（源码装首次要 `pnpm approve-builds --all`）→ `dsh --profile <名> --dump-config` 的组合树里出现本插件 → 起 `dsh --profile <名>`，看组合树里没有 `plugin tree failed to load`。
 3. **工具面与一条真路径**：六个 `dshnovel_` 工具各真调一次；再走一条真实业务：搜 → 详情 → 目录 → 正文并翻一页（顺带覆盖出站代理与解码链）。
 
 **它证明什么**：当前宿主版本上「装得进、挂得上、工具面活着、业务链路走得通一次」。**它不证明**：任何站点的正文可读率（那是 `DSH_CONTENT_AUDIT` 的分桶报告，报告不等于通过率）、浏览器里的渲染与图片解码（那是 `DSH_EPUB_BROWSER`），也不证明其它宿主版本——每次 bump 宿主版本都要重跑这三步，并把结果如实加进上面的实测名单。
