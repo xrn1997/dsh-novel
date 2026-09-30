@@ -53,7 +53,7 @@ npm 安装使用预构建产物，秒装、无需构建授权。从 GitHub 源�
 dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 ```
 
-**宿主兼容声明分两层，别混**：安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`（区间写窄了，插件在真宿主上装都装不进去）。实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本。两层由 `tests/packaging.test.ts` 同时看住：编译期 devDependency 必须被 peer 区间放行，且必须出现在实测声明里。宿主发新版要做四件事——升级编译所依、给 peer 区间开这一代的口、加实测条目、把新宿主的浏览器模块表（宿主前端的 `staticModules()`）重读一遍并对齐 `PLATFORM_MODULES`；前两件漏了会红，后两件靠真机与人工核对。
+**宿主兼容声明分两层，别混**：安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`（区间写窄了，插件在真宿主上装都装不进去）。实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本。两层由 `tests/packaging.test.ts` 同时看住：编译期 devDependency 必须被 peer 区间放行，且必须出现在实测声明里。宿主发新版要做四件事——升级编译所依、给 peer 区间开这一代的口、加实测条目、把新宿主的浏览器模块表（宿主前端的 `staticModules()`）重读一遍并对齐 `PLATFORM_MODULES`；前两件漏了会红，后两件靠真机与人工核对。宿主依赖包的**发布冷却闸**（pnpm 的 `minimumReleaseAge`，24 小时内发布的版本不许进 lockfile）对 `@deepseek-ai/dsh-*` 整 scope 放行，写死在 `pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude`——所以 bump 宿主不必再动一份逐代手写的放行名单（理由与被否决的做法见 `docs/adr/0026`）。
 
 ## 首次使用
 
