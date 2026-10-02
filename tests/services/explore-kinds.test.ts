@@ -46,4 +46,15 @@ describe('分类词表', () => {
     ], '玄幻')
     expect(out.map((x) => x.source.id)).toEqual(['B'])
   })
+
+  // 计数与清单都按**源**算：角标读的是「N 源」，同源重复声明不是第二个源；取源侧同一个源
+  // 也只能产出一次目标（否则同一源会被抓两遍）。故这一条同时钉住两个函数的源内去重。
+  it('同源重复声明同一分类：只算一个源、只产出一条目标（首条声明胜）', () => {
+    const sources = [
+      src('A', [{ title: '玄幻', url: 'a' }, { title: '玄幻', url: 'b' }]),
+      src('B', [{ title: '玄幻', url: 'c' }]),
+    ]
+    expect(kindsOf(sources)).toEqual([{ title: '玄幻', sources: 2 }])
+    expect(sourcesOfKind(sources, '玄幻').map((x) => [x.source.id, x.kindUrl])).toEqual([['A', 'a'], ['B', 'c']])
+  })
 })
