@@ -112,14 +112,34 @@ export function rulesEpoch(rules: NormalizedRules, baseUrl: string, facet: Cache
   return digest(parts)
 }
 
-/** 发现面快照的指纹字段集：与 `RULE_EPOCH_IMPACT` 里那十行 `ruleExplore*` 同集。`satisfies` 只保证
- *  这十个名字都是真字段（拼错即 tsc 红）；**刻意不按命名前缀自动收**，也不随 `NormalizedRules`
- *  加字段自动长大——「指纹收谁」该由发现面求值真正经过谁决定，不该由名字长什么样决定。 */
-const EXPLORE_FINGERPRINT = [
+/** 发现面指纹的字段表，分三组，**组即「它为什么在这里」**。`satisfies` 只保证名字都是真字段
+ *  （拼错即 tsc 红）；**刻意不按命名前缀自动收**，也不随 `NormalizedRules` 加字段自动长大——
+ *  「指纹收谁」由发现面求值真正经过谁决定，不由名字长什么样决定。 */
+
+/** ① 发现面自有规则：`ruleExploreList` 非空时整套用它（`explore-face.ts` 的 `rulesFor`）。 */
+const EXPLORE_OWN_FIELDS = [
   'ruleExploreUrl', 'ruleExploreList', 'ruleExploreName', 'ruleExploreAuthor',
   'ruleExploreBookUrl', 'ruleExploreCoverUrl', 'ruleExploreIntro', 'ruleExploreKind',
   'ruleExploreLastChapter', 'ruleExploreWordCount',
 ] as const satisfies readonly (keyof NormalizedRules)[]
+
+/** ② **回落分支**读的那九个通用书目字段：`ruleExploreList === null` 时整套改用它们，
+ *  「只声明了 `ruleFind.kinds` 的源」是常见形态——漏收这一组，改书名/作者规则就不动缓存键。 */
+const EXPLORE_FALLBACK_FIELDS = [
+  'ruleBookList', 'ruleBookName', 'ruleAuthor', 'ruleBookUrl', 'ruleCoverUrl',
+  'ruleIntro', 'ruleLastChapter', 'ruleKind', 'ruleWordCount',
+] as const satisfies readonly (keyof NormalizedRules)[]
+
+/** ③ 请求修饰符：`header` 与 `headerRule` 定发出去的请求长什么样（`bridge.ts` 的 `resolveHeaders`），
+ *  `jsLib` 是 JS 规则的库——三者任一变了，同一个分类地址可以拿回完全不同的页面。 */
+const EXPLORE_REQUEST_FIELDS = [
+  'header', 'headerRule', 'jsLib',
+] as const satisfies readonly (keyof NormalizedRules)[]
+
+/** 三组的并集即指纹字段集。`baseUrl` 不在此表内（它不是规则字段），由 `exploreEpoch` 入参带入。 */
+const EXPLORE_FINGERPRINT: readonly (keyof NormalizedRules)[] = [
+  ...EXPLORE_OWN_FIELDS, ...EXPLORE_FALLBACK_FIELDS, ...EXPLORE_REQUEST_FIELDS,
+]
 
 /**
  * 发现面（书城）快照的规则代际：**两个缓存、两份指纹、同一个主人**。本模块是「这份缓存还有效吗」
@@ -131,8 +151,18 @@ const EXPLORE_FINGERPRINT = [
  *  引擎面，会让目录/正文代际跟着探索规则抖，凭空作废整源文件缓存。发现面要的「换规则自然失效」
  *  由这份指纹独立兑现：换探索规则即换键，不必等 TTL。
  *
- * 收谁：只认发现面求值真正经过的字段（上面那十个）+ baseUrl，串接与摘要手法与 `rulesEpoch` 同一条。
- *  不含 `exploreUrl`（legado 的脚本/JSON 三形态，本期未接，取值不经过它）；不含 `ruleExploreKinds`
+ * 收谁：**一次发现面请求 + 解析读到的全部输入**——上面那三组规则字段（自有十条 / 回落九条 /
+ *  请求修饰符三条）+ baseUrl，串接与摘要手法与 `rulesEpoch` 同一条。为什么收这么宽：快照存的是
+ *  「一次请求 + 解析的**结果**」，它有没有效取决于这次请求的**全部输入**；**过度失效是免费的，
+ *  漏失效是陈旧谎**（改了规则却不换键，读者会拿到一份撑满 TTL 的旧书目）。文件缓存那份指纹同
+ *  思路——`header` / `jsLib` 在 `RULE_EPOCH_IMPACT` 里正是 `'both'`，不是 `'none'`。
+ *
+ *  与 `RULE_EPOCH_IMPACT` 的关系：那张表按「一个字段变更作废哪些**引擎面**（目录/正文）的文件
+ *  缓存」归类，判据是目录/正文求值经过谁。发现面回落读那九个通用书目字段属于**快照**的事，
+ *  与文件缓存无关，故那张表一行未动。两条轴不重叠也不矛盾：同模块、两份指纹、各按各自的消费
+ *  路径收字段（发现面收宽了不会让文件缓存多失效一次）。
+ *
+ *  刻意不含 `exploreUrl`（legado 的脚本/JSON 三形态，本期未接，取值不经过它）；不含 `ruleExploreKinds`
  *  ——后者只产出分类入口地址，而地址本身已是快照键的一半（`KindCacheKey.kind`），地址一变键就变。
  */
 export function exploreEpoch(rules: NormalizedRules, baseUrl: string): string {
