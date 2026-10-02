@@ -81,7 +81,7 @@ index.ts 组合根：配置 → 缺省值 → 部件装配 → 三条注册
 | 原子写与 JSON 读的两分判别 | `services/storage.ts` | domain 的合并写策略 |
 | 翻页何时停 | `services/pagination.ts` 的 `followPages` | 站点结构解析 |
 | 本地书身份与分流 | `services/localbooks.ts` | EPUB 包内解析（`services/epub/`） |
-| 聚合搜索的参与集 | `services/reading.ts` 的 `participates` 谓词 | 源清单读写 |
+| 聚合搜索的参与集 | `services/participation.ts` 的 `participates`（发现面谓词 `exploreParticipates` 同文件） | 源清单读写 |
 | 错误类目 → HTTP | `services/errors.ts` + `api/wire.ts`（两分法） | 路由自检错误 |
 | 整轮搜索结果 | `services/search-job.ts`（Node 半持有） | wire 形状 |
 | 缺省值 | 五个各自主人（见 `tests/services/defaults.test.ts` 钉的常量） | 第二处字面量 |

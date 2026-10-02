@@ -40,7 +40,7 @@ _Avoid_: 规则格式
 
 **搜索面（search face）**:
 「书源搜索规则 + 关键词」到「命中条目 + 首条书名」的完整请求语义；聚合搜索与探针共用同一份。参与集判据：**启用 ∧ 文本源**。
-_唯一实现_: `services/search-face.ts`；参与集谓词 `participates`（`services/reading.ts`）
+_唯一实现_: `services/search-face.ts`；「谁参与」的判据同住 `services/participation.ts`——搜索面 `participates`（启用 ∧ 文本源），发现面 `exploreParticipates`（其上再要求声明了分类入口）
 _Avoid_: 搜索服务
 
 **请求组装（request assembly）**:

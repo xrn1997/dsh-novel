@@ -22,7 +22,7 @@ export type SourceStatus = 'unverified' | 'verified' | 'broken'
  *  读不懂不等于文本，一律不进参与集（曾按文本处理，误标的短剧/漫画源混进聚合搜索——已推翻）。
  *  它也不写 `status`：探针按搜索面重判，这类源的搜索面恰恰是好的，用状态承载会被下一次重验洗白。
  *  本插件当前只支持文本源：导入预检点名拒绝非文本与未知；参与集 = enabled ∧ type==='text'
- *  （判定单点在 reading 的 participates 谓词）；存量误标由 SourceRegistry.load 按 raw 重推收敛。 */
+ *  （判定单点在 services/participation.ts 的 participates 谓词）；存量误标由 SourceRegistry.load 按 raw 重推收敛。 */
 export type SourceContentKind = 'text' | 'image' | 'audio' | 'file' | 'unknown'
 
 /** 探针失败原因：引擎三类 + 抓取两类 + 规则缺失；'Error' 为兜底（出现即分类漏了） */
