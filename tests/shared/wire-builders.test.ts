@@ -32,7 +32,7 @@ describe('路由表计数钉死（「17 条路由」注释曾腐烂且无测试�
     expect(ROUTES.exploreListStream).toEqual({ path: 'explore/list/job-stream', segs: ['explore', 'list', 'job-stream'] })
   })
 
-  it('分类词与页码参数名在 PARAMS 里', () => {
+  it('分类词参数名在 PARAMS 里', () => {
     expect(PARAMS.kind).toBe('kind')
   })
   it('书架批量删除：path 与 segs 同源（复用 batch-delete 段，与书源批删同段名）', () => {

@@ -45,7 +45,7 @@ describe('书城发现面：离线全链路', () => {
     })
     const page = await fetchKindPage(source, targets[0].kindUrl, fetcher)
     if (!page.ok) throw new Error('应能取到条目')
-    // brief 的断言集里没有这条地址，而它才是「词表派生的 slug 真进了请求」的唯一读数：
+    // 这条地址才是「词表派生的 slug 真进了请求」的唯一读数：
     // 钉子页的相对书地址对任何分类路径都解析成同一个绝对地址，光看返回的书目分不出请求打到哪去了。
     expect(seen[0]).toBe('https://www.bqquge.com/xuanhuan')
 

@@ -44,6 +44,21 @@ describe('explore-face：单源一次分类抓取', () => {
     expect(r.hits[0].url).toBe('https://s.com/book/1')
   })
 
+  // explore-own 那一支在这份文件里从未真正产出过条目（其余各条都走回落那侧），于是它整支被写坏
+  // ——比如把整套换成通用搜索规则——没有一条用例会红。这条给它一个真命中：通用两件套在这张页面上
+  // 都命不中，能出条目就只可能是发现面自己那套规则跑过了；书名断言再钉住「哪个位置取哪个字段」。
+  it('ruleExploreList 有命中 → 由发现面自己那套规则取到条目（通用规则在这张页面上命不中）', async () => {
+    const own = {
+      ruleSearch: { list: '.nothing', name: '.nomatch', bookUrl: '.nomatch@href' },
+      ruleFind: { url: '/{{kind}}/{{page}}', kinds: [{ title: '玄幻', url: 'x' }], ruleSearch: { list: '.item', name: 'h3 a' } },
+    }
+    const f = createFetcher({ fetchImpl: async () => html(LIST_HTML) })
+    const r = await fetchKindPage(source(own), 'x', f)
+    if (!r.ok) throw new Error('应能取到条目')
+    expect(r.hits).toHaveLength(1)
+    expect(r.hits[0].title).toBe('剑起长安')
+  })
+
   // 这一条只钉列表规则那一侧（列表命中 0 → 空 List，不是 Miss）。它对「整套切换」没有区分力：
   // 列表规则一条都命中不了，书名规则无论来自哪一套都没跑过，逐字段回落在这里产出一模一样的结果。
   it('ruleExploreList 非空 → 整套用它（通用规则不参与）', async () => {

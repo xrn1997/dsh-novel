@@ -3,7 +3,12 @@ import type { ExploreBook, ExploreOrigin, SearchGroup, SearchHit } from '../shar
 /** 归并键：书名 + 作者，各自 trim 后比较。**任一为空即返回 null（不归并）**——
  *  作者缺失时把两本不同的书焊成一本是本仓最高罪，宁可列表里多一条。
  *  分隔符用 NUL 而不是可见字符：`('a b','c')` 与 `('a','b c')` 必须是两个键，
- *  拿空格/换行拼键会让两本不同的书撞成一本。 */
+ *  拿空格/换行拼键会让两本不同的书撞成一本。
+ *
+ *  规范化**就是 trim 一项**，别再找「既有规范化器」来复用：发现面设计里那条「归并前先过既有的
+ *  书名/作者规范化」在本仓**没有实现物**——矩阵行 `d-name-author-cleanup` 讲的是**源名**的图标剥离，
+ *  与书名/作者无关，仓里没有任何书名/作者规范化器可接。刻意不发明一个：漏归并只多出一行书目，
+ *  假归并才会把两本不同的书焊成一本，取这一侧是安全方向。 */
 function keyOf(hit: SearchHit): string | null {
   const name = hit.title.trim()
   const author = (hit.author ?? '').trim()

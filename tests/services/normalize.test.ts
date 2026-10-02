@@ -388,9 +388,11 @@ describe('原生方言的 ruleFind 映射（发现面数据面）', () => {
     if (!a.ok) throw new Error('应能规范化')
     expect(a.source!.rules.ruleExploreList).toBe('.book')
     expect(a.source!.rules.ruleExploreName).toBe('.title@text')  // Native 裸选择器 = 取文本（隐式 @text）
-    // 未给的子字段仍是 null —— 提醒使用者「整套切换」而非逐字段回落
+    // 未给的子字段仍是 null —— 提醒使用者「整套切换」而非逐字段回落。这条断言要挑**通用规则声明过**
+    // 的字段：`ruleExploreBookUrl` 的通用侧（ruleBookUrl）是命得中的，逐字段回落会让它冒出通用那本书
+    // 地址，于是这里正是「整套」与「逐字段」的分野；作者/分类两边都空，断言它们对实现无区分力。
+    expect(a.source!.rules.ruleExploreBookUrl).toBeNull()
     expect(a.source!.rules.ruleExploreAuthor).toBeNull()
-    expect(a.source!.rules.ruleExploreKind).toBeNull()
 
     const b = normalizeSource(native)
     if (!b.ok) throw new Error('应能规范化')

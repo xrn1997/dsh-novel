@@ -68,6 +68,8 @@ export async function fetchKindPage(
     return { ok: false, code: 'RuleMissing', message: `发现规则缺失：缺 ${missing.join('、')}` }
   }
   const subEval = makeSubEval(fetcher, source, jsTimeoutMs === undefined ? undefined : { jsTimeoutMs })
+  // 首页裁页在此**不需要方言判定**（搜索面那一处要）：只有原生方言的书源声明 `ruleFind`，
+  // 发现面值住在 `ruleExploreUrl`，而它只可能由原生映射落位 ⇒ 走到这里的模板必是原生分页语义。
   const plan = buildSearchRequest(template, { kind: kindUrl, page: 1 }, source.baseUrl, { trimFirstPage: true })
   const { text, landedUrl } = await fetchTextPage(fetcher, plan.url,
     { ...fetchInitOf(plan, await resolveHeaders(fetcher, source, { jsTimeoutMs })), timeoutMs }, plan.charset)

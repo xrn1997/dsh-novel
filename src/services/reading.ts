@@ -37,7 +37,7 @@ import type { NovelSource, SourceAuth } from './types.js'
 // ── 公开类型（冻结：HTTP 面 / 工具面 / UI 只准用这套）──────────────────
 // 值形状定义在 wire 契约（src/shared/wire.ts）——
 // 此处 re-export 保持既有 import 路径可用；改形状请去 shared，别在这里加第二份。
-export type { SearchHit, SearchGroup, ChapterEntry, BookDetail, SearchJobSnapshot } from '../shared/wire.js'
+export type { SearchHit, SearchGroup, ChapterEntry, BookDetail, SearchJobSnapshot, ExploreKinds, ExploreSnapshot } from '../shared/wire.js'
 /** 本地资源读口（含流/MIME 的 Node 内部形状）：api 层从本模块取用，不去 localbooks 抄第二处 */
 export type { LocalResource } from './localbooks.js'
 import { planarNavigation } from '../shared/wire.js'
@@ -558,10 +558,6 @@ export class ReadingService {
 
   /** 分类轮次的「变了」信号口（SSE 路由用它拉全量帧；信号不带数据）。返回退订口。 */
   subscribeExploreJob(listener: () => void): () => void { return this.exploreJobs.subscribe(listener) }
-
-  /** 停止当前这轮分类浏览（宿主任务取消与 UI 的「停止浏览」都走这条）。返回 false = 本轮早已收尾
-   *  （点了个空钮），不是错误；在途请求不撤回，与聚合搜索同口径。 */
-  cancelExploreJob(): boolean { return this.exploreJobs.cancel('用户停止') }
 
   private async searchOne(s: NovelSource, keyword: string): Promise<SearchGroup> {
     const base = {
