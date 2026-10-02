@@ -19,6 +19,24 @@ describe('跨源归并', () => {
     expect(out[0].origins[1].bookUrl).toBe('https://b.com/9')
   })
 
+  it('同一源把同一本列两回，只算一个源——角标说的是「N 个源收录」，同源重复不是第二个源', () => {
+    const out = mergeBooks([group('A', [hit(), hit({ url: 'https://a.com/2' })])])
+    expect(out).toHaveLength(1)
+    expect(out[0].sourceCount).toBe(1)
+    expect(out[0].origins).toHaveLength(1)
+  })
+
+  it('去重不砍正常多源：同书来自 A、A、B → 两个源，A 只留这一页给的第一条入口', () => {
+    const out = mergeBooks([
+      group('A', [hit({ url: 'https://a.com/1' }), hit({ url: 'https://a.com/2' })]),
+      group('B', [hit({ url: 'https://b.com/9' })]),
+    ])
+    expect(out).toHaveLength(1)
+    expect(out[0].sourceCount).toBe(2)
+    expect(out[0].origins.map((o) => o.sourceId)).toEqual(['A', 'B'])
+    expect(out[0].origins[0].bookUrl).toBe('https://a.com/1')
+  })
+
   it('作者为空**不归并**——重名书大量存在，合并等于把两本书焊成一本', () => {
     const out = mergeBooks([group('A', [hit({ author: null })]), group('B', [hit({ author: '' })])])
     expect(out).toHaveLength(2)

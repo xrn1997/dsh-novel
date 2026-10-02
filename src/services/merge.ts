@@ -51,7 +51,10 @@ export function mergeBooks(groups: SearchGroup[]): ExploreBook[] {
         const b = bookOf(h, origin)
         byKey.set(key, b)
         out.push(b)
-      } else {
+      } else if (!found.origins.some((o) => o.sourceId === origin.sourceId)) {
+        // 角标写的是「N 个源收录」：同一个源在同一页把同一本列两回（目录页与「最新章节」
+        // 栏重复很常见）不构成第二个源，记进去是让角标说谎、让共识排序的依据跟着虚高。
+        // 该源只留这一页给的第一条入口（bookUrl / lastChapter 就是它给的入口）。
         found.origins.push(origin)
         found.sourceCount = found.origins.length
       }
