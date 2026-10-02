@@ -142,6 +142,62 @@ export interface SearchJobSnapshot {
   error?: string
 }
 
+/** 发现面的分类词表：各参与源 `ruleFind.kinds[].title` 的**精确同名**并集。
+ *  不做同义词归并——「玄幻」≠「奇幻」是站点的真实分歧，替用户合并就是替用户猜。 */
+export interface ExploreKinds {
+  kinds: Array<{ title: string; sources: number }>
+}
+
+/** 一本书在某个源上的可读入口（只在「看到书」的阶段出现，导航层不出现源名） */
+export interface ExploreOrigin {
+  sourceId: string
+  sourceName: string
+  bookUrl: string | null
+  lastChapter?: string
+}
+
+/** 归并后的一本书：同一本（书名, 作者）在多个源出现时合成一条。
+ *  `author` 为空的条目**不参与归并**（重名书大量存在，合并 = 把两本不同的书焊成一本），
+ *  所以这里的 author 仍可能是 null。 */
+export interface ExploreBook {
+  name: string
+  author: string | null
+  coverUrl?: string
+  kind?: string
+  lastChapter?: string
+  intro?: string
+  wordCount?: string
+  sourceCount: number
+  origins: ExploreOrigin[]
+}
+
+/** 一个源在这个分类上没给出结果（抓取失败 / 超时 / 规则不认）——如实摊开，不造占位条目 */
+export interface ExploreFailure {
+  sourceId: string
+  sourceName: string
+  code: string
+  message: string
+}
+
+/** 分类轮次的读面快照。
+ *  **全量而非游标增量**：归并会修订已经发出去的条目（第二个源带回同一本书要给已发的那条加 origin、
+ *  `sourceCount` 从 1 变 2），与 append-only 的 `added/next` 模型不相容。列表规模小（每源首页
+ *  10~20 条 × N 源），整帧替换比新增一套 `updated` 语义划算，也让归并保持成一个纯函数。 */
+export interface ExploreSnapshot {
+  id: string
+  kind: string
+  phase: 'running' | 'done' | 'failed'
+  /** 用户主动停止（`phase='failed'` 而非失败）：UI 据此不报红条 */
+  cancelled: boolean
+  total: number
+  done: number
+  books: ExploreBook[]
+  failures: ExploreFailure[]
+  startedAt: number
+  finishedAt?: number
+  error?: string
+}
+
 /** 每源命中上限（后台搜索任务的持有截断；站点侧搜索面本就只取首页） */
 export const SEARCH_HITS_CAP_PER_SOURCE = 50
 
@@ -375,6 +431,10 @@ export const SEG = {
   job: 'job',
   jobCancel: 'job-cancel',
   jobStream: 'job-stream',
+  /** 发现面（原生书源 ruleFind）：词表 / 分类书单 / 分类轮次的任务读面 */
+  explore: 'explore',
+  kinds: 'kinds',
+  list: 'list',
   book: 'book',
   toc: 'toc',
   chapter: 'chapter',
@@ -394,7 +454,7 @@ export const SEG = {
 export interface Route { path: string; segs: string[] }
 export function route(...segs: string[]): Route { return { path: segs.join('/'), segs } }
 
-/** 静态路由表（无参数的部分，共 25 条；另有 5 条参数路由见 paramRoutes）——
+/** 静态路由表（无参数的部分，共 29 条；另有 5 条参数路由见 paramRoutes）——
  *  路由总数由 tests/shared/wire-builders.test.ts 钉死（此前的「17 条路由」注释既烂又无测试）。 */
 export const ROUTES = {
   health: route(),
@@ -415,6 +475,14 @@ export const ROUTES = {
   searchJobStream: route(SEG.search, SEG.jobStream),
   /** 停止本轮聚合搜索：只停「还要去搜的源」，已搜出的命中一律保留（读面照旧可读） */
   searchJobCancel: route(SEG.search, SEG.jobCancel),
+  /** 分类词表（本地派生，零网络请求） */
+  exploreKinds: route(SEG.explore, SEG.kinds),
+  /** 提交一轮分类抓取 */
+  exploreList: route(SEG.explore, SEG.list),
+  /** 分类轮次的全量快照（无游标——快照形状见 ExploreSnapshot 的注释） */
+  exploreListStatus: route(SEG.explore, SEG.list, SEG.jobStatus),
+  /** 分类轮次的状态信号流（SSE，每帧一份全量快照） */
+  exploreListStream: route(SEG.explore, SEG.list, SEG.jobStream),
   book: route(SEG.book),
   toc: route(SEG.toc),
   chapter: route(SEG.chapter),
@@ -471,6 +539,8 @@ export const PARAMS = {
    *  （与既有 `DELETE local?id=` 同参数名；本地读口不用路径段，bookKey 里的 `:`/`/` 不必编码成段） */
   documentId: 'documentId',
   resourceId: 'resourceId',
+  /** 分类名（发现面：左栏选中项，精确同名匹配） */
+  kind: 'kind',
 } as const
 
 /** query 序列化：编码 + 去 undefined/null（null = 键缺席，与 wire 可空口径一致） */
