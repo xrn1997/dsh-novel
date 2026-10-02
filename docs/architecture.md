@@ -84,6 +84,12 @@ index.ts 组合根：配置 → 缺省值 → 部件装配 → 三条注册
 | 聚合搜索的参与集 | `services/participation.ts` 的 `participates`（发现面谓词 `exploreParticipates` 同文件） | 源清单读写 |
 | 错误类目 → HTTP | `services/errors.ts` + `api/wire.ts`（两分法） | 路由自检错误 |
 | 整轮搜索结果 | `services/search-job.ts`（Node 半持有） | wire 形状 |
+| 一次分类页请求的完整语义（含整套规则回落） | `services/explore-face.ts` 的 `fetchKindPage` | 整轮编排与跨源归并 |
+| 分类词表（有哪些分类、各被多少源声明） | `services/explore.ts` 的 `kindsOf` / `sourcesOfKind` | 站点侧分类的同义归并（本仓不造同义词表） |
+| 一轮分类抓取的编排（批并行 / 完成序交付 / 快照写回） | `services/explore.ts` 的 `runExploreKind` | 轮次状态与终态 |
+| 整轮分类结果 | `services/explore-job.ts`（Node 半持有，读面给全量快照） | wire 形状 |
+| 同一本书的跨源归并 | `services/merge.ts` 的 `mergeBooks` | 字段级择优（取首次出现那一份） |
+| 分类快照的存放与时效 | `services/explore-cache.ts` 的 `KindCache` + `services/cache-epoch.ts` 的 `exploreEpoch` | 目录 / 正文文件缓存（`rulesEpoch`） |
 | 缺省值 | 五个各自主人（见 `tests/services/defaults.test.ts` 钉的常量） | 第二处字面量 |
 | 浏览器视图内路由与跨卸载现场 | `client/store.ts` + 各模块级现场 store | 业务真相 |
 | 阅读时序 | `client/reader-session.ts` | DOM 测量实现 |

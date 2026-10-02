@@ -495,8 +495,9 @@ export class ReadingService {
     return this.searchProgressive(keyword, opts)
   }
 
-  /** 搜索参与计划：search 的参与集判定的唯一主人——客户端分批/进度按此走，
-   *  「哪些源参搜」（启停 ∧ 内容形态 invariant）不再在 wire 两侧各定义一份。 */
+  /** 搜索参与计划：**参与者 id 清单**这条投影的唯一主人——客户端分批/进度按此走，
+   *  「哪些源参搜」不再在 wire 两侧各定义一份。
+   *  谓词不在本文件：「谁参搜」的**判据**单点是 `services/participation.ts` 的 `participates`。 */
   searchPlan(): SearchPlan {
     return { sourceIds: this.registry.list().filter((s) => participates(s)).map((s) => s.id) }
   }

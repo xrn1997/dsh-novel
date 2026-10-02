@@ -59,7 +59,8 @@ export class SourceRegistry {
   /** dir = novel 根；sources.json **缺失** → 空表（首启是常态）；**损坏** → CorruptJsonError 响亮失败
    *  （绝不折叠成空表——那会让下一次 edit 覆盖整文件，本机库的源静默消失，见 storage.readJson）。
    *  存量归一（改了就落盘收敛）：
-   *  enabled 缺省归一为 true——早期数据无此字段，缺省即「启用」，否则搜索面 `s.enabled &&` 静默排除老源；
+   *  enabled 缺省归一为 true——早期数据无此字段，缺省即「启用」，否则参与集判据
+   *  （`services/participation.ts` 的 `participates`）静默排除老源；
    *  type 缺省归一为 'text'——早期数据无此字段（当时 bookSourceType 根本没读）；
    *  groups 拆分迁移——早期只按 `\` 拆，真实导出的逗号粘连组合串按 splitGroups 收敛成多段（幂等）；
    *  name 前缀图标迁移——书源包惯用的分组装饰前缀按 stripLeadingIcons 剥掉（幂等）；

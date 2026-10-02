@@ -43,6 +43,11 @@ _Avoid_: 规则格式
 _唯一实现_: `services/search-face.ts`；「谁参与」的判据同住 `services/participation.ts`——搜索面 `participates`（启用 ∧ 文本源），发现面 `exploreParticipates`（其上再要求声明了分类入口）
 _Avoid_: 搜索服务
 
+**发现面（explore face / 书城）**:
+「书源声明的分类入口 + 一个分类名」到「该分类在这个源上的书目」的完整请求语义与其整轮编排；用户可见的名字是面板里的「书城」tab。参与集判据：**启用 ∧ 文本源 ∧ 声明了分类入口**。
+_唯一实现_: 单源一次抓取 `services/explore-face.ts` 的 `fetchKindPage`；整轮编排 `services/explore.ts` 的 `runExploreKind`；「谁进城」的谓词 `services/participation.ts` 的 `exploreParticipates`
+_Avoid_: 书城列表页、分类搜索（发现面是另一条链路，不是聚合搜索的第二次调用）
+
 **请求组装（request assembly）**:
 「URL 模板 + 变量 + baseUrl」到「可执行请求计划」的唯一语义解释——method 判定、body 插值、POST 默认头、charset、init 姿态全在一处。
 _唯一实现_: `services/request.ts` 的 `assembleRequest` / `fetchInitOf`
@@ -156,9 +161,14 @@ _唯一实现_: `src/services/localbooks.ts`（身份、分流、提交、读取
 _Avoid_: 本地 TXT（口径覆盖两种格式，书架卡片因此只说「本地」，真格式由导入回执的 `format` 交代）、上传文件
 
 **后台任务（background job）**:
-跑在服务端的耗时任务，三种 kind：`novel-import` / `novel-probe`（写，共用一槽）与 `novel-search`（读，另开一槽）。身份与生命周期登记给宿主 `ctx.jobs`；业务计数与明细归本仓持有者。**停止（cancel）不是失败也不是放弃**。
-_唯一实现_: `services/import-job.ts` / `services/probe.ts` / `services/search-job.ts`
+跑在服务端的耗时任务，四种 kind：`novel-import` / `novel-probe`（写，共用一槽）与 `novel-search` / `novel-explore`（读，另开一槽）。身份与生命周期登记给宿主 `ctx.jobs`；业务计数与明细归本仓持有者。**停止（cancel）不是失败也不是放弃**。
+_唯一实现_: `services/import-job.ts` / `services/probe.ts` / `services/search-job.ts` / `services/explore-job.ts`
 _Avoid_: 队列（是单槽不是队列）、前端任务（在途循环不在浏览器半）
+
+**分类轮次（explore round）**:
+一轮分类浏览的持有物：逐源结果由 Node 半收着，读面给**全量快照**（归并会修订已发条目，游标增量装不下）；一次只留最近一轮，过了保留期读作「无任务」。
+_唯一实现_: `services/explore-job.ts` 的 `ExploreJobs`；跨半形状 `shared/wire.ts` 的 `ExploreSnapshot`
+_Avoid_: 分类任务队列（是单轮槽不是队列）
 
 **阅读会话（reader session）**:
 「目录 → 存档恢复 → 逐章懒加载 → 预取 → 进度落盘」的时序持有者；DOM 测量经 `ReaderPort` 注入，视图只渲染与接线。同一时刻只允许一章在途（`inflight`），滚动风暴与目录直达只记意图（`pendingJump`），刚失败过的同一章不自动重试。
@@ -196,6 +206,16 @@ _Avoid_: 逐字段 typeof 筛键（那是这张表的抄本）
 书架读取面上由服务端 join 出的源名 `ShelfEntry.sourceName`。它是**读取面投影、不是书目字段**——不可 patch、不落盘，故刻意不进 `SHELF_META`。
 _唯一实现_: `services/reading.ts` 的 `sourceNameOf`（读面入口 `shelfList`）
 _Avoid_: 来源字段（那是落盘书目字段的说法）、来源快照（同址替换会复用 sourceId，快照会静默陈旧）
+
+**分类词表（kind vocabulary）**:
+各参与源声明的分类入口摊成的一份可看清单（标题 + 声明它的源数）：跨源**精确同名**取并集，**不造同义词表**（「玄幻」≠「奇幻」是站点的真实分歧）。
+_唯一实现_: `services/explore.ts` 的 `kindsOf`（词表）+ `sourcesOfKind`（参与某一分类的源，附各源自己的地址）；跨半形状 `shared/wire.ts` 的 `ExploreKinds`
+_Avoid_: 分类目录（那是站点侧的分类，词表是各源声明的并集）
+
+**跨源归并（cross-source merge）**:
+同一本书在多个源上出现时合成一条书目的唯一算式：**书名与作者都非空**且同名才算同一本，否则宁可在列表里多出一条。
+_唯一实现_: `services/merge.ts` 的 `mergeBooks`（读时算、不缓存）；跨半形状 `shared/wire.ts` 的 `ExploreBook` / `ExploreOrigin`
+_Avoid_: 去重（归并不是丢掉重复条目，是给一条书目补上来源入口）
 
 **wire 契约（wire contract）**:
 `/novel-api` 规范 JSON 的值形状与路由名——Node 半与浏览器半之间的唯一真相，代码只许有一个主人。
