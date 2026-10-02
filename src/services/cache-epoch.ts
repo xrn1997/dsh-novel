@@ -3,7 +3,9 @@ import type { Facet } from '../engine/index.js'
 import type { NormalizedRules } from './types.js'
 
 /**
- * 缓存代际：规则指纹是「这份缓存还有效吗」的唯一算式。
+ * 缓存代际：规则指纹是「这份缓存还有效吗」的唯一算式。本仓有**两种缓存**，各一份指纹——
+ *  文件缓存（目录/正文，`rulesEpoch`）与进程内分类快照（`exploreEpoch`），
+ *  为何不能共用一份见 `exploreEpoch`。
  *
  * 为什么要它：同址替换复用 sourceId 保书架引用
  * （既有裁决），于是「身份没变」被当成了「内容仍有效」——换规则后目录/正文照旧命中旧代际，
@@ -107,6 +109,35 @@ export function rulesEpoch(rules: NormalizedRules, baseUrl: string, facet: Cache
     if (!FACES_OF[RULE_EPOCH_IMPACT[k]].includes(facet)) continue
     parts.push(k, stable(rules[k]))
   }
+  return digest(parts)
+}
+
+/** 发现面快照的指纹字段集：与 `RULE_EPOCH_IMPACT` 里那十行 `ruleExplore*` 同集。`satisfies` 只保证
+ *  这十个名字都是真字段（拼错即 tsc 红）；**刻意不按命名前缀自动收**，也不随 `NormalizedRules`
+ *  加字段自动长大——「指纹收谁」该由发现面求值真正经过谁决定，不该由名字长什么样决定。 */
+const EXPLORE_FINGERPRINT = [
+  'ruleExploreUrl', 'ruleExploreList', 'ruleExploreName', 'ruleExploreAuthor',
+  'ruleExploreBookUrl', 'ruleExploreCoverUrl', 'ruleExploreIntro', 'ruleExploreKind',
+  'ruleExploreLastChapter', 'ruleExploreWordCount',
+] as const satisfies readonly (keyof NormalizedRules)[]
+
+/**
+ * 发现面（书城）快照的规则代际：**两个缓存、两份指纹、同一个主人**。本模块是「这份缓存还有效吗」
+ *  的唯一算式——`rulesEpoch` 管**文件**缓存（目录/正文），`exploreEpoch` 管**进程内**分类快照。
+ *
+ * 为什么不能共用一份：`RULE_EPOCH_IMPACT` 的影响面是「一个字段变更波及哪些**引擎面**的缓存」，
+ *  而引擎面（`CacheFacet`）只有目录与正文两个，发现面不在其中——分类页不落文件缓存，没有目录/
+ *  正文文件可作废，所以那十行归 `'none'` 是**对的，不是漏填**；反过来把发现面字段归进某个
+ *  引擎面，会让目录/正文代际跟着探索规则抖，凭空作废整源文件缓存。发现面要的「换规则自然失效」
+ *  由这份指纹独立兑现：换探索规则即换键，不必等 TTL。
+ *
+ * 收谁：只认发现面求值真正经过的字段（上面那十个）+ baseUrl，串接与摘要手法与 `rulesEpoch` 同一条。
+ *  不含 `exploreUrl`（legado 的脚本/JSON 三形态，本期未接，取值不经过它）；不含 `ruleExploreKinds`
+ *  ——后者只产出分类入口地址，而地址本身已是快照键的一半（`KindCacheKey.kind`），地址一变键就变。
+ */
+export function exploreEpoch(rules: NormalizedRules, baseUrl: string): string {
+  const parts: string[] = [baseUrl]
+  for (const k of EXPLORE_FINGERPRINT) parts.push(k, stable(rules[k]))
   return digest(parts)
 }
 

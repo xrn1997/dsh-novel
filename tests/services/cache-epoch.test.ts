@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { contentSlot, RULE_EPOCH_IMPACT, rulesEpoch } from '../../src/services/cache-epoch.js'
+import { contentSlot, exploreEpoch, RULE_EPOCH_IMPACT, rulesEpoch } from '../../src/services/cache-epoch.js'
 import type { NormalizedRules } from '../../src/services/types.js'
 
 const NULLS: NormalizedRules = {
@@ -87,6 +87,43 @@ describe('rulesEpoch', () => {
       .toBe(rulesEpoch(NULLS, 'https://s.com', 'toc'))
     expect(rulesEpoch(legacy as NormalizedRules, 'https://s.com', 'content'))
       .toBe(rulesEpoch(NULLS, 'https://s.com', 'content'))
+  })
+})
+
+/** 与实现里那份指纹字段表**各写一遍**：指纹收谁是被钉住的性质，不该从实现里读回来
+ *  （否则「少收一个字段」会被同一次改动的两侧一起吞掉）。 */
+const EXPLORE_FIELDS = [
+  'ruleExploreUrl', 'ruleExploreList', 'ruleExploreName', 'ruleExploreAuthor',
+  'ruleExploreBookUrl', 'ruleExploreCoverUrl', 'ruleExploreIntro', 'ruleExploreKind',
+  'ruleExploreLastChapter', 'ruleExploreWordCount',
+] as const satisfies readonly (keyof NormalizedRules)[]
+
+describe('exploreEpoch', () => {
+  it('十个 explore 字段逐个翻转都换指纹（换探索规则即换键，不必等 TTL 兜底）', () => {
+    const base = exploreEpoch(NULLS, 'https://s.com')
+    for (const key of EXPLORE_FIELDS) {
+      const bumped = { ...NULLS, [key]: `${key}-value` } as NormalizedRules
+      expect({ key, moved: exploreEpoch(bumped, 'https://s.com') !== base }).toEqual({ key, moved: true })
+    }
+  })
+
+  it('只认那十个：非 explore 字段改一个都不换（其余字段归文件缓存那份指纹管）', () => {
+    const base = exploreEpoch(NULLS, 'https://s.com')
+    const changed: Array<[string, NormalizedRules]> = [
+      ['搜索面', { ...NULLS, searchUrl: '/search?q={{key}}' }],
+      ['目录面', { ...NULLS, ruleChapterUrl: 'tag.a@href' }],
+      ['正文面', { ...NULLS, ruleContent: '@css:#c@text' }],
+      ['动态头', { ...NULLS, headerRule: '@js:({})' }],
+      // 分类入口地址变了 → 快照键里的地址跟着变（KindCacheKey.kind），指纹不必重复收它
+      ['分类入口', { ...NULLS, ruleExploreKinds: [{ title: '玄幻', url: '/f/x' }] }],
+    ]
+    for (const [why, rules] of changed) {
+      expect({ why, epoch: exploreEpoch(rules, 'https://s.com') }).toEqual({ why, epoch: base })
+    }
+  })
+
+  it('baseUrl 入指纹：换站点即换代际（与 rulesEpoch 同口径）', () => {
+    expect(exploreEpoch(NULLS, 'https://a.com')).not.toBe(exploreEpoch(NULLS, 'https://b.com'))
   })
 })
 
