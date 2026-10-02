@@ -227,6 +227,50 @@ async function route(
     writeOk(res, await service.search(keyword, ids === undefined ? undefined : { sourceIds: ids }))
     return
   }
+  // ── 书城发现面（原生 ruleFind：词表 / 分类书单）────────────────────────
+  if (a === SEG.explore && b === SEG.kinds) {
+    // 词表是本地派生（各源 ruleFind.kinds[].title 的并集），零网络请求——参与集判据归门面
+    guard(method, 'GET', ROUTES.exploreKinds.path)
+    writeOk(res, service.exploreKinds())
+    return
+  }
+  if (a === SEG.explore && b === SEG.list && c === undefined) {
+    // 分类轮次复用搜索那套「提交 + 快照 + SSE」的读面形状：提交即由 Node 半跑完并持有整轮
+    guard(method, 'POST', ROUTES.exploreList.path)
+    const body = await readJsonBody<{ kind?: unknown } | null>(req, null)
+    const kind = typeof body?.kind === 'string' ? body.kind.trim() : ''
+    if (kind === '') throw new ApiError(`缺 body 字段 ${PARAMS.kind}`, 400, 'BadRequest')
+    writeOk(res, service.startExploreJob(kind))
+    return
+  }
+  if (a === SEG.explore && b === SEG.list && c === SEG.jobStatus) {
+    // 全量快照（归并会修订已发条目，装不进游标增量模型——见 ExploreSnapshot）
+    guard(method, 'GET', ROUTES.exploreListStatus.path)
+    writeOk(res, { job: service.exploreJobSnapshot() })
+    return
+  }
+  if (a === SEG.explore && b === SEG.list && c === SEG.jobStream) {
+    // 与 search 流同一份形状：每帧都是同一份快照，终态即关流；帧按 id 归属轮次（订阅者自己认 id）
+    guard(method, 'GET', ROUTES.exploreListStream.path)
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',
+    })
+    let off: (() => void) | null = null
+    const pump = (): void => {
+      if (res.writableEnded || res.destroyed) return
+      const job = service.exploreJobSnapshot()
+      res.write(`data: ${JSON.stringify({ job })}\n\n`)
+      if (job !== null && job.phase !== 'running') { off?.(); res.end() }
+    }
+    off = service.subscribeExploreJob(pump)
+    res.on('close', () => { off?.() })
+    pump()
+    return
+  }
+
   if (a === SEG.book && b === undefined) {
     guard(method, 'GET', ROUTES.book.path)
     const { sourceId, url: bookUrl } = requireSourceUrl(url)
