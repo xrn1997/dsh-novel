@@ -89,6 +89,7 @@ index.ts 组合根：配置 → 缺省值 → 部件装配 → 三条注册
 | 一轮分类抓取的编排（批并行 / 完成序交付 / 快照写回） | `services/explore.ts` 的 `runExploreKind` | 轮次状态与终态 |
 | 整轮分类结果 | `services/explore-job.ts`（Node 半持有，读面给全量快照） | wire 形状 |
 | 同一本书的跨源归并 | `services/merge.ts` 的 `mergeBooks` | 字段级择优（取首次出现那一份） |
+| 逐条目取值装配（求值上下文 → 一条命中） | **今天没有主人，两份抄本刻意接受**：`services/explore-face.ts` 与 `services/reading.ts` 各一份 | 两份的规则来源本就不同（发现面整套切换 vs 通用搜索面）；第三处消费者出现时再抽公共装配 |
 | 分类快照的存放与时效 | `services/explore-cache.ts` 的 `KindCache` + `services/cache-epoch.ts` 的 `exploreEpoch` | 目录 / 正文文件缓存（`rulesEpoch`） |
 | 缺省值 | 五个各自主人（见 `tests/services/defaults.test.ts` 钉的常量） | 第二处字面量 |
 | 浏览器视图内路由与跨卸载现场 | `client/store.ts` + 各模块级现场 store | 业务真相 |
