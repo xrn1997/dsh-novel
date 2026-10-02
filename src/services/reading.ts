@@ -21,6 +21,7 @@ import type { LocalResource } from './localbooks.js'
 import type { NormalizeIssue } from './normalize.js'
 import { followPages } from './pagination.js'
 import type { FollowResult } from './pagination.js'
+import { participates } from './participation.js'
 import { probeSource } from './probe.js'
 import type { ProbeResult } from './probe.js'
 import { absUrlKeepOption, assembleRequest, canonUrl, fetchInitOf, stripUrlOption } from './request.js'
@@ -462,7 +463,7 @@ export class ReadingService {
   }): Promise<SearchGroup[]> {
     const want = opts?.sourceIds
     const sources = this.registry.list().filter((s) =>
-      ReadingService.participates(s) && (want === undefined || want.length === 0 || want.includes(s.id)))
+      participates(s) && (want === undefined || want.length === 0 || want.includes(s.id)))
     const groups: SearchGroup[] = new Array(sources.length)
     for (let i = 0; i < sources.length; i += this.cfg.searchParallel) {
       if (opts?.shouldStop?.() === true) break
@@ -485,18 +486,10 @@ export class ReadingService {
     return this.searchProgressive(keyword, opts)
   }
 
-  /** 聚合搜索参与集判定（**唯一**实现）：启用 ∧ 文本源。本插件当前仅支持小说文本面
-   *  （wire `SourceContentKind` 注释同口径）；将来支持其他媒介时**只在此扩参与集**，
-   *  不许散落第二处判别（用户拍板 2026-09：「未来未必不支持其他类型，现在只支持小说」）。
-   *  非文本源留库、不删、不改启用态——只是不参搜（漫画/短剧书不再混进文字书架）。 */
-  private static participates(s: NovelSource): boolean {
-    return s.enabled && s.type === 'text'
-  }
-
   /** 搜索参与计划：search 的参与集判定的唯一主人——客户端分批/进度按此走，
    *  「哪些源参搜」（启停 ∧ 内容形态 invariant）不再在 wire 两侧各定义一份。 */
   searchPlan(): SearchPlan {
-    return { sourceIds: this.registry.list().filter((s) => ReadingService.participates(s)).map((s) => s.id) }
+    return { sourceIds: this.registry.list().filter((s) => participates(s)).map((s) => s.id) }
   }
 
   /** 提交一轮**后台**搜索：参与集判定与 `total` 同源（都是 searchPlan 那一条启停 invariant），
