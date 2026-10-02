@@ -44,6 +44,8 @@ describe('explore-face：单源一次分类抓取', () => {
     expect(r.hits[0].url).toBe('https://s.com/book/1')
   })
 
+  // 这一条只钉列表规则那一侧（列表命中 0 → 空 List，不是 Miss）。它对「整套切换」没有区分力：
+  // 列表规则一条都命中不了，书名规则无论来自哪一套都没跑过，逐字段回落在这里产出一模一样的结果。
   it('ruleExploreList 非空 → 整套用它（通用规则不参与）', async () => {
     const own = { ruleFind: { url: '/{{kind}}/{{page}}', kinds: [{ title: '玄幻', url: 'x' }], ruleSearch: { list: '.nothing', name: 'h3 a' } } }
     const f = createFetcher({ fetchImpl: async () => html(LIST_HTML) })
@@ -55,6 +57,26 @@ describe('explore-face：单源一次分类抓取', () => {
   it('缺 ruleFind.url → RuleMissing（结果形态，不是异常）', async () => {
     const f = createFetcher({ fetchImpl: async () => html(LIST_HTML) })
     const r = await fetchKindPage(source({ ruleFind: { kinds: [{ title: '玄幻', url: 'x' }] } }), 'x', f)
+    expect(r).toEqual({ ok: false, code: 'RuleMissing', message: expect.stringContaining('发现规则缺失') })
+  })
+
+  // 发现面的列表规则命中条目、书名规则却匹配不到：整套切换下这本书的标题读不出来，它是**空分类**
+  // （解析到空集合 = 空 List），不是规则缺失。通用书名规则在页面里是命得中的——一旦书名那一侧
+  // 单独回落通用规则，这里就会冒出一本标题取自另一套规则的书，所以本断言专治逐字段回落。
+  it('发现面列表有命中而书名规则读不出 → 空数组，不回落通用书名规则', async () => {
+    const own = { ruleFind: { url: '/{{kind}}/{{page}}', kinds: [{ title: '玄幻', url: 'x' }], ruleSearch: { list: '.item', name: '.nomatch' } } }
+    const f = createFetcher({ fetchImpl: async () => html(LIST_HTML) })
+    const r = await fetchKindPage(source(own), 'x', f)
+    if (!r.ok) throw new Error('空分类是正常空结果，不该是失败形态')
+    expect(r.hits).toEqual([])
+  })
+
+  // 发现面整套启用却缺书名规则：如实点名规则缺失，而不是造出没有标题的书目（对面会静默给 0 本）。
+  // 逐字段回落在这里同样会红——它回落到通用书名规则，于是「规则缺失」变成了一次带条目的正常返回。
+  it('发现面整套启用但缺书名规则 → RuleMissing（如实点名，不产出空书名条目）', async () => {
+    const own = { ruleFind: { url: '/{{kind}}/{{page}}', kinds: [{ title: '玄幻', url: 'x' }], ruleSearch: { list: '.item' } } }
+    const f = createFetcher({ fetchImpl: async () => html(LIST_HTML) })
+    const r = await fetchKindPage(source(own), 'x', f)
     expect(r).toEqual({ ok: false, code: 'RuleMissing', message: expect.stringContaining('发现规则缺失') })
   })
 })
