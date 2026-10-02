@@ -103,6 +103,13 @@ export class SourceRegistry {
       } else if (s.rules.bookUrlPattern === undefined) {
         s.rules.bookUrlPattern = null; changed = true
       }
+      // ruleExploreKinds 键按缺席补空数组（与上面 ruleDetailInit 那条同源：NormalizedRules 是 required
+      // 形状）。它与那几条的差别在**值域是数组**：消费者按 `rules.ruleExploreKinds.length` 读分类面，
+      // 存量老库缺键即 TypeError。**只补键、不按 raw 重推**：legado 侧本期不映射发现面，正确值就是空数组；
+      // 原生侧要从 raw 重推就得再立一条读 raw 的路（仓内明令禁止第二份读路），重新导入/同址替换即收敛。
+      if (!Array.isArray(s.rules.ruleExploreKinds)) {
+        s.rules.ruleExploreKinds = []; changed = true
+      }
       // ⑩ 静态头按 raw 补推（与 ⑦ headerRule 成对）：单引号形态的头曾被判成坏 JSON 丢弃，只改解析器
       // 不动存量则受害源的头仍然是空的（现量见矩阵行 `b-header-static`）。
       // 触发条件刻意收窄到「规则形态为 null 且头表也是 null」：那是旧版判失败的唯一形状，

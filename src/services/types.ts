@@ -17,6 +17,19 @@ export interface SourceAuth {
  * 平铺方言无 ruleDetail* 时详情面回退共用字段（原 v1 行为）。 */
 export interface NormalizedRules {
   searchUrl: string | null; exploreUrl: string | null
+  /** 原生方言 ruleFind.url：分类页 URL 模板，含 `{{kind}}`（替换成 kinds[].url）与 `{{page}}`。
+   *  与 legado 的 `exploreUrl` 是两条线——那个字段承载脚本/JSON 三形态，本期不接。 */
+  ruleExploreUrl: string | null
+  /** 原生 ruleFind.kinds：分类入口（顶层一层；`children` 本期不做，见 normalize 的告警） */
+  ruleExploreKinds: Array<{ title: string; url: string }>
+  /** 原生 ruleFind.ruleSearch 的九个字段：**整套**覆盖通用搜索规则（对面语义是
+   *  `if (findRule.ruleSearch.list.isNotEmpty())` 才用它）——所以判据只看 `ruleExploreList` 是否非空，
+   *  别逐字段回落：那会把「对面本该用通用规则」的源读成半套。 */
+  ruleExploreList: string | null; ruleExploreName: string | null
+  ruleExploreAuthor: string | null; ruleExploreBookUrl: string | null
+  ruleExploreCoverUrl: string | null; ruleExploreIntro: string | null
+  ruleExploreKind: string | null; ruleExploreLastChapter: string | null
+  ruleExploreWordCount: string | null
   /** 校验/探针关键词（`ruleSearch.checkKeyWord`）：探针的第一个关键词——固定词序列
    *  在「只搜得到自家书名」的站上是误判源（现量按 `DSH_PARSE_CENSUS=1` 的 `probeKeyword` 行
    *  重数，别抄任何转录的读数）。含 `http`/`::`/`++`/`--` 的值直接弃用（那些串与调试输入

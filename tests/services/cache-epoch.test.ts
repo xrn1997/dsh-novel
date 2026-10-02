@@ -8,6 +8,10 @@ const NULLS: NormalizedRules = {
   ruleChapterList: null, ruleChapterName: null, ruleChapterUrl: null, ruleDetailName: null,
   ruleDetailAuthor: null, ruleDetailCoverUrl: null, ruleDetailIntro: null, ruleDetailLastChapter: null, ruleDetailKind: null, ruleDetailWordCount: null,
   ruleDetailInit: null,
+  ruleExploreUrl: null, ruleExploreKinds: [],
+  ruleExploreList: null, ruleExploreName: null, ruleExploreAuthor: null, ruleExploreBookUrl: null,
+  ruleExploreCoverUrl: null, ruleExploreIntro: null, ruleExploreKind: null,
+  ruleExploreLastChapter: null, ruleExploreWordCount: null,
   ruleContent: null, nextTocUrl: null, nextPageUrl: null, header: null, loginUrl: null, jsLib: null,
   headerRule: null,
 }

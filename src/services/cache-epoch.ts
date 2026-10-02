@@ -31,6 +31,11 @@ export type CacheFacet = Extract<Facet, 'toc' | 'content'>
 
 export const RULE_EPOCH_IMPACT: Record<keyof NormalizedRules, EpochImpact> = {
   searchUrl: 'none', exploreUrl: 'none',
+  // 发现面（书城）不落文件缓存：分类页结果由进程内快照持有，无目录/正文文件可作废
+  ruleExploreUrl: 'none', ruleExploreKinds: 'none',
+  ruleExploreList: 'none', ruleExploreName: 'none', ruleExploreAuthor: 'none',
+  ruleExploreBookUrl: 'none', ruleExploreCoverUrl: 'none', ruleExploreIntro: 'none',
+  ruleExploreKind: 'none', ruleExploreLastChapter: 'none', ruleExploreWordCount: 'none',
   // 探针关键词只影响「验证」这一步，不参与任何面的取值 → 不进缓存指纹
   probeKeyword: 'none',
   // 详情页嗅探只改搜索面「这条响应是不是详情页」，目录/正文取值与它无关
@@ -74,14 +79,21 @@ const ORDER = Object.keys(RULE_EPOCH_IMPACT) as Array<keyof NormalizedRules>
  *  数组/嵌套对象会是 tsc 错，而不是被 `String(v)` 静默拍成 "[object Object]" 共用一个指纹。 */
 type RuleValue = NormalizedRules[keyof NormalizedRules]
 
-/** 值稳定化：header 是对象，按排序键拼（同一份 header 的不同键序必须同指纹）。
+/** 值稳定化：header 是对象、ruleExploreKinds 是分类入口数组，都按排序键拼（同一份值的不同键序
+ *  必须同指纹）。数组逐元素编码——发现面这批字段的影响面全是 `none`，今天到不了这里；这条分支
+ *  是为了「将来谁把它们归进某个面」时指纹依然稳定，而不是让上面那道 tsc 闸被 cast 掉。
  *  null 与 '' 必须分开：空串规则与缺规则在求值层行为不同（见 reading.getTocInner 的订正注）。
  *  存量兼容：老 sources.json 的 rules 可能缺新增字段的键（undefined）——按缺省（≡null）入指纹，
  *  与显式 null 同代际；SourceRegistry.load 的存量归一会补键落盘收敛，此处是读旧数据的运行时防线。 */
 function stable(v: RuleValue | undefined): string {
   if (v === null || v === undefined) return '\u0001'
   if (typeof v === 'string') return v
-  return Object.keys(v).sort().map((k) => `${k}=${v[k]}`).join('&')
+  return Array.isArray(v) ? v.map(encodeOrdered).join('\u0002') : encodeOrdered(v)
+}
+
+/** 对象 → 键排序的 `k=v&…`（键序不入指纹） */
+function encodeOrdered(o: Record<string, unknown>): string {
+  return Object.keys(o).sort().map((k) => `${k}=${o[k]}`).join('&')
 }
 
 function digest(parts: readonly string[]): string {

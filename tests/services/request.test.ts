@@ -206,6 +206,10 @@ describe('resolveJsSearchTemplate', () => {
       ruleChapterList: null, ruleChapterName: null, ruleChapterUrl: null,
       ruleDetailName: null, ruleDetailAuthor: null, ruleDetailCoverUrl: null,
       ruleDetailIntro: null, ruleDetailLastChapter: null, ruleDetailKind: null, ruleDetailWordCount: null, ruleDetailInit: null,
+      ruleExploreUrl: null, ruleExploreKinds: [],
+      ruleExploreList: null, ruleExploreName: null, ruleExploreAuthor: null, ruleExploreBookUrl: null,
+      ruleExploreCoverUrl: null, ruleExploreIntro: null, ruleExploreKind: null,
+      ruleExploreLastChapter: null, ruleExploreWordCount: null,
       ruleContent: 'x', nextTocUrl: null, nextPageUrl: null, header, loginUrl: null, jsLib: null, headerRule: null },
     status: 'unverified', importedAt: 0,
   })
@@ -279,6 +283,10 @@ describe('preEvaluateUrlJs', () => {
       ruleChapterList: null, ruleChapterName: null, ruleChapterUrl: null,
       ruleDetailName: null, ruleDetailAuthor: null, ruleDetailCoverUrl: null,
       ruleDetailIntro: null, ruleDetailLastChapter: null, ruleDetailKind: null, ruleDetailWordCount: null, ruleDetailInit: null,
+      ruleExploreUrl: null, ruleExploreKinds: [],
+      ruleExploreList: null, ruleExploreName: null, ruleExploreAuthor: null, ruleExploreBookUrl: null,
+      ruleExploreCoverUrl: null, ruleExploreIntro: null, ruleExploreKind: null,
+      ruleExploreLastChapter: null, ruleExploreWordCount: null,
       ruleContent: 'x', nextTocUrl: null, nextPageUrl: null, header: null, loginUrl: null, jsLib, headerRule: null },
     status: 'unverified', importedAt: 0,
   })

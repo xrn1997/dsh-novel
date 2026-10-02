@@ -318,12 +318,12 @@ describe('Native 格式（android-ebook 原生规则）', () => {
     expect(rules.ruleDetailKind).toBe('.booktxt p:nth-child(2)@text')
     expect(rules.ruleWordCount).toBeNull()   // 该 fixture 不带 wordCount
   })
-  it('ruleFind/ruleRank/charset → 聚合 warning（宁吵不瞒），不阻塞导入', () => {
+  it('ruleRank/charset → 聚合 warning（宁吵不瞒），不阻塞导入；ruleFind 已接真映射故不再在此列', () => {
     const r = normalizeSource(nativeSource)
     expect(r.ok).toBe(true)
     const warn = r.warnings.map((w) => w.message).join(' ')
     expect(warn).not.toContain('kind')     // 已支持，不再算未支持字段
-    expect(warn).toContain('ruleFind')
+    expect(warn).not.toContain('ruleFind') // 发现面已真映射（url/kinds/ruleSearch）
     expect(warn).toContain('ruleRank')
     expect(warn).toContain('charset')
   })
@@ -354,6 +354,76 @@ describe('Native 格式（android-ebook 原生规则）', () => {
     })
     expect(r.ok).toBe(true)
     expect(r.source).toMatchObject({ name: '标准', baseUrl: 'https://legado.com' })
+  })
+})
+
+describe('原生方言的 ruleFind 映射（发现面数据面）', () => {
+  const native = {
+    name: '笔趣阁', url: 'https://www.bqquge.com',
+    searchUrl: '/so/{{keyword}}/{{page}}',
+    ruleSearch: { list: '.item', name: 'h3 a', bookUrl: 'h3 a@href' },
+    ruleBookInfo: { name: '.booktxt h1' },
+    ruleToc: { list: '#list li', name: 'a', url: 'a@href' },
+    ruleContent: { content: '.con' },
+    ruleFind: {
+      url: '/{{kind}}/{{page}}',
+      kinds: [{ title: '玄幻', url: 'xuanhuan' }, { title: '都市', url: 'dushi' }],
+    },
+  }
+
+  it('ruleFind.url 与 kinds 落进模型字段', () => {
+    const r = normalizeSource(native)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.source!.rules.ruleExploreUrl).toBe('/{{kind}}/{{page}}')
+    expect(r.source!.rules.ruleExploreKinds).toEqual([
+      { title: '玄幻', url: 'xuanhuan' },
+      { title: '都市', url: 'dushi' },
+    ])
+  })
+
+  it('ruleFind.ruleSearch 非空即整套覆盖；缺失则留 null（回落通用搜索规则）', () => {
+    const withOwn = { ...native, ruleFind: { ...native.ruleFind, ruleSearch: { list: '.book', name: '.title' } } }
+    const a = normalizeSource(withOwn)
+    if (!a.ok) throw new Error('应能规范化')
+    expect(a.source!.rules.ruleExploreList).toBe('.book')
+    expect(a.source!.rules.ruleExploreName).toBe('.title@text')  // Native 裸选择器 = 取文本（隐式 @text）
+    // 未给的子字段仍是 null —— 提醒使用者「整套切换」而非逐字段回落
+    expect(a.source!.rules.ruleExploreAuthor).toBeNull()
+    expect(a.source!.rules.ruleExploreKind).toBeNull()
+
+    const b = normalizeSource(native)
+    if (!b.ok) throw new Error('应能规范化')
+    expect(b.source!.rules.ruleExploreList).toBeNull()
+    expect(b.source!.rules.ruleExploreName).toBeNull()
+    expect(b.source!.rules.ruleExploreUrl).toBe('/{{kind}}/{{page}}') // 不随 ruleSearch 缺席而消失
+  })
+
+  it('kinds 的 children 非空 → 如实进 warning（本期不递归二级分类）', () => {
+    const nested = {
+      ...native,
+      ruleFind: { ...native.ruleFind, kinds: [{ title: '玄幻', url: 'xuanhuan', children: [{ title: '东方玄幻', url: 'df' }] }] },
+    }
+    const r = normalizeSource(nested)
+    if (!r.ok) throw new Error('应能规范化')
+    expect(r.warnings.some((w) => w.field === 'ruleFind.kinds' && w.message.includes('children'))).toBe(true)
+    expect(r.source!.rules.ruleExploreKinds).toEqual([{ title: '玄幻', url: 'xuanhuan' }])
+  })
+
+  it('ruleRank 仍然是不支持字段（对面 ADR 0027 已删这条链）', () => {
+    const r = normalizeSource({ ...native, ruleRank: { url: '/paihang' } })
+    if (!r.ok) throw new Error('应能规范化')
+    expect(r.warnings.some((w) => w.message.includes('ruleRank'))).toBe(true)
+  })
+
+  it('legado 方言同样落 ruleExploreKinds 键（恒为数组，消费者不必判空）', () => {
+    const flat = normalizeSource({ bookSourceName: 'A', bookSourceUrl: 'https://a', ruleContent: 'x' })
+    if (!flat.ok) throw new Error('应能规范化')
+    expect(flat.source!.rules.ruleExploreKinds).toEqual([])
+    expect(flat.source!.rules.ruleExploreUrl).toBeNull()
+    const obj = normalizeSource(objectSource)
+    if (!obj.ok) throw new Error('应能规范化')
+    expect(obj.source!.rules.ruleExploreKinds).toEqual([])
   })
 })
 

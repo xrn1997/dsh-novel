@@ -22,6 +22,11 @@ const RULE_FIELDS = [
   'ruleCoverUrl', 'ruleIntro', 'ruleLastChapter', 'ruleKind', 'ruleWordCount',
   'ruleDetailKind', 'ruleDetailWordCount', 'ruleTocUrl', 'ruleChapterName',
   'ruleChapterUrl', 'ruleContent', 'nextTocUrl', 'nextPageUrl', 'loginUrl',
+  // 发现面（原生 ruleFind 的子字段落位）：两个方言共用同一落位——平铺/对象方言无这些键时读成
+  // null（无害）；`ruleExploreKinds` 是数组，不进这张表（在 normalizeSource 里单独落位）。
+  'ruleExploreUrl', 'ruleExploreList', 'ruleExploreName', 'ruleExploreAuthor',
+  'ruleExploreBookUrl', 'ruleExploreCoverUrl', 'ruleExploreIntro', 'ruleExploreKind',
+  'ruleExploreLastChapter', 'ruleExploreWordCount',
 ] as const
 
 /** 对象方言子字段 → 模型字段映射（书源 JSON 的嵌套导出形态）。
@@ -110,6 +115,12 @@ export function normalizeSource(raw: unknown): NormalizeResult {
   // JSON 对象/JSON 串 → header。两者互斥（同一 raw.header 二选一），规则形态不再是「非法 JSON」警告。
   rules.headerRule = normalizeHeaderRule(r.header)
   rules.header = rules.headerRule === null ? normalizeHeader(r.header, warnings) : null
+  // ruleExploreKinds 不是字符串（分类入口数组），故不进 RULE_FIELDS 循环。**两个方言都得落这个键**：
+  // 消费者按 `rules.ruleExploreKinds.length` 读分类面，缺键即 TypeError；legado 侧本期不映射发现面 → 空数组
+  // （平铺/对象方言的 raw 若自带同名键，形状不对也在这里归成缺席，不把脏值放进模型）。
+  rules.ruleExploreKinds = Array.isArray(r.ruleExploreKinds)
+    ? (r.ruleExploreKinds as Array<{ title: string; url: string }>)
+    : []
   // 这里的 ruleDetail*（Name/Author/CoverUrl/Intro/LastChapter/Init）与 ruleChapterList
   // 非 RULE_FIELDS 成员（平铺方言无此字段名，上面循环取不到），单独落位；
   // ruleDetailKind/ruleDetailWordCount 已在 RULE_FIELDS 里，不在此列。
@@ -443,12 +454,15 @@ export function isNativeSource(r: unknown): boolean {
 /** Native 取值字段（终端语义=取元素文本）：裸选择器补隐式 `@text`。
  * 对象方言规则显式写 `@text`/`@textNodes` 终端；Native 方言裸选择器即「取文本」
  * （android-ebook 原生规则格式的常用模式），不补的话引擎链终点剩节点集、服务层按规约抛错。
- * list/attr 字段不在列（ruleBookList/ruleChapterList 要节点集、coverUrl/bookUrl 要属性）。 */
+ * list/attr 字段不在列（ruleBookList/ruleChapterList 要节点集、coverUrl/bookUrl 要属性；
+ * 发现面的 ruleExploreList/bookUrl/coverUrl 同理）。 */
 const NATIVE_TEXT_FIELDS = [
   'ruleBookName', 'ruleAuthor', 'ruleIntro', 'ruleLastChapter', 'ruleKind', 'ruleWordCount',
   'ruleDetailName', 'ruleDetailAuthor', 'ruleDetailIntro', 'ruleDetailLastChapter',
   'ruleDetailKind', 'ruleDetailWordCount',
   'ruleChapterName', 'ruleContent',
+  'ruleExploreName', 'ruleExploreAuthor', 'ruleExploreIntro', 'ruleExploreKind',
+  'ruleExploreLastChapter', 'ruleExploreWordCount',
 ] as const
 
 /** 链体每段（`||` 分支）无 `@` → 补 `@text`；`##` 净化尾不动（只处理链体）。
@@ -460,7 +474,8 @@ const NATIVE_TEXT_FIELDS = [
  * searchUrl 占位符 `{{keyword}}` 改写为内部 `{{key}}`（`{{page}}` 同名不动）；
  * `authorPrefix` 追加 `##^前缀##` 净化尾到详情面作者规则（正则转义）；
  * 取值字段裸选择器补隐式 `@text` 终端（NATIVE_TEXT_FIELDS）。
- * v1 无发现/排序/POST 面：ruleFind/ruleRank/pageUrl/reverse/charset 等如实聚合 warning（宁吵不瞒）。
+ * ruleFind（发现面）：url 模板 + kinds 分类入口 + ruleSearch 整套覆盖（映射见下）。
+ * v1 无排序/POST 面：ruleRank/pageUrl/reverse/charset 等如实聚合 warning（宁吵不瞒）。
  */
 function flattenNative(raw: Record<string, unknown>, warnings: NormalizeIssue[]): Record<string, unknown> {
   const out: Record<string, unknown> = {
@@ -508,6 +523,40 @@ function flattenNative(raw: Record<string, unknown>, warnings: NormalizeIssue[])
       out.ruleDetailAuthor = t.rule
     }
   }
+  // ruleFind（发现面）：url 模板 + kinds 分类入口；ruleSearch 是**整套**覆盖通用搜索规则
+  // （判据只看 list 非空，见 NormalizedRules 的注释）。children 二级分类本期不做——如实进 warning，
+  // 不静默丢（顶层那层照样落位）。
+  const find = raw.ruleFind
+  if (typeof find === 'object' && find !== null && !Array.isArray(find)) {
+    const f = find as Record<string, unknown>
+    put('ruleExploreUrl', f.url)
+    const kinds = Array.isArray(f.kinds) ? f.kinds : []
+    const items: Array<{ title: string; url: string }> = []
+    let sawChildren = false
+    for (const k of kinds) {
+      if (typeof k !== 'object' || k === null || Array.isArray(k)) continue
+      const e = k as Record<string, unknown>
+      const title = str(e.title); const url = str(e.url)
+      if (title === null || url === null) continue
+      items.push({ title, url })
+      if (Array.isArray(e.children) && e.children.length > 0) sawChildren = true
+    }
+    out.ruleExploreKinds = items
+    if (sawChildren) {
+      warnings.push({ field: 'ruleFind.kinds', message: 'kinds[].children（二级分类）本期不支持，已忽略' })
+    }
+    const own = f.ruleSearch
+    if (typeof own === 'object' && own !== null && !Array.isArray(own)) {
+      const o = own as Record<string, unknown>
+      if (str(o.list) !== null) {
+        put('ruleExploreList', o.list)
+        put('ruleExploreName', o.name); put('ruleExploreAuthor', o.author)
+        put('ruleExploreBookUrl', o.bookUrl); put('ruleExploreCoverUrl', o.coverUrl)
+        put('ruleExploreIntro', o.intro); put('ruleExploreKind', o.kind)
+        put('ruleExploreLastChapter', o.lastChapter); put('ruleExploreWordCount', o.wordCount)
+      }
+    }
+  }
   // 顶层未支持字段（v1 无 POST/排序面；charset 由抓取链自动识别）
   const weight = raw.weight
   if (typeof weight === 'number' && weight !== 0) unsupported.push('weight')
@@ -515,7 +564,8 @@ function flattenNative(raw: Record<string, unknown>, warnings: NormalizeIssue[])
   const method = str(raw.method)
   if (method !== null && method.toUpperCase() !== 'GET') unsupported.push('method')
   for (const f of ['body', 'searchMethod', 'searchBody'] as const) if (str(raw[f]) !== null) unsupported.push(f)
-  for (const block of ['ruleFind', 'ruleRank'] as const) {
+  // ruleRank 仍然不认：对面自己的 ADR 0027 把整条声明链删了（「排行榜是功能级缺口而非分页缺口」）
+  for (const block of ['ruleRank'] as const) {
     const b = raw[block]
     if (typeof b === 'object' && b !== null && !Array.isArray(b)
       && Object.values(b as Record<string, unknown>).some((v) => str(v) !== null || Array.isArray(v) || (typeof v === 'object' && v !== null))) {

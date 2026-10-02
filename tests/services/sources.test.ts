@@ -221,6 +221,18 @@ describe('load 内容形态迁移（bookSourceType 编码订正的存量收敛�
     await reg.flush()
     expect((await SourceRegistry.load(dir)).list()[0].rules.ruleDetailInit).toBeNull()
   })
+  it('rules 缺 ruleExploreKinds 键 → load 补空数组（数组字段同样按 required 形状收敛：消费者按 .length 读分类面，缺键是 TypeError）', async () => {
+    const dir = await tmp()
+    const reg = await SourceRegistry.load(dir)
+    await reg.edit((tx) => tx.add(normalizeSource(raw)))
+    await reg.edit(() => {
+      const s = reg.list()[0]
+      delete (s.rules as unknown as Record<string, unknown>).ruleExploreKinds   // 模拟本任务之前入库的存量
+    })
+    await reg.flush()
+    expect((await SourceRegistry.load(dir)).list()[0].rules.ruleExploreKinds).toEqual([])
+    expect((await SourceRegistry.load(dir)).list()[0].rules.ruleExploreKinds).toEqual([])  // 二次 load 幂等
+  })
   // ⑥ 的读原先是自己解释 raw 的**第二份**规则解释：只认对象容器、且容器优先于平铺——
   // 与导入侧（flattenDialect：字符串化容器照解析、平铺优先）在两种形态上分岔。恒覆盖
   // 于是会把导入侧派生的正确值改写掉（抹成 null 或换成另一处的值），且落盘后看不出来。
