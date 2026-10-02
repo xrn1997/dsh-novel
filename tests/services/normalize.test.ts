@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeSource } from '../../src/services/normalize.js'
+import { normalizeSource, rawExploreFields } from '../../src/services/normalize.js'
 
 const realSource = {
   bookSourceName: '笔趣阁',
@@ -424,6 +424,64 @@ describe('原生方言的 ruleFind 映射（发现面数据面）', () => {
     const obj = normalizeSource(objectSource)
     if (!obj.ok) throw new Error('应能规范化')
     expect(obj.source!.rules.ruleExploreKinds).toEqual([])
+  })
+})
+
+describe('rawExploreFields（存量按 raw 补推发现面的读口）', () => {
+  const native = {
+    name: '笔趣阁', url: 'https://www.bqquge.com',
+    searchUrl: '/so/{{keyword}}/{{page}}',
+    ruleSearch: { list: '.item', name: 'h3 a', bookUrl: 'h3 a@href' },
+    ruleContent: { content: '.con' },
+    ruleFind: {
+      url: '/{{kind}}/{{page}}',
+      kinds: [{ title: '玄幻', url: 'xuanhuan' }, { title: '都市', url: 'dushi' }],
+    },
+  }
+  const withOwn = {
+    ...native,
+    ruleFind: {
+      ...native.ruleFind,
+      ruleSearch: {
+        list: '.book', name: '.title', author: '.au', bookUrl: 'a@href', coverUrl: 'img@src',
+        intro: '.i', kind: '.k', lastChapter: '.lc', wordCount: '.wc',
+      },
+    },
+  }
+
+  it('原生 ruleFind 的子字段按导入侧同一份映射派生（取值字段补隐式 @text，list/url 三件套不补）', () => {
+    const got = rawExploreFields(withOwn)!
+    expect(got.ruleExploreUrl).toBe('/{{kind}}/{{page}}')
+    expect(got.ruleExploreKinds).toEqual([
+      { title: '玄幻', url: 'xuanhuan' }, { title: '都市', url: 'dushi' },
+    ])
+    expect(got.ruleExploreList).toBe('.book')            // 节点集：不补终端
+    expect(got.ruleExploreName).toBe('.title@text')
+    expect(got.ruleExploreBookUrl).toBe('a@href')
+    expect(got.ruleExploreWordCount).toBe('.wc@text')
+  })
+
+  it('ruleSearch 缺 list → 八字段整套不给（判据只看 list）；url 照旧派生', () => {
+    const got = rawExploreFields({ ...native, ruleFind: { ...native.ruleFind, ruleSearch: { name: '.title' } } })!
+    expect(got.ruleExploreUrl).toBe('/{{kind}}/{{page}}')
+    const nine = ['ruleExploreList', 'ruleExploreName', 'ruleExploreAuthor', 'ruleExploreBookUrl',
+      'ruleExploreCoverUrl', 'ruleExploreIntro', 'ruleExploreKind', 'ruleExploreLastChapter', 'ruleExploreWordCount'] as const
+    for (const k of nine) expect(got[k]).toBeNull()
+  })
+
+  it('非原生方言（raw 里同名块也不认）/ 无 ruleFind：全 null + []；raw 非对象 → undefined 叫调用方别动', () => {
+    const flat = rawExploreFields({ bookSourceName: 'A', bookSourceUrl: 'https://a', ruleContent: 'x', ruleFind: native.ruleFind })!
+    expect(flat.ruleExploreUrl).toBeNull()               // 方言判定复用 isNativeSource，不自己再写一份
+    expect(flat.ruleExploreKinds).toEqual([])
+    const bare = rawExploreFields({ ...native, ruleFind: undefined })!
+    expect(bare.ruleExploreUrl).toBeNull()
+    expect(bare.ruleExploreKinds).toEqual([])
+    expect(rawExploreFields('not-an-object')).toBeUndefined()
+  })
+
+  it('与 flattenNative 共用同一份映射：逐键等于 normalizeSource 的 rules（分头写两份解释即在此分叉）', () => {
+    const rules = normalizeSource(withOwn).source!.rules as unknown as Record<string, unknown>
+    for (const [k, v] of Object.entries(rawExploreFields(withOwn)!)) expect(rules[k]).toEqual(v)
   })
 })
 

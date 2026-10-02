@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type { NovelSource, SourceAuth, SourceContentKind, SourceStatus } from './types.js'
 import type { NormalizeResult } from './normalize.js'
-import { contentTypeOfRaw, deriveRuleField, rawBookMetaFields, rawHeaderFields, rawHeaderRule, rawRulePattern, SOURCE_KIND_LABEL, splitGroups, stripLeadingIcons } from './normalize.js'
+import { contentTypeOfRaw, deriveRuleField, rawBookMetaFields, rawExploreFields, rawHeaderFields, rawHeaderRule, rawRulePattern, SOURCE_KIND_LABEL, splitGroups, stripLeadingIcons } from './normalize.js'
 import { readJson, writeJsonAtomic } from './storage.js'
 
 /**
@@ -103,10 +103,21 @@ export class SourceRegistry {
       } else if (s.rules.bookUrlPattern === undefined) {
         s.rules.bookUrlPattern = null; changed = true
       }
-      // ruleExploreKinds 键按缺席补空数组（与上面 ruleDetailInit 那条同源：NormalizedRules 是 required
-      // 形状）。它与那几条的差别在**值域是数组**：消费者按 `rules.ruleExploreKinds.length` 读分类面，
-      // 存量老库缺键即 TypeError。**只补键、不按 raw 重推**：legado 侧本期不映射发现面，正确值就是空数组；
-      // 原生侧要从 raw 重推就得再立一条读 raw 的路（仓内明令禁止第二份读路），重新导入/同址替换即收敛。
+      // ruleExplore* 十一键按 raw 补推（与上面几条同族的存量收敛）：发现面是后来才接的链路，
+      // 存量 rules 缺键 → 已入库的原生源在书城**整个是空的**（kinds 一条不剩、ruleExploreUrl 缺席
+      // 让分类抓取一律判规则缺失）。读口是导入侧同一份映射（rawExploreFields），不另立第二条规则解释。
+      // **只填缺席键**（与上面 kind/wordCount 同口径）：新入库源由 normalize 正确派生，覆盖会把对的
+      // 改成错的（`kind/wordCount` 两条读路的优先级本就不同，这里同样不给「再读一遍」改写的机会）。
+      const wantExplore = rawExploreFields(s.raw)
+      if (wantExplore !== undefined) {
+        const rules = s.rules as unknown as Record<string, unknown>
+        for (const [k, v] of Object.entries(wantExplore)) {
+          if (rules[k] === undefined) { rules[k] = v; changed = true }
+        }
+      }
+      // 键恒在场是 required 形状的合同，且**必须在上面那段之后**：消费者按
+      // `rules.ruleExploreKinds.length` 读分类面，raw 不是对象 / raw 里没有发现面 / 键上躺着脏形状
+      // （非数组）都靠这一步收敛成空数组；反过来的顺序会把按 raw 推出来的分类清掉。
       if (!Array.isArray(s.rules.ruleExploreKinds)) {
         s.rules.ruleExploreKinds = []; changed = true
       }

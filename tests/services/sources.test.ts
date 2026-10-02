@@ -221,7 +221,7 @@ describe('load 内容形态迁移（bookSourceType 编码订正的存量收敛�
     await reg.flush()
     expect((await SourceRegistry.load(dir)).list()[0].rules.ruleDetailInit).toBeNull()
   })
-  it('rules 缺 ruleExploreKinds 键 → load 补空数组（数组字段同样按 required 形状收敛：消费者按 .length 读分类面，缺键是 TypeError）', async () => {
+  it('rules 缺 ruleExploreKinds 键 → load 补空数组（数组键同样按 required 形状收敛：消费者按 .length 读分类面，缺键是 TypeError）', async () => {
     const dir = await tmp()
     const reg = await SourceRegistry.load(dir)
     await reg.edit((tx) => tx.add(normalizeSource(raw)))
@@ -232,6 +232,49 @@ describe('load 内容形态迁移（bookSourceType 编码订正的存量收敛�
     await reg.flush()
     expect((await SourceRegistry.load(dir)).list()[0].rules.ruleExploreKinds).toEqual([])
     expect((await SourceRegistry.load(dir)).list()[0].rules.ruleExploreKinds).toEqual([])  // 二次 load 幂等
+    // 这个夹具是 legado 平铺源、raw 里没有发现面：正确值**就是**空数组（不是「没补出来」）
+  })
+  it('原生方言的存量源缺 explore 键 → load 按 raw 的 ruleFind 补推（不是补空数组：本机那唯一原生源 raw 带 14 个 kinds，只补 [] 则书城整个是空的；ruleExploreUrl 同样缺席会让分类抓取一律判规则缺失）', async () => {
+    const dir = await tmp()
+    const reg = await SourceRegistry.load(dir)
+    await reg.edit((tx) => tx.add(normalizeSource({
+      name: '笔趣阁', url: 'https://www.bqquge.com',
+      searchUrl: '/so/{{keyword}}/{{page}}',
+      ruleSearch: { list: '.item', name: 'h3 a', bookUrl: 'h3 a@href' },
+      ruleContent: { content: '.con' },
+      ruleFind: {
+        url: '/{{kind}}/{{page}}',
+        kinds: [{ title: '玄幻', url: 'xuanhuan' }, { title: '都市', url: 'dushi' }],
+      },
+    })))
+    expect(reg.list()[0].rules.ruleExploreKinds).toHaveLength(2)                 // 入库时已映射
+    await reg.edit(() => {
+      const rules = reg.list()[0].rules as unknown as Record<string, unknown>
+      for (const k of Object.keys(rules)) if (k.startsWith('ruleExplore')) delete rules[k]  // 旧版派生的存量形态
+    })
+    await reg.flush()
+    const rules = (await SourceRegistry.load(dir)).list()[0].rules
+    expect(rules.ruleExploreUrl).toBe('/{{kind}}/{{page}}')                      // 只补空数组的实现这里是 null
+    expect(rules.ruleExploreKinds).toEqual([
+      { title: '玄幻', url: 'xuanhuan' }, { title: '都市', url: 'dushi' },
+    ])
+    expect(rules.ruleExploreList).toBeNull()                                     // ruleFind 没带 ruleSearch → 整套不给
+    expect((await SourceRegistry.load(dir)).list()[0].rules.ruleExploreKinds).toHaveLength(2)  // 二次 load 幂等
+  })
+  it('发现面补推只填缺席键：新入库源已有的值不被第二条路改写', async () => {
+    const dir = await tmp()
+    const reg = await SourceRegistry.load(dir)
+    await reg.edit((tx) => tx.add(normalizeSource({
+      name: '手改', url: 'https://manual.example.com',
+      ruleContent: { content: '.con' },
+      ruleFind: { url: '/{{kind}}/{{page}}', kinds: [{ title: '玄幻', url: 'xuanhuan' }] },
+    })))
+    // 键在场且与 raw 派生值不同——同值夹具下「只填缺席」与「恒覆盖」同绿，这条用例才可证伪
+    await reg.edit(() => { reg.list()[0].rules.ruleExploreUrl = '/manual/{{page}}' })
+    await reg.flush()
+    const rules = (await SourceRegistry.load(dir)).list()[0].rules
+    expect(rules.ruleExploreUrl).toBe('/manual/{{page}}')                        // 恒覆盖的实现会把它改成 /{{kind}}/{{page}}
+    expect(rules.ruleExploreKinds).toEqual([{ title: '玄幻', url: 'xuanhuan' }])
   })
   // ⑥ 的读原先是自己解释 raw 的**第二份**规则解释：只认对象容器、且容器优先于平铺——
   // 与导入侧（flattenDialect：字符串化容器照解析、平铺优先）在两种形态上分岔。恒覆盖

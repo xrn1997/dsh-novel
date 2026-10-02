@@ -255,6 +255,80 @@ export function rawBookMetaFields(raw: unknown): Record<string, string | null> |
   return out
 }
 
+/** 发现面十一键（键名直接取自 `NormalizedRules`，不另立一份同名字段表）。 */
+type ExploreField =
+  | 'ruleExploreUrl' | 'ruleExploreKinds' | 'ruleExploreList' | 'ruleExploreName'
+  | 'ruleExploreAuthor' | 'ruleExploreBookUrl' | 'ruleExploreCoverUrl' | 'ruleExploreIntro'
+  | 'ruleExploreKind' | 'ruleExploreLastChapter' | 'ruleExploreWordCount'
+
+/** 原生 `ruleFind` → 发现面取值的**唯一**映射：导入侧 `flattenNative` 与存量补推侧
+ *  `rawExploreFields` 共用这一份，两个调用点只负责落位与终端语义。拆成两份解释就会在三条口径上
+ *  分叉：`ruleSearch.list` 非空才启用整套覆盖（判据只在 list，逐字段回落会把对面本该回落通用规则的
+ *  源读成半套）、kinds 只收顶层 `title`+`url` 双非空的项、`children` 非空要留痕（返回 `sawChildren`
+ *  给调用方点名，本体不在这里告警——导入与补推的留痕渠道不同）。
+ *  非对象形态的 `ruleFind` 不在此列（同 `ruleRank` 一族：静默忽略）。 */
+function nativeExploreFields(f: Record<string, unknown>): {
+  values: Record<string, string>
+  kinds: Array<{ title: string; url: string }>
+  sawChildren: boolean
+} {
+  const values: Record<string, string> = {}
+  const put = (field: string, v: unknown): void => {
+    if (typeof v === 'string' && v.length > 0) values[field] = v
+  }
+  put('ruleExploreUrl', f.url)
+  const kinds: Array<{ title: string; url: string }> = []
+  let sawChildren = false
+  for (const k of Array.isArray(f.kinds) ? f.kinds : []) {
+    if (typeof k !== 'object' || k === null || Array.isArray(k)) continue
+    const e = k as Record<string, unknown>
+    const title = typeof e.title === 'string' && e.title.length > 0 ? e.title : null
+    const url = typeof e.url === 'string' && e.url.length > 0 ? e.url : null
+    if (title === null || url === null) continue
+    kinds.push({ title, url })
+    if (Array.isArray(e.children) && e.children.length > 0) sawChildren = true
+  }
+  const own = f.ruleSearch
+  if (typeof own === 'object' && own !== null && !Array.isArray(own)) {
+    const o = own as Record<string, unknown>
+    if (typeof o.list === 'string' && o.list.length > 0) {
+      put('ruleExploreList', o.list)
+      put('ruleExploreName', o.name); put('ruleExploreAuthor', o.author)
+      put('ruleExploreBookUrl', o.bookUrl); put('ruleExploreCoverUrl', o.coverUrl)
+      put('ruleExploreIntro', o.intro); put('ruleExploreKind', o.kind)
+      put('ruleExploreLastChapter', o.lastChapter); put('ruleExploreWordCount', o.wordCount)
+    }
+  }
+  return { values, kinds, sawChildren }
+}
+
+/** 发现面十一键（供 `SourceRegistry.load` 存量按 raw 补推，与 `rawBookMetaFields` / `rawRulePattern`
+ *  同族）。发现面是后来才接的链路：存量 rules 缺这些键 → 已入库的原生源在书城**整个是空的**
+ *  （kinds 一条不剩、`ruleExploreUrl` 缺席让分类抓取一律判规则缺失）。读口复用导入侧同一份映射
+ *  （`nativeExploreFields`），终端语义同 `NATIVE_TEXT_FIELDS`（裸选择器补隐式 `@text`，list/url 三件套
+ *  不补）；整套覆盖缺席时八字段如实取 null，不拿半套冒充。
+ *  本期只有原生方言有发现面：非原生（legado 平铺/对象）与无 `ruleFind` 的源如实给全 null + `[]`
+ *  ——发现面没映射就**是**空的，不许拿空值冒充有分类；raw 不是对象 → undefined（调用方别动）。 */
+export function rawExploreFields(raw: unknown): Pick<NormalizedRules, ExploreField> | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const out: Pick<NormalizedRules, ExploreField> = {
+    ruleExploreUrl: null, ruleExploreKinds: [],
+    ruleExploreList: null, ruleExploreName: null, ruleExploreAuthor: null,
+    ruleExploreBookUrl: null, ruleExploreCoverUrl: null, ruleExploreIntro: null,
+    ruleExploreKind: null, ruleExploreLastChapter: null, ruleExploreWordCount: null,
+  }
+  if (!isNativeSource(raw)) return out
+  const find = (raw as Record<string, unknown>).ruleFind
+  if (typeof find !== 'object' || find === null || Array.isArray(find)) return out
+  const mapped = nativeExploreFields(find as Record<string, unknown>)
+  out.ruleExploreKinds = mapped.kinds
+  const assign = out as unknown as Record<string, string>
+  for (const [k, v] of Object.entries(mapped.values)) {
+    assign[k] = (NATIVE_TEXT_FIELDS as readonly string[]).includes(k) ? withImplicitText(v) : v
+  }
+  return out
+}
+
 /** 规则容器的三态解析结果：拿到对象 / 明确缺席（静默）/ 看着像容器但读不出来（点名）。 */
 type Container = { obj: Record<string, unknown> } | { absent: true } | { unreadable: string }
 /**
@@ -528,33 +602,11 @@ function flattenNative(raw: Record<string, unknown>, warnings: NormalizeIssue[])
   // 不静默丢（顶层那层照样落位）。
   const find = raw.ruleFind
   if (typeof find === 'object' && find !== null && !Array.isArray(find)) {
-    const f = find as Record<string, unknown>
-    put('ruleExploreUrl', f.url)
-    const kinds = Array.isArray(f.kinds) ? f.kinds : []
-    const items: Array<{ title: string; url: string }> = []
-    let sawChildren = false
-    for (const k of kinds) {
-      if (typeof k !== 'object' || k === null || Array.isArray(k)) continue
-      const e = k as Record<string, unknown>
-      const title = str(e.title); const url = str(e.url)
-      if (title === null || url === null) continue
-      items.push({ title, url })
-      if (Array.isArray(e.children) && e.children.length > 0) sawChildren = true
-    }
-    out.ruleExploreKinds = items
-    if (sawChildren) {
+    const mapped = nativeExploreFields(find as Record<string, unknown>)
+    for (const [field, value] of Object.entries(mapped.values)) out[field] = value
+    out.ruleExploreKinds = mapped.kinds   // 键恒落位：消费者按 .length 读分类面
+    if (mapped.sawChildren) {
       warnings.push({ field: 'ruleFind.kinds', message: 'kinds[].children（二级分类）本期不支持，已忽略' })
-    }
-    const own = f.ruleSearch
-    if (typeof own === 'object' && own !== null && !Array.isArray(own)) {
-      const o = own as Record<string, unknown>
-      if (str(o.list) !== null) {
-        put('ruleExploreList', o.list)
-        put('ruleExploreName', o.name); put('ruleExploreAuthor', o.author)
-        put('ruleExploreBookUrl', o.bookUrl); put('ruleExploreCoverUrl', o.coverUrl)
-        put('ruleExploreIntro', o.intro); put('ruleExploreKind', o.kind)
-        put('ruleExploreLastChapter', o.lastChapter); put('ruleExploreWordCount', o.wordCount)
-      }
     }
   }
   // 顶层未支持字段（v1 无 POST/排序面；charset 由抓取链自动识别）
