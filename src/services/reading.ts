@@ -5,12 +5,15 @@ import type { Facet } from '../engine/index.js'
 import { absUrl, auxFieldOf, auxUrlFieldOf, detailContextOf, detailFieldsOf, engineContextOf, fieldOf, firstUrlValue, firstValue, itemContextsOf, kindFieldOf, makeSubEval, resolveHeaders, urlFieldOf, wordCountFieldOf } from './bridge.js'
 import type { Page, SubRuleEval } from './bridge.js'
 import { PageCache } from './cache.js'
-import { contentSlot, rulesEpoch } from './cache-epoch.js'
+import { contentSlot, exploreEpoch, rulesEpoch } from './cache-epoch.js'
 import { chapterContentToText } from './chapter-content.js'
 import { contentToText, formatIntro } from './content.js'
 import { ChapterNotFoundError, InvalidRequestError, LocalNotMountedError, RuleMissingError, SourceNotFoundError } from './errors.js'
 import { createFetcher, decodeBody, fetchTextPage, DEFAULT_TIMEOUT_MS } from './fetcher.js'
 import type { Fetcher } from './fetcher.js'
+import { KindCache } from './explore-cache.js'
+import { ExploreJobs } from './explore-job.js'
+import { kindsOf, runExploreKind, sourcesOfKind } from './explore.js'
 import { SourceJobs } from './import-job.js'
 import { SearchJobs } from './search-job.js'
 import type { JobHost } from './import-job.js'
@@ -39,8 +42,8 @@ export type { SearchHit, SearchGroup, ChapterEntry, BookDetail, SearchJobSnapsho
 export type { LocalResource } from './localbooks.js'
 import { planarNavigation } from '../shared/wire.js'
 import type {
-  BookDetail, BookNavigation, ChapterContent, LocalImportResponse, LocalImportWarning, SearchGroup, SearchHit,
-  SearchPlan, SearchJobSnapshot, ChapterEntry, ShelfBook, ShelfEntry, ShelfMetaPatch, SourcePublic,
+  BookDetail, BookNavigation, ChapterContent, ExploreKinds, ExploreSnapshot, LocalImportResponse, LocalImportWarning,
+  SearchGroup, SearchHit, SearchPlan, SearchJobSnapshot, ChapterEntry, ShelfBook, ShelfEntry, ShelfMetaPatch, SourcePublic,
 } from '../shared/wire.js'
 /** 聚合搜索并发（缺省 5）与 js 沙箱预算（缺省 15s）：**这两个数的唯一主人**——组合根 DEFAULTS
  *  与本文件 `from()` 回退都引这里，别处不再写字面量。15s 而非引擎 2s：多请求目录脚本 2s 必炸；
@@ -96,6 +99,10 @@ export class ReadingService {
     private readonly jobs: SourceJobs,
     /** 聚合搜索的后台持有者（读任务，与写的 `jobs` 分槽——见 services/search-job.ts 的理由） */
     private readonly searchJobs: SearchJobs,
+    /** 分类浏览的后台持有者（与 `searchJobs` 同一档：读任务，与写的 `jobs` 分槽——理由同 services/explore-job.ts） */
+    private readonly exploreJobs: ExploreJobs,
+    /** 逐源分类快照：**一份实例**服务全部轮次与全部调用方，否则「重复进同一分类」永远打站点 */
+    private readonly exploreCache: KindCache,
     private readonly local: LocalBooks | null,
   ) {}
 
@@ -169,6 +176,8 @@ export class ReadingService {
         ...(parts.jobHost === undefined ? {} : { host: parts.jobHost }),
       }),
       new SearchJobs(parts.jobHost === undefined ? {} : { host: parts.jobHost }),
+      new ExploreJobs(parts.jobHost === undefined ? {} : { host: parts.jobHost }),
+      new KindCache(),
       parts.local ?? null,
     )
   }
@@ -516,6 +525,42 @@ export class ReadingService {
 
   /** 搜索任务的「变了」信号口（SSE 路由用它拉增量；信号不带数据，游标归每条连接）。返回退订口。 */
   subscribeSearchJob(listener: () => void): () => void { return this.searchJobs.subscribe(listener) }
+
+  // ── 分类浏览（书城）──────────────────────────────────────────────────
+
+  /** 分类词表：本地派生、**零网络请求**。参与集判据与 `searchPlan` 同源——`exploreParticipates`
+   *  就是那条启停 invariant 再加一条「声明了分类入口」，故词表与参搜集合不会各说一套。 */
+  exploreKinds(): ExploreKinds {
+    return { kinds: kindsOf(this.registry.list()) }
+  }
+
+  /** 提交一轮分类浏览。参与源 = 声明了这一类的源（**精确同名**，与词表同一条匹配规则）；逐源
+   *  只取第 1 页。命中进程内快照的源直接出结果（零请求），未命中的才真抓——重复进同一个分类
+   *  不打站点是那份快照存在的全部理由。 */
+  startExploreJob(kind: string): { jobId: string } {
+    const targets = sourcesOfKind(this.registry.list(), kind)
+    return this.exploreJobs.start(kind, targets.length, (emit, shouldStop) =>
+      runExploreKind(targets, this.fetcher, {
+        parallel: this.cfg.searchParallel, timeoutMs: this.searchTimeoutMs, jsTimeoutMs: this.jsTimeoutMs,
+        cache: this.exploreCache,
+        // 代际用 `exploreEpoch` 而非 `rulesEpoch`：后者按「一个字段变更作废哪些**引擎面**（目录/
+        // 正文）的文件缓存」归类，ruleExplore* 一族在那张表里全归 'none'——拿它当快照键，作者改了
+        // 发现规则键却不动，陈旧书目会一直撑到 TTL 结束。两份指纹同一个主人、各按自己的消费路径
+        // 收字段，这里取发现面那一份。先在此算好：编排层（`runExploreKind`）只收 `epochOf`，不认识规则。
+        epochOf: (s) => exploreEpoch(s.rules, s.baseUrl),
+      }, emit, shouldStop))
+  }
+
+  /** 分类轮次读面：**全量**快照（归并会修订已发条目，增量模型装不下——见 services/explore-job.ts）。
+   *  null = 从未提交过，或结束后过了保留期。 */
+  exploreJobSnapshot(): ExploreSnapshot | null { return this.exploreJobs.snapshot() }
+
+  /** 分类轮次的「变了」信号口（SSE 路由用它拉全量帧；信号不带数据）。返回退订口。 */
+  subscribeExploreJob(listener: () => void): () => void { return this.exploreJobs.subscribe(listener) }
+
+  /** 停止当前这轮分类浏览（宿主任务取消与 UI 的「停止浏览」都走这条）。返回 false = 本轮早已收尾
+   *  （点了个空钮），不是错误；在途请求不撤回，与聚合搜索同口径。 */
+  cancelExploreJob(): boolean { return this.exploreJobs.cancel('用户停止') }
 
   private async searchOne(s: NovelSource, keyword: string): Promise<SearchGroup> {
     const base = {
