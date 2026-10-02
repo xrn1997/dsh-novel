@@ -1,0 +1,28 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: zh-CN
+commit: 8382c4b651032efdf342f59f328fb4c6ddb83344
+branch: main
+exported_at: "2026-10-02T05:00:24Z"
+modules:
+    root:
+        dir_name: DSH 小说插件工作区根配置
+        title: DSH 小说插件工作区根配置
+        scope:
+            - .gitignore
+            - package.json
+            - pnpm-workspace.yaml
+            - pnpm-lock.yaml
+            - tsconfig.json
+            - tsdown.config.ts
+            - vitest.config.ts
+            - vitest.compat.config.ts
+            - vitest.pack.config.ts
+            - screenshots.json
+            - cordis.patch.yml
+            - AGENTS.md
+            - CONTEXT.md
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []

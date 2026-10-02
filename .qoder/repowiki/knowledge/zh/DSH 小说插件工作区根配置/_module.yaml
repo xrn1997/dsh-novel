@@ -1,0 +1,58 @@
+schema_version: 1
+module_path: root
+title: DSH 小说插件工作区根配置
+scope:
+    - .gitignore
+    - package.json
+    - pnpm-workspace.yaml
+    - pnpm-lock.yaml
+    - tsconfig.json
+    - tsdown.config.ts
+    - vitest.config.ts
+    - vitest.compat.config.ts
+    - vitest.pack.config.ts
+    - screenshots.json
+    - cordis.patch.yml
+    - AGENTS.md
+    - CONTEXT.md
+source_files: []
+depends_on: []
+related_to: []
+kk_module_id: c857d503-d6b8-4a01-a382-57b821689e3c
+kk_cards:
+    architecture_design:
+        id: e97080c5-f04e-485e-b5aa-f622992fa5d6
+        title: DSH 小说插件工作区根配置
+    coding_conventions:
+        id: 214cabd2-68d6-41f3-b0fb-36530ead56c3
+        title: DSH 小说插件工作区根配置
+    overview:
+        id: 360374d4-f658-41d7-8c76-7375a12a0aae
+        title: DSH 小说插件工作区根配置
+    tech_stack:
+        id: df3ff2e1-d447-4e97-8861-31a8bdf3f8c7
+        title: DSH 小说插件工作区根配置
+    unique_setup_and_commands:
+        id: c3faf521-c856-4d77-bbc5-54b2ba8462b1
+        title: DSH 小说插件工作区根配置
+    build_system:
+        id: 0b25c6e5-49f5-4208-bb22-39f7ee99b7b2
+        title: 基于 tsdown + Vitest 的双半构建与发布管线
+    configuration_system:
+        id: 8cef02ea-5921-4838-91db-80b48d74e889
+        title: DSH 小说插件配置系统：schemastery Schema + Cordis 注入 + 多源优先级
+    error_handling:
+        id: 74201d15-92d0-4139-966e-0cf4a4146b9a
+        title: 错误处理：两分法分类学 + ApiError 直通 + Origin/Referer 同源 Fence
+    frontend_style:
+        id: cdee3fbb-eacb-41a6-979d-3b4298f061dd
+        title: 基于 CSS 变量 token 与宿主设计系统的插件样式层
+    logging_system:
+        id: 2fb7c18b-2278-429e-b0d5-814705bea6a9
+        title: 基于 console 的原生日志输出，无专用日志框架
+kk_repo_cards:
+    - build_system
+    - configuration_system
+    - error_handling
+    - frontend_style
+    - logging_system
