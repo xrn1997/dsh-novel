@@ -29,6 +29,39 @@ beforeAll(async () => {
 afterAll(async () => { await svc.flush(); await close() })
 
 describe('书城发现面', () => {
+  /** 排在提交类用例之前：入场态（从未提交过 → 首帧是空档、流继续等）只在「还没有任何一轮」时成立，
+   *  而 svc 在本块内共用、终态快照还会保留一段。 */
+  it('SSE 流：未提交时首帧是空档且流继续等，提交后终帧给出整轮并关流', async () => {
+    const res = await fetch(`${base}/novel-api/${ROUTES.exploreListStream.path}`)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('text/event-stream')
+    expect(res.headers.get('x-accel-buffering')).toBe('no')      // 经代理不许攒帧，否则「即时」变「整批迟到」
+    const sse = openStream(res)
+    try {
+      expect(await sse.next()).toEqual({ job: null })            // 还没提交过：正常入场态，不是错误
+      const pending = sse.next()                                 // 挂一次读：服务端若在这里关流，它会立刻以读完收尾
+      let settled = false
+      void pending.then(() => { settled = true })
+      for (let i = 0; i < 20 && !settled; i++) await new Promise((r) => setTimeout(r, 5))
+      expect(settled).toBe(false)                                // 流在等：不关、也不拿空帧刷屏
+
+      const submitted = await fetch(`${base}/novel-api/${ROUTES.exploreList.path}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: '玄幻' }),
+      })
+      const { value } = await submitted.json() as any
+      expect(typeof value.jobId).toBe('string')
+      let terminal = await pending
+      for (let i = 0; i < 50 && terminal !== null && terminal.job.phase === 'running'; i++) terminal = await sse.next()
+      expect(terminal).not.toBeNull()                            // 有终帧；提前关流会在这一条上露出来
+      expect(terminal!.job.id).toBe(value.jobId)                 // 帧归属本轮：不夹带上一次提交
+      expect(terminal!.job.phase).toBe('done')
+      expect(terminal!.job.books.map((b: any) => b.name)).toContain('剑起长安')
+      // 「关流」要有上界：真没收尾时给一句明确断言，而不是把整个用例拖成超时（超时还会连带挂住 afterAll）
+      const closed = await Promise.race([sse.next(), new Promise((r) => setTimeout(() => r('还在等'), 2000))])
+      expect(closed).toBeNull()
+    } finally { await sse.cancel() }
+  })
+
   it('GET explore/kinds → 本地派生的词表', async () => {
     const r = await fetch(`${base}/novel-api/${ROUTES.exploreKinds.path}`)
     expect(r.status).toBe(200)
@@ -60,3 +93,28 @@ describe('书城发现面', () => {
     expect(job.books.map((b: any) => b.name)).toEqual(['剑起长安'])
   })
 })
+
+/** 逐帧读 SSE（`\n\n` 分隔）：`next()` 在服务端关流后给 null——「读到读完」本身就是「服务端已关流」的读数。
+ *  `tests/api/dispatch-reading.test.ts` 那份是一次读到底；这里要分开看入场态，故按帧给。 */
+function openStream(res: Response): { next: () => Promise<{ job: any } | null>; cancel: () => Promise<void> } {
+  const reader = res.body!.getReader()
+  const dec = new TextDecoder()
+  let buf = ''
+  return {
+    async next(): Promise<{ job: any } | null> {
+      for (;;) {
+        const at = buf.indexOf('\n\n')
+        if (at >= 0) {
+          const line = buf.slice(0, at).split('\n').find((l) => l.startsWith('data: '))
+          buf = buf.slice(at + 2)
+          if (line === undefined) continue
+          return JSON.parse(line.slice(6))
+        }
+        const { value, done } = await reader.read()
+        if (done) return null
+        buf += dec.decode(value, { stream: true })
+      }
+    },
+    cancel: () => reader.cancel(),
+  }
+}
