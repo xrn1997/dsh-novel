@@ -32,6 +32,9 @@ export interface ExploreRound {
   books: ExploreBook[]
   failures: ExploreFailure[]
   running: boolean
+  /** 本轮被停止（用户按停、或宿主侧取消）：结果保留、只是不再往下抓。
+   *  UI 据此说「已停止」而不是「跑完了」——两者都是 `running=false`，只看 running 分不开。 */
+  cancelled: boolean
 }
 
 export interface ExploreJobView {
@@ -46,12 +49,18 @@ const errText = (e: unknown): string => (e instanceof Error ? e.message : String
 const toRound = (job: ExploreSnapshot): ExploreRound => ({
   id: job.id, kind: job.kind, total: job.total, done: job.done,
   books: job.books, failures: job.failures, running: job.phase === 'running',
+  cancelled: job.cancelled === true,
 })
 
 export function useExploreJob(deps: ClientCoreDeps): ExploreJobView {
   const alive = useRef(true)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const stream = useRef<AbortController | null>(null)
+  /** 「本页已经提交过」闸：POST 的回包说了算（它是新一轮的出生证明）。挂载恢复读到的是**上一轮**
+   *  的快照，它要是后到，就会把新轮刚落下的空帧盖成旧轮的书单——`search-job.ts` 的对应闸是
+   *  「累积器已被新一轮替换」（那边握着一份游标，有身份可比），这里没有任何可留的东西，故只用一枚
+   *  布尔：提交落地即关闸，恢复读此后一律让位。 */
+  const submitted = useRef(false)
   const [round, setRound] = useState<ExploreRound | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -125,10 +134,11 @@ export function useExploreJob(deps: ClientCoreDeps): ExploreJobView {
       try {
         const { jobId } = await deps.apiSend<{ jobId: string }>('POST', ROUTES.exploreList.path, { kind: k })
         if (!alive.current) return
+        submitted.current = true             // 新轮出生：此后的挂载恢复（读的是上一轮）一律让位
         stopChannels()
         // 提交返回的 id 就是本轮身份：先落一帧空态再开始盯（避免旧轮的条目在新轮里停留）
         setError(null)
-        setRound({ id: jobId, kind: k, total: 0, done: 0, books: [], failures: [], running: true })
+        setRound({ id: jobId, kind: k, total: 0, done: 0, books: [], failures: [], running: true, cancelled: false })
         watch()
       } catch (e) {
         if (!alive.current) return
@@ -145,7 +155,7 @@ export function useExploreJob(deps: ClientCoreDeps): ExploreJobView {
       try {
         job = (await deps.apiGet<{ job: ExploreSnapshot | null }>(ROUTES.exploreListStatus.path)).job ?? null
       } catch { return }                          // 首屏读不到就是没有：静默（真去看时会再报错）
-      if (!alive.current || job === null) return
+      if (!alive.current || job === null || submitted.current) return   // 提交先回来 → 不覆盖新一轮
       if (apply(job) && alive.current) watch()
     })()
     return () => {

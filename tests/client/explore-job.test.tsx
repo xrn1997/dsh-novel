@@ -46,4 +46,11 @@ describe('useExploreJob', () => {
     expect(seen?.round?.kind).toBe('都市')
     expect(seen?.round?.books).toEqual([])
   })
+
+  it('取消不是完成：快照说 cancelled 时视图态照实带出（宿主侧取消到得了这里，UI 才分得开两件事）', async () => {
+    const deps = depsOf([snap({ phase: 'failed', cancelled: true, done: 1, total: 2 })])
+    render(<Probe deps={deps} />)
+    await waitFor(() => { expect(seen?.round?.cancelled).toBe(true) })
+    expect(seen?.round?.running).toBe(false)
+  })
 })

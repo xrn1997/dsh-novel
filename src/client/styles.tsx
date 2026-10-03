@@ -223,6 +223,7 @@ export const NOVEL_CSS = `
 .novel-input:focus-visible, .novel-textarea:focus-visible, .novel-chip:focus-visible,
 .novel-seg button:focus-visible, .novel-tabs button:focus-visible, .novel-menu button:focus-visible,
 .novel-card:focus-visible, .novel-row-main:focus-visible,
+.novel-city-kind:focus-visible, .novel-city-card:focus-visible,
 .novel-drawer-item:focus-visible, .novel-switch:focus-visible, .novel-searchbox:focus-within,
 .novel-ref:focus-visible {
   outline: 2px solid var(--novel-ring); outline-offset: 2px;
@@ -958,12 +959,135 @@ export const NOVEL_CSS = `
 }
 @media (prefers-reduced-motion: reduce) {
   .novel-card, .novel-btn, .novel-chip, .novel-seg button, .novel-searchbox, .novel-row,
+  .novel-city-card, .novel-city-kind,
   .novel-switch, .novel-switch > i, .novel-progress > i, .novel-rdr-trail, .novel-card-ghost .novel-ghost-cover {
     transition: none;
   }
   .novel-sk::after { animation: none; }
   .novel-modal-mask, .novel-modal { animation: none; }
   .novel-card:hover, .novel-card:focus-visible { transform: none; }
+}
+/* ── 书城（分类浏览）：两级——左栏词表 + 右区 4 列跨源书单 ──────────────
+   两条几何口径（界面稿实测，别凭手感改）：
+   ① 只让书单自己滚（.novel-city-gridwrap），标题行 / 失败条 / 尾行读数钉在滚动区外——放进滚动区
+      就随书单滚走，读进度得先滚到底。那条前提是本层要把高度收到视图根上（.novel-main 已定高，
+      链上有确定高度可分），否则内层滚动容器高度由内容决定、等于没滚。
+   ② 4 列必须写 minmax(0, 1fr)：1fr 的 auto 最小值会被 nowrap 的书名 / 元信息行撑开，卡片被推出
+      面板（3 列与 4 列都实测溢出过）。
+   窄面板（<900px）退档：左栏折成顶部一条可横滚的 chip 行，书单回 2 列。 */
+[data-novel-view="city"] { height: 100%; }
+.novel-city { position: relative; flex: 1 1 auto; min-height: 0; display: flex; gap: var(--novel-sp-5); }
+/* 左栏自己可滚（词表按源数降序可以很长，裁掉等于把后面那些类藏起来）；条目 flex:none——
+   可滚动 flex 列里的条目在滚动发生前会先被压扁（目录抽屉踩过同一个坑） */
+.novel-city-rail {
+  width: 208px; flex: none; display: flex; flex-direction: column; gap: var(--novel-sp-0);
+  overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
+}
+/* 复用 .novel-input 的底 / 描边 / 焦点环，这里只钉本处的几何（词表筛选是一行矮件） */
+.novel-city-filter { flex: none; height: 28px; padding: 0 var(--novel-sp-3); margin-bottom: var(--novel-sp-3); font-size: var(--novel-fs-sm); }
+.novel-city-rail-head { flex: none; padding: 0 var(--novel-sp-4) var(--novel-sp-2); font-size: var(--novel-fs-xs); color: var(--novel-text-3); }
+.novel-city-kind {
+  flex: none; display: flex; align-items: center; gap: var(--novel-sp-3); width: 100%; text-align: left;
+  padding: var(--novel-sp-1) var(--novel-sp-4); border: none; border-radius: var(--novel-r-sm);
+  background: none; color: var(--novel-text-2); font: inherit; font-size: var(--novel-fs-md); cursor: pointer;
+  transition: background var(--novel-dur) var(--novel-ease), color var(--novel-dur) var(--novel-ease);
+}
+.novel-city-kind:hover { background: var(--novel-hover); color: var(--novel-text); }
+.novel-city-kind.on { background: var(--novel-brand-tint); color: var(--novel-brand-strong); font-weight: 600; }
+.novel-city-kind-n { margin-left: auto; font-size: var(--novel-fs-xs); color: var(--novel-text-3); }
+.novel-city-kind.on .novel-city-kind-n { color: var(--novel-brand-strong); }
+.novel-city-main { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: var(--novel-sp-3); }
+.novel-city-head { flex: none; display: flex; align-items: center; gap: var(--novel-sp-4); margin: 0; }
+.novel-city-head h2 { margin: 0; font-size: var(--novel-fs-xl); font-weight: 650; }
+.novel-city-sub { font-size: var(--novel-fs-xs); color: var(--novel-text-3); }
+/* 排序是**静态说明不是控件**：服务端只有一个排序键（收录源数）且已排好，摆下拉就是假控件 */
+.novel-city-note { flex: none; font-size: var(--novel-fs-xs); color: var(--novel-text-3); }
+.novel-city-gridwrap { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.novel-city-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--novel-sp-3); }
+.novel-city-card {
+  display: flex; gap: var(--novel-sp-4); padding: var(--novel-sp-4); text-align: left;
+  background: var(--novel-layer-2); border: 1px solid var(--novel-border-faint);
+  border-radius: var(--novel-r-md); color: inherit; font: inherit; cursor: pointer;
+  transition: border-color var(--novel-dur) var(--novel-ease), background var(--novel-dur) var(--novel-ease);
+}
+.novel-city-card:hover { border-color: var(--novel-border); background: var(--novel-layer-3); }
+/* 封面位：无 coverUrl 时是首字降级块（底色走 .novel-cover-t* 那四档，hex 仍不出 token 层）——
+   故本类不带 background，免得按源序压掉后定义的档位色 */
+.novel-city-cover {
+  flex: none; width: 44px; height: 58px; border-radius: var(--novel-r-xs);
+  display: grid; place-items: center; overflow: hidden;
+  font-family: "Noto Serif SC", "STSong", "SimSun", serif; font-size: var(--novel-fs-base); font-weight: 600;
+}
+img.novel-city-cover { display: block; object-fit: cover; background: var(--novel-skeleton); }
+.novel-city-card-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: var(--novel-sp-0); }
+.novel-city-card-title { display: flex; align-items: center; gap: var(--novel-sp-2); }
+.novel-city-name {
+  min-width: 0; font-size: var(--novel-fs-md); font-weight: 650;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.novel-city-card:hover .novel-city-name { color: var(--novel-brand-strong); }
+/* 来源角标只说数量（源名归抽屉与失败条）：**单源也照出**——「只有 1 个源有这本书」是要紧的信息 */
+.novel-city-src {
+  flex: none; display: inline-flex; align-items: center; height: 18px; padding: 0 var(--novel-sp-2);
+  border: 1px solid var(--novel-border); border-radius: 999px; background: var(--novel-layer-3);
+  font-size: var(--novel-fs-xs); font-weight: 400; color: var(--novel-text-2);
+}
+.novel-city-card-meta, .novel-city-card-last {
+  font-size: var(--novel-fs-xs); color: var(--novel-text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.novel-city-card-intro {
+  font-size: var(--novel-fs-sm); color: var(--novel-text-2); line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
+}
+/* 失败条是本设计的**刻意例外**（与搜索面同哲学：源坏了要如实摊开，不藏在折叠里）——
+   数量 + 坏源名 + 错误码住摘要行，展开只补完整 message */
+.novel-city-fail {
+  flex: none; border: 1px solid var(--novel-err-line); border-radius: var(--novel-r-sm);
+  background: var(--novel-err-weak); padding: var(--novel-sp-2) var(--novel-sp-4);
+  font-size: var(--novel-fs-xs); color: var(--novel-text-2);
+}
+.novel-city-fail > summary { display: flex; flex-wrap: wrap; align-items: center; gap: var(--novel-sp-2) var(--novel-sp-4); cursor: pointer; }
+.novel-city-fail b { font-weight: 600; color: var(--novel-err); }
+.novel-city-fail-who { color: var(--novel-text-2); }
+.novel-city-fail-more { margin-left: auto; color: var(--novel-text-3); }
+.novel-city-fail-msgs { display: flex; flex-direction: column; gap: var(--novel-sp-1); margin-top: var(--novel-sp-2); }
+/* 尾行 = 轮次的被动读数（服务端自跑分批，没有可点的东西）。渲染与否由**有没有轮次**判，
+   不是由这行文字空不空判——「还没有一轮」与「一轮里源数是 0」在这里都不产出读数文案 */
+.novel-city-foot { flex: none; border-top: 1px solid var(--novel-border-faint); padding-top: var(--novel-sp-3); font-size: var(--novel-fs-xs); color: var(--novel-text-3); }
+/* 选源抽屉（T4 的内容面接在这一层上）：覆盖右区、书单留在原位；遮罩与本体同住浮层单表 */
+.novel-city-scrim { position: absolute; inset: 0; z-index: var(--novel-z-panel); background: var(--novel-mask); }
+.novel-city-drawer {
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: var(--novel-z-panel);
+  width: min(372px, calc(100% - var(--novel-sp-6))); overflow-y: auto; overscroll-behavior: contain;
+  display: flex; flex-direction: column; gap: var(--novel-sp-4); padding: var(--novel-sp-5);
+  background: var(--novel-layer-2); border-left: 1px solid var(--novel-border); box-shadow: var(--novel-shadow-pop);
+}
+.novel-city-drawer-head { flex: none; display: flex; align-items: center; gap: var(--novel-sp-3); }
+.novel-city-drawer-title { flex: 1 1 auto; min-width: 0; font-size: var(--novel-fs-lg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.novel-city-srclist { display: flex; flex-direction: column; gap: var(--novel-sp-3); }
+.novel-city-srcrow {
+  display: flex; align-items: center; gap: var(--novel-sp-3); padding: var(--novel-sp-4);
+  border: 1px solid var(--novel-border); border-radius: var(--novel-r-md); background: var(--novel-layer-3);
+}
+.novel-city-srcrow-who { flex: 1 1 auto; min-width: 0; font-size: var(--novel-fs-base); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.novel-city-srcrow-last { flex: none; font-size: var(--novel-fs-xs); color: var(--novel-text-3); }
+/* 窄面板退档（<900px）：左栏折成顶部一条 chip 行（横滚），书单回 2 列。chip 形态与界面稿的
+   分类 tab 一致：词表在窄屏是「一条横带」而不是「一列可点行」。 */
+@media (max-width: 899px) {
+  .novel-city { flex-direction: column; }
+  .novel-city-rail {
+    width: auto; flex-direction: row; align-items: center; gap: var(--novel-sp-2);
+    overflow-x: auto; overflow-y: hidden;
+  }
+  .novel-city-filter { width: 132px; margin-bottom: 0; }
+  .novel-city-rail-head { padding: 0 var(--novel-sp-0); white-space: nowrap; }
+  .novel-city-kind {
+    width: auto; flex: none; height: 26px; padding: 0 var(--novel-sp-4); white-space: nowrap;
+    border: 1px solid var(--novel-border); border-radius: 999px;
+  }
+  .novel-city-kind-n { margin-left: var(--novel-sp-2); }
+  .novel-city-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 `
 

@@ -1118,7 +1118,7 @@ describe('NovelView 顶部 tab 导航（书架|书城|书源管理 并列；sett
   // routeStore 是模块级全局现场——本组每条测完复位 shelf，防止污染后续依赖默认路由的断言
   afterEach(() => { navigate({ name: 'shelf' }) })
 
-  it('点 tab 切换分支：书城=占位空态；书源管理=原设置区块渲染在小说视图内；书架=回首页', async () => {
+  it('点 tab 切换分支：书城=分类浏览页；书源管理=原设置区块渲染在小说视图内；书架=回首页', async () => {
     render(createElement(NovelView))
     const tabs = (): ReturnType<typeof within> => within(screen.getByRole('group', { name: '小说视图导航' }))
     // 默认书架：tab 组在场（书架 tab 激活）+ 书架内容渲染（搜索框常驻，与加载态无关）
@@ -1126,14 +1126,14 @@ describe('NovelView 顶部 tab 导航（书架|书城|书源管理 并列；sett
     await waitFor(() => expect(screen.getByPlaceholderText(/搜书名/)).toBeTruthy())
     // 「搜索」提交钮在场：与搜索页同款口径（Enter 是隐藏交互，可见按钮才是显式入口）
     expect(screen.getByRole('button', { name: '搜索' })).toBeTruthy()
-    // 书城：CityView 占位空态，书架内容已卸载
+    // 书城：CityView 分类浏览页（左栏词表常驻），书架内容已卸载
     fireEvent.click(tabs().getByRole('button', { name: '书城' }))
-    await waitFor(() => expect(screen.getByText(/书城未上线/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByPlaceholderText('筛选分类')).toBeTruthy())
     expect(screen.queryByPlaceholderText(/搜书名/)).toBeNull()
     // 书源管理：SettingsSection（原宿主设置「小说」区块整体）渲染在小说视图内
     fireEvent.click(tabs().getByRole('button', { name: '书源管理' }))
     await waitFor(() => expect(document.querySelector('[data-novel-view="sources"]')).not.toBeNull())
-    expect(screen.queryByText(/书城未上线/)).toBeNull()
+    expect(screen.queryByPlaceholderText('筛选分类')).toBeNull()
     // 回书架：首页内容回来
     fireEvent.click(tabs().getByRole('button', { name: '书架' }))
     await waitFor(() => expect(screen.getByPlaceholderText(/搜书名/)).toBeTruthy())
