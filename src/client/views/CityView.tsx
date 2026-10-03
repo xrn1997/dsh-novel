@@ -67,6 +67,7 @@ export function CityView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): Re
   const current = kinds === null ? null : kinds.find((k) => k.title === kind) ?? null
   const books = round?.books ?? []
   const failures = round?.failures ?? []
+  const empty = round === null ? null : bookListEmpty(round, failures.length, error)
   return (
     <div data-novel-view="city" className="novel-view">
       <div className="novel-city">
@@ -110,35 +111,39 @@ export function CityView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): Re
             />
           ) : (
             <>
-              <div className="novel-city-gridwrap">
-                <div className="novel-city-grid">
-                  {books.map((b) => {
-                    const meta = cityMeta(b)
-                    return (
-                      <button
-                        key={`${b.name}|${b.author ?? ''}`}
-                        className="novel-city-card"
-                        aria-label={`选择书源：${b.name}`}
-                        onClick={() => setPicked(b)}
-                      >
-                        {b.coverUrl !== undefined && imgFailed[b.name] !== true
-                          ? <img className="novel-city-cover" src={b.coverUrl} alt="" loading="lazy"
-                              onError={() => setImgFailed((m) => ({ ...m, [b.name]: true }))} />
-                          : <span className={`novel-city-cover ${coverTintClass(b.name)}`}>{coverFallbackChar(b.name)}</span>}
-                        <span className="novel-city-card-body">
-                          <span className="novel-city-card-title">
-                            <span className="novel-city-name">{b.name}</span>
-                            <span className="novel-city-src">{sourceCountLabel(b.sourceCount)}</span>
-                          </span>
-                          {meta === '' ? null : <span className="novel-city-card-meta">{meta}</span>}
-                          {b.intro === undefined ? null : <span className="novel-city-card-intro">{b.intro}</span>}
-                          {b.lastChapter === undefined ? null : <span className="novel-city-card-last">最新：{b.lastChapter}</span>}
-                        </span>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
+              {empty === null
+                ? (
+                  <div className="novel-city-gridwrap">
+                    <div className="novel-city-grid">
+                      {books.map((b) => {
+                        const meta = cityMeta(b)
+                        return (
+                          <button
+                            key={`${b.name}|${b.author ?? ''}`}
+                            className="novel-city-card"
+                            aria-label={`选择书源：${b.name}`}
+                            onClick={() => setPicked(b)}
+                          >
+                            {b.coverUrl !== undefined && imgFailed[b.name] !== true
+                              ? <img className="novel-city-cover" src={b.coverUrl} alt="" loading="lazy"
+                                  onError={() => setImgFailed((m) => ({ ...m, [b.name]: true }))} />
+                              : <span className={`novel-city-cover ${coverTintClass(b.name)}`}>{coverFallbackChar(b.name)}</span>}
+                            <span className="novel-city-card-body">
+                              <span className="novel-city-card-title">
+                                <span className="novel-city-name">{b.name}</span>
+                                <span className="novel-city-src">{sourceCountLabel(b.sourceCount)}</span>
+                              </span>
+                              {meta === '' ? null : <span className="novel-city-card-meta">{meta}</span>}
+                              {b.intro === undefined ? null : <span className="novel-city-card-intro">{b.intro}</span>}
+                              {b.lastChapter === undefined ? null : <span className="novel-city-card-last">最新：{b.lastChapter}</span>}
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+                : <EmptyState title={empty.title} hint={empty.hint} />}
               {failures.length === 0 ? null : (
                 <details className="novel-city-fail">
                   {/* 坏源名 + 错误码就摆在这一行：这一条是「逛时源不可见」的刻意例外，
@@ -167,9 +172,35 @@ export function CityView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): Re
   )
 }
 
+/**
+ * 书单区的空态：**按轮次的形状说话，不按「书单数组是不是空的」说话**。零本有四种来路，只有一种
+ * 能说成「这一类没有货」，其余三种说了就是编：
+ * ① 还在跑（源还在往回送）——结论未定；② 被停止——停止不是完成，也不是空结果；
+ * ③ 一轮里 0 个源——**没有任何源被问过**，对归类内容一无所知（这一态只由尾行说轮次自己的形状）；
+ * ④ 读面/写面报错的那一轮（服务端说 failed）——没跑完的一轮不能替分类下结论。
+ * 只有「干净跑完、且这一轮确实有源参与」才配得上这句空结果。
+ * 返回 null = 不占位（有书时铺网格；四种未定态既不铺网格也不说话——沉默比假结论诚实）。
+ *
+ * 有失败的那些源不改变本判据（`books` 已是全量归并结果，空就是真的没有），但改变**说法**：
+ * 部分失败时不能说「都答完了」，那是把「没回应」读成「没有货」。
+ */
+function bookListEmpty(round: ExploreRound, failures: number, error: string | null): { title: string; hint: string } | null {
+  if (round.running || round.cancelled || round.total === 0 || round.books.length > 0 || error !== null) return null
+  return {
+    title: '这一类还没有书',
+    hint: failures === 0
+      ? `这一类的 ${round.total} 个源都答完了，一本都没有收录——空结果不是失败，换个分类看看。`
+      : '答完的源一本都没有收录；没响应的那几个源见下面那条失败说明。',
+  }
+}
+
 /** 轮次读数（**被动读数**：服务端按并发自跑分批，没有需要用户按一下的东西）。
- *  **停止不是完成**：取消后不许说成一个走到了底的轮次，故「已停止」优先于进度文案。 */
+ *  **停止不是完成**：取消后不许说成一个走到了底的轮次，故「已停止」优先于进度文案。
+ *  跑完而 0 个源的一轮也不许留空白：`cityProgress` 在源数为 0 时给的是空串（那一档本是给
+ *  「还没有一轮」与「这一类零源」共用的），尾行会变成一条空读数。这一态唯一能被快照支持的事实
+ *  就是「没有源参与」，如实说它。 */
 function roundReadout(round: ExploreRound): string {
   if (round.cancelled) return '已停止'
-  return round.running && round.total === 0 ? '正在启动分类抓取…' : cityProgress(round.done, round.total)
+  if (round.running) return round.total === 0 ? '正在启动分类抓取…' : cityProgress(round.done, round.total)
+  return round.total === 0 ? '这一轮没有源参与' : cityProgress(round.done, round.total)
 }

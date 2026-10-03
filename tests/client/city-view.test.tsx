@@ -205,4 +205,28 @@ describe('CityView', () => {
     expect(drawer.textContent).toContain('无址阁')                        // 行还在：它是「这个源收录了它」的交代
     expect(screen.getAllByRole('button', { name: '读这本' })).toHaveLength(1)
   })
+
+  it('有分类但这一类零结果 → 诚实的空结果，不冒充失败（也不进失败条）', async () => {
+    // 两条读面（status 与 SSE 推的是同一个 current）都要说「零本」，否则推送那一帧会把书单填回来
+    current = { ...snap, books: [], failures: [] }
+    const d = { ...(deps as object), apiGet: async (p: string) => (p.includes('kinds') ? kinds : { job: { ...snap, books: [], failures: [] } }) } as never
+    render(<CityView deps={d} />)
+    await waitFor(() => { expect(screen.getByText(/这一类还没有书/)).toBeTruthy() })
+    expect(screen.queryByText(/个源没响应/)).toBeNull()      // 零命中不是失败（服务端口径）
+  })
+
+  it('零源且已完成的一轮：尾行说「这一轮没有源参与」，且不对归类内容下结论', async () => {
+    current = { ...snap, phase: 'done', total: 0, done: 0, books: [], failures: [] }
+    render(<CityView deps={deps} />)
+    await waitFor(() => { expect(screen.getByText('这一轮没有源参与')).toBeTruthy() })
+    // 没有任何源被问过 ⇒ 「这一类还没有书」是编的结论，这一态只许说轮次自己的形状
+    expect(screen.queryByText(/这一类还没有书/)).toBeNull()
+  })
+
+  it('还在跑的一轮里零本 = 源还在往回送，不许先说成这一类的空结果', async () => {
+    current = { ...snap, phase: 'running', done: 1, total: 4, books: [], failures: [] }
+    render(<CityView deps={deps} />)
+    await waitFor(() => { expect(screen.getByText('已 1 / 4 源')).toBeTruthy() })
+    expect(screen.queryByText(/这一类还没有书/)).toBeNull()
+  })
 })

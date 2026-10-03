@@ -974,8 +974,11 @@ export const NOVEL_CSS = `
       链上有确定高度可分），否则内层滚动容器高度由内容决定、等于没滚。
    ② 4 列必须写 minmax(0, 1fr)：1fr 的 auto 最小值会被 nowrap 的书名 / 元信息行撑开，卡片被推出
       面板（3 列与 4 列都实测溢出过）。
-   窄面板（<900px）退档：左栏折成顶部一条可横滚的 chip 行，书单回 2 列。 */
-[data-novel-view="city"] { height: 100%; }
+   窄面板退档（< 900px）：左栏折成顶部一条可横滚的 chip 行，书单回 2 列——判据是**面板宽度**，
+   不是视口宽度：宿主中央面板可拖窄（侧栏与常驻会话列同时在场时视口远比面板宽），视口断点会把
+   4 列硬塞进一条 400px 的面板。故本视图根自带容器查询锚（与 .novel-table / .novel-list-head 同
+   一条裁决：视口断点在分栏布局下量不准）。 */
+[data-novel-view="city"] { height: 100%; container-type: inline-size; }
 .novel-city { position: relative; flex: 1 1 auto; min-height: 0; display: flex; gap: var(--novel-sp-5); }
 /* 左栏自己可滚（词表按源数降序可以很长，裁掉等于把后面那些类藏起来）；条目 flex:none——
    可滚动 flex 列里的条目在滚动发生前会先被压扁（目录抽屉踩过同一个坑） */
@@ -1082,9 +1085,10 @@ img.novel-city-cover { display: block; object-fit: cover; background: var(--nove
 .novel-city-srcrow-who { flex: 1 1 auto; min-width: 0; font-size: var(--novel-fs-base); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .novel-city-srcrow-last { flex: none; font-size: var(--novel-fs-xs); color: var(--novel-text-3); }
 .novel-city-srcrow-go { flex: none; }
-/* 窄面板退档（<900px）：左栏折成顶部一条 chip 行（横滚），书单回 2 列。chip 形态与界面稿的
-   分类 tab 一致：词表在窄屏是「一条横带」而不是「一列可点行」。 */
-@media (max-width: 899px) {
+/* 窄面板退档（< 900px）：左栏折成顶部一条 chip 行（横滚），书单回 2 列。chip 形态与界面稿的
+   分类 tab 一致：词表在窄屏是「一条横带」而不是「一列可点行」。查询锚是上面那枚
+   [data-novel-view="city"] 的 inline-size——媒体查询只能问视口，问不出面板多宽。 */
+@container (max-width: 899px) {
   .novel-city { flex-direction: column; }
   .novel-city-rail {
     width: auto; flex-direction: row; align-items: center; gap: var(--novel-sp-2);
