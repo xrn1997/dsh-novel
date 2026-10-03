@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { cityEmptyKind, cityMeta, cityProgress, failureSummary, sourceCountLabel } from '../../src/client/city-view-model.js'
+import {
+  bookListEmpty, cityEmptyKind, cityMeta, cityProgress, failureSummary, roundReadout, sourceCountLabel,
+} from '../../src/client/city-view-model.js'
+import type { RoundShape } from '../../src/client/city-view-model.js'
 import type { ExploreBook, ExploreFailure } from '../../src/shared/wire.js'
 
 /** 分类页 view-model 钉子：卡片元信息 / 角标 / 进度 / 失败摘要 / 空态判据的唯一算式。
@@ -44,5 +47,42 @@ describe('cityEmptyKind（空态分支的唯一判据）', () => {
   it('没源提供分类 → 说「还没有书源提供分类浏览」；有分类但这一类零结果 → 不说这句话', () => {
     expect(cityEmptyKind(0)).toBe('no-kinds')
     expect(cityEmptyKind(3)).toBe('has-kinds')
+  })
+})
+
+/** 轮次判据的输入桩：只喂 `bookListEmpty`/`roundReadout` 读的那几个字段 */
+const rnd = (over: Partial<RoundShape> = {}): RoundShape =>
+  ({ total: 3, done: 3, books: [], running: false, cancelled: false, ...over })
+
+describe('bookListEmpty（空态按轮次的形状说话，不按书单数组空不空说话）', () => {
+  it('干净跑完且这一轮有源参与 → 唯一配得上「这一类还没有书」的一态', () => {
+    expect(bookListEmpty(rnd(), 0, null)?.title).toBe('这一类还没有书')
+    expect(bookListEmpty(rnd(), 0, null)?.hint).toContain('3 个源都答完了')
+  })
+  it('有源没响应 → 说法改口：不许把「没回应」读成「没有货」', () => {
+    expect(bookListEmpty(rnd(), 2, null)?.hint).toContain('没响应的那几个源')
+    expect(bookListEmpty(rnd(), 2, null)?.hint).not.toContain('都答完了')
+  })
+  it('四种未定态一律不占位（沉默比假结论诚实）：在跑 / 被停止 / 零源 / 报错的一轮', () => {
+    expect(bookListEmpty(rnd({ running: true }), 0, null)).toBeNull()
+    expect(bookListEmpty(rnd({ cancelled: true }), 0, null)).toBeNull()
+    expect(bookListEmpty(rnd({ total: 0 }), 0, null)).toBeNull()
+    expect(bookListEmpty(rnd(), 0, '分类结果读取失败：网络')).toBeNull()
+  })
+  it('有书就铺网格，不占位', () => {
+    expect(bookListEmpty(rnd({ books: [book()] }), 0, null)).toBeNull()
+  })
+})
+
+describe('roundReadout（被动读数：停止不是完成，零源的一轮也不留空白）', () => {
+  it('在跑：源数还没数出来时说「正在启动」，之后给进度', () => {
+    expect(roundReadout(rnd({ running: true, total: 0, done: 0 }))).toBe('正在启动分类抓取…')
+    expect(roundReadout(rnd({ running: true, total: 4, done: 1 }))).toBe('已 1 / 4 源')
+  })
+  it('被停止优先于进度文案——不许说得像一个走到了底的轮次', () => {
+    expect(roundReadout(rnd({ cancelled: true, total: 2, done: 1 }))).toBe('已停止')
+  })
+  it('零源的一轮仍是一轮：如实说「没有源参与」，不是空读数', () => {
+    expect(roundReadout(rnd({ total: 0, done: 0 }))).toBe('这一轮没有源参与')
   })
 })

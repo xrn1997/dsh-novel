@@ -41,6 +41,10 @@ export interface ExploreJobView {
   round: ExploreRound | null
   /** 读面/写面层面的失败——与「某源没响应」（`failures`）不同层 */
   error: string | null
+  /** 挂载恢复的读面是否已定（读到轮次、读到「没有轮次」、读失败，三者都算定）。
+   *  它定下来之前 `round` 恒为 `null`——那是「还没问过服务端」，不是「服务端说没有」。
+   *  调用方要判「这一轮在不在」必须等这个闸：抢在它之前提交，就会把服务端正持有的那一轮杀掉。 */
+  restored: boolean
   /** 提交一轮分类浏览（切类就是再调一次；服务端按 kind 走内存快照，重复提交很便宜） */
   submit: (kind: string) => void
 }
@@ -63,6 +67,7 @@ export function useExploreJob(deps: ClientCoreDeps): ExploreJobView {
   const submitted = useRef(false)
   const [round, setRound] = useState<ExploreRound | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [restored, setRestored] = useState(false)
 
   const stopChannels = (): void => {
     if (timer.current !== null) { clearTimeout(timer.current); timer.current = null }
@@ -154,9 +159,15 @@ export function useExploreJob(deps: ClientCoreDeps): ExploreJobView {
       let job: ExploreSnapshot | null
       try {
         job = (await deps.apiGet<{ job: ExploreSnapshot | null }>(ROUTES.exploreListStatus.path)).job ?? null
-      } catch { return }                          // 首屏读不到就是没有：静默（真去看时会再报错）
-      if (!alive.current || job === null || submitted.current) return   // 提交先回来 → 不覆盖新一轮
-      if (apply(job) && alive.current) watch()
+      } catch {
+        // 首屏读不到就是没有：静默（真去看时会再报错）。但闸要落下——不落，调用方会一直等着
+        // 「那一轮在不在」的答案，点了没反应比读到空更糟
+        if (alive.current) setRestored(true)
+        return
+      }
+      if (!alive.current) return
+      if (job !== null && !submitted.current && apply(job)) watch()   // 提交先回来 → 不覆盖新一轮
+      setRestored(true)
     })()
     return () => {
       alive.current = false                       // 只停「看」，服务端那轮继续跑
@@ -164,5 +175,5 @@ export function useExploreJob(deps: ClientCoreDeps): ExploreJobView {
     }
   }, [])                                          // eslint-disable-line react-hooks/exhaustive-deps
 
-  return { round, error, submit }
+  return { round, error, restored, submit }
 }

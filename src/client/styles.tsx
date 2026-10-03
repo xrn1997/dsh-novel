@@ -1014,6 +1014,9 @@ export const NOVEL_CSS = `
   transition: border-color var(--novel-dur) var(--novel-ease), background var(--novel-dur) var(--novel-ease);
 }
 .novel-city-card:hover { border-color: var(--novel-border); background: var(--novel-layer-3); }
+/* 在途骨架卡：盒子借 .novel-city-card、底色与线条借 .novel-sk（骨架语言只此一处，不另造一套），
+   本类只抹掉「可点」的假象——它不是一条能点的书，悬停变色就是假控件 */
+.novel-city-sk { cursor: default; pointer-events: none; }
 /* 封面位：无 coverUrl 时是首字降级块（底色走 .novel-cover-t* 那四档，hex 仍不出 token 层）——
    故本类不带 background，免得按源序压掉后定义的档位色 */
 .novel-city-cover {

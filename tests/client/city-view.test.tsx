@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import type { ReactNode } from 'react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { CityView } from '../../src/client/views/CityView.js'
 import { cityStore, routeStore, useStore } from '../../src/client/store.js'
+import { makeCoreDeps } from './fake-deps.js'
+import type { CoreDepsOverrides } from './fake-deps.js'
 
 /** 当前路由渲成一段可断言文本（走公开 API，不引入 testid 这套仓里没有的约定） */
 function RouteProbe(): ReactNode {
@@ -12,15 +14,18 @@ function RouteProbe(): ReactNode {
 }
 
 /**
- * 书城分类页的接线钉子：进入即加载词表首项、记住上次、空词表不提交、失败条如实点名、
- * 换类、左栏本地筛选、点卡开选源抽屉（源名只在这里出现、可读入口跳阅读器、无地址不给钮），
- * 以及两条「分不清就会说谎」的判据——被停止的轮次、「还没有一轮」与「零源的一轮」。
+ * 书城分类页的接线钉子：进入即加载（**仅在该分类没有轮次时**）、记住上次、空词表不提交、
+ * 失败条如实点名、换类、左栏本地筛选、点卡开选源抽屉（源名只在这里出现、可读入口跳阅读器、
+ * 无地址不给钮）、在途骨架卡，以及几条「分不清就会说谎」的判据——被停止的轮次、
+ * 「还没有一轮」与「零源的一轮」、恢复读与提交的先后。
  *
- * 假依赖只喂三条口：词表 / 轮次快照（同一函数按 URL 分流）/ 提交一轮。SSE 缺省推一帧**当前
- * 快照**（与生产同路：首帧就是 baseline）——提交落地后那一帧空态在一个微任务内被填回，用例
- * 不必拿墙钟等轮询；要显式走轮询兜底那条路就在用例里把 stream 换成连不上的假实现。
+ * 假依赖束走仓内唯一桩工厂 `tests/client/fake-deps.ts`（键面绑 `ClientCoreDeps`，主干加成员时
+ * 这里跟着红）。只喂三条口：词表 / 服务端此刻持有的那一轮 / 提交一轮；SSE 缺省推一帧**当前
+ * 快照**（与生产同路：首帧就是 baseline）。
+ *
+ * 「服务端此刻持有的那一轮」是本文件的模块级单点（`current`）：**缺省 null**——服务端手里没有
+ * 轮次，视图因此要走提交那条路；已经持有同类的轮次时不提交（那是「离开再回来不重打」）。
  */
-
 const kinds = { kinds: [{ title: '玄幻', sources: 2 }, { title: '都市', sources: 1 }] }
 
 /** 一轮已跑完的分类快照：一本书（一个 origin，源名只该在抽屉/失败条里出现）+ 一个坏源 */
@@ -35,35 +40,45 @@ const snap = {
 }
 
 const submitted: string[] = []
-/** 服务端此刻持有的一轮（用例可换；SSE 推的就是它；`null` = 服务端说没有这一轮） */
-let current: unknown = snap
+/** 服务端此刻持有的一轮（用例可换；SSE 与 status 读的都是它；`null` = 服务端说没有这一轮） */
+let current: unknown = null
 
-/** 一个用例的提交记录与轮次快照不串到下一个用例（两者都是模块级）；路由同为全局单点，
- *  读本那一条会把它推进 reader，留着就成下一条用例的暗状态 */
-beforeEach(() => { submitted.length = 0; current = snap })
+/** 服务端为一个分类起的一轮（缺省立刻答完：多数用例只关心「词表 → 提交 → 出书」这条线） */
+const serve = (kind: string): unknown => ({ ...snap, id: 'j1', kind })
+
+beforeEach(() => { submitted.length = 0; current = null })
 afterEach(() => { cleanup(); cityStore.set({ kind: null }); routeStore.set({ route: { name: 'shelf' } }) })
 
-const deps = {
-  apiGet: async (path: string) => (path.includes('kinds') ? kinds : { job: current }),
-  apiSend: async (_m: string, _p: string, body: { kind: string }) => {
+const depsOf = (over: CoreDepsOverrides = {}) => makeCoreDeps({
+  apiGet: vi.fn(async (p: string) => (p.includes('kinds') ? kinds : { job: current })),
+  apiSend: vi.fn(async (_m: string, _p: string, body: { kind: string }) => {
     submitted.push(body.kind)
+    current = serve(body.kind)                     // 提交落地即起一轮，之后各帧推的就是它
     return { jobId: 'j1' }
-  },
-  apiEventStream: async (_path: string, onFrame: (data: string) => void) => {
+  }),
+  apiEventStream: vi.fn(async (_p: string, onFrame: (data: string) => void) => {
     onFrame(JSON.stringify({ job: current }))
-  },
-  apiUpload: async () => ({}), pushError: () => {}, pushOk: () => {},
-} as never
+  }),
+  ...over,
+})
 
-/** 覆写若干口（键面与假依赖束一致；值不逐处 cast——与仓里 `fake-deps.ts` 的 Overrides 同口径） */
-const withDeps = (over: Record<string, unknown>): never => ({ ...(deps as object), ...over }) as never
-
-/** 连不上的 SSE：显式走「轮询是地基」那条路 */
-const noStream = { apiEventStream: async () => { throw new Error('无 SSE') } }
+/** 可手动喂帧的 SSE：帧由用例决定（在途骨架那一组要看「同一轮跑完」的下一帧） */
+const pushable = (): { over: CoreDepsOverrides; frame: (job: unknown) => void } => {
+  const box: { push: (job: unknown) => void } = { push: () => {} }
+  return {
+    over: {
+      apiEventStream: vi.fn(async (_p: string, onFrame: (data: string) => void, signal: AbortSignal) => {
+        box.push = (job) => onFrame(JSON.stringify({ job }))
+        await new Promise<void>((r) => signal.addEventListener('abort', () => r(), { once: true }))
+      }),
+    },
+    frame: (job) => box.push(job),
+  }
+}
 
 describe('CityView', () => {
   it('进入即加载词表第一项（服务端顺序即源数降序），且书单来自服务端', async () => {
-    const { container } = render(<CityView deps={deps} />)
+    const { container } = render(<CityView deps={depsOf()} />)
     await waitFor(() => { expect(screen.getByText('剑起长安')).toBeTruthy() })
     expect(submitted).toEqual(['玄幻'])
     expect(screen.getByText('青衫客 · 玄幻')).toBeTruthy()          // 元信息（缺字段不显示）
@@ -75,15 +90,14 @@ describe('CityView', () => {
 
   it('记住的上次分类还在词表里 → 加载它，而不是榜首', async () => {
     cityStore.set({ kind: '都市' })
-    render(<CityView deps={deps} />)
+    render(<CityView deps={depsOf()} />)
     await waitFor(() => { expect(submitted).toEqual(['都市']) })
     expect(screen.getByRole('button', { name: /都市/ }).getAttribute('aria-pressed')).toBe('true')
   })
 
   it('库里没有源提供分类 → 空态（且不提交任何一轮，也不留轮次读数）', async () => {
     // 两条读面要分开喂：kinds 空、status 明说「还没有一轮」（否则读面会多报一条无关错误）
-    current = null
-    const d = withDeps({ apiGet: async (p: string) => (p.includes('kinds') ? { kinds: [] } : { job: current }) })
+    const d = depsOf({ apiGet: vi.fn(async (p: string) => (p.includes('kinds') ? { kinds: [] } : { job: null })) })
     const { container } = render(<CityView deps={d} />)
     await waitFor(() => { expect(screen.getByText(/还没有书源提供分类浏览/)).toBeTruthy() })
     expect(submitted).toEqual([])
@@ -91,8 +105,36 @@ describe('CityView', () => {
     expect(container.querySelector('.novel-city-foot')).toBeNull()
   })
 
+  it('恢复回来的是同一类 → 一个提交都不发（服务端那一轮就是它的家，回来看它跑完）', async () => {
+    // 恢复读故意后到（词表先到、分类已选中而 round 还是 null）——这一段正是最容易白提交的窗口：
+    // 没有 restored 那道闸，视图会在这里把服务端正持有的那一轮杀掉，书单白闪一帧再从头抓
+    const gate = { open: (): void => {} }
+    current = snap                                      // 服务端已持有「玄幻」这一轮
+    const d = depsOf({
+      apiGet: vi.fn(async (p: string) => {
+        if (p.includes('kinds')) return kinds
+        await new Promise<void>((res) => { gate.open = res })
+        return { job: current }
+      }),
+    })
+    render(<CityView deps={d} />)
+    await waitFor(() => { expect(screen.getByRole('button', { name: /玄幻/ }).getAttribute('aria-pressed')).toBe('true') })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(submitted).toEqual([])                       // 恢复读还在飞：此刻提交就是把那一轮杀掉
+    gate.open()
+    await waitFor(() => { expect(screen.getByText('剑起长安')).toBeTruthy() })   // 恢复读落地，看的就是它
+    expect(submitted).toEqual([])
+  })
+
+  it('恢复回来的是另一类 → 提交想要的那一类（有轮次但不是这一类的，等于没有）', async () => {
+    current = { ...snap, id: 'j9', kind: '都市', books: [] }
+    render(<CityView deps={depsOf()} />)
+    await waitFor(() => { expect(submitted).toEqual(['玄幻']) })
+  })
+
   it('失败条如实说数量，坏源在摘要行里就点名（不藏在展开里）', async () => {
-    render(<CityView deps={deps} />)
+    current = snap
+    render(<CityView deps={depsOf()} />)
     await waitFor(() => { expect(screen.getByText('1 个源没响应')).toBeTruthy() })
     const who = screen.getByText(/顶点/)
     expect(who.className).toBe('novel-city-fail-who')              // 摘要行，不是展开区
@@ -100,7 +142,7 @@ describe('CityView', () => {
   })
 
   it('换类：点左栏另一项即提交它并记住（切类零跳转）', async () => {
-    render(<CityView deps={deps} />)
+    render(<CityView deps={depsOf()} />)
     await waitFor(() => { expect(submitted).toEqual(['玄幻']) })
     fireEvent.click(screen.getByRole('button', { name: /都市/ }))
     await waitFor(() => { expect(submitted).toEqual(['玄幻', '都市']) })
@@ -108,7 +150,7 @@ describe('CityView', () => {
   })
 
   it('左栏筛选是本地的：不触网、不提交，也不改当前类', async () => {
-    render(<CityView deps={deps} />)
+    render(<CityView deps={depsOf()} />)
     await waitFor(() => { expect(screen.getByRole('button', { name: /玄幻/ })).toBeTruthy() })
     fireEvent.change(screen.getByLabelText('筛选分类'), { target: { value: '都' } })
     expect(screen.queryByRole('button', { name: /玄幻/ })).toBeNull()
@@ -117,8 +159,47 @@ describe('CityView', () => {
     expect(cityStore.get().kind).toBe('玄幻')
   })
 
+  it('在途骨架卡：本轮还在跑时铺到网格的形状，轮次一终态就撤（活过轮次的骨架是谎）', async () => {
+    const { over, frame } = pushable()
+    current = { ...snap, phase: 'running', done: 1, total: 4 }     // 只回了 1 本，源还在往回送
+    const { container } = render(<CityView deps={depsOf(over)} />)
+    // 4 列网格、两行上限：1 本书 + 7 张骨架卡（无界的骨架铺法会把「还在等」画成「有这么多」）
+    await waitFor(() => { expect(container.querySelectorAll('.novel-city-sk')).toHaveLength(7) })
+    expect(container.querySelectorAll('button.novel-city-card')).toHaveLength(1)   // 骨架不是钮
+    act(() => { frame({ ...snap, phase: 'done' }) })
+    await waitFor(() => { expect(container.querySelectorAll('.novel-city-sk')).toHaveLength(0) })
+    expect(screen.getByText('剑起长安')).toBeTruthy()              // 撤的是骨架，不是内容
+  })
+
+  it('封面失败的键按行身份（书名 + 作者）：同名不同作者的两条不互相拖累', async () => {
+    current = {
+      ...snap,
+      books: [
+        { name: '剑起长安', author: '甲', sourceCount: 1, origins: [], coverUrl: 'https://a/broken' },
+        { name: '剑起长安', author: '乙', sourceCount: 1, origins: [], coverUrl: 'https://a/ok' },
+      ],
+    }
+    const { container } = render(<CityView deps={depsOf()} />)
+    await waitFor(() => { expect(container.querySelectorAll('img.novel-city-cover')).toHaveLength(2) })
+    fireEvent.error(container.querySelectorAll('img.novel-city-cover')[0])
+    await waitFor(() => { expect(container.querySelectorAll('img.novel-city-cover')).toHaveLength(1) })
+  })
+
+  it('换轮即清空封面失败表：新一轮里那张图要重来（不该一次坏封面永久降级）', async () => {
+    const book = { name: '剑起长安', author: '青衫客', sourceCount: 1, origins: [], coverUrl: 'https://a/1' }
+    const { over, frame } = pushable()
+    current = { ...snap, phase: 'running', books: [book] }
+    const { container } = render(<CityView deps={depsOf(over)} />)
+    await waitFor(() => { expect(container.querySelectorAll('img.novel-city-cover')).toHaveLength(1) })
+    fireEvent.error(container.querySelector('img.novel-city-cover')!)
+    await waitFor(() => { expect(container.querySelectorAll('img.novel-city-cover')).toHaveLength(0) })
+    act(() => { frame({ ...snap, id: 'j2', phase: 'running', books: [book] }) })
+    await waitFor(() => { expect(container.querySelectorAll('img.novel-city-cover')).toHaveLength(1) })
+  })
+
   it('点卡开选源抽屉（本任务只到打开态），关掉回到书单', async () => {
-    render(<CityView deps={deps} />)
+    current = snap
+    render(<CityView deps={depsOf()} />)
     await waitFor(() => { expect(screen.getByRole('button', { name: /剑起长安/ })).toBeTruthy() })
     fireEvent.click(screen.getByRole('button', { name: /剑起长安/ }))
     const drawer = screen.getByRole('dialog')
@@ -130,36 +211,34 @@ describe('CityView', () => {
   })
 
   it('被停止的轮次说「已停止」——不许长得像跑完的一轮', async () => {
-    // apiSend 抛：提交落不了地，视图态就停在恢复回来的那一轮（不必拿墙钟等一次轮询）
     current = { ...snap, phase: 'failed', cancelled: true, done: 1 }
-    const d = withDeps({ apiSend: async () => { throw new Error('服务端不可用') } })
-    render(<CityView deps={d} />)
+    render(<CityView deps={depsOf()} />)
     await waitFor(() => { expect(screen.getByText('已停止')).toBeTruthy() })
     expect(screen.queryByText(/已 1 \/ 2 源/)).toBeNull()           // 停止不是「跑到了 1/2」
   })
 
   it('零源的一轮仍是一轮：尾行读数在场（与「还没有一轮」不是同一种空）', async () => {
     current = { ...snap, phase: 'done', total: 0, done: 0, books: [], failures: [] }
-    const { container } = render(<CityView deps={withDeps(noStream)} />)
+    const { container } = render(<CityView deps={depsOf()} />)
     await waitFor(() => { expect(container.querySelector('.novel-city-foot')).not.toBeNull() })
   })
 
   it('挂载恢复不得盖掉刚落地的提交（旧的恢复读后到，新轮的空帧说了算）', async () => {
-    // 闸门卡住「上一轮」的那次读：提交先落地、恢复读后到——没有闸就会拿旧轮的书单盖掉新轮
+    // 闸门卡住「上一轮」的那次恢复读。抢在恢复读之前提交的通道是**用户手点**（自动那条要等
+    // 恢复读落地才决定），没有 submitted 闸，后到的旧帧就会拿上一轮的书单盖掉刚落下的新轮
     const gate = { open: (): void => {} }
-    current = {
-      ...snap, id: 'old',
-      books: [{ name: '上一轮的书', author: '甲', kind: '玄幻', sourceCount: 1, origins: [] }],
-    }
-    const d = withDeps({
-      ...noStream,                                          // 让那一帧空态只能被恢复读改写（不受推送干扰）
-      apiGet: async (p: string) => {
+    const stale = { ...snap, id: 'old', books: [{ name: '上一轮的书', author: '甲', kind: '玄幻', sourceCount: 1, origins: [] }] }
+    const d = depsOf({
+      apiGet: vi.fn(async (p: string) => {
         if (p.includes('kinds')) return kinds
         await new Promise<void>((res) => { gate.open = res })
-        return { job: current }
-      },
+        return { job: stale }
+      }),
+      apiEventStream: vi.fn(async () => { throw new Error('无 SSE') }),   // 那一帧空态只能被恢复读改写
     })
     render(<CityView deps={d} />)
+    await waitFor(() => { expect(screen.getByRole('button', { name: /都市/ })).toBeTruthy() })
+    fireEvent.click(screen.getByRole('button', { name: /都市/ }))
     await waitFor(() => { expect(screen.getByText('正在启动分类抓取…')).toBeTruthy() })   // 新轮的空帧已落地
     gate.open()
     await new Promise((r) => setTimeout(r, 20))
@@ -168,7 +247,8 @@ describe('CityView', () => {
   })
 
   it('点卡开抽屉：列各源可读入口，且只有这里点名源；Esc 关闭', async () => {
-    render(<CityView deps={deps} />)
+    current = snap
+    render(<CityView deps={depsOf()} />)
     await waitFor(() => { expect(screen.getByText('剑起长安')).toBeTruthy() })
     fireEvent.click(screen.getByRole('button', { name: /剑起长安/ }))
     const drawer = await screen.findByRole('dialog')
@@ -180,7 +260,8 @@ describe('CityView', () => {
   })
 
   it('「读这本」跳到阅读器路由（bookKey 用该源的书地址）', async () => {
-    render(<><CityView deps={deps} /><RouteProbe /></>)
+    current = snap
+    render(<><CityView deps={depsOf()} /><RouteProbe /></>)
     await waitFor(() => { expect(screen.getByText('剑起长安')).toBeTruthy() })
     fireEvent.click(screen.getByRole('button', { name: /剑起长安/ }))
     fireEvent.click(await screen.findByRole('button', { name: '读这本' }))
@@ -198,7 +279,7 @@ describe('CityView', () => {
         ],
       }],
     }
-    render(<CityView deps={deps} />)
+    render(<CityView deps={depsOf()} />)
     await waitFor(() => { expect(screen.getByRole('button', { name: /剑起长安/ })).toBeTruthy() })
     fireEvent.click(screen.getByRole('button', { name: /剑起长安/ }))
     const drawer = await screen.findByRole('dialog')
@@ -207,17 +288,15 @@ describe('CityView', () => {
   })
 
   it('有分类但这一类零结果 → 诚实的空结果，不冒充失败（也不进失败条）', async () => {
-    // 两条读面（status 与 SSE 推的是同一个 current）都要说「零本」，否则推送那一帧会把书单填回来
     current = { ...snap, books: [], failures: [] }
-    const d = { ...(deps as object), apiGet: async (p: string) => (p.includes('kinds') ? kinds : { job: { ...snap, books: [], failures: [] } }) } as never
-    render(<CityView deps={d} />)
+    render(<CityView deps={depsOf()} />)
     await waitFor(() => { expect(screen.getByText(/这一类还没有书/)).toBeTruthy() })
     expect(screen.queryByText(/个源没响应/)).toBeNull()      // 零命中不是失败（服务端口径）
   })
 
   it('零源且已完成的一轮：尾行说「这一轮没有源参与」，且不对归类内容下结论', async () => {
     current = { ...snap, phase: 'done', total: 0, done: 0, books: [], failures: [] }
-    render(<CityView deps={deps} />)
+    render(<CityView deps={depsOf()} />)
     await waitFor(() => { expect(screen.getByText('这一轮没有源参与')).toBeTruthy() })
     // 没有任何源被问过 ⇒ 「这一类还没有书」是编的结论，这一态只许说轮次自己的形状
     expect(screen.queryByText(/这一类还没有书/)).toBeNull()
@@ -225,7 +304,7 @@ describe('CityView', () => {
 
   it('还在跑的一轮里零本 = 源还在往回送，不许先说成这一类的空结果', async () => {
     current = { ...snap, phase: 'running', done: 1, total: 4, books: [], failures: [] }
-    render(<CityView deps={deps} />)
+    render(<CityView deps={depsOf()} />)
     await waitFor(() => { expect(screen.getByText('已 1 / 4 源')).toBeTruthy() })
     expect(screen.queryByText(/这一类还没有书/)).toBeNull()
   })

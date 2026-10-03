@@ -1,16 +1,24 @@
 import type { ReactNode } from 'react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ROUTES } from '../../shared/wire.js'
 import type { ExploreBook, ExploreKinds } from '../../shared/wire.js'
-import { cityEmptyKind, cityMeta, cityProgress, failureSummary, sourceCountLabel } from '../city-view-model.js'
+import { bookListEmpty, cityEmptyKind, cityMeta, failureSummary, roundReadout, sourceCountLabel } from '../city-view-model.js'
 import { useExploreJob } from '../explore-job.js'
-import type { ExploreRound } from '../explore-job.js'
 import { prodCoreDeps } from '../deps.js'
 import type { ClientCoreDeps } from '../deps.js'
 import { cityStore, useStore } from '../store.js'
 import { coverTintClass } from '../util.js'
 import { coverFallbackChar, EmptyState } from './bits.js'
 import { CitySourceDrawer } from './CitySourceDrawer.js'
+
+/** 在途骨架的行数上限。首屏第一眼不该是一片空白（源还在往回送时右侧空着，正是进入书城的
+ *  第一眼），但也不能无界地铺——铺满一屏空卡等于把「还在等」画成「有这么多」。两行（4 列
+ *  网格的两排）够占住形状，也够收敛。 */
+const SKELETON_ROWS = 2
+
+/** 行身份：React key 与封面失败表的键**必须是同一个算式**。按书名记会让同名不同作者的两条
+ *  互相拖累（一条封面坏了把另一条也降级成首字块）。 */
+const rowKey = (b: Pick<ExploreBook, 'name' | 'author'>): string => `${b.name}|${b.author ?? ''}`
 
 /**
  * 书城 = 分类浏览（两级，只此一层深度：分类只住左栏，没有独立的分类墙落地页）。
@@ -20,15 +28,15 @@ import { CitySourceDrawer } from './CitySourceDrawer.js'
  *    与失败条（源坏了要如实摊开，那是这条原则的刻意例外）。
  * ② **排序与进度都是被动读数**：服务端只有一个排序键（收录源数）且自己按并发分批抓完，
  *    摆下拉或「继续加载」钮就是假控件，所以左栏/尾行只有说明与读数。
- * ③ **进入即加载**：词表到手就提交首项（或记住的那一项），换类零跳转——重提同一类很便宜，
- *    逐源结果在服务端有缓存（`KindCache`）。
+ * ③ **进入即加载，但只在该分类没有轮次时**：词表到手先定分类，提交与否交给 `restored` 之后的
+ *    判据——服务端持有这一轮就是它的家，回来看它跑完即可（见下面那条 effect）。
  *
  * 轮次观察与读面的会话内现场各自有主人：轮次归 `useExploreJob`（全量快照），上次看的分类归
  * `cityStore`（不落盘）。本视图只做装配与呈现，文案与判据一律取 `city-view-model`。
  */
 export function CityView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): ReactNode {
   const { kind: remembered } = useStore(cityStore)
-  const { round, error, submit } = useExploreJob(deps)
+  const { round, error, submit, restored } = useExploreJob(deps)
   /** 词表（`null` = 还在读）：**空词表**是「库里没有源提供分类浏览」，与读面失败不是一件事 */
   const [kinds, setKinds] = useState<ExploreKinds['kinds'] | null>(null)
   const [kindsError, setKindsError] = useState<string | null>(null)
@@ -37,6 +45,8 @@ export function CityView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): Re
   const [query, setQuery] = useState('')
   const [picked, setPicked] = useState<ExploreBook | null>(null)
   const [imgFailed, setImgFailed] = useState<Record<string, boolean>>({})
+  /** 「已经为某个分类要过一轮了」：自动那条路只走一次，此后一律由 `pick` 提交 */
+  const asked = useRef(false)
 
   useEffect(() => {
     void (async () => {
@@ -53,14 +63,33 @@ export function CityView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): Re
       const title = remembered !== null && list.some((k) => k.title === remembered) ? remembered : list[0].title
       setKind(title)
       cityStore.set({ kind: title })                             // 自动选中的那一项也记住（与手点同一条路）
-      submit(title)
     })()
   }, [])   // eslint-disable-line react-hooks/exhaustive-deps
 
+  /**
+   * 进入即加载：**只在该分类没有轮次时提交**。轮次住在服务端（`ExploreJob` 的槽），离开再回来
+   * 只该看它跑完——重提一次会把它杀掉，书单空闪一帧再从头抓，正是本条要守住的性质。
+   * 所以判据是「`round` 没有或不是这个分类」，而不是「挂载了就提交」。
+   *
+   * 两道先后都不能省的闸：① `restored`——挂载恢复读没定之前 `round` 恒为 `null`（那是「还没问过」
+   * 而非「服务端说没有」），此刻提交就是上面那个破口；② `asked`——自动这条路只走一次，
+   * 用户手点的那条（`pick`）不等恢复读、立刻落地，两者不能互相追加提交。
+   */
+  useEffect(() => {
+    if (asked.current || !restored || kind === null) return
+    asked.current = true
+    if (round === null || round.kind !== kind) submit(kind)
+  }, [kind, restored, round, submit])
+
+  /** 换轮即清空封面失败表：封面坏掉是**这一轮这张卡**的事实（同址换一轮那张图就好了），
+   *  上一轮的同名条目不该继承——不清就是「一次坏封面永久降级」。 */
+  useEffect(() => { setImgFailed({}) }, [round?.id])
+
   const pick = (title: string): void => {
+    asked.current = true
     setKind(title)
     cityStore.set({ kind: title })
-    submit(title)
+    submit(title)                                              // 手点必须立刻有反应：不等恢复读
   }
 
   const shown = kinds === null ? [] : kinds.filter((k) => k.title.includes(query.trim()))
@@ -117,16 +146,17 @@ export function CityView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): Re
                     <div className="novel-city-grid">
                       {books.map((b) => {
                         const meta = cityMeta(b)
+                        const key = rowKey(b)
                         return (
                           <button
-                            key={`${b.name}|${b.author ?? ''}`}
+                            key={key}
                             className="novel-city-card"
                             aria-label={`选择书源：${b.name}`}
                             onClick={() => setPicked(b)}
                           >
-                            {b.coverUrl !== undefined && imgFailed[b.name] !== true
+                            {b.coverUrl !== undefined && imgFailed[key] !== true
                               ? <img className="novel-city-cover" src={b.coverUrl} alt="" loading="lazy"
-                                  onError={() => setImgFailed((m) => ({ ...m, [b.name]: true }))} />
+                                  onError={() => setImgFailed((m) => ({ ...m, [key]: true }))} />
                               : <span className={`novel-city-cover ${coverTintClass(b.name)}`}>{coverFallbackChar(b.name)}</span>}
                             <span className="novel-city-card-body">
                               <span className="novel-city-card-title">
@@ -140,6 +170,19 @@ export function CityView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): Re
                           </button>
                         )
                       })}
+                      {/* 在途骨架卡：**只在本轮还在跑时**铺（轮次一终态就撤——活过轮次的骨架就是
+                          一句谎），且只补到网格的形状（不足两行就铺到两行，够了就一张不加） */}
+                      {round !== null && round.running
+                        ? Array.from({ length: Math.max(0, SKELETON_ROWS * 4 - books.length) }, (_, i) => (
+                          <div key={`sk-${i}`} className="novel-city-card novel-city-sk" aria-hidden="true">
+                            <div className="novel-sk novel-city-cover" />
+                            <span className="novel-city-card-body">
+                              <span className="novel-sk novel-sk-line" />
+                              <span className="novel-sk novel-sk-line sm" />
+                            </span>
+                          </div>
+                        ))
+                        : null}
                     </div>
                   </div>
                 )
@@ -172,35 +215,3 @@ export function CityView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): Re
   )
 }
 
-/**
- * 书单区的空态：**按轮次的形状说话，不按「书单数组是不是空的」说话**。零本有四种来路，只有一种
- * 能说成「这一类没有货」，其余三种说了就是编：
- * ① 还在跑（源还在往回送）——结论未定；② 被停止——停止不是完成，也不是空结果；
- * ③ 一轮里 0 个源——**没有任何源被问过**，对归类内容一无所知（这一态只由尾行说轮次自己的形状）；
- * ④ 读面/写面报错的那一轮（服务端说 failed）——没跑完的一轮不能替分类下结论。
- * 只有「干净跑完、且这一轮确实有源参与」才配得上这句空结果。
- * 返回 null = 不占位（有书时铺网格；四种未定态既不铺网格也不说话——沉默比假结论诚实）。
- *
- * 有失败的那些源不改变本判据（`books` 已是全量归并结果，空就是真的没有），但改变**说法**：
- * 部分失败时不能说「都答完了」，那是把「没回应」读成「没有货」。
- */
-function bookListEmpty(round: ExploreRound, failures: number, error: string | null): { title: string; hint: string } | null {
-  if (round.running || round.cancelled || round.total === 0 || round.books.length > 0 || error !== null) return null
-  return {
-    title: '这一类还没有书',
-    hint: failures === 0
-      ? `这一类的 ${round.total} 个源都答完了，一本都没有收录——空结果不是失败，换个分类看看。`
-      : '答完的源一本都没有收录；没响应的那几个源见下面那条失败说明。',
-  }
-}
-
-/** 轮次读数（**被动读数**：服务端按并发自跑分批，没有需要用户按一下的东西）。
- *  **停止不是完成**：取消后不许说成一个走到了底的轮次，故「已停止」优先于进度文案。
- *  跑完而 0 个源的一轮也不许留空白：`cityProgress` 在源数为 0 时给的是空串（那一档本是给
- *  「还没有一轮」与「这一类零源」共用的），尾行会变成一条空读数。这一态唯一能被快照支持的事实
- *  就是「没有源参与」，如实说它。 */
-function roundReadout(round: ExploreRound): string {
-  if (round.cancelled) return '已停止'
-  if (round.running) return round.total === 0 ? '正在启动分类抓取…' : cityProgress(round.done, round.total)
-  return round.total === 0 ? '这一轮没有源参与' : cityProgress(round.done, round.total)
-}

@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, waitFor } from '@testing-library/react'
 import { useExploreJob } from '../../src/client/explore-job.js'
 import type { ExploreSnapshot } from '../../src/shared/wire.js'
+import { makeCoreDeps } from './fake-deps.js'
 
 afterEach(cleanup)
 
@@ -13,15 +14,15 @@ const snap = (over: Partial<ExploreSnapshot> = {}): ExploreSnapshot => ({
 
 /** 探针：把钩子的返回值暴露给断言（钩子只能活在组件里） */
 let seen: ReturnType<typeof useExploreJob> | null = null
-function Probe({ deps }: { deps: never }): null { seen = useExploreJob(deps); return null }
+function Probe({ deps }: { deps: ReturnType<typeof makeCoreDeps> }): null { seen = useExploreJob(deps); return null }
 
-const depsOf = (jobs: Array<ExploreSnapshot | null>) => ({
-  apiGet: async () => ({ job: jobs.shift() ?? null }),
-  apiSend: async () => ({ jobId: 'j1' }),
-  apiEventStream: async () => { throw new Error('无 SSE') },   // 强制走轮询兜底
-  apiUpload: async () => ({}) as never,
-  pushError: () => {}, pushOk: () => {},
-}) as never
+/** 假依赖：读面按用例给的序列逐次吐快照；SSE 缺省（`makeCoreDeps` 的「立刻结束、一帧不发」）
+ *  = 服务端没有推送可用 ⇒ 强制走轮询兜底那条地基 */
+const depsOf = (jobs: Array<ExploreSnapshot | null>) =>
+  makeCoreDeps({
+    apiGet: vi.fn(async () => ({ job: jobs.shift() ?? null })),
+    apiSend: vi.fn(async () => ({ jobId: 'j1' })),
+  })
 
 describe('useExploreJob', () => {
   it('全量替换：同一轮的第二帧整体覆盖第一帧（不是累加）', async () => {
@@ -52,5 +53,18 @@ describe('useExploreJob', () => {
     render(<Probe deps={deps} />)
     await waitFor(() => { expect(seen?.round?.cancelled).toBe(true) })
     expect(seen?.round?.running).toBe(false)
+  })
+
+  it('恢复闸：恢复读落地（无论读到轮次、读到没有、还是读失败）都要落下，且落地前是真 false', async () => {
+    // 读到「没有一轮」也算定：不落闸，调用方会一直等一个永远不来的答案
+    const empty = depsOf([null])
+    render(<Probe deps={empty} />)
+    expect(seen?.restored).toBe(false)                       // 首帧：还没问过服务端
+    await waitFor(() => { expect(seen?.restored).toBe(true) })
+    cleanup()
+
+    const failed = makeCoreDeps({ apiGet: vi.fn(async () => { throw new Error('读面不可用') }) })
+    render(<Probe deps={failed} />)
+    await waitFor(() => { expect(seen?.restored).toBe(true) })
   })
 })
