@@ -1057,9 +1057,13 @@ img.novel-city-cover { display: block; object-fit: cover; background: var(--nove
 .novel-city-fail-who { color: var(--novel-text-2); }
 .novel-city-fail-more { margin-left: auto; color: var(--novel-text-3); }
 .novel-city-fail-msgs { display: flex; flex-direction: column; gap: var(--novel-sp-1); margin-top: var(--novel-sp-2); }
-/* 尾行 = 轮次的被动读数（服务端自跑分批，没有可点的东西）。渲染与否由**有没有轮次**判，
-   不是由这行文字空不空判——「还没有一轮」与「一轮里源数是 0」在这里都不产出读数文案 */
-.novel-city-foot { flex: none; border-top: 1px solid var(--novel-border-faint); padding-top: var(--novel-sp-3); font-size: var(--novel-fs-xs); color: var(--novel-text-3); }
+/* 尾行 = 轮次读数 + 「加载更多」按钮（服务端不问就不打下一页，故这颗钮是真控件；读数本身仍只是读数）。
+   渲染与否由**有没有轮次**判，不是由这行文字空不空判——「还没有一轮」与「一轮里源数是 0」在这里都不产出读数文案 */
+.novel-city-foot {
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: var(--novel-sp-3);
+  border-top: 1px solid var(--novel-border-faint); padding-top: var(--novel-sp-3);
+  font-size: var(--novel-fs-xs); color: var(--novel-text-3);
+}
 /* 选源抽屉：覆盖右区、书单留在原位（它是覆盖层——不卸载书单、不动它的滚动位置）；遮罩与本体
    同住浮层单表。**不复用 .novel-drawer**：那一族锚的是阅读区 0 宽 sticky 槽（见上文），几何与
    这里「贴右缘通高的覆盖面板」是两件事，硬套会把两处一起改坏。 */

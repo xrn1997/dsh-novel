@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ROUTES } from '../shared/wire.js'
 import type { ExploreBook, ExploreFailure, ExploreSnapshot } from '../shared/wire.js'
+import { ApiClientError } from './api.js'
 import type { ClientCoreDeps } from './deps.js'
 
 /**
@@ -18,6 +19,9 @@ import type { ClientCoreDeps } from './deps.js'
  *
  * 轮询是地基、SSE 是加速器（官方口径：通知不 replay，可靠恢复必须有显式 query），
  * 任一时刻只有一条通道在推进（两条同时在飞会把「谁是最新」搞乱）。
+ *
+ * **续页不是新轮**：`loadMore` 只把同一轮往前推一页（服务端换页不换 id），所以上面那套「零累积、
+ * 整帧替换」一行都不用改——新一页的书随下一帧进来，客户端不持有任何要跟着翻页对齐的东西。
  */
 
 /** 轮询节奏：与搜索面同档（600ms 足够「边抓边出」的观感，又不把 /novel-api 打成刷屏） */
@@ -35,6 +39,12 @@ export interface ExploreRound {
   /** 本轮被停止（用户按停、或宿主侧取消）：结果保留、只是不再往下抓。
    *  UI 据此说「已停止」而不是「跑完了」——两者都是 `running=false`，只看 running 分不开。 */
   cancelled: boolean
+  /** 已加载到第几页：服务端说是第几页就是第几页，客户端**不自己加一**（自己加=
+   *  把还没发生的续页提前念成事实）。 */
+  page: number
+  /** 此刻能不能再点一次「加载更多」——服务端原样带过来。**有批在途时为 false**，
+   *  所以它管的是**显隐**；「正在加载」那个禁用态由 `running` 管（见 `ExploreJobView.loadMore`）。 */
+  hasMore: boolean
 }
 
 export interface ExploreJobView {
@@ -47,13 +57,20 @@ export interface ExploreJobView {
   restored: boolean
   /** 提交一轮分类浏览（切类就是再调一次；服务端按 kind 走内存快照，重复提交很便宜） */
   submit: (kind: string) => void
+  /** 把**当前这一轮**再往前推一页（同一轮 id，客户端不做累积——整帧替换的读模型照旧成立）。
+   *  典型路径是尾行那颗「加载更多」。
+   *
+   *  **409 不是故障**：它只有「此刻没得可加载」一个意思（服务端把在途那一段用 `hasMore=false`
+   *  排除了出去），照实把按钮收掉即可，不许挂红条——把「已经到底了」念成一次失败，用户会去
+   *  「重试」一个本来就不存在的东西。其余失败才有红条。 */
+  loadMore: () => void
 }
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 const toRound = (job: ExploreSnapshot): ExploreRound => ({
   id: job.id, kind: job.kind, total: job.total, done: job.done,
   books: job.books, failures: job.failures, running: job.phase === 'running',
-  cancelled: job.cancelled === true,
+  cancelled: job.cancelled === true, page: job.page, hasMore: job.hasMore,
 })
 
 export function useExploreJob(deps: ClientCoreDeps): ExploreJobView {
@@ -143,11 +160,41 @@ export function useExploreJob(deps: ClientCoreDeps): ExploreJobView {
         stopChannels()
         // 提交返回的 id 就是本轮身份：先落一帧空态再开始盯（避免旧轮的条目在新轮里停留）
         setError(null)
-        setRound({ id: jobId, kind: k, total: 0, done: 0, books: [], failures: [], running: true, cancelled: false })
+        setRound({ id: jobId, kind: k, total: 0, done: 0, page: 1, hasMore: false, books: [], failures: [], running: true, cancelled: false })
         watch()
       } catch (e) {
         if (!alive.current) return
         setError(`分类提交失败：${errText(e)}`)   // 服务端没起新轮：上一轮结果照旧可读，不清屏
+      }
+    })()
+  }
+
+  /**
+   * 把这一轮往前推一页。**这是本模块唯一的乐观态**，且只动 `running`：按下即进「加载中」——
+   * 若不本地按下去，按钮在这一段仍亮着，连点就会发出两次同样的续页（第二次撞服务端的 409，
+   * 那一次噪声是我们自己造的）。页码与 `hasMore` 都不本地推：那是服务端的事实，推出来就是把
+   * 还没发生的事写给用户看（本地这一帧随下一帧整体换掉，正是本模块的读模型）。
+   *
+   * 能按下就说明服务端**那一刻手里没有在途的批**（`hasMore` 为真蕴含它），所以失败时把本地按下去的
+   * `running` 还回来是诚实的：那种情况下服务端也没起任何东西。
+   */
+  const loadMore = (): void => {
+    setRound((r) => (r === null ? null : { ...r, running: true }))
+    void (async () => {
+      try {
+        await deps.apiSend<{ jobId: string }>('POST', ROUTES.exploreListMore.path)
+        if (!alive.current) return
+        setError(null)
+        watch()
+      } catch (e) {
+        if (!alive.current) return
+        if (e instanceof ApiClientError && e.status === 409) {
+          // 409 = 「此刻没得可加载」：钮照实收掉，不报红——这一条不是故障，是「到头了」
+          setRound((r) => (r === null ? null : { ...r, running: false, hasMore: false }))
+          return
+        }
+        setError(`续页失败：${errText(e)}`)   // 真失败：红条照说，钮还回来（重试是用户的事）
+        setRound((r) => (r === null ? null : { ...r, running: false }))
       }
     })()
   }
@@ -175,5 +222,5 @@ export function useExploreJob(deps: ClientCoreDeps): ExploreJobView {
     }
   }, [])                                          // eslint-disable-line react-hooks/exhaustive-deps
 
-  return { round, error, restored, submit }
+  return { round, error, restored, submit, loadMore }
 }

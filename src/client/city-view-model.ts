@@ -20,9 +20,13 @@ export function cityProgress(done: number, total: number): string {
 }
 
 /** 失败条摘要：只说数量（点名在展开里）——但失败条本身是本设计的**刻意例外**：
- *  它要说清哪个源坏了，与搜索面「把源好坏如实摊开」同哲学。 */
+ *  它要说清哪个源坏了，与搜索面「把源好坏如实摊开」同哲学。
+ *
+ *  **不许说成「没响应」**：这一条里住着两种源——一条都没给出的，与「已有累积、只是这一页没回来」
+ *  的（见 `ExploreFailure`）。后一种上一页明明答过，把它念成哑源就是拿一句懒话抹掉它的功劳，
+ *  也让用户以为这本书的来源全废了。说「这一页没回来」两种都成立。 */
 export function failureSummary(failures: readonly ExploreFailure[]): string {
-  return failures.length === 0 ? '' : `${failures.length} 个源没响应`
+  return failures.length === 0 ? '' : `${failures.length} 个源这一页没回来`
 }
 
 /** 空态分支的唯一判据：词表为空 = 库里没有源提供分类浏览（与「这一类零结果」是两件事）。 */
@@ -63,7 +67,8 @@ export function bookListEmpty(round: RoundShape, failures: number, error: string
   }
 }
 
-/** 轮次读数（**被动读数**：服务端按并发自跑分批，没有需要用户按一下的东西）。
+/** 轮次读数（**只说这一轮跑到哪儿了**：服务端按并发自跑分批，这行文字不承载任何动作）。
+ *  「加载更多」那颗按钮不归这里管：它认的是 `hasMore` 与快照的页码（见 `CityView` 的尾行）。
  *  **停止不是完成**：取消后不许说成一个走到了底的轮次，故「已停止」优先于进度文案。
  *  跑完而 0 个源的一轮也不许留空白：`cityProgress` 在源数为 0 时给的是空串（那一档本是给
  *  「还没有一轮」与「这一类零源」共用的），尾行会变成一条空读数。这一态唯一能被快照支持的事实

@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, waitFor } from '@testing-library/react'
+import { act, cleanup, render, waitFor } from '@testing-library/react'
+import { ApiClientError } from '../../src/client/api.js'
 import { useExploreJob } from '../../src/client/explore-job.js'
 import type { ExploreSnapshot } from '../../src/shared/wire.js'
 import { makeCoreDeps } from './fake-deps.js'
+import type { CoreDepsOverrides } from './fake-deps.js'
 
 afterEach(cleanup)
 
@@ -17,11 +19,12 @@ let seen: ReturnType<typeof useExploreJob> | null = null
 function Probe({ deps }: { deps: ReturnType<typeof makeCoreDeps> }): null { seen = useExploreJob(deps); return null }
 
 /** 假依赖：读面按用例给的序列逐次吐快照；SSE 缺省（`makeCoreDeps` 的「立刻结束、一帧不发」）
- *  = 服务端没有推送可用 ⇒ 强制走轮询兜底那条地基 */
-const depsOf = (jobs: Array<ExploreSnapshot | null>) =>
+ *  = 服务端没有推送可用 ⇒ 强制走轮询兜底那条地基。`over` 供续页那组覆写写面。 */
+const depsOf = (jobs: Array<ExploreSnapshot | null>, over: CoreDepsOverrides = {}) =>
   makeCoreDeps({
     apiGet: vi.fn(async () => ({ job: jobs.shift() ?? null })),
     apiSend: vi.fn(async () => ({ jobId: 'j1' })),
+    ...over,
   })
 
 describe('useExploreJob', () => {
@@ -66,5 +69,42 @@ describe('useExploreJob', () => {
     const failed = makeCoreDeps({ apiGet: vi.fn(async () => { throw new Error('读面不可用') }) })
     render(<Probe deps={failed} />)
     await waitFor(() => { expect(seen?.restored).toBe(true) })
+  })
+})
+
+describe('useExploreJob · 续页（loadMore）', () => {
+  it('一次续页 = 一次 POST explore/list/more，且本轮回到 running（钮据此禁用、防重复发）', async () => {
+    const deps = depsOf([snap({ phase: 'done', page: 1, hasMore: true })])
+    render(<Probe deps={deps} />)
+    await waitFor(() => { expect(seen?.round?.hasMore).toBe(true) })
+    act(() => { seen?.loadMore() })
+    await waitFor(() => { expect(seen?.round?.running).toBe(true) })
+    expect(deps.apiSend).toHaveBeenCalledTimes(1)
+    expect(deps.apiSend).toHaveBeenCalledWith('POST', 'explore/list/more')
+    // 页码归服务端的下一个快照：本地自己加一，就是把「已 N 页」提前念成还没发生的事
+    expect(seen?.round?.page).toBe(1)
+  })
+
+  it('409 = 「现在没得可加载」：把钮收掉，但不报红（没得加载不是故障）', async () => {
+    const deps = depsOf([snap({ phase: 'done', page: 2, hasMore: true })], {
+      apiSend: vi.fn(async () => { throw new ApiClientError('Conflict', 409, '没有更多了') }),
+    })
+    render(<Probe deps={deps} />)
+    await waitFor(() => { expect(seen?.round?.hasMore).toBe(true) })
+    act(() => { seen?.loadMore() })
+    await waitFor(() => { expect(seen?.round?.hasMore).toBe(false) })
+    expect(seen?.error).toBeNull()               // 红条只留给真故障
+    expect(seen?.round?.running).toBe(false)     // 也没起新批：服务端手上那轮已经到底了
+  })
+
+  it('真失败（不是 409）如实报错，且钮留着（重试是用户的事，不是我们收回）', async () => {
+    const deps = depsOf([snap({ phase: 'done', page: 1, hasMore: true })], {
+      apiSend: vi.fn(async () => { throw new Error('网络请求失败') }),
+    })
+    render(<Probe deps={deps} />)
+    await waitFor(() => { expect(seen?.round?.hasMore).toBe(true) })
+    act(() => { seen?.loadMore() })
+    await waitFor(() => { expect(seen?.error).toContain('续页失败') })
+    expect(seen?.round?.hasMore).toBe(true)      // 既没成功也没「没得加载」：不许替用户把路堵上
   })
 })

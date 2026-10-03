@@ -171,7 +171,9 @@ export interface ExploreBook {
   origins: ExploreOrigin[]
 }
 
-/** 一个源在这个分类上没给出结果（抓取失败 / 超时 / 规则不认）——如实摊开，不造占位条目 */
+/** 一个源的一次失败（抓取失败 / 超时 / 规则不认）——如实摊开，不造占位条目。
+ *  **两种来路**：一条都没给出的源，与「已有累积、只是这一页没回来」的源（续页那一批失败）。
+ *  所以 UI 的说法不许把后一种念成「这个源是哑的」——它上一页明明答过（措辞归 `failureSummary`）。 */
 export interface ExploreFailure {
   sourceId: string
   sourceName: string

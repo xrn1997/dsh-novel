@@ -2,6 +2,7 @@
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { ApiClientError } from '../../src/client/api.js'
 import { CityView } from '../../src/client/views/CityView.js'
 import { cityStore, routeStore, useStore } from '../../src/client/store.js'
 import { makeCoreDeps } from './fake-deps.js'
@@ -28,9 +29,10 @@ function RouteProbe(): ReactNode {
  */
 const kinds = { kinds: [{ title: '玄幻', sources: 2 }, { title: '都市', sources: 1 }] }
 
-/** 一轮已跑完的分类快照：一本书（一个 origin，源名只该在抽屉/失败条里出现）+ 一个坏源 */
+/** 一轮已跑完的分类快照：一本书（一个 origin，源名只该在抽屉/失败条里出现）+ 一个坏源。
+ *  `page`/`hasMore` 取「跑完、且没有更多」——续页那组用例各自覆写。 */
 const snap = {
-  id: 'j1', kind: '玄幻', phase: 'done', cancelled: false, total: 2, done: 2,
+  id: 'j1', kind: '玄幻', phase: 'done', cancelled: false, total: 2, done: 2, page: 1, hasMore: false,
   books: [{
     name: '剑起长安', author: '青衫客', kind: '玄幻', lastChapter: '第 412 章', sourceCount: 2,
     origins: [{ sourceId: 's1', sourceName: '笔趣阁', bookUrl: 'https://a/1', lastChapter: '第 412 章' }],
@@ -51,9 +53,11 @@ afterEach(() => { cleanup(); cityStore.set({ kind: null }); routeStore.set({ rou
 
 const depsOf = (over: CoreDepsOverrides = {}) => makeCoreDeps({
   apiGet: vi.fn(async (p: string) => (p.includes('kinds') ? kinds : { job: current })),
-  apiSend: vi.fn(async (_m: string, _p: string, body: { kind: string }) => {
-    submitted.push(body.kind)
-    current = serve(body.kind)                     // 提交落地即起一轮，之后各帧推的就是它
+  apiSend: vi.fn(async (m: string, p: string, body: { kind: string }) => {
+    if (p === 'explore/list/more') return { jobId: 'j1' }   // 续页：不是提交，也不动 current
+    if (m === 'PUT') return {}                              // 入架：写的是书架，与这一轮的读面无关
+    submitted.push(body.kind)                               // 提交落地即起一轮，之后各帧推的就是它
+    current = serve(body.kind)
     return { jobId: 'j1' }
   }),
   apiEventStream: vi.fn(async (_p: string, onFrame: (data: string) => void) => {
@@ -135,7 +139,8 @@ describe('CityView', () => {
   it('失败条如实说数量，坏源在摘要行里就点名（不藏在展开里）', async () => {
     current = snap
     render(<CityView deps={depsOf()} />)
-    await waitFor(() => { expect(screen.getByText('1 个源没响应')).toBeTruthy() })
+    // 措辞只说「这一页没回来」：同样的字段也承载「已累积、只是这一页失败」的源（见 ExploreFailure）
+    await waitFor(() => { expect(screen.getByText('1 个源这一页没回来')).toBeTruthy() })
     const who = screen.getByText(/顶点/)
     expect(who.className).toBe('novel-city-fail-who')              // 摘要行，不是展开区
     expect(screen.getByText(/超时/)).toBeTruthy()                  // 展开区给完整 message
@@ -291,7 +296,7 @@ describe('CityView', () => {
     current = { ...snap, books: [], failures: [] }
     render(<CityView deps={depsOf()} />)
     await waitFor(() => { expect(screen.getByText(/这一类还没有书/)).toBeTruthy() })
-    expect(screen.queryByText(/个源没响应/)).toBeNull()      // 零命中不是失败（服务端口径）
+    expect(screen.queryByText(/个源这一页没回来/)).toBeNull()      // 零命中不是失败（服务端口径）
   })
 
   it('零源且已完成的一轮：尾行说「这一轮没有源参与」，且不对归类内容下结论', async () => {
@@ -307,5 +312,58 @@ describe('CityView', () => {
     render(<CityView deps={depsOf()} />)
     await waitFor(() => { expect(screen.getByText('已 1 / 4 源')).toBeTruthy() })
     expect(screen.queryByText(/这一类还没有书/)).toBeNull()
+  })
+
+  it('hasMore 为真：尾行给「加载更多（已 N 页）」，点一次发一次续页 POST（在途时钮禁用）', async () => {
+    current = { ...snap, hasMore: true }
+    const { over, frame } = pushable()
+    const more: string[] = []
+    let release: () => void = () => {}
+    const deps = depsOf({
+      apiSend: vi.fn(async (_m: string, p: string) => {
+        if (p === 'explore/list/more') { more.push(p); await new Promise<void>((r) => { release = r }) }   // 卡住这一页，看「在途」那一小段
+        return { jobId: 'j1' }
+      }),
+      ...over,
+    })
+    render(<CityView deps={deps} />)
+    fireEvent.click(await screen.findByRole('button', { name: '加载更多（已 1 页）' }))
+    await waitFor(() => { expect(more).toHaveLength(1) })
+    // 本页已回到 running（服务端那轮如此），钮据此禁用：这一小段窗口不许再发一次
+    expect(screen.getByRole('button', { name: '加载更多（已 1 页）' }).hasAttribute('disabled')).toBe(true)
+    act(() => { release() })
+    await waitFor(() => { expect(deps.apiEventStream).toHaveBeenCalled() })                    // 续页后重新盯住这一轮
+    act(() => { frame({ ...snap, page: 2, hasMore: true }) })                                 // 新一页回来：页码与钮都跟上服务端
+    await waitFor(() => { expect(screen.getByRole('button', { name: '加载更多（已 2 页）' })).toBeTruthy() })
+    expect(more).toHaveLength(1)
+  })
+
+  it('在途（running）：钮仍在场但禁用——显隐只认 hasMore，禁用才认 running，不从 running 反推有没有更多', async () => {
+    current = { ...snap, phase: 'running', done: 1, page: 2, hasMore: true }
+    render(<CityView deps={depsOf()} />)
+    const btn = await screen.findByRole('button', { name: '加载更多（已 2 页）' })
+    expect(btn.hasAttribute('disabled')).toBe(true)
+  })
+
+  it('hasMore 为假：钮收掉、读数照旧（服务端说没了就真没了，不留一个点了没反应的饼）', async () => {
+    current = snap                                        // 跑完且没有更多
+    const { container } = render(<CityView deps={depsOf()} />)
+    await waitFor(() => { expect(screen.getByText('已 2 / 2 源')).toBeTruthy() })
+    expect(container.querySelector('.novel-city-foot')).not.toBeNull()
+    expect(screen.queryByText(/加载更多/)).toBeNull()
+  })
+
+  it('续页撞 409（此刻没得可加载）：钮收掉、不报红条——没得加载不是故障', async () => {
+    current = { ...snap, hasMore: true }
+    const deps = depsOf({
+      apiSend: vi.fn(async (_m: string, p: string) => {
+        if (p === 'explore/list/more') throw new ApiClientError('Conflict', 409, '没有更多了')
+        return { jobId: 'j1' }
+      }),
+    })
+    const { container } = render(<CityView deps={deps} />)
+    fireEvent.click(await screen.findByRole('button', { name: '加载更多（已 1 页）' }))
+    await waitFor(() => { expect(screen.queryByRole('button', { name: /加载更多/ })).toBeNull() })
+    expect(container.querySelector('.novel-err')).toBeNull()
   })
 })

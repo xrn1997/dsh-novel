@@ -26,8 +26,11 @@ const rowKey = (b: Pick<ExploreBook, 'name' | 'author'>): string => `${b.name}|$
  * 三条呈现口径：
  * ① **逛的时候源不可见**——书只带「N 源」数量角标，源名只出现在两个地方：选源抽屉（看到书之后）
  *    与失败条（源坏了要如实摊开，那是这条原则的刻意例外）。
- * ② **排序与进度都是被动读数**：服务端只有一个排序键（收录源数）且自己按并发分批抓完，
- *    摆下拉或「继续加载」钮就是假控件，所以左栏/尾行只有说明与读数。
+ * ② **排序是被动读数，续页是本轮唯一需要用户按一下的东西**：排序键服务端只有一个（收录源数），
+ *    摆下拉就是假控件，故只留一句说明；「加载更多」不是——服务端**不问就不打下一页**，
+ *    故它是真控件。它的**显隐只认 `hasMore`**（服务端说此刻能不能点），**禁用只认本轮自己的
+ *    `running`**（在途那一段）：从 `running` 反推「还有更多」就会在刚提交、一页都还没回来时
+ *    先把按钮亮给用户。
  * ③ **进入即加载，但只在该分类没有轮次时**：词表到手先定分类，提交与否交给 `restored` 之后的
  *    判据——服务端持有这一轮就是它的家，回来看它跑完即可（见下面那条 effect）。
  *
@@ -36,7 +39,7 @@ const rowKey = (b: Pick<ExploreBook, 'name' | 'author'>): string => `${b.name}|$
  */
 export function CityView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): ReactNode {
   const { kind: remembered } = useStore(cityStore)
-  const { round, error, submit, restored } = useExploreJob(deps)
+  const { round, error, submit, restored, loadMore } = useExploreJob(deps)
   /** 词表（`null` = 还在读）：**空词表**是「库里没有源提供分类浏览」，与读面失败不是一件事 */
   const [kinds, setKinds] = useState<ExploreKinds['kinds'] | null>(null)
   const [kindsError, setKindsError] = useState<string | null>(null)
@@ -204,8 +207,18 @@ export function CityView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): Re
                 </details>
               )}
               {/* 尾行按**有没有轮次**渲染，不是按文案空不空：`cityProgress` 在「还没有一轮」与
-                  「一轮里源数是 0」两处都产出空串，用它判空就把两件事折成一件 */}
-              {round === null ? null : <div className="novel-city-foot">{roundReadout(round)}</div>}
+                  「一轮里源数是 0」两处都产出空串，用它判空就把两件事折成一件。按钮只在
+                  `hasMore` 时出现（服务端说没了就收掉，不留一个点了没反应的饼），在途时禁用 */}
+              {round === null ? null : (
+                <div className="novel-city-foot">
+                  <span>{roundReadout(round)}</span>
+                  {round.hasMore ? (
+                    <button className="novel-btn sm" disabled={round.running} onClick={loadMore}>
+                      {`加载更多（已 ${round.page} 页）`}
+                    </button>
+                  ) : null}
+                </div>
+              )}
             </>
           )}
         </section>
