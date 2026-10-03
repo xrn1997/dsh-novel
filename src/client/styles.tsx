@@ -1090,6 +1090,9 @@ img.novel-city-cover { display: block; object-fit: cover; background: var(--nove
 }
 .novel-city-srcrow-who { flex: 1 1 auto; min-width: 0; font-size: var(--novel-fs-base); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .novel-city-srcrow-last { flex: none; font-size: var(--novel-fs-xs); color: var(--novel-text-3); }
+/* 行内两颗钮都不参与收缩：一行放不下时该退让的是源名（它已可省略），
+   而按钮一旦被压窄，钮里的字会折成两行（CJK 的 min-content 只有一个字宽） */
+.novel-city-srcrow-add { flex: none; }
 .novel-city-srcrow-go { flex: none; }
 /* 窄面板退档（< 900px）：左栏折成顶部一条 chip 行（横滚），书单回 2 列。chip 形态与界面稿的
    分类 tab 一致：词表在窄屏是「一条横带」而不是「一列可点行」。查询锚是上面那枚

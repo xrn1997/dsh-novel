@@ -38,7 +38,8 @@ describe('sourceCountLabel / cityProgress / failureSummary', () => {
       { sourceId: 'a', sourceName: '顶点', code: 'FetchError', message: '超时' },
       { sourceId: 'b', sourceName: '书友阁', code: 'RuleMissing', message: '缺书名规则' },
     ]
-    expect(failureSummary(f)).toBe('2 个源没响应')
+    // 措辞只说「这一页没回来」：同一张清单里也住着「已累积、只是这一页失败」的源，说成「没响应」就是诬告
+    expect(failureSummary(f)).toBe('2 个源这一页没回来')
     expect(failureSummary([])).toBe('')
   })
 })

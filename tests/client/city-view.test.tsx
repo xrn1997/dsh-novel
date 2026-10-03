@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { ApiClientError } from '../../src/client/api.js'
 import { CityView } from '../../src/client/views/CityView.js'
 import { cityStore, routeStore, useStore } from '../../src/client/store.js'
+import { paramRoutes } from '../../src/shared/wire.js'
 import { makeCoreDeps } from './fake-deps.js'
 import type { CoreDepsOverrides } from './fake-deps.js'
 
@@ -365,5 +366,75 @@ describe('CityView', () => {
     fireEvent.click(await screen.findByRole('button', { name: '加载更多（已 1 页）' }))
     await waitFor(() => { expect(screen.queryByRole('button', { name: /加载更多/ })).toBeNull() })
     expect(container.querySelector('.novel-err')).toBeNull()
+  })
+
+  it('抽屉每行可加入书架：一次 PUT 打到该行 bookKey，字段取该行与书、缺的一律缺席', async () => {
+    current = snap
+    const pushOk = vi.fn()
+    const deps = depsOf({ pushOk })
+    render(<CityView deps={deps} />)
+    fireEvent.click(await screen.findByRole('button', { name: /剑起长安/ }))
+    fireEvent.click(await screen.findByRole('button', { name: '加入书架' }))
+    await waitFor(() => { expect(pushOk).toHaveBeenCalledWith('已加入书架') })
+    const puts = deps.apiSend.mock.calls.filter((c) => c[0] === 'PUT')
+    expect(puts).toHaveLength(1)                                    // 不多发一次「读一次书架」之类的
+    expect(puts[0][1]).toBe(paramRoutes.shelfKey('https://a/1'))    // 书架身份 = 该源的书地址
+    // 缺席即不由客户端补：coverUrl/intro/wordCount 这本书没有，body 里就不该有它们的空壳
+    expect(puts[0][2]).toStrictEqual({
+      sourceId: 's1', title: '剑起长安', author: '青衫客', kind: '玄幻', lastChapterName: '第 412 章',
+    })
+  })
+
+  it('无地址的行两个钮都没有（与「读这本」同一条守卫）；有地址的行两个都在', async () => {
+    current = {
+      ...snap,
+      books: [{
+        name: '剑起长安', author: '青衫客', kind: '玄幻', sourceCount: 2,
+        origins: [
+          { sourceId: 's1', sourceName: '笔趣阁', bookUrl: 'https://a/1' },
+          { sourceId: 's3', sourceName: '无址阁', bookUrl: null },
+        ],
+      }],
+    }
+    const { container } = render(<CityView deps={depsOf()} />)
+    fireEvent.click(await screen.findByRole('button', { name: /剑起长安/ }))
+    const rows = container.querySelectorAll('.novel-city-srcrow')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].querySelectorAll('button')).toHaveLength(2)      // 读这本 + 加入书架
+    expect(rows[1].querySelectorAll('button')).toHaveLength(0)      // 没地址就没有入口，也没有入架口
+  })
+
+  it('入架字段取**这一行**的 origin：lastChapter 各行不同，缺失才回退书的', async () => {
+    current = {
+      ...snap,
+      books: [{
+        name: '剑起长安', author: '青衫客', kind: '玄幻', lastChapter: '第 412 章', sourceCount: 2,
+        origins: [
+          { sourceId: 's1', sourceName: '笔趣阁', bookUrl: 'https://a/1', lastChapter: '第 500 章' },
+          { sourceId: 's3', sourceName: '顶点', bookUrl: 'https://a/2' },
+        ],
+      }],
+    }
+    const deps = depsOf()
+    render(<CityView deps={deps} />)
+    fireEvent.click(await screen.findByRole('button', { name: /剑起长安/ }))
+    fireEvent.click((await screen.findAllByRole('button', { name: '加入书架' }))[1])
+    await waitFor(() => { expect(deps.apiSend).toHaveBeenCalledTimes(1) })
+    expect(deps.apiSend).toHaveBeenCalledWith('PUT', paramRoutes.shelfKey('https://a/2'), {
+      sourceId: 's3', title: '剑起长安', author: '青衫客', kind: '玄幻',
+      lastChapterName: '第 412 章',                                 // 这一行没写最新章 → 回退书的那条
+    })
+  })
+
+  it('入架失败：进错误泳道，不许报喜（点了没反应比失败更糟）', async () => {
+    current = snap
+    const pushOk = vi.fn()
+    const pushError = vi.fn()
+    const deps = depsOf({ apiSend: vi.fn(async () => { throw new Error('书架写不动') }), pushOk, pushError })
+    render(<CityView deps={deps} />)
+    fireEvent.click(await screen.findByRole('button', { name: /剑起长安/ }))
+    fireEvent.click(await screen.findByRole('button', { name: '加入书架' }))
+    await waitFor(() => { expect(pushError).toHaveBeenCalledWith(expect.stringContaining('书架写不动')) })
+    expect(pushOk).not.toHaveBeenCalled()
   })
 })

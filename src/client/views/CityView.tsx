@@ -222,7 +222,7 @@ export function CityView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): Re
             </>
           )}
         </section>
-        {picked === null ? null : <CitySourceDrawer book={picked} onClose={() => setPicked(null)} />}
+        {picked === null ? null : <CitySourceDrawer book={picked} deps={deps} onClose={() => setPicked(null)} />}
       </div>
     </div>
   )
