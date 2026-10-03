@@ -188,4 +188,22 @@ describe('runExploreKind：逐源批循环', () => {
     expect(fetches).toBe(1)
     expect(out.map((g) => g.sourceId)).toEqual(['alive'])
   })
+
+  // `cfg.page` 是编排层到「请求」与「快照槽位」两处的那条缝：它既决定请求打哪一页，也决定结果落哪个槽位。
+  // 这条缝没有任何类型能替人把住（`cfg.page` 可选、`fetchKindPage` 的 page 实参也带缺省），所以两处都得由
+  // 断言点名：**地址停在首页**说明 page 没被透传下去（退回 5 参调用就是这种红法）；**第 2 页的快照落进了
+  // 首页槽位**说明键里的 page 被写死——那是两种不同的懈，一条断言盖不住另一条。
+  it('page=2 → 请求打在页码段上，且快照只落第 2 页的槽位', async () => {
+    const seen: string[] = []
+    const f = createFetcher({ fetchImpl: async (input) => { seen.push(String(input)); return html(LIST_HTML) } })
+    const cache = new KindCache()
+    const now = 1_000
+    await runExploreKind([{ source: source(), kindUrl: 'xuanhuan' }], f,
+      { ...cfg(cache), parallel: 1, timeoutMs: 1_000, page: 2, now: () => now },
+      () => {}, () => false)
+    // 首页地址（`https://s.com/xuanhuan`）在这里就是失误的证据：它不是「第 2 页的另一种写法」。
+    expect(seen).toEqual(['https://s.com/xuanhuan/2'])
+    expect(cache.get({ sourceId: 'i', kind: 'xuanhuan', epoch: 7, page: 2 }, now)).not.toBeNull()
+    expect(cache.get({ sourceId: 'i', kind: 'xuanhuan', epoch: 7, page: 1 }, now)).toBeNull()
+  })
 })
