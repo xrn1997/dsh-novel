@@ -246,5 +246,91 @@ describe('ExploreJobs 同轮续页', () => {
     expect(() => jobs.advance('玄幻', async () => null)).toThrow('还在抓')
     expect(() => jobs.advance('都市', async () => null)).toThrow('分类不符')
   })
+
+  it('在途那一批让 hasMore 为 false：契约只说「现在能不能点」（客户端自己用 running 显加载态）', async () => {
+    const jobs = new ExploreJobs()
+    let finish: () => void = () => {}
+    jobs.start('玄幻', 1, (emit) => {
+      emit(g('A', '剑起长安', '青衫客'))
+      return new Promise<void>((res) => { finish = res })
+    })
+    expect(jobs.snapshot()).toMatchObject({ phase: 'running', hasMore: false })
+    finish()
+    await tick()
+    expect(jobs.snapshot()).toMatchObject({ phase: 'done', hasMore: true })
+  })
+
+  it('某源第 2 页抓取失败：错误进 failures、上一页的累积原样留着、这个源不算到底（下次续页仍会打它）', async () => {
+    const jobs = new ExploreJobs()
+    jobs.start('玄幻', 1, async (emit) => { emit(g('A', '剑起长安', '青衫客')) })
+    await tick()
+    expect(jobs.snapshot()?.failures).toEqual([])
+
+    const boom = { code: 'FetchError', message: '第 2 页超时' }
+    jobs.advance('玄幻', async (emit) => {
+      emit({ sourceId: 'A', sourceName: 'A', status: 'verified', hits: [], error: boom })
+    })
+    await tick()
+    const s = jobs.snapshot()
+    expect(s?.failures).toEqual([{ sourceId: 'A', sourceName: 'A', ...boom }])   // 失败如实摊开，不伪装成「没有更多」
+    expect(s?.books.map((b) => b.name)).toEqual(['剑起长安'])                     // 上一页的累积一个字都没丢
+    expect(s?.hasMore).toBe(true)
+    expect(jobs.exhaustedSourceIds()).toEqual([])                                // 失败≠到底：这个源仍在续页目标里
+
+    // 再点一次（目标里仍有 A）：新增落进同一组，且这一页的成功把那一次失败覆盖掉
+    jobs.advance('玄幻', async (emit) => { emit(g('A', '新书一', '乙')) })
+    await tick()
+    const after = jobs.snapshot()
+    expect(after?.failures).toEqual([])
+    expect(after?.books.map((b) => b.name)).toEqual(['剑起长安', '新书一'])
+  })
+
+  it('第 1 页就失败的源：如实进 failures，且这一轮对它记到底（一条也没累积）；换一轮重新派生目标即重试', async () => {
+    const jobs = new ExploreJobs()
+    jobs.start('玄幻', 1, async (emit) => {
+      emit({ sourceId: 'A', sourceName: 'A', status: 'verified', hits: [], error: { code: 'FetchError', message: '首页超时' } })
+    })
+    await tick()
+    expect(jobs.snapshot()?.failures)
+      .toEqual([{ sourceId: 'A', sourceName: 'A', code: 'FetchError', message: '首页超时' }])
+    expect(jobs.exhaustedSourceIds()).toEqual(['A'])   // 一条都没累积：这一轮对它没有内容可续
+    expect(jobs.snapshot()?.hasMore).toBe(false)
+
+    // 换一轮：目标清单由注册表重新派生，上一轮的「到底」不跨轮传染
+    jobs.start('玄幻', 1, async (emit) => { emit(g('A', '剑起长安', '青衫客')) })
+    await tick()
+    expect(jobs.snapshot()).toMatchObject({ page: 1, failures: [], hasMore: true })
+    expect(jobs.snapshot()?.books.map((b) => b.name)).toEqual(['剑起长安'])
+  })
+
+  it('取消在途那一批后再续页：陈旧批次既不能接着吐组、也不能结算它已不再拥有的新一轮', async () => {
+    const jobs = new ExploreJobs()
+    let staleEmit: (g: SearchGroup) => void = () => {}
+    let staleStop: () => boolean = () => true
+    let staleFinish: () => void = () => {}
+    jobs.start('玄幻', 2, (emit, shouldStop) => {
+      staleEmit = emit; staleStop = shouldStop
+      return new Promise<void>((res) => { staleFinish = res })      // 挂在途：只有测试放行才收手
+    })
+    expect(jobs.cancel('用户停止')).toBe(true)                       // 取消只落终态：在途请求不撤回，运行器仍在
+
+    let pageFinish: () => void = () => {}
+    jobs.advance('玄幻', (emit) => {
+      emit(g('A', '新书一', '乙'))
+      return new Promise<void>((res) => { pageFinish = res })
+    })
+    expect(jobs.snapshot()).toMatchObject({ phase: 'running', page: 2 })
+
+    expect(staleStop()).toBe(true)                                  // 它已不再拥有这一轮：不会顺着 shouldStop 接着跑
+    staleEmit(g('B', '幽灵书', '丙'))                                 // 迟到的分组不许落进新一轮
+    staleFinish()                                                   // 它的收尾也不许替新批次结算
+    await tick()
+    expect(jobs.snapshot()).toMatchObject({ phase: 'running', page: 2 })
+    expect(jobs.snapshot()?.books.map((b) => b.name)).toEqual(['新书一'])
+
+    pageFinish()
+    await tick()
+    expect(jobs.snapshot()).toMatchObject({ phase: 'done', page: 2 })
+  })
 })
 

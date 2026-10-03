@@ -127,11 +127,53 @@ describe('书城发现面', () => {
   })
 })
 
+/** 「在途」是竞态，靠运气碰不到——这条自带一道拦在取数前的闸，把「第 2 页那一批在途」的窗口钉死。
+ *  读数正是 F3 的两侧：在途时 hasMore 为 false，于是「再点一次」回 409（而不是走进续页的在途守卫抛错
+ *  变 500）；闸开、本轮收尾后按钮按真实「到底了没有」恢复。 */
+describe('书城续页：一批在途时再点 → 409（不是 500）', () => {
+  it('第 2 页在途时 POST more 回 409 Conflict；放行收尾后照旧按到底判据给读数', async () => {
+    let gate: Promise<void> | null = null
+    let open: () => void = () => {}
+    const dir = await makeTempDir('novel-api-explore-inflight-')
+    const s = trackService(await ReadingService.create({
+      dir,
+      fetchImpl: (async () => {
+        if (gate !== null) await gate                    // 闸住：制造「第 2 页还在途」的窗口
+        return new Response(LIST_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } })
+      }) as never,
+    }))
+    await s.importOne(NATIVE)
+    const { base: b, close: c } = await startServer(s)
+    try {
+      await fetch(`${b}/novel-api/${ROUTES.exploreList.path}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: '玄幻' }),
+      })
+      expect((await settleAt(b)).hasMore).toBe(true)     // 第 1 页带回新书：还能再点
+
+      gate = new Promise<void>((res) => { open = res })  // 此后的取数一律停在闸前
+      const more = await fetch(`${b}/novel-api/${ROUTES.exploreListMore.path}`, { method: 'POST' })
+      expect(more.status).toBe(200)                      // 第 2 页那一批已起跑、却在途
+
+      const again = await fetch(`${b}/novel-api/${ROUTES.exploreListMore.path}`, { method: 'POST' })
+      expect(again.status).toBe(409)                     // 「在途」不是说「你点了错的东西」：只说现在没得可加载
+      expect((await again.json() as any).error.code).toBe('Conflict')
+
+      open(); gate = null
+      expect((await settleAt(b)).hasMore).toBe(false)    // 这一页还是那本书 ⇒ 零新增 ⇒ 到底
+    } finally { await c() }
+  })
+})
+
 /** 轮询到**当前**这轮收手（`running` 之外即终态）：续页会把同一轮重新点亮，故不带 id 断言，
  *  只等「不再是 running」——与 `tests/services/reading-explore.test.ts` 的 settle 同口径。 */
 async function settle(): Promise<any> {
+  return settleAt(base)
+}
+
+/** 同上，但 base 由调用方给：本文件除公共 svc 外还有一条自带闸门的服务（F3 那条）。 */
+async function settleAt(baseUrl: string): Promise<any> {
   for (let i = 0; i < 200; i++) {
-    const s = await fetch(`${base}/novel-api/${ROUTES.exploreListStatus.path}`)
+    const s = await fetch(`${baseUrl}/novel-api/${ROUTES.exploreListStatus.path}`)
     const job = (await s.json() as any).value.job
     if (job !== null && job !== undefined && job.phase !== 'running') return job
     await new Promise((r) => setTimeout(r, 5))

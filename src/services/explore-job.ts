@@ -45,10 +45,16 @@ const RETAIN_MS = 5 * 60_000
 export const MAX_EXPLORE_PAGES = 10
 
 /** 一个源在本轮累积到的东西：条目本身 + **本页**新增条数。
- *  `lastNew` 归零就是「这个源在这一类上到底了」的判据（续页不再打它，也计入 `hasMore`）。 */
+ *  `lastNew` 归零就是「这个源在这一类上到底了」的判据（续页不再打它，也计入 `hasMore`）。
+ *  唯一的例外是**这一页抓取失败**——失败的一页不是到底的一页，见 `absorb`。
+ *  第 1 页就失败的源仍算到底：它一条都没累积，这一轮的续页对它无处可续（失败在 `failures` 里可见）。 */
 interface HeldSource {
   group: SearchGroup
   lastNew: number
+  /** 本批里这个源那一页抓取失败的记录（成功的一页会把它清掉）。**与 `group.error` 分开存**：
+   *  后者是「这个源一条都没给出」的读数（组里压根没有命中），这里记的是「它已经有累积、
+   *  只是这一页没回来」——对界面是两件事，混进同一处会把一页失败永久钉在这个源头上。 */
+  pageError?: { code: string; message: string }
 }
 
 /** 服务端持有的整轮结果（内部态；跨半只出 `ExploreSnapshot`，不泄全量 groups） */
@@ -62,6 +68,13 @@ interface Held {
   groups: Map<string, HeldSource>
   /** 已加载到第几页（`start` 起第 1 页，`advance` 每续一次 +1） */
   page: number
+  /** 有一批正握着这一轮在跑（由 `launch` 置位、由终态单点清位）。**它不是 `phase` 的替身**：
+   *  `cancel` 会立刻把 `phase` 落终态（读方要的是确定答复），而运行器是协作式的、在途请求不撤回，
+   *  此后 `phase` 已不再描述「还有没有一批在跑」。续页的守卫只看这个标记。 */
+  inflight: boolean
+  /** 批次代际（`launch` 每次 +1）。陈旧批次拿它对号入座：新一轮接手后，旧批既不能接着 emit、
+   *  也不能在自己的收尾里结算这一轮（后者会表现为「第 2 页还没回来就显示 done」）。 */
+  generation: number
   phase: 'running' | 'done' | 'failed'
   /** 用户主动停止（终态但仍可读）；只有 cancel() 会置位，被新一轮替换不算 */
   cancelled: boolean
@@ -109,7 +122,8 @@ export class ExploreJobs {
     }
     const held: Held = {
       id: (this.deps.uuid ?? randomUUID)(), kind, total,
-      startedAt: this.now(), groups: new Map(), page: 1, phase: 'running', cancelled: false,
+      startedAt: this.now(), groups: new Map(), page: 1,
+      inflight: false, generation: 0, phase: 'running', cancelled: false,
       settle: () => {},
     }
     this.current = held
@@ -120,13 +134,17 @@ export class ExploreJobs {
    *  换 id 就等于让浏览器半的「零累积、整帧替换」读模型清空重来——续页是这一轮里的事，不是新的一轮。
    *
    *  三种「续不动」如实抛错（不猜、不做无效起跑）：没有轮次；在途那一批还没收手；分类对不上。
-   *  在途那一种尤其不能放行——`end` 是按**轮次**收口的，旧批次的收尾会把刚点亮的新批次一并结算掉
-   *  （表现为「第 2 页还没回来就显示 done」），而两个批次同时往同一个源的累积里写也得不到可读读数。 */
+   *  在途那一种尤其不能放行——两个批次同时往同一个源的累积里写得不到可读读数，而旧批次的收尾
+   *  会把刚点亮的新批次一并结算（表现为「第 2 页还没回来就显示 done」）。
+   *
+   *  守卫看**在途标记**而不是 `phase`：`cancel` 会让 `phase` 先行落终态，若拿它当判据，
+   *  取消之后再点一次就会被误放行（正是上面那个 bug 的入口）。取消是**收回了在途那一批的
+   *  所有权**（清掉标记），因此取消后还能再点一次续页；被收回的那批由代际点穴，碰不到新一轮。 */
   advance(kind: string, run: ExploreJobRun): { jobId: string } {
     const h = this.current
     if (h === null) throw new Error('没有可续页的分类轮次')
     if (h.kind !== kind) throw new Error(`轮次分类不符：当前「${h.kind}」，请求「${kind}」`)
-    if (h.phase === 'running') throw new Error(`分类轮次「${kind}」这一批还在抓，不能同时续页`)
+    if (h.inflight) throw new Error(`分类轮次「${kind}」这一批还在抓，不能同时续页`)
     h.page += 1
     h.phase = 'running'
     // 续页把这轮重新点亮：上一批留下的「已停止 / 失败」不再描述它（否则新批在跑而界面说停过）
@@ -137,8 +155,14 @@ export class ExploreJobs {
   }
 
   /** 起跑一段（`start` 的第 1 批与 `advance` 的每一批共用这一处）：宿主登记 + 变了就 `notify`
-   *  + 同步起跑 + 终态单点收口。两处各抄一遍就会长出两种收尾口径。 */
+   *  + 同步起跑 + 终态单点收口。两处各抄一遍就会长出两种收尾口径。
+   *
+   *  一批起跑即领一代（`generation`）：交给运行器的 `emit` / `shouldStop` 与这批的收尾都认这一代。
+   *  代际被新一批盖过之后，旧批的三件事同时失效——不再吐组（`emit` 弃）、不再接着跑（`shouldStop`
+   *  为真）、收尾不结算（`finish` 弃）。少了任何一件，旧批都能伸手改一轮它已经不再拥有的轮次。 */
   private launch(h: Held, run: ExploreJobRun): { jobId: string } {
+    const gen = ++h.generation
+    h.inflight = true
     const host = this.deps.host
     if (host !== undefined) {
       const done = new Promise<JobOutcome>((res) => {
@@ -154,8 +178,12 @@ export class ExploreJobs {
       })
     }
     this.notify()                                      // 开场 / 续页起跑：观察者据此把读面当成在跑
-    const emit = (group: SearchGroup): void => { this.absorb(h, group); this.notify() }
-    const shouldStop = (): boolean => h.phase !== 'running'   // 取消 / 被替换都表现为「不再是本轮的 running」
+    const emit = (group: SearchGroup): void => {
+      if (h.generation !== gen) return                 // 陈旧批次迟到的组：这一轮已不归它
+      this.absorb(h, group)
+      this.notify()
+    }
+    const shouldStop = (): boolean => h.generation !== gen || h.phase !== 'running'
     // 同步起跑（照 search-job 的口径）：`run` 交出的 emit 必须在本函数返回前就在位，
     // 否则调用方紧接着 emit 的第一组会丢（被否的写法：`Promise.resolve().then(() => run(...))`）。
     // 本模块的运行器虽要先等网络，这条属性照样要立——它是调用方的契约，不是运行器的习惯。
@@ -163,14 +191,20 @@ export class ExploreJobs {
     try {
       running = Promise.resolve(run(emit, shouldStop))
     } catch (e) {
-      this.end(h, 'failed', undefined, e instanceof Error ? e.message : String(e))
+      this.finish(h, gen, 'failed', e instanceof Error ? e.message : String(e))
       return { jobId: h.id }
     }
     void running.then(
-      () => { this.end(h, 'completed') },
-      (e: unknown) => { this.end(h, 'failed', undefined, e instanceof Error ? e.message : String(e)) },
+      () => { this.finish(h, gen, 'completed') },
+      (e: unknown) => { this.finish(h, gen, 'failed', e instanceof Error ? e.message : String(e)) },
     )
     return { jobId: h.id }
+  }
+
+  /** 一批的收尾：**只有还握着这一轮的批次才能结算**。代际对不上即陈旧批次，它无权动这一轮。 */
+  private finish(h: Held, gen: number, status: JobOutcome['status'], error?: string): void {
+    if (h.generation !== gen) return
+    this.end(h, status, undefined, error)
   }
 
   /** 一个源的结果落进本轮：首次出现即建组（第 1 页那一组原样收下——它是这个源给的第一批，
@@ -178,13 +212,23 @@ export class ExploreJobs {
    *  只按**实际收到的组**累积，绝不按目标清单推：续页那批里被跳过的源一个组都不发（`skip` 是静默契约），
    *  替它们补一个空组就会把「已到底」洗成「这一页 0 条」——两者本该是同义的，但补出来的空组还会
    *  把那一段记忆抹掉（下一轮续页又会去打它）。
-   *  `lastNew` 记的是**本页真正新增**的条数（去重之后），它就是「这个源到底了没有」的判据。 */
+   *  `lastNew` 记的是**本页真正新增**的条数（去重之后），它就是「这个源到底了没有」的判据。
+   *
+   *  **失败的一页不是到底的一页**：这一批带了错误时，错误如实记下（读面把它摊进 `failures`），
+   *  累积与 `lastNew` 原样留着、这个源不算到底——一次偶发故障不该冒充「这一类没有更多书了」，
+   *  也不该把用户刚看到的那批书划掉；下一次续页照旧会打它（重试的机会留给用户）。
+   *  一页回来成功了就把它覆盖掉：那次失败不再描述这个源此刻的状态。 */
   private absorb(h: Held, group: SearchGroup): void {
     const prev = h.groups.get(group.sourceId)
     if (prev === undefined) {
       h.groups.set(group.sourceId, { group, lastNew: group.hits.length })
       return
     }
+    if (group.error !== undefined) {
+      prev.pageError = group.error
+      return
+    }
+    prev.pageError = undefined
     const known = new Set(prev.group.hits.map(dedupKeyOf))
     const fresh = group.hits.filter((hit) => {
       const key = dedupKeyOf(hit)
@@ -197,7 +241,9 @@ export class ExploreJobs {
   }
 
   /** 已经到底的源 id（本页零新增）：续页要跳过的就是它们——与 `skip` 是同一份判据的两侧，
-   *  「谁到底了」只有这里一个出处。没有组的源不在内：它没发过组，一无所知，不是「到底」。 */
+   *  「谁到底了」只有这里一个出处。没有组的源不在内：它没发过组，一无所知，不是「到底」。
+   *  一页抓取失败**不**入列（`absorb` 保住了那个源的上一页记忆）；第 1 页就失败的源入列且是本轮首次入列，
+   *  因为它一条都没累积、续页对它无页可续——下一轮的目标清单重新派生，那个源照旧会被打到。 */
   exhaustedSourceIds(): string[] {
     const out: string[] = []
     for (const [id, e] of this.current?.groups ?? []) if (e.lastNew === 0) out.push(id)
@@ -216,15 +262,20 @@ export class ExploreJobs {
       && this.now() - h.finishedAt > RETAIN_MS) return null
     const held = [...h.groups.values()]
     const books: ExploreBook[] = mergeBooks(held.map((e) => e.group))
-    const failures: ExploreFailure[] = held
-      .map((e) => e.group)
-      .filter((g) => g.error !== undefined)
-      .map((g) => ({ sourceId: g.sourceId, sourceName: g.sourceName, code: g.error!.code, message: g.error!.message }))
+    const failures: ExploreFailure[] = []
+    for (const e of held) {
+      const err = e.group.error ?? e.pageError      // 一条都没给出的源，与「只是这一页没回来」的源
+      if (err !== undefined) {
+        failures.push({ sourceId: e.group.sourceId, sourceName: e.group.sourceName, code: err.code, message: err.message })
+      }
+    }
     return {
       id: h.id, kind: h.kind, phase: h.phase, cancelled: h.cancelled,
       total: h.total, done: h.groups.size,
       page: h.page,
-      hasMore: h.page < MAX_EXPLORE_PAGES && held.some((e) => e.lastNew > 0),
+      // 「现在能不能点」而非「还有没有书」：一批在途时先点不了——客户端用自己的 running 显加载态，
+      // 服务端据此让 409 只剩一个意思（现在没得可加载），不必为「正在跑」再造一种错。
+      hasMore: h.phase !== 'running' && h.page < MAX_EXPLORE_PAGES && held.some((e) => e.lastNew > 0),
       books, failures, startedAt: h.startedAt,
       ...(h.finishedAt === undefined ? {} : { finishedAt: h.finishedAt }),
       ...(h.error === undefined ? {} : { error: h.error }),
@@ -233,7 +284,9 @@ export class ExploreJobs {
 
   /** 取消当前这轮（宿主 cancel 与 UI 的「停止浏览」都走这条）。返回：是否真有个在跑的轮次。
    *  与 `SearchJobs` 同口径**立即结算终态**而不等运行器收手：这是读，没有半途写脏的顾虑，
-   *  读方要的是「这一轮到此为止」的确定答复。停止不是失败——`cancelled` 让浏览器半不报红条。 */
+   *  读方要的是「这一轮到此为止」的确定答复。停止不是失败——`cancelled` 让浏览器半不报红条。
+   *  结算同时**收回在途那一批的所有权**（见 `end`）：运行器还会自己收手，但那之后它只是一段
+   *  没有轮次的在途请求；用户再点续页照样起新批，不会被这段残影挡住。 */
   cancel(reason?: string): boolean {
     const h = this.current
     if (h === null || h.phase !== 'running') return false
@@ -245,10 +298,12 @@ export class ExploreJobs {
 
   private now(): number { return this.deps.now?.() ?? Date.now() }
 
-  /** 终态单点：phase / finishedAt / error 与宿主结算同处写，缺一处就是
-   *  「界面说结束了而宿主还挂着 running」 */
+  /** 终态单点：phase / finishedAt / error、在途标记与宿主结算同处写，缺一处就是
+   *  「界面说结束了而宿主还挂着 running」。清在途标记即**收回在途那一批的所有权**：
+   *  取消或收手之后，谁都不能再拿「还在跑」当借口拦下一次续页（那一批已由代际点穴）。 */
   private end(h: Held, status: JobOutcome['status'], detail?: string, error?: string): void {
     if (h.phase !== 'running') return
+    h.inflight = false
     h.phase = status === 'completed' ? 'done' : 'failed'
     if (error !== undefined) h.error = error
     h.finishedAt = this.now()
