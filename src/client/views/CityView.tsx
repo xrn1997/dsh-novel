@@ -10,6 +10,7 @@ import type { ClientCoreDeps } from '../deps.js'
 import { cityStore, useStore } from '../store.js'
 import { coverTintClass } from '../util.js'
 import { coverFallbackChar, EmptyState } from './bits.js'
+import { CitySourceDrawer } from './CitySourceDrawer.js'
 
 /**
  * 书城 = 分类浏览（两级，只此一层深度：分类只住左栏，没有独立的分类墙落地页）。
@@ -160,26 +161,7 @@ export function CityView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): Re
             </>
           )}
         </section>
-        {picked === null ? null : (
-          <>
-            <div className="novel-city-scrim" onClick={() => setPicked(null)} />
-            <aside className="novel-city-drawer" role="dialog" aria-label={`选源：${picked.name}`}>
-              <div className="novel-city-drawer-head">
-                <strong className="novel-city-drawer-title">{picked.name}</strong>
-                <button className="novel-btn sm" onClick={() => setPicked(null)}>关闭</button>
-              </div>
-              {/* 书单留在原位（抽屉是覆盖层，不卸载、不动滚动位置）；这里是唯一点名源的地方 */}
-              <div className="novel-city-srclist">
-                {picked.origins.map((o) => (
-                  <div key={o.sourceId} className="novel-city-srcrow">
-                    <span className="novel-city-srcrow-who">{o.sourceName}</span>
-                    {o.lastChapter === undefined ? null : <span className="novel-city-srcrow-last">最新：{o.lastChapter}</span>}
-                  </div>
-                ))}
-              </div>
-            </aside>
-          </>
-        )}
+        {picked === null ? null : <CitySourceDrawer book={picked} onClose={() => setPicked(null)} />}
       </div>
     </div>
   )

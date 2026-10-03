@@ -1055,7 +1055,9 @@ img.novel-city-cover { display: block; object-fit: cover; background: var(--nove
 /* 尾行 = 轮次的被动读数（服务端自跑分批，没有可点的东西）。渲染与否由**有没有轮次**判，
    不是由这行文字空不空判——「还没有一轮」与「一轮里源数是 0」在这里都不产出读数文案 */
 .novel-city-foot { flex: none; border-top: 1px solid var(--novel-border-faint); padding-top: var(--novel-sp-3); font-size: var(--novel-fs-xs); color: var(--novel-text-3); }
-/* 选源抽屉（T4 的内容面接在这一层上）：覆盖右区、书单留在原位；遮罩与本体同住浮层单表 */
+/* 选源抽屉：覆盖右区、书单留在原位（它是覆盖层——不卸载书单、不动它的滚动位置）；遮罩与本体
+   同住浮层单表。**不复用 .novel-drawer**：那一族锚的是阅读区 0 宽 sticky 槽（见上文），几何与
+   这里「贴右缘通高的覆盖面板」是两件事，硬套会把两处一起改坏。 */
 .novel-city-scrim { position: absolute; inset: 0; z-index: var(--novel-z-panel); background: var(--novel-mask); }
 .novel-city-drawer {
   position: absolute; top: 0; right: 0; bottom: 0; z-index: var(--novel-z-panel);
@@ -1065,6 +1067,13 @@ img.novel-city-cover { display: block; object-fit: cover; background: var(--nove
 }
 .novel-city-drawer-head { flex: none; display: flex; align-items: center; gap: var(--novel-sp-3); }
 .novel-city-drawer-title { flex: 1 1 auto; min-width: 0; font-size: var(--novel-fs-lg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.novel-city-bookhead { flex: none; display: flex; flex-direction: column; gap: var(--novel-sp-2); }
+.novel-city-bookhead-meta { font-size: var(--novel-fs-sm); color: var(--novel-text-2); }
+.novel-city-tags { display: flex; flex-wrap: wrap; gap: var(--novel-sp-2); }
+.novel-city-tag {
+  font-size: var(--novel-fs-xs); color: var(--novel-text-3); padding: 1px var(--novel-sp-3);
+  border: 1px solid var(--novel-border-faint); border-radius: 999px;
+}
 .novel-city-srclist { display: flex; flex-direction: column; gap: var(--novel-sp-3); }
 .novel-city-srcrow {
   display: flex; align-items: center; gap: var(--novel-sp-3); padding: var(--novel-sp-4);
@@ -1072,6 +1081,7 @@ img.novel-city-cover { display: block; object-fit: cover; background: var(--nove
 }
 .novel-city-srcrow-who { flex: 1 1 auto; min-width: 0; font-size: var(--novel-fs-base); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .novel-city-srcrow-last { flex: none; font-size: var(--novel-fs-xs); color: var(--novel-text-3); }
+.novel-city-srcrow-go { flex: none; }
 /* 窄面板退档（<900px）：左栏折成顶部一条 chip 行（横滚），书单回 2 列。chip 形态与界面稿的
    分类 tab 一致：词表在窄屏是「一条横带」而不是「一列可点行」。 */
 @media (max-width: 899px) {

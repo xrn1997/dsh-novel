@@ -1,13 +1,20 @@
 // @vitest-environment jsdom
+import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { CityView } from '../../src/client/views/CityView.js'
-import { cityStore } from '../../src/client/store.js'
+import { cityStore, routeStore, useStore } from '../../src/client/store.js'
+
+/** 当前路由渲成一段可断言文本（走公开 API，不引入 testid 这套仓里没有的约定） */
+function RouteProbe(): ReactNode {
+  const { route } = useStore(routeStore)
+  return <span>{route.name === 'reader' ? `reader|${route.sourceId}|${route.bookKey}` : route.name}</span>
+}
 
 /**
  * 书城分类页的接线钉子：进入即加载词表首项、记住上次、空词表不提交、失败条如实点名、
- * 换类、左栏本地筛选、点卡开选源抽屉，以及两条「分不清就会说谎」的判据——被停止的轮次、
- * 「还没有一轮」与「零源的一轮」。
+ * 换类、左栏本地筛选、点卡开选源抽屉（源名只在这里出现、可读入口跳阅读器、无地址不给钮），
+ * 以及两条「分不清就会说谎」的判据——被停止的轮次、「还没有一轮」与「零源的一轮」。
  *
  * 假依赖只喂三条口：词表 / 轮次快照（同一函数按 URL 分流）/ 提交一轮。SSE 缺省推一帧**当前
  * 快照**（与生产同路：首帧就是 baseline）——提交落地后那一帧空态在一个微任务内被填回，用例
@@ -31,9 +38,10 @@ const submitted: string[] = []
 /** 服务端此刻持有的一轮（用例可换；SSE 推的就是它；`null` = 服务端说没有这一轮） */
 let current: unknown = snap
 
-/** 一个用例的提交记录与轮次快照不串到下一个用例（两者都是模块级） */
+/** 一个用例的提交记录与轮次快照不串到下一个用例（两者都是模块级）；路由同为全局单点，
+ *  读本那一条会把它推进 reader，留着就成下一条用例的暗状态 */
 beforeEach(() => { submitted.length = 0; current = snap })
-afterEach(() => { cleanup(); cityStore.set({ kind: null }) })
+afterEach(() => { cleanup(); cityStore.set({ kind: null }); routeStore.set({ route: { name: 'shelf' } }) })
 
 const deps = {
   apiGet: async (path: string) => (path.includes('kinds') ? kinds : { job: current }),
@@ -157,5 +165,44 @@ describe('CityView', () => {
     await new Promise((r) => setTimeout(r, 20))
     expect(screen.queryByText('上一轮的书')).toBeNull()
     expect(screen.getByText('正在启动分类抓取…')).toBeTruthy()
+  })
+
+  it('点卡开抽屉：列各源可读入口，且只有这里点名源；Esc 关闭', async () => {
+    render(<CityView deps={deps} />)
+    await waitFor(() => { expect(screen.getByText('剑起长安')).toBeTruthy() })
+    fireEvent.click(screen.getByRole('button', { name: /剑起长安/ }))
+    const drawer = await screen.findByRole('dialog')
+    expect(drawer.getAttribute('aria-modal')).toBe('true')
+    expect(drawer.textContent).toContain('笔趣阁')          // 到了「看到书」的阶段才点名
+    expect(drawer.textContent).toContain('第 412 章')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => { expect(screen.queryByRole('dialog')).toBeNull() })
+  })
+
+  it('「读这本」跳到阅读器路由（bookKey 用该源的书地址）', async () => {
+    render(<><CityView deps={deps} /><RouteProbe /></>)
+    await waitFor(() => { expect(screen.getByText('剑起长安')).toBeTruthy() })
+    fireEvent.click(screen.getByRole('button', { name: /剑起长安/ }))
+    fireEvent.click(await screen.findByRole('button', { name: '读这本' }))
+    await waitFor(() => { expect(screen.getByText('reader|s1|https://a/1')).toBeTruthy() })
+  })
+
+  it('没有可读地址的源照样列出来，但不给一个点了没反应的钮', async () => {
+    current = {
+      ...snap,
+      books: [{
+        name: '剑起长安', author: '青衫客', kind: '玄幻', sourceCount: 2,
+        origins: [
+          { sourceId: 's1', sourceName: '笔趣阁', bookUrl: 'https://a/1' },
+          { sourceId: 's3', sourceName: '无址阁', bookUrl: null },
+        ],
+      }],
+    }
+    render(<CityView deps={deps} />)
+    await waitFor(() => { expect(screen.getByRole('button', { name: /剑起长安/ })).toBeTruthy() })
+    fireEvent.click(screen.getByRole('button', { name: /剑起长安/ }))
+    const drawer = await screen.findByRole('dialog')
+    expect(drawer.textContent).toContain('无址阁')                        // 行还在：它是「这个源收录了它」的交代
+    expect(screen.getAllByRole('button', { name: '读这本' })).toHaveLength(1)
   })
 })
