@@ -1,16 +1,24 @@
 import { describe, expect, it } from 'vitest'
-import { ExploreJobs } from '../../src/services/explore-job.js'
+import { ExploreJobs, MAX_EXPLORE_PAGES } from '../../src/services/explore-job.js'
 import type { JobHost } from '../../src/services/import-job.js'
-import type { SearchGroup } from '../../src/shared/wire.js'
+import type { SearchGroup, SearchHit } from '../../src/shared/wire.js'
 
 /** 分类轮次持有者：读面是**全量快照**而非游标增量——归并会修订已发出的条目
  *  （第二个源带回同一本书要给那条加 origin、`sourceCount` 跟着变），
  *  append-only 的 `added/next` 装不下这种修订。与 `search-job` 的差别仅此一处。 */
 
+const hit = (title: string, author: string | null, url: string | null): SearchHit => ({
+  title, author, url, coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null,
+})
+
 const g = (sourceId: string, title: string, author: string | null): SearchGroup => ({
   sourceId, sourceName: sourceId, status: 'verified',
-  hits: [{ title, author, url: `https://${sourceId}/${title}`, coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null }],
+  hits: [hit(title, author, `https://${sourceId}/${title}`)],
 })
+
+/** 组形状的入口（无地址的命中要自己凑：去重退路键那一侧得能被钉住） */
+const group = (sourceId: string, hits: SearchHit[]): SearchGroup =>
+  ({ sourceId, sourceName: sourceId, status: 'verified', hits })
 
 /** 记 specs 与 done 结算的假宿主（与 search-job 测试同形，各自内联：测试桩不是生产逻辑） */
 function fakeHost(): { host: JobHost; kinds: string[]; labels: string[]; settled: string[] } {
@@ -164,3 +172,79 @@ describe('ExploreJobs.subscribe', () => {
     expect(seen).toHaveLength(3)
   })
 })
+
+/** 同轮续页：续页**不是**新一轮——浏览器半靠「同一轮 id + 整帧替换」这个读模型过日子，
+ *  换 id 等于把它的列表清空重来。累积因此必须住在服务端：跨页去重与「零新增即到底」都要跨页记忆，
+ *  而客户端刻意什么都不握。 */
+describe('ExploreJobs 同轮续页', () => {
+  it('advance：同一轮 id，第 2 页的新条目并进同一源的那一组、page 变 2', async () => {
+    const jobs = new ExploreJobs()
+    const first = jobs.start('玄幻', 2, async (emit) => {
+      emit(g('A', '剑起长安', '青衫客'))
+      emit(g('B', '都市之王', '甲'))
+    })
+    await tick()
+    expect(jobs.snapshot()).toMatchObject({ id: first.jobId, page: 1, phase: 'done', hasMore: true })
+
+    // 第 2 页只有 A 发了组（B 被 skip / 还在途——**没发组的源不许被补一个空组**）
+    const again = jobs.advance('玄幻', async (emit) => { emit(g('A', '新书一', '乙')) })
+    expect(again.jobId).toBe(first.jobId)          // 同一轮：不换 id
+    await tick()
+
+    const s = jobs.snapshot()
+    expect(s).toMatchObject({ id: first.jobId, page: 2, phase: 'done', done: 2, hasMore: true })
+    // 并进同一组：A 的新书紧挨着 A 第 1 页那条（组内顺序），且只有两个组（done 没涨）
+    expect(s?.books.map((b) => b.name)).toEqual(['剑起长安', '新书一', '都市之王'])
+    expect(s?.books.find((b) => b.name === '新书一')?.origins.map((o) => o.sourceId)).toEqual(['A'])
+    // B 这一页没发组 ⇒ 它的累积（lastNew）一个字都没被碰：按 targets 推着合并会把它清零成「到底」
+    expect(jobs.exhaustedSourceIds()).toEqual([])
+  })
+
+  it('某源第 2 页零新增即到底；全部源到底后 hasMore 变 false', async () => {
+    const jobs = new ExploreJobs()
+    jobs.start('玄幻', 2, async (emit) => {
+      emit(g('A', '一', '甲'))
+      emit(group('B', [hit('二', '乙', null)]))     // 无地址的命中：去重退路键是「书名 + NUL + 作者」
+    })
+    await tick()
+    expect(jobs.snapshot()?.hasMore).toBe(true)
+
+    jobs.advance('玄幻', async (emit) => {
+      emit(g('A', '三', '丙'))
+      emit(group('B', [hit('二', '乙', null)]))     // 与第 1 页同一条 ⇒ 零新增
+    })
+    await tick()
+    const mid = jobs.snapshot()
+    expect(mid).toMatchObject({ page: 2, hasMore: true })       // A 还在出新的 ⇒ 还能再点
+    expect(jobs.exhaustedSourceIds()).toEqual(['B'])
+    expect(mid?.books.filter((b) => b.origins.some((o) => o.sourceId === 'A'))).toHaveLength(2)
+
+    jobs.advance('玄幻', async (emit) => { emit(g('A', '三', '丙')) })   // A 也零新增
+    await tick()
+    expect(jobs.exhaustedSourceIds().sort()).toEqual(['A', 'B'])
+    expect(jobs.snapshot()?.hasMore).toBe(false)   // 全部到底：按钮该收掉，别再拿「还有更多」骗人
+  })
+
+  it('页数触到上限 → hasMore 为 false（兜底：翻页不是无底洞）', async () => {
+    expect(MAX_EXPLORE_PAGES).toBe(10)             // 上限值本身是契约（改它要连这条一起改）
+    const jobs = new ExploreJobs()
+    jobs.start('玄幻', 1, async (emit) => { emit(g('A', '第1页', '甲')) })
+    await tick()
+    for (let p = 2; p <= MAX_EXPLORE_PAGES; p++) {
+      jobs.advance('玄幻', async (emit) => { emit(g('A', `第${p}页`, '甲')) })
+      await tick()
+    }
+    // 每一页都真有新书（没有一个源到底）——唯独页码到了上限
+    expect(jobs.exhaustedSourceIds()).toEqual([])
+    expect(jobs.snapshot()).toMatchObject({ page: MAX_EXPLORE_PAGES, hasMore: false })
+  })
+
+  it('没有可续的轮次 / 在途那批还没收手 / 分类不符：如实抛错，不做无效起跑', async () => {
+    const jobs = new ExploreJobs()
+    expect(() => jobs.advance('玄幻', async () => null)).toThrow('没有可续页的分类轮次')
+    jobs.start('玄幻', 1, () => new Promise<void>(() => {}))          // 只能被取消收手：一直 running
+    expect(() => jobs.advance('玄幻', async () => null)).toThrow('还在抓')
+    expect(() => jobs.advance('都市', async () => null)).toThrow('分类不符')
+  })
+})
+

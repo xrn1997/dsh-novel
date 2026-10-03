@@ -182,7 +182,9 @@ export interface ExploreFailure {
 /** 分类轮次的读面快照。
  *  **全量而非游标增量**：归并会修订已经发出去的条目（第二个源带回同一本书要给已发的那条加 origin、
  *  `sourceCount` 从 1 变 2），与 append-only 的 `added/next` 模型不相容。列表规模小（每源首页
- *  10~20 条 × N 源），整帧替换比新增一套 `updated` 语义划算，也让归并保持成一个纯函数。 */
+ *  10~20 条 × N 源），整帧替换比新增一套 `updated` 语义划算，也让归并保持成一个纯函数。
+ *  `page` / `hasMore` 是「续页」的两侧：**同一轮内换页**（轮次 id 不变），所以客户端那套
+ *  「零累积、整帧替换」的读模型照旧成立。 */
 export interface ExploreSnapshot {
   id: string
   kind: string
@@ -191,6 +193,13 @@ export interface ExploreSnapshot {
   cancelled: boolean
   total: number
   done: number
+  /** 已加载到第几页（第 1 页由提交带来，续页每点一次 +1） */
+  page: number
+  /** 还能不能再点一次「加载更多」：还有源没到底 ∧ 未触页数上限。
+   *  **它不是 `phase` 的另一半**：一轮里每一批跑完就是 `done`（没有在途工作），而 `hasMore`
+   *  只说「服务端还愿意再去要一页」——「跑完了」与「还能再点」是两件事，用 `phase` 推其中任何
+   *  一件都会把另一件丢掉（客户端据此显隐按钮，服务端据此在没得发时回 409）。 */
+  hasMore: boolean
   books: ExploreBook[]
   failures: ExploreFailure[]
   startedAt: number
@@ -435,6 +444,9 @@ export const SEG = {
   explore: 'explore',
   kinds: 'kinds',
   list: 'list',
+  /** 续页端（`explore/list/more`）：`explore/list` 已经是「提交新一轮」的写口，
+   *  续页要有自己的一段才不与它同形、同形即歧义 */
+  more: 'more',
   book: 'book',
   toc: 'toc',
   chapter: 'chapter',
@@ -454,7 +466,7 @@ export const SEG = {
 export interface Route { path: string; segs: string[] }
 export function route(...segs: string[]): Route { return { path: segs.join('/'), segs } }
 
-/** 静态路由表（无参数的部分，共 29 条；另有 5 条参数路由见 paramRoutes）——
+/** 静态路由表（无参数的部分，共 30 条；另有 5 条参数路由见 paramRoutes）——
  *  路由总数由 tests/shared/wire-builders.test.ts 钉死（此前的「17 条路由」注释既烂又无测试）。 */
 export const ROUTES = {
   health: route(),
@@ -479,6 +491,9 @@ export const ROUTES = {
   exploreKinds: route(SEG.explore, SEG.kinds),
   /** 提交一轮分类抓取 */
   exploreList: route(SEG.explore, SEG.list),
+  /** 续页：把**当前这一轮**再往前抓一页（同一轮 id，客户端整帧替换的读模型不因此换脸）；
+   *  没有源还能再要一页时回 409——「加载更多」钮据此收掉，而不是假装又开了一轮 */
+  exploreListMore: route(SEG.explore, SEG.list, SEG.more),
   /** 分类轮次的全量快照（无游标——快照形状见 ExploreSnapshot 的注释） */
   exploreListStatus: route(SEG.explore, SEG.list, SEG.jobStatus),
   /** 分类轮次的状态信号流（SSE，每帧一份全量快照） */

@@ -535,9 +535,9 @@ export class ReadingService {
     return { kinds: kindsOf(this.registry.list()) }
   }
 
-  /** 提交一轮分类浏览。参与源 = 声明了这一类的源（**精确同名**，与词表同一条匹配规则）；逐源
-   *  只取第 1 页。命中进程内快照的源直接出结果（零请求），未命中的才真抓——重复进同一个分类
-   *  不打站点是那份快照存在的全部理由。 */
+  /** 提交一轮分类浏览。参与源 = 声明了这一类的源（**精确同名**，与词表同一条匹配规则）；每源自
+   *  第 1 页起取。命中进程内快照的源直接出结果（零请求），未命中的才真抓——重复进同一个分类
+   *  不打站点是那份快照存在的全部理由。往后还要几页由 `loadMoreExploreJob` 按用户意愿要。 */
   startExploreJob(kind: string): { jobId: string } {
     const targets = sourcesOfKind(this.registry.list(), kind)
     return this.exploreJobs.start(kind, targets.length, (emit, shouldStop) =>
@@ -549,6 +549,27 @@ export class ReadingService {
         // 发现规则键却不动，陈旧书目会一直撑到 TTL 结束。两份指纹同一个主人、各按自己的消费路径
         // 收字段，这里取发现面那一份。先在此算好：编排层（`runExploreKind`）只收 `epochOf`，不认识规则。
         epochOf: (s) => exploreEpoch(s.rules, s.baseUrl),
+      }, emit, shouldStop))
+  }
+
+  /** 续第 page+1 页（**同一轮**，不换 id）：只打在还没到底的源上。
+   *  一条也没得发（全部到底 / 触上限 / 压根没有轮次）时如实返回 null，不做无效请求——
+   *  路由据此回 409，客户端据此把「加载更多」收掉，而不是假装又加载了一轮。
+   *
+   *  `skip` 与目标清单是**同一份判据的两侧**（都由 `ExploreJobs` 按「本页零新增」给出）：
+   *  这里滤掉它们，`runExploreKind` 进去再跳一次——两层同源，故不会出现「滤掉的和跳过的不一致」
+   *  那种一边说不打、另一边照打的读数。 */
+  loadMoreExploreJob(): { jobId: string } | null {
+    const snap = this.exploreJobs.snapshot()
+    if (snap === null || !snap.hasMore) return null
+    const skip = new Set(this.exploreJobs.exhaustedSourceIds())
+    const targets = sourcesOfKind(this.registry.list(), snap.kind).filter((t) => !skip.has(t.source.id))
+    if (targets.length === 0) return null
+    return this.exploreJobs.advance(snap.kind, (emit, shouldStop) =>
+      runExploreKind(targets, this.fetcher, {
+        parallel: this.cfg.searchParallel, timeoutMs: this.searchTimeoutMs, jsTimeoutMs: this.jsTimeoutMs,
+        cache: this.exploreCache, epochOf: (s) => exploreEpoch(s.rules, s.baseUrl), page: snap.page + 1,
+        skip,
       }, emit, shouldStop))
   }
 

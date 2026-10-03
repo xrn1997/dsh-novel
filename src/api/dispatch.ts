@@ -243,6 +243,15 @@ async function route(
     writeOk(res, service.startExploreJob(kind))
     return
   }
+  if (a === SEG.explore && b === SEG.list && c === SEG.more) {
+    // 续页：同一轮再要一页。门面说「没得发」就是**没有更多**——回 409 而不是静默成功，
+    // 客户端据此把按钮收掉；假装又加载了一轮是拿假事实喂 UI。
+    guard(method, 'POST', ROUTES.exploreListMore.path)
+    const r = service.loadMoreExploreJob()
+    if (r === null) throw new ApiError('没有更多了', 409, 'Conflict')
+    writeOk(res, r)
+    return
+  }
   if (a === SEG.explore && b === SEG.list && c === SEG.jobStatus) {
     // 全量快照（归并会修订已发条目，装不进游标增量模型——见 ExploreSnapshot）
     guard(method, 'GET', ROUTES.exploreListStatus.path)

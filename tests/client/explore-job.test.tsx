@@ -9,7 +9,7 @@ afterEach(cleanup)
 
 const snap = (over: Partial<ExploreSnapshot> = {}): ExploreSnapshot => ({
   id: 'j1', kind: '玄幻', phase: 'running', cancelled: false,
-  total: 2, done: 1, books: [], failures: [], startedAt: 1, ...over,
+  total: 2, done: 1, page: 1, hasMore: false, books: [], failures: [], startedAt: 1, ...over,
 })
 
 /** 探针：把钩子的返回值暴露给断言（钩子只能活在组件里） */

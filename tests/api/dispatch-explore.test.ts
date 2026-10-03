@@ -29,6 +29,15 @@ beforeAll(async () => {
 afterAll(async () => { await svc.flush(); await close() })
 
 describe('书城发现面', () => {
+  /** **不提交任何轮次**（只问「还有没有更多」）：为下面的入场态用例保住「还没有任何一轮」这个前提 */
+  it('POST explore/list/more 没有可续的轮次 → 409（如实说没有更多，不假装又开了一轮）', async () => {
+    const r = await fetch(`${base}/novel-api/${ROUTES.exploreListMore.path}`, { method: 'POST' })
+    expect(r.status).toBe(409)
+    const body = await r.json() as any
+    expect(body.ok).toBe(false)
+    expect(body.error.code).toBe('Conflict')
+  })
+
   /** 排在提交类用例之前：入场态（从未提交过 → 首帧是空档、流继续等）只在「还没有任何一轮」时成立，
    *  而 svc 在本块内共用、终态快照还会保留一段。 */
   it('SSE 流：未提交时首帧是空档且流继续等，提交后终帧给出整轮并关流', async () => {
@@ -92,7 +101,43 @@ describe('书城发现面', () => {
     expect(job.phase).toBe('done')
     expect(job.books.map((b: any) => b.name)).toEqual(['剑起长安'])
   })
+
+  it('POST explore/list/more：同一轮续第 2 页（jobId 不变）；源到底后再点 → 409', async () => {
+    const r = await fetch(`${base}/novel-api/${ROUTES.exploreList.path}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: '玄幻' }),
+    })
+    const { value } = await r.json() as any
+    const first = await settle()
+    expect(first.id).toBe(value.jobId)
+    expect(first.page).toBe(1)
+    expect(first.hasMore).toBe(true)                                  // 第 1 页带回新书：按钮该在
+
+    const more = await fetch(`${base}/novel-api/${ROUTES.exploreListMore.path}`, { method: 'POST' })
+    expect(more.status).toBe(200)
+    expect((await more.json() as any).value.jobId).toBe(value.jobId)  // **同一轮**：不换 id（客户端整帧替换照旧）
+
+    const second = await settle()
+    expect(second.page).toBe(2)
+    expect(second.hasMore).toBe(false)                                // 这一页回来的还是那本书 → 零新增 ⇒ 到底
+    expect(second.books.map((b: any) => b.name)).toEqual(['剑起长安'])  // 去重：同一批书没被重复摊出
+
+    const again = await fetch(`${base}/novel-api/${ROUTES.exploreListMore.path}`, { method: 'POST' })
+    expect(again.status).toBe(409)
+    expect((await again.json() as any).error.code).toBe('Conflict')
+  })
 })
+
+/** 轮询到**当前**这轮收手（`running` 之外即终态）：续页会把同一轮重新点亮，故不带 id 断言，
+ *  只等「不再是 running」——与 `tests/services/reading-explore.test.ts` 的 settle 同口径。 */
+async function settle(): Promise<any> {
+  for (let i = 0; i < 200; i++) {
+    const s = await fetch(`${base}/novel-api/${ROUTES.exploreListStatus.path}`)
+    const job = (await s.json() as any).value.job
+    if (job !== null && job !== undefined && job.phase !== 'running') return job
+    await new Promise((r) => setTimeout(r, 5))
+  }
+  throw new Error('分类轮次未在限时内收尾')
+}
 
 /** 逐帧读 SSE（`\n\n` 分隔）：`next()` 在服务端关流后给 null——「读到读完」本身就是「服务端已关流」的读数。
  *  `tests/api/dispatch-reading.test.ts` 那份是一次读到底；这里要分开看入场态，故按帧给。 */

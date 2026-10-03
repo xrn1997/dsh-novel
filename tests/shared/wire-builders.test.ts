@@ -20,14 +20,15 @@ describe('LOCAL_SOURCE_ID（跨半契约常量的唯一主人）', () => {
 })
 
 describe('路由表计数钉死（「17 条路由」注释曾腐烂且无测试）', () => {
-  it('静态路由 29 条、参数路由 5 条', () => {
-    expect(Object.keys(ROUTES)).toHaveLength(29)
+  it('静态路由 30 条、参数路由 5 条', () => {
+    expect(Object.keys(ROUTES)).toHaveLength(30)
     expect(Object.keys(paramRoutes)).toHaveLength(5)
   })
 
   it('explore 路由的 path 与 segs', () => {
     expect(ROUTES.exploreKinds).toEqual({ path: 'explore/kinds', segs: ['explore', 'kinds'] })
     expect(ROUTES.exploreList).toEqual({ path: 'explore/list', segs: ['explore', 'list'] })
+    expect(ROUTES.exploreListMore).toEqual({ path: 'explore/list/more', segs: ['explore', 'list', 'more'] })
     expect(ROUTES.exploreListStatus).toEqual({ path: 'explore/list/job-status', segs: ['explore', 'list', 'job-status'] })
     expect(ROUTES.exploreListStream).toEqual({ path: 'explore/list/job-stream', segs: ['explore', 'list', 'job-stream'] })
   })
