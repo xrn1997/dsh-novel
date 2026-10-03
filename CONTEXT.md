@@ -44,8 +44,8 @@ _唯一实现_: `services/search-face.ts`；「谁参与」的判据同住 `serv
 _Avoid_: 搜索服务
 
 **发现面（explore face / 书城）**:
-「书源声明的分类入口 + 一个分类名」到「该分类在这个源上的书目」的完整请求语义与其整轮编排；用户可见的名字是面板里的「书城」tab。参与集判据：**启用 ∧ 文本源 ∧ 声明了分类入口**。
-_唯一实现_: 单源一次抓取 `services/explore-face.ts` 的 `fetchKindPage`；整轮编排 `services/explore.ts` 的 `runExploreKind`；「谁进城」的谓词 `services/participation.ts` 的 `exploreParticipates`
+「书源声明的分类入口 + 一个分类名 + 第几页」到「该分类在这个源上、这一页的书目」的完整请求语义与其整轮编排；用户可见的名字是面板里的「书城」tab。参与集判据：**启用 ∧ 文本源 ∧ 声明了分类入口**。
+_唯一实现_: 单源一次抓取 `services/explore-face.ts` 的 `fetchKindPage`（第几页由调用方给：翻页是用户点出来的、不是默认行为，首页那一段的页码裁剪仍归 `request.buildSearchRequest`）；整轮编排 `services/explore.ts` 的 `runExploreKind`（页码只透传，已到底的源由 `skip` 静默跳过、一个包都不发）；「谁进城」的谓词 `services/participation.ts` 的 `exploreParticipates`
 _Avoid_: 书城列表页、分类搜索（发现面是另一条链路，不是聚合搜索的第二次调用）
 
 **请求组装（request assembly）**:
@@ -171,9 +171,9 @@ _唯一实现_: `services/import-job.ts` / `services/probe.ts` / `services/searc
 _Avoid_: 队列（是单槽不是队列）、前端任务（在途循环不在浏览器半）
 
 **分类轮次（explore round）**:
-一轮分类浏览的持有物：逐源结果由 Node 半收着，读面给**全量快照**（归并会修订已发条目，游标增量装不下）；一次只留最近一轮，过了保留期读作「无任务」。
-_唯一实现_: `services/explore-job.ts` 的 `ExploreJobs`；跨半形状 `shared/wire.ts` 的 `ExploreSnapshot`
-_Avoid_: 分类任务队列（是单轮槽不是队列）
+一轮分类浏览的持有物：逐源结果由 Node 半收着、**按源跨页累积**（同一个源各页并进它那一组，本页零新增即这个源到底），读面给**全量快照**（归并会修订已发条目，游标增量装不下）；一次只留最近一轮，过了保留期读作「无任务」。**续页是这一轮里的事**：`advance` 同轮同 id 往前推一页（浏览器半「零累积、整帧替换」的读模型因此一行都不用改），快照上的 `page` / `hasMore` 是**动作契约**——`hasMore` 只说「此刻能不能点」，不是「还有没有书」。
+_唯一实现_: `services/explore-job.ts` 的 `ExploreJobs`（续页 `advance`、到底判据 `exhaustedSourceIds`）；门面入口 `services/reading.ts` 的 `loadMoreExploreJob`（滤掉已到底的源，一条也没得发就返回 null）；跨半形状 `shared/wire.ts` 的 `ExploreSnapshot`
+_Avoid_: 分类任务队列（是单轮槽不是队列）、新一轮（续页不换 id、不换身份，只有提交才换轮）
 
 **阅读会话（reader session）**:
 「目录 → 存档恢复 → 逐章懒加载 → 预取 → 进度落盘」的时序持有者；DOM 测量经 `ReaderPort` 注入，视图只渲染与接线。同一时刻只允许一章在途（`inflight`），滚动风暴与目录直达只记意图（`pendingJump`），刚失败过的同一章不自动重试。

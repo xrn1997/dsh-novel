@@ -57,9 +57,10 @@ export function mergeBooks(groups: SearchGroup[]): ExploreBook[] {
         byKey.set(key, b)
         out.push(b)
       } else if (!found.origins.some((o) => o.sourceId === origin.sourceId)) {
-        // 角标写的是「N 个源收录」：同一个源在同一页把同一本列两回（目录页与「最新章节」
-        // 栏重复很常见）不构成第二个源，记进去是让角标说谎、让共识排序的依据跟着虚高。
-        // 该源只留这一页给的第一条入口（bookUrl / lastChapter 就是它给的入口）。
+        // 角标写的是「N 个源收录」：同一个源把同一本列两回（同一页的目录栏与「最新章节」栏重复、
+        // 或续页把上一页已经给过的书又带回来，都很常见）不构成第二个源，记进去是让角标说谎、
+        // 让共识排序的依据跟着虚高。该源只留**首次**给的那条入口（bookUrl / lastChapter 就是
+        // 它给的入口）——续页那一组是并进同一源同一组的，故「首次」就是页码最小的那一页给的那条。
         found.origins.push(origin)
         found.sourceCount = found.origins.length
       }
