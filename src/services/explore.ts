@@ -79,6 +79,10 @@ export function sourcesOfKind(
  *  只写成功结果：把失败也缓存住等于把一次偶发故障钉死到 TTL 结束。代际值由**调用方**算好
  *  （`cfg.epochOf`）——`rulesEpoch` 的消费者是服务层，编排层不认识它，也就不必跟着规则面演化。
  *
+ *  `cfg.page` 与 `cfg.skip` 是「继续加载」的两侧：翻到第几页由调用方决定（本层只透传，翻页永远是
+ *  用户点出来的，不是这里的默认行为）；而**已到底的源由调用方点名后一个包都不发、也不出组**——
+ *  它们若照旧发一次，回来的会是与上一页等价的同一批书，续页面就会把那批书再摊一遍。
+ *
  *  两种失败分列：规则缺失与抓取失败都是 `fetchKindPage` 的**结果**（该源这一类的 error 组，
  *  整轮不因此失败）；而它上抛的传输/求值异常由这里 catch 并交给 `searchErrorCodeOf` 归类
  *  ——错误码投影的单一主人是搜索面，本模块不另写一份映射。
@@ -91,6 +95,10 @@ export async function runExploreKind(
   targets: ExploreTarget[], fetcher: Fetcher,
   cfg: {
     parallel: number; timeoutMs: number; jsTimeoutMs?: number
+    /** 这一轮要的是第几页（缺省 1） */
+    page?: number
+    /** 已经到底的源 id：不发请求、不出组（静默跳过——没有新事实可交出去） */
+    skip?: ReadonlySet<string>
     /** 逐源缓存；缺省即不缓存（单测直调与无缓存组合走这条） */
     cache?: KindCache
     /** 该源的规则代际（调用方算好——`rulesEpoch` 的消费者在服务层，编排层不认识它） */
@@ -105,14 +113,15 @@ export async function runExploreKind(
     const batch = targets.slice(i, i + cfg.parallel)
     await Promise.all(batch.map(async ({ source, kindUrl }) => {
       if (shouldStop()) return
+      if (cfg.skip?.has(source.id) === true) return
       const base = { sourceId: source.id, sourceName: source.name, status: source.status, statusDetail: source.statusDetail, hits: [] as SearchHit[] }
-      const cacheKey = { sourceId: source.id, kind: kindUrl, epoch: cfg.epochOf?.(source) ?? 0 }
+      const cacheKey = { sourceId: source.id, kind: kindUrl, epoch: cfg.epochOf?.(source) ?? 0, page: cfg.page ?? 1 }
       const cached = cfg.cache?.get(cacheKey, now())
       if (cached !== undefined && cached !== null) { emit(cached); return }   // 命中即零请求
       try {
-        const page = await fetchKindPage(source, kindUrl, fetcher, cfg.timeoutMs, cfg.jsTimeoutMs)
-        const group = page.ok ? { ...base, hits: page.hits } : { ...base, error: { code: page.code, message: page.message } }
-        if (page.ok) cfg.cache?.put(cacheKey, group, now())                    // 只有成功才写缓存：把失败也缓存住等于把偶发故障钉死
+        const fetched = await fetchKindPage(source, kindUrl, fetcher, cfg.timeoutMs, cfg.jsTimeoutMs, cfg.page ?? 1)
+        const group = fetched.ok ? { ...base, hits: fetched.hits } : { ...base, error: { code: fetched.code, message: fetched.message } }
+        if (fetched.ok) cfg.cache?.put(cacheKey, group, now())                 // 只有成功才写缓存：把失败也缓存住等于把偶发故障钉死
         emit(group)
       } catch (e) {
         emit({ ...base, error: { code: searchErrorCodeOf(e), message: e instanceof Error ? e.message : String(e) } })

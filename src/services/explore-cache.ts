@@ -12,6 +12,9 @@ export interface KindCacheKey {
    *  收 `string | number` 是因为本仓的代际生产者 `rulesEpoch` 产出摘要串、而键这一侧无权替它发明
    *  一次摘要→数字的转换（转换会掩盖代际的来源，也让「换规则即失效」取决于转换是否无损）。 */
   epoch: string | number
+  /** 第几页。**第 2 页与第 1 页是两份不同的快照**：站点上的页码就是不同的那份书单，共用一个槽位会让
+   *  「继续加载」端出首页那一组，用户看到的是同一批书被当成新的一页。 */
+  page: number
 }
 
 /** 逐源分类结果的内存快照。**只活在进程内**：落盘要连带代际、清理与删源连带，成本远大于收益。
@@ -22,7 +25,7 @@ export class KindCache {
   /** 代际值的两种拼法（`7` 与 `'7'`）必须落在不同槽位：键里带上它的类型，否则一个数字代际的
    *  调用方与一个摘要串代际的调用方会静默共用槽位——而它们对「规则变了吗」的答案是两回事。 */
   private static keyOf(k: KindCacheKey): string {
-    return `${k.sourceId}\u0000${k.kind}\u0000${typeof k.epoch}\u0000${k.epoch}`
+    return `${k.sourceId}\u0000${k.kind}\u0000${typeof k.epoch}\u0000${k.epoch}\u0000${k.page}`
   }
 
   get(k: KindCacheKey, now: number): SearchGroup | null {

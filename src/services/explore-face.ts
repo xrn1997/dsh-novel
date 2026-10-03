@@ -48,13 +48,14 @@ function rulesFor(source: NovelSource): ExploreRules {
 }
 
 /** 发一次分类页请求并取回条目。
- *  **只取第 1 页**：跨源翻页的代价是「分类数 × 页数」的请求爆炸，书城先把首页摊开就够——
- *  「还要更多」由用户点进具体书目去解决，不在这一轮里替所有人翻页。
+ *  **第几页由调用方给**（缺省第 1 页）：一轮里抓哪些页、抓几页是编排方的事——书城先摊开首页，
+ *  再翻才是用户点出来的（跨源翻页的代价是「分类数 × 页数」的请求数，所以「翻」不能是默认行为）。
  *  条目提取逐字段照 `ReadingService.searchOne` 的两档口径：书名非空才算书目，作者/书地址是裸奔项
  *  （缺即丢该条目），封面/简介/最新章节/分类/字数坏规则只丢该字段——两档的分野及其理由单点在
  *  `bridge.metaFieldOf`，此处不另立第三档。 */
 export async function fetchKindPage(
   source: NovelSource, kindUrl: string, fetcher: Fetcher, timeoutMs?: number, jsTimeoutMs?: number,
+  page = 1,
 ): Promise<KindPageResult> {
   const template = source.rules.ruleExploreUrl
   const R = rulesFor(source)
@@ -70,7 +71,10 @@ export async function fetchKindPage(
   const subEval = makeSubEval(fetcher, source, jsTimeoutMs === undefined ? undefined : { jsTimeoutMs })
   // 首页裁页在此**不需要方言判定**（搜索面那一处要）：只有原生方言的书源声明 `ruleFind`，
   // 发现面值住在 `ruleExploreUrl`，而它只可能由原生映射落位 ⇒ 走到这里的模板必是原生分页语义。
-  const plan = buildSearchRequest(template, { kind: kindUrl, page: 1 }, source.baseUrl, { trimFirstPage: true })
+  // `trimFirstPage` 恒为 true（不随页码变）：裁页那段只在「模板以 `/{{page}}` 结尾 ∧ page === 1」
+  // 时才生效——这是 `request.assembleRequest` 的既有语义，第 2 页因此自然带着页码段。
+  // 在这里再判一次页码就是把归属别人的判断抄成第二份，两份迟早会分叉。
+  const plan = buildSearchRequest(template, { kind: kindUrl, page }, source.baseUrl, { trimFirstPage: true })
   const { text, landedUrl } = await fetchTextPage(fetcher, plan.url,
     { ...fetchInitOf(plan, await resolveHeaders(fetcher, source, { jsTimeoutMs })), timeoutMs }, plan.charset)
   // 列表规则缺失（发现面整套覆盖里 list 恒非空，故只可能来自回落那一侧）：空规则求值即空列表，

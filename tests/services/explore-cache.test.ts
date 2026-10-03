@@ -7,7 +7,7 @@ import type { NovelSource } from '../../src/services/types.js'
 import type { SearchGroup } from '../../src/shared/wire.js'
 
 const group = (id: string): SearchGroup => ({ sourceId: id, sourceName: id, status: 'verified', hits: [] })
-const key = { sourceId: 'A', kind: '玄幻', epoch: 7 }
+const key = { sourceId: 'A', kind: '玄幻', epoch: 7, page: 1 }
 
 describe('KindCache', () => {
   it('存进去取得到；TTL 内有效、过期即失效', () => {
@@ -28,6 +28,14 @@ describe('KindCache', () => {
     c.put(key, group('A'), 1000)
     expect(c.get({ ...key, kind: '都市' }, 1000)).toBeNull()
     expect(c.get({ ...key, sourceId: 'B' }, 1000)).toBeNull()
+  })
+
+  // 第 2 页与第 1 页是两份不同的快照：共用一个槽位会让「继续加载」端出首页那一组，
+  // 用户看到的是同一批书被当成新的一页。
+  it('同一 (源, 分类, 代际) 下第 1 页与第 2 页互不命中', () => {
+    const c = new KindCache()
+    c.put({ ...key, page: 1 }, group('A'), 1000)
+    expect(c.get({ ...key, page: 2 }, 1000)).toBeNull()
   })
 })
 
@@ -132,7 +140,7 @@ describe('runExploreKind：逐源批循环', () => {
     let fetches = 0
     const f = createFetcher({ fetchImpl: async () => { fetches++; return html(LIST_HTML) } })
     const cache = new KindCache()
-    cache.put({ sourceId: 'i', kind: 'xuanhuan', epoch: 7 }, group('i'), 0)
+    cache.put({ sourceId: 'i', kind: 'xuanhuan', epoch: 7, page: 1 }, group('i'), 0)
     const out: SearchGroup[] = []
     await runExploreKind([{ source: source(), kindUrl: 'xuanhuan' }], f,
       { ...cfg(cache), now: () => 5 }, (g) => { out.push(g) }, () => false)
@@ -162,5 +170,22 @@ describe('runExploreKind：逐源批循环', () => {
       (g) => { out.push(g) }, () => out.length > 0)
     expect(fetches).toBe(2)
     expect(out).toHaveLength(2)
+  })
+
+  // 已到底的源（`cfg.skip`）一个包都不发，也不出组：续页只该打在还有下一页的源上——它们若照旧发一次，
+  // 这次请求的结果与首页那一组等价，续页面上就会把同一批书再摊一遍。
+  it('已到底的源不再发请求，也不出组', async () => {
+    let fetches = 0
+    const seen: string[] = []
+    const f = createFetcher({ fetchImpl: async (input) => { fetches++; seen.push(String(input)); return html(LIST_HTML) } })
+    const out: SearchGroup[] = []
+    await runExploreKind(
+      [{ source: { ...source(), id: 'dead' }, kindUrl: 'xuanhuan' },
+        { source: { ...source(), id: 'alive' }, kindUrl: 'dushi' }],
+      f, { ...cfg(), skip: new Set(['dead']) },
+      (g) => { out.push(g) }, () => false)
+    expect(seen).toEqual(['https://s.com/dushi'])
+    expect(fetches).toBe(1)
+    expect(out.map((g) => g.sourceId)).toEqual(['alive'])
   })
 })

@@ -94,4 +94,12 @@ describe('explore-face：单源一次分类抓取', () => {
     const r = await fetchKindPage(source(own), 'x', f)
     expect(r).toEqual({ ok: false, code: 'RuleMissing', message: expect.stringContaining('发现规则缺失') })
   })
+
+  it('page=2 → 地址带页码段（首页裁页不误伤后续页）', async () => {
+    const seen: string[] = []
+    const f = createFetcher({ fetchImpl: async (input) => { seen.push(String(input)); return html(LIST_HTML) } })
+    const r = await fetchKindPage(source(), 'xuanhuan', f, undefined, undefined, 2)
+    expect(r.ok).toBe(true)
+    expect(seen[0]).toBe('https://s.com/xuanhuan/2')      // 不是 /xuanhuan、也不是 /xuanhuan/2 被裁掉
+  })
 })
