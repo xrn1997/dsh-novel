@@ -160,10 +160,9 @@ export const NOVEL_CSS = `
 }
 .novel-view { padding: var(--novel-sp-4) var(--novel-sp-5); display: flex; flex-direction: column; gap: var(--novel-sp-4); }
 /* ── 顶部 tab 导航（书架 | 书城 | 书源管理）：IA 上三者并列（2026 变更，用户拍板）——
-   选择即切换下方内容。曾经的「书城预留位占位 chip」退役：占位不如真导航（书城未上线时
-   点开是诚实的占位空态 CityView，内容上线后填充该分支，导航结构不用再改）；书源管理 =
-   原宿主设置「小说」区块整体搬入（settings.section 注册撤除，单一归属）。
-   reader/search 是 tab 之下的沉浸内容流，各有自己的返回导航，本行不随行。 */
+   选择即切换下方内容。曾经的「书城预留位占位 chip」退役：占位不如真导航（书城已是两级分类
+   浏览页本身，不再是占位空态）；书源管理 = 原宿主设置「小说」区块整体搬入（settings.section
+   注册撤除，单一归属）。reader/search 是 tab 之下的沉浸内容流，各有自己的返回导航，本行不随行。 */
 .novel-tabs { display: flex; gap: var(--novel-sp-0); padding: var(--novel-sp-4) var(--novel-sp-5) 0; }
 .novel-tabs button {
   background: none; border: none; color: var(--novel-text-2); font-size: var(--novel-fs-base);

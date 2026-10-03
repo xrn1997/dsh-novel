@@ -231,7 +231,7 @@ describe('布局单位与视口约束（阅读器不能被正文高度绑架）'
 
   it('书架筛选簇不贴右；顶部 tab 导航在场且有激活态（IA：书架|书城|书源管理 并列）', () => {
     // 病史：排序灰字 margin-left:auto 在 1600px 内容列里被钉到最右端（实测 x1472 vs pills x75）＝悬浮碎片；
-    // 书城预留位 chip 已随 tab 化退役——占位不如真导航（书城未上线点开是 CityView 占位空态）
+    // 书城预留位 chip 已随 tab 化退役——占位不如真导航（书城已是分类浏览页本身，不再是占位空态）
     expect(ruleBody('.novel-shelf-sort'), '排序灰字跟簇尾，不许贴列右端').not.toMatch(/margin-left:\s*auto/)
     expect(ruleBody('.novel-shelf-filter'), '筛选簇整簇左聚簇').not.toMatch(/margin-left:\s*auto/)
     const tabs = ruleBody('.novel-tabs')

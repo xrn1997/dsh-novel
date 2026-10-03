@@ -150,6 +150,11 @@ _Avoid_: 舰队快照（黑话，已否决）、状态总览 chips（读数与�
 _唯一实现_: `src/client/search-job.ts` 的 `apply` 身份闸 + `rebaseline`
 _Avoid_: 重连（重连是同一轮的通道恢复；换轮是身份变了）、重置
 
+**整帧替换（full-frame replace）**:
+发现面观察者的换轮裁决：读面是全量快照且**不设累积器**，故不比轮次身份——轮到谁就以谁的整帧为准，服务端换了轮（别的观察者提交）时新帧自然全覆盖，即「跟随最近一轮」。
+_唯一实现_: `src/client/explore-job.ts` 的 `apply`
+_Avoid_: 换轮（那是搜索面的说法：那边握着一份只对自己有效的游标，必须验身份、丢累积、从基线重读；这里没有可丢的东西）
+
 **bookKey**:
 书籍身份：详情页 URL，**可带 `,{option}` 请求选项后缀**（URL 即请求规格）；本地书为 `local:<uuid>`。
 _相关实现_: `services/request.ts` 的 `assembleRequest`（解释选项）、`shared/wire.ts`（URL 剥选项与比对口径）
