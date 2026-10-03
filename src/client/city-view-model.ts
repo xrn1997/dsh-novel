@@ -55,7 +55,8 @@ export interface RoundShape {
  * 返回 null = 不占位（有书时铺网格；四种未定态既不铺网格也不说话——沉默比假结论诚实）。
  *
  * 有失败的那些源不改变本判据（`books` 已是全量归并结果，空就是真的没有），但改变**说法**：
- * 部分失败时不能说「都答完了」，那是把「没回应」读成「没有货」。
+ * 部分失败时不能说「都答完了」，那是把「这一页没回来」读成「没有货」。这一句用的是与失败条
+ * （`failureSummary`）**同一套词**：同一条清单在相邻两处各叫一个名字，读起来就像两份事实。
  */
 export function bookListEmpty(round: RoundShape, failures: number, error: string | null): { title: string; hint: string } | null {
   if (round.running || round.cancelled || round.total === 0 || round.books.length > 0 || error !== null) return null
@@ -63,7 +64,7 @@ export function bookListEmpty(round: RoundShape, failures: number, error: string
     title: '这一类还没有书',
     hint: failures === 0
       ? `这一类的 ${round.total} 个源都答完了，一本都没有收录——空结果不是失败，换个分类看看。`
-      : '答完的源一本都没有收录；没响应的那几个源见下面那条失败说明。',
+      : '答完的源一本都没有收录；这一页没回来的那几个源见下面那条失败说明。',
   }
 }
 

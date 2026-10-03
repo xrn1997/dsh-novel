@@ -167,11 +167,16 @@ describe('CityView', () => {
 
   it('在途骨架卡：本轮还在跑时铺到网格的形状，轮次一终态就撤（活过轮次的骨架是谎）', async () => {
     const { over, frame } = pushable()
-    current = { ...snap, phase: 'running', done: 1, total: 4 }     // 只回了 1 本，源还在往回送
+    // 只回了 1 本，源还在往回送。`hasMore` 显式写 false：服务端一批在途时它必为假
+    // （公式里那一条 `phase !== 'running'`），**这就是真的在途帧**，钮该整颗不在场。
+    current = { ...snap, phase: 'running', done: 1, total: 4, hasMore: false }
     const { container } = render(<CityView deps={depsOf(over)} />)
     // 4 列网格、两行上限：1 本书 + 7 张骨架卡（无界的骨架铺法会把「还在等」画成「有这么多」）
     await waitFor(() => { expect(container.querySelectorAll('.novel-city-sk')).toHaveLength(7) })
     expect(container.querySelectorAll('button.novel-city-card')).toHaveLength(1)   // 骨架不是钮
+    // 在途 = 没有钮（不是「钮在但禁用」）：显隐只认 hasMore，写成 `hasMore || running` 就会在这一
+    // 段把一颗点了必然撞 409 的钮亮出来。禁用态另有一条真实窗口（本地按下即加载中，见下面那条）。
+    expect(screen.queryByRole('button', { name: /加载更多/ })).toBeNull()
     act(() => { frame({ ...snap, phase: 'done' }) })
     await waitFor(() => { expect(container.querySelectorAll('.novel-city-sk')).toHaveLength(0) })
     expect(screen.getByText('剑起长安')).toBeTruthy()              // 撤的是骨架，不是内容
@@ -337,13 +342,6 @@ describe('CityView', () => {
     act(() => { frame({ ...snap, page: 2, hasMore: true }) })                                 // 新一页回来：页码与钮都跟上服务端
     await waitFor(() => { expect(screen.getByRole('button', { name: '加载更多（已 2 页）' })).toBeTruthy() })
     expect(more).toHaveLength(1)
-  })
-
-  it('在途（running）：钮仍在场但禁用——显隐只认 hasMore，禁用才认 running，不从 running 反推有没有更多', async () => {
-    current = { ...snap, phase: 'running', done: 1, page: 2, hasMore: true }
-    render(<CityView deps={depsOf()} />)
-    const btn = await screen.findByRole('button', { name: '加载更多（已 2 页）' })
-    expect(btn.hasAttribute('disabled')).toBe(true)
   })
 
   it('hasMore 为假：钮收掉、读数照旧（服务端说没了就真没了，不留一个点了没反应的饼）', async () => {

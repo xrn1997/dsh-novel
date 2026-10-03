@@ -60,8 +60,9 @@ describe('bookListEmpty（空态按轮次的形状说话，不按书单数组空
     expect(bookListEmpty(rnd(), 0, null)?.title).toBe('这一类还没有书')
     expect(bookListEmpty(rnd(), 0, null)?.hint).toContain('3 个源都答完了')
   })
-  it('有源没响应 → 说法改口：不许把「没回应」读成「没有货」', () => {
-    expect(bookListEmpty(rnd(), 2, null)?.hint).toContain('没响应的那几个源')
+  it('有源这一页没回来 → 说法改口：不许把「没回来」读成「没有货」', () => {
+    // 与失败条同一套词（「这一页没回来」）：同一条清单在相邻两处各叫一个名字，读起来就像两份事实
+    expect(bookListEmpty(rnd(), 2, null)?.hint).toContain('这一页没回来')
     expect(bookListEmpty(rnd(), 2, null)?.hint).not.toContain('都答完了')
   })
   it('四种未定态一律不占位（沉默比假结论诚实）：在跑 / 被停止 / 零源 / 报错的一轮', () => {
