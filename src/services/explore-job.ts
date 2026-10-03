@@ -171,9 +171,12 @@ export class ExploreJobs {
       // 宿主契约：start() 内同步调 run() 取 hooks，故 done 必须先建好
       host.start({
         kind: 'novel-explore',
+        // 页码段的 label **不报源数**：这一批只打在还没到底的源上，而 `total` 是**整轮**的目标数，
+        //  照抄它就是向宿主报一个比实际在问的大一号的数（读数不实等于说谎）。第 1 页那一批一个源
+        //  都不跳，那里的计数就是它真正在问的数，故只有那一段带它。
         label: h.page === 1
           ? `书城分类「${h.kind}」（${h.total} 家书源）`
-          : `书城分类「${h.kind}」第 ${h.page} 页（${h.total} 家书源）`,
+          : `书城分类「${h.kind}」第 ${h.page} 页`,
         run: () => ({ cancel: (reason): void => { this.cancel(reason) }, done }),
       })
     }
@@ -214,6 +217,15 @@ export class ExploreJobs {
    *  把那一段记忆抹掉（下一轮续页又会去打它）。
    *  `lastNew` 记的是**本页真正新增**的条数（去重之后），它就是「这个源到底了没有」的判据。
    *
+   *  **本持有者绝不原地改交进来的那个组**（累积走「换一个新组」而不是往 `prev.group.hits` 里塞）：
+   *  交进来的组不归这里所有——`runExploreKind` 命中快照时 emit 的正是**缓存持有的那个对象**。
+   *  原地改它等于把第 2..N 页的累积写回快照：同一个分类在 TTL 内再进一轮时，第 1 页会端出整段
+   *  并集而页码还写「已 1 页」，且第 2 页变成缓存命中、内容已在并集里 ⇒ 零新增 ⇒ 被冤判到底，
+   *  其后各页静默不可达。这与「零新增即到底」是同一个家族：**一个不是「没有更多」的状态被读成
+   *  「没有更多」**。（选择在持有者这一侧换组、而不是在 `KindCache` 里进出各拷一份：缓存拷贝只能
+   *  护住快照那一份，护不住「谁都可以改 emit 出来的对象」这条更宽的约定，且拷贝要沿着每一处
+   *  传递复用才成立。组里的 `hits` 是浅拷，够用——本轮只增删列表，不改条目自身。）
+   *
    *  **失败的一页不是到底的一页**：这一批带了错误时，错误如实记下（读面把它摊进 `failures`），
    *  累积与 `lastNew` 原样留着、这个源不算到底——一次偶发故障不该冒充「这一类没有更多书了」，
    *  也不该把用户刚看到的那批书划掉；下一次续页照旧会打它（重试的机会留给用户）。
@@ -236,7 +248,7 @@ export class ExploreJobs {
       known.add(key)
       return true
     })
-    prev.group.hits.push(...fresh)
+    prev.group = { ...prev.group, hits: [...prev.group.hits, ...fresh] }
     prev.lastNew = fresh.length
   }
 

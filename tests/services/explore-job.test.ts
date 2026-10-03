@@ -144,6 +144,18 @@ describe('ExploreJobs 登记给宿主 ctx.jobs', () => {
     expect(h.settled).toEqual(['completed', 'killed'])
   })
 
+  it('续页那一批的 label 不报源数：这一批只打在没到底的源上，照抄整轮的 total 就是报大了', async () => {
+    const h = fakeHost()
+    const jobs = new ExploreJobs({ host: h.host })
+    jobs.start('玄幻', 3, async (emit) => { emit(g('A', '一', '甲')) })
+    await tick()
+    jobs.advance('玄幻', async (emit) => { emit(g('A', '二', '乙')) })
+    await tick()
+    expect(h.labels[0]).toContain('3')            // 第 1 页一个源都不跳：那个数就是它真正在问的数
+    expect(h.labels[1]).toContain('第 2 页')
+    expect(h.labels[1]).not.toContain('家书源')    // 宁可不说，也不说一个比真正在问的大一号的数
+  })
+
   it('新一轮替换在跑的那轮：旧轮以 killed 结算给宿主，不留两条在途任务', async () => {
     const h = fakeHost()
     const jobs = new ExploreJobs({ host: h.host })
@@ -179,8 +191,9 @@ describe('ExploreJobs.subscribe', () => {
 describe('ExploreJobs 同轮续页', () => {
   it('advance：同一轮 id，第 2 页的新条目并进同一源的那一组、page 变 2', async () => {
     const jobs = new ExploreJobs()
+    const page1 = g('A', '剑起长安', '青衫客')      // 留个引用：交进来的组不归持有者所有（见下面那条断言）
     const first = jobs.start('玄幻', 2, async (emit) => {
-      emit(g('A', '剑起长安', '青衫客'))
+      emit(page1)
       emit(g('B', '都市之王', '甲'))
     })
     await tick()
@@ -198,6 +211,9 @@ describe('ExploreJobs 同轮续页', () => {
     expect(s?.books.find((b) => b.name === '新书一')?.origins.map((o) => o.sourceId)).toEqual(['A'])
     // B 这一页没发组 ⇒ 它的累积（lastNew）一个字都没被碰：按 targets 推着合并会把它清零成「到底」
     expect(jobs.exhaustedSourceIds()).toEqual([])
+    // **交进来的组一个字段都不许被改**：缓存组合下这个对象就是快照持有的那一份，原地塞进第 2 页的
+    // 新书＝把累积写回快照（下一轮第 1 页端出整段并集、页码却写「已 1 页」，且第 2 页变成零新增）
+    expect(page1.hits.map((h) => h.title)).toEqual(['剑起长安'])
   })
 
   it('某源第 2 页零新增即到底；全部源到底后 hasMore 变 false', async () => {

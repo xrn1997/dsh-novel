@@ -41,6 +41,41 @@ describe('门面：分类浏览', () => {
     expect(fetches).toBe(1)                    // 缓存命中：零请求
   })
 
+  // 快照与续页同处一条链上（Important 缺陷的老家）：续页的累积**不许写回本轮收到的那个组**——编排层
+  // 命中快照时 emit 的正是缓存持有的那个对象，原地塞进第 2 页的新书＝把累积写回快照。后果不是「多几
+  // 本书」而是**静默不可达**：同一分类在 TTL 内再进一轮，第 1 页端出整段并集而页码写「已 1 页」，
+  // 且第 2 页的取数变成缓存命中、内容已在并集里 ⇒ 零新增 ⇒ 被冤判到底，其后各页再也点不出来。
+  it('TTL 内再进同一分类：第 1 页仍是首页那一份（续页的累积不写回快照），且仍有页可续', async () => {
+    const dir = await makeTempDir('novel-explore4-')
+    const seen: string[] = []
+    const PAGE2_HTML = '<html><body><div class="item"><h3><a href="/book/2">长夜行</a></h3>' +
+      '<p><a href="/zuozhe/b">乙</a></p></div></body></html>'
+    const svc = trackService(await ReadingService.create({
+      dir,
+      fetchImpl: (async (input: unknown) => {
+        const url = String(input)
+        seen.push(url)
+        return new Response(url.endsWith('/2') ? PAGE2_HTML : LIST_HTML,
+          { headers: { 'content-type': 'text/html; charset=utf-8' } })
+      }) as never,
+    }))
+    await svc.importOne(NATIVE)
+
+    svc.startExploreJob('玄幻')
+    await settle(svc)
+    expect(svc.loadMoreExploreJob()).not.toBeNull()
+    await settle(svc)
+    expect(seen).toEqual(['https://s.com/xuanhuan', 'https://s.com/xuanhuan/2'])
+    expect(svc.exploreJobSnapshot()?.books.map((b) => b.name)).toEqual(['剑起长安', '长夜行'])
+
+    svc.startExploreJob('玄幻')                 // 同一分类、TTL 内：首页那条命中快照，零请求
+    await settle(svc)
+    const s = svc.exploreJobSnapshot()
+    expect(s?.books.map((b) => b.name)).toEqual(['剑起长安'])   // 首页那一份，不是并集
+    expect(s).toMatchObject({ page: 1, hasMore: true })         // 还有页可续：不许被上一轮的累积读成到底
+    expect(seen).toHaveLength(2)                               // 首页仍是缓存命中
+  })
+
   it('没有这一类的源 → total 为 0，跑完是空书单而不是错误', async () => {
     const dir = await makeTempDir('novel-explore2-')
     const svc = trackService(await ReadingService.create({ dir, fetchImpl: (async () => new Response('', { status: 404 })) as never }))
