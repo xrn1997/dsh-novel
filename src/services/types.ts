@@ -17,6 +17,24 @@ export interface SourceAuth {
  * 平铺方言无 ruleDetail* 时详情面回退共用字段（原 v1 行为）。 */
 export interface NormalizedRules {
   searchUrl: string | null; exploreUrl: string | null
+  /** 源级分类页 URL 模板，含 `{{kind}}`（替换成入口自带的地址）与 `{{page}}`：原生方言由
+   *  `ruleFind.url` 落位，平铺 raw 顶层写同名键也直通这一格——所以**这一格有没有值不由方言决定**。
+   *  它与「入口自带地址」谁优先、首页裁不裁页，主人是 `explore-face.fetchKindPage`（裁决见
+   *  `docs/adr/0027`），这里不复述判据。 */
+  ruleExploreUrl: string | null
+  /** 分类入口（顶层一层；`children` 本期不做，见 normalize 的告警）：原生 `ruleFind.kinds`、
+   *  legado `exploreUrl` 解出的条目、平铺 raw 自带那一格，三处共用这一个形状；地址语义按方言不同，
+   *  「这次用哪份模板」归 `explore-face.fetchKindPage`。 */
+  ruleExploreKinds: Array<{ title: string; url: string }>
+  /** 发现面条目的九个字段（原生 `ruleFind.ruleSearch` 与 legado `ruleExplore` 落的是同一批模型键）：
+   *  **整套**覆盖通用搜索规则（对面语义是
+   *  `if (findRule.ruleSearch.list.isNotEmpty())` 才用它）——所以判据只看 `ruleExploreList` 是否非空，
+   *  别逐字段回落：那会把「对面本该用通用规则」的源读成半套。 */
+  ruleExploreList: string | null; ruleExploreName: string | null
+  ruleExploreAuthor: string | null; ruleExploreBookUrl: string | null
+  ruleExploreCoverUrl: string | null; ruleExploreIntro: string | null
+  ruleExploreKind: string | null; ruleExploreLastChapter: string | null
+  ruleExploreWordCount: string | null
   /** 校验/探针关键词（`ruleSearch.checkKeyWord`）：探针的第一个关键词——固定词序列
    *  在「只搜得到自家书名」的站上是误判源（现量按 `DSH_PARSE_CENSUS=1` 的 `probeKeyword` 行
    *  重数，别抄任何转录的读数）。含 `http`/`::`/`++`/`--` 的值直接弃用（那些串与调试输入

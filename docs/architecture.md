@@ -81,9 +81,17 @@ index.ts 组合根：配置 → 缺省值 → 部件装配 → 三条注册
 | 原子写与 JSON 读的两分判别 | `services/storage.ts` | domain 的合并写策略 |
 | 翻页何时停 | `services/pagination.ts` 的 `followPages` | 站点结构解析 |
 | 本地书身份与分流 | `services/localbooks.ts` | EPUB 包内解析（`services/epub/`） |
-| 聚合搜索的参与集 | `services/reading.ts` 的 `participates` 谓词 | 源清单读写 |
+| 聚合搜索的参与集 | `services/participation.ts` 的 `participates`（发现面谓词 `exploreParticipates` 同文件） | 源清单读写 |
 | 错误类目 → HTTP | `services/errors.ts` + `api/wire.ts`（两分法） | 路由自检错误 |
 | 整轮搜索结果 | `services/search-job.ts`（Node 半持有） | wire 形状 |
+| `exploreUrl` 的形态判据与分类入口解析（js / JSON / `标题::URL` 三档怎么分、条目怎么取） | `services/explore-url.ts` 的 `exploreKindsFormOf` / `parseExploreKinds` | 落位与平铺优先（`services/normalize.ts` 的 `flattenDialect`）、这次用哪份模板（`services/explore-face.ts` 的 `fetchKindPage`） |
+| 一次分类页请求的完整语义（含整套规则回落） | `services/explore-face.ts` 的 `fetchKindPage` | 整轮编排与快照写回 |
+| 分类清单（哪个源自己声明了哪些分类） | `services/explore.ts` 的 `deriveExploreSources` | 站点侧分类的同义归并（本仓不造同义词表） |
+| 单源一页的执行（查进程内快照 → 抓 → 写回 → 出一个组） | `services/explore.ts` 的 `fetchExploreGroup` | 点名与页码（门面 `services/reading.ts`）、轮次状态与终态 |
+| 整轮分类结果 | `services/explore-job.ts`（Node 半持有，读面给全量快照） | wire 形状 |
+| 跨源那一次的关键词构造（有作者就带作者） | `client/city-view-model.ts` 的 `sheetKeyword`（消费者只有书籍详情浮层，链路复用搜索面） | 是不是同一本书（不替用户判，按源一行行列出来他自己看） |
+| 逐条目取值装配（求值上下文 → 一条命中） | **今天没有主人，两份抄本刻意接受**：`services/explore-face.ts` 与 `services/reading.ts` 各一份 | 两份的规则来源本就不同（发现面整套切换 vs 通用搜索面）；第三处消费者出现时再抽公共装配 |
+| 分类快照的存放与时效 | `services/explore-cache.ts` 的 `KindCache` + `services/cache-epoch.ts` 的 `exploreEpoch` | 目录 / 正文文件缓存（`rulesEpoch`） |
 | 缺省值 | 五个各自主人（见 `tests/services/defaults.test.ts` 钉的常量） | 第二处字面量 |
 | 浏览器视图内路由与跨卸载现场 | `client/store.ts` + 各模块级现场 store | 业务真相 |
 | 阅读时序 | `client/reader-session.ts` | DOM 测量实现 |
@@ -94,7 +102,7 @@ index.ts 组合根：配置 → 缺省值 → 部件装配 → 三条注册
 
 ## 5. seam：可测性怎么落
 
-- **纯函数面**直接单测，不造宿主替身：`parseRule`、`reducePicked`、`evalCss`、`evalXPath`、`evalJsonPath`、`applyReplaces`、`interpolateUrl`、`appendTail`、`bindRegexRow`、`engineValueToString`，以及客户端的 `source-list-view` / `shelf-view-model` / `source-inbox` / `reader-load` / `progress`。
+- **纯函数面**直接单测，不造宿主替身：`parseRule`、`reducePicked`、`evalCss`、`evalXPath`、`evalJsonPath`、`applyReplaces`、`interpolateUrl`、`appendTail`、`bindRegexRow`、`engineValueToString`，以及客户端的 `source-list-view` / `shelf-view-model` / `city-view-model` / `source-inbox` / `reader-load` / `progress`。
 - **注入垫片**是测试进出的口子（不是换模块替身）：引擎侧 `EvalContext` 的 fetch 族 / `evaluateRef` / `subEval` / `SourceSession` / 超时预算；服务侧 fetcher 与注入的时钟/目录；客户端三束 deps（核心 / 设置 / 阅读器）+ `ReaderPort`；浏览器位置用例走仓内最小宿主壳，它只证明「卸载与重挂」那一半契约。
 - **两条求值路必须同口径**（主线程与 worker），由按 fetch 计数自证的跨路钉子守——这是 `docs/adr/0005` 的产物。
 - 客户端的测试手法是**假 adapter 驱动真实组件**，不是渲染快照；服务端的路由测试用真 HTTP server 承载（`api/dispatch.ts` 不依赖 Cordis，纯构造器）。

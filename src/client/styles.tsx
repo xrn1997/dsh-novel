@@ -84,6 +84,12 @@ export const NOVEL_CSS = `
      守卫会把「行内写、样式读」的这一路判成未定义引用。 */
   --novel-pct: 0;
   --novel-measure: 36em;
+  /* --novel-paper / --novel-paper-ink：正文那一层的纸与墨（prefs.paperColor 与 paperInk 的结果，
+     由 ReaderView 行内写入）。**控制器条由它们派生**（见 .novel-rdr-bar）：条底读宿主 chrome 色
+     （--novel-bg）会在自选的米黄纸上劈出一道实测 15.51:1 的黑缝（黑白极限才 21:1），那是
+     「阅读界面看着不舒服」的主因。缺省值 = 默认纸米黄与其对应墨色。 */
+  --novel-paper: #f7f3e8;
+  --novel-paper-ink: #222;
   /* 插图预留宽高比（ChapterBody 由 wire 的可信 width/height 行内写入，规则读本值）：
      值槽在此在册是 token 自足守卫的硬要求——「行内写、样式读」的这一路也必须词表里有名。 */
   --novel-fig-ratio: 4 / 3;
@@ -119,8 +125,8 @@ export const NOVEL_CSS = `
 [data-conversation-scroll]:has([data-novel-root]) ~ [data-width-handle] { display: none; }
 /* 「控制器层跟随深色」：勾上即把本层局部 token 钉成暗底值（正文纸张色不受影响）。
    宿主没有「强制暗层」的现成 token，故这一处允许字面量——它表达的是用户显式选择，不是主题推导。
-   层-1（工具栏底）也在此重钉：工具栏挂的是 --novel-layer-1，不重钉就会「暗面板 + 亮工具栏」
-   novel-dark 现挂在工具栏根，整个控制器层同底。 */
+   novel-dark 挂在阅读器控制器条根，整个控制器层（条 / Aa 面板 / 导出面板 / 抽屉）同底。
+   条自己那一档另见 .novel-rdr-bar.novel-dark：它**默认跟纸色**，勾上才让回这里的 --novel-bg。 */
 .novel-dark {
   --novel-layer-1: #1b1b1d;
   --novel-layer-2: #232325;
@@ -143,7 +149,8 @@ export const NOVEL_CSS = `
   --novel-brand-strong: #f9fafb;
   --novel-ring: #f9fafb;
   --novel-skeleton: #ffffff14;
-  /* 控制器层强制暗：阅读器工具栏底读 --novel-bg——不重钉就是「暗面板 + 亮工具栏」 */
+  /* 控制器层强制暗：阅读器条在 .novel-rdr-bar.novel-dark 里读它（条默认跟纸色，勾上才让回暗底），
+     浮层底那几条也读它——不重钉就是「暗面板 + 亮工具栏」 */
   --novel-bg: #1b1b1d;
   color: var(--novel-text);
 }
@@ -160,10 +167,9 @@ export const NOVEL_CSS = `
 }
 .novel-view { padding: var(--novel-sp-4) var(--novel-sp-5); display: flex; flex-direction: column; gap: var(--novel-sp-4); }
 /* ── 顶部 tab 导航（书架 | 书城 | 书源管理）：IA 上三者并列（2026 变更，用户拍板）——
-   选择即切换下方内容。曾经的「书城预留位占位 chip」退役：占位不如真导航（书城未上线时
-   点开是诚实的占位空态 CityView，内容上线后填充该分支，导航结构不用再改）；书源管理 =
-   原宿主设置「小说」区块整体搬入（settings.section 注册撤除，单一归属）。
-   reader/search 是 tab 之下的沉浸内容流，各有自己的返回导航，本行不随行。 */
+   选择即切换下方内容。曾经的「书城预留位占位 chip」退役：占位不如真导航（书城已是两级分类
+   浏览页本身，不再是占位空态）；书源管理 = 原宿主设置「小说」区块整体搬入（settings.section
+   注册撤除，单一归属）。reader/search 是 tab 之下的沉浸内容流，各有自己的返回导航，本行不随行。 */
 .novel-tabs { display: flex; gap: var(--novel-sp-0); padding: var(--novel-sp-4) var(--novel-sp-5) 0; }
 .novel-tabs button {
   background: none; border: none; color: var(--novel-text-2); font-size: var(--novel-fs-base);
@@ -219,10 +225,11 @@ export const NOVEL_CSS = `
 /* ── 焦点环：一套覆盖所有交互件（brand 环 + 2px 偏移，压在深浅两种底上都找得着）──
    .novel-btn.primary 另有环色换色规则（brand 压 brand 等于没有）；手风琴退役后
    .novel-section-* 系列规则已随之删除（死代码不留）。 */
-.novel-btn:focus-visible,
+.novel-btn:focus-visible, .novel-rdr-ctl:focus-visible,
 .novel-input:focus-visible, .novel-textarea:focus-visible, .novel-chip:focus-visible,
 .novel-seg button:focus-visible, .novel-tabs button:focus-visible, .novel-menu button:focus-visible,
 .novel-card:focus-visible, .novel-row-main:focus-visible,
+.novel-city-source:focus-visible, .novel-city-kind:focus-visible, .novel-city-card:focus-visible,
 .novel-drawer-item:focus-visible, .novel-switch:focus-visible, .novel-searchbox:focus-within,
 .novel-ref:focus-visible {
   outline: 2px solid var(--novel-ring); outline-offset: 2px;
@@ -496,31 +503,71 @@ export const NOVEL_CSS = `
 .novel-chip.on { color: var(--novel-brand-strong); border-color: var(--novel-brand); background: var(--novel-brand-tint); }
 .novel-paper-swatch { width: 24px; height: 18px; padding: 0; border-radius: var(--novel-r-xs); }
 .novel-paper-swatch.on { outline: 2px solid var(--novel-brand); outline-offset: 1px; }
-/* ── 阅读器：工具栏/正文列/目录抽屉/Aa 面板（z 序仍归 CTRL_Z 常量，布局归样式类）── */
-/* 纸面 full-bleed：**纸张色涂满整个阅读区**（行内 style={{background}} 挂在 .novel-rdr-main），
+/* ── 阅读器：控制器条/正文列/目录抽屉/Aa 面板（z 序仍归 CTRL_Z 常量，布局归样式类）── */
+/* 纸面 full-bleed：**纸张色涂满整个阅读区**（值槽 --novel-paper 由 ReaderView 行内写在阅读区根上），
    正文列只决定「文字排到哪儿为止」。旧做法把纸色涂在 .novel-rdr-body 上，宽屏下就是一张
    680px 的窄带飘在宿主底色里（实测 1500px 视口左右各漏底 410px）——那不是留白，是纸没铺开。
    min-height 一屏：正文短于一屏时纸面也要铺满，不许下面漏底色。 */
 .novel-rdr { position: relative; display: flex; flex-direction: column; min-height: 100vh; }
+/* 控制器条**跟纸走，不跟宿主 chrome 走**：条底 = 纸往墨压一档，整屏读作「一张纸的顶部折了一道」。
+   旧做法条底读 --novel-bg（宿主 App 底色），与用户自选纸色毫无关系——实测接缝对比度 15.51:1，
+   而黑白极限才 21:1，那是「两块板拼起来」而不是「一页纸」。常驻阅读条取页面那一套配色不是偏好：
+   微信读书按阅读主题给条着色、Koodo 的条直接继承页面底色、Readest 的 base-100 就是页面底色。
+   条上的深浅一律 inherit + opacity 分主次——这样「控制器层跟随深色」只需重钉条根一个 color，
+   不必给每一档灰度各写一条覆盖。 */
 .novel-rdr-bar {
-  display: flex; gap: var(--novel-sp-3); align-items: center;
-  padding: var(--novel-sp-2) var(--novel-sp-4);
-  border-bottom: 1px solid var(--novel-border); background: var(--novel-bg);
+  display: flex; gap: var(--novel-sp-2); align-items: center; min-height: 40px;
+  padding: var(--novel-sp-1) var(--novel-sp-4);
+  background: color-mix(in srgb, var(--novel-paper-ink) 6%, var(--novel-paper));
+  border-bottom: 1px solid color-mix(in srgb, var(--novel-paper-ink) 12%, transparent);
+  color: var(--novel-paper-ink);
 }
+/* 「控制器层跟随深色」在条上仍是完整的一档：勾上即整条让回宿主暗底，纸色派生那一套整体作废。
+   复合选择器不是冗余——.novel-dark 与 .novel-rdr-bar 同特异度，靠文件次序决胜太脆。 */
+.novel-rdr-bar.novel-dark {
+  background: var(--novel-bg); color: var(--novel-text);
+  border-bottom-color: var(--novel-border);
+}
+/* 读数：当前章在**主位**（这一屏唯一在变的量），书名退副位——书名刚在书架上点过，在条上是冗余；
+   总章数由「N / M」的分母承担，不再单独占一句「共 M 章」。 */
 .novel-rdr-title {
-  flex: 1; text-align: center; font-size: var(--novel-fs-md); color: var(--novel-text-2);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1; min-width: 0; display: flex; align-items: baseline; gap: var(--novel-sp-2);
+  font-size: var(--novel-fs-md); overflow: hidden;
 }
-.novel-rdr-book { color: var(--novel-text); font-weight: 500; }
-/* 章进度细线：挂在 sticky 工具栏下沿（跨章才变——低频量，故不进每帧读数的滚动路径）。
-   width: 100% 不是冗余——绝对定位 + 无内容的元素 shrink-to-fit 成 0 宽，scaleX 再大也画不出线。 */
+.novel-rdr-chap { min-width: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.novel-rdr-pos, .novel-rdr-book { flex: none; font-size: var(--novel-fs-xs); opacity: .62; white-space: nowrap; }
+.novel-rdr-pos { font-variant-numeric: tabular-nums; }
+.novel-rdr-book { max-width: 12em; overflow: hidden; text-overflow: ellipsis; }
+/* 返回入口与读数之间的发丝：把「去哪」和「在哪」分成两组，比一排同权重方框好扫读 */
+.novel-rdr-sep { width: 1px; height: 14px; flex: none; background: currentColor; opacity: .25; }
+/* 条上控件：去框的一档 pill。文案一字不动（歧义出在形状语言那一层，就在那一层修），字形换成与汉字
+   同源的 SVG——stroke: currentColor 跟着条的 color 走，深浅两态不必各写一份。
+   代价如实记着：pill 的内边距比描边钮大，钮组实测比现状宽 46px。 */
+.novel-rdr-ctl {
+  font: inherit; font-size: var(--novel-fs-sm); padding: var(--novel-sp-1) var(--novel-sp-3);
+  border: none; border-radius: 999px; background: none; cursor: pointer; color: inherit; opacity: .8;
+  display: inline-flex; align-items: center; gap: var(--novel-sp-1); white-space: nowrap;
+  transition: background var(--novel-dur) var(--novel-ease), opacity var(--novel-dur) var(--novel-ease);
+}
+.novel-rdr-ctl:hover { background: color-mix(in srgb, currentColor 10%, transparent); opacity: 1; }
+.novel-rdr-ctl svg { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+/* 章进度：墨色凹槽（底槽 + 实心），不再是压在纸上的第三条外来横带。brand 蓝在控制器层只留给
+   选中态（Aa 面板的 .on），条下沿这一道归纸。跨章才变——低频量，故不进每帧读数的滚动路径。
+   实心走 ::after：轨道本体留着承载行内写入的 --novel-pct（浏览器台按它读「读到第几章」）。 */
 .novel-rdr-trail {
-  position: absolute; left: 0; bottom: -1px; width: 100%; height: 2px; background: var(--novel-brand);
+  position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
+  background: color-mix(in srgb, var(--novel-paper-ink) 9%, transparent);
+}
+.novel-rdr-trail::after {
+  content: ''; display: block; width: 100%; height: 100%;
+  background: color-mix(in srgb, var(--novel-paper-ink) 42%, transparent);
   transform-origin: left; transform: scaleX(var(--novel-pct, 0));
   transition: transform var(--novel-dur) var(--novel-ease);
 }
+.novel-rdr-bar.novel-dark .novel-rdr-trail { background: var(--novel-border-faint); }
+.novel-rdr-bar.novel-dark .novel-rdr-trail::after { background: var(--novel-brand); }
 .novel-rdr-acts { display: flex; gap: var(--novel-sp-1); align-items: center; }
-.novel-rdr-main { position: relative; flex: 1 1 auto; min-height: 0; display: flex; align-items: flex-start; }
+.novel-rdr-main { position: relative; flex: 1 1 auto; min-height: 0; display: flex; align-items: flex-start; background: var(--novel-paper); }
 /* 正文列宽随字号走：--novel-measure（缺省 36em，行内由 prefs.measure 覆写；em 跟着
    prefs.fontSize 变，中文一行约 36 字）。
    旧实现 padding 写死 calc(50% - 320px) = 恒 640px 列 → 12px 字号约 53 字/行、
@@ -528,11 +575,23 @@ export const NOVEL_CSS = `
 .novel-rdr-body {
   flex: 1 1 auto; min-width: 0; max-width: var(--novel-measure); margin-inline: auto;
   overflow-y: auto; padding: var(--novel-sp-7) var(--novel-sp-5) calc(var(--novel-sp-7) * 3);
+  color: var(--novel-paper-ink);
 }
-.novel-rdr-body h2 { font-size: 1.3em; font-weight: 600; letter-spacing: .08em; text-align: center; margin: 0 0 var(--novel-sp-1); }
+/* 章界：一条「发丝 + 小字 + 发丝」的分带，不再刷成 1.3em 居中大标题——相当一部分在线源的正文
+   第一行就是同一句章名（stripLeadingTitle 剥得掉），但即便剥掉，居中粗体大标题在连续滚动的
+   章与章之间也像另起了一页书。仍是 h2：阅读器这一屏没有更高的标题占位，从 h3 起等于给读屏一份
+   断了头的大纲。字号走 em：它随 prefs.fontSize 一起缩放，28px 字号下不该还是 12px。
+   正文里嵌来的 h2（图文章）不再被这条规则命中——那是 .novel-body h1..h6 的地盘，
+   旧写法把内容标题一起居中了，属误伤。 */
+.novel-rdr-body h2.novel-rdr-mark {
+  display: flex; align-items: center; gap: var(--novel-sp-3);
+  font-size: .72em; font-weight: 400; letter-spacing: .06em; opacity: .55;
+  margin: 0 0 var(--novel-sp-5);
+}
+.novel-rdr-mark::before, .novel-rdr-mark::after { content: ''; flex: 1; height: 1px; background: currentColor; opacity: .35; }
 .novel-rdr-body p { margin: .5em 0; text-indent: 2em; }
 .novel-rdr-body [data-chapter] { margin-bottom: 1.2em; }
-.novel-rdr-loading { padding: var(--novel-sp-7) 0; text-align: center; color: var(--novel-text-3); font-size: var(--novel-fs-md); }
+.novel-rdr-loading { padding: var(--novel-sp-7) 0; text-align: center; opacity: .6; font-size: var(--novel-fs-md); }
 .novel-sentinel { opacity: .5; font-size: var(--novel-fs-sm); padding: var(--novel-sp-6) 0; text-align: center; }
 /* 目录抽屉：锚视口靠**外层 .novel-drawer-slot 的 sticky**，抽屉本体 absolute 浮在正文右缘。
    为什么外层宽度给 0：抽屉当「有宽度的 flex 兄弟」会从正文列里切走宽度（实测 766px 视口下
@@ -958,12 +1017,174 @@ export const NOVEL_CSS = `
 }
 @media (prefers-reduced-motion: reduce) {
   .novel-card, .novel-btn, .novel-chip, .novel-seg button, .novel-searchbox, .novel-row,
-  .novel-switch, .novel-switch > i, .novel-progress > i, .novel-rdr-trail, .novel-card-ghost .novel-ghost-cover {
+  .novel-city-card, .novel-city-kind,
+  .novel-switch, .novel-switch > i, .novel-progress > i, .novel-rdr-trail::after, .novel-rdr-ctl,
+  .novel-card-ghost .novel-ghost-cover {
     transition: none;
   }
   .novel-sk::after { animation: none; }
   .novel-modal-mask, .novel-modal { animation: none; }
   .novel-card:hover, .novel-card:focus-visible { transform: none; }
+}
+/* ── 书城（分类浏览）：左栏一条源列表（选中的源就地展开自己的分类）+ 右区 4 列书单 ──
+   三条几何口径（界面稿实测，别凭手感改）：
+   ① 只让书单自己滚（.novel-city-gridwrap），标题行 / 顺序说明 / 错误条 / 尾行读数钉在滚动区外——放进
+      滚动区就随书单滚走，读进度得先滚到底。那条前提是本层要把高度收到视图根上（.novel-main 已定高，
+      链上有确定高度可分），否则内层滚动容器高度由内容决定、等于没滚。
+   ② 4 列必须写 minmax(0, 1fr)：1fr 的 auto 最小值会被 nowrap 的书名 / 元信息行撑开，卡片被推出
+      面板（3 列与 4 列都实测溢出过）。
+   ③ 左栏是**一个**滚动容器，条目一律 flex:none（可滚动 flex 列里的条目在滚动发生前会先被压扁——
+      目录抽屉踩过同一个坑）。源与分类同处一栏，靠缩进与一条竖线分层，不靠第二个标题：一栏两节
+      各自滚的旧形状里，滚轮落在哪一节由鼠标位置决定，而两句标题加两个筛选框的装饰件实测占掉栏高
+      16%（矮面板 27%）。
+   窄面板退档（< 900px）那条几何走容器查询，规则与它的理由都写在下面那个 @container 块头上。
+   判据是**面板宽度**而不是视口宽度：宿主中央面板可拖窄（侧栏与常驻会话列同时在场时视口远比面板
+   宽），视口断点会把 4 列硬塞进一条 400px 的面板。故本视图根自带容器查询锚（与 .novel-table /
+   .novel-list-head 同一条裁决：视口断点在分栏布局下量不准）。 */
+[data-novel-view="city"] { height: 100%; container-type: inline-size; }
+.novel-city { position: relative; flex: 1 1 auto; min-height: 0; display: flex; gap: var(--novel-sp-5); }
+/* 一条源列表：整栏自己滚（唯一的滚动容器），选中源下面挂它自己的分类 */
+.novel-city-rail {
+  width: 216px; flex: none; min-height: 0; display: flex; flex-direction: column; gap: var(--novel-sp-0);
+  overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
+}
+/* 复用 .novel-input 的底 / 描边 / 焦点环，这里只钉本处的几何（两处筛选都是一行矮件） */
+.novel-city-filter { flex: none; height: 28px; padding: 0 var(--novel-sp-3); margin-bottom: var(--novel-sp-3); font-size: var(--novel-fs-sm); }
+/* 源行与分类行同款可点行：源行右侧一枚「N 类」是本源自己声明的入口数，没有跨源计数可摆 */
+.novel-city-source, .novel-city-kind {
+  flex: none; display: flex; align-items: center; gap: var(--novel-sp-3); width: 100%; text-align: left;
+  padding: var(--novel-sp-1) var(--novel-sp-4); border: none; border-radius: var(--novel-r-sm);
+  background: none; color: var(--novel-text-2); font: inherit; font-size: var(--novel-fs-md); cursor: pointer;
+  transition: background var(--novel-dur) var(--novel-ease), color var(--novel-dur) var(--novel-ease);
+}
+/* 源行另有一枚 2px 左条说「展开的就是这一行」：整栏只剩一列可点行之后，铺底色不足以把选中源与它
+   下面那串分类分开。左条不额外占位——内边距让出那 2px，两行的文字左缘仍按各自档位对齐。 */
+.novel-city-source {
+  border-left: 2px solid transparent; border-radius: 0 var(--novel-r-sm) var(--novel-r-sm) 0;
+  padding-left: calc(var(--novel-sp-4) - 2px);
+}
+.novel-city-source:hover, .novel-city-kind:hover { background: var(--novel-hover); color: var(--novel-text); }
+.novel-city-source.on, .novel-city-kind.on { background: var(--novel-brand-tint); color: var(--novel-brand-strong); font-weight: 600; }
+.novel-city-source.on { border-left-color: var(--novel-brand); }
+.novel-city-source-name { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.novel-city-source-n { flex: none; font-size: var(--novel-fs-xs); color: var(--novel-text-3); font-weight: 400; }
+.novel-city-source.on .novel-city-source-n { color: var(--novel-brand-strong); }
+.novel-city-source-broken { flex: none; font-size: var(--novel-fs-xs); color: var(--novel-err); }
+/* 展开节点：分类只长在选中的源下面。左边距 + 一条竖线就是「这些属于上面那一行」的全部说法，
+   源行文字左缘 12px、分类文字左缘 25px——缩进本身是层级，不是装饰。 */
+.novel-city-kids {
+  flex: none; display: flex; flex-direction: column; gap: var(--novel-sp-0);
+  margin: var(--novel-sp-1) 0 var(--novel-sp-2) var(--novel-sp-4);
+  padding-left: var(--novel-sp-2); border-left: 1px solid var(--novel-border);
+}
+.novel-city-kids .novel-city-kind { padding-left: var(--novel-sp-2); }
+.novel-city-kfilter { margin-bottom: var(--novel-sp-2); }
+.novel-city-main { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: var(--novel-sp-3); }
+.novel-city-head { flex: none; display: flex; align-items: center; gap: var(--novel-sp-4); margin: 0; }
+.novel-city-head h2 { margin: 0; font-size: var(--novel-fs-xl); font-weight: 650; }
+.novel-city-sub { font-size: var(--novel-fs-xs); color: var(--novel-text-3); }
+/* 顺序是**静态说明不是控件**：左栏清单不做任何排序（服务端按该源声明的原样顺序给），
+   摆一个下拉出来就是假控件 */
+.novel-city-note { flex: none; font-size: var(--novel-fs-xs); color: var(--novel-text-3); }
+.novel-city-gridwrap { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.novel-city-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--novel-sp-3); }
+.novel-city-card {
+  display: flex; gap: var(--novel-sp-4); padding: var(--novel-sp-4); text-align: left;
+  background: var(--novel-layer-2); border: 1px solid var(--novel-border-faint);
+  border-radius: var(--novel-r-md); color: inherit; font: inherit; cursor: pointer;
+  transition: border-color var(--novel-dur) var(--novel-ease), background var(--novel-dur) var(--novel-ease);
+}
+.novel-city-card:hover { border-color: var(--novel-border); background: var(--novel-layer-3); }
+/* 在途骨架卡：盒子借 .novel-city-card、底色与线条借 .novel-sk（骨架语言只此一处，不另造一套），
+   本类只抹掉「可点」的假象——它不是一条能点的书，悬停变色就是假控件 */
+.novel-city-sk { cursor: default; pointer-events: none; }
+/* 封面位：无 coverUrl 时是首字降级块（底色走 .novel-cover-t* 那四档，hex 仍不出 token 层）——
+   故本类不带 background，免得按源序压掉后定义的档位色 */
+.novel-city-cover {
+  flex: none; width: 44px; height: 58px; border-radius: var(--novel-r-xs);
+  display: grid; place-items: center; overflow: hidden;
+  font-family: "Noto Serif SC", "STSong", "SimSun", serif; font-size: var(--novel-fs-base); font-weight: 600;
+}
+img.novel-city-cover { display: block; object-fit: cover; background: var(--novel-skeleton); }
+.novel-city-card-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: var(--novel-sp-0); }
+.novel-city-card-title { display: flex; align-items: center; gap: var(--novel-sp-2); }
+.novel-city-name {
+  min-width: 0; font-size: var(--novel-fs-md); font-weight: 650;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.novel-city-card:hover .novel-city-name { color: var(--novel-brand-strong); }
+.novel-city-card-meta, .novel-city-card-last {
+  font-size: var(--novel-fs-xs); color: var(--novel-text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.novel-city-card-intro {
+  font-size: var(--novel-fs-sm); color: var(--novel-text-2); line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
+}
+/* 未响应那条是本设计的**刻意例外**（与搜索面同哲学：源坏了要如实摊开，不藏在折叠里）——今天只有
+   书籍详情浮层的跨源那一列用它：摘要行给源名与错误码，展开才补完整 message */
+.novel-city-fail {
+  flex: none; border: 1px solid var(--novel-err-line); border-radius: var(--novel-r-sm);
+  background: var(--novel-err-weak); padding: var(--novel-sp-2) var(--novel-sp-4);
+  font-size: var(--novel-fs-xs); color: var(--novel-text-2);
+}
+.novel-city-fail > summary { display: flex; flex-wrap: wrap; align-items: center; gap: var(--novel-sp-2) var(--novel-sp-4); cursor: pointer; }
+.novel-city-fail b { font-weight: 600; color: var(--novel-err); }
+.novel-city-fail-who { color: var(--novel-text-2); }
+.novel-city-fail-more { margin-left: auto; color: var(--novel-text-3); }
+.novel-city-fail-msgs { display: flex; flex-direction: column; gap: var(--novel-sp-1); margin-top: var(--novel-sp-2); }
+/* 尾行 = 轮次读数 + 「加载更多」按钮（服务端不问就不打下一页，故这颗钮是真控件；读数本身仍只是读数）。
+   渲染与否由**有没有轮次**判（没有一轮即整行不出），不是由这行文字空不空判——轮次读数的四条分支
+   恒有一句可说，「一条还没回」也有它自己的说法 */
+.novel-city-foot {
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: var(--novel-sp-3);
+  border-top: 1px solid var(--novel-border-faint); padding-top: var(--novel-sp-3);
+  font-size: var(--novel-fs-xs); color: var(--novel-text-3);
+}
+/* 书籍详情浮层：覆盖右区、书单留在原位（它是覆盖层——不卸载书单、不动它的滚动位置）；遮罩与本体
+   同住浮层单表。**不复用 .novel-drawer**：那一族锚的是阅读区 0 宽 sticky 槽（见上文），几何与
+   这里「贴右缘通高的覆盖面板」是两件事，硬套会把两处一起改坏。 */
+.novel-city-scrim { position: absolute; inset: 0; z-index: var(--novel-z-panel); background: var(--novel-mask); }
+.novel-city-drawer {
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: var(--novel-z-panel);
+  width: min(372px, calc(100% - var(--novel-sp-6))); overflow-y: auto; overscroll-behavior: contain;
+  display: flex; flex-direction: column; gap: var(--novel-sp-4); padding: var(--novel-sp-5);
+  background: var(--novel-layer-2); border-left: 1px solid var(--novel-border); box-shadow: var(--novel-shadow-pop);
+}
+.novel-city-drawer-head { flex: none; display: flex; align-items: center; gap: var(--novel-sp-3); }
+.novel-city-drawer-title { flex: 1 1 auto; min-width: 0; font-size: var(--novel-fs-lg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.novel-city-bookhead { flex: none; display: flex; flex-direction: column; gap: var(--novel-sp-2); }
+.novel-city-bookhead-meta { font-size: var(--novel-fs-sm); color: var(--novel-text-2); }
+.novel-city-tags { display: flex; flex-wrap: wrap; gap: var(--novel-sp-2); }
+.novel-city-tag {
+  font-size: var(--novel-fs-xs); color: var(--novel-text-3); padding: 1px var(--novel-sp-3);
+  border: 1px solid var(--novel-border-faint); border-radius: 999px;
+}
+/* 跨源那一次的进度行：读数 + 「停止」并排（那颗钮说的就是这一行正在跑的那一轮，不搬到浮层底部） */
+.novel-city-progress { flex: none; display: flex; align-items: center; gap: var(--novel-sp-4); font-size: var(--novel-fs-xs); }
+.novel-city-srclist { display: flex; flex-direction: column; gap: var(--novel-sp-3); }
+.novel-city-srcrow {
+  display: flex; align-items: center; gap: var(--novel-sp-3); padding: var(--novel-sp-4);
+  border: 1px solid var(--novel-border); border-radius: var(--novel-r-md); background: var(--novel-layer-3);
+}
+.novel-city-srcrow-who { flex: 1 1 auto; min-width: 0; font-size: var(--novel-fs-base); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 这一行里该退让的是「最新」那句（省略号收口），不是两颗钮：钮被挤出浮层就是点不到。
+   本源那一行今天根本不带这句——头部那颗 tag 已经把整句说过了（同一层浮层说两遍就是抄本），
+   跨源各行带的是各家的最新，放不下就由它自己收省略号。 */
+.novel-city-srcrow-last {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--novel-fs-xs); color: var(--novel-text-3);
+}
+/* 两颗钮不参与收缩：它们一旦被压窄，钮里的字会折成两行（CJK 的 min-content 只有一个字宽） */
+.novel-city-srcrow-add { flex: none; }
+.novel-city-srcrow-go { flex: none; }
+/* 窄面板退档（< 900px）：左栏通栏、限高、限宽，书单回 2 列。**列表形状不变**——旧版在这里把两节
+   各折成一条可横滚的 chip 带，那是「两节叠在一栏里」才需要的补丁；一栏一条列表之后没有对象了。
+   限宽 340px 是防另一件事：通栏的 13px 短标签行会把右端的「N 类」推到两百多 px 之外，一行读成两半。 */
+@container (max-width: 899px) {
+  .novel-city { flex-direction: column; }
+  .novel-city-rail { width: auto; max-width: 340px; max-height: 38%; }
+  .novel-city-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 `
 

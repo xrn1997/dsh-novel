@@ -64,3 +64,11 @@ export function setPref(patch: Partial<Prefs>): void {
   prefsStore.set(next)
   ls.setItem(PREFS_KEY, JSON.stringify(next))
 }
+
+// ── 书城现场（会话内；不落盘）────────────────────────────────────
+
+/** 书城的会话内现场：记住上次逛的源与分类（**不落盘**——它是交互现场，不是用户偏好；落盘会引入
+ *  一份新的持久状态面，收益不抵成本）。空 = 还没选过，由视图回落可选源的第一项与其第一个分类。
+ *  浏览轴收成按源后现场多了一根轴：源失效（禁用/删掉）时视图回落第一项并改写这里，不留指向
+ *  不存在源的选中态。 */
+export const cityStore = createStore<{ sourceId: string | null; kind: string | null }>({ sourceId: null, kind: null })

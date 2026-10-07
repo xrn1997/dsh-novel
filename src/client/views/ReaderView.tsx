@@ -14,7 +14,7 @@ import { nextChapterIndex } from '../reader-load.js'
 import {
   contentOriginTop, findScrollport, portScrollHeight, portScrollTop, portViewHeight, portViewTop, setPortScrollTop,
 } from '../scrollport.js'
-import { paperInk, findNovelNode, novelNodes, centerInScroller } from '../util.js'
+import { paperInk, findNovelNode, novelNodes, centerInScroller, stripLeadingTitle } from '../util.js'
 import { ErrorBanner, WarningList } from './bits.js'
 import { ChapterBody } from './ChapterBody.js'
 import { ReaderNavigation } from './ReaderNavigation.js'
@@ -505,38 +505,53 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   }, [prefs.fontSize, prefs.lineHeight, prefs.measure, readerPort, session, sourceId])
 
   const shownError = error ?? exportState.error
+  /** 纸与墨：条底、条上控件、进度槽全由这两个值槽派生（规则住样式层，行内只给值）。
+   *  写在 .novel-rdr 根上而非 .novel-rdr-main 上——条是 main 的兄弟，写在 main 里条够不着。 */
+  const paper = { '--novel-paper': prefs.paperColor, '--novel-paper-ink': paperInk(prefs.paperColor) } as CSSProperties
   return (
-    <div data-novel-view="reader" className="novel-rdr">
+    <div data-novel-view="reader" className="novel-rdr" style={paper}>
       {/* 偏好/导出面板遮罩：挂 reader 根容器盖满整个阅读区——只盖工具栏条时点正文关不掉面板；
           导出面板同用（互斥浮层同一把 Esc + 同一层遮罩） */}
       {(ctrlOpen || expOpen) && (
         <div data-novel-ctrl-mask onClick={() => { setCtrlOpen(false); setExpOpen(false) }}
           style={{ position: 'absolute', inset: 0, zIndex: CTRL_Z.mask }} />
       )}
-      {/* 控制器层（主题变量；darkController 决定是否跟随深色）——sticky：滚动容器是 .novel-main，
-          工具栏不 sticky 会随正文一起滚走（目录/Aa 够不着）。布局归 .novel-rdr-bar（样式层），
-          行内只留 sticky 定位与 z（CTRL_Z 常量，ctrl-z 守卫断言）；novel-dark 挂工具栏根。 */}
+      {/* 控制器层——sticky：滚动容器是 .novel-main，工具栏不 sticky 会随正文一起滚走（目录/Aa 够不着）。
+          布局与配色归 .novel-rdr-bar（条底由 --novel-paper 派生；darkController 那一档在
+          .novel-rdr-bar.novel-dark 里让回宿主暗底），行内只留 sticky 定位与 z（CTRL_Z 常量，
+          ctrl-z 守卫断言）。图标一律 aria-hidden：它们是装饰，可访问名由文案给。 */}
       <div className={prefs.darkController ? 'novel-dark novel-rdr-bar' : 'novel-rdr-bar'}
         style={{ position: 'sticky', top: 0, zIndex: CTRL_Z.toolbar }}>
-        <button className="novel-btn sm" onClick={() => navigate({ name: 'shelf' })}>‹ 书架</button>
+        <button className="novel-rdr-ctl" onClick={() => navigate({ name: 'shelf' })}>
+          <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M10 3 5 8l5 5" /></svg>书架
+        </button>
         {/* 正文内链的返回入口：**一次返回一条**（重复跟随链接才有多层）。栈在会话里、只活在窗口内；
-            没押返回项时不渲染——不给一个点了没反应的按钮。位置在「‹ 书架」之后，左侧主次分明。 */}
+            没押返回项时不渲染——不给一个点了没反应的按钮。位置在「书架」之后，左侧主次分明。 */}
         {returnDepth > 0 && (
-          <button className="novel-btn sm" onClick={() => session.goBack(sourceId)}
-            title="回到跟随链接前的位置">↩ 返回原处</button>
+          <button className="novel-rdr-ctl" onClick={() => session.goBack(sourceId)}
+            title="回到跟随链接前的位置">返回原处</button>
         )}
+        <span className="novel-rdr-sep" aria-hidden="true" />
+        {/* 读数：当前章在主位（这一屏唯一在变的量），书名退副位、总章数交给分母。
+            目录未到时不给一个空主位——那时唯一诚实的话就是「目录加载中」。 */}
         <div className="novel-rdr-title">
-          <span className="novel-rdr-book">{title}</span>{toc === null ? '' : ` · 共 ${toc.length} 章`}
+          {toc === null ? <span className="novel-rdr-chap">目录加载中…</span> : (
+            <>
+              <span className="novel-rdr-chap">{toc[currentChapter]?.name ?? ''}</span>
+              <span className="novel-rdr-pos">{currentChapter + 1} / {toc.length}</span>
+            </>
+          )}
+          <span className="novel-rdr-book">{title}</span>
         </div>
         <div className="novel-rdr-acts">
           {/* 导入说明入口：**只在真有持久告警的本地书上出现**（没告警一个字都不多说）。
               点开是只读面板——重看入口，不重复取数、不写进度。 */}
           {hasImportNotes && (
-            <button className="novel-btn sm" aria-expanded={notesOpen} aria-label="导入说明"
+            <button className="novel-rdr-ctl" aria-expanded={notesOpen} aria-label="导入说明"
               onClick={toggleImportNotes} title={`导入说明（${importNotes.length} 条）`}>导入说明</button>
           )}
           <button
-            className="novel-btn sm"
+            className="novel-rdr-ctl"
             onClick={() => { if (exportState.running) exportRun.cancel(); else openExport() }}
             title={exportState.running
               ? (exportState.range === null
@@ -544,7 +559,9 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
                 : `范围导出（第 ${exportState.range.from}–${exportState.range.to} 章）`)
               : '导出（选择章节范围）'}
           >
-            {exportState.running ? `⤓ ${exportState.kb} KB · 取消导出` : '⤓ 下载'}
+            {exportState.running
+              ? <>{exportState.kb} KB · 取消导出</>
+              : <><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 2.5v8m0 0L5 7.5M8 10.5l3-3M3 13h10" /></svg>下载</>}
           </button>
           {/* 面板与 Aa 互斥：开任一先关另一（openExport / 下方 onClick 各自收口） */}
           {expOpen && (
@@ -571,18 +588,18 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
               darkController={prefs.darkController}
             />
           )}
-          <button className="novel-btn sm" aria-expanded={ctrlOpen} aria-label="阅读设置"
+          <button className="novel-rdr-ctl" aria-expanded={ctrlOpen} aria-label="阅读设置"
             onClick={() => { setExpOpen(false); setNotesOpen(false); hideNoteSurface(); setCtrlOpen(!ctrlOpen) }}
             title="阅读设置">Aa</button>
           {/* 目录与 Aa/导出/注释面板互斥：工具栏已在遮罩之上（CTRL_Z），点目录不再被遮罩顺手关面板——自己关。
               注释面板同住右上角且更宽，叠着会让目录**点不动**（命中测试打到面板头）。 */}
-          <button className="novel-btn sm" aria-expanded={drawer} aria-label="目录"
+          <button className="novel-rdr-ctl" aria-expanded={drawer} aria-label="目录"
             onClick={() => { setCtrlOpen(false); setExpOpen(false); setNotesOpen(false); hideNoteSurface(); setDrawer(!drawer) }}
             title={toc === null ? '目录' : `目录（${toc.length}）`}>目录</button>
           {ctrlOpen && <PrefsPanel />}
         </div>
-        {/* 章进度细线：跨章才动（会话只在 chapterIndex 变化时写 currentChapter）。
-            章内百分比刻意不做——那是每帧量，会让整棵阅读器每帧重渲染。 */}
+        {/* 章进度：跨章才动（会话只在 chapterIndex 变化时写 currentChapter）。章内百分比刻意不做——
+            那是每帧量，会让整棵阅读器每帧重渲染。值槽在轨道本体上，实心那一档由样式层的 ::after 读它。 */}
         <i className="novel-rdr-trail" aria-hidden="true"
           style={{ '--novel-pct': String(toc === null ? 0 : (currentChapter + 1) / toc.length) } as CSSProperties} />
       </div>
@@ -594,16 +611,15 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
           else setExportState(IDLE_EXPORT)
         }} />
       )}
-      {/* 阅读区（纸张色铺满这一层 = full-bleed）：正文列 + 0 宽 sticky 抽屉槽同在此行。
+      {/* 阅读区（full-bleed：纸铺满这一层）：正文列 + 0 宽 sticky 抽屉槽同在此行。
+          纸色走值槽（.novel-rdr 根上行内写、样式层读），条与正文因此读的是同一张纸。
           抽屉三版死法与现方案的理由见样式层 .novel-drawer-slot 注释。 */}
-      <div className="novel-rdr-main" style={{ background: prefs.paperColor }}>
-        {/* 正文层：字色/字号/行距/栏宽由 prefs 行内固定——永不接宿主 token；纸张色在**外层
-            .novel-rdr-main** 上（full-bleed：纸铺满阅读区，正文列只管文字排到哪儿为止） */}
+      <div className="novel-rdr-main">
+        {/* 正文层：字号/行距/栏宽由 prefs 行内固定——永不接宿主 token；字色走 --novel-paper-ink */}
         <div
           ref={bodyRef}
           className="novel-rdr-body"
           style={{
-            color: paperInk(prefs.paperColor),
             fontSize: prefs.fontSize, lineHeight: prefs.lineHeight,
             '--novel-measure': `${prefs.measure}em`,
           } as CSSProperties}
@@ -619,10 +635,12 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
                 data-chapter={i}
               >
                 {/* h2 不是 h3：阅读器这一屏没有更高的标题占位，从 h3 起等于给读屏一份断了头的大纲 */}
-                <h2>{toc?.[i]?.name ?? `第 ${i + 1} 章`}</h2>
+                <h2 className="novel-rdr-mark">{toc?.[i]?.name ?? `第 ${i + 1} 章`}</h2>
                 {/* 正文两种形态都在 ChapterBody 里（文字章逐行成段、图文章按白名单映射）：
-                    会话把 ChapterContent 原样搬进来，形态分支只在这一处 */}
-                <ChapterBody content={content} bookKey={bookKey} onNavigate={bodyLink} />
+                    会话把 ChapterContent 原样搬进来，形态分支只在这一处。
+                    送进渲染前剥一次重复章名——**只这一处剥**，导出与工具读的是原样正文。 */}
+                <ChapterBody content={stripLeadingTitle(content, toc?.[i]?.name ?? `第 ${i + 1} 章`)}
+                  bookKey={bookKey} onNavigate={bodyLink} />
               </div>
             ))}
           {toc !== null && (

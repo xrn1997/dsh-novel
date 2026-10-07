@@ -9,6 +9,15 @@ import { NOVEL_API_PREFIX, PARAMS, paramRoutes, pickShelfMeta, ROUTES, SEG } fro
 /** 「书不在架上」文案单点（此前 shelfPut 两形态逐字两份） */
 const NOT_ON_SHELF = '书不在架上，先带 title 调用加入'
 
+/** SSE 响应头单点（搜索面与发现面两条流共用）。`x-accel-buffering` 那句为什么只写过一份：
+ *  攒帧的代价是「即时」变成「整批迟到」，而这条性质对两条流同等成立，抄第二遍时最容易丢的就是它。 */
+const SSE_HEADERS = {
+  'content-type': 'text/event-stream; charset=utf-8',
+  'cache-control': 'no-cache',
+  connection: 'keep-alive',
+  'x-accel-buffering': 'no',
+}
+
 /** 非空 string[] body 校验单点（批路由同口径的手写块收口）；字段名是唯一变量（ids / keys） */
 function requireStringList(body: Record<string, unknown> | null, field: string): string[] {
   const v = body?.[field]
@@ -194,12 +203,7 @@ async function route(
     guard(method, 'GET', ROUTES.searchJobStream.path)
     const raw = Number(url.searchParams.get(PARAMS.since) ?? '0')
     let cursor = Number.isInteger(raw) && raw > 0 ? raw : 0
-    res.writeHead(200, {
-      'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-cache',
-      connection: 'keep-alive',
-      'x-accel-buffering': 'no',          // 经代理不许攒帧：攒了就不是「即时」，而是「整批迟到」
-    })
+    res.writeHead(200, SSE_HEADERS)
     let off: (() => void) | null = null
     const pump = (): void => {
       if (res.writableEnded || res.destroyed) return
@@ -227,6 +231,61 @@ async function route(
     writeOk(res, await service.search(keyword, ids === undefined ? undefined : { sourceIds: ids }))
     return
   }
+  // ── 书城发现面（按源列出的分类入口：清单 / 分类书单）──────────────────
+  if (a === SEG.explore && b === SEG.kinds) {
+    // 清单是本地派生（按源列出各自声明的分类入口标题，主人 `services/explore.ts` 的
+    // `deriveExploreSources`），零网络请求——参与集判据归门面。
+    // **只出标题、不出入口地址**：两方言的地址语义不同，那份差异不外泄到跨半契约（`ExploreSources`）
+    guard(method, 'GET', ROUTES.exploreKinds.path)
+    writeOk(res, service.exploreSources())
+    return
+  }
+  if (a === SEG.explore && b === SEG.list && c === undefined) {
+    // 分类轮次复用搜索那套「提交 + 快照 + SSE」的读面形状：提交即由 Node 半跑完并持有整轮。
+    // **浏览轴是「先点名一个源、逛它自己的分类」**（`docs/adr/0028`）：两个点名都进 body，
+    // 缺任何一个都是路由自检的 body 形状判据（400 BadRequest 点名缺哪个）；点了个不存在的源
+    // 则由门面的值域判据抛错，经同一份映射落成同一个状态码——路由不复制那份判据。
+    guard(method, 'POST', ROUTES.exploreList.path)
+    const body = await readJsonBody<{ sourceId?: unknown; kind?: unknown } | null>(req, null)
+    const sourceId = typeof body?.sourceId === 'string' ? body.sourceId.trim() : ''
+    if (sourceId === '') throw new ApiError(`缺 body 字段 ${PARAMS.sourceId}`, 400, 'BadRequest')
+    const kind = typeof body?.kind === 'string' ? body.kind.trim() : ''
+    if (kind === '') throw new ApiError(`缺 body 字段 ${PARAMS.kind}`, 400, 'BadRequest')
+    writeOk(res, service.startExploreJob(sourceId, kind))
+    return
+  }
+  if (a === SEG.explore && b === SEG.list && c === SEG.more) {
+    // 续页：同一轮再要一页。门面说「没得发」就是**没有更多**——回 409 而不是静默成功，
+    // 客户端据此把按钮收掉；假装又加载了一轮是拿假事实喂 UI。
+    guard(method, 'POST', ROUTES.exploreListMore.path)
+    const r = service.loadMoreExploreJob()
+    if (r === null) throw new ApiError('没有更多了', 409, 'Conflict')
+    writeOk(res, r)
+    return
+  }
+  if (a === SEG.explore && b === SEG.list && c === SEG.jobStatus) {
+    // 全量快照（跨页累积住在服务端持有者，整帧替换才读得出「这一轮到此刻」——见 ExploreSnapshot）
+    guard(method, 'GET', ROUTES.exploreListStatus.path)
+    writeOk(res, { job: service.exploreJobSnapshot() })
+    return
+  }
+  if (a === SEG.explore && b === SEG.list && c === SEG.jobStream) {
+    // 与 search 流同一份形状：每帧都是同一份快照，终态即关流；帧按 id 归属轮次（订阅者自己认 id）
+    guard(method, 'GET', ROUTES.exploreListStream.path)
+    res.writeHead(200, SSE_HEADERS)
+    let off: (() => void) | null = null
+    const pump = (): void => {
+      if (res.writableEnded || res.destroyed) return
+      const job = service.exploreJobSnapshot()
+      res.write(`data: ${JSON.stringify({ job })}\n\n`)
+      if (job !== null && job.phase !== 'running') { off?.(); res.end() }
+    }
+    off = service.subscribeExploreJob(pump)
+    res.on('close', () => { off?.() })
+    pump()
+    return
+  }
+
   if (a === SEG.book && b === undefined) {
     guard(method, 'GET', ROUTES.book.path)
     const { sourceId, url: bookUrl } = requireSourceUrl(url)

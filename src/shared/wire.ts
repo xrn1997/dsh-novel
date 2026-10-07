@@ -22,7 +22,7 @@ export type SourceStatus = 'unverified' | 'verified' | 'broken'
  *  读不懂不等于文本，一律不进参与集（曾按文本处理，误标的短剧/漫画源混进聚合搜索——已推翻）。
  *  它也不写 `status`：探针按搜索面重判，这类源的搜索面恰恰是好的，用状态承载会被下一次重验洗白。
  *  本插件当前只支持文本源：导入预检点名拒绝非文本与未知；参与集 = enabled ∧ type==='text'
- *  （判定单点在 reading 的 participates 谓词）；存量误标由 SourceRegistry.load 按 raw 重推收敛。 */
+ *  （判定单点在 services/participation.ts 的 participates 谓词）；存量误标由 SourceRegistry.load 按 raw 重推收敛。 */
 export type SourceContentKind = 'text' | 'image' | 'audio' | 'file' | 'unknown'
 
 /** 探针失败原因：引擎三类 + 抓取两类 + 规则缺失；'Error' 为兜底（出现即分类漏了） */
@@ -137,6 +137,62 @@ export interface SearchJobSnapshot {
   /** `since` 之后的增量分组（谁先搜完谁先可见）；客户端把 `next` 当作下次的 `since` */
   added: SearchGroup[]
   next: number
+  startedAt: number
+  finishedAt?: number
+  error?: string
+}
+
+/** 发现面的**按源**清单：每个「有分类入口」的源，连它自己声明的分类标题。
+ *  **只给标题、不给入口地址**——两方言的地址语义不同（原生是填进源级模板 `{{kind}}` 的 slug，
+ *  legado 的 `url` 本身就是那一类的完整模板），这份差异因此继续只住服务端一侧，不外泄到跨半契约。
+ *  路由名仍是 `explore/kinds`：它给的就是分类入口清单，只是按源分组了。
+ *  曾经的形状是「跨源精确同名并集 + 每条计数」——那条轴把左栏撑成了各站自造词的长列表，
+ *  且绝大多数词条只挂一个源，见 `docs/adr/0028`。
+ *  源行上的 `groups` 与 `status` **只是展示标签与状态角标，不是浏览轴**：同一篇 ADR 刚把「分组→源
+ *  两级」列为被否决做法，这一面逛的轴是「点名一个源」，不是「按分组逛」——别让这两个字段躺在
+ *  契约里被读成分组又变回了一级轴。 */
+export interface ExploreSources {
+  sources: Array<{ id: string; name: string; groups: string[]; status: SourceStatus; kinds: string[] }>
+}
+
+/** 一本书：**某个源的某个分类下的一条**。不再有 `origins[]`/`sourceCount`——浏览面不跨源，
+ *  那两个字段在单源下恒为「1 条 / 1 源」，是谎言字段。跨源视野由详情浮层那一次
+ *  手动聚合搜索承担（主人 `client/search-job.ts`，不是这里）。
+ *  `author` 为空的条目照旧合法（重名书大量存在，我们从不按书名合并任何东西）。 */
+export interface ExploreBook {
+  name: string
+  author: string | null
+  /** 该源上的书地址；`null` = 这个源没给入口，读与架两个动作都不给按钮 */
+  bookUrl: string | null
+  coverUrl: string | null
+  kind: string | null
+  lastChapter: string | null
+  intro: string | null
+  wordCount: string | null
+}
+
+/** 单源分类轮次的读面快照。
+ *  **仍是全量快照、仍整帧替换**：跨页累积住在服务端持有者（`services/explore-job.ts`），
+ *  客户端不持有任何要跟着翻页对齐的东西。
+ *  曾经的形状带着 `total`/`done`/`failures`：`total` 在单源下恒为 1，是常数；`done`/`failures`
+ *  是「一轮打多个源」的读数。单源的失败只有一条泳道，由 `error` 承载——**它不是 `phase` 的替身**：
+ *  执行体从不抛错，抓取失败是以带 `error` 的组交回来的，所以「这一页没问到」必须落在 `error` 上，
+ *  否则它会与「这一类真的没货」折成同一帧（写它的责任在 `services/explore-job.ts` 的 `absorb`）。 */
+export interface ExploreSnapshot {
+  id: string
+  sourceId: string
+  sourceName: string
+  kind: string
+  phase: 'running' | 'done' | 'failed'
+  /** 这一轮被取消（`phase='failed'` 而非失败）：UI 据此不报红条。发现面今天只有宿主侧取消可达 */
+  cancelled: boolean
+  /** 已加载到第几页（第 1 页由提交带来，续页每点一次 +1） */
+  page: number
+  /** 还能不能再点一次「加载更多」：**此刻**可以点——有一批在途时为 false（客户端显加载态用的是
+   *  自己的 `round.running`，把在途那一段排除出去不丢信息）。于是服务端的 409 只剩一个意思。
+   *  **它不是 `phase` 的另一半**：一页跑完就是 `done`，而 `hasMore` 只说「现在能不能点」。 */
+  hasMore: boolean
+  books: ExploreBook[]
   startedAt: number
   finishedAt?: number
   error?: string
@@ -375,6 +431,13 @@ export const SEG = {
   job: 'job',
   jobCancel: 'job-cancel',
   jobStream: 'job-stream',
+  /** 发现面（各源声明的分类入口，两方言都认）：按源的入口清单 / 分类书单 / 分类轮次的任务读面 */
+  explore: 'explore',
+  kinds: 'kinds',
+  list: 'list',
+  /** 续页端（`explore/list/more`）：`explore/list` 已经是「提交新一轮」的写口，
+   *  续页要有自己的一段才不与它同形、同形即歧义 */
+  more: 'more',
   book: 'book',
   toc: 'toc',
   chapter: 'chapter',
@@ -394,7 +457,7 @@ export const SEG = {
 export interface Route { path: string; segs: string[] }
 export function route(...segs: string[]): Route { return { path: segs.join('/'), segs } }
 
-/** 静态路由表（无参数的部分，共 25 条；另有 5 条参数路由见 paramRoutes）——
+/** 静态路由表（无参数的部分，共 30 条；另有 5 条参数路由见 paramRoutes）——
  *  路由总数由 tests/shared/wire-builders.test.ts 钉死（此前的「17 条路由」注释既烂又无测试）。 */
 export const ROUTES = {
   health: route(),
@@ -415,6 +478,17 @@ export const ROUTES = {
   searchJobStream: route(SEG.search, SEG.jobStream),
   /** 停止本轮聚合搜索：只停「还要去搜的源」，已搜出的命中一律保留（读面照旧可读） */
   searchJobCancel: route(SEG.search, SEG.jobCancel),
+  /** 按源列出的分类入口清单（本地派生，零网络请求，只出标题） */
+  exploreKinds: route(SEG.explore, SEG.kinds),
+  /** 提交一轮分类抓取 */
+  exploreList: route(SEG.explore, SEG.list),
+  /** 续页：把**当前这一轮**再往前抓一页（同一轮 id，客户端整帧替换的读模型不因此换脸）；
+   *  没有源还能再要一页时回 409——「加载更多」钮据此收掉，而不是假装又开了一轮 */
+  exploreListMore: route(SEG.explore, SEG.list, SEG.more),
+  /** 分类轮次的全量快照（无游标——快照形状见 ExploreSnapshot 的注释） */
+  exploreListStatus: route(SEG.explore, SEG.list, SEG.jobStatus),
+  /** 分类轮次的状态信号流（SSE，每帧一份全量快照） */
+  exploreListStream: route(SEG.explore, SEG.list, SEG.jobStream),
   book: route(SEG.book),
   toc: route(SEG.toc),
   chapter: route(SEG.chapter),
@@ -471,6 +545,8 @@ export const PARAMS = {
    *  （与既有 `DELETE local?id=` 同参数名；本地读口不用路径段，bookKey 里的 `:`/`/` 不必编码成段） */
   documentId: 'documentId',
   resourceId: 'resourceId',
+  /** 分类名（发现面：左栏选中项，精确同名匹配） */
+  kind: 'kind',
 } as const
 
 /** query 序列化：编码 + 去 undefined/null（null = 键缺席，与 wire 可空口径一致） */

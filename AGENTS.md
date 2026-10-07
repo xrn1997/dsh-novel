@@ -26,7 +26,7 @@ DeepSeek Harness（DSH）的「小说」插件：导入 legado 书源 → 聚合
 
 `pnpm test` 全绿只证明引擎 / 服务 / 契约 / 前端逻辑：**不证明**任何真实站点可用性、也不证明安装链路。`pnpm typecheck` 必须与 `pnpm test` **同批跑**：tests 在 tsconfig 内而 vitest 不查类型，props 缝加宽而某个测试文件没跟上，只有 tsc 抓得住。
 
-改动抓取 / 规则引擎 / 打包链路时，README「测试」节那几条门控（`DSH_REPROBE` / `DSH_CONTENT_AUDIT` / `COMPAT_CAPTURE` / `DSH_INSTALL_CHECK` / `DSH_EPUB_BROWSER` / `DSH_PARSE_CENSUS`）是唯一自动化验证——按那里的命令跑对应那条，并把结论**如实**写进汇报。注意分工：reprobe 只验**搜索面**，`verified` 不证明正文可读，正文口径是 `DSH_CONTENT_AUDIT`，而它是**审计报告**、不设通过率断言（分桶读数要人判）；`DSH_EPUB_BROWSER` 只跑本机浏览器与本地书、不访问站点。
+改动抓取 / 规则引擎 / 打包链路时，README「测试」节那几条门控（`DSH_REPROBE` / `DSH_CONTENT_AUDIT` / `COMPAT_CAPTURE` / `DSH_INSTALL_CHECK` / `DSH_EPUB_BROWSER` / `DSH_PARSE_CENSUS`）是唯一自动化验证——按那里的命令跑对应那条，并把结论**如实**写进汇报。注意分工：reprobe 只验**搜索面**，`verified` 不证明正文可读，正文口径是 `DSH_CONTENT_AUDIT`，而它是**审计报告**、不设通过率断言（分桶读数要人判）；`DSH_EPUB_BROWSER` 只在本机浏览器里量渲染与几何（本地书正文、组件排版），不起服务也不访问站点。
 
 **取门的退出码，别看管道说了什么**：`pnpm test | grep` 之后退出码是 grep 的，红会被吃掉还留一句「全绿」。跑门一律两步：先把输出灌进文件，再单独打印退出码，汇报里把**退出码连同计数**一起抄。**跑门与提交必须是两条命令**——链式的下一环看的是别人的退出码，红也就跟着提交了。
 

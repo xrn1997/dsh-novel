@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeSource } from '../../src/services/normalize.js'
+import { normalizeSource, rawExploreEnabled, rawExploreFields } from '../../src/services/normalize.js'
+import type { NormalizeIssue } from '../../src/services/normalize.js'
 
 const realSource = {
   bookSourceName: '笔趣阁',
@@ -158,13 +159,17 @@ describe('对象形态方言（legado 嵌套导出）', () => {
     expect(r.ok).toBe(false)
     expect(r.missing.map((m) => m.field)).toContain('ruleContent')
   })
-  it('不支持的子字段与 ruleExplore → 聚合 warning，不阻塞导入', () => {
+  it('不支持的子字段仍聚合 warning，而 ruleExplore 已被消费（不再被点名）→ 不阻塞导入', () => {
     const r = normalizeSource(objectSource)
     expect(r.ok).toBe(true)
     const warn = r.warnings.map((w) => w.message).join(' ')
     expect(warn).toContain('ruleContent.webJs')     // 未支持子字段点名
     expect(warn).toContain('ruleContent.callBackJs')
-    expect(r.warnings.some((w) => w.field === 'ruleExplore')).toBe(true)  // v1 无 explore 面
+    // ruleExplore 现在**被消费**（整套覆盖），不再是「整块未启用」的点名对象
+    expect(r.warnings.some((w) => w.field === 'ruleExplore')).toBe(false)
+    expect(r.source!.rules.ruleExploreList).toBe('@css:.e@li')
+    expect(r.source!.rules.ruleExploreName).toBe('tag.a@text')
+    expect(r.source!.rules.ruleExploreBookUrl).toBe('tag.a@href')
     // kind/wordCount 已接入取值链路（`ruleKind`/`ruleWordCount`），不再是"未支持字段"
     expect(warn).not.toContain('ruleSearch.kind')
     expect(r.source!.rules.ruleKind).toBe('玄幻')
@@ -318,12 +323,12 @@ describe('Native 格式（android-ebook 原生规则）', () => {
     expect(rules.ruleDetailKind).toBe('.booktxt p:nth-child(2)@text')
     expect(rules.ruleWordCount).toBeNull()   // 该 fixture 不带 wordCount
   })
-  it('ruleFind/ruleRank/charset → 聚合 warning（宁吵不瞒），不阻塞导入', () => {
+  it('ruleRank/charset → 聚合 warning（宁吵不瞒），不阻塞导入；ruleFind 已接真映射故不再在此列', () => {
     const r = normalizeSource(nativeSource)
     expect(r.ok).toBe(true)
     const warn = r.warnings.map((w) => w.message).join(' ')
     expect(warn).not.toContain('kind')     // 已支持，不再算未支持字段
-    expect(warn).toContain('ruleFind')
+    expect(warn).not.toContain('ruleFind') // 发现面已真映射（url/kinds/ruleSearch）
     expect(warn).toContain('ruleRank')
     expect(warn).toContain('charset')
   })
@@ -354,6 +359,168 @@ describe('Native 格式（android-ebook 原生规则）', () => {
     })
     expect(r.ok).toBe(true)
     expect(r.source).toMatchObject({ name: '标准', baseUrl: 'https://legado.com' })
+  })
+})
+
+describe('原生方言的 ruleFind 映射（发现面数据面）', () => {
+  const native = {
+    name: '笔趣阁', url: 'https://www.bqquge.com',
+    searchUrl: '/so/{{keyword}}/{{page}}',
+    ruleSearch: { list: '.item', name: 'h3 a', bookUrl: 'h3 a@href' },
+    ruleBookInfo: { name: '.booktxt h1' },
+    ruleToc: { list: '#list li', name: 'a', url: 'a@href' },
+    ruleContent: { content: '.con' },
+    ruleFind: {
+      url: '/{{kind}}/{{page}}',
+      kinds: [{ title: '玄幻', url: 'xuanhuan' }, { title: '都市', url: 'dushi' }],
+    },
+  }
+
+  it('ruleFind.url 与 kinds 落进模型字段', () => {
+    const r = normalizeSource(native)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.source!.rules.ruleExploreUrl).toBe('/{{kind}}/{{page}}')
+    expect(r.source!.rules.ruleExploreKinds).toEqual([
+      { title: '玄幻', url: 'xuanhuan' },
+      { title: '都市', url: 'dushi' },
+    ])
+  })
+
+  it('ruleFind.ruleSearch 非空即整套覆盖；缺失则留 null（回落通用搜索规则）', () => {
+    const withOwn = { ...native, ruleFind: { ...native.ruleFind, ruleSearch: { list: '.book', name: '.title' } } }
+    const a = normalizeSource(withOwn)
+    if (!a.ok) throw new Error('应能规范化')
+    expect(a.source!.rules.ruleExploreList).toBe('.book')
+    expect(a.source!.rules.ruleExploreName).toBe('.title@text')  // Native 裸选择器 = 取文本（隐式 @text）
+    // 未给的子字段仍是 null —— 提醒使用者「整套切换」而非逐字段回落。这条断言要挑**通用规则声明过**
+    // 的字段：`ruleExploreBookUrl` 的通用侧（ruleBookUrl）是命得中的，逐字段回落会让它冒出通用那本书
+    // 地址，于是这里正是「整套」与「逐字段」的分野；作者/分类两边都空，断言它们对实现无区分力。
+    expect(a.source!.rules.ruleExploreBookUrl).toBeNull()
+    expect(a.source!.rules.ruleExploreAuthor).toBeNull()
+
+    const b = normalizeSource(native)
+    if (!b.ok) throw new Error('应能规范化')
+    expect(b.source!.rules.ruleExploreList).toBeNull()
+    expect(b.source!.rules.ruleExploreName).toBeNull()
+    expect(b.source!.rules.ruleExploreUrl).toBe('/{{kind}}/{{page}}') // 不随 ruleSearch 缺席而消失
+  })
+
+  it('kinds 的 children 非空 → 如实进 warning（本期不递归二级分类）', () => {
+    const nested = {
+      ...native,
+      ruleFind: { ...native.ruleFind, kinds: [{ title: '玄幻', url: 'xuanhuan', children: [{ title: '东方玄幻', url: 'df' }] }] },
+    }
+    const r = normalizeSource(nested)
+    if (!r.ok) throw new Error('应能规范化')
+    expect(r.warnings.some((w) => w.field === 'ruleFind.kinds' && w.message.includes('children'))).toBe(true)
+    expect(r.source!.rules.ruleExploreKinds).toEqual([{ title: '玄幻', url: 'xuanhuan' }])
+  })
+
+  it('ruleRank 仍然是不支持字段（对面 ADR 0027 已删这条链）', () => {
+    const r = normalizeSource({ ...native, ruleRank: { url: '/paihang' } })
+    if (!r.ok) throw new Error('应能规范化')
+    expect(r.warnings.some((w) => w.message.includes('ruleRank'))).toBe(true)
+  })
+
+  it('legado 方言同样落 ruleExploreKinds 键（恒为数组，消费者不必判空）', () => {
+    const flat = normalizeSource({ bookSourceName: 'A', bookSourceUrl: 'https://a', ruleContent: 'x' })
+    if (!flat.ok) throw new Error('应能规范化')
+    expect(flat.source!.rules.ruleExploreKinds).toEqual([])
+    expect(flat.source!.rules.ruleExploreUrl).toBeNull()
+    const obj = normalizeSource(objectSource)
+    if (!obj.ok) throw new Error('应能规范化')
+    expect(obj.source!.rules.ruleExploreKinds).toEqual([])
+  })
+})
+
+describe('rawExploreFields（存量按 raw 补推发现面的读口）', () => {
+  const native = {
+    name: '笔趣阁', url: 'https://www.bqquge.com',
+    searchUrl: '/so/{{keyword}}/{{page}}',
+    ruleSearch: { list: '.item', name: 'h3 a', bookUrl: 'h3 a@href' },
+    ruleContent: { content: '.con' },
+    ruleFind: {
+      url: '/{{kind}}/{{page}}',
+      kinds: [{ title: '玄幻', url: 'xuanhuan' }, { title: '都市', url: 'dushi' }],
+    },
+  }
+  const withOwn = {
+    ...native,
+    ruleFind: {
+      ...native.ruleFind,
+      ruleSearch: {
+        list: '.book', name: '.title', author: '.au', bookUrl: 'a@href', coverUrl: 'img@src',
+        intro: '.i', kind: '.k', lastChapter: '.lc', wordCount: '.wc',
+      },
+    },
+  }
+
+  it('原生 ruleFind 的子字段按导入侧同一份映射派生（取值字段补隐式 @text，list/url 三件套不补）', () => {
+    const got = rawExploreFields(withOwn)!
+    expect(got.ruleExploreUrl).toBe('/{{kind}}/{{page}}')
+    expect(got.ruleExploreKinds).toEqual([
+      { title: '玄幻', url: 'xuanhuan' }, { title: '都市', url: 'dushi' },
+    ])
+    expect(got.ruleExploreList).toBe('.book')            // 节点集：不补终端
+    expect(got.ruleExploreName).toBe('.title@text')
+    expect(got.ruleExploreBookUrl).toBe('a@href')
+    expect(got.ruleExploreWordCount).toBe('.wc@text')
+  })
+
+  it('ruleSearch 缺 list → 八字段整套不给（判据只看 list）；url 照旧派生', () => {
+    const got = rawExploreFields({ ...native, ruleFind: { ...native.ruleFind, ruleSearch: { name: '.title' } } })!
+    expect(got.ruleExploreUrl).toBe('/{{kind}}/{{page}}')
+    const nine = ['ruleExploreList', 'ruleExploreName', 'ruleExploreAuthor', 'ruleExploreBookUrl',
+      'ruleExploreCoverUrl', 'ruleExploreIntro', 'ruleExploreKind', 'ruleExploreLastChapter', 'ruleExploreWordCount'] as const
+    for (const k of nine) expect(got[k]).toBeNull()
+  })
+
+  it('非原生方言（raw 里同名块也不认）/ 无 ruleFind：全 null + []；raw 非对象 → undefined 叫调用方别动', () => {
+    const flat = rawExploreFields({ bookSourceName: 'A', bookSourceUrl: 'https://a', ruleContent: 'x', ruleFind: native.ruleFind })!
+    expect(flat.ruleExploreUrl).toBeNull()               // 方言判定复用 isNativeSource，不自己再写一份
+    expect(flat.ruleExploreKinds).toEqual([])
+    const bare = rawExploreFields({ ...native, ruleFind: undefined })!
+    expect(bare.ruleExploreUrl).toBeNull()
+    expect(bare.ruleExploreKinds).toEqual([])
+    expect(rawExploreFields('not-an-object')).toBeUndefined()
+  })
+
+  it('与 flattenNative 共用同一份映射：逐键等于 normalizeSource 的 rules（分头写两份解释即在此分叉）', () => {
+    const rules = normalizeSource(withOwn).source!.rules as unknown as Record<string, unknown>
+    for (const [k, v] of Object.entries(rawExploreFields(withOwn)!)) expect(rules[k]).toEqual(v)
+  })
+
+  // legado 方言的存量收敛：发现面接进来之前入库的源，raw 里躺着 exploreUrl / ruleExplore 却推不出东西
+  // → 书城对整个方言是空的。读口与导入侧共用那一次 flatten，方言差别（含隐式 @text 只归原生）不在这条路上分叉。
+  const legadoRaw = {
+    bookSourceName: '甲', bookSourceUrl: 'https://a.com', ruleContent: '@css:#c@text',
+    exploreUrl: '玄幻::/xh/{{page}}', ruleExplore: { bookList: '.box', name: 'tag.a', wordCount: '.wc' },
+  }
+  it('legado 的 raw（顶层 exploreUrl + 嵌套 ruleExplore）同样推得出分类入口与条目规则', () => {
+    const got = rawExploreFields(legadoRaw)!
+    expect(got.ruleExploreKinds).toEqual([{ title: '玄幻', url: '/xh/{{page}}' }])
+    expect(got.ruleExploreList).toBe('.box')
+    expect(got.ruleExploreName).toBe('tag.a')          // 隐式 @text 是原生方言的终端语义，不套到 legado 上
+    expect(got.ruleExploreWordCount).toBe('.wc')
+    expect(got.ruleExploreAuthor).toBeNull()           // 整套里没写的键如实为 null
+  })
+
+  it('legado 侧也逐键等于 normalizeSource 的 rules：两个读口共用同一份解释，不是各写一份碰巧同值', () => {
+    const rules = normalizeSource(legadoRaw).source!.rules as unknown as Record<string, unknown>
+    for (const [k, v] of Object.entries(rawExploreFields(legadoRaw)!)) expect(rules[k], `键 ${k}`).toEqual(v)
+  })
+})
+
+describe('rawExploreEnabled（发现开关的 raw 读口）', () => {
+  it('只有显式 false 才算关：原生方言的 raw 没这个键，「没写」不等于「关掉」', () => {
+    expect(rawExploreEnabled({ enabledExplore: false })).toBe(false)
+    expect(rawExploreEnabled({ enabledExplore: true })).toBe(true)
+    expect(rawExploreEnabled({})).toBe(true)
+  })
+  it('raw 不是对象 → true（读不动开关就不据此把源藏起来）', () => {
+    expect(rawExploreEnabled(null)).toBe(true)
+    expect(rawExploreEnabled('x')).toBe(true)
   })
 })
 
@@ -426,5 +593,124 @@ describe('名称前缀图标剥离（修复 2026-09-16）', () => {
   it('整名都是图标 → 保留原名（宁丑不空）；【】括号不剥（名字本体装饰）', () => {
     expect(nameOf('📂⚡')).toBe('📂⚡')
     expect(nameOf('【小说】书源网')).toBe('【小说】书源网')
+  })
+})
+
+describe('legado 发现面（exploreUrl + ruleExplore）', () => {
+  /** 发现面条目的九对「容器子字段 → 模型字段」（落位与平铺两张用例共用同一张表：逐键断言只写
+   *  一处，映射表少一键、或某键落错位置都当场红）。 */
+  const NINE = [
+    ['bookList', 'ruleExploreList'], ['name', 'ruleExploreName'], ['author', 'ruleExploreAuthor'],
+    ['bookUrl', 'ruleExploreBookUrl'], ['coverUrl', 'ruleExploreCoverUrl'], ['intro', 'ruleExploreIntro'],
+    ['kind', 'ruleExploreKind'], ['lastChapter', 'ruleExploreLastChapter'],
+    ['wordCount', 'ruleExploreWordCount'],
+  ] as const
+  /** 九键全非空的容器夹具（值按子字段可辨——两个不同子字段落进同一模型位也红）。 */
+  const nineExplore: Record<string, string> =
+    Object.fromEntries(NINE.map(([sub]) => [sub, `e.${sub}@text`]))
+  const rulesOf = (raw: Record<string, unknown>): Record<string, string | null> => {
+    const r = normalizeSource(raw)
+    expect(r.ok).toBe(true)
+    return r.source!.rules as unknown as Record<string, string | null>
+  }
+  /** 「未支持子字段」那条聚合 warning 点名的清单（这类文案全仓只许有一条，第二条即抄本）。 */
+  const unsupportedNames = (warnings: NormalizeIssue[]): string[] => {
+    const aggregated = warnings.filter((w) => w.field === '(未支持子字段)')
+    expect(aggregated, '未消费的子字段一条都没被点名').toHaveLength(1)
+    return aggregated[0].message.replace(/^已忽略不支持的子字段：/, '').split('、')
+  }
+  const legado = {
+    bookSourceName: '站点甲', bookSourceUrl: 'https://a.com', ruleContent: '@css:#c@text',
+    searchUrl: '/s?q={{key}}', ruleBookList: '.n', ruleBookName: 'a@text',
+    exploreUrl: '玄幻::/list/xh/{{page}}.html\n都市::/list/ds/{{page}}.html',
+    ruleExplore: { bookList: '.box', name: '.t a@text', bookUrl: '.t a@href', coverUrl: '.img@src' },
+  }
+  it('exploreUrl 的文本档落进 ruleExploreKinds（标题与地址一起走，地址就是该类的模板）', () => {
+    const r = normalizeSource(legado)
+    expect(r.ok).toBe(true)
+    expect(r.source!.rules.ruleExploreKinds).toEqual([
+      { title: '玄幻', url: '/list/xh/{{page}}.html' },
+      { title: '都市', url: '/list/ds/{{page}}.html' },
+    ])
+    // 这一份夹具没写顶层 ruleExploreUrl：源级模板不是「解出分类入口」的副产品，得源自己声明
+    expect(r.source!.rules.ruleExploreUrl).toBe(null)
+  })
+  it('ruleExplore 九键整套逐键落位（判据只看 bookList）', () => {
+    const rules = rulesOf({ ...legado, ruleExplore: nineExplore })
+    for (const [sub, field] of NINE) {
+      expect(rules[field], `ruleExplore.${sub} → ${field}`).toBe(nineExplore[sub])
+    }
+  })
+  it('整套里没写的键如实为 null（不逐字段拼半套）', () => {
+    const given: Record<string, string> = { bookList: '.box', name: '.t a@text' }
+    const rules = rulesOf({ ...legado, ruleExplore: given })
+    for (const [sub, field] of NINE) {
+      expect(rules[field], `ruleExplore.${sub} → ${field}`).toBe(given[sub] ?? null)
+    }
+  })
+  it('平铺优先：九键共用同一把尺——平铺已占的位嵌套不覆盖，未占的位照填', () => {
+    const flat: Record<string, string> = {
+      ruleExploreList: 'flat.li@li', ruleExploreName: 'flat.name@text', ruleExploreKind: 'flat.kind@text',
+    }
+    const rules = rulesOf({ ...legado, ...flat, ruleExplore: nineExplore })
+    for (const [sub, field] of NINE) {
+      expect(rules[field], `ruleExplore.${sub} → ${field}`).toBe(flat[field] ?? nineExplore[sub])
+    }
+  })
+  // 平铺优先这条尺对 `ruleExploreKinds` 同样成立：这一族里只有它是数组，故不走 `setIfVacant`，
+  // 但**规则必须同一条**——无条件用派生值覆盖，等于「raw 顶层自己写了分类入口、
+  // exploreUrl 却缺席或读不出」的平铺源被静默清空（改动前它进得了书城，清空无任何留痕）。
+  it('平铺自带 ruleExploreKinds 而 exploreUrl 缺席 → 那个数组原样活着（平铺优先，九键同规则）', () => {
+    const kinds = [{ title: '玄幻', url: '/xh/{{page}}' }, { title: '都市', url: '/ds/{{page}}' }]
+    const r = normalizeSource({
+      bookSourceName: '平铺甲', bookSourceUrl: 'https://f.com', ruleContent: 'x', ruleExploreKinds: kinds,
+    })
+    expect(r.ok).toBe(true)
+    expect(r.source!.rules.ruleExploreKinds).toEqual(kinds)
+  })
+  it('平铺自带与 exploreUrl 派生并存 → 平铺胜（派生值只填空位，不改写在场的那一份）', () => {
+    const kinds = [{ title: '平铺类', url: '/flat/{{page}}' }]
+    const r = normalizeSource({ ...legado, ruleExploreKinds: kinds })
+    expect(r.source!.rules.ruleExploreKinds).toEqual(kinds)
+  })
+  it('bookList 缺席即整套不用（条目规则走通用搜索面，见 explore-face.rulesFor）', () => {
+    const rules = rulesOf({ ...legado, ruleExplore: { name: '.t a@text', bookUrl: '.t a@href' } })
+    for (const [sub, field] of NINE) {
+      expect(rules[field], `ruleExplore.${sub} → ${field}`).toBe(null)
+    }
+  })
+  it('ruleExplore 未消费的子字段并入既有的 unsupported 聚合点名（整套启用：映射表外那些）', () => {
+    const r = normalizeSource({
+      ...legado, ruleExplore: { bookList: '.box', name: '.t a@text', updateTime: 'x' },
+    })
+    expect(unsupportedNames(r.warnings)).toContain('ruleExplore.updateTime')
+  })
+  it('整套未启用时整块一条都不被消费——非空子字段逐条点名，空串与 false 不报', () => {
+    const r = normalizeSource({
+      ...legado, ruleExplore: { name: '.t a@text', bookUrl: '', checkKeyWord: false },
+    })
+    const names = unsupportedNames(r.warnings)
+    expect(names).toContain('ruleExplore.name')
+    expect(names).not.toContain('ruleExplore.bookUrl')
+    expect(names).not.toContain('ruleExplore.checkKeyWord')
+  })
+  it('js 档不执行：入口如实为空并点名（宁吵不瞒，不静默当「这源没分类」）', () => {
+    const r = normalizeSource({ ...legado, exploreUrl: '@js:\nresult' })
+    expect(r.source!.rules.ruleExploreKinds).toEqual([])
+    expect(r.warnings.map((w) => w.field)).toContain('exploreUrl')
+    expect(r.warnings.some((w) => w.message.includes('脚本'))).toBe(true)
+  })
+  it('认不出或一条都不读的 exploreUrl 形状点名，而不是当成空', () => {
+    const broken = normalizeSource({ ...legado, exploreUrl: '[{坏 JSON' })
+    expect(broken.source!.rules.ruleExploreKinds).toEqual([])
+    expect(broken.warnings.some((w) => w.field === 'exploreUrl')).toBe(true)
+    const unusable = normalizeSource({ ...legado, exploreUrl: '[{"title":"甲"}]' })
+    expect(unusable.source!.rules.ruleExploreKinds).toEqual([])
+    expect(unusable.warnings.some((w) => w.field === 'exploreUrl')).toBe(true)
+  })
+  it('没有 exploreUrl 的源不产出任何 exploreUrl warning（搜索面源在书城只是不进城）', () => {
+    const r = normalizeSource({ bookSourceName: 'B', bookSourceUrl: 'https://b.com', ruleContent: 'x' })
+    expect(r.warnings.filter((w) => w.field === 'exploreUrl')).toHaveLength(0)
+    expect(r.source!.rules.ruleExploreKinds).toEqual([])
   })
 })

@@ -205,7 +205,8 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       await settle(900)
 
       expect(await s.page.textContent('.novel-rdr-book')).toBe('图文样本')
-      expect(await s.page.textContent('.novel-rdr-title')).toContain('共 2 章')
+      // 总章数由读数「N / M」的分母承担（条上不再单独写一句「共 M 章」）
+      expect(await s.page.textContent('.novel-rdr-title')).toContain('/ 2')
 
       const dom = await s.page.evaluate(() => {
         const q = (sel: string) => document.querySelector(`[data-chapter="0"] ${sel}`)
@@ -250,7 +251,7 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       expect(dom.sectionTag).toBe('DIV')
 
       // 封面：回书架看卡片上的真解码（不是「img 标签在场」）
-      await s.page.click('button:has-text("‹ 书架")')
+      await s.page.click('button:has-text("书架")')
       await s.page.waitForSelector('[data-novel-view="shelf"] .novel-card img', { timeout: 10_000 })
       const cover = await s.page.evaluate(() => {
         const img = document.querySelector('[data-novel-view="shelf"] .novel-card img') as HTMLImageElement
@@ -379,7 +380,7 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       await settle(900)
 
       const download = s.page.waitForEvent('download', { timeout: 25_000 })
-      await s.page.click('button:has-text("⤓ 下载")')
+      await s.page.click('button[title="导出（选择章节范围）"]')
       await s.page.waitForSelector('[role="dialog"][aria-label="导出范围"]', { timeout: 8_000 })
       expect(await s.page.textContent('[role="dialog"][aria-label="导出范围"]'), '图文书的导出只有文字，这句话必须在下手之前说').toContain('TXT 文字导出，不包含图片')
       await s.page.click('[role="dialog"][aria-label="导出范围"] button:has-text("⤓ 下载")')
@@ -400,7 +401,7 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       expect(bytes.subarray(0, 3), '导出首字节是 UTF-8 BOM（记事本兼容）').toEqual(Buffer.from([0xef, 0xbb, 0xbf]))
 
       // 回书架删书（本地书连带删副本）：删前资源可读，删后必须 404
-      await s.page.click('button:has-text("‹ 书架")')
+      await s.page.click('button:has-text("书架")')
       await s.page.waitForSelector('button[aria-label="删除 图文样本"]', { timeout: 10_000 })
       const coverUrl = (await shelf(host))[0].coverUrl!
       expect(coverUrl).toContain('/novel-api/local/resource')
@@ -746,8 +747,11 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
   // ══ 7. EPUB2 与降级 ═══════════════════════════════════════════════════════
 
   it('EPUB2：NCX 三叶（嵌套父节点自带目标）→ 真锚点落位；封面真解码', async () => {
-    // 这一本整篇只占长屏的不到一屏（两个短章）——视口压到 420px 高，滚动才真的会发生，
+    // 这一本整篇只占长屏的不到一屏（两个短章）——视口压到 380px 高，滚动才真的会发生，
     // 「锚点落在视口顶」这条才有可测量的依据（否则滚动被 clamp，落位无从谈起）。
+    // 高度是**跟着条与章界的几何调的**：控制器条 37→40px、章界带比原 1.3em 居中标题矮一截，
+    // 两处一起吃掉末段锚点的滚动余量，clamp 之后量到的就不再是落位（实测差 16.89px）。
+    // 下面那条「正文确实超出视口」的前置断言就是这个校准的护栏：余量给多了它会红，给少了落位会红。
     await withHost(async (s, host) => {
       expect(await uploadFixture(s, 'epub2-basic', 'NCX 样本.epub')).toBe('reader')
       await s.page.waitForSelector('[data-chapter] [data-novel-node]', { timeout: 20_000 })
@@ -783,14 +787,14 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       expect(host.progressPuts().map((p) => p.chapterIndex),
         '目录点击 = 导航事件，章在途 / 落位被钳都要立刻落盘').toContain(1)
 
-      await s.page.click('button:has-text("‹ 书架")')
+      await s.page.click('button:has-text("书架")')
       await s.page.waitForSelector('[data-novel-view="shelf"] .novel-card img', { timeout: 10_000 })
       const cover = await s.page.evaluate(() => {
         const img = document.querySelector('[data-novel-view="shelf"] .novel-card img') as HTMLImageElement
         return { w: img.naturalWidth, h: img.naturalHeight }
       })
       expect(cover, 'EPUB2 的 meta name=cover 封面同样真解码').toEqual({ w: 2, h: 3 })
-    }, { viewport: { width: 900, height: 420 } })
+    }, { viewport: { width: 900, height: 380 } })
   }, 180_000)
 
   it('两本不同的书用同样的原始锚点名（a/b/c）互不干扰', async () => {
@@ -800,7 +804,7 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       await uploadFixture(s, 'epub2-basic', 'NCX 样本.epub')
       await s.page.waitForSelector('[data-chapter] [data-novel-node]', { timeout: 20_000 })
       await settle(800)
-      await s.page.click('button:has-text("‹ 书架")')
+      await s.page.click('button:has-text("书架")')
       await s.page.waitForSelector('[data-novel-view="shelf"] .novel-card', { timeout: 10_000 })
       await uploadFixture(s, 'epub3-rich', '图文样本.epub')
       await s.page.waitForSelector('[data-chapter] [data-novel-node]', { timeout: 20_000 })
@@ -829,7 +833,7 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       expect(await s.page.textContent(`[data-novel-node="${anchorB}"]`)).toBe('实体 & 与 &amp; 与 A')
 
       // A 书：跳它自己的 #a，落点是 A 的 #a 内容（「甲」）
-      await s.page.click('button:has-text("‹ 书架")')
+      await s.page.click('button:has-text("书架")')
       await s.page.waitForSelector('button[aria-label="阅读 NCX 样本"]', { timeout: 10_000 })
       await s.page.click('button[aria-label="阅读 NCX 样本"]')
       await s.page.waitForSelector('[data-chapter] [data-novel-node]', { timeout: 20_000 })
@@ -961,7 +965,7 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       await s.page.click('button[aria-label="阅读 在线样本"]')
       await s.page.waitForSelector('[data-chapter] p', { timeout: 20_000 })
       await settle(1_000)
-      expect(await s.page.textContent('.novel-rdr-title')).toContain(`共 ${ONLINE_CHAPTERS.length} 章`)
+      expect(await s.page.textContent('.novel-rdr-title')).toContain(`/ ${ONLINE_CHAPTERS.length}`)
       await openDrawer(s)
       expect(await drawerLeaves(s)).toEqual([...ONLINE_CHAPTERS])
       await clickLeaf(s, ONLINE_CHAPTERS[1])

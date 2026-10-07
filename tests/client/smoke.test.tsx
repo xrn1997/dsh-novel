@@ -25,11 +25,13 @@ describe('NovelView smoke（renderToString 不炸——数据获取在 effect，
     expect(html).toContain('data-novel-view="shelf"')
     expect(html).toContain('placeholder="搜书名 / 作者"')   // 书架搜索框
   })
-  it('书城 tab = 占位空态（CityView，内容未上线）', () => {
+  it('书城 tab = 分类浏览页骨架（左栏一条源列表；内容随读面加载）', () => {
     routeStore.set({ route: { name: 'city' } as any })
     const html = renderToString(createElement(NovelView))
     expect(html).toContain('data-novel-view="city"')
-    expect(html).toContain('书城未上线')
+    expect(html).toContain('placeholder="搜索书源"')     // 源筛选框常驻（按源清单未到也在场）
+    // 分类筛选框不常驻是形状本身：它长在**展开的那个源**下面，一个源都没选中时它没有对象
+    expect(html).not.toContain('placeholder="筛选分类"')
   })
   it('导入弹层：内容子面（ImportPane）自带拖放主入口 + 粘贴折叠区；壳层默认不挂载弹层', () => {
     const paneHtml = renderToString(createElement(ImportPane, {

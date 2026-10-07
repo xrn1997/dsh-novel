@@ -231,7 +231,7 @@ describe('布局单位与视口约束（阅读器不能被正文高度绑架）'
 
   it('书架筛选簇不贴右；顶部 tab 导航在场且有激活态（IA：书架|书城|书源管理 并列）', () => {
     // 病史：排序灰字 margin-left:auto 在 1600px 内容列里被钉到最右端（实测 x1472 vs pills x75）＝悬浮碎片；
-    // 书城预留位 chip 已随 tab 化退役——占位不如真导航（书城未上线点开是 CityView 占位空态）
+    // 书城预留位 chip 已随 tab 化退役——占位不如真导航（书城已是分类浏览页本身，不再是占位空态）
     expect(ruleBody('.novel-shelf-sort'), '排序灰字跟簇尾，不许贴列右端').not.toMatch(/margin-left:\s*auto/)
     expect(ruleBody('.novel-shelf-filter'), '筛选簇整簇左聚簇').not.toMatch(/margin-left:\s*auto/)
     const tabs = ruleBody('.novel-tabs')
@@ -243,7 +243,7 @@ describe('布局单位与视口约束（阅读器不能被正文高度绑架）'
 describe('焦点与指针无关可达（键盘/触屏不再是二等公民）', () => {
   it('交互件各有 :focus-visible 规则', () => {
     const focusRules = [...NOVEL_CSS.matchAll(/[^{}]*:focus-visible[^{]*\{[^}]*\}/g)].map((m) => m[0]).join('\n')
-    for (const sel of ['.novel-card', '.novel-chip', '.novel-drawer-item', '.novel-input', '.novel-seg button', '.novel-tabs button', '.novel-menu button', '.novel-switch']) {
+    for (const sel of ['.novel-card', '.novel-chip', '.novel-drawer-item', '.novel-input', '.novel-rdr-ctl', '.novel-seg button', '.novel-tabs button', '.novel-menu button', '.novel-switch']) {
       expect(focusRules, `缺 ${sel} 的焦点环`).toContain(sel)
     }
   })

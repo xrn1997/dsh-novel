@@ -31,6 +31,7 @@
 - **书源导入**：拖入或选择 .json 文件（可多选）或粘贴 legado 书源 JSON。导入跑在**服务端后台任务**——关掉页面不打断，进度与汇总随时回看；按书源地址自动去重（可用源优先保留）
 - **阅读体验**：封面网格书架（带阅读进度、每本书标注来源书源——同源同色色点 + 源名，源被删则如实标「来源已删除」；多选态批量删除）、连续滚动阅读（滚动到底自动预取下一章）、目录抽屉跳章、字号 / 行距 / 栏宽 / 纸张色可调、深浅主题自适应、章节范围流式导出（可取消）
 - **聚合搜索**：跑在服务端，进度实时推送（SSE，不可用时自动回落轮询）、可中途**停止**且保留已搜出的命中、**切走界面不丢结果**、失败源折叠
+- **书城（分类浏览）**：左栏是**一列可搜索的源**（只有声明了分类入口的源进城：启用 ∧ 文本源 ∧ 自己没把发现关掉；脚本形态 `@js:` / `<js>` 的发现入口不执行，声明它的源在书城就没有分类），**选中的那个源就地展开自己的分类**——分类按书源写下的顺序列、不排序、不跨源合并、也不带计数（本仓不造同义词表，「玄幻」与「玄幻奇幻」是站点的真实分歧），源行只写名字与它自己声明了几类、不写分组（分组撑不起一级浏览轴，也就不在浏览面每行重复）。右区是该源该分类的书单（4 列，窄面板 2 列），「加载更多」一次一页——服务端不问就不打下一页，到底这行读数自己收口。点开一本书进**书籍详情浮层**：整段简介（浮层里不夹行，卡片上才夹一行）+ 本源**读这本 / 加入书架** + **在其他源找这本**；跨源那一次由用户手动发起，走的是聚合搜索那条既有链路：结果逐源一行就地到达（不并成一条、不排序、不替用户判是不是同一本书）、可中途**停止**，某一家没响应就点名摊开它（源名 + 错误码），**答了的那些家**全都一条没搜到才说「没有一家按这个书名搜到」——一个答复都没有时只出未响应，不把「没答」念成「没搜到」；那既不等于「这本书不存在」，也不等于「搜索出了错」。这一列只认**这本书这一轮**点出来的结果，搜索面上别处的轮次不会被当成本书的答案
 - **AI 助手工具**：搜索、读章、目录、书架（含写）、书源管理、导入书源六个工具，与 UI 共用同一条链路
 - **本地书导入（TXT / EPUB）**：TXT 走 GBK / UTF-8 自动识别后切章入架；EPUB 2/3 流式排版按 spine 计章，保留原书目录树、正文插图、脚注跳转与返回、基本格式。有损项落成**持久导入说明**——导入时就地交代，进书后还能在阅读器里重看
 - **书源管理**（调度台 IA，入口在「小说」视图顶部「书源管理」tab）：**待办收件箱**把坏源 / 未验证置顶成任务卡（批量重验 / 一键验证，处理完自动消解），读数集中在源列表头的**状态带**；支持文本 / 状态 / 分组过滤、行内启停、编辑模式批量启停 / 验证 / 删除、单源试跑下钻、登录支持（cookie 录入与 `loginUrl` 脚本执行两形态）；删除统一模态二次确认
@@ -59,7 +60,7 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 
 1. **导入书源**：「小说」→「书源管理」tab → 选择 .json 文件（可多选，选中即开始导入）或粘贴 legado 书源 JSON。导入是服务端后台任务，关页面不打断；同址自动去重（已有可用源则跳过，坏源 / 未验证源被新条替换）。
 2. **批量验证**：导入不逐条探针（新源状态为「未验证」）——顶部**待办收件箱**把坏源 / 未验证置顶成任务卡，「一键验证」「批量重验」即点即跑；任意集合（过滤 + 编辑态勾选 +「验证所选」）同样可发起，后台并发 5 路限流。
-3. **找书读**：「书架」tab 顶部搜书名 / 作者 → 点封面进阅读器，阅读进度自动记住。手上已有文件就走书架末位的**导入本地书籍**（TXT / EPUB）。
+3. **找书读**：「书架」tab 顶部搜书名 / 作者 → 点封面进阅读器，阅读进度自动记住。想按分类逛就走「书城」tab：先在左栏点一个源，再点它自己声明的那几类。手上已有文件就走书架末位的**导入本地书籍**（TXT / EPUB）。
 4. **让 AI 助手干活**：对话里直接说「帮我找一本《XX》读第三章」「看看 XX 书源为什么坏了」。
 
 ## AI 助手工具
@@ -92,13 +93,14 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 
 ## HTTP API
 
-所有路由以 `/novel-api` 为前缀（仅接受本机 loopback 且 **Origin/Referer 同源**的请求），响应为统一信封 `{ ok, value | error }`，错误附带 `code` 与可选的规则段级定位。共 30 条路由（25 静态 + 5 参数，计数由 `tests/shared/wire-builders.test.ts` 钉死）。**路由名与值形状的代码真相在 `src/shared/wire.ts`**——Node 半与浏览器半共用同一份定义，契约测试逐条把守。
+所有路由以 `/novel-api` 为前缀（仅接受本机 loopback 且 **Origin/Referer 同源**的请求），响应为统一信封 `{ ok, value | error }`，错误附带 `code` 与可选的规则段级定位。共 35 条路由（30 静态 + 5 参数，计数由 `tests/shared/wire-builders.test.ts` 钉死）。**路由名与值形状的代码真相在 `src/shared/wire.ts`**——Node 半与浏览器半共用同一份定义，契约测试逐条把守。
 
 | 面 | 路由 |
 | --- | --- |
 | 健康检查 | `GET /novel-api` |
 | 书源 | `GET /sources`、`POST /sources/import`（后台任务，body `{files:[{name,text}]}`，上限 32MB）、`GET /sources/job-status`、`POST /sources/batch-probe`、`POST /sources/batch-enabled`、`POST /sources/batch-delete`、`POST /sources/:id/probe`、`POST /sources/:id/enabled`、`POST /sources/:id/auth`、`DELETE /sources/:id` |
 | 搜索与阅读 | `GET /search`（一次性收齐全部命中）、`GET /search/plan`（本次参搜源集——参与集的唯一主人在服务端）、`POST /search/job`、`GET /search/job-status?since=N`（按游标读增量）、`GET /search/job-stream?since=N`（同一份快照的 SSE 推送，首帧即 baseline）、`POST /search/job-cancel`（停止本轮：不再往下搜，已搜出的命中一律保留）、`GET /book`、`GET /toc`、`GET /navigation`（线性 `chapters` + 展示树 `items`）、`GET /chapter`（`{kind:'text'}` 或图文树 `{kind:'rich'}`；`?refresh=1` 绕过缓存） |
+| 书城发现面 | `GET /explore/kinds`（**按源**给出各源自己声明的**分类标题**清单，零网络请求，入口地址不外泄：原生方言的 `ruleFind` 与 legado 的 `exploreUrl` 都认，后者接**声明式两档**（`标题::URL` 多行 / JSON 条目数组）；脚本形态（`@js:` / `<js>`）的发现入口不执行，那类书源在书城没有分类）、`POST /explore/list`（body `{sourceId, kind}`：一轮 = 点名一个源 + 它自己声明的一类，回 `{jobId}`）、`POST /explore/list/more`（续这一轮的第 page+1 页，**同一轮不换 jobId**；没得续（已到底 / 触页数上限 / 一批在途）→ 409）、`GET /explore/list/job-status`（整轮全量快照，无游标）、`GET /explore/list/job-stream`（同一份快照的 SSE 推送，首帧可能是「还没提交过」的空档） |
 | 书架 | `GET /shelf`（条目附 `sourceName` 来源投影）、`PUT /shelf/:key`（带 `title` 加书 / 带 `progress` 存进度 / 带 `patch` 改元数据）、`DELETE /shelf/:key`、`POST /shelf/batch-delete`（本地书连带删副本，未知键静默跳过） |
 | 导出 | `GET /export`（流式 TXT，`from`/`to` 选段（1 基含端，缺席 = 全本），响应头 `X-Novel-Total-Chapters` / `X-Novel-Range`；倒置范围 422 `BadRange`，连接断开即停止抓取） |
 | 本地书 | `POST /local/import?name=…`、`DELETE /local?id=…`（连带删整份副本）、`GET /local/document?id=&documentId=`（脚注 / 附录）、`GET /local/resource?id=&resourceId=`（插图与封面，只认不透明资源 ID）、`GET /local/warnings?id=`（持久化的导入说明） |
@@ -227,6 +229,8 @@ $env:DSH_INSTALL_CHECK='1'; pnpm vitest run tests/packaging-install.test.ts
 # 真浏览器门（离线）：EPUB 图文阅读的真图片解码 / 真排版位置 / 真下载字节
 # 本地随机端口起真服务、驱动构建产物 lib/client.js，只用**已安装的** Edge/Chrome，从不下载
 $env:DSH_EPUB_BROWSER='1'; pnpm vitest run tests/browser/epub-reader.test.ts
+# 同一枚闸下的几何门：不起服务、不读站点——把浮层的真 DOM 灌进浏览器量 rect（jsdom 量不到排版）
+$env:DSH_EPUB_BROWSER='1'; pnpm vitest run tests/browser/city-sheet-layout.test.tsx
 ```
 
 - **采集三条实践口径**：出站与生产同口径（走 `resolveProxyUrl`：config > 环境变量 > 系统代理 > 直连，缺这条会把反爬壳页采成「正文为空」）；manifest 的键是**请求 URL**而非重定向后的落地地址（搜索类源常「POST 出去、302 落到结果页」）；站点会抖，**别删已采好的 fixture**，重采会覆盖、删除只会让你重新赌一次站点脸色。落盘的是生产解码链读到的文本（`decodeBody`：声明 charset → content-type → `<meta>` 嗅探），GBK 页才存成真中文。

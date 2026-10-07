@@ -741,11 +741,33 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
     expect(String(deps.apiGet.mock.calls[0][0])).toContain('navigation')
   })
 
-  it('点「⤓ 下载」→ 弹范围面板（此时不开流）；点面板「下载」→ streamExport 在途，成功后 saveBlob 按书名落盘', async () => {
+  it('正文首行与章名同句 → 呈现层剥掉它（章名只留 h2 那一份）', async () => {
+    // 在线源很常见：正文第一行就是「第1章 ××」。判据是相等才丢，所以这里同时钉「其余行原序在」。
+    const name = '第1章 夜航'
+    const deps = readerDeps({
+      apiGet: vi.fn(async (path: string) => {
+        if (path.includes('navigation')) {
+          return {
+            chapters: [{ name, url: 'u1' }],
+            items: [{ id: 't1', label: name, target: { kind: 'chapter', index: 0, anchorId: null }, children: [] }],
+          }
+        }
+        if (path.includes('chapter')) return { kind: 'text', text: `${name}\n夜里挑灯看剑\n第二段正文` }
+        return []
+      }),
+    })
+    const { container } = render(reader(deps))
+    await waitFor(() => expect(container.querySelector('[data-chapter="0"] p')).not.toBeNull())
+    expect([...container.querySelectorAll('[data-chapter="0"] p')].map((p) => p.textContent))
+      .toEqual(['夜里挑灯看剑', '第二段正文'])
+    expect(container.querySelector('.novel-rdr-chap')?.textContent).toBe(name)
+  })
+
+  it('点条上「下载」→ 弹范围面板（此时不开流）；点面板「⤓ 下载」→ streamExport 在途，成功后 saveBlob 按书名落盘', async () => {
     const deps = readerDeps()
     render(reader(deps))
-    await waitFor(() => expect(screen.getByText(/共 1 章/)).toBeTruthy())   // 目录未就绪时确认钮本就该禁用
-    fireEvent.click(screen.getByText('⤓ 下载'))
+    await waitFor(() => expect(screen.getByText('1 / 1')).toBeTruthy())   // 目录未就绪时确认钮本就该禁用
+    fireEvent.click(screen.getByRole('button', { name: '下载' }))
     expect(screen.getByRole('dialog', { name: '导出范围' })).toBeTruthy()   // 第一步只开面板
     expect(deps.streamExport).not.toHaveBeenCalled()
     fireEvent.click(within(screen.getByRole('dialog', { name: '导出范围' })).getByText('⤓ 下载'))
@@ -757,8 +779,8 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
   it('面板范围校验：输入倒置 → 确认钮禁用，改回合法才可点', async () => {
     const deps = readerDeps()
     render(reader(deps))
-    await waitFor(() => expect(screen.getByText(/共 1 章/)).toBeTruthy())   // toc 就绪才有 total
-    fireEvent.click(screen.getByText('⤓ 下载'))
+    await waitFor(() => expect(screen.getByText('1 / 1')).toBeTruthy())   // toc 就绪才有 total
+    fireEvent.click(screen.getByRole('button', { name: '下载' }))
     const dlg = screen.getByRole('dialog', { name: '导出范围' })
     const inputs = within(dlg).getAllByRole('spinbutton')                  // type="number" → spinbutton
     fireEvent.change(inputs[0], { target: { value: '3' } })                // 3 > 1 倒置
@@ -774,8 +796,8 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
       streamExport: vi.fn(async () => { throw new ApiClientError('ExportFailed', 500, '服务端导出失败') }),
     })
     render(reader(deps))
-    await waitFor(() => expect(screen.getByText(/共 1 章/)).toBeTruthy())
-    fireEvent.click(screen.getByText('⤓ 下载'))
+    await waitFor(() => expect(screen.getByText('1 / 1')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: '下载' }))
     fireEvent.click(within(screen.getByRole('dialog', { name: '导出范围' })).getByText('⤓ 下载'))
     await waitFor(() => expect(screen.getByText(/ExportFailed/)).toBeTruthy())
   })
@@ -785,8 +807,8 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
   it('导出面板点明只有 TXT 文字、不含图片', async () => {
     const deps = readerDeps()
     render(reader(deps))
-    await waitFor(() => expect(screen.getByText(/共 1 章/)).toBeTruthy())
-    fireEvent.click(screen.getByText('⤓ 下载'))
+    await waitFor(() => expect(screen.getByText('1 / 1')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: '下载' }))
     expect(within(screen.getByRole('dialog', { name: '导出范围' })).getByText('TXT 文字导出，不包含图片')).toBeTruthy()
   })
 })
@@ -1118,7 +1140,7 @@ describe('NovelView 顶部 tab 导航（书架|书城|书源管理 并列；sett
   // routeStore 是模块级全局现场——本组每条测完复位 shelf，防止污染后续依赖默认路由的断言
   afterEach(() => { navigate({ name: 'shelf' }) })
 
-  it('点 tab 切换分支：书城=占位空态；书源管理=原设置区块渲染在小说视图内；书架=回首页', async () => {
+  it('点 tab 切换分支：书城=分类浏览页；书源管理=原设置区块渲染在小说视图内；书架=回首页', async () => {
     render(createElement(NovelView))
     const tabs = (): ReturnType<typeof within> => within(screen.getByRole('group', { name: '小说视图导航' }))
     // 默认书架：tab 组在场（书架 tab 激活）+ 书架内容渲染（搜索框常驻，与加载态无关）
@@ -1126,14 +1148,14 @@ describe('NovelView 顶部 tab 导航（书架|书城|书源管理 并列；sett
     await waitFor(() => expect(screen.getByPlaceholderText(/搜书名/)).toBeTruthy())
     // 「搜索」提交钮在场：与搜索页同款口径（Enter 是隐藏交互，可见按钮才是显式入口）
     expect(screen.getByRole('button', { name: '搜索' })).toBeTruthy()
-    // 书城：CityView 占位空态，书架内容已卸载
+    // 书城：CityView 分类浏览页（左栏一条源列表，源筛选框常驻），书架内容已卸载
     fireEvent.click(tabs().getByRole('button', { name: '书城' }))
-    await waitFor(() => expect(screen.getByText(/书城未上线/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByPlaceholderText('搜索书源')).toBeTruthy())
     expect(screen.queryByPlaceholderText(/搜书名/)).toBeNull()
     // 书源管理：SettingsSection（原宿主设置「小说」区块整体）渲染在小说视图内
     fireEvent.click(tabs().getByRole('button', { name: '书源管理' }))
     await waitFor(() => expect(document.querySelector('[data-novel-view="sources"]')).not.toBeNull())
-    expect(screen.queryByText(/书城未上线/)).toBeNull()
+    expect(screen.queryByPlaceholderText('搜索书源')).toBeNull()
     // 回书架：首页内容回来
     fireEvent.click(tabs().getByRole('button', { name: '书架' }))
     await waitFor(() => expect(screen.getByPlaceholderText(/搜书名/)).toBeTruthy())

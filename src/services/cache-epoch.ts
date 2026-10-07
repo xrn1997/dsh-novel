@@ -3,7 +3,9 @@ import type { Facet } from '../engine/index.js'
 import type { NormalizedRules } from './types.js'
 
 /**
- * 缓存代际：规则指纹是「这份缓存还有效吗」的唯一算式。
+ * 缓存代际：规则指纹是「这份缓存还有效吗」的唯一算式。本仓有**两种缓存**，各一份指纹——
+ *  文件缓存（目录/正文，`rulesEpoch`）与进程内分类快照（`exploreEpoch`），
+ *  为何不能共用一份见 `exploreEpoch`。
  *
  * 为什么要它：同址替换复用 sourceId 保书架引用
  * （既有裁决），于是「身份没变」被当成了「内容仍有效」——换规则后目录/正文照旧命中旧代际，
@@ -31,6 +33,11 @@ export type CacheFacet = Extract<Facet, 'toc' | 'content'>
 
 export const RULE_EPOCH_IMPACT: Record<keyof NormalizedRules, EpochImpact> = {
   searchUrl: 'none', exploreUrl: 'none',
+  // 发现面（书城）不落文件缓存：分类页结果由进程内快照持有，无目录/正文文件可作废
+  ruleExploreUrl: 'none', ruleExploreKinds: 'none',
+  ruleExploreList: 'none', ruleExploreName: 'none', ruleExploreAuthor: 'none',
+  ruleExploreBookUrl: 'none', ruleExploreCoverUrl: 'none', ruleExploreIntro: 'none',
+  ruleExploreKind: 'none', ruleExploreLastChapter: 'none', ruleExploreWordCount: 'none',
   // 探针关键词只影响「验证」这一步，不参与任何面的取值 → 不进缓存指纹
   probeKeyword: 'none',
   // 详情页嗅探只改搜索面「这条响应是不是详情页」，目录/正文取值与它无关
@@ -74,14 +81,21 @@ const ORDER = Object.keys(RULE_EPOCH_IMPACT) as Array<keyof NormalizedRules>
  *  数组/嵌套对象会是 tsc 错，而不是被 `String(v)` 静默拍成 "[object Object]" 共用一个指纹。 */
 type RuleValue = NormalizedRules[keyof NormalizedRules]
 
-/** 值稳定化：header 是对象，按排序键拼（同一份 header 的不同键序必须同指纹）。
+/** 值稳定化：header 是对象、ruleExploreKinds 是分类入口数组，都按排序键拼（同一份值的不同键序
+ *  必须同指纹）。数组逐元素编码——发现面这批字段的影响面全是 `none`，今天到不了这里；这条分支
+ *  是为了「将来谁把它们归进某个面」时指纹依然稳定，而不是让上面那道 tsc 闸被 cast 掉。
  *  null 与 '' 必须分开：空串规则与缺规则在求值层行为不同（见 reading.getTocInner 的订正注）。
  *  存量兼容：老 sources.json 的 rules 可能缺新增字段的键（undefined）——按缺省（≡null）入指纹，
  *  与显式 null 同代际；SourceRegistry.load 的存量归一会补键落盘收敛，此处是读旧数据的运行时防线。 */
 function stable(v: RuleValue | undefined): string {
   if (v === null || v === undefined) return '\u0001'
   if (typeof v === 'string') return v
-  return Object.keys(v).sort().map((k) => `${k}=${v[k]}`).join('&')
+  return Array.isArray(v) ? v.map(encodeOrdered).join('\u0002') : encodeOrdered(v)
+}
+
+/** 对象 → 键排序的 `k=v&…`（键序不入指纹） */
+function encodeOrdered(o: Record<string, unknown>): string {
+  return Object.keys(o).sort().map((k) => `${k}=${o[k]}`).join('&')
 }
 
 function digest(parts: readonly string[]): string {
@@ -95,6 +109,66 @@ export function rulesEpoch(rules: NormalizedRules, baseUrl: string, facet: Cache
     if (!FACES_OF[RULE_EPOCH_IMPACT[k]].includes(facet)) continue
     parts.push(k, stable(rules[k]))
   }
+  return digest(parts)
+}
+
+/** 发现面指纹的字段表，分三组，**组即「它为什么在这里」**。`satisfies` 只保证名字都是真字段
+ *  （拼错即 tsc 红）；**刻意不按命名前缀自动收**，也不随 `NormalizedRules` 加字段自动长大——
+ *  「指纹收谁」由发现面求值真正经过谁决定，不由名字长什么样决定。 */
+
+/** ① 发现面自有规则：`ruleExploreList` 非空时整套用它（`explore-face.ts` 的 `rulesFor`）。 */
+const EXPLORE_OWN_FIELDS = [
+  'ruleExploreUrl', 'ruleExploreList', 'ruleExploreName', 'ruleExploreAuthor',
+  'ruleExploreBookUrl', 'ruleExploreCoverUrl', 'ruleExploreIntro', 'ruleExploreKind',
+  'ruleExploreLastChapter', 'ruleExploreWordCount',
+] as const satisfies readonly (keyof NormalizedRules)[]
+
+/** ② **回落分支**读的那九个通用书目字段：`ruleExploreList === null` 时整套改用它们，
+ *  「只声明了 `ruleFind.kinds` 的源」是常见形态——漏收这一组，改书名/作者规则就不动缓存键。 */
+const EXPLORE_FALLBACK_FIELDS = [
+  'ruleBookList', 'ruleBookName', 'ruleAuthor', 'ruleBookUrl', 'ruleCoverUrl',
+  'ruleIntro', 'ruleLastChapter', 'ruleKind', 'ruleWordCount',
+] as const satisfies readonly (keyof NormalizedRules)[]
+
+/** ③ 请求修饰符：`header` 与 `headerRule` 定发出去的请求长什么样（`bridge.ts` 的 `resolveHeaders`），
+ *  `jsLib` 是 JS 规则的库——三者任一变了，同一个分类地址可以拿回完全不同的页面。 */
+const EXPLORE_REQUEST_FIELDS = [
+  'header', 'headerRule', 'jsLib',
+] as const satisfies readonly (keyof NormalizedRules)[]
+
+/** 三组的并集即指纹字段集。`baseUrl` 不在此表内（它不是规则字段），由 `exploreEpoch` 入参带入。 */
+const EXPLORE_FINGERPRINT: readonly (keyof NormalizedRules)[] = [
+  ...EXPLORE_OWN_FIELDS, ...EXPLORE_FALLBACK_FIELDS, ...EXPLORE_REQUEST_FIELDS,
+]
+
+/**
+ * 发现面（书城）快照的规则代际：**两个缓存、两份指纹、同一个主人**。本模块是「这份缓存还有效吗」
+ *  的唯一算式——`rulesEpoch` 管**文件**缓存（目录/正文），`exploreEpoch` 管**进程内**分类快照。
+ *
+ * 为什么不能共用一份：`RULE_EPOCH_IMPACT` 的影响面是「一个字段变更波及哪些**引擎面**的缓存」，
+ *  而引擎面（`CacheFacet`）只有目录与正文两个，发现面不在其中——分类页不落文件缓存，没有目录/
+ *  正文文件可作废，所以那十行归 `'none'` 是**对的，不是漏填**；反过来把发现面字段归进某个
+ *  引擎面，会让目录/正文代际跟着探索规则抖，凭空作废整源文件缓存。发现面要的「换规则自然失效」
+ *  由这份指纹独立兑现：换探索规则即换键，不必等 TTL。
+ *
+ * 收谁：**一次发现面请求 + 解析读到的全部输入**——上面那三组规则字段（自有十条 / 回落九条 /
+ *  请求修饰符三条）+ baseUrl，串接与摘要手法与 `rulesEpoch` 同一条。为什么收这么宽：快照存的是
+ *  「一次请求 + 解析的**结果**」，它有没有效取决于这次请求的**全部输入**；**过度失效是免费的，
+ *  漏失效是陈旧谎**（改了规则却不换键，读者会拿到一份撑满 TTL 的旧书目）。文件缓存那份指纹同
+ *  思路——`header` / `jsLib` 在 `RULE_EPOCH_IMPACT` 里正是 `'both'`，不是 `'none'`。
+ *
+ *  与 `RULE_EPOCH_IMPACT` 的关系：那张表按「一个字段变更作废哪些**引擎面**（目录/正文）的文件
+ *  缓存」归类，判据是目录/正文求值经过谁。发现面回落读那九个通用书目字段属于**快照**的事，
+ *  与文件缓存无关，故那张表一行未动。两条轴不重叠也不矛盾：同模块、两份指纹、各按各自的消费
+ *  路径收字段（发现面收宽了不会让文件缓存多失效一次）。
+ *
+ *  刻意不含 `exploreUrl` 与 `ruleExploreKinds`：这两者只产出**分类入口地址**，而地址本身就是快照键的
+ *  一半（`KindCacheKey.kind`）——地址一变键就变，收进指纹是对同一件事作废两次，换不来任何覆盖。
+ *  会「改了规则却不换键」的是条目规则与请求规则，那些全在上面三组里，这一对不在其中。
+ */
+export function exploreEpoch(rules: NormalizedRules, baseUrl: string): string {
+  const parts: string[] = [baseUrl]
+  for (const k of EXPLORE_FINGERPRINT) parts.push(k, stable(rules[k]))
   return digest(parts)
 }
 

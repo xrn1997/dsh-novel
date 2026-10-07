@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type { NovelSource, SourceAuth, SourceContentKind, SourceStatus } from './types.js'
 import type { NormalizeResult } from './normalize.js'
-import { contentTypeOfRaw, deriveRuleField, rawBookMetaFields, rawHeaderFields, rawHeaderRule, rawRulePattern, SOURCE_KIND_LABEL, splitGroups, stripLeadingIcons } from './normalize.js'
+import { contentTypeOfRaw, deriveRuleField, rawBookMetaFields, rawExploreFields, rawHeaderFields, rawHeaderRule, rawRulePattern, SOURCE_KIND_LABEL, splitGroups, stripLeadingIcons } from './normalize.js'
 import { readJson, writeJsonAtomic } from './storage.js'
 
 /**
@@ -59,7 +59,8 @@ export class SourceRegistry {
   /** dir = novel 根；sources.json **缺失** → 空表（首启是常态）；**损坏** → CorruptJsonError 响亮失败
    *  （绝不折叠成空表——那会让下一次 edit 覆盖整文件，本机库的源静默消失，见 storage.readJson）。
    *  存量归一（改了就落盘收敛）：
-   *  enabled 缺省归一为 true——早期数据无此字段，缺省即「启用」，否则搜索面 `s.enabled &&` 静默排除老源；
+   *  enabled 缺省归一为 true——早期数据无此字段，缺省即「启用」，否则参与集判据
+   *  （`services/participation.ts` 的 `participates`）静默排除老源；
    *  type 缺省归一为 'text'——早期数据无此字段（当时 bookSourceType 根本没读）；
    *  groups 拆分迁移——早期只按 `\` 拆，真实导出的逗号粘连组合串按 splitGroups 收敛成多段（幂等）；
    *  name 前缀图标迁移——书源包惯用的分组装饰前缀按 stripLeadingIcons 剥掉（幂等）；
@@ -102,6 +103,32 @@ export class SourceRegistry {
         s.rules.bookUrlPattern = wantPattern; changed = true
       } else if (s.rules.bookUrlPattern === undefined) {
         s.rules.bookUrlPattern = null; changed = true
+      }
+      // ruleExplore* 十一键按 raw 补推（与上面几条同族的存量收敛）：发现面是后来才接的链路，
+      // 存量 rules 里这一族是空的源在书城**整个是空的**（kinds 一条不剩、条目规则缺席只能退回
+      // 通用搜索规则）。读口就是导入侧那一次 flatten（rawExploreFields），不另立第二条规则解释。
+      // **这一族连「在场但为空」也算可填**，与下面 kind/wordCount 那族「只填缺席」不同。差别不在宽容，
+      // 在生产者数量：这一族的派生值只有那份映射一个来源，老库里躺着 null 与空数组不代表
+      // 「读过且为空」，只代表那一版还没接 legado——按 raw 重推才是它的当前真相。那两族有两条读路、
+      // 优先级本就不同（导入侧平铺优先、重推侧容器优先），覆盖会把对的改成错的。
+      // 派生值为空时不写，所以这一步单调且幂等；键恒在场（required 形状的合同）仍由缺席那一支负责。
+      const wantExplore = rawExploreFields(s.raw)
+      if (wantExplore !== undefined) {
+        const rules = s.rules as unknown as Record<string, unknown>
+        for (const [k, v] of Object.entries(wantExplore)) {
+          const cur = rules[k]
+          const vacant = cur === undefined || cur === null
+            || (Array.isArray(cur) && (cur as unknown[]).length === 0)
+          const hasValue = Array.isArray(v) ? (v as unknown[]).length > 0 : v !== null
+          if (hasValue && vacant) { rules[k] = v; changed = true }
+          else if (cur === undefined) { rules[k] = v; changed = true }
+        }
+      }
+      // 键恒在场是 required 形状的合同，且**必须在上面那段之后**：消费者按
+      // `rules.ruleExploreKinds.length` 读分类面，raw 不是对象 / raw 里没有发现面 / 键上躺着脏形状
+      // （非数组）都靠这一步收敛成空数组；反过来的顺序会把按 raw 推出来的分类清掉。
+      if (!Array.isArray(s.rules.ruleExploreKinds)) {
+        s.rules.ruleExploreKinds = []; changed = true
       }
       // ⑩ 静态头按 raw 补推（与 ⑦ headerRule 成对）：单引号形态的头曾被判成坏 JSON 丢弃，只改解析器
       // 不动存量则受害源的头仍然是空的（现量见矩阵行 `b-header-static`）。

@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { parseRule } from '../../src/engine/parse.js'
 import { parseObjectJson } from '../../src/services/normalize.js'
+import { exploreKindsFormOf } from '../../src/services/explore-url.js'
 import { probeJavaSurface } from '../java-surface.js'
 import { JAVA_PROTOCOL } from '../../src/engine/js-protocol.js'
 import { messageSkeleton } from '../content-audit-classify.js'
@@ -248,26 +249,24 @@ export const DEMAND_KEYS: Array<{ key: string; label: string; test: (raw: any) =
     label: 'loginUi 非空且以 @js: 或 <js> 开头（脚本生成形态；矩阵 b-login-ui 三档之二）',
     test: (r) => typeof r?.loginUi === 'string' && /^\s*(@js:|<js>)/i.test(r.loginUi),
   },
-  // 发现面 exploreUrl 三档形态（矩阵 d-explore-three-forms；分母＝非空 exploreUrl）。**优先级写死**：
-  // js → JSON（`[`/`{` 开头）→ 剩下含 `::` 算文本——次序是三档互斥且和等于非空总数的前提。
-  // 2026-09-28 复算与行里读数一致（37 / 71 / 60，和 168）。
+  // 发现面 exploreUrl 三档形态（矩阵 d-explore-three-forms；分母＝非空 exploreUrl）。
+  // **判据的主人不在这里**：三档由 `services/explore-url.ts` 的 `exploreKindsFormOf` 分
+  // （优先级写死在那边：js → JSON → 含 `::` 的文本，⇒ 三档互斥），这里只按它的返回值切档。
+  // 行里的读数由矩阵行负责，本表只现算。
   {
     key: 'exploreFormJs',
-    label: 'exploreUrl 非空且以 @js: 或 <js> 开头（要过沙箱；矩阵 d-explore-three-forms 三档之一）',
-    test: (r) => { const t = typeof r?.exploreUrl === 'string' ? r.exploreUrl.trim() : ''
-      return t !== '' && /^(@js:|<js>)/i.test(t) },
+    label: 'exploreUrl 是 js 形态（要过沙箱；矩阵 d-explore-three-forms 三档之一）',
+    test: (r) => exploreKindsFormOf(r?.exploreUrl) === 'js',
   },
   {
     key: 'exploreFormJson',
-    label: 'exploreUrl 非空、不是 js 形态且以 [ 或 { 开头（声明式 JSON；矩阵 d-explore-three-forms 三档之二）',
-    test: (r) => { const t = typeof r?.exploreUrl === 'string' ? r.exploreUrl.trim() : ''
-      return t !== '' && !/^(@js:|<js>)/i.test(t) && (t.startsWith('[') || t.startsWith('{')) },
+    label: 'exploreUrl 是 JSON 形态（以 [ 或 { 开头；矩阵 d-explore-three-forms 三档之二）',
+    test: (r) => exploreKindsFormOf(r?.exploreUrl) === 'json',
   },
   {
     key: 'exploreFormTitleUrl',
-    label: 'exploreUrl 非空、非 js、非 JSON 且含 :: （声明式「标题::URL」多行；矩阵 d-explore-three-forms 三档之三）',
-    test: (r) => { const t = typeof r?.exploreUrl === 'string' ? r.exploreUrl.trim() : ''
-      return t !== '' && !/^(@js:|<js>)/i.test(t) && !(t.startsWith('[') || t.startsWith('{')) && t.includes('::') },
+    label: 'exploreUrl 是「标题::URL」文本形态（含 :: 的多行；矩阵 d-explore-three-forms 三档之三）',
+    test: (r) => exploreKindsFormOf(r?.exploreUrl) === 'text',
   },
 ]
 

@@ -40,8 +40,23 @@ _Avoid_: 规则格式
 
 **搜索面（search face）**:
 「书源搜索规则 + 关键词」到「命中条目 + 首条书名」的完整请求语义；聚合搜索与探针共用同一份。参与集判据：**启用 ∧ 文本源**。
-_唯一实现_: `services/search-face.ts`；参与集谓词 `participates`（`services/reading.ts`）
+_唯一实现_: `services/search-face.ts`；「谁参与」的判据同住 `services/participation.ts`——搜索面 `participates`（启用 ∧ 文本源），发现面 `exploreParticipates`（其上再要求声明了分类入口、且书源自己没把发现关掉）
 _Avoid_: 搜索服务
+
+**发现面（explore face / 书城）**:
+「**一个源 + 这个源自己声明的一个分类名 + 第几页**」到「该分类在这个源上、这一页的书目」的完整请求语义与其整轮编排——浏览轴就是这三样，没有跨源那一维（裁决见 `docs/adr/0028`）；用户可见的名字是面板里的「书城」tab。参与集判据四条：**启用 ∧ 文本源 ∧ 声明了分类入口 ∧ 没把发现关掉**。
+_唯一实现_: 单源一次抓取 `services/explore-face.ts` 的 `fetchKindPage`（页码由调用方给）；单源一页的执行体 `services/explore.ts` 的 `fetchExploreGroup`（**从不抛错**：抓取失败以带 `error` 的组交回）；「谁进城」的谓词 `services/participation.ts` 的 `exploreParticipates`（发现开关的 raw 读口 `services/normalize.ts` 的 `rawExploreEnabled`）
+_Avoid_: 书城列表页、分类搜索（发现面是另一条链路，不是聚合搜索的第二次调用）
+
+**分类入口（explore kinds）**:
+一个源「有哪些分类」的逐源声明（用户面与 `docs/adr/0027` 里也叫**发现入口**，指同一件事）。**两方言的地址语义不同**：原生 `ruleFind.kinds` 里的地址是填进源级模板 `{{kind}}` 的值，legado `exploreUrl` 里的地址本身就是那一类的完整模板（自带页码位）；落位后统一成模型里的 `ruleExploreKinds` 一个形状。**「这次用哪份模板」先问源级模板在场吗，方言只决定兜底、不决定优先**——判据的主人是 `explore-face.fetchKindPage`（裁决见 `docs/adr/0027`），此处不复述。脚本形态（`@js:` / `<js>`）本期不执行，声明它的源在书城没有分类。
+_唯一实现_: 解析与形态判定 `services/explore-url.ts` 的 `parseExploreKinds`（判据同住 `exploreKindsFormOf`）；落位在 `services/normalize.ts` 的 `flattenDialect`（导入侧）与 `rawExploreFields`（存量按 raw 补推）
+_Avoid_: 分类词表（那是一个源自己声明的分类标题摊开后的清单，主人是 `deriveExploreSources`）、发现列表
+
+**书籍详情浮层（book sheet）**:
+书城右区一本**已经点名的源上的书**的落点：整段简介（浮层里不夹行，卡片上才夹一行）+ 本源那两个动作（读这本 / 加入书架）+「在其他源找这本」那一次**手动**聚合搜索。源不在这层点名——浏览轴收成按源后，源在左栏第一层就点完名了（裁决见 `docs/adr/0028`）。跨源结果不替用户判是不是同一本书，按源一行行列出来他自己看。
+_唯一实现_: `client/views/CityBookSheet.tsx`（跨源那一次复用搜索面，不新造第二条跨源遍历；关键词构造同住 `client/city-view-model.ts` 的 `sheetKeyword`）
+_Avoid_: 选源（这一层不做这个动作，源已定）、详情面板（「面板」在本仓指宿主里那个全局面板，这层只是它内部的一层覆盖；也别与规则求值的那个**详情面**混为一谈——那是一条取值链路，不是一层界面）
 
 **请求组装（request assembly）**:
 「URL 模板 + 变量 + baseUrl」到「可执行请求计划」的唯一语义解释——method 判定、body 插值、POST 默认头、charset、init 姿态全在一处。
@@ -145,6 +160,11 @@ _Avoid_: 舰队快照（黑话，已否决）、状态总览 chips（读数与�
 _唯一实现_: `src/client/search-job.ts` 的 `apply` 身份闸 + `rebaseline`
 _Avoid_: 重连（重连是同一轮的通道恢复；换轮是身份变了）、重置
 
+**整帧替换（full-frame replace）**:
+发现面观察者的换轮裁决：读面是全量快照且**不设累积器**，故不比轮次身份——轮到谁就以谁的整帧为准，服务端换了轮（别的观察者提交）时新帧自然全覆盖，即「跟随最近一轮」。
+_唯一实现_: `src/client/explore-job.ts` 的 `apply`
+_Avoid_: 换轮（那是搜索面的说法：那边握着一份只对自己有效的游标，必须验身份、丢累积、从基线重读；这里没有可丢的东西）
+
 **bookKey**:
 书籍身份：详情页 URL，**可带 `,{option}` 请求选项后缀**（URL 即请求规格）；本地书为 `local:<uuid>`。
 _相关实现_: `services/request.ts` 的 `assembleRequest`（解释选项）、`shared/wire.ts`（URL 剥选项与比对口径）
@@ -156,9 +176,14 @@ _唯一实现_: `src/services/localbooks.ts`（身份、分流、提交、读取
 _Avoid_: 本地 TXT（口径覆盖两种格式，书架卡片因此只说「本地」，真格式由导入回执的 `format` 交代）、上传文件
 
 **后台任务（background job）**:
-跑在服务端的耗时任务，三种 kind：`novel-import` / `novel-probe`（写，共用一槽）与 `novel-search`（读，另开一槽）。身份与生命周期登记给宿主 `ctx.jobs`；业务计数与明细归本仓持有者。**停止（cancel）不是失败也不是放弃**。
-_唯一实现_: `services/import-job.ts` / `services/probe.ts` / `services/search-job.ts`
+跑在服务端的耗时任务，四种 kind：`novel-import` / `novel-probe`（写，共用一槽）与 `novel-search` / `novel-explore`（读，另开一槽）。身份与生命周期登记给宿主 `ctx.jobs`；业务计数与明细归本仓持有者。**停止（cancel）不是失败也不是放弃**。
+_唯一实现_: `services/import-job.ts` / `services/probe.ts` / `services/search-job.ts` / `services/explore-job.ts`
 _Avoid_: 队列（是单槽不是队列）、前端任务（在途循环不在浏览器半）
+
+**分类轮次（explore round）**:
+一轮分类浏览的持有物：**一轮 = 一个源 + 一个类**，各页结果**跨页累积**住在 Node 半，读面给**全量快照**（整帧替换）；一次只留最近一轮，过了保留期读作「无任务」。**续页是这一轮里的事**（同 id 往前推一页，不换轮），快照上的 `page` / `hasMore` 是**动作契约**——`hasMore` 只说「此刻能不能点」，不是「还有没有书」。
+_唯一实现_: `services/explore-job.ts` 的 `ExploreJobs`——整轮读数 `page` / `hasMore`、续页 `advance`、迟到批次那条边界 `absorb` 全在这一处；到底判据不自立第二个出口，它就是 `snapshot` 里 `hasMore` 的那个累积因子；门面入口 `services/reading.ts` 的 `loadMoreExploreJob`；跨半形状 `shared/wire.ts` 的 `ExploreSnapshot`
+_Avoid_: 分类任务队列（是单轮槽不是队列）、新一轮（续页不换 id、不换身份，只有提交才换轮）
 
 **阅读会话（reader session）**:
 「目录 → 存档恢复 → 逐章懒加载 → 预取 → 进度落盘」的时序持有者；DOM 测量经 `ReaderPort` 注入，视图只渲染与接线。同一时刻只允许一章在途（`inflight`），滚动风暴与目录直达只记意图（`pendingJump`），刚失败过的同一章不自动重试。
@@ -196,6 +221,11 @@ _Avoid_: 逐字段 typeof 筛键（那是这张表的抄本）
 书架读取面上由服务端 join 出的源名 `ShelfEntry.sourceName`。它是**读取面投影、不是书目字段**——不可 patch、不落盘，故刻意不进 `SHELF_META`。
 _唯一实现_: `services/reading.ts` 的 `sourceNameOf`（读面入口 `shelfList`）
 _Avoid_: 来源字段（那是落盘书目字段的说法）、来源快照（同址替换会复用 sourceId，快照会静默陈旧）
+
+**分类词表（kind vocabulary）**:
+书城那份可看清单的**按源**形状：一个源自己声明了哪些分类标题，按该源声明的原样顺序给、同源内去重。**不造同义词表**（「玄幻」≠「奇幻」是站点的真实分歧），跨源合并同名也不做——浏览轴的这一维是「点名一个源」（裁决见 `docs/adr/0028`）。
+_唯一实现_: `services/explore.ts` 的 `deriveExploreSources`；跨半形状 `shared/wire.ts` 的 `ExploreSources`
+_Avoid_: 分类目录（那是站点侧的分类，词表是各源自己声明的标题）、分类计数（旧版那份「被多少源声明」的读数随跨源轴一起走了）
 
 **wire 契约（wire contract）**:
 `/novel-api` 规范 JSON 的值形状与路由名——Node 半与浏览器半之间的唯一真相，代码只许有一个主人。

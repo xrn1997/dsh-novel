@@ -5,12 +5,15 @@ import type { Facet } from '../engine/index.js'
 import { absUrl, auxFieldOf, auxUrlFieldOf, detailContextOf, detailFieldsOf, engineContextOf, fieldOf, firstUrlValue, firstValue, itemContextsOf, kindFieldOf, makeSubEval, resolveHeaders, urlFieldOf, wordCountFieldOf } from './bridge.js'
 import type { Page, SubRuleEval } from './bridge.js'
 import { PageCache } from './cache.js'
-import { contentSlot, rulesEpoch } from './cache-epoch.js'
+import { contentSlot, exploreEpoch, rulesEpoch } from './cache-epoch.js'
 import { chapterContentToText } from './chapter-content.js'
 import { contentToText, formatIntro } from './content.js'
 import { ChapterNotFoundError, InvalidRequestError, LocalNotMountedError, RuleMissingError, SourceNotFoundError } from './errors.js'
 import { createFetcher, decodeBody, fetchTextPage, DEFAULT_TIMEOUT_MS } from './fetcher.js'
 import type { Fetcher } from './fetcher.js'
+import { KindCache } from './explore-cache.js'
+import { ExploreJobs } from './explore-job.js'
+import { deriveExploreSources, fetchExploreGroup } from './explore.js'
 import { SourceJobs } from './import-job.js'
 import { SearchJobs } from './search-job.js'
 import type { JobHost } from './import-job.js'
@@ -21,6 +24,7 @@ import type { LocalResource } from './localbooks.js'
 import type { NormalizeIssue } from './normalize.js'
 import { followPages } from './pagination.js'
 import type { FollowResult } from './pagination.js'
+import { exploreParticipates, participates } from './participation.js'
 import { probeSource } from './probe.js'
 import type { ProbeResult } from './probe.js'
 import { absUrlKeepOption, assembleRequest, canonUrl, fetchInitOf, stripUrlOption } from './request.js'
@@ -33,13 +37,13 @@ import type { NovelSource, SourceAuth } from './types.js'
 // ── 公开类型（冻结：HTTP 面 / 工具面 / UI 只准用这套）──────────────────
 // 值形状定义在 wire 契约（src/shared/wire.ts）——
 // 此处 re-export 保持既有 import 路径可用；改形状请去 shared，别在这里加第二份。
-export type { SearchHit, SearchGroup, ChapterEntry, BookDetail, SearchJobSnapshot } from '../shared/wire.js'
+export type { SearchHit, SearchGroup, ChapterEntry, BookDetail, SearchJobSnapshot, ExploreSources, ExploreSnapshot } from '../shared/wire.js'
 /** 本地资源读口（含流/MIME 的 Node 内部形状）：api 层从本模块取用，不去 localbooks 抄第二处 */
 export type { LocalResource } from './localbooks.js'
 import { planarNavigation } from '../shared/wire.js'
 import type {
-  BookDetail, BookNavigation, ChapterContent, LocalImportResponse, LocalImportWarning, SearchGroup, SearchHit,
-  SearchPlan, SearchJobSnapshot, ChapterEntry, ShelfBook, ShelfEntry, ShelfMetaPatch, SourcePublic,
+  BookDetail, BookNavigation, ChapterContent, ExploreSources, ExploreSnapshot, LocalImportResponse, LocalImportWarning,
+  SearchGroup, SearchHit, SearchPlan, SearchJobSnapshot, ChapterEntry, ShelfBook, ShelfEntry, ShelfMetaPatch, SourcePublic,
 } from '../shared/wire.js'
 /** 聚合搜索并发（缺省 5）与 js 沙箱预算（缺省 15s）：**这两个数的唯一主人**——组合根 DEFAULTS
  *  与本文件 `from()` 回退都引这里，别处不再写字面量。15s 而非引擎 2s：多请求目录脚本 2s 必炸；
@@ -73,6 +77,15 @@ export interface ImportOutcome {
   dupSkipped?: boolean
 }
 
+/** 一次点名解析出来的那一**条**分类入口：执行体要的三样（打哪个源、拿什么地址、按哪份代际存快照）。
+ *  `pickEntry` 交出它、`runExplorePage` 收下它，两处各写一遍匿名形状就是让这条契约没有名字。
+ *  不叫 `ExploreTarget`：那枚名字属于跨源编排那一层（一轮打多家），它随浏览轴一起撤了（`docs/adr/0028`）。 */
+interface ExploreEntry {
+  source: NovelSource
+  kindUrl: string
+  epoch: string
+}
+
 // ── 服务实现 ────────────────────────────────────────────────────────────
 
 /**
@@ -95,6 +108,10 @@ export class ReadingService {
     private readonly jobs: SourceJobs,
     /** 聚合搜索的后台持有者（读任务，与写的 `jobs` 分槽——见 services/search-job.ts 的理由） */
     private readonly searchJobs: SearchJobs,
+    /** 分类浏览的后台持有者（与 `searchJobs` 同一档：读任务，与写的 `jobs` 分槽——理由同 services/explore-job.ts） */
+    private readonly exploreJobs: ExploreJobs,
+    /** 逐源分类快照：**一份实例**服务全部轮次与全部调用方，否则「重复进同一分类」永远打站点 */
+    private readonly exploreCache: KindCache,
     private readonly local: LocalBooks | null,
   ) {}
 
@@ -168,6 +185,8 @@ export class ReadingService {
         ...(parts.jobHost === undefined ? {} : { host: parts.jobHost }),
       }),
       new SearchJobs(parts.jobHost === undefined ? {} : { host: parts.jobHost }),
+      new ExploreJobs(parts.jobHost === undefined ? {} : { host: parts.jobHost }),
+      new KindCache(),
       parts.local ?? null,
     )
   }
@@ -462,7 +481,7 @@ export class ReadingService {
   }): Promise<SearchGroup[]> {
     const want = opts?.sourceIds
     const sources = this.registry.list().filter((s) =>
-      ReadingService.participates(s) && (want === undefined || want.length === 0 || want.includes(s.id)))
+      participates(s) && (want === undefined || want.length === 0 || want.includes(s.id)))
     const groups: SearchGroup[] = new Array(sources.length)
     for (let i = 0; i < sources.length; i += this.cfg.searchParallel) {
       if (opts?.shouldStop?.() === true) break
@@ -485,18 +504,11 @@ export class ReadingService {
     return this.searchProgressive(keyword, opts)
   }
 
-  /** 聚合搜索参与集判定（**唯一**实现）：启用 ∧ 文本源。本插件当前仅支持小说文本面
-   *  （wire `SourceContentKind` 注释同口径）；将来支持其他媒介时**只在此扩参与集**，
-   *  不许散落第二处判别（用户拍板 2026-09：「未来未必不支持其他类型，现在只支持小说」）。
-   *  非文本源留库、不删、不改启用态——只是不参搜（漫画/短剧书不再混进文字书架）。 */
-  private static participates(s: NovelSource): boolean {
-    return s.enabled && s.type === 'text'
-  }
-
-  /** 搜索参与计划：search 的参与集判定的唯一主人——客户端分批/进度按此走，
-   *  「哪些源参搜」（启停 ∧ 内容形态 invariant）不再在 wire 两侧各定义一份。 */
+  /** 搜索参与计划：**参与者 id 清单**这条投影的唯一主人——客户端分批/进度按此走，
+   *  「哪些源参搜」不再在 wire 两侧各定义一份。
+   *  谓词不在本文件：「谁参搜」的**判据**单点是 `services/participation.ts` 的 `participates`。 */
   searchPlan(): SearchPlan {
-    return { sourceIds: this.registry.list().filter((s) => ReadingService.participates(s)).map((s) => s.id) }
+    return { sourceIds: this.registry.list().filter((s) => participates(s)).map((s) => s.id) }
   }
 
   /** 提交一轮**后台**搜索：参与集判定与 `total` 同源（都是 searchPlan 那一条启停 invariant），
@@ -523,6 +535,86 @@ export class ReadingService {
 
   /** 搜索任务的「变了」信号口（SSE 路由用它拉增量；信号不带数据，游标归每条连接）。返回退订口。 */
   subscribeSearchJob(listener: () => void): () => void { return this.searchJobs.subscribe(listener) }
+
+  // ── 分类浏览（书城）──────────────────────────────────────────────────
+
+  /** 发现面的**按源**清单（本地派生，**零网络请求**）：书城左栏两级的同一份材料。
+   *  参与集判据与 `searchPlan` 同源——`exploreParticipates` 就是那条启停 invariant 再加一条
+   *  「声明了分类入口」，故清单与参搜集合不会各说一套。
+   *  派生本身归 `explore.ts` 的 `deriveExploreSources`（吃名册吐数组的纯函数）：本方法只往上套一层
+   *  wire 信封。两个名字各指一层，读调用点的人不必现场分辨问的是哪一层。 */
+  exploreSources(): ExploreSources {
+    return { sources: deriveExploreSources(this.registry.list()) }
+  }
+
+  /** 提交一轮分类浏览：**一个源、一个类、从第 1 页起**。
+   *  点名不在可选集里的源（源不存在 / 没声明这一类 / 不进城）一律抛错而不是给一个空轮次——
+   *  空轮次会被读成「这一类没有书」，那是把「没点名成功」冒充成事实；用户主动点名的东西点不到，
+   *  就该响亮地告诉他点不到。抛 `InvalidRequestError` 而不是路由层的错误类：值域判据归门面
+   *  （架构硬约束「services 不 import api」），HTTP 面经 `errors.classify` 映射成与路由自检
+   *  同一份的 400 BadRequest 信封。
+   *  命中进程内快照即零请求（重复进同一类不打站点是那份快照存在的全部理由）。 */
+  startExploreJob(sourceId: string, kind: string): { jobId: string } {
+    const entry = this.pickEntry(sourceId, kind)
+    if (entry === null) throw new InvalidRequestError(`该源没有可用的分类入口：${sourceId} · ${kind}`)
+    return this.exploreJobs.start(sourceId, kind, (emit) => this.runExplorePage(entry, 1, emit))
+  }
+
+  /** 续第 page+1 页（**同一轮**，不换 id）。没得发就如实 null，不做无效请求——
+   *  路由据此回 409，客户端据此把「加载更多」收掉，而不是假装又加载了一轮。
+   *
+   *  判据只有 `hasMore` 一条：它已经是服务端「**此刻**能不能点」的唯一读数（在途那一段它自己就是
+   *  false），这里再判一次在途就是给同一条读数立第二个主人——两份判据迟早会一边说能、一边说不能。
+   *
+   *  **入口解析不出（源刚被删 / 那一类改了名）也按「没得发」走 null**，不跟 `startExploreJob` 共用
+   *  那条抛错：那边是用户主动点名一个点不到的东西，这边是**轮次还显示在界面上**、用户点的是这一轮的
+   *  下一页——「没得可加载」与「你点了个不存在的东西」是两件事，把前者报成后者等于拿注册表的变动
+   *  算成用户的操作失误，还顺手让一条红错误盖掉那一轮已经读得到的书单。轮次本身不受影响。 */
+  loadMoreExploreJob(): { jobId: string } | null {
+    const snap = this.exploreJobs.snapshot()
+    if (snap === null || !snap.hasMore) return null
+    const entry = this.pickEntry(snap.sourceId, snap.kind)
+    if (entry === null) return null
+    return this.exploreJobs.advance(snap.kind, (emit) => this.runExplorePage(entry, snap.page + 1, emit))
+  }
+
+  /** 源与类都要现查：注册表是唯一的源清单，入口地址与代际在这里一次算好交给执行体。
+   *  「点不到」的三种情形（源不在清单 / 该源没声明这一类 / 该源不进城）**合成一条判据**：
+   *  参与判据仍归 `exploreParticipates` 一处，本函数不复制它的启停规则，只是把「拿不到入口」
+   *  与「这个源不该被点名」落成同一个读数。
+   *
+   *  拿不到就返回 null、**不在这里替调用方定后果**：同一个「点不到」在两个调用方那里是两种事实——
+   *  提交时点不到是用户点名失败（抛，落成 400），续页时点不到是没得可加载（null，落成 409）。
+   *  判据单点在这里，选哪种后果归那两个门面方法各自说清。
+   *
+   *  代际用 `exploreEpoch` 而非 `rulesEpoch`：后者按「一个字段变更作废哪些**引擎面**（目录/正文）的
+   *  文件缓存」归类，ruleExplore* 一族在那张表里全归 'none'——拿它当快照键，作者改了发现规则而
+   *  入口地址不动时，陈旧书目会一直撑到 TTL 结束。两份指纹同一个主人、各按自己的消费路径收字段。 */
+  private pickEntry(sourceId: string, kind: string): ExploreEntry | null {
+    const s = this.registry.list().find((x) => x.id === sourceId)
+    const hit = s?.rules.ruleExploreKinds.find((k) => k.title === kind)
+    if (s === undefined || hit === undefined || !exploreParticipates(s)) return null
+    return { source: s, kindUrl: hit.url, epoch: exploreEpoch(s.rules, s.baseUrl) }
+  }
+
+  /** 一轮里的一页：交给执行体的东西全部现成（入口地址、代际、页码），本层不再推导。
+   *  运行器契约的第二个参数 `shouldStop`（协作式取消）在这里用不上——单源一次就完，
+   *  取消仍由持有者的代际点穴承担。 */
+  private async runExplorePage(
+    entry: ExploreEntry, page: number, emit: (g: SearchGroup) => void,
+  ): Promise<void> {
+    emit(await fetchExploreGroup(entry.source, entry.kindUrl, this.fetcher, {
+      timeoutMs: this.searchTimeoutMs, jsTimeoutMs: this.jsTimeoutMs, page,
+      cache: this.exploreCache, epoch: entry.epoch,
+    }))
+  }
+
+  /** 分类轮次读面：**全量**快照（跨页累积住在服务端持有者，增量模型装不下——见 services/explore-job.ts）。
+   *  null = 从未提交过，或结束后过了保留期。 */
+  exploreJobSnapshot(): ExploreSnapshot | null { return this.exploreJobs.snapshot() }
+
+  /** 分类轮次的「变了」信号口（SSE 路由用它拉全量帧；信号不带数据）。返回退订口。 */
+  subscribeExploreJob(listener: () => void): () => void { return this.exploreJobs.subscribe(listener) }
 
   private async searchOne(s: NovelSource, keyword: string): Promise<SearchGroup> {
     const base = {
