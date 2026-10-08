@@ -158,7 +158,11 @@ export interface ExploreSources {
 /** 一本书：**某个源的某个分类下的一条**。不再有 `origins[]`/`sourceCount`——浏览面不跨源，
  *  那两个字段在单源下恒为「1 条 / 1 源」，是谎言字段。跨源视野由详情浮层那一次
  *  手动聚合搜索承担（主人 `client/search-job.ts`，不是这里）。
- *  `author` 为空的条目照旧合法（重名书大量存在，我们从不按书名合并任何东西）。 */
+ *  `author` 为空的条目照旧合法（重名书大量存在，我们从不按书名合并任何东西）。
+ *  **与 `SearchHit` 同字段集而三处异名（`name`/`bookUrl`/`lastChapter`）是刻意的两份语义**：
+ *  这一张是浏览轴上「一家给的一条」，那一张是聚合搜索里「多家撞来的命中」——把它们并成一张，
+ *  「一条命中就是一本书」与「同一本在几个源上」这两种判断就会在类型面上重新长在一起。
+ *  谁该转成谁只有一个地方说得上：详情浮层那两个映射器（`client/views/CityBookSheet.tsx`）。 */
 export interface ExploreBook {
   name: string
   author: string | null
@@ -186,7 +190,8 @@ export interface ExploreSnapshot {
   phase: 'running' | 'done' | 'failed'
   /** 这一轮被取消（`phase='failed'` 而非失败）：UI 据此不报红条。发现面今天只有宿主侧取消可达 */
   cancelled: boolean
-  /** 已加载到第几页（第 1 页由提交带来，续页每点一次 +1） */
+  /** 这一轮**占到**第几页：第 1 页由提交带来，此后只有成功并入的那一页才占号——失败或被停止的一批
+   *  不算，于是下一次续页打回的是同一页（写主 `services/explore-job.ts` 的 `Held.page`） */
   page: number
   /** 还能不能再点一次「加载更多」：**此刻**可以点——有一批在途时为 false（客户端显加载态用的是
    *  自己的 `round.running`，把在途那一段排除出去不丢信息）。于是服务端的 409 只剩一个意思。
@@ -482,7 +487,7 @@ export const ROUTES = {
   exploreKinds: route(SEG.explore, SEG.kinds),
   /** 提交一轮分类抓取 */
   exploreList: route(SEG.explore, SEG.list),
-  /** 续页：把**当前这一轮**再往前抓一页（同一轮 id，客户端整帧替换的读模型不因此换脸）；
+  /** 续页：把**当前这一轮**再打一页（同一轮 id，客户端整帧替换的读模型不因此换脸）；
    *  没有源还能再要一页时回 409——「加载更多」钮据此收掉，而不是假装又开了一轮 */
   exploreListMore: route(SEG.explore, SEG.list, SEG.more),
   /** 分类轮次的全量快照（无游标——快照形状见 ExploreSnapshot 的注释） */

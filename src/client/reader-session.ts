@@ -106,6 +106,11 @@ export class ReaderSession {
    *  双帧回调）只服务它出发时的那一代——不符即作废，不落位不落盘。**只补在异步续作上**：
    *  既有的在途槽次序、RESTORE_SLOT 预约与防抖 flush 语义一字未动。 */
   private generation = 0
+  /** 这本书此刻**在不在书架上**（`'unknown'` = 书架没拉到，不假装知道）。
+   *  读数来自 `open` 里那次已有的书架查询：为存档恢复查过一次，再为「要不要问入架」查第二次
+   *  就是给同一个问题立第二个主人。视图据此在离开阅读器时问一次——不在架的书，进度 PUT 会被
+   *  服务端判 `NOT_ON_SHELF`，这一屏读到哪儿就此静默消失。 */
+  private onShelfNow: 'unknown' | 'on' | 'off' = 'unknown'
   private readonly save: DebouncedSave
 
   constructor(
@@ -121,6 +126,8 @@ export class ReaderSession {
   }
 
   get state(): ReaderSessionState { return this.store.get() }
+  /** 在架读数（视图据此决定离开时要不要问一句） */
+  get onShelf(): 'unknown' | 'on' | 'off' { return this.onShelfNow }
   subscribe = (cb: () => void): (() => void) => this.store.subscribe(cb)
 
   /** 进入一本书：目录 → 存档恢复；无存档/书架拉不到 → 从头 */
@@ -136,6 +143,7 @@ export class ReaderSession {
     this.inflight = null
     this.failedIndex = null
     this.returnStack = []
+    this.onShelfNow = 'unknown'                           // 换书即重问：上一本的在架状态不带到这一本
     this.save.cancel()
     this.store.set({
       toc: null, navigation: null, chapters: [], loadingIdx: null, error: null,
@@ -159,6 +167,8 @@ export class ReaderSession {
         const shelf = await this.deps.fetchShelf()
         if (gen !== this.generation) return
         const mine = shelf.find((b) => b.bookKey === bookKey)
+        // 同一次查询顺手记下在架读数：它是这条链上唯一问得到「这本书在不在架上」的时刻
+        this.onShelfNow = mine === undefined ? 'off' : 'on'
         if (mine !== undefined) {
           if (typeof mine.totalChapters !== 'number') this.deps.saveTotalChapters(toc.length)
           // 「有没有存档」判据单点归 wire.hasProgress（第 0 章的章内位置也算进度）；

@@ -18,6 +18,28 @@ const SSE_HEADERS = {
   'x-accel-buffering': 'no',
 }
 
+/** 一条作业观察流的机械，搜索面与发现面共用（头那一份住 `SSE_HEADERS`）：写头 → 每次「变了」补一帧
+ *  → 帧到了终态就自己退订并关流 → 关页/断连也退订。
+ *  「取哪一份快照、它到没到终态」交给 `frame`：游标推进这种只有某一面试得到的副作用留在调用方自己的
+ *  闭包里，机械不认识 job 的形状——两面各自的口径（搜索带游标、发现整帧替换）因此各说各的，不并进来。
+ *  不抽这一处的话，「终态必须自己关流」与「断连必须退订」两条纪律各写一遍，漏改任一条都只表现为
+ *  某一条流占着连接不放——那种缺陷从代码上看不出来。 */
+function openJobStream(res: ServerResponse, subscribe: (notify: () => void) => () => void,
+  frame: () => { job: unknown; done: boolean },
+): void {
+  res.writeHead(200, SSE_HEADERS)
+  let off: (() => void) | null = null
+  const pump = (): void => {
+    if (res.writableEnded || res.destroyed) return
+    const f = frame()
+    res.write(`data: ${JSON.stringify({ job: f.job })}\n\n`)
+    if (f.done) { off?.(); res.end() }
+  }
+  off = subscribe(pump)
+  res.on('close', () => { off?.() })                 // 关页/断连即退订：不给死连接攒帧，也不让监听器长驻持有者
+  pump()                                            // 首帧（可能是 `{job:null}`：还没提交过，流继续等）
+}
+
 /** 非空 string[] body 校验单点（批路由同口径的手写块收口）；字段名是唯一变量（ids / keys） */
 function requireStringList(body: Record<string, unknown> | null, field: string): string[] {
   const v = body?.[field]
@@ -203,18 +225,12 @@ async function route(
     guard(method, 'GET', ROUTES.searchJobStream.path)
     const raw = Number(url.searchParams.get(PARAMS.since) ?? '0')
     let cursor = Number.isInteger(raw) && raw > 0 ? raw : 0
-    res.writeHead(200, SSE_HEADERS)
-    let off: (() => void) | null = null
-    const pump = (): void => {
-      if (res.writableEnded || res.destroyed) return
+    // 游标只在这一面推进（发现面没有游标这回事）：它是 `frame` 闭包里的私有状态，机械不认识
+    openJobStream(res, (notify) => service.subscribeSearchJob(notify), () => {
       const job = service.searchJobSnapshot(cursor)
       if (job !== null) cursor = job.next
-      res.write(`data: ${JSON.stringify({ job })}\n\n`)
-      if (job !== null && job.phase !== 'running') { off?.(); res.end() }
-    }
-    off = service.subscribeSearchJob(pump)
-    res.on('close', () => { off?.() })    // 关页/断连即退订：不给死连接攒帧，也不让监听器长驻持有者
-    pump()                                // 首帧（可能是 `{job:null}`：还没提交过，流继续等）
+      return { job, done: job !== null && job.phase !== 'running' }
+    })
     return
   }
   if (a === SEG.search && b === SEG.jobStatus) {
@@ -270,19 +286,13 @@ async function route(
     return
   }
   if (a === SEG.explore && b === SEG.list && c === SEG.jobStream) {
-    // 与 search 流同一份形状：每帧都是同一份快照，终态即关流；帧按 id 归属轮次（订阅者自己认 id）
+    // 与 search 流同一份形状：每帧都是同一份快照，终态即关流。但**这一条流的订阅者不认帧的 id**：
+    // 发现面整帧替换（CONTEXT「整帧替换」、`client/explore-job.ts` 的 `apply`），search 面才按 id 验身份。
     guard(method, 'GET', ROUTES.exploreListStream.path)
-    res.writeHead(200, SSE_HEADERS)
-    let off: (() => void) | null = null
-    const pump = (): void => {
-      if (res.writableEnded || res.destroyed) return
+    openJobStream(res, (notify) => service.subscribeExploreJob(notify), () => {
       const job = service.exploreJobSnapshot()
-      res.write(`data: ${JSON.stringify({ job })}\n\n`)
-      if (job !== null && job.phase !== 'running') { off?.(); res.end() }
-    }
-    off = service.subscribeExploreJob(pump)
-    res.on('close', () => { off?.() })
-    pump()
+      return { job, done: job !== null && job.phase !== 'running' }
+    })
     return
   }
 

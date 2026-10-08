@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ROUTES } from '../shared/wire.js'
 import type { ExploreBook, ExploreSnapshot } from '../shared/wire.js'
 import { ApiClientError } from './api.js'
+import { JOB_POLL_MS } from './util.js'
 import type { ClientCoreDeps } from './deps.js'
 
 /**
@@ -25,12 +26,16 @@ import type { ClientCoreDeps } from './deps.js'
  * 那次读——那份迟到帧要靠 `stopChannels` 的代际认出自己该被丢掉，否则它会拿旧轮整帧盖掉刚落地
  * 的新轮（与下面 `submitted` 那枚闸挡的是同一件事，区别只在它管得到恢复读、管不到在途的轮询）。
  *
- * **续页不是新轮**：`loadMore` 只把同一轮往前推一页（服务端换页不换 id），所以上面那套「零累积、
+ * **与 `search-job.ts` 那段同形的通道机械（`armPoll`/`poll`/`watch`）刻意不抽公共壳**，只有节奏
+ * 那一格抽了（`util.ts` 的 `JOB_POLL_MS`，同一个数写两份必然只改到一份）。不抽的理由是两边的
+ * **收手语义不是一种参数的两个值**：这边靠通道代际把在途那一发判废，那边靠累积器身份，且身份
+ * 不符时它不是丢帧而是 `rebaseline`——断流、从 `since=0` 重读新轮基线、再重开观察。把那条恢复
+ * 塞进一个只有它用的注入位，壳就只剩转发；而把这边的 `stopChannels`（连 timer 一起撤）套到那边，
+ * 改的是搜索面撤通道的语义，那不是这份改动该有的授权。
+ *
+ * **续页不是新轮**：`loadMore` 只把同一轮再打一页（服务端不换轮、不换 id），所以上面那套「零累积、
  * 整帧替换」一行都不用改——新一页的书随下一帧进来，客户端不持有任何要跟着翻页对齐的东西。
  */
-
-/** 轮询节奏：与搜索面同档（600ms 足够「边抓边出」的观感，又不把 /novel-api 打成刷屏） */
-const POLL_MS = 600
 
 /** 本轮视图态（服务端快照的投影；`running` 就是 UI 的「还在跑吗」判据）。
  *  旧版带着 `total`/`done`/`failures`——那是「一轮打多个源」的读数：单源下 `total` 恒为 1（一个常数）、
@@ -69,7 +74,7 @@ export interface ExploreJobView {
   /** 提交一轮分类浏览：**两个点名都在 body 里**（源与类，见 `docs/adr/0028`）——切源、切类都是再调
    *  一次；服务端按这两个点名走内存快照，重复提交很便宜。 */
   submit: (sourceId: string, kind: string) => void
-  /** 把**当前这一轮**再往前推一页（同一轮 id，客户端不做累积——整帧替换的读模型照旧成立）。
+  /** 把**当前这一轮**再打一页（同一轮 id，客户端不做累积——整帧替换的读模型照旧成立）。
    *  典型路径是尾行那颗「加载更多」。
    *
    *  **409 不是故障**：它只有「此刻没得可加载」一个意思（服务端把在途那一段用 `hasMore=false`
@@ -112,7 +117,7 @@ export function useExploreJob(deps: ClientCoreDeps): ExploreJobView {
 
   const armPoll = (): void => {
     if (timer.current !== null) clearTimeout(timer.current)
-    timer.current = setTimeout(() => { void poll() }, POLL_MS)
+    timer.current = setTimeout(() => { void poll() }, JOB_POLL_MS)
   }
 
   /** 一帧落地：整体替换 + 判「还要不要继续看」。服务端连一轮都没有 = 没有可显示的结果，如实说 */
@@ -198,7 +203,7 @@ export function useExploreJob(deps: ClientCoreDeps): ExploreJobView {
   }
 
   /**
-   * 把这一轮往前推一页。**这是本模块唯一的乐观态**，且只动 `running`：按下即进「加载中」——
+   * 把这一轮再打一页。**这是本模块唯一的乐观态**，且只动 `running`：按下即进「加载中」——
    * 若不本地按下去，按钮在这一段仍亮着，连点就会发出两次同样的续页（第二次撞服务端的 409，
    * 那一次噪声是我们自己造的）。页码与 `hasMore` 都不本地推：那是服务端的事实，推出来就是把
    * 还没发生的事写给用户看（本地这一帧随下一帧整体换掉，正是本模块的读模型）。

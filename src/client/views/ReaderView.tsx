@@ -319,7 +319,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   }
   /** 只收**面板这一层浮层**，不消费返回栈条目——开另一个角落浮层（目录/Aa/导出/导入说明）时的
    *  互斥用它，不走 `closeNote`：「我要开目录」不是对阅读位置的表态，借关闭语义收面板等于开个
-   *  抽屉把正文跳走。返回项留在栈里由「↩ 返回原处」承接（同口径见 toggleImportNotes）。 */
+   *  抽屉把正文跳走。返回项留在栈里由「返回原处」承接（同口径见 toggleImportNotes）。 */
   const hideNoteSurface = (): void => {
     if (note !== null) setNote(null)
   }
@@ -332,6 +332,12 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   const visibleRef = useRef<VisibleNode | null>(null)
   /** 目录当前项：会话按「当前章内最近的已登记导航锚点」裁决，视图只负责在被问到时取一次 */
   const [navActive, setNavActive] = useState<string | null>(null)
+  /** 离开阅读器那一句「要不要加入书架」的现场。在不在架这个读数来自会话（`session.onShelf`，
+   *  它本来就是为恢复存档查过一次书架的副产品），视图不再查第二次。 */
+  const [askShelf, setAskShelf] = useState(false)
+  const [joinBusy, setJoinBusy] = useState(false)
+  const [joinError, setJoinError] = useState<string | null>(null)
+  const askModalRef = useRef<HTMLDivElement | null>(null)
   /** 关闭注释面板：内链打开的回到引用处（位置提交与返回栈都归会话） */
   const closeNote = (): void => {
     if (note !== null) session.closeSupplement(sourceId, note.entry)
@@ -339,8 +345,9 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   }
   // 浮层（Aa 面板 / 目录抽屉 / 导出面板 / 注释面板 / 导入说明面板）共用一条 Esc：任一在场就装监听。
   // Esc 关闭面板与「关闭」钮同一条语义（内链打开的会回引用处）——两条入口不许分叉。
+  // 入架那一问也在这一条 Esc 里：它只**收回这一问**，不替用户决定去留（要走有那两颗钮）。
   useEffect(() => {
-    if (!ctrlOpen && !drawer && !expOpen && note === null && !notesOpen) return
+    if (!ctrlOpen && !drawer && !expOpen && note === null && !notesOpen && !askShelf) return
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
       setCtrlOpen(false)
@@ -348,11 +355,36 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
       setExpOpen(false)
       setNotesOpen(false)
       closeNote()
+      if (!joinBusy) setAskShelf(false)
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ctrlOpen, drawer, expOpen, note, notesOpen, session, sourceId])
+  }, [ctrlOpen, drawer, expOpen, note, notesOpen, askShelf, joinBusy, session, sourceId])
+  /** 入架一问的键盘接管，与删除确认模态（`ShelfView` 的同款 effect）同一条纪律：入场焦点落在
+   *  「先不加入」，Tab 圈在框内，关闭后焦点还给触发它的「书架」钮（为什么只挡 Esc 不够，住那边的头注）。
+   *  依赖只有 `askShelf`——在场期间的重渲染不许重跑：重跑会把焦点劫回第一颗、opener 也被一并重捕获。 */
+  useEffect(() => {
+    if (!askShelf) return
+    const opener = document.activeElement
+    const focusables = (): HTMLElement[] => askModalRef.current === null ? []
+      : [...askModalRef.current.querySelectorAll<HTMLElement>('button:not([disabled])')]
+    focusables()[0]?.focus()
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Tab') return
+      const f = focusables()
+      if (f.length === 0) return
+      const first = f[0]
+      const last = f[f.length - 1]
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus()
+    }
+  }, [askShelf])
   /** 目录高亮：只在抽屉开着时取（一次 DOM 测量，不在滚动路径上）；只在**跨章**与换书时重算
    *  （`currentChapter` 变才醒）——同章内滚动是每帧的量，不值得为一条 aria-current 按帧唤醒。 */
   useEffect(() => {
@@ -439,6 +471,42 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     session.followLink(sourceId, target, role)
   }
 
+  /** 离开阅读器回书架：这本书**不在架上**时先问一句要不要加入。在架与「问不到」都不问——
+   *  书架拉不到是「不知道」，不是「没有」，不许拿不知道拦用户。
+   *  为什么不在「读这本」那一刻静默加：书城那一层刻意把「加入书架」与「读这本」分成两个动作
+   *  （`docs/adr/0028`），静默代劳就是替用户做一个他没要过的写操作。
+   *  不问会丢什么：不在架的书，进度 PUT 被服务端判 `NOT_ON_SHELF`，`saveProgress` 咽掉那句 400 ⇒
+   *  这一屏读到哪儿就此消失。先入架再离开，卸载时 `dispose` 那一次 flush 才落得到地上。 */
+  const exitToShelf = (): void => {
+    if (session.onShelf === 'off') {
+      setJoinError(null)
+      setAskShelf(true)
+      return
+    }
+    navigate({ name: 'shelf' })
+  }
+
+  /** 「加入书架并返回」：写成功后才离开（失败把话留在问它的那一层，用户可重试也可先不走）。
+   *  书目字段只带阅读器问得到的那几样（书名来自进入参数、总章数来自目录），其余一律缺席——
+   *  缺的整段不出现，比拿猜出来的作者/封面填进架子诚实。 */
+  const joinAndBack = (): void => {
+    setJoinBusy(true)
+    setJoinError(null)
+    void deps.apiSend('PUT', paramRoutes.shelfKey(bookKey),
+      shelfBody.addBook({ sourceId, title, totalChapters: toc?.length ?? null })).then(
+      (): void => {
+        setJoinBusy(false)
+        setAskShelf(false)
+        deps.pushOk(`已加入书架：${title}`)
+        navigate({ name: 'shelf' })
+      },
+      (e: unknown): void => {
+        setJoinBusy(false)
+        setJoinError(e instanceof Error ? e.message : String(e))
+      },
+    )
+  }
+
   // 进入：开会话（目录→恢复→懒加载）；卸载：关会话（清防抖定时器）
   useEffect(() => {
     chapterRefs.current = []
@@ -522,7 +590,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
           ctrl-z 守卫断言）。图标一律 aria-hidden：它们是装饰，可访问名由文案给。 */}
       <div className={prefs.darkController ? 'novel-dark novel-rdr-bar' : 'novel-rdr-bar'}
         style={{ position: 'sticky', top: 0, zIndex: CTRL_Z.toolbar }}>
-        <button className="novel-rdr-ctl" onClick={() => navigate({ name: 'shelf' })}>
+        <button className="novel-rdr-ctl" onClick={exitToShelf}>
           <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M10 3 5 8l5 5" /></svg>书架
         </button>
         {/* 正文内链的返回入口：**一次返回一条**（重复跟随链接才有多层）。栈在会话里、只活在窗口内；
@@ -610,6 +678,24 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
           if (error !== null) session.retry()
           else setExportState(IDLE_EXPORT)
         }} />
+      )}
+      {/* 离开前那一问（口径见 exitToShelf）：共用删除确认那一套模态（遮罩 + 居中框 + 动作行 + Tab 圈内、
+          关后还焦——见上面那条同款 effect）。
+          「先不加入」是**离开**（用户本来就要走，问过了就不再造第二次），按钮措辞各自说清自己那件事。 */}
+      {askShelf && (
+        <div className="novel-modal-mask" onClick={(e) => { if (e.target === e.currentTarget && !joinBusy) setAskShelf(false) }}>
+          <div ref={askModalRef} className="novel-modal" role="dialog" aria-modal="true" aria-labelledby="novel-rdr-add-title">
+            <div className="novel-modal-title" id="novel-rdr-add-title">这本书还没加入书架，加入吗？</div>
+            <div className="novel-modal-body">加入才会保存阅读进度；不加入，这一屏读到哪儿就不留。</div>
+            {joinError === null ? null : <div className="novel-err novel-note-sm">加入书架失败：{joinError}</div>}
+            <div className="novel-modal-actions">
+              <button className="novel-btn sm" onClick={() => navigate({ name: 'shelf' })} disabled={joinBusy}>先不加入</button>
+              <button className="novel-btn sm primary" onClick={joinAndBack} disabled={joinBusy}>
+                {joinBusy ? '加入中…' : '加入书架并返回'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       {/* 阅读区（full-bleed：纸铺满这一层）：正文列 + 0 宽 sticky 抽屉槽同在此行。
           纸色走值槽（.novel-rdr 根上行内写、样式层读），条与正文因此读的是同一张纸。

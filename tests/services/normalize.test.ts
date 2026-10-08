@@ -387,6 +387,19 @@ describe('原生方言的 ruleFind 映射（发现面数据面）', () => {
     ])
   })
 
+  // 原生这扇门与两档解析（explore-url 的 parseTextKinds / parseJsonKinds）用的是同一把尺：
+  // 标题与地址去空白后非空才算数、存的即去空白后的值——脏条目从哪一门都不许钻进来（口径的
+  // 完整论述住 `isUsableKind` 的头注）。
+  it('kinds 条目的标题与地址去空白后非空才算数：空白条目不进模型', () => {
+    const dirty = {
+      ...native,
+      ruleFind: { ...native.ruleFind, kinds: [{ title: '   ', url: 'xuanhuan' }, { title: ' 玄幻 ', url: ' xuanhuan ' }] },
+    }
+    const r = normalizeSource(dirty)
+    if (!r.ok) throw new Error('应能规范化')
+    expect(r.source!.rules.ruleExploreKinds).toEqual([{ title: '玄幻', url: 'xuanhuan' }])
+  })
+
   it('ruleFind.ruleSearch 非空即整套覆盖；缺失则留 null（回落通用搜索规则）', () => {
     const withOwn = { ...native, ruleFind: { ...native.ruleFind, ruleSearch: { list: '.book', name: '.title' } } }
     const a = normalizeSource(withOwn)
@@ -672,6 +685,23 @@ describe('legado 发现面（exploreUrl + ruleExplore）', () => {
     const kinds = [{ title: '平铺类', url: '/flat/{{page}}' }]
     const r = normalizeSource({ ...legado, ruleExploreKinds: kinds })
     expect(r.source!.rules.ruleExploreKinds).toEqual(kinds)
+  })
+  // 「在场」的尺判到**条目级**而不是只判容器：脏数组与「没写」在平铺优先这条尺上是同一种值——
+  // 都不算在场，交派生值接管。只判容器就等于让 `[{}]` 这类东西进模型，而派生面读的是 `k.title`，
+  // 于是一个空名分类在书城有个入口、点下去取不到任何东西（宁炸不猜：不许拿脏值冒充分类）。
+  it('平铺自带的分类数组里有脏条目 → 不算在场，由 exploreUrl 派生值接管', () => {
+    const r = normalizeSource({ ...legado, ruleExploreKinds: [{}, 42] })
+    expect(r.source!.rules.ruleExploreKinds).toEqual([
+      { title: '玄幻', url: '/list/xh/{{page}}.html' },
+      { title: '都市', url: '/list/ds/{{page}}.html' },
+    ])
+  })
+  it('平铺自带脏分类而 exploreUrl 也不在 → 落空数组，脏条目一个都不进模型', () => {
+    const r = normalizeSource({
+      bookSourceName: '平铺乙', bookSourceUrl: 'https://f.com', ruleContent: 'x',
+      ruleExploreKinds: [{}, 42, { title: '没地址的类', url: '' }, null],
+    })
+    expect(r.source!.rules.ruleExploreKinds).toEqual([])
   })
   it('bookList 缺席即整套不用（条目规则走通用搜索面，见 explore-face.rulesFor）', () => {
     const rules = rulesOf({ ...legado, ruleExplore: { name: '.t a@text', bookUrl: '.t a@href' } })

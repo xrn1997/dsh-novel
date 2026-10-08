@@ -90,12 +90,12 @@ export function CityBookSheet({ book, sourceId, sourceName, deps, onClose }: {
           {/* 元信息与卡片同源（`cityMeta`）：同一本书在两个地方写法不一致就是两份抄本 */}
           {meta === '' ? null : <div className="novel-city-bookhead-meta">{meta}</div>}
           {/* 整段简介在这里给（卡片那一行只夹一行）：文字是分类页那一条命中带来的，本层不另发详情面请求 */}
-          {book.intro === undefined || book.intro === '' ? null : (
+          {book.intro === null || book.intro === '' ? null : (
             <div className="novel-city-bookhead-meta">{book.intro}</div>
           )}
           <div className="novel-city-tags">
             {/* 源名不在这里重复：本源那一行已经点了它的名，同一层浮层里说两遍就是抄本 */}
-            {book.lastChapter === undefined ? null : <span className="novel-city-tag">最新 {book.lastChapter}</span>}
+            {book.lastChapter === null || book.lastChapter === '' ? null : <span className="novel-city-tag">最新 {book.lastChapter}</span>}
           </div>
         </div>
         {/* 本源那一行：与跨源那些行走同一个渲染器、同一对动作、同一条地址守卫。
@@ -186,7 +186,7 @@ function hitRow(g: SearchGroup, h: SearchHit): SheetRowData {
   }
 }
 
-/** 入架走**搜索面那条既有路**（`PUT paramRoutes.shelfKey` + `shelfBody.addBook`）：两条入架路共用
+/** 入架走**搜索面那条既有路**（`PUT paramRoutes.shelfKey` + `shelfBody.addBook`）：各条入架路共用
  *  一个路径构造器与一个 body 构造器，服务端那一份 patch 语义才不会长出第二种。
  *  **不先读一次书架判「已在书架」**：那是一个多出来的请求，换来的只是按钮文案；重复点按由幂等覆盖
  *  处理（同一 bookKey 再 PUT 一次，写进去的还是同一本书）。成功才报名，失败进错误泳道——点了一下

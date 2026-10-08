@@ -23,11 +23,15 @@ import { canonUrl } from './request.js'
 
 /** 运行器契约：门面（`ReadingService`）把「单源跑一页」包进来——持有者不认识门面，也不认识站点。
  *  返回值一律 `unknown`：那一页的东西经 `emit` 收，运行器自己返回什么都不相干。
- *  与 `SearchJobRun` 的差别只在读面（快照 vs 游标），故两边签名同形。 */
+ *  **页码由持有者交给运行器**（`page` 位）：「这一批打第几页」必须有唯一主人。让调用方按读面页号自行
+ *  +1，就把「已占到第几页」与「下一个该打第几页」焊成了同一个数——而失败的那一批不该占号（见 `Held.page`）。
+ *  与 `SearchJobRun` 的差别就在这一项（那边一轮只打第一页，没有页可交）。 */
 export type ExploreJobRun = (
   emit: (group: SearchGroup) => void,
   /** 协作式取消：运行器每取一步查一次；在途请求不撤回 */
   shouldStop: () => boolean,
+  /** 这一批要打的那一页（`Held.attempted`） */
+  page: number,
 ) => Promise<unknown>
 
 /** 整轮结果保留期：**本持有者自己的档**，不与搜索任务的 `SEARCH_JOB_RETENTION_MS` 同值。
@@ -70,9 +74,14 @@ interface Held {
   kind: string
   startedAt: number
   /** 本源本轮累积到的东西（单源 ⇒ 不再需要按 sourceId 分组的 Map） */
-  held: HeldSource
-  /** 已加载到第几页（`start` 起第 1 页，`advance` 每续一次 +1） */
+  accum: HeldSource
+  /** **这一轮占到第几页**（读面的 `page` 就是它）：第 1 页由提交带来，此后只有成功并入的那一页才占号。
+   *  失败或被停止的那一批不占号，所以下一次续页打回的仍是同一页——「重试的机会留给用户」这条承诺
+   *  落在页号上才有机械保证，只写在注释里不算。 */
   page: number
+  /** **这一批在打第几页**：`start` 交 1、`advance` 交 `page + 1`，宿主 label 与运行器都读它，
+   *  成功并入的一刻由 `absorb` 转成 `page`。 */
+  attempted: number
   /** 有一批正握着这一轮在跑（由 `launch` 置位、由终态单点清位）。**它不是 `phase` 的替身**：
    *  `cancel` 会立刻把 `phase` 落终态（读方要的是确定答复），而运行器是协作式的、在途请求不撤回，
    *  此后 `phase` 已不再描述「还有没有一批在跑」。续页的守卫只看这个标记。 */
@@ -152,7 +161,7 @@ export class ExploreJobs {
     }
     const held: Held = {
       id: (this.deps.uuid ?? randomUUID)(), sourceId, sourceName: '', kind,
-      startedAt: this.now(), held: { hits: [], lastNew: 0 }, page: 1,
+      startedAt: this.now(), accum: { hits: [], lastNew: 0 }, page: 1, attempted: 1,
       inflight: false, generation: 0, phase: 'running', cancelled: false,
       settle: () => {},
     }
@@ -175,7 +184,9 @@ export class ExploreJobs {
     if (h === null) throw new Error('没有可续页的分类轮次')
     if (h.kind !== kind) throw new Error(`轮次分类不符：当前「${h.kind}」，请求「${kind}」`)
     if (h.inflight) throw new Error(`分类轮次「${kind}」这一批还在抓，不能同时续页`)
-    h.page += 1
+    // 页号在这里**不落**，只记下这一批要打第几页：占号是成功并入那一拍的事（`absorb`）。
+    // 于是上一批失败或被停止时，这里算出的仍是同一页——续页因此既是往前、也是重试。
+    h.attempted = h.page + 1
     h.phase = 'running'
     // 续页把这轮重新点亮：上一批留下的「已停止 / 失败」不再描述它（否则新批在跑而界面说停过）
     h.cancelled = false
@@ -203,7 +214,7 @@ export class ExploreJobs {
         kind: 'novel-explore',
         // 页码段的 label **不报源数**：一轮就是一个源，那个数恒为 1，报它不携带任何信息
         // （旧版这里报「本轮问了几家」，那是跨源编排才有的读数）。
-        label: `书城分类「${h.kind}」第 ${h.page} 页`,
+        label: `书城分类「${h.kind}」第 ${h.attempted} 页`,
         run: () => ({ cancel: (reason): void => { this.cancel(reason) }, done }),
       })
     }
@@ -219,7 +230,7 @@ export class ExploreJobs {
     // 本模块的运行器虽要先等网络，这条属性照样要立——它是调用方的契约，不是运行器的习惯。
     let running: Promise<unknown>
     try {
-      running = Promise.resolve(run(emit, shouldStop))
+      running = Promise.resolve(run(emit, shouldStop, h.attempted))
     } catch (e) {
       this.finish(h, gen, 'failed', e instanceof Error ? e.message : String(e))
       return { jobId: h.id }
@@ -252,7 +263,8 @@ export class ExploreJobs {
    *
    *  **失败的一页不是到底的一页**：这一批带了错误时，错误如实落进泳道，累积与 `lastNew` 原样留着、
    *  这个源不算到底——一次偶发故障不该冒充「这一类没有更多书了」，也不该把用户刚看到的那批书划掉；
-   *  下一次续页照旧会打它（重试的机会留给用户）。
+   *  页号也不落（占号在这一批成功并入的一刻），所以下一次续页打回的仍是同一页——「重试的机会留给用户」
+   *  因此是机械事实，不靠运行器自觉。
    *
    *  **终态之后这一批不再拥有这一轮的结论**：轮次落定（被取消 / 已结束）后，同一批迟到的组仍会走到这里
    *  ——协作式取消不撤回在途请求、代际也没变，所以**条目照旧并入**（结果保留是既有语义）。
@@ -264,7 +276,7 @@ export class ExploreJobs {
    *  结论——否则「任务已取消：用户停止」会被一句「这一页没回来」盖掉，也会被一句迟到的成功抹平成没错误。
    *  旧形状里页泳道与整轮泳道是两条、各认各的写主，天然撞不上；合并成一条之后，这条边界必须显式立。 */
   private absorb(h: Held, group: SearchGroup): void {
-    const prev = h.held
+    const prev = h.accum
     const running = h.phase === 'running'      // 轮次结论只归此刻握着这一轮的那一批写
     if (running) h.sourceName = group.sourceName  // 源名跟着组进来：持有者不查注册表
     if (group.error !== undefined) {
@@ -278,8 +290,10 @@ export class ExploreJobs {
       prev.pageError = undefined
       h.error = undefined
     }
+    // 成功并入的一刻才占号（终态之后迟到的组不算，它不拥有这一轮的读数）。
+    if (running) h.page = h.attempted
     if (prev.hits.length === 0) {
-      h.held = { ...prev, hits: [...group.hits], lastNew: group.hits.length }
+      h.accum = { ...prev, hits: [...group.hits], lastNew: group.hits.length }
       return
     }
     const known = new Set(prev.hits.map(dedupKeyOf))
@@ -289,11 +303,12 @@ export class ExploreJobs {
       known.add(key)
       return true
     })
-    h.held = { ...prev, hits: [...prev.hits, ...fresh], lastNew: fresh.length }
+    h.accum = { ...prev, hits: [...prev.hits, ...fresh], lastNew: fresh.length }
   }
 
   /** 读面快照：**全量**书单（这一轮跨页累积的那一份）+ 一条失败泳道。
-   *  书单在读时投影而不缓存：`booksOf` 是纯函数、条目 < 200，缓存只会多出一份要跟着失效的状态。
+   *  书单在读时投影而不缓存：`booksOf` 是纯函数，条数上界就是 `MAX_EXPLORE_PAGES` × 该源每页给出的
+   *  条数（本仓不给每页设上界，与搜索面的 `SEARCH_HITS_CAP_PER_SOURCE` 不同档），缓存只会多出一份要跟着失效的状态。
    *  两种读作「无任务」（null）的情况要分清：从未提交过；以及**结束后过了保留期**——
    *  后者绝不返回一个空 `books`，那会把「结果已过期」伪装成「这一类没有书」。
    *  「这个源到底了没有」的对外读数就是这里 `hasMore` 的那个累积因子（本页零新增 ⇒ 点不动）：
@@ -310,8 +325,8 @@ export class ExploreJobs {
       // 「现在能不能点」而非「还有没有书」：一批在途时先点不了——客户端用自己的 running 显加载态，
       // 服务端据此让 409 只剩一个意思（现在没得可加载），不必为「正在跑」再造一种错。
       // 「失败那一页不算到底」由 `absorb` 不动 `lastNew` 来保证，这里不必再判一次错误。
-      hasMore: h.phase !== 'running' && h.page < MAX_EXPLORE_PAGES && h.held.lastNew > 0,
-      books: booksOf(h.held.hits),
+      hasMore: h.phase !== 'running' && h.page < MAX_EXPLORE_PAGES && h.accum.lastNew > 0,
+      books: booksOf(h.accum.hits),
       startedAt: h.startedAt,
       ...(h.finishedAt === undefined ? {} : { finishedAt: h.finishedAt }),
       ...(h.error === undefined ? {} : { error: h.error }),

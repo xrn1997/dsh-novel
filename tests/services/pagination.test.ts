@@ -21,6 +21,13 @@ const extract = async (page: Page): Promise<string[]> =>
   listValue(await evaluate('@css:.it@textNodes', { html: page.body, baseUrl: page.url }, 'toc'), 'toc') ?? []
 const keyOf = (s: string) => s
 
+/** 多候选形态的公共现场：入口页（书籍详情页形态）自带「首页」条目，`.nx` 里列出 q1/q2 两个候选。
+ *  多候选三连用例共用——各写一份的复制体一漂，测的就不再是同一种入口形态。 */
+const candidateEntry = (): [string, Page] => ['https://x.com/p1', {
+  url: 'https://x.com/p1',
+  body: '<div class="it">首页</div><div class="nx"><a href="/q1">A</a><a href="/q2">B</a></div>',
+}]
+
 describe('followPages 翻页闸（停止判据次序）', () => {
   it('正常跟完 3 页 → end，items 不重复', async () => {
     const pages = site()
@@ -125,10 +132,7 @@ describe('followPages 目录知识闸 + 列表 next + 部分重叠不停（legad
   })
   it('next 规则列表语义：多候选全部抓取且不递归翻页（legado getStringList 口径）', async () => {
     const pages = new Map<string, Page>([
-      ['https://x.com/p1', {
-        url: 'https://x.com/p1',
-        body: '<div class="it">首页</div><div class="nx"><a href="/q1">A</a><a href="/q2">B</a></div>',
-      }],
+      candidateEntry(),
       ['https://x.com/q1', { url: 'https://x.com/q1', body: '<div class="it">页A</div><a class="next" href="/q9">深层</a>' }],
       ['https://x.com/q2', { url: 'https://x.com/q2', body: '<div class="it">页B</div><a class="next" href="/q9">深层</a>' }],
       ['https://x.com/q9', { url: 'https://x.com/q9', body: '<div class="it">不该被抓</div>' }],
@@ -137,6 +141,38 @@ describe('followPages 目录知识闸 + 列表 next + 部分重叠不停（legad
       { maxPages: 10 }, 'toc', subEval)
     expect(r.pages).toBe(3)
     expect(r.items).toEqual(['首页', '页A', '页B'])   // q9 不抓（多候选不递归）
+    expect(r.stoppedBy).toBe('end')
+  })
+  /**
+   * 多候选模式的「零新增」不是一条全局闸。真机形态：目录入口页（书籍详情页）自己就列着第 1 页，
+   * 而翻页规则同时把 index_1（与入口页同内容）和 index_2…index_N 一起列出来。
+   * 曾按链式那侧的语义把「整页零新增」判成回环 → `break` 掉整个循环 → 队列里其余候选一起被丢掉：
+   * 笔趣阁 165 章读成 100、第一小说 1839 章读成 100、阳光中文网 1586 章读成 100。
+   * 对面那侧多候选是逐条并发全抓、条目最后统一去重，没有这道早停。
+   * 链式单候选的 loop / zero-new 两态不变（由上面的「回环」与「零新增」两条钉子守着）。
+   */
+  it('多候选：某一候选与入口页整页重复 → 其余候选照抓（不得中止整轮）', async () => {
+    const pages = new Map<string, Page>([
+      candidateEntry(),
+      ['https://x.com/q1', { url: 'https://x.com/q1', body: '<div class="it">首页</div>' }],  // 与入口页同内容
+      ['https://x.com/q2', { url: 'https://x.com/q2', body: '<div class="it">页B</div>' }],
+    ])
+    const r = await followPages('https://x.com/p1', async (u) => pages.get(u)!, extract, '.nx a@href', keyOf,
+      { maxPages: 10 }, 'toc', subEval)
+    expect(r.items).toEqual(['首页', '页B'])
+    expect(r.pages).toBe(3)
+    expect(r.stoppedBy).toBe('end')
+  })
+  it('多候选：某一候选是空页 → 其余候选照抓，也不追它的 next', async () => {
+    const pages = new Map<string, Page>([
+      candidateEntry(),
+      ['https://x.com/q1', { url: 'https://x.com/q1', body: '<a class="next" href="/q9">x</a>' }],  // 零条目
+      ['https://x.com/q2', { url: 'https://x.com/q2', body: '<div class="it">页B</div>' }],
+      ['https://x.com/q9', { url: 'https://x.com/q9', body: '<div class="it">不该被抓</div>' }],
+    ])
+    const r = await followPages('https://x.com/p1', async (u) => pages.get(u)!, extract, '.nx a@href', keyOf,
+      { maxPages: 10 }, 'toc', subEval)
+    expect(r.items).toEqual(['首页', '页B'])
     expect(r.stoppedBy).toBe('end')
   })
   it('页间部分重复不判到底：条目去重、继续追 next（legado 目录翻页只按 URL 防环）', async () => {

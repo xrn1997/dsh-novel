@@ -107,6 +107,45 @@ describe('门面：按源提交分类轮次', () => {
     expect(() => svc.startExploreJob(id, '玄幻')).toThrow('该源没有可用的分类入口')   // 同一条判据，另一种后果
   })
 
+  // 「下一次续页照旧会打它」这条承诺在门面上只有一个可读数：**请求地址**。页号由持有者交给运行器，
+  // 失败那一页不占号（口径住 `services/explore-job.ts` 的 `Held.page`），门面因此没有第二条算式可走。
+  it('第 2 页没回来：再点续页重打第 2 页那一条地址，而不是第 3 页', async () => {
+    const seen: string[] = []
+    let breakNext = false
+    const dir = await makeTempDir('novel-explore-')
+    const svc = trackService(await ReadingService.create({
+      dir,
+      fetchImpl: (async (input: RequestInfo | URL) => {
+        const url = String(input)
+        seen.push(url)
+        if (breakNext) { breakNext = false; throw new Error('站点断了') }
+        return new Response(LIST_HTML, HTML)
+      }) as never,
+    }))
+    await svc.importOne(LEGADO)
+    const id = svc.listPublicSources()[0].id
+    svc.startExploreJob(id, '玄幻')
+    await settleExploreRound(svc)
+
+    breakNext = true
+    svc.loadMoreExploreJob()
+    await settleExploreRound(svc)
+    const failed = svc.exploreJobSnapshot()!
+    expect(failed.page).toBe(1)                            // 没到手的这一页不占号
+    expect(failed.hasMore).toBe(true)                      // 也不算到底：还能再点一次
+    expect(failed.error).toContain('这一页没回来')
+    expect(failed.books.map((b) => b.name)).toEqual(['剑起长安'])
+
+    svc.loadMoreExploreJob()
+    await settleExploreRound(svc)
+    expect(seen[1]).not.toBe(seen[0])                      // 夹具里第 1、2 页确实是两个地址
+    expect(seen[seen.length - 1]).toBe(seen[1])            // 重打的就是第 2 页那条
+    const retried = svc.exploreJobSnapshot()!
+    expect(retried.page).toBe(2)                           // 成功后才占号
+    expect(retried.error).toBeUndefined()                  // 那次失败被到手的这一页清掉
+    expect(retried.books.map((b) => b.name)).toEqual(['剑起长安'])   // 夹具每页给同一本书：去重后不翻倍
+  })
+
   it('换源提交即替换整轮：旧轮在途的结果不写进新一轮', async () => {
     const { svc, id } = await oneSource()
     await svc.importOne({ ...LEGADO, bookSourceName: '站点乙', bookSourceUrl: 'https://t.com' })

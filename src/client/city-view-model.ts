@@ -80,7 +80,7 @@ export function bookListEmpty(round: RoundShape, error: string | null): { title:
  *  「加载更多」那颗按钮不归这里管：它认的是 `hasMore` 与快照的页码（见 `CityView` 的尾行）。
  *  三条先后各说各的：① 被停止优先——「已停止」不许长得像走到了底的一轮；
  *  ② 还在跑而一页未回——如实说「正在启动」，此刻手上没有本数可报；③ 其余归本数读数（`pageReadout`）。
- *  **它不再收 `error`**：抓失败那句话由界面上的失败横幅说（`docs/adr/0028` 那张表第二行的三件事之一），
+ *  **它不再收 `error`**：抓失败那句话由界面上的失败横幅说（唯一落点 `CityView` 的那条横幅），
  *  尾行重复一遍就是同一事实两个家；而这一轮跑到第几页、手上几本，是错误在场时照样要说的事实。 */
 export function roundReadout(round: RoundShape): string {
   if (round.cancelled) return '已停止'

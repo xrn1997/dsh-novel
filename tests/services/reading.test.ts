@@ -337,6 +337,30 @@ describe('ReadingService', () => {
     expect(await svc.getChapter(src.id, `${BASE}/book/1/`, 0)).toBe('正文一\n第二段\n第三段\n尾段')
   })
 
+  /**
+   * 「空正文必炸」的适用面是**首屏**，不是跟进链上的每一页。
+   * 真机形状：笔趣阁最后一章的「下一章」链接指向书详情页（那页没有正文容器），跟进落到它——
+   * 此前每一页都抛 ⇒ 三页正文（前两页有字）整章读不出。对面那侧只在**整章拼完仍为空**才抛
+   * ContentEmptyException，续页取不出只是不再追加、跟进自然收手。
+   * 与上一条对照才成立：首屏为空照样炸（空正文绝不写缓存那条门没有放宽）。
+   */
+  it('getChapter：续页取不出正文 → 停止跟进并保留首屏，不连坐整章（两种空态同判）', async () => {
+    for (const laterPage of [
+      EMPTY_CONTENT_HTML,                                                   // 容器在、零文本
+      '<html><body><p>改版后的页面，没有正文容器</p></body></html>',           // 容器不在 = Miss
+    ]) {
+      const { svc, registry } = await makeService((u) => {
+        if (u.includes('/c/1.html')) return CONTENT1_HTML
+        if (u.includes('/c/1p2.html')) return laterPage
+        if (u.includes('/book/1/')) return TOC_HTML
+        if (u.includes('/toc2.html')) return TOC2_HTML
+        return u.includes('/search') ? SEARCH_HTML('x') : null
+      })
+      const src = registry.list()[0]
+      expect(await svc.getChapter(src.id, `${BASE}/book/1/`, 0)).toBe('正文一\n第二段\n第三段')
+    }
+  })
+
   it('importSource 数组逐条：坏条目不连坐，导入不探针（验证归批量验证）', async () => {
     const dir = await makeTempDir('novel-rd-')
     const registry = trackService(await SourceRegistry.load(dir))

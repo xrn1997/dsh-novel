@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { queries, ROUTES } from '../shared/wire.js'
 import type { SearchGroup, SearchJobSnapshot } from '../shared/wire.js'
+import { JOB_POLL_MS } from './util.js'
 import type { ClientCoreDeps } from './deps.js'
 
 /**
@@ -22,9 +23,6 @@ import type { ClientCoreDeps } from './deps.js'
  * `job.id === acc.id`，不一致即换轮：丢旧累积、`since=0` 重读新轮基线、重开观察。裁决：
  * 旧观察者**跟随最近一轮**（服务端只保留一轮，跟随是唯一能收敛的语义）。
  */
-
-/** 轮询节奏：600ms 足够「边搜边出」的观感，又不会把 `/novel-api` 打成刷屏 */
-const POLL_MS = 600
 
 /** 本轮视图态（由服务端快照 + 本地累积得出；`running` 就是 UI 的「还在跑吗」判据） */
 export interface SearchRound {
@@ -128,7 +126,7 @@ export function useSearchJob(deps: ClientCoreDeps): SearchJobView {
 
   const armPoll = (): void => {
     if (timer.current !== null) clearTimeout(timer.current)
-    timer.current = setTimeout(() => { void poll() }, POLL_MS)
+    timer.current = setTimeout(() => { void poll() }, JOB_POLL_MS)
   }
 
   /** 地基通道：读一次快照。读不到就收手（读不到还转圈只会刷屏）。 */

@@ -2,7 +2,7 @@ import type { Cheerio, CheerioAPI } from 'cheerio'
 import type { AnyNode } from 'domhandler'
 import type { EngineValue, Facet, Segment, SegmentLoc } from './types.js'
 import { RuleEvalError } from './errors.js'
-import { containsText, reducePicked, textOf } from './select.js'
+import { containsText, reducePicked, selectStepWithSelf, textOf } from './select.js'
 
 type CssSegment = Extract<Segment, { kind: 'css' }>
 
@@ -74,7 +74,8 @@ function parseSelector(selector: string, loc: SegmentLoc, facet: Facet): ParsedS
 }
 
 /**
- * @css 选择器段求值：在当前节点集内 cur.find(SEL)（不做全文档查找）。
+ * @css 选择器段求值：在当前节点集内选（命中集含当前元素自身，口径见 `selectStepWithSelf`，
+ * 对面是 jsoup 的 `Element.select`；不做全文档查找）。
  * - cheerio 底层选择器引擎（nwsapi/css-select）对非法选择器抛错 → 包成 RuleEvalError
  *   （hits=0，说明是选择器写错而非语法外构造）；**本层自己抛的 RuleEvalError 原样上抛**——
  *   再包一层会让消息自嵌套（`CSS 选择器无法解析：sel（CSS 选择器无法解析：sel（…））`）。
@@ -92,7 +93,7 @@ export function evalCss(
   const { plain, textFilters, attrFilters } = parseSelector(seg.selector, loc, facet)
   let picked: Cheerio<AnyNode>
   try {
-    picked = cur.find(plain)
+    picked = $(selectStepWithSelf($, cur, plain))
   } catch (e) {
     if (e instanceof RuleEvalError) throw e
     throw new RuleEvalError(`CSS 选择器无法解析：${seg.selector}（${(e as Error).message}）`, { ...loc, facet, hits: 0 })

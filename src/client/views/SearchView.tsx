@@ -146,7 +146,7 @@ function HitRow({ sourceId, hit, deps }: { sourceId: string; hit: SearchHit; dep
     // 点行直接阅读：先加架（进度保存依赖书架条目）再进阅读器；已加过则幂等
     void add().catch(() => undefined).then(() => navigate({ name: 'reader', sourceId, bookKey: hit.url ?? '', title: hit.title }))
   }
-  const sub = `${hit.author ?? ''}${hit.lastChapterName === undefined ? '' : ` · ${hit.lastChapterName}`}`
+  const sub = `${hit.author ?? ''}${hit.lastChapterName === null || hit.lastChapterName === '' ? '' : ` · ${hit.lastChapterName}`}`
   if (hit.url === undefined || hit.url === null) {
     // 无 url：这条既进不了阅读器也加不了架——如实呈现为一行文字，不给假的可点态
     return (

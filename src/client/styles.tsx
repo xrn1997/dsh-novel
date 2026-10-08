@@ -85,9 +85,8 @@ export const NOVEL_CSS = `
   --novel-pct: 0;
   --novel-measure: 36em;
   /* --novel-paper / --novel-paper-ink：正文那一层的纸与墨（prefs.paperColor 与 paperInk 的结果，
-     由 ReaderView 行内写入）。**控制器条由它们派生**（见 .novel-rdr-bar）：条底读宿主 chrome 色
-     （--novel-bg）会在自选的米黄纸上劈出一道实测 15.51:1 的黑缝（黑白极限才 21:1），那是
-     「阅读界面看着不舒服」的主因。缺省值 = 默认纸米黄与其对应墨色。 */
+     由 ReaderView 行内写入）。**控制器条由它们派生**——「条底与纸底不同源即缺陷」的判据与实测
+     住 .novel-rdr-bar 那头。缺省值 = 默认纸米黄与其对应墨色。 */
   --novel-paper: #f7f3e8;
   --novel-paper-ink: #222;
   /* 插图预留宽高比（ChapterBody 由 wire 的可信 width/height 行内写入，规则读本值）：
@@ -511,8 +510,8 @@ export const NOVEL_CSS = `
 .novel-rdr { position: relative; display: flex; flex-direction: column; min-height: 100vh; }
 /* 控制器条**跟纸走，不跟宿主 chrome 走**：条底 = 纸往墨压一档，整屏读作「一张纸的顶部折了一道」。
    旧做法条底读 --novel-bg（宿主 App 底色），与用户自选纸色毫无关系——实测接缝对比度 15.51:1，
-   而黑白极限才 21:1，那是「两块板拼起来」而不是「一页纸」。常驻阅读条取页面那一套配色不是偏好：
-   微信读书按阅读主题给条着色、Koodo 的条直接继承页面底色、Readest 的 base-100 就是页面底色。
+   而黑白极限才 21:1，那是「两块板拼起来」而不是「一页纸」。判据到这句就闭合：条底与纸底不同源，
+   接缝就是可量的缺陷，不需要拿别的产品的做法来背书（那种断言在盘上回查不到）。
    条上的深浅一律 inherit + opacity 分主次——这样「控制器层跟随深色」只需重钉条根一个 color，
    不必给每一档灰度各写一条覆盖。 */
 .novel-rdr-bar {

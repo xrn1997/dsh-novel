@@ -82,6 +82,7 @@ describe('ExploreJobs 单源轮次：跨页累积与到底判据', () => {
     const snap = jobs.snapshot()!
     expect(snap.books.map((b) => b.name)).toEqual(['a'])   // 已累积的一条都没被划掉
     expect(snap.hasMore).toBe(true)                        // 失败的一页不是到底那一页
+    expect(snap.page).toBe(1)                              // 失败的那一页不占号（占号在成功并入那一拍，读数停在真到手的那页）
     expect(snap.phase).toBe('done')                        // 一轮跑完了：不是「失败的一轮」
     expect(snap.error).toContain('Timeout')                 // 但那一页没问到，必须看得见
     expect(snap.error).toContain('第 2 页超时')
@@ -90,7 +91,29 @@ describe('ExploreJobs 单源轮次：跨页累积与到底判据', () => {
     await tick()
     const after = jobs.snapshot()!
     expect(after.books.map((b) => b.name)).toEqual(['a', 'z'])
+    expect(after.page).toBe(2)                             // 占号发生在这一批成功并入的一刻
     expect(after.error).toBeUndefined()                    // 成功的一页把那次失败清掉
+  })
+
+  // 「下一次续页照旧会打它」这条承诺的唯一机械保证是**页码由持有者交出去**：运行器不该自己数页，
+  // 门面也不该按读面页号 +1（那个数说的是「占到第几页」）。交出的页号因此是可断言的实参。
+  it('页号交给运行器：失败那一批之后，下一次交出的仍是同一页', async () => {
+    const jobs = new ExploreJobs({ now: () => 1000, uuid: () => 'j3c' })
+    const handed: number[] = []
+    jobs.start('s1', '玄幻', async (emit, _shouldStop, page) => {
+      handed.push(page); emit(group([hit('a')]))
+    })
+    await tick()
+    jobs.advance('玄幻', async (emit, _shouldStop, page) => {
+      handed.push(page); emit({ ...blankGroup, error: { code: 'Timeout', message: '第 2 页超时' } })
+    })
+    await tick()
+    expect(jobs.snapshot()!.page).toBe(1)
+    jobs.advance('玄幻', async (emit, _shouldStop, page) => { handed.push(page); emit(group([hit('b')])) })
+    await tick()
+    expect(handed).toEqual([1, 2, 2])                      // 重打第 2 页，不是跳去第 3 页
+    expect(jobs.snapshot()!.page).toBe(2)
+    expect(jobs.snapshot()!.books.map((b) => b.name)).toEqual(['a', 'b'])
   })
 
   it('触到 MAX_EXPLORE_PAGES 上限即 hasMore false（上限是兜底，不是「没有更多」）', async () => {

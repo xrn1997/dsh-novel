@@ -41,7 +41,7 @@ describe('useExploreJob', () => {
     ])
     render(<Probe deps={deps} />)
     await waitFor(() => { expect(seen?.round?.books.map((b) => b.name)).toEqual(['A']) })
-    await new Promise((r) => setTimeout(r, 700))            // 等一轮轮询（POLL_MS=600）
+    await new Promise((r) => setTimeout(r, 700))            // 等一轮轮询（JOB_POLL_MS=600）
     expect(seen?.round?.books.map((b) => b.name)).toEqual(['A', 'B'])   // 不是 ['A','A','B']：没人在客户端接列表
     expect(seen?.round?.page).toBe(2)                      // 整轮读数跟着这一帧一起换，不留在第一帧上
     expect(seen?.round?.hasMore).toBe(true)
@@ -144,13 +144,13 @@ describe('useExploreJob', () => {
     })
     const { result } = renderHook(() => useExploreJob(deps))
     await waitFor(() => { expect(result.current.round?.id).toBe('j-old') })
-    // 盲等 POLL_MS 会假绿：机器稍慢时轮询还没起飞，submit 已接管，放行的是空气
+    // 盲等 JOB_POLL_MS 会假绿：机器稍慢时轮询还没起飞，submit 已接管，放行的是空气
     await waitFor(() => { expect(reads).toBe(2) }, { timeout: 2000 })  // 轮询已起飞，卡在闸上
     act(() => { result.current.submit('s8', '都市') })
     await waitFor(() => { expect(result.current.round?.id).toBe('j2') })
 
     act(() => { gate.open() })                                      // 放行迟到的旧轮帧
-    // 这一格短于 POLL_MS：此刻唯一还能动这轮读数的就是那发迟到的旧帧
+    // 这一格短于 JOB_POLL_MS：此刻唯一还能动这轮读数的就是那发迟到的旧帧
     await new Promise((r) => setTimeout(r, 50))
     expect(result.current.round?.id).toBe('j2')
     expect(result.current.round?.kind).toBe('都市')
@@ -184,7 +184,7 @@ describe('useExploreJob', () => {
 
   it('watch 接管通道：新流起来时旧轮询的定时一并撤掉，不留两条通道并行', async () => {
     // 旧通道「没有推送可用」→ 排好了一发轮询；新通道推送可用（这条流挂住不结束）→ 自己不该再轮。
-    // 于是提交之后再过一整个 POLL_MS，读面次数必须还停在恢复那一次：多出来的一发就是双通道。
+    // 于是提交之后再过一整个 JOB_POLL_MS，读面次数必须还停在恢复那一次：多出来的一发就是双通道。
     let reads = 0
     let streams = 0
     const deps = makeCoreDeps({

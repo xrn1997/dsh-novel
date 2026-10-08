@@ -309,6 +309,8 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     fireEvent.change(screen.getByPlaceholderText('书名 / 作者'), { target: { value: '斗罗' } })
     fireEvent.submit(screen.getByRole('form'))
     await waitFor(() => expect(screen.getByText('后台命中')).toBeTruthy())
+    // `lastChapterName` 是 `string | null`：判 `undefined` 的守卫永不生效，null 会渲染成字面「null」
+    expect(document.querySelector('.novel-hit-sub')!.textContent).toBe('')
     expect(deps.apiSend).toHaveBeenCalledWith('POST', ROUTES.searchJob.path, { keyword: '斗罗' })
     // 全部读取都是快照：没有任何一次 search?keyword= 的批请求从浏览器半发出
     expect(reads.every((r) => r.startsWith(`${ROUTES.searchJobStatus.path}?`))).toBe(true)
@@ -450,7 +452,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     await waitFor(() => expect(frames.length).toBe(1))
     frames[0](JSON.stringify({ job: snap({ phase: 'running', total: 2, done: 1, next: 1, added: [hitGroup('推送来的书')] }) }))
     await waitFor(() => expect(screen.getByText('推送来的书')).toBeTruthy())
-    await new Promise((r) => setTimeout(r, 900))                  // 越过两个 POLL_MS 节拍
+    await new Promise((r) => setTimeout(r, 900))                  // 越过两个 JOB_POLL_MS 节拍
     expect(deps.apiGet).toHaveBeenCalledTimes(1)                  // 一轮都没轮：流在，就不必问
     frames[0](JSON.stringify({ job: snap({ phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('收尾的书', 's2')] }) }))
     await waitFor(() => expect(screen.getByText(/本轮搜过/)).toBeTruthy())
@@ -729,7 +731,7 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
 })
 
 describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run）', () => {
-  const readerDeps = (over: ReaderDepsOverrides = {}): FakeReaderDeps => makeReaderDeps(over)
+  const readerDeps = (over: ReaderDepsOverrides = {}, shelf: unknown[] = []): FakeReaderDeps => makeReaderDeps(over, shelf)
 
   const reader = (deps: FakeReaderDeps): ReturnType<typeof createElement> =>
     createElement(ReaderView, { sourceId: 's1', bookKey: 'k1', title: '斗罗', deps })
@@ -739,6 +741,82 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
     render(reader(deps))
     await waitFor(() => expect(deps.apiGet).toHaveBeenCalled())
     expect(String(deps.apiGet.mock.calls[0][0])).toContain('navigation')
+  })
+
+  // 从书城「读这本」进来的书不在架上（那一层刻意把入架与阅读分成两个动作，`docs/adr/0028`），
+  // 而不在架的书进度 PUT 会被服务端判 `NOT_ON_SHELF` 并咽掉。离开那一跳因此先问一句。
+  it('不在架的书：点「书架」先问要不要加入，确认后 PUT 的是这本书的架位并带上总章数', async () => {
+    const pushOk = vi.fn()
+    const deps = readerDeps({ pushOk })
+    const { container } = render(reader(deps))
+    await waitFor(() => expect(container.querySelector('[data-chapter="0"]')).not.toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: '书架' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.textContent).toContain('还没加入书架')
+
+    fireEvent.click(screen.getByRole('button', { name: /加入书架并返回/ }))
+    await waitFor(() => expect(pushOk).toHaveBeenCalled())
+    // 按 body 形状认这一发（阅读器还会发 progress / patch 两种 PUT，路径同一条）
+    const add = deps.apiSend.mock.calls.find((c) => c[0] === 'PUT' && 'title' in (c[2] as object))
+    expect(add).toBeDefined()
+    expect(String(add![1])).toBe(`${ROUTES.shelf.path}/k1`)
+    expect(add![2]).toMatchObject({ sourceId: 's1', title: '斗罗', totalChapters: 1 })
+  })
+
+  it('已在架的书：点「书架」直接走，不多问一句', async () => {
+    // 只换「书架」那一支的读数：navigation/chapter 仍走缺省分流（整段复制缺省假实现会与缺省形脱钩）
+    const deps = readerDeps({}, [
+      { sourceId: 's1', bookKey: 'k1', title: '斗罗', addedAt: 0, progress: { chapterIndex: 0, offsetRatio: 0, updatedAt: 0 } },
+    ])
+    const { container } = render(reader(deps))
+    await waitFor(() => expect(container.querySelector('[data-chapter="0"]')).not.toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: '书架' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  // 键盘接管与删除确认模态同一条纪律（ShelfView）：只挡 Esc 不够——Tab 一路走下去就走到遮罩
+  // 背后的阅读器（对话框还挂着、人已出去）。入场焦点落「先不加入」，关后焦点还给触发件。
+  it('入架一问的键盘接管：入场焦点在「先不加入」，Tab 圈在框内，关闭后焦点还给「书架」钮', async () => {
+    const deps = readerDeps()
+    const { container } = render(reader(deps))
+    await waitFor(() => expect(container.querySelector('[data-chapter="0"]')).not.toBeNull())
+    const shelfBtn = screen.getByRole('button', { name: '书架' })
+    shelfBtn.focus()                                   // jsdom 的 click 不聚焦（真实浏览器会）——先显式聚焦
+    fireEvent.click(shelfBtn)
+    const dialog = await screen.findByRole('dialog')
+    const skip = screen.getByRole('button', { name: '先不加入' })
+    const join = screen.getByRole('button', { name: /加入书架并返回/ })
+    expect(document.activeElement).toBe(skip)          // 入场焦点 = 安全的那一颗
+    join.focus()
+    fireEvent.keyDown(document, { key: 'Tab' })        // 末颗前进 → 圈回第一颗
+    expect(document.activeElement).toBe(skip)
+    expect(dialog.contains(document.activeElement)).toBe(true)
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true })   // 第一颗后退 → 圈到最后
+    expect(document.activeElement).toBe(join)
+    fireEvent.keyDown(document, { key: 'Escape' })     // Esc 归浮层共用那条：收回这一问
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(document.activeElement).toBe(shelfBtn)      // 关后还焦给触发件
+  })
+
+  // 「失败留在问它的那一层」的机械保证：若再给 joinAndBack 补一发 pushError，同一句失败话
+  // 就有模态内联 + 全局条两个家（ShelfView 删书模态立的正是「失败留在框内、不散落页面流」）。
+  it('加入失败：模态留原地可重试，失败话只住模态内（不弹全局条）', async () => {
+    const pushError = vi.fn()
+    const deps = readerDeps({
+      pushError,
+      apiSend: vi.fn(async (m: 'POST' | 'PUT' | 'DELETE', _path: string, body?: unknown) => {
+        if (m === 'PUT' && body !== null && typeof body === 'object' && 'title' in body) throw new Error('磁盘只读')
+        return {}
+      }),
+    })
+    const { container } = render(reader(deps))
+    await waitFor(() => expect(container.querySelector('[data-chapter="0"]')).not.toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: '书架' }))
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', { name: /加入书架并返回/ }))
+    await screen.findByText('加入书架失败：磁盘只读')
+    expect(screen.getByRole('dialog')).toBeTruthy()          // 模态留着：可重试，也可先不走
+    expect(pushError).not.toHaveBeenCalled()                 // 不散落页面流
   })
 
   it('正文首行与章名同句 → 呈现层剥掉它（章名只留 h2 那一份）', async () => {
@@ -1182,7 +1260,7 @@ describe('SearchView 离开界面：停看不停工（结果由服务端持有�
     await waitFor(() => expect(reads.length).toBeGreaterThan(0))
     const atUnmount = reads.length
     view.unmount()
-    await new Promise((r) => setTimeout(r, 900))               // 越过 POLL_MS 节拍
+    await new Promise((r) => setTimeout(r, 900))               // 越过 JOB_POLL_MS 节拍
     expect(reads).toHaveLength(atUnmount)                      // 卸载即停表：一条都不再发
 
     reads.length = 0

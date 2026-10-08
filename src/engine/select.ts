@@ -99,6 +99,31 @@ export function reducePicked<T>(
 }
 
 /**
+ * 链步命中集 = 当前元素自身（若它自己就匹配）+ 其后代命中；逐父展开、自身排在其全部后代之前、整体去重。
+ *
+ * 为什么要含自身：对面 jsoup 的四种选择步（`select` / `getElementsByTag` / `getElementsByClass` /
+ * `Collector.collect`）都把当前元素自己算进命中集，只有 `children()` 不算——本机实测 jsoup
+ * 四步全含、自身优先（版本成色住矩阵行 `a-default-step-self-inclusion`）。cheerio 只有后代语义，于是
+ * 「类名与标签长在同一个元素上」的写法（真形如 `<a class="page-link">` 配 `.page-link@a@href`）
+ * 对面读得出、我们读空。裁决、代价与被否决的一侧
+ * 见 `docs/adr/0029`；真机读数在矩阵行 `a-default-step-self-inclusion`。
+ * 顺序不是细节：含自身会把 `.0`/`[0]` 的取位从「第一个后代」挪到「自身」，那是对面本来就在给的语义。
+ */
+export function selectStepWithSelf(
+  $: CheerioAPI, cur: Cheerio<AnyNode>, selector: string,
+): AnyNode[] {
+  const out: AnyNode[] = []
+  const seen = new Set<AnyNode>()
+  const add = (n: AnyNode): void => { if (!seen.has(n)) { seen.add(n); out.push(n) } }
+  for (const el of cur.toArray()) {
+    const $el = $(el)
+    if ($el.is(selector)) add(el)
+    for (const d of $el.find(selector).toArray()) add(d)
+  }
+  return out
+}
+
+/**
  * default 段求值：选择段（class/id/tag/child/children）产出节点集；
  * 取值段（text/textAll/ownText/html/all/href/src/content/textNodes/attr）产出字符串值。
  * `text.<串>` / `ownText.<串>`（**带参数**）是选择段——「按文本选元素」的形态
@@ -139,9 +164,10 @@ export function evalDefault(
       // `class.x y` = 同时含所有类 → CSS `.x.y` 链（直译后代选择器恒零命中；上游把整串当**一个**
       // 类名交给 jsoup 同样读不出——本仓这一侧更宽，矩阵行 `a-class-multi-token-arg`；
       // 钉子 `tests/engine/select.test.ts` 的「同时含两个类」）
-      case 'class': picked = cur.find('.' + (seg.arg ?? '').trim().split(/\s+/).filter(Boolean).join('.')); break
-      case 'id': picked = cur.find('#' + seg.arg); break
-      case 'tag': picked = cur.find(seg.arg!); break
+      case 'class': picked = $(selectStepWithSelf($, cur, '.' + (seg.arg ?? '').trim().split(/\s+/).filter(Boolean).join('.'))); break
+      case 'id': picked = $(selectStepWithSelf($, cur, '#' + seg.arg)); break
+      case 'tag': picked = $(selectStepWithSelf($, cur, seg.arg!)); break
+      // child/children 不含自身：对面这两支走 `temp.children()`，本来就不算当前元素自己
       case 'child': picked = cur.children(seg.arg!); break
       default: picked = cur.children(); break // children
     }

@@ -276,7 +276,7 @@ type ExploreField =
  *  跑的是同一个 flatten，两条路因此不可能分叉）。这个函数只交材料、不产留痕——`sawChildren` 回给
  *  调用方点名，因为导入与补推的留痕渠道不同。口径三条（判据只在能分叉的地方钉死）：整套覆盖的
  *  启用判据只看 `ruleSearch` 的 list 非空（逐字段回落会把对面本该用通用规则的源读成半套）、
- *  kinds 只收标题与地址双非空的顶层项、`children` 非空要如实报。
+ *  kinds 只收标题与地址**去空白后**非空的顶层项、`children` 非空要如实报。
  *  非对象形态的 `ruleFind` 不在此列（同 `ruleRank` 一族：静默忽略）。 */
 function nativeExploreFields(f: Record<string, unknown>): {
   values: Record<string, string>
@@ -293,9 +293,9 @@ function nativeExploreFields(f: Record<string, unknown>): {
   for (const k of Array.isArray(f.kinds) ? f.kinds : []) {
     if (typeof k !== 'object' || k === null || Array.isArray(k)) continue
     const e = k as Record<string, unknown>
-    const title = typeof e.title === 'string' && e.title.length > 0 ? e.title : null
-    const url = typeof e.url === 'string' && e.url.length > 0 ? e.url : null
-    if (title === null || url === null) continue
+    const title = typeof e.title === 'string' ? e.title.trim() : ''
+    const url = typeof e.url === 'string' ? e.url.trim() : ''
+    if (title === '' || url === '') continue
     kinds.push({ title, url })
     if (Array.isArray(e.children) && e.children.length > 0) sawChildren = true
   }
@@ -397,10 +397,23 @@ function ruleContainers(raw: Record<string, unknown>, warnings: NormalizeIssue[]
   return out
 }
 
+/** 一条分类入口「可用」的尺：`title` 与 `url` 都是去空白后非空的串——与两档解析
+ *  （`parseTextKinds` / `parseJsonKinds`）和原生侧 `nativeExploreFields` 收条目用的是同一把。
+ *  几处里任何一处只判容器，脏条目就从那一门钻进模型，而下游 `deriveExploreSources` 读的是
+ *  `k.title`：一条 `{}` 因此被算成一个真分类，界面上多出一个空名入口、点下去取不到东西。 */
+function isUsableKind(e: unknown): boolean {
+  if (typeof e !== 'object' || e === null || Array.isArray(e)) return false
+  const o = e as { title?: unknown; url?: unknown }
+  return typeof o.title === 'string' && o.title.trim() !== ''
+    && typeof o.url === 'string' && o.url.trim() !== ''
+}
+
 /** 合并视图这一格是否**已带可用的分类入口**（平铺 raw 自己写了非空数组）——「平铺优先」那条尺在
- *  数组键上的读法：这条族里只有它是数组，走不了 `setIfVacant`，判据却必须是同一条。 */
+ *  数组键上的读法：这条族里只有它是数组，走不了 `setIfVacant`，判据却必须是同一条。
+ *  判到条目级而不是只判容器：脏数组（`[{}]`、`[42]`）与「没写」在这条尺上是同一种值——都不算在场，
+ *  照旧由派生值接管（与「非数组照旧被派生值接管」同一条裁法，不另立第二种）。 */
 function isArrayOfKinds(v: unknown): boolean {
-  return Array.isArray(v) && v.length > 0
+  return Array.isArray(v) && v.length > 0 && v.every(isUsableKind)
 }
 
 /**

@@ -192,7 +192,7 @@ export function CityView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): Re
           )}
           {kind === null ? null : <div className="novel-city-note">按书源声明的顺序</div>}
           {sourcesError === null ? null : <div className="novel-err novel-note-sm">{sourcesError}</div>}
-          {/* 抓失败说在这一条横幅上（`adr/0028` 那张表第二行）：已到的书单留在原位、尾行只报跑到哪儿。
+          {/* 抓失败说在这一条横幅上：已到的书单留在原位、尾行只报跑到哪儿。
               被停止的那一轮到不了这里——`useExploreJob` 已把「任务已取消」那句咽掉，停止不是失败。 */}
           {error === null ? null : <div className="novel-err novel-note-sm">{error}</div>}
           {sources !== null && cityEmptyState(sources.length) === 'no-sources' ? (

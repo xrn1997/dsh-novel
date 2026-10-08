@@ -27,10 +27,10 @@ describe('@css 选择器段', () => {
     expect((v as any).detail).toContain('零命中')
     expect((v as any).detail).toContain('.nope')
   })
-  it('在当前节点集内 find，不做全文档查找', () => {
+  it('在当前节点集内选（含当前元素自身），不做全文档查找', () => {
     const meta = $('#meta') as any
     const v = evalCss(seg('li'), $, meta, loc(0, '@css:li'), 'toc')
-    expect(v.kind).toBe('miss') // li 都在 #meta 之外
+    expect(v.kind).toBe('miss') // li 都在 #meta 之外，#meta 自己也不是 li
     const inWrap = evalCss(seg('li'), $, root(), loc(1, '@css:li'), 'toc')
     expect((inWrap as any).nodes).toHaveLength(3)
   })
@@ -65,6 +65,46 @@ describe('@css 选择器段', () => {
     expect(err.hits).toBe(0)
     expect(err.segmentIndex).toBe(2)
     expect(err.facet).toBe('toc')
+  })
+})
+
+/**
+ * @css 链步含当前元素自身——本仓与对面 jsoup 的真实分叉，2026-10-08 由真机 404 追出。
+ *
+ * 病态：`<a class="page-link">` 这种「类名长在标签自己身上」的写法，规则 `.page-link@a@href`
+ * 的中间步是一条裸词 CSS 选择器。对面 `Element.select` 的命中集**含当前元素**（本机实测：
+ * `self.select("a")` = 1；版本成色写在矩阵 `a-default-step-self-inclusion`，不在这里重复），
+ * 本仓 `cur.find()` 只给后代 = 0 → 整条链读空 → 目录翻页规则后面的脚本拿 `undefined` 拼出下一页
+ * 地址 → 404 把整棵目录带走。裁决与代价见 `docs/adr/0029`，
+ * 读数在矩阵行 `a-default-step-self-inclusion`。
+ */
+describe('@css 链步含当前元素自身', () => {
+  const PL_HTML = '<div id="pg"><ul class="pages">'
+    + '<li class="pi"><a class="page-link">1/2</a></li>'
+    + '<li class="pi"><a class="page-link" href="/107/107609/index_1.html">1</a></li>'
+    + '<li class="pi"><a class="page-link" href="/107/107609/index_2.html">2</a></li>'
+    + '</ul></div>'
+  const p$ = cheerio.load(PL_HTML)
+
+  it('裸词步 a 在当前集全是 a.page-link 时入选（对面同形）', () => {
+    const v = evalCss(seg('a'), p$, p$('.page-link') as any, loc(0, '@css:a'), 'toc')
+    expect(v.kind).toBe('nodes')
+    expect((v as any).nodes).toHaveLength(3)
+  })
+  it('整条链 .page-link@a@href 读出两条真地址（事故现场的最小复现）', async () => {
+    const { evaluate } = await import('../../src/engine/evaluate.js')
+    const v = await evaluate('.page-link@a@href', { html: PL_HTML, baseUrl: 'http://www.miaobige.cc/107/107609/' }, 'toc', 'value')
+    expect(v.kind).toBe('list')
+    expect(v.kind === 'list' ? v.items : []).toEqual(['/107/107609/index_1.html', '/107/107609/index_2.html'])
+  })
+  it('自身与后代同时命中时，自身排在全部后代之前', () => {
+    const nested = cheerio.load('<div id="w" class="box">外<div class="box" id="i">内</div></div>')
+    const v = evalCss(seg('.box'), nested, nested('#w') as any, loc(0, '@css:.box'), 'toc') as any
+    expect(v.nodes.toArray().map((n: any) => n.attribs.id)).toEqual(['w', 'i'])
+  })
+  it('自身不匹配时行为不变：仍只出后代、仍文档序', () => {
+    const v = evalCss(seg('.page-link'), p$, p$('ul.pages') as any, loc(0, '@css:.page-link'), 'toc') as any
+    expect(v.nodes).toHaveLength(3)
   })
 })
 

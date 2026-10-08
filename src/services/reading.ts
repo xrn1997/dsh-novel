@@ -557,10 +557,12 @@ export class ReadingService {
   startExploreJob(sourceId: string, kind: string): { jobId: string } {
     const entry = this.pickEntry(sourceId, kind)
     if (entry === null) throw new InvalidRequestError(`该源没有可用的分类入口：${sourceId} · ${kind}`)
-    return this.exploreJobs.start(sourceId, kind, (emit) => this.runExplorePage(entry, 1, emit))
+    return this.exploreJobs.start(sourceId, kind, (emit, _shouldStop, page) => this.runExplorePage(entry, page, emit))
   }
 
-  /** 续第 page+1 页（**同一轮**，不换 id）。没得发就如实 null，不做无效请求——
+  /** 续下一页（**同一轮**，不换 id）。要打第几页由持有者算（`ExploreJobRun` 的页码位），本层不再按
+   *  快照页号 +1：那个数是「已占到第几页」，失败的一页没占到，按它 +1 就等于把失败页消费掉、永不再打。
+   *  没得发就如实 null，不做无效请求——
    *  路由据此回 409，客户端据此把「加载更多」收掉，而不是假装又加载了一轮。
    *
    *  判据只有 `hasMore` 一条：它已经是服务端「**此刻**能不能点」的唯一读数（在途那一段它自己就是
@@ -575,7 +577,7 @@ export class ReadingService {
     if (snap === null || !snap.hasMore) return null
     const entry = this.pickEntry(snap.sourceId, snap.kind)
     if (entry === null) return null
-    return this.exploreJobs.advance(snap.kind, (emit) => this.runExplorePage(entry, snap.page + 1, emit))
+    return this.exploreJobs.advance(snap.kind, (emit, _shouldStop, page) => this.runExplorePage(entry, page, emit))
   }
 
   /** 源与类都要现查：注册表是唯一的源清单，入口地址与代际在这里一次算好交给执行体。
@@ -825,8 +827,9 @@ export class ReadingService {
     return this.onlineChapterText(sourceId, bookKey, chIndex, opts).then((text) => ({ kind: 'text', text }))
   }
 
-  /** 在线正文的**唯一文本路径**（既有实现，签名外的一切行为未变）：缓存优先（refresh 跳过）；
-   *  目录缺章报错；多页串接；Miss 抛 RuleEvalError 不吞。本地书不走这里。 */
+  /** 在线正文的**唯一文本路径**：缓存优先（refresh 跳过）；目录缺章报错；多页串接；
+   *  **首屏**的 Miss 与零命中抛 RuleEvalError 不吞（续页取空按到底收手，见下文 `extract` 的口径）。
+   *  本地书不走这里。 */
   private async onlineChapterText(sourceId: string, bookKey: string, chIndex: number, opts?: { refresh?: boolean }): Promise<string> {
     const s = this.requireSource(sourceId)
     const epoch = rulesEpoch(s.rules, s.baseUrl, 'content')
@@ -862,13 +865,23 @@ export class ReadingService {
       chapter: { title: target.name, index: chIndex, url: target.url, baseUrl: target.url },
       jsTimeoutMs: this.jsTimeoutMs,
     })
+    // 「空正文必炸」管的是**首屏**：跟进链上的续页取不出正文，只说明这一章到此为止，
+    // 不许把已经拼好的首屏一起判死（真机形状：最后一章的「下一章」链接指向书详情页，
+    // 那页没有正文容器 ⇒ 此前整章抛错，前两页的正文一并丢掉）。
+    // 首屏那一半一字未放宽：空正文仍然抛、仍然不写缓存（矩阵行 `g-content-empty-exception`）。
+    // 续页交空数组即可——`followPages` 的 zero-new 闸本就负责停跟进。
+    let pageSeq = 0
     const extract = async (page: Page): Promise<string[]> => {
+      const firstPage = pageSeq++ === 0
       const v = await subEval(ruleContent, { html: page.body, json: page.json, baseUrl: page.url }, 'content', 'value')
       const text = firstValue(v, 'content')
       if (text === null) {
-        throw new RuleEvalError('正文规则没取到内容', {
-          facet: 'content', segmentIndex: 0, segmentRaw: ruleContent, hits: 0,
-        })
+        if (firstPage) {
+          throw new RuleEvalError('正文规则没取到内容', {
+            facet: 'content', segmentIndex: 0, segmentRaw: ruleContent, hits: 0,
+          })
+        }
+        return []
       }
       // 正文契约是纯文本：@html 类规则收回的是 HTML 片段（否则一串 <p> 原样打给读者）——
       // 先转纯文本再走行规约（矩阵行 `g-html-to-text`）
@@ -876,6 +889,7 @@ export class ReadingService {
       if (plain.trim() === '') {
         // 零命中不得静默：空正文曾被当正常结果写进缓存（整章 0 字节，用户只见「不出正文」）。
         // 报错带规则与落点（请求地址 + 实际落地地址，两者不同即被跳转走了）——矩阵行 `g-content-empty-exception`。
+        if (!firstPage) return []
         const landed = page.requestedUrl === undefined || page.requestedUrl === page.url
           ? page.url
           : `${page.requestedUrl} → ${page.url}`

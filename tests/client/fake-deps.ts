@@ -71,8 +71,10 @@ export function makeDeps(over: Overrides<SettingsDeps> = {}): FakeSettingsDeps {
  *  目录读面是 `BookNavigation`（线性 chapters + 展示树 items），正文是 `ChapterContent`
  *  （阅读器只吃这一种形状；返回裸字符串的假实现会让阅读器当图文树解，直接崩）。
  *  ReaderDeps 是 ClientCoreDeps 超集，apiUpload/pushError 也必须盖成假实现，否则 spread
- *  prodReaderDeps 会把生产真实现带进来（真发 fetch / 写模块级 store）——与文件头「零网络」自述矛盾。 */
-export function makeReaderDeps(over: Overrides<ReaderDeps> = {}): FakeReaderDeps {
+ *  prodReaderDeps 会把生产真实现带进来（真发 fetch / 写模块级 store）——与文件头「零网络」自述矛盾。
+ *  第二参 `shelf` = 分流兜底那一支的读数（缺省空表 = 不在架）；用例要「已在架」只改这一格，
+ *  别整段复制 navigation/chapter 分流——复制体一漂，测的就不是缺省形了。 */
+export function makeReaderDeps(over: Overrides<ReaderDeps> = {}, shelf: unknown[] = []): FakeReaderDeps {
   return {
     ...prodReaderDeps,
     apiGet: vi.fn(async (path: string) => {
@@ -81,7 +83,7 @@ export function makeReaderDeps(over: Overrides<ReaderDeps> = {}): FakeReaderDeps
         return { chapters, items: planarNavigation(chapters) }
       }
       if (path.includes('chapter')) return { kind: 'text', text: '第一章正文' }
-      return []
+      return shelf
     }),
     apiSend: vi.fn(async () => ({})),
     apiUpload: vi.fn(async () => ({})),

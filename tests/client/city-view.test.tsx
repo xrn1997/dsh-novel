@@ -420,6 +420,18 @@ describe('CityBookSheet（书籍详情浮层：本源两动作 + 跨源那一次
     expect(screen.getByText('半夏小说')).toBeTruthy()
   })
 
+  // wire 上 `lastChapter` / `intro` 是**非可选的 `string | null`**：Miss 的值是 `null` 而不是缺键，
+  // 守卫判 `undefined` 就永不生效，界面上会留一颗读不到内容的「最新 」空壳（缺的整段不出现，
+  // 那条口径同住 `cityMeta`）。
+  it('最新章与简介都是 null 时那两段整段不出现（不给空壳占位）', () => {
+    openSheet(<CityBookSheet book={{ ...aBook, lastChapter: null, intro: null }} {...own}
+      deps={depsWithGroups([])} onClose={noop} />)
+    expect(screen.queryByText(/最新/)).toBeNull()
+    const metas = Array.from(document.querySelectorAll('.novel-city-bookhead-meta'))
+    expect(metas).toHaveLength(1)                          // 只剩元信息那一段，简介那段整段不走
+    expect(metas[0].textContent).toContain('现代情感')       // 元信息没被误伤
+  })
+
   it('「在其他源找这本」提交的是书名 + 作者，走搜索面那条既有链（POST search/job）', async () => {
     const calls: Array<{ p: string; b: unknown }> = []
     const deps = makeCoreDeps({

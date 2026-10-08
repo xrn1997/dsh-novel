@@ -26,10 +26,12 @@ interface QueueEntry { url: string; chain: boolean }
  *   （每页继续求值 next）；多个候选 → 全部抓取但**不递归翻页**（多候选意味着这一页已把
  *   同章各分页列全，再翻会越界）；
  * - 防环按 **URL 已见**，条目去重按 keyOf；
- * - 判到底五态（见 `FollowResult.stoppedBy`）：本页 0 条 → zero-new（空页之后的页不可信）；
- *   本页有条目但 0 新增 → loop
+ * - 判到底五态（见 `FollowResult.stoppedBy`）：本页 0 条 → zero-new
+ *   （空页之后的页不可信）；本页有条目但 0 新增 → loop
  *   （**部分重复不再停**——目录翻页只按 URL 防环、条目最后统一去重，站点页间重叠是常态，
  *   此前「出现重复条目即停」把重叠的真实页截断）；上限 → cap；
+ *   **zero-new / loop 两闸只在链式单候选那侧生效**：多候选那侧一次列出的同组分页彼此重叠是常态，
+ *   队列点完才叫到底（`end`）。
  * - 串章闸：stopUrls（目录知识：下一页 == 下一章 URL → 停）优先，
  *   无目录知识才回退路径启发式 isSameChapterPage（判不准宁漏页不串章）。
  */
@@ -59,9 +61,12 @@ export async function followPages<T>(
       if (seenKeys.has(k)) continue
       seenKeys.add(k); items.push(it); newCount++
     }
+    // 多候选（非链式）那侧先走：这一页零新增只说明它和别的候选重叠，不是「判到底」。
+    // 一次列出同组各分页时重叠是常态（入口页与第一页常同内容），拿链式那两闸去拦会把队列里
+    // 其余分页一起丢掉——真机读数：165 章的目录读成 100 章。对面那侧逐条全抓、条目最后统一去重。
+    if (!entry.chain) continue
     if (pageItems.length === 0) { stoppedBy = 'zero-new'; break }   // 零新增闸：空页不追 next
     if (newCount === 0) { stoppedBy = 'loop'; break }               // 回环闸：整页零新增 = 到底/软404
-    if (!entry.chain) continue // 多 URL 模式：本页不再求值 next
     // next 规则：取值用途求值（`'value'`）+ 列表形状处理（逐项绝对化 + 去重 + 丢空）
     const nv = await subEval(nextRule, { html: page.body, json: page.json, baseUrl: page.url }, facet, 'value')
     const rawList = listValue(nv, facet) ?? []

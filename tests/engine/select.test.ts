@@ -111,6 +111,63 @@ describe('default 选择段', () => {
   })
 })
 
+/**
+ * default 选择段含当前元素自身（对面 jsoup 语义；裁决见 docs/adr/0029，读数在矩阵行
+ * `a-default-step-self-inclusion`）。
+ *
+ * 为什么钉这一条：对面那四种选择步（class / tag / id / CSS）都交给同一个 DOM 库 jsoup 求值，
+ * 而 jsoup 的 `getElementsByClass` / `getElementsByTag` / `Collector.collect` / `select` 命中集
+ * **含当前元素自身**——本机实测 jsoup：四种全含，且自身排在全部后代之前（版本成色写在矩阵
+ * `a-default-step-self-inclusion`）。cheerio 的
+ * `find()` 只给后代，于是「类名和标签在同一个元素上」这类写法（`class.page-link@tag.a@href`）
+ * 我们读空、对面读得出——真机实证是目录翻页规则整条链读空后，脚本把 `undefined` 拼成下一页地址。
+ */
+describe('default 选择段含当前元素自身（class / id / tag），children 与 child 不含', () => {
+  // 真机形态：妙笔阁目录页的分页导航——class 就长在 <a> 自己身上
+  const SELF_HTML = '<div id="pg"><ul class="pages">'
+    + '<li class="pi"><a class="page-link" href="/107/107609/index_1.html">1</a></li>'
+    + '<li class="pi"><a class="page-link" href="/107/107609/index_2.html">2</a></li>'
+    + '</ul><div class="box" id="outer">外<div class="box" id="inner">内</div></div></div>'
+  const $$ = cheerio.load(SELF_HTML)
+  const links = () => $$('.page-link') as any
+  const outer = () => $$('#outer') as any
+  const at = (mode: string, arg: string | null, cur: any, index: any = null) =>
+    evalDefault({ kind: 'default', mode, arg, index } as any, $$, cur, loc(0, `${mode}.${arg ?? ''}`), 'toc')
+
+  it('tag 步：当前元素自己就是该标签 → 入选（容器即目标的写法读得出）', () => {
+    const v = at('tag', 'a', links())
+    expect(v.kind).toBe('nodes')
+    expect((v as any).nodes).toHaveLength(2)
+  })
+  it('class 步：当前元素自己带该类 → 入选', () => {
+    const v = at('class', 'page-link', links())
+    expect(v.kind).toBe('nodes')
+    expect((v as any).nodes).toHaveLength(2)
+  })
+  it('id 步：当前元素自己就是该 id → 入选', () => {
+    const v = at('id', 'inner', $$('#inner') as any)
+    expect(v.kind).toBe('nodes')
+    expect((v as any).nodes).toHaveLength(1)
+  })
+  it('children 步不含自身（这条维持子节点语义）', () => {
+    // #outer 自己带 class="box"：含自身的步会出 2（outer+inner），children 只能出 1（inner）
+    expect((at('children', null, outer()) as any).nodes).toHaveLength(1)
+    expect((at('child', 'div', outer()) as any).nodes).toHaveLength(1)
+  })
+  it('自身排在全部后代之前：`.0` 取到的是容器自己', () => {
+    const idx = { kind: 'index', value: 0 }
+    const v = at('class', 'box', outer(), idx) as any
+    expect(v.kind).toBe('nodes')
+    expect(v.nodes).toHaveLength(1)
+    expect(v.nodes.attr('id')).toBe('outer')
+  })
+  it('自身不匹配时，后代读数与文档序不变（不因为含自身而多捞、也不打乱顺序）', () => {
+    const v = at('class', 'box', $$('#pg') as any) as any
+    expect(v.nodes).toHaveLength(2)
+    expect(v.nodes.toArray().map((n: any) => n.attribs.id)).toEqual(['outer', 'inner'])
+  })
+})
+
 describe('default 取值段', () => {
   it('单节点 href → Value；多节点 → List', () => {
     const lis = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: { kind: 'index', value: 0 } }, $, root(), loc(0, 'class.item.0'), 'toc') as any

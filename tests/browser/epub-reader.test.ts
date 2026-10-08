@@ -205,8 +205,9 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       await settle(900)
 
       expect(await s.page.textContent('.novel-rdr-book')).toBe('图文样本')
-      // 总章数由读数「N / M」的分母承担（条上不再单独写一句「共 M 章」）
-      expect(await s.page.textContent('.novel-rdr-title')).toContain('/ 2')
+      // 总章数由读数「N / M」的分母承担（条上不再单独写一句「共 M 章」）。
+      // 整句一起钉：`toContain('/ 2')` 会同时放过「1 / 20」与「3 / 2」，那种断言只证明有个斜杠。
+      expect(await s.page.textContent('.novel-rdr-pos')).toBe('1 / 2')
 
       const dom = await s.page.evaluate(() => {
         const q = (sel: string) => document.querySelector(`[data-chapter="0"] ${sel}`)

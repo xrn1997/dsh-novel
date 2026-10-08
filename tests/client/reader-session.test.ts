@@ -58,6 +58,8 @@ interface FakeHarness {
 
 function makeSession(opts?: {
   shelf?: ShelfBook[]
+  /** 书架读不到（抛）：在架读数必须停在 'unknown' 而不是假装「不在架上」 */
+  shelfError?: boolean
   chapters?: Record<number, string>
   /** 目录展示树（缺省 = 由线性目录派生的平面导航） */
   navigation?: NavigationItem[]
@@ -75,7 +77,10 @@ function makeSession(opts?: {
       if (opts?.failChapter === i) throw new Error(`第 ${i} 章拉取失败`)
       return { kind: 'text', text: opts?.chapters?.[i] ?? `正文${i}` }
     },
-    fetchShelf: async () => opts?.shelf ?? [],
+    fetchShelf: async () => {
+      if (opts?.shelfError) throw new Error('书架拉不到')
+      return opts?.shelf ?? []
+    },
     saveProgress: (i, r) => { saves.push([i, r]) },
     saveTotalChapters: (n) => { totals.push(n) },
     afterFrames: (cb) => cb(),                       // 测试：同步落定
@@ -101,6 +106,23 @@ describe('ReaderSession.open（目录 → 存档恢复 → 载后定位）', () 
     await h.session.open('src', 'https://s.com/book/1')
     expect(h.fetched).toEqual([0])
     expect(h.session.state.toc).toHaveLength(3)
+  })
+
+  // 在架读数三态（视图据此决定离开那一跳要不要问一句「要不要加入书架」）：它是上面那次存档
+  // 查询的副产品，不是第二次请求。书架拉不到停在 'unknown'——**不知道不等于没有**，不许据此拦用户。
+  it('在架读数：架上 / 不在架 / 书架拉不到', async () => {
+    const on = makeSession({ shelf: [shelfBook({ chapterIndex: 0, offsetRatio: 0, updatedAt: 0 })] })
+    await on.session.open('src', 'https://s.com/book/1')
+    expect(on.session.onShelf).toBe('on')
+
+    const off = makeSession({ shelf: [] })
+    await off.session.open('src', 'https://s.com/book/1')
+    expect(off.session.onShelf).toBe('off')
+
+    const unknown = makeSession({ shelfError: true })
+    await unknown.session.open('src', 'https://s.com/book/1')
+    expect(unknown.session.onShelf).toBe('unknown')      // 拉不到照样进得去，不阻断阅读
+    expect(unknown.fetched).toEqual([0])
   })
 
   it('有存档：恢复到存档章 + 比例，双帧后按锚点落滚动位', async () => {

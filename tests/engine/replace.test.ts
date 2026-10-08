@@ -17,6 +17,43 @@ describe('applyReplaces 净化（## 替换）', () => {
       .toEqual({ kind: 'value', text: 'a-b-c' })
   })
 
+  /**
+   * 空 pattern 的替换步**整步跳过**——对面那侧每一处替换都门在 `replaceRegex.isNotEmpty()` 上，
+   * 空串正则根本不执行。本仓此前无条件执行：JS 的空正则配 `g` 在每个字符位置都匹配，
+   * 于是真库那条 `class.font_max@html####本章未完.*##`（`##` 尾的第 2 段是空串、第 3 段才是正则）
+   * 把 6.5KB 的一页灌成 **732,311 字符**并写进缓存（一章变半本书）。
+   * 这条与 `##` 的「只有一对 + 第 4 段开关」那条分叉是两件事，后者仍登记在矩阵行
+   * `a-replace-tail-single-pair`（待裁 D10）。
+   */
+  describe('空 pattern 整步跳过（对面 isNotEmpty 那道门）', () => {
+    it('全局净化：空 pattern 不执行，原文一字不动', () => {
+      expect(applyReplaces({ kind: 'value', text: 'a b c' }, [step('', 'X')], false))
+        .toEqual({ kind: 'value', text: 'a b c' })
+    })
+    it('OnlyOne：空 pattern 不得把整段替换成空串或replacement', () => {
+      expect(applyReplaces({ kind: 'value', text: 'a b c' }, [step('', 'X')], true))
+        .toEqual({ kind: 'value', text: 'a b c' })
+    })
+    it('多步里只跳空的那一步，其余照常作用', () => {
+      expect(applyReplaces({ kind: 'value', text: 'a b c' }, [step('', 'X'), step('\\s+', '-')], false))
+        .toEqual({ kind: 'value', text: 'a-b-c' })
+    })
+    it('插值后为空同样跳过（`{{…}}` 查到空串 = 空正则 = 不执行）', () => {
+      expect(applyReplaces({ kind: 'value', text: 'a b c' }, [step('{{t}}', 'X')], false, undefined, { t: '' }))
+        .toEqual({ kind: 'value', text: 'a b c' })
+    })
+    it('事故形状：真库那条尾（`####正则##`）作用于整页时不得放大文本', async () => {
+      const { evaluate } = await import('../../src/engine/evaluate.js')
+      const html = '<div id="c" class="font_max"><p>正文第一句。</p><p>本章未完，点击下一页继续阅读。</p></div>'
+      const bare = await evaluate('class.font_max@html', { html, baseUrl: 'http://x/1.html' }, 'content', 'value')
+      const tailed = await evaluate('class.font_max@html####本章未完.*##', { html, baseUrl: 'http://x/1.html' }, 'content', 'value')
+      expect(bare.kind).toBe('value')
+      expect(tailed.kind).toBe('value')
+      // 空 pattern 那步被跳过 ⇒ 与不带尾同形（对面在这条源上也是「不替换」）
+      expect((tailed as any).text).toBe((bare as any).text)
+    })
+  })
+
   it('OnlyOne 先截取首个匹配、再在该匹配内替换（对面 replaceRegex 的 replaceFirst 分支）', () => {
     // 先取**首个匹配**的那一小段，替换再作用在该小段上——产物就是那一小段
     // （不是「原文里只改第一处」）。此前本仓按后者实现：'aXaX' → 'a-aX'（错值，
