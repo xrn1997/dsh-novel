@@ -3,6 +3,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { createElement } from 'react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { apply } from '../../src/client/index.js'
+import { fakeCtx, fakeHost } from './fake-host.js'
 
 /**
  * 客户端注册面：小说 = **全局面板**（2026-09 迁移，用户拍板），不再是对话区 tab。
@@ -10,52 +11,15 @@ import { apply } from '../../src/client/index.js'
  * 侧栏一行（注册 `{ id, order?, label? }`，占用者只收 owner props `{ size, active }`）；`main` 是
  * 同 id 选中后按 `{ key }` 渲染的占用者；「selecting a missing main entry throws」⇒ 两个座位必须
  * 同批注册（apply 内同步完成）。
- * 本文件钉注册面本身（seam = `apply(ctx)` + 假 slots）：座位名、id/key 一致性、owner props、
- * main 占用者渲染 NovelView、`conversation.view` 撤除。
+ * 本文件钉注册面本身（seam = `apply(ctx)` + 假体，假体住址 `fake-host.ts`）：座位名、id/key 一致性、
+ * owner props、main 占用者渲染 NovelView、`conversation.view` 撤除。
  */
-
-interface Registration { name: string; options: Record<string, unknown>; component: unknown }
-
-function fakeSlots(): {
-  slots: {
-    inject: (name: string, fn: () => () => void) => () => void
-    register: (options: Record<string, unknown>, component: unknown) => () => void
-  }
-  injected: string[]
-  registrations: Registration[]
-  effects: string[]
-} {
-  const injected: string[] = []
-  const registrations: Registration[] = []
-  const effects: string[] = []
-  const slots = {
-    inject(name: string, fn: () => () => void): () => void {
-      injected.push(name)
-      return fn()
-    },
-    register(options: Record<string, unknown>, component: unknown): () => void {
-      registrations.push({ name: String(options.name), options, component })
-      return () => {}
-    },
-  }
-  return { slots, injected, registrations, effects }
-}
-
-function fakeCtx(s: ReturnType<typeof fakeSlots>): unknown {
-  return {
-    slots: s.slots,
-    effect(fn: () => unknown, label?: string): unknown {
-      s.effects.push(String(label))
-      return fn()
-    },
-  }
-}
 
 afterEach(cleanup)
 
 describe('客户端注册面：小说 = 全局面板（main keyed + sidebar.panellist list）', () => {
   it('apply 注入 sidebar.panellist 与 main 两个座位（同 id/key「novel」）；conversation.view 注册撤除', () => {
-    const s = fakeSlots()
+    const s = fakeHost()
     apply(fakeCtx(s) as never)
     expect(s.injected).toContain('sidebar.panellist')
     expect(s.injected).toContain('main')
@@ -77,7 +41,7 @@ describe('客户端注册面：小说 = 全局面板（main keyed + sidebar.pane
   })
 
   it('panellist 占用者 = 图标组件：吃得下宿主行的 owner props { size, active }', () => {
-    const s = fakeSlots()
+    const s = fakeHost()
     apply(fakeCtx(s) as never)
     const icon = s.registrations.find((r) => r.name === 'sidebar.panellist')?.component as never
     const { container: c1 } = render(createElement(icon, { size: 16, active: false }))
@@ -96,7 +60,7 @@ describe('客户端注册面：小说 = 全局面板（main keyed + sidebar.pane
     // 0..1025，字形 bbox 约 39..986 × 20..979），fill 用 currentColor 随宿主行前景色；
     // 背景层（原资产那面是纯白方块的 ic_launcher_background）刻意不搬：侧栏行自带底色，
     // 白方块在暗色主题下是块白斑。此钉防「图标被随手换回通用书本 stroke」。
-    const s = fakeSlots()
+    const s = fakeHost()
     apply(fakeCtx(s) as never)
     const icon = s.registrations.find((r) => r.name === 'sidebar.panellist')?.component as never
     const { container } = render(createElement(icon, { size: 16, active: false }))
@@ -109,7 +73,7 @@ describe('客户端注册面：小说 = 全局面板（main keyed + sidebar.pane
   })
 
   it('main 占用者 = 小说视图本体：渲染 NovelView（根、tab 导航、样式层都在）', () => {
-    const s = fakeSlots()
+    const s = fakeHost()
     apply(fakeCtx(s) as never)
     const panel = s.registrations.find((r) => r.name === 'main')?.component as never
     render(createElement(panel))

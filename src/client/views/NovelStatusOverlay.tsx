@@ -19,19 +19,23 @@ import { GlobalStatusBar } from './SettingsStatusBar.js'
  *
  * 点击任务泳道是跨子树动作（overlay 与小说视图不同分支）：记一次意图 + 路由去书源管理，
  * `SettingsSection` 消费意图（开弹层 / 滚到任务卡）。不靠 querySelector 隔空点钮。
+ * 但面板树只在宿主选中「小说」时才挂载（`main` keyed 槽按侧栏选中渲染）——意图与路由备好后
+ * 还要把面板带到前台（`focusPanel`，接线层转宿主 `layout.selectPanel`），否则用户停在宿主
+ * 别的界面上点击毫无可见效果（真机：停在「插件」页点「点此查看」像坏了一样）。
  *
  * 样式层与 token 锚点**必须自带**，不能借小说视图那份：本层与视图不同分支，切到「对话」tab 即
  * 视图卸载、样式层随之消失（真机：状态条剥成裸文字、`z-index` 塌成 `auto`）。`--novel-*` 定义
  * 在 `.novel-root, [data-novel-scope]` 上，overlay 子树没有 `.novel-root` 祖先 ⇒ 不给
  * `data-novel-scope` 就整棵取不到值（同「独立挂载点自带样式层」的 `SettingsSection` 先例）。
  */
-export function NovelStatusOverlay({ deps = prodDeps }: { deps?: SettingsDeps } = {}): ReactNode {
+export function NovelStatusOverlay({ deps = prodDeps, focusPanel }: { deps?: SettingsDeps; focusPanel: () => void }): ReactNode {
   useJobPolling(deps)
   const { job, stale } = useJobSurface()
   const onOpen = (): void => {
     if (job === null) return
     requestJobOpen(job.kind === 'import' ? 'import' : 'probe')
     navigate({ name: 'sources' })
+    focusPanel()
   }
   return (
     <div data-novel-shell-status data-novel-scope className="novel-shell-status">

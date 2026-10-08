@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import { NovelStatusOverlay } from './views/NovelStatusOverlay.js'
 import { NovelView } from './views/NovelView.js'
 
-export const inject = ['slots', 'sessions']
+export const inject = ['slots', 'sessions', 'layout']
 
 /**
  * 浏览器半入口：把「小说」注册为**全局面板**（2026-09 迁移，用户拍板）——侧栏
@@ -50,6 +50,9 @@ function NovelPanelIcon({ size = 16 }: { size?: number; active?: boolean }): Rea
   )
 }
 
+/** 全局面板的 id/key 同一个词（官方契约：选中缺失的 main entry 会抛）——注册与「带到前台」共用一格。 */
+const NOVEL_PANEL_ID = 'novel'
+
 /** `main` keyed 槽的占用者：小说全局面板本体（root 作用域，无 Session 绑定）。
  *  NovelView 自带样式层与 token 锚点（`data-novel-scope`），在 keyed 槽这棵子树里自足。 */
 function NovelPanel(): ReactNode {
@@ -63,21 +66,26 @@ export function apply(ctx: Context): void {
       register(options: Record<string, unknown>, component: unknown): () => void
     }
   }).slots
+  // 宿主 layout 服务窄镜像（ADR 0020：只声明用到的成员、一次强转）：把面板带到前台是宿主的活，
+  // 插件不碰 sidebar shell 的行按钮与选中态，只在「去现场」时调它同款的 selectPanel。
+  const { layout } = ctx as unknown as { layout: { selectPanel(id: string | null): void } }
   // 全局面板双注册（同 id/key「novel」，必须同批——官方契约：选中缺失的 main entry 会抛）
   ctx.effect(() => slots.inject('sidebar.panellist', () => slots.register(
-    { name: 'sidebar.panellist', id: 'novel', order: 20, label: '小说' },
+    { name: 'sidebar.panellist', id: NOVEL_PANEL_ID, order: 20, label: '小说' },
     NovelPanelIcon,
   )), 'dsh-novel: sidebar panel icon')
   ctx.effect(() => slots.inject('main', () => slots.register(
-    { name: 'main', key: 'novel' },
+    { name: 'main', key: NOVEL_PANEL_ID },
     NovelPanel,
   )), 'dsh-novel: main panel')
   // 常驻状态层挂 shell.overlay（root 作用域、list 基数、默认 click-through）：与 sidebar/main/
   // rightbar 并列，切面板与切会话都不卸载它——任务读数的唯一常驻住址。
   // pointer-events 由样式层 .novel-shell-status 的条目自己收回（浮层层默认不吃点击）。
+  // 占用者包一层只为把宿主口递进去：状态层点「点此查看」要把「小说」面板带到前台（面板树
+  // 不挂载时它的内部路由看不见），而 ctx 只在本接线层在场。
   ctx.effect(() => slots.inject('shell.overlay', () => slots.register(
     { name: 'shell.overlay', id: 'novel-status', order: 100, label: '小说任务状态' },
-    NovelStatusOverlay,
+    () => <NovelStatusOverlay focusPanel={() => layout.selectPanel(NOVEL_PANEL_ID)} />,
   )), 'dsh-novel: shell overlay status layer')
 }
 
