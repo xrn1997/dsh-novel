@@ -1,6 +1,8 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ReadingService } from '../services/reading.js'
 import type { ShelfBook } from '../services/types.js'
+import { mergeBooks } from '../shared/merge-by-book.js'
+import { partitionByRelevance } from '../shared/relevance.js'
 import { project } from './project.js'
 
 /** defineTool 产物（registry-ready definition）；registerTools 的 ctxLike 结构镜像 Cordis ToolRuntime */
@@ -33,7 +35,10 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
 
   const searchBooks = defineTool({
     name: 'dshnovel_search',
-    description: '在已启用的文本书源里聚合搜索书籍（本插件当前仅支持小说文本面），结果逐源分组（一源挂了不影响他源）。返回的 url 字段是详情页地址，可作为其他 dshnovel 工具的 bookKey。结果可能较长，按需使用。',
+    description: '在已启用的文本书源里聚合搜索并按书分组（同一书名+作者在多家源上收成一本，`sources[]` 逐家给详情页地址与 `sourceId`；本插件当前仅支持小说文本面）。'
+      + '返回书名／作者／分类含关键词（或书名含其空格分段）的行，判为不相关的行数在 `filtered` 里如实报数。'
+      + '返回结果里的 `url` 是详情页地址，可作为其他 dshnovel 工具的 bookKey，调用时要一起带上该行自己的 `sourceId`。'
+      + '未答话的书源在 `failed` 里逐家点名；`books` 为空时先看 `searched`/`answered`/`filtered`——「没人答话」与「答话了但全不相关」是两回事，别转述成「没找到」。',
     parameters: {
       keyword: { type: 'string', required: true, description: '书名/作者关键词' },
       sourceIds: { type: 'array', description: '限定源 id 列表（缺省搜全部启用的文本源）' },
@@ -42,54 +47,101 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
       schema: {
         type: 'object', additionalProperties: false,
         properties: {
-          groups: {
-            type: 'array', required: true, description: '逐源分组',
+          books: {
+            type: 'array', required: true, description: '按书归并后的作品视图（相关性档 → 家数 → 到达序）',
             items: {
               type: 'object', additionalProperties: false,
               properties: {
-                sourceId: { type: 'string', required: true, description: '源 id' },
-                sourceName: { type: 'string', required: true, description: '源名' },
-                status: { type: 'string', required: true, description: 'verified/broken/unverified' },
-                statusDetail: { type: 'string', description: 'broken 原因（含段级定位）' },
-                error: { type: 'object', additionalProperties: true, description: '该源本次失败（网络/规则）' },
-                hits: {
-                  type: 'array', required: true, description: '书目',
+                title: { type: 'string', required: true, description: '书名（首个到达源的原样）' },
+                author: { type: 'string', description: '作者（源没给值时整键缺席）' },
+                relevance: { type: 'string', required: true, description: '相关性档：exact|contains（本工具只返回这两档）' },
+                sourceCount: { type: 'integer', required: true, description: '答话去重后的源家数（一家给两行仍算一家）' },
+                sources: {
+                  type: 'array', required: true, description: '这本书在各家源上的行（行≠家：一家的两种写法都留在册，不改写）',
                   items: {
                     type: 'object', additionalProperties: false,
                     properties: {
-                      title: { type: 'string', required: true, description: '书名' },
-                      author: { type: 'string', description: '作者' },
+                      sourceId: { type: 'string', required: true, description: '源 id（拿本行 bookKey 调其他工具时要一起带上）' },
+                      sourceName: { type: 'string', required: true, description: '源名' },
+                      title: { type: 'string', required: true, description: '这一家把它叫作什么' },
+                      author: { type: 'string', description: '这一家写的作者' },
                       url: { type: 'string', description: '详情页 URL（bookKey）' },
-                      coverUrl: { type: 'string', description: '封面' },
-                      intro: { type: 'string', description: '简介' },
-                      lastChapterName: { type: 'string', description: '最新章名' },
-                      kind: { type: 'string', description: '分类（源的 ruleSearch.kind / ruleBookInfo.kind）' },
-                      wordCount: { type: 'string', description: '字数（原样字符串，可能是「120万字」这类站点文案）' },
                     },
                   },
                 },
               },
             },
           },
+          failed: {
+            type: 'array', required: true, description: '本轮未答话的源逐家点名——按书视图会把「哪家没回」抹掉，工具面没有页尾折叠，排查轴只能靠这一列',
+            items: {
+              type: 'object', additionalProperties: false,
+              properties: {
+                sourceId: { type: 'string', required: true, description: '源 id' },
+                sourceName: { type: 'string', required: true, description: '源名' },
+                code: { type: 'string', required: true, description: '失败码' },
+                message: { type: 'string', required: true, description: '失败原因（含段级定位时在此）' },
+              },
+            },
+          },
+          searched: { type: 'integer', required: true, description: '本轮实际跑了的源数' },
+          answered: { type: 'integer', required: true, description: '干净答话（无 error）的源数' },
+          filtered: { type: 'integer', required: true, description: '因被判不相关而移出默认返回的行数' },
+          truncated: { type: 'string', description: '本轮本数超过返回上限时的如实说明（缺席=没截断）' },
         },
       },
       render: (_args, v) => {
-        const total = v.groups.reduce((n, g) => n + g.hits.length, 0)
-        const lines = v.groups.map((g) => g.error
-          ? `【${g.sourceName}（${g.status}）】失败：${g.error.code}: ${g.error.message}`
-          : `【${g.sourceName}（${g.status}）】${g.hits.length} 本：${g.hits.slice(0, 5).map((h) => `${h.title}${h.author === null ? '' : ` / ${h.author}`}`).join('；')}${g.hits.length > 5 ? '…' : ''}`)
-        return text(`共 ${v.groups.length} 组、${total} 本：\n${lines.join('\n')}`)
+        // render 拿到的是缺键投影后的规范值：缺作者是整键不在（project() 把 null 与 undefined 同省），
+        // 判在场只能按键缺席认——旧式按 null 哨兵比对的写法漏判，会给模型印出「 / undefined」的幽灵作者
+        //（2026-10 审查记下的真 bug，文本断言钉在 tests/tools/tools.test.ts）。
+        // 截断省略号按**行数**判不按家数判：sources 是行、sourceCount 是家，一家两行时按家数会漏报截断。
+        // 摘要行是恒在的结论行，books 为空时后面不接列表段——那一行空行冒充的是一条不存在的分隔，
+        // 而模型读到的整段文案就是这一轮的覆盖面回执（2026-10 审查）。
+        const lines = v.books.map((b) => `《${b.title}》${b.author === undefined ? '' : ` / ${b.author}`} · ${b.sourceCount} 家源：${
+          b.sources.slice(0, 3).map((s) => `${s.sourceName}(${s.url ?? '无地址'})`).join('；')}${b.sources.length > 3 ? '…' : ''}`)
+        const fails = v.failed.map((f) => `${f.sourceName}：${f.code}`).join('；')
+        return text(`${v.books.length} 本（跑了 ${v.searched} 家、答话 ${v.answered} 家、滤去 ${v.filtered} 条不相关）：${
+          lines.length === 0 ? '' : `\n${lines.join('\n')}`}`
+          + `${v.failed.length === 0 ? '' : `\n${v.failed.length} 家未答话：${fails}`}`
+          + `${v.truncated === undefined ? '' : `\n${v.truncated}`}`)
       },
     },
     execute: async (args: { keyword: string; sourceIds?: string[] }) => {
+      const round = await service.search(args.keyword, args.sourceIds === undefined ? undefined : { sourceIds: args.sourceIds })
+      // 与界面同一份归并（shared/merge-by-book.ts 单点）：模型看到的「一本书在几家源上」必须与用户
+      // 点出来的那一份同源——两处各算一份迟早一边说三家一边说两家。
+      const { books, total } = mergeBooks(args.keyword, round)
+      const answeredGroups = round.filter((g) => g.error === undefined)
+      // searched/answered/filtered：界面上「相关 0 · 共 20」有页尾折叠承接，工具面没有折叠——三个读数
+      // 让「没人答话」与「答话了但全不相关」是两个可区分的事实，空 books 不再冒充「没找到」
+      //（空结果冒充对世界的判断是本仓定的最高罪）。分档只判 partitionByRelevance 的档级读数
+      //（shared/relevance.ts 单点），不在这里复述 containment。
+      // searchOne 的失败组恒带空 hits，所以归并与计数里把它们排除在外是口径防御而非活路——
+      // 失败源唯一的活出口是 `failed` 列（「失败源贡献行」不可观测，2026-10 审查证过）。
+      const filtered = answeredGroups.reduce((n, g) => n + partitionByRelevance(args.keyword, g.hits).suspect.length, 0)
       // 缺键纪律归 project()（tools/project.ts 单点）：null/undefined 字段整键省略——
-      // harness 的 lossless-JSON 校验对 undefined 属性值一票否决
-      const groups: Array<{
-        sourceId: string; sourceName: string; status: string
-        statusDetail?: string; error?: { code: string; message: string }
-        hits: Array<{ title: string; url?: string; author?: string; coverUrl?: string; intro?: string; lastChapterName?: string; kind?: string; wordCount?: string }>
-      }> = project(await service.search(args.keyword, args.sourceIds === undefined ? undefined : { sourceIds: args.sourceIds }))
-      return { groups }
+      // harness 的 lossless-JSON 校验对 undefined 属性值一票否决；truncated 缺席即没截断。
+      const out: {
+        books: Array<{
+          title: string; author?: string; relevance: 'exact' | 'contains'; sourceCount: number
+          sources: Array<{ sourceId: string; sourceName: string; title: string; author?: string; url?: string }>
+        }>
+        failed: Array<{ sourceId: string; sourceName: string; code: string; message: string }>
+        searched: number; answered: number; filtered: number; truncated?: string
+      } = project({
+        books: books.map((b) => ({
+          title: b.title, author: b.author, relevance: b.relevance, sourceCount: b.sourceCount,
+          sources: b.sources.map((s) => ({ sourceId: s.sourceId, sourceName: s.sourceName, title: s.title, author: s.author, url: s.url })),
+        })),
+        failed: round.flatMap((g) => g.error === undefined ? [] : [{
+          sourceId: g.sourceId, sourceName: g.sourceName, code: g.error.code, message: g.error.message,
+        }]),
+        searched: round.length,
+        answered: answeredGroups.length,
+        filtered,
+        truncated: total > books.length ? `本轮共 ${total} 本，只返回前 ${books.length} 本` : undefined,
+      })
+      return out
     },
   })
 

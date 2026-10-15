@@ -12,13 +12,13 @@ import { SearchView } from '../../src/client/views/SearchView.js'
 import { resetSourceInboxUi } from '../../src/client/source-inbox-ui.js'
 import { resetJobSurface, useJobPolling } from '../../src/client/jobs.js'
 import { navigate, routeStore, setPref } from '../../src/client/store.js'
-import { LOCAL_SOURCE_ID, ROUTES, queries } from '../../src/shared/wire.js'
+import { LOCAL_SOURCE_ID, ROUTES, SEARCH_BOOKS_CAP, paramRoutes, queries } from '../../src/shared/wire.js'
 import type { SearchJobSnapshot } from '../../src/shared/wire.js'
 import { makeCoreDeps, makeDeps, makeReaderDeps } from './fake-deps.js'
 import type { CoreDepsOverrides, FakeCoreDeps, FakeReaderDeps, FakeSettingsDeps, ReaderDepsOverrides, SettingsDepsOverrides } from './fake-deps.js'
 import type {
   ChapterContent, ChapterEntry, ContentNode, JobState, LocalImportResponse, LocalImportWarning,
-  NavigationItem, ReadingTarget, SourcePublic,
+  NavigationItem, ReadingTarget, SearchGroup, SourcePublic,
 } from '../../src/client/views/types.js'
 
 /**
@@ -283,16 +283,71 @@ describe('ShelfView 接线（deps seam 驱动）', () => {
 /** 命中分组桩（`SearchGroup` 的最小可渲染形态）。
  *  `sourceId` 一轮内必须一源一个：服务端 `searchProgressive` 对每个源只 `emit` 一组，分组在
  *  `SearchView` 里按 `key={g.sourceId}` 渲染——同一轮塞两个同 id 的桩等于造出服务端给不出的形状
- *  （React 会报 duplicate key）。多组用例显式传第二个 id。 */
-const hitGroup = (title: string, sourceId = 's1') => ({
+ *  （React 会报 duplicate key）。多组用例显式传第二个 id。
+ *  相关性视野：`inView: false` 显式造一条会落 `suspect` 的标题（折叠语义有专门用例钉）；
+ *  既有用例测的是游标与轮次身份、不是视野，默认不传——**但标题要带上本轮关键词**：
+ *  不带就落 suspect、整行进折叠区，而 jsdom 没有浏览器 UA 样式表、查询打得进未展开的 details，
+ *  于是「默认视野摆着它」这件事全靠这个巧合撑着，哪天折叠改成懒渲染就一片看不懂的蓝。
+ *  注意：默认视野现在有两轴（按书在前、按源在页尾折叠），同一个标题在两轴各现一次，
+ *  用例按容器取用（见 booksAxis / perSourceAxis）。 */
+const hitGroup = (title: string, sourceId = 's1', over: { inView?: boolean } = {}) => ({
   sourceId, sourceName: 'S', status: 'verified' as const,
-  hits: [{ title, author: null, url: 'https://s.com/book/1', coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null }],
+  hits: [{
+    title: over.inView === false ? `与关键词无关的${title}` : title,
+    author: null, url: 'https://s.com/book/1', coverUrl: null, intro: null,
+    lastChapterName: null, kind: null, wordCount: null,
+  }],
 })
 
 /** 后台搜索任务快照桩：默认「已结束、一家源、零增量」，各用例只覆写自己在意的那几项 */
 const snap = (over: Partial<SearchJobSnapshot> = {}): SearchJobSnapshot => ({
   id: 'j1', keyword: '斗罗', phase: 'done', cancelled: false, total: 1, done: 1, added: [], next: 0, startedAt: 0, ...over,
 })
+
+/** 结果页现在有两条轴（按书在前、按源在页尾折叠），同一个书名会在两轴各现一次；而 jsdom 没有
+ *  浏览器 UA 样式表，收起的 `<details>` 里照样查得到——「唯一匹配」因此不再是默认前提。
+ *  用例一律按容器取用，并把「容器不在场」写成 thrown（waitFor 才会重试到超时并把它报出来）。 */
+const booksAxis = (): HTMLElement => {
+  const el = document.querySelector('[data-novel-books]')
+  if (el === null) throw new Error('按书那一档没渲染（本轮一条 kept 都没有时它本就不该在场）')
+  return el as HTMLElement
+}
+const perSourceAxis = (): HTMLElement => {
+  const el = document.querySelector('[data-novel-per-source]')
+  if (el === null) throw new Error('按源那一档没渲染——降级不等于删除，源好坏仍要各自可见')
+  return el as HTMLElement
+}
+/** 读按源那一档**里面**的东西之前先把它展开。
+ *  口径：这一档默认收着（收起/展开这两个 DOM 事实由「页尾那条按源折叠」用例钉住），而 jsdom 没有
+ *  浏览器 UA 样式表、查询打得进收起的 `<details>`——不先展开就取用，证的是查询器不是界面，
+ *  哪天折叠改成懒渲染或换到真浏览器就是一批看不懂的蓝。已开时不再点（waitFor 里可重复调用）。 */
+const openPerSourceAxis = (): HTMLElement => {
+  const axis = perSourceAxis()
+  if (!(axis as HTMLDetailsElement).open) {
+    const summary = axis.querySelector('summary')
+    if (summary === null) throw new Error('按源那一档没有收口行：折叠形状没了')
+    fireEvent.click(summary)
+  }
+  return axis
+}
+/** 读/点按书那一档**展开区里**的逐源行之前先展开：一行一本的展开区由行头主钮的 `aria-expanded`
+ *  控制，收起时逐源行**根本不在 DOM 里**（不是藏在折叠后面）——不先展开就取用，拿到的是空集，
+ *  于是断言静默地什么也没断（同 openPerSourceAxis 的口径；「收起不摆出来」那类钉收起态的用例不走这里）。
+ *  已开的不重复点。 */
+const openBookFold = (): void => {
+  for (const row of booksAxis().querySelectorAll('[data-novel-book]')) {
+    const main = row.querySelector('.novel-book-main')
+    if (main === null) throw new Error('书行没有行头主钮：一行一本的形状没了')
+    if (main.getAttribute('aria-expanded') !== 'true') fireEvent.click(main)
+  }
+}
+/** 按书那一档「行上」那一个书名：同一本书在行首与它的展开区各写一次，取行首那份才是在说「一行」 */
+const bookRow = (title: string): HTMLElement => {
+  const row = [...document.querySelectorAll('[data-novel-books] [data-novel-book]')]
+    .find((r) => r.querySelector('.novel-book-main strong')?.textContent === title)
+  if (row === undefined) throw new Error(`按书视图没有「${title}」那一行`)
+  return row as HTMLElement
+}
 
 describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游标读快照）', () => {
   it('提交 = POST search/job，此后只读 job-status——浏览器半不再打批请求', async () => {
@@ -302,15 +357,17 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
       apiSend: vi.fn(async () => { submitted = true; return { jobId: 'j1' } }),
       apiGet: vi.fn(async (path: string) => {
         reads.push(path)
-        return { job: submitted ? snap({ added: [hitGroup('后台命中')], next: 1 }) : null }
+        return { job: submitted ? snap({ added: [hitGroup('斗罗后台命中')], next: 1 }) : null }
       }),
     })
     render(createElement(SearchView, { deps }))
     fireEvent.change(screen.getByPlaceholderText('书名 / 作者'), { target: { value: '斗罗' } })
     fireEvent.submit(screen.getByRole('form'))
-    await waitFor(() => expect(screen.getByText('后台命中')).toBeTruthy())
+    await waitFor(() => expect(within(openPerSourceAxis()).getByText('斗罗后台命中')).toBeTruthy())
     // `lastChapterName` 是 `string | null`：判 `undefined` 的守卫永不生效，null 会渲染成字面「null」
-    expect(document.querySelector('.novel-hit-sub')!.textContent).toBe('')
+    const sub = openPerSourceAxis().querySelector('.novel-hit-sub')
+    expect(sub, '按源那一档的命中行副行未渲染').not.toBeNull()
+    expect(sub!.textContent).toBe('')
     expect(deps.apiSend).toHaveBeenCalledWith('POST', ROUTES.searchJob.path, { keyword: '斗罗' })
     // 全部读取都是快照：没有任何一次 search?keyword= 的批请求从浏览器半发出
     expect(reads.every((r) => r.startsWith(`${ROUTES.searchJobStatus.path}?`))).toBe(true)
@@ -323,9 +380,628 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
       })),
     })
     render(createElement(SearchView, { deps }))
-    await waitFor(() => expect(screen.getByText('上一轮的命中')).toBeTruthy())
+    await waitFor(() => expect(bookRow('上一轮的命中')).toBeTruthy())
     expect(deps.apiSend).not.toHaveBeenCalled()          // 恢复不是重打：一轮都不必提交
     expect(screen.getByText(/本轮搜过/)).toBeTruthy()     // 收尾留痕同样从快照复算
+    // 没折进任何东西时不摆两个数（组头单数、收口无括注）：负向钉住，防「相关 x · 共 y」无差别铺开
+    // 单位：组头数的是这一家的**行**，所以是「1 条」不是「1 本」（律见 CONTEXT「作品视图（按书）」）
+    expect(screen.getByText('1 条')).toBeTruthy()
+    expect(String(screen.getByText(/本轮搜过/).textContent)).not.toMatch(/其中相关/)
+  })
+
+  it('相关性档改变默认视野但不改账目：suspect 收进组内折叠，展开后仍是可点的命中行', async () => {
+    const deps = coreDeps({
+      apiGet: vi.fn(async () => ({
+        job: snap({
+          keyword: '斗罗', phase: 'done', next: 1, total: 1, done: 1,
+          added: [{
+            sourceId: 's1', sourceName: 'S', status: 'verified',
+            hits: [
+              { title: '斗罗', author: '唐家', url: 'https://s.com/a', coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null },
+              { title: '完全无关的书', author: null, url: 'https://s.com/b', coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null },
+            ],
+          }],
+        }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    // 先等本轮落地：首帧之前两条轴都不在场，直接取容器就是把「还没加载」读成「没渲染」
+    // 这一档默认收着，读它里面的东西先展开（口径见 openPerSourceAxis）
+    await waitFor(() => expect(openPerSourceAxis().textContent).toContain('斗罗'))
+    const perSource = perSourceAxis()
+    // 默认视野不许摆那条无关的——钉 DOM 事实：疑似折叠区没开、kept 列表里没有它，
+    // 条数不丢则由展开之后的那一条断言证（不靠 jsdom 能打进收起 details 这个巧合）。
+    const fold = within(perSource).getByText(/疑似无关/)
+    const details = fold.closest('details')
+    expect(details, '折叠区必须在组内').not.toBeNull()
+    expect(details!.open, '默认视野：折叠区收着').toBe(false)
+    const keptList = perSource.querySelector('.novel-list')
+    expect(keptList, '按源那一档的 kept 列表未渲染').not.toBeNull()
+    expect(keptList!.textContent, '默认视野里不许摆那条疑似无关的').not.toContain('完全无关的书')
+    fireEvent.click(fold)
+    expect(details!.open, '点收口行要真能展开').toBe(true)
+    expect(details!.textContent, '一条不丢：它就在折叠区里等着被展开').toContain('完全无关的书')
+    expect(screen.getByText('完全无关的书')).toBeTruthy()
+    const row = screen.getByText('完全无关的书').closest('button')
+    expect(row, '判为疑似不夺走动作——展开后仍是可点的命中行').not.toBeNull()
+    expect(screen.getByText(/相关 1 · 共 2/)).toBeTruthy()   // 计数两个数都在场（这一档不写单位，写了也不许是「本」）
+    expect(screen.getByText(/其中相关 1 条/)).toBeTruthy()    // 收口行同样并报两个数，单位是条
+    // 按书那一档收不进它（suspect 不参与归并），所以它不许出现在书行里——两边的账各归各
+    expect(booksAxis().textContent).not.toContain('完全无关的书')
+  })
+
+  it('整组都被判 suspect：一条不丢——折叠区带着全部条数在案，不许读成「搜了没命中」', async () => {
+    const deps = coreDeps({
+      apiGet: vi.fn(async () => ({
+        job: snap({ keyword: '斗罗', phase: 'done', next: 1, total: 1, done: 1, added: [hitGroup('命中', 's1', { inView: false })] }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(within(openPerSourceAxis()).getByText(/疑似无关/)).toBeTruthy())
+    expect(screen.queryByText(/没有结果/)).toBeNull()       // 空态只属于「真的一个组都没有」
+  })
+
+  it('默认按书：同一本的多源收成一行，「读这本」只在展开后的逐源行里', async () => {
+    const deps = coreDeps({
+      apiGet: vi.fn(async () => ({
+        job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1'), hitGroup('斗罗', 's2')] }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText(/2 家源/)).toBeTruthy())
+    const books = booksAxis()
+    expect(books.querySelectorAll('[data-novel-book]'), '两家答话的同一本收成一行').toHaveLength(1)
+    const row = books.querySelector('[data-novel-book]') as HTMLElement
+    const main = row.querySelector('.novel-book-main') as HTMLElement
+    // 行头主钮只做「展开」这一件事：本仓没有能替用户选源的读数（探针 verified 只证搜索面），
+    // 所以「读这本」永远在展开后的逐源行里，行上一颗都没有（裁决见 docs/adr/0033）
+    expect(main.getAttribute('aria-expanded'), '默认收起').toBe('false')
+    // 主钮的无障碍名来自内容拼接：它得把「N 条」那笔账带进名字（收起时行上唯一说得出条数的地方），
+    // 又不许混进行以外的字——按 name 子串钉，抄整串会把排版空格也钉死。
+    expect(within(row).getByRole('button', { name: /展开 2 条$/ }), '行头主钮：名字以条数收尾').toBeTruthy()
+    expect(within(row).getAllByRole('button').map((b) => b.textContent?.trim()),
+      '收起态行上只有两颗钮：展开主钮与「都加架」').toEqual([
+      expect.stringMatching(/展开 2 条/), '都加架'])
+    expect(within(row).queryAllByLabelText('阅读 斗罗'), '收起不摆逐源行：整本的行不进 DOM').toHaveLength(0)
+    fireEvent.click(main)
+    expect(main.getAttribute('aria-expanded'), '点主钮要真能展开').toBe('true')
+    expect(within(row).getAllByLabelText('阅读 斗罗'), '展开才把逐源行摆出来，两家各一条').toHaveLength(2)
+    // 按源那一档降级不删：同一批读本页尾照旧摆着（读里面的东西先展开）
+    expect(within(openPerSourceAxis()).getAllByLabelText('阅读 斗罗')).toHaveLength(2)
+  })
+
+  it('都加架：逐条走既有 PUT（幂等归服务端），每条带自己那个源，不开新写口', async () => {
+    // 桩要按 apiSend 的真实 arity 声明，否则 mock.calls 的元素被推成空元组、按下标取值即 TS 红
+    const apiSend = vi.fn(async (_m: 'POST' | 'PUT' | 'DELETE', _path: string, _body?: unknown) => ({}))
+    const deps = coreDeps({
+      apiSend,
+      apiGet: vi.fn(async () => ({
+        job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1'), hitGroup('斗罗', 's2')] }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText(/2 家源/)).toBeTruthy())
+    fireEvent.click(within(booksAxis()).getByRole('button', { name: '都加架' }))
+    await waitFor(() => expect(apiSend).toHaveBeenCalledTimes(2))
+    const key = paramRoutes.shelfKey('https://s.com/book/1')
+    expect(apiSend).toHaveBeenCalledWith('PUT', key, expect.objectContaining({ title: '斗罗' }))
+    // 两家给的是同一个地址 ⇒ 路径分不出谁是谁，只有 body 里的 sourceId 认得出「这条 PUT 是哪家那一行」
+    expect(apiSend.mock.calls.map((c) => (c[2] as { sourceId: string }).sourceId),
+      '逐条各带自己那个源（全用第一家的话，第二家就没上架）').toEqual(['s1', 's2'])
+    expect(apiSend.mock.calls.map((c) => [c[0], c[1]]), '只复用 PUT shelf/:key 那一条既有路').toEqual([['PUT', key], ['PUT', key]])
+  })
+
+  it('作者串是整张配音表那种长度：行上只留前两位加「等」，全串归 title 与展开后的逐源行', async () => {
+    // 有的源把配音表整个塞进 author（实测十几位）。这一串现在住在主钮的内容里，也就是它的
+    // 无障碍名——不收，读屏每本念一遍名单，视觉上还把尾巴与「都加架」顶下两行。
+    const longAuthor = '张沛,黑石稔,陈奕雯,高其昌,筱筝,鬼月'
+    const deps = coreDeps({
+      apiGet: vi.fn(async () => ({
+        job: snap({
+          keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1,
+          added: [{
+            sourceId: 's1', sourceName: 'S', status: 'verified',
+            hits: [
+              { title: '斗罗', author: longAuthor, url: 'https://s.com/a', coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null },
+            ],
+          }],
+        }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText(/1 家源/)).toBeTruthy())
+    const who = bookRow('斗罗').querySelector('.novel-book-author') as HTMLElement
+    expect(who, '行上少了作者那一段读数').not.toBeNull()
+    expect(who.textContent, '只留前两位，其余由「等」承担').toBe('张沛,黑石稔 等')
+    expect(who.getAttribute('title'), '全串不丢：hover 读的就是它').toBe(longAuthor)
+    // 家数读数紧跟在作者后面，不许被同一把省略号吃掉尾巴
+    expect(bookRow('斗罗').querySelector('.novel-book-sources')?.textContent, '家数是独立一段').toContain('1 家源')
+    openBookFold()
+    expect(bookRow('斗罗').querySelector('.novel-hit-sub')?.textContent,
+      '展开后的逐源行仍给全串：收进行上的只是这一行的读数').toContain(longAuthor)
+  })
+
+  it('作者只有两位或那种空格分隔的角色表：一字不改（没有第三位可「等」，也不拿逗号去切）', async () => {
+    const cases = ['天蚕土豆', '甲,乙', '萧炎：锦鲤 药老：北炎 美杜莎：常蓉珊']
+    const deps = coreDeps({
+      apiGet: vi.fn(async () => ({
+        job: snap({
+          keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1,
+          added: [{
+            sourceId: 's1', sourceName: 'S', status: 'verified',
+            hits: cases.map((author, i) => ({
+              title: `斗罗${i}`, author, url: `https://s.com/${i}`,
+              coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null,
+            })),
+          }],
+        }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(booksAxis().querySelectorAll('[data-novel-book]')).toHaveLength(3))
+    for (const author of cases)
+      expect(bookRow(`斗罗${cases.indexOf(author)}`).querySelector('.novel-book-author')?.textContent,
+        `「${author}」被改写了`).toBe(author)
+  })
+
+  it('都加架成功：按钮与每一条逐源行都记得落过架，再点不再发一发 PUT', async () => {
+    // 症状：都加架把两条都写上了架，界面上却什么都没变——按钮仍「都加架」、
+    // 两条仍「＋ 加书架」，于是用户再点一次，把重复写当成没生效的反馈。
+    const releases: Array<() => void> = []
+    const apiSend = vi.fn((_m: 'POST' | 'PUT' | 'DELETE', _path: string, _body?: unknown) => new Promise<void>((res) => { releases.push(res) }))
+    const deps = coreDeps({
+      apiSend,
+      apiGet: vi.fn(async () => ({
+        job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1'), hitGroup('斗罗', 's2')] }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText(/2 家源/)).toBeTruthy())
+    const row = bookRow('斗罗')
+    fireEvent.click(row.querySelector('.novel-book-main') as HTMLElement)   // 展开
+    const putCount = (): number => apiSend.mock.calls.filter((c) => c[0] === 'PUT').length
+    fireEvent.click(within(row).getByRole('button', { name: '都加架' }))
+    const busy = within(row).getByRole('button', { name: '加架中…' }) as HTMLButtonElement
+    expect(busy.disabled, '在途要禁点，也要有个在途读数（只灰不改字＝没人知道点没点上）').toBe(true)
+    releases.splice(0).forEach((r) => { r() })
+    await waitFor(() => expect(putCount()).toBe(2))
+    await waitFor(() => expect(within(row).queryAllByRole('button', { name: '＋ 加书架' })).toHaveLength(0))
+    expect(within(row).getByRole('button', { name: '都在架' }), '批量动作的结果要在按钮上留下读数').toBeTruthy()
+    expect(within(row).getAllByRole('button', { name: '已在书架' }), '逐源行也要记得：两条都落架了').toHaveLength(2)
+    // 再点：一发都不该再出（禁点已被 label 换掉，这里连按路径也验一次）
+    fireEvent.click(within(row).getByRole('button', { name: '都在架' }))
+    expect(putCount(), '已落架的行不许再发').toBe(2)
+  })
+
+  it('先单加一条再点都加架：只补没落架的那一条，落架账不重复', async () => {
+    const apiSend = vi.fn(async (_m: 'POST' | 'PUT' | 'DELETE', _path: string, _body?: unknown) => ({}))
+    const pushOk = vi.fn()
+    const deps = coreDeps({
+      apiSend, pushOk,
+      apiGet: vi.fn(async () => ({
+        job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1'), hitGroup('斗罗', 's2')] }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText(/2 家源/)).toBeTruthy())
+    const row = bookRow('斗罗')
+    fireEvent.click(row.querySelector('.novel-book-main') as HTMLElement)
+    const putCount = (): number => apiSend.mock.calls.filter((c) => c[0] === 'PUT').length
+    fireEvent.click(within(row).getAllByRole('button', { name: '＋ 加书架' })[0])
+    await waitFor(() => expect(putCount()).toBe(1))
+    expect(within(row).getByRole('button', { name: '都加架' }), '只落了一条：整本还没齐').toBeTruthy()
+    fireEvent.click(within(row).getByRole('button', { name: '都加架' }))
+    await waitFor(() => expect(putCount(), '已落架那条不该再发一遍').toBe(2))
+    await waitFor(() => expect(pushOk).toHaveBeenCalledWith('已加 1 条：斗罗'))   // 这次只补了一条
+    expect(within(row).getByRole('button', { name: '都在架' })).toBeTruthy()
+  })
+
+  it('收起再展开：已在架的行仍显示已在书架（账住在行之上，不在那一行自己肚子里）', async () => {
+    // 展开区收起时不渲染（那是这一行的性能账），所以落架的账必须存在比这一行更长寿的地方。
+    const apiSend = vi.fn(async (_m: 'POST' | 'PUT' | 'DELETE', _path: string, _body?: unknown) => ({}))
+    const deps = coreDeps({
+      apiSend,
+      apiGet: vi.fn(async () => ({
+        job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1'), hitGroup('斗罗', 's2')] }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText(/2 家源/)).toBeTruthy())
+    const main = (): HTMLElement => bookRow('斗罗').querySelector('.novel-book-main') as HTMLElement
+    fireEvent.click(main())
+    fireEvent.click(within(bookRow('斗罗')).getByRole('button', { name: '都加架' }))
+    await waitFor(() => expect(within(bookRow('斗罗')).queryAllByRole('button', { name: '＋ 加书架' })).toHaveLength(0))
+    fireEvent.click(main())                                        // 收起：展开区整块离开 DOM
+    expect(bookRow('斗罗').querySelectorAll('.novel-hit-title')).toHaveLength(0)
+    fireEvent.click(main())                                        // 再展开
+    expect(within(bookRow('斗罗')).getAllByRole('button', { name: '已在书架' }), '收起再展开把账洗掉了').toHaveLength(2)
+    expect(within(bookRow('斗罗')).getByRole('button', { name: '都在架' })).toBeTruthy()
+  })
+
+  it('一家给两行：家数报 1、都加架发两条、回执单位是「条」', async () => {
+    // `searchOne` 不做源内去重，同一家把装饰写法与裸写法各给一条是常态：拿行数当家数会把
+    // 「只有一家答话」念成两家，拿家数当回执数会把没上架的那条吞掉。
+    const apiSend = vi.fn(async () => ({}))
+    const pushOk = vi.fn()
+    const deps = coreDeps({
+      apiSend, pushOk,
+      apiGet: vi.fn(async () => ({
+        job: snap({
+          keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1,
+          added: [{
+            sourceId: 's1', sourceName: 'S', status: 'verified',
+            hits: [
+              { title: '斗罗', author: null, url: 'https://s.com/a', coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null },
+              { title: '《斗罗》', author: null, url: 'https://s.com/b', coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null },
+            ],
+          }],
+        }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText(/1 家源/)).toBeTruthy())   // 家数按去重后的源计
+    // 展开钮承诺的是行（条）不是家：一家两行时「N 家源」与「展开 N 条」必然分岔，
+    // 单位口径（家=去重源、条=行、本=归并后书目）由此钉住，界面与 README 不能各说各话
+    expect(booksAxis().querySelector('.novel-book-tail')?.textContent,
+      '展开读的是条不是家').toContain('展开 2 条')
+    // 单位律的另外两处读数同样数**行**：这一家给了两行、只归并出一本。负钉按**面**扫——
+    // 数行的读数（组头计数、收口的命中条数）念成「本」就红；合法的「N 本」只有并书与超限两处，
+    // 各另有正钉（整页扫会把它们误伤，这正是要改这条负钉的原因）。
+    expect(String(screen.getByText(/本轮搜过/).textContent), '收口报的是条不是本').toContain('命中 2 条')
+    expect(String(screen.getByText(/本轮搜过/).textContent), '并书读数吃归并结果：两行并成一本').toContain('并成 1 本')
+    expect(String(screen.getByText(/本轮搜过/).textContent).replace(/并成 [0-9]+ 本/, ''), '收口里数行的读数不许念成「本」')
+      .not.toMatch(/[0-9] 本/)
+    for (const muted of [...openPerSourceAxis().querySelectorAll('.novel-muted')])
+      expect(String(muted.textContent), '组头数的是这一家的行，不许念成书').not.toMatch(/[0-9] 本/)
+    expect(within(openPerSourceAxis()).getByText('2 条'), '组头数的是这一家的两行').toBeTruthy()
+    fireEvent.click(within(booksAxis()).getByRole('button', { name: '都加架' }))
+    await waitFor(() => expect(apiSend).toHaveBeenCalledTimes(2))           // 两条都在册：少发一条就是漏上架
+    await waitFor(() => expect(pushOk).toHaveBeenCalledWith('已加 2 条：斗罗'))
+    openBookFold()   // 这一句读的是展开区里的名字：先展开，证的才是「展开看得见」而不是 jsdom 打得进收起折叠
+    expect(within(booksAxis()).getAllByText('《斗罗》'), '这一家把它叫作什么也要看得见').toHaveLength(1)
+  })
+
+  it('同一家同一地址的两行写法：PUT 照发行发行、回执按架位计——一个架位不许念成两条', async () => {
+    // 书架身份是 (源, 地址)：同址两行各发一发幂等 PUT，落架只有一个架位。按成功 PUT 计数
+    // 的回执会报「已加 2 条」——架上的账被夸大一条（变异：回执改回数 fulfilled 的条数即红）。
+    const apiSend = vi.fn(async () => ({}))
+    const pushOk = vi.fn()
+    const pushError = vi.fn()
+    const deps = coreDeps({
+      apiSend, pushOk, pushError,
+      apiGet: vi.fn(async () => ({
+        job: snap({
+          keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1,
+          added: [{
+            sourceId: 's1', sourceName: 'S', status: 'verified',
+            hits: [
+              { title: '斗罗', author: null, url: 'https://s.com/a', coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null },
+              { title: '《斗罗》', author: null, url: 'https://s.com/a', coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null },
+            ],
+          }],
+        }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText(/1 家源/)).toBeTruthy())
+    expect(booksAxis().querySelector('.novel-book-tail')?.textContent,
+      '行读数不因同址而缩：两条写法都在册').toContain('展开 2 条')
+    fireEvent.click(within(booksAxis()).getByRole('button', { name: '都加架' }))
+    await waitFor(() => expect(apiSend).toHaveBeenCalledTimes(2))           // 逐行照发：发不发是行的账，幂等归服务端
+    await waitFor(() => expect(pushOk).toHaveBeenCalledWith('已加 1 条：斗罗'))
+    expect(pushError, '一个架位落架即全数落架，不该有失败回执').not.toHaveBeenCalled()
+  })
+
+  it('都加架有失败：成功数与失败数各报一次（点了一下必须有个交代）', async () => {
+    let calls = 0
+    const apiSend = vi.fn(async () => { calls++; if (calls === 2) throw new Error('磁盘只读'); return {} })
+    const pushOk = vi.fn()
+    const pushError = vi.fn()
+    const deps = coreDeps({
+      apiSend, pushOk, pushError,
+      apiGet: vi.fn(async () => ({
+        job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1'), hitGroup('斗罗', 's2')] }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText(/2 家源/)).toBeTruthy())
+    fireEvent.click(within(booksAxis()).getByRole('button', { name: '都加架' }))
+    await waitFor(() => expect(pushOk).toHaveBeenCalledWith('已加 1 条：斗罗'))
+    expect(pushError).toHaveBeenCalledWith('加入失败 1 条（共 2）')   // 只报成功数＝静默吞掉没加上的那条
+  })
+
+  it('都加架不替「没有地址」那一行发 PUT，也不把它算成失败', async () => {
+    // 无 url 的命中在逐源行上本就不给动作（既进不了阅读器也加不了架）；书行的批量动作替它
+    // 发一发空架位 PUT，就是写进一条没有书面的架位、还要回头报「已加」——两头谎。
+    const apiSend = vi.fn(async (_m: 'POST' | 'PUT' | 'DELETE', _path: string, _body?: unknown) => ({}))
+    const pushOk = vi.fn()
+    const pushError = vi.fn()
+    const deps = coreDeps({
+      apiSend, pushOk, pushError,
+      apiGet: vi.fn(async () => ({
+        job: snap({
+          keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1,
+          added: [{
+            sourceId: 's1', sourceName: 'S', status: 'verified',
+            hits: [
+              { title: '斗罗', author: null, url: 'https://s.com/a', coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null },
+              { title: '斗罗', author: null, url: null, coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null },
+            ],
+          }],
+        }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText(/1 家源/)).toBeTruthy())
+    fireEvent.click(within(booksAxis()).getByRole('button', { name: '都加架' }))
+    await waitFor(() => expect(pushOk).toHaveBeenCalledWith('已加 1 条：斗罗'))
+    expect(apiSend).toHaveBeenCalledTimes(1)                     // 只发有地址那一行
+    expect(apiSend.mock.calls[0][1]).toBe(paramRoutes.shelfKey('https://s.com/a'))
+    expect(pushError).toHaveBeenCalledWith('1 条没有地址，加不了架')   // 没试过不是失败，点名说清
+    expect(pushError.mock.calls.map((c) => String(c[0])).join(), '不许把没发的算进失败数').not.toMatch(/加入失败/)
+  })
+
+  it('都加架一物未加（整行都没有地址）：成功通道不响，交代只有「没有地址」那一句', async () => {
+    // 撤掉「有加成才报成功」那道闸的变异就在这一条红：整行没有地址时 ok 恒 0，
+    // 「已加 0 条：X」是给一次没发生的写入报喜——点了一下、什么都没加，成功 toast 却响了。
+    // 架空与全部 PUT 失败读出来都是 0，两种结局挤进同一句成功话；零加成的交代改由错误通道给。
+    const apiSend = vi.fn(async (_m: 'POST' | 'PUT' | 'DELETE', _path: string, _body?: unknown) => ({}))
+    const pushOk = vi.fn()
+    const pushError = vi.fn()
+    const deps = coreDeps({
+      apiSend, pushOk, pushError,
+      apiGet: vi.fn(async () => ({
+        job: snap({
+          keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1,
+          added: [{
+            sourceId: 's1', sourceName: 'S', status: 'verified',
+            hits: [
+              { title: '斗罗', author: null, url: null, coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null },
+              { title: '《斗罗》', author: null, url: null, coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null },
+            ],
+          }],
+        }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText(/1 家源/)).toBeTruthy())
+    fireEvent.click(within(booksAxis()).getByRole('button', { name: '都加架' }))
+    await waitFor(() => expect(pushError).toHaveBeenCalledWith('2 条没有地址，加不了架'))
+    expect(pushOk, '零加成不许报成功').not.toHaveBeenCalled()
+    expect(pushError).toHaveBeenCalledTimes(1)                     // 一句话只说一次：两条都在册，不拆成两声
+    expect(apiSend).not.toHaveBeenCalled()                        // 一发都不出：空架位 PUT 写的是没有书面的架位
+    fireEvent.click(bookRow('斗罗').querySelector('.novel-book-main')!)
+    expect(bookRow('斗罗').querySelectorAll('.novel-row-dead'), '同一家给两种写法仍是两行，不许收成一行').toHaveLength(2)
+  })
+
+  it('都加架全部失败：只有失败那一句，成功通道同样不响', async () => {
+    // 与上一条是两种 0：这次每发都试了、每发都炸。共用「已加 0 条：X」就是把写失败的读数
+    // 说成写成功了半边——回执的两条通道各管各的结局，才点得出差别。
+    const apiSend = vi.fn(async () => { throw new Error('磁盘只读') })
+    const pushOk = vi.fn()
+    const pushError = vi.fn()
+    const deps = coreDeps({
+      apiSend, pushOk, pushError,
+      apiGet: vi.fn(async () => ({
+        job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1'), hitGroup('斗罗', 's2')] }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText(/2 家源/)).toBeTruthy())
+    fireEvent.click(within(booksAxis()).getByRole('button', { name: '都加架' }))
+    await waitFor(() => expect(pushError).toHaveBeenCalledWith('加入失败 2 条（共 2）'))
+    expect(pushOk, '一条也没加上就不许报成功').not.toHaveBeenCalled()
+    expect(pushError).toHaveBeenCalledTimes(1)
+  })
+
+  it('书行的动作不带第二份字段映射：加架发的还是那一份元数据（封面／简介／最新章回读本组命中）', async () => {
+    // 归并只带「这一家把它叫作什么」与地址；按书成了默认视图之后，若这条 PUT 不再回读命中本身，
+    // 书架卡片就少一张封面——那是主路径的可见退化，不是「少带一个可选字段」。
+    const apiSend = vi.fn(async (_m: 'POST' | 'PUT' | 'DELETE', _path: string, _body?: unknown) => ({}))
+    const deps = coreDeps({
+      apiSend,
+      apiGet: vi.fn(async () => ({
+        job: snap({
+          keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1,
+          added: [{
+            sourceId: 's1', sourceName: 'S', status: 'verified',
+            hits: [
+              {
+                title: '斗罗', author: '甲', url: 'https://s.com/a', coverUrl: 'https://c/1.jpg',
+                intro: '第一章就打架', lastChapterName: '第 9 章', kind: '玄幻', wordCount: '12 万字',
+              },
+              {
+                title: '斗罗', author: '甲', url: 'https://s.com/b', coverUrl: 'https://c/1.jpg',
+                intro: '第一章就打架', lastChapterName: '第 9 章', kind: '玄幻', wordCount: '12 万字',
+              },
+            ],
+          }],
+        }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText(/1 家源/)).toBeTruthy())
+    const putBodies = (): unknown[] => apiSend.mock.calls.filter((c) => c[0] === 'PUT').map((c) => c[2])
+    // 展开后的逐源行走同一条接线：＋加书架 不许比都加架少带字段（先真展开：读的是展开区）
+    openBookFold()
+    fireEvent.click(within(booksAxis()).getAllByRole('button', { name: '＋ 加书架' })[0])
+    await waitFor(() => expect(putBodies()).toHaveLength(1))
+    // 再点都加架：已落架那一条不再发，补的是第二条（同一份字段映射，两个入口）
+    fireEvent.click(within(booksAxis()).getByRole('button', { name: '都加架' }))
+    await waitFor(() => expect(putBodies()).toHaveLength(2))
+    for (const body of putBodies())
+      expect(body, '两个入口发的必须是同一份元数据').toMatchObject({
+        sourceId: 's1', title: '斗罗', author: '甲', coverUrl: 'https://c/1.jpg',
+        intro: '第一章就打架', lastChapterName: '第 9 章', kind: '玄幻', wordCount: '12 万字',
+      })
+  })
+
+  it('同一家给两种写法：逐源行各回读各的元数据（地址参与行身份）', async () => {
+    // 行身份少了地址，第二条就会顶用第一条的封面与最新章——两行看着都动了作，存的却是同一份元数据
+    const apiSend = vi.fn(async (_m: 'POST' | 'PUT' | 'DELETE', _path: string, _body?: unknown) => ({}))
+    const pushOk = vi.fn()
+    const deps = coreDeps({
+      apiSend, pushOk,
+      apiGet: vi.fn(async () => ({
+        job: snap({
+          keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1,
+          added: [{
+            sourceId: 's1', sourceName: 'S', status: 'verified',
+            hits: [
+              { title: '斗罗', author: null, url: 'https://s.com/a', coverUrl: 'https://c/a.jpg', intro: null, lastChapterName: '第 1 章', kind: null, wordCount: null },
+              { title: '《斗罗》', author: null, url: 'https://s.com/b', coverUrl: 'https://c/b.jpg', intro: null, lastChapterName: '第 2 章', kind: null, wordCount: null },
+            ],
+          }],
+        }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText(/1 家源/)).toBeTruthy())
+    fireEvent.click(within(booksAxis()).getByRole('button', { name: '都加架' }))
+    await waitFor(() => expect(pushOk).toHaveBeenCalledWith('已加 2 条：斗罗'))
+    expect(apiSend.mock.calls.map((c) => (c[2] as { coverUrl: string }).coverUrl)).toEqual(['https://c/a.jpg', 'https://c/b.jpg'])
+    expect(apiSend.mock.calls.map((c) => (c[2] as { title: string }).title)).toEqual(['斗罗', '《斗罗》'])
+  })
+
+  it('超出上限：那一行报出全量本数，不把「还有更多」吞成结束', async () => {
+    const hits = Array.from({ length: SEARCH_BOOKS_CAP + 1 }, (_, i) => ({
+      title: `斗罗第${i}部`, author: null, url: `https://s.com/${i}`, coverUrl: null,
+      intro: null, lastChapterName: null, kind: null, wordCount: null,
+    }))
+    const deps = coreDeps({
+      apiGet: vi.fn(async () => ({
+        job: snap({ keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1, added: [{ sourceId: 's1', sourceName: 'S', status: 'verified', hits }] }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText(new RegExp(`本轮共 ${SEARCH_BOOKS_CAP + 1} 本，只列前 ${SEARCH_BOOKS_CAP}`))).toBeTruthy())
+    const books = booksAxis()
+    expect(books.querySelectorAll('[data-novel-book]')).toHaveLength(SEARCH_BOOKS_CAP)   // 视图真按上限截断
+    expect(books.textContent, '没列出来的那一本不许既不出现在视图里、也不出现在上限说明里').not.toContain(`斗罗第${SEARCH_BOOKS_CAP}部`)
+  })
+
+  it('整轮都被判 suspect：按书视图空着也不许读成「没有结果」——账在按源那一档里', async () => {
+    const deps = coreDeps({
+      apiGet: vi.fn(async () => ({
+        job: snap({ keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1, added: [hitGroup('命中', 's1', { inView: false })] }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText(/按源看/)).toBeTruthy())
+    expect(screen.queryByText(/没有结果/)).toBeNull()                 // 空态只属于「一个组都没回来」
+    expect(screen.queryByText(/没有参与搜索的书源/)).toBeNull()
+    expect(document.querySelector('[data-novel-books]')).toBeNull()  // 空视图不占版面
+    // 收口那两个数与组头同源：按书视图空着的时候，「相关 0 条」这句还得说得出（单位是行不是本）
+    expect(String(screen.getByText(/本轮搜过/).textContent)).toContain('相关 0 条')
+    expect(openPerSourceAxis().textContent).toContain('另有 1 条疑似无关')
+  })
+
+  it('页尾那条按源折叠：默认收着，点收口行才展开——降级不删，也不许顺手把折叠改回常摆', async () => {
+    // 变异：把这一档的 <details> 换成 <div>（或删掉 summary）——整串用例只读文本，换掉照样绿，
+    // 于是「降级成折叠」这条裁决可以在没人看见的地方被翻回去。钉的是 DOM 事实，不是文本在场。
+    const deps = coreDeps({
+      apiGet: vi.fn(async () => ({
+        job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1'), hitGroup('斗罗', 's2')] }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText(/2 家源/)).toBeTruthy())
+    const axis = perSourceAxis()
+    expect(axis.tagName, '按源那一档必须是折叠件：常摆就把首屏还给两千屏列表').toBe('DETAILS')
+    expect((axis as HTMLDetailsElement).open, '默认收起：页尾那一档不许抢按书的版面').toBe(false)
+    const summary = axis.querySelector('summary')
+    expect(summary, '折叠要有收口行，否则没人打得开它').not.toBeNull()
+    fireEvent.click(summary as HTMLElement)
+    expect((axis as HTMLDetailsElement).open, '点收口行要真能展开').toBe(true)
+    // 展开的读数：那两家的账都在里面（降级不删）
+    expect(within(axis).getAllByLabelText('阅读 斗罗')).toHaveLength(2)
+    expect(String(summary?.textContent)).toContain('2 家')
+  })
+
+  it('按书行的 key 认名字不认位置：新一轮到达把书目重排后，展开的那一本还开着', async () => {
+    // 流式轮次里组陆续到达，同档那一条子句按「家数降序」重排书目；纯下标 key 会把展开态
+    // 串到别的书上（用户展开的是甲，重排后开的是乙）——那是「刚点的东西自己关了」的界面噪声。
+    const frames: Array<(data: string) => void> = []
+    const deps = coreDeps({
+      apiSend: vi.fn(async () => ({ jobId: 'j1' })),
+      apiGet: vi.fn(async () => ({ job: null })),
+      apiEventStream: vi.fn(async (_p: string, onFrame: (d: string) => void) => {
+        frames.push(onFrame)
+        return new Promise<void>(() => {})
+      }),
+    })
+    render(createElement(SearchView, { deps }))
+    fireEvent.change(screen.getByPlaceholderText('书名 / 作者'), { target: { value: '斗罗' } })
+    fireEvent.submit(screen.getByRole('form'))
+    await waitFor(() => expect(frames.length).toBe(1))
+    frames[0](JSON.stringify({
+      job: snap({ phase: 'running', total: 3, done: 2, next: 2, added: [hitGroup('斗罗甲', 's1'), hitGroup('斗罗乙', 's2')] }),
+    }))
+    await waitFor(() => expect(booksAxis().querySelectorAll('[data-novel-book]')).toHaveLength(2))
+    const rowOf = (title: string): Element => {
+      // 每次重新按容器取：重排之后拿旧 NodeList 的槽位找行，拿到的就是别人家的展开态
+      const row = [...booksAxis().querySelectorAll('[data-novel-book]')]
+        .find((r) => r.querySelector('strong')?.textContent === title)
+      if (row === undefined) throw new Error(`没有「${title}」那一行`)
+      return row
+    }
+    const expandedOf = (title: string): string | null =>
+      rowOf(title).querySelector('.novel-book-main')?.getAttribute('aria-expanded') ?? null
+    fireEvent.click(rowOf('斗罗甲').querySelector('.novel-book-main')!)
+    expect(expandedOf('斗罗甲')).toBe('true')
+
+    frames[0](JSON.stringify({ job: snap({ phase: 'done', total: 3, done: 3, next: 3, added: [hitGroup('斗罗乙', 's3')] }) }))
+    await waitFor(() => expect(booksAxis().querySelectorAll('[data-novel-book]')).toHaveLength(2))
+    expect([...booksAxis().querySelectorAll('[data-novel-book] > .novel-book-main strong')].map((s) => s.textContent),
+      '乙现在两家答话，同档按家数降序排到前面').toEqual(['斗罗乙', '斗罗甲'])
+    expect(expandedOf('斗罗甲'),
+      '展开态跟着那一本走，不跟着位置走').toBe('true')
+    expect(expandedOf('斗罗乙')).toBe('false')
+  })
+
+  it('逐源行的 key 认地址：换一轮搜同一本书、同一家给了新指向，新行不许顶用上一行的「已在书架」', async () => {
+    // 变异：把这一行的 key 退回 (源, 下标)。地址不在 key 里 ⇒ 换轮之后同一家、同一下标、换了
+    // 地址的那一行被 React 认成上一轮那一行，本地入架态跟着搬过来——界面写着「已在书架」，
+    // 而架子上根本没有这一条地址，「读这本／＋架」两个动作点的是另一条书面。
+    // 桩按服务端的形状给：一轮之内一家只发一组，换轮靠任务身份切换（累加器整体重读）。
+    const groupWith = (url: string): SearchGroup[] => [{
+      sourceId: 's1', sourceName: 'S', status: 'verified',
+      hits: [{ title: '斗罗', author: null, url, coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null }],
+    }]
+    // 第二轮的基线只在身份切换后被读到（since=0）；此前每次读都回「还没有任务」
+    let baseline: SearchJobSnapshot | null = null
+    // POST search/job 要回 jobId（否则整轮被读成「任务已不可读」），PUT 的返回值没人读
+    const apiSend = vi.fn(async (_m: 'POST' | 'PUT' | 'DELETE', _path: string, _body?: unknown) => ({ jobId: 'j1' }))
+    const frames: Array<(data: string) => void> = []
+    const deps = coreDeps({
+      apiSend,
+      apiGet: vi.fn(async () => ({ job: baseline })),
+      apiEventStream: vi.fn(async (_p: string, onFrame: (d: string) => void) => {
+        frames.push(onFrame)
+        return new Promise<void>(() => {})
+      }),
+    })
+    render(createElement(SearchView, { deps }))
+    fireEvent.change(screen.getByPlaceholderText('书名 / 作者'), { target: { value: '斗罗' } })
+    fireEvent.submit(screen.getByRole('form'))
+    await waitFor(() => expect(frames.length).toBe(1))
+    frames[0](JSON.stringify({ job: snap({ id: 'j1', phase: 'running', done: 1, total: 2, next: 1, added: groupWith('https://s.com/a') }) }))
+    await waitFor(() => expect(bookRow('斗罗')).toBeTruthy())
+    fireEvent.click(bookRow('斗罗').querySelector('.novel-book-main')!)
+    fireEvent.click(within(bookRow('斗罗')).getByRole('button', { name: '＋ 加书架' }))
+    await waitFor(() => expect(within(bookRow('斗罗')).getByRole('button', { name: '已在书架' })).toBeTruthy())
+
+    baseline = snap({ id: 'j2', phase: 'done', done: 2, total: 2, next: 2, added: groupWith('https://s.com/b') })
+    frames[0](JSON.stringify({ job: baseline }))          // 身份一变，客户端就按 since=0 重读整轮基线
+    await waitFor(() => expect(within(bookRow('斗罗')).getByRole('button', { name: '＋ 加书架' })).toBeTruthy())
+    expect(within(bookRow('斗罗')).queryByRole('button', { name: '已在书架' }),
+      '换了指向就是新的一行：上一轮那一行的入架态不属于它').toBeNull()
+    // 那一行确实活着（不是「查不到才看着像未加」）：点它，PUT 落在新地址上
+    fireEvent.click(within(bookRow('斗罗')).getByRole('button', { name: '＋ 加书架' }))
+    await waitFor(() => expect(within(bookRow('斗罗')).getByRole('button', { name: '已在书架' })).toBeTruthy())
+    const puts = apiSend.mock.calls.filter((c) => c[0] === 'PUT')
+    expect(puts, '两轮各点各的：上一轮那一发不是这一行点的').toHaveLength(2)
+    expect(puts[1]?.[1]).toBe(paramRoutes.shelfKey('https://s.com/b'))
   })
 
   it('陈旧快照防线：第二轮落地后，第一轮的迟到响应不许污染结果', async () => {
@@ -349,12 +1025,12 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     await waitFor(() => expect(deps.apiGet).toHaveBeenCalledTimes(2))            // 挂载读 + 第一轮首拍
     fireEvent.change(input, { target: { value: '第二轮' } })
     fireEvent.submit(screen.getByRole('form'))
-    await waitFor(() => expect(screen.getByText('第二轮书')).toBeTruthy())
+    await waitFor(() => expect(bookRow('第二轮书')).toBeTruthy())
 
     resolveStale({ job: snap({ id: 'A', keyword: '第一轮', added: [hitGroup('第一轮书')], next: 1 }) })
     await new Promise((r) => setTimeout(r, 20))
-    expect(screen.queryByText('第一轮书')).toBeNull()
-    expect(screen.getByText('第二轮书')).toBeTruthy()
+    expect(screen.queryByText('第一轮书')).toBeNull()              // 迟到的上一轮在两轴都不许留痕
+    expect(bookRow('第二轮书')).toBeTruthy()
   })
 
   it('空参与集与「搜了没命中」分得清：total=0 → 引导导入书源；total>0 零分组 → 换关键词', async () => {
@@ -393,11 +1069,11 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
       apiSend: vi.fn(async () => { throw new Error('服务未挂载') }),
     })
     render(createElement(SearchView, { deps }))
-    await waitFor(() => expect(screen.getByText('上一轮命中')).toBeTruthy())
+    await waitFor(() => expect(bookRow('上一轮命中')).toBeTruthy())
     fireEvent.change(screen.getByPlaceholderText('书名 / 作者'), { target: { value: '斗罗' } })
     fireEvent.submit(screen.getByRole('form'))
     await waitFor(() => expect(screen.getByText(/搜索提交失败：服务未挂载/)).toBeTruthy())
-    expect(screen.getByText('上一轮命中')).toBeTruthy()        // 服务端没起新轮 → 旧结果仍是真相
+    expect(bookRow('上一轮命中')).toBeTruthy()        // 服务端没起新轮 → 旧结果仍是真相
   })
 
   it('停止搜索：跑着才有钮、点它只发 job-cancel、已搜出的命中留着且不报红条', async () => {
@@ -417,19 +1093,19 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     await waitFor(() => expect(frames.length).toBe(1))
     // 提交后立刻有钮（不必等第一帧）：用户随时可以说「别再往下搜了」
     expect(screen.getByRole('button', { name: '停止搜索' })).toBeTruthy()
-    frames[0](JSON.stringify({ job: snap({ phase: 'running', total: 3, done: 1, next: 1, added: [hitGroup('先回来的书')] }) }))
-    await waitFor(() => expect(screen.getByText('先回来的书')).toBeTruthy())
+    frames[0](JSON.stringify({ job: snap({ phase: 'running', total: 3, done: 1, next: 1, added: [hitGroup('斗罗先回来的书')] }) }))
+    await waitFor(() => expect(within(openPerSourceAxis()).getByText('斗罗先回来的书')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: '停止搜索' }))
     expect(deps.apiSend).toHaveBeenLastCalledWith('POST', ROUTES.searchJobCancel.path, {})
     frames[0](JSON.stringify({ job: snap({ phase: 'failed', cancelled: true, error: '任务已取消：用户停止了搜索',
-      total: 3, done: 2, next: 2, added: [hitGroup('停止前又回来一本', 's2')] }) }))
+      total: 3, done: 2, next: 2, added: [hitGroup('斗罗停止前又回来一本', 's2')] }) }))
     await waitFor(() => expect(screen.getByText(/已停止 · 本轮搜过/)).toBeTruthy())
     // 收口数字只算**真搜完的**：计划 3 家、停止前只回来 2 组，就不许报「搜过 3 家」；
     // 进度条同理，停止的轮次不倒填 100%（真机实测出的谎报：431 家计划 / 29 家实搜）
     expect(screen.getByText(/本轮搜过/).textContent).toMatch(/本轮搜过 2 家/)
     expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('67')
-    expect(screen.getByText('先回来的书')).toBeTruthy()               // 停止 ≠ 放弃已经搜出来的
-    expect(screen.getByText('停止前又回来一本')).toBeTruthy()
+    expect(within(openPerSourceAxis()).getByText('斗罗先回来的书')).toBeTruthy()   // 停止 ≠ 放弃已经搜出来的
+    expect(within(openPerSourceAxis()).getByText('斗罗停止前又回来一本')).toBeTruthy()
     expect(screen.queryByText(/搜索中断/)).toBeNull()                 // 自己按的停止不是错误
     expect(screen.queryByRole('button', { name: '停止搜索' })).toBeNull()   // 收口行不留死钮
     expect(screen.getByRole('button', { name: '搜索' })).toBeTruthy()       // 再搜是新一轮
@@ -450,13 +1126,13 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     fireEvent.change(screen.getByPlaceholderText('书名 / 作者'), { target: { value: '斗罗' } })
     fireEvent.submit(screen.getByRole('form'))
     await waitFor(() => expect(frames.length).toBe(1))
-    frames[0](JSON.stringify({ job: snap({ phase: 'running', total: 2, done: 1, next: 1, added: [hitGroup('推送来的书')] }) }))
-    await waitFor(() => expect(screen.getByText('推送来的书')).toBeTruthy())
+    frames[0](JSON.stringify({ job: snap({ phase: 'running', total: 2, done: 1, next: 1, added: [hitGroup('斗罗推送来的书')] }) }))
+    await waitFor(() => expect(within(openPerSourceAxis()).getByText('斗罗推送来的书')).toBeTruthy())
     await new Promise((r) => setTimeout(r, 900))                  // 越过两个 JOB_POLL_MS 节拍
     expect(deps.apiGet).toHaveBeenCalledTimes(1)                  // 一轮都没轮：流在，就不必问
-    frames[0](JSON.stringify({ job: snap({ phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('收尾的书', 's2')] }) }))
+    frames[0](JSON.stringify({ job: snap({ phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗收尾的书', 's2')] }) }))
     await waitFor(() => expect(screen.getByText(/本轮搜过/)).toBeTruthy())
-    expect(screen.getByText('收尾的书')).toBeTruthy()
+    expect(within(openPerSourceAxis()).getByText('斗罗收尾的书')).toBeTruthy()
     await waitFor(() => expect(closed).toBe(true))                // 终态帧后自己关流，不留着占连接
   })
 })
@@ -1266,10 +1942,10 @@ describe('SearchView 离开界面：停看不停工（结果由服务端持有�
     reads.length = 0
     deps.apiGet.mockImplementation(async (path: string) => {
       reads.push(path)
-      return { job: snap({ phase: 'done', done: 1, next: 1, added: [hitGroup('切走期间搜完的书')] }) }
+      return { job: snap({ phase: 'done', done: 1, next: 1, added: [hitGroup('斗罗切走期间搜完的书')] }) }
     })
     render(createElement(SearchView, { deps }))
-    await waitFor(() => expect(screen.getByText('切走期间搜完的书')).toBeTruthy())
+    await waitFor(() => expect(bookRow('斗罗切走期间搜完的书')).toBeTruthy())
     expect(reads[0]).toBe(queries.searchJobStatus(0))          // 重挂载 = 从游标零点重读
     expect(deps.apiSend).toHaveBeenCalledTimes(1)              // 恢复不重打：第二轮都没提交
   })
@@ -1281,7 +1957,7 @@ describe('SearchView 离开界面：停看不停工（结果由服务端持有�
     const deps = coreDeps({
       apiSend: vi.fn(async () => ({ jobId: 'j1' })),
       apiGet: vi.fn(async () => ({
-        job: snap({ phase: 'running', done: 3, total: 10, next: 3, added: [hitGroup('切走前已搜到的书')] }),
+        job: snap({ phase: 'running', done: 3, total: 10, next: 3, added: [hitGroup('斗罗切走前已搜到的书')] }),
       })),
     })
     const view = render(createElement(SearchView, { deps }))
@@ -1289,7 +1965,7 @@ describe('SearchView 离开界面：停看不停工（结果由服务端持有�
     view.unmount()                                                       // 退出小说界面（服务端那轮照跑）
 
     render(createElement(SearchView, { deps }))                          // 再进小说界面
-    await waitFor(() => expect(screen.getByText('切走前已搜到的书')).toBeTruthy())
+    await waitFor(() => expect(bookRow('斗罗切走前已搜到的书')).toBeTruthy())
     // 进度从服务端快照恢复不从零开始（已搜 3/10 被 <b> 拆元素，按 textContent 断言）
     expect(document.querySelector('.novel-prog-text')?.textContent ?? '').toMatch(/已搜 3\/10/)
     expect(deps.apiSend).toHaveBeenCalledTimes(1)                        // 恢复不重打：重挂载零提交
@@ -1301,12 +1977,15 @@ describe('SearchView 离开界面：停看不停工（结果由服务端持有�
     const deps = coreDeps({
       apiGet: vi.fn(async () => {
         reads++
-        return { job: snap({ phase: 'done', done: 1, next: 1, added: [hitGroup('只该出现一次的书')] }) }
+        return { job: snap({ phase: 'done', done: 1, next: 1, added: [hitGroup('斗罗只该出现一次的书')] }) }
       }),
     })
     render(createElement(StrictMode, null, createElement(SearchView, { deps })))
     await waitFor(() => expect(reads).toBeGreaterThanOrEqual(2))   // 同实例二次 effect：确实读了两次
-    expect(screen.getAllByText('只该出现一次的书')).toHaveLength(1)
+    // 两轴各摆一份是形状本身；累加两遍就会在任一轴里多出第二行／第二条
+    expect(booksAxis().querySelectorAll('[data-novel-book]')).toHaveLength(1)
+    expect(within(openPerSourceAxis()).getAllByText('斗罗只该出现一次的书')).toHaveLength(1)
+    expect(screen.getByText(/1 家源/)).toBeTruthy()                // 一本一行：没有第二行
   })
 
   it('服务端宣布任务已不可读（重启 / 过保留期）→ 如实说明，不伪装成「搜了没命中」', async () => {

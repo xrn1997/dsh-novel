@@ -466,6 +466,59 @@ export const NOVEL_CSS = `
 .novel-fail { border-top: 1px solid var(--novel-border-faint); padding: var(--novel-sp-4) 0 var(--novel-sp-1); font-size: var(--novel-fs-sm); color: var(--novel-text-3); }
 .novel-fail summary { cursor: pointer; }
 .novel-fail summary:hover { color: var(--novel-text-2); }
+/* 按源那一档（页尾折叠）借 .novel-fail 的折叠形状，字色跟着落到三级灰——而这条轴的存在理由正是
+   「源好坏各自可见」，源名与命中标题灰上加灰等于把可见性读没了。这一条只把**这一档**的字色请回正字：
+   尺寸不归它（归 .novel-hit-title 与 .novel-group-head strong），只管颜色。
+   选择器把轴标记与折叠类并写，为的是这一条稳赢 .novel-fail、不靠声明次序；就地改 .novel-fail 会连带
+   重画失败源折叠与两处疑似折叠——那三条的灰是「这一家不行／这一条可疑」的语气，不在本条覆盖里。 */
+[data-novel-per-source].novel-fail { color: var(--novel-text); }
+/* 按书那一行（一行一本）。形状取舍的实测理由住在 BookRow 的注释头上（为什么不借 .novel-fail 的折叠），
+   这里只写几何。两条轴各用一套：按源轴一块好几行、组间距留 sp-6 那一档，按书轴一行一本、
+   邻近本身就是分组线，收到 sp-2——再宽就读成「一句书名一条横线」的散装清单。 */
+[data-novel-books].novel-groups { gap: var(--novel-sp-2); }
+/* container-type 让下面那条尾巴退档按**这一行自身宽度**判定（与 .novel-list-head 同一理由：
+   宿主面板可拖窄，视口断点量不准）。 */
+.novel-book-row {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--novel-sp-4);
+  border-bottom: 1px solid var(--novel-border-faint); container-type: inline-size;
+}
+.novel-book-row:last-child { border-bottom: none; }
+.novel-book-row > .novel-btn { flex: 0 0 auto; }
+/* 主钮复用 .novel-row-main（焦点环与键盘可达都归它认领），这里只把行内排版换成 flex：并写两个类
+   是为稳赢那条的 padding 与 flex/min-width，不靠声明次序。两条都是这一行不折行的关键——
+   flex-basis 让回 0：.novel-row-main 那条的 1 1 auto 拿内容宽当基准，长作者串一撑就把兄弟动作钮
+   挤到第二行（2026-10 用户实机反馈的那版三行形态）；基准 0 才是「先给动作钮留位，剩下归我」。
+   nowrap 让内层不折行：多行容器里放不下的是**换行**而不是**收缩**，写了省略号也永远轮不到它。 */
+.novel-row-main.novel-book-main {
+  display: flex; flex-wrap: nowrap; align-items: baseline; gap: var(--novel-sp-1) var(--novel-sp-4);
+  flex: 1 1 0; min-width: 0; padding: var(--novel-sp-3) var(--novel-sp-3) var(--novel-sp-3) var(--novel-sp-0);
+}
+/* 书名与作者各按自己那一段省略（本仓密集列表的统一口径：截断归 CSS，全串归 title）。
+   读数各占一段、互不牵连：家数与尾巴不许被作者的省略号吃掉。 */
+.novel-book-main strong, .novel-book-author {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.novel-book-main strong { font-size: var(--novel-fs-base); font-weight: 600; }
+.novel-book-main:hover { background: var(--novel-hover); }
+.novel-book-main:hover strong { color: var(--novel-brand-strong); }
+.novel-book-sources, .novel-book-tail { flex: 0 0 auto; }
+/* 尾巴靠 margin-left:auto 顶到行尾：读数与动作钮各占一头，右边缘才成一条直线 */
+.novel-book-tail {
+  margin-left: auto; display: inline-flex; align-items: baseline; gap: var(--novel-sp-2);
+  font-size: var(--novel-fs-sm); color: var(--novel-text-3); white-space: nowrap;
+}
+.novel-book-main:hover .novel-book-tail { color: var(--novel-text-2); }
+/* 箭头只管方向（aria-hidden 在组件上），字归 .novel-book-tail-label：两者都是 aria-expanded 的
+   可见读数（为什么名字不另抄一份，见 BookRow 注释头上）。 */
+.novel-book-chev { display: inline-block; font-size: var(--novel-fs-xs); transition: transform var(--novel-dur) var(--novel-ease); }
+.novel-book-main[aria-expanded='true'] .novel-book-chev { transform: rotate(90deg); }
+/* 展开区整幅铺开：它是这一行的第二块，不跟动作钮抢同一行宽度 */
+.novel-book-row > .novel-list { flex: 0 0 100%; gap: 0; border-top: 1px solid var(--novel-border-faint); padding-bottom: var(--novel-sp-2); }
+.novel-book-row > .novel-list .novel-row { border-bottom: 1px solid var(--novel-border-faint); }
+.novel-book-row > .novel-list .novel-row:last-child { border-bottom: none; }
+/* 窄面板退档：动作钮那一档宽度是从主钮里扣的，扣到尾巴放不下字就只留箭头——
+   「展开 N 条」那笔账行头的「N 家源」旁边少说一次不要紧，箭头在就是还有话可展开 */
+@container (max-width: 340px) { .novel-book-tail-label { display: none; } }
 /* 进度段：推进走 transform: scaleX 而非 width —— width 每次改都触发布局（书架几十张卡
    + 搜索条 + 运行卡同时在途时逐帧重排），scaleX 只走合成。transform-origin 必须在左，
    否则从中心缩放。行内只写 --novel-pct（唯一动态量）。 */
@@ -1016,6 +1069,7 @@ export const NOVEL_CSS = `
 }
 @media (prefers-reduced-motion: reduce) {
   .novel-card, .novel-btn, .novel-chip, .novel-seg button, .novel-searchbox, .novel-row,
+  .novel-book-chev,
   .novel-city-card, .novel-city-kind,
   .novel-switch, .novel-switch > i, .novel-progress > i, .novel-rdr-trail::after, .novel-rdr-ctl,
   .novel-card-ghost .novel-ghost-cover {
@@ -1121,12 +1175,16 @@ img.novel-city-cover { display: block; object-fit: cover; background: var(--nove
   display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
 }
 /* 未响应那条是本设计的**刻意例外**（与搜索面同哲学：源坏了要如实摊开，不藏在折叠里）——今天只有
-   书籍详情浮层的跨源那一列用它：摘要行给源名与错误码，展开才补完整 message */
+   书籍详情浮层的跨源那一列用它：摘要行给源名与错误码，展开才补完整 message。同一列那行「疑似无关」
+   的折叠共用这个容器（摘要给得出是谁家、多少条，展开才是内容），但它不是故障——容器本来的红线条
+   红底默认也罩着它，故由下面带标记的那一条只把这一族回正成中性线条与中性底；只属于真失败的红
+   原样留在未响应那一条上（与按源轴 [data-novel-per-source] 同法：只碰颜色、只用 token、不就地改折叠类）。 */
 .novel-city-fail {
   flex: none; border: 1px solid var(--novel-err-line); border-radius: var(--novel-r-sm);
   background: var(--novel-err-weak); padding: var(--novel-sp-2) var(--novel-sp-4);
   font-size: var(--novel-fs-xs); color: var(--novel-text-2);
 }
+[data-novel-city-suspect].novel-city-fail { border-color: var(--novel-border-faint); background: var(--novel-layer-2); }
 .novel-city-fail > summary { display: flex; flex-wrap: wrap; align-items: center; gap: var(--novel-sp-2) var(--novel-sp-4); cursor: pointer; }
 .novel-city-fail b { font-weight: 600; color: var(--novel-err); }
 .novel-city-fail-who { color: var(--novel-text-2); }

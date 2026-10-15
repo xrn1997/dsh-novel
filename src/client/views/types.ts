@@ -10,6 +10,8 @@ export type {
   SourcePublic, ProbeResult, JobState, JobIssue,
   // 阅读面
   SearchHit, SearchGroup, ChapterEntry, BookDetail,
+  // 按书视图（呈现层派生）：上限常量 SEARCH_BOOKS_CAP 是**值**，不走这个类型桶，直接从 shared/wire 引
+  MergedBook, MergedSource,
   // 书架面
   ShelfProgress, ShelfBook, ShelfEntry,
   // 本地图文面（EPUB 导入）：正文树 / 阅读目标 / 目录树 / 导入回执 / 链接角色

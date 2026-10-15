@@ -84,12 +84,14 @@ index.ts 组合根：配置 → 缺省值 → 部件装配 → 三条注册
 | 聚合搜索的参与集 | `services/participation.ts` 的 `participates`（发现面谓词 `exploreParticipates` 同文件） | 源清单读写 |
 | 错误类目 → HTTP | `services/errors.ts` + `api/wire.ts`（两分法） | 路由自检错误 |
 | 整轮搜索结果 | `services/search-job.ts`（Node 半持有） | wire 形状 |
+| 跨源归并（作品视图）：搜索面「是不是同一本书」的判同 | `shared/merge-by-book.ts` 的 `mergeBooks`（形状与上限 `MergedBook`／`MergedSource`／`SEARCH_BOOKS_CAP` 在 `shared/wire.ts`）——呈现层派生，消费点只有搜索结果页与工具面 | 不替用户判该用哪家读（动作不下放）、不服务书籍详情浮层、不改书架身份与进度（作品级身份与换源搬运另裁，见 `docs/adr/0033`） |
+| 相关性判据（一条命中与本轮关键词的关系档位） | 形状 `Relevance` 声明在 `shared/wire.ts`；判据与三档序 `shared/relevance.ts` 的 `relevanceOf` / `partitionByRelevance` / `RELEVANCE_RANK`——决定 `suspect` 去处的三个消费点（`client/views/SearchView.tsx` 的 `renderGroups`、`client/views/CityBookSheet.tsx` 的 `GroupRow`、`tools/tools.ts` 的 `searchBooks`）加只收 `kept` 的归并面（`shared/merge-by-book.ts`）都只吃这一份 | 不判书架、不判发现面（那两面没有关键词这一维） |
 | `exploreUrl` 的形态判据与分类入口解析（js / JSON / `标题::URL` 三档怎么分、条目怎么取） | `services/explore-url.ts` 的 `exploreKindsFormOf` / `parseExploreKinds` | 落位与平铺优先（`services/normalize.ts` 的 `flattenDialect`）、这次用哪份模板（`services/explore-face.ts` 的 `fetchKindPage`） |
 | 一次分类页请求的完整语义（含整套规则回落） | `services/explore-face.ts` 的 `fetchKindPage` | 整轮编排与快照写回 |
 | 分类清单（哪个源自己声明了哪些分类） | `services/explore.ts` 的 `deriveExploreSources` | 站点侧分类的同义归并（本仓不造同义词表） |
 | 单源一页的执行（查进程内快照 → 抓 → 写回 → 出一个组） | `services/explore.ts` 的 `fetchExploreGroup` | 点名与页码（门面 `services/reading.ts`）、轮次状态与终态 |
 | 整轮分类结果 | `services/explore-job.ts`（Node 半持有，读面给全量快照） | wire 形状 |
-| 跨源那一次的关键词构造（有作者就带作者） | `client/city-view-model.ts` 的 `sheetKeyword`（消费者只有书籍详情浮层，链路复用搜索面） | 是不是同一本书（不替用户判，按源一行行列出来他自己看） |
+| 跨源那一次的关键词构造（有作者就带作者） | `client/city-view-model.ts` 的 `sheetKeyword`（消费者只有书籍详情浮层，链路复用搜索面） | 是不是同一本书——判同在搜索面归并那一行（`mergeBooks`，按归并键）；书籍详情浮层维持逐源轴、不吃归并；两层的界面都不替他判该用哪家读 |
 | 逐条目取值装配（求值上下文 → 一条命中） | **今天没有主人，两份抄本刻意接受**：`services/explore-face.ts` 与 `services/reading.ts` 各一份 | 两份的规则来源本就不同（发现面整套切换 vs 通用搜索面）；第三处消费者出现时再抽公共装配 |
 | 分类快照的存放与时效 | `services/explore-cache.ts` 的 `KindCache` + `services/cache-epoch.ts` 的 `exploreEpoch` | 目录 / 正文文件缓存（`rulesEpoch`） |
 | 缺省值 | 五个各自主人（见 `tests/services/defaults.test.ts` 钉的常量） | 第二处字面量 |

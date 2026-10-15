@@ -4,7 +4,7 @@ import type { JsonSchemaNode } from '@deepseek-ai/dsh-tools'
 import { ReadingService } from '../../src/services/reading.js'
 import { buildTools } from '../../src/tools/tools.js'
 import { SHELF_META } from '../../src/shared/wire.js'
-import type { ChapterEntry, SearchGroup, SearchHit, ShelfBook } from '../../src/shared/wire.js'
+import type { ChapterEntry, MergedBook, MergedSource, SearchGroup, SearchHit, ShelfBook } from '../../src/shared/wire.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
 
 /**
@@ -13,10 +13,12 @@ import { makeTempDir, trackService } from '../temp-dir.js'
  * wire 类型加一个字段，整个工具调用被 lossless-JSON 校验拒收）。此前 project.ts 声称
  * 「schema 侧的一致性由 tools 的用例钉住」但并不存在——本文件把声明证成：
  * ① 每工具 execute 输出过 harness 同款校验（validateJsonSchemaValue）；
- * ② **从 wire 派生的字段清单是三面钉死**（2026-09-28 收紧）：`SearchGroup`/`SearchHit`、`ChapterEntry`、
- *    `ShelfBook` 的字段清单住在 `*_FIELDS` 常量里——**运行时**拿它与 schema 的属性集比、
- *    **编译期**再用 `Assert<Eq<keyof Wire, …>>` 把同一份清单绑回 wire 类型；于是 wire 加/改字段会让
- *    `pnpm typecheck` 红（此前只有字面快照，wire 改名要人工记得同步，缺口就在那里）。
+ * ② **从 wire 派生的字段清单是三面钉死**（2026-09-28 收紧）：`MergedBook`/`MergedSource`（`dshnovel_search`
+ *    从第二批起投影的是作品视图）、`ChapterEntry`、`ShelfBook` 的字段清单住在 `*_FIELDS` 常量里——
+ *    **运行时**拿它与 schema 的属性集比、**编译期**再用 `Assert<Eq<keyof Wire, …>>` 把同一份清单绑回
+ *    wire 类型；于是 wire 加/改字段会让 `pnpm typecheck` 红（此前只有字面快照，wire 改名要人工记得同步，
+ *    缺口就在那里）。`SearchGroup`/`SearchHit` 的清单与编译期绑定**保留**——它们仍是跨半形状
+ *    （HTTP 面与逐源折叠照旧消费），只是不再被这个工具直接投影。
  *    另三份（`dshnovel_read`/`dshnovel_import_source`/`dshnovel_source`）是**工具自己的**投影形状，
  *    没有对应 wire 类型可绑，仍是字面清单（照旧由 ① 的校验兜底）；
  * ③ schema 本体在 harness 的强制子集内（assertSupportedJsonSchema）。
@@ -29,6 +31,8 @@ type Assert<T extends true> = T
 /** 下面这份清单是**唯一**一份：运行时比 schema，编译期比 wire 类型 */
 const GROUP_FIELDS = ['sourceId', 'sourceName', 'status', 'statusDetail', 'hits', 'error'] as const
 const HIT_FIELDS = ['title', 'author', 'url', 'coverUrl', 'intro', 'lastChapterName', 'kind', 'wordCount'] as const
+const BOOK_FIELDS = ['title', 'author', 'relevance', 'sources', 'sourceCount'] as const
+const BOOK_SOURCE_FIELDS = ['sourceId', 'sourceName', 'title', 'author', 'url'] as const
 const CHAPTER_FIELDS = ['chapterIndex', 'name', 'url'] as const
 /** 工具刻意**不投影**的书目元数据（超集会被 harness 拒） */
 const SHELF_EXCLUDED = ['coverUrl', 'intro', 'totalChapters'] as const
@@ -36,10 +40,18 @@ const SHELF_FIELDS = ['sourceId', 'bookKey', 'title', 'author', 'lastChapterName
 
 type _GroupWire = Assert<Eq<keyof SearchGroup, typeof GROUP_FIELDS[number]>>
 type _HitWire = Assert<Eq<keyof SearchHit, typeof HIT_FIELDS[number]>>
+type _BookWire = Assert<Eq<keyof MergedBook, typeof BOOK_FIELDS[number]>>
+type _BookSourceWire = Assert<Eq<keyof MergedSource, typeof BOOK_SOURCE_FIELDS[number]>>
 type _ChapterWire = Assert<Eq<keyof ChapterEntry, Extract<typeof CHAPTER_FIELDS[number], 'name' | 'url'>>>
 type _ShelfWire = Assert<Eq<keyof ShelfBook, typeof SHELF_FIELDS[number] | typeof SHELF_EXCLUDED[number]>>
 
-const SEARCH_HTML = '<html><body><div class="b"><a href="/book/1/" title="120万字">斗罗</a><span class="z">唐家</span></div><div class="b"><a href="/book/2/">无名书</a></div></body></html>'
+/** 第三条与关键词有关且不带作者/分类/字数：工具面按相关性收视野之后，仍需有一条「整键缺席」的
+ *  命中留在 kept 内，好让 ① 那次 harness 同款校验继续量到缺键投影后的形状（第二条是反例：它不进输出）。 */
+const SEARCH_HTML = '<html><body>'
+  + '<div class="b"><a href="/book/1/" title="120万字">斗罗</a><span class="z">唐家</span></div>'
+  + '<div class="b"><a href="/book/2/">无名书</a></div>'
+  + '<div class="b"><a href="/book/3/">斗罗外传</a></div>'
+  + '</body></html>'
 const TOC_HTML = '<html><body><div class="b ch"><a href="/c/1.html">第一章</a></div></body></html>'
 const CONTENT_HTML = '<html><body><div id="content">正文内容</div></body></html>'
 const rawSource = {
@@ -118,15 +130,23 @@ describe('工具 schema 契约（execute 输出 ≡ 声明 schema；schema ≡ w
   it('② schema 属性集 ≡ wire 类型字段集（表钉死；缺键投影差集=nullable→缺席）', async () => {
     const s = await svc()
     const search = schemaOf(s, 'dshnovel_search')
-    // ── dshnovel_search ≡ SearchGroup/SearchHit（`shared/wire.ts` 的两个 interface）──
-    // 清单住在 GROUP_FIELDS/HIT_FIELDS：运行时比 schema、编译期比 wire 类型（见文件头 ② ）
-    expect(propsOf(search, 'groups', '[]'))
-      .toEqual(new Set(GROUP_FIELDS))
-    expect(propsOf(search, 'groups', '[]', 'hits', '[]'))
-      .toEqual(new Set(HIT_FIELDS))
-    // 必填差集：wire 上 nullable 的字段（author/url/coverUrl/intro/lastChapterName）经缺键投影后可缺席
-    expect(requiredOf(search, 'groups', '[]')).toEqual(['hits', 'sourceId', 'sourceName', 'status'])
-    expect(requiredOf(search, 'groups', '[]', 'hits', '[]')).toEqual(['title'])
+    // ── dshnovel_search ≡ MergedBook/MergedSource（`shared/wire.ts` 的作品视图两个 interface）──
+    // 清单住在 BOOK_FIELDS/BOOK_SOURCE_FIELDS：运行时比 schema、编译期比 wire 类型（见文件头 ②）
+    expect(propsOf(search))
+      .toEqual(new Set(['books', 'failed', 'searched', 'answered', 'filtered', 'truncated']))
+    // 三读数是覆盖面回执，必须声明为必填——少一个 required，工具少报数就没人拦
+    expect(requiredOf(search)).toEqual(['answered', 'books', 'failed', 'filtered', 'searched'])
+    expect(propsOf(search, 'books', '[]'))
+      .toEqual(new Set(BOOK_FIELDS))
+    expect(propsOf(search, 'books', '[]', 'sources', '[]'))
+      .toEqual(new Set(BOOK_SOURCE_FIELDS))
+    // 必填差集：wire 上 nullable 的字段（author/url）经缺键投影后可缺席
+    expect(requiredOf(search, 'books', '[]')).toEqual(['relevance', 'sourceCount', 'sources', 'title'])
+    expect(requiredOf(search, 'books', '[]', 'sources', '[]')).toEqual(['sourceId', 'sourceName', 'title'])
+    // `failed` 是工具自己的投影（没有对应 wire 类型可绑，字面清单 + ① 的校验兜底）
+    expect(propsOf(search, 'failed', '[]'))
+      .toEqual(new Set(['sourceId', 'sourceName', 'code', 'message']))
+    expect(requiredOf(search, 'failed', '[]')).toEqual(['code', 'message', 'sourceId', 'sourceName'])
 
     // ── dshnovel_read：随读工具自己的规范值（sourceId/bookKey/chapterIndex/chapterName/text）──
     expect(propsOf(schemaOf(s, 'dshnovel_read')))

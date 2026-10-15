@@ -6,7 +6,7 @@ DeepSeek Harness（DSH）的「小说」插件：导入 legado 书源 → 聚合
 
 1. **`CONTEXT.md`** — 领域词汇表，每个词条点名它的**唯一实现**符号。命名新 module、改口径、写文档之前先查它：自造同义词会让同一概念长出第二份抄本。
 2. **`docs/architecture.md`** — 形状与归属：分几块、为什么这么切、某条语义该去哪改（唯一主人清单）。它**不装读数与决策**，只给地图。
-3. **`docs/adr/`** — 决策与它当初被否决的替代方案，每篇一个编号文件。**只追加**：推翻一条就写一篇标 superseded，别改写历史，也别重排编号（断号即有人抄不到那一页）。
+3. **`docs/adr/`** — 决策与它当初被否决的替代方案，每篇一个编号文件。**只追加**：推翻**整篇**就新写一篇并给旧篇标 superseded；只翻案旧篇里**个别条目**而整篇仍立的，在原条目后就地补订正括注（原话保留）、不另开新篇——标 superseded 反而更坏，因为那篇大多数字还立着。别改写历史，也别重排编号（断号即有人抄不到那一页）。
 4. **代码注释** — 局部口径的家。每条口径的「为什么、约束」就地写在实现它的那个符号头上（见下面「高度规范」）；跨子系统的全局论述才进 architecture.md。
 5. **`tests/legado-coverage/matrix.ts`** — 「彻底兼容 legado」的唯一读数口：一行一条 legado 语义，三态归属 + 证据 + 裁决理由 + 复核戳。
 6. **`README.md`** — 用户面与命令。
@@ -26,7 +26,7 @@ DeepSeek Harness（DSH）的「小说」插件：导入 legado 书源 → 聚合
 
 `pnpm test` 全绿只证明引擎 / 服务 / 契约 / 前端逻辑：**不证明**任何真实站点可用性、也不证明安装链路。`pnpm typecheck` 必须与 `pnpm test` **同批跑**：tests 在 tsconfig 内而 vitest 不查类型，props 缝加宽而某个测试文件没跟上，只有 tsc 抓得住。
 
-改动抓取 / 规则引擎 / 打包链路时，README「测试」节那几条门控（`DSH_REPROBE` / `DSH_CONTENT_AUDIT` / `COMPAT_CAPTURE` / `DSH_INSTALL_CHECK` / `DSH_EPUB_BROWSER` / `DSH_PARSE_CENSUS`）是唯一自动化验证——按那里的命令跑对应那条，并把结论**如实**写进汇报。注意分工：reprobe 只验**搜索面**，`verified` 不证明正文可读，正文口径是 `DSH_CONTENT_AUDIT`，而它是**审计报告**、不设通过率断言（分桶读数要人判）；`DSH_EPUB_BROWSER` 只在本机浏览器里量渲染与几何（本地书正文、组件排版），不起服务也不访问站点。
+改动抓取 / 规则引擎 / 打包链路，或改相关性判据 / 按书归并时，README「测试」节那几条门控（`DSH_REPROBE` / `DSH_CONTENT_AUDIT` / `DSH_SEARCH_FILTER_AUDIT` / `COMPAT_CAPTURE` / `DSH_INSTALL_CHECK` / `DSH_EPUB_BROWSER` / `DSH_PARSE_CENSUS`）是唯一自动化验证——按那里的命令跑对应那条，并把结论**如实**写进汇报。注意分工：reprobe 只验**搜索面**，`verified` 不证明正文可读，正文口径是 `DSH_CONTENT_AUDIT`，而它是**审计报告**、不设通过率断言（分桶读数要人判）；`DSH_SEARCH_FILTER_AUDIT` 真打聚合搜索、量相关性分档与按书归并的读数，同为**报告**、唯一断言只是判据自洽（分档不丢条），供裁「去虚字放行」那条偏离与那把归并键的焊错面；`DSH_EPUB_BROWSER` 只在本机浏览器里量渲染与几何（本地书正文、组件排版），不起服务也不访问站点。
 
 **取门的退出码，别看管道说了什么**：`pnpm test | grep` 之后退出码是 grep 的，红会被吃掉还留一句「全绿」。跑门一律两步：先把输出灌进文件，再单独打印退出码，汇报里把**退出码连同计数**一起抄。**跑门与提交必须是两条命令**——链式的下一环看的是别人的退出码，红也就跟着提交了。
 

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
+import { partitionByRelevance } from '../../shared/relevance.js'
 import { paramRoutes, shelfBody } from '../../shared/wire.js'
 import type { ExploreBook, SearchGroup, SearchHit } from '../../shared/wire.js'
 import { cityMeta, sheetKeyword } from '../city-view-model.js'
@@ -22,7 +23,12 @@ import { navigate } from '../store.js'
  *    一个槽、观察者跟随最近一轮，故这一列还多一条身份守卫：只认「本轮关键词就是这本书」的那一轮
  *    （见下面 `ownRound`）。
  * ③ 跨源结果**不替用户判是不是同一本书**：按源一行行列出来，该源上的书名与最新章都在行上，
- *    他自己看——与「不造分类同义词表」（`docs/adr/0027`）同一族纪律。
+ *    他自己看——与「不造分类同义词表」（`docs/adr/0027`）同一族纪律。这一行取该源哪一条命中由
+ *    相关性判据说了算（判据与档序的家在 `shared/relevance`，搜索结果页调的也是它；落点见 `GroupRow`），
+ *    判掉的条目只换位置不消失。**没当上代表的那几条在这一层哪儿都看不见**：这一层一家只给一行，
+ *    落选的相关条目（含被档序换下的到达首条）不像疑似无关那样有折叠区可去——按书那笔账是搜索面的事
+ *    （归并唯一实现 `shared/merge-by-book` 的 `mergeBooks`，只进结果页与工具面，裁决见 `docs/adr/0033`），
+ *    不在这里补一份；这一层维持逐源轴，三条读数（有命中／答了但零条／未响应）才不会被浓缩吞掉。
  * ④ 四种说法各说各的，谁都不许冒充谁：**进行中**（进度 + 可停止）／**零命中**（没有一家按这个
  *    书名搜到，不挂红条）／**有源没响应**（点名源与错误码）／**本源可读**（正常那一行）。
  *    停止不是失败；一家都没被问到也不是「搜了没命中」；某一家答了而零条命中不是「那家没响应」
@@ -62,13 +68,16 @@ export function CityBookSheet({ book, sourceId, sourceName, deps, onClose }: {
     }
   }, [])
 
+  /** 跨源那一次的关键词，本层只在这里向 `sheetKeyword` 取一次：本轮身份守卫与相关性分档读的是
+   *  同一个串，两处各拼一遍就会给「这一轮是不是这本书」与「这条命中相关吗」两种答案。 */
+  const keyword = sheetKeyword(book)
   /** 本轮身份守卫（口径②的后半）：`asked` 在点击瞬间即真，而挂载恢复交回的是搜索面**最近那一轮**——
    *  服务端只有一个槽、观察者跟随最近一轮（`docs/adr/0023`），那一轮的关键词很可能属于**另一本书**
    *  （上一本在这里点过跨源，或搜索面正拿着别处的结果）。本次 POST 回包之前的窗口里，不认关键词就会
    *  把别的书的命中当成本书的结果念给用户。判据：关键词与 `sheetKeyword` 给的那一个一致才算本轮，
    *  不一致就当还没出结果。**不顺手 cancel**：那是别人正在看的轮次，浮层没有停它的权利。 */
   const round = search.round
-  const ownRound = round !== null && round.keyword === sheetKeyword(book).trim() ? round : null
+  const ownRound = round !== null && round.keyword === keyword.trim() ? round : null
   const groups = ownRound?.groups ?? []
   /** 零命中判据（口径④）：**至少一家干净答了**，且答了的那些家全都零条命中。
    *  前半条不是多余的：只数「组里还有没有命中」时，这一列压根没有组、以及整列全是未响应——两种
@@ -105,7 +114,7 @@ export function CityBookSheet({ book, sourceId, sourceName, deps, onClose }: {
         <div className="novel-city-srclist">
           <SheetRow row={ownRow(book, sourceId, sourceName)} deps={deps} showLast={false} />
         </div>
-        <button className="novel-btn" onClick={() => { setAsked(true); search.submit(sheetKeyword(book)) }}>
+        <button className="novel-btn" onClick={() => { setAsked(true); search.submit(keyword) }}>
           {asked && ownRound?.running === true ? '在其他源找这本 · 进行中' : '在其他源找这本'}
         </button>
         {asked ? (
@@ -138,10 +147,11 @@ export function CityBookSheet({ book, sourceId, sourceName, deps, onClose }: {
                 没有一家按这个书名搜到——这既不是说这本书不存在，也不是搜索出了错。
               </div>
             ) : null}
-            {/* 各源命中就地长在同一列：一行一个源，不并成一条、不排序、不标「推荐这一本」 */}
+            {/* 各源命中就地长在同一列：一行一个源，不并成一条、不给源排序、不标「推荐这一本」。
+                源家数不变，变的只是这一行的**代表**由谁当——判据见 `GroupRow`。 */}
             {groups.length === 0 ? null : (
               <div className="novel-city-srclist">
-                {groups.map((g) => <GroupRow key={g.sourceId} group={g} deps={deps} />)}
+                {groups.map((g) => <GroupRow key={g.sourceId} group={g} keyword={keyword} deps={deps} />)}
               </div>
             )}
           </>
@@ -202,13 +212,15 @@ function addToShelf(row: SheetRowData, deps: ClientCoreDeps): void {
 }
 
 /** `showLast` 关掉「最新」那半句：本源那一行的最新归头部那颗 tag 说（它装得下整句），
- *  跨源各行说的是各家的最新，默认带着。 */
-function SheetRow({ row, deps, showLast = true }: {
-  row: SheetRowData; deps: ClientCoreDeps; showLast?: boolean
+ *  跨源各行说的是各家的最新，默认带着。
+ *  `showSource` 关掉源名：折叠区里那些行的家门由它们所在那行折叠的摘要说一次（同一组里说两遍就是
+ *  抄本），默认带着——本源那一行与各源的代表行都靠它自报家门。 */
+function SheetRow({ row, deps, showLast = true, showSource = true }: {
+  row: SheetRowData; deps: ClientCoreDeps; showLast?: boolean; showSource?: boolean
 }): ReactNode {
   return (
     <div className="novel-city-srcrow">
-      <span className="novel-city-srcrow-who">{row.sourceName}</span>
+      {showSource ? <span className="novel-city-srcrow-who">{row.sourceName}</span> : null}
       {row.listed === null ? null : <span className="novel-city-srcrow-last">{row.listed}</span>}
       {!showLast || row.lastChapter === null ? null : (
         <span className="novel-city-srcrow-last">最新：{row.lastChapter}</span>
@@ -231,8 +243,18 @@ function SheetRow({ row, deps, showLast = true }: {
 }
 
 /** 一个源在这一轮的三种来路，各说各的：有命中（一行动作）／答了但零条（空集合，不是没响应）／
- *  没答上来（点名源与错误码——沿用搜索面失败条那套「如实摊开」的措辞与同类容器）。 */
-function GroupRow({ group, deps }: { group: SearchGroup; deps: ClientCoreDeps }): ReactNode {
+ *  没答上来（点名源与错误码——沿用搜索面失败条那套「如实摊开」的措辞与同类容器）。
+ *
+ *  代表行取哪一条由相关性判据说了算（判据与档序的家在 `shared/relevance`，这里只消费；与搜索结果页
+ *  调的是同一个函数，两处的「相关」不许分叉）。这一层一家只给一行，所以判据买到的不是行数而是
+ *  **谁上这一行**：站点先回来的常常是推荐位，按到达序取就让无关条目占住这一源唯一的门面，
+ *  而那条真结果压根不出现。疑似无关的那些不删——收进该组末尾一行折叠，展开后照旧是可点的普通行
+ *  （判为疑似不夺走「读这本 / 加入书架」）。
+ *  「只回了疑似无关」既不是「这一家没有按这个书名搜到」（那是**答了而零条**的说法），也不是未响应
+ *  （它答了）——三条来路按答复长，不按默认视野长，所以这里只在真零条命中时才说那一句。 */
+function GroupRow({ group, keyword, deps }: {
+  group: SearchGroup; keyword: string; deps: ClientCoreDeps
+}): ReactNode {
   if (group.error !== undefined) {
     return (
       <details className="novel-city-fail">
@@ -248,8 +270,7 @@ function GroupRow({ group, deps }: { group: SearchGroup; deps: ClientCoreDeps })
       </details>
     )
   }
-  const hit = group.hits[0]
-  if (hit === undefined) {
+  if (group.hits.length === 0) {
     return (
       <div className="novel-city-srcrow">
         <span className="novel-city-srcrow-who">{group.sourceName}</span>
@@ -257,5 +278,22 @@ function GroupRow({ group, deps }: { group: SearchGroup; deps: ClientCoreDeps })
       </div>
     )
   }
-  return <SheetRow row={hitRow(group, hit)} deps={deps} />
+  const { kept, suspect } = partitionByRelevance(keyword, group.hits)
+  const best = kept[0]
+  return (
+    <>
+      {best === undefined ? null : <SheetRow row={hitRow(group, best.hit)} deps={deps} />}
+      {suspect.length === 0 ? null : (
+        <details className="novel-city-fail" data-novel-city-suspect>
+          <summary>
+            <span>{`${group.sourceName}：另有 ${suspect.length} 条疑似无关`}</span>
+            <span className="novel-city-fail-more">展开照旧可点（书名／作者／分类都不含关键词）</span>
+          </summary>
+          <div className="novel-city-srclist">
+            {suspect.map((m, i) => <SheetRow key={`s#${i}`} row={hitRow(group, m.hit)} deps={deps} showSource={false} />)}
+          </div>
+        </details>
+      )}
+    </>
+  )
 }

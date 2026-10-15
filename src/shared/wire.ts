@@ -94,6 +94,11 @@ export interface JobState {
 
 // ── 阅读面 ──────────────────────────────────────────────────────────────
 
+/** 一条命中与本轮关键词的关系（判据的唯一实现见 `shared/relevance.ts`）。
+ *  `suspect`＝不进默认视野的档、不删（不是「坏数据」也不是「已丢弃」）；空关键词时这一维不生效。
+ *  「为什么折叠而不丢弃、空串为何不参与比较」的裁决只住 `docs/adr/0032`，这里不复述。 */
+export type Relevance = 'exact' | 'contains' | 'suspect'
+
 /** 搜索命中条目：可空即 `null`，不是缺键 */
 export interface SearchHit {
   title: string
@@ -118,6 +123,31 @@ export interface SearchGroup {
   hits: SearchHit[]
   error?: { code: string; message: string }
 }
+
+/** 一本书在**一个源**上的那一条：字段取「这一家把它叫作什么」的原样，不归一、不投票。
+ *  两边名字都看得见是既有口径（书籍详情浮层那条），归并只收成一行，不改写任何一家的写法。 */
+export interface MergedSource {
+  sourceId: string
+  sourceName: string
+  title: string
+  author: string | null
+  url: string | null
+}
+
+/** 按书视图的一行：同一 `(书名, 作者)` 规范化键下的若干条命中。
+ *  它是**呈现层派生**，不落盘、不进 `SHELF_META`——书架身份仍是 `(sourceId, bookKey)`，
+ *  「一本书挂多源并搬进度」另有一篇待裁的 ADR，别在这里提前把它焊进类型面。 */
+export interface MergedBook {
+  title: string
+  author: string | null
+  /** 只会是 `exact`/`contains`：suspect 不进归并（裁决见 `docs/adr/0033`） */
+  relevance: 'exact' | 'contains'
+  sources: MergedSource[]
+  sourceCount: number
+}
+
+/** 按书默认视图的本数上限（超限那一行如实报总数——与每源命中截断同一族读数） */
+export const SEARCH_BOOKS_CAP = 200
 
 /** 聚合搜索后台任务的**读面快照**（跨半契约形状；服务端如何持有整轮结果属服务层，不上 wire）。
  *  为什么是「服务端持有 + 显式快照查询」：浏览器半自持在途循环会切走即丢结果；读面还须
@@ -158,7 +188,9 @@ export interface ExploreSources {
 /** 一本书：**某个源的某个分类下的一条**。不再有 `origins[]`/`sourceCount`——浏览面不跨源，
  *  那两个字段在单源下恒为「1 条 / 1 源」，是谎言字段。跨源视野由详情浮层那一次
  *  手动聚合搜索承担（主人 `client/search-job.ts`，不是这里）。
- *  `author` 为空的条目照旧合法（重名书大量存在，我们从不按书名合并任何东西）。
+ *  `author` 为空的条目照旧合法（重名书大量存在，而**类型面与落盘这一侧从不按书名合并任何东西**——
+ *  搜索面那一层按规范化 `(书名, 作者)` 归并的是呈现层投影，不落盘、不改这里的字段与书架身份，
+ *  见 `MergedBook` 与 `docs/adr/0033`）。
  *  **与 `SearchHit` 同字段集而三处异名（`name`/`bookUrl`/`lastChapter`）是刻意的两份语义**：
  *  这一张是浏览轴上「一家给的一条」，那一张是聚合搜索里「多家撞来的命中」——把它们并成一张，
  *  「一条命中就是一本书」与「同一本在几个源上」这两种判断就会在类型面上重新长在一起。

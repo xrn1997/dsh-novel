@@ -38,7 +38,7 @@ const UNITS: Record<string, string[]> = {
   C3: ['c-rule-search-subfields', 'c-explore-url', 'c-content-fields', 'c-toc-next', 'c-stringified-rule-objects', 'c-raw-fidelity', 'c-content-title', 'c-content-sub-content', 'g-callback-js'],
   C4: ['c-identity', 'd-groups-scope', 'k-import-dedup'],
   D1: ['d-book-list-fallback', 'd-name-author-cleanup', 'd-precise-search', 'c-search-url'],
-  D2: ['d-search-face', 'd-search-paging', 'd-merge-dedup', 'd-groups-scope', 'd-check-flow'],
+  D2: ['d-search-face', 'd-search-paging', 'd-merge-dedup', 'd-search-relevance', 'd-match-mode', 'd-groups-scope', 'd-check-flow'],
   D3: ['c-explore-url', 'd-native-rulefind-explore', 'd-explore-three-forms', 'd-explore-fallback-search-rule', 'h-source-refresh-explore'],
   E: ['e-detail-fields', 'e-detail-fallback-flat', 'e-init-replace-content', 'e-toc-html-reuse', 'e-word-count-format', 'e-intro-special-prefix'],
   F1: ['f-toc-rules', 'f-toc-url-per-item', 'f-toc-url-fallback', 'f-toc-paging', 'f-toc-reverse-twice', 'f-toc-cache', 'f-chapter-tag-update-time', 'c-toc-url'],

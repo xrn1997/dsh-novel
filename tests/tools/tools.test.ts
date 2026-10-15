@@ -1,9 +1,18 @@
 import { describe, expect, it } from 'vitest'
+import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
+import type { ToolOutputDefinition } from '@deepseek-ai/dsh-tools'
 import { ReadingService } from '../../src/services/reading.js'
+import { SEARCH_BOOKS_CAP } from '../../src/shared/wire.js'
 import { buildTools, registerTools } from '../../src/tools/tools.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
 
-const SEARCH_HTML = '<html><body><div class="b"><a href="/book/1/">斗罗</a><span>唐家</span></div><div class="b"><a href="/book/2/">无名书</a></div></body></html>'
+/** 三条 .b：① 含关键词且带作者、② 与关键词无涉、③ 含关键词而无作者 span。
+ *  ②③ 分工：② 钉「疑似无关整条不进输出」、③ 让「kept 内」与「缺键投影」两条判据同处可钉。 */
+const SEARCH_HTML = '<html><body>'
+  + '<div class="b"><a href="/book/1/">斗罗</a><span>唐家</span></div>'
+  + '<div class="b"><a href="/book/2/">无名书</a></div>'
+  + '<div class="b"><a href="/book/3/">斗罗外传</a></div>'
+  + '</body></html>'
 const TOC_HTML = '<html><body><div class="b ch"><a href="/c/1.html">第一章</a></div></body></html>'
 const CONTENT_HTML = '<html><body><div id="content">正文内容</div></body></html>'
 const rawSource = {
@@ -42,9 +51,15 @@ const run = async (s: ReadingService, name: string, args: unknown): Promise<any>
   const tool = buildTools(s).find((t) => t.name === name)!
   return tool.execute(args, exec)
 }
+/** render 的产物是 content 块数组，拼回一句文本才是模型读到的那一份——文案断言只能量这里。
+ *  入参类型取自 harness 的 ToolOutputDefinition，不在测试里放宽成 any：render 只认规范 JSON 值 */
+const asText = (blocks: unknown): string => (blocks as Array<{ type: 'text'; text: string }>).map((c) => c.text).join('')
+const renderOf = (s: ReadingService, name: string, args: unknown,
+  value: Parameters<ToolOutputDefinition['render']>[1]): string =>
+  asText(buildTools(s).find((t) => t.name === name)!.output.render(args, value))
 
 describe('agent 工具六件套', () => {
-  it('工具名齐 6 个且全部带 dshnovel_ 前缀（防生态撞名——宿主重名直接抛错）；dshnovel_search 结构化分组', async () => {
+  it('工具名齐 6 个且全部带 dshnovel_ 前缀（防生态撞名——宿主重名直接抛错）；dshnovel_search 按书返回且不摆疑似无关', async () => {
     const s = await svc()
     const names = buildTools(s).map((t) => t.name).sort()
     expect(names).toEqual(
@@ -52,13 +67,107 @@ describe('agent 工具六件套', () => {
     // 名字集合是占位锁：新增/改名工具必须显式过这条——前缀是与生态其他插件的硬边界
     for (const n of names) expect(n.startsWith('dshnovel_'), `${n} 缺 dshnovel_ 前缀`).toBe(true)
     const v = await run(s, 'dshnovel_search', { keyword: '斗罗' })
-    expect(v.groups[0]).toMatchObject({ sourceName: 'S', status: 'verified' })
-    expect(v.groups[0].hits[0]).toMatchObject({ title: '斗罗', author: '唐家', url: 'https://s.com/book/1/' })
+    // 按书视图：档序在前（exact 的斗罗先于 contains 的斗罗外传）；无名书与关键词无涉 ⇒ 整行不进输出
+    //（与用户看到的默认视野同一份，模型不该多看见一条）。列表式 toEqual 同时钉住「谁不进」与档序。
+    expect(v.books.map((b: { title: string }) => b.title)).toEqual(['斗罗', '斗罗外传'])
+    expect(v.books[0]).toMatchObject({ title: '斗罗', author: '唐家', relevance: 'exact', sourceCount: 1 })
+    // 逐源行的 sourceId 必须留在册——bookKey 单独不够，其他工具调用要行自己那一家的 id
+    expect(v.books[0].sources[0]).toMatchObject({ sourceId, sourceName: 'S', title: '斗罗', url: 'https://s.com/book/1/' })
+    expect(v.books[1].relevance).toBe('contains')
+    expect(v.failed).toEqual([])
     expect(JSON.stringify(v)).not.toContain('raw')     // 凭据/原文红线
-    // lossless：缺作者的书目缺键而非 author:undefined（undefined 属性值会被 harness 拒收）
-    expect(v.groups[0].hits[1]).toMatchObject({ title: '无名书' })
-    expect('author' in v.groups[0].hits[1]).toBe(false)
+    // 覆盖面三读数：跑了几家、几家干净答话、几条因不相关被移出默认视野——
+    // 「没人答话」与「答了但全不相关」是两个可区分的事实，空 books 不许冒充「没找到」。
+    expect({ searched: v.searched, answered: v.answered, filtered: v.filtered }).toEqual({ searched: 1, answered: 1, filtered: 1 })
+    expect('truncated' in v).toBe(false)               // 缺席=没截断：上限读数不许常驻
+    // 工具面真实输出整键缺席（project() 自身的形状纪律由 tests/tools/project.test.ts 钉住）——
+    // 这里是唯一证明 execute 真走了 project() 而非绕过的地方；hasUndefined 只管值不许是 undefined，管不到键。
+    expect('author' in v.books[1]).toBe(false)
+    expect('author' in v.books[1].sources[0]).toBe(false)
     expect(hasUndefined(v)).toBe(false)
+  })
+  it('dshnovel_search：books 为空时分得开「没人答话」「答了但全不相关」「答了但 0 条」（三读数 + failed 逐家点名）', async () => {
+    const dir = await makeTempDir('novel-disclose-')
+    const s = trackService(await ReadingService.create({
+      dir,
+      fetchImpl: (async (input: any) => {
+        const u = String(input)
+        // A 家答话但唯一一条与关键词无涉；B 家直接 404（本轮没答话）
+        if (u.includes('/searchA')) {
+          return new Response('<html><body><div class="b"><a href="/a/1/">射雕</a></div></body></html>',
+            { headers: { 'content-type': 'text/html; charset=utf-8' } })
+        }
+        // C 家的搜索页是空列表：干净答话、0 命中——本仓口径「0 命中是结果不是失败」，
+        // 所以 answered 认的是有没有 error，不是有没有货。按命中数计会让「答了但全不相关」与
+        // 「答了但这本没有」重新焊成一团，三读数存在的理由就没了。
+        if (u.includes('/searchC')) {
+          return new Response('<html><body></body></html>', { headers: { 'content-type': 'text/html; charset=utf-8' } })
+        }
+        return new Response('', { status: 404 })
+      }) as any,
+    }))
+    await s.importOne({ ...rawSource, bookSourceName: 'A', bookSourceUrl: 'https://a.com', searchUrl: 'https://a.com/searchA?q={{key}}' })
+    const idB = (await s.importOne({ ...rawSource, bookSourceName: 'B', bookSourceUrl: 'https://b.com', searchUrl: 'https://b.com/searchB?q={{key}}' })).sourceId!
+    await s.importOne({ ...rawSource, bookSourceName: 'C', bookSourceUrl: 'https://c.com', searchUrl: 'https://c.com/searchC?q={{key}}' })
+    const v = await run(s, 'dshnovel_search', { keyword: '斗罗' })
+    expect(v.books).toEqual([])
+    // 界面上这一轮是「相关 0 · 共 1」外加折叠；工具面没有折叠，只能靠读数分开几回事——
+    // C 家计入 answered 却不给 filtered 添一笔
+    expect({ searched: v.searched, answered: v.answered, filtered: v.filtered }).toEqual({ searched: 3, answered: 2, filtered: 1 })
+    expect(v.failed).toEqual([expect.objectContaining({ sourceId: idB, sourceName: 'B' })])
+    expect(typeof v.failed[0].code).toBe('string')
+    expect(hasUndefined(v)).toBe(false)
+    // 三读数进了结构字段还不算交付：模型读的是文案里「答话 N 家」那一分句，它得在场上
+    const say = renderOf(s, 'dshnovel_search', { keyword: '斗罗' }, v)
+    expect(say).toContain('0 本（跑了 3 家、答话 2 家、滤去 1 条不相关）')
+    // books 为空时摘要行直接接「未答话」那一行——那里多出来的空行是一条不存在的分隔
+    expect(say).not.toContain('\n\n')
+  })
+  it('dshnovel_search：本数超过返回上限时 truncated 如实报数，且那一支的输出过自身 schema', async () => {
+    const dir = await makeTempDir('novel-truncated-')
+    // 上限之上的那一支只有 cap+1 本才走得到；夹具按常量生成，改上限不用回来改这里的数字
+    const many = Array.from({ length: SEARCH_BOOKS_CAP + 1 }, (_, i) =>
+      `<div class="b"><a href="/book/${i}/">斗罗第${i}部</a><span>唐家</span></div>`).join('')
+    const s = trackService(await ReadingService.create({
+      dir,
+      fetchImpl: (async () => new Response(`<html><body>${many}</body></html>`,
+        { headers: { 'content-type': 'text/html; charset=utf-8' } })) as any,
+    }))
+    await s.importOne(rawSource)
+    const v = await run(s, 'dshnovel_search', { keyword: '斗罗' })
+    expect(v.books.length).toBe(SEARCH_BOOKS_CAP)
+    // 两个数各指各的：共几本说全量、只返回前几本说返回量——调换了模型就会以为没丢东西
+    expect(v.truncated).toBe(`本轮共 ${SEARCH_BOOKS_CAP + 1} 本，只返回前 ${SEARCH_BOOKS_CAP} 本`)
+    expect('truncated' in v).toBe(true)
+    // 声明了却没值的键钉不住 schema（tests/tools/schema-contract.test.ts 的口径）——
+    // 截断那一支也过一次 harness 同款校验，不靠字面量独自作证
+    const tool = buildTools(s).find((t) => t.name === 'dshnovel_search')!
+    expect(validateJsonSchemaValue(tool.output.schema, v, 'dshnovel_search')).toEqual([])
+  })
+  it('dshnovel_search 的 render：逐书一行、缺作者不印幽灵、行超 3 才标 …、覆盖面与未答话点名', async () => {
+    const s = await svc()
+    const body = renderOf(s, 'dshnovel_search', { keyword: '斗罗' }, await run(s, 'dshnovel_search', { keyword: '斗罗' }))
+    expect(body).toContain('《斗罗》 / 唐家 · 1 家源：S(https://s.com/book/1/)')
+    // 缺作者是整键不在（规范值经缺键投影）——按 null 哨兵比对的老写法会在这里印出「 / undefined」的幽灵作者
+    expect(body).toContain('《斗罗外传》 · 1 家源：S(https://s.com/book/3/)')
+    expect(body).not.toContain('undefined')
+    expect(body).toContain('2 本（跑了 1 家、答话 1 家、滤去 1 条不相关）')
+    // 行与家是两条读数：一家两行仍标 2 家（家数按去重）；省略号按**行数**超 3 判——按家数判会把 4 行截成
+    // 3 行还不吭声。缺 url 的行给「无地址」，不能印成空串冒充「没有地址这件事」。
+    const wide = renderOf(s, 'dshnovel_search', { keyword: '甲' }, {
+      books: [{ title: '甲', relevance: 'exact', sourceCount: 2, sources: [
+        { sourceId: 'x', sourceName: 'X', title: '甲', url: 'https://x/1' },
+        { sourceId: 'x', sourceName: 'X', title: '甲' },
+        { sourceId: 'y', sourceName: 'Y', title: '甲', url: 'https://y/1' },
+        { sourceId: 'y', sourceName: 'Y', title: '甲', url: 'https://y/2' },
+      ] }],
+      failed: [{ sourceId: 'z', sourceName: 'Z', code: 'Timeout', message: '等超时' }],
+      searched: 3, answered: 2, filtered: 5, truncated: '本轮共 9 本，只返回前 8 本',
+    })
+    expect(wide).toContain('《甲》 · 2 家源：X(https://x/1)；X(无地址)；Y(https://y/1)…')
+    expect(wide).toContain('1 本（跑了 3 家、答话 2 家、滤去 5 条不相关）')
+    expect(wide).toContain('1 家未答话：Z：Timeout')
+    expect(wide).toContain('本轮共 9 本，只返回前 8 本')
   })
   it('dshnovel_read：按 index 取正文', async () => {
     const s = await svc()
@@ -137,8 +246,10 @@ describe('agent 工具六件套', () => {
     expect(list.sources[0]).toMatchObject({ sourceId: id, name: 'S', enabled: true, status: 'verified' })
     expect(hasUndefined(list)).toBe(false)
     // 探针成功：error 键不存在而非 error:undefined（同款 lossless 雷）
+    // itemCount 是**搜索面解析到的条数**，与相关性视野无关（探针答的是「这一家能不能搜出东西」，
+    // 不是「这一家有几本相关」）——夹具三条 .b 就是三条。
     const p = await run(s, 'dshnovel_source', { action: 'probe', sourceId: id })
-    expect(p).toMatchObject({ action: 'probe', sourceId: id, ok: true, itemCount: 2 })
+    expect(p).toMatchObject({ action: 'probe', sourceId: id, ok: true, itemCount: 3 })
     expect('error' in p).toBe(false)
     expect(hasUndefined(p)).toBe(false)
     const off = await run(s, 'dshnovel_source', { action: 'disable', sourceId: id })

@@ -20,7 +20,9 @@ import { rect, stubLayout } from './scroll-stub.js'
  * 的先后。文件后半是书籍详情浮层那一族：本源的两个动作、书地址缺席时零入口，以及跨源那一次各说各的
  * 那些形状（进行中 / 零命中 / 有源没响应 / 某一家答了而零条 / 一家都没被问到 / 被停止）。零命中
  * 只由**答复**作证——整列未响应时那句不许出现；那一列也只认**本轮关键词**，挂载恢复带来的上一本书
- * 那一轮不会被当成本书的结果。
+ * 那一轮不会被当成本书的结果。跨源那一列还吃相关性判据：无关条目不占该源唯一的代表行、只回无关条目的
+ * 一家不许折成「这一家没有按这个书名搜到」，被折起来的那些展开后照旧可点。而这一列**不折叠成一本**：
+ * 按书归并只进搜索面（结果页与工具面），浮层维持逐源轴——钉这条是为了挡将来的「顺手统一」。
  *
  * 假依赖束走仓内唯一桩工厂 `tests/client/fake-deps.ts`。只喂三条口：可选源清单 / 服务端此刻持有的
  * 那一轮 / 提交一轮；SSE 缺省推一帧当前快照（与生产同路：首帧就是 baseline）。
@@ -377,7 +379,7 @@ const own = { sourceId: 's1', sourceName: '半夏小说' }
 
 /** 一个搜索分组（`SearchGroup` 的最小可用形状：源身份 + 命中；命中只填在意的字段，其余按 wire
  *  的「可空即 null」补齐——桩的形状必须与契约同形，不能靠缺键蒙过类型） */
-function group(sourceId: string, sourceName: string, hits: Array<{ title: string; author?: string; url?: string | null; lastChapterName?: string }>): SearchGroup {
+function group(sourceId: string, sourceName: string, hits: Array<{ title: string; author?: string; url?: string | null; lastChapterName?: string | null }>): SearchGroup {
   return {
     sourceId, sourceName, status: 'unverified',
     hits: hits.map((h) => ({
@@ -459,6 +461,64 @@ describe('CityBookSheet（书籍详情浮层：本源两动作 + 跨源那一次
     expect(screen.getByText(/Timeout/)).toBeTruthy()
   })
 
+  it('跨源那一次按相关性收视野：无关条目进折叠区，展开后仍可点；本源那一行不受影响', async () => {
+    openSheet(<CityBookSheet book={aBook} {...own} deps={depsWithGroups([
+      group('s2', '顶点', [
+        { title: '半城风月（顶点叫法）', author: '沈念', url: 'https://v/9', lastChapterName: '第 12 章' },
+        { title: '与这本无关的推荐位', author: '他人', url: 'https://v/x', lastChapterName: null },
+      ]),
+    ])} onClose={noop} />)
+    fireEvent.click(screen.getByRole('button', { name: /在其他源找这本/ }))
+    await waitFor(() => expect(screen.getByText('顶点')).toBeTruthy(), { timeout: 2500 })
+    // 折叠判据只能钉 DOM 事实：jsdom 没有 UA 样式表，closed <details> 的内容照样查得到，
+    // 用 queryByText(...).toBeNull() 既红得莫名其妙，又会在「实现真把条目删了」时假绿。
+    const fold = document.querySelector('details')
+    expect(fold, '该组要有折叠区').not.toBeNull()
+    expect(fold!.open, '默认收起').toBe(false)
+    expect(screen.getByText(/半城风月（顶点叫法）/).closest('details'), '相关那条不在折叠区里').toBeNull()
+    expect(fold!.textContent).toContain('与这本无关的推荐位')
+    fireEvent.click(fold!.querySelector('summary')!)
+    expect(fold!.open, '点了要展开').toBe(true)
+    expect(screen.getAllByRole('button', { name: '读这本' }).length).toBeGreaterThanOrEqual(2)
+  })
+
+  // 代表行取哪一条也是判据的事：站点先回来的常常是推荐位，按到达序取就是让无关条目占住这一源唯一的
+  // 那一行——那条真结果则压根不上默认视野（这一层一行一个源，见 `GroupRow` 的三种来路）。
+  it('无关那条不许占这一源的代表行：档首相关的那条上默认视野，无关那条留在折叠区里', async () => {
+    openSheet(<CityBookSheet book={aBook} {...own} deps={depsWithGroups([
+      group('s2', '顶点', [
+        { title: '与这本无关的推荐位', author: '他人', url: 'https://v/x', lastChapterName: '第 1 章' },
+        { title: '半城风月（顶点叫法）', author: '沈念', url: 'https://v/9', lastChapterName: '第 12 章' },
+      ]),
+    ])} onClose={noop} />)
+    fireEvent.click(screen.getByRole('button', { name: /在其他源找这本/ }))
+    await waitFor(() => expect(screen.getByText('顶点')).toBeTruthy(), { timeout: 2500 })
+    expect(screen.getByText(/最新：第 12 章/).closest('details'), '代表行是相关那一条（它的最新在默认视野）').toBeNull()
+    expect(screen.getByText(/与这本无关的推荐位/).closest('details'), '无关那条要在折叠区里').not.toBeNull()
+  })
+
+  // 三种来路的读数是按**答复**长的，不是按默认视野长的：只回了疑似无关的一家既不是「这一家没搜到」
+  // （它答了，条目都在折叠里），也不是「没有一家按这个书名搜到」（那是答复的总结）。
+  it('某一家只回疑似无关：不折成「这一家没有按这个书名搜到」，折叠那一行点名这一家回了什么', async () => {
+    openSheet(<CityBookSheet book={aBook} {...own} deps={depsWithGroups([
+      group('s2', '顶点', [{ title: '与这本无关的推荐位', author: '他人', url: 'https://v/x', lastChapterName: null }]),
+      group('s3', '书海', [{ title: '半城风月', author: '沈念', url: 'https://s/9', lastChapterName: null }]),
+    ])} onClose={noop} />)
+    fireEvent.click(screen.getByRole('button', { name: /在其他源找这本/ }))
+    await waitFor(() => expect(screen.getByText('书海')).toBeTruthy(), { timeout: 2500 })
+    const fold = document.querySelector('details')
+    expect(fold, '只回无关条目那组要有折叠区').not.toBeNull()
+    // 回正标记按计数钉：疑似折叠恰一条（styles 里那条标记级规则认领的就是它，标记掉了规则成死规则；
+    // 贴到别家折叠上则由下一条用例红）
+    expect(fold!.hasAttribute('data-novel-city-suspect'), '疑似折叠要带标记：非故障的容器靠它回正线条与底色').toBe(true)
+    expect(document.querySelectorAll('[data-novel-city-suspect]'),
+      '标记只属于疑似折叠：这一轮一家疑似，恰一条').toHaveLength(1)
+    expect(fold!.textContent).toContain('与这本无关的推荐位')
+    expect(fold!.querySelector('summary')?.textContent).toContain('顶点')   // 默认视野只有这一行要说得出是谁家的
+    expect(screen.queryByText(/这一家没有按这个书名搜到/)).toBeNull()
+    expect(screen.queryByText(/没有一家按这个书名搜到/)).toBeNull()
+  })
+
   it('跨源一条没搜到 ≠ 失败：说的是「没有一家按这个书名搜到」，不许挂红条', async () => {
     openSheet(<CityBookSheet book={aBook} {...own} deps={depsWithGroups([
       group('s2', '顶点', []), group('s3', '多看', []),
@@ -481,6 +541,8 @@ describe('CityBookSheet（书籍详情浮层：本源两动作 + 跨源那一次
     await waitFor(() => expect(screen.getAllByText(/未响应/)).toHaveLength(2), { timeout: 2500 })
     expect(screen.queryByText(/没有一家按这个书名搜到/)).toBeNull()
     expect(screen.queryByText(/这一家没有按这个书名搜到/)).toBeNull()
+    expect(document.querySelectorAll('[data-novel-city-suspect]'),
+      '未响应是真失败：不许蹭疑似折叠的回正标记，红框红底原样留着').toHaveLength(0)
   })
 
   it('零命中那句只由答复作证：一家答了、零条，另一家未响应——两句话各说各的', async () => {
@@ -554,5 +616,20 @@ describe('CityBookSheet（书籍详情浮层：本源两动作 + 跨源那一次
     release({ jobId: 'sj1' })
     await waitFor(() => expect(screen.getByText(/正在启动跨源搜索/)).toBeTruthy(), { timeout: 2500 })
     expect(screen.queryByText('上一本书的源')).toBeNull()               // 本轮自己还没有答复可列
+  })
+
+  // 浮层维持逐源轴：这一层谈的**本来就是一本**，按书归并（`shared/merge-by-book.ts` 的 `mergeBooks`，
+  // 只进搜索面）在这里买不到任何浓缩，却会吞掉三条既有读数——有命中／答了但零条／未响应，逐源各说各的。
+  // 这条钉子不改行为，挡的是将来「顺手统一」把逐源轴拆了（裁决见 docs/adr/0033，本浮层刻意不吃归并）。
+  it('浮层的跨源那一列不折叠成一本：三家答法各异，逐行各自可见', async () => {
+    openSheet(<CityBookSheet book={aBook} {...own} deps={depsWithGroups([
+      group('s2', '顶点', [{ title: '半城风月（顶点叫法）', author: '沈念', url: 'https://v/9', lastChapterName: null }]),
+      group('s3', '书海', [{ title: '半城风月', author: '沈念', url: 'https://s/9', lastChapterName: null }]),
+      group('s4', '轻读', [{ title: '半城风月（轻读叫法）', author: '沈念', url: 'https://q/9', lastChapterName: null }]),
+    ])} onClose={noop} />)
+    fireEvent.click(screen.getByRole('button', { name: /在其他源找这本/ }))
+    await waitFor(() => expect(screen.getByText('顶点')).toBeTruthy(), { timeout: 2500 })
+    expect(screen.getAllByRole('button', { name: '读这本' })).toHaveLength(4)          // 本源 + 三家
+    expect(screen.queryByText(/家源/)).toBeNull()                                       // 「N 家源」那一行属于搜索面
   })
 })
