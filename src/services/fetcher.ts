@@ -10,12 +10,15 @@ export interface FetchedPage {
   contentType: string | undefined
   /** 从 Content-Type 提取的 charset（无则 undefined） */
   charset: string | undefined
-  /** HTTP 状态码。守门 fetcher 对非 2xx 抛 FetchError，所以在成功返回的页里它恒为 2xx/3xx；
+  /** HTTP 状态码。守门 fetcher 缺省对非 2xx 抛 FetchError，所以在成功返回的页里它恒为 2xx/3xx；
+   *  `manual: true`（`java.head` 的重定向探测）例外——那时这一项就是要读的状态本身，可为任意码。
    *  它存在的理由是 `java.post(...).statusCode()`（响应对象要能给出这一项，缺它就只能编一个）。 */
   status: number
   /** 响应 `Set-Cookie` 头原文数组（无则空数组）——`java.post(...).cookies()` 的数据源。
    *  本仓**不**实现 cookie jar 自动回带（见矩阵 `b-cookie-jar`）：这里只给脚本自己读。 */
   setCookie: string[]
+  /** 响应头表（小写键名）——`java.head` 的 `.headers()` 数据源；手工构造的测试页可缺省。 */
+  headers?: Record<string, string>
 }
 
 export interface FetcherOptions {
@@ -30,6 +33,8 @@ export interface Fetcher {
     headers?: Record<string, string>; method?: string; body?: string
     /** 本次调用的超时覆盖（缺省 = createFetcher 的 timeoutMs）；超时 abort + FetchError */
     timeoutMs?: number
+    /** HEAD 探测姿态：redirect:'manual' 且非 2xx 不抛——要的就是 3xx 的状态与头（`java.head`） */
+    manual?: boolean
   }): Promise<FetchedPage>
 }
 
@@ -100,7 +105,7 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
 
   return {
     async fetchPage(url: string, init?: {
-      headers?: Record<string, string>; method?: string; body?: string; timeoutMs?: number
+      headers?: Record<string, string>; method?: string; body?: string; timeoutMs?: number; manual?: boolean
     }): Promise<FetchedPage> {
       const timeoutMs = init?.timeoutMs ?? defaultTimeoutMs
       const ctrl = new AbortController()
@@ -117,12 +122,14 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
             headers: mergeHeaders(init?.headers),
             ...(init?.method === undefined ? {} : { method: init.method }),
             ...(init?.body === undefined ? {} : { body: init.body }),
+            ...(init?.manual === true ? { redirect: 'manual' as const } : {}),
             signal: ctrl.signal,
             ...(dispatcher === undefined ? {} : { dispatcher }),
           }),
           timeout,
         ])
-        if (!res.ok) {
+        // 守门口径：缺省非 2xx 即 FetchError；manual（HEAD 探测——看的就是 3xx 的 Location）放行
+        if (!res.ok && init?.manual !== true) {
           throw new FetchError(`请求失败 ${res.status}: ${url}`, { url, status: res.status })
         }
         const contentType = res.headers.get('content-type') ?? undefined
@@ -134,6 +141,7 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
           charset,
           status: res.status,
           setCookie: typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [],
+          headers: Object.fromEntries(res.headers.entries()),
         }
       } catch (e) {
         if (e instanceof FetchError) throw e

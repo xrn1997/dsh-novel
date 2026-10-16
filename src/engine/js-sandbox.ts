@@ -62,6 +62,7 @@ export interface RunScriptOptions {
   sourceName?: string
   fetch?: (url: string) => Promise<{ body: string; contentType?: string }>
   fetchRaw?: (url: string) => Promise<Uint8Array>
+  fetchHead?: (url: string, headers?: Record<string, string>) => Promise<{ url: string; statusCode: number; headers: Record<string, string> }>
   jsLib?: string
   jsTimeoutMs?: number
   loc: SegmentLoc
@@ -80,6 +81,7 @@ export function runScript(o: RunScriptOptions): Promise<JsOutcome> {
     ...(o.vars === undefined ? {} : { vars: o.vars }),
     ...(o.fetch === undefined ? {} : { fetch: o.fetch }),
     ...(o.fetchRaw === undefined ? {} : { fetchRaw: o.fetchRaw }),
+    ...(o.fetchHead === undefined ? {} : { fetchHead: o.fetchHead }),
     ...(o.jsLib === undefined ? {} : { jsLib: o.jsLib }),
     ...(o.jsTimeoutMs === undefined ? {} : { jsTimeoutMs: o.jsTimeoutMs }),
     ...(o.sourceComment === undefined ? {} : { sourceComment: o.sourceComment }),
@@ -221,6 +223,27 @@ const BOOTSTRAP = `;(function (g) {
         contentType: function () { return r.contentType === undefined ? '' : r.contentType },
         url: function () { return r.url },
         cookies: function () { return r.cookies === undefined ? {} : r.cookies },
+      }
+    }
+    : function () { throw new Error('__dsh_sync_ajax_required__') }
+  // java.head：与 connect/post 同款网络同步语义（worker 直通、主线程哨兵换道）。数据面只有
+  // { url, statusCode, headers }；只包真有数据的访问器（同 post 的口径，不编空壳）。
+  // headers() 读取面大小写不敏感（脚本写 ["Location"] 与 ["location"] 两种形态都命中）。
+  const head = d.syncAjax
+    ? function () {
+      let r
+      try { r = JSON.parse(invoke('head', [].slice.call(arguments))) } catch (e) { throw new Error(msg(e)) }
+      return {
+        statusCode: function () { return r.statusCode },
+        url: function () { return r.url },
+        headers: function () {
+          return new Proxy(r.headers === undefined ? {} : r.headers, {
+            get: function (t, p) {
+              if (typeof p !== 'string') return t[p]
+              return t[p] !== undefined ? t[p] : t[p.toLowerCase()]
+            },
+          })
+        },
       }
     }
     : function () { throw new Error('__dsh_sync_ajax_required__') }
@@ -487,6 +510,7 @@ const BOOTSTRAP = `;(function (g) {
     downloadFile: downloadFile,
     connect: connect,
     post: post,
+    head: head,
     log: log('console.log'),
     toast: function(){}, longToast: function(){}, copyText: function(){},
     startBrowser: function(){}, open: function(){}, openUrl: function(){},
@@ -496,6 +520,9 @@ const BOOTSTRAP = `;(function (g) {
       return {
         decryptStr: function (data) {
           return JSON.parse(call('aesBase64DecodeToString', ser([String(data), String(key), String(transformation || 'AES/CBC/PKCS5Padding'), String(iv || '')])))
+        },
+        decrypt: function (data) {
+          return JSON.parse(call('aesDecryptToBytes', ser([String(data), String(key), String(transformation || 'AES/CBC/PKCS5Padding'), String(iv || '')])))
         },
         encryptStr: function () { throw new Error('java.createSymmetricCrypto().encryptStr 不支持：v1 仅实现正文解密形态') },
       }

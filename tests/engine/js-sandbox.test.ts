@@ -140,6 +140,59 @@ describe('@js 沙箱', () => {
     // androidId 现在也是点名桩（不是 TypeError: is not a function）——脚本能看懂差在哪
     await expect(run('return java.androidId()')).rejects.toThrow(/需要安卓宿主环境/)
   })
+  it('java.head(url, headers) → 数据面方法壳（statusCode/url/headers()；头名大小写不敏感）', async () => {
+    const seen: Array<[string, Record<string, string> | undefined]> = []
+    const ctx = ctxOf({
+      fetchHead: async (u, h) => {
+        seen.push([u, h])
+        return { url: 'https://i.pximg.net/a.png', statusCode: 302, headers: { location: 'https://i.pximg.net/a.png' } }
+      },
+    })
+    const v = await run(
+      'const r = await java.head("https://m.example.com/img", { "X-Requested-With": "XMLHttpRequest" })' +
+      '; return r.statusCode() + "|" + r.url() + "|" + r.headers()["Location"] + "|" + r.headers()["location"]',
+      hostOf(), ctx,
+    )
+    expect(v.value).toEqual({ kind: 'value', text: '302|https://i.pximg.net/a.png|https://i.pximg.net/a.png|https://i.pximg.net/a.png' })
+    expect(seen[0]?.[1]).toEqual({ 'X-Requested-With': 'XMLHttpRequest' })
+  })
+  it('java.head：请求头 JSON 串两形态都收；未接 fetchHead / 参数空 → 点名', async () => {
+    const ctx = ctxOf({ fetchHead: async () => ({ url: 'u', statusCode: 200, headers: {} }) })
+    const v = await run('return (await java.head("https://m.example.com/a", "{\\"Referer\\":\\"https://r\\"}")).statusCode()', hostOf(), ctx)
+    expect(v.value).toEqual({ kind: 'value', text: '200' })
+    await expect(run('return (await java.head("https://m.example.com/a")).statusCode()'))
+      .rejects.toThrow(/ctx.fetchHead 缺失/)
+    await expect(run('return (await java.head(null)).statusCode()', hostOf(), ctx))
+      .rejects.toThrow(/java.head 参数为空/)
+  })
+  it('java.hexEncodeToString / java.bytesToStr：与 hexDecode/strToBytes 往返', async () => {
+    const hex = await run('return java.hexEncodeToString("中文")')
+    expect(hex.value).toEqual({ kind: 'value', text: Buffer.from('中文', 'utf8').toString('hex') })
+    const rt = await run('return java.bytesToStr(java.strToBytes("汉字GBK", "GBK"), "GBK")')
+    expect(rt.value).toEqual({ kind: 'value', text: '汉字GBK' })
+    await expect(run('return java.bytesToStr("not-bytes")')).rejects.toThrow(/不是字节数组/)
+  })
+  it('java.createSymmetricCrypto(...).decrypt → 字节组（与 bytesToStr 串成解密链）', async () => {
+    const nodeCrypto = await import('node:crypto')
+    const key = 'k'.repeat(16); const iv = 'i'.repeat(16)
+    const enc = nodeCrypto.createCipheriv('aes-128-cbc', Buffer.from(key), Buffer.from(iv))
+    const b64 = Buffer.concat([enc.update(Buffer.from('真实路径', 'utf8')), enc.final()]).toString('base64')
+    const v = await run(`const c = java.createSymmetricCrypto("AES/CBC/PKCS5Padding", "${key}", "${iv}"); return java.bytesToStr(c.decrypt("${b64}"))`)
+    expect(v.value).toEqual({ kind: 'value', text: '真实路径' })
+  })
+  it('java.getCookie：无 key 拼整表、有 key 取单值（jar 按源隔离）', async () => {
+    const session = createSourceSession()
+    const jar = session.cookieJar('https://m.example.com')
+    jar.set('sid', 'abc'); jar.set('t', '1')
+    const outcome = await runScript({
+      code: 'return java.getCookie("https://m.example.com") + "|" + java.getCookie("https://m.example.com", "sid")',
+      baseUrl: 'https://m.example.com',
+      loc: L,
+      facet: 'content',
+      session,
+    })
+    expect(outcome.value).toEqual({ kind: 'value', text: 'sid=abc; t=1|abc' })
+  })
   it('java.connect(url) → 响应对象形态（对象 {url, body}，不是串）', async () => {
     const ctx = ctxOf({ fetch: async (u) => ({ body: 'B:' + u }) })
     const v = await run(

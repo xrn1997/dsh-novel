@@ -22,6 +22,24 @@ describe('fetchPage', () => {
     const f = createFetcher({ fetchImpl: fakeFetch(() => ({ status: 404, body: '' })) })
     await expect(f.fetchPage('https://a.com/404')).rejects.toMatchObject({ name: 'FetchError', status: 404, url: 'https://a.com/404' })
   })
+  it('manual 姿态：带 redirect:manual 出站、非 2xx 不抛、响应头表可读（`java.head` 的探测面）', async () => {
+    let seen: RequestInit | undefined
+    const f = createFetcher({
+      fetchImpl: fakeFetch((_url, init) => {
+        seen = init
+        return { status: 302, body: '', headers: { location: 'https://i.pximg.net/a.png', 'x-origin-url': 'https://alt/a.png' } }
+      }),
+    })
+    const p = await f.fetchPage('https://a.com/img', { method: 'HEAD', manual: true })
+    expect(seen?.redirect).toBe('manual')
+    expect(p.status).toBe(302)
+    expect(p.headers).toMatchObject({ location: 'https://i.pximg.net/a.png', 'x-origin-url': 'https://alt/a.png' })
+    // 缺省姿态照旧炸：例外只在那一个调用点开（`docs/adr/0015` 的订正括注）
+    await expect(f.fetchPage('https://a.com/img', { method: 'HEAD' })).rejects.toMatchObject({ name: 'FetchError', status: 302 })
+    // 这条桩**证不了** undici 真把 3xx 的状态与头透出来（那是 Node 侧行为，本机以本地 302 服务实测过：
+    // `type: basic`、status 302、location 可读，不是浏览器那种 opaqueredirect 空壳）。
+    // 这里钉的是本仓自己的两件事：请求确实带 manual 出站、非 2xx 在 manual 下不折叠成错误。
+  })
   it('网络层异常 → FetchError', async () => {
     const f = createFetcher({ fetchImpl: async () => { throw new TypeError('fetch failed') } })
     await expect(f.fetchPage('https://a.com')).rejects.toBeInstanceOf(FetchError)

@@ -89,6 +89,11 @@ export function hexDecodeToString(hex: string): string {
   return Buffer.from(clean, 'hex').toString('utf8')
 }
 
+/** UTF-8 字符串 → 十六进制串（`java.hexEncodeToString` 宿主实现；对面 Kotlin `toHexString` = 小写）。 */
+export function hexEncodeToString(utf8: string): string {
+  return Buffer.from(String(utf8), 'utf8').toString('hex')
+}
+
 /**
  * HTML 实体反转义（**白名单近似**，不是全表）：数字引用（`&#n;` / `&#xhh;`）+ HTML4 常用命名集。
  * **未知实体原样留**——与本页 `engine/dom` 的实体口径同一条纪律（不猜），差集只是「原样留」，

@@ -285,7 +285,9 @@ export class ReadingService {
   }
 
   /** loginUrl JS 形态：沙箱执行取 cookie 串 → 解析 k=v; → setAuth + persist。
-   *  空产出（脚本没 return 出 cookie，或只用 cookie.setCookie 垫片——该 jar 从不回读）**不算登录**：
+   *  空产出（脚本没 return 出 cookie，或只写 `cookie.setCookie` 垫片又不 `java.getCookie` 读回——
+   *  jar 只回读脚本自己写进去的那份，**HTTP 响应的 `Set-Cookie` 从不落库**，口径见矩阵 `b-cookie-jar`）
+   *  **不算登录**：
    *  返回 null 且不写 auth（曾落空 auth 把 hasAuth 点亮成「已登录」而零凭据）。
    * URL 形态由调用侧分流（不在此处理——开新 tab + cookie 录入，不注入 WebView）。 */
   async runLogin(id: string): Promise<SourceAuth | null> {

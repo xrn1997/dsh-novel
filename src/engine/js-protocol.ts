@@ -23,6 +23,7 @@ import {
   hMacBase64,
   hMacHex,
   hexDecodeToString,
+  hexEncodeToString,
   javaDecode,
   javaEncode,
   md5Hex,
@@ -183,6 +184,29 @@ export const JAVA_PROTOCOL = [
     }
     return d.ctx.userAgent()
   }),
+  // java.head(url, headers[, timeout])：HEAD 请求、**不跟重定向**（对面 followRedirects(false)），
+  // 数据面 = { url, statusCode, headers }；`.headers()` 方法壳在 BOOTSTRAP 里包（同 post，跨桥只走
+  // JSON）。脚本用它读 `res.headers()["location"]` 取图片直链（Linpx/兽人小说站 jsLib）。
+  method('head', { obj: 'java' }, (d) => async (
+    url: unknown, headersArg?: unknown,
+  ): Promise<{ url: string; statusCode: number; headers: Record<string, string> }> => {
+    const headFn = d.ctx.fetchHead
+    if (!headFn) {
+      throw new JsSandboxError('该源未提供 HEAD 请求能力（ctx.fetchHead 缺失）', { ...d.loc, facet: d.facet, script: d.code })
+    }
+    if (url === null || url === undefined) {
+      throw new JsSandboxError('java.head 参数为空（脚本传进 null/undefined）', { ...d.loc, facet: d.facet, script: d.code })
+    }
+    let hdrs: Record<string, string> | undefined
+    if (typeof headersArg === 'string' && headersArg.trim() !== '') {
+      try { hdrs = JSON.parse(headersArg) as Record<string, string> } catch {
+        throw new JsSandboxError(`java.head 的 header 参数不是 JSON：${headersArg.slice(0, 60)}`, { ...d.loc, facet: d.facet, script: d.code })
+      }
+    } else if (headersArg !== null && typeof headersArg === 'object' && headersArg !== undefined) {
+      hdrs = headersArg as Record<string, string>
+    }
+    return headFn(String(url), hdrs)
+  }, 'async'),
   // ── 沙箱变量（java.get/put）─────────────────────────────────────────
   // 未设 → **空串**（变量读的收口是「本表 → 大变量表 → 空串」三级回落）。曾返 undefined 过 JSON 桥
   // 变成 null：`String(java.get('x'))` 得到字面量 "null" 拼进密钥/URL（静默错值）。
@@ -264,12 +288,18 @@ export const JAVA_PROTOCOL = [
   method('toNumChapter', { obj: 'java' }, () => (s: string): string => toNumChapter(String(s))),
   method('encodeURI', { obj: 'java' }, () => (s: string): string => uriEncode(String(s))),
   method('hexDecodeToString', { obj: 'java' }, () => (hex: string): string => hexDecodeToString(String(hex))),
+  method('hexEncodeToString', { obj: 'java' }, () => (utf8: string): string => hexEncodeToString(String(utf8))),
   // ── AES 解密桥（真实源正文解密形态
   //    `java.aesBase64DecodeToString(data, key, transformation, iv)`——key/iv 为 utf8 字符串，
   //    PKCS5Padding ≡ PKCS7，Node crypto 原生支持）──
   method('aesBase64DecodeToString', { obj: 'java' }, (d) =>
     (data: string, key: string, transformation?: string, iv?: string): string =>
       aesDecryptB64(String(data), String(key), String(transformation ?? 'AES/CBC/PKCS5Padding'), String(iv ?? ''), d)),
+  // `createSymmetricCrypto(...).decrypt(data)` 的宿主口：返回**字节**（number[]），脚本常再接
+  // `java.bytesToStr(decrypted)`（对面 SymmetricCrypto.decrypt 返 ByteArray；见 js-sandbox 的链式壳）。
+  method('aesDecryptToBytes', { obj: 'java' }, (d) =>
+    (data: string, key: string, transformation?: string, iv?: string): number[] =>
+      Array.from(aesDecryptB64Buffer(String(data), String(key), String(transformation ?? 'AES/CBC/PKCS5Padding'), String(iv ?? ''), d))),
   // ── cookie 垫片（挂 cookie.getCookie/setCookie/removeCookie）─────────
   method('cookieGet', { obj: 'cookie', as: 'getCookie' }, (d) => (name: string): string | null =>
     jar(d).get(String(name)) ?? null),
@@ -278,6 +308,15 @@ export const JAVA_PROTOCOL = [
   }),
   method('cookieRemove', { obj: 'cookie', as: 'removeCookie' }, (d) => (name: string): void => {
     jar(d).delete(String(name))
+  }),
+  // java.getCookie(tag[, key])：对面按 url-tag 读 CookieStore；本仓 jar 按**源**隔离（name→value），
+  // tag 不进判据——无 key 时取整表拼 cookie 串（近似，矩阵 `h-java-getcookie` 记差）。
+  method('getCookie', { obj: 'java' }, (d) => (_tag: string, key?: unknown): string => {
+    const j = jar(d)
+    if (key !== undefined && key !== null && String(key) !== '') return j.get(String(key)) ?? ''
+    const parts: string[] = []
+    for (const [k, v] of j) parts.push(`${k}=${v}`)
+    return parts.join('; ')
   }),
   // ── 源级状态（挂 source.getVariable/setVariable/get/put 与 cache.*）─────
   // 口径是**三处独立存储**：单串槽 / 键值表 / 缓存表，按源建档、互不串味（曾混在一张 Map 里
@@ -333,6 +372,16 @@ export const JAVA_PROTOCOL = [
   }),
   method('base64DecodeToByteArray', { obj: 'java' }, () => (b64: string): number[] =>
     Array.from(Buffer.from(String(b64), 'base64'))),
+  // bytesToStr：与 strToBytes 互逆（真实源 AES 解密链 `java.bytesToStr(crypto.decrypt(x))`——
+  // 丁丁/盗版顶点/笔趣阁三源章节 URL）。默认 charset = UTF-8（对面 `String(bytes, charset("UTF-8"))`）。
+  method('bytesToStr', { obj: 'java' }, () => (bytes: unknown, charset?: unknown): string => {
+    if (!Array.isArray(bytes) && !(bytes instanceof Uint8Array)) {
+      throw new JsSandboxError(`bytesToStr 参数不是字节数组（${typeof bytes}）`, { facet: 'rule', segmentIndex: -1, segmentRaw: String(bytes).slice(0, 64), script: '' })
+    }
+    const buf = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes as number[])
+    const cs = charset === undefined || charset === null || String(charset) === '' ? 'UTF-8' : String(charset)
+    return javaDecode(buf, cs)
+  }),
   // ── 文件下载（downloadFile / readTxtFile）───────────────────────────
   // **进程内暂存**（非真实磁盘）：downloadFile 取字节存表、readTxtFile 取表解码——
   // 刻意**不暴露真实文件系统**（书源脚本可读任意本地路径 = 数据外泄面）；
@@ -384,6 +433,11 @@ function storeFile(path: string, bytes: Uint8Array): void {
 /** AES 解密（base64 密文 → utf8 明文）：transformation 形如 `AES/CBC/PKCS5Padding`；
  *  模式不识别 / 密钥或 IV 长度不合法 → 宁炸（JsSandboxError 带定位，不返回假明文） */
 function aesDecryptB64(data: string, key: string, transformation: string, iv: string, d: BridgeDeps): string {
+  return aesDecryptB64Buffer(data, key, transformation, iv, d).toString('utf8')
+}
+
+/** 同上但返回**原始字节**（`createSymmetricCrypto(...).decrypt` 与 `aesDecryptToBytes` 的口） */
+function aesDecryptB64Buffer(data: string, key: string, transformation: string, iv: string, d: BridgeDeps): Buffer {
   const parts = transformation.toUpperCase().split('/')
   const cipher = parts[0] ?? 'AES'
   const mode = (parts[1] ?? 'CBC').toLowerCase()
@@ -405,7 +459,7 @@ function aesDecryptB64(data: string, key: string, transformation: string, iv: st
     const algo = `aes-${keyBuf.length * 8}-${mode}`
     const decipher = crypto.createDecipheriv(algo, keyBuf, ivBuf)
     decipher.setAutoPadding(true)
-    return Buffer.concat([decipher.update(Buffer.from(data, 'base64')), decipher.final()]).toString('utf8')
+    return Buffer.concat([decipher.update(Buffer.from(data, 'base64')), decipher.final()])
   } catch (e) {
     return fail(`AES 解密失败：${String((e as Error)?.message ?? e)}`)
   }

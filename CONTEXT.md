@@ -111,12 +111,22 @@ _Avoid_: 自定义属性（太泛——这是链尾语义，不是属性语法�
 
 **模板字面段（literal segment）**:
 规则段含 `{{expr}}`、`{$.path}` 或 URL 模板时整段按字面模板插值求值，产出 Value 而不报「认不出」。
-_唯一实现_: 识别与切分 `engine/literal.ts`（`isLiteralForm`/`splitLiteral`），求值 `engine/evaluate.ts` 的 `branchGen` literal 分支
+_唯一实现_: 识别与切分 `engine/literal.ts`（`isLiteralForm`/`splitLiteral`），求值 `engine/evaluate.ts` 的 `branchGen` literal 分支；**模板态**下白名单之外的段落成字面段另有兜底口 `engine/parse.ts` 的 `classifyDefault`（那一支按定义不构成选择器，不经 `isLiteralForm` 判据）
 _Avoid_: URL 规则（太泛——不只 URL，任何含插值的字面段都是）
 
+**受保护区（protected region）**:
+规则串里三处「区内字符不属于本层文法」的区域：`<js>…</js>` 块（块内 `##`/`@`/`||` 是 JS 文本）、`{{…}}` 区（区内是插值表达式）、`@put:{…}` 值区（区内是值内规则文本）。对面是把它们**先摘出去**再谈切分（先抽 js 块、先剥 @put、先做插值）；本仓按同一口径**就地跳过**——切 `##` 替换尾、切连接符、判 `$n` 行模板、判模板态，四处都只看区外的字符。
+_唯一实现_: 三区探测 `engine/grammar.ts`（`jsBlockEnd` / `putRegionEnd` / `braceRegion`；`jsRegionEnd` 比块形态宽，另含 `@js:` 吃到串尾），消费点 `grammar.parseTails` 与 `parse.splitTop` / `splitElements` / `maskRegions`
+_Avoid_: 转义、豁免区（说「受保护区」）；也别把它读成「先摘出去」——跳过与摘出对 `##` 之外那几轴等价，对「尾在前、js 块在后」的形状不等价，残留登记在矩阵 `a-js-block-after-tail`
+
+**模板态（template mode）**:
+支文本在受保护区**之外**含 `{{…}}` 或 `@get:{…}` 时的文法翻转（对面 SourceRule 的 Mode.Regex）：文本段按字面产出、`@` 不再是段界——对面先插值再谈切分，所以 `最近更新：@get:{time}` 的 `最近更新：` 是字面文本，而不是「白名单之外的段」。
+_唯一实现_: 判定与传递 `engine/parse.ts` 的 `ParseCtx.template`（`parseBranch` 设、`splitElements` 与 `classifyDefault` 消费）
+_Avoid_: 与「模板字面段」混称（本词是**整支的文法状态**，那个词是**一段的产物形态**）；也别叫「正则模式」——对面那个名字在这里只是标签，不代表按正则求值
+
 **AllInOne 行模板（row template）**:
-AllInOne 条目下字段规则的形态：支文本出现 `$\d{1,2}` 时整支是行组引用模板，值 = 用当前行把 `$n` 绑好后的原文，不再按规则解析。js 区域豁免。
-_唯一实现_: 判定 `engine/parse.ts`，绑定 `engine/regex-row.ts` 的 `bindRegexRow`，求值 `engine/evaluate.ts` 的 regexRow 分支；行经 `services/bridge.ts` 的 `ItemContext` 传入
+AllInOne 条目下字段规则的形态：支文本在受保护区**之外**出现 `$\d{1,2}` 时整支是行组引用模板，值 = 用当前行把 `$n` 绑好后的原文，不再按规则解析。
+_唯一实现_: 判定 `engine/parse.ts`（`GROUP_TOKEN` 测 `maskRegions` 的结果），绑定 `engine/regex-row.ts` 的 `bindRegexRow`，求值 `engine/evaluate.ts` 的 regexRow 分支；行经 `services/bridge.ts` 的 `ItemContext` 传入
 _Avoid_: 变量替换、`$n` 展开（说「行模板」）；与「模板字面段」混称（两者按**触发形态**分家，出处见矩阵行 `a-allinone-group-zero`）
 
 **按文本选元素（text selection）**:

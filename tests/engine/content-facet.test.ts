@@ -284,3 +284,40 @@ describe('属性取值的去重（对面 getResultLast else 分支 textS.contain
     expect(v).toEqual({ kind: 'list', items: ['甲', '甲'] })
   })
 })
+
+describe('js 块的 ## 尾（对面 makeUpRule 对 js 文本同样切 ##；茄子免费小说 lastChapter 形态）', () => {
+  const HTML = '<p class="t">最新章 第1章 【求更】</p>'
+  it('首段为空 + ## 尾：不求值，净化作用在链值上', async () => {
+    const v = await evaluate('class.t@text\n<js>##[\\(（【].*?[】）\\)]</js>', { html: HTML }, 'toc', 'value')
+    expect(v).toEqual({ kind: 'value', text: '最新章 第1章 ' })
+  })
+  it('代码 + ## 尾：先求值再替换（##p##r 形态）', async () => {
+    const v = await evaluate('class.t@text\n<js>String(result) + "AB"##AB##CD</js>', { html: HTML }, 'toc', 'value')
+    expect(v).toEqual({ kind: 'value', text: '最新章 第1章 【求更】CD' })
+  })
+  // 替换走 replace.applyReplaces（与规则级 `##` 同一个家）——下面四条钉的是「不另写一份」会走偏的地方：
+  // 对面 replaceRegex 在 replaceFirst（切出多于三段）下回的是**首个匹配段**、无匹配给空串，
+  // 不是「原文里改第一处」；而 miss 与「取到空」绝不折叠。
+  it('三段尾 = 只回首个匹配段；无匹配给空串（对面 replaceFirst 口径）', async () => {
+    const src = { html: '<p class="t">xAyA z</p>' }
+    expect(await evaluate('class.t@text\n<js>result##A##B##</js>', src, 'rule', 'value'))
+      .toEqual({ kind: 'value', text: 'B' })
+    expect(await evaluate('class.t@text\n<js>result##Q##B##</js>', src, 'rule', 'value'))
+      .toEqual({ kind: 'value', text: '' })
+    // 与规则级 `###`（同一判据的另一写法）逐字同值——不许两条路给出两个答案
+    expect(await evaluate('class.t@text##A##B###', src, 'rule', 'value'))
+      .toEqual({ kind: 'value', text: 'B' })
+  })
+  it('尾不折叠 Miss、不压平 List（取值规约）', async () => {
+    // 上游取位失败时净化尾作用在 miss 上仍是 miss——折成空串就把「没取到」写成「取到空」
+    expect(await evaluate('class.none@text\n<js>##[x]</js>', { html: '<p class="t">甲</p>' }, 'rule', 'value'))
+      .toMatchObject({ kind: 'miss' })
+    // 上游是 List 时逐项替换（对面 `it.map { replaceRegex(...) }`），不 join 成一条
+    expect(await evaluate('tag.p@text\n<js>result##A##B</js>', { html: '<p>aA</p><p>bA</p>' }, 'toc', 'list'))
+      .toEqual({ kind: 'list', items: ['aB', 'bB'] })
+  })
+  it('尾正则非法 → RuleEvalError 带段定位（不抛裸 SyntaxError）', async () => {
+    await expect(evaluate('class.t@text\n<js>result##[##B</js>', { html: '<p class="t">xAyA z</p>' }, 'rule', 'value'))
+      .rejects.toThrow(/## 替换正则非法/)
+  })
+})

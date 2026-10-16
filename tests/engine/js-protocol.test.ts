@@ -67,9 +67,9 @@ describe('JavaBridge 协议表（表驱动登记）', () => {
     expect([...unmounted].sort()).toEqual([...asyncRows].sort())
   })
 
-  it('async 行不进 javaSync 名单（ajax/downloadFile/connect/post 走引导层特制包装）', () => {
+  it('async 行不进 javaSync 名单（ajax/downloadFile/connect/post/head 走引导层特制包装）', () => {
     const asyncNames = JAVA_PROTOCOL.flatMap((r) => (r.mode === 'async' ? [r.name] : []))
-    expect(asyncNames).toEqual(['ajax', 'connect', 'post', 'downloadFile'])
+    expect(asyncNames).toEqual(['ajax', 'connect', 'post', 'head', 'downloadFile'])
     expect(SANDBOX_MOUNTS.javaSync).not.toContain('ajax')
     expect(SANDBOX_MOUNTS.javaSync).toContain('get')
   })

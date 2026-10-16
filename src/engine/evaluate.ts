@@ -177,18 +177,43 @@ function* branchGen(
           }
           code = engineValueToString(rewritten, 'inner')
         }
-        const outcome: JsOutcome = yield [
-          code,
-          jsHostOf(prev, rt), rt.ctx, loc, rt.facet, rt.evaluateRef,
-          { scriptForm: true },
-        ]
-        let out: EngineValue = outcome.value
+        // js 文本的 `##` 尾：对面 `makeUpRule` 在插值之后对 js 文本同样切 `##`——首段才是代码、其余是
+        // 「对结果做正则净化」的替换尾；首段为空则整块只当净化步（茄子免费小说 `<js>##[…]</js>` 形态，
+        // 对应对面 `if (rule.isNotEmpty())` 那道门）。替换**不另写一份**：走 `replace.applyReplaces`，
+        // 与规则级 `##` 同一个家——miss/nodes 透传（绝不在这里把「没取到」折成空串）、List 逐项、
+        // 空 pattern 整步跳过、非法正则抛带段定位的 RuleEvalError。
+        // `onlyOne` 按对面的判据取「切出多于三段」：对面 `##p##r##` 回的是**首个匹配段**的替换结果、
+        // 无匹配给空串，不是「原文里改第一处」。这条轴与规则级仍待裁的配对分叉同属
+        // `a-replace-tail-single-pair`，此处先按对面字面实现，规则级那条不跟着动。
+        const jsParts = code.split('##')
+        const jsCode = jsParts[0]
+        const jsTail = jsParts.length > 1 ? jsParts.slice(1) : null
+        let out: EngineValue = cur ?? { kind: 'miss', detail: '空链值' }
+        let jsLogs: string[] | undefined
+        if (jsCode.trim() !== '') {
+          const outcome: JsOutcome = yield [
+            jsCode,
+            jsHostOf(prev, rt), rt.ctx, loc, rt.facet, rt.evaluateRef,
+            { scriptForm: true },
+          ]
+          out = outcome.value
+          jsLogs = outcome.logs
+        }
         // 链上游是 List（多节点取值）→ js 串结果按 \n 拆回 List，保持链的「多条目」语义
         if (prev?.kind === 'list' && out.kind === 'value' && out.text.includes('\n')) {
           out = { kind: 'list', items: out.text.split('\n') }
         }
+        // 尾文本已随整段 `code` 一起插值过（上面那道 `{{` 门），故不再传 bindings——对面也是先插值再切
+        if (jsTail !== null) {
+          out = applyReplaces(
+            out,
+            [{ pattern: jsTail[0] ?? '', flags: '', replacement: jsTail[1] ?? '' }],
+            jsTail.length > 2,
+            { facet: rt.facet },
+          )
+        }
         cur = out
-        if (collect) collect.push(stepOf(seg, loc, out, outcome.logs))
+        if (collect) collect.push(stepOf(seg, loc, out, jsLogs))
         continue
       }
       if (seg.kind === 'put') {

@@ -48,6 +48,44 @@ describe('④⑤ 分支与段切分', () => {
   it('混用算符抛 UnsupportedRuleError', () => {
     expect(() => parseRule('a||b&&c')).toThrow(UnsupportedRuleError)
   })
+  it('@put 值区的 || 不是连接符（走查存量：独步小说/八一中文网 init 形态）', () => {
+    const p = parseRule('@put:{n:"[property$=og:title]@content",l:"[a]@content||[b]@content"}', 'rule', 'value')
+    expect(p.branches).toHaveLength(1)
+    expect(p.branches[0].segments[0]).toMatchObject({ kind: 'put' })
+  })
+  it('受保护区不切 ## 替换尾：<js> 块 / {{…}} 区 / @put 值区（走查存量）', () => {
+    // 茄子免费小说 lastChapter：<js> 块内正则自带的 ## 曾是「缺 </js> 结束标记」误报的根因
+    const egg = parseRule('{{$.t}} • {{java.timeFormat(1)}}\n<js>result.replace(/\\s\\d+:\\d+/,\'\')</js>\n<js>##[\\(（【].*?[】）\\)]</js>', 'rule', 'value')
+    expect(egg.replaces).toEqual([])
+    expect(egg.branches[0].segments.map((s) => s.kind)).toEqual(['literal', 'js', 'js'])
+    // 言情小说大全 intro：{{}} 区内的 ## 属于内嵌子规则自己的替换尾
+    const inb = parseRule('封面：{{@@tr:nth-child(6) > td > img@src##.*?level(\\d+).*##$1}}', 'rule', 'value')
+    expect(inb.replaces).toEqual([])
+    expect(inb.branches[0].segments).toHaveLength(1)
+    // @put 值区同理（对面 splitPutRule 先于 ## 处理剥离）
+    expect(parseRule('@put:{x:"a##b"}', 'rule', 'value').replaces).toEqual([])
+  })
+  it('模板态：纯文本段按字面、@ 不切段（走查存量：小米阅读/言情小说大全形态）', () => {
+    const p = parseRule('最近更新：@get:{time}', 'rule', 'value')
+    expect(p.branches[0].segments).toHaveLength(1)
+    expect(p.branches[0].segments[0]).toEqual({ kind: 'literal', raw: '最近更新：@get:{time}' })
+    // 纯文本标签段与 {{…}} 混排同样是一段字面（插值在段内完成）
+    const multi = parseRule('出版社：{{@@td@text}}\n主角：{{@@td2@text}}', 'rule', 'value')
+    expect(multi.branches[0].segments).toHaveLength(1)
+    expect(multi.branches[0].segments[0]).toMatchObject({ kind: 'literal' })
+    // 无模板标记的分支不受影响：纯文本段照旧在解析期抛（宁炸不猜的 guard 面）
+    expect(() => parseRule('最近更新：文字', 'rule', 'value')).toThrow(UnsupportedRuleError)
+  })
+  it('行模板与模板态都只认受保护区**之外**的标记（走查存量：爱丽丝书屋 init）', () => {
+    // @put 值区里的 `$1` 是值内规则自己的替换尾——整支不该被折成行组模板，否则 js 不执行、put 不写
+    // 变量、该源详情面所有 `@get:{…}` 静默取空（对面 splitPutRule 先剥 put 再扫 `$n`，看不到它）
+    const p = parseRule('<js>var a = 1</js>\n@put:{z:"class.fix@p.4@text##.*：(.*)·##$1###"}', 'rule', 'value')
+    expect(p.branches[0].segments.map((s) => s.kind)).toEqual(['js', 'put'])
+    // js 代码里的 `{{…}}` 不触发模板态（对面先抽 js 块，块内标记从不翻转 Mode.Regex）：翻转了就把
+    // `class.a@text` 整串当成 class 选择器的参数、零命中而不报错
+    const q = parseRule('class.a@text@js:result+"{{baseUrl}}"', 'rule', 'value')
+    expect(q.branches[0].segments.map((s) => s.kind)).toEqual(['default', 'default', 'js'])
+  })
 })
 
 describe('⑥ 段识别', () => {

@@ -27,7 +27,30 @@ export function parseTails(rule: string): ParsedTails {
   const trimmed = rule.trim()
   const onlyOne = trimmed.endsWith('###')
   const s = onlyOne ? trimmed.slice(0, -1) : trimmed
-  const parts = s.split('##')
+  // `##` 切分跳过受保护区：`<js>…</js>` 块内的 `##` 是 JS 文本/正则净化串，`{{…}}` 区内的 `##`
+  // 属于插值表达式，`@put:{…}` 值区内的 `##` 属于值内规则文本——对面先剥 @put、先抽 js 块、
+  // 先做插值，替换尾只在剩余文本上切。茄子免费小说 `<js>##[…]</js>` 实证：块内那个 `##` 曾把链
+  // 切断、残链被误报成「缺 </js> 结束标记」。只跳块形态（jsBlockEnd），`@js:code##re##rep` 的
+  // `##` 仍按替换尾切——与对面净结果一致。
+  const parts: string[] = []
+  let start = 0
+  let scan = 0
+  while (scan < s.length) {
+    const jsEnd = jsBlockEnd(s, scan)
+    if (jsEnd !== null) { scan = jsEnd; continue }
+    const putEnd = putRegionEnd(s, scan)
+    if (putEnd !== null) { scan = putEnd; continue }
+    const brace = braceRegion(s, scan)
+    if (brace !== null) { scan = brace.end; continue }
+    if (s.startsWith('##', scan)) {
+      parts.push(s.slice(start, scan))
+      scan += 2
+      start = scan
+      continue
+    }
+    scan++
+  }
+  parts.push(s.slice(start))
   const chain = parts[0]
   const restSegs = parts.slice(1)
   const replaces: ReplaceStep[] = []
@@ -77,14 +100,17 @@ export function appendTail(rule: string, pattern: string, replacement: string): 
  *  `<js>…</js>`：块整体是一个段——块内 ||/&&/%%/@ 是 JS 代码，不是连接符/段界（任意位置可起块）；
  *  `js:`（链首或段界 @ 后）：js 只能是末段 → 吃到链尾（真实源 @js 代码里大量 ||/&&/字符串 @）。
  */
+export function jsBlockEnd(s: string, i: number): number | null {
+  if (!startsWithAt(s, '<js>', i)) return null
+  for (let j = i + 4; j + 5 <= s.length; j++) if (startsWithAt(s, '</js>', j)) return j + 5
+  return null
+}
+
 export function jsRegionEnd(s: string, i: number): number | null {
   // 前缀比对只看定宽窗口（大小写不敏感），不做 `slice(i).toLowerCase()` 整串拷贝——
   // 本函数被 splitTop / splitElements / hasJsRegion 按位调用，整串拷贝是 O(n²) 之源。
   // 等价性：prefix 里的字母只有 j/s，ASCII 大小写折叠与整串 toLowerCase 在这些字符上同效。
-  if (startsWithAt(s, '<js>', i)) {
-    for (let j = i + 4; j + 5 <= s.length; j++) if (startsWithAt(s, '</js>', j)) return j + 5
-    return null
-  }
+  if (startsWithAt(s, '<js>', i)) return jsBlockEnd(s, i)
   // 段首判定：链首，或前一字符是段界 @（@@ 是字面 @，不起段）
   const atSegStart = i === 0 || (s[i - 1] === '@' && s[i - 2] !== '@')
   if (atSegStart && startsWithAt(s, 'js:', i)) return s.length

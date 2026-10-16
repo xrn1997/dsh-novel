@@ -49,6 +49,11 @@ export interface EvalContext {
   fetchPost?: (url: string, body: string, headers?: Record<string, string>) => Promise<{
     url: string; body: string; contentType?: string; statusCode: number; cookies: Record<string, string>
   }>
+  /** `java.head(url, headers)` 的出站口（engineFetchHead）：HEAD + **不跟重定向**，数据面带响应头
+   *  （脚本读 `res.headers()["location"]` 取直链；对面 followRedirects(false) 同口径）。 */
+  fetchHead?: (url: string, headers?: Record<string, string>) => Promise<{
+    url: string; statusCode: number; headers: Record<string, string>
+  }>
   jsTimeoutMs?: number
   /** 源级 jsLib：全局 JS 函数库——先于每段 @js 代码在同上下文执行（函数定义全局可见） */
   jsLib?: string

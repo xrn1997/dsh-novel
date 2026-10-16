@@ -77,3 +77,20 @@ export function engineFetchRaw(
     return page.raw
   }
 }
+
+/** `java.head(url, headers)` 的引擎桥：HEAD + **不跟重定向**（对面 followRedirects(false)——
+ *  脚本读 3xx 的 Location/x-origin-url 取图片直链）。请求语义仍走 assembleRequest + fetchInitOf；
+ *  fetcher 以 manual 姿态放行非 2xx（要探的就是状态与响应头本身）。 */
+export function engineFetchHead(
+  fetcher: Fetcher, headers: HeadersInput, vars?: Record<string, string | number>,
+): (url: string, hdrs?: Record<string, string>) => Promise<{ url: string; statusCode: number; headers: Record<string, string> }> {
+  return async (rawUrl, hdrs) => {
+    const plan = assembleRequest(rawUrl, vars ?? {}, null)
+    const init = fetchInitOf(
+      { ...plan, method: 'HEAD', headers: { ...plan.headers, ...(hdrs ?? {}) } },
+      await resolveHeadersInput(headers),
+    )
+    const page = await fetcher.fetchPage(plan.url, { ...init, manual: true })
+    return { url: page.finalUrl, statusCode: page.status, headers: page.headers ?? {} }
+  }
+}

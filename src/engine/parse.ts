@@ -1,6 +1,6 @@
 import type { Branch, Facet, IndexSpec, ParsedRule, RuleUsage, Segment } from './types.js'
 import { UnsupportedRuleError } from './errors.js'
-import { braceRegion, hasJsRegion, isXPathForm, jsRegionEnd, parseTails, putRegionEnd } from './grammar.js'
+import { braceRegion, isXPathForm, jsRegionEnd, parseTails, putRegionEnd } from './grammar.js'
 import { GROUP_TOKEN } from './regex-row.js'
 import { isLiteralForm } from './literal.js'
 
@@ -8,13 +8,17 @@ import { isLiteralForm } from './literal.js'
  * parseRule 词法流水线（纯词法：字符串 → ParsedRule AST，零 IO）。
  *
  * 切分次序（钉死）：
- *   ② 剥 ## 替换尾（含 OnlyOne ###）
+ *   ② 剥 ## 替换尾（含 OnlyOne ###）——只在受保护区**之外**切：`<js>…</js>` 块、`{{…}}` 区、
+ *       `@put:{…}` 值区里的 `##` 是区内自己的规则文本（对面先抽 js 块、先剥 @put、先做插值，
+ *       替换尾只在剩下的文本上切；单点在 grammar.parseTails）
  *   ③ 剥链首 - 反序前缀
  *   ③b 列表用途剥链首 + 前缀（剥完照常走选择段；见 parseRule 的 `+` 分支）
  *   ① AllInOne：剥完上面各步后仍以 : 开头 → 整链是一个 allinone 段
  *   ④ 分支切分（|| / && / %%，左到右，混用抛错）
  *   ⑤⑥ 段切分与识别（globalIndex 全规则连续编号，写进错误定位）——js 形态在这一段认
- *       （`js:` 前缀 / `<js>` 块）；链尾**没有** (jsCode) 切法，理由见 parseBranch 的说明
+ *       （`js:` 前缀 / `<js>` 块）；链尾**没有** (jsCode) 切法，理由见 parseBranch 的说明。
+ *       支文本在受保护区**之外**含 `{{…}}` / `@get:{…}` → **模板态**（对面 SourceRule 的 Mode.Regex
+ *       翻转）：文本段按字面、`@` 不切段，判据与后果都住 parseBranch
  */
 
 // default 段白名单（选择段 + 取值段；白名单之外的串先过隐式 CSS 回落 `isImplicitCss`——
@@ -32,8 +36,9 @@ const COMBINATOR_MAP: Record<CombToken, ParsedRule['combinator']> = {
   '||': 'first', '&&': 'and', '%%': 'zip',
 }
 
-/** 解析期共享状态：facet 用于错误面，counter 是全规则连续段号，usage 决定链尾未知词语义 */
-interface ParseCtx { facet: Facet; counter: number; usage: RuleUsage }
+/** 解析期共享状态：facet 用于错误面，counter 是全规则连续段号，usage 决定链尾未知词语义；
+ *  template 标记当前分支是否模板态（受保护区**之外**含 `{{…}}`/`@get:{…}`）——模板态文本段按字面、`@` 不切段 */
+interface ParseCtx { facet: Facet; counter: number; usage: RuleUsage; template: boolean }
 
 export function parseRule(rule: string, facet: Facet = 'rule', usage: RuleUsage = 'list'): ParsedRule {
   // ② 剥 ## 替换尾（含 OnlyOne ###）——文法口 parseTails 单点（grammar.ts：构词与解析同属一处）
@@ -78,7 +83,7 @@ export function parseRule(rule: string, facet: Facet = 'rule', usage: RuleUsage 
   // ⑤⑥ 段切分与识别。**空白分支照吞掉**：分支切分不过滤空串，`A&&&&B` 产出 `["A","","B"]`，
   // 而空规则取值是空列表，合并时自然不贡献——等价于丢分支，不是整条失败。全空（`&&`、纯空白）
   // 与上面「剥空」分支同路：零分支，求值即空。
-  const ctx: ParseCtx = { facet, counter: 0, usage }
+  const ctx: ParseCtx = { facet, counter: 0, usage, template: false }
   const branches = parts
     .map(p => parseBranch(p.text, ctx))
     .filter((b): b is Branch => b !== null)
@@ -91,8 +96,8 @@ interface TopPart { text: string; comb: CombToken | null }
 
 /** 按 || / && / %% 从左到右切分（算符不嵌套；JS 段整体跳过——块内的算符是 JS 代码不是连接符；
  *  `{{…}}` 模板区同样整体跳过——区内的 `&&`/`||` 属于插值表达式，插值先于任何切分完成，
- *  故这些算符从不到达切分器。JS 区域探测与括号区扫描分别住在 grammar.ts
- *  （jsRegionEnd / braceRegion），此处只消费）。 */
+ *  故这些算符从不到达切分器；`@put:{…}` 值区同理——值里的算符是值内规则文本。
+ *  三种区域的探测分别住在 grammar.ts（jsRegionEnd / braceRegion / putRegionEnd），此处只消费）。 */
 function splitTop(s: string): TopPart[] {
   const parts: TopPart[] = []
   let start = 0
@@ -101,6 +106,10 @@ function splitTop(s: string): TopPart[] {
   while (i < s.length) {
     const jsEnd = jsRegionEnd(s, i)
     if (jsEnd !== null) { i = jsEnd; continue }
+    // `@put:{…}` 整体跳过：值里的 `||`/`&&` 是值内规则文本，不是连接符（splitElements 早已认
+    // putRegionEnd，splitTop 曾经不认——`@put:{l:"[a]@content||[b]@content"}` 被撕开）
+    const putEnd = putRegionEnd(s, i)
+    if (putEnd !== null) { i = putEnd; continue }
     const brace = braceRegion(s, i)
     if (brace !== null) { i = brace.end; continue }
     const tok = COMBINATOR_TOKENS.find(t => s.startsWith(t, i))
@@ -117,6 +126,32 @@ function splitTop(s: string): TopPart[] {
   return parts
 }
 
+/** 受保护区掩码：`<js>…</js>` 块、`{{…}}` 区、`@put:{…}` 值区各替换为等长空格。
+ *  对面判「支文本里有没有 `$n`」「有没有插值标记」之前，先把这三区**摘出去**（先抽 js 块、先剥 @put、
+ *  先做插值，见矩阵 `a-js-region-protected`），掩码就是那一步的本仓形态：脚本里的 `'$1'` 是正则反向
+ *  引用、`{{…##…##$1}}` 与 `@put:{…"##$1###"}` 里的 `$1` 属于**值内规则自己的替换尾**——三者都不该把
+ *  整支判成行组模板，也不该把同支的文本段判成模板态。
+ *  js 区用 `jsRegionEnd`（含 `@js:` 吃到串尾），比 `parseTails` 的只认块形态宽——那里的 `##` 已被
+ *  规则级切掉、只剩块形态的会走到这里，两处判据各自对着自己的上游顺序。 */
+function maskRegions(s: string): string {
+  let out = ''
+  let i = 0
+  while (i < s.length) {
+    const jsEnd = jsRegionEnd(s, i)
+    if (jsEnd !== null) { out += ' '.repeat(jsEnd - i); i = jsEnd; continue }
+    const putEnd = putRegionEnd(s, i)
+    if (putEnd !== null) { out += ' '.repeat(putEnd - i); i = putEnd; continue }
+    const brace = braceRegion(s, i)
+    if (brace !== null) { out += ' '.repeat(brace.end - i); i = brace.end; continue }
+    out += s[i]
+    i++
+  }
+  return out
+}
+
+/** 模板态标记（对面 `evalPattern` 匹配的两形：`@get:{…}` 与 `{{…}}`） */
+const TEMPLATE_MARK = /@get:\{|{{/
+
 // ── ⑤⑥ 段切分与识别 ───────────────────────────────────────────────────
 
 /** 按 @ 切分分支段：单个 @ 是段边界；连续 @@ 是字面 @（@@ 显式声明形态——
@@ -126,7 +161,7 @@ function splitTop(s: string): TopPart[] {
  *  下一级规则——切，切完回归普通模式。 */
 const XPATH_HEAD = /^(@xpath:|\/\/|\.\/\/|\/)/i
 
-function splitElements(s: string): string[] {
+function splitElements(s: string, template = false): string[] {
   const out: string[] = []
   let cur = ''
   // 括号/引号深度：XPath 主导链里 `[@id="x"]` 的 @ 是选择器的一部分，不是段界——
@@ -141,10 +176,13 @@ function splitElements(s: string): string[] {
     // 块起始即隐式段界——cur 先独立成段，块本身起新段；块结束若紧跟内容（非 @）同样断段。
     const jsEnd = jsRegionEnd(s, i)
     if (jsEnd !== null) {
+      // 模板态下 `@` 是字面字符（不切段），行尾的 `@` 属于 js 标记（对面 JS_PATTERN 的匹配含
+      // `@`）——剥掉再收；块后推送条件在模板态恒成立（没有 `@` 来收尾了）
+      if (template && cur.endsWith('@')) cur = cur.slice(0, -1)
       if (cur !== '') { out.push(cur); cur = '' }
       cur = s.slice(i, jsEnd)
       i = jsEnd
-      if (i < s.length && s[i] !== '@') {
+      if (template || (i < s.length && s[i] !== '@')) {
         out.push(cur)
         cur = ''
       }
@@ -153,10 +191,12 @@ function splitElements(s: string): string[] {
     // `@put:{…}` 整体是一段：体内 `@` 是值里的选择器/终端，不是段界（grammar.putRegionEnd）
     const putEnd = putRegionEnd(s, i)
     if (putEnd !== null) {
+      // 模板态同 js 块：行尾 `@` 属于标记、剥掉；块后推送条件恒成立
+      if (template && cur.endsWith('@')) cur = cur.slice(0, -1)
       if (cur !== '') { out.push(cur); cur = '' }
       cur = s.slice(i, putEnd)
       i = putEnd
-      if (i < s.length && s[i] !== '@') {
+      if (template || (i < s.length && s[i] !== '@')) {
         out.push(cur)
         cur = ''
       }
@@ -171,6 +211,8 @@ function splitElements(s: string): string[] {
       continue
     }
     if (s[i] === '@') {
+      // 模板态：`@` 是字面字符（插值先于一切切分；`@get:` 等插值点在字面段内部由 splitLiteral 认）
+      if (template) { cur += s[i]; i++; continue }
       if (s[i + 1] === '@') { cur += '@'; i += 2; continue }
       // 吃掉两个 @：只进一位会让第二个 @ 变成段界，于是 `@@css:.x`（「`@@<rule>` 强制按
       // Default 处理」形态）被切成 ['@', 'css:.x'] 两段，第一段认不出就抛错——链首形态必炸。
@@ -202,14 +244,23 @@ function splitElements(s: string): string[] {
 function parseBranch(text: string, ctx: ParseCtx): Branch | null {
   // AllInOne 行模板（矩阵 a-allinone-group-zero）：支文本里出现 `$\d{1,2}` → 整支是行组引用模板，
   // 值由求值层用当前行绑定。判在切段之前——`$2$3` 这种产物本来就不是合法段（$ 开头会当 JSONPath 抛错）。
-  // js 区域豁免（grammar.hasJsRegion）：脚本里的 `'$1'` 是正则反向引用，不是行组。组号形态只住
-  // regex-row.ts 的 GROUP_TOKEN。判定只看支文本形状、不看规则是否出自 AllInOne——误分类的后果是
-  // 无行时出原文而非炸（口径见 types.ts 的 regexRow 段注释与矩阵行）。
-  if (GROUP_TOKEN.test(text) && !hasJsRegion(text)) {
+  // 受保护区豁免见 maskRegions。判定只看支文本形状、不看规则是否出自 AllInOne——误分类的后果是无行时
+  // 出原文而非炸（口径见 types.ts 的 regexRow 段注释与矩阵行）。
+  // 掩码只把区内字符换成空格、**不会造出标记**，所以两处判据都可以先用原文廉价测一遍、命中才掩：
+  // `parseRule` 无缓存、逐条目调用，而掩码是一次支文本的 O(n) 串构造——绝大多数分支既无 `$n` 也无
+  // 插值标记，到这里就够了（可证等价：掩码只消字符、不增标记）。
+  const hasMark = GROUP_TOKEN.test(text) || TEMPLATE_MARK.test(text)
+  const marked = hasMark ? maskRegions(text) : text
+  if (hasMark && GROUP_TOKEN.test(marked)) {
     const raw = text.trim()
     return { segments: [{ kind: 'regexRow', raw }], raws: [text] }
   }
-  const els = splitElements(text)
+  // 模板态（对面 SourceRule 的 Mode.Regex 翻转：受保护区**之外**出现 `{{…}}` 或 `@get:{…}`）：文本段
+  // 按字面、`@` 不再是段界——对面先做插值再谈切分（`最近更新：@get:{time}` 的 `最近更新：` 是字面文本）。
+  // 只看掩码后：对面先抽 js 块，js 代码里的 `{{baseUrl}}` 从不触发这次翻转（`class.a@text@js:…{{…}}`
+  // 若按原文判，`@` 不切段会把 `class.a@text` 整串当 class 选择器参数、静默零命中）。
+  ctx.template = hasMark && TEMPLATE_MARK.test(marked)
+  const els = splitElements(text, ctx.template)
   if (els.length === 0) return null
   const segments: Segment[] = []
   const raws: string[] = []
@@ -454,6 +505,9 @@ function classifyDefault(raw: string, exclude: number[] | undefined, el: string,
     return seg
   }
 
+  // 模板态：白名单之外的段是**字面文本**——对面在 Mode.Regex 下把文本原样拼进结果
+  // （`最近更新：@get:{time}` 的 `最近更新：`、`书籍信息：\n编号：` 这类标签段），不做选择器求值
+  if (ctx.template) return { kind: 'literal', raw: el.trim() }
   // 纯索引段（`kind: "0"` 这类）**未实现**：裸索引＝根的子元素再取索引，但本仓的
   // `children` 在根上下文上已与之分叉（见矩阵 `a-bare-index-segment`）——
   // 不把这个映射接在一个可疑的基座上，先修 `children` 再放行。此处继续走解析期抛错（宁炸不猜）。

@@ -112,8 +112,11 @@ const KITCHEN_SINK: any = {
   preUpdateJs: '@js:1',
   ruleToc: { formatJs: '@js:title', chapterUrl: 'a@href##reSegment##paragraphTitle' },
   ruleContent: { content: 'java.refreshExplore("x"); source.setVariable("k", "v")' },
-  // 节点导航形状：`jsoupNodeNav` 判据当下为 0，按上方的规矩塞进样品
+  // 节点导航形状：`jsoupNodeNav` 2026-09-28 数为 0、2026-10-16 普查现算 4 源（矩阵行
+  // `h-jsoup-live-node-navigation` 那句「0/214」是旧批读数、待重数），样品照留——形状在册不只为了反空转
   ruleBookInfo: { intro: 'result.parent().children(0).elementSiblingIndex()' },
+  // 非文本源形状：`nonTextSource` 判据当下为 0，按上方的规矩塞进样品
+  bookSourceType: 1,
 }
 
 /**
@@ -279,17 +282,31 @@ export const DEMAND_KEYS: Array<{ key: string; label: string; test: (raw: any) =
 const KNOWN_RULE_SHAPES: Record<string, string> = {
   '无法识别的段类型（default 段白名单之外）（规则片段: "#"':
     '无 `@` 单段（`kind: "0"` 等）——取值路径 = `attr(整串)` → 也取空；矩阵 `a-bare-index-segment` 记为不适用（guard 族），非欠账',
+  '一条规则混用了多个连接符（|| / && / %%）':
+    '刻意分歧（解析期拒）：对面混用只有「首个 `||` 命中即停、其后换符残片 jsoup 直抛」的半坏文法（2026-10-16 选择器层实跑）——矩阵 `a-combining-mixed`',
+  '无法识别的段类型（default 段白名单之外）（规则片段: "…"':
+    '本仓解析期拒、对面也读不出的段：`{baseUrl}` / `java.refreshBookUrl()` / `category_tag.*.*` 走对面 jsoup 直抛（1.13.1 实跑）；`href\\n书名h4` 可解析但零命中——双侧盲区非欠账；矩阵 `a-reject-double-blind`',
+  '无法识别的段类型（default 段白名单之外）（规则片段: "<"':
+    '`<<js>` 双尖括号笔误：对面 jsoup 直抛（实跑）——矩阵 `a-reject-double-blind`',
 }
 
 /**
  * 在册已知桥缺口：脚本用得到、本仓没挂、已在矩阵行排队的 `java.*` 方法名。只为让**新**缺口冒出来
- * 即红、不给存量挡红：加条目必须先有矩阵行 id。下面三条全部来自换分母那批（2026-09-22，本库之外
- * 另取两份公开合集，`DSH_PARSE_CENSUS_FILE` 指过去可复现）——本库从未用过它们。
+ * 即红、不给存量挡红：加条目必须先有矩阵行 id。**按名字点，不数第几条**（加过一条就把「前三条」这类
+ * 说法作废过一次）：t2s / cacheFile / toURL 三条来自换分母那批（2026-09-22，本库之外另取两份公开
+ * 合集，`DSH_PARSE_CENSUS_FILE` 指过去可复现）；s2t / getVerificationCode / ajaxTestAll /
+ * queryBase64TTF 四条是 2026-10-16 随本库需求方出现补进去的。**2026-10-16 订正**：t2s 的需求方已进
+ * 本库（6 源 14 处——**只 Linpx / 兽人小说站 是搜索面**，其余 4 源跨正文/目录/详情/发现，读数按面
+ * 拆见矩阵 `h-java-t2s`），「本库从未用过」那句只对 cacheFile / toURL 成立。
  */
 const KNOWN_BRIDGE_GAPS: Record<string, string> = {
   t2s: '繁简词典不在本仓，且对面在转换前还会跑自家补丁词典——换轮子（opencc 一类）得到的文本与对面不逐字相等，要拍板：矩阵 h-java-t2s',
+  s2t: '与 t2s 同席（矩阵行已同时绑 java.s2t 两键）：同一词典议题，需求方已进本库（2 源）：矩阵 h-java-t2s',
   cacheFile: '裁决已有（真实文件 API = 数据外泄面），这一条的作用是确认该裁决真有需求方：矩阵 h-java-cache-file',
   toURL: '返回的是 JVM URL 对象；先看清那 1 源真调了哪些成员再造壳：矩阵 h-java-tourl',
+  getVerificationCode: '需宿主交互面（验证码对话框），headless 无面——登录/评论链调用（4 源）：矩阵 h-tts-and-search-bridges',
+  ajaxTestAll: '静态命中全在特性探测注释块（Linpx/兽人小说站 loginCheckJs），无真实调用；网络自测函数无面：矩阵 h-java-ajax-test-all',
+  queryBase64TTF: '字体反混淆（TTF 解析 + 码位映射，大件）——需求方已出现（爱丽丝书屋 1 源），用户裁「排队」：矩阵 h-font-anti-scrape',
 }
 
 /** 本仓 `java` 挂载面：**问沙箱本体**，探钢单点在 `tests/java-surface.ts`——第二个消费者

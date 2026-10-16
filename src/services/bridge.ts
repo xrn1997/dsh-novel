@@ -4,7 +4,7 @@ import type { EngineValue, Facet, RuleUsage } from '../engine/index.js'
 // runScript 深引（与 search-template 同口径）：header 规则求值走沙箱完成值语义，
 // 引擎 barrel 刻意不收 runScript（公开面只有 evaluate）——服务半第二个深引消费点。
 import { runScript } from '../engine/js-sandbox.js'
-import { engineFetch, engineFetchPost, engineFetchRaw } from './engine-fetch.js'
+import { engineFetch, engineFetchHead, engineFetchPost, engineFetchRaw } from './engine-fetch.js'
 import { headerOf, effectiveUserAgent } from './fetcher.js'
 import type { Fetcher } from './fetcher.js'
 import { absUrl } from './url.js'
@@ -129,6 +129,7 @@ export function engineContextOf(
   fetch: ReturnType<typeof engineFetch>
   fetchRaw: ReturnType<typeof engineFetchRaw>
   fetchPost: ReturnType<typeof engineFetchPost>
+  fetchHead: ReturnType<typeof engineFetchHead>
   /** java.getWebViewUA 用（口径见 src/engine/types.ts 的 EvalContext.userAgent） */
   userAgent?: () => string
   /** 脚本可见的源实体字段（见 src/engine/types.ts 的 EvalContext.sourceComment / sourceName） */
@@ -151,6 +152,8 @@ export function engineContextOf(
     fetchRaw: engineFetchRaw(fetcher, () => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs })),
     // java.post 的出站口：与 ajax/connect 同一个守门 fetcher（不开第二出口），差别只有 POST + 脚本头
     fetchPost: engineFetchPost(fetcher, () => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs })),
+    // java.head 的出站口：同一守门 fetcher 的 HEAD 姿态（不跟重定向，脚本读 3xx 的直链头）
+    fetchHead: engineFetchHead(fetcher, () => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs })),
     // java.getWebViewUA 的口径：本仓真发出去的那条 UA（同步取，与 fetch 同一套静态头解析）
     userAgent: () => effectiveUserAgent(source),
     // 脚本可见的源实体字段：**按 raw 现读**，只投影脚本真读到的（对面脚本里的 source 是字段面
