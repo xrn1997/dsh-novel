@@ -12,7 +12,7 @@ import { withoutComments } from './without-comments.js'
  * src/** 与仓库根 `*.ts`），注释里提一嘴不算实现；矩阵行 id 形态另走 `matrix.ts`。
  *
  * 第二条门守词汇表自身的两条承诺：**每个词条都点名实现位置**（不许退化成散文 glossary）、
- * **不许指已出库的东西**（本仓只剩 `README.md` / `AGENTS.md` / 本表三份文档）。
+ * **不许指已出库的东西**（本仓在册的散文文档是 `README.md` / `AGENTS.md` / 本表与 `docs/**`）。
  */
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
@@ -106,6 +106,6 @@ describe('CONTEXT.md 不许指着已出库的东西', () => {
   it('不提已删的设计文档、词表外的兼容文档与已撤的守卫', () => {
     const DEAD = /docs\/(design|reference)\/|compat\/README\.md|(?<!-)coverage\.test\.ts|citation-liveness|matrix-pointers|docs-module-symbols|docs-references|docs-pinned-copy|known-open/
     const hits = CONTEXT.split('\n').map((l, i) => ({ l, i })).filter(({ l }) => DEAD.test(l))
-    expect(hits.map(({ i, l }) => `${i + 1} ${l.trim().slice(0, 90)}`), '本仓在册文档只有 README / AGENTS / CONTEXT').toEqual([])
+    expect(hits.map(({ i, l }) => `${i + 1} ${l.trim().slice(0, 90)}`), '指向了已出库或不在册的文档').toEqual([])
   })
 })

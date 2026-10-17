@@ -21,20 +21,20 @@
 - [兼容哪些书源](#兼容哪些书源)
 - [常见问题](#常见问题)
 - [开发](#开发)
-- [测试与真链路门控](#测试与真链路门控)
 - [文档地图](#文档地图)
 - [贡献](#贡献)
 - [致谢](#致谢)
 
 ## 功能特性
 
-- **书源导入**：拖入或选择 .json 文件（可多选）或粘贴 legado 书源 JSON。导入跑在**服务端后台任务**——关掉页面不打断，进度与汇总随时回看；按书源地址自动去重（可用源优先保留）
-- **阅读体验**：封面网格书架（带阅读进度、每本书标注来源书源——同源同色色点 + 源名，源被删则如实标「来源已删除」；多选态批量删除）、连续滚动阅读（滚动到底自动预取下一章）、目录抽屉跳章、字号 / 行距 / 栏宽 / 纸张色可调、深浅主题自适应、章节范围流式导出（可取消）；不在书架上的书点「书架」离开阅读器时会先问一句要不要加入（加入才保存阅读进度）
-- **聚合搜索**：跑在服务端，进度实时推送（SSE，不可用时自动回落轮询）、可中途**停止**且保留已搜出的命中、**切走界面不丢结果**、失败源折叠；结果默认**按书一行**——同一（书名，作者）在多家源上的命中收成一本，行上报「N 家源」（数的是**去重后的家**：几家答话了），点「展开 N 条」摊开逐源行（数的是**行**：一家可能给多种写法，各家的叫法与各家的动作都在），「都加架」一次把这一本的各家逐条入架（回执按落架的架位报「已加 x 条」：同一源同一地址的两种写法只落一个架位）；按源那一轴**没有删**，降级为页尾「按源看」折叠，未响应失败源仍逐家点名。默认列书名／作者／分类含关键词（或书名含其空格分段）的结果，其余在组内「疑似无关」里折叠、可展开；默认视图最多 200 本，超限照实报「本轮共 N 本，只列前 M」
-- **书城（分类浏览）**：左栏是**一列可搜索的源**（只有声明了分类入口的源进城：启用 ∧ 文本源 ∧ 自己没把发现关掉；脚本形态 `@js:` / `<js>` 的发现入口不执行，声明它的源在书城就没有分类），**选中的那个源就地展开自己的分类**——分类按书源写下的顺序列、不排序、不跨源合并、也不带计数（本仓不造同义词表，「玄幻」与「玄幻奇幻」是站点的真实分歧），源行只写名字与它自己声明了几类、不写分组（分组撑不起一级浏览轴，也就不在浏览面每行重复）。右区是该源该分类的书单（4 列，窄面板 2 列），「加载更多」一次一页——服务端不问就不打下一页，到底这行读数自己收口。点开一本书进**书籍详情浮层**：整段简介（浮层里不夹行，卡片上才夹一行）+ 本源**读这本 / 加入书架** + **在其他源找这本**；跨源那一次由用户手动发起，走的是聚合搜索那条既有链路：结果逐源一行就地到达（不并成一条、不排序、不替用户判是不是同一本书）、可中途**停止**，某一家没响应就点名摊开它（源名 + 错误码），**答了的那些家**全都一条没搜到才说「没有一家按这个书名搜到」——一个答复都没有时只出未响应，不把「没答」念成「没搜到」；那既不等于「这本书不存在」，也不等于「搜索出了错」。这一列只认**这本书这一轮**点出来的结果，搜索面上别处的轮次不会被当成本书的答案
-- **AI 助手工具**：搜索、读章、目录、书架（含写）、书源管理、导入书源六个工具，与 UI 共用同一条链路
-- **本地书导入（TXT / EPUB）**：TXT 走 GBK / UTF-8 自动识别后切章入架；EPUB 2/3 流式排版按 spine 计章，保留原书目录树、正文插图、脚注跳转与返回、基本格式。有损项落成**持久导入说明**——导入时就地交代，进书后还能在阅读器里重看
-- **书源管理**（调度台 IA，入口在「小说」视图顶部「书源管理」tab）：**待办收件箱**把坏源 / 未验证置顶成任务卡（批量重验 / 一键验证，处理完自动消解），读数集中在源列表头的**状态带**；支持文本 / 状态 / 分组过滤、行内启停、编辑模式批量启停 / 验证 / 删除、单源试跑下钻、登录支持（cookie 录入与 `loginUrl` 脚本执行两形态）；删除统一模态二次确认
+- **书源导入**：拖入 / 多选 `.json` 或粘贴 legado 书源 JSON；导入跑在服务端后台，关页面不打断，进度与汇总可回看，按书源地址自动去重（可用源优先保留）。
+- **书架**：封面网格 + 阅读进度，每本书标注来源书源（同源同色色点 + 源名；源被删则标「来源已删除」）；支持多选批量删除。
+- **阅读器**：连续滚动、滚动到底自动预取下一章、目录抽屉跳章；字号 / 行距 / 栏宽 / 纸张色可调，深浅主题自适应；支持章节范围流式导出（可取消）。不在书架上的书点「书架」离开阅读器时会先问是否加入（加入才保存进度）。
+- **聚合搜索**：服务端执行，SSE 实时推送（不可用时回落轮询），可中途停止并保留命中，切走界面不丢结果，失败源折叠；结果默认按（书名，作者）归并成一本、行上标「N 家源」，可展开逐源行或「都加架」逐条入架；默认只列书名 / 作者 / 分类含关键词（或书名含其空格分段）的结果，其余折进「疑似无关」、可展开，最多列 200 本并如实报总数；页尾保留「按源看」折叠。
+- **书城（分类浏览）**：左栏选源（只有声明了分类入口、启用且没关掉发现的文本源进城；`@js:` / `<js>` 发现入口不执行），右栏看该源自己声明的分类——按源内顺序列、不排序、不跨源合并、不带计数；书单 4 列（窄面板 2 列），「加载更多」一次一页；点书进详情浮层，可读、加架，或手动在其他源搜这本（逐源一行到达、不归并、不排序、不替用户判同书、可停止，未响应的源点名摊开）。
+- **AI 助手工具**：搜索、读章、目录、书架（含写）、书源管理、导入书源六个工具，与 UI 共用同一条链路（详见下文）。
+- **本地书（TXT / EPUB）**：TXT 自动识别 GBK / UTF-8 并切章；EPUB 2/3 流式排版按 spine 计章，保留原书目录树、正文插图、脚注跳转与返回、基本格式。有损项落成持久导入说明，进书后还能在阅读器里重看。
+- **书源管理**：待办收件箱把坏源 / 未验证置顶成任务卡（批量重验 / 一键验证，处理完自动消解），状态带汇总读数；支持文本 / 状态 / 分组过滤、行内启停、批量启停 / 验证 / 删除、单源试跑、cookie 录入与 `loginUrl` 脚本执行两形态；删除二次确认。
 
 ## 安装
 
@@ -54,7 +54,7 @@ npm 安装使用预构建产物，秒装、无需构建授权。从 GitHub 源�
 dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 ```
 
-**宿主兼容声明分两层，别混**：安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`（区间写窄了，插件在真宿主上装都装不进去）。实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本。两层由 `tests/packaging.test.ts` 同时看住：编译期 devDependency 必须被 peer 区间放行，且必须出现在实测声明里。宿主发新版要做四件事——升级编译所依、给 peer 区间开这一代的口、加实测条目、把新宿主的浏览器模块表（宿主前端的 `staticModules()`）重读一遍并对齐 `PLATFORM_MODULES`；前两件漏了会红，后两件靠真机与人工核对。宿主依赖包的**发布冷却闸**（pnpm 的 `minimumReleaseAge`，24 小时内发布的版本不许进 lockfile）对 `@deepseek-ai/dsh-*` 整 scope 放行，写死在 `pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude`——所以 bump 宿主不必再动一份逐代手写的放行名单（理由与被否决的做法见 `docs/adr/0026`）。
+**宿主兼容声明分两层**：安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`；实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本。宿主发版、peer 区间与浏览器模块表的维护流程，以及发布冷却闸，见 [docs/developing.md](https://github.com/xrn1997/dsh-novel/blob/main/docs/developing.md#宿主兼容与发版)。
 
 ## 首次使用
 
@@ -142,7 +142,7 @@ URL 模板语义按 legado 书源格式对齐：`url,{json}` 选项的逗号两�
 
 遇到不认识的语法，本插件选择**报错而不是猜测**——错误定位到出错的规则段，而不是产出错误结果。依赖安卓 WebView 或加解密 API 的书源无法在本环境仿真，会明确报告不支持。
 
-**「做到哪一步」有机器口径**：`tests/legado-coverage/matrix.ts` 一行一条 legado 语义，每行归入 实现 / 环境不适用 / 待拍板 三态之一，并带可回查的证据（实现符号、钉住它的用例）与裁决理由。四门默认随 `pnpm test` 跑（见[测试与真链路门控](#测试与真链路门控)）。想查某个字段支不支持：在矩阵里按 `id` 或能力名搜那一行即可。
+**「做到哪一步」有机器口径**：`tests/legado-coverage/matrix.ts` 一行一条 legado 语义，每行归入 实现 / 环境不适用 / 待拍板 三态之一，并带可回查的证据（实现符号、钉住它的用例）与裁决理由。四门默认随 `pnpm test` 跑（见 [docs/developing.md 的「兼容判据四门」](https://github.com/xrn1997/dsh-novel/blob/main/docs/developing.md#兼容判据四门)）。想查某个字段支不支持：在矩阵里按 `id` 或能力名搜那一行即可。
 
 ## 常见问题
 
@@ -156,7 +156,7 @@ URL 模板语义按 legado 书源格式对齐：`url,{json}` 选项的逗号两�
 该源的 `jsLib` 里用了 `eval` / `new Function` 动态执行字符串——本插件的 JS 沙箱出于逃逸防御显式禁用字符串代码生成（legado 的 Rhino 环境允许），这类源无法仿真。
 
 **安装后侧栏没有出现「小说」入口？**
-先重启宿主。若从源码目录安装，确认已先 `pnpm build` 生成 `lib/`（构建产物缺失会让整个插件树拒绝挂载，宿主直接启动失败而非静默降级），详见[本地源码调试](#本地源码调试)；装进了 bundles 里没有 `@deepseek-ai/dsh-web-app` 的 profile，则本就只有工具面、没有侧栏入口。
+先重启宿主。若从源码目录安装，确认已先 `pnpm build` 生成 `lib/`（构建产物缺失会让整个插件树拒绝挂载，宿主直接启动失败而非静默降级），详见 [docs/developing.md 的「本地源码调试」](https://github.com/xrn1997/dsh-novel/blob/main/docs/developing.md#本地源码调试)；装进了 bundles 里没有 `@deepseek-ai/dsh-web-app` 的 profile，则本就只有工具面、没有侧栏入口。
 
 ## 开发
 
@@ -168,136 +168,28 @@ pnpm build        # 构建 lib/（Node 半 + 浏览器半）；改动源码后�
 pnpm dev          # = tsdown --watch，日常开发建议挂着
 ```
 
-### 本地源码调试
-
-**`lib/` 是构建产物且不入库，任何从源码目录链进 profile 的安装方式都不会替你构建它。**
-
-```powershell
-dsh plugin --profile <profile> add link:C:/path/to/dsh-novel
-pnpm build        # 必须在源码目录手动跑一次，缺这步宿主起不来
-```
-
-`link:` 只建目录链接、绝不触碰对端目录，pnpm 不会在对端执行 `prepare`，反复重跑也不会生成 `lib/`。缺失时的报错是 `dsh: plugin tree failed to load` + `ERR_MODULE_NOT_FOUND`，指向 `lib/index.js`。
-
-改动生效分两半：**浏览器半**（`src/client/`）由 `dsh-client-hmr`（500ms stat 轮询 + SSE）在 `lib/client.js` 的 mtime / size 变化时自动推给浏览器热更新，无需重启；**Node 半**不在热重载链路内，需重启宿主。
-
-### 架构速览
-
-```
-src/
-├── engine/     # legado 规则引擎（纯函数：解析 → 求值；段级错误追踪；@js 沙箱）
-├── services/   # 业务门面：抓取（编码检测 / 代理）/ 书源注册表 / 书架 / 缓存 / 本地书
-├── api/        # /novel-api/* HTTP 路由
-├── tools/      # AI 助手六工具（与 HTTP 共用同一 service 层）
-├── config.ts   # 配置缝：类型 / schema / 缺省 / 值域
-├── index.ts    # Node 侧插件入口（Cordis）
-├── shared/     # 跨半 wire 契约（唯一主人）
-└── client/     # 浏览器侧：「小说」视图（书架 / 书城 / 书源管理三 tab）
-```
-
-## 测试与真链路门控
-
-```powershell
-pnpm test          # 常规集（引擎 / 服务 / API / 工具 / 入口 / 前端逻辑与 smoke / 兼容判据四门）
-pnpm test:compat   # 兼容性回放（compat/fixtures → 离线复算；报告写 compat/report.md，产物不入库）
-pnpm test:pack     # 构建 + 产物自检
-pnpm typecheck     # tsc --noEmit —— 必须与 pnpm test 同批跑
-```
-
-> **跑门取退出码，别看管道说了什么**：`pnpm test | tail` 之后退出码是管道工具的，红会被吃掉。先把输出灌进文件、再单独打印退出码；**跑门与提交必须是两条命令**。
-
-**默认跳过、需显式打开的门控**（`pnpm test` 全绿**不覆盖**它们；常规集证明引擎 / 服务 / 契约 / 前端逻辑，**不证明任何真实站点可用性、也不证明安装链路**）：
-
-```powershell
-# 真机全量重探：改动抓取 / 规则引擎后实测书源**搜索面**可用率（真实联网，耗时数分钟）
-# 注意 verified 只证搜索面，不证正文可读
-$env:DSH_REPROBE='1'; pnpm vitest run tests/reprobe.test.ts
-
-# 正文链路全量审计：搜索→目录→正文逐段实测 + 失败分桶（正文可用率以本审计为准）
-# 它是**报告**：分桶读数靠人判，代码不设通过率断言，只断言每个注册源都进了审计
-$env:DSH_CONTENT_AUDIT='1'; pnpm vitest run tests/content-audit.test.ts
-$env:DSH_AUDIT_KEYWORDS='小说,完本,的'   # 旋钮（都可省）：关键词表 / 并发 / 每本抽哪几章 / 只审某些源
-$env:DSH_AUDIT_WORKERS='5'
-$env:DSH_AUDIT_CHAPTERS='0,2,5,mid'
-$env:DSH_AUDIT_ONLY='源名子串1,源名子串2'
-
-# 搜索相关性分档 + 按书归并真机审计：全量源聚合搜索 → kept/suspect 分桶读数、按书本数与家数分布、三组待判样例（联网，分钟量级）
-# 它是**报告**：不设通过率断言（分母随源增删与站点脸色漂），唯一断言是判据自洽（分档不丢条）；读数供裁「去虚字放行」偏离与那把归并键的焊错面
-$env:DSH_SEARCH_FILTER_AUDIT='1'; pnpm vitest run tests/search-relevance-audit.test.ts
-$env:DSH_SEARCH_AUDIT_KEYWORD='冰魔女的契约'   # 旋钮（可省）：审计关键词
-
-# 真采集上游：把真实站点抓成 compat fixture 快照（联网；关键词须与回放同批，缺省「书」）
-$env:COMPAT_CAPTURE='1'; $env:COMPAT_KEYWORD='书'
-pnpm vitest run --config vitest.compat.config.ts tests/compat/capture.test.ts
-# 采完离线复算：pnpm test:compat —— 落盘的必须是脱敏后的产物（见下）
-
-# 真安装链路：dsh plugin add → profile bundles 挂载 + lib/client.js / cordis.patch.yml 就位
-$env:DSH_INSTALL_CHECK='1'; pnpm vitest run tests/packaging-install.test.ts
-
-# 真浏览器门（离线）：EPUB 图文阅读的真图片解码 / 真排版位置 / 真下载字节
-# 本地随机端口起真服务、驱动构建产物 lib/client.js，只用**已安装的** Edge/Chrome，从不下载
-$env:DSH_EPUB_BROWSER='1'; pnpm vitest run tests/browser/epub-reader.test.ts
-# 同一枚闸下的几何门：不起服务、不读站点——把浮层的真 DOM 灌进浏览器量 rect（jsdom 量不到排版）
-$env:DSH_EPUB_BROWSER='1'; pnpm vitest run tests/browser/city-sheet-layout.test.tsx
-```
-
-- **采集三条实践口径**：出站与生产同口径（走 `resolveProxyUrl`：config > 环境变量 > 系统代理 > 直连，缺这条会把反爬壳页采成「正文为空」）；manifest 的键是**请求 URL**而非重定向后的落地地址（搜索类源常「POST 出去、302 落到结果页」）；站点会抖，**别删已采好的 fixture**，重采会覆盖、删除只会让你重新赌一次站点脸色。落盘的是生产解码链读到的文本（`decodeBody`：声明 charset → content-type → `<meta>` 嗅探），GBK 页才存成真中文。
-- **脱敏是门禁**：`tests/compat/sanitize.ts` 在写盘前扫 cookie / token / password / authorization / apiKey 与 `Authorization: Bearer …` 形态（判据与被否决的旧写法住该文件头注），`tests/compat/sanitize.test.ts` 钉住它。自动脱敏**是兜底不是证明**，入库前仍要人工过目。
-- **`DSH_EPUB_BROWSER` 允许带按应有口径写的「诚实红」**：已知缺陷的读数不削成绿，缺陷与读数登记在该测试文件自己的注释里；修好时按那条记录一起撤下。
-
-**解析面普查（离线，读本地书源库）**——「legado 能解析的书源本插件也能解析」这条目标的进度读数口：把现库**每一条规则串**过 `parseRule`、把**每一个脚本里的 `java.*` 调用**与沙箱实际挂载面对账，输出「本仓拒绝的语法族」「脚本在调而桥没挂的方法」两张清单，并断言**未在册的新形态 = 0**；同时印一张**需求读数表**（矩阵 `note` 里那些「N 源带值」一条命令重算，判据印在数字旁边——同一个键常有两种数法）。
-
-```powershell
-$env:DSH_PARSE_CENSUS='1'; pnpm vitest run tests/engine/parse-census.test.ts
-```
-
-数不一致只打印漂移、不判红（分母随用户增删漂）；判红的是**绑定落空**（矩阵行 id 被改名 / 删掉、或那个键再也算不出来）与**零读数空转**（当下数出 0 的判据必须在合成样品上数得出非 0，否则分不清「真没人用」与「判据接不上任何东西」）。**分母要定期换**：只跑本机库，一条从未出现过的写法就永远不会露出来——把另一批独立公开合集灌进同一个门（`DSH_PARSE_CENSUS_FILE` 指过去即可，取法见 `tests/engine/parse-census.test.ts` 头注）。
-
-**兼容判据四门**（随 `pnpm test` 默认跑，运行时不需要任何外部 checkout）：
-
-| 门 | 判什么 |
-| --- | --- |
-| `status-evidence.test.ts` | 逐行验证据可回查：`implemented` 的实现符号在剥注释后的代码里、钉子用例在测试里；`not-applicable` 必须写明裁决理由；`open` 必须带 `2026-MM-DD` 复核戳；行 id 唯一；一行一条记录 |
-| `inventory-coverage.test.ts` | 每个能力单元各挂 ≥2 条真实矩阵行（分母是矩阵本身，**不读快照**） |
-| `upstream-fields.test.ts` | 对面 7 个规则实体的**每个字段**都要在矩阵有归属 |
-| `host-methods.test.ts` | 对面 `java` 宿主方法名集的归属：要么挂在沙箱自报的方法面上、要么在矩阵里逐字点名 |
-
-后两门的分母是**仓内快照** `compat/upstream/snapshot.json`（对面源根路径集 / 规则实体字段表 / java 宿主方法名集），由开发阶段的门控从对面 checkout 抽一次；日常跑门只读快照，**快照不在场即红**（不静默跳过）：
-
-```powershell
-$env:DSH_CAPTURE_UPSTREAM='1'; $env:DSH_LEGADO_REF='<对面 checkout 路径>'
-pnpm vitest run tests/legado-coverage/capture-upstream-snapshot.test.ts
-```
-
-### 真宿主冒烟（手工，动的是宿主与环境，属授权项——仓内没有自动化替代）
-
-`DSH_INSTALL_CHECK` 只证明**源码装入这一格**（一次性 profile、自建 `lib/`、断言 bundles 与产物就位，跑完自己 `remove`）。它不起宿主，所以不证明插件树真能被挂载、也不证明六个工具在宿主里跑得通。那两件事只能手工做：
-
-1. **前置**：先 `pnpm build`。宿主 profile 必须**可由 CLI 写**——保留名 `desktop` 归宿主应用独占，普通 CLI 会以 `profile "desktop" is managed exclusively by the Electron application` 拒写；写不了就改用 CLI 自建的一次性 profile（`dsh plugin --profile <名> add <本地路径>` 初始化它，再把 `@deepseek-ai/dsh-web-app` 加进 `dsh.profile.bundles`），它组出同一棵树。
-2. **装载与挂载**：`dsh plugin --profile <名> add github:xrn1997/dsh-novel`（源码装首次要 `pnpm approve-builds --all`）→ `dsh --profile <名> --dump-config` 的组合树里出现本插件 → 起 `dsh --profile <名>`，看组合树里没有 `plugin tree failed to load`。
-3. **工具面与一条真路径**：六个 `dshnovel_` 工具各真调一次；再走一条真实业务：搜 → 详情 → 目录 → 正文并翻一页（顺带覆盖出站代理与解码链）。
-
-**它证明什么**：当前宿主版本上「装得进、挂得上、工具面活着、业务链路走得通一次」。**它不证明**：任何站点的正文可读率（那是 `DSH_CONTENT_AUDIT` 的分桶报告，报告不等于通过率）、浏览器里的渲染与图片解码（那是 `DSH_EPUB_BROWSER`），也不证明其它宿主版本——每次 bump 宿主版本都要重跑这三步，并把结果如实加进上面的实测名单。
+本地源码调试、构建产物与热更新、宿主兼容与发版、全部测试门控与真宿主冒烟见 [docs/developing.md](https://github.com/xrn1997/dsh-novel/blob/main/docs/developing.md)；模块形状与语义归属见 [docs/architecture.md](https://github.com/xrn1997/dsh-novel/blob/main/docs/architecture.md)。
 
 ## 文档地图
 
-本仓的文档按「一个事实只有一个家」分工，五家各管一种寿命：
+本仓的文档按「一个事实只有一个家」分工，六家各管一种寿命：
 
 | 位置 | 承担 | 明确不承担 |
 | --- | --- | --- |
-| `README.md`（本文件） | 用户面事实与全部命令：安装、用法、配置键、路由与工具表、门控 | 设计理由、真机读数 |
+| `README.md`（本文件） | 用户面事实与产品命令：安装、用法、配置键、路由与工具表 | 设计理由、真机读数、贡献者门控与发版细节 |
 | `AGENTS.md` | 给 agent 的工作纪律：真相在哪、硬约束、跑门纪律、文档纪律、环境坑 | 时点状态与读数 |
 | `CONTEXT.md` | 领域词汇表，每个词条点名它的**唯一实现**符号 | 口径论证、实现细节 |
 | `docs/architecture.md` | 形状与归属：分几块、为什么这么切、某条语义该去哪改 | 读数、决策史、逐文件清单 |
+| `docs/developing.md` | 贡献者命令与验证：构建、本地调试、全部门控、真宿主冒烟、宿主兼容与发版 | 用户用法、设计决策、真机读数 |
 | `docs/adr/` | 决策与当初被否决的替代方案，每篇一个编号文件（只追加，推翻就标 superseded） | 现状描述、验收清单 |
 
-两类东西不进文档：**兼容裁决与真机读数**住 `tests/legado-coverage/matrix.ts` 的行 `note`（要重算走 `DSH_PARSE_CENSUS`）；**局部口径的为什么**住实现它的那段代码注释。宿主侧的 API 行为以就地注释引原文 + 每次 bump 现读为凭，本仓**没有**宿主 API 的参考文档；legado 侧的对读结论才冻结成在册快照 `compat/upstream/snapshot.json`。
+两类东西不进文档：**兼容裁决与真机读数**住 `tests/legado-coverage/matrix.ts` 的行 `note`（要重算见 `docs/developing.md` 的「解析面普查」）；**局部口径的为什么**住实现它的那段代码注释。宿主侧的 API 行为以就地注释引原文 + 每次 bump 现读为凭，本仓**没有**宿主 API 的参考文档；legado 侧的对读结论才冻结成在册快照 `compat/upstream/snapshot.json`。
 
 迭代过程文档（任务计划、审查报告、一次性脚本）**不入库**，写在本机 `.superpowers/`——`main` 只保留当前真相。文档面的引用活性由 `tests/docs-liveness.test.ts` 随 `pnpm test` 把住：路径不在场、写行号、指已出库的东西、ADR 断号，都会红。
 
 ## 贡献
 
-欢迎 Issue 与 PR。提交改动前请确保 `pnpm test` 与 `pnpm typecheck` 通过，且**两条命令的退出码都亲眼看过**；若扩展了书源语法，请优先补充对应的回放测试 fixture（脱敏判据见 `tests/compat/sanitize.ts`），并把新形态在 `tests/legado-coverage/matrix.ts` 里落到正确的那一态。提交即表示你同意以 [Apache-2.0](LICENSE) 协议授权你的贡献。
+欢迎 Issue 与 PR。提交改动前请确保 `pnpm test` 与 `pnpm typecheck` 通过，且**两条命令的退出码都亲眼看过**；完整的真链路门控与真宿主冒烟见 [docs/developing.md 的「测试与真链路门控」](https://github.com/xrn1997/dsh-novel/blob/main/docs/developing.md#测试与真链路门控)。若扩展了书源语法，请优先补充对应的回放测试 fixture（脱敏判据见 `tests/compat/sanitize.ts`），并把新形态在 `tests/legado-coverage/matrix.ts` 里落到正确的那一态。提交即表示你同意以 [Apache-2.0](LICENSE) 协议授权你的贡献。
 
 ## 致谢
 
