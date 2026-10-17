@@ -8,7 +8,7 @@ import { DEFAULT_JS_BUDGET_MS, DEFAULT_SEARCH_PARALLEL } from './services/readin
 /** 插件配置（官方 config 页规范形态：schemastery Standard Schema）。
  *  默认值与值域**都住 schema**：字面量只出现在各消费模块，这里全部引常量——
  *  「缺省值五个各自主人」的纪律不破，schema 是口径的家而不是字面量的第二个主人。
- *  偏离理由的更正（2026-10-17，钉版 3.18.4 实测）：inner/outer default 的填充语义
+ *  偏离理由的更正（2026-10-17，钉版 3.18.5 实测）：inner/outer default 的填充语义
  *  是确定的（undefined / {} / 字段缺失都按 default 填），当年「随版本歧义」的顾虑
  *  在钉版上不成立；`.default({})` 只作 cordis 缺省 config 行（undefined 输入）的兜底。
  *  显式 `null` 也按「未设置」填缺省——这是 schemastery 的平台语义，本仓不再另造一道

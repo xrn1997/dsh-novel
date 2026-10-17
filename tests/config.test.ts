@@ -7,7 +7,7 @@ import { DEFAULT_MAX_IMPORT_BYTES } from '../src/services/localbooks.js'
 import { DEFAULT_JS_BUDGET_MS, DEFAULT_SEARCH_PARALLEL } from '../src/services/reading.js'
 
 describe('配置收缝', () => {
-  it('默认值与值域都住 schema：undefined / {} / 字段缺失都按默认填（3.18.4 实测语义）', () => {
+  it('默认值与值域都住 schema：undefined / {} / 字段缺失都按默认填（3.18.5 实测语义）', () => {
     expect(Config(undefined as any)).toMatchObject({ searchTimeoutMs: DEFAULT_TIMEOUT_MS })
     expect(Config({} as any)).toMatchObject({ searchParallel: DEFAULT_SEARCH_PARALLEL })
     expect(Config({ searchTimeoutMs: 1000 } as any)).toMatchObject({

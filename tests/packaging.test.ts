@@ -91,7 +91,7 @@ describe('包形态声明', () => {
     const asHost = (v: string): boolean => semver.satisfies(v, range, { includePrerelease: true })
     expect(asHost(dev)).toBe(true)
     // 上界必须挡住**下一代**：否则下一代一发就自动变成「被兼容」
-    expect(asHost('0.2.1-rc.1')).toBe(false)
+    expect(asHost('0.2.2-rc.1')).toBe(false)
     // 下限的理由：三个硬 inject 里只有 `jobs` 有下限——`webServer`（补丁 id 写的是 `webserver`，
     // 按 camelCase grep 会漏）在 dsh-web-app 每个已发版本里都在，`tools` 连 0.0.1-rc.1 就有。
     // `jobs` 行在 dsh-base 侧从 0.0.1-rc.3 起就有，但那一版只有组件侧发过（`@deepseek-ai/dsh`

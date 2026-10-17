@@ -2,3 +2,8 @@ allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-*'
+  # 0.2.1-rc.1 的 dsh-tools 传递依赖把这三件也带到当天版本；pnpm 自动追加，
+  # 由 frozen lockfile 的 supply-chain 校验兜底（满 24h 后可删）。
+  - '@deepseek-ai/cordis@4.0.5'
+  - '@deepseek-ai/cosmokit@1.8.6'
+  - '@deepseek-ai/schemastery@3.18.5'
