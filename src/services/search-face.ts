@@ -6,6 +6,7 @@ import { classify } from './errors.js'
 import type { ErrorCategory } from './errors.js'
 import { fetchTextPage } from './fetcher.js'
 import type { Fetcher } from './fetcher.js'
+import { log } from './log.js'
 import { isNativeSource } from './normalize.js'
 import { absUrlKeepOption, buildSearchRequest, canonUrl, fetchInitOf } from './request.js'
 import { resolveSearchTemplate } from './search-template.js'
@@ -118,7 +119,7 @@ function patternOf(raw: string | null, sourceName: string): RegExp | null {
   try {
     return new RegExp(`^(?:${raw})$`)
   } catch {
-    console.warn(`[dsh-novel] 源「${sourceName}」的 bookUrlPattern 不是合法正则，已忽略详情页嗅探：${raw}`)
+    log.warn(`源「${sourceName}」的 bookUrlPattern 不是合法正则，已忽略详情页嗅探：${raw}`)
     return null
   }
 }

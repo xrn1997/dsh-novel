@@ -10,6 +10,7 @@ import type { Fetcher } from './fetcher.js'
 import { absUrl } from './url.js'
 import { parseObjectJson, stringTableOf } from './normalize.js'
 import { formatIntro } from './content.js'
+import { log } from './log.js'
 import type { NovelSource } from './types.js'
 
 // 兼容 re-export：absUrl 迁至 url.ts（拆 request↔bridge 环）、engineFetch 迁至 engine-fetch.ts
@@ -211,7 +212,7 @@ export async function resolveHeaders(
     if (parsed === undefined) throw new Error('动态头规则产物不是对象 JSON')
     return { ...stringTableOf(parsed), ...staticHeaders }
   } catch (e) {
-    console.warn(`[dsh-novel] 动态头规则求值失败，回退静态头（${source.name}）：`,
+    log.warn(`动态头规则求值失败，回退静态头（${source.name}）：`,
       e instanceof Error ? e.message : String(e))
     return staticHeaders
   }

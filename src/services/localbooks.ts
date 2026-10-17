@@ -167,7 +167,7 @@ export interface LocalResource {
 }
 
 /** 本地导入上限（缺省 50MB）。**这个数是唯一主人**：传输层（`api/dispatch.ts` 读 `service.localImportMaxBytes`）、
- *  门面（`reading.ts` 的 create/from 回退）与组合根 DEFAULTS 全部走它——两侧同一值是有意的：
+ *  门面（`reading.ts` 的 create/from 回退）与缺省装配处 `src/config.ts` 的 schema `.default()` 全部走它——两侧同一值是有意的：
  *  流读时按它计数，解析层再按它判一次，两边不一致就会出现「读进来了却拒不解析」的错觉。 */
 export const DEFAULT_MAX_IMPORT_BYTES = 50 * 1024 * 1024
 

@@ -45,8 +45,8 @@ import type {
   BookDetail, BookNavigation, ChapterContent, ExploreSources, ExploreSnapshot, LocalImportResponse, LocalImportWarning,
   SearchGroup, SearchHit, SearchPlan, SearchJobSnapshot, ChapterEntry, ShelfBook, ShelfEntry, ShelfMetaPatch, SourcePublic,
 } from '../shared/wire.js'
-/** 聚合搜索并发（缺省 5）与 js 沙箱预算（缺省 15s）：**这两个数的唯一主人**——组合根 DEFAULTS
- *  与本文件 `from()` 回退都引这里，别处不再写字面量。15s 而非引擎 2s：多请求目录脚本 2s 必炸；
+/** 聚合搜索并发（缺省 5）与 js 沙箱预算（缺省 15s）：**这两个数的唯一主人**——缺省装配处
+ *  `src/config.ts` 的 schema `.default()` 与本文件 `from()` 回退都引这里，别处不再写字面量。15s 而非引擎 2s：多请求目录脚本 2s 必炸；
  *  名字带「预算」以别于引擎 `DEFAULT_JS_TIMEOUT_MS`，两层各有默认，同名会让按名 import 落错主人。 */
 export const DEFAULT_SEARCH_PARALLEL = 5
 export const DEFAULT_JS_BUDGET_MS = 15_000

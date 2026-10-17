@@ -91,6 +91,8 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 | `localImportMaxBytes` | `52428800`（50MB） | 本地文件导入大小上限（字节，TXT / EPUB 共用） |
 | `proxyUrl` | 自动探测 | 出站代理，见[常见问题](#常见问题)；`'direct'` 强制直连，或显式指定如 `'http://127.0.0.1:7897'` |
 
+数值项按整数校验；非法值（含 `NaN` / `Infinity`）在插件加载期报错。显式 `null` 按未设置处理、取缺省。
+
 ## HTTP API
 
 所有路由以 `/novel-api` 为前缀（仅接受本机 loopback 且 **Origin/Referer 同源**的请求），响应为统一信封 `{ ok, value | error }`，错误附带 `code` 与可选的规则段级定位。共 35 条路由（30 静态 + 5 参数，计数由 `tests/shared/wire-builders.test.ts` 钉死）。**路由名与值形状的代码真相在 `src/shared/wire.ts`**——Node 半与浏览器半共用同一份定义，契约测试逐条把守。
@@ -187,6 +189,7 @@ src/
 ├── services/   # 业务门面：抓取（编码检测 / 代理）/ 书源注册表 / 书架 / 缓存 / 本地书
 ├── api/        # /novel-api/* HTTP 路由
 ├── tools/      # AI 助手六工具（与 HTTP 共用同一 service 层）
+├── config.ts   # 配置缝：类型 / schema / 缺省 / 值域
 ├── index.ts    # Node 侧插件入口（Cordis）
 ├── shared/     # 跨半 wire 契约（唯一主人）
 └── client/     # 浏览器侧：「小说」视图（书架 / 书城 / 书源管理三 tab）

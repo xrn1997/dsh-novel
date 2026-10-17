@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { log } from './log.js'
 
 /** 数据根目录：$DSH_HOME ?? ~/.dsh，再拼 'novel'（布局钉死） */
 export function novelDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -59,7 +60,7 @@ export async function readJson<T>(file: string, fallback: T): Promise<T> {
     return JSON.parse(raw) as T
   } catch (e) {
     await fs.copyFile(file, backupPathOf(file)).catch(() => undefined)
-    console.error(`[dsh-novel] ${file} 解析失败，已备份为 ${backupPathOf(file)}，拒绝按空结果继续：`, e)
+    log.error(`${file} 解析失败，已备份为 ${backupPathOf(file)}，拒绝按空结果继续：`, e)
     throw new CorruptJsonError(file, e)
   }
 }

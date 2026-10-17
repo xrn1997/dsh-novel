@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ExploreJobs, MAX_EXPLORE_PAGES } from '../../src/services/explore-job.js'
 import type { JobHost } from '../../src/services/import-job.js'
+import { DEFAULT_JOB_OUTPUT_BYTES } from '../../src/services/job-tail.js'
 import type { SearchGroup, SearchHit } from '../../src/shared/wire.js'
 
 /** 单源分类轮次的持有者：一轮 = **一个源 + 一个类**，跨页累积与「零新增即到底」的记忆都住在这里
@@ -411,6 +412,52 @@ describe('ExploreJobs 登记给宿主 ctx.jobs', () => {
     await tick()
     expect(h.labels).toEqual(['书城分类「玄幻」第 1 页', '书城分类「玄幻」第 2 页'])
     expect(h.settled).toEqual(['completed', 'completed'])
+  })
+
+  // 与 search-job 的 readOutput 钉子同形：分类这一路的过程行也得真的交得出（那边只靠 tsc 与
+  // 同形推断的话，宿主 `job_output` 拉到的空面没人报）。
+  it('每一页一行留在 readOutput 里，且第二次 read 不重复交付', async () => {
+    let hooks = null as { readOutput?: () => string } | null
+    let spec = null as { outputLimitBytes?: number } | null
+    const host: JobHost = {
+      start: (s) => {
+        spec = s
+        hooks = s.run()
+        return `${s.kind}-1`
+      },
+    }
+    const jobs = new ExploreJobs({ host })
+    jobs.start('s1', '玄幻', async (emit) => { emit(group([hit('a')])) })
+    await tick()
+    expect(typeof hooks?.readOutput).toBe('function')
+    const line = hooks?.readOutput?.()
+    expect(line).toContain('s1')                          // 行文带源名（组的自我报名）
+    expect(line).toContain('第 1 页')
+    expect(line).toContain('源 verified')                 // 源状态与结果分成两轴
+    expect(hooks?.readOutput?.()).toBe('')                // 消费式：同一批增量不重复交付
+    expect(spec!.outputLimitBytes).toBe(DEFAULT_JOB_OUTPUT_BYTES)
+  })
+
+  it('续页复用同一轮尾缓冲：早页 jobId 的消费者会一起拉走后页行', async () => {
+    const hooks: Array<{ readOutput?: () => string }> = []
+    const host: JobHost = {
+      start: (spec) => {
+        hooks.push(spec.run())
+        return `${spec.kind}-${hooks.length}`
+      },
+    }
+    const jobs = new ExploreJobs({ host })
+    jobs.start('s1', '玄幻', async (emit) => { emit(group([hit('a')])) })
+    await tick()
+    jobs.advance('玄幻', async (emit) => {
+      emit({ ...group([hit('b')]), status: 'unverified' })
+    })
+    await tick()
+    expect(hooks).toHaveLength(2)
+    const fromFirst = hooks[0].readOutput!()
+    expect(fromFirst).toContain('第 1 页')
+    expect(fromFirst).toContain('第 2 页 1 条（源 unverified）')
+    expect(hooks[1].readOutput!()).toBe('')               // 同一份游标：后页 jobId 不再重复交付
   })
 
   it('新一轮替换在跑的那轮：旧轮以 killed 结算给宿主，不留两条在途任务', async () => {

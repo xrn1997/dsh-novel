@@ -4,12 +4,24 @@ import http from 'node:http'
 import path from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { Config, apply, inject, name } from '../src/index.js'
+import { DEFAULT_TIMEOUT_MS } from '../src/services/fetcher.js'
+import { log, setLogSink } from '../src/services/log.js'
 import { ROUTES } from '../src/shared/wire.js'
 import { makeTempDir } from './temp-dir.js'
 
 function fakeCtx() {
   const calls: Array<{ kind: string; label?: string; route?: any; tool?: any }> = []
+  const logs: Array<{ name: string; level: string; args: unknown[] }> = []
+  /** 宿主日志服务面（官方 Context 成员，入口不再窄镜像它）：`ctx.logger(name)` 返回按级别的
+   *  命名 logger，severity 方法收变参（宿主的 printf 口径是「format + rest」）。假面挂本仓
+   *  日志缝用到的三级——info/warn/error。 */
+  const namedLogger = (name: string) => ({
+    info: (...args: unknown[]) => { logs.push({ name, level: 'info', args }) },
+    warn: (...args: unknown[]) => { logs.push({ name, level: 'warn', args }) },
+    error: (...args: unknown[]) => { logs.push({ name, level: 'error', args }) },
+  })
   const ctx = {
+    logger: namedLogger,
     effect: (fn: () => (() => void), label?: string) => {
       const d = fn()
       calls.push({ kind: 'off', label })
@@ -29,7 +41,7 @@ function fakeCtx() {
     },
   }
   const disposers: Array<() => void> = []
-  return { ctx: ctx as any, calls, disposeAll: () => { for (const d of disposers) d() } }
+  return { ctx: ctx as any, calls, logs, disposeAll: () => { for (const d of disposers) d() } }
 }
 
 const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms))
@@ -46,21 +58,19 @@ async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {
 describe('Cordis 插件入口', () => {
   // 注：@deepseek-ai/schemastery 的 schema 实例是可调用的（Config(data)），无 .parse 方法——
   // 调用形态按库实际 API 适配。
-  it('身份与 Config（schemastery：全 optional + 外层 default({})）', () => {
+  it('身份与 Config（schemastery：默认值与值域都住 schema，外层 default({}) 兜 cordis 缺省行）', () => {
     expect(name).toBe('@xrn1997/dsh-novel')
     expect(inject).toEqual(['webServer', 'tools', 'jobs'])
-    expect(Config({})).toEqual({})
-    expect(Config({ dataDir: 'D:/x' })).toEqual({ dataDir: 'D:/x' })
-    expect(Config({ exportDelayMs: 500 })).toEqual({ exportDelayMs: 500 })
-    expect(Config({ jsTimeoutMs: 30000 })).toEqual({ jsTimeoutMs: 30000 })   // js 沙箱预算出口（③）
-    expect(() => Config({ dataDir: 1 } as any)).toThrow()       // 类型错在加载期响亮
-    expect(Config(undefined as any)).toEqual({})                // .default({}) 防御：cordis 缺省 config 行
+    expect(Config({} as any)).toMatchObject({ searchTimeoutMs: DEFAULT_TIMEOUT_MS })
+    expect(Config(undefined as any)).toMatchObject({ searchTimeoutMs: DEFAULT_TIMEOUT_MS })
+    expect(Config({ dataDir: 'D:/x' } as any)).toMatchObject({ dataDir: 'D:/x', searchTimeoutMs: DEFAULT_TIMEOUT_MS })
+    expect(() => Config({ dataDir: 1 } as any)).toThrow()
   })
   it('配置值域校验：searchParallel ≤ 0 加载期响亮失败（否则批循环 i+=0 永久挂起）', () => {
-    expect(() => apply(fakeCtx().ctx, { dataDir: 'D:/x', searchParallel: 0 })).toThrow(/searchParallel/)
-    expect(() => apply(fakeCtx().ctx, { dataDir: 'D:/x', searchParallel: -1 })).toThrow(/searchParallel/)
-    expect(() => apply(fakeCtx().ctx, { dataDir: 'D:/x', searchTimeoutMs: 0 })).toThrow(/searchTimeoutMs/)
-    expect(() => apply(fakeCtx().ctx, { dataDir: 'D:/x', jsTimeoutMs: 0 })).toThrow(/jsTimeoutMs/)
+    expect(() => apply(fakeCtx().ctx, { dataDir: 'D:/x', searchParallel: 0 })).toThrow(/配置非法/)
+    expect(() => apply(fakeCtx().ctx, { dataDir: 'D:/x', searchParallel: -1 })).toThrow(/配置非法/)
+    expect(() => apply(fakeCtx().ctx, { dataDir: 'D:/x', searchTimeoutMs: 0 })).toThrow(/配置非法/)
+    expect(() => apply(fakeCtx().ctx, { dataDir: 'D:/x', jsTimeoutMs: 0 })).toThrow(/配置非法/)
   })
   it('apply：ready 后注册 prefix 路由 + 6 工具；disposer 摘干净', async () => {
     const dir = await makeTempDir('novel-entry-')
@@ -152,6 +162,115 @@ describe('Cordis 插件入口', () => {
     } finally {
       a.disposeAll()
       c.disposeAll()
+    }
+  })
+
+  /** 日志缝的运行时 adapter 是**双腿**：宿主 `ctx.logger` 只进 ring buffer 且默认级别吞 warn，
+   *  只走那条腿本机 stdout 就看不见了。这条用例同时钉两件事——组合根真的装了 sink（漏装的话缝
+   *  一路走缺省 console，其余用例照样全绿），以及两条腿收到的是同一条消息。 */
+  it('apply：运行时 logger adapter 双腿装上了（console 与 ctx.logger 各收到一条）', async () => {
+    const dir = await makeTempDir('novel-log-')
+    const a = fakeCtx()
+    const b = fakeCtx()
+    const seen: unknown[][] = []
+    const spy = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => { seen.push(args) })
+    try {
+      apply(a.ctx, { dataDir: dir })
+      expect(seen, '装 adapter 这一步本身不该吭声').toEqual([])
+      expect(a.logs, '装 adapter 这一步本身不该吭声').toEqual([])
+      apply(b.ctx, { dataDir: dir })     // 第二次撞双重启用守卫 → 经缝发一条 warn
+      expect(seen, 'console 腿没收到（stdout 变暗）').toHaveLength(1)
+      expect(seen[0][0]).toBe('[dsh-novel]')
+      expect(String(seen[0][1])).toContain('duplicate apply ignored')
+      expect(a.logs).toHaveLength(1)
+      expect(a.logs[0]).toMatchObject({ name: 'dsh-novel', level: 'warn' })
+      expect(a.logs[0].args).toEqual(['[dsh-novel]', expect.stringContaining('duplicate apply ignored')])
+    } finally {
+      spy.mockRestore()
+      a.disposeAll()
+      b.disposeAll()
+    }
+  })
+
+  /** `named.error` 腿 + `hostArgs()` 成形层的钉子：缝把前缀当首参、消息本体与尾随 Error 按 rest 递，
+   *  组合根的 adapter 用 `hostArgs(a)` 成形后才喂得进宿主的「format + rest」severity 方法。假面的
+   *  severity 签名是 `(...args: unknown[])`、不塌缩 Error，所以只有这条能验出「Error 已转成形」——
+   *  有人把 `hostArgs(a)` 换回 `...a`，logger 腿收到的仍是 Error 实例（真机上会塌成 `{}`），这里就红。 */
+  it('apply：log.error 尾随的 Error 在 logger 腿被 hostArgs 成形为文本', async () => {
+    const dir = await makeTempDir('novel-log-error-')
+    const a = fakeCtx()
+    const seen: unknown[][] = []
+    const err = new Error('boom')
+    const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => { seen.push(args) })
+    try {
+      apply(a.ctx, { dataDir: dir })          // 组合根把双腿 adapter 装进模块级 sink
+      log.error('x', err)                      // 经缝 → adapter.error 腿
+      const shaped = a.logs.find((l) => l.level === 'error')
+      expect(shaped, 'logger 腿没收到 error').toBeDefined()
+      expect(shaped!.args[0]).toBe('[dsh-novel]')          // format 位是缝缀的前缀
+      expect(shaped!.args[1]).toBe('x')
+      expect(shaped!.args[2]).not.toBeInstanceOf(Error)    // 换回 `...a` 时这里红：Error 未成形
+      expect(typeof shaped!.args[2], 'Error 应被转成形为文本').toBe('string')
+      expect(String(shaped!.args[2])).toContain('boom')
+      // console 腿收到同一条（前缀 + 消息本体 + **原样 Error**：成形只发生在 logger 腿）
+      expect(seen).toHaveLength(1)
+      expect(seen[0][0]).toBe('[dsh-novel]')
+      expect(seen[0][1]).toBe('x')
+      expect(seen[0][2]).toBe(err)
+    } finally {
+      spy.mockRestore()
+      setLogSink(console)                      // 复位模块级 sink，别把这条 adapter 漏给后续用例
+      a.disposeAll()
+    }
+  })
+
+  it('dispose：日志 sink 复位到 console（模块级单点不指向已卸载实例）', async () => {
+    const dir = await makeTempDir('novel-log-dispose-')
+    const a = fakeCtx()
+    apply(a.ctx, { dataDir: dir })
+    a.disposeAll()
+    const seen: unknown[][] = []
+    const spy = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => { seen.push(args) })
+    try {
+      log.warn('after dispose')
+      expect(seen).toHaveLength(1)
+      expect(seen[0][0]).toBe('[dsh-novel]')
+      expect(String(seen[0][1])).toBe('after dispose')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('ready 后注册失败：经日志缝留痕，且不带重复的满名', async () => {
+    const dir = await makeTempDir('novel-log-register-')
+    const a = fakeCtx()
+    ;(a.ctx as any).webServer.register = () => { throw new Error('register boom') }
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      apply(a.ctx, { dataDir: dir })
+      await waitFor(() => a.logs.some((l) => l.level === 'error'))
+      const hit = a.logs.find((l) => l.level === 'error')!
+      expect(String(hit.args[1])).toContain('/novel-api routes registration failed')
+      expect(String(hit.args[1])).not.toContain('dsh-novel: /novel-api routes')
+      expect(hit.args[2]).not.toBeInstanceOf(Error)     // logger 腿同样过 hostArgs 成形
+    } finally {
+      spy.mockRestore()
+      a.disposeAll()
+    }
+  })
+
+  it('ctx.logger 缺失时 apply 抛错但不锁死 applied（下一次 apply 仍能注册）', async () => {
+    const dir = await makeTempDir('novel-log-nologger-')
+    const bad = fakeCtx()
+    ;(bad.ctx as any).logger = () => { throw new Error('no logger') }
+    expect(() => apply(bad.ctx, { dataDir: dir })).toThrow(/no logger/)
+    const good = fakeCtx()
+    try {
+      apply(good.ctx, { dataDir: dir })
+      await waitFor(() => good.calls.some((c) => c.kind === 'route'))
+      expect(good.calls.filter((c) => c.kind === 'route')).toHaveLength(1)
+    } finally {
+      good.disposeAll()
     }
   })
 

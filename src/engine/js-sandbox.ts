@@ -116,13 +116,23 @@ const TIMEOUT = Symbol('js-sandbox-timeout')
  *  Node 20+ 默认当致命错误干掉整个 dsh 进程（探针逐源跑 @js 时命中一个 fire-and-forget 源就崩）。
  *  所以不能「evalJs 期间挂、finally 摘」——摘早了照样漏；加载期常驻拦住默认 throw，插件 dispose 才摘。 */
 let guardInstalled = false
+/** 注入 sink 的形状：引擎不认识 services（依赖方向红线），日志缝因此不进这里，由组合根递进来。 */
+export interface GuardSink { warn(...args: unknown[]): void }
+/** 缺省 sink 仍走 console——引擎离线直用（探针、普查、测试）时防线照样出声。
+ *  前缀归 sink 的家：缺省这条自己缀一次（读数要认得出是谁家的日志），而注入方（日志缝）
+ *  已经负责前缀，所以守卫这条**消息本身不带字面前缀**——两处各缀一次就是双前缀。 */
+const consoleGuardSink: GuardSink = { warn: (...args) => { console.warn('[dsh-novel]', ...args) } }
+let guardSink: GuardSink = consoleGuardSink
 function unhandledGuardHandler(reason: unknown): void {
-  console.warn('[dsh-novel] 沙箱脚本产生未处理的 rejection（已捕获，不影响进程）:',
+  guardSink.warn('沙箱脚本产生未处理的 rejection（已捕获，不影响进程）:',
     reason instanceof Error ? reason.message : reason)
 }
-/** 幂等挂载：多次调用只挂一次。返回卸载函数（插件 dispose 时调用）。 */
-export function ensureUnhandledGuard(): () => void {
+/** 幂等挂载：多次调用只挂一次，**先挂的那次定 sink**——所以想让日志进宿主日志面，必须由组合根
+ *  在第一次跑脚本之前挂上（入口 apply 就是这一起点；evalJs 里的兜底调用晚于它）。返回卸载函数
+ *  （插件 dispose 时调用）。 */
+export function ensureUnhandledGuard(sink: GuardSink = consoleGuardSink): () => void {
   if (!guardInstalled) {
+    guardSink = sink
     process.on('unhandledRejection', unhandledGuardHandler)
     guardInstalled = true
   }

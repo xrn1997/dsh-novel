@@ -33,7 +33,7 @@ services/  domain 门面 + 部件：抓取 / 书源注册表 / 书架 / 缓存 /
    ▲
 api/  ·  tools/        ← 两个平行的**投影面**，不是上下两层
    ▲
-index.ts 组合根：配置 → 缺省值 → 部件装配 → 三条注册
+index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注册
 ```
 
 - **`api` 与 `tools` 各只拥有什么**：`api/dispatch.ts` 只做传输关注点（方法守卫、body 形状、信封、流式与响应头），业务判据一律抛给门面动词；`tools` 只 `import type` 门面，每个 `execute` 都是门面动词的调用，自己只拥有缺键投影与 render。所以「UI、AI 工具、探针三个面共用同一条链路」不是口号而是 import 事实。
@@ -83,6 +83,8 @@ index.ts 组合根：配置 → 缺省值 → 部件装配 → 三条注册
 | 本地书身份与分流 | `services/localbooks.ts` | EPUB 包内解析（`services/epub/`） |
 | 聚合搜索的参与集 | `services/participation.ts` 的 `participates`（发现面谓词 `exploreParticipates` 同文件） | 源清单读写 |
 | 错误类目 → HTTP | `services/errors.ts` + `api/wire.ts`（两分法） | 路由自检错误 |
+| 日志前缀与级别出口 | 唯一主人 `services/log.ts` 的 `log` / `setLogSink`（运行时 adapter = console + 宿主 `ctx.logger` 双腿，组合根卸载时复位 console）；**例外**：engine 防线的缺省 sink（`engine/js-sandbox.ts` 的 `consoleGuardSink`）自持一份前缀——依赖方向红线要求 engine 不得 import services，只有注入路径的前缀归缝 | 日志往哪投（宿主日志面的去向归宿主） |
+| 任务过程行 | `services/job-tail.ts` 的 `JobTail`（宿主 job 输出面是拉：各持有者经 `readOutput` 交出尾缓冲） | 整轮结果与业务明细（那归各持有者的快照读面，`docs/adr/0018`） |
 | 整轮搜索结果 | `services/search-job.ts`（Node 半持有） | wire 形状 |
 | 跨源归并（作品视图）：搜索面「是不是同一本书」的判同 | `shared/merge-by-book.ts` 的 `mergeBooks`（形状与上限 `MergedBook`／`MergedSource`／`SEARCH_BOOKS_CAP` 在 `shared/wire.ts`）——呈现层派生，消费点只有搜索结果页与工具面 | 不替用户判该用哪家读（动作不下放）、不服务书籍详情浮层、不改书架身份与进度（作品级身份与换源搬运另裁，见 `docs/adr/0033`） |
 | 相关性判据（一条命中与本轮关键词的关系档位） | 形状 `Relevance` 声明在 `shared/wire.ts`；判据与三档序 `shared/relevance.ts` 的 `relevanceOf` / `partitionByRelevance` / `RELEVANCE_RANK`——决定 `suspect` 去处的三个消费点（`client/views/SearchView.tsx` 的 `renderGroups`、`client/views/CityBookSheet.tsx` 的 `GroupRow`、`tools/tools.ts` 的 `searchBooks`）加只收 `kept` 的归并面（`shared/merge-by-book.ts`）都只吃这一份 | 不判书架、不判发现面（那两面没有关键词这一维） |
@@ -94,6 +96,7 @@ index.ts 组合根：配置 → 缺省值 → 部件装配 → 三条注册
 | 跨源那一次的关键词构造（有作者就带作者） | `client/city-view-model.ts` 的 `sheetKeyword`（消费者只有书籍详情浮层，链路复用搜索面） | 是不是同一本书——判同在搜索面归并那一行（`mergeBooks`，按归并键）；书籍详情浮层维持逐源轴、不吃归并；两层的界面都不替他判该用哪家读 |
 | 逐条目取值装配（求值上下文 → 一条命中） | **今天没有主人，两份抄本刻意接受**：`services/explore-face.ts` 与 `services/reading.ts` 各一份 | 两份的规则来源本就不同（发现面整套切换 vs 通用搜索面）；第三处消费者出现时再抽公共装配 |
 | 分类快照的存放与时效 | `services/explore-cache.ts` 的 `KindCache` + `services/cache-epoch.ts` 的 `exploreEpoch` | 目录 / 正文文件缓存（`rulesEpoch`） |
+| 配置口径（类型 / schema / 缺省填充 / 值域） | `config.ts` 的 `resolveConfig`（schema 的 `.default()` 只引各消费模块常量，不写第二份字面量） | 运行时环境探测（如系统代理读取，在 `services/proxy.ts`） |
 | 缺省值 | 五个各自主人（见 `tests/services/defaults.test.ts` 钉的常量） | 第二处字面量 |
 | 浏览器视图内路由与跨卸载现场 | `client/store.ts` + 各模块级现场 store | 业务真相 |
 | 阅读时序 | `client/reader-session.ts` | DOM 测量实现 |

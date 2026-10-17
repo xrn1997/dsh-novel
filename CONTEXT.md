@@ -280,3 +280,20 @@ _Avoid_: 不支持（太泛——没说清是裁决还是欠账）、做不了
 client bundle 的构建期守卫：平台模块表之外的 `@deepseek-ai/*` **值** import、或 Node 内建闯进浏览器 bundle → 构建立刻失败。后果：`src/shared/wire.ts` 必须零运行时依赖（它被整个 inline 进 client bundle）。
 _唯一实现_: `tsdown.config.ts` 的 `dsh-novel-bundle-purity` 插件 + 平台模块表 `PLATFORM_MODULES`
 _Avoid_: external / noExternal 配置（那是宿主侧 bundler 的事）
+
+## 基础设施与装配
+
+**配置缝（config seam）**:
+原始 cordis 配置 → 类型 / schema / 缺省 / 值域的唯一边界；缺省字面量的主人仍是各消费模块的 `DEFAULT_*` 常量。
+_唯一实现_: `config.ts` 的 `resolveConfig`（schema 为 `Config`）
+_Avoid_: DEFAULTS / assertConfig 抄本、在装配处再写一份缺省字面量
+
+**日志缝（log seam）**:
+Node 半留痕的前缀与级别出口唯一家；组合根装 console + `ctx.logger` 双腿，卸载时复位 console。engine 防线的缺省 sink 是文档化例外（依赖方向不允许 engine import services）。
+_唯一实现_: `services/log.ts` 的 `log` / `setLogSink`
+_Avoid_: 逐调用点手写 `[dsh-novel]` 前缀、另开 console 出口
+
+**任务过程行（job progress tail）**:
+宿主 job 输出面的拉模型缓冲：有界、消费式、只装过程行；整轮结果与业务明细归各持有者的快照读面。
+_唯一实现_: `services/job-tail.ts` 的 `JobTail`（各持有者经 `readOutput` 交出）
+_Avoid_: 把整轮结果塞进 job_output、把过程行当业务快照

@@ -4,6 +4,7 @@ import type { SearchJobRun } from '../../src/services/search-job.js'
 import { SEARCH_HITS_CAP_PER_SOURCE, SEARCH_JOB_RETENTION_MS } from '../../src/shared/wire.js'
 import type { SearchGroup, SearchHit } from '../../src/shared/wire.js'
 import type { JobHost } from '../../src/services/import-job.js'
+import { DEFAULT_JOB_OUTPUT_BYTES } from '../../src/services/job-tail.js'
 
 /** 搜索后台任务的持有者：整轮结果住服务端，读面给游标增量。它存在的理由是实测缺陷——
  *  浏览器半自持在途循环，切界面即丢结果。 */
@@ -151,6 +152,48 @@ describe('SearchJobs 登记给宿主 ctx.jobs（与写任务同一口径）', ()
     expect(jobs.cancel('换关键词了')).toBe(true)
     await tick()
     expect(h.settled).toEqual(['completed', 'killed'])
+  })
+
+  it('每源答话一行留在 readOutput 里，且第二次 read 不重复交付', async () => {
+    let hooks = null as { readOutput?: () => string } | null
+    let spec = null as { outputLimitBytes?: number } | null
+    const host: JobHost = {
+      start: (s) => {
+        spec = s
+        hooks = s.run()
+        return `${s.kind}-1`
+      },
+    }
+    const m = manualRun()
+    const jobs = new SearchJobs({ uuid: () => 'sj-readout', host })
+    jobs.start('斗罗', 3, m.run)
+    m.emit(group('a', 1))
+    m.finish()
+    expect(hooks?.readOutput?.()).toContain('a')
+    expect(hooks?.readOutput?.()).toBe('')            // 消费式
+    expect(spec!.outputLimitBytes).toBe(DEFAULT_JOB_OUTPUT_BYTES)
+  })
+
+  it('过程行把源状态与截断分轴：条数用 cap 后值，截断时附原始数', () => {
+    let hooks = null as { readOutput?: () => string } | null
+    const host: JobHost = {
+      start: (spec) => {
+        hooks = spec.run()
+        return `${spec.kind}-1`
+      },
+    }
+    const m = manualRun()
+    const jobs = new SearchJobs({ uuid: () => 'sj-readout-cap', host })
+    jobs.start('斗罗', 1, m.run)
+    const raw = SEARCH_HITS_CAP_PER_SOURCE + 5
+    m.emit({ ...group('a', raw), status: 'unverified' })
+    m.emit({ ...group('b', 0), error: { code: 'Timeout', message: '慢' } })
+    m.finish()
+    const out = hooks!.readOutput!()
+    expect(out).toContain(`${SEARCH_HITS_CAP_PER_SOURCE} 条`)
+    expect(out).toContain(`原始 ${raw}`)
+    expect(out).toContain('源 unverified')
+    expect(out).toContain('b：失败（Timeout）')
   })
 })
 

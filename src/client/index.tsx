@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import { NovelStatusOverlay } from './views/NovelStatusOverlay.js'
 import { NovelView } from './views/NovelView.js'
 
-export const inject = ['slots', 'sessions', 'layout']
+export const inject = ['slots', 'layout']
 
 /**
  * 浏览器半入口：把「小说」注册为**全局面板**（2026-09 迁移，用户拍板）——侧栏

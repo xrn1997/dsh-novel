@@ -4,6 +4,7 @@ import type { NovelSource, SourceAuth, SourceContentKind, SourceStatus } from '.
 import type { NormalizeResult } from './normalize.js'
 import { contentTypeOfRaw, deriveRuleField, rawBookMetaFields, rawExploreFields, rawHeaderFields, rawHeaderRule, rawRulePattern, SOURCE_KIND_LABEL, splitGroups, stripLeadingIcons } from './normalize.js'
 import { readJson, writeJsonAtomic } from './storage.js'
+import { log } from './log.js'
 
 /**
  * 书源对外视图：**绝不含 raw / rules / auth**——凭据与原文只落盘，不出现在服务层对外返回值。
@@ -210,7 +211,7 @@ export class SourceRegistry {
     this.chain = this.chain
       .catch(() => undefined)                       // 排队者只关心「轮到我」，不被前一次失败带崩
       .then(() => writeJsonAtomic(path.join(this.dir, 'sources.json'), this.sources))
-      .catch((e: unknown) => { console.error('[dsh-novel] sources.json 落盘失败:', e) })
+      .catch((e: unknown) => { log.error('sources.json 落盘失败:', e) })
     return this.chain
   }
 

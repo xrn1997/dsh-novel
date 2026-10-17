@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { SourceIntake } from './intake.js'
+import { DEFAULT_JOB_OUTPUT_BYTES, JobTail } from './job-tail.js'
 import type { ProbeResult } from './probe.js'
 import type { SourceRegistry } from './sources.js'
 import type { NovelSource } from './types.js'
@@ -32,20 +33,26 @@ const PROBE_CONCURRENCY = 5
 // 落盘粒度已内聚进注册表（edit 合并写：每 20 次变更强制落盘 + 尾沿防抖）——
 // 任务运行器不再持有 persist 节流常量
 
-/** 宿主后台任务注册表（`ctx.jobs`）在本插件用到的子集。
- *  **本地窄面镜像，不引类型包**：
- *  照 `src/index.ts` 既有的 `NovelContext` + `*Like` 先例办，只声明用到的成员。
+/** 宿主后台任务注册表（`ctx.jobs`）在本插件用到的子集——与宿主真名真形对齐（2026-10-17 对宿主
+ *  jobs 包的实证）：宿主侧叫 `JobStart`/`JobHooks`，`run()` **无入参**，
+ *  hooks 面是 `{ cancel, done, readOutput? }`——**没有 append/log/write**，输出是拉：注册表（经 `job_output` 工具）
+ *  调生产方自己的 `readOutput()`，宿主任务面板没有文本面。
+ *  **本地窄面镜像，不引类型包**：照 `src/index.ts` 既有的 `NovelContext` + `*Like` 先例办，只声明用到的成员。
  *  `kind` 用 `string` 是刻意的——注册表把 kind 当作不透明的 id 命名空间（唯一判据是「非空字符串」），
  *  自定义 kind 不需要宿主的 `JobKindMap` 合并，id 直接长成 `novel-import-1`。
+ *  `outputLimitBytes` 是正整数自报帽、注册表原样投影进 snapshot，不是缓冲区——缓冲住 `job-tail.ts`。
  *  缺席即不接线（headless 组合与单测直构都走这条），任务语义不受影响。 */
 export interface JobHostSpec {
   kind: string
   /** 模型可见的一行说明（宿主 UI / `job_*` 工具读它） */
   label: string
+  outputLimitBytes?: number
   run(): {
     /** 宿主请求终止：**协作式**——不打断在途网络请求，只在取下一条前收手 */
     cancel(reason?: string): void
     done: Promise<JobOutcome>
+    /** 拉模型输出面：一次调用交出「上次读之后」的全部过程行（消费式，见 job-tail.ts） */
+    readOutput?(): string
   }
 }
 
@@ -57,11 +64,14 @@ export interface JobHost {
 export type JobOutcome = { status: 'completed' | 'killed' | 'failed'; detail?: string }
 
 /** 与宿主登记的那条任务的私有挂点（wire 的 `JobState` 不为此加字段：
- *  它是跨半契约，而取消/结算纯属 Node 半与宿主之间的事）。 */
+ *  它是跨半契约，而取消/结算/过程行纯属 Node 半与宿主之间的事）。 */
 interface HostTie {
   requested: boolean
   reason: string
   settle: (outcome: JobOutcome) => void
+  /** 过程行的有界尾缓冲：每单元收尾（含文件级解析失败/预筛无效 id）push 一行，
+   *  宿主经 `job_output` 拉走（消费式） */
+  tail: JobTail
 }
 
 export class SourceJobs {
@@ -136,7 +146,7 @@ export class SourceJobs {
     // 本插件的 JobState 继续是计数与明细的唯一载体。kind 用 novel-* 前缀与 bash/subagent 分namespace。
     const host = this.deps.host
     if (host !== undefined) {
-      const tie: HostTie = { requested: false, reason: '', settle: () => {} }
+      const tie: HostTie = { requested: false, reason: '', settle: () => {}, tail: new JobTail(DEFAULT_JOB_OUTPUT_BYTES) }
       const done = new Promise<{ status: 'completed' | 'killed' | 'failed'; detail?: string }>((res) => {
         tie.settle = (o): void => { res(o) }
       })
@@ -144,14 +154,23 @@ export class SourceJobs {
       host.start({
         kind: kind === 'import' ? 'novel-import' : 'novel-probe',
         label,
+        outputLimitBytes: DEFAULT_JOB_OUTPUT_BYTES,
         run: () => ({
           cancel: (reason): void => { tie.requested = true; tie.reason = reason ?? '已取消' },
           done,
+          readOutput: (): string => tie.tail.read(),
         }),
       })
       this.ties.set(state, tie)
     }
     return state
+  }
+
+  /** 过程行落进宿主那条任务的尾缓冲（缺席即 no-op——宿主没登记就没有消费者）。
+   *  覆盖每单元收尾、文件级解析失败与预筛无效 id；行文只用既有任务词汇（源名、状态词、
+   *  `error.code`），口径归各调用处，不复述 issues 明细。 */
+  private note(state: JobState, line: string): void {
+    this.ties.get(state)?.tail.push(line)
   }
 
   private issue(state: JobState, kind: JobIssue['kind'], name: string, detail: string): void {
@@ -168,7 +187,11 @@ export class SourceJobs {
     const items: unknown[] = []
     for (const f of files) {
       let parsed: unknown
-      try { parsed = JSON.parse(stripBom(f.text)) } catch { state.fileErrors.push({ file: f.name, error: 'JSON 解析失败' }); continue }
+      try { parsed = JSON.parse(stripBom(f.text)) } catch {
+        state.fileErrors.push({ file: f.name, error: 'JSON 解析失败' })
+        this.note(state, `${f.name}：JSON 解析失败`)
+        continue
+      }
       if (Array.isArray(parsed)) items.push(...parsed)
       else items.push(parsed)
     }
@@ -196,6 +219,7 @@ export class SourceJobs {
             : `重复跳过：与已有可用源同地址（${d.existing?.name ?? '?'}）`)
           break
       }
+      this.note(state, `${d.kind === 'added' || d.kind === 'replaced' ? d.source.name : d.name}：${d.kind}`)
       state.done++
     }
     await this.deps.registry.flush()                       // 任务完成 ⇒ 结果已落盘（既有语义不变）
@@ -210,8 +234,10 @@ export class SourceJobs {
   private async runBatchProbe(state: JobState, ids: string[]): Promise<void> {
     const valid: string[] = []
     for (const id of ids) {
-      if (this.deps.registry.get(id) === undefined) this.issue(state, 'failed', id, '源不存在（已跳过）')
-      else valid.push(id)
+      if (this.deps.registry.get(id) === undefined) {
+        this.issue(state, 'failed', id, '源不存在（已跳过）')
+        this.note(state, `${id}：源不存在`)
+      } else valid.push(id)
     }
     state.total = valid.length
     let cursor = 0
@@ -227,6 +253,7 @@ export class SourceJobs {
         const s = this.deps.registry.get(id)
         if (s === undefined) {
           this.issue(state, 'failed', id, '源不存在（运行中被删除，已跳过）')
+          this.note(state, `${id}：源不存在`)
           state.done++
           settled++
           continue
@@ -234,11 +261,18 @@ export class SourceJobs {
         try {
           const r = await this.deps.probe(s)
           await this.deps.registry.edit((tx) => tx.setStatus(id, r.ok ? 'verified' : 'broken', r.error?.message, r.probedAt))
-          if (r.ok) state.counts.ok++
-          else { state.counts.failed++; this.issue(state, 'failed', s.name, r.error?.message ?? '探针未通过') }
+          if (r.ok) { state.counts.ok++; this.note(state, `${s.name}：verified`) }
+          else {
+            state.counts.failed++
+            this.issue(state, 'failed', s.name, r.error?.message ?? '探针未通过')
+            this.note(state, `${s.name}：broken（${r.error?.code ?? 'Error'}）`)
+          }
         } catch (e) {
           state.counts.failed++
           this.issue(state, 'failed', s.name, e instanceof Error ? e.message : String(e))
+          const rawCode = e instanceof Error ? (e as unknown as { code?: unknown }).code : undefined
+          const code = typeof rawCode === 'string' ? rawCode : 'Error'
+          this.note(state, `${s.name}：broken（${code}）`)
         }
         state.done++
         settled++

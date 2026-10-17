@@ -1,6 +1,7 @@
 import { interpolateUrl, expandPageAngleList, URL_OPTION_SPLIT } from '../engine/index.js'
 import iconv from 'iconv-lite'
 import { parseObjectJson, stringTableOf } from './normalize.js'
+import { log } from './log.js'
 import { absUrl } from './url.js'
 
 /** 书源 URL 模板的请求形态（格式钉死这三种）：
@@ -49,7 +50,7 @@ export function parseUrlOption(template: string): { urlPart: string; option: Req
   const option = parseOptionJson(template.slice(m.index + m[0].length))
   if (option === undefined) {
     // 留痕（同 normalize 的 header 口径）：让「选项没生效」可见，但不改变已切分的 URL。
-    console.warn(`[dsh-novel] URL 选项不是合法 JSON，按无选项请求（URL 已切分）：${JSON.stringify(template)}`)
+    log.warn(`URL 选项不是合法 JSON，按无选项请求（URL 已切分）：${JSON.stringify(template)}`)
   }
   return { urlPart, option }
 }
@@ -66,7 +67,7 @@ function parseOptionJson(text: string): RequestOption | undefined {
   // 生效了。现量与键例见矩阵行 `b-opt-unknown-keys`。
   const unknown = Object.keys(obj).filter((k) => !KNOWN_OPTION_KEYS.includes(k))
   if (unknown.length > 0) {
-    console.warn(`[dsh-novel] URL 选项含本插件未实现的键，已忽略：${unknown.join('、')}`)
+    log.warn(`URL 选项含本插件未实现的键，已忽略：${unknown.join('、')}`)
   }
   const option: RequestOption = {}
   if (typeof obj.method === 'string') option.method = obj.method

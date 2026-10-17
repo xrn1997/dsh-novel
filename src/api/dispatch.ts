@@ -3,6 +3,7 @@ import type { ReadingService } from '../services/reading.js'
 import { exportBook, DEFAULT_EXPORT_DELAY_MS } from '../services/export.js'
 import { SourceNotFoundError } from '../services/errors.js'
 import { SVG_MEDIA_TYPE } from '../services/epub/resources.js'
+import { log } from '../services/log.js'
 import { ApiError, isTrustedRequest, readCappedBody, readJsonBody, writeError, writeOk } from './wire.js'
 import { NOVEL_API_PREFIX, PARAMS, paramRoutes, pickShelfMeta, ROUTES, SEG } from '../shared/wire.js'
 
@@ -457,11 +458,11 @@ async function route(
       res.on('close', () => stream.destroy())
       if (res.destroyed) stream.destroy()
       stream.on('error', (e: unknown) => {
-        console.error(`[dsh-novel] 本地资源流出错（${resourceId}，响应头已发，只能断连）:`, e)
+        log.error(`本地资源流出错（${resourceId}，响应头已发，只能断连）:`, e)
         res.destroy()
       })
       res.on('error', (e: unknown) => {
-        console.error(`[dsh-novel] 本地资源响应出错（${resourceId}）:`, e)
+        log.error(`本地资源响应出错（${resourceId}）:`, e)
         stream.destroy()
       })
       stream.pipe(res)

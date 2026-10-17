@@ -42,8 +42,8 @@ export interface Fetcher {
 type FetchInit = RequestInit & { dispatcher?: unknown }
 type FetchLike = (url: string, init?: FetchInit) => Promise<Response>
 
-/** 出站默认耐心（缺省 15s）。**这个数是唯一主人**：组合根 DEFAULTS 与 reading.from() 的回退
- *  都引它——多请求目录脚本一轮要连打数个请求，窄超时必炸，缺省给得比一般 HTTP 客户端宽。 */
+/** 出站默认耐心（缺省 15s）。**这个数是唯一主人**：缺省装配处 `src/config.ts` 的 schema `.default()`
+ *  与 reading.from() 的回退都引它——多请求目录脚本一轮要连打数个请求，窄超时必炸，缺省给得比一般 HTTP 客户端宽。 */
 export const DEFAULT_TIMEOUT_MS = 15_000
 const CHARSET_RE = /charset=([^;\s"']+)/i
 /** 嗅探用：`<meta charset=…>`（HTML5）与 `<meta http-equiv content="…charset=…">`（遗留形态） */

@@ -1,25 +1,28 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
-import Schema from '@deepseek-ai/schemastery'
 import { createApiHandler } from './api/dispatch.js'
+import { resolveConfig, type NovelConfig } from './config.js'
 import { ensureUnhandledGuard } from './engine/js-sandbox.js'
-import { DEFAULT_CACHE_MAX_BYTES } from './services/cache.js'
-import { DEFAULT_EXPORT_DELAY_MS } from './services/export.js'
-import { DEFAULT_TIMEOUT_MS } from './services/fetcher.js'
 import type { JobHost } from './services/import-job.js'
-import { DEFAULT_MAX_IMPORT_BYTES } from './services/localbooks.js'
+import { log, setLogSink } from './services/log.js'
 import { readSystemProxy, resolveProxyUrl } from './services/proxy.js'
-import { DEFAULT_JS_BUDGET_MS, DEFAULT_SEARCH_PARALLEL, ReadingService } from './services/reading.js'
+import { ReadingService } from './services/reading.js'
 import { novelDir } from './services/storage.js'
 import { NOVEL_API_PREFIX } from './shared/wire.js'
 import { registerTools } from './tools/tools.js'
 
+// 配置口径全部住在 config.js（类型 / schema / 缺省 / 值域一个缝）；入口只 re-export 门面符号，
+// 让 cordis 装载期继续从这里拿到导出的 `Config`（tests/packaging-build.test.ts 钉 dts 含 apply 与 Config）。
+export { Config, type NovelConfig, type ResolvedConfig } from './config.js'
+
 /** 结构镜像：webServer/tools/jobs 的 declare module 增强来自未安装的宿主包——
  * 本仓库不装 dsh-host-webserver（peer，运行时由宿主提供），类型面按 d.ts 证据镜像最小形状。
  * 注意不能 extends Context（dsh-tools 已对 tools 做了更宽的增强，交叉会冲突）——独立形状 + 强转。
- * `jobs` = 宿主后台任务注册表（ctx.jobs）：只镜像我们用到的两成员，且 `start` 的形状与
- * services/import-job.ts 的 JobHost 对齐（kind 是自由字符串——注册表按不透明命名空间处理，
- * 唯一判据非空，见 `dsh-jobs-local` 的 `invalid job kind: expected a non-empty string`）。 */
+ * `jobs` = 宿主后台任务注册表（ctx.jobs）：只镜像我们用到的两成员（`start` 与下面的 `attachController`）。
+ * `start` 交出的 spec 形状由 services/import-job.ts 的 `JobHostSpec` 唯一持有——宿主真名真形与
+ * 输出拉模型（`readOutput`）的窄面镜像注释都在那里，本处不复述。
+ * kind 是自由字符串（注册表按不透明命名空间处理，唯一判据非空，
+ * 见 `dsh-jobs-local` 的 `invalid job kind: expected a non-empty string`）。 */
 interface WebServerLike { register(route: { kind: 'prefix'; path: string; handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void> }): () => void }
 interface ToolsRuntimeLike { register(tool: unknown): () => void }
 interface JobsRuntimeLike extends JobHost {
@@ -37,69 +40,20 @@ export const name = '@xrn1997/dsh-novel'
  *  缺了就该响亮失败；名字集合由 `tests/index.test.ts` 钉住） */
 export const inject = ['webServer', 'tools', 'jobs']
 
-/** 插件配置（官方 config 页规范形态：schemastery Standard Schema）。
- * .default({}) 防御：cordis 的 resolveConfig 在 patch 行没写 config: 时传的是 undefined，
- * 裸 object schema 会判 invalid 而炸掉整棵插件树——.default 兜住缺省行并归一为 {}。
- * 全字段 optional + 外层 .default({})：schemastery 的 inner-default 与 outer-default
- * 组合在 undefined 输入下的填充语义随版本有歧义——一律由 apply 侧 coalesce DEFAULTS，
- * schema 只负责类型校验（非法值加载期响亮失败）。
- * 注：本包 schema 无 .optional() 方法——object 的字段天然是可选的（缺省键/undefined 直接放行）。 */
-export interface NovelConfig {
-  dataDir?: string
-  searchTimeoutMs?: number
-  searchParallel?: number
-  /** js 沙箱预算（vm 同步闸与异步总时长共用；引擎缺省 2000ms 只作回退）。
-   *  缺省 15000：真实源的多请求目录脚本（java.ajax×2 + md5 签名，txs12 源实测）
-   *  2s 预算必炸——探针 verified 只证明搜索面，正文链路靠这个预算放行。 */
-  jsTimeoutMs?: number
-  cacheMaxBytes?: number
-  exportDelayMs?: number
-  localImportMaxBytes?: number
-  /** 出站代理：'direct' = 强制直连；'http://host:port' = 显式；缺省 = 环境变量 → Windows 系统代理 → 直连 */
-  proxyUrl?: string
-}
-export const Config = Schema.object({
-  dataDir: Schema.string(),
-  searchTimeoutMs: Schema.number(),
-  searchParallel: Schema.number(),
-  jsTimeoutMs: Schema.number(),
-  cacheMaxBytes: Schema.number(),
-  exportDelayMs: Schema.number(),
-  localImportMaxBytes: Schema.number(),
-  proxyUrl: Schema.string(),
-  // 空对象缺省：ObjectT 静态要求全字段（库的类型偏严），运行时缺省由 apply 侧 coalesce DEFAULTS
-}).default({} as any)
-
-/** 无硬编码可调参数原则的缺省面——cordis.yml 可覆盖每一项。
- *  **字面量只出现在各自的消费模块里**（本表全部引常量）：这里再写一遍数字，就等于给同一个口径
- *  开了第二个主人——改一处漏一处时，配置文件看到的默认值与服务层实际回退值会分叉。 */
-const DEFAULTS = {
-  searchTimeoutMs: DEFAULT_TIMEOUT_MS,
-  searchParallel: DEFAULT_SEARCH_PARALLEL,
-  jsTimeoutMs: DEFAULT_JS_BUDGET_MS,
-  cacheMaxBytes: DEFAULT_CACHE_MAX_BYTES,
-  exportDelayMs: DEFAULT_EXPORT_DELAY_MS,
-  localImportMaxBytes: DEFAULT_MAX_IMPORT_BYTES,
-}
-
 /** 双重启用防御：bundles+插槽双启用时重复注册 /novel-api 会崩宿主进程（dsh-reader 验证过的坑）。
  * 语义钉死「当前有一份实例已注册」——dispose 复位，使 cordis 配置热替换（unload→load）后
  * 新实例可正常注册（dsh-reader 原模式无复位，HMR 场景会误拦）。 */
 let applied = false
 
-/** 配置**值域**校验（schema 只管类型）：searchParallel ≤ 0 会让聚合搜索批循环 `i += 0` 永不终止
- *  （`await Promise.all([])` 只让出微任务、定时器饿死 → 请求/工具调用永久挂起）。
- *  非法值在此加载期响亮失败——不静默夹紧（那是「猜」）。 */
-function assertConfig(c: NovelConfig): void {
-  const check = (key: keyof NovelConfig, v: number | undefined, ok: boolean): void => {
-    if (v !== undefined && !ok) throw new Error(`[dsh-novel] 配置 ${key} 非法：${String(v)}（见 README 配置表）`)
-  }
-  check('searchParallel', c.searchParallel, Number.isInteger(c.searchParallel) && (c.searchParallel ?? 0) >= 1)
-  check('searchTimeoutMs', c.searchTimeoutMs, (c.searchTimeoutMs ?? 0) > 0)
-  check('jsTimeoutMs', c.jsTimeoutMs, (c.jsTimeoutMs ?? 0) > 0)
-  check('cacheMaxBytes', c.cacheMaxBytes, (c.cacheMaxBytes ?? 0) >= 0)
-  check('exportDelayMs', c.exportDelayMs, (c.exportDelayMs ?? 0) >= 0)
-  check('localImportMaxBytes', c.localImportMaxBytes, (c.localImportMaxBytes ?? 0) > 0)
+/** 缝送来的 args → 宿主 severity 方法能吃的形状。真签名核证（cordis 发布物 logger.d.ts）：
+ *  每条级别方法是「printf 模板位打头（必填）+ 可选 rest」，整串变参展开接不进去；第二参不是
+ *  meta 对象。模板位就取缝的第一条（前缀），其余按 rest 递；尾随的 Error 先成形为文本——宿主
+ *  格式化器对对象一律 JSON 化，没成形的 Error 进 ring buffer 会塌成空壳，而本仓留痕几乎每条
+ *  尾随一个 error。 */
+function hostArgs(args: unknown[]): [unknown, ...unknown[]] {
+  const [head, ...rest] = args
+  const textOf = (v: unknown): unknown => (v instanceof Error ? (v.stack ?? v.message) : v)
+  return [head, ...rest.map(textOf)]
 }
 
 /**
@@ -107,13 +61,54 @@ function assertConfig(c: NovelConfig): void {
  * ready 失败吞掉不炸整树（源数据损坏不值得整个 profile 起不来）——路由/工具不挂载，日志留痕。
  */
 export function apply(ctx: Context, config?: NovelConfig): void {
-  assertConfig(config ?? {})
+  const resolved = resolveConfig(config)
   if (applied) {
-    console.warn('[dsh-novel] duplicate apply ignored（插件被重复启用，已跳过注册——防重复路由崩溃）')
+    log.warn('duplicate apply ignored（插件被重复启用，已跳过注册——防重复路由崩溃）')
     return
   }
-  applied = true
   const c = ctx as unknown as NovelContext
+
+  // 运行时 adapter = console + ctx.logger 双腿复合：宿主的 ctx.logger 只进 ring buffer（要 stdout 得
+  // 另挂 console exporter 插件），且缺省级别闸只放行 error/info、吞掉 warn/debug——只走那条腿会让
+  // warn 级留痕进不了宿主面、又把本机 stdout 做暗。console 这条腿保本机可见性，不是冗余（info 腿走
+  // stdout、warn/error 腿走 stderr，三级一律直传原样参数——Error 原样进 stderr 才保住栈形；成形只在
+  // logger 腿，因为只有它要喂宿主的「format + rest」方法）。窄镜像（ADR 0020）只管没装的宿主包
+  // webServer / tools / jobs；ctx.logger 是已 type-import 的官方 Context 成员，直接吃，不再镜像一遍。
+  const named = ctx.logger('dsh-novel')
+  setLogSink({
+    info: (...a) => { console.log(...a); named.info(...hostArgs(a)) },
+    warn: (...a) => { console.warn(...a); named.warn(...hostArgs(a)) },
+    error: (...a) => { console.error(...a); named.error(...hostArgs(a)) },
+  })
+  // 模块级 sink 不能指向已卸载实例的 logger：卸载后晚到的留痕会把对象送进旧 ctx。
+  // 复位也归组合根这一处（sink 是模块级单点）。
+  ctx.effect(() => () => { setLogSink(console) }, 'dsh-novel: log sink')
+  // 守卫放到 logger/sink 装好之后：ctx.logger 是宿主成员，旧代次缺失时 apply 会同步抛错；
+  // 若先置 applied，抛错后没有 effect 可复位，后续重试会被 duplicate apply 挡死。
+  applied = true
+
+  /** 入口各注册共用的同一支时序舞——等 ready、被取消就收手、拆时调 disposer 并复位 applied——
+   *  收成一个私有闭包：以前它在路由与工具两条 effect 里各抄一份，第四个注册还得再抄，
+   *  时序口径因此散成多处（locality）。走不走这条缝只有一条分界：注册排在 ready 之后的才收进来；
+   *  flush 与 unhandledRejection 守卫刻意留在外面——它们靠「注册得早 ⇒ 拆得晚」的次序成立，
+   *  套上这层等 ready 的延迟就会让最后一笔写丢窗、让常驻防线迟到。 */
+  const afterReady = (
+    ready: Promise<{ service: ReadingService } | null>,
+    attach: (r: { service: ReadingService }) => (() => void) | void,
+    label: string,
+  ): void => {
+    let dispose: (() => void) | null = null
+    let cancelled = false
+    // 日志文案只吃去掉 `[dsh-novel] ` 前缀的短名：label 本身是 cordis 的诊断元数据（归它自己，不动），
+    // 而前缀由日志缝缀一次——两处都带满名会让一条留痕长出三重标识。
+    const logName = label.replace(/^dsh-novel: /, '')
+    void ready.then((r) => {
+      if (cancelled || r === null) return
+      const d = attach(r)
+      dispose = typeof d === 'function' ? d : null
+    }).catch((e: unknown) => { log.error(`${logName} registration failed:`, e) })
+    ctx.effect(() => () => { cancelled = true; applied = false; dispose?.() }, label)
+  }
 
   // 沙箱 unhandledRejection 常驻防线：脚本在 vm realm 里**自建**又 fire-and-forget 的异步工作
   // （Promise 与宿主同一 isolate），其 rejection 会悬空冒到进程顶层。Node 20+ 默认把这类
@@ -121,8 +116,10 @@ export function apply(ctx: Context, config?: NovelConfig): void {
   // 尤其在导入书源时（探针逐源跑 @js）。java.ajax 本身已不再产出 Promise（同步语义唯一，
   // 见 engine/js-sandbox.ts 的哨兵口径），但这条防线仍然必需。
   // 挂上后常驻至插件 dispose——早前「evalJs 期间挂、finally 摘」摘早了照样漏。
+  // sink 也从这里递进去：防线幂等且先挂者定 sink，所以入口必须抢在第一次跑脚本之前挂，
+  // 这条留痕才走得到日志缝（宿主日志面），而不是落在引擎的缺省 console 上。
   ctx.effect(() => {
-    const detach = ensureUnhandledGuard()
+    const detach = ensureUnhandledGuard({ warn: (...a) => log.warn(...a) })
     return () => { detach() }
   }, 'dsh-novel: unhandledRejection guard')
 
@@ -136,22 +133,24 @@ export function apply(ctx: Context, config?: NovelConfig): void {
   // 派生 then 链若不带 catch 会产生 unhandled rejection（实测钉死）。
   // LocalBooks 初始化失败同样不炸树——与 ReadingService 同口径 catch 语义，合并进同一 catch。
   const ready = (async () => {
-    const dir = config?.dataDir ?? novelDir()
+    const dir = resolved.dataDir ?? novelDir()
     // 出站代理：Node 的 fetch（undici）不读系统代理，有代理才通的站点直连会被 302/重置
-    // （实测笔趣阁）——config.proxyUrl > 环境变量 > Windows 系统代理 > 直连，见 services/proxy.ts
+    // （实测笔趣阁）——用户配的 proxyUrl > 环境变量 > Windows 系统代理 > 直连，见 services/proxy.ts
     const proxyUrl = resolveProxyUrl({
-      configProxy: config?.proxyUrl,
+      configProxy: resolved.proxyUrl,
       env: process.env,
       systemProxy: await readSystemProxy(),
     })
-    if (proxyUrl !== null) console.log(`[dsh-novel] 出站代理: ${proxyUrl}`)
+    // 启动提示走 info 而非 warn：一是它是信息不是异常，二是宿主缺省级别闸吞 warn、
+    // 只放行 error/info——想让这条真进得了宿主日志面就得走 info（本机经 console 腿走 stdout）。
+    if (proxyUrl !== null) log.info(`出站代理: ${proxyUrl}`)
     const service = await ReadingService.create({
       dir,
-      searchTimeoutMs: config?.searchTimeoutMs ?? DEFAULTS.searchTimeoutMs,
-      searchParallel: config?.searchParallel ?? DEFAULTS.searchParallel,
-      jsTimeoutMs: config?.jsTimeoutMs ?? DEFAULTS.jsTimeoutMs,
-      cacheMaxBytes: config?.cacheMaxBytes ?? DEFAULTS.cacheMaxBytes,
-      localImportMaxBytes: config?.localImportMaxBytes ?? DEFAULTS.localImportMaxBytes,
+      searchTimeoutMs: resolved.searchTimeoutMs,
+      searchParallel: resolved.searchParallel,
+      jsTimeoutMs: resolved.jsTimeoutMs,
+      cacheMaxBytes: resolved.cacheMaxBytes,
+      localImportMaxBytes: resolved.localImportMaxBytes,
       proxyUrl,
       // 任务生命周期交宿主注册表（身份 `<kind>-N` / running→终态 / 取消入口）；
       // 本插件的 JobState 仍是计数与明细的唯一载体，单任务槽互斥也不变。
@@ -159,7 +158,7 @@ export function apply(ctx: Context, config?: NovelConfig): void {
     })
     return { service }
   })().catch((e: unknown) => {
-    console.error('[dsh-novel] service init failed（路由/工具未挂载）:', e)
+    log.error('service init failed（路由/工具未挂载）:', e)
     return null
   })
 
@@ -172,30 +171,16 @@ export function apply(ctx: Context, config?: NovelConfig): void {
     return () => { if (service !== null) void service.flush() }
   }, 'dsh-novel: flush shelf on dispose')
 
-  ctx.effect(() => {
-    let dispose: (() => void) | null = null
-    let cancelled = false
-    void ready.then((r) => {
-      if (cancelled || r === null) return
-      const handler = createApiHandler(r.service, {
-        exportDelayMs: config?.exportDelayMs ?? DEFAULTS.exportDelayMs,
-      })
-      dispose = c.webServer.register({
-        kind: 'prefix',
-        path: NOVEL_API_PREFIX,
-        handler: async (req: IncomingMessage, res: ServerResponse) => { await handler(req, res) },
-      })
-    }).catch((e: unknown) => { console.error('[dsh-novel] route registration failed:', e) })
-    return () => { cancelled = true; applied = false; dispose?.() }
+  afterReady(ready, (r) => {
+    const handler = createApiHandler(r.service, {
+      exportDelayMs: resolved.exportDelayMs,
+    })
+    return c.webServer.register({
+      kind: 'prefix',
+      path: NOVEL_API_PREFIX,
+      handler: async (req: IncomingMessage, res: ServerResponse) => { await handler(req, res) },
+    })
   }, 'dsh-novel: /novel-api routes')
 
-  ctx.effect(() => {
-    let disposeTools: (() => void) | null = null
-    let cancelled = false
-    void ready.then((r) => {
-      if (cancelled || r === null) return
-      disposeTools = registerTools({ tools: c.tools }, r.service)
-    }).catch((e: unknown) => { console.error('[dsh-novel] tools registration failed:', e) })
-    return () => { cancelled = true; applied = false; disposeTools?.() }
-  }, 'dsh-novel: agent tools')
+  afterReady(ready, (r) => registerTools({ tools: c.tools }, r.service), 'dsh-novel: agent tools')
 }

@@ -38,11 +38,13 @@ describe('包形态声明', () => {
   it('dsh 声明（嵌套形态，client-modules 与 plugin add 依赖它）', () => {
     expect(pkg.dsh.bundle.patch).toBe('./cordis.patch.yml')
     expect(pkg.dsh.client.platform).toBe('web')
-    expect(Array.isArray(pkg.dsh.client.inject)).toBe(true)
-    expect(pkg.dsh.client.inject).toContain('@deepseek-ai/dsh-client-ui-primitives')
-    // 对话区 tab 注册已撤（单一归属口径）：dsh.client.inject 只是
-    // boot graph 排序边——留一个运行时不再 import 的包 = 给极简 profile 留一条解析不开的死边
-    expect(pkg.dsh.client.inject).not.toContain('@deepseek-ai/dsh-client-ui-conversation')
+    // 零 require 的到达依赖已摘，boot 不再绑一个用不到的包行。
+    // dsh.client.inject 是包名依赖边（宿主 client-modules 的 WebBootEntry，可选），与运行时
+    // 服务名 inject 两套；client bundle 的 require 集合里没有 ui-primitives，声明它 = 过度声明，
+    // 激活期与别的解析失败聚合成 AggregateError。
+    expect(pkg.dsh.client.inject).toBeUndefined()
+    // 「对话区 tab 已撤 / 单一归属」由 tests/client/panel-registration.test.tsx 钉（座位集合），
+    // 这里不留一条对着 undefined 的空断言。
   })
   it('兼容面声明：编译所依的宿主必须在册，且状态词只许「compatible」', () => {
     const releases = pkg.dsh.compatibility?.dshReleases

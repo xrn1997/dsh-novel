@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { SEARCH_HITS_CAP_PER_SOURCE, SEARCH_JOB_RETENTION_MS } from '../shared/wire.js'
 import type { SearchGroup, SearchJobSnapshot } from '../shared/wire.js'
 import type { JobHost, JobOutcome } from './import-job.js'
+import { DEFAULT_JOB_OUTPUT_BYTES, JobTail } from './job-tail.js'
 
 /**
  * 聚合搜索的后台任务：整轮结果由 **Node 半持有**，读面给游标增量。
@@ -15,7 +16,8 @@ import type { JobHost, JobOutcome } from './import-job.js'
  * `maxConcurrentJobsPerOwner` 缺省 10，够用），UI 的「任何任务在途即禁用」判据只管写任务。
  *
  * 生命周期同样登记给 `ctx.jobs`（kind `novel-search`）——身份、终态、取消入口与写任务同口径；
- * 本模块只额外持有「结果集 + 游标」这件事，宿主那套只有一个 `detail` 字符串，装不下。
+ * 本模块持有「结果集 + 游标」与一段有界过程行尾缓冲（`Held.tail`，宿主经 `readOutput` 拉）。
+ * 宿主任务面板只有 label / detail（另有 `readOutput` 过程行拉取面），装不下整轮结果——结果与明细仍只在这里。
  */
 
 /** 运行器契约：门面（`ReadingService`）把 `searchProgressive` 包进来——持有者不认识门面。
@@ -40,6 +42,8 @@ interface Held {
   finishedAt?: number
   error?: string
   settle: (outcome: JobOutcome) => void
+  /** 过程行的有界尾缓冲：仅在登记给宿主时存在；每源答话 push 一行，宿主经 `job_output` 拉走（消费式）。 */
+  tail?: JobTail
 }
 
 /** 命中截断：内存上限要有主——逐源不截是无上界（站点侧搜索面本就只取首页） */
@@ -87,6 +91,8 @@ export class SearchJobs {
     }
     const host = this.deps.host
     if (host !== undefined) {
+      const tail = new JobTail(DEFAULT_JOB_OUTPUT_BYTES)
+      held.tail = tail
       const done = new Promise<JobOutcome>((res) => {
         held.settle = (o): void => { res(o) }
       })
@@ -94,7 +100,12 @@ export class SearchJobs {
       host.start({
         kind: 'novel-search',
         label: `聚合搜索「${keyword}」（${total} 家书源）`,
-        run: () => ({ cancel: (reason): void => { this.cancel(reason) }, done }),
+        outputLimitBytes: DEFAULT_JOB_OUTPUT_BYTES,
+        run: () => ({
+          cancel: (reason): void => { this.cancel(reason) },
+          done,
+          readOutput: (): string => tail.read(),
+        }),
       })
     }
     this.current = held
@@ -102,7 +113,21 @@ export class SearchJobs {
     // 同步起跑：`run` 交出的 emit 必须在本函数返回前就在位，否则调用方紧接着 emit 的第一组会丢
     //（被否的写法：`void Promise.resolve().then(() => run(...))`——它把 emit 推后一个微任务，
     //  同步消费 emit 的一方什么都收不到）。
-    const emit = (group: SearchGroup): void => { held.groups.push(capHits(group)); this.notify() }
+    // 每源答话留一行过程行进尾缓冲（缺席即 held.tail 为空，不写）：行文把「结果条数」与
+    // 「源状态」分成两轴——status 是源的验证态、不是本轮结果；条数用 cap 后实际进快照的数，
+    // 截断时附原始数（上限见 SEARCH_HITS_CAP_PER_SOURCE）。单源失败点名 `error.code`；
+    // 与整轮结果（读面 snapshot）分工照 ADR 0018 不变。
+    const emit = (group: SearchGroup): void => {
+      const capped = capHits(group)
+      held.groups.push(capped)
+      const truncated = group.hits.length > capped.hits.length
+        ? `，原始 ${group.hits.length}`
+        : ''
+      held.tail?.push(group.error !== undefined
+        ? `${group.sourceName}：失败（${group.error.code}）`
+        : `${group.sourceName}：${capped.hits.length} 条（源 ${group.status}${truncated}）`)
+      this.notify()
+    }
     const shouldStop = (): boolean => held.phase !== 'running'   // 取消 / 被替换都表现为「不再是本轮的 running」
     let running: Promise<unknown>
     try {

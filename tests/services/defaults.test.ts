@@ -14,7 +14,7 @@ import { DEFAULT_JS_BUDGET_MS, DEFAULT_SEARCH_PARALLEL } from '../../src/service
  *
  * 两类钉子：
  * ① 值本身钉死——改缺省是一次有意的产品行为变更，应当在这里留下一笔；
- * ② 组合根 `index.ts` 的 DEFAULTS 块里**不许出现数字字面量**——它是配置表的装配处，不是第二个主人。
+ * ② 配置缝 `config.ts` 的 schema 缺省只引常量——它是缺省值的装配处，不是第二个主人。
  */
 describe('可调参数的缺省值单点化', () => {
   it('值钉死（改这些数 = 改产品默认行为）', () => {
@@ -27,11 +27,16 @@ describe('可调参数的缺省值单点化', () => {
     expect(DEFAULT_JSON_BODY_MAX_BYTES).toBe(1024 * 1024)
   })
 
-  it('index.ts 的 DEFAULTS 只引常量：块内不许出现数字字面量', () => {
-    const src = readFileSync(new URL('../../src/index.ts', import.meta.url), 'utf8')
-    const block = /const DEFAULTS = \{[\s\S]*?\n\}/.exec(src)?.[0] ?? ''
-    expect(block, 'DEFAULTS 块没匹配到（改名或改形状时同步这条守卫）').not.toBe('')
-    expect(block, '缺省值的主人各自在消费模块——在这里写回数字就是第二个主人')
-      .not.toMatch(/\d/)
+  it('config.ts 的 schema 缺省只引常量：.default() 里不许出现数字字面量', () => {
+    const src = readFileSync(new URL('../../src/config.ts', import.meta.url), 'utf8')
+    // 先剥注释：注释里出现 `.default(0)` 不是 schema 缺省，不该把守卫弄红。
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+    const defaults = [...code.matchAll(/\.default\(([^)]*)\)/g)].map((m) => m[1])
+    // 六个数值位各钉一个消费模块常量作缺省：少一个就是有人把某项缺省挪走或在 schema 里写死数字
+    expect(defaults.filter((a) => /^DEFAULT_[A-Z0-9_]+$/.test(a))).toHaveLength(6)
+    // 每个 .default(...) 参数都不许掺数字字面量（值域 min/step 不是缺省，另由 config.test.ts 钉）
+    for (const arg of defaults) {
+      expect(arg, '缺省值的主人各自在消费模块——在 schema 写回数字就是第二个主人').not.toMatch(/\d/)
+    }
   })
 })

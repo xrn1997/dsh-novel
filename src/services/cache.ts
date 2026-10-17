@@ -3,9 +3,8 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { writeFileAtomic } from './storage.js'
 
-/** 容量上限默认 200MB */
-/** 磁盘缓存上限（缺省 200MB）。**这个数是唯一主人**：组合根 `index.ts` 的 DEFAULTS 也引它，
- *  别在配置表里再写一遍字面量（两份会被改岔）。 */
+/** 磁盘缓存上限（缺省 200MB）。**这个数是唯一主人**：缺省装配处 `src/config.ts` 的 schema `.default()`
+ *  也引它，别在配置表里再写一遍字面量（两份会被改岔）。 */
 export const DEFAULT_CACHE_MAX_BYTES = 200 * 1024 * 1024
 
 /**

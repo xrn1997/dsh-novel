@@ -1,3 +1,7 @@
+/** 平台的 dsh-client-store 刻意不用（2026-10-17 宿主实测裁决）：它是 immer+rafFlush+persist
+ *  的组合态引擎、且 hook 合成权在 ui-renderer 的 owner props（模块头注「NO selector hook」）。
+ *  本仓的客户端本地 store 是 get/set(patch)/subscribe 小面 + 一个 uSES 桥，换引擎是语义搬家
+ *  不是删抄本；rafFlush 还会改通知时机，tests/client 的行为网要整体重验。 */
 import { useSyncExternalStore } from 'react'
 import { ls } from './util.js'
 

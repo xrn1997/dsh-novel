@@ -3,6 +3,7 @@ import { SourceRegistry } from '../../src/services/sources.js'
 import type { ProbeResult } from '../../src/services/probe.js'
 import { JobRunningError, SourceJobs, dedupKey } from '../../src/services/import-job.js'
 import type { JobState } from '../../src/services/import-job.js'
+import { DEFAULT_JOB_OUTPUT_BYTES } from '../../src/services/job-tail.js'
 import { makeTempDir } from '../temp-dir.js'
 
 const raw = (n: string, url: string) => ({
@@ -326,5 +327,66 @@ describe('任务生命周期归 ctx.jobs（生产方接线 + 协作式取消）'
     const { jobs } = await mkJobs()
     jobs.startImport(filesOf(1))
     expect((await waitDone(jobs)).phase).toBe('done')
+  })
+
+  it('过程行留在 hooks.readOutput 里供宿主 job_output 拉（面板无文本面）', async () => {
+    const dir = await makeTempDir('novel-job-readout-')
+    const registry = await SourceRegistry.load(dir)
+    let hooks = null as { readOutput?: () => string } | null
+    let spec = null as JobHostSpec | null
+    const host: JobHost = {
+      start: (s) => {
+        spec = s
+        hooks = s.run()
+        return `${s.kind}-1`
+      },
+    }
+    const jobs = new SourceJobs({ registry, probe: async () => okProbe, uuid: () => 'job-readout', host })
+    jobs.startImport([{ name: 'a.json', text: JSON.stringify([raw('A', 'https://a.com')]) }])
+    await waitDone(jobs)
+    expect(typeof hooks?.readOutput).toBe('function')
+    expect(hooks!.readOutput!()).toContain('A')       // 每单元收尾一行，行文含源名
+    expect(spec!.outputLimitBytes).toBe(DEFAULT_JOB_OUTPUT_BYTES)
+  })
+
+  it('过程行也覆盖文件级解析失败与预筛无效 id', async () => {
+    const dir = await makeTempDir('novel-job-readout-err-')
+    const registry = await SourceRegistry.load(dir)
+    let hooks = null as { readOutput?: () => string } | null
+    const host: JobHost = {
+      start: (spec) => {
+        hooks = spec.run()
+        return `${spec.kind}-1`
+      },
+    }
+    const jobs = new SourceJobs({ registry, probe: async () => okProbe, uuid: () => 'job-readout-err', host })
+    jobs.startImport([{ name: 'bad.json', text: '{' }])
+    await waitDone(jobs)
+    expect(hooks!.readOutput!()).toContain('bad.json：JSON 解析失败')
+    jobs.startBatchProbe(['nope'])
+    await waitDone(jobs)
+    expect(hooks!.readOutput!()).toContain('nope：源不存在')
+  })
+
+  it('探针抛错时过程行点名异常上的 error.code', async () => {
+    const dir = await makeTempDir('novel-job-readout-throw-')
+    const registry = await SourceRegistry.load(dir)
+    const seeder = new SourceJobs({ registry, probe: async () => okProbe, uuid: () => 'seed' })
+    seeder.startImport([{ name: 'a.json', text: JSON.stringify([raw('A', 'https://a.com')]) }])
+    await waitDone(seeder)
+    const id = registry.list()[0].id
+    let hooks = null as { readOutput?: () => string } | null
+    const host: JobHost = {
+      start: (spec) => {
+        hooks = spec.run()
+        return `${spec.kind}-1`
+      },
+    }
+    const boom = new Error('boom') as Error & { code?: string }
+    boom.code = 'ECONNRESET'
+    const jobs = new SourceJobs({ registry, probe: async () => { throw boom }, uuid: () => 'probe', host })
+    jobs.startBatchProbe([id])
+    await waitDone(jobs)
+    expect(hooks!.readOutput!()).toContain('broken（ECONNRESET）')
   })
 })
