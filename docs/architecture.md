@@ -36,9 +36,9 @@ api/  ·  tools/        ← 两个平行的**投影面**，不是上下两层
 index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注册
 ```
 
-- **`api` 与 `tools` 各只拥有什么**：`api/dispatch.ts` 只做传输关注点（方法守卫、body 形状、信封、流式与响应头），业务判据一律抛给门面动词；`tools` 只 `import type` 门面，每个 `execute` 都是门面动词的调用，自己只拥有缺键投影与 render。所以「UI、AI 工具、探针三个面共用同一条链路」不是口号而是 import 事实。
+- **`api` 与 `tools` 各只拥有什么**：`api/dispatch.ts` 只做传输关注点（方法守卫、信封、流式与响应头；body 的**形状**判据不在这层，它是 `shared/wire.ts` 的 `readBodies`），业务判据一律抛给门面动词——留在路由层的三处形状分派与区间裁剪，各自的家写在 `dispatch.ts` 末尾那条注里；`tools` 只 `import type` 门面，每个 `execute` 都是门面动词的调用，自己只拥有缺键投影与 render。所以「UI、AI 工具、探针三个面共用同一条链路」不是口号而是 import 事实。
 - **绕过门面在类型上不可表达**：门面的部件全是构造期的私有成员，外部三面拿不到。
-- 方向上的两处**刻意破例**都有理由，别当违规清理：选项切分常量放引擎侧（桥不能 import 服务层）；`services/url.ts` 存在的唯一理由是拆 request ↔ bridge 的环。
+- 方向上的两处**刻意破例**都有理由，别当违规清理：选项切分常量放引擎侧（桥不能 import 服务层）；`services/url.ts` 存在的唯一理由是拆 request ↔ bridge 的环——所以绝对化与 `,{option}` 后缀那一族（`absUrl` / `splitUrlOption` / `absUrlKeepOption`）住这里，而不是 request。
 - 反向依赖的硬约束：`services` 不 import `api`（服务层的错误类型由路由层映射成状态码）；EPUB 子树不认识书架与 HTTP。
 - 持久化模型不另立形状：`services/types.ts` 把状态枚举与书目形状**反向 re-export** 自 wire——契约不是服务层的私有形状，是两半共用的那一份。
 
@@ -48,7 +48,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 
 一条不对称要记住：**面（`Facet`）不改变求值语义**，它只进错误定位与 trace；**用途（`RuleUsage`）改变形状**，且只有这一个轴被允许改变形状（`docs/adr/0007`）。把它们混为一谈会生出「面决定语义」的假口径。
 
-链语义是单点：一条链只有一份 generator，两个驱动器对链本身零知识；js 段是唯一需要跨 `await` / 跨线程的段，所以它是唯一的 `yield` 点，也是唯一允许把宿主能力带进求值层的口子（`docs/adr/0005`）。
+链语义是单点：一条链只有一份 generator，两个驱动器对链本身零知识；js 段是唯一需要跨 `await` / 跨线程的段，所以它是唯一的 `yield` 点，也是唯一允许把宿主能力带进求值层的口子（`docs/adr/0005`）。服务层跑脚本只走 `js-sandbox.ts` 的 `runScript` 一扇门，而它的入参**就是 `EvalContext`**（曾逐字段抄一份能力清单，于是同一段脚本从这扇门进就少 `fetchPost`/`userAgent`/`book`/`chapter`）；超时预算的三个数各有名字与家：调用方给的 `jsTimeoutMs`、worker 那条 race 的 `ASYNC_GRACE_MS`、worker 内单次宿主往返的 `WORKER_RPC_DEADLINE_MS`。
 
 文法区域（`{{…}}` / `@put:{…}` / `<js>`）先于任何切分被整体剥离，判据只住在 `engine/grammar.ts`——区域里的 `||`、`&&`、`@`、`$1` 是代码内容而不是文法记号。构词与解析同属一处，方言拼串走 round-trip 自校验。
 
@@ -60,7 +60,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 
 | 语义 | 唯一主人 | 它不回答什么 |
 | --- | --- | --- |
-| 路由名 / 值形状 / body 构造器 | `shared/wire.ts` | 业务判据 |
+| 路由名 / 值形状 / body 形状（`bodies` 构造 + `readBodies` 读口 / `shelfBody` / `queries`） | `shared/wire.ts` | 业务判据 |
 | 书目元数据字段集 | `shared/wire.ts` 的 `SHELF_META` + `pickShelfMeta` | 读取面投影（`sourceName` 刻意不进表） |
 | 规则文法（构词 + 解析 + 区域） | `engine/grammar.ts` | 求值 |
 | 段识别与切分次序（含隐式 CSS 回落） | `engine/parse.ts` | 空态裁决 |
@@ -68,7 +68,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 组合符形状与驱动长度 | `engine/combine.ts`（读 `usage`） | 链衔接 |
 | 行模板的判定与绑定 | `engine/regex-row.ts`（同一份文法的两面） | 模板字面段 |
 | `EngineValue → 单串` | `engine/js-utils.ts` 的 `engineValueToString` | 业务字段语义 |
-| 宿主方法面（名字 / 挂载 / 分派） | `engine/js-protocol.ts` 的协议表，加一个方法 = 表加一行 | 真实网络 |
+| 宿主方法面（名字 / 挂载 / 分派） | `engine/js-protocol.ts` 的协议表。加一个 **sync** 方法 = 表加一行；加一个 **async** 方法还要在 `js-sandbox.ts` 的 `BOOTSTRAP` 里写那份同步桥包装（`docs/adr/0004` 把生成逻辑钉在串内），且它读的 `ctx.*` 能力位必须由 `services/bridge.ts` 的 `engineContextOf` 供出——这两处联系都有机器闸（`tests/engine/js-protocol.test.ts` 的能力位闸） | 真实网络 |
 | 选项语义（模板 → 请求计划） | `services/request.ts` 的 `assembleRequest` + `fetchInitOf` | 网络与解码 |
 | 出站（超时 / 代理 / 解码 / 状态） | `services/fetcher.ts`，`@js` 复用同一出口 | 缓存与业务 |
 | 一次搜索请求的完整语义（含嗅探） | `services/search-face.ts` | 聚合与游标 |
@@ -84,17 +84,18 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 聚合搜索的参与集 | `services/participation.ts` 的 `participates`（发现面谓词 `exploreParticipates` 同文件） | 源清单读写 |
 | 错误类目 → HTTP | `services/errors.ts` + `api/wire.ts`（两分法） | 路由自检错误 |
 | 日志前缀与级别出口 | 唯一主人 `services/log.ts` 的 `log` / `setLogSink`（运行时 adapter = console + 宿主 `ctx.logger` 双腿，组合根卸载时复位 console）；**例外**：engine 防线的缺省 sink（`engine/js-sandbox.ts` 的 `consoleGuardSink`）自持一份前缀——依赖方向红线要求 engine 不得 import services，只有注入路径的前缀归缝 | 日志往哪投（宿主日志面的去向归宿主） |
-| 任务过程行 | `services/job-tail.ts` 的 `JobTail`（宿主 job 输出面是拉：各持有者经 `readOutput` 交出尾缓冲） | 整轮结果与业务明细（那归各持有者的快照读面，`docs/adr/0018`） |
+| 任务过程行 | 缓冲与上限：`services/job-tail.ts` 的 `JobTail`；接到宿主 `readOutput` 上那段登记机械：`services/job-holder.ts` 的 `HostTie`（三个持有者共读这一份，`start()` 内同步取 hooks 的顺序只在这里记一次） | 整轮结果与业务明细（那归各持有者的快照读面，`docs/adr/0018`）；状态形状与槽政策 |
+| 「本轮状态变了」信号 | `services/job-holder.ts` 的 `ChangeSignal`（只发信号不发数据；观察者自取快照、各持游标） | 快照形状、游标推进、换轮与整帧替换的裁决（那归浏览器半两个观察模块） |
 | 整轮搜索结果 | `services/search-job.ts`（Node 半持有） | wire 形状 |
 | 跨源归并（作品视图）：搜索面「是不是同一本书」的判同 | `shared/merge-by-book.ts` 的 `mergeBooks`（形状与上限 `MergedBook`／`MergedSource`／`SEARCH_BOOKS_CAP` 在 `shared/wire.ts`）——呈现层派生，消费点只有搜索结果页与工具面 | 不替用户判该用哪家读（动作不下放）、不服务书籍详情浮层、不改书架身份与进度（作品级身份与换源搬运另裁，见 `docs/adr/0033`） |
 | 相关性判据（一条命中与本轮关键词的关系档位） | 形状 `Relevance` 声明在 `shared/wire.ts`；判据与三档序 `shared/relevance.ts` 的 `relevanceOf` / `partitionByRelevance` / `RELEVANCE_RANK`——决定 `suspect` 去处的三个消费点（`client/views/SearchView.tsx` 的 `renderGroups`、`client/views/CityBookSheet.tsx` 的 `GroupRow`、`tools/tools.ts` 的 `searchBooks`）加只收 `kept` 的归并面（`shared/merge-by-book.ts`）都只吃这一份 | 不判书架、不判发现面（那两面没有关键词这一维） |
-| `exploreUrl` 的形态判据与分类入口解析（js / JSON / `标题::URL` 三档怎么分、条目怎么取） | `services/explore-url.ts` 的 `exploreKindsFormOf` / `parseExploreKinds` | 落位与平铺优先（`services/normalize.ts` 的 `flattenDialect`）、这次用哪份模板（`services/explore-face.ts` 的 `fetchKindPage`） |
+| `exploreUrl` 的形态判据与分类入口解析（js / JSON / `标题::URL` 三档怎么分、条目怎么取、什么算一条**可用**条目） | `services/explore-url.ts` 的 `exploreKindsFormOf` / `parseExploreKinds` / `usableKind` | 落位与平铺优先（`services/normalize.ts` 的 `flattenDialect`）、这次用哪份模板（`services/explore-face.ts` 的 `fetchKindPage`） |
 | 一次分类页请求的完整语义（含整套规则回落） | `services/explore-face.ts` 的 `fetchKindPage` | 整轮编排与快照写回 |
 | 分类清单（哪个源自己声明了哪些分类） | `services/explore.ts` 的 `deriveExploreSources` | 站点侧分类的同义归并（本仓不造同义词表） |
 | 单源一页的执行（查进程内快照 → 抓 → 写回 → 出一个组） | `services/explore.ts` 的 `fetchExploreGroup` | 点名与页码（门面 `services/reading.ts`）、轮次状态与终态 |
 | 整轮分类结果 | `services/explore-job.ts`（Node 半持有，读面给全量快照） | wire 形状 |
 | 跨源那一次的关键词构造（有作者就带作者） | `client/city-view-model.ts` 的 `sheetKeyword`（消费者只有书籍详情浮层，链路复用搜索面） | 是不是同一本书——判同在搜索面归并那一行（`mergeBooks`，按归并键）；书籍详情浮层维持逐源轴、不吃归并；两层的界面都不替他判该用哪家读 |
-| 逐条目取值装配（求值上下文 → 一条命中） | **今天没有主人，两份抄本刻意接受**：`services/explore-face.ts` 与 `services/reading.ts` 各一份 | 两份的规则来源本就不同（发现面整套切换 vs 通用搜索面）；第三处消费者出现时再抽公共装配 |
+| 逐条目取值装配（一套条目规则 + 一个条目上下文 → 一条命中） | `services/bridge.ts` 的 `hitFieldsOf`（槽序、书名非空尺、选项保留绝对化、简介净化全在这一处；聚合搜索与发现面共用） | 用哪一套规则（发现面的整套切换归 `explore-face.rulesFor`）、读不出来归成哪类错（各自调用侧：搜索面按组、发现面按源） |
 | 分类快照的存放与时效 | `services/explore-cache.ts` 的 `KindCache` + `services/cache-epoch.ts` 的 `exploreEpoch` | 目录 / 正文文件缓存（`rulesEpoch`） |
 | 配置口径（类型 / schema / 缺省填充 / 值域） | `config.ts` 的 `resolveConfig`（schema 的 `.default()` 只引各消费模块常量，不写第二份字面量） | 运行时环境探测（如系统代理读取，在 `services/proxy.ts`） |
 | 插件页运行参数表单与热更 | `client/config-page.tsx` 的 `registerConfigPage` / `NovelConfigCard`（表单）+ `config.ts` 的 `Config` volatile 字段与 `resolveConfig` getter（读数） | 启动期 `dataDir`、系统代理探测、HTTP 路由 |
@@ -109,7 +110,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 ## 5. seam：可测性怎么落
 
 - **纯函数面**直接单测，不造宿主替身：`parseRule`、`reducePicked`、`evalCss`、`evalXPath`、`evalJsonPath`、`applyReplaces`、`interpolateUrl`、`appendTail`、`bindRegexRow`、`engineValueToString`，以及客户端的 `source-list-view` / `shelf-view-model` / `city-view-model` / `source-inbox` / `reader-load` / `progress`。
-- **注入垫片**是测试进出的口子（不是换模块替身）：引擎侧 `EvalContext` 的 fetch 族 / `evaluateRef` / `subEval` / `SourceSession` / 超时预算；服务侧 fetcher 与注入的时钟/目录；客户端三束 deps（核心 / 设置 / 阅读器）+ `ReaderPort`；浏览器位置用例走仓内最小宿主壳，它只证明「卸载与重挂」那一半契约。
+- **注入垫片**是测试进出的口子（不是换模块替身）：引擎侧 `EvalContext` 的 fetch 族 / `evaluateRef` / `subEval` / `SourceSession` / 超时预算；服务侧 fetcher 与注入的时钟/目录；客户端**按读者分的依赖束**（核心 / 观察通道 / 带观察的视图 / 书架 / 设置 / 阅读器）+ `ReaderPort`，其中观察通道的节拍与阅读器的防抖窗各留一格注入位；浏览器位置用例走仓内最小宿主壳，它只证明「卸载与重挂」那一半契约。
 - **两条求值路必须同口径**（主线程与 worker），由按 fetch 计数自证的跨路钉子守——这是 `docs/adr/0005` 的产物。
 - 客户端的测试手法是**假 adapter 驱动真实组件**，不是渲染快照；服务端的路由测试用真 HTTP server 承载（`api/dispatch.ts` 不依赖 Cordis，纯构造器）。
 - **门的分工别混**：解析面普查管「能不能解析」，重探只证搜索面，正文审计是**报告**不设通过率，compat 回放的分母是 fixture，真浏览器门只跑本机与本地书，安装门控不起宿主。各自承诺什么写在 `docs/developing.md` 的「测试与真链路门控」，不在这里复述。

@@ -50,7 +50,7 @@ _Avoid_: 书城列表页、分类搜索（发现面是另一条链路，不是�
 
 **分类入口（explore kinds）**:
 一个源「有哪些分类」的逐源声明（用户面与 `docs/adr/0027` 里也叫**发现入口**，指同一件事）。**两方言的地址语义不同**：原生 `ruleFind.kinds` 里的地址是填进源级模板 `{{kind}}` 的值，legado `exploreUrl` 里的地址本身就是那一类的完整模板（自带页码位）；落位后统一成模型里的 `ruleExploreKinds` 一个形状。**「这次用哪份模板」先问源级模板在场吗，方言只决定兜底、不决定优先**——判据的主人是 `explore-face.fetchKindPage`（裁决见 `docs/adr/0027`），此处不复述。脚本形态（`@js:` / `<js>`）本期不执行，声明它的源在书城没有分类。
-_唯一实现_: 解析与形态判定 `services/explore-url.ts` 的 `parseExploreKinds`（判据同住 `exploreKindsFormOf`）；落位在 `services/normalize.ts`——导入侧 `flattenDialect`（legado，条目尺同住 `parseExploreKinds`）与 `flattenNative`（原生，条目尺同住 `nativeExploreFields`），存量按 raw 补推同住 `rawExploreFields`（两方言跑的是同一个 flatten）
+_唯一实现_: 解析与形态判定 `services/explore-url.ts` 的 `parseExploreKinds`（判据同住 `exploreKindsFormOf`，条目可用尺同住 `usableKind`——两档解析、原生侧条目、平铺优先的数组尺四家共读这一把）；落位在 `services/normalize.ts`——导入侧 `flattenDialect`（legado，条目尺同住 `parseExploreKinds`）与 `flattenNative`（原生，条目尺同住 `nativeExploreFields`），存量按 raw 补推同住 `rawExploreFields`（两方言跑的是同一个 flatten）
 _Avoid_: 分类词表（那是一个源自己声明的分类标题摊开后的清单，主人是 `deriveExploreSources`）、发现列表
 
 **相关性（relevance）**:
@@ -98,6 +98,11 @@ _Avoid_: 空结果（太泛——Miss 与空 List 是两种值）
 服务层把链尾 `EngineValue` 收成业务串的三种口径：单值文本位、URL 位、多值位。
 _唯一实现_: `services/bridge.ts` 的 `firstValue` / `firstUrlValue` / `listValue`（字段侧入口同名分家：`fieldOf`/`urlFieldOf` 不吞错，`auxFieldOf`/`auxUrlFieldOf` 读不出留空）
 _Avoid_: 取值规约（那是引擎层的空态裁决；这条是服务层的值收口）
+
+**条目装配（一条命中）**:
+「一套条目规则 + 一个条目上下文 + 落地地址」收成**一条书目**的唯一语义。聚合搜索与发现面共用同一份，两档档位（书名非空才算书目 / 作者与书地址是裸奔项 / 其余五项坏规则只丢该字段）只在这里说一次。
+_唯一实现_: `services/bridge.ts` 的 `hitFieldsOf`（入参形状 `HitRules` 同文件）
+_Avoid_: 逐字段解析（太泛——不含选项保留绝对化与简介净化那一半）、搜索面装配（发现面也走这一份）、命中构造器（面不进 interface）
 
 **取值用途（rule usage）**:
 同一条规则串在两种用途下**链尾未知词**的语义不同，调用方显式声明：`'value'` → 未知词按 HTML 属性名；`'list'` → 未知词按 CSS。
@@ -202,8 +207,8 @@ _Avoid_: 本地 TXT（口径覆盖两种格式，书架卡片因此只说「本�
 
 **后台任务（background job）**:
 跑在服务端的耗时任务，四种 kind：`novel-import` / `novel-probe`（写，共用一槽）与 `novel-search` / `novel-explore`（读，另开一槽）。身份与生命周期登记给宿主 `ctx.jobs`；业务计数与明细归本仓持有者。**停止（cancel）不是失败也不是放弃**。
-_唯一实现_: `services/import-job.ts` / `services/probe.ts` / `services/search-job.ts` / `services/explore-job.ts`
-_Avoid_: 队列（是单槽不是队列）、前端任务（在途循环不在浏览器半）
+_唯一实现_: `services/import-job.ts` / `services/probe.ts` / `services/search-job.ts` / `services/explore-job.ts`；**与宿主登记之间那段机械**（`ctx.jobs` 注册、协作式取消记账、终态结算、过程行拉取、「变了」信号）唯一住在 `services/job-holder.ts` 的 `HostTie` / `ChangeSignal`
+_Avoid_: 队列（是单槽不是队列）、前端任务（在途循环不在浏览器半）、任务运行器（挂点不认识状态形状，刻意没有这种东西）
 
 **分类轮次（explore round）**:
 一轮分类浏览的持有物：**一轮 = 一个源 + 一个类**，各页结果**跨页累积**住在 Node 半，读面给**全量快照**（整帧替换）；一次只留最近一轮，过了保留期读作「无任务」。**续页是这一轮里的事**（同 id 再打一页，不换轮；失败或被停止的那一批不占页号，所以再打的可能是同一页），快照上的 `page` / `hasMore` 是**动作契约**——`hasMore` 只说「此刻能不能点」，不是「还有没有书」。
@@ -253,9 +258,9 @@ _唯一实现_: `services/explore.ts` 的 `deriveExploreSources`；跨半形状 
 _Avoid_: 分类目录（那是站点侧的分类，词表是各源自己声明的标题）、分类计数（旧版那份「被多少源声明」的读数随跨源轴一起走了）
 
 **wire 契约（wire contract）**:
-`/novel-api` 规范 JSON 的值形状与路由名——Node 半与浏览器半之间的唯一真相，代码只许有一个主人。
+`/novel-api` 规范 JSON 的值形状、路由名与**写路由的 body 形状**——Node 半与浏览器半之间的唯一真相，代码只许有一个主人。body 的两半成对住这里（`bodies` 构造器给浏览器半、`readBodies` 读口给 Node 半），键名同理只有一处字面量（`BODY`，与 query 同名的业务键沿用 `PARAMS`）。
 _唯一实现_: `shared/wire.ts`
-_Avoid_: API 文档（文档是它的抄本）
+_Avoid_: API 文档（文档是它的抄本）、body 校验（形状判据在契约、状态码归传输层）
 
 **缺键投影（missing-key projection）**:
 工具面把空值字段从规范值中整键省略的投影——harness 的 lossless-JSON 约束下的职责，不是 wire 口径。
@@ -311,5 +316,5 @@ _Avoid_: 逐调用点手写 `[dsh-novel]` 前缀、另开 console 出口
 
 **任务过程行（job progress tail）**:
 宿主 job 输出面的拉模型缓冲：有界、消费式、只装过程行；整轮结果与业务明细归各持有者的快照读面。
-_唯一实现_: `services/job-tail.ts` 的 `JobTail`（各持有者经 `readOutput` 交出）
+_唯一实现_: `services/job-tail.ts` 的 `JobTail`（缓冲与上限）；`services/job-holder.ts` 的 `HostTie`（把它接到宿主 `readOutput` 上——三个持有者不再各写一遍登记顺序）
 _Avoid_: 把整轮结果塞进 job_output、把过程行当业务快照
