@@ -1,5 +1,5 @@
 import { appendTail, withImplicitText } from '../engine/grammar.js'
-import { parseExploreKinds } from './explore-url.js'
+import { parseExploreKinds, usableKind } from './explore-url.js'
 import type { NormalizedRules, SourceContentKind } from './types.js'
 
 export interface NormalizeIssue { field: string; message: string }
@@ -290,14 +290,12 @@ function nativeExploreFields(f: Record<string, unknown>): {
   put('ruleExploreUrl', f.url)
   const kinds: Array<{ title: string; url: string }> = []
   let sawChildren = false
-  for (const k of Array.isArray(f.kinds) ? f.kinds : []) {
-    if (typeof k !== 'object' || k === null || Array.isArray(k)) continue
-    const e = k as Record<string, unknown>
-    const title = typeof e.title === 'string' ? e.title.trim() : ''
-    const url = typeof e.url === 'string' ? e.url.trim() : ''
-    if (title === '' || url === '') continue
-    kinds.push({ title, url })
-    if (Array.isArray(e.children) && e.children.length > 0) sawChildren = true
+  for (const entry of Array.isArray(f.kinds) ? f.kinds : []) {
+    const k = usableKind(entry)
+    if (k === null) continue
+    kinds.push(k)
+    const children = (entry as Record<string, unknown>).children
+    if (Array.isArray(children) && children.length > 0) sawChildren = true
   }
   const own = f.ruleSearch
   if (typeof own === 'object' && own !== null && !Array.isArray(own)) {
@@ -397,23 +395,13 @@ function ruleContainers(raw: Record<string, unknown>, warnings: NormalizeIssue[]
   return out
 }
 
-/** 一条分类入口「可用」的尺：`title` 与 `url` 都是去空白后非空的串——与两档解析
- *  （`parseTextKinds` / `parseJsonKinds`）和原生侧 `nativeExploreFields` 收条目用的是同一把。
- *  几处里任何一处只判容器，脏条目就从那一门钻进模型，而下游 `deriveExploreSources` 读的是
- *  `k.title`：一条 `{}` 因此被算成一个真分类，界面上多出一个空名入口、点下去取不到东西。 */
-function isUsableKind(e: unknown): boolean {
-  if (typeof e !== 'object' || e === null || Array.isArray(e)) return false
-  const o = e as { title?: unknown; url?: unknown }
-  return typeof o.title === 'string' && o.title.trim() !== ''
-    && typeof o.url === 'string' && o.url.trim() !== ''
-}
-
 /** 合并视图这一格是否**已带可用的分类入口**（平铺 raw 自己写了非空数组）——「平铺优先」那条尺在
  *  数组键上的读法：这条族里只有它是数组，走不了 `setIfVacant`，判据却必须是同一条。
  *  判到条目级而不是只判容器：脏数组（`[{}]`、`[42]`）与「没写」在这条尺上是同一种值——都不算在场，
- *  照旧由派生值接管（与「非数组照旧被派生值接管」同一条裁法，不另立第二种）。 */
+ *  照旧由派生值接管（与「非数组照旧被派生值接管」同一条裁法，不另立第二种）。条目级的尺住
+ *  `explore-url.usableKind`，本函数只加「每条都过」这一层。 */
 function isArrayOfKinds(v: unknown): boolean {
-  return Array.isArray(v) && v.length > 0 && v.every(isUsableKind)
+  return Array.isArray(v) && v.length > 0 && v.every((e) => usableKind(e) !== null)
 }
 
 /**

@@ -389,7 +389,7 @@ describe('原生方言的 ruleFind 映射（发现面数据面）', () => {
 
   // 原生这扇门与两档解析（explore-url 的 parseTextKinds / parseJsonKinds）用的是同一把尺：
   // 标题与地址去空白后非空才算数、存的即去空白后的值——脏条目从哪一门都不许钻进来（口径的
-  // 完整论述住 `isUsableKind` 的头注）。
+  // 完整论述住 `explore-url.usableKind` 的头注）。
   it('kinds 条目的标题与地址去空白后非空才算数：空白条目不进模型', () => {
     const dirty = {
       ...native,

@@ -3,7 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { createApiHandler } from './api/dispatch.js'
 import { resolveConfig, type NovelConfig } from './config.js'
 import { ensureUnhandledGuard } from './engine/js-sandbox.js'
-import type { JobHost } from './services/import-job.js'
+import type { JobHost } from './services/job-holder.js'
 import { log, setLogSink } from './services/log.js'
 import { readSystemProxy, redactProxyUrl, resolveProxyUrl } from './services/proxy.js'
 import { ReadingService } from './services/reading.js'
@@ -19,7 +19,7 @@ export { Config, type NovelConfig, type ResolvedConfig } from './config.js'
  * 本仓库不装 dsh-host-webserver（peer，运行时由宿主提供），类型面按 d.ts 证据镜像最小形状。
  * 注意不能 extends Context（dsh-tools 已对 tools 做了更宽的增强，交叉会冲突）——独立形状 + 强转。
  * `jobs` = 宿主后台任务注册表（ctx.jobs）：只镜像我们用到的两成员（`start` 与下面的 `attachController`）。
- * `start` 交出的 spec 形状由 services/import-job.ts 的 `JobHostSpec` 唯一持有——宿主真名真形与
+ * `start` 交出的 spec 形状由 services/job-holder.ts 的 `JobHostSpec` 唯一持有——宿主真名真形与
  * 输出拉模型（`readOutput`）的窄面镜像注释都在那里，本处不复述。
  * kind 是自由字符串（注册表按不透明命名空间处理，唯一判据非空，
  * 见 `dsh-jobs-local` 的 `invalid job kind: expected a non-empty string`）。 */

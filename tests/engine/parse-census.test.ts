@@ -111,7 +111,7 @@ const KITCHEN_SINK: any = {
   searchUrl: '/search?q={{key}}&retry=1&charset=gbk',
   preUpdateJs: '@js:1',
   ruleToc: { formatJs: '@js:title', chapterUrl: 'a@href##reSegment##paragraphTitle' },
-  ruleContent: { content: 'java.refreshExplore("x"); source.setVariable("k", "v")' },
+  ruleContent: { content: 'java.refreshExplore("x"); source.setVariable("k", "v")', subContent: 'text.正文' },
   // 节点导航形状：`jsoupNodeNav` 2026-09-28 数为 0、2026-10-16 普查现算 4 源（矩阵行
   // `h-jsoup-live-node-navigation` 那句「0/214」是旧批读数、待重数），样品照留——形状在册不只为了反空转
   ruleBookInfo: { intro: 'result.parent().children(0).elementSiblingIndex()' },

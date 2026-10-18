@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { load } from 'cheerio'
 import { JAVA_PROTOCOL, SANDBOX_MOUNTS, invokeJavaMethod } from '../../src/engine/js-protocol.js'
@@ -269,5 +270,38 @@ describe('摘要与 HMAC 族（java.digestHex / digestBase64Str / HMacHex / HMac
   })
   it('digestHex 拿到 HMAC 算法名 → 同样报「不支持的算法」（对面 MessageDigest 也抛 NoSuchAlgorithmException，不许当成 HMAC 悄悄算）', () => {
     expect(() => invokeJavaMethod(depsOf(), 'digestHex', ['abc', 'HmacSHA256'])).toThrow(/HmacSHA256/)
+  })
+})
+
+describe('async 行的能力位闸（表行 ↔ 沙箱包装 ↔ 服务层装配）', () => {
+  // 「加一个方法 = 表加一行」这句话只对 sync 行成立：async 行还要 BOOTSTRAP 里那份手写包装，
+  // 而它读的能力位（`ctx.fetchPost` 这类）必须有人真的递进来。两处都没有编译期联系，
+  // 漏哪一处都只在真跑到那个方法的源上炸成「未接线」——所以这里用现读的源码当闸。
+  const read = (rel: string): string =>
+    readFileSync(new URL(rel, import.meta.url), 'utf8')
+  const protocolSrc = read('../../src/engine/js-protocol.ts')
+  const sandboxSrc = read('../../src/engine/js-sandbox.ts')
+  const bridgeSrc = read('../../src/services/bridge.ts')
+  const asyncRows = JAVA_PROTOCOL.filter((r) => r.mode === 'async').map((r) => r.name)
+  const capabilityNames = [...new Set(
+    [...protocolSrc.matchAll(/d\.ctx\.([a-zA-Z]+)/g)].map((m) => m[1]),
+  )]
+
+  it('每条 async 行都在引导层有自己的同步桥包装（漏包装＝脚本永远调不到）', () => {
+    expect(asyncRows).toEqual(['ajax', 'connect', 'post', 'head', 'downloadFile'])
+    for (const name of asyncRows) {
+      expect(sandboxSrc).toContain(`const ${name} = d.syncAjax`)
+    }
+  })
+
+  it('表读到的每个能力位，源级上下文装配单点都供得出（漏装配＝运行时「未接线」）', () => {
+    expect(capabilityNames.length).toBeGreaterThan(0)
+    for (const name of capabilityNames) {
+      expect(bridgeSrc.includes(`${name}:`), `engineContextOf 没有产出 ctx.${name}`).toBe(true)
+    }
+  })
+
+  it('async 行不进同步挂载表（它们走引导层特制包装，不是 `sync()` 转发）', () => {
+    for (const name of asyncRows) expect(SANDBOX_MOUNTS.javaSync).not.toContain(name)
   })
 })

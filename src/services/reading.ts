@@ -3,12 +3,12 @@ import path from 'node:path'
 import type { ResolvedConfig } from '../config.js'
 import { evaluate, RuleEvalError } from '../engine/index.js'
 import type { Facet } from '../engine/index.js'
-import { absUrl, auxFieldOf, auxUrlFieldOf, detailContextOf, detailFieldsOf, engineContextOf, fieldOf, firstUrlValue, firstValue, itemContextsOf, kindFieldOf, makeSubEval, resolveHeaders, urlFieldOf, wordCountFieldOf } from './bridge.js'
+import { absUrl, detailContextOf, detailFieldsOf, engineContextOf, firstUrlValue, firstValue, hitFieldsOf, itemContextsOf, makeSubEval, resolveHeaders, urlFieldOf } from './bridge.js'
 import type { Page, SubRuleEval } from './bridge.js'
 import { DEFAULT_CACHE_MAX_BYTES, PageCache } from './cache.js'
 import { contentSlot, exploreEpoch, rulesEpoch } from './cache-epoch.js'
 import { chapterContentToText } from './chapter-content.js'
-import { contentToText, formatIntro } from './content.js'
+import { contentToText } from './content.js'
 import { ChapterNotFoundError, InvalidRequestError, LocalNotMountedError, RuleMissingError, SourceNotFoundError } from './errors.js'
 import { createFetcher, decodeBody, fetchTextPage, DEFAULT_TIMEOUT_MS } from './fetcher.js'
 import type { Fetcher } from './fetcher.js'
@@ -18,7 +18,7 @@ import { deriveExploreSources, fetchExploreGroup } from './explore.js'
 import { DEFAULT_EXPORT_DELAY_MS } from './export.js'
 import { SourceJobs } from './import-job.js'
 import { SearchJobs } from './search-job.js'
-import type { JobHost } from './import-job.js'
+import type { JobHost } from './job-holder.js'
 import type { ImportFile, JobState } from './import-job.js'
 import { SourceIntake } from './intake.js'
 import { DEFAULT_MAX_IMPORT_BYTES, isLocalBookKey, LOCAL_SOURCE_ID, LocalBooks } from './localbooks.js'
@@ -72,7 +72,7 @@ export interface ReadingServiceOptions {
   /** 出站代理（见 proxy.ts：Node 的 fetch 不读系统代理）；null/缺省 = 直连。
    *  getter 形态供配置页热改——服务原样交给 fetcher，读值时机归它。 */
   proxyUrl?: ValueSource<string | null>
-  /** 宿主 `ctx.jobs` 窄面：任务身份与生命周期交它（见 import-job.ts 的 JobHost），缺省不登记 */
+  /** 宿主 `ctx.jobs` 窄面：任务身份与生命周期交它（见 job-holder.ts 的 JobHost），缺省不登记 */
   jobHost?: JobHost
 }
 export interface ImportOutcome {
@@ -187,7 +187,7 @@ export class ReadingService {
     cache: PageCache
     fetcher: Fetcher
     local?: LocalBooks
-    /** 宿主 `ctx.jobs` 的窄面（见 import-job.ts 的 JobHost）；缺省即不登记，任务语义不变 */
+    /** 宿主 `ctx.jobs` 的窄面（见 job-holder.ts 的 JobHost）；缺省即不登记，任务语义不变 */
     jobHost?: JobHost
     config?: ResolvedConfig
     localImportMaxBytes?: number
@@ -563,7 +563,7 @@ export class ReadingService {
   searchJobSnapshot(since = 0): SearchJobSnapshot | null { return this.searchJobs.snapshot(since) }
 
   /** 搜索任务的「变了」信号口（SSE 路由用它拉增量；信号不带数据，游标归每条连接）。返回退订口。 */
-  subscribeSearchJob(listener: () => void): () => void { return this.searchJobs.subscribe(listener) }
+  subscribeSearchJob(listener: () => void): () => void { return this.searchJobs.signal.subscribe(listener) }
 
   // ── 分类浏览（书城）──────────────────────────────────────────────────
 
@@ -645,7 +645,7 @@ export class ReadingService {
   exploreJobSnapshot(): ExploreSnapshot | null { return this.exploreJobs.snapshot() }
 
   /** 分类轮次的「变了」信号口（SSE 路由用它拉全量帧；信号不带数据）。返回退订口。 */
-  subscribeExploreJob(listener: () => void): () => void { return this.exploreJobs.subscribe(listener) }
+  subscribeExploreJob(listener: () => void): () => void { return this.exploreJobs.signal.subscribe(listener) }
 
   private async searchOne(s: NovelSource, keyword: string): Promise<SearchGroup> {
     const base = {
@@ -666,36 +666,18 @@ export class ReadingService {
       const hits: SearchHit[] = []
       // 求值与相对链接基准 = 落地地址（浏览器语义，与目录/正文面同口径——重定向站点不再错位）；
       // 上下文由搜索面按条目产出（AllInOne 条目带行，字段规则的 `$n` 在引擎入口绑定）
+      // ruleBookName 的非空保障在搜索面（缺规则整体 RuleMissing，不降级 `?? ''`——空串规则返回
+      // 整页文本会造垃圾标题），这一格只为 `hitFieldsOf` 的 name 恒非空契约而写
+      const R = {
+        name: s.rules.ruleBookName ?? '', author: s.rules.ruleAuthor, url: s.rules.ruleBookUrl,
+        cover: s.rules.ruleCoverUrl, intro: s.rules.ruleIntro, last: s.rules.ruleLastChapter,
+        kind: s.rules.ruleKind, wordCount: s.rules.ruleWordCount,
+      }
       for (const ctx of page.contexts) {
-        // ruleBookName 的非空保障在搜索面（缺规则整体 RuleMissing，不降级 `?? ''`——空串规则返回整页文本会造垃圾标题）
-        const title = firstValue(await page.subEval(s.rules.ruleBookName ?? '', ctx, 'search', 'value'), 'search')
-        if (title === null || title.trim() === '') continue // 书名非空才算书目
-        const [author, href, cover, intro, last, kind, wordCount] = await Promise.all([
-          // 作者/书地址 = 裸奔项（不吞：空书名才丢条目）；书地址走 URL 位取首项（理由单点在
-          // bridge.urlFieldOf，矩阵行 `b-url-value-first-item`）
-          fieldOf(page.subEval, s.rules.ruleAuthor, ctx, 'search'),
-          urlFieldOf(page.subEval, s.rules.ruleBookUrl, ctx, 'search'),
-          // 下面五项各自包 try/catch：坏规则只丢该字段，不带走整页书目（bridge.metaFieldOf）；
-          // 封面是 URL 位，只多一层「读不出来留空」
-          auxUrlFieldOf(page.subEval, s.rules.ruleCoverUrl, ctx, 'search'),
-          auxFieldOf(page.subEval, s.rules.ruleIntro, ctx, 'search'),
-          auxFieldOf(page.subEval, s.rules.ruleLastChapter, ctx, 'search'),
-          // 分类/字数：同上，另注意 kind 是多值逗号串、wordCount 在解析层就格式化
-          kindFieldOf(page.subEval, s.rules.ruleKind, ctx, 'search'),
-          wordCountFieldOf(page.subEval, s.rules.ruleWordCount, ctx, 'search'),
-        ])
-        hits.push({
-          title, author,
-          // 书 URL 保留 `,{option}` 后缀落库（URL 即请求规格——米读类 POST API 源的
-          // book_id 藏在选项 body 里，剥掉即身份残废；与章节 URL「保留选项」同源，见 request.absUrlKeepOption）
-          url: href === null ? null : absUrlKeepOption(href, page.landedUrl),
-          coverUrl: cover === null ? null : absUrl(cover, page.landedUrl),
-          // 简介是**展示文本**：净化 + 截 5000 字（搜索面**不认**渲染指令前缀，那是详情面的事）。
-          // Miss 仍是 null，不折成空串。
-          intro: intro === null ? null : formatIntro(intro),
-          lastChapterName: last,
-          kind, wordCount,
-        })
+        // 档位与槽序的单点在 bridge.hitFieldsOf（书名非空才算书目 / 裸奔项 / 坏规则只丢该字段）；
+        // 这里的 try/catch 才是「整组归错码」的主人
+        const hit = await hitFieldsOf(R, page.subEval, ctx, page.landedUrl)
+        if (hit !== null) hits.push(hit)
       }
       return { ...base, hits }
     } catch (e) {

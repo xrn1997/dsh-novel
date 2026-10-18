@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { load } from 'cheerio'
 import { createSourceSession, evalJs, runScript } from '../../src/engine/js-sandbox.js'
-import type { JsHost } from '../../src/engine/js-sandbox.js'
+import type { EvaluateRef, JsHost } from '../../src/engine/js-sandbox.js'
 import { JsSandboxError } from '../../src/engine/errors.js'
 import type { EngineValue, EvalContext } from '../../src/engine/types.js'
 
@@ -22,7 +22,7 @@ const run = (
   code: string,
   host: JsHost = hostOf(),
   ctx: EvalContext = ctxOf(),
-  evaluateRef?: (rule: string, data: unknown, baseUrl?: string) => EngineValue,
+  evaluateRef?: EvaluateRef,
 ) => evalJs(code, host, ctx, L, 'content', evaluateRef)
 
 describe('@js 沙箱', () => {

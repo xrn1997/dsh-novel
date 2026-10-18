@@ -43,28 +43,26 @@ export interface EvalJsOptions {
 }
 
 /**
- * runScript：evalJs 的单对象入口。evalJs 的 JsHost 与 EvalContext 字段重叠，调用方此前必须双拼
- * 两份上下文；本入口把重叠字段收进一个对象、host/ctx 在此合并构造。evalJs 保持原样（引擎内部仍用它）。
+ * runScript：沙箱对**服务层与测试**的那一扇门（引擎内部仍走 `evalJs`——它是 generator 交出去的
+ * 入参形状，见 `evaluate.ts` 的 `JsCall`）。
+ * 能力面直接就是 `EvalContext`：这里过去逐字段抄了一份清单（`fetchPost` / `userAgent` /
+ * `regexRow` / `book` / `chapter` 都不在那份清单上），于是同一段脚本从这扇门进就会
+ * 「`java.post` 抛 ctx.fetchPost 缺失」——而清单与真面之间没有任何闸，加一个注入字段就自动少抄一个。
+ * 现在唯一入口收 `EvalContext` 的全部能力位，调用方按名字给，`host` 位与沙箱专属位单列。
  */
-export interface RunScriptOptions {
+export interface RunScriptOptions extends EvalContext {
   code: string
   /** 上一段结果序列化（host.result）；缺省 ''（脚本起步无上游） */
   result?: string
-  baseUrl?: string
-  source?: string
   /** 沙箱全局变量（searchUrl @js 形态用 key/page；header 为源静态头 JSON 串） */
   key?: string
   page?: number
   header?: string
-  vars?: Record<string, string>
-  /** 脚本可见的源实体字段（透传给 EvalContext，见 engine/types.ts 的同名注释） */
-  sourceComment?: string
-  sourceName?: string
-  fetch?: (url: string) => Promise<{ body: string; contentType?: string }>
-  fetchRaw?: (url: string) => Promise<Uint8Array>
-  fetchHead?: (url: string, headers?: Record<string, string>) => Promise<{ url: string; statusCode: number; headers: Record<string, string> }>
-  jsLib?: string
-  jsTimeoutMs?: number
+  /** 上一段结果的值形态与所在路径（nodes/page 绑成元素包装对象）——只有链上跑的脚本才给 */
+  resultKind?: string
+  resultCtx?: 'list' | 'value'
+  /** 脚本自己的 console 收集口 */
+  console?: JsHost['console']
   loc: SegmentLoc
   facet: Facet
   /** 缺省 true：完成值即结果 */
@@ -75,28 +73,21 @@ export interface RunScriptOptions {
 }
 
 export function runScript(o: RunScriptOptions): Promise<JsOutcome> {
-  const ctx: EvalContext = {
-    ...(o.baseUrl === undefined ? {} : { baseUrl: o.baseUrl }),
-    ...(o.source === undefined ? {} : { source: o.source }),
-    ...(o.vars === undefined ? {} : { vars: o.vars }),
-    ...(o.fetch === undefined ? {} : { fetch: o.fetch }),
-    ...(o.fetchRaw === undefined ? {} : { fetchRaw: o.fetchRaw }),
-    ...(o.fetchHead === undefined ? {} : { fetchHead: o.fetchHead }),
-    ...(o.jsLib === undefined ? {} : { jsLib: o.jsLib }),
-    ...(o.jsTimeoutMs === undefined ? {} : { jsTimeoutMs: o.jsTimeoutMs }),
-    ...(o.sourceComment === undefined ? {} : { sourceComment: o.sourceComment }),
-    ...(o.sourceName === undefined ? {} : { sourceName: o.sourceName }),
-  }
+  // 能力位原样透传：这里只剥出 host/驱动专属的那几格，其余就是 EvalContext（不再逐字段挑一遍）
+  const { code, result, key, page, header, resultKind, resultCtx, console: hostConsole, loc, facet, scriptForm, evaluateRef, session, ...ctx } = o
   const host: JsHost = {
-    result: o.result ?? '',
-    baseUrl: o.baseUrl ?? '',
-    source: o.source ?? '',
-    ...(o.key === undefined ? {} : { key: o.key }),
-    ...(o.page === undefined ? {} : { page: o.page }),
-    ...(o.header === undefined ? {} : { header: o.header }),
+    result: result ?? '',
+    baseUrl: ctx.baseUrl ?? '',
+    source: ctx.source ?? '',
+    ...(key === undefined ? {} : { key }),
+    ...(page === undefined ? {} : { page }),
+    ...(header === undefined ? {} : { header }),
+    ...(resultKind === undefined ? {} : { resultKind }),
+    ...(resultCtx === undefined ? {} : { resultCtx }),
+    ...(hostConsole === undefined ? {} : { console: hostConsole }),
   }
-  return evalJs(o.code, host, ctx, o.loc, o.facet, o.evaluateRef,
-    { scriptForm: o.scriptForm ?? true, ...(o.session === undefined ? {} : { session: o.session }) })
+  return evalJs(code, host, ctx, loc, facet, evaluateRef,
+    { scriptForm: scriptForm ?? true, ...(session === undefined ? {} : { session }) })
 }
 
 export interface JsOutcome {
@@ -110,6 +101,18 @@ export interface JsOutcome {
 export type EvaluateRef = (rule: string, data: unknown) => EngineValue
 
 const TIMEOUT = Symbol('js-sandbox-timeout')
+
+/** worker 那条 race 的宽限（唯一消费点在 `runInWorker`）：`vm` 的 timeout 杀的是 worker 内的同步
+ *  死循环，这一条管「await 一个永不 settle 的 promise」。它必须**晚于**调用方预算到，否则跑满预算
+ *  的脚本会被自己判死；额外的那一截是给「主线程替 worker 服务一发宿主调用」的往返留的余量——
+ *  主线程自己那条 race 没有这趟往返，因此用整额预算，不加宽限（见 `evalJs` 里的 race）。
+ *  原先它是 `+ 5000` 的字面量，藏在 race 的参数式里，看不出谁是主人。 */
+const ASYNC_GRACE_MS = 5_000
+
+/** worker 侧单次宿主往返的兜底死线：脚本在 worker 里同步等主线程服务那一发，等到这里就抛。
+ *  **刻意不从调用方预算推出来**：预算约束整段脚本，这条只防「主线程再也不来服务这一发」，
+ *  两者不同轴——把它跟着预算缩到 2s，反而会给慢站点制造假失败。 */
+const WORKER_RPC_DEADLINE_MS = 300_000
 
 /** 进程级 unhandledRejection 防线（加载期常驻，幂等挂载一次）。
  *  脚本自建又 fire-and-forget 的异步工作，其 rejection 在 settle 之后才悬空触发（晚于 evalJs 返回），
@@ -771,6 +774,9 @@ export async function evalJs(
       const ret = await Promise.race([
         started,
         new Promise<never>((_, reject) => {
+          // 主线程这条 race 用的是**整额预算**、不加宽限：这里的 await 全在本 realm 里推进，
+          // 没有「等主线程替 worker 服务一发宿主调用」那种额外往返。worker 那条才加
+          // `ASYNC_GRACE_MS`（见 `runInWorker`），两处的差是 realm 结构决定的，不是漂移。
           timer = setTimeout(() => reject(TIMEOUT), timeout)
           timer?.unref?.()
         }),
@@ -860,7 +866,7 @@ function hostCall(name, argsJson) {
   Atomics.store(reqFlag, 0, 1)
   parentPort.postMessage({ rpc: true })   // 唤醒主线程来服务（数据走 SAB，消息只做信号）
   Atomics.notify(reqFlag, 0)
-  const deadline = Date.now() + 300000
+  const deadline = Date.now() + ${WORKER_RPC_DEADLINE_MS}
   while (Atomics.load(respFlag, 0) === 0) {
     if (Date.now() > deadline) throw new Error('宿主调用等待超时（300s）')
     Atomics.wait(respFlag, 0, 0, 1000)
@@ -950,7 +956,7 @@ async function evalJsInWorker(a: WorkerRunArgs): Promise<JsOutcome> {
     try {
       // 帧解析也在 try 内：畸形长度或非 JSON 帧必须以 {__error} 回包让 worker 从 Atomics.wait
       // 醒来，不能落在 `void serviceRpc()` 上变成 unhandled rejection——那样 worker 一直挂到
-      // 外层 race（timeout + 5000）才被 terminate，用户看到的是整段 js 卡死。
+      // 外层 race（timeout + `ASYNC_GRACE_MS`）才被 terminate，用户看到的是整段 js 卡死。
       const len = new DataView(reqSab).getInt32(0, true)
       const [name, argsJson] = JSON.parse(new TextDecoder().decode(new Uint8Array(reqSab).subarray(4, 4 + len))) as [string, string]
       const r = await a.call(name, argsJson)
@@ -969,7 +975,7 @@ async function evalJsInWorker(a: WorkerRunArgs): Promise<JsOutcome> {
   }
   try {
     const result = await new Promise<{ ok: boolean; ret?: unknown; message?: string; stack?: string }>((resolve, reject) => {
-      const timer = setTimeout(() => reject(TIMEOUT), a.timeout + 5000)
+      const timer = setTimeout(() => reject(TIMEOUT), a.timeout + ASYNC_GRACE_MS)
       timer.unref?.()
       worker.on('message', (m: { ok: boolean; ret?: unknown; message?: string; stack?: string; rpc?: boolean }) => {
         if (m?.rpc === true) { void serviceRpc(); return }

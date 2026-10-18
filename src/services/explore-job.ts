@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { ExploreBook, ExploreSnapshot, SearchGroup, SearchHit } from '../shared/wire.js'
-import type { JobHost, JobOutcome } from './import-job.js'
+import { ChangeSignal, HostTie } from './job-holder.js'
+import type { JobHost, JobOutcome } from './job-holder.js'
 import { DEFAULT_JOB_OUTPUT_BYTES, JobTail } from './job-tail.js'
 import { canonUrl } from './request.js'
 
@@ -100,8 +101,9 @@ interface Held {
    *  执行体从不抛错，抓取失败是以带 `error` 的组交回来的——少了后半条，「这一类没问到」就会与
    *  「这一类真的没货」折成同一帧。 */
   error?: string
-  settle: (outcome: JobOutcome) => void
-  /** 过程行的有界尾缓冲：仅在登记给宿主时存在；每翻一页 push 一行，宿主经 `job_output` 拉走（消费式）。 */
+  /** 与**当前这批**宿主登记之间的挂点（`launch` 每批换一次；一轮一份尾缓冲见 `tail`）。 */
+  tie: HostTie | null
+  /** 过程行的有界尾缓冲：**一轮一份**（续页复用同一轮 ⇒ 同一份），仅在登记给宿主时存在。 */
   tail?: JobTail
 }
 
@@ -133,7 +135,10 @@ function booksOf(hits: readonly SearchHit[]): ExploreBook[] {
 
 export class ExploreJobs {
   private current: Held | null = null
-  private readonly listeners = new Set<() => void>()
+
+  /** 「本轮状态变了」信号（机械住 `job-holder.ts` 的 `ChangeSignal`）：SSE 路由订阅它、自己取快照。
+   *  **只发信号不发数据**：快照由订阅者自取，故多个观察者（SSE 每条连接各一份）共用同一份持有物。 */
+  readonly signal = new ChangeSignal()
 
   constructor(private readonly deps: {
     /** 宿主 `ctx.jobs` 的窄面；缺省即不登记（单测直构与无 jobs 的组合走这条） */
@@ -141,18 +146,6 @@ export class ExploreJobs {
     now?: () => number
     uuid?: () => string
   } = {}) {}
-
-  /** 订阅「本轮状态变了」。返回退订口。
-   *  **只发信号不发数据**：快照由订阅者自取，故多个观察者（SSE 每条连接各一份）共用同一份持有物。 */
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener)
-    return () => { this.listeners.delete(listener) }
-  }
-
-  private notify(): void {
-    // 快照成数组：回调里再 subscribe/unsubscribe 不该让本轮漏发给别人
-    for (const listener of [...this.listeners]) listener()
-  }
 
   /** 提交一轮分类浏览：**一个源、一个类、从第 1 页起**。**只留最近一轮**：新提交即替换上一轮——
    *  上一轮若在跑则被协作式收手，读面立刻指向新一轮（两真相同时在场是更坏的选择）。
@@ -166,7 +159,7 @@ export class ExploreJobs {
       id: (this.deps.uuid ?? randomUUID)(), sourceId, sourceName: '', kind,
       startedAt: this.now(), accum: { hits: [], lastNew: 0 }, page: 1, attempted: 1,
       inflight: false, generation: 0, phase: 'running', cancelled: false,
-      settle: () => {},
+      tie: null,
     }
     this.current = held
     return this.launch(held, run)
@@ -209,30 +202,22 @@ export class ExploreJobs {
     h.inflight = true
     const host = this.deps.host
     if (host !== undefined) {
-      // 尾缓冲一轮一份（续页复用同一轮 ⇒ 同一份）：缺席即不建，无宿主就没有消费者。
+      // 尾缓冲一轮一份（续页复用同一轮 ⇒ 同一份）：没宿主就不建，没有消费者。
       // 后果写明：每一批都各自向宿主登记，而这几处 `readOutput` 认的是**同一份**缓冲（消费式只有一条
       // 游标）——早页那次的消费者会把后页刚 push 的行一起拉走。现状语义而非缺陷：过程行说的是
       // 「这一轮跑到哪」，本来就不按批次分页归属。
       if (h.tail === undefined) h.tail = new JobTail(DEFAULT_JOB_OUTPUT_BYTES)
-      const tail = h.tail
-      const done = new Promise<JobOutcome>((res) => {
-        h.settle = (o): void => { res(o) }
-      })
-      // 宿主契约：start() 内同步调 run() 取 hooks，故 done 必须先建好
-      host.start({
+      // 页码段的 label **不报源数**：一轮就是一个源，那个数恒为 1，报它不携带任何信息
+      // （旧版这里报「本轮问了几家」，那是跨源编排才有的读数）。
+      h.tie = HostTie.open(host, {
         kind: 'novel-explore',
-        // 页码段的 label **不报源数**：一轮就是一个源，那个数恒为 1，报它不携带任何信息
-        // （旧版这里报「本轮问了几家」，那是跨源编排才有的读数）。
         label: `书城分类「${h.kind}」第 ${h.attempted} 页`,
-        outputLimitBytes: DEFAULT_JOB_OUTPUT_BYTES,
-        run: () => ({
-          cancel: (reason): void => { this.cancel(reason) },
-          done,
-          readOutput: (): string => tail.read(),
-        }),
+        tail: h.tail,
+        // 宿主请求收手即整轮进终态：与 search 面同口径（读，没有半途写脏的顾虑）
+        onCancel: (reason): void => { this.cancel(reason) },
       })
     }
-    this.notify()                                      // 开场 / 续页起跑：观察者据此把读面当成在跑
+    this.signal.notify()                                      // 开场 / 续页起跑：观察者据此把读面当成在跑
     const emit = (group: SearchGroup): void => {
       if (h.generation !== gen) return                 // 陈旧批次迟到的组：这一轮已不归它
       this.absorb(h, group)
@@ -242,7 +227,7 @@ export class ExploreJobs {
       h.tail?.push(group.error !== undefined
         ? `${group.sourceName}：第 ${h.attempted} 页失败（${group.error.code}）`
         : `${group.sourceName}：第 ${h.attempted} 页 ${group.hits.length} 条（源 ${group.status}）`)
-      this.notify()
+      this.signal.notify()
     }
     const shouldStop = (): boolean => h.generation !== gen || h.phase !== 'running'
     // 同步起跑（照 search-job 的口径）：`run` 交出的 emit 必须在本函数返回前就在位，
@@ -380,7 +365,7 @@ export class ExploreJobs {
     h.phase = status === 'completed' ? 'done' : 'failed'
     if (error !== undefined) h.error = error
     h.finishedAt = this.now()
-    h.settle({ status, ...(detail === undefined || detail === '' ? {} : { detail }) })
-    this.notify()                                      // 终态也要发：SSE 据此收尾并关流
+    h.tie?.settle({ status, ...(detail === undefined || detail === '' ? {} : { detail }) })
+    this.signal.notify()                                      // 终态也要发：SSE 据此收尾并关流
   }
 }

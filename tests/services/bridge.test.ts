@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { evaluate } from '../../src/engine/index.js'
+import type { EngineValue } from '../../src/engine/index.js'
 import type { SubRuleEval } from '../../src/services/bridge.js'
 import {
-  extractItems, absUrl, engineFetch, firstUrlValue, firstValue, formatWordCount, kindFieldOf, listValue, wordCountFieldOf,
+  extractItems, absUrl, engineFetch, firstUrlValue, firstValue, formatWordCount, hitFieldsOf, kindFieldOf, listValue, wordCountFieldOf,
 } from '../../src/services/bridge.js'
 
 describe('值规约', () => {
@@ -181,5 +182,73 @@ describe('字数字段 wordCountFieldOf（数字串 → x字 / x.x万字）', ()
     expect(await wordCountFieldOf(empty.sub, 'tag.span@text', empty.ctx, 'detail')).toBe('')
     const bad = at('<span>123</span>')
     expect(await wordCountFieldOf(bad.sub, '0', bad.ctx, 'detail')).toBeNull()
+  })
+})
+
+describe('hitFieldsOf（一条命中的装配单点）', () => {
+  // 假 SubRuleEval 按键给回引擎值：装配的档位判据在这里测，不需要站点、也不需要整轮搜索
+  const evalOf = (table: Record<string, EngineValue | Error>): SubRuleEval =>
+    async (rule) => {
+      const v = table[rule]
+      if (v instanceof Error) throw v
+      return v ?? { kind: 'miss', detail: `未登记的规则：${rule}` }
+    }
+  const ctx = { html: '<li>x</li>', baseUrl: 'https://b.example/list/1' }
+  const rules = { name: 'N', author: 'A', url: 'U', cover: 'C', intro: 'I', last: 'L', kind: 'K', wordCount: 'W' }
+  const val = (text: string): EngineValue => ({ kind: 'value', text })
+
+  it('书名 Miss 或去空白后为空 → null（这一条不成书，不产出空标题书目冒充命中）', async () => {
+    expect(await hitFieldsOf(rules, evalOf({}), ctx, 'https://b.example/list/1')).toBeNull()
+    const blank = evalOf({ N: val('   ') })
+    expect(await hitFieldsOf(rules, blank, ctx, 'https://b.example/list/1')).toBeNull()
+  })
+
+  it('坏规则只丢该字段：辅助五项各自炸，书目照收', async () => {
+    const hit = await hitFieldsOf(
+      rules,
+      evalOf({ N: val('甲书'), A: val('作者'), U: val('/book/1'), I: new Error('坏简介规则'), L: new Error('坏章名规则'), K: new Error('坏分类规则'), W: new Error('坏字数规则') }),
+      ctx, 'https://b.example/list/1',
+    )
+    expect(hit).not.toBeNull()
+    expect(hit!.title).toBe('甲书')
+    expect([hit!.intro, hit!.lastChapterName, hit!.kind, hit!.wordCount]).toEqual([null, null, null, null])
+    expect(hit!.coverUrl).toBeNull()
+  })
+
+  it('作者与书地址是裸奔项：读不出来抛穿，归类由调用方决定（装配层不自立第二套吞错口径）', async () => {
+    await expect(hitFieldsOf(rules, evalOf({ N: val('甲'), A: new Error('坏作者') }), ctx, 'https://b.example/'))
+      .rejects.toThrow('坏作者')
+  })
+
+  it('书地址保留 `,{option}` 后缀，封面按落地地址绝对化（URL 即请求规格）', async () => {
+    const hit = await hitFieldsOf(
+      rules,
+      evalOf({ N: val('甲'), U: val('/book/1,{"method":"POST"}'), C: val('/cover.jpg') }),
+      ctx, 'https://b.example/search?q=x',
+    )
+    expect(hit!.url).toBe('https://b.example/book/1,{"method":"POST"}')
+    expect(hit!.coverUrl).toBe('https://b.example/cover.jpg')
+  })
+
+  it('简介走搜索面口径：渲染指令前缀不保留；字数在解析层就格式化', async () => {
+    const hit = await hitFieldsOf(
+      rules,
+      evalOf({ N: val('甲'), I: val('<md>正文简介</md>'), W: val('12345') }),
+      ctx, 'https://b.example/',
+    )
+    expect(hit!.intro).toBe('正文简介')
+    expect(hit!.wordCount).toBe('1.2万字')
+  })
+
+  it('每一槽传的面恒为 search（面不进 interface，只进错误定位）', async () => {
+    const facets: string[] = []
+    const rec: SubRuleEval = async (rule, _ctx, facet) => {
+      facets.push(facet)
+      return rule === 'N' ? val('甲') : { kind: 'miss', detail: rule }
+    }
+    const hit = await hitFieldsOf(rules, rec, ctx, 'https://b.example/')
+    expect(hit).not.toBeNull()
+    expect(facets).toEqual(Array.from({ length: facets.length }, () => 'search'))
+    expect(facets).toHaveLength(8)
   })
 })

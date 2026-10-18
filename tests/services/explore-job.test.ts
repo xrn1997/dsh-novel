@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ExploreJobs, MAX_EXPLORE_PAGES } from '../../src/services/explore-job.js'
-import type { JobHost } from '../../src/services/import-job.js'
+import type { JobHost } from '../../src/services/job-holder.js'
 import { DEFAULT_JOB_OUTPUT_BYTES } from '../../src/services/job-tail.js'
 import type { SearchGroup, SearchHit } from '../../src/shared/wire.js'
 
@@ -478,7 +478,7 @@ describe('ExploreJobs.subscribe', () => {
     let emit: (g: SearchGroup) => void = () => {}
     let finish: () => void = () => {}
     const seen: number[] = []
-    const off = jobs.subscribe(() => { seen.push(jobs.snapshot()?.books.length ?? -1) })
+    const off = jobs.signal.subscribe(() => { seen.push(jobs.snapshot()?.books.length ?? -1) })
     jobs.start('s1', '玄幻', (e) => { emit = e; return new Promise<void>((res) => { finish = res }) })
     emit(group([hit('a')]))
     finish()

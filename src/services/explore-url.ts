@@ -43,6 +43,27 @@ export function exploreKindsFormOf(v: unknown): ExploreKindsForm {
   return t.includes('::') ? 'text' : 'unknown'
 }
 
+/** 一条分类入口「可用」的唯一尺：**去空白后标题与地址都是非空串**，产出即去空白后的条目，
+ *  读不出给 null。
+ *
+ *  为什么必须有唯一主人：这条尺被四家读（文本档切出的两段、JSON 档的对象项、原生侧
+ *  `ruleFind.kinds` 的对象项、平铺优先那把「数组里每条都可用吗」的尺）。任何一处只判容器，
+ *  脏条目就从那一门钻进模型，而下游 `deriveExploreSources` 读的是 `k.title`：一条 `{}` 因此
+ *  被算成一个真分类，界面上多出一个空名入口、点下去取不到东西。四家各写一遍时，「什么算空」
+ *  迟早分叉，而分叉只表现为某个源的分类时有时无。 */
+export function usableText(title: unknown, url: unknown): { title: string; url: string } | null {
+  if (typeof title !== 'string' || typeof url !== 'string') return null
+  const t = title.trim(), u = url.trim()
+  return t === '' || u === '' ? null : { title: t, url: u }
+}
+
+/** `usableText` 的对象位读法：非对象、数组、以及标题或地址缺失或非串，全按「这条不可用」同值处理。 */
+export function usableKind(e: unknown): { title: string; url: string } | null {
+  if (typeof e !== 'object' || e === null || Array.isArray(e)) return null
+  const o = e as Record<string, unknown>
+  return usableText(o.title, o.url)
+}
+
 /** 对面文本档口径（出处与逐条对读在册矩阵行 `d-explore-three-forms`）：条目分隔是
  *  `(&&|\n)+`（两种可混用可连续），每条按 `::` 切后**只取前两段**——第三段及之后直接丢弃，
  *  不报错也不参与；标题或地址为空的条目不收（一个没有地址的入口在抓取链上只会变成一次失败）。
@@ -53,17 +74,15 @@ function parseTextKinds(t: string): Array<{ title: string; url: string }> | unde
   for (const seg of t.split(/(?:&&|\n)+/)) {
     const parts = seg.split('::')
     if (parts.length < 2) continue
-    const title = parts[0].trim()
-    const url = parts[1].trim()
-    if (title !== '' && url !== '') out.push({ title, url })
+    const k = usableText(parts[0], parts[1])
+    if (k !== null) out.push(k)
   }
   return out.length === 0 ? undefined : out
 }
 
-/** JSON 档：只认「对象数组且每项 `title`+`url` 都是去空白后非空的串」，存的即去空白后的值——
- *  判空的尺与文本档同一把（口径见 `parseTextKinds`）：两档对「空」不一致，词表里就会躺着取不到
- *  东西的入口，而它只在抓取链上炸。`style` 是对面发现页的排版字段（本仓词表不排版），
- *  照收不误地忽略掉——它不构成「认不出的形状」。
+/** JSON 档：只认「对象数组且每项都过 `usableKind` 那一把尺」，存的即去空白后的值——两档对
+ *  「空」共用同一把尺，否则词表里会躺着取不到东西的入口，而它只在抓取链上炸。`style` 是对面
+ *  发现页的排版字段（本仓词表不排版），照收不误地忽略掉——它不构成「认不出的形状」。
  *
  *  读不出任何条目即回 `undefined`（调用方落成 `unknown`）：**声明了形状却一条都不认**，与
  *  「老老实实的空数组」是两种值——前者要调用方点名，后者是空集合。把前者折进后者，就是拿
@@ -75,13 +94,9 @@ function parseJsonKinds(t: string): Array<{ title: string; url: string }> | unde
   if (!Array.isArray(parsed)) return undefined
   const out: Array<{ title: string; url: string }> = []
   for (const e of parsed) {
-    if (typeof e !== 'object' || e === null || Array.isArray(e)) continue
-    const o = e as Record<string, unknown>
-    if (typeof o.title !== 'string' || typeof o.url !== 'string') continue
-    const title = o.title.trim()
-    const url = o.url.trim()
-    if (title === '' || url === '') continue
-    out.push({ title, url })
+    const k = usableKind(e)
+    if (k === null) continue
+    out.push(k)
   }
   return out.length === 0 && parsed.length > 0 ? undefined : out
 }

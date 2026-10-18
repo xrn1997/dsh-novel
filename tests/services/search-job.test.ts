@@ -3,7 +3,7 @@ import { SearchJobs } from '../../src/services/search-job.js'
 import type { SearchJobRun } from '../../src/services/search-job.js'
 import { SEARCH_HITS_CAP_PER_SOURCE, SEARCH_JOB_RETENTION_MS } from '../../src/shared/wire.js'
 import type { SearchGroup, SearchHit } from '../../src/shared/wire.js'
-import type { JobHost } from '../../src/services/import-job.js'
+import type { JobHost } from '../../src/services/job-holder.js'
 import { DEFAULT_JOB_OUTPUT_BYTES } from '../../src/services/job-tail.js'
 
 /** 搜索后台任务的持有者：整轮结果住服务端，读面给游标增量。它存在的理由是实测缺陷——
@@ -205,7 +205,7 @@ describe('SearchJobs.subscribe（推送加速器的事件口）', () => {
     const m = manualRun()
     const seen: Array<number | 'new'> = []
     let lastId = ''
-    const off = jobs.subscribe((): void => {
+    const off = jobs.signal.subscribe((): void => {
       const s = jobs.snapshot()
       if (s !== null && s.id !== lastId) { lastId = s.id; seen.push('new') }
       seen.push(s?.done ?? -1)

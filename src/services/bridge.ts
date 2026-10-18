@@ -7,10 +7,11 @@ import { runScript } from '../engine/js-sandbox.js'
 import { engineFetch, engineFetchHead, engineFetchPost, engineFetchRaw } from './engine-fetch.js'
 import { headerOf, effectiveUserAgent } from './fetcher.js'
 import type { Fetcher } from './fetcher.js'
-import { absUrl } from './url.js'
+import { absUrl, absUrlKeepOption } from './url.js'
 import { parseObjectJson, stringTableOf } from './normalize.js'
 import { formatIntro } from './content.js'
 import { log } from './log.js'
+import type { SearchHit } from '../shared/wire.js'
 import type { NovelSource } from './types.js'
 
 // 兼容 re-export：absUrl 迁至 url.ts（拆 request↔bridge 环）、engineFetch 迁至 engine-fetch.ts
@@ -195,9 +196,14 @@ export async function resolveHeaders(
       code,
       baseUrl: source.baseUrl,
       source: source.baseUrl,
-      // 规则脚本自身的网络能力：静态头打底（见上：不递归）
+      // 规则脚本自身的网络能力：静态头打底（见上：不递归）。post/head/UA 与 fetch 同一个守门
+      // fetcher——沙箱那一扇门收 `EvalContext` 全部能力位之后，这里漏一个字段就是脚本里
+      // 「java.post 抛 ctx.fetchPost 缺失」的直接来源。
       fetch: engineFetch(fetcher, staticHeaders),
       fetchRaw: engineFetchRaw(fetcher, staticHeaders),
+      fetchPost: engineFetchPost(fetcher, staticHeaders),
+      fetchHead: engineFetchHead(fetcher, staticHeaders),
+      userAgent: () => effectiveUserAgent(source),
       jsLib: source.rules.jsLib ?? undefined,
       jsTimeoutMs: opts?.jsTimeoutMs,
       loc: { segmentIndex: 0, segmentRaw: rule },
@@ -444,5 +450,59 @@ export async function detailFieldsOf(
     intro: intro === null ? null : formatIntro(intro, { keepDirective: true }),
     lastChapterName: last,
     kind, wordCount,
+  }
+}
+
+/** 一套条目规则（逐条目装配的输入位；键名即装配槽位，不落模型字段）。
+ *  聚合搜索用通用搜索那一套，发现面用 `explore-face.rulesFor` 整套切换后的那一份——
+ *  **规则的来源不在这条轴上**，来源各异而槽位同一，正是要收成一个主人的理由。 */
+export interface HitRules {
+  /** 恒非空是调用方的责任：搜索面缺它整体 `RuleMissing`，发现面缺它单条 `RuleMissing`，
+   *  两条链路都在循环之外如实报「没有书名规则」——装配层不许拿空规则冒充书名。 */
+  name: string
+  author: string | null; url: string | null
+  cover: string | null; intro: string | null; last: string | null
+  kind: string | null; wordCount: string | null
+}
+
+/** 逐条目取值装配（**一条命中**的唯一主人）：一套条目规则 + 一个条目上下文 + 落地地址 →
+ *  一条书目，或 null（这一条不成书）。
+ *
+ *  为什么必须有主人：聚合搜索与发现面各写过一份同形的循环——同样九个字段读法、同样的
+ *  `Promise.all` 槽序、同样的书名非空尺、同样的选项保留绝对化与简介净化。两份抄本被记为
+ *  「规则来源不同」，来源确实不同，但那不是装配的分野：两处求值传的面都是 `'search'`，
+ *  槽位与档位在这两条链路上从来是同一套。档位一旦调整（哪一项从「丢条目」改成「丢字段」）
+ *  要在两处各自发现，而它只在一处有理由。
+ *
+ *  档位分野仍只住 `metaFieldOf` 一处：书名非空才算书目、作者/书地址是裸奔项、其余五项坏规则
+ *  只丢该字段。简介走搜索面口径（净化 + 截断，**不认**渲染指令前缀——那是详情面 `detailFieldsOf`
+ *  给 `keepDirective` 的那一支）。
+ *  面不进 interface：它恒为 `'search'`，只进错误定位不改求值语义（与 `docs/adr/0007` 那条
+ *  「只有用途一个轴能改变形状」是同一件事的两面）。
+ *
+ *  抛错穿透：作者/书地址读不出来会抛（裸奔项），归成哪一类错由调用方决定——搜索面按组归错误码，
+ *  发现面按源归，编排方在循环之外吞。装配层不自立第二套吞错口径，也不许把 Miss 折成空串。 */
+export async function hitFieldsOf(
+  rules: HitRules, subEval: SubRuleEval, ctx: ItemContext, landedUrl: string,
+): Promise<SearchHit | null> {
+  const title = firstValue(await subEval(rules.name, ctx, 'search', 'value'), 'search')
+  if (title === null || title.trim() === '') return null
+  const [author, href, cover, intro, last, kind, wordCount] = await Promise.all([
+    fieldOf(subEval, rules.author, ctx, 'search'),
+    urlFieldOf(subEval, rules.url, ctx, 'search'),
+    auxUrlFieldOf(subEval, rules.cover, ctx, 'search'),
+    auxFieldOf(subEval, rules.intro, ctx, 'search'),
+    auxFieldOf(subEval, rules.last, ctx, 'search'),
+    kindFieldOf(subEval, rules.kind, ctx, 'search'),
+    wordCountFieldOf(subEval, rules.wordCount, ctx, 'search'),
+  ])
+  return {
+    title, author,
+    // 书地址保留 `,{option}` 后缀落库（URL 即请求规格——米读类 POST API 源的 book_id 藏在选项
+    // body 里，剥掉即身份残废；与章节 URL「保留选项」同源，见 url.absUrlKeepOption）
+    url: href === null ? null : absUrlKeepOption(href, landedUrl),
+    coverUrl: cover === null ? null : absUrl(cover, landedUrl),
+    intro: intro === null ? null : formatIntro(intro),
+    lastChapterName: last, kind, wordCount,
   }
 }

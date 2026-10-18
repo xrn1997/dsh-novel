@@ -2,7 +2,7 @@ import { interpolateUrl, expandPageAngleList, URL_OPTION_SPLIT } from '../engine
 import iconv from 'iconv-lite'
 import { parseObjectJson, stringTableOf } from './normalize.js'
 import { log } from './log.js'
-import { absUrl } from './url.js'
+import { absUrl, splitUrlOption } from './url.js'
 
 /** 书源 URL 模板的请求形态（格式钉死这三种）：
  *  ① 纯 URL：`/search?q={{key}}`（支持相对 URL——按 bookSourceUrl 解析）
@@ -182,33 +182,9 @@ export function fetchInitOf(
   return init
 }
 
-/** URL 尾部 `,{option}` 后缀切分（章节/下一页 URL 常带——嗅探语义）。
- *  只认「逗号 + 完整 JSON 对象收尾」形态（严格 JSON 或单引号形态），正文里的 `{a,b}` 不误剥。
- *  `suffix` 是**原文**（含逗号），绝对化后原样接回——选项语义由 assembleRequest 在抓取时解释。 */
-export function splitUrlOption(href: string): { url: string; suffix: string | null } {
-  const m = URL_OPTION_SPLIT.exec(href)
-  if (m === null) return { url: href, suffix: null }
-  // 同 parseUrlOption 的切分口径（命中即无条件取串首部分，不做尾段 JSON 校验）：
-  // 命中即切、**不校验尾段是不是合法 JSON**——后缀原文保留给抓取时的 assembleRequest
-  // 解释（解析失败 → 无选项 + warn，URL 已干净）；`{a,b}` 形态不受影响（逗号后不是 `{`，正则不命中）。
-  return { url: href.slice(0, m.index).trimEnd(), suffix: href.slice(m.index) }
-}
-
-/** URL 尾部的 `,{"webView":true}` 选项后缀剥离（兼容入口——语义即 splitUrlOption().url）。
- *  我们不支持 WebView，但抓取层会按普通请求带选项照常尝试（assembleRequest 解释其余选项）。 */
-export function stripUrlOption(href: string): string {
-  return splitUrlOption(href).url
-}
-
-/** 绝对化并保留选项后缀（章节/下一页 URL 的组装口径：
- *  URL 部分按 baseUrl 绝对化，`",{option}"` 接回）。此前先 strip 再绝对化 → POST/charset
- *  选项在目录落库时被丢弃，API 型章节端点（POST body 模板）全部退化成裸 GET。 */
-export function absUrlKeepOption(href: string, base: string): string | null {
-  const { url, suffix } = splitUrlOption(href)
-  const abs = absUrl(url, base)
-  if (abs === null) return null
-  return suffix === null ? abs : abs + suffix
-}
+/** 兼容 re-export：URL 绝对化与选项后缀那一族迁至 url.ts（bridge 也要 absUrlKeepOption，
+ *  而 bridge→request→bridge 就是 url.ts 当初拆掉的那个环）。既有 import 路径保持可用。 */
+export { absUrlKeepOption, splitUrlOption, stripUrlOption } from './url.js'
 
 /** 比对口径（串章闸/防环）：剥选项后缀 → URL 归一化（new URL().href）；解析失败回原文。
  *  目录章地址与「下一页」候选都过这一层再比对——选项/编码差异不参与判等。 */

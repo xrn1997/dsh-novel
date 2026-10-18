@@ -31,14 +31,31 @@ describe('沙箱 legado 绑定与作用域（本轮修复钉子）', () => {
     const out2 = await runScript({ code: 'src', result: '', loc, facet: 'content', scriptForm: true })
     expect(out2.value.kind).toBe('miss')
   })
-  it('runScript 入口不注入 book/chapter（空对象——字段串成 "undefined"，注入归 evalJs 面）', async () => {
+  it('runScript 这一扇门收 EvalContext 的全部能力位：book/chapter 与 ctx.userAgent 都进得来', async () => {
+    // 这一条钉的是**门本身**：RunScriptOptions 曾逐字段抄一份 EvalContext 清单，book/chapter/
+    // userAgent/fetchPost 都不在清单上——同一扇门里 `java.getWebViewUA()` 与 `java.post(...)`
+    // 一律抛「未接线」。清单删掉之后，少一个能力位不再是可能的漏抄，而是编译期就传不进去。
+    const out = await runScript({
+      code: 'book.bookUrl + "|" + chapter.title + "|" + chapter.index',
+      loc, facet: 'content', scriptForm: true,
+      baseUrl: 'https://x.com/b/1',
+      book: { bookUrl: 'https://x.com/b/1' }, chapter: { title: '第一章', index: 3 },
+    })
+    expect(out.value).toEqual({ kind: 'value', text: 'https://x.com/b/1|第一章|3' })
+    const ua = await runScript({
+      code: 'java.getWebViewUA()',
+      loc, facet: 'rule', scriptForm: true, baseUrl: 'https://x.com',
+      userAgent: () => 'dsh-novel/ua',
+    })
+    expect(ua.value).toEqual({ kind: 'value', text: 'dsh-novel/ua' })
+  })
+  it('runScript 缺省不给 book/chapter：脚本里串成 "undefined"（不注入 ≠ 注入不了）', async () => {
     const out = await runScript({
       code: 'book.bookUrl + "|" + chapter.title + "|" + chapter.index',
       loc, facet: 'content', scriptForm: true,
       baseUrl: 'https://x.com/b/1',
     })
-    // 这条钉的是**边界**：book/chapter 只在服务层按面注入（下一条用例钉注入侧），
-    // runScript 这条入口拿不到它们——断整串而非 toContain('|')，否则绑定悄悄变空也照绿。
+    // 边界仍在：book/chapter 由服务层按面注入，门面不替它编默认值
     expect(out.value.kind).toBe('value')
     expect((out.value as { text: string }).text).toBe('undefined|undefined|undefined')
   })

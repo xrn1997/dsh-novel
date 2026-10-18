@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { exploreKindsFormOf, parseExploreKinds } from '../../src/services/explore-url.js'
+import { exploreKindsFormOf, parseExploreKinds, usableKind, usableText } from '../../src/services/explore-url.js'
 
 describe('exploreUrl 形态判定（优先级 js → JSON → 含 :: 的文本）', () => {
   it('缺席与「去空白后为空」→ empty', () => {
@@ -89,5 +89,21 @@ describe('parseExploreKinds 两档解析', () => {
   })
   it('js 档不执行脚本：如实给空入口并把 form 交回调用方留痕', () => {
     expect(parseExploreKinds('@js:\nresult')).toEqual({ kinds: [], form: 'js' })
+  })
+})
+
+describe('分类条目可用性尺：一把尺管四扇门', () => {
+  it('对象位与串位同值：usableKind 只是比 usableText 多一道容器判', () => {
+    for (const [title, url] of [[' 玄幻 ', ' /x '], ['', '/x'], ['玄幻', '   '], ['玄幻', 42]] as Array<[unknown, unknown]>) {
+      expect(usableKind({ title, url })).toEqual(usableText(title, url))
+    }
+    for (const dirty of [{}, null, 42, [], ['玄幻', '/x']]) expect(usableKind(dirty)).toBeNull()
+  })
+  it('两档解析逐条走的就是这一把尺：条目存活集与尺给回的同集合', () => {
+    const entries = [{ title: ' 玄幻 ', url: ' /x ' }, { title: '   ', url: '/y' }, { title: '都市', url: '' }]
+    expect(parseExploreKinds(JSON.stringify(entries)).kinds)
+      .toEqual(entries.map(usableKind).filter((k) => k !== null))
+    expect(parseExploreKinds('  ::/y \n&& 玄幻::/x \n&&  \n ').kinds)
+      .toEqual(['::/y', '玄幻::/x'].map((seg) => { const p = seg.split('::'); return usableText(p[0], p[1]) }).filter((k) => k !== null))
   })
 })

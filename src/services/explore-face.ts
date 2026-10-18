@@ -1,9 +1,8 @@
-import { absUrl, auxFieldOf, auxUrlFieldOf, fieldOf, firstValue, itemContextsOf, kindFieldOf, makeSubEval, resolveHeaders, urlFieldOf, wordCountFieldOf } from './bridge.js'
-import { formatIntro } from './content.js'
+import { hitFieldsOf, itemContextsOf, makeSubEval, resolveHeaders } from './bridge.js'
 import { fetchTextPage } from './fetcher.js'
 import type { Fetcher } from './fetcher.js'
 import { isNativeSource } from './normalize.js'
-import { absUrlKeepOption, buildSearchRequest, fetchInitOf } from './request.js'
+import { buildSearchRequest, fetchInitOf } from './request.js'
 import type { SearchHit } from '../shared/wire.js'
 import type { NovelSource } from './types.js'
 
@@ -12,7 +11,7 @@ import type { NovelSource } from './types.js'
  * 与搜索面同构，差别只有两处——URL 模板与规则来源：
  * 请求组装归 `request.buildSearchRequest`（首页裁页那条语义的主人是 `request.assembleRequest`），
  * 抓取+解码归 `fetcher.fetchTextPage`（超时单点），
- * 条目取值归 `bridge` 的 `fieldOf`/`urlFieldOf`/`aux*` 一族与 `content.formatIntro`——
+ * 条目装配归 `bridge.hitFieldsOf`（与聚合搜索同一份，档位与槽序的理由住那里）——
  * 本模块只持有分类面特有的编排，不复制其中任何一件。
  *
  * 规则缺失是**结果**（`ok:false`）：编排方要把它记成「这个源这个分类没有结果」，
@@ -51,9 +50,8 @@ function rulesFor(source: NovelSource): ExploreRules {
 /** 发一次分类页请求并取回条目。
  *  **第几页由调用方给**（缺省第 1 页）：一轮里抓哪些页、抓几页是编排方的事——书城先摊开首页，
  *  再翻才是用户点出来的（跨源翻页的代价是「分类数 × 页数」的请求数，所以「翻」不能是默认行为）。
- *  条目提取逐字段照 `ReadingService.searchOne` 的两档口径：书名非空才算书目，作者/书地址是裸奔项
- *  （缺即丢该条目），封面/简介/最新章节/分类/字数坏规则只丢该字段——两档的分野及其理由单点在
- *  `bridge.metaFieldOf`，此处不另立第三档。 */
+ *  条目装配不在本模块：一套规则加一个条目上下文怎么收成一条书目，单点在 `bridge.hitFieldsOf`
+ *  （两档档位与理由也住那里）。 */
 export async function fetchKindPage(
   source: NovelSource, kindUrl: string, fetcher: Fetcher, timeoutMs?: number, jsTimeoutMs?: number,
   page = 1,
@@ -68,14 +66,15 @@ export async function fetchKindPage(
   const sourceTemplate = source.rules.ruleExploreUrl
   const template = sourceTemplate ?? (isNativeSource(source.raw) ? null : kindUrl)
   const R = rulesFor(source)
+  const name = R.name
   // 书名规则缺失按**规则缺失**回报，而不是产出一串没有标题的书目：对面在这种源上会静默给 0 本，
   // 本仓的口径是「空结果不得冒充失败」，反过来让「读不出任何东西」冒充成一次正常空分类同样不许。
-  if (template === null || R.name === null) {
+  if (template === null || name === null) {
     const missing = [
       // 缺模板这一支只有原生方言会走到：legado 的分类入口自带地址，地址为空的条目在导入侧就不进城
       // （判空尺见 `explore-url.parseExploreKinds`），这里拿不到空入口。
       template === null ? 'ruleFind.url' : null,
-      R.name === null ? '书名规则' : null,
+      name === null ? '书名规则' : null,
     ].filter((x): x is string => x !== null)
     return { ok: false, code: 'RuleMissing', message: `发现规则缺失：缺 ${missing.join('、')}` }
   }
@@ -95,26 +94,12 @@ export async function fetchKindPage(
   const contexts = itemContextsOf(await subEval(R.list, { html: text, baseUrl: landedUrl }, 'search', 'list'), landedUrl)
   const hits: SearchHit[] = []
   for (const ctx of contexts) {
-    const title = firstValue(await subEval(R.name, ctx, 'search', 'value'), 'search')
-    if (title === null || title.trim() === '') continue   // 书名非空才算书目
-    const [author, href, cover, intro, last, kind, wordCount] = await Promise.all([
-      fieldOf(subEval, R.author, ctx, 'search'),
-      urlFieldOf(subEval, R.url, ctx, 'search'),
-      auxUrlFieldOf(subEval, R.cover, ctx, 'search'),
-      auxFieldOf(subEval, R.intro, ctx, 'search'),
-      auxFieldOf(subEval, R.last, ctx, 'search'),
-      kindFieldOf(subEval, R.kind, ctx, 'search'),
-      wordCountFieldOf(subEval, R.wordCount, ctx, 'search'),
-    ])
-    hits.push({
-      title, author,
-      // 书地址保留 `,{option}` 后缀落库（URL 即请求规格，与搜索结果/章节 URL 同源）
-      url: href === null ? null : absUrlKeepOption(href, landedUrl),
-      coverUrl: cover === null ? null : absUrl(cover, landedUrl),
-      // 简介是展示文本：净化 + 截断（搜索面口径，不认渲染指令前缀）；Miss 仍是 null，不折成空串
-      intro: intro === null ? null : formatIntro(intro),
-      lastChapterName: last, kind, wordCount,
-    })
+    const hit = await hitFieldsOf(
+      { name, author: R.author, url: R.url, cover: R.cover, intro: R.intro,
+        last: R.last, kind: R.kind, wordCount: R.wordCount },
+      subEval, ctx, landedUrl,
+    )
+    if (hit !== null) hits.push(hit)
   }
   return { ok: true, hits }
 }

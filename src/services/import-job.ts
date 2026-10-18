@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { SourceIntake } from './intake.js'
-import { DEFAULT_JOB_OUTPUT_BYTES, JobTail } from './job-tail.js'
+import { HostTie } from './job-holder.js'
+import type { JobHost, JobOutcome } from './job-holder.js'
 import type { ProbeResult } from './probe.js'
 import type { SourceRegistry } from './sources.js'
 import type { NovelSource } from './types.js'
@@ -9,6 +10,7 @@ import type { NovelSource } from './types.js'
  * 书源后台任务：导入/批量验证跑在服务端进程内，单任务槽——
  * 运行中互斥、结束后结果保留（关设置/刷新页面后 UI 重挂载即可恢复展示）。
  * 任务态只在内存：DSH 重启即丢，但源已按批落盘不丢数据——导入幂等可重跑，不做任务持久化（YAGNI）。
+ * 与宿主之间那段登记机械不住这里（住 `job-holder.ts`）；这里只拥有**导入与批量验证的计数与明细**。
  */
 /** JobState/JobIssue 定义在 wire 契约（src/shared/wire.ts）；此处 re-export 保持 import 路径可用 */
 export type { JobState, JobIssue } from '../shared/wire.js'
@@ -32,47 +34,6 @@ const ISSUE_CAP = 200
 const PROBE_CONCURRENCY = 5
 // 落盘粒度已内聚进注册表（edit 合并写：每 20 次变更强制落盘 + 尾沿防抖）——
 // 任务运行器不再持有 persist 节流常量
-
-/** 宿主后台任务注册表（`ctx.jobs`）在本插件用到的子集——与宿主真名真形对齐（2026-10-17 对宿主
- *  jobs 包的实证）：宿主侧叫 `JobStart`/`JobHooks`，`run()` **无入参**，
- *  hooks 面是 `{ cancel, done, readOutput? }`——**没有 append/log/write**，输出是拉：注册表（经 `job_output` 工具）
- *  调生产方自己的 `readOutput()`，宿主任务面板没有文本面。
- *  **本地窄面镜像，不引类型包**：照 `src/index.ts` 既有的 `NovelContext` + `*Like` 先例办，只声明用到的成员。
- *  `kind` 用 `string` 是刻意的——注册表把 kind 当作不透明的 id 命名空间（唯一判据是「非空字符串」），
- *  自定义 kind 不需要宿主的 `JobKindMap` 合并，id 直接长成 `novel-import-1`。
- *  `outputLimitBytes` 是正整数自报帽、注册表原样投影进 snapshot，不是缓冲区——缓冲住 `job-tail.ts`。
- *  缺席即不接线（headless 组合与单测直构都走这条），任务语义不受影响。 */
-export interface JobHostSpec {
-  kind: string
-  /** 模型可见的一行说明（宿主 UI / `job_*` 工具读它） */
-  label: string
-  outputLimitBytes?: number
-  run(): {
-    /** 宿主请求终止：**协作式**——不打断在途网络请求，只在取下一条前收手 */
-    cancel(reason?: string): void
-    done: Promise<JobOutcome>
-    /** 拉模型输出面：一次调用交出「上次读之后」的全部过程行（消费式，见 job-tail.ts） */
-    readOutput?(): string
-  }
-}
-
-export interface JobHost {
-  start(spec: JobHostSpec): string
-}
-
-/** 宿主登记任务的终态词汇（唯一住址：本文件与 `search-job.ts` 共用，别各写一份联合类型） */
-export type JobOutcome = { status: 'completed' | 'killed' | 'failed'; detail?: string }
-
-/** 与宿主登记的那条任务的私有挂点（wire 的 `JobState` 不为此加字段：
- *  它是跨半契约，而取消/结算/过程行纯属 Node 半与宿主之间的事）。 */
-interface HostTie {
-  requested: boolean
-  reason: string
-  settle: (outcome: JobOutcome) => void
-  /** 过程行的有界尾缓冲：每单元收尾（含文件级解析失败/预筛无效 id）push 一行，
-   *  宿主经 `job_output` 拉走（消费式） */
-  tail: JobTail
-}
 
 export class SourceJobs {
   private current: JobState | null = null
@@ -109,7 +70,7 @@ export class SourceJobs {
 
   /** 收尾的三处写口（done / fail / cancel）集中在这里，宿主登记的那条一并结算——
    *  漏掉一处就是「UI 显示已结束而宿主还挂着 running」。 */
-  private settle(state: JobState, status: 'completed' | 'killed' | 'failed', detail: string, error?: string): void {
+  private settle(state: JobState, status: JobOutcome['status'], detail: string, error?: string): void {
     state.phase = status === 'completed' ? 'done' : 'failed'
     if (error !== undefined) state.error = error
     state.finishedAt = this.now()
@@ -144,33 +105,20 @@ export class SourceJobs {
     this.current = state
     // 宿主登记：身份/生命周期归 ctx.jobs（`<kind>-N`、running→终态、按 owner 栅栏），
     // 本插件的 JobState 继续是计数与明细的唯一载体。kind 用 novel-* 前缀与 bash/subagent 分namespace。
-    const host = this.deps.host
-    if (host !== undefined) {
-      const tie: HostTie = { requested: false, reason: '', settle: () => {}, tail: new JobTail(DEFAULT_JOB_OUTPUT_BYTES) }
-      const done = new Promise<{ status: 'completed' | 'killed' | 'failed'; detail?: string }>((res) => {
-        tie.settle = (o): void => { res(o) }
-      })
-      // 宿主契约：start() 内同步调 run() 取回 hooks，所以 tie/done 必须先建好再调 start。
-      host.start({
-        kind: kind === 'import' ? 'novel-import' : 'novel-probe',
-        label,
-        outputLimitBytes: DEFAULT_JOB_OUTPUT_BYTES,
-        run: () => ({
-          cancel: (reason): void => { tie.requested = true; tie.reason = reason ?? '已取消' },
-          done,
-          readOutput: (): string => tie.tail.read(),
-        }),
-      })
-      this.ties.set(state, tie)
-    }
+    // 协作式取消只需记账（取下一条前查 `cancelled`），故不给 onCancel 落点。
+    const tie = HostTie.open(this.deps.host, {
+      kind: kind === 'import' ? 'novel-import' : 'novel-probe',
+      label,
+    })
+    if (tie !== null) this.ties.set(state, tie)
     return state
   }
 
-  /** 过程行落进宿主那条任务的尾缓冲（缺席即 no-op——宿主没登记就没有消费者）。
+  /** 过程行落进宿主那条任务的尾缓冲（缺席即没有挂点，不写）。
    *  覆盖每单元收尾、文件级解析失败与预筛无效 id；行文只用既有任务词汇（源名、状态词、
    *  `error.code`），口径归各调用处，不复述 issues 明细。 */
   private note(state: JobState, line: string): void {
-    this.ties.get(state)?.tail.push(line)
+    this.ties.get(state)?.note(line)
   }
 
   private issue(state: JobState, kind: JobIssue['kind'], name: string, detail: string): void {

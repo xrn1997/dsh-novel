@@ -256,7 +256,7 @@ describe('批量验证任务', () => {
   })
 })
 // ── 宿主后台任务注册表（ctx.jobs）接线：生命周期归宿主，counts 与单槽仍归本插件 ──
-import type { JobHost, JobHostSpec } from '../../src/services/import-job.js'
+import type { JobHost, JobHostSpec } from '../../src/services/job-holder.js'
 
 type Settled = { status: string; detail?: string }
 interface Tie { spec: JobHostSpec; cancel: (reason?: string) => void; done: Promise<Settled> }

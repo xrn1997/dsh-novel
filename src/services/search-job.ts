@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { SEARCH_HITS_CAP_PER_SOURCE, SEARCH_JOB_RETENTION_MS } from '../shared/wire.js'
 import type { SearchGroup, SearchJobSnapshot } from '../shared/wire.js'
-import type { JobHost, JobOutcome } from './import-job.js'
-import { DEFAULT_JOB_OUTPUT_BYTES, JobTail } from './job-tail.js'
+import { ChangeSignal, HostTie } from './job-holder.js'
+import type { JobHost, JobOutcome } from './job-holder.js'
 
 /**
  * 聚合搜索的后台任务：整轮结果由 **Node 半持有**，读面给游标增量。
@@ -16,7 +16,8 @@ import { DEFAULT_JOB_OUTPUT_BYTES, JobTail } from './job-tail.js'
  * `maxConcurrentJobsPerOwner` 缺省 10，够用），UI 的「任何任务在途即禁用」判据只管写任务。
  *
  * 生命周期同样登记给 `ctx.jobs`（kind `novel-search`）——身份、终态、取消入口与写任务同口径；
- * 本模块持有「结果集 + 游标」与一段有界过程行尾缓冲（`Held.tail`，宿主经 `readOutput` 拉）。
+ * 本模块持有「结果集 + 游标」；过程行尾缓冲挂在登记给宿主的那根线上（`job-holder.ts` 的 `HostTie`，
+ * 宿主经 `readOutput` 拉）。
  * 宿主任务面板只有 label / detail（另有 `readOutput` 过程行拉取面），装不下整轮结果——结果与明细仍只在这里。
  */
 
@@ -41,9 +42,8 @@ interface Held {
   cancelled: boolean
   finishedAt?: number
   error?: string
-  settle: (outcome: JobOutcome) => void
-  /** 过程行的有界尾缓冲：仅在登记给宿主时存在；每源答话 push 一行，宿主经 `job_output` 拉走（消费式）。 */
-  tail?: JobTail
+  /** 与宿主登记之间的那根线（`job-holder.ts`）：缺席即没登记，终态与过程行都不往外发。 */
+  tie: HostTie | null
 }
 
 /** 命中截断：内存上限要有主——逐源不截是无上界（站点侧搜索面本就只取首页） */
@@ -55,20 +55,12 @@ function capHits(group: SearchGroup): SearchGroup {
 
 export class SearchJobs {
   private current: Held | null = null
-  private readonly listeners = new Set<() => void>()
 
-  /** 订阅「本轮状态变了」（新一轮、新增分组、终态）。返回退订口。
-   *  **只发信号不发数据**：游标属于每一条连接，不属于持有者——SSE 路由收到信号后自己
-   *  `snapshot(cursor)` 取增量，所以多个观察者、不同游标，共用同一份持有物而不互相踩。 */
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener)
-    return () => { this.listeners.delete(listener) }
-  }
-
-  private notify(): void {
-    // 快照成数组：回调里再 subscribe/unsubscribe 不该让本轮漏发给别人
-    for (const listener of [...this.listeners]) listener()
-  }
+  /** 「本轮状态变了」信号（机械住 `job-holder.ts` 的 `ChangeSignal`）：SSE 路由订阅它、
+   *  自己带游标取增量。
+   *  **只发信号不发数据**：游标属于每一条连接，不属于持有者——所以多个观察者、不同游标，
+   *  共用同一份持有物而不互相踩。 */
+  readonly signal = new ChangeSignal()
 
   constructor(private readonly deps: {
     /** 宿主 `ctx.jobs` 的窄面；缺省即不登记（单测直构与无 jobs 的组合走这条） */
@@ -87,33 +79,20 @@ export class SearchJobs {
     const held: Held = {
       id: (this.deps.uuid ?? randomUUID)(), keyword, total,
       startedAt: this.now(), groups: [], phase: 'running', cancelled: false,
-      settle: () => {},
-    }
-    const host = this.deps.host
-    if (host !== undefined) {
-      const tail = new JobTail(DEFAULT_JOB_OUTPUT_BYTES)
-      held.tail = tail
-      const done = new Promise<JobOutcome>((res) => {
-        held.settle = (o): void => { res(o) }
-      })
-      // 宿主契约：start() 内同步调 run() 取 hooks，故 done 必须先建好
-      host.start({
+      // 宿主登记（机械与顺序都住 `job-holder.ts`）：kind 用 novel-* 前缀与 bash/subagent 分 namespace。
+      tie: HostTie.open(this.deps.host, {
         kind: 'novel-search',
         label: `聚合搜索「${keyword}」（${total} 家书源）`,
-        outputLimitBytes: DEFAULT_JOB_OUTPUT_BYTES,
-        run: () => ({
-          cancel: (reason): void => { this.cancel(reason) },
-          done,
-          readOutput: (): string => tail.read(),
-        }),
-      })
+        // 宿主请求收手即整轮进终态：搜索是读，没有半途写脏的顾虑（理由同 `cancel`）
+        onCancel: (reason): void => { this.cancel(reason) },
+      }),
     }
     this.current = held
-    this.notify()                                      // 新一轮开场：旧观察者据此把结果清零换轮
+    this.signal.notify()                              // 新一轮开场：旧观察者据此把结果清零换轮
     // 同步起跑：`run` 交出的 emit 必须在本函数返回前就在位，否则调用方紧接着 emit 的第一组会丢
     //（被否的写法：`void Promise.resolve().then(() => run(...))`——它把 emit 推后一个微任务，
     //  同步消费 emit 的一方什么都收不到）。
-    // 每源答话留一行过程行进尾缓冲（缺席即 held.tail 为空，不写）：行文把「结果条数」与
+    // 每源答话留一行过程行进尾缓冲（没登记宿主即 `tie` 为 null，不写）：行文把「结果条数」与
     // 「源状态」分成两轴——status 是源的验证态、不是本轮结果；条数用 cap 后实际进快照的数，
     // 截断时附原始数（上限见 SEARCH_HITS_CAP_PER_SOURCE）。单源失败点名 `error.code`；
     // 与整轮结果（读面 snapshot）分工照 ADR 0018 不变。
@@ -123,10 +102,10 @@ export class SearchJobs {
       const truncated = group.hits.length > capped.hits.length
         ? `，原始 ${group.hits.length}`
         : ''
-      held.tail?.push(group.error !== undefined
+      held.tie?.note(group.error !== undefined
         ? `${group.sourceName}：失败（${group.error.code}）`
         : `${group.sourceName}：${capped.hits.length} 条（源 ${group.status}${truncated}）`)
-      this.notify()
+      this.signal.notify()
     }
     const shouldStop = (): boolean => held.phase !== 'running'   // 取消 / 被替换都表现为「不再是本轮的 running」
     let running: Promise<unknown>
@@ -189,7 +168,7 @@ export class SearchJobs {
     h.phase = status === 'completed' ? 'done' : 'failed'
     if (error !== undefined) h.error = error
     h.finishedAt = this.now()
-    h.settle({ status, ...(detail === undefined || detail === '' ? {} : { detail }) })
-    this.notify()                                      // 终态也要发：SSE 据此收尾并关流
+    h.tie?.settle({ status, ...(detail === undefined || detail === '' ? {} : { detail }) })
+    this.signal.notify()                                      // 终态也要发：SSE 据此收尾并关流
   }
 }
