@@ -30,35 +30,94 @@ export interface NovelConfig {
   proxyUrl?: string
 }
 
+/** 已解析配置的只读读数面：volatile 字段每次读当前 ref 快照。 */
+export interface ResolvedConfig {
+  readonly dataDir?: string
+  readonly searchTimeoutMs: number
+  readonly searchParallel: number
+  readonly jsTimeoutMs: number
+  readonly cacheMaxBytes: number
+  readonly exportDelayMs: number
+  readonly localImportMaxBytes: number
+  readonly proxyUrl?: string
+}
+
+const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write')
+type VolatileRef<T> = { get(): T }
+type Field<T> = T | VolatileRef<T>
+/** 配置收缝的输入形状：用户写的纯值或 Loader 解析出的活 ref，字段全部可选（两者都是稀疏的）。 */
+type ConfigInput = {
+  dataDir?: string | null
+  searchTimeoutMs?: Field<number>
+  searchParallel?: Field<number>
+  jsTimeoutMs?: Field<number>
+  cacheMaxBytes?: Field<number>
+  exportDelayMs?: Field<number>
+  localImportMaxBytes?: Field<number>
+  proxyUrl?: Field<string | null | undefined> | null
+}
+
+function isVolatileRef(value: unknown): value is VolatileRef<unknown> {
+  return typeof value === 'object' && value !== null && VOLATILE_WRITE in value
+}
+
+/** 纯值是测试/直装路径；ref 是 Loader 解析后的活值。两种都收，对外统一成 getter。 */
+function readField<T>(value: Field<T> | null | undefined): T | undefined {
+  return isVolatileRef(value) ? (value.get() as T) : (value ?? undefined)
+}
+
+/** 旧 schemastery 没有 .volatile()：字段退化为普通值，插件仍能加载；配置页由 configForms 能力闸另判。 */
+function maybeVolatile<T extends object>(schema: T): T {
+  const method = (schema as T & { volatile?: () => unknown }).volatile
+  return typeof method === 'function' ? (method.call(schema) as T) : schema
+}
+
+/** string schema 的形状闸：空串 / direct / 可选的 http(s) scheme + 无空格主机。完整解析在
+ *  createFetcher 建 dispatcher 前由 parseProxyUrl 再做一次。 */
+function proxyUrlSchema() {
+  return Schema.string().pattern(/^(?:|direct|(?:https?:\/\/)?(?!.*:\/\/)[^\s/]+(?::\d+)?(?:\/\S*)?)$/i)
+}
+
 export const Config = Schema.object({
   dataDir: Schema.string(),
   // 六个数值位的单位都是整数（毫秒 / 字节 / 并发数）：.step(1) 同时钉整数并挡掉
   // NaN/Infinity——.min/.max 对 NaN 的比较为假，挡不住（宁炸不猜）。
-  searchTimeoutMs: Schema.number().default(DEFAULT_TIMEOUT_MS).min(1).step(1),
-  searchParallel: Schema.number().default(DEFAULT_SEARCH_PARALLEL).min(1).step(1),
-  jsTimeoutMs: Schema.number().default(DEFAULT_JS_BUDGET_MS).min(1).step(1),
-  cacheMaxBytes: Schema.number().default(DEFAULT_CACHE_MAX_BYTES).min(0).step(1),
-  exportDelayMs: Schema.number().default(DEFAULT_EXPORT_DELAY_MS).min(0).step(1),
-  localImportMaxBytes: Schema.number().default(DEFAULT_MAX_IMPORT_BYTES).min(1).step(1),
-  proxyUrl: Schema.string(),
+  searchTimeoutMs: maybeVolatile(Schema.number().default(DEFAULT_TIMEOUT_MS).min(1).step(1)),
+  searchParallel: maybeVolatile(Schema.number().default(DEFAULT_SEARCH_PARALLEL).min(1).step(1)),
+  jsTimeoutMs: maybeVolatile(Schema.number().default(DEFAULT_JS_BUDGET_MS).min(1).step(1)),
+  cacheMaxBytes: maybeVolatile(Schema.number().default(DEFAULT_CACHE_MAX_BYTES).min(0).step(1)),
+  exportDelayMs: maybeVolatile(Schema.number().default(DEFAULT_EXPORT_DELAY_MS).min(0).step(1)),
+  localImportMaxBytes: maybeVolatile(Schema.number().default(DEFAULT_MAX_IMPORT_BYTES).min(1).step(1)),
+  proxyUrl: maybeVolatile(proxyUrlSchema()),
 }).default({} as any)
 
-/** 缺省已填、值域已验的配置：六个数值位必填，dataDir/proxyUrl 仍可选 */
-export type ResolvedConfig = Omit<Required<NovelConfig>, 'dataDir' | 'proxyUrl'>
-  & Pick<NovelConfig, 'dataDir' | 'proxyUrl'>
-
-/** schema 对无 default 的可选键会把显式 null 原样带出；先按真实运行形状接住，再归一。 */
-type SchemaConfig = Omit<Required<NovelConfig>, 'dataDir' | 'proxyUrl'>
-  & { dataDir?: string | null; proxyUrl?: string | null }
-
-/** 原始配置 → 合法配置的唯一缝：填充 + 类型 + 值域一步到位，非法值加载期响亮失败。
- *  数值位的整数 / 有限性由 schema 的 `.step(1)` 把住（`.min`/`.max` 挡不住 NaN）；
- *  dataDir/proxyUrl 的 null 在这里归一成 undefined（ResolvedConfig 的类型不含 null）。 */
-export function resolveConfig(raw?: NovelConfig): ResolvedConfig {
-  try {
-    const out = Config(raw ?? {}) as SchemaConfig
-    return { ...out, dataDir: out.dataDir ?? undefined, proxyUrl: out.proxyUrl ?? undefined }
-  } catch (e) {
-    throw new Error(`[dsh-novel] 配置非法（见 README 配置表）：${e instanceof Error ? e.message : String(e)}`)
+/** 原始配置 → 合法配置的唯一缝：纯输入走 schema 校验；Loader 已解析的 ref 输入不重跑 schema
+ *  （volatile ref 会被 `expected number but got [object Object]` 拒绝）。 */
+export function resolveConfig(raw?: NovelConfig | ConfigInput): ResolvedConfig {
+  const input = raw as ConfigInput | undefined
+  const resolved = input !== undefined && [
+    input.searchTimeoutMs, input.searchParallel, input.jsTimeoutMs,
+    input.cacheMaxBytes, input.exportDelayMs, input.localImportMaxBytes,
+    input.proxyUrl,
+  ].some(isVolatileRef)
+  let out: ConfigInput
+  if (resolved && input !== undefined) {
+    out = input
+  } else {
+    try {
+      out = Config((input ?? {}) as any) as unknown as ConfigInput
+    } catch (e) {
+      throw new Error(`[dsh-novel] 配置非法（见 README 配置表）：${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+  return {
+    get dataDir() { return out.dataDir ?? undefined },
+    get searchTimeoutMs() { return readField(out.searchTimeoutMs) ?? DEFAULT_TIMEOUT_MS },
+    get searchParallel() { return readField(out.searchParallel) ?? DEFAULT_SEARCH_PARALLEL },
+    get jsTimeoutMs() { return readField(out.jsTimeoutMs) ?? DEFAULT_JS_BUDGET_MS },
+    get cacheMaxBytes() { return readField(out.cacheMaxBytes) ?? DEFAULT_CACHE_MAX_BYTES },
+    get exportDelayMs() { return readField(out.exportDelayMs) ?? DEFAULT_EXPORT_DELAY_MS },
+    get localImportMaxBytes() { return readField(out.localImportMaxBytes) ?? DEFAULT_MAX_IMPORT_BYTES },
+    get proxyUrl() { return readField(out.proxyUrl) ?? undefined },
   }
 }

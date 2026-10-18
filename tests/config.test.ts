@@ -6,15 +6,29 @@ import { DEFAULT_TIMEOUT_MS } from '../src/services/fetcher.js'
 import { DEFAULT_MAX_IMPORT_BYTES } from '../src/services/localbooks.js'
 import { DEFAULT_JS_BUDGET_MS, DEFAULT_SEARCH_PARALLEL } from '../src/services/reading.js'
 
+function ref<T>(value: T) {
+  let current = value
+  return {
+    get: () => current,
+    [Symbol.for('cosmokit.volatile.write')]: (next: T) => { current = next },
+  }
+}
+
 describe('配置收缝', () => {
-  it('默认值与值域都住 schema：undefined / {} / 字段缺失都按默认填（3.18.5 实测语义）', () => {
-    expect(Config(undefined as any)).toMatchObject({ searchTimeoutMs: DEFAULT_TIMEOUT_MS })
-    expect(Config({} as any)).toMatchObject({ searchParallel: DEFAULT_SEARCH_PARALLEL })
-    expect(Config({ searchTimeoutMs: 1000 } as any)).toMatchObject({
-      searchTimeoutMs: 1000, searchParallel: DEFAULT_SEARCH_PARALLEL,
-    })
+  it('volatile 字段是 ref；resolveConfig 仍是普通值', () => {
+    const cfg = Config(undefined as any) as any
+    expect(cfg.searchTimeoutMs.get()).toBe(DEFAULT_TIMEOUT_MS)
+    expect(cfg.searchParallel.get()).toBe(DEFAULT_SEARCH_PARALLEL)
+    expect(cfg.proxyUrl.get()).toBeUndefined()
     expect(resolveConfig(undefined)).toMatchObject({ searchTimeoutMs: DEFAULT_TIMEOUT_MS })
-    expect(resolveConfig({}).dataDir).toBeUndefined()     // 无默认的键不硬造
+    expect(resolveConfig({}).dataDir).toBeUndefined()
+  })
+  it('已解析 ref 输入不二次校验，getter 读当前快照', () => {
+    const searchTimeoutMs = ref(1000)
+    const live = resolveConfig({ searchTimeoutMs } as any)
+    expect(live.searchTimeoutMs).toBe(1000)
+    ;(searchTimeoutMs as any)[Symbol.for('cosmokit.volatile.write')](2000)
+    expect(live.searchTimeoutMs).toBe(2000)
   })
   it('六项缺省各自引消费模块常量（映射不许写反）', () => {
     expect(resolveConfig(undefined)).toMatchObject({
@@ -60,5 +74,13 @@ describe('配置收缝', () => {
   })
   it('类型错在加载期响亮（schema 只认类型不猜）', () => {
     expect(() => resolveConfig({ dataDir: 1 } as any)).toThrow(/配置非法/)
+  })
+  it('proxyUrl 形状闸：direct/空/裸主机/http(s) 接受，坏串拒绝', () => {
+    expect(resolveConfig({ proxyUrl: 'direct' }).proxyUrl).toBe('direct')
+    expect(resolveConfig({ proxyUrl: '' }).proxyUrl).toBe('')
+    expect(resolveConfig({ proxyUrl: '127.0.0.1:7897' }).proxyUrl).toBe('127.0.0.1:7897')
+    expect(resolveConfig({ proxyUrl: 'http://127.0.0.1:7897' }).proxyUrl).toBe('http://127.0.0.1:7897')
+    expect(() => resolveConfig({ proxyUrl: 'http://bad host' })).toThrow(/配置非法/)
+    expect(() => resolveConfig({ proxyUrl: 'ftp://127.0.0.1' })).toThrow(/配置非法/)
   })
 })

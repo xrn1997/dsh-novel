@@ -95,6 +95,14 @@ describe('LocalBooks', () => {
     expect(await fs.readdir(path.join(dir, 'local'))).toEqual([])
   })
 
+  it('亚 MiB 上限的报错用 KB，不出现「0MB」（上限可在插件页热改到 1 MiB 以下）', async () => {
+    const { lb } = await mk(2 * 1024)
+    const err: unknown = await lb.import(Buffer.from('x'.repeat(3 * 1024)), 'small-limit.txt').catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(LocalFileTooLargeError)
+    expect((err as Error).message).toBe('文件超过 2KB 上限')
+    expect((err as Error).message).not.toContain('0MB')
+  })
+
   it('LRU 上限 3 本：第 4 本导入后重读第 1 本不炸（穿透读盘）', async () => {
     const { lb } = await mk()
     const keys: string[] = []
@@ -124,6 +132,15 @@ describe('LocalBooks', () => {
     expect(r.chapterCount).toBe(2)
     expect(await lb.getChapter(r.bookKey, 0)).toBe('')   // 相邻标题行 → 退化 span（start>end）→ 必须为 ''
     expect(await lb.getChapter(r.bookKey, 1)).toBe('内容')
+  })
+
+  it('maxImportBytes 是活值：每次导入按当前上限判（低值拒绝、调高后放行）', async () => {
+    const dir = await makeTempDir('novel-local-live-')
+    let max = 1024
+    const lb = await LocalBooks.create(dir, { maxImportBytes: () => max })
+    await expect(lb.import(Buffer.from('x'.repeat(2048)), 'a.txt')).rejects.toBeInstanceOf(LocalFileTooLargeError)
+    max = 4096
+    await expect(lb.import(Buffer.from('x'.repeat(2048)), 'b.txt')).resolves.toMatchObject({ format: 'txt' })
   })
 })
 

@@ -66,9 +66,14 @@ describe('本地书路由', () => {
     expect((await fetch(`${base}/novel-api/local/warnings`)).status).toBe(400)
     expect((await fetch(`${base}/novel-api/local/resource?id=x&resourceId=r0`, { method: 'DELETE' })).status).toBe(405)
   })
-  it('空文件 → 400；超限 → 413（信封）', async () => {
+  it('空文件 → 400；超限 → 413（信封），传输层文案与限额同一读数', async () => {
     expect((await importTxt('', 'e.txt')).status).toBe(400)
-    expect((await importTxt('x'.repeat(2048), 'big.txt')).status).toBe(413)
+    const tooBig = await importTxt('x'.repeat(2048), 'big.txt')
+    expect(tooBig.status).toBe(413)
+    const body = await tooBig.json() as any
+    // 本套件的上限是 1KB（亚 MiB）：文案必须说 KB，不能四舍五入成「0MB」
+    expect(body.error.message).toBe('文件超过 1KB 上限')
+    expect(body.error.message).not.toContain('0MB')
   })
   it('DELETE /local → 删文件 + 书架条目消失', async () => {
     const { value: book } = await (await importTxt(TXT, 'd.txt')).json() as any

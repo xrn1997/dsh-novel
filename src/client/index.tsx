@@ -1,5 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ReactNode } from 'react'
+import { registerConfigPage } from './config-page.js'
 import { NovelStatusOverlay } from './views/NovelStatusOverlay.js'
 import { NovelView } from './views/NovelView.js'
 
@@ -87,6 +88,8 @@ export function apply(ctx: Context): void {
     { name: 'shell.overlay', id: 'novel-status', order: 100, label: '小说任务状态' },
     () => <NovelStatusOverlay focusPanel={() => layout.selectPanel(NOVEL_PANEL_ID)} />,
   )), 'dsh-novel: shell overlay status layer')
+  // 可选能力：旧宿主没有 configForms 时回调不执行，侧栏/面板完全不受影响。
+  ctx.inject(['configForms'], (child) => registerConfigPage(child))
 }
 
 export { NovelStatusOverlay, NovelView }

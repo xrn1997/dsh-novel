@@ -97,6 +97,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 逐条目取值装配（求值上下文 → 一条命中） | **今天没有主人，两份抄本刻意接受**：`services/explore-face.ts` 与 `services/reading.ts` 各一份 | 两份的规则来源本就不同（发现面整套切换 vs 通用搜索面）；第三处消费者出现时再抽公共装配 |
 | 分类快照的存放与时效 | `services/explore-cache.ts` 的 `KindCache` + `services/cache-epoch.ts` 的 `exploreEpoch` | 目录 / 正文文件缓存（`rulesEpoch`） |
 | 配置口径（类型 / schema / 缺省填充 / 值域） | `config.ts` 的 `resolveConfig`（schema 的 `.default()` 只引各消费模块常量，不写第二份字面量） | 运行时环境探测（如系统代理读取，在 `services/proxy.ts`） |
+| 插件页运行参数表单与热更 | `client/config-page.tsx` 的 `registerConfigPage` / `NovelConfigCard`（表单）+ `config.ts` 的 `Config` volatile 字段与 `resolveConfig` getter（读数） | 启动期 `dataDir`、系统代理探测、HTTP 路由 |
 | 缺省值 | 五个各自主人（见 `tests/services/defaults.test.ts` 钉的常量） | 第二处字面量 |
 | 浏览器视图内路由与跨卸载现场 | `client/store.ts` + 各模块级现场 store | 业务真相 |
 | 阅读时序 | `client/reader-session.ts` | DOM 测量实现 |

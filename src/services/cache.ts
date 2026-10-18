@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { writeFileAtomic } from './storage.js'
+import { readValue, type ValueSource } from './value-source.js'
 
 /** 磁盘缓存上限（缺省 200MB）。**这个数是唯一主人**：缺省装配处 `src/config.ts` 的 schema `.default()`
  *  也引它，别在配置表里再写一遍字面量（两份会被改岔）。 */
@@ -21,6 +22,8 @@ export function safeKey(bookKey: string): string {
 /**
  * 正文/目录文件缓存（novel 根目录下 `cache/toc` 与 `cache/content`）。
  * 写入后触发 prune：两目录总字节超上限 → 按 mtime 最旧先删（LRU 近似）。
+ * 上限是活值：配置页改过上限后，下一次 prune 就按新值淘汰，不必重建缓存实例；
+ * prune 开头读一次快照，两处比较共用它——读到一半换值会让「判超」与「删到够」用两个上限。
  *
  * 本模块只回答「放在哪」，不回答「何时有效」：`epoch` / `slot` 是调用方给的不透明串
  * （算式在 `cache-epoch.ts`，裁决在 `reading.ts`）。旧代际文件不删——此后不再被写，
@@ -30,9 +33,9 @@ export function safeKey(bookKey: string): string {
 export class PageCache {
   private readonly tocDir: string
   private readonly contentDir: string
-  private readonly maxBytes: number
+  private readonly maxBytes: ValueSource<number>
 
-  constructor(private readonly dir: string, maxBytes: number = DEFAULT_CACHE_MAX_BYTES) {
+  constructor(private readonly dir: string, maxBytes: ValueSource<number> = DEFAULT_CACHE_MAX_BYTES) {
     this.tocDir = path.join(dir, 'cache', 'toc')
     this.contentDir = path.join(dir, 'cache', 'content')
     this.maxBytes = maxBytes
@@ -67,6 +70,7 @@ export class PageCache {
 
   /** 总字节超上限 → 按 mtimeMs 升序删除直到 ≤ 上限；目录不存在直接返回 */
   async prune(): Promise<void> {
+    const maxBytes = readValue(this.maxBytes)
     const files: { file: string; size: number; mtimeMs: number }[] = []
     for (const dir of [this.tocDir, this.contentDir]) {
       let names: string[]
@@ -86,10 +90,10 @@ export class PageCache {
       }
     }
     let total = files.reduce((sum, f) => sum + f.size, 0)
-    if (total <= this.maxBytes) return
+    if (total <= maxBytes) return
     files.sort((a, b) => a.mtimeMs - b.mtimeMs)
     for (const f of files) {
-      if (total <= this.maxBytes) break
+      if (total <= maxBytes) break
       try {
         await fs.unlink(f.file)
         total -= f.size

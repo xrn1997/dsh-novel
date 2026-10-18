@@ -288,6 +288,22 @@ _Avoid_: external / noExternal 配置（那是宿主侧 bundler 的事）
 _唯一实现_: `config.ts` 的 `resolveConfig`（schema 为 `Config`）
 _Avoid_: DEFAULTS / assertConfig 抄本、在装配处再写一份缺省字面量
 
+**运行参数（活配置，runtime config）**:
+可在插件页编辑、保存后立即生效的七项配置；`dataDir` 不在其中（启动期读一次）。
+_唯一实现_: `config.ts` 的 `Config` volatile 字段与 `resolveConfig` 的 getter
+_Avoid_: 设置（宿主设置页是另一处）、热更新（宿主 HMR 是另一件事）
+
+**插件页配置页（plugin config page）**:
+挂在宿主「插件」页 `plugins.bundle.config` 槽上的「运行参数」表单，按 bundle 包名 `@xrn1997/dsh-novel` 注册。
+壳（保存 / 只读 / 不可用 / 失败四条语义）归宿主 `SettingsForm`，**每一行的几何归本仓**——宿主字段原语只吃 label 与 hint 两个字符串，装不下「单位落在框内」与「裸字节数要读成人话」。
+_唯一实现_: `client/config-page.tsx` 的 `registerConfigPage` / `NovelConfigCard`（接线）与 `NovelConfigCardView`（行）
+_Avoid_: 设置页、设置面板（那是宿主设置的分区）
+
+**活值读数（value source）**:
+服务消费配置的取值形态：纯值（测试 / 直装）与 getter（volatile 活配置）同收，消费方在**每次操作时**读一次当前值，不把装配期的快照抄成副本——抄下来的值会让配置页的热改等到重启才生效。
+_唯一实现_: `services/value-source.ts` 的 `ValueSource` / `readValue`
+_Avoid_: 配置快照（装配期抄本）、缓存值（缓存会把热改拖到下一次重建）
+
 **日志缝（log seam）**:
 Node 半留痕的前缀与级别出口唯一家；组合根装 console + `ctx.logger` 双腿，卸载时复位 console。engine 防线的缺省 sink 是文档化例外（依赖方向不允许 engine import services）。
 _唯一实现_: `services/log.ts` 的 `log` / `setLogSink`

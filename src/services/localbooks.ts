@@ -10,7 +10,9 @@ import type {
 import { chapterContentToText } from './chapter-content.js'
 import { importEpub } from './epub/import.js'
 import type { EpubChapterRef, EpubDocumentRef, EpubImportData, EpubResourceRef } from './epub/import.js'
+import { formatByteLimit } from './size.js'
 import { readJson, writeJsonAtomic, isAtomicTemp, backupPathOf } from './storage.js'
+import { readValue, type ValueSource } from './value-source.js'
 
 /** 本地书的保留源 id：**单主人是 shared/wire.ts**（跨半契约常量）。服务半可直接 import shared
  *  （services/types.ts、reading.ts 已在做），故此处不再是第二份声明——re-export 保留既有 import 路径。 */
@@ -196,17 +198,19 @@ const STAGING_SUFFIX = '.importing'
  */
 export class LocalBooks {
   private readonly localDir: string
-  private readonly maxImportBytes: number
+  /** 导入上限（活值）：每次 import 读一次快照——大小判定与报错文案必须是同一个值，
+   *  否则两个读数之间配置变了，用户看到的上限与实际拒绝的口径对不上。 */
+  private readonly maxImportBytes: ValueSource<number>
   /** bookKey → 解码全文；Map 迭代序 = LRU 序（get 时 delete+set 提升）。**只装 TXT**：
    *  EPUB 正文按文档按需读 JSON，不把整本塞进这个 LRU（那是两份缓存与两套失效口径）。 */
   private readonly textCache = new Map<string, string>()
 
-  private constructor(dir: string, maxImportBytes: number) {
+  private constructor(dir: string, maxImportBytes: ValueSource<number>) {
     this.localDir = path.join(dir, 'local')
     this.maxImportBytes = maxImportBytes
   }
 
-  static async create(dir: string, opts?: { maxImportBytes?: number }): Promise<LocalBooks> {
+  static async create(dir: string, opts?: { maxImportBytes?: ValueSource<number> }): Promise<LocalBooks> {
     const lb = new LocalBooks(dir, opts?.maxImportBytes ?? DEFAULT_MAX_IMPORT_BYTES)
     await fs.mkdir(lb.localDir, { recursive: true })
     return lb
@@ -214,9 +218,10 @@ export class LocalBooks {
 
   /** 导入（TXT / EPUB 按**文件头魔数**分流）+ 落盘。发布是否算完成由顶层元数据说了算（口径②）。 */
   async import(buf: Buffer, name: string): Promise<LocalImportResult> {
+    const maxImportBytes = readValue(this.maxImportBytes)
     if (buf.length === 0) throw new LocalImportError('文件为空')
-    if (buf.length > this.maxImportBytes) {
-      throw new LocalFileTooLargeError(`文件超过 ${Math.round(this.maxImportBytes / 1024 / 1024)}MB 上限`)
+    if (buf.length > maxImportBytes) {
+      throw new LocalFileTooLargeError(`文件超过 ${formatByteLimit(maxImportBytes)} 上限`)
     }
     return hasZipMagic(buf) ? this.publishEpub(buf, name) : this.publishText(buf, name)
   }

@@ -78,7 +78,7 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 
 ## 配置
 
-插件配置位于 cordis.yml 插件行的 `config` 字段（schemastery 校验，全部可选）：
+插件配置位于 profile 的 `cordis.patch.yml` 里该插件行的 `config` 字段（schemastery 校验，全部可选）：
 
 | 键 | 缺省 | 说明 |
 | --- | --- | --- |
@@ -89,9 +89,11 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 | `cacheMaxBytes` | `209715200`（200MB） | 目录 / 正文缓存上限（字节，LRU 淘汰） |
 | `exportDelayMs` | `300` | 范围导出的章节间抓取间隔（毫秒，串行限速） |
 | `localImportMaxBytes` | `52428800`（50MB） | 本地文件导入大小上限（字节，TXT / EPUB 共用） |
-| `proxyUrl` | 自动探测 | 出站代理，见[常见问题](#常见问题)；`'direct'` 强制直连，或显式指定如 `'http://127.0.0.1:7897'` |
+| `proxyUrl` | 启动时自动探测 | 出站代理，见[常见问题](#常见问题)；`'direct'` 强制直连，或显式指定如 `'http://127.0.0.1:7897'` |
 
-数值项按整数校验；非法值（含 `NaN` / `Infinity`）在插件加载期报错。显式 `null` 按未设置处理、取缺省。
+除 `dataDir` 外，其余 7 项还可在宿主的「插件」页 → `@xrn1997/dsh-novel` 详情里的「运行参数」中编辑（需宿主支持插件配置页）；保存后立即生效，不需要重启插件。旧宿主没有这一页时，配置仍写在 profile 的 `cordis.patch.yml`。`dataDir` 始终需改该文件并重启。
+
+数值项按整数校验；`proxyUrl` 只接受 `direct`、空串或 http(s) 地址（裸 `host:port` 按 `http://` 补全）。非法值（含 `NaN` / `Infinity`）在插件加载期报错；在插件页保存时被同样拒绝，页面保留草稿供修改。显式 `null` 按未设置处理、取缺省。
 
 ## HTTP API
 

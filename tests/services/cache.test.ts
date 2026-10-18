@@ -37,6 +37,20 @@ describe('PageCache', () => {
     expect(await c.getContent('s', 'new', 0, 'e')).toBe('y'.repeat(150))
     expect(await c.getContent('s', 'old', 0, 'e')).toBeNull()
   })
+  it('maxBytes 是活值：调低后下一次 prune 按新上限淘汰', async () => {
+    const dir = await tmp()
+    let max = 400
+    const c = new PageCache(dir, () => max)
+    await c.setContent('s', 'old', 0, 'e', 'x'.repeat(150))
+    const oldFile = path.join(dir, 'cache', 'content', 's-old-0-e.txt')
+    const oldT = new Date(Date.now() - 10_000)
+    await fs.utimes(oldFile, oldT, oldT)
+    await c.setContent('s', 'new', 0, 'e', 'y'.repeat(150))
+    max = 200
+    await c.prune()
+    expect(await c.getContent('s', 'old', 0, 'e')).toBeNull()
+    expect(await c.getContent('s', 'new', 0, 'e')).toBe('y'.repeat(150))
+  })
 })
 
 describe('safeKey', () => {

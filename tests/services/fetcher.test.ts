@@ -1,7 +1,28 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+// undici 的 ProxyAgent 会在构造时真的建连接池：测试里换成记账桩，
+// 才量得到「同 URL 复用、换 URL 关旧、dispose 关当前」这三条生命周期。
+const proxyAgents = vi.hoisted(() => [] as Array<{ url: string; closed: boolean }>)
+vi.mock('undici', () => ({
+  ProxyAgent: class {
+    url: string
+    closed = false
+    constructor(url: string) {
+      this.url = url
+      proxyAgents.push(this)
+    }
+    close() {
+      this.closed = true
+      return Promise.resolve()
+    }
+  },
+}))
+
 import { createFetcher, decodeBody, effectiveUserAgent, headerOf } from '../../src/services/fetcher.js'
 import { FetchError, DecodeError } from '../../src/services/errors.js'
 import type { NovelSource } from '../../src/services/types.js'
+
+beforeEach(() => { proxyAgents.length = 0 })
 
 function fakeFetch(handler: (url: string, init?: RequestInit) => { status?: number; body: BodyInit; headers?: Record<string, string> }) {
   return async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -71,6 +92,131 @@ describe('fetchPage', () => {
     })
     await f.fetchPage('https://a.com/x')
     expect(seen?.dispatcher).toBeUndefined()
+  })
+  it('proxyUrl getter：换 URL 建新 dispatcher 并关旧；dispose 关当前（同 URL 复用、dispose 后可重建）', async () => {
+    let proxy: string | null = 'http://a:1'
+    const f = createFetcher({
+      proxyUrl: () => proxy,
+      fetchImpl: fakeFetch(() => ({ body: 'ok' })) as unknown as typeof globalThis.fetch,
+    })
+    await f.fetchPage('https://a.com/1')
+    expect(proxyAgents.at(-1)?.url).toBe('http://a:1')
+    // 同 URL 不重建：proxyAgents 仍只有一份
+    await f.fetchPage('https://a.com/1b')
+    expect(proxyAgents).toHaveLength(1)
+    proxy = 'http://b:2'
+    await f.fetchPage('https://a.com/2')
+    expect(proxyAgents.at(-1)?.url).toBe('http://b:2')
+    expect(proxyAgents[0]?.closed).toBe(true)
+    f.dispose?.()
+    expect(proxyAgents.at(-1)?.closed).toBe(true)
+    // dispose 之后调用方还在抓取：按当前 URL 重建，而不是复用已关闭的实例
+    await f.fetchPage('https://a.com/3')
+    expect(proxyAgents.at(-1)?.url).toBe('http://b:2')
+    expect(proxyAgents.at(-1)?.closed).toBe(false)
+  })
+  it("proxyUrl 改为 'DIRECT' / 空串 → 直连并关旧 dispatcher", async () => {
+    let proxy: string | null = 'http://a:1'
+    const seen: Array<Record<string, unknown>> = []
+    const f = createFetcher({
+      proxyUrl: () => proxy,
+      fetchImpl: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        seen.push(init as unknown as Record<string, unknown>)
+        return new Response('ok', { status: 200 })
+      }) as unknown as typeof globalThis.fetch,
+    })
+    await f.fetchPage('https://a.com/1')
+    proxy = 'DIRECT'
+    await f.fetchPage('https://a.com/2')
+    expect(seen.at(-1)?.dispatcher).toBeUndefined()
+    expect(proxyAgents[0]?.closed).toBe(true)
+    proxy = ''
+    await f.fetchPage('https://a.com/3')
+    expect(seen.at(-1)?.dispatcher).toBeUndefined()
+  })
+  it('proxyUrl 坏地址 → FetchError（不是裸 TypeError）', async () => {
+    const f = createFetcher({
+      proxyUrl: 'ftp://127.0.0.1:21',
+      fetchImpl: fakeFetch(() => ({ body: 'ok' })) as unknown as typeof globalThis.fetch,
+    })
+    await expect(f.fetchPage('https://a.com')).rejects.toMatchObject({ name: 'FetchError' })
+  })
+  it('坏地址每次都炸：失败不记账，第二次请求不许静默走直连', async () => {
+    const f = createFetcher({
+      proxyUrl: 'ftp://127.0.0.1:21',
+      fetchImpl: fakeFetch(() => ({ body: 'ok' })) as unknown as typeof globalThis.fetch,
+    })
+    await expect(f.fetchPage('https://a.com/1')).rejects.toMatchObject({ name: 'FetchError' })
+    await expect(f.fetchPage('https://a.com/2')).rejects.toMatchObject({ name: 'FetchError' })
+  })
+  it('proxyUrl 坏地址带 userinfo → 报错不含密码（脱敏）', async () => {
+    const f = createFetcher({
+      proxyUrl: 'http://user:s3cret@bad host',
+      fetchImpl: fakeFetch(() => ({ body: 'ok' })) as unknown as typeof globalThis.fetch,
+    })
+    const err = await f.fetchPage('https://a.com').catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(FetchError)
+    expect((err as Error).message).not.toContain('s3cret')
+    expect((err as Error).message).toContain('***@')
+    expect((err as FetchError).url).not.toContain('s3cret')
+  })
+  it('proxyUrl 坏地址带斜杠密码（schema 可达）→ 报错文案与 url 字段都不含密码', async () => {
+    // 配置页 schema 放行 `http://user:pa/ss@host`；这条只走到「坏地址」分支，
+    // 两个回声面（message、FetchError.url）都必须只剩脱敏后的地址。
+    const f = createFetcher({
+      proxyUrl: 'http://user:pa/ss@host',
+      fetchImpl: fakeFetch(() => ({ body: 'ok' })) as unknown as typeof globalThis.fetch,
+    })
+    const err = await f.fetchPage('https://a.com').catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(FetchError)
+    expect((err as Error).message).not.toContain('pa/ss')
+    expect((err as Error).message).not.toContain('user:pa')
+    expect((err as FetchError).url).not.toContain('pa/ss')
+    expect((err as FetchError).url).not.toContain('user:pa')
+  })
+  it('裸 host:port 的 getter → 建 dispatcher 前补 http://（ProxyAgent 只认带 scheme 的 URL）', async () => {
+    const f = createFetcher({
+      proxyUrl: () => '127.0.0.1:7897',
+      fetchImpl: fakeFetch(() => ({ body: 'ok' })) as unknown as typeof globalThis.fetch,
+    })
+    await f.fetchPage('https://a.com')
+    expect(proxyAgents.at(-1)?.url).toBe('http://127.0.0.1:7897')
+  })
+  it("proxyUrl 为 ' direct '（带空白）→ 直连并关旧 dispatcher", async () => {
+    let proxy: string | null = 'http://a:1'
+    const seen: Array<Record<string, unknown>> = []
+    const f = createFetcher({
+      proxyUrl: () => proxy,
+      fetchImpl: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        seen.push(init as unknown as Record<string, unknown>)
+        return new Response('ok', { status: 200 })
+      }) as unknown as typeof globalThis.fetch,
+    })
+    await f.fetchPage('https://a.com/1')
+    expect(proxyAgents.at(-1)?.url).toBe('http://a:1')
+    proxy = ' direct '
+    await f.fetchPage('https://a.com/2')
+    expect(seen.at(-1)?.dispatcher).toBeUndefined()
+    expect(proxyAgents[0]?.closed).toBe(true)
+  })
+  it('A 活着 → B 坏 → 换回 A：坏地址不污染缓存，仍按 A 重建 dispatcher 而不是静默直连', async () => {
+    let proxy = 'http://a:1'
+    const seen: Array<Record<string, unknown>> = []
+    const f = createFetcher({
+      proxyUrl: () => proxy,
+      fetchImpl: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        seen.push(init as unknown as Record<string, unknown>)
+        return new Response('ok', { status: 200 })
+      }) as unknown as typeof globalThis.fetch,
+    })
+    await f.fetchPage('https://a.com/1')
+    proxy = 'ftp://127.0.0.1:21'
+    await expect(f.fetchPage('https://a.com/2')).rejects.toMatchObject({ name: 'FetchError' })
+    proxy = 'http://a:1'
+    await f.fetchPage('https://a.com/3')
+    expect(seen.at(-1)?.dispatcher).toBeDefined()
+    expect(proxyAgents.at(-1)?.url).toBe('http://a:1')
+    expect(proxyAgents.at(-1)?.closed).toBe(false)
   })
   // Node fetch 默认不带 User-Agent——站点 WAF 按 UA 过滤直接 403（真机实测有这种源；浏览器口径默认带）
   it('缺省带浏览器 UA/Accept 头；调用方声明的同名头优先', async () => {

@@ -1,7 +1,9 @@
 import iconv from 'iconv-lite'
 import { ProxyAgent } from 'undici'
 import { DecodeError, FetchError } from './errors.js'
+import { normalizeProxyUrl, parseProxyUrl, redactProxyUrl } from './proxy.js'
 import type { NovelSource } from './types.js'
+import { readValue, type ValueSource } from './value-source.js'
 
 export interface FetchedPage {
   raw: Buffer
@@ -24,8 +26,9 @@ export interface FetchedPage {
 export interface FetcherOptions {
   fetchImpl?: typeof globalThis.fetch
   timeoutMs?: number
-  /** 出站代理（见 services/proxy.ts：Node 的 fetch 不读系统代理）；null/缺省 = 直连 */
-  proxyUrl?: string | null
+  /** 出站代理（见 services/proxy.ts：Node 的 fetch 不读系统代理）；null / '' / direct = 直连。
+   *  可以是活 getter——每次请求前读当前值，配置页改了代理不必重建 fetcher。 */
+  proxyUrl?: ValueSource<string | null>
 }
 
 export interface Fetcher {
@@ -36,6 +39,8 @@ export interface Fetcher {
     /** HEAD 探测姿态：redirect:'manual' 且非 2xx 不抛——要的就是 3xx 的状态与头（`java.head`） */
     manual?: boolean
   }): Promise<FetchedPage>
+  /** 关掉当前出站 dispatcher（代理连接池）。卸载时调用；之后再抓取会按当前 proxyUrl 重建。 */
+  dispose?(): void
 }
 
 /** fetch 的 init 加上 undici 扩展位（dispatcher）——标准 lib.dom 类型里没有这个键 */
@@ -98,16 +103,44 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
   const fetchImpl = (opts?.fetchImpl ?? globalThis.fetch) as FetchLike
   const defaultTimeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS
   // 代理走 undici 的 ProxyAgent（dispatcher）：Node 的 fetch 不认系统代理，有代理才通的站点
-  // 直连会被站点 302/重置——「浏览器能开、插件打不开」的根因
-  const dispatcher = opts?.proxyUrl === undefined || opts?.proxyUrl === null || opts.proxyUrl === ''
-    ? undefined
-    : new ProxyAgent(opts.proxyUrl)
+  // 直连会被站点 302/重置——「浏览器能开、插件打不开」的根因。
+  // 配置页可在运行中改 proxyUrl，所以每请求重读、**按 URL 复用**：同 URL 重建等于每次抓取
+  // 丢掉代理连接池；换 URL 必须关旧，否则旧代理的连接池常驻到进程退出。
+  let lastProxy: string | null | undefined
+  let dispatcher: ProxyAgent | undefined
+  const currentDispatcher = (): ProxyAgent | undefined => {
+    const next = normalizeProxyUrl(readValue(opts?.proxyUrl ?? null))
+    if (next === lastProxy) return dispatcher
+    const previous = dispatcher
+    dispatcher = undefined
+    // 旧实例一关，缓存键必须同时作废：否则「A 通 → B 坏 → 换回 A」时，A 会被当成「未变化的当前值」，
+    // 请求拿到 undefined 的 dispatcher 静默走直连——代理恰是直连不通时的刚需，悄悄换路比炸更难查。
+    lastProxy = undefined
+    if (previous !== undefined) void previous.close().catch(() => undefined)
+    if (next === null) {
+      lastProxy = null
+      return undefined
+    }
+    try {
+      dispatcher = new ProxyAgent(parseProxyUrl(next))
+    } catch (e) {
+      // 坏地址成 FetchError 而不是裸 TypeError；回显整体先脱敏——userinfo 里的密码不许进日志
+      //（错误对象常被整个交给 logger，url 字段是同一回声面；内层文案也可能带着原始地址）。
+      const shown = redactProxyUrl(next)
+      const detail = e instanceof Error ? e.message : String(e)
+      throw new FetchError(`代理地址非法: ${shown}（${redactProxyUrl(detail)}）`, { url: shown })
+    }
+    // 缓存键只在构建成功后落地：失败不记账，坏地址才会每次都炸，而不是被当成「当前值」静默直连。
+    lastProxy = next
+    return dispatcher
+  }
 
   return {
     async fetchPage(url: string, init?: {
       headers?: Record<string, string>; method?: string; body?: string; timeoutMs?: number; manual?: boolean
     }): Promise<FetchedPage> {
       const timeoutMs = init?.timeoutMs ?? defaultTimeoutMs
+      const activeDispatcher = currentDispatcher()
       const ctrl = new AbortController()
       let timer: ReturnType<typeof setTimeout> | undefined
       const timeout = new Promise<never>((_, reject) => {
@@ -124,7 +157,7 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
             ...(init?.body === undefined ? {} : { body: init.body }),
             ...(init?.manual === true ? { redirect: 'manual' as const } : {}),
             signal: ctrl.signal,
-            ...(dispatcher === undefined ? {} : { dispatcher }),
+            ...(activeDispatcher === undefined ? {} : { dispatcher: activeDispatcher }),
           }),
           timeout,
         ])
@@ -153,6 +186,14 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
       } finally {
         if (timer !== undefined) clearTimeout(timer)
       }
+    },
+    dispose() {
+      const previous = dispatcher
+      dispatcher = undefined
+      // 作废缓存键：dispose 之后调用方若还在抓取，要按当前值重建而不是复用已关闭的实例。
+      lastProxy = undefined
+      // close 的拒绝在拆除路径上不可处理（连接池已不归任何人），吞掉只为不让它变成 unhandled rejection。
+      if (previous !== undefined) void previous.close().catch(() => undefined)
     },
   }
 }

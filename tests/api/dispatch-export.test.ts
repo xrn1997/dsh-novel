@@ -98,4 +98,18 @@ describe('GET /novel-api/export', () => {
     expect(env.ok).toBe(false)
     expect(env.error?.code).toBe('FetchError')             // 守门 fetcher：404 → FetchError → 502
   })
+  it('exportDelayMs getter 在每次导出开始时读取', async () => {
+    let reads = 0
+    const s = await startServer(svc, { exportDelayMs: () => { reads += 1; return 1 } })
+    try {
+      const id = await sourceId()
+      const url = `${s.base}/novel-api/export?sourceId=${id}&url=${encodeURIComponent(`${BASE}/book/1/`)}&title=t`
+      await (await fetch(url)).arrayBuffer()
+      expect(reads).toBe(1)
+      await (await fetch(url)).arrayBuffer()
+      expect(reads).toBe(2)
+    } finally {
+      await s.close()
+    }
+  })
 })

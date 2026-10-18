@@ -4,6 +4,8 @@ import { exportBook, DEFAULT_EXPORT_DELAY_MS } from '../services/export.js'
 import { SourceNotFoundError } from '../services/errors.js'
 import { SVG_MEDIA_TYPE } from '../services/epub/resources.js'
 import { log } from '../services/log.js'
+import { formatByteLimit } from '../services/size.js'
+import { readValue, type ValueSource } from '../services/value-source.js'
 import { ApiError, isTrustedRequest, readCappedBody, readJsonBody, writeError, writeOk } from './wire.js'
 import { NOVEL_API_PREFIX, PARAMS, paramRoutes, pickShelfMeta, ROUTES, SEG } from '../shared/wire.js'
 
@@ -62,9 +64,10 @@ function requireKeys(body: Record<string, unknown> | null): string[] {
 
 /** 路由级可调参数。
  * 本地书面已归门面：LocalBooks 部件与导入上限都在 ReadingService，
- * 此处只剩传输层关注点（导出节流）。 */
+ * 此处只剩传输层关注点（导出节流）。`exportDelayMs` 收 getter 形态：配置页热改后
+ * 下一次导出即用新值，但**一次导出只读一次**——导出中途换节奏会让同一份文件前后快慢不一。 */
 export interface ApiHandlerOptions {
-  exportDelayMs?: number
+  exportDelayMs?: ValueSource<number>
 }
 
 /**
@@ -389,13 +392,16 @@ async function route(
       'x-novel-total-chapters': String(to - from + 1),      // 本次范围章数（非全书章数）
       'x-novel-range': `${from}-${to}`,
     })
+    const delayMs = opts.exportDelayMs === undefined
+      ? DEFAULT_EXPORT_DELAY_MS
+      : readValue(opts.exportDelayMs)
     const gen = exportBook(
       {
         getToc: (s, b) => service.getToc(s, b),
         getChapter: (s, b, i) => service.getChapter(s, b, i),
       },
       sourceId, bookUrl,
-      { title, delayMs: opts.exportDelayMs ?? DEFAULT_EXPORT_DELAY_MS, from, to, signal: ctrl.signal },
+      { title, delayMs, from, to, signal: ctrl.signal },
     )
     try {
       for await (const chunk of gen) {
@@ -425,7 +431,7 @@ async function route(
       if (name === '') throw new ApiError('缺 query 参数 name（文件名）', 400, 'BadRequest')
       const max = service.localImportMaxBytes
       // 流读与上限判据归 readCappedBody（与 JSON 信封体同一份实现），本处只给措辞
-      const bytes = await readCappedBody(req, max, (m) => `文件超过 ${Math.round(m / 1024 / 1024)}MB 上限`)
+      const bytes = await readCappedBody(req, max, (m) => `文件超过 ${formatByteLimit(m)} 上限`)
       // 分流（TXT/EPUB 按内容）、发布与自动上架全归门面；回执就是 wire 的 LocalImportResponse
       writeOk(res, await service.localImport(bytes, name))
       return

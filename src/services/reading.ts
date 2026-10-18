@@ -1,10 +1,11 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import type { ResolvedConfig } from '../config.js'
 import { evaluate, RuleEvalError } from '../engine/index.js'
 import type { Facet } from '../engine/index.js'
 import { absUrl, auxFieldOf, auxUrlFieldOf, detailContextOf, detailFieldsOf, engineContextOf, fieldOf, firstUrlValue, firstValue, itemContextsOf, kindFieldOf, makeSubEval, resolveHeaders, urlFieldOf, wordCountFieldOf } from './bridge.js'
 import type { Page, SubRuleEval } from './bridge.js'
-import { PageCache } from './cache.js'
+import { DEFAULT_CACHE_MAX_BYTES, PageCache } from './cache.js'
 import { contentSlot, exploreEpoch, rulesEpoch } from './cache-epoch.js'
 import { chapterContentToText } from './chapter-content.js'
 import { contentToText, formatIntro } from './content.js'
@@ -14,6 +15,7 @@ import type { Fetcher } from './fetcher.js'
 import { KindCache } from './explore-cache.js'
 import { ExploreJobs } from './explore-job.js'
 import { deriveExploreSources, fetchExploreGroup } from './explore.js'
+import { DEFAULT_EXPORT_DELAY_MS } from './export.js'
 import { SourceJobs } from './import-job.js'
 import { SearchJobs } from './search-job.js'
 import type { JobHost } from './import-job.js'
@@ -33,6 +35,7 @@ import type { SearchFaceResult } from './search-face.js'
 import { Shelf } from './shelf.js'
 import { SourceRegistry } from './sources.js'
 import type { NovelSource, SourceAuth } from './types.js'
+import type { ValueSource } from './value-source.js'
 
 // ── 公开类型（冻结：HTTP 面 / 工具面 / UI 只准用这套）──────────────────
 // 值形状定义在 wire 契约（src/shared/wire.ts）——
@@ -53,6 +56,9 @@ export const DEFAULT_JS_BUDGET_MS = 15_000
 
 export interface ReadingServiceOptions {
   dir: string                       // novel 根目录（测试注入 mkdtemp）
+  /** 组合根交给服务的活配置读数面：给了就每次使用时读当前值（配置页热改即生效），
+   *  逐字段值只作直装缝的回退 */
+  config?: ResolvedConfig
   fetchImpl?: typeof globalThis.fetch
   searchParallel?: number           // 默认 5
   searchTimeoutMs?: number          // 默认 15000
@@ -63,8 +69,9 @@ export interface ReadingServiceOptions {
   cacheMaxBytes?: number            // 默认 200MB
   /** 本地文件导入上限（TXT / EPUB 共用：传输层流式计数与本地书 domain 上限同一配置值；默认 50MB） */
   localImportMaxBytes?: number
-  /** 出站代理（见 proxy.ts：Node 的 fetch 不读系统代理）；null/缺省 = 直连 */
-  proxyUrl?: string | null
+  /** 出站代理（见 proxy.ts：Node 的 fetch 不读系统代理）；null/缺省 = 直连。
+   *  getter 形态供配置页热改——服务原样交给 fetcher，读值时机归它。 */
+  proxyUrl?: ValueSource<string | null>
   /** 宿主 `ctx.jobs` 窄面：任务身份与生命周期交它（见 import-job.ts 的 JobHost），缺省不登记 */
   jobHost?: JobHost
 }
@@ -88,6 +95,29 @@ interface ExploreEntry {
 
 // ── 服务实现 ────────────────────────────────────────────────────────────
 
+/** 服务的直装缝：把逐字段值装成 ResolvedConfig 形状。不能调 resolveConfig——config.ts 已 import
+ *  本文件的 DEFAULT_*，反向运行期依赖会成环；ResolvedConfig 只做 type-only import。
+ *  `exportDelayMs` 不是服务的旋钮（HTTP 导出面自己读组合根给的值），这里给缺省只为凑齐形状；
+ *  proxyUrl 同理——代理读数归 fetcher 自己的复用/关闭语义，由 createFetcherWith 单独传入。 */
+function staticLiveConfig(parts: {
+  searchTimeoutMs?: number
+  searchParallel?: number
+  jsTimeoutMs?: number
+  cacheMaxBytes?: number
+  localImportMaxBytes?: number
+}): ResolvedConfig {
+  return {
+    get dataDir() { return undefined },
+    get searchTimeoutMs() { return parts.searchTimeoutMs ?? DEFAULT_TIMEOUT_MS },
+    get searchParallel() { return parts.searchParallel ?? DEFAULT_SEARCH_PARALLEL },
+    get jsTimeoutMs() { return parts.jsTimeoutMs ?? DEFAULT_JS_BUDGET_MS },
+    get cacheMaxBytes() { return parts.cacheMaxBytes ?? DEFAULT_CACHE_MAX_BYTES },
+    get exportDelayMs() { return DEFAULT_EXPORT_DELAY_MS },
+    get localImportMaxBytes() { return parts.localImportMaxBytes ?? DEFAULT_MAX_IMPORT_BYTES },
+    get proxyUrl() { return undefined },
+  }
+}
+
 /**
  * 阅读链路门面：HTTP API / agent 工具 / UI 三个面的**唯一**业务入口。
  * 规则求值全部经引擎；抓取全部经守门 fetcher；缓存/书架/注册表在其上编排。
@@ -95,12 +125,11 @@ interface ExploreEntry {
 export class ReadingService {
   private readonly tocInflight = new Map<string, Promise<ChapterEntry[]>>()
   private constructor(
-    private readonly cfg: { searchParallel: number; tocMaxPages: number; contentMaxPages: number },
-    private readonly searchTimeoutMs: number,
-    /** js 沙箱预算（engineContextOf/求值上下文组装时带上——引擎 `ctx.jsTimeoutMs ?? DEFAULT` 消费） */
-    private readonly jsTimeoutMs: number,
-    /** 本地书导入上限（传输层流式计数与本地书 domain 上限同一配置值——index 只传一次） */
-    readonly localImportMaxBytes: number,
+    /** 与活配置分开：目录/正文页数上限不是配置页字段（不受热改约束） */
+    private readonly cfg: { tocMaxPages: number; contentMaxPages: number },
+    /** 活配置读数面：所有可热改字段在使用时读当前值——装配期抄快照会让配置页的改动等到重启。
+     *  dataDir 不在其中（启动期定址）。 */
+    private readonly live: ResolvedConfig,
     private readonly registry: SourceRegistry,
     private readonly shelf: Shelf,
     private readonly cache: PageCache,
@@ -115,6 +144,12 @@ export class ReadingService {
     private readonly local: LocalBooks | null,
   ) {}
 
+  /** 本地书导入上限（传输层流式计数与本地书 domain 上限同一读数口——每次读活配置当前值） */
+  get localImportMaxBytes(): number { return this.live.localImportMaxBytes }
+
+  /** 关掉出站 dispatcher（代理连接池）；卸载时组合根调用，之后再抓取会按当前 proxyUrl 重建。 */
+  dispose(): void { this.fetcher.dispose?.() }
+
   /**
    * 生产快捷方式：建目录 + 从磁盘装配部件，再交 from() 总装。
    * 业务类不再被迫知道目录与加载细节——组合根与业务自此可分（server 侧）。
@@ -123,20 +158,17 @@ export class ReadingService {
   static async create(opts: ReadingServiceOptions): Promise<ReadingService> {
     // 主动建数据目录：保证存在 + 快速失败（dir 指向文件时 mkdir 抛错——ready 拒绝，入口层零注册）
     await fs.mkdir(opts.dir, { recursive: true })
-    const localImportMaxBytes = opts.localImportMaxBytes ?? DEFAULT_MAX_IMPORT_BYTES
+    const live = opts.config ?? staticLiveConfig(opts)
     return ReadingService.from({
       fetcher: createFetcherWith(opts.fetchImpl, opts.proxyUrl),
       registry: await SourceRegistry.load(opts.dir),
       shelf: await Shelf.load(opts.dir),
-      cache: new PageCache(opts.dir, opts.cacheMaxBytes),
-      local: await LocalBooks.create(opts.dir, { maxImportBytes: localImportMaxBytes }),
-      localImportMaxBytes,
-      searchParallel: opts.searchParallel,
+      cache: new PageCache(opts.dir, () => live.cacheMaxBytes),
+      local: await LocalBooks.create(opts.dir, { maxImportBytes: () => live.localImportMaxBytes }),
+      config: live,
       jobHost: opts.jobHost,
       tocMaxPages: opts.tocMaxPages,
       contentMaxPages: opts.contentMaxPages,
-      searchTimeoutMs: opts.searchTimeoutMs,
-      jsTimeoutMs: opts.jsTimeoutMs,
     })
   }
 
@@ -146,6 +178,8 @@ export class ReadingService {
    * 后台任务面在此接线：导入/批量验证的探针口径与 search/probe 同一
    * fetcher 出口；timeoutMs 同源（探针与搜索对同一站点用同一耐心值）。
    * 部件（registry/shelf/jobs/local）总装后即 private——外部只经门面动词。
+   * 逐字段数值是直装缝：给了 `config` 就全按它读（逐字段值让位于活配置），
+   * 没有才把逐字段值装成一份静态读数——配置页的改动只走 `config` 那条路生效。
    */
   static async from(parts: {
     registry: SourceRegistry
@@ -155,6 +189,7 @@ export class ReadingService {
     local?: LocalBooks
     /** 宿主 `ctx.jobs` 的窄面（见 import-job.ts 的 JobHost）；缺省即不登记，任务语义不变 */
     jobHost?: JobHost
+    config?: ResolvedConfig
     localImportMaxBytes?: number
     searchParallel?: number
     tocMaxPages?: number
@@ -162,26 +197,18 @@ export class ReadingService {
     searchTimeoutMs?: number
     jsTimeoutMs?: number
   }): Promise<ReadingService> {
-    const searchTimeoutMs = parts.searchTimeoutMs ?? DEFAULT_TIMEOUT_MS
-    const jsTimeoutMs = parts.jsTimeoutMs ?? DEFAULT_JS_BUDGET_MS
+    const live = parts.config ?? staticLiveConfig(parts)
     // searchParallel ≤ 0 → 批循环 `i += 0` 永不终止（组合根直装也必须炸，不能挂起）
-    const searchParallel = parts.searchParallel ?? DEFAULT_SEARCH_PARALLEL
-    if (!Number.isInteger(searchParallel) || searchParallel < 1) {
-      throw new RangeError(`searchParallel 必须为正整数，收到 ${String(searchParallel)}`)
+    if (!Number.isInteger(live.searchParallel) || live.searchParallel < 1) {
+      throw new RangeError(`searchParallel 必须为正整数，收到 ${String(live.searchParallel)}`)
     }
     return new ReadingService(
-      {
-        searchParallel,
-        tocMaxPages: parts.tocMaxPages ?? 200,
-        contentMaxPages: parts.contentMaxPages ?? 50,
-      },
-      searchTimeoutMs,
-      jsTimeoutMs,
-      parts.localImportMaxBytes ?? DEFAULT_MAX_IMPORT_BYTES,
+      { tocMaxPages: parts.tocMaxPages ?? 200, contentMaxPages: parts.contentMaxPages ?? 50 },
+      live,
       parts.registry, parts.shelf, parts.cache, parts.fetcher,
       new SourceJobs({
         registry: parts.registry,
-        probe: (s) => probeSource(s, parts.fetcher, { timeoutMs: searchTimeoutMs, jsTimeoutMs }),
+        probe: (s) => probeSource(s, parts.fetcher, { timeoutMs: live.searchTimeoutMs, jsTimeoutMs: live.jsTimeoutMs }),
         ...(parts.jobHost === undefined ? {} : { host: parts.jobHost }),
       }),
       new SearchJobs(parts.jobHost === undefined ? {} : { host: parts.jobHost }),
@@ -241,7 +268,7 @@ export class ReadingService {
    *  同一源在导入期与门面两处探针拿回两个 verdict。 */
   async probe(id: string): Promise<ProbeResult> {
     const s = this.requireSource(id)
-    const r = await probeSource(s, this.fetcher, { timeoutMs: this.searchTimeoutMs, jsTimeoutMs: this.jsTimeoutMs })
+    const r = await probeSource(s, this.fetcher, { timeoutMs: this.live.searchTimeoutMs, jsTimeoutMs: this.live.jsTimeoutMs })
     await this.registry.edit((tx) => tx.setStatus(id, r.ok ? 'verified' : 'broken', r.error?.message, r.probedAt))
     return r
   }
@@ -294,7 +321,7 @@ export class ReadingService {
     const s = this.requireSource(id)
     const loginUrl = s.rules.loginUrl
     if (loginUrl === null) throw new Error(`源「${s.name}」未声明 loginUrl`)
-    const v = await evaluate('@js:' + loginUrl, engineContextOf(this.fetcher, s, { baseUrl: s.baseUrl, jsTimeoutMs: this.jsTimeoutMs }), 'rule')
+    const v = await evaluate('@js:' + loginUrl, engineContextOf(this.fetcher, s, { baseUrl: s.baseUrl, jsTimeoutMs: this.live.jsTimeoutMs }), 'rule')
     const text = firstValue(v, 'rule') ?? ''
     const cookies: Record<string, string> = {}
     for (const seg of text.split(';')) {
@@ -485,9 +512,9 @@ export class ReadingService {
     const sources = this.registry.list().filter((s) =>
       participates(s) && (want === undefined || want.length === 0 || want.includes(s.id)))
     const groups: SearchGroup[] = new Array(sources.length)
-    for (let i = 0; i < sources.length; i += this.cfg.searchParallel) {
+    for (let i = 0; i < sources.length; i += this.live.searchParallel) {
       if (opts?.shouldStop?.() === true) break
-      const batch = sources.slice(i, i + this.cfg.searchParallel)
+      const batch = sources.slice(i, i + this.live.searchParallel)
       await Promise.all(batch.map(async (s, j) => {
         if (opts?.shouldStop?.() === true) return         // 收手：该源不发了，结果里也就没有它
         const index = i + j
@@ -608,7 +635,7 @@ export class ReadingService {
     entry: ExploreEntry, page: number, emit: (g: SearchGroup) => void,
   ): Promise<void> {
     emit(await fetchExploreGroup(entry.source, entry.kindUrl, this.fetcher, {
-      timeoutMs: this.searchTimeoutMs, jsTimeoutMs: this.jsTimeoutMs, page,
+      timeoutMs: this.live.searchTimeoutMs, jsTimeoutMs: this.live.jsTimeoutMs, page,
       cache: this.exploreCache, epoch: entry.epoch,
     }))
   }
@@ -627,7 +654,7 @@ export class ReadingService {
     }
     try {
       // 请求语义全走搜索面（search-face.ts，与探针同一实现）：模板解析/组装/超时/解码/列表求值
-      const page = await fetchSearchPage(s, keyword, this.fetcher, this.searchTimeoutMs, this.jsTimeoutMs)
+      const page = await fetchSearchPage(s, keyword, this.fetcher, this.live.searchTimeoutMs, this.live.jsTimeoutMs)
       if (!page.ok) {
         return { ...base, error: { code: 'RuleMissing', message: page.message } }
       }
@@ -703,7 +730,7 @@ export class ReadingService {
     // 一张共享 vars 表：init 的 `@put:{n:"[property$=book_name]@content"}` 写进去，
     // 随后的 `@get:{n}` 字段规则与 tocUrl 模板才读得到（各次调用新建，不跨门面共享）。
     const subEval = makeSubEval(this.fetcher, s, {
-      vars: {}, book: bookMirrorOf(url, s.baseUrl, this.shelf.get(url)), jsTimeoutMs: this.jsTimeoutMs,
+      vars: {}, book: bookMirrorOf(url, s.baseUrl, this.shelf.get(url)), jsTimeoutMs: this.live.jsTimeoutMs,
     })
     const html = await this.fetchText(s, url)
     const { rules } = s
@@ -761,7 +788,7 @@ export class ReadingService {
     }
     // `book` 变量：目录规则常见 `book.bookUrl`（36小说网 chapterUrl）与 `book.origin`
     // （努努书坊 ruleTocUrl `{{book.origin}}/e/...`——源站点域名即注册表 baseUrl）
-    const subEval = makeSubEval(this.fetcher, s, { book: bookMirrorOf(bookUrl, s.baseUrl, this.shelf.get(bookUrl), bookUrl), jsTimeoutMs: this.jsTimeoutMs })
+    const subEval = makeSubEval(this.fetcher, s, { book: bookMirrorOf(bookUrl, s.baseUrl, this.shelf.get(bookUrl), bookUrl), jsTimeoutMs: this.live.jsTimeoutMs })
     const tocUrl = await tocUrlOf(s.rules.ruleTocUrl, s.rules.ruleDetailInit, bookUrl,
       () => this.fetchText(s, bookUrl), subEval)
     const extract = async (page: Page): Promise<ChapterEntry[]> => {
@@ -865,7 +892,7 @@ export class ReadingService {
     const subEval = makeSubEval(this.fetcher, s, {
       book: bookMirrorOf(bookKey, s.baseUrl, shelfBook, bookKey),
       chapter: { title: target.name, index: chIndex, url: target.url, baseUrl: target.url },
-      jsTimeoutMs: this.jsTimeoutMs,
+      jsTimeoutMs: this.live.jsTimeoutMs,
     })
     // 「空正文必炸」管的是**首屏**：跟进链上的续页取不出正文，只说明这一章到此为止，
     // 不许把已经拼好的首屏一起判死（真机形状：最后一章的「下一章」链接指向书详情页，
@@ -960,7 +987,7 @@ export class ReadingService {
    *  webView 选项不支持——按普通请求照常尝试（如实，矩阵行 `b-opt-webview`）。 */
   private async fetchPage(s: NovelSource, url: string): Promise<Page> {
     const plan = assembleRequest(url, {}, s.baseUrl)
-    const page = await this.fetcher.fetchPage(plan.url, fetchInitOf(plan, await resolveHeaders(this.fetcher, s, { jsTimeoutMs: this.jsTimeoutMs })))
+    const page = await this.fetcher.fetchPage(plan.url, fetchInitOf(plan, await resolveHeaders(this.fetcher, s, { jsTimeoutMs: this.live.jsTimeoutMs })))
     // url = 落地地址（相对链接基准，浏览器语义）；requestedUrl 仅诊断用（被跳转走时报错点名）
     return { url: page.finalUrl, requestedUrl: plan.url, body: decodeBody(page, plan.charset) }
   }
@@ -970,7 +997,7 @@ export class ReadingService {
   private async fetchText(s: NovelSource, url: string, timeoutMs?: number): Promise<string> {
     const plan = assembleRequest(url, {}, s.baseUrl)
     const { text } = await fetchTextPage(this.fetcher, plan.url,
-      { ...fetchInitOf(plan, await resolveHeaders(this.fetcher, s, { jsTimeoutMs: this.jsTimeoutMs })), ...(timeoutMs === undefined ? {} : { timeoutMs }) }, plan.charset)
+      { ...fetchInitOf(plan, await resolveHeaders(this.fetcher, s, { jsTimeoutMs: this.live.jsTimeoutMs })), ...(timeoutMs === undefined ? {} : { timeoutMs }) }, plan.charset)
     return text
   }
 }
@@ -1053,10 +1080,10 @@ export function normalizeChapterText(raw: string): string {
 
 // ── 模块级助手 ─────────────────────────────────────────────────────────
 
-function createFetcherWith(fetchImpl?: typeof globalThis.fetch, proxyUrl?: string | null): Fetcher {
+function createFetcherWith(fetchImpl?: typeof globalThis.fetch, proxyUrl?: ValueSource<string | null>): Fetcher {
   return createFetcher({
     ...(fetchImpl === undefined ? {} : { fetchImpl }),
-    ...(proxyUrl === undefined || proxyUrl === null ? {} : { proxyUrl }),
+    ...(proxyUrl === undefined ? {} : { proxyUrl }),
   })
 }
 

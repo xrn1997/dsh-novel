@@ -5,7 +5,7 @@ import { resolveConfig, type NovelConfig } from './config.js'
 import { ensureUnhandledGuard } from './engine/js-sandbox.js'
 import type { JobHost } from './services/import-job.js'
 import { log, setLogSink } from './services/log.js'
-import { readSystemProxy, resolveProxyUrl } from './services/proxy.js'
+import { readSystemProxy, redactProxyUrl, resolveProxyUrl } from './services/proxy.js'
 import { ReadingService } from './services/reading.js'
 import { novelDir } from './services/storage.js'
 import { NOVEL_API_PREFIX } from './shared/wire.js'
@@ -56,6 +56,32 @@ function hostArgs(args: unknown[]): [unknown, ...unknown[]] {
   return [head, ...rest.map(textOf)]
 }
 
+/** `loader/volatile-update` 的载荷：0.2.1-rc.2 的 Loader 实测为顶层路径段数组（`string[][]`），
+ *  且宿主会捕获监听器抛出的错误、不中断配置保存。解析仍按 unknown 收窄并容忍字符串 / 嵌套段：
+ *  那是面向旧代次 Loader 的跨版本硬化，不是对现行形状的猜测——异形载荷上只许留下可读痕迹，
+ *  不许把纯观测升级成故障。数组段按段拼成可读路径；只有顶层单段的 `proxyUrl` 才重算代理。
+ *  最外层兜底吞掉连字符串化都会抛的极端载荷（revoked Proxy、无原型对象…）。 */
+function readVolatilePaths(payload: unknown): { text: string; proxyUrl: boolean } {
+  try {
+    const entries = Array.isArray(payload) ? payload : [payload]
+    const parts: string[] = []
+    let proxyUrl = false
+    for (const entry of entries) {
+      if (Array.isArray(entry)) {
+        parts.push(entry.join('.'))
+        if (entry.length === 1 && entry[0] === 'proxyUrl') proxyUrl = true
+      } else {
+        const text = String(entry)
+        parts.push(text)
+        if (text === 'proxyUrl') proxyUrl = true
+      }
+    }
+    return { text: parts.join(', '), proxyUrl }
+  } catch {
+    return { text: '(不可读的变更路径)', proxyUrl: false }
+  }
+}
+
 /**
  * Cordis 插件入口：ReadingService 异步初始化，routes/tools 两 effect 等 ready 后注册。
  * ready 失败吞掉不炸整树（源数据损坏不值得整个 profile 起不来）——路由/工具不挂载，日志留痕。
@@ -83,8 +109,30 @@ export function apply(ctx: Context, config?: NovelConfig): void {
   // 模块级 sink 不能指向已卸载实例的 logger：卸载后晚到的留痕会把对象送进旧 ctx。
   // 复位也归组合根这一处（sink 是模块级单点）。
   ctx.effect(() => () => { setLogSink(console) }, 'dsh-novel: log sink')
-  // 守卫放到 logger/sink 装好之后：ctx.logger 是宿主成员，旧代次缺失时 apply 会同步抛错；
-  // 若先置 applied，抛错后没有 effect 可复位，后续重试会被 duplicate apply 挡死。
+
+  // volatile 热更只留痕、不重建：各消费方在用时读当前值（配置页改完即生效）；代理需重算一次，
+  // 因为 fallback（环境变量 / 系统代理）启动期只取一次，显式值热更会翻转「显式 > fallback」的结果。
+  // 代理日志必须过 redactProxyUrl：地址可能带 userinfo 密码。
+  let proxyFor: (() => string | null) | null = null
+  // 载荷照 unknown 收、解析归 readVolatilePaths：现行 Loader 的形状已核实（顶层 `string[][]`），
+  // 但旧代次的异形载荷仍可能到达；按窄镜像硬吃会把纯观测变成运行期 throw。
+  const events = ctx as unknown as {
+    on(event: 'loader/volatile-update', listener: (payload: unknown) => void): () => boolean
+  }
+  ctx.effect(() => {
+    const off = events.on('loader/volatile-update', (payload) => {
+      const changed = readVolatilePaths(payload)
+      log.info(`配置热更: ${changed.text}`)
+      if (proxyFor !== null && changed.proxyUrl) {
+        const next = proxyFor()
+        log.info(`出站代理: ${next === null ? '(直连)' : redactProxyUrl(next)}`)
+      }
+    })
+    return () => { off() }
+  }, 'dsh-novel: volatile config log')
+
+  // 守卫放到宿主成员同步调用（logger/sink、volatile 监听）都装好之后：旧代次缺成员时 apply 会
+  // 同步抛错；若先置 applied，抛错后没有 effect 可复位，后续重试会被 duplicate apply 挡死。
   applied = true
 
   /** 入口各注册共用的同一支时序舞——等 ready、被取消就收手、拆时调 disposer 并复位 applied——
@@ -135,22 +183,24 @@ export function apply(ctx: Context, config?: NovelConfig): void {
   const ready = (async () => {
     const dir = resolved.dataDir ?? novelDir()
     // 出站代理：Node 的 fetch（undici）不读系统代理，有代理才通的站点直连会被 302/重置
-    // （实测笔趣阁）——用户配的 proxyUrl > 环境变量 > Windows 系统代理 > 直连，见 services/proxy.ts
-    const proxyUrl = resolveProxyUrl({
-      configProxy: resolved.proxyUrl,
-      env: process.env,
-      systemProxy: await readSystemProxy(),
-    })
+    // （实测笔趣阁）——fallback（环境变量 > Windows 系统代理）启动期只取一次，显式配置覆盖它；
+    // 完整优先级见 services/proxy.ts 的 resolveProxyUrl。
+    const fallbackProxy = await resolveProxyUrl({ env: process.env, systemProxy: await readSystemProxy() })
+    const proxyUrl = (): string | null => {
+      const explicit = resolved.proxyUrl?.trim()
+      return explicit === undefined || explicit === ''
+        ? fallbackProxy
+        : resolveProxyUrl({ configProxy: explicit, env: {}, systemProxy: null })
+    }
+    proxyFor = proxyUrl
     // 启动提示走 info 而非 warn：一是它是信息不是异常，二是宿主缺省级别闸吞 warn、
     // 只放行 error/info——想让这条真进得了宿主日志面就得走 info（本机经 console 腿走 stdout）。
-    if (proxyUrl !== null) log.info(`出站代理: ${proxyUrl}`)
+    const initialProxy = proxyUrl()
+    if (initialProxy !== null) log.info(`出站代理: ${redactProxyUrl(initialProxy)}`)
     const service = await ReadingService.create({
       dir,
-      searchTimeoutMs: resolved.searchTimeoutMs,
-      searchParallel: resolved.searchParallel,
-      jsTimeoutMs: resolved.jsTimeoutMs,
-      cacheMaxBytes: resolved.cacheMaxBytes,
-      localImportMaxBytes: resolved.localImportMaxBytes,
+      config: resolved,
+      // 代理走独立的 proxyUrl 源而非 config.proxyUrl：只传 config 的直装调用方不该因此被接上网关。
       proxyUrl,
       // 任务生命周期交宿主注册表（身份 `<kind>-N` / running→终态 / 取消入口）；
       // 本插件的 JobState 仍是计数与明细的唯一载体，单任务槽互斥也不变。
@@ -165,15 +215,21 @@ export function apply(ctx: Context, config?: NovelConfig): void {
   // 卸载时把防抖写落地：书架与源注册表的落盘都带防抖窗口（shelf = 100ms），
   // 宿主重启（SIGINT → fiber 卸载）会把窗口里的最后一条写丢掉——「刚读到的位置」正好死在
   // 窗口里（进度是高频写，退出那一刻往往就是最后一次）。注册得早 ⇒ 拆得晚。
+  // 同一处顺手关掉出站 dispatcher：代理连接池不该活过插件实例（Fetcher.dispose）。
   ctx.effect(() => {
     let service: ReadingService | null = null
     void ready.then((r) => { service = r?.service ?? null })
-    return () => { if (service !== null) void service.flush() }
-  }, 'dsh-novel: flush shelf on dispose')
+    return () => {
+      if (service !== null) {
+        void service.flush()
+        service.dispose()
+      }
+    }
+  }, 'dsh-novel: flush shelf + close fetcher')
 
   afterReady(ready, (r) => {
     const handler = createApiHandler(r.service, {
-      exportDelayMs: resolved.exportDelayMs,
+      exportDelayMs: () => resolved.exportDelayMs,
     })
     return c.webServer.register({
       kind: 'prefix',

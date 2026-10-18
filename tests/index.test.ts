@@ -20,8 +20,21 @@ function fakeCtx() {
     warn: (...args: unknown[]) => { logs.push({ name, level: 'warn', args }) },
     error: (...args: unknown[]) => { logs.push({ name, level: 'error', args }) },
   })
+  /** 宿主事件面（cordis 的 `ctx.on`）：`loader/volatile-update` 是配置热更的信号口，
+   *  假面按事件名收 listener，`emit` 按名分发。disposer 必须真摘 handler——否则「dispose 后
+   *  不再留痕」这条性质在假宿主上无从验证（旧假面返回 no-op，监听会活过卸载）。 */
+  const handlers: Array<{ event: string; listener: (...args: any[]) => void }> = []
   const ctx = {
     logger: namedLogger,
+    on: (event: string, listener: (...args: any[]) => void) => {
+      const entry = { event, listener }
+      handlers.push(entry)
+      return () => {
+        const i = handlers.indexOf(entry)
+        if (i !== -1) handlers.splice(i, 1)
+        return true
+      }
+    },
     effect: (fn: () => (() => void), label?: string) => {
       const d = fn()
       calls.push({ kind: 'off', label })
@@ -41,7 +54,15 @@ function fakeCtx() {
     },
   }
   const disposers: Array<() => void> = []
-  return { ctx: ctx as any, calls, logs, disposeAll: () => { for (const d of disposers) d() } }
+  return {
+    ctx: ctx as any,
+    calls,
+    logs,
+    emit: (event: string, ...args: any[]) => {
+      for (const h of handlers) if (h.event === event) h.listener(...args)
+    },
+    disposeAll: () => { for (const d of disposers) d() },
+  }
 }
 
 const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms))
@@ -61,9 +82,10 @@ describe('Cordis 插件入口', () => {
   it('身份与 Config（schemastery：默认值与值域都住 schema，外层 default({}) 兜 cordis 缺省行）', () => {
     expect(name).toBe('@xrn1997/dsh-novel')
     expect(inject).toEqual(['webServer', 'tools', 'jobs'])
-    expect(Config({} as any)).toMatchObject({ searchTimeoutMs: DEFAULT_TIMEOUT_MS })
-    expect(Config(undefined as any)).toMatchObject({ searchTimeoutMs: DEFAULT_TIMEOUT_MS })
-    expect(Config({ dataDir: 'D:/x' } as any)).toMatchObject({ dataDir: 'D:/x', searchTimeoutMs: DEFAULT_TIMEOUT_MS })
+    const cfg = Config({} as any) as any
+    expect(cfg.searchTimeoutMs.get()).toBe(DEFAULT_TIMEOUT_MS)
+    expect((Config(undefined as any) as any).searchTimeoutMs.get()).toBe(DEFAULT_TIMEOUT_MS)
+    expect(Config({ dataDir: 'D:/x' } as any).dataDir).toBe('D:/x')
     expect(() => Config({ dataDir: 1 } as any)).toThrow()
   })
   it('配置值域校验：searchParallel ≤ 0 加载期响亮失败（否则批循环 i+=0 永久挂起）', () => {
@@ -125,6 +147,115 @@ describe('Cordis 插件入口', () => {
     await tick(200)                    // 等过 ready 窗口，确认之后也不会补注册
     expect(calls.filter((c) => c.kind === 'route')).toHaveLength(0)
     expect(calls.filter((c) => c.kind === 'tool')).toHaveLength(0)
+  })
+  it('loader/volatile-update：变更路径进日志', async () => {
+    const dir = await makeTempDir('novel-volatile-')
+    const { ctx, calls, logs, emit, disposeAll } = fakeCtx()
+    try {
+      apply(ctx, { dataDir: dir })
+      await waitFor(() => calls.some((c) => c.kind === 'route'))
+      emit('loader/volatile-update', [['searchParallel']])
+      await waitFor(() => logs.some((l) => l.args.some((a) => String(a).includes('配置热更: searchParallel'))), 1500)
+      expect(
+        logs.some((l) => l.args.some((a) => String(a).includes('配置热更: searchParallel'))),
+        '变更路径没有进日志（volatile 热更在配置页上是静默的）',
+      ).toBe(true)
+    } finally {
+      disposeAll()
+    }
+  })
+  /** 现行 Loader 的载荷是顶层 `string[][]`（0.2.1-rc.2 实测）。这两条钉的是跨版本硬化：
+   *  旧代次 / 异形载荷上监听器只许留下可读痕迹，不许把宿主的配置保存派发带崩。 */
+  it('loader/volatile-update：字符串载荷不抛、照常留痕', async () => {
+    const dir = await makeTempDir('novel-volatile-str-')
+    const { ctx, calls, logs, emit, disposeAll } = fakeCtx()
+    try {
+      apply(ctx, { dataDir: dir })
+      await waitFor(() => calls.some((c) => c.kind === 'route'))
+      expect(() => emit('loader/volatile-update', 'searchParallel')).not.toThrow()
+      const hit = () => logs.some((l) => l.args.some((a) => String(a).includes('配置热更: searchParallel')))
+      await waitFor(hit, 1500)
+      expect(hit(), '字符串载荷没有进日志').toBe(true)
+    } finally {
+      disposeAll()
+    }
+  })
+  it('loader/volatile-update：混合/嵌套载荷不抛，逐段可读且代理仍会重算', async () => {
+    const dir = await makeTempDir('novel-volatile-mixed-')
+    const { ctx, calls, logs, emit, disposeAll } = fakeCtx()
+    const proxyLines = () => logs.filter((l) => l.args.some((a) => String(a).includes('出站代理:')))
+    try {
+      apply(ctx, { dataDir: dir })
+      await waitFor(() => calls.some((c) => c.kind === 'route'))
+      const before = proxyLines().length
+      expect(() => emit('loader/volatile-update', [['searchParallel'], 'proxyUrl', ['a', 'b'], 42])).not.toThrow()
+      const changedLine = () =>
+        logs.some((l) => l.args.some((a) => String(a) === '配置热更: searchParallel, proxyUrl, a.b, 42'))
+      await waitFor(changedLine, 1500)
+      expect(changedLine(), '混合载荷的路径没有逐段留痕').toBe(true)
+      await waitFor(() => proxyLines().length > before, 1500)
+      expect(proxyLines().length, '字符串形态的顶层 proxyUrl 没触发热更重算').toBe(before + 1)
+    } finally {
+      disposeAll()
+    }
+  })
+  it('代理留痕脱敏：初始与 volatile 热更都不回显 userinfo 密码', async () => {
+    const dir = await makeTempDir('novel-proxy-log-')
+    const { ctx, calls, logs, emit, disposeAll } = fakeCtx()
+    const proxyLines = () => logs.filter((l) => l.args.some((a) => String(a).includes('出站代理:')))
+    try {
+      apply(ctx, { dataDir: dir, proxyUrl: 'http://user:pass@127.0.0.1:9' })
+      await waitFor(() => calls.some((c) => c.kind === 'route'))
+      await waitFor(() => proxyLines().length >= 1)
+      emit('loader/volatile-update', [['proxyUrl']])
+      await waitFor(() => proxyLines().length >= 2, 1500)
+      expect(proxyLines().length, '初始与热更各应留一条代理日志').toBeGreaterThanOrEqual(2)
+      for (const l of proxyLines()) {
+        expect(l.args.some((a) => String(a).includes('pass')), '代理日志漏出 userinfo 密码').toBe(false)
+        expect(l.args.some((a) => String(a).includes('***@127.0.0.1:9'))).toBe(true)
+      }
+    } finally {
+      disposeAll()
+    }
+  })
+  it('dispose：volatile 监听随 effect 摘除（卸载后 emit 不再留痕）', async () => {
+    const dir = await makeTempDir('novel-volatile-off-')
+    const { ctx, calls, logs, emit, disposeAll } = fakeCtx()
+    try {
+      apply(ctx, { dataDir: dir })
+      await waitFor(() => calls.some((c) => c.kind === 'route'))
+      emit('loader/volatile-update', [['searchParallel']])
+      await waitFor(() => logs.some((l) => l.args.some((a) => String(a).includes('配置热更: searchParallel'))), 1500)
+      disposeAll()
+      // sink 随卸载复位回 console：残留的监听会走 console.info 而不是假宿主 logger，故盯那一腿。
+      const seen: string[] = []
+      const spy = vi.spyOn(console, 'info').mockImplementation((...args: unknown[]) => { seen.push(args.map(String).join(' ')) })
+      try {
+        emit('loader/volatile-update', [['searchParallel']])
+      } finally {
+        spy.mockRestore()
+      }
+      expect(
+        seen.filter((line) => line.includes('配置热更')),
+        '卸载后 on 的 disposer 没摘 handler，监听仍在留痕',
+      ).toEqual([])
+    } finally {
+      disposeAll()
+    }
+  })
+  it('ctx.on 缺失时 apply 抛错但不锁死 applied（监听注册排在守卫置位之前）', async () => {
+    const dir = await makeTempDir('novel-volatile-no-on-')
+    const bad = fakeCtx()
+    ;(bad.ctx as any).on = undefined
+    expect(() => apply(bad.ctx, { dataDir: dir })).toThrow(/on is not a function/)
+    const good = fakeCtx()
+    try {
+      apply(good.ctx, { dataDir: dir })
+      await waitFor(() => good.calls.some((c) => c.kind === 'route'))
+      expect(good.calls.filter((c) => c.kind === 'route')).toHaveLength(1)
+    } finally {
+      good.disposeAll()
+    }
   })
   it('初始化失败（dataDir 指向文件）：不炸、零注册', async () => {
     // mkdtemp 建目录再换成文件：Date.now() 命名在同一毫秒内会撞已存在路径（writeFile EEXIST）
