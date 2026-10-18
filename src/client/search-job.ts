@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { queries, ROUTES } from '../shared/wire.js'
+import { bodies, queries, ROUTES } from '../shared/wire.js'
 import type { SearchGroup, SearchJobSnapshot } from '../shared/wire.js'
 import { JOB_POLL_MS } from './util.js'
-import type { ClientCoreDeps } from './deps.js'
+import type { JobWatchDeps } from './deps.js'
 
 /**
  * 浏览器半的「聚合搜索后台任务」接线：提交一轮 → 盯住它（SSE 推送优先，快照轮询兜底）→
@@ -60,7 +60,7 @@ export interface SearchJobView {
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
-export function useSearchJob(deps: ClientCoreDeps): SearchJobView {
+export function useSearchJob(deps: JobWatchDeps): SearchJobView {
   const acc = useRef<Acc | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const stream = useRef<AbortController | null>(null)
@@ -126,7 +126,7 @@ export function useSearchJob(deps: ClientCoreDeps): SearchJobView {
 
   const armPoll = (): void => {
     if (timer.current !== null) clearTimeout(timer.current)
-    timer.current = setTimeout(() => { void poll() }, JOB_POLL_MS)
+    timer.current = setTimeout(() => { void poll() }, deps.jobPollMs ?? JOB_POLL_MS)
   }
 
   /** 地基通道：读一次快照。读不到就收手（读不到还转圈只会刷屏）。 */
@@ -184,7 +184,7 @@ export function useSearchJob(deps: ClientCoreDeps): SearchJobView {
     if (kw === '') return
     void (async () => {
       try {
-        const { jobId } = await deps.apiSend<{ jobId: string }>('POST', ROUTES.searchJob.path, { keyword: kw })
+        const { jobId } = await deps.apiSend<{ jobId: string }>('POST', ROUTES.searchJob.path, bodies.searchJob(kw))
         // 提交在飞时挂载恢复也可能已经落地——POST 的结果说了算（新一轮替换上一轮），故此后置
         begin({ id: jobId, keyword: kw, total: 0, cancelled: false, since: 0, groups: [] })
       } catch (e) {

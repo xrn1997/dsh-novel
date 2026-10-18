@@ -15,7 +15,7 @@ import { navigate, routeStore, setPref } from '../../src/client/store.js'
 import { LOCAL_SOURCE_ID, ROUTES, SEARCH_BOOKS_CAP, paramRoutes, queries } from '../../src/shared/wire.js'
 import type { SearchJobSnapshot } from '../../src/shared/wire.js'
 import { makeCoreDeps, makeDeps, makeReaderDeps } from './fake-deps.js'
-import type { CoreDepsOverrides, FakeCoreDeps, FakeReaderDeps, FakeSettingsDeps, ReaderDepsOverrides, SettingsDepsOverrides } from './fake-deps.js'
+import type { DepsOverrides, FakeViewDeps, FakeReaderDeps, FakeSettingsDeps } from './fake-deps.js'
 import type {
   ChapterContent, ChapterEntry, ContentNode, JobState, LocalImportResponse, LocalImportWarning,
   NavigationItem, ReadingTarget, SearchGroup, SourcePublic,
@@ -27,7 +27,7 @@ import type {
  * 桩工厂统一到 fake-deps.ts。
  */
 
-const coreDeps = (over: CoreDepsOverrides): FakeCoreDeps => makeCoreDeps(over)
+const coreDeps = (over: DepsOverrides): FakeViewDeps => makeCoreDeps(over)
 
 afterEach(cleanup)
 
@@ -1151,7 +1151,7 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
     counts: { ok: 1, failed: 0, dupSkipped: 0, replaced: 0 },
     issues: [], fileErrors: [], startedAt: 0,
   }
-  const settingsDeps = (over: SettingsDepsOverrides = {}, sources: SourcePublic[] = [unverifiedSrc]): FakeSettingsDeps =>
+  const settingsDeps = (over: DepsOverrides = {}, sources: SourcePublic[] = [unverifiedSrc]): FakeSettingsDeps =>
     makeDeps({ apiGet: vi.fn(async (path: string) => (path === 'sources' ? sources : null)), ...over })
 
   // 忽略现场是模块级 store（source-inbox-ui.ts）：不复位会让上一个用例的「已忽略」漏进
@@ -1407,7 +1407,7 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
 })
 
 describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run）', () => {
-  const readerDeps = (over: ReaderDepsOverrides = {}, shelf: unknown[] = []): FakeReaderDeps => makeReaderDeps(over, shelf)
+  const readerDeps = (over: DepsOverrides = {}, shelf: unknown[] = []): FakeReaderDeps => makeReaderDeps(over, shelf)
 
   const reader = (deps: FakeReaderDeps): ReturnType<typeof createElement> =>
     createElement(ReaderView, { sourceId: 's1', bookKey: 'k1', title: '斗罗', deps })
@@ -1650,7 +1650,7 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
   // 若它与第 1 章同文，页面里就会出现两个「见第二章」按钮（用例要按角色取唯一元素）。
   const rich2: ChapterContent = { kind: 'rich', documentId: 'd2', nodes: [para('r1', '第三章正文')] }
 
-  const richDeps = (over: ReaderDepsOverrides = {}): FakeReaderDeps => makeReaderDeps({
+  const richDeps = (over: DepsOverrides = {}): FakeReaderDeps => makeReaderDeps({
     apiGet: vi.fn(async (p: string) => {
       if (String(p).includes('navigation')) return { chapters, items: navItems }
       if (String(p).includes('local/document')) return { kind: 'text', text: '脚注正文' }

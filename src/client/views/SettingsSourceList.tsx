@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { parseCookieString } from '../importer.js'
-import { paramRoutes, ROUTES } from '../../shared/wire.js'
+import { bodies, paramRoutes, ROUTES } from '../../shared/wire.js'
 import { prodDeps } from '../deps.js'
 import type { SettingsDeps } from '../deps.js'
 import { startSourceVerification } from '../jobs.js'
@@ -85,7 +85,7 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
    *  计数用服务端回包的 `updated`（未知 id 会被静默跳过，报「我勾了几个」会说谎）。 */
   const batchEnabled = (enabled: boolean): void => {
     const ids = [...ui.selection]
-    submit(() => deps.apiSend<{ updated: number }>('POST', ROUTES.sourcesBatchEnabled.path, { ids, enabled }), (r) => {
+    submit(() => deps.apiSend<{ updated: number }>('POST', ROUTES.sourcesBatchEnabled.path, bodies.batchEnabled(ids, enabled)), (r) => {
       deps.pushOk(`${enabled ? '已启用' : '已停用'} ${r.updated} 个源`)
       onChanged()
     })
@@ -94,7 +94,7 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
     if (pending === null || delBusy) return          // 在途防重：双击「确认删除」不许双 POST（修过的真双写窗口）
     const ids = pending.ids                          // 点击时快照，不随列表变化重算
     setDelBusy(true)
-    void deps.apiSend<{ removed: number }>('POST', ROUTES.sourcesBatchDelete.path, { ids }).then((r) => {
+    void deps.apiSend<{ removed: number }>('POST', ROUTES.sourcesBatchDelete.path, bodies.ids(ids)).then((r) => {
       setPending(null)
       setDelBusy(false)
       clearSelection()                               // 已删的 id 留在选择集里是幽灵勾选（动作条计数虚高、后续批量动作带死 id）
@@ -111,7 +111,7 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
   const toggleEnabled = (s: SourcePublic, next: boolean): Promise<boolean> => {
     const fb = toggleFeedback(rowAnchorOf(s.id), deps)
     fb.inFlight()
-    return deps.apiSend('POST', paramRoutes.sourceEnabled(s.id), { enabled: next }).then(() => {
+    return deps.apiSend('POST', paramRoutes.sourceEnabled(s.id), bodies.enabled(next)).then(() => {
       fb.settle(true)
       onChanged()
       return true
@@ -479,7 +479,7 @@ function SourceAuthPane({ source, onDone, deps = prodDeps }: {
       window.open(source.baseUrl, '_blank', 'noopener,noreferrer')
       return
     }
-    void deps.apiSend<{ mode?: string; loginUrl?: string }>('POST', paramRoutes.sourceAuth(source.id), { runLogin: true }).then((r) => {
+    void deps.apiSend<{ mode?: string; loginUrl?: string }>('POST', paramRoutes.sourceAuth(source.id), bodies.runLogin()).then((r) => {
       if (r.mode === 'manual' && typeof r.loginUrl === 'string' && r.loginUrl !== '') {
         window.open(r.loginUrl, '_blank', 'noopener,noreferrer')
         return
@@ -489,7 +489,7 @@ function SourceAuthPane({ source, onDone, deps = prodDeps }: {
     }, (e) => deps.pushError(`去登录失败：${e instanceof Error ? e.message : String(e)}`, rowAnchorOf(source.id)))
   }
   const save = (): void => {
-    void deps.apiSend('POST', paramRoutes.sourceAuth(source.id), { cookies: parseCookieString(cookie) }).then(() => {
+    void deps.apiSend('POST', paramRoutes.sourceAuth(source.id), bodies.authCookies(parseCookieString(cookie))).then(() => {
       setCookie('')                      // 输入值即刻清空
       deps.pushOk('已保存登录态')
       onDone()

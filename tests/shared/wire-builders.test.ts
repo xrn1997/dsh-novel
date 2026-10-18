@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { encodeQuery, LOCAL_SOURCE_ID, PARAMS, paramRoutes, pickShelfMeta, planarNavigation, queries, ROUTES, SHELF_META, shelfBody } from '../../src/shared/wire.js'
+import { bodies, BODY, encodeQuery, LOCAL_SOURCE_ID, PARAMS, paramRoutes, pickShelfMeta, planarNavigation, queries, readBodies, ROUTES, SHELF_META, shelfBody } from '../../src/shared/wire.js'
 import { LOCAL_SOURCE_ID as NODE_LOCAL_SOURCE_ID } from '../../src/services/localbooks.js'
 
 /**
@@ -169,5 +169,57 @@ describe('漂移守卫', () => {
     expect(paramRoutes.shelfKey(bookKey)).toBe(`shelf/${encodeURIComponent(bookKey)}`)
     // 统一断言：任何 client 装配点产出的 shelf 路径都要能被这个构造器生成
     expect(paramRoutes.shelfKey('local:00000000-0000-0000-0000-000000000000')).toBe(`shelf/${encodeURIComponent('local:00000000-0000-0000-0000-000000000000')}`)
+  })
+})
+
+describe('写路由 body：构造器与读口同源（wire 单点承诺的另一半）', () => {
+  it('body 构造器计数钉死：9 条写路由各一对，加路由必须加一对', () => {
+    expect(Object.keys(bodies)).toHaveLength(9)
+    expect(Object.keys(readBodies)).toHaveLength(8)
+  })
+
+  it('每条 shape 都能 round-trip：构造器产的东西，读口原样收回来', () => {
+    const files = [{ name: 'a.json', text: '[]' }, { name: 'b.json', text: '{}' }]
+    expect(readBodies.import(bodies.import(files))).toEqual({ files })
+    const ids = ['s1', 's2']
+    expect(readBodies.ids(bodies.ids(ids))).toEqual(ids)
+    expect(readBodies.keys(bodies.keys(['local:1']))).toEqual(['local:1'])
+    expect(readBodies.enabled(bodies.enabled(false))).toBe(false)
+    expect(readBodies.batchEnabled(bodies.batchEnabled(ids, true))).toEqual({ ids, enabled: true })
+    expect(readBodies.searchJob(bodies.searchJob('三体'))).toEqual({ keyword: '三体' })
+    expect(readBodies.searchJob(bodies.searchJob('三体', ids))).toEqual({ keyword: '三体', sourceIds: ids })
+    expect(readBodies.exploreList(bodies.exploreList('s1', '玄幻'))).toEqual({ sourceId: 's1', kind: '玄幻' })
+    expect(readBodies.auth(bodies.runLogin())).toEqual({ mode: 'run-login' })
+    const cookies = { token: 'abc' }
+    expect(readBodies.auth(bodies.authCookies(cookies))).toEqual({ mode: 'cookies', cookies })
+    expect(readBodies.auth(bodies.authCookies(cookies, { 'user-agent': 'x' })))
+      .toEqual({ mode: 'cookies', cookies, headers: { 'user-agent': 'x' } })
+  })
+
+  it('键名只有一处字面量：构造器写的键就是读口认的键（改名不会两边各自漂移）', () => {
+    expect(bodies.ids(['x'])).toHaveProperty(BODY.ids)
+    expect(bodies.keys(['x'])).toHaveProperty(BODY.keys)
+    expect(bodies.enabled(true)).toHaveProperty(BODY.enabled)
+    expect(bodies.runLogin()).toHaveProperty(BODY.runLogin)
+    expect(bodies.authCookies({})).toHaveProperty(BODY.cookies)
+    // 与 query 同名的业务键沿用 PARAMS——同一个业务名词不许有第二个字面量
+    expect(bodies.searchJob('k')).toHaveProperty(PARAMS.keyword)
+    expect(bodies.searchJob('k', ['s']).hasOwnProperty(PARAMS.sourceIds)).toBe(true)
+    expect(bodies.exploreList('s', 'k')).toHaveProperty(PARAMS.sourceId)
+    expect(bodies.exploreList('s', 'k')).toHaveProperty(PARAMS.kind)
+  })
+
+  it('读口拒得如实：空数组、类型错、空白串都点名，不静默放行也不折成空结果', () => {
+    expect(() => readBodies.ids({ ids: [] })).toThrow(/非空/)
+    expect(() => readBodies.ids({ ids: [1] })).toThrow(/string\[\]/)
+    expect(() => readBodies.enabled({ enabled: 'true' })).toThrow(/boolean/)
+    expect(() => readBodies.batchEnabled({ ids: ['s'] })).toThrow(/enabled/)
+    expect(() => readBodies.searchJob({ keyword: '   ' })).toThrow(/缺 body 字段/)
+    expect(() => readBodies.searchJob({ keyword: 'k', sourceIds: 's1' })).toThrow(/需为 string\[\]/)
+    expect(() => readBodies.exploreList({ sourceId: 's' })).toThrow(/kind/)
+    expect(() => readBodies.auth(null)).toThrow(/cookies/)
+    expect(() => readBodies.auth({ cookies: [] })).toThrow(/cookies/)
+    // 认不出的 headers 不再静默丢掉（原先整字段被忽略＝拿半份配置冒充录入了）
+    expect(() => readBodies.auth({ cookies: {}, headers: 'x' })).toThrow(/headers/)
   })
 })

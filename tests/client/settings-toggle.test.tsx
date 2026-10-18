@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import type { ReactNode } from 'react'
 import { SourceList } from '../../src/client/views/SettingsSourceList.js'
 import { makeDeps } from './fake-deps.js'
-import type { FakeSettingsDeps, SettingsDepsOverrides } from './fake-deps.js'
+import type { FakeSettingsDeps, DepsOverrides } from './fake-deps.js'
 import { resetSourceListUi, UNGROUPED } from '../../src/client/source-list.js'
 import type { SourcePublic } from '../../src/client/views/types.js'
 
@@ -104,7 +104,7 @@ describe('SourceList 启停开关接线（deps seam 驱动）', () => {
  *  按状态出，不随 enabled 消失（病史：`!enabled` 门让停用源既点不动单源验证，又照样出现在
  *  待办收件箱的批量重验 id 集里，两个入口口径打架）。 */
 describe('SourceList 行内验证入口与启停正交（编排收进 jobs.ts 领域动作）', () => {
-  const panel = (over: Partial<SourcePublic>, depsOver: SettingsDepsOverrides = {}): {
+  const panel = (over: Partial<SourcePublic>, depsOver: DepsOverrides = {}): {
     node: ReactNode; deps: FakeSettingsDeps; onChanged: ReturnType<typeof vi.fn>
   } => {
     const deps = makeDeps(depsOver)

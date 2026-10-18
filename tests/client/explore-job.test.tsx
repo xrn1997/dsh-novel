@@ -5,7 +5,7 @@ import { ApiClientError } from '../../src/client/api.js'
 import { toRound, useExploreJob } from '../../src/client/explore-job.js'
 import type { ExploreBook, ExploreSnapshot } from '../../src/shared/wire.js'
 import { makeCoreDeps } from './fake-deps.js'
-import type { CoreDepsOverrides } from './fake-deps.js'
+import type { DepsOverrides } from './fake-deps.js'
 
 afterEach(cleanup)
 
@@ -26,7 +26,7 @@ function Probe({ deps }: { deps: ReturnType<typeof makeCoreDeps> }): null { seen
 
 /** 假依赖：读面按用例给的序列逐次吐快照；SSE 缺省（`makeCoreDeps` 的「立刻结束、一帧不发」）
  *  = 服务端没有推送可用 ⇒ 强制走轮询兜底那条地基。`over` 供续页那组覆写写面。 */
-const depsOf = (jobs: Array<ExploreSnapshot | null>, over: CoreDepsOverrides = {}) =>
+const depsOf = (jobs: Array<ExploreSnapshot | null>, over: DepsOverrides = {}) =>
   makeCoreDeps({
     apiGet: vi.fn(async () => ({ job: jobs.shift() ?? null })),
     apiSend: vi.fn(async () => ({ jobId: 'j1' })),
@@ -35,14 +35,14 @@ const depsOf = (jobs: Array<ExploreSnapshot | null>, over: CoreDepsOverrides = {
 
 describe('useExploreJob', () => {
   it('全量替换：同一轮的第二帧整体覆盖第一帧（不是累加）', async () => {
+    // 节拍注入 250ms（生产 600）：既不拿墙钟干等，又留够 `waitFor` 50ms 间隔看得见第一帧的余量
     const deps = depsOf([
       snap({ page: 1, books: [book('A')] }),
       snap({ page: 2, hasMore: true, books: [book('A'), book('B')] }),
-    ])
+    ], { jobPollMs: 250 })
     render(<Probe deps={deps} />)
     await waitFor(() => { expect(seen?.round?.books.map((b) => b.name)).toEqual(['A']) })
-    await new Promise((r) => setTimeout(r, 700))            // 等一轮轮询（JOB_POLL_MS=600）
-    expect(seen?.round?.books.map((b) => b.name)).toEqual(['A', 'B'])   // 不是 ['A','A','B']：没人在客户端接列表
+    await waitFor(() => { expect(seen?.round?.books.map((b) => b.name)).toEqual(['A', 'B']) }, { timeout: 2000 })
     expect(seen?.round?.page).toBe(2)                      // 整轮读数跟着这一帧一起换，不留在第一帧上
     expect(seen?.round?.hasMore).toBe(true)
   })

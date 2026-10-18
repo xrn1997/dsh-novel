@@ -2,36 +2,67 @@ import { apiEventStream, apiGet, apiSend, apiUpload } from './api.js'
 import { saveBlob, streamExport } from './download.js'
 import { fetchJobStatus, getLastImportJob, startBatchProbeJob, startImportJob } from './jobs.js'
 import { pushError, pushOk } from './transient.js'
+import { JOB_POLL_MS } from './util.js'
 
 /**
- * client 依赖 seam 分两层（三主视图共用的核心束 + 按区扩展的加面）：
+ * client 依赖 seam：束按**读者**切，不按方便切。
  *
- * ClientCoreDeps = 三视图需要的最小束：wire 请求 + 瞬态上报。为什么注入：视图硬 import 真实现
- * 时，接线层的 bug（乐观态不回滚、陈旧回调、误导性空态）无法被测试驱动——现在 interface 即
- * 测试面，生产缺省 prodCoreDeps（接线不变），测试给假 adapter。
+ * 为什么收窄：视图硬 import 真实现时，接线层的 bug（乐观态不回滚、陈旧回调、误导性空态）无法被
+ * 测试驱动——interface 即测试面。而一条测试要构造的成员数就是它的固定成本：原先所有吃「核心束」的
+ * 读者都被迫提供 `apiUpload`（只有书架读）与 `apiEventStream`（只有两条观察通道读），
+ * 那两位的成本付在每一个用例上，收益落在零个用例上。
  *
- * pushOk 在核心束而非设置束：书架的本地上传是异步的，落地时用户可能已切走，那条成功必须有
+ * 分工：
+ * - `ClientCoreDeps` = 三视图与浮层真正共用的那四件（两条 wire 口 + 瞬态上报两位）。
+ * - `JobWatchDeps` = 观察一条后台任务所需的通道（`useSearchJob` / `useExploreJob` 只吃这个）。
+ * - `JobViewDeps` = 把观察通道嵌进界面的读者（搜索结果页、书籍详情浮层、书城）。
+ * - `ShelfDeps` = 需要原始字节上传的读者（书架）。
+ * - `SettingsDeps` / `ReaderDeps` = 各自加面（任务面 / 导出流）。
+ *
+ * `pushOk` 在核心束而非设置束：书架的本地上传是异步的，落地时用户可能已切走，那条成功必须有
  * 地方说（见 ShelfView 的 alive 闸）。
- *
- * SettingsDeps = 核心束超集（+任务面）；ReaderDeps = 核心束超集（+导出流）——三主视图同口径。
  */
 export interface ClientCoreDeps {
   /** wire GET（信封解包） */
   apiGet: typeof apiGet
   /** wire 请求（PUT/POST/DELETE 信封面） */
   apiSend: typeof apiSend
-  /** 原始字节上传（本地书导入：TXT / EPUB 按内容分流） */
-  apiUpload: typeof apiUpload
-  /** SSE 读流（搜索进度的推送加速器；连不上时调用方回落快照轮询） */
-  apiEventStream: typeof apiEventStream
   /** 瞬态层：错误上报（带锚点可选） */
   pushError: typeof pushError
   /** 瞬态层：显式保存类成功（少而淡策略，TTL 自动退场） */
   pushOk: typeof pushOk
 }
 
+/** 观察一条在跑的后台任务所需的通道：读面 + 推送加速器 + 节奏。
+ *  节奏是 seam 的一格而不是常量：观察通道的节拍原先只有常量一个家，测试要驱动「等到下一拍」
+ *  就得干等墙钟（一条用例 700ms 起）。缺省仍是 `JOB_POLL_MS`——生产接线零变化。 */
+export interface JobWatchDeps {
+  apiGet: typeof apiGet
+  apiSend: typeof apiSend
+  /** SSE 读流（推送加速器；连不上时通道自己回落快照轮询） */
+  apiEventStream: typeof apiEventStream
+  jobPollMs?: number
+}
+
+/** 把任务观察嵌进界面的读者：搜索结果页、书籍详情浮层、书城 */
+export interface JobViewDeps extends ClientCoreDeps, JobWatchDeps {}
+
+/** 需要原始字节上传的读者（本地书导入：TXT / EPUB 按内容分流） */
+export interface ShelfDeps extends ClientCoreDeps {
+  apiUpload: typeof apiUpload
+}
+
 /** 三视图的生产依赖：模块级真实现的打包——视图缺省即它，接线零变化 */
-export const prodCoreDeps: ClientCoreDeps = { apiGet, apiSend, apiUpload, apiEventStream, pushError, pushOk }
+export const prodCoreDeps: ClientCoreDeps = { apiGet, apiSend, pushError, pushOk }
+
+/** 观察通道的生产依赖 */
+export const prodJobWatchDeps: JobWatchDeps = { apiGet, apiSend, apiEventStream, jobPollMs: JOB_POLL_MS }
+
+/** 搜索结果页 / 书籍详情浮层 / 书城的生产依赖 */
+export const prodJobViewDeps: JobViewDeps = { ...prodCoreDeps, ...prodJobWatchDeps }
+
+/** 书架的生产依赖 */
+export const prodShelfDeps: ShelfDeps = { ...prodCoreDeps, apiUpload }
 
 /** 设置区依赖束：核心束超集 + 任务面 */
 export interface SettingsDeps extends ClientCoreDeps {
@@ -47,7 +78,6 @@ export interface SettingsDeps extends ClientCoreDeps {
 /** 生产依赖：模块级真实现的打包——视图缺省即它，接线零变化 */
 export const prodDeps: SettingsDeps = {
   ...prodCoreDeps,
-  pushOk,
   startImportJob,
   startBatchProbeJob,
   lastImportJob: getLastImportJob,
@@ -61,7 +91,7 @@ export interface ReaderDeps extends ClientCoreDeps {
   streamExport: typeof streamExport
   saveBlob: typeof saveBlob
   /** 进度防抖窗口（缺省 2s，见 ReaderSession 构造）——测试收紧，免得用例拿墙钟干等整个防抖窗
-   *  （jobs 轮询「测试可换确定性时钟」同一先例） */
+   *  （观察通道的 `jobPollMs` 同一先例） */
   saveDebounceMs?: number
 }
 

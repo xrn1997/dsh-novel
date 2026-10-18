@@ -6,7 +6,7 @@ import { ShelfView } from '../../src/client/views/ShelfView.js'
 import { routeStore } from '../../src/client/store.js'
 import { ROUTES } from '../../src/shared/wire.js'
 import { makeCoreDeps } from './fake-deps.js'
-import type { FakeCoreDeps } from './fake-deps.js'
+import type { FakeViewDeps } from './fake-deps.js'
 import type { ShelfEntry } from '../../src/client/views/types.js'
 
 /**
@@ -31,7 +31,7 @@ const A = entry({ bookKey: 'k-a', title: '斗罗', progress: { chapterIndex: 3, 
 const B = entry({ bookKey: 'k-b', title: '剑来', sourceId: 's2', sourceName: '源二' })
 const L = entry({ bookKey: 'local:u1', title: '本地书', sourceId: '__local__', sourceName: null })
 
-async function mount(books: ShelfEntry[], apiSend?: unknown): Promise<FakeCoreDeps> {
+async function mount(books: ShelfEntry[], apiSend?: unknown): Promise<FakeViewDeps> {
   const deps = makeCoreDeps({ apiGet: vi.fn(async () => books), ...(apiSend === undefined ? {} : { apiSend }) })
   render(createElement(ShelfView, { deps }))
   await waitFor(() => expect(screen.getByText(books[0].title)).toBeTruthy())

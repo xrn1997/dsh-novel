@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { ROUTES } from '../shared/wire.js'
+import { bodies, ROUTES } from '../shared/wire.js'
 import type { ExploreBook, ExploreSnapshot } from '../shared/wire.js'
 import { ApiClientError } from './api.js'
 import { JOB_POLL_MS } from './util.js'
-import type { ClientCoreDeps } from './deps.js'
+import type { JobWatchDeps } from './deps.js'
 
 /**
  * 浏览器半的「分类浏览轮次」接线：**一轮 = 一个源的一个分类**（`docs/adr/0028` 的浏览轴）——
@@ -93,7 +93,7 @@ export const toRound = (job: ExploreSnapshot): ExploreRound => ({
   cancelled: job.cancelled === true, page: job.page, hasMore: job.hasMore,
 })
 
-export function useExploreJob(deps: ClientCoreDeps): ExploreJobView {
+export function useExploreJob(deps: JobWatchDeps): ExploreJobView {
   const alive = useRef(true)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const stream = useRef<AbortController | null>(null)
@@ -117,7 +117,7 @@ export function useExploreJob(deps: ClientCoreDeps): ExploreJobView {
 
   const armPoll = (): void => {
     if (timer.current !== null) clearTimeout(timer.current)
-    timer.current = setTimeout(() => { void poll() }, JOB_POLL_MS)
+    timer.current = setTimeout(() => { void poll() }, deps.jobPollMs ?? JOB_POLL_MS)
   }
 
   /** 一帧落地：整体替换 + 判「还要不要继续看」。服务端连一轮都没有 = 没有可显示的结果，如实说 */
@@ -185,7 +185,7 @@ export function useExploreJob(deps: ClientCoreDeps): ExploreJobView {
     if (s === '' || k === '') return
     void (async () => {
       try {
-        const { jobId } = await deps.apiSend<{ jobId: string }>('POST', ROUTES.exploreList.path, { sourceId: s, kind: k })
+        const { jobId } = await deps.apiSend<{ jobId: string }>('POST', ROUTES.exploreList.path, bodies.exploreList(s, k))
         if (!alive.current) return
         submitted.current = true             // 新轮出生：此后的挂载恢复（读的是上一轮）一律让位
         // 提交返回的 id 就是本轮身份：先落一帧空态再开始盯（避免旧轮的条目在新轮里停留）。

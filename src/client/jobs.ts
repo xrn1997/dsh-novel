@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react'
 import { apiGet, apiSend } from './api.js'
 import { createStore, useStore } from './store.js'
-import { ROUTES } from '../shared/wire.js'
+import { bodies, ROUTES } from '../shared/wire.js'
 import type { JobIssue, JobState } from './views/types.js'
+import { STATUS_POLL_MS } from './util.js'
 
 /**
  * 后台任务面：导入/批量验证跑在服务端，客户端只是提交者与观察者——
@@ -11,11 +12,11 @@ import type { JobIssue, JobState } from './views/types.js'
  */
 
 export async function startImportJob(files: Array<{ name: string; text: string }>): Promise<{ jobId: string }> {
-  return apiSend<{ jobId: string }>('POST', ROUTES.sourcesImport.path, { files })
+  return apiSend<{ jobId: string }>('POST', ROUTES.sourcesImport.path, bodies.import(files))
 }
 
 export async function startBatchProbeJob(ids: string[]): Promise<{ jobId: string }> {
-  return apiSend<{ jobId: string }>('POST', ROUTES.sourcesBatchProbe.path, { ids })
+  return apiSend<{ jobId: string }>('POST', ROUTES.sourcesBatchProbe.path, bodies.ids(ids))
 }
 
 /** 书源验证提交的依赖面（窄接口：三入口的 SettingsDeps 都结构满足；测试注入假实现） */
@@ -54,13 +55,15 @@ export function getLastImportJob(): JobState | null { return lastImportJob }
 
 /** 轮询取数依赖（SettingsDeps.fetchJobStatus 的最小面，补完 seam）：
  *  生产缺省真实现；测试注入假取数 + 假时钟——轮询节拍第一次变得可测。
- *  本地声明而不引 deps.ts 的类型：避免 deps.ts(值) ↔ jobs.ts 的环。 */
+ *  本地声明而不引 deps.ts 的类型：避免 deps.ts(值) ↔ jobs.ts 的环。
+ *  `statusPollMs` 缺省 `STATUS_POLL_MS`：节拍的家在 util.ts，这一格只是让它可注入。 */
 export interface JobStatusDeps {
   fetchJobStatus: () => Promise<JobState | null>
+  statusPollMs?: number
 }
 
 /** 生产取数依赖：模块级真实现打包——hook 缺省即它，接线零变化 */
-const prodJobStatusDeps: JobStatusDeps = { fetchJobStatus }
+const prodJobStatusDeps: JobStatusDeps = { fetchJobStatus, statusPollMs: STATUS_POLL_MS }
 
 // ── 任务现场的唯一镜像 ────────────────────────────────────────────────
 /** 为什么住模块 store 而不是 props/hook 局部 state：轮询单实例住在**面板之外**的常驻状态层
@@ -74,7 +77,7 @@ const jobOpen = createStore<{ pending: OpenTarget }>({ pending: null })
 export type OpenTarget = 'import' | 'probe' | null
 
 export function useJobSurface(): { job: JobState | null; stale: boolean } { return useStore(jobSurface) }
-/** 立刻再取一次（不等下一个 1s 拍）：提交任务后调用，运行卡即刻出现。 */
+/** 立刻再取一次（不等下一个节拍）：提交任务后调用，运行卡即刻出现。 */
 export function refreshJob(): void { jobTick.set({ n: jobTick.get().n + 1 }) }
 /** 状态层 → 书源管理区的跨子树信令：点击时记下意图，SettingsSection 取走即清空（不重放）。 */
 export function requestJobOpen(kind: Exclude<OpenTarget, null>): void { jobOpen.set({ pending: kind }) }
@@ -91,7 +94,7 @@ export function resetJobSurface(): void {
   jobOpen.set({ pending: null })
 }
 
-/** 唯一轮询驱动：挂载即拉 + 1s 节拍 + `refreshJob()` 立刻重拉；结果写 `jobSurface`。
+/** 唯一轮询驱动：挂载即拉 + `STATUS_POLL_MS` 节拍 + `refreshJob()` 立刻重拉；结果写 `jobSurface`。
  *  抖动时保留旧值但如实置 `stale`（不静默停在最后一帧）。卸载即停（不许孤儿轮询）。
  *  取数走注入 deps（useLatest ref 进 effect）：deps 若是每 render 新字面量，直接进
  *  依赖数组会每帧重启轮询，故 effect 只认 tick。 */
@@ -111,7 +114,7 @@ export function useJobPolling(deps: JobStatusDeps = prodJobStatusDeps): void {
         if (alive) jobSurface.set({ ...jobSurface.get(), stale: true })
       }
       if (!alive) return
-      timer = setTimeout(() => { void loop() }, 1000)
+      timer = setTimeout(() => { void loop() }, depsRef.current.statusPollMs ?? STATUS_POLL_MS)
     }
     void loop()
     return () => { alive = false; if (timer !== null) clearTimeout(timer) }

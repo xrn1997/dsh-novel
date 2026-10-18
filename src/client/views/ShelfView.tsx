@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
-import { LOCAL_SOURCE_ID, paramRoutes, queries, ROUTES } from '../../shared/wire.js'
-import { prodCoreDeps } from '../deps.js'
-import type { ClientCoreDeps } from '../deps.js'
+import { bodies, LOCAL_SOURCE_ID, paramRoutes, queries, ROUTES } from '../../shared/wire.js'
+import { prodShelfDeps } from '../deps.js'
+import type { ShelfDeps } from '../deps.js'
 import { navigate } from '../store.js'
 import type { LocalImportResponse, ShelfEntry } from './types.js'
 import { coverFallbackChar, EmptyState, ProgressBar, SearchIcon, WarningList } from './bits.js'
@@ -34,7 +34,7 @@ import { coverTintClass, sourceTintClass } from '../util.js'
  * 测试钉子（不可动）：搜索框 placeholder「搜书名 / 作者」、删除 title「删除本书」、确认条文案与
  * 空态/错误文案原文（views-wiring + smoke）。 */
 
-export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): ReactNode {
+export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): ReactNode {
   const [books, setBooks] = useState<ShelfEntry[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [keyword, setKeyword] = useState('')
@@ -102,7 +102,7 @@ export function ShelfView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): R
     const targetKeys = new Set(targets.map((b) => b.bookKey))
     setDelBusy(true)
     void (batch
-      ? deps.apiSend('POST', ROUTES.shelfBatchDelete.path, { keys: [...targetKeys] })
+      ? deps.apiSend('POST', ROUTES.shelfBatchDelete.path, bodies.keys([...targetKeys]))
       : deps.apiSend('DELETE', paramRoutes.shelfKey(targets[0].bookKey))
     ).then(() => {
       setBooks((prev) => (prev ?? []).filter((b) => !targetKeys.has(b.bookKey)))

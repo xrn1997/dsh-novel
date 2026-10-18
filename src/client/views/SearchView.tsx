@@ -5,8 +5,8 @@ import type { MergedRound } from '../../shared/merge-by-book.js'
 import { partitionByRelevance } from '../../shared/relevance.js'
 import type { RelevancePartition } from '../../shared/relevance.js'
 import { SEARCH_BOOKS_CAP, paramRoutes, shelfBody } from '../../shared/wire.js'
-import { prodCoreDeps } from '../deps.js'
-import type { ClientCoreDeps } from '../deps.js'
+import { prodJobViewDeps } from '../deps.js'
+import type { JobViewDeps } from '../deps.js'
 import { useSearchJob } from '../search-job.js'
 import { navigate, routeStore, useStore } from '../store.js'
 import { EmptyState, ProgressBar, SearchIcon, searchPct, StatusBadge } from './bits.js'
@@ -62,7 +62,7 @@ function sumRound(parts: PartitionedGroup[]): SearchSummary {
   return { sources: parts.length, hits, found, failed, relevant }
 }
 
-export function SearchView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): ReactNode {
+export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): ReactNode {
   const { route } = useStore(routeStore)
   const initialKeyword = route.name === 'search' ? route.keyword ?? '' : ''
   const [keyword, setKeyword] = useState(initialKeyword)
@@ -198,7 +198,7 @@ export function SearchView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): 
 
 /** 加架的接线只此一份：路径与 body 都由 wire 的构造器给（行上「＋ 加书架」与书行「都加架」
  *  走同一条 PUT，服务端那一份 patch 语义因此不会长出第二种形状）。 */
-function addBookToShelf(sourceId: string, hit: SearchHit, deps: ClientCoreDeps): Promise<unknown> {
+function addBookToShelf(sourceId: string, hit: SearchHit, deps: JobViewDeps): Promise<unknown> {
   return deps.apiSend('PUT', paramRoutes.shelfKey(hit.url ?? ''), shelfBody.addBook({
     sourceId, title: hit.title, author: hit.author, coverUrl: hit.coverUrl,
     intro: hit.intro, lastChapterName: hit.lastChapterName, kind: hit.kind, wordCount: hit.wordCount,
@@ -214,7 +214,7 @@ function addBookToShelf(sourceId: string, hit: SearchHit, deps: ClientCoreDeps):
  * url 守卫：`null` 渲染不可点行（wire 给这一格的就是 `string | null`）；空串 `''` **产不出来**（命中行的 `url` 只出自服务端
  * 搜索链，空输入在那里就已落 `null`），于是「无身份」在浏览器半只有一种形状可认。 */
 function HitRow({ sourceId, hit, deps, added, onLanded }: {
-  sourceId: string; hit: SearchHit; deps: ClientCoreDeps; added: boolean; onLanded: (id: string) => void
+  sourceId: string; hit: SearchHit; deps: JobViewDeps; added: boolean; onLanded: (id: string) => void
 }): ReactNode {
   const add = (): Promise<unknown> => addBookToShelf(sourceId, hit, deps).then(() => { onLanded(rowId(sourceId, hit.url)) })
   const read = (): void => {
@@ -253,7 +253,7 @@ function HitRow({ sourceId, hit, deps, added, onLanded }: {
  *  行的 key 与按书轴展开区读同一个身份算式（`rowKeys`，身份 (源, 地址)，同身份重复才垫位次）：
  *  档序会挪位，纯下标 key 在重排时把一行的本地入架态串到别的书上。
  *  失败源折叠的呈现口径（点名 code / message / statusDetail）原样保留，仅容器换简约版类。 */
-function renderGroups(view: RoundView, deps: ClientCoreDeps, landed: ReadonlySet<string>, onLanded: (id: string) => void): ReactNode {
+function renderGroups(view: RoundView, deps: JobViewDeps, landed: ReadonlySet<string>, onLanded: (id: string) => void): ReactNode {
   const hits = view.parts.filter((p) => p.group.error === undefined)
   const failed = view.parts.filter((p) => p.group.error !== undefined)
   if (hits.length === 0 && failed.length === 0) return null
@@ -317,7 +317,7 @@ function renderGroups(view: RoundView, deps: ClientCoreDeps, landed: ReadonlySet
  *  **条**（逐源命中，一行一条）——差额正是每一行那个「N 家源」吃进去的东西。
  *  超限那一行报出全量本数：只列前 SEARCH_BOOKS_CAP 而不说本轮共几本，
  *  就是把「还有更多」读成「到此为止」。 */
-function renderBooks(merged: MergedRound, meta: Map<string, SearchHit>, deps: ClientCoreDeps,
+function renderBooks(merged: MergedRound, meta: Map<string, SearchHit>, deps: JobViewDeps,
   landed: ReadonlySet<string>, onLanded: (id: string) => void): ReactNode {
   if (merged.total === 0) return null
   return (
@@ -415,7 +415,7 @@ const shortAuthor = (author: string): string => {
  *  再抄一份进 aria-label 就是给同一批读数第二个主人——改了可见字忘了改名字即分叉。
  *  尾巴的字随状态翻（展开↔收起），可见标签因此恒含在名字里；箭头是同一状态的第二个读数。 */
 function BookRow({ book, rows, deps, landed, onLanded }: {
-  book: MergedBook; rows: Array<{ sourceId: string; hit: SearchHit }>; deps: ClientCoreDeps
+  book: MergedBook; rows: Array<{ sourceId: string; hit: SearchHit }>; deps: JobViewDeps
   landed: ReadonlySet<string>; onLanded: (id: string) => void
 }): ReactNode {
   const [adding, setAdding] = useState(false)

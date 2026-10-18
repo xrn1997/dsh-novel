@@ -675,3 +675,140 @@ export const shelfBody = {
   patch: (p: ShelfMetaPatch): { patch: Record<string, string | number> } =>
     ({ patch: pickShelfMeta(p) as Record<string, string | number> }),
 } as const
+
+// ── 写路由的 body：字段名、构造器、读口同源 ────────────────────────────
+// 此前只有 `shelfBody` 有主人：其余写路由的键名由浏览器半手写、Node 半逐一手读，改名不会有任何
+// 东西变红——而「wire 单点」这条硬约束承诺的正是 body 构造器。读口与构造器同住这里，是因为它们
+// 答的是同一件事（「这个 body 该长什么样」），分家就会立刻生成两份抄本。
+// 本文件被 inline 进 client bundle，故以下全部零运行时依赖（纯函数 + 本地错误类）。
+
+/** body 字段名（只列 query 那侧没有的词）。与 `PARAMS` 撞上的业务名词（`keyword` / `sourceIds` /
+ *  `sourceId` / `kind` / `name` / `title`）**沿用 `PARAMS`**，不在这里再造第二个字面量：body 与
+ *  query 是两条轴，同一个业务名词在两轴上同名是语义一致，不是巧合。 */
+export const BODY = {
+  files: 'files',
+  text: 'text',
+  ids: 'ids',
+  keys: 'keys',
+  enabled: 'enabled',
+  patch: 'patch',
+  progress: 'progress',
+  chapterIndex: 'chapterIndex',
+  offsetRatio: 'offsetRatio',
+  runLogin: 'runLogin',
+  cookies: 'cookies',
+  headers: 'headers',
+} as const
+
+/** body 形状不符（缺字段、类型错、空数组）。消息文本就是给终端用户看的那句 400 说明——
+ *  「路由自检错误」这一类，由 `api/dispatch.ts` 落成 `ApiError(…, 400, 'BadRequest')`：
+ *  判据住这里，状态码归传输层（口径两分法见 `docs/adr/0016`）。 */
+export class BodyShapeError extends Error {}
+
+function bodyBad(message: string): never {
+  throw new BodyShapeError(message)
+}
+
+/** 非空 string[] 的读法（批路由共用一条尺；字段名只进消息不进判据） */
+function readIdList(body: Record<string, unknown> | null, field: string): string[] {
+  const v = body?.[field]
+  if (!Array.isArray(v) || v.length === 0 || !v.every((x) => typeof x === 'string')) {
+    bodyBad(`body 需为非空 { ${field}: string[] }`)
+  }
+  return v as string[]
+}
+
+/** 必填串位（去空白后非空才算在场）：缺席/非串/全空白同值 → 点名缺哪个字段 */
+function readRequiredText(body: Record<string, unknown> | null, field: string): string {
+  const v = body?.[field]
+  const t = typeof v === 'string' ? v.trim() : ''
+  if (t === '') bodyBad(`缺 body 字段 ${field}`)
+  return t
+}
+
+/** 一条导入文件（`{ name, text }`，与 legado 导出面板给回的形状一致） */
+export interface ImportFileBody { name: string; text: string }
+
+/** 写路由 body 的构造器（浏览器半唯一出口）与读口（Node 半唯一入口）。
+ *  **成对读**：每个 shape 一条 `bodies.x` 与一条 `readBodies.x`，`readBodies.x(bodies.x(v))`
+ *  必须原样给回 `v`（`tests/shared/wire-builders.test.ts` 逐条钉这一条）——这条 round-trip 就是
+ *  「两半各写一遍键名迟早分叉」的闸。 */
+export const bodies = {
+  import: (files: ImportFileBody[]): Record<string, unknown> => ({ [BODY.files]: files }),
+  ids: (ids: string[]): Record<string, unknown> => ({ [BODY.ids]: ids }),
+  keys: (keys: string[]): Record<string, unknown> => ({ [BODY.keys]: keys }),
+  enabled: (enabled: boolean): Record<string, unknown> => ({ [BODY.enabled]: enabled }),
+  batchEnabled: (ids: string[], enabled: boolean): Record<string, unknown> =>
+    ({ [BODY.ids]: ids, [BODY.enabled]: enabled }),
+  searchJob: (keyword: string, sourceIds?: string[]): Record<string, unknown> =>
+    ({ [PARAMS.keyword]: keyword, ...(sourceIds === undefined ? {} : { [PARAMS.sourceIds]: sourceIds }) }),
+  exploreList: (sourceId: string, kind: string): Record<string, unknown> =>
+    ({ [PARAMS.sourceId]: sourceId, [PARAMS.kind]: kind }),
+  runLogin: (): Record<string, unknown> => ({ [BODY.runLogin]: true }),
+  authCookies: (cookies: Record<string, string>, headers?: Record<string, string>): Record<string, unknown> =>
+    ({ [BODY.cookies]: cookies, ...(headers === undefined ? {} : { [BODY.headers]: headers }) }),
+} as const
+
+/** 对象位（cookie/header 表）：非对象、null、数组一律不算在场 */
+function readRecordField(body: Record<string, unknown>, field: string): Record<string, string> | undefined {
+  const v = body[field]
+  if (v === undefined) return undefined
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) bodyBad(`body 需为 { ${BODY.cookies}: Record<string,string>, ${BODY.headers}?: Record<string,string> }`)
+  return v as Record<string, string>
+}
+
+export const readBodies = {
+  /** 导入任务：`{ files: [{ name, text }] }`（真实多源导出常见数 MB 级，上限归路由的读体） */
+  import: (body: Record<string, unknown> | null): { files: ImportFileBody[] } => {
+    const files = body?.[BODY.files]
+    if (!Array.isArray(files) || files.length === 0
+      || !files.every((f) => f !== null && typeof f === 'object'
+        && typeof (f as Record<string, unknown>)[PARAMS.name] === 'string'
+        && typeof (f as Record<string, unknown>)[BODY.text] === 'string')) {
+      bodyBad(`body 需为非空 { ${BODY.files}: [{ ${PARAMS.name}, ${BODY.text} }] }`)
+    }
+    return { files: files as ImportFileBody[] }
+  },
+  /** 书源批路由的键集（id） */
+  ids: (body: Record<string, unknown> | null): string[] => readIdList(body, BODY.ids),
+  /** 书架批路由的键集（bookKey，与源 id 不同名，故字段名也不同） */
+  keys: (body: Record<string, unknown> | null): string[] => readIdList(body, BODY.keys),
+  /** 单源启停 */
+  enabled: (body: Record<string, unknown> | null): boolean => {
+    const v = body?.[BODY.enabled]
+    if (typeof v !== 'boolean') bodyBad(`body 需为 { ${BODY.enabled}: boolean }`)
+    return v
+  },
+  /** 批量启停：键集 + 目标状态 */
+  batchEnabled: (body: Record<string, unknown> | null): { ids: string[]; enabled: boolean } => {
+    const ids = readIdList(body, BODY.ids)
+    const enabled = body?.[BODY.enabled]
+    if (typeof enabled !== 'boolean') bodyBad(`body 需为非空 { ${BODY.ids}: string[], ${BODY.enabled}: boolean }`)
+    return { ids, enabled }
+  },
+  /** 聚合搜索提交：关键词必填，点名源可选（空数组按「没点名」走全参与集，不是「搜零家」） */
+  searchJob: (body: Record<string, unknown> | null): { keyword: string; sourceIds?: string[] } => {
+    const keyword = readRequiredText(body, PARAMS.keyword)
+    const raw = body?.[PARAMS.sourceIds]
+    if (raw !== undefined && (!Array.isArray(raw) || !raw.every((x) => typeof x === 'string'))) {
+      bodyBad(`body.${PARAMS.sourceIds} 需为 string[]`)
+    }
+    return { keyword, ...(raw === undefined ? {} : { sourceIds: raw as string[] }) }
+  },
+  /** 分类轮次提交：两个点名都在 body 里（浏览轴是「先点名一个源、逛它自己的分类」，`docs/adr/0028`） */
+  exploreList: (body: Record<string, unknown> | null): { sourceId: string; kind: string } => ({
+    sourceId: readRequiredText(body, PARAMS.sourceId),
+    kind: readRequiredText(body, PARAMS.kind),
+  }),
+  /** 登录面两形态：`runLogin: true` 走源自己声明的登录规则，否则按 cookie 录入。
+   *  判别只到形状层——「这源有没有声明登录入口、是 URL 还是 JS」归门面。 */
+  auth: (body: Record<string, unknown> | null):
+    { mode: 'run-login' } | { mode: 'cookies'; cookies: Record<string, string>; headers?: Record<string, string> } => {
+    if (body?.[BODY.runLogin] === true) return { mode: 'run-login' }
+    const b = (body ?? {}) as Record<string, unknown>
+    const cookies = readRecordField(b, BODY.cookies)
+    if (cookies === undefined) bodyBad(`body 需为 { ${BODY.cookies}: Record<string,string>, ${BODY.headers}?: Record<string,string> }`)
+    const headers = readRecordField(b, BODY.headers)
+    return { mode: 'cookies', cookies, ...(headers === undefined ? {} : { headers }) }
+  },
+} as const

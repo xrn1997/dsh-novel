@@ -9,7 +9,7 @@ import { cityStore } from '../../src/client/store.js'
 import { ROUTES } from '../../src/shared/wire.js'
 import type { ExploreBook, SearchGroup, SearchJobSnapshot } from '../../src/shared/wire.js'
 import { makeCoreDeps } from './fake-deps.js'
-import type { CoreDepsOverrides, FakeCoreDeps } from './fake-deps.js'
+import type { DepsOverrides, FakeViewDeps } from './fake-deps.js'
 import { rect, stubLayout } from './scroll-stub.js'
 
 /**
@@ -58,7 +58,7 @@ const serve = (sourceId: string, kind: string): unknown => ({
 beforeEach(() => { submitted.length = 0; current = null })
 afterEach(() => { cleanup(); cityStore.set({ sourceId: null, kind: null }) })
 
-const depsOf = (over: CoreDepsOverrides = {}) => makeCoreDeps({
+const depsOf = (over: DepsOverrides = {}) => makeCoreDeps({
   apiGet: vi.fn(async (p: string) => (p.includes('kinds') ? sources : { job: current })),
   apiSend: vi.fn(async (m: string, p: string, body: { sourceId: string; kind: string }) => {
     if (p === 'explore/list/more') return { jobId: 'j1' }   // 续页：不是提交，也不动 current
@@ -74,7 +74,7 @@ const depsOf = (over: CoreDepsOverrides = {}) => makeCoreDeps({
 })
 
 /** 可手动喂帧的 SSE：帧由用例决定（在途骨架那一组要看「同一轮跑完」的下一帧） */
-const pushable = (): { over: CoreDepsOverrides; frame: (job: unknown) => void } => {
+const pushable = (): { over: DepsOverrides; frame: (job: unknown) => void } => {
   const box: { push: (job: unknown) => void } = { push: () => {} }
   return {
     over: {
@@ -391,7 +391,7 @@ function group(sourceId: string, sourceName: string, hits: Array<{ title: string
 
 /** 把搜索面的读面与写面按路径喂成给定的那一轮：浮层里那颗跨源钮走的就是这条既有链。
  *  游标语义照服务端的样子演：`added` 按请求带的 `since` 切片（不切就会把同一批命中累第二遍）。 */
-function depsWithGroups(groups: SearchGroup[], job: Partial<SearchJobSnapshot> = {}): FakeCoreDeps {
+function depsWithGroups(groups: SearchGroup[], job: Partial<SearchJobSnapshot> = {}): FakeViewDeps {
   const snap: SearchJobSnapshot = {
     id: 'sj1', keyword: '半城风月 沈念', phase: 'done', cancelled: false,
     total: 142, done: groups.length, added: groups, next: groups.length, startedAt: 1, ...job,

@@ -4,7 +4,7 @@ import { partitionByRelevance } from '../../shared/relevance.js'
 import { paramRoutes, shelfBody } from '../../shared/wire.js'
 import type { ExploreBook, SearchGroup, SearchHit } from '../../shared/wire.js'
 import { cityMeta, sheetKeyword } from '../city-view-model.js'
-import type { ClientCoreDeps } from '../deps.js'
+import type { JobViewDeps } from '../deps.js'
 import { useSearchJob } from '../search-job.js'
 import { navigate } from '../store.js'
 
@@ -47,7 +47,7 @@ import { navigate } from '../store.js'
  * `deps` 由父层（`CityView`）透传：行内写口同样要能被测试驱动（与 `SearchView` 的命中行同口径）。
  */
 export function CityBookSheet({ book, sourceId, sourceName, deps, onClose }: {
-  book: ExploreBook; sourceId: string; sourceName: string; deps: ClientCoreDeps; onClose: () => void
+  book: ExploreBook; sourceId: string; sourceName: string; deps: JobViewDeps; onClose: () => void
 }): ReactNode {
   const search = useSearchJob(deps)
   /** 按过那颗钮才算「要跨源」：在那之前搜索面持有的轮次不是本浮层的读数，一条都不列 */
@@ -201,7 +201,7 @@ function hitRow(g: SearchGroup, h: SearchHit): SheetRowData {
  *  **不先读一次书架判「已在书架」**：那是一个多出来的请求，换来的只是按钮文案；重复点按由幂等覆盖
  *  处理（同一 bookKey 再 PUT 一次，写进去的还是同一本书）。成功才报名，失败进错误泳道——点了一下
  *  必须有个交代，静默失败比失败更糟。 */
-function addToShelf(row: SheetRowData, deps: ClientCoreDeps): void {
+function addToShelf(row: SheetRowData, deps: JobViewDeps): void {
   void deps.apiSend('PUT', paramRoutes.shelfKey(row.url ?? ''), shelfBody.addBook({
     sourceId: row.sourceId, title: row.title, author: row.author, coverUrl: row.coverUrl,
     intro: row.intro, lastChapterName: row.lastChapter, kind: row.kind, wordCount: row.wordCount,
@@ -216,7 +216,7 @@ function addToShelf(row: SheetRowData, deps: ClientCoreDeps): void {
  *  `showSource` 关掉源名：折叠区里那些行的家门由它们所在那行折叠的摘要说一次（同一组里说两遍就是
  *  抄本），默认带着——本源那一行与各源的代表行都靠它自报家门。 */
 function SheetRow({ row, deps, showLast = true, showSource = true }: {
-  row: SheetRowData; deps: ClientCoreDeps; showLast?: boolean; showSource?: boolean
+  row: SheetRowData; deps: JobViewDeps; showLast?: boolean; showSource?: boolean
 }): ReactNode {
   return (
     <div className="novel-city-srcrow">
@@ -253,7 +253,7 @@ function SheetRow({ row, deps, showLast = true, showSource = true }: {
  *  「只回了疑似无关」既不是「这一家没有按这个书名搜到」（那是**答了而零条**的说法），也不是未响应
  *  （它答了）——三条来路按答复长，不按默认视野长，所以这里只在真零条命中时才说那一句。 */
 function GroupRow({ group, keyword, deps }: {
-  group: SearchGroup; keyword: string; deps: ClientCoreDeps
+  group: SearchGroup; keyword: string; deps: JobViewDeps
 }): ReactNode {
   if (group.error !== undefined) {
     return (

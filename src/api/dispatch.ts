@@ -7,7 +7,8 @@ import { log } from '../services/log.js'
 import { formatByteLimit } from '../services/size.js'
 import { readValue, type ValueSource } from '../services/value-source.js'
 import { ApiError, isTrustedRequest, readCappedBody, readJsonBody, writeError, writeOk } from './wire.js'
-import { NOVEL_API_PREFIX, PARAMS, paramRoutes, pickShelfMeta, ROUTES, SEG } from '../shared/wire.js'
+import { NOVEL_API_PREFIX, PARAMS, paramRoutes, pickShelfMeta, readBodies, ROUTES, SEG } from '../shared/wire.js'
+import { BodyShapeError } from '../shared/wire.js'
 
 /** 「书不在架上」文案单点（此前 shelfPut 两形态逐字两份） */
 const NOT_ON_SHELF = '书不在架上，先带 title 调用加入'
@@ -43,25 +44,6 @@ function openJobStream(res: ServerResponse, subscribe: (notify: () => void) => (
   pump()                                            // 首帧（可能是 `{job:null}`：还没提交过，流继续等）
 }
 
-/** 非空 string[] body 校验单点（批路由同口径的手写块收口）；字段名是唯一变量（ids / keys） */
-function requireStringList(body: Record<string, unknown> | null, field: string): string[] {
-  const v = body?.[field]
-  if (!Array.isArray(v) || v.length === 0 || !v.every((x) => typeof x === 'string')) {
-    throw new ApiError(`body 需为非空 { ${field}: string[] }`, 400, 'BadRequest')
-  }
-  return v as string[]
-}
-
-/** 源批路由的键集（书源 id） */
-function requireIds(body: Record<string, unknown> | null): string[] {
-  return requireStringList(body, 'ids')
-}
-
-/** 书架批路由的键集（bookKey——不是源 id，字段名也就不同名） */
-function requireKeys(body: Record<string, unknown> | null): string[] {
-  return requireStringList(body, 'keys')
-}
-
 /** 路由级可调参数。
  * 本地书面已归门面：LocalBooks 部件与导入上限都在 ReadingService，
  * 此处只剩传输层关注点（导出节流）。`exportDelayMs` 收 getter 形态：配置页热改后
@@ -88,7 +70,9 @@ export function createApiHandler(service: ReadingService, opts: ApiHandlerOption
       const segs = rest.split('/').filter(Boolean)
       await route(service, opts, req.method ?? 'GET', segs, url, req, res)
     } catch (e) {
-      writeError(res, e)
+      // body 形状判据住在 wire 契约（两半共读那一份），落成状态码是传输关注点——在这里翻一次，
+      // 不在每个读口各写一遍 try/catch
+      writeError(res, e instanceof BodyShapeError ? new ApiError(e.message, 400, 'BadRequest') : e)
     }
   }
 }
@@ -113,19 +97,13 @@ async function route(
         return
       }
       // 同步 POST 导入已移除——导入走 sources/import 后台任务
-      throw new ApiError(`方法不允许: ${method} ${NOVEL_API_PREFIX}/sources（导入走 POST /sources/import）`, 405, 'MethodNotAllowed')
+      throw methodNotAllowed(method, ROUTES.sources.path, '导入走 POST /sources/import')
     }
     if (b === SEG.import) {
       guard(method, 'POST', ROUTES.sourcesImport.path)
       // 真实多源导出常见数 MB 级——上限 32MB，默认 1MB 会把最大流量的包挡在门外
-      const body = await readJsonBody<{ files?: unknown } | null>(req, null, 32 * 1024 * 1024)
-      const files = body?.files
-      if (!Array.isArray(files) || files.length === 0
-        || !files.every((f) => f !== null && typeof f === 'object'
-          && typeof (f as { name?: unknown }).name === 'string' && typeof (f as { text?: unknown }).text === 'string')) {
-        throw new ApiError('body 需为非空 { files: [{ name, text }] }', 400, 'BadRequest')
-      }
-      writeOk(res, service.startImportJob(files as Array<{ name: string; text: string }>))
+      const body = await readJsonBody<Record<string, unknown> | null>(req, null, 32 * 1024 * 1024)
+      writeOk(res, service.startImportJob(readBodies.import(body).files))
       return
     }
     if (b === SEG.jobStatus) {
@@ -137,7 +115,7 @@ async function route(
     if (b === SEG.batchProbe) {
       guard(method, 'POST', ROUTES.sourcesBatchProbe.path)
       const body = await readJsonBody<Record<string, unknown> | null>(req, null)
-      writeOk(res, service.startBatchProbeJob(requireIds(body)))
+      writeOk(res, service.startBatchProbeJob(readBodies.ids(body)))
       return
     }
     if (c === SEG.probe) {
@@ -154,10 +132,7 @@ async function route(
       // 单源启停：停用 = 不参与聚合搜索，试跑/验证不受影响
       guard(method, 'POST', paramRoutes.sourceEnabled(b))
       const body = await readJsonBody<Record<string, unknown> | null>(req, null)
-      const enabled = body?.enabled
-      if (typeof enabled !== 'boolean') {
-        throw new ApiError('body 需为 { enabled: boolean }', 400, 'BadRequest')
-      }
+      const enabled = readBodies.enabled(body)
       const found = await service.setEnabled(b, enabled)
       if (!found) {
         // 错误词汇单主人：「源不存在」全走 SourceNotFoundError → 分类表投影 404 NotFound
@@ -169,13 +144,9 @@ async function route(
     if (b === SEG.batchEnabled) {
       guard(method, 'POST', ROUTES.sourcesBatchEnabled.path)
       const body = await readJsonBody<Record<string, unknown> | null>(req, null)
-      const ids = body?.ids
-      const enabled = body?.enabled
-      if (!Array.isArray(ids) || ids.length === 0 || !ids.every((x) => typeof x === 'string') || typeof enabled !== 'boolean') {
-        throw new ApiError('body 需为非空 { ids: string[], enabled: boolean }', 400, 'BadRequest')
-      }
+      const { ids, enabled } = readBodies.batchEnabled(body)
       // 未知 id 静默跳过、重复 id 幂等；一次 edit 一次合并落盘——配方知识归门面动词
-      const updated = await service.setEnabledMany(ids as string[], enabled)
+      const updated = await service.setEnabledMany(ids, enabled)
       writeOk(res, { updated })
       return
     }
@@ -183,7 +154,7 @@ async function route(
       // 批量删除：门面动词（一次 edit 合并落盘），替代逐删逐写的 N 次全量重写
       guard(method, 'POST', ROUTES.sourcesBatchDelete.path)
       const body = await readJsonBody<Record<string, unknown> | null>(req, null)
-      const removed = await service.removeSources(requireIds(body))
+      const removed = await service.removeSources(readBodies.ids(body))
       writeOk(res, { removed })
       return
     }
@@ -192,7 +163,7 @@ async function route(
       writeOk(res, { removed })
       return
     }
-    throw new ApiError(`未知路由: ${method} ${NOVEL_API_PREFIX}/${segs.join('/')}`, 404, 'NotFound')
+    throw unknownRoute(method, segs)
   }
 
   // ── reading 面（query 驱动， GET）────────────────────────────────────
@@ -205,14 +176,9 @@ async function route(
   if (a === SEG.search && b === SEG.job) {
     // 提交即由 Node 半跑完并持有整轮结果——浏览器半只负责看，切界面不再作废在途搜索
     guard(method, 'POST', ROUTES.searchJob.path)
-    const body = await readJsonBody<{ keyword?: unknown; sourceIds?: unknown } | null>(req, null)
-    const keyword = typeof body?.keyword === 'string' ? body.keyword.trim() : ''
-    if (keyword === '') throw new ApiError(`缺 body 字段 ${PARAMS.keyword}`, 400, 'BadRequest')
-    const raw = body?.sourceIds
-    if (raw !== undefined && (!Array.isArray(raw) || !raw.every((x) => typeof x === 'string'))) {
-      throw new ApiError(`body.${PARAMS.sourceIds} 需为 string[]`, 400, 'BadRequest')
-    }
-    writeOk(res, service.startSearchJob(keyword, raw === undefined ? undefined : { sourceIds: raw as string[] }))
+    const body = await readJsonBody<Record<string, unknown> | null>(req, null)
+    const { keyword, sourceIds } = readBodies.searchJob(body)
+    writeOk(res, service.startSearchJob(keyword, sourceIds === undefined ? undefined : { sourceIds }))
     return
   }
   if (a === SEG.search && b === SEG.jobCancel) {
@@ -245,8 +211,9 @@ async function route(
   }
   if (a === SEG.search && b === undefined) {
     guard(method, 'GET', ROUTES.search.path)
-    const keyword = url.searchParams.get(PARAMS.keyword)?.trim() ?? ''
-    if (keyword === '') throw new ApiError(`缺 query 参数 ${PARAMS.keyword}`, 400, 'BadRequest')
+    // 「关键词去空白后非空才算在场」这一把尺在两条入口上是同一把：body 那侧住 `readBodies.searchJob`，
+    // query 这侧走 requireQuery（它同时是「缺 query 参数 X」这句措辞的唯一家）
+    const [keyword] = requireQuery(url, PARAMS.keyword)
     const ids = url.searchParams.get(PARAMS.sourceIds)?.split(',').filter(Boolean)
     writeOk(res, await service.search(keyword, ids === undefined ? undefined : { sourceIds: ids }))
     return
@@ -266,11 +233,8 @@ async function route(
     // 缺任何一个都是路由自检的 body 形状判据（400 BadRequest 点名缺哪个）；点了个不存在的源
     // 则由门面的值域判据抛错，经同一份映射落成同一个状态码——路由不复制那份判据。
     guard(method, 'POST', ROUTES.exploreList.path)
-    const body = await readJsonBody<{ sourceId?: unknown; kind?: unknown } | null>(req, null)
-    const sourceId = typeof body?.sourceId === 'string' ? body.sourceId.trim() : ''
-    if (sourceId === '') throw new ApiError(`缺 body 字段 ${PARAMS.sourceId}`, 400, 'BadRequest')
-    const kind = typeof body?.kind === 'string' ? body.kind.trim() : ''
-    if (kind === '') throw new ApiError(`缺 body 字段 ${PARAMS.kind}`, 400, 'BadRequest')
+    const body = await readJsonBody<Record<string, unknown> | null>(req, null)
+    const { sourceId, kind } = readBodies.exploreList(body)
     writeOk(res, service.startExploreJob(sourceId, kind))
     return
   }
@@ -339,7 +303,7 @@ async function route(
       // 与单删 removeBook 同一条，路由只做 body 校验与信封。bookKey 走 JSON body，不必编码。
       guard(method, 'POST', ROUTES.shelfBatchDelete.path)
       const body = await readJsonBody<Record<string, unknown> | null>(req, null)
-      writeOk(res, await service.removeBooks(requireKeys(body)))
+      writeOk(res, await service.removeBooks(readBodies.keys(body)))
       return
     }
     if (b === undefined && method === 'GET') {
@@ -355,7 +319,7 @@ async function route(
       writeOk(res, await service.removeBook(decodeSegKey(b)))
       return
     }
-    throw new ApiError(`方法不允许: ${method} ${NOVEL_API_PREFIX}/shelf${b === undefined ? '' : '/:key'}`, 405, 'MethodNotAllowed')
+    throw methodNotAllowed(method, b === undefined ? SEG.shelf : `${SEG.shelf}/:key`)
   }
 
   // ── 章节范围导出（流式，from/to 缺席 = 全本）──────────────────────────
@@ -481,10 +445,10 @@ async function route(
       writeOk(res, await service.removeLocalBook(id))
       return
     }
-    throw new ApiError(`未知路由: ${method} ${NOVEL_API_PREFIX}/${segs.join('/')}`, 404, 'NotFound')
+    throw unknownRoute(method, segs)
   }
 
-  throw new ApiError(`未知路由: ${method} ${NOVEL_API_PREFIX}/${segs.join('/')}`, 404, 'NotFound')
+  throw unknownRoute(method, segs)
 }
 
 /** 路径段百分号解码：非法编码（decodeURIComponent 抛 URIError）→ 400（此前归 'other' → 500） */
@@ -569,8 +533,9 @@ async function authRoute(service: ReadingService, id: string, req: IncomingMessa
   // 存在性先于 body 形态判别（既有 wire 口径：不存在的 id 恒 404，不先报 400）
   if (!service.hasSource(id)) throw new SourceNotFoundError(id)
   const body = await readJsonBody<Record<string, unknown> | null>(req, null)
+  const want = readBodies.auth(body)
 
-  if (body !== null && typeof body === 'object' && body.runLogin === true) {
+  if (want.mode === 'run-login') {
     const plan = service.loginPlan(id)   // 源不存在 → SourceNotFoundError（writeError 映射 404）
     if (plan === null) throw new ApiError('该源未声明 loginUrl', 400, 'BadRequest')
     if (plan.mode === 'manual') {
@@ -584,16 +549,8 @@ async function authRoute(service: ReadingService, id: string, req: IncomingMessa
     return
   }
 
-  const cookies = (body as Record<string, unknown> | null)?.cookies
-  if (typeof cookies !== 'object' || cookies === null || Array.isArray(cookies)) {
-    throw new ApiError('body 需为 { cookies: Record<string,string>, headers?: Record<string,string> }', 400, 'BadRequest')
-  }
-  const headers = (body as Record<string, unknown>).headers
   // cookie 录入归门面动词（acquiredAt 盖章在门面——dispatch 不再手拼 SourceAuth）
-  await service.saveAuth(id,
-    cookies as Record<string, string>,
-    typeof headers === 'object' && headers !== null && !Array.isArray(headers)
-      ? headers as Record<string, string> : undefined)
+  await service.saveAuth(id, want.cookies, want.headers)
   writeOk(res, { auth: true })
 }
 
@@ -601,6 +558,30 @@ function guard(method: string, want: string, what: string): void {
   if (method !== want) throw new ApiError(`方法不允许: ${method}（${what} 需 ${want}）`, 405, 'MethodNotAllowed')
 }
 
+/** 「未知路由」404 的唯一措辞处。三个落点各写一遍时，改前缀必然漏改一处——而
+ *  `tests/api/routes.test.ts` 的**落点判据**就是这句前缀（`startsWith('未知路由')`），
+ *  漏改的那一处会让「路由没接住」被读成「测试找不到证据」。 */
+function unknownRoute(method: string, segs: string[]): ApiError {
+  return new ApiError(`未知路由: ${method} ${NOVEL_API_PREFIX}/${segs.join('/')}`, 404, 'NotFound')
+}
+
+/** 「方法不允许」405 在**面出口**上的唯一措辞处（臂内守卫另有其家，见 `guard`）。
+ *  `at` = 落在哪条面（`sources` / `shelf/:key`），`hint` = 给调用方的出路，两者都不参与判据。 */
+function methodNotAllowed(method: string, at: string, hint?: string): ApiError {
+  return new ApiError(
+    `方法不允许: ${method} ${NOVEL_API_PREFIX}/${at}${hint === undefined ? '' : `（${hint}）`}`,
+    405, 'MethodNotAllowed',
+  )
+}
+
 /** 任务互斥（409）与本地书面（400/413/503）的错误→HTTP 投影已全数收进分类表
  *  口径两分法（见 api/wire）：domain 错误走 classify+STATUS_OF；
  *  路由自检错误走 ApiError（自带 status）。本文件不再 inline writeJson 硬编状态码。 */
+
+/** 这里留下的三处「看着像业务判据」的东西，各自的归属是定过的，别当违规清理：
+ *  ① `shelfPut` / `authRoute` 按 body 形状分派到哪个门面动词——那是「调用方要的是哪个动作」，
+ *    传输关注点；**值域**判据（能不能进架、进度取值范围）全在门面（`docs/adr/0019` 那条同一件事）。
+ *    body 的*形状*判据不在这里重复：它住 `shared/wire.ts` 的 `readBodies`。
+ *  ② 导出区间的裁剪与两条 422：主人是这一层，`services/export.ts` 的头注就是这条分工的记录
+ *    （它只在拿到越界区间时抛，防的是未来的第二个调用方）。
+ *  ③ 流式面（导出 / 两条观察流）自己写响应头：它们不套 JSON 信封，是信封的两个有意豁免者。 */

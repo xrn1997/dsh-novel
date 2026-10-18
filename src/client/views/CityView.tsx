@@ -4,8 +4,8 @@ import { ROUTES } from '../../shared/wire.js'
 import type { ExploreBook, ExploreSources } from '../../shared/wire.js'
 import { bookListEmpty, cityEmptyState, cityMeta, kindCountLabel, roundReadout } from '../city-view-model.js'
 import { useExploreJob } from '../explore-job.js'
-import { prodCoreDeps } from '../deps.js'
-import type { ClientCoreDeps } from '../deps.js'
+import { prodJobViewDeps } from '../deps.js'
+import type { JobViewDeps } from '../deps.js'
 import { cityStore } from '../store.js'
 import { coverTintClass, topAlignIfClipped } from '../util.js'
 import { coverFallbackChar, EmptyState } from './bits.js'
@@ -44,7 +44,7 @@ const sourceSub = (s: ExploreSources['sources'][number]): string =>
  * 轮次观察与读面的会话内现场各自有主人：轮次归 `useExploreJob`（全量快照），上次逛的源与分类归
  * `cityStore`（不落盘）。本视图只做装配与呈现，文案与判据一律取 `city-view-model`。
  */
-export function CityView({ deps = prodCoreDeps }: { deps?: ClientCoreDeps }): ReactNode {
+export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): ReactNode {
   const { round, error, submit, restored, loadMore } = useExploreJob(deps)
   /** 可选源清单（`null` = 还在读）：**空清单**是「库里没有源提供分类浏览」，与读面失败不是一件事 */
   const [sources, setSources] = useState<ExploreSources['sources'] | null>(null)

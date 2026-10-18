@@ -5,7 +5,7 @@ import { useSearchJob } from '../../src/client/search-job.js'
 import { SearchJobs } from '../../src/services/search-job.js'
 import type { SearchGroup } from '../../src/shared/wire.js'
 import { makeCoreDeps } from './fake-deps.js'
-import type { CoreDepsOverrides } from './fake-deps.js'
+import type { DepsOverrides } from './fake-deps.js'
 
 /**
  * 搜索观察 module 的**轮次身份**测试（身份与游标不可分开）。
@@ -39,7 +39,7 @@ const makeJobs = (): SearchJobs => {
 const sinceOf = (path: string): number => Number(new URLSearchParams(path.split('?')[1] ?? '').get('since') ?? '0')
 
 /** 真读面假传输：apiGet 直通 SearchJobs.snapshot(since)；apiEventStream 由各用例覆写 */
-const serverDeps = (jobs: SearchJobs, over: CoreDepsOverrides = {}): ReturnType<typeof makeCoreDeps> =>
+const serverDeps = (jobs: SearchJobs, over: DepsOverrides = {}): ReturnType<typeof makeCoreDeps> =>
   makeCoreDeps({
     apiGet: vi.fn(async (path: string) => ({ job: jobs.snapshot(sinceOf(path)) })),
     ...over,
