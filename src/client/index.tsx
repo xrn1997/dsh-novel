@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ReactNode } from 'react'
 import { registerConfigPage } from './config-page.js'
+import { NOVEL_GLYPH_PATH, NOVEL_GLYPH_VIEWBOX } from './novel-glyph.js'
 import { NovelStatusOverlay } from './views/NovelStatusOverlay.js'
 import { NovelView } from './views/NovelView.js'
 
@@ -31,22 +32,16 @@ export const inject = ['slots', 'layout']
  *  行本体（按钮、aria-current、tooltip、选中底色）全归宿主 sidebar shell——我们只出图，
  *  `active` 刻意不用（宿主行已是唯一选中呈现，契约字段留在类型里即可）。
  *
- * 字形 = **android-ebook 的启动器前景**（用户指定，2026-09）：几何读数与出处记在
- * `tests/client/panel-registration.test.tsx` 的「面板图标 = android-ebook 启动器前景字形」用例里。
- * 搬运用法：pathData **原样**保留、裁掉自适应图标的安全区留白——viewBox 取 group 坐标系
- * `0 0 1025 1025`（原 canvas 里字形只占约一半，16px 行图标下会糊成一点）；`fill="currentColor"`
- * 写在 path 上（随宿主行前景色走明暗；hex 不进本仓，theme-tokens 守卫扫到即红）。背景层
- * （原资产那面是纯白方块）刻意不搬：侧栏行自带底色，白方块在暗色主题下是块白斑。
- * 机器钉子同在那份测试（pathData 来源防随手换回通用图标）。 */
+ * 字形单点见 `novel-glyph.ts`；`fill="currentColor"` 随宿主行前景色走明暗。 */
 function NovelPanelIcon({ size = 16 }: { size?: number; active?: boolean }): ReactNode {
   return (
     <svg
       width={size}
       height={size}
-      viewBox="0 0 1025 1025"
+      viewBox={NOVEL_GLYPH_VIEWBOX}
       aria-hidden="true"
     >
-      <path fill="currentColor" d="M410.74,19.6l81.7,0 0,171.54 343.06,0 -20.43,285.7 142.94,0c-5.44,68.08 -10.9,140.24 -16.34,216.46 -5.44,114.37 -62.62,170.18 -171.52,167.46 -51.74,0 -100.75,0 -147.02,0 0,-13.62 -5.46,-40.85 -16.34,-81.68 51.71,5.44 102.08,8.16 151.1,8.16 68.06,8.18 104.82,-25.86 110.27,-102.1 2.72,-51.73 5.44,-98.02 8.16,-138.86L492.43,546.27l0,432.91 -81.7,0L410.74,546.27 39.09,546.27l0,-69.44 371.65,0L410.74,264.67 104.43,264.67l0,-73.54 306.3,0L410.74,19.6zM749.71,264.67l-257.28,0 0,212.16 245.04,0L749.71,264.67zM716.72,76.62l53.1,-53.1c84.38,54.46 156.54,103.47 216.45,147.02l-53.09,65.34C889.62,197.78 817.46,144.69 716.72,76.62z" />
+      <path fill="currentColor" d={NOVEL_GLYPH_PATH} />
     </svg>
   )
 }

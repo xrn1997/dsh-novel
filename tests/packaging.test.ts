@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import * as semver from 'semver'
+import { NOVEL_GLYPH_PATH, NOVEL_GLYPH_VIEWBOX } from '../src/client/novel-glyph.js'
 
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
 const patch = readFileSync('cordis.patch.yml', 'utf8')
@@ -78,6 +79,8 @@ describe('包形态声明', () => {
     expect(pkg.files).toEqual(expect.arrayContaining(['locale', 'icon.svg']))
     const icon = readFileSync('icon.svg', 'utf8')
     expect(icon).toContain('<svg')
+    // 宿主把解析后的主题写成根节点 color-scheme，SVG 内部据此切换深浅两档颜色
+    expect(icon).toContain('prefers-color-scheme: dark')
     expect(Buffer.byteLength(icon)).toBeLessThanOrEqual(256 * 1024)
     for (const lang of ['zh', 'en']) {
       const { meta } = JSON.parse(readFileSync(`locale/${lang}.json`, 'utf8'))
@@ -86,6 +89,11 @@ describe('包形态声明', () => {
       expect(typeof meta.description).toBe('string')
       expect(meta.description.trim().length).toBeGreaterThan(0)
     }
+  })
+  it('图标字形与侧栏组件同一份 pathData（静态资源不能 import 单点，测试对齐）', () => {
+    const icon = readFileSync('icon.svg', 'utf8')
+    expect(icon).toContain(`viewBox="${NOVEL_GLYPH_VIEWBOX}"`)
+    expect(icon).toContain(`d="${NOVEL_GLYPH_PATH}"`)
   })
   it('peerDeps 覆盖宿主面：官方 @deepseek-ai/* 一律 peer，不进 dependencies', () => {
     expect(Object.keys(pkg.peerDependencies)).toEqual(
