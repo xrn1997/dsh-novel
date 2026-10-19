@@ -57,7 +57,7 @@ describe('包形态声明', () => {
     // 编译所依的 dsh-tools 号 = 宿主号（官方包同号下发）：它必须自己就在册，
     // 否则就是拿一版没声明过的类型面在编译
     const dev = pkg.devDependencies['@deepseek-ai/dsh-tools']
-    expect(releases[dev]).toBe('compatible')   // 本轮实测：dump-config 挂载 + 工具真调用
+    expect(releases[dev]).toBe('compatible')   // 在册即声称实测过：每一版「真跑了什么」住把它加进册的那次提交正文，注释不抄那份读数
     // 只许出现已验过的状态词：多一个 'unknown' / 'incompatible' 就是把「没验过」写进兼容门面
     expect([...new Set(Object.values(releases))]).toEqual(['compatible'])
   })
