@@ -1,9 +1,9 @@
 # 知识卡导出索引文件
 schema_version: 1
 locale: zh-CN
-commit: 8382c4b651032efdf342f59f328fb4c6ddb83344
+commit: 4f31eacd8965af7339ff7ea3b21943cd3e7c989d
 branch: main
-exported_at: "2026-10-02T05:00:24Z"
+exported_at: "2026-10-19T14:40:50Z"
 modules:
     root:
         dir_name: DSH 小说插件工作区根配置
