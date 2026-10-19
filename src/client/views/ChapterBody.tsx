@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { Fragment, createElement, useState } from 'react'
 import { resourceUrl } from '../../shared/wire.js'
+import { useCopy } from '../copy/index.js'
 import type { ChapterContent, ContentNode, ContentTag, LinkRole, ReadingTarget } from './types.js'
 
 /**
@@ -140,6 +141,7 @@ function Figure({ node, ctx }: {
   node: Extract<ContentNode, { kind: 'image' }>
   ctx: Ctx
 }): ReactNode {
+  const t = useCopy()
   const [failed, setFailed] = useState(false)
   // 宽高比只在**可信宽高**（有限且为正）时落地：NaN / Infinity 会拼出一份浏览器认不出的
   // aspect-ratio（框塌成 0 或整条规则被丢弃），占位反而失效——宁可退回样式层的兜底比值。
@@ -156,8 +158,8 @@ function Figure({ node, ctx }: {
       {failed
         ? (
           <span className="novel-fig-fail" role="img"
-            aria-label={node.alt === '' ? '图片加载失败' : `图片加载失败：${node.alt}`}>
-            图片加载失败
+            aria-label={node.alt === '' ? t('reader.imageFailed') : t('reader.imageFailedAlt', { alt: node.alt })}>
+            {t('reader.imageFailed')}
           </span>
         )
         : (

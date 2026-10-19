@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createElement } from 'react'
 import { ShelfView } from '../../src/client/views/ShelfView.js'
+import { CopyProvider, enTranslate } from '../../src/client/copy/index.js'
 import { routeStore } from '../../src/client/store.js'
 import { ROUTES } from '../../src/shared/wire.js'
 import { makeCoreDeps } from './fake-deps.js'
@@ -196,5 +197,29 @@ describe('删除所选：一次批请求 + 模态口径 + 失败留框内', () =
     await waitFor(() => expect(deps.apiSend).toHaveBeenCalledTimes(1))
     expect(deps.apiSend.mock.calls[0][0]).toBe('DELETE')
     expect(String(deps.apiSend.mock.calls[0][1])).toContain('shelf/')
+  })
+})
+
+describe('英文渲染：书架', () => {
+  it('多选入口、批量条与导入入口走 en 字典', async () => {
+    const deps = makeCoreDeps({ apiGet: vi.fn(async () => [A, B]) })
+    render(<CopyProvider value={enTranslate}><ShelfView deps={deps} /></CopyProvider>)
+    await waitFor(() => expect(screen.getByText('Select')).toBeTruthy())
+    expect(screen.getByText('Import local books')).toBeTruthy()
+
+    fireEvent.click(screen.getByText('Select'))
+    const bar = selbar()
+    expect(within(bar).getByText('0 selected')).toBeTruthy()
+    expect(within(bar).getByText('Select all')).toBeTruthy()
+    expect(within(bar).getByText('Clear selection')).toBeTruthy()
+    expect(within(bar).getByText('Delete selected')).toBeTruthy()
+    expect(within(bar).getByText('Done')).toBeTruthy()
+  })
+
+  it('空态标题与提示对齐中文口径', async () => {
+    const deps = makeCoreDeps({ apiGet: vi.fn(async () => []) })
+    render(<CopyProvider value={enTranslate}><ShelfView deps={deps} /></CopyProvider>)
+    await waitFor(() => expect(screen.getByText('Your shelf is empty — search for a book above to start reading')).toBeTruthy())
+    expect(screen.getByText('Book sources are imported under Novel → Sources.')).toBeTruthy()
   })
 })

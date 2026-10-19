@@ -255,6 +255,18 @@ _Avoid_: 版本号（是规则指纹不是自增版本）、缓存键
 _唯一实现_: `services/cache-epoch.ts` 的 `contentSlot`
 _Avoid_: 正文键、章节 id
 
+### 客户端文案
+
+**文案字典（copy dictionary）**:
+客户端可见文案的唯一住址：`ZH` 是真源，`EN` 逐键镜像；组件经 `useCopy` 取词、slot 子树经 `CopyProvider` 注入，宿主 locale 服务缺席时 `zhTranslate` 兜底。
+_唯一实现_: `src/client/copy/index.tsx` 的 `ZH` / `EN` / `createTranslate`（注册与绑定）/ `zhTranslate`（回退）/ `CopyProvider` + `useCopy`（子树取词）
+_Avoid_: 文案表、客户端 UI 文案的外挂 i18n 资源（字典是同一份 TS 模块；插件卡片的 locale 元信息不在这层）；服务端错误原文与 AI 工具描述不在这一层
+
+**错误展示（error display）**:
+上屏错误的一句话归谁出：客户端自造的网络错误按 `reason` 走当前语言；服务端错误原文透传（与书源数据同一条边界），错误码与段级定位原样呈现。
+_唯一实现_: `src/client/api.ts` 的 `describeError` / `NetworkReason`（只翻客户端自造的三条）
+_Avoid_: 按 message 前缀判来源（文案一改就漂，见 `docs/adr/0016`）
+
 ### 跨半契约
 
 **书目字段集（shelf metadata field-set）**:

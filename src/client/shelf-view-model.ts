@@ -1,7 +1,9 @@
 import { hasProgress, LOCAL_SOURCE_ID } from '../shared/wire.js'
+import { plural, zhTranslate } from './copy/index.js'
+import type { CopyKey, Translate } from './copy/index.js'
 import type { LocalImportResponse, ShelfBook, ShelfEntry } from './views/types.js'
 
-/** 书架视图派生（纯函数、零 React）：筛选与卡片元信息的唯一口径（pct 是书架卡片百分比的
+/** 书架视图派生（纯函数、不持 React 状态）：筛选与卡片元信息的唯一口径（pct 是书架卡片百分比的
  *  **唯一算式**，与 `views/bits.tsx` 的 `jobPct` / `searchPct` 三分家、刻意不合并：三者的分母
  *  语义不同——已读章数 / 任务条目数 / 参搜源数，折叠成一个算式必有一面谎报进度）。口径：
  *   - reading = 有实质阅读进度（判据单点 `wire.hasProgress`，与阅读器的存档恢复同源）；
@@ -10,11 +12,11 @@ import type { LocalImportResponse, ShelfBook, ShelfEntry } from './views/types.j
  *   - 未读书 pct 归 null：「未读不出进度条」，卡片元信息只留文字。 */
 export type ShelfFilterKey = 'all' | 'reading' | 'unread' | 'local'
 
-export const SHELF_FILTERS: Array<{ key: ShelfFilterKey; label: string }> = [
-  { key: 'all', label: '全部' },
-  { key: 'reading', label: '在读' },
-  { key: 'unread', label: '未读' },
-  { key: 'local', label: '本地' },
+export const SHELF_FILTERS: Array<{ key: ShelfFilterKey; labelKey: CopyKey }> = [
+  { key: 'all', labelKey: 'shelf.filter.all' },
+  { key: 'reading', labelKey: 'shelf.filter.reading' },
+  { key: 'unread', labelKey: 'shelf.filter.unread' },
+  { key: 'local', labelKey: 'shelf.filter.local' },
 ]
 
 /** 筛选：泛型保住入参的具体条目类型（ShelfEntry 的来源投影不许被这里擦成 ShelfBook——
@@ -32,18 +34,31 @@ export function filterShelfBooks<T extends ShelfBook>(books: readonly T[], key: 
  *  （`SHELF_META` 里没有它——加进去就等于多一个能被 PUT 随意 patch、与磁盘真相脱节的字段），
  *  所以这里没有可从「唯一真相」推出来的格式可写；真实格式由服务端 `LocalImportResponse.format`
  *  交代（导入回执与阅读器的导入说明），卡片不猜（按书名猜格式是另一种造假）。 */
-export function shelfCardMeta(b: ShelfBook): { text: string; pct: number | null } {
+export function shelfCardMeta(b: ShelfBook, t: Translate = zhTranslate): { text: string; pct: number | null } {
   const total = typeof b.totalChapters === 'number' ? b.totalChapters : 0
   const isLocal = b.sourceId === LOCAL_SOURCE_ID
   if (!hasProgress(b.progress)) {
-    return { text: isLocal ? '本地' : total > 0 ? `未开始 · ${total} 章` : '未开始', pct: null }
+    const text = isLocal
+      ? t('shelf.local')
+      : total > 0
+        ? plural(t, total, 'shelf.card.unreadTotal.one', 'shelf.card.unreadTotal.other', { n: total })
+        : t('shelf.card.unread')
+    return { text, pct: null }
   }
   const pct = total > 0
     ? Math.min(100, Math.round(((b.progress.chapterIndex + b.progress.offsetRatio) / total) * 100))
     : null
-  if (isLocal) return { text: pct === null ? '本地' : `本地 · ${pct}%`, pct }
-  if (pct === null) return { text: `读至第 ${b.progress.chapterIndex + 1} 章`, pct }
-  return { text: `${b.progress.chapterIndex + 1}/${total} 章 · ${pct}%`, pct }
+  if (isLocal) return { text: pct === null ? t('shelf.local') : t('shelf.card.localPct', { pct }), pct }
+  if (pct === null) {
+    const chapter = b.progress.chapterIndex + 1
+    return { text: plural(t, chapter, 'shelf.card.reading.one', 'shelf.card.reading.other', { n: chapter }), pct }
+  }
+  return {
+    text: plural(t, total, 'shelf.card.progress.one', 'shelf.card.progress.other', {
+      i: b.progress.chapterIndex + 1, total, pct, n: total,
+    }),
+    pct,
+  }
 }
 
 /** 来源 chip 的展示口径（卡片封面左下那枚）：
@@ -51,24 +66,28 @@ export function shelfCardMeta(b: ShelfBook): { text: string; pct: number | null 
  *   - 源名可用 → 直出源名；
  *   - 服务端 join 不到（源已被删/从未存在，`sourceName === null`）→ 灰字「来源已删除」，
  *     `deleted` 供样式降调（宁如实说来源没了，也不拿空串或旧名糊过去）。 */
-export function shelfSourceTag(b: ShelfEntry): { text: string; deleted: boolean } | null {
+export function shelfSourceTag(b: ShelfEntry, t: Translate = zhTranslate): { text: string; deleted: boolean } | null {
   if (b.sourceId === LOCAL_SOURCE_ID) return null
   const name = b.sourceName
   return typeof name === 'string' && name !== ''
     ? { text: name, deleted: false }
-    : { text: '来源已删除', deleted: true }
+    : { text: t('shelf.sourceDeleted'), deleted: true }
 }
 
 /** 导入回执的格式标签（**从服务端回执的 `format` 字段来**，不按书名 / 后缀猜）：TXT 与 EPUB 是
  *  本仓本地书的两支，章数口径一致（EPUB 按阅读单元计章）。卡片文案那边刻意不说格式（格式不是
  *  书目字段，见 `shelfCardMeta`）——真实格式只有这条回执与阅读器的导入说明说得出，所以它认的是
  *  **服务端那次导入的元数据**，不是书架上这本书当下的样子。 */
-export function localImportLabel(b: LocalImportResponse): string {
-  return `${b.format === 'epub' ? 'EPUB' : 'TXT'} · ${b.chapterCount} 章`
+export function localImportLabel(b: LocalImportResponse, t: Translate = zhTranslate): string {
+  const format = b.format === 'epub' ? 'EPUB' : 'TXT'
+  return plural(t, b.chapterCount, 'shelf.importFormat.one', 'shelf.importFormat.other', { format, n: b.chapterCount })
 }
 
 /** 切走半场（瞬态成功通知）的一句补充：有导入说明时点名条数，用户回来点进这本书就能重看
  *  （导入回执只在书架页在场时摆得出来，切走后至少别让「有几条说明」这件事只剩回忆）。 */
-export function localImportNote(b: LocalImportResponse): string {
-  return b.warnings.length === 0 ? '' : `，有 ${b.warnings.length} 条导入说明`
+export function localImportNote(b: LocalImportResponse, t: Translate = zhTranslate): string {
+  const n = b.warnings.length
+  return n === 0
+    ? ''
+    : plural(t, n, 'shelf.notice.importNote.one', 'shelf.notice.importNote.other', { n })
 }

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { useCopy } from '../copy/index.js'
 import { useTransient } from '../transient.js'
 import { jobKindLabel } from '../jobs.js'
 import { jobPct, ProgressBar } from './bits.js'
@@ -16,6 +17,7 @@ import type { JobState } from './types.js'
  *  每次渲染现造五个 style 对象，样式表里搜不到这些规则，改观感要改 JS。 */
 
 export function GlobalStatusBar({ job, stale = false, onOpen }: { job: JobState | null; stale?: boolean; onOpen: () => void }): ReactNode {
+  const t = useCopy()
   const { entries, dismiss } = useTransient()
   const errors = entries.filter((e) => e.kind === 'error')
   const pendings = entries.filter((e) => e.kind === 'pending')
@@ -27,7 +29,7 @@ export function GlobalStatusBar({ job, stale = false, onOpen }: { job: JobState 
     <div data-novel-status-bar className="novel-status-bar">
       {stale && (
         <div data-novel-job-stale className="novel-warn novel-lane cols-1">
-          连接异常，重试中……（任务状态刷新失败，显示的是最后一帧）
+          {t('status.stale')}
         </div>
       )}
       {errors.map((e) => (
@@ -37,24 +39,26 @@ export function GlobalStatusBar({ job, stale = false, onOpen }: { job: JobState 
           {e.anchor === undefined ? null : (
             <button className="novel-btn sm"
               onClick={() => document.querySelector(e.anchor as string)?.scrollIntoView({ block: 'center' })}>
-              定位 →
+              {t('status.locate')}
             </button>
           )}
-          <button className="novel-btn sm" aria-label="忽略此错误" onClick={() => dismiss(e.id)}>✕</button>
+          <button className="novel-btn sm" aria-label={t('status.dismissError')} onClick={() => dismiss(e.id)}>✕</button>
         </div>
       ))}
       {running && job !== null && (
         <button data-novel-job-status className="novel-lane cols-job" onClick={onOpen}>
-          <span className="novel-muted">{jobKindLabel(job.kind)}中…</span>
-          <span className="novel-muted">{job.done}/{job.total}（{pct}%）</span>
+          <span className="novel-muted">{t('job.progress', { kind: jobKindLabel(job.kind, t) })}</span>
+          <span className="novel-muted">{t('job.counts', { done: job.done, total: job.total, pct })}</span>
           {/* 迷你进度条与两区运行卡同源：ProgressBar + jobPct，仅高度覆写 */}
           <ProgressBar pct={pct} style={{ height: 4 }} />
-          <span className="novel-lane-link">点此查看 →</span>
+          <span className="novel-lane-link">{t('status.viewTask')}</span>
         </button>
       )}
       {pendings.length > 0 && (
         <div className="novel-muted novel-lane cols-1">
-          {pendings.length === 1 ? pendings[0].label : `正在保存 ${pendings.length} 项…`}
+          {pendings.length === 1
+            ? pendings[0].label
+            : t('status.saving', { n: pendings.length })}
         </div>
       )}
       {oks.map((e) => (

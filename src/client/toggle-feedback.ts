@@ -1,3 +1,4 @@
+import { zhTranslate, type Translate } from './copy/index.js'
 import { pushError } from './transient.js'
 
 /** 启停反馈只需要错误入口——依赖束的最小投影（测试注入假 pushError 即可断言进条语义） */
@@ -28,14 +29,18 @@ export function rowAnchorOf(id: string): string {
   return `[data-novel-source-row="${id}"]`
 }
 
-export function toggleFeedback(anchor: string, deps: ToggleFeedbackDeps = { pushError }): ToggleFeedback {
+/** `t` 缺省 zhTranslate：测试与未接 locale 的调用方保持既有中文；调用方在**创建时**交当前 `t`，
+ *  在途请求落地的那句因此停在发起语言（与钩子类反馈同一取舍，见 `copy/index.tsx` 头注）。 */
+export function toggleFeedback(
+  anchor: string, deps: ToggleFeedbackDeps = { pushError }, t: Translate = zhTranslate,
+): ToggleFeedback {
   return {
     inFlight(): void {
       // 故意留空：这里**不许** pushPending（挂上就顶动设置区布局 → 闪烁，见文件头注）
     },
     settle(ok: boolean, failureText?: string): void {
       if (ok) return
-      deps.pushError(failureText ?? '启停失败', anchor)
+      deps.pushError(failureText ?? t('sources.toggle.failed'), anchor)
     },
   }
 }

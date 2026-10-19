@@ -2,9 +2,11 @@ import type { ReactNode } from 'react'
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { parseCookieString } from '../../shared/cookies.js'
 import { bodies, paramRoutes, ROUTES } from '../../shared/wire.js'
+import { describeError } from '../api.js'
+import { plural, useCopy, type CopyKey } from '../copy/index.js'
 import { prodDeps } from '../deps.js'
 import type { RowActionDeps, SettingsDeps } from '../deps.js'
-import { startSourceVerification } from '../jobs.js'
+import { jobKindLabel, startSourceVerification } from '../jobs.js'
 import { clearSelection, groupIcon, selectMany, setEditMode, setGroupFilter, setQuery, setStatusFilter, sourceListUi, toggleSelect, UNGROUPED } from '../source-list.js'
 import type { StatusFilter } from '../source-list.js'
 import { deriveSourceListView } from '../source-list-view.js'
@@ -39,12 +41,12 @@ const PAGE_SIZE = 100
 type SourceListDeps = RowActionDeps & Pick<SettingsDeps, 'startBatchProbeJob'>
 /** 状态下拉：五维单选（'disabled' 维是 enabled 布尔，与 status 正交——口径归 source-list.ts）。
  *  不带计数：全库读数唯一住址是列表头**状态带**（`source-list-view.ts` 的 `stats`），下拉只过滤。 */
-const STATUS_OPTIONS: Array<{ key: StatusFilter; label: string }> = [
-  { key: 'all', label: '全部状态' },
-  { key: 'verified', label: '可用' },
-  { key: 'unverified', label: '未验证' },
-  { key: 'broken', label: '坏源' },
-  { key: 'disabled', label: '停用' },
+const STATUS_OPTIONS: Array<{ key: StatusFilter; labelKey: CopyKey }> = [
+  { key: 'all', labelKey: 'sources.filter.all' },
+  { key: 'verified', labelKey: 'sources.filter.available' },
+  { key: 'unverified', labelKey: 'sources.filter.unverified' },
+  { key: 'broken', labelKey: 'sources.filter.broken' },
+  { key: 'disabled', labelKey: 'sources.filter.disabled' },
 ]
 
 export function SourceList({ sources, job, onChanged, onProbe, onImport, loadError = null, deps = prodDeps }: {
@@ -57,6 +59,7 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
   /** 依赖束：缺省生产实现；测试注入假 adapter 驱动接线层 */
   deps?: SourceListDeps
 }): ReactNode {
+  const t = useCopy()
   const ui = useStore(sourceListUi)
   const [limit, setLimit] = useState(PAGE_SIZE)
   // opener = 触发件（批量条钮 / 该行 ⋯ 钮）：模态关闭后焦点还给它。不能靠
@@ -83,7 +86,7 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
    *  helper**：归 `jobs.ts` 的 `startSourceVerification`（提交 → 催任务读面 / 失败一处反馈）。
    *  启停若走错出口，写完没人重取源列表，行开关与计数全停在点之前的值（2026-09 实机报）。 */
   const submit = <T,>(fn: () => Promise<T>, after: (res: T) => void): void => {
-    void fn().then(after, (e) => deps.pushError(`操作失败：${e instanceof Error ? e.message : String(e)}`))
+    void fn().then(after, (e) => deps.pushError(t('sources.batch.failed', { detail: describeError(e, t) })))
   }
   /** 批量启停：ids 点击时快照；成功只重取源列表，**留在编辑态且勾选保留**（2026-09 用户裁定：
    *  这批源还在列表里，勾选是它们的现场）。清勾选只在「删除所选」成功后做——对象已不存在。
@@ -92,7 +95,9 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
   const batchEnabled = (enabled: boolean): void => {
     const ids = [...ui.selection]
     submit(() => deps.apiSend<{ updated: number }>('POST', ROUTES.sourcesBatchEnabled.path, bodies.batchEnabled(ids, enabled)), (r) => {
-      deps.pushOk(`${enabled ? '已启用' : '已停用'} ${r.updated} 个源`)
+      deps.pushOk(enabled
+        ? plural(t, r.updated, 'sources.batch.enabled.one', 'sources.batch.enabled.other')
+        : plural(t, r.updated, 'sources.batch.disabled.one', 'sources.batch.disabled.other'))
       onChanged()
     })
   }
@@ -104,25 +109,25 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
       setPending(null)
       setDelBusy(false)
       clearSelection()                               // 已删的 id 留在选择集里是幽灵勾选（动作条计数虚高、后续批量动作带死 id）
-      deps.pushOk(`已删除 ${r.removed} 个源`)
+      deps.pushOk(plural(t, r.removed, 'sources.delete.removed.one', 'sources.delete.removed.other'))
       onChanged()
     }, (e) => {
       setPending(null)
       setDelBusy(false)
-      deps.pushError(`批量删除失败：${e instanceof Error ? e.message : String(e)}`)
+      deps.pushError(t('sources.delete.failed', { detail: describeError(e, t) }))
     })
   }
   /** 行内启停开关：单击即切——乐观更新在行内组件；**在途不进泳道**（进条就顶动
    *  布局 → 秒级操作闪烁，见 toggle-feedback.ts 头注），失败才进 error 泳道并挂行锚点。 */
   const toggleEnabled = (s: SourcePublic, next: boolean): Promise<boolean> => {
-    const fb = toggleFeedback(rowAnchorOf(s.id), deps)
+    const fb = toggleFeedback(rowAnchorOf(s.id), deps, t)
     fb.inFlight()
     return deps.apiSend('POST', paramRoutes.sourceEnabled(s.id), bodies.enabled(next)).then(() => {
       fb.settle(true)
       onChanged()
       return true
     }, (e) => {
-      fb.settle(false, `「${s.name}」启停失败：${e instanceof Error ? e.message : String(e)}（若路由 404，请重启 DSH 服务端）`)
+      fb.settle(false, t('sources.toggle.failedNamed', { name: s.name, detail: describeError(e, t) }))
       onChanged()                                        // 服务端为准的二次校准（行内已即刻回滚）
       return false
     })
@@ -130,19 +135,19 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
   return (
     <div data-novel-source-list className="novel-group">
       <div className="novel-list-head">
-        <strong>源列表</strong>
+        <strong>{t('sources.list.title')}</strong>
         {/* 状态带：全库读数的**唯一**住址（待办卡可忽略，读数不能跟着提示消失）。0 也显示
             （「坏源 0」是结论）；纯读数不可点——过滤归同一行的下拉与文本框，「带计数的状态
             chips」是 2026 已否决的设计。窄列退化规则在样式层（@container）。
             **只在真有数据可报时在场**：加载中不报 = 不拿未知冒充结论；0 源不报 = 空态已说同一件事。 */}
         {loaded && all.length > 0 && (
           <span className="novel-src-stats" data-novel-src-stats>
-            <span>共 {stats.total} 个源</span>
-            <span>已启用 {stats.enabled}</span>
-            <span className="slim">已停用 {stats.disabled}</span>
-            <span className={stats.unverified > 0 ? 'slim warn' : 'slim'}>未验证 {stats.unverified}</span>
-            <span className={stats.broken > 0 ? 'slim err' : 'slim'}>坏源 {stats.broken}</span>
-            {filtered.length === stats.total ? null : <span>当前过滤 {filtered.length}</span>}
+            <span>{plural(t, stats.total, 'sources.stats.total.one', 'sources.stats.total.other')}</span>
+            <span>{t('sources.stats.enabled', { n: stats.enabled })}</span>
+            <span className="slim">{t('sources.stats.disabled', { n: stats.disabled })}</span>
+            <span className={stats.unverified > 0 ? 'slim warn' : 'slim'}>{t('sources.stats.unverified', { n: stats.unverified })}</span>
+            <span className={stats.broken > 0 ? 'slim err' : 'slim'}>{t('sources.stats.broken', { n: stats.broken })}</span>
+            {filtered.length === stats.total ? null : <span>{t('sources.stats.filtered', { n: filtered.length })}</span>}
           </span>
         )}
         <span className="novel-grow" />
@@ -151,17 +156,17 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
           className="novel-input novel-source-query"
           value={ui.query}
           onChange={(e) => { setQuery(e.target.value); setLimit(PAGE_SIZE) }}
-          placeholder="过滤名称 / 地址"
-          aria-label="过滤源名称或地址"
+          placeholder={t('sources.filter.placeholder')}
+          aria-label={t('sources.filter.label')}
         />
         <select
           data-novel-status-filter
           className="novel-input"
           value={ui.statusFilter}
-          aria-label="按状态过滤"
+          aria-label={t('sources.filter.statusLabel')}
           onChange={(e) => { setStatusFilter(e.target.value as StatusFilter); setLimit(PAGE_SIZE) }}
         >
-          {STATUS_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+          {STATUS_OPTIONS.map((o) => <option key={o.key} value={o.key}>{t(o.labelKey)}</option>)}
         </select>
         {/* 分组下拉：分组名五花八门不配 chips——下拉单选收敛宽度，与状态/文本过滤叠加；
             选项集按**全库**聚合计数，不随状态/文本过滤缩水（可组合过滤，语义钉在 view-model） */}
@@ -169,46 +174,47 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
           data-novel-group-filter
           className="novel-input novel-group-filter"
           value={ui.groupFilter}
-          aria-label="按分组过滤"
+          aria-label={t('sources.filter.groupLabel')}
           onChange={(e) => { setGroupFilter(e.target.value); setLimit(PAGE_SIZE) }}
         >
-          <option value="">全部分组</option>
+          <option value="">{t('sources.group.all')}</option>
           {/* 「未分组」伪选项：无分组源不属于任何真实组——单独入口才定位得到（批量补分组）；
               哨兵值 UNGROUPED 防与真实组名撞名；计数 0 时不渲染（不添噪声选项） */}
-          {ungroupedCount > 0 && <option value={UNGROUPED}>未分组（{ungroupedCount}）</option>}
+          {ungroupedCount > 0 && <option value={UNGROUPED}>{t('sources.group.ungrouped', { n: ungroupedCount })}</option>}
+          {/* 分组名是用户数据（中文）；排序按中文 collation，界面语言切换不改变选项顺序 */}
           {[...groupCounts.entries()].sort(([a], [b]) => a.localeCompare(b, 'zh')).map(([g, n]) => (
-            <option key={g} value={g}>{g}（{n}）</option>
+            <option key={g} value={g}>{t('sources.group.option', { name: g, n })}</option>
           ))}
         </select>
         <button className={ui.editMode ? 'novel-btn sm on' : 'novel-btn sm'}
           data-novel-edit-toggle
           onClick={() => setEditMode(!ui.editMode)}>
-          {ui.editMode ? '完成' : '编辑'}
+          {ui.editMode ? t('sources.done') : t('sources.edit')}
         </button>
-        <button className="novel-btn primary" data-novel-import-open onClick={onImport}>＋ 导入书源</button>
+        <button className="novel-btn primary" data-novel-import-open onClick={onImport}>{t('sources.import.open')}</button>
       </div>
 
       <div className="novel-list-body">
         {/* 选中动作条：操作与作用对象同框（编辑态才有意义） */}
         {ui.selection.length > 0 && (
           <div data-novel-selbar className="novel-selbar">
-            <strong>已选 {ui.selection.length}</strong>
+            <strong>{t('sources.batch.selected', { n: ui.selection.length })}</strong>
             <button className="novel-btn sm" disabled={probing} onClick={() => batchEnabled(true)}>
-              启用所选
+              {t('sources.batch.enable')}
             </button>
             <button className="novel-btn sm" disabled={probing} onClick={() => batchEnabled(false)}>
-              停用所选
+              {t('sources.batch.disable')}
             </button>
             <button className="novel-btn sm primary" disabled={probing}
-              onClick={() => void startSourceVerification(ui.selection, deps)}>
-              验证所选
+              onClick={() => void startSourceVerification(ui.selection, deps, t)}>
+              {t('sources.batch.verify')}
             </button>
             <button className="novel-btn sm danger"
-              onClick={(e) => setPending({ ids: [...ui.selection], title: `删除所选 ${ui.selection.length} 个源？`, opener: e.currentTarget })}>
-              删除所选
+              onClick={(e) => setPending({ ids: [...ui.selection], title: plural(t, ui.selection.length, 'sources.delete.confirm.count.one', 'sources.delete.confirm.count.other'), opener: e.currentTarget })}>
+              {t('sources.batch.delete')}
             </button>
             <span className="novel-grow" />
-            <button className="novel-btn sm" onClick={clearSelection}>清空选择</button>
+            <button className="novel-btn sm" onClick={clearSelection}>{t('sources.batch.clear')}</button>
           </div>
         )}
 
@@ -222,15 +228,15 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
           return (
             <Dialog title={pending.title} opener={pending.opener} onClose={cancel}
               actions={<>
-                <button className="novel-btn sm" onClick={cancel} disabled={delBusy}>取消</button>
-                <button className="novel-btn sm danger solid" onClick={confirmDelete} disabled={delBusy}>确认删除</button>
+                <button className="novel-btn sm" onClick={cancel} disabled={delBusy}>{t('common.cancel')}</button>
+                <button className="novel-btn sm danger solid" onClick={confirmDelete} disabled={delBusy}>{t('sources.delete.confirm')}</button>
               </>}>
               <div className="novel-modal-body">
                 {authCount > 0 && (
-                  <div className="novel-modal-warn">其中 {authCount} 个带登录态，删除后 cookie 失效，需重新录入登录。</div>
+                  <div className="novel-modal-warn">{plural(t, authCount, 'sources.delete.authWarning.one', 'sources.delete.authWarning.other')}</div>
                 )}
-                删除不可恢复。只是暂时不想用？行内启停开关停用即可（停用 ≠ 删除，随时可开回）。
-                {delBusy ? <div className="novel-modal-body">删除中…</div> : null}
+                {t('sources.delete.irreversible')}
+                {delBusy ? <div className="novel-modal-body">{t('sources.delete.deleting')}</div> : null}
               </div>
             </Dialog>
           )
@@ -240,7 +246,7 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
             把表头一起跳过 = 提示指向不存在的控件）；取数失败 → 这里不出声，壳层红字更全（同一
             失败不抄两遍，也不许伪装成「还没有书源」）；其余（含加载中）→ 表格。 */}
         {loadError !== null ? null : showEmpty ? (
-          <div className="novel-muted">还没有书源——点右上「＋ 导入书源」，或在对话里让 AI 助手帮你导入</div>
+          <div className="novel-muted">{t('sources.empty')}</div>
         ) : (
           <>
             {/* 表格：列宽归 .novel-tr.src（样式层单点），窄表由 @container 收掉地址列 */}
@@ -248,33 +254,33 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
               <div className="novel-tr src head">
                 <span>
                   {ui.editMode && (
-                    <input type="checkbox" checked={allFilteredSelected} aria-label="全选当前过滤结果"
+                    <input type="checkbox" checked={allFilteredSelected} aria-label={t('sources.selectAll')}
                       onChange={() => { if (!allFilteredSelected) selectMany(filtered.map((s) => s.id)) }} />
-                  )} 名称
+                  )} {t('sources.col.name')}
                 </span>
-                <span>状态</span>
+                <span>{t('sources.col.status')}</span>
                 <span>
-                  分组
+                  {t('sources.col.groups')}
                   {/* 「?」图例：分组列只显示图标，悬停解释每个图标对应哪个组 */}
                   {groupLegend === '' ? null : (
                     <span data-novel-group-legend className="novel-muted novel-group-legend" title={groupLegend}
-                      aria-label="图标图例">?</span>
+                      aria-label={t('sources.legend')}>?</span>
                   )}
                 </span>
-                <span className="col-url">地址</span>
-                <span className="novel-cell-end">操作</span>
-                <span className="novel-cell-right">启用</span>
+                <span className="col-url">{t('sources.col.url')}</span>
+                <span className="novel-cell-end">{t('sources.col.actions')}</span>
+                <span className="novel-cell-right">{t('sources.col.enabled')}</span>
               </div>
               {shown.map((s) => (
                 <SourceRow key={s.id} source={s} editMode={ui.editMode} selected={selection.has(s.id)}
                   probing={probing} onChanged={onChanged} onProbe={onProbe} onToggleEnabled={toggleEnabled}
-                  onDelete={(src, opener) => setPending({ ids: [src.id], title: `删除《${src.name}》？`, opener })}
+                  onDelete={(src, opener) => setPending({ ids: [src.id], title: t('sources.delete.confirm.named', { name: src.name }), opener })}
                   deps={deps} />
               ))}
             </div>
             {filtered.length > shown.length && (
               <button className="novel-btn" onClick={() => setLimit(limit + PAGE_SIZE)}>
-                显示更多（还有 {filtered.length - shown.length} 个）
+                {plural(t, filtered.length - shown.length, 'sources.loadMore.one', 'sources.loadMore.other')}
               </button>
             )}
           </>
@@ -304,6 +310,7 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
   onDelete: (s: SourcePublic, opener: HTMLElement | null) => void
   deps?: SourceListDeps
 }): ReactNode {
+  const t = useCopy()
   const [authOpen, setAuthOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   /** 菜单开合方向：false = 向下（默认），true = 向上。 */
@@ -360,14 +367,14 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
   /** 行内「验证/重验」：与待办箱、批量条同一条领域动作——本入口只表达「验证这一源」，提交后的
    *  编排归 `jobs.ts` 的 `startSourceVerification`；源列表随任务终态整体刷新，不就地 `onChanged`。 */
   const verifyThis = (): void => {
-    void startSourceVerification([s.id], deps)
+    void startSourceVerification([s.id], deps, t)
   }
   return (
     <Fragment>
       <div data-novel-source-row={s.id}
         className={`novel-tr src${failed ? ' row-err' : ''}${enabled ? '' : ' off'}`}>
         <span className="novel-td name" title={s.name}>
-          {editMode && <input type="checkbox" checked={selected} onChange={() => toggleSelect(s.id)} aria-label={`选择 ${s.name}`} />}
+          {editMode && <input type="checkbox" checked={selected} onChange={() => toggleSelect(s.id)} aria-label={t('sources.row.select', { name: s.name })} />}
           <strong>{s.name}</strong>
         </span>
         {/* 状态列只放验证状态：曾用类型徽标（bookSourceType）顶掉验证位，实测造成误读——已撤 */}
@@ -383,7 +390,7 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
         </span>
         <span className="novel-td novel-muted col-url" title={s.statusDetail ?? s.baseUrl}>
           {s.baseUrl}
-          {s.hasAuth && <span> · {s.authExpired ? '登录已过期' : '已登录'}</span>}
+          {s.hasAuth && <span> · {s.authExpired ? t('sources.row.authExpired') : t('sources.row.loggedIn')}</span>}
         </span>
         <span className="novel-actions">
           {/* 操作列：浏览态常驻（试跑是排查主路径）；异常态多一个状态动作钮（验证/重验）。
@@ -393,19 +400,19 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
               验证钮**不看 enabled**（2026-09 裁定）：停用 ≠ 免验——曾挂过的 `!enabled` 门造成
               「批量能验、单点不能验」，与待办箱入口自相矛盾。 */}
           {s.status === 'unverified'
-            ? <button className="novel-btn sm" disabled={probing} onClick={verifyThis}>验证</button>
+            ? <button className="novel-btn sm" disabled={probing} onClick={verifyThis}>{t('sources.row.verify')}</button>
             : s.status === 'broken'
-              ? <button className="novel-btn sm" disabled={probing} onClick={verifyThis}>重验</button>
+              ? <button className="novel-btn sm" disabled={probing} onClick={verifyThis}>{t('sources.row.reverify')}</button>
               : null}
-          <button className="novel-btn sm" onClick={() => onProbe(s.id)}>试跑</button>
-          <button className="novel-btn sm" aria-label={`更多动作 ${s.name}`} aria-haspopup="menu" ref={menuRef}
+          <button className="novel-btn sm" onClick={() => onProbe(s.id)}>{t('sources.row.probe')}</button>
+          <button className="novel-btn sm" aria-label={t('sources.row.more', { name: s.name })} aria-haspopup="menu" ref={menuRef}
             onClick={(e) => { e.stopPropagation(); toggleMenu() }}>⋯</button>
           {menuOpen && (
             <div className={menuUp ? 'novel-menu up' : 'novel-menu'} role="menu">
-              <button role="menuitem" onClick={() => { setMenuOpen(false); setAuthOpen(!authOpen) }}>登录态…</button>
-              <button role="menuitem" onClick={() => { setMenuOpen(false); onProbe(s.id) }}>试跑 trace</button>
+              <button role="menuitem" onClick={() => { setMenuOpen(false); setAuthOpen(!authOpen) }}>{t('sources.menu.auth')}</button>
+              <button role="menuitem" onClick={() => { setMenuOpen(false); onProbe(s.id) }}>{t('sources.menu.trace')}</button>
               <button role="menuitem" className="danger" onClick={() => { setMenuOpen(false); onDelete(s, menuRef.current) }}>
-                {s.hasAuth ? '删除（含登录态）' : '删除'}
+                {s.hasAuth ? t('sources.menu.deleteAuth') : t('sources.menu.delete')}
               </button>
             </div>
           )}
@@ -413,8 +420,10 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
         {/* 启停开关：右对齐常驻（两态都渲染——启停是高频决策，不进编辑模式）。
             外观与位移归 .novel-switch（状态靠 aria-checked 选样式），行内只剩 data-busy。 */}
         <span className="novel-cell-end">
-          <button className="novel-switch" data-novel-switch role="switch" aria-checked={enabled} aria-label={`${enabled ? '停用' : '启用'} ${s.name}`}
-            title={saving ? '保存中…' : enabled ? '点击停用（不参与聚合搜索，可随时开回）' : '点击启用'}
+          <button className="novel-switch" data-novel-switch role="switch" aria-checked={enabled}
+            aria-label={`${enabled ? t('sources.toggle.disable') : t('sources.toggle.enable')} ${s.name}`}
+            title={saving ? t('sources.toggle.saving')
+              : enabled ? t('sources.toggle.titleDisable') : t('sources.toggle.titleEnable')}
             data-busy={saving}
             onClick={() => toggle(!enabled)}>
             <i />
@@ -435,6 +444,7 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
 function SourceAuthPane({ source, onDone, deps = prodDeps }: {
   source: SourcePublic; onDone: () => void; deps?: RowActionDeps
 }): ReactNode {
+  const t = useCopy()
   const [cookie, setCookie] = useState('')
   /** 「去登录」按源是否有登录脚本分岔（`hasLoginUrl` 是服务端投影的事实，不在客户端猜分支）：
    *  ① 声明了 loginUrl：问服务端要计划——URL 形态开那个 URL，JS 形态服务端沙箱跑完存登录态，
@@ -449,30 +459,30 @@ function SourceAuthPane({ source, onDone, deps = prodDeps }: {
         window.open(r.loginUrl, '_blank', 'noopener,noreferrer')
         return
       }
-      deps.pushOk('登录脚本已执行，登录态已保存')
+      deps.pushOk(t('sources.auth.scriptDone'))
       onDone()
-    }, (e) => deps.pushError(`去登录失败：${e instanceof Error ? e.message : String(e)}`, rowAnchorOf(source.id)))
+    }, (e) => deps.pushError(t('sources.auth.goFailed', { detail: describeError(e, t) }), rowAnchorOf(source.id)))
   }
   const save = (): void => {
     void deps.apiSend('POST', paramRoutes.sourceAuth(source.id), bodies.authCookies(parseCookieString(cookie))).then(() => {
       setCookie('')                      // 输入值即刻清空
-      deps.pushOk('已保存登录态')
+      deps.pushOk(t('sources.auth.saved'))
       onDone()
-    }, (e) => deps.pushError(`保存登录失败：${e instanceof Error ? e.message : String(e)}`, rowAnchorOf(source.id)))
+    }, (e) => deps.pushError(t('sources.auth.saveFailed', { detail: describeError(e, t) }), rowAnchorOf(source.id)))
   }
   return (
     <span className="novel-auth-pane" onClick={(e) => e.stopPropagation()}>
       {/* 书源是任意第三方站点：显式 noopener,noreferrer 关掉新页对 DSH GUI tab 的反向
           tabnabbing（Chromium ≥88 对 _blank 已隐式 noopener，显式写是零成本保险） */}
-      <button className="novel-btn sm" onClick={goLogin}>去登录</button>
+      <button className="novel-btn sm" onClick={goLogin}>{t('sources.auth.go')}</button>
       <input
         className="novel-input"
         value={cookie}
         onChange={(e) => setCookie(e.target.value)}
-        placeholder="cookie：token=abc; sid=def"
-        aria-label={`${source.name} 的 cookie`}
+        placeholder={t('sources.auth.cookiePlaceholder')}
+        aria-label={t('sources.auth.cookieLabel', { name: source.name })}
       />
-      <button className="novel-btn sm" onClick={save}>保存登录</button>
+      <button className="novel-btn sm" onClick={save}>{t('sources.auth.save')}</button>
     </span>
   )
 }
@@ -480,15 +490,16 @@ function SourceAuthPane({ source, onDone, deps = prodDeps }: {
 /** 批量验证运行卡：kind 分家的「验证」侧——渲染在壳层任务槽（待办箱下方）。
  * 外壳归 bits.RunCard（与 ImportRunCard 曾是近逐字同构的双胞胎），此处只供文案与 counts。 */
 export function ProbeRunCard({ job }: { job: JobState }): ReactNode {
+  const t = useCopy()
   const pct = jobPct(job)
   return (
     <RunCard
-      label="验证中…"
-      meta={<>{job.done}/{job.total}（{pct}%）· 并发 5 路</>}
+      label={t('job.progress', { kind: jobKindLabel(job.kind, t) })}
+      meta={<>{t('job.counts', { done: job.done, total: job.total, pct })}{t('sources.probe.concurrency')}</>}
       pct={pct}
       counts={<>
-        <span className="novel-ok">已验证 {job.counts.ok}</span>
-        <span className="novel-muted">· 未通过 {job.counts.failed}</span>
+        <span className="novel-ok">{t('sources.probe.ok', { n: job.counts.ok })}</span>
+        <span className="novel-muted">{t('sources.probe.failed', { n: job.counts.failed })}</span>
       </>}
     />
   )

@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
+import { CopyProvider, enTranslate } from '../../src/client/copy/index.js'
 import { ImportPane } from '../../src/client/views/SettingsImportPane.js'
 import { makeDeps } from './fake-deps.js'
 import type { FakeSettingsDeps } from './fake-deps.js'
@@ -92,6 +93,26 @@ describe('ImportPane 接线（deps seam 驱动）', () => {
     expect(deps.startImportJob).not.toHaveBeenCalled()
   })
 
+  it('预检坏条目：整句按原样拼出（条数 + 缺字段点名，碎片拼接不丢字符）', async () => {
+    // 这句由「条数句 + 逐条点名 + 省略尾」三段拼成；碎片的空格/分隔符一旦多一个少一个，
+    // 用户读到的就是两截贴错的句子——整句断言是本用例的全部价值。
+    render(pane(makeDeps()))
+    fireEvent.change(screen.getByPlaceholderText('粘贴 legado 书源 JSON（对象或数组）'), {
+      target: { value: '[{"bookSourceName":"坏源"}]' },
+    })
+    await screen.findByText(
+      '1 条，其中 1 条缺字段（仍可导入，缺的会逐条报）：「坏源」缺 bookSourceUrl/ruleContent',
+      {}, { timeout: 2000 })
+  })
+
+  it('预检坏条目超过 3 条：省略尾报「还有」的条数，不把总数当追加数', async () => {
+    render(pane(makeDeps()))
+    fireEvent.change(screen.getByPlaceholderText('粘贴 legado 书源 JSON（对象或数组）'), {
+      target: { value: '[{"bookSourceName":"A"},{"bookSourceName":"B"},{"bookSourceName":"C"},{"bookSourceName":"D"}]' },
+    })
+    await screen.findByText(/等 1 条/, {}, { timeout: 2000 })
+  })
+
   it('import 任务运行中：拖放区替换为运行卡（data-novel-run-card）', () => {
     render(pane(makeDeps(), { job: runningImport }))
     expect(screen.getByText(/导入中/)).toBeTruthy()
@@ -121,5 +142,50 @@ describe('ImportPane 接线（deps seam 驱动）', () => {
     fireEvent.change(fileInput(container), { target: { files: [file] } })
     await waitFor(() => expect(deps.pushError).toHaveBeenCalledTimes(1))
     expect(onSubmitted).not.toHaveBeenCalled()
+  })
+
+  it('完成回执的「查看明细」：issue 与坏文件逐条点名（jobIssueLabel 的渲染接线）', () => {
+    // 本文件的既有用例都走 `issues: []`，明细区的渲染接线一直没被断言；这条补上。
+    const done: JobState = {
+      id: 'imp2', kind: 'import', phase: 'done', total: 2, done: 2,
+      counts: { ok: 1, failed: 1, dupSkipped: 0, replaced: 0 },
+      issues: [{ kind: 'failed', name: '源甲', detail: '缺少 ruleSearch' }],
+      fileErrors: [{ file: 'bad.json', error: '不是 JSON' }],
+      startedAt: 0,
+    }
+    render(pane(makeDeps({ lastImportJob: () => done })))
+    fireEvent.click(screen.getByText('查看明细'))
+    expect(screen.getByText('失败 源甲')).toBeTruthy()
+    expect(screen.getByText('bad.json：不是 JSON')).toBeTruthy()
+  })
+})
+
+describe('英文渲染：导入区', () => {
+  it('导入标题与粘贴入口走 en 字典', () => {
+    render(<CopyProvider value={enTranslate}>{pane(makeDeps())}</CopyProvider>)
+    // 弹层标题住壳层 Dialog（这棵子树只渲面板），面板以分组名承载同一句；
+    // 「粘贴内容」是粘贴道的分组名（也是提交任务时那条记录的名字），不另造可见文案。
+    expect(screen.getByLabelText('Import sources')).toBeTruthy()
+    expect(screen.getByLabelText('Paste content')).toBeTruthy()
+    expect(screen.getByText('Choose or drop legado source files (.json, multiple allowed)')).toBeTruthy()
+    expect(screen.getByText('Import', { selector: 'button' })).toBeTruthy()
+  })
+
+  it('预检坏条目：英文整句的单位、冒号与分隔符都按 en 字典拼', async () => {
+    render(<CopyProvider value={enTranslate}>{pane(makeDeps())}</CopyProvider>)
+    fireEvent.change(screen.getByPlaceholderText('Paste legado source JSON (object or array)'), {
+      target: { value: '[{"bookSourceName":"Bad"}]' },
+    })
+    await screen.findByText(
+      '1 entry, 1 with missing fields (still importable; missing fields are reported one by one): “Bad” is missing bookSourceUrl/ruleContent',
+      {}, { timeout: 2000 })
+  })
+
+  it('预检坏条目超过 3 条：英文省略尾只说「还有」的条数', async () => {
+    render(<CopyProvider value={enTranslate}>{pane(makeDeps())}</CopyProvider>)
+    fireEvent.change(screen.getByPlaceholderText('Paste legado source JSON (object or array)'), {
+      target: { value: '[{"bookSourceName":"A"},{"bookSourceName":"B"},{"bookSourceName":"C"},{"bookSourceName":"D"}]' },
+    })
+    await screen.findByText(/and 1 more entry/, {}, { timeout: 2000 })
   })
 })

@@ -1,4 +1,7 @@
+import { describeError } from './api.js'
 import { saveBlob, streamExport } from './download.js'
+import { zhTranslate } from './copy/index.js'
+import type { CopyKey, Translate } from './copy/index.js'
 
 /**
  * 范围导出流编排（从 ReaderView 的 ExportPanel 收出）：start(范围) / cancel / 状态三态 + 卸载 abort。
@@ -39,26 +42,27 @@ export interface ExportRange { from: number; to: number; total: number }
 export const IDLE_EXPORT: ExportRunState = { running: false, kb: 0, total: '', range: null, error: null }
 
 /** 落盘文件名：全本（或 1..total 全覆盖）= 书名.txt；部分 = 书名（第5-80章）.txt——
- *  部分导出不加后缀会让人把片段当全本存丢 */
-function exportFileName(title: string, range: ExportRange | null): string {
+ *  部分导出不加后缀会让人把片段当全本存丢。后缀随当前语言（文件名同样是用户可见文案）。 */
+function exportFileName(title: string, range: ExportRange | null, t: Translate = zhTranslate): string {
   if (range === null || (range.from <= 1 && range.to >= range.total)) return `${title}.txt`
-  return `${title}（第${range.from}-${range.to}章）.txt`
+  return `${title}${t('reader.export.fileRange', { from: range.from, to: range.to })}.txt`
 }
 
 /** 面板范围校验（纯函数，视图确认钮的唯一判据）：
- *  空串 / 非整数 / 倒置 / 越界 → 拒；total<1 = 目录未就绪，同样拒（不许在章数未知时开下） */
+ *  空串 / 非整数 / 倒置 / 越界 → 拒；total<1 = 目录未就绪，同样拒（不许在章数未知时开下）。
+ *  理由回**文案键**而不是成句：翻译归视图的 `t`，校验本身保持纯函数。 */
 export type RangeParse =
-  | { ok: false; reason: string }
+  | { ok: false; reason: CopyKey }
   | { ok: true; from: number; to: number }
 
 export function parseRange(fromStr: string, toStr: string, total: number): RangeParse {
-  if (!Number.isInteger(total) || total < 1) return { ok: false, reason: '目录未就绪' }
-  if (fromStr.trim() === '' || toStr.trim() === '') return { ok: false, reason: '请输入章节号' }
+  if (!Number.isInteger(total) || total < 1) return { ok: false, reason: 'reader.export.reason.tocNotReady' }
+  if (fromStr.trim() === '' || toStr.trim() === '') return { ok: false, reason: 'reader.export.reason.missing' }
   const from = Number(fromStr)
   const to = Number(toStr)
-  if (!Number.isInteger(from) || !Number.isInteger(to)) return { ok: false, reason: '章节号需为整数' }
-  if (from > to) return { ok: false, reason: '起始章不能大于结束章' }
-  if (from < 1 || to > total) return { ok: false, reason: `范围需在 1–${total} 章内` }
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return { ok: false, reason: 'reader.export.reason.notInteger' }
+  if (from > to) return { ok: false, reason: 'reader.export.reason.reversed' }
+  if (from < 1 || to > total) return { ok: false, reason: 'reader.export.reason.outOfRange' }
   return { ok: true, from, to }
 }
 
@@ -67,10 +71,11 @@ function isAbort(e: unknown): boolean {
   return typeof e === 'object' && e !== null && 'name' in e && e.name === 'AbortError'
 }
 
-/** 错误类目投影：ApiClientError 带 code（导出失败可分类呈现）；普通 Error 只有 message，不伪造 code */
-function errorOf(e: unknown): { code?: string; message: string } {
+/** 错误类目投影：ApiClientError 带 code（导出失败可分类呈现）；普通 Error 只有 message，不伪造 code。
+ *  客户端网络错误在这里就落成当前语言（快照的口径与 job 层一致：语言取生成时那一次）。 */
+function errorOf(e: unknown, t: Translate = zhTranslate): { code?: string; message: string } {
   const code = typeof e === 'object' && e !== null && 'code' in e && typeof e.code === 'string' ? e.code : undefined
-  const message = e instanceof Error ? e.message : String(e)
+  const message = describeError(e, t)
   return code === undefined ? { message } : { code, message }
 }
 
@@ -91,10 +96,14 @@ export function createExportRun(ctx: {
   title: string
   /** 依赖束：缺省生产实现；测试注入假 streamExport/saveBlob */
   deps?: ExportRunDeps
+  /** 文案语言：落盘文件名与网络错误在**生成时**定语言（与 job store 同一条已知限制）；
+   *  缺省 zh 让未接 locale 的调用方与既有测试保持中文。 */
+  t?: Translate
   /** 状态变化回调（视图的 setState 接线口） */
   onChange: (state: ExportRunState) => void
 }): ExportRun {
   const deps = ctx.deps ?? prodExportDeps
+  const t = ctx.t ?? zhTranslate
   let state: ExportRunState = IDLE_EXPORT
   let ctrl: AbortController | null = null
   const set = (patch: Partial<ExportRunState>): void => {
@@ -117,9 +126,9 @@ export function createExportRun(ctx: {
         onProgress: (bytes, total) => set({ kb: Math.round(bytes / 1024), total: total ?? '' }),
         signal: c.signal,
       }).then((blob) => {
-        deps.saveBlob(blob, exportFileName(ctx.title, range))
+        deps.saveBlob(blob, exportFileName(ctx.title, range, t))
       }, (e: unknown) => {
-        if (!isAbort(e)) set({ error: errorOf(e) })
+        if (!isAbort(e)) set({ error: errorOf(e, t) })
       }).finally(() => set({ running: false }))
     },
     cancel: (): void => { ctrl?.abort() },

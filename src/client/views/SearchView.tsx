@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { SEARCH_BOOKS_CAP, bodies, paramRoutes } from '../../shared/wire.js'
+import { plural, useCopy } from '../copy/index.js'
+import type { Translate } from '../copy/index.js'
 import { prodJobViewDeps } from '../deps.js'
 import type { JobViewDeps, RowActionDeps } from '../deps.js'
 import { useSearchJob } from '../search-job.js'
@@ -25,10 +27,11 @@ import type { MergedBook, SearchGroup, SearchHit } from './types.js'
  *  轮级派生（收口计数、两条轴的行身份、逐源回读）也不在本文件：唯一住址 `search-view-model.ts`。 */
 
 export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): ReactNode {
+  const t = useCopy()
   const { route } = useStore(routeStore)
   const initialKeyword = route.name === 'search' ? route.keyword ?? '' : ''
   const [keyword, setKeyword] = useState(initialKeyword)
-  const { round, error, submit, cancel } = useSearchJob(deps)
+  const { round, error, submit, cancel } = useSearchJob(deps, t)
   /** mount 提交的一次性闸：ref 防 StrictMode 同实例二次 effect；防重挂载的防线不在这里，
    *  在下面提交后立刻把 route.keyword 摘掉。 */
   const consumed = useRef<string | null>(null)
@@ -78,8 +81,8 @@ export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): 
   const pct = searchPct(round === null ? null : { done: round.done, total: round.total })
   const live = progress !== null
     ? (progress.total === 0
-      ? <>正在启动搜索…</>
-      : <>已搜 <b>{progress.done}</b>/{progress.total} 家书源 · 命中源会陆续出现在下方</>)
+      ? <>{t('search.starting')}</>
+      : <>{t('search.progress.prefix')}<b>{progress.done}</b>{plural(t, progress.total, 'search.progress.suffix.one', 'search.progress.suffix.other', { total: progress.total })}</>)
     : summary === null || summary.sources === 0 || view === null
       ? null
       : <>
@@ -88,30 +91,46 @@ export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): 
               本=归并后的书目（收口里「本」只许出现在并书读数上）；「并成 N 本」在按书成了
               默认视图后必须报，否则一轮并掉多少无人知道（工具面恒报 N 本，两边不许不对称）。
               单位律的唯一住址是 CONTEXT 的「作品视图（按书）」词条，这里只落字不复述判据。 */}
-          {round?.cancelled === true ? '已停止 · ' : ''}本轮搜过 <b>{summary.sources}</b> 家 · 命中 <b>{summary.hits}</b> 条 · 并成 <b>{view.merged.total}</b> 本
-          {`（来自 ${summary.found} 家${summary.relevant < summary.hits ? `，其中相关 ${summary.relevant} 条、其余折叠可展开` : ''}）`} · <b>{summary.failed}</b> 家未响应
+          {round?.cancelled === true ? t('search.summary.stopped') : ''}
+          {t('search.summary.searched')}
+          <b>{summary.sources}</b>
+          {plural(t, summary.sources, 'search.summary.sourcesUnit.one', 'search.summary.sourcesUnit.other', { n: summary.sources })}
+          {t('search.summary.hitsLead')}
+          <b>{summary.hits}</b>
+          {plural(t, summary.hits, 'search.summary.hitsUnit.one', 'search.summary.hitsUnit.other', { n: summary.hits })}
+          {t('search.summary.mergedLead')}
+          <b>{view.merged.total}</b>
+          {plural(t, view.merged.total, 'search.summary.mergedUnit.one', 'search.summary.mergedUnit.other', { n: view.merged.total })}
+          {plural(t, summary.found, 'search.summary.from.one', 'search.summary.from.other', { n: summary.found })}
+          {summary.relevant < summary.hits
+            ? plural(t, summary.relevant, 'search.summary.relevant.one', 'search.summary.relevant.other', { n: summary.relevant })
+            : ''}
+          {t('search.summary.fromClose')}
+          {t('search.summary.failedLead')}
+          <b>{summary.failed}</b>
+          {plural(t, summary.failed, 'search.summary.failedUnit.one', 'search.summary.failedUnit.other', { n: summary.failed })}
         </>
   return (
     <div data-novel-view="search" className="novel-view">
       <div className="novel-wrap">
         <div className="novel-search-bar">
-          <button className="novel-btn" onClick={() => navigate({ name: 'shelf' })}>‹ 书架</button>
+          <button className="novel-btn" onClick={() => navigate({ name: 'shelf' })}>{t('search.back')}</button>
           <form
             onSubmit={(e) => { e.preventDefault(); submit(keyword) }}
             className="novel-search-form"
-            aria-label="搜索书籍"
+            aria-label={t('search.label')}
           >
             <label className="novel-searchbox">
               <SearchIcon />
               <input
                 value={keyword}
                 onChange={(e) => setKeyword(e.target.value)}
-                placeholder="书名 / 作者"
-                aria-label="搜索书籍"
+                placeholder={t('search.placeholder')}
+                aria-label={t('search.label')}
               />
             </label>
             <button type="submit" className="novel-btn primary" disabled={running}>
-              {running ? '搜索中…' : '搜索'}
+              {running ? t('search.searching') : t('search.submit')}
             </button>
           </form>
         </div>
@@ -122,27 +141,27 @@ export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): 
               <span>{live}</span>
               {/* 停止 = 不再往下搜，**已搜出来的全部留下**（服务端只进终态、不清结果）；
                   钮只在跑着时出现，收口行不留「再点一下」的死钮 */}
-              {running ? <button type="button" className="novel-btn sm" onClick={cancel}>停止搜索</button> : null}
+              {running ? <button type="button" className="novel-btn sm" onClick={cancel}>{t('search.cancel')}</button> : null}
             </div>
           )}
         </div>
         {error === null ? null : (
-          <div className="novel-err novel-note-md">搜索中断：{error}</div>
+          <div className="novel-err novel-note-md">{t('search.interrupted', { detail: error })}</div>
         )}
         {view !== null && progress === null && view.parts.length === 0 && (
           emptyPlan
-            ? <EmptyState title="没有参与搜索的书源" hint="全部书源都已停用，或尚未导入——书源在「小说 → 书源管理」中导入" />
-            : <EmptyState title="没有结果" hint="换个关键词，或在「小说 → 书源管理」中导入更多书源" />
+            ? <EmptyState title={t('search.empty.noSources.title')} hint={t('search.empty.noSources.hint')} />
+            : <EmptyState title={t('search.empty.noHits.title')} hint={t('search.empty.noHits.hint')} />
         )}
         {/* 按书在前：一本一行。整轮都被判 suspect 时这一档是空的（归并只收 kept），
             空视图不接管说话权——账由下面那一档与收口行报（收口的「并成 0 本」也在报这笔账），
             读起来不是「没有结果」。 */}
-        {view !== null && renderBooks(view, deps, landed, markLanded)}
+        {view !== null && renderBooks(view, deps, landed, markLanded, t)}
         {/* 逐源那一档不删、降级到页尾折叠：各家给了几条、哪一家未响应，仍是排查轴 */}
         {view !== null && view.parts.length !== 0 && (
           <details className="novel-fail" data-novel-per-source>
-            <summary>按源看（{view.parts.length} 家 · 折叠）</summary>
-            {renderGroups(view, deps, landed, markLanded)}
+            <summary>{plural(t, view.parts.length, 'search.perSource.summary.one', 'search.perSource.summary.other', { n: view.parts.length })}</summary>
+            {renderGroups(view, deps, landed, markLanded, t)}
           </details>
         )}
       </div>
@@ -168,6 +187,7 @@ function addBookToShelf(sourceId: string, hit: SearchHit, deps: RowActionDeps): 
 function HitRow({ sourceId, hit, deps, added, onLanded }: {
   sourceId: string; hit: SearchHit; deps: RowActionDeps; added: boolean; onLanded: (id: string) => void
 }): ReactNode {
+  const t = useCopy()
   const add = (): Promise<unknown> => addBookToShelf(sourceId, hit, deps).then(() => { onLanded(rowId(sourceId, hit.url)) })
   const read = (): void => {
     // 点行直接阅读：先加架（进度保存依赖书架条目）再进阅读器；已加过则幂等
@@ -185,12 +205,12 @@ function HitRow({ sourceId, hit, deps, added, onLanded }: {
   }
   return (
     <div className="novel-row">
-      <button className="novel-row-main" onClick={read} aria-label={`阅读 ${hit.title}`}>
+      <button className="novel-row-main" onClick={read} aria-label={t('search.hit.read', { title: hit.title })}>
         <span className="novel-hit-title">{hit.title}</span>
         <span className="novel-hit-sub">{sub}</span>
       </button>
       <button className="novel-btn sm" disabled={added} onClick={() => { void add().catch(() => undefined) }}>
-        {added ? '已在书架' : '＋ 加书架'}
+        {added ? t('search.shelf.added') : t('search.shelf.add')}
       </button>
     </div>
   )
@@ -205,7 +225,7 @@ function HitRow({ sourceId, hit, deps, added, onLanded }: {
  *  行的 key 与按书轴展开区读同一个身份算式（`rowKeys`，身份 (源, 地址)，同身份重复才垫位次）：
  *  档序会挪位，纯下标 key 在重排时把一行的本地入架态串到别的书上。
  *  失败源折叠的呈现口径（点名 code / message / statusDetail）原样保留，仅容器换简约版类。 */
-function renderGroups(view: RoundView, deps: RowActionDeps, landed: ReadonlySet<string>, onLanded: (id: string) => void): ReactNode {
+function renderGroups(view: RoundView, deps: RowActionDeps, landed: ReadonlySet<string>, onLanded: (id: string) => void, t: Translate): ReactNode {
   const hits = view.parts.filter((p) => p.group.error === undefined)
   const failed = view.parts.filter((p) => p.group.error !== undefined)
   if (hits.length === 0 && failed.length === 0) return null
@@ -219,10 +239,12 @@ function renderGroups(view: RoundView, deps: RowActionDeps, landed: ReadonlySet<
           <section key={g.sourceId} className="novel-group">
             <header className="novel-group-head">
               <strong>{g.sourceName}</strong>
-              {/* 状态走 bits.StatusBadge 的中文映射（verified→「可用」）——原始状态字不进 UI */}
+              {/* 状态走 bits.StatusBadge（文案随当前语言，原始状态字不进 UI） */}
               <StatusBadge status={g.status} />
               <span className="novel-muted">
-                {suspect.length === 0 ? `${kept.length} 条` : `相关 ${kept.length} · 共 ${g.hits.length}`}
+                {suspect.length === 0
+                  ? plural(t, kept.length, 'search.group.hits.one', 'search.group.hits.other', { n: kept.length })
+                  : t('search.group.relevant', { n: kept.length, total: g.hits.length })}
               </span>
             </header>
             <div className="novel-list">
@@ -231,7 +253,7 @@ function renderGroups(view: RoundView, deps: RowActionDeps, landed: ReadonlySet<
             </div>
             {suspect.length === 0 ? null : (
               <details className="novel-fail">
-                <summary>另有 {suspect.length} 条疑似无关（书名／作者／分类都不含关键词，展开照旧可点）</summary>
+                <summary>{plural(t, suspect.length, 'search.group.suspect.one', 'search.group.suspect.other', { n: suspect.length })}</summary>
                 <div className="novel-list novel-fail-list">
                   {suspect.map((m, i) => <HitRow key={suspectKeys[i]} sourceId={g.sourceId} hit={m.hit} deps={deps}
                     added={landed.has(rowId(g.sourceId, m.hit.url))} onLanded={onLanded} />)}
@@ -243,13 +265,16 @@ function renderGroups(view: RoundView, deps: RowActionDeps, landed: ReadonlySet<
       })}
       {failed.length === 0 ? null : (
         <details className="novel-fail">
-          <summary>{failed.length} 家书源未响应（多为站点不可达，展开看原因）</summary>
+          <summary>{plural(t, failed.length, 'search.group.failed.one', 'search.group.failed.other', { n: failed.length })}</summary>
           <div className="novel-group novel-fail-list">
             {failed.map(({ group: g }) => (
               <div key={g.sourceId}>
                 <span>{g.sourceName}</span>
                 <span className="novel-err"> · {g.error?.code}</span>
-                <div className="novel-note-sm">{g.error?.message}{g.statusDetail === undefined ? '' : `（${g.statusDetail}）`}</div>
+                <div className="novel-note-sm">
+                  {g.error?.message}
+                  {g.statusDetail === undefined ? null : t('search.statusDetail', { detail: g.statusDetail })}
+                </div>
               </div>
             ))}
           </div>
@@ -269,14 +294,14 @@ function renderGroups(view: RoundView, deps: RowActionDeps, landed: ReadonlySet<
  *  **条**（逐源命中，一行一条）——差额正是每一行那个「N 家源」吃进去的东西。
  *  超限那一行报出全量本数：只列前 SEARCH_BOOKS_CAP 而不说本轮共几本，
  *  就是把「还有更多」读成「到此为止」。 */
-function renderBooks(view: RoundView, deps: RowActionDeps, landed: ReadonlySet<string>, onLanded: (id: string) => void): ReactNode {
+function renderBooks(view: RoundView, deps: RowActionDeps, landed: ReadonlySet<string>, onLanded: (id: string) => void, t: Translate): ReactNode {
   const { merged } = view
   if (merged.total === 0) return null
   return (
     <div className="novel-groups" data-novel-books>
       {merged.books.map((b) => <BookRow key={bookRowKey(b)} book={b} rows={bookRows(b, view.meta)} deps={deps} landed={landed} onLanded={onLanded} />)}
       {merged.total > merged.books.length ? (
-        <div className="novel-note-sm">本轮共 {merged.total} 本，只列前 {SEARCH_BOOKS_CAP}（按相关性档 → 家数降序）</div>
+        <div className="novel-note-sm">{plural(t, merged.total, 'search.books.capped.one', 'search.books.capped.other', { n: merged.total, cap: SEARCH_BOOKS_CAP })}</div>
       ) : null}
     </div>
   )
@@ -298,6 +323,7 @@ function BookRow({ book, rows, deps, landed, onLanded }: {
   book: MergedBook; rows: RowRef[]; deps: RowActionDeps
   landed: ReadonlySet<string>; onLanded: (id: string) => void
 }): ReactNode {
+  const t = useCopy()
   const [adding, setAdding] = useState(false)
   const [open, setOpen] = useState(false)
   const keys = rowKeys(rows)
@@ -322,10 +348,16 @@ function BookRow({ book, rows, deps, landed, onLanded }: {
       // 回执数的是**这次新落架的架位**（口径与理由住 `search-view-model.newlyLandedSeats`）；
       // 零加成不许走成功通道，整行没有地址与全部 PUT 失败读出来都是 0，「已加 0 条：X」等于给
       // 一次没发生的写入报喜。没加成的交代由下面两条错误回执各说各的。
-      if (newly.length > 0) deps.pushOk(`已加 ${newly.length} 条：${book.title}`)
+      if (newly.length > 0) {
+        deps.pushOk(plural(t, newly.length, 'search.book.added.one', 'search.book.added.other', { n: newly.length, title: book.title }))
+      }
       const stillMissing = [...seats].filter((id) => !landed.has(id) && !newly.includes(id)).length
-      if (stillMissing > 0) deps.pushError(`加入失败 ${stillMissing} 条（共 ${seats.size}）`)
-      if (noAddress > 0) deps.pushError(`${noAddress} 条没有地址，加不了架`)
+      if (stillMissing > 0) {
+        deps.pushError(plural(t, stillMissing, 'search.book.addFailed.one', 'search.book.addFailed.other', { n: stillMissing, total: seats.size }))
+      }
+      if (noAddress > 0) {
+        deps.pushError(plural(t, noAddress, 'search.book.noAddress.one', 'search.book.noAddress.other', { n: noAddress }))
+      }
     })()
   }
   return (
@@ -339,20 +371,26 @@ function BookRow({ book, rows, deps, landed, onLanded }: {
         {/* 「N 家源」读 sourceCount（去重后的源），不是行数：读行数会把一家撞两种写法的源报成两家。
             作者与家数是两段独立读数而非一条拼好的串：作者那一段会省略号，捆在一起就把家数也吃掉。 */}
         <span className="novel-muted novel-book-author" title={book.author ?? undefined}>
-          {shortAuthor(book.author ?? '作者未给')}
+          {shortAuthor(book.author ?? t('search.book.unknownAuthor'), t)}
         </span>
-        <span className="novel-muted novel-book-sources">· {book.sourceCount} 家源</span>
+        <span className="novel-muted novel-book-sources">
+          {plural(t, book.sourceCount, 'search.book.sources.one', 'search.book.sources.other', { n: book.sourceCount })}
+        </span>
         {/* 尾巴承诺的是**行**（条），不是家：这里摊开的就是一行一条，一家给两条同键写法就是两条；
             家数那笔账由行头读数报一次（行与家是两条读数，单位律的住址见 CONTEXT 的「作品视图（按书）」）。 */}
         <span className="novel-book-tail">
-          <span className="novel-book-tail-label">{open ? '收起' : '展开'} {rows.length} 条</span>
+          <span className="novel-book-tail-label">
+            {open
+              ? plural(t, rows.length, 'search.book.collapse.one', 'search.book.collapse.other', { n: rows.length })
+              : plural(t, rows.length, 'search.book.expand.one', 'search.book.expand.other', { n: rows.length })}
+          </span>
           <span className="novel-book-chev" aria-hidden="true">▶</span>
         </span>
       </button>
       {/* 动作钮三态：都加架 → 加架中…（在途禁点）→ 都在架（这一本的架位全落过，再点也无一发可发）。
           终态不是装饰：加完了界面什么都不变，用户就只能再点一次拿重复写当反馈。 */}
       <button className="novel-btn sm" disabled={adding || allLanded} onClick={addAll}>
-        {adding ? '加架中…' : allLanded ? '都在架' : '都加架'}
+        {adding ? t('search.book.adding') : allLanded ? t('search.book.allAdded') : t('search.book.addAll')}
       </button>
       {open ? (
         <div className="novel-list">

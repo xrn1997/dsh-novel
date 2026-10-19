@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { useEffect, useId, useRef } from 'react'
+import { useCopy } from '../copy/index.js'
 
 /**
  * 模态契约的唯一住址（词汇见 `CONTEXT.md` 的「模态契约（dialog）」）：遮罩、面板标记、Esc、
@@ -55,6 +56,7 @@ function isTabbable(el: HTMLElement): boolean {
 }
 
 export function Dialog({ title, label, onClose, children, actions, variant = 'modal', opener = null }: DialogProps): ReactNode {
+  const t = useCopy()
   const panelRef = useRef<HTMLDivElement | null>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose                      // 每 render 刷新 ref：effect 内永远调到最新闭包
@@ -90,7 +92,7 @@ export function Dialog({ title, label, onClose, children, actions, variant = 'mo
           {...(label === undefined ? { 'aria-labelledby': titleId } : { 'aria-label': label })}>
           <div className="novel-city-drawer-head">
             <strong className="novel-city-drawer-title" id={titleId}>{title}</strong>
-            <button className="novel-btn sm" onClick={onClose}>关闭</button>
+            <button className="novel-btn sm" onClick={onClose}>{t('common.close')}</button>
           </div>
           {children}
         </div>

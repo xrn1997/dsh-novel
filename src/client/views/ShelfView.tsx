@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { bodies, LOCAL_SOURCE_ID, paramRoutes, queries, ROUTES } from '../../shared/wire.js'
+import { describeError } from '../api.js'
+import { plural, useCopy } from '../copy/index.js'
 import { prodShelfDeps } from '../deps.js'
 import type { ShelfDeps } from '../deps.js'
 import { navigate } from '../store.js'
@@ -32,10 +34,11 @@ import { coverTintClass, sourceTintClass } from '../util.js'
  * `LocalImportResponse`，本视图**原样消费**。无告警照旧直接进阅读器；**有持久告警时不跳**，就地
  * 摆出回执——跳走等于把「这本书的有损事项」吞掉。成功/失败两半归 alive 闸与瞬态层。
  *
- * 测试钉子（不可动）：搜索框 placeholder「搜书名 / 作者」、删除 title「删除本书」、确认条文案与
- * 空态/错误文案原文（views-wiring + smoke）。 */
+ * 测试钉子：搜索框 placeholder、删除 title、确认条与空态/错误文案的原文住在 `copy/shelf.ts`，
+ * views-wiring + smoke 按这些键断言；改文案先改字典，别在这里另留一份。 */
 
 export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): ReactNode {
+  const t = useCopy()
   const [books, setBooks] = useState<ShelfEntry[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [keyword, setKeyword] = useState('')
@@ -88,7 +91,7 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
       cancelDel()
     }, (e) => {
       // 失败留在模态内：错误就地呈现，可重试可取消（错误不再散落到页面流里粘屏）
-      setDelError(e instanceof Error ? e.message : String(e))
+      setDelError(describeError(e, t))
       setDelBusy(false)
     })
   }
@@ -100,7 +103,7 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
       setLoadError(null)
     }, (e) => {
       setBooks([])
-      setLoadError(e instanceof Error ? e.message : String(e))
+      setLoadError(describeError(e, t))
     })
   }
   useEffect(() => { loadShelf() }, [])   // eslint-disable-line react-hooks/exhaustive-deps
@@ -119,11 +122,11 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
     setPendingDel({ books: targets, batch: true })
   }
   const importCard = (
-    <button className="novel-card novel-card-ghost" aria-label="导入本地书籍"
+    <button className="novel-card novel-card-ghost" aria-label={t('shelf.import')}
       onClick={() => fileRef.current?.click()}>
       <span className="novel-ghost-cover">＋</span>
-      <span className="novel-card-title">导入本地书籍</span>
-      <span className="novel-card-meta">导入 TXT / EPUB</span>
+      <span className="novel-card-title">{t('shelf.import')}</span>
+      <span className="novel-card-meta">{t('shelf.importHint')}</span>
     </button>
   )
   /** 有警告的导入留在本页：先把新书摆进网格（服务端真相，含来源投影），再让用户自己点进阅读器 */
@@ -138,53 +141,53 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
       <div className="novel-wrap">
         <header className="novel-shelf-head">
           <h1 className="novel-shelf-title">
-            书架{books === null || books.length === 0 ? null : <span className="novel-shelf-count">{books.length} 本</span>}
+            {t('shelf.title')}{books === null || books.length === 0 ? null : <span className="novel-shelf-count">{plural(t, books.length, 'count.books.one', 'count.books.other')}</span>}
           </h1>
           {/* 行2：搜索框单独一行（聚合搜索 = 找新书入口，与书架筛选不是同一语义组）。
               「搜索」钮与搜索页同款（type=submit + primary）：Enter 是隐藏交互，可见按钮才是
               显式入口（用户提议；搜索页早有同款先例）。 */}
           <div className="novel-shelf-search">
-            <form onSubmit={(e) => { e.preventDefault(); search() }} aria-label="搜索书籍">
+            <form onSubmit={(e) => { e.preventDefault(); search() }} aria-label={t('shelf.search.label')}>
               <label className="novel-searchbox">
                 <SearchIcon />
                 <input
                   value={keyword}
                   onChange={(e) => setKeyword(e.target.value)}
-                  placeholder="搜书名 / 作者"
-                  aria-label="搜索书籍"
+                  placeholder={t('shelf.search.placeholder')}
+                  aria-label={t('shelf.search.label')}
                 />
               </label>
-              <button type="submit" className="novel-btn primary">搜索</button>
+              <button type="submit" className="novel-btn primary">{t('shelf.search.submit')}</button>
             </form>
-            <span className="novel-shelf-search-note">聚合全部书源</span>
+            <span className="novel-shelf-search-note">{t('shelf.search.scope')}</span>
           </div>
           {/* 行3：书架筛选簇（有书才渲染——空架/加载中没有可筛的东西）；排序灰字跟簇尾。
               多选态里这一行让位给批量条（复用书源管理的 .novel-selbar 与同款词汇）——筛选
               随入场定格，「全选」的口径才有唯一答案。 */}
           {books === null || books.length === 0 ? null : selectMode ? (
             <div data-novel-selbar className="novel-selbar">
-              <strong>已选 {selected.length}</strong>
-              <button className="novel-btn sm" onClick={selectAllVisible}>全选</button>
-              <button className="novel-btn sm" onClick={() => setSelected([])}>清空选择</button>
+              <strong>{plural(t, selected.length, 'shelf.selected.one', 'shelf.selected.other', { n: selected.length })}</strong>
+              <button className="novel-btn sm" onClick={selectAllVisible}>{t('shelf.selectAll')}</button>
+              <button className="novel-btn sm" onClick={() => setSelected([])}>{t('shelf.clearSelection')}</button>
               <button className="novel-btn sm danger" disabled={selected.length === 0}
-                onClick={openBatchConfirm}>删除所选</button>
+                onClick={openBatchConfirm}>{t('shelf.deleteSelected')}</button>
               <span className="novel-grow" />
-              <button className="novel-btn sm" onClick={exitSelect}>退出</button>
+              <button className="novel-btn sm" onClick={exitSelect}>{t('shelf.exitSelect')}</button>
             </div>
           ) : (
             <div className="novel-shelf-filter">
-              <div className="novel-seg" role="group" aria-label="按阅读状态筛选">
+              <div className="novel-seg" role="group" aria-label={t('shelf.filter.label')}>
                 {SHELF_FILTERS.map((f) => (
                   <button
                     key={f.key}
                     className={filter === f.key ? 'on' : undefined}
                     aria-pressed={filter === f.key}
                     onClick={() => setFilter(f.key)}
-                  >{f.label}</button>
+                  >{t(f.labelKey)}</button>
                 ))}
               </div>
-              <button className="novel-btn sm" onClick={() => setSelectMode(true)}>选择</button>
-              <span className="novel-shelf-sort">最近阅读排序 · 进度自动保存</span>
+              <button className="novel-btn sm" onClick={() => setSelectMode(true)}>{t('shelf.select')}</button>
+              <span className="novel-shelf-sort">{t('shelf.sortNote')}</span>
             </div>
           )}
           {/* 隐藏 file input（布局零参与）：触发方只有引导卡。accept 收 TXT 与 EPUB——分流按**内容**
@@ -198,7 +201,10 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
               void deps.apiUpload<LocalImportResponse>(
                 queries.localImport({ name: f.name }), f,
               ).then((book) => {
-                if (!aliveRef.current) { deps.pushOk(`《${book.title}》已导入，在书架可见${localImportNote(book)}`); return }
+                if (!aliveRef.current) {
+                  deps.pushOk(t('shelf.notice.imported', { title: book.title, note: localImportNote(book, t) }))
+                  return
+                }
                 if (book.warnings.length > 0) {
                   setImported(book)               // 跳走就吞了交代：留在本页把它说完
                   loadShelf()
@@ -209,9 +215,9 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
                 // 导入失败的具体原因由服务端给（固定版式 / 加密条目 / 是 ZIP 魔数但读不成 EPUB 归档 /
                 // 超限），这里原样透出——换成「导入失败」一句泛话，用户与我们都无从下手；
                 // 非 ZIP 字节不走这条路（它照 TXT 解码链导入）
-                const text = err instanceof Error ? err.message : String(err)
+                const text = describeError(err, t)
                 if (aliveRef.current) setImportError(text)
-                else deps.pushError(`本地书籍导入失败：${text}`)
+                else deps.pushError(t('shelf.notice.importFailed', { detail: text }))
               })
             }} />
         </header>
@@ -225,21 +231,23 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
           <div className="novel-import-note" role="status">
             <div className="novel-import-head">
               {imported.coverUrl === undefined || imgFailed[imported.bookKey] === true
-                ? <span className="novel-cover-fallback sm">本地</span>
+                ? <span className="novel-cover-fallback sm">{t('shelf.local')}</span>
                 : <img className="novel-cover" src={imported.coverUrl} alt="" loading="lazy"
                     onError={() => setImgFailed((m) => ({ ...m, [imported.bookKey]: true }))} />}
               <div className="novel-import-who">
-                <div className="novel-card-title">《{imported.title}》已导入</div>
+                <div className="novel-card-title">{t('shelf.receipt.title', { title: imported.title })}</div>
                 <div className="novel-muted novel-note-sm">
-                  {imported.author === undefined ? localImportLabel(imported) : `${imported.author} · ${localImportLabel(imported)}`}
+                  {imported.author === undefined ? localImportLabel(imported, t) : `${imported.author} · ${localImportLabel(imported, t)}`}
                 </div>
               </div>
             </div>
-            <div className="novel-prefs-label">导入说明（{imported.warnings.length} 条）</div>
+            <div className="novel-prefs-label">
+              {plural(t, imported.warnings.length, 'shelf.receipt.notes.one', 'shelf.receipt.notes.other', { n: imported.warnings.length })}
+            </div>
             <WarningList warnings={imported.warnings} />
             <div className="novel-import-acts">
-              <button className="novel-btn sm" onClick={() => setImported(null)}>稍后再看</button>
-              <button className="novel-btn sm primary" onClick={openImported}>开始阅读</button>
+              <button className="novel-btn sm" onClick={() => setImported(null)}>{t('shelf.receipt.later')}</button>
+              <button className="novel-btn sm primary" onClick={openImported}>{t('shelf.receipt.start')}</button>
             </div>
           </div>
         )}
@@ -249,24 +257,24 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
             失败文案「删除失败：…」、批量标题「删除选中的 N 本书？」。 */}
         {pendingDel === null ? null : (() => {
           const copy = pendingDel.batch
-            ? deleteBooksCopy(pendingDel.books)
-            : deleteBookCopy(pendingDel.books[0].title, pendingDel.books[0].sourceId === LOCAL_SOURCE_ID)
+            ? deleteBooksCopy(pendingDel.books, t)
+            : deleteBookCopy(pendingDel.books[0].title, pendingDel.books[0].sourceId === LOCAL_SOURCE_ID, t)
           return (
             <Dialog title={copy.confirm} onClose={cancelDel}
               actions={<>
-                <button className="novel-btn sm" onClick={cancelDel} disabled={delBusy}>取消</button>
-                <button className="novel-btn sm danger solid" onClick={confirmDelete} disabled={delBusy}>确认删除</button>
+                <button className="novel-btn sm" onClick={cancelDel} disabled={delBusy}>{t('common.cancel')}</button>
+                <button className="novel-btn sm danger solid" onClick={confirmDelete} disabled={delBusy}>{t('shelf.delete.confirm')}</button>
               </>}>
               {copy.warn === null
-                ? <div className="novel-modal-body">将从书架移除，阅读进度记录一并删除。</div>
+                ? <div className="novel-modal-body">{t('shelf.delete.online')}</div>
                 : <div className="novel-modal-warn">{copy.warn}</div>}
-              {delBusy ? <div className="novel-modal-body">删除中…</div> : null}
-              {delError === null ? null : <div className="novel-err novel-note-sm">删除失败：{delError}</div>}
+              {delBusy ? <div className="novel-modal-body">{t('shelf.delete.busy')}</div> : null}
+              {delError === null ? null : <div className="novel-err novel-note-sm">{t('shelf.delete.failed', { detail: delError })}</div>}
             </Dialog>
           )
         })()}
         {loadError === null ? null : (
-          <div className="novel-err novel-note-md">书架加载失败：{loadError}（稍后重试或检查 DSH 服务端）</div>
+          <div className="novel-err novel-note-md">{t('shelf.loadFailed', { detail: loadError })}</div>
         )}
         {books === null
           // 骨架按网格占位：文字→整屏网格的一跳会顶掉用户刚看清的位置
@@ -281,24 +289,28 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
             ? (loadError === null
               // 真零本：空态文案（测试钉子原文）+ 单卡导入兜底——导入入口不能随工具栏钮一起消失
               ? (<>
-                  <EmptyState title="书架空空——上方搜一本书开始阅读" hint="书源在「小说 → 书源管理」中导入" />
+                  <EmptyState title={t('shelf.empty.title')} hint={t('shelf.empty.hint')} />
                   <div className="novel-grid solo">{importCard}</div>
                 </>)
-              : <EmptyState title="书架暂时不可用（见上方错误）" hint="书源在「小说 → 书源管理」中导入" />)
+              : <EmptyState title={t('shelf.unavailable')} hint={t('shelf.empty.hint')} />)
             : (
               <div className="novel-grid">
                 {shown.map((b) => {
                   const isLocal = b.sourceId === LOCAL_SOURCE_ID
                   const failed = imgFailed[b.bookKey] === true
-                  const meta = shelfCardMeta(b)
-                  const srcTag = shelfSourceTag(b)
+                  const meta = shelfCardMeta(b, t)
+                  const srcTag = shelfSourceTag(b, t)
                   const picked = selected.includes(b.bookKey)
                   return (
                     <div key={b.bookKey} className={`novel-cell${selectMode ? ' sel' : ''}${picked ? ' on' : ''}`}>
                       <button className="novel-card"
                         // 多选态里卡片就是勾选件（aria-pressed 如实）；常态是「阅读」入口。
                         // 两种态下都是真 <button>——勾选标记是卡内装饰 span，不再嵌一个可交互控件。
-                        aria-label={selectMode ? `${picked ? '取消选择' : '选择'}《${b.title}》` : `阅读 ${b.title}`}
+                        aria-label={selectMode
+                          ? (picked
+                            ? t('shelf.unpick', { title: b.title })
+                            : t('shelf.pick', { title: b.title }))
+                          : t('shelf.read', { title: b.title })}
                         aria-pressed={selectMode ? picked : undefined}
                         onClick={() => {
                           if (selectMode) { toggleSelect(b.bookKey); return }
@@ -312,7 +324,7 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
                             ? <img className="novel-cover" src={b.coverUrl} alt="" loading="lazy"
                                 onError={() => setImgFailed((m) => ({ ...m, [b.bookKey]: true }))} />
                             : isLocal
-                              ? <span className="novel-cover-fallback sm">本地</span>
+                              ? <span className="novel-cover-fallback sm">{t('shelf.local')}</span>
                               : <span className={`novel-cover-fallback ${coverTintClass(b.title)}`}>{coverFallbackChar(b.title)}</span>}
                           {/* 来源 chip：色点按 sourceId 派生四档（一眼分得出源不同）+ 源名（超长省略，
                               title 给全名）。本地书不出（本地身份归封面「本地」与角标）。 */}
@@ -328,13 +340,13 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
                         {meta.pct === null ? null : <ProgressBar pct={meta.pct} />}
                       </button>
                       {/* 多选态：本地角标把左上让给勾选标记；单本 ✕ 退场（同一职责不留第二个入口） */}
-                      {selectMode || !isLocal ? null : <span className="novel-local-tag">本地</span>}
+                      {selectMode || !isLocal ? null : <span className="novel-local-tag">{t('shelf.local')}</span>}
                       {!selectMode ? null : <span className="novel-check" aria-hidden="true">{picked ? '✓' : ''}</span>}
                       {!selectMode ? (
                         <button
                           className="novel-btn sm novel-card-x"
-                          title="删除本书"
-                          aria-label={`删除 ${b.title}`}
+                          title={t('shelf.deleteBook')}
+                          aria-label={t('shelf.deleteBookAria', { title: b.title })}
                           onClick={() => { setDelError(null); setPendingDel({ books: [b], batch: false }) }}
                         >✕</button>
                       ) : null}

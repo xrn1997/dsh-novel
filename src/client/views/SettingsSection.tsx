@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 import { paramRoutes, ROUTES } from '../../shared/wire.js'
+import { describeError } from '../api.js'
+import { plural, useCopy, type CopyKey } from '../copy/index.js'
 import { prodDeps } from '../deps.js'
 import type { ClientCoreDeps, SettingsDeps } from '../deps.js'
 import { refreshJob, startSourceVerification, takeJobOpen, useJobOpenRequest, useJobSurface } from '../jobs.js'
@@ -31,6 +33,7 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
   /** 样式层是否自带：宿主（`NovelView`）已在其根上注入时传 false，避免同一棵树里两份 NOVEL_CSS */
   withStyles?: boolean
 }): ReactNode {
+  const t = useCopy()
   type Sub = { name: 'list' } | { name: 'probe'; sourceId: string }
   const [sub, setSub] = useState<Sub>({ name: 'list' })
   const [sources, setSources] = useState<SourcePublic[] | null>(null)
@@ -50,7 +53,7 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
       pruneInboxMuted(sourceInbox(list))
     }, (e) => {
       setSources([])
-      setLoadError(e instanceof Error ? e.message : String(e))
+      setLoadError(describeError(e, t))
     })
   }
   useEffect(reload, [])
@@ -85,7 +88,7 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
    *  提交后的编排归 `jobs.ts` 的 `startSourceVerification`（三个验证入口同一条路）——
    *  此处曾是 `() => undefined` 吞掉 rejection，「去验证」点了没反应还留 unhandled。 */
   const verifyIds = (ids: string[]): void => {
-    void startSourceVerification(ids, deps)
+    void startSourceVerification(ids, deps, t)
   }
 
   if (sub.name === 'probe') {
@@ -104,7 +107,7 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
     <div data-novel-view="sources" data-novel-scope className="novel-view">
       {withStyles ? <NovelStyles /> : null}
       {loadError === null ? null : (
-        <div className="novel-err novel-note-md">源列表加载失败：{loadError}（稍后重试或检查 DSH 服务端）</div>
+        <div className="novel-err novel-note-md">{t('sources.loadFailed', { detail: loadError })}</div>
       )}
       {/* ① 待办收件箱：反常置顶；加载中/加载失败不渲染 */}
       <InboxSection inbox={inbox} loadError={loadError} job={job} onVerify={verifyIds} />
@@ -128,8 +131,8 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
           在无有效 JSON 时禁用），有完成回执时是回执里的「查看明细」。
           回归钉在 views-wiring「导入弹层焦点不被壳层重渲染劫持」。 */}
       {importOpen && (
-        <Dialog title="导入书源" variant="wide" onClose={() => { setImportOpen(false) }}
-          actions={<button className="novel-btn sm" onClick={() => { setImportOpen(false) }}>关闭</button>}>
+        <Dialog title={t('import.title')} variant="wide" onClose={() => { setImportOpen(false) }}
+          actions={<button className="novel-btn sm" onClick={() => { setImportOpen(false) }}>{t('common.close')}</button>}>
           <ImportPane
             job={job}
             refresh={refreshJob}
@@ -157,6 +160,7 @@ function InboxSection({ inbox, loadError, job, onVerify }: {
   inbox: SourceInbox | null; loadError: string | null; job: JobState | null
   onVerify: (ids: string[]) => void
 }): ReactNode {
+  const t = useCopy()
   const { muted } = useStore(inboxUi)
   if (inbox === null || loadError !== null) return null
   const { shown, hidden } = visibleInboxCards(inboxCards(inbox), muted)
@@ -168,11 +172,11 @@ function InboxSection({ inbox, loadError, job, onVerify }: {
   return (
     <div data-novel-inbox className="novel-inbox">
       <div className="novel-inbox-head">
-        <strong>待办</strong>
+        <strong>{t('sources.inbox.title')}</strong>
         {/* 忽略态必须看得见才有出路：只剩隐藏行时网格不渲染，但「重新显示」一直在 */}
         {hidden.length === 0 ? null : (
-          <span className="novel-muted" data-novel-inbox-hidden>已忽略 {hidden.length} 张
-            <button className="novel-btn sm" onClick={unmuteAllInboxCards}>重新显示</button>
+          <span className="novel-muted" data-novel-inbox-hidden>{plural(t, hidden.length, 'sources.inbox.hidden.one', 'sources.inbox.hidden.other')}
+            <button className="novel-btn sm" onClick={unmuteAllInboxCards}>{t('sources.inbox.showAll')}</button>
           </span>
         )}
       </div>
@@ -180,18 +184,19 @@ function InboxSection({ inbox, loadError, job, onVerify }: {
         <div className="novel-inbox-grid">
           {shown.map((c) => {
             const copy = TODO_CARD[c.kind]
+            const label = t(copy.labelKey)
             return (
               <div key={c.kind} className={`novel-todo-card ${copy.tone}`} data-novel-todo={c.kind}>
                 <div className="novel-todo-head">
-                  <span className={`novel-todo-label ${copy.tone}`}>{copy.icon} {copy.label}</span>
+                  <span className={`novel-todo-label ${copy.tone}`}>{copy.icon} {label}</span>
                   <span className="novel-grow" />
-                  <button className="novel-btn sm" aria-label={`忽略 ${copy.label} 提示`} title={copy.muteTitle}
-                    onClick={() => muteInboxCard(c.kind, c.signature)}>✕ 忽略</button>
+                  <button className="novel-btn sm" aria-label={t('sources.inbox.muteAria', { label })} title={t(copy.muteTitleKey)}
+                    onClick={() => muteInboxCard(c.kind, c.signature)}>{t('sources.inbox.mute')}</button>
                 </div>
                 <span className="novel-todo-names">{c.sources.map((s) => s.name).join(' · ')}</span>
                 <button className="novel-btn sm primary" disabled={probing}
-                  onClick={() => onVerify(inboxIds(inbox, c.kind))}>{copy.action}</button>
-                <span className="novel-muted">{copy.hint}</span>
+                  onClick={() => onVerify(inboxIds(inbox, c.kind))}>{t(copy.actionKey)}</button>
+                <span className="novel-muted">{t(copy.hintKey)}</span>
               </div>
             )
           })}
@@ -201,15 +206,16 @@ function InboxSection({ inbox, loadError, job, onVerify }: {
   )
 }
 
-/** 两类待办的卡面文案：表驱动——两分支各写一份 JSX 是近逐字双胞胎，改一处即漂移 */
-const TODO_CARD: Record<InboxKind, { icon: string; label: string; tone: 'err' | 'warn'; action: string; hint: string; muteTitle: string }> = {
+/** 两类待办的卡面文案：表驱动——两分支各写一份 JSX 是近逐字双胞胎，改一处即漂移。
+ *  文字只存键（`copy/sources.ts` 的 `sources.inbox.*`），图标与色档是数据。 */
+const TODO_CARD: Record<InboxKind, { icon: string; labelKey: CopyKey; tone: 'err' | 'warn'; actionKey: CopyKey; hintKey: CopyKey; muteTitleKey: CopyKey }> = {
   broken: {
-    icon: '✗', label: '坏源', tone: 'err', action: '批量重验',
-    hint: '逐源排查在列表行内「试跑」', muteTitle: '本轮不再提醒；有新的坏源出现会自动回来',
+    icon: '✗', labelKey: 'sources.filter.broken', tone: 'err', actionKey: 'sources.inbox.broken.action',
+    hintKey: 'sources.inbox.broken.hint', muteTitleKey: 'sources.inbox.broken.muteTitle',
   },
   unverified: {
-    icon: '?', label: '未验证', tone: 'warn', action: '一键验证',
-    hint: '新导入的源也汇入此处', muteTitle: '本轮不再提醒；新导入的未验证源会自动回来',
+    icon: '?', labelKey: 'sources.filter.unverified', tone: 'warn', actionKey: 'sources.inbox.unverified.action',
+    hintKey: 'sources.inbox.unverified.hint', muteTitleKey: 'sources.inbox.unverified.muteTitle',
   },
 }
 
@@ -224,30 +230,33 @@ export function ProbePane({ sourceId, onBack, deps = prodDeps }: {
   /** 试跑只发一次探针请求：读面与任务面都由壳层管，这里不吃整束 */
   sourceId: string; onBack: () => void; deps?: Pick<ClientCoreDeps, 'apiSend'>
 }): ReactNode {
+  const t = useCopy()
   const [result, setResult] = useState<ProbeResult | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
   const run = (): void => {
     setFailed(null)
     void deps.apiSend<ProbeResult>('POST', paramRoutes.sourceProbe(sourceId))
-      .then(setResult, (e: unknown) => setFailed(e instanceof Error ? e.message : String(e)))
+      .then(setResult, (e: unknown) => setFailed(describeError(e, t)))
   }
   useEffect(run, [sourceId])
   return (
     <div className="novel-group">
       <div className="novel-toolbar">
-        <button className="novel-btn" onClick={onBack}>← 返回源列表</button>
-        <button className="novel-btn" onClick={run}>重跑</button>
-        <span className="novel-muted">单源试跑：真实搜索请求 + 规则求值 trace</span>
+        <button className="novel-btn" onClick={onBack}>{t('sources.probe.back')}</button>
+        <button className="novel-btn" onClick={run}>{t('sources.probe.rerun')}</button>
+        <span className="novel-muted">{t('sources.probe.subtitle')}</span>
       </div>
       {failed !== null
-        ? <div className="novel-err novel-note-md">探针请求失败：{failed}</div>
+        ? <div className="novel-err novel-note-md">{t('sources.probe.requestFailed', { detail: failed })}</div>
         : result === null
-          ? <div className="novel-muted">探针执行中…</div>
+          ? <div className="novel-muted">{t('sources.probe.running')}</div>
           : (
             <div className="novel-panel novel-group">
               <div>
                 <StatusBadge status={result.ok ? 'verified' : 'broken'} />
-                {' '}{result.ok ? `命中 ${result.itemCount} 条，首条「${result.firstTitle ?? ''}」` : '不可用'}
+                {' '}{result.ok
+                  ? plural(t, result.itemCount, 'sources.probe.hits.one', 'sources.probe.hits.other', { title: result.firstTitle ?? '' })
+                  : t('sources.probe.unavailable')}
               </div>
               {result.error === undefined ? null : <ErrorBanner error={{ code: result.error.code, message: result.error.message }} />}
             </div>

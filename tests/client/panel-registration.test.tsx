@@ -33,13 +33,26 @@ describe('客户端注册面：小说 = 全局面板（main keyed + sidebar.pane
     const icon = s.registrations.find((r) => r.name === 'sidebar.panellist')
     expect(icon, 'sidebar.panellist 未注册').toBeDefined()
     expect(icon?.options.id).toBe('novel')
-    expect(icon?.options.label).toBe('小说')
+    const label = icon?.options.label
+    expect(typeof label).toBe('function')
+    expect((label as () => string)()).toBe('小说')
 
     const panel = s.registrations.find((r) => r.name === 'main')
     expect(panel, 'main 未注册').toBeDefined()
     expect(panel?.options.key).toBe('novel')                      // 与 panellist id 同一个词
+    // main 的 inject 缝：宿主槽位按它取 t，缺了这个函数面板就没有字典（回退中文只算兜底）
+    expect(typeof panel?.options.inject).toBe('function')
+    const panelSeams = (panel?.options.inject as () => { t: (key: string) => string })()
+    expect(panelSeams.t('nav.panel')).toBe('小说')
 
-    expect(s.registrations.some((r) => r.name === 'shell.overlay' && r.options.id === 'novel-status')).toBe(true)
+    const overlay = s.registrations.find((r) => r.name === 'shell.overlay' && r.options.id === 'novel-status')
+    expect(overlay, 'shell.overlay 未注册').toBeDefined()
+    // 常驻状态层同样两条缝：行标签是读字典的函数，inject 交回同一个 t
+    const overlayLabel = overlay?.options.label
+    expect(typeof overlayLabel).toBe('function')
+    expect((overlayLabel as () => string)()).toBe('小说任务状态')
+    const overlaySeams = (overlay?.options.inject as () => { t: (key: string) => string })()
+    expect(overlaySeams.t('nav.overlay')).toBe('小说任务状态')
     // 每个注册都在 ctx.effect 内（随插件卸载可退订），且带可读标签
     expect(s.effects.filter((l) => l.includes('dsh-novel')).length).toBeGreaterThanOrEqual(3)
   })

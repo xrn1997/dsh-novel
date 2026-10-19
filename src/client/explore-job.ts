@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { bodies, ROUTES } from '../shared/wire.js'
 import type { ExploreBook, ExploreSnapshot } from '../shared/wire.js'
-import { ApiClientError } from './api.js'
+import { ApiClientError, describeError } from './api.js'
+import { zhTranslate } from './copy/index.js'
+import type { Translate } from './copy/index.js'
 import { JOB_POLL_MS } from './util.js'
 import type { JobWatchDeps } from './deps.js'
 
@@ -63,7 +65,7 @@ export interface ExploreRound {
 
 export interface ExploreJobView {
   round: ExploreRound | null
-  /** 唯一那条错误泳道：读面/写面自己的失败（`分类结果读取失败：` / `分类提交失败：` / `续页失败：`）
+  /** 唯一那条错误泳道：读面/写面自己的失败（`city.job.readFailed` / `city.job.submitFailed` / `city.job.moreFailed`）
    *  与快照那句「这一页没回来」（`ExploreSnapshot` 的 `error`）都落在这里。单源没有「某几个源没响应」
    *  那种清单要分列，两件事靠各自的文案分辨、谁也不冒充谁——**尤其不许把抓取失败咽成静默的空书单**。 */
   error: string | null
@@ -83,8 +85,6 @@ export interface ExploreJobView {
   loadMore: () => void
 }
 
-const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
-
 /** 快照 → 视图态的**唯一投影**，导出它：测试要钉的就是这份映射本身。让它留在模块内，测试就只能
  *  自己复制一份映射——那份复制迟早跟实现分叉，而且分叉的方向永远是「拿着旧形状继续跑」。 */
 export const toRound = (job: ExploreSnapshot): ExploreRound => ({
@@ -93,7 +93,7 @@ export const toRound = (job: ExploreSnapshot): ExploreRound => ({
   cancelled: job.cancelled === true, page: job.page, hasMore: job.hasMore,
 })
 
-export function useExploreJob(deps: JobWatchDeps): ExploreJobView {
+export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): ExploreJobView {
   const alive = useRef(true)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const stream = useRef<AbortController | null>(null)
@@ -124,7 +124,7 @@ export function useExploreJob(deps: JobWatchDeps): ExploreJobView {
   const apply = (job: ExploreSnapshot | null): boolean => {
     if (job === null) {
       stopChannels()
-      setError('分类浏览已不可读（服务重启或结果已过保留期）')
+      setError(t('city.job.unavailable'))
       setRound(null)
       return false
     }
@@ -145,7 +145,7 @@ export function useExploreJob(deps: JobWatchDeps): ExploreJobView {
       // 代际已换 = 这一发属于一条已被撤掉的通道：连那句「读取失败」都不许报，
       // 否则旧通道的断线会把新轮的一帧好结果刷成红条
       if (!alive.current || gen.current !== g) return
-      setError(`分类结果读取失败：${errText(e)}`)
+      setError(t('city.job.readFailed', { detail: describeError(e, t) }))
       setRound((r) => (r === null ? null : { ...r, running: false }))
       return
     }
@@ -197,7 +197,7 @@ export function useExploreJob(deps: JobWatchDeps): ExploreJobView {
         watch()
       } catch (e) {
         if (!alive.current) return
-        setError(`分类提交失败：${errText(e)}`)   // 服务端没起新轮：上一轮结果照旧可读，不清屏
+        setError(t('city.job.submitFailed', { detail: describeError(e, t) }))   // 服务端没起新轮：上一轮结果照旧可读，不清屏
       }
     })()
   }
@@ -226,7 +226,7 @@ export function useExploreJob(deps: JobWatchDeps): ExploreJobView {
           setRound((r) => (r === null ? null : { ...r, running: false, hasMore: false }))
           return
         }
-        setError(`续页失败：${errText(e)}`)   // 真失败：红条照说，钮还回来（重试是用户的事）
+        setError(t('city.job.moreFailed', { detail: describeError(e, t) }))   // 真失败：红条照说，钮还回来（重试是用户的事）
         setRound((r) => (r === null ? null : { ...r, running: false }))
       }
     })()

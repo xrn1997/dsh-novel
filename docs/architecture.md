@@ -22,6 +22,7 @@
 - 浏览器半是 CJS 单文件闭包工厂，经宿主的模块装载器进场，bundle 内每个 `require` 由宿主**冻结的平台模块表**解答——这决定了它不能带运行时依赖出去（`docs/adr/0021`）。
 - Node 半是 Cordis 插件：入口导出配置 schema 与 `apply`，在 `apply` 里挂三条注册（prefix 路由、工具、常驻 effect）。装配声明与安装许可由宿主的兼容闸把关（`docs/adr/0020`）。
 - **浏览器半不读任何运行时配置、也不需要 API base**：同源根相对 fetch，前缀由 wire 单点持有。
+- **客户端文案单点**：可见中文与 `EN` 译文经 `src/client/copy/` 的命名空间字典进宿主 locale 服务；slot 入口用 `inject` 拿 `t`，子树用 `CopyProvider`，组件里不写可见中文（可选回退与错误边界见 `docs/adr/0038`）。
 - 改动生效分两条路：浏览器半靠宿主的 HMR 热推；Node 半必须重启宿主。契约升级要**两半同批**上线（`docs/adr/0019`）。
 
 ## 2. Node 半的分层与依赖方向
@@ -104,6 +105,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 缺省值 | 五个各自主人（见 `tests/services/defaults.test.ts` 钉的常量） | 第二处字面量 |
 | 浏览器视图内路由与跨卸载现场 | `client/store.ts` + 各模块级现场 store | 业务真相 |
 | 模态契约（Esc / 入场焦点 / Tab 圈 / 关后还焦 / scrim 与 dialog 标记） | `client/views/dialog.tsx` 的 `Dialog`（五处带遮罩浮层共读这一份） | 几何档位的主人（样式层）与标题、动作行文案（各调用点） |
+| 客户端可见文案与错误展示 | `client/copy/index.tsx` 的 `ZH` / `EN` / `createTranslate` / `zhTranslate` / `CopyProvider` / `useCopy`（字典与取词入口）+ `client/api.ts` 的 `describeError` / `NetworkReason`（客户端网络错误的翻译判据） | 服务端错误原文、AI 工具描述、插件卡片的 `locale` 元信息 |
 | 阅读时序 | `client/reader-session.ts` | DOM 测量实现 |
 | 阅读浮层在场与互斥（至多一角、换角退场语义、哪面带遮罩） | `client/reader-surfaces.ts`（视图的 `surface` state 只是它的投影） | 阅读位置与返回栈（`reader-session.ts`）、带遮罩模态（`client/views/dialog.tsx`） |
 | 章节窗口与预取判据 | `client/reader-load.ts` | 会话状态 |

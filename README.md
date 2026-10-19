@@ -2,7 +2,7 @@
 
 在 DeepSeek Harness（DSH）里读网络小说：导入 [legado](https://github.com/gedoor/legado) 书源 → 聚合搜索 → 加书架 → 连续滚动阅读。AI 助手同时获得六个小说工具（`dshnovel_` 前缀），一句「帮我找本书并读第 N 章」就能在对话里完成搜索与阅读。
 
-![左侧栏「小说」面板：书架 / 书城 / 书源管理三个 tab](https://raw.githubusercontent.com/xrn1997/dsh-novel/main/docs/screenshots/screenshot-01.png)
+![左侧栏「小说」面板：书架 / 书城 / 书源管理 tab](https://raw.githubusercontent.com/xrn1997/dsh-novel/main/docs/screenshots/screenshot-01.png)
 
 - 安装：`dsh plugin --profile <profile> add @xrn1997/dsh-novel`
 - 许可：[Apache-2.0](LICENSE)
@@ -35,6 +35,7 @@
 - **AI 助手工具**：搜索、读章、目录、书架（含写）、书源管理、导入书源六个工具，与 UI 共用同一条链路（详见下文）。
 - **本地书（TXT / EPUB）**：TXT 自动识别 GBK / UTF-8 并切章；EPUB 2/3 流式排版按 spine 计章，保留原书目录树、正文插图、脚注跳转与返回、基本格式。有损项落成持久导入说明，进书后还能在阅读器里重看。
 - **书源管理**：待办收件箱把坏源 / 未验证置顶成任务卡（批量重验 / 一键验证，处理完自动消解），状态带汇总读数；支持文本 / 状态 / 分组过滤、行内启停、批量启停 / 验证 / 删除、单源试跑、cookie 录入与 `loginUrl` 脚本执行两形态；删除二次确认。
+- **中英界面**：界面文案跟随宿主语言（中文 / English；服务端返回的错误原文与书源数据不翻，已生成的任务 / 错误条目保留生成时语言），插件卡片标题与描述也随语言切换。
 
 ## 安装
 
@@ -44,7 +45,7 @@
 dsh plugin --profile <profile> add @xrn1997/dsh-novel
 ```
 
-重启宿主后，左侧栏出现「小说」全局面板入口（图标行；点击即在中央面板打开书架 / 书城 / 书源管理三个 tab）。侧栏入口要求该 profile 的 bundles 里有 `@deepseek-ai/dsh-web-app`；不带它的 profile 只挂 Node 半与六个 AI 工具，界面上不会多出入口。
+重启宿主后，左侧栏出现「小说」全局面板入口（图标行；点击即在中央面板打开书架 / 书城 / 书源管理 tab）。侧栏入口要求该 profile 的 bundles 里有 `@deepseek-ai/dsh-web-app`；不带它的 profile 只挂 Node 半与 AI 工具，界面上不会多出入口。
 
 npm 安装使用预构建产物，秒装、无需构建授权。从 GitHub 源码安装（`dsh plugin --profile <profile> add github:xrn1997/dsh-novel`）时 `prepare` 脚本会自动构建，但 pnpm ≥10 首次安装可能拦下构建脚本（依赖已装而 `lib/` 未生成），需先在 profile 目录执行 `pnpm approve-builds --all` 再重跑。
 

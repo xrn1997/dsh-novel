@@ -1,19 +1,22 @@
 import type { CSSProperties, ReactNode } from 'react'
+import { useCopy } from '../copy/index.js'
 import type { JobState, LocalImportWarning } from './types.js'
 
 /** 小组件集：状态徽标 / 错误横幅（带段级定位徽标）/ 空态 / 运行卡与进度段——六视图共用。
  *  颜色一律走 `--novel-*` 局部 token（由 NovelStyles 的 token 层定义，见 styles.tsx 头注）：
  *  写死 hex 等于钉死一套主题观感，暗态下与宿主调色板不一致。 */
 
-/** 源状态徽标：文案是原始状态字的中文映射（原始状态字不进 UI），取色走 data-status
- *  属性选择器——颜色的主人是样式层的 --novel-status-*，这里不该再行内挑色。
- *  状态点是纯装饰：读屏念「● 可用」是噪声，颜色之外没有任何信息。 */
+/** 源状态徽标：原始状态字不进 UI，文案住 `copy/sources.ts` 的 `sources.status.*`（书源列表与
+ *  搜索结果共用）；取色走 data-status 属性选择器——颜色的主人是样式层的 --novel-status-*，
+ *  这里不该再行内挑色。状态点是纯装饰：读屏念「● 可用」是噪声，颜色之外没有任何信息。 */
 export function StatusBadge({ status }: { status: string }): ReactNode {
+  const t = useCopy()
   const key = status === 'verified' ? 'verified' : status === 'broken' ? 'broken' : 'unverified'
-  const label = key === 'verified' ? '可用' : key === 'broken' ? '不可用' : '未验证'
+  const labelKey = key === 'verified' ? 'sources.status.verified'
+    : key === 'broken' ? 'sources.status.broken' : 'sources.status.unverified'
   return (
     <span data-novel="badge" data-status={key} className="novel-badge">
-      <span aria-hidden="true">● </span>{label}
+      <span aria-hidden="true">● </span>{t(labelKey)}
     </span>
   )
 }
@@ -35,16 +38,20 @@ export interface ApiErrorLike {
   segment?: { facet: string; segmentIndex: number; segmentRaw?: string }
 }
 
-/** 错误横幅：message 红字 + segment 存在时「面#段N」徽标（底/字/徽标全走 token） */
+/** 错误横幅：message 红字 + segment 存在时「面#段N」徽标（底/字/徽标全走 token）。
+ *  `error.code` 与 segment 的 facet 是服务端数据，原样呈现；骨架词（段 / 未知错误 / 重试）走字典。 */
 export function ErrorBanner({ error, onRetry }: { error: ApiErrorLike; onRetry?: () => void }): ReactNode {
+  const t = useCopy()
   return (
     <div data-novel="error" className="novel-panel novel-error-banner">
       {error.segment !== undefined && (
-        <span className="novel-badge-pill">{error.segment.facet}#段{error.segment.segmentIndex}</span>
+        <span className="novel-badge-pill">
+          {t('common.segmentBadge', { facet: error.segment.facet, n: error.segment.segmentIndex })}
+        </span>
       )}
-      <span className="novel-err">{error.code ?? 'Error'}: {error.message ?? '未知错误'}</span>
+      <span className="novel-err">{error.code ?? 'Error'}: {error.message ?? t('common.unknownError')}</span>
       {onRetry !== undefined && (
-        <button className="novel-btn sm novel-retry" onClick={onRetry}>重试</button>
+        <button className="novel-btn sm novel-retry" onClick={onRetry}>{t('common.retry')}</button>
       )}
     </div>
   )
@@ -113,13 +120,14 @@ export function RunCard({ label, meta, pct, counts }: {
   /** 尾行 counts（已新增/已验证/未通过/重复跳过……）——两卡形态不同，插槽化 */
   counts: ReactNode
 }): ReactNode {
+  const t = useCopy()
   return (
     <div data-novel-run-card className="novel-group novel-run-card">
       <div className="novel-toolbar novel-run-card-head">
         <strong>{label}</strong>
         <span className="novel-muted">{meta}</span>
         <span className="novel-grow" />
-        <span className="novel-muted">可以关掉页面，任务在服务端继续</span>
+        <span className="novel-muted">{t('sources.run.canClose')}</span>
       </div>
       <ProgressBar pct={pct} />
       <div className="novel-toolbar">{counts}</div>

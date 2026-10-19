@@ -1,6 +1,8 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { LOCAL_SOURCE_ID, bodies, paramRoutes, queries, ROUTES } from '../../shared/wire.js'
+import { describeError } from '../api.js'
+import { plural, useCopy } from '../copy/index.js'
 import { prodReaderDeps } from '../deps.js'
 import type { ReaderDeps } from '../deps.js'
 import { createExportRun, IDLE_EXPORT, parseRange } from '../export-run.js'
@@ -38,6 +40,7 @@ export const CTRL_Z = { toolbar: 12, mask: 10, panel: 11 } as const
  *  chip 式控件，布局归样式类 .novel-prefs，行内只留定位与 z；role=dialog + aria-label
  *  （能开能关的浮层，Esc 关，共用 ReaderView 的一条 Esc）。 */
 export function PrefsPanel(): ReactNode {
+  const t = useCopy()
   const prefs = useStore(prefsStore)
   const step = (delta: number): void => {
     const i = FONT_STEPS.indexOf(prefs.fontSize)
@@ -48,19 +51,19 @@ export function PrefsPanel(): ReactNode {
     <div
       data-novel-ctrl
       role="dialog"
-      aria-label="阅读设置"
+      aria-label={t('reader.settings')}
       className={prefs.darkController ? 'novel-dark novel-prefs' : 'novel-prefs'}
       style={{ position: 'absolute', right: 12, top: 40, zIndex: CTRL_Z.panel }}
     >
       <div>
-        <div className="novel-prefs-label">字号（当前 {prefs.fontSize}px）</div>
+        <div className="novel-prefs-label">{t('reader.fontSizeCurrent', { size: prefs.fontSize })}</div>
         <div className="novel-chips">
-          <button className="novel-chip" onClick={() => step(-1)} aria-label="减小字号">A−</button>
-          <button className="novel-chip" onClick={() => step(1)} aria-label="增大字号">A＋</button>
+          <button className="novel-chip" onClick={() => step(-1)} aria-label={t('reader.fontSizeDown')}>A−</button>
+          <button className="novel-chip" onClick={() => step(1)} aria-label={t('reader.fontSizeUp')}>A＋</button>
         </div>
       </div>
       <div>
-        <div className="novel-prefs-label">行距</div>
+        <div className="novel-prefs-label">{t('reader.lineHeight')}</div>
         <div className="novel-chips">
           {LINE_HEIGHTS.map((lh) => (
             <button key={lh} className={prefs.lineHeight === lh ? 'novel-chip on' : 'novel-chip'}
@@ -70,33 +73,33 @@ export function PrefsPanel(): ReactNode {
         </div>
       </div>
       <div>
-        <div className="novel-prefs-label">栏宽（每行约 {prefs.measure} 字）</div>
+        <div className="novel-prefs-label">{t('reader.measureCurrent', { n: prefs.measure })}</div>
         <div className="novel-chips">
           {MEASURES.map((m) => (
             <button key={m.em} className={prefs.measure === m.em ? 'novel-chip on' : 'novel-chip'}
               aria-pressed={prefs.measure === m.em}
-              onClick={() => setPref({ measure: m.em })}>{m.label}</button>
+              onClick={() => setPref({ measure: m.em })}>{t(m.labelKey)}</button>
           ))}
         </div>
       </div>
       <div>
-        <div className="novel-prefs-label">纸张色（正文层，不随深色主题）</div>
+        <div className="novel-prefs-label">{t('reader.paper')}</div>
         <div className="novel-chips">
           {PAPER_PRESETS.map((p) => (
-            <button key={p.color} title={p.name} aria-label={p.name} aria-pressed={prefs.paperColor === p.color}
+            <button key={p.color} title={t(p.nameKey)} aria-label={t(p.nameKey)} aria-pressed={prefs.paperColor === p.color}
               className={prefs.paperColor === p.color ? 'novel-chip novel-paper-swatch on' : 'novel-chip novel-paper-swatch'}
               style={{ background: p.color, color: paperInk(p.color) }}
               onClick={() => setPref({ paperColor: p.color })} />
           ))}
           {/* 正文层的唯一取色入口：行内只有值本身，外观归 .novel-prefs-color
               （原生 color 控件不套标度会在面板里显得突兀） */}
-          <input type="color" className="novel-prefs-color" aria-label="自定义纸张色"
+          <input type="color" className="novel-prefs-color" aria-label={t('reader.paperCustom')}
             value={prefs.paperColor} onChange={(e) => setPref({ paperColor: e.target.value })} />
         </div>
       </div>
       <label>
         <input type="checkbox" checked={prefs.darkController} onChange={(e) => setPref({ darkController: e.target.checked })} />
-        控制器层跟随深色
+        {t('reader.darkController')}
       </label>
     </div>
   )
@@ -125,48 +128,54 @@ export function ExportPanel(props: {
   onCancel: () => void
   darkController: boolean
 }): ReactNode {
+  const t = useCopy()
   const valid = parseRange(props.from, props.to, props.total)
   return (
     <div
       data-novel-ctrl
       role="dialog"
-      aria-label="导出范围"
+      aria-label={t('reader.export.range')}
       className={props.darkController ? 'novel-dark novel-prefs' : 'novel-prefs'}
       style={{ position: 'absolute', right: 12, top: 40, zIndex: CTRL_Z.panel }}
     >
       {props.running ? (
         <>
           <div className="novel-prefs-label">
-            {props.totalChapters === '' ? '导出中…' : `导出中 · 共 ${props.totalChapters} 章`}{` · ${props.kb} KB`}
+            {props.totalChapters === ''
+              ? t('reader.export.runningBytes', { kb: props.kb })
+              : plural(t, Number(props.totalChapters), 'reader.export.running.one', 'reader.export.running.other',
+                { total: props.totalChapters, kb: props.kb })}
           </div>
           <div className="novel-chips">
-            <button className="novel-chip" onClick={props.onCancel}>取消导出</button>
-            <button className="novel-chip" onClick={props.onClose}>收起</button>
+            <button className="novel-chip" onClick={props.onCancel}>{t('reader.export.cancel')}</button>
+            <button className="novel-chip" onClick={props.onClose}>{t('reader.export.collapse')}</button>
           </div>
         </>
       ) : (
         <>
-          <div className="novel-prefs-label">导出范围（1 基含端，共 {props.total} 章）</div>
+          <div className="novel-prefs-label">
+            {plural(t, props.total, 'reader.export.rangeTotal.one', 'reader.export.rangeTotal.other', { total: props.total })}
+          </div>
           <label>
-            从第
+            {t('reader.export.fromPrefix')}
             <input className="novel-input" type="number" min={1} max={props.total}
-              value={props.from} onChange={(e) => props.onFrom(e.target.value)} aria-label="起始章" />
-            章 到第
+              value={props.from} onChange={(e) => props.onFrom(e.target.value)} aria-label={t('reader.export.startChapter')} />
+            {t('reader.export.between')}
             <input className="novel-input" type="number" min={1} max={props.total}
-              value={props.to} onChange={(e) => props.onTo(e.target.value)} aria-label="结束章" />
-            章
+              value={props.to} onChange={(e) => props.onTo(e.target.value)} aria-label={t('reader.export.endChapter')} />
+            {t('reader.export.toSuffix')}
           </label>
           <div className="novel-chips">
-            <button className="novel-chip" onClick={() => props.onPreset('all')}>整本</button>
-            <button className="novel-chip" onClick={() => props.onPreset('rest')}>当前章起</button>
+            <button className="novel-chip" onClick={() => props.onPreset('all')}>{t('reader.export.all')}</button>
+            <button className="novel-chip" onClick={() => props.onPreset('rest')}>{t('reader.export.rest')}</button>
           </div>
-          {!valid.ok && <div className="novel-prefs-label" role="status">{valid.reason}</div>}
+          {!valid.ok && <div className="novel-prefs-label" role="status">{t(valid.reason, { total: props.total })}</div>}
           {/* 导出面只有文字：图文书的插图在投影里是占位文字（`chapterContentToText`），
               这句话必须在下手之前说，而不是等用户对着下载到的文件发现插图没了。 */}
-          <div className="novel-prefs-label">TXT 文字导出，不包含图片</div>
+          <div className="novel-prefs-label">{t('reader.export.textOnly')}</div>
           <div className="novel-chips">
-            <button className="novel-chip" disabled={!valid.ok} onClick={props.onConfirm}>⤓ 下载</button>
-            <button className="novel-chip" onClick={props.onClose}>取消</button>
+            <button className="novel-chip" disabled={!valid.ok} onClick={props.onConfirm}>{t('reader.export.download')}</button>
+            <button className="novel-chip" onClick={props.onClose}>{t('common.cancel')}</button>
           </div>
         </>
       )}
@@ -187,12 +196,15 @@ export function ImportNotesPanel({ warnings, onClose }: {
   warnings: LocalImportWarning[]
   onClose: () => void
 }): ReactNode {
+  const t = useCopy()
   return (
     <div className="novel-notes-slot">
-      <div className="novel-notes" role="dialog" aria-label="导入说明">
+      <div className="novel-notes" role="dialog" aria-label={t('reader.importNotes')}>
         <div className="novel-toolbar novel-notes-head">
-          <span className="novel-notes-title">导入说明（{warnings.length} 条）</span>
-          <button type="button" className="novel-btn sm" onClick={onClose}>关闭</button>
+          <span className="novel-notes-title">
+            {plural(t, warnings.length, 'reader.importNotesTitle.one', 'reader.importNotesTitle.other')}
+          </span>
+          <button type="button" className="novel-btn sm" onClick={onClose}>{t('common.close')}</button>
         </div>
         <div className="novel-notes-body">
           <WarningList warnings={warnings} />
@@ -236,6 +248,7 @@ function currentNodeOf(blocks: Array<HTMLDivElement | null>, viewTop: number): V
 export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: {
   sourceId: string; bookKey: string; title: string; deps?: ReaderDeps
 }): ReactNode {
+  const t = useCopy()
   const prefs = useStore(prefsStore)
   const bodyRef = useRef<HTMLDivElement | null>(null)                  // 正文层：锚点测量基准
   const sentinelRef = useRef<HTMLDivElement | null>(null)              // 未载边界哨兵：进预取区 → 加载下一章
@@ -280,7 +293,9 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   }), [])
 
   /** 会话依赖束：网络 + 帧调度（rAF 双帧 = 等布局落定再测量）；网络走注入 deps。
-   *  目录走 navigation 读面（线性 chapters + 展示树 items 同一份响应），正文一律 ChapterContent。 */
+   *  目录走 navigation 读面（线性 chapters + 展示树 items 同一份响应），正文一律 ChapterContent。
+   *  `t` 只进构造：会话的错误快照在生成时定语言（与 job store 同一条已知限制），
+   *  语言切换不重开会话——重开会丢目录与阅读位置，代价远大于旧错误条仍说旧语言。 */
   const session = useMemo(() => new ReaderSession({
     fetchNavigation: (s, b) => deps.apiGet<BookNavigation>(queries.navigation({ sourceId: s, url: b })),
     fetchChapter: (s, b, i) => deps.apiGet<ChapterContent>(queries.chapter({ sourceId: s, url: b, index: i })),
@@ -295,7 +310,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
         bodies.shelfPatch({ totalChapters: total })).catch(() => undefined)
     },
     afterFrames: (cb) => { requestAnimationFrame(() => requestAnimationFrame(cb)) },
-  }, readerPort, deps.saveDebounceMs), [readerPort, deps, sourceId, bookKey, title])
+  }, readerPort, deps.saveDebounceMs, t), [readerPort, deps, sourceId, bookKey, title])
 
   // 第三参 = getServerSnapshot：renderToString（smoke/SSR）必需，缺了直接抛
   const st = useSyncExternalStore(session.subscribe, () => session.state, () => session.state)
@@ -377,7 +392,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   // 导出失败单独一条（会话 error 归阅读链路）
   const [exportState, setExportState] = useState<ExportRunState>(IDLE_EXPORT)
   const exportRun = useMemo(() => createExportRun({
-    sourceId, bookKey, title, deps, onChange: setExportState,
+    sourceId, bookKey, title, deps, t, onChange: setExportState,
   }), [deps, sourceId, bookKey, title])
   useEffect(() => () => exportRun.dispose(), [exportRun])   // 卸载即取消——不许孤儿抓取
   const expTotal = toc?.length ?? 0
@@ -399,10 +414,11 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
       (e: unknown) => {
         if (!alive) return
         setImportNotes(null)
-        deps.pushError(`导入说明读取失败：${e instanceof Error ? e.message : String(e)}`)
+        deps.pushError(t('reader.importNotesFailed', { detail: describeError(e, t) }))
       },
     )
     return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 取数只随书变；错误文案的语言取发起时那一次
   }, [deps, sourceId, bookKey])
   const hasImportNotes = importNotes !== null && importNotes.length > 0
 
@@ -458,12 +474,12 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
       (): void => {
         setJoinBusy(false)
         setAskShelf(false)
-        deps.pushOk(`已加入书架：${title}`)
+        deps.pushOk(t('reader.join.ok', { title }))
         navigate({ name: 'shelf' })
       },
       (e: unknown): void => {
         setJoinBusy(false)
-        setJoinError(e instanceof Error ? e.message : String(e))
+        setJoinError(describeError(e, t))
       },
     )
   }
@@ -552,19 +568,19 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
       <div className={prefs.darkController ? 'novel-dark novel-rdr-bar' : 'novel-rdr-bar'}
         style={{ position: 'sticky', top: 0, zIndex: CTRL_Z.toolbar }}>
         <button className="novel-rdr-ctl" onClick={exitToShelf}>
-          <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M10 3 5 8l5 5" /></svg>书架
+          <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M10 3 5 8l5 5" /></svg>{t('reader.shelf')}
         </button>
         {/* 正文内链的返回入口：**一次返回一条**（重复跟随链接才有多层）。栈在会话里、只活在窗口内；
             没押返回项时不渲染——不给一个点了没反应的按钮。位置在「书架」之后，左侧主次分明。 */}
         {returnDepth > 0 && (
           <button className="novel-rdr-ctl" onClick={() => session.goBack(sourceId)}
-            title="回到跟随链接前的位置">返回原处</button>
+            title={t('reader.backToOriginTitle')}>{t('reader.backToOrigin')}</button>
         )}
         <span className="novel-rdr-sep" aria-hidden="true" />
         {/* 读数：当前章在主位（这一屏唯一在变的量），书名退副位、总章数交给分母。
             目录未到时不给一个空主位——那时唯一诚实的话就是「目录加载中」。 */}
         <div className="novel-rdr-title">
-          {toc === null ? <span className="novel-rdr-chap">目录加载中…</span> : (
+          {toc === null ? <span className="novel-rdr-chap">{t('reader.tocLoading')}</span> : (
             <>
               <span className="novel-rdr-chap">{toc[currentChapter]?.name ?? ''}</span>
               <span className="novel-rdr-pos">{currentChapter + 1} / {toc.length}</span>
@@ -576,21 +592,27 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
           {/* 导入说明入口：**只在真有持久告警的本地书上出现**（没告警一个字都不多说）。
               点开是只读面板——重看入口，不重复取数、不写进度。 */}
           {hasImportNotes && (
-            <button className="novel-rdr-ctl" aria-expanded={surface === 'importNotes'} aria-label="导入说明"
-              onClick={() => { toggleSurface('importNotes') }} title={`导入说明（${importNotes.length} 条）`}>导入说明</button>
+            <button className="novel-rdr-ctl" aria-expanded={surface === 'importNotes'} aria-label={t('reader.importNotes')}
+              onClick={() => { toggleSurface('importNotes') }}
+              title={plural(t, importNotes.length, 'reader.importNotesTitle.one', 'reader.importNotesTitle.other')}>
+              {t('reader.importNotes')}
+            </button>
           )}
           <button
             className="novel-rdr-ctl"
             onClick={() => { if (exportState.running) exportRun.cancel(); else openExport() }}
             title={exportState.running
               ? (exportState.range === null
-                ? (exportState.total === '' ? '整本导出' : `整本导出（共 ${exportState.total} 章）`)
-                : `范围导出（第 ${exportState.range.from}–${exportState.range.to} 章）`)
-              : '导出（选择章节范围）'}
+                ? (exportState.total === ''
+                  ? t('reader.export.whole')
+                  : plural(t, Number(exportState.total), 'reader.export.whole.one', 'reader.export.whole.other',
+                    { total: exportState.total }))
+                : t('reader.export.rangeToolbar', { from: exportState.range.from, to: exportState.range.to }))
+              : t('reader.export.open')}
           >
             {exportState.running
-              ? <>{exportState.kb} KB · 取消导出</>
-              : <><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 2.5v8m0 0L5 7.5M8 10.5l3-3M3 13h10" /></svg>下载</>}
+              ? t('reader.export.toolbarRunning', { kb: exportState.kb })
+              : <><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 2.5v8m0 0L5 7.5M8 10.5l3-3M3 13h10" /></svg>{t('reader.download')}</>}
           </button>
           {/* 导出面板与 Aa／目录／注释／导入说明永不同场：互斥判据在 `reader-surfaces`，这里只摆当场面 */}
           {surface === 'export' && (
@@ -619,11 +641,13 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
           )}
           {/* 互斥、以及「再点同一颗就收场」都不在这两行抄：判据在 `reader-surfaces`。
               工具栏已在遮罩之上（CTRL_Z），所以这些面各自的钮负责收场，不靠遮罩顺手关。 */}
-          <button className="novel-rdr-ctl" aria-expanded={surface === 'prefs'} aria-label="阅读设置"
-            onClick={() => { toggleSurface('prefs') }} title="阅读设置">Aa</button>
-          <button className="novel-rdr-ctl" aria-expanded={surface === 'toc'} aria-label="目录"
+          <button className="novel-rdr-ctl" aria-expanded={surface === 'prefs'} aria-label={t('reader.settings')}
+            onClick={() => { toggleSurface('prefs') }} title={t('reader.settings')}>Aa</button>
+          <button className="novel-rdr-ctl" aria-expanded={surface === 'toc'} aria-label={t('reader.contents')}
             onClick={() => { toggleSurface('toc') }}
-            title={toc === null ? '目录' : `目录（${toc.length}）`}>目录</button>
+            title={toc === null ? t('reader.contents') : t('reader.contentsWithCount', { n: toc.length })}>
+            {t('reader.contents')}
+          </button>
           {surface === 'prefs' && <PrefsPanel />}
         </div>
         {/* 章进度：跨章才动（会话只在 chapterIndex 变化时写 currentChapter）。章内百分比刻意不做——
@@ -643,15 +667,17 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
           关后还焦——见 `views/dialog.tsx`）。
           「先不加入」是**离开**（用户本来就要走，问过了就不再造第二次），按钮措辞各自说清自己那件事。 */}
       {askShelf && (
-        <Dialog title="这本书还没加入书架，加入吗？" onClose={dismissAsk}
+        <Dialog title={t('reader.join.title')} onClose={dismissAsk}
           actions={<>
-            <button className="novel-btn sm" onClick={() => navigate({ name: 'shelf' })} disabled={joinBusy}>先不加入</button>
+            <button className="novel-btn sm" onClick={() => navigate({ name: 'shelf' })} disabled={joinBusy}>
+              {t('reader.join.skip')}
+            </button>
             <button className="novel-btn sm primary" onClick={joinAndBack} disabled={joinBusy}>
-              {joinBusy ? '加入中…' : '加入书架并返回'}
+              {joinBusy ? t('reader.join.joining') : t('reader.join.confirm')}
             </button>
           </>}>
-          <div className="novel-modal-body">加入才会保存阅读进度；不加入，这一屏读到哪儿就不留。</div>
-          {joinError === null ? null : <div className="novel-err novel-note-sm">加入书架失败：{joinError}</div>}
+          <div className="novel-modal-body">{t('reader.join.body')}</div>
+          {joinError === null ? null : <div className="novel-err novel-note-sm">{t('reader.join.failed', { detail: joinError })}</div>}
         </Dialog>
       )}
       {/* 阅读区（full-bleed：纸铺满这一层）：正文列 + 0 宽 sticky 抽屉槽同在此行。
@@ -667,7 +693,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
             '--novel-measure': `${prefs.measure}em`,
           } as CSSProperties}
         >
-          {toc === null && <div className="novel-rdr-loading">目录加载中…</div>}
+          {toc === null && <div className="novel-rdr-loading">{t('reader.tocLoading')}</div>}
           {/* 只渲染已载章节：未载章节不进 DOM——scrollHeight 才等于「已读内容高」，预取判据才成立 */}
           {chapters.map((content, i) => content === null
             ? null
@@ -678,17 +704,19 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
                 data-chapter={i}
               >
                 {/* h2 不是 h3：阅读器这一屏没有更高的标题占位，从 h3 起等于给读屏一份断了头的大纲 */}
-                <h2 className="novel-rdr-mark">{toc?.[i]?.name ?? `第 ${i + 1} 章`}</h2>
+                <h2 className="novel-rdr-mark">{toc?.[i]?.name ?? t('reader.chapterFallback', { n: i + 1 })}</h2>
                 {/* 正文两种形态都在 ChapterBody 里（文字章逐行成段、图文章按白名单映射）：
                     会话把 ChapterContent 原样搬进来，形态分支只在这一处。
                     送进渲染前剥一次重复章名——**只这一处剥**，导出与工具读的是原样正文。 */}
-                <ChapterBody content={stripLeadingTitle(content, toc?.[i]?.name ?? `第 ${i + 1} 章`)}
+                <ChapterBody content={stripLeadingTitle(content, toc?.[i]?.name ?? t('reader.chapterFallback', { n: i + 1 }))}
                   bookKey={bookKey} onNavigate={bodyLink} />
               </div>
             ))}
           {toc !== null && (
             <div ref={sentinelRef} data-novel-sentinel className="novel-sentinel">
-              {loadingIdx !== null ? '加载中…' : nextChapterIndex(chapters, currentChapter) === -1 ? '— 全书完 —' : '…'}
+              {loadingIdx !== null
+                ? t('common.loading')
+                : nextChapterIndex(chapters, currentChapter) === -1 ? t('reader.endOfBook') : '…'}
             </div>
           )}
         </div>
@@ -696,7 +724,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
             内容 = 目录树（分组标题不可点；同一章可以有多条锚点条目）。 */}
         {surface === 'toc' && (
           <div className="novel-drawer-slot">
-            <div ref={drawerRef} className="novel-drawer" role="dialog" aria-label="目录">
+            <div ref={drawerRef} className="novel-drawer" role="dialog" aria-label={t('reader.contents')}>
               <ReaderNavigation
                 items={navigation ?? []}
                 activeId={navActive}

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import { createElement, StrictMode } from 'react'
 import { ApiClientError } from '../../src/client/api.js'
+import { CopyProvider, enTranslate } from '../../src/client/copy/index.js'
 import { ProbePane } from '../../src/client/views/SettingsSection.js'
 import { SettingsSection } from '../../src/client/views/SettingsSection.js'
 import { NovelView } from '../../src/client/views/NovelView.js'
@@ -1135,6 +1136,65 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     expect(within(openPerSourceAxis()).getByText('斗罗收尾的书')).toBeTruthy()
     await waitFor(() => expect(closed).toBe(true))                // 终态帧后自己关流，不留着占连接
   })
+
+  it('英文：搜索框占位与提交按钮', async () => {
+    const deps = coreDeps({ apiGet: vi.fn(async () => ({ job: null })) })
+    render(createElement(CopyProvider, { value: enTranslate, children: createElement(SearchView, { deps }) }))
+    expect(screen.getByPlaceholderText('Book title / author')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Search' })).toBeTruthy()
+  })
+
+  /** 收口行的相关数数的是**命中**（`sumRound.relevant`），紧挨着它的「(from N sources」数的是源：
+   *  英文若写成「N of them」就会被读成源数，单位必须跟着条数走。单复数两条键各钉一次。
+   *  同时钉 from 子句的前导空格：少了它，英文会渲染成「2 books(from 2 sources…」。 */
+  it('英文：收口汇总的相关数按命中条数报（单数）', async () => {
+    const deps = coreDeps({
+      apiGet: vi.fn(async () => ({
+        job: snap({
+          keyword: '斗罗', phase: 'done', next: 1, total: 1, done: 1,
+          added: [{
+            sourceId: 's1', sourceName: 'S', status: 'verified',
+            hits: [
+              { title: '斗罗', author: '唐家', url: 'https://s.com/a', coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null },
+              { title: '完全无关的书', author: null, url: 'https://s.com/b', coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null },
+            ],
+          }],
+        }),
+      })),
+    })
+    render(createElement(CopyProvider, { value: enTranslate, children: createElement(SearchView, { deps }) }))
+    const summaryText = (await screen.findByText(/This round searched/)).textContent ?? ''
+    expect(summaryText).toContain('1 book (from 1 source')
+    expect(summaryText).toContain(', 1 relevant hit, the rest folded but expandable')
+  })
+
+  it('英文：收口汇总的相关数按命中条数报（复数）', async () => {
+    const deps = coreDeps({
+      apiGet: vi.fn(async () => ({
+        job: snap({
+          keyword: '斗罗', phase: 'done', next: 2, total: 2, done: 2,
+          added: [
+            {
+              sourceId: 's1', sourceName: 'S', status: 'verified',
+              hits: [
+                { title: '斗罗', author: '唐家', url: 'https://s.com/a', coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null },
+                { title: '完全无关的书', author: null, url: 'https://s.com/b', coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null },
+              ],
+            },
+            {
+              sourceId: 's2', sourceName: 'T', status: 'verified',
+              hits: [
+                { title: '斗罗外传', author: null, url: 'https://t.com/a', coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null },
+              ],
+            },
+          ],
+        }),
+      })),
+    })
+    render(createElement(CopyProvider, { value: enTranslate, children: createElement(SearchView, { deps }) }))
+    expect((await screen.findByText(/This round searched/)).textContent)
+      .toContain(', 2 relevant hits, the rest folded but expandable')
+  })
 })
 
 describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层闭环；SettingsDeps 注入）', () => {
@@ -1429,6 +1489,21 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
 
   const reader = (deps: FakeReaderDeps): ReturnType<typeof createElement> =>
     createElement(ReaderView, { sourceId: 's1', bookKey: 'k1', title: '斗罗', deps })
+
+  it('英文：阅读器控制条与设置入口', async () => {
+    const deps = readerDeps()
+    const { container } = render(createElement(CopyProvider, { value: enTranslate, children: reader(deps) }))
+    await waitFor(() => expect(container.querySelector('[data-chapter="0"]')).not.toBeNull())
+    expect(screen.getByRole('button', { name: 'Shelf' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Reader settings' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Contents' })).toBeTruthy()
+    // 设置抽屉的档位名也走字典：字号读数、行距、纸张色 swatch 的可访问名
+    fireEvent.click(screen.getByRole('button', { name: 'Reader settings' }))
+    const prefs = screen.getByRole('dialog', { name: 'Reader settings' })
+    expect(within(prefs).getByText(/^Font size \(current \d+px\)$/)).toBeTruthy()
+    expect(within(prefs).getByText('Line height')).toBeTruthy()
+    expect(within(prefs).getByRole('button', { name: 'Cream' })).toBeTruthy()
+  })
 
   it('阅读会话的网络取数走注入 deps（目录走 navigation 读面，不再硬 import apiGet）', async () => {
     const deps = readerDeps()

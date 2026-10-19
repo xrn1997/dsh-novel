@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
-import { apiGet, apiSend } from './api.js'
+import { apiGet, apiSend, describeError } from './api.js'
+import { zhTranslate, type CopyKey, type Translate } from './copy/index.js'
 import { createStore, useStore } from './store.js'
 import { bodies, ROUTES } from '../shared/wire.js'
 import type { JobIssue, JobState } from './views/types.js'
@@ -32,14 +33,17 @@ export interface VerifyDeps {
 /** 书源验证的领域动作（验证编排收拢于此）。
  *  三个入口（待办箱 / 行内「验证/重验」/ 批量「验证所选」）只表达「验证哪些源」；提交后的编排
  *  收在这一处：成功 → 催任务读面（源列表刷新归任务终态，`SettingsSection` 按 job.id 记账一次）；
- *  失败 → 一处反馈（文案单点「启动验证失败：…」，此前三处各持一份，一改即漂移）。
- *  ids 在此按点击时快照：调用方传进来的数组可能随后变异，POST 载荷不许跟着动。 */
-export async function startSourceVerification(ids: string[], deps: VerifyDeps): Promise<void> {
+ *  失败 → 一处反馈（文案单点 `sources.verify.startFailed`；此前三处各持一份，一改即漂移）。
+ *  ids 在此按点击时快照：调用方传进来的数组可能随后变异，POST 载荷不许跟着动。
+ *  `t` 缺省 zhTranslate：三个入口都从 `useCopy()` 交当前 `t`，失败那句与入口同语言。 */
+export async function startSourceVerification(
+  ids: string[], deps: VerifyDeps, t: Translate = zhTranslate,
+): Promise<void> {
   try {
     await deps.startBatchProbeJob([...ids])
     ;(deps.refresh ?? refreshJob)()
   } catch (e) {
-    deps.pushError(`启动验证失败：${e instanceof Error ? e.message : String(e)}`)
+    deps.pushError(t('sources.verify.startFailed', { detail: describeError(e, t) }))
   }
 }
 
@@ -121,10 +125,19 @@ export function useJobPolling(deps: JobStatusDeps = prodJobStatusDeps): void {
   }, [n])
 }
 
-export function jobKindLabel(kind: JobState['kind']): string {
-  return kind === 'import' ? '导入' : '验证'
+/** 标签缺省 zhTranslate：未接 locale 的调用方（测试直渲 / 老宿主）保持既有中文；
+ *  有 t 就传——字典是真源，这里不再持有第二份中文。 */
+export function jobKindLabel(kind: JobState['kind'], t: Translate = zhTranslate): string {
+  return kind === 'import' ? t('job.kind.import') : t('job.kind.probe')
 }
 
-export const JOB_ISSUE_LABEL: Record<JobIssue['kind'], string> = {
-  failed: '失败', warning: '警告', dup: '重复跳过', replaced: '已替换',
+const JOB_ISSUE_KEY: Record<JobIssue['kind'], CopyKey> = {
+  failed: 'job.issue.failed',
+  warning: 'job.issue.warning',
+  dup: 'job.issue.dup',
+  replaced: 'job.issue.replaced',
+}
+
+export function jobIssueLabel(kind: JobIssue['kind'], t: Translate = zhTranslate): string {
+  return t(JOB_ISSUE_KEY[kind])
 }

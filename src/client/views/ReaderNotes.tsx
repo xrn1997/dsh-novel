@@ -1,6 +1,9 @@
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { queries } from '../../shared/wire.js'
+import { describeError } from '../api.js'
+import { useCopy, zhTranslate } from '../copy/index.js'
+import type { Translate } from '../copy/index.js'
 import type { ClientCoreDeps } from '../deps.js'
 import { findNovelNode, centerInScroller } from '../util.js'
 import { ChapterBody } from './ChapterBody.js'
@@ -31,13 +34,15 @@ type NotesState =
   | { phase: 'ready'; content: ChapterContent }
   | { phase: 'error'; error: { code?: string; message: string } }
 
-/** 失败载荷进 ErrorBanner：ApiClientError 的 code 带着（有 code 就显 code），其他异常按普通错误 */
-function asErrorLike(e: unknown): { code?: string; message: string } {
+/** 失败载荷进 ErrorBanner：ApiClientError 的 code 带着（有 code 就显 code），其他异常按普通错误。
+ *  客户端网络错误按当前语言出话，服务端错误原文透传（判据归 `describeError`）。 */
+function asErrorLike(e: unknown, t: Translate = zhTranslate): { code?: string; message: string } {
+  const message = describeError(e, t)
   if (e instanceof Error) {
     const code = (e as { code?: unknown }).code
-    return typeof code === 'string' ? { code, message: e.message } : { message: e.message }
+    return typeof code === 'string' ? { code, message } : { message }
   }
-  return { message: String(e) }
+  return { message }
 }
 
 /** 注释面板的依赖面：读一份文档 + 失败上报。它不写进度、不观察任务，也就不该为了拿这两样
@@ -57,6 +62,7 @@ export function ReaderNotes({ bookKey, target, requestSeq, deps, onNavigate, onC
   onNavigate: (target: ReadingTarget, role: LinkRole) => void
   onClose: () => void
 }): ReactNode {
+  const t = useCopy()
   const [stack, setStack] = useState<SupplementTarget[]>(() => [target])
   const [state, setState] = useState<NotesState>({ phase: 'loading' })
   const [nonce, setNonce] = useState(0)                     // 重试：同一文档再取一次的显式触发
@@ -89,8 +95,8 @@ export function ReaderNotes({ bookKey, target, requestSeq, deps, onNavigate, onC
       },
       (e: unknown) => {
         if (my !== seq.current) return                       // 已被更晚的请求接管：这条永远闭嘴
-        if (!alive.current) { deps.pushError(`注释读取失败：${asErrorLike(e).message}`); return }
-        setState({ phase: 'error', error: asErrorLike(e) })
+        if (!alive.current) { deps.pushError(t('reader.notesFailed', { detail: asErrorLike(e, t).message })); return }
+        setState({ phase: 'error', error: asErrorLike(e, t) })
       },
     )
   }, [deps, bookKey, docId, nonce])
@@ -115,14 +121,14 @@ export function ReaderNotes({ bookKey, target, requestSeq, deps, onNavigate, onC
 
   return (
     <div className="novel-notes-slot">
-      <div className="novel-notes" role="dialog" aria-label="注释">
+      <div className="novel-notes" role="dialog" aria-label={t('reader.notes')}>
         <div className="novel-toolbar novel-notes-head">
-          {stack.length > 1 && <button type="button" className="novel-btn sm" onClick={back}>‹ 返回</button>}
-          <span className="novel-notes-title">注释</span>
-          <button type="button" className="novel-btn sm" onClick={onClose}>关闭</button>
+          {stack.length > 1 && <button type="button" className="novel-btn sm" onClick={back}>{t('reader.notesBack')}</button>}
+          <span className="novel-notes-title">{t('reader.notes')}</span>
+          <button type="button" className="novel-btn sm" onClick={onClose}>{t('common.close')}</button>
         </div>
         <div className="novel-notes-body" ref={bodyRef}>
-          {state.phase === 'loading' && <div className="novel-muted novel-note-sm">注释加载中…</div>}
+          {state.phase === 'loading' && <div className="novel-muted novel-note-sm">{t('reader.notesLoading')}</div>}
           {state.phase === 'error' && <ErrorBanner error={state.error} onRetry={retry} />}
           {state.phase === 'ready' && <ChapterBody content={state.content} bookKey={bookKey} onNavigate={follow} />}
         </div>

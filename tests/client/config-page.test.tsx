@@ -4,6 +4,7 @@ import { createElement } from 'react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { apply } from '../../src/client/index.js'
 import { NovelConfigCardView } from '../../src/client/config-page.js'
+import { enTranslate, type Translate } from '../../src/client/copy/index.js'
 import { fakeConfigForms, fakeCtx, fakeHost } from './fake-host.js'
 
 /**
@@ -31,12 +32,16 @@ function unit(container: HTMLElement, name: string) {
   return container.querySelector(`[data-novel-cfg-unit="${name}"]`)?.textContent ?? null
 }
 
-function mountConfigPage(scope?: Record<string, unknown>, opts?: Parameters<typeof fakeConfigForms>[1]) {
+function mountConfigPage(
+  scope?: Record<string, unknown>,
+  opts?: Parameters<typeof fakeConfigForms>[1],
+  t?: Translate,
+) {
   const forms = fakeConfigForms(scope ?? {}, opts)
   const h = fakeHost({ configForms: forms })
   apply(fakeCtx(h) as never)
   const reg = h.registrations.find((r) => r.name === 'plugins.bundle.config')!
-  const view = render(createElement(reg.component as never))
+  const view = render(createElement(reg.component as never, t === undefined ? {} : { t }))
   return { forms, reg, view }
 }
 
@@ -188,5 +193,25 @@ describe('配置页的非法值呈现', () => {
       createElement(NovelConfigCardView, { state: state as never, actions: actions as never }),
     )
     expect(readback(container, 'cacheMaxBytes')).toBeNull()
+  })
+})
+
+describe('英文渲染：配置页', () => {
+  it('英文：标题、字段、分区与代理说明', () => {
+    mountConfigPage({ searchParallel: 5 }, undefined, enTranslate)
+    expect(screen.getByText('Runtime settings')).toBeTruthy()
+    expect(screen.getByLabelText('Search timeout')).toBeTruthy()
+    expect(screen.getByText('Search')).toBeTruthy()
+    // 说明的主语必须是代理：原文把站点写成被填对象，会教用户往代理框里填站点 URL。
+    expect(screen.getByText(/enter the proxy here explicitly/)).toBeTruthy()
+  })
+
+  it('英文：量词随框内数值变单数，中文同字', () => {
+    const en = mountConfigPage({ searchParallel: 1, cacheMaxBytes: 1 }, undefined, enTranslate)
+    expect(unit(en.view.container, 'searchParallel')).toBe('source')
+    expect(unit(en.view.container, 'cacheMaxBytes')).toBe('byte')
+    cleanup()
+    const zh = mountConfigPage({ searchParallel: 1, cacheMaxBytes: 1 })
+    expect(unit(zh.view.container, 'searchParallel')).toBe('个源')
   })
 })

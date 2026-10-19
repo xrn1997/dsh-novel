@@ -1,0 +1,36 @@
+/** 共享文案：按钮、单位、网络错误与复数样本。键前缀 `common.` / `unit.` / `count.`。 */
+export const COMMON_ZH = {
+  'common.cancel': '取消',
+  'common.close': '关闭',
+  'common.retry': '重试',
+  'common.loading': '加载中…',
+  'common.unknownError': '未知错误',
+  'common.segmentBadge': '{facet}#段{n}',
+  'common.networkNotJson': '响应不是 JSON（HTTP {status}）',
+  'common.networkRequestFailed': '网络请求失败: {detail}',
+  'common.streamUnavailable': '事件流不可用（HTTP {status}）',
+  'unit.ms': '{n} 毫秒',
+  'unit.seconds': '{n} 秒',
+  'unit.minutes': '{n} 分钟',
+  'unit.hours': '{n} 小时',
+  'count.books.one': '{n} 本',
+  'count.books.other': '{n} 本',
+} as const
+
+export const COMMON_EN: Record<keyof typeof COMMON_ZH, string> = {
+  'common.cancel': 'Cancel',
+  'common.close': 'Close',
+  'common.retry': 'Retry',
+  'common.loading': 'Loading…',
+  'common.unknownError': 'Unknown error',
+  'common.segmentBadge': '{facet}#segment {n}',
+  'common.networkNotJson': 'The response was not JSON (HTTP {status})',
+  'common.networkRequestFailed': 'Network request failed: {detail}',
+  'common.streamUnavailable': 'Event stream unavailable (HTTP {status})',
+  'unit.ms': '{n} ms',
+  'unit.seconds': '{n} s',
+  'unit.minutes': '{n} min',
+  'unit.hours': '{n} h',
+  'count.books.one': '{n} book',
+  'count.books.other': '{n} books',
+}

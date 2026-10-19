@@ -1,4 +1,7 @@
 import { hasProgress } from '../shared/wire.js'
+import { describeError } from './api.js'
+import { zhTranslate } from './copy/index.js'
+import type { Translate } from './copy/index.js'
 import { anchorTop, locateChapter, ratioWithin } from './progress.js'
 import type { ChapterAnchor } from './progress.js'
 import { debounce } from './util.js'
@@ -118,6 +121,8 @@ export class ReaderSession {
     private readonly port: ReaderPort,
     /** 滚动防抖窗口（缺省 2s；测试收紧） */
     saveDebounceMs = 2000,
+    /** 错误快照的语言：生成时定（与 job store 同一条已知限制）。视图传当前 t，测试缺省 zh。 */
+    private readonly t: Translate = zhTranslate,
   ) {
     const d = debounce((chapterIndex: number, offsetRatio: number): void => {
       deps.saveProgress(chapterIndex, offsetRatio)
@@ -185,7 +190,7 @@ export class ReaderSession {
       await this.load(sourceId, restoreIndex, restoreRatio)
     } catch (e) {
       if (gen !== this.generation) return
-      this.store.set({ error: toErrorInfo(e) })
+      this.store.set({ error: toErrorInfo(e, this.t) })
     }
   }
 
@@ -234,7 +239,7 @@ export class ReaderSession {
           this.commit('cross', at.chapterIndex, at.offsetRatio)
         }
       }
-      this.store.set({ error: toErrorInfo(e) })
+      this.store.set({ error: toErrorInfo(e, this.t) })
     } finally {
       if (gen === this.generation) {                          // 作废的续作不许碰在途槽（那已是新会话的）
         this.inflight = null
@@ -497,10 +502,10 @@ export class ReaderSession {
   }
 }
 
-function toErrorInfo(e: unknown): { code?: string; message?: string } {
+function toErrorInfo(e: unknown, t: Translate = zhTranslate): { code?: string; message?: string } {
   const err = e as { code?: unknown }
   return {
     ...(typeof err?.code === 'string' ? { code: err.code } : {}),
-    message: e instanceof Error ? e.message : String(e),
+    message: describeError(e, t),
   }
 }

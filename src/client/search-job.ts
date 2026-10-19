@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { bodies, queries, ROUTES } from '../shared/wire.js'
 import type { SearchGroup, SearchJobSnapshot } from '../shared/wire.js'
+import { describeError } from './api.js'
+import { zhTranslate } from './copy/index.js'
+import type { Translate } from './copy/index.js'
 import { JOB_POLL_MS } from './util.js'
 import type { JobWatchDeps } from './deps.js'
 
@@ -58,9 +61,7 @@ export interface SearchJobView {
   submit: (keyword: string) => void
 }
 
-const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
-
-export function useSearchJob(deps: JobWatchDeps): SearchJobView {
+export function useSearchJob(deps: JobWatchDeps, t: Translate = zhTranslate): SearchJobView {
   const acc = useRef<Acc | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const stream = useRef<AbortController | null>(null)
@@ -78,7 +79,7 @@ export function useSearchJob(deps: JobWatchDeps): SearchJobView {
    *  这份快照是**新轮按本观察者旧游标切的片**——增量对新轮无意义，走换轮收尾，不许合并。 */
   const apply = (a: Acc, job: SearchJobSnapshot | null): boolean => {
     if (job === null) {
-      setError('后台搜索任务已不可读（服务重启或结果已过保留期）')
+      setError(t('search.job.unavailable'))
       publish(a, false)
       return false
     }
@@ -109,13 +110,13 @@ export function useSearchJob(deps: JobWatchDeps): SearchJobView {
       job = (await deps.apiGet<{ job: SearchJobSnapshot | null }>(queries.searchJobStatus(0))).job
     } catch (e) {
       if (acc.current !== stale || !alive.current) return
-      setError(`搜索结果读取失败：${errText(e)}`)
+      setError(t('search.job.readFailed', { detail: describeError(e, t) }))
       publish(stale, false)
       return
     }
     if (!alive.current || acc.current !== stale) return   // 已卸载，或本页提交已落地（POST 说了算）
     if (job === null) {                                    // 服务端连新一轮也没了：如实说，不伪装
-      setError('后台搜索任务已不可读（服务重启或结果已过保留期）')
+      setError(t('search.job.unavailable'))
       publish(stale, false)
       return
     }
@@ -138,7 +139,7 @@ export function useSearchJob(deps: JobWatchDeps): SearchJobView {
       job = (await deps.apiGet<{ job: SearchJobSnapshot | null }>(queries.searchJobStatus(a.since))).job
     } catch (e) {
       if (acc.current !== a || !alive.current) return
-      setError(`搜索结果读取失败：${errText(e)}`)
+      setError(t('search.job.readFailed', { detail: describeError(e, t) }))
       publish(a, false)
       return
     }
@@ -188,7 +189,7 @@ export function useSearchJob(deps: JobWatchDeps): SearchJobView {
         // 提交在飞时挂载恢复也可能已经落地——POST 的结果说了算（新一轮替换上一轮），故此后置
         begin({ id: jobId, keyword: kw, total: 0, cancelled: false, since: 0, groups: [] })
       } catch (e) {
-        setError(`搜索提交失败：${errText(e)}`)        // 服务端没起新轮：上一轮结果照旧可读，不清屏
+        setError(t('search.job.submitFailed', { detail: describeError(e, t) }))   // 服务端没起新轮：上一轮结果照旧可读，不清屏
       }
     })()
   }
@@ -220,7 +221,7 @@ export function useSearchJob(deps: JobWatchDeps): SearchJobView {
     if (a === null) return                             // 视图只在「还在跑」时给这个钮，这里只挡「压根没提交过」
     void deps.apiSend('POST', ROUTES.searchJobCancel.path, {}).catch((e): void => {
       if (acc.current !== a || !alive.current) return
-      setError(`停止搜索失败：${errText(e)}`)
+      setError(t('search.job.cancelFailed', { detail: describeError(e, t) }))
     })
   }
 

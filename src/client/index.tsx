@@ -1,6 +1,13 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ReactNode } from 'react'
 import { registerConfigPage } from './config-page.js'
+import {
+  CopyProvider,
+  createTranslate,
+  zhTranslate,
+  type CopyHostLike,
+  type Translate,
+} from './copy/index.js'
 import { NOVEL_GLYPH_PATH, NOVEL_GLYPH_VIEWBOX } from './novel-glyph.js'
 import { NovelStatusOverlay } from './views/NovelStatusOverlay.js'
 import { NovelView } from './views/NovelView.js'
@@ -50,9 +57,10 @@ function NovelPanelIcon({ size = 16 }: { size?: number; active?: boolean }): Rea
 const NOVEL_PANEL_ID = 'novel'
 
 /** `main` keyed 槽的占用者：小说全局面板本体（root 作用域，无 Session 绑定）。
- *  NovelView 自带样式层与 token 锚点（`data-novel-scope`），在 keyed 槽这棵子树里自足。 */
-function NovelPanel(): ReactNode {
-  return <NovelView />
+ *  NovelView 自带样式层与 token 锚点（`data-novel-scope`），在 keyed 槽这棵子树里自足。
+ *  `t` 缺省走 zhTranslate：宿主槽位没接 inject 时（含测试直渲）保持既有中文断言。 */
+function NovelPanel({ t = zhTranslate }: { t?: Translate }): ReactNode {
+  return <CopyProvider value={t}><NovelView /></CopyProvider>
 }
 
 export function apply(ctx: Context): void {
@@ -65,13 +73,18 @@ export function apply(ctx: Context): void {
   // 宿主 layout 服务窄镜像（ADR 0020：只声明用到的成员、一次强转）：把面板带到前台是宿主的活，
   // 插件不碰 sidebar shell 的行按钮与选中态，只在「去现场」时调它同款的 selectPanel。
   const { layout } = ctx as unknown as { layout: { selectPanel(id: string | null): void } }
+  // 文案入口只有这一处：locale 服务缺席（老宿主 / 测试假体）时回退 zhTranslate，侧栏 / 面板 /
+  // 状态层 / 配置页共用同一个 t。宿主槽位缓存的 inject 结果是这个稳定函数本身，切语言由它在
+  // 调用时读当前 locale，故这里不订阅。不声明 slot 的 `locale` 席位：那条路在未安装 locale face
+  // 的宿主上会抛，与可选回退冲突（`docs/adr/0038`）；换语言靠 outlet 的 locale revision 重渲。
+  const t = createTranslate(ctx as unknown as CopyHostLike)
   // 全局面板双注册（同 id/key「novel」，必须同批——官方契约：选中缺失的 main entry 会抛）
   ctx.effect(() => slots.inject('sidebar.panellist', () => slots.register(
-    { name: 'sidebar.panellist', id: NOVEL_PANEL_ID, order: 20, label: '小说' },
+    { name: 'sidebar.panellist', id: NOVEL_PANEL_ID, order: 20, label: () => t('nav.panel') },
     NovelPanelIcon,
   )), 'dsh-novel: sidebar panel icon')
   ctx.effect(() => slots.inject('main', () => slots.register(
-    { name: 'main', key: NOVEL_PANEL_ID },
+    { name: 'main', key: NOVEL_PANEL_ID, inject: () => ({ t }) },
     NovelPanel,
   )), 'dsh-novel: main panel')
   // 常驻状态层挂 shell.overlay（root 作用域、list 基数、默认 click-through）：与 sidebar/main/
@@ -79,12 +92,19 @@ export function apply(ctx: Context): void {
   // pointer-events 由样式层 .novel-shell-status 的条目自己收回（浮层层默认不吃点击）。
   // 占用者包一层只为把宿主口递进去：状态层点「点此查看」要把「小说」面板带到前台（面板树
   // 不挂载时它的内部路由看不见），而 ctx 只在本接线层在场。
-  ctx.effect(() => slots.inject('shell.overlay', () => slots.register(
-    { name: 'shell.overlay', id: 'novel-status', order: 100, label: '小说任务状态' },
-    () => <NovelStatusOverlay focusPanel={() => layout.selectPanel(NOVEL_PANEL_ID)} />,
-  )), 'dsh-novel: shell overlay status layer')
+  ctx.effect(() => slots.inject('shell.overlay', () => {
+    const StatusOverlay = ({ t = zhTranslate }: { t?: Translate }): ReactNode => (
+      <CopyProvider value={t}>
+        <NovelStatusOverlay focusPanel={() => layout.selectPanel(NOVEL_PANEL_ID)} />
+      </CopyProvider>
+    )
+    return slots.register(
+      { name: 'shell.overlay', id: 'novel-status', order: 100, label: () => t('nav.overlay'), inject: () => ({ t }) },
+      StatusOverlay,
+    )
+  }), 'dsh-novel: shell overlay status layer')
   // 可选能力：旧宿主没有 configForms 时回调不执行，侧栏/面板完全不受影响。
-  ctx.inject(['configForms'], (child) => registerConfigPage(child))
+  ctx.inject(['configForms'], (child) => registerConfigPage(child, t))
 }
 
 export { NovelStatusOverlay, NovelView }

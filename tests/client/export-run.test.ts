@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createExportRun, parseRange } from '../../src/client/export-run.js'
 import type { ExportRunDeps, ExportRunState } from '../../src/client/export-run.js'
 import { ApiClientError } from '../../src/client/api.js'
+import { enTranslate, zhTranslate } from '../../src/client/copy/index.js'
 
 /**
  * 范围导出流编排：此前整段住在 ReaderView（硬 import streamExport/saveBlob），
@@ -32,10 +33,10 @@ function hangingStream(): { streamExport: ExportRunDeps['streamExport']; aborted
   return { streamExport, aborted: () => aborted }
 }
 
-const setup = (deps: ExportRunDeps): { states: ExportRunState[]; run: ReturnType<typeof createExportRun> } => {
+const setup = (deps: ExportRunDeps, t = zhTranslate): { states: ExportRunState[]; run: ReturnType<typeof createExportRun> } => {
   const states: ExportRunState[] = []
   const run = createExportRun({
-    sourceId: 's1', bookKey: 'k1', title: '斗罗', deps,
+    sourceId: 's1', bookKey: 'k1', title: '斗罗', deps, t,
     onChange: (s) => { states.push(s) },
   })
   return { states, run }
@@ -89,12 +90,22 @@ describe('createExportRun：成功 / 失败（错误类目投影）/ 取消 / �
   })
 
   it('parseRange：倒置 / 越界 / 非整数 → 拒；合法 → ok（面板确认钮的判据）', () => {
-    expect(parseRange('3', '1', 10)).toMatchObject({ ok: false })
-    expect(parseRange('1', '11', 10)).toMatchObject({ ok: false })
-    expect(parseRange('abc', '2', 10)).toMatchObject({ ok: false })
-    expect(parseRange('', '2', 10)).toMatchObject({ ok: false })   // Number('') = 0 < 1
-    expect(parseRange('2', '2', 0)).toMatchObject({ ok: false })   // 目录未就绪
+    expect(parseRange('3', '1', 10)).toMatchObject({ ok: false, reason: 'reader.export.reason.reversed' })
+    expect(parseRange('1', '11', 10)).toMatchObject({ ok: false, reason: 'reader.export.reason.outOfRange' })
+    expect(parseRange('abc', '2', 10)).toMatchObject({ ok: false, reason: 'reader.export.reason.notInteger' })
+    expect(parseRange('', '2', 10)).toMatchObject({ ok: false, reason: 'reader.export.reason.missing' })
+    expect(parseRange('2', '2', 0)).toMatchObject({ ok: false, reason: 'reader.export.reason.tocNotReady' })   // 目录未就绪
     expect(parseRange('5', '80', 100)).toEqual({ ok: true, from: 5, to: 80 })
+    expect(enTranslate('reader.export.reason.outOfRange', { total: 10 })).toBe('Range must be within chapters 1–10')
+  })
+
+  it('英文导出：文件名后缀随 t', async () => {
+    const saveBlob = vi.fn()
+    const streamExport = vi.fn(async () => new Blob(['x']))
+    const { run } = setup({ streamExport, saveBlob }, enTranslate)
+    run.start({ from: 5, to: 80, total: 100 })
+    await vi.waitFor(() => expect(run.state.running).toBe(false))
+    expect(saveBlob).toHaveBeenCalledWith(expect.any(Blob), '斗罗 (chapters 5-80).txt')
   })
 
   it('失败（ApiClientError 带 code）：错误类目投影——code + message 都进状态', async () => {

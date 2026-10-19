@@ -1,7 +1,9 @@
 import type { ExploreBook } from '../shared/wire.js'
+import { plural, zhTranslate } from './copy/index.js'
+import type { Translate } from './copy/index.js'
 
-/** 分类页的**纯派生**层：文案与判据只此一处，视图里不再各拼一份（客户端逻辑层测试口径：
- *  纯函数、零 React、零 DOM——这些函数能在没有 DOM 的情况下被钉住）。
+/** 分类页的**纯派生**层：派生文案的组装与判据只此一处（字面量住 `copy/city.ts`），视图里不再各拼一份（客户端逻辑层测试口径：
+ *  纯函数、不持 React 状态、零 DOM——这些函数能在没有 DOM 的情况下被钉住）。
  *
  *  浏览轴收成按源后（`docs/adr/0028`），「一本书来自几个源」这类跨源读数在本层没有对象了：
  *  旧的 `sourceCountLabel`（卡片角标）、`cityProgress`（「已 x / y 源」）、`failureSummary`（失败清单
@@ -24,8 +26,8 @@ export function cityMeta(book: Pick<ExploreBook, 'author' | 'kind' | 'wordCount'
  *  撑不起一级浏览轴」；既然不当轴，就不该在浏览面每一行重复一遍（一行装三件事时最长那条会把栏宽
  *  顶穿，省略号落在谁身上都不划算）。当前源的分组由右区头行说一次（`CityView` 的 `sourceSub`），
  *  要看全部分组去书源管理那一 tab。 */
-export function kindCountLabel(kindCount: number): string {
-  return `${kindCount} 类`
+export function kindCountLabel(kindCount: number, t: Translate = zhTranslate): string {
+  return plural(t, kindCount, 'city.kinds.one', 'city.kinds.other', { n: kindCount })
 }
 
 /** 跨源那一次搜索的关键词，**唯一主人**：有作者就带上——重名书大量存在，只给书名会把
@@ -37,8 +39,10 @@ export function sheetKeyword(book: Pick<ExploreBook, 'name' | 'author'>): string
 /** 尾行读数：单源的轮次只有「翻到第几页、手上几本」两件事可说。
  *  第 1 页说「这一页」，往后说「累计」——累积住在服务端持有者，客户端整帧替换，
  *  所以这个数就是快照给的 `books.length`，不是本地加出来的。 */
-export function pageReadout(page: number, count: number): string {
-  return page <= 1 ? `第 1 页 · 这一页 ${count} 本` : `第 ${page} 页 · 累计 ${count} 本`
+export function pageReadout(page: number, count: number, t: Translate = zhTranslate): string {
+  return page <= 1
+    ? plural(t, count, 'city.page.first.one', 'city.page.first.other', { n: count })
+    : plural(t, count, 'city.page.more.one', 'city.page.more.other', { n: count, page })
 }
 
 /** 空态分支的唯一判据：**可选源数**为 0 = 库里没有源提供分类浏览（与「这一类零结果」是两件事）。
@@ -68,12 +72,13 @@ export interface RoundShape {
  * 返回 null = 不占位（有书时铺网格；三种未定态既不铺网格也不说话——沉默比假结论诚实）。
  * 单源下没有「一轮里 0 个源」那一档：一轮要么打这个源、要么还没打，不存在「一个源都没被问」。
  */
-export function bookListEmpty(round: RoundShape, error: string | null): { title: string; hint: string } | null {
+export function bookListEmpty(
+  round: RoundShape,
+  error: string | null,
+  t: Translate = zhTranslate,
+): { title: string; hint: string } | null {
   if (round.running || round.cancelled || round.books.length > 0 || error !== null) return null
-  return {
-    title: '这一类还没有书',
-    hint: '这个源在这一类没给出书——空结果不是失败，换个分类或换个源看看。',
-  }
+  return { title: t('city.empty.title'), hint: t('city.empty.hint') }
 }
 
 /** 轮次读数（**只说这一轮跑到哪儿了**：单源没有跨源进度可数，这行文字不承载任何动作）。
@@ -82,8 +87,8 @@ export function bookListEmpty(round: RoundShape, error: string | null): { title:
  *  ② 还在跑而一页未回——如实说「正在启动」，此刻手上没有本数可报；③ 其余归本数读数（`pageReadout`）。
  *  **它不再收 `error`**：抓失败那句话由界面上的失败横幅说（唯一落点 `CityView` 的那条横幅），
  *  尾行重复一遍就是同一事实两个家；而这一轮跑到第几页、手上几本，是错误在场时照样要说的事实。 */
-export function roundReadout(round: RoundShape): string {
-  if (round.cancelled) return '已停止'
-  if (round.running && round.books.length === 0) return '正在启动分类抓取…'
-  return pageReadout(round.page, round.books.length)
+export function roundReadout(round: RoundShape, t: Translate = zhTranslate): string {
+  if (round.cancelled) return t('city.stopped')
+  if (round.running && round.books.length === 0) return t('city.starting')
+  return pageReadout(round.page, round.books.length, t)
 }

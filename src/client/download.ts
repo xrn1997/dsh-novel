@@ -1,4 +1,4 @@
-import { ApiClientError } from './api.js'
+import { ApiClientError, networkErrorOf } from './api.js'
 import type { ApiEnvelope } from '../shared/wire.js'
 import { NOVEL_API_PREFIX, queries } from '../shared/wire.js'
 
@@ -19,7 +19,7 @@ export async function streamExport(opts: {
     res = await fetch(`${NOVEL_API_PREFIX}/${q}`, { signal: opts.signal })
   } catch (e) {
     if ((e as Error).name === 'AbortError') throw e
-    throw new ApiClientError('NetworkError', 0, `网络请求失败: ${(e as Error).message}`)
+    throw networkErrorOf(e)
   }
   if (!res.ok || res.body === null) {
     // 失败在首包前 → 走 JSON 错误信封（还没开始流式输出）

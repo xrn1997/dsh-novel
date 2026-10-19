@@ -39,13 +39,17 @@ describe('包形态声明', () => {
   it('dsh 声明（嵌套形态，client-modules 与 plugin add 依赖它）', () => {
     expect(pkg.dsh.bundle.patch).toBe('./cordis.patch.yml')
     expect(pkg.dsh.client.platform).toBe('web')
-    // 零 require 的到达依赖已摘，boot 不再绑一个用不到的包行。
-    // dsh.client.inject 是包名依赖边（宿主 client-modules 的 WebBootEntry，可选），与运行时
-    // 服务名 inject 两套；client bundle 的 require 集合里没有 ui-primitives，声明它 = 过度声明，
-    // 激活期与别的解析失败聚合成 AggregateError。
-    expect(pkg.dsh.client.inject).toBeUndefined()
+    // dsh.client.inject 是**包名**依赖边（宿主 client-modules 的 WebBootEntry，可选），与客户端
+    // 条目里那份**服务名** inject 是两套东西：这条只管激活期排序，不产生运行时 import，
+    // 所以 client bundle 的 require 集合仍只有平台模块表里那些（见 tsdown.config.ts）。
+    // locale 是唯一的在册条目：文案字典靠 ctx.get('locale') 读宿主语言服务。这条边只保证包
+    // 按序到达；服务本身由 locale 包的 immediately 在正常组合里先提供——apply 时读一次，
+    // 晚到/缺席退回内置中文（ADR 0038），不炸。
+    // 其余到达依赖（如 ui-primitives）仍不声明——require 集合里没有它，声明即过度声明，
+    // 激活期会与别的解析失败聚合成 AggregateError。
+    expect(pkg.dsh.client.inject).toEqual(['@deepseek-ai/dsh-client-locale'])
     // 「对话区 tab 已撤 / 单一归属」由 tests/client/panel-registration.test.tsx 钉（座位集合），
-    // 这里不留一条对着 undefined 的空断言。
+    // 本文件不重复那条读数，只钉包声明面。
   })
   it('兼容面声明：编译所依的宿主必须在册，且状态词只许「compatible」', () => {
     const releases = pkg.dsh.compatibility?.dshReleases

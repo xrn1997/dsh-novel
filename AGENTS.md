@@ -21,6 +21,7 @@ DeepSeek Harness（DSH）的「小说」插件：导入 legado 书源 → 聚合
 - **宁炸不猜**：认不出的规则语法在**解析期**抛 `UnsupportedRuleError`，带段级定位；空结果冒充失败是本仓定的最高罪。
 - **取值规约**：取位失败 → Miss、解析到空集合 → 空 List，两种值绝不折叠；唯一实现 `src/engine/select.ts` 的 `reducePicked`。
 - **纯度门**：`src/client/**` 的运行时 import 只能来自平台模块表；`src/shared/wire.ts` 保持零运行时依赖（它被 inline 进 client bundle）。构建成败由 `tsdown.config.ts` 的 `dsh-novel-bundle-purity` 把住，改平台模块表要对着宿主发布物重读，别凭记忆。
+- **客户端文案单点**：`src/client/**` 的可见文案（中文原文与英文译文；单位、格式名、错误码、装饰字形与插件卡片元信息除外）只住 `src/client/copy/**`，组件经 `useCopy()`、非 React 函数经 `Translate` 参数取词；宿主 locale 服务可选读（`ctx.get('locale')`），缺席回退中文。服务端错误原文与 AI 工具描述不在这一层。机器面是 `tests/client/copy-guard.test.ts`（AST 扫字符串 / 模板串 / JSX 文本里的中文，注释不算；英文译文由 `EN` 的逐键镜像与评审兜底），白名单只许收不上屏的数据/注释，或与语言无关的装饰字形、模板，且每条带理由。
 
 ## 改完必须验的门（默认全跳过，没人替你跑）
 

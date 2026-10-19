@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
+import { CopyProvider, enTranslate } from '../../src/client/copy/index.js'
 import { useJobPolling } from '../../src/client/jobs.js'
 import { MENU_ITEM_COUNT, SourceList } from '../../src/client/views/SettingsSourceList.js'
 import { makeDeps } from './fake-deps.js'
@@ -428,5 +429,29 @@ describe('「去登录」接线（runLogin 两形态 / 未声明回站点）', (
     fireEvent.click(screen.getByText('去登录'))
     await waitFor(() => expect(deps.pushError).toHaveBeenCalledWith(expect.stringContaining('去登录失败：loginUrl 未产出 cookie'), expect.anything()))
     expect(window.open).not.toHaveBeenCalled()
+  })
+})
+
+describe('英文渲染：书源列表', () => {
+  it('状态筛选与编辑入口走 en 字典', () => {
+    render(<CopyProvider value={enTranslate}>{view(makeDeps())}</CopyProvider>)
+    expect(screen.getByText('All statuses')).toBeTruthy()
+    // 徽标同为 Available（与筛选器同一个词），故断言收窄到下拉选项，不按全文匹配
+    expect(screen.getByRole('option', { name: 'Available' })).toBeTruthy()
+    expect(screen.getByText('Edit')).toBeTruthy()
+  })
+})
+
+describe('分组下拉：真实组选项的计数括号随语言渲染', () => {
+  const grouped = [src({ id: 'g1', name: '源甲', groups: ['玄幻'] }), src({ id: 'g2', name: '源乙', groups: ['玄幻'] })]
+
+  it('中文：全角括号（与旧屏上文案逐字一致）', () => {
+    render(view(makeDeps(), grouped))
+    expect(screen.getByRole('option', { name: '玄幻（2）' })).toBeTruthy()
+  })
+
+  it('英文：半角括号', () => {
+    render(<CopyProvider value={enTranslate}>{view(makeDeps(), grouped)}</CopyProvider>)
+    expect(screen.getByRole('option', { name: '玄幻 (2)' })).toBeTruthy()
   })
 })

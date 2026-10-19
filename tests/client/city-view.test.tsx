@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { ApiClientError } from '../../src/client/api.js'
+import { CopyProvider, enTranslate } from '../../src/client/copy/index.js'
 import { CityBookSheet } from '../../src/client/views/CityBookSheet.js'
 import { CityView } from '../../src/client/views/CityView.js'
 import { cityStore } from '../../src/client/store.js'
@@ -637,4 +638,10 @@ describe('CityBookSheet（书籍详情浮层：本源两动作 + 跨源那一次
     expect(screen.getAllByRole('button', { name: '读这本' })).toHaveLength(4)          // 本源 + 三家
     expect(screen.queryByText(/家源/)).toBeNull()                                       // 「N 家源」那一行属于搜索面
   })
+})
+
+it('英文：没有分类入口时的空态', async () => {
+  const d = depsOf({ apiGet: vi.fn(async (p: string) => (p.includes('kinds') ? { sources: [] } : { job: null })) })
+  render(<CopyProvider value={enTranslate}><CityView deps={d} /></CopyProvider>)
+  await waitFor(() => expect(screen.getByText(/No book source provides category browsing/)).toBeTruthy())
 })

@@ -2,7 +2,9 @@ import type { ReactNode } from 'react'
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { ROUTES } from '../../shared/wire.js'
 import type { ExploreBook, ExploreSources } from '../../shared/wire.js'
+import { describeError } from '../api.js'
 import { bookListEmpty, cityEmptyState, cityMeta, kindCountLabel, roundReadout } from '../city-view-model.js'
+import { plural, useCopy } from '../copy/index.js'
 import { useExploreJob } from '../explore-job.js'
 import { prodJobViewDeps } from '../deps.js'
 import type { JobViewDeps } from '../deps.js'
@@ -45,10 +47,11 @@ const sourceSub = (s: ExploreSources['sources'][number]): string =>
  *    与 `asked` 两道闸之后的判据——服务端持有这一轮就是它的家，回来看它跑完即可（见下面那条 effect）。
  *
  * 轮次观察与读面的会话内现场各自有主人：轮次归 `useExploreJob`（全量快照），上次逛的源与分类归
- * `cityStore`（不落盘）。本视图只做装配与呈现，文案与判据一律取 `city-view-model`。
+ * `cityStore`（不落盘）。本视图只做装配与呈现：判据取 `city-view-model`，文案取 `copy/city.ts`。
  */
 export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): ReactNode {
-  const { round, error, submit, restored, loadMore } = useExploreJob(deps)
+  const t = useCopy()
+  const { round, error, submit, restored, loadMore } = useExploreJob(deps, t)
   /** 可选源清单（`null` = 还在读）：**空清单**是「库里没有源提供分类浏览」，与读面失败不是一件事 */
   const [sources, setSources] = useState<ExploreSources['sources'] | null>(null)
   const [sourcesError, setSourcesError] = useState<string | null>(null)
@@ -73,7 +76,7 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
         list = (await deps.apiGet<ExploreSources>(ROUTES.exploreKinds.path)).sources ?? []
       } catch (e) {
         // 读不到源清单 ≠ 没有源可用：只报错，不落空列表（落空列表会多摆一个「还没有源提供分类」的假空态）
-        setSourcesError(`分类入口读取失败：${e instanceof Error ? e.message : String(e)}`)
+        setSourcesError(t('city.kindsReadFailed', { detail: describeError(e, t) }))
         return
       }
       setSources(list)
@@ -134,17 +137,17 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceId, shownSources.length])
   const books = round?.books ?? []
-  const empty = round === null ? null : bookListEmpty(round, error)
+  const empty = round === null ? null : bookListEmpty(round, error, t)
   return (
     <div data-novel-view="city" className="novel-view">
       <div className="novel-city">
-        <aside className="novel-city-rail" aria-label="源与分类" ref={railRef}>
+        <aside className="novel-city-rail" aria-label={t('city.rail')} ref={railRef}>
           <input
             className="novel-input novel-city-filter"
             value={sourceQuery}
             onChange={(e) => setSourceQuery(e.target.value)}
-            placeholder="搜索书源"
-            aria-label="搜索书源"
+            placeholder={t('city.sourceSearch')}
+            aria-label={t('city.sourceSearch')}
           />
           {shownSources.map((s) => {
             const on = s.id === sourceId
@@ -157,8 +160,8 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
                   onClick={() => pickSource(s)}
                 >
                   <span className="novel-city-source-name">{s.name}</span>
-                  {s.status === 'broken' ? <span className="novel-city-source-broken">坏</span> : null}
-                  <span className="novel-city-source-n">{kindCountLabel(s.kinds.length)}</span>
+                  {s.status === 'broken' ? <span className="novel-city-source-broken">{t('city.sourceBroken')}</span> : null}
+                  <span className="novel-city-source-n">{kindCountLabel(s.kinds.length, t)}</span>
                 </button>
                 {/* 分类只长在**选中的那个源**下面：归属由嵌套说，不再另起一列、也不再写一遍源名 */}
                 {on ? (
@@ -167,8 +170,8 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
                       className="novel-input novel-city-filter novel-city-kfilter"
                       value={kindQuery}
                       onChange={(e) => setKindQuery(e.target.value)}
-                      placeholder="筛选分类"
-                      aria-label="筛选分类"
+                      placeholder={t('city.kindFilter')}
+                      aria-label={t('city.kindFilter')}
                     />
                     {shownKinds.map((k) => (
                       <button
@@ -193,16 +196,13 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
               {currentSource === null ? null : <span className="novel-city-sub">{sourceSub(currentSource)}</span>}
             </header>
           )}
-          {kind === null ? null : <div className="novel-city-note">按书源声明的顺序</div>}
+          {kind === null ? null : <div className="novel-city-note">{t('city.orderNote')}</div>}
           {sourcesError === null ? null : <div className="novel-err novel-note-sm">{sourcesError}</div>}
           {/* 抓失败说在这一条横幅上：已到的书单留在原位、尾行只报跑到哪儿。
               被停止的那一轮到不了这里——`useExploreJob` 已把「任务已取消」那句咽掉，停止不是失败。 */}
           {error === null ? null : <div className="novel-err novel-note-sm">{error}</div>}
           {sources !== null && cityEmptyState(sources.length) === 'no-sources' ? (
-            <EmptyState
-              title="还没有书源提供分类浏览"
-              hint="发现面来自书源声明的分类入口（原生方言的 ruleFind、legado 的 exploreUrl，脚本形态除外）。导入带它的书源后，左栏会按源列出它们各自声明的分类——搜索与书架不受影响，照常可用。"
-            />
+            <EmptyState title={t('city.noSources')} hint={t('city.noSources.hint')} />
           ) : (
             <>
               {empty === null
@@ -216,7 +216,7 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
                           <button
                             key={key}
                             className="novel-city-card"
-                            aria-label={`查看这本书：${b.name}`}
+                            aria-label={t('city.card.open', { title: b.name })}
                             onClick={() => setPicked(b)}
                           >
                             {b.coverUrl !== null && imgFailed[key] !== true
@@ -229,7 +229,7 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
                               </span>
                               {meta === '' ? null : <span className="novel-city-card-meta">{meta}</span>}
                               {b.intro === null ? null : <span className="novel-city-card-intro">{b.intro}</span>}
-                              {b.lastChapter === null ? null : <span className="novel-city-card-last">最新：{b.lastChapter}</span>}
+                              {b.lastChapter === null ? null : <span className="novel-city-card-last">{t('city.latest', { chapter: b.lastChapter })}</span>}
                             </span>
                           </button>
                         )
@@ -257,10 +257,10 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
                   **本地按下之后**那一段——服务端那一批在途时 `hasMore` 本已是 false，钮不在场 */}
               {round === null ? null : (
                 <div className="novel-city-foot">
-                  <span>{roundReadout(round)}</span>
+                  <span>{roundReadout(round, t)}</span>
                   {round.hasMore ? (
                     <button className="novel-btn sm" disabled={round.running} onClick={loadMore}>
-                      {`加载更多（已 ${round.page} 页）`}
+                      {plural(t, round.page, 'city.loadMore.one', 'city.loadMore.other', { n: round.page })}
                     </button>
                   ) : null}
                 </div>

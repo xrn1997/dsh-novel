@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react'
+import { useCopy } from '../copy/index.js'
+import type { CopyKey } from '../copy/index.js'
 import { navigate, routeStore, useStore } from '../store.js'
 import type { Route } from '../store.js'
 import { NovelStyles } from '../styles.js'
@@ -16,14 +18,16 @@ import { ShelfView } from './ShelfView.js'
  *  reader/search 是 tab 之下的沉浸内容流（各有自己的返回导航），顶部 tab 不随行。
  *  布局钉死：根 = flex 列；视图区（flex:1 + overflowY:auto）——视图区曾写 height:100% 而被挤出视口。 */
 
-/** tab 常量：key = Route['name'] 的 tab 子集；route 是无参路由对象（点击即 navigate） */
-const TABS: Array<{ key: 'shelf' | 'city' | 'sources'; label: string; route: Route }> = [
-  { key: 'shelf', label: '书架', route: { name: 'shelf' } },
-  { key: 'city', label: '书城', route: { name: 'city' } },
-  { key: 'sources', label: '书源管理', route: { name: 'sources' } },
+/** tab 常量：key = Route['name'] 的 tab 子集；labelKey 指向字典（t 在渲染时取，tab 常量不持文案）；
+ *  route 是无参路由对象（点击即 navigate） */
+const TABS: Array<{ key: 'shelf' | 'city' | 'sources'; labelKey: CopyKey; route: Route }> = [
+  { key: 'shelf', labelKey: 'nav.tabs.shelf', route: { name: 'shelf' } },
+  { key: 'city', labelKey: 'nav.tabs.city', route: { name: 'city' } },
+  { key: 'sources', labelKey: 'nav.tabs.sources', route: { name: 'sources' } },
 ]
 
 export function NovelView(): ReactNode {
+  const t = useCopy()
   const { route } = useStore(routeStore)
   const tabbed = route.name === 'shelf' || route.name === 'city' || route.name === 'sources'
   return (
@@ -31,14 +35,14 @@ export function NovelView(): ReactNode {
       <NovelStyles />
       {tabbed
         ? (
-          <div className="novel-tabs" role="group" aria-label="小说视图导航">
-            {TABS.map((t) => (
+          <div className="novel-tabs" role="group" aria-label={t('nav.tabs.label')}>
+            {TABS.map((tab) => (
               <button
-                key={t.key}
-                className={route.name === t.key ? 'on' : undefined}
-                aria-pressed={route.name === t.key}
-                onClick={() => navigate(t.route)}
-              >{t.label}</button>
+                key={tab.key}
+                className={route.name === tab.key ? 'on' : undefined}
+                aria-pressed={route.name === tab.key}
+                onClick={() => navigate(tab.route)}
+              >{t(tab.labelKey)}</button>
             ))}
           </div>
         )

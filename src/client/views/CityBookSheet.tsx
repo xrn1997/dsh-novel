@@ -3,7 +3,10 @@ import { useState } from 'react'
 import { partitionByRelevance } from '../../shared/relevance.js'
 import { bodies, paramRoutes } from '../../shared/wire.js'
 import type { ExploreBook, SearchGroup, SearchHit } from '../../shared/wire.js'
+import { describeError } from '../api.js'
 import { cityMeta, sheetKeyword } from '../city-view-model.js'
+import { plural, useCopy, zhTranslate } from '../copy/index.js'
+import type { Translate } from '../copy/index.js'
 import type { JobViewDeps, RowActionDeps } from '../deps.js'
 import { useSearchJob } from '../search-job.js'
 import { navigate } from '../store.js'
@@ -49,7 +52,8 @@ import { Dialog } from './dialog.js'
 export function CityBookSheet({ book, sourceId, sourceName, deps, onClose }: {
   book: ExploreBook; sourceId: string; sourceName: string; deps: JobViewDeps; onClose: () => void
 }): ReactNode {
-  const search = useSearchJob(deps)
+  const t = useCopy()
+  const search = useSearchJob(deps, t)
   /** 按过那颗钮才算「要跨源」：在那之前搜索面持有的轮次不是本浮层的读数，一条都不列 */
   const [asked, setAsked] = useState(false)
 
@@ -73,7 +77,7 @@ export function CityBookSheet({ book, sourceId, sourceName, deps, onClose }: {
   const zeroHits = answered.length > 0 && answered.every((g) => g.hits.length === 0)
   const meta = cityMeta(book)
   return (
-    <Dialog title={book.name} label={`书籍详情：${book.name}`} variant="drawer" onClose={onClose}>
+    <Dialog title={book.name} label={t('city.details', { title: book.name })} variant="drawer" onClose={onClose}>
       <div className="novel-city-bookhead">
         {/* 元信息与卡片同源（`cityMeta`）：同一本书在两个地方写法不一致就是两份抄本 */}
         {meta === '' ? null : <div className="novel-city-bookhead-meta">{meta}</div>}
@@ -83,7 +87,7 @@ export function CityBookSheet({ book, sourceId, sourceName, deps, onClose }: {
         )}
         <div className="novel-city-tags">
           {/* 源名不在这里重复：本源那一行已经点了它的名，同一层浮层里说两遍就是抄本 */}
-          {book.lastChapter === null || book.lastChapter === '' ? null : <span className="novel-city-tag">最新 {book.lastChapter}</span>}
+          {book.lastChapter === null || book.lastChapter === '' ? null : <span className="novel-city-tag">{t('city.sheet.latestTag', { chapter: book.lastChapter })}</span>}
         </div>
       </div>
       {/* 本源那一行：与跨源那些行走同一个渲染器、同一对动作、同一条地址守卫。
@@ -94,7 +98,7 @@ export function CityBookSheet({ book, sourceId, sourceName, deps, onClose }: {
         <SheetRow row={ownRow(book, sourceId, sourceName)} deps={deps} showLast={false} />
       </div>
       <button className="novel-btn" onClick={() => { setAsked(true); search.submit(keyword) }}>
-        {asked && ownRound?.running === true ? '在其他源找这本 · 进行中' : '在其他源找这本'}
+        {asked && ownRound?.running === true ? t('city.findElsewhere.running') : t('city.findElsewhere')}
       </button>
       {asked ? (
         <>
@@ -103,28 +107,26 @@ export function CityBookSheet({ book, sourceId, sourceName, deps, onClose }: {
               <span className="novel-muted">
                 {/* 参搜家数由服务端 searchPlan 说了算：首帧之前手上还没有这个数，说「已问到 0 / 0」
                     就是把「还没问到」念成「问过了、没人答」 */}
-                {ownRound.total === 0 ? '正在启动跨源搜索…' : `已问到 ${ownRound.done} / ${ownRound.total} 家`}
+                {ownRound.total === 0
+                  ? t('city.cross.starting')
+                  : plural(t, ownRound.total, 'city.cross.progress.one', 'city.cross.progress.other', { done: ownRound.done, n: ownRound.total })}
               </span>
-              <button className="novel-btn sm" onClick={() => { search.cancel() }}>停止</button>
+              <button className="novel-btn sm" onClick={() => { search.cancel() }}>{t('city.cross.stop')}</button>
             </div>
           ) : null}
           {search.error === null ? null : (
-            <div className="novel-err novel-note-sm">跨源搜索中断：{search.error}</div>
+            <div className="novel-err novel-note-sm">{t('city.cross.interrupted', { detail: search.error })}</div>
           )}
           {/* 收口的三种说法互不冒充：被停止 ≠ 问完了没货，一家没被问到 ≠ 搜了没命中。
               「被停止」排在最前，它优先于另两条——停止的那一轮没资格对结果下结论。 */}
           {ownRound !== null && !ownRound.running && ownRound.cancelled ? (
-            <div className="novel-muted novel-note-sm">已停止：没问完的源不再往下问，已经答的留在上方。</div>
+            <div className="novel-muted novel-note-sm">{t('city.cross.stopped')}</div>
           ) : null}
           {ownRound !== null && !ownRound.running && !ownRound.cancelled && ownRound.total === 0 ? (
-            <div className="novel-muted novel-note-sm">
-              这一轮一家都没被问到：没有参与搜索的书源（都已停用，或还没导入）。
-            </div>
+            <div className="novel-muted novel-note-sm">{t('city.cross.noSources')}</div>
           ) : null}
           {ownRound !== null && !ownRound.running && !ownRound.cancelled && ownRound.total > 0 && zeroHits ? (
-            <div className="novel-muted novel-note-sm">
-              没有一家按这个书名搜到——这既不是说这本书不存在，也不是搜索出了错。
-            </div>
+            <div className="novel-muted novel-note-sm">{t('city.cross.zeroHits')}</div>
           ) : null}
           {/* 各源命中就地长在同一列：一行一个源，不并成一条、不给源排序、不标「推荐这一本」。
               源家数不变，变的只是这一行的**代表**由谁当——判据见 `GroupRow`。 */}
@@ -182,10 +184,10 @@ function hitRow(g: SearchGroup, h: SearchHit): SheetRowData {
  *  **不先读一次书架判「已在书架」**：那是一个多出来的请求，换来的只是按钮文案；重复点按由幂等覆盖
  *  处理（同一 bookKey 再 PUT 一次，写进去的还是同一本书）。成功才报名，失败进错误泳道——点了一下
  *  必须有个交代，静默失败比失败更糟。 */
-function addToShelf(row: SheetRowData, deps: RowActionDeps): void {
+function addToShelf(row: SheetRowData, deps: RowActionDeps, t: Translate = zhTranslate): void {
   void deps.apiSend('PUT', paramRoutes.shelfKey(row.url ?? ''), bodies.shelfAdd(row.sourceId, row)).then(
-    () => deps.pushOk(`已加入书架：${row.title}`),
-    (e: unknown) => deps.pushError(`加入书架失败：${e instanceof Error ? e.message : String(e)}`),
+    () => deps.pushOk(t('city.sheet.added', { title: row.title })),
+    (e: unknown) => deps.pushError(t('city.sheet.addFailed', { detail: describeError(e, t) })),
   )
 }
 
@@ -196,23 +198,24 @@ function addToShelf(row: SheetRowData, deps: RowActionDeps): void {
 function SheetRow({ row, deps, showLast = true, showSource = true }: {
   row: SheetRowData; deps: RowActionDeps; showLast?: boolean; showSource?: boolean
 }): ReactNode {
+  const t = useCopy()
   return (
     <div className="novel-city-srcrow">
       {showSource ? <span className="novel-city-srcrow-who">{row.sourceName}</span> : null}
       {row.listed === null ? null : <span className="novel-city-srcrow-last">{row.listed}</span>}
       {!showLast || row.lastChapterName === null ? null : (
-        <span className="novel-city-srcrow-last">最新：{row.lastChapterName}</span>
+        <span className="novel-city-srcrow-last">{t('city.latest', { chapter: row.lastChapterName })}</span>
       )}
       {/* 各源一律同款按钮、没有排序：把第一条刷成主色就是替用户排序。入架排在「读这本」前面，
           主色（读）留在行尾的既有位置。 */}
       {row.url === null ? null : (
         <>
-          <button className="novel-btn sm novel-city-srcrow-add" onClick={() => { addToShelf(row, deps) }}>加入书架</button>
+          <button className="novel-btn sm novel-city-srcrow-add" onClick={() => { addToShelf(row, deps, t) }}>{t('city.sheet.add')}</button>
           <button
             className="novel-btn sm primary novel-city-srcrow-go"
             onClick={() => navigate({ name: 'reader', sourceId: row.sourceId, bookKey: row.url ?? '', title: row.title })}
           >
-            读这本
+            {t('city.sheet.read')}
           </button>
         </>
       )}
@@ -233,13 +236,14 @@ function SheetRow({ row, deps, showLast = true, showSource = true }: {
 function GroupRow({ group, keyword, deps }: {
   group: SearchGroup; keyword: string; deps: RowActionDeps
 }): ReactNode {
+  const t = useCopy()
   if (group.error !== undefined) {
     return (
       <details className="novel-city-fail">
         <summary>
           <b className="novel-city-fail-who">{group.sourceName}</b>
-          <span>未响应 · {group.error.code}</span>
-          <span className="novel-city-fail-more">展开看原因</span>
+          <span>{t('city.cross.unresponsive', { code: group.error.code })}</span>
+          <span className="novel-city-fail-more">{t('city.cross.expandReason')}</span>
         </summary>
         <div className="novel-city-fail-msgs">
           <span>{group.error.message}</span>
@@ -252,7 +256,7 @@ function GroupRow({ group, keyword, deps }: {
     return (
       <div className="novel-city-srcrow">
         <span className="novel-city-srcrow-who">{group.sourceName}</span>
-        <span className="novel-city-srcrow-last">这一家没有按这个书名搜到</span>
+        <span className="novel-city-srcrow-last">{t('city.cross.notFound')}</span>
       </div>
     )
   }
@@ -264,8 +268,8 @@ function GroupRow({ group, keyword, deps }: {
       {suspect.length === 0 ? null : (
         <details className="novel-city-fail" data-novel-city-suspect>
           <summary>
-            <span>{`${group.sourceName}：另有 ${suspect.length} 条疑似无关`}</span>
-            <span className="novel-city-fail-more">展开照旧可点（书名／作者／分类都不含关键词）</span>
+            <span>{plural(t, suspect.length, 'city.cross.suspect.one', 'city.cross.suspect.other', { n: suspect.length, source: group.sourceName })}</span>
+            <span className="novel-city-fail-more">{t('city.cross.suspectHint')}</span>
           </summary>
           <div className="novel-city-srclist">
             {suspect.map((m, i) => <SheetRow key={`s#${i}`} row={hitRow(group, m.hit)} deps={deps} showSource={false} />)}

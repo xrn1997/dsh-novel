@@ -3,10 +3,12 @@ import type { MergedRound } from '../shared/merge-by-book.js'
 import { partitionByRelevance } from '../shared/relevance.js'
 import type { RelevancePartition } from '../shared/relevance.js'
 import type { MergedBook, MergedSource, SearchGroup, SearchHit } from '../shared/wire.js'
+import { zhTranslate } from './copy/index.js'
+import type { Translate } from './copy/index.js'
 
 /**
  * 搜索结果页的**纯派生**层（与 `shelf-view-model` / `city-view-model` / `source-list-view` 同形：
- * 零 React、零 DOM、零 IO）：一轮命中的现场 → 收口读数、两条呈现轴的行身份与逐源回读。
+ *  纯函数、不持 React 状态、零 DOM、零 IO）：一轮命中的现场 → 收口读数、两条呈现轴的行身份与逐源回读。
  *
  * 为什么这一族要搬出视图：它们此前是 `SearchView` 的模块私有函数，只能在整页 jsdom 里间接触达，
  * 而单位律（条／本／家三条读数绝不折叠）与「同址两行」这类判据恰恰是最该被单独钉住的东西。
@@ -125,15 +127,15 @@ function rowHit(s: MergedSource, meta: SearchHit | undefined): SearchHit {
   }
 }
 
-/** 行上的作者读数：逗号级名单只留前两位，其余由「等」承担。
+/** 行上的作者读数：逗号级名单只留前两位，其余由尾缀承担（`search.book.etAl`）。
  *  为什么收：有的源把整张配音表塞进 `author`，而这一段住在主钮的内容里、也就是它的
  *  无障碍名——不收，读屏每本念一遍名单，视觉上还把尾巴与「都加架」顶下两行。收的不是信息：
  *  全串在 `title` 与展开后的逐源行里原样都在。
  *  只在逗号处切：「萧炎：锦鲤 药老：北炎」那种空格分隔的角色表切不出「第二位」，整串交给 CSS 省略号。 */
-export function shortAuthor(author: string): string {
+export function shortAuthor(author: string, t: Translate = zhTranslate): string {
   const head = /^\s*[^,，、]+\s*[,，、]\s*[^,，、]+/.exec(author)
   if (head === null || !/[,，、]/.test(author.slice(head[0].length))) return author
-  return `${head[0].trimEnd()} 等`
+  return t('search.book.etAl', { head: head[0].trimEnd() })
 }
 
 /** 一本的架位全集（有地址的那些）：「都加架」的三态与回执都数这个集合，不数行数——

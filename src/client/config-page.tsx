@@ -10,6 +10,9 @@ import {
   type SettingsFormState,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { VolatileConfigFieldName } from '../config.js'
+import {
+  CopyProvider, useCopy, zhTranslate, type CopyKey, type Translate,
+} from './copy/index.js'
 import { NovelStyles } from './styles.js'
 
 /**
@@ -39,7 +42,7 @@ const ENTRY_ID = 'dsh-novel'
 const BUNDLE_NAME = '@xrn1997/dsh-novel'
 
 /** 可编辑字段的名字表由配置缝给（type-only import，运行时擦除、不过纯度门）：这里只写读者要看的
- *  文案与单位，名字与值域不归本文件管——`FIELDS` 是 `Record<FieldName, …>`，少一行就编译不过。 */
+ *  文案键与单位，名字与值域不归本文件管——`FIELDS` 是 `Record<FieldName, …>`，少一行就编译不过。 */
 type FieldName = VolatileConfigFieldName
 
 /** 换算口径决定这一行长什么样，故与字段清单同处一表。 */
@@ -47,79 +50,76 @@ type Kind = 'ms' | 'bytes' | 'count' | 'text'
 
 interface FieldSpec {
   name: FieldName
-  label: string
+  labelKey: CopyKey
   kind: Kind
-  /** 落在框内的后缀；`text` 位没有单位。 */
-  unit?: string
+  /** 落在框内的后缀键；`text` 位没有单位。 */
+  unitKey?: CopyKey
+  /** 框内数值为 1 时换用的单数量词（英文 `1 source` 而非 `1 sources`）；中文两侧同字，故中文输出不变。 */
+  unitOneKey?: CopyKey
   /** 「这个数管什么、调到哪会坏」——原 hint 只报了单位，没报后果。 */
-  meaning: string
+  meaningKey: CopyKey
   presets?: readonly { label: string; value: number }[]
-  placeholder?: string
-  invalidLabel: string
+  placeholderKey?: CopyKey
+  invalidKey: CopyKey
 }
 
 const MB = 1024 * 1024
 
+/** 预设档的 label 是纯量纲（`50 MB`），两种语言同形，故不走字典——它们是值不是文案。 */
 const FIELDS: Record<FieldName, FieldSpec> = {
   searchTimeoutMs: {
-    name: 'searchTimeoutMs', label: '单源搜索超时', kind: 'ms', unit: '毫秒',
-    meaning: '一次聚合搜索里，单个书源等多久就放弃。整次搜索的耗时由它与并发源数一起决定。',
-    invalidLabel: '请填数字',
+    name: 'searchTimeoutMs', labelKey: 'config.field.searchTimeoutMs.label', kind: 'ms',
+    unitKey: 'config.unit.ms', meaningKey: 'config.field.searchTimeoutMs.meaning',
+    invalidKey: 'config.invalid.number',
   },
   searchParallel: {
-    name: 'searchParallel', label: '搜索并发源数', kind: 'count', unit: '个源',
-    meaning: '同时向多少个书源发请求；填 1 即串行。调大更快，也更吃带宽和对方站点的额度。',
-    invalidLabel: '请填数字',
+    name: 'searchParallel', labelKey: 'config.field.searchParallel.label', kind: 'count',
+    unitKey: 'config.unit.sources', unitOneKey: 'config.unit.sources.one',
+    meaningKey: 'config.field.searchParallel.meaning',
+    invalidKey: 'config.invalid.number',
   },
   jsTimeoutMs: {
-    name: 'jsTimeoutMs', label: 'JS 沙箱预算', kind: 'ms', unit: '毫秒',
-    meaning: '书源 js 脚本的总时长上限，阅读 / 搜索 / 探针 / 登录共用。legado 的多请求目录脚本要秒级预算，调小会让这类源直接失败。',
-    invalidLabel: '请填数字',
+    name: 'jsTimeoutMs', labelKey: 'config.field.jsTimeoutMs.label', kind: 'ms',
+    unitKey: 'config.unit.ms', meaningKey: 'config.field.jsTimeoutMs.meaning',
+    invalidKey: 'config.invalid.number',
   },
   exportDelayMs: {
-    name: 'exportDelayMs', label: '导出章间节流', kind: 'ms', unit: '毫秒',
-    meaning: '范围导出是逐章真抓，章与章之间睡这么久。填 0 = 不等待，对目标站点不友好。',
-    invalidLabel: '请填数字',
+    name: 'exportDelayMs', labelKey: 'config.field.exportDelayMs.label', kind: 'ms',
+    unitKey: 'config.unit.ms', meaningKey: 'config.field.exportDelayMs.meaning',
+    invalidKey: 'config.invalid.number',
   },
   cacheMaxBytes: {
-    name: 'cacheMaxBytes', label: '磁盘缓存上限', kind: 'bytes', unit: '字节',
-    meaning: '目录与正文缓存的上限，超了按最久未用淘汰。填 0 = 不留缓存，每次读数都重新抓。',
+    name: 'cacheMaxBytes', labelKey: 'config.field.cacheMaxBytes.label', kind: 'bytes',
+    unitKey: 'config.unit.bytes', unitOneKey: 'config.unit.bytes.one',
+    meaningKey: 'config.field.cacheMaxBytes.meaning',
     presets: [{ label: '50 MB', value: 50 * MB }, { label: '100 MB', value: 100 * MB },
       { label: '200 MB', value: 200 * MB }, { label: '500 MB', value: 500 * MB }],
-    invalidLabel: '请填数字',
+    invalidKey: 'config.invalid.number',
   },
   localImportMaxBytes: {
-    name: 'localImportMaxBytes', label: '本地文件导入上限', kind: 'bytes', unit: '字节',
-    meaning: 'TXT / EPUB 本地导入共用的大小上限；流读与解析按同一个数判，不会出现「读进来了却拒不解析」。',
+    name: 'localImportMaxBytes', labelKey: 'config.field.localImportMaxBytes.label', kind: 'bytes',
+    unitKey: 'config.unit.bytes', unitOneKey: 'config.unit.bytes.one',
+    meaningKey: 'config.field.localImportMaxBytes.meaning',
     presets: [{ label: '20 MB', value: 20 * MB }, { label: '50 MB', value: 50 * MB },
       { label: '100 MB', value: 100 * MB }, { label: '200 MB', value: 200 * MB }],
-    invalidLabel: '请填数字',
+    invalidKey: 'config.invalid.number',
   },
   proxyUrl: {
-    name: 'proxyUrl', label: '出站代理', kind: 'text',
-    meaning: 'DSH 的 Node 进程不读系统代理：只有代理能到的站点必须显式填这里。留空 = 沿用启动时的自动探测（环境变量 → Windows 系统代理 → 直连）；运行中清空不会重新探测注册表。',
-    placeholder: 'direct 或 http://127.0.0.1:7897',
-    invalidLabel: '代理地址不合法（支持 direct、留空或 http(s) URL）',
+    name: 'proxyUrl', labelKey: 'config.field.proxyUrl.label', kind: 'text',
+    meaningKey: 'config.field.proxyUrl.meaning',
+    placeholderKey: 'config.field.proxyUrl.placeholder',
+    invalidKey: 'config.field.proxyUrl.invalid',
   },
 }
 
 /** 分区按「你什么时候会来动它」切，不按实现模块切：七个字段等权排一条纵列时，
  *  第 7 项在首屏之外，而最常调的两个（超时、并发）和最不敢调的两个（字节数）占一样的地方。 */
-const GROUPS: { title: string; names: readonly FieldName[] }[] = [
-  { title: '搜索', names: ['searchTimeoutMs', 'searchParallel'] },
-  { title: '阅读与导出', names: ['jsTimeoutMs', 'exportDelayMs'] },
-  { title: '存储上限', names: ['cacheMaxBytes', 'localImportMaxBytes'] },
-  { title: '网络', names: ['proxyUrl'] },
+const GROUPS: { titleKey: CopyKey; names: readonly FieldName[] }[] = [
+  { titleKey: 'config.group.search', names: ['searchTimeoutMs', 'searchParallel'] },
+  { titleKey: 'config.group.reading', names: ['jsTimeoutMs', 'exportDelayMs'] },
+  { titleKey: 'config.group.storage', names: ['cacheMaxBytes', 'localImportMaxBytes'] },
+  { titleKey: 'config.group.network', names: ['proxyUrl'] },
 ]
-
-/** 宿主 SettingsForm 的固定文案面：不可用 / 只读 / 保存被拒由模型状态驱动。 */
-const LABELS = {
-  unavailable: '该插件当前未加载，暂时无法配置。',
-  readOnly: '本部署的配置为只读。',
-  saveFailed: '本部署没有接受这些值，已保留供你修改。',
-  save: '保存',
-  saving: '保存中…',
-}
 
 /** 字段状态与壳层状态都直接取宿主声明的窄镜像（`host-ui.d.ts`）：不可用 / 只读 / 保存失败的
  *  文案与禁用态由宿主的 `SettingsForm` 按这些键驱动，本仓不再抄一份同形类型。 */
@@ -144,23 +144,23 @@ function humanBytes(n: number): string | null {
   return `${scale(n / (1024 * 1024 * 1024))} GB`
 }
 
-function humanMs(n: number): string | null {
+function humanMs(n: number, t: Translate): string | null {
   if (!Number.isFinite(n) || n < 0) return null
-  if (n < 1000) return `${n} 毫秒`
+  if (n < 1000) return t('unit.ms', { n })
   const s = n / 1000
-  if (s < 60) return `${scale(s)} 秒`
+  if (s < 60) return t('unit.seconds', { n: scale(s) })
   const m = s / 60
-  if (m < 60) return `${scale(m)} 分钟`
-  return `${scale(m / 60)} 小时`
+  if (m < 60) return t('unit.minutes', { n: scale(m) })
+  return t('unit.hours', { n: scale(m / 60) })
 }
 
 /** 空框与非法值都没有可回读的数——宁缺毋滥：把 `abc` 换算成 `NaN MB` 或把空框换算成
  *  `0 B`，都是拿一个编出来的数盖住真正该被看见的状态。 */
-function readbackOf(spec: FieldSpec, text: string): string | null {
+function readbackOf(spec: FieldSpec, text: string, t: Translate): string | null {
   if (spec.kind === 'text' || spec.kind === 'count' || text.trim() === '') return null
   const n = Number(text)
   if (!Number.isFinite(n)) return null
-  return spec.kind === 'bytes' ? humanBytes(n) : humanMs(n)
+  return spec.kind === 'bytes' ? humanBytes(n) : humanMs(n, t)
 }
 
 function ConfigRow({ spec, field, disabled, onEdit, onReset }: {
@@ -170,25 +170,28 @@ function ConfigRow({ spec, field, disabled, onEdit, onReset }: {
   onEdit: (text: string) => void
   onReset: () => void
 }) {
+  // 每行跟着当前语言换文案：取词在行内，随父级重渲。
+  const t = useCopy()
   const id = `novel-config-${spec.name}`
-  const read = readbackOf(spec, field.text)
+  const read = readbackOf(spec, field.text, t)
   const numeric = spec.kind !== 'text'
   const current = numeric && field.text.trim() !== '' ? Number(field.text) : NaN
+  const unitKey = current === 1 && spec.unitOneKey !== undefined ? spec.unitOneKey : spec.unitKey
   return (
     <div className="novel-cfg-row">
       <div>
         <span className="novel-cfg-head">
-          <label htmlFor={id}>{spec.label}</label>
+          <label htmlFor={id}>{t(spec.labelKey)}</label>
           {field.overridden ? (
             <>
-              <span className="novel-cfg-tag">已覆盖</span>
+              <span className="novel-cfg-tag">{t('config.overridden')}</span>
               <button type="button" className="novel-cfg-reset" onClick={onReset} disabled={disabled}>
-                恢复默认
+                {t('config.reset')}
               </button>
             </>
           ) : null}
         </span>
-        <p className="novel-cfg-meaning" id={`${id}-meaning`}>{spec.meaning}</p>
+        <p className="novel-cfg-meaning" id={`${id}-meaning`}>{t(spec.meaningKey)}</p>
       </div>
       <div className="novel-cfg-side">
         <span className="novel-cfg-box">
@@ -202,17 +205,17 @@ function ConfigRow({ spec, field, disabled, onEdit, onReset }: {
             type="text"
             inputMode={numeric ? 'numeric' : undefined}
             value={field.text}
-            placeholder={spec.placeholder}
+            placeholder={spec.placeholderKey === undefined ? undefined : t(spec.placeholderKey)}
             disabled={disabled}
             aria-invalid={field.invalid ? 'true' : undefined}
             // 单位与报错都是这一格的含义：读屏用户听不到框内的后缀，也不该只靠 aria-invalid 猜原因。
-            aria-describedby={[`${id}-meaning`, spec.unit ? `${id}-unit` : null, field.invalid ? `${id}-err` : null]
+            aria-describedby={[`${id}-meaning`, unitKey === undefined ? null : `${id}-unit`, field.invalid ? `${id}-err` : null]
               .filter(Boolean).join(' ')}
             onChange={(event) => onEdit(event.target.value)}
           />
-          {spec.unit
-            ? <span className="novel-cfg-unit" id={`${id}-unit`} data-novel-cfg-unit={spec.name}>{spec.unit}</span>
-            : null}
+          {unitKey === undefined
+            ? null
+            : <span className="novel-cfg-unit" id={`${id}-unit`} data-novel-cfg-unit={spec.name}>{t(unitKey)}</span>}
         </span>
         {read ? <span className="novel-cfg-read" data-novel-cfg-read={spec.name}>{read}</span> : null}
         {spec.presets ? (
@@ -231,7 +234,7 @@ function ConfigRow({ spec, field, disabled, onEdit, onReset }: {
             ))}
           </span>
         ) : null}
-        {field.invalid ? <p className="novel-cfg-err" id={`${id}-err`}>{spec.invalidLabel}</p> : null}
+        {field.invalid ? <p className="novel-cfg-err" id={`${id}-err`}>{t(spec.invalidKey)}</p> : null}
       </div>
     </div>
   )
@@ -239,20 +242,29 @@ function ConfigRow({ spec, field, disabled, onEdit, onReset }: {
 
 /** 纯呈现组件（导出以便测试直渲）：表单状态与动作都由调用方给，不碰宿主服务。 */
 export function NovelConfigCardView({ state, actions }: { state: NovelConfigState; actions: SettingsFormActions }) {
+  // 宿主此刻渲染的文案面：不可用 / 只读 / 保存被拒由模型状态驱动，措辞跟着当前语言。
+  const t = useCopy()
+  const labels = {
+    unavailable: t('config.unavailable'),
+    readOnly: t('config.readOnly'),
+    saveFailed: t('config.saveFailed'),
+    save: t('config.save'),
+    saving: t('config.saving'),
+  }
   const disabled = !state.writable || state.saving === true
   return (
     <section data-novel-scope className="novel-cfg">
       {/* 本页不在 NovelView 树下，拿不到它注入的样式层：与 SettingsSection 单飞同一口径，自带。 */}
       <NovelStyles />
       <div className="novel-cfg-title">
-        <h3>运行参数</h3>
-        <p>改完点保存即生效，不需要重启插件。</p>
+        <h3>{t('config.title')}</h3>
+        <p>{t('config.subtitle')}</p>
       </div>
-      <SettingsForm labels={LABELS} state={state} onSave={actions.save} onDiscard={actions.discard}>
+      <SettingsForm labels={labels} state={state} onSave={actions.save} onDiscard={actions.discard}>
         <div className="novel-cfg-groups">
           {GROUPS.map((group) => (
-            <section key={group.title} className="novel-cfg-group">
-              <h4>{group.title}</h4>
+            <section key={group.titleKey} className="novel-cfg-group">
+              <h4>{t(group.titleKey)}</h4>
               {group.names.map((name) => (
                 <ConfigRow
                   key={name}
@@ -268,8 +280,7 @@ export function NovelConfigCardView({ state, actions }: { state: NovelConfigStat
         </div>
       </SettingsForm>
       <p className="novel-cfg-foot">
-        数据目录（<code>dataDir</code>）不在这里：它决定书架 / 缓存 / 本地书的落盘根，运行期换根会让新旧数据分家，
-        只能改宿主 profile 的 <code>cordis.patch.yml</code> 并重启插件。
+        {t('config.footer.before')}<code>dataDir</code>{t('config.footer.between')}<code>cordis.patch.yml</code>{t('config.footer.after')}
       </p>
     </section>
   )
@@ -285,7 +296,8 @@ interface SlotsLike {
   register(options: Record<string, unknown>, component: unknown): () => void
 }
 
-export function registerConfigPage(ctx: Context): void {
+/** `t` 由浏览器半入口给；缺省 zhTranslate 让测试直渲与未接 locale 的老宿主保持中文。 */
+export function registerConfigPage(ctx: Context, t: Translate = zhTranslate): void {
   const host = ctx as unknown as { configForms?: ConfigFormsLike; slots: SlotsLike }
   const forms = host.configForms
   if (forms === undefined || typeof forms.get !== 'function' || typeof forms.whileServed !== 'function') return
@@ -316,9 +328,9 @@ export function registerConfigPage(ctx: Context): void {
   const subscribe = (listener: () => void) => store.subscribe(listener)
   const getSnapshot = () => store.getSnapshot()
 
-  function NovelConfigCard() {
+  function NovelConfigCard({ t = zhTranslate }: { t?: Translate }) {
     const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-    return <NovelConfigCardView state={state} actions={actions} />
+    return <CopyProvider value={t}><NovelConfigCardView state={state} actions={actions} /></CopyProvider>
   }
 
   ctx.effect(() => () => model.dispose(), 'dsh-novel: config form')
@@ -327,6 +339,7 @@ export function registerConfigPage(ctx: Context): void {
     () => forms.whileServed([ENTRY_ID], () => host.slots.inject('plugins.bundle.config', () => host.slots.register({
       name: 'plugins.bundle.config',
       key: BUNDLE_NAME,
+      inject: () => ({ t }),
     }, NovelConfigCard))),
     'dsh-novel: config page',
   )

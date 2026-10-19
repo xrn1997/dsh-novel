@@ -1,4 +1,6 @@
 import { LOCAL_SOURCE_ID } from '../shared/wire.js'
+import { plural, zhTranslate } from './copy/index.js'
+import type { Translate } from './copy/index.js'
 import type { ShelfBook } from './views/types.js'
 
 /**
@@ -12,12 +14,14 @@ import type { ShelfBook } from './views/types.js'
 /** 删除确认文案：confirm=确认行（含书名）；warn=本地书的副本连删说明（在线书为 null）。
  *  文案刻意不说「txt」：本地书现在有 TXT 与 EPUB 两种，落盘形态不同，用户要认的是
  *  「数据目录里的那份副本」这件事本身（服务端删的是整个 uuid 副本，两种格式一致）。 */
-export function deleteBookCopy(title: string, isLocal: boolean): { confirm: string; warn: string | null } {
+export function deleteBookCopy(
+  title: string,
+  isLocal: boolean,
+  t: Translate = zhTranslate,
+): { confirm: string; warn: string | null } {
   return {
-    confirm: `删除《${title}》？`,
-    warn: isLocal
-      ? '本地书：将同时删除 DSH 数据目录中的副本与元数据（默认 ~/.dsh/novel/local/，随 dataDir 配置）；你自己的原始文件不受影响'
-      : null,
+    confirm: t('shelf.delete.title', { title }),
+    warn: isLocal ? t('shelf.delete.local') : null,
   }
 }
 
@@ -26,12 +30,17 @@ export function deleteBookCopy(title: string, isLocal: boolean): { confirm: stri
  *  而服务端连副本一起删（与单本同一条 invariant）。 */
 export function deleteBooksCopy(
   books: ReadonlyArray<Pick<ShelfBook, 'title' | 'sourceId'>>,
+  t: Translate = zhTranslate,
 ): { confirm: string; warn: string | null } {
   const locals = books.filter((b) => b.sourceId === LOCAL_SOURCE_ID).length
   return {
-    confirm: `删除选中的 ${books.length} 本书？`,
+    confirm: plural(
+      t, books.length, 'shelf.delete.batchTitle.one', 'shelf.delete.batchTitle.other', { n: books.length },
+    ),
     warn: locals === 0
       ? null
-      : `其中 ${locals} 本为本地书：将同时删除 DSH 数据目录中的副本与元数据（默认 ~/.dsh/novel/local/，随 dataDir 配置）；你自己的原始文件不受影响`,
+      : plural(
+        t, locals, 'shelf.delete.batchLocal.one', 'shelf.delete.batchLocal.other', { n: locals },
+      ),
   }
 }
