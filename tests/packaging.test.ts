@@ -77,27 +77,25 @@ describe('包形态声明', () => {
     // 官方包由宿主提供（收录规范：官方 @deepseek-ai/* 用 peerDependencies 声明）
     expect(Object.keys(pkg.dependencies).filter((name) => name.startsWith('@deepseek-ai/'))).toEqual([])
   })
-  it('dsh-tools peer 区间必须放行我们正在跑的那一代（semver 预发布规则）', () => {
+  it('dsh-tools peer 区间按宿主线开口——线内 rc / patch 放行，跨线挡住', () => {
     const range = pkg.peerDependencies['@deepseek-ai/dsh-tools']
     const dev = pkg.devDependencies['@deepseek-ai/dsh-tools']
-    // semver 的预发布规则：带预发布标签的版本，只有在某个比较符与它**同 major.minor.patch**、
-    // 且该比较符自己也带预发布时才算满足。所以「>= 某代最低预发布 < 下一代-0」必须**逐代显式列出**——
-    // 写成一个看着覆盖的大区间，实际只开了最低那代一层（本仓踩过：`>=0.1.5-rc.1 <0.1.6-0 ||
-    // >=0.1.6-rc.1 <0.2.0-0` 只放行 0.1.5 系 3 个版本，连正在跑的 0.1.7-rc.1 都挡在外面）。
-    // 判据走真解析器而不是查字符串形状：正则能证明「写了预发布」，证明不了「放行了这一代」。
-    // **比较模式必须与宿主一致**：宿主的安装闸 `evaluatePluginCompatibility` 用
-    // `semver.satisfies(runtime, range, { includePrerelease: true })`——不开这一项时预发布版
-    // 默认被排除，下面那两条「上界挡住了」会在另一种模式下被证明，读起来像绿而宿主照放。
+    // 宿主安装闸按 `includePrerelease` 比较 peer 区间：一条连续区间即可放行线内所有 rc / patch，
+    // 不必逐代开口。这里钉区间语义而不是字符串形状——线内自动放行，跨到下一宿主线才要重验。
+    // 比较模式必须与宿主一致：若按默认 semver（排除预发布）来验，会得出相反读数。
     const asHost = (v: string): boolean => semver.satisfies(v, range, { includePrerelease: true })
     expect(asHost(dev)).toBe(true)
-    // 上界必须挡住**下一代**：否则下一代一发就自动变成「被兼容」
-    expect(asHost('0.2.2-rc.1')).toBe(false)
+    // 线内下一个 rc / patch 跟着放行：宿主升级不再要求本插件同步发一版
+    expect(asHost('0.2.2-rc.1')).toBe(true)
+    // 上界必须挡住**下一条宿主线**：0.3 起要先真机验过再开口
+    expect(asHost('0.3.0-rc.1')).toBe(false)
     // 下限的理由：三个硬 inject 里只有 `jobs` 有下限——`webServer`（补丁 id 写的是 `webserver`，
     // 按 camelCase grep 会漏）在 dsh-web-app 每个已发版本里都在，`tools` 连 0.0.1-rc.1 就有。
     // `jobs` 行在 dsh-base 侧从 0.0.1-rc.3 起就有，但那一版只有组件侧发过（`@deepseek-ai/dsh`
     // 与 dsh-web-app 都没有这版），所以**可安装的宿主**里最低带 jobs 的是 0.0.1-rc.5。
     // 故 0.0.1-rc.1 / -rc.2 必须挡在外面：缺 jobs 的宿主插进去整树拒绝挂载。
     expect(asHost('0.0.1-rc.2')).toBe(false)
+    expect(asHost('0.0.1-rc.5')).toBe(true)
   })
   it('cordis.patch.yml：单条 insert，name=包名', () => {
     expect(patch.trimStart().startsWith('- insert:')).toBe(true)
