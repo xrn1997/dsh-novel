@@ -71,6 +71,22 @@ describe('包形态声明', () => {
     expect(pkg.files).toContain('lib')
     expect(pkg.files).toContain('cordis.patch.yml')
   })
+  it('展示元信息：icon 与 locale meta 随包导出（宿主未激活也读，缺失即落包名与默认插画）', () => {
+    expect(pkg.icon).toBe('./icon.svg')
+    expect(pkg.exports['./icon']).toBe('./icon.svg')
+    expect(pkg.exports['./locale/*.json']).toBe('./locale/*.json')
+    expect(pkg.files).toEqual(expect.arrayContaining(['locale', 'icon.svg']))
+    const icon = readFileSync('icon.svg', 'utf8')
+    expect(icon).toContain('<svg')
+    expect(Buffer.byteLength(icon)).toBeLessThanOrEqual(256 * 1024)
+    for (const lang of ['zh', 'en']) {
+      const { meta } = JSON.parse(readFileSync(`locale/${lang}.json`, 'utf8'))
+      expect(typeof meta.title).toBe('string')
+      expect(meta.title.trim().length).toBeGreaterThan(0)
+      expect(typeof meta.description).toBe('string')
+      expect(meta.description.trim().length).toBeGreaterThan(0)
+    }
+  })
   it('peerDeps 覆盖宿主面：官方 @deepseek-ai/* 一律 peer，不进 dependencies', () => {
     expect(Object.keys(pkg.peerDependencies)).toEqual(
       expect.arrayContaining(['@deepseek-ai/cordis', '@deepseek-ai/dsh-tools', '@deepseek-ai/schemastery', 'react', 'react-dom']))
