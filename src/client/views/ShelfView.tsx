@@ -6,6 +6,7 @@ import type { ShelfDeps } from '../deps.js'
 import { navigate } from '../store.js'
 import type { LocalImportResponse, ShelfEntry } from './types.js'
 import { coverFallbackChar, EmptyState, ProgressBar, SearchIcon, WarningList } from './bits.js'
+import { Dialog } from './dialog.js'
 import { deleteBookCopy, deleteBooksCopy } from '../shelf-delete.js'
 import { filterShelfBooks, localImportLabel, localImportNote, SHELF_FILTERS, shelfCardMeta, shelfSourceTag } from '../shelf-view-model.js'
 import type { ShelfFilterKey } from '../shelf-view-model.js'
@@ -62,37 +63,13 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
   // 过滤得出 = 书架序，别指望它是点选顺序）
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
-  const modalRef = useRef<HTMLDivElement | null>(null)
   const cancelDel = (): void => { setPendingDel(null); setDelError(null); setDelBusy(false) }
   const exitSelect = (): void => { setSelectMode(false); setSelected([]) }
   const toggleSelect = (bookKey: string): void => {
     setSelected((prev) => prev.includes(bookKey) ? prev.filter((k) => k !== bookKey) : [...prev, bookKey])
   }
-  /** 模态在场期间的键盘接管：Esc 取消 + Tab 圈在框内（关闭后焦点还给触发它的那张卡片 ✕）。
-   *  只挡 Esc 不够——Tab 一路走下去就走到遮罩背后的书架，对话框还挂着、人已出去。 */
-  useEffect(() => {
-    if (pendingDel === null) return
-    const opener = document.activeElement
-    const focusables = (): HTMLElement[] => modalRef.current === null ? []
-      : [...modalRef.current.querySelectorAll<HTMLElement>('button:not([disabled])')]
-    focusables()[0]?.focus()
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') { cancelDel(); return }
-      if (e.key !== 'Tab') return
-      const f = focusables()
-      if (f.length === 0) return
-      const first = f[0]
-      const last = f[f.length - 1]
-      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
-      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
-    }
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      if (opener instanceof HTMLElement && opener.isConnected) opener.focus()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingDel])
+  /** 模态在场期间的键盘接管（Esc 取消 + Tab 圈在框内 + 关后还焦触发卡片 ✕）不在这层：
+   *  契约的唯一住址是 `views/dialog.tsx`，本层只交标题、内容与两颗钮。 */
   /** 确认删除：**入口决定路径**——单本 ✕ 走 DELETE shelf/:key，多选「删除所选」走一次
    *  POST shelf/batch-delete（哪怕只勾了 1 本：载荷与文案跟用户点的那个钮一致）。
    *  成功才本地过滤 + 清勾选（失败半场卡片保留——乐观删除的回滚半场归接线测试钉死）。 */
@@ -275,20 +252,17 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
             ? deleteBooksCopy(pendingDel.books)
             : deleteBookCopy(pendingDel.books[0].title, pendingDel.books[0].sourceId === LOCAL_SOURCE_ID)
           return (
-            <div className="novel-modal-mask" onClick={(e) => { if (e.target === e.currentTarget) cancelDel() }}>
-              <div ref={modalRef} className="novel-modal" role="dialog" aria-modal="true" aria-labelledby="novel-del-title">
-                <div className="novel-modal-title" id="novel-del-title">{copy.confirm}</div>
-                {copy.warn === null
-                  ? <div className="novel-modal-body">将从书架移除，阅读进度记录一并删除。</div>
-                  : <div className="novel-modal-warn">{copy.warn}</div>}
-                {delBusy ? <div className="novel-modal-body">删除中…</div> : null}
-                {delError === null ? null : <div className="novel-err novel-note-sm">删除失败：{delError}</div>}
-                <div className="novel-modal-actions">
-                  <button className="novel-btn sm" onClick={cancelDel} disabled={delBusy}>取消</button>
-                  <button className="novel-btn sm danger solid" onClick={confirmDelete} disabled={delBusy}>确认删除</button>
-                </div>
-              </div>
-            </div>
+            <Dialog title={copy.confirm} onClose={cancelDel}
+              actions={<>
+                <button className="novel-btn sm" onClick={cancelDel} disabled={delBusy}>取消</button>
+                <button className="novel-btn sm danger solid" onClick={confirmDelete} disabled={delBusy}>确认删除</button>
+              </>}>
+              {copy.warn === null
+                ? <div className="novel-modal-body">将从书架移除，阅读进度记录一并删除。</div>
+                : <div className="novel-modal-warn">{copy.warn}</div>}
+              {delBusy ? <div className="novel-modal-body">删除中…</div> : null}
+              {delError === null ? null : <div className="novel-err novel-note-sm">删除失败：{delError}</div>}
+            </Dialog>
           )
         })()}
         {loadError === null ? null : (

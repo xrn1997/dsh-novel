@@ -1,17 +1,18 @@
 import type { ReactNode } from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { paramRoutes, ROUTES } from '../../shared/wire.js'
 import { prodDeps } from '../deps.js'
-import type { SettingsDeps } from '../deps.js'
+import type { ClientCoreDeps, SettingsDeps } from '../deps.js'
 import { refreshJob, startSourceVerification, takeJobOpen, useJobOpenRequest, useJobSurface } from '../jobs.js'
 import { inboxCards, inboxIds, sourceInbox, visibleInboxCards } from '../source-inbox.js'
-import type { InboxKind } from '../source-inbox.js'
+import type { InboxKind, SourceInbox } from '../source-inbox.js'
 import { inboxUi, muteInboxCard, pruneInboxMuted, unmuteAllInboxCards } from '../source-inbox-ui.js'
 import { useStore } from '../store.js'
 import { NovelStyles } from '../styles.js'
 import { ImportPane } from './SettingsImportPane.js'
 import { ProbeRunCard, SourceList } from './SettingsSourceList.js'
 import { ErrorBanner, StatusBadge } from './bits.js'
+import { Dialog } from './dialog.js'
 import type { JobState, ProbeResult, SourcePublic } from './types.js'
 
 /**
@@ -41,15 +42,18 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
     void deps.apiGet<SourcePublic[]>(ROUTES.sources.path).then((list) => {
       setSources(list)
       setLoadError(null)
+      // 忽略记录随源清单变化作废——这一步跟着**清单落地的这一处**，不另开 effect：清单只有这一个
+      // 写入点，作废就挂在它后面，读代码的人不会漏。留着一条遮不住任何东西的记录，会在
+      // 「删光这批再导入同一批 id」时把提示再次吞掉——那是一次用户没做过的「已看过」（判据在
+      // `source-inbox-ui.ts`）。**取数失败那一支不作废**：加载失败是「不知道」，不是「这批没了」，
+      // 拿它清掉用户的忽略现场就是把未知当结论。
+      pruneInboxMuted(sourceInbox(list))
     }, (e) => {
       setSources([])
       setLoadError(e instanceof Error ? e.message : String(e))
     })
   }
   useEffect(reload, [])
-  // 忽略记录随源清单变化作废（判据在 `source-inbox-ui.ts`）：留着一条遮不住任何东西的记录，
-  // 会在「删光这批再导入同一批 id」时把提示再次吞掉——那是一次用户没做过的「已看过」。
-  useEffect(() => { if (sources !== null) pruneInboxMuted(sourceInbox(sources)) }, [sources])
   // 任务现场只读常驻状态层的镜像（轮询单实例住 `NovelStatusOverlay`，不在本视图内）：
   // 切走 tab 轮询照跑、回到本区读数即刻是最新的。refresh = 让驱动立刻重拉一次。
   const { job } = useJobSurface()
@@ -73,8 +77,10 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
     takeJobOpen()
   }, [openRequest])
 
-  // 待办集合唯一派生口在 source-inbox.ts：导入弹层的「去验证」也走它，视图不另抄一份按状态筛
-  const unverifiedIds = sources === null ? [] : inboxIds(sourceInbox(sources), 'unverified')
+  // 待办集合唯一派生口在 source-inbox.ts：一次派生同时喂待办区与导入弹层的「去验证」，
+  // 视图不另抄一份按状态筛（同一份源清单也不在同一轮渲染里筛两遍）
+  const inbox = sources === null ? null : sourceInbox(sources)
+  const unverifiedIds = inbox === null ? [] : inboxIds(inbox, 'unverified')
   /** 待办处置动作（批量重验/一键验证/导入后「去验证」）的统一提交口：ids 点击时快照；
    *  提交后的编排归 `jobs.ts` 的 `startSourceVerification`（三个验证入口同一条路）——
    *  此处曾是 `() => undefined` 吞掉 rejection，「去验证」点了没反应还留 unhandled。 */
@@ -101,7 +107,7 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
         <div className="novel-err novel-note-md">源列表加载失败：{loadError}（稍后重试或检查 DSH 服务端）</div>
       )}
       {/* ① 待办收件箱：反常置顶；加载中/加载失败不渲染 */}
-      <SourceInbox sources={sources} loadError={loadError} job={job} onVerify={verifyIds} />
+      <InboxSection inbox={inbox} loadError={loadError} job={job} onVerify={verifyIds} />
       {/* ② 任务槽：验证类任务的运行卡归位于此（导入任务的运行卡在导入弹层内——kind 分家） */}
       {job !== null && job.kind !== 'import' && job.phase === 'running' && (
         <div data-novel-job-slot><ProbeRunCard job={job} /></div>
@@ -116,9 +122,14 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
         loadError={loadError}
         deps={deps}
       />
-      {/* ④ 导入弹层：低频任务收纳；提交后自动关闭，完成事项经待办收件箱回流（闭环） */}
+      {/* ④ 导入弹层：低频任务收纳；提交后自动关闭，完成事项经待办收件箱回流（闭环）。
+          焦点闭环与 Esc 归 `views/dialog.tsx`（宽档几何 = `.novel-modal.wide`，主人仍是样式层）。
+          入场焦点按契约落面板内第一颗未禁用钮：缺省态是动作行「关闭」（更早的「导入粘贴内容」
+          在无有效 JSON 时禁用），有完成回执时是回执里的「查看明细」。
+          回归钉在 views-wiring「导入弹层焦点不被壳层重渲染劫持」。 */}
       {importOpen && (
-        <ImportModal onClose={() => setImportOpen(false)}>
+        <Dialog title="导入书源" variant="wide" onClose={() => { setImportOpen(false) }}
+          actions={<button className="novel-btn sm" onClick={() => { setImportOpen(false) }}>关闭</button>}>
           <ImportPane
             job={job}
             refresh={refreshJob}
@@ -127,7 +138,7 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
             onSubmitted={() => setImportOpen(false)}
             deps={deps}
           />
-        </ImportModal>
+        </Dialog>
       )}
     </div>
   )
@@ -140,14 +151,14 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
  *  ③ **零待办整块不渲染**（全健康 / 全部被忽略 / 0 源）：「查过了且没事」由状态带的
  *    `未验证 0 · 坏源 0` 承担，0 源引导归列表自己的空态（不抄第二份）。
  *  不变的口径：加载中 / 加载失败**不渲染**（不拿未知当「全部良好」，宁炸不猜）；每卡只留处置
- *  动作，逐源排查在列表行内「试跑」（待办是任务摘要，不放重复入口，用户裁定）。 */
-function SourceInbox({ sources, loadError, job, onVerify }: {
-  sources: SourcePublic[] | null; loadError: string | null; job: JobState | null
+ *  动作，逐源排查在列表行内「试跑」（待办是任务摘要，不放重复入口，用户裁定）。
+ *  `inbox` 由壳层一次派生后传下来（同一份源清单不在一轮渲染里筛两遍，弹层的「去验证」读同一份）。 */
+function InboxSection({ inbox, loadError, job, onVerify }: {
+  inbox: SourceInbox | null; loadError: string | null; job: JobState | null
   onVerify: (ids: string[]) => void
 }): ReactNode {
   const { muted } = useStore(inboxUi)
-  if (sources === null || loadError !== null) return null
-  const inbox = sourceInbox(sources)
+  if (inbox === null || loadError !== null) return null
   const { shown, hidden } = visibleInboxCards(inboxCards(inbox), muted)
   if (shown.length === 0 && hidden.length === 0) return null
   // 在途禁用面 = 任何任务（不限 probe kind）：服务端**单任务槽**——import-job.begin 运行中
@@ -202,34 +213,6 @@ const TODO_CARD: Record<InboxKind, { icon: string; label: string; tone: 'err' | 
   },
 }
 
-/** 导入弹层：遮罩 + 宽档模态（`.novel-modal.wide`）；Esc / 点遮罩 /「关闭」退出。
- *  入场焦点在关闭钮（轻量焦点口径；删除确认模态另有完整 Tab 圈，在 SourceList 侧）。
- *  焦点/Esc effect **挂载作用域**（空依赖 + onClose 走 ref）：轮询每秒重渲染父层，闭包进依赖
- *  数组会每秒把焦点劫回关闭钮（修过的真缺陷）。弹层条件渲染 = 每次打开都是新挂载，入场焦点
- *  语义不受影响。回归钉在 views-wiring「导入弹层焦点不被壳层重渲染劫持」。 */
-function ImportModal({ onClose, children }: { onClose: () => void; children: ReactNode }): ReactNode {
-  const closeRef = useRef<HTMLButtonElement | null>(null)
-  const onCloseRef = useRef(onClose)
-  onCloseRef.current = onClose                      // 每 render 刷新 ref：effect 内永远调到最新闭包
-  useEffect(() => {
-    closeRef.current?.focus()
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') onCloseRef.current() }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [])
-  return (
-    <div className="novel-modal-mask" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="novel-modal wide" role="dialog" aria-modal="true" aria-label="导入书源">
-        <div className="novel-modal-title">导入书源</div>
-        {children}
-        <div className="novel-modal-actions">
-          <button ref={closeRef} className="novel-btn sm" onClick={onClose}>关闭</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 // ── 试跑器（单源排查下钻）：段级 trace 结果卡 ────────────────────────────
 
 /**
@@ -238,7 +221,8 @@ function ImportModal({ onClose, children }: { onClose: () => void; children: Rea
  * 永久停在「探针执行中…」并留下 unhandled rejection。失败显式呈现是接线的一部分。
  */
 export function ProbePane({ sourceId, onBack, deps = prodDeps }: {
-  sourceId: string; onBack: () => void; deps?: SettingsDeps
+  /** 试跑只发一次探针请求：读面与任务面都由壳层管，这里不吃整束 */
+  sourceId: string; onBack: () => void; deps?: Pick<ClientCoreDeps, 'apiSend'>
 }): ReactNode {
   const [result, setResult] = useState<ProbeResult | null>(null)
   const [failed, setFailed] = useState<string | null>(null)

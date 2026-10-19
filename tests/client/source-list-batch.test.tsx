@@ -215,7 +215,7 @@ describe('删除：统一模态二次确认（2026 改版——手输口令与�
     expect(deps.apiSend).not.toHaveBeenCalled()
   })
 
-  it('焦点闭环：入场焦点在「取消」；关闭后焦点还给触发件（与书架删书同款口径）', () => {
+  it('焦点闭环：入场焦点在「取消」；关闭后焦点还给触发件', () => {
     const deps = makeDeps()
     render(view(deps))
     selectRows(['源一'])

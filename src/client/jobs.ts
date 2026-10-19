@@ -56,14 +56,14 @@ export function getLastImportJob(): JobState | null { return lastImportJob }
 /** 轮询取数依赖（SettingsDeps.fetchJobStatus 的最小面，补完 seam）：
  *  生产缺省真实现；测试注入假取数 + 假时钟——轮询节拍第一次变得可测。
  *  本地声明而不引 deps.ts 的类型：避免 deps.ts(值) ↔ jobs.ts 的环。
- *  `statusPollMs` 缺省 `STATUS_POLL_MS`：节拍的家在 util.ts，这一格只是让它可注入。 */
+ *  节拍不作为注入格：它的家只有 `STATUS_POLL_MS` 一个，注入一格却无人驱动，等于把 interface
+ *  开得比需要宽（这批 seam 收窄的立意正是「成员数就是每条用例的固定成本」）。 */
 export interface JobStatusDeps {
   fetchJobStatus: () => Promise<JobState | null>
-  statusPollMs?: number
 }
 
 /** 生产取数依赖：模块级真实现打包——hook 缺省即它，接线零变化 */
-const prodJobStatusDeps: JobStatusDeps = { fetchJobStatus, statusPollMs: STATUS_POLL_MS }
+const prodJobStatusDeps: JobStatusDeps = { fetchJobStatus }
 
 // ── 任务现场的唯一镜像 ────────────────────────────────────────────────
 /** 为什么住模块 store 而不是 props/hook 局部 state：轮询单实例住在**面板之外**的常驻状态层
@@ -114,7 +114,7 @@ export function useJobPolling(deps: JobStatusDeps = prodJobStatusDeps): void {
         if (alive) jobSurface.set({ ...jobSurface.get(), stale: true })
       }
       if (!alive) return
-      timer = setTimeout(() => { void loop() }, depsRef.current.statusPollMs ?? STATUS_POLL_MS)
+      timer = setTimeout(() => { void loop() }, STATUS_POLL_MS)
     }
     void loop()
     return () => { alive = false; if (timer !== null) clearTimeout(timer) }

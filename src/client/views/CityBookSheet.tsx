@@ -1,12 +1,13 @@
 import type { ReactNode } from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { partitionByRelevance } from '../../shared/relevance.js'
-import { paramRoutes, shelfBody } from '../../shared/wire.js'
+import { bodies, paramRoutes } from '../../shared/wire.js'
 import type { ExploreBook, SearchGroup, SearchHit } from '../../shared/wire.js'
 import { cityMeta, sheetKeyword } from '../city-view-model.js'
-import type { JobViewDeps } from '../deps.js'
+import type { JobViewDeps, RowActionDeps } from '../deps.js'
 import { useSearchJob } from '../search-job.js'
 import { navigate } from '../store.js'
+import { Dialog } from './dialog.js'
 
 /**
  * 书籍详情浮层：一本**已经点名的源上的书**的落点。三件事住这里——读这本、加入书架、跨源找这本。
@@ -35,10 +36,9 @@ import { navigate } from '../store.js'
  *    （取值规约在呈现层的落点：空集合与取值失败是两种值）。零命中那句因此**只在真有答复时**才说：
  *    「全都答了而没搜到」与「全都没答」是两种事实，后者只能出未响应那些行。
  *
- * 浮层是覆盖层：书单留在原位（不卸载、不动滚动位置），退出路是遮罩与 Esc 两条，入场焦点落关闭钮
- * （焦点口径沿用 `ImportModal` 那条——同一仓里长两套焦点语言，会让「打开浮层后键盘在哪儿」变成
- * 要分情况背的东西）。Esc 挂 `document`（焦点可能落在浮层内任意处），effect 空依赖 + onClose 走
- * ref：浮层活着的期间父层随时会重渲染（轮次推送），闭包进依赖会把监听搬来搬去。
+ * 浮层是覆盖层：书单留在原位（不卸载、不动滚动位置）。遮罩、Esc、入场焦点、Tab 圈与关后还焦都不
+ * 是本层的手写机械——它们是**模态契约**的一份落点（唯一住址 `views/dialog.tsx`，与删除确认、入架
+ * 一问、导入弹层同一份）；抽屉档的几何仍归样式层（`.novel-city-scrim` / `.novel-city-drawer`）。
  *
  * **一次跨源会换掉搜索面的那一轮**：服务端搜索槽只有一个（`services/search-job.ts`），在书城发起
  * 的这轮同样会替换它——这是既有裁决「跟随最近一轮」（`docs/adr/0023`）的另一处落点，不是缺陷；
@@ -52,21 +52,6 @@ export function CityBookSheet({ book, sourceId, sourceName, deps, onClose }: {
   const search = useSearchJob(deps)
   /** 按过那颗钮才算「要跨源」：在那之前搜索面持有的轮次不是本浮层的读数，一条都不列 */
   const [asked, setAsked] = useState(false)
-  const closeRef = useRef<HTMLButtonElement | null>(null)
-  const onCloseRef = useRef(onClose)
-  onCloseRef.current = onClose
-  useEffect(() => {
-    const previous = document.activeElement
-    closeRef.current?.focus()
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') onCloseRef.current() }
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      // 焦点归还给打开浮层的那张卡（书单还在场，那张卡没被卸载）。这是 nice-to-have，所以只在
-      // 原元素仍挂在文档里时才还——别把焦点扔给一个已经不在文档里的节点。
-      if (previous instanceof HTMLElement && previous.isConnected) previous.focus()
-    }
-  }, [])
 
   /** 跨源那一次的关键词，本层只在这里向 `sheetKeyword` 取一次：本轮身份守卫与相关性分档读的是
    *  同一个串，两处各拼一遍就会给「这一轮是不是这本书」与「这条命中相关吗」两种答案。 */
@@ -88,76 +73,69 @@ export function CityBookSheet({ book, sourceId, sourceName, deps, onClose }: {
   const zeroHits = answered.length > 0 && answered.every((g) => g.hits.length === 0)
   const meta = cityMeta(book)
   return (
-    <>
-      <div className="novel-city-scrim" aria-hidden="true" onClick={onClose} />
-      <div className="novel-city-drawer" role="dialog" aria-modal="true" aria-label={`书籍详情：${book.name}`}>
-        <div className="novel-city-drawer-head">
-          <strong className="novel-city-drawer-title">{book.name}</strong>
-          <button ref={closeRef} className="novel-btn sm" onClick={onClose}>关闭</button>
+    <Dialog title={book.name} label={`书籍详情：${book.name}`} variant="drawer" onClose={onClose}>
+      <div className="novel-city-bookhead">
+        {/* 元信息与卡片同源（`cityMeta`）：同一本书在两个地方写法不一致就是两份抄本 */}
+        {meta === '' ? null : <div className="novel-city-bookhead-meta">{meta}</div>}
+        {/* 整段简介在这里给（卡片那一行只夹一行）：文字是分类页那一条命中带来的，本层不另发详情面请求 */}
+        {book.intro === null || book.intro === '' ? null : (
+          <div className="novel-city-bookhead-meta">{book.intro}</div>
+        )}
+        <div className="novel-city-tags">
+          {/* 源名不在这里重复：本源那一行已经点了它的名，同一层浮层里说两遍就是抄本 */}
+          {book.lastChapter === null || book.lastChapter === '' ? null : <span className="novel-city-tag">最新 {book.lastChapter}</span>}
         </div>
-        <div className="novel-city-bookhead">
-          {/* 元信息与卡片同源（`cityMeta`）：同一本书在两个地方写法不一致就是两份抄本 */}
-          {meta === '' ? null : <div className="novel-city-bookhead-meta">{meta}</div>}
-          {/* 整段简介在这里给（卡片那一行只夹一行）：文字是分类页那一条命中带来的，本层不另发详情面请求 */}
-          {book.intro === null || book.intro === '' ? null : (
-            <div className="novel-city-bookhead-meta">{book.intro}</div>
-          )}
-          <div className="novel-city-tags">
-            {/* 源名不在这里重复：本源那一行已经点了它的名，同一层浮层里说两遍就是抄本 */}
-            {book.lastChapter === null || book.lastChapter === '' ? null : <span className="novel-city-tag">最新 {book.lastChapter}</span>}
-          </div>
-        </div>
-        {/* 本源那一行：与跨源那些行走同一个渲染器、同一对动作、同一条地址守卫。
-            「最新」不在这里重复——头部那颗 tag 已经把这本书的最新章整句说过了（同一层浮层里说两遍
-            就是抄本，源名同理，见上面那条）。372px 的一行装不下「源名 + 整句最新 + 两颗钮」，
-            实测该退让的次序是：先让重复的那句，再让长补充，源名与两颗钮都不许动。 */}
-        <div className="novel-city-srclist">
-          <SheetRow row={ownRow(book, sourceId, sourceName)} deps={deps} showLast={false} />
-        </div>
-        <button className="novel-btn" onClick={() => { setAsked(true); search.submit(keyword) }}>
-          {asked && ownRound?.running === true ? '在其他源找这本 · 进行中' : '在其他源找这本'}
-        </button>
-        {asked ? (
-          <>
-            {ownRound !== null && ownRound.running ? (
-              <div className="novel-city-progress">
-                <span className="novel-muted">
-                  {/* 参搜家数由服务端 searchPlan 说了算：首帧之前手上还没有这个数，说「已问到 0 / 0」
-                      就是把「还没问到」念成「问过了、没人答」 */}
-                  {ownRound.total === 0 ? '正在启动跨源搜索…' : `已问到 ${ownRound.done} / ${ownRound.total} 家`}
-                </span>
-                <button className="novel-btn sm" onClick={() => { search.cancel() }}>停止</button>
-              </div>
-            ) : null}
-            {search.error === null ? null : (
-              <div className="novel-err novel-note-sm">跨源搜索中断：{search.error}</div>
-            )}
-            {/* 收口的三种说法互不冒充：被停止 ≠ 问完了没货，一家没被问到 ≠ 搜了没命中。
-                「被停止」排在最前，它优先于另两条——停止的那一轮没资格对结果下结论。 */}
-            {ownRound !== null && !ownRound.running && ownRound.cancelled ? (
-              <div className="novel-muted novel-note-sm">已停止：没问完的源不再往下问，已经答的留在上方。</div>
-            ) : null}
-            {ownRound !== null && !ownRound.running && !ownRound.cancelled && ownRound.total === 0 ? (
-              <div className="novel-muted novel-note-sm">
-                这一轮一家都没被问到：没有参与搜索的书源（都已停用，或还没导入）。
-              </div>
-            ) : null}
-            {ownRound !== null && !ownRound.running && !ownRound.cancelled && ownRound.total > 0 && zeroHits ? (
-              <div className="novel-muted novel-note-sm">
-                没有一家按这个书名搜到——这既不是说这本书不存在，也不是搜索出了错。
-              </div>
-            ) : null}
-            {/* 各源命中就地长在同一列：一行一个源，不并成一条、不给源排序、不标「推荐这一本」。
-                源家数不变，变的只是这一行的**代表**由谁当——判据见 `GroupRow`。 */}
-            {groups.length === 0 ? null : (
-              <div className="novel-city-srclist">
-                {groups.map((g) => <GroupRow key={g.sourceId} group={g} keyword={keyword} deps={deps} />)}
-              </div>
-            )}
-          </>
-        ) : null}
       </div>
-    </>
+      {/* 本源那一行：与跨源那些行走同一个渲染器、同一对动作、同一条地址守卫。
+          「最新」不在这里重复——头部那颗 tag 已经把这本书的最新章整句说过了（同一层浮层里说两遍
+          就是抄本，源名同理，见上面那条）。372px 的一行装不下「源名 + 整句最新 + 两颗钮」，
+          实测该退让的次序是：先让重复的那句，再让长补充，源名与两颗钮都不许动。 */}
+      <div className="novel-city-srclist">
+        <SheetRow row={ownRow(book, sourceId, sourceName)} deps={deps} showLast={false} />
+      </div>
+      <button className="novel-btn" onClick={() => { setAsked(true); search.submit(keyword) }}>
+        {asked && ownRound?.running === true ? '在其他源找这本 · 进行中' : '在其他源找这本'}
+      </button>
+      {asked ? (
+        <>
+          {ownRound !== null && ownRound.running ? (
+            <div className="novel-city-progress">
+              <span className="novel-muted">
+                {/* 参搜家数由服务端 searchPlan 说了算：首帧之前手上还没有这个数，说「已问到 0 / 0」
+                    就是把「还没问到」念成「问过了、没人答」 */}
+                {ownRound.total === 0 ? '正在启动跨源搜索…' : `已问到 ${ownRound.done} / ${ownRound.total} 家`}
+              </span>
+              <button className="novel-btn sm" onClick={() => { search.cancel() }}>停止</button>
+            </div>
+          ) : null}
+          {search.error === null ? null : (
+            <div className="novel-err novel-note-sm">跨源搜索中断：{search.error}</div>
+          )}
+          {/* 收口的三种说法互不冒充：被停止 ≠ 问完了没货，一家没被问到 ≠ 搜了没命中。
+              「被停止」排在最前，它优先于另两条——停止的那一轮没资格对结果下结论。 */}
+          {ownRound !== null && !ownRound.running && ownRound.cancelled ? (
+            <div className="novel-muted novel-note-sm">已停止：没问完的源不再往下问，已经答的留在上方。</div>
+          ) : null}
+          {ownRound !== null && !ownRound.running && !ownRound.cancelled && ownRound.total === 0 ? (
+            <div className="novel-muted novel-note-sm">
+              这一轮一家都没被问到：没有参与搜索的书源（都已停用，或还没导入）。
+            </div>
+          ) : null}
+          {ownRound !== null && !ownRound.running && !ownRound.cancelled && ownRound.total > 0 && zeroHits ? (
+            <div className="novel-muted novel-note-sm">
+              没有一家按这个书名搜到——这既不是说这本书不存在，也不是搜索出了错。
+            </div>
+          ) : null}
+          {/* 各源命中就地长在同一列：一行一个源，不并成一条、不给源排序、不标「推荐这一本」。
+              源家数不变，变的只是这一行的**代表**由谁当——判据见 `GroupRow`。 */}
+          {groups.length === 0 ? null : (
+            <div className="novel-city-srclist">
+              {groups.map((g) => <GroupRow key={g.sourceId} group={g} keyword={keyword} deps={deps} />)}
+            </div>
+          )}
+        </>
+      ) : null}
+    </Dialog>
   )
 }
 
@@ -173,7 +151,9 @@ interface SheetRowData {
   author: string | null
   /** 该源上的书地址：书架身份 + 阅读入口；缺席即两个动作都不给 */
   url: string | null
-  lastChapter: string | null
+  /** 行名与 `SearchHit` / `ShelfMetaPatch` 同字（`lastChapterName`）：这一层的行就是「某个源上的
+   *  这一本」，与命中同一个形状，入架时才无须在这里再列一遍字段位。 */
+  lastChapterName: string | null
   coverUrl: string | null
   intro: string | null
   kind: string | null
@@ -183,7 +163,7 @@ interface SheetRowData {
 function ownRow(book: ExploreBook, sourceId: string, sourceName: string): SheetRowData {
   return {
     sourceId, sourceName, listed: null, title: book.name, author: book.author, url: book.bookUrl,
-    lastChapter: book.lastChapter, coverUrl: book.coverUrl, intro: book.intro,
+    lastChapterName: book.lastChapter, coverUrl: book.coverUrl, intro: book.intro,
     kind: book.kind, wordCount: book.wordCount,
   }
 }
@@ -192,20 +172,18 @@ function hitRow(g: SearchGroup, h: SearchHit): SheetRowData {
   const listed = [h.title, h.author ?? ''].filter((x) => x !== '').join(' · ')
   return {
     sourceId: g.sourceId, sourceName: g.sourceName, listed, title: h.title, author: h.author, url: h.url,
-    lastChapter: h.lastChapterName, coverUrl: h.coverUrl, intro: h.intro, kind: h.kind, wordCount: h.wordCount,
+    lastChapterName: h.lastChapterName, coverUrl: h.coverUrl, intro: h.intro, kind: h.kind, wordCount: h.wordCount,
   }
 }
 
-/** 入架走**搜索面那条既有路**（`PUT paramRoutes.shelfKey` + `shelfBody.addBook`）：各条入架路共用
- *  一个路径构造器与一个 body 构造器，服务端那一份 patch 语义才不会长出第二种。
+/** 入架走**搜索面那条既有路**（`PUT paramRoutes.shelfKey` + `bodies.shelfAdd`）：各条入架路共用
+ *  一个路径构造器与一个 body 构造器，服务端那一份 patch 语义才不会长出第二种。行上多出来的
+ *  `sourceName` / `listed` / `url` 不是书目字段，`pickShelfMeta` 整键丢。
  *  **不先读一次书架判「已在书架」**：那是一个多出来的请求，换来的只是按钮文案；重复点按由幂等覆盖
  *  处理（同一 bookKey 再 PUT 一次，写进去的还是同一本书）。成功才报名，失败进错误泳道——点了一下
  *  必须有个交代，静默失败比失败更糟。 */
-function addToShelf(row: SheetRowData, deps: JobViewDeps): void {
-  void deps.apiSend('PUT', paramRoutes.shelfKey(row.url ?? ''), shelfBody.addBook({
-    sourceId: row.sourceId, title: row.title, author: row.author, coverUrl: row.coverUrl,
-    intro: row.intro, lastChapterName: row.lastChapter, kind: row.kind, wordCount: row.wordCount,
-  })).then(
+function addToShelf(row: SheetRowData, deps: RowActionDeps): void {
+  void deps.apiSend('PUT', paramRoutes.shelfKey(row.url ?? ''), bodies.shelfAdd(row.sourceId, row)).then(
     () => deps.pushOk(`已加入书架：${row.title}`),
     (e: unknown) => deps.pushError(`加入书架失败：${e instanceof Error ? e.message : String(e)}`),
   )
@@ -216,14 +194,14 @@ function addToShelf(row: SheetRowData, deps: JobViewDeps): void {
  *  `showSource` 关掉源名：折叠区里那些行的家门由它们所在那行折叠的摘要说一次（同一组里说两遍就是
  *  抄本），默认带着——本源那一行与各源的代表行都靠它自报家门。 */
 function SheetRow({ row, deps, showLast = true, showSource = true }: {
-  row: SheetRowData; deps: JobViewDeps; showLast?: boolean; showSource?: boolean
+  row: SheetRowData; deps: RowActionDeps; showLast?: boolean; showSource?: boolean
 }): ReactNode {
   return (
     <div className="novel-city-srcrow">
       {showSource ? <span className="novel-city-srcrow-who">{row.sourceName}</span> : null}
       {row.listed === null ? null : <span className="novel-city-srcrow-last">{row.listed}</span>}
-      {!showLast || row.lastChapter === null ? null : (
-        <span className="novel-city-srcrow-last">最新：{row.lastChapter}</span>
+      {!showLast || row.lastChapterName === null ? null : (
+        <span className="novel-city-srcrow-last">最新：{row.lastChapterName}</span>
       )}
       {/* 各源一律同款按钮、没有排序：把第一条刷成主色就是替用户排序。入架排在「读这本」前面，
           主色（读）留在行尾的既有位置。 */}
@@ -253,7 +231,7 @@ function SheetRow({ row, deps, showLast = true, showSource = true }: {
  *  「只回了疑似无关」既不是「这一家没有按这个书名搜到」（那是**答了而零条**的说法），也不是未响应
  *  （它答了）——三条来路按答复长，不按默认视野长，所以这里只在真零条命中时才说那一句。 */
 function GroupRow({ group, keyword, deps }: {
-  group: SearchGroup; keyword: string; deps: JobViewDeps
+  group: SearchGroup; keyword: string; deps: RowActionDeps
 }): ReactNode {
   if (group.error !== undefined) {
     return (

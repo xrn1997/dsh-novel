@@ -58,11 +58,6 @@ export interface RunScriptOptions extends EvalContext {
   key?: string
   page?: number
   header?: string
-  /** 上一段结果的值形态与所在路径（nodes/page 绑成元素包装对象）——只有链上跑的脚本才给 */
-  resultKind?: string
-  resultCtx?: 'list' | 'value'
-  /** 脚本自己的 console 收集口 */
-  console?: JsHost['console']
   loc: SegmentLoc
   facet: Facet
   /** 缺省 true：完成值即结果 */
@@ -73,8 +68,10 @@ export interface RunScriptOptions extends EvalContext {
 }
 
 export function runScript(o: RunScriptOptions): Promise<JsOutcome> {
-  // 能力位原样透传：这里只剥出 host/驱动专属的那几格，其余就是 EvalContext（不再逐字段挑一遍）
-  const { code, result, key, page, header, resultKind, resultCtx, console: hostConsole, loc, facet, scriptForm, evaluateRef, session, ...ctx } = o
+  // 能力位原样透传：这里只剥出 host/驱动专属的那几格，其余就是 EvalContext（不再逐字段挑一遍）。
+  // host 的 `resultKind` / `resultCtx` / `console` 不归这扇门——它们只在规则链上跑时由求值层
+  // 构造（`evaluate.ts` 的 `JsCall`），服务层与测试的入口没有「上一段结果」这条链。
+  const { code, result, key, page, header, loc, facet, scriptForm, evaluateRef, session, ...ctx } = o
   const host: JsHost = {
     result: result ?? '',
     baseUrl: ctx.baseUrl ?? '',
@@ -82,9 +79,6 @@ export function runScript(o: RunScriptOptions): Promise<JsOutcome> {
     ...(key === undefined ? {} : { key }),
     ...(page === undefined ? {} : { page }),
     ...(header === undefined ? {} : { header }),
-    ...(resultKind === undefined ? {} : { resultKind }),
-    ...(resultCtx === undefined ? {} : { resultCtx }),
-    ...(hostConsole === undefined ? {} : { console: hostConsole }),
   }
   return evalJs(code, host, ctx, loc, facet, evaluateRef,
     { scriptForm: scriptForm ?? true, ...(session === undefined ? {} : { session }) })
@@ -868,7 +862,7 @@ function hostCall(name, argsJson) {
   Atomics.notify(reqFlag, 0)
   const deadline = Date.now() + ${WORKER_RPC_DEADLINE_MS}
   while (Atomics.load(respFlag, 0) === 0) {
-    if (Date.now() > deadline) throw new Error('宿主调用等待超时（300s）')
+    if (Date.now() > deadline) throw new Error('宿主调用等待超时（${WORKER_RPC_DEADLINE_MS / 1000}s）')
     Atomics.wait(respFlag, 0, 0, 1000)
   }
   const len = new DataView(respSab).getInt32(0, true)

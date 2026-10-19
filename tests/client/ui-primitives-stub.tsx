@@ -1,3 +1,4 @@
+import type { SettingsFieldState, SettingsFormActions, SettingsFormState } from '@deepseek-ai/dsh-client-ui-primitives'
 import { createElement, type ReactNode } from 'react'
 
 /**
@@ -31,6 +32,18 @@ export interface StubActions {
   edit: (field: string, text: string) => void
   resetField: (field: string) => void
 }
+
+/** 替身与宿主镜像（`src/client/host-ui.d.ts`）的形状闸：三个读数形状必须与镜像**互相**可赋值。
+ *  双向才拦得住两种漂移——镜像加了成员（替身不再顶替）与替身多带成员（页面读到真容没有的东西）。
+ *  没有这道闸，「宿主契约变了这里与配置页一起红」就只是愿望：本仓不装那个包，vitest 又把它
+ *  alias 到本文件，类型层面两边原本互不相识。 */
+type Mutually<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
+const _shapeGate: [
+  Mutually<StubFieldState, SettingsFieldState>,
+  Mutually<StubFormState, SettingsFormState>,
+  Mutually<StubActions, SettingsFormActions>,
+] = [true, true, true]
+void _shapeGate
 
 export function settingsNumberField(name: string): StubField { return { name, kind: 'number' } }
 export function settingsTextField(name: string): StubField { return { name, kind: 'text' } }

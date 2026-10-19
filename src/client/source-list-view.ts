@@ -1,4 +1,5 @@
 import { filterByGroup, filterByStatus, filterSources, groupIcon } from './source-list.js'
+import { sourceInbox } from './source-inbox.js'
 import type { SourceListUi } from './source-list.js'
 import type { SourcePublic } from './views/types.js'
 
@@ -14,13 +15,14 @@ import type { SourcePublic } from './views/types.js'
  * - 'disabled' 维度是 enabled 布尔而非 status（停用与坏源正交）——沿用 source-list.ts 口径；
  * - 状态下拉**不带计数**（2026 调度台改版）：下拉只做过滤不做总览；全部读数的唯一住址是
  *   列表头**状态带**（`stats`，本 view-model 派生）——2026-09 起待办卡可被忽略，读数不能再
- *   住在那里；坏源/未验证的 id 集合归 source-inbox.ts（待办派生的唯一住址），本层不重复派生。
+ *   住在那里；坏源/未验证的 id 集合归 source-inbox.ts（待办派生的唯一住址），本层**读它的集合**
+ *   算这两维计数，不再 filter 第二遍。
  */
 
 /** 列表头状态带的五个读数：`enabled/disabled` 是 enabled 维，`unverified/broken` 是 status 维
  *  （两者正交，故不做「合计 = total」这种假约束）。口径：算全库、不看过滤，且**停用源照样
- *  计入**未验证/坏源（2026-09 裁定：停用 ≠ 免验），与待办集合同一口径——测试钉住二者相等。
- *  0 也要显示（「坏源 0」本身就是结论，且数字位忽隐忽现会让这条带子一直抖）。 */
+ *  计入**未验证/坏源（2026-09 裁定：停用 ≠ 免验）——这两维**直接读 `source-inbox.ts` 的集合**，
+ *  与待办合同一口径、由构造相等。0 也要显示（「坏源 0」本身就是结论，且数字位忽隐忽现会让这条带子一直抖）。 */
 export interface SourceStats { total: number; enabled: number; disabled: number; unverified: number; broken: number }
 
 /** 派生结果：视图渲染所需的全部纯计算值 */
@@ -54,13 +56,13 @@ export function deriveSourceListView(all: SourcePublic[], ui: SourceListUi, limi
   const groupCounts = new Map<string, number>()
   for (const s of all) for (const g of s.groups) groupCounts.set(g, (groupCounts.get(g) ?? 0) + 1)
   const ungroupedCount = all.filter((s) => s.groups.length === 0).length
-  // 状态带：单次遍历算四个计数（逐维 filter 要把 642 条源过四遍，而这里每次渲染都跑）
-  const stats: SourceStats = { total: all.length, enabled: 0, disabled: 0, unverified: 0, broken: 0 }
+  // 状态带：`enabled/disabled` 一趟算齐；`unverified/broken` **直接读待办派生**（同一份判据、
+  // 同一份集合，两张读数由构造相等——此前这里再 filter 一遍，只能靠一条测试维持两边相等）
+  const inbox = sourceInbox(all)
+  const stats: SourceStats = { total: all.length, enabled: 0, disabled: 0, unverified: inbox.unverified.length, broken: inbox.broken.length }
   for (const s of all) {
     if (s.enabled) stats.enabled += 1
     else stats.disabled += 1
-    if (s.status === 'unverified') stats.unverified += 1
-    else if (s.status === 'broken') stats.broken += 1
   }
   const legend: string[] = []
   for (const g of groupCounts.keys()) {

@@ -27,15 +27,18 @@ describe('可调参数的缺省值单点化', () => {
     expect(DEFAULT_JSON_BODY_MAX_BYTES).toBe(1024 * 1024)
   })
 
-  it('config.ts 的 schema 缺省只引常量：.default() 里不许出现数字字面量', () => {
+  it('config.ts 的字段表缺省只引常量：数值位一律 numberField(DEFAULT_*, 下界)', () => {
     const src = readFileSync(new URL('../../src/config.ts', import.meta.url), 'utf8')
     // 先剥注释：注释里出现 `.default(0)` 不是 schema 缺省，不该把守卫弄红。
     const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
-    const defaults = [...code.matchAll(/\.default\(([^)]*)\)/g)].map((m) => m[1])
-    // 六个数值位各钉一个消费模块常量作缺省：少一个就是有人把某项缺省挪走或在 schema 里写死数字
-    expect(defaults.filter((a) => /^DEFAULT_[A-Z0-9_]+$/.test(a))).toHaveLength(6)
-    // 每个 .default(...) 参数都不许掺数字字面量（值域 min/step 不是缺省，另由 config.test.ts 钉）
-    for (const arg of defaults) {
+    // 六个数值位各引一个消费模块常量作缺省：少一个就是有人把某项缺省挪走或在表里写死数字
+    const rowConstants = [...code.matchAll(/numberField\((DEFAULT_[A-Z0-9_]+),/g)].map((m) => m[1]).sort()
+    expect(rowConstants).toEqual([
+      'DEFAULT_CACHE_MAX_BYTES', 'DEFAULT_EXPORT_DELAY_MS', 'DEFAULT_JS_BUDGET_MS',
+      'DEFAULT_MAX_IMPORT_BYTES', 'DEFAULT_SEARCH_PARALLEL', 'DEFAULT_TIMEOUT_MS',
+    ])
+    // schema 的 `.default(...)` 参数（表里只剩装配那一条）不许掺数字字面量——缺省的主人各自在消费模块
+    for (const arg of [...code.matchAll(/\.default\(([^)]*)\)/g)].map((m) => m[1])) {
       expect(arg, '缺省值的主人各自在消费模块——在 schema 写回数字就是第二个主人').not.toMatch(/\d/)
     }
   })

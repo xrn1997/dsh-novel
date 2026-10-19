@@ -5,6 +5,7 @@ import { JAVA_PROTOCOL, SANDBOX_MOUNTS, invokeJavaMethod } from '../../src/engin
 import type { BridgeDeps, JavaBridge } from '../../src/engine/js-protocol.js'
 import { createSourceSession } from '../../src/engine/js-sandbox.js'
 import { JsSandboxError, UnsupportedRuleError } from '../../src/engine/errors.js'
+import { engineContextOf } from '../../src/services/bridge.js'
 import type { EngineValue, EvalContext, Facet, SegmentLoc } from '../../src/engine/types.js'
 
 const L: SegmentLoc = { segmentIndex: 0, segmentRaw: '@js:test' }
@@ -281,7 +282,6 @@ describe('async 行的能力位闸（表行 ↔ 沙箱包装 ↔ 服务层装配
     readFileSync(new URL(rel, import.meta.url), 'utf8')
   const protocolSrc = read('../../src/engine/js-protocol.ts')
   const sandboxSrc = read('../../src/engine/js-sandbox.ts')
-  const bridgeSrc = read('../../src/services/bridge.ts')
   const asyncRows = JAVA_PROTOCOL.filter((r) => r.mode === 'async').map((r) => r.name)
   const capabilityNames = [...new Set(
     [...protocolSrc.matchAll(/d\.ctx\.([a-zA-Z]+)/g)].map((m) => m[1]),
@@ -296,8 +296,12 @@ describe('async 行的能力位闸（表行 ↔ 沙箱包装 ↔ 服务层装配
 
   it('表读到的每个能力位，源级上下文装配单点都供得出（漏装配＝运行时「未接线」）', () => {
     expect(capabilityNames.length).toBeGreaterThan(0)
+    // 现造一份源级上下文来验「供得出」，而不是在 bridge.ts 全文里 grep `name:`——后者会被注释、
+    // `resolveHeaders` 乃至任何同名键满足，装配单点漏掉一格照样绿。
+    const source = { name: '探针源', baseUrl: 'https://m.example.com', rules: {}, raw: {} }
+    const ctx = engineContextOf({} as never, source as never, { baseUrl: source.baseUrl, vars: { key: 'k' } })
     for (const name of capabilityNames) {
-      expect(bridgeSrc.includes(`${name}:`), `engineContextOf 没有产出 ctx.${name}`).toBe(true)
+      expect(name in ctx, `engineContextOf 没有产出 ctx.${name}`).toBe(true)
     }
   })
 

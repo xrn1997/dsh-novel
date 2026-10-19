@@ -4,19 +4,6 @@
 /** 条目预检结果：缺失字段点名（ruleContent 对象形态含非空 content 也算合法） */
 export interface ItemCheck { index: number; name: string; missing: string[] }
 
-/** cookie 串 → 键值表（登录面板输入的解析；`a=1; b=2` 形态，无 `=` 的段跳过、不炸）。
- *  此前这段循环埋在 SourceAuthPane 的 JSX 里无人能测——拆出即测。 */
-export function parseCookieString(raw: string): Record<string, string> {
-  const cookies: Record<string, string> = {}
-  for (const seg of raw.split(';')) {
-    const t = seg.trim()
-    if (t === '') continue
-    const eq = t.indexOf('=')
-    if (eq > 0) cookies[t.slice(0, eq).trim()] = t.slice(eq + 1).trim()
-  }
-  return cookies
-}
-
 /** 导入预检：ok = 结构可解析（对象或非空数组）→ 导入按钮可用；坏条目只提示不连坐——
  *  数组里第一条坏不该挡后面好源（服务端逐条 outcome 本就独立）。 */
 export function validateSourceJson(text: string): { ok: boolean; total: number; bad: ItemCheck[] } {

@@ -44,6 +44,7 @@ export type { SearchHit, SearchGroup, ChapterEntry, BookDetail, SearchJobSnapsho
 /** 本地资源读口（含流/MIME 的 Node 内部形状）：api 层从本模块取用，不去 localbooks 抄第二处 */
 export type { LocalResource } from './localbooks.js'
 import { planarNavigation } from '../shared/wire.js'
+import { parseCookieString } from '../shared/cookies.js'
 import type {
   BookDetail, BookNavigation, ChapterContent, ExploreSources, ExploreSnapshot, LocalImportResponse, LocalImportWarning,
   SearchGroup, SearchHit, SearchPlan, SearchJobSnapshot, ChapterEntry, ShelfBook, ShelfEntry, ShelfMetaPatch, SourcePublic,
@@ -95,10 +96,19 @@ interface ExploreEntry {
 
 // ── 服务实现 ────────────────────────────────────────────────────────────
 
+/** `searchParallel` 的值域尺（唯一住址）：非正整数会让批循环 `i += n` 永不终止——挂死而非报错，
+ *  所以一律炸。装配期挡不住配置页后来的改动，故读数口每轮再过一次；一轮只取一个值，两次读之间
+ *  翻页会让 `i += n` 与 `slice(i, i + n)` 用不同步长，批次就会重叠或漏行。 */
+function requireParallelStep(n: number): number {
+  if (!Number.isInteger(n) || n < 1) throw new RangeError(`searchParallel 必须为正整数，收到 ${String(n)}`)
+  return n
+}
+
 /** 服务的直装缝：把逐字段值装成 ResolvedConfig 形状。不能调 resolveConfig——config.ts 已 import
  *  本文件的 DEFAULT_*，反向运行期依赖会成环；ResolvedConfig 只做 type-only import。
- *  `exportDelayMs` 不是服务的旋钮（HTTP 导出面自己读组合根给的值），这里给缺省只为凑齐形状；
- *  proxyUrl 同理——代理读数归 fetcher 自己的复用/关闭语义，由 createFetcherWith 单独传入。 */
+ *  `exportDelayMs` 不是服务的旋钮（HTTP 导出面自己读组合根给的值），这里给缺省只为满足读数面的形状；
+ *  proxyUrl / dataDir 不在这里出现——它们是可选格，代理读数归 fetcher 自己的复用/关闭语义
+ *  （由 createFetcherWith 单独传入），数据目录归组合根。 */
 function staticLiveConfig(parts: {
   searchTimeoutMs?: number
   searchParallel?: number
@@ -107,14 +117,12 @@ function staticLiveConfig(parts: {
   localImportMaxBytes?: number
 }): ResolvedConfig {
   return {
-    get dataDir() { return undefined },
     get searchTimeoutMs() { return parts.searchTimeoutMs ?? DEFAULT_TIMEOUT_MS },
     get searchParallel() { return parts.searchParallel ?? DEFAULT_SEARCH_PARALLEL },
     get jsTimeoutMs() { return parts.jsTimeoutMs ?? DEFAULT_JS_BUDGET_MS },
     get cacheMaxBytes() { return parts.cacheMaxBytes ?? DEFAULT_CACHE_MAX_BYTES },
     get exportDelayMs() { return DEFAULT_EXPORT_DELAY_MS },
     get localImportMaxBytes() { return parts.localImportMaxBytes ?? DEFAULT_MAX_IMPORT_BYTES },
-    get proxyUrl() { return undefined },
   }
 }
 
@@ -198,10 +206,8 @@ export class ReadingService {
     jsTimeoutMs?: number
   }): Promise<ReadingService> {
     const live = parts.config ?? staticLiveConfig(parts)
-    // searchParallel ≤ 0 → 批循环 `i += 0` 永不终止（组合根直装也必须炸，不能挂起）
-    if (!Number.isInteger(live.searchParallel) || live.searchParallel < 1) {
-      throw new RangeError(`searchParallel 必须为正整数，收到 ${String(live.searchParallel)}`)
-    }
+    // 装配期先过一遍：组合根直装的非法值要在启动时就炸，不留到第一次搜索才挂起
+    requireParallelStep(live.searchParallel)
     return new ReadingService(
       { tocMaxPages: parts.tocMaxPages ?? 200, contentMaxPages: parts.contentMaxPages ?? 50 },
       live,
@@ -322,14 +328,9 @@ export class ReadingService {
     const loginUrl = s.rules.loginUrl
     if (loginUrl === null) throw new Error(`源「${s.name}」未声明 loginUrl`)
     const v = await evaluate('@js:' + loginUrl, engineContextOf(this.fetcher, s, { baseUrl: s.baseUrl, jsTimeoutMs: this.live.jsTimeoutMs }), 'rule')
-    const text = firstValue(v, 'rule') ?? ''
-    const cookies: Record<string, string> = {}
-    for (const seg of text.split(';')) {
-      const t = seg.trim()
-      if (t === '') continue
-      const eq = t.indexOf('=')
-      if (eq > 0) cookies[t.slice(0, eq).trim()] = t.slice(eq + 1).trim()  // 无 = 的段跳过，不炸
-    }
+    // 宽松 `k=v;` 串的解析规则跨半只有一份（`shared/cookies.ts`）：登录脚本产出的串与用户在
+    // 登录面板手工粘进去的串走同一条语法，两处各写一遍就是给这条语法两个主人。
+    const cookies = parseCookieString(firstValue(v, 'rule') ?? '')
     if (Object.keys(cookies).length === 0) return null   // 空产出：不写登录态（如实 → UI 仍显示未登录）
     const auth: SourceAuth = { cookies, acquiredAt: Date.now() }
     await this.registry.edit((tx) => tx.setAuth(id, auth))
@@ -512,9 +513,10 @@ export class ReadingService {
     const sources = this.registry.list().filter((s) =>
       participates(s) && (want === undefined || want.length === 0 || want.includes(s.id)))
     const groups: SearchGroup[] = new Array(sources.length)
-    for (let i = 0; i < sources.length; i += this.live.searchParallel) {
+    const step = requireParallelStep(this.live.searchParallel)
+    for (let i = 0; i < sources.length; i += step) {
       if (opts?.shouldStop?.() === true) break
-      const batch = sources.slice(i, i + this.live.searchParallel)
+      const batch = sources.slice(i, i + step)
       await Promise.all(batch.map(async (s, j) => {
         if (opts?.shouldStop?.() === true) return         // 收手：该源不发了，结果里也就没有它
         const index = i + j

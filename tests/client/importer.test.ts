@@ -1,20 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { parseCookieString, validateSourceJson } from '../../src/client/importer.js'
+import { validateSourceJson } from '../../src/client/importer.js'
 import { clearSelection, filterByGroup, filterByStatus, filterSources, groupIcon, selectMany, setEditMode, setGroupFilter, setQuery, setStatusFilter, resetSourceListUi, sourceListUi, toggleSelect, UNGROUPED } from '../../src/client/source-list.js'
 import type { SourcePublic } from '../../src/client/views/types.js'
-
-/** 登录面板输入解析（原埋在 SourceAuthPane 的 JSX 里无人能测——拆出即测） */
-describe('parseCookieString', () => {
-  it('a=1; b=2 形态；无 = 的段与空段跳过、不炸', () => {
-    expect(parseCookieString('token=abc; sid=def')).toEqual({ token: 'abc', sid: 'def' })
-    expect(parseCookieString(' a = 1 ;; junk ;x=2 ')).toEqual({ a: '1', x: '2' })
-    expect(parseCookieString('')).toEqual({})
-    expect(parseCookieString('=nokey; ok=1')).toEqual({ ok: '1' })
-  })
-  it('值里含 = 只切第一个（cookie 值可以是 base64/URL）', () => {
-    expect(parseCookieString('t=a=b=c')).toEqual({ t: 'a=b=c' })
-  })
-})
 
 /** 导入预检：结构可解析即可导入（服务端 normalize 是权威）；条目缺失只提示不连坐。
  * 注：文件导入不经此——原文直通服务端后台任务，无客户端合并/分批逻辑。 */

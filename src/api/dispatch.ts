@@ -7,7 +7,7 @@ import { log } from '../services/log.js'
 import { formatByteLimit } from '../services/size.js'
 import { readValue, type ValueSource } from '../services/value-source.js'
 import { ApiError, isTrustedRequest, readCappedBody, readJsonBody, writeError, writeOk } from './wire.js'
-import { NOVEL_API_PREFIX, PARAMS, paramRoutes, pickShelfMeta, readBodies, ROUTES, SEG } from '../shared/wire.js'
+import { NOVEL_API_PREFIX, PARAMS, paramRoutes, readBodies, ROUTES, SEG } from '../shared/wire.js'
 import { BodyShapeError } from '../shared/wire.js'
 
 /** 「书不在架上」文案单点（此前 shelfPut 两形态逐字两份） */
@@ -391,8 +391,7 @@ async function route(
   if (a === SEG.local) {
     if (b === SEG.import) {
       guard(method, 'POST', ROUTES.localImport.path)
-      const name = url.searchParams.get(PARAMS.name)?.trim() ?? ''
-      if (name === '') throw new ApiError('缺 query 参数 name（文件名）', 400, 'BadRequest')
+      const [name] = requireQuery(url, PARAMS.name)
       const max = service.localImportMaxBytes
       // 流读与上限判据归 readCappedBody（与 JSON 信封体同一份实现），本处只给措辞
       const bytes = await readCappedBody(req, max, (m) => `文件超过 ${formatByteLimit(m)} 上限`)
@@ -441,7 +440,7 @@ async function route(
     // 注：id 在 query（DELETE /novel-api/local?id=…，测试钉死），不是路径段——b === 'id' 不匹配任何 segs
     if (b === undefined) {
       guard(method, 'DELETE', ROUTES.local.path)
-      const id = url.searchParams.get(PARAMS.id) ?? ''
+      const [id] = requireQuery(url, PARAMS.id)
       writeOk(res, await service.removeLocalBook(id))
       return
     }
@@ -456,17 +455,13 @@ function decodeSegKey(raw: string): string {
   try { return decodeURIComponent(raw) } catch { throw new ApiError('路径含非法百分号编码', 400, 'BadRequest') }
 }
 
-/** book/toc/chapter 共用：sourceId 与 url 必填校验（参数名归 wire 契约 PARAMS） */
+/** book/toc/chapter 共用：sourceId 与 url 必填（参数名归 wire 契约 PARAMS） */
 function requireSourceUrl(url: URL): { sourceId: string; url: string } {
-  const sourceId = url.searchParams.get(PARAMS.sourceId)
-  const bookUrl = url.searchParams.get(PARAMS.url)
-  if (sourceId === null || sourceId === '' || bookUrl === null || bookUrl === '') {
-    throw new ApiError(`缺 query 参数 ${PARAMS.sourceId} / ${PARAMS.url}`, 400, 'BadRequest')
-  }
+  const [sourceId, bookUrl] = requireQuery(url, PARAMS.sourceId, PARAMS.url)
   return { sourceId, url: bookUrl }
 }
 
-/** 本地读口共用：按序取必填 query 参数（缺/空串 → 400）；参数名一律来自 wire 的 PARAMS */
+/** 必填 query 参数的唯一尺与唯一措辞处：按序取、trim 后非空才算在场，缺席点名缺哪一个。 */
 function requireQuery(url: URL, ...names: string[]): string[] {
   return names.map((name) => {
     const v = url.searchParams.get(name)?.trim() ?? ''
@@ -492,39 +487,30 @@ function resourceHeaders(mediaType: string, bytes: number): Record<string, strin
   }
 }
 
-/** PUT /shelf/:key：body 带 title → 加书；带 patch → 在架书打补丁（不在架 400）；
- *  带 progress → 更新进度（不在架 400）；三者皆无 400。
- *  合并语义（null/undefined 保值）单点住在 Shelf（add=patch 语义 / update=patch 写口）——
- *  此前的「四兄弟条件展开」在这里消亡：类型校验后的缺席键直接透传，保值是 Shelf 的 interface。 */
+/** PUT /shelf/:key：body 三形态（加书 / 补丁 / 进度）各交一个门面动词。形状判据不在这里——
+ *  住 wire 的 `readBodies.shelfPut`（合并语义 null/undefined 保值单点住在 Shelf）。 */
 async function shelfPut(
   service: ReadingService, bookKey: string, req: IncomingMessage, res: ServerResponse,
 ): Promise<void> {
   const body = await readJsonBody<Record<string, unknown> | null>(req, null)
   if (body === null || typeof body !== 'object') throw new ApiError('body 需为 JSON 对象', 400, 'BadRequest')
-  // 字段判别/归一化全走 pickShelfMeta；入架/补丁/进度语义与其**值域门**都归门面动词
-  // （门住门面而不是这里：同一条判断要同时护 HTTP 面与 agent 工具面）
-  const meta = pickShelfMeta(body)
-  if (typeof meta.title === 'string' && meta.title !== '') {
-    writeOk(res, service.shelfAdd(bookKey, { ...meta, title: meta.title }))
+  // body 的**形状**判据（哪种形态、字段取值）住 wire 的 readBodies.shelfPut；这里只留「这一形态
+  // 交给哪个门面动词」——那是传输关注点（`docs/adr/0036` 第①条）。**值域门**（能不能进架、进度
+  // 取值范围）归门面动词：同一条判断要同时护 HTTP 面与 agent 工具面。
+  const want = readBodies.shelfPut(body)
+  if (want.mode === 'add') {
+    writeOk(res, service.shelfAdd(bookKey, want.meta))
     return
   }
-  if (body.patch !== undefined && typeof body.patch === 'object' && body.patch !== null) {
-    const patched = service.shelfPatch(bookKey, pickShelfMeta(body.patch as Record<string, unknown>))
+  if (want.mode === 'patch') {
+    const patched = service.shelfPatch(bookKey, want.patch)
     if (patched === null) throw new ApiError(NOT_ON_SHELF, 400, 'BadRequest')
     writeOk(res, patched)
     return
   }
-  const progress = body.progress as { chapterIndex?: unknown; offsetRatio?: unknown } | undefined
-  if (progress !== undefined && typeof progress === 'object'
-    && typeof progress.chapterIndex === 'number' && typeof progress.offsetRatio === 'number') {
-    const saved = service.shelfSaveProgress(bookKey, progress.chapterIndex, progress.offsetRatio)
-    if (saved === null) {
-      throw new ApiError(NOT_ON_SHELF, 400, 'BadRequest')
-    }
-    writeOk(res, saved)
-    return
-  }
-  throw new ApiError('body 需带 title（加书）/ patch（打补丁）/ progress:{chapterIndex,offsetRatio}（更新进度）', 400, 'BadRequest')
+  const saved = service.shelfSaveProgress(bookKey, want.chapterIndex, want.offsetRatio)
+  if (saved === null) throw new ApiError(NOT_ON_SHELF, 400, 'BadRequest')
+  writeOk(res, saved)
 }
 
 /** auth 路由两形态：runLogin（URL → manual 分流；JS → 沙箱执行）；否则 cookie 录入。

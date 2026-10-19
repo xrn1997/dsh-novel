@@ -14,4 +14,4 @@
 
 **代价**：宿主日志面会出现 logger name 与消息前缀双标识；warn 默认不进宿主 ring buffer；`outputLimitBytes` 不是 `read()` 的严格上界（单行超帽、换行与丢弃横幅不计）；分类续页的共享游标会让早页消费者拉走后页行；过程行永远不是业务真相。以上都是可观测面的取舍，不改变 `docs/adr/0018` 的结果归属。
 
-锚点：`src/services/log.ts` 的 `log` / `setLogSink`；组合根 `src/index.ts` 的双腿 adapter 与 sink 复位；`src/services/job-tail.ts` 的 `JobTail` / `DEFAULT_JOB_OUTPUT_BYTES`；`JobHostSpec` 与三类持有者 `src/services/import-job.ts` / `search-job.ts` / `explore-job.ts`；钉子 `tests/index.test.ts`、`tests/services/job-tail.test.ts`、`tests/services/{import,search,explore}-job.test.ts`、`tests/engine/unhandled-guard.test.ts`。
+锚点：`src/services/log.ts` 的 `log` / `setLogSink`；组合根 `src/index.ts` 的双腿 adapter 与 sink 复位；`src/services/job-tail.ts` 的 `JobTail` / `DEFAULT_JOB_OUTPUT_BYTES`；`JobHostSpec` 与三类持有者 `src/services/import-job.ts` / `search-job.ts` / `explore-job.ts`；钉子 `tests/index.test.ts`、`tests/services/job-tail.test.ts`、`tests/services/{import,search,explore}-job.test.ts`、`tests/engine/unhandled-guard.test.ts`。（2026-10-19 订正：`JobHostSpec` 的家现在是 `src/services/job-holder.ts`，三个持有者只挂点不各抄一份；宿主自报的 `outputLimitBytes` 也跟着实际接手的 `JobTail.maxBytes` 走，不再另报一个缺省。）

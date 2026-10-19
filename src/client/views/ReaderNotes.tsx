@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { queries } from '../../shared/wire.js'
-import type { ReaderDeps } from '../deps.js'
+import type { ClientCoreDeps } from '../deps.js'
 import { findNovelNode, centerInScroller } from '../util.js'
 import { ChapterBody } from './ChapterBody.js'
 import { ErrorBanner } from './bits.js'
@@ -40,13 +40,17 @@ function asErrorLike(e: unknown): { code?: string; message: string } {
   return { message: String(e) }
 }
 
+/** 注释面板的依赖面：读一份文档 + 失败上报。它不写进度、不观察任务，也就不该为了拿这两样
+ *  而声明整个阅读区束（宽束由 `ReaderView` 持有，传下来时自然投影成这一份）。 */
+type NotesDeps = Pick<ClientCoreDeps, 'apiGet' | 'pushError'>
+
 export function ReaderNotes({ bookKey, target, requestSeq, deps, onNavigate, onClose }: {
   bookKey: string
   /** 用户点的那条脚注（supplement 分支）：面板打开即从它开始 */
   target: SupplementTarget
   /** 外层「重新指向」的次数（每次打开都 +1）：面板按它重置内部栈，见下方 effect */
   requestSeq: number
-  deps: ReaderDeps
+  deps: NotesDeps
   /** 面板里点到主序列目标：交外层导航（面板不自己跳、不写进度）。
    *  `role` 必须透传：外层要按它决定这条跳转是「从正文链接出发」（押返回项）还是
    *  「返回链接本身」（消费掉返回项）——面板丢掉的正是这个判据。 */

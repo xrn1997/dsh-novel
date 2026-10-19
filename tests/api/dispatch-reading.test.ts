@@ -187,7 +187,7 @@ describe('reading/shelf 面', () => {
     })
   })
   // ── patch 形态：ReaderView 回写只发 totalChapters 一个字段 ──────────────────
-  it('PUT {patch:{totalChapters}} 单字段回写：其余元数据全保（shelfBody.patch → Shelf.update）', async () => {
+  it('PUT {patch:{totalChapters}} 单字段回写：其余元数据全保（bodies.shelfPatch → Shelf.update）', async () => {
     const { value: src } = await (await fetch(`${base}/novel-api/sources`)).json() as any
     const key = encodeURIComponent(`${BASE}/book/1/patch`)
     await fetch(`${base}/novel-api/shelf/${key}`, {

@@ -63,6 +63,11 @@ _Avoid_: 过滤（它不是丢弃）、降噪、二次搜索、相关性分数�
 _唯一实现_: `shared/merge-by-book.ts` 的 `mergeBooks`（形状 `MergedBook` / `MergedSource` 与上限 `SEARCH_BOOKS_CAP` 在 `shared/wire.ts`；本轮收口形状 `MergedRound` 不过 HTTP，就住 `mergeBooks` 旁边；键上的名字取首个到达源原样，不投票）
 _Avoid_: 跨源合并器（那是发现面已下线那一层的历史名字，见 `docs/adr/0028`）、同书去重（不去重，多源都在案）、作品（本仓不用这个词指存储实体）
 
+**搜索结果页派生（search view-model）**:
+「一轮命中现场 → 收口读数（条／本／家）、两条呈现轴的行身份与逐源回读」的唯一住址：判据在此，视图只接线与渲染。
+_唯一实现_: `client/search-view-model.ts`（`deriveRound` / `sumRound` / `rowId` / `rowKeys` / `rowMeta` / `bookRows` / `shelfSeats` / `newlyLandedSeats`）
+_Avoid_: 搜索结果状态（那住 `client/search-job.ts` 的观察通道）、加架账（落架现场在视图 state，本层只给架位算式）
+
 **工具面披露三件套（searched / answered / filtered）**:
 `dshnovel_search` 对「这一轮为什么给出这些」自报的三条计数：本轮跑了多少家、多少家干净答话（答了零条也算答话）、多少行因被判不相关移出默认返回。界面上同一事实由逐源轴与折叠区承接，工具面没有折叠，用数字承接——「没人答话」与「答话了但全不相关」不许折成同一种结局。
 _唯一实现_: `tools/tools.ts` 的 `dshnovel_search` 的 execute（逐家点名的 `failed` 同住这一主人；裁决与必然后果见 `docs/adr/0033`）
@@ -72,6 +77,11 @@ _Avoid_: 有命中的源数（answered 数的是「答话」，不是「有命�
 书城右区一本**已经点名的源上的书**的落点：整段简介（浮层里不夹行，卡片上才夹一行）+ 本源那两个动作（读这本 / 加入书架）+「在其他源找这本」那一次**手动**聚合搜索。源不在这层点名——浏览轴收成按源后，源在左栏第一层就点完名了（裁决见 `docs/adr/0028`）。逐源行列出是这一层的轴，**刻意不吃**搜索面的按书归并（归并只进结果页与工具面，裁决见 `docs/adr/0033`，有钉子钉着这一不下场）：「不替用户判是不是同一本书」在这一层仍是事实，搜索面则按键判同；「不替他判该用哪一家读」两层都成立。
 _唯一实现_: `client/views/CityBookSheet.tsx`（跨源那一次复用搜索面，不新造第二条跨源遍历；关键词构造同住 `client/city-view-model.ts` 的 `sheetKeyword`）
 _Avoid_: 选源（这一层不做这个动作，源已定）、详情面板（「面板」在本仓指宿主里那个全局面板，这层只是它内部的一层覆盖；也别与规则求值的那个**详情面**混为一谈——那是一条取值链路，不是一层界面）
+
+**模态契约（dialog）**:
+带遮罩那一层浮层的行为口径：Esc 退出、入场焦点落面板内第一颗未禁用钮、Tab 圈认面板内全部可聚焦件（拖放区 / 文本框也算）、关闭后焦点还给触发件、`role=dialog` 与 `aria-modal` 的标记与遮罩点空退出——五处浮层共用这一份，调用方只交标题、内容、动作行与归还对象（被否决的做法见 `docs/adr/0037`）。
+_唯一实现_: `client/views/dialog.tsx` 的 `Dialog`
+_Avoid_: 弹窗工具、焦点 hook（说「模态契约」）；也别与**阅读浮层**混称——那是阅读器里不带遮罩的角落面板，只管「此刻哪一面在场」
 
 **请求组装（request assembly）**:
 「URL 模板 + 变量 + baseUrl」到「可执行请求计划」的唯一语义解释——method 判定、body 插值、POST 默认头、charset、init 姿态全在一处。
@@ -182,7 +192,7 @@ _Avoid_: 删除、隐藏
 
 **书源待办（source inbox）**:
 书源管理 tab 的首屏任务面：全库源清单派生出「坏源 / 未验证」两集合，反常置顶成任务卡，任务收尾自动消解。只看状态、不看启停；加载失败不渲染待办（不拿未知当「全部良好」）。
-_唯一实现_: `src/client/source-inbox.ts`（派生）+ `src/client/views/SettingsSection.tsx`（渲染）
+_唯一实现_: `src/client/source-inbox.ts`（派生；列表头状态带的 未验证/坏源 两维同读这一份，不再各 filter 一遍）+ `src/client/source-inbox-ui.ts`（忽略现场与失效判据）+ `src/client/views/SettingsSection.tsx`（渲染；失效作废挂在「清单落地的那一处」= `reload`，不挂在等人记得调的 effect 上）
 _Avoid_: 舰队快照（黑话，已否决）、状态总览 chips（读数与过滤混杂，已退役）
 
 **换轮（round switch）**:
@@ -219,6 +229,11 @@ _Avoid_: 分类任务队列（是单轮槽不是队列）、新一轮（续页�
 「目录 → 存档恢复 → 逐章懒加载 → 预取 → 进度落盘」的时序持有者；DOM 测量经 `ReaderPort` 注入，视图只渲染与接线。同一时刻只允许一章在途（`inflight`），滚动风暴与目录直达只记意图（`pendingJump`），刚失败过的同一章不自动重试。
 _唯一实现_: `client/reader-session.ts`
 _Avoid_: 阅读器状态管理（视图里的 state 只是它的投影）
+
+**阅读浮层（reader surface）**:
+阅读器右上角那一层的在场判据：Aa／目录／导出／注释／导入说明**至多一角在场**（同住右上角的两面叠起来，底下那面看得见点不动）；换角时注释面板只收不消费，Esc 走「关闭」那条语义（裁决见 `docs/adr/0037`）。
+_唯一实现_: `client/reader-surfaces.ts`（`openSurface` / `closeAll` / `dismissSurface` / `maskFor`）
+_Avoid_: 浮层状态管理（视图里的 `surface` 只是它的投影）、在各 opener 里逐处抄「先关别人」；也别与**模态契约**混称——带遮罩的入架一问走 `client/views/dialog.tsx`
 
 **判到底（翻页闸）**:
 「下一页 / 下一目录页」何时停的唯一语义：next 规则按取值用途求值、结果按列表形状处理。停止判据次序与代码同序——防环 → 上限 → 零新增 → 回环；正文面另串章闸。
@@ -290,12 +305,12 @@ _Avoid_: external / noExternal 配置（那是宿主侧 bundler 的事）
 
 **配置缝（config seam）**:
 原始 cordis 配置 → 类型 / schema / 缺省 / 值域的唯一边界；缺省字面量的主人仍是各消费模块的 `DEFAULT_*` 常量。
-_唯一实现_: `config.ts` 的 `resolveConfig`（schema 为 `Config`）
+_唯一实现_: `config.ts` 的 `CONFIG_FIELDS`（一个字段一行：名字 × 类型 × 缺省 × 值域 × 是否活值）与 `resolveConfig`（schema 与读数面都从这张表派生，不再各写一份清单）
 _Avoid_: DEFAULTS / assertConfig 抄本、在装配处再写一份缺省字面量
 
 **运行参数（活配置，runtime config）**:
 可在插件页编辑、保存后立即生效的七项配置；`dataDir` 不在其中（启动期读一次）。
-_唯一实现_: `config.ts` 的 `Config` volatile 字段与 `resolveConfig` 的 getter
+_唯一实现_: `config.ts` 的 `CONFIG_FIELDS` 里标了 `volatile` 的那几行（类型面即 `VolatileConfigFieldName`——配置页的名字表由它派生）与 `resolveConfig` 的 getter
 _Avoid_: 设置（宿主设置页是另一处）、热更新（宿主 HMR 是另一件事）
 
 **插件页配置页（plugin config page）**:

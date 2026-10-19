@@ -194,7 +194,8 @@ export interface ExploreSources {
  *  **与 `SearchHit` 同字段集而三处异名（`name`/`bookUrl`/`lastChapter`）是刻意的两份语义**：
  *  这一张是浏览轴上「一家给的一条」，那一张是聚合搜索里「多家撞来的命中」——把它们并成一张，
  *  「一条命中就是一本书」与「同一本在几个源上」这两种判断就会在类型面上重新长在一起。
- *  谁该转成谁只有一个地方说得上：详情浮层那两个映射器（`client/views/CityBookSheet.tsx`）。 */
+ *  谁该转成谁有两处说得上，各管一面：浏览器半是详情浮层那两个映射器（`client/views/CityBookSheet.tsx`
+ *  的 `ownRow` / `hitRow`），Node 半是快照写侧的投影（`services/explore-job.ts` 的 `booksOf`）。 */
 export interface ExploreBook {
   name: string
   author: string | null
@@ -292,8 +293,10 @@ export interface ShelfBook {
 
 /** 书目元数据字段集（唯一主人）：9 个元数据字段的
  *  「名称 × wire 类型判别 × 归一化」只准活在这张表 + pickShelfMeta 里。
- *  消费方三面：Shelf.applyPatch（保值覆盖遍历表）、shelfBody（客户端 body 构造）、
- *  dispatch.shelfPut（未知 JSON body → 归一化字段）。加一个书目字段 = 改这张表。
+ *  消费方三面：Shelf.applyPatch（保值覆盖遍历表）、`bodies.shelfAdd` / `bodies.shelfPatch`（客户端 body
+ *  构造——只走 pick，不列字段位）、dispatch.shelfPut（未知 JSON body → 归一化字段）。
+ *  **加一个书目字段 = 改这张表**：客户端三个入架口交进来的是整条命中或一份 meta，不是逐字段的抄本，
+ *  所以新字段不会「表里有、body 里没有」。
  *  bookKey（身份）/ progress、addedAt（系统字段）不属于元数据写口，不进表；
  *  来源投影（sourceName，见 ShelfEntry）也不进——它不可 patch、不落盘。 */
 export const SHELF_META = {
@@ -648,37 +651,9 @@ export function resourceUrl(bookKey: string, resourceId: string): string {
   return `${NOVEL_API_PREFIX}/${queries.localResource({ id: bookKey, resourceId })}`
 }
 
-/**
- * `PUT shelf/:key` 的 body 构造器（三种形态）：
- * ① title 形态=加书（元数据字段带值才发——服务端 Shelf.add 已是 patch 语义，null/undefined 保值，
- *    构造器只做形状整理，不再是「防抹值」的唯一防线）；
- * ② progress 形态=更新进度（不在架 400，dispatch.shelfPut 单点判定）；
- * ③ patch 形态=对在架书打补丁（缺席键保值——ReaderView 回写 totalChapters 只发一个字段，
- *    不必再重发 sourceId+title）。
- */
-export const shelfBody = {
-  addBook: (b: {
-    sourceId: string; title: string
-    author?: string | null; coverUrl?: string | null; intro?: string | null
-    lastChapterName?: string | null; kind?: string | null; wordCount?: string | null
-    totalChapters?: number | null
-  }): { sourceId: string; title: string } & Record<string, string | number> => {
-    // 字段取舍走 pickShelfMeta 单点：null/undefined 缺席、totalChapters 客户端即归一化；
-    // sourceId/title 必填后写，保证取值恒为入参本值（pick 的运行时值无 null——断言只剥类型面的可空）
-    const meta = pickShelfMeta(b) as Record<string, string | number>
-    return { ...meta, sourceId: b.sourceId, title: b.title }
-  },
-  progress: (chapterIndex: number, offsetRatio: number): { progress: { chapterIndex: number; offsetRatio: number } } =>
-    ({ progress: { chapterIndex, offsetRatio } }),
-  /** patch 形态：字段缺省/null 一律不出现在 body（与服务端 Shelf.update 的保值语义双保险）。
-   *  取舍同走 pickShelfMeta 单点 */
-  patch: (p: ShelfMetaPatch): { patch: Record<string, string | number> } =>
-    ({ patch: pickShelfMeta(p) as Record<string, string | number> }),
-} as const
-
 // ── 写路由的 body：字段名、构造器、读口同源 ────────────────────────────
-// 此前只有 `shelfBody` 有主人：其余写路由的键名由浏览器半手写、Node 半逐一手读，改名不会有任何
-// 东西变红——而「wire 单点」这条硬约束承诺的正是 body 构造器。读口与构造器同住这里，是因为它们
+// 此前只有书架那三种形态有主人：其余写路由的键名由浏览器半手写、Node 半逐一手读，改名不会有任何
+// 东西变红——而「wire 单点」这条硬约束承诺的正是 body 构造器与读口成对。两者同住这里，是因为它们
 // 答的是同一件事（「这个 body 该长什么样」），分家就会立刻生成两份抄本。
 // 本文件被 inline 进 client bundle，故以下全部零运行时依赖（纯函数 + 本地错误类）。
 
@@ -747,6 +722,24 @@ export const bodies = {
   runLogin: (): Record<string, unknown> => ({ [BODY.runLogin]: true }),
   authCookies: (cookies: Record<string, string>, headers?: Record<string, string>): Record<string, unknown> =>
     ({ [BODY.cookies]: cookies, ...(headers === undefined ? {} : { [BODY.headers]: headers }) }),
+  /** ① title 形态=加书。**字段集只由 `SHELF_META` 决定**：这里不再逐字段列一遍可选位，
+   *  调用方把手上那条命中（`SearchHit`、浮层行）连同 `sourceId` 交进来即可——认不出的键
+   *  （`url` / `sourceName` / 浮层补的 `listed`）由 `pickShelfMeta` 整键丢，命中里没值的位缺键。
+   *  入参形状与门面动词 `shelfAdd(bookKey, meta)` 同一张表的两端；null/undefined 一律缺键
+   *  （`{...existing, ...input}` 下 `: undefined` 会抹掉已有元数据）。sourceId/title 必填后写：
+   *  pick 的运行时值无 null，断言只剥类型面的可空。 */
+  shelfAdd: (sourceId: string, meta: ShelfMetaPatch & { title: string }):
+    { sourceId: string; title: string } & Record<string, string | number> => {
+    const picked = pickShelfMeta({ ...meta, sourceId }) as Record<string, string | number>
+    return { ...picked, sourceId, title: meta.title }
+  },
+  /** ② progress 形态=更新进度（值域门与「不在架 400」都归门面动词，这里只管形状） */
+  shelfProgress: (chapterIndex: number, offsetRatio: number): Record<string, unknown> =>
+    ({ [BODY.progress]: { [BODY.chapterIndex]: chapterIndex, [BODY.offsetRatio]: offsetRatio } }),
+  /** ③ patch 形态=对在架书打补丁：字段缺省/null 一律不出现在 body（缺席键保值——ReaderView 回写
+   *  totalChapters 只发一个字段，不必再重发 sourceId+title）。取舍同走 `pickShelfMeta` 单点 */
+  shelfPatch: (p: ShelfMetaPatch): Record<string, unknown> =>
+    ({ [BODY.patch]: pickShelfMeta(p) as Record<string, string | number> }),
 } as const
 
 /** 对象位（cookie/header 表）：非对象、null、数组一律不算在场 */
@@ -756,6 +749,13 @@ function readRecordField(body: Record<string, unknown>, field: string): Record<s
   if (typeof v !== 'object' || v === null || Array.isArray(v)) bodyBad(`body 需为 { ${BODY.cookies}: Record<string,string>, ${BODY.headers}?: Record<string,string> }`)
   return v as Record<string, string>
 }
+
+/** `PUT shelf/:key` 的三种形态（一条判别式读口收一个 shape 家族——与 `auth` 同先例：三个构造器、
+ *  一个读口，判别只到形状层）。值域判据（能不能进架、进度取值范围）不在这份类型里，归门面动词。 */
+export type ShelfPutBody =
+  | { mode: 'add'; meta: ShelfMetaPatch & { title: string } }
+  | { mode: 'patch'; patch: ShelfMetaPatch }
+  | { mode: 'progress'; chapterIndex: number; offsetRatio: number }
 
 export const readBodies = {
   /** 导入任务：`{ files: [{ name, text }] }`（真实多源导出常见数 MB 级，上限归路由的读体） */
@@ -810,5 +810,27 @@ export const readBodies = {
     if (cookies === undefined) bodyBad(`body 需为 { ${BODY.cookies}: Record<string,string>, ${BODY.headers}?: Record<string,string> }`)
     const headers = readRecordField(b, BODY.headers)
     return { mode: 'cookies', cookies, ...(headers === undefined ? {} : { headers }) }
+  },
+  /** 书架 PUT 的三形态判别（顺序即优先级：title → patch → progress，与路由层的分派同序）。
+   *  「非空 title 才算加书」在这里，「能不能进架 / 进度取值范围」不在——后者是门面的值域门。 */
+  shelfPut: (body: Record<string, unknown> | null): ShelfPutBody => {
+    const b = (body ?? {}) as Record<string, unknown>
+    const meta = pickShelfMeta(b)
+    const title = meta.title
+    if (typeof title === 'string' && title !== '') {
+      return { mode: 'add', meta: { ...meta, title } as ShelfMetaPatch & { title: string } }
+    }
+    const patch = b[BODY.patch]
+    if (patch !== undefined && typeof patch === 'object' && patch !== null) {
+      return { mode: 'patch', patch: pickShelfMeta(patch as Record<string, unknown>) }
+    }
+    const progress = b[BODY.progress]
+    if (progress !== undefined && typeof progress === 'object' && progress !== null) {
+      const p = progress as Record<string, unknown>
+      if (typeof p[BODY.chapterIndex] === 'number' && typeof p[BODY.offsetRatio] === 'number') {
+        return { mode: 'progress', chapterIndex: p[BODY.chapterIndex] as number, offsetRatio: p[BODY.offsetRatio] as number }
+      }
+    }
+    return bodyBad(`body 需带 ${PARAMS.title}（加书）/ ${BODY.patch}（打补丁）/ ${BODY.progress}:{${BODY.chapterIndex},${BODY.offsetRatio}}（更新进度）`)
   },
 } as const

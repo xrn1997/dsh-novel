@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { deriveSourceListView } from '../../src/client/source-list-view.js'
-import { sourceInbox } from '../../src/client/source-inbox.js'
 import type { SourceListUi } from '../../src/client/source-list.js'
 import type { SourcePublic } from '../../src/client/views/types.js'
 
@@ -131,12 +130,5 @@ describe('deriveSourceListView：stats（状态带计数）', () => {
   it('停用 ≠ 免验：停用的坏源/未验证照样计入（与待办集合同一口径）', () => {
     const onlyOff = [src({ id: 'z', status: 'broken', enabled: false }), src({ id: 'w', status: 'unverified', enabled: false })]
     expect(deriveSourceListView(onlyOff, ui0, 100).stats).toEqual({ total: 2, enabled: 0, disabled: 2, unverified: 1, broken: 1 })
-  })
-
-  it('防漂移钉：stats.broken / stats.unverified 必须等于两张待办卡的成员数（两处各算一份迟早对不上）', () => {
-    const vm = deriveSourceListView(ALL, ui0, 100)
-    const inbox = sourceInbox(ALL)
-    expect(vm.stats.broken).toBe(inbox.broken.length)
-    expect(vm.stats.unverified).toBe(inbox.unverified.length)
   })
 })

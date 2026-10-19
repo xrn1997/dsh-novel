@@ -18,6 +18,7 @@ import { JOB_POLL_MS } from './util.js'
  * - `JobViewDeps` = 把观察通道嵌进界面的读者（搜索结果页、书籍详情浮层、书城）。
  * - `ShelfDeps` = 需要原始字节上传的读者（书架）。
  * - `SettingsDeps` / `ReaderDeps` = 各自加面（任务面 / 导出流）。
+ * - `RowActionDeps` = 行与行内浮层那一级：一发写请求 + 两句上报（壳层把宽束原样传下来即可）。
  *
  * `pushOk` 在核心束而非设置束：书架的本地上传是异步的，落地时用户可能已切走，那条成功必须有
  * 地方说（见 ShelfView 的 alive 闸）。
@@ -54,6 +55,11 @@ export interface ShelfDeps extends ClientCoreDeps {
 
 /** 三视图的生产依赖：模块级真实现的打包——视图缺省即它，接线零变化 */
 export const prodCoreDeps: ClientCoreDeps = { apiGet, apiSend, pushError, pushOk }
+
+/** **行内动作**读者的依赖面：一发写请求 + 两句上报。行与浮层里的每一条都一样只管动作，
+ *  既不读面、也不观察任务——`jobs.ts` 的 `JobStatusDeps` 是同一先例的更早一份。
+ *  宽束仍由整壳读者（`SearchView` / `CityBookSheet` / `SourceList` 的壳层）持有并原样传下来。 */
+export interface RowActionDeps extends Pick<ClientCoreDeps, 'apiSend' | 'pushOk' | 'pushError'> {}
 
 /** 观察通道的生产依赖 */
 export const prodJobWatchDeps: JobWatchDeps = { apiGet, apiSend, apiEventStream, jobPollMs: JOB_POLL_MS }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bodies, BODY, encodeQuery, LOCAL_SOURCE_ID, PARAMS, paramRoutes, pickShelfMeta, planarNavigation, queries, readBodies, ROUTES, SHELF_META, shelfBody } from '../../src/shared/wire.js'
+import { bodies, BODY, encodeQuery, LOCAL_SOURCE_ID, PARAMS, paramRoutes, pickShelfMeta, planarNavigation, queries, readBodies, ROUTES, SHELF_META } from '../../src/shared/wire.js'
 import { LOCAL_SOURCE_ID as NODE_LOCAL_SOURCE_ID } from '../../src/services/localbooks.js'
 
 /**
@@ -139,10 +139,10 @@ describe('pickShelfMeta（任意 JSON body → 合法元数据字段，判别/�
   })
 })
 
-describe('shelfBody（PUT shelf/:key 的 body 形状纪律）', () => {
-  it('addBook：null/undefined 字段一律缺键（{...existing,...input} 下 :undefined 会抹掉已有元数据）', () => {
-    const body = shelfBody.addBook({
-      sourceId: 's', title: '斗罗', author: '唐家', coverUrl: null, intro: undefined,
+describe('书架 PUT 三形态（body 形状纪律）', () => {
+  it('shelfAdd：null/undefined 字段一律缺键（{...existing,...input} 下 :undefined 会抹掉已有元数据）', () => {
+    const body = bodies.shelfAdd('s', {
+      title: '斗罗', author: '唐家', coverUrl: null, intro: undefined,
       lastChapterName: null, totalChapters: 300,
     })
     expect(body).toEqual({ sourceId: 's', title: '斗罗', author: '唐家', totalChapters: 300 })
@@ -150,16 +150,45 @@ describe('shelfBody（PUT shelf/:key 的 body 形状纪律）', () => {
     expect('intro' in body).toBe(false)
     expect('lastChapterName' in body).toBe(false)
   })
-  it('addBook：走 pickShelfMeta 同一口径——totalChapters 客户端即归一化', () => {
-    expect(shelfBody.addBook({ sourceId: 's', title: 'T', totalChapters: 12.9 }))
+  it('shelfAdd：整条命中直接进来——认得出的位全落 body，认不出的键（url 等）整键丢', () => {
+    const hit = {
+      title: '斗罗', author: '唐家', url: 'https://a/1', coverUrl: 'https://c/1', intro: '简介',
+      lastChapterName: '第 300 章', kind: '玄幻', wordCount: '120万',
+    }
+    expect(bodies.shelfAdd('s9', hit)).toEqual({
+      sourceId: 's9', title: '斗罗', author: '唐家', coverUrl: 'https://c/1', intro: '简介',
+      lastChapterName: '第 300 章', kind: '玄幻', wordCount: '120万',
+    })
+    expect('url' in bodies.shelfAdd('s9', hit)).toBe(false)
+  })
+  it('shelfAdd：走 pickShelfMeta 同一口径——totalChapters 客户端即归一化', () => {
+    expect(bodies.shelfAdd('s', { title: 'T', totalChapters: 12.9 }))
       .toEqual({ sourceId: 's', title: 'T', totalChapters: 12 })
   })
-  it('progress：只带 progress 两字段（dispatch shelfPut 的 progress 分支口径）', () => {
-    expect(shelfBody.progress(3, 0.42)).toEqual({ progress: { chapterIndex: 3, offsetRatio: 0.42 } })
+  it('progress：只带 progress 两字段（形状判据，值域门归门面）', () => {
+    expect(bodies.shelfProgress(3, 0.42)).toEqual({ progress: { chapterIndex: 3, offsetRatio: 0.42 } })
   })
   it('patch：缺省/null 字段不出现在 body（与 Shelf.update 保值语义双保险；ReaderView 回写单字段形态）', () => {
-    expect(shelfBody.patch({ totalChapters: 300 })).toEqual({ patch: { totalChapters: 300 } })
-    expect(shelfBody.patch({ author: null, coverUrl: undefined, title: 'T' })).toEqual({ patch: { title: 'T' } })
+    expect(bodies.shelfPatch({ totalChapters: 300 })).toEqual({ patch: { totalChapters: 300 } })
+    expect(bodies.shelfPatch({ author: null, coverUrl: undefined, title: 'T' })).toEqual({ patch: { title: 'T' } })
+  })
+  it('三形态各自 round-trip：构造器产的东西，判别读口按同一形态收回来', () => {
+    expect(readBodies.shelfPut(bodies.shelfAdd('s', { title: '斗罗' })))
+      .toEqual({ mode: 'add', meta: { sourceId: 's', title: '斗罗' } })
+    expect(readBodies.shelfPut(bodies.shelfProgress(3, 0.42)))
+      .toEqual({ mode: 'progress', chapterIndex: 3, offsetRatio: 0.42 })
+    expect(readBodies.shelfPut(bodies.shelfPatch({ totalChapters: 300 })))
+      .toEqual({ mode: 'patch', patch: { totalChapters: 300 } })
+  })
+  it('三形态皆无 → 点名三种出路（这句措辞的家在读口，不在路由层）', () => {
+    expect(() => readBodies.shelfPut({})).toThrow(/title（加书）.*patch（打补丁）.*progress/)
+  })
+  it('分派优先级 title → patch → progress：同 body 里 title 在场就按加书走', () => {
+    expect(readBodies.shelfPut({ title: 'T', patch: { kind: '玄幻' } })).toMatchObject({ mode: 'add' })
+  })
+  it('progress 只判形状：Infinity 照样收成 progress 形态，值域门留给门面', () => {
+    expect(readBodies.shelfPut({ progress: { chapterIndex: Infinity, offsetRatio: 0.5 } }))
+      .toMatchObject({ mode: 'progress', chapterIndex: Infinity })
   })
 })
 
@@ -173,9 +202,9 @@ describe('漂移守卫', () => {
 })
 
 describe('写路由 body：构造器与读口同源（wire 单点承诺的另一半）', () => {
-  it('body 构造器计数钉死：9 条写路由各一对，加路由必须加一对', () => {
-    expect(Object.keys(bodies)).toHaveLength(9)
-    expect(Object.keys(readBodies)).toHaveLength(8)
+  it('body 构造器计数钉死：12 个构造器对 9 条 shape（书架三形态共一条判别读口），加路由必须加一对', () => {
+    expect(Object.keys(bodies)).toHaveLength(12)
+    expect(Object.keys(readBodies)).toHaveLength(9)
   })
 
   it('每条 shape 都能 round-trip：构造器产的东西，读口原样收回来', () => {

@@ -17,9 +17,12 @@ import { CityBookSheet } from './CityBookSheet.js'
  *  把那个数抄进 JS 就会在退档时撒谎（窄档下这 8 张是四排，仍是同一枚上界，只是不叫「两排」）。 */
 const SKELETON_CARDS = 8
 
-/** 行身份：React key 与封面失败表的键**必须是同一个算式**。按书名记会让同名不同作者的两条
- *  互相拖累（一条封面坏了把另一条也降级成首字块）。 */
-const rowKey = (b: Pick<ExploreBook, 'name' | 'author'>): string => `${b.name}|${b.author ?? ''}`
+/** 行身份：React key 与封面失败表的键**必须是同一个算式**。地址优先——服务端按地址去重，
+ *  于是「同名同作者、地址不同」的两条是这一源真给出来的两行（不同版本的入口、或站点自己的重复），
+ *  只按名字记会让它们撞成同一个 key：React 丢一行，一条坏封面还把另一条也降级成首字块。
+ *  没地址的条目退到「名字对 + 行序」：一轮内累积只增不减，行序对已在场的行是稳定的。 */
+const rowKey = (b: ExploreBook, i: number): string =>
+  b.bookUrl !== null ? JSON.stringify([b.bookUrl]) : `${JSON.stringify([b.name, b.author ?? ''])}#${String(i)}`
 
 /** 头行副标题：`源名 · 分组`（分组缺席就不出现）。浏览轴收成按源后，右区头行报的是「这一屏逛的是
  *  哪个源」——源已在左栏第一层点名，这里只复述，不再摆跨源收录数（那是归并层的残影）。 */
@@ -206,9 +209,9 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
                 ? (
                   <div className="novel-city-gridwrap">
                     <div className="novel-city-grid">
-                      {books.map((b) => {
+                      {books.map((b, i) => {
                         const meta = cityMeta(b)
-                        const key = rowKey(b)
+                        const key = rowKey(b, i)
                         return (
                           <button
                             key={key}

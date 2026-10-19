@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { LOCAL_SOURCE_ID, paramRoutes, queries, ROUTES, shelfBody } from '../../shared/wire.js'
+import { LOCAL_SOURCE_ID, bodies, paramRoutes, queries, ROUTES } from '../../shared/wire.js'
 import { prodReaderDeps } from '../deps.js'
 import type { ReaderDeps } from '../deps.js'
 import { createExportRun, IDLE_EXPORT, parseRange } from '../export-run.js'
@@ -10,6 +10,8 @@ import { FONT_STEPS, LINE_HEIGHTS, MEASURES, PAPER_PRESETS } from '../prefs-ui.j
 import type { ChapterAnchor } from '../progress.js'
 import { ReaderSession } from '../reader-session.js'
 import type { ReaderPort, VisibleNode } from '../reader-session.js'
+import { closeAll, dismissSurface, maskFor, openSurface } from '../reader-surfaces.js'
+import type { ReaderSurface, SurfaceChange } from '../reader-surfaces.js'
 import { nextChapterIndex } from '../reader-load.js'
 import {
   contentOriginTop, findScrollport, portScrollHeight, portScrollTop, portViewHeight, portViewTop, setPortScrollTop,
@@ -17,6 +19,7 @@ import {
 import { paperInk, findNovelNode, novelNodes, centerInScroller, stripLeadingTitle } from '../util.js'
 import { ErrorBanner, WarningList } from './bits.js'
 import { ChapterBody } from './ChapterBody.js'
+import { Dialog } from './dialog.js'
 import { ReaderNavigation } from './ReaderNavigation.js'
 import { ReaderNotes } from './ReaderNotes.js'
 import type { SupplementTarget } from './ReaderNotes.js'
@@ -28,7 +31,7 @@ import type { BookNavigation, ChapterContent, LinkRole, LocalImportWarning, Read
  *  面板嵌在 sticky 工具栏里，而 sticky + z-index 的工具栏**自成 stacking context**——面板自己的
  *  z-index 只在工具栏内部有效。工具栏若 ≤ 遮罩，透明遮罩反压整层：面板看得见但点不了（「Aa 能
  *  弹出但点不了」）。守卫见 tests/client/reader-ctrl-z.test.ts；目录抽屉同用 panel 值
- *  （抽屉与 Aa/导出面板互斥、永不同场，遮罩由 `ctrlOpen` 与 `expOpen` 同候渲染）。 */
+ *  （哪一面带遮罩由 `reader-surfaces.maskFor` 判：只有 Aa 与导出面板要「点外面关掉它」）。 */
 export const CTRL_Z = { toolbar: 12, mask: 10, panel: 11 } as const
 
 /** 阅读控制器面板：挂 sticky 工具栏内（定位与滚动锚在工具栏上；z 序见 CTRL_Z），点遮罩关闭。
@@ -283,13 +286,13 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     fetchChapter: (s, b, i) => deps.apiGet<ChapterContent>(queries.chapter({ sourceId: s, url: b, index: i })),
     fetchShelf: () => deps.apiGet<ShelfBook[]>(ROUTES.shelf.path),
     saveProgress: (chapterIndex, offsetRatio) => {
-      void deps.apiSend('PUT', paramRoutes.shelfKey(bookKey), shelfBody.progress(chapterIndex, offsetRatio)).catch(() => undefined)
+      void deps.apiSend('PUT', paramRoutes.shelfKey(bookKey), bodies.shelfProgress(chapterIndex, offsetRatio)).catch(() => undefined)
     },
     saveTotalChapters: (total) => {
       // 幂等补数据：缺 totalChapters 才回写；patch 形态只发这一个字段——
       // 保值语义在 Shelf.update 的 interface 上，不再被迫重发 sourceId+title
       void deps.apiSend('PUT', paramRoutes.shelfKey(bookKey),
-        shelfBody.patch({ totalChapters: total })).catch(() => undefined)
+        bodies.shelfPatch({ totalChapters: total })).catch(() => undefined)
     },
     afterFrames: (cb) => { requestAnimationFrame(() => requestAnimationFrame(cb)) },
   }, readerPort, deps.saveDebounceMs), [readerPort, deps, sourceId, bookKey, title])
@@ -298,11 +301,11 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   const st = useSyncExternalStore(session.subscribe, () => session.state, () => session.state)
   const { toc, navigation, chapters, loadingIdx, error, currentChapter, returnDepth } = st
 
-  const [drawer, setDrawer] = useState(false)
-  const [ctrlOpen, setCtrlOpen] = useState(false)
-  // 导出范围面板现场（纯视图状态）：开合 + 起止章字符串（输入态保字符串，校验单点在 parseRange）。
-  // 声明在 Esc effect 之前——浮层五兄弟（ctrlOpen/drawer/expOpen/note/notesOpen）共用一条 Esc，顺序即 TDZ 边界
-  const [expOpen, setExpOpen] = useState(false)
+  /** 角落浮层：至多一角在场。互斥与退场语义的唯一住址在 `client/reader-surfaces.ts`
+   *  （**为什么**互斥也写在那边——同住右上角的两面会让底下那面看得见点不动）。
+   *  这里只持「哪一角」与注释面板的载荷；那份载荷只在当场面是注释面板时有意义。
+   *  导出范围的起止章是输入态（字符串），校验单点在 parseRange。 */
+  const [surface, setSurface] = useState<ReaderSurface | null>(null)
   const [expFrom, setExpFrom] = useState('1')
   const [expTo, setExpTo] = useState('')
   /** 注释面板现场（脚注/附录）：目标 + **开面板时压入的那条返回项**（会话给的句柄）+ 打开意图序号。
@@ -312,21 +315,23 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
    *  目标值不变，但期间用户可能已在面板里跟到别的文档）。 */
   const [note, setNote] = useState<{ target: SupplementTarget; entry: VisibleNode | null; seq: number } | null>(null)
   const noteSeqRef = useRef(0)
-  /** 打开注释面板：序号自增（面板按它重置内部栈），目标与返回项句柄一起记下 */
+  /** 换面只走这一条：判据在 `reader-surfaces`，这里负责把退场语义落成 state */
+  const applySurface = (change: SurfaceChange): void => {
+    setSurface(change.surface)
+    if (change.supplement !== 'keep') setNote(null)
+  }
+  /** 点某一角（Aa / 目录 / 导入说明 / 导出）：互斥与「同一角再点是收场」都由判据给，不在这里各抄一遍 */
+  const toggleSurface = (opening: ReaderSurface): void => { applySurface(openSurface(surface, opening)) }
+  /** 打开注释面板：序号自增（面板按它重置内部栈），目标与返回项句柄一起记下。
+   *  同一角第二次进入是**换目标**，不是收场（判据那边对 `supplement` 不吃 toggle）。 */
   const openNote = (target: SupplementTarget, entry: VisibleNode | null): void => {
     noteSeqRef.current += 1
     setNote({ target, entry, seq: noteSeqRef.current })
-  }
-  /** 只收**面板这一层浮层**，不消费返回栈条目——开另一个角落浮层（目录/Aa/导出/导入说明）时的
-   *  互斥用它，不走 `closeNote`：「我要开目录」不是对阅读位置的表态，借关闭语义收面板等于开个
-   *  抽屉把正文跳走。返回项留在栈里由「返回原处」承接（同口径见 toggleImportNotes）。 */
-  const hideNoteSurface = (): void => {
-    if (note !== null) setNote(null)
+    applySurface(openSurface(surface, 'supplement'))
   }
   /** 持久导入说明（本地书专属）与它的面板现场：null = 还没问到 / 这本书没有这份东西。
    *  入口只在**真有告警**时出现（正常无警告不新增干扰），面板只展示已取到的清单。 */
   const [importNotes, setImportNotes] = useState<LocalImportWarning[] | null>(null)
-  const [notesOpen, setNotesOpen] = useState(false)
   const drawerRef = useRef<HTMLDivElement | null>(null)
   /** 排版变化前的可见节点采点（字号/行距/栏宽变化 → 复位用） */
   const visibleRef = useRef<VisibleNode | null>(null)
@@ -337,67 +342,36 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   const [askShelf, setAskShelf] = useState(false)
   const [joinBusy, setJoinBusy] = useState(false)
   const [joinError, setJoinError] = useState<string | null>(null)
-  const askModalRef = useRef<HTMLDivElement | null>(null)
-  /** 关闭注释面板：内链打开的回到引用处（位置提交与返回栈都归会话） */
-  const closeNote = (): void => {
+  /** 收回这一问的唯一判据：写完不许被 Esc 或遮罩打断（钮已禁用，但通道还在）。共用这一处，
+   *  阅读器的那条总 Esc 与 dialog 自己的 Esc 因此不会给出两种答案。 */
+  const dismissAsk = (): void => { if (!joinBusy) setAskShelf(false) }
+  /** 收场（Esc 与面板「关闭」钮同一条路）：内链打开的回到引用处——位置提交与返回栈都归会话 */
+  const closeCurrent = (): void => {
     if (note !== null) session.closeSupplement(sourceId, note.entry)
-    setNote(null)
+    applySurface(closeAll(surface))
   }
-  // 浮层（Aa 面板 / 目录抽屉 / 导出面板 / 注释面板 / 导入说明面板）共用一条 Esc：任一在场就装监听。
-  // Esc 关闭面板与「关闭」钮同一条语义（内链打开的会回引用处）——两条入口不许分叉。
-  // 入架那一问也在这一条 Esc 里：它只**收回这一问**，不替用户决定去留（要走有那两颗钮）。
+  // 浮层共用一条 Esc：有角在场就装监听。入架那一问不在这一条里——它是带遮罩的模态，
+  // Esc 归 `views/dialog.tsx`（收回这一问的判据住 `dismissAsk`）。
   useEffect(() => {
-    if (!ctrlOpen && !drawer && !expOpen && note === null && !notesOpen && !askShelf) return
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
-      setCtrlOpen(false)
-      setDrawer(false)
-      setExpOpen(false)
-      setNotesOpen(false)
-      closeNote()
-      if (!joinBusy) setAskShelf(false)
-    }
+    if (surface === null) return
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') closeCurrent() }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ctrlOpen, drawer, expOpen, note, notesOpen, askShelf, joinBusy, session, sourceId])
-  /** 入架一问的键盘接管，与删除确认模态（`ShelfView` 的同款 effect）同一条纪律：入场焦点落在
-   *  「先不加入」，Tab 圈在框内，关闭后焦点还给触发它的「书架」钮（为什么只挡 Esc 不够，住那边的头注）。
-   *  依赖只有 `askShelf`——在场期间的重渲染不许重跑：重跑会把焦点劫回第一颗、opener 也被一并重捕获。 */
-  useEffect(() => {
-    if (!askShelf) return
-    const opener = document.activeElement
-    const focusables = (): HTMLElement[] => askModalRef.current === null ? []
-      : [...askModalRef.current.querySelectorAll<HTMLElement>('button:not([disabled])')]
-    focusables()[0]?.focus()
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Tab') return
-      const f = focusables()
-      if (f.length === 0) return
-      const first = f[0]
-      const last = f[f.length - 1]
-      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
-      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
-    }
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      if (opener instanceof HTMLElement && opener.isConnected) opener.focus()
-    }
-  }, [askShelf])
+  }, [surface, note, session, sourceId])
   /** 目录高亮：只在抽屉开着时取（一次 DOM 测量，不在滚动路径上）；只在**跨章**与换书时重算
    *  （`currentChapter` 变才醒）——同章内滚动是每帧的量，不值得为一条 aria-current 按帧唤醒。 */
   useEffect(() => {
-    if (!drawer) return
+    if (surface !== 'toc') return
     setNavActive(session.activeNavId())
-  }, [drawer, currentChapter, navigation, session])
+  }, [surface, currentChapter, navigation, session])
   /** 打开抽屉即把当前项摆到视野中间——**只滚抽屉自己**，不借 `scrollIntoView`（它连可滚祖先一起
    *  滚，会改写主阅读位置）。口径与被否决方案见 util.ts 的 `centerInScroller`。 */
   useEffect(() => {
     const drawerEl = drawerRef.current
-    if (!drawer || drawerEl === null) return
+    if (surface !== 'toc' || drawerEl === null) return
     centerInScroller(drawerEl, drawerEl.querySelector('[aria-current="true"]'))
-  }, [drawer, navActive])
+  }, [surface, navActive])
   // 范围导出：编排归 export-run.ts——start(范围)/cancel/状态三态 + 卸载 abort
   // 在那边可单测；本视图只接线：状态经 onChange 进 state，⤓ 钮开范围面板、面板确认才 start。
   // 导出失败单独一条（会话 error 归阅读链路）
@@ -407,15 +381,11 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   }), [deps, sourceId, bookKey, title])
   useEffect(() => () => exportRun.dispose(), [exportRun])   // 卸载即取消——不许孤儿抓取
   const expTotal = toc?.length ?? 0
-  /** 开面板：默认整本（1..N），并收掉互斥浮层（Aa / 目录 / 导入说明与面板永不同场） */
+  /** 开导出面板：默认整本（1..N）。互斥不在这里抄一遍——判据在 `reader-surfaces` */
   const openExport = (): void => {
-    setCtrlOpen(false)
-    setDrawer(false)
-    setNotesOpen(false)
-    hideNoteSurface()
     setExpFrom('1')
     setExpTo(String(expTotal))
-    setExpOpen(true)
+    applySurface(openSurface(surface, 'export'))
   }
 
   /** 持久导入说明：**只有本地书有这份东西**，按书取一次（`local/warnings` 刻意不随取章携带）。
@@ -435,25 +405,15 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     return () => { alive = false }
   }, [deps, sourceId, bookKey])
   const hasImportNotes = importNotes !== null && importNotes.length > 0
-  /** 导入说明面板与别的浮层互斥（同住右上角，与目录/Aa/导出同一条纪律）。脚注面板在这里
-   *  **只收面板、不消费返回项**（不调 `closeNote`）：「看一眼导入说明」是只读动作，按关闭语义走
-   *  会把主序列跳回引用处、还落一笔存档（口径同 hideNoteSurface）。 */
-  const toggleImportNotes = (): void => {
-    setCtrlOpen(false)
-    setDrawer(false)
-    setExpOpen(false)
-    hideNoteSurface()
-    setNotesOpen((open) => !open)
-  }
 
   /** 刷新滚动容器缓存（内容变化/视口变化时） */
   const refreshPort = (): void => { portRef.current = findScrollport(bodyRef.current) }
 
   /** 目标分发：主序列目标走会话跳章（含章内锚点），补充文档开注释面板。
-   *  **目录点击是纯导航**（不押返回项）——只有正文内链才建立「返回原处」。 */
+   *  **目录点击是纯导航**（不押返回项）——只有正文内链才建立「返回原处」。
+   *  目录抽屉与注释面板不同场：开面板那一步的互斥由判据收掉抽屉（抽屉里点脚注，选完就该让位）。 */
   const openTarget = (target: ReadingTarget): void => {
     if (target.kind === 'chapter') { session.requestJump(sourceId, target.index, target.anchorId); return }
-    setNotesOpen(false)                                  // 注释面板与导入说明同处一层浮层
     openNote(target, null)                               // 目录进来：没有引用处可回
   }
 
@@ -462,12 +422,13 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
    *  采点返回的那条要随面板一起记下来：关闭面板时只说「消费我打开面板时压的那条」。 */
   const bodyLink = (target: ReadingTarget, role: LinkRole): void => {
     const entry = session.followLink(sourceId, target, role)
-    if (target.kind === 'supplement') { setNotesOpen(false); openNote(target, entry) }
+    if (target.kind === 'supplement') openNote(target, entry)
   }
 
-  /** 注释面板里点到主序列：面板退场、由会话跳（返回项归那次采点，不新押一条） */
+  /** 注释面板里点到主序列：面板退场、由会话跳。这条退场**不消费返回项**（`dismissSurface` 的
+   *  `hide` 那一档）——返回项归这次跟随，会话自己采与消费，面板不许再消费一次。 */
   const panelLink = (target: ReadingTarget, role: LinkRole): void => {
-    setNote(null)
+    applySurface(dismissSurface())
     session.followLink(sourceId, target, role)
   }
 
@@ -493,7 +454,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     setJoinBusy(true)
     setJoinError(null)
     void deps.apiSend('PUT', paramRoutes.shelfKey(bookKey),
-      shelfBody.addBook({ sourceId, title, totalChapters: toc?.length ?? null })).then(
+      bodies.shelfAdd(sourceId, { title, totalChapters: toc?.length ?? null })).then(
       (): void => {
         setJoinBusy(false)
         setAskShelf(false)
@@ -579,9 +540,9 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   return (
     <div data-novel-view="reader" className="novel-rdr" style={paper}>
       {/* 偏好/导出面板遮罩：挂 reader 根容器盖满整个阅读区——只盖工具栏条时点正文关不掉面板；
-          导出面板同用（互斥浮层同一把 Esc + 同一层遮罩） */}
-      {(ctrlOpen || expOpen) && (
-        <div data-novel-ctrl-mask onClick={() => { setCtrlOpen(false); setExpOpen(false) }}
+          哪些面带遮罩由 `maskFor` 说了算（目录/注释/导入说明自带收场的钮，不借遮罩顺手关）。 */}
+      {maskFor(surface) && (
+        <div data-novel-ctrl-mask onClick={closeCurrent}
           style={{ position: 'absolute', inset: 0, zIndex: CTRL_Z.mask }} />
       )}
       {/* 控制器层——sticky：滚动容器是 .novel-main，工具栏不 sticky 会随正文一起滚走（目录/Aa 够不着）。
@@ -615,8 +576,8 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
           {/* 导入说明入口：**只在真有持久告警的本地书上出现**（没告警一个字都不多说）。
               点开是只读面板——重看入口，不重复取数、不写进度。 */}
           {hasImportNotes && (
-            <button className="novel-rdr-ctl" aria-expanded={notesOpen} aria-label="导入说明"
-              onClick={toggleImportNotes} title={`导入说明（${importNotes.length} 条）`}>导入说明</button>
+            <button className="novel-rdr-ctl" aria-expanded={surface === 'importNotes'} aria-label="导入说明"
+              onClick={() => { toggleSurface('importNotes') }} title={`导入说明（${importNotes.length} 条）`}>导入说明</button>
           )}
           <button
             className="novel-rdr-ctl"
@@ -631,8 +592,8 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
               ? <>{exportState.kb} KB · 取消导出</>
               : <><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 2.5v8m0 0L5 7.5M8 10.5l3-3M3 13h10" /></svg>下载</>}
           </button>
-          {/* 面板与 Aa 互斥：开任一先关另一（openExport / 下方 onClick 各自收口） */}
-          {expOpen && (
+          {/* 导出面板与 Aa／目录／注释／导入说明永不同场：互斥判据在 `reader-surfaces`，这里只摆当场面 */}
+          {surface === 'export' && (
             <ExportPanel
               total={expTotal}
               from={expFrom}
@@ -648,7 +609,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
                 if (!v.ok) return                                    // 校验单点：倒置/越界不发废包
                 exportRun.start({ from: v.from, to: v.to, total: expTotal })
               }}
-              onClose={() => setExpOpen(false)}
+              onClose={closeCurrent}
               running={exportState.running}
               kb={exportState.kb}
               totalChapters={exportState.total}
@@ -656,15 +617,14 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
               darkController={prefs.darkController}
             />
           )}
-          <button className="novel-rdr-ctl" aria-expanded={ctrlOpen} aria-label="阅读设置"
-            onClick={() => { setExpOpen(false); setNotesOpen(false); hideNoteSurface(); setCtrlOpen(!ctrlOpen) }}
-            title="阅读设置">Aa</button>
-          {/* 目录与 Aa/导出/注释面板互斥：工具栏已在遮罩之上（CTRL_Z），点目录不再被遮罩顺手关面板——自己关。
-              注释面板同住右上角且更宽，叠着会让目录**点不动**（命中测试打到面板头）。 */}
-          <button className="novel-rdr-ctl" aria-expanded={drawer} aria-label="目录"
-            onClick={() => { setCtrlOpen(false); setExpOpen(false); setNotesOpen(false); hideNoteSurface(); setDrawer(!drawer) }}
+          {/* 互斥、以及「再点同一颗就收场」都不在这两行抄：判据在 `reader-surfaces`。
+              工具栏已在遮罩之上（CTRL_Z），所以这些面各自的钮负责收场，不靠遮罩顺手关。 */}
+          <button className="novel-rdr-ctl" aria-expanded={surface === 'prefs'} aria-label="阅读设置"
+            onClick={() => { toggleSurface('prefs') }} title="阅读设置">Aa</button>
+          <button className="novel-rdr-ctl" aria-expanded={surface === 'toc'} aria-label="目录"
+            onClick={() => { toggleSurface('toc') }}
             title={toc === null ? '目录' : `目录（${toc.length}）`}>目录</button>
-          {ctrlOpen && <PrefsPanel />}
+          {surface === 'prefs' && <PrefsPanel />}
         </div>
         {/* 章进度：跨章才动（会话只在 chapterIndex 变化时写 currentChapter）。章内百分比刻意不做——
             那是每帧量，会让整棵阅读器每帧重渲染。值槽在轨道本体上，实心那一档由样式层的 ::after 读它。 */}
@@ -679,23 +639,20 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
           else setExportState(IDLE_EXPORT)
         }} />
       )}
-      {/* 离开前那一问（口径见 exitToShelf）：共用删除确认那一套模态（遮罩 + 居中框 + 动作行 + Tab 圈内、
-          关后还焦——见上面那条同款 effect）。
+      {/* 离开前那一问（口径见 exitToShelf）：共用模态契约（遮罩 + 居中框 + 动作行 + Tab 圈内、
+          关后还焦——见 `views/dialog.tsx`）。
           「先不加入」是**离开**（用户本来就要走，问过了就不再造第二次），按钮措辞各自说清自己那件事。 */}
       {askShelf && (
-        <div className="novel-modal-mask" onClick={(e) => { if (e.target === e.currentTarget && !joinBusy) setAskShelf(false) }}>
-          <div ref={askModalRef} className="novel-modal" role="dialog" aria-modal="true" aria-labelledby="novel-rdr-add-title">
-            <div className="novel-modal-title" id="novel-rdr-add-title">这本书还没加入书架，加入吗？</div>
-            <div className="novel-modal-body">加入才会保存阅读进度；不加入，这一屏读到哪儿就不留。</div>
-            {joinError === null ? null : <div className="novel-err novel-note-sm">加入书架失败：{joinError}</div>}
-            <div className="novel-modal-actions">
-              <button className="novel-btn sm" onClick={() => navigate({ name: 'shelf' })} disabled={joinBusy}>先不加入</button>
-              <button className="novel-btn sm primary" onClick={joinAndBack} disabled={joinBusy}>
-                {joinBusy ? '加入中…' : '加入书架并返回'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <Dialog title="这本书还没加入书架，加入吗？" onClose={dismissAsk}
+          actions={<>
+            <button className="novel-btn sm" onClick={() => navigate({ name: 'shelf' })} disabled={joinBusy}>先不加入</button>
+            <button className="novel-btn sm primary" onClick={joinAndBack} disabled={joinBusy}>
+              {joinBusy ? '加入中…' : '加入书架并返回'}
+            </button>
+          </>}>
+          <div className="novel-modal-body">加入才会保存阅读进度；不加入，这一屏读到哪儿就不留。</div>
+          {joinError === null ? null : <div className="novel-err novel-note-sm">加入书架失败：{joinError}</div>}
+        </Dialog>
       )}
       {/* 阅读区（full-bleed：纸铺满这一层）：正文列 + 0 宽 sticky 抽屉槽同在此行。
           纸色走值槽（.novel-rdr 根上行内写、样式层读），条与正文因此读的是同一张纸。
@@ -737,30 +694,30 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
         </div>
         {/* 抽屉：0 宽 sticky 槽 + absolute 本体（锚视口、且不切走正文宽度；三版死法见样式层注释）。
             内容 = 目录树（分组标题不可点；同一章可以有多条锚点条目）。 */}
-        {drawer && (
+        {surface === 'toc' && (
           <div className="novel-drawer-slot">
             <div ref={drawerRef} className="novel-drawer" role="dialog" aria-label="目录">
               <ReaderNavigation
                 items={navigation ?? []}
                 activeId={navActive}
-                onNavigate={(target) => { setDrawer(false); openTarget(target) }}
+                onNavigate={(target) => { applySurface(closeAll(surface)); openTarget(target) }}
               />
             </div>
           </div>
         )}
         {/* 导入说明面板（本地书持久告警）：与注释面板同几何、同 z、互斥——只读，不写任何进度 */}
-        {notesOpen && hasImportNotes && (
-          <ImportNotesPanel warnings={importNotes} onClose={() => setNotesOpen(false)} />
+        {surface === 'importNotes' && hasImportNotes && (
+          <ImportNotesPanel warnings={importNotes} onClose={closeCurrent} />
         )}
         {/* 注释面板（脚注/附录）：面板是浮层，主阅读位置不受它影响；内链打开的关闭即回引用处 */}
-        {note !== null && (
+        {surface === 'supplement' && note !== null && (
           <ReaderNotes
             bookKey={bookKey}
             target={note.target}
             requestSeq={note.seq}
             deps={deps}
             onNavigate={panelLink}
-            onClose={closeNote}
+            onClose={closeCurrent}
           />
         )}
       </div>

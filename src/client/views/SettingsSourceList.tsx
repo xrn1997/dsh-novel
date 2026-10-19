@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react'
 import { Fragment, useEffect, useRef, useState } from 'react'
-import { parseCookieString } from '../importer.js'
+import { parseCookieString } from '../../shared/cookies.js'
 import { bodies, paramRoutes, ROUTES } from '../../shared/wire.js'
 import { prodDeps } from '../deps.js'
-import type { SettingsDeps } from '../deps.js'
+import type { RowActionDeps, SettingsDeps } from '../deps.js'
 import { startSourceVerification } from '../jobs.js'
 import { clearSelection, groupIcon, selectMany, setEditMode, setGroupFilter, setQuery, setStatusFilter, sourceListUi, toggleSelect, UNGROUPED } from '../source-list.js'
 import type { StatusFilter } from '../source-list.js'
@@ -13,6 +13,7 @@ import { useStore } from '../store.js'
 import { useTransientFlag } from '../transient.js'
 import { rowAnchorOf, toggleFeedback } from '../toggle-feedback.js'
 import { jobPct, RunCard, StatusBadge } from './bits.js'
+import { Dialog } from './dialog.js'
 import type { JobState, SourcePublic } from './types.js'
 
 /**
@@ -31,6 +32,11 @@ import type { JobState, SourcePublic } from './types.js'
  */
 
 const PAGE_SIZE = 100
+
+/** 源列表壳层与行的依赖面：行内写口三件套 + 提交一轮验证（验证的编排归 `jobs.ts` 的
+ *  `startSourceVerification`，这里只多要那一格提交口，不整束照抄 `SettingsDeps`——任务读面
+ *  由常驻状态层持有，本层连 `fetchJobStatus` 都不该声明）。壳层收到的整束结构上满足这一份。 */
+type SourceListDeps = RowActionDeps & Pick<SettingsDeps, 'startBatchProbeJob'>
 /** 状态下拉：五维单选（'disabled' 维是 enabled 布尔，与 status 正交——口径归 source-list.ts）。
  *  不带计数：全库读数唯一住址是列表头**状态带**（`source-list-view.ts` 的 `stats`），下拉只过滤。 */
 const STATUS_OPTIONS: Array<{ key: StatusFilter; label: string }> = [
@@ -49,7 +55,7 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
   /** 上层取数失败信息：有错时既不渲染空态也不渲染表格——失败由壳层红字统一说一遍（三态见下方表体注释） */
   loadError?: string | null
   /** 依赖束：缺省生产实现；测试注入假 adapter 驱动接线层 */
-  deps?: SettingsDeps
+  deps?: SourceListDeps
 }): ReactNode {
   const ui = useStore(sourceListUi)
   const [limit, setLimit] = useState(PAGE_SIZE)
@@ -206,17 +212,29 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
           </div>
         )}
 
-        {/* 删除二次确认（统一模态口径，2026 改版）：ids 点击时快照 → 模态点名后果 → 确认提交 */}
-        {pending === null ? null : (
-          <DeleteModal
-            title={pending.title}
-            opener={pending.opener}
-            authCount={authCountOf(pending.ids)}
-            busy={delBusy}
-            onConfirm={confirmDelete}
-            onCancel={() => setPending(null)}
-          />
-        )}
+        {/* 删除二次确认（统一模态口径，2026 改版）：ids 点击时快照 → 模态点名后果 → 确认提交。
+            危险性由文案与确认动作表达，不设「危险区」专区（用户裁定）。
+            焦点闭环与 Esc 归 `views/dialog.tsx`；opener 仍由这里显式传——⋯ 菜单项在模态挂载前已随
+            菜单卸载，那一刻读 `document.activeElement` 只会读到 body。 */}
+        {pending === null ? null : (() => {
+          const authCount = authCountOf(pending.ids)
+          const cancel = (): void => { setPending(null) }
+          return (
+            <Dialog title={pending.title} opener={pending.opener} onClose={cancel}
+              actions={<>
+                <button className="novel-btn sm" onClick={cancel} disabled={delBusy}>取消</button>
+                <button className="novel-btn sm danger solid" onClick={confirmDelete} disabled={delBusy}>确认删除</button>
+              </>}>
+              <div className="novel-modal-body">
+                {authCount > 0 && (
+                  <div className="novel-modal-warn">其中 {authCount} 个带登录态，删除后 cookie 失效，需重新录入登录。</div>
+                )}
+                删除不可恢复。只是暂时不想用？行内启停开关停用即可（停用 ≠ 删除，随时可开回）。
+                {delBusy ? <div className="novel-modal-body">删除中…</div> : null}
+              </div>
+            </Dialog>
+          )
+        })()}
 
         {/* 表体三态：0 源 → 空态引导（它指的「＋ 导入书源」就在上面的表头里——曾整块 early-return
             把表头一起跳过 = 提示指向不存在的控件）；取数失败 → 这里不出声，壳层红字更全（同一
@@ -266,59 +284,6 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
   )
 }
 
-/** 删除二次确认模态（与书架删书同款口径）：点名后果 + 危险色确认钮 + 焦点闭环
- *  （入场焦点在取消、Tab 圈在框内、关闭后焦点还给触发件）+ Esc / 点遮罩取消 + 在途禁双击。
- *  危险性由文案与确认动作表达，不设「危险区」专区（用户裁定）。
- *  焦点 effect **挂载作用域**（空依赖 + 回调走 ref）：轮询每秒重渲染父层，闭包进依赖数组会
- *  每秒把焦点劫回「取消」、opener 被重捕获成模态内按钮（修过的真缺陷；回归钉在
- *  source-list-batch「重渲染不扰焦点」）。opener 由调用方显式传入——⋯ 菜单项在模态挂载前
- *  已随菜单卸载，挂载时读 `document.activeElement` 只会读到 body。 */
-function DeleteModal({ title, opener, authCount, busy, onConfirm, onCancel }: {
-  title: string; opener: HTMLElement | null; authCount: number; busy: boolean; onConfirm: () => void; onCancel: () => void
-}): ReactNode {
-  const modalRef = useRef<HTMLDivElement | null>(null)
-  const onCancelRef = useRef(onCancel)
-  onCancelRef.current = onCancel                     // 每 render 刷新 ref：effect 内永远调到最新闭包
-  useEffect(() => {
-    const focusables = (): HTMLElement[] => modalRef.current === null ? []
-      : [...modalRef.current.querySelectorAll<HTMLElement>('button:not([disabled])')]
-    focusables()[0]?.focus()
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') { onCancelRef.current(); return }
-      if (e.key !== 'Tab') return
-      const f = focusables()
-      if (f.length === 0) return
-      const first = f[0]
-      const last = f[f.length - 1]
-      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
-      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
-    }
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      if (opener !== null && opener.isConnected) opener.focus()
-    }
-  }, [])   // 挂载一次：焦点闭环的三个动作都在模态生命周期边界上发生（口径见上方注释）
-  return (
-    <div className="novel-modal-mask" onClick={(e) => { if (e.target === e.currentTarget) onCancel() }}>
-      <div ref={modalRef} className="novel-modal" role="dialog" aria-modal="true" aria-labelledby="novel-src-del-title">
-        <div className="novel-modal-title" id="novel-src-del-title">{title}</div>
-        <div className="novel-modal-body">
-          {authCount > 0 && (
-            <div className="novel-modal-warn">其中 {authCount} 个带登录态，删除后 cookie 失效，需重新录入登录。</div>
-          )}
-          删除不可恢复。只是暂时不想用？行内启停开关停用即可（停用 ≠ 删除，随时可开回）。
-          {busy ? <div className="novel-modal-body">删除中…</div> : null}
-        </div>
-        <div className="novel-modal-actions">
-          <button className="novel-btn sm" onClick={onCancel} disabled={busy}>取消</button>
-          <button className="novel-btn sm danger solid" onClick={onConfirm} disabled={busy}>确认删除</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 /** 「⋯」菜单的固定项数（登录态… / 试跑 trace / 删除）——**加减菜单项改这里**。
  *  空间预算按它推导（见下），测试钉「渲染出的 menuitem 数 = 此数」（source-list-batch 的项数守卫）：
  *  加一项而没改这个数会当场红，不会让翻转预算静默过期、末行菜单再被滚动口裁掉。 */
@@ -337,7 +302,7 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
   onChanged: () => void; onProbe: (id: string) => void
   onToggleEnabled: (s: SourcePublic, next: boolean) => Promise<boolean>
   onDelete: (s: SourcePublic, opener: HTMLElement | null) => void
-  deps?: SettingsDeps
+  deps?: SourceListDeps
 }): ReactNode {
   const [authOpen, setAuthOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -468,7 +433,7 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
 /** 登录配置：cookie 录入（输入值不进 store，直接 POST）+ 去登录。
  *  反馈全走全局状态条——成功条自动退场。 */
 function SourceAuthPane({ source, onDone, deps = prodDeps }: {
-  source: SourcePublic; onDone: () => void; deps?: SettingsDeps
+  source: SourcePublic; onDone: () => void; deps?: RowActionDeps
 }): ReactNode {
   const [cookie, setCookie] = useState('')
   /** 「去登录」按源是否有登录脚本分岔（`hasLoginUrl` 是服务端投影的事实，不在客户端猜分支）：

@@ -58,6 +58,12 @@
       window.__novelPlugin = mod.factory(function (name) {
         if (name === 'react') return React;
         if (name === 'react/jsx-runtime') return { jsx: makeElement, jsxs: makeElement, Fragment: React.Fragment };
+        // 宿主表单原语：本壳**没有** configForms 这一能力（下面 ctx.inject 从不回调），
+        // 但 bundle 顶层仍会 `require` 这个 specifier（config-page 是 bundle 的一部分），
+        // 所以模块表必须答得出它——答一个空对象，配置页的在场判据（成员是不是函数）自然不成立。
+        // 「旧宿主只是没有配置页」那条降级路正是这里在演；表单本身的语义另有两台：
+        // tests/client/ui-primitives-stub.tsx（接线）与 tests/browser/config-page-layout.test.tsx（几何）。
+        if (name === '@deepseek-ai/dsh-client-ui-primitives') return {};
         throw new Error('壳的模块表里没有：' + name);
       });
     },
@@ -69,6 +75,9 @@
   var registered = [];
   window.__novelPlugin.apply({
     effect: function (fn) { return fn(); },
+    // 可选能力注入：本壳不提供 configForms ⇒ 回调一次都不执行（浏览器半因此不挂插件页配置表单，
+    // 与真旧宿主同形）。槽位注入仍是「立即求值」，与上面 slots.inject 一致。
+    inject: function (_names, _fn) { return function () {}; },
     slots: {
       inject: function (_name, fn) { return fn(); },
       register: function (options, component) { registered.push({ options: options, component: component }); return function () {}; },

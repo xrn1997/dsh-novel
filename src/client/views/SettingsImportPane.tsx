@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { validateSourceJson } from '../importer.js'
 import type { ItemCheck } from '../importer.js'
 import { JOB_ISSUE_LABEL } from '../jobs.js'
@@ -12,7 +12,7 @@ import type { JobState } from './types.js'
 /**
  * 导入现场（书源管理 tab 的导入弹层内容，2026 调度台 IA）：拖放主入口 + 三态（空闲/运行/完成汇总）+ 粘贴小道。
  * 职责：只持「导入现场」——job 经 props 注入；import 任务的客户端缓存兜底（getLastImportJob）
- * 留在 jobs.ts 单点。改版口径：导入是低频任务，收纳进弹层（壳层 ImportModal）；提交成功后
+ * 留在 jobs.ts 单点。改版口径：导入是低频任务，收纳进弹层（壳层 `Dialog` 的 wide 档）；提交成功后
  * 经 onSubmitted 关弹层，任务在服务端跑，**完成事项回流待办收件箱**（新导入 → 待验证卡），
  * 不留在原地——闭环。运行卡/完成汇总在弹层内呈现（重开弹层可回看；任务进度同时走全局状态条）。
  */
@@ -20,12 +20,16 @@ import type { JobState } from './types.js'
 /** 粘贴超此值提示改用文件导入（不阻止） */
 const BIG_PASTE_BYTES = 200 * 1024
 
+/** 导入弹层的依赖面：提交一次导入任务 + 读最近一次导入回执 + 失败上报。
+ *  任务读面（`job` / `refresh`）由壳层从常驻镜像传下来，这里不再持一条轮询口。 */
+type ImportPaneDeps = Pick<SettingsDeps, 'startImportJob' | 'lastImportJob' | 'pushError'>
+
 export function ImportPane({ job, refresh, unverifiedCount, onVerifyUnverified, onSubmitted, deps = prodDeps }: {
   job: JobState | null; refresh: () => void; unverifiedCount: number; onVerifyUnverified: () => void
   /** 提交成功回调：弹层语境 = 关闭弹层（任务在服务端继续，结果经待办收件箱回流） */
   onSubmitted?: () => void
   /** 依赖束：缺省生产实现；测试注入假 adapter */
-  deps?: SettingsDeps
+  deps?: ImportPaneDeps
 }): ReactNode {
   const fileRef = useRef<HTMLInputElement | null>(null)
   const pasteRef = useRef<HTMLTextAreaElement | null>(null)

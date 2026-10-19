@@ -249,18 +249,23 @@ describe('CityView', () => {
     expect(screen.getByText('剑起长安')).toBeTruthy()              // 撤的是骨架，不是内容
   })
 
-  it('封面失败的键按行身份（书名 + 作者）：同名不同作者的两条不互相拖累', async () => {
+  it('封面失败的键按行身份（地址优先）：同名同作者而地址不同的两条不互相拖累，也不撞 React key', async () => {
     current = {
       ...snap,
       books: [
         { name: '剑起长安', author: '甲', bookUrl: 'https://a/broken', coverUrl: 'https://a/broken' },
         { name: '剑起长安', author: '乙', bookUrl: 'https://a/ok', coverUrl: 'https://a/ok' },
+        // 服务端按**地址**去重，所以这一对是真给得出来的形状：名字一模一样、入口是两个。
+        // 只按名字记 key 会让它们撞车——React 直接丢一行，坏封面还顺带降级另一条。
+        { name: '同名同作者', author: '同一人', bookUrl: 'https://a/x1', coverUrl: 'https://a/x1' },
+        { name: '同名同作者', author: '同一人', bookUrl: 'https://a/x2', coverUrl: 'https://a/x2' },
       ],
     }
     const { container } = render(<CityView deps={depsOf()} />)
-    await waitFor(() => { expect(container.querySelectorAll('img.novel-city-cover')).toHaveLength(2) })
+    await waitFor(() => { expect(container.querySelectorAll('img.novel-city-cover')).toHaveLength(4) })
     fireEvent.error(container.querySelectorAll('img.novel-city-cover')[0])
-    await waitFor(() => { expect(container.querySelectorAll('img.novel-city-cover')).toHaveLength(1) })
+    await waitFor(() => { expect(container.querySelectorAll('img.novel-city-cover')).toHaveLength(3) })
+    expect(container.querySelectorAll('.novel-city-cover:not(img)')).toHaveLength(1)   // 只有那一条降级成首字块
   })
 
   it('换轮即清空封面失败表：新一轮里那张图要重来（不该一次坏封面永久降级）', async () => {

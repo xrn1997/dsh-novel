@@ -79,7 +79,7 @@ export class HostTie {
     host.start({
       kind: opts.kind,
       label: opts.label,
-      outputLimitBytes: DEFAULT_JOB_OUTPUT_BYTES,
+      outputLimitBytes: tie.tail.maxBytes,
       run: () => ({
         cancel: (reason): void => {
           tie.requested = true

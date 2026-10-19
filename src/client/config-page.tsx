@@ -9,6 +9,7 @@ import {
   type SettingsFormActions,
   type SettingsFormState,
 } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { VolatileConfigFieldName } from '../config.js'
 import { NovelStyles } from './styles.js'
 
 /**
@@ -37,9 +38,9 @@ import { NovelStyles } from './styles.js'
 const ENTRY_ID = 'dsh-novel'
 const BUNDLE_NAME = '@xrn1997/dsh-novel'
 
-type FieldName =
-  | 'searchTimeoutMs' | 'searchParallel' | 'jsTimeoutMs'
-  | 'cacheMaxBytes' | 'exportDelayMs' | 'localImportMaxBytes' | 'proxyUrl'
+/** 可编辑字段的名字表由配置缝给（type-only import，运行时擦除、不过纯度门）：这里只写读者要看的
+ *  文案与单位，名字与值域不归本文件管——`FIELDS` 是 `Record<FieldName, …>`，少一行就编译不过。 */
+type FieldName = VolatileConfigFieldName
 
 /** 换算口径决定这一行长什么样，故与字段清单同处一表。 */
 type Kind = 'ms' | 'bytes' | 'count' | 'text'
@@ -124,15 +125,8 @@ const LABELS = {
  *  文案与禁用态由宿主的 `SettingsForm` 按这些键驱动，本仓不再抄一份同形类型。 */
 type FieldState = SettingsFieldState
 
-interface NovelConfigState extends SettingsFormState {
-  searchTimeoutMs: FieldState
-  searchParallel: FieldState
-  jsTimeoutMs: FieldState
-  cacheMaxBytes: FieldState
-  exportDelayMs: FieldState
-  localImportMaxBytes: FieldState
-  proxyUrl: FieldState
-}
+/** 页面读数面 = 宿主壳层状态 + 每个可编辑字段的宿主字段状态（键由 `FieldName` 钉，不再逐格抄名）。 */
+type NovelConfigState = SettingsFormState & Record<FieldName, FieldState>
 
 /** 一位小数足够分辨档位，多一位就是假精度；整数不带小数点（200 MB 不写成 200.0 MB）。 */
 function scale(n: number): string {
@@ -305,29 +299,18 @@ export function registerConfigPage(ctx: Context): void {
     typeof settingsTextField !== 'function'
   ) return
 
-  // 字段声明与宿主的写协议同源：同一组名字既是表单模型的动作键，也是 mutate 的 path。
-  // 建在这里而不是模块顶层：字段工厂是宿主运行时能力，确认在场之前不得触碰。
-  const fields = [
-    settingsNumberField('searchTimeoutMs'),
-    settingsNumberField('searchParallel'),
-    settingsNumberField('jsTimeoutMs'),
-    settingsNumberField('cacheMaxBytes'),
-    settingsNumberField('exportDelayMs'),
-    settingsNumberField('localImportMaxBytes'),
-    settingsTextField('proxyUrl'),
-  ]
+  // 字段声明与宿主的写协议同源：名字只有一份——`FIELDS` 的键（类型由配置缝的活值字段钉死，
+  // 加一格漏一行就编译不过）。建在这里而不是模块顶层：字段工厂是宿主运行时能力，确认在场之前不得触碰。
+  const names = Object.keys(FIELDS) as FieldName[]
+  const fields = names.map((name) => (FIELDS[name].kind === 'text' ? settingsTextField(name) : settingsNumberField(name)))
 
   const model = new SettingsFormModel(forms.get(ENTRY_ID), fields)
-  const store = model.bind(() => ({
+  // `Object.fromEntries` 只给出索引签名，故这里断言回读数面：键集与 NovelConfigState 的一致性由
+  // `FIELDS: Record<FieldName, FieldSpec>` 把住（少一行 FIELDS 就编译不过），不是手工保证
+  const store = model.bind((): NovelConfigState => ({
     ...model.shell(),
-    searchTimeoutMs: model.field('searchTimeoutMs'),
-    searchParallel: model.field('searchParallel'),
-    jsTimeoutMs: model.field('jsTimeoutMs'),
-    cacheMaxBytes: model.field('cacheMaxBytes'),
-    exportDelayMs: model.field('exportDelayMs'),
-    localImportMaxBytes: model.field('localImportMaxBytes'),
-    proxyUrl: model.field('proxyUrl'),
-  }))
+    ...Object.fromEntries(names.map((name) => [name, model.field(name)])),
+  } as NovelConfigState))
   const actions = model.actions()
   // 页面只认「快照 + 订阅」这一份契约（useSyncExternalStore），不依赖宿主槽位未公开的 hooks 约定。
   const subscribe = (listener: () => void) => store.subscribe(listener)

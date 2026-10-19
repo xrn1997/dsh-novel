@@ -1219,6 +1219,24 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
     expect(document.querySelector('[data-novel-todo="broken"]')).not.toBeNull()
   })
 
+  it('忽略过的那批整批消失后再回来，提示照旧出现：失效记录跟着取数落动作废，不替用户记住他没做过的「已看过」', async () => {
+    // 病史这一族的形状：忽略按**成员签名**记账，签名一模一样就遮。删光坏源 → 再导入同一批 id
+    // → 签名复现，若失效记录还活着，这张卡会被一次用户从未做过的动作吞掉。
+    // 作废挂在「清单落地的那一处」（SettingsSection 的 reload），不是挂在 effect 上等人记得调。
+    const { unmount } = render(createElement(SettingsSection, { deps: settingsDeps({}, [brokenSrc]) }))
+    await screen.findByText('批量重验')
+    fireEvent.click(screen.getByLabelText('忽略 坏源 提示'))
+    expect(document.querySelector('[data-novel-todo="broken"]')).toBeNull()
+    unmount()
+
+    render(createElement(SettingsSection, { deps: settingsDeps({}, []) }))    // 这批坏源都没了
+    await waitFor(() => expect(document.querySelector('[data-novel-source-list]')).not.toBeNull())
+    unmount()
+
+    render(createElement(SettingsSection, { deps: settingsDeps({}, [brokenSrc]) }))   // 又导入同一批
+    await waitFor(() => expect(document.querySelector('[data-novel-todo="broken"]')).not.toBeNull())
+  })
+
   it('列表头状态带：五个读数按全库算，非 0 的 未验证/坏源 带语义色类', async () => {
     const deps = settingsDeps({}, [unverifiedSrc, brokenSrc, { ...unverifiedSrc, id: 'u2', name: '未验源二', enabled: false }])
     const { container } = render(createElement(SettingsSection, { deps }))
@@ -1387,7 +1405,7 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
   })
 
   it('导入弹层焦点不被壳层重渲染劫持（useJobPolling 1s 轮询 tick → 新 onClose 闭包；mount-scoped 口径）', async () => {
-    // 病史（当时是真回归）：ImportModal 的焦点 effect 依赖 [onClose]，而 onClose 是壳层每 render
+    // 病史（当时是真回归）：当时的导入弹层（现 `Dialog`）焦点 effect 依赖 [onClose]，而 onClose 是壳层每 render
     // 新造的内联箭头 → 轮询每秒重渲染 → effect 重跑 → 焦点每秒被劫回「关闭」钮。挂载作用域化后
     // 焦点必须原地不动。
     const deps = settingsDeps()
@@ -1450,26 +1468,21 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
-  // 键盘接管与删除确认模态同一条纪律（ShelfView）：只挡 Esc 不够——Tab 一路走下去就走到遮罩
-  // 背后的阅读器（对话框还挂着、人已出去）。入场焦点落「先不加入」，关后焦点还给触发件。
-  it('入架一问的键盘接管：入场焦点在「先不加入」，Tab 圈在框内，关闭后焦点还给「书架」钮', async () => {
+  // 键盘接管的机械（Esc、Tab 圈、入场焦点、还焦）归模态契约，钉子住在 `tests/client/dialog.test.tsx`；
+  // 这里只钉这一处浮层的两个现场事实：入场焦点落「安全的那一颗」、关后还焦给触发它的那颗「书架」钮。
+  it('入架一问：入场焦点在「先不加入」，关闭后焦点还给「书架」钮', async () => {
     const deps = readerDeps()
     const { container } = render(reader(deps))
     await waitFor(() => expect(container.querySelector('[data-chapter="0"]')).not.toBeNull())
     const shelfBtn = screen.getByRole('button', { name: '书架' })
     shelfBtn.focus()                                   // jsdom 的 click 不聚焦（真实浏览器会）——先显式聚焦
     fireEvent.click(shelfBtn)
-    const dialog = await screen.findByRole('dialog')
+    await screen.findByRole('dialog')
     const skip = screen.getByRole('button', { name: '先不加入' })
     const join = screen.getByRole('button', { name: /加入书架并返回/ })
     expect(document.activeElement).toBe(skip)          // 入场焦点 = 安全的那一颗
     join.focus()
-    fireEvent.keyDown(document, { key: 'Tab' })        // 末颗前进 → 圈回第一颗
-    expect(document.activeElement).toBe(skip)
-    expect(dialog.contains(document.activeElement)).toBe(true)
-    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true })   // 第一颗后退 → 圈到最后
-    expect(document.activeElement).toBe(join)
-    fireEvent.keyDown(document, { key: 'Escape' })     // Esc 归浮层共用那条：收回这一问
+    fireEvent.keyDown(document, { key: 'Escape' })     // Esc 归模态契约：收回这一问
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(document.activeElement).toBe(shelfBtn)      // 关后还焦给触发件
   })
@@ -1728,7 +1741,7 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
 
   it('导入说明与脚注面板互斥：只收脚注面板、不消费返回项、不写主进度', async () => {
     // 两块面板同住右上角（同一套 `.novel-notes` 几何），同场谁也读不了。收脚注面板**不按关闭语义走**
-    // （不调 closeNote：那是弹栈回引用处 + 落存档），「看一眼导入说明」是只读动作。
+    // （不消费返回项：消费是弹栈回引用处 + 落存档），「看一眼导入说明」是只读动作。
     const deps = withWarnings([degraded])
     render(richReader(deps))
     await screen.findByText('第一章第一段')
