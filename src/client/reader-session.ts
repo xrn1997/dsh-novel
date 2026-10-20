@@ -494,7 +494,8 @@ export class ReaderSession {
 
   /** 退出阅读器：先作废在途续作（代际 +1），再把防抖窗口里的进度补落盘——flush 不 cancel，
    *  cancel 会静默丢最后一段章内偏移，而 fetch 卸载后照样完成，没有「来不及存」的结构理由。
-   *  在途槽一并复位：dispose = 这条会话到此为止；留着旧槽会让本实例此后的加载被无声挡下。 */
+   *  在途槽一并复位：本代到此为止。**同一实例还会被下一次 open 复用**（同址换源时视图的会话
+   *  memo 不重建，cleanup 的 dispose 之后紧接着 open 新源），留着旧槽会让那次加载被无声挡下。 */
   dispose(): void {
     this.generation++
     this.inflight = null

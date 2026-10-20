@@ -121,7 +121,7 @@ describe('SearchJobs 读面快照', () => {
     let shouldStop: () => boolean = () => false
     let finish: () => void = () => {}
     const jobs = new SearchJobs()
-    jobs.start('x', 5, (emit, ss) => { shouldStop = ss; return new Promise<void>((res) => { finish = res }) })
+    jobs.start('x', 5, (_emit, ss) => { shouldStop = ss; return new Promise<void>((res) => { finish = res }) })
     expect(shouldStop()).toBe(false)
     expect(jobs.cancel('用户取消')).toBe(true)
     expect(shouldStop()).toBe(true)

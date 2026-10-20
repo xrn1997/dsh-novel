@@ -33,7 +33,7 @@ export function isAtomicTemp(file: string, entry: string): boolean {
 
 /** 数据文件存在但解析失败——与「文件不存在」是两回事，见 readJson。 */
 export class CorruptJsonError extends Error {
-  constructor(readonly file: string, readonly cause: unknown) {
+  constructor(readonly file: string, override readonly cause: unknown) {
     const why = cause instanceof Error ? cause.message : String(cause)
     super(`数据文件损坏，拒绝按空结果继续（原文件已备份为 ${backupPathOf(file)}）：${file}（${why}）`)
     this.name = 'CorruptJsonError'

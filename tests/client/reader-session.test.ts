@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { planarNavigation } from '../../src/shared/wire.js'
 import { ReaderSession } from '../../src/client/reader-session.js'
-import type { ReaderPort, ReaderSessionDeps, VisibleNode } from '../../src/client/reader-session.js'
+import type { ReaderSessionDeps, VisibleNode } from '../../src/client/reader-session.js'
 import type { ChapterAnchor } from '../../src/client/progress.js'
 import type { ChapterContent, ChapterEntry, NavigationItem, ShelfBook } from '../../src/client/views/types.js'
 

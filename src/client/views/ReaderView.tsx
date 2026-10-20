@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from 'react'
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { LOCAL_SOURCE_ID, bodies, paramRoutes, queries, ROUTES } from '../../shared/wire.js'
 import { describeError } from '../api.js'
 import { plural, useCopy } from '../copy/index.js'
@@ -310,7 +310,9 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
         bodies.shelfPatch({ totalChapters: total })).catch(() => undefined)
     },
     afterFrames: (cb) => { requestAnimationFrame(() => requestAnimationFrame(cb)) },
-  }, readerPort, deps.saveDebounceMs, t), [readerPort, deps, sourceId, bookKey, title])
+    // bookKey 必须留在这格：saveProgress 与 saveTotalChapters 两枚闭包捕的就是它，摘掉会让进度
+    // 一路写给第一本书的地址。sourceId 与 title 不在本工厂里被读——换源走下面那条 open() 的 effect。
+  }, readerPort, deps.saveDebounceMs, t), [readerPort, deps, bookKey, t])
 
   // 第三参 = getServerSnapshot：renderToString（smoke/SSR）必需，缺了直接抛
   const st = useSyncExternalStore(session.subscribe, () => session.state, () => session.state)
@@ -393,7 +395,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   const [exportState, setExportState] = useState<ExportRunState>(IDLE_EXPORT)
   const exportRun = useMemo(() => createExportRun({
     sourceId, bookKey, title, deps, t, onChange: setExportState,
-  }), [deps, sourceId, bookKey, title])
+  }), [deps, sourceId, bookKey, title, t])
   useEffect(() => () => exportRun.dispose(), [exportRun])   // 卸载即取消——不许孤儿抓取
   const expTotal = toc?.length ?? 0
   /** 开导出面板：默认整本（1..N）。互斥不在这里抄一遍——判据在 `reader-surfaces` */
@@ -423,7 +425,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   const hasImportNotes = importNotes !== null && importNotes.length > 0
 
   /** 刷新滚动容器缓存（内容变化/视口变化时） */
-  const refreshPort = (): void => { portRef.current = findScrollport(bodyRef.current) }
+  const refreshPort = useCallback((): void => { portRef.current = findScrollport(bodyRef.current) }, [])
 
   /** 目标分发：主序列目标走会话跳章（含章内锚点），补充文档开注释面板。
    *  **目录点击是纯导航**（不押返回项）——只有正文内链才建立「返回原处」。
@@ -490,8 +492,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     refreshPort()
     void session.open(sourceId, bookKey)
     return () => session.dispose()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session])
+  }, [session, sourceId, bookKey, refreshPort])
 
   // 已载表变化：刷新滚动容器与锚点 → 补足预取（哨兵出区即自限，不会全书风暴）
   useEffect(() => {
@@ -546,7 +547,6 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     readerPort.setScrollTop(readerPort.scrollTop() + off + snap.offsetWithinNode)
     visibleRef.current = readerPort.currentNode()        // 复位后重采：连调两次排版也各有正确锚
     session.handleViewportChange(sourceId)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefs.fontSize, prefs.lineHeight, prefs.measure, readerPort, session, sourceId])
 
   const shownError = error ?? exportState.error

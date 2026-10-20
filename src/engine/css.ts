@@ -47,7 +47,7 @@ function parseSelector(selector: string, loc: SegmentLoc, facet: Facet): ParsedS
   // 摘掉伪类后补什么，取决于它前面是什么：紧贴基础选择器（`.tag:contains(x)`）时必须**什么都不留**
   // （补 `*` 会变成 `.tag *` = 后代，把元素自己排除在候选之外，语义整个反了）；
   // 而裸形态（开头、组合符或逗号之后）要补 `*`，否则剩下一个悬空组合符。
-  let plain = selector.replace(JSOUP_TEXT_RE, (m, name: string, dq?: string, sq?: string, bare?: string, off?: number) => {
+  let plain = selector.replace(JSOUP_TEXT_RE, (_m, name: string, dq?: string, sq?: string, bare?: string, off?: number) => {
     const text = (dq ?? sq ?? bare ?? '').trim()
     if (text === '') {
       throw new RuleEvalError(`CSS 选择器无法解析：${selector}（:${name}(…) 的参数为空）`, { ...loc, facet, hits: 0 })

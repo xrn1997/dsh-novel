@@ -376,7 +376,7 @@ describe.skipIf(!ON)('解析面全库普查（DSH_PARSE_CENSUS=1）', () => {
     const notUpstream = notMounted.filter(([n]) => !upstream.has(n))
 
     // ── 读数（报告，不是通过率）─────────────────────────────────────
-    const fmt = (m: Map<string, { n: number; srcs: Set<string> }>, key: string) =>
+    const fmt = (m: Map<string, { n: number; srcs: Set<string> }>) =>
       [...m.entries()].sort((a, b) => b[1].n - a[1].n)
         .map(([k, v]) => `    ${String(v.n).padStart(4)}×  ${v.srcs.size}源  ${k}`).join('\n')
     console.log(
@@ -391,7 +391,7 @@ describe.skipIf(!ON)('解析面全库普查（DSH_PARSE_CENSUS=1）', () => {
     }
     if (bridgeGaps.length) {
       console.log(`[parse-census] 脚本调了、快照里有、本仓没挂的 java.* 方法 ${bridgeGaps.length} 种：`)
-      console.log(fmt(new Map(bridgeGaps), 'name'))
+      console.log(fmt(new Map(bridgeGaps)))
       // **两类分开展印**：在册那几条**只报不红**（登记过的缺席）——「需求方出现了」只在这行的
       // 非 0 里看得见，别以为门会替它响（矩阵 h-java-unmounted-uncalled 的重开条件曾误写成「门会红」）。
       const rostered = bridgeGaps.filter(([n]) => KNOWN_BRIDGE_GAPS[n]).map(([n]) => n)
@@ -400,11 +400,11 @@ describe.skipIf(!ON)('解析面全库普查（DSH_PARSE_CENSUS=1）', () => {
     }
     if (notUpstream.length) {
       console.log(`[parse-census] 快照的 java 方法集里也没有的调用名 ${notUpstream.length} 种（不判红，只报）：`)
-      console.log(fmt(new Map(notUpstream), 'name'))
+      console.log(fmt(new Map(notUpstream)))
     }
     if (packages.size) {
       console.log('[parse-census] Packages 引用（按包名聚合，含本仓已挂的 org.jsoup/jsoup 元素桥）：')
-      console.log(fmt(packages, 'pkg'))
+      console.log(fmt(packages))
     }
 
     // ── 面 D：需求读数表（登记册那些「N 源带值」的复数入口）────────────

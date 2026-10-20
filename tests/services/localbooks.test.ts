@@ -172,7 +172,7 @@ describe('格式判定与 TXT 存量', () => {
   })
 
   it('存量 TXT（无 schemaVersion 的既有元数据）重启后仍可读目录/正文/导航', async () => {
-    const { lb, dir } = await mk()
+    const { dir } = await mk()
     const id = '11111111-1111-4111-8111-111111111111'
     await fs.writeFile(path.join(dir, 'local', `${id}.txt`), TXT)
     await fs.writeFile(path.join(dir, 'local', `${id}.json`), JSON.stringify({

@@ -134,7 +134,6 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
     if (railRef.current !== null && headRef.current !== null) {
       topAlignIfClipped(railRef.current, headRef.current, kidsRef.current)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceId, shownSources.length])
   const books = round?.books ?? []
   const empty = round === null ? null : bookListEmpty(round, error, t)

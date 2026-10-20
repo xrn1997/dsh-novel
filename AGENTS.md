@@ -25,7 +25,7 @@ DeepSeek Harness（DSH）的「小说」插件：导入 legado 书源 → 聚合
 
 ## 改完必须验的门（默认全跳过，没人替你跑）
 
-`pnpm test` 全绿只证明引擎 / 服务 / 契约 / 前端逻辑：**不证明**任何真实站点可用性、也不证明安装链路。`pnpm typecheck` 必须与 `pnpm test` **同批跑**：tests 在 tsconfig 内而 vitest 不查类型，props 缝加宽而某个测试文件没跟上，只有 tsc 抓得住。
+`pnpm test` 全绿只证明引擎 / 服务 / 契约 / 前端逻辑：**不证明**任何真实站点可用性、也不证明安装链路。`pnpm typecheck` 必须与 `pnpm test` **同批跑**：tests 在 tsconfig 内而 vitest 不查类型，props 缝加宽而某个测试文件没跟上，只有 tsc 抓得住。`pnpm lint` 把界面那一头**未豁免**的 react-hooks 依赖数组（`src/client` 里仍在的 `eslint-disable` 是存量豁免清单，不在本门覆盖内），仓内方向与值环由 `tests/layering.test.ts` 随 `pnpm test` 把，不额外要一条命令。
 
 改动抓取 / 规则引擎 / 打包链路，或改相关性判据 / 按书归并时，`docs/developing.md` 的「测试与真链路门控」那几条门控（`DSH_REPROBE` / `DSH_CONTENT_AUDIT` / `DSH_SEARCH_FILTER_AUDIT` / `COMPAT_CAPTURE` / `DSH_INSTALL_CHECK` / `DSH_EPUB_BROWSER` / `DSH_PARSE_CENSUS`）是唯一自动化验证——按那里的命令跑对应那条，并把结论**如实**写进汇报。注意分工：reprobe 只验**搜索面**，`verified` 不证明正文可读，正文口径是 `DSH_CONTENT_AUDIT`，而它是**审计报告**、不设通过率断言（分桶读数要人判）；`DSH_SEARCH_FILTER_AUDIT` 真打聚合搜索、量相关性分档与按书归并的读数，同为**报告**、唯一断言只是判据自洽（分档不丢条），供裁「去虚字放行」那条偏离与那把归并键的焊错面；`DSH_EPUB_BROWSER` 只在本机浏览器里量渲染与几何（本地书正文、组件排版），不起服务也不访问站点。
 

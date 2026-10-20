@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { EngineValue } from '../../src/engine/types.js'
+import type { EngineValue } from '../../src/engine/types.js'
 import { UnsupportedRuleError, RuleEvalError, JsSandboxError } from '../../src/engine/errors.js'
 
 function render(v: EngineValue): string {

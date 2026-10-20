@@ -147,12 +147,12 @@ export function evalDefault(
   // 与 ownText 终端的「直系」口径互为镜像——实测无源依赖，按更有用的方向实现）
   if ((seg.mode === 'text' || seg.mode === 'ownText') && seg.arg !== null && seg.arg !== '') {
     const picked = textContaining($, cur, seg.arg, seg.mode === 'text' ? 'own' : 'descendant')
-    return pickNodes(seg, $, picked.toArray(), loc, facet, `${seg.mode}.${seg.arg}`)
+    return pickNodes(seg, $, picked.toArray(), `${seg.mode}.${seg.arg}`)
   }
 
   if (!(SELECT_MODES as readonly string[]).includes(seg.mode)) {
     if (seg.mode === 'attr' || (GET_MODES as readonly string[]).includes(seg.mode)) {
-      return getValue(seg, $, cur, loc, facet)
+      return getValue(seg, $, cur)
     }
     // classifySegment（parse）已挡掉未知 mode，此处兜底
     throw new RuleEvalError('未知 default 段模式', { ...loc, facet, hits: 0 })
@@ -176,13 +176,13 @@ export function evalDefault(
     throw new RuleEvalError(`选择器无法解析：${seg.mode}.${seg.arg ?? ''}（${(e as Error).message}）`, { ...loc, facet, hits: 0 })
   }
 
-  return pickNodes(seg, $, picked.toArray(), loc, facet, `${seg.mode}.${seg.arg ?? ''}`)
+  return pickNodes(seg, $, picked.toArray(), `${seg.mode}.${seg.arg ?? ''}`)
 }
 
 /** 选择结果 → reducePicked 裁决 → nodes/Miss（选择段与文本选择段共用一份空态口径） */
 function pickNodes(
   seg: DefaultSegment, $: CheerioAPI, pickedArr: AnyNode[],
-  loc: SegmentLoc, facet: Facet, label: string,
+  label: string,
 ): EngineValue {
   const reduced = reducePicked(pickedArr, seg.exclude, seg.index)
   if (!reduced.ok) {
@@ -242,8 +242,6 @@ function getValue(
   seg: DefaultSegment,
   $: CheerioAPI,
   cur: Cheerio<AnyNode>,
-  loc: SegmentLoc,
-  facet: Facet,
 ): EngineValue {
   const arr = cur.toArray()
   const reduced = reducePicked(arr, seg.exclude, seg.index)

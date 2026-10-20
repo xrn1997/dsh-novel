@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useCallback, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { describeError } from '../api.js'
 import { validateSourceJson } from '../importer.js'
 import type { ItemCheck } from '../importer.js'
@@ -45,7 +45,9 @@ export function ImportPane({ job, refresh, unverifiedCount, onVerifyUnverified, 
   // 服务端单任务槽覆盖后，用客户端缓存的最近导入任务兜底
   const importJob = job?.kind === 'import' ? job : deps.lastImportJob()
   const busy = job?.phase === 'running'
-  const recheck = useCallback(debounce(() => {
+  // debounce 交回的是带 flush()/cancel() 的值而不是裸回调，所以这格用 useMemo（useCallback 看不见
+  // 包装函数的依赖，react-hooks/exhaustive-deps 在此只能报「dependencies are unknown」）
+  const recheck = useMemo(() => debounce(() => {
     const v = pasteRef.current?.value ?? ''
     setBigPaste(v.length > BIG_PASTE_BYTES)
     if (v.trim() === '') { setCheck(null); return }

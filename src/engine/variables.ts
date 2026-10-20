@@ -45,7 +45,7 @@ export function resolveJsonData(ctx: EvalContext): unknown {
  * `@get:name` → 读 `ctx.vars[name]`；未 put 过 / vars 未初始化 → Miss（detail 提到键名）。
  */
 
-function reject(detail: string, pairsRaw: string, loc: SegmentLoc, facet: Facet): never {
+function reject(detail: string, loc: SegmentLoc, facet: Facet): never {
   throw new UnsupportedRuleError(detail, { ...loc, facet })
 }
 
@@ -54,7 +54,7 @@ function reject(detail: string, pairsRaw: string, loc: SegmentLoc, facet: Facet)
 function parsePairs(pairsRaw: string, loc: SegmentLoc, facet: Facet): Array<[string, string, boolean]> {
   const s = pairsRaw.trim()
   if (!s.startsWith('{') || !s.endsWith('}')) {
-    reject('@put 形态必须为 {key:"value", …}（{ 开头 } 结尾）', pairsRaw, loc, facet)
+    reject('@put 形态必须为 {key:"value", …}（{ 开头 } 结尾）', loc, facet)
   }
   const inner = s.slice(1, -1)
   const pairs: Array<[string, string, boolean]> = []
@@ -69,8 +69,8 @@ function parsePairs(pairsRaw: string, loc: SegmentLoc, facet: Facet): Array<[str
     const kStart = i
     while (i < n && inner[i] !== ':' && inner[i] !== ',') i++
     const key = inner.slice(kStart, i).trim()
-    if (key === '') reject('@put 键名为空', pairsRaw, loc, facet)
-    if (i >= n || inner[i] !== ':') reject(`@put 键值对缺少冒号：${JSON.stringify(key)}`, pairsRaw, loc, facet)
+    if (key === '') reject('@put 键名为空', loc, facet)
+    if (i >= n || inner[i] !== ':') reject(`@put 键值对缺少冒号：${JSON.stringify(key)}`, loc, facet)
     i++ // 吃掉 ':'
     skipWs()
     let value = ''
@@ -86,7 +86,7 @@ function parsePairs(pairsRaw: string, loc: SegmentLoc, facet: Facet): Array<[str
         value += c
         i++
       }
-      if (!closed) reject('@put 值引号未闭合', pairsRaw, loc, facet)
+      if (!closed) reject('@put 值引号未闭合', loc, facet)
     } else {
       // 裸值：读到顶层逗号为止（key:value 形态——键访问/字面串）
       const vStart = i
@@ -96,7 +96,7 @@ function parsePairs(pairsRaw: string, loc: SegmentLoc, facet: Facet): Array<[str
     pairs.push([key, value, quoted])
     skipWs()
     if (i >= n) break
-    if (inner[i] !== ',') reject(`@put 顶层逗号分隔处出现意外字符：${JSON.stringify(inner[i])}`, pairsRaw, loc, facet)
+    if (inner[i] !== ',') reject(`@put 顶层逗号分隔处出现意外字符：${JSON.stringify(inner[i])}`, loc, facet)
     i++ // 吃掉逗号；尾逗号由循环顶的 skipWs + break 收编
   }
   return pairs
@@ -145,7 +145,7 @@ export function evalPut(
       // put 的值就是一次取值，故与取值段同一条出口；真实源 ruleBookInfo.init 的六键形态全靠这条
       // （2026-09 真机审计：曾被段切分撕开 + 被 v1 白名单拒掉）。
       if (!subEval) {
-        reject(`@put 值是规则串但调用方未接线子规则求值口（evaluate 的 subEval）：${JSON.stringify(value)}`, pairsRaw, loc, facet)
+        reject(`@put 值是规则串但调用方未接线子规则求值口（evaluate 的 subEval）：${JSON.stringify(value)}`, loc, facet)
       }
       putString(key, subEval(value))
     } else {

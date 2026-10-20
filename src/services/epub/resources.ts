@@ -6,7 +6,7 @@ import { crc32Unsigned } from './archive.js'
 import { EpubImportError } from './errors.js'
 import { normalizeMediaType, resolveEpubHref } from './package.js'
 import {
-  attrOf, childElements, decodeEpubXml, isElement, localName, parseXml, textOf, xmlBudget,
+  attrOf, decodeEpubXml, isElement, localName, parseXml, textOf, xmlBudget,
   type XmlBudget, type XmlLimits,
 } from './xml.js'
 

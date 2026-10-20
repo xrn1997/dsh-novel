@@ -4,7 +4,7 @@ import { load } from 'cheerio'
 import { JAVA_PROTOCOL, SANDBOX_MOUNTS, invokeJavaMethod } from '../../src/engine/js-protocol.js'
 import type { BridgeDeps, JavaBridge } from '../../src/engine/js-protocol.js'
 import { createSourceSession } from '../../src/engine/js-sandbox.js'
-import { JsSandboxError, UnsupportedRuleError } from '../../src/engine/errors.js'
+import { JsSandboxError } from '../../src/engine/errors.js'
 import { engineContextOf } from '../../src/services/bridge.js'
 import type { EngineValue, EvalContext, Facet, SegmentLoc } from '../../src/engine/types.js'
 
@@ -30,21 +30,22 @@ const depsOf = (over: Partial<BridgeDeps> = {}): BridgeDeps => ({
 type Eq<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
 type Assert<T extends true> = T
 
-// 类型别名仅作编译期断言（tsc --noEmit 覆盖 tests；形状回归即红）
+// 类型别名仅作编译期断言（tsc --noEmit 覆盖 tests；形状回归即在别名自己那一行红）。逐条 export：
+// `noUnusedLocals` 只认导出面，不必再攒一张清单——那张清单本身没人消费，只多一处要人同步。
 // 形参是 unknown 而非 string：脚本侧按字符串形参强制转换，脚本常把上一段的值
 // （JSONPath 的单元素数组最常见）直接递给 ajax——桥侧统一 String()，空值点名（钉子见
 // tests/engine/js-bindings.test.ts 的「java.ajax 参数规约」）。
-type _Ajax = Assert<Eq<JavaBridge['ajax'], (url: unknown) => Promise<string>>>
-type _Get = Assert<Eq<JavaBridge['get'], (key: string) => string>>
-type _Put = Assert<Eq<JavaBridge['put'], (key: string, value: unknown) => void>>
+export type _Ajax = Assert<Eq<JavaBridge['ajax'], (url: unknown) => Promise<string>>>
+export type _Get = Assert<Eq<JavaBridge['get'], (key: string) => string>>
+export type _Put = Assert<Eq<JavaBridge['put'], (key: string, value: unknown) => void>>
 // getString 的三个位置各有语义（二参重载 + 三参形态）：第二参布尔 = unescape 开关，
 // 非布尔 = mContent 基内容，第三参布尔 = isUrl 绝对化。**没有「取 URL 后再抓」这条**。
-type _GetString = Assert<Eq<JavaBridge['getString'], (rule: unknown, arg2?: unknown, isUrl?: unknown) => string>>
-type _GetElement = Assert<Eq<JavaBridge['getElement'], (rule: string) => { html: string; text: string } | null>>
-type _SetContent = Assert<Eq<JavaBridge['setContent'], (content: unknown) => void>>
-type _CookieGet = Assert<Eq<JavaBridge['cookieGet'], (name: string) => string | null>>
-type _SourceVarPut = Assert<Eq<JavaBridge['sourceVarPut'], (key: string, value: string) => string>>
-type _SourceVarGet = Assert<Eq<JavaBridge['sourceVarGet'], (key: string) => string>>
+export type _GetString = Assert<Eq<JavaBridge['getString'], (rule: unknown, arg2?: unknown, isUrl?: unknown) => string>>
+export type _GetElement = Assert<Eq<JavaBridge['getElement'], (rule: string) => { html: string; text: string } | null>>
+export type _SetContent = Assert<Eq<JavaBridge['setContent'], (content: unknown) => void>>
+export type _CookieGet = Assert<Eq<JavaBridge['cookieGet'], (name: string) => string | null>>
+export type _SourceVarPut = Assert<Eq<JavaBridge['sourceVarPut'], (key: string, value: string) => string>>
+export type _SourceVarGet = Assert<Eq<JavaBridge['sourceVarGet'], (key: string) => string>>
 
 describe('JavaBridge 协议表（表驱动登记）', () => {
   it('方法名唯一（重复登记 → 红）', () => {

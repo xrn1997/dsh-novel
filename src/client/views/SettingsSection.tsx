@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { paramRoutes, ROUTES } from '../../shared/wire.js'
 import { describeError } from '../api.js'
 import { plural, useCopy, type CopyKey } from '../copy/index.js'
@@ -41,7 +41,7 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
   const [importOpen, setImportOpen] = useState(false)
   // 失败不许伪装成空列表/空架（宁炸不猜的呈现半场）：网络失败 → 显式错误，
   // 待办收件箱随之不渲染（不拿未知当「✓ 全部源状态良好」）
-  const reload = (): void => {
+  const reload = useCallback((): void => {
     void deps.apiGet<SourcePublic[]>(ROUTES.sources.path).then((list) => {
       setSources(list)
       setLoadError(null)
@@ -55,8 +55,11 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
       setSources([])
       setLoadError(describeError(e, t))
     })
-  }
-  useEffect(reload, [])
+  }, [deps, t])
+  // t 由 apply() 建一次（`client/index.tsx`），deps 走缺省的模块常量 prodDeps——两者身份挂载期不变，
+  // 故 [reload] 仍只在挂载跑一次，与原先的 [] 同效，但不再靠人记住这件事。**注入 deps 的调用方别给
+  // 内联对象**：那会让 reload 每轮父渲染换身份，sources 跟着重拉一轮。
+  useEffect(() => { reload() }, [reload])
   // 任务现场只读常驻状态层的镜像（轮询单实例住 `NovelStatusOverlay`，不在本视图内）：
   // 切走 tab 轮询照跑、回到本区读数即刻是最新的。refresh = 让驱动立刻重拉一次。
   const { job } = useJobSurface()
@@ -67,7 +70,7 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
       setReloadedJob(job.id)
       reload()
     }
-  }, [job, reloadedJob])
+  }, [job, reloadedJob, reload])
   /** 常驻状态层点击 → 跨子树意图：本区在场就消费（开弹层 / 回列表并滚到任务卡）。
    *  消费即清空，所以同一意图不重放；试跑子视图也先退回列表——原先在试跑页里点「点此查看」
    *  是个 no-op（querySelector 找不到目标，见本文件历史口径），现在改成「带回现场」。 */
@@ -233,12 +236,14 @@ export function ProbePane({ sourceId, onBack, deps = prodDeps }: {
   const t = useCopy()
   const [result, setResult] = useState<ProbeResult | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
-  const run = (): void => {
+  const run = useCallback((): void => {
     setFailed(null)
     void deps.apiSend<ProbeResult>('POST', paramRoutes.sourceProbe(sourceId))
       .then(setResult, (e: unknown) => setFailed(describeError(e, t)))
-  }
-  useEffect(run, [sourceId])
+    // deps 与 t 身份稳定（见上方 reload 同款口径），故 run 只随 sourceId 换——
+    // [run] 与原先的 [sourceId] 触发次数一致。
+  }, [deps, t, sourceId])
+  useEffect(() => { run() }, [run])
   return (
     <div className="novel-group">
       <div className="novel-toolbar">

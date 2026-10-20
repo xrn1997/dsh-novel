@@ -99,7 +99,7 @@ export function ReaderNotes({ bookKey, target, requestSeq, deps, onNavigate, onC
         setState({ phase: 'error', error: asErrorLike(e, t) })
       },
     )
-  }, [deps, bookKey, docId, nonce])
+  }, [deps, bookKey, docId, nonce, t])
 
   // 落位：只滚面板自己的身体（`centerInScroller` 的口径与理由见 util.ts——借 scrollIntoView 会连
   // 主滚动一起拉走，那是实测过的缺陷）。无锚点的新文档回到顶部，免得停在上一条内容的中段。

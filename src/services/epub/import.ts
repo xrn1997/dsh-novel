@@ -11,7 +11,7 @@ import {
   type EpubHref, type EpubManifestItem, type EpubNavItem,
 } from './package.js'
 import { soleRasterHref, SVG_MEDIA_TYPE, validateImage } from './resources.js'
-import { decodeEpubXml, parseXml, xmlBudget, type XmlBudget, type XmlLimits } from './xml.js'
+import { decodeEpubXml, parseXml, xmlBudget, type XmlLimits } from './xml.js'
 
 /**
  * 导入编排：把一份 EPUB 字节变成「只有规范化文档与已验证资源」的指定目录 + 一份索引（`EpubImportData`）。

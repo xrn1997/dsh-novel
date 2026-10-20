@@ -35,7 +35,7 @@ export class PageCache {
   private readonly contentDir: string
   private readonly maxBytes: ValueSource<number>
 
-  constructor(private readonly dir: string, maxBytes: ValueSource<number> = DEFAULT_CACHE_MAX_BYTES) {
+  constructor(dir: string, maxBytes: ValueSource<number> = DEFAULT_CACHE_MAX_BYTES) {
     this.tocDir = path.join(dir, 'cache', 'toc')
     this.contentDir = path.join(dir, 'cache', 'content')
     this.maxBytes = maxBytes

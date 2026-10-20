@@ -28,7 +28,6 @@ describe('isTrustedRequest', () => {
 })
 
 describe('readJsonBody', () => {
-  const bodyReq = (text: string) => new PassThrough() as unknown as IncomingMessage & PassThrough
   it('合法 JSON 解析', async () => {
     const s = new PassThrough()
     const p = readJsonBody(s as unknown as IncomingMessage, null)

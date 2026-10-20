@@ -5,7 +5,6 @@ import type { ReactNode } from 'react'
 import { CopyProvider, enTranslate } from '../../src/client/copy/index.js'
 import { ImportPane } from '../../src/client/views/SettingsImportPane.js'
 import { makeDeps } from './fake-deps.js'
-import type { FakeSettingsDeps } from './fake-deps.js'
 import type { SettingsDeps } from '../../src/client/deps.js'
 import type { JobState } from '../../src/client/views/types.js'
 

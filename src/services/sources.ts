@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
-import type { NovelSource, SourceAuth, SourceContentKind, SourceStatus } from './types.js'
+import type { NovelSource, SourceAuth, SourceStatus } from './types.js'
 import type { NormalizeResult } from './normalize.js'
 import { contentTypeOfRaw, deriveRuleField, rawBookMetaFields, rawExploreFields, rawHeaderFields, rawHeaderRule, rawRulePattern, SOURCE_KIND_LABEL, splitGroups, stripLeadingIcons } from './normalize.js'
 import { readJson, writeJsonAtomic } from './storage.js'

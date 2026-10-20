@@ -1,4 +1,4 @@
-import { RuleEvalError, interpolateUrl } from '../engine/index.js'
+import { interpolateUrl } from '../engine/index.js'
 import { itemContextsOf, makeSubEval, resolveHeaders } from './bridge.js'
 import type { ItemContext } from './bridge.js'
 import type { SubRuleEval } from './bridge.js'

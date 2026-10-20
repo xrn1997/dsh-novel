@@ -7,7 +7,6 @@ import { detailContextOf } from '../../src/services/bridge.js'
 import type { SubRuleEval } from '../../src/services/bridge.js'
 import { chapterContentToText } from '../../src/services/chapter-content.js'
 import { LocalArtifactNotFoundError } from '../../src/services/localbooks.js'
-import type { ChapterContent } from '../../src/shared/wire.js'
 import { IMAGE_SAMPLES, makeEpubFixture } from '../fixtures/epub.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
 import { createFetcher } from '../../src/services/fetcher.js'
@@ -105,7 +104,7 @@ describe('ReadingService', () => {
       expect(registry.get(a.id)!.auth!.headers).toBeUndefined()    // 不带 headers → 无该键
     })
     it('listPublicSources：凭据红线投影（registry.list().map(toPublic) 的调用方知识入门面）', async () => {
-      const { svc, registry } = await makeService(() => null)
+      const { svc } = await makeService(() => null)
       const list = svc.listPublicSources()
       expect(list).toHaveLength(1)
       expect(list[0]).toMatchObject({ name: 'S' })
@@ -137,7 +136,7 @@ describe('ReadingService', () => {
   })
 
   it('search 命中并分组；broken 单源失败不拖垮他源', async () => {
-    const { svc, registry } = await makeService((u) =>
+    const { svc } = await makeService((u) =>
       u.includes('/search') ? SEARCH_HTML('斗罗') : null)
     const groups = await svc.search('斗罗')
     expect(groups).toHaveLength(1)
@@ -957,11 +956,6 @@ describe('本地 EPUB 门面：导入回执、图文读取、导航与资源', (
   const mk = async (): Promise<{ svc: ReadingService; dir: string }> => {
     const dir = await makeTempDir('novel-rde-')
     return { svc: trackService(await ReadingService.create({ dir, fetchImpl: route(() => null) as any })), dir }
-  }
-  const contentOf = async (svc: ReadingService, bookKey: string, index: number): Promise<ChapterContent> => {
-    const content = await svc.getChapterContent('__local__', bookKey, index)
-    if (content.kind !== 'rich') throw new Error(`第 ${index} 章应是图文树`)
-    return content
   }
 
   it('图文读取与现有文字读取共用内容', async () => {

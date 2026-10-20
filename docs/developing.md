@@ -42,6 +42,7 @@ pnpm test          # 常规集（引擎 / 服务 / API / 工具 / 入口 / 前�
 pnpm test:compat   # 兼容性回放（compat/fixtures → 离线复算；报告写 compat/report.md，产物不入库）
 pnpm test:pack     # 构建 + 产物自检
 pnpm typecheck     # tsc --noEmit —— 必须与 pnpm test 同批跑
+pnpm lint          # react-hooks 一条规则集（未豁免的界面依赖数组；存量 eslint-disable 另计）；只此一集，不引格式类规则
 ```
 
 > **跑门取退出码，别看管道说了什么**：`pnpm test | tail` 之后退出码是管道工具的，红会被吃掉。先把输出灌进文件、再单独打印退出码；**跑门与提交必须是两条命令**。

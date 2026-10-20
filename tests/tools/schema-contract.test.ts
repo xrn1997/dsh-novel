@@ -38,12 +38,13 @@ const CHAPTER_FIELDS = ['chapterIndex', 'name', 'url'] as const
 const SHELF_EXCLUDED = ['coverUrl', 'intro', 'totalChapters'] as const
 const SHELF_FIELDS = ['sourceId', 'bookKey', 'title', 'author', 'lastChapterName', 'kind', 'wordCount', 'progress', 'addedAt'] as const
 
-type _GroupWire = Assert<Eq<keyof SearchGroup, typeof GROUP_FIELDS[number]>>
-type _HitWire = Assert<Eq<keyof SearchHit, typeof HIT_FIELDS[number]>>
-type _BookWire = Assert<Eq<keyof MergedBook, typeof BOOK_FIELDS[number]>>
-type _BookSourceWire = Assert<Eq<keyof MergedSource, typeof BOOK_SOURCE_FIELDS[number]>>
-type _ChapterWire = Assert<Eq<keyof ChapterEntry, Extract<typeof CHAPTER_FIELDS[number], 'name' | 'url'>>>
-type _ShelfWire = Assert<Eq<keyof ShelfBook, typeof SHELF_FIELDS[number] | typeof SHELF_EXCLUDED[number]>>
+// 逐条 export（不攒第二份清单，理由同住 `tests/engine/js-protocol.test.ts`）
+export type _GroupWire = Assert<Eq<keyof SearchGroup, typeof GROUP_FIELDS[number]>>
+export type _HitWire = Assert<Eq<keyof SearchHit, typeof HIT_FIELDS[number]>>
+export type _BookWire = Assert<Eq<keyof MergedBook, typeof BOOK_FIELDS[number]>>
+export type _BookSourceWire = Assert<Eq<keyof MergedSource, typeof BOOK_SOURCE_FIELDS[number]>>
+export type _ChapterWire = Assert<Eq<keyof ChapterEntry, Extract<typeof CHAPTER_FIELDS[number], 'name' | 'url'>>>
+export type _ShelfWire = Assert<Eq<keyof ShelfBook, typeof SHELF_FIELDS[number] | typeof SHELF_EXCLUDED[number]>>
 
 /** 第三条与关键词有关且不带作者/分类/字数：工具面按相关性收视野之后，仍需有一条「整键缺席」的
  *  命中留在 kept 内，好让 ① 那次 harness 同款校验继续量到缺键投影后的形状（第二条是反例：它不进输出）。 */

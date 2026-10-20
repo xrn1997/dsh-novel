@@ -2,9 +2,13 @@
   "compilerOptions": {
     "target": "ES2022", "module": "ESNext", "moduleResolution": "Bundler",
     "strict": true, "skipLibCheck": true, "noEmit": true,
+    // lib 跟宿主运行时（node ≥24 / tsdown 出 es2024）；target 留 ES2022：tsc 不出码，抬 target
+    // 只会让 vitest 的 esbuild 报「Unrecognized target environment」并退回默认档。
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "isolatedModules": true, "verbatimModuleSyntax": true, "noImplicitOverride": true,
+    "noUnusedLocals": true, "noUnusedParameters": true,
     "types": ["node"], "esModuleInterop": true,
-    "jsx": "react-jsx", "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "paths": { "@engine/*": ["./src/engine/*"] }
+    "jsx": "react-jsx"
   },
   "include": ["src", "tests"]
 }

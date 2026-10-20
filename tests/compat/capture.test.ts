@@ -19,7 +19,6 @@ const KEYWORD = process.env.COMPAT_KEYWORD ?? '书'
  *  回放必红（回放一律以 utf-8 提供文本），又一种「采集与回放断的不是同一批」。 */
 function recordFetch() {
   const pages = new Map<string, { body: string; contentType?: string }>()
-  const CT_CHARSET_RE = /charset=([^;\s"']+)/i
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     const res = await globalThis.fetch(input, init)
