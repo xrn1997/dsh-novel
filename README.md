@@ -55,7 +55,7 @@ npm 安装使用预构建产物，秒装、无需构建授权。从 GitHub 源�
 dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 ```
 
-**宿主兼容声明分两层**：安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`；peer 区间按宿主线开口，线内 rc / patch 不跟版，跨线才重验。实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本。宿主发版、peer 区间与浏览器模块表的维护流程，以及发布冷却闸，见 [docs/developing.md](https://github.com/xrn1997/dsh-novel/blob/main/docs/developing.md#宿主兼容与发版)。
+**宿主兼容声明分两层**：安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`；peer 区间按宿主线开口，线内 rc / patch 不跟版，跨线才重验。实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本（宿主不读这个字段——安装许可只认上面那组 peer 区间；这一行是给人看的记录）。宿主发版、peer 区间与浏览器模块表的维护流程，以及发布冷却闸，见 [docs/developing.md](https://github.com/xrn1997/dsh-novel/blob/main/docs/developing.md#宿主兼容与发版)。
 
 ## 首次使用
 

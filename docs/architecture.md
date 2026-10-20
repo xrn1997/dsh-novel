@@ -121,6 +121,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 - **两条求值路必须同口径**（主线程与 worker），由按 fetch 计数自证的跨路钉子守——这是 `docs/adr/0005` 的产物。
 - 客户端的测试手法是**假 adapter 驱动真实组件**，不是渲染快照；服务端的路由测试用真 HTTP server 承载（`api/dispatch.ts` 不依赖 Cordis，纯构造器）。
 - **门的分工别混**：解析面普查管「能不能解析」，重探只证搜索面，正文审计是**报告**不设通过率，compat 回放的分母是 fixture，真浏览器门只跑本机与本地书，安装门控不起宿主。各自承诺什么写在 `docs/developing.md` 的「测试与真链路门控」，不在这里复述。
+- **`compat/` 的家按「对面来路」归，不按「跑不跑」归**：`fixtures` 与 `sources` 喂回放集（默认被 `vitest.config.ts` exclude，`sources` 还是人工投放口——未脱敏的人类输入不进 `tests/`），而 `compat/upstream/snapshot.json` 是 `tests/legado-coverage/` 那两门（`upstream-fields` / `host-methods`）的分母、随 `pnpm test` 默认跑。所以「判据住在 `tests/legado-coverage/`、它的分母住在 `compat/upstream/`」是**刻意的两条边**，不是同一件事抄了两份；搬目录只会把默认跑的与默认不跑的混进一处。**并家（把 `compat/upstream` 搬进 `tests/legado-coverage/`）仍待裁**；这段只解释现状为什么是两条边。
 
 ## 6. 数据与生命周期
 
