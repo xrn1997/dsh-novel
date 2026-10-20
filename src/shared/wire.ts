@@ -135,7 +135,7 @@ export interface MergedSource {
 }
 
 /** 按书视图的一行：同一 `(书名, 作者)` 规范化键下的若干条命中。
- *  它是**呈现层派生**，不落盘、不进 `SHELF_META`——书架身份仍是 `(sourceId, bookKey)`，
+ *  它是**呈现层派生**，不落盘、不进 `SHELF_META`（架位口径住 `services/shelf.ts` 的 `Shelf`），
  *  「一本书挂多源并搬进度」另有一篇待裁的 ADR，别在这里提前把它焊进类型面。 */
 export interface MergedBook {
   title: string
@@ -189,7 +189,7 @@ export interface ExploreSources {
  *  那两个字段在单源下恒为「1 条 / 1 源」，是谎言字段。跨源视野由详情浮层那一次
  *  手动聚合搜索承担（主人 `client/search-job.ts`，不是这里）。
  *  `author` 为空的条目照旧合法（重名书大量存在，而**类型面与落盘这一侧从不按书名合并任何东西**——
- *  搜索面那一层按规范化 `(书名, 作者)` 归并的是呈现层投影，不落盘、不改这里的字段与书架身份，
+ *  搜索面那一层按规范化 `(书名, 作者)` 归并的是呈现层投影，不落盘、不改这里的字段与架位，
  *  见 `MergedBook` 与 `docs/adr/0033`）。
  *  **与 `SearchHit` 同字段集而三处异名（`name`/`bookUrl`/`lastChapter`）是刻意的两份语义**：
  *  这一张是浏览轴上「一家给的一条」，那一张是聚合搜索里「多家撞来的命中」——把它们并成一张，

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SearchGroup, SearchHit } from '../../src/shared/wire.js'
 import {
-  bookRowKey, bookRows, deriveRound, newlyLandedSeats, rowId, rowKeys, rowMeta,
+  bookRowKey, bookRows, deriveRound, isSeatLanded, newlyLandedSeats, rowId, rowKeys, rowMeta,
   shelfSeats, shortAuthor, sumRound,
 } from '../../src/client/search-view-model.js'
 import type { RowRef } from '../../src/client/search-view-model.js'
@@ -52,7 +52,7 @@ describe('sumRound：条／本／家三条读数绝不折叠', () => {
   })
 })
 
-describe('行身份：(源, 地址) 一个算式，React key 与架位共读', () => {
+describe('行身份：(源, 地址) 只喂 React key 与元数据回读；架位按地址单键', () => {
   it('同身份重复才垫位次（一家给同一地址两种写法是既有形状，整行列号会随旁行挪位串状态）', () => {
     const rows: RowRef[] = [
       { sourceId: 's1', hit: hit({ title: 'a', url: 'u1' }) },
@@ -118,21 +118,25 @@ describe('shortAuthor：只在逗号处切，收的是行宽不是信息', () =>
   })
 })
 
-describe('架位：数落架的座位，不数 PUT', () => {
+describe('架位：凭地址认，数架位不数 PUT', () => {
   const ok = { status: 'fulfilled', value: {} } as PromiseSettledResult<unknown>
   const bad = { status: 'rejected', reason: new Error('只读') } as PromiseSettledResult<unknown>
   const rows: RowRef[] = [
     { sourceId: 's1', hit: hit({ title: 'a', url: 'u1' }) },
-    { sourceId: 's1', hit: hit({ title: 'a', url: 'u1' }) },   // 同址两种写法 = 一行一 PUT，但只有一个架位
+    { sourceId: 's2', hit: hit({ title: 'a', url: 'u1' }) },   // 跨源同址 = 一行一 PUT，但只有一个架位
     { sourceId: 's1', hit: hit({ title: 'a', url: null }) },   // 没地址的那条进不了架
   ]
-  it('shelfSeats 只数有地址的行，且同址折叠成一个座位', () => {
-    expect([...shelfSeats(rows)]).toEqual([rowId('s1', 'u1')])
+  it('shelfSeats 只数有地址的行，且跨源同址也折叠成一个架位', () => {
+    expect([...shelfSeats(rows)]).toEqual(['u1'])
   })
-  it('newlyLandedSeats 按 rowId 去重成功回执（两发幂等 PUT 只报「已加 1 条」）', () => {
-    expect(newlyLandedSeats(rows.slice(0, 2), [ok, ok])).toEqual([rowId('s1', 'u1')])
+  it('newlyLandedSeats 按地址去重成功回执（两发幂等 PUT 只报「已加 1 个架位」）', () => {
+    expect(newlyLandedSeats(rows.slice(0, 2), [ok, ok])).toEqual(['u1'])
   })
   it('失败的行不进回执，也不冒充「新落架」', () => {
-    expect(newlyLandedSeats(rows.slice(0, 2), [bad, ok])).toEqual([rowId('s1', 'u1')])
+    expect(newlyLandedSeats(rows.slice(0, 2), [bad, ok])).toEqual(['u1'])
+  })
+  it('入架态按地址认：源不同但地址相同算已落；无地址永远未落', () => {
+    expect(isSeatLanded(new Set(['u1']), hit({ title: 'a', url: 'u1' }))).toBe(true)
+    expect(isSeatLanded(new Set(['u1']), hit({ title: 'a', url: null }))).toBe(false)
   })
 })

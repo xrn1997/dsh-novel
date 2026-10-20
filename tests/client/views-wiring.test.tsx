@@ -291,11 +291,11 @@ describe('ShelfView 接线（deps seam 驱动）', () => {
  *  于是「默认视野摆着它」这件事全靠这个巧合撑着，哪天折叠改成懒渲染就一片看不懂的蓝。
  *  注意：默认视野现在有两轴（按书在前、按源在页尾折叠），同一个标题在两轴各现一次，
  *  用例按容器取用（见 booksAxis / perSourceAxis）。 */
-const hitGroup = (title: string, sourceId = 's1', over: { inView?: boolean } = {}) => ({
+const hitGroup = (title: string, sourceId = 's1', over: { inView?: boolean; url?: string } = {}) => ({
   sourceId, sourceName: 'S', status: 'verified' as const,
   hits: [{
     title: over.inView === false ? `与关键词无关的${title}` : title,
-    author: null, url: 'https://s.com/book/1', coverUrl: null, intro: null,
+    author: null, url: over.url ?? 'https://s.com/book/1', coverUrl: null, intro: null,
     lastChapterName: null, kind: null, wordCount: null,
   }],
 })
@@ -488,7 +488,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     expect(apiSend).toHaveBeenCalledWith('PUT', key, expect.objectContaining({ title: '斗罗' }))
     // 两家给的是同一个地址 ⇒ 路径分不出谁是谁，只有 body 里的 sourceId 认得出「这条 PUT 是哪家那一行」
     expect(apiSend.mock.calls.map((c) => (c[2] as { sourceId: string }).sourceId),
-      '逐条各带自己那个源（全用第一家的话，第二家就没上架）').toEqual(['s1', 's2'])
+      '逐条各带自己那个源（同址只落一个架位，署名就靠 body 里的 sourceId）').toEqual(['s1', 's2'])
     expect(apiSend.mock.calls.map((c) => [c[0], c[1]]), '只复用 PUT shelf/:key 那一条既有路').toEqual([['PUT', key], ['PUT', key]])
   })
 
@@ -580,7 +580,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     const deps = coreDeps({
       apiSend, pushOk,
       apiGet: vi.fn(async () => ({
-        job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1'), hitGroup('斗罗', 's2')] }),
+        job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1', { url: 'https://s.com/1' }), hitGroup('斗罗', 's2', { url: 'https://s.com/2' })] }),
       })),
     })
     render(createElement(SearchView, { deps }))
@@ -593,7 +593,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     expect(within(row).getByRole('button', { name: '都加架' }), '只落了一条：整本还没齐').toBeTruthy()
     fireEvent.click(within(row).getByRole('button', { name: '都加架' }))
     await waitFor(() => expect(putCount(), '已落架那条不该再发一遍').toBe(2))
-    await waitFor(() => expect(pushOk).toHaveBeenCalledWith('已加 1 条：斗罗'))   // 这次只补了一条
+    await waitFor(() => expect(pushOk).toHaveBeenCalledWith('已加 1 个架位：斗罗'))   // 这次只补了一条
     expect(within(row).getByRole('button', { name: '都在架' })).toBeTruthy()
   })
 
@@ -657,14 +657,14 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     expect(within(openPerSourceAxis()).getByText('2 条'), '组头数的是这一家的两行').toBeTruthy()
     fireEvent.click(within(booksAxis()).getByRole('button', { name: '都加架' }))
     await waitFor(() => expect(apiSend).toHaveBeenCalledTimes(2))           // 两条都在册：少发一条就是漏上架
-    await waitFor(() => expect(pushOk).toHaveBeenCalledWith('已加 2 条：斗罗'))
+    await waitFor(() => expect(pushOk).toHaveBeenCalledWith('已加 2 个架位：斗罗'))
     openBookFold()   // 这一句读的是展开区里的名字：先展开，证的才是「展开看得见」而不是 jsdom 打得进收起折叠
     expect(within(booksAxis()).getAllByText('《斗罗》'), '这一家把它叫作什么也要看得见').toHaveLength(1)
   })
 
-  it('同一家同一地址的两行写法：PUT 照发行发行、回执按架位计——一个架位不许念成两条', async () => {
-    // 书架身份是 (源, 地址)：同址两行各发一发幂等 PUT，落架只有一个架位。按成功 PUT 计数
-    // 的回执会报「已加 2 条」——架上的账被夸大一条（变异：回执改回数 fulfilled 的条数即红）。
+  it('同一家同一地址的两行写法：PUT 照发行发行、回执按架位计——一个架位不许念成两个', async () => {
+    // 架位口径住 `Shelf`（跨源同址同理）：同址两行各发一发幂等 PUT，落架只有一个架位。按成功 PUT 计数
+    // 的回执会报「已加 2 个架位」——架上的账被夸大一条（变异：回执改回数 fulfilled 的条数即红）。
     const apiSend = vi.fn(async () => ({}))
     const pushOk = vi.fn()
     const pushError = vi.fn()
@@ -689,8 +689,32 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
       '行读数不因同址而缩：两条写法都在册').toContain('展开 2 条')
     fireEvent.click(within(booksAxis()).getByRole('button', { name: '都加架' }))
     await waitFor(() => expect(apiSend).toHaveBeenCalledTimes(2))           // 逐行照发：发不发是行的账，幂等归服务端
-    await waitFor(() => expect(pushOk).toHaveBeenCalledWith('已加 1 条：斗罗'))
+    await waitFor(() => expect(pushOk).toHaveBeenCalledWith('已加 1 个架位：斗罗'))
     expect(pushError, '一个架位落架即全数落架，不该有失败回执').not.toHaveBeenCalled()
+  })
+
+  it('两家源给同一个地址：两发 PUT 只落一个架位，回执与三条读数各归各', async () => {
+    // 架位凭地址认（口径住 `Shelf`，词条见 CONTEXT 的「架位」）：两家各给一发幂等 PUT，架上只多一条。
+    // 行读数照旧数两条、家数照旧报两家——三条读数不许因同址互相吃掉（单位律住「作品视图（按书）」）。
+    // 变异：把架位算式退回 (源, 地址) 即报「已加 2 个架位」，架上的账被夸大一条。
+    const apiSend = vi.fn(async () => ({}))
+    const pushOk = vi.fn()
+    const pushError = vi.fn()
+    const deps = coreDeps({
+      apiSend, pushOk, pushError,
+      apiGet: vi.fn(async () => ({
+        job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1', { url: 'https://s.com/a' }), hitGroup('斗罗', 's2', { url: 'https://s.com/a' })] }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText(/2 家源/)).toBeTruthy())
+    expect(booksAxis().querySelector('.novel-book-tail')?.textContent,
+      '同址不缩行读数：两家各一条，照数两条').toContain('展开 2 条')
+    fireEvent.click(within(booksAxis()).getByRole('button', { name: '都加架' }))
+    await waitFor(() => expect(apiSend).toHaveBeenCalledTimes(2))            // 逐行照发：发不发是行的账，幂等归服务端
+    await waitFor(() => expect(pushOk).toHaveBeenCalledWith('已加 1 个架位：斗罗'))
+    expect(pushError, '两发都成，不该有失败回执').not.toHaveBeenCalled()
+    expect(within(booksAxis()).getByRole('button', { name: '都在架' }), '一个架位落定即整本齐').toBeTruthy()
   })
 
   it('都加架有失败：成功数与失败数各报一次（点了一下必须有个交代）', async () => {
@@ -701,14 +725,14 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     const deps = coreDeps({
       apiSend, pushOk, pushError,
       apiGet: vi.fn(async () => ({
-        job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1'), hitGroup('斗罗', 's2')] }),
+        job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1', { url: 'https://s.com/1' }), hitGroup('斗罗', 's2', { url: 'https://s.com/2' })] }),
       })),
     })
     render(createElement(SearchView, { deps }))
     await waitFor(() => expect(screen.getByText(/2 家源/)).toBeTruthy())
     fireEvent.click(within(booksAxis()).getByRole('button', { name: '都加架' }))
-    await waitFor(() => expect(pushOk).toHaveBeenCalledWith('已加 1 条：斗罗'))
-    expect(pushError).toHaveBeenCalledWith('加入失败 1 条（共 2）')   // 只报成功数＝静默吞掉没加上的那条
+    await waitFor(() => expect(pushOk).toHaveBeenCalledWith('已加 1 个架位：斗罗'))
+    expect(pushError).toHaveBeenCalledWith('加入失败 1 个架位（共 2）')   // 只报成功数＝静默吞掉没加上的那条
   })
 
   it('都加架不替「没有地址」那一行发 PUT，也不把它算成失败', async () => {
@@ -735,7 +759,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     render(createElement(SearchView, { deps }))
     await waitFor(() => expect(screen.getByText(/1 家源/)).toBeTruthy())
     fireEvent.click(within(booksAxis()).getByRole('button', { name: '都加架' }))
-    await waitFor(() => expect(pushOk).toHaveBeenCalledWith('已加 1 条：斗罗'))
+    await waitFor(() => expect(pushOk).toHaveBeenCalledWith('已加 1 个架位：斗罗'))
     expect(apiSend).toHaveBeenCalledTimes(1)                     // 只发有地址那一行
     expect(apiSend.mock.calls[0][1]).toBe(paramRoutes.shelfKey('https://s.com/a'))
     expect(pushError).toHaveBeenCalledWith('1 条没有地址，加不了架')   // 没试过不是失败，点名说清
@@ -744,7 +768,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
 
   it('都加架一物未加（整行都没有地址）：成功通道不响，交代只有「没有地址」那一句', async () => {
     // 撤掉「有加成才报成功」那道闸的变异就在这一条红：整行没有地址时 ok 恒 0，
-    // 「已加 0 条：X」是给一次没发生的写入报喜——点了一下、什么都没加，成功 toast 却响了。
+    // 「已加 0 个架位：X」是给一次没发生的写入报喜——点了一下、什么都没加，成功 toast 却响了。
     // 架空与全部 PUT 失败读出来都是 0，两种结局挤进同一句成功话；零加成的交代改由错误通道给。
     const apiSend = vi.fn(async (_m: 'POST' | 'PUT' | 'DELETE', _path: string, _body?: unknown) => ({}))
     const pushOk = vi.fn()
@@ -776,7 +800,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
   })
 
   it('都加架全部失败：只有失败那一句，成功通道同样不响', async () => {
-    // 与上一条是两种 0：这次每发都试了、每发都炸。共用「已加 0 条：X」就是把写失败的读数
+    // 与上一条是两种 0：这次每发都试了、每发都炸。共用「已加 0 个架位：X」就是把写失败的读数
     // 说成写成功了半边——回执的两条通道各管各的结局，才点得出差别。
     const apiSend = vi.fn(async () => { throw new Error('磁盘只读') })
     const pushOk = vi.fn()
@@ -784,13 +808,13 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     const deps = coreDeps({
       apiSend, pushOk, pushError,
       apiGet: vi.fn(async () => ({
-        job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1'), hitGroup('斗罗', 's2')] }),
+        job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1', { url: 'https://s.com/1' }), hitGroup('斗罗', 's2', { url: 'https://s.com/2' })] }),
       })),
     })
     render(createElement(SearchView, { deps }))
     await waitFor(() => expect(screen.getByText(/2 家源/)).toBeTruthy())
     fireEvent.click(within(booksAxis()).getByRole('button', { name: '都加架' }))
-    await waitFor(() => expect(pushError).toHaveBeenCalledWith('加入失败 2 条（共 2）'))
+    await waitFor(() => expect(pushError).toHaveBeenCalledWith('加入失败 2 个架位（共 2）'))
     expect(pushOk, '一条也没加上就不许报成功').not.toHaveBeenCalled()
     expect(pushError).toHaveBeenCalledTimes(1)
   })
@@ -859,7 +883,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     render(createElement(SearchView, { deps }))
     await waitFor(() => expect(screen.getByText(/1 家源/)).toBeTruthy())
     fireEvent.click(within(booksAxis()).getByRole('button', { name: '都加架' }))
-    await waitFor(() => expect(pushOk).toHaveBeenCalledWith('已加 2 条：斗罗'))
+    await waitFor(() => expect(pushOk).toHaveBeenCalledWith('已加 2 个架位：斗罗'))
     expect(apiSend.mock.calls.map((c) => (c[2] as { coverUrl: string }).coverUrl)).toEqual(['https://c/a.jpg', 'https://c/b.jpg'])
     expect(apiSend.mock.calls.map((c) => (c[2] as { title: string }).title)).toEqual(['斗罗', '《斗罗》'])
   })
@@ -1510,6 +1534,32 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
     render(reader(deps))
     await waitFor(() => expect(deps.apiGet).toHaveBeenCalled())
     expect(String(deps.apiGet.mock.calls[0][0])).toContain('navigation')
+  })
+
+  it('换源即重开、改标题不重开：会话的键是「地址 + 源」，书名只是展示', async () => {
+    // 这一条钉的是会话键的两侧：同址换一个源必须重新 open（否则阅读器还读着旧源的地址），
+    // 而标题变化不得重开会话——重建会把目录与阅读位置一起丢一次，那是「换源保持进度」还没裁
+    // 之前就不该先付的代价。变异：把 title 放回会话 memo 的依赖，第二段计数即变 2；
+    // 把 sourceId 从 open 那条 effect 的依赖里摘掉，第三段等不到第二发。
+    const deps = readerDeps()
+    const navs = (): string[] => (deps.apiGet as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => String(c[0]))
+      .filter((p) => p.includes('navigation'))
+    const view = (over: { sourceId?: string; title?: string }): ReturnType<typeof createElement> =>
+      createElement(ReaderView, {
+        sourceId: over.sourceId ?? 's1', bookKey: 'k1', title: over.title ?? '斗罗', deps,
+      })
+
+    const { rerender } = render(view({}))
+    await waitFor(() => expect(navs()).toHaveLength(1))
+
+    rerender(view({ title: '《斗罗》' }))
+    await waitFor(() => expect(screen.getByText('《斗罗》')).toBeTruthy())
+    expect(navs(), '改标题不该重开会话').toHaveLength(1)
+
+    rerender(view({ sourceId: 's2' }))
+    await waitFor(() => expect(navs()).toHaveLength(2))
+    expect(navs()[1], '重开那一发问的必须是新源').toContain('sourceId=s2')
   })
 
   // 从书城「读这本」进来的书不在架上（那一层刻意把入架与阅读分成两个动作，`docs/adr/0028`），

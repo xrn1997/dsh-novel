@@ -63,6 +63,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | --- | --- | --- |
 | 路由名 / 值形状 / body 形状（`bodies` 构造 + `readBodies` 读口 / `queries`） | `shared/wire.ts` | 业务判据 |
 | 书目元数据字段集 | `shared/wire.ts` 的 `SHELF_META` + `pickShelfMeta` | 读取面投影（`sourceName` 刻意不进表） |
+| 架位（书架上的一条记录，凭 `bookKey` 认） | `services/shelf.ts` 的 `Shelf`（按 `bookKey` 单键认）；客户端算式 `client/search-view-model.ts` 的 `shelfSeats` / `isSeatLanded` / `newlyLandedSeats` | 逐源行怎么认（那是 `rowId`，两把键不许混）、元数据字段集（`SHELF_META`） |
 | 规则文法（构词 + 解析 + 区域） | `engine/grammar.ts` | 求值 |
 | 段识别与切分次序（含隐式 CSS 回落） | `engine/parse.ts` | 空态裁决 |
 | 空态裁决（Miss vs 空 List） | `engine/select.ts` 的 `reducePicked` | 服务层的值收口 |
@@ -89,7 +90,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 任务过程行 | 缓冲与上限：`services/job-tail.ts` 的 `JobTail`；接到宿主 `readOutput` 上那段登记机械：`services/job-holder.ts` 的 `HostTie`（三个持有者共读这一份，`start()` 内同步取 hooks 的顺序只在这里记一次） | 整轮结果与业务明细（那归各持有者的快照读面，`docs/adr/0018`）；状态形状与槽政策 |
 | 「本轮状态变了」信号 | `services/job-holder.ts` 的 `ChangeSignal`（只发信号不发数据；观察者自取快照、各持游标） | 快照形状、游标推进、换轮与整帧替换的裁决（那归浏览器半两个观察模块） |
 | 整轮搜索结果 | `services/search-job.ts`（Node 半持有） | wire 形状 |
-| 跨源归并（作品视图）：搜索面「是不是同一本书」的判同 | `shared/merge-by-book.ts` 的 `mergeBooks`（形状与上限 `MergedBook`／`MergedSource`／`SEARCH_BOOKS_CAP` 在 `shared/wire.ts`）——呈现层派生，消费点只有搜索结果页与工具面 | 不替用户判该用哪家读（动作不下放）、不服务书籍详情浮层、不改书架身份与进度（作品级身份与换源搬运另裁，见 `docs/adr/0033`） |
+| 跨源归并（作品视图）：搜索面「是不是同一本书」的判同 | `shared/merge-by-book.ts` 的 `mergeBooks`（形状与上限 `MergedBook`／`MergedSource`／`SEARCH_BOOKS_CAP` 在 `shared/wire.ts`）——呈现层派生，消费点只有搜索结果页与工具面 | 不替用户判该用哪家读（动作不下放）、不服务书籍详情浮层、不改架位与进度（作品级身份与换源搬运另裁，见 `docs/adr/0033`） |
 | 搜索结果页的轮级派生（收口读数、行身份与 React key、逐源回读、架位） | `client/search-view-model.ts`（`deriveRound` 一次给齐现场；判据的「为什么」仍住 `CONTEXT.md` 的单位律词条与 `docs/adr/0032` / `0033`） | 轮次累积与游标（`client/search-job.ts`）、落架现场（视图 state） |
 | 相关性判据（一条命中与本轮关键词的关系档位） | 形状 `Relevance` 声明在 `shared/wire.ts`；判据与三档序 `shared/relevance.ts` 的 `relevanceOf` / `partitionByRelevance` / `RELEVANCE_RANK`——决定 `suspect` 去处的三个消费点（`client/views/SearchView.tsx` 的 `renderGroups`、`client/views/CityBookSheet.tsx` 的 `GroupRow`、`tools/tools.ts` 的 `searchBooks`）加只收 `kept` 的归并面（`shared/merge-by-book.ts`）都只吃这一份 | 不判书架、不判发现面（那两面没有关键词这一维） |
 | `exploreUrl` 的形态判据与分类入口解析（js / JSON / `标题::URL` 三档怎么分、条目怎么取、什么算一条**可用**条目） | `services/explore-url.ts` 的 `exploreKindsFormOf` / `parseExploreKinds` / `usableKind` | 落位与平铺优先（`services/normalize.ts` 的 `flattenDialect`）、这次用哪份模板（`services/explore-face.ts` 的 `fetchKindPage`） |

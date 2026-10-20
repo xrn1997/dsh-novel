@@ -3,7 +3,8 @@ import type { ShelfBook } from './types.js'
 import { SHELF_META, type ShelfMetaField, type ShelfMetaPatch } from '../shared/wire.js'
 import { createDebouncedWriter, readJson } from './storage.js'
 
-/** 加书入参（书架只存元数据 + 进度，正文/目录归缓存）：身份两键必填，元数据字段集派生自 SHELF_META */
+/** 加书入参（书架只存元数据 + 进度，正文/目录归缓存）：`bookKey`（地址）认架位、源与书名是必填元数据，
+ *  字段集派生自 SHELF_META（口径见 `Shelf` 的类注释） */
 export type AddBookInput = { bookKey: string; sourceId: string; title: string }
   & Omit<ShelfMetaPatch, 'sourceId' | 'title'>
 
@@ -27,6 +28,13 @@ function applyPatch(book: ShelfBook, patch: BookPatch): void {
  * 两种元数据写口各司其职：add = 不在架才插入（已有书 = patch 语义）；
  * update = 对在架书打补丁（缺席键保值）——merge 规则住在本 module，调用方不再各自筛键。
  * updateProgress 对不在架的书静默不写。
+ *
+ * **架位凭 `bookKey` 单键认**（词条见 CONTEXT 的「架位」；在线书的值就是那条命中行的 URL 原文，
+ * 本地书另带 `local:` 前缀）。`sourceId` 与 `title` 是必填的**元数据字段**、不参与查找：同一个地址
+ * 被两家源加进架，落的是同一个架位，`sourceId` 由后写覆盖、`addedAt` 与进度保留（钉子用例
+ * 「同 bookKey 再加：更新元数据，保留 addedAt 与进度」）。别把「(源, 地址)」当架位的键抄进注释——
+ * 那是**逐源行**的身份，算式在 `client/search-view-model.ts` 的 `rowId`；两件事混起来会让
+ * 「一本书挂多源」的待裁问题看起来已解决。
  */
 export class Shelf {
   private constructor(

@@ -22,7 +22,8 @@ export interface SearchSummary { sources: number; hits: number; found: number; f
 /** 一组命中的相关性分区（每组只算一次的现场） */
 export interface PartitionedGroup { group: SearchGroup; part: RelevancePartition }
 
-/** 一条逐源行的引用：哪个源上的哪条命中（行身份、React key、架位都从这一对算） */
+/** 一条逐源行的引用：哪个源上的哪条命中。行身份与 React key 从这一对算；
+ *  架位不是这个键（口径住 `services/shelf.ts` 的 `Shelf`）。 */
 export interface RowRef { sourceId: string; hit: SearchHit }
 
 /** 一轮结果的现场：按组分区（每组带 group 本体），另有轮级派生两份（归并结果与行元数据索引）。
@@ -67,8 +68,10 @@ export function sumRound(parts: PartitionedGroup[]): SearchSummary {
   return { sources: parts.length, hits, found, failed, relevant }
 }
 
-/** 一行的身份：(源, 地址)。建索引那一侧、取用那一侧、逐源行的 React key 与架位都读这一个算式，
- *  两处各写一遍就等于给「哪一行属于哪一本」两个主人。 */
+/** 一行的身份：(源, 地址)。建索引那一侧、取用那一侧与逐源行的 React key 都读这一个算式，
+ *  两处各写一遍就等于给「哪一行属于哪一本」两个主人。
+ *  **架位不读它**（口径住 `services/shelf.ts` 的 `Shelf`，算式在 `shelfSeats` / `newlyLandedSeats`）；
+ *  `rowId` 只服务行 key 与元数据回读。 */
 export const rowId = (sourceId: string, url: string | null): string => JSON.stringify([sourceId, url])
 
 /** 逐源行的 React key：身份走 `rowId`，只在同一身份于本行里重复出现时垫位次。
@@ -139,18 +142,24 @@ export function shortAuthor(author: string, t: Translate = zhTranslate): string 
 }
 
 /** 一本的架位全集（有地址的那些）：「都加架」的三态与回执都数这个集合，不数行数——
- *  同一地址的两种写法各是一行、只落一个架位。 */
+ *  同址两行只落一个架位（口径住 `services/shelf.ts` 的 `Shelf`）。 */
 export function shelfSeats(rows: RowRef[]): Set<string> {
-  return new Set(rows.filter((r) => r.hit.url !== null).map((r) => rowId(r.sourceId, r.hit.url)))
+  return new Set(rows.flatMap((r) => (r.hit.url === null ? [] : [r.hit.url])))
 }
 
-/** 「都加架」里**这次新落架**的架位：逐条 PUT 的成功结果按 `rowId` 去重后给回。
- *  按成功 PUT 计数会把一个架位报成「已加 2 条」（一家两条同址写法发两发幂等 PUT 也只落一个架位），
+/** 行上入架态：无地址的行永远未落（架位口径住 `services/shelf.ts` 的 `Shelf`）。 */
+export function isSeatLanded(landed: ReadonlySet<string>, hit: SearchHit): boolean {
+  return hit.url !== null && landed.has(hit.url)
+}
+
+/** 「都加架」里**这次新落架**的架位：逐条 PUT 的成功结果按地址去重后给回。
+ *  按成功 PUT 计数会把一个架位报成「已加 2 个架位」（同址两行发两发幂等 PUT 也只落一个架位），
  *  虚报架上的账；没发出去的那几条不在 `settled` 里，本来就不该记进回执。 */
 export function newlyLandedSeats(todo: RowRef[], settled: ReadonlyArray<PromiseSettledResult<unknown>>): string[] {
   const seats = new Set<string>()
   settled.forEach((res, i) => {
-    if (res.status === 'fulfilled') seats.add(rowId(todo[i].sourceId, todo[i].hit.url))
+    const url = todo[i].hit.url
+    if (res.status === 'fulfilled' && url !== null) seats.add(url)
   })
   return [...seats]
 }

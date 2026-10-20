@@ -375,7 +375,7 @@ describe('CityView', () => {
 function openSheet(node: ReactNode): ReturnType<typeof render> { return render(node) }
 const noop = (): void => {}
 
-/** 浮层里那本书：`bookUrl` 就是它在本源上的地址（书架身份 = 读这本的入口） */
+/** 浮层里那本书：`bookUrl` 就是它在本源上的地址（书籍身份 = 读这本的入口） */
 const aBook: ExploreBook = {
   name: '半城风月', author: '沈念', bookUrl: '/b/1', intro: '一段该在浮层里看全文的简介',
   kind: '现代情感', lastChapter: '第 30 章', coverUrl: null, wordCount: null,
