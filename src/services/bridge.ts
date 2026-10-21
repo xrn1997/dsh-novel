@@ -1,6 +1,6 @@
 import render from 'dom-serializer'
 import { evaluate, isPutOnlyRule, RuleEvalError } from '../engine/index.js'
-import type { EngineValue, Facet, RuleUsage } from '../engine/index.js'
+import type { EngineValue, Facet, RuleUsage, SourceSession } from '../engine/index.js'
 // runScript 深引（与 search-template 同口径）：header 规则求值走沙箱完成值语义，
 // 引擎 barrel 刻意不收 runScript（公开面只有 evaluate）——服务半第二个深引消费点。
 import { runScript } from '../engine/js-sandbox.js'
@@ -140,7 +140,7 @@ export function engineContextOf(
   evalWebJs: (code: string, baseUrl?: string) => Promise<string>
   webView: (url: string) => Promise<string>
   deviceId?: string
-  session?: import('../engine/js-sandbox.js').SourceSession
+  session?: SourceSession
   httpCookies?: {
     headerFor(url: string): string
     setCookie(url: string, raw: string): void

@@ -4,6 +4,7 @@ import { SourceRegistry } from '../../src/services/sources.js'
 import { Shelf } from '../../src/services/shelf.js'
 import { PageCache } from '../../src/services/cache.js'
 import { createFetcher } from '../../src/services/fetcher.js'
+import { CookieJar } from '../../src/services/cookies.js'
 import { startServer } from './helpers.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
 import { NOVEL_API_PREFIX, paramRoutes, ROUTES, SEG } from '../../src/shared/wire.js'
@@ -145,11 +146,13 @@ describe('路由契约：ROUTES → 真实 dispatch 落点', () => {
 
   it('local part 缺席（from() 不传 local）→ 503 Unavailable（判据归门面动词）', async () => {
     const dir = await makeTempDir('novel-routes-nolocal-')
+    const jar = new CookieJar()
     const bare = trackService(await ReadingService.from({
       registry: await SourceRegistry.load(dir),
       shelf: await Shelf.load(dir),
       cache: new PageCache(dir),
-      fetcher: createFetcher({}),
+      fetcher: createFetcher({ cookieJar: jar }),
+      cookieJar: jar,
     }))
     const { base: b2, close: c2 } = await startServer(bare)
     try {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { CorruptJsonError, backupPathOf, isAtomicTemp, novelDir, readJson, tempPathOf, writeFileAtomic, writeJsonAtomic, createDebouncedWriter } from '../../src/services/storage.js'
+import { log } from '../../src/services/log.js'
 import { makeTempDir } from '../temp-dir.js'
 
 afterEach(() => { vi.restoreAllMocks() })
@@ -92,12 +93,39 @@ describe('writeFileAtomic（PageCache/JSON 共用低层）', () => {
   })
 
   it('定时器路径的写失败会留下可见错误，flush 如实抛出（不成为 unhandled）', async () => {
+    // 病根：flush 原先只看 pending。定时器触发后 pending 立刻被删、rename 还在途的这段窗口里，
+    // flush 会误判「没有挂起写」而 resolve，失败只能留给下一次 flush——收尾时即未处理拒绝。
+    // 这里用可控 rename 把窗口钉死：写真的在途，flush 必须等它并以同一个错误 reject。
     const dir = await tmp()
     const file = path.join(dir, 'debounced-fail.json')
-    vi.spyOn(fs, 'rename').mockRejectedValue(fsError('EACCES', 'denied'))
+    let rejectRename!: (e: unknown) => void
+    const renameMock = vi.spyOn(fs, 'rename').mockImplementation(
+      () => new Promise<void>((_resolve, reject) => { rejectRename = reject }),
+    )
     const w = createDebouncedWriter(1)
     w.schedule(file, { v: 1 })
-    await new Promise((resolve) => setTimeout(resolve, 20))   // 让定时器先撞失败
+    await vi.waitFor(() => { expect(renameMock).toHaveBeenCalled() }, { timeout: 5_000 })
+    const flushed = w.flush(file)          // pending 已被定时器取走，rename 仍在途
+    rejectRename(fsError('EACCES', 'denied'))
+    await expect(flushed).rejects.toMatchObject({ code: 'EACCES' })
+  })
+
+  it('定时器路径已记下的失败，由下一次 flush 取走（failed 表那条路）', async () => {
+    // 与上一条互补：那里 flush 与定时器抢的是**在途**那一笔；这里定时器已失败收场，
+    // flush 到来时既无 pending 也无 inflight，只能把记下的失败原样抛给调用方——
+    // 否则同一笔失败只剩一条日志，调用方永远看不见。
+    const dir = await tmp()
+    const file = path.join(dir, 'debounced-recorded-fail.json')
+    let rejectRename!: (e: unknown) => void
+    const renameMock = vi.spyOn(fs, 'rename').mockImplementation(
+      () => new Promise<void>((_resolve, reject) => { rejectRename = reject }),
+    )
+    const errorSpy = vi.spyOn(log, 'error').mockImplementation(() => undefined)
+    const w = createDebouncedWriter(1)
+    w.schedule(file, { v: 1 })
+    await vi.waitFor(() => { expect(renameMock).toHaveBeenCalled() }, { timeout: 5_000 })
+    rejectRename(fsError('EACCES', 'denied'))
+    await vi.waitFor(() => { expect(errorSpy).toHaveBeenCalled() }, { timeout: 5_000 })
     await expect(w.flush(file)).rejects.toMatchObject({ code: 'EACCES' })
   })
 })

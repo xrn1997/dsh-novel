@@ -11,11 +11,11 @@ import { contentSlot, exploreEpoch, rulesEpoch } from './cache-epoch.js'
 import { chapterContentToText } from './chapter-content.js'
 import { contentToText } from './content.js'
 import { ChapterNotFoundError, InvalidRequestError, LocalNotMountedError, RuleMissingError, SourceNotFoundError } from './errors.js'
-import { createFetcher, DEFAULT_TIMEOUT_MS } from './fetcher.js'
+import { createFetcher, DEFAULT_TIMEOUT_MS, type FetcherOptions } from './fetcher.js'
 import { CookieJar } from './cookies.js'
 import { WebViewRuntime } from './webview.js'
 import { createFileSourceSession } from './source-session.js'
-import { runScript, type SourceSession } from '../engine/js-sandbox.js'
+import { runScript } from '../engine/js-sandbox.js'
 import type { Fetcher } from './fetcher.js'
 import { KindCache } from './explore-cache.js'
 import { ExploreJobs } from './explore-job.js'
@@ -195,8 +195,9 @@ export class ReadingService {
     const deviceId = await readDeviceId(opts.dir)
     const sourceSession = createFileSourceSession(opts.dir)
     return ReadingService.from({
-      // HTTP cookie 按域共享（与上游 CookieStore 同粒度）；脚本侧 source cookie 仍按源隔离
-      fetcher: createFetcherWith(opts.fetchImpl, opts.proxyUrl, cookieJar),
+      // HTTP cookie 按域共享（与上游 CookieStore 同粒度）；脚本侧 source cookie 仍按源隔离。
+      // 运行期字段（deviceId / sourceSession）随构造进 fetcher——门面不再往注入物上写回。
+      fetcher: createFetcherWith(opts.fetchImpl, opts.proxyUrl, cookieJar, { deviceId, sourceSession }),
       cookieJar,
       registry: await SourceRegistry.load(opts.dir),
       shelf: await Shelf.load(opts.dir),
@@ -207,14 +208,14 @@ export class ReadingService {
       tocMaxPages: opts.tocMaxPages,
       contentMaxPages: opts.contentMaxPages,
       proxyUrl: opts.proxyUrl,
-      deviceId,
-      sourceSession,
     })
   }
 
   /**
    * 组合根注入面：接受已建好的部件（registry/shelf/cache/fetcher/local）直接总装——
    * 测试可换内存 registry adapter / 确定性 fetcher，而不必每次 mkdtemp + importOne。
+   * **只读注入物**：jar 必须是构造方给 fetcher 的同一实例（不一致当场炸，门面不挑一张、
+   * 不补写回）；deviceId / sourceSession 这类运行期字段也只由构造方带进 fetcher。
    * 后台任务面在此接线：导入/批量验证的探针口径与 search/probe 同一
    * fetcher 出口；timeoutMs 同源（探针与搜索对同一站点用同一耐心值）。
    * 部件（registry/shelf/jobs/local）总装后即 private——外部只经门面动词。
@@ -238,22 +239,18 @@ export class ReadingService {
     jsTimeoutMs?: number
     /** 真浏览器 WebView 的出站代理值源（与 fetcher 同口径） */
     proxyUrl?: ValueSource<string | null>
-    /** HTTP/浏览器共享 cookie jar（组合根直装时可传入；缺省新建） */
-    cookieJar?: CookieJar
-    /** 宿主设备 ID（androidId 的稳定替代） */
-    deviceId?: string
-    /** 源级状态会话（可落盘；缺省进程内） */
-    sourceSession?: SourceSession
+    /** HTTP/浏览器共享 cookie jar（必填；fetcher 带 jar 时必须是同一实例） */
+    cookieJar: CookieJar
   }): Promise<ReadingService> {
     const live = parts.config ?? staticLiveConfig(parts)
     // 装配期先过一遍：组合根直装的非法值要在启动时就炸，不留到第一次搜索才挂起
     requireParallelStep(live.searchParallel)
-    if (parts.deviceId !== undefined) parts.fetcher.deviceId = parts.deviceId
-    if (parts.sourceSession !== undefined) parts.fetcher.sourceSession = parts.sourceSession
     // 同一张 jar 要同时服务 HTTP（自动回带/落库）与脚本面（CookieManager/CookieStore）——
-    // 直装时 fetcher 可能没带 jar，门面这边补上；两处各持一张会让脚本读到的 cookie 与请求发出去的不是一份。
-    const cookieJar = parts.fetcher.cookieJar ?? parts.cookieJar ?? new CookieJar()
-    if (parts.fetcher.cookieJar === undefined) parts.fetcher.cookieJar = cookieJar
+    // 两处各持一张会让脚本读到的 cookie 与请求发出去的不是一份；装配只认调用方显式给的同一实例。
+    if (parts.fetcher.cookieJar !== undefined && parts.fetcher.cookieJar !== parts.cookieJar) {
+      throw new Error('fetcher.cookieJar 与 parts.cookieJar 不是同一张表——装配必须显式给同一实例')
+    }
+    const cookieJar = parts.cookieJar
     const webview = new WebViewRuntime(parts.proxyUrl === undefined ? {} : { proxyUrl: parts.proxyUrl })
     // 与基础 fetcher **同一张 jar**：两处各持一张会让脚本读到的 cookie 与请求发出去的不是一份
     const sourceRequest = createSourceRequest({
@@ -870,7 +867,7 @@ export class ReadingService {
   private async getTocInner(s: NovelSource, bookUrl: string, epoch: string, opts?: { refresh?: boolean }): Promise<ChapterEntry[]> {
     if (opts?.refresh !== true) {
       const cached = await this.cache.getToc(s.id, bookUrl, epoch)
-      if (cached !== null) return JSON.parse(cached) as ChapterEntry[]
+      if (cached !== null) return cached
     }
     // 目录三规则任一缺失不得降级 `?? ''`——空串规则返回整页文本，宁炸不猜
     // 列表选择器：ruleChapterList（对象方言）；平铺方言缺它时回退 ruleBookList（平铺口径：
@@ -944,7 +941,7 @@ export class ReadingService {
       subEval,
     )
     const chapters = result.items
-    await this.cache.setToc(s.id, bookUrl, epoch, JSON.stringify(chapters))
+    await this.cache.setToc(s.id, bookUrl, epoch, chapters)
     return chapters
   }
 
@@ -1229,11 +1226,13 @@ function createFetcherWith(
   fetchImpl?: typeof globalThis.fetch,
   proxyUrl?: ValueSource<string | null>,
   cookieJar?: CookieJar,
+  runtime?: Pick<FetcherOptions, 'deviceId' | 'sourceSession'>,
 ): Fetcher {
   return createFetcher({
     ...(fetchImpl === undefined ? {} : { fetchImpl }),
     ...(proxyUrl === undefined ? {} : { proxyUrl }),
     ...(cookieJar === undefined ? {} : { cookieJar }),
+    ...runtime,
   })
 }
 

@@ -5,7 +5,7 @@ import { normalizeProxyUrl, parseProxyUrl, redactProxyUrl } from './proxy.js'
 import type { NovelSource } from './types.js'
 import { readValue, type ValueSource } from './value-source.js'
 import type { CookieJar } from './cookies.js'
-import type { SourceSession } from '../engine/js-sandbox.js'
+import type { SourceSession } from '../engine/index.js'
 
 export interface FetchedPage {
   raw: Buffer
@@ -35,8 +35,13 @@ export interface FetcherOptions {
    *  可以是活 getter——每次请求前读当前值，配置页改了代理不必重建 fetcher。 */
   proxyUrl?: ValueSource<string | null>
   /** 域/路径感知的 cookie jar（跨源共享，上游 CookieStore 同粒度）：请求缺省带同一 host/path
-   *  的 cookie，响应 Set-Cookie 自动落库。显式 Cookie 头优先（源规则/auth 合并后的头照旧占优）。 */
+   *  的 cookie，响应 Set-Cookie 自动落库。显式 Cookie 头优先（源规则/auth 合并后的头照旧占优）。
+   *  jar 在构造时给；门面只读不再写回（见 reading.from）。 */
   cookieJar?: CookieJar
+  /** 宿主设备 ID（androidId 的稳定替代）；由构造方给，门面不再写回 */
+  deviceId?: string
+  /** 源级状态会话；由构造方给，门面不再写回 */
+  sourceSession?: SourceSession
 }
 
 /** 一次抓取的 init 形状：接口与实现共用这一份，新增字段不再需要两处同步。 */
@@ -180,10 +185,12 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
     return dispatcher
   }
 
-  // jar 走**对象字段**而不是建厂闭包：组合根直装时门面会给 fetcher 补一张 jar（reading.from），
-  // 请求自动回带必须与脚本面读的是同一张表。
+  // jar / deviceId / sourceSession 走**对象字段**而不是建厂闭包：脚本面与请求面必须读到同一实例
+  //（jar 还要求构造方与门面给的是同一张，见 reading.from）。
   const api: Fetcher = {
     ...(opts?.cookieJar === undefined ? {} : { cookieJar: opts.cookieJar }),
+    ...(opts?.deviceId === undefined ? {} : { deviceId: opts.deviceId }),
+    ...(opts?.sourceSession === undefined ? {} : { sourceSession: opts.sourceSession }),
     async fetchPage(url: string, init?: FetchInit): Promise<FetchedPage> {
       const timeoutMs = init?.timeoutMs ?? defaultTimeoutMs
       const activeDispatcher = currentDispatcher()

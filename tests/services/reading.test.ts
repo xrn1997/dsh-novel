@@ -3,7 +3,7 @@ import { promises as fsPromises } from 'node:fs'
 import path from 'node:path'
 import type { Readable } from 'node:stream'
 import { ReadingService } from '../../src/services/reading.js'
-import type { SourceSession } from '../../src/engine/js-sandbox.js'
+import type { SourceSession } from '../../src/engine/index.js'
 import { detailContextOf } from '../../src/services/bridge.js'
 import type { SubRuleEval } from '../../src/services/bridge.js'
 import { chapterContentToText } from '../../src/services/chapter-content.js'
@@ -70,19 +70,21 @@ async function makeService(
     /** 源级状态会话（删源清理用例观察 forget 的调用） */
     sourceSession?: SourceSession
   },
-): Promise<{ svc: ReadingService; registry: SourceRegistry }> {
+): Promise<{ svc: ReadingService; registry: SourceRegistry; dir: string }> {
   const dir = await makeTempDir('novel-rd-')
   const registry = trackService(await SourceRegistry.load(dir))
   const shelf = trackService(await Shelf.load(dir))
-  const svc = trackService(await ReadingService.from({
-    registry,
-    shelf,
-    cache: new PageCache(dir),
-    fetcher: createFetcher({ fetchImpl: route(htmlOf, opts?.onFetch) as never }),
+  const jar = new CookieJar()
+  const fetcher = createFetcher({
+    fetchImpl: route(htmlOf, opts?.onFetch) as never,
+    cookieJar: jar,
     ...(opts?.sourceSession === undefined ? {} : { sourceSession: opts.sourceSession }),
+  })
+  const svc = trackService(await ReadingService.from({
+    registry, shelf, cache: new PageCache(dir), fetcher, cookieJar: jar,
   }))
   await svc.importOne({ ...rawSource, ...opts?.over })
-  return { svc, registry }
+  return { svc, registry, dir }
 }
 
 describe('ReadingService', () => {
@@ -300,6 +302,20 @@ describe('ReadingService', () => {
     expect(tocFetches).toBe(before) // 缓存命中
   })
 
+  it('坏目录缓存读作 miss：下一次 getToc 重抓并重写，不把整本书钉成 500', async () => {
+    const { svc, registry, dir } = await makeService((u) => {
+      if (u.includes('/book/1/')) return TOC_HTML
+      return u.includes('/toc2.html') ? TOC2_HTML : null
+    })
+    const src = registry.list()[0]
+    await svc.getToc(src.id, `${BASE}/book/1/`)
+    const tocDir = path.join(dir, 'cache', 'toc')
+    const [file] = await fsPromises.readdir(tocDir)
+    await fsPromises.writeFile(path.join(tocDir, file!), '{not json', 'utf8')
+    const toc = await svc.getToc(src.id, `${BASE}/book/1/`)
+    expect(toc.map((c) => c.name)).toEqual(['第一章', '第二章', '第三章'])
+  })
+
   it('getChapter 多页串接 + 正文规约；Miss 抛 RuleEvalError', async () => {
     let contentFetches = 0
     const { svc, registry } = await makeService((u) => {
@@ -381,8 +397,12 @@ describe('ReadingService', () => {
     const registry = trackService(await SourceRegistry.load(dir))
     const shelf = trackService(await Shelf.load(dir))
     const cache = new PageCache(dir)
-    const fetcher = createFetcher({ fetchImpl: route((u) => (u.includes('/search') ? SEARCH_HTML('斗罗') : null)) as never })
-    const svc = trackService(await ReadingService.from({ registry, shelf, cache, fetcher }))
+    const jar = new CookieJar()
+    const fetcher = createFetcher({
+      fetchImpl: route((u) => (u.includes('/search') ? SEARCH_HTML('斗罗') : null)) as never,
+      cookieJar: jar,
+    })
+    const svc = trackService(await ReadingService.from({ registry, shelf, cache, fetcher, cookieJar: jar }))
     // 引擎能力归源请求缝的 sourceRequest.fetcherFor；from() 不再偷偷改注入的基础 fetcher
     expect(fetcher.webview).toBeUndefined()
     await svc.importOne(rawSource)
@@ -422,14 +442,37 @@ describe('ReadingService', () => {
     for (const r of seen) expect(r.headers['X-Dyn'], r.url).toBe('1')
   })
 
-  it('from()：同一张 cookie jar 交给基础 fetcher 与源请求缝（脚本读到的就是请求层那张表）', async () => {
+  it('from() 不替调用方造 jar：fetcher 与 parts 的 jar 不是同一张就当场炸', async () => {
+    const dir = await makeTempDir('novel-rd-')
+    const registry = trackService(await SourceRegistry.load(dir))
+    const shelf = trackService(await Shelf.load(dir))
+    const jarA = new CookieJar()
+    const fetcher = createFetcher({ fetchImpl: (async () => new Response('')) as never, cookieJar: jarA })
+    await expect(ReadingService.from({
+      registry, shelf, cache: new PageCache(dir), fetcher, cookieJar: new CookieJar(),
+    })).rejects.toThrow(/同一张/)
+  })
+
+  it('from() 不写回：没带 jar 的 fetcher 装配后仍然没有 jar', async () => {
+    const dir = await makeTempDir('novel-rd-')
+    const registry = trackService(await SourceRegistry.load(dir))
+    const shelf = trackService(await Shelf.load(dir))
+    const fetcher = createFetcher({ fetchImpl: (async () => new Response('')) as never })
+    const jar = new CookieJar()
+    trackService(await ReadingService.from({ registry, shelf, cache: new PageCache(dir), fetcher, cookieJar: jar }))
+    expect(fetcher.cookieJar).toBeUndefined()
+  })
+
+  it('from()：同一张 cookie jar 在构造时交给 fetcher 与源请求缝（脚本读到的就是请求层那张表）', async () => {
     const dir = await makeTempDir('novel-rd-')
     const registry = trackService(await SourceRegistry.load(dir))
     const shelf = trackService(await Shelf.load(dir))
     const jar = new CookieJar()
     jar.absorb(`${BASE}/`, ['sid=1; Path=/'])
-    // 不建 jar 的 fetcher + 直装 jar：门面补上的那张必须同时是脚本面读到的那张
-    const fetcher = createFetcher({ fetchImpl: route((u) => (u.includes('/search') ? SEARCH_HTML('斗罗') : null)) as never })
+    const fetcher = createFetcher({
+      fetchImpl: route((u) => (u.includes('/search') ? SEARCH_HTML('斗罗') : null)) as never,
+      cookieJar: jar,
+    })
     const svc = trackService(await ReadingService.from({
       registry, shelf, cache: new PageCache(dir), fetcher, cookieJar: jar,
     }))
@@ -503,11 +546,16 @@ describe('ReadingService', () => {
     const dir = await makeTempDir('novel-rd-')
     const registry = trackService(await SourceRegistry.load(dir))
     const shelf = trackService(await Shelf.load(dir))
+    const jar = new CookieJar()
     const svc = trackService(await ReadingService.from({
       registry,
       shelf,
       cache: new PageCache(dir),
-      fetcher: createFetcher({ fetchImpl: route((u) => u.includes('/search') ? SEARCH_HTML('x') : null) as never }),
+      fetcher: createFetcher({
+        fetchImpl: route((u) => u.includes('/search') ? SEARCH_HTML('x') : null) as never,
+        cookieJar: jar,
+      }),
+      cookieJar: jar,
     }))
     const out = await svc.importSource([
       rawSource,
@@ -665,11 +713,13 @@ describe('书 URL 承载请求选项（,{option} 随身份存取）', () => {
     const dir = await makeTempDir('novel-rd-')
     const registry = trackService(await SourceRegistry.load(dir))
     const shelf = trackService(await Shelf.load(dir))
+    const jar = new CookieJar()
     const svc = trackService(await ReadingService.from({
       registry,
       shelf,
       cache: new PageCache(dir),
       fetcher: createFetcher({
+        cookieJar: jar,
         fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
           const u = String(input)
           calls.push({ url: u, method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: init.body } : {}) })
@@ -683,6 +733,7 @@ describe('书 URL 承载请求选项（,{option} 随身份存取）', () => {
           return new Response('', { status: 404 })
         }) as never,
       }),
+      cookieJar: jar,
     }))
     await svc.importOne(API_RAW)
     const src = registry.list().find((s) => s.name === 'API源')!
@@ -729,11 +780,13 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
     const dir = await makeTempDir('novel-rd-')
     const registry = trackService(await SourceRegistry.load(dir))
     const shelf = trackService(await Shelf.load(dir))
+    const jar = new CookieJar()
     const svc = trackService(await ReadingService.from({
       registry,
       shelf,
       cache: new PageCache(dir),
       fetcher: createFetcher({
+        cookieJar: jar,
         fetchImpl: (async (input: RequestInfo | URL) => {
           const u = String(input)
           calls.push(u)
@@ -748,6 +801,7 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
           return new Response('', { status: 404 })
         }) as never,
       }),
+      cookieJar: jar,
     }))
     await svc.importOne(QQ_RAW)
     return { svc, registry, calls }
@@ -785,9 +839,11 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
     const dir = await makeTempDir('novel-rd-')
     const registry = trackService(await SourceRegistry.load(dir))
     const shelf = trackService(await Shelf.load(dir))
+    const jar = new CookieJar()
     const svc = trackService(await ReadingService.from({
       registry, shelf, cache: new PageCache(dir),
       fetcher: createFetcher({
+        cookieJar: jar,
         fetchImpl: (async (input: RequestInfo | URL) => {
           const u = String(input)
           if (u === 'https://once.example.com/init-hit') {
@@ -800,6 +856,7 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
           return new Response('', { status: 404 })
         }) as never,
       }),
+      cookieJar: jar,
     }))
     await svc.importOne({
       bookSourceName: '单次 init 源', bookSourceUrl: 'https://once.example.com',
@@ -843,9 +900,11 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
     const dir = await makeTempDir('novel-rd-')
     const registry = trackService(await SourceRegistry.load(dir))
     const shelf = trackService(await Shelf.load(dir))
+    const jar = new CookieJar()
     const svc = trackService(await ReadingService.from({
       registry, shelf, cache: new PageCache(dir),
       fetcher: createFetcher({
+        cookieJar: jar,
         fetchImpl: (async (input: RequestInfo | URL) => {
           const u = String(input)
           if (u === META_URL || u === 'https://meta.example.com/book/77') {
@@ -854,6 +913,7 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
           return new Response('', { status: 404 })
         }) as never,
       }),
+      cookieJar: jar,
     }))
     await svc.importOne(META_RAW)
     return { svc, registry }
@@ -905,11 +965,13 @@ describe('js 沙箱预算走配置出口（jsTimeoutMs）', () => {
     const dir = await makeTempDir('novel-rd-')
     const registry = trackService(await SourceRegistry.load(dir))
     const shelf = trackService(await Shelf.load(dir))
+    const jar = new CookieJar()
     const svc = trackService(await ReadingService.from({
       registry,
       shelf,
       cache: new PageCache(dir),
       fetcher: createFetcher({
+        cookieJar: jar,
         fetchImpl: (async (input: RequestInfo | URL) => {
           const u = String(input)
           if (u.includes('/s?')) {
@@ -927,6 +989,7 @@ describe('js 沙箱预算走配置出口（jsTimeoutMs）', () => {
           return new Response('', { status: 404 })
         }) as never,
       }),
+      cookieJar: jar,
       ...(opts.jsTimeoutMs === undefined ? {} : { jsTimeoutMs: opts.jsTimeoutMs }),
     }))
     await svc.importOne({
@@ -989,11 +1052,13 @@ describe('同步导入走 intake 入库规则（此前工具面导入无去重�
   const mk = async (): Promise<{ svc: ReadingService; registry: SourceRegistry }> => {
     const dir = await makeTempDir('novel-rd-')
     const registry = await SourceRegistry.load(dir)
+    const jar = new CookieJar()
     const svc = trackService(await ReadingService.from({
       registry,
       shelf: await Shelf.load(dir),
       cache: new PageCache(dir),
-      fetcher: createFetcher({ fetchImpl: route(() => null) as never }),
+      fetcher: createFetcher({ fetchImpl: route(() => null) as never, cookieJar: jar }),
+      cookieJar: jar,
     }))
     return { svc, registry }
   }
@@ -1303,9 +1368,11 @@ describe('searchProgressive：给唯一实现加增量出口（不许出现第�
       if (arm && u.includes('b-late.com')) await slow
       return plain(u)
     }
+    const jar = new CookieJar()
     const svc = trackService(await ReadingService.from({
       registry, shelf, cache: new PageCache(dir),
-      fetcher: createFetcher({ fetchImpl: fetchImpl as never }),
+      fetcher: createFetcher({ fetchImpl: fetchImpl as never, cookieJar: jar }),
+      cookieJar: jar,
     }))
     await svc.importOne(rawSource)
     await svc.importOne({ ...rawSource, bookSourceName: 'B', bookSourceUrl: 'https://b-late.com', searchUrl: 'https://b-late.com/search?q={{key}}' })

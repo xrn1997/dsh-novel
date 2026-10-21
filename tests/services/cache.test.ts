@@ -11,9 +11,19 @@ describe('PageCache', () => {
   it('toc set/get 往返；miss → null', async () => {
     const c = new PageCache(await tmp())
     expect(await c.getToc('s', 'k', 'e')).toBeNull()
-    await c.setToc('s', 'k', 'e', '[{"name":"第1章"}]')
-    expect(await c.getToc('s', 'k', 'e')).toBe('[{"name":"第1章"}]')
+    await c.setToc('s', 'k', 'e', [{ name: '第1章', url: 'https://x/1' }])
+    expect(await c.getToc('s', 'k', 'e')).toEqual([{ name: '第1章', url: 'https://x/1' }])
     expect(await c.getToc('s', 'k', 'e2')).toBeNull()   // 换代际即换文件：旧条目不被新代际读到
+  })
+  it('坏字节 / 错形状读作 miss，不抛', async () => {
+    const dir = await tmp()
+    const c = new PageCache(dir)
+    const file = path.join(dir, 'cache', 'toc', `s-${safeKey('k')}-e.json`)
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    for (const bad of ['{oops', '{}', '[{"name":1,"url":"u"}]', '[{"name":"n"}]']) {
+      await fs.writeFile(file, bad, 'utf8')
+      await expect(c.getToc('s', 'k', 'e')).resolves.toBeNull()
+    }
   })
   it('content 按章节索引与槽位隔离', async () => {
     const c = new PageCache(await tmp())

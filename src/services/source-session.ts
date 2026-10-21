@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import type { SourceSession } from '../engine/js-sandbox.js'
+import type { SourceSession } from '../engine/index.js'
 import { log } from './log.js'
 import { backupPathOf, CorruptJsonError, tempPathOf } from './storage.js'
 

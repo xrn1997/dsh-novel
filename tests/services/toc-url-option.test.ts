@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { ReadingService } from '../../src/services/reading.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
 import { createFetcher } from '../../src/services/fetcher.js'
+import { CookieJar } from '../../src/services/cookies.js'
 import { PageCache } from '../../src/services/cache.js'
 import { Shelf } from '../../src/services/shelf.js'
 import { SourceRegistry } from '../../src/services/sources.js'
@@ -52,11 +53,13 @@ async function makeSvc(): Promise<{ svc: ReadingService; registry: SourceRegistr
   const dir = await makeTempDir('novel-tocopt-')
   const registry = trackService(await SourceRegistry.load(dir))
   const shelf = trackService(await Shelf.load(dir))
+  const jar = new CookieJar()
   const svc = trackService(await ReadingService.from({
     registry,
     shelf,
     cache: new PageCache(dir),
     fetcher: createFetcher({
+      cookieJar: jar,
       fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
         const u = String(input)
         const method = init?.method ?? 'GET'
@@ -72,6 +75,7 @@ async function makeSvc(): Promise<{ svc: ReadingService; registry: SourceRegistr
         return new Response('', { status: 404 })
       }) as never,
     }),
+    cookieJar: jar,
   }))
   await svc.importOne(RAW)
   return { svc, registry, calls }

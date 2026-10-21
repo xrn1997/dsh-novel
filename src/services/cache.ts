@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import type { ChapterEntry } from '../shared/wire.js'
 import { writeFileAtomic } from './storage.js'
 import { readValue, type ValueSource } from './value-source.js'
 
@@ -25,10 +26,12 @@ export function safeKey(bookKey: string): string {
  * 上限是活值：配置页改过上限后，下一次 prune 就按新值淘汰，不必重建缓存实例；
  * prune 开头读一次快照，两处比较共用它——读到一半换值会让「判超」与「删到够」用两个上限。
  *
- * 本模块只回答「放在哪」，不回答「何时有效」：`epoch` / `slot` 是调用方给的不透明串
+ * 本模块回答「放在哪」与 toc 编解码，不回答「何时有效」：`epoch` / `slot` 是调用方给的不透明串
  * （算式在 `cache-epoch.ts`，裁决在 `reading.ts`）。旧代际文件不删——此后不再被写，
  * mtime 只可能更早，因此排在**新写入**之前；但 prune 是 mtime 近似、`read()` 不刷新 mtime，
  * 长期只读的热条目同样不会被读操作续命，可能先于旧代际被淘汰（如实记，不假装挤不掉热数据）。
+ *
+ * toc 的 (de)serialize 与坏字节裁决在本模块；内容正文仍只收发 string。
  */
 export class PageCache {
   private readonly tocDir: string
@@ -41,12 +44,12 @@ export class PageCache {
     this.maxBytes = maxBytes
   }
 
-  async getToc(sourceId: string, bookKey: string, epoch: string): Promise<string | null> {
-    return this.read(this.tocFile(sourceId, bookKey, epoch))
+  async getToc(sourceId: string, bookKey: string, epoch: string): Promise<ChapterEntry[] | null> {
+    return this.readToc(this.tocFile(sourceId, bookKey, epoch))
   }
 
-  async setToc(sourceId: string, bookKey: string, epoch: string, data: string): Promise<void> {
-    await writeFileAtomic(this.tocFile(sourceId, bookKey, epoch), data)
+  async setToc(sourceId: string, bookKey: string, epoch: string, chapters: readonly ChapterEntry[]): Promise<void> {
+    await writeFileAtomic(this.tocFile(sourceId, bookKey, epoch), JSON.stringify(chapters))
     await this.prune()
   }
 
@@ -110,4 +113,29 @@ export class PageCache {
       return null
     }
   }
+
+  /** 目录缓存是**域形状**，不是裸文本：坏字节与错形状都读作 miss（ADR 0017 的降级边界内），
+   *  下一次抓取按同一代际重写；不新增清缓存出口（ADR 0012）。 */
+  private async readToc(file: string): Promise<ChapterEntry[] | null> {
+    const raw = await this.read(file)
+    if (raw === null) return null
+    try {
+      const value: unknown = JSON.parse(raw)
+      return isChapterEntries(value) ? value : null
+    } catch {
+      return null
+    }
+  }
+}
+
+function isChapterEntries(value: unknown): value is ChapterEntry[] {
+  return Array.isArray(value) && value.every((item) => {
+    if (typeof item !== 'object' || item === null) return false
+    const row = item as Record<string, unknown>
+    if (typeof row.name !== 'string' || typeof row.url !== 'string') return false
+    for (const key of ['isVip', 'isVolume', 'isPay'] as const) {
+      if (row[key] !== undefined && typeof row[key] !== 'boolean') return false
+    }
+    return row.updateTime === undefined || typeof row.updateTime === 'string'
+  })
 }

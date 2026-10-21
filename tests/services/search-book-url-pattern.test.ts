@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createFetcher } from '../../src/services/fetcher.js'
+import { CookieJar } from '../../src/services/cookies.js'
 import { fetchSearchPage } from '../../src/services/search-face.js'
 import { probeSource } from '../../src/services/probe.js'
 import { ReadingService } from '../../src/services/reading.js'
@@ -171,9 +172,11 @@ async function makeSvc(raw: Record<string, unknown>, finalUrlOf: (url: string) =
     const body = /\/search|\/book\/123/.test(url) ? DETAIL_BODY : LIST_BODY
     return htmlPage(body, finalUrlOf(url) ?? undefined)
   }
+  const jar = new CookieJar()
   const svc = trackService(await ReadingService.from({
     registry, shelf, cache: new PageCache(dir),
-    fetcher: createFetcher({ fetchImpl: impl as never }),
+    fetcher: createFetcher({ fetchImpl: impl as never, cookieJar: jar }),
+    cookieJar: jar,
   }))
   await svc.importOne(raw)
   return { svc, id: registry.list()[0].id }

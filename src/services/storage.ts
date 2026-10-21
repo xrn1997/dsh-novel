@@ -118,7 +118,11 @@ export async function writeJsonAtomic(file: string, data: unknown): Promise<void
 
 /** 进程内防抖合并连续写：窗口内同文件多次 schedule 只落最后一次；flush 等待全部落地 */
 export function createDebouncedWriter(delayMs = 100) {
-  const pending = new Map<string, { data: unknown; timer: ReturnType<typeof setTimeout>; waiters: (() => void)[] }>()
+  type PendingWrite = { data: unknown; timer: ReturnType<typeof setTimeout>; waiters: (() => void)[] }
+  const pending = new Map<string, PendingWrite>()
+  // 已离开 pending、尚未落地的写。定时器一触发 pending 就删了，rename 在途这段窗口若不算「挂起」，
+  // flush 会误判静默而提前 resolve——失败只剩「下一次 flush」可接，进程收尾时即未处理拒绝。
+  const inflight = new Map<string, Promise<void>>()
   // 定时器触发的写没有调用方可接 rejection；失败留在这里，下一次 flush 如实抛给调用方
   const failed = new Map<string, unknown>()
   const takeFailure = (file?: string): { error: unknown } | undefined => {
@@ -134,12 +138,8 @@ export function createDebouncedWriter(delayMs = 100) {
     failed.delete(first.value)
     return { error }
   }
-  const flushOne = (file: string): Promise<void> => {
-    const p = pending.get(file)
-    if (!p) return Promise.resolve()
-    clearTimeout(p.timer)
-    pending.delete(file)
-    return writeJsonAtomic(file, p.data).then(
+  const startWrite = (file: string, p: PendingWrite): Promise<void> => {
+    const job = writeJsonAtomic(file, p.data).then(
       () => {
         failed.delete(file)             // 新一笔写成功即清掉旧失败
         p.waiters.forEach((r) => r())
@@ -149,6 +149,17 @@ export function createDebouncedWriter(delayMs = 100) {
         throw e
       },
     )
+    inflight.set(file, job)
+    const settled = (): void => { if (inflight.get(file) === job) inflight.delete(file) } // 只摘自己：后继写可能已顶替
+    job.then(settled, settled)
+    return job
+  }
+  const flushOne = (file: string): Promise<void> => {
+    const p = pending.get(file)
+    if (!p) return inflight.get(file) ?? Promise.resolve()
+    clearTimeout(p.timer)
+    pending.delete(file)
+    return startWrite(file, p)
   }
   return {
     schedule(file: string, data: unknown): void {
@@ -167,11 +178,15 @@ export function createDebouncedWriter(delayMs = 100) {
     /** 等齐落盘：排到**静默**，不是排「调用那一刻的快照」。
      *  只取一次快照的话，第一轮 I/O 在途时新 `schedule` 的那笔写留在计时器里——flush 已返回、
      *  进程收尾后它才自己烧：Windows 上表现为 `rename` 撞 EPERM 的未处理拒绝（门绿 exit≠0 的现场）。
+     *  「挂起」同时算计时器里的 pending 与已开写未落地的 inflight：定时器触发后到 rename 落地之间的
+     *  窗口也归 flush 管，否则在途失败会让 flush 提前返回、把错误丢给下一次。
      *  终止条件是「这一轮没有挂起写」，**刻意不设轮次上限**：加上限等于把同一个逃逸窗口藏回去。
      *  指定 file 时只等那一支（没有它的挂起写就立即 resolve）；定时器路径失败的写也会在这里抛出。 */
     async flush(file?: string): Promise<void> {
       for (;;) {
-        const files = file === undefined ? [...pending.keys()] : pending.has(file) ? [file] : []
+        const files = file === undefined
+          ? [...new Set([...pending.keys(), ...inflight.keys()])]
+          : pending.has(file) || inflight.has(file) ? [file] : []
         if (files.length === 0) {
           const failure = takeFailure(file)
           if (failure !== undefined) throw failure.error
