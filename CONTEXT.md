@@ -60,12 +60,12 @@ _Avoid_: 过滤（它不是丢弃）、降噪、二次搜索、相关性分数�
 
 **作品视图（按书）**:
 一轮聚合搜索里「同一本（规范化书名 + 规范化作者）在若干家源上」的呈现轴：一本一行、逐源在下面可展开、可一次把这一本的各家逐条都加架。它是**派生投影**，不是存储身份——架位凭 `bookKey`（词条见「架位」），进度不跨源搬。单位律是三条身份：**条**＝那一本书在一个源上的那一行——逐源轴的组头计数、收口的命中读数、书行的展开钮都数它；**本**＝归并后的那一本——书行一行一本，收口的并书读数与超限行数它；**家**＝一个源——「N 家源」与收口的搜过/未响应数的是去重后的家。三条读数绝不折叠；加架回执数的是落架的**架位**（同一地址的两种写法各是一行、只落一个架位）。
-_唯一实现_: `shared/merge-by-book.ts` 的 `mergeBooks`（形状 `MergedBook` / `MergedSource` 与上限 `SEARCH_BOOKS_CAP` 在 `shared/wire.ts`；本轮收口形状 `MergedRound` 不过 HTTP，就住 `mergeBooks` 旁边；键上的名字取首个到达源原样，不投票）
+_唯一实现_: `shared/merge-by-book.ts` 的 `mergePartitioned`（生产两个消费点的归并入口：吃 `shared/round-summary.ts` 的分区，同一轮只分区一次；形状 `MergedBook` / `MergedSource` 与上限 `SEARCH_BOOKS_CAP` 在 `shared/wire.ts`；本轮收口形状 `MergedRound` 不过 HTTP，就住 `mergePartitioned` 旁边；键上的名字取首个到达源原样，不投票）；`mergeBooks` 只是「一轮 → 归并」的 convenience（测试与审计脚本用），不是第二个实现
 _Avoid_: 跨源合并器（那是发现面已下线那一层的历史名字，见 `docs/adr/0028`）、同书去重（不去重，多源都在案）、作品（本仓不用这个词指存储实体）
 
 **搜索结果页派生（search view-model）**:
-「一轮命中现场 → 收口读数（条／本／家）、两条呈现轴的行身份与逐源回读」的唯一住址：判据在此，视图只接线与渲染。
-_唯一实现_: `client/search-view-model.ts`（`deriveRound` / `sumRound` / `rowId` / `rowKeys` / `rowMeta` / `bookRows` / `shelfSeats` / `newlyLandedSeats`）
+「一轮命中现场 → 轮级计数（条／本／家）、两条呈现轴的行身份与逐源回读」的唯一住址：判据在此，视图只接线与渲染。
+_唯一实现_: `shared/round-summary.ts` 的 `summarizeRound`（轮级分区与计数，每源只分区一次）；`client/search-view-model.ts` 的 `deriveRound` / `rowId` / `rowKeys` / `rowMeta` / `bookRows` / `shelfSeats` / `isSeatLanded` / `newlyLandedSeats`
 _Avoid_: 搜索结果状态（那住 `client/search-job.ts` 的观察通道）、加架账（落架现场在视图 state，本层只给架位算式）
 
 **工具面披露三件套（searched / answered / filtered）**:
@@ -100,7 +100,7 @@ _Avoid_: cookie 垫片（那是 `SourceSession.cookieJar` 的按源键值表）�
 
 **源状态会话（source session）**:
 脚本可见的按源状态四张表：cookie 垫片、键值变量、单串槽、cache 垫片。接口面同步（脚本 `source.get`/`cache.get` 不能等 IO）；生产实现落盘到数据根 `source-state.json`，删源时按 baseUrl 清掉该源四张表。
-_唯一实现_: `src/engine/js-sandbox.ts` 的 `SourceSession` 接口；`src/services/source-session.ts` 的 `FileSourceSession`（`forget` 是删源清理口）
+_唯一实现_: `src/engine/session.ts` 的 `SourceSession` 接口；`src/services/source-session.ts` 的 `FileSourceSession`（`forget` 是删源清理口）
 _Avoid_: 缓存（页面缓存归 `services/cache.ts`；这里的 cache 只是脚本 `source.cache` 垫片）、登录态（`SourceAuth` 归 `services/sources.ts`）
 
 ### 面与段
@@ -227,7 +227,7 @@ _Avoid_: id、url（太泛）
 
 **架位（shelf seat）**:
 书架上的一条记录（一个 `ShelfBook`，界面上一张卡），凭 `bookKey` 认：**同一地址不管从哪家源加进来只落一个架位**，`sourceId` 与 `title` 是这条记录的元数据、不参与查找；一本被两家源各给一个地址就是两个架位、两份进度（「换源保持进度」仍未裁）。「都加架」的三态与回执数的是架位，不数 PUT、也不数行。
-_唯一实现_: `services/shelf.ts` 的 `Shelf`（按 `bookKey` 单键认）；客户端算式 `client/search-view-model.ts` 的 `shelfSeats` / `isSeatLanded` / `newlyLandedSeats`
+_唯一实现_: `services/shelf.ts` 的 `Shelf`（按 `bookKey` 单键认）；客户端算式 `client/search-view-model.ts` 的 `shelfSeats` / `isSeatLanded` / `newlyLandedSeats` / `addAllReceipt`
 _Avoid_: 书架身份（它把上面那条 `bookKey` 的「书籍身份」和这个「架位」压成一句，两键误读就从这里长出来）、座位（本仓的「座位」指宿主的槽位）、光杆一个「条目」（那指一条命中，见「条目装配」；要指架上这条就写全「书架条目」或直接写「架位」）
 
 **加架动作（shelf action）**:
@@ -289,8 +289,8 @@ _Avoid_: 正文键、章节 id
 
 **文案字典（copy dictionary）**:
 客户端可见文案的唯一住址：`ZH` 是真源，`EN` 逐键镜像；组件经 `useCopy` 取词、slot 子树经 `CopyProvider` 注入，宿主 locale 服务缺席时 `zhTranslate` 兜底。
-_唯一实现_: `src/client/copy/index.tsx` 的 `ZH` / `EN` / `createTranslate`（注册与绑定）/ `zhTranslate`（回退）/ `CopyProvider` + `useCopy`（子树取词）
-_Avoid_: 文案表、客户端 UI 文案的外挂 i18n 资源（字典是同一份 TS 模块；插件卡片的 locale 元信息不在这层）；服务端错误原文与 AI 工具描述不在这一层
+_唯一实现_: `src/client/copy/index.tsx` 的 `ZH` / `EN` / `createTranslate`（注册与绑定）/ `zhTranslate`（回退）/ `CopyProvider` + `useCopy`（子树取词）；搜索收口句的模板与子句键住 `src/client/copy/search.ts`，按模板组装成段的唯一实现是 `src/client/copy/search-summary.ts` 的 `searchSummarySegments`
+_Avoid_: 文案表、客户端 UI 文案的外挂 i18n 资源（字典是同一份 TS 模块；插件卡片的 locale 元信息不在这层）；服务端错误原文与 AI 工具描述不在这一层；视图里拼句序（子句顺序由字典的整句模板决定，视图只交数字与渲染段）
 
 **错误展示（error display）**:
 上屏错误的一句话归谁出：客户端自造的网络错误按 `reason` 走当前语言；服务端错误原文透传（与书源数据同一条边界），错误码与段级定位原样呈现。
