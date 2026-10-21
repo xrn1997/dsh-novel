@@ -385,9 +385,14 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     expect(deps.apiSend).not.toHaveBeenCalled()          // 恢复不是重打：一轮都不必提交
     expect(screen.getByText(/本轮搜过/)).toBeTruthy()     // 收尾留痕同样从快照复算
     // 没折进任何东西时不摆两个数（组头单数、收口无括注）：负向钉住，防「相关 x · 共 y」无差别铺开
-    // 单位：组头数的是这一家的**行**，所以是「1 条」不是「1 本」（律见 CONTEXT「作品视图（按书）」）
-    expect(screen.getByText('1 条')).toBeTruthy()
-    expect(String(screen.getByText(/本轮搜过/).textContent)).not.toMatch(/其中相关/)
+    // 单位：组头数的是这一家的**行**，所以是「1 条」不是「1 本」（律见 CONTEXT「作品视图（按书）」）。
+    // 同形的「1 条」在收口也有一个，两条读数各钉各的：上面按那一档取（钉组头），下面读整句（钉收口）。
+    expect(within(openPerSourceAxis()).getByText('1 条')).toBeTruthy()
+    const summaryLine = screen.getByText(/本轮搜过/)
+    expect(String(summaryLine.textContent)).toContain('命中 1 条')
+    // 加粗边界与旧 UI 一致：只有数字进 b（含 failed=0 的结论），单位与 answered 是纯文本。
+    expect([...summaryLine.querySelectorAll('b')].map((b) => b.textContent)).toEqual(['1', '1', '1', '0'])
+    expect(String(summaryLine.textContent)).not.toMatch(/其中相关/)
   })
 
   it('相关性档改变默认视野但不改账目：suspect 收进组内折叠，展开后仍是可点的命中行', async () => {
@@ -1244,7 +1249,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     expect(screen.getByRole('button', { name: 'Search' })).toBeTruthy()
   })
 
-  /** 收口行的相关数数的是**命中**（`sumRound.relevant`），紧挨着它的「(from N sources」数的是源：
+  /** 收口行的相关数数的是**命中**（`RoundCounts.kept`），紧挨着它的「(from N sources」数的是源：
    *  英文若写成「N of them」就会被读成源数，单位必须跟着条数走。单复数两条键各钉一次。
    *  同时钉 from 子句的前导空格：少了它，英文会渲染成「2 books(from 2 sources…」。 */
   it('英文：收口汇总的相关数按命中条数报（单数）', async () => {

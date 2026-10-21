@@ -1,13 +1,14 @@
 import type { ReactNode } from 'react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { SEARCH_BOOKS_CAP } from '../../shared/wire.js'
 import { describeError } from '../api.js'
 import { plural, useCopy } from '../copy/index.js'
 import type { Translate } from '../copy/index.js'
+import { searchSummarySegments } from '../copy/search-summary.js'
 import { prodJobViewDeps } from '../deps.js'
 import type { JobViewDeps, RowActionDeps } from '../deps.js'
 import { useSearchJob } from '../search-job.js'
-import { bookRowKey, bookRows, deriveRound, isSeatLanded, newlyLandedSeats, rowKeys, shelfSeats, shortAuthor, sumRound } from '../search-view-model.js'
+import { addAllReceipt, bookRowKey, bookRows, deriveRound, isSeatLanded, rowKeys, shelfSeats, shortAuthor } from '../search-view-model.js'
 import type { RowRef, RoundView } from '../search-view-model.js'
 import { addShelfSeat } from '../shelf-action.js'
 import type { ShelfAddOutcome, ShelfSeatInput } from '../shelf-action.js'
@@ -27,7 +28,8 @@ import type { MergedBook, SearchHit } from './types.js'
  *  切 tab 即卸载——原先结果随组件清零、整轮重打（实测）。现在切走只是没人看，切回来从 `since=0`
  *  重拉一遍即可恢复（本轮真实参搜数、已完成数、命中分组全在快照里）。
  *  陈旧回调防线换了主人：轮次身份就是服务端 jobId，迟到的上一轮响应在 `search-job` 里按身份丢弃。
- *  轮级派生（收口计数、两条轴的行身份、逐源回读）也不在本文件：唯一住址 `search-view-model.ts`。 */
+ *  轮级派生的住址也不在本文件：收口计数住 `shared/round-summary.ts`，两条轴的行身份与逐源回读
+ *  住 `search-view-model.ts`。 */
 
 export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): ReactNode {
   const t = useCopy()
@@ -76,7 +78,7 @@ export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): 
   const markLanded = (id: string): void => {
     setLanded((prev) => (prev.has(id) ? prev : new Set(prev).add(id)))
   }
-  const summary = view !== null && !running ? sumRound(view.parts) : null
+  const summary = view !== null && !running ? view.summary : null
   // 空参与集与「搜了没命中」是两件事：前者 total=0（源全停用/未导入），后者有源但零分组
   const emptyPlan = progress === null && round !== null && round.total === 0
 
@@ -86,32 +88,29 @@ export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): 
     ? (progress.total === 0
       ? <>{t('search.starting')}</>
       : <>{t('search.progress.prefix')}<b>{progress.done}</b>{plural(t, progress.total, 'search.progress.suffix.one', 'search.progress.suffix.other', { total: progress.total })}</>)
-    : summary === null || summary.sources === 0 || view === null
+    : summary === null || summary.searched === 0 || view === null
       ? null
       : <>
           {/* 视野收过一条时收口必须两个数并报：只报 hits 与默认视野对不上号。
               三个读数各数各的——家=搜过的组数、条=逐源命中（一行一条，一家可能给两条）、
               本=归并后的书目（收口里「本」只许出现在并书读数上）；「并成 N 本」在按书成了
               默认视图后必须报，否则一轮并掉多少无人知道（工具面恒报 N 本，两边不许不对称）。
-              单位律的唯一住址是 CONTEXT 的「作品视图（按书）」词条，这里只落字不复述判据。 */}
-          {round?.cancelled === true ? t('search.summary.stopped') : ''}
-          {t('search.summary.searched')}
-          <b>{summary.sources}</b>
-          {plural(t, summary.sources, 'search.summary.sourcesUnit.one', 'search.summary.sourcesUnit.other', { n: summary.sources })}
-          {t('search.summary.hitsLead')}
-          <b>{summary.hits}</b>
-          {plural(t, summary.hits, 'search.summary.hitsUnit.one', 'search.summary.hitsUnit.other', { n: summary.hits })}
-          {t('search.summary.mergedLead')}
-          <b>{view.merged.total}</b>
-          {plural(t, view.merged.total, 'search.summary.mergedUnit.one', 'search.summary.mergedUnit.other', { n: view.merged.total })}
-          {plural(t, summary.found, 'search.summary.from.one', 'search.summary.from.other', { n: summary.found })}
-          {summary.relevant < summary.hits
-            ? plural(t, summary.relevant, 'search.summary.relevant.one', 'search.summary.relevant.other', { n: summary.relevant })
-            : ''}
-          {t('search.summary.fromClose')}
-          {t('search.summary.failedLead')}
-          <b>{summary.failed}</b>
-          {plural(t, summary.failed, 'search.summary.failedUnit.one', 'search.summary.failedUnit.other', { n: summary.failed })}
+              单位律的唯一住址是 CONTEXT 的「作品视图（按书）」词条，这里只落字不复述判据。
+              语法不在视图里拼：整句模板与子句键住 `copy/search.ts`，按模板组装成段的唯一实现是
+              `copy/search-summary.ts` 的 `searchSummarySegments`；这里只把数字交给它。emphasis 段
+              （搜过/命中/并成/未响应的数字）渲染成 b，其余段是纯文本节点（包 span 会让 getByText
+              命中子元素，整句的父容器反而查不到）。 */}
+          {searchSummarySegments(t, {
+            searched: summary.searched,
+            hits: summary.hits,
+            merged: view.merged.total,
+            answered: summary.answered,
+            relevant: summary.kept,
+            failed: summary.failed,
+            stopped: round?.cancelled === true,
+          }).map((seg, i) => seg.emphasis
+            ? <b key={i}>{seg.text}</b>
+            : <Fragment key={i}>{seg.text}</Fragment>)}
         </>
   return (
     <div data-novel-view="search" className="novel-view">
@@ -351,33 +350,27 @@ function BookRow({ book, rows, deps, landed, onLanded }: {
    *  只发**有地址**且**这一轮还没落过架**的那些行：无 url 的命中在行上本就不给动作（进不了架也
    *  进不了阅读器），替它发一发空架位 PUT 就是写进一条没有书面的架位，还要报「已加」；已落过的
    *  那条（多半是用户先单加过一条）再发一遍，就是把同一件事写成两次。
-   *  没发出去的那几条不并入「失败」——没试过不是失败，点名说它没有地址。 */
+   *  三笔回执账（新落架 / 仍缺 / 无地址）的算式住 `search-view-model.addAllReceipt`；
+   *  这里只接线与选通道：加成的报成功，没加成的报失败，没发出去的单独点名（没试过不是失败）。 */
   const addAll = (): void => {
     void (async () => {
       const addable = rows.filter((r): r is RowRef & { hit: SearchHit & { url: string } } => r.hit.url !== null)
-      const noAddress = rows.length - addable.length
       const todo = addable.filter((r) => !isSeatLanded(landed, r.hit))
       setAdding(true)
       const outcomes = await Promise.all(todo.map((r) => addShelfSeat(seatInputOf(r.sourceId, r.hit, r.hit.url), deps)))
       setAdding(false)
-      /** `addShelfSeat` 把失败也收成返回值（不抛），这里要还原成 `newlyLandedSeats` 认的成败二元，
-       *  否则「没落成的也算 fulfilled」会把失败报成已加。 */
-      const settled = outcomes.map((o): PromiseSettledResult<unknown> =>
-        (o.ok ? { status: 'fulfilled', value: o.bookKey } : { status: 'rejected', reason: o.error }))
-      const newly = newlyLandedSeats(todo, settled)
-      newly.forEach((id) => { onLanded(id) })
-      // 回执数的是**这次新落架的架位**（口径与理由住 `search-view-model.newlyLandedSeats`）；
-      // 零加成不许走成功通道，整行没有地址与全部 PUT 失败读出来都是 0，「已加 0 个架位：X」等于给
+      const receipt = addAllReceipt({ rows, landed, todo, outcomes })
+      receipt.newly.forEach((id) => { onLanded(id) })
+      // 零加成不许走成功通道：整行没有地址与全部 PUT 失败读出来都是 0，「已加 0 个架位：X」等于给
       // 一次没发生的写入报喜。没加成的交代由下面两条错误回执各说各的。
-      if (newly.length > 0) {
-        deps.pushOk(plural(t, newly.length, 'search.book.added.one', 'search.book.added.other', { n: newly.length, title: book.title }))
+      if (receipt.newly.length > 0) {
+        deps.pushOk(plural(t, receipt.newly.length, 'search.book.added.one', 'search.book.added.other', { n: receipt.newly.length, title: book.title }))
       }
-      const stillMissing = [...seats].filter((id) => !landed.has(id) && !newly.includes(id)).length
-      if (stillMissing > 0) {
-        deps.pushError(plural(t, stillMissing, 'search.book.addFailed.one', 'search.book.addFailed.other', { n: stillMissing, total: seats.size }))
+      if (receipt.stillMissing > 0) {
+        deps.pushError(plural(t, receipt.stillMissing, 'search.book.addFailed.one', 'search.book.addFailed.other', { n: receipt.stillMissing, total: seats.size }))
       }
-      if (noAddress > 0) {
-        deps.pushError(plural(t, noAddress, 'search.book.noAddress.one', 'search.book.noAddress.other', { n: noAddress }))
+      if (receipt.noAddress > 0) {
+        deps.pushError(plural(t, receipt.noAddress, 'search.book.noAddress.one', 'search.book.noAddress.other', { n: receipt.noAddress }))
       }
     })()
   }

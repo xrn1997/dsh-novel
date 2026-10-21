@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { SearchGroup, SearchHit } from '../../src/shared/wire.js'
 import {
-  bookRowKey, bookRows, deriveRound, isSeatLanded, newlyLandedSeats, rowId, rowKeys, rowMeta,
-  shelfSeats, shortAuthor, sumRound,
+  addAllReceipt, bookRowKey, bookRows, deriveRound, isSeatLanded, newlyLandedSeats, rowId, rowKeys,
+  rowMeta, shelfSeats, shortAuthor,
 } from '../../src/client/search-view-model.js'
 import type { RowRef } from '../../src/client/search-view-model.js'
 
@@ -23,7 +23,7 @@ function group(sourceId: string, hits: SearchHit[], extra: Partial<SearchGroup> 
   return { sourceId, sourceName: sourceId, status: 'unverified', hits, ...extra }
 }
 
-describe('sumRound：条／本／家三条读数绝不折叠', () => {
+describe('轮级读数：条／本／家三条读数绝不折叠', () => {
   const view = deriveRound({
     keyword: '斗罗',
     groups: [
@@ -32,23 +32,23 @@ describe('sumRound：条／本／家三条读数绝不折叠', () => {
       group('s3', [], { error: { code: 'ECONNRESET', message: '站点不可达' } }),
     ],
   })
-  const s = sumRound(view.parts)
+  const s = view.summary
 
-  it('sources 数的是真回来的组数，不是本轮计划家数', () => {
-    expect(s.sources).toBe(3)
+  it('searched 数的是真回来的组数，不是本轮计划家数', () => {
+    expect(s.searched).toBe(3)
   })
-  it('hits 数条（一行一条）、found 数有命中的家、failed 数带 error 的组', () => {
+  it('hits 数条（一行一条）、answered 数答话的家、failed 数带 error 的组', () => {
     expect(s.hits).toBe(3)
-    expect(s.found).toBe(2)
+    expect(s.answered).toBe(2)
     expect(s.failed).toBe(1)
   })
-  it('答了零条的组计答话、不计命中（「没人答话」与「答了但全不相关」是两种结局）', () => {
-    const onlyEmpty = sumRound(deriveRound({ keyword: 'x', groups: [group('s9', [])] }).parts)
-    expect(onlyEmpty).toEqual({ sources: 1, hits: 0, found: 1, failed: 0, relevant: 0 })
+  it('answered 数答话的家（答零条也算）；found 是历史误名', () => {
+    const onlyEmpty = deriveRound({ keyword: 'x', groups: [group('s9', [])] }).summary
+    expect(onlyEmpty).toEqual({ searched: 1, answered: 1, failed: 0, hits: 0, kept: 0, suspect: 0 })
   })
-  it('relevant 只汇总分区结果，不在此写第二份判据（收口与组头因此对得上）', () => {
-    expect(s.relevant).toBe(2)                     // s2 那一条被判 suspect，移出默认视野
-    expect(s.relevant).toBeLessThan(s.hits)        // 两个数不一致 → 收口行必须并报
+  it('kept 只汇总分区结果，不在此写第二份判据（收口与组头因此对得上）', () => {
+    expect(s.kept).toBe(2)                     // s2 那一条被判 suspect，移出默认视野
+    expect(s.kept).toBeLessThan(s.hits)        // 两个数不一致 → 收口行必须并报
   })
 })
 
@@ -119,8 +119,8 @@ describe('shortAuthor：只在逗号处切，收的是行宽不是信息', () =>
 })
 
 describe('架位：凭地址认，数架位不数 PUT', () => {
-  const ok = { status: 'fulfilled', value: {} } as PromiseSettledResult<unknown>
-  const bad = { status: 'rejected', reason: new Error('只读') } as PromiseSettledResult<unknown>
+  const ok = { ok: true, bookKey: 'u1' } as const
+  const bad = { ok: false, error: new Error('只读') } as const
   const rows: RowRef[] = [
     { sourceId: 's1', hit: hit({ title: 'a', url: 'u1' }) },
     { sourceId: 's2', hit: hit({ title: 'a', url: 'u1' }) },   // 跨源同址 = 一行一 PUT，但只有一个架位
@@ -134,6 +134,12 @@ describe('架位：凭地址认，数架位不数 PUT', () => {
   })
   it('失败的行不进回执，也不冒充「新落架」', () => {
     expect(newlyLandedSeats(rows.slice(0, 2), [bad, ok])).toEqual(['u1'])
+  })
+  it('addAllReceipt 一次给 newly / stillMissing / noAddress', () => {
+    expect(addAllReceipt({ rows, landed: new Set(), todo: rows.slice(0, 2), outcomes: [bad, ok] }))
+      .toEqual({ newly: ['u1'], stillMissing: 0, noAddress: 1 })
+    expect(addAllReceipt({ rows, landed: new Set(), todo: rows.slice(0, 2), outcomes: [bad, bad] }))
+      .toEqual({ newly: [], stillMissing: 1, noAddress: 1 })
   })
   it('入架态按地址认：源不同但地址相同算已落；无地址永远未落', () => {
     expect(isSeatLanded(new Set(['u1']), hit({ title: 'a', url: 'u1' }))).toBe(true)

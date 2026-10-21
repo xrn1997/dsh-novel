@@ -1,8 +1,8 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ReadingService } from '../services/reading.js'
 import type { ShelfBook } from '../services/types.js'
-import { mergeBooks } from '../shared/merge-by-book.js'
-import { partitionByRelevance } from '../shared/relevance.js'
+import { mergePartitioned } from '../shared/merge-by-book.js'
+import { summarizeRound } from '../shared/round-summary.js'
 import { project } from './project.js'
 
 /** defineTool 产物（registry-ready definition）；registerTools 的 ctxLike 结构镜像 Cordis ToolRuntime */
@@ -108,17 +108,18 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
     },
     execute: async (args: { keyword: string; sourceIds?: string[] }) => {
       const round = await service.search(args.keyword, args.sourceIds === undefined ? undefined : { sourceIds: args.sourceIds })
-      // 与界面同一份归并（shared/merge-by-book.ts 单点）：模型看到的「一本书在几家源上」必须与用户
-      // 点出来的那一份同源——两处各算一份迟早一边说三家一边说两家。
-      const { books, total } = mergeBooks(args.keyword, round)
-      const answeredGroups = round.filter((g) => g.error === undefined)
+      // 与界面同一份轮级汇总与归并（`shared/round-summary.ts` 单点分区、`shared/merge-by-book.ts`
+      // 单点归并）：模型看到的「一本书在几家源上」与覆盖面读数必须与用户点出来的那一份同源——
+      // 两处各算一份迟早一边说三家一边说两家。
+      const { counts, parts } = summarizeRound(args.keyword, round)
+      const { books, total } = mergePartitioned(parts)
       // searched/answered/filtered：界面上「相关 0 · 共 20」有页尾折叠承接，工具面没有折叠——三个读数
       // 让「没人答话」与「答话了但全不相关」是两个可区分的事实，空 books 不再冒充「没找到」
-      //（空结果冒充对世界的判断是本仓定的最高罪）。分档只判 partitionByRelevance 的档级读数
-      //（shared/relevance.ts 单点），不在这里复述 containment。
+      //（空结果冒充对世界的判断是本仓定的最高罪）。分档读数由 `summarizeRound` 汇总
+      //（`shared/relevance.ts` 单点判据），不在这里复述 containment。
       // searchOne 的失败组恒带空 hits，所以归并与计数里把它们排除在外是口径防御而非活路——
       // 失败源唯一的活出口是 `failed` 列（「失败源贡献行」不可观测，2026-10 审查证过）。
-      const filtered = answeredGroups.reduce((n, g) => n + partitionByRelevance(args.keyword, g.hits).suspect.length, 0)
+      const filtered = counts.suspect
       // 缺键纪律归 project()（tools/project.ts 单点）：null/undefined 字段整键省略——
       // harness 的 lossless-JSON 校验对 undefined 属性值一票否决；truncated 缺席即没截断。
       const out: {
@@ -136,8 +137,8 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
         failed: round.flatMap((g) => g.error === undefined ? [] : [{
           sourceId: g.sourceId, sourceName: g.sourceName, code: g.error.code, message: g.error.message,
         }]),
-        searched: round.length,
-        answered: answeredGroups.length,
+        searched: counts.searched,
+        answered: counts.answered,
         filtered,
         truncated: total > books.length ? `本轮共 ${total} 本，只返回前 ${books.length} 本` : undefined,
       })

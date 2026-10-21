@@ -1,14 +1,16 @@
-import { mergeBooks } from '../shared/merge-by-book.js'
+import { mergePartitioned } from '../shared/merge-by-book.js'
 import type { MergedRound } from '../shared/merge-by-book.js'
-import { partitionByRelevance } from '../shared/relevance.js'
-import type { RelevancePartition } from '../shared/relevance.js'
+import { summarizeRound } from '../shared/round-summary.js'
+import type { RoundCounts, RoundPartition } from '../shared/round-summary.js'
 import type { MergedBook, MergedSource, SearchGroup, SearchHit } from '../shared/wire.js'
 import { zhTranslate } from './copy/index.js'
 import type { Translate } from './copy/index.js'
+import type { ShelfAddOutcome } from './shelf-action.js'
 
 /**
  * 搜索结果页的**纯派生**层（与 `shelf-view-model` / `city-view-model` / `source-list-view` 同形：
- *  纯函数、不持 React 状态、零 DOM、零 IO）：一轮命中的现场 → 收口读数、两条呈现轴的行身份与逐源回读。
+ *  纯函数、不持 React 状态、零 DOM、零 IO）：一轮命中的现场 → 轮级读数（分区与计数住
+ *  `shared/round-summary.ts`）、两条呈现轴的行身份与逐源回读。
  *
  * 为什么这一族要搬出视图：它们此前是 `SearchView` 的模块私有函数，只能在整页 jsdom 里间接触达，
  * 而单位律（条／本／家三条读数绝不折叠）与「同址两行」这类判据恰恰是最该被单独钉住的东西。
@@ -16,62 +18,29 @@ import type { Translate } from './copy/index.js'
  * 「作品视图（按书）」与 `docs/adr/0032` / `docs/adr/0033`。
  */
 
-/** 一轮搜索的收口数字（进度条退场后仍在） */
-export interface SearchSummary { sources: number; hits: number; found: number; failed: number; relevant: number }
-
-/** 一组命中的相关性分区（每组只算一次的现场） */
-export interface PartitionedGroup { group: SearchGroup; part: RelevancePartition }
-
 /** 一条逐源行的引用：哪个源上的哪条命中。行身份与 React key 从这一对算；
  *  架位不是这个键（口径住 `services/shelf.ts` 的 `Shelf`）。 */
 export interface RowRef { sourceId: string; hit: SearchHit }
 
-/** 一轮结果的现场：按组分区（每组带 group 本体），另有轮级派生两份（归并结果与行元数据索引）。
+/** 一轮结果的现场：轮级分区与计数（`shared/round-summary.ts` 一趟给齐）、归并结果与行元数据索引。
  *  全部派生在轮次身份上，只有轮真变才重算。为什么要调用方 memo：SSE 每帧都发新的 round 对象
  *  （累积器只增不减、组按源只 emit 一次），打字也走同一棵重渲——不 memo 就是每帧每击键重付
- *  整轮派生（2026-10-13 实测：520 源 × 40 条的轮约 38 ms）。重算时各付几趟如实记：分区一趟、
- *  归并一趟（归并面自带逐组分区——`mergeBooks` 签名被工具面同吃，不在这吃这份现场）、
- *  行元数据索引一趟。
- *  归并面自带分区不是分叉：判据只有一处住址（`shared/relevance.ts`）且同入参同结果的纯函数，
- *  两条轴读到的「相关」因此不会分叉；收口行的「相关 x 条」与组头的「相关 x · 共 y」则读
- *  同一份分区，把「两个数对不上」从源头堵死。 */
-export interface RoundView { parts: PartitionedGroup[]; merged: MergedRound; meta: Map<string, SearchHit> }
+ *  整轮派生（2026-10-13 实测：520 源 × 40 条的轮约 38 ms）。重算时各付几趟如实记：轮级分区与
+ *  计数一趟、归并一趟（吃上面那份分区）、行元数据索引一趟。
+ *  轮级只分区一次：收口行的「相关 x 条」、组头的「相关 x · 共 y」与归并取行读的是同一份分区，
+ *  「两个数对不上」从源头堵死。 */
+export interface RoundView { parts: RoundPartition[]; summary: RoundCounts; merged: MergedRound; meta: Map<string, SearchHit> }
 
-/** 一轮的现场（分区 + 归并 + 逐源回读索引一次算齐）。memo 归调用方：本函数不认识轮次身份。 */
+/** 一轮的现场（轮级分区与计数 + 归并 + 逐源回读索引一次算齐）。memo 归调用方：本函数不认识轮次身份。 */
 export function deriveRound(round: { keyword: string; groups: SearchGroup[] }): RoundView {
-  const parts = round.groups.map((g) => ({ group: g, part: partitionByRelevance(round.keyword, g.hits) }))
-  return {
-    parts,
-    merged: mergeBooks(round.keyword, round.groups),
-    meta: rowMeta(round.groups),
-  }
-}
-
-/** 收口算式：sources = **真搜完并回来的组数**（不是本轮计划家数——停止的轮次里两者不等，
- *  报计划数就是谎报）；命中条数 = 各命中组之和；found = 有命中的源数；failed = 带 error 的组数；
- *  relevant = 默认视野会摆的条数——判据不在这里写第二份，只汇总分区结果
- *  （hits 与 relevant 两个数不一致时收口行必须并报，否则读成「结果又少了一批」）。
- *  与 `views/bits.tsx` 的 `jobPct` / `searchPct` 百分比算式不同源——
- *  这是**计数**不是百分比，只此一处。 */
-export function sumRound(parts: PartitionedGroup[]): SearchSummary {
-  let hits = 0
-  let found = 0
-  let failed = 0
-  let relevant = 0
-  for (const { group, part } of parts) {
-    if (group.error === undefined) {
-      hits += group.hits.length
-      found += 1
-      relevant += part.kept.length
-    } else failed += 1
-  }
-  return { sources: parts.length, hits, found, failed, relevant }
+  const { parts, counts } = summarizeRound(round.keyword, round.groups)
+  return { parts, summary: counts, merged: mergePartitioned(parts), meta: rowMeta(round.groups) }
 }
 
 /** 一行的身份：(源, 地址)。建索引那一侧、取用那一侧与逐源行的 React key 都读这一个算式，
  *  两处各写一遍就等于给「哪一行属于哪一本」两个主人。
- *  **架位不读它**（口径住 `services/shelf.ts` 的 `Shelf`，算式在 `shelfSeats` / `newlyLandedSeats`）；
- *  `rowId` 只服务行 key 与元数据回读。 */
+ *  **架位不读它**（口径住 `services/shelf.ts` 的 `Shelf`，算式在 `shelfSeats` / `newlyLandedSeats` /
+ *  `addAllReceipt`）；`rowId` 只服务行 key 与元数据回读。 */
 export const rowId = (sourceId: string, url: string | null): string => JSON.stringify([sourceId, url])
 
 /** 逐源行的 React key：身份走 `rowId`，只在同一身份于本行里重复出现时垫位次。
@@ -152,14 +121,33 @@ export function isSeatLanded(landed: ReadonlySet<string>, hit: SearchHit): boole
   return hit.url !== null && landed.has(hit.url)
 }
 
-/** 「都加架」里**这次新落架**的架位：逐条 PUT 的成功结果按地址去重后给回。
+/** 「都加架」里**这次新落架**的架位：逐条 PUT 的成功结局按地址去重后给回。
  *  按成功 PUT 计数会把一个架位报成「已加 2 个架位」（同址两行发两发幂等 PUT 也只落一个架位），
- *  虚报架上的账；没发出去的那几条不在 `settled` 里，本来就不该记进回执。 */
-export function newlyLandedSeats(todo: RowRef[], settled: ReadonlyArray<PromiseSettledResult<unknown>>): string[] {
+ *  虚报架上的账；没发出去的那几条没有结局，本来就不该记进回执。
+ *  `addShelfSeat` 从不 reject，结局就是 `ShelfAddOutcome`——不为凑 `PromiseSettledResult`
+ *  再造一层反译，那层反译只是把「成功/失败」换个名字写第二遍。 */
+export function newlyLandedSeats(todo: RowRef[], outcomes: readonly ShelfAddOutcome[]): string[] {
   const seats = new Set<string>()
-  settled.forEach((res, i) => {
+  outcomes.forEach((outcome, i) => {
     const url = todo[i].hit.url
-    if (res.status === 'fulfilled' && url !== null) seats.add(url)
+    if (outcome.ok && url !== null) seats.add(url)
   })
   return [...seats]
+}
+
+/** 「都加架」的回执：新落架 / 仍缺 / 无地址三笔账。三段各走各的通道——新落架才报成功，
+ *  仍缺报失败，无地址点名（没试过不是失败）；零加成不许借成功通道报喜。
+ *  `newly.length > 0` 的那道闸留在视图：它管的是措辞（零加成不说「已加 0 个架位」），不是算式。 */
+export interface AddAllReceipt { newly: string[]; stillMissing: number; noAddress: number }
+
+/** 「都加架」的回执算式：原行全集、落架现场与逐条结局一次算齐，视图不再手算中间量。
+ *  `stillMissing` 认的是架位（同址两行只算一个），`noAddress` 认的是行（没地址的那一行没法发 PUT）。 */
+export function addAllReceipt(input: {
+  rows: RowRef[]; landed: ReadonlySet<string>; todo: RowRef[]; outcomes: readonly ShelfAddOutcome[]
+}): AddAllReceipt {
+  const seats = shelfSeats(input.rows)
+  const newly = newlyLandedSeats(input.todo, input.outcomes)
+  const noAddress = input.rows.length - input.rows.filter((r) => r.hit.url !== null).length
+  const stillMissing = [...seats].filter((id) => !input.landed.has(id) && !newly.includes(id)).length
+  return { newly, stillMissing, noAddress }
 }
