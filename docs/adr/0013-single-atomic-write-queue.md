@@ -1,5 +1,7 @@
 # 落盘只有一条按文件名排队的原子写；同步小文件例外
 
+Status: accepted
+
 低层只有一条 `writeFileAtomic`（临时文件 + rename，并**按文件名排队串行**），JSON 写与页面缓存共用它。并发 rename 同一目标在 Windows 上会互斥失败（EPERM），而缓存侧曾自抄一份**无排队**的写。入队必须先于任何 `await`（含建目录），否则「最后写的最后落盘」不成立。
 
 **同步小文件是明确例外**：`src/services/source-session.ts` 的 `source-state.json` 由 `SourceSession` 同步 tmp+rename 落盘——脚本 `source.get` / `cache.get` 的方法面是同步的，不能等异步队列；命名仍复用 `tempPathOf` / `backupPathOf`，单线程同步调用不会互相插队，故不需要按文件名排队。读侧沿用本文的 ENOENT-vs-损坏判据：损坏时备份 + 抛 `CorruptJsonError`，不折叠成空表（下一笔写会把整张源状态覆盖掉）。

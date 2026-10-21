@@ -1,5 +1,7 @@
 # 平台模块表取**交集**不取并集；纯度门在构建期 throw
 
+Status: accepted
+
 浏览器半是 CJS 单文件闭包工厂，bundle 内每个 `require` 由宿主的**冻结模块表**解答。本仓维护一份 `PLATFORM_MODULES`，两条判据：
 
 - **收录判据是「我们声明兼容的每一代宿主都答得上」（交集），不是把见过的清单并起来。** 并集里多出来的每一条都是纯度门的一次豁免——允许表宽于运行时表，守卫就从守卫变成共犯，证明的不再是「官方表长这样」而是「我们只 require 这些」。据此**撤掉**裸 `cordis`（它只活在更早两代官方样例的清单里；本插件对 cordis 从头到尾只有 type-only import，留着等于允许一次「构建通过、浏览器 require 落空」），也据此**不收**新代宿主新种的 `dockkit`（本插件不用它、老宿主也没有，收了等于用新宿主的表给老宿主放行）。
@@ -13,4 +15,4 @@
 
 待裁（属改进不属决策）：宿主每代的 `staticModules()` 名单目前只能每次 bump 现读，因此「重读新表」这一件事无法机器判——可选做法是照 `compat/upstream/snapshot.json` 的先例给宿主模块表也做一份按代次冻结的仓内快照。
 
-锚点：`tsdown.config.ts`（`PLATFORM_MODULES` 头注 = 判据的家、`dsh-novel-bundle-purity`、三段式 banner 的 id 必须等于包名）；`tests/packaging-build.test.ts` 的「client 半纯度：require 白名单外零泄漏」；`src/shared/wire.ts` 文件头；`docs/developing.md`「宿主兼容与发版」。
+锚点：`tsdown.config.ts`（`PLATFORM_MODULES` 头注 = 判据的家、`dsh-novel-bundle-purity`、三段式 banner 的 id 必须等于包名）；`tests/packaging-build.test.ts` 的「client 半纯度：require 白名单外零泄漏」；`src/shared/wire.ts` 文件头；`docs/development.md`「宿主兼容与发版」。

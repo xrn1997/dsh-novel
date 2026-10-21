@@ -1,6 +1,8 @@
 # 文档分层：读数、决策、现状分开住，过程文档出库
 
-本仓的散文文档按**寿命**分四层：当前事实（`README.md` / `CONTEXT.md` / `docs/architecture.md` / `docs/developing.md`）、决策（`docs/adr/`）、读数（`tests/legado-coverage/matrix.ts` 的行 `note` 与代码注释里的局部口径）、过程（本机 `.superpowers/`，不入库）。代码与测试是最终真相；文档与代码冲突时以代码为准，并顺手把文档改回现状。
+Status: superseded by 0041
+
+本仓的散文文档按**寿命**分四层：当前事实（`README.md` / `CONTEXT.md` / `docs/architecture.md` / `docs/development.md`）、决策（`docs/adr/`）、读数（`tests/legado-coverage/matrix.ts` 的行 `note` 与代码注释里的局部口径）、过程（本机 `.superpowers/`，不入库）。代码与测试是最终真相；文档与代码冲突时以代码为准，并顺手把文档改回现状。
 
 **为什么必须分开**：读数、决策与现状的寿命不同步。真机读数随站点与批次变，决策难逆，现状随代码变；写回同一份文件，任何一次读数更新都会把决策与现状一起拖旧。兼容读数与裁决还要求「一行一条、可回查」，这与散文的导航职责相反。
 
@@ -24,4 +26,4 @@
 
 **代价**：过程不留档，跨会话只剩 ADR / matrix / 代码注释与 git；读者要按「真相在哪」的顺序找，不能一份文件通读；语义重复只能靠评审，机器门管不到。
 
-锚点：`AGENTS.md` 的「真相在哪」「文档纪律」；`README.md` 的「文档地图」；`tests/docs-liveness.test.ts`；`tests/context-terms.test.ts`；`tests/comment-altitude.test.ts`；`tests/legado-coverage/matrix.ts`；`shared/wire.ts`；`docs/adr/README.md`。
+锚点：`AGENTS.md` 的「真相在哪」「文档」；`README.md` 的「文档」；`tests/docs-liveness.test.ts`；`tests/context-terms.test.ts`；`tests/comment-altitude.test.ts`；`tests/legado-coverage/matrix.ts`；`shared/wire.ts`；`docs/adr/README.md`。

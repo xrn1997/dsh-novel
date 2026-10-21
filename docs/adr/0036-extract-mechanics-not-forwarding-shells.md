@@ -1,5 +1,7 @@
 # 收口只抽机械，不抽转发壳
 
+Status: accepted
+
 这一轮把四处重复各归了一家（逐条目取值装配 → `bridge.hitFieldsOf`、写路由 body 形状 → `shared/wire.ts` 的 `bodies`/`readBodies`、分类条目可用尺 → `explore-url.usableKind`、宿主登记与「变了」信号 → `job-holder.ts` 的 `HostTie`/`ChangeSignal`）。同一轮里被**否决**的是两件顺手的泛型：
 
 - **「route 注册壳」**（把 `dispatch.ts` 里成片的 `guard` / `writeOk` / `new ApiError` 调用包成一条 `route(method, path, handler)`）。被否的理由：这三样**已经各有主人**（`guard` / `api/wire.ts` 的信封与分类表），臂里那两行只是调用，不是判据的副本——套一层壳后壳内只剩转发，deletion test 直接判它出局。真正在重复的是 body 的**形状**（键名两半各写一遍），那个归了 wire，壳的动机随之一并消失。留下的三处重复措辞各有了一次收口：「未知路由」404 与「方法不允许」405 各成一个 `unknownRoute` / `methodNotAllowed`，因为 `routes.test.ts` 的落点判据就是那句前缀，漏改一处会让测试找不到证据。

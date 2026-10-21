@@ -1,5 +1,7 @@
 # 请求组装与出站各只有一个门口；URL 即身份，`,{option}` 全程保留
 
+Status: accepted
+
 三件事一条链：
 1. **选项语义的唯一主人**是 `src/services/request.ts` 的 `assembleRequest`（method / body 插值 / POST 默认表单头 / charset / `trimFirstPage`），init 姿态在 `fetchInitOf`。此前请求组装在搜索面与引擎桥各写一份、靠「与对方同口径」的注释同步。
 2. **`new URL()` 之前必须切分**：它会吃掉换行并把 `{` 百分号编码。绝对化是这条链上唯一会**静默改写**选项串形状的步骤。

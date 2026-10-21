@@ -1,5 +1,7 @@
 # HTTP cookie jar 以域为边界，不以源为边界
 
+Status: accepted
+
 **裁决**：HTTP 请求侧只有一张 `CookieJar`，按域/路径/过期/`Secure` 匹配；它属于 `ReadingService`，同一个插件实例里的所有源共用。脚本侧 `SourceSession.cookieJar` 的按源键值表仍是另一张表，不并入；浏览器与 HTTP 的 cookie 桥也回灌这同一张表。
 
 **为什么不是 per-source**：上游 `CookieStore` 的粒度本来就是站点级——同一站点的两个源复用登录态，正是它的可观测行为；per-source 会让同站两个源各登录一次，且登录态从 A 源换到 B 源就消失。另一个理由是单一真相：HTTP 自动回带、脚本面 `CookieManager/CookieStore`、真浏览器桥如果各持一张，脚本读到的 cookie 与实际发出去的不是一份。

@@ -1,5 +1,7 @@
 # `java.ajax` 只有一种语义：同步返回 body；主线程撞不了就用 worker 透明重跑
 
+Status: accepted
+
 legado 的宿主桥是同步的，而 Node 的 fetch 不是。书源脚本的主导写法是 `java.ajax(u).match(...)[1]`——**语义绝不能随拼写变**：曾经 `typeof java.ajax("…")` 给 `"string"`（走 worker）、`typeof java["ajax"]("…")` 给 `"object"`（主线程拿到 Promise），作者改成下标写法就静默换语义。
 
 决定：主线程分支不返回 Promise，而是在发起宿主调用**之前**抛哨兵 `__dsh_sync_ajax_required__`；`evalJs` 最外层捕获后丢掉已收集的 logs，换 `syncAjax` 初始化在 worker 里重跑同一段。正则 `SYNC_WORKER_RE` 只是路由启发（刻意过近似），**只决定性能与稳健性，不决定语义**。哨兵在宿主调用之前抛 ⇒ 重跑不多打站点（钉子按 fetch 计数自证）。

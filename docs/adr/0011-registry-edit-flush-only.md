@@ -1,5 +1,7 @@
 # 注册表只暴露 `edit` / `flush`：「改了忘落盘」在接口上不可表达
 
+Status: accepted
+
 `SourceRegistry` 对外只有 `edit(recipe)` / `flush()` / `list()` / `get()` / `toPublic()`——原先那 7 个公开 mutator 与公开 `persist()` 全删。动机是曾有九处调用点手工配对「mutator + persist」（顺序约束只活在注释里），谁忘了 persist 就是静默丢数据。现在 recipe 同步执行、一次 `edit` 内的多步变更对外不可分割，落盘策略住模块内部（累计达阈的那次 `edit` 等写落地，否则尾沿防抖后台合并），调用方不知道粒度存在——节流常量也从任务运行器搬进了注册表。
 
 同族的两条纪律：

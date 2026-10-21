@@ -2,7 +2,7 @@
 
 这份文档只回答两个问题：**系统分成哪几块、为什么这么切；某条语义的主人在谁头上**。它是 explanation——给读懂代码提供地图，不给代码充当副本。
 
-不在这里的东西，各有各的家：**真机读数与欠账**在 `tests/legado-coverage/matrix.ts` 的行 `note`（那是唯一读数口）；**决策与它当初被否决的替代方案**在 `docs/adr/`；**用户可见的事实与产品命令**在 `README.md`；**贡献者的构建、门控与发版流程**在 `docs/developing.md`；**术语的定义**在 `CONTEXT.md`；**"怎么做"**在代码自己。这里一条读数都不列——列了就是第二份抄本，且必然腐烂。
+不在这里的东西，各有各的家：**真机读数与欠账**在 `tests/legado-coverage/matrix.ts` 的行 `note`（那是唯一读数口）；**决策与它当初被否决的替代方案**在 `docs/adr/`；**用户可见的事实与产品命令**在 `README.md`；**贡献者的构建、门控与发版流程**在 `docs/development.md`，提交与发版边界在 `CONTRIBUTING.md`，发布历史在 `CHANGELOG.md`；**术语的定义**在 `CONTEXT.md`；**"怎么做"**在代码自己。这里一条读数都不列——列了就是第二份抄本，且必然腐烂。
 
 ## 1. 双半形态
 
@@ -131,7 +131,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 - **注入垫片**是测试进出的口子（不是换模块替身）：引擎侧 `EvalContext` 的 fetch 族 / `evaluateRef` / `subEval` / `SourceSession` / 超时预算；服务侧 fetcher 与注入的时钟/目录（`ReadingService.from()` 只读注入物：jar 必须由构造方给同一实例，门面不兜底、不写回）；客户端**按读者分的依赖束**（核心 / 观察通道 / 带观察的视图 / 书架 / 设置 / 阅读器）+ `ReaderPort`，其中观察通道的节拍与阅读器的防抖窗各留一格注入位；浏览器位置用例走仓内最小宿主壳，它只证明「卸载与重挂」那一半契约。**束切到读者，也要切到读者里面的行**：行内动作只声明 `RowActionDeps`（一发写请求 + 两句上报），注释面板只声明 `apiGet` + `pushError`——interface 的宽度就是那条用例的固定成本。
 - **两条求值路必须同口径**（主线程与 worker），由按 fetch 计数自证的跨路钉子守——这是 `docs/adr/0005` 的产物。
 - 客户端的测试手法是**假 adapter 驱动真实组件**，不是渲染快照；服务端的路由测试用真 HTTP server 承载（`api/dispatch.ts` 不依赖 Cordis，纯构造器）。
-- **门的分工别混**：解析面普查管「能不能解析」，重探只证搜索面，正文审计是**报告**不设通过率，compat 回放的分母是 fixture，真浏览器门只跑本机与本地书，安装门控不起宿主。各自承诺什么写在 `docs/developing.md` 的「测试与真链路门控」，不在这里复述。
+- **门的分工别混**：解析面普查管「能不能解析」，重探只证搜索面，正文审计是**报告**不设通过率，compat 回放的分母是 fixture，真浏览器门只跑本机与本地书，安装门控不起宿主。各自承诺什么写在 `docs/development.md` 的「测试与真链路门控」，不在这里复述。
 - **`compat/` 的家按「对面来路」归，不按「跑不跑」归**：`fixtures` 与 `sources` 喂回放集（默认被 `vitest.config.ts` exclude，`sources` 还是人工投放口——未脱敏的人类输入不进 `tests/`），而 `compat/upstream/snapshot.json` 是 `tests/legado-coverage/` 那两门（`upstream-fields` / `host-methods`）的分母、随 `pnpm test` 默认跑。所以「判据住在 `tests/legado-coverage/`、它的分母住在 `compat/upstream/`」是**刻意的两条边**，不是同一件事抄了两份；搬目录只会把默认跑的与默认不跑的混进一处。**并家（把 `compat/upstream` 搬进 `tests/legado-coverage/`）仍待裁**；这段只解释现状为什么是两条边。
 
 ## 6. 数据与生命周期
@@ -156,6 +156,6 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 客户端视图 / 文案 / 模态 / 阅读浮层 | 第 4 节的 `client/copy/index.tsx`、`client/views/dialog.tsx`、`client/reader-surfaces.ts` 行；`docs/adr/0037`、`docs/adr/0038` |
 | 阅读器 / 章节窗口 / 进度 | 第 4 节的 `client/reader-session.ts`、`client/reader-load.ts`、`client/progress.ts` 行；`docs/adr/0022` |
 | 后台任务 / 过程行 / 宿主观察 | 第 4 节的 `HostTie`、`JobTail`、`ChangeSignal` 行；`docs/adr/0018`、`docs/adr/0034` |
-| 宿主接入 / 打包 / 插件页 | 第 1 节；`docs/adr/0020`、`docs/adr/0021`、`docs/adr/0035`；`docs/developing.md` 的「宿主兼容与发版」 |
-| legado 兼容判据 / 新写法 | 先查 `tests/legado-coverage/matrix.ts` 有没有那一行；`docs/adr/0003`、`docs/adr/0024`、`docs/adr/0025`；`docs/developing.md` 的「兼容判据四门」 |
-| 文档 / ADR / 发布流程 | `AGENTS.md` 的「文档纪律」；`docs/adr/README.md`；`docs/adr/0040`；`docs/developing.md` |
+| 宿主接入 / 打包 / 插件页 | 第 1 节；`docs/adr/0020`、`docs/adr/0021`、`docs/adr/0035`；`docs/development.md` 的「宿主兼容与发版」 |
+| legado 兼容判据 / 新写法 | 先查 `tests/legado-coverage/matrix.ts` 有没有那一行；`docs/adr/0003`、`docs/adr/0024`、`docs/adr/0025`；`docs/development.md` 的「兼容判据四门」 |
+| 文档 / ADR / 发布流程 | `docs/AGENTS.md`；`docs/adr/README.md`、`docs/adr/ADR-FORMAT.md`、`docs/adr/0041`；`CONTRIBUTING.md`、`CHANGELOG.md`；`docs/development.md` |

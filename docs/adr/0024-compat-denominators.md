@@ -1,5 +1,7 @@
 # 兼容判据的三个分母：对面解析器、仓内冻结快照、离线 fixture
 
+Status: accepted
+
 「彻底兼容 legado 书源格式」这条目标要有可复算的读数，三条分母各管一件事，混了就得到骗人的数字：
 
 1. **做不做的判据 = 对面的解析器认不认**，不是「本库有没有源在用」。兼容目标是对面**格式**在本仓可用，本机源集不是全集——「现库数不出这种写法」只证明这批源没踩到，不证明适配完了。所以现库需求量从「不做」的理由**降级为「排到队尾」**（用来排实现顺序，不用来判做不做）。例外：CookieStore、限速器、登录面这类**运行时机制而不是格式**的，按机制有没有需求方单独裁。
@@ -8,4 +10,4 @@
 
 同族的一条采集纪律：**采集与回放必须断同一批**（两侧共用同一份判据），否则会出现「采集绿、回放红」的 fixture；manifest 的键是**请求 URL**而不是重定向后的落地地址；落盘的是生产解码链读到的文本（非 UTF-8 页存成真中文）。
 
-锚点：`tests/legado-coverage/{status-evidence,inventory-coverage,upstream-fields,host-methods}.test.ts`；`tests/legado-coverage/{upstream-facts,capture-upstream-snapshot}.test.ts`；`tests/compat/{harness,record}.ts`；`compat/upstream/snapshot.json`；`docs/developing.md`「测试与真链路门控」；`AGENTS.md`「兼容判据」。
+锚点：`tests/legado-coverage/{status-evidence,inventory-coverage,upstream-fields,host-methods}.test.ts`；`tests/legado-coverage/{upstream-facts,capture-upstream-snapshot}.test.ts`；`tests/compat/{harness,record}.ts`；`compat/upstream/snapshot.json`；`docs/development.md`「测试与真链路门控」；`AGENTS.md`「兼容判据」。

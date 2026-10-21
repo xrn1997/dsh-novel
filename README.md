@@ -21,7 +21,7 @@
 - [兼容哪些书源](#兼容哪些书源)
 - [常见问题](#常见问题)
 - [开发](#开发)
-- [文档地图](#文档地图)
+- [文档](#文档)
 - [贡献](#贡献)
 - [致谢](#致谢)
 
@@ -55,7 +55,7 @@ npm 安装使用预构建产物，秒装、无需构建授权。从 GitHub 源�
 dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 ```
 
-**宿主兼容声明分两层**：安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`；peer 区间按宿主线开口，线内 rc / patch 不跟版，跨线才重验。实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本（宿主不读这个字段——安装许可只认上面那组 peer 区间；这一行是给人看的记录）。宿主发版、peer 区间与浏览器模块表的维护流程，以及发布冷却闸，见 [docs/developing.md](https://github.com/xrn1997/dsh-novel/blob/main/docs/developing.md#宿主兼容与发版)。
+**宿主兼容声明分两层**：安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`；peer 区间按宿主线开口，线内 rc / patch 不跟版，跨线才重验。实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本（宿主不读这个字段——安装许可只认上面那组 peer 区间；这一行是给人看的记录）。宿主发版、peer 区间与浏览器模块表的维护流程，以及发布冷却闸，见 [docs/development.md](https://github.com/xrn1997/dsh-novel/blob/main/docs/development.md#宿主兼容与发版)。
 
 ## 首次使用
 
@@ -145,7 +145,7 @@ URL 模板语义按 legado 书源格式对齐：`url,{json}` 选项的逗号两�
 
 遇到不认识的语法，本插件选择**报错而不是猜测**——错误定位到出错的规则段，而不是产出错误结果。`webView`/`webJs` 走本机已装的 Edge/Chrome；没有可用浏览器、或书源依赖安卓专有 API / 加密侧能力时，会明确报告不支持。
 
-**「做到哪一步」有机器口径**：`tests/legado-coverage/matrix.ts` 一行一条 legado 语义，每行归入 实现 / 环境不适用 / 待拍板 三态之一，并带可回查的证据（实现符号、钉住它的用例）与裁决理由。四门默认随 `pnpm test` 跑（见 [docs/developing.md 的「兼容判据四门」](https://github.com/xrn1997/dsh-novel/blob/main/docs/developing.md#兼容判据四门)）。想查某个字段支不支持：在矩阵里按 `id` 或能力名搜那一行即可。
+**「做到哪一步」有机器口径**：`tests/legado-coverage/matrix.ts` 一行一条 legado 语义，每行归入 实现 / 环境不适用 / 待拍板 三态之一，并带可回查的证据（实现符号、钉住它的用例）与裁决理由。四门默认随 `pnpm test` 跑（见 [docs/development.md 的「兼容判据四门」](https://github.com/xrn1997/dsh-novel/blob/main/docs/development.md#兼容判据四门)）。想查某个字段支不支持：在矩阵里按 `id` 或能力名搜那一行即可。
 
 ## 常见问题
 
@@ -159,7 +159,7 @@ URL 模板语义按 legado 书源格式对齐：`url,{json}` 选项的逗号两�
 本插件用 `playwright-core` 驱动本机已安装的 Edge/Chrome（不下载浏览器）。装一个 Edge 或 Chrome 即可；两者都没有时会如实报错，不会静默退回普通 HTTP 请求。
 
 **安装后侧栏没有出现「小说」入口？**
-先重启宿主。若从源码目录安装，确认已先 `pnpm build` 生成 `lib/`（构建产物缺失会让整个插件树拒绝挂载，宿主直接启动失败而非静默降级），详见 [docs/developing.md 的「本地源码调试」](https://github.com/xrn1997/dsh-novel/blob/main/docs/developing.md#本地源码调试)；装进了 bundles 里没有 `@deepseek-ai/dsh-web-app` 的 profile，则本就只有工具面、没有侧栏入口。
+先重启宿主。若从源码目录安装，确认已先 `pnpm build` 生成 `lib/`（构建产物缺失会让整个插件树拒绝挂载，宿主直接启动失败而非静默降级），详见 [docs/development.md 的「本地源码调试」](https://github.com/xrn1997/dsh-novel/blob/main/docs/development.md#本地源码调试)；装进了 bundles 里没有 `@deepseek-ai/dsh-web-app` 的 profile，则本就只有工具面、没有侧栏入口。
 
 ## 开发
 
@@ -171,30 +171,17 @@ pnpm build        # 构建 lib/（Node 半 + 浏览器半）；改动源码后�
 pnpm dev          # = tsdown --watch，日常开发建议挂着
 ```
 
-本地源码调试、构建产物与热更新、宿主兼容与发版、全部测试门控与真宿主冒烟见 [docs/developing.md](https://github.com/xrn1997/dsh-novel/blob/main/docs/developing.md)；模块形状与语义归属见 [docs/architecture.md](https://github.com/xrn1997/dsh-novel/blob/main/docs/architecture.md)。
+本地源码调试、构建产物与热更新、宿主兼容与发版、全部测试门控与真宿主冒烟见 [docs/development.md](https://github.com/xrn1997/dsh-novel/blob/main/docs/development.md)；模块形状与语义归属见 [docs/architecture.md](https://github.com/xrn1997/dsh-novel/blob/main/docs/architecture.md)。
 
-## 文档地图
+## 文档
 
-本仓的文档按「一个事实只有一个家」分工，六家各管一种寿命：
+本仓按「一个事实只有一个家」分工：用户面事实在本文件；agent 的常读规则在 `AGENTS.md`；文档分层、放置与生命周期在 `docs/AGENTS.md`；构建与全部门控在 `docs/development.md`；提交与发版边界在 `CONTRIBUTING.md`；决策在 `docs/adr/`（索引见 `docs/adr/README.md`）；发布历史在 `CHANGELOG.md`。
 
-| 位置 | 承担 | 明确不承担 |
-| --- | --- | --- |
-| `README.md`（本文件） | 用户面事实与产品命令：安装、用法、配置键、路由与工具表 | 设计理由、真机读数、贡献者门控与发版细节 |
-| `AGENTS.md` | 给 agent 的工作纪律：真相在哪、硬约束、跑门纪律、文档纪律、环境坑 | 时点状态与读数 |
-| `CONTEXT.md` | 领域词汇表，每个词条点名它的**唯一实现**符号 | 口径论证、实现细节 |
-| `docs/architecture.md` | 形状与归属：分几块、为什么这么切、某条语义该去哪改 | 读数、决策史、逐文件清单 |
-| `docs/developing.md` | 贡献者命令与验证：构建、本地调试、全部门控、真宿主冒烟、宿主兼容与发版 | 用户用法、设计决策、真机读数 |
-| `docs/adr/` | 决策与当前仍被否决的替代方案，每篇一个编号文件（正文直接写当前真相；整篇不再成立时标 superseded） | 现状描述、验收清单 |
-
-这套分层本身的裁决见 `docs/adr/0040`。
-
-两类东西不进文档：**兼容裁决与真机读数**住 `tests/legado-coverage/matrix.ts` 的行 `note`（要重算见 `docs/developing.md` 的「解析面普查」）；**局部口径的为什么**住实现它的那段代码注释。宿主侧的 API 行为以就地注释引原文 + 每次 bump 现读为凭，本仓**没有**宿主 API 的参考文档；legado 侧的对读结论才冻结成在册快照 `compat/upstream/snapshot.json`。
-
-迭代过程文档（任务计划、审查报告、一次性脚本）**不入库**，写在本机 `.superpowers/`——`main` 只保留当前真相。文档面的引用活性由 `tests/docs-liveness.test.ts` 随 `pnpm test` 把住：路径不在场、写行号、指已出库的东西、ADR 断号、ADR 索引漏行、Markdown 链接或标题锚点悬空，都会红。
+兼容裁决与真机读数住 `tests/legado-coverage/matrix.ts` 的行 `note`；局部口径的为什么住实现它的代码注释。迭代过程文档不入库，写在本机 `.superpowers/`。完整分层与门禁判据见 `docs/AGENTS.md`。
 
 ## 贡献
 
-欢迎 Issue 与 PR。提交改动前请确保 `pnpm test` 与 `pnpm typecheck` 通过，且**两条命令的退出码都亲眼看过**；完整的真链路门控与真宿主冒烟见 [docs/developing.md 的「测试与真链路门控」](https://github.com/xrn1997/dsh-novel/blob/main/docs/developing.md#测试与真链路门控)。若扩展了书源语法，请优先补充对应的回放测试 fixture（脱敏判据见 `tests/compat/sanitize.ts`），并把新形态在 `tests/legado-coverage/matrix.ts` 里落到正确的那一态。提交即表示你同意以 [Apache-2.0](LICENSE) 协议授权你的贡献。
+欢迎 Issue 与 PR。提交信息、PR 与发版边界见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。提交改动前请确保 `pnpm test` 与 `pnpm typecheck` 通过，且**两条命令的退出码都亲眼看过**；完整的真链路门控与真宿主冒烟见 [docs/development.md 的「测试与真链路门控」](https://github.com/xrn1997/dsh-novel/blob/main/docs/development.md#测试与真链路门控)。若扩展了书源语法，请优先补充对应的回放测试 fixture（脱敏判据见 `tests/compat/sanitize.ts`），并把新形态在 `tests/legado-coverage/matrix.ts` 里落到正确的那一态。提交即表示你同意以 [Apache-2.0](LICENSE) 协议授权你的贡献。
 
 ## 致谢
 

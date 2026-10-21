@@ -1,5 +1,7 @@
 # 客户端文案归宿主 locale：TS 字典、单点、可选回退
 
+Status: accepted
+
 浏览器半原先中文散在各组件里；宿主 `@deepseek-ai/dsh-client-locale` 提供运行期语言服务与按 revision 重渲的 slot `t` 席位。本轮把可见文案收进 `src/client/copy/**` 的域字典，并只经一个入口取词。
 
 - **字典是 TS 模块，不是外挂资源**：每个域一个 `*_ZH`（真源）与 `*_EN`（逐键镜像）；`src/client/copy/index.tsx` 的 `ZH` / `EN` 合成单一键类型，`EN` 的 `Record<CopyKey, string>` 让漏键编译不过。`locale/` 目录的包元信息 JSON 仍只装插件卡片的标题/描述——那是宿主在激活前读的清单元信息，不是运行期 UI 字典。被否决：把字典做成 JSON / 另起 i18n 运行时——浏览器半是单文件 CJS，多一个加载面就多一截纯度门解释不了的依赖。

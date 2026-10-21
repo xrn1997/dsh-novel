@@ -1,5 +1,7 @@
 # 宿主依赖包的发布冷却闸整 scope 放行
 
+Status: accepted
+
 pnpm 默认的 `minimumReleaseAge`（24 小时内发布的版本不许进 lockfile）对 `@deepseek-ai/dsh-*` **整 scope 放行**，写死在 `pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude`：
 
 ```yaml
@@ -19,4 +21,4 @@ minimumReleaseAgeExclude:
 
 **重开条件**：若本仓开始对 `@deepseek-ai/dsh-*` 使用范围版本（而非精确版本），这条豁免的论据就没了——那时该回来重估，而不是继续放行。
 
-锚点：`pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude`；`package.json` 的 devDependencies（精确版本这一前提的现场）；`docs/developing.md`「宿主兼容与发版」。
+锚点：`pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude`；`package.json` 的 devDependencies（精确版本这一前提的现场）；`docs/development.md`「宿主兼容与发版」。

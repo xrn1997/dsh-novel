@@ -1,5 +1,7 @@
 # 链式选择步的命中集含当前元素自身（照对面那套 DOM 库，不照 cheerio 的后代语义）
 
+Status: accepted
+
 default 方言的 class / id / tag 三种选择步，与隐式及显式 CSS 步，命中集**含当前元素自己**（若它自己就匹配），并且自身排在它的全部后代之前；`child` / `children` 维持只取子节点。唯一实现是 `src/engine/select.ts` 的 `selectStepWithSelf`，四处步共用它。
 
 **为什么这么定**：本仓的兼容判据是「对面读得出的，我们也得读得出」。那四种步对面交给同一个 DOM 库求值，而该库的这四条公开读法（`select` / `getElementsByTag` / `getElementsByClass` / `Collector.collect`）都把当前元素算进命中集——本机拿 jsoup 1.22.2 实测：四种全含，顺序是自身先于全部后代。cheerio 只给后代语义，于是「类名和标签长在同一个元素上」的写法整条链读空：`<a class="page-link" href="…">` 配 `.page-link@a@href`，对面拿 2 条分页地址，我们拿 0 条。
@@ -12,7 +14,7 @@ default 方言的 class / id / tag 三种选择步，与隐式及显式 CSS 步�
 - **判成「这族源写得 sloppy」，不动引擎**：那段脚本确实没有空值守卫，但兼容判据不是写法优雅，是「对面读得出」。把它记成源的锅，等于把这条分叉从「待裁」写成永久欠账。
 - **只补裸词那一支（CSS 步），不补 `tag` / `class` / `id`**：真分叉在四种步上。只补一处会让 `tag.a@href` 与裸词 `a@href` 两种写法对同一份页面给出不同结果——同一个语义两套口径，正是本仓不容许的第二份抄本。
 
-**代价**：含自身**改变取位顺序**。`.0` / `[0]` 的含义从「第一个后代」变成「自身」，所以现在靠后代语义才碰对的写法可能被挪到容器上。这不是零风险，因此随本篇一起：取位与「自身优先」由 `tests/engine/select.test.ts` 的「default 选择段含当前元素自身」和 `tests/engine/css.test.ts` 的「@css 链步含当前元素自身」钉死；真机侧改前/改后逐源读数按 `docs/developing.md` 的 `DSH_REPROBE`、`DSH_CONTENT_AUDIT` 重取，量出来的回归如实写进矩阵行的 `note`，不藏进提交信息。
+**代价**：含自身**改变取位顺序**。`.0` / `[0]` 的含义从「第一个后代」变成「自身」，所以现在靠后代语义才碰对的写法可能被挪到容器上。这不是零风险，因此随本篇一起：取位与「自身优先」由 `tests/engine/select.test.ts` 的「default 选择段含当前元素自身」和 `tests/engine/css.test.ts` 的「@css 链步含当前元素自身」钉死；真机侧改前/改后逐源读数按 `docs/development.md` 的 `DSH_REPROBE`、`DSH_CONTENT_AUDIT` 重取，量出来的回归如实写进矩阵行的 `note`，不藏进提交信息。
 
 本篇不推翻 `docs/adr/0003`（判「支持不支持」以对面的读法为基准）——它就是那条基准的一次落地。与 `docs/adr/0001`、`docs/adr/0002` 无冲突：链步空态仍按 `reducePicked` 判 Miss，本篇只改「空」的判据里候选集合该不该包含自身。
 

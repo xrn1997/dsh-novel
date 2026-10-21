@@ -1,5 +1,7 @@
 # 入库语义只有一份；同址去重「以可用者为准」并复用旧 id
 
+Status: accepted
+
 「书源进入系统」的全部语义（normalize → 批内留首条 → 按址去重 → add/replace）只有一个实现 `src/services/intake.ts` 的 `SourceIntake`；后台导入任务与工具面同步导入都只是**调用方**，只把 `IntakeDecision` 映射成自己的词汇。规则曾只住在 `runImport` 里，同步工具面导入没有去重——同一 baseUrl 可重复入库，「入库规则」只兑现了一半。
 
 去重判据：同一 baseUrl 已有条目里存在 verified → 保留已有、跳过新条；一条可用的都没有 → 新条 **replace 并复用旧 id**（书架与既有引用不断），同时清掉同键其余历史条目。去重键只做 `trim` + 去尾部 `/`，**不折叠大小写**——URL 路径大小写有意义。

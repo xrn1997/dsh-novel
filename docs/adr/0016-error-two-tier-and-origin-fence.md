@@ -1,5 +1,7 @@
 # 错误→HTTP 是两分法；同源 fence 必须看 Origin，无 Origin / 无 Referer 放行
 
+Status: accepted
+
 ① **domain 与引擎错误**走一个分类单点（`services/errors.classify` → `ErrorCategory` → 状态码表），分类权在**类型**上，不在中文文案上——`message.startsWith('源不存在')` 是历史形态，改个错别字就改了 HTTP 状态码。`RuleMissing` 这类类目在 HTTP 面与搜索面/探针必须是同一词汇（此前裸 Error → 500，用户看到「服务器内部错误」而不是「这源缺规则」）。
 ② **路由层自检错误**用自带 status/code 的 `ApiError` 直通，**不进分类学**（405 / 未知路由 404 / body 校验 400 / 非受信来源 403 / 非法百分号编码 400）。被否决：把所有状态码映射塞进同一张表——那会把路由自检错误拖进分类学，凭空发明一批 domain 错误类。路由侧不许再 inline 写状态码，那会成为第三面。
 

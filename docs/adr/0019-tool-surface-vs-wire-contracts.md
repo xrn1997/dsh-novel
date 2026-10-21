@@ -1,5 +1,7 @@
 # 工具面与 HTTP 面共用同一批门面动词；两套可空口径刻意分家
 
+Status: accepted
+
 六个 `dshnovel_` 工具与 UI、探针共用同一个 service 层，**不存在第二套实现**：工具模块只 `import type { ReadingService }`，每个 `execute` 都是门面动词的调用——没有一处自己发 fetch、自己读 `sources.json` / `shelf.json`，也没有第二份规则求值。`ReadingService` 的全部部件是构造函数里的 `private readonly` 参数，所以「绕过门面直接动注册表」在**类型上不可表达**。
 
 工具面自己只拥有两件事，因为它们属于 harness 的输出约束而不是业务语义：**缺键投影**与 **render 文本投影**。
