@@ -29,7 +29,7 @@ DeepSeek Harness（DSH）的「小说」插件：导入 legado 书源 → 聚合
 
 改动抓取 / 规则引擎 / 打包链路，或改相关性判据 / 按书归并时，`docs/developing.md` 的「测试与真链路门控」那几条门控（`DSH_REPROBE` / `DSH_CONTENT_AUDIT` / `DSH_SEARCH_FILTER_AUDIT` / `COMPAT_CAPTURE` / `DSH_INSTALL_CHECK` / `DSH_EPUB_BROWSER` / `DSH_WEBVIEW` / `DSH_PARSE_CENSUS`）是唯一自动化验证——按那里的命令跑对应那条，并把结论**如实**写进汇报。注意分工：reprobe 只验**搜索面**，`verified` 不证明正文可读，正文口径是 `DSH_CONTENT_AUDIT`，而它是**审计报告**、不设通过率断言（分桶读数要人判）；`DSH_SEARCH_FILTER_AUDIT` 真打聚合搜索、量相关性分档与按书归并的读数，同为**报告**、唯一断言只是判据自洽（分档不丢条），供裁「去虚字放行」那条偏离与那把归并键的焊错面；`DSH_EPUB_BROWSER` 只在本机浏览器里量渲染与几何（本地书正文、组件排版），不起服务也不访问站点。
 
-**取门的退出码，别看管道说了什么**：`pnpm test | grep` 之后退出码是 grep 的，红会被吃掉还留一句「全绿」。跑门一律两步：先把输出灌进文件，再单独打印退出码，汇报里把**退出码连同计数**一起抄。**跑门与提交必须是两条命令**——链式的下一环看的是别人的退出码，红也就跟着提交了。
+**取门的退出码，别看管道说了什么**：跑门与提交必须是两条命令；完整口径见 `docs/developing.md` 的「测试与真链路门控」。
 
 跑 `pnpm test` 前确认依赖装全：缺 `jsdom` / `@testing-library/react` 会让前端测试文件假红（报 `Cannot find module`）。
 
@@ -49,13 +49,14 @@ DeepSeek Harness（DSH）的「小说」插件：导入 legado 书源 → 聚合
 - **同一事实只住一个家**：真机读数住矩阵行 `note`、局部口径住代码注释、决策与被否决的方案住 `docs/adr/`、跨子系统形状住 `docs/architecture.md`、用户可见事实住 `README.md`、贡献者流程住 `docs/developing.md`、术语住 `CONTEXT.md`。写作时先问「这句属于哪家」——不属于任何一家的句子就是抄本。
 - **引用活性：不许指着读者拿不到的东西**。不写行号（`file.ext:123` 形态会随任何一次编辑漂移）；不指已出库或不存在的文件；不拿 `.superpowers/` 里的过程产物当证据。外部出处（对面 legado 的 `.kt` 路径与符号）只许出现在三处：`README.md`（致谢）、`tests/legado-coverage/matrix.ts`（登记册）、快照刷新工具 `tests/legado-coverage/{upstream-facts.ts,capture-upstream-snapshot.test.ts}`；其余地方只讲本仓自己的口径。
 - **词汇优先**：新概念先进 `CONTEXT.md` 点名它的唯一实现，再写代码——反过来做会让同一个东西有两个名字。
-- **文档面的引用活性有门**：`tests/docs-liveness.test.ts` 随 `pnpm test` 扫 README / AGENTS / CONTEXT / `docs/**`——路径不在场、行号形态、指已出库文档或过程产物，都红；ADR 编号断号也红。词汇表点名的符号能不能现查得到，另有一道 `tests/context-terms.test.ts`。
+- **文档面的引用活性有门**：`tests/docs-liveness.test.ts` 随 `pnpm test` 扫 README / AGENTS / CONTEXT / `docs/**`——路径不在场、行号形态、指已出库文档或过程产物，都红；ADR 编号断号、ADR 索引漏行、Markdown 链接或标题锚点悬空也红。词汇表点名的符号能不能现查得到，另有一道 `tests/context-terms.test.ts`。
+- **文档分层本身的裁决住 `docs/adr/0040`**：当前事实 / 决策 / 读数 / 过程四种寿命不合并；过程文档出库，不设 `docs/specs/` 与仓库内 plans/specs。
 - **提交**：conventional commits（`feat|fix|test|docs|refactor|chore(scope): 中文说明`），正文讲**为什么**。
 
 ## 环境坑（配置文件里看不出来的）
 
-- **`lib/` 是构建产物且不入库**：任何从源码目录链进 profile 的安装方式都不会替你构建它——先 `pnpm build`，否则整个插件树拒绝挂载（`plugin tree failed to load` + `ERR_MODULE_NOT_FOUND`）。
-- **改动生效路径分两半**：`lib/client.js` 的 mtime / size 一变，`dsh-client-hmr` 自动推给浏览器热更新（前提是 `pnpm dev` 或手动 `pnpm build` 让产物真的重生成）；Node 半不在热重载链路内，改完要重启宿主。
+- **`lib/` 是构建产物且不入库**：先 `pnpm build`，否则整个插件树拒绝挂载（`plugin tree failed to load` + `ERR_MODULE_NOT_FOUND`）。完整说明见 `docs/developing.md` 的「构建与日常开发」。
+- **改动生效路径分两半**：浏览器半由宿主 HMR 热推，Node 半必须重启宿主；前提与细节见 `docs/developing.md` 的「构建与日常开发」。
 - **出站代理**：DSH 的 Node 进程走 undici，**不读系统代理**；只有代理能到的站点必须配 `proxyUrl`，否则表现为「浏览器能开、插件打不开」。
 - **运行时数据不在仓库**：书源 / 书架 / 缓存 / 本地书住 `~/.dsh/novel/`（`dataDir` 可改）。
 - **`compat/report.md` 是跑门产物**：`pnpm test:compat` 每次覆盖写，已 gitignore；它的分母是 `compat/fixtures/` 下的 fixture，**不是站点可用率**。

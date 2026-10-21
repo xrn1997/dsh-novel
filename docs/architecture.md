@@ -141,9 +141,21 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 - 缓存有效性靠指纹入名而不是删除式失效，所以**没有清缓存出口是设计而非缺失**（`docs/adr/0012`）。
 - 任务生命周期：身份与终态在宿主注册表，业务明细与整轮结果在本仓持有者；写任务一槽、搜索另开一槽；任务态不持久化（`docs/adr/0018`）。
 
-## 7. 阅读路径建议
+## 7. 改动面 → 先读什么
 
-- 要改抓取或规则语义：`CONTEXT.md` 找术语 → 本文件第 4 节找主人 → 去那个符号头上读注释 → 查 `docs/adr/` 有没有对应裁决。
-- 要加一个书架元数据字段：只改 `SHELF_META`（第 4 节第一行就是它）。
-- 要判断「legado 某写法该不该支持」：先查矩阵有没有那一行；没有就先落一行，再动手。
-- 要改宿主接入方式：先读 `docs/adr/0020`、`docs/adr/0021`，再动 `package.json` / `tsdown.config.ts`。
+表只指路，不复制口径：真正的主人在第 4 节、ADR 与代码注释。
+
+| 改动面 | 先读 |
+| --- | --- |
+| 规则文法 / 求值 / 链语义 | 第 3 节；`docs/adr/0001`、`docs/adr/0002`、`docs/adr/0005`、`docs/adr/0006`、`docs/adr/0007`、`docs/adr/0029`；矩阵 `a-*` 行 |
+| 请求组装 / 出站 / cookie / 限速 / webview | 第 4 节的 `assembleRequest`、`fetcher`、`CookieJar`、`RateLimiter`、`WebViewRuntime` 行；`docs/adr/0015`、`docs/adr/0016`、`docs/adr/0039`；矩阵 `b-*` 行 |
+| wire / 路由 / 工具面 | 第 2 节；`docs/adr/0009`、`docs/adr/0019`；`shared/wire.ts` |
+| 书架 / 存储 / 缓存 / 本地书 | 第 6 节；`docs/adr/0010`、`docs/adr/0011`、`docs/adr/0012`、`docs/adr/0013`、`docs/adr/0014`；`services/shelf.ts`、`services/storage.ts`、`services/cache.ts`、`services/localbooks.ts` |
+| 聚合搜索 / 相关性 / 按书归并 | 第 4 节的 `services/search-face.ts`、`mergePartitioned`、`relevanceOf` 行；`docs/adr/0032`、`docs/adr/0033`；矩阵 `d-*` 行 |
+| 书城 / 分类浏览 | 第 4 节的 `fetchKindPage`、`ExploreJobs`、`decideCityEntry` 行；`docs/adr/0027`、`docs/adr/0028`；`services/explore-face.ts`、`services/explore-job.ts` |
+| 客户端视图 / 文案 / 模态 / 阅读浮层 | 第 4 节的 `client/copy/index.tsx`、`client/views/dialog.tsx`、`client/reader-surfaces.ts` 行；`docs/adr/0037`、`docs/adr/0038` |
+| 阅读器 / 章节窗口 / 进度 | 第 4 节的 `client/reader-session.ts`、`client/reader-load.ts`、`client/progress.ts` 行；`docs/adr/0022` |
+| 后台任务 / 过程行 / 宿主观察 | 第 4 节的 `HostTie`、`JobTail`、`ChangeSignal` 行；`docs/adr/0018`、`docs/adr/0034` |
+| 宿主接入 / 打包 / 插件页 | 第 1 节；`docs/adr/0020`、`docs/adr/0021`、`docs/adr/0035`；`docs/developing.md` 的「宿主兼容与发版」 |
+| legado 兼容判据 / 新写法 | 先查 `tests/legado-coverage/matrix.ts` 有没有那一行；`docs/adr/0003`、`docs/adr/0024`、`docs/adr/0025`；`docs/developing.md` 的「兼容判据四门」 |
+| 文档 / ADR / 发布流程 | `AGENTS.md` 的「文档纪律」；`docs/adr/README.md`；`docs/adr/0040`；`docs/developing.md` |

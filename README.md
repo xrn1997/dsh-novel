@@ -186,9 +186,11 @@ pnpm dev          # = tsdown --watch，日常开发建议挂着
 | `docs/developing.md` | 贡献者命令与验证：构建、本地调试、全部门控、真宿主冒烟、宿主兼容与发版 | 用户用法、设计决策、真机读数 |
 | `docs/adr/` | 决策与当前仍被否决的替代方案，每篇一个编号文件（正文直接写当前真相；整篇不再成立时标 superseded） | 现状描述、验收清单 |
 
+这套分层本身的裁决见 `docs/adr/0040`。
+
 两类东西不进文档：**兼容裁决与真机读数**住 `tests/legado-coverage/matrix.ts` 的行 `note`（要重算见 `docs/developing.md` 的「解析面普查」）；**局部口径的为什么**住实现它的那段代码注释。宿主侧的 API 行为以就地注释引原文 + 每次 bump 现读为凭，本仓**没有**宿主 API 的参考文档；legado 侧的对读结论才冻结成在册快照 `compat/upstream/snapshot.json`。
 
-迭代过程文档（任务计划、审查报告、一次性脚本）**不入库**，写在本机 `.superpowers/`——`main` 只保留当前真相。文档面的引用活性由 `tests/docs-liveness.test.ts` 随 `pnpm test` 把住：路径不在场、写行号、指已出库的东西、ADR 断号，都会红。
+迭代过程文档（任务计划、审查报告、一次性脚本）**不入库**，写在本机 `.superpowers/`——`main` 只保留当前真相。文档面的引用活性由 `tests/docs-liveness.test.ts` 随 `pnpm test` 把住：路径不在场、写行号、指已出库的东西、ADR 断号、ADR 索引漏行、Markdown 链接或标题锚点悬空，都会红。
 
 ## 贡献
 
