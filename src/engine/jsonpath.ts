@@ -18,6 +18,17 @@ import { UnsupportedRuleError } from './errors.js'
  * 元素转字符串：字符串原样；对象/数组 JSON.stringify；number/bool → String()。
  */
 
+/** `Json:`/裸路径归一：JSONPath 从根起算，无 `$` 视为根相对路径补 `$.`
+ *  （`data[*]` → `$.data[*]`，`.data[*]` → `$.data[*]`——前导点只补 `$`，补成 `$..data[*]`
+ *  会把根相对路径变成递归下降）；`@` 开头保持原样，由 tokenizer 如实拒绝。
+ *  与 legado Jayway 的原始读取不同，这是本仓的有意放宽。 */
+export function normalizeJsonPath(path: string): string {
+  const p = path.trim()
+  if (p.startsWith('$') || p.startsWith('@')) return p
+  if (p.startsWith('.')) return `$${p}`
+  return p.startsWith('[') ? `$${p}` : `$.${p}`
+}
+
 type Token =
   | { kind: 'child'; name: string }
   | { kind: 'descend'; name: string }
@@ -174,7 +185,7 @@ function toValue(v: unknown): EngineValue {
  * 非空数组 → List；直接标量 → Value。
  */
 export function evalJsonPath(path: string, data: unknown, loc: SegmentLoc, facet: Facet): EngineValue {
-  const tokens = tokenize(path, loc, facet)
+  const tokens = tokenize(normalizeJsonPath(path), loc, facet)
   let cur: unknown[] = [data]
   for (const tok of tokens) {
     const prev = cur

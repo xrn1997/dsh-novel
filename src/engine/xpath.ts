@@ -84,7 +84,7 @@ type Axis = 'child' | 'descendant' | 'parent' | 'fwd' | 'bwd'
 interface Step { axis: Axis; test: Test; preds: Predicate[] }
 
 type Predicate =
-  | { kind: 'pos'; op: '=' | '>' | '<' | '>=' | '<='; rhs: number | 'last' }
+  | { kind: 'pos'; op: '=' | '>' | '<' | '>=' | '<='; rhs: number | 'last'; offset?: number }
   | { kind: 'attrExists'; attr: string }
   | { kind: 'textExists' }
   | { kind: 'elemExists'; name: string }
@@ -209,6 +209,11 @@ function parsePredicate(content: string): Predicate {
   if (pos) {
     const rhs = pos[2] === 'last()' ? 'last' : Number(pos[2])
     return { kind: 'pos', op: pos[1] as '=' | '>' | '<' | '>=' | '<=', rhs }
+  }
+  const lastOffset = /^last\(\)\s*([+-])\s*(\d+)$/.exec(c)
+  if (lastOffset) {
+    const n = Number(lastOffset[2])
+    return { kind: 'pos', op: '=', rhs: 'last', offset: lastOffset[1] === '-' ? -n : n }
   }
   if (c === 'last()') return { kind: 'pos', op: '=', rhs: 'last' }
   if (/^\d+$/.test(c)) return { kind: 'pos', op: '=', rhs: Number(c) }
@@ -393,7 +398,7 @@ function textContentOf(n: AnyNode): string {
 function evalPredicate(p: Predicate, n: AnyNode, pos: number, size: number): boolean {
   switch (p.kind) {
     case 'pos': {
-      const rhs = p.rhs === 'last' ? size : p.rhs
+      const rhs = (p.rhs === 'last' ? size : p.rhs) + (p.offset ?? 0)
       switch (p.op) {
         case '=': return pos === rhs
         case '>': return pos > rhs

@@ -3,6 +3,7 @@ import { Fragment, useEffect, useRef, useState } from 'react'
 import { ROUTES } from '../../shared/wire.js'
 import type { ExploreBook, ExploreSources } from '../../shared/wire.js'
 import { describeError } from '../api.js'
+import { decideCityEntry, rememberedSelection } from '../city-entry.js'
 import { bookListEmpty, cityEmptyState, cityMeta, kindCountLabel, roundReadout } from '../city-view-model.js'
 import { plural, useCopy } from '../copy/index.js'
 import { useExploreJob } from '../explore-job.js'
@@ -43,11 +44,13 @@ const sourceSub = (s: ExploreSources['sources'][number]): string =>
  *    折叠线以下（点了却没看见等于没点），所以换源后要把那一行抬到框顶，见 `topAlignIfClipped`。
  * ③ **续页是本轮唯一需要用户按一下的东西**：显隐只认 `hasMore`、`disabled` 只认本地按下那一段——
  *    两个字段各管什么定义在 `client/explore-job.ts` 的 `ExploreRound` 与 `loadMore` 上，本视图照它渲染。
- * ④ **进入即加载，但只在该源+该分类没有轮次时**：源与分类到手先各定一次，提交与否交给 `restored`
- *    与 `asked` 两道闸之后的判据——服务端持有这一轮就是它的家，回来看它跑完即可（见下面那条 effect）。
+ * ④ **进入即加载，但只在该源+该分类没有轮次时**：源与分类的回落、以及「该不该提交」都收在
+ *    `client/city-entry.ts` 的纯判据里——服务端持有这一轮就是它的家，回来看它跑完即可
+ *    （见下面那条 effect）。
  *
  * 轮次观察与读面的会话内现场各自有主人：轮次归 `useExploreJob`（全量快照），上次逛的源与分类归
- * `cityStore`（不落盘）。本视图只做装配与呈现：判据取 `city-view-model`，文案取 `copy/city.ts`。
+ * `cityStore`（不落盘）。本视图只做装配与呈现：进入判据取 `city-entry`，呈现判据取
+ * `city-view-model`，文案取 `copy/city.ts`。
  */
 export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): ReactNode {
   const t = useCopy()
@@ -62,7 +65,8 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
   const [kindQuery, setKindQuery] = useState('')
   const [picked, setPicked] = useState<ExploreBook | null>(null)
   const [imgFailed, setImgFailed] = useState<Record<string, boolean>>({})
-  /** 「已经为某个源+分类要过一轮了」：自动那条路只走一次，此后一律由点击路径提交 */
+  /** 「已经由任一入口起过一轮」（自动那条路提交/follow 过，或用户手点过）：自动那条路最多动作一次；
+   *  手点也置位，免得恢复读落地前手选一次、自动路径又追加一次提交。 */
   const asked = useRef(false)
   /** 落位的三件锚：整栏（本视图唯一的滚动容器）、展开的那一行、它下面刚长出来的那一串 */
   const railRef = useRef<HTMLElement | null>(null)
@@ -82,30 +86,37 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
       setSources(list)
       // 记住的源失效（禁用/删掉）即回落到可选清单的第一项——回落同时把选中态改写到真实存在的源上，
       // 不留一个指向不存在源的选中态；分类同理，记住的不在这一源声明的分类里就落它声明的第一个分类。
-      const remembered = list.find((s) => s.id === cityStore.get().sourceId) ?? list[0]
-      if (remembered === undefined) return                       // 没有任何源进城：不提交任何一轮
-      const rememberedKind = cityStore.get().kind
-      const title = remembered.kinds.includes(rememberedKind ?? '') ? rememberedKind! : remembered.kinds[0]
-      setSourceId(remembered.id)
-      setKind(title)
-      cityStore.set({ sourceId: remembered.id, kind: title })    // 自动选中也记住（与手点同一条路）
+      // 算式归 `city-entry.ts` 的 `rememberedSelection`：自动那条路独立再算一次，两条路同一个回落。
+      const selection = rememberedSelection(list, cityStore.get())
+      if (selection === null) return                       // 没有可落的源+分类：不提交任何一轮
+      setSourceId(selection.sourceId)
+      setKind(selection.kind)
+      cityStore.set(selection)                             // 自动选中也记住（与手点同一条路）
     })()
   }, [])   // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
    * 进入即加载：**只在该源+该分类没有轮次时提交**。轮次住在服务端（`ExploreJob` 的槽），离开再回来
    * 只该看它跑完——重提一次会把它杀掉，书单空闪一帧再从头抓，正是本条要守住的性质。
-   * 所以判据是「`round` 没有、或不是这个源/这个分类」，而不是「挂载了就提交」。
-   *
-   * 两道先后都不能省的闸：① `restored`——挂载恢复读没定之前 `round` 恒为 `null`（那是「还没问过」
-   * 而非「服务端说没有」），此刻提交就是上面那个破口；② `asked`——自动这条路只走一次，
-   * 用户手点的那条（`pick`）不等恢复读、立刻落地，两者不能互相追加提交。
+   * 源/分类的回落、恢复读定没定、自动那条路走没走，三者一起收在 `city-entry.ts` 的
+   * `decideCityEntry` 里；本视图只把 `select` 落成 state 与 `asked`（自动这条路的 one-shot），
+   * `action` 只决定要不要提交（`follow` = 服务端那一轮就是它的家）。
    */
   useEffect(() => {
-    if (asked.current || !restored || sourceId === null || kind === null) return
+    const decision = decideCityEntry({
+      sources,
+      remembered: cityStore.get(),
+      restored,
+      asked: asked.current,
+      round: round === null ? null : { sourceId: round.sourceId, kind: round.kind },
+    })
+    if (decision.type !== 'select') return
     asked.current = true
-    if (round === null || round.sourceId !== sourceId || round.kind !== kind) submit(sourceId, kind)
-  }, [sourceId, kind, restored, round, submit])
+    setSourceId(decision.sourceId)
+    setKind(decision.kind)
+    cityStore.set({ sourceId: decision.sourceId, kind: decision.kind })
+    if (decision.action === 'submit') submit(decision.sourceId, decision.kind)
+  }, [sources, restored, round, submit])
 
   /** 换轮即清空封面失败表：封面坏掉是**这一轮这张卡**的事实（同址换一轮那张图就好了），
    *  上一轮的同名条目不该继承——不清就是「一次坏封面永久降级」。 */
@@ -122,7 +133,8 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
 
   /** 换源：分类栏跟着换成新源声明的那几条；当前分类若新源也声明了就沿用，否则落新源的第一个分类。 */
   const pickSource = (s: ExploreSources['sources'][number]): void => {
-    pick(s.id, s.kinds.includes(kind ?? '') ? kind! : s.kinds[0])
+    const selection = rememberedSelection([s], { sourceId: s.id, kind })
+    if (selection !== null) pick(selection.sourceId, selection.kind)
   }
 
   const shownSources = sources === null ? [] : sources.filter((s) => s.name.includes(sourceQuery.trim()))

@@ -80,7 +80,7 @@ describe('default 选择段', () => {
     // 三种读法里只有一种能读出现库的真实源：对面把整串当一个类名交给 jsoup（`getElementsByClass`），
     // 带空格的类名在按空白分词比对 class 属性时不可能命中；曾经直译成 `.x y`（后代选择器）也恒零命中
     // ——两个类在同一元素上时，后代里没有满足 `.x y` 的东西。本仓解成 `.a.b`（同时含所有类）。
-    // 这一侧是**库里 78 段 / 27 源**（2026-09-28 按 raw 全串重数；旧注「3 源」是当时的读数）赖以读出的语义。
+    // 这一侧是**库里 78 段 / 27 源**（2026-09-28 按 raw 全串重数）赖以读出的语义。
     // 红检：把 `case 'class'` 改回 `.x y` 的直译即红（同一元素两个类 → 后代选择器零命中）。
     const H = cheerio.load('<div id="w"><div class="col-12 col-md-6 x"><span>甲</span></div></div>')
     const hit = evalDefault({ kind: 'default', mode: 'class', arg: 'col-12 col-md-6', index: null }, H, H('#w') as any, loc(0, 'class.col-12 col-md-6'), 'toc')

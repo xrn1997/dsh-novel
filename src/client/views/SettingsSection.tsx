@@ -11,6 +11,7 @@ import type { InboxKind, SourceInbox } from '../source-inbox.js'
 import { inboxUi, muteInboxCard, pruneInboxMuted, unmuteAllInboxCards } from '../source-inbox-ui.js'
 import { useStore } from '../store.js'
 import { NovelStyles } from '../styles.js'
+import { focusRunCard } from '../run-card.js'
 import { ImportPane } from './SettingsImportPane.js'
 import { ProbeRunCard, SourceList } from './SettingsSourceList.js'
 import { ErrorBanner, StatusBadge } from './bits.js'
@@ -73,15 +74,32 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
   }, [job, reloadedJob, reload])
   /** 常驻状态层点击 → 跨子树意图：本区在场就消费（开弹层 / 回列表并滚到任务卡）。
    *  消费即清空，所以同一意图不重放；试跑子视图也先退回列表——原先在试跑页里点「点此查看」
-   *  是个 no-op（querySelector 找不到目标，见本文件历史口径），现在改成「带回现场」。 */
+   *  是个 no-op（找不到卡片，旧路径与原因见 `run-card.ts` 文件头），现在改成「带回现场」。
+   *  去现场分两拍：这一拍只落意图（切回列表 / 推进 `focusTick`），滚动留给提交后的 effect——
+   *  卡片由任务镜像渲染，正常同一提交已在树上；若那一刻还没登记，effect 再等一个宏任务补一次。 */
+  const [focusTick, setFocusTick] = useState(0)
   const openRequest = useJobOpenRequest()
   useEffect(() => {
     if (openRequest === null) return
     setSub({ name: 'list' })
     if (openRequest === 'import') setImportOpen(true)
-    else setTimeout(() => document.querySelector('[data-novel-run-card]')?.scrollIntoView({ block: 'center' }), 0)
+    else {
+      // 「看任务卡」与导入弹层互斥：弹层开着时卡片被遮罩挡在下面，焦点滚过去也看不见
+      // （真机口径：去现场 = 用户眼前真的出现那张卡）。关掉弹层再推进确认拍。
+      setImportOpen(false)
+      setFocusTick((n) => n + 1)
+    }
     takeJobOpen()
   }, [openRequest])
+  // 卡片挂载后的去现场：tick 只在消费「看任务卡」意图时前进，初值 0 不动——
+  // 本区单纯挂载/重渲染不抢滚动位置。
+  useEffect(() => {
+    if (focusTick === 0) return
+    if (focusRunCard('probe')) return
+    // 卡片可能比意图晚一个任务挂载：补一次，之后不再追（不把一次性意图做成轮询）
+    const timer = setTimeout(() => { focusRunCard('probe') }, 0)
+    return () => clearTimeout(timer)
+  }, [focusTick])
 
   // 待办集合唯一派生口在 source-inbox.ts：一次派生同时喂待办区与导入弹层的「去验证」，
   // 视图不另抄一份按状态筛（同一份源清单也不在同一轮渲染里筛两遍）
@@ -124,7 +142,7 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
         job={job}
         onChanged={reload}
         onProbe={(id) => setSub({ name: 'probe', sourceId: id })}
-        onImport={() => setImportOpen(true)}
+        onImport={() => { if (job?.phase !== 'running') setImportOpen(true) }}
         loadError={loadError}
         deps={deps}
       />

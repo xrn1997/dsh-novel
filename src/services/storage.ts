@@ -71,6 +71,25 @@ export async function readJson<T>(file: string, fallback: T): Promise<T> {
  *  （PageCache 曾自抄一份无排队的写，与导出/工具并发抓同章即 EPERM→500）。 */
 const renameChains = new Map<string, Promise<void>>()
 
+/** 瞬时 rename 冲突的有限重试：Windows 上杀软/索引器短暂持有目标文件会报 EPERM/EBUSY。
+ *  只重这两个码；EACCES 这类持久性权限错直接抛，不把不可恢复的失败拖成延迟。 */
+const RENAME_RETRYABLE = new Set(['EPERM', 'EBUSY'])
+const RENAME_RETRY_DELAYS_MS = [10, 50, 200]
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+async function renameWithRetry(tmp: string, file: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await fs.rename(tmp, file)
+      return
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code
+      if (!RENAME_RETRYABLE.has(code ?? '') || attempt >= RENAME_RETRY_DELAYS_MS.length) throw e
+      await sleep(RENAME_RETRY_DELAYS_MS[attempt]!)
+    }
+  }
+}
+
 /** 临时文件 + rename 原子写（低层、纯文本）；自动建父目录。序列化归调用方。
  *  入队先于任何 await（含 mkdir）：否则「谁先排进链」由 mkdir 完成顺序决定，
  *  最后调用的那次不保证最后落盘——注释承诺的「最终落盘的是最后一次写的数据」就不成立。 */
@@ -81,7 +100,7 @@ export async function writeFileAtomic(file: string, data: string): Promise<void>
     await fs.mkdir(path.dirname(file), { recursive: true })
     const tmp = tempPathOf(file)
     await fs.writeFile(tmp, data, 'utf8')
-    await fs.rename(tmp, file)
+    await renameWithRetry(tmp, file)
   })
   const tail = run.catch(() => undefined)
   renameChains.set(file, tail)
@@ -100,30 +119,70 @@ export async function writeJsonAtomic(file: string, data: unknown): Promise<void
 /** 进程内防抖合并连续写：窗口内同文件多次 schedule 只落最后一次；flush 等待全部落地 */
 export function createDebouncedWriter(delayMs = 100) {
   const pending = new Map<string, { data: unknown; timer: ReturnType<typeof setTimeout>; waiters: (() => void)[] }>()
+  // 定时器触发的写没有调用方可接 rejection；失败留在这里，下一次 flush 如实抛给调用方
+  const failed = new Map<string, unknown>()
+  const takeFailure = (file?: string): { error: unknown } | undefined => {
+    if (file !== undefined) {
+      if (!failed.has(file)) return undefined
+      const error = failed.get(file)
+      failed.delete(file)
+      return { error }
+    }
+    const first = failed.keys().next()
+    if (first.done === true) return undefined
+    const error = failed.get(first.value)
+    failed.delete(first.value)
+    return { error }
+  }
   const flushOne = (file: string): Promise<void> => {
     const p = pending.get(file)
     if (!p) return Promise.resolve()
     clearTimeout(p.timer)
     pending.delete(file)
-    return writeJsonAtomic(file, p.data).then(() => p.waiters.forEach((r) => r()))
+    return writeJsonAtomic(file, p.data).then(
+      () => {
+        failed.delete(file)             // 新一笔写成功即清掉旧失败
+        p.waiters.forEach((r) => r())
+      },
+      (e: unknown) => {
+        failed.set(file, e)
+        throw e
+      },
+    )
   }
   return {
     schedule(file: string, data: unknown): void {
       const old = pending.get(file)
       if (old) clearTimeout(old.timer)
-      const entry = { data, timer: setTimeout(() => void flushOne(file), delayMs), waiters: old?.waiters ?? [] }
+      const entry = {
+        data,
+        timer: setTimeout(() => {
+          // 定时器路径没有调用方可接 rejection；日志留下现场，flush 仍会把失败抛给下一次调用方
+          void flushOne(file).catch((e: unknown) => { log.error(`防抖落盘失败（等待下一次写重试）：${file}`, e) })
+        }, delayMs),
+        waiters: old?.waiters ?? [],
+      }
       pending.set(file, entry)
     },
     /** 等齐落盘：排到**静默**，不是排「调用那一刻的快照」。
      *  只取一次快照的话，第一轮 I/O 在途时新 `schedule` 的那笔写留在计时器里——flush 已返回、
      *  进程收尾后它才自己烧：Windows 上表现为 `rename` 撞 EPERM 的未处理拒绝（门绿 exit≠0 的现场）。
      *  终止条件是「这一轮没有挂起写」，**刻意不设轮次上限**：加上限等于把同一个逃逸窗口藏回去。
-     *  指定 file 时只等那一支（没有它的挂起写就立即 resolve）。 */
+     *  指定 file 时只等那一支（没有它的挂起写就立即 resolve）；定时器路径失败的写也会在这里抛出。 */
     async flush(file?: string): Promise<void> {
       for (;;) {
         const files = file === undefined ? [...pending.keys()] : pending.has(file) ? [file] : []
-        if (files.length === 0) return
-        await Promise.all(files.map(flushOne))
+        if (files.length === 0) {
+          const failure = takeFailure(file)
+          if (failure !== undefined) throw failure.error
+          return
+        }
+        try {
+          await Promise.all(files.map(flushOne))
+        } catch (e) {
+          const failure = takeFailure(file)
+          throw failure === undefined ? e : failure.error
+        }
       }
     },
   }

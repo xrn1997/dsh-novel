@@ -77,6 +77,11 @@ export function base64Decode(s: string): string {
   return Buffer.from(String(s), 'base64').toString('utf8')
 }
 
+/** 字节组 → base64（btoa 的二进制语义；与 base64Encode 的 UTF-8 语义分开） */
+export function base64EncodeBytes(bytes: number[]): string {
+  return Buffer.from(bytes.map((b) => b & 0xff)).toString('base64')
+}
+
 /** java.encodeURI 垫片：语义 = encodeURIComponent（中文/空格/斜杠全部转义） */
 export function uriEncode(s: string): string {
   return encodeURIComponent(String(s))

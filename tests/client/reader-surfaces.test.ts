@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { closeAll, dismissSurface, maskFor, openSurface } from '../../src/client/reader-surfaces.js'
+import { closeAll, dismissSurface, escOwner, maskFor, openSurface } from '../../src/client/reader-surfaces.js'
 
 /**
  * 阅读浮层在场判据的钉子：「至多一角在场」与「换角时注释面板怎么退场」这两条以前散在四个
@@ -50,5 +50,15 @@ describe('遮罩只跟需要「点外面关掉它」的两面', () => {
   it('无角在场就没有遮罩（不许留一层吃不掉的透明遮罩）', () => {
     expect(maskFor(null)).toBe(false)
     expect(closeAll(null)).toEqual({ surface: null, supplement: 'keep' })
+  })
+})
+
+describe('escOwner：同场时 Esc 归谁', () => {
+  it('模态优先；无模态时浮层；两者皆无', () => {
+    expect(escOwner('toc', true)).toBe('modal')
+    expect(escOwner('supplement', true)).toBe('modal')
+    expect(escOwner(null, true)).toBe('modal')
+    expect(escOwner('toc', false)).toBe('surface')
+    expect(escOwner(null, false)).toBe('none')
   })
 })

@@ -12,7 +12,7 @@ import { log } from './log.js'
  * 形状定义在 wire 契约（src/shared/wire.ts）；此处 re-export 保持 import 路径可用。
  */
 export type { SourcePublic } from '../shared/wire.js'
-import type { SourcePublic } from '../shared/wire.js'
+import type { LoginUiField, LoginUiText, SourcePublic } from '../shared/wire.js'
 
 /** edit 的变更句柄：原注册表公开 mutator 全部迁到此（方法名与语义不变）。
  *  只在 edit 的 recipe 内可用——变更与落盘不再可分。 */
@@ -37,6 +37,45 @@ const PERSIST_WINDOW_MS = 100
  * 落盘是内部事务，不是调用方的纪律——
  * 「改完记得 persist」的顺序约束已从 interface 消灭：公开 persist 不存在，忘了落盘不可表达。
  */
+/** loginUi 的可渲染子集：JSON 数组里的 text/password/button 行；`@js:` 生成形态与字面
+ *  `webView` 行不投影，UI 回退 cookie 录入。button 只收有非空 action 的行（无动作按钮是死控件）。
+ *  **内部行带 action**：服务端按同名行查脚本；`toPublic` 只投影 name/type，客户端不持脚本。
+ *  `name` 同时是 loginInfo 的键与标签（legado RowUi.name）。 */
+export interface LoginUiActionRow {
+  name: string
+  type: 'button'
+  action: string
+}
+
+export type LoginUiRow = LoginUiText | LoginUiActionRow
+
+export function loginUiOf(raw: unknown): LoginUiRow[] | undefined {
+  if (raw === null || typeof raw !== 'object') return undefined
+  const v = (raw as Record<string, unknown>).loginUi
+  if (typeof v !== 'string' || v.trim() === '') return undefined
+  let parsed: unknown
+  try { parsed = JSON.parse(v) } catch { return undefined }
+  if (!Array.isArray(parsed)) return undefined
+  const out: LoginUiRow[] = []
+  for (const row of parsed) {
+    if (row === null || typeof row !== 'object') continue
+    const r = row as Record<string, unknown>
+    const type = typeof r.type === 'string' ? r.type : 'text'
+    const name = typeof r.name === 'string' ? r.name.trim() : ''
+    if (name === '') continue
+    if (type === 'text' || type === 'password') {
+      out.push({ name, type, ...(typeof r.default === 'string' ? { default: r.default } : {}) })
+      continue
+    }
+    if (type === 'button') {
+      const action = typeof r.action === 'string' ? r.action.trim() : ''
+      if (action === '') continue
+      out.push({ name, type: 'button', action })
+    }
+  }
+  return out.length === 0 ? undefined : out
+}
+
 export class SourceRegistry {
   private dirty = false
   private mutations = 0
@@ -228,6 +267,9 @@ export class SourceRegistry {
 
   /** 对外视图：显式字段组装，剥离 raw/rules/auth */
   toPublic(s: NovelSource): SourcePublic {
+    const rows = loginUiOf(s.raw)
+    // button 的 action 是源脚本，只服务端用；对外视图只留标签与类型
+    const loginUi = rows?.map((r): LoginUiField => r.type === 'button' ? { name: r.name, type: 'button' } : r)
     return {
       id: s.id,
       name: s.name,
@@ -243,6 +285,7 @@ export class SourceRegistry {
       hasAuth: !!s.auth,
       authExpired: s.auth?.expired ?? false,
       hasLoginUrl: s.rules.loginUrl !== null,
+      ...(loginUi === undefined ? {} : { loginUi }),
     }
   }
 

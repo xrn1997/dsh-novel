@@ -75,32 +75,136 @@ describe('@js 沙箱', () => {
     expect((await run('return typeof globalThis.require')).value).toEqual({ kind: 'value', text: 'undefined' })
   })
 
-  it('沙箱逃逸：代码生成被禁（Function 构造器 / eval 均 EvalError）', async () => {
-    const v1 = await run('try { Function("return 1"); return "escaped" } catch (e) { return "blocked:" + e.name }')
-    expect(v1.value).toEqual({ kind: 'value', text: 'blocked:EvalError' })
-    const v2 = await run('try { eval("1+1"); return "escaped" } catch (e) { return "blocked:" + e.name }')
-    expect(v2.value).toEqual({ kind: 'value', text: 'blocked:EvalError' })
+  it('代码生成允许（eval / Function 在 vm 内可用）', async () => {
+    const v1 = await run('return Function("return 1")()')
+    expect(v1.value).toEqual({ kind: 'value', text: '1' })
+    const v2 = await run('return eval("1+1")')
+    expect(v2.value).toEqual({ kind: 'value', text: '2' })
   })
 
-  it('沙箱逃逸：宿主 realm 不可达（构造器链 / 错误对象 / 返回的 Promise / 引导入口）', async () => {
-    // 宿主函数的 .constructor（跨 realm Function）：console/java 均为 vm realm 包装 → EvalError
-    const v3 = await run('try { return "escaped:" + console.log.constructor("return 1")() } catch (e) { return "blocked:" + e.name }')
-    expect(v3.value).toEqual({ kind: 'value', text: 'blocked:EvalError' })
-    const v3b = await run('try { return "escaped:" + java.get.constructor("return 1")() } catch (e) { return "blocked:" + e.name }')
-    expect(v3b.value).toEqual({ kind: 'value', text: 'blocked:EvalError' })
-    // 宿主抛出的错误（如守门 JsSandboxError）跨 realm 后须为 vm Error，其构造器链同样被禁
+  it('沙箱逃逸：eval 可用，但宿主 realm 仍不可达（process/require/入口）', async () => {
+    // vm 内的 Function 构造器可用，但 process 不在 vm 全局里 → ReferenceError
+    const v3 = await run('try { return "escaped:" + console.log.constructor("return process")() } catch (e) { return "blocked:" + e.name }')
+    expect(v3.value).toEqual({ kind: 'value', text: 'blocked:ReferenceError' })
+    const v3b = await run('try { return "escaped:" + java.get.constructor("return process")() } catch (e) { return "blocked:" + e.name }')
+    expect(v3b.value).toEqual({ kind: 'value', text: 'blocked:ReferenceError' })
+    // 宿主抛出的错误跨 realm 后是 vm Error；其构造器链同样取不到 process
     const v4 = await run(
-      'try { await java.ajax("u") } catch (e) { try { return "escaped:" + e.constructor.constructor("return 1")() } catch (x) { return "blocked:" + x.name + "|" + e.message.includes("网络能力") } }',
+      'try { await java.ajax("u") } catch (e) { try { return "escaped:" + e.constructor.constructor("return process")() } catch (x) { return "blocked:" + x.name + "|" + e.message.includes("网络能力") } }',
       hostOf(),
       ctxOf(),
     )
-    expect(v4.value).toEqual({ kind: 'value', text: 'blocked:EvalError|true' })
-    // ajax 返回的 Promise 为 vm realm Promise，构造器链被禁
-    const v5 = await run('try { return "escaped:" + java.ajax.constructor("return 1")() } catch (e) { return "blocked:" + e.name }')
-    expect(v5.value).toEqual({ kind: 'value', text: 'blocked:EvalError' })
+    expect(v4.value).toEqual({ kind: 'value', text: 'blocked:ReferenceError|true' })
+    const v5 = await run('try { return "escaped:" + java.ajax.constructor("return process")() } catch (e) { return "blocked:" + e.name }')
+    expect(v5.value).toEqual({ kind: 'value', text: 'blocked:ReferenceError' })
     // 引导入口 __host_call__ 已从全局锁死，不可恢复
     const v6 = await run('return [typeof __host_call__, typeof __init__].join(",")')
     expect(v6.value).toEqual({ kind: 'value', text: 'number,number' })
+  })
+
+  it('宿主帧逃逸通道已锁：用户代码改不掉 Error.prepareStackTrace', async () => {
+    // 主线程路径：prepareStackTrace 被引导层锁成不可写 → 赋值静默失败，默认栈格式化照常（拿不到 CallSite）
+    const main = await run(
+      'var called = false;'
+      + 'try { Error.prepareStackTrace = function () { called = true; return "hacked" } } catch (e) {}'
+      + 'var s = ""; try { throw new Error("probe") } catch (e) { s = String(e.stack) }'
+      + 'return called + "|" + (s === "hacked" ? "hacked" : "default")',
+    )
+    expect(main.value).toEqual({ kind: 'value', text: 'false|default' })
+    // worker 路径的宿主帧曾可直接取到 require；同一把锁在 BOOTSTRAP 里，worker 重跑同一份引导。
+    // 断言 prepared 标志本身，不依赖「默认栈里恰好没有 function 字样」。
+    const worker = await run(
+      'var called = false;'
+      + 'Error.prepareStackTrace = function (err, frames) {'
+      + '  called = true;'
+      + '  var out = [];'
+      + '  for (var i = 0; i < frames.length; i++) {'
+      + '    try { var t = frames[i].getThis();'
+      + '      if (t && t.constructor && t.constructor.constructor)'
+      + '        out.push(String(t.constructor.constructor("return typeof require")()));'
+      + '    } catch (e) { out.push("err") }'
+      + '  }'
+      + '  return "HACKED:" + out.join(",")'
+      + '};'
+      + 'var s = ""; try { throw new Error("probe") } catch (e) { s = String(e.stack) }'
+      + 'java.ajax("https://x.com/p");'
+      + 'return called + "|" + (s.indexOf("HACKED:") === 0 ? s : "default")',
+      hostOf(),
+      ctxOf({ fetch: async () => ({ body: 'ok' }) }),
+    )
+    expect(worker.value).toEqual({ kind: 'value', text: 'false|default' })
+  })
+
+  it('宿主错误过界前换成 vm realm Error（constructor 逃逸通道已封）', async () => {
+    // AES 桥是直接 call，不走 invoke 的 try/catch；宿主 Error 若原样进 vm，脚本就能用
+    // e.constructor.constructor 拿回宿主 process。
+    const probe = 'try { java.createSymmetricCrypto("AES/CBC/PKCS5Padding", "short", "").decryptStr("x") }'
+      + ' catch (e) { return e.constructor.constructor("return typeof process")() }'
+    const main = await run(probe)
+    expect(main.value).toEqual({ kind: 'value', text: 'undefined' })
+    const worker = await run(
+      probe + 'java.ajax("https://x.com/p");',
+      hostOf(),
+      ctxOf({ fetch: async () => ({ body: 'ok' }) }),
+    )
+    expect(worker.value).toEqual({ kind: 'value', text: 'undefined' })
+  })
+
+  it('java.post 收 Map 形头参数（source.getLoginInfoMap）', async () => {
+    let seen: Record<string, string> | undefined
+    const v = await run(
+      'return java.post("https://x.com/p", "b", source.getLoginInfoMap()).body()',
+      hostOf(),
+      ctxOf({
+        loginInfo: { u: '1' },
+        fetchPost: async (_url, _body, headers) => {
+          seen = headers
+          return { url: 'https://x.com/p', body: 'OK', statusCode: 200, headers: {}, cookies: {} }
+        },
+      }),
+    )
+    expect(v.value).toEqual({ kind: 'value', text: 'OK' })
+    expect(seen).toEqual({ u: '1' })
+  })
+
+  it('java.get 双参按实参个数分派：显式 undefined 仍是 HTTP，不是变量 getter', async () => {
+    let called = ''
+    const v = await run(
+      'return java.get("https://x.com/g", undefined).body()',
+      hostOf(),
+      ctxOf({
+        vars: { k: 'V' },
+        fetchGet: async (url) => {
+          called = url
+          return { url, body: 'HTTP', statusCode: 200, headers: {}, cookies: {} }
+        },
+      }),
+    )
+    expect(v.value).toEqual({ kind: 'value', text: 'HTTP' })
+    expect(called).toBe('https://x.com/g')
+  })
+
+  it('同步桥正则覆盖 post/get/webView：脚本 try/catch 不吞哨兵', async () => {
+    const ctx = ctxOf({
+      fetchPost: async () => ({ url: 'https://x.com/p', body: 'POST-BODY', statusCode: 200, headers: {}, cookies: {} }),
+      fetchGet: async (u) => ({ url: u, body: 'GET-BODY', statusCode: 200, headers: {}, cookies: {} }),
+      webView: async () => '<html>W</html>',
+    })
+    const post = await run(
+      'try { return (await java.post("https://x.com/p", "b")).body() } catch (e) { return "caught:" + e.message }',
+      hostOf(), ctx,
+    )
+    expect(post.value).toEqual({ kind: 'value', text: 'POST-BODY' })
+    const get = await run(
+      'try { return (await java.get("https://x.com/g", {})).body() } catch (e) { return "caught:" + e.message }',
+      hostOf(), ctx,
+    )
+    expect(get.value).toEqual({ kind: 'value', text: 'GET-BODY' })
+    const web = await run(
+      'try { return String(await java.webView("https://x.com/w")) } catch (e) { return "caught:" + e.message }',
+      hostOf(), ctx,
+    )
+    expect(web.value).toEqual({ kind: 'value', text: '<html>W</html>' })
   })
 
   it('java.get/put 读写 ctx.vars', async () => {
@@ -137,23 +241,26 @@ describe('@js 沙箱', () => {
     const withUa = await run('return java.getWebViewUA()', hostOf(), ctxOf({ userAgent: () => 'UA-from-fetch' }))
     expect(withUa.value).toEqual({ kind: 'value', text: 'UA-from-fetch' })
     await expect(run('return java.getWebViewUA()')).rejects.toThrow(/取不到出站 UA/)
-    // androidId 现在也是点名桩（不是 TypeError: is not a function）——脚本能看懂差在哪
-    await expect(run('return java.androidId()')).rejects.toThrow(/需要安卓宿主环境/)
+    // androidId 现在读宿主设备 ID（未接线点名，不是 TypeError: is not a function）
+    await expect(run('return java.androidId()')).rejects.toThrow(/设备 ID/)
   })
-  it('java.head(url, headers) → 数据面方法壳（statusCode/url/headers()；头名大小写不敏感）', async () => {
+  it('java.head(url, headers) → 数据面方法壳（statusCode/url/headers()/cookies()；头名大小写不敏感）', async () => {
     const seen: Array<[string, Record<string, string> | undefined]> = []
     const ctx = ctxOf({
       fetchHead: async (u, h) => {
         seen.push([u, h])
-        return { url: 'https://i.pximg.net/a.png', statusCode: 302, headers: { location: 'https://i.pximg.net/a.png' } }
+        return {
+          url: 'https://i.pximg.net/a.png', statusCode: 302,
+          headers: { location: 'https://i.pximg.net/a.png' }, cookies: { sid: '1' },
+        }
       },
     })
     const v = await run(
       'const r = await java.head("https://m.example.com/img", { "X-Requested-With": "XMLHttpRequest" })' +
-      '; return r.statusCode() + "|" + r.url() + "|" + r.headers()["Location"] + "|" + r.headers()["location"]',
+      '; return r.statusCode() + "|" + r.url() + "|" + r.headers()["Location"] + "|" + r.headers()["location"] + "|" + r.cookies().get("sid")',
       hostOf(), ctx,
     )
-    expect(v.value).toEqual({ kind: 'value', text: '302|https://i.pximg.net/a.png|https://i.pximg.net/a.png|https://i.pximg.net/a.png' })
+    expect(v.value).toEqual({ kind: 'value', text: '302|https://i.pximg.net/a.png|https://i.pximg.net/a.png|https://i.pximg.net/a.png|1' })
     expect(seen[0]?.[1]).toEqual({ 'X-Requested-With': 'XMLHttpRequest' })
   })
   it('java.head：请求头 JSON 串两形态都收；未接 fetchHead / 参数空 → 点名', async () => {
@@ -212,17 +319,19 @@ describe('@js 沙箱', () => {
     )
     expect(v.value).toEqual({ kind: 'value', text: 'https://m.example.com/final|https://m.example.com/final' })
   })
-  it('java.connect 的第二实参（对面是 header JSON）本仓无请求头通道 → 点名，不静默丢掉', async () => {
-    const ctx = ctxOf({ fetch: async () => ({ body: 'z' }) })
-    await expect(run('return (await java.connect("https://m.example.com/a", "{\\"Referer\\":\\"https://r\\"}")).body', hostOf(), ctx))
-      .rejects.toThrow(/header|请求头/)
+  it('java.connect 的第二实参 header 透传到 fetch', async () => {
+    let seen: Record<string, string> | undefined
+    const ctx = ctxOf({ fetch: async (_u, h) => { seen = h; return { body: 'z' } } })
+    const v = await run('return (await java.connect("https://m.example.com/a", "{\\"Referer\\":\\"https://r\\"}")).body', hostOf(), ctx)
+    expect(v.value).toEqual({ kind: 'value', text: 'z' })
+    expect(seen).toEqual({ Referer: 'https://r' })
   })
   it('java.post(url, body, headers) → 对面 Jsoup Response 的**方法壳**（res.body() / res.cookies()）', async () => {
     const seen: Array<[string, string, Record<string, string> | undefined]> = []
     const ctx = ctxOf({
       fetchPost: async (u, b, h) => {
         seen.push([u, b, h])
-        return { url: 'https://m.example.com/final', body: 'BODY', contentType: 'application/json', statusCode: 200, cookies: { sid: 'abc' } }
+        return { url: 'https://m.example.com/final', body: 'BODY', contentType: 'application/json', statusCode: 200, headers: {}, cookies: { sid: 'abc' } }
       },
     })
     const v = await run(
@@ -243,7 +352,7 @@ describe('@js 沙箱', () => {
     expect(seen[1][2]).toEqual({ a: 'b' })
   })
   it('java.post 的 header 不是 JSON → 点名（不静默丢脚本的请求头）；未接 fetchPost → 点名', async () => {
-    const ctx = ctxOf({ fetchPost: async () => ({ url: 'u', body: '', statusCode: 200, cookies: {} }) })
+    const ctx = ctxOf({ fetchPost: async () => ({ url: 'u', body: '', statusCode: 200, headers: {}, cookies: {} }) })
     await expect(run('return (await java.post("https://m.example.com/a", "b", "{oops")).body()', hostOf(), ctx))
       .rejects.toThrow(/不是 JSON/)
     await expect(run('return (await java.post("https://m.example.com/a", "b")).body()'))
@@ -408,9 +517,11 @@ describe('宿主垫片（真实源用到的缺失 API）', () => {
     expect((await run('return java.timeFormatUTC(0)')).value).toEqual({ kind: 'value', text: '1970/01/01 00:00' })
     expect((await run('return java.hexDecodeToString("e4bda0")')).value).toEqual({ kind: 'value', text: '你' })
   })
-  it('无法仿真的安卓宿主 API（webView/android.*）→ 如实报不支持（不静默 no-op）', async () => {
+  it('webView 未接线 → 点名；android.* 仍如实报不支持（不静默 no-op）', async () => {
     const err = await run('return java.webView("<p/>", "https://a.com", "")').then(() => null, (e) => e)
-    expect(String(err.message)).toMatch(/不支持|未知/)
+    expect(String(err.message)).toMatch(/ctx\.webView 未接线/)
+    const err2 = await run('return android.foo()').then(() => null, (e) => e)
+    expect(String(err2.message)).toMatch(/需要安卓宿主环境/)
   })
   it('AES 解密桥（legado createSymmetricCrypto().decryptStr / aesBase64DecodeToString——Node crypto 实现）', async () => {
     const crypto = await import('node:crypto')
@@ -707,5 +818,223 @@ describe('java.get 的 source 层兜底（对面四级读链；跨调用可见�
     const v = await evalJs('java.put("k","本层"); return java.get("k")', { result: '', baseUrl: url, source: opts.source },
       { baseUrl: url, source: opts.source, vars: {} }, { segmentIndex: 0, segmentRaw: '@js' }, 'content', undefined, { session })
     expect(v.value).toEqual({ kind: 'value', text: '本层' })
+  })
+})
+
+describe('host object 形状（Response/Map/Element/UUID）', () => {
+  it('java.get(url, headers) → Response 壳：statusCode/header/headers/body/cookies', async () => {
+    const seen: Array<[string, Record<string, string> | undefined]> = []
+    const ctx = ctxOf({
+      fetchGet: async (u, h) => {
+        seen.push([u, h])
+        return {
+          url: 'https://m.example.com/final', statusCode: 200,
+          headers: { 'set-cookie': 'sid=abc; Path=/', location: '/next' },
+          cookies: { sid: 'abc' }, body: 'BODY', contentType: 'text/plain', charset: 'utf-8',
+        }
+      },
+    })
+    const v = await run(
+      'const r = await java.get("https://m.example.com/a", { "X-A": "1" })' +
+      '; return r.statusCode() + "|" + r.header("Set-Cookie") + "|" + r.headers("Location")[0] + "|" + r.headers()["LOCATION"] + "|" + r.body() + "|" + r.cookies().get("sid")',
+      hostOf(), ctx,
+    )
+    expect(v.value).toEqual({ kind: 'value', text: '200|sid=abc; Path=/|/next|/next|BODY|abc' })
+    expect(seen[0]).toEqual(['https://m.example.com/a', { 'X-A': '1' }])
+  })
+
+  it('java.get 单参仍是源变量 getter（不被 HTTP 重载抢走）', async () => {
+    const v = await run('java.put("k","V"); return java.get("k")')
+    expect(v.value).toEqual({ kind: 'value', text: 'V' })
+  })
+
+  it('java.post 响应壳含 header/headers（与 get/head 同一形状）', async () => {
+    const ctx = ctxOf({
+      fetchPost: async () => ({ url: 'u', statusCode: 201, headers: { 'x-a': '1' }, cookies: {}, body: 'B' }),
+    })
+    const v = await run(
+      'const r = await java.post("u", "b"); return r.statusCode() + "|" + r.header("X-A") + "|" + r.headers("X-A")[0] + "|" + r.headers()["X-A"]',
+      hostOf(), ctx,
+    )
+    expect(v.value).toEqual({ kind: 'value', text: '201|1|1|1' })
+  })
+
+  it('Response.bodyAsBytes 按 UTF-8 编（代理对是 4 字节，不是 CESU-8）', async () => {
+    const ctx = ctxOf({
+      fetchPost: async () => ({ url: 'u', statusCode: 200, headers: {}, cookies: {}, body: '😀' }),
+    })
+    const v = await run('const r = await java.post("u", "b"); return r.bodyAsBytes().join(",")', hostOf(), ctx)
+    expect(v.value).toEqual({ kind: 'value', text: '240,159,152,128' })
+  })
+
+  it('source.getLoginHeader / getLoginInfoMap() 的 Map 形状', async () => {
+    const ctx = ctxOf({ loginHeader: '{"Cookie":"c=1"}', loginInfo: { u: 'alice', p: 'secret' } })
+    const v = await run('return source.getLoginHeader() + "|" + source.getLoginInfoMap().get("u") + "|" + source.getLoginInfoMap().size()', hostOf(), ctx)
+    expect(v.value).toEqual({ kind: 'value', text: '{"Cookie":"c=1"}|alice|2' })
+  })
+
+  it('Packages.java.util.UUID.randomUUID() 可调用', async () => {
+    const v = await run('return Packages.java.util.UUID.randomUUID()')
+    expect(v.value.kind).toBe('value')
+    if (v.value.kind === 'value') expect(v.value.text).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
+  it('resultMap 以 Map 绑定 result（登录按钮动作读 loginInfo）', async () => {
+    const out = await runScript({
+      code: 'return result.get("user")',
+      resultMap: { user: 'alice' },
+      loc: L,
+      facet: 'content',
+    })
+    expect(out.value).toEqual({ kind: 'value', text: 'alice' })
+  })
+
+  it('元素/集合 selectFirst 返回首个匹配', async () => {
+    const host = hostOf({ result: '<div><p class="a">A</p><p class="b">B</p></div>' })
+    const v = await run('return org.jsoup.Jsoup.parse(result).selectFirst(".b").text()', host)
+    expect(v.value).toEqual({ kind: 'value', text: 'B' })
+  })
+
+  it('JavaImporter + with 只注入已挂载的 Packages 类', async () => {
+    const v = await run('const ji = new JavaImporter(Packages.java.util); with (ji) { return UUID.randomUUID() }')
+    expect(v.value.kind).toBe('value')
+    if (v.value.kind === 'value') expect(v.value.text).toMatch(/^[0-9a-f-]{36}$/)
+    const v2 = await run('importPackage(Packages.java.util); return UUID.randomUUID().length')
+    expect(v2.value).toEqual({ kind: 'value', text: '36' })
+  })
+
+  it('importClass 把已挂载类绑定到简单名；包路径如实拒绝', async () => {
+    const v = await run('importClass(Packages.java.util.UUID); return UUID.randomUUID().length')
+    expect(v.value).toEqual({ kind: 'value', text: '36' })
+    const v2 = await run('importClass(Packages.java.net.URL); var u = new URL("https://x.test/"); return u.toString()')
+    expect(v2.value).toEqual({ kind: 'value', text: 'https://x.test/' })
+    const v3 = await run('var U = loadClass("java.util.UUID"); return U.randomUUID().length')
+    expect(v3.value).toEqual({ kind: 'value', text: '36' })
+    await expect(run('importClass(Packages.java.util); return "unreachable"')).rejects.toThrow(/需要已挂载的类/)
+  })
+
+  it('java.net.URL.openConnection 走 ctx.fetchConn（GET/响应码/流）', async () => {
+    const seen: Array<Record<string, unknown>> = []
+    const ctx = ctxOf({
+      fetchConn: async (req) => {
+        seen.push(req)
+        return { url: 'https://x.test/final', statusCode: 200, headers: { 'x-a': '1' }, cookies: {}, body: new Uint8Array([65, 66]) }
+      },
+    })
+    const v = await run(
+      'var u = new Packages.java.net.URL("https://x.test/a"); var c = u.openConnection();' +
+      ' c.setRequestMethod("GET"); c.setConnectTimeout(3000); var s = c.getInputStream(); s.close(); c.disconnect();' +
+      ' return c.getResponseCode() + "|" + c.getHeaderField("X-A")',
+      hostOf(), ctx,
+    )
+    expect(v.value).toEqual({ kind: 'value', text: '200|1' })
+    expect(seen[0]).toMatchObject({ url: 'https://x.test/a', method: 'GET' })
+  })
+
+  it('JavaImporter(Packages.java.net) 的 with 作用域可解析 URL', async () => {
+    const v = await run('var ji = new JavaImporter(Packages.java.net); with (ji) { var u = new URL("https://x.test/"); return u.toString() }')
+    expect(v.value).toEqual({ kind: 'value', text: 'https://x.test/' })
+  })
+
+  it('chapter.isVip()/isVolume()/isPay() 读目录折出的实体字段', async () => {
+    expect((await run('return chapter.isVip()', hostOf(), ctxOf({ chapter: { vip: true } }))).value)
+      .toEqual({ kind: 'value', text: 'true' })
+    expect((await run('return chapter.isVip()', hostOf(), ctxOf({ chapter: { vip: false } }))).value)
+      .toEqual({ kind: 'value', text: 'false' })
+    expect((await run('return chapter.isVolume()', hostOf(), ctxOf({ chapter: { volume: true } }))).value)
+      .toEqual({ kind: 'value', text: 'true' })
+    expect((await run('return chapter.isPay()', hostOf(), ctxOf({ chapter: { pay: true } }))).value)
+      .toEqual({ kind: 'value', text: 'true' })
+  })
+
+  it('java.webView 走 ctx.webView（真浏览器渲染返回 HTML）', async () => {
+    const ctx = ctxOf({ webView: async (u) => `<html>${u}</html>` })
+    const v = await run('return java.webView("https://x.test/a")', hostOf(), ctx)
+    expect(v.value).toEqual({ kind: 'value', text: '<html>https://x.test/a</html>' })
+    await expect(run('return java.webView("https://x.test/a")')).rejects.toThrow(/ctx\.webView 未接线/)
+  })
+
+  it('java.androidId 读稳定设备 ID（未接线点名）', async () => {
+    expect((await run('return java.androidId()', hostOf(), ctxOf({ deviceId: 'D1' }))).value)
+      .toEqual({ kind: 'value', text: 'D1' })
+    await expect(run('return java.androidId()')).rejects.toThrow(/设备 ID/)
+  })
+
+  it('CookieManager / CookieStore 读写注入的 HTTP jar（未接线点名）', async () => {
+    const ops: string[] = []
+    let stored = ''
+    const httpCookies = {
+      headerFor: (url: string) => { ops.push(`get:${url}`); return stored },
+      setCookie: (url: string, raw: string) => { ops.push(`set:${url}:${raw}`); stored = raw },
+      removeSessionCookies: () => { ops.push('remove-session') },
+    }
+    const v = await run(
+      'var cm = Packages.android.webkit.CookieManager.getInstance();'
+      + 'cm.setCookie("https://a.com/x", "sid=1");'
+      + 'return cm.getCookie("https://a.com/x")',
+      hostOf(), ctxOf({ httpCookies }),
+    )
+    expect(v.value).toEqual({ kind: 'value', text: 'sid=1' })
+    expect(ops).toEqual(['set:https://a.com/x:sid=1', 'get:https://a.com/x'])
+    // CookieStore 与 CookieManager 读同一张表；空 jar 返回 null（Android getCookie 口径）
+    const cs = await run(
+      'return Packages.io.legado.app.help.http.CookieStore.getCookie("https://a.com/x")',
+      hostOf(), ctxOf({ httpCookies }),
+    )
+    expect(cs.value).toEqual({ kind: 'value', text: 'sid=1' })
+    const empty = await run(
+      'return Packages.io.legado.app.help.http.CookieStore.getCookie("https://b.com/x")',
+      hostOf(),
+      ctxOf({ httpCookies: { headerFor: () => '', setCookie: () => {}, removeSessionCookies: () => {} } }),
+    )
+    expect(empty.value.kind).toBe('miss')
+    await expect(run(
+      'return Packages.android.webkit.CookieManager.getInstance().getCookie("https://a.com/")',
+    )).rejects.toThrow(/cookie jar 未接线/)
+  })
+
+  it('java.getUserAgent 与 getWebViewUA 同值（源阅特性探测落非源阅分支）', async () => {
+    const v = await run(
+      'return java.getUserAgent() === java.getWebViewUA()',
+      hostOf(), ctxOf({ userAgent: () => 'UA-x' }),
+    )
+    expect(v.value).toEqual({ kind: 'value', text: 'true' })
+    await expect(run('return java.getUserAgent()')).rejects.toThrow(/取不到出站 UA/)
+  })
+
+  it('cookie.replaceCookie 合并键值；mapToCookie 把 Map 形拼回 cookie 串', async () => {
+    const v = await run(
+      'cookie.setCookie("a", "1");'
+      + 'cookie.replaceCookie("https://a.com/", "b=2; c=3");'
+      + 'return cookie.getCookie("a") + "|" + cookie.getCookie("b") + "|" + cookie.getCookie("c")',
+    )
+    expect(v.value).toEqual({ kind: 'value', text: '1|2|3' })
+    const map = await run(
+      'var m = { x: "1", y: "2" };'
+      + 'return cookie.mapToCookie(m) + "|" + cookie.mapToCookie({})',
+    )
+    expect(map.value).toEqual({ kind: 'value', text: 'x=1; y=2|null' })
+  })
+
+  it('Packages StrResponse(url, body) 产出 loginCheck 约定可替换响应', async () => {
+    const v = await run(
+      'var r = new Packages.io.legado.app.help.http.StrResponse("https://a.com/x", "B");'
+      + 'return [r.code(), r.url(), r.body()].join("|")',
+    )
+    expect(v.value).toEqual({ kind: 'value', text: '200|https://a.com/x|B' })
+    const serialized = await run(
+      'return JSON.stringify(new Packages.io.legado.app.help.http.StrResponse("https://a.com/x", "B"))',
+    )
+    expect(serialized.value.kind).toBe('value')
+    expect((serialized.value as { text: string }).text).toContain('"__host":"response"')
+  })
+
+  it('atob/btoa 与元素 hasClass', async () => {
+    expect((await run('return atob("QUI=")')).value).toEqual({ kind: 'value', text: 'AB' })
+    expect((await run('return btoa("AB")')).value).toEqual({ kind: 'value', text: 'QUI=' })
+    const v = await run(
+      'var e = org.jsoup.Jsoup.parse(\'<p class="a b">\').selectFirst("p"); return e.hasClass("b") + "|" + e.hasClass("c")',
+    )
+    expect(v.value).toEqual({ kind: 'value', text: 'true|false' })
   })
 })

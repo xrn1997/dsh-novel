@@ -2,7 +2,8 @@ import type { ProbeErrorCode, ProbeResult } from '../shared/wire.js'
 export type { ProbeResult, ProbeErrorCode } from '../shared/wire.js'
 import { detailFieldsOf, firstValue } from './bridge.js'
 import { fetchSearchPage, searchErrorCodeOf } from './search-face.js'
-import type { Fetcher } from './fetcher.js'
+import type { SourceRequest } from './source-request.js'
+import type { SourceRegistry } from './sources.js'
 import type { NovelSource } from './types.js'
 
 /** 探针关键词序列：单字「书」在个别站被搜索程序停用（实测有站对「书」0 命中、换词即命中）——
@@ -19,7 +20,7 @@ const PROBE_KEYS = ['书', '小说', '的'] as const
  * timeoutMs 缺省时探针与搜索同认 ReadingService 的 searchTimeoutMs（此前探针只靠 fetcher 固定 15s）。
  */
 export async function probeSource(
-  source: NovelSource, fetcher: Fetcher, opts?: { timeoutMs?: number; jsTimeoutMs?: number },
+  source: NovelSource, request: SourceRequest, opts?: { timeoutMs?: number; jsTimeoutMs?: number },
 ): Promise<ProbeResult> {
   try {
     // 源自带校验关键词（`ruleSearch.checkKeyWord`）时先打它：「只搜得到自家书名」的站
@@ -28,7 +29,7 @@ export async function probeSource(
     const own = source.rules.probeKeyword ?? null
     const keys = own === null || own.trim() === '' ? [...PROBE_KEYS] : [own, ...PROBE_KEYS]
     for (const key of keys) {
-      const page = await fetchSearchPage(source, key, fetcher, opts?.timeoutMs, opts?.jsTimeoutMs)
+      const page = await fetchSearchPage(source, key, request, opts?.timeoutMs, opts?.jsTimeoutMs)
       if (!page.ok) return fail('RuleMissing', page.message, 0)
       if (page.shape === 'info' && page.via === 'pattern') {
         // 搜索响应即详情页（bookUrlPattern 命中）：书名走**详情规则**，与聚合搜索的 info 形态
@@ -64,6 +65,11 @@ export async function probeSource(
 
 function fail(code: ProbeErrorCode, message: string, itemCount: number): ProbeResult {
   return { ok: false, itemCount, firstTitle: null, error: { code, message }, probedAt: Date.now() }
+}
+
+/** verdict → status 的唯一写口：单点探针与批量探针共用 */
+export async function applyProbeResult(registry: SourceRegistry, id: string, r: ProbeResult): Promise<void> {
+  await registry.edit((tx) => tx.setStatus(id, r.ok ? 'verified' : 'broken', r.error?.message, r.probedAt))
 }
 
 function messageOf(e: unknown): string {

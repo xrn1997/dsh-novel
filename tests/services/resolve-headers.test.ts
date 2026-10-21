@@ -90,6 +90,15 @@ describe('resolveHeaders（legado getHeaderMap 口径）', () => {
     expect(h['X-Shared']).toBe('from-auth') // auth 在后占优
     expect(h.Cookie).toBe('sid=s')
   })
+  it('headerRule 脚本拿到 engineContextOf 的非头能力位（deviceId）', async () => {
+    const s = mkSource({
+      rules: { ...mkSource().rules, headerRule: '@js:JSON.stringify({"X-Android": java.androidId()})' },
+    })
+    const withDevice: Fetcher = { ...fetcher, deviceId: 'dev-1' }
+    // 回归：resolveHeaders 曾手拼上下文，只带 fetch/userAgent/jsLib；deviceId 已接在引擎上下文
+    // 单点里，却到不了头规则脚本 → java.androidId 抛「ctx.deviceId 未接线」并被回退吞掉。
+    expect((await resolveHeaders(withDevice, s))['X-Android']).toBe('dev-1')
+  })
   it('randomUUID 逐次求值 → device id 每请求刷新（legado 每请求 getHeaderMap 口径）', async () => {
     const s = mkSource({
       rules: { ...mkSource().rules, headerRule: '@js:JSON.stringify({"D": java.randomUUID()})' },

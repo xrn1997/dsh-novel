@@ -75,4 +75,16 @@ describe('JSONPath 子集', () => {
     expect(evalJsonPath('$', 'plain', L, 'search')).toEqual({ kind: 'value', text: 'plain' })
     expect(evalJsonPath('$', ['a', 'b'], L, 'search')).toEqual({ kind: 'list', items: ['a', 'b'] })
   })
+
+  it('裸路径按 $ 根归一（JSON 模式的有意放宽）', () => {
+    expect(evalJsonPath('data[*]', { data: ['a', 'b'] }, L, 'search'))
+      .toEqual({ kind: 'list', items: ['a', 'b'] })
+    expect(evalJsonPath('.data[*]', { data: ['a'] }, L, 'search'))
+      .toEqual({ kind: 'list', items: ['a'] })
+    // 前导点只补 `$`：补成 `$..data[*]` 会把根相对路径变成递归下降
+    expect(evalJsonPath('.data[*]', { nested: { data: ['WRONG'] }, data: ['RIGHT'] }, L, 'search'))
+      .toEqual({ kind: 'list', items: ['RIGHT'] })
+    expect(evalJsonPath('data.name', { data: { name: 'A' } }, L, 'search'))
+      .toEqual({ kind: 'value', text: 'A' })
+  })
 })

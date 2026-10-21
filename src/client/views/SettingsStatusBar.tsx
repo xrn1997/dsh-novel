@@ -6,7 +6,7 @@ import { jobPct, ProgressBar } from './bits.js'
 import type { JobState } from './types.js'
 
 /**
- * 全局状态条（瞬态统一层的呈现端）：错误(红,sticky) > 运行任务 > 保存中(聚合) > 成功(自动退场）。
+ * 全局状态条（瞬态统一层的呈现端）：错误(红,sticky) > 运行任务 > 成功(自动退场）。
  * **浮层**：absolute 定位、不参与布局（挂载/卸载不顶动区块内容——曾把整块顶下去 35px 造成
  * 启停闪烁，见 styles.tsx `.novel-status-bar` 注释）；空闲零占用（无条目无任务不渲染）。
  * 任务泳道保留 data-novel-job-status（smoke 断言）。
@@ -20,10 +20,9 @@ export function GlobalStatusBar({ job, stale = false, onOpen }: { job: JobState 
   const t = useCopy()
   const { entries, dismiss } = useTransient()
   const errors = entries.filter((e) => e.kind === 'error')
-  const pendings = entries.filter((e) => e.kind === 'pending')
   const oks = entries.filter((e) => e.kind === 'ok')
   const running = job !== null && job.phase === 'running'
-  if (errors.length === 0 && pendings.length === 0 && oks.length === 0 && !running && !stale) return null
+  if (errors.length === 0 && oks.length === 0 && !running && !stale) return null
   const pct = running && job !== null ? jobPct(job) : 0
   return (
     <div data-novel-status-bar className="novel-status-bar">
@@ -53,13 +52,6 @@ export function GlobalStatusBar({ job, stale = false, onOpen }: { job: JobState 
           <ProgressBar pct={pct} style={{ height: 4 }} />
           <span className="novel-lane-link">{t('status.viewTask')}</span>
         </button>
-      )}
-      {pendings.length > 0 && (
-        <div className="novel-muted novel-lane cols-1">
-          {pendings.length === 1
-            ? pendings[0].label
-            : t('status.saving', { n: pendings.length })}
-        </div>
       )}
       {oks.map((e) => (
         <div key={e.id} className="novel-ok novel-lane cols-1">✓ {e.label}</div>

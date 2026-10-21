@@ -60,8 +60,8 @@ export async function resolveSearchTemplate(
 
 /** URL 模板里的 js 块形态：`<js>…</js>` 闭区间可出现在**任意位置**；`@js:` 与**串首裸 `js:`**
  *  吃到**串尾**——都按 findAll 定位（不是「整串是 js」的前缀判定）。串首裸 `js:` 是
- *  `grammar.isJsForm` 三形态之一：块扫描落地时漏了它，整串 `js:…` 会被当字面 URL 发出去
- *  （2026-09-29 补回首，见矩阵 `b-url-js-anywhere` 的订正段；与 isJsForm 同判据——`@?js:` 串首）。 */
+ *  `grammar.isJsForm` 三形态之一；不认它，整串 `js:…` 会落到 URL 上被当字面发出
+ *  （与 isJsForm 同判据——`@?js:` 串首）。 */
 const URL_JS_BLOCK_RE = /<js>([\s\S]*?)<\/js>|(?:@|^\s*)js:([\s\S]*)/gi
 
 /** js 块求值的累积器：块可在任意位置；块间的字面文本参与拼接（`@result` 口径见 spliceLiteral——

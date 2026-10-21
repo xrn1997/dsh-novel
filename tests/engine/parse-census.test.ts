@@ -201,9 +201,9 @@ export const DEMAND_KEYS: Array<{ key: string; label: string; test: (raw: any) =
   // 入口就会这样过期。键放这儿，词条只指这条命令。
   { key: 'probeKeyword', label: 'ruleSearch.checkKeyWord 非空（顶层 checkKeyWord 也算；探针首词的需求方）', test: (r) => boxField(r, 'ruleSearch', 'checkKeyWord') || rawField(r, 'checkKeyWord') },
   { key: 'nonTextSource', label: '非文本源（bookSourceType 有值且不是 0/"0"）', test: (r) => r?.bookSourceType !== undefined && r?.bookSourceType !== 0 && r?.bookSourceType !== '0' && r?.bookSourceType !== null && r?.bookSourceType !== '' },
-  // URL 页码形态 `<a,b,c>`：判据在**这里唯一地**写死（分桶重叠曾造出假负结果，订正见矩阵
-  // d-search-paging）——剥 js 与 `{{}}` 后 URL 位仍含 `<…>` 组，按**源**去重；别的宽度只作历史
-  // 读数留在矩阵行，不当第二个主人。
+  // URL 页码形态 `<a,b,c>`：判据在**这里唯一地**写死（分桶重叠会造出假负结果，见矩阵
+  // d-search-paging）——剥 js 与 `{{}}` 后 URL 位仍含 `<…>` 组，按**源**去重；别的宽度只在矩阵行
+  // 留读数，不当第二个主人。
   {
     key: 'pageAngleListUrl',
     label: 'URL 位（searchUrl/exploreUrl）剥掉 js 片段与 {{}} 后仍含 <…> 组（按源去重；矩阵 b-page-angle-list 的主判据）',
@@ -295,9 +295,9 @@ const KNOWN_RULE_SHAPES: Record<string, string> = {
  * 即红、不给存量挡红：加条目必须先有矩阵行 id。**按名字点，不数第几条**（加过一条就把「前三条」这类
  * 说法作废过一次）：t2s / cacheFile / toURL 三条来自换分母那批（2026-09-22，本库之外另取两份公开
  * 合集，`DSH_PARSE_CENSUS_FILE` 指过去可复现）；s2t / getVerificationCode / ajaxTestAll /
- * queryBase64TTF 四条是 2026-10-16 随本库需求方出现补进去的。**2026-10-16 订正**：t2s 的需求方已进
- * 本库（6 源 14 处——**只 Linpx / 兽人小说站 是搜索面**，其余 4 源跨正文/目录/详情/发现，读数按面
- * 拆见矩阵 `h-java-t2s`），「本库从未用过」那句只对 cacheFile / toURL 成立。
+ * queryBase64TTF 四条随本库需求方出现登记。t2s 的需求方在本库（6 源 14 处——**只 Linpx / 兽人小说站
+ * 是搜索面**，其余 4 源跨正文/目录/详情/发现，读数按面拆见矩阵 `h-java-t2s`）；「本库从未用过」只对
+ * cacheFile / toURL 成立。
  */
 const KNOWN_BRIDGE_GAPS: Record<string, string> = {
   t2s: '繁简词典不在本仓，且对面在转换前还会跑自家补丁词典——换轮子（opencc 一类）得到的文本与对面不逐字相等，要拍板：矩阵 h-java-t2s',

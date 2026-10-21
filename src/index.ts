@@ -221,7 +221,7 @@ export function apply(ctx: Context, config?: NovelConfig): void {
     void ready.then((r) => { service = r?.service ?? null })
     return () => {
       if (service !== null) {
-        void service.flush()
+        void service.flush().catch((e: unknown) => { log.error('卸载前落盘失败：', e) })
         service.dispose()
       }
     }

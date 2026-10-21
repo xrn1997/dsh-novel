@@ -70,9 +70,9 @@ describe('JavaBridge 协议表（表驱动登记）', () => {
     expect([...unmounted].sort()).toEqual([...asyncRows].sort())
   })
 
-  it('async 行不进 javaSync 名单（ajax/downloadFile/connect/post/head 走引导层特制包装）', () => {
+  it('async 行不进 javaSync 名单（ajax/downloadFile/connect/post/getHttp/head 走引导层特制包装）', () => {
     const asyncNames = JAVA_PROTOCOL.flatMap((r) => (r.mode === 'async' ? [r.name] : []))
-    expect(asyncNames).toEqual(['ajax', 'connect', 'post', 'head', 'downloadFile'])
+    expect(asyncNames).toEqual(['ajax', 'connect', 'post', 'getHttp', 'urlConn', 'webView', 'head', 'downloadFile'])
     expect(SANDBOX_MOUNTS.javaSync).not.toContain('ajax')
     expect(SANDBOX_MOUNTS.javaSync).toContain('get')
   })
@@ -82,6 +82,7 @@ describe('JavaBridge 协议表（表驱动登记）', () => {
       { name: 'cookieGet', key: 'getCookie' },
       { name: 'cookieSet', key: 'setCookie' },
       { name: 'cookieRemove', key: 'removeCookie' },
+      { name: 'cookieReplace', key: 'replaceCookie' },
     ])
     expect(SANDBOX_MOUNTS.source).toEqual([
       { name: 'sourceGetVariable', key: 'getVariable' },
@@ -289,7 +290,7 @@ describe('async 行的能力位闸（表行 ↔ 沙箱包装 ↔ 服务层装配
   )]
 
   it('每条 async 行都在引导层有自己的同步桥包装（漏包装＝脚本永远调不到）', () => {
-    expect(asyncRows).toEqual(['ajax', 'connect', 'post', 'head', 'downloadFile'])
+    expect(asyncRows).toEqual(['ajax', 'connect', 'post', 'getHttp', 'urlConn', 'webView', 'head', 'downloadFile'])
     for (const name of asyncRows) {
       expect(sandboxSrc).toContain(`const ${name} = d.syncAjax`)
     }

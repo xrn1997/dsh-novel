@@ -248,9 +248,9 @@ describe('JSON 条目上的裸词终端（真源 ruleChapterUrl: url / href，20
     const v = await evaluate('href', { html: ITEM }, 'toc', 'value')
     expect(v).toEqual({ kind: 'value', text: '/c/124.html' })
   })
-  it('裸词 `id` 仍是 id 选择器（对面 getElementsSingle 同样按关键字认，须写 $.id）', async () => {
+  it('裸词 `id` 在 JSON 条目上按属性读（整条规则走 JSONPath）', async () => {
     const v = await evaluate('id', { html: ITEM }, 'toc', 'value')
-    expect(v.kind).not.toBe('value')
+    expect(v).toEqual({ kind: 'value', text: '7' })
   })
   it('HTML 条目不受影响：裸词仍是属性终端（img@_src 形态，DOM 上有值）', async () => {
     const v = await evaluate('img@_src', { html: '<img _src="/lazy/1.jpg">' }, 'search', 'value')
@@ -319,5 +319,64 @@ describe('js 块的 ## 尾（对面 makeUpRule 对 js 文本同样切 ##；茄�
   it('尾正则非法 → RuleEvalError 带段定位（不抛裸 SyntaxError）', async () => {
     await expect(evaluate('class.t@text\n<js>result##[##B</js>', { html: '<p class="t">xAyA z</p>' }, 'rule', 'value'))
       .rejects.toThrow(/## 替换正则非法/)
+  })
+})
+
+describe('@webjs 规则段', () => {
+  it('走 ctx.evalWebJs（真浏览器接线），返回字符串', async () => {
+    const seen: Array<[string, string | undefined]> = []
+    const v = await evaluate('@webjs:return document.title', {
+      baseUrl: 'https://a.test/x',
+      evalWebJs: async (code, base) => { seen.push([code, base]); return 'T' },
+    }, 'search')
+    expect(v).toEqual({ kind: 'value', text: 'T' })
+    expect(seen).toEqual([['return document.title', 'https://a.test/x']])
+  })
+
+  it('未接 evalWebJs → 点名（不静默退回普通请求）', async () => {
+    await expect(evaluate('@webjs:return 1', {}, 'search'))
+      .rejects.toThrow(/@webjs 需要真浏览器 WebView/)
+  })
+})
+
+describe('runtime JSON mode', () => {
+  it('evaluates a bare JSON list path on JSON content', async () => {
+    const v = await evaluate('data[*]', { json: { data: [{ name: 'A' }, { name: 'B' }] } }, 'search')
+    expect(v.kind).toBe('list')
+    if (v.kind === 'list') {
+      expect(v.items).toHaveLength(2)
+      expect(v.items[0]).toContain('A')
+    }
+  })
+
+  it('evaluates a bare property terminal on JSON content', async () => {
+    const v = await evaluate('name', { json: { name: 'A' } }, 'search', 'value')
+    expect(v).toEqual({ kind: 'value', text: 'A' })
+  })
+
+  it('keeps @css: explicit even when the context is JSON', async () => {
+    const v = await evaluate('@css:.item@text', { json: { data: [] }, html: '<div class="item">X</div>' }, 'search')
+    expect(v).toEqual({ kind: 'value', text: 'X' })
+  })
+
+  it('keeps explicit segment prefixes even when the context is JSON', async () => {
+    const ctx = { json: { a: 1 }, html: '<div class="item">X</div>' }
+    expect(await evaluate('@json:$.a', ctx, 'search')).toEqual({ kind: 'value', text: '1' })
+    expect(await evaluate('json:$.a', ctx, 'search')).toEqual({ kind: 'value', text: '1' })
+    expect(await evaluate('js:1+1', ctx, 'search')).toEqual({ kind: 'value', text: '2' })
+    expect(await evaluate('css:.item@text', ctx, 'search')).toEqual({ kind: 'value', text: 'X' })
+  })
+
+  it('keeps HTML selectors on HTML content', async () => {
+    const v = await evaluate('class.item@text', { html: '<div class="item">X</div>' }, 'search')
+    expect(v).toEqual({ kind: 'value', text: 'X' })
+  })
+
+  it('sub-evaluation clears the outer JSON context when the fragment is HTML', async () => {
+    const v = await evaluate('@js:java.getString("div.item")', {
+      html: '<div class="item">X</div>',
+      json: { data: [] },
+    }, 'search')
+    expect(v).toEqual({ kind: 'value', text: 'X' })
   })
 })

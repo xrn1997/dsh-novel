@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { probeSource } from '../../src/services/probe.js'
+import { applyProbeResult, probeSource } from '../../src/services/probe.js'
 import { createFetcher } from '../../src/services/fetcher.js'
 import { normalizeSource } from '../../src/services/normalize.js'
+import { SourceRegistry } from '../../src/services/sources.js'
+import { fakeSourceRequest } from './fake-source-request.js'
+import { makeTempDir } from '../temp-dir.js'
 import type { NovelSource } from '../../src/services/types.js'
 
 const SEARCH_HTML = '<html><body><div class="b"><a href="/book/1/">斗罗大陆</a><span>唐家三少</span></div>' +
@@ -21,7 +24,7 @@ function src(over: Record<string, unknown> = {}): NovelSource {
 describe('probeSource（search 面）', () => {
   it('取到 ≥1 本书且书名非空 → ok', async () => {
     const f = createFetcher({ fetchImpl: async () => new Response(SEARCH_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } }) })
-    const r = await probeSource(src(), f)
+    const r = await probeSource(src(), fakeSourceRequest(f))
     expect(r.ok).toBe(true)
     expect(r.itemCount).toBe(2)
     expect(r.firstTitle).toBe('斗罗大陆')
@@ -31,7 +34,7 @@ describe('probeSource（search 面）', () => {
     // 它是选择器——探针曾漏传该参数，于是搜索面读得出书名的源被报「首条书名为空」的 broken。
     const html = '<html><body><div class="b"><a href="/book/1/" title="斗罗大陆">进入</a></div></body></html>'
     const f = createFetcher({ fetchImpl: async () => new Response(html) })
-    const r = await probeSource(src({ ruleBookName: 'tag.a@title' }), f)
+    const r = await probeSource(src({ ruleBookName: 'tag.a@title' }), fakeSourceRequest(f))
     expect(r.ok).toBe(true)
     expect(r.firstTitle).toBe('斗罗大陆')
   })
@@ -45,7 +48,7 @@ describe('probeSource（search 面）', () => {
           { headers: { 'content-type': 'text/html; charset=utf-8' } })
       }) as never,
     })
-    const r = await probeSource(src({ ruleSearch: { checkKeyWord: '勇者' } }), f)
+    const r = await probeSource(src({ ruleSearch: { checkKeyWord: '勇者' } }), fakeSourceRequest(f))
     expect(r.ok).toBe(true)
     expect(seen[0]).toContain('q=勇者')
   })
@@ -62,7 +65,7 @@ describe('probeSource（search 面）', () => {
 
   it('规则取不到条目 → broken 口径（RuleEvalError 语义：0 命中）', async () => {
     const f = createFetcher({ fetchImpl: async () => new Response('<html></html>') })
-    const r = await probeSource(src({ ruleBookList: '@css:.nope' }), f)
+    const r = await probeSource(src({ ruleBookList: '@css:.nope' }), fakeSourceRequest(f))
     expect(r.ok).toBe(false)
     expect(r.error?.code).toBe('RuleEvalError')
     expect(r.error?.message).toMatch(/段/)
@@ -71,7 +74,7 @@ describe('probeSource（search 面）', () => {
     const f = createFetcher({ fetchImpl: async () => new Response(SEARCH_HTML) })
     // 取真·构不成选择器的形态：`词.词`（如 weirdsyntax.x）自 2026-09-22 起
     // 交 CSS 求值，不再是解析期错误
-    const r = await probeSource(src({ ruleBookName: 'weirdsyntax$.x@text' }), f)
+    const r = await probeSource(src({ ruleBookName: 'weirdsyntax$.x@text' }), fakeSourceRequest(f))
     expect(r.ok).toBe(false)
     expect(r.error?.code).toBe('UnsupportedRuleError')
   })
@@ -85,33 +88,33 @@ describe('probeSource（search 面）', () => {
         ? '<html></html>' : SEARCH_HTML
       return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8' } })
     } })
-    const r = await probeSource(src(), f)
+    const r = await probeSource(src(), fakeSourceRequest(f))
     expect(r.ok).toBe(true)
     expect(r.firstTitle).toBe('斗罗大陆')
     expect(seen).toEqual(['书', '小说']) // 命中即止，不打第三词
   })
   it('全部关键词 0 命中 → broken，报错点名试过的词', async () => {
     const f = createFetcher({ fetchImpl: async () => new Response('<html></html>', { headers: { 'content-type': 'text/html; charset=utf-8' } }) })
-    const r = await probeSource(src({ ruleBookList: '@css:.nope' }), f)
+    const r = await probeSource(src({ ruleBookList: '@css:.nope' }), fakeSourceRequest(f))
     expect(r.ok).toBe(false)
     expect(r.error?.message).toMatch(/「书」「小说」「的」均无结果/)
   })
   it('网络失败 → FetchError', async () => {
     const f = createFetcher({ fetchImpl: async () => new Response('', { status: 500 }) })
-    const r = await probeSource(src(), f)
+    const r = await probeSource(src(), fakeSourceRequest(f))
     expect(r.ok).toBe(false)
     expect(r.error?.code).toBe('FetchError')
   })
   it('searchUrl 缺失 → RuleMissing', async () => {
     const f = createFetcher({ fetchImpl: async () => new Response(SEARCH_HTML) })
-    const r = await probeSource(src({ searchUrl: undefined }), f)
+    const r = await probeSource(src({ searchUrl: undefined }), fakeSourceRequest(f))
     expect(r.ok).toBe(false)
     expect(r.error?.code).toBe('RuleMissing')
   })
   it('探针认 searchTimeoutMs：挂起的抓取在限时内回 FetchError（不再只靠 fetcher 固定 15s）', async () => {
     const f = createFetcher({ fetchImpl: () => new Promise<Response>(() => { /* 永不返回 */ }) })
     const t0 = Date.now()
-    const r = await probeSource(src(), f, { timeoutMs: 50 })
+    const r = await probeSource(src(), fakeSourceRequest(f), { timeoutMs: 50 })
     expect(Date.now() - t0).toBeLessThan(1000)
     expect(r.ok).toBe(false)
     expect(r.error?.code).toBe('FetchError')
@@ -120,13 +123,13 @@ describe('probeSource（search 面）', () => {
   // 以下为钉死口径的补测
   it('ruleBookName 缺失 → RuleMissing（不进条目求值）', async () => {
     const f = createFetcher({ fetchImpl: async () => new Response(SEARCH_HTML) })
-    const r = await probeSource(src({ ruleBookName: undefined }), f)
+    const r = await probeSource(src({ ruleBookName: undefined }), fakeSourceRequest(f))
     expect(r.ok).toBe(false)
     expect(r.error?.code).toBe('RuleMissing')
   })
   it('首条书名为空 → RuleEvalError（首条书名为空）', async () => {
     const f = createFetcher({ fetchImpl: async () => new Response(SEARCH_HTML) })
-    const r = await probeSource(src({ ruleBookName: '@css:.nope@text' }), f)
+    const r = await probeSource(src({ ruleBookName: '@css:.nope@text' }), fakeSourceRequest(f))
     expect(r.ok).toBe(false)
     expect(r.error?.code).toBe('RuleEvalError')
     expect(r.error?.message).toMatch(/首条书名/)
@@ -134,7 +137,7 @@ describe('probeSource（search 面）', () => {
   })
   it('声明的 charset 解不出 → DecodeError', async () => {
     const f = createFetcher({ fetchImpl: async () => new Response(SEARCH_HTML, { headers: { 'content-type': 'text/html; charset=x-nope' } }) })
-    const r = await probeSource(src(), f)
+    const r = await probeSource(src(), fakeSourceRequest(f))
     expect(r.ok).toBe(false)
     expect(r.error?.code).toBe('DecodeError')
   })
@@ -146,7 +149,7 @@ describe('probeSource（search 面）', () => {
       seen = String(input)
       return new Response(SEARCH_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } })
     } })
-    const r = await probeSource(src({ searchUrl: '/search?q={{key}}' }), f)
+    const r = await probeSource(src({ searchUrl: '/search?q={{key}}' }), fakeSourceRequest(f))
     expect(seen).toBe('https://s.com/search?q=%E4%B9%A6')
     expect(r.ok).toBe(true)
   })
@@ -160,7 +163,7 @@ describe('probeSource（search 面）', () => {
     } })
     const r = await probeSource(src({
       searchUrl: '/s.php,{"method":"POST","body":"s={{key}}&t=1","charset":"utf-8"}',
-    }), f)
+    }), fakeSourceRequest(f))
     expect(method).toBe('POST')
     expect(body).toBe('s=%E4%B9%A6&t=1')
     expect(r.ok).toBe(true)
@@ -171,7 +174,25 @@ describe('probeSource（search 面）', () => {
       headers = init?.headers as Record<string, string>
       return new Response(SEARCH_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } })
     } })
-    await probeSource(src({ searchUrl: '/x,{"headers":{"Referer":"https://ref.com"}}' }), f)
+    await probeSource(src({ searchUrl: '/x,{"headers":{"Referer":"https://ref.com"}}' }), fakeSourceRequest(f))
     expect(headers?.Referer).toBe('https://ref.com')
+  })
+})
+
+describe('applyProbeResult（verdict → status 单点）', () => {
+  it('applyProbeResult 是 verdict → status 的唯一写口', async () => {
+    const dir = await makeTempDir('novel-probe-status-')
+    const registry = await SourceRegistry.load(dir)
+    await registry.edit((tx) => tx.add(normalizeSource({
+      bookSourceName: 'S', bookSourceUrl: 'https://s.com', ruleContent: '@css:#c@text',
+    })))
+    const [s] = registry.list()
+    await applyProbeResult(registry, s.id, {
+      ok: false, itemCount: 0, firstTitle: null, probedAt: 7,
+      error: { code: 'RuleEvalError', message: 'bad' },
+    })
+    expect(registry.get(s.id)).toMatchObject({ status: 'broken', statusDetail: 'bad', lastProbedAt: 7 })
+    await applyProbeResult(registry, s.id, { ok: true, itemCount: 1, firstTitle: 'x', probedAt: 8 })
+    expect(registry.get(s.id)).toMatchObject({ status: 'verified', lastProbedAt: 8 })
   })
 })

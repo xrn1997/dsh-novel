@@ -43,7 +43,7 @@ export type _GroupWire = Assert<Eq<keyof SearchGroup, typeof GROUP_FIELDS[number
 export type _HitWire = Assert<Eq<keyof SearchHit, typeof HIT_FIELDS[number]>>
 export type _BookWire = Assert<Eq<keyof MergedBook, typeof BOOK_FIELDS[number]>>
 export type _BookSourceWire = Assert<Eq<keyof MergedSource, typeof BOOK_SOURCE_FIELDS[number]>>
-export type _ChapterWire = Assert<Eq<keyof ChapterEntry, Extract<typeof CHAPTER_FIELDS[number], 'name' | 'url'>>>
+export type _ChapterWire = Assert<Eq<keyof ChapterEntry, Extract<typeof CHAPTER_FIELDS[number], 'name' | 'url'> | 'isVip' | 'isVolume' | 'isPay' | 'updateTime'>>
 export type _ShelfWire = Assert<Eq<keyof ShelfBook, typeof SHELF_FIELDS[number] | typeof SHELF_EXCLUDED[number]>>
 
 /** 第三条与关键词有关且不带作者/分类/字数：工具面按相关性收视野之后，仍需有一条「整键缺席」的

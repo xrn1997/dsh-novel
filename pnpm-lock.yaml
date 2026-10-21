@@ -26,6 +26,9 @@ importers:
       image-size:
         specifier: 2.0.4
         version: 2.0.4
+      playwright-core:
+        specifier: 1.63.0
+        version: 1.63.0
       undici:
         specifier: 7.29.1
         version: 7.29.1

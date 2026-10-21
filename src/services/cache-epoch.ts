@@ -48,12 +48,14 @@ export const RULE_EPOCH_IMPACT: Record<keyof NormalizedRules, EpochImpact> = {
   ruleCoverUrl: 'none', ruleIntro: 'none', ruleLastChapter: 'none',
   ruleKind: 'none', ruleWordCount: 'none', ruleDetailKind: 'none', ruleDetailWordCount: 'none',
   ruleTocUrl: 'toc', ruleChapterList: 'toc', ruleChapterName: 'toc', ruleChapterUrl: 'toc',
+  ruleChapterIsVip: 'toc', ruleChapterIsVolume: 'toc', ruleChapterIsPay: 'toc', ruleChapterUpdateTime: 'toc',
   ruleDetailName: 'none', ruleDetailAuthor: 'none', ruleDetailCoverUrl: 'none',
   ruleDetailIntro: 'none', ruleDetailLastChapter: 'none',
   // init 决定详情字段与 tocUrl 模板 `{{$.…}}` 的求值上下文（详情 init 换根）——
   // 改 init 即换目录地址的插值来源 → 目录代际必须失效；正文经 FACES_OF 的 toc 行连带
   ruleDetailInit: 'toc',
-  ruleContent: 'content', nextTocUrl: 'toc', nextPageUrl: 'content',
+  ruleContent: 'content', ruleContentSubContent: 'content',
+  nextTocUrl: 'toc', nextPageUrl: 'content',
   header: 'both', loginUrl: 'none', jsLib: 'both',
   // 动态头规则与静态 header 同影响面：换规则 = 换 device/UA/鉴权 → 站点返回可能整体不同
   headerRule: 'both',
@@ -84,7 +86,7 @@ type RuleValue = NormalizedRules[keyof NormalizedRules]
 /** 值稳定化：header 是对象、ruleExploreKinds 是分类入口数组，都按排序键拼（同一份值的不同键序
  *  必须同指纹）。数组逐元素编码——发现面这批字段的影响面全是 `none`，今天到不了这里；这条分支
  *  是为了「将来谁把它们归进某个面」时指纹依然稳定，而不是让上面那道 tsc 闸被 cast 掉。
- *  null 与 '' 必须分开：空串规则与缺规则在求值层行为不同（见 reading.getTocInner 的订正注）。
+ *  null 与 '' 必须分开：空串规则与缺规则在求值层行为不同（见 reading.getTocInner 的规则缺失判据）。
  *  存量兼容：老 sources.json 的 rules 可能缺新增字段的键（undefined）——按缺省（≡null）入指纹，
  *  与显式 null 同代际；SourceRegistry.load 的存量归一会补键落盘收敛，此处是读旧数据的运行时防线。 */
 function stable(v: RuleValue | undefined): string {

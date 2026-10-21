@@ -1,7 +1,7 @@
 import { isEngineError } from '../engine/index.js'
+import type { JobState } from '../shared/wire.js'
 import { LocalArtifactNotFoundError, LocalFileTooLargeError, LocalImportError } from './localbooks.js'
 import { EpubImportError } from './epub/errors.js'
-import { JobRunningError } from './import-job.js'
 
 /**
  * 书源不存在（API 层映射 404 NotFound）。
@@ -82,6 +82,16 @@ export class InvalidRequestError extends Error {
   constructor(message: string) {
     super(message)
     this.name = new.target.name
+  }
+}
+
+/** 运行中重复提交任务：路由层映射 409 JobRunning（services 不 import api 层）。
+ *  类住在错误分类学单点（`classify` 在本文件），任务模块只抛它——曾有反向 import
+ *  （`errors` → `import-job`），探针状态单点接入后合成值环。 */
+export class JobRunningError extends Error {
+  constructor(running: JobState) {
+    super(`已有任务在运行（${running.kind === 'import' ? '导入' : '验证'} ${running.done}/${running.total}）`)
+    this.name = 'JobRunningError'
   }
 }
 

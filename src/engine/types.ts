@@ -1,5 +1,6 @@
 import type { Cheerio } from 'cheerio'
 import type { AnyNode } from 'domhandler'
+import type { SourceSession } from './js-sandbox.js'
 
 export type Facet = 'search' | 'detail' | 'toc' | 'content' | 'explore' | 'rule'
 
@@ -36,10 +37,10 @@ export interface EvalContext {
   sourceVar?: (key: string) => string | undefined
   /** 引擎出站口（`java.ajax` / `java.connect` 用）。`finalUrl` = 跟随重定向后的落地地址
    *  （实现见 `services/engine-fetch.ts`）；缺席时桥按请求地址兜底（假的 fetch 桩不必带）。 */
-  fetch?: (url: string) => Promise<{ body: string; contentType?: string; finalUrl?: string }>
+  fetch?: (url: string, headers?: Record<string, string>) => Promise<{ body: string; contentType?: string; finalUrl?: string }>
   /** 本仓**实际出站**的 User-Agent（惰性取，源规则可覆盖）。给"我们真发出去的那条 UA"
-   *  是**近似**而非等价：本仓没有 WebView 的默认 UA 可取，未接线时桥点名抛错而不编一个值
-   *  （矩阵 `h-java-webview-ua`）。 */
+   *  是**近似**而非等价：普通请求走 HTTP 客户端，给的不是浏览器/WebView 内核 UA；未接线时桥
+   *  点名抛错而不编一个值（矩阵 `h-java-webview-ua`）。 */
   userAgent?: () => string
   /** 二进制抓取（`java.downloadFile` 用）：与 fetch 同请求语义但返回**原始字节**——
    *  经字符集解码链的字符串会损坏 PNG 等二进制（密钥图提取实证）。缺省缺席 → 下载类方法如实报错。 */
@@ -47,12 +48,26 @@ export interface EvalContext {
   /** `java.post(url, body, headers)` 的出站口（实现在
    *  `services/engine-fetch.ts` 的 engineFetchPost——**同一个守门 fetcher**，不开第二出口）。 */
   fetchPost?: (url: string, body: string, headers?: Record<string, string>) => Promise<{
-    url: string; body: string; contentType?: string; statusCode: number; cookies: Record<string, string>
+    url: string; body: string; contentType?: string; charset?: string; statusCode: number
+    headers: Record<string, string>; cookies: Record<string, string>
   }>
   /** `java.head(url, headers)` 的出站口（engineFetchHead）：HEAD + **不跟重定向**，数据面带响应头
    *  （脚本读 `res.headers()["location"]` 取直链；对面 followRedirects(false) 同口径）。 */
   fetchHead?: (url: string, headers?: Record<string, string>) => Promise<{
-    url: string; statusCode: number; headers: Record<string, string>
+    url: string; statusCode: number; headers: Record<string, string>; cookies?: Record<string, string>
+  }>
+  /** `java.get(url, headers)` 的出站口（engineFetchGet）：GET + **不跟重定向**，返回 Response 数据面
+   *  （上游 `JsExtensions.get` 的 jsoup Connection.Response 形状）。 */
+  fetchGet?: (url: string, headers?: Record<string, string>) => Promise<{
+    url: string; body: string; contentType?: string; charset?: string; statusCode: number
+    headers: Record<string, string>; cookies: Record<string, string>
+  }>
+  /** `java.net.URL.openConnection` 的出站口：跟重定向、可 GET/POST，返回原始字节与响应头。
+   *  安全重开裁决：走同一个守门 fetcher，不开裸 socket。 */
+  fetchConn?: (req: {
+    url: string; method?: string; headers?: Record<string, string>; body?: string
+  }) => Promise<{
+    url: string; statusCode: number; headers: Record<string, string>; cookies: Record<string, string>; body: Uint8Array
   }>
   jsTimeoutMs?: number
   /** 源级 jsLib：全局 JS 函数库——先于每段 @js 代码在同上下文执行（函数定义全局可见） */
@@ -61,6 +76,25 @@ export interface EvalContext {
   book?: Record<string, unknown>
   /** 脚本可见的 `chapter` 变量（章节身份：title/index/url/baseUrl）——正文面由服务层注入 */
   chapter?: Record<string, unknown>
+  /** 登录面投影：source.getLoginInfoMap() 的条目；服务层未接线时缺省空表。 */
+  loginInfo?: Record<string, string>
+  /** 登录面投影：source.getLoginHeader() 的原始串；缺省空串。 */
+  loginHeader?: string
+  /** `@webjs:` 规则段：在真浏览器里执行代码并返回字符串（服务层经 WebViewRuntime 接线）。 */
+  evalWebJs?: (code: string, baseUrl?: string) => Promise<string>
+  /** 宿主设备 ID（androidId 的稳定替代；数据根 device-id 文件生成一次） */
+  deviceId?: string
+  /** `java.webView(url)`：真浏览器取渲染后 HTML（同步桥，worker SAB） */
+  webView?: (url: string) => Promise<string>
+  /** 源级状态会话（源变量/cookie 垫片/cache）；服务层可注入落盘实现。 */
+  session?: SourceSession
+  /** HTTP cookie jar 的脚本读口（`Packages.android.webkit.CookieManager` /
+   *  `Packages.io.legado.app.help.http.CookieStore`）——与请求自动回带同一张表；缺席即未接线。 */
+  httpCookies?: {
+    headerFor(url: string): string
+    setCookie(url: string, raw: string): void
+    removeSessionCookies(): void
+  }
   /** AllInOne 行上下文（**只有**「按整页正则列出的条目」那条链路会带）：字段规则文本里的
    *  `$n` 按本行取值（`$0` = 整段），在 parseRule 之前绑定（`evaluate` 入口）。
    *  非 AllInOne 的条目（DOM 条目 / JSONPath 列表）没有行 → 缺席，规则原样解析。 */

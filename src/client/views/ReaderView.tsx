@@ -12,12 +12,13 @@ import { FONT_STEPS, LINE_HEIGHTS, MEASURES, PAPER_PRESETS } from '../prefs-ui.j
 import type { ChapterAnchor } from '../progress.js'
 import { ReaderSession } from '../reader-session.js'
 import type { ReaderPort, VisibleNode } from '../reader-session.js'
-import { closeAll, dismissSurface, maskFor, openSurface } from '../reader-surfaces.js'
+import { closeAll, dismissSurface, escOwner, maskFor, openSurface } from '../reader-surfaces.js'
 import type { ReaderSurface, SurfaceChange } from '../reader-surfaces.js'
 import { nextChapterIndex } from '../reader-load.js'
 import {
   contentOriginTop, findScrollport, portScrollHeight, portScrollTop, portViewHeight, portViewTop, setPortScrollTop,
 } from '../scrollport.js'
+import { addShelfSeat } from '../shelf-action.js'
 import { paperInk, findNovelNode, novelNodes, centerInScroller, stripLeadingTitle } from '../util.js'
 import { ErrorBanner, WarningList } from './bits.js'
 import { ChapterBody } from './ChapterBody.js'
@@ -359,23 +360,24 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   const [askShelf, setAskShelf] = useState(false)
   const [joinBusy, setJoinBusy] = useState(false)
   const [joinError, setJoinError] = useState<string | null>(null)
-  /** 收回这一问的唯一判据：写完不许被 Esc 或遮罩打断（钮已禁用，但通道还在）。共用这一处，
-   *  阅读器的那条总 Esc 与 dialog 自己的 Esc 因此不会给出两种答案。 */
+  /** 收回这一问的唯一判据：写完不许被 Esc 或遮罩打断（钮已禁用，但通道还在）。模态在场时
+   *  浮层那条 Esc 监听不安装（`escOwner` 的裁决），这一问只由 dialog 自己的 Esc 走这一处收回。 */
   const dismissAsk = (): void => { if (!joinBusy) setAskShelf(false) }
   /** 收场（Esc 与面板「关闭」钮同一条路）：内链打开的回到引用处——位置提交与返回栈都归会话 */
   const closeCurrent = (): void => {
     if (note !== null) session.closeSupplement(sourceId, note.entry)
     applySurface(closeAll(surface))
   }
-  // 浮层共用一条 Esc：有角在场就装监听。入架那一问不在这一条里——它是带遮罩的模态，
-  // Esc 归 `views/dialog.tsx`（收回这一问的判据住 `dismissAsk`）。
+  // 浮层共用一条 Esc：归属由 `escOwner` 裁——模态（入架一问）在场时浮层这条不装，Esc 只归
+  // `views/dialog.tsx`；模态退场后浮层若仍在场则重新持有。`askShelf` 必须在依赖里，否则模态
+  // 上场时这条监听撤不下来（一次 Esc 会既关模态又收浮层）。
   useEffect(() => {
-    if (surface === null) return
+    if (escOwner(surface, askShelf) !== 'surface') return
     const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') closeCurrent() }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [surface, note, session, sourceId])
+  }, [surface, note, session, sourceId, askShelf])
   /** 目录高亮：只在抽屉开着时取（一次 DOM 测量，不在滚动路径上）；只在**跨章**与换书时重算
    *  （`currentChapter` 变才醒）——同章内滚动是每帧的量，不值得为一条 aria-current 按帧唤醒。 */
   useEffect(() => {
@@ -466,24 +468,22 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   }
 
   /** 「加入书架并返回」：写成功后才离开（失败把话留在问它的那一层，用户可重试也可先不走）。
-   *  书目字段只带阅读器问得到的那几样（书名来自进入参数、总章数来自目录），其余一律缺席——
-   *  缺的整段不出现，比拿猜出来的作者/封面填进架子诚实。 */
+   *  写口是整仓唯一那一发（`shelf-action.addShelfSeat`）；书目字段只带阅读器问得到的那几样
+   *  （书名来自进入参数、总章数来自目录），其余一律缺席——缺的整段不出现，比拿猜出来的作者/封面
+   *  填进架子诚实。 */
   const joinAndBack = (): void => {
     setJoinBusy(true)
     setJoinError(null)
-    void deps.apiSend('PUT', paramRoutes.shelfKey(bookKey),
-      bodies.shelfAdd(sourceId, { title, totalChapters: toc?.length ?? null })).then(
-      (): void => {
-        setJoinBusy(false)
-        setAskShelf(false)
-        deps.pushOk(t('reader.join.ok', { title }))
-        navigate({ name: 'shelf' })
-      },
-      (e: unknown): void => {
-        setJoinBusy(false)
-        setJoinError(describeError(e, t))
-      },
-    )
+    void addShelfSeat({ sourceId, url: bookKey, title, totalChapters: toc?.length ?? null }, deps).then((outcome) => {
+      setJoinBusy(false)
+      if (!outcome.ok) {
+        setJoinError(describeError(outcome.error, t))
+        return
+      }
+      setAskShelf(false)
+      deps.pushOk(t('reader.join.ok', { title }))
+      navigate({ name: 'shelf' })
+    })
   }
 
   // 进入：开会话（目录→恢复→懒加载）；卸载：关会话（清防抖定时器）

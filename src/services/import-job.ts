@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
+import { JobRunningError } from './errors.js'
 import { SourceIntake } from './intake.js'
 import { HostTie } from './job-holder.js'
 import type { JobHost, JobOutcome } from './job-holder.js'
+import { applyProbeResult } from './probe.js'
 import type { ProbeResult } from './probe.js'
 import type { SourceRegistry } from './sources.js'
 import type { NovelSource } from './types.js'
@@ -19,13 +21,8 @@ import type { JobIssue, JobState } from '../shared/wire.js'
 export type JobKind = JobState['kind']
 export type ImportFile = { name: string; text: string }
 
-/** 运行中重复提交：路由层映射 409 JobRunning（services 不 import api 层） */
-export class JobRunningError extends Error {
-  constructor(running: JobState) {
-    super(`已有任务在运行（${running.kind === 'import' ? '导入' : '验证'} ${running.done}/${running.total}）`)
-    this.name = 'JobRunningError'
-  }
-}
+/** 类住在错误分类学单点（errors.ts）；re-export 保持既有 import 路径可用 */
+export { JobRunningError }
 
 /** 去重键归 intake（入库规则唯一实现）；re-export 保持 import 路径可用 */
 export { dedupKey } from './intake.js'
@@ -208,7 +205,7 @@ export class SourceJobs {
         }
         try {
           const r = await this.deps.probe(s)
-          await this.deps.registry.edit((tx) => tx.setStatus(id, r.ok ? 'verified' : 'broken', r.error?.message, r.probedAt))
+          await applyProbeResult(this.deps.registry, id, r)
           if (r.ok) { state.counts.ok++; this.note(state, `${s.name}：verified`) }
           else {
             state.counts.failed++

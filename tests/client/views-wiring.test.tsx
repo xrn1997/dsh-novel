@@ -597,6 +597,82 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     expect(within(row).getByRole('button', { name: '都在架' })).toBeTruthy()
   })
 
+  it('单行加架失败：pushError 必须有回执，不再静默吞掉', async () => {
+    // 症状：单行「＋ 加书架」的 PUT 失败被 catch(() => undefined) 咽掉——按钮还是「＋ 加书架」，
+    // 也没有任何回执，用户点了一下界面什么也不说。
+    const apiSend = vi.fn(async () => { throw new Error('disk') })
+    const pushError = vi.fn()
+    const deps = coreDeps({
+      apiSend, pushError,
+      apiGet: vi.fn(async () => ({
+        job: snap({ keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1, added: [hitGroup('斗罗')] }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText(/1 家源/)).toBeTruthy())
+    const row = bookRow('斗罗')
+    fireEvent.click(row.querySelector('.novel-book-main') as HTMLElement)   // 展开逐源行
+    fireEvent.click(within(row).getByRole('button', { name: '＋ 加书架' }))
+    await waitFor(() => expect(pushError).toHaveBeenCalledWith('加入书架失败：disk'))
+    expect(within(row).getByRole('button', { name: '＋ 加书架' }), '失败不许记成已落架').toBeTruthy()
+  })
+
+  it('点行阅读时加架失败：照样进阅读器，失败另有回执（导航不吞掉交代）', async () => {
+    navigate({ name: 'shelf' })
+    const apiSend = vi.fn(async () => { throw new Error('disk') })
+    const pushError = vi.fn()
+    const deps = coreDeps({
+      apiSend, pushError,
+      apiGet: vi.fn(async () => ({
+        job: snap({ keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1, added: [hitGroup('斗罗')] }),
+      })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(screen.getByText(/1 家源/)).toBeTruthy())
+    const row = bookRow('斗罗')
+    fireEvent.click(row.querySelector('.novel-book-main') as HTMLElement)   // 展开逐源行
+    fireEvent.click(within(row).getByLabelText('阅读 斗罗'))
+    await waitFor(() => expect(routeStore.get().route.name).toBe('reader'))
+    await waitFor(() => expect(pushError).toHaveBeenCalledWith('加入书架失败：disk'))
+    navigate({ name: 'shelf' })
+  })
+
+  // 回执自己抛错（pushError/onLanded 都来自壳层，行为不受本组件控制）：加架那一发的
+  // rejection 必须被两处入口各自接住——点行阅读照旧导航，兄弟「＋ 加书架」不许把 rejection
+  // 漏成无人处理的一发。旧实现只有前者接了 rejection 分支，后者 `void add()` 裸奔。
+  it('加架回执自己抛错：点行阅读仍进阅读器，兄弟加架不漏 unhandled rejection', async () => {
+    navigate({ name: 'shelf' })
+    const apiSend = vi.fn(async () => { throw new Error('disk') })
+    const pushError = vi.fn(() => { throw new Error('回执炸了') })
+    const deps = coreDeps({
+      apiSend, pushError,
+      apiGet: vi.fn(async () => ({
+        job: snap({ keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1, added: [hitGroup('斗罗')] }),
+      })),
+    })
+    const escaped: unknown[] = []
+    const onUnhandled = (reason: unknown): void => { escaped.push(reason) }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      render(createElement(SearchView, { deps }))
+      await waitFor(() => expect(screen.getByText(/1 家源/)).toBeTruthy())
+      const row = bookRow('斗罗')
+      fireEvent.click(row.querySelector('.novel-book-main') as HTMLElement)   // 展开逐源行
+      fireEvent.click(within(row).getByRole('button', { name: '＋ 加书架' }))
+      await waitFor(() => expect(pushError).toHaveBeenCalledTimes(1))
+      await new Promise((r) => setTimeout(r, 40))          // 给 Node 的 unhandledRejection 判定留一拍
+      expect(escaped, '兄弟加架的回执异常逃成了 unhandled rejection').toEqual([])
+      fireEvent.click(within(row).getByLabelText('阅读 斗罗'))
+      await waitFor(() => expect(routeStore.get().route.name).toBe('reader'))
+      await waitFor(() => expect(pushError).toHaveBeenCalledTimes(2))
+      await new Promise((r) => setTimeout(r, 40))
+      expect(escaped, '点行阅读的 rejection 分支没接住').toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+      navigate({ name: 'shelf' })
+    }
+  })
+
   it('收起再展开：已在架的行仍显示已在书架（账住在行之上，不在那一行自己肚子里）', async () => {
     // 展开区收起时不渲染（那是这一行的性能账），所以落架的账必须存在比这一行更长寿的地方。
     const apiSend = vi.fn(async (_m: 'POST' | 'PUT' | 'DELETE', _path: string, _body?: unknown) => ({}))
@@ -1447,6 +1523,20 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
     await waitFor(() => expect(screen.queryByText(/选择或拖入 legado 书源文件/)).toBeNull())
   })
 
+  it('有任务在跑时「＋ 导入书源」禁用（单任务槽不允许导入）', async () => {
+    const running: JobState = {
+      id: 'p-run', kind: 'batch-probe', phase: 'running', total: 2, done: 0,
+      counts: { ok: 0, failed: 0, dupSkipped: 0, replaced: 0 },
+      issues: [], fileErrors: [], startedAt: 0,
+    }
+    const fetchJobStatus = vi.fn(async () => running)
+    const deps = settingsDeps({ fetchJobStatus })
+    render(createElement(SettingsSection, { deps }))
+    renderHook(() => useJobPolling({ fetchJobStatus }))
+    const btn = await screen.findByRole('button', { name: '＋ 导入书源' }) as HTMLButtonElement
+    await waitFor(() => expect(btn.disabled).toBe(true))
+  })
+
   it('导入完成态「去验证」：弹层内回调 → startBatchProbeJob(未验证 ids) + 弹层收起（闭环）', async () => {
     const deps = settingsDeps({ lastImportJob: () => doneImportJob })
     render(createElement(SettingsSection, { deps }))
@@ -1631,6 +1721,28 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
     await screen.findByText('加入书架失败：磁盘只读')
     expect(screen.getByRole('dialog')).toBeTruthy()          // 模态留着：可重试，也可先不走
     expect(pushError).not.toHaveBeenCalled()                 // 不散落页面流
+  })
+
+  // 同场时 Esc 归谁：判据在 `reader-surfaces.escOwner`（模态在场时浮层的 Esc 监听不安装）。
+  // 旧实现两条监听同挂 document，一次 Esc 既收回模态、又走 closeAll 把目录也收掉。
+  it('目录开着 + 入架一问：Esc 只关模态，目录仍在场、进度不变', async () => {
+    const deps = readerDeps()
+    const { container } = render(reader(deps))
+    await waitFor(() => expect(container.querySelector('[data-chapter="0"]')).not.toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: '目录' }))
+    expect(screen.getByRole('button', { name: '目录' }).getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: '书架' }))
+    await screen.findByRole('dialog', { name: '这本书还没加入书架，加入吗？' })
+    const sent = deps.apiSend.mock.calls.length
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '这本书还没加入书架，加入吗？' })).toBeNull())
+    expect(screen.getByRole('dialog', { name: '目录' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '目录' }).getAttribute('aria-expanded')).toBe('true')
+    expect(deps.apiSend.mock.calls.length).toBe(sent)        // 关模态不连带走 closeAll、不写进度
+    // 模态退场后浮层重新持有 Esc：下一次仍按 closeAll 的语义收场（依赖数组必须含 askShelf）
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '目录' })).toBeNull())
+    expect(screen.getByRole('button', { name: '目录' }).getAttribute('aria-expanded')).toBe('false')
   })
 
   it('正文首行与章名同句 → 呈现层剥掉它（章名只留 h2 那一份）', async () => {

@@ -39,7 +39,7 @@ export function splitUrlOption(href: string): { url: string; suffix: string | nu
 }
 
 /** URL 尾部的 `,{"webView":true}` 选项后缀剥离（兼容入口——语义即 splitUrlOption().url）。
- *  我们不支持 WebView，但抓取层会按普通请求带选项照常尝试（assembleRequest 解释其余选项）。 */
+ *  `webView:true` 已由源请求缝执行；这里只剥选项文本，选项语义归 assembleRequest。 */
 export function stripUrlOption(href: string): string {
   return splitUrlOption(href).url
 }

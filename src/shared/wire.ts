@@ -58,7 +58,24 @@ export interface SourcePublic {
   /** 源是否声明了 loginUrl（派生自 `rules.loginUrl !== null`，与门面 `loginPlan` 同一判据）。
    *  给 UI 分支用：把「有没有」投影出来，UI 不必靠错误文案猜（服务端 400 是给 API 调用方的）。 */
   hasLoginUrl: boolean
+  /** loginUi 里可渲染的行（text/password/button；@js: 与 webView 形态不投影，UI 回退 cookie 录入）。 */
+  loginUi?: LoginUiField[]
 }
+
+export interface LoginUiText {
+  /** 同时是 loginInfo 的键与界面标签（legado RowUi.name） */
+  name: string
+  type: 'text' | 'password'
+  default?: string
+}
+
+export interface LoginUiButton {
+  /** 按钮标签；动作由服务端按同名 RowUi 查，客户端只回传名字、不持脚本 */
+  name: string
+  type: 'button'
+}
+
+export type LoginUiField = LoginUiText | LoginUiButton
 
 /** 探针结论（search 面）：verified/broken 口径 + 段级原因透出 */
 export interface ProbeResult {
@@ -242,7 +259,10 @@ export const SEARCH_HITS_CAP_PER_SOURCE = 50
 /** 一轮搜索结果的保留期（结束后过此时点读作「无任务」，不伪装成「搜了没命中」） */
 export const SEARCH_JOB_RETENTION_MS = 30 * 60 * 1000
 
-export interface ChapterEntry { name: string; url: string }
+export interface ChapterEntry {
+  name: string; url: string
+  isVip?: boolean; isVolume?: boolean; isPay?: boolean; updateTime?: string
+}
 
 /** 搜索参与计划：本次聚合搜索的真实参与者——参与集唯一主人在服务端，
  *  客户端分批/进度条按此走，不再自行重推导启停 invariant。 */
@@ -671,8 +691,10 @@ export const BODY = {
   chapterIndex: 'chapterIndex',
   offsetRatio: 'offsetRatio',
   runLogin: 'runLogin',
+  loginAction: 'loginAction',
   cookies: 'cookies',
   headers: 'headers',
+  loginInfo: 'loginInfo',
 } as const
 
 /** body 形状不符（缺字段、类型错、空数组）。消息文本就是给终端用户看的那句 400 说明——
@@ -720,8 +742,18 @@ export const bodies = {
   exploreList: (sourceId: string, kind: string): Record<string, unknown> =>
     ({ [PARAMS.sourceId]: sourceId, [PARAMS.kind]: kind }),
   runLogin: (): Record<string, unknown> => ({ [BODY.runLogin]: true }),
-  authCookies: (cookies: Record<string, string>, headers?: Record<string, string>): Record<string, unknown> =>
-    ({ [BODY.cookies]: cookies, ...(headers === undefined ? {} : { [BODY.headers]: headers }) }),
+  loginAction: (name: string): Record<string, unknown> => ({ [BODY.loginAction]: name }),
+  authCookies: (
+    cookies: Record<string, string>,
+    headers?: Record<string, string>,
+    loginInfo?: Record<string, string>,
+  ): Record<string, unknown> => ({
+    [BODY.cookies]: cookies,
+    ...(headers === undefined ? {} : { [BODY.headers]: headers }),
+    ...(loginInfo === undefined ? {} : { [BODY.loginInfo]: loginInfo }),
+  }),
+  authLoginInfo: (loginInfo: Record<string, string>): Record<string, unknown> =>
+    ({ [BODY.loginInfo]: loginInfo }),
   /** ① title 形态=加书。**字段集只由 `SHELF_META` 决定**：这里不再逐字段列一遍可选位，
    *  调用方把手上那条命中（`SearchHit`、浮层行）连同 `sourceId` 交进来即可——认不出的键
    *  （`url` / `sourceName` / 浮层补的 `listed`）由 `pickShelfMeta` 整键丢，命中里没值的位缺键。
@@ -800,16 +832,30 @@ export const readBodies = {
     sourceId: readRequiredText(body, PARAMS.sourceId),
     kind: readRequiredText(body, PARAMS.kind),
   }),
-  /** 登录面两形态：`runLogin: true` 走源自己声明的登录规则，否则按 cookie 录入。
-   *  判别只到形状层——「这源有没有声明登录入口、是 URL 还是 JS」归门面。 */
+  /** 登录面形态：`runLogin: true` 走源自己声明的登录规则；`loginAction: 行名` 跑按钮动作；
+   *  否则按 cookie / loginInfo 录入。判别只到形状层——「这源有没有声明登录入口、是 URL 还是 JS」归门面。 */
   auth: (body: Record<string, unknown> | null):
-    { mode: 'run-login' } | { mode: 'cookies'; cookies: Record<string, string>; headers?: Record<string, string> } => {
+    | { mode: 'run-login' }
+    | { mode: 'login-action'; name: string }
+    | { mode: 'cookies'; cookies: Record<string, string>; headers?: Record<string, string>; loginInfo?: Record<string, string> }
+    | { mode: 'login-info'; loginInfo: Record<string, string> } => {
     if (body?.[BODY.runLogin] === true) return { mode: 'run-login' }
     const b = (body ?? {}) as Record<string, unknown>
+    const loginAction = b[BODY.loginAction]
+    if (loginAction !== undefined) {
+      if (typeof loginAction !== 'string' || loginAction.trim() === '') bodyBad(`body.${BODY.loginAction} 需为非空 string`)
+      return { mode: 'login-action', name: loginAction }
+    }
     const cookies = readRecordField(b, BODY.cookies)
-    if (cookies === undefined) bodyBad(`body 需为 { ${BODY.cookies}: Record<string,string>, ${BODY.headers}?: Record<string,string> }`)
+    const loginInfo = readRecordField(b, BODY.loginInfo)
+    if (cookies === undefined && loginInfo !== undefined) return { mode: 'login-info', loginInfo }
+    if (cookies === undefined) bodyBad(`body 需为 { ${BODY.runLogin}: true } | { ${BODY.loginAction}: string } | { ${BODY.loginInfo}: Record<string,string> } | { ${BODY.cookies}: Record<string,string>, ${BODY.headers}?: Record<string,string>, ${BODY.loginInfo}?: Record<string,string> }`)
     const headers = readRecordField(b, BODY.headers)
-    return { mode: 'cookies', cookies, ...(headers === undefined ? {} : { headers }) }
+    return {
+      mode: 'cookies', cookies,
+      ...(headers === undefined ? {} : { headers }),
+      ...(loginInfo === undefined ? {} : { loginInfo }),
+    }
   },
   /** 书架 PUT 的三形态判别（顺序即优先级：title → patch → progress，与路由层的分派同序）。
    *  「非空 title 才算加书」在这里，「能不能进架 / 进度取值范围」不在——后者是门面的值域门。 */

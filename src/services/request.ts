@@ -14,8 +14,12 @@ export interface RequestOption {
   body?: string
   charset?: string
   headers?: Record<string, string>
-  /** 我们不支持 WebView——调用方按普通请求尝试并如实 warning */
+  /** 非 2xx 的额外重试次数（上游 UrlOption.retry；连接层异常不重） */
+  retry?: number | string
+  /** 真浏览器抓取（Playwright + 本机 Edge/Chrome） */
   webView?: boolean
+  /** 在页面里执行的 JS，返回值作为正文（与 webView 一起用） */
+  webJs?: string
 }
 
 /**
@@ -31,7 +35,10 @@ export interface RequestPlan {
   body?: string
   /** 声明的响应 charset（如 gbk）——解码优先级高于 Content-Type/嗅探 */
   charset?: string
+  /** 非 2xx 的额外重试次数（缺省 0） */
+  retry?: number
   webView: boolean
+  webJs?: string
 }
 
 /** 兼容别名：历史名字（搜索面/详情面旧 import 路径不改） */
@@ -58,7 +65,7 @@ export function parseUrlOption(template: string): { urlPart: string; option: Req
 /** 选项 JSON：宽松引号解析归 `normalize.parseObjectJson` 单点（头与 URL 选项共用同一份——
  *  严格 JSON 优先，失败回退单引号交换，`{'a':'b'}` → `{"a":"b"}`）。 */
 /** 本插件实现的 UrlOption 键集（书源格式的键集更大：retry/type/js/bodyJs/dnsIp/serverID/webJs/origin…） */
-const KNOWN_OPTION_KEYS = ['method', 'body', 'charset', 'headers', 'webView']
+const KNOWN_OPTION_KEYS = ['method', 'body', 'charset', 'headers', 'retry', 'webView', 'webJs']
 
 function parseOptionJson(text: string): RequestOption | undefined {
   const obj = parseObjectJson(text)
@@ -73,7 +80,9 @@ function parseOptionJson(text: string): RequestOption | undefined {
   if (typeof obj.method === 'string') option.method = obj.method
   if (typeof obj.body === 'string') option.body = obj.body
   if (typeof obj.charset === 'string') option.charset = obj.charset.toLowerCase()
+  if (typeof obj.retry === 'number' || typeof obj.retry === 'string') option.retry = obj.retry
   if (obj.webView === true) option.webView = true
+  if (typeof obj.webJs === 'string') option.webJs = obj.webJs
   const headers = parseHeaders(obj.headers)
   if (headers !== undefined) option.headers = headers
   return option
@@ -146,7 +155,10 @@ export function assembleRequest(
   // HEAD 此前被并进「不是 POST 就 GET」那条路 → 声明 HEAD 的源实际发的是 GET（降级当成了实现）。
   const rawMethod = (option?.method ?? 'GET').toUpperCase()
   const method: RequestPlan['method'] = rawMethod === 'POST' ? 'POST' : rawMethod === 'HEAD' ? 'HEAD' : 'GET'
-  const plan: RequestPlan = { url, method, headers: { ...(option?.headers ?? {}) }, webView: option?.webView === true }
+  const plan: RequestPlan = {
+    url, method, headers: { ...(option?.headers ?? {}) }, webView: option?.webView === true,
+    ...(option?.webJs === undefined ? {} : { webJs: option.webJs }),
+  }
   // HEAD 是「只看响应头」的方法，**不发 body**（对面同规则）：声明了 body 也丢掉，
   // 免得把表单体连同 urlencoded 头一起发出去，把一次元数据探测变成真的写请求。
   if (option?.body !== undefined && method !== 'HEAD') {
@@ -154,6 +166,8 @@ export function assembleRequest(
     plan.body = option.charset === undefined ? raw : encodeFormCharset(raw, option.charset)
   }
   if (option?.charset !== undefined) plan.charset = option.charset
+  const retry = typeof option?.retry === 'number' ? option.retry : Number(option?.retry ?? 0)
+  if (Number.isFinite(retry) && retry > 0) plan.retry = Math.floor(retry)
   // POST 表单体默认 urlencoded（浏览器表单同款语义）：不补的话 Node fetch 发 text/plain，
   // PHP 等表单端点 $_POST 解析不到字段（站点收空关键词返回空页）
   if (plan.body !== undefined && !Object.keys(plan.headers).some((k) => k.toLowerCase() === 'content-type')) {
@@ -170,10 +184,22 @@ export function assembleRequest(
  */
 export function fetchInitOf(
   plan: RequestPlan, baseHeaders?: Record<string, string>,
-): { headers: Record<string, string>; method?: string; body?: string } {
-  const init: { headers: Record<string, string>; method?: string; body?: string } = {
+): {
+  headers: Record<string, string>; method?: string; body?: string; retry?: number
+  webView?: boolean; webJs?: string; declaredCharset?: string
+} {
+  const init: {
+    headers: Record<string, string>; method?: string; body?: string; retry?: number
+    webView?: boolean; webJs?: string; declaredCharset?: string
+  } = {
     headers: { ...(baseHeaders ?? {}), ...plan.headers },
   }
+  if (plan.retry !== undefined) init.retry = plan.retry
+  // loginCheckJs 读原页时用同一份声明 charset（否则 GBK 源在 URL 选项里声明、响应头没 charset 时，
+  // 脚本看到的是乱码，校验/替换判断全错）
+  if (plan.charset !== undefined) init.declaredCharset = plan.charset
+  if (plan.webView) init.webView = true
+  if (plan.webJs !== undefined) init.webJs = plan.webJs
   if (plan.method === 'HEAD') init.method = 'HEAD'
   if (plan.method === 'POST') {
     init.method = 'POST'

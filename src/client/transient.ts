@@ -3,8 +3,7 @@ import { createStore, useStore } from './store.js'
 
 /**
  * 全局瞬态状态层（「全局状态条」）：
- * 此前「保存中/成功/失败」散在七个位置、同一语义有三种长相——本层收进一个有序条目队列：
- * - `pending` 进行中：settle 即移除，多条聚合计数展示；
+ * 此前成功/失败反馈散在多个位置、同一语义有三种长相——本层收进一个有序条目队列：
  * - `ok` 成功：**少而淡**——单行开关翻转本身即反馈不进条，显式保存类才进条，TTL 自动退场；
  *   **批量写口例外**：分页 + 过滤下被改的行可能在屏幕外，「看见开关翻了」不成立，批量要补确认；
  * - `error` 错误：sticky 手动 dismiss；携带 `anchor` 供「定位」跳转 + 行内装饰标记
@@ -12,7 +11,7 @@ import { createStore, useStore } from './store.js'
  * 模块级 store：重开设置不丢错误。通用层，书架/搜索的散落状态服务于场景内重试，按需接入。
  */
 
-export type TransientKind = 'pending' | 'ok' | 'error'
+export type TransientKind = 'ok' | 'error'
 
 export interface TransientEntry {
   id: number
@@ -65,20 +64,6 @@ export function pushOk(label: string): number {
   const id = push('ok', label)
   timers.set(id, setTimeout(() => remove(id), OK_TTL_MS))
   return id
-}
-
-/** 进行中：返回结算句柄（幂等）。settle() 收工；settle(errText) 移除 pending 并转错误进条。
- *  **当前无生产消费者**（单源启停故意不进泳道，见 toggle-feedback.ts 头注）——保留为
- *  通用层能力（本层「本次只接设置界面，后续按需接入」，见文件头注），不是死码；直测在 transient.test.ts。 */
-export function pushPending(label: string, anchor?: string): (errorText?: string) => void {
-  const id = push('pending', label, anchor)
-  let settled = false
-  return (errorText) => {
-    if (settled) return
-    settled = true
-    remove(id)
-    if (errorText !== undefined) pushError(errorText, anchor)
-  }
 }
 
 /** 测试专用：清空队列与定时器（模块级 store 会跨用例残留） */

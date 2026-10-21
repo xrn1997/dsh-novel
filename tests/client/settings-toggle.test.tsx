@@ -2,10 +2,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
-import { SourceList } from '../../src/client/views/SettingsSourceList.js'
+import { rowAnchorOf, SourceList } from '../../src/client/views/SettingsSourceList.js'
 import { makeDeps } from './fake-deps.js'
 import type { FakeSettingsDeps, DepsOverrides } from './fake-deps.js'
 import { resetSourceListUi, UNGROUPED } from '../../src/client/source-list.js'
+import { pushError, pushOk, resetTransient, transientEntries } from '../../src/client/transient.js'
 import type { SourcePublic } from '../../src/client/views/types.js'
 
 /**
@@ -25,10 +26,19 @@ const view = (deps: FakeSettingsDeps): ReactNode =>
 
 const checked = (): string | null => screen.getByRole('switch').getAttribute('aria-checked')
 
-beforeEach(() => resetSourceListUi())   // 模块级现场一次复位（先例 resetTransient）
-afterEach(cleanup)
+beforeEach(() => { resetSourceListUi(); resetTransient() })   // 模块级现场一次复位
+afterEach(() => { cleanup(); resetTransient() })
+
+/** 缺省 `pushError`/`pushOk` 是空 `vi.fn()`——真实瞬态层从未被写，`transientEntries()` 那条
+ *  「在途不进泳道」的锁因此恒真（空断言）。这组替身**转发到真实模块**：调用数仍可断言，
+ *  条目也真的落进 store，泳道读数与行内红边才是被测对象。 */
+const realTransient = () => ({ pushError: vi.fn(pushError), pushOk: vi.fn(pushOk) })
 
 describe('SourceList 启停开关接线（deps seam 驱动）', () => {
+  it('rowAnchorOf：行锚点选择器与行内 data 属性同源（错误条「定位 →」与行内红边共用）', () => {
+    expect(rowAnchorOf('x9')).toBe('[data-novel-source-row="x9"]')
+  })
+
   it('开关挂 .novel-switch 且内含滑块 <i>（外观与位移全在样式层：类一丢就是无底无滑块的裸按钮，且搜不到报错）', () => {
     render(view(makeDeps()))
     const sw = screen.getByRole('switch')
@@ -36,9 +46,9 @@ describe('SourceList 启停开关接线（deps seam 驱动）', () => {
     expect(sw.querySelector('i')).not.toBeNull()
   })
 
-  it('成功路径：点击即乐观翻转（请求未回已是新态），回包后保持', async () => {
+  it('成功路径：点击即乐观翻转（请求未回已是新态），回包后保持且静默', async () => {
     let resolveSend: (v: unknown) => void = () => { /* replaced below */ }
-    const deps = makeDeps({ apiSend: vi.fn(() => new Promise((res) => { resolveSend = res })) })
+    const deps = makeDeps({ apiSend: vi.fn(() => new Promise((res) => { resolveSend = res })), ...realTransient() })
     render(view(deps))
     expect(checked()).toBe('true')                        // 初始：已启用（按钮语义=停用）
 
@@ -48,11 +58,16 @@ describe('SourceList 启停开关接线（deps seam 驱动）', () => {
     resolveSend({})
     await waitFor(() => expect(deps.apiSend).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(checked()).toBe('false'))  // 回包后保持新态
-    expect(deps.pushError).not.toHaveBeenCalled()
+    expect(deps.pushError).not.toHaveBeenCalled()         // 成功静默：开关翻转本身即反馈
+    expect(deps.pushOk).not.toHaveBeenCalled()
+    expect(transientEntries()).toEqual([])                // 真 store 里也没有回执条
   })
 
   it('失败路径：即刻回滚到服务端原态 + error 泳道挂行锚点（历史 bug 回归钉死）', async () => {
-    const deps = makeDeps({ apiSend: vi.fn(() => Promise.reject(new Error('boom'))) })
+    const deps = makeDeps({
+      apiSend: vi.fn(() => Promise.reject(new Error('boom'))),
+      ...realTransient(),
+    })
     render(view(deps))
     expect(checked()).toBe('true')
 
@@ -64,18 +79,31 @@ describe('SourceList 启停开关接线（deps seam 驱动）', () => {
     expect(String(label)).toContain('启停失败')
     expect(String(label)).toContain('boom')
     expect(anchor).toBe('[data-novel-source-row="s1"]')   // 全局条「定位 →」与行内红边共用的选择器
+    expect(document.querySelector(anchor)?.getAttribute('data-novel-source-row')).toBe('s1')
+    // 真瞬态层读数：只有那一枚 error（带行锚点），没有多余条目
+    const entries = transientEntries()
+    expect(entries).toHaveLength(1)
+    expect(entries[0].kind).toBe('error')
+    expect(entries[0].label).toContain('启停失败')
+    expect(entries[0].anchor).toBe('[data-novel-source-row="s1"]')
+    // 行内红边由同一个真实 store 驱动（错误条与行内装饰不是两套判据）
+    await waitFor(() => {
+      expect(document.querySelector('[data-novel-source-row="s1"]')?.className).toContain('row-err')
+    })
   })
 
-  it('在途不进瞬态泳道（闪烁修复的政策：inFlight 零占用）', async () => {
+  it('在途不进瞬态泳道（闪烁回归锁：秒级操作零占用，在途只有行内装饰）', async () => {
     let settle: (v: unknown) => void = () => { /* replaced below */ }
-    const deps = makeDeps({ apiSend: vi.fn(() => new Promise((res) => { settle = res })) })
+    const deps = makeDeps({ apiSend: vi.fn(() => new Promise((res) => { settle = res })), ...realTransient() })
     render(view(deps))
     fireEvent.click(screen.getByRole('switch'))
-    // 请求在途：既无 pending 泳道（无 pushPending 通道），也无错误
+    // 请求在途：真瞬态层里没有任何条目，也没有错误（空断言不再靠空桩成立）
+    expect(transientEntries()).toEqual([])
     expect(deps.pushError).not.toHaveBeenCalled()
     expect(screen.queryByRole('progressbar')).toBeNull()
     settle({})
     await waitFor(() => expect(checked()).toBe('false'))
+    expect(transientEntries()).toEqual([])                // 成功静默，不在真 store 里补条
   })
 
   it('乐观值随服务端值让位：reload 落地即以服务端为准（粘滞乐观态——审查 2026 发现的真缺陷回归钉）', async () => {

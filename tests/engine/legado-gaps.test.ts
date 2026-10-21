@@ -284,8 +284,9 @@ describe('E-4. Packages.* 沙箱面（爱腐文密钥图解密链的载体）', 
     // 也让审计归因认不出（那条消息不在任何锚点里 → 会落 `unattributed` 而不是 `host-gap`）。
     const probe = await run('String(typeof Packages.java.net)')
     expect(String((probe.value as { text?: string }).text)).not.toBe('undefined')  // 包名可探测
-    const e = await run("new Packages.java.net.URL('https://x')").catch((x: Error) => x)
-    expect(String((e as Error).message)).toMatch(/未知 Packages 包路径：java\.net\.URL/)
+    // 2026-10-20：java.net.URL 已挂载（安全重开，走 ctx.fetchConn），不再是未知路径
+    const u = await run("String(new Packages.java.net.URL('https://x'))")
+    expect(String((u.value as { text?: string }).text)).toBe('https://x')
     const e2 = await run('new Packages.android.webkit.WebView()').catch((x: Error) => x)
     expect(String((e2 as Error).message)).toMatch(/未知 Packages 包路径：android\.webkit\.WebView/)
   })

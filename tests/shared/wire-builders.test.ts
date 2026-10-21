@@ -202,12 +202,13 @@ describe('漂移守卫', () => {
 })
 
 describe('写路由 body：构造器与读口同源（wire 单点承诺的另一半）', () => {
-  it('body 构造器计数钉死：12 个构造器对 9 条 shape（书架三形态共一条判别读口），加路由必须加一对', () => {
-    expect(Object.keys(bodies)).toHaveLength(12)
+  it('body 构造器计数钉死：14 个构造器对 9 条 shape（书架三形态共一条判别读口），加路由必须加一对', () => {
+    expect(Object.keys(bodies)).toHaveLength(14)
     expect(Object.keys(readBodies)).toHaveLength(9)
   })
 
   it('每条 shape 都能 round-trip：构造器产的东西，读口原样收回来', () => {
+    expect(readBodies.auth(bodies.authLoginInfo({ u: 'alice' }))).toEqual({ mode: 'login-info', loginInfo: { u: 'alice' } })
     const files = [{ name: 'a.json', text: '[]' }, { name: 'b.json', text: '{}' }]
     expect(readBodies.import(bodies.import(files))).toEqual({ files })
     const ids = ['s1', 's2']
@@ -219,6 +220,7 @@ describe('写路由 body：构造器与读口同源（wire 单点承诺的另一
     expect(readBodies.searchJob(bodies.searchJob('三体', ids))).toEqual({ keyword: '三体', sourceIds: ids })
     expect(readBodies.exploreList(bodies.exploreList('s1', '玄幻'))).toEqual({ sourceId: 's1', kind: '玄幻' })
     expect(readBodies.auth(bodies.runLogin())).toEqual({ mode: 'run-login' })
+    expect(readBodies.auth(bodies.loginAction('打开'))).toEqual({ mode: 'login-action', name: '打开' })
     const cookies = { token: 'abc' }
     expect(readBodies.auth(bodies.authCookies(cookies))).toEqual({ mode: 'cookies', cookies })
     expect(readBodies.auth(bodies.authCookies(cookies, { 'user-agent': 'x' })))
@@ -230,6 +232,7 @@ describe('写路由 body：构造器与读口同源（wire 单点承诺的另一
     expect(bodies.keys(['x'])).toHaveProperty(BODY.keys)
     expect(bodies.enabled(true)).toHaveProperty(BODY.enabled)
     expect(bodies.runLogin()).toHaveProperty(BODY.runLogin)
+    expect(bodies.loginAction('x')).toHaveProperty(BODY.loginAction)
     expect(bodies.authCookies({})).toHaveProperty(BODY.cookies)
     // 与 query 同名的业务键沿用 PARAMS——同一个业务名词不许有第二个字面量
     expect(bodies.searchJob('k')).toHaveProperty(PARAMS.keyword)
@@ -250,5 +253,6 @@ describe('写路由 body：构造器与读口同源（wire 单点承诺的另一
     expect(() => readBodies.auth({ cookies: [] })).toThrow(/cookies/)
     // 认不出的 headers 不再静默丢掉（原先整字段被忽略＝拿半份配置冒充录入了）
     expect(() => readBodies.auth({ cookies: {}, headers: 'x' })).toThrow(/headers/)
+    expect(() => readBodies.auth({ loginAction: '   ' })).toThrow(/loginAction/)
   })
 })

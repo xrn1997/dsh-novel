@@ -420,3 +420,21 @@ describe('对面兜底口径：白名单外的段交 CSS、裸索引段等于 ch
     expect(() => parseRule('nonsense$x@text', 'detail', 'value')).toThrow(UnsupportedRuleError)
   })
 })
+
+describe('parseRule JSON mode hint', () => {
+  it('turns a bare JSON list path into a jsonpath segment', () => {
+    const parsed = parseRule('data[*]', 'search', 'list', 'json')
+    expect(parsed.branches).toHaveLength(1)
+    expect(parsed.branches[0].segments[0]).toEqual({ kind: 'jsonpath', path: '$.data[*]' })
+  })
+
+  it('keeps || branches as separate JSONPath segments', () => {
+    const parsed = parseRule('data.list||data.items', 'search', 'list', 'json')
+    expect(parsed.combinator).toBe('first')
+    expect(parsed.branches.map((b) => b.segments[0])).toEqual([
+      { kind: 'jsonpath', path: '$.data.list' },
+      { kind: 'jsonpath', path: '$.data.items' },
+    ])
+  })
+
+})

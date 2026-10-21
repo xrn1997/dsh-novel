@@ -7,6 +7,8 @@ import type { SourceStatus, SourceContentKind } from '../shared/wire.js'
 export interface SourceAuth {
   cookies: Record<string, string>
   headers?: Record<string, string>
+  /** loginUi / getLoginInfoMap 的键值（用户名、token 等）；脚本经 source.getLoginInfoMap() 读。 */
+  loginInfo?: Record<string, string>
   acquiredAt?: number
   expired?: boolean
 }
@@ -53,6 +55,12 @@ export interface NormalizedRules {
   /** 目录列表选择器（对象方言 ruleToc.chapterList；平铺方言缺 → 目录面回退 ruleBookList） */
   ruleChapterList: string | null
   ruleChapterName: string | null; ruleChapterUrl: string | null
+  /** 目录章标记规则（对象方言 ruleToc.isVip/isVolume/isPay/updateTime）；布尔位按上游 isTrue 口径折。
+   *  可选：存量 NormalizedRules 字面量与旧源不必带这几格。 */
+  ruleChapterIsVip?: string | null
+  ruleChapterIsVolume?: string | null
+  ruleChapterIsPay?: string | null
+  ruleChapterUpdateTime?: string | null
   /** 详情页上下文（对象方言 ruleBookInfo.*；缺 → 详情面回退同名共用字段） */
   ruleDetailName: string | null; ruleDetailAuthor: string | null
   ruleDetailCoverUrl: string | null; ruleDetailIntro: string | null
@@ -63,6 +71,8 @@ export interface NormalizedRules {
    *  全靠它；tocUrl 模板 `{{$.…}}` 同在换根后的上下文上插值（bridge.detailContextOf 唯一实现） */
   ruleDetailInit: string | null
   ruleContent: string | null
+  /** 正文扩展字段（对象方言 ruleContent.title/subContent）；可选，旧源不必带 */
+  ruleContentSubContent?: string | null
   nextTocUrl: string | null; nextPageUrl: string | null
   header: Record<string, string> | null; loginUrl: string | null
   /** 动态请求头规则（`header` 字段的 `@js:`/`<js>` 形态）：与 header 互斥同源

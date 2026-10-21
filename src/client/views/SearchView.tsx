@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { SEARCH_BOOKS_CAP, bodies, paramRoutes } from '../../shared/wire.js'
+import { SEARCH_BOOKS_CAP } from '../../shared/wire.js'
+import { describeError } from '../api.js'
 import { plural, useCopy } from '../copy/index.js'
 import type { Translate } from '../copy/index.js'
 import { prodJobViewDeps } from '../deps.js'
@@ -8,6 +9,8 @@ import type { JobViewDeps, RowActionDeps } from '../deps.js'
 import { useSearchJob } from '../search-job.js'
 import { bookRowKey, bookRows, deriveRound, isSeatLanded, newlyLandedSeats, rowKeys, shelfSeats, shortAuthor, sumRound } from '../search-view-model.js'
 import type { RowRef, RoundView } from '../search-view-model.js'
+import { addShelfSeat } from '../shelf-action.js'
+import type { ShelfAddOutcome, ShelfSeatInput } from '../shelf-action.js'
 import { navigate, routeStore, useStore } from '../store.js'
 import { EmptyState, ProgressBar, SearchIcon, searchPct, StatusBadge } from './bits.js'
 import type { MergedBook, SearchHit } from './types.js'
@@ -169,11 +172,11 @@ export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): 
   )
 }
 
-/** 加架的接线只此一份：路径与 body 都由 wire 给（行上「＋ 加书架」与书行「都加架」走同一条 PUT，
- *  服务端那一份 patch 语义因此不会长出第二种形状）。字段集不在这里列——整条命中交进
- *  `bodies.shelfAdd`，能进架的位由 `SHELF_META` 说了算。 */
-function addBookToShelf(sourceId: string, hit: SearchHit, deps: RowActionDeps): Promise<unknown> {
-  return deps.apiSend('PUT', paramRoutes.shelfKey(hit.url ?? ''), bodies.shelfAdd(sourceId, hit))
+/** 命中行 → 加架输入：只并进架位身份（源 + 地址），书目字段整条命中照交。
+ *  为什么不再逐字段挑：字段集归 `SHELF_META` 单表，`bodies.shelfAdd` 走 `pickShelfMeta` 把表外键
+ *  整键丢弃——在这里再列一遍就是字段集的第二份抄本，新字段会「表里有、这个入口里没有」。 */
+function seatInputOf(sourceId: string, hit: SearchHit, url: string): ShelfSeatInput {
+  return { ...hit, sourceId, url }
 }
 
 /** 命中行：行内双动作——主按钮 = 加架并直接阅读；「＋ 加书架」只加架。
@@ -199,10 +202,21 @@ function HitRow({ sourceId, hit, deps, added, onLanded }: {
     )
   }
   const url = hit.url
-  const add = (): Promise<unknown> => addBookToShelf(sourceId, hit, deps).then(() => { onLanded(url) })
+  /** 单行加架：成功记账、失败上报，两种结局都交回调用方（点行阅读要据此照走导航）。
+   *  失败不再静默：这一发是用户明确点出来的写操作，吞掉它等于让「＋ 加书架」看似没反应。 */
+  const add = async (): Promise<ShelfAddOutcome> => {
+    const outcome = await addShelfSeat(seatInputOf(sourceId, hit, url), deps)
+    if (outcome.ok) onLanded(url)
+    else deps.pushError(t('search.shelf.addFailed', { detail: describeError(outcome.error, t) }))
+    return outcome
+  }
+  /** 点行直接阅读：先加架（进度保存依赖书架条目）再进阅读器。导航是**两种结局**的收尾：
+   *  加架失败的回执已由 `add` 报过；而 `add` 自己虽不抛（`addShelfSeat` 把成败收成返回值），
+   *  它的记账/上报回调可能抛——拒绝分支不接住，导航就被一条回调挡在门外，rejection 还会逃成
+   *  无人处理的一发。 */
   const read = (): void => {
-    // 点行直接阅读：先加架（进度保存依赖书架条目）再进阅读器；已加过则幂等
-    void add().catch(() => undefined).then(() => navigate({ name: 'reader', sourceId, bookKey: url, title: hit.title }))
+    const goRead = (): void => { navigate({ name: 'reader', sourceId, bookKey: url, title: hit.title }) }
+    void add().then(goRead, goRead)
   }
   return (
     <div className="novel-row">
@@ -210,6 +224,8 @@ function HitRow({ sourceId, hit, deps, added, onLanded }: {
         <span className="novel-hit-title">{hit.title}</span>
         <span className="novel-hit-sub">{sub}</span>
       </button>
+      {/* 兄弟入口没有后续动作：回执回调自己抛错时这一发只许就地咽掉（add 的失败已上报过），
+          不许像旧实现那样裸 `void add()` 漏成无人处理的 rejection。 */}
       <button className="novel-btn sm" disabled={added} onClick={() => { void add().catch(() => undefined) }}>
         {added ? t('search.shelf.added') : t('search.shelf.add')}
       </button>
@@ -338,13 +354,17 @@ function BookRow({ book, rows, deps, landed, onLanded }: {
    *  没发出去的那几条不并入「失败」——没试过不是失败，点名说它没有地址。 */
   const addAll = (): void => {
     void (async () => {
-      const addable = rows.filter((r) => r.hit.url !== null)
+      const addable = rows.filter((r): r is RowRef & { hit: SearchHit & { url: string } } => r.hit.url !== null)
       const noAddress = rows.length - addable.length
       const todo = addable.filter((r) => !isSeatLanded(landed, r.hit))
       setAdding(true)
-      const results = await Promise.allSettled(todo.map((r) => addBookToShelf(r.sourceId, r.hit, deps)))
+      const outcomes = await Promise.all(todo.map((r) => addShelfSeat(seatInputOf(r.sourceId, r.hit, r.hit.url), deps)))
       setAdding(false)
-      const newly = newlyLandedSeats(todo, results)
+      /** `addShelfSeat` 把失败也收成返回值（不抛），这里要还原成 `newlyLandedSeats` 认的成败二元，
+       *  否则「没落成的也算 fulfilled」会把失败报成已加。 */
+      const settled = outcomes.map((o): PromiseSettledResult<unknown> =>
+        (o.ok ? { status: 'fulfilled', value: o.bookKey } : { status: 'rejected', reason: o.error }))
+      const newly = newlyLandedSeats(todo, settled)
       newly.forEach((id) => { onLanded(id) })
       // 回执数的是**这次新落架的架位**（口径与理由住 `search-view-model.newlyLandedSeats`）；
       // 零加成不许走成功通道，整行没有地址与全部 PUT 失败读出来都是 0，「已加 0 个架位：X」等于给

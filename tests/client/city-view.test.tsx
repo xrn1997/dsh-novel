@@ -7,7 +7,7 @@ import { CopyProvider, enTranslate } from '../../src/client/copy/index.js'
 import { CityBookSheet } from '../../src/client/views/CityBookSheet.js'
 import { CityView } from '../../src/client/views/CityView.js'
 import { cityStore } from '../../src/client/store.js'
-import { ROUTES } from '../../src/shared/wire.js'
+import { ROUTES, paramRoutes } from '../../src/shared/wire.js'
 import type { ExploreBook, SearchGroup, SearchJobSnapshot } from '../../src/shared/wire.js'
 import { makeCoreDeps } from './fake-deps.js'
 import type { DepsOverrides, FakeViewDeps } from './fake-deps.js'
@@ -160,6 +160,15 @@ describe('CityView', () => {
     fireEvent.click(screen.getByRole('button', { name: '穿越重生' }))
     await waitFor(() => expect(submitted).toEqual([['s1', '现代情感'], ['s1', '穿越重生']]))
     expect(cityStore.get().kind).toBe('穿越重生')
+  })
+
+  // 手点不进 `city-entry.ts` 的判据：自动那条路遇到「当前轮正是这一对」会给 follow（不重提），
+  // 而手点是「再点一次」的意思，恒走 submit——把这条折进判据就得给纯函数多一枚只有视图知道的入参。
+  it('手点当前这一类也照旧提交：判据只管自动那条路，手点恒走 submit', async () => {
+    render(<CityView deps={depsOf()} />)
+    await waitFor(() => expect(submitted).toEqual([['s1', '现代情感']]))
+    fireEvent.click(screen.getByRole('button', { name: '现代情感' }))
+    await waitFor(() => expect(submitted).toEqual([['s1', '现代情感'], ['s1', '现代情感']]))
   })
 
   it('左栏分类筛选是本地的：不触网、不提交，也不改当前类', async () => {
@@ -438,6 +447,28 @@ describe('CityBookSheet（书籍详情浮层：本源两动作 + 跨源那一次
     const metas = Array.from(document.querySelectorAll('.novel-city-bookhead-meta'))
     expect(metas).toHaveLength(1)                          // 只剩元信息那一段，简介那段整段不走
     expect(metas[0].textContent).toContain('现代情感')       // 元信息没被误伤
+  })
+
+  it('本源那一行「加入书架」成功：走 PUT 架位并进成功泳道报书名', async () => {
+    const deps = depsWithGroups([])
+    openSheet(<CityBookSheet book={aBook} {...own} deps={deps} onClose={noop} />)
+    fireEvent.click(screen.getByRole('button', { name: '加入书架' }))
+    await waitFor(() => expect(deps.pushOk).toHaveBeenCalledWith('已加入书架：半城风月'))
+    expect(deps.apiSend).toHaveBeenCalledWith('PUT', paramRoutes.shelfKey('/b/1'), expect.objectContaining({
+      sourceId: 's1', title: '半城风月',
+    }))
+    expect(deps.pushError, '成功不该走失败泳道').not.toHaveBeenCalled()
+  })
+
+  it('本源那一行「加入书架」失败：进错误泳道报错误原文，不静默', async () => {
+    const deps = makeCoreDeps({
+      apiGet: vi.fn(async () => ({ job: null })),
+      apiSend: vi.fn(async () => { throw new Error('disk') }),
+    })
+    openSheet(<CityBookSheet book={aBook} {...own} deps={deps} onClose={noop} />)
+    fireEvent.click(screen.getByRole('button', { name: '加入书架' }))
+    await waitFor(() => expect(deps.pushError).toHaveBeenCalledWith('加入书架失败：disk'))
+    expect(deps.pushOk, '失败不该报成功').not.toHaveBeenCalled()
   })
 
   it('「在其他源找这本」提交的是书名 + 作者，走搜索面那条既有链（POST search/job）', async () => {

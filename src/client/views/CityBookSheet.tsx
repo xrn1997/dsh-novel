@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react'
 import { useState } from 'react'
 import { partitionByRelevance } from '../../shared/relevance.js'
-import { bodies, paramRoutes } from '../../shared/wire.js'
 import type { ExploreBook, SearchGroup, SearchHit } from '../../shared/wire.js'
 import { describeError } from '../api.js'
 import { cityMeta, sheetKeyword } from '../city-view-model.js'
@@ -9,6 +8,7 @@ import { plural, useCopy, zhTranslate } from '../copy/index.js'
 import type { Translate } from '../copy/index.js'
 import type { JobViewDeps, RowActionDeps } from '../deps.js'
 import { useSearchJob } from '../search-job.js'
+import { addShelfSeat } from '../shelf-action.js'
 import { navigate } from '../store.js'
 import { Dialog } from './dialog.js'
 
@@ -178,17 +178,16 @@ function hitRow(g: SearchGroup, h: SearchHit): SheetRowData {
   }
 }
 
-/** 入架走**搜索面那条既有路**（`PUT paramRoutes.shelfKey` + `bodies.shelfAdd`）：各条入架路共用
- *  一个路径构造器与一个 body 构造器，服务端那一份 patch 语义才不会长出第二种。行上多出来的
- *  `sourceName` / `listed` / `url` 不是书目字段，`pickShelfMeta` 整键丢。
- *  **不先读一次书架判「已在书架」**：那是一个多出来的请求，换来的只是按钮文案；重复点按由幂等覆盖
- *  处理（同一 bookKey 再 PUT 一次，写进去的还是同一本书）。成功才报名，失败进错误泳道——点了一下
- *  必须有个交代，静默失败比失败更糟。 */
-function addToShelf(row: SheetRowData, deps: RowActionDeps, t: Translate = zhTranslate): void {
-  void deps.apiSend('PUT', paramRoutes.shelfKey(row.url ?? ''), bodies.shelfAdd(row.sourceId, row)).then(
-    () => deps.pushOk(t('city.sheet.added', { title: row.title })),
-    (e: unknown) => deps.pushError(t('city.sheet.addFailed', { detail: describeError(e, t) })),
-  )
+/** 入架走整仓唯一那一发（`shelf-action.addShelfSeat`）：路径与 body 归 wire 单点，成败在这里
+ *  才落成回执。**不先读一次书架判「已在书架」**：那是一个多出来的请求，换来的只是按钮文案；
+ *  重复点按由幂等覆盖处理（同一 bookKey 再 PUT 一次，写进去的还是同一本书）。成功才报名，失败进
+ *  错误泳道——点了一下必须有个交代，静默失败比失败更糟。 */
+function addToShelf(row: SheetRowData & { url: string }, deps: RowActionDeps, t: Translate = zhTranslate): void {
+  // 书目字段不在这里列：pickShelfMeta / SHELF_META 是唯一过滤点；sourceName/listed 会被整键丢
+  void addShelfSeat(row, deps).then((outcome) => {
+    if (outcome.ok) deps.pushOk(t('city.sheet.added', { title: row.title }))
+    else deps.pushError(t('city.sheet.addFailed', { detail: describeError(outcome.error, t) }))
+  })
 }
 
 /** `showLast` 关掉「最新」那半句：本源那一行的最新归头部那颗 tag 说（它装得下整句），
@@ -199,6 +198,7 @@ function SheetRow({ row, deps, showLast = true, showSource = true }: {
   row: SheetRowData; deps: RowActionDeps; showLast?: boolean; showSource?: boolean
 }): ReactNode {
   const t = useCopy()
+  const url = row.url
   return (
     <div className="novel-city-srcrow">
       {showSource ? <span className="novel-city-srcrow-who">{row.sourceName}</span> : null}
@@ -208,12 +208,12 @@ function SheetRow({ row, deps, showLast = true, showSource = true }: {
       )}
       {/* 各源一律同款按钮、没有排序：把第一条刷成主色就是替用户排序。入架排在「读这本」前面，
           主色（读）留在行尾的既有位置。 */}
-      {row.url === null ? null : (
+      {url === null ? null : (
         <>
-          <button className="novel-btn sm novel-city-srcrow-add" onClick={() => { addToShelf(row, deps, t) }}>{t('city.sheet.add')}</button>
+          <button className="novel-btn sm novel-city-srcrow-add" onClick={() => { addToShelf({ ...row, url }, deps, t) }}>{t('city.sheet.add')}</button>
           <button
             className="novel-btn sm primary novel-city-srcrow-go"
-            onClick={() => navigate({ name: 'reader', sourceId: row.sourceId, bookKey: row.url ?? '', title: row.title })}
+            onClick={() => navigate({ name: 'reader', sourceId: row.sourceId, bookKey: url, title: row.title })}
           >
             {t('city.sheet.read')}
           </button>

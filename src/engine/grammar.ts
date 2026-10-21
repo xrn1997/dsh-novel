@@ -228,7 +228,7 @@ export function isJsForm(template: string): boolean {
  * XPath 形态判定（**规则语言侧**单点，parse.classifySegment 的 XPath 分支用）：
  * `@xpath:`/`xpath:` 显式前缀，或 `//`/`.//`/`/` 开头**且不含插值区**
  * （`{{…}}`/`{$.…}` 是 URL 模板不是 XPath——插值优先于前缀判定，矩阵 `a-xpath-prefix-vs-url-template`）。
- * tocUrl 位的静态 URL 短路闸（`reading.tocUrlOf`）**另有一份两档口径**、结论刻意不同：
+ * tocUrl 位的静态 URL 短路闸（`bridge.staticTocUrl`）**另有一份两档口径**、结论刻意不同：
  * 规则语言里 `/static/list.html` 是 XPath 形态，tocUrl 位上它是站点相对静态 URL（URL 读法优先），
  * 而 `//` 家族在 tocUrl 位一律按绝对 XPath 不短路——歧义前缀的两处裁决与理由见矩阵
  * `b-toc-url-xpath-vs-url`（此处是规则文法，别拿去当短路闸）。

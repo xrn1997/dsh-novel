@@ -67,6 +67,25 @@ describe('SourceRegistry', () => {
     expect(pub).not.toHaveProperty('rules')
     expect(pub).toMatchObject({ hasHeader: true, hasAuth: true, authExpired: true, hasLoginUrl: false })
   })
+  it('toPublic 投影 loginUi 的 text/password/button 行（button 只给 name/type，不交 action 脚本）', async () => {
+    const dir = await tmp()
+    const reg = await SourceRegistry.load(dir)
+    const withUi = await reg.edit((tx) => tx.add(normalizeSource({
+      ...raw,
+      bookSourceUrl: 'https://c.com',
+      loginUi: JSON.stringify([
+        { name: '账号', type: 'text' },
+        { name: '密码', type: 'password', default: '' },
+        { name: '登录', type: 'button', action: 'https://login.example/x' },
+        { name: '无动作', type: 'button' },
+      ]),
+    })))
+    expect(reg.toPublic(withUi).loginUi).toEqual([
+      { name: '账号', type: 'text' },
+      { name: '密码', type: 'password', default: '' },
+      { name: '登录', type: 'button' },
+    ])
+  })
   it('hasLoginUrl 是「有没有登录脚本」的投影（UI 靠它决定「去登录」要不要问服务端）', async () => {
     const dir = await tmp()
     const reg = await SourceRegistry.load(dir)
@@ -159,7 +178,7 @@ describe('SourceRegistry', () => {
   })
 })
 
-describe('load 内容形态迁移（bookSourceType 编码订正的存量收敛）', () => {
+describe('load 内容形态迁移（bookSourceType 编码的存量收敛）', () => {
   it('raw.bookSourceType=2 的存量源：type 由误标的 text 重推为 image（legado 2=图片）；enabled 不动', async () => {
     const dir = await tmp()
     const reg = await SourceRegistry.load(dir)

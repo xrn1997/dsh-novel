@@ -141,7 +141,7 @@ describe('沙箱 legado 绑定与作用域（本轮修复钉子）', () => {
     })
     expect(ajaxCalls).toBe(1)                                            // 证明走的是 worker RPC 桥
     expect(out.value).toEqual({ kind: 'value', text: 'undefined|undefined|undefined' })
-    // worker 里的 vm 上下文同样 codeGeneration:false → Function 构造器不可用（拿不到宿主 realm）
+    // worker 里的 vm 同样没有 process/require；Function 可编译但取不到宿主 realm
     const err = await runScript({
       ...viaWorker,
       code: 'java.ajax("https://x.com/p"); return Function("return process")()',

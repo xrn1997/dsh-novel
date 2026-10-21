@@ -39,6 +39,13 @@ const evalX = (path: string, cur?: any) => evalXPath({ kind: 'xpath', path }, $,
 
 const texts = (v: any): string[] => (v.kind === 'list' ? v.items : v.kind === 'value' ? [v.text] : [])
 
+describe('XPath last() 偏移', () => {
+  it('last()/last()-1 选择末尾节点', () => {
+    expect(texts(evalX('//*[@id="pagelist"]/*[last()-1]/@value'))).toEqual(['/p=2'])
+    expect(texts(evalX('//*[@id="pagelist"]/*[last()]/@value'))).toEqual(['/p=3'])
+  })
+})
+
 describe('XPath 子集：路径与末段（真实样本）', () => {
   it(' //*[@id="sitebox"]/dl —— id 谓词 + 子步 → nodes', () => {
     const v = evalX('//*[@id="sitebox"]/dl')

@@ -13,7 +13,6 @@ import { deriveSourceListView } from '../source-list-view.js'
 import { findScrollport } from '../scrollport.js'
 import { useStore } from '../store.js'
 import { useTransientFlag } from '../transient.js'
-import { rowAnchorOf, toggleFeedback } from '../toggle-feedback.js'
 import { jobPct, RunCard, StatusBadge } from './bits.js'
 import { Dialog } from './dialog.js'
 import type { JobState, SourcePublic } from './types.js'
@@ -34,6 +33,12 @@ import type { JobState, SourcePublic } from './types.js'
  */
 
 const PAGE_SIZE = 100
+
+/** 单源行的错误锚点：全局条「定位 →」与行内红边共用同一个选择器，且与行渲染的
+ *  `data-novel-source-row` 同源。启停失败与鉴权三条失败路径都挂它。 */
+export function rowAnchorOf(id: string): string {
+  return `[data-novel-source-row="${id}"]`
+}
 
 /** 源列表壳层与行的依赖面：行内写口三件套 + 提交一轮验证（验证的编排归 `jobs.ts` 的
  *  `startSourceVerification`，这里只多要那一格提交口，不整束照抄 `SettingsDeps`——任务读面
@@ -117,17 +122,20 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
       deps.pushError(t('sources.delete.failed', { detail: describeError(e, t) }))
     })
   }
-  /** 行内启停开关：单击即切——乐观更新在行内组件；**在途不进泳道**（进条就顶动
-   *  布局 → 秒级操作闪烁，见 toggle-feedback.ts 头注），失败才进 error 泳道并挂行锚点。 */
+  /** 行内启停开关：单击即切——乐观更新在行内组件。
+   *
+   *  **秒级操作不进瞬态泳道**（闪烁回归锁）：单源启停往返 13~20ms ≈ 1 帧，而状态条**原先**
+   *  是流内元素、挂上就把设置区顶下去再弹回（真机逐帧实测 +35px layout-shift；现状态条已改为浮层，
+   *  这条具体读数不再复现，口径保留：秒级操作的反馈不占布局位置）。在途只留行内
+   *  `savingN` 装饰（开关降透明 + wait + title「保存中…」）；成功静默（开关翻转本身即反馈），
+   *  只有失败才进 error 泳道并挂行锚点（全局条「定位 →」+ 行内红边）。 */
   const toggleEnabled = (s: SourcePublic, next: boolean): Promise<boolean> => {
-    const fb = toggleFeedback(rowAnchorOf(s.id), deps, t)
-    fb.inFlight()
     return deps.apiSend('POST', paramRoutes.sourceEnabled(s.id), bodies.enabled(next)).then(() => {
-      fb.settle(true)
       onChanged()
       return true
     }, (e) => {
-      fb.settle(false, t('sources.toggle.failedNamed', { name: s.name, detail: describeError(e, t) }))
+      deps.pushError(
+        t('sources.toggle.failedNamed', { name: s.name, detail: describeError(e, t) }), rowAnchorOf(s.id))
       onChanged()                                        // 服务端为准的二次校准（行内已即刻回滚）
       return false
     })
@@ -191,7 +199,8 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
           onClick={() => setEditMode(!ui.editMode)}>
           {ui.editMode ? t('sources.done') : t('sources.edit')}
         </button>
-        <button className="novel-btn primary" data-novel-import-open onClick={onImport}>{t('sources.import.open')}</button>
+        {/* 单任务槽：任何任务在跑时不允许再开导入（与待办动作、导入面板的 busy 同一判据） */}
+        <button className="novel-btn primary" data-novel-import-open disabled={probing} onClick={onImport}>{t('sources.import.open')}</button>
       </div>
 
       <div className="novel-list-body">
@@ -439,6 +448,13 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
   )
 }
 
+/** 登录表单的初值：只有 text/password 行进 loginInfo；button 行不是键。 */
+function initLoginInfo(rows: NonNullable<SourcePublic['loginUi']>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const f of rows) if (f.type !== 'button') out[f.name] = f.default ?? ''
+  return out
+}
+
 /** 登录配置：cookie 录入（输入值不进 store，直接 POST）+ 去登录。
  *  反馈全走全局状态条——成功条自动退场。 */
 function SourceAuthPane({ source, onDone, deps = prodDeps }: {
@@ -446,6 +462,8 @@ function SourceAuthPane({ source, onDone, deps = prodDeps }: {
 }): ReactNode {
   const t = useCopy()
   const [cookie, setCookie] = useState('')
+  const [loginInfo, setLoginInfo] = useState<Record<string, string>>(() =>
+    initLoginInfo(source.loginUi ?? []))
   /** 「去登录」按源是否有登录脚本分岔（`hasLoginUrl` 是服务端投影的事实，不在客户端猜分支）：
    *  ① 声明了 loginUrl：问服务端要计划——URL 形态开那个 URL，JS 形态服务端沙箱跑完存登录态，
    *     这里只报成功并刷新；② 未声明：站点的登录页就是它自己，直接开 baseUrl（本按钮原行为）。 */
@@ -464,25 +482,73 @@ function SourceAuthPane({ source, onDone, deps = prodDeps }: {
     }, (e) => deps.pushError(t('sources.auth.goFailed', { detail: describeError(e, t) }), rowAnchorOf(source.id)))
   }
   const save = (): void => {
+    if (source.loginUi !== undefined) {
+      void (async () => {
+        await deps.apiSend('POST', paramRoutes.sourceAuth(source.id), bodies.authLoginInfo(loginInfo))
+        if (source.hasLoginUrl) await deps.apiSend('POST', paramRoutes.sourceAuth(source.id), bodies.runLogin())
+        deps.pushOk(t('sources.auth.saved'))
+        onDone()
+      })().catch((e) => deps.pushError(t('sources.auth.saveFailed', { detail: describeError(e, t) }), rowAnchorOf(source.id)))
+      return
+    }
     void deps.apiSend('POST', paramRoutes.sourceAuth(source.id), bodies.authCookies(parseCookieString(cookie))).then(() => {
       setCookie('')                      // 输入值即刻清空
       deps.pushOk(t('sources.auth.saved'))
       onDone()
     }, (e) => deps.pushError(t('sources.auth.saveFailed', { detail: describeError(e, t) }), rowAnchorOf(source.id)))
   }
+  /** RowUi button：先落当前 text/password 的 loginInfo，再按行名跑服务端动作。
+   *  外链只开新页；脚本动作成功后刷新源列表（动作可能改了登录态）。 */
+  const runRowAction = (name: string): void => {
+    void (async () => {
+      if ((source.loginUi ?? []).some((f) => f.type !== 'button')) {
+        await deps.apiSend('POST', paramRoutes.sourceAuth(source.id), bodies.authLoginInfo(loginInfo))
+      }
+      const r = await deps.apiSend<{ mode?: string; url?: string }>(
+        'POST', paramRoutes.sourceAuth(source.id), bodies.loginAction(name),
+      )
+      if (r.mode === 'external' && typeof r.url === 'string') {
+        window.open(r.url, '_blank', 'noopener,noreferrer')
+        return
+      }
+      deps.pushOk(t('sources.auth.actionDone'))
+      onDone()
+    })().catch((e) => deps.pushError(t('sources.auth.actionFailed', { detail: describeError(e, t) }), rowAnchorOf(source.id)))
+  }
   return (
     <span className="novel-auth-pane" onClick={(e) => e.stopPropagation()}>
       {/* 书源是任意第三方站点：显式 noopener,noreferrer 关掉新页对 DSH GUI tab 的反向
           tabnabbing（Chromium ≥88 对 _blank 已隐式 noopener，显式写是零成本保险） */}
       <button className="novel-btn sm" onClick={goLogin}>{t('sources.auth.go')}</button>
-      <input
-        className="novel-input"
-        value={cookie}
-        onChange={(e) => setCookie(e.target.value)}
-        placeholder={t('sources.auth.cookiePlaceholder')}
-        aria-label={t('sources.auth.cookieLabel', { name: source.name })}
-      />
-      <button className="novel-btn sm" onClick={save}>{t('sources.auth.save')}</button>
+      {source.loginUi === undefined
+        ? <input
+            className="novel-input"
+            value={cookie}
+            onChange={(e) => setCookie(e.target.value)}
+            placeholder={t('sources.auth.cookiePlaceholder')}
+            aria-label={t('sources.auth.cookieLabel', { name: source.name })}
+          />
+        : source.loginUi.map((f, i) => f.type === 'button'
+          ? (
+              <button key={`${f.type}:${i}:${f.name}`} className="novel-btn sm" onClick={() => { runRowAction(f.name) }}>
+                {f.name}
+              </button>
+            )
+          : (
+              <input
+                key={`${f.type}:${i}:${f.name}`}
+                className="novel-input"
+                type={f.type}
+                value={loginInfo[f.name] ?? ''}
+                onChange={(e) => setLoginInfo((prev) => ({ ...prev, [f.name]: e.target.value }))}
+                placeholder={f.name}
+                aria-label={f.name}
+              />
+            ))}
+      {/* 纯按钮源没有可保存的 loginInfo：不摆「保存登录」，否则会落一张空 auth 把 hasAuth 点亮 */}
+      {(source.loginUi === undefined || source.loginUi.some((f) => f.type !== 'button')) && (
+        <button className="novel-btn sm" onClick={save}>{t('sources.auth.save')}</button>
+      )}
     </span>
   )
 }
@@ -494,6 +560,7 @@ export function ProbeRunCard({ job }: { job: JobState }): ReactNode {
   const pct = jobPct(job)
   return (
     <RunCard
+      kind="probe"
       label={t('job.progress', { kind: jobKindLabel(job.kind, t) })}
       meta={<>{t('job.counts', { done: job.done, total: job.total, pct })}{t('sources.probe.concurrency')}</>}
       pct={pct}

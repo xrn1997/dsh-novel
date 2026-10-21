@@ -1,15 +1,21 @@
 import { promises as fs } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import path from 'node:path'
 import type { ResolvedConfig } from '../config.js'
 import { evaluate, RuleEvalError } from '../engine/index.js'
 import type { Facet } from '../engine/index.js'
-import { absUrl, detailContextOf, detailFieldsOf, engineContextOf, firstUrlValue, firstValue, hitFieldsOf, itemContextsOf, makeSubEval, resolveHeaders, urlFieldOf } from './bridge.js'
+import { detailContextOf, detailFieldsOf, detailReadOf, engineContextOf, firstValue, hitFieldsOf, itemContextsOf, makeSubEval, staticTocUrl, tocUrlFromContext, urlFieldOf } from './bridge.js'
 import type { Page, SubRuleEval } from './bridge.js'
 import { DEFAULT_CACHE_MAX_BYTES, PageCache } from './cache.js'
 import { contentSlot, exploreEpoch, rulesEpoch } from './cache-epoch.js'
 import { chapterContentToText } from './chapter-content.js'
 import { contentToText } from './content.js'
 import { ChapterNotFoundError, InvalidRequestError, LocalNotMountedError, RuleMissingError, SourceNotFoundError } from './errors.js'
-import { createFetcher, decodeBody, fetchTextPage, DEFAULT_TIMEOUT_MS } from './fetcher.js'
+import { createFetcher, DEFAULT_TIMEOUT_MS } from './fetcher.js'
+import { CookieJar } from './cookies.js'
+import { WebViewRuntime } from './webview.js'
+import { createFileSourceSession } from './source-session.js'
+import { runScript, type SourceSession } from '../engine/js-sandbox.js'
 import type { Fetcher } from './fetcher.js'
 import { KindCache } from './explore-cache.js'
 import { ExploreJobs } from './explore-job.js'
@@ -26,13 +32,16 @@ import type { NormalizeIssue } from './normalize.js'
 import { followPages } from './pagination.js'
 import type { FollowResult } from './pagination.js'
 import { exploreParticipates, participates } from './participation.js'
-import { probeSource } from './probe.js'
+import { writeFileAtomic } from './storage.js'
+import { applyProbeResult, probeSource } from './probe.js'
 import type { ProbeResult } from './probe.js'
-import { absUrlKeepOption, assembleRequest, canonUrl, fetchInitOf, stripUrlOption } from './request.js'
+import { absUrlKeepOption, assembleRequest, canonUrl, stripUrlOption } from './request.js'
 import { fetchSearchPage, searchErrorCodeOf } from './search-face.js'
 import type { SearchFaceResult } from './search-face.js'
 import { Shelf } from './shelf.js'
-import { SourceRegistry } from './sources.js'
+import { createSourceRequest } from './source-request.js'
+import type { SourceRequest } from './source-request.js'
+import { loginUiOf, SourceRegistry } from './sources.js'
 import type { NovelSource, SourceAuth } from './types.js'
 import type { ValueSource } from './value-source.js'
 
@@ -125,6 +134,14 @@ function staticLiveConfig(parts: {
   }
 }
 
+/** 目录在途请求的身份：同源同书还不够，代际与 refresh 也必须各占一条。
+ *  只按源+书归并，后到的强制刷新会并入先到的普通读取、拿回它没打算要的旧结果；
+ *  代际并入身份则让换规则后的读单独起飞——`getToc` 起飞前取一次 `rulesEpoch`，在途写回按
+ *  起飞时的代际落盘（`getTocInner`），旧在途与新读各走各的键，不需要取消通道。 */
+function tocReadKey(sourceId: string, bookUrl: string, epoch: string, refresh: boolean): string {
+  return JSON.stringify([sourceId, bookUrl, epoch, refresh])
+}
+
 /**
  * 阅读链路门面：HTTP API / agent 工具 / UI 三个面的**唯一**业务入口。
  * 规则求值全部经引擎；抓取全部经守门 fetcher；缓存/书架/注册表在其上编排。
@@ -140,7 +157,10 @@ export class ReadingService {
     private readonly registry: SourceRegistry,
     private readonly shelf: Shelf,
     private readonly cache: PageCache,
+    /** 基础 fetcher 只留给 dispose / sourceSession；脚本出站与抓取一律走 sourceRequest */
     private readonly fetcher: Fetcher,
+    /** 一次出站抓取的唯一装配点（动态头 → 限速 → webview/HTTP → loginCheck） */
+    private readonly sourceRequest: SourceRequest,
     private readonly jobs: SourceJobs,
     /** 聚合搜索的后台持有者（读任务，与写的 `jobs` 分槽——见 services/search-job.ts 的理由） */
     private readonly searchJobs: SearchJobs,
@@ -149,13 +169,18 @@ export class ReadingService {
     /** 逐源分类快照：**一份实例**服务全部轮次与全部调用方，否则「重复进同一分类」永远打站点 */
     private readonly exploreCache: KindCache,
     private readonly local: LocalBooks | null,
+    private readonly webview: WebViewRuntime,
   ) {}
 
   /** 本地书导入上限（传输层流式计数与本地书 domain 上限同一读数口——每次读活配置当前值） */
   get localImportMaxBytes(): number { return this.live.localImportMaxBytes }
 
   /** 关掉出站 dispatcher（代理连接池）；卸载时组合根调用，之后再抓取会按当前 proxyUrl 重建。 */
-  dispose(): void { this.fetcher.dispose?.() }
+  dispose(): void {
+    this.fetcher.dispose?.()
+    this.fetcher.sourceSession?.flush?.()
+    void this.webview.dispose()
+  }
 
   /**
    * 生产快捷方式：建目录 + 从磁盘装配部件，再交 from() 总装。
@@ -166,8 +191,13 @@ export class ReadingService {
     // 主动建数据目录：保证存在 + 快速失败（dir 指向文件时 mkdir 抛错——ready 拒绝，入口层零注册）
     await fs.mkdir(opts.dir, { recursive: true })
     const live = opts.config ?? staticLiveConfig(opts)
+    const cookieJar = new CookieJar()
+    const deviceId = await readDeviceId(opts.dir)
+    const sourceSession = createFileSourceSession(opts.dir)
     return ReadingService.from({
-      fetcher: createFetcherWith(opts.fetchImpl, opts.proxyUrl),
+      // HTTP cookie 按域共享（与上游 CookieStore 同粒度）；脚本侧 source cookie 仍按源隔离
+      fetcher: createFetcherWith(opts.fetchImpl, opts.proxyUrl, cookieJar),
+      cookieJar,
       registry: await SourceRegistry.load(opts.dir),
       shelf: await Shelf.load(opts.dir),
       cache: new PageCache(opts.dir, () => live.cacheMaxBytes),
@@ -176,6 +206,9 @@ export class ReadingService {
       jobHost: opts.jobHost,
       tocMaxPages: opts.tocMaxPages,
       contentMaxPages: opts.contentMaxPages,
+      proxyUrl: opts.proxyUrl,
+      deviceId,
+      sourceSession,
     })
   }
 
@@ -203,23 +236,43 @@ export class ReadingService {
     contentMaxPages?: number
     searchTimeoutMs?: number
     jsTimeoutMs?: number
+    /** 真浏览器 WebView 的出站代理值源（与 fetcher 同口径） */
+    proxyUrl?: ValueSource<string | null>
+    /** HTTP/浏览器共享 cookie jar（组合根直装时可传入；缺省新建） */
+    cookieJar?: CookieJar
+    /** 宿主设备 ID（androidId 的稳定替代） */
+    deviceId?: string
+    /** 源级状态会话（可落盘；缺省进程内） */
+    sourceSession?: SourceSession
   }): Promise<ReadingService> {
     const live = parts.config ?? staticLiveConfig(parts)
     // 装配期先过一遍：组合根直装的非法值要在启动时就炸，不留到第一次搜索才挂起
     requireParallelStep(live.searchParallel)
+    if (parts.deviceId !== undefined) parts.fetcher.deviceId = parts.deviceId
+    if (parts.sourceSession !== undefined) parts.fetcher.sourceSession = parts.sourceSession
+    // 同一张 jar 要同时服务 HTTP（自动回带/落库）与脚本面（CookieManager/CookieStore）——
+    // 直装时 fetcher 可能没带 jar，门面这边补上；两处各持一张会让脚本读到的 cookie 与请求发出去的不是一份。
+    const cookieJar = parts.fetcher.cookieJar ?? parts.cookieJar ?? new CookieJar()
+    if (parts.fetcher.cookieJar === undefined) parts.fetcher.cookieJar = cookieJar
+    const webview = new WebViewRuntime(parts.proxyUrl === undefined ? {} : { proxyUrl: parts.proxyUrl })
+    // 与基础 fetcher **同一张 jar**：两处各持一张会让脚本读到的 cookie 与请求发出去的不是一份
+    const sourceRequest = createSourceRequest({
+      fetcher: parts.fetcher, webview, cookieJar, jsTimeoutMs: () => live.jsTimeoutMs,
+    })
     return new ReadingService(
       { tocMaxPages: parts.tocMaxPages ?? 200, contentMaxPages: parts.contentMaxPages ?? 50 },
       live,
-      parts.registry, parts.shelf, parts.cache, parts.fetcher,
+      parts.registry, parts.shelf, parts.cache, parts.fetcher, sourceRequest,
       new SourceJobs({
         registry: parts.registry,
-        probe: (s) => probeSource(s, parts.fetcher, { timeoutMs: live.searchTimeoutMs, jsTimeoutMs: live.jsTimeoutMs }),
+        probe: (s) => probeSource(s, sourceRequest, { timeoutMs: live.searchTimeoutMs, jsTimeoutMs: live.jsTimeoutMs }),
         ...(parts.jobHost === undefined ? {} : { host: parts.jobHost }),
       }),
       new SearchJobs(parts.jobHost === undefined ? {} : { host: parts.jobHost }),
       new ExploreJobs(parts.jobHost === undefined ? {} : { host: parts.jobHost }),
       new KindCache(),
       parts.local ?? null,
+      webview,
     )
   }
 
@@ -273,8 +326,8 @@ export class ReadingService {
    *  同一源在导入期与门面两处探针拿回两个 verdict。 */
   async probe(id: string): Promise<ProbeResult> {
     const s = this.requireSource(id)
-    const r = await probeSource(s, this.fetcher, { timeoutMs: this.live.searchTimeoutMs, jsTimeoutMs: this.live.jsTimeoutMs })
-    await this.registry.edit((tx) => tx.setStatus(id, r.ok ? 'verified' : 'broken', r.error?.message, r.probedAt))
+    const r = await probeSource(s, this.sourceRequest, { timeoutMs: this.live.searchTimeoutMs, jsTimeoutMs: this.live.jsTimeoutMs })
+    await applyProbeResult(this.registry, id, r)
     return r
   }
 
@@ -299,26 +352,54 @@ export class ReadingService {
     })
   }
 
-  /** 删单源；不存在 → false */
+  /** 删单源；不存在 → false。源级状态按脚本侧键（baseUrl）清理，不是 registry id。 */
   async removeSource(id: string): Promise<boolean> {
-    return this.registry.edit((tx) => tx.remove(id))
+    const key = this.registry.get(id)?.baseUrl
+    const removed = await this.registry.edit((tx) => tx.remove(id))
+    if (removed && key !== undefined) this.fetcher.sourceSession?.forget?.(key)
+    return removed
   }
 
   /** 批量删源；返回实际删除数 */
   async removeSources(ids: string[]): Promise<number> {
-    return this.registry.edit((tx) => tx.removeAll(ids))
+    const keys = new Set(ids.map((id) => this.registry.get(id)?.baseUrl).filter((k): k is string => k !== undefined))
+    const n = await this.registry.edit((tx) => tx.removeAll(ids))
+    for (const key of keys) this.fetcher.sourceSession?.forget?.(key)
+    return n
   }
 
   /** cookie 录入（auth 路由的录入形态）：acquiredAt 由门面盖章——调用方不再手拼 SourceAuth */
-  async saveAuth(id: string, cookies: Record<string, string>, headers?: Record<string, string>): Promise<void> {
+  async saveAuth(
+    id: string,
+    cookies: Record<string, string>,
+    headers?: Record<string, string>,
+    loginInfo?: Record<string, string>,
+  ): Promise<void> {
     this.requireSource(id)
-    const auth: SourceAuth = { cookies, acquiredAt: Date.now(), ...(headers === undefined ? {} : { headers }) }
+    const auth: SourceAuth = {
+      cookies, acquiredAt: Date.now(),
+      ...(headers === undefined ? {} : { headers }),
+      ...(loginInfo === undefined ? {} : { loginInfo }),
+    }
+    await this.registry.edit((tx) => tx.setAuth(id, auth))
+  }
+
+  /** loginUi 表单录入：只更新 loginInfo，保留既有 cookie/header（不拿空 cookie 覆盖登录态）。 */
+  async saveLoginInfo(id: string, loginInfo: Record<string, string>): Promise<void> {
+    const s = this.requireSource(id)
+    const prev = s.auth
+    const auth: SourceAuth = {
+      cookies: prev?.cookies ?? {},
+      ...(prev?.headers === undefined ? {} : { headers: prev.headers }),
+      loginInfo,
+      acquiredAt: Date.now(),
+    }
     await this.registry.edit((tx) => tx.setAuth(id, auth))
   }
 
   /** loginUrl JS 形态：沙箱执行取 cookie 串 → 解析 k=v; → setAuth + persist。
-   *  空产出（脚本没 return 出 cookie，或只写 `cookie.setCookie` 垫片又不 `java.getCookie` 读回——
-   *  jar 只回读脚本自己写进去的那份，**HTTP 响应的 `Set-Cookie` 从不落库**，口径见矩阵 `b-cookie-jar`）
+   *  空产出（脚本没 return 出 cookie，或只写 `cookie.setCookie` 垫片又不读回——那张垫片是按源键值表，
+   *  与 HTTP jar 不是一张；HTTP 响应的 `Set-Cookie` 现由 fetcher 自动落 jar，口径见矩阵 `b-cookie-jar`）
    *  **不算登录**：
    *  返回 null 且不写 auth（曾落空 auth 把 hasAuth 点亮成「已登录」而零凭据）。
    * URL 形态由调用侧分流（不在此处理——开新 tab + cookie 录入，不注入 WebView）。 */
@@ -326,14 +407,47 @@ export class ReadingService {
     const s = this.requireSource(id)
     const loginUrl = s.rules.loginUrl
     if (loginUrl === null) throw new Error(`源「${s.name}」未声明 loginUrl`)
-    const v = await evaluate('@js:' + loginUrl, engineContextOf(this.fetcher, s, { baseUrl: s.baseUrl, jsTimeoutMs: this.live.jsTimeoutMs }), 'rule')
+    if (/^https?:\/\//i.test(loginUrl)) throw new Error(`源「${s.name}」的登录地址是 URL，不是 JS 登录脚本`)
+    // 与按钮动作共用同一条前缀剥离：`<js>…</js>` 不能再套一个 `@js:`（会变成语法错）
+    const v = await evaluate('@js:' + stripLoginPrefix(loginUrl), engineContextOf(this.sourceRequest.fetcherFor(s), s, { baseUrl: s.baseUrl, jsTimeoutMs: this.live.jsTimeoutMs }), 'rule')
     // 宽松 `k=v;` 串的解析规则跨半只有一份（`shared/cookies.ts`）：登录脚本产出的串与用户在
     // 登录面板手工粘进去的串走同一条语法，两处各写一遍就是给这条语法两个主人。
     const cookies = parseCookieString(firstValue(v, 'rule') ?? '')
     if (Object.keys(cookies).length === 0) return null   // 空产出：不写登录态（如实 → UI 仍显示未登录）
-    const auth: SourceAuth = { cookies, acquiredAt: Date.now() }
+    // loginInfo / headers 是表单与手工录入的伴生态：JS 登录只产出 cookie，不能把刚存的那两格抹掉
+    const prev = s.auth
+    const auth: SourceAuth = {
+      cookies,
+      ...(prev?.headers === undefined ? {} : { headers: prev.headers }),
+      ...(prev?.loginInfo === undefined ? {} : { loginInfo: prev.loginInfo }),
+      acquiredAt: Date.now(),
+    }
     await this.registry.edit((tx) => tx.setAuth(id, auth))
     return auth
+  }
+
+  /** RowUi button action：绝对 URL 回传给 UI 打开；其余按上游把 loginUrl 脚本拼在 action 前执行，
+   *  `result` 绑定当前 loginInfo 的 Map。按钮按名字查服务端源数据，客户端不持脚本。 */
+  async runLoginAction(id: string, name: string): Promise<{ mode: 'external'; url: string } | { mode: 'script' }> {
+    const s = this.requireSource(id)
+    const row = (loginUiOf(s.raw) ?? []).find((r) => r.type === 'button' && r.name === name)
+    if (row === undefined || row.type !== 'button') {
+      throw new InvalidRequestError(`源「${s.name}」没有名为「${name}」的登录按钮`)
+    }
+    const action = row.action.trim()
+    if (/^https?:\/\//i.test(action)) return { mode: 'external', url: action }
+    const loginUrl = s.rules.loginUrl
+    const loginJs = loginUrl === null || /^https?:\/\//i.test(loginUrl) ? '' : stripLoginPrefix(loginUrl)
+    const code = loginJs === '' ? action : `${loginJs}\n${action}`
+    await runScript({
+      code,
+      ...engineContextOf(this.sourceRequest.fetcherFor(s), s, { baseUrl: s.baseUrl, jsTimeoutMs: this.live.jsTimeoutMs }),
+      resultMap: s.auth?.loginInfo ?? {},
+      loc: { segmentIndex: 0, segmentRaw: action },
+      facet: 'rule',
+      scriptForm: true,
+    })
+    return { mode: 'script' }
   }
 
   /** 登录计划：loginUrl 形态判别归门面——URL 形态 → manual（回传 UI 开新 tab），
@@ -635,7 +749,7 @@ export class ReadingService {
   private async runExplorePage(
     entry: ExploreEntry, page: number, emit: (g: SearchGroup) => void,
   ): Promise<void> {
-    emit(await fetchExploreGroup(entry.source, entry.kindUrl, this.fetcher, {
+    emit(await fetchExploreGroup(entry.source, entry.kindUrl, this.sourceRequest, {
       timeoutMs: this.live.searchTimeoutMs, jsTimeoutMs: this.live.jsTimeoutMs, page,
       cache: this.exploreCache, epoch: entry.epoch,
     }))
@@ -655,7 +769,7 @@ export class ReadingService {
     }
     try {
       // 请求语义全走搜索面（search-face.ts，与探针同一实现）：模板解析/组装/超时/解码/列表求值
-      const page = await fetchSearchPage(s, keyword, this.fetcher, this.live.searchTimeoutMs, this.live.jsTimeoutMs)
+      const page = await fetchSearchPage(s, keyword, this.sourceRequest, this.live.searchTimeoutMs, this.live.jsTimeoutMs)
       if (!page.ok) {
         return { ...base, error: { code: 'RuleMissing', message: page.message } }
       }
@@ -686,8 +800,8 @@ export class ReadingService {
     }
   }
 
-  /** 搜索面 info 形态的一条书目：字段走 bridge.detailFieldsOf（与 getDetail 同一份实现，
-   *  含 init 换根），求值基准是落地地址（重定向后按落地地址解析相对链接），
+  /** 搜索面 info 形态的一条书目：字段走 bridge.detailFieldsOf（与 getDetail 的字段段共用
+   *  bridge.detailFieldsFromContext，含 init 换根），求值基准是落地地址（重定向后按落地地址解析相对链接），
    *  书地址用面算好的 bookUrl。
    *  书名为空 → null：只有书名非空才收这一条，「0 命中」是**结果**不是失败。 */
   private async infoHitOf(
@@ -706,37 +820,39 @@ export class ReadingService {
 
   async getDetail(sourceId: string, url: string): Promise<BookDetail> {
     const s = this.requireSource(sourceId)
-    // 引擎上下文（相对链接解析/字段求值）用剥选项的地址；抓取用全串——选项由 assembleRequest 解释
-    const base = stripUrlOption(url)
     // `book` 变量：详情面规则常见 `book.bookUrl`/`book.origin` 引用（脚本/模板段），
     // 且跨规则可见（`book`/`chapter` 绑定与 vars 表随求值上下文传递）——这里给这次 getDetail
     // 一张共享 vars 表：init 的 `@put:{n:"[property$=book_name]@content"}` 写进去，
     // 随后的 `@get:{n}` 字段规则与 tocUrl 模板才读得到（各次调用新建，不跨门面共享）。
-    const subEval = makeSubEval(this.fetcher, s, {
+    const subEval = makeSubEval(this.sourceRequest.fetcherFor(s), s, {
       vars: {}, book: bookMirrorOf(url, s.baseUrl, this.shelf.get(url)), jsTimeoutMs: this.live.jsTimeoutMs,
     })
     const html = await this.fetchText(s, url)
-    const { rules } = s
-    // 详情七字段（init 换根 + ruleDetail* 优先、平铺回退 + 简介详情面口径）单点在
-    // bridge.detailFieldsOf：搜索面的 info 形态与本方法共用同一份，不各写回落链。
-    // 已知重复：下面 tocUrlOf 会再算一次 init——刻意不并签名（并了要宽入参、让「谁负责 html」易主，
-    // 换来的只是省一次纯 JSONPath 求值）；真源若用 js 形态 init 双打站点，届时按那个源改。
-    const fields = await detailFieldsOf(s, subEval, html, base)
-    const tocUrl = await tocUrlOf(s.rules.ruleTocUrl, rules.ruleDetailInit, url, async () => html, subEval)
-    return { ...fields, tocUrl }
+    // 七字段与 tocUrl 共用**一次** init 求值：字段段是 bridge.detailFieldsFromContext（detailFieldsOf
+    // 与 detailReadOf 共用的那一份回落链与档位），整次读取的单点是 bridge.detailReadOf；搜索面
+    // info 形态与探针仍走 detailFieldsOf——那条路只要字段，不付 tocUrl 求值。
+    const read = await detailReadOf(s, subEval, html, url)
+    return { ...read.fields, tocUrl: read.tocUrl }
   }
 
   // ── 目录 ─────────────────────────────────────────────────────────────
 
-  /** 目录：缓存优先（refresh 跳过）+ in-flight 去重（同书并发只拉一次）+ 翻页闸跟进。
+  /** 目录：缓存优先（refresh 跳过）+ in-flight 去重（身份见 `tocReadKey`）+ 翻页闸跟进。
+   *  `async` 只为把 `requireSource` 的抛错收成 rejection：HTTP 面与工具面都按 promise 消费，
+   *  同步 throw 会漏出契约。函数体没有 `await`，所以在途登记在返回前同步完成——同身份的并发读
+   *  仍能 join 到同一发（去重语义不因 async 改写而变）。
    *  本地书分流在门面内：sourceId=__local__ 走本地书面——
    *  dispatch 不再持 LOCAL 分流知识，localToc/localChapter 收为私有 */
-  getToc(sourceId: string, bookUrl: string, opts?: { refresh?: boolean }): Promise<ChapterEntry[]> {
+  async getToc(sourceId: string, bookUrl: string, opts?: { refresh?: boolean }): Promise<ChapterEntry[]> {
     if (sourceId === LOCAL_SOURCE_ID) return this.localToc(bookUrl)
-    const key = `${sourceId}|${bookUrl}`
+    const s = this.requireSource(sourceId)
+    // 代际在起飞前算一次，读与写共用同一个值：在途请求写的就是它起飞时的代际，
+    // 换规则后的读永远看不见（这就是「旧在途写回」不需要取消通道的原因）
+    const epoch = rulesEpoch(s.rules, s.baseUrl, 'toc')
+    const key = tocReadKey(sourceId, bookUrl, epoch, opts?.refresh === true)
     const inflight = this.tocInflight.get(key)
     if (inflight !== undefined) return inflight
-    const p = this.getTocInner(sourceId, bookUrl, opts)
+    const p = this.getTocInner(s, bookUrl, epoch, opts)
       .finally(() => { this.tocInflight.delete(key) })
     this.tocInflight.set(key, p)
     return p
@@ -751,13 +867,9 @@ export class ReadingService {
     return { chapters, items: planarNavigation(chapters) }
   }
 
-  private async getTocInner(sourceId: string, bookUrl: string, opts?: { refresh?: boolean }): Promise<ChapterEntry[]> {
-    const s = this.requireSource(sourceId)
-    // 代际在取到源之后算一次，读与写共用同一个值：在途请求写的就是它起飞时的代际，
-    // 换规则后的读永远看不见（这就是「旧在途写回」不需要取消通道的原因）
-    const epoch = rulesEpoch(s.rules, s.baseUrl, 'toc')
+  private async getTocInner(s: NovelSource, bookUrl: string, epoch: string, opts?: { refresh?: boolean }): Promise<ChapterEntry[]> {
     if (opts?.refresh !== true) {
-      const cached = await this.cache.getToc(sourceId, bookUrl, epoch)
+      const cached = await this.cache.getToc(s.id, bookUrl, epoch)
       if (cached !== null) return JSON.parse(cached) as ChapterEntry[]
     }
     // 目录三规则任一缺失不得降级 `?? ''`——空串规则返回整页文本，宁炸不猜
@@ -771,9 +883,13 @@ export class ReadingService {
     }
     // `book` 变量：目录规则常见 `book.bookUrl`（36小说网 chapterUrl）与 `book.origin`
     // （努努书坊 ruleTocUrl `{{book.origin}}/e/...`——源站点域名即注册表 baseUrl）
-    const subEval = makeSubEval(this.fetcher, s, { book: bookMirrorOf(bookUrl, s.baseUrl, this.shelf.get(bookUrl), bookUrl), jsTimeoutMs: this.live.jsTimeoutMs })
+    const subEval = makeSubEval(this.sourceRequest.fetcherFor(s), s, { book: bookMirrorOf(bookUrl, s.baseUrl, this.shelf.get(bookUrl), bookUrl), jsTimeoutMs: this.live.jsTimeoutMs })
     const tocUrl = await tocUrlOf(s.rules.ruleTocUrl, s.rules.ruleDetailInit, bookUrl,
       () => this.fetchText(s, bookUrl), subEval)
+    const isVipRule = s.rules.ruleChapterIsVip ?? null
+    const isVolumeRule = s.rules.ruleChapterIsVolume ?? null
+    const isPayRule = s.rules.ruleChapterIsPay ?? null
+    const updateTimeRule = s.rules.ruleChapterUpdateTime ?? null
     const extract = async (page: Page): Promise<ChapterEntry[]> => {
       const listV = await subEval(listRule, { html: page.body, json: page.json, baseUrl: page.url }, 'toc', 'list')
       const out: ChapterEntry[] = []
@@ -782,6 +898,14 @@ export class ReadingService {
         const name = firstValue(await subEval(ruleChapterName, ctx, 'toc', 'value'), 'toc')
         // 章地址是 URL 位（多命中取首项，理由单点在 bridge.urlFieldOf，矩阵行 `b-url-value-first-item`）
         const href = await urlFieldOf(subEval, ruleChapterUrl, ctx, 'toc')
+        const flagOf = async (rule: string | null): Promise<boolean> =>
+          rule !== null && isTrueRuleValue(firstValue(await subEval(rule, ctx, 'toc', 'value'), 'toc'))
+        const vip = await flagOf(isVipRule)
+        const volume = await flagOf(isVolumeRule)
+        const pay = await flagOf(isPayRule)
+        const updateTime = updateTimeRule === null
+          ? undefined
+          : firstValue(await subEval(updateTimeRule, ctx, 'toc', 'value'), 'toc') ?? undefined
         // 章节 URL 常带 `,{"webView":true}` 等选项后缀（嗅探语义）——**保留后缀落库**，
         // 抓取时由 fetchPage → assembleRequest 解释（矩阵行 `b-url-option-on-chapter-url`）；
         // URL 取不到时回退目录页地址——不整条丢弃（曾「url null → 跳过」把整站目录清成 0 章，
@@ -790,7 +914,13 @@ export class ReadingService {
         const url = href !== null && href.trim() !== '' ? absUrlKeepOption(href, page.url) : page.url
         if (name !== null && url !== null) {
           if (missing) fellBack++
-          out.push({ name, url })
+          out.push({
+            name, url,
+            ...(vip ? { isVip: true } : {}),
+            ...(volume ? { isVolume: true } : {}),
+            ...(pay ? { isPay: true } : {}),
+            ...(updateTime === undefined ? {} : { updateTime }),
+          })
         }
       }
       // 逐章回退只服务「个别条目缺链接」；**每一条都回退** = ruleChapterUrl 整体失效，
@@ -814,7 +944,7 @@ export class ReadingService {
       subEval,
     )
     const chapters = result.items
-    await this.cache.setToc(sourceId, bookUrl, epoch, JSON.stringify(chapters))
+    await this.cache.setToc(s.id, bookUrl, epoch, JSON.stringify(chapters))
     return chapters
   }
 
@@ -866,15 +996,19 @@ export class ReadingService {
     }
     const ruleContent = s.rules.ruleContent
     if (ruleContent === null) {
-      // 订正：正文规则缺失不得降级 `?? ''`
+      // 正文规则缺失不得降级 `?? ''`
       throw new RuleMissingError('content', 'ruleContent', `源「${s.name}」缺正文规则 ruleContent`)
     }
     // 变量注入：`book`（bookUrl/name…——36小说网 ruleChapterUrl 用 book.bookUrl.replace）
     // 与 `chapter`（title/index/url——正文脚本 `chapter.title` 广泛使用）
     const shelfBook = this.shelf.get(bookKey)
-    const subEval = makeSubEval(this.fetcher, s, {
+    const subEval = makeSubEval(this.sourceRequest.fetcherFor(s), s, {
       book: bookMirrorOf(bookKey, s.baseUrl, shelfBook, bookKey),
-      chapter: { title: target.name, index: chIndex, url: target.url, baseUrl: target.url },
+      chapter: {
+        title: target.name, index: chIndex, url: target.url, baseUrl: target.url,
+        vip: target.isVip === true, volume: target.isVolume === true, pay: target.isPay === true,
+        updateTime: target.updateTime ?? '',
+      },
       jsTimeoutMs: this.live.jsTimeoutMs,
     })
     // 「空正文必炸」管的是**首屏**：跟进链上的续页取不出正文，只说明这一章到此为止，
@@ -882,9 +1016,13 @@ export class ReadingService {
     // 那页没有正文容器 ⇒ 此前整章抛错，前两页的正文一并丢掉）。
     // 首屏那一半一字未放宽：空正文仍然抛、仍然不写缓存（矩阵行 `g-content-empty-exception`）。
     // 续页交空数组即可——`followPages` 的 zero-new 闸本就负责停跟进。
+    const subContentRule = s.rules.ruleContentSubContent ?? null
     let pageSeq = 0
+    // 取值走对象字段而不是局部 let：extract 在闭包里赋值，TS 的流分析不会把那次赋值算进来
+    const lastPage: { page: Page | null } = { page: null }
     const extract = async (page: Page): Promise<string[]> => {
       const firstPage = pageSeq++ === 0
+      lastPage.page = page
       const v = await subEval(ruleContent, { html: page.body, json: page.json, baseUrl: page.url }, 'content', 'value')
       const text = firstValue(v, 'content')
       if (text === null) {
@@ -927,7 +1065,21 @@ export class ReadingService {
         stopUrls: new Set(toc.map((c) => canonUrl(c.url)).filter((u) => u !== canonUrl(target.url))),
       },
     )
-    const text = result.items.join('\n')
+    let text = result.items.join('\n')
+    // subContent 在**拼页之后**求值（上游 BookContent.kt 口径：循环结束后用 analyzeRule 的末页上下文），
+    // 以 http 开头时先把那页取回来当子正文；取不到/为空静默跳过——它是追加物，不该把整章判死。
+    if (subContentRule !== null && lastPage.page !== null) {
+      const sub = firstValue(
+        await subEval(subContentRule, { html: lastPage.page.body, json: lastPage.page.json, baseUrl: lastPage.page.url }, 'content', 'value'),
+        'content',
+      )
+      if (sub !== null && sub.trim() !== '') {
+        const raw = sub.trim()
+        const body = /^https?:\/\//i.test(raw) ? await this.fetchText(s, raw) : raw
+        const plainSub = normalizeChapterText(contentToText(body))
+        if (plainSub.trim() !== '') text += '\n' + plainSub
+      }
+    }
     await this.cache.setContent(sourceId, bookKey, chIndex, slot, text)
     return text
   }
@@ -967,20 +1119,18 @@ export class ReadingService {
 
   /** 抓取一页：URL 可带 `,{option}` 选项后缀（章节/下一页/目录 URL 的嗅探语义）——
    *  选项语义走 assembleRequest 单点，charset 声明进解码链（优先级最高）；
-   *  webView 选项不支持——按普通请求照常尝试（如实，矩阵行 `b-opt-webview`）。 */
+   *  `webView`/`webJs` 选项走真浏览器（`b-opt-webview`），浏览器 cookie 回灌 HTTP jar。 */
   private async fetchPage(s: NovelSource, url: string): Promise<Page> {
     const plan = assembleRequest(url, {}, s.baseUrl)
-    const page = await this.fetcher.fetchPage(plan.url, fetchInitOf(plan, await resolveHeaders(this.fetcher, s, { jsTimeoutMs: this.live.jsTimeoutMs })))
-    // url = 落地地址（相对链接基准，浏览器语义）；requestedUrl 仅诊断用（被跳转走时报错点名）
-    return { url: page.finalUrl, requestedUrl: plan.url, body: decodeBody(page, plan.charset) }
+    return this.sourceRequest.fetchPage(s, plan)
   }
 
   /** fetchText：抓取 + 解码 + 超时——请求语义同走 assembleRequest 单点（理由见 fetchPage；
    *  书 URL / 详情页 / tocUrl 回退都可能是 POST 型 API 端点——曾裸抓带选项的 URL 而得 405）。 */
   private async fetchText(s: NovelSource, url: string, timeoutMs?: number): Promise<string> {
     const plan = assembleRequest(url, {}, s.baseUrl)
-    const { text } = await fetchTextPage(this.fetcher, plan.url,
-      { ...fetchInitOf(plan, await resolveHeaders(this.fetcher, s, { jsTimeoutMs: this.live.jsTimeoutMs })), ...(timeoutMs === undefined ? {} : { timeoutMs }) }, plan.charset)
+    const { text } = await this.sourceRequest.fetchText(s, plan,
+      timeoutMs === undefined ? undefined : { timeoutMs })
     return text
   }
 }
@@ -1010,42 +1160,23 @@ function bookMirrorOf(
 }
 
 /** tocUrl 解析（钉死）：null→bookUrl **全串**（回退即「目录在本书地址上」——抓取仍按选项发请求）；
- *  纯静态 URL（URL 形态且无插值段）→ 字面绝对化，不抓详情页；其余（带 `{{$.…}}` 插值段的 URL
- *  模板与一切规则形态）→ 按**详情上下文**过规则引擎求值（init 换根后嵌套字段才有解；曾按空 vars
- *  插值留下残地址 → 0 章）。引擎 literal 口径：任一插值段 Miss → 整段 Miss → 回退 bookUrl
- *  （明确失败，不发残 URL）。解析 base 剥 `,{option}`（选项不属于链接解析域）；
+ *  纯静态 URL → 字面绝对化，不抓详情页；其余（带 `{{$.…}}` 插值段的 URL 模板与一切规则形态）
+ *  → 按**详情上下文**过规则引擎求值（init 换根后嵌套字段才有解；曾按空 vars 插值留下残地址
+ *  → 0 章）。本函数只剩「什么时候需要详情页」这一件事：短路判据与上下文求值分别住
+ *  `bridge.staticTocUrl` / `bridge.tocUrlFromContext`（`detailReadOf` 共用同一份）。
  *  求值走调用方的 subEval（完整上下文单点——jsLib/vars/fetch/source 全可见）。 */
 export async function tocUrlOf(
   ruleTocUrl: string | null, ruleDetailInit: string | null,
   bookUrl: string, detailHtml: () => Promise<string | null>, subEval: SubRuleEval,
 ): Promise<string> {
-  const base = stripUrlOption(bookUrl)
   if (ruleTocUrl === null) return bookUrl
-  // 静态 URL 短路的歧义前缀按两档分（完整病史与钉子：矩阵行 `b-toc-url-xpath-vs-url`）：
-  // ① `//`/`.//` 开头（非插值）= 绝对 XPath **绝不短路**——「absUrl 解得出」分不开它与协议相对
-  //    地址（裸标签 XPath 会被 `new URL` 解成 `https://div/a/@href` 野地址）；
-  // ② 单 `/` 开头（非插值）= 站点相对静态 URL，**解得出才短路**（单 `/` 纯路径 XPath 与它同形
-  //    不可分——现量 0 条，残余如实记在矩阵行）。
-  // 与 grammar.isXPathForm 的结论**不同是口径而非漂移**：规则语言里 `/static/list.html` 是 XPath
-  // 形态，tocUrl 位上它是静态 URL（URL 读法在能绝对化时优先）。
-  const urlShaped = /^(https?:)?\/\//i.test(ruleTocUrl) || ruleTocUrl.startsWith('/')
-  const absoluteXPath = ruleTocUrl.startsWith('//') || ruleTocUrl.startsWith('.//')
-  if (urlShaped && !absoluteXPath && !ruleTocUrl.includes('{')) {
-    // 走到这里必无插值段（`{` 判过），interpolateUrl 恒等 → 直接绝对化。
-    const abs = absUrl(ruleTocUrl, base)
-    if (abs !== null) return abs
-  }
+  const direct = staticTocUrl(ruleTocUrl, bookUrl)
+  if (direct !== null) return direct
   const html = await detailHtml()
   if (html === null) return bookUrl
-  const dctx = await detailContextOf(ruleDetailInit, html, base, subEval)
-  const v = await subEval(ruleTocUrl, { html: dctx.html, json: dctx.json, baseUrl: base }, 'detail', 'value')
-  const href = firstUrlValue(v, 'detail')
-  // 绝对化**只作用在 URL 部分**，`,{option}` 原样接回（与搜索结果 bookUrl、章节 URL 同一层
-  // 处理）。先 absUrl 等于让 `new URL()` 先碰选项串：换行被吃、`{` 被百分号编码，`",{`
-  // 形状一坏、抓取层就再也切不到选项 → 整串当路径发出去（两条 POST 型 tocUrl 源实证，
-  // 矩阵行 `b-url-option-on-toc-url`）。
-  if (href === null) return bookUrl
-  return absUrlKeepOption(href, base) ?? bookUrl
+  // 解析 base 剥 `,{option}`（选项不属于链接解析域）
+  const dctx = await detailContextOf(ruleDetailInit, html, stripUrlOption(bookUrl), subEval)
+  return tocUrlFromContext(ruleTocUrl, dctx, bookUrl, subEval)
 }
 
 /** 正文规约：逐行 trim → 去首尾空行 → 相邻空行折叠一个 */
@@ -1063,10 +1194,46 @@ export function normalizeChapterText(raw: string): string {
 
 // ── 模块级助手 ─────────────────────────────────────────────────────────
 
-function createFetcherWith(fetchImpl?: typeof globalThis.fetch, proxyUrl?: ValueSource<string | null>): Fetcher {
+/** 登录按钮动作前拼的 loginUrl 脚本：剥离规则前缀；URL 形态不拼（上游 getLoginJs 只给 JS 形态）。 */
+function stripLoginPrefix(raw: string): string {
+  const t = raw.trim()
+  if (/^@js:/i.test(t)) return t.slice(4)
+  const m = /^<js>([\s\S]*)<\/js>$/i.exec(t)
+  return m === null ? t : m[1]
+}
+
+/** 上游 `String.isTrue` 口径：空/字面 null 与整串 `false|no|not|0|0.0` 为假，其余非空为真。 */
+function isTrueRuleValue(v: string | null): boolean {
+  if (v === null) return false
+  const t = v.trim()
+  if (t === '' || t.toLowerCase() === 'null') return false
+  return !/^(?:false|no|not|0|0\.0)$/i.test(t)
+}
+
+/** 数据根级设备 ID：首次生成、此后稳定复用（androidId 的替代，不用随机值每轮冒充设备） */
+async function readDeviceId(dir: string): Promise<string> {
+  const file = path.join(dir, 'device-id')
+  try {
+    const v = (await fs.readFile(file, 'utf8')).trim()
+    if (v !== '') return v
+  } catch (e) {
+    // 只有「缺文件」是首次；权限/IO 错误不许当成首次并覆盖原设备 ID（身份会悄悄换掉）
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
+  }
+  const id = randomUUID()
+  await writeFileAtomic(file, id)
+  return id
+}
+
+function createFetcherWith(
+  fetchImpl?: typeof globalThis.fetch,
+  proxyUrl?: ValueSource<string | null>,
+  cookieJar?: CookieJar,
+): Fetcher {
   return createFetcher({
     ...(fetchImpl === undefined ? {} : { fetchImpl }),
     ...(proxyUrl === undefined ? {} : { proxyUrl }),
+    ...(cookieJar === undefined ? {} : { cookieJar }),
   })
 }
 

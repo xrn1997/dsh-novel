@@ -3,8 +3,15 @@ import { evaluate } from '../../src/engine/index.js'
 import type { EngineValue } from '../../src/engine/index.js'
 import type { SubRuleEval } from '../../src/services/bridge.js'
 import {
-  extractItems, absUrl, engineFetch, firstUrlValue, firstValue, formatWordCount, hitFieldsOf, kindFieldOf, listValue, wordCountFieldOf,
+  detailFieldsOf, detailReadOf, engineContextOf, extractItems, absUrl, engineFetch, firstUrlValue, firstValue,
+  formatWordCount, hitFieldsOf, kindFieldOf, listValue, makeSubEval, wordCountFieldOf,
 } from '../../src/services/bridge.js'
+import { CookieJar } from '../../src/services/cookies.js'
+import type { Fetcher } from '../../src/services/fetcher.js'
+import { normalizeSource } from '../../src/services/normalize.js'
+import { tocUrlOf } from '../../src/services/reading.js'
+import type { NovelSource } from '../../src/services/types.js'
+import { stripUrlOption } from '../../src/services/url.js'
 
 describe('值规约', () => {
   it('miss → null（源没这条信息）', () => {
@@ -29,6 +36,26 @@ describe('值规约', () => {
     expect(firstUrlValue({ kind: 'miss', detail: 'x' })).toBeNull()
     expect(firstUrlValue({ kind: 'list', items: [] })).toBe('')
     expect(() => firstUrlValue({ kind: 'nodes', nodes: [] } as never, 'search')).toThrow(/节点集/)
+  })
+})
+
+describe('engineContextOf 的 HTTP cookie 桥', () => {
+  it('setCookie 收 cookie 串的多对，并把 Path/Secure 当属性跳过', () => {
+    const jar = new CookieJar()
+    const fetcher: Fetcher = {
+      fetchPage: async () => { throw new Error('本用例不发请求') },
+      cookieJar: jar,
+    }
+    const normalized = normalizeSource({
+      bookSourceName: 'Cookie源', bookSourceUrl: 'https://a.test',
+      ruleBookList: '@css:.b', ruleBookName: 'tag.a@text', ruleBookUrl: 'tag.a@href',
+      ruleContent: '@css:#c@text',
+    })
+    const source: NovelSource = { ...normalized.source!, id: 'cookie-src', status: 'unverified', importedAt: 0 }
+    const ctx = engineContextOf(fetcher, source, { baseUrl: source.baseUrl })
+    ctx.httpCookies!.setCookie('https://a.test/x', 'a=1; b=2; Path=/; Secure')
+    expect(jar.entries().map((e) => `${e.name}=${e.value}`)).toEqual(['a=1', 'b=2'])
+    expect(jar.headerFor('https://a.test/x')).toBe('a=1; b=2')
   })
 })
 
@@ -250,5 +277,101 @@ describe('hitFieldsOf（一条命中的装配单点）', () => {
     expect(hit).not.toBeNull()
     expect(facets).toEqual(Array.from({ length: facets.length }, () => 'search'))
     expect(facets).toHaveLength(8)
+  })
+})
+
+/** 详情面一次读取（`detailReadOf`）：字段与 tocUrl 必须共用**同一次** init 求值。
+ *  计数 subEval 包住真实求值器（`makeSubEval`），读的是规则串的出现次数——
+ *  旧组合 `detailFieldsOf` + `tocUrlOf` 各求一次 init 正是这条要收掉的重复。 */
+describe('detailReadOf（详情 init 单次求值）', () => {
+  const INIT = '$.data.bookInfo'
+  const BOOK = 'https://detail.example.com/book/42'
+  const HTML = JSON.stringify({
+    data: { bookInfo: { resourceID: '42', resourceName: '甲书', author: '乙', summary: '简介' } },
+  })
+  const normalized = normalizeSource({
+    bookSourceName: '详情源', bookSourceUrl: 'https://detail.example.com',
+    ruleContent: '$.text',
+    ruleBookInfo: {
+      init: INIT,
+      name: '$.resourceName', author: '$.author', intro: '$.summary',
+      tocUrl: 'https://detail.example.com/toc?bookId={{$.resourceID}}',
+    },
+  })
+  const source: NovelSource = {
+    ...normalized.source!, id: 'detail-src', status: 'unverified', importedAt: 0,
+  }
+  // 本用例只求规则、不发请求：真 Fetcher 的 fetchPage 一旦被调用就是规则形态写错了
+  const fetcher: Fetcher = { fetchPage: async () => { throw new Error('规则求值不该发请求') } }
+  const counting = (seen: string[], src: NovelSource = source): SubRuleEval => {
+    const real = makeSubEval(fetcher, src)
+    return (rule, ctx, facet, usage) => {
+      seen.push(rule)
+      return real(rule, ctx, facet, usage)
+    }
+  }
+  /** tocUrl 两分支的源：同一份 init/字段，只换 ruleTocUrl（null = 源没声明目录规则） */
+  const sourceWithToc = (id: string, ruleTocUrl: string | null): NovelSource => {
+    const n = normalizeSource({
+      bookSourceName: `详情源-${id}`, bookSourceUrl: 'https://detail.example.com',
+      ruleContent: '$.text',
+      ruleBookInfo: {
+        init: INIT,
+        name: '$.resourceName', author: '$.author',
+        ...(ruleTocUrl === null ? {} : { tocUrl: ruleTocUrl }),
+      },
+    })
+    return { ...n.source!, id, status: 'unverified', importedAt: 0 }
+  }
+
+  it('init 只求值一次，fields/tocUrl 与旧组合（detailFieldsOf + tocUrlOf）逐值一致', async () => {
+    const seen: string[] = []
+    const read = await detailReadOf(source, counting(seen), HTML, BOOK)
+    expect(seen.filter((r) => r === INIT)).toHaveLength(1)
+
+    // 旧组合的读数作对照：同一份源、同一份 html，两条路径给出的值必须一致
+    const oldSeen: string[] = []
+    const oldEval = counting(oldSeen)
+    const oldFields = await detailFieldsOf(source, oldEval, HTML, stripUrlOption(BOOK))
+    const oldToc = await tocUrlOf(source.rules.ruleTocUrl, INIT, BOOK, async () => HTML, oldEval)
+    expect(read.fields).toEqual(oldFields)
+    expect(read.tocUrl).toBe(oldToc)
+
+    expect(read.fields).toMatchObject({ title: '甲书', author: '乙', intro: '简介' })
+    expect(read.tocUrl).toBe('https://detail.example.com/toc?bookId=42')
+  })
+
+  it('detailFieldsOf（info/探针路径）仍不付 tocUrl 求值——tocUrl 规则不进它的求值器', async () => {
+    const seen: string[] = []
+    const fields = await detailFieldsOf(source, counting(seen), HTML, stripUrlOption(BOOK))
+    expect(fields.title).toBe('甲书')
+    expect(seen).not.toContain(source.rules.ruleTocUrl)
+  })
+
+  it('静态 ruleTocUrl 短路：tocUrl 规则一次都不进求值器，返回按 bookUrl 绝对化的静态地址', async () => {
+    const staticSource = sourceWithToc('static-src', '/toc/static.html')
+    const seen: string[] = []
+    const read = await detailReadOf(staticSource, counting(seen, staticSource), HTML, BOOK)
+    expect(seen).toContain(INIT)                                // 字段仍走那次 init
+    expect(seen).not.toContain(staticSource.rules.ruleTocUrl)   // 短路：tocUrl 规则不进引擎
+    expect(read.tocUrl).toBe('https://detail.example.com/toc/static.html')
+  })
+
+  it('无插值段但带 ,{option} 的 tocUrl 走字面求值：选项后缀原样保留（短路判据不吃选项串）', async () => {
+    const rule = 'https://detail.example.com/toc,{"method":"POST"}'
+    const optSource = sourceWithToc('opt-src', rule)
+    const seen: string[] = []
+    const read = await detailReadOf(optSource, counting(seen, optSource), HTML, BOOK)
+    // `{` 让它不满足静态短路，按字面模板求值；绝对化只作用 URL 部分，后缀接回
+    expect(seen).toContain(rule)
+    expect(read.tocUrl).toBe(rule)
+  })
+
+  it('ruleTocUrl 为 null → 返回 bookUrl 全串（含 ,{option} 后缀：抓取仍按选项发请求）', async () => {
+    const nullSource = sourceWithToc('null-src', null)
+    const seen: string[] = []
+    const book = `${BOOK},{"webView":true}`
+    const read = await detailReadOf(nullSource, counting(seen, nullSource), HTML, book)
+    expect(read.tocUrl).toBe(book)
   })
 })

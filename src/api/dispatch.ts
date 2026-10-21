@@ -513,8 +513,8 @@ async function shelfPut(
   writeOk(res, saved)
 }
 
-/** auth 路由两形态：runLogin（URL → manual 分流；JS → 沙箱执行）；否则 cookie 录入。
- *  loginUrl 形态判别归门面 loginPlan——dispatch 不再读 rules.loginUrl。 */
+/** auth 路由：runLogin（URL → manual 分流；JS → 沙箱执行）/ loginAction（按按钮名跑动作）/
+ *  否则 cookie / loginInfo 录入。loginUrl 形态判别归门面 loginPlan——dispatch 不再读 rules.loginUrl。 */
 async function authRoute(service: ReadingService, id: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
   // 存在性先于 body 形态判别（既有 wire 口径：不存在的 id 恒 404，不先报 400）
   if (!service.hasSource(id)) throw new SourceNotFoundError(id)
@@ -535,8 +535,19 @@ async function authRoute(service: ReadingService, id: string, req: IncomingMessa
     return
   }
 
+  if (want.mode === 'login-action') {
+    writeOk(res, await service.runLoginAction(id, want.name))
+    return
+  }
+
+  if (want.mode === 'login-info') {
+    await service.saveLoginInfo(id, want.loginInfo)
+    writeOk(res, { auth: true })
+    return
+  }
+
   // cookie 录入归门面动词（acquiredAt 盖章在门面——dispatch 不再手拼 SourceAuth）
-  await service.saveAuth(id, want.cookies, want.headers)
+  await service.saveAuth(id, want.cookies, want.headers, want.loginInfo)
   writeOk(res, { auth: true })
 }
 

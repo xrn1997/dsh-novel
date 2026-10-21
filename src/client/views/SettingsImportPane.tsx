@@ -201,6 +201,7 @@ export function ImportRunCard({ job }: { job: JobState }): ReactNode {
   const pct = jobPct(job)
   return (
     <RunCard
+      kind="import"
       label={t('job.progress', { kind: jobKindLabel(job.kind, t) })}
       meta={t('job.counts', { done: job.done, total: job.total, pct })}
       pct={pct}

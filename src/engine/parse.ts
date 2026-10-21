@@ -3,6 +3,7 @@ import { UnsupportedRuleError } from './errors.js'
 import { braceRegion, isXPathForm, jsRegionEnd, parseTails, putRegionEnd } from './grammar.js'
 import { GROUP_TOKEN } from './regex-row.js'
 import { isLiteralForm } from './literal.js'
+import { normalizeJsonPath } from './jsonpath.js'
 
 /**
  * parseRule 词法流水线（纯词法：字符串 → ParsedRule AST，零 IO）。
@@ -40,7 +41,12 @@ const COMBINATOR_MAP: Record<CombToken, ParsedRule['combinator']> = {
  *  template 标记当前分支是否模板态（受保护区**之外**含 `{{…}}`/`@get:{…}`）——模板态文本段按字面、`@` 不切段 */
 interface ParseCtx { facet: Facet; counter: number; usage: RuleUsage; template: boolean }
 
-export function parseRule(rule: string, facet: Facet = 'rule', usage: RuleUsage = 'list'): ParsedRule {
+export function parseRule(
+  rule: string,
+  facet: Facet = 'rule',
+  usage: RuleUsage = 'list',
+  mode?: 'json',
+): ParsedRule {
   // ② 剥 ## 替换尾（含 OnlyOne ###）——文法口 parseTails 单点（grammar.ts：构词与解析同属一处）
   const { chain, replaces, onlyOne } = parseTails(rule)
 
@@ -85,9 +91,18 @@ export function parseRule(rule: string, facet: Facet = 'rule', usage: RuleUsage 
   // 与上面「剥空」分支同路：零分支，求值即空。
   const ctx: ParseCtx = { facet, counter: 0, usage, template: false }
   const branches = parts
-    .map(p => parseBranch(p.text, ctx))
+    .map(p => (mode === 'json' ? parseJsonBranch(p.text) : parseBranch(p.text, ctx)))
     .filter((b): b is Branch => b !== null)
   return { branches, combinator, reverse, replaces, onlyOne, usage }
+}
+
+/** JSON 模式分支：整支就是一条 JSONPath，不再按选择器/段语法切分。
+ *  显式 `json:` 前缀在默认解析里已由 classifySegment 剥掉；这里再剥一次是为 `parseRule(...,'json')`
+ *  的直接调用方（运行时门已不把带前缀的规则送进来）。 */
+function parseJsonBranch(text: string): Branch | null {
+  const raw = text.trim().replace(/^@?json:/i, '')
+  if (raw === '') return null
+  return { segments: [{ kind: 'jsonpath', path: normalizeJsonPath(raw) }], raws: [text] }
 }
 
 // ── ④ 分支切分 ─────────────────────────────────────────────────────────
@@ -327,14 +342,6 @@ function classifySegment(el: string, ctx: ParseCtx, isLast: boolean): Segment {
   // 其余段：先切 ! 排除，再走 default 识别（含隐式 CSS 回落、属性终端）
   const { base, exclude } = splitExclude(raw)
   return classifyDefault(base, exclude, el, ctx, isLast)
-}
-
-/** `Json:` 前缀路径归一：真实源有 `Json:data.list`（无 $ 前缀）形态——JSONPath 从根起算，
- *  无 `$` 视为根相对路径补 `$.`（data.list → $.data.list）；@ 开头保持原样如实报错。 */
-function normalizeJsonPath(path: string): string {
-  const p = path.trim()
-  if (p.startsWith('$') || p.startsWith('@')) return p
-  return p.startsWith('[') ? `$${p}` : `$.${p}`
 }
 
 /** 常见 HTML 标签名（「元素.类」形态判定依据——首词是标签即 CSS 组合选择器） */

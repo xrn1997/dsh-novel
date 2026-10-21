@@ -1,15 +1,14 @@
 import { interpolateUrl } from '../engine/index.js'
-import { itemContextsOf, makeSubEval, resolveHeaders } from './bridge.js'
+import { itemContextsOf, makeSubEval } from './bridge.js'
 import type { ItemContext } from './bridge.js'
 import type { SubRuleEval } from './bridge.js'
 import { classify } from './errors.js'
 import type { ErrorCategory } from './errors.js'
-import { fetchTextPage } from './fetcher.js'
-import type { Fetcher } from './fetcher.js'
 import { log } from './log.js'
 import { isNativeSource } from './normalize.js'
-import { absUrlKeepOption, buildSearchRequest, canonUrl, fetchInitOf } from './request.js'
+import { absUrlKeepOption, buildSearchRequest, canonUrl } from './request.js'
 import { resolveSearchTemplate } from './search-template.js'
+import type { SourceRequest } from './source-request.js'
 import type { ProbeErrorCode } from '../shared/wire.js'
 import type { NovelSource } from './types.js'
 
@@ -20,8 +19,9 @@ import type { NovelSource } from './types.js'
  * 聚合搜索（reading.searchOne）与探针（probe.probeSource）是消费它的两个 adapter：
  * 前者展开字段，后者做关键词重试——请求语义不再各持一份。
  *
- * 请求组装归 request.assembleRequest（选项语义唯一主人），抓取+解码归 fetcher.fetchTextPage
- * （超时单点）；本模块只持有搜索面特有的编排：模板解析 → 计划 → 条目求值。
+ * 请求组装归 request.assembleRequest（选项语义唯一主人），抓取+解码归
+ * source-request.SourceRequest.fetchText（限速/动态头/loginCheck 的装配与超时单点）；
+ * 本模块只持有搜索面特有的编排：模板解析 → 计划 → 条目求值。
  *
  * 错误策略归调用方：抓取/解码/沙箱错误**上抛**（调用方各自 catch 并用 searchErrorCodeOf 归类）；
  * 规则缺失是**结果**（ok:false），因为两个 adapter 都把它当正常分支而非异常。
@@ -63,7 +63,7 @@ export type SearchFaceResult =
  *   就是 0 结果，不再回落）。
  */
 export async function fetchSearchPage(
-  source: NovelSource, keyword: string, fetcher: Fetcher, timeoutMs?: number, jsTimeoutMs?: number,
+  source: NovelSource, keyword: string, request: SourceRequest, timeoutMs?: number, jsTimeoutMs?: number,
 ): Promise<SearchFaceResult> {
   const { searchUrl, ruleBookList, ruleBookName, bookUrlPattern } = source.rules
   if (searchUrl === null || ruleBookName === null) {
@@ -73,13 +73,15 @@ export async function fetchSearchPage(
     ].filter((x): x is string => x !== null)
     return { ok: false, code: 'RuleMissing', message: `搜索规则缺失或形态不支持：缺 ${missing.join('、')}` }
   }
-  const subEval = makeSubEval(fetcher, source, jsTimeoutMs === undefined ? undefined : { jsTimeoutMs })
-  const template = await resolveSearchTemplate(source, searchUrl, keyword, 1, fetcher, jsTimeoutMs)
+  const subEval = makeSubEval(request.fetcherFor(source), source,
+    jsTimeoutMs === undefined ? undefined : { jsTimeoutMs })
+  // 模板里的 js 脚本出站也走源级外观：拿基础 fetcher 会让脚本请求绕过限速（见 source-request 的头条裁决）
+  const template = await resolveSearchTemplate(source, searchUrl, keyword, 1, request.fetcherFor(source), jsTimeoutMs)
   const vars = { key: keyword, page: 1 }
   const plan = buildSearchRequest(template, vars, source.baseUrl,
     { trimFirstPage: isNativeSource(source.raw) })
-  const { text, landedUrl } = await fetchTextPage(fetcher, plan.url,
-    { ...fetchInitOf(plan, await resolveHeaders(fetcher, source, { jsTimeoutMs })), timeoutMs }, plan.charset)
+  const { text, landedUrl } = await request.fetchText(source, plan,
+    timeoutMs === undefined ? undefined : { timeoutMs })
   // 「重定向过」的判据是落地地址 ≠ 请求地址（本仓没有响应对象上的标志可比）
   const redirected = canonUrl(landedUrl) !== canonUrl(plan.url)
   const info = (via: 'pattern' | 'empty-list'): SearchFaceResult => {
@@ -89,7 +91,7 @@ export async function fetchSearchPage(
     // 两个 adapter（聚合搜索 / 探针）都拿这一份 subEval 走详情规则，不再各自决定绑什么
     return {
       ok: true, shape: 'info', via, body: text, landedUrl, bookUrl,
-      subEval: makeSubEval(fetcher, source, {
+      subEval: makeSubEval(request.fetcherFor(source), source, {
         vars: {}, book: { bookUrl, origin: source.baseUrl },
         ...(jsTimeoutMs === undefined ? {} : { jsTimeoutMs }),
       }),

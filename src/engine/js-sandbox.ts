@@ -20,6 +20,10 @@ export interface JsHost {
   result: string
   /** 上一段结果的值形态（nodes/page 时沙箱把 result 包成元素包装对象——`result.attr()` 等形态） */
   resultKind?: string
+  /** 以宿主响应对象绑定 result（loginCheckJs 用：脚本读 result.url()/code()/body()）。 */
+  resultHost?: import('./host-object.js').ResponseHost
+  /** 以宿主 Map 绑定 result（登录按钮动作：脚本读 result.get(...)；与 resultHost 互斥）。 */
+  resultMap?: Record<string, string>
   /** 上一段结果所在的**路径**（列表取元素 / 取值取字符串）：list → 节点结果绑成元素**集合**
    *  （`forEach`/`length`/下标），value → 仍是字符串对象 */
   resultCtx?: 'list' | 'value'
@@ -65,13 +69,17 @@ export interface RunScriptOptions extends EvalContext {
   evaluateRef?: EvaluateRef
   /** 脚本可见的源会话（cookie 垫片/源变量）：缺省进程级实例；测试注入 createSourceSession() */
   session?: SourceSession
+  /** loginCheckJs 的响应对象绑定（与规则链的 result 字符串互斥） */
+  resultHost?: import('./host-object.js').ResponseHost
+  /** 登录按钮动作的 loginInfo Map（与 resultHost / result 字符串互斥） */
+  resultMap?: Record<string, string>
 }
 
 export function runScript(o: RunScriptOptions): Promise<JsOutcome> {
   // 能力位原样透传：这里只剥出 host/驱动专属的那几格，其余就是 EvalContext（不再逐字段挑一遍）。
   // host 的 `resultKind` / `resultCtx` / `console` 不归这扇门——它们只在规则链上跑时由求值层
   // 构造（`evaluate.ts` 的 `JsCall`），服务层与测试的入口没有「上一段结果」这条链。
-  const { code, result, key, page, header, loc, facet, scriptForm, evaluateRef, session, ...ctx } = o
+  const { code, result, key, page, header, loc, facet, scriptForm, evaluateRef, session, resultHost, resultMap, ...ctx } = o
   const host: JsHost = {
     result: result ?? '',
     baseUrl: ctx.baseUrl ?? '',
@@ -79,6 +87,8 @@ export function runScript(o: RunScriptOptions): Promise<JsOutcome> {
     ...(key === undefined ? {} : { key }),
     ...(page === undefined ? {} : { page }),
     ...(header === undefined ? {} : { header }),
+    ...(resultHost === undefined ? {} : { resultHost }),
+    ...(resultMap === undefined ? {} : { resultMap }),
   }
   return evalJs(code, host, ctx, loc, facet, evaluateRef,
     { scriptForm: scriptForm ?? true, ...(session === undefined ? {} : { session }) })
@@ -148,7 +158,10 @@ export function ensureUnhandledGuard(sink: GuardSink = consoleGuardSink): () => 
  * 逃逸防御核心：宿主绝不把函数/对象直接交给用户代码——唯一入口 `__host_call__` 被本闭包捕获后
  * 即从全局锁死；暴露给用户的 `java`/`console` 全是 vm realm 包装函数，参数与返回值 JSON 双向序列化，
  * 宿主错误只取 `.message` 后以 vm realm Error 重抛。故用户代码沿 `.constructor` 或错误对象都够不到
- * 宿主 realm；vm realm 内 codeGeneration:{strings:false} 另使 eval / Function 构造器一律 EvalError。
+ * 宿主 realm；vm realm 内 codeGeneration:{strings:true} 允许 eval / Function，但入口仍锁死。
+ * **宿主帧通道已单独关掉**：V8 会把 CallSite 交给 `Error.prepareStackTrace`，worker 的 CJS 宿主帧
+ * 曾可经它的 `getThis()`/`getFunction()` 取到 `require`（2026-10-21 实证）；本闭包把该属性锁死。
+ * vm 仍是纵深防御层，不是 OS 级安全沙箱（见 `docs/adr/0004`）。
  */
 const BOOTSTRAP = `;(function (g) {
   'use strict'
@@ -160,6 +173,13 @@ const BOOTSTRAP = `;(function (g) {
   }
   hide('__host_call__')
   hide('__init__')
+  // V8 格式化错误栈时会回调 realm 里的 Error.prepareStackTrace，并把 CallSite 交给它；CallSite
+  // 的 getThis()/getFunction() 能取到**宿主帧**的 this/函数——worker 的 CJS 宿主帧曾可据此
+  // 直达 require（2026-10-21 复核实证）。锁成不可写、不可配置，用户脚本改不掉；默认格式化仍给出
+  // 字符串栈。vm 仍是纵深防御层，不是 OS 级安全沙箱。
+  try {
+    Object.defineProperty(Error, 'prepareStackTrace', { value: undefined, writable: false, configurable: false })
+  } catch (e) {}
   // JSON.parse 对象幂等 wrap（两形态共存的兼容口径）：对象直传 JSON.parse 会被 ToString 成
   // "[object Object]" → SyntaxError → 目录全灭（JSON 页 result 按已解析对象绑定、而 init 脚本又写
   // JSON.parse(result)）。对已解析对象先 stringify 回原文再 parse（parse 的逆，深拷贝幂等），
@@ -171,13 +191,104 @@ const BOOTSTRAP = `;(function (g) {
   }
   const ser = function (a) { return JSON.stringify(a) }
   const msg = function (e) { return (e && e.message) ? String(e.message) : String(e) }
+  // 宿主对象物化器：跨 JSON 桥只传 __host 描述符，方法壳在这里统一包。
+  // 判别字段与 src/engine/host-object.ts 同步；BOOTSTRAP 是模板字符串，不能 import。
+  const utf8Bytes = function (s) {
+    var out = []
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i)
+      // 代理对按码点编成 4 字节（逐 UTF-16 单元编会得到 CESU-8，emoji 字节与 UTF-8 不一致）
+      if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
+        var d = s.charCodeAt(i + 1)
+        if (d >= 0xdc00 && d <= 0xdfff) {
+          var cp = 0x10000 + ((c - 0xd800) << 10) + (d - 0xdc00)
+          out.push(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 63), 0x80 | ((cp >> 6) & 63), 0x80 | (cp & 63))
+          i++
+          continue
+        }
+      }
+      if (c < 0x80) out.push(c)
+      else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 63))
+      else out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63))
+    }
+    return out
+  }
+  const materialize = function (v) {
+    if (v === null || typeof v !== 'object' || v.__host === undefined) return v
+    if (v.__host === 'map') {
+      const entries = v.entries || {}
+      const m = {
+        get: function (k) {
+          k = String(k)
+          return Object.prototype.hasOwnProperty.call(entries, k) ? entries[k] : null
+        },
+        put: function (k, val) { entries[String(k)] = String(val); return val },
+        size: function () { return Object.keys(entries).length },
+        containsKey: function (k) { return Object.prototype.hasOwnProperty.call(entries, String(k)) },
+        keySet: function () { return Object.keys(entries) },
+        entrySet: function () {
+          return Object.keys(entries).map(function (k) { return { key: k, value: entries[k] } })
+        },
+        toString: function () { return JSON.stringify(entries) },
+        // Map 作 java.post/connect 的头参数时经 JSON 桥交给宿主；没有 toJSON 时方法全是函数，
+        // JSON.stringify 得到空对象——脚本意图被静默丢掉（源会拿空头去请求）。
+        toJSON: function () { return entries },
+      }
+      return new Proxy(m, {
+        get: function (t, p) {
+          if (typeof p === 'string' && !(p in t)) {
+            if (Object.prototype.hasOwnProperty.call(entries, p)) return entries[p]
+            if (v.caseInsensitive === true) {
+              const low = p.toLowerCase()
+              if (Object.prototype.hasOwnProperty.call(entries, low)) return entries[low]
+            }
+          }
+          return t[p]
+        },
+      })
+    }
+    if (v.__host === 'response') {
+      const headers = v.headers || {}
+      const lower = {}
+      for (const k of Object.keys(headers)) lower[String(k).toLowerCase()] = headers[k]
+      const headersMap = function () { return materialize({ __host: 'map', entries: lower, caseInsensitive: true }) }
+      return {
+        __host: 'response',
+        __data: {
+          url: v.url, statusCode: v.statusCode, headers: lower, body: v.body,
+          contentType: v.contentType || '', charset: v.charset || '', cookies: v.cookies || {},
+        },
+        statusCode: function () { return v.statusCode },
+        code: function () { return v.statusCode },
+        statusMessage: function () { return v.statusMessage || '' },
+        header: function (n) { const k = String(n).toLowerCase(); return lower[k] === undefined ? '' : lower[k] },
+        headers: function (n) {
+          if (arguments.length === 0) return headersMap()
+          const k = String(n).toLowerCase()
+          return lower[k] === undefined ? [] : [lower[k]]
+        },
+        body: function () { return v.body },
+        bodyAsBytes: function () { return utf8Bytes(String(v.body)) },
+        charset: function () { return v.charset || '' },
+        contentType: function () { return v.contentType || '' },
+        url: function () { return v.url },
+        cookies: function () { return materialize({ __host: 'map', entries: v.cookies || {} }) },
+        toString: function () { return v.body },
+      }
+    }
+    return v
+  }
+  // 宿主错误必须在**本 realm** 换成 Error 再交给脚本：宿主 Error 的 constructor.constructor
+  // 是宿主 Function，脚本一旦 catch 到就能拿回 process/require（node vm 实测）。所有直接
+  // call 的桥都必须走这里，不能只包 invoke —— AES/Java 类桥是直调。
+  const callHost = function (name, payload) {
+    try { return call(name, payload) } catch (e) { throw new Error(msg(e)) }
+  }
   const invoke = function (name, a) {
-    let r
-    try { r = call(name, ser(a)) } catch (e) { throw new Error(msg(e)) }
-    return r
+    return callHost(name, ser(a))
   }
   const sync = function (name) {
-    return function () { return JSON.parse(invoke(name, [].slice.call(arguments))) }
+    return function () { return materialize(JSON.parse(invoke(name, [].slice.call(arguments)))) }
   }
   const ajax = d.syncAjax
     // worker 同步桥形态（脚本视角同步）：__host_call__ 经 SAB RPC 阻塞等待主线程
@@ -216,42 +327,44 @@ const BOOTSTRAP = `;(function (g) {
       }
     }
     : function () { throw new Error('__dsh_sync_ajax_required__') }
-  // java.post：返回响应对象的**方法**壳（脚本写 res.body() / res.cookies()）。
-  // 跨桥只走 JSON 数据，所以数据包在沙箱内包成方法对象——函数不外传，也不跨边界。
-  // 刻意只给有真数据支撑的四个访问器：还有 header(name) 等，本仓没带响应头表，
-  // 就不编一个空壳给脚本（宁缺毋假值）；调到不存在的名字会照实 TypeError。
+  // java.post：宿主返回 __host:'response' 描述符，materialize 统一包成
+  // statusCode/header/headers/body/cookies 方法壳（与 java.get/head 同一形状）。
   const post = d.syncAjax
     ? function () {
       let r
       try { r = JSON.parse(invoke('post', [].slice.call(arguments))) } catch (e) { throw new Error(msg(e)) }
-      return {
-        body: function () { return r.body },
-        statusCode: function () { return r.statusCode },
-        contentType: function () { return r.contentType === undefined ? '' : r.contentType },
-        url: function () { return r.url },
-        cookies: function () { return r.cookies === undefined ? {} : r.cookies },
-      }
+      return materialize(r)
     }
     : function () { throw new Error('__dsh_sync_ajax_required__') }
-  // java.head：与 connect/post 同款网络同步语义（worker 直通、主线程哨兵换道）。数据面只有
-  // { url, statusCode, headers }；只包真有数据的访问器（同 post 的口径，不编空壳）。
-  // headers() 读取面大小写不敏感（脚本写 ["Location"] 与 ["location"] 两种形态都命中）。
+  // java.head：同款响应壳（无 body；headers 读取大小写不敏感由 materialize 统一处理）。
   const head = d.syncAjax
     ? function () {
       let r
       try { r = JSON.parse(invoke('head', [].slice.call(arguments))) } catch (e) { throw new Error(msg(e)) }
-      return {
-        statusCode: function () { return r.statusCode },
-        url: function () { return r.url },
-        headers: function () {
-          return new Proxy(r.headers === undefined ? {} : r.headers, {
-            get: function (t, p) {
-              if (typeof p !== 'string') return t[p]
-              return t[p] !== undefined ? t[p] : t[p.toLowerCase()]
-            },
-          })
-        },
-      }
+      return materialize(r)
+    }
+    : function () { throw new Error('__dsh_sync_ajax_required__') }
+  // java.get 的 HTTP 重载（双参）；单参变量 getter 仍走同步名单里的 get。
+  const getHttp = d.syncAjax
+    ? function () {
+      let r
+      try { r = JSON.parse(invoke('getHttp', [].slice.call(arguments))) } catch (e) { throw new Error(msg(e)) }
+      return materialize(r)
+    }
+    : function () { throw new Error('__dsh_sync_ajax_required__') }
+  const webView = d.syncAjax
+    ? function () {
+      let r
+      try { r = JSON.parse(invoke('webView', [].slice.call(arguments))) } catch (e) { throw new Error(msg(e)) }
+      return r
+    }
+    : function () { throw new Error('__dsh_sync_ajax_required__') }
+  // java.net.URL.openConnection 的同步桥：返回 { url, statusCode, headers, bytes }
+  const urlConn = d.syncAjax
+    ? function () {
+      let r
+      try { r = JSON.parse(invoke('urlConn', [].slice.call(arguments))) } catch (e) { throw new Error(msg(e)) }
+      return r
     }
     : function () { throw new Error('__dsh_sync_ajax_required__') }
   // ── Packages.*（书源脚本里的 Java 包路径仿真）─────────────────────
@@ -260,6 +373,20 @@ const BOOTSTRAP = `;(function (g) {
   // 未知路径 → 如实报「不支持」。
   const pkgCall = function (op, payload) {
     try { return JSON.parse(call('__pkg.' + op, ser(payload))) } catch (e) { throw new Error(msg(e)) }
+  }
+  // CookieManager/CookieStore 读的是**请求层同一张 jar**（域/路径感知、Set-Cookie 自动落库）——
+  // 不是上面按源隔离的 cookie 垫片；上游这两个类搬的就是引擎的 CookieStore。
+  const cookieJarGet = function (u) {
+    var v = pkgCall('cookieGet', { url: String(u) })
+    return v === '' ? null : v
+  }
+  const cookieJarSet = function (u, c) {
+    pkgCall('cookieSet', { url: String(u), cookie: String(c) })
+  }
+  const cookieManager = {
+    getCookie: cookieJarGet,
+    setCookie: cookieJarSet,
+    removeSessionCookies: function () { pkgCall('cookieRemoveSession', {}) },
   }
   const mkBytesStream = function (bytes) {
     const buf = Array.isArray(bytes) ? bytes : []
@@ -271,7 +398,58 @@ const BOOTSTRAP = `;(function (g) {
       _bytes: buf,
       available: function () { return buf.length - pos },
       read: function () { return pos < buf.length ? buf[pos++] : -1 },
+      close: function () {},
       toString: function () { return '[ByteArrayInputStream len=' + buf.length + ' pos=' + pos + ']' },
+    }
+  }
+  // java.net.URL.openConnection 的最小连接对象：同步桥走 urlConn（worker SAB），
+  // 请求仍经注入的 ctx.fetchConn（同一守门 fetcher），不开裸 socket。
+  const mkUrlConnection = function (rawUrl) {
+    var method = 'GET'
+    var headers = {}
+    var body
+    var outBytes = null
+    var loaded = null
+    var load = function () {
+      if (loaded === null) loaded = urlConn({ url: String(rawUrl), method: method, headers: headers, body: body })
+      return loaded
+    }
+    return {
+      setRequestMethod: function (m) { method = String(m).toUpperCase() },
+      setRequestProperty: function (k, v) { headers[String(k)] = String(v) },
+      addRequestProperty: function (k, v) { headers[String(k)] = String(v) },
+      setConnectTimeout: function () {},
+      setReadTimeout: function () {},
+      setDoOutput: function (v) { if (v) outBytes = [] },
+      getOutputStream: function () {
+        outBytes = []
+        return {
+          write: function (x) {
+            if (Array.isArray(x)) { for (var i = 0; i < x.length; i++) outBytes.push(x[i] & 255) }
+            else outBytes.push((+x) & 255)
+          },
+          flush: function () {}, close: function () {},
+        }
+      },
+      getInputStream: function () {
+        if (outBytes !== null) {
+          var s = ''
+          for (var i = 0; i < outBytes.length; i++) s += String.fromCharCode(outBytes[i])
+          body = s
+          outBytes = null
+        }
+        return mkBytesStream(load().bytes || [])
+      },
+      getResponseCode: function () { return load().statusCode },
+      getHeaderField: function (n) {
+        var h = load().headers || {}
+        var k = String(n).toLowerCase()
+        for (var key in h) if (key.toLowerCase() === k) return h[key]
+        return null
+      },
+      getContent: function () { return load().bytes || [] },
+      getURL: function () { return String(rawUrl) },
+      disconnect: function () {}, close: function () {},
     }
   }
   g.Packages = {
@@ -279,6 +457,14 @@ const BOOTSTRAP = `;(function (g) {
     // 同一份实现（脚本两种写法在真实源里都有；BOOTSTRAP 是模板字符串，注释里不能出现反引号）。
     org: { jsoup: { Jsoup: { parse: function (html) { return mkElem(String(html)) } } } },
     java: {
+      net: {
+        URL: function (u) {
+          this._url = String(u)
+          this.openConnection = function () { return mkUrlConnection(this._url) }
+          this.toString = function () { return this._url }
+          this.valueOf = function () { return this._url }
+        },
+      },
       io: {
         ByteArrayInputStream: function (bytes) { return mkBytesStream(bytes) },
         ByteArrayOutputStream: function () {
@@ -296,9 +482,11 @@ const BOOTSTRAP = `;(function (g) {
       lang: {
         // new Packages.java.lang.String(bytes, 'UTF-8') → String(obj) 走 valueOf/toString 还原文本
         String: function (bytes, charset) {
-          const s = JSON.parse(call('__pkg.b2s', ser({ bytes: bytes, charset: charset || 'UTF-8' })))
+          const s = JSON.parse(callHost('__pkg.b2s', ser({ bytes: bytes, charset: charset || 'UTF-8' })))
           return { toString: function () { return s }, valueOf: function () { return s } }
         },
+        // 海棠搜书 loginUrl 的延迟检测用它取时间戳；vm 内 Date 与宿主时钟同源
+        System: { currentTimeMillis: function () { return Date.now() } },
       },
       util: {
         Arrays: {
@@ -338,7 +526,7 @@ const BOOTSTRAP = `;(function (g) {
               doFinal: function (data) {
                 if (st.key === null || st.iv === null) throw new Error('Cipher 未 init')
                 if ((st.mode | 0) !== 2) throw new Error('v1 仅实现解密（DECRYPT_MODE）')
-                return JSON.parse(call('__pkg.aes', ser({ key: st.key, iv: st.iv, data: data })))
+                return JSON.parse(callHost('__pkg.aes', ser({ key: st.key, iv: st.iv, data: data })))
               },
             }
           },
@@ -365,7 +553,7 @@ const BOOTSTRAP = `;(function (g) {
                 let data = []
                 for (const p of st.parts) data = data.concat(p)
                 st.parts = []
-                return JSON.parse(call('__pkg.hmac', ser({ algo: a, key: st.key, data: data })))
+                return JSON.parse(callHost('__pkg.hmac', ser({ algo: a, key: st.key, data: data })))
               },
             }
           },
@@ -406,6 +594,43 @@ const BOOTSTRAP = `;(function (g) {
       util: {
         Base64: { decode: sync('base64DecodeToByteArray') },
       },
+      // 登录面脚本：CookieManager.getInstance().getCookie(u) 与
+      // CookieStore.setCookie(u, ck)——同一张 HTTP jar（见上面 cookieJarGet/Set）。
+      webkit: {
+        CookieManager: { getInstance: function () { return cookieManager } },
+      },
+    },
+    io: {
+      legado: {
+        app: {
+          help: {
+            http: {
+              CookieStore: {
+                getCookie: cookieJarGet,
+                setCookie: cookieJarSet,
+              },
+              // 登录校验脚本的响应替换形态：new Packages.io.legado.app.help.http.StrResponse(url, body)
+              // （爱丽丝书屋/点众阅读/聚合书库）。两端契约是 login-check 认的 __host:'response' + __data。
+              StrResponse: function (url, body) {
+                this.__host = 'response'
+                this.__data = {
+                  url: String(url === null || url === undefined ? '' : url),
+                  body: body === null || body === undefined ? '' : String(body),
+                  statusCode: 200, headers: {}, cookies: {}, contentType: '', charset: '',
+                }
+                var self = this
+                this.url = function () { return self.__data.url }
+                this.body = function () { return self.__data.body }
+                this.code = function () { return 200 }
+                this.statusCode = function () { return 200 }
+                this.headers = function () { return materialize({ __host: 'map', entries: {} }) }
+                this.header = function () { return '' }
+                this.cookies = function () { return materialize({ __host: 'map', entries: {} }) }
+              },
+            },
+          },
+        },
+      },
     },
   }
   // 未知包路径**如实点名**（上游 Rhino 的 Packages 是惰性命名空间：取到名字不炸、用到才炸——本代理同语义）。
@@ -428,6 +653,7 @@ const BOOTSTRAP = `;(function (g) {
     return new Proxy(obj, {
       get: function (t, k) {
         if (typeof k === 'symbol' || k === 'toString' || k === 'valueOf') return t[k]
+        if (k === '__pkgPath') return path
         var next = path === '' ? String(k) : path + '.' + String(k)
         if (k in t) {
           var v = t[k]
@@ -438,6 +664,58 @@ const BOOTSTRAP = `;(function (g) {
     })
   }
   g.Packages = pkgWrap(g.Packages, '')
+  // pkgWrap 只包对象；String/URL/流这几个函数类拿不到 __pkgPath。把已挂载的函数类路径钉成
+  // 一张小表，importClass 才能按简单名绑定（对象类由 pkgWrap 的 __pkgPath 自报）。
+  ;[
+    ['java.lang.String', g.Packages.java.lang.String],
+    ['java.net.URL', g.Packages.java.net.URL],
+    ['java.io.ByteArrayInputStream', g.Packages.java.io.ByteArrayInputStream],
+    ['java.io.ByteArrayOutputStream', g.Packages.java.io.ByteArrayOutputStream],
+  ].forEach(function (pair) {
+    if (pair[1] !== null && pair[1] !== undefined) pair[1].__pkgPath = pair[0]
+  })
+  // Rhino 的 JavaImporter / importPackage / loadClass：只注入已挂载的 Packages 路径。
+  // with (Importer) 依赖 sloppy 作用域（书源脚本按 sloppy 执行），作用域对象就是本函数返回的普通对象。
+  const pkgAt = function (path) {
+    var obj = g.Packages
+    for (var i = 0; i < path.length; i++) {
+      if (obj === null || obj === undefined) return undefined
+      obj = obj[path[i]]
+    }
+    return obj
+  }
+  const JavaImporter = function () {
+    var scope = {}
+    for (var i = 0; i < arguments.length; i++) {
+      var p = arguments[i]
+      var path = p && p.__pkgPath
+      if (path === undefined) continue
+      var pkg = pkgAt(path === '' ? [] : String(path).split('.'))
+      if (pkg === null || pkg === undefined) continue
+      var keys = Object.keys(pkg)
+      for (var j = 0; j < keys.length; j++) scope[keys[j]] = pkg[keys[j]]
+    }
+    return scope
+  }
+  g.JavaImporter = JavaImporter
+  g.importPackage = function (p) {
+    var s = JavaImporter(p)
+    for (var k in s) g[k] = s[k]
+  }
+  // Rhino 的 importClass 把类绑到当前作用域的简单名（不是只把类原样返回）。Java 类名首字母
+  // 大写、包名不是——这里只收已挂载的类；包路径与未挂载路径如实拒绝/留给惰性代理点名。
+  g.importClass = function (cls) {
+    var path = cls && cls.__pkgPath
+    if (typeof path !== 'string' || path === '') return cls
+    var parts = path.split('.')
+    var name = parts[parts.length - 1]
+    if (!/^[A-Z]/.test(name)) throw new Error('importClass 需要已挂载的类：' + path)
+    var resolved = pkgAt(parts)
+    if (resolved === null || resolved === undefined) return cls
+    g[name] = resolved
+    return cls
+  }
+  g.loadClass = function (path) { return pkgAt(String(path).split('.')) }
   const log = function (kind) {
     return function () {
       try { call(kind, ser([].slice.call(arguments))) } catch (e) {}
@@ -473,6 +751,8 @@ const BOOTSTRAP = `;(function (g) {
       text: function () { return all().text() },
       html: function () { return out.length > 0 ? out[0].html() : '' },
       select: function (rule) { return wrapElems(all().select(rule)) },
+      selectFirst: function (rule) { return all().selectFirst(rule) },
+      hasClass: function (c) { return all().hasClass(c) },
       hasAttr: function (n) { var a = all().attr(n); return a !== '' && a !== undefined },
       // 集合的 remove()：没有 owner 的集合（临时聚合）背后没有可回写的片段 → 如实抛——
       // 静默 no-op 等于把脏节点当已净化交给正文。
@@ -500,6 +780,11 @@ const BOOTSTRAP = `;(function (g) {
     s.text = function () { return elemOps('text', { html: box.html }) }
     s.html = function () { return elemOps('html', { html: box.html }) }
     s.select = function (rule) { return wrapElems(elemOps('select', { html: box.html, rule: String(rule) }), { box: box, rule: String(rule) }) }
+    s.selectFirst = function (rule) { return s.select(rule).first() }
+    s.hasClass = function (c) {
+      var cls = String(s.attr('class') || '')
+      return (' ' + cls + ' ').indexOf(' ' + String(c) + ' ') > -1
+    }
     s.toArray = function () { return wrapElems(elemOps('split', { html: box.html })) }
     s.size = function () { return s.toArray().length }
     s.get = function (i) { var a = s.toArray(); return a[i] !== undefined ? a[i] : mkElem('') }
@@ -518,6 +803,8 @@ const BOOTSTRAP = `;(function (g) {
     connect: connect,
     post: post,
     head: head,
+    webView: webView,
+    webViewGetSource: webView,
     log: log('console.log'),
     toast: function(){}, longToast: function(){}, copyText: function(){},
     startBrowser: function(){}, open: function(){}, openUrl: function(){},
@@ -526,10 +813,10 @@ const BOOTSTRAP = `;(function (g) {
     createSymmetricCrypto: function (transformation, key, iv) {
       return {
         decryptStr: function (data) {
-          return JSON.parse(call('aesBase64DecodeToString', ser([String(data), String(key), String(transformation || 'AES/CBC/PKCS5Padding'), String(iv || '')])))
+          return JSON.parse(callHost('aesBase64DecodeToString', ser([String(data), String(key), String(transformation || 'AES/CBC/PKCS5Padding'), String(iv || '')])))
         },
         decrypt: function (data) {
-          return JSON.parse(call('aesDecryptToBytes', ser([String(data), String(key), String(transformation || 'AES/CBC/PKCS5Padding'), String(iv || '')])))
+          return JSON.parse(callHost('aesDecryptToBytes', ser([String(data), String(key), String(transformation || 'AES/CBC/PKCS5Padding'), String(iv || '')])))
         },
         encryptStr: function () { throw new Error('java.createSymmetricCrypto().encryptStr 不支持：v1 仅实现正文解密形态') },
       }
@@ -538,6 +825,17 @@ const BOOTSTRAP = `;(function (g) {
   // 同步方法名单从协议表派生（js-protocol.SANDBOX_MOUNTS，经 __init__ 注入）——
   // 加一个 java 方法只改表一行，此处零改动；ajax 为 async 走上面的特制包装，不在名单内
   d.mounts.javaSync.forEach(function (n) { g.java[n] = sync(n) })
+  // java.get 双形态：单参 = 源变量 getter（同步名单）；双参 = HTTP GET（上游
+  // JsExtensions.get(url, headers) 返回 Connection.Response）。按**实参个数**分派：
+  // java.get(url, undefined) 仍是双参 HTTP，按值判会把显式空头误当变量 getter。
+  // HTTP 形态走同步 worker，主线程先抛哨兵换道——与 ajax/downloadFile 同一套同步桥。
+  const getVar = g.java.get
+  g.java.get = function (key, headers) {
+    if (arguments.length <= 1) return getVar(key)
+    return getHttp.apply(null, arguments)
+  }
+  // Packages.java.util.UUID.randomUUID（上游 Java 互操作；真实源用于生成请求 id）
+  g.Packages.java.util.UUID = { randomUUID: function () { return g.java.randomUUID() } }
   // getElements/getElement 返回值包成元素包装对象（.attr/.select/.toArray 可用）——
   // 宿主侧仍按 {html,text} JSON 序列化，包装在沙箱内完成
   ;['getElements', 'getElement'].forEach(function (n) {
@@ -553,13 +851,31 @@ const BOOTSTRAP = `;(function (g) {
   // 宿主桩名单：只放本仓真没有对应实现的名字（书源会调、但需安卓宿主/WebView/字体栈）。
   // 曾把协议表已有真实现的摘要/HMAC 族误列在此、被本循环覆盖成抛错桩（协议表测试全绿而脚本一调就报
   // 「需要安卓宿主环境」）——现由普查面 C 钉住不许复发。
-  ;['webView','startBrowserAwait','refreshTocUrl','ajaxAll','createAsymmetricCrypto',
-    'aesBase','queryTTF','queryBase','replaceFont','androidId',
+  ;['startBrowserAwait','refreshTocUrl','ajaxAll','createAsymmetricCrypto',
+    'aesBase','queryTTF','queryBase','replaceFont',
     'createSign'].forEach(function (n) {
     g.java[n] = function () { throw new Error('java.' + n + ' 不支持：需要安卓宿主环境（WebView/加密/系统服务无法仿真）') }
   })
+  // 设备 ID：上游 Settings.Secure.ANDROID_ID；本仓用数据根 generation 一次的稳定 ID（不随机冒充）
+  g.java.androidId = function () {
+    if (!d.deviceId) throw new Error('java.androidId 需要宿主设备 ID（ctx.deviceId 未接线）')
+    return d.deviceId
+  }
   g.cookie = {}
   d.mounts.cookie.forEach(function (p) { g.cookie[p.key] = sync(p.name) })
+  // CookieStore.mapToCookie(Map)：Java Map 形（response.cookies() 的产物）→ k=v; … 串；
+  // 空表回 null（上游同口径）。纯值变换，留在 vm 内，不进协议表。
+  g.cookie.mapToCookie = function (map) {
+    if (map === null || map === undefined) return null
+    var keys = typeof map.keySet === 'function' ? map.keySet() : Object.keys(map)
+    var parts = []
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i]
+      var v = typeof map.get === 'function' ? map.get(k) : map[k]
+      if (v !== null && v !== undefined) parts.push(String(k) + '=' + String(v))
+    }
+    return parts.length === 0 ? null : parts.join('; ')
+  }
   // cache（进程内键值表最小仿真——按源隔离，搜索面写、目录面读的跨面形态）
   g.cache = {}
   d.mounts.cache.forEach(function (p) { g.cache[p.key] = sync(p.name) })
@@ -580,6 +896,19 @@ const BOOTSTRAP = `;(function (g) {
       throw new Error('org.' + String(p) + ' 不支持：需要安卓宿主环境')
     },
   })
+  // 浏览器基础全局：部分书源脚本用 atob/btoa 处理二进制串（eval 已允许，这两个补上）
+  g.atob = function (s) {
+    var b = sync('base64DecodeToByteArray')(String(s))
+    var out = ''
+    for (var i = 0; i < b.length; i++) out += String.fromCharCode(b[i])
+    return out
+  }
+  g.btoa = function (s) {
+    var str = String(s)
+    var b = []
+    for (var i = 0; i < str.length; i++) b.push(str.charCodeAt(i) & 255)
+    return sync('base64EncodeBytes')(b)
+  }
   g.console = { log: log('console.log'), error: log('console.error') }
   g.__d__ = d
   g.__src__ = { key: d.source, bookSourceUrl: d.source, bookSourceName: d.sourceName || '',
@@ -587,13 +916,18 @@ const BOOTSTRAP = `;(function (g) {
     bookSourceComment: d.sourceComment || '', loginUrl: '',
     header: d.header || '{}',
     getKey: function () { return d.source },
-    // getLoginInfoMap：登录信息表（用户在 loginUi 录入的键值）。我们无 loginUi——
-    // 返回空表如实仿真（脚本取不到配置走默认分支；不伪造假配置）
-    getLoginInfoMap: function () { return {} },
+    // 登录面投影：服务层供出 loginInfo；未接线时空。形状先按上游 Java Map / String 给，
+    // 让脚本的 info.get(...) / source.getLoginHeader() 不再因 TypeError 整段炸。
+    getLoginHeader: function () { return d.loginHeader || '' },
+    getLoginInfoMap: function () { return materialize({ __host: 'map', entries: d.loginInfo || {} }) },
     toString: function () { return d.source }, valueOf: function () { return d.source } }
   // 源变量垫片方法（getVariable/setVariable/get/put）同样从协议表派生
   d.mounts.source.forEach(function (p) { g.__src__[p.key] = sync(p.name) })
-  g.result = d.resultJson
+  g.result = d.resultHost !== null && d.resultHost !== undefined
+    ? materialize(d.resultHost)
+    : d.resultMap !== null && d.resultMap !== undefined
+      ? materialize({ __host: 'map', entries: d.resultMap })
+      : d.resultJson
     // JSON 页/条目：result 按解析后的对象绑定（字段访问形态）
     ? (function () { try { return JSON.parse(d.resultJson) } catch (e) { return d.result } })()
     : (d.resultKind === 'nodes' && d.resultCtx === 'list')
@@ -602,6 +936,9 @@ const BOOTSTRAP = `;(function (g) {
       : (d.resultKind === 'nodes' || (d.resultKind === 'page' && /<[a-zA-Z]/.test(d.result)))
         ? g.__mkElem__(d.result)
         : d.result
+  // 函数体形态（代码里有顶层 return/await）的 result 首参取的是 __d__.result 原始串；loginCheckJs
+  // 的 result 是响应对象，两种形态必须同值——故把原始串换回物化后的 host（脚本形态本来就看 g.result）。
+  if ((d.resultHost !== null && d.resultHost !== undefined) || (d.resultMap !== null && d.resultMap !== undefined)) d.result = g.result
   // book/chapter 是服务层按面注入的**镜像**，这里补齐脚本要调的方法面（setType/getVariable 等）：
   // type 落回镜像自身字段（本次调用内可读，落库不在本层职责）；variable 用镜像自带的局部表，
   // 不与源级变量表混用——book 级与 source 级是两个存储，合并会把用户级开关串味。本仓没有 Book 级
@@ -617,6 +954,10 @@ const BOOTSTRAP = `;(function (g) {
     t.getName = function () { return String(t.name ?? t.title ?? '') }
     t.getBookUrl = function () { return String(t.bookUrl ?? '') }
     t.getOrigin = function () { return String(t.origin ?? t.baseUrl ?? d.source) }
+    // chapter.isVip()/isVolume()/isPay()（目录 ruleToc 标记折出的实体字段；非章节实体不挂也不冒充）
+    if (t.vip !== undefined) t.isVip = function () { return t.vip === true }
+    if (t.volume !== undefined) t.isVolume = function () { return t.volume === true }
+    if (t.pay !== undefined) t.isPay = function () { return t.pay === true }
     return t
   }
   g.book = mkHostObj(d.book)
@@ -634,7 +975,9 @@ const BOOTSTRAP = `;(function (g) {
  * 在 node:vm 受限上下文中执行用户 JS 片段（`js:` 前缀段 / `<js>…</js>` 内联段两种形态；
  * 链尾没有 `(…)` 切法，见 parse.ts 的 `parseBranch`）。
  *
- * - 上下文 codeGeneration:{strings:false,wasm:false}：eval / Function 构造器一律 EvalError。
+ * - 上下文 codeGeneration:{strings:true,wasm:false}：eval / Function 在 vm 内可用，
+ *   但宿主入口 `__host_call__` 已锁死、宿主帧通道（Error.prepareStackTrace）已锁；vm 是纵深防御层，
+ *   不是 OS 沙箱（见矩阵 h-sandbox-escape-defense）。
  * - wrapper 为 async IIFE：顶层 `await` 可用；单次 `vm.runInContext` 同时覆盖编译与同步段
  *   （vm timeout 杀死 while(true){} 这类同步死循环），异步总时长由外层 Promise.race 硬超时约束
  *   （timer 已 unref，不拖住事件循环）。
@@ -656,7 +999,7 @@ export async function evalJs(
   const timeout = Math.max(1, ctx.jsTimeoutMs ?? DEFAULT_JS_TIMEOUT_MS)
   // 幂等挂载进程级 unhandledRejection 防线（多次调用只挂一次；挂上后常驻至插件 dispose）
   ensureUnhandledGuard()
-  const session = opts?.session ?? processSession
+  const session = opts?.session ?? ctx.session ?? processSession
   // 变量读链的 source 层（四级读链的最外级）：与 source.get/put 同一张按源隔离的表。用 peek
   // （非建档）而不是 sourceVars()——后者一调就建表，会改掉「从未设置」的语义；惰性取值还顺带
   // 覆盖「同一次调用里先 source.put 再 java.get」的形态。
@@ -693,9 +1036,13 @@ export async function evalJs(
   // 复用主线程的 init 会让 worker 里的 ajax 包装再抛一次哨兵。
   const initOf = (syncAjax: boolean): string => JSON.stringify({
     result: pageRaw, resultKind: host.resultKind ?? '', resultJson,
+    resultHost: host.resultHost ?? null,
+    resultMap: host.resultMap ?? null,
     resultCtx: host.resultCtx ?? 'value',
+    deviceId: ctx.deviceId ?? '',
     baseUrl: ctx.baseUrl ?? '', source: ctx.source ?? '',
     key: host.key ?? '', page: host.page ?? 1, header: host.header ?? '{}',
+    loginInfo: ctx.loginInfo ?? {}, loginHeader: ctx.loginHeader ?? '',
     // 源实体字段（脚本可见的 `source.bookSourceComment` / `source.bookSourceName`）：只投影脚本真读到的
     sourceComment: ctx.sourceComment ?? '', sourceName: ctx.sourceName ?? '',
     // 沙箱全局 `src` = 当前页面原文（html 优先；纯 JSON 页给序列化文本——与 host.result 的
@@ -723,7 +1070,7 @@ export async function evalJs(
   try {
     const context = vm.createContext(
       { __host_call__: call, __init__: init } as unknown as vm.Context,
-      { codeGeneration: { strings: false, wasm: false } },
+      { codeGeneration: { strings: true, wasm: false } },
     )
 
     try {
@@ -749,7 +1096,7 @@ export async function evalJs(
     // 同名参数（真源有 `let page = java.get("page")` 的重声明形态，参数位会撞 Identifier already declared）。
     // **非严格模式（钉死）**：书源脚本按 sloppy 语义执行，`next = []` 这类未声明赋值就是写全局，
     // 真实源大量依赖（现库 18/214 源某处规则串含 `next = [`，2026-09-28 按 raw 扫、判据不限首行）。
-    // 逃逸防御不靠严格模式：vm realm 隔离 + codeGeneration 关闭 + 宿主入口锁死才是边界，见 BOOTSTRAP 顶注。
+    // 逃逸防御不靠严格模式：vm realm 隔离 + 宿主入口锁死才是边界（eval 允许，但不跨 realm），见 BOOTSTRAP 顶注。
     // wrapped 文本在 evalJs 顶部构造（与 worker 共用同一份）。
 
     let started: unknown
@@ -829,17 +1176,19 @@ function wrappedFormOf(code: string): string {
 // evalJs 捕获后换 worker 重跑同一段（见 needsSyncBridge，请求没发出去，不多打站点）。
 // worker 里的 __host_call__ 把 (name, argsJson) 写进请求 SAB 后 Atomics.wait 阻塞，主线程经
 // message 唤醒后用同一个 `call` 异步服务（fetch / 引擎递归 / console / 元素桥），响应回写 + notify。
-// 逃逸防御不变：同一份 BOOTSTRAP + vm codeGeneration 锁死，SAB 上只有 JSON 字符串。超时双闸：
+// 逃逸防御不变：同一份 BOOTSTRAP + 宿主入口锁死 + Error.prepareStackTrace 已锁（eval 允许；vm 是
+// 纵深防御层，不是 OS 沙箱），SAB 上只有 JSON 字符串。超时双闸：
 // worker 内 vm timeout 杀同步死循环，主线程 Promise.race（timeout + 5s）后 terminate。
 // worker 代码以字符串交付（tsdown 打包后无独立文件可解析），BOOTSTRAP/init/code/wrapped 全走
 // workerData，不产生第二份引导抄本；唯一无法共用的是 runAsScript（见 WORKER_SRC 内注释）。
 
-/** 路由启发式（**只影响性能与稳健性，不影响语义**——语义由桥给）。刻意过近似而不求精确，三支：
- *  ① `\.ajax\s*\(` 认任何 `.ajax(`；② `downloadFile\s*\(`（与 ajax 同款的哨兵桥，见 js-protocol.ts）；
- *  ③ `java\s*\[` 认任何对 java 桥的下标访问。放宽的动机不只是省一趟白跑：哨兵靠「抛出」传递，
- *  脚本自己的 try/catch 会在 vm 内把它吞掉——现实的别名写法直接进 worker，压根走不到抛哨兵那步。
+/** 路由启发式（**只影响性能与稳健性，不影响语义**——语义由桥给）。刻意过近似而不求精确：
+ *  ① `\.ajax\s*\(` 认任何 `.ajax(`；② `downloadFile\s*\(`（与 ajax 同款的哨兵桥）；
+ *  ③ `java\s*\[` 认任何对 java 桥的下标访问；④ 其余手工挂载的同步网络桥（connect/post/head/
+ *  webView/webViewGetSource 与双参 get、URL.openConnection）必须逐个列出——它们在主线程抛哨兵，
+ *  脚本自己的 try/catch 会把哨兵吞掉；只靠哨兵兜底等于让 catch 分支拿到 undefined。
  *  仍漏的只有真正间接形态（解构、with）。 */
-const SYNC_WORKER_RE = /\.ajax\s*\(|downloadFile\s*\(|java\s*\[/
+const SYNC_WORKER_RE = /\.ajax\s*\(|downloadFile\s*\(|java\s*\[|java\s*\.\s*(?:connect|post|head|webView|webViewGetSource)\s*\(|java\s*\.\s*get\s*\([^)]*,|openConnection\s*\(/
 const SAB_REQ_BYTES = 4 * 1024 * 1024
 const SAB_RESP_BYTES = 16 * 1024 * 1024
 
@@ -897,7 +1246,7 @@ function runAsScript(code, wrapped, context, timeout) {
 ;(function () {
   const context = vm.createContext(
     { __host_call__: hostCall, __init__: init },
-    { codeGeneration: { strings: false, wasm: false } },
+    { codeGeneration: { strings: true, wasm: false } },
   )
   try {
     vm.runInContext(bootstrap, context, { timeout })
@@ -1048,7 +1397,7 @@ function makeHostCall(
     // Packages.* 的宿主重活（__pkg.*）：PNG 解码 / AES-CBC / HMAC / 字节→串——同 __elem 纪律，
     // 不进协议表（它是 Packages 包路径面，不是 java.* 方法），返回纯 JSON
     if (name.startsWith('__pkg.')) {
-      return JSON.stringify(pkgHostOp(name.slice('__pkg.'.length), JSON.parse(argsJson))) ?? 'null'
+      return JSON.stringify(pkgHostOp(name.slice('__pkg.'.length), JSON.parse(argsJson), deps)) ?? 'null'
     }
     const args: unknown[] = JSON.parse(argsJson)
     const out = invokeJavaMethod(deps, name, args)
@@ -1142,7 +1491,7 @@ function elemHostOp(op: string, payload: { html?: unknown; name?: unknown; rule?
  *  否则挡不住它守的那次分配（膨胀 + `height × rowBytes` 的图像缓冲 + 逐像素 ARGB 数组）。 */
 const MAX_PNG_PIXELS = 4_000_000
 
-function pkgHostOp(op: string, payload: Record<string, unknown>): unknown {
+function pkgHostOp(op: string, payload: Record<string, unknown>, deps: BridgeDeps): unknown {
   const toBytes = (v: unknown): Uint8Array => {
     if (!Array.isArray(v)) throw new Error('字节载荷需为 number[]')
     return Uint8Array.from(v.map((n) => (Number(n) || 0) & 0xff))
@@ -1173,25 +1522,44 @@ function pkgHostOp(op: string, payload: Record<string, unknown>): unknown {
     }
     case 'b2s':
       return javaDecode(toBytes(payload.bytes), typeof payload.charset === 'string' ? payload.charset : 'UTF-8')
+    case 'cookieGet': {
+      const jar = deps.ctx.httpCookies
+      if (jar === undefined) throw new Error('cookie jar 未接线：该源未提供 HTTP cookie jar')
+      return jar.headerFor(String(payload.url ?? ''))
+    }
+    case 'cookieSet': {
+      const jar = deps.ctx.httpCookies
+      if (jar === undefined) throw new Error('cookie jar 未接线：该源未提供 HTTP cookie jar')
+      jar.setCookie(String(payload.url ?? ''), String(payload.cookie ?? ''))
+      return null
+    }
+    case 'cookieRemoveSession': {
+      const jar = deps.ctx.httpCookies
+      if (jar === undefined) throw new Error('cookie jar 未接线：该源未提供 HTTP cookie jar')
+      jar.removeSessionCookies()
+      return null
+    }
     default:
       throw new Error(`未知 Packages 桥操作：${op}`)
   }
 }
 
-/** cookie 垫片存储：按源隔离（真实源 cookie.removeCookie(url) 后再 ajax 的形态——最小仿真，
- *  不做真实 CookieJar/域匹配——那是无头浏览器的活，我们如实只做脚本可见的键值）。
- *  存储本体归 SourceSession：这两个 Map 是进程级缺省实例的后仓。 */
+/** cookie 垫片存储：按源隔离的脚本键值表（真实源 cookie.removeCookie(url) 后再 ajax 的形态）。
+ *  它**不是**请求层的 CookieJar——域/路径/过期匹配归 `services/cookies.ts`，两者不是一张表。
+ *  存储本体归 SourceSession：这里只是进程级缺省实例的后仓。 */
 const COOKIE_JARS = new Map<string, Map<string, string>>()
 
 /** 源级状态的四张进程级表（本仓按源建档）：COOKIE_JARS（cookie 垫片）、SOURCE_VARS（source.put/get
  *  的键值表）、SOURCE_STRINGS（source.setVariable/getVariable 的单串槽）、CACHE_STORES（cache 垫片）。
  *  四者必须分开——曾把串槽与键值表塞同一张 Map，setVariable 顺手 clear() 整表（见 SourceSession 注释）。
- *  全部进程内仿真，不落盘（跨重启落盘登记在矩阵 h-source-variable）。 */
+ *  这组是**进程内缺省实现**；生产组合根注入 `services/source-session.ts` 的 `FileSourceSession`
+ *  （source-state.json，跨重启；矩阵 `h-source-variable-persistence`）。 */
 const SOURCE_VARS = new Map<string, Map<string, string>>()
 
 /**
  * 源会话：脚本可见的按源状态——cookie 垫片与源变量。显式 interface 而非裸模块 Map（后者无 reset、
- * 跨服务实例永生，跨源污染用例写不出来）：生产缺省 processSession，测试注入 createSourceSession()。
+ * 跨服务实例永生，跨源污染用例写不出来）。缺省 processSession（进程内）；生产组合根注入
+ * FileSourceSession，测试注入 createSourceSession() 隔离实例。
  */
 export interface SourceSession {
   /** 某源的 cookie 垫片（键值表，缺省建档） */
@@ -1205,9 +1573,13 @@ export interface SourceSession {
    *  把 source.put 的键全清了，getVariable 还返回整表 JSON 壳）。 */
   sourceString(sourceKey: string): string
   setSourceString(sourceKey: string, value: string | null): void
-  /** 某源的 cache 垫片表（缓存本是全局表；本仓按源隔离是在册裁决，见矩阵 h-cache-ttl）。
+  /** 某源的 cache 垫片表（缓存本是全局表；按源隔离是 SourceSession 的既定口径；TTL 未接见矩阵 h-cache-ttl）。
    *  独立于键值表——曾借 sourceVars 加 `cache:` 前缀，脚本用 `source.get('cache:x')` 就串味。 */
   cacheStore(sourceKey: string): Map<string, string>
+  /** 可选：删源时清掉该源的全部状态（文件实现有；进程内实现无） */
+  forget?(sourceKey: string): void
+  /** 可选落盘收尾（内存实现无此方法） */
+  flush?(): void
 }
 
 /** 进程级三张表（生产）：按源建档、跨调用/跨服务实例存活——与旧实现同生命周期 */

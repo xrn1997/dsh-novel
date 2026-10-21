@@ -37,8 +37,8 @@ export default defineConfig([
     deps: {
       // 归属已由 neverBundle/alwaysBundle 全量表定，onlyBundle 关闭其白名单过滤并消掉构建期 hint
       onlyBundle: false,
-      neverBundle: (s) => s.startsWith('@deepseek-ai/'),
-      alwaysBundle: (s) => !s.startsWith('@deepseek-ai/'),
+      neverBundle: (s) => s.startsWith('@deepseek-ai/') || s === 'playwright-core',
+      alwaysBundle: (s) => !s.startsWith('@deepseek-ai/') && s !== 'playwright-core',
     },
   },
   {

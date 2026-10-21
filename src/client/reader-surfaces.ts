@@ -6,7 +6,8 @@
  * 而不是「各钮各记各的开合」。判据在此一处，四个 opener 不再各抄一份「先关别人」。
  *
  * 分工别混：阅读位置、时序与返回栈归 `client/reader-session.ts`；带遮罩的模态归
- * `client/views/dialog.tsx`（入架一问走那边）。本文件只答「此刻哪一角在场」与「换角时那一面怎么退场」。
+ * `client/views/dialog.tsx`（入架一问走那边）。本文件只答「此刻哪一角在场」「换角时那一面怎么退场」
+ * 与「模态同场时 Esc 归谁」（`escOwner`）。
  */
 
 /** 角落浮层的五个面。`supplement` = 注释面板（脚注/附录），它带一份载荷，载荷本身住视图 */
@@ -30,7 +31,8 @@ export function openSurface(current: ReaderSurface | null, opening: ReaderSurfac
   return { surface: next, supplement: exitOf(current, next) }
 }
 
-/** Esc：一视同仁全收，注释面板按「关闭」那条语义退场（两条入口不许分叉）。 */
+/** Esc 归浮层时（`escOwner` 判为 `surface`）：全收，注释面板按「关闭」那条语义退场
+ *  （两条入口不许分叉）。模态在场时调用方根本不安装这条监听，本函数不参与那场仲裁。 */
 export function closeAll(current: ReaderSurface | null): SurfaceChange {
   return { surface: null, supplement: exitOf(current, null) }
 }
@@ -38,6 +40,17 @@ export function closeAll(current: ReaderSurface | null): SurfaceChange {
 /** 面板自己退场而不表态阅读位置：注释面板里点到主序列就是这一条——那条返回项归这次跟随，
  *  由会话采/消费，面板不许再消费一次。 */
 export const dismissSurface = (): SurfaceChange => ({ surface: null, supplement: 'hide' })
+
+/** Esc 的归属：同场时模态先吃；只有浮层在场时是浮层的；都不在场就没人管。 */
+export type EscOwner = 'modal' | 'surface' | 'none'
+
+/** 同场时模态先吃 Esc；浮层的 surface 监听在模态在场时不安装。
+ *  为什么要这条仲裁：两条监听都挂在 document 上，同场时一次 Esc 会既关模态又走 `closeAll`——
+ *  注释面板那条还会消费返回项，把正文跳回引用处并落一笔进度。 */
+export function escOwner(surface: ReaderSurface | null, modalOpen: boolean): EscOwner {
+  if (modalOpen) return 'modal'
+  return surface === null ? 'none' : 'surface'
+}
 
 function exitOf(from: ReaderSurface | null, to: ReaderSurface | null): SupplementExit {
   if (from !== 'supplement' || to === 'supplement') return 'keep'

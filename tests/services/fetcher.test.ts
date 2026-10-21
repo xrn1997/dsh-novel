@@ -20,6 +20,7 @@ vi.mock('undici', () => ({
 
 import { createFetcher, decodeBody, effectiveUserAgent, headerOf } from '../../src/services/fetcher.js'
 import { FetchError, DecodeError } from '../../src/services/errors.js'
+import { CookieJar } from '../../src/services/cookies.js'
 import type { NovelSource } from '../../src/services/types.js'
 
 beforeEach(() => { proxyAgents.length = 0 })
@@ -30,6 +31,71 @@ function fakeFetch(handler: (url: string, init?: RequestInit) => { status?: numb
     return new Response(body, { status, headers })
   }
 }
+
+describe('retry option', () => {
+  it('retries non-2xx up to the extra attempts and returns the success', async () => {
+    let calls = 0
+    const f = createFetcher({
+      fetchImpl: fakeFetch(() => {
+        calls++
+        return { status: calls < 3 ? 500 : 200, body: 'ok' }
+      }),
+    })
+    const p = await f.fetchPage('https://a.test/x', { retry: 2 })
+    expect(calls).toBe(3)
+    expect(p.status).toBe(200)
+  })
+
+  it('throws the last HTTP failure when retries are exhausted', async () => {
+    let calls = 0
+    const f = createFetcher({
+      fetchImpl: fakeFetch(() => { calls++; return { status: 500, body: '' } }),
+    })
+    await expect(f.fetchPage('https://a.test/x', { retry: 1 })).rejects.toMatchObject({ name: 'FetchError', status: 500 })
+    expect(calls).toBe(2)
+  })
+
+  it('does not retry connection-layer failures', async () => {
+    let calls = 0
+    const f = createFetcher({
+      fetchImpl: async () => { calls++; throw new TypeError('fetch failed') },
+    })
+    await expect(f.fetchPage('https://a.test/x', { retry: 2 })).rejects.toBeInstanceOf(FetchError)
+    expect(calls).toBe(1)
+  })
+})
+
+describe('cookie jar', () => {
+  it('absorbs Set-Cookie and sends it on the next request', async () => {
+    const seen: Array<Record<string, string> | undefined> = []
+    const jar = new CookieJar()
+    const f = createFetcher({
+      cookieJar: jar,
+      fetchImpl: fakeFetch((_url, init) => {
+        seen.push(init?.headers as Record<string, string> | undefined)
+        return { body: 'ok', headers: { 'set-cookie': 'sid=1; Path=/' } }
+      }),
+    })
+    await f.fetchPage('https://a.test/x')
+    await f.fetchPage('https://a.test/y')
+    expect(seen[1]?.Cookie).toBe('sid=1')
+  })
+
+  it('explicit Cookie header wins over the jar', async () => {
+    let seen: Record<string, string> | undefined
+    const jar = new CookieJar()
+    jar.absorb('https://a.test/', ['sid=1; Path=/'])
+    const f = createFetcher({
+      cookieJar: jar,
+      fetchImpl: fakeFetch((_url, init) => {
+        seen = init?.headers as Record<string, string> | undefined
+        return { body: 'ok' }
+      }),
+    })
+    await f.fetchPage('https://a.test/x', { headers: { Cookie: 'manual=1' } })
+    expect(seen?.Cookie).toBe('manual=1')
+  })
+})
 
 describe('fetchPage', () => {
   it('2xx 返回 raw/finalUrl/contentType', async () => {
@@ -55,11 +121,26 @@ describe('fetchPage', () => {
     expect(seen?.redirect).toBe('manual')
     expect(p.status).toBe(302)
     expect(p.headers).toMatchObject({ location: 'https://i.pximg.net/a.png', 'x-origin-url': 'https://alt/a.png' })
-    // 缺省姿态照旧炸：例外只在那一个调用点开（`docs/adr/0015` 的订正括注）
+    // 缺省姿态照旧炸：例外只在那一个调用点开（`docs/adr/0015` 的 manual 例外）
     await expect(f.fetchPage('https://a.com/img', { method: 'HEAD' })).rejects.toMatchObject({ name: 'FetchError', status: 302 })
     // 这条桩**证不了** undici 真把 3xx 的状态与头透出来（那是 Node 侧行为，本机以本地 302 服务实测过：
     // `type: basic`、status 302、location 可读，不是浏览器那种 opaqueredirect 空壳）。
     // 这里钉的是本仓自己的两件事：请求确实带 manual 出站、非 2xx 在 manual 下不折叠成错误。
+  })
+  it('noFollow 姿态：带 redirect:manual 出站、3xx 返回、>=400 仍抛（java.get 的 jsoup 口径）', async () => {
+    let seen: RequestInit | undefined
+    const f = createFetcher({
+      fetchImpl: fakeFetch((_url, init) => {
+        seen = init
+        return { status: 302, body: '', headers: { location: '/next' } }
+      }),
+    })
+    const p = await f.fetchPage('https://a.com/x', { noFollow: true })
+    expect(seen?.redirect).toBe('manual')
+    expect(p.status).toBe(302)
+    const bad = createFetcher({ fetchImpl: fakeFetch(() => ({ status: 404, body: '' })) })
+    await expect(bad.fetchPage('https://a.com/x', { noFollow: true }))
+      .rejects.toMatchObject({ name: 'FetchError', status: 404 })
   })
   it('网络层异常 → FetchError', async () => {
     const f = createFetcher({ fetchImpl: async () => { throw new TypeError('fetch failed') } })
@@ -282,6 +363,10 @@ describe('decodeBody 解码链', () => {
   it('④ 声明 charset 覆盖（searchUrl 选项 charset 优先于 Content-Type/嗅探）', () => {
     expect(decodeBody(page(gbkHello, undefined), 'gbk')).toBe('你好')
     expect(decodeBody(page(gbkHello, 'text/html; charset=utf-8'), 'gbk')).toBe('你好')  // 覆盖错误的头
+  })
+  it('replaced 页忽略调用方声明的 charset（loginCheckJs 的替换正文是 UTF-8）', () => {
+    const replaced = { ...page(Buffer.from('替换正文', 'utf8')), charset: 'utf-8', replaced: true }
+    expect(decodeBody(replaced, 'gbk')).toBe('替换正文')
   })
   it('空串 charset 声明视为缺位（真实源 `charset=` 空值——此前必炸 DecodeError）', () => {
     // 声明缺位 → 嗅探链接管：meta charset=gbk 的页面照常解码，不再空串必炸

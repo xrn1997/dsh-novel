@@ -7,6 +7,7 @@ import { PageCache } from '../../src/services/cache.js'
 import { Shelf } from '../../src/services/shelf.js'
 import { SourceRegistry } from '../../src/services/sources.js'
 import { normalizeSource } from '../../src/services/normalize.js'
+import { fakeSourceRequest } from './fake-source-request.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
 import type { NovelSource } from '../../src/services/types.js'
 
@@ -57,7 +58,7 @@ describe('fetchSearchPage 的 bookUrlPattern 判定', () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage(DETAIL_BODY) })
     const r = await fetchSearchPage(src({
       searchUrl: `${BASE}/book/123/`, bookUrlPattern: 'https://s\\.com/book/\\d+/',
-    }), '书', f)
+    }), '书', fakeSourceRequest(f))
     expect(r.ok && r.shape).toBe('info')
     if (!r.ok || r.shape !== 'info') return
     expect(r.via).toBe('pattern')
@@ -65,26 +66,26 @@ describe('fetchSearchPage 的 bookUrlPattern 判定', () => {
   })
   it('部分命中不算命中（Kotlin matches = 整串；缺尾锚不许当成详情页）', async () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage(LIST_BODY) })
-    const r = await fetchSearchPage(src({ bookUrlPattern: 'https://s\\.com/search' }), '书', f)
+    const r = await fetchSearchPage(src({ bookUrlPattern: 'https://s\\.com/search' }), '书', fakeSourceRequest(f))
     expect(r.ok && r.shape).toBe('list')
     if (!r.ok || r.shape !== 'list') return
     expect(r.contexts).toHaveLength(2)
   })
   it('命中判定用**落地地址**（重定向后的 res.url，与对面 baseUrl=res.url 同口径）', async () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage(DETAIL_BODY, `${BASE}/book/123/`) })
-    const r = await fetchSearchPage(src({ bookUrlPattern: 'https://s\\.com/book/\\d+/' }), '书', f)
+    const r = await fetchSearchPage(src({ bookUrlPattern: 'https://s\\.com/book/\\d+/' }), '书', fakeSourceRequest(f))
     expect(r.ok && r.shape).toBe('info')
   })
   it('列表 0 条 + 无 pattern → info 回落（via empty-list，对面「列表为空,按详情页解析」）', async () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage('<html><body>无结果</body></html>') })
-    const r = await fetchSearchPage(src(), '书', f)
+    const r = await fetchSearchPage(src(), '书', fakeSourceRequest(f))
     expect(r.ok && r.shape).toBe('info')
     if (!r.ok || r.shape !== 'info') return
     expect(r.via).toBe('empty-list')
   })
   it('列表 0 条 + pattern 未命中 → 仍 0 条，不再回落详情页（对面守卫是 bookUrlPattern.isNullOrEmpty）', async () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage('<html><body>无结果</body></html>') })
-    const r = await fetchSearchPage(src({ bookUrlPattern: 'https://s\\.com/x/\\d+' }), '书', f)
+    const r = await fetchSearchPage(src({ bookUrlPattern: 'https://s\\.com/x/\\d+' }), '书', fakeSourceRequest(f))
     expect(r.ok && r.shape).toBe('list')
     if (!r.ok || r.shape !== 'list') return
     expect(r.contexts).toEqual([])
@@ -93,14 +94,14 @@ describe('fetchSearchPage 的 bookUrlPattern 判定', () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage(DETAIL_BODY) })
     const r = await fetchSearchPage(src({
       searchUrl: `${BASE}/book/123/`, ruleBookList: undefined, bookUrlPattern: undefined,
-    }), '书', f)
+    }), '书', fakeSourceRequest(f))
     expect(r.ok && r.shape).toBe('info')
   })
   it('缺 ruleBookList 且 pattern 未命中 → 也不是 RuleMissing：list 形态 0 条', async () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage(DETAIL_BODY) })
     const r = await fetchSearchPage(src({
       searchUrl: `${BASE}/book/123/`, ruleBookList: undefined, bookUrlPattern: 'https://x\\.y/z',
-    }), '书', f)
+    }), '书', fakeSourceRequest(f))
     expect(r.ok && r.shape).toBe('list')
     if (!r.ok || r.shape !== 'list') return
     expect(r.contexts).toEqual([])
@@ -109,7 +110,7 @@ describe('fetchSearchPage 的 bookUrlPattern 判定', () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage(DETAIL_BODY) })
     const r = await fetchSearchPage(src({
       searchUrl: `${BASE}/book/123/`, bookUrlPattern: 'https://s\\.com/book/\\d+/', ruleDetailName: undefined,
-    }), '书', f)
+    }), '书', fakeSourceRequest(f))
     expect(r.ok && r.shape).toBe('list')
     if (!r.ok || r.shape !== 'list') return
     expect(r.contexts).toEqual([])
@@ -117,7 +118,7 @@ describe('fetchSearchPage 的 bookUrlPattern 判定', () => {
   it('pattern 不是合法正则 → warn 点名 + 按未声明处理（列表照旧，不静默也不炸搜索）', async () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage(LIST_BODY) })
     const warns = await captureWarn(async () => {
-      const r = await fetchSearchPage(src({ bookUrlPattern: '([unclosed' }), '书', f)
+      const r = await fetchSearchPage(src({ bookUrlPattern: '([unclosed' }), '书', fakeSourceRequest(f))
       expect(r.ok && r.shape).toBe('list')
     })
     expect(warns.join('\n')).toMatch(/bookUrlPattern/)
@@ -127,14 +128,14 @@ describe('fetchSearchPage 的 bookUrlPattern 判定', () => {
     const r = await fetchSearchPage(src({
       searchUrl: `${BASE}/search?q={{key}},{"method":"POST","body":"s=1"}`,
       bookUrlPattern: 'https://s\\.com/search\\?q=.+',
-    }), '书', f)
+    }), '书', fakeSourceRequest(f))
     expect(r.ok && r.shape).toBe('info')
     if (!r.ok || r.shape !== 'info') return
     expect(r.bookUrl).toBe(`${BASE}/search?q=%E4%B9%A6,{"method":"POST","body":"s=1"}`)
   })
   it('info 的 bookUrl：重定向 = 落地地址（对面 isRedirect 分支）', async () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage(DETAIL_BODY, `${BASE}/book/123/`) })
-    const r = await fetchSearchPage(src({ bookUrlPattern: 'https://s\\.com/book/\\d+/' }), '书', f)
+    const r = await fetchSearchPage(src({ bookUrlPattern: 'https://s\\.com/book/\\d+/' }), '书', fakeSourceRequest(f))
     expect(r.ok && r.shape).toBe('info')
     if (!r.ok || r.shape !== 'info') return
     expect(r.bookUrl).toBe(`${BASE}/book/123/`)
@@ -146,14 +147,14 @@ describe('探针的 info 形态（与聚合搜索同一详情实现）', () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage(DETAIL_BODY) })
     const r = await probeSource(src({
       searchUrl: `${BASE}/book/123/`, bookUrlPattern: 'https://s\\.com/book/\\d+/',
-    }), f)
+    }), fakeSourceRequest(f))
     expect(r).toMatchObject({ ok: true, itemCount: 1, firstTitle: '剑来' })
   })
   it('空列表回落出的 info **不算 verified**：那是「这个词零命中」，照旧换词重试到判坏', async () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage(DETAIL_BODY) })
     const r = await probeSource(src({
       searchUrl: `${BASE}/book/123/`, ruleBookList: undefined,
-    }), f)
+    }), fakeSourceRequest(f))
     expect(r.ok).toBe(false)
     expect(r.error?.message).toMatch(/0 命中/)
   })

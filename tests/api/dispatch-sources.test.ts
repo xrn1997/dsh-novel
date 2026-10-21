@@ -215,7 +215,37 @@ describe('sources 面（后台任务版）', () => {
     const { value: after } = await (await fetch(`${base}/novel-api/sources`)).json() as any
     expect(after[0]).toMatchObject({ hasAuth: true, authExpired: false })
     expect(JSON.stringify(after)).not.toContain('SECRET')
+    // login-info 形态：只更新登录信息，不改 cookie/header（保留语义在 reading.test 有专测）
+    const r2 = await fetch(`${base}/novel-api/sources/${list[0].id}/auth`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ loginInfo: { user: 'LOGIN-SECRET' } }),
+    })
+    expect(r2.status).toBe(200)
+    expect((await r2.json() as any).value).toEqual({ auth: true })
+    const { value: after2 } = await (await fetch(`${base}/novel-api/sources`)).json() as any
+    expect(JSON.stringify(after2)).not.toContain('LOGIN-SECRET')
     await fetch(`${base}/novel-api/sources/${list[0].id}`, { method: 'DELETE' })
+  })
+  it('POST /sources/:id/auth loginAction → 按按钮名回传外链；未知按钮 400', async () => {
+    const job = await importAndDone([{
+      name: 'button.json',
+      text: JSON.stringify({
+        ...rawSource, bookSourceName: 'Btn', bookSourceUrl: 'https://btn.com',
+        loginUi: JSON.stringify([{ name: '打开', type: 'button', action: 'https://login.example/x' }]),
+      }),
+    }])
+    expect(job.phase).toBe('done')
+    const { value: list } = await (await fetch(`${base}/novel-api/sources`)).json() as any
+    const btn = list.find((s: any) => s.name === 'Btn')
+    expect(btn).toBeTruthy()
+    const r = await fetch(`${base}/novel-api/sources/${btn.id}/auth`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ loginAction: '打开' }),
+    })
+    expect(r.status).toBe(200)
+    expect((await r.json() as any).value).toEqual({ mode: 'external', url: 'https://login.example/x' })
+    const bad = await fetch(`${base}/novel-api/sources/${btn.id}/auth`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ loginAction: '不存在' }),
+    })
+    expect(bad.status).toBe(400)
   })
   it('未知路由 → 404 NotFound；方法不对 → 405', async () => {
     const r1 = await fetch(`${base}/novel-api/nope`)

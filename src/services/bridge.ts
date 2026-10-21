@@ -4,10 +4,10 @@ import type { EngineValue, Facet, RuleUsage } from '../engine/index.js'
 // runScript 深引（与 search-template 同口径）：header 规则求值走沙箱完成值语义，
 // 引擎 barrel 刻意不收 runScript（公开面只有 evaluate）——服务半第二个深引消费点。
 import { runScript } from '../engine/js-sandbox.js'
-import { engineFetch, engineFetchHead, engineFetchPost, engineFetchRaw } from './engine-fetch.js'
+import { engineFetch, engineFetchConn, engineFetchGet, engineFetchHead, engineFetchPost, engineFetchRaw } from './engine-fetch.js'
 import { headerOf, effectiveUserAgent } from './fetcher.js'
 import type { Fetcher } from './fetcher.js'
-import { absUrl, absUrlKeepOption } from './url.js'
+import { absUrl, absUrlKeepOption, stripUrlOption } from './url.js'
 import { parseObjectJson, stringTableOf } from './normalize.js'
 import { formatIntro } from './content.js'
 import { log } from './log.js'
@@ -124,6 +124,9 @@ export function engineContextOf(
     chapter?: Record<string, unknown>
     /** js 沙箱预算透传（EvalContext.jsTimeoutMs；缺省时引擎回退 DEFAULT_JS_TIMEOUT_MS） */
     jsTimeoutMs?: number
+    /** 登录面投影（source.getLoginInfoMap / getLoginHeader）：源 auth 或表单录入供出，缺省空。 */
+    loginInfo?: Record<string, string>
+    loginHeader?: string
   },
 ): {
   html?: string; json?: unknown; baseUrl: string; source: string
@@ -132,6 +135,19 @@ export function engineContextOf(
   fetchRaw: ReturnType<typeof engineFetchRaw>
   fetchPost: ReturnType<typeof engineFetchPost>
   fetchHead: ReturnType<typeof engineFetchHead>
+  fetchGet: ReturnType<typeof engineFetchGet>
+  fetchConn: ReturnType<typeof engineFetchConn>
+  evalWebJs: (code: string, baseUrl?: string) => Promise<string>
+  webView: (url: string) => Promise<string>
+  deviceId?: string
+  session?: import('../engine/js-sandbox.js').SourceSession
+  httpCookies?: {
+    headerFor(url: string): string
+    setCookie(url: string, raw: string): void
+    removeSessionCookies(): void
+  }
+  loginInfo?: Record<string, string>
+  loginHeader?: string
   /** java.getWebViewUA 用（口径见 src/engine/types.ts 的 EvalContext.userAgent） */
   userAgent?: () => string
   /** 脚本可见的源实体字段（见 src/engine/types.ts 的 EvalContext.sourceComment / sourceName） */
@@ -156,6 +172,10 @@ export function engineContextOf(
     fetchPost: engineFetchPost(fetcher, () => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs })),
     // java.head 的出站口：同一守门 fetcher 的 HEAD 姿态（不跟重定向，脚本读 3xx 的直链头）
     fetchHead: engineFetchHead(fetcher, () => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs })),
+    // java.get(url, headers) 的出站口：GET + 不跟重定向，返回 Response 数据面
+    fetchGet: engineFetchGet(fetcher, () => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs })),
+    // java.net.URL.openConnection 的出站口：跟重定向、原始字节；同一守门 fetcher
+    fetchConn: engineFetchConn(fetcher, () => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs })),
     // java.getWebViewUA 的口径：本仓真发出去的那条 UA（同步取，与 fetch 同一套静态头解析）
     userAgent: () => effectiveUserAgent(source),
     // 脚本可见的源实体字段：**按 raw 现读**，只投影脚本真读到的（对面脚本里的 source 是字段面
@@ -166,6 +186,41 @@ export function engineContextOf(
     ...(opts.book === undefined ? {} : { book: opts.book }),
     ...(opts.chapter === undefined ? {} : { chapter: opts.chapter }),
     ...(opts.jsTimeoutMs === undefined ? {} : { jsTimeoutMs: opts.jsTimeoutMs }),
+    ...(opts.loginInfo !== undefined
+      ? { loginInfo: opts.loginInfo }
+      : source.auth !== undefined && !source.auth.expired && source.auth.loginInfo !== undefined
+        ? { loginInfo: source.auth.loginInfo }
+        : {}),
+    ...(opts.loginHeader !== undefined
+      ? { loginHeader: opts.loginHeader }
+      : source.auth !== undefined && !source.auth.expired
+        && source.auth.headers !== undefined && Object.keys(source.auth.headers).length > 0
+        ? { loginHeader: JSON.stringify(source.auth.headers) }
+        : {}),
+    // 两个浏览器能力位始终在场（缺席时调用才点名）：能力位闸要求 ctx 的每个 d.ctx.* 都供得出
+    evalWebJs: (code: string, baseUrl?: string) => {
+      if (fetcher.webview === undefined) throw new Error('该源未提供 WebView 能力（fetcher.webview 缺失）')
+      return fetcher.webview.fetch(baseUrl ?? source.baseUrl, { webJs: code }).then((p) => p.html)
+    },
+    webView: (url: string) => {
+      if (fetcher.webview === undefined) throw new Error('该源未提供 WebView 能力（fetcher.webview 缺失）')
+      return fetcher.webview.fetch(url).then((p) => p.html)
+    },
+    ...(fetcher.deviceId === undefined ? {} : { deviceId: fetcher.deviceId }),
+    ...(fetcher.sourceSession === undefined ? {} : { session: fetcher.sourceSession }),
+    ...(fetcher.cookieJar === undefined ? {} : {
+      httpCookies: {
+        headerFor: (url: string) => fetcher.cookieJar!.headerFor(url),
+        // CookieManager/CookieStore.setCookie 收的是 **cookie 串**（`getCookie` 的原样回写，
+        // 常见 `a=1; b=2`），不是 Set-Cookie 头；整串塞给 absorb 会把第二个键当成属性丢掉。
+        setCookie: (url: string, raw: string) => {
+          const pairs = raw.split(';').map((s) => s.trim()).filter((s) => s !== '')
+            .filter((s) => !/^(?:path|domain|expires|max-age|secure|httponly|samesite)\s*=/i.test(s))
+          if (pairs.length > 0) fetcher.cookieJar!.absorb(url, pairs)
+        },
+        removeSessionCookies: () => fetcher.cookieJar!.removeSessionCookies(),
+      },
+    }),
   }
 }
 
@@ -194,18 +249,18 @@ export async function resolveHeaders(
   try {
     const outcome = await runScript({
       code,
-      baseUrl: source.baseUrl,
-      source: source.baseUrl,
-      // 规则脚本自身的网络能力：静态头打底（见上：不递归）。post/head/UA 与 fetch 同一个守门
-      // fetcher——沙箱那一扇门收 `EvalContext` 全部能力位之后，这里漏一个字段就是脚本里
-      // 「java.post 抛 ctx.fetchPost 缺失」的直接来源。
+      ...engineContextOf(fetcher, source, {
+        baseUrl: source.baseUrl,
+        ...(opts?.jsTimeoutMs === undefined ? {} : { jsTimeoutMs: opts.jsTimeoutMs }),
+      }),
+      // 头规则脚本的六个出站口用静态头打底（见上：不递归）；其余能力位、jsLib、userAgent
+      // 与源级求值同源——手拼第二份就会在新能力接入时漏掉（deviceId 就是这样漏到 headerRule 的）。
       fetch: engineFetch(fetcher, staticHeaders),
       fetchRaw: engineFetchRaw(fetcher, staticHeaders),
       fetchPost: engineFetchPost(fetcher, staticHeaders),
       fetchHead: engineFetchHead(fetcher, staticHeaders),
-      userAgent: () => effectiveUserAgent(source),
-      jsLib: source.rules.jsLib ?? undefined,
-      jsTimeoutMs: opts?.jsTimeoutMs,
+      fetchGet: engineFetchGet(fetcher, staticHeaders),
+      fetchConn: engineFetchConn(fetcher, staticHeaders),
       loc: { segmentIndex: 0, segmentRaw: rule },
       facet: 'rule',
       scriptForm: true,
@@ -399,41 +454,23 @@ export async function detailContextOf(
   try { return { html: text, json: JSON.parse(text) as unknown } } catch { return { html: text } }
 }
 
-/** 详情页七字段（详情面字段规则的取值段，见 `DetailFields`）：init 换根 → 书名/作者/封面/简介/
- *  最新章节/分类/字数，`ruleDetail*` 优先、平铺方言回退同名共用字段（原 v1 行为）。封面按 base 绝对化、
- *  简介按详情面口径净化（`<usehtml>`/`<md>`/`<useweb>` 前缀原样保留，其余 format + 5000 截断）。
- *
- *  两个消费点共用这一份：`ReadingService.getDetail`（详情面）与搜索面的 **info 形态**
- *  （`bookUrlPattern` 命中 / 列表为空回落——两处走同一套字段口径）。第二处若各写一份
- *  `ruleDetailName ?? ruleBookName` 的回落链，两上下文的分野就会开始各自漂移（那是本仓定过的重复罪）。
- *
- *  `onEmptyInit: 'no-book'` 正是为第二处准备的：那里的「这是详情页」只是**嗅探出来的猜测**
- *  （守卫是「书名为空即没有书目」——init 取空 → 书名 Miss → 无书目）。让它在搜索面抛错，
- *  会把一次正常的「这个词没搜到东西」升级成整源搜索失败（真机源的 `$.data` 在结果响应里取空）。 */
-/** 详情页七字段的取值面（`detailFieldsOf` 的返回形状） */
+/** 详情页七字段的取值面：`detailFieldsOf` 的返回形状；`detailReadOf` 返回 `DetailRead`、把它放在 `.fields`。 */
 export interface DetailFields {
   title: string | null; author: string | null; coverUrl: string | null
   intro: string | null; lastChapterName: string | null
   kind: string | null; wordCount: string | null
 }
 
-export async function detailFieldsOf(
-  s: NovelSource, subEval: SubRuleEval, html: string, baseUrl: string,
-  opts: { onEmptyInit: 'no-book' },
-): Promise<DetailFields | null>
-export async function detailFieldsOf(
-  s: NovelSource, subEval: SubRuleEval, html: string, baseUrl: string,
-  opts?: { onEmptyInit?: 'error' },
-): Promise<DetailFields>
-export async function detailFieldsOf(
-  s: NovelSource, subEval: SubRuleEval, html: string, baseUrl: string,
-  opts?: { onEmptyInit?: 'error' | 'no-book' },
-): Promise<DetailFields | null> {
+/** 详情页**一次**读取的结果（`detailReadOf` 的返回形状）：字段与 tocUrl 出自同一份 init 上下文。 */
+export interface DetailRead { fields: DetailFields; tocUrl: string }
+
+/** init 换根之后的七字段取值段（`detailFieldsOf` / `detailReadOf` 共用这一份回落链与档位）：
+ *  `ruleDetail*` 优先、平铺方言回退同名共用字段（原 v1 行为）；封面按 base 绝对化、
+ *  简介按详情面口径净化（`<usehtml>`/`<md>`/`<useweb>` 前缀原样保留，其余 format + 5000 截断）。 */
+async function detailFieldsFromContext(
+  s: NovelSource, subEval: SubRuleEval, dctx: { html: string; json?: unknown }, baseUrl: string,
+): Promise<DetailFields> {
   const { rules } = s
-  const dctx = opts?.onEmptyInit === 'no-book'
-    ? await detailContextOf(rules.ruleDetailInit, html, baseUrl, subEval, { onEmptyInit: 'no-context' })
-    : await detailContextOf(rules.ruleDetailInit, html, baseUrl, subEval)
-  if (dctx === null) return null
   const ctx = { html: dctx.html, json: dctx.json, baseUrl }
   const [title, author, cover, intro, last, kind, wordCount] = await Promise.all([
     fieldOf(subEval, rules.ruleDetailName ?? rules.ruleBookName, ctx, 'detail'),
@@ -451,6 +488,86 @@ export async function detailFieldsOf(
     lastChapterName: last,
     kind, wordCount,
   }
+}
+
+/** 详情页七字段的读取（**只要字段**的两个消费点）：搜索面的 **info 形态**
+ *  （`bookUrlPattern` 命中 / 列表为空回落）与探针。`getDetail` 不走它——那条路要字段 + tocUrl，
+ *  由 `detailReadOf` 用**同一次** init 求值一并交出（旧组合在本函数与 tocUrlOf 里各求一次 init）。
+ *
+ *  `onEmptyInit: 'no-book'` 正是为搜索面准备的：那里的「这是详情页」只是**嗅探出来的猜测**
+ *  （守卫是「书名为空即没有书目」——init 取空 → 书名 Miss → 无书目）。让它在搜索面抛错，
+ *  会把一次正常的「这个词没搜到东西」升级成整源搜索失败（真机源的 `$.data` 在结果响应里取空）。 */
+export async function detailFieldsOf(
+  s: NovelSource, subEval: SubRuleEval, html: string, baseUrl: string,
+  opts: { onEmptyInit: 'no-book' },
+): Promise<DetailFields | null>
+export async function detailFieldsOf(
+  s: NovelSource, subEval: SubRuleEval, html: string, baseUrl: string,
+  opts?: { onEmptyInit?: 'error' },
+): Promise<DetailFields>
+export async function detailFieldsOf(
+  s: NovelSource, subEval: SubRuleEval, html: string, baseUrl: string,
+  opts?: { onEmptyInit?: 'error' | 'no-book' },
+): Promise<DetailFields | null> {
+  const dctx = opts?.onEmptyInit === 'no-book'
+    ? await detailContextOf(s.rules.ruleDetailInit, html, baseUrl, subEval, { onEmptyInit: 'no-context' })
+    : await detailContextOf(s.rules.ruleDetailInit, html, baseUrl, subEval)
+  if (dctx === null) return null
+  return detailFieldsFromContext(s, subEval, dctx, baseUrl)
+}
+
+/** tocUrl 的**无需详情上下文**那一半：非 null 规则里的真静态 URL 直接绝对化；
+ *  返回 null = 这条规则要拿到详情上下文后过引擎（`tocUrlFromContext`）。
+ *
+ *  静态 URL 短路的歧义前缀按两档分（完整病史与钉子：矩阵行 `b-toc-url-xpath-vs-url`）：
+ *  ① `//`/`.//` 开头（非插值）= 绝对 XPath **绝不短路**——「absUrl 解得出」分不开它与协议相对
+ *     地址（裸标签 XPath 会被 `new URL` 解成 `https://div/a/@href` 野地址）；
+ *  ② 单 `/` 开头（非插值）= 站点相对静态 URL，**解得出才短路**（单 `/` 纯路径 XPath 与它同形
+ *     不可分——现量 0 条，残余如实记在矩阵行）。
+ *  与 grammar.isXPathForm 的结论**不同是口径而非漂移**：规则语言里 `/static/list.html` 是 XPath
+ *  形态，tocUrl 位上它是静态 URL（URL 读法在能绝对化时优先）。 */
+export function staticTocUrl(ruleTocUrl: string, bookUrl: string): string | null {
+  const urlShaped = /^(https?:)?\/\//i.test(ruleTocUrl) || ruleTocUrl.startsWith('/')
+  const absoluteXPath = ruleTocUrl.startsWith('//') || ruleTocUrl.startsWith('.//')
+  if (!urlShaped || absoluteXPath || ruleTocUrl.includes('{')) return null
+  // 走到这里必无插值段（`{` 判过），interpolateUrl 恒等 → 直接绝对化。
+  return absUrl(ruleTocUrl, stripUrlOption(bookUrl))
+}
+
+/** tocUrl 的**详情上下文**那一半（`tocUrlOf` 与 `detailReadOf` 共用）：规则按 init 换根后的上下文
+ *  过引擎求值，URL 位按 `firstUrlValue` 取首项（引擎 literal 口径：任一插值段 Miss → 整段 Miss）。
+ *  绝对化**只作用在 URL 部分**，`,{option}` 原样接回（与搜索结果 bookUrl、章节 URL 同一层处理）：
+ *  先 absUrl 等于让 `new URL()` 先碰选项串——换行被吃、`{` 被百分号编码，`",{` 形状一坏、
+ *  抓取层就再也切不到选项 → 整串当路径发出去（两条 POST 型 tocUrl 源实证，矩阵行
+ *  `b-url-option-on-toc-url`）。取不到 → 回退 bookUrl **全串**（目录就在本书地址上，抓取仍按选项发）。 */
+export async function tocUrlFromContext(
+  ruleTocUrl: string, dctx: { html: string; json?: unknown }, bookUrl: string, subEval: SubRuleEval,
+): Promise<string> {
+  // 解析 base 剥 `,{option}`（选项不属于链接解析域）
+  const base = stripUrlOption(bookUrl)
+  const v = await subEval(ruleTocUrl, { html: dctx.html, json: dctx.json, baseUrl: base }, 'detail', 'value')
+  const href = firstUrlValue(v, 'detail')
+  if (href === null) return bookUrl
+  return absUrlKeepOption(href, base) ?? bookUrl
+}
+
+/** 详情面的**一次**完整读取（`ReadingService.getDetail` 的唯一入口）：init 只求值一次，
+ *  七字段与 tocUrl 共用这一份上下文——旧组合（`detailFieldsOf` + `tocUrlOf`）各求一次 init，
+ *  纯规则白白重算，js 形态的 init 还会**双打站点**。
+ *  info / 探针仍走 `detailFieldsOf`：那条路只要字段，不付 tocUrl 求值。
+ *
+ *  init 空命中按默认口径抛（这里是详情面，不是搜索面的嗅探猜测）；tocUrl 的 null 回退与静态
+ *  短路与 `tocUrlOf` 同一判据（`staticTocUrl`）——静态 URL 的源连 tocUrl 规则都不求值。 */
+export async function detailReadOf(
+  s: NovelSource, subEval: SubRuleEval, html: string, bookUrl: string,
+): Promise<DetailRead> {
+  const base = stripUrlOption(bookUrl)
+  const dctx = await detailContextOf(s.rules.ruleDetailInit, html, base, subEval)
+  const fields = await detailFieldsFromContext(s, subEval, dctx, base)
+  const ruleTocUrl = s.rules.ruleTocUrl
+  if (ruleTocUrl === null) return { fields, tocUrl: bookUrl }
+  const tocUrl = staticTocUrl(ruleTocUrl, bookUrl) ?? await tocUrlFromContext(ruleTocUrl, dctx, bookUrl, subEval)
+  return { fields, tocUrl }
 }
 
 /** 一套条目规则（逐条目装配的输入位；键名即装配槽位，不落模型字段）。
@@ -475,8 +592,8 @@ export interface HitRules {
  *  要在两处各自发现，而它只在一处有理由。
  *
  *  档位分野仍只住 `metaFieldOf` 一处：书名非空才算书目、作者/书地址是裸奔项、其余五项坏规则
- *  只丢该字段。简介走搜索面口径（净化 + 截断，**不认**渲染指令前缀——那是详情面 `detailFieldsOf`
- *  给 `keepDirective` 的那一支）。
+ *  只丢该字段。简介走搜索面口径（净化 + 截断，**不认**渲染指令前缀——那是详情面
+ *  `detailFieldsFromContext` 给 `keepDirective` 的那一支）。
  *  面不进 interface：它恒为 `'search'`，只进错误定位不改求值语义（与 `docs/adr/0007` 那条
  *  「只有用途一个轴能改变形状」是同一件事的两面）。
  *

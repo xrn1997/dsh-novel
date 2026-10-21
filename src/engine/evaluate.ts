@@ -16,6 +16,7 @@ import { applyReplaces } from './replace.js'
 import { loadHtml } from './dom.js'
 import { engineValueToString } from './js-utils.js'
 import { splitLiteral } from './literal.js'
+import { isJsonRule } from './mode.js'
 
 import { JsSandboxError, RuleEvalError, UnsupportedRuleError, isEngineError } from './errors.js'
 
@@ -54,7 +55,18 @@ export async function evaluate(
   facet: Facet = 'rule',
   usage: RuleUsage = 'list',
 ): Promise<EngineValue> {
-  const parsed = typeof rule === 'string' ? parseRule(rule, facet, usage) : rule
+  if (typeof rule === 'string' && /^@webjs:/i.test(rule.trim())) {
+    if (ctx.evalWebJs === undefined) {
+      throw new UnsupportedRuleError('@webjs 需要真浏览器 WebView（ctx.evalWebJs 未接线）', {
+        facet, segmentIndex: 0, segmentRaw: rule,
+      })
+    }
+    const text = await ctx.evalWebJs(rule.trim().slice(7), ctx.baseUrl)
+    return text.trim() === '' ? { kind: 'miss', detail: '@webjs 空结果' } : { kind: 'value', text }
+  }
+  const parsed = typeof rule === 'string'
+    ? parseRule(rule, facet, usage, isJsonRule(rule, ctx) ? 'json' : undefined)
+    : rule
   return runParsed(parsed, ctx, facet, null)
 }
 
@@ -65,7 +77,18 @@ export async function evaluateWithTrace(
   facet: Facet = 'rule',
   usage: RuleUsage = 'list',
 ): Promise<TraceResult> {
-  const parsed = parseRule(rule, facet, usage)
+  if (/^@webjs:/i.test(rule.trim())) {
+    const value = await evaluate(rule, ctx, facet, usage)
+    return {
+      value,
+      steps: [{
+        segmentIndex: 0, segmentRaw: rule, segmentKind: 'js', hits: null,
+        preview: value.kind === 'value' ? value.text.slice(0, 80) : value.kind,
+      }],
+      combinator: 'first', reverse: false,
+    }
+  }
+  const parsed = parseRule(rule, facet, usage, isJsonRule(rule, ctx) ? 'json' : undefined)
   const steps: TraceStep[] = []
   const value = await runParsed(parsed, ctx, facet, steps)
   return { value, steps, combinator: parsed.combinator, reverse: parsed.reverse }
@@ -108,9 +131,17 @@ function makeRuntime(ctx: EvalContext, facet: Facet, usage: RuleUsage): Runtime 
       }
       return jsonValue
     },
-    // 子规则对「给定数据」求值：data 作为子规则的 html 上下文（与 host.result 同源）
-    evaluateRef: (ruleStr, data) =>
-      runParsedSync(parseRule(ruleStr, facet), { ...ctx, html: String(data ?? '') }, facet),
+    // 子规则对「给定数据」求值：data 作为子规则的 html 上下文（与 host.result 同源）。
+    // json 必须摘掉：外层是 JSON 页时，子规则拿到的若是 HTML 片段，留着 ctx.json 会让
+    // isJsonRule 把 `div.x` 这类选择器判成 JSONPath 而静默 Miss。
+    evaluateRef: (ruleStr, data) => {
+      const subCtx = { ...ctx, html: String(data ?? ''), json: undefined }
+      return runParsedSync(
+        parseRule(ruleStr, facet, 'list', isJsonRule(ruleStr, subCtx) ? 'json' : undefined),
+        subCtx,
+        facet,
+      )
+    },
   }
 }
 

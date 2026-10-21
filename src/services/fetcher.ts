@@ -4,6 +4,8 @@ import { DecodeError, FetchError } from './errors.js'
 import { normalizeProxyUrl, parseProxyUrl, redactProxyUrl } from './proxy.js'
 import type { NovelSource } from './types.js'
 import { readValue, type ValueSource } from './value-source.js'
+import type { CookieJar } from './cookies.js'
+import type { SourceSession } from '../engine/js-sandbox.js'
 
 export interface FetchedPage {
   raw: Buffer
@@ -17,10 +19,13 @@ export interface FetchedPage {
    *  它存在的理由是 `java.post(...).statusCode()`（响应对象要能给出这一项，缺它就只能编一个）。 */
   status: number
   /** 响应 `Set-Cookie` 头原文数组（无则空数组）——`java.post(...).cookies()` 的数据源。
-   *  本仓**不**实现 cookie jar 自动回带（见矩阵 `b-cookie-jar`）：这里只给脚本自己读。 */
+   *  除脚本读取外，配置了 jar 时 fetchPage 已自动落库（见矩阵 `b-cookie-jar`）。 */
   setCookie: string[]
   /** 响应头表（小写键名）——`java.head` 的 `.headers()` 数据源；手工构造的测试页可缺省。 */
   headers?: Record<string, string>
+  /** loginCheckJs 替换过正文：raw 是本仓按 UTF-8 重编码的，原始 charset 不再适用。
+   *  `decodeBody` 据此忽略调用方声明的 charset（登录脚本产出的是 JS 字符串，不是站点字节）。 */
+  replaced?: boolean
 }
 
 export interface FetcherOptions {
@@ -29,23 +34,52 @@ export interface FetcherOptions {
   /** 出站代理（见 services/proxy.ts：Node 的 fetch 不读系统代理）；null / '' / direct = 直连。
    *  可以是活 getter——每次请求前读当前值，配置页改了代理不必重建 fetcher。 */
   proxyUrl?: ValueSource<string | null>
+  /** 域/路径感知的 cookie jar（跨源共享，上游 CookieStore 同粒度）：请求缺省带同一 host/path
+   *  的 cookie，响应 Set-Cookie 自动落库。显式 Cookie 头优先（源规则/auth 合并后的头照旧占优）。 */
+  cookieJar?: CookieJar
+}
+
+/** 一次抓取的 init 形状：接口与实现共用这一份，新增字段不再需要两处同步。 */
+export interface FetchInit {
+  headers?: Record<string, string>
+  method?: string
+  body?: string
+  /** 本次调用的超时覆盖（缺省 = createFetcher 的 timeoutMs）；超时 abort + FetchError */
+  timeoutMs?: number
+  /** HEAD 探测姿态：redirect:'manual' 且非 2xx 不抛——要的就是 3xx 的状态与头（`java.head`） */
+  manual?: boolean
+  /** 不跟重定向但 >=400 仍抛（`java.get` 的 jsoup followRedirects(false) 口径） */
+  noFollow?: boolean
+  /** 规则 URL 选项声明的 charset（`fetchInitOf` 带入；loginCheckJs 读原页时按它解码） */
+  declaredCharset?: string
+  /** 非 2xx 的额外重试次数（只重拿到响应的 HTTP 错；连接/超时不重） */
+  retry?: number
+  /** 真浏览器抓取（由源级 fetcher 外观消费；基础 fetcher 忽略） */
+  webView?: boolean
+  webJs?: string
+  /** 非 2xx 也返回页面（源请求缝给 loginCheck 看 403/503 正文；未替换时由该缝补抛） */
+  allowError?: boolean
 }
 
 export interface Fetcher {
-  fetchPage(url: string, init?: {
-    headers?: Record<string, string>; method?: string; body?: string
-    /** 本次调用的超时覆盖（缺省 = createFetcher 的 timeoutMs）；超时 abort + FetchError */
-    timeoutMs?: number
-    /** HEAD 探测姿态：redirect:'manual' 且非 2xx 不抛——要的就是 3xx 的状态与头（`java.head`） */
-    manual?: boolean
-  }): Promise<FetchedPage>
+  /** 真浏览器能力（源级外观/组合根可挂；引擎 `@webjs:` 从它取 evalWebJs） */
+  webview?: {
+    fetch(url: string, opts?: { webJs?: string }): Promise<{ html: string }>
+  }
+  /** 宿主设备 ID（androidId 的稳定替代；数据根 device-id 生成一次） */
+  deviceId?: string
+  /** 源级状态会话（可落盘；引擎脚本从 EvalContext.session 取） */
+  sourceSession?: SourceSession
+  /** 域/路径感知的 HTTP cookie jar（引擎脚本经 Packages CookieManager/CookieStore 读写同一张表） */
+  cookieJar?: CookieJar
+  fetchPage(url: string, init?: FetchInit): Promise<FetchedPage>
   /** 关掉当前出站 dispatcher（代理连接池）。卸载时调用；之后再抓取会按当前 proxyUrl 重建。 */
   dispose?(): void
 }
 
 /** fetch 的 init 加上 undici 扩展位（dispatcher）——标准 lib.dom 类型里没有这个键 */
-type FetchInit = RequestInit & { dispatcher?: unknown }
-type FetchLike = (url: string, init?: FetchInit) => Promise<Response>
+type FetchImplInit = RequestInit & { dispatcher?: unknown }
+type FetchLike = (url: string, init?: FetchImplInit) => Promise<Response>
 
 /** 出站默认耐心（缺省 15s）。**这个数是唯一主人**：缺省装配处 `src/config.ts` 的 schema `.default()`
  *  与 reading.from() 的回退都引它——多请求目录脚本一轮要连打数个请求，窄超时必炸，缺省给得比一般 HTTP 客户端宽。 */
@@ -63,6 +97,18 @@ const DEFAULT_HEADERS: Record<string, string> = {
   'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
 }
 
+/** User-Agent 归 context.userAgent：塞进 extraHTTPHeaders 会被浏览器默认 UA 覆盖/并存。
+ *  请求头拆分归这一处——源请求缝与 WebView 都读同一份判据。 */
+export function splitUserAgent(headers: Record<string, string>): { headers: Record<string, string>; userAgent?: string } {
+  const out: Record<string, string> = {}
+  let userAgent: string | undefined
+  for (const [k, v] of Object.entries(headers)) {
+    if (k.toLowerCase() === 'user-agent') userAgent = v
+    else out[k] = v
+  }
+  return userAgent === undefined ? { headers: out } : { headers: out, userAgent }
+}
+
 /**
  * 本源**实际发出去**的 User-Agent：源静态头 / auth 头覆盖 → 缺省 UA 打底。
  * **大小写不敏感**（HTTP 头名本就不敏感）：`user-agent` 与 `User-Agent` 是同一条头，
@@ -72,10 +118,8 @@ const DEFAULT_HEADERS: Record<string, string> = {
  * 脚本要的通常是"给我一个能用的 UA"，不是"给我一个和下一个请求逐字节一致的头"。
  */
 export function effectiveUserAgent(source: Pick<NovelSource, 'rules' | 'auth'>): string {
-  for (const [k, v] of Object.entries(headerOf(source))) {
-    if (k.toLowerCase() === 'user-agent') return v
-  }
-  return DEFAULT_HEADERS['User-Agent'] ?? ''
+  const { userAgent } = splitUserAgent(headerOf(source))
+  return userAgent ?? DEFAULT_HEADERS['User-Agent'] ?? ''
 }
 
 /**
@@ -97,7 +141,8 @@ function mergeHeaders(init?: Record<string, string>): Record<string, string> {
 
 /**
  * 守门抓取器：唯一出站口。超时/网络层失败/HTTP 非 2xx 分别类型化为 FetchError，
- * 绝不把未分类异常漏给上层。
+ * 绝不把未分类异常漏给上层。`allowError` 是源请求缝给 loginCheckJs 看错误页的窄例外：
+ * 最终错误页由该缝在脚本未替换时补抛（manual 的 HEAD 探测另有放行语义）。
  */
 export function createFetcher(opts?: FetcherOptions): Fetcher {
   const fetchImpl = (opts?.fetchImpl ?? globalThis.fetch) as FetchLike
@@ -135,56 +180,78 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
     return dispatcher
   }
 
-  return {
-    async fetchPage(url: string, init?: {
-      headers?: Record<string, string>; method?: string; body?: string; timeoutMs?: number; manual?: boolean
-    }): Promise<FetchedPage> {
+  // jar 走**对象字段**而不是建厂闭包：组合根直装时门面会给 fetcher 补一张 jar（reading.from），
+  // 请求自动回带必须与脚本面读的是同一张表。
+  const api: Fetcher = {
+    ...(opts?.cookieJar === undefined ? {} : { cookieJar: opts.cookieJar }),
+    async fetchPage(url: string, init?: FetchInit): Promise<FetchedPage> {
       const timeoutMs = init?.timeoutMs ?? defaultTimeoutMs
       const activeDispatcher = currentDispatcher()
-      const ctrl = new AbortController()
-      let timer: ReturnType<typeof setTimeout> | undefined
-      const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          ctrl.abort()
-          reject(new FetchError(`请求超时 ${timeoutMs}ms: ${url}`, { url }))
-        }, timeoutMs)
-      })
-      try {
-        const res = await Promise.race([
-          fetchImpl(url, {
-            headers: mergeHeaders(init?.headers),
-            ...(init?.method === undefined ? {} : { method: init.method }),
-            ...(init?.body === undefined ? {} : { body: init.body }),
-            ...(init?.manual === true ? { redirect: 'manual' as const } : {}),
-            signal: ctrl.signal,
-            ...(activeDispatcher === undefined ? {} : { dispatcher: activeDispatcher }),
-          }),
-          timeout,
-        ])
-        // 守门口径：缺省非 2xx 即 FetchError；manual（HEAD 探测——看的就是 3xx 的 Location）放行
-        if (!res.ok && init?.manual !== true) {
-          throw new FetchError(`请求失败 ${res.status}: ${url}`, { url, status: res.status })
+      const attempts = Math.max(0, Math.floor(init?.retry ?? 0))
+      for (let attempt = 0; ; attempt++) {
+        const ctrl = new AbortController()
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const timeout = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            ctrl.abort()
+            reject(new FetchError(`请求超时 ${timeoutMs}ms: ${url}`, { url }))
+          }, timeoutMs)
+        })
+        try {
+          const outHeaders = mergeHeaders(init?.headers)
+          if (api.cookieJar !== undefined && !Object.keys(outHeaders).some(k => k.toLowerCase() === 'cookie')) {
+            const cookie = api.cookieJar.headerFor(url)
+            if (cookie !== '') outHeaders.Cookie = cookie
+          }
+          const res = await Promise.race([
+            fetchImpl(url, {
+              headers: outHeaders,
+              ...(init?.method === undefined ? {} : { method: init.method }),
+              ...(init?.body === undefined ? {} : { body: init.body }),
+              ...(init?.manual === true || init?.noFollow === true ? { redirect: 'manual' as const } : {}),
+              signal: ctrl.signal,
+              ...(activeDispatcher === undefined ? {} : { dispatcher: activeDispatcher }),
+            }),
+            timeout,
+          ])
+          // 守门口径：缺省非 2xx 即 FetchError；manual（HEAD 探测——看的就是 3xx 的 Location）放行；
+          // noFollow（java.get）只放行 3xx，>=400 照 jsoup 的 execute() 抛；allowError 把最终错误页
+          // 交给 loginCheckJs 先看正文，补抛由源请求缝在「脚本没替换」时做。
+          const failed = init?.manual === true ? false : init?.noFollow === true ? res.status >= 400 : !res.ok
+          if (failed) {
+            if (attempt < attempts) continue
+            if (init?.allowError !== true) {
+              throw new FetchError(`请求失败 ${res.status}: ${url}`, { url, status: res.status })
+            }
+          }
+          const contentType = res.headers.get('content-type') ?? undefined
+          const charset = contentType?.match(CHARSET_RE)?.[1]?.toLowerCase()
+          const setCookie = typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : []
+          const finalUrl = res.url || url
+          api.cookieJar?.absorb(finalUrl, setCookie)
+          return {
+            raw: Buffer.from(await res.arrayBuffer()),
+            finalUrl,
+            contentType,
+            charset,
+            status: res.status,
+            setCookie,
+            headers: Object.fromEntries(res.headers.entries()),
+          }
+        } catch (e) {
+          if (e instanceof FetchError) {
+            // 上游 retry 只作用于「拿到响应但状态码不成功」；无 status 的网络/超时错直接抛
+            if (e.status !== undefined && attempt < attempts) continue
+            throw e
+          }
+          // fetchImpl 遵从 signal 中止时也会走到这里，同按超时归类
+          if (e instanceof Error && e.name === 'AbortError') {
+            throw new FetchError(`请求超时 ${timeoutMs}ms: ${url}`, { url })
+          }
+          throw new FetchError(`网络错误: ${url}（${String(e)}）`, { url })
+        } finally {
+          if (timer !== undefined) clearTimeout(timer)
         }
-        const contentType = res.headers.get('content-type') ?? undefined
-        const charset = contentType?.match(CHARSET_RE)?.[1]?.toLowerCase()
-        return {
-          raw: Buffer.from(await res.arrayBuffer()),
-          finalUrl: res.url || url,
-          contentType,
-          charset,
-          status: res.status,
-          setCookie: typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [],
-          headers: Object.fromEntries(res.headers.entries()),
-        }
-      } catch (e) {
-        if (e instanceof FetchError) throw e
-        // fetchImpl 遵从 signal 中止时也会走到这里，同按超时归类
-        if (e instanceof Error && e.name === 'AbortError') {
-          throw new FetchError(`请求超时 ${timeoutMs}ms: ${url}`, { url })
-        }
-        throw new FetchError(`网络错误: ${url}（${String(e)}）`, { url })
-      } finally {
-        if (timer !== undefined) clearTimeout(timer)
       }
     },
     dispose() {
@@ -196,6 +263,7 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
       if (previous !== undefined) void previous.close().catch(() => undefined)
     },
   }
+  return api
 }
 
 /**
@@ -205,8 +273,11 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
  * → ③ 兜底 UTF-8。声明的 charset 解不出 → DecodeError（宁可报错，不拿乱码冒充正文）。
  */
 export function decodeBody(page: FetchedPage, declaredCharset?: string): string {
-  // 空串声明（`charset=` 空值，真实源存在）视为缺位，走后续嗅探链而不是必炸
-  const cs = nonEmpty(declaredCharset) ?? nonEmpty(page.charset) ?? sniffCharset(page.raw)
+  // 空串声明（`charset=` 空值，真实源存在）视为缺位，走后续嗅探链而不是必炸。
+  // 被 loginCheck 替换过的正文是按 UTF-8 重编码的，声明的 charset（如 GBK 源）对它不成立——
+  // 用声明值解会把替换正文解成乱码；此时按 page.charset（替换时置 utf-8）走。
+  const declared = page.replaced === true ? undefined : declaredCharset
+  const cs = nonEmpty(declared) ?? nonEmpty(page.charset) ?? sniffCharset(page.raw)
   if (!iconv.encodingExists(cs)) {
     throw new DecodeError(`无法解码 charset=${cs}: ${page.finalUrl}`, { url: page.finalUrl, charset: cs })
   }
@@ -219,7 +290,7 @@ export function decodeBody(page: FetchedPage, declaredCharset?: string): string 
  */
 export async function fetchTextPage(
   fetcher: Fetcher, url: string,
-  init: { headers?: Record<string, string>; method?: string; body?: string; timeoutMs?: number },
+  init: FetchInit,
   declaredCharset?: string,
 ): Promise<{ text: string; landedUrl: string }> {
   const page = await fetcher.fetchPage(url, init)

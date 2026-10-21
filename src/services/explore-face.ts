@@ -1,8 +1,7 @@
-import { hitFieldsOf, itemContextsOf, makeSubEval, resolveHeaders } from './bridge.js'
-import { fetchTextPage } from './fetcher.js'
-import type { Fetcher } from './fetcher.js'
+import { hitFieldsOf, itemContextsOf, makeSubEval } from './bridge.js'
 import { isNativeSource } from './normalize.js'
-import { buildSearchRequest, fetchInitOf } from './request.js'
+import { buildSearchRequest } from './request.js'
+import type { SourceRequest } from './source-request.js'
 import type { SearchHit } from '../shared/wire.js'
 import type { NovelSource } from './types.js'
 
@@ -10,7 +9,7 @@ import type { NovelSource } from './types.js'
  * 发现面（书城分类）单源一次抓取：「发一次分类页请求并取回该分类的书目」的唯一实现。
  * 与搜索面同构，差别只有两处——URL 模板与规则来源：
  * 请求组装归 `request.buildSearchRequest`（首页裁页那条语义的主人是 `request.assembleRequest`），
- * 抓取+解码归 `fetcher.fetchTextPage`（超时单点），
+ * 抓取+解码归 `source-request.SourceRequest.fetchText`（限速/动态头/loginCheck 的装配与超时单点），
  * 条目装配归 `bridge.hitFieldsOf`（与聚合搜索同一份，档位与槽序的理由住那里）——
  * 本模块只持有分类面特有的编排，不复制其中任何一件。
  *
@@ -53,7 +52,7 @@ function rulesFor(source: NovelSource): ExploreRules {
  *  条目装配不在本模块：一套规则加一个条目上下文怎么收成一条书目，单点在 `bridge.hitFieldsOf`
  *  （两档档位与理由也住那里）。 */
 export async function fetchKindPage(
-  source: NovelSource, kindUrl: string, fetcher: Fetcher, timeoutMs?: number, jsTimeoutMs?: number,
+  source: NovelSource, kindUrl: string, request: SourceRequest, timeoutMs?: number, jsTimeoutMs?: number,
   page = 1,
 ): Promise<KindPageResult> {
   // 「这次用哪份模板」的判据（本函数是它的主人，裁决与被否决的方案见 `docs/adr/0027`）：
@@ -78,15 +77,16 @@ export async function fetchKindPage(
     ].filter((x): x is string => x !== null)
     return { ok: false, code: 'RuleMissing', message: `发现规则缺失：缺 ${missing.join('、')}` }
   }
-  const subEval = makeSubEval(fetcher, source, jsTimeoutMs === undefined ? undefined : { jsTimeoutMs })
+  const subEval = makeSubEval(request.fetcherFor(source), source,
+    jsTimeoutMs === undefined ? undefined : { jsTimeoutMs })
   // 裁页跟着「本次用的是哪份模板」走，不跟着方言走：源级模板带的就是原生分页语义（首页不裁的代价见
   // `request.assembleRequest`）；分类自带地址那一份怎么翻页是源自己写死的，替它裁等于改它的语义。
   // 变量恒给 kind 与 page 两个：模板里没写的占位不参与替换（判据见 `engine/template.isPlaceholder`），
   // 多带一个用不到的变量在黑盒上没有签名，故不为它另立用例。
   const plan = buildSearchRequest(template, { kind: kindUrl, page }, source.baseUrl,
     { trimFirstPage: sourceTemplate !== null })
-  const { text, landedUrl } = await fetchTextPage(fetcher, plan.url,
-    { ...fetchInitOf(plan, await resolveHeaders(fetcher, source, { jsTimeoutMs })), timeoutMs }, plan.charset)
+  const { text, landedUrl } = await request.fetchText(source, plan,
+    timeoutMs === undefined ? undefined : { timeoutMs })
   // 列表规则缺失（发现面整套覆盖里 list 恒非空，故只可能来自回落那一侧）：空规则求值即空列表，
   // 是「这个分类没条目」不是「规则没了」——与搜索面同一条口径，不折叠成失败。
   if (R.list === null) return { ok: true, hits: [] }

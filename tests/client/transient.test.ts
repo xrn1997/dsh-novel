@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToString } from 'react-dom/server'
-import { dismiss, pushError, pushOk, pushPending, resetTransient, transientEntries } from '../../src/client/transient.js'
+import { dismiss, pushError, pushOk, resetTransient, transientEntries } from '../../src/client/transient.js'
 import { resetJobSurface } from '../../src/client/jobs.js'
 import { NovelStatusOverlay } from '../../src/client/views/NovelStatusOverlay.js'
 import { SettingsSection } from '../../src/client/views/SettingsSection.js'
@@ -14,32 +14,6 @@ describe('transient 条目生命周期', () => {
   beforeEach(resetTransient)
   afterEach(() => { resetTransient(); vi.useRealTimers() })
 
-  it('pending：settle() 收工不留痕', () => {
-    const settle = pushPending('「A」启停')
-    expect(kinds()).toEqual(['pending'])
-    settle()
-    expect(transientEntries()).toEqual([])
-  })
-  it('pending：settle(errText) 移除自身并转错误，携带 anchor（定位跳转/行内标记共用）', () => {
-    const settle = pushPending('「A」启停', '[data-novel-source-row="a1"]')
-    settle('「A」启停失败：boom')
-    const [err] = transientEntries()
-    expect(kinds()).toEqual(['error'])
-    expect(err.label).toBe('「A」启停失败：boom')
-    expect(err.anchor).toBe('[data-novel-source-row="a1"]')
-  })
-  it('settle 幂等：二次结算不追加错误（then/finally 双路径踩过的坑）', () => {
-    const settle = pushPending('「A」启停')
-    settle('第一次')
-    settle('第二次')
-    expect(transientEntries()).toHaveLength(1)
-    expect(transientEntries()[0].label).toBe('第一次')
-  })
-  it('多条 pending 并存（聚合计数的原料，互不吞并）', () => {
-    pushPending('「A」启停')
-    pushPending('「B」启停')
-    expect(kinds()).toEqual(['pending', 'pending'])
-  })
   it('ok：TTL 自动退场（少而淡——成功不粘屏）', () => {
     vi.useFakeTimers()
     pushOk('已保存登录态')

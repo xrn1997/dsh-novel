@@ -8,13 +8,17 @@
 import crypto from 'node:crypto'
 import type { EngineValue, EvalContext, Facet, SegmentLoc } from './types.js'
 import { JsSandboxError } from './errors.js'
+import { responseOf } from './host-object.js'
+import type { ResponseHost } from './host-object.js'
 import { URL_OPTION_SPLIT } from './template.js'
 import type { EvaluateRef, SourceSession } from './js-sandbox.js'
 import { getRuleVar } from './variables.js'
+import { parseCookieString } from '../shared/cookies.js'
 import {
   absolutizeUrl,
   base64Decode,
   base64Encode,
+  base64EncodeBytes,
   digestBase64,
   digestHex,
   engineValueToString,
@@ -103,6 +107,19 @@ function parseGetStringArgs(arg2?: unknown, arg3?: unknown): { content?: unknown
   return { content: arg2, isUrl: arg3 === true, unescape: true }
 }
 
+/** 脚本网络方法的 header 实参：JSON 串或对象字面量两形态；认不出就点名，不静默丢意图。 */
+function parseHeaderArg(d: BridgeDeps, method: string, arg: unknown): Record<string, string> | undefined {
+  if (arg === null || arg === undefined) return undefined
+  if (typeof arg === 'string' && arg.trim() === '') return undefined
+  if (typeof arg === 'string') {
+    try { return JSON.parse(arg) as Record<string, string> } catch {
+      throw new JsSandboxError(`${method} 的 header 参数不是 JSON：${arg.slice(0, 60)}`, { ...d.loc, facet: d.facet, script: d.code })
+    }
+  }
+  if (typeof arg === 'object') return arg as Record<string, string>
+  throw new JsSandboxError(`${method} 的 header 参数形状不支持：${typeof arg}`, { ...d.loc, facet: d.facet, script: d.code })
+}
+
 const jar = (d: BridgeDeps): Map<string, string> => d.session.cookieJar(d.sourceKey)
 const sourceVars = (d: BridgeDeps): Map<string, string> => d.session.sourceVars(d.sourceKey)
 const sourceCache = (d: BridgeDeps): Map<string, string> => d.session.cacheStore(d.sourceKey)
@@ -130,8 +147,8 @@ export const JAVA_PROTOCOL = [
     return fetchFn(String(url)).then((r) => r?.body ?? '')
   }, 'async'),
   // java.connect：返回带结果对象的响应，与 ajax 只差一层壳。三点刻意取舍：
-  // ① 不接 header JSON 与 callTimeout——本仓 ctx.fetch 没有请求头通道，传了非空 header 就点名，
-  //    不静默丢掉脚本的意图；② 不把异常塞进 body——错误文本冒充正文是最高罪（见矩阵 `h-java-connect`）；
+  // ① header JSON 经 parseHeaderArg 叠到源级头之后（与 post 同口径）；callTimeout 走进程级超时；
+  // ② 不把异常塞进 body——错误文本冒充正文是最高罪（见矩阵 `h-java-connect`）；
   // ③ `url` 给落地地址（重定向后末次请求），`raw().request().url()` 与 `.url` 同源同值。
   method('connect', { obj: 'java' }, (d) => async (url: unknown, header?: unknown): Promise<{ url: string; body: string }> => {
     const fetchFn = d.ctx.fetch
@@ -141,21 +158,16 @@ export const JAVA_PROTOCOL = [
     if (url === null || url === undefined) {
       throw new JsSandboxError('java.connect 参数为空（脚本传进 null/undefined）', { ...d.loc, facet: d.facet, script: d.code })
     }
-    if (typeof header === 'string' && header.trim() !== '') {
-      throw new JsSandboxError(
-        `java.connect 的 header 参数在本仓没有通道（请求头由源规则经请求组装层装配）：${header.slice(0, 60)}`,
-        { ...d.loc, facet: d.facet, script: d.code },
-      )
-    }
+    const hdrs = parseHeaderArg(d, 'java.connect', header)
     const u = String(url)
-    return fetchFn(u).then((r) => ({ url: r?.finalUrl ?? u, body: r?.body ?? '' }))
+    return fetchFn(u, hdrs).then((r) => ({ url: r?.finalUrl ?? u, body: r?.body ?? '' }))
   }, 'async'),
   // java.post：脚本以 POST 发请求、拿响应对象（`res.body()` / `res.cookies()`）。宿主侧返回数据面，
   // `.body()` 那层壳在 BOOTSTRAP 里包（跨 worker 只走 JSON）。headers 照收并叠到源级头之上
   // （同名后者覆盖）；`timeout` 一类实参走进程级超时，忽略之。
   method('post', { obj: 'java' }, (d) => async (
     url: unknown, body?: unknown, headersArg?: unknown,
-  ): Promise<{ url: string; body: string; contentType?: string; statusCode: number; cookies: Record<string, string> }> => {
+  ): Promise<ResponseHost> => {
     const postFn = d.ctx.fetchPost
     if (!postFn) {
       throw new JsSandboxError('该源未提供 POST 网络能力（ctx.fetchPost 缺失）', { ...d.loc, facet: d.facet, script: d.code })
@@ -163,33 +175,74 @@ export const JAVA_PROTOCOL = [
     if (url === null || url === undefined) {
       throw new JsSandboxError('java.post 参数为空（脚本传进 null/undefined）', { ...d.loc, facet: d.facet, script: d.code })
     }
-    // header 实参脚本常给 JSON 串（`'{"Content-Type":"..."}'`）或对象字面量：本仓两种都收，
-    // 认不出的形状点名而不是当 header 发出去。
-    let hdrs: Record<string, string> | undefined
-    if (typeof headersArg === 'string' && headersArg.trim() !== '') {
-      try { hdrs = JSON.parse(headersArg) as Record<string, string> } catch {
-        throw new JsSandboxError(`java.post 的 header 参数不是 JSON：${headersArg.slice(0, 60)}`, { ...d.loc, facet: d.facet, script: d.code })
-      }
-    } else if (headersArg !== null && typeof headersArg === 'object' && headersArg !== undefined) {
-      hdrs = headersArg as Record<string, string>
-    }
-    return postFn(String(url), body === null || body === undefined ? '' : String(body), hdrs)
+    const hdrs = parseHeaderArg(d, 'java.post', headersArg)
+    const r = await postFn(String(url), body === null || body === undefined ? '' : String(body), hdrs)
+    return responseOf({ ...r })
   }, 'async'),
-  // java.getWebViewUA：本仓没有 WebView，给的是**我们实际发出去的那条 UA**：
-  // 对拼 headers 的脚本可用，但它不是设备/内核真实的 WebView UA，属**近似**（矩阵
-  // `h-java-webview-ua` 记着这条差）。ctx.userAgent 未接线时点名抛错，绝不编一个串冒充。
+  // java.get 的 HTTP 重载：上游 JsExtensions.get(url, headers) 返回 Connection.Response。
+  // 单参变量 getter 仍走下面的 get 行；BOOTSTRAP 按实参个数分派（显式 undefined 仍是双参 HTTP）。
+  method('getHttp', { obj: 'java' }, (d) => async (
+    url: unknown, headersArg?: unknown,
+  ): Promise<ResponseHost> => {
+    const getFn = d.ctx.fetchGet
+    if (!getFn) {
+      throw new JsSandboxError('该源未提供 GET 网络能力（ctx.fetchGet 缺失）', { ...d.loc, facet: d.facet, script: d.code })
+    }
+    if (url === null || url === undefined) {
+      throw new JsSandboxError('java.get 参数为空（脚本传进 null/undefined）', { ...d.loc, facet: d.facet, script: d.code })
+    }
+    const hdrs = parseHeaderArg(d, 'java.get', headersArg)
+    return responseOf({ ...(await getFn(String(url), hdrs)) })
+  }, 'async'),
+  // java.net.URL.openConnection 的宿主口：跟重定向、可 GET/POST，返回原始字节。
+  // 安全重开裁决：走 ctx.fetchConn（同一守门 fetcher），不给脚本开裸 socket。
+  method('urlConn', { obj: 'java' }, (d) => async (
+    req: unknown,
+  ): Promise<{ url: string; statusCode: number; headers: Record<string, string>; cookies: Record<string, string>; bytes: number[] }> => {
+    const connFn = d.ctx.fetchConn
+    if (!connFn) {
+      throw new JsSandboxError('该源未提供 URL 连接能力（ctx.fetchConn 缺失）', { ...d.loc, facet: d.facet, script: d.code })
+    }
+    if (req === null || typeof req !== 'object') {
+      throw new JsSandboxError('java.net.URL.openConnection 参数为空或非对象', { ...d.loc, facet: d.facet, script: d.code })
+    }
+    const r = await connFn(req as { url: string; method?: string; headers?: Record<string, string>; body?: string })
+    return { url: r.url, statusCode: r.statusCode, headers: r.headers, cookies: r.cookies, bytes: Array.from(r.body) }
+  }, 'async'),
+  // java.getWebViewUA：本仓的 WebView 只服务 webView 源；普通请求走 HTTP 客户端，故这里给的是
+  // 我们实际发出去的那条 UA（不是浏览器/WebView 内核 UA，属近似；矩阵 `h-java-webview-ua` 记差）。
+  // ctx.userAgent 未接线时点名抛错，绝不编一个串冒充。
   method('getWebViewUA', { obj: 'java' }, (d) => (): string => {
     if (!d.ctx.userAgent) {
       throw new JsSandboxError('java.getWebViewUA 取不到出站 UA（ctx.userAgent 未接线）', { ...d.loc, facet: d.facet, script: d.code })
     }
     return d.ctx.userAgent()
   }),
+  // 部分源借 `getUserAgent() === getWebViewUA()` 做「这是源阅还是阅读」的特性探测
+  // （Linpx / 兽人小说站 jsLib）；本仓两者同源，故给同一个值，探测落到「非源阅」分支。
+  method('getUserAgent', { obj: 'java' }, (d) => (): string => {
+    if (!d.ctx.userAgent) {
+      throw new JsSandboxError('java.getUserAgent 取不到出站 UA（ctx.userAgent 未接线）', { ...d.loc, facet: d.facet, script: d.code })
+    }
+    return d.ctx.userAgent()
+  }),
+  // java.webView(url)：真浏览器取渲染后 HTML（Android WebView 的安全替代）
+  method('webView', { obj: 'java' }, (d) => async (url: unknown): Promise<string> => {
+    const fn = d.ctx.webView
+    if (!fn) {
+      throw new JsSandboxError('java.webView 需要真浏览器 WebView（ctx.webView 未接线）', { ...d.loc, facet: d.facet, script: d.code })
+    }
+    if (url === null || url === undefined) {
+      throw new JsSandboxError('java.webView 参数为空（脚本传进 null/undefined）', { ...d.loc, facet: d.facet, script: d.code })
+    }
+    return fn(String(url))
+  }, 'async'),
   // java.head(url, headers[, timeout])：HEAD 请求、**不跟重定向**（对面 followRedirects(false)），
   // 数据面 = { url, statusCode, headers }；`.headers()` 方法壳在 BOOTSTRAP 里包（同 post，跨桥只走
   // JSON）。脚本用它读 `res.headers()["location"]` 取图片直链（Linpx/兽人小说站 jsLib）。
   method('head', { obj: 'java' }, (d) => async (
     url: unknown, headersArg?: unknown,
-  ): Promise<{ url: string; statusCode: number; headers: Record<string, string> }> => {
+  ): Promise<ResponseHost> => {
     const headFn = d.ctx.fetchHead
     if (!headFn) {
       throw new JsSandboxError('该源未提供 HEAD 请求能力（ctx.fetchHead 缺失）', { ...d.loc, facet: d.facet, script: d.code })
@@ -197,15 +250,9 @@ export const JAVA_PROTOCOL = [
     if (url === null || url === undefined) {
       throw new JsSandboxError('java.head 参数为空（脚本传进 null/undefined）', { ...d.loc, facet: d.facet, script: d.code })
     }
-    let hdrs: Record<string, string> | undefined
-    if (typeof headersArg === 'string' && headersArg.trim() !== '') {
-      try { hdrs = JSON.parse(headersArg) as Record<string, string> } catch {
-        throw new JsSandboxError(`java.head 的 header 参数不是 JSON：${headersArg.slice(0, 60)}`, { ...d.loc, facet: d.facet, script: d.code })
-      }
-    } else if (headersArg !== null && typeof headersArg === 'object' && headersArg !== undefined) {
-      hdrs = headersArg as Record<string, string>
-    }
-    return headFn(String(url), hdrs)
+    const hdrs = parseHeaderArg(d, 'java.head', headersArg)
+    const r = await headFn(String(url), hdrs)
+    return responseOf({ url: r.url, statusCode: r.statusCode, headers: r.headers, cookies: r.cookies ?? {}, body: '' })
   }, 'async'),
   // ── 沙箱变量（java.get/put）─────────────────────────────────────────
   // 未设 → **空串**（变量读的收口是「本表 → 大变量表 → 空串」三级回落）。曾返 undefined 过 JSON 桥
@@ -270,6 +317,7 @@ export const JAVA_PROTOCOL = [
   method('timeFormat', { obj: 'java' }, () => (ts: number | string): string => fmtTime(ts, false)),
   method('timeFormatUTC', { obj: 'java' }, () => (ts: number | string): string => fmtTime(ts, true)),
   method('base64Encode', { obj: 'java' }, () => (s: string): string => base64Encode(String(s))),
+  method('base64EncodeBytes', { obj: 'java' }, () => (bytes: number[]): string => base64EncodeBytes(bytes)),
   method('base64Decode', { obj: 'java' }, () => (s: string): string => base64Decode(String(s))),
   method('md5Encode', { obj: 'java' }, () => (s: string): string => md5Hex(String(s))),
   method('md5Encode16', { obj: 'java' }, () => (s: string): string => md5Hex16(String(s))),
@@ -308,6 +356,12 @@ export const JAVA_PROTOCOL = [
   }),
   method('cookieRemove', { obj: 'cookie', as: 'removeCookie' }, (d) => (name: string): void => {
     jar(d).delete(String(name))
+  }),
+  // cookie.replaceCookie(url, cookieString)：对面按 url 取旧表、合并新串再写回（CookieStore.kt）；
+  // 本仓垫片是按源键值表（无域），故只做「新串逐对覆盖」——与对面在单表内的可观测结果一致。
+  method('cookieReplace', { obj: 'cookie', as: 'replaceCookie' }, (d) => (_url: string, raw: string): void => {
+    const j = jar(d)
+    for (const [k, v] of Object.entries(parseCookieString(String(raw)))) j.set(k, v)
   }),
   // java.getCookie(tag[, key])：对面按 url-tag 读 CookieStore；本仓 jar 按**源**隔离（name→value），
   // tag 不进判据——无 key 时取整表拼 cookie 串（近似，矩阵 `h-java-getcookie` 记差）。

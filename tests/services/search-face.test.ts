@@ -4,6 +4,7 @@ import { fetchSearchPage, searchErrorCodeOf } from '../../src/services/search-fa
 import { normalizeSource } from '../../src/services/normalize.js'
 import { DecodeError, FetchError } from '../../src/services/errors.js'
 import { RuleEvalError } from '../../src/engine/index.js'
+import { fakeSourceRequest } from './fake-source-request.js'
 import type { NovelSource } from '../../src/services/types.js'
 
 /** 搜索面：探针与聚合搜索共用的请求语义 */
@@ -26,7 +27,7 @@ const html = (text: string): Response => new Response(text, { headers: { 'conten
 describe('fetchSearchPage', () => {
   it('条目提取：ok 结果含 contexts 与 landedUrl（合成 Response 无重定向 → 回落请求址）', async () => {
     const f = createFetcher({ fetchImpl: async () => html(SEARCH_HTML) })
-    const r = await fetchSearchPage(src(), '书', f)
+    const r = await fetchSearchPage(src(), '书', fakeSourceRequest(f))
     expect(r.ok).toBe(true)
     if (!r.ok || r.shape !== 'list') return
     expect(r.contexts).toHaveLength(2)
@@ -34,7 +35,7 @@ describe('fetchSearchPage', () => {
   })
   it('规则缺失 → ok:false RuleMissing（点名缺失字段）', async () => {
     const f = createFetcher({ fetchImpl: async () => html(SEARCH_HTML) })
-    const r = await fetchSearchPage(src({ searchUrl: undefined }), '书', f)
+    const r = await fetchSearchPage(src({ searchUrl: undefined }), '书', fakeSourceRequest(f))
     expect(r.ok).toBe(false)
     if (r.ok) return
     expect(r.code).toBe('RuleMissing')
@@ -43,7 +44,7 @@ describe('fetchSearchPage', () => {
   it('timeoutMs 生效：挂起的抓取在限时内抛 FetchError', async () => {
     const f = createFetcher({ fetchImpl: () => new Promise<Response>(() => { /* 永不返回 */ }) })
     const t0 = Date.now()
-    await expect(fetchSearchPage(src(), '书', f, 50)).rejects.toMatchObject({ name: 'FetchError' })
+    await expect(fetchSearchPage(src(), '书', fakeSourceRequest(f), 50)).rejects.toMatchObject({ name: 'FetchError' })
     expect(Date.now() - t0).toBeLessThan(1000)
   })
   it('POST 选项透传：method/body 插值/headers（probe.test 同款断言口径）', async () => {
@@ -56,7 +57,7 @@ describe('fetchSearchPage', () => {
     } })
     const r = await fetchSearchPage(src({
       searchUrl: '/s.php,{"method":"POST","body":"s={{key}}&t=1","headers":{"Referer":"https://ref.com"}}',
-    }), '书', f)
+    }), '书', fakeSourceRequest(f))
     expect(method).toBe('POST')
     expect(body).toBe('s=%E4%B9%A6&t=1')
     expect(headers?.Referer).toBe('https://ref.com')

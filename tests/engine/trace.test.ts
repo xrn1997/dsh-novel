@@ -50,7 +50,7 @@ describe('evaluateWithTrace 端到端', () => {
     expect(t.value).toEqual({ kind: 'value', text: '|净化Y' })
   })
   it('纯 @js 首段在 JSON-only 页：result 取整页原文（pageText），非空', async () => {
-    // 订正：首段 @js 曾只见 ctx.html ?? ''，JSON 源（无 html）拿到空 result
+    // 首段 @js 的 result 取整页原文（pageText）；JSON 源（无 html）同样非空
     const t = await evaluateWithTrace('@js:return result.length>0?"有内容":"空"', { json: { a: 1 } }, 'content')
     expect(t.value).toEqual({ kind: 'value', text: '有内容' })
   })

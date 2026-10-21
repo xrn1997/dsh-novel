@@ -16,9 +16,14 @@ describe('URL 选项的未知键留痕', () => {
 
   it('含本插件不支持的键 → 点名这些键', () => {
     const warns = captureWarn(() => assembleRequest(
-      'https://x/api,{"method":"POST","retry":3,"bodyJs":"@js:1"}', {}, 'https://x'))
-    expect(warns.join('\n')).toMatch(/retry/)
+      'https://x/api,{"method":"POST","dnsIp":"1.2.3.4","bodyJs":"@js:1"}', {}, 'https://x'))
+    expect(warns.join('\n')).toMatch(/dnsIp/)
     expect(warns.join('\n')).toMatch(/bodyJs/)
+  })
+
+  it('retry 键进入请求计划（非 2xx 额外重试次数）', () => {
+    const plan = assembleRequest('https://x/api,{"retry":2}', {}, 'https://x')
+    expect(plan.retry).toBe(2)
   })
 
   it('只含支持的键 → 一条 warn 都不发', () => {
@@ -222,7 +227,7 @@ describe('resolveJsSearchTemplate', () => {
     expect(t).toBe('https://a.com/s?k=%E5%89%91%E6%9D%A5&p=2')
   })
   it('串首裸 `js:` 形态（isJsForm 三形态之一）同样吃串尾求值——不把整串 `js:…` 当字面 URL 发出去', async () => {
-    // 回归形态（矩阵 b-url-js-anywhere 订正段）：块扫描只认 `@js:` 时，整串 `js:…` 无块可配、
+    // 回归形态（矩阵 b-url-js-anywhere）：块扫描只认 `@js:` 时，整串 `js:…` 无块可配、
     // 原样落到 URL 上。红检：把 URL_JS_BLOCK_RE 的 `(?:@|^\\s*)js:` 退回 `@js:` 即红在字面量上。
     const t = await resolveJsSearchTemplate(mkSource(),
       'js:"https://a.com/s?k=" + encodeURIComponent(key)', '剑来', 1, fetcher)

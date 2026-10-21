@@ -1,8 +1,8 @@
 import { fetchKindPage } from './explore-face.js'
 import type { KindCache } from './explore-cache.js'
-import type { Fetcher } from './fetcher.js'
 import { exploreParticipates } from './participation.js'
 import { searchErrorCodeOf } from './search-face.js'
+import type { SourceRequest } from './source-request.js'
 import type { ExploreSources, SearchGroup, SearchHit } from '../shared/wire.js'
 import type { NovelSource } from './types.js'
 
@@ -50,7 +50,7 @@ export function deriveExploreSources(sources: NovelSource[]): ExploreSources['so
  *  **本函数从不抛错**：抓取失败与规则缺失都以带 `error` 的组交回——`ExploreSnapshot` 的
  *  「这一页没问到」全靠这条 error 落到 `error` 泳道上，别改成抛。 */
 export async function fetchExploreGroup(
-  source: NovelSource, kindUrl: string, fetcher: Fetcher,
+  source: NovelSource, kindUrl: string, request: SourceRequest,
   cfg: { timeoutMs: number; jsTimeoutMs?: number; page?: number; cache?: KindCache; epoch: string | number; now?: () => number },
 ): Promise<SearchGroup> {
   const now = cfg.now ?? Date.now
@@ -63,7 +63,7 @@ export async function fetchExploreGroup(
   const cached = cfg.cache?.get(key, now())
   if (cached !== undefined && cached !== null) return cached
   try {
-    const fetched = await fetchKindPage(source, kindUrl, fetcher, cfg.timeoutMs, cfg.jsTimeoutMs, page)
+    const fetched = await fetchKindPage(source, kindUrl, request, cfg.timeoutMs, cfg.jsTimeoutMs, page)
     if (!fetched.ok) return { ...base, error: { code: fetched.code, message: fetched.message } }
     const group = { ...base, hits: fetched.hits }
     // 只写成功结果：把失败也缓存住，等于把一次偶发故障钉死到 TTL 结束

@@ -1,10 +1,18 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { CorruptJsonError, backupPathOf, isAtomicTemp, novelDir, readJson, tempPathOf, writeFileAtomic, writeJsonAtomic, createDebouncedWriter } from '../../src/services/storage.js'
 import { makeTempDir } from '../temp-dir.js'
 
+afterEach(() => { vi.restoreAllMocks() })
+
 async function tmp(): Promise<string> { return makeTempDir('novel-st-') }
+
+function fsError(code: string, message = code): NodeJS.ErrnoException {
+  const e = new Error(message) as NodeJS.ErrnoException
+  e.code = code
+  return e
+}
 
 describe('novelDir', () => {
   it('DSH_HOME 存在时取 $DSH_HOME/novel', () => {
@@ -46,6 +54,51 @@ describe('writeFileAtomic（PageCache/JSON 共用低层）', () => {
     expect(await fs.readFile(file, 'utf8')).toBe('v39')
     const residue = (await fs.readdir(dir)).filter((f) => f.endsWith('.tmp'))
     expect(residue).toHaveLength(0)
+  })
+
+  it('瞬时 EPERM 有限重试后成功；持久 EPERM 重试用尽后如实抛', async () => {
+    const dir = await tmp()
+    const file = path.join(dir, 'retry.txt')
+    const realRename = fs.rename.bind(fs)
+    let calls = 0
+    vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      calls += 1
+      if (calls < 3) throw fsError('EPERM', 'file held')
+      return realRename(from, to)
+    })
+    await writeFileAtomic(file, 'ok')
+    expect(await fs.readFile(file, 'utf8')).toBe('ok')
+    expect(calls).toBe(3)
+
+    calls = 0
+    vi.spyOn(fs, 'rename').mockImplementation(async () => {
+      calls += 1
+      throw fsError('EPERM', 'still held')
+    })
+    await expect(writeFileAtomic(file, 'x')).rejects.toMatchObject({ code: 'EPERM' })
+    expect(calls).toBe(4)             // 首次 + 3 次退避
+  }, 10_000)
+
+  it('EACCES 不重试（持久性权限错直接如实抛）', async () => {
+    const dir = await tmp()
+    const file = path.join(dir, 'denied.txt')
+    let calls = 0
+    vi.spyOn(fs, 'rename').mockImplementation(async () => {
+      calls += 1
+      throw fsError('EACCES', 'denied')
+    })
+    await expect(writeFileAtomic(file, 'x')).rejects.toMatchObject({ code: 'EACCES' })
+    expect(calls).toBe(1)
+  })
+
+  it('定时器路径的写失败会留下可见错误，flush 如实抛出（不成为 unhandled）', async () => {
+    const dir = await tmp()
+    const file = path.join(dir, 'debounced-fail.json')
+    vi.spyOn(fs, 'rename').mockRejectedValue(fsError('EACCES', 'denied'))
+    const w = createDebouncedWriter(1)
+    w.schedule(file, { v: 1 })
+    await new Promise((resolve) => setTimeout(resolve, 20))   // 让定时器先撞失败
+    await expect(w.flush(file)).rejects.toMatchObject({ code: 'EACCES' })
   })
 })
 

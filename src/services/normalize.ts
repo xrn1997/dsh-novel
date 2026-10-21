@@ -33,7 +33,7 @@ const RULE_FIELDS = [
 /** 对象方言子字段 → 模型字段映射（书源 JSON 的嵌套导出形态）。
  * 搜索上下文（ruleSearch）落搜索面字段；详情上下文（ruleBookInfo）落 ruleDetail*——两上下文
  * 规则不同，混用会把搜索条目规则套到详情页造垃圾标题；详情面只由 `ruleDetail*` 承载，
- * 回落只在 `bridge.detailFieldsOf` 一处。 */
+ * 回落只在 `bridge.detailFieldsFromContext` 一处。 */
 const DIALECT_MAP: Record<string, Record<string, string>> = {
   ruleSearch: {
     bookList: 'ruleBookList', name: 'ruleBookName', author: 'ruleAuthor', bookUrl: 'ruleBookUrl',
@@ -49,10 +49,13 @@ const DIALECT_MAP: Record<string, Record<string, string>> = {
   },
   ruleToc: {
     chapterList: 'ruleChapterList', chapterName: 'ruleChapterName', chapterUrl: 'ruleChapterUrl',
+    isVip: 'ruleChapterIsVip', isVolume: 'ruleChapterIsVolume', isPay: 'ruleChapterIsPay',
+    updateTime: 'ruleChapterUpdateTime',
     nextTocUrl: 'nextTocUrl',
   },
   ruleContent: {
     content: 'ruleContent', nextContentUrl: 'nextPageUrl',
+    subContent: 'ruleContentSubContent',
   },
 }
 
@@ -142,6 +145,11 @@ export function normalizeSource(raw: unknown): NormalizeResult {
   rules.ruleDetailLastChapter = str(r.ruleDetailLastChapter)
   rules.ruleDetailInit = str(r.ruleDetailInit)
   rules.ruleChapterList = str(r.ruleChapterList)
+  rules.ruleContentSubContent = str(r.ruleContentSubContent)
+  rules.ruleChapterIsVip = str(r.ruleChapterIsVip)
+  rules.ruleChapterIsVolume = str(r.ruleChapterIsVolume)
+  rules.ruleChapterIsPay = str(r.ruleChapterIsPay)
+  rules.ruleChapterUpdateTime = str(r.ruleChapterUpdateTime)
   rules.jsLib = str(r.jsLib)
 
   const groupsRaw = r.bookSourceGroup

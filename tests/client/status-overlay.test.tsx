@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createElement } from 'react'
 import type { ReactNode } from 'react'
 import { NovelStatusOverlay } from '../../src/client/views/NovelStatusOverlay.js'
 import { SettingsSection } from '../../src/client/views/SettingsSection.js'
-import { resetJobSurface, takeJobOpen } from '../../src/client/jobs.js'
+import { requestJobOpen, resetJobSurface, takeJobOpen } from '../../src/client/jobs.js'
 import { createStore, navigate, routeStore, useStore } from '../../src/client/store.js'
 import type { Store } from '../../src/client/store.js'
 import { apply } from '../../src/client/index.js'
@@ -30,9 +30,16 @@ const runningImport: JobState = {
 }
 const runningProbe: JobState = { ...runningImport, id: 'prb1', kind: 'batch-probe' }
 
-const depsWith = (job: JobState | null) => makeDeps({
+/** 一条已验源的公开形：源列表非空才够得着行内「试跑」入口（试跑子视图自己没有任务卡） */
+const probeRowSource: SourcePublic = {
+  id: 'src1', name: '示例源', baseUrl: 'https://example.com/', enabled: true,
+  groups: [], type: 'text', status: 'verified', importedAt: 0,
+  hasHeader: false, hasAuth: false, authExpired: false, hasLoginUrl: false,
+}
+
+const depsWith = (job: JobState | null, sources: SourcePublic[] = []) => makeDeps({
   fetchJobStatus: vi.fn(async () => job),
-  apiGet: vi.fn(async (path: string) => (path === 'sources' ? [] as SourcePublic[] : null)),
+  apiGet: vi.fn(async (path: string) => (path === 'sources' ? sources : null)),
 })
 
 afterEach(() => {
@@ -142,5 +149,77 @@ describe('任务泳道 = 跨界面的「去现场」（小说面板不在前台�
     fireEvent.click(await screen.findByText('点此查看 →'))
     expect(await screen.findByText('小说现场：sources')).toBeTruthy()
     expect(host.layout.selectPanel).toHaveBeenCalledWith('novel')
+  })
+})
+
+/**
+ * 状态层点任务泳道后的**消费半**：overlay 只把 running probe 喂进 `jobSurface`，`SettingsSection`
+ * 消费「看任务卡」意图时，滚动必须落在**已经挂载**的卡片根节点上（这一跳此前只用一次性探针
+ * 验证过，现转成入库钉子）。jsdom 没有排版引擎，`scrollIntoView` 用替身量调用次数、落点与参数。
+ */
+describe('任务卡去现场（消费半：喂现场 → 消费意图 → 滚动）', () => {
+  const cardIn = async (container: HTMLElement): Promise<HTMLElement> => {
+    await waitFor(() => {
+      expect(container.querySelector('[data-novel-run-card]'), 'running probe 的任务卡未渲染——现场没被 overlay 喂进镜像？').not.toBeNull()
+    })
+    const card = container.querySelector('[data-novel-run-card]')
+    if (card === null) throw new Error('waitFor 已判过，这里只为类型收窄')
+    return card as HTMLElement
+  }
+
+  it('running probe + requestJobOpen(\'probe\') → 卡片根节点滚动恰好一次（居中），意图取走即空', async () => {
+    const deps = depsWith(runningProbe)
+    render(<NovelStatusOverlay deps={deps} focusPanel={() => {}} />)
+    const section = render(<SettingsSection deps={deps} />)
+    const card = await cardIn(section.container)
+    const into = vi.fn()
+    card.scrollIntoView = into
+
+    act(() => requestJobOpen('probe'))
+
+    await waitFor(() => expect(into).toHaveBeenCalledTimes(1))
+    expect(into.mock.instances[0], '滚动落点必须是卡片根节点').toBe(card)
+    expect(into).toHaveBeenCalledWith({ block: 'center' })
+    expect(takeJobOpen()).toBeNull()
+  })
+
+  it('在试跑子视图里点「点此查看」→ 先退回源列表、再滚到任务卡（恰好一次、居中）', async () => {
+    const deps = depsWith(runningProbe, [probeRowSource])
+    // 卡片随「退回列表」这一拍才挂载，scrollIntoView 在同一次 commit 的 effect 里就已被调用 ⇒
+    // 替身必须先上原型（单卡赋值赶不上）；`mock.instances` 记 `this`，落点仍是卡片本身。
+    const proto = Element.prototype as unknown as { scrollIntoView?: (arg?: unknown) => void }
+    const hadInto = proto.scrollIntoView !== undefined
+    const originalInto = proto.scrollIntoView
+    const into = vi.fn()
+    proto.scrollIntoView = into
+    try {
+      render(<NovelStatusOverlay deps={deps} focusPanel={() => {}} />)
+      const section = render(<SettingsSection deps={deps} />)
+      fireEvent.click(await screen.findByText('试跑'))
+      expect(await screen.findByText('← 返回源列表'), '没进试跑子视图').toBeTruthy()
+
+      act(() => requestJobOpen('probe'))
+
+      const card = await cardIn(section.container)
+      await waitFor(() => expect(into).toHaveBeenCalledTimes(1))
+      expect(into.mock.instances[0], '滚动落点必须是任务卡根节点').toBe(card)
+      expect(into).toHaveBeenCalledWith({ block: 'center' })
+      expect(screen.queryByText('← 返回源列表'), '意图到达后应已退回源列表、不在子视图里').toBeNull()
+      expect(takeJobOpen()).toBeNull()
+    } finally {
+      if (!hadInto) delete proto.scrollIntoView
+      else proto.scrollIntoView = originalInto
+    }
+  })
+
+  it("requestJobOpen('import') 打开导入弹层（运行中的导入任务从状态层回到弹层）", async () => {
+    const deps = depsWith(runningImport)
+    render(<NovelStatusOverlay deps={deps} focusPanel={() => {}} />)
+    render(<SettingsSection deps={deps} />)
+
+    act(() => requestJobOpen('import'))
+
+    expect(await screen.findByText('导入书源'), '导入弹层没开 = 意图没被消费').toBeTruthy()
+    expect(takeJobOpen()).toBeNull()
   })
 })

@@ -3,6 +3,7 @@ import { createFetcher } from '../../src/services/fetcher.js'
 import { normalizeSource } from '../../src/services/normalize.js'
 import { EXPLORE_CACHE_TTL_MS, KindCache } from '../../src/services/explore-cache.js'
 import { fetchExploreGroup } from '../../src/services/explore.js'
+import { fakeSourceRequest } from './fake-source-request.js'
 import type { NovelSource } from '../../src/services/types.js'
 import type { SearchGroup } from '../../src/shared/wire.js'
 
@@ -74,8 +75,8 @@ describe('fetchExploreGroup：单源一页的缓存语义', () => {
     const cache = new KindCache()
     const at = 1_000
     const once = { ...cfg(cache), now: () => at }
-    const first = await fetchExploreGroup(source(), 'xuanhuan', f, once)
-    const second = await fetchExploreGroup(source(), 'xuanhuan', f, once)
+    const first = await fetchExploreGroup(source(), 'xuanhuan', fakeSourceRequest(f), once)
+    const second = await fetchExploreGroup(source(), 'xuanhuan', fakeSourceRequest(f), once)
     expect(first.hits.map((h) => h.title)).toEqual(['剑起长安'])
     expect(fetches).toBe(1)
     expect(second).toBe(first)
@@ -94,14 +95,14 @@ describe('fetchExploreGroup：单源一页的缓存语义', () => {
     const at = 1_000
     const p1 = { ...cfg(cache), now: () => at }
     const p2 = { ...cfg(cache), page: 2, now: () => at }
-    const first = await fetchExploreGroup(source(), 'xuanhuan', f, p1)
-    const second = await fetchExploreGroup(source(), 'xuanhuan', f, p2)
+    const first = await fetchExploreGroup(source(), 'xuanhuan', fakeSourceRequest(f), p1)
+    const second = await fetchExploreGroup(source(), 'xuanhuan', fakeSourceRequest(f), p2)
     // 首页地址在这里既是「第 1 页的写法」也是证据：它没带上页码段。
     expect(seen).toEqual(['https://s.com/xuanhuan', 'https://s.com/xuanhuan/2'])
     expect(fetches).toBe(2)
     // 各归各槽：第二轮两页都命中自己的那一份，一个包都不发。
-    expect(await fetchExploreGroup(source(), 'xuanhuan', f, p1)).toBe(first)
-    expect(await fetchExploreGroup(source(), 'xuanhuan', f, p2)).toBe(second)
+    expect(await fetchExploreGroup(source(), 'xuanhuan', fakeSourceRequest(f), p1)).toBe(first)
+    expect(await fetchExploreGroup(source(), 'xuanhuan', fakeSourceRequest(f), p2)).toBe(second)
     expect(fetches).toBe(2)
   })
 
@@ -117,10 +118,10 @@ describe('fetchExploreGroup：单源一页的缓存语义', () => {
       },
     })
     const cache = new KindCache()
-    const bad = await fetchExploreGroup(source(), 'xuanhuan', f, cfg(cache))
+    const bad = await fetchExploreGroup(source(), 'xuanhuan', fakeSourceRequest(f), cfg(cache))
     expect(bad.error?.code).toBe('FetchError')      // 错误码投影是 searchErrorCodeOf 的活
     expect(bad.hits).toEqual([])
-    const good = await fetchExploreGroup(source(), 'xuanhuan', f, cfg(cache))
+    const good = await fetchExploreGroup(source(), 'xuanhuan', fakeSourceRequest(f), cfg(cache))
     expect(fetches).toBe(2)
     expect(good.error).toBeUndefined()
     expect(good.hits.map((h) => h.title)).toEqual(['剑起长安'])
@@ -133,10 +134,10 @@ describe('fetchExploreGroup：单源一页的缓存语义', () => {
     const f = createFetcher({ fetchImpl: async () => { fetches++; return html(LIST_HTML) } })
     const cache = new KindCache()
     const missing = source({ ruleFind: { kinds: [{ title: '玄幻', url: 'xuanhuan' }] } })
-    const first = await fetchExploreGroup(missing, 'xuanhuan', f, cfg(cache))
+    const first = await fetchExploreGroup(missing, 'xuanhuan', fakeSourceRequest(f), cfg(cache))
     expect(first.error?.code).toBe('RuleMissing')
     expect(fetches).toBe(0)                        // 规则缺失在发请求之前就定了，一个包都没发
-    const second = await fetchExploreGroup(source(), 'xuanhuan', f, cfg(cache))
+    const second = await fetchExploreGroup(source(), 'xuanhuan', fakeSourceRequest(f), cfg(cache))
     expect(fetches).toBe(1)
     expect(second.error).toBeUndefined()
     expect(second.hits.map((h) => h.title)).toEqual(['剑起长安'])
@@ -147,8 +148,8 @@ describe('fetchExploreGroup：单源一页的缓存语义', () => {
     const f = createFetcher({ fetchImpl: async () => { fetches++; return html(LIST_HTML) } })
     const cache = new KindCache()
     const at = 1_000
-    await fetchExploreGroup(source(), 'xuanhuan', f, { ...cfg(cache), now: () => at })
-    await fetchExploreGroup(source(), 'xuanhuan', f, { ...cfg(cache), epoch: 8, now: () => at })
+    await fetchExploreGroup(source(), 'xuanhuan', fakeSourceRequest(f), { ...cfg(cache), now: () => at })
+    await fetchExploreGroup(source(), 'xuanhuan', fakeSourceRequest(f), { ...cfg(cache), epoch: 8, now: () => at })
     expect(fetches).toBe(2)
     // 旧代际那一份仍在槽里：换键不删缓存，规则回滚也还能命中（这一层不替人做清理）。
     expect(cache.get({ sourceId: 'i', kind: 'xuanhuan', epoch: 7, page: 1 }, at)).not.toBeNull()
@@ -163,11 +164,11 @@ describe('fetchExploreGroup：单源一页的缓存语义', () => {
     const cache = new KindCache()
     const stored = group('i')
     cache.put({ sourceId: 'i', kind: 'xuanhuan', epoch: 7, page: 1 }, stored, 0)
-    const fresh = await fetchExploreGroup(source(), 'xuanhuan', f,
+    const fresh = await fetchExploreGroup(source(), 'xuanhuan', fakeSourceRequest(f),
       { ...cfg(cache), now: () => EXPLORE_CACHE_TTL_MS })
     expect(fetches).toBe(0)
     expect(fresh).toBe(stored)
-    const stale = await fetchExploreGroup(source(), 'xuanhuan', f,
+    const stale = await fetchExploreGroup(source(), 'xuanhuan', fakeSourceRequest(f),
       { ...cfg(cache), now: () => EXPLORE_CACHE_TTL_MS + 1 })
     expect(fetches).toBe(1)
     expect(stale.hits.map((h) => h.title)).toEqual(['剑起长安'])
@@ -178,8 +179,8 @@ describe('fetchExploreGroup：单源一页的缓存语义', () => {
   it('不传 cache 时永不命中：同键两次各打一次', async () => {
     let fetches = 0
     const f = createFetcher({ fetchImpl: async () => { fetches++; return html(LIST_HTML) } })
-    const first = await fetchExploreGroup(source(), 'xuanhuan', f, cfg())
-    const second = await fetchExploreGroup(source(), 'xuanhuan', f, cfg())
+    const first = await fetchExploreGroup(source(), 'xuanhuan', fakeSourceRequest(f), cfg())
+    const second = await fetchExploreGroup(source(), 'xuanhuan', fakeSourceRequest(f), cfg())
     expect(fetches).toBe(2)
     expect(second).not.toBe(first)
     expect(second).toEqual(first)

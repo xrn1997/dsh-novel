@@ -1,5 +1,8 @@
+import { useCallback } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useCopy } from '../copy/index.js'
+import { setRunCard } from '../run-card.js'
+import type { RunCardKind } from '../run-card.js'
 import type { JobState, LocalImportWarning } from './types.js'
 
 /** 小组件集：状态徽标 / 错误横幅（带段级定位徽标）/ 空态 / 运行卡与进度段——六视图共用。
@@ -110,8 +113,12 @@ export function ProgressBar({ pct, style }: { pct: number; style?: CSSProperties
 /** 运行卡外壳：导入/批量验证两卡此前近逐字同构——浮层底 + 标题行 + 进度段
  *  + counts 尾行 + 「可以关掉设置页，任务在服务端继续」全同，差异仅 label/meta 文案与
  *  dupSkipped 等条件行。本组件持公共外壳（brand 派生色走 --novel-brand-* token），
- *  两卡收薄为调用、差异插槽化（meta/counts）。 */
-export function RunCard({ label, meta, pct, counts }: {
+ *  两卡收薄为调用、差异插槽化（meta/counts）。
+ *  根节点同时是「任务去现场」的登记点（`run-card.ts`）：按 `kind` 分桶登记——两张运行卡
+ *  可以同时在树上，去现场只该滚自己那一种。 */
+export function RunCard({ kind, label, meta, pct, counts }: {
+  /** 现场分桶：导入卡与验证卡可同时在场（见 `run-card.ts` 文件头） */
+  kind: RunCardKind
   /** 「导入中…」/「验证中…」 */
   label: string
   /** done/total（pct%）· 并发 5 路 之类 */
@@ -121,8 +128,11 @@ export function RunCard({ label, meta, pct, counts }: {
   counts: ReactNode
 }): ReactNode {
   const t = useCopy()
+  /** ref 身份钉在 kind 上：内联回调每轮渲染换身份，React 会以 null 重调旧 ref——等于每轮
+   *  渲染都把现场短暂清空，在途的去现场意图可能撞上这个空窗。 */
+  const register = useCallback((el: HTMLElement | null) => { setRunCard(kind, el) }, [kind])
   return (
-    <div data-novel-run-card className="novel-group novel-run-card">
+    <div data-novel-run-card className="novel-group novel-run-card" ref={register}>
       <div className="novel-toolbar novel-run-card-head">
         <strong>{label}</strong>
         <span className="novel-muted">{meta}</span>
