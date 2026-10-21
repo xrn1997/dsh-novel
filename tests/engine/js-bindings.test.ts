@@ -61,26 +61,26 @@ describe('沙箱 legado 绑定与作用域（本轮修复钉子）', () => {
   })
   it('evalJs 直连：ctx.book/ctx.chapter 可见（沙箱全局注入）', async () => {
     const { evalJs } = await import('../../src/engine/js-sandbox.js')
-    const out = await evalJs(
-      'book.bookUrl + "|" + chapter.title',
-      { result: '', baseUrl: 'https://x.com/b/1', source: 'https://x.com' },
-      {
+    const out = await evalJs({
+      code: 'book.bookUrl + "|" + chapter.title',
+      host: { result: '', baseUrl: 'https://x.com/b/1', source: 'https://x.com' },
+      ctx: {
         baseUrl: 'https://x.com/b/1',
         book: { bookUrl: 'https://x.com/b/1', name: '诡秘' },
         chapter: { title: '第3章', index: 3, url: 'https://x.com/b/1/3' },
       },
-      loc, 'content', undefined, { scriptForm: true },
-    )
+      loc, facet: 'content', opts: { scriptForm: true },
+    })
     expect(out.value).toEqual({ kind: 'value', text: 'https://x.com/b/1|第3章' })
   })
   it('evalJs 直连：src 取 ctx.html', async () => {
     const { evalJs } = await import('../../src/engine/js-sandbox.js')
-    const out = await evalJs(
-      'src.match(/id="([\\w-]+)"/)[1]',
-      { result: '', baseUrl: 'https://x.com', source: 'https://x.com' },
-      { baseUrl: 'https://x.com', html: '<div id="chapter-list">x</div>' },
-      loc, 'toc', undefined, { scriptForm: true },
-    )
+    const out = await evalJs({
+      code: 'src.match(/id="([\\w-]+)"/)[1]',
+      host: { result: '', baseUrl: 'https://x.com', source: 'https://x.com' },
+      ctx: { baseUrl: 'https://x.com', html: '<div id="chapter-list">x</div>' },
+      loc, facet: 'toc', opts: { scriptForm: true },
+    })
     expect(out.value).toEqual({ kind: 'value', text: 'chapter-list' })
   })
   it('java.ajax 同步语义（worker + SAB RPC 桥——legado runBlocking 口径）', async () => {
@@ -156,20 +156,20 @@ describe('沙箱 legado 绑定与作用域（本轮修复钉子）', () => {
   it('JSON 页 result 按对象绑定（legado isJSON 口径——result.chapterTitle 字段访问形态）', async () => {
     const { evalJs } = await import('../../src/engine/js-sandbox.js')
     const json = JSON.stringify({ chapterTitle: '第9章', chapterId: 77 })
-    const out = await evalJs(
-      'result.chapterTitle + "|" + result.chapterId',
-      { result: json, resultKind: 'page', baseUrl: 'https://x.com/api', source: 'https://x.com' },
-      { baseUrl: 'https://x.com/api', html: json },
-      loc, 'toc', undefined, { scriptForm: true },
-    )
+    const out = await evalJs({
+      code: 'result.chapterTitle + "|" + result.chapterId',
+      host: { result: json, resultKind: 'page', baseUrl: 'https://x.com/api', source: 'https://x.com' },
+      ctx: { baseUrl: 'https://x.com/api', html: json },
+      loc, facet: 'toc', opts: { scriptForm: true },
+    })
     expect(out.value).toEqual({ kind: 'value', text: '第9章|77' })
     // HTML 页 result 仍是元素包装（字符串方法照常）
-    const out2 = await evalJs(
-      'result.replace(/x/g, "y")',
-      { result: '<p>x页</p>', resultKind: 'page', baseUrl: 'https://x.com', source: 'https://x.com' },
-      { baseUrl: 'https://x.com', html: '<p>x页</p>' },
-      loc, 'toc', undefined, { scriptForm: true },
-    )
+    const out2 = await evalJs({
+      code: 'result.replace(/x/g, "y")',
+      host: { result: '<p>x页</p>', resultKind: 'page', baseUrl: 'https://x.com', source: 'https://x.com' },
+      ctx: { baseUrl: 'https://x.com', html: '<p>x页</p>' },
+      loc, facet: 'toc', opts: { scriptForm: true },
+    })
     expect(out2.value).toEqual({ kind: 'value', text: '<p>y页</p>' })
   })
   it('org.jsoup.Jsoup.parse 最小仿真（select/size/get/text 链——白鹿书院形态）', async () => {

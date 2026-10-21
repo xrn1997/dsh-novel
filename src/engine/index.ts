@@ -15,3 +15,4 @@ export { interpolateUrl, isPlaceholderExpr, expandPageAngleList, URL_OPTION_SPLI
 export { isEngineError } from './errors.js'
 export { EngineError, UnsupportedRuleError, RuleEvalError, JsSandboxError } from './errors.js'
 export type { EngineValue, EvalContext, Facet, RuleUsage } from './types.js'
+export type { SourceSession } from './session.js'

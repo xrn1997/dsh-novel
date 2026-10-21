@@ -23,7 +23,7 @@ const run = (
   host: JsHost = hostOf(),
   ctx: EvalContext = ctxOf(),
   evaluateRef?: EvaluateRef,
-) => evalJs(code, host, ctx, L, 'content', evaluateRef)
+) => evalJs({ code, host, ctx, loc: L, facet: 'content', evaluateRef })
 
 describe('@js 沙箱', () => {
   it('基本求值：字符串/数组/空值/对象 → 四种 EngineValue', async () => {
@@ -577,7 +577,7 @@ describe('宿主垫片（真实源用到的缺失 API）', () => {
 
 describe('scriptForm（legado @js 口径：完成值即结果）', () => {
   const runScript = (code: string, host: JsHost = hostOf(), ctx: EvalContext = ctxOf()) =>
-    evalJs(code, host, ctx, L, 'search', undefined, { scriptForm: true })
+    evalJs({ code, host, ctx, loc: L, facet: 'search', opts: { scriptForm: true } })
 
   it('裸表达式结尾（无 return）→ 最后一个表达式的值即结果', async () => {
     const v = await runScript('"https://a.com/s?key=" + encodeURIComponent(key) + "&p=" + page',
@@ -606,15 +606,15 @@ describe('scriptForm（legado @js 口径：完成值即结果）', () => {
   })
   it('jsLib 先于用户代码执行：函数定义全局可见（legado 源级函数库口径）', async () => {
     const ctx = ctxOf({ jsLib: 'function host() { return "https://lib.example.com" }\nvar CONST_X = 42;' })
-    const v = await evalJs('host() + "/" + key', hostOf({ key: 'k' }), ctx, L, 'search', undefined, { scriptForm: true })
+    const v = await evalJs({ code: 'host() + "/" + key', host: hostOf({ key: 'k' }), ctx, loc: L, facet: 'search', opts: { scriptForm: true } })
     expect(v.value).toEqual({ kind: 'value', text: 'https://lib.example.com/k' })
     // 常量同样可见（qmSearchUrl.call(this, key, page) 类形态）
-    const v2 = await evalJs('String(CONST_X)', hostOf(), ctx, L, 'search', undefined, { scriptForm: true })
+    const v2 = await evalJs({ code: 'String(CONST_X)', host: hostOf(), ctx, loc: L, facet: 'search', opts: { scriptForm: true } })
     expect(v2.value).toEqual({ kind: 'value', text: '42' })
   })
   it('jsLib 抛错 → JsSandboxError 点名 jsLib（不吞不混）', async () => {
     const ctx = ctxOf({ jsLib: 'null.boom()' })
-    await expect(evalJs('return "x"', hostOf(), ctx, L, 'search')).rejects.toThrow(/jsLib/)
+    await expect(evalJs({ code: 'return "x"', host: hostOf(), ctx, loc: L, facet: 'search' })).rejects.toThrow(/jsLib/)
   })
 })
 
@@ -802,21 +802,35 @@ describe('java.get 的 source 层兜底（对面四级读链；跨调用可见�
   })
   it('source.put 写进去的变量，下一次调用的 java.get 读得到（对面 source 层落 BookSource.variable）', async () => {
     const session = createSourceSession()
-    await evalJs('source.put("tok","T1"); return "ok"', { result: '', baseUrl: url, source: 'https://scope.example.com' },
-      { baseUrl: url, source: 'https://scope.example.com', vars: {} },
-      { segmentIndex: 0, segmentRaw: '@js:scope' }, 'content', undefined, { session })
-    const v = await evalJs('return java.get("tok")', { result: '', baseUrl: url, source: 'https://scope.example.com' },
-      { baseUrl: url, source: 'https://scope.example.com', vars: {} },
-      { segmentIndex: 0, segmentRaw: '@js:scope' }, 'content', undefined, { session })
+    await evalJs({
+      code: 'source.put("tok","T1"); return "ok"',
+      host: { result: '', baseUrl: url, source: 'https://scope.example.com' },
+      ctx: { baseUrl: url, source: 'https://scope.example.com', vars: {} },
+      loc: { segmentIndex: 0, segmentRaw: '@js:scope' }, facet: 'content', opts: { session },
+    })
+    const v = await evalJs({
+      code: 'return java.get("tok")',
+      host: { result: '', baseUrl: url, source: 'https://scope.example.com' },
+      ctx: { baseUrl: url, source: 'https://scope.example.com', vars: {} },
+      loc: { segmentIndex: 0, segmentRaw: '@js:scope' }, facet: 'content', opts: { session },
+    })
     expect(v.value).toEqual({ kind: 'value', text: 'T1' })
   })
   it('本次 java.put 的键仍在最上层优先（读链顺序不许反）', async () => {
     const session = createSourceSession()
     const opts = mk(session)
-    await evalJs('source.put("k","源层"); return 1', { result: '', baseUrl: url, source: opts.source },
-      { baseUrl: url, source: opts.source, vars: {} }, { segmentIndex: 0, segmentRaw: '@js' }, 'content', undefined, { session })
-    const v = await evalJs('java.put("k","本层"); return java.get("k")', { result: '', baseUrl: url, source: opts.source },
-      { baseUrl: url, source: opts.source, vars: {} }, { segmentIndex: 0, segmentRaw: '@js' }, 'content', undefined, { session })
+    await evalJs({
+      code: 'source.put("k","源层"); return 1',
+      host: { result: '', baseUrl: url, source: opts.source },
+      ctx: { baseUrl: url, source: opts.source, vars: {} },
+      loc: { segmentIndex: 0, segmentRaw: '@js' }, facet: 'content', opts: { session },
+    })
+    const v = await evalJs({
+      code: 'java.put("k","本层"); return java.get("k")',
+      host: { result: '', baseUrl: url, source: opts.source },
+      ctx: { baseUrl: url, source: opts.source, vars: {} },
+      loc: { segmentIndex: 0, segmentRaw: '@js' }, facet: 'content', opts: { session },
+    })
     expect(v.value).toEqual({ kind: 'value', text: '本层' })
   })
 })

@@ -13,14 +13,14 @@ import { evalJs } from '../src/engine/js-sandbox.js'
 
 export async function probeJavaSurface(): Promise<{ names: Set<string>; stubs: Set<string> }> {
   const url = 'https://census.example.com/read/1'
-  const out = await evalJs(
-    'var o = []; for (var n in java) { var f = java[n]; o.push(n + (typeof f === "function" ' +
-    '&& String(f).indexOf("需要安卓宿主环境") >= 0 ? "\\tSTUB" : "")); } return o.join("\\n")',
-    { result: '', baseUrl: url, source: 'https://census.example.com' },
-    { baseUrl: url, source: 'https://census.example.com', vars: {} },
-    { segmentIndex: 0, segmentRaw: '@js:probeJavaSurface' },
-    'content',
-  )
+  const out = await evalJs({
+    code: 'var o = []; for (var n in java) { var f = java[n]; o.push(n + (typeof f === "function" ' +
+      '&& String(f).indexOf("需要安卓宿主环境") >= 0 ? "\\tSTUB" : "")); } return o.join("\\n")',
+    host: { result: '', baseUrl: url, source: 'https://census.example.com' },
+    ctx: { baseUrl: url, source: 'https://census.example.com', vars: {} },
+    loc: { segmentIndex: 0, segmentRaw: '@js:probeJavaSurface' },
+    facet: 'content',
+  })
   const text = out.value.kind === 'value' ? out.value.text : ''
   const names = new Set<string>()
   const stubs = new Set<string>()

@@ -4,6 +4,7 @@ import { isTag } from 'domhandler'
 import type { Element } from 'domhandler'
 import { DEFAULT_JS_TIMEOUT_MS } from './types.js'
 import type { EngineValue, EvalContext, Facet, SegmentLoc } from './types.js'
+import type { SourceSession } from './session.js'
 import { JsSandboxError } from './errors.js'
 import { SANDBOX_MOUNTS, invokeJavaMethod } from './js-protocol.js'
 import type { BridgeDeps } from './js-protocol.js'
@@ -48,7 +49,7 @@ export interface EvalJsOptions {
 
 /**
  * runScript：沙箱对**服务层与测试**的那一扇门（引擎内部仍走 `evalJs`——它是 generator 交出去的
- * 入参形状，见 `evaluate.ts` 的 `JsCall`）。
+ * 入参形状，见 `JsCall`）。
  * 能力面直接就是 `EvalContext`：这里过去逐字段抄了一份清单（`fetchPost` / `userAgent` /
  * `regexRow` / `book` / `chapter` 都不在那份清单上），于是同一段脚本从这扇门进就会
  * 「`java.post` 抛 ctx.fetchPost 缺失」——而清单与真面之间没有任何闸，加一个注入字段就自动少抄一个。
@@ -78,7 +79,7 @@ export interface RunScriptOptions extends EvalContext {
 export function runScript(o: RunScriptOptions): Promise<JsOutcome> {
   // 能力位原样透传：这里只剥出 host/驱动专属的那几格，其余就是 EvalContext（不再逐字段挑一遍）。
   // host 的 `resultKind` / `resultCtx` / `console` 不归这扇门——它们只在规则链上跑时由求值层
-  // 构造（`evaluate.ts` 的 `JsCall`），服务层与测试的入口没有「上一段结果」这条链。
+  // 构造（`JsCall`），服务层与测试的入口没有「上一段结果」这条链。
   const { code, result, key, page, header, loc, facet, scriptForm, evaluateRef, session, resultHost, resultMap, ...ctx } = o
   const host: JsHost = {
     result: result ?? '',
@@ -90,8 +91,11 @@ export function runScript(o: RunScriptOptions): Promise<JsOutcome> {
     ...(resultHost === undefined ? {} : { resultHost }),
     ...(resultMap === undefined ? {} : { resultMap }),
   }
-  return evalJs(code, host, ctx, loc, facet, evaluateRef,
-    { scriptForm: scriptForm ?? true, ...(session === undefined ? {} : { session }) })
+  return evalJs({
+    code, host, ctx, loc, facet,
+    ...(evaluateRef === undefined ? {} : { evaluateRef }),
+    opts: { scriptForm: scriptForm ?? true, ...(session === undefined ? {} : { session }) },
+  })
 }
 
 export interface JsOutcome {
@@ -103,6 +107,18 @@ export interface JsOutcome {
  *  两个参数：rule + data（data 作为子规则的 html 上下文）。baseUrl 由外层 EvalContext
  *  经 `{...ctx, html}` 继承（第三参 baseUrl? 曾是两处实现都丢弃的死参数，已删）。 */
 export type EvaluateRef = (rule: string, data: unknown) => EngineValue
+
+/** 求值层 → 沙箱的**唯一调用描述符**：链上的 js 段与 runScript 都交这一份。
+ *  位置元组曾是链协议，加一格要同时改两处 yield 与 driveSync 的下标；命名后加字段只改这里。 */
+export interface JsCall {
+  code: string
+  host: JsHost
+  ctx: EvalContext
+  loc: SegmentLoc
+  facet: Facet
+  evaluateRef?: EvaluateRef
+  opts?: EvalJsOptions
+}
 
 const TIMEOUT = Symbol('js-sandbox-timeout')
 
@@ -986,15 +1002,8 @@ const BOOTSTRAP = `;(function (g) {
  * - `java.ajax` 语义唯一（同步返回 body）：主线程撞哨兵即换 worker 重跑同一段（见下方
  *   「java.ajax 同步桥」一节）；正则只决定性能，不决定语义。
  */
-export async function evalJs(
-  code: string,
-  host: JsHost,
-  ctx: EvalContext,
-  loc: SegmentLoc,
-  facet: Facet,
-  evaluateRef?: EvaluateRef,
-  opts?: EvalJsOptions,
-): Promise<JsOutcome> {
+export async function evalJs(call: JsCall): Promise<JsOutcome> {
+  const { code, host, ctx, loc, facet, evaluateRef, opts } = call
   const logs: string[] = []
   const timeout = Math.max(1, ctx.jsTimeoutMs ?? DEFAULT_JS_TIMEOUT_MS)
   // 幂等挂载进程级 unhandledRejection 防线（多次调用只挂一次；挂上后常驻至插件 dispose）
@@ -1018,7 +1027,7 @@ export async function evalJs(
     evaluateRef,
     contentBase: null,
   }
-  const call = makeHostCall(deps, logs, host.console)
+  const hostCall = makeHostCall(deps, logs, host.console)
   // java.ajax 同步语义路由：命中 SYNC_WORKER_RE 即整段进 worker（SAB RPC 同步阻塞拿 body），
   // 无 ajax 的脚本仍走主线程 vm（零开销）。**正则只是性能启发，不是语义开关**——认不出的等价写法
   // 会先白跑主线程、再由哨兵兜回 worker（见 needsSyncBridge），语义一致。总口径见下方「同步桥」一节。
@@ -1062,14 +1071,14 @@ export async function evalJs(
   if (useWorker) {
     return evalJsInWorker({
       bootstrap: BOOTSTRAP, init, code, wrapped, jsLib: jsLibCode, timeout,
-      scriptForm: opts?.scriptForm ?? true, call, logs, loc, facet,
+      scriptForm: opts?.scriptForm ?? true, call: hostCall, logs, loc, facet,
     })
   }
   // 主线程整段包一层哨兵捕获：四个可能冒出哨兵的位置（BOOTSTRAP init / jsLib / 同步执行 /
   // await 到的完成值——`await` 形态下哨兵是 rejection）都要能兜住，故包在最外层而不是逐处判定。
   try {
     const context = vm.createContext(
-      { __host_call__: call, __init__: init } as unknown as vm.Context,
+      { __host_call__: hostCall, __init__: init } as unknown as vm.Context,
       { codeGeneration: { strings: true, wasm: false } },
     )
 
@@ -1138,7 +1147,7 @@ export async function evalJs(
     logs.length = 0
     return evalJsInWorker({
       bootstrap: BOOTSTRAP, init: initOf(true), code, wrapped, jsLib: jsLibCode, timeout,
-      scriptForm: opts?.scriptForm ?? true, call, logs, loc, facet,
+      scriptForm: opts?.scriptForm ?? true, call: hostCall, logs, loc, facet,
     })
   }
 }
@@ -1555,32 +1564,6 @@ const COOKIE_JARS = new Map<string, Map<string, string>>()
  *  这组是**进程内缺省实现**；生产组合根注入 `services/source-session.ts` 的 `FileSourceSession`
  *  （source-state.json，跨重启；矩阵 `h-source-variable-persistence`）。 */
 const SOURCE_VARS = new Map<string, Map<string, string>>()
-
-/**
- * 源会话：脚本可见的按源状态——cookie 垫片与源变量。显式 interface 而非裸模块 Map（后者无 reset、
- * 跨服务实例永生，跨源污染用例写不出来）。缺省 processSession（进程内）；生产组合根注入
- * FileSourceSession，测试注入 createSourceSession() 隔离实例。
- */
-export interface SourceSession {
-  /** 某源的 cookie 垫片（键值表，缺省建档） */
-  cookieJar(sourceKey: string): Map<string, string>
-  /** 某源的**键值变量表**（source.put/get 落这里） */
-  sourceVars(sourceKey: string): Map<string, string>
-  /** 某源键值表的非建档读口：从未碰过 → undefined（java.get 的 source 层要区分「从未设置」） */
-  peekSourceVars(sourceKey: string): Map<string, string> | undefined
-  /** 某源的**自定义变量单串槽**（source.setVariable/getVariable 落这里）。
-   *  与键值表是两个存储：写串槽不许动键值表，反之亦然（曾塞同一张 Map，setVariable 顺手 clear()
-   *  把 source.put 的键全清了，getVariable 还返回整表 JSON 壳）。 */
-  sourceString(sourceKey: string): string
-  setSourceString(sourceKey: string, value: string | null): void
-  /** 某源的 cache 垫片表（缓存本是全局表；按源隔离是 SourceSession 的既定口径；TTL 未接见矩阵 h-cache-ttl）。
-   *  独立于键值表——曾借 sourceVars 加 `cache:` 前缀，脚本用 `source.get('cache:x')` 就串味。 */
-  cacheStore(sourceKey: string): Map<string, string>
-  /** 可选：删源时清掉该源的全部状态（文件实现有；进程内实现无） */
-  forget?(sourceKey: string): void
-  /** 可选落盘收尾（内存实现无此方法） */
-  flush?(): void
-}
 
 /** 进程级三张表（生产）：按源建档、跨调用/跨服务实例存活——与旧实现同生命周期 */
 const SOURCE_STRINGS = new Map<string, string>()

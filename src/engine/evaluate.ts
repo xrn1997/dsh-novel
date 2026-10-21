@@ -10,7 +10,7 @@ import { evalXPath } from './xpath.js'
 import { evalAllInOne } from './allinone.js'
 import { evalPut, evalGetVar, resolveJsonData } from './variables.js'
 import { evalJs } from './js-sandbox.js'
-import type { EvaluateRef, JsHost } from './js-sandbox.js'
+import type { EvaluateRef, JsCall, JsHost } from './js-sandbox.js'
 import { combine, reverseList } from './combine.js'
 import { applyReplaces } from './replace.js'
 import { loadHtml } from './dom.js'
@@ -161,8 +161,7 @@ function standaloneBase(rt: Runtime): EngineValue {
 // 曾是两份逐条镜像的孪生 runner（特判段双写、同步环路零测试）——已收拢，见
 // tests/engine/evaluate-sync-loop.test.ts。
 
-/** js 段调用：generator yield 给驱动器的完整 evalJs 入参（驱动器对段零知识） */
-type JsCall = Parameters<typeof evalJs>
+/** 驱动器回喂给 generator 的求值结局（取值 + 日志）；驱动器对段零知识。 */
 type JsOutcome = Awaited<ReturnType<typeof evalJs>>
 
 function* ruleGen(
@@ -222,11 +221,15 @@ function* branchGen(
         let out: EngineValue = cur ?? { kind: 'miss', detail: '空链值' }
         let jsLogs: string[] | undefined
         if (jsCode.trim() !== '') {
-          const outcome: JsOutcome = yield [
-            jsCode,
-            jsHostOf(prev, rt), rt.ctx, loc, rt.facet, rt.evaluateRef,
-            { scriptForm: true },
-          ]
+          const outcome: JsOutcome = yield {
+            code: jsCode,
+            host: jsHostOf(prev, rt),
+            ctx: rt.ctx,
+            loc,
+            facet: rt.facet,
+            ...(rt.evaluateRef === undefined ? {} : { evaluateRef: rt.evaluateRef }),
+            opts: { scriptForm: true },
+          }
           out = outcome.value
           jsLogs = outcome.logs
         }
@@ -308,7 +311,15 @@ function* interpolateTemplate(
         break
       }
       case 'js': {
-        const outcome: JsOutcome = yield [part.text, jsHostOf(cur, rt), rt.ctx, loc, rt.facet, rt.evaluateRef, { scriptForm: true }]
+        const outcome: JsOutcome = yield {
+          code: part.text,
+          host: jsHostOf(cur, rt),
+          ctx: rt.ctx,
+          loc,
+          facet: rt.facet,
+          ...(rt.evaluateRef === undefined ? {} : { evaluateRef: rt.evaluateRef }),
+          opts: { scriptForm: true },
+        }
         piece = outcome.value
         break
       }
@@ -325,7 +336,7 @@ async function driveAsync(gen: Generator<JsCall, EngineValue, JsOutcome>): Promi
   while (!step.done) {
     let outcome: JsOutcome
     try {
-      outcome = await evalJs(...step.value)
+      outcome = await evalJs(step.value)
     } catch (e) {
       gen.throw(e) // generator 的 catch 记错误步后照抛——此处必然再抛，下一行不可达
       throw e
@@ -340,7 +351,7 @@ async function driveAsync(gen: Generator<JsCall, EngineValue, JsOutcome>): Promi
 function driveSync(gen: Generator<JsCall, EngineValue, JsOutcome>, facet: Facet): EngineValue {
   const step = gen.next()
   if (!step.done) {
-    const loc = step.value[3]
+    const loc = step.value.loc
     throw new UnsupportedRuleError('子规则（java.getString 等递归求值）内不支持 js 段——沙箱宿主桥为同步接口', {
       segmentIndex: loc.segmentIndex,
       segmentRaw: loc.segmentRaw,

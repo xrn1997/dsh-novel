@@ -1,6 +1,6 @@
 import type { Cheerio } from 'cheerio'
 import type { AnyNode } from 'domhandler'
-import type { SourceSession } from './js-sandbox.js'
+import type { SourceSession } from './session.js'
 
 export type Facet = 'search' | 'detail' | 'toc' | 'content' | 'explore' | 'rule'
 
@@ -30,7 +30,7 @@ export interface EvalContext {
   /** 源名（脚本可见的 `source.bookSourceName`）：同源透传（曾恒空串——没有任何地方写过它）。 */
   sourceName?: string
   vars?: Record<string, string>
-  /** 变量链的 **source 层**（跨门面调用、按源隔离；由 js-sandbox 从 SourceSession 接线）。
+  /** 变量链的 **source 层**（跨门面调用、按源隔离；由沙箱从 `SourceSession` 接线）。
    *  读序 chapter→book→ruleData→source，每级空串继续下找。
    *  本仓 `vars` = 本次调用的 ruleData/chapter 层，`sourceVar` = source 层的只读访问器；
    *  chapter/book 两层要持久化宿主，未接 → 矩阵 `a-var-scope-chain` 仍记开口。 */
