@@ -64,15 +64,24 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 路由名 / 值形状 / body 形状（`bodies` 构造 + `readBodies` 读口 / `queries`） | `shared/wire.ts` | 业务判据 |
 | 书目元数据字段集 | `shared/wire.ts` 的 `SHELF_META` + `pickShelfMeta` | 读取面投影（`sourceName` 刻意不进表） |
 | 架位（书架上的一条记录，凭 `bookKey` 认） | `services/shelf.ts` 的 `Shelf`（按 `bookKey` 单键认）；客户端算式 `client/search-view-model.ts` 的 `shelfSeats` / `isSeatLanded` / `newlyLandedSeats` | 逐源行怎么认（那是 `rowId`，两把键不许混）、元数据字段集（`SHELF_META`） |
+| 加架动作（一条命中落进书架：路径 + body + 成败形状） | `src/client/shelf-action.ts` 的 `addShelfSeat`（`ShelfSeatInput` / `ShelfAddOutcome`；路径与 body 仍由 `paramRoutes.shelfKey` + `bodies.shelfAdd` 给） | 回执位置与措辞（留在各视图：搜索行上报错误、书城走成功/失败泳道、阅读器失败留在模态内、成功走全局成功条并跳书架）、架位真相（`services/shelf.ts` 的 `Shelf`）与元数据字段集（`SHELF_META`） |
 | 规则文法（构词 + 解析 + 区域） | `engine/grammar.ts` | 求值 |
+| 整条规则模式（JSON 内容 → JSONPath；显式前缀不接管） | `engine/mode.ts` 的 `isJsonRule`（求解入口 `engine/evaluate.ts` 调用） | 段级前缀分类（`engine/parse.ts` 的 `classifySegment`） |
 | 段识别与切分次序（含隐式 CSS 回落） | `engine/parse.ts` | 空态裁决 |
 | 空态裁决（Miss vs 空 List） | `engine/select.ts` 的 `reducePicked` | 服务层的值收口 |
 | 组合符形状与驱动长度 | `engine/combine.ts`（读 `usage`） | 链衔接 |
 | 行模板的判定与绑定 | `engine/regex-row.ts`（同一份文法的两面） | 模板字面段 |
 | `EngineValue → 单串` | `engine/js-utils.ts` 的 `engineValueToString` | 业务字段语义 |
 | 宿主方法面（名字 / 挂载 / 分派） | `engine/js-protocol.ts` 的协议表。加一个 **sync** 方法 = 表加一行；加一个 **async** 方法还要在 `js-sandbox.ts` 的 `BOOTSTRAP` 里写那份同步桥包装（`docs/adr/0004` 把生成逻辑钉在串内），且它读的 `ctx.*` 能力位必须由 `services/bridge.ts` 的 `engineContextOf` 供出——这两处联系都有机器闸（`tests/engine/js-protocol.test.ts` 的能力位闸） | 真实网络 |
+| JS 宿主对象描述符（`__host`） | `engine/host-object.ts` 的 `ResponseHost`（宿主→沙箱的响应描述符）；`__host:'map'` 由 `engine/js-sandbox.ts` 的 BOOTSTRAP 内部物化，不跨宿主边界 | 宿主函数/对象直接过界（`__host_call__` 是唯一入口） |
 | 选项语义（模板 → 请求计划） | `services/request.ts` 的 `assembleRequest` + `fetchInitOf` | 网络与解码 |
 | 出站（超时 / 代理 / 解码 / 状态） | `services/fetcher.ts`，`@js` 复用同一出口 | 缓存与业务 |
+| 源请求执行（动态头 / 限速 / webview / loginCheck（含 4xx、5xx 错误页）/ cookie 桥；只按计划**选 charset**——解码本身归 `services/fetcher.ts` 的 `decodeBody`） | `src/services/source-request.ts` 的 `createSourceRequest` / `SourceRequest`（`fetcherFor` 给脚本出站与引擎脚本的浏览器能力，`fetchText` / `fetchPage` 给读面） | 模板解析与选项语义（归 `services/request.ts` 的 `assembleRequest`）、解码（`decodeBody`）、缓存与业务判据、探针判据 |
+| HTTP cookie jar（域/路径/过期/Secure；跨源共享） | `services/cookies.ts` 的 `CookieJar`；Set-Cookie 自动吸收/回带归 `services/fetcher.ts` | 脚本侧按源隔离的 cookie 垫片（`SourceSession.cookieJar`）、浏览器 cookie 桥（`source-request`）；跨源共享的裁决见 `docs/adr/0039` |
+| 源状态会话（脚本可见的四张按源表；落盘与删源清理） | `services/source-session.ts` 的 `FileSourceSession`（`forget`）；接口在 `engine/js-sandbox.ts` 的 `SourceSession` | 页面缓存（`services/cache.ts`）、登录态 `SourceAuth`（`services/sources.ts`） |
+| 真浏览器运行时（启动 Edge/Chrome、上下文、超时、关闭） | `services/webview.ts` 的 `WebViewRuntime` | 限速与 cookie 桥（`source-request`）、规则求值 |
+| 源级限速（`concurrentRate` 解析与令牌桶） | `services/rate-limit.ts` 的 `parseConcurrentRate` / `RateLimiter` | 出站时序与按源装配（`source-request`） |
+| 探针 verdict → status 的写回 | `services/probe.ts` 的 `applyProbeResult` | 探针判据与关键词（`services/probe.ts` 的 `probeSource`） |
 | 一次搜索请求的完整语义（含嗅探） | `services/search-face.ts` | 聚合与游标 |
 | 值投影（`EngineValue` → 业务串） | `services/bridge.ts` 的三种投影 | 空态判定 |
 | 文字输出 | `services/content.ts` + `services/chapter-content.ts` | 图文排版 |
@@ -98,6 +107,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 分类清单（哪个源自己声明了哪些分类） | `services/explore.ts` 的 `deriveExploreSources` | 站点侧分类的同义归并（本仓不造同义词表） |
 | 单源一页的执行（查进程内快照 → 抓 → 写回 → 出一个组） | `services/explore.ts` 的 `fetchExploreGroup` | 点名与页码（门面 `services/reading.ts`）、轮次状态与终态 |
 | 整轮分类结果 | `services/explore-job.ts`（Node 半持有，读面给全量快照） | wire 形状 |
+| 书城进入判据（自动那条路的源/分类回落与提交决策） | `client/city-entry.ts` 的 `decideCityEntry` / `rememberedSelection` | 分类轮次的持有与续页（`services/explore-job.ts`）、分类清单派生（`services/explore.ts`）、手点提交（`client/views/CityView.tsx`） |
 | 跨源那一次的关键词构造（有作者就带作者） | `client/city-view-model.ts` 的 `sheetKeyword`（消费者只有书籍详情浮层，链路复用搜索面） | 是不是同一本书——判同在搜索面归并那一行（`mergeBooks`，按归并键）；书籍详情浮层维持逐源轴、不吃归并；两层的界面都不替他判该用哪家读 |
 | 逐条目取值装配（一套条目规则 + 一个条目上下文 → 一条命中） | `services/bridge.ts` 的 `hitFieldsOf`（槽序、书名非空尺、选项保留绝对化、简介净化全在这一处；聚合搜索与发现面共用） | 用哪一套规则（发现面的整套切换归 `explore-face.rulesFor`）、读不出来归成哪类错（各自调用侧：搜索面按组、发现面按源） |
 | 分类快照的存放与时效 | `services/explore-cache.ts` 的 `KindCache` + `services/cache-epoch.ts` 的 `exploreEpoch` | 目录 / 正文文件缓存（`rulesEpoch`） |
@@ -108,7 +118,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 模态契约（Esc / 入场焦点 / Tab 圈 / 关后还焦 / scrim 与 dialog 标记） | `client/views/dialog.tsx` 的 `Dialog`（五处带遮罩浮层共读这一份） | 几何档位的主人（样式层）与标题、动作行文案（各调用点） |
 | 客户端可见文案与错误展示 | `client/copy/index.tsx` 的 `ZH` / `EN` / `createTranslate` / `zhTranslate` / `CopyProvider` / `useCopy`（字典与取词入口）+ `client/api.ts` 的 `describeError` / `NetworkReason`（客户端网络错误的翻译判据） | 服务端错误原文、AI 工具描述、插件卡片的 `locale` 元信息 |
 | 阅读时序 | `client/reader-session.ts` | DOM 测量实现 |
-| 阅读浮层在场与互斥（至多一角、换角退场语义、哪面带遮罩） | `client/reader-surfaces.ts`（视图的 `surface` state 只是它的投影） | 阅读位置与返回栈（`reader-session.ts`）、带遮罩模态（`client/views/dialog.tsx`） |
+| 阅读浮层在场与互斥（至多一角、换角退场语义、哪面带遮罩、模态同场时 Esc 归谁） | `client/reader-surfaces.ts`（`openSurface` / `closeAll` / `dismissSurface` / `maskFor` / `escOwner`；视图的 `surface` state 只是它的投影） | 阅读位置与返回栈（`reader-session.ts`）、带遮罩模态（`client/views/dialog.tsx`） |
 | 章节窗口与预取判据 | `client/reader-load.ts` | 会话状态 |
 | 阅读位置 ⇄ 像素 | `client/progress.ts`（两侧同跨度才互逆） | 落盘时机 |
 | 视觉 token 与标度 | `client/styles.tsx`（唯一 token 层） | 视图局部布局 |
@@ -116,7 +126,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 
 ## 5. seam：可测性怎么落
 
-- **纯函数面**直接单测，不造宿主替身：`parseRule`、`reducePicked`、`evalCss`、`evalXPath`、`evalJsonPath`、`applyReplaces`、`interpolateUrl`、`appendTail`、`bindRegexRow`、`engineValueToString`，以及客户端的 `source-list-view` / `shelf-view-model` / `city-view-model` / `search-view-model` / `source-inbox` / `reader-load` / `progress`。
+- **纯函数面**直接单测，不造宿主替身：`parseRule`、`reducePicked`、`evalCss`、`evalXPath`、`evalJsonPath`、`applyReplaces`、`interpolateUrl`、`appendTail`、`bindRegexRow`、`engineValueToString`，以及客户端的 `source-list-view` / `shelf-view-model` / `city-view-model` / `city-entry` / `search-view-model` / `source-inbox` / `reader-load` / `progress`。
 - **注入垫片**是测试进出的口子（不是换模块替身）：引擎侧 `EvalContext` 的 fetch 族 / `evaluateRef` / `subEval` / `SourceSession` / 超时预算；服务侧 fetcher 与注入的时钟/目录；客户端**按读者分的依赖束**（核心 / 观察通道 / 带观察的视图 / 书架 / 设置 / 阅读器）+ `ReaderPort`，其中观察通道的节拍与阅读器的防抖窗各留一格注入位；浏览器位置用例走仓内最小宿主壳，它只证明「卸载与重挂」那一半契约。**束切到读者，也要切到读者里面的行**：行内动作只声明 `RowActionDeps`（一发写请求 + 两句上报），注释面板只声明 `apiGet` + `pushError`——interface 的宽度就是那条用例的固定成本。
 - **两条求值路必须同口径**（主线程与 worker），由按 fetch 计数自证的跨路钉子守——这是 `docs/adr/0005` 的产物。
 - 客户端的测试手法是**假 adapter 驱动真实组件**，不是渲染快照；服务端的路由测试用真 HTTP server 承载（`api/dispatch.ts` 不依赖 Cordis，纯构造器）。

@@ -15,14 +15,16 @@
 
 为什么互斥而不是各记各的开合：这些面同住右上角且各自成 absolute 层，两面上场时**底下那面看得见点不动**（命中测试打到上面那块）。此前互斥散在四个 opener 的 `setX(false)` 抄写里，抄写一漏就叠。
 
-**一处行为变更如实记在此**：`Aa` 此前不关目录抽屉，于是「Aa 上场 + 遮罩出现」时抽屉仍在场却被遮罩压住——正是上面那条要挡的形状。收成单角后 `Aa` 也收目录。这条由本批改造顺带裁掉，**真机验收尚未做**（键盘与遮挡是浏览器半的门，`DSH_EPUB_BROWSER` 那类门只量渲染几何）。
+**同场 Esc 的归属**：模态在场时模态先吃 Esc，阅读浮层的 surface 监听在模态在场时不安装；模态关闭后若浮层仍在场，下一次 Esc 按 `reader-surfaces.closeAll` 的语义收场。两家划分不变。
+
+**一处行为变更如实记在此**：`Aa` 此前不关目录抽屉，于是「Aa 上场 + 遮罩出现」时抽屉仍在场却被遮罩压住——正是上面那条要挡的形状。收成单角后 `Aa` 也收目录。这条由这次改造顺带裁掉，**真机验收尚未做**（键盘与遮挡是浏览器半的门，`DSH_EPUB_BROWSER` 那类门只量渲染几何）。
 
 被否决的做法：
 
 - **保持各视图自持 effect**：五份手写已经漂出两种行为，且下一次新增浮层还会继续复制。
 - **把 `Dialog` 塞进 `client/views/bits.tsx`**：`bits` 是六视图共用的**呈现小件**（徽标、进度段、空态、告警清单），没有行为契约；模态契约带焦点与键盘接管，混进去会让 `bits` 同时是抽屉和主人。
-- **抽屉与模态合成一套标记**：几何不同族（`.novel-modal` / `.novel-modal.wide` / `.novel-city-drawer` + `.novel-city-scrim`），主人是样式层；`variant` 只选哪一档标记，不接管内部排版——两档的标题行/动作行照旧用原类名（`.novel-modal-title` / `.novel-modal-actions` / `.novel-city-drawer-head`），本批不动任何行的几何。
+- **抽屉与模态合成一套标记**：几何不同族（`.novel-modal` / `.novel-modal.wide` / `.novel-city-drawer` + `.novel-city-scrim`），主人是样式层；`variant` 只选哪一档标记，不接管内部排版——两档的标题行/动作行照旧用原类名（`.novel-modal-title` / `.novel-modal-actions` / `.novel-city-drawer-head`），这次改造不动任何行的几何。
 - **阅读浮层做成 reducer/状态机框架**：判据只有「哪一角在场 + 退场怎么表态」两问，一个纯函数族就够；引框架会把视图改成派发点，而真正的 bug（互斥漏抄、Esc 分叉）在判据住址，不在调度形式。
 - **借会话持有浮层在场**：会话深且只拥有阅读时序（`docs/adr/0022`）；「此刻哪个面板开着」不是位置真相，塞进去会让会话的 interface 长出只有视图用的格。
 
-锚点：`src/client/views/dialog.tsx`（`Dialog` / `FOCUSABLE`）；`src/client/reader-surfaces.ts`（`openSurface` / `closeAll` / `dismissSurface` / `maskFor` / `SupplementExit`）；`src/client/reader-session.ts` 的 `closeSupplement`（消费返回项那一侧的主人）；`tests/client/dialog.test.tsx`、`tests/client/reader-surfaces.test.ts`、`tests/client/views-wiring.test.tsx` 的「导入弹层焦点不被壳层重渲染劫持」与「入架一问」两条。
+锚点：`src/client/views/dialog.tsx`（`Dialog` / `FOCUSABLE`）；`src/client/reader-surfaces.ts`（`openSurface` / `closeAll` / `dismissSurface` / `maskFor` / `escOwner` / `SupplementExit`）；`src/client/reader-session.ts` 的 `closeSupplement`（消费返回项那一侧的主人）；`tests/client/dialog.test.tsx`、`tests/client/reader-surfaces.test.ts`、`tests/client/views-wiring.test.tsx` 的「导入弹层焦点不被壳层重渲染劫持」与「入架一问」两条。

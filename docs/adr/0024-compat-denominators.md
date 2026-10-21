@@ -8,4 +8,4 @@
 
 同族的一条采集纪律：**采集与回放必须断同一批**（两侧共用同一份判据），否则会出现「采集绿、回放红」的 fixture；manifest 的键是**请求 URL**而不是重定向后的落地地址；落盘的是生产解码链读到的文本（非 UTF-8 页存成真中文）。
 
-锚点：`tests/legado-coverage/{status-evidence,inventory-coverage,upstream-fields,host-methods}.test.ts`；`tests/legado-coverage/{upstream-facts,capture-upstream-snapshot}.test.ts`；`tests/compat/{harness,record}.ts`；`compat/upstream/snapshot.json`；`README.md`「测试与真链路门控」（2026-10-17 注：该节已迁至 `docs/developing.md`）；`AGENTS.md`「兼容判据」。
+锚点：`tests/legado-coverage/{status-evidence,inventory-coverage,upstream-fields,host-methods}.test.ts`；`tests/legado-coverage/{upstream-facts,capture-upstream-snapshot}.test.ts`；`tests/compat/{harness,record}.ts`；`compat/upstream/snapshot.json`；`docs/developing.md`「测试与真链路门控」；`AGENTS.md`「兼容判据」。

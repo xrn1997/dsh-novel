@@ -75,6 +75,10 @@ pnpm vitest run --config vitest.compat.config.ts tests/compat/capture.test.ts
 # 真安装链路：dsh plugin add → profile bundles 挂载 + lib/client.js / cordis.patch.yml 就位
 $env:DSH_INSTALL_CHECK='1'; pnpm vitest run tests/packaging-install.test.ts
 
+# 真浏览器 WebView 门（离线，需本机装 Edge 或 Chrome）：webView 渲染与 webJs 页面内执行
+# 默认集合里该用例是 skip；矩阵 b-opt-webview 的实现证据就是这一枚（不开闸只证明夹具）
+$env:DSH_WEBVIEW='1'; pnpm vitest run tests/services/webview.test.ts
+
 # 真浏览器门（离线）：EPUB 图文阅读的真图片解码 / 真排版位置 / 真下载字节
 # 本地随机端口起真服务、驱动构建产物 lib/client.js，只用**已安装的** Edge/Chrome，从不下载
 $env:DSH_EPUB_BROWSER='1'; pnpm vitest run tests/browser/epub-reader.test.ts

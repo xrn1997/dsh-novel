@@ -139,11 +139,11 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 
 ## 兼容哪些书源
 
-兼容 legado 书源的**声明式子集**：取值链 / 组合符（`||`、`&&`、`%%`）/ `##` 替换 / AllInOne / JSONPath（含 `.*` 属性通配，页面是 JSON 文本时对内容按需解析）/ XPath 子集 / `@put` / `@get` / `@js` 沙箱（脚本完成值语义 + 顶层 `return`/`await` 回落）/ `jsLib` 源级函数库 / `searchUrl` 的 `@js`/`<js>` 形态 / 对象形态方言（**含 `ruleBookInfo.init` 详情上下文初始化**）/ `url,{json}` POST 请求（选项随书 URL 与章节 URL 全程保留）/ 相对 URL / 隐式 CSS 选择器 / `!` 排除语法，以及 `@js` 宿主垫片（`java.log` / `getElement` / `setContent` / `cookie` / `source.getVariable` 等）。缺省请求带浏览器 UA（部分站点 WAF 无 UA 直接 403）。
+兼容 legado 书源的**声明式子集**：取值链 / 组合符（`||`、`&&`、`%%`）/ `##` 替换 / AllInOne / JSONPath（含 `.*` 属性通配，页面是 JSON 文本时对内容按需解析）/ XPath 子集 / `@put` / `@get` / `@js` 沙箱（脚本完成值语义 + 顶层 `return`/`await` 回落；`eval`/`Function` 在 vm 内可用）/ `jsLib` 源级函数库 / `searchUrl` 的 `@js`/`<js>` 形态 / 对象形态方言（**含 `ruleBookInfo.init` 详情上下文初始化**）/ `url,{json}` POST 请求（选项随书 URL 与章节 URL 全程保留）/ 相对 URL / 隐式 CSS 选择器 / `!` 排除语法，以及 `@js` 宿主垫片（`java.log` / `getElement` / `setContent` / `cookie` / `source.getVariable` 等）。请求状态面还包括真实 cookie jar（`Set-Cookie` 自动落库/回带）、`loginCheckJs`、源级 `concurrentRate` 限速、`webView`/`webJs` 真浏览器抓取与源变量/cache 落盘。缺省请求带浏览器 UA（部分站点 WAF 无 UA 直接 403）。
 
 URL 模板语义按 legado 书源格式对齐：`url,{json}` 选项的逗号两侧允许空白；模板内 `{{...}}` 按 JS 求值（`{{java.encodeURI(key)}}`、`{{page*2}}`、源级 `jsLib` 定义的全局如 `{{host}}`），变量占位 `{{key}}`/`{{page}}` 保持原有的 URL 编码口径；URL 里的 js 块可出现在任意位置（`<js>…</js>` 闭区间、`@js:` 吃到串尾、块间字面文本按 `@result` 拼接）；`charset` 同时用于**请求体编码**与响应解码（GBK 站点才搜得到）；`&&` / `%%` 对空或 Miss 的分支静默跳过、只合并非空结果。
 
-遇到不认识的语法，本插件选择**报错而不是猜测**——错误定位到出错的规则段，而不是产出错误结果。依赖安卓 WebView 或加解密 API 的书源无法在本环境仿真，会明确报告不支持。
+遇到不认识的语法，本插件选择**报错而不是猜测**——错误定位到出错的规则段，而不是产出错误结果。`webView`/`webJs` 走本机已装的 Edge/Chrome；没有可用浏览器、或书源依赖安卓专有 API / 加密侧能力时，会明确报告不支持。
 
 **「做到哪一步」有机器口径**：`tests/legado-coverage/matrix.ts` 一行一条 legado 语义，每行归入 实现 / 环境不适用 / 待拍板 三态之一，并带可回查的证据（实现符号、钉住它的用例）与裁决理由。四门默认随 `pnpm test` 跑（见 [docs/developing.md 的「兼容判据四门」](https://github.com/xrn1997/dsh-novel/blob/main/docs/developing.md#兼容判据四门)）。想查某个字段支不支持：在矩阵里按 `id` 或能力名搜那一行即可。
 
@@ -153,10 +153,10 @@ URL 模板语义按 legado 书源格式对齐：`url,{json}` 选项的逗号两�
 多半是代理问题。DSH 的 Node 进程用 undici 发请求，**不会读取系统代理设置**；对代理才可达的站点，直连会被重定向或重置。解决：在配置里显式设 `proxyUrl`（如 Clash 常用端口 `'http://127.0.0.1:7897'`）。缺省的自动探测顺序为：环境变量 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` → Windows 系统代理 → 直连。
 
 **某条书源报「不支持 xx」？**
-本插件只实现 legado 规则的声明式子集（见上节），对无法仿真或不认识的语法会明确报错并定位到规则段，而不会静默给出错误结果。可以尝试换用不依赖 WebView / 加密的同类书源。
+本插件只实现 legado 规则的声明式子集（见上节），对无法仿真或不认识的语法会明确报错并定位到规则段，而不会静默给出错误结果。可以尝试换用不依赖安卓专有 API / 加密侧能力的同类书源。
 
-**探针报「jsLib 执行失败：Code generation from strings disallowed」？**
-该源的 `jsLib` 里用了 `eval` / `new Function` 动态执行字符串——本插件的 JS 沙箱出于逃逸防御显式禁用字符串代码生成（legado 的 Rhino 环境允许），这类源无法仿真。
+**`webView` / `webJs` 源报「WebView 不可用」？**
+本插件用 `playwright-core` 驱动本机已安装的 Edge/Chrome（不下载浏览器）。装一个 Edge 或 Chrome 即可；两者都没有时会如实报错，不会静默退回普通 HTTP 请求。
 
 **安装后侧栏没有出现「小说」入口？**
 先重启宿主。若从源码目录安装，确认已先 `pnpm build` 生成 `lib/`（构建产物缺失会让整个插件树拒绝挂载，宿主直接启动失败而非静默降级），详见 [docs/developing.md 的「本地源码调试」](https://github.com/xrn1997/dsh-novel/blob/main/docs/developing.md#本地源码调试)；装进了 bundles 里没有 `@deepseek-ai/dsh-web-app` 的 profile，则本就只有工具面、没有侧栏入口。
@@ -184,7 +184,7 @@ pnpm dev          # = tsdown --watch，日常开发建议挂着
 | `CONTEXT.md` | 领域词汇表，每个词条点名它的**唯一实现**符号 | 口径论证、实现细节 |
 | `docs/architecture.md` | 形状与归属：分几块、为什么这么切、某条语义该去哪改 | 读数、决策史、逐文件清单 |
 | `docs/developing.md` | 贡献者命令与验证：构建、本地调试、全部门控、真宿主冒烟、宿主兼容与发版 | 用户用法、设计决策、真机读数 |
-| `docs/adr/` | 决策与当初被否决的替代方案，每篇一个编号文件（只追加，推翻就标 superseded） | 现状描述、验收清单 |
+| `docs/adr/` | 决策与当前仍被否决的替代方案，每篇一个编号文件（正文直接写当前真相；整篇不再成立时标 superseded） | 现状描述、验收清单 |
 
 两类东西不进文档：**兼容裁决与真机读数**住 `tests/legado-coverage/matrix.ts` 的行 `note`（要重算见 `docs/developing.md` 的「解析面普查」）；**局部口径的为什么**住实现它的那段代码注释。宿主侧的 API 行为以就地注释引原文 + 每次 bump 现读为凭，本仓**没有**宿主 API 的参考文档；legado 侧的对读结论才冻结成在册快照 `compat/upstream/snapshot.json`。
 

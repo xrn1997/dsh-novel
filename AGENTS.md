@@ -6,7 +6,7 @@ DeepSeek Harness（DSH）的「小说」插件：导入 legado 书源 → 聚合
 
 1. **`CONTEXT.md`** — 领域词汇表，每个词条点名它的**唯一实现**符号。命名新 module、改口径、写文档之前先查它：自造同义词会让同一概念长出第二份抄本。
 2. **`docs/architecture.md`** — 形状与归属：分几块、为什么这么切、某条语义该去哪改（唯一主人清单）。它**不装读数与决策**，只给地图。
-3. **`docs/adr/`** — 决策与它当初被否决的替代方案，每篇一个编号文件。**只追加**：推翻**整篇**就新写一篇并给旧篇标 superseded；只翻案旧篇里**个别条目**而整篇仍立的，在原条目后就地补订正括注（原话保留）、不另开新篇——标 superseded 反而更坏，因为那篇大多数字还立着。别改写历史，也别重排编号（断号即有人抄不到那一页）。
+3. **`docs/adr/`** — 决策与当前仍被否决的替代方案，每篇一个编号文件。正文直接写当前真相，不留日期或历史标记；改决策就改对应篇。编号只追加、别重排（断号即有人抄不到那一页）。整篇不再成立时，新写一篇并把旧篇标 superseded——旧篇的编号与链接仍可回查。
 4. **代码注释** — 局部口径的家。每条口径的「为什么、约束」就地写在实现它的那个符号头上（见下面「高度规范」）；跨子系统的全局论述才进 architecture.md。
 5. **`tests/legado-coverage/matrix.ts`** — 「彻底兼容 legado」的唯一读数口：一行一条 legado 语义，三态归属 + 证据 + 裁决理由 + 复核戳。
 6. **`README.md`** — 用户面事实与产品命令；贡献者的构建、门控与发版流程在 `docs/developing.md`。
@@ -27,7 +27,7 @@ DeepSeek Harness（DSH）的「小说」插件：导入 legado 书源 → 聚合
 
 `pnpm test` 全绿只证明引擎 / 服务 / 契约 / 前端逻辑：**不证明**任何真实站点可用性、也不证明安装链路。`pnpm typecheck` 必须与 `pnpm test` **同批跑**：tests 在 tsconfig 内而 vitest 不查类型，props 缝加宽而某个测试文件没跟上，只有 tsc 抓得住。`pnpm lint` 把界面那一头**未豁免**的 react-hooks 依赖数组（`src/client` 里仍在的 `eslint-disable` 是存量豁免清单，不在本门覆盖内），仓内方向与值环由 `tests/layering.test.ts` 随 `pnpm test` 把，不额外要一条命令。
 
-改动抓取 / 规则引擎 / 打包链路，或改相关性判据 / 按书归并时，`docs/developing.md` 的「测试与真链路门控」那几条门控（`DSH_REPROBE` / `DSH_CONTENT_AUDIT` / `DSH_SEARCH_FILTER_AUDIT` / `COMPAT_CAPTURE` / `DSH_INSTALL_CHECK` / `DSH_EPUB_BROWSER` / `DSH_PARSE_CENSUS`）是唯一自动化验证——按那里的命令跑对应那条，并把结论**如实**写进汇报。注意分工：reprobe 只验**搜索面**，`verified` 不证明正文可读，正文口径是 `DSH_CONTENT_AUDIT`，而它是**审计报告**、不设通过率断言（分桶读数要人判）；`DSH_SEARCH_FILTER_AUDIT` 真打聚合搜索、量相关性分档与按书归并的读数，同为**报告**、唯一断言只是判据自洽（分档不丢条），供裁「去虚字放行」那条偏离与那把归并键的焊错面；`DSH_EPUB_BROWSER` 只在本机浏览器里量渲染与几何（本地书正文、组件排版），不起服务也不访问站点。
+改动抓取 / 规则引擎 / 打包链路，或改相关性判据 / 按书归并时，`docs/developing.md` 的「测试与真链路门控」那几条门控（`DSH_REPROBE` / `DSH_CONTENT_AUDIT` / `DSH_SEARCH_FILTER_AUDIT` / `COMPAT_CAPTURE` / `DSH_INSTALL_CHECK` / `DSH_EPUB_BROWSER` / `DSH_WEBVIEW` / `DSH_PARSE_CENSUS`）是唯一自动化验证——按那里的命令跑对应那条，并把结论**如实**写进汇报。注意分工：reprobe 只验**搜索面**，`verified` 不证明正文可读，正文口径是 `DSH_CONTENT_AUDIT`，而它是**审计报告**、不设通过率断言（分桶读数要人判）；`DSH_SEARCH_FILTER_AUDIT` 真打聚合搜索、量相关性分档与按书归并的读数，同为**报告**、唯一断言只是判据自洽（分档不丢条），供裁「去虚字放行」那条偏离与那把归并键的焊错面；`DSH_EPUB_BROWSER` 只在本机浏览器里量渲染与几何（本地书正文、组件排版），不起服务也不访问站点。
 
 **取门的退出码，别看管道说了什么**：`pnpm test | grep` 之后退出码是 grep 的，红会被吃掉还留一句「全绿」。跑门一律两步：先把输出灌进文件，再单独打印退出码，汇报里把**退出码连同计数**一起抄。**跑门与提交必须是两条命令**——链式的下一环看的是别人的退出码，红也就跟着提交了。
 
@@ -44,7 +44,7 @@ DeepSeek Harness（DSH）的「小说」插件：导入 legado 书源 → 聚合
 ## 文档纪律
 
 - **过程文档不入库**：逐任务计划、审查报告、任务简报、一次性扫描脚本写在本机 `.superpowers/`（已 gitignore）。`main` 只保留当前真相。
-- **原地更新，不新增副本**：改口径就改实现处那段注释 / 那个矩阵行；改**决策**才追加一篇 ADR，并给被推翻的那篇标 superseded。新起一份份 spec / plan 会让真相分叉。
+- **原地更新，不新增副本**：改口径就改实现处那段注释 / 那个矩阵行；改**决策**就改对应 ADR 的正文（整篇不再成立时新写一篇、旧篇标 superseded）。新起一份份 spec / plan 会让真相分叉。
 - **高度规范**：注释与文档承担**为什么 / 口径 / 裁决 / 证据**，不承担代码细节——实现步骤复述、控制流描述、表达式与调用链的抄写都不许；「怎么做」的家是代码自己。自测问题：*这句删掉，读者丢的是「为什么」还是「怎么做」？*只丢后者就删或升高度。要指实现就指**符号锚**（函数/常量名、抛错消息原文、矩阵行 id），不抄表达式——抄写形由 `tests/comment-altitude.test.ts` 随 `pnpm test` 兜底。
 - **同一事实只住一个家**：真机读数住矩阵行 `note`、局部口径住代码注释、决策与被否决的方案住 `docs/adr/`、跨子系统形状住 `docs/architecture.md`、用户可见事实住 `README.md`、贡献者流程住 `docs/developing.md`、术语住 `CONTEXT.md`。写作时先问「这句属于哪家」——不属于任何一家的句子就是抄本。
 - **引用活性：不许指着读者拿不到的东西**。不写行号（`file.ext:123` 形态会随任何一次编辑漂移）；不指已出库或不存在的文件；不拿 `.superpowers/` 里的过程产物当证据。外部出处（对面 legado 的 `.kt` 路径与符号）只许出现在三处：`README.md`（致谢）、`tests/legado-coverage/matrix.ts`（登记册）、快照刷新工具 `tests/legado-coverage/{upstream-facts.ts,capture-upstream-snapshot.test.ts}`；其余地方只讲本仓自己的口径。

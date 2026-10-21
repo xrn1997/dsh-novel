@@ -10,4 +10,4 @@
 
 **色值与尺寸只准住 token 层**：视图与逻辑层不许内联颜色字面量（hex / `rgb()` / `rgba()` / `color-mix()` / 颜色名一律扫，且**先剥注释再扫**——口径是「代码里」不准内联），只有 token 定义处与 prefs 驱动的正文色值白名单放行。被否决：守卫只扫 hex（旧口径，视图里内联 `rgba(...)` 从缝里过）。
 
-锚点：`src/client/search-job.ts`；`src/client/store.ts`；`src/client/transient.ts`；`src/client/toggle-feedback.ts`；`src/client/views/SearchView.tsx`；`tests/client/theme-tokens.test.ts`；`tests/client/toggle-feedback.test.ts`。
+锚点：`src/client/search-job.ts`；`src/client/store.ts`；`src/client/transient.ts`；`src/client/views/SettingsSourceList.tsx`；`src/client/views/SearchView.tsx`；`tests/client/theme-tokens.test.ts`；`tests/client/settings-toggle.test.tsx`。

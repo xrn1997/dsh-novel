@@ -88,6 +88,21 @@ _Avoid_: 弹窗工具、焦点 hook（说「模态契约」）；也别与**阅�
 _唯一实现_: `services/request.ts` 的 `assembleRequest` / `fetchInitOf`
 _Avoid_: 请求工具、fetch 封装（抓取与解码归守门 fetcher）
 
+**源请求（source request）**:
+一次出站抓取的完整执行语义：动态头求值 → 限速 → webview/HTTP →（仅 HTTP 分支）loginCheck（4xx/5xx 错误页也先交给脚本看正文），外加 webview 与 HTTP cookie jar 的双向桥接。要发请求的调用方只交源与请求计划，不自己拼这份顺序；脚本侧拿 `fetcherFor` 交出的 adapter，动态头由引擎的惰性 provider 带入。**解码不归本缝**：它只按计划选 charset，解码本身归 `services/fetcher.ts` 的 `decodeBody`（`fetchTextPage` 与 `SourceRequest.fetchPage` 共用的单点）。
+_唯一实现_: `src/services/source-request.ts` 的 `createSourceRequest` / `SourceRequest`（`fetcherFor` 给脚本出站，`fetchText` / `fetchPage` 给读面）
+_Avoid_: 抓取工具、fetcher 包装（它拥有执行顺序，不是转发壳；模板解析仍归「请求组装」）。
+
+**HTTP cookie jar**:
+请求层那张域/路径/过期/`Secure` 感知的 cookie 表：响应 `Set-Cookie` 自动落库，请求缺省回带；一张表**跨源共享**（上游 `CookieStore` 同粒度，同站两源复用登录态）。与脚本侧按源隔离的 cookie 垫片是两张表。裁决与公共后缀残留见 `docs/adr/0039`。
+_唯一实现_: `src/services/cookies.ts` 的 `CookieJar`；自动吸收/回带归 `services/fetcher.ts`，浏览器与 jar 的双向桥归 `services/source-request.ts`
+_Avoid_: cookie 垫片（那是 `SourceSession.cookieJar` 的按源键值表）、CookieManager（那是 Android 类名，脚本桥面）
+
+**源状态会话（source session）**:
+脚本可见的按源状态四张表：cookie 垫片、键值变量、单串槽、cache 垫片。接口面同步（脚本 `source.get`/`cache.get` 不能等 IO）；生产实现落盘到数据根 `source-state.json`，删源时按 baseUrl 清掉该源四张表。
+_唯一实现_: `src/engine/js-sandbox.ts` 的 `SourceSession` 接口；`src/services/source-session.ts` 的 `FileSourceSession`（`forget` 是删源清理口）
+_Avoid_: 缓存（页面缓存归 `services/cache.ts`；这里的 cache 只是脚本 `source.cache` 垫片）、登录态（`SourceAuth` 归 `services/sources.ts`）
+
 ### 面与段
 
 **面（facet）**:
@@ -151,8 +166,8 @@ _Avoid_: 文本过滤（太泛——判据是「含文本的元素」，链上�
 
 **详情上下文初始化（ruleDetailInit）**:
 legado `ruleBookInfo.init` 的内部名：详情面先求值，其产物**整体替换**后续详情规则与 tocUrl 模板的求值上下文与 html。init 非空但零命中 → 抛错点名，不拿整页冒充上下文。
-_唯一实现_: `services/bridge.ts` 的 `detailContextOf`（详情七字段取值单点同文件 `detailFieldsOf`；tocUrl 单点 `tocUrlOf`）
-_Avoid_: init 规则（与 fetch 的 init 姿态易混，交流用内部名）
+_唯一实现_: `services/bridge.ts` 的 `detailContextOf`；七字段取值段 `detailFieldsFromContext`（`detailFieldsOf` 与 `detailReadOf` 共用这一份回落链与档位），详情一次读取 `detailReadOf`（字段与 tocUrl 共用同一份 init 上下文），tocUrl 的静态短路与上下文求值分住 `staticTocUrl` / `tocUrlFromContext`（`tocUrlOf` 是 `getTocInner` 那条入口）。
+_Avoid_: init 规则（与 fetch 的 init 姿态易混，交流用内部名）。
 
 **纯 `@put` 的 init**:
 整条规则只设变量时**不换根**——判据归引擎。
@@ -215,6 +230,11 @@ _Avoid_: id、url（太泛）
 _唯一实现_: `services/shelf.ts` 的 `Shelf`（按 `bookKey` 单键认）；客户端算式 `client/search-view-model.ts` 的 `shelfSeats` / `isSeatLanded` / `newlyLandedSeats`
 _Avoid_: 书架身份（它把上面那条 `bookKey` 的「书籍身份」和这个「架位」压成一句，两键误读就从这里长出来）、座位（本仓的「座位」指宿主的槽位）、光杆一个「条目」（那指一条命中，见「条目装配」；要指架上这条就写全「书架条目」或直接写「架位」）
 
+**加架动作（shelf action）**:
+「把一条命中落进书架」的唯一动作语义：架位路径 + body 形状 + 成功/失败两种结局（不抛）。回执位置与措辞不在这里——搜索行上报错误、书城走成功/失败泳道、阅读器失败留在模态内、成功走全局成功条并跳书架，各是各的。
+_唯一实现_: `src/client/shelf-action.ts` 的 `addShelfSeat`（输入 `ShelfSeatInput`、结局 `ShelfAddOutcome`）
+_Avoid_: 入架按钮、书城加架（那是两个入口，动作只有这一个）；架位真相与元数据字段集仍归 `services/shelf.ts` 的 `Shelf` / `SHELF_META`
+
 **本地书（local book）**:
 从本地文件导入的书，**TXT 与 EPUB 2/3 两支**，分流按**内容**（ZIP 魔数走 EPUB 路径，其余走 TXT 解码链），两条互不兜底；源身份固定 `__local__`，与在线书源正交。
 _唯一实现_: `src/services/localbooks.ts`（身份、分流、提交、读取、删除）+ `src/services/epub/`（解析与规范化——不认识书架与 HTTP）
@@ -230,6 +250,11 @@ _Avoid_: 队列（是单槽不是队列）、前端任务（在途循环不在�
 _唯一实现_: `services/explore-job.ts` 的 `ExploreJobs`——整轮读数 `page` / `hasMore`、续页 `advance`、迟到批次那条边界 `absorb` 全在这一处；到底判据不自立第二个出口，它就是 `snapshot` 里 `hasMore` 的那个累积因子；门面入口 `services/reading.ts` 的 `loadMoreExploreJob`；跨半形状 `shared/wire.ts` 的 `ExploreSnapshot`
 _Avoid_: 分类任务队列（是单轮槽不是队列）、新一轮（续页不换 id、不换身份，只有提交才换轮）
 
+**书城进入判据（city entry）**:
+书城自动那条路「该不该提交一轮分类浏览」的唯一判据：源与分类的回落（记住的源不在清单里就取第一项；被选中源声明零分类则无路可走）、挂载恢复读是否已定、自动那条路是否已走过、服务端此刻那一轮的身份，一起算出一个动作（等待 / 不动 / 落选中并提交或跟随已有轮次）。「进入即加载」只在该源+该分类没有轮次时提交——重提会杀掉服务端那一轮；手点路径不进判据（切源/切类必须马上有反应，恒提交）。
+_唯一实现_: `client/city-entry.ts` 的 `decideCityEntry` / `rememberedSelection`
+_Avoid_: 进入逻辑（太泛）、自动加载开关（判据产出的是动作，不是可配开关）；也别与「分类轮次」混称——那个词指 Node 半的持有物，这里只是客户端的一次决策。
+
 **阅读会话（reader session）**:
 「目录 → 存档恢复 → 逐章懒加载 → 预取 → 进度落盘」的时序持有者；DOM 测量经 `ReaderPort` 注入，视图只渲染与接线。同一时刻只允许一章在途（`inflight`），滚动风暴与目录直达只记意图（`pendingJump`），刚失败过的同一章不自动重试。
 _唯一实现_: `client/reader-session.ts`
@@ -237,7 +262,7 @@ _Avoid_: 阅读器状态管理（视图里的 state 只是它的投影）
 
 **阅读浮层（reader surface）**:
 阅读器右上角那一层的在场判据：Aa／目录／导出／注释／导入说明**至多一角在场**（同住右上角的两面叠起来，底下那面看得见点不动）；换角时注释面板只收不消费，Esc 走「关闭」那条语义（裁决见 `docs/adr/0037`）。
-_唯一实现_: `client/reader-surfaces.ts`（`openSurface` / `closeAll` / `dismissSurface` / `maskFor`）
+_唯一实现_: `client/reader-surfaces.ts`（`openSurface` / `closeAll` / `dismissSurface` / `maskFor` / `escOwner`）
 _Avoid_: 浮层状态管理（视图里的 `surface` 只是它的投影）、在各 opener 里逐处抄「先关别人」；也别与**模态契约**混称——带遮罩的入架一问走 `client/views/dialog.tsx`
 
 **判到底（翻页闸）**:
