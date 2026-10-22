@@ -10,11 +10,17 @@ type DefaultSegment = Extract<Segment, { kind: 'default' }>
 const SELECT_MODES = ['class', 'id', 'tag', 'child', 'children'] as const
 const GET_MODES = ['text', 'textAll', 'ownText', 'html', 'all', 'href', 'src', 'content', 'textNodes'] as const
 
-/** 该 default 段是否是**取值段**（终端，不再向下选）：mode 属 GET_MODES/attr 且不带参数——
- *  `text.<串>` 那种带参数的「按文本选元素」是选择段。链首未起链时取哪个上下文，由此决定
- *  （evaluate 的 default 分支消费）。 */
+/** 该 default 段是否是**取值终端**（不再向下选）：attr 恒是（arg 是属性名），
+ *  具名 GET mode 必须不带参数——`text.<串>` 那种带参数的「按文本选元素」是选择段。
+ *  子规则用途判据消费这一份（attr 带参也要算 value）。 */
+export function isValueTerminal(seg: DefaultSegment): boolean {
+  return seg.mode === 'attr' || (seg.arg === null && (GET_MODES as readonly string[]).includes(seg.mode))
+}
+
+/** 链首未起链时取哪个上下文由此决定（evaluate 的 default 分支消费）：
+ *  带参数的 attr 是终端但不算「裸取值起点」，所以这一档只收不带参数的终端。 */
 export function isGetValueSegment(seg: DefaultSegment): boolean {
-  return seg.arg === null && (seg.mode === 'attr' || (GET_MODES as readonly string[]).includes(seg.mode))
+  return seg.arg === null && isValueTerminal(seg)
 }
 
 /**

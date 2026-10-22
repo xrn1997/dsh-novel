@@ -49,7 +49,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 
 一条不对称要记住：**面（`Facet`）不改变求值语义**，它只进错误定位与 trace；**用途（`RuleUsage`）改变形状**，且只有这一个轴被允许改变形状（`docs/adr/0007`）。把它们混为一谈会生出「面决定语义」的假口径。
 
-链语义是单点：一条链只有一份 generator，两个驱动器对链本身零知识；js 段是唯一需要跨 `await` / 跨线程的段，所以它是唯一的 `yield` 点，也是唯一允许把宿主能力带进求值层的口子（`docs/adr/0005`）。服务层跑脚本只走 `js-sandbox.ts` 的 `runScript` 一扇门，而它的入参**就是 `EvalContext`**（曾逐字段抄一份能力清单，于是同一段脚本从这扇门进就少 `fetchPost`/`userAgent`/`book`/`chapter`）；超时预算的三个数各有名字与家：调用方给的 `jsTimeoutMs`、worker 那条 race 的 `ASYNC_GRACE_MS`、worker 内单次宿主往返的 `WORKER_RPC_DEADLINE_MS`。
+链语义是单点：一条链只有一份 generator，两个驱动器对链本身零知识；js 段是唯一需要跨 `await` / 跨线程的段，所以它是唯一的 `yield` 点，也是唯一允许把宿主能力带进求值层的口子（`docs/adr/0005`）。服务层跑脚本只走 `js-sandbox.ts` 的 `runScript` 一扇门，而它的入参**就是 `EvalContext`**（曾逐字段抄一份能力清单，于是同一段脚本从这扇门进就少 `fetchPost`/`userAgent`/`book`/`chapter`）；超时预算的三个数各有名字与家：调用方给的 `jsTimeoutMs`、worker 那条 race 的 `ASYNC_GRACE_MS`、worker 内单次宿主往返的 `WORKER_RPC_DEADLINE_MS`。递归求值口的用途判据同样只有一处（`engine/sub-rule.ts` 的 `usageOfSubRule`，归属见 §4 的子规则行；why 与被否方案见 `docs/adr/0007`）。
 
 文法区域（`{{…}}` / `@put:{…}` / `<js>`）先于任何切分被整体剥离，判据只住在 `engine/grammar.ts`——区域里的 `||`、`&&`、`@`、`$1` 是代码内容而不是文法记号。构词与解析同属一处，方言拼串走 round-trip 自校验。
 
@@ -64,12 +64,14 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 路由名 / 值形状 / body 形状（`bodies` 构造 + `readBodies` 读口 / `queries`） | `shared/wire.ts` | 业务判据 |
 | 书目元数据字段集 | `shared/wire.ts` 的 `SHELF_META` + `pickShelfMeta` | 读取面投影（`sourceName` 刻意不进表） |
 | 架位（书架上的一条记录，凭 `bookKey` 认） | `services/shelf.ts` 的 `Shelf`（按 `bookKey` 单键认）；客户端算式 `client/search-view-model.ts` 的 `shelfSeats` / `isSeatLanded` / `newlyLandedSeats` / `addAllReceipt` | 逐源行怎么认（那是 `rowId`，两把键不许混）、元数据字段集（`SHELF_META`） |
+| 工具面书架投影（字段、schema、picker） | `tools/shelf-item.ts` 的 `SHELF_ITEM_FIELDS` / `SHELF_ITEM_EXCLUDED` / `pickShelfItem` | 书目字段集（`shared/wire.ts` 的 `SHELF_META`）、缺键投影（`tools/project.ts`） |
 | 加架动作（一条命中落进书架：路径 + body + 成败形状） | `src/client/shelf-action.ts` 的 `addShelfSeat`（`ShelfSeatInput` / `ShelfAddOutcome`；路径与 body 仍由 `paramRoutes.shelfKey` + `bodies.shelfAdd` 给） | 回执位置与措辞（留在各视图：搜索行上报错误、书城走成功/失败泳道、阅读器失败留在模态内、成功走全局成功条并跳书架）、架位真相（`services/shelf.ts` 的 `Shelf`）与元数据字段集（`SHELF_META`） |
 | 规则文法（构词 + 解析 + 区域） | `engine/grammar.ts` | 求值 |
 | 整条规则模式（JSON 内容 → JSONPath；显式前缀不接管） | `engine/mode.ts` 的 `isJsonRule`（求解入口 `engine/evaluate.ts` 调用） | 段级前缀分类（`engine/parse.ts` 的 `classifySegment`） |
 | 段识别与切分次序（含隐式 CSS 回落） | `engine/parse.ts` | 空态裁决 |
 | 空态裁决（Miss vs 空 List） | `engine/select.ts` 的 `reducePicked` | 服务层的值收口 |
 | 组合符形状与驱动长度 | `engine/combine.ts`（读 `usage`） | 链衔接 |
+| 子规则求值用途（`java.getString*` / 模板 `{{…}}` / `@put` 的 value/list 判据） | `engine/sub-rule.ts` 的 `usageOfSubRule`（取值终端判据 `engine/select.ts` 的 `isValueTerminal`）；求值入口 `engine/evaluate.ts` 的 `evaluateRef` / 模板插值 `interpolateTemplate` / `engine/js-protocol.ts` 的 `evalRule` | 主链用途（`engine/parse.ts` 的 `classifyDefault` / `ParsedRule.usage`）、组合符语义（`engine/combine.ts`） |
 | 行模板的判定与绑定 | `engine/regex-row.ts`（同一份文法的两面） | 模板字面段 |
 | `EngineValue → 单串` | `engine/js-utils.ts` 的 `engineValueToString` | 业务字段语义 |
 | 宿主方法面（名字 / 挂载 / 分派） | `engine/js-protocol.ts` 的协议表。加一个 **sync** 方法 = 表加一行；加一个 **async** 方法还要在 `js-sandbox.ts` 的 `BOOTSTRAP` 里写那份同步桥包装（`docs/adr/0004` 把生成逻辑钉在串内），且它读的 `ctx.*` 能力位必须由 `services/bridge.ts` 的 `engineContextOf` 供出——这两处联系都有机器闸（`tests/engine/js-protocol.test.ts` 的能力位闸） | 真实网络 |
@@ -88,7 +90,9 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 缓存「放在哪」 | `services/cache.ts` | 何时有效 |
 | 缓存「还有效吗」 | `services/cache-epoch.ts`（代际 + 槽位），裁决在 `services/reading.ts` | 清理策略 |
 | 入库规则（什么算同一本书源） | `services/intake.ts` | 呈现与计数 |
-| 源清单与落盘 | `services/sources.ts` 的注册表（只有 `edit` / `flush`） | 任务节流 |
+| 落盘调度机制（防抖 / 阈值计数 / flush 失败） | `services/storage.ts` 的 `createDebouncedWriter`（`SourceRegistry` 与 `Shelf` 只调用） | 阈值与窗口的取值（注册表：`services/sources.ts` 的 `PERSIST_EVERY` / `PERSIST_WINDOW_MS`；书架用 writer 缺省窗口）、何时触发迁移（`SourceRegistry.load`）、原子写低层与按文件名排队（`writeFileAtomic`） |
+| 源清单与落盘 | `services/sources.ts` 的注册表（变更口 `edit` / `flush`；写失败移交 `retainWriteFailure`） | 任务节流、写调度（归 `createDebouncedWriter`） |
+| 存量收敛（已落盘源按 raw 收敛） | `services/normalize.ts` 的 `rehydrateStoredSource`（触发点只有 `SourceRegistry.load`） | 何时加载 / 何时落盘（归 `SourceRegistry`） |
 | 原子写与 JSON 读的两分判别 | `services/storage.ts` | domain 的合并写策略 |
 | 翻页何时停 | `services/pagination.ts` 的 `followPages` | 站点结构解析 |
 | 本地书身份与分流 | `services/localbooks.ts` | EPUB 包内解析（`services/epub/`） |
@@ -99,6 +103,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 任务过程行 | 缓冲与上限：`services/job-tail.ts` 的 `JobTail`；接到宿主 `readOutput` 上那段登记机械：`services/job-holder.ts` 的 `HostTie`（三个持有者共读这一份，`start()` 内同步取 hooks 的顺序只在这里记一次） | 整轮结果与业务明细（那归各持有者的快照读面，`docs/adr/0018`）；状态形状与槽政策 |
 | 「本轮状态变了」信号 | `services/job-holder.ts` 的 `ChangeSignal`（只发信号不发数据；观察者自取快照、各持游标） | 快照形状、游标推进、换轮与整帧替换的裁决（那归浏览器半两个观察模块） |
 | 整轮搜索结果 | `services/search-job.ts`（Node 半持有） | wire 形状 |
+| 搜索轮的开始与归属 | `client/search-job.ts` 的 `submit`（返回本轮 `jobId`；需要认领自身轮次的调用方按 id 认领——书籍详情浮层如此，搜索结果页仍跟随最近一轮） | 服务端单槽与跟随最近一轮（`services/search-job.ts`、`docs/adr/0023`）、轮级派生（`client/search-view-model.ts`） |
 | 跨源归并（作品视图）：搜索面「是不是同一本书」的判同 | `shared/merge-by-book.ts` 的 `mergePartitioned`（生产归并入口，吃 `shared/round-summary.ts` 的分区；`mergeBooks` 只是「一轮 → 归并」的 convenience，供测试与审计脚本；形状与上限 `MergedBook`／`MergedSource`／`SEARCH_BOOKS_CAP` 在 `shared/wire.ts`）——呈现层派生，消费点只有搜索结果页与工具面 | 不替用户判该用哪家读（动作不下放）、不服务书籍详情浮层、不改架位与进度（作品级身份与换源搬运另裁，见 `docs/adr/0033`） |
 | 一轮搜索的轮级计数与分区（每源只分区一次） | `shared/round-summary.ts` 的 `summarizeRound`（形状 `RoundPartition` / `RoundCounts`；answered/kept/suspect 的名字即口径——answered 数答了话的家，零条也算） | 归并（`shared/merge-by-book.ts` 的 `mergePartitioned`）、行身份与架位（`client/search-view-model.ts`） |
 | 搜索结果页的轮级派生（行身份与 React key、逐源回读、架位） | `client/search-view-model.ts`（`deriveRound` 一次给齐现场；判据的「为什么」仍住 `CONTEXT.md` 的单位律词条与 `docs/adr/0032` / `0033`） | 轮次累积与游标（`client/search-job.ts`）、落架现场（视图 state）、轮级计数与分区（`shared/round-summary.ts`） |
@@ -108,7 +113,8 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 分类清单（哪个源自己声明了哪些分类） | `services/explore.ts` 的 `deriveExploreSources` | 站点侧分类的同义归并（本仓不造同义词表） |
 | 单源一页的执行（查进程内快照 → 抓 → 写回 → 出一个组） | `services/explore.ts` 的 `fetchExploreGroup` | 点名与页码（门面 `services/reading.ts`）、轮次状态与终态 |
 | 整轮分类结果 | `services/explore-job.ts`（Node 半持有，读面给全量快照） | wire 形状 |
-| 书城进入判据（自动那条路的源/分类回落与提交决策） | `client/city-entry.ts` 的 `decideCityEntry` / `rememberedSelection` | 分类轮次的持有与续页（`services/explore-job.ts`）、分类清单派生（`services/explore.ts`）、手点提交（`client/views/CityView.tsx`） |
+| 书城进入判据（自动那条路的源/分类回落与提交决策） | `client/city-entry.ts` 的 `decideCityEntry` / `resolveCitySelection` | 分类轮次的持有与续页（`services/explore-job.ts`）、分类清单派生（`services/explore.ts`）、手点提交（`client/views/CityView.tsx`） |
+| 书城选中态（源 + 分类 + 本挂载 one-shot） | `client/city-selection.ts` 的 `useCitySelection` / `rememberedCitySelection` | 进入判据（`client/city-entry.ts`）、分类轮次（`services/explore-job.ts`）、提交回包闸（`client/explore-job.ts` 的 `submitted`） |
 | 跨源那一次的关键词构造（有作者就带作者） | `client/city-view-model.ts` 的 `sheetKeyword`（消费者只有书籍详情浮层，链路复用搜索面） | 是不是同一本书——判同在搜索面归并那一行（`mergePartitioned`，按归并键）；书籍详情浮层维持逐源轴、不吃归并；两层的界面都不替他判该用哪家读 |
 | 逐条目取值装配（一套条目规则 + 一个条目上下文 → 一条命中） | `services/bridge.ts` 的 `hitFieldsOf`（槽序、书名非空尺、选项保留绝对化、简介净化全在这一处；聚合搜索与发现面共用） | 用哪一套规则（发现面的整套切换归 `explore-face.rulesFor`）、读不出来归成哪类错（各自调用侧：搜索面按组、发现面按源） |
 | 分类快照的存放与时效 | `services/explore-cache.ts` 的 `KindCache` + `services/cache-epoch.ts` 的 `exploreEpoch` | 目录 / 正文文件缓存（`rulesEpoch`） |
@@ -119,6 +125,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 模态契约（Esc / 入场焦点 / Tab 圈 / 关后还焦 / scrim 与 dialog 标记） | `client/views/dialog.tsx` 的 `Dialog`（五处带遮罩浮层共读这一份） | 几何档位的主人（样式层）与标题、动作行文案（各调用点） |
 | 客户端可见文案与错误展示 | `client/copy/index.tsx` 的 `ZH` / `EN` / `createTranslate` / `zhTranslate` / `CopyProvider` / `useCopy`（字典与取词入口）+ `client/copy/search.ts`（搜索收口句的整句模板与子句键）+ `client/copy/search-summary.ts` 的 `searchSummarySegments`（按模板组装成段）+ `client/api.ts` 的 `describeError` / `NetworkReason`（客户端网络错误的翻译判据） | 服务端错误原文、AI 工具描述、插件卡片的 `locale` 元信息 |
 | 阅读时序 | `client/reader-session.ts` | DOM 测量实现 |
+| 阅读渲染后拍点（落位 → 预取；落位内部在滚动后自刷锚点） | `client/reader-session.ts` 的 `afterRender`（视图只 `refreshPort` 后调它） | DOM 测量（`ReaderPort`）、滚动/排版事件（`ReaderView`） |
 | 阅读浮层在场与互斥（至多一角、换角退场语义、哪面带遮罩、模态同场时 Esc 归谁） | `client/reader-surfaces.ts`（`openSurface` / `closeAll` / `dismissSurface` / `maskFor` / `escOwner`；视图的 `surface` state 只是它的投影） | 阅读位置与返回栈（`reader-session.ts`）、带遮罩模态（`client/views/dialog.tsx`） |
 | 章节窗口与预取判据 | `client/reader-load.ts` | 会话状态 |
 | 阅读位置 ⇄ 像素 | `client/progress.ts`（两侧同跨度才互逆） | 落盘时机 |

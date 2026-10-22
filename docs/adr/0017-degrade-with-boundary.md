@@ -12,4 +12,6 @@ Status: accepted
 
 同族的一条不对称，看起来像两处实现不一致，其实是刻意的：**详情页嗅探的结论按「猜测」对待**。`ruleBookInfo.init` 取空在搜索面（嗅探来的「这是详情页」）= **没有书目**，不把一次正常的「这个词没搜到」升级成整源错误；在 `getDetail`（用户真的在读书的详情面）= **必须抛**，不拿整页冒充上下文。嗅探判定只有一份、住在搜索面，两个 adapter 不各写一份；且判据是**整串锚定**而非 JS `RegExp.test` 的子串语义（子串会把搜索结果页误判成详情页）。探针侧同样分岔：`info ∧ via='pattern'` 才按详情规则判书名；`info ∧ via='empty-list'` 与零条目同义，照旧换词重试——把它当 verified 等于用一次空响应洗白一个坏源。
 
-锚点：`src/services/bridge.ts` 的 `metaFieldOf` / `detailFieldsOf` / `detailContextOf` / `resolveHeaders`；`src/services/search-face.ts` 的 `patternOf` / `canInfo`；`src/services/probe.ts` 的 `via` 分岔；`src/services/reading.ts` 的 `getTocInner` / `getChapter`；`tests/services/reading.test.ts`。
+**磁盘侧失败不冒充站点判据**：批量验证里站点判据先记账、状态写回另接一手——`edit` 的落盘失败只进任务读数（issue 的 `warning` 与收尾 `flush` 的失败），不折成「这一家 broken」，也不占 `counts.failed`。把本机故障记进站点判据分母，与把站点结构问题记成引擎失败是同一条罪的两个方向（写失败合同见 `docs/adr/0011`）。
+
+锚点：`src/services/bridge.ts` 的 `metaFieldOf` / `detailFieldsOf` / `detailContextOf` / `resolveHeaders`；`src/services/search-face.ts` 的 `patternOf` / `canInfo`；`src/services/probe.ts` 的 `via` 分岔；`src/services/import-job.ts`（探针判据与状态写回分道）；`src/services/reading.ts` 的 `getTocInner` / `getChapter`；`tests/services/reading.test.ts`、`tests/services/import-job.test.ts`。

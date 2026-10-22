@@ -1,12 +1,19 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { SourceRegistry } from '../../src/services/sources.js'
+import { PERSIST_EVERY, SourceRegistry } from '../../src/services/sources.js'
 import { normalizeSource } from '../../src/services/normalize.js'
 import { makeTempDir } from '../temp-dir.js'
 
 const raw = { bookSourceName: 'A', bookSourceUrl: 'https://a.com', ruleContent: '@css:#c@text', header: '{"Cookie":"secret=1"}' }
 async function tmp(): Promise<string> { return makeTempDir('novel-src-') }
+
+/** 把累计写计数推到阈值前一格（add 本身已占一次 schedule），下一次 edit 即触发阈值写。 */
+async function primeThreshold(reg: SourceRegistry, id: string): Promise<void> {
+  for (let i = 0; i < PERSIST_EVERY - 2; i++) await reg.edit((tx) => tx.setStatus(id, 'verified'))
+}
+
+afterEach(() => { vi.restoreAllMocks() })
 
 describe('SourceRegistry', () => {
   it('edit(add) → flush → 重新 load 往返一致（raw 原样）', async () => {
@@ -20,6 +27,72 @@ describe('SourceRegistry', () => {
     expect(reg2.list()).toHaveLength(1)
     expect(reg2.get(src.id)!.raw).toEqual(raw)
     expect(reg2.get(src.id)!.rules.searchUrl).toBeNull()
+  })
+  it('load 的存量收敛写回磁盘：首次 load 后文件已是新形状，二次 load 不再改', async () => {
+    const dir = await tmp()
+    const sourceRaw = {
+      bookSourceName: 'A', bookSourceUrl: 'https://a.com', ruleContent: 'x',
+      ruleBookInfo: { init: '@css:#ctx' },
+    }
+    const stored = {
+      ...normalizeSource(sourceRaw).source!,
+      id: 's1', status: 'unverified' as const, importedAt: 0,
+    }
+    delete (stored.rules as unknown as Record<string, unknown>).ruleDetailInit
+    const file = path.join(dir, 'sources.json')
+    await fs.writeFile(file, JSON.stringify([stored]), 'utf8')
+    await SourceRegistry.load(dir)
+    const onDisk = JSON.parse(await fs.readFile(file, 'utf8')) as Array<{ rules: Record<string, unknown> }>
+    expect(onDisk[0].rules.ruleDetailInit).toContain('#ctx')
+    const bytes = await fs.readFile(file, 'utf8')
+    const writes = vi.spyOn(fs, 'rename')
+    await SourceRegistry.load(dir)
+    expect(writes, '二次 load 已是新形状，不该再写').not.toHaveBeenCalled()
+    expect(await fs.readFile(file, 'utf8')).toBe(bytes)
+  })
+
+  it('recipe 抛错时阈值写失败不覆盖 recipe 错误，失败留给下一次 flush', async () => {
+    const dir = await tmp()
+    const reg = await SourceRegistry.load(dir)
+    const src = await reg.edit((tx) => tx.add(normalizeSource(raw)))
+    await primeThreshold(reg, src.id)
+    const rename = vi.spyOn(fs, 'rename').mockRejectedValueOnce(
+      Object.assign(new Error('denied'), { code: 'EACCES' }),
+    )
+    await expect(reg.edit(() => { throw new Error('recipe') })).rejects.toThrow('recipe')
+    // 不钉这一下，阈值没触发时本用例只剩 recipe 错误、失败分支其实没跑到
+    expect(rename, '阈值那次确实开了写').toHaveBeenCalledTimes(1)
+    await expect(reg.flush()).rejects.toMatchObject({ code: 'EACCES' })
+  })
+
+  it('edit 的阈值写失败由调用方接住；只有显式移交才留给收尾 flush', async () => {
+    const dir = await tmp()
+    const reg = await SourceRegistry.load(dir)
+    const src = await reg.edit((tx) => tx.add(normalizeSource(raw)))
+    await primeThreshold(reg, src.id)
+    vi.spyOn(fs, 'rename').mockRejectedValueOnce(
+      Object.assign(new Error('denied'), { code: 'EACCES' }),
+    )
+    let failure: unknown
+    try {
+      await reg.edit((tx) => tx.setStatus(src.id, 'broken'))
+    } catch (e) {
+      failure = e
+    }
+    expect(failure).toMatchObject({ code: 'EACCES' })
+    await expect(reg.flush()).resolves.toBeUndefined()       // 调用方已接住，未移交 → 不重复报
+    reg.retainWriteFailure(failure)
+    await expect(reg.flush()).rejects.toMatchObject({ code: 'EACCES' })
+  })
+
+  it('flush 把落盘失败抛给调用方（与 writer 同一合同）', async () => {
+    const dir = await tmp()
+    const reg = await SourceRegistry.load(dir)
+    await reg.edit((tx) => tx.add(normalizeSource(raw)))
+    vi.spyOn(fs, 'rename').mockRejectedValueOnce(
+      Object.assign(new Error('denied'), { code: 'EACCES' }),
+    )
+    await expect(reg.flush()).rejects.toMatchObject({ code: 'EACCES' })
   })
   it('edit(setStatus) 持久化 detail', async () => {
     const dir = await tmp()

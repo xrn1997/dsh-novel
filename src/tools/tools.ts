@@ -1,9 +1,10 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ReadingService } from '../services/reading.js'
-import type { ShelfBook } from '../services/types.js'
 import { mergePartitioned } from '../shared/merge-by-book.js'
 import { summarizeRound } from '../shared/round-summary.js'
 import { project } from './project.js'
+import { pickShelfItem, SHELF_ITEM_FIELDS } from './shelf-item.js'
+import type { ShelfItem } from './shelf-item.js'
 
 /** defineTool 产物（registry-ready definition）；registerTools 的 ctxLike 结构镜像 Cordis ToolRuntime */
 export type ToolDefinition = ReturnType<typeof defineTool>
@@ -232,33 +233,13 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
             type: 'array', description: '书架条目（仅 list）',
             items: {
               type: 'object', additionalProperties: false,
-              properties: {
-                sourceId: { type: 'string', required: true, description: '源 id' },
-                bookKey: { type: 'string', required: true, description: '书籍键（详情页 URL）' },
-                title: { type: 'string', required: true, description: '书名' },
-                author: { type: 'string', description: '作者' },
-                lastChapterName: { type: 'string', description: '最新章名' },
-                kind: { type: 'string', description: '分类' },
-                wordCount: { type: 'string', description: '字数（站点文案原样）' },
-                progress: { type: 'object', additionalProperties: true, required: true, description: '{chapterIndex, offsetRatio, updatedAt}' },
-                addedAt: { type: 'integer', required: true, description: '加入时间戳' },
-              },
+              properties: SHELF_ITEM_FIELDS,
             },
           },
           book: {
             type: 'object', additionalProperties: false,
             description: '受影响的单本条目（仅 add/save_progress，字段与 books 条目同形）',
-            properties: {
-              sourceId: { type: 'string', required: true, description: '源 id' },
-              bookKey: { type: 'string', required: true, description: '书籍键（详情页 URL）' },
-              title: { type: 'string', required: true, description: '书名' },
-              author: { type: 'string', description: '作者' },
-              lastChapterName: { type: 'string', description: '最新章名' },
-              kind: { type: 'string', description: '分类' },
-              wordCount: { type: 'string', description: '字数（站点文案原样）' },
-              progress: { type: 'object', additionalProperties: true, required: true, description: '{chapterIndex, offsetRatio, updatedAt}' },
-              addedAt: { type: 'integer', required: true, description: '加入时间戳' },
-            },
+            properties: SHELF_ITEM_FIELDS,
           },
           removed: { type: 'boolean', description: '是否真的移除了（仅 remove）' },
         },
@@ -459,20 +440,6 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
 
   return [searchBooks, readChapter, tocTool, shelf, sourceTool, addSource]
 }
-
-/** 书架单本投影的唯一形状（books 条目与 book 回执同源，不长第二份）：
- *  schema 声明的字段集——intro/totalChapters/coverUrl 刻意不投影（additionalProperties:false 下超集会被拒） */
-type ShelfItem = {
-  sourceId: string; bookKey: string; title: string
-  author?: string; lastChapterName?: string; kind?: string; wordCount?: string
-  progress: ShelfBook['progress']; addedAt: number
-}
-const pickShelfItem = (b: ShelfBook): ShelfItem => ({
-  sourceId: b.sourceId, bookKey: b.bookKey, title: b.title,
-  author: b.author, lastChapterName: b.lastChapterName,
-  kind: b.kind, wordCount: b.wordCount,
-  progress: b.progress, addedAt: b.addedAt,
-})
 
 /** 注册六工具并返回聚合 disposer（apply 里 ctx.effect 用） */
 export function registerTools(ctxLike: ToolsCtxLike, service: ReadingService): () => void {

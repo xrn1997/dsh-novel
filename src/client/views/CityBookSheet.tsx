@@ -24,8 +24,8 @@ import { Dialog } from './dialog.js'
  *    它就既进不了阅读器也无从入架）。那一行照样列出——它是「这个源收录了它」的交代。
  * ② **跨源那一次是用户主动发起的**：服务端不问就不打搜索，所以这颗钮是真控件；点了之后走的
  *    是搜索面那条既有链（`useSearchJob` + `sheetKeyword`），**不新造第二条跨源遍历**。搜索面只有
- *    一个槽、观察者跟随最近一轮，故这一列还多一条身份守卫：只认「本轮关键词就是这本书」的那一轮
- *    （见下面 `ownRound`）。
+ *    一个槽、观察者跟随最近一轮，故这一列还多一条身份守卫：只认本层 POST 回来的 jobId
+ *    （见下面 `ownRound`；关键词不是身份）。
  * ③ 跨源结果**不替用户判是不是同一本书**：按源一行行列出来，该源上的书名与最新章都在行上，
  *    他自己看——与「不造分类同义词表」（`docs/adr/0027`）同一族纪律。这一行取该源哪一条命中由
  *    相关性判据说了算（判据与档序的家在 `shared/relevance`，搜索结果页调的也是它；落点见 `GroupRow`），
@@ -56,18 +56,24 @@ export function CityBookSheet({ book, sourceId, sourceName, deps, onClose }: {
   const search = useSearchJob(deps, t)
   /** 按过那颗钮才算「要跨源」：在那之前搜索面持有的轮次不是本浮层的读数，一条都不列 */
   const [asked, setAsked] = useState(false)
+  /** 本浮层最近一次成功 POST 回来的轮次 id（同关键词的别人那轮不认）。 */
+  const [ownId, setOwnId] = useState<string | null>(null)
 
-  /** 跨源那一次的关键词，本层只在这里向 `sheetKeyword` 取一次：本轮身份守卫与相关性分档读的是
-   *  同一个串，两处各拼一遍就会给「这一轮是不是这本书」与「这条命中相关吗」两种答案。 */
+  /** 跨源那一次的关键词，本层只在这里向 `sheetKeyword` 取一次：它只服务相关性与提交文本；
+   *  本轮身份认 `ownId`，不是这个串。 */
   const keyword = sheetKeyword(book)
-  /** 本轮身份守卫（口径②的后半）：`asked` 在点击瞬间即真，而挂载恢复交回的是搜索面**最近那一轮**——
-   *  服务端只有一个槽、观察者跟随最近一轮（`docs/adr/0023`），那一轮的关键词很可能属于**另一本书**
-   *  （上一本在这里点过跨源，或搜索面正拿着别处的结果）。本次 POST 回包之前的窗口里，不认关键词就会
-   *  把别的书的命中当成本书的结果念给用户。判据：关键词与 `sheetKeyword` 给的那一个一致才算本轮，
-   *  不一致就当还没出结果。**不顺手 cancel**：那是别人正在看的轮次，浮层没有停它的权利。 */
+  /** 本轮身份守卫：服务端只有一个槽、观察者跟随最近一轮（`docs/adr/0023`），
+   *  而挂载恢复交回的那一轮可能属于另一本书。本层只认自己 POST 回来的 jobId——
+   *  关键词相同也不是身份。**不顺手 cancel**：那是别人正在看的轮次，浮层没有停它的权利。 */
   const round = search.round
-  const ownRound = round !== null && round.keyword === keyword.trim() ? round : null
+  const ownRound = round !== null && ownId !== null && round.id === ownId ? round : null
   const groups = ownRound?.groups ?? []
+  const start = (): void => {
+    setAsked(true)
+    // 迟到回包由 `useSearchJob` 的起跑序号挡住（只有最后一次 submit 会 begin 并交回 id）；
+    // 这里拿到非 null 即本轮。认领还多一道自证：`ownRound` 比当前轮次 id，指错了就一条都不列。
+    void search.submit(keyword).then((id) => { if (id !== null) setOwnId(id) })
+  }
   /** 零命中判据（口径④）：**至少一家干净答了**，且答了的那些家全都零条命中。
    *  前半条不是多余的：只数「组里还有没有命中」时，这一列压根没有组、以及整列全是未响应——两种
    *  「一个答复都没有」的情形都满足它（未响应那组本来就是空列表，空集合上更是真空成立），
@@ -97,7 +103,7 @@ export function CityBookSheet({ book, sourceId, sourceName, deps, onClose }: {
       <div className="novel-city-srclist">
         <SheetRow row={ownRow(book, sourceId, sourceName)} deps={deps} showLast={false} />
       </div>
-      <button className="novel-btn" onClick={() => { setAsked(true); search.submit(keyword) }}>
+      <button className="novel-btn" onClick={start}>
         {asked && ownRound?.running === true ? t('city.findElsewhere.running') : t('city.findElsewhere')}
       </button>
       {asked ? (

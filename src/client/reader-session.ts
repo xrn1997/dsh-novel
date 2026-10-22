@@ -275,7 +275,7 @@ export class ReaderSession {
 
   /** 未载边界哨兵进预取区 → 加载下一章（单一在途；读尽/边界未到 → 不动）。
    *  目标 = **视口所在章之后**第一个未载章（不是最大已载章 +1，见 reader-load 头注）。 */
-  checkPreload(sourceId: string): void {
+  private checkPreload(sourceId: string): void {
     const sentinel = this.port.sentinelOffset()
     if (sentinel === null) return
     const target = nextLoadTarget(sentinel, this.port.viewHeight(), {
@@ -458,13 +458,21 @@ export class ReaderSession {
     if (this.store.get().returnDepth !== depth) this.store.set({ returnDepth: depth })
   }
 
+  /** 视图唯一渲染后拍点：章节 DOM 或 pendingJump 变化后调用。
+   *  次序固定在这里：落位（内部在滚动后自刷锚点）→ 按落定后的位置预取。
+   *  视图不再认识这两个内部阶段；无待跳目标时不重复量锚点（下一次视口变化会自刷）。 */
+  afterRender(sourceId: string): void {
+    this.settleJump()
+    this.checkPreload(sourceId)
+  }
+
   /** pendingJump 的目标已渲染 → 按真实位置定位并清零；未落地则下轮再试。
    *  **先挂载再测量**是硬次序：章块与锚点节点不在 DOM 时无可测量。
    *  定位后补一笔**真实比例**（章号意图 requestJump 已落盘，这里补「落位后读到章内哪儿」）。
    *  **窄回退**：章块已挂载而锚点量不到（悬空锚点 / 手改过的落盘元数据）退回该章章首——挂住
    *  的代价不是「这次没跳成」，而是 `handleViewportChange` 被 pendingJump 整条早退：滚动不再
    *  落盘、进度静默停摆，比「损坏元数据落到章首」坏得多。正文确实没挂载（在途）才继续挂住。 */
-  settleJump(): void {
+  private settleJump(): void {
     const jump = this.store.get().pendingJump
     if (jump === null) return
     let off = this.port.targetOffset(jump.index, jump.anchorId)
@@ -487,8 +495,8 @@ export class ReaderSession {
     return this.chaptersNow[index] !== null && this.chaptersNow[index] !== undefined
   }
 
-  /** 锚点刷新（视图在章节 DOM 变化后调用；会话在定位前也会自刷） */
-  recalcAnchors(): void {
+  /** 锚点刷新（存档恢复、视口变化、落位后与失败定位共用；视图不再直接调） */
+  private recalcAnchors(): void {
     this.anchorsNow = this.port.measureAnchors()
   }
 

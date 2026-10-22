@@ -1,12 +1,13 @@
-import type { ReplaceStep } from './types.js'
+import type { ReplaceStep, RuleUsage } from './types.js'
 
 /**
  * 规则文法：同一文法的构词与解析同属一处——此前构词散在三个
  * 跨半 module、没有任何东西验证「normalize 拼出来的正是 parse 认的」，文法一改全靠注释同步。
  *
  * 本 module 持有：`##` 尾的解析（parseTails）与构词（appendTail）、Native 隐式终端构词
- * （withImplicitText）、URL 模板 JS 形态判定（isJsForm）与 `{{…}}` 变量词法（splitVarExpr）。
- * parse.ts 消费解析口，normalize/search-template/template 消费构词与词法口。
+ * （withImplicitText）、URL 模板 JS 形态判定（isJsForm）、`{{…}}` 变量词法（splitVarExpr）与
+ * 链首前缀的剥除/形态两判（stripChainPrefixes）。parse.ts 消费解析口与链首剥除，
+ * sub-rule.ts 消费形态两判，normalize/search-template/template 消费构词与词法口。
  *
  * 构词期越界不进求值期：appendTail 用 parseTails 回读比对（round-trip 自校验），粘连/OnlyOne
  * 误伤当场返回 warning（进 normalize warnings），不产出求值期谜之结果。
@@ -254,4 +255,37 @@ export function splitVarExpr(inner: string): VarExpr {
   return orIdx === -1
     ? { name: inner.trim(), fallback: null }
     : { name: inner.slice(0, orIdx).trim(), fallback: inner.slice(orIdx + 2) }
+}
+
+/**
+ * 链首前缀的唯一词法主人（parseRule ③/③b 的剥除与子规则用途判据的两读全建在这一份上）：
+ * - `stripChainPrefixes`：parse 用它剥——`-` 恒剥并置反序，`+` 只在 list 用途剥（不扩大豁免，
+ *   理由同住 parseRule 的头注）；
+ * - `hasListEntryMarker` / `hasExplicitValueHead`：判「剥完 `-` 后紧跟链首的那一格」，`+` 归列表
+ *   入口（value 求值不认它，按 value 解析会把整条读错）、`@` 归显式取值头。
+ * 两判都不容前导空白：调用方先经 `parseTails(rule).chain` 取同一条链——parseRule 的剥除与
+ * `usageOfSubRule` 的判读都读它，不要拿原始规则串直接判。
+ */
+function reversePrefix(chain: string): { rest: string; reverse: boolean } {
+  if (!chain.startsWith('-')) return { rest: chain, reverse: false }
+  return { rest: chain.slice(1).trimStart(), reverse: true }
+}
+
+/** ③ 之后紧跟链首的那一格：③b 的 `+` 与子规则判据的 `@` 都读它，不再各数一次位置 */
+function headAfterReverse(chain: string): string {
+  return reversePrefix(chain).rest.charAt(0)
+}
+
+export function hasListEntryMarker(chain: string): boolean {
+  return headAfterReverse(chain) === '+'
+}
+
+export function hasExplicitValueHead(chain: string): boolean {
+  return headAfterReverse(chain) === '@'
+}
+
+export function stripChainPrefixes(chain: string, usage: RuleUsage): { rest: string; reverse: boolean } {
+  const { rest, reverse } = reversePrefix(chain)
+  if (usage !== 'list' || !hasListEntryMarker(chain)) return { rest, reverse }
+  return { rest: rest.slice(1).trimStart(), reverse }
 }

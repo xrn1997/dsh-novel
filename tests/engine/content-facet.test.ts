@@ -379,4 +379,12 @@ describe('runtime JSON mode', () => {
     }, 'search')
     expect(v).toEqual({ kind: 'value', text: 'X' })
   })
+
+  it('sub-evaluation 的显式前缀无取值尾时仍读出元素内容，而不是 outerHTML', async () => {
+    const v = await evaluate('@js:java.getString("@css:div.item")', {
+      html: '<div class="item">X</div>',
+      json: { data: [] },
+    }, 'search')
+    expect(v).toEqual({ kind: 'value', text: 'X' })
+  })
 })

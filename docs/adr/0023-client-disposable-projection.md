@@ -6,10 +6,10 @@ Status: accepted
 
 **口径要一起记住**：新代码别再往组件 `useState` 里塞在途操作。它与官方分层规则（业务与传输状态归 Cordis service / Client model）**动机一致、手段冲突**：不留第二份真相的方式是不建 client model，而只建可丢弃投影。是否把这层投影升格为官方意义上的 Client model **未拍板**（可批默认是维持现状；真要升格时连同那条契约的约束一起裁）。
 
-**轮次身份与游标不可分开**：每个回包先验 `job.id` 与观察中的轮次一致，不一致即换轮收尾——丢旧累积、`since=0` 重读新轮基线、旧连接 abort、按新轮重建；旧观察者**跟随最近一轮**。服务端只保留一轮，所以这是唯一能收敛的语义；只验身份或只验游标都会混轮或缺组。
+**轮次身份与游标不可分开**：每个回包先验 `job.id` 与观察中的轮次一致，不一致即换轮收尾——丢旧累积、`since=0` 重读新轮基线、旧连接 abort、按新轮重建；旧观察者**跟随最近一轮**。服务端只保留一轮，所以这是唯一能收敛的语义；只验身份或只验游标都会混轮或缺组。需要认领自身轮次的起跑方拿 `submit` 返回的 `jobId` 认领；关键词不是身份（同关键词的上一轮不接管）。
 
 **反馈原则**：点击位置即反馈位置。秒级乐观操作（行开关）不进全局泳道——翻转本地值本身即反馈，在途只用行内装饰；全局状态条若是流内元素，挂上就顶动布局再弹回，是一帧下沉回闪。失败即刻回滚并带行锚点进 error 泳道，成功与失败都重读一次让服务端结果二次校准（乐观值随服务端值让位）。瞬态层三种生命周期各说各的话：pending 聚合计数、settle 即移除；ok 少而淡、自动退场；error sticky、手动关闭、携带锚点。范围如实：书架与搜索的散落场景错误仍在各自场景内呈现，尚未接入通用层。
 
 **色值与尺寸只准住 token 层**：视图与逻辑层不许内联颜色字面量（hex / `rgb()` / `rgba()` / `color-mix()` / 颜色名一律扫，且**先剥注释再扫**——口径是「代码里」不准内联），只有 token 定义处与 prefs 驱动的正文色值白名单放行。被否决：守卫只扫 hex（旧口径，视图里内联 `rgba(...)` 从缝里过）。
 
-锚点：`src/client/search-job.ts`；`src/client/store.ts`；`src/client/transient.ts`；`src/client/views/SettingsSourceList.tsx`；`src/client/views/SearchView.tsx`；`tests/client/theme-tokens.test.ts`；`tests/client/settings-toggle.test.tsx`。
+锚点：`src/client/search-job.ts`；`src/client/store.ts`；`src/client/transient.ts`；`src/client/views/SettingsSourceList.tsx`；`src/client/views/SearchView.tsx`；`src/client/views/CityBookSheet.tsx`；`tests/client/theme-tokens.test.ts`；`tests/client/settings-toggle.test.tsx`；`tests/client/city-view.test.tsx`。

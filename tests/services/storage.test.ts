@@ -167,6 +167,59 @@ describe('createDebouncedWriter', () => {
     await p
     expect(await readJson(b, null)).toEqual({ v: 2 })
   })
+  it('threshold 次 schedule 立即落盘，并让调用方等到写落地', async () => {
+    const dir = await tmp()
+    const file = path.join(dir, 'threshold.json')
+    const w = createDebouncedWriter(10_000, { threshold: 2 })
+    expect(w.schedule(file, { n: 1 })).toBeUndefined()
+    await expect(w.schedule(file, { n: 2 })).resolves.toBeUndefined()
+    expect(await readJson(file, null)).toEqual({ n: 2 })
+  })
+  it('threshold 写失败 reject 给触发它的调用方，后续 flush 不重复抛', async () => {
+    const dir = await tmp()
+    const file = path.join(dir, 'threshold-fail.json')
+    const w = createDebouncedWriter(10_000, { threshold: 2 })
+    expect(w.schedule(file, { n: 1 })).toBeUndefined()
+    vi.spyOn(fs, 'rename').mockRejectedValueOnce(
+      Object.assign(new Error('denied'), { code: 'EACCES' }),
+    )
+    await expect(w.schedule(file, { n: 2 })).rejects.toMatchObject({ code: 'EACCES' })
+    await expect(w.flush()).resolves.toBeUndefined()
+  })
+  it('阈值触发后计数复位：下一次 schedule 从 1 重新计', async () => {
+    const dir = await tmp()
+    const file = path.join(dir, 'threshold-reset.json')
+    const w = createDebouncedWriter(10_000, { threshold: 2 })
+    expect(w.schedule(file, { n: 1 })).toBeUndefined()
+    await w.schedule(file, { n: 2 })
+    expect(w.schedule(file, { n: 3 })).toBeUndefined()
+    await w.flush()
+    expect(await readJson(file, null)).toEqual({ n: 3 })
+  })
+  it('threshold 计数跨定时器写累计（ADR 0011 的「累计 N 次」）', async () => {
+    const dir = await tmp()
+    const file = path.join(dir, 'threshold-cumulative.json')
+    const w = createDebouncedWriter(5, { threshold: 3 })
+    expect(w.schedule(file, { n: 1 })).toBeUndefined()
+    for (let i = 0; i < 100 && (await readJson(file, null)) === null; i++) {
+      await new Promise((r) => setTimeout(r, 5))              // 等定时器路径写真正落地
+    }
+    expect(await readJson(file, null)).toEqual({ n: 1 })      // 那一笔落地不清计数
+    expect(w.schedule(file, { n: 2 })).toBeUndefined()
+    await expect(w.schedule(file, { n: 3 })).resolves.toBeUndefined()
+    expect(await readJson(file, null)).toEqual({ n: 3 })
+  })
+  it('retainFailure：调用方接住的失败仍留给下一次 flush，写成功即清账', async () => {
+    const dir = await tmp()
+    const file = path.join(dir, 'retained.json')
+    const w = createDebouncedWriter(10_000)
+    w.retainFailure(file, fsError('EACCES', 'denied'))
+    await expect(w.flush(file)).rejects.toMatchObject({ code: 'EACCES' })
+    w.retainFailure(file, fsError('EACCES', 'denied'))
+    w.schedule(file, { v: 1 })
+    await w.flush()
+    await expect(w.flush(file)).resolves.toBeUndefined()
+  })
 })
 
 describe('原子写与备份的命名约定（唯一住址在 storage.ts）', () => {

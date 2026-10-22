@@ -58,7 +58,9 @@ export interface SearchJobView {
   cancel: () => void
   /** 读面/写面层面的失败——与「某源未响应」（分组里的 error）不同层 */
   error: string | null
-  submit: (keyword: string) => void
+  /** 起跑一轮；成功 resolve 本轮 jobId，失败或被后一次提交取代时 resolve null。
+   *  调用方拿 id 认领自己的轮次——服务端单槽会跟随最近一轮，关键词不是身份。 */
+  submit: (keyword: string) => Promise<string | null>
 }
 
 export function useSearchJob(deps: JobWatchDeps, t: Translate = zhTranslate): SearchJobView {
@@ -66,6 +68,9 @@ export function useSearchJob(deps: JobWatchDeps, t: Translate = zhTranslate): Se
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const stream = useRef<AbortController | null>(null)
   const alive = useRef(true)
+  /** 起跑序号：只有最后一次 `submit` 的回包能 `begin`/报错。只挡调用方的认领不够——
+   *  前一次提交的迟到回包若照样 `begin`，观察者会被倒回旧轮，下一次快照身份闸才发现。 */
+  const submitSeq = useRef(0)
   const [round, setRound] = useState<SearchRound | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -180,16 +185,21 @@ export function useSearchJob(deps: JobWatchDeps, t: Translate = zhTranslate): Se
     if (running) watch(a)
   }
 
-  const submit = (keyword: string): void => {
+  const submit = (keyword: string): Promise<string | null> => {
     const kw = keyword.trim()
-    if (kw === '') return
-    void (async () => {
+    if (kw === '') return Promise.resolve(null)
+    const mine = ++submitSeq.current
+    return (async () => {
       try {
         const { jobId } = await deps.apiSend<{ jobId: string }>('POST', ROUTES.searchJob.path, bodies.searchJob(kw))
+        if (mine !== submitSeq.current) return null   // 迟到回包：后一次提交已起跑，旧回包不许倒回观察者
         // 提交在飞时挂载恢复也可能已经落地——POST 的结果说了算（新一轮替换上一轮），故此后置
         begin({ id: jobId, keyword: kw, total: 0, cancelled: false, since: 0, groups: [] })
+        return jobId
       } catch (e) {
+        if (mine !== submitSeq.current) return null   // 迟到的失败不盖住后一次提交的现场
         setError(t('search.job.submitFailed', { detail: describeError(e, t) }))   // 服务端没起新轮：上一轮结果照旧可读，不清屏
+        return null
       }
     })()
   }

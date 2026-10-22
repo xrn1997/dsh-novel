@@ -185,7 +185,7 @@ describe('目录高亮：当前章内最近的已登记导航锚点', () => {
     h.session.requestJump('local:b1', 1)                   // 视口落到第 2 章
     await tick()
     h.port.chapterOff = -500
-    h.session.settleJump()
+    h.session.afterRender('local:b1')
     expect(h.session.activeNavId()).toBe('n3')             // 第 2 章自己的章首条目（不是第 1 章的 n1）
   })
 })
@@ -202,7 +202,7 @@ describe('正文内链的返回栈（窗口内状态，绝不落盘）', () => {
     expect(h.session.state.pendingJump).toMatchObject({ index: 2, anchorId: null })
     h.port.chapterOff = 500
     await tick()                                                     // 第 3 章到货（窗口随之裁到视口章）
-    h.session.settleJump()
+    h.session.afterRender('local:b1')
     expect(h.port.top).toBe(500)
     expect(h.session.state.chapters[0]).toBeNull()                   // 与视口章不相邻：来源章被裁掉
 
@@ -212,7 +212,7 @@ describe('正文内链的返回栈（窗口内状态，绝不落盘）', () => {
     await tick()                                                     // 同一单在途加载路径补回来源章
     expect(h.session.state.chapters[0]).toEqual(rich0)
     h.port.targetOffs.set('p7', 300)                                 // 节点此刻在视口下 300px
-    h.session.settleJump()
+    h.session.afterRender('local:b1')
     expect(h.port.top).toBe(500 + 300 + 64)                          // 回到「节点顶在视口顶上方 64px」
     expect(h.saves.at(-1)?.[0]).toBe(0)                              // 位置提交仍归会话
     expect(h.saves.at(-1)?.[1]).toBeCloseTo((500 + 300 + 64) / 2000)
@@ -272,7 +272,7 @@ describe('正文内链的返回栈（窗口内状态，绝不落盘）', () => {
     h.session.goBack('local:b1')                                     // ③ 工具栏返回：消费 E2（面板还开着）
     expect(h.session.state.returnDepth).toBe(1)
     h.port.targetOffs.set('s1', 100)
-    h.session.settleJump()                                           // 落回引用节点，落位收口
+    h.session.afterRender('local:b1')                              // 落回引用节点，落位收口
     expect(h.session.state.pendingJump).toBeNull()
 
     const saves = [...h.saves]
@@ -297,7 +297,7 @@ describe('补充文档（脚注/附录）不碰主阅读进度', () => {
     h.session.closeSupplement('local:b1', entry)             // 关闭面板 = 回引用处（栈顶仍是那一条 → 消费它）
     expect(h.session.state.returnDepth).toBe(0)
     h.port.targetOffs.set('p7', 300)
-    h.session.settleJump()
+    h.session.afterRender('local:b1')
     expect(h.port.top).toBe(300 + 64)                        // 落回「节点顶在视口顶上方 64px」
   })
 

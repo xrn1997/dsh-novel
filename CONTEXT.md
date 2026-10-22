@@ -25,6 +25,11 @@ _Avoid_: 导入逻辑（导入是调用方，不是入库规则本身）
 _唯一实现_: `services/normalize.ts`
 _Avoid_: 格式、模板
 
+**存量收敛（stored-source rehydration）**:
+已落盘书源按 raw 收敛到当前模型形状（rules 字段重推、enabled/type/groups/name 归一）的唯一机械；触发点只有 `SourceRegistry.load`（收敛后的落盘由注册表完成），逐字段次序与覆盖策略跟 raw 解释同住。
+_唯一实现_: `services/normalize.ts` 的 `rehydrateStoredSource`
+_Avoid_: 迁移脚本、启动修复
+
 **取值链（rule chain）**:
 书源规则的形态：`||` 分支、组合符与终端（`@text` / `@href` / `@html`…）构成的链。
 _Avoid_: 选择器链（选择器只是链的一段）
@@ -130,8 +135,8 @@ _唯一实现_: `services/bridge.ts` 的 `hitFieldsOf`（入参形状 `HitRules`
 _Avoid_: 逐字段解析（太泛——不含选项保留绝对化与简介净化那一半）、搜索面装配（发现面也走这一份）、命中构造器（面不进 interface）
 
 **取值用途（rule usage）**:
-同一条规则串在两种用途下**链尾未知词**的语义不同，调用方显式声明：`'value'` → 未知词按 HTML 属性名；`'list'` → 未知词按 CSS。
-_唯一实现_: `engine/parse.ts` 的 `classifyDefault`
+同一条规则串在两种用途下**链尾未知词**的语义不同，调用方显式声明：`'value'` → 未知词按 HTML 属性名；`'list'` → 未知词按 CSS。递归求值口（`java.getString*` / 模板规则插值 / `@put` 的值）的用途同样由调用方交，定档的那一处见 `_唯一实现_`。
+_唯一实现_: `engine/parse.ts` 的 `classifyDefault`；子规则判据 `engine/sub-rule.ts` 的 `usageOfSubRule`
 _Avoid_: 模式、场景（太泛——这是「链尾未知词」的裁决轴）
 
 **属性终端（attr terminal）**:
@@ -252,8 +257,13 @@ _Avoid_: 分类任务队列（是单轮槽不是队列）、新一轮（续页�
 
 **书城进入判据（city entry）**:
 书城自动那条路「该不该提交一轮分类浏览」的唯一判据：源与分类的回落（记住的源不在清单里就取第一项；被选中源声明零分类则无路可走）、挂载恢复读是否已定、自动那条路是否已走过、服务端此刻那一轮的身份，一起算出一个动作（等待 / 不动 / 落选中并提交或跟随已有轮次）。「进入即加载」只在该源+该分类没有轮次时提交——重提会杀掉服务端那一轮；手点路径不进判据（切源/切类必须马上有反应，恒提交）。
-_唯一实现_: `client/city-entry.ts` 的 `decideCityEntry` / `rememberedSelection`
+_唯一实现_: `client/city-entry.ts` 的 `decideCityEntry` / `resolveCitySelection`
 _Avoid_: 进入逻辑（太泛）、自动加载开关（判据产出的是动作，不是可配开关）；也别与「分类轮次」混称——那个词指 Node 半的持有物，这里只是客户端的一次决策。
+
+**书城选中态（city selection）**:
+书城左栏当前源+分类的本挂载投影与跨卸载现场：唯一写口 `select` 同时写两者；`isAsked` 是本挂载的 one-shot（自动那条路最多动作一次，卸载即重置；进入判据把它作为 `asked` 入参），与分类轮次的提交闸（`client/explore-job.ts` 的 `submitted`）不是同一条语义。
+_唯一实现_: `client/city-selection.ts` 的 `useCitySelection` / `rememberedCitySelection`
+_Avoid_: 选中状态（太泛）；也别与「书城进入判据」混称——判据产出动作，这里只持有选中态。
 
 **阅读会话（reader session）**:
 「目录 → 存档恢复 → 逐章懒加载 → 预取 → 进度落盘」的时序持有者；DOM 测量经 `ReaderPort` 注入，视图只渲染与接线。同一时刻只允许一章在途（`inflight`），滚动风暴与目录直达只记意图（`pendingJump`），刚失败过的同一章不自动重试。

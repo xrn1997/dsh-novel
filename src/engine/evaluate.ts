@@ -17,6 +17,7 @@ import { loadHtml } from './dom.js'
 import { engineValueToString } from './js-utils.js'
 import { splitLiteral } from './literal.js'
 import { isJsonRule } from './mode.js'
+import { usageOfSubRule } from './sub-rule.js'
 
 import { JsSandboxError, RuleEvalError, UnsupportedRuleError, isEngineError } from './errors.js'
 
@@ -134,10 +135,10 @@ function makeRuntime(ctx: EvalContext, facet: Facet, usage: RuleUsage): Runtime 
     // 子规则对「给定数据」求值：data 作为子规则的 html 上下文（与 host.result 同源）。
     // json 必须摘掉：外层是 JSON 页时，子规则拿到的若是 HTML 片段，留着 ctx.json 会让
     // isJsonRule 把 `div.x` 这类选择器判成 JSONPath 而静默 Miss。
-    evaluateRef: (ruleStr, data) => {
+    evaluateRef: (ruleStr, data, subUsage) => {
       const subCtx = { ...ctx, html: String(data ?? ''), json: undefined }
       return runParsedSync(
-        parseRule(ruleStr, facet, 'list', isJsonRule(ruleStr, subCtx) ? 'json' : undefined),
+        parseRule(ruleStr, facet, subUsage, isJsonRule(ruleStr, subCtx) ? 'json' : undefined),
         subCtx,
         facet,
       )
@@ -254,7 +255,11 @@ function* branchGen(
         // @put 是副作用段：写 ctx.vars 后链值透传，不替换 cur。值按取值口径求值
         // （put = put(key, getString(value))）：基内容 = 当前链值，未起链则是整页原文。
         evalPut(seg.pairsRaw, rt.ctx, loc, rt.facet,
-          (rule) => rt.evaluateRef(rule, cur === null ? rt.pageText() : engineValueToString(cur, 'inner')))
+          (rule) => rt.evaluateRef(
+            rule,
+            cur === null ? rt.pageText() : engineValueToString(cur, 'inner'),
+            usageOfSubRule(rule, rt.facet),
+          ))
         if (collect) collect.push(putStepOf(loc, cur))
         continue
       }
@@ -307,7 +312,11 @@ function* interpolateTemplate(
       case 'getvar': piece = evalGetVar(part.text, rt.ctx); break
       case 'jsonpath': piece = evalJsonPath(part.text, literalJsonData(rt, cur), loc, rt.facet); break
       case 'rule': {
-        piece = runParsedSync(parseRule(part.text, rt.facet), literalSubCtx(rt, cur), rt.facet)
+        piece = runParsedSync(
+          parseRule(part.text, rt.facet, usageOfSubRule(part.text, rt.facet)),
+          literalSubCtx(rt, cur),
+          rt.facet,
+        )
         break
       }
       case 'js': {

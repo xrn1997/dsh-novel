@@ -3,13 +3,13 @@ import { Fragment, useEffect, useRef, useState } from 'react'
 import { ROUTES } from '../../shared/wire.js'
 import type { ExploreBook, ExploreSources } from '../../shared/wire.js'
 import { describeError } from '../api.js'
-import { decideCityEntry, rememberedSelection } from '../city-entry.js'
+import { decideCityEntry, resolveCitySelection } from '../city-entry.js'
+import { rememberedCitySelection, useCitySelection } from '../city-selection.js'
 import { bookListEmpty, cityEmptyState, cityMeta, kindCountLabel, roundReadout } from '../city-view-model.js'
 import { plural, useCopy } from '../copy/index.js'
 import { useExploreJob } from '../explore-job.js'
 import { prodJobViewDeps } from '../deps.js'
 import type { JobViewDeps } from '../deps.js'
-import { cityStore } from '../store.js'
 import { coverTintClass, topAlignIfClipped } from '../util.js'
 import { coverFallbackChar, EmptyState } from './bits.js'
 import { CityBookSheet } from './CityBookSheet.js'
@@ -58,16 +58,14 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
   /** 可选源清单（`null` = 还在读）：**空清单**是「库里没有源提供分类浏览」，与读面失败不是一件事 */
   const [sources, setSources] = useState<ExploreSources['sources'] | null>(null)
   const [sourcesError, setSourcesError] = useState<string | null>(null)
-  /** 当前源与当前分类（左栏高亮 + 标题）：按源清单到手时各定一次，之后只由点击改 */
-  const [sourceId, setSourceId] = useState<string | null>(null)
-  const [kind, setKind] = useState<string | null>(null)
+  /** 当前源与当前分类：唯一写口是 `useCitySelection` 的 select（本挂载投影 + cityStore 一起写）。 */
+  const { selection, select, isAsked } = useCitySelection()
+  const sourceId = selection?.sourceId ?? null
+  const kind = selection?.kind ?? null
   const [sourceQuery, setSourceQuery] = useState('')
   const [kindQuery, setKindQuery] = useState('')
   const [picked, setPicked] = useState<ExploreBook | null>(null)
   const [imgFailed, setImgFailed] = useState<Record<string, boolean>>({})
-  /** 「已经由任一入口起过一轮」（自动那条路提交/follow 过，或用户手点过）：自动那条路最多动作一次；
-   *  手点也置位，免得恢复读落地前手选一次、自动路径又追加一次提交。 */
-  const asked = useRef(false)
   /** 落位的三件锚：整栏（本视图唯一的滚动容器）、展开的那一行、它下面刚长出来的那一串 */
   const railRef = useRef<HTMLElement | null>(null)
   const headRef = useRef<HTMLButtonElement | null>(null)
@@ -86,12 +84,10 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
       setSources(list)
       // 记住的源失效（禁用/删掉）即回落到可选清单的第一项——回落同时把选中态改写到真实存在的源上，
       // 不留一个指向不存在源的选中态；分类同理，记住的不在这一源声明的分类里就落它声明的第一个分类。
-      // 算式归 `city-entry.ts` 的 `rememberedSelection`：自动那条路独立再算一次，两条路同一个回落。
-      const selection = rememberedSelection(list, cityStore.get())
-      if (selection === null) return                       // 没有可落的源+分类：不提交任何一轮
-      setSourceId(selection.sourceId)
-      setKind(selection.kind)
-      cityStore.set(selection)                             // 自动选中也记住（与手点同一条路）
+      // 算式归 `city-entry.ts` 的 `resolveCitySelection`：自动那条路独立再算一次，两条路同一个回落。
+      const chosen = resolveCitySelection(list, rememberedCitySelection())
+      if (chosen === null) return                          // 没有可落的源+分类：不提交任何一轮
+      select(chosen)                                       // 自动选中也记住（与手点同一条路）
     })()
   }, [])   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -99,24 +95,21 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
    * 进入即加载：**只在该源+该分类没有轮次时提交**。轮次住在服务端（`ExploreJob` 的槽），离开再回来
    * 只该看它跑完——重提一次会把它杀掉，书单空闪一帧再从头抓，正是本条要守住的性质。
    * 源/分类的回落、恢复读定没定、自动那条路走没走，三者一起收在 `city-entry.ts` 的
-   * `decideCityEntry` 里；本视图只把 `select` 落成 state 与 `asked`（自动这条路的 one-shot），
-   * `action` 只决定要不要提交（`follow` = 服务端那一轮就是它的家）。
+   * `decideCityEntry` 里；本视图只把 `select` 落成本挂载投影，`isAsked` 守自动这条路的
+   * one-shot，`action` 只决定要不要提交（`follow` = 服务端那一轮就是它的家）。
    */
   useEffect(() => {
     const decision = decideCityEntry({
       sources,
-      remembered: cityStore.get(),
+      remembered: rememberedCitySelection(),
       restored,
-      asked: asked.current,
+      asked: isAsked(),
       round: round === null ? null : { sourceId: round.sourceId, kind: round.kind },
     })
     if (decision.type !== 'select') return
-    asked.current = true
-    setSourceId(decision.sourceId)
-    setKind(decision.kind)
-    cityStore.set({ sourceId: decision.sourceId, kind: decision.kind })
+    select({ sourceId: decision.sourceId, kind: decision.kind }, { asked: true })
     if (decision.action === 'submit') submit(decision.sourceId, decision.kind)
-  }, [sources, restored, round, submit])
+  }, [sources, restored, round, submit, select, isAsked])
 
   /** 换轮即清空封面失败表：封面坏掉是**这一轮这张卡**的事实（同址换一轮那张图就好了），
    *  上一轮的同名条目不该继承——不清就是「一次坏封面永久降级」。 */
@@ -124,17 +117,14 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
 
   /** 与手点同一条路：记住源+分类、写现场、立刻提交（不等恢复读，切源/切类必须马上有反应）。 */
   const pick = (nextSourceId: string, nextKind: string): void => {
-    asked.current = true
-    setSourceId(nextSourceId)
-    setKind(nextKind)
-    cityStore.set({ sourceId: nextSourceId, kind: nextKind })
+    select({ sourceId: nextSourceId, kind: nextKind }, { asked: true })
     submit(nextSourceId, nextKind)
   }
 
   /** 换源：分类栏跟着换成新源声明的那几条；当前分类若新源也声明了就沿用，否则落新源的第一个分类。 */
   const pickSource = (s: ExploreSources['sources'][number]): void => {
-    const selection = rememberedSelection([s], { sourceId: s.id, kind })
-    if (selection !== null) pick(selection.sourceId, selection.kind)
+    const chosen = resolveCitySelection([s], { sourceId: s.id, kind })
+    if (chosen !== null) pick(chosen.sourceId, chosen.kind)
   }
 
   const shownSources = sources === null ? [] : sources.filter((s) => s.name.includes(sourceQuery.trim()))
@@ -282,7 +272,8 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
         {/* 浮层的源身份来自**带来这本书的那一轮**（不是左栏此刻的选中态）：一本书属于哪个源，
             答案就在产出它的轮次里；浮层的两个动作与跨源那一次都要用它。 */}
         {picked === null || round === null ? null : (
-          <CityBookSheet book={picked} sourceId={round.sourceId} sourceName={round.sourceName}
+          <CityBookSheet
+            book={picked} sourceId={round.sourceId} sourceName={round.sourceName}
             deps={deps} onClose={() => setPicked(null)} />
         )}
       </div>

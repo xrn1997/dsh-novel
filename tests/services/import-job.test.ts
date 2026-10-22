@@ -1,10 +1,13 @@
-import { describe, expect, it } from 'vitest'
-import { SourceRegistry } from '../../src/services/sources.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { promises as fs } from 'node:fs'
+import { PERSIST_EVERY, SourceRegistry } from '../../src/services/sources.js'
 import type { ProbeResult } from '../../src/services/probe.js'
 import { JobRunningError, SourceJobs, dedupKey } from '../../src/services/import-job.js'
 import type { JobState } from '../../src/services/import-job.js'
 import { DEFAULT_JOB_OUTPUT_BYTES } from '../../src/services/job-tail.js'
 import { makeTempDir } from '../temp-dir.js'
+
+afterEach(() => { vi.restoreAllMocks() })
 
 const raw = (n: string, url: string) => ({
   bookSourceName: n, bookSourceUrl: url, ruleContent: '@css:#c@text',
@@ -174,6 +177,48 @@ describe('批量验证任务', () => {
     expect(j.counts).toMatchObject({ ok: 2, failed: 1 })
     expect(j.issues.some((i) => i.kind === 'failed' && i.detail.includes('boom'))).toBe(true)
     expect(j.phase).toBe('done')                                // 单条异常不炸整任务
+  })
+  it('状态落盘失败不折进站点判据：counts 全由探针答复决定，磁盘侧另记一条 warning', async () => {
+    const { jobs, registry } = await mkJobs()
+    jobs.startImport([{ name: 'a.json', text: JSON.stringify([
+      raw('A', 'https://a.com'), raw('B', 'https://b.com'), raw('C', 'https://c.com'),
+    ]) }])
+    const imported = await waitDone(jobs)
+    await registry.flush()                                     // 排到静默：挂起写归零；阈值计数按 ADR 0011 跨写累计
+    const id = registry.list()[0].id
+    // 导入的每条 added/replaced 各算一次 edit（这里 3 条）；把第 PERSIST_EVERY 次变更正好对齐到
+    // 「某家探针写回状态」那一格——阈值那次等写落地并如实抛。
+    const importedEdits = imported.counts.ok + imported.counts.replaced
+    for (let i = 0; i < PERSIST_EVERY - 1 - importedEdits; i++) await registry.edit((tx) => tx.setStatus(id, 'unverified'))
+    vi.spyOn(fs, 'rename').mockRejectedValueOnce(
+      Object.assign(new Error('denied'), { code: 'EACCES' }),
+    )
+    jobs.startBatchProbe(registry.list().map((s) => s.id))
+    const j = await waitDone(jobs)
+    expect(j.counts).toMatchObject({ ok: 3, failed: 0 })        // 三家都答了话，一家也没被记成 broken
+    const warn = j.issues.find((i) => i.kind === 'warning')
+    expect(j.issues.filter((i) => i.kind === 'warning')).toHaveLength(1)
+    expect(warn?.detail).toContain('EACCES')
+    expect(j.phase).toBe('done')                               // 后续写落地，任务不把一次写失败说成站点坏了
+    expect(registry.list().every((s) => s.status === 'verified')).toBe(true)
+  })
+  it('唯一的写回失败留给收尾 flush：任务失败，站点计数仍不被污染', async () => {
+    const { jobs, registry } = await mkJobs()
+    jobs.startImport([{ name: 'a.json', text: JSON.stringify([raw('A', 'https://a.com')]) }])
+    const imported = await waitDone(jobs)
+    await registry.flush()
+    const id = registry.list()[0].id
+    const importedEdits = imported.counts.ok + imported.counts.replaced
+    for (let i = 0; i < PERSIST_EVERY - 1 - importedEdits; i++) await registry.edit((tx) => tx.setStatus(id, 'unverified'))
+    vi.spyOn(fs, 'rename').mockRejectedValueOnce(
+      Object.assign(new Error('EACCES'), { code: 'EACCES' }),
+    )
+    jobs.startBatchProbe([id])
+    const j = await waitDone(jobs)
+    expect(j.counts).toMatchObject({ ok: 1, failed: 0 })        // 站点判据仍只看探针答复
+    expect(j.issues.some((i) => i.kind === 'warning' && i.detail.includes('EACCES'))).toBe(true)
+    expect(j.phase).toBe('failed')                             // 磁盘失败走自己的道：收尾 flush 如实抛
+    expect(j.error).toContain('EACCES')
   })
   it('探针返回 not ok → 记 failed 并置 broken', async () => {
     const { jobs, registry } = await mkJobs(async () => ({ ok: false, itemCount: 0, firstTitle: null, error: { code: 'FetchError', message: '连接拒绝' }, probedAt: 0 }))

@@ -195,6 +195,30 @@ describe('invokeJavaMethod 分派（不进 vm 的直测）', () => {
     expect(invokeJavaMethod(empty, 'getElement', ['@css:h2'])).toBeNull()
   })
 
+  it('子规则求值把用途交给引擎：显式取值尾 value、裸选择 list；getElements/getElement list', () => {
+    const calls: Array<[string, string]> = []
+    const deps = depsOf({
+      evaluateRef: (rule, _data, usage) => {
+        calls.push([String(rule), usage])
+        return { kind: 'miss', detail: 'x' }
+      },
+    })
+    invokeJavaMethod(deps, 'getString', ['tag.a@href'])
+    invokeJavaMethod(deps, 'getStringList', ['tag.a@href'])
+    invokeJavaMethod(deps, 'getString', ['div.item'])
+    invokeJavaMethod(deps, 'getStringList', ['div.item'])
+    invokeJavaMethod(deps, 'getElements', ['tag.a'])
+    invokeJavaMethod(deps, 'getElement', ['tag.a'])
+    expect(calls).toEqual([
+      ['tag.a@href', 'value'],
+      ['tag.a@href', 'value'],
+      ['div.item', 'list'],
+      ['div.item', 'list'],
+      ['tag.a', 'list'],
+      ['tag.a', 'list'],
+    ])
+  })
+
   it('cookie 三件套：按源隔离会话内 set/get/remove', () => {
     const deps = depsOf()
     invokeJavaMethod(deps, 'cookieSet', ['token', 'abc'])

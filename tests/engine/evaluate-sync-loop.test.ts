@@ -19,6 +19,11 @@ describe('java.getString 真实环路（沙箱宿主桥 → evaluateRef 真身 �
     expect(v).toEqual({ kind: 'value', text: '段一|段二' })
   })
 
+  it('getStringList：裸选择子规则留在 list 口径（取内容，不取 outerHTML）', async () => {
+    const v = await evaluate('<js>return java.getStringList("@css:h1").join("|")</js>', { html: HTML, baseUrl: '' }, 'search')
+    expect(v).toEqual({ kind: 'value', text: '标题甲' })
+  })
+
   it('子规则链式求值（选择→取值两段链）经真身跑通', async () => {
     const v = await evaluate('<js>return java.getString(".c a@text")</js>', { html: HTML, baseUrl: '' }, 'toc')
     expect(v).toEqual({ kind: 'value', text: '章壹' })
@@ -27,6 +32,32 @@ describe('java.getString 真实环路（沙箱宿主桥 → evaluateRef 真身 �
   it('子规则零命中 → getString 空串（Miss 序列化为 ""，与 bridge 口径一致）', async () => {
     const v = await evaluate('<js>return java.getString("@css:.none@text")</js>', { html: HTML, baseUrl: '' }, 'search')
     expect(v.kind).toBe('miss')
+  })
+
+  it('{{规则}} 按取值用途解析链尾未知词（属性终端）', async () => {
+    const v = await evaluate('{{@tag.a@onclick}}', {
+      html: '<a onclick="go()">x</a>', baseUrl: 'https://a.com',
+    })
+    expect(v).toEqual({ kind: 'value', text: 'go()' })
+  })
+
+  it('@put 的值按取值用途解析（属性终端）', async () => {
+    const ctx = { html: '<a onclick="go()">x</a>', baseUrl: 'https://a.com', vars: {} as Record<string, string> }
+    await evaluate('@put:{x:tag.a@onclick}', ctx)
+    expect(ctx.vars.x).toBe('go()')
+  })
+
+  it('@put 与模板的裸选择保持 inner 内容（与 getString 同口径）', async () => {
+    const ctx = { html: HTML, baseUrl: '', vars: {} as Record<string, string> }
+    await evaluate('@put:{x://div}', ctx)
+    expect(ctx.vars.x).toContain('章壹')
+    expect(ctx.vars.x).not.toContain('<div')
+    const v = await evaluate('{{//div}}', { html: HTML, baseUrl: '' })
+    expect(v.kind).toBe('value')
+    if (v.kind === 'value') {
+      expect(v.text).toContain('章壹')
+      expect(v.text).not.toContain('<div')
+    }
   })
 
   it('子规则内含 js 段 → 宁炸不猜（同步宿主桥不支持递归 await）', async () => {

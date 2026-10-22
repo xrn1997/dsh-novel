@@ -24,18 +24,20 @@ export interface RememberedSelection {
   kind: string | null
 }
 
-/** 落位的源+分类对：两个点名都在，视图可直接写 state 与 `cityStore` */
+/** 落位的源+分类对：唯一写口是 `city-selection.ts` 的 `select`（本挂载投影与 `cityStore` 一起写） */
 export interface CitySelection {
   sourceId: string
   kind: string
 }
 
 /**
- * 源/分类回落：记住的源还在清单里就用它，否则第一项；记住的分类被这个源声明就用它，否则这个源的
+ * 源/分类回落算式：记住的源还在清单里就用它，否则第一项；记住的分类被这个源声明就用它，否则这个源的
  * 第一个分类。**被选中的源声明零分类时返回 null**——没有可逛的分类，不跳过它去借别的源的分类
  * （分类归属由源自己声明，借一个就是造事实）；视图据此不落选中态、也不提交。
+ * 名字刻意不用 remembered 开头：入参里的 remembered 只是判据之一，产出的是「该落到哪一对」，
+ * 与 `city-selection.ts` 读 store 的 `rememberedCitySelection` 不是一回事。
  */
-export function rememberedSelection(
+export function resolveCitySelection(
   sources: ExploreSources['sources'] | null,
   remembered: RememberedSelection,
 ): CitySelection | null {
@@ -79,7 +81,7 @@ export type CityEntryDecision =
  */
 export function decideCityEntry(input: CityEntryInput): CityEntryDecision {
   if (input.sources === null) return { type: 'wait' }
-  const selection = rememberedSelection(input.sources, input.remembered)
+  const selection = resolveCitySelection(input.sources, input.remembered)
   if (selection === null || !input.restored || input.asked) return { type: 'none' }
   const follows = input.round !== null
     && input.round.sourceId === selection.sourceId

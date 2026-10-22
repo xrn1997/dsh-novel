@@ -3,6 +3,8 @@ import { assertSupportedJsonSchema, validateJsonSchemaValue } from '@deepseek-ai
 import type { JsonSchemaNode } from '@deepseek-ai/dsh-tools'
 import { ReadingService } from '../../src/services/reading.js'
 import { buildTools } from '../../src/tools/tools.js'
+import { SHELF_ITEM_EXCLUDED, SHELF_ITEM_FIELDS } from '../../src/tools/shelf-item.js'
+import type { ShelfItemField } from '../../src/tools/shelf-item.js'
 import { SHELF_META } from '../../src/shared/wire.js'
 import type { ChapterEntry, MergedBook, MergedSource, SearchGroup, SearchHit, ShelfBook } from '../../src/shared/wire.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
@@ -34,9 +36,6 @@ const HIT_FIELDS = ['title', 'author', 'url', 'coverUrl', 'intro', 'lastChapterN
 const BOOK_FIELDS = ['title', 'author', 'relevance', 'sources', 'sourceCount'] as const
 const BOOK_SOURCE_FIELDS = ['sourceId', 'sourceName', 'title', 'author', 'url'] as const
 const CHAPTER_FIELDS = ['chapterIndex', 'name', 'url'] as const
-/** 工具刻意**不投影**的书目元数据（超集会被 harness 拒） */
-const SHELF_EXCLUDED = ['coverUrl', 'intro', 'totalChapters'] as const
-const SHELF_FIELDS = ['sourceId', 'bookKey', 'title', 'author', 'lastChapterName', 'kind', 'wordCount', 'progress', 'addedAt'] as const
 
 // 逐条 export（不攒第二份清单，理由同住 `tests/engine/js-protocol.test.ts`）
 export type _GroupWire = Assert<Eq<keyof SearchGroup, typeof GROUP_FIELDS[number]>>
@@ -44,7 +43,9 @@ export type _HitWire = Assert<Eq<keyof SearchHit, typeof HIT_FIELDS[number]>>
 export type _BookWire = Assert<Eq<keyof MergedBook, typeof BOOK_FIELDS[number]>>
 export type _BookSourceWire = Assert<Eq<keyof MergedSource, typeof BOOK_SOURCE_FIELDS[number]>>
 export type _ChapterWire = Assert<Eq<keyof ChapterEntry, Extract<typeof CHAPTER_FIELDS[number], 'name' | 'url'> | 'isVip' | 'isVolume' | 'isPay' | 'updateTime'>>
-export type _ShelfWire = Assert<Eq<keyof ShelfBook, typeof SHELF_FIELDS[number] | typeof SHELF_EXCLUDED[number]>>
+/** 工具刻意**不投影**的书目元数据（超集会被 harness 拒）；投影字段的唯一住址是 `shelf-item.ts`。
+ *  `ShelfItemField ∪ SHELF_ITEM_EXCLUDED` 必须覆盖 `keyof ShelfBook`（编译期钉）。 */
+export type _ShelfWire = Assert<Eq<keyof ShelfBook, ShelfItemField | typeof SHELF_ITEM_EXCLUDED[number]>>
 
 /** 第三条与关键词有关且不带作者/分类/字数：工具面按相关性收视野之后，仍需有一条「整键缺席」的
  *  命中留在 kept 内，好让 ① 那次 harness 同款校验继续量到缺键投影后的形状（第二条是反例：它不进输出）。 */
@@ -171,12 +172,12 @@ describe('工具 schema 契约（execute 输出 ≡ 声明 schema；schema ≡ w
       .toEqual(new Set(['sourceId', 'name', 'baseUrl', 'enabled', 'type', 'status', 'statusDetail']))
 
     // ── dshnovel_shelf ≡ ShelfBook 投影（`shared/wire.ts` 的 ShelfBook；coverUrl/intro/totalChapters 刻意不投影——超集会被拒）──
-    // 两层都钉住：`SHELF_FIELDS` ⊆ `SHELF_META`（写面孔径，表里改键名/加键这里跟着动）
-    // ＋ `SHELF_FIELDS ∪ SHELF_EXCLUDED ≡ keyof ShelfBook`（编译期类型钉，见文件头 ②）
+    // 两层都钉住：投影表 ⊆ `SHELF_META`（写面孔径，表里改键名/加键这里跟着动）
+    // ＋ `投影表 ∪ 排除表 ≡ keyof ShelfBook`（编译期类型钉，见文件头 ②）
     const shelfMeta = new Set(Object.keys(SHELF_META))
-    const shelfItem = new Set<string>(SHELF_FIELDS)
-    expect(shelfItem, 'SHELF_FIELDS 必须与「SHELF_META 减去刻意不投影的三项」逐键相等')
-      .toEqual(new Set([...[...shelfMeta].filter((k) => !(SHELF_EXCLUDED as readonly string[]).includes(k)), 'bookKey', 'progress', 'addedAt']))
+    const shelfItem = new Set<string>(Object.keys(SHELF_ITEM_FIELDS))
+    expect(shelfItem, '工具投影表必须与「SHELF_META 减去刻意不投影的三项」逐键相等')
+      .toEqual(new Set([...[...shelfMeta].filter((k) => !(SHELF_ITEM_EXCLUDED as readonly string[]).includes(k)), 'bookKey', 'progress', 'addedAt']))
     expect(propsOf(schemaOf(s, 'dshnovel_shelf'), 'books', '[]')).toEqual(shelfItem)
     // add/save_progress 的单本回执与 list 的条目同形（同一投影，不长第二份）
     expect(propsOf(schemaOf(s, 'dshnovel_shelf'), 'book')).toEqual(shelfItem)

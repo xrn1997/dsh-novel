@@ -494,13 +494,12 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     return () => session.dispose()
   }, [session, sourceId, bookKey, refreshPort])
 
-  // 已载表变化：刷新滚动容器与锚点 → 补足预取（哨兵出区即自限，不会全书风暴）
+  // 已载表 / 待跳目标变化：刷新滚动容器后交会话一个渲染后拍点——锚点、落位、预取的次序归会话
   useEffect(() => {
     refreshPort()
-    session.recalcAnchors()
-    session.checkPreload(sourceId)
+    session.afterRender(sourceId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chapters])
+  }, [chapters, st.pendingJump])
 
   // 视口变化：capture 阶段收「任意容器」的 scroll（scroll 不冒泡，但捕获阶段会经过 document——
   // 滚动容器（.novel-main 或更外层）的滚动因此都收得到）；rAF 合帧
@@ -524,12 +523,6 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session])
-
-  // 目录直达：目标章渲染落地后定位（未落地：会话保有 pendingJump，下轮 chapters 变化再试）
-  useEffect(() => {
-    session.settleJump()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chapters, st.pendingJump])
 
   /** 排版变化前的采点：prefsStore 的订阅者在 `setPref` 的同步调用栈里执行——那一刻 React 还没重渲染、
    *  DOM 还是旧排版，这是唯一能拿到「变化前位置」的时刻（任何 effect 都在新排版落定之后才跑）。 */

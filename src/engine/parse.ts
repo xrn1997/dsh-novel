@@ -1,6 +1,6 @@
 import type { Branch, Facet, IndexSpec, ParsedRule, RuleUsage, Segment } from './types.js'
 import { UnsupportedRuleError } from './errors.js'
-import { braceRegion, isXPathForm, jsRegionEnd, parseTails, putRegionEnd } from './grammar.js'
+import { braceRegion, isXPathForm, jsRegionEnd, parseTails, putRegionEnd, stripChainPrefixes } from './grammar.js'
 import { GROUP_TOKEN } from './regex-row.js'
 import { isLiteralForm } from './literal.js'
 import { normalizeJsonPath } from './jsonpath.js'
@@ -13,7 +13,7 @@ import { normalizeJsonPath } from './jsonpath.js'
  *       `@put:{…}` 值区里的 `##` 是区内自己的规则文本（对面先抽 js 块、先剥 @put、先做插值，
  *       替换尾只在剩下的文本上切；单点在 grammar.parseTails）
  *   ③ 剥链首 - 反序前缀
- *   ③b 列表用途剥链首 + 前缀（剥完照常走选择段；见 parseRule 的 `+` 分支）
+ *   ③b 列表用途剥链首 + 前缀（剥完照常走选择段；见 `grammar.ts` 的 `stripChainPrefixes`）
  *   ① AllInOne：剥完上面各步后仍以 : 开头 → 整链是一个 allinone 段
  *   ④ 分支切分（|| / && / %%，左到右，混用抛错）
  *   ⑤⑥ 段切分与识别（globalIndex 全规则连续编号，写进错误定位）——js 形态在这一段认
@@ -50,18 +50,9 @@ export function parseRule(
   // ② 剥 ## 替换尾（含 OnlyOne ###）——文法口 parseTails 单点（grammar.ts：构词与解析同属一处）
   const { chain, replaces, onlyOne } = parseTails(rule)
 
-  // ③ - 反序前缀（只看链首，段内负索引不受影响）
-  let reverse = false
-  let rest = chain
-  if (rest.startsWith('-')) {
-    reverse = true
-    rest = rest.slice(1).trimStart()
-  }
-  // ③b 列表用途的 `+` 前缀：列表入口先剥 `-` 置反序、再剥 `+`（剥完不做事），照常取元素——
-  // 不剥则落成 CSS/属性段 ⇒ 恒 Miss ⇒ 列表与目录一条都不出。只在 list 用途剥，不扩大豁免。
-  if (usage === 'list' && rest.startsWith('+')) {
-    rest = rest.slice(1).trimStart()
-  }
+  // ③/③b 链首前缀（`-` 反序、list 用途的 `+` 列表入口）——剥除与形态两判同住 grammar.ts。
+  // `+` 不剥则落成 CSS/属性段 ⇒ 恒 Miss ⇒ 列表与目录一条都不出；只在 list 用途剥，不扩大豁免。
+  const { rest, reverse } = stripChainPrefixes(chain, usage)
 
   // ① AllInOne：剥完替换尾与反序前缀后仍以 : 开头 → 整链一个 allinone 段
   if (rest.startsWith(':')) {

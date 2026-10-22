@@ -3,7 +3,7 @@ import crypto from 'node:crypto'
 import { isTag } from 'domhandler'
 import type { Element } from 'domhandler'
 import { DEFAULT_JS_TIMEOUT_MS } from './types.js'
-import type { EngineValue, EvalContext, Facet, SegmentLoc } from './types.js'
+import type { EngineValue, EvalContext, Facet, RuleUsage, SegmentLoc } from './types.js'
 import type { SourceSession } from './session.js'
 import { JsSandboxError } from './errors.js'
 import { SANDBOX_MOUNTS, invokeJavaMethod } from './js-protocol.js'
@@ -104,9 +104,10 @@ export interface JsOutcome {
 }
 
 /** 规则递归求值回调（避免与求值层循环依赖，由求值层注入真实现）。
- *  两个参数：rule + data（data 作为子规则的 html 上下文）。baseUrl 由外层 EvalContext
- *  经 `{...ctx, html}` 继承（第三参 baseUrl? 曾是两处实现都丢弃的死参数，已删）。 */
-export type EvaluateRef = (rule: string, data: unknown) => EngineValue
+ *  rule + data（data 作为子规则的 html 上下文）+ usage（链尾未知词的用途：getString* 按
+ *  `sub-rule.ts` 的 `usageOfSubRule` 判，getElements/getElement 恒 list）。baseUrl 由外层
+ *  EvalContext 经 `{...ctx, html}` 继承。 */
+export type EvaluateRef = (rule: string, data: unknown, usage: RuleUsage) => EngineValue
 
 /** 求值层 → 沙箱的**唯一调用描述符**：链上的 js 段与 runScript 都交这一份。
  *  位置元组曾是链协议，加一格要同时改两处 yield 与 driveSync 的下标；命名后加字段只改这里。 */

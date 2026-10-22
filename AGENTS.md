@@ -18,7 +18,7 @@ DeepSeek Harness（DSH）的「小说」插件：导入 legado 书源 → 聚合
 ## 硬约束（本仓的不变量，违反即回归）
 
 - **wire 单点**：路由名、值形状与写路由的 body 形状（构造器 + 读口）只住 `src/shared/wire.ts`，Node 半与浏览器半消费同一份（`src/client/views/types.ts` 只是再导出桶）。
-- **书目字段集**：加 / 改书架元数据字段 = 只改 `shared/wire.ts` 的 `SHELF_META` + `pickShelfMeta`，`Shelf` 与 dispatch 自动跟上；别在各处写逐字段 `typeof` 筛键的抄本。
+- **书目字段集**：加 / 改书架元数据字段 = 改 `shared/wire.ts` 的 `SHELF_META` + `pickShelfMeta`；工具面投影的覆盖由 `tools/shelf-item.ts` 的编译期断言逼你选投影或排除，别在各处写逐字段 `typeof` 筛键的抄本。
 - **宁炸不猜**：认不出的规则语法在**解析期**抛 `UnsupportedRuleError`，带段级定位；空结果冒充失败是本仓定的最高罪。
 - **取值规约**：取位失败 → Miss、解析到空集合 → 空 List，两种值绝不折叠；唯一实现 `src/engine/select.ts` 的 `reducePicked`。
 - **纯度门**：`src/client/**` 的运行时 import 只能来自平台模块表；`src/shared/wire.ts` 保持零运行时依赖（它被 inline 进 client bundle）。构建成败由 `tsdown.config.ts` 的 `dsh-novel-bundle-purity` 把住，改平台模块表要对着宿主发布物重读，别凭记忆。

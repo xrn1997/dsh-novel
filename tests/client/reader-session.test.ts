@@ -137,7 +137,7 @@ describe('ReaderSession.open（目录 → 存档恢复 → 载后定位）', () 
   })
 
   it('进书：目录一发布就来的预取不许抢走存档恢复的在途槽', async () => {
-    // 视图侧事实：toc 一发布就 recalcAnchors + checkPreload，此刻哨兵在视口顶 → 预取目标 = 第 0 章，
+    // 视图侧事实：toc 一发布就 afterRender，此刻哨兵在视口顶 → 预取目标 = 第 0 章，
     // 而存档章要等 fetchShelf 回来才知道。在途槽若被预取抢走，open() 的恢复 load 会半路静默短路
     // （`if (this.inflight !== null) return`）——真机表现即「切走再回来变第一章」。
     const port = fakePort()
@@ -155,12 +155,11 @@ describe('ReaderSession.open（目录 → 存档恢复 → 载后定位）', () 
     }, port)
     const opening = session.open('src', 'https://s.com/book/1')
     let primed = false
-    const unsub = session.subscribe(() => {          // 视图 shim：等价 ReaderView 的 [chapters] effect
+    const unsub = session.subscribe(() => {          // 视图 shim：等价 ReaderView 的渲染后拍点 effect
       if (primed || session.state.toc === null) return
       primed = true
-      session.recalcAnchors()
       port.sentinel = 0                              // 哨兵在视口顶 = 预取区内
-      session.checkPreload('src')
+      session.afterRender('src')
     })
     await new Promise((r) => setTimeout(r, 0))        // 目录发布 + 预取该发生的都发生了
     expect(fetched).toEqual([])                       // 旧实现 [0]：存档未落定就预取
@@ -305,16 +304,32 @@ describe('ReaderSession 预取与目录直达', () => {
     await h.session.open('src', 'https://s.com/book/1')
     h.fetched.length = 0
     h.port.sentinel = 500                          // 视口高 1000 → 预取区内
-    h.session.checkPreload('src')
+    h.session.afterRender('src')
     await new Promise((r) => setTimeout(r, 0))
     expect(h.fetched).toEqual([1])
 
     // 全载完后不再拉
     await h.session.load('src', 2)
     h.fetched.length = 0
-    h.session.checkPreload('src')
+    h.session.afterRender('src')
     await new Promise((r) => setTimeout(r, 0))
     expect(h.fetched).toEqual([])
+  })
+
+  it('afterRender：一次完成落位与预取', async () => {
+    const h = makeSession()
+    await h.session.open('src', 'https://s.com/book/1')
+    h.fetched.length = 0
+    h.port.anchors = [{ index: 0, start: 0, height: 1000 }, { index: 1, start: 1000, height: 1000 }]
+    h.port.chapterOff = 0
+    h.port.sentinel = 0
+    h.session.requestJump('src', 1)
+    await new Promise((r) => setTimeout(r, 0))
+    h.fetched.length = 0
+    h.session.afterRender('src')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(h.session.state.pendingJump).toBeNull()
+    expect(h.fetched).toEqual([2])     // 落位在第 1 章后，预取目标是第 2 章
   })
 
   it('目录直达：未载先拉；渲染落地后定位并清 pendingJump', async () => {
@@ -327,7 +342,7 @@ describe('ReaderSession 预取与目录直达', () => {
     expect(h.session.state.chapters[2]).toEqual(text(2))
 
     h.port.chapterOff = 300                        // 章块已在视口下 300px
-    h.session.settleJump()
+    h.session.afterRender('src')
     expect(h.port.top).toBe(300)
     expect(h.session.state.pendingJump).toBeNull()
   })
@@ -346,12 +361,12 @@ describe('ReaderSession 预取与目录直达', () => {
     expect(h.saves).toEqual([[2, 0]])                // 那一笔就是最终存档
   })
 
-  it('settleJump：章未渲染（targetOffset 给 null）不动、不清——下轮再试', async () => {
+  it('afterRender：章未渲染（targetOffset 给 null）不动、不清——下轮再试', async () => {
     const h = makeSession()
     await h.session.open('src', 'https://s.com/book/1')
     h.session.requestJump('src', 2)
     h.port.chapterOff = null
-    h.session.settleJump()
+    h.session.afterRender('src')
     expect(h.session.state.pendingJump).toMatchObject({ index: 2 })
     expect(h.port.top).toBe(0)
   })
@@ -467,7 +482,7 @@ describe('ReaderSession 跳章失败（位置回退 + 不自动重试）', () =>
     h.session.requestJump('src', 2)
     await new Promise((r) => setTimeout(r, 0))
     expect(h.fetched).toEqual([2])
-    h.session.checkPreload('src')
+    h.session.afterRender('src')
     await new Promise((r) => setTimeout(r, 0))
     expect(h.fetched).toEqual([2])                       // 旧实现：[2, 2]
   })
@@ -529,7 +544,7 @@ describe('ReaderSession 锚点跳转（待定位目标 = 章号 + 锚点 + 节�
   })
 
   it('同章两个锚点：各自落到自己的锚点，并按落位后的真实比例补一笔（不落到章首）', async () => {
-    // 目标章已挂在 DOM 里（同章情形），两次跳转都在同一章内 → 走的是既有的 settleJump 路径，
+    // 目标章已挂在 DOM 里（同章情形），两次跳转都在同一章内 → 走的是既有的落位路径，
     // 没有第二套加载循环；区别只是待定位目标多带一个锚点。
     const h = makeSession()
     await h.session.open('src', 'https://s.com/book/1')
@@ -538,7 +553,7 @@ describe('ReaderSession 锚点跳转（待定位目标 = 章号 + 锚点 + 节�
     h.port.targetOffs.set('a2', 800)
 
     h.session.requestJump('src', 0, 'a1')
-    h.session.settleJump()
+    h.session.afterRender('src')
     expect(h.port.top).toBe(400)                          // 锚点落在视口顶（不是章首 0）
     expect(h.saves).toHaveLength(2)                       // 意图即时落 + 落位后真实比例
     expect(h.saves[0]).toEqual([0, 0])
@@ -547,7 +562,7 @@ describe('ReaderSession 锚点跳转（待定位目标 = 章号 + 锚点 + 节�
 
     h.port.targetOffs.set('a2', 800)                      // a2 在绝对 1200（此刻视口在 400）
     h.session.requestJump('src', 0, 'a2')
-    h.session.settleJump()
+    h.session.afterRender('src')
     expect(h.port.top).toBe(1200)
     expect(h.saves[2]).toEqual([0, 0])
     expect(h.saves[3][0]).toBe(0)
@@ -561,7 +576,7 @@ describe('ReaderSession 锚点跳转（待定位目标 = 章号 + 锚点 + 节�
     h.port.chapterOff = 1200                              // 目标章块在视口下 1200px
     h.session.requestJump('src', 1)
     expect(h.saves).toEqual([[1, 0]])                     // 选中即落盘（章号意图）
-    h.session.settleJump()
+    h.session.afterRender('src')
     expect(h.port.top).toBe(1200)
     expect(h.saves[1]).toEqual([1, 0.2])                  // (1200 - 1000) / 1000：落位后的真实比例
   })
@@ -570,7 +585,7 @@ describe('ReaderSession 锚点跳转（待定位目标 = 章号 + 锚点 + 节�
     const h = makeSession()
     await h.session.open('src', 'https://s.com/book/1')
     h.session.requestJump('src', 0, 'a9')                 // 该锚点没登记 = 节点不在 DOM
-    h.session.settleJump()
+    h.session.afterRender('src')
     expect(h.port.tops).toEqual([])                       // 一次都没量到，就不许动视口
     expect(h.session.state.pendingJump).toMatchObject({ index: 0, anchorId: 'a9' })
   })
@@ -584,7 +599,7 @@ describe('ReaderSession 锚点跳转（待定位目标 = 章号 + 锚点 + 节�
     h.port.anchors = [{ index: 0, start: 0, height: 3000 }]
     h.port.chapterOff = 500                               // 章块在视口下 500px：章首量得到
     h.session.requestJump('src', 0, 'a9')                 // 章已载、锚点不存在
-    h.session.settleJump()
+    h.session.afterRender('src')
     expect(h.port.top).toBe(500)                          // 旧实现：0（永久挂住，一次落位都不发生）
     expect(h.session.state.pendingJump).toBeNull()
     expect(h.saves).toHaveLength(2)                       // 章号意图 + 章首的真实比例
@@ -604,7 +619,7 @@ describe('ReaderSession 锚点跳转（待定位目标 = 章号 + 锚点 + 节�
     await h.session.open('src', 'https://s.com/book/1')
     h.port.chapterOff = 700                               // 假 port 量得到——但这一章根本还没载
     h.session.requestJump('src', 2, 'a9')
-    h.session.settleJump()
+    h.session.afterRender('src')
     expect(h.port.tops).toEqual([])                       // 不许落位
     expect(h.session.state.pendingJump).toMatchObject({ index: 2, anchorId: 'a9' })
   })
@@ -618,7 +633,7 @@ describe('ReaderSession 锚点跳转（待定位目标 = 章号 + 锚点 + 节�
     expect(h.saves).toEqual([])                           // 旧实现：[[9, 0], [-1, 0]]（存档写进不存在的章）
     expect(h.session.state.currentChapter).toBe(0)
     expect(h.session.state.chapters).toEqual([text(0), null, null])
-    h.session.settleJump()
+    h.session.afterRender('src')
     expect(h.port.tops).toEqual([])
   })
 
@@ -648,7 +663,7 @@ describe('ReaderSession 锚点跳转（待定位目标 = 章号 + 锚点 + 节�
     port.targetOffs.set('a9', 250)
     d.resolve(text(2))                                    // 目标到货
     await new Promise((r) => setTimeout(r, 0))
-    session.settleJump()
+    session.afterRender('src')
     expect(port.top).toBe(250)
     expect(session.state.pendingJump).toBeNull()
   })
@@ -683,14 +698,14 @@ describe('ReaderSession 锚点跳转（待定位目标 = 章号 + 锚点 + 节�
     d1.resolve(text(1))                                   // 第一个目标晚到
     await new Promise((r) => setTimeout(r, 0))
     port.targetOffs.delete('a2')                          // 第 3 章还没挂载：锚点量不到
-    session.settleJump()
+    session.afterRender('src')
     expect(port.tops).toEqual([])                         // 迟到的是「上一个目标」：不许落位
     expect(session.state.pendingJump).toMatchObject({ index: 2 })
 
     d2.resolve(text(2))
     await new Promise((r) => setTimeout(r, 0))
     port.targetOffs.set('a2', 250)                        // 目标挂载了
-    session.settleJump()
+    session.afterRender('src')
     expect(port.top).toBe(250)                            // 只认最后点的那个目标
     expect(session.state.pendingJump).toBeNull()
   })

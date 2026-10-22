@@ -29,7 +29,7 @@ export { dedupKey } from './intake.js'
 
 const ISSUE_CAP = 200
 const PROBE_CONCURRENCY = 5
-// 落盘粒度已内聚进注册表（edit 合并写：每 20 次变更强制落盘 + 尾沿防抖）——
+// 落盘粒度已内聚进注册表（edit 合并写，调度归 createDebouncedWriter：每 20 次变更强制落盘 + 尾沿防抖）——
 // 任务运行器不再持有 persist 节流常量
 
 export class SourceJobs {
@@ -174,7 +174,7 @@ export class SourceJobs {
   /**
    * 批量验证：有效 id 并发 5 路探针（限流敬畏——对齐 searchParallel 口径）。
    * 单条失败即结果（broken/异常记 counts）不中断。落盘粒度已收进注册表（每 20 次变更强制落盘
-   * + 100ms 尾沿防抖，见 sources.ts），任务运行器不再持「每 N 条 persist」的常量。
+   * + 100ms 尾沿防抖，调度归 storage.createDebouncedWriter），任务运行器不再持「每 N 条 persist」的常量。
    */
   private async runBatchProbe(state: JobState, ids: string[]): Promise<void> {
     const valid: string[] = []
@@ -203,21 +203,27 @@ export class SourceJobs {
           settled++
           continue
         }
+        // 站点判据先记账，再写回状态：`applyProbeResult` 会把落盘失败如实抛（ADR 0011 / 0013），
+        // 把它折进「这一家 broken」就是把磁盘侧事实记进站点判据分母（ADR 0011 的写盘失败边界）；
+        // 这里把失败移交给注册表（retainWriteFailure），收尾 flush 会如实抛，只补一条任务读数。
         try {
           const r = await this.deps.probe(s)
-          await applyProbeResult(this.deps.registry, id, r)
           if (r.ok) { state.counts.ok++; this.note(state, `${s.name}：verified`) }
           else {
             state.counts.failed++
             this.issue(state, 'failed', s.name, r.error?.message ?? '探针未通过')
             this.note(state, `${s.name}：broken（${r.error?.code ?? 'Error'}）`)
           }
+          try {
+            await applyProbeResult(this.deps.registry, id, r)
+          } catch (e) {
+            this.deps.registry.retainWriteFailure(e)
+            this.issue(state, 'warning', s.name, `探针结果落盘失败（${errCode(e)}）：状态还只在内存里，等收尾 flush 或下一次写重试`)
+          }
         } catch (e) {
           state.counts.failed++
           this.issue(state, 'failed', s.name, e instanceof Error ? e.message : String(e))
-          const rawCode = e instanceof Error ? (e as unknown as { code?: unknown }).code : undefined
-          const code = typeof rawCode === 'string' ? rawCode : 'Error'
-          this.note(state, `${s.name}：broken（${code}）`)
+          this.note(state, `${s.name}：broken（${errCode(e)}）`)
         }
         state.done++
         settled++
@@ -232,4 +238,11 @@ export class SourceJobs {
 
 function stripBom(text: string): string {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
+}
+
+/** 错误码读数（`code` 不在场就说不在场，不猜成某个具体码）：探针的 broken 标注与状态落盘失败
+ *  的标注共用这一份，两处各写一遍筛键迟早分叉。 */
+function errCode(e: unknown): string {
+  const raw = e instanceof Error ? (e as unknown as { code?: unknown }).code : undefined
+  return typeof raw === 'string' ? raw : 'Error'
 }

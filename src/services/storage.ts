@@ -116,10 +116,15 @@ export async function writeJsonAtomic(file: string, data: unknown): Promise<void
   await writeFileAtomic(file, JSON.stringify(data, null, 2))
 }
 
-/** 进程内防抖合并连续写：窗口内同文件多次 schedule 只落最后一次；flush 等待全部落地 */
-export function createDebouncedWriter(delayMs = 100) {
-  type PendingWrite = { data: unknown; timer: ReturnType<typeof setTimeout>; waiters: (() => void)[] }
+/** 进程内防抖合并连续写：窗口内同文件多次 schedule 只落最后一次；flush 等待全部落地。
+ *  可选 `threshold`：累计到第 N 次 schedule 时立即写，并把「这次写落地」交给调用方 await——
+ *  计数跨定时器/flush 写累计，只有阈值触发才复位（ADR 0011 的「累计 N 次」）；
+ *  阈值与窗口的取值由调用方给（如 `SourceRegistry` 的 `PERSIST_EVERY`），防抖/计数/排队/失败合同只住这里。 */
+export function createDebouncedWriter(delayMs = 100, opts: { threshold?: number } = {}) {
+  type PendingWrite = { data: unknown; timer: ReturnType<typeof setTimeout> }
   const pending = new Map<string, PendingWrite>()
+  const counts = new Map<string, number>()
+  const threshold = opts.threshold ?? Number.POSITIVE_INFINITY
   // 已离开 pending、尚未落地的写。定时器一触发 pending 就删了，rename 在途这段窗口若不算「挂起」，
   // flush 会误判静默而提前 resolve——失败只剩「下一次 flush」可接，进程收尾时即未处理拒绝。
   const inflight = new Map<string, Promise<void>>()
@@ -138,42 +143,68 @@ export function createDebouncedWriter(delayMs = 100) {
     failed.delete(first.value)
     return { error }
   }
-  const startWrite = (file: string, p: PendingWrite): Promise<void> => {
-    const job = writeJsonAtomic(file, p.data).then(
-      () => {
-        failed.delete(file)             // 新一笔写成功即清掉旧失败
-        p.waiters.forEach((r) => r())
-      },
-      (e: unknown) => {
-        failed.set(file, e)
-        throw e
-      },
-    )
+  /** 摘一笔挂起写（清计时器）；摘走后它的失败归调用方的合同管。
+   *  阈值计数**不在这里**复位：定时器/flush 写不清零，只有阈值触发那一次清零。 */
+  const takePending = (file: string): PendingWrite | undefined => {
+    const p = pending.get(file)
+    if (!p) return undefined
+    clearTimeout(p.timer)
+    pending.delete(file)
+    return p
+  }
+  /** 开写 + 在途登记（inflight 只摘自己：后继写可能已顶替）；失败合同由调用侧的入口定 */
+  const launchWrite = (file: string, job: Promise<void>): Promise<void> => {
     inflight.set(file, job)
-    const settled = (): void => { if (inflight.get(file) === job) inflight.delete(file) } // 只摘自己：后继写可能已顶替
+    const settled = (): void => { if (inflight.get(file) === job) inflight.delete(file) }
     job.then(settled, settled)
     return job
   }
+  /** 落盘的唯一开写口：成功清旧失败账，rejection 原样留给调用侧。
+   *  有人接的（阈值路径 / flush）默认如实抛给调用方、**不记账**——调用方已直接接住；
+   *  调用方若要把失败留给下一次 flush（如注册表在 recipe 已抛错时），显式用 `retainFailure` 记一笔。 */
+  const startWrite = (file: string, p: PendingWrite): Promise<void> =>
+    launchWrite(file, writeJsonAtomic(file, p.data).then(() => { failed.delete(file) }))
+  /** 定时器触发的那一笔：摘走挂起写后落盘。这一支没有调用方可接 rejection，所以失败由这里
+   *  记账（留给下一次 flush 如实抛）并留下日志现场——两份重复的写代码就此收成一份开写口。 */
+  const flushDeferred = (file: string): void => {
+    const p = takePending(file)
+    if (!p) return
+    startWrite(file, p).catch((e: unknown) => {
+      failed.set(file, e)
+      log.error(`防抖落盘失败（等待下一次写重试）：${file}`, e)
+    })
+  }
+  /** 摘走挂起写并落盘，失败如实抛（调用方是阈值路径或 flush）；没挂起的只等在途那笔
+   *  （flush 的静默口径：计时器已触发、rename 在途的窗口也算挂起）。 */
   const flushOne = (file: string): Promise<void> => {
-    const p = pending.get(file)
+    const p = takePending(file)
     if (!p) return inflight.get(file) ?? Promise.resolve()
-    clearTimeout(p.timer)
-    pending.delete(file)
     return startWrite(file, p)
   }
   return {
-    schedule(file: string, data: unknown): void {
+    /** 阈值触发时返回本次写的 promise（失败如实抛），否则返回 undefined（交给防抖窗口）。 */
+    schedule(file: string, data: unknown): Promise<void> | undefined {
       const old = pending.get(file)
       if (old) clearTimeout(old.timer)
+      const count = (counts.get(file) ?? 0) + 1
+      counts.set(file, count)
       const entry = {
         data,
         timer: setTimeout(() => {
-          // 定时器路径没有调用方可接 rejection；日志留下现场，flush 仍会把失败抛给下一次调用方
-          void flushOne(file).catch((e: unknown) => { log.error(`防抖落盘失败（等待下一次写重试）：${file}`, e) })
+          // 定时器路径没有调用方可接 rejection；日志与记账都归 flushDeferred
+          flushDeferred(file)
         }, delayMs),
-        waiters: old?.waiters ?? [],
       }
       pending.set(file, entry)
+      if (count < threshold) return undefined
+      // 阈值触发即复位（与旧 `mutations = 0` 同口径）；定时器与 flush 写都不碰计数。
+      counts.delete(file)
+      return flushOne(file)
+    },
+    /** 调用方接住了一次写失败、但仍要让下一次 flush 看见时，把它记入失败账；
+     *  同一文件下一次写成功即清账。注册表用它把阈值失败留给收尾 flush（recipe 已抛错时尤其）。 */
+    retainFailure(file: string, error: unknown): void {
+      failed.set(file, error)
     },
     /** 等齐落盘：排到**静默**，不是排「调用那一刻的快照」。
      *  只取一次快照的话，第一轮 I/O 在途时新 `schedule` 的那笔写留在计时器里——flush 已返回、
@@ -193,7 +224,7 @@ export function createDebouncedWriter(delayMs = 100) {
           return
         }
         try {
-          await Promise.all(files.map(flushOne))
+          await Promise.all(files.map((f) => flushOne(f)))
         } catch (e) {
           const failure = takeFailure(file)
           throw failure === undefined ? e : failure.error

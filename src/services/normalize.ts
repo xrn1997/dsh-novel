@@ -1,6 +1,6 @@
 import { appendTail, withImplicitText } from '../engine/grammar.js'
 import { parseExploreKinds, usableKind } from './explore-url.js'
-import type { NormalizedRules, SourceContentKind } from './types.js'
+import type { NormalizedRules, NovelSource, SourceContentKind } from './types.js'
 
 export interface NormalizeIssue { field: string; message: string }
 export interface NormalizeResult {
@@ -168,9 +168,10 @@ export function normalizeSource(raw: unknown): NormalizeResult {
 }
 
 /** 内容形态中文名（只服务导入拒绝文案——列表不渲染 type）。Record 由编译器强制穷尽，
- *  故它同时是**值域见证**：`SourceRegistry.load` 用 `type in SOURCE_KIND_LABEL` 判旧数据的
- *  type 还在不在域内，不再手写第三份形态清单。 */
-export const SOURCE_KIND_LABEL: Record<SourceContentKind, string> = {
+ *  故它同时是**值域见证**：`rehydrateStoredSource` 用 `Object.hasOwn(SOURCE_KIND_LABEL, type)` 判旧数据
+ *  的 type 还在不在域内（只看自有键——旧口径 `in` 会把 `toString` 这类原型键也当成合法形态），
+ *  不再手写第三份形态清单。 */
+const SOURCE_KIND_LABEL: Record<SourceContentKind, string> = {
   text: '文本', image: '图片', audio: '音频', file: '文件', unknown: '未知',
 }
 
@@ -189,7 +190,7 @@ export function splitGroups(raw: string): string[] {
 /** 名称前缀图标剥离：只剥「开头连续的装饰符号段」——\p{So}\p{Sk} 覆盖 ⚡📂🎬 等全部杂项符号，
  *  FE0F(变体选择符)/200D(ZWJ) 是 emoji 组合件；【】等括号是 Po/Ps 不在列（可能是名字本体装饰），
  *  尾部/中部不动。剥完为空（整名都是图标）→ 保留原名（宁丑不空）。 */
-export function stripLeadingIcons(name: string): string {
+function stripLeadingIcons(name: string): string {
   const stripped = name.replace(/^[\s\p{So}\p{Sk}\uFE0F\u200D]+/u, '').trimStart()
   return stripped === '' ? name : stripped
 }
@@ -211,10 +212,10 @@ function kindOfSourceValue(v: unknown): SourceContentKind {
   return typeof v === 'number' ? CONTENT_KIND_OF[v] ?? 'unknown' : 'unknown'
 }
 
-/** raw.bookSourceType → 内容形态（quiet 版，供 SourceRegistry.load 存量重推）：
+/** raw.bookSourceType → 内容形态（quiet 版，供 `rehydrateStoredSource` 存量重推）：
  *  缺省/0/-1 → 'text'，其余（1/2/3 与认不出的值）→ 对应形态或 'unknown'——旧数据当年按
  *  文本入库的误标在此按 raw 重推收敛出去，不再当文本源参搜；raw 不是对象 → undefined（别动）。 */
-export function contentTypeOfRaw(raw: unknown): SourceContentKind | undefined {
+function contentTypeOfRaw(raw: unknown): SourceContentKind | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined
   return kindOfSourceValue((raw as Record<string, unknown>).bookSourceType)
 }
@@ -226,7 +227,7 @@ export function contentTypeOfRaw(raw: unknown): SourceContentKind | undefined {
  *  新增需要存量收敛的规则字段时**只加调用点**，不要再写第二个读 raw 的函数（曾有第三份自解释，
  *  与导入侧口径不同、补推恒覆盖 → 把正确值改写落盘，读数上看不出来）。
  *  `rawBookMetaFields` 是这条纪律之前的产物：它自带优先级，故只能只填缺席键。 */
-export function deriveRuleField(raw: unknown, field: string): string | null | undefined {
+function deriveRuleField(raw: unknown, field: string): string | null | undefined {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
   const r = isNativeSource(raw)
     ? flattenNative(raw as Record<string, unknown>, [])
@@ -236,9 +237,9 @@ export function deriveRuleField(raw: unknown, field: string): string | null | un
 }
 
 /** raw.bookUrlPattern（书源格式的**顶层**字段，不在任何 rule 对象里）：
- *  `SourceRegistry.load` 的存量重推口——旧数据的 rules 没这个键，不重推则嗅探对老源永不生效。
- *  raw 非对象 → undefined（不动）；空白 → null。 */
-export function rawRulePattern(raw: unknown): string | null | undefined {
+ *  `rehydrateStoredSource` 的存量重推口（触发点仍是 `SourceRegistry.load`）——旧数据的 rules
+ *  没这个键，不重推则嗅探对老源永不生效。raw 非对象 → undefined（不动）；空白 → null。 */
+function rawRulePattern(raw: unknown): string | null | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined
   const v = (raw as Record<string, unknown>).bookUrlPattern
   return typeof v === 'string' && v.trim() !== '' ? v : null
@@ -253,13 +254,13 @@ const BOOK_META_KEYS = [
   { container: 'ruleBookInfo', nested: 'wordCount', model: DIALECT_MAP.ruleBookInfo.wordCount },
 ] as const
 
-/** raw 的分类 / 字数四项（供 `SourceRegistry.load` 存量重推，与 `rawHeaderRule` /
+/** raw 的分类 / 字数四项（供 `rehydrateStoredSource` 存量重推，与 `rawHeaderRule` /
  *  `rawRulePattern` 同族）。这两个字段后接进取值链路，存量 rules 没这四个键 → 源里读得出的
  *  分类/字数对老库**永远是 null**（缺这一步时审计到货率为零）。
  *  读口复用导入时的同一套材料：容器走 `ruleContainer`（字符串化容器照解析，不另立规矩）、
  *  键名走 `DIALECT_MAP`、Native 的裸选择器补隐式 `@text`（`withImplicitText`，与 flattenNative 同口径）。
  *  raw 不是对象 → undefined（调用方别动）。 */
-export function rawBookMetaFields(raw: unknown): Record<string, string | null> | undefined {
+function rawBookMetaFields(raw: unknown): Record<string, string | null> | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined
   const r = raw as Record<string, unknown>
   const native = isNativeSource(raw)
@@ -319,8 +320,8 @@ function nativeExploreFields(f: Record<string, unknown>): {
   return { values, kinds, sawChildren }
 }
 
-/** 发现面十一键（供 `SourceRegistry.load` 存量按 raw 补推，与 `rawBookMetaFields` / `rawRulePattern`
- *  同族）。存量 rules 里这一族是空的源，在书城**整个是空的**（kinds 一条不剩、条目规则缺席只能退回
+/** 发现面十一键（供 `rehydrateStoredSource` 存量按 raw 补推，触发点 `SourceRegistry.load`，
+ *  与 `rawBookMetaFields` / `rawRulePattern` 同族）。存量 rules 里这一族是空的源，在书城**整个是空的**（kinds 一条不剩、条目规则缺席只能退回
  *  通用搜索规则），这个读口就是把它们从 raw 现推回来。
  *  两方言共用**导入侧那一次 flatten**：方言判定、字符串化容器、平铺/嵌套优先级、Native 的隐式
  *  `@text` 终端全在那一份里（原先本函数自己再调一次 `nativeExploreFields`、并手工补一遍终端，
@@ -549,7 +550,7 @@ export function stringTableOf(obj: Record<string, unknown>): Record<string, stri
 }
 
 /** 存量补推用：按 raw 现读静态头表（规则形态 `@js:`/`<js>` 返回 undefined = 别动这一格） */
-export function rawHeaderFields(raw: unknown): Record<string, string> | undefined {
+function rawHeaderFields(raw: unknown): Record<string, string> | undefined {
   const v = (raw as { header?: unknown } | null | undefined)?.header
   if (typeof v === 'string' && /^\s*(@js:|<js>)/i.test(v)) return undefined
   const obj = parseObjectJson(v)
@@ -566,7 +567,7 @@ function normalizeHeaderRule(v: unknown): string | null {
     ? v : null
 }
 
-/** 动态请求头规则判别（**raw 源版**，供 SourceRegistry.load 存量重推）：
+/** 动态请求头规则判别（**raw 源版**，供 `rehydrateStoredSource` 存量重推，触发点 `SourceRegistry.load`）：
  *  raw.header 是规则字符串 → 原文；raw 在场但非规则 → null；raw 不是对象 → undefined（调用方别动）。
  *  规则形态**不是**「非法 JSON」——它是书源的合法 header 形态（曾被当坏 JSON 丢弃，存量靠
  *  load 迁移按 raw 重推）。 */
@@ -720,4 +721,114 @@ function nativeReplaceTails(base: string, v: unknown, warnings: NormalizeIssue[]
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * 存量收敛：把已落盘的 `sources.json` 条目按 raw 重新推导到当前模型形状，原地修改并返回是否有改动。
+ * 触发点只有 `SourceRegistry.load`；「哪些字段恒覆盖、哪些只填缺席、哪些键必须恒在场、谁必须排在谁
+ * 之后」逐条写在实现它的那一格上面（覆盖策略按**生产者数量**分档：单一读口恒覆盖，两条读路只填缺席）。
+ * 幂等：收敛过一次后再进来不再产生改动。
+ */
+export function rehydrateStoredSource(s: NovelSource): boolean {
+  if (typeof s.rules !== 'object' || s.rules === null) {
+    throw new Error(`sources.json 条目缺少 rules 对象（id=${String(s.id)}）：拒绝按空规则继续`)
+  }
+  let changed = false
+  const mark = (): void => { changed = true }
+  /** 三格同构的「恒覆盖」收敛：raw 在就对齐；raw 不在只把缺席键补成 null（required 形状）。
+   *  逐字段的 why 仍写在每个调用点头上。 */
+  const syncRule = (key: 'ruleDetailInit' | 'headerRule' | 'bookUrlPattern', want: string | null | undefined): void => {
+    if (want !== undefined && s.rules[key] !== want) { s.rules[key] = want; mark() }
+    else if (s.rules[key] === undefined) { s.rules[key] = null; mark() }
+  }
+
+  // enabled 缺省归一为 true——早期数据无此字段，缺省即「启用」，否则参与集判据
+  // （`services/participation.ts` 的 `participates`）静默排除老源；type 缺省归一为 'text'——
+  // 早期数据无此字段（当时 bookSourceType 根本没读）。
+  if (typeof s.enabled !== 'boolean') { s.enabled = true; mark() }
+  if (!Object.hasOwn(SOURCE_KIND_LABEL, s.type)) { s.type = 'text'; mark() }
+  // type 按 raw.bookSourceType 重推——旧映射把 1/2 读反，漫画/短剧源被误标 text 混进聚合搜索与
+  // 文字书架；**认不出的编码 → 'unknown'**（读不懂不等于文本源，退出参与集；不打 status——
+  // 探针按搜索面判 verified，坏源那条道会被下一次重验洗白）。
+  const derived = contentTypeOfRaw(s.raw)
+  if (derived !== undefined && s.type !== derived) { s.type = derived; mark() }
+
+  // ruleDetailInit 按 raw 重推（init 换根映射的存量收敛）：normalize 只在入库时映射 ruleBookInfo.init，
+  // 存量 rules 缺此键 → 详情换根静默不生效、tocUrl 模板 Miss 回退详情页地址 → EmptyToc（真机实证）。
+  // raw 是真相、rules 是派生；定点补这一个字段，不整链重 normalize（那可能拒绝存量源）。
+  // raw 非对象 → 不动；raw 在场：键恒落成 string | null（NormalizedRules 是 required 形状）。
+  // **读路必须是导入侧那一份**（deriveRuleField 直接跑 flattenDialect/flattenNative）：恒覆盖
+  // 配第二份解释会把对的改成错的，见该函数的注释与下面 kind/wordCount 补推那条的差别说明。
+  syncRule('ruleDetailInit', deriveRuleField(s.raw, 'ruleDetailInit'))
+
+  // headerRule 按 raw 重推（与上面 ruleDetailInit 那条同构）：旧版 normalize 把 `@js:` header
+  // 当坏 JSON 丢弃（rules.header=null、原文只活在 raw 里）——不重推则动态头永远不生效。
+  // raw 非对象 → 不动；raw 在场：键恒落成 string | null。
+  syncRule('headerRule', rawHeaderRule(s.raw))
+
+  // bookUrlPattern 按 raw 重推（与上面 ruleDetailInit / headerRule 两条同构）：详情页嗅探字段是
+  // 后来才读的，存量 rules 缺键 → 声明了它的源搜索时照旧只跑列表规则（补推后命中即按详情页解析）。
+  syncRule('bookUrlPattern', rawRulePattern(s.raw))
+
+  // ruleExplore* 十一键按 raw 补推（与上面几条同族的存量收敛）：发现面是后来才接的链路，
+  // 存量 rules 里这一族是空的源在书城**整个是空的**（kinds 一条不剩、条目规则缺席只能退回
+  // 通用搜索规则）。读口就是导入侧那一次 flatten（rawExploreFields），不另立第二条规则解释。
+  // **这一族连「在场但为空」也算可填**，与下面 kind/wordCount 那族「只填缺席」不同。差别不在宽容，
+  // 在生产者数量：这一族的派生值只有那份映射一个来源，老库里躺着 null 与空数组不代表
+  // 「读过且为空」，只代表那一版还没接 legado——按 raw 重推才是它的当前真相。那两族有两条读路、
+  // 优先级本就不同（导入侧平铺优先、重推侧容器优先），覆盖会把对的改成错的。
+  // 派生值为空时不写，所以这一步单调且幂等；键恒在场（required 形状的合同）仍由缺席那一支负责。
+  const wantExplore = rawExploreFields(s.raw)
+  if (wantExplore !== undefined) {
+    const rules = s.rules as unknown as Record<string, unknown>
+    for (const [k, v] of Object.entries(wantExplore)) {
+      const cur = rules[k]
+      const vacant = cur === undefined || cur === null
+        || (Array.isArray(cur) && (cur as unknown[]).length === 0)
+      const hasValue = Array.isArray(v) ? (v as unknown[]).length > 0 : v !== null
+      if (hasValue && vacant) { rules[k] = v; mark() }
+      else if (cur === undefined) { rules[k] = v; mark() }
+    }
+  }
+  // 键恒在场是 required 形状的合同，且**必须在上面那段之后**：消费者按
+  // `rules.ruleExploreKinds.length` 读分类面，raw 不是对象 / raw 里没有发现面 / 键上躺着脏形状
+  // （非数组）都靠这一步收敛成空数组；反过来的顺序会把按 raw 推出来的分类清掉。
+  if (!Array.isArray(s.rules.ruleExploreKinds)) {
+    s.rules.ruleExploreKinds = []; mark()
+  }
+
+  // 静态头按 raw 补推（与 headerRule 成对）：单引号形态的头曾被判成坏 JSON 丢弃，只改解析器
+  // 不动存量则受害源的头仍然是空的（现量见矩阵行 `b-header-static`）。
+  // 触发条件刻意收窄到「规则形态为 null 且头表也是 null」：那是旧版判失败的唯一形状，
+  // 不会覆盖任何今天被判为有效的值（合法空对象 `{}` 派生出来是 {}，不是 null）。
+  if (s.rules.headerRule === null && s.rules.header === null) {
+    const wantHeader = rawHeaderFields(s.raw)
+    if (wantHeader !== undefined) { s.rules.header = wantHeader; mark() }
+  }
+
+  // kind / wordCount 按 raw 补推（与上面几条同族的存量收敛）：这两个字段后来才接进取值链路，
+  // 老数据的 rules 根本没这四个键 → 不补推则读得出的分类/字数对已入库的源永远是 null。
+  // **与上面三条的差别**：只补 `undefined` 的键、不覆盖已有值——新入库的源由 normalize 正确派生
+  // （含字符串化容器那条路径），这里再按 raw 读一遍是第二条路，覆盖会把对的改成错的。
+  const wantMeta = rawBookMetaFields(s.raw)
+  if (wantMeta !== undefined) {
+    for (const [k, v] of Object.entries(wantMeta)) {
+      const rules = s.rules as unknown as Record<string, string | null | undefined>
+      if (rules[k] === undefined) { rules[k] = v; mark() }
+    }
+  }
+
+  // groups 拆分迁移——早期只按 `\` 拆，真实导出的逗号粘连组合串按 splitGroups 收敛成多段（幂等）；
+  // name 前缀图标迁移——书源包惯用的分组装饰前缀按 stripLeadingIcons 剥掉（幂等）。
+  if (Array.isArray(s.groups)) {
+    const migrated = s.groups.flatMap(splitGroups)
+    if (migrated.length !== s.groups.length || migrated.some((g, i) => g !== s.groups[i])) {
+      s.groups = migrated; mark()
+    }
+  }
+  if (typeof s.name === 'string') {
+    const cleanName = stripLeadingIcons(s.name)
+    if (cleanName !== s.name) { s.name = cleanName; mark() }
+  }
+  return changed
 }

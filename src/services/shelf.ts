@@ -46,7 +46,7 @@ export class Shelf {
   /** dir = novel 根；读 shelf.json（不存在/坏文件按空架起步） */
   static async load(dir: string): Promise<Shelf> {
     const books = await readJson<ShelfBook[]>(path.join(dir, 'shelf.json'), [])
-    return new Shelf(dir, books, createDebouncedWriter(100))
+    return new Shelf(dir, books, createDebouncedWriter())
   }
 
   list(): ShelfBook[] {
@@ -64,7 +64,7 @@ export class Shelf {
     const existing = this.get(input.bookKey)
     if (existing !== undefined) {
       applyPatch(existing, input)
-      this.writer.schedule(this.file, this.books)
+      void this.writer.schedule(this.file, this.books)
       return existing
     }
     const book: ShelfBook = {
@@ -76,7 +76,7 @@ export class Shelf {
     }
     applyPatch(book, input)
     this.books.push(book)
-    this.writer.schedule(this.file, this.books)
+    void this.writer.schedule(this.file, this.books)
     return book
   }
 
@@ -85,7 +85,7 @@ export class Shelf {
     const book = this.get(bookKey)
     if (book === undefined) return null
     applyPatch(book, patch)
-    this.writer.schedule(this.file, this.books)
+    void this.writer.schedule(this.file, this.books)
     return book
   }
 
@@ -94,7 +94,7 @@ export class Shelf {
     const book = this.get(bookKey)
     if (!book) return
     book.progress = { chapterIndex, offsetRatio, updatedAt: Date.now() }
-    this.writer.schedule(this.file, this.books)
+    void this.writer.schedule(this.file, this.books)
   }
 
   /** 移除并防抖落盘；返回是否命中 */
@@ -115,7 +115,7 @@ export class Shelf {
       return false
     })
     if (gone.length === 0) return gone
-    this.writer.schedule(this.file, this.books)
+    void this.writer.schedule(this.file, this.books)
     return gone
   }
 

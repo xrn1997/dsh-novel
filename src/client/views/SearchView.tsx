@@ -43,7 +43,7 @@ export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): 
   useEffect(() => {
     if (initialKeyword === '' || consumed.current === initialKeyword) return
     consumed.current = initialKeyword
-    submit(initialKeyword)
+    void submit(initialKeyword)
     // route.keyword 只消费一次，提交即摘除：routeStore 是跨卸载存活的现场（store.ts），
     // 不摘的话「退出小说界面再进（route 还带着关键词重新挂载）」与「从书架新鲜跳入」在
     // 挂载时不可分——重挂载会无条件重新提交，而服务端搜索读面是单槽（services/search-job.ts
@@ -118,7 +118,7 @@ export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): 
         <div className="novel-search-bar">
           <button className="novel-btn" onClick={() => navigate({ name: 'shelf' })}>{t('search.back')}</button>
           <form
-            onSubmit={(e) => { e.preventDefault(); submit(keyword) }}
+            onSubmit={(e) => { e.preventDefault(); void submit(keyword) }}
             className="novel-search-form"
             aria-label={t('search.label')}
           >

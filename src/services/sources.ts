@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type { NovelSource, SourceAuth, SourceStatus } from './types.js'
 import type { NormalizeResult } from './normalize.js'
-import { contentTypeOfRaw, deriveRuleField, rawBookMetaFields, rawExploreFields, rawHeaderFields, rawHeaderRule, rawRulePattern, SOURCE_KIND_LABEL, splitGroups, stripLeadingIcons } from './normalize.js'
-import { readJson, writeJsonAtomic } from './storage.js'
+import { rehydrateStoredSource } from './normalize.js'
+import { createDebouncedWriter, readJson } from './storage.js'
 import { log } from './log.js'
 
 /**
@@ -26,9 +26,10 @@ export interface SourceEdit {
   setAuth(id: string, auth: SourceAuth | undefined): boolean
 }
 
-/** 合并落盘阈值：累计 N 次变更强制写一次
- *  （「每 20 条 persist 一次」的既有决策——从任务运行器搬进注册表，调用方不再知道粒度存在） */
-const PERSIST_EVERY = 20
+/** 合并落盘阈值：累计 N 次变更强制写一次（计数跨定时器/flush 写累计，阈值触发才复位）
+ *  （「每 20 条 persist 一次」的既有决策——从任务运行器搬进注册表，调用方不再知道粒度存在）。
+ *  export 只为测试能按它把第 N 次变更对齐到阈值那一格；生产调用方一律不认识这个数。 */
+export const PERSIST_EVERY = 20
 /** 尾沿防抖窗口：阈值内的零散变更合并为一次写（shelf 进度同款 100ms 口径） */
 const PERSIST_WINDOW_MS = 100
 
@@ -77,13 +78,12 @@ export function loginUiOf(raw: unknown): LoginUiRow[] | undefined {
 }
 
 export class SourceRegistry {
-  private dirty = false
-  private mutations = 0
-  private timer: ReturnType<typeof setTimeout> | undefined
-  private chain: Promise<void> = Promise.resolve()
+  /** 落盘调度只住 writer：注册表只排写（调用 schedule）与等 flush，不另持 timer/chain。 */
+  private readonly writer: ReturnType<typeof createDebouncedWriter>
   private readonly tx: SourceEdit
 
   private constructor(private readonly dir: string, private readonly sources: NovelSource[]) {
+    this.writer = createDebouncedWriter(PERSIST_WINDOW_MS, { threshold: PERSIST_EVERY })
     const self = this
     this.tx = {
       add: (r) => self.add(r),
@@ -98,111 +98,16 @@ export class SourceRegistry {
 
   /** dir = novel 根；sources.json **缺失** → 空表（首启是常态）；**损坏** → CorruptJsonError 响亮失败
    *  （绝不折叠成空表——那会让下一次 edit 覆盖整文件，本机库的源静默消失，见 storage.readJson）。
-   *  存量归一（改了就落盘收敛）：
-   *  enabled 缺省归一为 true——早期数据无此字段，缺省即「启用」，否则参与集判据
-   *  （`services/participation.ts` 的 `participates`）静默排除老源；
-   *  type 缺省归一为 'text'——早期数据无此字段（当时 bookSourceType 根本没读）；
-   *  groups 拆分迁移——早期只按 `\` 拆，真实导出的逗号粘连组合串按 splitGroups 收敛成多段（幂等）；
-   *  name 前缀图标迁移——书源包惯用的分组装饰前缀按 stripLeadingIcons 剥掉（幂等）；
-   *  type 按 raw.bookSourceType 重推——旧映射把 1/2 读反，漫画/短剧源被误标 text 混进聚合搜索与
-   *  文字书架；**认不出的编码 → 'unknown'**（读不懂不等于文本源，退出参与集；不打 status——
-   *  探针按搜索面判 verified，坏源那条道会被下一次重验洗白）。 */
+   *  存量收敛的逐字段机械与覆盖策略住 `normalize.rehydrateStoredSource`；这里只触发一次并落盘。 */
   static async load(dir: string): Promise<SourceRegistry> {
     const sources = await readJson<NovelSource[]>(path.join(dir, 'sources.json'), [])
     let changed = false
-    for (const s of sources) {
-      if (typeof s.enabled !== 'boolean') { s.enabled = true; changed = true }
-      if (!(s.type in SOURCE_KIND_LABEL)) { s.type = 'text'; changed = true }
-      const derived = contentTypeOfRaw(s.raw)
-      if (derived !== undefined && s.type !== derived) { s.type = derived; changed = true }
-      // ruleDetailInit 按 raw 重推（init 换根映射的存量收敛）：normalize 只在入库时映射 ruleBookInfo.init，
-      // 存量 rules 缺此键 → 详情换根静默不生效、tocUrl 模板 Miss 回退详情页地址 → EmptyToc（真机实证）。
-      // raw 是真相、rules 是派生；定点补这一个字段，不整链重 normalize（那可能拒绝存量源）。
-      // raw 非对象 → 不动；raw 在场：键恒落成 string | null（NormalizedRules 是 required 形状）。
-      // **读路必须是导入侧那一份**（deriveRuleField 直接跑 flattenDialect/flattenNative）：恒覆盖
-      // 配第二份解释会把对的改成错的，见 normalize.ts 该函数的注释与下面 kind/wordCount 补推那条的差别说明。
-      const wantInit = deriveRuleField(s.raw, 'ruleDetailInit')
-      if (wantInit !== undefined && s.rules.ruleDetailInit !== wantInit) {
-        s.rules.ruleDetailInit = wantInit; changed = true
-      } else if (s.rules.ruleDetailInit === undefined) {
-        s.rules.ruleDetailInit = null; changed = true
-      }
-      // ⑦ headerRule 按 raw 重推（与上面 ruleDetailInit 那条同构）：
-      // 旧版 normalize 把 `@js:` header 当坏 JSON 丢弃（rules.header=null、原文只活在 raw 里）——
-      // 不重推则动态头永远不生效。raw 非对象 → 不动；raw 在场：键恒落成 string | null。
-      const wantHeaderRule = rawHeaderRule(s.raw)
-      if (wantHeaderRule !== undefined && s.rules.headerRule !== wantHeaderRule) {
-        s.rules.headerRule = wantHeaderRule; changed = true
-      } else if (s.rules.headerRule === undefined) {
-        s.rules.headerRule = null; changed = true
-      }
-      // bookUrlPattern 按 raw 重推（与上面 ruleDetailInit / headerRule 两条同构）：详情页嗅探字段是
-      // 后来才读的，存量 rules 缺键 → 声明了它的源搜索时照旧只跑列表规则（补推后命中即按详情页解析）。
-      const wantPattern = rawRulePattern(s.raw)
-      if (wantPattern !== undefined && s.rules.bookUrlPattern !== wantPattern) {
-        s.rules.bookUrlPattern = wantPattern; changed = true
-      } else if (s.rules.bookUrlPattern === undefined) {
-        s.rules.bookUrlPattern = null; changed = true
-      }
-      // ruleExplore* 十一键按 raw 补推（与上面几条同族的存量收敛）：发现面是后来才接的链路，
-      // 存量 rules 里这一族是空的源在书城**整个是空的**（kinds 一条不剩、条目规则缺席只能退回
-      // 通用搜索规则）。读口就是导入侧那一次 flatten（rawExploreFields），不另立第二条规则解释。
-      // **这一族连「在场但为空」也算可填**，与下面 kind/wordCount 那族「只填缺席」不同。差别不在宽容，
-      // 在生产者数量：这一族的派生值只有那份映射一个来源，老库里躺着 null 与空数组不代表
-      // 「读过且为空」，只代表那一版还没接 legado——按 raw 重推才是它的当前真相。那两族有两条读路、
-      // 优先级本就不同（导入侧平铺优先、重推侧容器优先），覆盖会把对的改成错的。
-      // 派生值为空时不写，所以这一步单调且幂等；键恒在场（required 形状的合同）仍由缺席那一支负责。
-      const wantExplore = rawExploreFields(s.raw)
-      if (wantExplore !== undefined) {
-        const rules = s.rules as unknown as Record<string, unknown>
-        for (const [k, v] of Object.entries(wantExplore)) {
-          const cur = rules[k]
-          const vacant = cur === undefined || cur === null
-            || (Array.isArray(cur) && (cur as unknown[]).length === 0)
-          const hasValue = Array.isArray(v) ? (v as unknown[]).length > 0 : v !== null
-          if (hasValue && vacant) { rules[k] = v; changed = true }
-          else if (cur === undefined) { rules[k] = v; changed = true }
-        }
-      }
-      // 键恒在场是 required 形状的合同，且**必须在上面那段之后**：消费者按
-      // `rules.ruleExploreKinds.length` 读分类面，raw 不是对象 / raw 里没有发现面 / 键上躺着脏形状
-      // （非数组）都靠这一步收敛成空数组；反过来的顺序会把按 raw 推出来的分类清掉。
-      if (!Array.isArray(s.rules.ruleExploreKinds)) {
-        s.rules.ruleExploreKinds = []; changed = true
-      }
-      // ⑩ 静态头按 raw 补推（与 ⑦ headerRule 成对）：单引号形态的头曾被判成坏 JSON 丢弃，只改解析器
-      // 不动存量则受害源的头仍然是空的（现量见矩阵行 `b-header-static`）。
-      // 触发条件刻意收窄到「规则形态为 null 且头表也是 null」：那是旧版判失败的唯一形状，
-      // 不会覆盖任何今天被判为有效的值（合法空对象 `{}` 派生出来是 {}，不是 null）。
-      if (s.rules.headerRule === null && s.rules.header === null) {
-        const wantHeader = rawHeaderFields(s.raw)
-        if (wantHeader !== undefined) { s.rules.header = wantHeader; changed = true }
-      }
-      // kind / wordCount 按 raw 补推（与上面几条同族的存量收敛）：这两个字段后来才接进取值链路，
-      // 老数据的 rules 根本没这四个键 → 不补推则读得出的分类/字数对已入库的源永远是 null。
-      // **与上面三条的差别**：只补 `undefined` 的键、不覆盖已有值——新入库的源由 normalize 正确派生
-      // （含字符串化容器那条路径），这里再按 raw 读一遍是第二条路，覆盖会把对的改成错的。
-      const wantMeta = rawBookMetaFields(s.raw)
-      if (wantMeta !== undefined) {
-        for (const [k, v] of Object.entries(wantMeta)) {
-          const rules = s.rules as unknown as Record<string, string | null | undefined>
-          if (rules[k] === undefined) { rules[k] = v; changed = true }
-        }
-      }
-      if (Array.isArray(s.groups)) {
-        const migrated = s.groups.flatMap(splitGroups)
-        if (migrated.length !== s.groups.length || migrated.some((g, i) => g !== s.groups[i])) {
-          s.groups = migrated
-          changed = true
-        }
-      }
-      if (typeof s.name === 'string') {
-        const cleanName = stripLeadingIcons(s.name)
-        if (cleanName !== s.name) { s.name = cleanName; changed = true }
-      }
-    }
+    for (const s of sources) if (rehydrateStoredSource(s)) changed = true
     const reg = new SourceRegistry(dir, sources)
-    if (changed) { reg.dirty = true; await reg.flush() }   // 迁移即落盘：脏数据一次收敛，不每次重算
+    if (changed) {
+      await reg.scheduleWrite()   // flush 只处理挂起写；迁移后的内存必须先 schedule 成待写
+      await reg.flush()       // 迁移即落盘：脏数据一次收敛，不每次重算
+    }
     return reg
   }
 
@@ -213,45 +118,44 @@ export class SourceRegistry {
    *  落盘由内部合并调度——累计 ≥PERSIST_EVERY 的那次 edit 会**等写落地**（旧「每 20 条 persist」同款），
    *  否则 100ms 尾沿防抖后台合并；需要立即持久的收尾点用 flush()。 */
   async edit<T>(recipe: (tx: SourceEdit) => T): Promise<T> {
+    let ok = false
     try {
-      return recipe(this.tx)
+      const out = recipe(this.tx)
+      ok = true
+      return out
     } finally {
-      await this.schedule()
+      try {
+        // 阈值到点的那次返回写 promise（失败如实抛）；其余交给 writer 的尾沿防抖。
+        await this.scheduleWrite()
+      } catch (e) {
+        // recipe 已在抛错时，写失败没有交付路径：记进 writer 的失败账，收尾 flush 可见；
+        // recipe 的错误优先，不能被写失败盖掉。recipe 成功时写失败直接抛给调用方，
+        // 是否留给收尾 flush 由调用方用 retainWriteFailure 显式移交（不重复报同一个错）。
+        if (ok) throw e
+        this.writer.retainFailure(this.file, e)
+        log.error('recipe 抛错期间的落盘失败（保留 recipe 错误）:', e)
+      }
     }
   }
 
-  /** 等待全部待写落地（任务收尾 / 测试断言）；无脏零开销。
-   *  **排到静默，不是排调用那一刻的链尾**：只 await 一次的话，落在那次写 I/O 期间的 `edit` 会换成
-   *  一枚新的防抖计时器挂着——flush 已返回、数据根删掉之后它才烧，rename 被系统拒绝成为未处理拒绝。
-   *  终止条件是「这一轮既没有新链尾也没有脏」；**不设轮次上限**——`flush` 的合同就是等齐落盘，
-   *  加上限等于把同一个逃逸窗口藏回注释里。 */
+  /** 排一次写：writer 的 schedule 是唯一写调度入口；阈值返回写 promise，其余返回 undefined。 */
+  private scheduleWrite(): Promise<void> | undefined {
+    return this.writer.schedule(this.file, this.sources)
+  }
+
+  /** 等待全部待写落地（任务收尾 / 测试断言）；排到静默、失败如实抛——合同归 writer 一份。 */
   async flush(): Promise<void> {
-    for (;;) {
-      this.mutations = 0
-      const before = this.chain
-      await this.writeNow()
-      if (this.chain === before && !this.dirty) return
-    }
+    return this.writer.flush(this.file)
   }
 
-  /** 标脏 + 调度写：阈值到点 → 立即写并等齐（await 语义在 edit 的 finally 里）；否则尾沿防抖后台写 */
-  private async schedule(): Promise<void> {
-    this.dirty = true
-    if (++this.mutations >= PERSIST_EVERY) { this.mutations = 0; await this.writeNow(); return }
-    if (this.timer !== undefined) clearTimeout(this.timer)
-    this.timer = setTimeout(() => { this.timer = undefined; void this.writeNow() }, PERSIST_WINDOW_MS)
+  /** 调用方接住了 `edit` 的落盘失败、但仍要让收尾 `flush` 看见时，把失败移交给 writer 的失败账；
+   *  同一文件下一次写成功即清账。批量探针用它把磁盘侧失败留在自己的道上（ADR 0011）。 */
+  retainWriteFailure(error: unknown): void {
+    this.writer.retainFailure(this.file, error)
   }
 
-  /** 写链尾随：同文件并发写由 writeJsonAtomic 的 rename 链串行；此处只管脏标记与链序 */
-  private writeNow(): Promise<void> {
-    if (!this.dirty) return this.chain
-    this.dirty = false
-    if (this.timer !== undefined) { clearTimeout(this.timer); this.timer = undefined }
-    this.chain = this.chain
-      .catch(() => undefined)                       // 排队者只关心「轮到我」，不被前一次失败带崩
-      .then(() => writeJsonAtomic(path.join(this.dir, 'sources.json'), this.sources))
-      .catch((e: unknown) => { log.error('sources.json 落盘失败:', e) })
-    return this.chain
+  private get file(): string {
+    return path.join(this.dir, 'sources.json')
   }
 
   // ── 只读面 ───────────────────────────────────────────────────────────

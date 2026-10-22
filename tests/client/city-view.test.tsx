@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { StrictMode } from 'react'
 import type { ReactNode } from 'react'
 import { ApiClientError } from '../../src/client/api.js'
 import { CopyProvider, enTranslate } from '../../src/client/copy/index.js'
@@ -20,8 +21,8 @@ import { rect, stubLayout } from './scroll-stub.js'
  * 封面失败键按行身份，以及几条「分不清就会说谎」的判据——被停止的轮次、这一页没回来、恢复读与提交
  * 的先后。文件后半是书籍详情浮层那一族：本源的两个动作、书地址缺席时零入口，以及跨源那一次各说各的
  * 那些形状（进行中 / 零命中 / 有源没响应 / 某一家答了而零条 / 一家都没被问到 / 被停止）。零命中
- * 只由**答复**作证——整列未响应时那句不许出现；那一列也只认**本轮关键词**，挂载恢复带来的上一本书
- * 那一轮不会被当成本书的结果。跨源那一列还吃相关性判据：无关条目不占该源唯一的代表行、只回无关条目的
+ * 只由**答复**作证——整列未响应时那句不许出现；那一列也只认**本层 POST 回来的 jobId**，挂载恢复带来的
+ * 上一本书那一轮（哪怕关键词相同）不会被当成本书的结果。跨源那一列还吃相关性判据：无关条目不占该源唯一的代表行、只回无关条目的
  * 一家不许折成「这一家没有按这个书名搜到」，被折起来的那些展开后照旧可点。而这一列**不折叠成一本**：
  * 按书归并只进搜索面（结果页与工具面），浮层维持逐源轴——钉这条是为了挡将来的「顺手统一」。
  *
@@ -94,6 +95,11 @@ describe('CityView', () => {
     await waitFor(() => expect(submitted).toEqual([['s1', '现代情感']]))
     expect(screen.getByRole('heading', { name: '现代情感' })).toBeTruthy()
     expect(screen.getByText('半夏小说 · 通常书源')).toBeTruthy()   // 头行副标题报的是源，不再是「N 个源收录」
+  })
+
+  it('StrictMode 双 effect：自动进入的提交只发一次（one-shot 必须同步可见）', async () => {
+    render(<StrictMode><CityView deps={depsOf()} /></StrictMode>)
+    await waitFor(() => expect(submitted).toEqual([['s1', '现代情感']]))
   })
 
   it('换源：分类栏跟着换成新源声明的那几条，并提交新源的第一个分类', async () => {
@@ -632,7 +638,7 @@ describe('CityBookSheet（书籍详情浮层：本源两动作 + 跨源那一次
 
   // 搜索面只有一个槽、观察者跟随最近一轮（`docs/adr/0023`）：浮层挂载时的恢复读交回的很可能是
   // **另一本书**那一轮，而 `asked` 在点击瞬间即真——本次 POST 回包之前手上的就是它。
-  // 那一列因此认关键词：与 `sheetKeyword` 给的那一个不一致就当还没出结果（也不替别人 cancel）。
+  // 那一列认的是本层 POST 回来的 jobId（关键词不是身份；也不替别人 cancel）。
   it('挂载恢复带来的「上一本书那一轮」不当成本书的结果：那一列不出现、也不报零命中', async () => {
     const stale: SearchJobSnapshot = {
       id: 'sj0', keyword: '上一本书 的作者', phase: 'done', cancelled: false, total: 1, done: 1, next: 1,
@@ -653,6 +659,47 @@ describe('CityBookSheet（书籍详情浮层：本源两动作 + 跨源那一次
     release({ jobId: 'sj1' })
     await waitFor(() => expect(screen.getByText(/正在启动跨源搜索/)).toBeTruthy(), { timeout: 2500 })
     expect(screen.queryByText('上一本书的源')).toBeNull()               // 本轮自己还没有答复可列
+  })
+
+  it('同关键词的另一轮也不接管：浮层只认自己 POST 回来的 jobId', async () => {
+    const stale: SearchJobSnapshot = {
+      id: 'sj0', keyword: '半城风月 沈念', phase: 'done', cancelled: false, total: 1, done: 1, next: 1,
+      added: [group('s9', '同关键词旧源', [{ title: '半城风月', url: 'https://x/1' }])], startedAt: 1,
+    }
+    let release: (v: { jobId: string }) => void = () => {}
+    const deps = makeCoreDeps({
+      apiGet: vi.fn(async () => ({ job: stale })),
+      apiSend: vi.fn(async () => new Promise<{ jobId: string }>((r) => { release = r })),
+      apiEventStream: vi.fn(async () => { throw new Error('无 SSE') }),
+    })
+    openSheet(<CityBookSheet book={aBook} {...own} deps={deps} onClose={noop} />)
+    await waitFor(() => expect(deps.apiGet).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /在其他源找这本/ }))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(screen.queryByText('同关键词旧源')).toBeNull()               // 关键词相同也不是身份
+    release({ jobId: 'sj1' })
+    await waitFor(() => expect(screen.getByText(/正在启动跨源搜索/)).toBeTruthy(), { timeout: 2500 })
+    expect(screen.queryByText('同关键词旧源')).toBeNull()
+  })
+
+  it('重复点击按最后一次认领：挂住的那颗不闸重试，先回的新轮也不被迟到旧回包倒回', async () => {
+    const releases: Array<(v: { jobId: string }) => void> = []
+    const deps = makeCoreDeps({
+      apiGet: vi.fn(async () => ({ job: null })),
+      apiSend: vi.fn(async () => new Promise<{ jobId: string }>((r) => { releases.push(r) })),
+      apiEventStream: vi.fn(async () => { throw new Error('无 SSE') }),
+    })
+    openSheet(<CityBookSheet book={aBook} {...own} deps={deps} onClose={noop} />)
+    await waitFor(() => expect(deps.apiGet).toHaveBeenCalled())
+    const button = screen.getByRole('button', { name: /在其他源找这本/ })
+    fireEvent.click(button)
+    fireEvent.click(button)
+    expect(deps.apiSend).toHaveBeenCalledTimes(2)                 // 第一颗挂着挡不住再点一次
+    releases[1]({ jobId: 'mine' })                                // 后一次点击的回包先落地
+    await waitFor(() => expect(screen.getByText(/正在启动跨源搜索/)).toBeTruthy(), { timeout: 2500 })
+    releases[0]({ jobId: 'late' })                                // 旧回包后落地：不许把观察者倒回旧轮
+    await new Promise((r) => setTimeout(r, 20))
+    expect(screen.getByText(/正在启动跨源搜索/)).toBeTruthy()
   })
 
   // 浮层维持逐源轴：这一层谈的**本来就是一本**，按书归并（`shared/merge-by-book.ts` 的 `mergeBooks`，

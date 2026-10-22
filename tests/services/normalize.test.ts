@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeSource, rawExploreEnabled, rawExploreFields } from '../../src/services/normalize.js'
+import { normalizeSource, rawExploreEnabled, rawExploreFields, rehydrateStoredSource } from '../../src/services/normalize.js'
 import type { NormalizeIssue } from '../../src/services/normalize.js'
 
 const realSource = {
@@ -742,5 +742,43 @@ describe('legado 发现面（exploreUrl + ruleExplore）', () => {
     const r = normalizeSource({ bookSourceName: 'B', bookSourceUrl: 'https://b.com', ruleContent: 'x' })
     expect(r.warnings.filter((w) => w.field === 'exploreUrl')).toHaveLength(0)
     expect(r.source!.rules.ruleExploreKinds).toEqual([])
+  })
+})
+
+describe('rehydrateStoredSource（存量收敛）', () => {
+  it('按 raw 补推 ruleDetailInit / headerRule / bookUrlPattern，幂等', () => {
+    const s = {
+      ...normalizeSource({
+        bookSourceName: 'A', bookSourceUrl: 'https://a.com', ruleContent: 'x',
+        ruleBookInfo: { init: '@css:#ctx' },
+        header: '@js:({Cookie:"x"})',
+        bookUrlPattern: '/book/\\d+',
+      }).source!,
+      id: 's', status: 'unverified' as const, importedAt: 0,
+    }
+    delete (s.rules as unknown as Record<string, unknown>).ruleDetailInit
+    delete (s.rules as unknown as Record<string, unknown>).headerRule
+    delete (s.rules as unknown as Record<string, unknown>).bookUrlPattern
+    expect(rehydrateStoredSource(s)).toBe(true)
+    expect(s.rules.ruleDetailInit).toContain('#ctx')
+    expect(s.rules.headerRule).toContain('Cookie')
+    expect(s.rules.bookUrlPattern).toContain('/book/')
+    expect(rehydrateStoredSource(s)).toBe(false)
+  })
+
+  it('kind/wordCount 只填缺席，不覆盖已有值', () => {
+    const s = {
+      ...normalizeSource({
+        bookSourceName: 'A', bookSourceUrl: 'https://a.com', ruleContent: 'x',
+        ruleSearch: { kind: '玄幻', wordCount: '1000' },
+      }).source!,
+      id: 's', status: 'unverified' as const, importedAt: 0,
+    }
+    const rules = s.rules as unknown as Record<string, unknown>
+    rules.ruleKind = '已有值'
+    delete rules.ruleWordCount
+    rehydrateStoredSource(s)
+    expect(s.rules.ruleKind).toBe('已有值')
+    expect(s.rules.ruleWordCount).toBe('1000')
   })
 })
