@@ -16,4 +16,4 @@ Status: accepted
 
 **代价**：多候选模式下重复/空页不再提前收手，一轮目录会把规则列出的每个分页都打一遍（页数由规则与 `tocMaxPages` 说了算）。换来的是「少掉的章不靠运气」。
 
-锚点：`src/services/pagination.ts` 的 `followPages`（两闸的适用范围）与 `FollowResult.stoppedBy`（五态读数的家）；`src/services/reading.ts` 的 `followOrSingle`（链式与单页的分岔）；钉子 `tests/services/pagination.test.ts` 的「多候选：某一候选与入口页整页重复 → 其余候选照抓（不得中止整轮）」；矩阵行 `f-toc-paging`（翻页形状）、`g-chapter-boundary-guard`（另一侧不许放松的串章闸）；真机改前/改后逐源读数住在 `f-toc-paging` 的 `note`。
+锚点：`src/services/pagination.ts` 的 `followPages`（两闸的适用范围）与 `FollowResult.stoppedBy`（五态读数的家）；`src/services/online-reading.ts` 的 `followOrSingle`（链式与单页的分岔）；钉子 `tests/services/pagination.test.ts` 的「多候选：某一候选与入口页整页重复 → 其余候选照抓（不得中止整轮）」；矩阵行 `f-toc-paging`（翻页形状）、`g-chapter-boundary-guard`（另一侧不许放松的串章闸）；真机改前/改后逐源读数住在 `f-toc-paging` 的 `note`。

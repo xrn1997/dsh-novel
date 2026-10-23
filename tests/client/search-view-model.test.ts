@@ -95,7 +95,10 @@ describe('按书轴：行 key 认名字对、逐源行回读命中', () => {
     expect(bookRowKey({ ...book, title: '别的书' })).not.toBe(bookRowKey(book))
   })
   it('bookRows：名字用归并带来的那一份，其余从本轮命中回读；回读不到给 null，不发明缺键', () => {
-    const rows = bookRows(book, view.meta)
+    const rows = bookRows(book, rowMeta([
+      group('s1', [hit({ title: '斗罗大陆', author: '唐家三少', url: 'u1', coverUrl: 'c1', lastChapterName: '第 1 章' })]),
+      group('s2', [hit({ title: '斗罗大陆', author: '唐家三少', url: 'u2' })], { statusDetail: 'ok' }),
+    ]))
     expect(rows).toHaveLength(2)
     expect(rows[1].hit.coverUrl).toBeNull()          // s2 那条命中没有封面
     expect(rows[0].hit.coverUrl).toBe('c1')
@@ -115,6 +118,32 @@ describe('shortAuthor：只在逗号处切，收的是行宽不是信息', () =>
   })
   it('空格分隔的角色表切不出「第二位」，整串交给 CSS 省略号', () => {
     expect(shortAuthor('萧炎：锦鲤 药老：北炎')).toBe('萧炎：锦鲤 药老：北炎')
+  })
+})
+
+describe('deriveRound 预计算行身份与架位', () => {
+  it('groups carry kept/suspect rows and keys', () => {
+    const view = deriveRound({
+      keyword: '斗罗',
+      groups: [group('s1', [hit({ title: '斗罗1', url: 'u1' }), hit({ title: '无关', url: 'u2' })])],
+    })
+    expect(view.groupViews[0].keptRows.map((r) => r.hit.url)).toEqual(['u1'])
+    expect(view.groupViews[0].keptKeys).toEqual([rowId('s1', 'u1')])
+    expect(view.groupViews[0].suspectRows.map((r) => r.hit.url)).toEqual(['u2'])
+    expect(view.groupViews[0].suspectKeys).toEqual([rowId('s1', 'u2')])
+  })
+
+  it('books carry rows, keys and the seat set', () => {
+    const view = deriveRound({
+      keyword: '斗罗',
+      groups: [
+        group('s1', [hit({ title: '斗罗大陆', author: '唐家三少', url: 'u1' })]),
+        group('s2', [hit({ title: '斗罗大陆', author: '唐家三少', url: 'u2' })]),
+      ],
+    })
+    expect(view.bookViews[0].rows.map((r) => r.hit.url)).toEqual(['u1', 'u2'])
+    expect(view.bookViews[0].keys).toEqual(view.bookViews[0].rows.map((r) => rowId(r.sourceId, r.hit.url)))
+    expect([...view.bookViews[0].seats]).toEqual(['u1', 'u2'])
   })
 })
 

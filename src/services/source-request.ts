@@ -1,4 +1,3 @@
-import { resolveHeaders } from './bridge.js'
 import type { Page } from './bridge.js'
 import type { CookieJar } from './cookies.js'
 import { FetchError } from './errors.js'
@@ -6,8 +5,9 @@ import { decodeBody, fetchTextPage, headerOf, splitUserAgent } from './fetcher.j
 import type { Fetcher } from './fetcher.js'
 import { applyLoginCheck, loginCheckOf } from './login-check.js'
 import { parseConcurrentRate, RateLimiter } from './rate-limit.js'
-import { fetchInitOf } from './request.js'
+import { assembleRequest, fetchInitOf } from './request.js'
 import type { RequestPlan } from './request.js'
+import { createSourceEval } from './source-eval.js'
 import type { NovelSource } from './types.js'
 import type { WebViewCookie, WebViewOptions, WebViewPage, WebViewRuntime } from './webview.js'
 
@@ -42,7 +42,7 @@ export interface SourceRequest {
  *   （`@webjs:` / `java.webView`）从 `fetcherFor(source).webview` 取浏览器，与读面共用同一只
  *   按源令牌桶；浏览器与 HTTP jar 的双向桥也归这一层（secure/expires 随 cookie 一起过桥）。
  *   引擎裸 `webView` 没有 RequestPlan，带源**静态头与 UA** 打底；动态头只在读面与脚本 HTTP
- *   出站（`engineContextOf` 的惰性 provider）求值。
+ *   出站（`source-eval.ts` 的 `engineContextOf` 惰性 provider）求值。
  * - **loginCheck 只作用于 HTTP**：对面把它当 HTTP 响应的后置处理；替真浏览器页面重试/替换
  *   会把浏览器拿到的正文换成 HTTP 的。loginCheck 的替页与重试都走内部 raw 执行，
  *   所以重试仍受限速与动态头约束，但不会再次触发 loginCheck。
@@ -50,9 +50,9 @@ export interface SourceRequest {
  *   看正文（Cloudflare 403/503 正是需求方）；脚本不替换时由本缝补抛 FetchError。`manual` 的
  *   HEAD 探测仍按原语义放行任意状态码。
  * - **头规则只求值一次**：`initFor` 经 `fetcherFor` 求值一次后经 init 带入请求——头规则脚本自己的
- *   出站因此也受限速与 loginCheck 约束；`resolveHeaders` 给它脚本里的 `java.ajax` 打的是**静态头**，
- *   不回头再求值头规则。`fetcherFor` 交给引擎脚本时不再解析——脚本侧的头由 `engineContextOf` 的
- *   惰性 provider 提供，外观再解析就等于每个脚本请求叠加一次求值。
+ *   出站因此也受限速与 loginCheck 约束；`source-eval.ts` 的 `resolveHeaders` 给它脚本里的 `java.ajax`
+ *   打的是**静态头**，不回头再求值头规则。`fetcherFor` 交给引擎脚本时不再解析——脚本侧的头由
+ *   `engineContextOf` 的惰性 provider 提供，外观再解析就等于每个脚本请求叠加一次求值。
  *
  * **解码不归本缝**：它只按计划选 charset（`charsetOf`），解码本身归 `fetcher.decodeBody`
  * （`fetchTextPage` 与 `SourceRequest.fetchPage` 共用那条单点）。顺序里「动态头」排在「限速」前也是实序：
@@ -165,8 +165,8 @@ export function createSourceRequest(deps: SourceRequestDeps): SourceRequest {
   /** 一次出站的前置：动态头求值 + 计划 → init。头规则脚本自己的出站也走本缝（限速/loginCheck）。 */
   const initFor = async (source: NovelSource, plan: RequestPlan, opts?: { timeoutMs?: number }) => {
     // 动态头每请求求值一次；头规则脚本里的 java.ajax 同样过本缝的限速与 loginCheck。
-    // 不递归：resolveHeaders 给这些脚本出站打的是静态头，不会再求值头规则。
-    const dynamic = await resolveHeaders(fetcherFor(source), source, { jsTimeoutMs: deps.jsTimeoutMs() })
+    // 不递归：source-eval 的 resolveHeaders 给这些脚本出站打的是静态头，不会再求值头规则。
+    const dynamic = await createSourceEval(fetcherFor(source), source, { jsTimeoutMs: deps.jsTimeoutMs() }).headers()
     return { ...fetchInitOf(plan, dynamic), ...(opts?.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }) }
   }
 
@@ -185,6 +185,18 @@ export function createSourceRequest(deps: SourceRequestDeps): SourceRequest {
       return { url: page.finalUrl, requestedUrl: plan.url, body: decodeBody(page, charsetOf(plan)) }
     },
   }
+}
+
+/** 读面的一次文本抓取：URL（可带 `,{option}` 后缀）→ 请求计划 → 守门源请求。
+ *  门面（详情页）与在线阅读（tocUrl 回退 / 子正文地址）共用这一条——书 URL 与目录地址
+ *  可能是 POST 型 API 端点，裸抓带选项的 URL 会得 405；选项语义与解码仍归
+ *  `assembleRequest` 与 `SourceRequest.fetchText` 两个单点。 */
+export async function fetchSourceText(
+  request: SourceRequest, source: NovelSource, url: string, opts?: { timeoutMs?: number },
+): Promise<string> {
+  const plan = assembleRequest(url, {}, source.baseUrl)
+  const { text } = await request.fetchText(source, plan, opts)
+  return text
 }
 
 /** 浏览器 → JAR 的单点（组合根给基础 fetcher 挂的兜底能力也走这一份）。

@@ -3,15 +3,17 @@ import { evaluate } from '../../src/engine/index.js'
 import type { EngineValue } from '../../src/engine/index.js'
 import type { SubRuleEval } from '../../src/services/bridge.js'
 import {
-  detailFieldsOf, detailReadOf, engineContextOf, extractItems, absUrl, engineFetch, firstUrlValue, firstValue,
-  formatWordCount, hitFieldsOf, kindFieldOf, listValue, makeSubEval, wordCountFieldOf,
+  detailFieldsOf, detailReadOf, extractItems, firstUrlValue, firstValue,
+  formatWordCount, hitFieldsOf, kindFieldOf, listValue, wordCountFieldOf,
 } from '../../src/services/bridge.js'
 import { CookieJar } from '../../src/services/cookies.js'
+import { engineFetch } from '../../src/services/engine-fetch.js'
 import type { Fetcher } from '../../src/services/fetcher.js'
 import { normalizeSource } from '../../src/services/normalize.js'
-import { tocUrlOf } from '../../src/services/reading.js'
+import { tocUrlOf } from '../../src/services/online-reading.js'
+import { createSourceEval, engineContextOf } from '../../src/services/source-eval.js'
 import type { NovelSource } from '../../src/services/types.js'
-import { stripUrlOption } from '../../src/services/url.js'
+import { absUrl, stripUrlOption } from '../../src/services/url.js'
 
 describe('值规约', () => {
   it('miss → null（源没这条信息）', () => {
@@ -281,7 +283,7 @@ describe('hitFieldsOf（一条命中的装配单点）', () => {
 })
 
 /** 详情面一次读取（`detailReadOf`）：字段与 tocUrl 必须共用**同一次** init 求值。
- *  计数 subEval 包住真实求值器（`makeSubEval`），读的是规则串的出现次数——
+ *  计数 subEval 包住真实求值器（`createSourceEval(...).subEval`），读的是规则串的出现次数——
  *  旧组合 `detailFieldsOf` + `tocUrlOf` 各求一次 init 正是这条要收掉的重复。 */
 describe('detailReadOf（详情 init 单次求值）', () => {
   const INIT = '$.data.bookInfo'
@@ -304,7 +306,7 @@ describe('detailReadOf（详情 init 单次求值）', () => {
   // 本用例只求规则、不发请求：真 Fetcher 的 fetchPage 一旦被调用就是规则形态写错了
   const fetcher: Fetcher = { fetchPage: async () => { throw new Error('规则求值不该发请求') } }
   const counting = (seen: string[], src: NovelSource = source): SubRuleEval => {
-    const real = makeSubEval(fetcher, src)
+    const real = createSourceEval(fetcher, src).subEval()
     return (rule, ctx, facet, usage) => {
       seen.push(rule)
       return real(rule, ctx, facet, usage)

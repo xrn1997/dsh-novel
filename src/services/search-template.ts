@@ -1,8 +1,8 @@
 import { RuleEvalError } from '../engine/index.js'
 import { isPlaceholderExpr } from '../engine/index.js'
-import { runScript } from '../engine/js-sandbox.js'
-import { engineContextOf } from './bridge.js'
+import type { JsOutcome } from '../engine/js-sandbox.js'
 import type { Fetcher } from './fetcher.js'
+import { createSourceEval } from './source-eval.js'
 import type { NovelSource } from './types.js'
 
 /**
@@ -42,7 +42,7 @@ export async function preEvaluateUrlJs(
   let out = ''
   for (const part of parts) {
     if (part.kind === 'text') { out += part.text; continue }
-    const outcome = await runScript(scriptOf(source, part.expr, key, page, fetcher, `{{${part.expr}}}`.slice(0, 200), jsTimeoutMs))
+    const outcome = await scriptOf(source, part.expr, key, page, fetcher, `{{${part.expr}}}`.slice(0, 200), jsTimeoutMs)
     const v = outcome.value
     out += v.kind === 'value' ? v.text : v.kind === 'list' ? v.items.join('\n') : ''
   }
@@ -83,7 +83,7 @@ export async function resolveJsSearchTemplate(
     const at = m.index ?? 0
     result = spliceLiteral(result, template.slice(start, at))
     const code = nonEmpty(m[2]) ?? nonEmpty(m[1]) ?? ''
-    const outcome = await runScript(scriptOf(source, code, key, page, fetcher, m[0].slice(0, 200), jsTimeoutMs, result))
+    const outcome = await scriptOf(source, code, key, page, fetcher, m[0].slice(0, 200), jsTimeoutMs, result)
     const v = outcome.value
     result = v.kind === 'value' ? v.text : v.kind === 'list' ? v.items.join('\n') : ''
     start = at + m[0].length
@@ -115,22 +115,20 @@ function nonEmpty(v: string | undefined): string | undefined {
 function scriptOf(
   source: NovelSource, code: string, key: string, page: number, fetcher: Fetcher, segmentRaw: string,
   jsTimeoutMs?: number, result = '',
-): Parameters<typeof runScript>[0] {
-  return {
-    // 重叠字段（baseUrl/source/vars/fetch/jsLib/jsTimeoutMs）走 engineContextOf 单点——
-    // runScript 面独有的字段（code/key/page/header/result/loc/facet/scriptForm）在此补齐
-    ...engineContextOf(fetcher, source, {
-      baseUrl: source.baseUrl, vars: { key, page: String(page) },
-      ...(jsTimeoutMs === undefined ? {} : { jsTimeoutMs }),
-    }),
-    code,
-    key,
-    page,
-    // `result` 是 URL js 块的累积值（逐块传入）——`{{…}}` 预求值路径用不着（给空串）
-    result,
-    header: JSON.stringify(source.rules.header ?? {}),
-    loc: { segmentIndex: -1, segmentRaw },
-    facet: 'search',
-    scriptForm: true,
-  }
+): Promise<JsOutcome> {
+  // 重叠字段（baseUrl/source/vars/fetch/jsLib/jsTimeoutMs）走 source-eval 的上下文单点——
+  // runScript 面独有的字段（code/key/page/header/result/loc/facet/scriptForm）在此补齐
+  return createSourceEval(fetcher, source, jsTimeoutMs === undefined ? undefined : { jsTimeoutMs })
+    .runScript(code, {
+      baseUrl: source.baseUrl,
+      vars: { key, page: String(page) },
+      facet: 'search',
+      key,
+      page,
+      // `result` 是 URL js 块的累积值（逐块传入）——`{{…}}` 预求值路径用不着（给空串）
+      result,
+      header: JSON.stringify(source.rules.header ?? {}),
+      loc: { segmentIndex: -1, segmentRaw },
+      scriptForm: true,
+    })
 }

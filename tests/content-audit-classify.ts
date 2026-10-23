@@ -37,7 +37,7 @@ const HOST_GAP = [
 
 /** 本仓刻意闸口（本可静默、我们明确失败）的消息锚点 */
 const GUARD = [
-  '目录 URL 规则未取到任何章节地址',          // reading.ts：逐条回退目录页即判定整体失效
+  '目录 URL 规则未取到任何章节地址',          // online-reading.ts：逐条回退目录页即判定整体失效
   '无法解码 charset',                         // 声明了非法 charset 时不猜
   '需要安卓宿主环境',                         // java.webView 等——安卓宿主面对本仓环境不适用
   '缺目录规则',                               // RuleMissingError

@@ -1,9 +1,8 @@
-import { runScript } from '../engine/js-sandbox.js'
 import { responseOf } from '../engine/host-object.js'
-import { engineContextOf } from './bridge.js'
 import { cookiesOf } from './engine-fetch.js'
 import { decodeBody } from './fetcher.js'
 import type { FetchedPage, Fetcher } from './fetcher.js'
+import { createSourceEval } from './source-eval.js'
 import type { NovelSource } from './types.js'
 
 type FetchInit = Parameters<Fetcher['fetchPage']>[1]
@@ -35,13 +34,9 @@ export async function applyLoginCheck(
   if (code === '') return page
   // 与读面同一个声明优先级：URL 选项 charset 可能只在这里（响应头没 charset）
   const body = decodeBody(page, init?.declaredCharset)
-  const ctx = engineContextOf(fetcher, source, {
+  const outcome = await createSourceEval(fetcher, source, opts).runScript(code, {
     baseUrl: page.finalUrl,
-    ...(opts?.jsTimeoutMs === undefined ? {} : { jsTimeoutMs: opts.jsTimeoutMs }),
-  })
-  const outcome = await runScript({
-    ...ctx,
-    code,
+    facet: 'rule',
     resultHost: responseOf({
       url: page.finalUrl,
       statusCode: page.status,
@@ -52,7 +47,6 @@ export async function applyLoginCheck(
       charset: page.charset,
     }),
     loc: { segmentIndex: 0, segmentRaw: code },
-    facet: 'rule',
   })
   const value = outcome.value
   if (value.kind !== 'value') return page

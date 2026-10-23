@@ -1,6 +1,7 @@
-import { hitFieldsOf, itemContextsOf, makeSubEval } from './bridge.js'
+import { hitFieldsOf, itemContextsOf } from './bridge.js'
 import { isNativeSource } from './normalize.js'
 import { buildSearchRequest } from './request.js'
+import { createSourceEval } from './source-eval.js'
 import type { SourceRequest } from './source-request.js'
 import type { SearchHit } from '../shared/wire.js'
 import type { NovelSource } from './types.js'
@@ -77,8 +78,8 @@ export async function fetchKindPage(
     ].filter((x): x is string => x !== null)
     return { ok: false, code: 'RuleMissing', message: `发现规则缺失：缺 ${missing.join('、')}` }
   }
-  const subEval = makeSubEval(request.fetcherFor(source), source,
-    jsTimeoutMs === undefined ? undefined : { jsTimeoutMs })
+  const subEval = createSourceEval(request.fetcherFor(source), source,
+    jsTimeoutMs === undefined ? undefined : { jsTimeoutMs }).subEval()
   // 裁页跟着「本次用的是哪份模板」走，不跟着方言走：源级模板带的就是原生分页语义（首页不裁的代价见
   // `request.assembleRequest`）；分类自带地址那一份怎么翻页是源自己写死的，替它裁等于改它的语义。
   // 变量恒给 kind 与 page 两个：模板里没写的占位不参与替换（判据见 `engine/template.isPlaceholder`），

@@ -25,8 +25,13 @@ _Avoid_: 导入逻辑（导入是调用方，不是入库规则本身）
 _唯一实现_: `services/normalize.ts`
 _Avoid_: 格式、模板
 
+**规则字段表（rule-field table）**:
+书源规则字段的登记处：一个模型键一行，写明它在两方言里的容器与子字段路径（发现面条目字段没有路径列，见下）、Native 隐式终端标记与存量收敛的覆盖模式。通用容器字段的导入循环名单、两方言通用展平映射、Native 隐式终端清单与存量重推的档位都从它派生；发现面条目字段（`ruleExplore*`）是边界——`ruleExplore` / Native `ruleFind` 的整套切换仍归 `normalize` 的显式分支，表只为它们登记模型键、隐式终端与覆盖模式。
+_唯一实现_: `services/rule-fields.ts` 的 `RULE_FIELD_SPECS`（派生 `RULE_FIELDS` / `DIALECT_MAP` / `NATIVE_MAP` / `NATIVE_TEXT_FIELDS`；裁决见 `docs/adr/0044-rule-field-table.md`）
+_Avoid_: 字段清单（它只是这张表的投影）、规则映射（映射只是表的一列）
+
 **存量收敛（stored-source rehydration）**:
-已落盘书源按 raw 收敛到当前模型形状（rules 字段重推、enabled/type/groups/name 归一）的唯一机械；触发点只有 `SourceRegistry.load`（收敛后的落盘由注册表完成），逐字段次序与覆盖策略跟 raw 解释同住。
+已落盘书源按 raw 收敛到当前模型形状（rules 字段重推、enabled/type/groups/name 归一）的唯一机械；触发点只有 `SourceRegistry.load`（收敛后的落盘由注册表完成），逐字段次序跟 raw 解释同住，覆盖策略（哪个字段归哪一档）由「规则字段表」的模式列登记。
 _唯一实现_: `services/normalize.ts` 的 `rehydrateStoredSource`
 _Avoid_: 迁移脚本、启动修复
 
@@ -69,9 +74,14 @@ _唯一实现_: `shared/merge-by-book.ts` 的 `mergePartitioned`（生产两个�
 _Avoid_: 跨源合并器（那是发现面已下线那一层的历史名字，见 `docs/adr/0028`）、同书去重（不去重，多源都在案）、作品（本仓不用这个词指存储实体）
 
 **搜索结果页派生（search view-model）**:
-「一轮命中现场 → 轮级计数（条／本／家）、两条呈现轴的行身份与逐源回读」的唯一住址：判据在此，视图只接线与渲染。
-_唯一实现_: `shared/round-summary.ts` 的 `summarizeRound`（轮级分区与计数，每源只分区一次）；`client/search-view-model.ts` 的 `deriveRound` / `rowId` / `rowKeys` / `rowMeta` / `bookRows` / `shelfSeats` / `isSeatLanded` / `newlyLandedSeats`
-_Avoid_: 搜索结果状态（那住 `client/search-job.ts` 的观察通道）、加架账（落架现场在视图 state，本层只给架位算式）
+「一轮命中现场 → 轮级计数（条／本／家）、两条呈现轴的行身份与逐源回读」的唯一住址：判据在此，视图只接线与渲染。轮级派生一次给齐预算值——逐源组的两档行与行 key、每本的逐源行与架位全集都随 `deriveRound` 算好，渲染路径不再为每帧每击键各算一趟。
+_唯一实现_: `shared/round-summary.ts` 的 `summarizeRound`（轮级分区与计数，每源只分区一次）；`client/search-view-model.ts` 的 `deriveRound`（返回 `parts` / `summary` / `merged` 与 `groupViews` / `bookViews`——行身份、行 key、逐源行与架位全集都在它里面预算）/ `rowId` / `rowKeys` / `rowMeta` / `bookRows` / `shelfSeats` / `isSeatLanded` / `newlyLandedSeats` / `addAllReceipt`
+_Avoid_: 搜索结果状态（那住 `client/search-job.ts` 的观察通道）、加架账（落架现场住 `client/search-landing.ts` 的 `useSearchLanding`，本层只给架位与回执算式）
+
+**搜索落架（search landing）**:
+搜索结果页一次挂载里的落架现场与加架排队：哪些架位已经落过、哪一本的「都加架」还在途，逐条与整本两条入口共用这一份账。**在途读数逐本记**（书行键 `bookRowKey`）：每本书行一颗钮，一个全局布尔会把没碰过的书一并禁掉、还给它们挂上「加架中…」；**回执只给数**——加成 / 仍缺 / 无地址三笔账由视图按落架回执选通道与措辞。落架账是会话内读数（「这一发 PUT 发成功过」），不是书架真相：真相在 `Shelf`，写口幂等兜住其余。
+_唯一实现_: `client/search-landing.ts` 的 `useSearchLanding`（返回 `landed` / `adding` / `isLanded` / `add` / `addAll`；写口仍是 `client/shelf-action.ts` 的 `addShelfSeat`，由视图以 `addSeat` 注入；架位与回执算式复用 `client/search-view-model.ts`）
+_Avoid_: 搜索结果状态（那是 `client/search-job.ts` 的观察通道）、批量写口 / 加架事务（没有第二条写路由：整本就是一串幂等 PUT）、落架回执文案（措辞与通道住视图）
 
 **工具面披露三件套（searched / answered / filtered）**:
 `dshnovel_search` 对「这一轮为什么给出这些」自报的三条计数：本轮跑了多少家、多少家干净答话（答了零条也算答话）、多少行因被判不相关移出默认返回。界面上同一事实由逐源轴与折叠区承接，工具面没有折叠，用数字承接——「没人答话」与「答话了但全不相关」不许折成同一种结局。
@@ -171,7 +181,7 @@ _Avoid_: 文本过滤（太泛——判据是「含文本的元素」，链上�
 
 **详情上下文初始化（ruleDetailInit）**:
 legado `ruleBookInfo.init` 的内部名：详情面先求值，其产物**整体替换**后续详情规则与 tocUrl 模板的求值上下文与 html。init 非空但零命中 → 抛错点名，不拿整页冒充上下文。
-_唯一实现_: `services/bridge.ts` 的 `detailContextOf`；七字段取值段 `detailFieldsFromContext`（`detailFieldsOf` 与 `detailReadOf` 共用这一份回落链与档位），详情一次读取 `detailReadOf`（字段与 tocUrl 共用同一份 init 上下文），tocUrl 的静态短路与上下文求值分住 `staticTocUrl` / `tocUrlFromContext`（`tocUrlOf` 是 `getTocInner` 那条入口）。
+_唯一实现_: `services/bridge.ts` 的 `detailContextOf`；七字段取值段 `detailFieldsFromContext`（`detailFieldsOf` 与 `detailReadOf` 共用这一份回落链与档位），详情一次读取 `detailReadOf`（字段与 tocUrl 共用同一份 init 上下文），tocUrl 的静态短路与上下文求值分住 `staticTocUrl` / `tocUrlFromContext`（`tocUrlOf` 是 `services/online-reading.ts` 的 `getTocInner` 那条入口）。
 _Avoid_: init 规则（与 fetch 的 init 姿态易混，交流用内部名）。
 
 **纯 `@put` 的 init**:
@@ -183,9 +193,14 @@ _唯一实现_: `engine/parse.ts` 的 `isPutOnlyRule`
 _读写实现_: `engine/variables.ts` 的 `evalPut`/`evalGetVar`
 _Avoid_: 变量池（太泛）、缓存（`cache` 是按源隔离的另一套键值表）
 
+**源求值（source eval）**:
+一条书源上的**一次**脚本 / 规则求值：能力位（fetch 族 / 浏览器 / cookie / device / 源实体字段）、动态头求值、非递归与回退、脚本可见的 `book` 镜像都从这一处装配，调用方只交规则与上下文（`chapter` 由调用方构造后原样透传）。逐面 `book` 字段集由调用方给的 shelf 上下文塑形，**不**在这里统一成全集。
+_唯一实现_: `services/source-eval.ts` 的 `createSourceEval` / `engineContextOf` / `resolveHeaders` / `bookMirrorOf`
+_Avoid_: 规则引擎（那是 `engine/` 的事）、求值上下文（那只是它产出的 `EvalContext`）
+
 **动态请求头（headerRule）**:
 legado `header` 字段的 `@js:`/`<js>` 规则形态的内部名（与静态 JSON 形态互斥同源）。求值失败 → warn 后回退静态头，不吞请求也不炸整链。
-_唯一实现_: `services/bridge.ts` 的 `resolveHeaders`
+_唯一实现_: `services/source-eval.ts` 的 `resolveHeaders`
 _Avoid_: header 规则、动态 header（说内部名）
 
 **探针（probe）**:
@@ -268,12 +283,17 @@ _Avoid_: 选中状态（太泛）；也别与「书城进入判据」混称—�
 **阅读会话（reader session）**:
 「目录 → 存档恢复 → 逐章懒加载 → 预取 → 进度落盘」的时序持有者；DOM 测量经 `ReaderPort` 注入，视图只渲染与接线。同一时刻只允许一章在途（`inflight`），滚动风暴与目录直达只记意图（`pendingJump`），刚失败过的同一章不自动重试。
 _唯一实现_: `client/reader-session.ts`
-_Avoid_: 阅读器状态管理（视图里的 state 只是它的投影）
+_Avoid_: 阅读器状态管理（视图里的 state 只是它的投影）；也别与**阅读场景**混称——那个词指浮层、注释载荷、Esc 归属与入架一问的交互现场
 
 **阅读浮层（reader surface）**:
 阅读器右上角那一层的在场判据：Aa／目录／导出／注释／导入说明**至多一角在场**（同住右上角的两面叠起来，底下那面看得见点不动）；换角时注释面板只收不消费，Esc 走「关闭」那条语义（裁决见 `docs/adr/0037`）。
 _唯一实现_: `client/reader-surfaces.ts`（`openSurface` / `closeAll` / `dismissSurface` / `maskFor` / `escOwner`）
-_Avoid_: 浮层状态管理（视图里的 `surface` 只是它的投影）、在各 opener 里逐处抄「先关别人」；也别与**模态契约**混称——带遮罩的入架一问走 `client/views/dialog.tsx`
+_Avoid_: 浮层状态管理（阅读场景里的 `surface` 只是它的投影）、在各 opener 里逐处抄「先关别人」；也别与**模态契约**混称——带遮罩的入架一问走 `client/views/dialog.tsx`
+
+**阅读场景（reader scene）**:
+阅读器里互相咬合的交互现场：当场面、注释面板的目标与**返回项句柄**、Esc 归属、离开时那一句入架询问与它的写入回执。视图只渲染它的投影并接线，阅读时序不在这里。
+_唯一实现_: `client/reader-scene.ts` 的 `ReaderScene`（`toggle` / `openNote` / `close` / `handleEsc` / `dismissAsk` / `openTarget` / `bodyLink` / `panelLink` / `exitToShelf` / `joinAndBack`）
+_Avoid_: 阅读器状态（时序归 `client/reader-session.ts`）、至多一角的纯判据（`client/reader-surfaces.ts`）；DOM 测量、取数与导出编排也不归它
 
 **判到底（翻页闸）**:
 「下一页 / 下一目录页」何时停的唯一语义：next 规则按取值用途求值、结果按列表形状处理。停止判据次序与代码同序——防环 → 上限 → 零新增 → 回环；正文面另串章闸。
@@ -285,14 +305,19 @@ _Avoid_: 翻页循环、重复过滤（判据是「本页零新增」与「URL �
 _唯一实现_: `client/reader-session.ts`（状态）+ `client/progress.ts`（位置 ⇄ 像素）+ `shared/wire.ts` 的 `ShelfProgress`、`hasProgress`
 _Avoid_: 进度（要区分「元数据」与「阅读位置」）、scrollTop（像素是测量值，不是位置本身）
 
+**在线阅读（online reading）**:
+一条在线书的目录与正文取值管线：缓存优先、目录在途去重（身份含代际与 refresh）、翻页跟进、缓存写回，连同 tocUrl 解析、subContent 追加、正文行规约与空正文异常。**在途去重只服务目录**（单章在途由阅读会话保证，正文不另立全局表）。**本地书不走这条线**——门面只做本地书分流与委托，搜索/发现/书架/导入/详情仍归门面（裁决见 `docs/adr/0043`）。
+_唯一实现_: `services/online-reading.ts` 的 `OnlineReading`（目录 `toc` / 正文 `chapterText`；`tocUrlOf` / `normalizeChapterText` 同住）
+_Avoid_: 阅读服务（`ReadingService` 是门面，不是管线）、抓取（出站执行归 `services/source-request.ts`）
+
 **缓存代际（epoch）**:
 「这份目录 / 正文缓存还有效吗」的唯一算式：按面细分的规则指纹 + baseUrl，**入缓存文件名**而不是删除式失效。刻意不含 `auth`（登录态刷新会整源缓存全灭）。
-_唯一实现_: `services/cache-epoch.ts` 的 `rulesEpoch`；裁决在 `services/reading.ts` 的 `getTocInner` / `getChapter`
+_唯一实现_: `services/cache-epoch.ts` 的 `rulesEpoch`；在线目录 / 正文的消费点在 `services/online-reading.ts` 的 `OnlineReading`（本地书不参与）
 _Avoid_: 版本号（是规则指纹不是自增版本）、缓存键
 
 **正文槽位（slot）**:
 正文缓存文件名的有效性段 = 代际 + 章名：代际管「规则变了」，章名管「站点侧目录变了」。刻意**不含章节 url**（带时效 token 的站点每次刷目录都换 url）。
-_唯一实现_: `services/cache-epoch.ts` 的 `contentSlot`
+_唯一实现_: `services/cache-epoch.ts` 的 `contentSlot`（消费点 `services/online-reading.ts` 的 `chapterText`）
 _Avoid_: 正文键、章节 id
 
 ### 客户端文案

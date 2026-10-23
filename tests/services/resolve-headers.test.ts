@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveHeaders } from '../../src/services/bridge.js'
+import { resolveHeaders } from '../../src/services/source-eval.js'
 import { headerOf, effectiveUserAgent } from '../../src/services/fetcher.js'
 import type { Fetcher } from '../../src/services/fetcher.js'
 import { normalizeSource, rawHeaderRule } from '../../src/services/normalize.js'

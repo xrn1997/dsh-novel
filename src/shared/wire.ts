@@ -376,6 +376,10 @@ export type ReadingTarget =
   | { kind: 'chapter'; index: number; anchorId: string | null }
   | { kind: 'supplement'; documentId: string; anchorId: string | null }
 
+/** 补充文档目标（supplement 分支）：注释面板与阅读场景共用的窄类型。
+ *  主序列目标在类型上就进不来——面板只认补充文档。 */
+export type SupplementTarget = Extract<ReadingTarget, { kind: 'supplement' }>
+
 /** 图文节点：六类，带稳定节点 ID 的是白名单元素、图片、链接、换行与分隔线。
  *  **不携带任意属性字典**——只按种类保留明确字段：`start` 只对 ol 生效、`value` 只对 li、
  *  `rowSpan`/`colSpan` 只对单元格，其余位置恒 `null`（null = 无该属性，不输出 DOM 属性）。

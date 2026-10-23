@@ -27,7 +27,7 @@ export function safeKey(bookKey: string): string {
  * prune 开头读一次快照，两处比较共用它——读到一半换值会让「判超」与「删到够」用两个上限。
  *
  * 本模块回答「放在哪」与 toc 编解码，不回答「何时有效」：`epoch` / `slot` 是调用方给的不透明串
- * （算式在 `cache-epoch.ts`，裁决在 `reading.ts`）。旧代际文件不删——此后不再被写，
+ * （算式在 `cache-epoch.ts`，裁决在 `online-reading.ts`）。旧代际文件不删——此后不再被写，
  * mtime 只可能更早，因此排在**新写入**之前；但 prune 是 mtime 近似、`read()` 不刷新 mtime，
  * 长期只读的热条目同样不会被读操作续命，可能先于旧代际被淘汰（如实记，不假装挤不掉热数据）。
  *
@@ -62,7 +62,7 @@ export class PageCache {
     await this.prune()
   }
 
-  /** 文件名形状单点：代际 / 槽位是**不透明串**，本模块不解释它（有效性归 cache-epoch + reading） */
+  /** 文件名形状单点：代际 / 槽位是**不透明串**，本模块不解释它（有效性归 cache-epoch + online-reading） */
   private tocFile(sourceId: string, bookKey: string, epoch: string): string {
     return path.join(this.tocDir, `${sourceId}-${safeKey(bookKey)}-${epoch}.json`)
   }

@@ -14,4 +14,4 @@ Status: accepted
 
 **磁盘侧失败不冒充站点判据**：批量验证里站点判据先记账、状态写回另接一手——`edit` 的落盘失败只进任务读数（issue 的 `warning` 与收尾 `flush` 的失败），不折成「这一家 broken」，也不占 `counts.failed`。把本机故障记进站点判据分母，与把站点结构问题记成引擎失败是同一条罪的两个方向（写失败合同见 `docs/adr/0011`）。
 
-锚点：`src/services/bridge.ts` 的 `metaFieldOf` / `detailFieldsOf` / `detailContextOf` / `resolveHeaders`；`src/services/search-face.ts` 的 `patternOf` / `canInfo`；`src/services/probe.ts` 的 `via` 分岔；`src/services/import-job.ts`（探针判据与状态写回分道）；`src/services/reading.ts` 的 `getTocInner` / `getChapter`；`tests/services/reading.test.ts`、`tests/services/import-job.test.ts`。
+锚点：`src/services/bridge.ts` 的 `metaFieldOf` / `detailFieldsOf` / `detailContextOf`；`src/services/source-eval.ts` 的 `resolveHeaders`；`src/services/search-face.ts` 的 `patternOf` / `canInfo`；`src/services/probe.ts` 的 `via` 分岔；`src/services/import-job.ts`（探针判据与状态写回分道）；`src/services/online-reading.ts` 的 `OnlineReading`；`src/services/reading.ts` 的 `getChapter`；`tests/services/reading.test.ts`、`tests/services/online-reading.test.ts`、`tests/services/import-job.test.ts`。

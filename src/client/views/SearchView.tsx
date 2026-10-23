@@ -8,10 +8,12 @@ import { searchSummarySegments } from '../copy/search-summary.js'
 import { prodJobViewDeps } from '../deps.js'
 import type { JobViewDeps, RowActionDeps } from '../deps.js'
 import { useSearchJob } from '../search-job.js'
-import { addAllReceipt, bookRowKey, bookRows, deriveRound, isSeatLanded, rowKeys, shelfSeats, shortAuthor } from '../search-view-model.js'
-import type { RowRef, RoundView } from '../search-view-model.js'
+import { useSearchLanding } from '../search-landing.js'
+import type { SearchLanding } from '../search-landing.js'
+import { bookRowKey, deriveRound, shortAuthor } from '../search-view-model.js'
+import type { BookView, GroupView, RowRef, RoundView } from '../search-view-model.js'
 import { addShelfSeat } from '../shelf-action.js'
-import type { ShelfAddOutcome, ShelfSeatInput } from '../shelf-action.js'
+import type { ShelfAddOutcome } from '../shelf-action.js'
 import { navigate, routeStore, useStore } from '../store.js'
 import { EmptyState, ProgressBar, SearchIcon, searchPct, StatusBadge } from './bits.js'
 import type { MergedBook, SearchHit } from './types.js'
@@ -68,16 +70,9 @@ export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): 
   const view = useMemo<RoundView | null>(() => (round === null ? null : deriveRound(round)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [round?.id, round?.keyword, round?.groups.length])
-  /** 本轮挂载里已经落过架的架位（口径住 `services/shelf.ts` 的 `Shelf`）。
-   *  为什么住在视图这一层、而不是逐行自己记：① 展开区收起时整块离开 DOM（那是这一行的性能账），
-   *  行自己的 state 会被卸载洗掉；② 「都加架」与「＋ 加书架」是同一件事的两个入口，各记一份就会
-   *  出现批量加完、行上还写着「＋ 加书架」，按钮也就无从知道自己该退休。
-   *  它只是**会话内读数**，不是书架真相：真相在 `Shelf`；本视图不预读它（SearchHit 没带在架标记），
-   *  所以「这一发 PUT 我们发成功过」才是这份账的确切语义，写口幂等兜住其余。 */
-  const [landed, setLanded] = useState<ReadonlySet<string>>(() => new Set())
-  const markLanded = (id: string): void => {
-    setLanded((prev) => (prev.has(id) ? prev : new Set(prev).add(id)))
-  }
+  /** 落架现场（哪些架位落过、哪一本的在途）与两条加架入口的排队住 `search-landing.ts`；
+   *  写口仍是 `addShelfSeat`，视图只把它包成 `addSeat` 注入，并保留回执的措辞与通道。 */
+  const landing = useSearchLanding({ addSeat: (input) => addShelfSeat(input, deps) })
   const summary = view !== null && !running ? view.summary : null
   // 空参与集与「搜了没命中」是两件事：前者 total=0（源全停用/未导入），后者有源但零分组
   const emptyPlan = progress === null && round !== null && round.total === 0
@@ -158,12 +153,12 @@ export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): 
         {/* 按书在前：一本一行。整轮都被判 suspect 时这一档是空的（归并只收 kept），
             空视图不接管说话权——账由下面那一档与收口行报（收口的「并成 0 本」也在报这笔账），
             读起来不是「没有结果」。 */}
-        {view !== null && renderBooks(view, deps, landed, markLanded, t)}
+        {view !== null && renderBooks(view.bookViews, view.merged.total, deps, landing, t)}
         {/* 逐源那一档不删、降级到页尾折叠：各家给了几条、哪一家未响应，仍是排查轴 */}
         {view !== null && view.parts.length !== 0 && (
           <details className="novel-fail" data-novel-per-source>
             <summary>{plural(t, view.parts.length, 'search.perSource.summary.one', 'search.perSource.summary.other', { n: view.parts.length })}</summary>
-            {renderGroups(view, deps, landed, markLanded, t)}
+            {renderGroups(view.groupViews, deps, landing, t)}
           </details>
         )}
       </div>
@@ -171,23 +166,15 @@ export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): 
   )
 }
 
-/** 命中行 → 加架输入：只并进架位身份（源 + 地址），书目字段整条命中照交。
- *  为什么不再逐字段挑：字段集归 `SHELF_META` 单表，`bodies.shelfAdd` 走 `pickShelfMeta` 把表外键
- *  整键丢弃——在这里再列一遍就是字段集的第二份抄本，新字段会「表里有、这个入口里没有」。 */
-function seatInputOf(sourceId: string, hit: SearchHit, url: string): ShelfSeatInput {
-  return { ...hit, sourceId, url }
-}
-
 /** 命中行：行内双动作——主按钮 = 加架并直接阅读；「＋ 加书架」只加架。
  * 结构：容器 .novel-row + 主钮 .novel-row-main + 兄弟动作钮（**不嵌套**）。
  * apiSend 经 deps 透传（行内接线同样可被测试驱动）。
- * 入架态由调用方给（`added` / `onLanded`，账住在 `SearchView` 那一层）：这一行会随展开区收起而
- * 卸载，自己记的账活不过一次折叠；而同一架位可能从「＋ 加书架」进来、也可能从「都加架」进来，
- * 两处各记一份就会互相看不见。
+ * 入架态由调用方给的 `landing` 给（账住在行之上：这一行会随展开区收起而卸载，自己记的账
+ * 活不过一次折叠；同一架位也可能从「都加架」进来，两处各记一份就会互相看不见）。
  * url 守卫：`null` 渲染不可点行（wire 给这一格的就是 `string | null`）；空串 `''` **产不出来**（命中行的 `url` 只出自服务端
  * 搜索链，空输入在那里就已落 `null`），于是「无身份」在浏览器半只有一种形状可认。 */
-function HitRow({ sourceId, hit, deps, added, onLanded }: {
-  sourceId: string; hit: SearchHit; deps: RowActionDeps; added: boolean; onLanded: (id: string) => void
+function HitRow({ sourceId, hit, deps, landing }: {
+  sourceId: string; hit: SearchHit; deps: RowActionDeps; landing: SearchLanding
 }): ReactNode {
   const t = useCopy()
   const sub = `${hit.author ?? ''}${hit.lastChapterName === null || hit.lastChapterName === '' ? '' : ` · ${hit.lastChapterName}`}`
@@ -201,12 +188,12 @@ function HitRow({ sourceId, hit, deps, added, onLanded }: {
     )
   }
   const url = hit.url
-  /** 单行加架：成功记账、失败上报，两种结局都交回调用方（点行阅读要据此照走导航）。
-   *  失败不再静默：这一发是用户明确点出来的写操作，吞掉它等于让「＋ 加书架」看似没反应。 */
+  /** 单行加架：落架记账归 `landing`，失败上报留在行上（这一发的措辞属于视图），两种结局都交回
+   *  调用方（点行阅读要据此照走导航）。失败不静默：这是用户明确点出来的写操作，吞掉它等于让
+   *  「＋ 加书架」看似没反应。 */
   const add = async (): Promise<ShelfAddOutcome> => {
-    const outcome = await addShelfSeat(seatInputOf(sourceId, hit, url), deps)
-    if (outcome.ok) onLanded(url)
-    else deps.pushError(t('search.shelf.addFailed', { detail: describeError(outcome.error, t) }))
+    const outcome = await landing.add({ sourceId, hit })
+    if (!outcome.ok) deps.pushError(t('search.shelf.addFailed', { detail: describeError(outcome.error, t) }))
     return outcome
   }
   /** 点行直接阅读：先加架（进度保存依赖书架条目）再进阅读器。导航是**两种结局**的收尾：
@@ -225,8 +212,8 @@ function HitRow({ sourceId, hit, deps, added, onLanded }: {
       </button>
       {/* 兄弟入口没有后续动作：回执回调自己抛错时这一发只许就地咽掉（add 的失败已上报过），
           不许像旧实现那样裸 `void add()` 漏成无人处理的 rejection。 */}
-      <button className="novel-btn sm" disabled={added} onClick={() => { void add().catch(() => undefined) }}>
-        {added ? t('search.shelf.added') : t('search.shelf.add')}
+      <button className="novel-btn sm" disabled={landing.isLanded(hit)} onClick={() => { void add().catch(() => undefined) }}>
+        {landing.isLanded(hit) ? t('search.shelf.added') : t('search.shelf.add')}
       </button>
     </div>
   )
@@ -238,19 +225,19 @@ function HitRow({ sourceId, hit, deps, added, onLanded }: {
  *  折叠区里的行保留全部动作（HitRow 一字不动），判为疑似不夺走「读这本 / ＋架」。
  *  计数两个数都给、单位是**条**不是本（这一档数的是这一家给出的行，律见 CONTEXT 的「作品视图（按书）」）：
  *  只报相关数会让人以为这一家就给了这么多条。
- *  行的 key 与按书轴展开区读同一个身份算式（`rowKeys`，身份 (源, 地址)，同身份重复才垫位次）：
- *  档序会挪位，纯下标 key 在重排时把一行的本地入架态串到别的书上。
+ *  行与行 key 由轮级派生预计算（`search-view-model.ts` 的 `GroupView`，算式住 `rowKeys`）：档序会挪位，
+ *  纯下标 key 在重排时把一行的本地入架态串到别的书上。
+ *  失败组也留在 `groupViews` 里，由本函数按 `error` 挪进失败折叠——派生不替视图决定摆哪一档；
  *  失败源折叠的呈现口径（点名 code / message / statusDetail）原样保留，仅容器换简约版类。 */
-function renderGroups(view: RoundView, deps: RowActionDeps, landed: ReadonlySet<string>, onLanded: (id: string) => void, t: Translate): ReactNode {
-  const hits = view.parts.filter((p) => p.group.error === undefined)
-  const failed = view.parts.filter((p) => p.group.error !== undefined)
+function renderGroups(groupViews: GroupView[], deps: RowActionDeps, landing: SearchLanding, t: Translate): ReactNode {
+  const hits = groupViews.filter((gv) => gv.partition.group.error === undefined)
+  const failed = groupViews.filter((gv) => gv.partition.group.error !== undefined)
   if (hits.length === 0 && failed.length === 0) return null
   return (
     <div className="novel-groups">
-      {hits.map(({ group: g, part }) => {
-        const { kept, suspect } = part
-        const keptKeys = rowKeys(kept.map((m) => ({ sourceId: g.sourceId, hit: m.hit })))
-        const suspectKeys = rowKeys(suspect.map((m) => ({ sourceId: g.sourceId, hit: m.hit })))
+      {hits.map((gv) => {
+        const g = gv.partition.group
+        const { kept, suspect } = gv.partition.part
         return (
           <section key={g.sourceId} className="novel-group">
             <header className="novel-group-head">
@@ -264,15 +251,15 @@ function renderGroups(view: RoundView, deps: RowActionDeps, landed: ReadonlySet<
               </span>
             </header>
             <div className="novel-list">
-              {kept.map((m, i) => <HitRow key={keptKeys[i]} sourceId={g.sourceId} hit={m.hit} deps={deps}
-                added={isSeatLanded(landed, m.hit)} onLanded={onLanded} />)}
+              {gv.keptRows.map((r, i) => <HitRow key={gv.keptKeys[i]} sourceId={r.sourceId} hit={r.hit} deps={deps}
+                landing={landing} />)}
             </div>
             {suspect.length === 0 ? null : (
               <details className="novel-fail">
                 <summary>{plural(t, suspect.length, 'search.group.suspect.one', 'search.group.suspect.other', { n: suspect.length })}</summary>
                 <div className="novel-list novel-fail-list">
-                  {suspect.map((m, i) => <HitRow key={suspectKeys[i]} sourceId={g.sourceId} hit={m.hit} deps={deps}
-                    added={isSeatLanded(landed, m.hit)} onLanded={onLanded} />)}
+                  {gv.suspectRows.map((r, i) => <HitRow key={gv.suspectKeys[i]} sourceId={r.sourceId} hit={r.hit} deps={deps}
+                    landing={landing} />)}
                 </div>
               </details>
             )}
@@ -283,16 +270,19 @@ function renderGroups(view: RoundView, deps: RowActionDeps, landed: ReadonlySet<
         <details className="novel-fail">
           <summary>{plural(t, failed.length, 'search.group.failed.one', 'search.group.failed.other', { n: failed.length })}</summary>
           <div className="novel-group novel-fail-list">
-            {failed.map(({ group: g }) => (
-              <div key={g.sourceId}>
-                <span>{g.sourceName}</span>
-                <span className="novel-err"> · {g.error?.code}</span>
-                <div className="novel-note-sm">
-                  {g.error?.message}
-                  {g.statusDetail === undefined ? null : t('search.statusDetail', { detail: g.statusDetail })}
+            {failed.map((gv) => {
+              const g = gv.partition.group
+              return (
+                <div key={g.sourceId}>
+                  <span>{g.sourceName}</span>
+                  <span className="novel-err"> · {g.error?.code}</span>
+                  <div className="novel-note-sm">
+                    {g.error?.message}
+                    {g.statusDetail === undefined ? null : t('search.statusDetail', { detail: g.statusDetail })}
+                  </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </details>
       )}
@@ -301,23 +291,22 @@ function renderGroups(view: RoundView, deps: RowActionDeps, landed: ReadonlySet<
 }
 
 /** 按书默认视图：一本一行；逐源那一档不删、降级到页尾折叠（见 `renderGroups`）。
- *  现场是页面顶层 memo 化的那一份（`RoundView`）——这一档不在渲染路径里重算自己那趟，
- *  SSE 帧与击键才不会各付一遍整轮归并。
+ *  现场是页面顶层 memo 化的那一份（`RoundView.bookViews`）：逐源行、行 key 与架位全集都已随轮级派生
+ *  算齐——这一档不在渲染路径里重算自己那趟，SSE 帧与击键才不会各付一遍整轮归并。
  *  空视图**不接管说话权**：整轮都被判 suspect 时归并给出 0 本，这里就一物不摆——
  *  「这一轮到底有没有结果」由空态分支按分组判，账目由按源那一档与收口行报（含收口的「并成 0 本」），
  *  把「判掉了」写成「没有结果」就是空结果冒充失败（本仓定的最高罪）。
  *  两条轴的数天生不等，且不许掰平：这一档数的是**本**（归并后的书目），按源那一档与收口行数的是
  *  **条**（逐源命中，一行一条）——差额正是每一行那个「N 家源」吃进去的东西。
- *  超限那一行报出全量本数：只列前 SEARCH_BOOKS_CAP 而不说本轮共几本，
+ *  超限那一行报出全量本数（`total`）：只列前 SEARCH_BOOKS_CAP 而不说本轮共几本，
  *  就是把「还有更多」读成「到此为止」。 */
-function renderBooks(view: RoundView, deps: RowActionDeps, landed: ReadonlySet<string>, onLanded: (id: string) => void, t: Translate): ReactNode {
-  const { merged } = view
-  if (merged.total === 0) return null
+function renderBooks(bookViews: BookView[], total: number, deps: RowActionDeps, landing: SearchLanding, t: Translate): ReactNode {
+  if (bookViews.length === 0) return null
   return (
     <div className="novel-groups" data-novel-books>
-      {merged.books.map((b) => <BookRow key={bookRowKey(b)} book={b} rows={bookRows(b, view.meta)} deps={deps} landed={landed} onLanded={onLanded} />)}
-      {merged.total > merged.books.length ? (
-        <div className="novel-note-sm">{plural(t, merged.total, 'search.books.capped.one', 'search.books.capped.other', { n: merged.total, cap: SEARCH_BOOKS_CAP })}</div>
+      {bookViews.map((bv) => <BookRow key={bookRowKey(bv.book)} book={bv.book} rows={bv.rows} keys={bv.keys} seats={bv.seats} deps={deps} landing={landing} />)}
+      {total > bookViews.length ? (
+        <div className="novel-note-sm">{plural(t, total, 'search.books.capped.one', 'search.books.capped.other', { n: total, cap: SEARCH_BOOKS_CAP })}</div>
       ) : null}
     </div>
   )
@@ -335,32 +324,24 @@ function renderBooks(view: RoundView, deps: RowActionDeps, landed: ReadonlySet<s
  *  无障碍名走内容拼接（不写 aria-label）：行上可见的就是「书名 + 作者 · N 家源 + 展开 N 条」，
  *  再抄一份进 aria-label 就是给同一批读数第二个主人——改了可见字忘了改名字即分叉。
  *  尾巴的字随状态翻（展开↔收起），可见标签因此恒含在名字里；箭头是同一状态的第二个读数。 */
-function BookRow({ book, rows, deps, landed, onLanded }: {
-  book: MergedBook; rows: RowRef[]; deps: RowActionDeps
-  landed: ReadonlySet<string>; onLanded: (id: string) => void
+function BookRow({ book, rows, keys, seats, deps, landing }: {
+  book: MergedBook; rows: RowRef[]; keys: string[]; seats: Set<string>; deps: RowActionDeps
+  landing: SearchLanding
 }): ReactNode {
   const t = useCopy()
-  const [adding, setAdding] = useState(false)
   const [open, setOpen] = useState(false)
-  const keys = rowKeys(rows)
   // 这一本的架位全集与「全落过了」的读数：钮的三态由后者决定，不另立一份 state
-  const seats = shelfSeats(rows)
-  const allLanded = seats.size > 0 && [...seats].every((id) => landed.has(id))
-  /** 都加架逐条走既有 PUT：书架写口本就幂等，为这个动作开一条批量路由等于给「加架」第二个主人。
-   *  只发**有地址**且**这一轮还没落过架**的那些行：无 url 的命中在行上本就不给动作（进不了架也
+  // （架位全集由轮级派生给，`BookView.seats`；在途读数逐本记在 `landing.adding`）
+  const allLanded = seats.size > 0 && [...seats].every((id) => landing.landed.has(id))
+  const adding = landing.adding.has(bookRowKey(book))
+  /** 只发**有地址**且**这一轮还没落过架**的行：无 url 的命中在行上本就不给动作（进不了架也
    *  进不了阅读器），替它发一发空架位 PUT 就是写进一条没有书面的架位，还要报「已加」；已落过的
-   *  那条（多半是用户先单加过一条）再发一遍，就是把同一件事写成两次。
-   *  三笔回执账（新落架 / 仍缺 / 无地址）的算式住 `search-view-model.addAllReceipt`；
+   *  那条（多半是用户先单加过一条）再发一遍，就是把同一件事写成两次。选行、排队与在途读数住
+   *  `search-landing`，三笔回执账（新落架 / 仍缺 / 无地址）的算式住 `search-view-model.addAllReceipt`；
    *  这里只接线与选通道：加成的报成功，没加成的报失败，没发出去的单独点名（没试过不是失败）。 */
   const addAll = (): void => {
     void (async () => {
-      const addable = rows.filter((r): r is RowRef & { hit: SearchHit & { url: string } } => r.hit.url !== null)
-      const todo = addable.filter((r) => !isSeatLanded(landed, r.hit))
-      setAdding(true)
-      const outcomes = await Promise.all(todo.map((r) => addShelfSeat(seatInputOf(r.sourceId, r.hit, r.hit.url), deps)))
-      setAdding(false)
-      const receipt = addAllReceipt({ rows, landed, todo, outcomes })
-      receipt.newly.forEach((id) => { onLanded(id) })
+      const receipt = await landing.addAll(bookRowKey(book), rows)
       // 零加成不许走成功通道：整行没有地址与全部 PUT 失败读出来都是 0，「已加 0 个架位：X」等于给
       // 一次没发生的写入报喜。没加成的交代由下面两条错误回执各说各的。
       if (receipt.newly.length > 0) {
@@ -409,7 +390,7 @@ function BookRow({ book, rows, deps, landed, onLanded }: {
       {open ? (
         <div className="novel-list">
           {rows.map((r, i) => <HitRow key={keys[i]} sourceId={r.sourceId} hit={r.hit} deps={deps}
-            added={isSeatLanded(landed, r.hit)} onLanded={onLanded} />)}
+            landing={landing} />)}
         </div>
       ) : null}
     </div>

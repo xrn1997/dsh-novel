@@ -17,7 +17,7 @@ import type { NormalizedRules } from './types.js'
  *
  * `Record<keyof NormalizedRules, …>` 只保证**每个字段都有一行**（往 NormalizedRules 加字段
  * 而没在此归类 → `pnpm typecheck` 红）；但**把字段归错行 tsc 抓不住**。所以给一个字段归类前，
- * 先核对 `getTocInner` / `onlineChapterText` / `followOrSingle` 是否真的消费它（`ruleBookList` 行的
+ * 先核对 `getTocInner` / `chapterText` / `followOrSingle` 是否真的消费它（`ruleBookList` 行的
  * 注释就是这条自查的范例）。
  *
  * 刻意**不含** `NovelSource.auth`：登录态刷新会让指纹变，整源缓存每次登录后全灭。
@@ -42,7 +42,7 @@ export const RULE_EPOCH_IMPACT: Record<keyof NormalizedRules, EpochImpact> = {
   probeKeyword: 'none',
   // 详情页嗅探只改搜索面「这条响应是不是详情页」，目录/正文取值与它无关
   bookUrlPattern: 'none',
-  // 目录面在缺 ruleChapterList 时回退 ruleBookList（reading.getTocInner 的既有口径）
+  // 目录面在缺 ruleChapterList 时回退 ruleBookList（online-reading.getTocInner 的既有口径）
   ruleBookList: 'toc',
   ruleBookName: 'none', ruleAuthor: 'none', ruleBookUrl: 'none',
   ruleCoverUrl: 'none', ruleIntro: 'none', ruleLastChapter: 'none',
@@ -86,7 +86,7 @@ type RuleValue = NormalizedRules[keyof NormalizedRules]
 /** 值稳定化：header 是对象、ruleExploreKinds 是分类入口数组，都按排序键拼（同一份值的不同键序
  *  必须同指纹）。数组逐元素编码——发现面这批字段的影响面全是 `none`，今天到不了这里；这条分支
  *  是为了「将来谁把它们归进某个面」时指纹依然稳定，而不是让上面那道 tsc 闸被 cast 掉。
- *  null 与 '' 必须分开：空串规则与缺规则在求值层行为不同（见 reading.getTocInner 的规则缺失判据）。
+ *  null 与 '' 必须分开：空串规则与缺规则在求值层行为不同（见 online-reading.getTocInner 的规则缺失判据）。
  *  存量兼容：老 sources.json 的 rules 可能缺新增字段的键（undefined）——按缺省（≡null）入指纹，
  *  与显式 null 同代际；SourceRegistry.load 的存量归一会补键落盘收敛，此处是读旧数据的运行时防线。 */
 function stable(v: RuleValue | undefined): string {
@@ -132,7 +132,7 @@ const EXPLORE_FALLBACK_FIELDS = [
   'ruleIntro', 'ruleLastChapter', 'ruleKind', 'ruleWordCount',
 ] as const satisfies readonly (keyof NormalizedRules)[]
 
-/** ③ 请求修饰符：`header` 与 `headerRule` 定发出去的请求长什么样（`bridge.ts` 的 `resolveHeaders`），
+/** ③ 请求修饰符：`header` 与 `headerRule` 定发出去的请求长什么样（`source-eval.ts` 的 `resolveHeaders`），
  *  `jsLib` 是 JS 规则的库——三者任一变了，同一个分类地址可以拿回完全不同的页面。 */
 const EXPLORE_REQUEST_FIELDS = [
   'header', 'headerRule', 'jsLib',

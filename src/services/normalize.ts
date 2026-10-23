@@ -1,5 +1,7 @@
 import { appendTail, withImplicitText } from '../engine/grammar.js'
 import { parseExploreKinds, usableKind } from './explore-url.js'
+import { DIALECT_MAP, NATIVE_MAP, NATIVE_TEXT_FIELDS, RULE_FIELD_SPECS, RULE_FIELDS, VACANT_RULE_FIELDS } from './rule-fields.js'
+import type { RuleFieldsOf } from './rule-fields.js'
 import type { NormalizedRules, NovelSource, SourceContentKind } from './types.js'
 
 export interface NormalizeIssue { field: string; message: string }
@@ -17,73 +19,12 @@ export interface NormalizeResult {
   }
 }
 
-const RULE_FIELDS = [
-  'searchUrl', 'exploreUrl', 'probeKeyword', 'bookUrlPattern',
-  'ruleBookList', 'ruleBookName', 'ruleAuthor', 'ruleBookUrl',
-  'ruleCoverUrl', 'ruleIntro', 'ruleLastChapter', 'ruleKind', 'ruleWordCount',
-  'ruleDetailKind', 'ruleDetailWordCount', 'ruleTocUrl', 'ruleChapterName',
-  'ruleChapterUrl', 'ruleContent', 'nextTocUrl', 'nextPageUrl', 'loginUrl',
-  // 发现面（原生 ruleFind 与 legado ruleExplore 的子字段共用这批模型键）：方言没写这些键时读成
-  // null（无害）；`ruleExploreKinds` 是数组，不进这张表（在 normalizeSource 里单独落位）。
-  'ruleExploreUrl', 'ruleExploreList', 'ruleExploreName', 'ruleExploreAuthor',
-  'ruleExploreBookUrl', 'ruleExploreCoverUrl', 'ruleExploreIntro', 'ruleExploreKind',
-  'ruleExploreLastChapter', 'ruleExploreWordCount',
-] as const
-
-/** 对象方言子字段 → 模型字段映射（书源 JSON 的嵌套导出形态）。
- * 搜索上下文（ruleSearch）落搜索面字段；详情上下文（ruleBookInfo）落 ruleDetail*——两上下文
- * 规则不同，混用会把搜索条目规则套到详情页造垃圾标题；详情面只由 `ruleDetail*` 承载，
- * 回落只在 `bridge.detailFieldsFromContext` 一处。 */
-const DIALECT_MAP: Record<string, Record<string, string>> = {
-  ruleSearch: {
-    bookList: 'ruleBookList', name: 'ruleBookName', author: 'ruleAuthor', bookUrl: 'ruleBookUrl',
-    coverUrl: 'ruleCoverUrl', intro: 'ruleIntro', lastChapter: 'ruleLastChapter',
-    kind: 'ruleKind', wordCount: 'ruleWordCount',
-    checkKeyWord: 'probeKeyword',
-  },
-  ruleBookInfo: {
-    init: 'ruleDetailInit',
-    name: 'ruleDetailName', author: 'ruleDetailAuthor', coverUrl: 'ruleDetailCoverUrl',
-    intro: 'ruleDetailIntro', lastChapter: 'ruleDetailLastChapter', tocUrl: 'ruleTocUrl',
-    kind: 'ruleDetailKind', wordCount: 'ruleDetailWordCount',
-  },
-  ruleToc: {
-    chapterList: 'ruleChapterList', chapterName: 'ruleChapterName', chapterUrl: 'ruleChapterUrl',
-    isVip: 'ruleChapterIsVip', isVolume: 'ruleChapterIsVolume', isPay: 'ruleChapterIsPay',
-    updateTime: 'ruleChapterUpdateTime',
-    nextTocUrl: 'nextTocUrl',
-  },
-  ruleContent: {
-    content: 'ruleContent', nextContentUrl: 'nextPageUrl',
-    subContent: 'ruleContentSubContent',
-  },
-}
-
 /** legado `ruleExplore` 的条目子字段 → 发现面模型字段（`bookList` 是整套启用的判据，故不在循环里）。
  *  与原生侧 `nativeExploreFields` 那组 `put` 同名单——两侧落的是同一批模型键。 */
 const RULE_EXPLORE_MAP: Record<string, string> = {
   name: 'ruleExploreName', author: 'ruleExploreAuthor', bookUrl: 'ruleExploreBookUrl',
   coverUrl: 'ruleExploreCoverUrl', intro: 'ruleExploreIntro', kind: 'ruleExploreKind',
   lastChapter: 'ruleExploreLastChapter', wordCount: 'ruleExploreWordCount',
-}
-
-/** Native（android-ebook 原生规则格式）子字段 → 模型字段映射。
- * 与上面的对象方言同构但键名不同：list/name/url 三件套、ruleContent.nextPage/replaceRules[]。 */
-const NATIVE_MAP: Record<string, Record<string, string>> = {
-  ruleSearch: {
-    list: 'ruleBookList', name: 'ruleBookName', author: 'ruleAuthor', bookUrl: 'ruleBookUrl',
-    coverUrl: 'ruleCoverUrl', intro: 'ruleIntro', lastChapter: 'ruleLastChapter',
-    kind: 'ruleKind', wordCount: 'ruleWordCount',
-  },
-  ruleBookInfo: {
-    init: 'ruleDetailInit',
-    name: 'ruleDetailName', author: 'ruleDetailAuthor', coverUrl: 'ruleDetailCoverUrl',
-    intro: 'ruleDetailIntro', lastChapter: 'ruleDetailLastChapter', tocUrl: 'ruleTocUrl',
-    kind: 'ruleDetailKind', wordCount: 'ruleDetailWordCount',
-  },
-  ruleToc: {
-    list: 'ruleChapterList', name: 'ruleChapterName', url: 'ruleChapterUrl', nextPage: 'nextTocUrl',
-  },
 }
 
 /** Native 子字段由映射表之外的专门逻辑处理（不点名 unsupported）：authorPrefix → ##净化尾 */
@@ -135,22 +76,17 @@ export function normalizeSource(raw: unknown): NormalizeResult {
   rules.ruleExploreKinds = Array.isArray(r.ruleExploreKinds)
     ? (r.ruleExploreKinds as Array<{ title: string; url: string }>)
     : []
-  // 这里的 ruleDetail*（Name/Author/CoverUrl/Intro/LastChapter/Init）与 ruleChapterList
-  // 非 RULE_FIELDS 成员（平铺方言无此字段名，上面循环取不到），单独落位；
-  // ruleDetailKind/ruleDetailWordCount 已在 RULE_FIELDS 里，不在此列。
-  rules.ruleDetailName = str(r.ruleDetailName)
-  rules.ruleDetailAuthor = str(r.ruleDetailAuthor)
-  rules.ruleDetailCoverUrl = str(r.ruleDetailCoverUrl)
-  rules.ruleDetailIntro = str(r.ruleDetailIntro)
-  rules.ruleDetailLastChapter = str(r.ruleDetailLastChapter)
-  rules.ruleDetailInit = str(r.ruleDetailInit)
-  rules.ruleChapterList = str(r.ruleChapterList)
-  rules.ruleContentSubContent = str(r.ruleContentSubContent)
+  // 表里的特殊字段不进平铺循环，各留一块落位：
+  // exploreUrl 是发现入口的声明串（解析归 flattenDialect 与 `explore-url.ts`），不是取值规则；
+  // jsLib 是源级脚本库，只存在于平铺 raw；章节 flag 是逐章折布尔的规则，落位与那条下游口径
+  // （`online-reading.isTrueRuleValue`）放在一起读。其余规则字段（含详情面与目录列表）都由
+  // `rule-fields.ts` 的字段表列出、走上面的循环。
+  rules.exploreUrl = str(r.exploreUrl)
+  rules.jsLib = str(r.jsLib)
   rules.ruleChapterIsVip = str(r.ruleChapterIsVip)
   rules.ruleChapterIsVolume = str(r.ruleChapterIsVolume)
   rules.ruleChapterIsPay = str(r.ruleChapterIsPay)
   rules.ruleChapterUpdateTime = str(r.ruleChapterUpdateTime)
-  rules.jsLib = str(r.jsLib)
 
   const groupsRaw = r.bookSourceGroup
   const groups = typeof groupsRaw === 'string'
@@ -245,20 +181,21 @@ function rawRulePattern(raw: unknown): string | null | undefined {
   return typeof v === 'string' && v.trim() !== '' ? v : null
 }
 
-/** 存量重推用的四个模型键（键名直接取自 DIALECT_MAP，不再抄第二份映射）：
- *  平铺方言的 raw 顶层键与模型键同名（`ruleKind` 等），对象/Native 方言住在容器里。 */
-const BOOK_META_KEYS = [
-  { container: 'ruleSearch', nested: 'kind', model: DIALECT_MAP.ruleSearch.kind },
-  { container: 'ruleSearch', nested: 'wordCount', model: DIALECT_MAP.ruleSearch.wordCount },
-  { container: 'ruleBookInfo', nested: 'kind', model: DIALECT_MAP.ruleBookInfo.kind },
-  { container: 'ruleBookInfo', nested: 'wordCount', model: DIALECT_MAP.ruleBookInfo.wordCount },
-] as const
+/** 存量重推用的四个模型键：**模式 `missing` 的字段就是这份名单**（表是唯一登记处），容器与
+ *  子字段名取自同一行的 legado 路径——平铺方言把同一个键写在 raw 顶层（下面回落到 `r[model]`），
+ *  对象/Native 方言住在容器里。 */
+const BOOK_META_KEYS = RULE_FIELD_SPECS.flatMap((s) => (
+  s.rehydrate === 'missing' && s.legadoObject !== undefined && s.legadoKey !== undefined
+    ? [{ container: s.legadoObject, nested: s.legadoKey, model: s.model }]
+    : []
+))
 
 /** raw 的分类 / 字数四项（供 `rehydrateStoredSource` 存量重推，与 `rawHeaderRule` /
  *  `rawRulePattern` 同族）。这两个字段后接进取值链路，存量 rules 没这四个键 → 源里读得出的
  *  分类/字数对老库**永远是 null**（缺这一步时审计到货率为零）。
  *  读口复用导入时的同一套材料：容器走 `ruleContainer`（字符串化容器照解析，不另立规矩）、
- *  键名走 `DIALECT_MAP`、Native 的裸选择器补隐式 `@text`（`withImplicitText`，与 flattenNative 同口径）。
+ *  容器与键名取自规则字段表的 legado 路径（与 `flattenDialect` 同一批行）、Native 的裸选择器补
+ *  隐式 `@text`（`withImplicitText`，与 flattenNative 同口径）。
  *  raw 不是对象 → undefined（调用方别动）。 */
 function rawBookMetaFields(raw: unknown): Record<string, string | null> | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined
@@ -320,6 +257,13 @@ function nativeExploreFields(f: Record<string, unknown>): {
   return { values, kinds, sawChildren }
 }
 
+/** 发现面字符串键 = 表里模式 `vacant` 的字段（`ruleExploreKinds` 是数组，另落）。
+ *  这一族既是存量补推的「可填」名单，也是本函数要读的字段清单——两处不再各列一份。
+ *  名单与 `ExploreField` 那十键双向钉在 `tests/services/rule-fields.test.ts` 的 `vacant` 档：
+ *  表把某行改出这一档，这个返回对象就少一个键（书城整族读空、`tsc` 不响），那条钉子当场红。 */
+type ExploreStringField = Exclude<ExploreField, 'ruleExploreKinds'>
+const EXPLORE_STRING_MODELS: readonly ExploreStringField[] = VACANT_RULE_FIELDS
+
 /** 发现面十一键（供 `rehydrateStoredSource` 存量按 raw 补推，触发点 `SourceRegistry.load`，
  *  与 `rawBookMetaFields` / `rawRulePattern` 同族）。存量 rules 里这一族是空的源，在书城**整个是空的**（kinds 一条不剩、条目规则缺席只能退回
  *  通用搜索规则），这个读口就是把它们从 raw 现推回来。
@@ -336,12 +280,8 @@ export function rawExploreFields(raw: unknown): Pick<NormalizedRules, ExploreFie
     ? flattenNative(raw as Record<string, unknown>, [])
     : flattenDialect(raw as Record<string, unknown>, [])
   ) as Record<string, unknown>
-  const out: Pick<NormalizedRules, ExploreField> = {
-    ruleExploreUrl: null, ruleExploreKinds: [],
-    ruleExploreList: null, ruleExploreName: null, ruleExploreAuthor: null,
-    ruleExploreBookUrl: null, ruleExploreCoverUrl: null, ruleExploreIntro: null,
-    ruleExploreKind: null, ruleExploreLastChapter: null, ruleExploreWordCount: null,
-  }
+  const vacantNulls = Object.fromEntries(EXPLORE_STRING_MODELS.map((model) => [model, null])) as Record<ExploreStringField, string | null>
+  const out: Pick<NormalizedRules, ExploreField> = { ruleExploreKinds: [], ...vacantNulls }
   for (const k of Object.keys(out) as ExploreField[]) {
     const got = view[k]
     if (k === 'ruleExploreKinds') {
@@ -589,23 +529,6 @@ export function isNativeSource(r: unknown): boolean {
     && typeof o.bookSourceName !== 'string'
 }
 
-/** Native 取值字段（终端语义=取元素文本）：裸选择器补隐式 `@text`。
- * 对象方言规则显式写 `@text`/`@textNodes` 终端；Native 方言裸选择器即「取文本」
- * （android-ebook 原生规则格式的常用模式），不补的话引擎链终点剩节点集、服务层按规约抛错。
- * list/attr 字段不在列（ruleBookList/ruleChapterList 要节点集、coverUrl/bookUrl 要属性；
- * 发现面的 ruleExploreList/bookUrl/coverUrl 同理）。 */
-const NATIVE_TEXT_FIELDS = [
-  'ruleBookName', 'ruleAuthor', 'ruleIntro', 'ruleLastChapter', 'ruleKind', 'ruleWordCount',
-  'ruleDetailName', 'ruleDetailAuthor', 'ruleDetailIntro', 'ruleDetailLastChapter',
-  'ruleDetailKind', 'ruleDetailWordCount',
-  'ruleChapterName', 'ruleContent',
-  'ruleExploreName', 'ruleExploreAuthor', 'ruleExploreIntro', 'ruleExploreKind',
-  'ruleExploreLastChapter', 'ruleExploreWordCount',
-] as const
-
-/** 链体每段（`||` 分支）无 `@` → 补 `@text`；`##` 净化尾不动（只处理链体）。
- *  实现归 grammar.withImplicitText（构词与解析同属一处）。 */
-
 /**
  * Native → 合并视图（与 flattenDialect 同构的目标位）：按 android-ebook 原生规则格式语义映射
  * name/url/headers/group、三个规则对象的 list 三件套、ruleContent.nextPage/replaceRules[]；
@@ -723,10 +646,41 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+/** 表里 `always` 档的读口：键集由 `RuleFieldsOf<'always'>` 收口——表加一行而这里没跟，`tsc`
+ *  当场红。逐字段的 why 仍写在每个读口上。 */
+const ALWAYS_READERS: Record<RuleFieldsOf<'always'>, (raw: unknown) => string | null | undefined> = {
+  // ruleDetailInit 按 raw 重推（init 换根映射的存量收敛）：normalize 只在入库时映射 ruleBookInfo.init，
+  // 存量 rules 缺此键 → 详情换根静默不生效、tocUrl 模板 Miss 回退详情页地址 → EmptyToc（真机实证）。
+  // raw 是真相、rules 是派生；定点补这一个字段，不整链重 normalize（那可能拒绝存量源）。
+  // **读路必须是导入侧那一份**（deriveRuleField 直接跑 flattenDialect/flattenNative）：恒覆盖
+  // 配第二份解释会把对的改成错的。
+  ruleDetailInit: (raw) => deriveRuleField(raw, 'ruleDetailInit'),
+  // headerRule 按 raw 重推：旧版 normalize 把 `@js:` header 当坏 JSON 丢弃（rules.header=null、
+  // 原文只活在 raw 里）——不重推则动态头永远不生效。
+  headerRule: rawHeaderRule,
+  // bookUrlPattern 按 raw 重推：详情页嗅探字段是后来才读的，存量 rules 缺键 → 声明了它的源
+  // 搜索时照旧只跑列表规则（补推后命中即按详情页解析）。
+  bookUrlPattern: rawRulePattern,
+}
+
+/** 表里 `conditional` 档的读口：判据自带前置条件，故交整条源。 */
+const CONDITIONAL_READERS: Record<RuleFieldsOf<'conditional'>, (s: NovelSource, mark: () => void) => void> = {
+  // 静态头按 raw 补推（与 headerRule 成对）：单引号形态的头曾被判成坏 JSON 丢弃，只改解析器
+  // 不动存量则受害源的头仍然是空的（现量见矩阵行 `b-header-static`）。
+  // 触发条件刻意收窄到「规则形态为 null 且头表也是 null」：那是旧版判失败的唯一形状，
+  // 不会覆盖任何今天被判为有效的值（合法空对象 `{}` 派生出来是 {}，不是 null）。
+  header: (s, mark) => {
+    if (s.rules.headerRule !== null || s.rules.header !== null) return
+    const wantHeader = rawHeaderFields(s.raw)
+    if (wantHeader !== undefined) { s.rules.header = wantHeader; mark() }
+  },
+}
+
 /**
  * 存量收敛：把已落盘的 `sources.json` 条目按 raw 重新推导到当前模型形状，原地修改并返回是否有改动。
  * 触发点只有 `SourceRegistry.load`；「哪些字段恒覆盖、哪些只填缺席、哪些键必须恒在场、谁必须排在谁
- * 之后」逐条写在实现它的那一格上面（覆盖策略按**生产者数量**分档：单一读口恒覆盖，两条读路只填缺席）。
+ * 之后」逐条写在实现它的那一格上面。覆盖策略的材料面住 `rule-fields.ts` 的字段表：每个字段归哪一档
+ * （按**生产者数量**分档）由那一行的模式列登记，这里只消费，不另列名单。
  * 幂等：收敛过一次后再进来不再产生改动。
  */
 export function rehydrateStoredSource(s: NovelSource): boolean {
@@ -735,9 +689,10 @@ export function rehydrateStoredSource(s: NovelSource): boolean {
   }
   let changed = false
   const mark = (): void => { changed = true }
-  /** 三格同构的「恒覆盖」收敛：raw 在就对齐；raw 不在只把缺席键补成 null（required 形状）。
-   *  逐字段的 why 仍写在每个调用点头上。 */
-  const syncRule = (key: 'ruleDetailInit' | 'headerRule' | 'bookUrlPattern', want: string | null | undefined): void => {
+  /** 「恒覆盖」收敛：raw 在就对齐；raw 不在只把缺席键补成 null（required 形状）。
+   *  入参键类型取自表的 `always` 档，读口由 `ALWAYS_READERS` 以同一键集做 Record——
+   *  表加一行而没补读口，`tsc` 当场红。逐字段的 why 住各读口上。 */
+  const syncRule = (key: RuleFieldsOf<'always'>, want: string | null | undefined): void => {
     if (want !== undefined && s.rules[key] !== want) { s.rules[key] = want; mark() }
     else if (s.rules[key] === undefined) { s.rules[key] = null; mark() }
   }
@@ -753,27 +708,16 @@ export function rehydrateStoredSource(s: NovelSource): boolean {
   const derived = contentTypeOfRaw(s.raw)
   if (derived !== undefined && s.type !== derived) { s.type = derived; mark() }
 
-  // ruleDetailInit 按 raw 重推（init 换根映射的存量收敛）：normalize 只在入库时映射 ruleBookInfo.init，
-  // 存量 rules 缺此键 → 详情换根静默不生效、tocUrl 模板 Miss 回退详情页地址 → EmptyToc（真机实证）。
-  // raw 是真相、rules 是派生；定点补这一个字段，不整链重 normalize（那可能拒绝存量源）。
-  // raw 非对象 → 不动；raw 在场：键恒落成 string | null（NormalizedRules 是 required 形状）。
-  // **读路必须是导入侧那一份**（deriveRuleField 直接跑 flattenDialect/flattenNative）：恒覆盖
-  // 配第二份解释会把对的改成错的，见该函数的注释与下面 kind/wordCount 补推那条的差别说明。
-  syncRule('ruleDetailInit', deriveRuleField(s.raw, 'ruleDetailInit'))
-
-  // headerRule 按 raw 重推（与上面 ruleDetailInit 那条同构）：旧版 normalize 把 `@js:` header
-  // 当坏 JSON 丢弃（rules.header=null、原文只活在 raw 里）——不重推则动态头永远不生效。
-  // raw 非对象 → 不动；raw 在场：键恒落成 string | null。
-  syncRule('headerRule', rawHeaderRule(s.raw))
-
-  // bookUrlPattern 按 raw 重推（与上面 ruleDetailInit / headerRule 两条同构）：详情页嗅探字段是
-  // 后来才读的，存量 rules 缺键 → 声明了它的源搜索时照旧只跑列表规则（补推后命中即按详情页解析）。
-  syncRule('bookUrlPattern', rawRulePattern(s.raw))
+  // 恒覆盖档按表的行逐条走读口：表加一行而 ALWAYS_READERS 没补，`tsc` 当场红。
+  // raw 非对象 → 读口回 undefined（不动）；raw 在场：键恒落成 string | null（required 形状）。
+  for (const spec of RULE_FIELD_SPECS) {
+    if (spec.rehydrate === 'always') syncRule(spec.model, ALWAYS_READERS[spec.model](s.raw))
+  }
 
   // ruleExplore* 十一键按 raw 补推（与上面几条同族的存量收敛）：发现面是后来才接的链路，
   // 存量 rules 里这一族是空的源在书城**整个是空的**（kinds 一条不剩、条目规则缺席只能退回
   // 通用搜索规则）。读口就是导入侧那一次 flatten（rawExploreFields），不另立第二条规则解释。
-  // **这一族连「在场但为空」也算可填**，与下面 kind/wordCount 那族「只填缺席」不同。差别不在宽容，
+  // **这一族（表里的 `vacant` 档）连「在场但为空」也算可填**，与下面 kind/wordCount 那族 `missing` 档「只填缺席」不同。差别不在宽容，
   // 在生产者数量：这一族的派生值只有那份映射一个来源，老库里躺着 null 与空数组不代表
   // 「读过且为空」，只代表那一版还没接 legado——按 raw 重推才是它的当前真相。那两族有两条读路、
   // 优先级本就不同（导入侧平铺优先、重推侧容器优先），覆盖会把对的改成错的。
@@ -797,16 +741,13 @@ export function rehydrateStoredSource(s: NovelSource): boolean {
     s.rules.ruleExploreKinds = []; mark()
   }
 
-  // 静态头按 raw 补推（与 headerRule 成对）：单引号形态的头曾被判成坏 JSON 丢弃，只改解析器
-  // 不动存量则受害源的头仍然是空的（现量见矩阵行 `b-header-static`）。
-  // 触发条件刻意收窄到「规则形态为 null 且头表也是 null」：那是旧版判失败的唯一形状，
-  // 不会覆盖任何今天被判为有效的值（合法空对象 `{}` 派生出来是 {}，不是 null）。
-  if (s.rules.headerRule === null && s.rules.header === null) {
-    const wantHeader = rawHeaderFields(s.raw)
-    if (wantHeader !== undefined) { s.rules.header = wantHeader; mark() }
+  // 条件档同样按表走读口（键集由 RuleFieldsOf<'conditional'> 收口）：表加一行而
+  // CONDITIONAL_READERS 没补，`tsc` 当场红。
+  for (const spec of RULE_FIELD_SPECS) {
+    if (spec.rehydrate === 'conditional') CONDITIONAL_READERS[spec.model](s, mark)
   }
 
-  // kind / wordCount 按 raw 补推（与上面几条同族的存量收敛）：这两个字段后来才接进取值链路，
+  // kind / wordCount 按 raw 补推（表里的 `missing` 档；与上面几条同族的存量收敛）：这两个字段后来才接进取值链路，
   // 老数据的 rules 根本没这四个键 → 不补推则读得出的分类/字数对已入库的源永远是 null。
   // **与上面三条的差别**：只补 `undefined` 的键、不覆盖已有值——新入库的源由 normalize 正确派生
   // （含字符串化容器那条路径），这里再按 raw 读一遍是第二条路，覆盖会把对的改成错的。

@@ -111,7 +111,7 @@ export class ReaderSession {
   private generation = 0
   /** 这本书此刻**在不在书架上**（`'unknown'` = 书架没拉到，不假装知道）。
    *  读数来自 `open` 里那次已有的书架查询：为存档恢复查过一次，再为「要不要问入架」查第二次
-   *  就是给同一个问题立第二个主人。视图据此在离开阅读器时问一次——不在架的书，进度 PUT 会被
+   *  就是给同一个问题立第二个主人。阅读场景据此在离开阅读器时问一次——不在架的书，进度 PUT 会被
    *  服务端判 `NOT_ON_SHELF`，这一屏读到哪儿就此静默消失。 */
   private onShelfNow: 'unknown' | 'on' | 'off' = 'unknown'
   private readonly save: DebouncedSave
@@ -131,7 +131,7 @@ export class ReaderSession {
   }
 
   get state(): ReaderSessionState { return this.store.get() }
-  /** 在架读数（视图据此决定离开时要不要问一句） */
+  /** 在架读数（阅读场景据此决定离开时要不要问一句） */
   get onShelf(): 'unknown' | 'on' | 'off' { return this.onShelfNow }
   subscribe = (cb: () => void): (() => void) => this.store.subscribe(cb)
 
@@ -357,7 +357,7 @@ export class ReaderSession {
    *  - 其余角色先采点压栈（视图据此给「返回原处」入口）。脚注也采点：面板是浮层、主阅读位置
    *    不动，但面板里还能再点到主序列，没有这条采点那次跳转就没有「原处」可回。
    *  返回这条采点（没采到 / backlink / 越界目标 → null）当句柄：关闭面板只消费打开时压的那条
-   *  （见 `closeSupplement`）；落点由视图决定（补充文档开面板、主序列走跳章）。 */
+   *  （见 `closeSupplement`）；落点由阅读场景决定（补充文档开面板、主序列走跳章）。 */
   followLink(sourceId: string, target: ReadingTarget, role: LinkRole): VisibleNode | null {
     if (target.kind === 'chapter' && !this.inRange(target.index)) return null   // 越界目标：不采点、不导航
     let entry: VisibleNode | null = null
@@ -384,10 +384,10 @@ export class ReaderSession {
     this.jumpTo(sourceId, { index: entry.index, anchorId: entry.nodeId, offsetWithinNode: entry.offsetWithinNode })
   }
 
-  /** 关闭补充文档面板：**只消费「开面板时压入的那一条」**——`entry` 就是 `followLink` 交给视图的那个句柄。
+  /** 关闭补充文档面板：**只消费「开面板时压入的那一条」**——`entry` 就是 `followLink` 交给阅读场景的那个句柄。
    *  栈顶已不是它，说明期间用户又跟了别的链接（或自己按过工具栏返回）：那条记的是**别人的原处**，
    *  此时弹栈会把主序列送回用户没点过的地方，还会经 `commit('jump')` 写进存档。
-   *  目录直接打开的补充文档（视图没有句柄）→ 什么都不做，只关面板。 */
+   *  目录直接打开的补充文档（阅读场景没有句柄）→ 什么都不做，只关面板。 */
   closeSupplement(sourceId: string, entry: VisibleNode | null): void {
     if (entry === null) return
     if (this.returnStack[this.returnStack.length - 1] !== entry) return
@@ -444,7 +444,7 @@ export class ReaderSession {
 
   /** 压一条返回项：与栈顶**同一处**的快照不重复压——脚注引用开面板与面板里再点主序列链接
    *  问的是同一个视口位置（视口没动过），压两份只让工具栏多一次「返回原处」（点它回到原地）。
-   *  返回这个位置当前那条（新压的或已压的）：调用方（视图）拿它当「关闭面板要消费哪条」的句柄。 */
+   *  返回这个位置当前那条（新压的或已压的）：调用方（阅读场景）拿它当「关闭面板要消费哪条」的句柄。 */
   private pushReturn(snapshot: VisibleNode): VisibleNode {
     const top = this.returnStack[this.returnStack.length - 1]
     if (top !== undefined && top.index === snapshot.index && top.nodeId === snapshot.nodeId

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { tocUrlOf } from '../../src/services/reading.js'
+import { tocUrlOf } from '../../src/services/online-reading.js'
 import { evaluate } from '../../src/engine/index.js'
 import type { SubRuleEval } from '../../src/services/bridge.js'
 

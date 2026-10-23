@@ -8,7 +8,7 @@ import type { ClientCoreDeps } from '../deps.js'
 import { findNovelNode, centerInScroller } from '../util.js'
 import { ChapterBody } from './ChapterBody.js'
 import { ErrorBanner } from './bits.js'
-import type { ChapterContent, LinkRole, ReadingTarget } from './types.js'
+import type { ChapterContent, LinkRole, ReadingTarget, SupplementTarget } from './types.js'
 
 /**
  * 补充文档面板（脚注 / 附录）：只读 `localDocument`，只认 supplement 目标。
@@ -25,9 +25,6 @@ import type { ChapterContent, LinkRole, ReadingTarget } from './types.js'
  *    卸载后本就静默，这条钉的是「不做任何外部动作」），失败转瞬态层（本仓口径：两个半场都不许静默，
  *    与 ShelfView 的异步导入同款）。
  */
-
-/** 注释面板的入参目标（supplement 分支）：主序列目标在类型上就进不来 */
-export type SupplementTarget = Extract<ReadingTarget, { kind: 'supplement' }>
 
 type NotesState =
   | { phase: 'loading' }

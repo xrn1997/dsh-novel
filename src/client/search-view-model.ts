@@ -22,19 +22,60 @@ import type { ShelfAddOutcome } from './shelf-action.js'
  *  架位不是这个键（口径住 `services/shelf.ts` 的 `Shelf`）。 */
 export interface RowRef { sourceId: string; hit: SearchHit }
 
-/** 一轮结果的现场：轮级分区与计数（`shared/round-summary.ts` 一趟给齐）、归并结果与行元数据索引。
+/** 逐源组在一个轮次里的呈现现场：这一组的分区（组头读数与失败判定都读它）＋ 两档行与它们的 key。
+ *  分档仍是**视图的**事：失败组照样在这里（`partition.group.error` 让视图把它挪进失败折叠），
+ *  派生只把「一组里哪些行、各叫什么 key」一次算齐，不替视图决定摆哪一档。 */
+export interface GroupView {
+  partition: RoundPartition
+  keptRows: RowRef[]
+  keptKeys: string[]
+  suspectRows: RowRef[]
+  suspectKeys: string[]
+}
+
+/** 一本在按书视图里的呈现现场：归并来的书目 ＋ 逐源行、行 key 与架位全集。
+ *  三者都从同一份 `rows` 派生，摊开区的行与「都加架」数的架位不会各算各的。 */
+export interface BookView {
+  book: MergedBook
+  rows: RowRef[]
+  keys: string[]
+  seats: Set<string>
+}
+
+/** 一轮结果的现场：轮级分区与计数（`shared/round-summary.ts` 一趟给齐）、归并结果，
+ *  以及两条呈现轴预计算好的行身份（`groupViews` / `bookViews`）。
  *  全部派生在轮次身份上，只有轮真变才重算。为什么要调用方 memo：SSE 每帧都发新的 round 对象
  *  （累积器只增不减、组按源只 emit 一次），打字也走同一棵重渲——不 memo 就是每帧每击键重付
  *  整轮派生（2026-10-13 实测：520 源 × 40 条的轮约 38 ms）。重算时各付几趟如实记：轮级分区与
- *  计数一趟、归并一趟（吃上面那份分区）、行元数据索引一趟。
+ *  计数一趟、归并一趟（吃上面那份分区）、行元数据索引一趟（只为按书轴回读）、两条呈现轴的行身份
+ *  各一趟。
  *  轮级只分区一次：收口行的「相关 x 条」、组头的「相关 x · 共 y」与归并取行读的是同一份分区，
- *  「两个数对不上」从源头堵死。 */
-export interface RoundView { parts: RoundPartition[]; summary: RoundCounts; merged: MergedRound; meta: Map<string, SearchHit> }
+ *  「两个数对不上」从源头堵死。行 key 与架位也收在这里：它们是同一份行对象的算式，散回渲染路径
+ *  就会在每帧每击键重算，而渲染只该摆已经算好的东西。 */
+export interface RoundView {
+  parts: RoundPartition[]
+  summary: RoundCounts
+  merged: MergedRound
+  groupViews: GroupView[]
+  bookViews: BookView[]
+}
 
-/** 一轮的现场（轮级分区与计数 + 归并 + 逐源回读索引一次算齐）。memo 归调用方：本函数不认识轮次身份。 */
+/** 一轮的现场（轮级分区与计数 + 归并 + 两条呈现轴的行身份一次算齐）。
+ *  memo 归调用方：本函数不认识轮次身份。 */
 export function deriveRound(round: { keyword: string; groups: SearchGroup[] }): RoundView {
   const { parts, counts } = summarizeRound(round.keyword, round.groups)
-  return { parts, summary: counts, merged: mergePartitioned(parts), meta: rowMeta(round.groups) }
+  const merged = mergePartitioned(parts)
+  const meta = rowMeta(round.groups)
+  const groupViews = parts.map((part) => {
+    const keptRows = part.part.kept.map((m) => ({ sourceId: part.group.sourceId, hit: m.hit }))
+    const suspectRows = part.part.suspect.map((m) => ({ sourceId: part.group.sourceId, hit: m.hit }))
+    return { partition: part, keptRows, keptKeys: rowKeys(keptRows), suspectRows, suspectKeys: rowKeys(suspectRows) }
+  })
+  const bookViews = merged.books.map((book) => {
+    const rows = bookRows(book, meta)
+    return { book, rows, keys: rowKeys(rows), seats: shelfSeats(rows) }
+  })
+  return { parts, summary: counts, merged, groupViews, bookViews }
 }
 
 /** 一行的身份：(源, 地址)。建索引那一侧、取用那一侧与逐源行的 React key 都读这一个算式，

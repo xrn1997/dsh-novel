@@ -1,5 +1,5 @@
 import { interpolateUrl } from '../engine/index.js'
-import { itemContextsOf, makeSubEval } from './bridge.js'
+import { itemContextsOf } from './bridge.js'
 import type { ItemContext } from './bridge.js'
 import type { SubRuleEval } from './bridge.js'
 import { classify } from './errors.js'
@@ -8,6 +8,7 @@ import { log } from './log.js'
 import { isNativeSource } from './normalize.js'
 import { absUrlKeepOption, buildSearchRequest, canonUrl } from './request.js'
 import { resolveSearchTemplate } from './search-template.js'
+import { createSourceEval } from './source-eval.js'
 import type { SourceRequest } from './source-request.js'
 import type { ProbeErrorCode } from '../shared/wire.js'
 import type { NovelSource } from './types.js'
@@ -73,8 +74,10 @@ export async function fetchSearchPage(
     ].filter((x): x is string => x !== null)
     return { ok: false, code: 'RuleMissing', message: `搜索规则缺失或形态不支持：缺 ${missing.join('、')}` }
   }
-  const subEval = makeSubEval(request.fetcherFor(source), source,
+  // 一条源一个求值器：列表形态与详情形态共用它，差别只在 info 那一份多带 `book` 绑定。
+  const evalr = createSourceEval(request.fetcherFor(source), source,
     jsTimeoutMs === undefined ? undefined : { jsTimeoutMs })
+  const subEval = evalr.subEval()
   // 模板里的 js 脚本出站也走源级外观：拿基础 fetcher 会让脚本请求绕过限速（见 source-request 的头条裁决）
   const template = await resolveSearchTemplate(source, searchUrl, keyword, 1, request.fetcherFor(source), jsTimeoutMs)
   const vars = { key: keyword, page: 1 }
@@ -91,10 +94,7 @@ export async function fetchSearchPage(
     // 两个 adapter（聚合搜索 / 探针）都拿这一份 subEval 走详情规则，不再各自决定绑什么
     return {
       ok: true, shape: 'info', via, body: text, landedUrl, bookUrl,
-      subEval: makeSubEval(request.fetcherFor(source), source, {
-        vars: {}, book: { bookUrl, origin: source.baseUrl },
-        ...(jsTimeoutMs === undefined ? {} : { jsTimeoutMs }),
-      }),
+      subEval: evalr.subEval({ vars: {}, book: { bookUrl, origin: source.baseUrl } }),
     }
   }
   const sniff = patternOf(bookUrlPattern, source.name)

@@ -6,7 +6,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { queries } from '../../src/shared/wire.js'
 import type { ReaderDeps } from '../../src/client/deps.js'
 import { ReaderNotes } from '../../src/client/views/ReaderNotes.js'
-import type { SupplementTarget } from '../../src/client/views/ReaderNotes.js'
+import type { SupplementTarget } from '../../src/client/views/types.js'
 import type { ChapterContent, ContentNode } from '../../src/client/views/types.js'
 import { makeReaderDeps } from './fake-deps.js'
 import { rect, stubLayout } from './scroll-stub.js'

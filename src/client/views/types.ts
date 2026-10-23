@@ -15,7 +15,7 @@ export type {
   // 书架面
   ShelfProgress, ShelfBook, ShelfEntry,
   // 本地图文面（EPUB 导入）：正文树 / 阅读目标 / 目录树 / 导入回执 / 链接角色
-  ChapterContent, ContentNode, ContentTag, LinkRole, ReadingTarget, NavigationItem, BookNavigation,
+  ChapterContent, ContentNode, ContentTag, LinkRole, ReadingTarget, SupplementTarget, NavigationItem, BookNavigation,
   LocalImportWarning, LocalImportResponse,
   // 信封
   ApiEnvelope, ApiErrorBody,

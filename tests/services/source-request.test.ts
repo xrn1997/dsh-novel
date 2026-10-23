@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { engineContextOf } from '../../src/services/bridge.js'
+import { engineContextOf } from '../../src/services/source-eval.js'
 import { CookieJar } from '../../src/services/cookies.js'
 import { createFetcher } from '../../src/services/fetcher.js'
 import { normalizeSource } from '../../src/services/normalize.js'

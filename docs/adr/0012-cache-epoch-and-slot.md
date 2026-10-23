@@ -13,4 +13,4 @@ Status: accepted
 
 看起来矛盾但已写明不矛盾的一处：正文代际同时收目录面字段（正文的输入是目录的产物）——那里排除的是**站点侧** url 抖动，这里是**规则侧**的 url 变更。
 
-锚点：`src/services/cache-epoch.ts`（`rulesEpoch` / `contentSlot` / `EpochImpact` / `FACES_OF`）；`src/services/cache.ts`；`src/services/reading.ts` 的 `getTocInner` / `getChapter` / `bookMirrorOf`；`CONTEXT.md`「缓存代际」「正文槽位」；`tests/services/cache-epoch.test.ts`。
+锚点：`src/services/cache-epoch.ts`（`rulesEpoch` / `contentSlot` / `EpochImpact` / `FACES_OF`）；`src/services/cache.ts`；`src/services/online-reading.ts` 的 `OnlineReading`；`src/services/reading.ts` 的 `getChapter`；`src/services/source-eval.ts` 的 `bookMirrorOf`；`CONTEXT.md`「缓存代际」「正文槽位」；`tests/services/cache-epoch.test.ts`。

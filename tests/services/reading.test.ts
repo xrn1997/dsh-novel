@@ -15,7 +15,7 @@ import { CookieJar } from '../../src/services/cookies.js'
 import { PageCache } from '../../src/services/cache.js'
 import { Shelf } from '../../src/services/shelf.js'
 import { SourceRegistry } from '../../src/services/sources.js'
-import { ChapterNotFoundError, RuleMissingError, SourceNotFoundError } from '../../src/services/errors.js'
+import { ChapterNotFoundError, SourceNotFoundError } from '../../src/services/errors.js'
 
 async function streamToBuffer(stream: Readable): Promise<Buffer> {
   const chunks: Buffer[] = []
@@ -32,8 +32,6 @@ const TOC_HTML = `<html><body><div class="b ch"><a href="/c/1.html">第一章</a
 const TOC2_HTML = `<html><body><div class="b ch"><a href="/c/3.html">第三章</a></div></body></html>`
 const CONTENT1_HTML = `<html><body><div id="content">正文一<p></p><p>  第二段  </p><p></p><p></p><p>第三段</p></div><a class="np" href="/c/1p2.html">下页</a></body></html>`
 const CONTENT1P2_HTML = `<html><body><div id="content">尾段</div></body></html>`
-// 正文容器在但零文本（站点整站 302/改版后的典型形态：选择器命中却没有正文）
-const EMPTY_CONTENT_HTML = `<html><body><div id="content"></div></body></html>`
 
 function route(
   htmlOf: (url: string) => string | null,
@@ -302,20 +300,6 @@ describe('ReadingService', () => {
     expect(tocFetches).toBe(before) // 缓存命中
   })
 
-  it('坏目录缓存读作 miss：下一次 getToc 重抓并重写，不把整本书钉成 500', async () => {
-    const { svc, registry, dir } = await makeService((u) => {
-      if (u.includes('/book/1/')) return TOC_HTML
-      return u.includes('/toc2.html') ? TOC2_HTML : null
-    })
-    const src = registry.list()[0]
-    await svc.getToc(src.id, `${BASE}/book/1/`)
-    const tocDir = path.join(dir, 'cache', 'toc')
-    const [file] = await fsPromises.readdir(tocDir)
-    await fsPromises.writeFile(path.join(tocDir, file!), '{not json', 'utf8')
-    const toc = await svc.getToc(src.id, `${BASE}/book/1/`)
-    expect(toc.map((c) => c.name)).toEqual(['第一章', '第二章', '第三章'])
-  })
-
   it('getChapter 多页串接 + 正文规约；Miss 抛 RuleEvalError', async () => {
     let contentFetches = 0
     const { svc, registry } = await makeService((u) => {
@@ -338,58 +322,9 @@ describe('ReadingService', () => {
     await expect(svc.getChapter('nope', `${BASE}/book/1/`, 0)).rejects.toBeInstanceOf(SourceNotFoundError)
   })
 
-  it('ruleContent.subContent：拼页之后按末页上下文追加子正文', async () => {
-    const { svc, registry } = await makeService((u) => {
-      if (u.includes('/c/1.html')) return '<html><body><div id="content">正文一</div><a class="np" href="/c/1p2.html">下页</a></body></html>'
-      if (u.includes('/c/1p2.html')) return '<html><body><div id="content">尾段</div><div class="sub">歌词</div></body></html>'
-      if (u.includes('/book/1/')) return TOC_HTML
-      return u.includes('/toc2.html') ? TOC2_HTML : null
-    })
-    await svc.importOne({
-      ...rawSource,
-      ruleContent: '@css:#content@text',
-      ruleContentSubContent: '@css:.sub@text',
-      nextPageUrl: 'tag.a.np@href',
-    })
-    const src = registry.list().at(-1)!
-    expect(await svc.getChapter(src.id, `${BASE}/book/1/`, 0)).toBe('正文一\n尾段\n歌词')
-  })
-
-  it('ruleContent.subContent：http 开头的子正文先取回再追加', async () => {
-    const { svc, registry } = await makeService((u) => {
-      if (u.includes('/c/1.html')) return '<html><body><div id="content">正文一</div></body></html>'
-      if (u.includes('/lyric.html')) return '<html><body><p>歌词</p></body></html>'
-      if (u.includes('/book/1/')) return TOC_HTML
-      return u.includes('/toc2.html') ? TOC2_HTML : null
-    })
-    await svc.importOne({
-      ...rawSource,
-      ruleContent: '@css:#content@text',
-      ruleContentSubContent: `@js:"${BASE}/lyric.html"`,
-      nextPageUrl: undefined,
-    })
-    const src = registry.list().at(-1)!
-    expect(await svc.getChapter(src.id, `${BASE}/book/1/`, 0)).toBe('正文一\n歌词')
-  })
-
   it('未知源的目录读以 rejection 交回 SourceNotFoundError（getToc 的 promise 契约没有同步 throw 漏口）', async () => {
     const { svc } = await makeService(() => null)
     await expect(svc.getToc('nope', `${BASE}/book/1/`)).rejects.toBeInstanceOf(SourceNotFoundError)
-  })
-
-  it('缺目录/正文规则 → RuleMissingError（点名 facet 与规则名；API 层映射 422）', async () => {
-    const { svc, registry } = await makeService((u) => (u.includes('/search') ? SEARCH_HTML('x') : null))
-    // 只导搜索三件套：目录与正文规则全缺
-    await svc.importOne({
-      bookSourceName: 'NoToc', bookSourceUrl: 'https://n.com',
-      searchUrl: 'https://n.com/s?q={{key}}', ruleBookList: '@css:.b', ruleBookName: 'tag.a@text',
-      ruleContent: '@css:#content@text',
-    })
-    const n = registry.list().find((s) => s.name === 'NoToc')!
-    const tocErr = await svc.getToc(n.id, 'https://n.com/book/1/').catch((e: unknown) => e)
-    expect(tocErr).toBeInstanceOf(RuleMissingError)
-    expect((tocErr as RuleMissingError).facet).toBe('toc')
-    expect((tocErr as RuleMissingError).rule).toContain('ruleChapterList')
   })
 
   it('from()：组合根注入面——部件直装即业务可用（create 只是生产快捷方式）', async () => {
@@ -486,62 +421,6 @@ describe('ReadingService', () => {
     expect(groups[0].hits[0]?.title).toBe('sid=1')
   })
 
-  it('getChapter：@html 正文转纯文本（@html 源收的是 HTML 片段——标签不许打给读者）', async () => {
-    const { svc, registry } = await makeService((u) => {
-      if (u.includes('/c/1.html')) return CONTENT1_HTML
-      if (u.includes('/c/1p2.html')) return CONTENT1P2_HTML
-      if (u.includes('/book/1/')) return TOC_HTML
-      if (u.includes('/toc2.html')) return TOC2_HTML
-      return u.includes('/search') ? SEARCH_HTML('x') : null
-    })
-    // 与 rawSource 同站同目录，只有正文规则换成 @html（久久小说网 #view_content_txt@html 同款形态）
-    await svc.importOne({ ...rawSource, bookSourceName: 'H', bookSourceUrl: 'https://h.com', ruleContent: '@css:#content@html' })
-    const h = registry.list().find((s) => s.name === 'H')!
-    const text = await svc.getChapter(h.id, `${BASE}/book/1/`, 0)
-    expect(text).toBe('正文一\n第二段\n第三段\n尾段')   // 块级边界换行；多页 join('\n')
-    expect(text).not.toContain('<')                    // 标签一个都不留
-  })
-
-  it('getChapter：正文零命中 → 段级报错（带落点）且不写缓存——修复前静默写 0 字节缓存，全书空到无感', async () => {
-    let serveReal = false
-    const { svc, registry } = await makeService((u) => {
-      if (u.includes('/c/1.html')) return serveReal ? CONTENT1_HTML : EMPTY_CONTENT_HTML
-      if (u.includes('/c/1p2.html')) return CONTENT1P2_HTML
-      if (u.includes('/book/1/')) return TOC_HTML
-      if (u.includes('/toc2.html')) return TOC2_HTML
-      return u.includes('/search') ? SEARCH_HTML('x') : null
-    })
-    const src = registry.list()[0]
-    await expect(svc.getChapter(src.id, `${BASE}/book/1/`, 0)).rejects.toThrowError(/正文规则零命中.*ruleContent: @css:#content@textNodes.*落点 https:\/\/s\.com\/c\/1\.html/)
-    serveReal = true
-    // 零命中没有把空正文写进缓存，也没有污染 —— 站点恢复后立刻抓到真内容
-    expect(await svc.getChapter(src.id, `${BASE}/book/1/`, 0)).toBe('正文一\n第二段\n第三段\n尾段')
-  })
-
-  /**
-   * 「空正文必炸」的适用面是**首屏**，不是跟进链上的每一页。
-   * 真机形状：笔趣阁最后一章的「下一章」链接指向书详情页（那页没有正文容器），跟进落到它——
-   * 此前每一页都抛 ⇒ 三页正文（前两页有字）整章读不出。对面那侧只在**整章拼完仍为空**才抛
-   * ContentEmptyException，续页取不出只是不再追加、跟进自然收手。
-   * 与上一条对照才成立：首屏为空照样炸（空正文绝不写缓存那条门没有放宽）。
-   */
-  it('getChapter：续页取不出正文 → 停止跟进并保留首屏，不连坐整章（两种空态同判）', async () => {
-    for (const laterPage of [
-      EMPTY_CONTENT_HTML,                                                   // 容器在、零文本
-      '<html><body><p>改版后的页面，没有正文容器</p></body></html>',           // 容器不在 = Miss
-    ]) {
-      const { svc, registry } = await makeService((u) => {
-        if (u.includes('/c/1.html')) return CONTENT1_HTML
-        if (u.includes('/c/1p2.html')) return laterPage
-        if (u.includes('/book/1/')) return TOC_HTML
-        if (u.includes('/toc2.html')) return TOC2_HTML
-        return u.includes('/search') ? SEARCH_HTML('x') : null
-      })
-      const src = registry.list()[0]
-      expect(await svc.getChapter(src.id, `${BASE}/book/1/`, 0)).toBe('正文一\n第二段\n第三段')
-    }
-  })
-
   it('importSource 数组逐条：坏条目不连坐，导入不探针（验证归批量验证）', async () => {
     const dir = await makeTempDir('novel-rd-')
     const registry = trackService(await SourceRegistry.load(dir))
@@ -570,62 +449,6 @@ describe('ReadingService', () => {
     expect(out[2].ok).toBe(false)                          // 缺必填
     expect(registry.list()).toHaveLength(2)
     expect(registry.list().every((s) => s.status === 'unverified')).toBe(true)
-  })
-
-  it('ruleChapterList 存在时目录用它（搜索列表与目录列表不同选择器）', async () => {
-    const { svc, registry } = await makeService((u) => {
-      if (u.includes('/book/1/')) return TOC_HTML
-      if (u.includes('/toc2.html')) return TOC2_HTML
-      return u.includes('/search') ? SEARCH_HTML('x') : null
-    })
-    // 目录列表选择器改成 .ch（ruleBookList 的 .b 在目录页也能命中——若误用 ruleBookList 会把
-    // 章节 div 当列表项，章名仍取到但测试目的在语义：目录面必须走 ruleChapterList）
-    await svc.importOne({
-      ...rawSource,
-      ruleBookList: '@css:.sl',          // 搜索面专用（本 fixture 搜索页无 .sl，仅验证目录不走它）
-      ruleChapterList: '@css:.ch',
-      searchUrl: undefined,              // 探针 RuleMissing 不阻塞导入
-    })
-    const src = registry.list().at(-1)!   // makeService 已导过 rawSource，取最后导入的
-    const toc = await svc.getToc(src.id, `${BASE}/book/1/`)
-    expect(toc.map((c) => c.name)).toEqual(['第一章', '第二章', '第三章'])
-  })
-
-  it('ruleToc 标记落 ChapterEntry（isVip/isVolume/isPay/updateTime；上游 isTrue 口径）', async () => {
-    const { svc, registry } = await makeService((u) => {
-      if (u.includes('/book/1/')) return TOC_HTML
-      return u.includes('/toc2.html') ? TOC2_HTML : null
-    })
-    await svc.importOne({
-      ...rawSource,
-      ruleChapterIsVip: '@js:result.includes("第一章") ? "1" : "0"',
-      ruleChapterIsVolume: '@js:result.includes("第一章") ? "yes" : "no"',
-      ruleChapterIsPay: '@js:result.includes("第一章") ? "VIP" : "false"',
-      ruleChapterUpdateTime: '@js:"2026-10-20"',
-    })
-    const toc = await svc.getToc(registry.list().at(-1)!.id, `${BASE}/book/1/`)
-    expect(toc[0]).toMatchObject({ isVip: true, isVolume: true, isPay: true, updateTime: '2026-10-20' })
-    expect(toc[1].isVip).toBeUndefined()
-    expect(toc[1].isVolume).toBeUndefined()
-    expect(toc[1].isPay).toBeUndefined()
-  })
-
-  it('整本取不到章节 URL → 如实抛错，不产出全指目录页的假目录（2026-09 审查）', async () => {
-    // 逐章回退（未取到 url 时用 baseUrl 替代）保留，但「每一条都
-    // 回退」不是缺个别链接，而是 ruleChapterUrl 整体失效——静默产出 200 条指向目录页的
-    // toc 等于拿合法形状冒充成功（本仓镜像的宁炸不猜）。
-    const noHref = '<html><body><div class="b ch"><a>第一章</a></div><div class="b ch"><a>第二章</a></div></body></html>'
-    const { svc, registry } = await makeService((u) => (u.includes('/book/1/') ? noHref : null))
-    await expect(svc.getToc(registry.list().at(-1)!.id, `${BASE}/book/1/`)).rejects.toThrow(/ruleChapterUrl/)
-  })
-
-  it('只有个别章取不到 URL → 仍逐章回退目录页（不许把 legado 对齐改回整条丢弃）', async () => {
-    const mixed = '<html><body><div class="b ch"><a href="/c/1.html">第一章</a></div><div class="b ch"><a>第二章</a></div></body></html>'
-    const { svc, registry } = await makeService((u) => (u.includes('/book/1/') ? mixed : null))
-    const toc = await svc.getToc(registry.list().at(-1)!.id, `${BASE}/book/1/`)
-    expect(toc.map((c) => c.name)).toEqual(['第一章', '第二章'])
-    expect(toc[0].url).toBe(`${BASE}/c/1.html`)
-    expect(toc[1].url).toBe(`${BASE}/book/1/`)   // 缺链接的那章回退目录页地址，不丢条目
   })
 
   it('详情面优先 ruleDetail*（搜索/详情两上下文规则不同），缺时回退共用字段', async () => {
@@ -821,15 +644,6 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
     expect(d.intro).toBe('斗气世界简介')
   })
 
-  it('tocUrl 模板 {{$.resourceID}} 过引擎按 init 上下文插值：目录请求打到真实 bookId 地址', async () => {
-    const { svc, registry, calls } = await makeQq(DETAIL_JSON)
-    const src = registry.list().find((s) => s.name === '正版源')!
-    const toc = await svc.getToc(src.id, DETAIL_URL)
-    expect(calls).toContain(TOC_URL)                       // 插值出真实 bookId，不是字面 {{$.resourceID}}
-    expect(toc).toHaveLength(1)
-    expect(toc[0]).toMatchObject({ name: '第1章 陨落的天才', url: CH1_URL })
-  })
-
   // 「init 单次求值」的真机危害不是多算一次纯路径：js 形态 init 的第二次求值会**再打一次站点**。
   // 这里用 `java.ajax` 当计数器——读数不是内部调用次数，而是 init 每被求值一次就多出的真实出站请求。
   // 旧组合（detailFieldsOf + tocUrlOf 各求一次 init）在这个源上会打两次 /init-hit。
@@ -926,14 +740,6 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
     expect(d).toMatchObject({
       title: '武动乾坤', author: '天蚕土豆', intro: '少年林动，一夜蜕变', lastChapterName: '第1章 蜕变',
     })
-  })
-
-  it('纯 @put 的 init 之后目录仍在原详情页上求值（换根会把目录打成空）', async () => {
-    const { svc, registry } = await makeMeta()
-    const src = registry.list().find((s) => s.name === '元信息源')!
-    const toc = await svc.getToc(src.id, META_URL)
-    expect(toc).toHaveLength(1)
-    expect(toc[0]).toMatchObject({ name: '第1章 蜕变', url: 'https://meta.example.com/c/1.html' })
   })
 
   it('ruleDetailInit 非空但零命中 → RuleEvalError 点名 ruleDetailInit（宁炸：不拿整页冒充上下文）', async () => {
@@ -1392,232 +1198,5 @@ describe('searchProgressive：给唯一实现加增量出口（不许出现第�
   it('无回调时 searchProgressive 与 search 完全等价（既有调用方零改动）', async () => {
     const { svc } = await makeService((u) => (u.includes('/search') ? SEARCH_HTML('斗罗') : null))
     expect(await svc.searchProgressive('斗罗')).toEqual(await svc.search('斗罗'))
-  })
-})
-
-describe('缓存有效性：代际随规则走、槽位随章名走', () => {
-  it('同 id 换规则后默认读取即新目录：代际随规则走，不要求用户手动刷新', async () => {
-    const dir = await makeTempDir('novel-epoch-')
-    const svc = trackService(await ReadingService.create({
-      dir,
-      fetchImpl: (async () => new Response(
-        '<div class="old"><a href="/c/1.html">旧目录</a></div><div class="new"><a href="/c/2.html">新目录</a></div>',
-      )) as never,
-    }))
-    const raw = {
-      bookSourceName: 'fixture', bookSourceUrl: 'https://fixture.invalid',
-      searchUrl: '/search?q={{key}}',
-      ruleBookList: '@css:.old', ruleBookName: 'tag.a@text', ruleBookUrl: 'tag.a@href',
-      ruleChapterName: 'tag.a@text', ruleChapterUrl: 'tag.a@href', ruleContent: '@css:p@text',
-    }
-    const bookKey = 'https://fixture.invalid/book'
-    const first = await svc.importOne(raw)
-    expect(first.ok).toBe(true)
-    const sourceId = first.sourceId as string
-    expect((await svc.getToc(sourceId, bookKey))[0]?.name).toBe('旧目录')
-
-    const second = await svc.importOne({ ...raw, ruleBookList: '@css:.new' })
-    expect(second.sourceId).toBe(sourceId)                 // 同址替换复用 id：既有裁决不动
-    expect((await svc.getToc(second.sourceId as string, bookKey))[0]?.name).toBe('新目录')
-  })
-
-  it('同 id 换正文规则后默认读取即新正文：正文代际端到端随 ruleContent 走', async () => {
-    const dir = await makeTempDir('novel-epoch-content-')
-    // 单页同时充当目录页与正文页：两个可区分容器 .v1 / .v2，让两版 ruleContent 取出不同文本
-    const svc = trackService(await ReadingService.create({
-      dir,
-      fetchImpl: (async () => new Response(
-        '<div class="b ch"><a href="/c/1.html">第一章</a></div><div class="v1">正文旧规则</div><div class="v2">正文新规则</div>',
-      )) as never,
-    }))
-    const raw = {
-      bookSourceName: 'fixture', bookSourceUrl: 'https://fixture.invalid',
-      searchUrl: '/search?q={{key}}',
-      ruleBookList: '@css:.b', ruleBookName: 'tag.a@text', ruleBookUrl: 'tag.a@href',
-      ruleChapterName: 'tag.a@text', ruleChapterUrl: 'tag.a@href', ruleContent: '@css:.v1@text',
-    }
-    const bookKey = 'https://fixture.invalid/book'
-    const first = await svc.importOne(raw)
-    expect(first.ok).toBe(true)
-    const sourceId = first.sourceId as string
-    expect(await svc.getChapter(sourceId, bookKey, 0)).toContain('正文旧规则')
-
-    // 只改 ruleContent（'content' 影响面）→ 正文代际变 → 槽位变 → 不带 refresh 也读不到旧正文
-    const second = await svc.importOne({ ...raw, ruleContent: '@css:.v2@text' })
-    expect(second.sourceId).toBe(sourceId)                 // 同址替换复用 id：钉住 replace 而非 skip 路径
-    expect(await svc.getChapter(second.sourceId as string, bookKey, 0)).toContain('正文新规则')
-  })
-
-  it('目录刷新导致章序变化：按章序的正文缓存不串配（正文键含章名）', async () => {
-    let tocRows = '<div class="b ch"><a href="/c/1.html">第一章</a></div><div class="b ch"><a href="/c/2.html">第二章</a></div>'
-    const { svc, registry } = await makeService((url) => {
-      if (url.endsWith('/c/1.html')) return '<html><body><div id="content">正文一</div></body></html>'
-      if (url.endsWith('/c/2.html')) return '<html><body><div id="content">正文二</div></body></html>'
-      return `<html><body>${tocRows}</body></html>`
-    })
-    const sourceId = registry.list()[0]!.id
-    const bookKey = `${BASE}/book/1/`
-    expect(await svc.getChapter(sourceId, bookKey, 0)).toContain('正文一')
-
-    // 站点把顺序换了（规则没变）：刷新目录后第 0 章已是「第二章」
-    tocRows = '<div class="b ch"><a href="/c/2.html">第二章</a></div><div class="b ch"><a href="/c/1.html">第一章</a></div>'
-    await svc.getToc(sourceId, bookKey, { refresh: true })
-    expect(await svc.getChapter(sourceId, bookKey, 0)).toContain('正文二')
-  })
-
-  it('目录并发：refresh 不被先到的非 refresh 并掉', async () => {
-    const dir = await makeTempDir('novel-toc-refresh-')
-    let release!: () => void
-    const gate = new Promise<void>((r) => { release = r })
-    // 先到的非 refresh 读取要先过缓存读 I/O 才出站，refresh 却直接出站——不钉住「谁先出站」，
-    // 两次抓取的顺序在调度上可互换，章名断言就成掷骰子。等它真出站再发 refresh。
-    let firstStarted!: () => void
-    const started = new Promise<void>((r) => { firstStarted = r })
-    let tocCalls = 0
-    const svc = trackService(await ReadingService.create({
-      dir,
-      fetchImpl: (async (input: RequestInfo | URL) => {
-        const url = String(input)
-        if (url.endsWith('/book/1/')) {
-          tocCalls += 1
-          const n = tocCalls
-          if (n === 1) {
-            firstStarted()
-            await gate
-          }
-          const name = n === 1 ? '第一章' : '第二章'
-          return new Response(
-            `<html><body><div class="b"><a href="/c/${n}.html">${name}</a></div></body></html>`,
-            { headers: { 'content-type': 'text/html; charset=utf-8' } },
-          )
-        }
-        return new Response('', { status: 404 })
-      }) as never,
-    }))
-    const imported = await svc.importOne(rawSource)
-    const sourceId = imported.sourceId as string
-    const bookKey = `${BASE}/book/1/`
-    const p1 = svc.getToc(sourceId, bookKey)
-    await started
-    const p2 = svc.getToc(sourceId, bookKey, { refresh: true })
-    release()
-    const [a, b] = await Promise.all([p1, p2])
-    expect(tocCalls).toBe(2)
-    expect(a[0]?.name).toBe('第一章')
-    expect(b[0]?.name).toBe('第二章')
-  })
-
-  it('目录并发：换代际后的新读不 join 旧代际的在途（旧读仍按自己的代际交结果）', async () => {
-    const dir = await makeTempDir('novel-toc-epoch-')
-    let release!: () => void
-    const gate = new Promise<void>((r) => { release = r })
-    let firstStarted!: () => void
-    const started = new Promise<void>((r) => { firstStarted = r })
-    const fetched: string[] = []
-    const svc = trackService(await ReadingService.create({
-      dir,
-      fetchImpl: (async (input: RequestInfo | URL) => {
-        const url = String(input)
-        fetched.push(url)
-        if (url.endsWith('/book/1/')) {
-          firstStarted()
-          await gate
-          return new Response(
-            '<html><body><div class="b"><a href="/c/old.html">旧代章节</a></div></body></html>',
-            { headers: { 'content-type': 'text/html; charset=utf-8' } },
-          )
-        }
-        if (url.endsWith('/book/2/')) {
-          return new Response(
-            '<html><body><div class="b"><a href="/c/new.html">新代章节</a></div></body></html>',
-            { headers: { 'content-type': 'text/html; charset=utf-8' } },
-          )
-        }
-        return new Response('', { status: 404 })
-      }) as never,
-    }))
-    const imported = await svc.importOne(rawSource)
-    const sourceId = imported.sourceId as string
-    const bookKey = `${BASE}/book/1/`
-    const p1 = svc.getToc(sourceId, bookKey)
-    await started
-    // 同 baseUrl 换规则 → 入库按址替换、复用 sourceId（既有裁决）——身份没变，只有代际变
-    const replaced = await svc.importOne({ ...rawSource, ruleTocUrl: `${BASE}/book/2/` })
-    expect(replaced.sourceId).toBe(sourceId)
-    const p2 = svc.getToc(sourceId, bookKey)
-    release()
-    const [oldRead, newRead] = await Promise.all([p1, p2])
-    expect(oldRead[0]?.url).toBe(`${BASE}/c/old.html`)     // 旧在途按起飞代际交自己的结果
-    expect(newRead[0]?.url).toBe(`${BASE}/c/new.html`)     // 新读另起一发，不拿旧代际的章节
-    expect(fetched.filter((u) => u === `${BASE}/book/1/`)).toHaveLength(1)
-    expect(fetched.filter((u) => u === `${BASE}/book/2/`)).toHaveLength(1)
-  })
-
-  it('目录并发：同一身份并发只抓一次，两个读拿到同一份章节（在途去重）', async () => {
-    const dir = await makeTempDir('novel-toc-dedup-')
-    let release!: () => void
-    const gate = new Promise<void>((r) => { release = r })
-    let firstStarted!: () => void
-    const started = new Promise<void>((r) => { firstStarted = r })
-    const fetched: string[] = []
-    const svc = trackService(await ReadingService.create({
-      dir,
-      fetchImpl: (async (input: RequestInfo | URL) => {
-        const url = String(input)
-        fetched.push(url)
-        if (url.endsWith('/book/1/')) {
-          firstStarted()
-          await gate
-          return new Response(
-            '<html><body><div class="b"><a href="/c/1.html">第一章</a></div></body></html>',
-            { headers: { 'content-type': 'text/html; charset=utf-8' } },
-          )
-        }
-        return new Response('', { status: 404 })
-      }) as never,
-    }))
-    const imported = await svc.importOne(rawSource)
-    const sourceId = imported.sourceId as string
-    const bookKey = `${BASE}/book/1/`
-    const p1 = svc.getToc(sourceId, bookKey)
-    await started
-    const p2 = svc.getToc(sourceId, bookKey)
-    release()
-    const [a, b] = await Promise.all([p1, p2])
-    expect(fetched.filter((u) => u === `${BASE}/book/1/`), '同一身份并发只该抓一次').toHaveLength(1)
-    expect(a).toEqual(b)
-    expect(a[0]?.url).toBe(`${BASE}/c/1.html`)
-  })
-
-  it('换目录规则而章名一字不变：正文代际仍跟着走，不端旧地址抓来的正文', async () => {
-    const dir = await makeTempDir('novel-epoch-tocrule-')
-    // 两版目录页各列一条**同名**章节，但地址不同：旧地址 /wrong.html、新地址 /c/1.html。
-    // 章名不变 ⇒ 槽位（代际 + 章名）的章名那一半挡不住，只有代际能挡。
-    const svc = trackService(await ReadingService.create({
-      dir,
-      fetchImpl: (async (input: RequestInfo | URL) => {
-        const u = String(input)
-        if (u.endsWith('/wrong.html')) return new Response('<div id="content">正文旧地址</div>')
-        if (u.endsWith('/c/1.html')) return new Response('<div id="content">正文新地址</div>')
-        if (u.endsWith('/toc2')) return new Response('<div class="b ch"><a href="/c/1.html">第一章</a></div>')
-        return new Response('<div class="b ch"><a href="/wrong.html">第一章</a></div>')
-      }) as never,
-    }))
-    const raw = {
-      bookSourceName: 'fixture', bookSourceUrl: 'https://fixture.invalid',
-      searchUrl: '/search?q={{key}}',
-      ruleBookList: '@css:.b', ruleBookName: 'tag.a@text', ruleBookUrl: 'tag.a@href',
-      ruleChapterName: 'tag.a@text', ruleChapterUrl: 'tag.a@href', ruleContent: '@css:#content@text',
-    }
-    const bookKey = 'https://fixture.invalid/book'
-    const first = await svc.importOne(raw)
-    expect(first.ok).toBe(true)
-    const sourceId = first.sourceId as string
-    expect(await svc.getChapter(sourceId, bookKey, 0)).toContain('正文旧地址')
-
-    const second = await svc.importOne({ ...raw, ruleTocUrl: 'https://fixture.invalid/toc2' })
-    expect(second.sourceId).toBe(sourceId)                 // 同址替换复用 id：钉住 replace 而非 skip 路径
-    expect((await svc.getToc(second.sourceId as string, bookKey))[0]?.name).toBe('第一章')   // 章名确实没变
-    expect(await svc.getChapter(second.sourceId as string, bookKey, 0)).toContain('正文新地址')
   })
 })

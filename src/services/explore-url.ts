@@ -31,8 +31,8 @@ const JS_FORM = /^(@js:|<js>)/i
  *  `exploreForm*`）的三条分档谓词**以本函数为准**，不得在那里内联第二份判据。
  *
  *  「在场但认不出」一律 `unknown`，其中包含**非串的值**：调用方 `normalize.flattenDialect` 从
- *  `{ ...raw }` 起步，`exploreUrl` 要到 `RULE_FIELDS` 那一圈才被字符串化，所以传进来的完全可能是
- *  数组 / 对象 / 数字这种脏形状。把它折成 `empty` 等于替源主宣布「这个源没有分类」——而它只是
+ *  `{ ...raw }` 起步，字符串化发生在 `normalizeSource` 落位那一步（在那之后），所以传进来的
+ *  完全可能是数组 / 对象 / 数字这种脏形状。把它折成 `empty` 等于替源主宣布「这个源没有分类」——而它只是
  *  本模块读不懂；`empty` 只留给真的没写（缺席）与写了空白这两种。 */
 export function exploreKindsFormOf(v: unknown): ExploreKindsForm {
   if (typeof v !== 'string') return v === undefined || v === null ? 'empty' : 'unknown'

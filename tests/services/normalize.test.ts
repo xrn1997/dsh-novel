@@ -31,6 +31,8 @@ describe('normalizeSource 真实形态', () => {
       enabled: false, groups: ['热门', '本地'],
     })
     expect(r.source!.rules.ruleBookList).toBe('@css:.list@li')
+    // searchUrl 的落位与形态警告同住 `normalizeSearchUrl`（矩阵行 `c-search-url` 的实现锚）
+    expect(r.source!.rules.searchUrl).toBe('/search?keyword={{key}}&page={{page}}')
     expect(r.source!.rules.ruleChapterUrl).toBe('tag.a@href')
     expect(r.source!.rules.nextPageUrl).toBe('tag.a.next@href')
     expect(r.source!.rules.header).toEqual({ 'User-Agent': 'UA' })

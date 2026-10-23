@@ -77,7 +77,7 @@ export interface NormalizedRules {
   header: Record<string, string> | null; loginUrl: string | null
   /** 动态请求头规则（`header` 字段的 `@js:`/`<js>` 形态）：与 header 互斥同源
    *  （同一 raw.header 字段二选一），请求前经沙箱求值得到 JSON 头表（源的 device-id/
-   *  Authorization 全靠它，静态形态 4004）。唯一求值点 `services/bridge.ts` 的 resolveHeaders；
+   *  Authorization 全靠它，静态形态 4004）。唯一求值点 `services/source-eval.ts` 的 resolveHeaders；
    *  存量由 SourceRegistry.load 按 raw 重推。 */
   headerRule: string | null
   /** jsLib：源级全局 JS 函数库（函数定义拼在每段 @js 代码前执行——
