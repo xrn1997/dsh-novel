@@ -6,6 +6,7 @@ import type { SegmentLoc } from '../engine/types.js'
 import { runScript } from '../engine/js-sandbox.js'
 import type { ResponseHost } from '../engine/host-object.js'
 import { engineFetch, engineFetchConn, engineFetchGet, engineFetchHead, engineFetchPost, engineFetchRaw } from './engine-fetch.js'
+import type { HeadersInput } from './engine-fetch.js'
 import { headerOf, effectiveUserAgent } from './fetcher.js'
 import type { Fetcher } from './fetcher.js'
 import { parseObjectJson, stringTableOf } from './normalize.js'
@@ -114,6 +115,9 @@ export function engineContextOf(
     chapter?: Record<string, unknown>
     /** js 沙箱预算透传（EvalContext.jsTimeoutMs；缺省时引擎回退 DEFAULT_JS_TIMEOUT_MS） */
     jsTimeoutMs?: number
+    /** 出站口的头来源：省略 = 动态头惰性 provider（默认）；给定 = 静态表（头规则脚本自身用，
+     *  不递归回头规则）。六个出站口共用这一份装配，不再由调用方逐个覆盖。 */
+    headers?: HeadersInput
     /** 登录面投影（source.getLoginInfoMap / getLoginHeader）：源 auth 或表单录入供出，缺省空。 */
     loginInfo?: Record<string, string>
     loginHeader?: string
@@ -147,6 +151,8 @@ export function engineContextOf(
   book?: Record<string, unknown>; chapter?: Record<string, unknown>; jsTimeoutMs?: number
   regexRow?: string[]
 } {
+  const headers: HeadersInput = opts.headers
+    ?? (() => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs }))
   return {
     ...(opts.html === undefined ? {} : { html: opts.html }),
     ...(opts.json === undefined ? {} : { json: opts.json }),
@@ -154,18 +160,18 @@ export function engineContextOf(
     baseUrl: opts.baseUrl,
     source: source.baseUrl,
     ...(opts.vars === undefined ? {} : { vars: opts.vars }),
-    // 头走惰性 provider：`@js` 动态头每请求现算（头规则在请求期求值，不缓存结果）；
-    // 规则求值自身用的静态头在 resolveHeaders 内单独构造——不递归回 provider。
-    fetch: engineFetch(fetcher, () => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs })),
-    fetchRaw: engineFetchRaw(fetcher, () => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs })),
+    // 头走这里一份装配：省略 headers 入参 = 惰性 provider（`@js` 动态头每请求现算，头规则在请求期
+    // 求值、不缓存）；头规则脚本自身由 resolveHeaders 传静态表进来，六个出站口共用它。
+    fetch: engineFetch(fetcher, headers),
+    fetchRaw: engineFetchRaw(fetcher, headers),
     // java.post 的出站口：与 ajax/connect 同一个守门 fetcher（不开第二出口），差别只有 POST + 脚本头
-    fetchPost: engineFetchPost(fetcher, () => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs })),
+    fetchPost: engineFetchPost(fetcher, headers),
     // java.head 的出站口：同一守门 fetcher 的 HEAD 姿态（不跟重定向，脚本读 3xx 的直链头）
-    fetchHead: engineFetchHead(fetcher, () => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs })),
+    fetchHead: engineFetchHead(fetcher, headers),
     // java.get(url, headers) 的出站口：GET + 不跟重定向，返回 Response 数据面
-    fetchGet: engineFetchGet(fetcher, () => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs })),
+    fetchGet: engineFetchGet(fetcher, headers),
     // java.net.URL.openConnection 的出站口：跟重定向、原始字节；同一守门 fetcher
-    fetchConn: engineFetchConn(fetcher, () => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs })),
+    fetchConn: engineFetchConn(fetcher, headers),
     // java.getWebViewUA 的口径：本仓真发出去的那条 UA（同步取，与 fetch 同一套静态头解析）
     userAgent: () => effectiveUserAgent(source),
     // 脚本可见的源实体字段：**按 raw 现读**，只投影脚本真读到的（对面脚本里的 source 是字段面
@@ -241,16 +247,11 @@ export async function resolveHeaders(
       code,
       ...engineContextOf(fetcher, source, {
         baseUrl: source.baseUrl,
+        headers: staticHeaders,
         ...(opts?.jsTimeoutMs === undefined ? {} : { jsTimeoutMs: opts.jsTimeoutMs }),
       }),
-      // 头规则脚本的六个出站口用静态头打底（见上：不递归）；其余能力位、jsLib、userAgent
-      // 与源级求值同源——手拼第二份就会在新能力接入时漏掉（deviceId 就是这样漏到 headerRule 的）。
-      fetch: engineFetch(fetcher, staticHeaders),
-      fetchRaw: engineFetchRaw(fetcher, staticHeaders),
-      fetchPost: engineFetchPost(fetcher, staticHeaders),
-      fetchHead: engineFetchHead(fetcher, staticHeaders),
-      fetchGet: engineFetchGet(fetcher, staticHeaders),
-      fetchConn: engineFetchConn(fetcher, staticHeaders),
+      // 头规则脚本的六个出站口用静态头打底（不递归）；「不递归」现在是 engineContextOf 的一个入参，
+      // 不再是六个键的手抄覆盖——手抄那份曾把 deviceId 漏在 headerRule 外面，且能力位闸看不见它。
       loc: { segmentIndex: 0, segmentRaw: rule },
       facet: 'rule',
       scriptForm: true,

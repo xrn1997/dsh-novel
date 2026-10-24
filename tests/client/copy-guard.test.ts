@@ -28,7 +28,17 @@ const CLIENT = fileURLToPath(new URL('../../src/client', import.meta.url))
 
 /** 文件级白名单：整份文件都不上屏。键是相对 `src/client` 的路径。 */
 const FILE_ALLOW = new Map<string, string>([
-  ['styles.tsx', 'CSS 模板串里的中文全是注释，模板本身不上屏'],
+  // 样式层按视图分块后逐块登记：样式是数据，中文只出现在模板串里的 CSS 注释中。
+  ['styles/tokens.ts', 'CSS 模板串里的中文全是注释，模板本身不上屏'],
+  ['styles/shell.ts', 'CSS 模板串里的中文全是注释，模板本身不上屏'],
+  ['styles/controls.ts', 'CSS 模板串里的中文全是注释，模板本身不上屏'],
+  ['styles/sources.ts', 'CSS 模板串里的中文全是注释，模板本身不上屏'],
+  ['styles/search.ts', 'CSS 模板串里的中文全是注释，模板本身不上屏'],
+  ['styles/reader.ts', 'CSS 模板串里的中文全是注释，模板本身不上屏'],
+  ['styles/shelf.ts', 'CSS 模板串里的中文全是注释，模板本身不上屏'],
+  ['styles/overlays.ts', 'CSS 模板串里的中文全是注释，模板本身不上屏'],
+  ['styles/city.ts', 'CSS 模板串里的中文全是注释，模板本身不上屏'],
+  ['styles/config-page.ts', 'CSS 模板串里的中文全是注释，模板本身不上屏'],
 ])
 
 /** 逐字面量白名单：只放行具体某个非文案字形或内部错误模板。 */

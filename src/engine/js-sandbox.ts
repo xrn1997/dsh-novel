@@ -6,7 +6,7 @@ import { DEFAULT_JS_TIMEOUT_MS } from './types.js'
 import type { EngineValue, EvalContext, Facet, RuleUsage, SegmentLoc } from './types.js'
 import type { SourceSession } from './session.js'
 import { JsSandboxError } from './errors.js'
-import { SANDBOX_MOUNTS, invokeJavaMethod } from './js-protocol.js'
+import { SANDBOX_MOUNTS, SYNC_AJAX_SENTINEL, asyncBridgeSource, asyncMountSource, invokeJavaMethod } from './js-protocol.js'
 import type { BridgeDeps } from './js-protocol.js'
 import { loadHtml, nodeText } from './dom.js'
 import { decodePngToArgb, javaDecode } from './js-utils.js'
@@ -307,83 +307,7 @@ const BOOTSTRAP = `;(function (g) {
   const sync = function (name) {
     return function () { return materialize(JSON.parse(invoke(name, [].slice.call(arguments)))) }
   }
-  const ajax = d.syncAjax
-    // worker 同步桥形态（脚本视角同步）：__host_call__ 经 SAB RPC 阻塞等待主线程
-    // fetch 落地，JS 视角同步返回响应 body 字符串——java.ajax(url).match(...) 直接成立
-    ? function () {
-      const r = invoke('ajax', [].slice.call(arguments))
-      try { return JSON.parse(r) } catch (e) { throw new Error(msg(e)) }
-    }
-    // 主线程形态：**没有同步桥就不猜异步语义**。ajax 语义是同步返回 body，主线程物理上无法阻塞；
-    // 曾在此返回 Promise，等价写法静默换类型（已改抛哨兵）。现于**发起宿主调用之前**抛哨兵，
-    // evalJs 捕获后换 worker 重跑同一段（请求没发出去，不多打站点）——正则只决定性能，不决定语义。
-    // 全貌见本文件「java.ajax 同步桥」一节。
-    : function () { throw new Error('__dsh_sync_ajax_required__') }
-  // java.downloadFile 同款网络同步语义（同步下载、返回路径）：worker 直通、主线程哨兵换道。
-  const downloadFile = d.syncAjax
-    ? function () {
-      const r = invoke('downloadFile', [].slice.call(arguments))
-      try { return JSON.parse(r) } catch (e) { throw new Error(msg(e)) }
-    }
-    : function () { throw new Error('__dsh_sync_ajax_required__') }
-  // java.connect 与 ajax/downloadFile 同款网络同步语义（脚本侧是同步调用、拿到对象）：
-  // worker 直通拿数据面，主线程抛哨兵换道——不在没有同步桥时返回 Promise 换类型。
-  // 壳：raw() 与 url() 是**同一值**关系，脚本链 connect(so).raw().request().url() 取的就是落地地址
-  // （跟随重定向后的末次请求）——故 raw 壳直接复用数据面的 url，不额外跨桥带字段。
-  const connect = d.syncAjax
-    ? function () {
-      const raw = invoke('connect', [].slice.call(arguments))
-      let r
-      try { r = JSON.parse(raw) } catch (e) { throw new Error(msg(e)) }
-      return {
-        url: r.url,
-        body: r.body,
-        raw: function () {
-          return { request: function () { return { url: function () { return r.url } } } }
-        },
-      }
-    }
-    : function () { throw new Error('__dsh_sync_ajax_required__') }
-  // java.post：宿主返回 __host:'response' 描述符，materialize 统一包成
-  // statusCode/header/headers/body/cookies 方法壳（与 java.get/head 同一形状）。
-  const post = d.syncAjax
-    ? function () {
-      let r
-      try { r = JSON.parse(invoke('post', [].slice.call(arguments))) } catch (e) { throw new Error(msg(e)) }
-      return materialize(r)
-    }
-    : function () { throw new Error('__dsh_sync_ajax_required__') }
-  // java.head：同款响应壳（无 body；headers 读取大小写不敏感由 materialize 统一处理）。
-  const head = d.syncAjax
-    ? function () {
-      let r
-      try { r = JSON.parse(invoke('head', [].slice.call(arguments))) } catch (e) { throw new Error(msg(e)) }
-      return materialize(r)
-    }
-    : function () { throw new Error('__dsh_sync_ajax_required__') }
-  // java.get 的 HTTP 重载（双参）；单参变量 getter 仍走同步名单里的 get。
-  const getHttp = d.syncAjax
-    ? function () {
-      let r
-      try { r = JSON.parse(invoke('getHttp', [].slice.call(arguments))) } catch (e) { throw new Error(msg(e)) }
-      return materialize(r)
-    }
-    : function () { throw new Error('__dsh_sync_ajax_required__') }
-  const webView = d.syncAjax
-    ? function () {
-      let r
-      try { r = JSON.parse(invoke('webView', [].slice.call(arguments))) } catch (e) { throw new Error(msg(e)) }
-      return r
-    }
-    : function () { throw new Error('__dsh_sync_ajax_required__') }
-  // java.net.URL.openConnection 的同步桥：返回 { url, statusCode, headers, bytes }
-  const urlConn = d.syncAjax
-    ? function () {
-      let r
-      try { r = JSON.parse(invoke('urlConn', [].slice.call(arguments))) } catch (e) { throw new Error(msg(e)) }
-      return r
-    }
-    : function () { throw new Error('__dsh_sync_ajax_required__') }
+${asyncBridgeSource()}
   // ── Packages.*（书源脚本里的 Java 包路径仿真）─────────────────────
   // 真实源正文解密链用它组织 JVM/Android 类调用。重活（PNG 解码、AES、HMAC、charset 解码）走宿主
   // 调用 __pkg.*（JSON 序列化边界，与 __elem.* 同款纪律）；轻活（流/数组/包装）留在 vm realm 纯 JS。
@@ -813,15 +737,10 @@ const BOOTSTRAP = `;(function (g) {
   }
   g.__mkElem__ = mkElem
   g.__wrapElems__ = wrapElems
+  // async 行的挂载行由协议表生成（js-protocol.asyncMountSource）——新增异步方法只该动表，
+  // 手工列表曾把「挂上了没有」交给记性。
   g.java = {
-    ajax: ajax,
-    // async 网络行（协议表 mode:'async' 不进 javaSync 名单）——与 ajax 同款手工挂载
-    downloadFile: downloadFile,
-    connect: connect,
-    post: post,
-    head: head,
-    webView: webView,
-    webViewGetSource: webView,
+${asyncMountSource()}
     log: log('console.log'),
     toast: function(){}, longToast: function(){}, copyText: function(){},
     startBrowser: function(){}, open: function(){}, openUrl: function(){},
@@ -840,7 +759,7 @@ const BOOTSTRAP = `;(function (g) {
     },
   }
   // 同步方法名单从协议表派生（js-protocol.SANDBOX_MOUNTS，经 __init__ 注入）——
-  // 加一个 java 方法只改表一行，此处零改动；ajax 为 async 走上面的特制包装，不在名单内
+  // 加一个 java 方法只改表一行（async 行另带 bridge），此处零改动；async 行不走 sync()，不在名单内
   d.mounts.javaSync.forEach(function (n) { g.java[n] = sync(n) })
   // java.get 双形态：单参 = 源变量 getter（同步名单）；双参 = HTTP GET（上游
   // JsExtensions.get(url, headers) 返回 Connection.Response）。按**实参个数**分派：
@@ -1194,11 +1113,13 @@ function wrappedFormOf(code: string): string {
 
 /** 路由启发式（**只影响性能与稳健性，不影响语义**——语义由桥给）。刻意过近似而不求精确：
  *  ① `\.ajax\s*\(` 认任何 `.ajax(`；② `downloadFile\s*\(`（与 ajax 同款的哨兵桥）；
- *  ③ `java\s*\[` 认任何对 java 桥的下标访问；④ 其余手工挂载的同步网络桥（connect/post/head/
+ *  ③ `java\s*\[` 认任何对 java 桥的下标访问；④ 其余直接挂在 `java` 上的同步网络桥（connect/post/head/
  *  webView/webViewGetSource 与双参 get、URL.openConnection）必须逐个列出——它们在主线程抛哨兵，
  *  脚本自己的 try/catch 会把哨兵吞掉；只靠哨兵兜底等于让 catch 分支拿到 undefined。
- *  仍漏的只有真正间接形态（解构、with）。 */
-const SYNC_WORKER_RE = /\.ajax\s*\(|downloadFile\s*\(|java\s*\[|java\s*\.\s*(?:connect|post|head|webView|webViewGetSource)\s*\(|java\s*\.\s*get\s*\([^)]*,|openConnection\s*\(/
+ *  协议表每一行的 `bridge.routeProbe` 都被测试钉在这条正则上（漏列即红），不再靠记性。
+ *  仍漏的只有真正间接形态（解构、with，以及首个实参里带右括号的 `java.get(...)`——双参 get 那条
+ *  正则的 `[^)]*` 在实参内部的右括号处断掉）。 */
+export const SYNC_WORKER_RE = /\.ajax\s*\(|downloadFile\s*\(|java\s*\[|java\s*\.\s*(?:connect|post|head|webView|webViewGetSource)\s*\(|java\s*\.\s*get\s*\([^)]*,|openConnection\s*\(/
 const SAB_REQ_BYTES = 4 * 1024 * 1024
 const SAB_RESP_BYTES = 16 * 1024 * 1024
 
@@ -1625,9 +1546,9 @@ function isVmTimeout(e: unknown): boolean {
   return (e as NodeJS.ErrnoException | undefined)?.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT'
 }
 
-/** 主线程 ajax 分支的哨兵（见 BOOTSTRAP）。内层 catch 会把它包成 JsSandboxError，
- *  但 jsErr 是 `${prefix}：${msg}` 拼接，原文仍在 message 里，故按子串判定即可。 */
-const SYNC_AJAX_SENTINEL = '__dsh_sync_ajax_required__'
+/** 主线程那臂的哨兵值住 js-protocol（抛它的那几段由 `asyncBridgeSource` 生成），这里只认它。
+ *  内层 catch 会把它包成 JsSandboxError，但 jsErr 是 `${prefix}：${msg}` 拼接，原文仍在 message 里，
+ *  故按子串判定即可。 */
 function needsSyncBridge(e: unknown): boolean {
   return String((e as { message?: unknown })?.message ?? '').includes(SYNC_AJAX_SENTINEL)
 }

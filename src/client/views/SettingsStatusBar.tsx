@@ -8,7 +8,7 @@ import type { JobState } from './types.js'
 /**
  * 全局状态条（瞬态统一层的呈现端）：错误(红,sticky) > 运行任务 > 成功(自动退场）。
  * **浮层**：absolute 定位、不参与布局（挂载/卸载不顶动区块内容——曾把整块顶下去 35px 造成
- * 启停闪烁，见 styles.tsx `.novel-status-bar` 注释）；空闲零占用（无条目无任务不渲染）。
+ * 启停闪烁，见 styles/shell.ts 的 `.novel-status-bar` 注释）；空闲零占用（无条目无任务不渲染）。
  * 任务泳道保留 data-novel-job-status（smoke 断言）。
  * interface：job（任务现场）+ onOpen（点任务泳道跳转到对应区块）。
  */

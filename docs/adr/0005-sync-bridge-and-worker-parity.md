@@ -12,4 +12,4 @@ legado 的宿主桥是同步的，而 Node 的 fetch 不是。书源脚本的主
 
 **接受的残余**：脚本里不含那三个字面量的间接形态（解构 `const {ajax} = java`、`with (java)`）仍可能撞哨兵，后果是第一次 ajax 之前的非幂等写入被执行两遍；网络请求不受影响。将来的正确修法是先做 worker 池再一律走 worker，把重跑整条路删掉。
 
-锚点：`src/engine/js-sandbox.ts` 的 `SYNC_AJAX_SENTINEL` / `SYNC_WORKER_RE` / `needsSyncBridge` / `WORKER_SRC` / `runAsScript`；`tests/engine/js-bindings.test.ts`；矩阵行 `h-java-ajax-sync`、`a-js-script-form`、`h-rhino-vs-vm`。
+锚点：`src/engine/js-protocol.ts` 的 `SYNC_AJAX_SENTINEL`（抛侧的几段桥壳由同文件的 `asyncBridgeSource` 生成、插进 BOOTSTRAP）；`src/engine/js-sandbox.ts` 的 `SYNC_WORKER_RE` / `needsSyncBridge` / `WORKER_SRC` / `runAsScript`；`tests/engine/js-bindings.test.ts`；`tests/engine/js-protocol.test.ts` 的 async 行闸；矩阵行 `h-java-ajax-sync`、`a-js-script-form`、`h-rhino-vs-vm`。

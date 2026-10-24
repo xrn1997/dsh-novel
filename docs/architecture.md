@@ -74,7 +74,8 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 子规则求值用途（`java.getString*` / 模板 `{{…}}` / `@put` 的 value/list 判据） | `engine/sub-rule.ts` 的 `usageOfSubRule`（取值终端判据 `engine/select.ts` 的 `isValueTerminal`）；求值入口 `engine/evaluate.ts` 的 `evaluateRef` / 模板插值 `interpolateTemplate` / `engine/js-protocol.ts` 的 `evalRule` | 主链用途（`engine/parse.ts` 的 `classifyDefault` / `ParsedRule.usage`）、组合符语义（`engine/combine.ts`） |
 | 行模板的判定与绑定 | `engine/regex-row.ts`（同一份文法的两面） | 模板字面段 |
 | `EngineValue → 单串` | `engine/js-utils.ts` 的 `engineValueToString` | 业务字段语义 |
-| 宿主方法面（名字 / 挂载 / 分派） | `engine/js-protocol.ts` 的协议表。加一个 **sync** 方法 = 表加一行；加一个 **async** 方法还要在 `js-sandbox.ts` 的 `BOOTSTRAP` 里写那份同步桥包装（`docs/adr/0004` 把生成逻辑钉在串内），且它读的 `ctx.*` 能力位必须由 `services/source-eval.ts` 的 `engineContextOf` 供出——这两处联系都有机器闸（`tests/engine/js-protocol.test.ts` 的能力位闸） | 真实网络 |
+| 宿主方法面（名字 / 挂载 / 分派 / async 桥） | `engine/js-protocol.ts` 的协议表（async 行另带 `bridge` 判别：壳形态、挂载名、路由探针；桥壳源码与 `g.java` 挂载由表生成，生成文本插进 `js-sandbox.ts` 的 `BOOTSTRAP` 串——沙箱边界见 `docs/adr/0004`，主线程与 worker 同口径见 `docs/adr/0005`）。加一个 **sync** 方法 = 表加一行；加一个 **async** 方法 = 表加一行 + 一个 `bridge`；且它读的 `ctx.*` 能力位必须由 `services/source-eval.ts` 的 `engineContextOf` 供出——桥壳 / 挂载 / 路由与能力位都有机器闸（`tests/engine/js-protocol.test.ts` 的 async 行闸） | 真实网络 |
+| 引擎进程级缓存的上限与淘汰（`downloadFile` 暂存表） | `engine/stores.ts` 的 `createFileStore`（条数 + 单文件字节两道闸；消费点 `js-protocol.ts` 的 `storeFile` / `readTxtFile`） | 按源隔离的状态四表（归 `SourceSession`）、jsLib URL 缓存（已自带上限，仍住 `js-sandbox.ts`） |
 | JS 宿主对象描述符（`__host`） | `engine/host-object.ts` 的 `ResponseHost`（宿主→沙箱的响应描述符）；`__host:'map'` 由 `engine/js-sandbox.ts` 的 BOOTSTRAP 内部物化，不跨宿主边界 | 宿主函数/对象直接过界（`__host_call__` 是唯一入口） |
 | 选项语义（模板 → 请求计划） | `services/request.ts` 的 `assembleRequest` + `fetchInitOf` | 网络与解码 |
 | 出站（超时 / 代理 / 解码 / 状态） | `services/fetcher.ts`，`@js` 复用同一出口 | 缓存与业务 |
@@ -135,7 +136,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 阅读场景（当场面与注释载荷、返回句柄、Esc 命令、离开一问与入架写入） | `client/reader-scene.ts` 的 `ReaderScene`（命令面 `toggle` / `openNote` / `close` / `handleEsc` / `dismissAsk` / `openTarget` / `bodyLink` / `panelLink` / `exitToShelf` / `joinAndBack`；写口以 `addSeat` 注入，生产是 `client/shelf-action.ts` 的 `addShelfSeat`） | 阅读时序（`client/reader-session.ts`）、至多一角的纯判据（`client/reader-surfaces.ts`）、模态契约与焦点（`client/views/dialog.tsx`）、DOM 测量与滚动事件（`ReaderView`）、导出编排（`client/export-run.ts`）、文案（`client/copy/`） |
 | 章节窗口与预取判据 | `client/reader-load.ts` | 会话状态 |
 | 阅读位置 ⇄ 像素 | `client/progress.ts`（两侧同跨度才互逆） | 落盘时机 |
-| 视觉 token 与标度 | `client/styles.tsx`（唯一 token 层） | 视图局部布局 |
+| 视觉 token 与标度 | `client/styles/tokens.ts` 的 `TOKENS_CSS`（配色契约、named 标度与 `--novel-*` 缺省定义）；暗层重钉住 `client/styles/shell.ts` 的 `.novel-dark`；`client/styles.tsx` 只是拼装点（把十块按原次序连成 `NOVEL_CSS`，`NovelStyles` 注入） | 视图局部布局（归 `client/styles/` 各块）、块间次序（次序即行为，重排等于改样式） |
 | 兼容读数与裁决 | `tests/legado-coverage/matrix.ts` 的行 | 复述进文档 |
 
 ## 5. seam：可测性怎么落

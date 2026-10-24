@@ -366,10 +366,8 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
         })
       }
       if (args.action === 'enable' || args.action === 'disable') {
-        // 存在性防线住这里（setEnabled 的 bool 语义不自明，不拿它当回执）：
-        // 摸到不存在的 id 若静默回「已停用」，是空头承诺——宁炸不猜
-        if (!service.hasSource(id)) throw new Error(`dshnovel_source 源不存在：${id}`)
         const enabled = args.action === 'enable'
+        // 存在性防线已收进门面：未知 id 抛 SourceNotFoundError，工具面不再预检。
         await service.setEnabled(id, enabled)
         return { action: args.action, sourceId: id, enabled }
       }

@@ -207,6 +207,17 @@ describe('@js 沙箱', () => {
     expect(web.value).toEqual({ kind: 'value', text: '<html>W</html>' })
   })
 
+  it('java.webViewGetSource 是 webView 的挂载别名（由挂载清单生成，且被路由送进 worker）', async () => {
+    // 脚本自己 try/catch 包住：若这个别名不被 SYNC_WORKER_RE 认出，主线程的哨兵会被脚本
+    // 自己的 catch 吞成 "caught:…"——空结果冒充失败的形态，正是这条用例要防的。
+    const v = await run(
+      'try { return String(await java.webViewGetSource("https://x.com/w")) } catch (e) { return "caught:" + e.message }',
+      hostOf(),
+      ctxOf({ webView: async () => '<html>SRC</html>' }),
+    )
+    expect(v.value).toEqual({ kind: 'value', text: '<html>SRC</html>' })
+  })
+
   it('java.get/put 读写 ctx.vars', async () => {
     const ctx = ctxOf()
     await run('java.put("k","v"); return "x"', hostOf(), ctx)

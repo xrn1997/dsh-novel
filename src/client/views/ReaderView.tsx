@@ -5,8 +5,8 @@ import { describeError } from '../api.js'
 import { plural, useCopy } from '../copy/index.js'
 import { prodReaderDeps } from '../deps.js'
 import type { ReaderDeps } from '../deps.js'
-import { createExportRun, IDLE_EXPORT, parseRange } from '../export-run.js'
-import type { ExportRunState } from '../export-run.js'
+import { applyPreset, createExportRun, draftOf, IDLE_EXPORT, validRangeOf } from '../export-run.js'
+import type { ExportDraft, ExportRunState, RangeParse } from '../export-run.js'
 import { navigate, prefsStore, setPref, useStore } from '../store.js'
 import { FONT_STEPS, LINE_HEIGHTS, MEASURES, PAPER_PRESETS } from '../prefs-ui.js'
 import type { ChapterAnchor } from '../progress.js'
@@ -107,29 +107,33 @@ export function PrefsPanel(): ReactNode {
 
 /**
  * 导出范围面板（⤓ 钮的第一步）：起止章输入 + 快捷预设 + 确认/取消。
- * 口径：点⤓不再直接全下——本面板是唯一开下入口（确认前零请求）；校验单点在
- * export-run.parseRange（倒置/越界/非整数/目录未就绪一律禁确认，宁可不发不发废包）。
+ * 口径：点⤓不再直接全下——本面板是唯一开下入口（确认前零请求）；草稿（缺省/档位/校验）
+ * 归 export-run 的 draftOf / applyPreset / validRangeOf（倒置/越界/非整数/目录未就绪一律禁
+ * 确认，宁可不发不发废包），本面板**只渲染**裁决与透传编辑，不自己判。
  * 挂工具栏内（与 PrefsPanel 同款绝对定位 + CTRL_Z.panel，z 序不变量见 CTRL_Z 头注）；
  * 运行中换进度视图（沿用 ExportRunState），仍在场可取消。role=dialog + aria-label=导出范围。
  */
 export function ExportPanel(props: {
+  /** 范围草稿：两个输入框里用户的编辑，由视图持有、编辑经回调回去 */
+  draft: ExportDraft
+  /** 草稿的校验裁决（唯一判据 validRangeOf，按活章数算出）；失败臂的 reason 由本面板翻译上屏 */
+  valid: RangeParse
+  /** 当前目录章数：面板上「共 N 章」读数与输入框上限的活值——不是草稿的一部分，每次渲染由视图现给 */
   total: number
-  from: string
-  to: string
+  running: boolean
+  kb: number
+  /** 运行中章数标题（x-novel-total-chapters 头；未给为空串） */
+  totalChapters: string
   onFrom: (v: string) => void
   onTo: (v: string) => void
   onPreset: (kind: 'all' | 'rest') => void
   onConfirm: () => void
   onClose: () => void
-  running: boolean
-  kb: number
-  /** 运行中章数标题（x-novel-total-chapters 头；未给为空串） */
-  totalChapters: string
   onCancel: () => void
   darkController: boolean
 }): ReactNode {
   const t = useCopy()
-  const valid = parseRange(props.from, props.to, props.total)
+  const valid = props.valid
   return (
     <div
       data-novel-ctrl
@@ -154,15 +158,16 @@ export function ExportPanel(props: {
       ) : (
         <>
           <div className="novel-prefs-label">
-            {plural(t, props.total, 'reader.export.rangeTotal.one', 'reader.export.rangeTotal.other', { total: props.total })}
+            {plural(t, props.total, 'reader.export.rangeTotal.one', 'reader.export.rangeTotal.other',
+              { total: props.total })}
           </div>
           <label>
             {t('reader.export.fromPrefix')}
             <input className="novel-input" type="number" min={1} max={props.total}
-              value={props.from} onChange={(e) => props.onFrom(e.target.value)} aria-label={t('reader.export.startChapter')} />
+              value={props.draft.from} onChange={(e) => props.onFrom(e.target.value)} aria-label={t('reader.export.startChapter')} />
             {t('reader.export.between')}
             <input className="novel-input" type="number" min={1} max={props.total}
-              value={props.to} onChange={(e) => props.onTo(e.target.value)} aria-label={t('reader.export.endChapter')} />
+              value={props.draft.to} onChange={(e) => props.onTo(e.target.value)} aria-label={t('reader.export.endChapter')} />
             {t('reader.export.toSuffix')}
           </label>
           <div className="novel-chips">
@@ -322,9 +327,9 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
 
   /** 角落浮层、注释面板载荷、Esc 归属、离开一问与入架写入归 `client/reader-scene.ts`：
    *  这几条律互相咬合（谁先退场、谁消费返回项、写完能不能被打断），证明它们不该靠整页渲染。
-   *  视图只持它的投影与命令，另加导出范围的输入态（字符串，校验单点在 parseRange）。 */
-  const [expFrom, setExpFrom] = useState('1')
-  const [expTo, setExpTo] = useState('')
+   *  视图只持它的投影与命令，外加一份导出范围草稿——缺省/档位/校验归 `export-run` 的
+   *  draftOf / applyPreset / validRangeOf，这里只持值并转发编辑；章数不进草稿，调用时现读目录。 */
+  const [expDraft, setExpDraft] = useState<ExportDraft>(() => draftOf(0))
   /** 目录总章数：场景只在「加入书架」那一刻读一次。目录未到 = 不知道（null），
    *  不许落成 0——0 会被写成架位上的真读数，并挡住会话的幂等补数。 */
   const tocLenRef = useRef<number | null>(null)
@@ -379,10 +384,9 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   }), [deps, sourceId, bookKey, title, t])
   useEffect(() => () => exportRun.dispose(), [exportRun])   // 卸载即取消——不许孤儿抓取
   const expTotal = toc?.length ?? 0
-  /** 开导出面板：默认整本（1..N）。互斥不在这里抄一遍——判据在 `reader-surfaces` */
+  /** 开导出面板：缺省整本（缺省口径归 draftOf）。互斥不在这里抄一遍——判据在 `reader-surfaces` */
   const openExport = (): void => {
-    setExpFrom('1')
-    setExpTo(String(expTotal))
+    setExpDraft(draftOf(expTotal))
     scene.toggle('export')
   }
 
@@ -532,24 +536,22 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
           {/* 导出面板与 Aa／目录／注释／导入说明永不同场：互斥判据在 `reader-surfaces`，这里只摆当场面 */}
           {sceneState.surface === 'export' && (
             <ExportPanel
+              draft={expDraft}
+              // 章数是活的：每次调用现给，草稿里不存副本——目录迟到时预设与校验一起自愈
+              valid={validRangeOf(expDraft, expTotal)}
               total={expTotal}
-              from={expFrom}
-              to={expTo}
-              onFrom={setExpFrom}
-              onTo={setExpTo}
-              onPreset={(kind) => {
-                if (kind === 'all') { setExpFrom('1'); setExpTo(String(expTotal)) }
-                else { setExpFrom(String(currentChapter + 1)); setExpTo(String(expTotal)) }
-              }}
+              running={exportState.running}
+              kb={exportState.kb}
+              totalChapters={exportState.total}
+              onFrom={(v) => setExpDraft((d) => ({ ...d, from: v }))}
+              onTo={(v) => setExpDraft((d) => ({ ...d, to: v }))}
+              onPreset={(kind) => setExpDraft(applyPreset(kind, currentChapter, expTotal))}
               onConfirm={() => {
-                const v = parseRange(expFrom, expTo, expTotal)
+                const v = validRangeOf(expDraft, expTotal)
                 if (!v.ok) return                                    // 校验单点：倒置/越界不发废包
                 exportRun.start({ from: v.from, to: v.to, total: expTotal })
               }}
               onClose={closeCurrent}
-              running={exportState.running}
-              kb={exportState.kb}
-              totalChapters={exportState.total}
               onCancel={() => exportRun.cancel()}
               darkController={prefs.darkController}
             />

@@ -9,6 +9,7 @@ import type { SubRuleEval } from '../../src/services/bridge.js'
 import { chapterContentToText } from '../../src/services/chapter-content.js'
 import { LocalArtifactNotFoundError } from '../../src/services/localbooks.js'
 import { IMAGE_SAMPLES, makeEpubFixture } from '../fixtures/epub.js'
+import { settleSearchJob } from '../explore-settle.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
 import { createFetcher } from '../../src/services/fetcher.js'
 import { CookieJar } from '../../src/services/cookies.js'
@@ -93,11 +94,14 @@ describe('ReadingService', () => {
       const [a] = registry.list()
       const bRaw = { ...rawSource, bookSourceName: 'B', bookSourceUrl: 'https://b2.com' }
       const b = (await svc.importOne(bRaw)).sourceId!
-      expect(await svc.setEnabled(a.id, false)).toBe(true)
-      expect(registry.get(a.id)!.enabled).toBe(false)
+      // 单源启停：成功即返回（无 bool 回执）；未知 id 抛 SourceNotFoundError——
+      // 「源不存在」只在门面断言一次，两个投影面不再各译一遍。
+      await expect(svc.setEnabled(a.id, false)).resolves.toBeUndefined()
+      expect(registry.list().find((s) => s.id === a.id)?.enabled).toBe(false)
+      // setEnabledMany 是另一份契约：未知 id 静默跳过、重复 id 幂等
       expect(await svc.setEnabledMany([a.id, b, b, 'nope'], true)).toBe(2)   // 重复 b 计一次、nope 跳过
       expect(registry.get(a.id)!.enabled).toBe(true)
-      expect(await svc.setEnabled('nope', true)).toBe(false)
+      await expect(svc.setEnabled('nope', true)).rejects.toBeInstanceOf(SourceNotFoundError)
     })
     it('removeSource / removeSources：单删与批删；不存在 → false/0', async () => {
       const { svc, registry } = await makeService(() => null)
@@ -1160,8 +1164,8 @@ describe('本地 EPUB 门面：导入回执、图文读取、导航与资源', (
   })
 })
 
-describe('searchProgressive：给唯一实现加增量出口（不许出现第二个批循环）', () => {
-  it('单源完成即回调（快的先出，不等慢的）；返回值仍按参搜源序，与 search() 同值', async () => {
+describe('后台搜索任务：增量出口只此一处（不许出现第二个批循环）', () => {
+  it('单源完成即可见（快的先出，不等慢的）；一次性读面仍按参搜源序，与任务同集', async () => {
     const dir = await makeTempDir('novel-sp-')
     const registry = trackService(await SourceRegistry.load(dir))
     const shelf = trackService(await Shelf.load(dir))
@@ -1184,19 +1188,27 @@ describe('searchProgressive：给唯一实现加增量出口（不许出现第�
     await svc.importOne({ ...rawSource, bookSourceName: 'B', bookSourceUrl: 'https://b-late.com', searchUrl: 'https://b-late.com/search?q={{key}}' })
     const order = registry.list().map((s) => s.name)                 // ['S','B']＝参搜源序
     arm = true
-    const seen: string[] = []
-    const running = svc.searchProgressive('斗罗', { onGroup: (g) => { seen.push(g.sourceName) } })
+    svc.startSearchJob('斗罗')
     await new Promise((r) => setTimeout(r, 30))
-    expect(seen).toEqual(['S'])                                      // 增量：慢源未回，快源已交付
+    expect(svc.searchJobSnapshot(0)!.added.map((g) => g.sourceName)).toEqual(['S'])   // 增量：慢源未回，快源已交付
     releaseSlow()
-    const groups = await running
-    expect(seen.slice().sort()).toEqual(order.slice().sort())         // 两条都回调过
-    expect(groups.map((g) => g.sourceName)).toEqual(order)            // 返回序 = 参搜源序（不是完成序）
-    expect(await svc.search('斗罗')).toEqual(groups)                  // 防漂移：薄壳与 progressive 同值
+    await settleSearchJob(svc)
+    const snap = svc.searchJobSnapshot(0)!
+    expect(snap.phase).toBe('done')
+    expect(snap.added.map((g) => g.sourceName).sort()).toEqual(order.slice().sort())  // 两条都收齐
+    // 一次性读面与后台任务同集（同一份批循环的两个消费方）；返回序 = 参搜源序
+    const oneShot = await svc.search('斗罗')
+    expect(oneShot.map((g) => g.sourceName)).toEqual(order)
+    expect(oneShot.map((g) => g.sourceName).sort()).toEqual(snap.added.map((g) => g.sourceName).sort())
   })
 
-  it('无回调时 searchProgressive 与 search 完全等价（既有调用方零改动）', async () => {
+  it('后台任务与一次性 search 收齐同一批源', async () => {
     const { svc } = await makeService((u) => (u.includes('/search') ? SEARCH_HTML('斗罗') : null))
-    expect(await svc.searchProgressive('斗罗')).toEqual(await svc.search('斗罗'))
+    svc.startSearchJob('斗罗')
+    await settleSearchJob(svc)
+    const snap = svc.searchJobSnapshot(0)!
+    expect(snap.phase).toBe('done')
+    expect((await svc.search('斗罗')).map((g) => g.sourceName).sort())
+      .toEqual(snap.added.map((g) => g.sourceName).sort())
   })
 })

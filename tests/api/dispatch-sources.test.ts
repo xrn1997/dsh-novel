@@ -160,6 +160,13 @@ describe('sources 面（后台任务版）', () => {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ nope: 1 }),
     })).status).toBe(400)
   })
+  it('POST /sources/:id/enabled：未知 id → 404 NotFound（存在性判据归门面，路由不再自带第二份）', async () => {
+    const r = await fetch(`${base}/novel-api/sources/nope-does-not-exist/enabled`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: true }),
+    })
+    expect(r.status).toBe(404)
+    expect((await r.json() as any).error.code).toBe('NotFound')
+  })
   it('POST /sources/batch-enabled：批量启停 + 未知跳过 + 重复幂等 + 空/非法 400', async () => {
     const seed = await importAndDone([{ name: 'be.json', text: JSON.stringify([
       { ...rawSource, bookSourceName: 'BE1', bookSourceUrl: 'https://be1.com' },

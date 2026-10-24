@@ -35,7 +35,7 @@ function clientSources(): Array<{ file: string; text: string }> {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const p = path.join(dir, entry.name)
       if (entry.isDirectory()) walk(p)
-      else if (/\.tsx?$/.test(entry.name)) out.push({ file: path.relative(clientDir, p), text: readFileSync(p, 'utf8') })
+      else if (/\.tsx?$/.test(entry.name)) out.push({ file: path.relative(clientDir, p).split(path.sep).join('/'), text: readFileSync(p, 'utf8') })
     }
   }
   walk(clientDir)
@@ -56,7 +56,7 @@ function ruleBody(selector: string): string {
   return ''
 }
 
-/** 剥掉注释再扫：守卫管的是**声明**，不是文档。本文件与 styles.tsx 的注释里
+/** 剥掉注释再扫：守卫管的是**声明**，不是文档。本文件与 styles/ 各块的注释里
  *  大量出现「曾经的假 token 名」（那正是文档的价值所在），照扫即误报。 */
 function strip(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
@@ -73,10 +73,12 @@ describe('token 层自足守卫（引用未定义的本层 token 即红）', () 
     for (const m of NOVEL_CSS.matchAll(/(--novel-[\w-]+)\s*:/g)) defined.add(m[1])
     const bad: string[] = []
     for (const m of strip(NOVEL_CSS).matchAll(/var\(\s*(--novel-[\w-]+)/g)) {
-      if (!defined.has(m[1])) bad.push(`styles.tsx: ${m[1]}`)
+      if (!defined.has(m[1])) bad.push(`styles/（NOVEL_CSS 拼装层）: ${m[1]}`)
     }
     for (const { file, text } of clientSources()) {
-      if (file === 'styles.tsx') continue
+      // 样式层（拼装点 + styles/ 各块）正是上面那个串的来源，逐块再扫是同一批文本的第二遍；
+      // 拼装点自身没有 CSS（只剩 import 与 `NOVEL_CSS` 的连接）。
+      if (file === 'styles.tsx' || file.startsWith('styles/')) continue
       for (const m of strip(text).matchAll(/var\(\s*(--novel-[\w-]+)/g)) {
         if (!defined.has(m[1])) bad.push(`${file}: ${m[1]}`)
       }
@@ -117,7 +119,7 @@ describe('z 序单表（控制器层 CTRL_Z 与样式层浮层不再各写各的
   it('视图不得写裸 z-index 数字（z 只从 CTRL_Z 或 --novel-z-* 出）', () => {
     const bad: string[] = []
     for (const { file, text } of clientSources()) {
-      if (file === 'styles.tsx') continue                        // z 值的唯一住址就是样式层的 --novel-z-* 表
+      if (file === 'styles.tsx' || file.startsWith('styles/')) continue   // z 值的唯一住址就是样式层（拼装点 + styles/ 各块）
       const code = strip(text)
       for (const m of code.matchAll(/zIndex:\s*(\d+)/g)) bad.push(`${file}: zIndex:${m[1]}`)
       for (const m of code.matchAll(/z-index:\s*(\d+)/g)) bad.push(`${file}: z-index:${m[1]}`)

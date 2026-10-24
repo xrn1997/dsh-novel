@@ -133,11 +133,9 @@ async function route(
       guard(method, 'POST', paramRoutes.sourceEnabled(b))
       const body = await readJsonBody<Record<string, unknown> | null>(req, null)
       const enabled = readBodies.enabled(body)
-      const found = await service.setEnabled(b, enabled)
-      if (!found) {
-        // 错误词汇单主人：「源不存在」全走 SourceNotFoundError → 分类表投影 404 NotFound
-        throw new SourceNotFoundError(b)
-      }
+      // 未知 id 由门面抛 SourceNotFoundError；classify 的表把它投影成 404 NotFound，
+      // 路由层不再自带第二份判据。
+      await service.setEnabled(b, enabled)
       writeOk(res, { enabled })
       return
     }

@@ -404,7 +404,7 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
         <span className="novel-actions">
           {/* 操作列：浏览态常驻（试跑是排查主路径）；异常态多一个状态动作钮（验证/重验）。
               **不渲染「启用」文字钮**：启停唯一入口 = 最右开关——重复入口曾让列宽随状态漂移、
-              右缘按钮组不对齐（用户实机反馈）。列轨道定宽右锚在 styles.tsx `.novel-tr.src`。
+              右缘按钮组不对齐（用户实机反馈）。列轨道定宽右锚在 styles/controls.ts 的 `.novel-tr.src`。
               批量任务在途时禁验证类动作（防重复提交），试跑不受影响（独立请求）。
               验证钮**不看 enabled**（2026-09 裁定）：停用 ≠ 免验——曾挂过的 `!enabled` 门造成
               「批量能验、单点不能验」，与待办箱入口自相矛盾。 */}

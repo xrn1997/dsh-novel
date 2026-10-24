@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { load } from 'cheerio'
-import { JAVA_PROTOCOL, SANDBOX_MOUNTS, invokeJavaMethod } from '../../src/engine/js-protocol.js'
+import { JAVA_PROTOCOL, SANDBOX_MOUNTS, SYNC_AJAX_SENTINEL, asyncBridgeSource, asyncRouteProbes, invokeJavaMethod } from '../../src/engine/js-protocol.js'
 import type { BridgeDeps, JavaBridge } from '../../src/engine/js-protocol.js'
-import { createSourceSession } from '../../src/engine/js-sandbox.js'
+import { SYNC_WORKER_RE, createSourceSession } from '../../src/engine/js-sandbox.js'
 import { JsSandboxError } from '../../src/engine/errors.js'
 import { engineContextOf } from '../../src/services/source-eval.js'
 import type { EngineValue, EvalContext, Facet, SegmentLoc } from '../../src/engine/types.js'
@@ -60,7 +60,7 @@ describe('JavaBridge 协议表（表驱动登记）', () => {
       ...SANDBOX_MOUNTS.source.map((p) => p.name),
       ...SANDBOX_MOUNTS.cache.map((p) => p.name),
     ]
-    // async 行（ajax / connect / post / downloadFile）在引导层手工挂特制包装，不进 sync 清单——差集必须恰为 async 集
+    // async 行（ajax / connect / post / downloadFile）由引导层生成特制包装，不进 sync 清单——差集必须恰为 async 集
     const asyncRows = JAVA_PROTOCOL.flatMap((r) => (r.mode === 'async' ? [r.name] : []))
     const syncRows = JAVA_PROTOCOL.flatMap((r) => (r.mode === 'async' ? [] : [r.name]))
     expect([...mounted].sort()).toEqual([...syncRows].sort())
@@ -70,10 +70,10 @@ describe('JavaBridge 协议表（表驱动登记）', () => {
     expect([...unmounted].sort()).toEqual([...asyncRows].sort())
   })
 
-  it('async 行不进 javaSync 名单（ajax/downloadFile/connect/post/getHttp/head 走引导层特制包装）', () => {
-    const asyncNames = JAVA_PROTOCOL.flatMap((r) => (r.mode === 'async' ? [r.name] : []))
-    expect(asyncNames).toEqual(['ajax', 'connect', 'post', 'getHttp', 'urlConn', 'webView', 'head', 'downloadFile'])
-    expect(SANDBOX_MOUNTS.javaSync).not.toContain('ajax')
+  it('async 行不进 javaSync 名单（它们走引导层特制包装，不是 `sync()` 转发）', () => {
+    for (const name of JAVA_PROTOCOL.flatMap((r) => (r.mode === 'async' ? [r.name] : []))) {
+      expect(SANDBOX_MOUNTS.javaSync).not.toContain(name)
+    }
     expect(SANDBOX_MOUNTS.javaSync).toContain('get')
   })
 
@@ -301,23 +301,74 @@ describe('摘要与 HMAC 族（java.digestHex / digestBase64Str / HMacHex / HMac
 })
 
 describe('async 行的能力位闸（表行 ↔ 沙箱包装 ↔ 服务层装配）', () => {
-  // 「加一个方法 = 表加一行」这句话只对 sync 行成立：async 行还要 BOOTSTRAP 里那份手写包装，
-  // 而它读的能力位（`ctx.fetchPost` 这类）必须有人真的递进来。两处都没有编译期联系，
-  // 漏哪一处都只在真跑到那个方法的源上炸成「未接线」——所以这里用现读的源码当闸。
+  // 「加一个方法 = 表加一行」对 async 行同样成立：桥壳与 g.java 挂载都由表生成，测试逐行验
+  // 「有壳 / 能到 / 被路由」。它读的能力位（`ctx.fetchPost` 这类）仍必须有人真的递进来：
+  // 两处没有编译期联系，漏哪一处都只在真跑到那个方法的源上炸成「未接线」——所以这里用现读的源码当闸。
   const read = (rel: string): string =>
     readFileSync(new URL(rel, import.meta.url), 'utf8')
   const protocolSrc = read('../../src/engine/js-protocol.ts')
-  const sandboxSrc = read('../../src/engine/js-sandbox.ts')
   const asyncRows = JAVA_PROTOCOL.filter((r) => r.mode === 'async').map((r) => r.name)
   const capabilityNames = [...new Set(
     [...protocolSrc.matchAll(/d\.ctx\.([a-zA-Z]+)/g)].map((m) => m[1]),
   )]
 
-  it('每条 async 行都在引导层有自己的同步桥包装（漏包装＝脚本永远调不到）', () => {
-    expect(asyncRows).toEqual(['ajax', 'connect', 'post', 'getHttp', 'urlConn', 'webView', 'head', 'downloadFile'])
-    for (const name of asyncRows) {
-      expect(sandboxSrc).toContain(`const ${name} = d.syncAjax`)
+  it('bridge 只长在 async 行上（sync 行混进 bridge 会被 javaSync 名单静默收编成双挂载）', () => {
+    // 表的类型只把 bridge 标成可选，挡不住「sync 行也带 bridge」：那一行会同时进 javaSync
+    // （sync() 转发）与 javaAsyncMounts（生成桥壳），后者被前者覆盖、哨兵臂成死代码。
+    // 正向（async 行必有 bridge）由上一条闸钉住，这里钉反向，两条合起来基数恰为 async 行数。
+    for (const r of JAVA_PROTOCOL) {
+      if (r.bridge !== undefined) expect(r.mode, `${r.name} 带 bridge 却不是 async 行`).toBe('async')
     }
+    expect(JAVA_PROTOCOL.filter((r) => r.bridge !== undefined)).toHaveLength(asyncRows.length)
+  })
+
+  it('每条 async 行都：有桥壳、有可达入口、被路由启发式认出', () => {
+    // ① 桥壳：生成器必须为每一行产出一段 `const <name> = d.syncAjax`（串是生成的，
+    //    所以这条只防生成器漏行，不再防手抄漂移）
+    const bridgeSrc = asyncBridgeSource()
+    for (const r of JAVA_PROTOCOL.filter((x) => x.mode === 'async')) {
+      expect(bridgeSrc).toContain(`const ${r.name} = d.syncAjax`)
+    }
+    // ② 可达：直接挂载的必须有挂载项；间接的必须写明它走哪个入口
+    const mounted = new Set(SANDBOX_MOUNTS.javaAsyncMounts.map((m) => m.target))
+    for (const r of JAVA_PROTOCOL.filter((x) => x.mode === 'async')) {
+      expect(r.bridge, `${r.name} 缺 bridge 判别`).toBeDefined()
+      if (r.bridge!.mountAs !== null) expect(mounted.has(r.bridge!.mountAs)).toBe(true)
+      else expect(r.bridge!.routeProbe).toMatch(/java\s*\.\s*get\s*\(|openConnection\s*\(/)
+    }
+    // ③ 路由：每种可达写法都必须被 SYNC_WORKER_RE 认出——认不出时主线程抛哨兵，
+    //    而脚本自己的 try/catch 会把哨兵吞掉（见 js-sandbox「同步桥」一节），
+    //    catch 分支拿到 undefined = 空结果冒充失败。
+    for (const { name, probe } of asyncRouteProbes()) {
+      expect(SYNC_WORKER_RE.test(probe), `${name} 的写法不会被路由：${probe}`).toBe(true)
+    }
+    // 上面那条 for 在生成器漏行时会空转：基数与表的 async 行数对齐（分母是表，不是写死的数）
+    expect(asyncRouteProbes()).toHaveLength(asyncRows.length)
+    // 别名不在表行上（表里只有宿主方法名），只能经挂载清单钉：它同样在引导层抛哨兵。
+    for (const m of SANDBOX_MOUNTS.javaAsyncMounts) {
+      expect(SYNC_WORKER_RE.test(`java.${m.target}("https://m.example.com")`), `${m.target} 的挂载名不会被路由`).toBe(true)
+    }
+  })
+
+  it('哨兵只有一个主人：生成的桥壳抛的就是路由认的那一个，两个模块里不许有第二份字面量', () => {
+    // 抛侧搬进生成器后，字面量极易跟着抄一份：值一改另一头认不出，脚本拿到的就是哨兵错误本身
+    // （不再换 worker 重跑），而这条路只在真跑同步网络桥的源上炸。
+    expect(asyncBridgeSource()).toContain(SYNC_AJAX_SENTINEL)
+    const sandboxSrc = read('../../src/engine/js-sandbox.ts')
+    expect(`${protocolSrc}\n${sandboxSrc}`.match(/__dsh_sync_ajax_required__/g)).toHaveLength(1)
+  })
+
+  it('生成的桥源码可安全插进 BOOTSTRAP 模板串：无反引号、无 ${', () => {
+    // 输出是**文本**插值（js-sandbox 的 BOOTSTRAP）：一个反引号提前结束模板串，一个 ${ 被当场求值——
+    // 两种都只在真跑脚本的源上炸，且报错离生成器很远，所以钉在生成物上。
+    const src = asyncBridgeSource()
+    expect(src).not.toContain('`')
+    expect(src).not.toContain('${')
+  })
+
+  it('async 挂载目标名唯一（同名双挂 ⇒ 后者静默覆盖前者）', () => {
+    const targets = SANDBOX_MOUNTS.javaAsyncMounts.map((m) => m.target)
+    expect(new Set(targets).size).toBe(targets.length)
   })
 
   it('表读到的每个能力位，源级上下文装配单点都供得出（漏装配＝运行时「未接线」）', () => {

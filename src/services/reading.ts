@@ -332,9 +332,11 @@ export class ReadingService {
     return this.registry.list().map((s) => this.registry.toPublic(s))
   }
 
-  /** 启停单源；不存在 → false */
-  async setEnabled(id: string, enabled: boolean): Promise<boolean> {
-    return this.registry.edit((tx) => tx.setEnabled(id, enabled))
+  /** 单源启停：未知 id → 抛 SourceNotFoundError（「源不存在」只在门面断言一次；
+   *  路由面由 classify 免费拿 404，工具面不再先 hasSource 预检——bool 回执的语义不自明）。 */
+  async setEnabled(id: string, enabled: boolean): Promise<void> {
+    const found = await this.registry.edit((tx) => tx.setEnabled(id, enabled))
+    if (!found) throw new SourceNotFoundError(id)
   }
 
   /** 启停批量：未知 id 静默跳过、重复 id 幂等；返回实际变更数（一次 edit 一次合并落盘） */
@@ -611,7 +613,7 @@ export class ReadingService {
    *  那一路可以边跑边被看见（浏览器半原先自持的分批循环只为拿这个增量，随之后退）。
    *  sourceIds 缺省**或空数组**都视为「未限定」= 搜全部启用源（曾把空数组当「搜零个源」，
    *  零分组空结果冒充成功）。 */
-  async searchProgressive(keyword: string, opts?: {
+  private async searchProgressive(keyword: string, opts?: {
     sourceIds?: string[]
     onGroup?: (group: SearchGroup, index: number) => void
     /** 协作式停止：置位后**不再开新的源**（在途的不撤回）。搜索做成后台任务时的取消出口。 */

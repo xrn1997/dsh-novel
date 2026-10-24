@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createSourceEval, engineContextOf } from '../../src/services/source-eval.js'
+import { createSourceEval, engineContextOf, resolveHeaders } from '../../src/services/source-eval.js'
 import { normalizeSource } from '../../src/services/normalize.js'
 import type { Fetcher } from '../../src/services/fetcher.js'
 import type { NovelSource } from '../../src/services/types.js'
@@ -59,6 +59,47 @@ describe('SourceEval: one seam for source script evaluation', () => {
     const h = await ev.headers()
     expect(h['X-Static']).toBe('1')
     expect(h['X-Dev']).toBe('d1')
+  })
+
+  it('头规则脚本的六个出站口都用静态头，且不递归回头规则（出站数 = 脚本调用数）', async () => {
+    // 不递归只能从**出站次数**上观测：脚本三次调用若回头发起头规则求值，每轮会多出三发。
+    // 三条调用走三条**不同**的出口：ajax（fetch）、post（fetchPost）、双参 get（fetchGet）——
+    // 只观测 ajax 时另外两条出口用不用静态头、会不会递归，一条断言都管不到。
+    const seen: { method: string; url: string; headers: Record<string, string> }[] = []
+    const f: Fetcher = {
+      fetchPage: async (url, init) => {
+        seen.push({ method: init?.method ?? 'GET', url, headers: init?.headers ?? {} })
+        return {
+          raw: Buffer.from(''), finalUrl: url, contentType: 'text/plain', charset: 'utf-8',
+          status: 200, setCookie: [],
+        }
+      },
+    }
+    // header 与 headerRule 手工并存：normalize 的同一 raw.header 二选一产不出这一形态，但只有
+    // 并存才观测得到「头规则脚本出站时带的是静态表，不是动态头」；本用例要的就是这一眼。
+    const s = {
+      ...source,
+      rules: {
+        ...source.rules,
+        header: { 'X-Static': 'on' },
+        headerRule: '@js: java.ajax("https://m.example.com/ping");'
+          + ' java.post("https://m.example.com/post", "a=1");'
+          + ' java.get("https://m.example.com/get", {});'
+          + ' return JSON.stringify({ "X-Dyn": "1" })',
+      },
+      raw: { header: JSON.stringify({ 'X-Static': 'on' }) },
+    } satisfies NovelSource
+    const out = await resolveHeaders(f, s)
+    expect(out['X-Dyn']).toBe('1')
+    expect(out['X-Static']).toBe('on')
+    // 三发恰是脚本的三次调用：任何多出来的一发都是递归（头规则被自身请求重新求值）
+    expect(seen).toHaveLength(3)
+    expect(seen.map((r) => [r.method, r.url])).toEqual([
+      ['GET', 'https://m.example.com/ping'],
+      ['POST', 'https://m.example.com/post'],
+      ['GET', 'https://m.example.com/get'],
+    ])
+    for (const r of seen) expect(r.headers['X-Static']).toBe('on')   // 每条出口都是静态头打底
   })
 
   it('登录面投影：调用方给的排在源 auth 之前，过期 auth 一概不供出', () => {

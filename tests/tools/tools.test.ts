@@ -261,6 +261,11 @@ describe('agent 工具六件套', () => {
     const empty = await run(s, 'dshnovel_source', { action: 'list' })
     expect(empty.sources).toHaveLength(0)
   })
+  it('dshnovel_source：enable 未知 id 必抛错（不静默回「已启用」）', async () => {
+    const s = await svc()
+    await expect(run(s, 'dshnovel_source', { action: 'enable', sourceId: 'nope' }))
+      .rejects.toThrow(/源不存在/)
+  })
   it('dshnovel_source：id 类 action 缺 sourceId 时抛清楚的错', async () => {
     const s = await svc()
     await expect(run(s, 'dshnovel_source', { action: 'probe' })).rejects.toThrow(/缺少参数/)

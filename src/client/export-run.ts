@@ -66,6 +66,38 @@ export function parseRange(fromStr: string, toStr: string, total: number): Range
   return { ok: true, from, to }
 }
 
+/** 导出范围草稿：面板上那两个输入框的全部状态——**只有用户输入的两格**。
+ *  缺省、档位算术、校验三件事只住这里——视图此前各持一份（openExport 写缺省、onPreset 算档位、
+ *  onConfirm 再校验一次），四处各写一遍同一件事就是没有 locality。
+ *  章数刻意不进草稿：它是视图的**活值**（当前目录长度），抄进草稿就会停在装配或开面板那一下的读数上
+ *  （目录迟到 / 变化即失真）——调用方每次把当下章数传进来。 */
+export interface ExportDraft { from: string; to: string }
+
+/** 全本缺省（打开面板那一下） */
+export function draftOf(total: number): ExportDraft {
+  return { from: '1', to: String(total) }
+}
+
+/** 档位：all = 全本；rest = 当前章的下一章起。
+ *  total 由调用方按当下目录现给（不进草稿）：目录在面板开着时才到齐，这一次传递就把草稿的旧读数冲正。
+ *  rest 在最后一章时钳到 total——from 越过 to 会让确认钮凭空禁用，用户读不出为什么。
+ *  不收草稿入参：两格全由 kind / currentChapter / total 决定，草稿在这里没有可贡献的值。收进来只为凑
+ *  签名，就会逼出一个 `{ ...d, ... }` 的空底——结构上更宽的对象可赋值给 `ExportDraft`（如带 total 的），
+ *  多余的格便经由那个空底原样流回 `setExpDraft`，正是「草稿不沾派生读数」这条要挡的。 */
+export function applyPreset(
+  kind: 'all' | 'rest', currentChapter: number, total: number,
+): ExportDraft {
+  if (kind === 'all') return draftOf(total)
+  const from = Math.min(currentChapter + 1, total)
+  return { from: String(from), to: String(total) }
+}
+
+/** 确认钮的唯一判据（视图只渲染 reason，不自己判；面板另有「共 N 章」与输入框 max 这类活读数，
+ *  直接读 total，不归这里）；章数同样按调用方现给的活值 */
+export function validRangeOf(d: ExportDraft, total: number): RangeParse {
+  return parseRange(d.from, d.to, total)
+}
+
 /** AbortError 判定：取消/卸载是主动行为，不许当成导出失败弹错误条 */
 function isAbort(e: unknown): boolean {
   return typeof e === 'object' && e !== null && 'name' in e && e.name === 'AbortError'

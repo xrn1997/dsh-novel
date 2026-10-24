@@ -16,7 +16,7 @@ import type { ChapterContent, ContentNode, ContentTag, LinkRole, ReadingTarget }
  *     `onNavigate(ReadingTarget, role)`，由上层（阅读会话 / 注释面板）决定去哪个阅读单元。
  *
  * 呈现只管结构：颜色与字号一律**继承容器**——同一组件在两处渲染（阅读流是纸张色 + 阅读设置字号，
- * 注释面板是控制器层 token），组件自己钉色必然在另一处不可读。视觉规则住 `styles.tsx`。
+ * 注释面板是控制器层 token），组件自己钉色必然在另一处不可读。视觉规则住 `styles/reader.ts`。
  */
 
 /** 白名单标签 → DOM 元素名。恒等映射不是冗余：`Record<ContentTag, …>` 让白名单漏一个即编译红。

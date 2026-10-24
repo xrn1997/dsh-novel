@@ -77,7 +77,7 @@ function clientSources(): Array<{ file: string; text: string }> {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const p = path.join(dir, entry.name)
       if (entry.isDirectory()) walk(p)
-      else if (/\.tsx?$/.test(entry.name)) out.push({ file: path.relative(clientDir, p), text: readFileSync(p, 'utf8') })
+      else if (/\.tsx?$/.test(entry.name)) out.push({ file: path.relative(clientDir, p).split(path.sep).join('/'), text: readFileSync(p, 'utf8') })
     }
   }
   walk(clientDir)
@@ -122,12 +122,16 @@ describe('宿主 token 词表守卫（--dsw-* 必须是宿主真名）', () => {
  * hex 字面量守卫：上面的 --dsw-* 词表守卫只查宿主 token 真名，管不住视图内联
  * brand hex——SettingsSourceList/SettingsImportPane 曾内联 #2f6feb14/1f/44 与 #79a8ff 绕开
  * token seam（宿主换 brand 即全部失联）。本守卫扫 client 全源码的 hex 字面量，白名单只有两处：
- *  ① token 定义处本身（styles.tsx：fallback 与 .novel-dark 钉值的唯一住址）；
+ *  ① token 定义处本身（`src/client/styles/`：fallback、`.novel-dark` 钉值与由 token 派生的叠层）；
  * ② 钉死的正文层色值（正文层永不接 token——paperInk 两端字色 / 纸张预设 / 默认纸色）。
  * 视图里再出现任何非白名单 hex 即红。
  */
 const HEX_ALLOWED: Record<string, string[] | '*'> = {
-  'styles.tsx': '*',
+  'styles/tokens.ts': '*',                                          // token 变量与字面色值的缺省定义
+  'styles/shell.ts': '*',                                           // .novel-dark 的暗层重钉（同属 token 层）
+  'styles/reader.ts': '*',                                          // 纸/墨的 token 派生色
+  'styles/shelf.ts': '*',                                           // 卡片描边与投影的 token 派生色
+  'styles/overlays.ts': '*',                                        // 浮层投影的 token 派生色
   'util.ts': ['#222', '#e8e8ea'],                                   // paperInk 深/浅字（正文层）
   'prefs-ui.ts': ['#f7f3e8', '#ffffff', '#e8f0e8', '#f0e8e8'],      // 四款纸张预设（正文层）
   'store.ts': ['#f7f3e8'],                                          // DEFAULT_PREFS.paperColor（正文层）

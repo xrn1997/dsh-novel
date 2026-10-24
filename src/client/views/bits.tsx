@@ -6,7 +6,7 @@ import type { RunCardKind } from '../run-card.js'
 import type { JobState, LocalImportWarning } from './types.js'
 
 /** 小组件集：状态徽标 / 错误横幅（带段级定位徽标）/ 空态 / 运行卡与进度段——六视图共用。
- *  颜色一律走 `--novel-*` 局部 token（由 NovelStyles 的 token 层定义，见 styles.tsx 头注）：
+ *  颜色一律走 `--novel-*` 局部 token（由 NovelStyles 的 token 层定义，见 styles/tokens.ts 头注）：
  *  写死 hex 等于钉死一套主题观感，暗态下与宿主调色板不一致。 */
 
 /** 源状态徽标：原始状态字不进 UI，文案住 `copy/sources.ts` 的 `sources.status.*`（书源列表与
