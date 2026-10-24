@@ -32,9 +32,11 @@ const cmpVer = (a: number[], b: number[]): number => {
 describe('包形态声明', () => {
   it('入口与 exports', () => {
     expect(pkg.main).toBe('lib/index.js')
-    expect(pkg.types).toBe('lib/index.d.ts')
-    expect(pkg.exports['./client']).toBe('./lib/client.js')
+    expect(pkg.types).toBe('lib/types/index.d.ts')
+    expect(pkg.exports['./client'].types).toBe('./lib/types/client/index.d.ts')
+    expect(pkg.exports['./client'].default).toBe('./lib/client.js')
     expect(pkg.exports['.'].default).toBe('./lib/index.js')
+    expect(pkg.exports['.'].types).toBe('./lib/types/index.d.ts')
   })
   it('dsh 声明（嵌套形态，client-modules 与 plugin add 依赖它）', () => {
     expect(pkg.dsh.bundle.patch).toBe('./cordis.patch.yml')

@@ -47,7 +47,7 @@ dsh plugin --profile <profile> add @xrn1997/dsh-novel
 
 重启宿主后，左侧栏出现「小说」全局面板入口（图标行；点击即在中央面板打开书架 / 书城 / 书源管理 tab）。侧栏入口要求该 profile 的 bundles 里有 `@deepseek-ai/dsh-web-app`；不带它的 profile 只挂 Node 半与 AI 工具，界面上不会多出入口。
 
-npm 安装使用预构建产物，秒装、无需构建授权。从 GitHub 源码安装（`dsh plugin --profile <profile> add github:xrn1997/dsh-novel`）时 `prepare` 脚本会自动构建，但 pnpm ≥10 首次安装可能拦下构建脚本（依赖已装而 `lib/` 未生成），需先在 profile 目录执行 `pnpm approve-builds --all` 再重跑。
+npm 安装使用预构建产物，秒装、无需构建授权。本包没有 `prepare`：从 GitHub 源码直装（`dsh plugin --profile <profile> add github:xrn1997/dsh-novel`）不会自动构建，装出来缺 `lib/` 会被宿主拒绝挂载。要走源码，请先克隆仓库并 `pnpm install && pnpm build`，再用 `dsh plugin --profile <profile> add link:<克隆目录>` 挂载。
 
 卸载：
 

@@ -25,14 +25,16 @@ const NODE_ENV = process.env.NODE_ENV ?? 'production'
 
 export default defineConfig([
   {
-    // host 半：ESM node，peerDeps 留 import（真实安装里在盘上），npm 依赖 inline，dts 直出
+    // host 半：ESM node，peerDeps 留 import（真实安装里在盘上），npm 依赖 inline；声明不在这里出（见下面 dts）
     entry: { index: 'src/index.ts' },
     outDir: 'lib',
     format: ['esm'],
     platform: 'node',
     target: 'es2024',
     fixedExtension: false,
-    dts: true,
+    // 声明由 `tsc -p tsconfig.build.json` 出到 `lib/types/`：tsdown 的 dts 会加载
+    // rolldown-plugin-dts → yuku 原生模块，构建期不需要它，也不该被 AV 盯上。
+    dts: false,
     clean: true,
     deps: {
       // 归属已由 neverBundle/alwaysBundle 全量表定，onlyBundle 关闭其白名单过滤并消掉构建期 hint

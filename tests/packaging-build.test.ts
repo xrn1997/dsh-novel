@@ -40,7 +40,7 @@ describe.skipIf(!hasLib)('构建产物（先跑 pnpm build 或 pnpm test:pack）
     expect(requires.filter((r) => !allowed.includes(r))).toEqual([])
   })
   it('dts 存在且导出入口签名', () => {
-    const dts = readFileSync('lib/index.d.ts', 'utf8')
+    const dts = readFileSync('lib/types/index.d.ts', 'utf8')
     expect(dts).toContain('apply')
     expect(dts).toContain('Config')
   })
