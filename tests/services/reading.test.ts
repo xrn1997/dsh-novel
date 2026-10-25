@@ -1046,6 +1046,20 @@ describe('门面直测（invariant 与 loginPlan 不再只穿 HTTP 测）', () =
     expect((await svc.removeLocalBook(local.bookKey)).removed).toBe(false)
   })
 
+  it('shelfList 按最近阅读排序：刚存过进度的书排到最前', async () => {
+    const svc = await mk()
+    const clock = vi.spyOn(Date, 'now')
+    try {
+      clock.mockReturnValue(100); svc.shelfAdd('a', { sourceId: 's', title: 'A' })
+      clock.mockReturnValue(200); svc.shelfAdd('b', { sourceId: 's', title: 'B' })
+      clock.mockReturnValue(300); svc.shelfAdd('c', { sourceId: 's', title: 'C' })
+      clock.mockReturnValue(400); svc.shelfSaveProgress('b', 1, 0)
+      expect(svc.shelfList().map((b) => b.bookKey)).toEqual(['b', 'c', 'a'])
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
   it('shelfList 来源投影：源名实时 join——源删了投影跟着变 null，本地书恒 null', async () => {
     const svc = await mk()
     const src = await svc.importOne(rawSource)                       // bookSourceName: 'S'

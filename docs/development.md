@@ -5,7 +5,7 @@
 ## 构建与日常开发
 
 ```powershell
-git clone https://github.com/xrn1997/dsh-novel.git
+git clone <仓库地址>   # GitHub 或 GitCode 镜像均可
 cd dsh-novel
 pnpm install
 pnpm build        # 构建 lib/（Node 半 + 浏览器半）+ lib/types/（tsc 声明）；改动源码后、重启宿主前必须执行

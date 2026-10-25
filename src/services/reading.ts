@@ -467,11 +467,18 @@ export class ReadingService {
 
   // ── 书架动词 ──
 
-  /** 书架读取面：落盘条目 + **来源投影**（sourceName）。
+  /** 书架读取面：落盘条目 + **来源投影**（sourceName），按**最近阅读**排序。
+   *  排序键是进度自己的 `updatedAt`（每次存进度刷新；新书 = 加入时刻），
+   *  同刻按加入时间、再按 bookKey 定序，保证 API / 工具 / 书架三面读到的顺序一致。
    *  源名在这里实时 join 注册表（与 SearchGroup.sourceName 同一口径）——落盘快照会在源改名 /
    *  同址替换复用 id 后陈旧（intake 复用旧 id，见按址去重）。join 不到 = 源已被删 → null。 */
   shelfList(): ShelfEntry[] {
-    return this.shelf.list().map((b) => ({ ...b, sourceName: this.sourceNameOf(b.sourceId) }))
+    return this.shelf.list()
+      .map((b) => ({ ...b, sourceName: this.sourceNameOf(b.sourceId) }))
+      .sort((a, b) =>
+        b.progress.updatedAt - a.progress.updatedAt
+        || b.addedAt - a.addedAt
+        || (a.bookKey < b.bookKey ? -1 : a.bookKey > b.bookKey ? 1 : 0))
   }
 
   /** 来源投影的唯一算式：本地书恒 null（本地身份归 LOCAL_SOURCE_ID 判别，不查注册表）；

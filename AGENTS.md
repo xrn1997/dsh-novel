@@ -54,5 +54,5 @@ DeepSeek Harness（DSH）的「小说」插件：导入 legado 书源 → 聚合
 - **`lib/` 是构建产物且不入库**：先 `pnpm build`，否则整个插件树拒绝挂载（`plugin tree failed to load` + `ERR_MODULE_NOT_FOUND`）。完整说明见 `docs/development.md` 的「构建与日常开发」。
 - **改动生效路径分两半**：浏览器半由宿主 HMR 热推，Node 半必须重启宿主；前提与细节见 `docs/development.md` 的「构建与日常开发」。
 - **出站代理**：DSH 的 Node 进程走 undici，**不读系统代理**；只有代理能到的站点必须配 `proxyUrl`，否则表现为「浏览器能开、插件打不开」。
-- **运行时数据不在仓库**：书源 / 书架 / 缓存 / 本地书住 `~/.dsh/novel/`（`dataDir` 可改）。
+- **运行时数据不在仓库**：书源 / 书架 / 缓存 / 本地书住 `$DSH_HOME/novel/`（缺省 `~/.dsh/novel/`；`dataDir` 可改）。
 - **`compat/report.md` 是跑门产物**：`pnpm test:compat` 每次覆盖写，已 gitignore；它的分母是 `compat/fixtures/` 下的 fixture，**不是站点可用率**。
