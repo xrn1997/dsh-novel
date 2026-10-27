@@ -23,6 +23,6 @@ export interface SourceSession {
   cacheStore(sourceKey: string): Map<string, string>
   /** 可选：删源时清掉该源的全部状态（文件实现有；进程内实现无） */
   forget?(sourceKey: string): void
-  /** 可选落盘收尾（内存实现无此方法） */
+  /** 可选落盘收尾（求值边界/卸载时调用；内存实现无此方法） */
   flush?(): void
 }

@@ -887,8 +887,11 @@ export class ReadingService {
     return this.content.chapterContent(sourceId, bookKey, chIndex, opts)
   }
 
-  /** 收尾落盘：书架（防抖进度）+ 注册表（合并写）一并等齐 */
-  async flush(): Promise<void> { await Promise.all([this.shelf.flush(), this.registry.flush()]) }
+  /** 收尾落盘：书架（防抖进度）+ 注册表（合并写）+ 源状态（求值边界外的脏标记）一并等齐 */
+  async flush(): Promise<void> {
+    this.fetcher.sourceSession?.flush?.()
+    await Promise.all([this.shelf.flush(), this.registry.flush()])
+  }
 
   // ── 内部 ─────────────────────────────────────────────────────────────
 

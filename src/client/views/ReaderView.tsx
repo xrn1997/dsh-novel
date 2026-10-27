@@ -1,5 +1,5 @@
-import type { CSSProperties, ReactNode } from 'react'
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import type { CSSProperties, MutableRefObject, ReactNode } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { LOCAL_SOURCE_ID, bodies, paramOps, queries } from '../../shared/wire.js'
 import { describeError } from '../api.js'
 import { plural, useCopy } from '../copy/index.js'
@@ -24,7 +24,7 @@ import { ChapterBody } from './ChapterBody.js'
 import { Dialog } from './dialog.js'
 import { ReaderNavigation } from './ReaderNavigation.js'
 import { ReaderNotes } from './ReaderNotes.js'
-import type { BookNavigation, ChapterContent, LocalImportWarning } from './types.js'
+import type { BookNavigation, ChapterContent, LinkRole, LocalImportWarning, ReadingTarget } from './types.js'
 
 /** 正文层字色由纸张色算：纯函数住址在 util.ts，此处只接线。 */
 
@@ -218,6 +218,28 @@ export function ImportNotesPanel({ warnings, onClose }: {
   )
 }
 
+/** 已载章块：memo 以 (content, name, bookKey, onNavigate) 为界——父视图的 loading/currentChapter
+ *  变化不再重渲染全部历史章节；stripLeadingTitle 也只随本章内容/章名重算。 */
+const ChapterShell = memo(function ChapterShell(props: {
+  index: number
+  content: ChapterContent
+  name: string
+  bookKey: string
+  onNavigate: (target: ReadingTarget, role: LinkRole) => void
+  chapterRefs: MutableRefObject<Array<HTMLDivElement | null>>
+}): ReactNode {
+  const { index, content, name, bookKey, onNavigate, chapterRefs } = props
+  const body = useMemo(() => stripLeadingTitle(content, name), [content, name])
+  return (
+    <div ref={(el) => { chapterRefs.current[index] = el }} data-chapter={index}>
+      {/* h2 不是 h3：阅读器这一屏没有更高的标题占位，从 h3 起等于给读屏一份断了头的大纲 */}
+      <h2 className="novel-rdr-mark">{name}</h2>
+      {/* 正文两种形态都在 ChapterBody；送渲染前剥一次重复章名——只这一处剥 */}
+      <ChapterBody content={body} bookKey={bookKey} onNavigate={onNavigate} />
+    </div>
+  )
+})
+
 /**
  * 阅读器：连续滚动流（章章首尾相接）。两块状态各有主人——阅读时序归「阅读会话」
  * （reader-session.ts），浮层/注释载荷/Esc/离开一问/入架写入归「阅读场景」（reader-scene.ts）；
@@ -299,6 +321,10 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     },
     pushOk: deps.pushOk, t,
   }), [session, sourceId, bookKey, title, deps, t])
+  /** 正文内链回调：scene 稳定，回调身份不能每次渲染都换（ChapterShell 的 memo 依赖它）。 */
+  const onBodyNavigate = useCallback((target: ReadingTarget, role: LinkRole): void => {
+    scene.bodyLink(target, role)
+  }, [scene])
   // 第三参 = getServerSnapshot：renderToString（smoke/SSR）必需，缺了直接抛
   const sceneState = useSyncExternalStore(scene.subscribe, () => scene.state, () => scene.state)
   /** 收场（Esc 与面板「关闭」钮同一条路）：内链打开的回到引用处——位置提交与返回栈仍归会话 */
@@ -386,27 +412,42 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   }, [chapters, st.pendingJump])
 
   // 视口变化：capture 阶段收「任意容器」的 scroll（scroll 不冒泡，但捕获阶段会经过 document——
-  // 滚动容器（.novel-main 或更外层）的滚动因此都收得到）；rAF 合帧
+  // 滚动容器（.novel-main 或更外层）的滚动因此都收得到）；rAF 合帧。滚动只读锚点缓存，
+  // 只有窗口 resize 与内容高度变化（图片解码完成等，走 ResizeObserver）才标「布局变了」——
+  // 两类来源共用这一条 rAF：同一帧里各自排一次会重复采点、重复落一笔进度。
   useEffect(() => {
     let raf = 0
-    const schedule = (): void => {
+    let pendingLayout = false
+    const schedule = (layoutChanged: boolean): void => {
+      pendingLayout = pendingLayout || layoutChanged
       if (raf !== 0) return
       raf = requestAnimationFrame(() => {
         raf = 0
+        const changed = pendingLayout
+        pendingLayout = false
         refreshPort()
-        session.handleViewportChange(sourceId)
+        session.handleViewportChange(sourceId, { layoutChanged: changed })
       })
     }
-    document.addEventListener('scroll', schedule, { capture: true, passive: true })
-    window.addEventListener('resize', schedule)
-    schedule()
+    const onScroll = (): void => schedule(false)
+    const onResize = (): void => schedule(true)
+    document.addEventListener('scroll', onScroll, { capture: true, passive: true })
+    window.addEventListener('resize', onResize)
+    // 内容高度变化不经过 window resize；观察到就并入上面那条合帧，不再另起一条 rAF
+    const el = bodyRef.current
+    let ro: ResizeObserver | null = null
+    if (el !== null && typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => { schedule(true) })
+      ro.observe(el)
+    }
+    schedule(false)
     return () => {
-      document.removeEventListener('scroll', schedule, { capture: true })
-      window.removeEventListener('resize', schedule)
+      document.removeEventListener('scroll', onScroll, { capture: true })
+      window.removeEventListener('resize', onResize)
+      ro?.disconnect()
       if (raf !== 0) cancelAnimationFrame(raf)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session])
+  }, [session, sourceId, refreshPort])
 
   /** 排版变化前的采点：prefsStore 的订阅者在 `setPref` 的同步调用栈里执行——那一刻 React 还没重渲染、
    *  DOM 还是旧排版，这是唯一能拿到「变化前位置」的时刻（任何 effect 都在新排版落定之后才跑）。 */
@@ -423,7 +464,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     if (off === null) return
     readerPort.setScrollTop(readerPort.scrollTop() + off + snap.offsetWithinNode)
     visibleRef.current = readerPort.currentNode()        // 复位后重采：连调两次排版也各有正确锚
-    session.handleViewportChange(sourceId)
+    session.handleViewportChange(sourceId, { layoutChanged: true })
   }, [prefs.fontSize, prefs.lineHeight, prefs.measure, readerPort, session, sourceId])
 
   const shownError = error ?? exportState.error
@@ -573,19 +614,15 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
           {chapters.map((content, i) => content === null
             ? null
             : (
-              <div
+              <ChapterShell
                 key={i}
-                ref={(el) => { chapterRefs.current[i] = el }}
-                data-chapter={i}
-              >
-                {/* h2 不是 h3：阅读器这一屏没有更高的标题占位，从 h3 起等于给读屏一份断了头的大纲 */}
-                <h2 className="novel-rdr-mark">{toc?.[i]?.name ?? t('reader.chapterFallback', { n: i + 1 })}</h2>
-                {/* 正文两种形态都在 ChapterBody 里（文字章逐行成段、图文章按白名单映射）：
-                    会话把 ChapterContent 原样搬进来，形态分支只在这一处。
-                    送进渲染前剥一次重复章名——**只这一处剥**，导出与工具读的是原样正文。 */}
-                <ChapterBody content={stripLeadingTitle(content, toc?.[i]?.name ?? t('reader.chapterFallback', { n: i + 1 }))}
-                  bookKey={bookKey} onNavigate={(target, role) => { scene.bodyLink(target, role) }} />
-              </div>
+                index={i}
+                content={content}
+                name={toc?.[i]?.name ?? t('reader.chapterFallback', { n: i + 1 })}
+                bookKey={bookKey}
+                onNavigate={onBodyNavigate}
+                chapterRefs={chapterRefs}
+              />
             ))}
           {toc !== null && (
             <div ref={sentinelRef} data-novel-sentinel className="novel-sentinel">

@@ -7,6 +7,11 @@ import type { Translate } from './copy/index.js'
 import { JOB_POLL_MS } from './util.js'
 import type { JobWatchDeps } from './deps.js'
 
+/** 大轮次流式派生：每来一组就整轮归并，代价随源数平方增长；超过这个组数后合并 UI 更新。
+ *  终态/换轮/小轮次仍立即落，读数不会因为合并而丢。 */
+const COALESCE_AFTER_GROUPS = 16
+const COALESCE_MS = 150
+
 /**
  * 浏览器半的「聚合搜索后台任务」接线：提交一轮 → 盯住它（SSE 推送优先，快照轮询兜底）→
  * 按游标累积增量分组。
@@ -66,6 +71,8 @@ export interface SearchJobView {
 export function useSearchJob(deps: JobWatchDeps, t: Translate = zhTranslate): SearchJobView {
   const acc = useRef<Acc | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const publishTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingPublish = useRef<{ a: Acc; running: boolean } | null>(null)
   const stream = useRef<AbortController | null>(null)
   const alive = useRef(true)
   /** 起跑序号：只有最后一次 `submit` 的回包能 `begin`/报错。只挡调用方的认领不够——
@@ -75,8 +82,35 @@ export function useSearchJob(deps: JobWatchDeps, t: Translate = zhTranslate): Se
   const [error, setError] = useState<string | null>(null)
 
   /** 累积器 → 视图态：单点投影，别在多处各拼一份（progress 与 summary 不要各算一份百分比） */
-  const publish = (a: Acc, running: boolean): void => {
+  const setRoundNow = (a: Acc, running: boolean): void => {
     setRound({ id: a.id, keyword: a.keyword, total: a.total, done: a.since, groups: [...a.groups], running, cancelled: a.cancelled })
+  }
+
+  const flushPublish = (): void => {
+    if (publishTimer.current !== null) {
+      clearTimeout(publishTimer.current)
+      publishTimer.current = null
+    }
+    const pending = pendingPublish.current
+    if (pending === null) return
+    pendingPublish.current = null
+    setRoundNow(pending.a, pending.running)
+  }
+
+  const publish = (a: Acc, running: boolean, immediate = false): void => {
+    if (immediate || !running || a.groups.length <= COALESCE_AFTER_GROUPS) {
+      if (publishTimer.current !== null) {
+        clearTimeout(publishTimer.current)
+        publishTimer.current = null
+      }
+      pendingPublish.current = null
+      setRoundNow(a, running)
+      return
+    }
+    pendingPublish.current = { a, running }
+    if (publishTimer.current === null) {
+      publishTimer.current = setTimeout(flushPublish, COALESCE_MS)
+    }
   }
 
   /** 快照 → 累积 → 视图态。推送帧与轮询回包共用，返回「本轮是否还在跑」。
@@ -181,7 +215,7 @@ export function useSearchJob(deps: JobWatchDeps, t: Translate = zhTranslate): Se
     acc.current = a
     if (timer.current !== null) { clearTimeout(timer.current); timer.current = null }
     setError(null)
-    publish(a, running)
+    publish(a, running, true)
     if (running) watch(a)
   }
 
@@ -221,6 +255,9 @@ export function useSearchJob(deps: JobWatchDeps, t: Translate = zhTranslate): Se
       alive.current = false                            // 只停「看」，服务端那轮继续跑
       if (timer.current !== null) clearTimeout(timer.current)
       timer.current = null
+      if (publishTimer.current !== null) clearTimeout(publishTimer.current)
+      publishTimer.current = null
+      pendingPublish.current = null
       stream.current?.abort()
       stream.current = null
     }

@@ -177,3 +177,58 @@ describe('jsoup 的 [attr~=regex]（正则匹配，不是 CSS 的词表包含）
     expect(() => evalCss(seg('meta[property~=(]'), $h, hroot(), loc(0, 'meta[property~=(]'), 'detail')).toThrow(RuleEvalError)
   })
 })
+
+/**
+ * 链首直达：cur 是全文档 `$('*')` 时直接做一次全文档选择。
+ * 对元素级选择器，逐元素 `is + find` 的并集与全文档选择等价，但代价是 O(n²)。
+ * 这里同时钉住「不遍历 cur」与「结果不变」；集合型伪类与相对选择器是例外，见下面两条。
+ */
+describe('链首 CSS 直达', () => {
+  const NESTED = '<div id="w"><div class="item"><span class="item">内</span></div><div class="item">外</div></div>'
+  const $n = cheerio.load(NESTED)
+  const htmlOf = (doc: any, v: any): string[] => v.kind === 'nodes'
+    ? v.nodes.toArray().map((n: any) => doc.html(n))
+    : []
+
+  it('不遍历当前全集，且与逐元素并集同结果（含 :contains 过滤）', () => {
+    // `:first-child` 是结构伪类（按父位判定，与结果集范围无关）：后缀 `-` 使它不被
+    // SET_SCOPED_PSEUDO 当成集合型伪类放行给慢路径。
+    for (const selector of ['.item', 'div.item:contains(外)', 'div:first-child']) {
+      let walked = false
+      const cur = { length: 0, text: () => '', toArray: () => { walked = true; return $n('*').toArray() } } as any
+      const fast = evalCss(seg(selector), $n, cur, loc(0, `@css:${selector}`), 'toc', true)
+      expect(walked).toBe(false)
+      const slow = evalCss(seg(selector), $n, $n('*') as any, loc(0, `@css:${selector}`), 'toc')
+      expect(htmlOf($n, fast)).toEqual(htmlOf($n, slow))
+      expect(htmlOf($n, fast).length).toBeGreaterThan(0)
+    }
+  })
+
+  it('集合型伪类仍走逐元素路径（:first 的作用域不同）', () => {
+    // 全文档 `$('li:first')` 只给全局第一个；逐元素并集给每个父列表的第一个。
+    // 快路径不能把这类选择器换成全文档选择，否则同一份规则会换出一组元素。
+    const H = cheerio.load('<div><ul><li>A</li><li>B</li></ul><ul><li>C</li><li>D</li></ul></div>')
+    let walked = false
+    const cur = { length: 0, text: () => '', toArray: () => { walked = true; return H('*').toArray() } } as any
+    const fast = evalCss(seg('li:first'), H, cur, loc(0, '@css:li:first'), 'toc', true)
+    expect(walked).toBe(true)
+    const slow = evalCss(seg('li:first'), H, H('*') as any, loc(0, '@css:li:first'), 'toc')
+    expect(htmlOf(H, fast)).toEqual(htmlOf(H, slow))
+    expect(htmlOf(H, fast).length).toBeGreaterThan(0)
+  })
+
+  it('相对选择器（前导组合符）仍走逐元素路径', () => {
+    // 全文档 `$('> li')` / `$(':is(> li)')` 没有锚点，直接选会零命中；逐元素 `find` 以每个当前元素为锚点。
+    // 快路径必须放行给慢路径，否则「取每个列表的直接 li」会静默变成零命中。
+    const H = cheerio.load('<div><ul><li>A</li><li>B</li></ul><ul><li>C</li><li>D</li></ul></div>')
+    for (const selector of ['> li', '+ ul', '~ ul', 'div, > li', ':is(> li)', ':where(> li)']) {
+      let walked = false
+      const cur = { length: 0, text: () => '', toArray: () => { walked = true; return H('*').toArray() } } as any
+      const fast = evalCss(seg(selector), H, cur, loc(0, `@css:${selector}`), 'toc', true)
+      expect(walked).toBe(true)
+      const slow = evalCss(seg(selector), H, H('*') as any, loc(0, `@css:${selector}`), 'toc')
+      expect(htmlOf(H, fast)).toEqual(htmlOf(H, slow))
+      expect(htmlOf(H, fast).length).toBeGreaterThan(0)
+    }
+  })
+})

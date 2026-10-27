@@ -2,7 +2,7 @@ import type { Cheerio, CheerioAPI } from 'cheerio'
 import type { AnyNode, Element, Text } from 'domhandler'
 import type { EngineValue, Facet, Segment, SegmentLoc } from './types.js'
 import { RuleEvalError, UnsupportedRuleError } from './errors.js'
-import { cleanText } from './dom.js'
+import { cleanText, rawTextOf } from './dom.js'
 
 type XPathSegment = Extract<Segment, { kind: 'xpath' }>
 
@@ -383,16 +383,10 @@ function pathHits(ctx: AnyNode, steps: Step[]): AnyNode[] {
   return cur
 }
 
-/** 谓词内 text() 口径：元素 textContent（拼接后代文本 trim）——近似已文档化（真实样本全落此口径） */
+/** 谓词内 text() 口径：元素 textContent（拼接后代文本 trim）——近似已文档化（真实样本全落此口径）。
+ *  子树文本与 `:contains` 同一份实现（`dom.ts` 的 `rawTextOf`），不再另起一棵遍历。 */
 function predText(n: AnyNode): string {
-  if (n.type === 'text') return cleanText((n as Text).data ?? '')
-  return cleanText(textContentOf(n))
-}
-
-function textContentOf(n: AnyNode): string {
-  let out = ''
-  for (const c of nodeChildren(n)) out += c.type === 'text' ? (c as Text).data : textContentOf(c)
-  return out
+  return cleanText(rawTextOf(n))
 }
 
 function evalPredicate(p: Predicate, n: AnyNode, pos: number, size: number): boolean {

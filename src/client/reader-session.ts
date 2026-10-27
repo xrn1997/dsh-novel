@@ -56,6 +56,9 @@ export interface ReaderPort {
   /** 目标（章 + 可空锚点）相对视口顶部的偏移；`anchorId` 为 null = 该章块顶。
    *  目标节点不在 DOM → null（不落位、不清待定位目标，等下一轮）。 */
   targetOffset(index: number, anchorId: string | null): number | null
+  /** 一批目标的偏移：一次建章内节点索引服务全部导航候选（逐个 `targetOffset` 会对同一棵子树
+   *  重复扫描）。逐锚点读数与 `targetOffset` 一致；找不到的一律给 null。 */
+  targetOffsets(index: number, anchorIds: ReadonlyArray<string | null>): Array<number | null>
   /** 视口顶所在正文节点；该章没有可定位节点（文字章）或量不到 → null */
   currentNode(): VisibleNode | null
 }
@@ -93,7 +96,14 @@ export class ReaderSession {
   private tocNow: ChapterEntry[] | null = null
   private navigationNow: NavigationItem[] | null = null
   private chaptersNow: Array<ChapterContent | null> = []
+  /** 已载章号集合：prune 只遍历已载项，不扫整本目录长度的数组。 */
+  private readonly mountedSet = new Set<number>()
   private anchorsNow: ChapterAnchor[] = []
+  /** 上次锚点测量所依据的**已载表引用**（`chaptersNow` 是 copy-on-write，换引用即换版本）。
+   *  与当前表不同 = 载入或裁剪过、这张锚点表已过期；布局变化是另一条来路（`handleViewportChange`
+   *  的显式标记）。用它而不是布尔脏标记：脏标记会被「提交之前来的那一帧滚动」消费掉，而滚动帧
+   *  读到的是还没提交新章块的 DOM。 */
+  private anchorsFrom: Array<ChapterContent | null> | null = null
   private inflight: number | null = null
   /** 阅读位置：**唯一真相**（章 + 章内比例）。滚动测量 / 目录选中 / 存档恢复都只是「修正」它，
    *  落盘策略只由 `commit` 判定——读数若只是每次滚动现算的一次性输出，每条时序路径就会各自
@@ -143,6 +153,7 @@ export class ReaderSession {
     this.tocNow = null
     this.navigationNow = null
     this.chaptersNow = []
+    this.mountedSet.clear()
     this.anchorsNow = []
     this.position = { chapterIndex: 0, offsetRatio: 0 }
     this.inflight = null
@@ -209,6 +220,7 @@ export class ReaderSession {
       const next = [...this.chaptersNow]
       next[index] = content
       this.chaptersNow = next
+      this.mountedSet.add(index)
       // 成功即清错：成功 load 必须同时清 error，否则错误条粘屏、重试看似无效
       this.failedIndex = null
       this.store.set({ chapters: next, error: null })
@@ -295,13 +307,15 @@ export class ReaderSession {
     while (lo > 0 && this.mounted(lo - 1)) lo--
     let hi = at
     while (hi + 1 < this.chaptersNow.length && this.mounted(hi + 1)) hi++
-    let dropped = false
-    const next = this.chaptersNow.map((text, i) => {
-      if (i >= lo && i <= hi) return text
-      if (text !== null) dropped = true
-      return null
-    })
-    if (!dropped) return
+    if (this.mountedSet.size === hi - lo + 1) return
+    const dropped: number[] = []
+    for (const i of this.mountedSet) if (i < lo || i > hi) dropped.push(i)
+    if (dropped.length === 0) return
+    const next = [...this.chaptersNow]
+    for (const i of dropped) {
+      next[i] = null
+      this.mountedSet.delete(i)
+    }
     this.chaptersNow = next
     this.store.set({ chapters: next })
   }
@@ -331,12 +345,13 @@ export class ReaderSession {
     if (cause !== 'scroll') this.save.flush()
   }
   /** 视口变化：预取 + 位置修正（跨章是导航事件，同章滚动是连续量）。
+   *  纯滚动只读锚点缓存（锚点是绝对位置，滚动不改变它）；`layoutChanged` 或已载表换了版本才重测。
    *  目录跳章在途期间**不采信读数**：视口还是旧位置，采信等于用旧证据推翻用户刚下的导航
    *  命令（跳章后正文未到时读数会把位置改回原章）。落地由 `settleJump` 收口（它清
    *  pendingJump），之后的读数才是新位置的证据。 */
-  handleViewportChange(sourceId: string): void {
+  handleViewportChange(sourceId: string, opts?: { layoutChanged?: boolean }): void {
     this.checkPreload(sourceId)
-    this.recalcAnchors()
+    if (opts?.layoutChanged === true || this.anchorsFrom !== this.chaptersNow) this.recalcAnchors()
     if (this.anchorsNow.length === 0) return
     if (this.store.get().pendingJump !== null) return
     const { chapterIndex, offsetRatio } = locateChapter(this.anchorsNow, this.port.scrollTop())
@@ -411,15 +426,18 @@ export class ReaderSession {
       }
     }
     walk(items)
+    if (candidates.length === 0) return null    // 本章没有导航锚点：不建节点索引
+    const offsets = this.port.targetOffsets(chapter, candidates.map((c) => c.anchorId))
     let best: { id: string; off: number } | null = null
     let below: { id: string; off: number } | null = null
-    for (const c of candidates) {
-      const off = this.port.targetOffset(chapter, c.anchorId)
-      if (off === null) continue                            // 这个目标不在 DOM：不是候选
+    for (let i = 0; i < candidates.length; i++) {
+      const off = offsets[i]
+      if (off === null) continue                       // 这个目标不在 DOM：不是候选
+      const id = candidates[i].id
       if (off <= 0) {
-        if (best === null || off > best.off) best = { id: c.id, off }
+        if (best === null || off > best.off) best = { id, off }
       } else if (below === null || off < below.off) {
-        below = { id: c.id, off }                          // 并列者同样留在先到者手里（与上面同口径）
+        below = { id, off }                                // 并列者同样留在先到者手里（与上面同口径）
       }
     }
     return best?.id ?? below?.id ?? null
@@ -459,11 +477,13 @@ export class ReaderSession {
   }
 
   /** 视图唯一渲染后拍点：章节 DOM 或 pendingJump 变化后调用。
-   *  次序固定在这里：落位（内部在滚动后自刷锚点）→ 按落定后的位置预取。
-   *  视图不再认识这两个内部阶段；无待跳目标时不重复量锚点（下一次视口变化会自刷）。 */
+   *  次序固定在这里：落位（内部在滚动后自刷锚点）→ 按落定后的位置预取 → 重测锚点。
+   *  这一趟的重测无条件：它是唯一知道「新章块已经提交进 DOM」的时刻——滚动帧里那次可能量在
+   *  提交之前（那一刻 DOM 还没有这一章），不能替它免掉。视图不再认识这三个内部阶段。 */
   afterRender(sourceId: string): void {
     this.settleJump()
     this.checkPreload(sourceId)
+    this.recalcAnchors()
   }
 
   /** pendingJump 的目标已渲染 → 按真实位置定位并清零；未落地则下轮再试。
@@ -490,14 +510,17 @@ export class ReaderSession {
     this.commit('jump', jump.index, ratioWithin(a, this.port.scrollTop()))
   }
 
-  /** 该章正文是否已挂载（chapters 表里的空洞 = 还没到；DOM 侧无从判断，会话只看这张表） */
+  /** 该章正文是否已挂载（`mountedSet` 是 `chaptersNow` 非空项的索引，随载入/裁剪同步维护；
+   *  DOM 侧无从判断，会话只看这张索引） */
   private mounted(index: number): boolean {
-    return this.chaptersNow[index] !== null && this.chaptersNow[index] !== undefined
+    return this.mountedSet.has(index)
   }
 
-  /** 锚点刷新（存档恢复、视口变化、落位后与失败定位共用；视图不再直接调） */
+  /** 锚点刷新（存档恢复、布局变化、渲染后拍点与失败定位共用；视图不再直接调）。
+   *  同时记下这次测量吃的是哪一份已载表——比较引用就够了，`chaptersNow` 每次改动都换数组。 */
   private recalcAnchors(): void {
     this.anchorsNow = this.port.measureAnchors()
+    this.anchorsFrom = this.chaptersNow
   }
 
   /** 退出阅读器：先作废在途续作（代际 +1），再把防抖窗口里的进度补落盘——flush 不 cancel，

@@ -67,6 +67,8 @@ function fakePort() {
     sentinelOffset: (): number | null => null,
     targetOffset: (_i: number, anchorId: string | null): number | null =>
       (anchorId === null ? port.chapterOff : (port.targetOffs.get(anchorId) ?? null)),
+    targetOffsets: (i: number, anchorIds: ReadonlyArray<string | null>): Array<number | null> =>
+      anchorIds.map((anchorId) => port.targetOffset(i, anchorId)),
     currentNode: (): VisibleNode | null => port.node,
   }
   return port

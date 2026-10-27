@@ -111,6 +111,21 @@ describe('followPages 目录知识闸 + 列表 next + 部分重叠不停（legad
     expect(r.pages).toBe(2)
     expect(r.items).toEqual(['第一页', '第二页'])
   })
+  it('stopUrlExcept：当前章地址在 stopUrls 里也不判串章（选项后缀差异不算另一章）', async () => {
+    const pages = new Map<string, Page>([
+      ['https://x.com/c/1', { url: 'https://x.com/c/1', body: `<div class="it">第一页</div><a class="next" href='/c/1,{"webView":true}'>下一页</a>` }],
+      ['https://x.com/c/1,{"webView":true}', { url: 'https://x.com/c/1,{"webView":true}', body: '<div class="it">第二页</div>' }],
+    ])
+    const r = await followPages('https://x.com/c/1', async (u) => pages.get(u)!, extract, 'tag.a.next@href', keyOf,
+      {
+        maxPages: 10,
+        stopUrls: new Set(['https://x.com/c/1', 'https://x.com/c/2']),
+        stopUrlExcept: 'https://x.com/c/1',
+      }, 'content', subEval)
+    expect(r.stoppedBy).toBe('end')
+    expect(r.pages).toBe(2)
+    expect(r.items).toEqual(['第一页', '第二页'])
+  })
   it('两闸同供时目录知识优先：stopUrls 在场则路径启发式完全不参与（2026-09 审查复议维持原裁决）', async () => {
     // 审查建议「stopSet 未命中时再走收窄到路径变化的启发式」——本用例正是那个形态：入口
     // `/book/1/1.html`、续页 `/book/1/2.html`（路径不同且非前缀，启发式判不同章 → 会漏页），

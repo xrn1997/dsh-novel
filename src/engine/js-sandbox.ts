@@ -936,8 +936,19 @@ ${SIMPLE_GLOBALS}
  * - `console.log/error` 收集进返回的 logs（join(' ')），不外泄打印。
  * - `java.ajax` 语义唯一（同步返回 body）：主线程撞哨兵即换 worker 重跑同一段（见下方
  *   「java.ajax 同步桥」一节）；正则只决定性能，不决定语义。
+ * - 求值结束统一 flush 源状态：同一段脚本内的多次 set 合并为一次写入；落盘失败不打断求值，
+ *   由实现方记日志并留到下一次。
  */
 export async function evalJs(call: JsCall): Promise<JsOutcome> {
+  try {
+    return await evalJsCore(call)
+  } finally {
+    // runScript 把会话放在 opts.session；规则链把会话放在 ctx.session——与 evalJsCore 同一优先级
+    ;(call.opts?.session ?? call.ctx.session)?.flush?.()
+  }
+}
+
+async function evalJsCore(call: JsCall): Promise<JsOutcome> {
   const { code, host, ctx, loc, facet, evaluateRef, opts } = call
   const logs: string[] = []
   const timeout = Math.max(1, ctx.jsTimeoutMs ?? DEFAULT_JS_TIMEOUT_MS)

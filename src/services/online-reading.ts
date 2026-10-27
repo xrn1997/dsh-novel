@@ -7,6 +7,7 @@ import { contentSlot, rulesEpoch } from './cache-epoch.js'
 import { normalizeChapterText } from './chapter-content.js'
 import { contentToText } from './content.js'
 import { ChapterNotFoundError, RuleMissingError, SourceNotFoundError } from './errors.js'
+import { lruGet, lruSet } from './lru.js'
 import { followPages } from './pagination.js'
 import type { FollowResult } from './pagination.js'
 import { absUrlKeepOption, assembleRequest, canonUrl, stripUrlOption } from './request.js'
@@ -46,24 +47,66 @@ function tocReadKey(sourceId: string, bookUrl: string, epoch: string, refresh: b
   return JSON.stringify([sourceId, bookUrl, epoch, refresh])
 }
 
+/** 目录内存条目：规范化地址集合与目录同生共死，章节正文读取直接复用。
+ *  两份值都是**共享**的（同一数组/集合交给每个读者），消费方不得原地改——要改先复制。 */
+interface TocMemo {
+  chapters: ChapterEntry[]
+  /** 全目录的 `canonUrl` 结果：串章闸的 stopUrls，避免每章重规范化整本目录。 */
+  canonicalUrls: Set<string>
+}
+
+/** 目录内存缓存上限：读面一次只读一本，留几本给换书/返回；超出按最久未用淘汰。 */
+const TOC_MEMO_LIMIT = 8
+
 export class OnlineReading {
-  private readonly tocInflight = new Map<string, Promise<ChapterEntry[]>>()
+  private readonly tocInflight = new Map<string, Promise<TocMemo>>()
+  private readonly tocMemo = new Map<string, TocMemo>()
+  /** refresh 写回即 +1：普通读只在自己起飞后没有 refresh 写回时才允许覆盖内存目录——
+   *  在途普通读可能读的是刷新前的盘，晚到的旧结果不能把刚刷新的那一份盖回去。 */
+  private memoWriteSeq = 0
 
   constructor(private readonly parts: OnlineReadingParts) {}
 
-  /** 目录：缓存优先（refresh 跳过）+ in-flight 去重（身份见 `tocReadKey`）+ 翻页闸跟进。
+  /** 目录：进程内缓存优先（refresh 绕过）+ 磁盘缓存/in-flight 去重（身份见 `tocReadKey`）+ 翻页闸跟进。
    *  `async` 只为把源查找的抛错收成 rejection：HTTP 面与工具面都按 promise 消费，
-   *  同步 throw 会漏出契约。函数体没有 `await`，所以在途登记在返回前同步完成——同身份的并发读
-   *  仍能 join 到同一发（去重语义不因 async 改写而变）。 */
+   *  同步 throw 会漏出契约。在途登记在返回前同步完成——同身份的并发读仍能 join 到同一发。 */
   async toc(sourceId: string, bookUrl: string, opts?: { refresh?: boolean }): Promise<ChapterEntry[]> {
+    return (await this.tocMemoOf(sourceId, bookUrl, opts)).chapters
+  }
+
+  /** 目录 + 规范化地址集一起取：章节正文既要目录知识，也要 stopUrls；两者只算一次。 */
+  private async tocMemoOf(
+    sourceId: string, bookUrl: string, opts?: { refresh?: boolean },
+  ): Promise<TocMemo> {
     const s = this.requireSource(sourceId)
     // 代际在起飞前算一次，读与写共用同一个值：在途请求写的就是它起飞时的代际，
     // 换规则后的读永远看不见（这就是「旧在途写回」不需要取消通道的原因）
     const epoch = rulesEpoch(s.rules, s.baseUrl, 'toc')
+    const memoKey = tocReadKey(sourceId, bookUrl, epoch, false)
+    if (opts?.refresh !== true) {
+      const hit = lruGet(this.tocMemo, memoKey)
+      if (hit !== undefined) return hit
+    }
     const key = tocReadKey(sourceId, bookUrl, epoch, opts?.refresh === true)
     const inflight = this.tocInflight.get(key)
     if (inflight !== undefined) return inflight
+    const writeSeq = this.memoWriteSeq
     const p = this.getTocInner(s, bookUrl, epoch, opts)
+      .then((chapters) => {
+        const memo: TocMemo = {
+          chapters,
+          canonicalUrls: new Set(chapters.map((c) => canonUrl(c.url))),
+        }
+        // refresh 的结果也写回非 refresh 槽：下一次普通读取看到的是刚刷新的目录。
+        // 普通读只有起飞后没发生过 refresh 写回才写：并发时宁少存一次，也不让旧目录盖回新目录。
+        if (opts?.refresh === true) {
+          lruSet(this.tocMemo, memoKey, memo, TOC_MEMO_LIMIT)
+          this.memoWriteSeq += 1
+        } else if (this.memoWriteSeq === writeSeq) {
+          lruSet(this.tocMemo, memoKey, memo, TOC_MEMO_LIMIT)
+        }
+        return memo
+      })
       .finally(() => { this.tocInflight.delete(key) })
     this.tocInflight.set(key, p)
     return p
@@ -78,7 +121,8 @@ export class OnlineReading {
     // 目录上移到缓存读取之前：正文槽位含章名（挡章序位移串配，见 cache-epoch.contentSlot，
     // 矩阵行 `g-cache-slot-chapter-name`）。代价如实记：热正文缓存不再能单独服务一章——
     // 目录缺失时会真发一次目录抓取（章名只存在于目录里，这是必然代价不是疏忽）。
-    const toc = await this.toc(sourceId, bookKey)
+    const tocMemo = await this.tocMemoOf(sourceId, bookKey)
+    const toc = tocMemo.chapters
     // 双边守卫：只拦上界会让负数绕过 → toc[-1].name TypeError → 500；
     // HTTP 面有 /^\d+$/ 而工具面无下限，守卫必须盖住两面入口。
     if (chIndex < 0 || chIndex >= toc.length) throw new ChapterNotFoundError(chIndex, toc.length)
@@ -161,8 +205,10 @@ export class OnlineReading {
       {
         // 串章闸：候选「下一页」== 目录里其他章节 URL → 到底。
         // 目录知识是正判据——路径启发式会把 `?id=..&cid=..&page=2` 这类非页码键分页误判成串章
-        // （「一章只解析出一页」的根因之一）；启发式仅在无目录知识时兜底（见 pagination.ts）
-        stopUrls: new Set(toc.map((c) => canonUrl(c.url)).filter((u) => u !== canonUrl(target.url))),
+        // （「一章只解析出一页」的根因之一）；启发式仅在无目录知识时兜底（见 pagination.ts）。
+        // 规范化集合随目录缓存一次，当前章用 except 放行——不每章复制整表。
+        stopUrls: tocMemo.canonicalUrls,
+        stopUrlExcept: canonUrl(target.url),
       },
     )
     let text = result.items.join('\n')
@@ -283,7 +329,7 @@ export class OnlineReading {
     maxPages: number,
     facet: Facet,
     subEval: SubRuleEval,
-    followOpts?: { sameChapterBase?: string; stopUrls?: Set<string> },
+    followOpts?: { sameChapterBase?: string; stopUrls?: ReadonlySet<string>; stopUrlExcept?: string },
   ): Promise<FollowResult<T>> {
     if (nextRule === null) {
       const page = await fetchPage(startUrl)

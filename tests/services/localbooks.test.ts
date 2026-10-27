@@ -88,6 +88,19 @@ describe('LocalBooks', () => {
     expect(await lb.getChapter(r.bookKey, 2)).toBe('内容二')
   })
 
+  it('meta 在书级缓存：章节读取不再重解析；删书后缓存失效', async () => {
+    const { lb, dir } = await mk()
+    const r = await lb.import(Buffer.from(TXT, 'utf8'), '缓存.txt')
+    const id = r.bookKey.slice('local:'.length)
+    const metaFile = path.join(dir, 'local', `${id}.json`)
+    expect(await lb.getChapter(r.bookKey, 1)).toBe('内容一')
+    // 外部把元数据弄坏：若第二次章节读取仍解析 meta，会抛 CorruptJsonError；缓存命中则照常切片
+    await fs.writeFile(metaFile, '{broken', 'utf8')
+    expect(await lb.getChapter(r.bookKey, 2)).toBe('内容二')
+    await lb.remove(r.bookKey)
+    await expect(lb.getChapter(r.bookKey, 1)).rejects.toBeInstanceOf(LocalArtifactNotFoundError)
+  })
+
   it('超限 → LocalFileTooLargeError；空文件 → LocalImportError；都不落盘（HTTP 码归分类表，错误体不携带）', async () => {
     const { lb, dir } = await mk(10)
     await expect(lb.import(Buffer.from('一二三四五六七八九十十一', 'utf8'), 'x.txt')).rejects.toBeInstanceOf(LocalFileTooLargeError)

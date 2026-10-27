@@ -43,6 +43,9 @@ function fakePort() {
     sentinelOffset: (): number | null => port.sentinel,
     targetOffset: (_index: number, anchorId: string | null): number | null =>
       (anchorId === null ? port.chapterOff : (port.targetOffs.get(anchorId) ?? null)),
+    /** 批量口径 = 逐个读数（会话侧只钉「一批候选都拿到」，真实索引实现归 reader-geometry.test.ts） */
+    targetOffsets: (index: number, anchorIds: ReadonlyArray<string | null>): Array<number | null> =>
+      anchorIds.map((anchorId) => port.targetOffset(index, anchorId)),
     currentNode: (): VisibleNode | null => port.node,
   }
   return port
@@ -294,6 +297,54 @@ describe('ReaderSession 进度落盘策略', () => {
     await h.session.open('src', 'https://s.com/book/1')
     h.session.dispose()
     expect(h.saves).toEqual([])
+  })
+
+  it('滚动只量一次锚点；布局变化才重测', async () => {
+    const h = makeSession({ debounceMs: 5000 })
+    const measure = vi.spyOn(h.port, 'measureAnchors')
+    await h.session.open('src', 'https://s.com/book/1')
+    h.port.anchors = [{ index: 0, start: 0, height: 3000 }]
+    h.port.top = 1200
+    h.session.handleViewportChange('src')
+    expect(measure).toHaveBeenCalledTimes(1)
+    h.port.top = 1500
+    h.session.handleViewportChange('src')
+    expect(measure).toHaveBeenCalledTimes(1)
+    h.session.handleViewportChange('src', { layoutChanged: true })
+    expect(measure).toHaveBeenCalledTimes(2)
+    h.session.dispose()
+  })
+
+  it('新章载入换了已载表：下一次滚动即使未标 layoutChanged 也重测锚点', async () => {
+    const h = makeSession({ debounceMs: 5000 })
+    await h.session.open('src', 'https://s.com/book/1')
+    h.port.anchors = [{ index: 0, start: 0, height: 1000 }]
+    h.port.top = 10
+    h.session.handleViewportChange('src')         // 首次：已载表还没量过
+    const measure = vi.spyOn(h.port, 'measureAnchors')
+    h.port.anchors = [
+      { index: 0, start: 0, height: 1000 },
+      { index: 1, start: 1000, height: 1000 },
+    ]
+    await h.session.load('src', 1)                // 新章载入 → 已载表换版本
+    h.session.handleViewportChange('src')         // 纯滚动：过期来自载入，不是滚动
+    expect(measure).toHaveBeenCalledTimes(1)
+    h.session.dispose()
+  })
+
+  it('提交之前来的那帧滚动，不吃掉渲染后拍点的重测', async () => {
+    const h = makeSession({ debounceMs: 5000 })
+    await h.session.open('src', 'https://s.com/book/1')
+    h.session.afterRender('src')
+    const measure = vi.spyOn(h.port, 'measureAnchors')
+    await h.session.load('src', 1)                // 到货：store 已写新表，React 还没提交
+    h.session.handleViewportChange('src')         // 这一帧量到的是还没有新章块的 DOM
+    expect(measure).toHaveBeenCalledTimes(1)
+    h.session.afterRender('src')                  // 提交后的拍点必须再量一次，否则锚点停在旧表
+    expect(measure).toHaveBeenCalledTimes(2)
+    h.session.handleViewportChange('src')         // 之后纯滚动只读缓存
+    expect(measure).toHaveBeenCalledTimes(2)
+    h.session.dispose()
   })
 })
 

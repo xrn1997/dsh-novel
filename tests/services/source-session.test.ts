@@ -23,6 +23,20 @@ describe('FileSourceSession', () => {
     await fs.rm(dir, { recursive: true, force: true })
   })
 
+  it('同一批写只在 flush 时落一次盘，不在每次 set 同步写整份状态', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'novel-session-'))
+    const file = path.join(dir, 'source-state.json')
+    const a = createFileSourceSession(dir)
+    a.sourceVars('src').set('k1', 'v1')
+    a.sourceVars('src').set('k2', 'v2')
+    await expect(fs.stat(file)).rejects.toMatchObject({ code: 'ENOENT' })
+    a.flush()
+    const b = createFileSourceSession(dir)
+    expect(b.sourceVars('src').get('k1')).toBe('v1')
+    expect(b.sourceVars('src').get('k2')).toBe('v2')
+    await fs.rm(dir, { recursive: true, force: true })
+  })
+
   it('keeps "never set" distinguishable for peekSourceVars', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'novel-session-'))
     const a = createFileSourceSession(dir)

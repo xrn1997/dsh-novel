@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
-import { runScript } from '../../src/engine/js-sandbox.js'
+import { describe, expect, it, vi } from 'vitest'
+import { createSourceSession, runScript } from '../../src/engine/js-sandbox.js'
 import { JsSandboxError } from '../../src/engine/errors.js'
+import type { SourceSession } from '../../src/engine/session.js'
 
 const loc = { segmentIndex: -1, segmentRaw: '(test)' }
 
@@ -40,5 +41,17 @@ describe('runScript', () => {
   it('脚本抛错 → JsSandboxError（宁炸不猜，如实上抛）', async () => {
     await expect(runScript({ code: 'throw new Error("boom")', loc, facet: 'search' }))
       .rejects.toBeInstanceOf(JsSandboxError)
+  })
+
+  it('求值结束统一 flush 源状态（脚本内多次写入只落一次盘）', async () => {
+    const flush = vi.fn()
+    const session: SourceSession = { ...createSourceSession(), flush }
+    await runScript({
+      code: 'source.put("k1","v1"); source.put("k2","v2"); "ok"',
+      source: 'https://x.com', session, loc, facet: 'search',
+    })
+    expect(flush).toHaveBeenCalledTimes(1)
+    expect(session.sourceVars('https://x.com').get('k1')).toBe('v1')
+    expect(session.sourceVars('https://x.com').get('k2')).toBe('v2')
   })
 })

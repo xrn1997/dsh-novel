@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import * as cheerio from 'cheerio'
-import { evalDefault } from '../../src/engine/select.js'
+import { evalDefault, selectStepWithSelf } from '../../src/engine/select.js'
 
 const html = `<div id="wrap"><ul class="list">
   <li class="item"><a href="/b/1">第一章 起点</a><span class="date">2024-01-01</span></li>
@@ -268,4 +268,59 @@ describe('text / textAll / textNodes / ownText 区分', () => {
     // 笔趣阁（bqquge）真实形态：.con 里全是 <p> —— 直系文本为空，只有后代文本有内容
     expect(v).toEqual({ kind: 'value', text: '第2章 斗气大陆\n月如银盘，漫天繁星。\n山崖之颠。' })
   })
+})
+
+/**
+ * 链首直达：cur 就是全文档 `$('*')` 时，常规选择器的逐元素 `is + find` 并集等于一次全文档选择。
+ * 这条不是性能微调——逐元素子树查找在长页面上是 O(n²)，详情页一条规则就能吃掉几十毫秒；
+ * 本组钉住「链首不遍历 cur，且结果与逐元素并集一致」，防止优化把自身命中语义改掉。
+ */
+describe('链首 default 选择段直达', () => {
+  const NESTED = '<div id="w"><div class="item"><span class="item">内</span></div><div class="item">外</div></div>'
+  const $n = cheerio.load(NESTED)
+  const htmlOf = (v: any): string[] => v.kind === 'nodes'
+    ? v.nodes.toArray().map((n: any) => $n.html(n))
+    : []
+
+  it('class/id/tag 在链首不遍历当前全集，且与逐元素并集同结果', () => {
+    for (const [mode, arg] of [['class', 'item'], ['tag', 'div'], ['id', 'w']] as const) {
+      let walked = false
+      const cur = { length: 0, text: () => '', toArray: () => { walked = true; return $n('*').toArray() } } as any
+      const fast = evalDefault({ kind: 'default', mode, arg, index: null }, $n, cur, loc(0, `${mode}.${arg}`), 'toc', true)
+      expect(walked).toBe(false)
+      const slow = evalDefault({ kind: 'default', mode, arg, index: null }, $n, $n('*') as any, loc(0, `${mode}.${arg}`), 'toc')
+      expect(htmlOf(fast)).toEqual(htmlOf(slow))
+      expect(htmlOf(fast).length).toBeGreaterThan(0)
+    }
+  })
+})
+
+/**
+ * 链首直达的**差分**钉子：真源规则里出现的 selector 形状逐个走一遍两条路，命中集与顺序必须
+ * 逐元素相同。例外表（SET_SCOPED_PSEUDO / RELATIVE_SELECTOR）是正则写的，上面那组样品钉不住
+ * 「该放行的没放行」——这里按形状铺开，误分类当场红。祖先与后代长同一个类名是最容易把
+ * 顺序改岔的形状，故样品里留了一处 `.item` 套 `.item`。
+ */
+describe('链首直达与逐元素并集等价（按形状差分）', () => {
+  const $d = cheerio.load(`<div id="wrap"><table><tbody>
+      <tr class="even"><td><a href="/b/1">第一章 起点</a></td><td class="date">2024-01-01</td></tr>
+      <tr class="odd"><td><a href="/b/2">第二章 转折</a><span class="tag">新</span></td><td class="date">2024-01-02</td></tr>
+    </tbody></table>
+    <ul class="list"><li class="item"><div class="item"><span>嵌套同类</span></div><a href="/b/3">第三章</a></li>
+      <li class="item odd"><a href="/b/4">第四章</a></li></ul>
+    <div id="meta"><p>作者：甲</p><p class="last">字数：10万</p></div></div>`)
+  const SELECTORS = [
+    '.item', '#meta', 'li', 'td', 'a', 'p', '.odd', '.even', 'tr:nth-of-type(2)',
+    'td:nth-of-type(1) a', 'li.item:nth-child(odd)', 'p:first-child', 'span:last-child',
+    'div > ul > li', 'ul > li > a', 'li a', '#wrap p', '.list, #meta', 'a, span',
+    'a[href^="/b/"]', '[class]', 'li:not(.odd) a', ':not(p)', 'div.item', '.item div.item',
+  ]
+  for (const selector of SELECTORS) {
+    it(`${selector}：同集同序`, () => {
+      const fast = selectStepWithSelf($d, $d('*'), selector, true)
+      const slow = selectStepWithSelf($d, $d('*'), selector)
+      expect(fast).toHaveLength(slow.length)
+      for (let i = 0; i < slow.length; i++) expect(fast[i]).toBe(slow[i])
+    })
+  }
 })

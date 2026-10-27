@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { promises as fsPromises } from 'node:fs'
 import path from 'node:path'
 import { OnlineReading } from '../../src/services/online-reading.js'
@@ -62,6 +62,8 @@ interface Rig {
   patchRules(patch: Partial<NormalizedRules>): void
   setHtml(fn: HtmlOf): void
   setBeforeFetch(fn?: (url: string) => Promise<void> | void): void
+  /** 同一份盘上缓存/源/请求的新管线实例（进程内缓存为空；用于验证磁盘侧行为） */
+  reopen(): OnlineReading
 }
 
 /** 五件部件的最小组合：假 `SourceRequest`（可换页路由 / 可门控）+ 真 `PageCache` / `Shelf`。
@@ -99,7 +101,7 @@ async function makeRig(opts: {
       return pageOf(plan.url, body)
     },
   }
-  const online = new OnlineReading({
+  const buildOnline = (): OnlineReading => new OnlineReading({
     sourceOf: (id) => (id === source.id ? source : undefined),
     shelf, cache, request,
     sourceEvalFor: (s) => createSourceEval(request.fetcherFor(s), s, { jsTimeoutMs: opts.jsTimeoutMs ?? 1000 }),
@@ -107,12 +109,13 @@ async function makeRig(opts: {
     contentMaxPages: opts.contentMaxPages ?? 10,
   })
   return {
-    online, dir, cache, shelf, fetches,
+    online: buildOnline(), dir, cache, shelf, fetches,
     source: () => source,
     replace: (over) => { source = toSource(over) },
     patchRules: (patch) => { source = { ...source, rules: { ...source.rules, ...patch } } },
     setHtml: (fn) => { htmlOf = fn },
     setBeforeFetch: (fn) => { beforeFetch = fn },
+    reopen: buildOnline,
   }
 }
 
@@ -125,6 +128,59 @@ describe('OnlineReading', () => {
     const again = await rig.online.toc('i', BOOK)
     expect(again).toEqual(toc)
     expect(rig.fetches).toHaveLength(fetched) // 缓存命中零网络
+  })
+
+  it('目录在进程内缓存：章节正文读取不再重读/重解析目录', async () => {
+    const rig = await makeRig()
+    await rig.online.toc('i', BOOK)
+    const getToc = vi.spyOn(rig.cache, 'getToc')
+    await rig.online.chapterText('i', BOOK, 0)
+    expect(getToc).not.toHaveBeenCalled()
+  })
+
+  it('refresh 绕过内存缓存，并用新结果更新缓存', async () => {
+    let name = '旧章'
+    const tocPage = (): string => `<html><body><div class="b ch"><a href="/c/1.html">${name}</a></div></body></html>`
+    const rig = await makeRig({ htmlOf: (u) => (u.endsWith('/book/1/') ? tocPage() : null) })
+    expect((await rig.online.toc('i', BOOK)).map((c) => c.name)).toEqual(['旧章'])
+    const getToc = vi.spyOn(rig.cache, 'getToc')
+    name = '新章'
+    expect((await rig.online.toc('i', BOOK, { refresh: true })).map((c) => c.name)).toEqual(['新章'])
+    const fetched = rig.fetches.length
+    expect((await rig.online.toc('i', BOOK)).map((c) => c.name)).toEqual(['新章'])
+    expect(rig.fetches).toHaveLength(fetched)   // 非 refresh 命中刚刷新的内存条目
+    expect(getToc).not.toHaveBeenCalled()       // refresh 跳盘；随后这次也不该读盘
+  })
+
+  it('在途的普通目录读不会覆盖刚刷新的内存条目', async () => {
+    const rig = await makeRig()
+    await rig.online.toc('i', BOOK)                         // 旧目录落盘
+    const online = rig.reopen()                             // 新实例：内存空，普通读走盘
+    const realGetToc = rig.cache.getToc.bind(rig.cache)
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    let started!: () => void
+    const startedP = new Promise<void>((r) => { started = r })
+    let reads = 0
+    vi.spyOn(rig.cache, 'getToc').mockImplementation(async (sourceId, bookKey, epoch) => {
+      const value = await realGetToc(sourceId, bookKey, epoch)   // 先取到旧目录，再卡住返回
+      reads += 1
+      if (reads === 1) { started(); await gate }
+      return value
+    })
+    const normal = online.toc('i', BOOK)
+    await startedP
+    rig.setHtml((url) => (url.endsWith('/book/1/')
+      ? '<html><body><div class="b ch"><a href="/c/2.html">刷新章</a></div></body></html>'
+      : null))
+    expect((await online.toc('i', BOOK, { refresh: true })).map((c) => c.name)).toEqual(['刷新章'])
+    release()
+    // 在途普通读拿回的是刷新前的旧目录，但它不许把刚刷新的内存条目盖回去
+    await expect(normal).resolves.toEqual([
+      { name: '第一章', url: `${BASE}/c/1.html` },
+      { name: '第三章', url: `${BASE}/c/3.html` },
+    ])
+    expect((await online.toc('i', BOOK)).map((c) => c.name)).toEqual(['刷新章'])
   })
 
   it('concatenates content pages and stops at the chapter boundary', async () => {
@@ -160,7 +216,8 @@ describe('OnlineReading', () => {
     const tocDir = path.join(rig.dir, 'cache', 'toc')
     const [file] = await fsPromises.readdir(tocDir)
     await fsPromises.writeFile(path.join(tocDir, file!), '{not json', 'utf8')
-    const toc = await rig.online.toc('i', BOOK)
+    // 新实例的内存缓存为空：这条钉的是磁盘坏字节的降级，不是进程内缓存
+    const toc = await rig.reopen().toc('i', BOOK)
     expect(toc.map((c) => c.name)).toEqual(['第一章', '第三章'])
   })
 

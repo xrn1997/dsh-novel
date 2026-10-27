@@ -92,6 +92,17 @@ describe('createReaderGeometry（ReaderPort 的纯几何实现）', () => {
     expect(g.targetOffset(9, null)).toBeNull()
   })
 
+  it('targetOffsets：一次建章内索引服务多个锚点，与逐个 targetOffset 同结果', () => {
+    const c0 = block(100, 200, [node('n1', 90), node('n2', 150), node('n3', 190)])
+    const g = geometryOf({ port: port(100, 50), chapters: [c0] })
+    expect(g.targetOffsets(0, [null, 'n1', 'n2', 'missing'])).toEqual([0, -10, 50, null])
+    expect(g.targetOffsets(9, [null, 'n1'])).toEqual([null, null])
+    // 与逐个调用同读数（会话侧的批量快路径靠这条等价性成立）
+    for (const anchorId of [null, 'n1', 'n2', 'missing'] as const) {
+      expect(g.targetOffsets(0, [anchorId])[0]).toBe(g.targetOffset(0, anchorId))
+    }
+  })
+
   it('currentNode：取已越过视口顶的最靠下节点；都在下方取第一个；无节点 → null', () => {
     const c0 = block(100, 200, [node('n1', 90), node('n2', 150)])
     const c1 = block(300, 100, [node('n3', 400)])

@@ -119,7 +119,7 @@ _唯一实现_: `src/services/cookies.ts` 的 `CookieJar`；自动吸收/回带�
 _Avoid_: cookie 垫片（那是 `SourceSession.cookieJar` 的按源键值表）、CookieManager（那是 Android 类名，脚本桥面）
 
 **源状态会话（source session）**:
-脚本可见的按源状态四张表：cookie 垫片、键值变量、单串槽、cache 垫片。接口面同步（脚本 `source.get`/`cache.get` 不能等 IO）；生产实现落盘到数据根 `source-state.json`，删源时按 baseUrl 清掉该源四张表。
+脚本可见的按源状态四张表：cookie 垫片、键值变量、单串槽、cache 垫片。接口面同步（脚本 `source.get`/`cache.get` 不能等 IO）；生产实现把写先标脏、在求值边界或卸载时成批落盘到数据根 `source-state.json`，删源时按 baseUrl 清掉该源四张表。
 _唯一实现_: `src/engine/session.ts` 的 `SourceSession` 接口；`src/services/source-session.ts` 的 `FileSourceSession`（`forget` 是删源清理口）
 _Avoid_: 缓存（页面缓存归 `services/cache.ts`；这里的 cache 只是脚本 `source.cache` 垫片）、登录态（`SourceAuth` 归 `services/sources.ts`）
 
@@ -321,7 +321,7 @@ _唯一实现_: `client/reader-geometry.ts` 的 `createReaderGeometry` / `curren
 _Avoid_: 阅读时序（`client/reader-session.ts`）、滚动容器探测（`client/scrollport.ts` 的 `findScrollport`）
 
 **在线阅读（online reading）**:
-一条在线书的目录与正文取值管线：缓存优先、目录在途去重（身份含代际与 refresh）、翻页跟进、缓存写回，连同 tocUrl 解析、subContent 追加与空正文异常。**在途去重只服务目录**（单章在途由阅读会话保证，正文不另立全局表）。**本地书不走这条线**——本地/在线分流与文字规约归书内容读面，门面只委托；搜索/发现/书架/导入/详情仍归门面（裁决见 `docs/adr/0047`）。
+一条在线书的目录与正文取值管线：目录读数先走一层进程内缓存（键含代际，refresh 绕过读；写回有序——晚到的旧目录不许盖掉刚刷新的那份），其后是磁盘缓存优先、目录在途去重（身份含代际与 refresh）、翻页跟进、缓存写回，连同 tocUrl 解析、subContent 追加与空正文异常；全目录的规范化地址集随目录缓存一份，供串章闸放行当前章。**在途去重与进程内缓存都只服务目录**（单章在途由阅读会话保证，正文不另立全局表；缓存里的目录与地址集是共享值，消费方不得原地改）。**本地书不走这条线**——本地/在线分流与文字规约归书内容读面，门面只委托；搜索/发现/书架/导入/详情仍归门面（裁决见 `docs/adr/0047`）。
 _唯一实现_: `services/online-reading.ts` 的 `OnlineReading`（目录 `toc` / 正文 `chapterText`；`tocUrlOf` 同住）
 _Avoid_: 阅读服务（`ReadingService` 是门面，不是管线）、抓取（出站执行归 `services/source-request.ts`）
 

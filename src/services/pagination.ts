@@ -11,8 +11,11 @@ export interface FollowOptions {
   sameChapterBase?: string
   /** 目录已知章节地址（防串章的正判据）：候选 == 其他章节 URL → 停。
    *  提供时**取代**启发式——「下一页」指向 `?id=..&cid=..&page=2` 这类非页码键分页地址时，
-   *  启发式会误拦（实测一批源「一章只解析出一页」的根因），而目录知识是正判据。 */
-  stopUrls?: Set<string>
+   *  启发式会误拦（实测一批源「一章只解析出一页」的根因），而目录知识是正判据。
+   *  **调用方负责先 `canonUrl` 规范化**；本函数不再逐项转换整表。 */
+  stopUrls?: ReadonlySet<string>
+  /** `stopUrls` 里要放行的一项（当前章地址，已规范化）——避免每章复制整表来排除当前章。 */
+  stopUrlExcept?: string
 }
 export interface FollowResult<T> { items: T[]; pages: number; stoppedBy: 'end' | 'zero-new' | 'loop' | 'cap' | 'chapter-boundary' }
 
@@ -43,7 +46,7 @@ export async function followPages<T>(
   const items: T[] = []
   const seenKeys = new Set<string>()
   const seenUrls = new Set<string>()
-  const stopSet = opts.stopUrls === undefined ? undefined : new Set([...opts.stopUrls].map((u) => canonUrl(u)))
+  const stopSet = opts.stopUrls
   const queue: QueueEntry[] = [{ url: startUrl, chain: true }]
   let pages = 0
   let stoppedBy: FollowResult<T>['stoppedBy'] = 'end'
@@ -79,7 +82,8 @@ export async function followPages<T>(
     // 串章闸：目录知识优先（候选 == 其他章节 URL → 到底）；启发式只在无目录知识时兜底
     for (const cand of nexts) {
       if (stopSet !== undefined) {
-        if (stopSet.has(canonUrl(cand))) { stoppedBy = 'chapter-boundary'; break outer }
+        const canon = canonUrl(cand)
+        if (canon !== opts.stopUrlExcept && stopSet.has(canon)) { stoppedBy = 'chapter-boundary'; break outer }
       } else if (opts.sameChapterBase !== undefined && !isSameChapterPage(cand, opts.sameChapterBase)) {
         stoppedBy = 'chapter-boundary'; break outer
       }

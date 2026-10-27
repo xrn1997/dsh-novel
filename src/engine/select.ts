@@ -3,7 +3,7 @@ import { isTag } from 'domhandler'
 import type { AnyNode, Element, Text } from 'domhandler'
 import type { EngineValue, Facet, IndexSpec, Segment, SegmentLoc } from './types.js'
 import { RuleEvalError, UnsupportedRuleError } from './errors.js'
-import { cleanText, isNodeValue, nodeText } from './dom.js'
+import { cleanText, isNodeValue, nodeText, rawTextOf } from './dom.js'
 
 type DefaultSegment = Extract<Segment, { kind: 'default' }>
 
@@ -104,6 +104,14 @@ export function reducePicked<T>(
   return { ok: true, items: applied }
 }
 
+/** 集合型伪类按**当前结果集**解释（`:first` / `:eq` / `:scope` 等）：全文档选择与逐元素并集不等价，
+ *  这些形态必须继续走慢路径。`:first-child` / `:nth-child` 等结构伪类不受影响（后缀是 `-`）。 */
+const SET_SCOPED_PSEUDO = /:(?:first|last|eq|lt|gt|odd|even|nth|slice|scope)(?![\w-])/i
+
+/** 前导组合符是相对选择器：逐元素 `find` 以每个当前元素为锚点，全文档选择没有锚点（`> li` 会零命中）。
+ *  函数型伪类内部同样按当前元素解释（`:is(> li)`），不能只查表层的开头与逗号后。 */
+const RELATIVE_SELECTOR = /(?:^|,)\s*[>+~]|\(\s*[>+~]/
+
 /**
  * 链步命中集 = 当前元素自身（若它自己就匹配）+ 其后代命中；逐父展开、自身排在其全部后代之前、整体去重。
  *
@@ -116,8 +124,13 @@ export function reducePicked<T>(
  * 顺序不是细节：含自身会把 `.0`/`[0]` 的取位从「第一个后代」挪到「自身」，那是对面本来就在给的语义。
  */
 export function selectStepWithSelf(
-  $: CheerioAPI, cur: Cheerio<AnyNode>, selector: string,
+  $: CheerioAPI, cur: Cheerio<AnyNode>, selector: string, fromRoot = false,
 ): AnyNode[] {
+  // 链首 cur 是全文档 $('*')：自身 ∪ 后代的并集就是全文档匹配集，直接选一次。
+  // 逐元素 is/find 在长页面上是 O(n²)，但只换「怎么找」不换「找什么」——非链首与两类例外仍走下面的逐元素路径。
+  if (fromRoot && !SET_SCOPED_PSEUDO.test(selector) && !RELATIVE_SELECTOR.test(selector)) {
+    return $(selector).toArray()
+  }
   const out: AnyNode[] = []
   const seen = new Set<AnyNode>()
   const add = (n: AnyNode): void => { if (!seen.has(n)) { seen.add(n); out.push(n) } }
@@ -143,6 +156,8 @@ export function evalDefault(
   cur: Cheerio<AnyNode>,
   loc: SegmentLoc,
   facet: Facet,
+  /** 链首（cur 为全文档 `$('*')`）：仅等价形态的 class/id/tag 直达，child/children 仍按当前集求值 */
+  fromRoot = false,
 ): EngineValue {
   if (!isNodeValue(cur)) {
     throw new RuleEvalError('上游结果不是节点集，无法继续选择', { ...loc, facet, hits: 0 })
@@ -170,9 +185,9 @@ export function evalDefault(
       // `class.x y` = 同时含所有类 → CSS `.x.y` 链（直译后代选择器恒零命中；上游把整串当**一个**
       // 类名交给 jsoup 同样读不出——本仓这一侧更宽，矩阵行 `a-class-multi-token-arg`；
       // 钉子 `tests/engine/select.test.ts` 的「同时含两个类」）
-      case 'class': picked = $(selectStepWithSelf($, cur, '.' + (seg.arg ?? '').trim().split(/\s+/).filter(Boolean).join('.'))); break
-      case 'id': picked = $(selectStepWithSelf($, cur, '#' + seg.arg)); break
-      case 'tag': picked = $(selectStepWithSelf($, cur, seg.arg!)); break
+      case 'class': picked = $(selectStepWithSelf($, cur, '.' + (seg.arg ?? '').trim().split(/\s+/).filter(Boolean).join('.'), fromRoot)); break
+      case 'id': picked = $(selectStepWithSelf($, cur, '#' + seg.arg, fromRoot)); break
+      case 'tag': picked = $(selectStepWithSelf($, cur, seg.arg!, fromRoot)); break
       // child/children 不含自身：对面这两支走 `temp.children()`，本来就不算当前元素自己
       case 'child': picked = cur.children(seg.arg!); break
       default: picked = cur.children(); break // children
@@ -226,9 +241,9 @@ function textContaining(
 
 /** 元素文本按口径取：own = 直系文本节点合并（`directText`），descendant = 全部后代文本。
  *  `text.x`/`ownText.x` 选择段与 jsoup `:contains`/`:containsOwn` 伪类（css.ts）共用——
- *  「直系文本」的定义只住这里。 */
+ *  「直系文本」与「子树文本」的定义各只住一处（后者是 `dom.ts` 的 `rawTextOf`）。 */
 export function textOf($: CheerioAPI, el: AnyNode, scope: 'own' | 'descendant'): string {
-  return scope === 'own' ? directText($, el) : $(el).text()
+  return scope === 'own' ? directText($, el) : rawTextOf(el)
 }
 
 /** 「文本包含」判定单点：忽略大小写的**字面**包含（非正则）。大小写折叠只住这里——
@@ -354,7 +369,7 @@ function extract($: CheerioAPI, el: AnyNode, mode: string): string {
     case 'ownText':
       return cleanText(directText($, el))
     case 'textAll':
-      return cleanText($(el).text())
+      return cleanText(rawTextOf(el))
     case 'html':
       return $(el).html() ?? ''
     case 'all':
@@ -371,6 +386,6 @@ function extract($: CheerioAPI, el: AnyNode, mode: string): string {
     case 'content':
       return attrFallback($, el, 'content', 'meta[content]')
     default:
-      return cleanText($(el).text())
+      return cleanText(rawTextOf(el))
   }
 }

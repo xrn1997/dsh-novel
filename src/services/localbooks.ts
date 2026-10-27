@@ -10,6 +10,7 @@ import type {
 import { chapterContentToText } from './chapter-content.js'
 import { importEpub } from './epub/import.js'
 import type { EpubChapterRef, EpubDocumentRef, EpubImportData, EpubResourceRef } from './epub/import.js'
+import { lruGet, lruSet } from './lru.js'
 import { formatByteLimit } from './size.js'
 import { readJson, writeJsonAtomic, isAtomicTemp, backupPathOf } from './storage.js'
 import { readValue, type ValueSource } from './value-source.js'
@@ -173,6 +174,7 @@ export interface LocalResource {
  *  流读时按它计数，解析层再按它判一次，两边不一致就会出现「读进来了却拒不解析」的错觉。 */
 export const DEFAULT_MAX_IMPORT_BYTES = 50 * 1024 * 1024
 
+/** 同时顾及几本本地书：正文全文与元数据两张表各按这个数收（读一本时另一本留着不至于重解）。 */
 const MAX_CACHED_BOOKS = 3
 /** EPUB 原文在书目录里的名字（重解析路径保留上传字节） */
 const ORIGINAL_EPUB = 'original.epub'
@@ -204,6 +206,13 @@ export class LocalBooks {
   /** bookKey → 解码全文；Map 迭代序 = LRU 序（get 时 delete+set 提升）。**只装 TXT**：
    *  EPUB 正文按文档按需读 JSON，不把整本塞进这个 LRU（那是两份缓存与两套失效口径）。 */
   private readonly textCache = new Map<string, string>()
+  /** bookKey → 元数据；章节/资源读取共用。TXT 的章节偏移表与 EPUB 的文档/资源表都在这里，
+   *  不缓存就得每章/每图重读重解析整份 meta。 */
+  private readonly metaCache = new Map<string, LocalMeta>()
+  private readonly metaInflight = new Map<string, Promise<LocalMeta>>()
+  /** 删书代际：在途 meta 读取不得把已删书的旧表重新塞回缓存。全局递增——一本书被删就让所有
+   *  在途读取放弃写回（只是少一次缓存，不会串书），避免按书键累积的回收账。 */
+  private metaEpoch = 0
 
   private constructor(dir: string, maxImportBytes: ValueSource<number>) {
     this.localDir = path.join(dir, 'local')
@@ -364,6 +373,9 @@ export class LocalBooks {
     const existed = await fs.stat(this.fileOf(id, 'json')).then(() => true, () => false)
     await this.discard(id)
     this.textCache.delete(bookKey)
+    this.metaCache.delete(bookKey)
+    this.metaInflight.delete(bookKey)                 // 删后新读不许 join 删除前那一发
+    this.metaEpoch += 1
     return existed
   }
 
@@ -395,14 +407,10 @@ export class LocalBooks {
     if (span === undefined) {
       throw new LocalArtifactNotFoundError(`本地书没有第 ${index} 章（共 ${meta.chapters.length} 章）`)
     }
-    let text = this.textCache.get(bookKey)
+    let text = lruGet(this.textCache, bookKey)
     if (text === undefined) {
       text = decodeLocalText(await fs.readFile(this.fileOf(this.idOf(bookKey), 'txt'))).text
-      this.textCache.delete(bookKey)                                       // LRU 提升
-      this.textCache.set(bookKey, text)
-      while (this.textCache.size > MAX_CACHED_BOOKS) {
-        this.textCache.delete(this.textCache.keys().next().value as string)
-      }
+      lruSet(this.textCache, bookKey, text, MAX_CACHED_BOOKS)
     }
     // 退化 span（相邻标题行 / 文末孤标题）可能 start > end——夹紧边界，保证只切出 '' 而非负长度
     const start = Math.max(0, Math.min(span.start, text.length))
@@ -420,9 +428,21 @@ export class LocalBooks {
 
   private async metaOf(bookKey: string): Promise<LocalMeta> {
     if (!isLocalBookKey(bookKey)) throw new LocalArtifactNotFoundError(`非法本地书 key: ${bookKey}`)
-    const meta = await readJson<LocalMeta | null>(this.fileOf(this.idOf(bookKey), 'json'), null)
-    if (meta === null) throw new LocalArtifactNotFoundError(`本地书不存在: ${bookKey}`)
-    return meta
+    const hit = lruGet(this.metaCache, bookKey)
+    if (hit !== undefined) return hit
+    const inflight = this.metaInflight.get(bookKey)
+    if (inflight !== undefined) return inflight
+    const epoch = this.metaEpoch
+    const p = (async (): Promise<LocalMeta> => {
+      const meta = await readJson<LocalMeta | null>(this.fileOf(this.idOf(bookKey), 'json'), null)
+      if (meta === null) throw new LocalArtifactNotFoundError(`本地书不存在: ${bookKey}`)
+      if (this.metaEpoch === epoch) lruSet(this.metaCache, bookKey, meta, MAX_CACHED_BOOKS)
+      return meta
+    })()
+    this.metaInflight.set(bookKey, p)
+    const clear = (): void => { if (this.metaInflight.get(bookKey) === p) this.metaInflight.delete(bookKey) }
+    p.then(clear, clear)
+    return p
   }
 
   private async epubMetaOf(bookKey: string): Promise<LocalEpubMeta> {

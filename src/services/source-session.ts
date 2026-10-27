@@ -76,12 +76,13 @@ function readState(file: string): State {
   return state
 }
 
-/** 落盘时机由写操作触发（同步小文件）；跨重启保留源变量/单串槽/cache/cookie 垫片。
+/** 源状态持久化：写操作只标脏（脚本方法面同步），求值边界/卸载时 flush 一次整份落盘——
+ *  同一段脚本的多次 set 合并成一次写；跨重启保留源变量/单串槽/cache/cookie 垫片。
  *
  *  **同步写是 ADR 0013 的刻意例外**：SourceSession 的方法面是同步的（脚本 `source.get`/`cache.get`
- *  不能等 IO），所以这里用同一种 tmp+rename（命名仍走 storage 的 `tempPathOf`/`backupPathOf`），
- *  由单线程同步调用保证同一文件的写不会互相插队。写失败只记日志、不打断读链路；
- *  源状态是派生数据，下一次写入重试。 */
+ *  不能等 IO），所以 flush 用同一种 tmp+rename（命名仍走 storage 的 `tempPathOf`/`backupPathOf`），
+ *  由单线程同步调用保证同一文件的写不会互相插队。写失败只记日志、不打断读链路，脏标记留到
+ *  下一次 flush 重试；进程崩溃最多丢当前求值批的写入（源状态是派生数据）。 */
 class PersistentMap extends Map<string, string> {
   constructor(entries: Record<string, string>, private readonly onChange: () => void) {
     super()
@@ -111,6 +112,8 @@ export class FileSourceSession implements SourceSession {
   private state: State
   private readonly file: string
   private readonly maps = new Map<string, PersistentMap>()
+  /** 内存已变、盘未落：同一批脚本写入合并成一次同步写。 */
+  private dirty = false
 
   constructor(dir: string) {
     this.file = path.join(dir, 'source-state.json')
@@ -118,13 +121,28 @@ export class FileSourceSession implements SourceSession {
   }
 
   private persist(): void {
+    if (!this.dirty) return
+    this.syncMaps()
     try {
       const tmp = tempPathOf(this.file)
       fs.writeFileSync(tmp, JSON.stringify(this.state), 'utf8')
       fs.renameSync(tmp, this.file)
+      this.dirty = false
     } catch (e) {
-      // 不打断读链路；下一次写入重试（源状态是派生数据，正文/书架另有原子写）
-      log.error(`源状态落盘失败（下一次写入重试）：${this.file}`, e)
+      // 不打断读链路；保留 dirty，下一次 flush 重试（源状态是派生数据，正文/书架另有原子写）
+      log.error(`源状态落盘失败（下一次 flush 重试）：${this.file}`, e)
+    }
+  }
+
+  /** 加载过的 Map 才是该源的真相：落盘前一次性折回 state，避免每次 set 都整表 Object.fromEntries。 */
+  private syncMaps(): void {
+    for (const [id, map] of this.maps) {
+      const sep = id.indexOf('\n')
+      const bucket = id.slice(0, sep) as Bucket
+      const sourceKey = id.slice(sep + 1)
+      if (map.size > 0 || this.state[bucket][sourceKey] !== undefined) {
+        this.state[bucket][sourceKey] = Object.fromEntries(map)
+      }
     }
   }
 
@@ -134,10 +152,7 @@ export class FileSourceSession implements SourceSession {
     if (held !== undefined) return held
     const entries = this.state[bucket][sourceKey]
     if (entries === undefined && !create) return undefined
-    const map = new PersistentMap(entries ?? {}, () => {
-      this.state[bucket][sourceKey] = Object.fromEntries(map)
-      this.persist()
-    })
+    const map = new PersistentMap(entries ?? {}, () => { this.dirty = true })
     this.maps.set(id, map)
     return map
   }
@@ -161,7 +176,7 @@ export class FileSourceSession implements SourceSession {
   setSourceString(sourceKey: string, value: string | null): void {
     if (value === null) delete this.state.strings[sourceKey]
     else this.state.strings[sourceKey] = value
-    this.persist()
+    this.dirty = true
   }
 
   cacheStore(sourceKey: string): Map<string, string> {
@@ -169,7 +184,9 @@ export class FileSourceSession implements SourceSession {
   }
 
   /** 删源时清掉该源的全部源级状态（键值表/单串槽/cache/cookie 垫片）。
-   *  sourceKey 是脚本侧键（`baseUrl`），不是书源 id——调用方负责按 id 取 baseUrl。 */
+   *  sourceKey 是脚本侧键（`baseUrl`），不是书源 id——调用方负责按 id 取 baseUrl。
+   *  删完当场落盘（不押到下一次 flush），并把句柄从 `maps` 摘掉：此后那个 Map 的写入不再进账——
+   *  已删源的状态不许靠一条晚到的写复活。 */
   forget(sourceKey: string): void {
     let changed = false
     for (const bucket of BUCKETS) {
@@ -183,9 +200,13 @@ export class FileSourceSession implements SourceSession {
       delete this.state.strings[sourceKey]
       changed = true
     }
-    if (changed) this.persist()
+    if (changed) {
+      this.dirty = true
+      this.persist()
+    }
   }
 
+  /** 求值边界/卸载时落盘；没有脏数据时零 I/O。 */
   flush(): void {
     this.persist()
   }

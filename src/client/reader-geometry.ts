@@ -3,7 +3,7 @@ import type { ReaderPort, VisibleNode } from './reader-session.js'
 import {
   contentOriginTop, portScrollHeight, portScrollTop, portViewHeight, portViewTop, setPortScrollTop,
 } from './scrollport.js'
-import { findNovelNode, novelNodes } from './util.js'
+import { findNovelNode, novelNodes, NOVEL_NODE_ATTR } from './util.js'
 
 /**
  * 阅读器几何：把 DOM 测量实现成一个 `ReaderPort`，视图只提供最小元素源。
@@ -59,6 +59,20 @@ export function createReaderGeometry(source: ReaderGeometrySource): ReaderPort {
       const target = anchorId === null ? block : findNovelNode(block, anchorId)
       if (target === null) return null
       return target.getBoundingClientRect().top - portViewTop(source.port())
+    },
+    targetOffsets: (index, anchorIds) => {
+      const block = source.chapters()[index]
+      if (block === null || block === undefined) return anchorIds.map(() => null)
+      const viewTop = portViewTop(source.port())
+      const byId = new Map<string, Element>()
+      for (const el of novelNodes(block)) {
+        const id = el.getAttribute(NOVEL_NODE_ATTR)
+        if (id !== null && !byId.has(id)) byId.set(id, el)
+      }
+      return anchorIds.map((anchorId) => {
+        const target = anchorId === null ? block : byId.get(anchorId)
+        return target === undefined ? null : target.getBoundingClientRect().top - viewTop
+      })
     },
     currentNode: () => currentNodeOf(source.chapters(), portViewTop(source.port())),
   }

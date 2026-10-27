@@ -13,6 +13,24 @@ export function cleanText(s: string): string {
   return s.replace(/\u3000/g, ' ').replace(/[ \t\r\n]+/g, ' ').trim()
 }
 
+/**
+ * 节点子树原始文本（cheerio `.text()` 口径：含脚本/样式文本、不含注释）——判定用的文本只这一份。
+ * 与 `nodeText` 的分工按用途分：这一份喂 `:contains` 与 XPath 谓词（判定要看元素的全部文字，
+ * 换行与实体规约反而会把比对拆岔），那一份喂正文产出（块级边界落成 \n，阅读器据此分段）。
+ *
+ * 不做子树文本缓存：引擎这一层零内部状态（口径见 `docs/architecture.md` §2），而缓存要在每个
+ * 遍历到的后代上留一份子树文本——深嵌套页面的驻留量随嵌套深度乘全文长度，命中却只在同一节点
+ * 被重复判定时才有。
+ */
+export function rawTextOf(node: AnyNode): string {
+  if (isText(node)) return (node as Text).data ?? ''
+  const children = (node as { children?: AnyNode[] }).children
+  if (children === undefined) return ''
+  let out = ''
+  for (const child of children) out += rawTextOf(child)
+  return out
+}
+
 /** 判定「上游结果是节点集」（Cheerio 集有 length 与 text()；普通 Value 对象没有） */
 export function isNodeValue(v: unknown): v is Cheerio<AnyNode> {
   return typeof v === 'object' && v !== null && 'length' in (v as any) && typeof (v as any).text === 'function'

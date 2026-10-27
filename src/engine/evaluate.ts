@@ -408,7 +408,7 @@ function evalNonJs(
   switch (seg.kind) {
     case 'css': {
       if (cur?.kind === 'miss') return cur // Miss 穿透：选择/取值段对 Miss 上游原样透传
-      return evalCss(seg, $(), requireNodes(cur, rt, loc), loc, rt.facet)
+      return evalCss(seg, $(), requireNodes(cur, rt, loc), loc, rt.facet, cur === null)
     }
     case 'xpath': {
       if (cur?.kind === 'miss') return cur
@@ -430,7 +430,7 @@ function evalNonJs(
         : undefined
       if (jsonBase !== undefined) return evalJsonPath(`$.${propName}`, jsonBase, loc, rt.facet)
       const nodes = cur === null && isGetValueSegment(seg) ? $().root() : requireNodes(cur, rt, loc)
-      return evalDefault(seg, $(), nodes, loc, rt.facet)
+      return evalDefault(seg, $(), nodes, loc, rt.facet, cur === null)
     }
     case 'jsonpath': {
       if (cur?.kind === 'miss') return cur

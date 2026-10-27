@@ -75,7 +75,7 @@ function parseSelector(selector: string, loc: SegmentLoc, facet: Facet): ParsedS
 
 /**
  * @css 选择器段求值：在当前节点集内选（命中集含当前元素自身，口径见 `selectStepWithSelf`，
- * 对面是 jsoup 的 `Element.select`；不做全文档查找）。
+ * 对面是 jsoup 的 `Element.select`）；链首（当前集即全文档）由 fromRoot 走等价直达，其余不做全文档查找。
  * - cheerio 底层选择器引擎（nwsapi/css-select）对非法选择器抛错 → 包成 RuleEvalError
  *   （hits=0，说明是选择器写错而非语法外构造）；**本层自己抛的 RuleEvalError 原样上抛**——
  *   再包一层会让消息自嵌套（`CSS 选择器无法解析：sel（CSS 选择器无法解析：sel（…））`）。
@@ -90,11 +90,13 @@ export function evalCss(
   cur: Cheerio<AnyNode>,
   loc: SegmentLoc,
   facet: Facet,
+  /** 链首（cur 为全文档 `$('*')`）：等价形态直接全文档选择，避免长页面上的 O(n²) 子树查找 */
+  fromRoot = false,
 ): EngineValue {
   const { plain, textFilters, attrFilters } = parseSelector(seg.selector, loc, facet)
   let picked: Cheerio<AnyNode>
   try {
-    picked = $(selectStepWithSelf($, cur, plain))
+    picked = $(selectStepWithSelf($, cur, plain, fromRoot))
   } catch (e) {
     if (e instanceof RuleEvalError) throw e
     throw new RuleEvalError(`CSS 选择器无法解析：${seg.selector}（${(e as Error).message}）`, { ...loc, facet, hits: 0 })
