@@ -1,0 +1,60 @@
+name: CI
+
+# 离线门：类型 / 规则 / 契约 / 打包 / compat 回放。
+# 真链路门（REPROBE / CONTENT_AUDIT / SEARCH_FILTER_AUDIT / EPUB_BROWSER / WEBVIEW /
+# INSTALL_CHECK）需要真实站点、真浏览器或本机宿主，刻意不进日常 CI；按
+# docs/development.md 的命令在开发机上手动跑。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-gates:
+    name: Offline gates (Ubuntu, Node 24)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 与 pnpm-lock.yaml 的 lockfileVersion 9 和本机 pnpm 11 对齐；升级时两处一起改。
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: '11.25.0'
+          run_install: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Unit and contract tests
+        run: pnpm test
+
+      - name: Packaging self-check
+        run: pnpm test:pack
+
+      - name: Compat replay
+        run: pnpm test:compat

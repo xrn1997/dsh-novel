@@ -48,6 +48,8 @@ pnpm lint          # react-hooks 一条规则集（未豁免的界面依赖数�
 
 > **跑门取退出码，别看管道说了什么**：`pnpm test | tail` 之后退出码是管道工具的，红会被吃掉。先把输出灌进文件、再单独打印退出码，汇报里把**退出码连同计数**一起抄；**跑门与提交必须是两条命令**。
 
+**CI 的分工**：GitHub Actions（`.github/workflows/ci.yml`）在 push / PR 上跑离线门——`pnpm typecheck`、`pnpm lint`、`pnpm test`、`pnpm test:pack`、`pnpm test:compat`。真链路门（下面的 `DSH_*` 系列）不进 CI：它们需要真实站点、真浏览器或本机宿主，仍按本机命令手动跑；CI 绿不代表站点可用性或安装链路通过。
+
 **默认跳过、需显式打开的门控**（`pnpm test` 全绿**不覆盖**它们；常规集证明引擎 / 服务 / 契约 / 前端逻辑，**不证明任何真实站点可用性、也不证明安装链路**）：
 
 ```powershell
