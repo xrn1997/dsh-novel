@@ -5,6 +5,9 @@
 - [src/shared/wire.ts](file://src/shared/wire.ts)
 - [src/api/wire.ts](file://src/api/wire.ts)
 - [tests/api/wire.test.ts](file://tests/api/wire.test.ts)
+- [tests/shared/wire-builders.test.ts](file://tests/shared/wire-builders.test.ts)
+- [tests/api/routes.test.ts](file://tests/api/routes.test.ts)
+- [src/client/copy/common.ts](file://src/client/copy/common.ts)
 </cite>
 
 ## 目录
@@ -13,16 +16,17 @@
 3. [核心类型与语义](#核心类型与语义)
 4. [Wire-first 策略与构建期门禁](#wire-first-策略与构建期门禁)
 5. [序列化/反序列化工具链](#序列化反序列化工具链)
-6. [新增 Wire 类型的步骤](#新增-wire-类型的步骤)
-7. [依赖关系分析](#依赖关系分析)
-8. [性能与体积特性](#性能与体积特性)
-9. [常见陷阱与排错](#常见陷阱与排错)
-10. [结论](#结论)
+6. [路由与参数操作（重大变更）](#路由与参数操作重大变更)
+7. [新增 Wire 类型的步骤](#新增-wire-类型的步骤)
+8. [依赖关系分析](#依赖关系分析)
+9. [性能与体积特性](#性能与体积特性)
+10. [常见陷阱与排错](#常见陷阱与排错)
+11. [结论](#结论)
 
 ## 引言
 本文件文档化 `src/shared/wire.ts` 定义的跨 Node 半与浏览器半的 wire 契约。该文件是 `/novel-api` 的值形状、路由段名、错误信封与请求体构造器的唯一权威来源：Node 端把业务对象投影为 JSON，浏览器端只消费这些纯数据，不持有 DOM、宿主 API 或运行时副作用。
 
-“wire-first”的核心思想是：**先写跨半契约，再分别实现服务端投影与客户端消费**。这样可以在编译期和测试期同时保证两端不会悄悄分叉。
+"wire-first"的核心思想是：**先写跨半契约，再分别实现服务端投影与客户端消费**。这样可以在编译期和测试期同时保证两端不会悄悄分叉。
 
 ## 项目结构定位
 `src/shared/wire.ts` 处于共享层，既不被浏览器端直接调用运行时逻辑，也不被 Node 端当作服务实现；它只做三件事：
@@ -64,7 +68,7 @@ graph TB
 - `JobState`：单任务槽状态，包含任务标识、阶段、进度、计数、错误与时间戳。
 - `Relevance`：搜索命中与关键词的关系，用于聚合搜索的可见性控制。
 
-它们共同表达“任务是否还在跑”“是否被用户停止”“结果是否失败”。
+它们共同表达"任务是否还在跑""是否被用户停止""结果是否失败"。
 
 **章节来源**
 - [src/shared/wire.ts:60-98](file://src/shared/wire.ts#L60-L98)
@@ -98,7 +102,7 @@ flowchart TD
 - `ExploreSnapshot`：单源分类轮次的读面快照，包含页码、是否有更多页、书籍列表与错误信息。
 
 关键约束：
-- `phase` 与 `JobState` 使用同一套词汇，表示“仍在运行、完成、失败”。
+- `phase` 与 `JobState` 使用同一套词汇，表示"仍在运行、完成、失败"。
 - `cancelled` 不是失败：用户主动停止时保留已有结果，UI 不报红条。
 - `next` 作为游标，客户端将其作为下次查询的 `since`。
 - `ExploreSnapshot` 是全量快照，不是增量流；分页累积在服务端持有者中。
@@ -128,9 +132,9 @@ sequenceDiagram
 
 ### 书架类型
 - `ShelfProgress`：阅读进度，包含章索引、偏移比例与更新时间。
-- `hasProgress`：判断“是否读过”的单点函数，口径是“章号大于 0 或偏移比例大于 0”。
+- `hasProgress`：判断"是否读过"的单点函数，口径是"章号大于 0 或偏移比例大于 0"。
 - `ShelfBook`：落盘的书架条目，包含元数据与进度。
-- `SHELF_META`：书目元数据字段表，是“名称 × wire 类型判别 × 归一化”的唯一主人。
+- `SHELF_META`：书目元数据字段表，是"名称 × wire 类型判别 × 归一化"的唯一主人。
 - `ShelfEntry`：书架读取面类型，是 `ShelfBook` 加上来源投影 `sourceName`。
 - `ShelfMetaPatch`：对书架条目打补丁的可空映射。
 - `pickShelfMeta`：从任意记录中提取合法元数据字段，过滤非法类型、空值与未知键。
@@ -194,24 +198,6 @@ classDiagram
 **章节来源**
 - [src/shared/wire.ts:511-540](file://src/shared/wire.ts#L511-L540)
 
-### 路由、参数与请求体
-- `SEG`：路由段字面量的单一来源。
-- `Route`：双形态路由，包含 path 与 segs。
-- `ROUTES`：静态路由表。
-- `paramRoutes`：参数路由构造器。
-- `PARAMS`：query 参数名的单一来源。
-- `encodeQuery`：参数序列化，丢弃 undefined 与 null。
-- `queries`：查询路径构造器。
-- `BODY`：请求体字段名。
-- `bodies`：请求体构造器。
-- `readBodies`：请求体解析器。
-- `ShelfPutBody`：书架 PUT 的三种模式。
-
-这些构造器保证“写路由的 body 与读路由的 body 同源”，避免两端各自手写字段名。
-
-**章节来源**
-- [src/shared/wire.ts:541-836](file://src/shared/wire.ts#L541-L836)
-
 ## Wire-first 策略与构建期门禁
 
 ### 为什么选择 wire-first
@@ -269,6 +255,180 @@ sequenceDiagram
 - [src/api/wire.ts:100-135](file://src/api/wire.ts#L100-L135)
 - [src/shared/wire.ts:620-755](file://src/shared/wire.ts#L620-L755)
 
+## 路由与参数操作（重大变更）
+
+### 路由身份绑定：方法与路径成为一对
+
+本次重大变更将 HTTP method 与 path 绑定为**路由身份对**，彻底消除方法误配风险。变更前，路由只存储路径字符串，方法信息由调用方分别传递；变更后，每个路由都携带自己的 method 字段，形成不可分割的身份单元。
+
+#### 核心类型定义
+
+**更新** 新增 `HttpMethod`、`WriteMethod`、`RouteTarget` 与 `Route` 类型，将方法与路径绑定为单一身份对。
+
+- `HttpMethod`：HTTP 方法字面量联合类型，限定为 `'GET' | 'POST' | 'PUT' | 'DELETE'`。
+- `WriteMethod`：写方法子集，排除 `GET`，确保类型层面挡住「把 GET 路由交给写接口」的错误。
+- `RouteTarget<M>`：路由目标接口，包含 `method` 与 `path` 两个字段，泛型 `M` 保留方法字面量。
+- `Route<M>`：双形态路由，继承 `RouteTarget<M>` 并增加 `segs` 数组，用于服务端段匹配自洽校验。
+
+```typescript
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE'
+export type WriteMethod = Exclude<HttpMethod, 'GET'>
+export interface RouteTarget<M extends HttpMethod = HttpMethod> { method: M; path: string }
+export interface Route<M extends HttpMethod = HttpMethod> extends RouteTarget<M> { segs: string[] }
+```
+
+**章节来源**
+- [src/shared/wire.ts:541-570](file://src/shared/wire.ts#L541-L570)
+
+#### route() 构造器
+
+**更新** `route()` 函数现在接受 method 作为第一个参数，返回带有方法字面量的 `Route` 对象。
+
+```typescript
+export function route<M extends HttpMethod>(method: M, ...segs: string[]): Route<M> {
+  return { method, path: segs.join('/'), segs }
+}
+```
+
+所有静态路由在 `ROUTES` 表中都通过 `route()` 构造，方法随行：客户端写口取 `ROUTES.x.method`，dispatch 的 guard 读同一份。
+
+**章节来源**
+- [src/shared/wire.ts:571-620](file://src/shared/wire.ts#L571-L620)
+
+### 参数操作：shelfPut 与 shelfDelete 分离
+
+**更新** 参数操作从 5 个增至 6 个，将原本合并的 `shelf` 操作拆分为独立的 `shelfPut` 与 `shelfDelete`。
+
+#### ParamOperation 接口
+
+`ParamOperation<A, M>` 接口定义参数化操作的形状：
+- `method`：HTTP 方法字面量（写方法）。
+- `path(...args)`：路径构造器函数。
+- `at(...args)`：返回 `RouteTarget<M>`，将方法与路径绑成目标对象。
+
+```typescript
+export interface ParamOperation<A extends unknown[], M extends WriteMethod = WriteMethod> {
+  readonly method: M
+  path(...args: A): string
+  at(...args: A): RouteTarget<M>
+}
+```
+
+#### paramOp() 构造器
+
+**更新** `paramOp()` 函数现在接受 method 作为第一个参数，返回带有方法字面量的 `ParamOperation` 对象。
+
+```typescript
+function paramOp<M extends WriteMethod, A extends unknown[]>(
+  method: M, path: (...args: A) => string,
+): ParamOperation<A, M> {
+  return { method, path, at: (...args) => ({ method, path: path(...args) }) }
+}
+```
+
+#### 六个参数操作
+
+当前 `paramOps` 包含六个操作：
+
+1. **sourceProbe**：POST `/sources/:id/probe` — 探针单个书源。
+2. **sourceEnabled**：POST `/sources/:id/enabled` — 启停单个书源。
+3. **sourceAuth**：POST `/sources/:id/auth` — 认证单个书源。
+4. **sourceDelete**：DELETE `/sources/:id` — 删除单个书源。
+5. **shelfPut**：PUT `/shelf/:bookKey` — 上架/更新进度/打补丁（三形态合一）。
+6. **shelfDelete**：DELETE `/shelf/:bookKey` — 下架单个书架条目。
+
+**关键变化**：`shelfPut` 与 `shelfDelete` 从原先可能的合并操作中分离，各自拥有独立的方法与路径构造器。这消除了「同一个参数操作既要支持 PUT 又要支持 DELETE」的歧义，使类型系统能在编译期挡住方法误配。
+
+```typescript
+const shelfKeyPath = (bookKey: string): string => `${ROUTES.shelf.path}/${encodeURIComponent(bookKey)}`
+
+export const paramOps = {
+  sourceProbe: paramOp('POST', (id: string) => `${ROUTES.sources.path}/${id}/${SEG.probe}`),
+  sourceEnabled: paramOp('POST', (id: string) => `${ROUTES.sources.path}/${id}/${SEG.enabled}`),
+  sourceAuth: paramOp('POST', (id: string) => `${ROUTES.sources.path}/${id}/${SEG.auth}`),
+  sourceDelete: paramOp('DELETE', (id: string) => `${ROUTES.sources.path}/${id}`),
+  shelfPut: paramOp('PUT', shelfKeyPath),
+  shelfDelete: paramOp('DELETE', shelfKeyPath),
+} as const
+```
+
+**章节来源**
+- [src/shared/wire.ts:601-620](file://src/shared/wire.ts#L601-L620)
+
+### 路由总数：从 35 增至 36
+
+**更新** 由于 `shelfPut` 与 `shelfDelete` 分离，参数操作从 5 个增至 6 个，路由总数从 35 增至 36。
+
+静态路由仍为 30 条，参数操作现为 6 条，总计 36 条路由。这一计数由 `tests/shared/wire-builders.test.ts` 钉死，任何增删路由都必须同步更新测试断言。
+
+```typescript
+describe('路由表计数钉死（总数只有一个家，别处不许手写）', () => {
+  it('静态路由 30 条、参数操作 6 条', () => {
+    expect(Object.keys(ROUTES)).toHaveLength(30)
+    expect(Object.keys(paramOps)).toHaveLength(6)
+  })
+})
+```
+
+**章节来源**
+- [tests/shared/wire-builders.test.ts:60-70](file://tests/shared/wire-builders.test.ts#L60-L70)
+
+### 写端点接受 RouteTarget 对象
+
+**更新** 所有写端点现在接受 `RouteTarget` 对象而非分别传递 method 与 path。这消除了两参形式允许配错的风险，且让 dispatch 的 guard 无需重述一遍 same shape。
+
+客户端调用示例：
+
+```typescript
+// 旧方式（已废弃）：分别传 method 与 path，容易配错
+apiSend('PUT', paramOps.shelf.path(bookKey), body)
+
+// 新方式：取 RouteTarget 对象，方法随行
+const target = paramOps.shelfPut.at(bookKey)
+apiSend(target.method, target.path, body)
+```
+
+Dispatch 层的 guard 现在可以直接读取路由对象的 method 字段进行校验：
+
+```typescript
+guard(method, { method: ROUTES.health.method, path: NOVEL_API_PREFIX })
+```
+
+**章节来源**
+- [src/api/dispatch.ts:85-95](file://src/api/dispatch.ts#L85-L95)
+- [src/shared/wire.ts:571-580](file://src/shared/wire.ts#L571-L580)
+
+### 路由身份字面快照测试
+
+为确保路由身份绑定正确，测试文件中维护了一份字面快照 `ROUTE_IDENTITIES` 与 `PARAM_IDENTITIES`，逐条验证每个路由的 method 与 path 是否与预期一致。
+
+```typescript
+const ROUTE_IDENTITIES = {
+  health: { method: 'GET', path: '' },
+  sources: { method: 'GET', path: 'sources' },
+  sourcesImport: { method: 'POST', path: 'sources/import' },
+  // ... 其余 27 条静态路由
+} as const
+
+const PARAM_IDENTITIES = {
+  sourceProbe: { method: 'POST', key: 'x', path: 'sources/x/probe' },
+  sourceEnabled: { method: 'POST', key: 'x', path: 'sources/x/enabled' },
+  sourceAuth: { method: 'POST', key: 'x', path: 'sources/x/auth' },
+  sourceDelete: { method: 'DELETE', key: 'x', path: 'sources/x' },
+  shelfPut: { method: 'PUT', key: 'local:x', path: 'shelf/local%3Ax' },
+  shelfDelete: { method: 'DELETE', key: 'local:x', path: 'shelf/local%3Ax' },
+} as const
+```
+
+测试逐条验证：
+- 每个静态路由的 method/path 与字面快照一致。
+- 每个参数操作的 method/path/at 与字面快照一致。
+- `paramOps.shelfPut.at(key)` 返回的对象包含正确的 method 与编码后的 path。
+
+**章节来源**
+- [tests/shared/wire-builders.test.ts:20-60](file://tests/shared/wire-builders.test.ts#L20-L60)
+- [tests/shared/wire-builders.test.ts:70-90](file://tests/shared/wire-builders.test.ts#L70-L90)
+
 ## 新增 Wire 类型的步骤
 
 ### 标准流程
@@ -281,7 +441,9 @@ sequenceDiagram
 如果新增的是书架元数据字段，必须同步修改 `SHELF_META`，因为它是所有书架写入口的唯一主人。新增普通业务字段则只需更新类型、响应体、ViewModel 与测试。
 
 ### 新增路由时的注意事项
-如果新增的是查询参数，应优先复用 `PARAMS`；如果是请求体字段，应复用 `BODY`。新增路由段应放在 `SEG`，新增静态路由应加入 `ROUTES`，新增参数路由应加入 `paramRoutes`。
+如果新增的是查询参数，应优先复用 `PARAMS`；如果是请求体字段，应复用 `BODY`。新增路由段应放在 `SEG`，新增静态路由应加入 `ROUTES`，新增参数路由应加入 `paramOps`。
+
+**重要**：新增路由后必须更新 `tests/shared/wire-builders.test.ts` 中的计数断言与字面快照，否则测试会失败。
 
 ```mermaid
 flowchart TD
@@ -388,11 +550,11 @@ wire 类型不应出现循环引用。例如 `MergedBook` 引用 `MergedSource`�
 - [src/shared/wire.ts:620-836](file://src/shared/wire.ts#L620-L836)
 
 ### 陷阱五：混淆 `null` 与可选字段
-wire 契约规定：可空字段用 `| null`，可能缺键的字段才用 `?:`。例如 `author` 可能是“源没给这条信息”，所以是 `string | null`；而 `lastProbedAt` 可能整键缺席，所以是 `?: number`。
+wire 契约规定：可空字段用 `| null`，可能缺键的字段才用 `?:`。例如 `author` 可能是"源没给这条信息"，所以是 `string | null`；而 `lastProbedAt` 可能整键缺席，所以是 `?: number`。
 
 排查方法：
 - 检查 JSON.stringify 是否会丢弃 undefined 键。
-- 检查 UI 是否把 `null` 当成“字段不存在”。
+- 检查 UI 是否把 `null` 当成"字段不存在"。
 
 **章节来源**
 - [src/shared/wire.ts:1-25](file://src/shared/wire.ts#L1-L25)
@@ -409,5 +571,30 @@ wire 契约规定：可空字段用 `| null`，可能缺键的字段才用 `?:`�
 - [src/shared/wire.ts:114-200](file://src/shared/wire.ts#L114-L200)
 - [src/shared/wire.ts:251-350](file://src/shared/wire.ts#L251-L350)
 
+### 陷阱七：方法误配导致路由歧义
+**新增** 在路由身份绑定之前，调用方可能错误地将 GET 方法用于写端点，或将 POST 方法用于读端点。这种错误在运行时才会暴露，且可能导致意外的副作用。
+
+排查方法：
+- 使用 `RouteTarget` 对象而非分别传递 method 与 path。
+- 依赖 TypeScript 类型系统：`WriteMethod` 排除 `GET`，编译期即可挡住「把 GET 路由交给写接口」的错误。
+- 检查 `paramOps.x.method` 是否与预期一致。
+
+**章节来源**
+- [src/shared/wire.ts:541-570](file://src/shared/wire.ts#L541-L570)
+- [tests/shared/wire-builders.test.ts:70-90](file://tests/shared/wire-builders.test.ts#L70-L90)
+
+### 陷阱八：参数操作合并导致语义模糊
+**新增** 在 `shelfPut` 与 `shelfDelete` 分离之前，可能存在一个参数操作同时支持 PUT 与 DELETE 的情况，导致调用方不清楚应该使用哪种方法。
+
+排查方法：
+- 确认每个参数操作只对应一种 HTTP 方法。
+- 检查 `paramOps` 中是否存在合并的操作，如有则拆分为独立的操作。
+- 验证 `paramOps.shelfPut.method` 为 `'PUT'`，`paramOps.shelfDelete.method` 为 `'DELETE'`。
+
+**章节来源**
+- [src/shared/wire.ts:601-620](file://src/shared/wire.ts#L601-L620)
+
 ## 结论
 `src/shared/wire.ts` 是跨 Node 半与浏览器半的单一真相来源。它通过 wire-first 策略把值形状、路由、参数与请求体约束集中管理，让浏览器端只消费纯数据，让 Node 端只负责投影与校验。新增类型时，应优先维护这份契约，再通过 API 响应体与 UI ViewModel 两侧落地，并用契约测试钉住 round-trip、信封形状与错误映射。常见风险包括循环引用、宿主对象泄漏、非幂等字段误入快照、body 字段名分叉以及对 null 与可选字段的误用。只要守住这些边界，wire 就能长期保持稳定。
+
+本次重大变更将 HTTP method 与 path 绑定为路由身份对，参数操作从 5 个增至 6 个（`shelfPut` 与 `shelfDelete` 分离），路由总数从 35 增至 36，写端点现在接受 `RouteTarget` 对象。这些变化消除了方法误配风险，使类型系统能在编译期挡住错误，提升了契约的严谨性与可维护性。

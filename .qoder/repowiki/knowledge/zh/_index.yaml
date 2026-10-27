@@ -1,27 +1,30 @@
 # 知识卡导出索引文件
 schema_version: 1
 locale: zh-CN
-commit: 4f31eacd8965af7339ff7ea3b21943cd3e7c989d
+commit: 0f43f039542d25deb6a9bf0e8cfc4a4024ad8817
 branch: main
-exported_at: "2026-10-19T14:40:50Z"
+exported_at: "2026-10-27T14:50:38Z"
 modules:
     root:
-        dir_name: DSH 小说插件工作区根配置
-        title: DSH 小说插件工作区根配置
+        dir_name: DSH 网络小说阅读插件（@xrn1997_dsh-novel）
+        title: DSH 网络小说阅读插件（@xrn1997/dsh-novel）
         scope:
             - .gitignore
+            - README.md
+            - AGENTS.md
+            - CONTEXT.md
             - package.json
             - pnpm-workspace.yaml
             - pnpm-lock.yaml
             - tsconfig.json
+            - tsconfig.build.json
             - tsdown.config.ts
             - vitest.config.ts
             - vitest.compat.config.ts
             - vitest.pack.config.ts
-            - screenshots.json
+            - eslint.config.js
             - cordis.patch.yml
-            - AGENTS.md
-            - CONTEXT.md
+            - screenshots.json
         source_files: []
         children: []
         depends_on: []

@@ -5,10 +5,10 @@
     "progress_status": "completed",
     "wiki_present_status": "COMPLETED",
     "recovery_checkpoint": "wiki_generation_completed",
-    "last_commit_id": "4f31eacd8965af7339ff7ea3b21943cd3e7c989d",
-    "last_commit_update": "2026-10-19T14:40:50Z",
-    "gmt_create": "2026-10-19T14:40:50Z",
-    "gmt_modified": "2026-10-19T14:40:50Z",
+    "last_commit_id": "0f43f039542d25deb6a9bf0e8cfc4a4024ad8817",
+    "last_commit_update": "2026-10-27T14:50:38Z",
+    "gmt_create": "2026-10-27T14:50:38Z",
+    "gmt_modified": "2026-10-27T14:50:38Z",
     "extend_info": "{\"language\":\"zh\",\"active\":true,\"branch\":\"main\"}"
   },
   "wiki_catalogs": [
@@ -20,8 +20,8 @@
       "prompt": "说明 dsh-novel 的 vitest 多套配置文件：主门控 vitest.config.ts（client/engine/services/api/shared/tools 测试）、compat 回放门控 vitest.compat.config.ts、打包测试门控 vitest.pack.config.ts。解释 tests/setup.ts 的全局 fixture、mock 策略、异步钩子与错误处理。说明如何运行特定 suite、如何并行执行、如何生成覆盖率报告。提供新增测试文件时的命名与组织约定，包括 tests/{layer}/*.test.ts 的分层结构。包含常见陷阱：JS DOM 环境、宿主依赖 mock、SSEResponse 模拟等。",
       "progress_status": "completed",
       "dependent_files": "vitest.config.ts,vitest.compat.config.ts,vitest.pack.config.ts,tests/setup.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "05919243-1f2c-4905-acbb-9a11a10ac081",
       "layer_level": 1,
       "kk_dependent_files": [
@@ -39,8 +39,8 @@
       "prompt": "为 dshnovel 的 `/novel-api` 统一响应信封与错误体系创建参考文档。说明成功响应 `Result<T>` 与失败响应的结构差异，包括 code、message、data、error 字段；列出所有业务错误码及其含义（如源不可用、章节不存在、任务已取消等）；说明 SSE 事件的消息头（event/type）、payload 形状及断连时的重放策略。提供 wire 类型到 JSON 的映射表，包含分页游标、搜索结果快照、书城发现快照、本地书条目等关键类型的字段定义。给出客户端错误处理最佳实践：401/403 认证失败、404 资源不存在、500 服务端异常的重试与降级方案，以及用户提示文案建议。附带 curl 与 TypeScript 调用示例，展示正常路径与常见错误路径的响应体。",
       "progress_status": "completed",
       "dependent_files": "src/api/wire.ts,src/shared/wire.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "79ace86b-4f88-4023-8efb-ecca9381d18b",
       "layer_level": 1,
       "kk_dependent_files": [
@@ -56,14 +56,30 @@
       "prompt": "为 dsh-novel（DeepSeek Harness 小说插件）创建项目概述文档。说明该插件在 DSH 生态中的定位：将 legado 书源导入、聚合搜索、书架管理、连续阅读与书城发现整合到 DSH 宿主中，同时向 AI 助手暴露 `dshnovel_*` 系列工具。描述 Node 半（Cordis 插件 + HTTP API）与浏览器半（React 面板）的双半产物形态，以及它与宿主、AI 助手、legado 生态的关系。给出快速开始路径：安装插件 → 导入书源 → 搜索 → 加架 → 阅读。列出主要技术栈（TypeScript、undici、cheerio、react、vitest、playwright 等）和运行环境要求。提供面向初学者的概念引导（书源、取值链、面 facet、按书归并、相关性分档、活配置），以及面向资深开发者的架构关键词（门面 ReadingService、组合根 index.ts、窄镜像接口、Wire-first 契约）。包含实际截图与目录结构概览，使读者能在 5 分钟内理解项目全貌。",
       "progress_status": "completed",
       "dependent_files": "package.json,README.md,cordis.patch.yml,AGENTS.md,CONTEXT.md",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "kk_dependent_files": [
         "package.json",
         "README.md",
         "cordis.patch.yml",
         "AGENTS.md",
         "CONTEXT.md"
+      ]
+    },
+    {
+      "id": "a5daf4be-b745-4a1f-84f3-f0f8bdb9c641",
+      "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
+      "name": "面板书架投影机制",
+      "description": "panel-shelf-projection",
+      "prompt": "",
+      "progress_status": "completed",
+      "dependent_files": "src/client/panel-shelf.ts",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
+      "parent_id": "ff118858-af1d-4749-b6f8-d6a84e4fd8b8",
+      "layer_level": 2,
+      "kk_dependent_files": [
+        "src/client/panel-shelf.ts"
       ]
     },
     {
@@ -74,8 +90,8 @@
       "prompt": "详细说明浏览器端如何通过 Cordis 宿主插槽注册与挂载：sidebar.panellist（左侧图标行）、main（内容区）、shell.overlay（模态对话框）。解释 host-ui.d.ts 中 WebHostLike / PanelDescriptor 等窄接口，插件如何声明面板标题、图标、默认宽度、可关闭行为。提供新增面板的完整步骤：定义 React 组件 → 在 src/client/index.tsx 调用 registerPanel → 绑定路由或入口 → 通过 ReadingService 与 Node 半通信。包含插槽冲突排查、宿主版本兼容处理、面板销毁与重建的生命周期注意事项，以及如何在测试中 mock 宿主插槽。",
       "progress_status": "completed",
       "dependent_files": "src/client/index.tsx,src/client/host-ui.d.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "fa6de80c-64f9-4801-ad37-86c49a01f301",
       "layer_level": 1,
       "kk_dependent_files": [
@@ -91,31 +107,13 @@
       "prompt": "详细说明 `src/index.ts` 作为插件组合根的职责：接收 Cordis ctx 与 ResolvedConfig，装配 WebServer、ToolsRuntime、JobsRuntime、Fetcher、Sources、Shelf、Cache、LocalBooks、SearchJob、ExploreJob、ImportJob、ReadingService、Tools 等依赖，并注册 HTTP 路由与 AI 工具。解释 `apply(ctx, config)` 的生命周期、错误捕获、资源清理时机，以及与 `cordis.patch.yml` 中插件元信息、插槽声明的关系。说明窄镜像接口如何避免对未安装宿主包的强依赖。给出添加新服务时的装配步骤、依赖注入顺序注意事项，以及如何在测试中 mock ctx。包含实际代码片段与调用时序图。",
       "progress_status": "completed",
       "dependent_files": "src/index.ts,cordis.patch.yml",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "52de1b56-81bf-4e67-89d9-82fc667678c5",
       "layer_level": 1,
       "kk_dependent_files": [
         "src/index.ts",
         "cordis.patch.yml"
-      ]
-    },
-    {
-      "id": "d03bcaf7-6e3f-4db6-9af8-89416609ce66",
-      "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
-      "name": "规则文法与取值链",
-      "description": "grammar-and-value-chain",
-      "prompt": "详细说明取值链的文法规则与解析过程：`||` 分支短路求值、终端节点（`@text`/`@href`/`@html`/`@json`/`@attr`/`@match` 等）、净化尾（strip/trim/replace）、模板字面段（${var}）、变量插值。解释 parse.ts 如何将字符串解析为 Segment[]，select.ts 如何选择 DOM/JSON 节点，evaluate.ts 如何按 facet 调度。给出从 legacy JSON 到 AST 的转换示例，以及自定义净化器的接入点。说明解析错误、未匹配分支、循环变量的处理策略。",
-      "progress_status": "completed",
-      "dependent_files": "src/engine/parse.ts,src/engine/select.ts,src/engine/evaluate.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
-      "parent_id": "29f008a4-6795-4573-a834-8f3d056158d6",
-      "layer_level": 1,
-      "kk_dependent_files": [
-        "src/engine/parse.ts",
-        "src/engine/select.ts",
-        "src/engine/evaluate.ts"
       ]
     },
     {
@@ -126,8 +124,8 @@
       "prompt": "详细说明书源导入与治理全流程：支持 legacy JSON 三种方言（平铺数组、对象、Native）→ SourceIntake.normalize() 规范化 → 批内去重 → 按址去重（已有可用源则跳过）→ add/replace → 写入 sources.json。解释待办收件箱（坏源/未验证任务卡）、批量验证、一键验证、单源试跑、cookie/loginUrl 鉴权脚本执行、状态过滤、分组、批量启停/删除。说明规范化后的 NovelSource 结构与 legacy 原始结构的映射关系。提供导入失败时的诊断步骤：检查 URL 可达性、登录态、正则匹配、JS 沙箱错误。给出新增方言或新增治理动作时的扩展点。",
       "progress_status": "completed",
       "dependent_files": "src/services/intake.ts,src/services/normalize.ts,src/services/sources.ts,src/client/views/SettingsSourceList.tsx",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "69bc1c3e-0863-46ec-a249-5be55a24bff3",
       "layer_level": 1,
       "kk_dependent_files": [
@@ -145,8 +143,8 @@
       "prompt": "深入讲解聚合搜索的实现：搜索计划 searchPlan 确定参搜源集（启用 ∧ 文本源）→ 并发 probe + search（默认 5 路）→ 逐源结果 → mergeBooks 按书名+作者归并为「本」→ partitionByRelevance 分 exact/contains/suspect 三档 → SearchJobSnapshot 写入 → SSE 实时推送或轮询回退。说明搜索结果视图模型如何将「条/本/家」三条轴呈现给 UI，以及失败源的折叠与展开交互。解释相关性判据、最多 200 本上限、如实总数保留策略。提供 SSE 与轮询两种消费模式的示例代码，并说明如何调试某源搜索失败。包含性能优化建议：并发度调节、重复词去重、缓存命中判断。",
       "progress_status": "completed",
       "dependent_files": "src/services/search-face.ts,src/services/search-job.ts,src/client/search-view-model.ts,src/shared/merge-by-book.ts,src/shared/relevance.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "69bc1c3e-0863-46ec-a249-5be55a24bff3",
       "layer_level": 1,
       "order": 1,
@@ -166,8 +164,8 @@
       "prompt": "文档化书源管理相关的所有 HTTP 端点，包括导入 legacy JSON（对象/数组/平铺/Native 方言）、获取书源列表、单源详情、更新、删除、批量验证、一键验证、单源试跑、cookie/loginUrl 录入。说明每条路由的 HTTP 方法、URL 模式、请求体/查询参数、成功响应与错误码。解释 SourceIntake 规范化流程与批内去重、按址去重的语义，以及验证任务的异步状态流转（pending/running/success/failure）。提供 curl 与 TypeScript 示例，演示从导入→批量验证→单源试跑→查看结果的完整链路。说明鉴权约束（loopback + 同源 Origin/Referer）、幂等性保证、大体积 JSON 上传的注意事项，并给出常见错误排查：JSON 解析失败、重复 sourceName、登录脚本执行超时、cookie 未生效等。",
       "progress_status": "completed",
       "dependent_files": "src/api/dispatch.ts,src/services/sources.ts,src/services/intake.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "79ace86b-4f88-4023-8efb-ecca9381d18b",
       "layer_level": 1,
       "order": 1,
@@ -185,8 +183,8 @@
       "prompt": "详细说明 legado 兼容性矩阵的工作原理：upstream-facts.ts 一行一条语义（sourceId + 方言 + 断言），capture 录制上游站点快照，replay 回放并裁决（pass/fail/blocked）。解释 status-evidence 如何收集证据、定位回归差异；sanitize/resanitize 如何处理 HTML 清洗差异。说明 DSH_CONTENT_AUDIT 与 DSH_SEARCH_FILTER_AUDIT 环境变量对审计范围的影响。提供新增站点、新增方言、新增断言规则的完整步骤，以及如何处理 upstream snapshot 过期。包含性能注意事项：网络 I/O 隔离、重试策略、缓存键设计。",
       "progress_status": "completed",
       "dependent_files": "tests/legado-coverage/upstream-facts.ts,tests/legado-coverage/capture-upstream-snapshot.test.ts,tests/legado-coverage/status-evidence.test.ts,tests/capture.test.ts,tests/replay.test.ts,tests/resanitize.test.ts,tests/sanitize.test.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "05919243-1f2c-4905-acbb-9a11a10ac081",
       "layer_level": 1,
       "order": 1,
@@ -208,8 +206,8 @@
       "prompt": "编写 dsh-novel 的快速开始指南，覆盖三类用户：DSH 普通用户、插件开发者、legado 书源作者。内容包括：在 DSH 中安装插件、首次启动后通过左侧栏「小说」图标打开面板、从 legacy JSON 文件或粘贴文本导入书源、对书源执行批量验证、输入关键词触发聚合搜索、将搜索结果加入书架、进入阅读器连续翻页。补充 AI 助手侧用法示例：调用 `dshnovel_search` 获取 bookKey，再调用 `dshnovel_read` 读取第 N 章。说明配置文件来源（`cordis.patch.yml` 或宿主「插件」页）与常用键值。给出常见问题排查：无法连接书源、代理未生效、EPUB 封面缺失、搜索结果为空。所有步骤需对应仓库中的真实文件与界面元素，避免虚构流程。",
       "progress_status": "completed",
       "dependent_files": "package.json,cordis.patch.yml,src/index.ts,docs/developing.md",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "order": 1,
       "kk_dependent_files": [
         "package.json",
@@ -226,8 +224,8 @@
       "prompt": "深入说明五种 facet：rule（通用取值）、search（搜索结果）、detail（详情页）、toc（目录）、content（正文），以及每种 facet 下可用的终端与上下文变量。解释终端的行为差异：@text 提取文本、@href 提取链接、@html 保留标记、@json 解析 JSON、@attr 取属性、@match 正则捕获组。说明 facet 如何影响选择器作用域、模板变量与返回值类型。提供各 facet 的典型 usage pattern，并给出扩展新终端的实现步骤。包含常见陷阱：HTML 转义、JSON 解析失败、正则回溯过深。",
       "progress_status": "completed",
       "dependent_files": "src/engine/evaluate.ts,src/engine/types.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "29f008a4-6795-4573-a834-8f3d056158d6",
       "layer_level": 1,
       "order": 1,
@@ -243,14 +241,17 @@
       "description": "reading-service-facade",
       "prompt": "深入讲解 `src/services/reading.ts` 中 ReadingService 的设计：它作为 HTTP API、AI 工具、浏览器面板共享的唯一业务门面，持有 Sources、Shelf、Cache、LocalBooks、Fetcher、SearchJob、ExploreJob、ImportJob 等子系统的句柄。说明 `create` 与 `from` 两种构造方式、实例方法（search、read、toc、shelf、source、import_source 等）的调用约定、参数校验、返回值投影与错误传播。解释后台任务（SearchJob/ExploreJob/ImportJob）的 owner 隔离、进度推送、取消与重试策略。给出典型调用链路示例：AI 工具 → ReadingService.search → SearchJob → 并发 probe/search → mergeBooks → SSE。说明扩展新业务时如何复用 ReadingService 而非直接调用底层服务。",
       "progress_status": "completed",
-      "dependent_files": "src/services/reading.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "dependent_files": "src/services/reading.ts,src/services/book-content.ts,src/client/panel-shelf.ts,src/services/lru.ts",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "52de1b56-81bf-4e67-89d9-82fc667678c5",
       "layer_level": 1,
       "order": 1,
       "kk_dependent_files": [
-        "src/services/reading.ts"
+        "src/services/reading.ts",
+        "src/services/book-content.ts",
+        "src/client/panel-shelf.ts",
+        "src/services/lru.ts"
       ]
     },
     {
@@ -261,8 +262,8 @@
       "prompt": "说明三个主面板的职责边界与组合关系：ShelfView（书架网格 + 阅读进度 + 批量删除）、SearchView（关键词输入 + SSE/轮询结果 + 按书归并视图）、CityView（左栏选源 + 右栏分类书单 + CityBookSheet 详情浮层），以及 ReaderView 作为阅读器容器的角色。解释 ViewModel 层（search-view-model、shelf-view-model）如何封装 ReadingService 调用、缓存本地状态、驱动 UI 更新，并与 store.ts 中的全局 transient 状态协作。提供受控表单、事件冒泡、列表虚拟滚动、懒加载的实际代码示例。包含常见问题排查：SSE 断开后重新订阅、搜索结果不同步、书架选中态丢失、大列表渲染卡顿。",
       "progress_status": "completed",
       "dependent_files": "src/client/views/ShelfView.tsx,src/client/views/SearchView.tsx,src/client/views/CityView.tsx,src/client/views/CityBookSheet.tsx,src/client/search-view-model.ts,src/client/shelf-view-model.ts,src/client/store.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "fa6de80c-64f9-4801-ad37-86c49a01f301",
       "layer_level": 1,
       "order": 1,
@@ -284,8 +285,8 @@
       "prompt": "文档化书架管理的数据结构与 UI 行为：ShelfEntry 包含 bookKey、progress、sourceName 等字段；书架条目按封面网格展示，带来源色点；阅读进度持久化并在离开阅读器时询问加架；支持多选批量删除。说明 ShelfService 的 CRUD 接口、与 ShelfViewModel 的状态同步、与 SearchView/CityView/ReaderView 的协作。解释书架与搜索结果的区别：书架是持久化收藏，搜索结果是临时快照。提供加架、移除、批量操作的代码示例，以及书架损坏恢复策略。包含 UI 定制选项与无障碍提示。",
       "progress_status": "completed",
       "dependent_files": "src/services/shelf.ts,src/client/views/ShelfView.tsx,src/client/shelf-view-model.ts,src/client/shelf-delete.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "69bc1c3e-0863-46ec-a249-5be55a24bff3",
       "layer_level": 1,
       "order": 2,
@@ -304,8 +305,8 @@
       "prompt": "文档化搜索与阅读相关端点：关键词搜索（一次性/SSE/轮询三种模式）、章节目录、章节正文、分页、章节范围导出。说明一次性搜索的请求参数、SearchJobSnapshot 响应结构与相关性分档（exact/contains/suspect）；SSE 连接建立、事件类型（start/increment/complete/error）、增量推送数据格式与断线重连策略；轮询回退的 URL 与分页游标使用方式。详细说明 ChapterContent 与 Pagination 的数据结构，解释目录树、章节偏移、连续滚动页码的计算逻辑。提供 curl 与 TypeScript 客户端示例，包括 SSE 事件消费、轮询重试、大章节导出的进度回调与取消。说明性能优化建议：并发 probe 限制、结果合并上限（200 本）、SSE 心跳与超时配置，以及常见错误排查：搜索结果为空、SSE 断连、分页游标失效、章节加载超时。",
       "progress_status": "completed",
       "dependent_files": "src/api/dispatch.ts,src/services/search-job.ts,src/services/chapter-content.ts,src/services/pagination.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "79ace86b-4f88-4023-8efb-ecca9381d18b",
       "layer_level": 1,
       "order": 2,
@@ -324,8 +325,8 @@
       "prompt": "详细说明前端样式与主题系统：styles.tsx 中的 CSS-in-JS token（颜色、字号、行距、卡片阴影、边框、间距）、深浅主题切换逻辑、响应式断点。解释 i18n 实现：locale/en.json 与 locale/zh.json 双语文案、宿主语言监听、插件卡片标题与描述随语言切换；copy/index.tsx 负责界面文案，服务端错误原文与书源数据保持不翻译的原则。提供新增主题色、新增文案键、适配新语言的步骤与约定。包含常见问题的调试方法：主题变量未生效、CSS 选择器穿透失败、文案遗漏导致回退英文、移动端布局错位。",
       "progress_status": "completed",
       "dependent_files": "src/client/styles.tsx,locale/en.json,locale/zh.json,src/client/copy/index.tsx",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "fa6de80c-64f9-4801-ad37-86c49a01f301",
       "layer_level": 1,
       "order": 2,
@@ -343,16 +344,17 @@
       "description": "js-sandbox-and-host-bridge",
       "prompt": "文档化 JS 沙箱的执行环境：受限 JavaScript 运行时、禁止的 API、允许的宿主方法（Java 桥接）、模板求值与表达式求值的边界。说明 js-protocol.ts 定义的沙箱消息协议，js-sandbox.ts 的隔离策略与异常捕获。解释如何安全地扩展宿主方法、如何调试沙箱内脚本、如何避免无限循环与内存泄漏。提供典型脚本示例：动态计算 URL、解析复杂 JSON、拼接章节标题。包含安全加固建议与性能监控指标。",
       "progress_status": "completed",
-      "dependent_files": "src/engine/js-sandbox.ts,src/engine/js-utils.ts,src/engine/js-protocol.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "dependent_files": "src/engine/js-sandbox.ts,src/engine/js-utils.ts,src/engine/js-protocol.ts,src/engine/script-surface.ts",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "29f008a4-6795-4573-a834-8f3d056158d6",
       "layer_level": 1,
       "order": 2,
       "kk_dependent_files": [
         "src/engine/js-sandbox.ts",
         "src/engine/js-utils.ts",
-        "src/engine/js-protocol.ts"
+        "src/engine/js-protocol.ts",
+        "src/engine/script-surface.ts"
       ]
     },
     {
@@ -363,8 +365,8 @@
       "prompt": "说明 Playwright 浏览器测试与 React 单元测试的组合策略：epub-host.ts 启动 EPUB 宿主页面、epub-reader.test.ts 执行真机冒烟、shell.html 作为宿主容器、client/smoke.test.tsx 进行 UI 集成测试。解释 fake-host.ts 如何模拟宿主插槽、API、JobsRuntime 等依赖。提供新增浏览器用例、调试 headless 模式、截图对比的方法。说明单元测例的组织原则（按 feature 分组）、mock 最佳实践（避免过度 stubbing）、组件测试与 ViewModel 测试的边界。包含常见问题：DOM 渲染时序、SSE 连接模拟、主题切换导致的样式断言失败。",
       "progress_status": "completed",
       "dependent_files": "tests/browser/epub-host.ts,tests/browser/epub-reader.test.ts,tests/browser/shell.html,tests/client/smoke.test.tsx,tests/client/fake-host.ts,tests/client/views-wiring.test.tsx",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "05919243-1f2c-4905-acbb-9a11a10ac081",
       "layer_level": 1,
       "order": 2,
@@ -385,8 +387,8 @@
       "prompt": "文档化 `src/shared/wire.ts` 定义的跨 Node 半与浏览器半的值形状契约：NovelSource、ShelfEntry、MergedBook、SearchJobSnapshot、ExploreJobSnapshot、Segment、SegmentLoc、ErrorEnvelope 等类型的字段、约束与版本兼容性。解释为什么使用「wire-first」策略：构建期 client 纯度门禁检查确保浏览器端只消费纯数据，避免引入 DOM/宿主依赖。说明 `src/api/wire.ts` 与 `src/client/copy/common.ts` 如何基于同一份 wire 生成序列化/反序列化工具。提供新增 wire 类型的步骤：先在 shared/wire.ts 声明，再更新 API 响应体与 UI ViewModel，最后补充契约测试。包含常见陷阱：循环引用、host-only 对象泄漏到 wire、非幂等字段误入快照。",
       "progress_status": "completed",
       "dependent_files": "src/shared/wire.ts,src/api/wire.ts,src/client/copy/common.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "52de1b56-81bf-4e67-89d9-82fc667678c5",
       "layer_level": 1,
       "order": 2,
@@ -404,8 +406,8 @@
       "prompt": "创建 dsh-novel 的架构总览文档，描述 Node 半与浏览器半的系统边界、组件关系和数据流。重点解释以下模式：门面 `ReadingService`（HTTP/AI/UI 共享的业务入口）、组合根 `src/index.ts`（装配 Cordis ctx、WebServer、ToolsRuntime、JobsRuntime、Services）、窄镜像接口（`WebServerLike` / `ToolsRuntimeLike` / `JobsRuntimeLike` 避免强依赖）、Wire-first 跨半契约（`src/shared/wire.ts`）、活配置（ResolvedConfig getter）。绘制系统上下文图，展示 DSH 宿主、Cordis 装载器、插件 Node 端、浏览器面板、AI 助手之间的交互。说明请求链路：浏览器 UI → `/novel-api` → dispatch → ReadingService → Fetcher/Engine/Storage → 返回 SSE 或 JSON。解释错误处理的两态日志 Sink（console + ctx.logger）与统一响应信封。给出扩展点：新增路由、新增 UI 面板、新增书源语法、新增导出格式时的接入位置。",
       "progress_status": "completed",
       "dependent_files": "src/index.ts,src/services/reading.ts,src/shared/wire.ts,src/api/dispatch.ts,src/client/index.tsx",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "order": 2,
       "kk_dependent_files": [
         "src/index.ts",
@@ -423,8 +425,8 @@
       "prompt": "文档化四类独立但常用的 API 子集：书架（增删查、批量删除、阅读进度）、书城分类浏览（分类列表、书单分页、书籍详情）、本地书（导入 TXT/EPUB、列表、章节读取）、导出（章节范围导出）。对每个端点说明 HTTP 方法、URL、请求体/查询参数、成功响应与错误码。解释书架条目的 bookKey 生成规则与阅读进度持久化；书城分类发现的原生 ruleFind.kinds 与 legado exploreUrl 两种方言；本地书导入的文件上传格式、ZIP/EPUB 分流逻辑、有损导入 warnings.json 的结构；导出任务的进度事件与取消机制。提供各端点的 curl 与 TypeScript 示例，并说明常见问题：书架同步冲突、书城分类为空、EPUB 解析失败、导出任务被中断的处理方案。",
       "progress_status": "completed",
       "dependent_files": "src/api/dispatch.ts,src/services/shelf.ts,src/services/explore.ts,src/services/localbooks.ts,src/services/export.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "79ace86b-4f88-4023-8efb-ecca9381d18b",
       "layer_level": 1,
       "order": 3,
@@ -444,8 +446,8 @@
       "prompt": "围绕 dsh-novel 的核心模块编写详细文档，涵盖主入口、业务门面、跨半契约、配置体系与前端入口。对每个模块说明职责、对外接口、关键数据结构、生命周期、与其他模块的依赖关系及测试覆盖。重点包括：`src/index.ts` 的 apply(ctx, config) 装配流程与 Cordis 生命周期；`src/services/reading.ts` 的 ReadingService.create/from、registry/shelf/cache/fetcher/searchJobs/exploreJobs/local 持有者语义；`src/shared/wire.ts` 定义的所有 wire 类型与构建期 client 纯度门禁；`src/config.ts` 的 schema 校验与 ResolvedConfig 活配置；`src/client/index.tsx` 的面板注册、插槽挂载与 React 渲染入口；`src/api/dispatch.ts` 的 35 条路由分发策略。提供代码片段展示常见调用方式，并指出扩展新模块时应遵循的组合根约定。",
       "progress_status": "completed",
       "dependent_files": "src/index.ts,src/services/reading.ts,src/shared/wire.ts,src/config.ts,src/client/index.tsx,src/api/dispatch.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "order": 3,
       "kk_dependent_files": [
         "src/index.ts",
@@ -464,8 +466,8 @@
       "prompt": "详细说明 dsh-novel 的配置来源与解析流程：`cordis.patch.yml` 与宿主「插件」页面运行时合并，形成 ResolvedConfig。列出所有配置键、默认值、类型、作用域（全局/书源级）与热更新行为。解释 schema 校验机制（@deepseek-ai/schemastery）与非法配置的报错路径。说明活配置如何通过 getter 暴露给各服务，以及修改后哪些子系统会重新订阅。提供迁移指南：新增配置键时的 schema 变更、默认值回退、旧版本兼容。给出代理、超时、并发数、主题、语言等常用配置的实际示例。包含调试技巧：如何打印当前 ResolvedConfig、如何确认配置是否热生效。",
       "progress_status": "completed",
       "dependent_files": "src/config.ts,cordis.patch.yml",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "52de1b56-81bf-4e67-89d9-82fc667678c5",
       "layer_level": 1,
       "order": 3,
@@ -482,8 +484,8 @@
       "prompt": "说明引擎支持的 CSS 选择器、XPath 与 JSONPath 子集及其与原生实现（Cheerio/JQuery）的差异。重点解释 CSS pseudo 类、XPath 函数、JSONPath 过滤器在 legacy 书源中的使用方式。提供针对 HTML DOM 与 JSON 数据的查询示例，并说明何时应优先使用正则（regex-row）或 JS 表达式。包含性能对比：选择器 vs 正则 vs JS，以及如何避免全量扫描。",
       "progress_status": "completed",
       "dependent_files": "src/engine/css.ts,src/engine/xpath.ts,src/engine/select.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "29f008a4-6795-4573-a834-8f3d056158d6",
       "layer_level": 1,
       "order": 3,
@@ -501,8 +503,8 @@
       "prompt": "详细说明阅读器核心能力：连续滚动与预取下一章、目录抽屉跳章、字号/行距/栏宽/纸张色可调、深浅主题自适应、章节范围流式导出（可取消）、EPUB 图文阅读（spine 计章、原书目录、脚注附录）。解释 chapter-content.ts 的章节正文求值、pagination.ts 的分页与偏移、export.ts 的流式导出、reader-session.ts 的阅读会话与进度、reader-load.ts 的内容加载策略。说明 ReaderView 如何与 Shelf、Search、City 三个入口衔接。提供导出 PDF/TXT 的使用示例，以及 EPUB spine 计数异常的排查方法。包含性能优化：预取窗口、图片懒加载、滚动节流。",
       "progress_status": "completed",
       "dependent_files": "src/services/chapter-content.ts,src/services/pagination.ts,src/services/export.ts,src/client/reader-session.ts,src/client/reader-load.ts,src/client/views/ReaderView.tsx",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "69bc1c3e-0863-46ec-a249-5be55a24bff3",
       "layer_level": 1,
       "order": 3,
@@ -523,8 +525,8 @@
       "prompt": "文档化书城分类浏览功能：左栏选择源与分类入口（原生 ruleFind.kinds 或 legacy exploreUrl 方言），右栏显示该源自己声明的分类；书单 4 列展示（窄面板 2 列），支持分页加载；书籍详情浮层展示简介并提供读/加架/其他源找书。解释 ExploreJob 与 SearchJob 的差异：书城是按分类拉取书单，搜索是按关键词聚合全文。说明分类发现、分页游标、空分类关闭、错误源折叠等交互。提供扩展书城源的实现步骤：声明 kinds 或 exploreUrl、实现分类模板与书单模板。包含调试技巧：如何查看某分类的原始 HTML、如何定位分页链接解析失败。",
       "progress_status": "completed",
       "dependent_files": "src/services/explore-face.ts,src/services/explore-url.ts,src/services/explore.ts,src/client/views/CityView.tsx,src/client/views/CityBookSheet.tsx",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "69bc1c3e-0863-46ec-a249-5be55a24bff3",
       "layer_level": 1,
       "order": 4,
@@ -544,8 +546,8 @@
       "prompt": "为 dsh-novel 的功能特性编写系统性文档，覆盖六大能力域：书源导入与治理、聚合搜索、书架管理、阅读器、书城分类浏览、本地书导入。每类功能需说明业务目标、用户流程、核心数据结构、服务层实现、UI 表现与错误处理。强调领域术语的一致性：书源、取值链、面 facet、按书归并、相关性分档（exact/contains/suspect）、本/家/条、书城、本地书等。提供从用户输入到持久化的端到端流程图，并标注涉及的 service 文件。包含常见用例的代码示例、配置项与性能调优建议（如并发数、缓存失效、分页阈值）。",
       "progress_status": "completed",
       "dependent_files": "src/services/intake.ts,src/services/sources.ts,src/services/search-face.ts,src/services/search-job.ts,src/services/explore-face.ts,src/services/explore-url.ts,src/services/explore.ts,src/services/shelf.ts,src/services/chapter-content.ts,src/services/pagination.ts,src/services/export.ts,src/services/localbooks.ts,src/client/search-view-model.ts,src/client/views/ShelfView.tsx,src/client/views/SearchView.tsx,src/client/views/CityView.tsx,src/client/views/CityBookSheet.tsx,src/client/views/ReaderView.tsx",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "order": 4,
       "kk_dependent_files": [
         "src/services/intake.ts",
@@ -576,8 +578,8 @@
       "prompt": "说明浏览器端入口 `src/client/index.tsx` 的职责：加载 React peer 依赖、初始化样式与主题、注册宿主插槽（sidebar.panellist/main/shell.overlay）、挂载三个面板（书架、书城、书源设置），以及通过 API 客户端与 Node 半通信。解释 deps.ts 中 peer 依赖的动态加载策略、styles.tsx 的主题 token 与 CSS-in-JS 方案、transient.ts 的临时状态管理。说明面板与侧边栏图标如何随宿主语言切换，以及模态对话框、通知、进度条等通用 UI 契约。给出扩展新面板的步骤：注册面板组件、声明插槽、定义路由、绑定 ReadingService。包含无障碍与响应式布局注意事项。",
       "progress_status": "completed",
       "dependent_files": "src/client/index.tsx,src/client/deps.ts,src/client/styles.tsx,src/client/transient.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "52de1b56-81bf-4e67-89d9-82fc667678c5",
       "layer_level": 1,
       "order": 4,
@@ -596,8 +598,8 @@
       "prompt": "为 dsh-novel 的规则引擎与 legacy 书源语法创建权威参考文档。从文法入手，说明取值链（rule chain）的结构：`||` 分支、终端（`@text`/`@href`/`@html`/`@json`/`@attr`…）、净化尾、模板字面段、变量插值。解释五种求值上下文（facet）：rule/search/detail/toc/content，以及它们在 evaluate.ts 中的调度差异。说明 CSS/XPath/JSONPath 选择器的支持范围与限制，regex-row 的行级匹配，literal 字面量与 variables 变量表。重点介绍 JS 沙箱：受限执行环境、Java 宿主方法桥接、安全边界与调试输出。提供大量来自 tests/engine/ 的真实语法示例，并说明如何扩展新的终端或净化器。包含性能与安全注意事项，以及常见语法错误的诊断方法。",
       "progress_status": "completed",
       "dependent_files": "src/engine/index.ts,src/engine/parse.ts,src/engine/select.ts,src/engine/evaluate.ts,src/engine/js-sandbox.ts,src/engine/xpath.ts,src/engine/css.ts,src/engine/regex-row.ts,src/engine/literal.ts,src/engine/variables.ts,src/engine/types.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "order": 5,
       "kk_dependent_files": [
         "src/engine/index.ts",
@@ -621,8 +623,8 @@
       "prompt": "详细说明本地书导入与阅读：POST /local/import?name=... 分流 ZIP → EPUB，否则 TXT。TXT 路径：BOM → UTF-8 → GBK 自动探测、标题行切章（第X章/卷/回/节/章外篇目）、偏移表落盘。EPUB 路径：yauzl 流式读取、spine 计章、封面/插图/脚注/附录/目录树解析、CRC 校验、有损导入说明持久化到 warnings.json。解释 LocalBooks 与 Shelf/Reader 的集成方式，以及大文件内存占用控制。提供常见问题的排障清单：GBK 乱码、无目录、EPUB 缺少 manifest、图片缺失。给出自定义切章规则与 EPUB 资源替换的高级用法。",
       "progress_status": "completed",
       "dependent_files": "src/services/localbooks.ts,src/services/epub/archive.ts,src/services/epub/documents.ts,src/services/epub/package.ts,src/services/epub/resources.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "parent_id": "69bc1c3e-0863-46ec-a249-5be55a24bff3",
       "layer_level": 1,
       "order": 5,
@@ -635,6 +637,23 @@
       ]
     },
     {
+      "id": "e3813b30-fc8a-4ada-928c-ba86409eb937",
+      "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
+      "name": "书内容读面模块",
+      "description": "book-content-module",
+      "prompt": "",
+      "progress_status": "completed",
+      "dependent_files": "src/services/book-content.ts",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
+      "parent_id": "52de1b56-81bf-4e67-89d9-82fc667678c5",
+      "layer_level": 1,
+      "order": 5,
+      "kk_dependent_files": [
+        "src/services/book-content.ts"
+      ]
+    },
+    {
       "id": "79ace86b-4f88-4023-8efb-ecca9381d18b",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "name": "HTTP API 参考",
@@ -642,8 +661,8 @@
       "prompt": "为 dshnovel 的 RESTful HTTP API 创建完整参考文档。所有端点以 `/novel-api` 为前缀，仅 loopback + 同源 Origin/Referer 访问。按功能分组文档化：健康检查、书源管理（CRUD、批量验证、试跑）、搜索（一次性/SSE/轮询）、阅读与目录、书架（增删查）、书城发现、本地书（导入/列表/章节）、导出。每条路由说明 HTTP 方法、URL 模式、请求体/查询参数、成功响应体、错误码与错误信封、认证/授权约束、速率限制（如有）、SSE 事件格式。提供 curl 与 TypeScript 客户端调用示例，并说明 wire 类型如何映射到 JSON。包含常见错误排查：401/403/404/500、SSE 断连、分页游标失效、大响应体超时。",
       "progress_status": "completed",
       "dependent_files": "src/api/dispatch.ts,src/api/wire.ts,src/shared/wire.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "order": 6,
       "kk_dependent_files": [
         "src/api/dispatch.ts",
@@ -659,8 +678,8 @@
       "prompt": "创建 dsh-novel 的数据存储设计文档，说明持久化布局（`~/.dsh/novel/`）、sources.json、shelf.json、本地书目录、缓存文件的结构与生命周期。详细描述每个文件的字段、索引策略、读写路径与备份/恢复方式。解释 Cache 的 LRU 策略、容量上限、过期淘汰与磁盘落盘。说明 LocalBooks 的 TXT 偏移表、EPUB 资源目录、warnings.json 的维护规则。提供数据迁移与版本升级时的向后兼容策略。包含性能考虑：大书架检索、频繁写入合并、缓存命中率优化。给出常见故障：文件损坏、权限不足、磁盘满的处理方案。",
       "progress_status": "completed",
       "dependent_files": "src/services/storage.ts,src/services/cache.ts,src/services/sources.ts,src/services/shelf.ts,src/services/localbooks.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "order": 7,
       "kk_dependent_files": [
         "src/services/storage.ts",
@@ -678,8 +697,8 @@
       "prompt": "详细说明浏览器前端架构：React 面板注册、插槽挂载、组件树组织、状态管理、样式与主题系统、国际化实现。解释三个主面板（书架 ShelfView、搜索 SearchView、书城 CityView）与书源设置面板的职责划分，以及 ReaderView 作为阅读器容器的角色。说明 copy/index.tsx 下的复制文案、styles.tsx 的主题 token、i18n 文案随宿主语言切换的机制。提供新增面板、新增视图组件、新增主题色的步骤。包含响应式布局、无障碍、性能优化（虚拟滚动、懒加载）与调试技巧。",
       "progress_status": "completed",
       "dependent_files": "src/client/index.tsx,src/client/views/ShelfView.tsx,src/client/views/SearchView.tsx,src/client/views/CityView.tsx,src/client/views/CityBookSheet.tsx,src/client/views/ReaderView.tsx,src/client/views/SettingsSourceList.tsx,src/client/copy/index.tsx,src/client/styles.tsx",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "order": 8,
       "kk_dependent_files": [
         "src/client/index.tsx",
@@ -701,8 +720,8 @@
       "prompt": "说明 dsh-novel 的分层测试策略：api 层测试 HTTP 路由与 wire 契约、client 层测试 React 组件与 ViewModel、engine 层测试规则解析与求值、services 层测试服务逻辑、compat 层回放 legado 上游快照、browser 层 Playwright 真机冒烟、tools 层测试打包与工具链。解释 vitest.*.config.ts 的多套门控、tests/setup.ts 的全局 fixture、upstream-facts.ts 的兼容性矩阵。说明如何新增测试用例、如何模拟宿主依赖、如何调试 SSEResponse 与 JS 沙箱。包含覆盖率阈值、CI 门禁、性能回归检测的建议。",
       "progress_status": "completed",
       "dependent_files": "vitest.config.ts,vitest.compat.config.ts,vitest.pack.config.ts,tests/setup.ts,tests/api/helpers.ts,tests/legado-coverage/upstream-facts.ts,tests/browser/epub-host.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "order": 9,
       "kk_dependent_files": [
         "vitest.config.ts",
@@ -722,8 +741,8 @@
       "prompt": "编写 dsh-novel 的开发与部署指南，覆盖本地环境搭建（Node.js、pnpm、DSH 宿主）、依赖安装、构建命令（`pnpm build`、`pnpm test`、`pnpm test:compat`、`pnpm test:pack`）、热重载与调试。说明 tsdown.config.ts 的双半产物构建、package.json 的 scripts 与 peer 依赖、pnpm-workspace.yaml 的工作区配置。解释发版流程：版本号更新、兼容性矩阵刷新、DSH 宿主版本矩阵（`dsh.compatibility.dshReleases`）、发布到 DSH 插件市场。提供 Agent 工作须知（AGENTS.md）中与代码质量、提交规范相关的硬约束。包含常见问题：端口冲突、peer 依赖未安装、构建产物未更新、EPUB 真机测试失败。",
       "progress_status": "completed",
       "dependent_files": "docs/developing.md,AGENTS.md,tsdown.config.ts,package.json,pnpm-workspace.yaml",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "order": 10,
       "kk_dependent_files": [
         "docs/developing.md",
@@ -741,8 +760,8 @@
       "prompt": "整理并索引 dsh-novel 的架构决策记录（ADR），按编号列出每项决策的背景、权衡、结论与影响范围。重点解释：解析期失败优先、reduce 从不塌陷、自实现子集（CSS/XPath/JSONPath）、单使用轴、无推测存储、单原子写队列、请求与出站共用一扇门、双层错误与 Origin 围栏、边界降级、服务端任务与进度、平台模块交集、客户端可丢弃投影、搜索相关性分区、插件配置页活引用、抽取机制而非转发壳、模态契约与单阅读器表面、客户端复制文案走宿主 locale 等决策。为每条 ADR 提供跳转到原文档的链接，并总结其对当前代码实现的约束。",
       "progress_status": "completed",
       "dependent_files": "docs/adr/README.md,docs/adr/0001-fail-loud-at-parse-time.md,docs/adr/0002-reduction-never-collapses.md,docs/adr/0006-self-implemented-subsets.md,docs/adr/0007-usage-axis-single.md,docs/adr/0008-no-speculative-storage.md,docs/adr/0013-single-atomic-write-queue.md,docs/adr/0015-one-door-for-request-and-outbound.md,docs/adr/0016-error-two-tier-and-origin-fence.md,docs/adr/0017-degrade-with-boundary.md,docs/adr/0018-server-side-jobs-and-progress.md,docs/adr/0021-platform-modules-intersection.md,docs/adr/0023-client-disposable-projection.md,docs/adr/0032-search-relevance-partition.md,docs/adr/0035-plugin-config-page-live-refs.md,docs/adr/0036-extract-mechanics-not-forwarding-shells.md,docs/adr/0037-modal-contract-and-single-reader-surface.md,docs/adr/0038-client-copy-host-locale.md",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "order": 11,
       "kk_dependent_files": [
         "docs/adr/README.md",
@@ -773,8 +792,8 @@
       "prompt": "提供 dsh-novel 的故障排除指南，按问题类别组织：安装失败（peer 依赖、DSH 版本不兼容）、书源连接失败（DNS、代理、SSL、UA、Cookie）、代理与网络配置（系统代理 vs undici 代理、socks/http proxy）、搜索结果为空（规则不匹配、源被禁用、相关性过滤）、阅读器异常（EPUB spine 缺失、图片 404、编码乱码）、性能问题（并发过高、缓存未命中、大文件 OOM）。每个问题给出症状、可能原因、排查步骤、日志定位方法与修复建议。说明如何使用 src/services/log.ts 的两态日志、src/services/errors.ts 的错误分类、src/services/proxy.ts 的代理调试。",
       "progress_status": "completed",
       "dependent_files": "src/services/errors.ts,src/engine/errors.ts,src/services/log.ts,src/services/fetcher.ts,src/services/proxy.ts,src/services/localbooks.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "order": 12,
       "kk_dependent_files": [
         "src/services/errors.ts",
@@ -793,8 +812,8 @@
       "prompt": "提供附录资料：领域词汇表（基于 CONTEXT.md，如书源、取值链、面 facet、按书归并、相关性分档、书城、本地书、bookKey 等）、缩略语对照（DSH、Cordis、SSE、EPUB、TXT、LRU、CQRS、ADR）、环境变量清单（DSH_CONTENT_AUDIT、DSH_SEARCH_FILTER_AUDIT、DSH_EPUB_BROWSER、DSH_INSTALL_CHECK）、第三方依赖清单与版本矩阵、wire 类型速查表。所有条目需与代码库保持一致，不得臆造字段或行为。",
       "progress_status": "completed",
       "dependent_files": "CONTEXT.md,package.json,tsdown.config.ts,src/shared/wire.ts",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z",
       "order": 13,
       "kk_dependent_files": [
         "CONTEXT.md",
@@ -814,8 +833,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "9623cdb7-8537-4cf1-8c1a-09c875599171",
@@ -826,8 +845,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "9ea315ba-690d-40f5-8167-2127f19acb65",
@@ -838,8 +857,20 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
+    },
+    {
+      "id": "a5daf4be-b745-4a1f-84f3-f0f8bdb9c641",
+      "catalog_id": "a5daf4be-b745-4a1f-84f3-f0f8bdb9c641",
+      "title": "面板书架投影机制",
+      "description": "panel-shelf-projection",
+      "extend": "{}",
+      "progress_status": "completed",
+      "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
+      "reference_count": 0,
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "b9a9def7-5532-41bc-829b-20f259685949",
@@ -850,8 +881,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "ced0b434-62a0-4d56-9b03-c0530781cdc8",
@@ -862,20 +893,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
-    },
-    {
-      "id": "d03bcaf7-6e3f-4db6-9af8-89416609ce66",
-      "catalog_id": "d03bcaf7-6e3f-4db6-9af8-89416609ce66",
-      "title": "规则文法与取值链",
-      "description": "grammar-and-value-chain",
-      "extend": "{}",
-      "progress_status": "completed",
-      "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
-      "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "e9fa52ee-034a-45d6-b102-564678bb520b",
@@ -886,8 +905,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "412bb0e0-c9b1-4009-8604-30f147e43515",
@@ -898,8 +917,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "43e39353-17b4-42e8-bd4b-4da69d3cbf8f",
@@ -910,8 +929,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "71fb54b1-4a56-4828-80de-2ba4b7c1b161",
@@ -922,8 +941,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "905418e9-4ba1-4e2d-909f-74708140bc49",
@@ -934,8 +953,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "b65c15ff-ea84-4b6e-9f84-3b84c3970822",
@@ -946,8 +965,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "e1260195-c1aa-4795-b361-eca2d37aa402",
@@ -958,8 +977,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "ff118858-af1d-4749-b6f8-d6a84e4fd8b8",
@@ -970,8 +989,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "1b15aa89-e027-48cd-9868-e6a0bcaad3dd",
@@ -982,8 +1001,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "2424c857-e327-46ad-8f72-4c9024ff3bcf",
@@ -994,8 +1013,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "271e6f8d-4af6-44fd-b960-fd9d4a0d82e4",
@@ -1006,8 +1025,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "aafe36d6-b84e-42d2-aeff-efd60d965589",
@@ -1018,8 +1037,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "daeedf66-b1b9-4007-87f7-7ac714e8f86d",
@@ -1030,8 +1049,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "e46c0ed9-19a4-46b2-ace6-7885738404f4",
@@ -1042,8 +1061,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "fdd75aee-bf45-4f3d-9757-254db06a784b",
@@ -1054,8 +1073,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "2cd8743e-cf09-4fab-bd7d-8b11ad9d80d3",
@@ -1066,8 +1085,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "52de1b56-81bf-4e67-89d9-82fc667678c5",
@@ -1078,8 +1097,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "a09eb04b-50cf-428f-a68d-f0a6bbf94ab3",
@@ -1090,8 +1109,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "ec0d8ce7-095a-4acc-a1e6-970da6992c1a",
@@ -1102,8 +1121,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "fb423d0a-3c06-4d6d-b82e-0a6fa18cb1ee",
@@ -1114,8 +1133,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "53311a9e-919b-44f7-806d-92ae55de26f0",
@@ -1126,8 +1145,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "69bc1c3e-0863-46ec-a249-5be55a24bff3",
@@ -1138,8 +1157,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "7dcbd059-5952-4e3e-8d83-46768b0a109a",
@@ -1150,8 +1169,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "29f008a4-6795-4573-a834-8f3d056158d6",
@@ -1162,8 +1181,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "75f2a913-db1b-44b1-860f-46f8f331d037",
@@ -1174,8 +1193,20 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
+    },
+    {
+      "id": "e3813b30-fc8a-4ada-928c-ba86409eb937",
+      "catalog_id": "e3813b30-fc8a-4ada-928c-ba86409eb937",
+      "title": "书内容读面模块",
+      "description": "book-content-module",
+      "extend": "{}",
+      "progress_status": "completed",
+      "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
+      "reference_count": 0,
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "79ace86b-4f88-4023-8efb-ecca9381d18b",
@@ -1186,8 +1217,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "5d852b76-5b94-4ff3-b44c-15a381e3c0a3",
@@ -1198,8 +1229,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "fa6de80c-64f9-4801-ad37-86c49a01f301",
@@ -1210,8 +1241,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "05919243-1f2c-4905-acbb-9a11a10ac081",
@@ -1222,8 +1253,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "7ac7fe27-49a3-40e7-b572-10b8d02f97d1",
@@ -1234,8 +1265,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "3408f706-3473-446d-b2f4-796013aaee60",
@@ -1246,8 +1277,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "dc1eb2c4-e0ab-485b-adf6-e8d9e9b9beb7",
@@ -1258,8 +1289,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": "ce0263ac-c6fc-4135-8472-d8e179c3f97d",
@@ -1270,8 +1301,8 @@
       "progress_status": "completed",
       "repo_id": "1c1bd151-a454-5f8d-ac1e-8130bee55dab",
       "reference_count": 0,
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     }
   ],
   "knowledge_relations": [
@@ -1282,8 +1313,8 @@
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": 2,
@@ -1292,38 +1323,38 @@
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": 3,
+      "source_id": "ff118858-af1d-4749-b6f8-d6a84e4fd8b8",
+      "target_id": "a5daf4be-b745-4a1f-84f3-f0f8bdb9c641",
+      "source_type": "WIKI_ITEM",
+      "target_type": "WIKI_ITEM",
+      "relationship_type": "PARENT_CHILD",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
+    },
+    {
+      "id": 4,
       "source_id": "fa6de80c-64f9-4801-ad37-86c49a01f301",
       "target_id": "b9a9def7-5532-41bc-829b-20f259685949",
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
-      "id": 4,
+      "id": 5,
       "source_id": "52de1b56-81bf-4e67-89d9-82fc667678c5",
       "target_id": "ced0b434-62a0-4d56-9b03-c0530781cdc8",
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
-    },
-    {
-      "id": 5,
-      "source_id": "29f008a4-6795-4573-a834-8f3d056158d6",
-      "target_id": "d03bcaf7-6e3f-4db6-9af8-89416609ce66",
-      "source_type": "WIKI_ITEM",
-      "target_type": "WIKI_ITEM",
-      "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": 6,
@@ -1332,8 +1363,8 @@
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": 7,
@@ -1342,8 +1373,8 @@
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": 8,
@@ -1352,8 +1383,8 @@
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": 9,
@@ -1362,8 +1393,8 @@
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": 10,
@@ -1372,8 +1403,8 @@
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": 11,
@@ -1382,8 +1413,8 @@
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": 12,
@@ -1392,8 +1423,8 @@
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": 13,
@@ -1402,8 +1433,8 @@
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": 14,
@@ -1412,8 +1443,8 @@
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": 15,
@@ -1422,8 +1453,8 @@
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": 16,
@@ -1432,8 +1463,8 @@
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": 17,
@@ -1442,8 +1473,8 @@
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": 18,
@@ -1452,8 +1483,8 @@
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": 19,
@@ -1462,8 +1493,8 @@
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": 20,
@@ -1472,8 +1503,8 @@
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": 21,
@@ -1482,8 +1513,8 @@
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": 22,
@@ -1492,8 +1523,8 @@
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": 23,
@@ -1502,8 +1533,8 @@
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": 24,
@@ -1512,8 +1543,8 @@
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     },
     {
       "id": 25,
@@ -1522,8 +1553,18 @@
       "source_type": "WIKI_ITEM",
       "target_type": "WIKI_ITEM",
       "relationship_type": "PARENT_CHILD",
-      "gmt_create": "2026-10-19T14:40:50Z",
-      "gmt_modified": "2026-10-19T14:40:50Z"
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
+    },
+    {
+      "id": 26,
+      "source_id": "52de1b56-81bf-4e67-89d9-82fc667678c5",
+      "target_id": "e3813b30-fc8a-4ada-928c-ba86409eb937",
+      "source_type": "WIKI_ITEM",
+      "target_type": "WIKI_ITEM",
+      "relationship_type": "PARENT_CHILD",
+      "gmt_create": "2026-10-27T14:50:38Z",
+      "gmt_modified": "2026-10-27T14:50:38Z"
     }
   ]
 }
