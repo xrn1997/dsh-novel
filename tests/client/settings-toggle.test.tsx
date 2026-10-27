@@ -107,8 +107,8 @@ describe('SourceList 启停开关接线（deps seam 驱动）', () => {
   })
 
   it('乐观值随服务端值让位：reload 落地即以服务端为准（粘滞乐观态——审查 2026 发现的真缺陷回归钉）', async () => {
-    // 病史：乐观值只在失败时清，成功路径永驻 → 另一入口（selbar 批量停用 / AI 工具）改了
-    // 服务端后，行仍被残留的 optimistic 顶住显示旧态（key={s.id} 稳定，SourceRow 跨 reload 存活）。
+    // 乐观值必须随服务端值让位：另一入口（selbar 批量停用 / AI 工具）改了服务端后，
+    // reload 落地即以服务端为准，残留的 optimistic 不得顶住显示（key={s.id} 稳定，SourceRow 跨 reload 存活）。
     const deps = makeDeps()                                  // apiSend 缺省成功
     const off: SourcePublic = { ...src, enabled: false }
     const panel = (sources: SourcePublic[]): ReactNode =>
@@ -128,9 +128,9 @@ describe('SourceList 启停开关接线（deps seam 驱动）', () => {
   })
 })
 
-/** 停用 ≠ 免验（2026-09 用户裁定）：停用只摘掉「参与聚合搜索」这一件事——行内验证入口
- *  按状态出，不随 enabled 消失（病史：`!enabled` 门让停用源既点不动单源验证，又照样出现在
- *  待办收件箱的批量重验 id 集里，两个入口口径打架）。 */
+/** 停用 ≠ 免验（用户裁定）：停用只摘掉「参与聚合搜索」这一件事——行内验证入口
+ *  按状态出，不随 enabled 消失，否则停用源点不动单源验证，却照样出现在待办收件箱的
+ *  批量重验 id 集里，两个入口口径打架。 */
 describe('SourceList 行内验证入口与启停正交（编排收进 jobs.ts 领域动作）', () => {
   const panel = (over: Partial<SourcePublic>, depsOver: DepsOverrides = {}): {
     node: ReactNode; deps: FakeSettingsDeps; onChanged: ReturnType<typeof vi.fn>
@@ -146,9 +146,9 @@ describe('SourceList 行内验证入口与启停正交（编排收进 jobs.ts �
     render(node)
     fireEvent.click(screen.getByText('验证'))
     await waitFor(() => expect(deps.startBatchProbeJob).toHaveBeenCalledWith(['s1']))
-    // 验证起任务 → 读任务。旧行为 verifyThis `.then(() => onChanged())` 与
-    // 待办/批量入口的 `.then(refreshJob)` 打架；提交成功后「催任务读面」的观测钉在
-    // jobs-verify.test.ts（缺省 refresh = refreshJob → 轮询立刻重拉）。
+    // 验证起任务 → 读任务：命中任务的出口是 refreshJob，不走 onChanged（后者属改源的口径，
+    // 与待办/批量入口一致）；提交成功后「催任务读面」的观测钉在 jobs-verify.test.ts
+    // （缺省 refresh = refreshJob → 轮询立刻重拉）。
     await new Promise((r) => setTimeout(r, 20))
     expect(onChanged).not.toHaveBeenCalled()
   })

@@ -2,8 +2,8 @@
  *  （位移用 transform、状态由 aria-checked 表达）。 */
 export const CONTROLS_CSS = `
 /* ── 焦点环：一套覆盖所有交互件（brand 环 + 2px 偏移，压在深浅两种底上都找得着）──
-   .novel-btn.primary 另有环色换色规则（brand 压 brand 等于没有）；手风琴退役后
-   .novel-section-* 系列规则已随之删除（死代码不留）。 */
+   .novel-btn.primary 另有环色换色规则（brand 压 brand 等于没有）。
+   .novel-section-* 系列规则不在这里——没有对应组件，死代码不留。 */
 .novel-btn:focus-visible, .novel-rdr-ctl:focus-visible,
 .novel-input:focus-visible, .novel-textarea:focus-visible, .novel-chip:focus-visible,
 .novel-seg button:focus-visible, .novel-tabs button:focus-visible, .novel-menu button:focus-visible,
@@ -23,7 +23,7 @@ export const CONTROLS_CSS = `
 .novel-input::placeholder, .novel-textarea::placeholder { color: var(--novel-text-3); }
 .novel-textarea { width: 100%; font-family: ui-monospace, Consolas, monospace; }
 .novel-panel { border: 1px solid var(--novel-border); border-radius: var(--novel-r-md); padding: var(--novel-sp-4); background: var(--novel-layer-2); }
-/* 错误横幅（会话/导出失败）：弱底 + 徽标 + 重试钮，全靠标度；旧实现在视图里行内写死 */
+/* 错误横幅（会话/导出失败）：弱底 + 徽标 + 重试钮，全靠标度；不要在视图里行内写死 */
 .novel-error-banner { background: var(--novel-err-weak); margin: var(--novel-sp-3) 0; }
 .novel-retry { margin-left: var(--novel-sp-4); }
 /* 运行卡（导入 / 批量验证共用外壳）：brand 派生色浮层底，标题行窄时可折。
@@ -61,8 +61,8 @@ export const CONTROLS_CSS = `
 /* 表头「?」图例（cursor:help 是「这里有解释」的唯一提示） */
 /* 圆角**不能**靠 overflow: hidden 收：行内「⋯」菜单（.novel-menu 绝对定位）的包含块
    .novel-actions 就在表内，一裁就把菜单锁进表格盒、超出表底的部分点不到（末行菜单只可见
-   约 1/4，2026-09-26 用户实机）。改为首/末行各自带圆角裁自己的背景——浮层归浮层、圆角归
-   圆角（判据：浮层归浮层、圆角归圆角——第二档「表格自身 overflow」翻转已实测排除）。 */
+   约 1/4）。改为首/末行各自带圆角裁自己的背景——浮层归浮层、圆角归圆角
+   （「表格自身 overflow」那档同样会裁菜单）。 */
 .novel-table { border: 1px solid var(--novel-border); border-radius: var(--novel-r-md);
   /* 容器查询锚：源列表按**表格自身宽度**（不是视口宽度）收列——宿主会话列可拖窄，
      视口断点在分栏布局下量不准。inline-size containment 同时把表格的布局影响范围关住。 */
@@ -81,8 +81,8 @@ export const CONTROLS_CSS = `
 .novel-tr:first-child { border-top: none; }
 .novel-tr:hover { background: var(--novel-hover); }
 .novel-tr.head { background: var(--novel-skeleton); font-size: var(--novel-fs-sm); color: var(--novel-text-2); }
-/* 源列表六列：列宽唯一住址（表头与每一行共用，此前是两处逐字重复的字面量）。
-   操作列（第5轨）**定宽 + 右对齐**（2026 调度台改版）：内容随状态增减（异常态多一个
+/* 源列表六列：列宽唯一住址（表头与每一行共用；不要另写一份字面量）。
+   操作列（第5轨）**定宽 + 右对齐**：内容随状态增减（异常态多一个
    验证/重验钮），auto 轨让各行内容宽不一 → 右缘按钮组漂移（用户实机反馈「没对齐」）；
    定宽后「试跑/⋯」右缘全表锚定，状态动作钮向左生长。启停唯一入口 = 最右开关，
    行内不再渲染重复的「启用」文字钮。 */
@@ -98,7 +98,7 @@ export const CONTROLS_CSS = `
    错误条目的定位按钮 scrollIntoView 跳到这里，标记随错误 dismiss 消失 */
 .novel-tr.row-err { box-shadow: inset 3px 0 0 var(--novel-err); }
 /* 停用行：内容变灰、名称去粗体（**启停开关不参与变灰**——把开关一起压暗会读成「控件禁用」，
-   而停用态恰恰是最需要能被点回来的东西）。旧实现把 opacity 行内写在四个格子上。 */
+   而停用态恰恰是最需要能被点回来的东西）。不要把 opacity 行内写在四个格子上。 */
 .novel-tr.off .novel-td, .novel-tr.off .novel-badge, .novel-tr.off .novel-grouppill { opacity: .6; }
 .novel-tr.off strong { font-weight: 400; }
 .novel-td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -106,7 +106,7 @@ export const CONTROLS_CSS = `
 .novel-actions { display: flex; gap: var(--novel-sp-2); justify-content: flex-end; position: relative; }
 /* ── 启停开关（设置区）：状态由 aria-checked 表达，位移用 transform 而非 left
    （left 改的是布局位置，每切一次都要重排一行；transform 只走合成层）。
-   旧实现把 30/17/13/15px 全写在行内 style 上，642 行每行每次渲染新建两个 style 对象。 */
+   不要把尺寸写在行内 style 上——每行每次渲染都会新建 style 对象。 */
 .novel-switch {
   position: relative; flex: none; width: 30px; height: 17px; padding: 0;
   border-radius: 999px; cursor: pointer;

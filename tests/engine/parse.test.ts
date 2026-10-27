@@ -41,7 +41,7 @@ describe('④⑤ 分支与段切分', () => {
     expect(p.branches[1].segments[0]).toEqual({ kind: 'default', mode: 'tag', arg: 'dd', index: { kind: 'index', value: 0 } })
   })
   it('&& → and，%% → zip', () => {
-    // 组合符分支测试用白名单词（text）作操作数——裸词透传例外已废除
+    // 组合符分支用白名单词（text）作操作数：白名单外的裸词会先按 CSS 选择器试解
     expect(parseRule('text&&text').combinator).toBe('and')
     expect(parseRule('text%%text').combinator).toBe('zip')
   })
@@ -54,7 +54,7 @@ describe('④⑤ 分支与段切分', () => {
     expect(p.branches[0].segments[0]).toMatchObject({ kind: 'put' })
   })
   it('受保护区不切 ## 替换尾：<js> 块 / {{…}} 区 / @put 值区（走查存量）', () => {
-    // 茄子免费小说 lastChapter：<js> 块内正则自带的 ## 曾是「缺 </js> 结束标记」误报的根因
+    // 茄子免费小说 lastChapter：<js> 块内正则自带的 ## 不算替换尾（受保护区整块不切）
     const egg = parseRule('{{$.t}} • {{java.timeFormat(1)}}\n<js>result.replace(/\\s\\d+:\\d+/,\'\')</js>\n<js>##[\\(（【].*?[】）\\)]</js>', 'rule', 'value')
     expect(egg.replaces).toEqual([])
     expect(egg.branches[0].segments.map((s) => s.kind)).toEqual(['literal', 'js', 'js'])
@@ -114,7 +114,7 @@ describe('⑥ 段识别', () => {
   it('put / getvar 识别', () => {
     expect(parseRule('@put:{bid:"123"}').branches[0].segments[0]).toEqual({ kind: 'put', pairsRaw: '{bid:"123"}' })
     // 体内 @ 不是段界（`@put:{…}` 在任何切分之前先整块剥离）——
-    // 真实源 ruleBookInfo.init 形态 @put:{n:"[property$=x]@content", …} 曾被撕成六段
+    // 回归钉子：真实源 ruleBookInfo.init 的 @put 值区按一个段处理，不被撕成多段。
     const put = parseRule('@put:{n:"[property$=book_name]@content", a:"[property$=author]@content"}@get:n')
     expect(put.branches[0].segments[0]).toEqual({
       kind: 'put',
@@ -152,7 +152,8 @@ describe('⑥ 段识别', () => {
   })
   it('白名单外的段在**解析期**定性：构成选择器的即 css 段，构不成的仍当场抛（都不留到 eval 才炸）', () => {
     // 白名单外的段交 CSS 选择：`nonsense.x` 落到选择器上是
-    // 「tag=nonsense + class=x」，不是认不出。本仓此前抛错、把读得出的规则判死。
+    // 「tag=nonsense + class=x」，不是认不出。改这里注意：别把这类段判成解析期错误——
+    // 读得出的规则不该判死。
     const ok = parseRule('nonsense.x', 'toc')
     expect(ok.branches[0].segments[0]).toMatchObject({ kind: 'css', selector: 'nonsense.x' })
     // 真认不出的（`$` 不是 CSS 标识符字符）依旧在解析期 UnsupportedRuleError——
@@ -237,7 +238,7 @@ describe('隐式 CSS 新形态（642 源重探归因驱动）', () => {
   })
   it('选择器特征字符 → css 段（含 `#` `[` `>` `+` `~` `=` `,` 或 `*` 开头即交 css-select 求值）', () => {
     // 放宽的是「哪串字符像选择器」，不是「认不出也不报」：解析不了的形态在求值层如实
-    // RuleEvalError（带段定位），不再在解析期误报「无法识别的段类型」
+    // RuleEvalError（带段定位），不在解析期误报「无法识别的段类型」
     for (const raw of ['ul#ncp3_ul li', 'a[href*="_"]', 'li[style~=width:100%;]', '*[href]', 'div,span']) {
       expect(parseRule(`${raw}@text`).branches[0].segments[0], raw).toEqual({ kind: 'css', selector: raw })
     }
@@ -354,9 +355,9 @@ describe('链尾 (…) 不是 js 形态（对面从不切它）', () => {
    * 两条依据：① 规则形态判定里 `ruleStr.startsWith("/")` 即整条按 XPath，并把 **原文**当 rule
    * （`/text()` 从头到尾没被再切）；② 分段找分隔符时括号是**平衡组**，跳过而非在 `(` 处切开。
    * Default 链的末尾段是属性读（取不到属性就是空）。
-   * 本仓曾把「末元素以 ) 结尾」当 js 表达式形态（`detectTailJs`），真机实证它把
-   * 耽美小说 `ruleToc.chapterName: "/text()"` 切成 `/text` + `()` 两段，`() ` 当脚本编译
-   * 当场 Unexpected token。全库普查里需要这条形态的源为 **0**（分母与现量走 `DSH_PARSE_CENSUS=1`）。
+   * 改这里注意：别把「末元素以 ) 结尾」当 js 表达式形态——切开会把 `/text()` 拆成 `/text` + `()`，
+   * `()` 当脚本编译当场 Unexpected token（真机实证：耽美小说 ruleToc.chapterName）。
+   * 全库普查里需要这条形态的源为 **0**（分母与现量走 `DSH_PARSE_CENSUS=1`）。
    */
   it('/text() 整条是一个 XPath 段，不产生 js 段', () => {
     const p = parseRule('/text()', 'toc', 'value')

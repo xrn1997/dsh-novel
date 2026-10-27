@@ -13,11 +13,9 @@ import { DEFAULT_JS_BUDGET_MS, DEFAULT_SEARCH_PARALLEL } from './services/readin
  * 缺省值一律引各消费模块的常量：本表只给「怎么校验」，不长出第二个字面量主人（「缺省值五个各自主人」
  * 这条纪律不破）。
  *
- * 偏离理由的更正（2026-10-17，钉版 3.18.5 实测）：inner/outer default 的填充语义是确定的
- * （undefined / {} / 字段缺失都按 default 填），当年「随版本歧义」的顾虑在钉版上不成立；
+ * default 的填充语义是确定的（undefined / {} / 字段缺失都按 default 填）；
  * `.default({})` 只作 cordis 缺省 config 行（undefined 输入）的兜底。显式 `null` 也按「未设置」填
- * 缺省——这是 schemastery 的平台语义，本仓不再另造一道 null 判据；旧 assertConfig 会拒绝数字 null，
- * 这条差异按平台口径接受并在此记录。
+ * 缺省——这是 schemastery 的平台语义，本仓不另造一道 null 判据。
  * cordis 装载期会自己用导出的 `Config` 校验并填充 patch 行的 config，所以 resolveConfig 在生产路径上
  * 近似幂等——但它仍是本仓唯一被测试穿透的配置缝（官方 config 页「加载时校验、错则失败」与本仓
  * 「宁炸不猜」都挂在这一个 interface 上），这一步不可省。

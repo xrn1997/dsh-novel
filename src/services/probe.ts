@@ -17,7 +17,7 @@ const PROBE_KEYS = ['书', '小说', '的'] as const
  * 只有「请求成功但 0 命中」换词重试——网络/规则异常立即返回，不多打请求。
  *
  * 请求语义全部走搜索面（search-face.ts）：模板解析/请求组装/超时/解码与聚合搜索同一实现——
- * timeoutMs 缺省时探针与搜索同认 ReadingService 的 searchTimeoutMs（此前探针只靠 fetcher 固定 15s）。
+ * timeoutMs 缺省时探针与搜索同认 ReadingService 的 searchTimeoutMs，不要退到 fetcher 的固定默认值。
  */
 export async function probeSource(
   source: NovelSource, request: SourceRequest, opts?: { timeoutMs?: number; jsTimeoutMs?: number },
@@ -49,7 +49,7 @@ export async function probeSource(
       if (nameRule === null) return fail('RuleMissing', '源未声明 ruleBookName', 0)   // 搜索面已拦；此处为类型收窄
       // usage='value'：与搜索面取书名同口径（`reading.ts` 对同一 ruleBookName、同一 item
       // 用 'value'）。规则以属性终端收尾（`@onclick`/`@_src`）时两种用途结果不同——
-      // 探针漏传该参数会把搜索面读得出书名的源判成「首条书名为空」的坏源（2026-09 审查）。
+      // 探针漏传该参数会把搜索面读得出书名的源判成「首条书名为空」的坏源。
       const first = firstValue(await page.subEval(nameRule, page.contexts[0], 'search', 'value'), 'search')
       if (first === null || first.trim() === '') {
         return fail('RuleEvalError', `首条书名为空（段 ruleBookName: ${nameRule}）`, page.contexts.length)

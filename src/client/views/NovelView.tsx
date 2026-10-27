@@ -13,12 +13,13 @@ import { SettingsSection } from './SettingsSection.js'
 import { ShelfView } from './ShelfView.js'
 
 /** 「小说」view 根：顶部 tab 导航 + 按 routeStore 分发五分支；样式层全局注入一次。
- *  IA（2026 变更，用户拍板）：书架 | 书城 | 书源管理 **并列 tab**——选择即切换下方内容；
- *  书源管理 = 原宿主设置「小说」区块整体（slots 的 settings.section 注册已撤，单一归属：
+ *  IA：书架 | 书城 | 书源管理 **并列 tab**——选择即切换下方内容；
+ *  书源管理 = 宿主设置「小说」区块整体（单一归属：
  *  轮询单实例、现场 store 单份）。书城 = 分类浏览（左栏点名一个源、再点它自己声明的分类，右区是
  *  该源这一类的书单；跨源视野只在书籍详情浮层里手动发起，见 CityView 与 `docs/adr/0028`）。
  *  reader/search 是 tab 之下的沉浸内容流（各有自己的返回导航），顶部 tab 不随行。
- *  布局钉死：根 = flex 列；视图区（flex:1 + overflowY:auto）——视图区曾写 height:100% 而被挤出视口。 */
+ *  布局钉死：根 = flex 列；视图区（flex:1 + overflowY:auto）——不要给视图区写 height:100%，
+ *  那会被挤出视口。 */
 
 /** tab 常量：key = ViewRoute['name'] 的 tab 子集；labelKey 指向字典（t 在渲染时取，tab 常量不持文案）；
  *  route 是无参路由对象（点击即 navigate） */

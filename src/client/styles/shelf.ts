@@ -11,7 +11,7 @@ export const SHELF_CSS = `
    行3 书架筛选簇（pills + 簇尾排序灰字）。
    为什么不做「工具组与标题同行」：Chrome 把同行 flex item 的假设主尺寸算成 min-content 量级
    （探针实测四件东西 706px 被算成 651px），搜索框与导入钮在标题旁折行堆叠——显式三行后不存在
-   这条折行路径。书架顶栏禁止 margin-left:auto（灰字曾被钉到列最右端＝悬浮碎片，已删）。
+   这条折行路径。书架顶栏禁止 margin-left:auto（会把灰字钉到列最右端＝悬浮碎片）。
    （本文件注释里别写反引号：NOVEL_CSS 是模板字符串，反引号会当场截断它。） */
 /* 行2：搜索框单独一行（聚合搜索 = 找新书入口，与书架筛选不是同一语义组）。
    form = 搜索框 + 「搜索」提交钮（与搜索页同款 type=submit + primary；可见按钮才是显式入口）。
@@ -23,7 +23,7 @@ export const SHELF_CSS = `
 .novel-shelf-search-note { color: var(--novel-text-3); font-size: var(--novel-fs-sm); }
 /* 搜索框：放大镜图标 + 无边框输入装进层底圆角容器，focus 描边走强调色；
    宽度弹性（1 1 180px）而非死宽——宿主会话列可拖窄，死宽会把标题压成一字一行。
-   底色必须读存在的 token：这里曾引用不存在的 --novel-layer，background 整条落 unset
+   底色必须读存在的 token：引用不存在的 --novel-layer 会让 background 整条落 unset
    （空心框）。 */
 .novel-searchbox {
   display: flex; align-items: center; gap: var(--novel-sp-3); background: var(--novel-layer-2);
@@ -54,7 +54,7 @@ export const SHELF_CSS = `
   box-shadow: 0 1px 2px rgba(0, 0, 0, .12);
 }
 /* 行3：书架筛选簇——pills 是书架自己的筛选项（全部/在读/未读/本地），不与搜索同簇；
-   排序灰字跟在簇尾（margin-left:auto 已删，见上方病史）。hairline 在簇行下沿：
+   排序灰字跟在簇尾（不要用 margin-left:auto 推到列最右）。hairline 在簇行下沿：
    控制区与网格的分隔语义不变。有书才渲染（空架/加载中没有可筛的东西）。 */
 .novel-shelf-filter {
   flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center;
@@ -72,7 +72,7 @@ export const SHELF_CSS = `
 .novel-grid.solo { max-width: 200px; margin: 0 auto; }
 /* 卡片 = 一格（.novel-cell）里的「打开钮 + 删除钮」两个兄弟按钮：
    打开钮是原生 <button>（Enter/Space 免费可用、焦点环自然），删除钮浮在封面右上；
-   旧结构是 div[role=button] 套 button——键盘按不动、读屏念「按钮含按钮」。 */
+   不要用 div[role=button] 套 button——键盘按不动、读屏念「按钮含按钮」。 */
 .novel-cell { position: relative; display: flex; flex-direction: column; }
 .novel-card {
   display: flex; flex-direction: column; cursor: pointer; text-align: left;
@@ -83,8 +83,8 @@ export const SHELF_CSS = `
 }
 .novel-card:hover { background: var(--novel-hover); transform: translateY(-2px); box-shadow: var(--novel-shadow-2); }
 .novel-card:focus-visible { transform: translateY(-2px); box-shadow: var(--novel-shadow-2); }
-/* 网格末位常驻引导卡 =「导入本地书籍」：搜索入口已由行2搜索框显式承担（「搜一本书」
-   引导卡退役），导入职责单一归这张卡；点击触发隐藏 file input。空架兜底见 .novel-grid.solo。 */
+/* 网格末位常驻引导卡 =「导入本地书籍」：搜索入口由行2搜索框承担，
+   导入职责单一归这张卡；点击触发隐藏 file input。空架兜底见 .novel-grid.solo。 */
 .novel-card-ghost .novel-ghost-cover {
   aspect-ratio: 2 / 3; display: grid; place-items: center; margin-bottom: var(--novel-sp-3);
   border: 1px dashed var(--novel-border-strong); border-radius: var(--novel-r-xs);
@@ -150,7 +150,7 @@ export const SHELF_CSS = `
 }
 .novel-card .novel-progress { height: 2px; border-radius: 1px; margin-top: var(--novel-sp-0); }
 /* 删除钮：hover/焦点显形（鼠标端不吃布局），触屏端无 hover 能力 → 常驻可见
-   （旧实现只有 :hover/:focus 两条路，触屏设备上这个操作根本不存在）。 */
+   （只做 :hover/:focus 两条路会让触屏设备上这个操作不存在）。 */
 .novel-card-x {
   position: absolute; top: var(--novel-sp-2); right: var(--novel-sp-2); z-index: 1;
   width: 24px; height: 24px; padding: 0; line-height: 1; border-radius: var(--novel-r-xs);
@@ -166,7 +166,7 @@ export const SHELF_CSS = `
   background: color-mix(in srgb, var(--novel-bg) 60%, transparent);
   border-radius: var(--novel-r-xs); padding: var(--novel-sp-0) var(--novel-sp-2);
 }
-/* ── 来源 chip + 多选态（2026 书架两条新需求）────────────────────────────
+/* ── 来源 chip + 多选态 ────────────────────────────────────────────
    来源 chip 钉在封面**左下**：右上归删除 ✕、左上归本地角标，四个角各司其职。
    色点按 sourceId 派生四档——复用无封面降级那四档 token（hex 仍不出本层），
    于是「同源同色、异源异色」在整架书上一眼可辨。源名超长省略（全名走 title 提示）。 */

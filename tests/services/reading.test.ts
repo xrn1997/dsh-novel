@@ -207,11 +207,11 @@ describe('ReadingService', () => {
   })
 
   it('URL 位取值取 list 首项：条目里多个 <a> 时不再拼成多行串（真源 八一中文网 / Royalroad 的 a@href）', async () => {
-    // 真源形态（2026-09-28 审计 `no-book-url` 桶）：条目 = 封面链 + 标题链 + 最新章节链，
-    // `tag.a@href` 命中 2..n 个不同 href。值规约原先一律 `join('\n')`，而 `absUrl` 有换行守卫
-    // （`/[\t\n\r]/` 即 null）→ **整条书目丢地址**——不报错，而是「搜到了却打不开」，在审计里与
-    // 「列表规则零命中」混在同一个桶。对面的口径是 URL 位一律取 `list[0]`（矩阵行
-    // `b-url-value-first-item`），join 只用于非 URL 取值：URL 里不可能有换行。
+    // 真源形态（审计 `no-book-url` 桶）：条目 = 封面链 + 标题链 + 最新章节链，
+    // `tag.a@href` 命中 2..n 个不同 href。URL 位一律取 `list[0]`——值规约若在这里 `join('\n')`，
+    // `absUrl` 的换行守卫（`/[\t\n\r]/` 即 null）会**整条书目丢地址**：不报错，而是「搜到了却打不开」，
+    // 在审计里与「列表规则零命中」混在同一个桶。矩阵行 `b-url-value-first-item`；
+    // join 只用于非 URL 取值：URL 里不可能有换行。
     const MULTI_A = (q: string): string => '<html><body><div class="b">'
       + '<a href="/book/1/"><img src="/1.jpg"></a>'
       + `<h3><a href="/book/1/">${q}·斗罗</a></h3>`
@@ -224,8 +224,8 @@ describe('ReadingService', () => {
   })
 
   it('源实体字段 `bookSourceComment` 脚本可见（涩涩俱乐部把解密脚本存在那里）', async () => {
-    // 对面脚本里的 `source` 就是 BookSource 实体 → `source.bookSourceComment` 可读；本仓此前不投影
-    // 该字段，脚本拿到 undefined（静默不映射、不报错），现库按 raw 全串扫的命中样本是
+    // 对面脚本里的 `source` 就是 BookSource 实体 → `source.bookSourceComment` 必须可读：不投影该字段时
+    // 脚本拿到 undefined（静默不映射、不报错），现库按 raw 全串扫的命中样本是
     // 涩涩俱乐部 ruleContent.replaceRegex 里的插值。用请求 URL 做观测点：把注释拼进 searchUrl。
     let seen = ''
     const { svc } = await makeService((u) => {
@@ -267,7 +267,7 @@ describe('ReadingService', () => {
 
   it('search sourceIds 为空数组 = 未限定（搜全部启用源），与工具描述一致', async () => {
     const { svc } = await makeService((u) => (u.includes('/search') ? SEARCH_HTML('斗罗') : null))
-    // 此前空数组 → 「搜零个源」零分组空结果（`!opts?.sourceIds` 对 [] 为 false）
+    // 空数组 = 未限定（搜全部启用源），不是「搜零个源」的零分组空结果
     const groups = await svc.search('斗罗', { sourceIds: [] })
     expect(groups).toHaveLength(1)
     expect(groups[0].hits[0]).toMatchObject({ title: '斗罗·斗罗' })
@@ -284,7 +284,7 @@ describe('ReadingService', () => {
     const svc = trackService(await ReadingService.create({ dir, fetchImpl: fetchImpl as never }))
     await svc.importOne(rawSource)
     const groups = await svc.search('斗罗')
-    // 按落地址 → /landed/book/1/；按请求地址（旧行为）→ /book/1/
+    // 解析基准是 302 落地地址；拿请求地址当基准会少掉 /landed/ 前缀
     expect(groups[0].hits[0].url).toBe('https://s.com/landed/book/1/')
   })
 
@@ -474,7 +474,7 @@ describe('ReadingService', () => {
   it('详情面脚本读得到书架镜像字段（`{{book.name}}` 不再渲染成空；快看漫画 detail intro 形态）', async () => {
     // 对面脚本里的 `book` 是 Book 实体：详情面脚本常拿它拼模板（`{{book.name}}`/`{{book.author}}`/
     // `{{book.kind}}`），还把 `book.kind` 当 kind 规则的**首选值**（`book.kind || get(…)`）。
-    // 本仓 book 镜像此前只有正文面带 name/author，详情/目录两面 → 这些读法全是静默空。
+    // 详情/目录两面的 book 镜像同样带 name/author/kind——缺了这些读法全是静默空。
     const { svc, registry } = await makeService((u) => (u === `${BASE}/book/1/` ? '<html><body><h1>详情标题</h1></body></html>' : null))
     await svc.importOne({
       ...rawSource, bookSourceName: '带镜像', bookSourceUrl: 'https://mirror.example.com',
@@ -508,9 +508,9 @@ describe('ReadingService', () => {
 })
 
 // ── 书 URL 承载请求选项（`url,{option}` 随身份存取——URL 字符串即请求规格）────────
-// 修复背景（书架诊断实证）：API 源的 ruleBookUrl 是 `端点,{"method":"POST",…}`，此前搜索面剥掉选项
-// 才落库 → bookKey 只剩裸端点、POST body 里的 id 永久丢失，全链路 405。口径：URL 字符串即请求规格，
-// 命中/书架/抓取全程不剥离，抓取时由 assembleRequest 单点解释。
+// 口径（书架诊断实证）：URL 字符串即请求规格，命中/书架/抓取全程不剥离，抓取时由 assembleRequest
+// 单点解释。API 源的 ruleBookUrl 是 `端点,{"method":"POST",…}` 形态，剥掉选项会让 bookKey 只剩
+// 裸端点、POST body 里的 id 永久丢失，全链路 405。
 describe('书 URL 承载请求选项（,{option} 随身份存取）', () => {
   const OPT = ',{"method":"POST","body":"app=x&book_id=42"}'
   const API_BOOK = `https://api.example.com/fiction/book/getDetail${OPT}`
@@ -532,7 +532,7 @@ describe('书 URL 承载请求选项（,{option} 随身份存取）', () => {
     const groups = await svc.search('斗破')
     const g = groups.find((x) => x.sourceName === 'API源')!
     expect(g.error).toBeUndefined()
-    expect(g.hits[0].url).toBe(API_BOOK)   // 修复前被剥成裸端点，book_id 随 body 丢失
+    expect(g.hits[0].url).toBe(API_BOOK)   // URL 即请求规格：选项不剥离，book_id 随 body 一起保住
   })
 
   it('getDetail 按 bookKey 的 ,{option} 真发 POST 并带 body（此前 fetchText 裸抓带选项 URL 必炸）', async () => {
@@ -574,9 +574,9 @@ describe('书 URL 承载请求选项（,{option} 随身份存取）', () => {
 })
 
 // ── 详情上下文 ruleBookInfo.init + tocUrl 模板过引擎插值 ────────
-// 修复背景（书架诊断实证）：详情规则依赖 init 换上下文、tocUrl 是带 `{{$.resourceID}}` 的模板。
-// 此前 init 未实现、模板走 interpolateUrl(空 vars)——插值段原样留下，目录打到字面地址 → 0 章。
-// 口径：init 先求值，其结果**替换**后续详情规则的求值上下文；URL 模板按该上下文过规则引擎插值；
+// 口径（书架诊断实证）：详情规则依赖 init 换上下文、tocUrl 是带 `{{$.resourceID}}` 的模板。
+// init 先求值，其结果**替换**后续详情规则的求值上下文；URL 模板按该上下文过规则引擎插值——
+// 未插值的模板会把目录打到字面地址（0 章）。
 // init 非空但零命中 → RuleEvalError 点名 ruleDetailInit（宁炸不猜：静默降级会把「规则与站点不符」
 // 伪装成「源什么都没有」）。
 describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
@@ -650,7 +650,7 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
 
   // 「init 单次求值」的真机危害不是多算一次纯路径：js 形态 init 的第二次求值会**再打一次站点**。
   // 这里用 `java.ajax` 当计数器——读数不是内部调用次数，而是 init 每被求值一次就多出的真实出站请求。
-  // 旧组合（detailFieldsOf + tocUrlOf 各求一次 init）在这个源上会打两次 /init-hit。
+  // 各求一次 init 就会在这个源上打两次 /init-hit——这条钉的是单次。
   it('getDetail 只求一次 init：js 形态 init 不双打站点（tocUrl 复用同一份上下文）', async () => {
     const initHits: string[] = []
     const DETAIL = 'https://once.example.com/book/9'
@@ -692,7 +692,7 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
     expect(initHits).toHaveLength(1)
   })
 
-  // 真机分桶实证（2026-09）：ruleBookInfo.init 是**纯 @put**（只设变量），详情面每条规则都是
+  // 真机分桶实证：ruleBookInfo.init 是**纯 @put**（只设变量），详情面每条规则都是
   // `@get:{k}`——三件事必须同时成立：init 不换根、vars 在这次 getDetail 内共享、`@get:{}` 花括号形态认。
   const META_URL = 'https://meta.example.com/book/77'
   const META_PAGE = `<html><head>
@@ -760,7 +760,7 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
 })
 
 // ── js 沙箱预算走配置出口（jsTimeoutMs）──────────────────────────────────────────
-// 修复背景（书架诊断实证）：目录 @js 脚本需多次 java.ajax 往返 + md5 签名，2s 写死预算必炸
+// 为什么要有这条配置（书架诊断实证）：目录 @js 脚本需多次 java.ajax 往返 + md5 签名，2s 写死预算必炸
 // 「脚本超时」。口径（用户拍板）：插件配置 jsTimeoutMs（缺省 15000）经 ReadingService → bridge →
 // EvalContext 透传（引擎零改动）；搜索面/探针同口径。
 describe('js 沙箱预算走配置出口（jsTimeoutMs）', () => {
@@ -842,8 +842,8 @@ describe('js 沙箱预算走配置出口（jsTimeoutMs）', () => {
     expect(groups[0].error?.message).toMatch(/脚本超时（>300ms）/)
   })
 
-  // 标题曾写「搜索面/探针同口径」却只钉了搜索面——门面 probe 漏传 jsTimeoutMs 正是在这条
-  // 假覆盖的影子里活下来的（同一个源在导入期探针与门面探针拿回两个 verdict）。
+  // 回归钉子：搜索面与探针面同口径——门面 probe 漏传 jsTimeoutMs 会让同一个源在导入期探针与
+  // 门面探针拿回两个 verdict。
   it('探针面同口径：门面 probe 的 @js 脚本也吃 jsTimeoutMs（漏传即落回引擎 2s）', async () => {
     const { svc, registry } = await makeJsService({
       jsTimeoutMs: 300,

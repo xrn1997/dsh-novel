@@ -8,9 +8,9 @@ import ts from 'typescript'
  * 仓内方向守卫：`docs/architecture.md` §2「Node 半的分层与依赖方向」（外加浏览器半那条）
  * 的机器版——§4 是语义的主人清单，不是方向表。
  *
- * 为什么要有这一道：此前「services 不许反向 import api」只有人眼与一次 grep 守着，破了
+ * 为什么要有这一道：「services 不许反向 import api」若只靠人眼与一次 grep 守着，破了
  * 不会有任何东西变红；跨插件那一头有 `tsdown.config.ts` 的 dsh-novel-bundle-purity，
- * 仓内这一头一直是空白。本门随 `pnpm test` 跑，不额外要一条命令。
+ * 仓内这一头由本门补上。本门随 `pnpm test` 跑，不额外要一条命令。
  *
  * 为什么不用 dependency-cruiser：它的 engines 是 ^22 / ^24 / >=26，本机 node 25 直接拒跑
  * ——装上来跑不起来的闸不算闸。这里只取本仓真正需要的那一小截（静态 import 的方向、值环、

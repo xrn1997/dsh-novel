@@ -32,10 +32,10 @@ export interface SourceRequest {
 /**
  * 源请求执行缝：一次出站抓取「动态头 → 限速 → webview/HTTP → loginCheck」顺序的**唯一**装配点。
  *
- * 为什么要有这一层：这套顺序此前散在各面（搜索/发现/目录/正文各调 `resolveHeaders`，
- * 只有阅读门面的源级外观带限速与 loginCheck），于是真浏览器抓取绕开限速、头部由每个调用方
- * 自己求值、头规则脚本里的一次网络调用还可能回头再求值头规则。要发请求的调用方只交
- * (source, plan)，不自己拼这份顺序。
+ * 为什么要有这一层：这套顺序必须只有一个装配点。若散在各面（搜索/发现/目录/正文各调
+ * `resolveHeaders`，只有阅读门面的源级外观带限速与 loginCheck），真浏览器抓取会绕开限速、
+ * 头部由每个调用方自己求值，头规则脚本里的一次网络调用还可能回头再求值头规则。
+ * 要发请求的调用方只交 (source, plan)，不自己拼这份顺序。
  *
  * 三条不变量（本 module 的存在理由，改动前先读）：
  * - **真浏览器也过限速**：限速与动态头是共同前置，不挂在 HTTP 那一支上。引擎面
@@ -75,8 +75,8 @@ export function createSourceRequest(deps: SourceRequestDeps): SourceRequest {
     return limiter
   }
 
-  /** 一次浏览器抓取：限速 + cookie 双向桥。读面与引擎面（`@webjs:` / `java.webView`）共用这一层——
-   *  引擎面此前从基础 fetcher 直接取浏览器，既绕限速又各自抄一遍 cookie 回灌。 */
+  /** 一次浏览器抓取：限速 + cookie 双向桥。读面与引擎面（`@webjs:` / `java.webView`）共用这一层；
+   *  不要从基础 fetcher 直接取浏览器——那会绕限速，并各自抄一遍 cookie 回灌。 */
   const webviewFor = (source: NovelSource): Pick<WebViewRuntime, 'fetch'> => ({
     fetch: async (url: string, opts: WebViewOptions = {}): Promise<WebViewPage> => {
       await limiterFor(source).acquire()

@@ -87,9 +87,9 @@ export type PickedOutcome<T> =
   | { ok: false; reason: 'zero' | 'excluded' | 'oob' }
 
 /**
- * 选择结果后处理单点（规约单点）：exclude 过滤 → index 取位 → 空态裁决，唯一实现
- * （default 选择段与 css 段同源——此前两处各写一份且已语义分叉：同一种取位在两段给两种结果，
- * 而空 List 不是节点集、中链必抛「上游结果不是节点集」）。
+ * 选择结果后处理单点（规约单点）：exclude 过滤 → index 取位 → 空态裁决，唯一实现。
+ * default 选择段与 css 段必须共用这一份：各写一份会让同一种取位在两段给两种结果，
+ * 而空 List 不是节点集、中链必抛「上游结果不是节点集」。
  * 口径：三态皆「选择失败」语义，调用方按 reason 组 Miss detail；
  * 「合法零条目（空 List）」只属于取值段（getValue：元素在、取值全空）。顺序：先排除再取位。
  */
@@ -133,8 +133,8 @@ export function selectStepWithSelf(
  * default 段求值：选择段（class/id/tag/child/children）产出节点集；
  * 取值段（text/textAll/ownText/html/all/href/src/content/textNodes/attr）产出字符串值。
  * `text.<串>` / `ownText.<串>`（**带参数**）是选择段——「按文本选元素」的形态
- * （不带参数的 `text` 才是取值终端）。`text.下一页@href` 这类全靠它——曾把带参数的 text 当取值段
- * 忽略参数，产出整页文本后 `@href` 落空。
+ * （不带参数的 `text` 才是取值终端）。`text.下一页@href` 这类全靠它——把带参数的 text 当取值段
+ * 会忽略参数，产出整页文本后 `@href` 落空。
  * 第 2 参 $（CheerioAPI）用于重建节点集与逐节点取值。
  */
 export function evalDefault(
@@ -239,9 +239,9 @@ export function containsText(hay: string, needle: string): boolean {
 
 /**
  * 取值段：单节点 → Value；多节点 → List；零节点/取位失败 → Miss；取到空（合法零条目）→ 空 List。
- * 空态/取位裁决复用 reducePicked 单点：此前本函数自写一份排除+applyIndex+空态逻辑，
- * 与选择段分叉——切片裁空在选择段给 Miss、取值段给空 List（同一 `x.5:9` 后缀两种结果）。
- * 现与选择段同口径：zero/excluded/oob 三态一律「取位失败」→ Miss（切片裁空也归 `oob`）；
+ * 空态/取位裁决复用 reducePicked 单点。不要在本函数自写排除/取位/空态逻辑——那会与选择段分叉
+ * （切片裁空在选择段给 Miss、取值段给空 List，同一 `x.5:9` 后缀两种结果）。
+ * 与选择段同口径：zero/excluded/oob 三态一律「取位失败」→ Miss（切片裁空也归 `oob`）；
  * 「合法零条目（元素在、取值全空）」仍是空 List（非 Miss）。
  */
 function getValue(
@@ -345,7 +345,7 @@ function attrFallback($: CheerioAPI, el: AnyNode, name: string, fallbackSel?: st
 
 function extract($: CheerioAPI, el: AnyNode, mode: string): string {
   switch (mode) {
-    // text：**全部后代文本**，块级边界落成换行。曾按「严格直系文本」收（与 ownText 同义），
+    // text：**全部后代文本**，块级边界落成换行。不要按「严格直系文本」收（那与 ownText 同义）：
     // 正文规则 `.con@text` 里全是 <p> 子元素 → 直系文本为空 → 零命中；容器自身往往不带直系文本。
     case 'text':
       return nodeText(el)

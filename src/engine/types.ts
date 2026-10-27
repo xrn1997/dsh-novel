@@ -7,7 +7,7 @@ export type Facet = 'search' | 'detail' | 'toc' | 'content' | 'explore' | 'rule'
 /** 取值用途：同一条规则串在「取值」与「列表选择」两种用途下，
  *  链尾未知词的语义不同——取值用途（value）把链尾未知提取指令当 **HTML 属性名**，
  *  列表用途（list）把链尾未知选择器按 **CSS** 求值。
- *  调用方（服务层）按规则用途显式声明；缺省 'list'（与旧口径同）。 */
+ *  调用方（服务层）按规则用途显式声明；缺省 'list'。 */
 export type RuleUsage = 'value' | 'list'
 
 export type EngineValue =
@@ -25,9 +25,9 @@ export interface EvalContext {
   source?: string
   /** 源实体字段 `bookSourceComment`（脚本里的 `source` 就是书源实体，脚本可读它）。
    *  不是装饰字段：真实源把**解密脚本**存在这里，用插值读 `source.bookSourceComment` 再执行。
-   *  曾不投影 → 脚本拿到 undefined、静默不映射；服务层从 `raw.bookSourceComment` 现读后经此透传。 */
+   *  必须投影：漏掉时脚本拿到 undefined、静默不映射；服务层从 `raw.bookSourceComment` 现读后经此透传。 */
   sourceComment?: string
-  /** 源名（脚本可见的 `source.bookSourceName`）：同源透传（曾恒空串——没有任何地方写过它）。 */
+  /** 源名（脚本可见的 `source.bookSourceName`）：同源透传（漏写时会恒为空串）。 */
   sourceName?: string
   vars?: Record<string, string>
   /** 变量链的 **source 层**（跨门面调用、按源隔离；由沙箱从 `SourceSession` 接线）。

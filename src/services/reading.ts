@@ -83,7 +83,7 @@ export interface ImportOutcome {
   missing: NormalizeIssue[]; warnings: NormalizeIssue[]
   probe: ProbeResult | null
   /** 按址去重命中（intake 入库规则，矩阵行 `k-import-dedup`）：同 baseUrl 已有可用源则保留已有条目、
-   *  未新增，sourceId 给可用的那条（曾只在任务路径去重，同步导入可重复入库）。 */
+   *  未新增，sourceId 给可用的那条（同步与任务两条路都必须去重，否则可重复入库）。 */
   dupSkipped?: boolean
 }
 
@@ -318,7 +318,7 @@ export class ReadingService {
   }
 
   /** 探针已有源（API/tools 的 probe 路由/工具用）：与 importOne 的探针段同口径。
-   *  超时与 js 预算必须与搜索同耐心（`searchTimeoutMs`/`jsTimeoutMs` 两个单点）——漏传曾让
+   *  超时与 js 预算必须与搜索同耐心（`searchTimeoutMs`/`jsTimeoutMs` 两个单点）——漏传会让
    *  同一源在导入期与门面两处探针拿回两个 verdict。 */
   async probe(id: string): Promise<ProbeResult> {
     const s = this.requireSource(id)
@@ -399,7 +399,7 @@ export class ReadingService {
    *  空产出（脚本没 return 出 cookie，或只写 `cookie.setCookie` 垫片又不读回——那张垫片是按源键值表，
    *  与 HTTP jar 不是一张；HTTP 响应的 `Set-Cookie` 现由 fetcher 自动落 jar，口径见矩阵 `b-cookie-jar`）
    *  **不算登录**：
-   *  返回 null 且不写 auth（曾落空 auth 把 hasAuth 点亮成「已登录」而零凭据）。
+   *  返回 null 且不写 auth（落空 auth 会把 hasAuth 点亮成「已登录」而零凭据）。
    * URL 形态由调用侧分流（不在此处理——开新 tab + cookie 录入，不注入 WebView）。 */
   async runLogin(id: string): Promise<SourceAuth | null> {
     const s = this.requireSource(id)
@@ -491,7 +491,7 @@ export class ReadingService {
   }
 
   /** 加书（title 形态）：字段判别归 pickShelfMeta，此处只管「入架」语义。
-   *  title / sourceId 必填非空（曾静默兜底 `?? ''`：写入 200、读取才炸的死书）；
+   *  title / sourceId 必填非空（静默兜底 `?? ''` 会造出写入 200、读取才炸的死书）；
    *  值域门在这里而不是路由——HTTP 面与工具面共用本动词，门长在路由只护一半。 */
   shelfAdd(bookKey: string, meta: ShelfMetaPatch & { title: string }): ShelfBook {
     const sourceId = meta.sourceId
@@ -542,7 +542,7 @@ export class ReadingService {
     return shelfRemoved || localRemoved
   }
 
-  /** 删书：本地书连带删文件（防孤儿 invariant 归门面——此前住 dispatch 路由分支；副本先删，失败则架位保留可重试） */
+  /** 删书：本地书连带删文件（防孤儿 invariant 归门面；副本先删，失败则架位保留可重试） */
   async removeBook(bookKey: string): Promise<{ removed: boolean }> {
     return { removed: await this.removeShelfAndLocal(bookKey, false) }
   }
@@ -628,9 +628,9 @@ export class ReadingService {
 
   /** 聚合搜索的**唯一实现**。`onGroup` 是增量出口：单源求值完成即按完成序交付，
    *  返回值仍按参搜源序——HTTP 面与工具面的既有形状一字不改，而后台任务/将来做任务的
-   *  那一路可以边跑边被看见（浏览器半原先自持的分批循环只为拿这个增量，随之后退）。
-   *  sourceIds 缺省**或空数组**都视为「未限定」= 搜全部启用源（曾把空数组当「搜零个源」，
-   *  零分组空结果冒充成功）。 */
+   *  那一路可以边跑边被看见（浏览器半不再自持分批循环，只消费这个增量）。
+   *  sourceIds 缺省**或空数组**都视为「未限定」= 搜全部启用源（不要把空数组当「搜零个源」，
+   *  零分组空结果会冒充成功）。 */
   private async searchProgressive(keyword: string, opts?: {
     sourceIds?: string[]
     onGroup?: (group: SearchGroup, index: number) => void
@@ -653,7 +653,7 @@ export class ReadingService {
         opts?.onGroup?.(group, index)
       }))
     }
-    // 停止时数组可能有洞（filter 天然跳过洞位）；未停止时无洞，与旧行为逐字相同
+    // 停止时数组可能有洞（filter 天然跳过洞位）；未停止时无洞
     return groups.filter((g): g is SearchGroup => g !== undefined)
   }
 

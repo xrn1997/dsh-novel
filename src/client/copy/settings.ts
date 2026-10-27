@@ -1,8 +1,8 @@
 /** 配置页与阅读偏好共用的文案：两个读者是同一块「插件设置」可见面，故同住一处。
  *  `config.*` 由插件页「运行参数」表单消费（字段行、分区、壳层文案与页脚）；`prefs.*` 由
  *  阅读设置面板消费。页脚里两处代码字（`dataDir` / `cordis.patch.yml`）是 JSX 元素，字典只装
- *  它们之间的句子；`config.footer.between` / `.after` 首尾的空格旧屏上就有（含旧文案跨行折出的
- *  那一枚），**故意留着**——trim 掉中文就少了一个间隔。 */
+ *  它们之间的句子；`config.footer.between` / `.after` 首尾的空格**故意留着**——
+ *  trim 掉中文就少了一个间隔。 */
 export const SETTINGS_ZH = {
   'config.title': '运行参数',
   'config.subtitle': '改完点保存即生效，不需要重启插件。',

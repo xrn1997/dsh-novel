@@ -10,8 +10,8 @@ import { formatIntro } from '../../src/services/content.js'
  *   `<usehtml>` / `<md>` / `<useweb>`，命中就**原样保留**（否则 `<button>@onclick`
  *   等书源交互标记会被清理掉，交给渲染层按前缀选渲染器）；否则同样净化后截断。
  *
- * 本仓此前两侧都是**原样透出**：普通 HTML 简介带着一堆 `<div>`/`<span>` 标签进 UI，
- * 而指令前缀那条（样本是米读小说的整页 CSS + 卡片 HTML）也没有任何地方认识它。
+ * 两侧都不许把原标签透出：普通 HTML 简介会把 `<div>`/`<span>` 带进 UI；带指令前缀的那条
+ * （样本是米读小说的整页 CSS + 卡片 HTML）若被净化就丢了书源交互标记。
  */
 
 describe('formatIntro：对面 HtmlFormatter.format 的移植', () => {

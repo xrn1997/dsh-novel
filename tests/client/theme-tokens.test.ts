@@ -7,7 +7,7 @@ import { NOVEL_CSS } from '../../src/client/styles.js'
 
 /**
  * 宿主设计 token 词表守卫（防「引用了宿主根本不存在的 token」这类静默失败）：不存在的别名
- * 不报错、只静默落回硬编码 fallback，深浅两态都不再跟随宿主（深色适配曾被它拖住）。
+ * 不报错、只静默落回硬编码 fallback，深浅两态都不再跟随宿主（深色模式会因此失效）。
  * 词表取自宿主 `@deepseek-ai/dsh-client-ui-theme` 的 design-platform CSS（光/暗两套同名），冻结
  * 在此以免测试依赖宿主安装路径；宿主升级改名 token 时更新本词表（那是契约变了的信号）。
  */
@@ -120,8 +120,8 @@ describe('宿主 token 词表守卫（--dsw-* 必须是宿主真名）', () => {
 
 /**
  * hex 字面量守卫：上面的 --dsw-* 词表守卫只查宿主 token 真名，管不住视图内联
- * brand hex——SettingsSourceList/SettingsImportPane 曾内联 #2f6feb14/1f/44 与 #79a8ff 绕开
- * token seam（宿主换 brand 即全部失联）。本守卫扫 client 全源码的 hex 字面量，白名单只有两处：
+ * brand hex——视图内联 hex 即绕开 token seam（宿主更换 brand 后全部失联）。本守卫扫 client
+ * 全源码的 hex 字面量，白名单只有两处：
  *  ① token 定义处本身（`src/client/styles/`：fallback、`.novel-dark` 钉值与由 token 派生的叠层）；
  * ② 钉死的正文层色值（正文层永不接 token——paperInk 两端字色 / 纸张预设 / 默认纸色）。
  * 视图里再出现任何非白名单 hex 即红。
@@ -175,7 +175,7 @@ describe('颜色字面量守卫（派生色只准住 token 层，视图内联即
     expect(scanColorLiterals([{ file: 'util.ts', text: "return '#123'" }])).toEqual(['util.ts: #123'])
   })
 
-  // 2026-09-28 补：此前只扫 hex，`rgba(...)`/`color-mix(...)` 写进视图能绕过守卫（那曾是登记的已知开口）
+  // 判据覆盖函数形态：`rgba(...)`/`color-mix(...)` 写进视图同样算内联
   it('负断言：函数形态同样抓——视图里写死 rgba() 即红', () => {
     expect(scanColorLiterals([{ file: 'views/Fake.tsx', text: 'style={{ background: "rgba(0,0,0,.45)" }}' }]))
       .toEqual(['views/Fake.tsx: rgba('])

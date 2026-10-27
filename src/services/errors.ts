@@ -5,8 +5,8 @@ import { EpubImportError } from './epub/errors.js'
 
 /**
  * 书源不存在（API 层映射 404 NotFound）。
- * 此前是裸 Error + api/wire.ts 的中文前缀匹配（`message.startsWith('源不存在')`）——
- * 分类权活在文案作者手里，改错别字即改 HTTP 状态码；类型化后 instanceof 是唯一判据。
+ * 不要用裸 Error + 中文前缀匹配来分类：分类权会活在文案作者手里，改错别字即改 HTTP 状态码；
+ * 本类走 instanceof 作为唯一判据。
  */
 export class SourceNotFoundError extends Error {
   readonly sourceId: string
@@ -31,8 +31,8 @@ export class ChapterNotFoundError extends Error {
 
 /**
  * 书源缺规则导致某一面无法执行（API 层映射 422，wire 错误码 'RuleMissing'——
- * 与搜索面/探针的 RuleMissing 结果形态同一词汇；此前是裸 Error → 500 InternalError，
- * 用户看到的是「服务器内部错误」而不是「这源缺规则」）。
+ * 与搜索面/探针的 RuleMissing 结果形态同一词汇）。不要退回裸 Error：那会映射成 500，
+ * 用户看到「服务器内部错误」而不是「这源缺规则」。
  */
 export class RuleMissingError extends Error {
   /** 缺的是哪一面的规则（facet 词汇：toc / content …） */
@@ -86,8 +86,8 @@ export class InvalidRequestError extends Error {
 }
 
 /** 运行中重复提交任务：路由层映射 409 JobRunning（services 不 import api 层）。
- *  类住在错误分类学单点（`classify` 在本文件），任务模块只抛它——曾有反向 import
- *  （`errors` → `import-job`），探针状态单点接入后合成值环。 */
+ *  类住在错误分类学单点（`classify` 在本文件），任务模块只抛它；不要反向 import
+ *  （`errors` → `import-job`），那会与探针状态单点合成值环。 */
 export class JobRunningError extends Error {
   constructor(running: JobState) {
     super(`已有任务在运行（${running.kind === 'import' ? '导入' : '验证'} ${running.done}/${running.total}）`)
@@ -106,9 +106,8 @@ export class LocalNotMountedError extends Error {
 
 // ── 错误分类学单点 ────────────────────────────────────────────────────────
 // 「类 → 类目」的知识只在这里编码一次；HTTP 状态映射（api/wire.errorStatusOf）与
-// 探针错误码（search-face.searchErrorCodeOf）是它的小投影。此前同一分类学
-// 在两个 destination 各写一份（且 RuleMissing 有异常/结果两条路径）——加一个错误类
-// 要动两个模块加一份自觉。
+// 探针错误码（search-face.searchErrorCodeOf）是它的小投影。同一分类学只在
+// 这里定义；两个 destination 各写一份会让加一个错误类要动两个模块加一份自觉。
 
 /** 错误类目：规则求值 / 缺规则 / 网络抓取 / 资源缺席 / 本地导入两态 / 本地未挂载 / 任务互斥 / 其他。
  *  LocalImportError 不再自带 status、JobRunningError 的 409 特判包装与本地书面的

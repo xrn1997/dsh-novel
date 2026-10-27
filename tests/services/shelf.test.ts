@@ -90,8 +90,8 @@ describe('Shelf', () => {
     })
   })
 
-  // ── patch 写口：「null/undefined 键 = 保值」语义在 interface 上，
-  //    不再是调用方民俗（此前三处复读同一纪律，该用例覆盖的两处已修缺陷）─────────────
+  // ── patch 写口：「null/undefined 键 = 保值」语义住在 interface 上，
+  //    不是调用方民俗 ──────────────
   describe('update（patch 写口）', () => {
     it('只带 totalChapters：其余元数据全保（ReaderView 回写场景——此前被迫重发 sourceId+title）', async () => {
       const { s } = await tmpShelf()
@@ -115,7 +115,7 @@ describe('Shelf', () => {
     it('add 对已有书 = patch 语义：显式 undefined 自有键不再抹值（旧 {...existing,...input} 的雷）', async () => {
       const { s } = await tmpShelf()
       s.add({ sourceId: 's1', bookKey: 'k', title: 'T', author: 'A' })
-      // 模拟调用方构造的 input 带 `: undefined` 自有键——旧实现会把 author 抹掉
+      // 模拟调用方构造的 input 带 `: undefined` 自有键——保值语义同样适用，author 不被抹掉
       s.add({ sourceId: 's1', bookKey: 'k', title: 'T2', author: undefined })
       expect(s.get('k')).toMatchObject({ title: 'T2', author: 'A' })
     })

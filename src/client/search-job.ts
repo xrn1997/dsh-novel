@@ -74,7 +74,7 @@ export function useSearchJob(deps: JobWatchDeps, t: Translate = zhTranslate): Se
   const [round, setRound] = useState<SearchRound | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  /** 累积器 → 视图态：单点投影，别在多处各拼一份（曾经 progress/summary 各算一份百分比） */
+  /** 累积器 → 视图态：单点投影，别在多处各拼一份（progress 与 summary 不要各算一份百分比） */
   const publish = (a: Acc, running: boolean): void => {
     setRound({ id: a.id, keyword: a.keyword, total: a.total, done: a.since, groups: [...a.groups], running, cancelled: a.cancelled })
   }

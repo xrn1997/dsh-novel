@@ -32,9 +32,9 @@ describe('沙箱 legado 绑定与作用域（本轮修复钉子）', () => {
     expect(out2.value.kind).toBe('miss')
   })
   it('runScript 这一扇门收 EvalContext 的全部能力位：book/chapter 与 ctx.userAgent 都进得来', async () => {
-    // 这一条钉的是**门本身**：RunScriptOptions 曾逐字段抄一份 EvalContext 清单，book/chapter/
-    // userAgent/fetchPost 都不在清单上——同一扇门里 `java.getWebViewUA()` 与 `java.post(...)`
-    // 一律抛「未接线」。清单删掉之后，少一个能力位不再是可能的漏抄，而是编译期就传不进去。
+    // 这一条钉的是**门本身**：RunScriptOptions 直接收整份 EvalContext，不再逐字段抄清单——
+    // 少一个能力位就是编译期传不进去，不会到运行时才抛「未接线」（`java.getWebViewUA()` 与
+    // `java.post(...)` 就走这扇门）。
     const out = await runScript({
       code: 'book.bookUrl + "|" + chapter.title + "|" + chapter.index',
       loc, facet: 'content', scriptForm: true,
@@ -111,8 +111,9 @@ describe('沙箱 legado 绑定与作用域（本轮修复钉子）', () => {
     const seen: unknown[] = []
     const fetchImpl = async (url: string): Promise<{ body: string }> => { seen.push(url); return { body: 'OK' } }
     // 真源形态：上一段 JSONPath 产出 `['https://…']`，脚本直接 java.ajax(result)——
-    // 脚本侧按 String 形参转换，单元素数组的 toString 就是那条 URL；本仓此前把原值
-    // 交给请求组装层，炸成 `template.replace is not a function`（灯读文学 init 段实证）。
+    // 脚本侧按 String 形参转换，单元素数组的 toString 就是那条 URL。改这里注意：非串参数在入口
+    // 就归成串，别把原值交给请求组装层——那边按串操作，会炸成 `template.replace is not a function`
+    // （灯读文学 init 段实证）。
     const out = await runScript({
       code: 'java.ajax(["https://x.com/one"]); java.ajax(42); "done"',
       loc, facet: 'content', scriptForm: true,
@@ -188,8 +189,8 @@ describe('沙箱 legado 绑定与作用域（本轮修复钉子）', () => {
       loc, facet: 'content' as const, scriptForm: true,
       baseUrl: 'https://x.com', source: 'https://x.com', fetch: fetchImpl,
     }
-    // 修复前这三条分别是 string / object / string——源码文本选择了语义。
-    // 三种拼写现在都被放宽后的 SYNC_WORKER_RE 直接送进 worker（下标访问命中 `java[`）。
+    // 三种拼写都由 SYNC_WORKER_RE 直接送进 worker（下标访问命中 `java[`）。
+    // 改这里注意：别按源码文本判语义——下标访问与带注释的写法会漏判。
     const direct = await runScript({ ...base, code: 'typeof java.ajax("https://x.com/p")' })
     const bracket = await runScript({ ...base, code: 'typeof java["ajax"]("https://x.com/p")' })
     const commented = await runScript({ ...base, code: '/* java.ajax( */ typeof java["ajax"]("https://x.com/p")' })

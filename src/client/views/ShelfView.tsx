@@ -14,13 +14,14 @@ import { deleteBookCopy, deleteBooksCopy } from '../shelf-delete.js'
 import { filterShelfBooks, localImportLabel, localImportNote, SHELF_FILTERS, shelfCardMeta, shelfSourceTag } from '../shelf-view-model.js'
 import { coverTintClass, sourceTintClass } from '../util.js'
 
-/** 本地书保留源 id 归 wire 契约（`LOCAL_SOURCE_ID`）：此前此处手抄 '__local__'——
- *  服务端单主人在 src/services/localbooks.ts，client 纯度门禁拦跨半 import，字面量双份即漂移隐患。 */
+/** 本地书保留源 id 归 wire 契约（`LOCAL_SOURCE_ID`）：不要手抄 '__local__'——
+ *  单主人在 src/shared/wire.ts；服务端 localbooks 只 re-export，client 也直接取 wire，
+ *  字面量双份即漂移隐患。 */
 
 /** 书架 tab 内容（IA：书架/书城/书源管理是 NovelView 顶部的并列 tab，用户拍板）：
  *  行1 内容标题 + 灰字计数；行2 搜索框单独一行且整簇居中（聚合搜索 = 找新书入口）；
  *  行3 筛选簇（有书才渲染）；网格末位常驻「导入本地书籍」引导卡（空书架以 .novel-grid.solo
- *  单卡兜底）。旧「搜一本书」引导卡退役——同一职责不留第二个入口。
+ *  单卡兜底）。不做「搜一本书」引导卡——同一职责不留第二个入口。
  *  筛选与卡片元信息归 shelf-view-model（纯函数）；首字色块档位归 util.coverTintClass。
  *  承载元素口径：卡片与引导卡是真 <button>，删除钮是其**兄弟**而非后代（守卫
  *  tests/client/ui-system.test.tsx）；布局与配色归样式类，本文件零行内 style。
@@ -95,7 +96,7 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
     })
   }
   /** 取书架（挂载一次 + 有警告的导入留在本页后一次）：失败由投影落成 `[] + error`，
-   *  不许伪装成空架（历史 bug：网络失败 setBooks([]) → 渲染「书架空空」误导）。 */
+   *  不许伪装成空架（网络失败写成空数组会渲染「书架空空」误导）。 */
   const loadShelf = (): void => {
     void loadPanelShelf({
       apiGet: deps.apiGet,
@@ -349,7 +350,7 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
                     </div>
                   )
                 })}
-                {/* 网格末位常驻引导卡 = 导入本地书籍（「搜一本书」退役：搜索已由行2搜索框显式承担）。
+                {/* 网格末位常驻引导卡 = 导入本地书籍（搜索入口由行2搜索框承担）。
                     多选态里它也退场：正在挑要删的书时，末位摆一张「导入」卡是纯粹误触面。 */}
                 {selectMode ? null : importCard}
               </div>

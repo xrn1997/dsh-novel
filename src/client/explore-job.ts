@@ -12,9 +12,8 @@ import type { JobWatchDeps } from './deps.js'
  * 提交一轮 → 盯住它（SSE 优先、快照轮询兜底）→ **整体替换**视图态。
  *
  * 与 `search-job.ts` 的关键差别：那边的读面是**游标增量**（`added`/`next`，客户端累积），
- * 这边的读面是**全量快照**——因为续页改写的不只是条目清单，还有 `page` 与 `hasMore` 这些**整轮**
- * 读数，游标装不下「同一轮的读数变了」（旧版这里的理由是跨源归并会**修订已经发出去的条目**，
- * 那条理由随跨源浏览轴一起走了）。增量模型表达不了这种改写，所以这里不做累积器，
+ * 这边的读面是**全量快照**——续页改写的不只是条目清单，还有 `page` 与 `hasMore` 这些**整轮**读数，
+ * 游标装不下「同一轮的读数变了」；增量模型表达不了这种改写，所以这里不做累积器，
  * 每读到一帧就整体替换。代价（列表规模小到可忽略）换来一个不会说谎的读面。
  *
  * **身份闸在这里是「无条件整帧换掉」，不是一段比对**：`search-job.ts` 必须验 `job.id`，因为它的
@@ -40,8 +39,8 @@ import type { JobWatchDeps } from './deps.js'
  */
 
 /** 本轮视图态（服务端快照的投影；`running` 就是 UI 的「还在跑吗」判据）。
- *  旧版带着 `total`/`done`/`failures`——那是「一轮打多个源」的读数：单源下 `total` 恒为 1（一个常数）、
- *  `done` 与 `phase` 说的是同一件事、`failures` 退化成一条 `error` 泳道，三者一并收掉。
+ *  本模块不带 `total`/`done`/`failures`——那是「一轮打多个源」的读数：单源下 `total` 恒为 1（一个常数）、
+ *  `done` 与 `phase` 说的是同一件事、`failures` 退化成一条 `error` 泳道，三者都不进视图态。
  *  源身份这两条是「这一轮逛的是谁」的唯一说法，界面上每一处点名都读它。 */
 export interface ExploreRound {
   id: string
@@ -86,7 +85,7 @@ export interface ExploreJobView {
 }
 
 /** 快照 → 视图态的**唯一投影**，导出它：测试要钉的就是这份映射本身。让它留在模块内，测试就只能
- *  自己复制一份映射——那份复制迟早跟实现分叉，而且分叉的方向永远是「拿着旧形状继续跑」。 */
+ *  自己复制一份映射——那份复制迟早跟实现分叉，而且分叉的方向永远是「拿着过期形状继续跑」。 */
 export const toRound = (job: ExploreSnapshot): ExploreRound => ({
   id: job.id, sourceId: job.sourceId, sourceName: job.sourceName, kind: job.kind,
   books: job.books, running: job.phase === 'running',

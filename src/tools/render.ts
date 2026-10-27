@@ -3,8 +3,8 @@ import type { ShelfItem } from './shelf-item.js'
 /**
  * 工具面的**纯文本投影**：规范值 → 模型读到的那一段文案。
  *
- * 为什么单独立家：render 是工具的 interface（模型只读这一份），但此前六个 render 都内联在
- * `tools.ts` 的 `defineTool` 里，只有 search 有断言——其余五个的文案改动没有任何测试能拦住。
+ * 为什么单独立家：render 是工具的 interface（模型只读这一份）；若六个 render 都内联在
+ * `tools.ts` 的 `defineTool` 里，只有 search 有断言——其余五个的文案改动没有测试能拦住。
  * 纯函数可以直接喂规范值，不用起服务层；各工具定义只负责把 `text()` 包上。
  *
  * 规范值缺块即炸，不编「书目缺失」式回执：缺键投影归 `tools/project.ts`，render 只投影

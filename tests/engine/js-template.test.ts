@@ -10,10 +10,9 @@ import { evaluate } from '../../src/engine/index.js'
  * `@js: "https://…/chapter_list/100/{{$.book_id}}.txt"`（try/catch 选主备域名）；
  * js 段里嵌 `{{…}}` 的需求方现量重算走 `DSH_PARSE_CENSUS=1`。
  *
- * 本仓此前只对「模板字面段」做插值，js 段代码原样进沙箱 → 脚本返回**带字面花括号的残 URL**
- * 直接发出去（真机实证：米读小说 toc 404 打到
- * `…/chapter_list/100/%7B%7B$.book_id%7D%7D.txt`）。本仓既有口径写明「插值段 Miss → 整段 Miss，
- * 不发残 URL」，这里把同一条口径接到 js 段上。
+ * js 段里的插值在进沙箱前做完：别把 js 段原样送进去，否则脚本返回**带字面花括号的残 URL**
+ * 直接发出去（真机实证：米读小说 toc 404 打到编码后的花括号段）。口径与模板字面段同一：
+ * 插值段 Miss → 整段 Miss，不发残 URL。
  */
 
 const CTX = { html: '', json: { book_id: '9g7', data: { id: 12 } }, baseUrl: 'https://x.com' }

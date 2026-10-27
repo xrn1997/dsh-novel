@@ -145,7 +145,7 @@ describe('LocalBooks', () => {
 })
 
 // ── 格式分流与 EPUB 发布/读取/删除 ────────────────────────────────────────
-// 存量的 TXT 布局与元数据形态**一字不改**：旧 `<uuid>.txt` + 无 schemaVersion 的 `<uuid>.json`
+// 存量的 TXT 布局与元数据形态**一字不改**：`<uuid>.txt` + 无 schemaVersion 的 `<uuid>.json`
 // 继续按既有形态读；EPUB 是 `<uuid>/`（documents + resources + original.epub）+ schemaVersion=2
 // 的顶层元数据（提交标记）。判定按内容，后缀不参与。
 

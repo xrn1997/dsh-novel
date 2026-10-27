@@ -23,8 +23,8 @@ export interface ExportOptions {
   delayMs: number
   /** 起始章（1 基含端）。**必须已裁剪**：越界裁剪与「缺省 = 全本」是路由层的策略单点
    *  （它要在首包前拿这些数去写 `x-novel-total-chapters` / `x-novel-range`），本 module
-   *  不再抄第二份判据——此前两边各写一份 `clip` 与同一句「导出范围非法」，而这里的 clip
-   *  对唯一调用方恒等。越界只可能来自新调用方，故按前置条件抛，不静默产废包。 */
+   *  不再抄第二份判据——两边各写一份 `clip` 与「导出范围非法」会让判据分叉。
+   *  越界只可能来自新调用方，故按前置条件抛，不静默产废包。 */
   from: number
   /** 结束章（1 基含端）。同 `from`。 */
   to: number
@@ -41,7 +41,7 @@ export async function* exportBook(
   const toc = await deps.getToc(sourceId, bookKey)
   const { from, to } = opts
   // 空目录 / 越界 / 倒置合起来判：它们说的是同一件事——[from, to] 不是 toc 的一段。
-  // 曾经这两类各自有静默出口（空目录只发 BOM、倒置靠 clip 折回来），现在没有：
+  // 不要给这两类留静默出口（空目录只发 BOM、倒置靠 clip 折回来）：
   // 越界继续往下跑会印出「《书名》· undefined」的废包，那比抛错坏得多。
   if (from < 1 || to > toc.length || from > to) {
     throw new Error(`导出范围越界：[${from}, ${to}] 不在 [1, ${toc.length}] 内（裁剪归路由层）`)

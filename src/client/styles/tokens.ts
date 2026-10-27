@@ -12,7 +12,7 @@
  *       `var(--novel-*)` 引用都必须有定义。
  *  本层因此把用到的 token 先收进 `.novel-root, [data-novel-scope]` 一层局部变量：视觉规则
  *  只读局部变量，token→宿主、fallback→暗底老观感。双根覆盖与组件自带 `data-novel-scope` 的
- *  自足性**保留**（设置区块曾在独立 React 树，现虽已同树，组件在哪棵树渲染都应成立）。
+ *  自足性**保留**：组件在哪棵树渲染都应成立（设置区块现在与主视图同树，但规则不依赖这一点）。
  *
  *  ── 标度（sp/fs/r/shadow/z/dur）───────────────────────────────────────────────
  *  间距、字阶、圆角、阴影、层级、动效各有一套 named 标度，视觉规则里不散写像素：散值的代价
@@ -42,7 +42,7 @@ export const TOKENS_CSS = `
   --novel-brand: var(--dsw-alias-brand-primary, #2f6feb);
   --novel-primary-fill: var(--dsw-alias-button-primary-fill, #2f6feb);
   --novel-primary-hover: var(--dsw-alias-button-primary-hover, #3b7bf0);
-  /* brand 派生色：视图此前内联 #2f6feb14/1f/44 与 #79a8ff——brand 一换色即全部失联。
+  /* brand 派生色：视图不要内联 #2f6feb14/1f/44 与 #79a8ff——brand 一换色即全部失联。
      alpha 值按 --novel-brand 用 color-mix 派生（宿主换 brand / 主按钮换色自动跟随）；
      strong 走宿主「亮蓝语义文字」alias（无派生对应），fallback 即原内联色。 */
   --novel-brand-soft: color-mix(in srgb, var(--novel-brand) 8%, transparent);   /* 选中动作条底 */
@@ -64,7 +64,7 @@ export const TOKENS_CSS = `
   --novel-status-unverified: var(--dsw-alias-label-tertiary, #8b949e);
   /* 字面量（无宿主对应）：纯白字压在主按钮/错误徽标上 */
   --novel-on-solid: #fff;
-  /* 焦点环：走 brand（宿主主色）+ 2px 外偏移——原先借 label-secondary 与正文同色系，
+  /* 焦点环：走 brand（宿主主色）+ 2px 外偏移——不要借 label-secondary 与正文同色系，
      在密集列表里几乎找不着环；primary 钮上另换 --novel-text（brand 压 brand 等于没有）。 */
   --novel-ring: var(--novel-brand);
   /* ── 标度：间距 / 字阶 / 圆角 / 阴影 / 层级 / 动效 ── */

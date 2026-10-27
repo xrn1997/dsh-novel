@@ -68,7 +68,7 @@ export function createTranslate(ctx: CopyHostLike): Translate {
   const service = ctx.get?.('locale') as LocaleServiceLike | undefined
   if (service === undefined) return zhTranslate
   ctx.effect(() => service.register(COPY_NS, { zh: ZH, en: EN }), 'dsh-novel: copy dictionaries')
-  // 服务形状畸形（第三方包的旧版 / 半个实现）时 bind 可能缺席或返回非函数：locale 是可选服务，
+  // 服务形状畸形（第三方包 / 半个实现）时 bind 可能缺席或返回非函数：locale 是可选服务，
   // 宁可退回中文，也不能把首帧渲染炸掉。
   if (typeof service.bind !== 'function') return zhTranslate
   const bound = service.bind(COPY_NS)

@@ -20,8 +20,8 @@ export const SEARCH_CSS = `
 }
 .novel-group-head strong { font-size: var(--novel-fs-base); font-weight: 600; }
 /* 命中行：发丝分隔线列表（真实搜索动辄十几条命中，靠分隔线扫读）。
-   结构口径（本轮改）：行 = 容器 + **主按钮**（标题/副行）+ 兄弟动作钮。
-   旧结构是 div[role=button] 里套 button——只绑 onClick，键盘 Enter/Space 什么都不发生，
+   结构口径：行 = 容器 + **主按钮**（标题/副行）+ 兄弟动作钮。
+   不要用 div[role=button] 里套 button——只绑 onClick 会让键盘 Enter/Space 什么都不发生，
    且读屏念成「按钮 内含 按钮」。守卫见 ui-system.test.tsx。
    布局：主钮 flex:1 挤压、动作钮天然同行尾；丢掉 flex 会让钮掉到标题下方堆叠。 */
 .novel-row {
@@ -71,7 +71,7 @@ export const SEARCH_CSS = `
 /* 主钮复用 .novel-row-main（焦点环与键盘可达都归它认领），这里只把行内排版换成 flex：并写两个类
    是为稳赢那条的 padding 与 flex/min-width，不靠声明次序。两条都是这一行不折行的关键——
    flex-basis 让回 0：.novel-row-main 那条的 1 1 auto 拿内容宽当基准，长作者串一撑就把兄弟动作钮
-   挤到第二行（2026-10 用户实机反馈的那版三行形态）；基准 0 才是「先给动作钮留位，剩下归我」。
+   挤到第二行；基准 0 才是「先给动作钮留位，剩下归我」。
    nowrap 让内层不折行：多行容器里放不下的是**换行**而不是**收缩**，写了省略号也永远轮不到它。 */
 .novel-row-main.novel-book-main {
   display: flex; flex-wrap: nowrap; align-items: baseline; gap: var(--novel-sp-1) var(--novel-sp-4);

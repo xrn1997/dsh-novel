@@ -17,9 +17,9 @@ import type { JobState, SourcePublic } from '../../src/client/views/types.js'
 /**
  * 常驻状态层（`shell.overlay` 位）的接线钉子。
  * 为什么要存在：`conversation.view` 是 list 基数且壳层只渲染当前激活 entry（官方 slots 层级表 +
- * 宿主壳层 `renderSlot('conversation.view', …, { only: active.id })`），状态条原先住在
- * `SettingsSection` 里 ⇒ 用户一切 tab 就看不见仍在服务端跑的任务。
- * 本文件钉死新住址的几件事：常驻层自带任务泳道、空闲零占用、点击把用户送回现场并记下要看什么，
+ * 宿主壳层 `renderSlot('conversation.view', …, { only: active.id })`），状态条若挂在子视图里，
+ * 用户一切 tab 就看不见仍在服务端跑的任务——所以它住常驻层。
+ * 本文件钉死常驻层的几件事：自带任务泳道、空闲零占用、点击把用户送回现场并记下要看什么，
  * 以及「送回现场」要真的把小说面板带到前台——用户停在宿主别的界面上点「点此查看」，不能点了没反应。
  */
 
@@ -154,8 +154,8 @@ describe('任务泳道 = 跨界面的「去现场」（小说面板不在前台�
 
 /**
  * 状态层点任务泳道后的**消费半**：overlay 只把 running probe 喂进 `jobSurface`，`SettingsSection`
- * 消费「看任务卡」意图时，滚动必须落在**已经挂载**的卡片根节点上（这一跳此前只用一次性探针
- * 验证过，现转成入库钉子）。jsdom 没有排版引擎，`scrollIntoView` 用替身量调用次数、落点与参数。
+ * 消费「看任务卡」意图时，滚动必须落在**已经挂载**的卡片根节点上（不许靠一次性探针够着）。
+ * jsdom 没有排版引擎，`scrollIntoView` 用替身量调用次数、落点与参数。
  */
 describe('任务卡去现场（消费半：喂现场 → 消费意图 → 滚动）', () => {
   const cardIn = async (container: HTMLElement): Promise<HTMLElement> => {

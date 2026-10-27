@@ -6,8 +6,8 @@ import type { SearchGroup, SearchHit } from '../../src/shared/wire.js'
 
 /** 单源分类轮次的持有者：一轮 = **一个源 + 一个类**，跨页累积与「零新增即到底」的记忆都住在这里
  *  （浏览器半刻意什么都不握，读面是整帧替换的全量快照）。
- *  旧文件里那三族——按 sourceId 跨源累积、`skip` 的静默契约、「哪些源到底了」那份多源清单——
- *  测的都是「一轮打多个源」，浏览轴收成单源后它们的对象已不存在，随轴一起走。 */
+ *  单源轴别按多源语义加用例：跨源累积 / `skip` 静默契约 / 「哪些源到底了」的多源清单都属
+ *  「一轮打多个源」，而一轮只打一个源，那些对象不存在。 */
 
 const hit = (title: string, over: Partial<SearchHit> = {}): SearchHit => ({
   title, author: '甲', url: `https://s1/${title}`,

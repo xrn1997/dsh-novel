@@ -1,12 +1,11 @@
 /**
  * engine 公开面（收窄）：显式列出服务半依赖的引擎 API——
  * evaluate 求值入口（含 trace 变体）、URL 插值 + URL 选项分界式、错误类与判别、核心类型。
- * 此前 `export *` 把 parse/select/css/xpath/… 的内部细节全部泄漏成「对外承诺」，
- * 而 services/content（dom）、services/bridge 与 services/search-template（js-sandbox）、
- * 插件入口 index（js-sandbox）四处又绕过 barrel 直取——barrel 两头不是 interface。
+ * 公开面只列服务半依赖的引擎 API；`export *` 会把 parse/select/css/xpath 的内部细节
+ * 变成事实上的对外承诺。
  *
- * 收窄后：内部 module（parse/grammar/replace/variables/…）保留深路径直引作**自测 seam**
- * （tests 直引是测试需要，不是对外承诺）；服务半新消费点先问「这是引擎公开面吗」。
+ * 内部 module（parse/grammar/replace/variables/…）的深路径直引是既有消费点与**自测 seam**
+ * （tests 直引是测试需要，不是对外承诺）；服务半新增消费点先问「这是引擎公开面吗」。
  */
 export { evaluate, evaluateWithTrace } from './evaluate.js'
 export type { TraceStep, TraceResult } from './evaluate.js'

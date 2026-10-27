@@ -16,8 +16,8 @@ import { scriptGlobals, scriptGlobalOf, scriptInitOf, scriptKeyOf } from './scri
 /** JavaBridge 协议的唯一登记点在 js-protocol.ts 的 JAVA_PROTOCOL 表；此处只 re-export 类型。 */
 export type { JavaBridge } from './js-protocol.js'
 
-/** 沙箱宿主注入面。（曾设 `java?: JavaBridge` 覆盖点，全仓零生产者的假 seam，已删除：桥始终由
- *  evalJs 内部按协议表构造。） */
+/** 沙箱宿主注入面。桥始终由 evalJs 内部按协议表构造；不要在这里加 `java` 覆盖点——
+ *  那会造出没有生产者的假 seam。 */
 export interface JsHost {
   /** 上一段结果序列化（Value.text / List.items.join('\n') / 页面原文） */
   result: string
@@ -112,7 +112,7 @@ export interface JsOutcome {
 export type EvaluateRef = (sub: SubRule, data: unknown) => EngineValue
 
 /** 求值层 → 沙箱的**唯一调用描述符**：链上的 js 段与 runScript 都交这一份。
- *  位置元组曾是链协议，加一格要同时改两处 yield 与 driveSync 的下标；命名后加字段只改这里。 */
+ *  字段按名传递；不要改回位置元组——加一格就要同时改两处 yield 与 driveSync 的下标。 */
 export interface JsCall {
   code: string
   host: JsHost
@@ -129,7 +129,7 @@ const TIMEOUT = Symbol('js-sandbox-timeout')
  *  死循环，这一条管「await 一个永不 settle 的 promise」。它必须**晚于**调用方预算到，否则跑满预算
  *  的脚本会被自己判死；额外的那一截是给「主线程替 worker 服务一发宿主调用」的往返留的余量——
  *  主线程自己那条 race 没有这趟往返，因此用整额预算，不加宽限（见 `evalJs` 里的 race）。
- *  原先它是 `+ 5000` 的字面量，藏在 race 的参数式里，看不出谁是主人。 */
+ *  这个宽限必须独立命名并只在这里定义；不要在 race 的参数式里写裸数字，否则没人看得出它的归属。 */
 const ASYNC_GRACE_MS = 5_000
 
 /** worker 侧单次宿主往返的兜底死线：脚本在 worker 里同步等主线程服务那一发，等到这里就抛。
@@ -195,7 +195,7 @@ const SOURCE_GLOBAL = scriptGlobalOf('source')
  * 宿主错误只取 `.message` 后以 vm realm Error 重抛。故用户代码沿 `.constructor` 或错误对象都够不到
  * 宿主 realm；vm realm 内 codeGeneration:{strings:true} 允许 eval / Function，但入口仍锁死。
  * **宿主帧通道已单独关掉**：V8 会把 CallSite 交给 `Error.prepareStackTrace`，worker 的 CJS 宿主帧
- * 曾可经它的 `getThis()`/`getFunction()` 取到 `require`（2026-10-21 实证）；本闭包把该属性锁死。
+ * 可经它的 `getThis()`/`getFunction()` 取到 `require`；本闭包必须把该属性锁死。
  * vm 仍是纵深防御层，不是 OS 级安全沙箱（见 `docs/adr/0004`）。
  */
 const BOOTSTRAP = `;(function (g) {
@@ -209,8 +209,8 @@ const BOOTSTRAP = `;(function (g) {
   hide('__host_call__')
   hide('__init__')
   // V8 格式化错误栈时会回调 realm 里的 Error.prepareStackTrace，并把 CallSite 交给它；CallSite
-  // 的 getThis()/getFunction() 能取到**宿主帧**的 this/函数——worker 的 CJS 宿主帧曾可据此
-  // 直达 require（2026-10-21 复核实证）。锁成不可写、不可配置，用户脚本改不掉；默认格式化仍给出
+  // 的 getThis()/getFunction() 能取到**宿主帧**的 this/函数——worker 的 CJS 宿主帧可据此
+  // 直达 require。锁成不可写、不可配置，用户脚本改不掉；默认格式化仍给出
   // 字符串栈。vm 仍是纵深防御层，不是 OS 级安全沙箱。
   try {
     Object.defineProperty(Error, 'prepareStackTrace', { value: undefined, writable: false, configurable: false })
@@ -497,7 +497,7 @@ ${asyncBridgeSource()}
             const st = { key: null, parts: [] }
             // Java 的 Mac 契约：update(byte[]) 累加、update(byte) 追加单字节、doFinal() 结算后复位、
             // doFinal(input) ≡ update(input) + doFinal()。认不出的字节载荷形态如实抛，不静默丢弃
-            // （曾静默丢弃 → 零字节签名 → 站点拒给空/乱正文，是静默出错值而不是报错）。
+            // 不要静默丢弃：丢弃会产出零字节签名，站点拒给空/乱正文，是静默错值而不是报错。
             const push = function (v) {
               if (Array.isArray(v)) st.parts.push(v)
               else if (typeof v === 'number') st.parts.push([v])
@@ -593,8 +593,8 @@ ${asyncBridgeSource()}
     },
   }
   // 未知包路径**如实点名**（上游 Rhino 的 Packages 是惰性命名空间：取到名字不炸、用到才炸——本代理同语义）。
-  // 曾是普通对象字面量：未实现路径取到 undefined → 抛裸 TypeError，既说不清是哪条包路径，也不在审计
-  // 归因的任何锚点里。现库真量（2026-09-28 扫）：java.net 2 处、android.webkit / io.legado 各 1 处。
+  // 未实现路径必须点名到包路径：普通对象字面量会取到 undefined → 抛裸 TypeError，既说不清是哪条
+  // 包路径，也不在审计归因的任何锚点里。
   // 注意：本段是 BOOTSTRAP 模板字符串的一部分——注释里不许出现反引号与美元花括号。
   var pkgUnknownPath = function (path) {
     var boom = function () { throw new Error('未知 Packages 包路径：' + path) }
@@ -755,8 +755,8 @@ ${asyncBridgeSource()}
   }
   g.__mkElem__ = mkElem
   g.__wrapElems__ = wrapElems
-  // async 行的挂载行由协议表生成（js-protocol.asyncMountSource）——新增异步方法只该动表，
-  // 手工列表曾把「挂上了没有」交给记性。
+  // async 行的挂载行由协议表生成（js-protocol.asyncMountSource）——新增异步方法只该动表；
+  // 不要手写挂载列表，那会把「挂上了没有」交给记性。
   g.java = {
 ${asyncMountSource()}
     log: log('console.log'),
@@ -803,8 +803,8 @@ ${asyncMountSource()}
     }
   })
   // 宿主桩名单：只放本仓真没有对应实现的名字（书源会调、但需安卓宿主/WebView/字体栈）。
-  // 曾把协议表已有真实现的摘要/HMAC 族误列在此、被本循环覆盖成抛错桩（协议表测试全绿而脚本一调就报
-  // 「需要安卓宿主环境」）——现由普查面 C 钉住不许复发。
+  // 只列协议表没有真实现的名字；若把已有实现的方法列进来，本循环会把它覆盖成抛错桩，
+  // 协议表测试仍绿而脚本一调就报「需要安卓宿主环境」。普查面 C 钉住这条边界。
   ;['startBrowserAwait','refreshTocUrl','ajaxAll','createAsymmetricCrypto',
     'aesBase','queryTTF','queryBase','replaceFont',
     'createSign'].forEach(function (n) {
@@ -969,8 +969,8 @@ export async function evalJs(call: JsCall): Promise<JsOutcome> {
   const jsLibCode = await resolveJsLib(ctx.jsLib, ctx, loc, facet)
   const useWorker = SYNC_WORKER_RE.test(jsLibCode + '\n' + code)
   // JSON 页的 `result` 绑定：整页/条目上下文是合法 JSON 时按**解析后的对象**绑定——
-  // `result.chapterTitle`、`result.data.list` 这类字段访问形态全靠它（曾恒为原文字符串 → 字段全
-  // undefined → 目录脚本产空）。
+  // `result.chapterTitle`、`result.data.list` 这类字段访问形态全靠它；若绑成原文字符串，
+  // 字段会全 undefined，目录脚本产空。
   const pageRaw = host.result ?? ''
   const trimmedResult = pageRaw.trim()
   const resultJson = host.resultKind === 'page'
@@ -1029,7 +1029,7 @@ export async function evalJs(call: JsCall): Promise<JsOutcome> {
     // key/page/result/baseUrl/source/src/book/chapter 已由 bootstrap 注入为全局——wrapper 不再声明
     // 同名参数（真源有 `let page = java.get("page")` 的重声明形态，参数位会撞 Identifier already declared）。
     // **非严格模式（钉死）**：书源脚本按 sloppy 语义执行，`next = []` 这类未声明赋值就是写全局，
-    // 真实源大量依赖（现库 18/214 源某处规则串含 `next = [`，2026-09-28 按 raw 扫、判据不限首行）。
+    // 真实源大量依赖（读数与普查口径住矩阵行 `h-rhino-vs-vm` 的 note）。
     // 逃逸防御不靠严格模式：vm realm 隔离 + 宿主入口锁死才是边界（eval 允许，但不跨 realm），见 BOOTSTRAP 顶注。
     // wrapped 文本在 evalJs 顶部构造（与 worker 共用同一份）。
 
@@ -1078,8 +1078,8 @@ export async function evalJs(call: JsCall): Promise<JsOutcome> {
 }
 
 /** 脚本形态执行：完成值即结果；**编译期** SyntaxError（顶层 return/await）回落 async IIFE 函数体形态。
- *  判别必须在编译期（new vm.Script 只编译不执行）——曾按执行后的异常类名判，运行时 SyntaxError
- *  （JSON.parse 坏串等）被误判成顶层 return 形态静默回落 wrapped，表达式脚本恒 Miss（比报错更坏）。
+ *  判别必须在编译期（new vm.Script 只编译不执行）。不要按执行后的异常类名判：运行时 SyntaxError
+ *  （JSON.parse 坏串等）会被误判成顶层 return 形态并静默回落 wrapped，表达式脚本恒 Miss（比报错更坏）。
  *  跨 realm `instanceof SyntaxError` 不成立，按 constructor.name 判定。
  *  **worker 里有这份的文本抄本**（WORKER_SRC 的 runAsScript，worker 代码以字符串交付够不到本函数）：
  *  改这里必须同时改那里，两路一致由 `tests/engine/json-parse-object-idempotent.test.ts` 钉住。 */
@@ -1169,8 +1169,8 @@ function sanitize(v) {
 }
 // 脚本形态判别：**编译期**判 SyntaxError，与主线程 runAsScript 同口径。这里是那份的文本抄本
 // （worker 代码以字符串交付，够不到宿主函数）——改一处必须改两处，两路一致由
-// tests/engine/json-parse-object-idempotent.test.ts 钉住。曾按执行后异常类名判，会把运行时
-// SyntaxError 误当顶层 return 形态并重跑（ajax 重发、站点两趟，且可能静默 Miss）。
+// tests/engine/json-parse-object-idempotent.test.ts 钉住。不要按执行后异常类名判：运行时
+// SyntaxError 会被误当顶层 return 形态并重跑（ajax 重发、站点两趟，且可能静默 Miss）。
 function runAsScript(code, wrapped, context, timeout) {
   try { new vm.Script(code) }
   catch (e) {
@@ -1267,7 +1267,7 @@ async function evalJsInWorker(a: WorkerRunArgs): Promise<JsOutcome> {
     if (!result.ok) {
       // worker 里 vm 的超时错误只有 message/stack 过得到边界（`ERR_SCRIPT_EXECUTION_TIMEOUT`
       // 这个 code 留在对端 realm）——在此映射回本仓口径「脚本超时（>Nms）」，否则同一条件
-      // 在主线程与 worker 两条路上报两种错，用户与错误分类都看不出是超时（2026-09 审查）。
+      // 在主线程与 worker 两条路上报两种错，用户与错误分类都看不出是超时。
       if (/Script execution timed out/i.test(result.message ?? '')) {
         throw jsTimeoutErr(a.timeout, a.code, a.loc, a.facet)
       }
@@ -1487,12 +1487,12 @@ const COOKIE_JARS = new Map<string, Map<string, string>>()
 
 /** 源级状态的四张进程级表（本仓按源建档）：COOKIE_JARS（cookie 垫片）、SOURCE_VARS（source.put/get
  *  的键值表）、SOURCE_STRINGS（source.setVariable/getVariable 的单串槽）、CACHE_STORES（cache 垫片）。
- *  四者必须分开——曾把串槽与键值表塞同一张 Map，setVariable 顺手 clear() 整表（见 SourceSession 注释）。
+ *  四者必须分开——把串槽与键值表塞进同一张 Map 会让 setVariable 顺手 clear() 整表（见 SourceSession 注释）。
  *  这组是**进程内缺省实现**；生产组合根注入 `services/source-session.ts` 的 `FileSourceSession`
  *  （source-state.json，跨重启；矩阵 `h-source-variable-persistence`）。 */
 const SOURCE_VARS = new Map<string, Map<string, string>>()
 
-/** 进程级三张表（生产）：按源建档、跨调用/跨服务实例存活——与旧实现同生命周期 */
+/** 进程级三张表（生产）：按源建档、跨调用/跨服务实例存活 */
 const SOURCE_STRINGS = new Map<string, string>()
 const CACHE_STORES = new Map<string, Map<string, string>>()
 
@@ -1526,7 +1526,7 @@ function sessionOf(
   }
 }
 
-/** 进程级缺省会话（生产）：按源建档、跨调用/跨服务实例存活——与旧实现行为一致 */
+/** 进程级缺省会话（生产）：按源建档、跨调用/跨服务实例存活 */
 export const processSession: SourceSession = sessionOf(COOKIE_JARS, SOURCE_VARS, SOURCE_STRINGS, CACHE_STORES)
 
 /** 全新隔离会话（测试）：与进程级实例、与其他隔离实例互不可见——跨源污染用例的入口 */
@@ -1565,7 +1565,7 @@ function parseLineFromStack(stack: string): number | undefined {
   // 语法错误栈无列号形态（evalmachine.<anonymous>:N）
   const noCol = stack.match(/<anonymous>:(\d+)\b/)
   if (noCol) return Math.max(1, Number(noCol[1]) - 1)
-  // 无行号信息 → undefined（此前返回 1 会**谎报「第 1 行」**；errors 侧 `loc.line ?` 判定据此省略行号）
+  // 无行号信息 → undefined。不要兜底成 1：那会**谎报「第 1 行」**；errors 侧 `loc.line ?` 据此省略行号。
   return undefined
 }
 

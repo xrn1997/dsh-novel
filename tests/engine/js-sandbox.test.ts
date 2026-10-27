@@ -111,7 +111,7 @@ describe('@js 沙箱', () => {
       + 'return called + "|" + (s === "hacked" ? "hacked" : "default")',
     )
     expect(main.value).toEqual({ kind: 'value', text: 'false|default' })
-    // worker 路径的宿主帧曾可直接取到 require；同一把锁在 BOOTSTRAP 里，worker 重跑同一份引导。
+    // 宿主帧拿不到 require：同一把锁写在 BOOTSTRAP 里，worker 重跑同一份引导。
     // 断言 prepared 标志本身，不依赖「默认栈里恰好没有 function 字样」。
     const worker = await run(
       'var called = false;'
@@ -252,7 +252,7 @@ describe('@js 沙箱', () => {
     const withUa = await run('return java.getWebViewUA()', hostOf(), ctxOf({ userAgent: () => 'UA-from-fetch' }))
     expect(withUa.value).toEqual({ kind: 'value', text: 'UA-from-fetch' })
     await expect(run('return java.getWebViewUA()')).rejects.toThrow(/取不到出站 UA/)
-    // androidId 现在读宿主设备 ID（未接线点名，不是 TypeError: is not a function）
+    // androidId 读宿主设备 ID（未接线点名，不是 TypeError: is not a function）
     await expect(run('return java.androidId()')).rejects.toThrow(/设备 ID/)
   })
   it('java.head(url, headers) → 数据面方法壳（statusCode/url/headers()/cookies()；头名大小写不敏感）', async () => {
@@ -321,7 +321,7 @@ describe('@js 沙箱', () => {
   })
   // `connect(...)` 的返回对象上，`.url` 与 `.raw().request().url()` 是**同一个值**（跟随重定向后的
   // 末次请求）；全本同人小说网的 searchUrl 脚本靠 `connect(so).raw().request().url()`
-  // 取落地地址再拼分页 URL（此前本仓报 `raw is not a function`，源整条判坏）。
+  // 取落地地址再拼分页 URL（改这里注意：raw/request 缺一环，整条源在运行时就判坏）。
   it('java.connect(...).raw().request().url() → 落地地址，且与 .url 同值（重定向后的末次请求）', async () => {
     const ctx = ctxOf({ fetch: async () => ({ body: 'B', finalUrl: 'https://m.example.com/final' }) })
     const v = await run(
@@ -461,8 +461,8 @@ describe('@js 沙箱', () => {
   })
 
   it('getString 二参布尔 = unescape 开关（对面双参重载），不再被当 isUrl 抛错', async () => {
-    // 本行原先钉的是「isUrl=true 守门必炸」——那条守门建在误读上：第二参是 unescape，
-    // isUrl 在第三参，且 isUrl 也**不抓取**（只绝对化）。见 matrix h-get-string-is-url。
+    // 二参布尔是 unescape，isUrl 在第三参，且 isUrl 也**不抓取**（只绝对化）。
+    // 别按 isUrl 读第二参：那会把「不要反转义」的意图反过来执行。见 matrix h-get-string-is-url。
     const fake = (): EngineValue => ({ kind: 'value', text: 'X' })
     const unescapeOn = await run('return java.getString("@css:h1", true)', hostOf(), ctxOf(), fake)
     expect(unescapeOn.value).toEqual({ kind: 'value', text: 'X' })
@@ -569,8 +569,8 @@ describe('宿主垫片（真实源用到的缺失 API）', () => {
   it('source.getVariable/setVariable 是**单串槽**（与 source.put 的键值表分开存）', async () => {
     const ctx = ctxOf()
     expect((await run('return source.getVariable() || "(空)"', hostOf(), ctx)).value).toEqual({ kind: 'value', text: '(空)' })
-    // getVariable 直返那串——本仓曾把它做成「整表 JSON.stringify」，脚本按字符串用就拿到
-    // 一层 JSON 壳（存自定义域名的源正是直接把这串拼进 URL 的写法）
+    // getVariable 直返那串：改这里注意别改成整表 JSON——按字符串用的脚本会多拿到
+    // 一层 JSON 壳（存自定义域名的源正是把它拼进 URL 的写法）
     await run('source.setVariable("x.com"); return "ok"', hostOf(), ctx)
     expect((await run('return source.getVariable()', hostOf(), ctx)).value).toEqual({ kind: 'value', text: 'x.com' })
     await run('source.setVariable(JSON.stringify({host:"y.com"})); return "ok"', hostOf(), ctx)
@@ -585,7 +585,7 @@ describe('宿主垫片（真实源用到的缺失 API）', () => {
     // 但 `source.get("x") === ""` 这类判等只有这一形状才对
     expect((await run('return source.get("missing") === "" ? "空串" : String(source.get("missing"))', hostOf(), ctx)).value)
       .toEqual({ kind: 'value', text: '空串' })
-    // 写串槽**不清**键值表（旧实现同一张 Map，setVariable 顺手 clear()）
+    // 写串槽**不清**键值表：两者分开存，别合并回同一张 Map（setVariable 会顺手清空整表）
     await run('source.setVariable("S"); return "ok"', hostOf(), ctx)
     expect((await run('return source.get("searchMode")', hostOf(), ctx)).value).toEqual({ kind: 'value', text: 'author' })
     expect((await run('return source.getVariable()', hostOf(), ctx)).value).toEqual({ kind: 'value', text: 'S' })
@@ -758,7 +758,7 @@ describe('对面 Rhino 面：Packages.org.jsoup 与 book 实体方法（真机�
     // 一看像缺陷：BOOTSTRAP 先 `g.book = mkHostObj(d.book)` 补齐方法面，紧跟 `g.book = d.book || {}`。
     // 实测是**冗余**而非覆盖——`js-sandbox.ts` 的 init 恒传对象（`book: ctx.book ?? {}`），于是
     // mkHostObj 就地给同一个对象加方法、那行再把同一个对象赋回去。**先测再改**：本用例写出来就直接绿。
-    // 留着它是因为这条不变量此前没有钉子：方法面不该依赖「调用方注入了什么」。
+    // 回归钉子：方法面不该依赖「调用方注入了什么」。
     const { evaluate } = await import('../../src/engine/index.js')
     const v: any = await evaluate(
       '<js>typeof book.getVariable + "/" + typeof chapter.putVariable + "/" + typeof book.getOrigin</js>',
@@ -774,7 +774,7 @@ describe('对面 Rhino 面：Packages.org.jsoup 与 book 实体方法（真机�
   it('源实体字段 bookSourceComment / bookSourceName 脚本可见（对面 source 就是 BookSource 实体）', async () => {
     // 现库按 raw 全串扫的命中样本：涩涩俱乐部把 `source.bookSourceComment` 当**解密脚本的存放处**
     // （ruleContent.replaceRegex 里插值读它再执行）；`bookSourceName` 是顺手补正（BOOTSTRAP 早就
-    // 读 `d.sourceName`，但此前没人写过它 → 恒空串，属静默错值）。服务层按 raw 现读（bridge.rawStringField）。
+    // 读 `d.sourceName`，若不接线则恒空串、属静默错值）。服务层按 raw 现读（bridge.rawStringField）。
     const r: any = await runScript({
       code: 'source.bookSourceComment + "|" + source.bookSourceName',
       loc: { segmentIndex: 0, segmentRaw: '@js:test' }, facet: 'rule', scriptForm: true,

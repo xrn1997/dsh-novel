@@ -1,9 +1,9 @@
 /** 书源待办收件箱块（`NOVEL_CSS` 的第 4 块）：调度台 IA 的任务卡网格与列表头读数带。 */
 export const SOURCES_CSS = `
-/* ── 书源待办收件箱（2026 调度台 IA，用户拍板：反常置顶、任务卡横排）──
+/* ── 书源待办收件箱（反常置顶、任务卡横排）──
    宽屏口径：auto-fit 卡片网格——横跨整列的长条在 1600px 内容列下中间空、动作钮孤悬列尾
    （悬浮碎片病，实测用户反馈）；窄屏/会话列拖窄自动堆叠。
-   读数职责从状态 chips 移交此处：坏源/未验证的数量与处置动作同框，chips/.novel-chip-dot 退役。 */
+   读数职责归此处：坏源/未验证的数量与处置动作同框，不用状态 chips。 */
 .novel-inbox { border: 1px solid var(--novel-border); border-radius: var(--novel-r-md); background: var(--novel-layer-2); }
 .novel-inbox-head { display: flex; align-items: center; gap: var(--novel-sp-3);
   padding: var(--novel-sp-3) var(--novel-sp-4); border-bottom: 1px solid var(--novel-border-faint); }
@@ -28,7 +28,7 @@ export const SOURCES_CSS = `
   padding: var(--novel-sp-3) var(--novel-sp-4); border-bottom: 1px solid var(--novel-border-faint);
   container-type: inline-size; }
 .novel-list-head strong { font-size: var(--novel-fs-base); }
-/* 状态带（2026-09）：全库读数的唯一住址（待办卡可忽略，读数不能跟着提示一起消失）。
+/* 状态带：全库读数的唯一住址（待办卡可忽略，读数不能跟着提示一起消失）。
    点号是分隔符不是内容，故走 ::before——加一条数就多一个点，视图里不抄分隔符。
    非 0 的 未验证/坏源 才吃 warn/err 色（0 是"没事"，不该红）；.slim 是窄列可牺牲的部分 */
 .novel-src-stats { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: var(--novel-sp-2);
@@ -38,7 +38,7 @@ export const SOURCES_CSS = `
 .novel-src-stats .warn { color: var(--novel-warn); }
 .novel-src-stats .err { color: var(--novel-err); }
 /* 窄列退化：留「共 N 个源 · 已启用 M」，掉 已停用/未验证/坏源（丢了能从下拉再筛回来，宽列
-   也在同一屏）；再窄由 flex-wrap 自然折行（不裁字）。断点 1000px 由渲染台实测（2026-09-19：
+   也在同一屏）；再窄由 flex-wrap 自然折行（不裁字）。断点 1000px 由渲染台实测：
    五项自然宽 326px、退化后 140px，退化买回约 170px 单线余量；宿主内容列常态 ~1600 全五项
    同线）。 */
 @container (max-width: 1000px) {

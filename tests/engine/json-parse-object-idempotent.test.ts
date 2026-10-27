@@ -39,10 +39,8 @@ describe('JSON.parse 对象幂等 + 编译期 SyntaxError 判别', () => {
 })
 
 /**
- * 同一族 bug 的**另一条路**（2026-09 审查实证）：上面那条编译期判别只修在主线程的 `runAsScript`
- * 里，worker 的 WORKER_SRC 仍按「执行 code → 捕获到 SyntaxError 就重跑 wrapped」判别。
- * 编译期 SyntaxError（顶层 return）在两条路上都不执行脚本，所以只有**运行时** SyntaxError
- * 会暴露分叉：worker 已经把脚本跑了一遍（ajax 已发出去）才拿到异常，重跑 = 站点两趟 +
+ * 两条路同口径：worker 路不许靠「捕获到 SyntaxError 就重跑 wrapped」判别形态。
+ * 改这里注意：运行时 SyntaxError 时脚本已经跑过一遍（ajax 已发出去），重跑 = 站点两趟 +
  * 非幂等写入两遍；若第二遍恰好不抛，wrapped 形态无 return → 完成值 undefined → **静默 Miss**
  * ——本仓定的最高罪（空结果冒充失败）。fetch 计数自证真走了 worker 那条路。
  */

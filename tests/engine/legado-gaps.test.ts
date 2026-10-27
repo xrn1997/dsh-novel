@@ -10,9 +10,9 @@ import { JsSandboxError } from '../../src/engine/errors.js'
 import type { EvalContext, Facet, SegmentLoc } from '../../src/engine/types.js'
 
 /**
- * 真机缺口修复的回归钉子（29 条书架实测诊断的五处修复）：
+ * 真机缺口的回归钉子（29 条书架实测诊断出的五处缺口）：
  * A. cache.putMemory/getFromMemory/deleteMemory 三别名 + java.randomUUID
- * B. `tag.li.` 尾点号（!排除 切走 base 后的尾巴）不再炸选择器
+ * B. `tag.li.` 尾点号（!排除 切走 base 后的尾巴）不炸选择器
  * E. 字节组方法 / downloadFile↔readTxtFile / Packages.*（PNG/AES/HMAC）沙箱面
  */
 
@@ -120,7 +120,8 @@ describe('E-2. downloadFile ↔ readTxtFile（进程内暂存，不暴露真实�
     expect(() => invokeJavaMethod(depsOf(), 'readTxtFile', ['/etc/passwd'])).toThrow(/只支持本进程 downloadFile/)
   })
   it('选项后缀 `,{…}` 与逗号前空格都不进扩展名推断（分界式与 request 同源）', async () => {
-    // 回归钉子：此处曾自抄一份分界式且少了前导 `\s*`，带空格的 URL 会把尾空格带进扩展名匹配 → 回落 `.bin`
+    // 回归钉子：扩展名推断与 request 同源，前导空格必须一起吃掉——带空格的 URL 会把尾空格
+    // 带进扩展名匹配 → 回落 `.bin`。
     const ctx = { fetchRaw: async () => Buffer.from('89504e47', 'hex') } as EvalContext
     const p = (await invokeJavaMethod(depsOf({ ctx }), 'downloadFile', ['https://x.com/a/key.png ,{"method":"POST"}'])) as Promise<string>
     expect(p).toMatch(/^\/dsh-cache\/[0-9a-f]{32}\.png$/)
@@ -242,8 +243,8 @@ describe('E-4. Packages.* 沙箱面（爱腐文密钥图解密链的载体）', 
   it('Packages.android.util.Base64.decode 出字节组：真源的「解 base64 拿真地址」链（Hi歌曲音乐网 ruleContent.content）', async () => {
     // 现库真量（2026-09-28 按 raw 全串扫）：`Packages.android.util.Base64.decode` **1 源 1 处**——
     // Hi歌曲音乐网 的正文规则从页面里的 `let code = "…"` 抠出 base64，解成字节再按 UTF-8 还原成
-    // 真正的地址。此前 `android.util` 整条路径未挂载 ⇒ 抛「未知 Packages 包路径：android.util.Base64」
-    // ⇒ 整条正文规则失败（对面 Rhino 有真 android.util.Base64，对面读得出）。
+    // 真正的地址。`android.util` 路径已挂载：缺挂载会抛「未知 Packages 包路径」⇒ 整条正文规则失败
+    // （对面 Rhino 有真 android.util.Base64，对面读得出）。
     const realUrl = 'https://higequ.com/play/12345'
     const b64 = Buffer.from(realUrl, 'utf8').toString('base64')
     const r = await run(
@@ -279,12 +280,12 @@ describe('E-4. Packages.* 沙箱面（爱腐文密钥图解密链的载体）', 
     // 现库真量（2026-09-28 按 raw 全串扫）：`Packages.java.net` 2 处（海棠搜书 loginUrl 的
     // `new Packages.java.net.URL(u)` 加 openConnection 那一路）、`android.util` / `android.webkit` /
     // `io.legado` 各 1 处。语义对齐对面 Rhino：`Packages.x.y` 是**惰性命名空间**（truthy，可探测），
-    // 只有真去 new/调用才抛 ClassNotFound。此前本仓的 `g.Packages` 是普通对象字面量，未实现路径
-    // 取到的是 `undefined` → 抛裸 `TypeError: Cannot read properties of undefined`：既没说是哪条包路径，
-    // 也让审计归因认不出（那条消息不在任何锚点里 → 会落 `unattributed` 而不是 `host-gap`）。
+    // 只有真去 new/调用才抛 ClassNotFound。改这里注意：`g.Packages` 不能是普通对象字面量——
+    // 未实现路径会取到 `undefined`、抛裸 TypeError：既没说是哪条包路径，也让审计归因认不出
+    // （那条消息不在任何锚点里 → 会落 `unattributed` 而不是 `host-gap`）。
     const probe = await run('String(typeof Packages.java.net)')
     expect(String((probe.value as { text?: string }).text)).not.toBe('undefined')  // 包名可探测
-    // 2026-10-20：java.net.URL 已挂载（安全重开，走 ctx.fetchConn），不再是未知路径
+    // java.net.URL 走 ctx.fetchConn 挂载（安全重开），不在未实现路径集合里
     const u = await run("String(new Packages.java.net.URL('https://x'))")
     expect(String((u.value as { text?: string }).text)).toBe('https://x')
     const e2 = await run('new Packages.android.webkit.WebView()').catch((x: Error) => x)
@@ -310,7 +311,7 @@ describe('E-4. Packages.* 沙箱面（爱腐文密钥图解密链的载体）', 
     const r = await run(`
       var m = Packages.javax.crypto.Mac.getInstance('HmacSHA256');
       m.init(new Packages.javax.crypto.spec.SecretKeySpec([1,2,3], 'HmacSHA256'));
-      m.update(4);                            // 单字节实参：Java 收，此前被静默丢弃
+      m.update(4);                            // 单字节实参：Java 收，不得静默丢弃
       JSON.stringify(m.doFinal([5,6,7]))      // doFinal(input) ≡ update(input) + doFinal()
     `)
     expect(JSON.parse(String((r.value as { text?: string }).text))).toEqual(expectMac)

@@ -26,11 +26,11 @@ import type { MergedBook, SearchHit } from './types.js'
  *  呈现口径不变：进度一条线 + 灰字、组头=源名+状态徽标+灰字计数、命中行 hover 行式、
  *  失败源收一行 details。测试钉子：placeholder「书名 / 作者」、form aria-label「搜索书籍」
  *  （getByRole('form') 依赖）、空态两分支文案原文。
- *  在途循环的归属已搬走：本组件不再持有批请求，只 `POST search/job` + 读 `search/job-status`
- *  （接线在 `client/search-job.ts`）。为什么搬：宿主 `conversation.view` 一次只渲染一个视图，
- *  切 tab 即卸载——原先结果随组件清零、整轮重打（实测）。现在切走只是没人看，切回来从 `since=0`
- *  重拉一遍即可恢复（本轮真实参搜数、已完成数、命中分组全在快照里）。
- *  陈旧回调防线换了主人：轮次身份就是服务端 jobId，迟到的上一轮响应在 `search-job` 里按身份丢弃。
+ *  在途循环归 `client/search-job.ts`：本组件不持有批请求，只 `POST search/job` + 读
+ *  `search/job-status`。宿主一次只渲染一个视图，切 tab 即卸载；循环若留在这里，结果会随组件
+ *  清零、整轮重打。切走只是没人看，切回来从 `since=0` 重拉一遍即可恢复
+ *  （本轮真实参搜数、已完成数、命中分组全在快照里）。
+ *  陈旧回调防线在 `search-job`：轮次身份就是服务端 jobId，迟到的上一轮响应在那里按身份丢弃。
  *  轮级派生的住址也不在本文件：收口计数住 `shared/round-summary.ts`，两条轴的行身份与逐源回读
  *  住 `search-view-model.ts`。 */
 
@@ -50,7 +50,7 @@ export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): 
     // route.keyword 只消费一次，提交即摘除：routeStore 是跨卸载存活的现场（store.ts），
     // 不摘的话「退出小说界面再进（route 还带着关键词重新挂载）」与「从书架新鲜跳入」在
     // 挂载时不可分——重挂载会无条件重新提交，而服务端搜索读面是单槽（services/search-job.ts
-    // 的 start：新提交即替换，旧轮在跑则被杀），整轮从头重搜（真机实测 bug）。摘除后重挂载
+    // 的 start：新提交即替换，旧轮在跑则被杀），整轮从头重搜。摘除后重挂载
     // 只剩 search-job.ts 的「挂载即恢复」一条路：读 since=0 快照、零提交。
     navigate({ name: 'search' })
   }, [])   // eslint-disable-line react-hooks/exhaustive-deps
@@ -223,7 +223,7 @@ function HitRow({ sourceId, hit, deps, landing }: {
         <span className="novel-hit-sub">{sub}</span>
       </button>
       {/* 兄弟入口没有后续动作：回执回调自己抛错时这一发只许就地咽掉（add 的失败已上报过），
-          不许像旧实现那样裸 `void add()` 漏成无人处理的 rejection。 */}
+          不要裸 `void add()`，那会漏成无人处理的 rejection。 */}
       <button className="novel-btn sm" disabled={landing.isLanded(hit)} onClick={() => { void add().catch(() => undefined) }}>
         {landing.isLanded(hit) ? t('search.shelf.added') : t('search.shelf.add')}
       </button>

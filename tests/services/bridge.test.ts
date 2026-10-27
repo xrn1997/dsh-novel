@@ -92,8 +92,8 @@ describe('absUrl', () => {
 })
 
 describe('engineFetch（java.ajax 出口）', () => {
-  // java.ajax 的 URL 可带 `url,{json}` 请求选项。
-  // 此前不解析选项、整串当 URL 发出 → 站点 403/404（真实崩溃案例：@js 脚本拼
+  // java.ajax 的 URL 可带 `url,{json}` 请求选项，必须在这里剥下来按选项发。
+  // 整串当 URL 发出会得站点 403/404（真实源：@js 脚本把带 body 的
   // `search.php,{'body':...}` 传给 java.ajax）。
   const mkFetcher = () => {
     const seen: Array<{ url: string; init?: { method?: string; headers?: Record<string, string>; body?: string } }> = []
@@ -284,7 +284,7 @@ describe('hitFieldsOf（一条命中的装配单点）', () => {
 
 /** 详情面一次读取（`detailReadOf`）：字段与 tocUrl 必须共用**同一次** init 求值。
  *  计数 subEval 包住真实求值器（`createSourceEval(...).subEval`），读的是规则串的出现次数——
- *  旧组合 `detailFieldsOf` + `tocUrlOf` 各求一次 init 正是这条要收掉的重复。 */
+ *  两处各求一次 init 会让次数翻倍，这条钉的就是它不翻倍。 */
 describe('detailReadOf（详情 init 单次求值）', () => {
   const INIT = '$.data.bookInfo'
   const BOOK = 'https://detail.example.com/book/42'
@@ -331,7 +331,7 @@ describe('detailReadOf（详情 init 单次求值）', () => {
     const read = await detailReadOf(source, counting(seen), HTML, BOOK)
     expect(seen.filter((r) => r === INIT)).toHaveLength(1)
 
-    // 旧组合的读数作对照：同一份源、同一份 html，两条路径给出的值必须一致
+    // 两条路各求一次的读数作对照：同一份源、同一份 html，两条路径给出的值必须一致
     const oldSeen: string[] = []
     const oldEval = counting(oldSeen)
     const oldFields = await detailFieldsOf(source, oldEval, HTML, stripUrlOption(BOOK))

@@ -39,8 +39,7 @@ export function resolveJsonData(ctx: EvalContext): unknown {
  * pairs 解析（手写小 parser，不用 JSON.parse——值不保证是严格 JSON）：
  *   `{` 开头 `}` 结尾；顶层逗号切分（引号内逗号不切）；每项 `key:"value"` 或 `key:裸值`。
  *   引号有意义：带引号 = 显式字面量；裸值 = 先当 JSONPath（`$.`/`@json:`），否则对当前条目
- *   做**键访问**，键不在才字面存。（曾要求值必带双引号否则抛错，已废——但引号与裸值的这条
- *   分界必须保住，见 `evalPut` 的键访问分支。）
+ *   做**键访问**，键不在才字面存。引号与裸值的这条分界必须保住，见 `evalPut` 的键访问分支。
  *
  * `@get:name` → 读 `ctx.vars[name]`；未 put 过 / vars 未初始化 → Miss（detail 提到键名）。
  */
@@ -50,7 +49,7 @@ function reject(detail: string, loc: SegmentLoc, facet: Facet): never {
 }
 
 /** 手写 pairs 解析：顶层逗号切分（引号内不切），每项 key:"value" 或 key:裸值——两种形态都收
- *  （引号值处理转义，裸值读到顶层逗号为止；曾只收引号形态直接抛错，已废） */
+ *  （引号值处理转义，裸值读到顶层逗号为止）。 */
 function parsePairs(pairsRaw: string, loc: SegmentLoc, facet: Facet): Array<[string, string, boolean]> {
   const s = pairsRaw.trim()
   if (!s.startsWith('{') || !s.endsWith('}')) {
@@ -143,7 +142,7 @@ export function evalPut(
     } else if (isRuleFormValue(value)) {
       // 规则形态的值（`[property$=x]@content`、`//xpath`、`@css:`、`i@text`…）→ 按子规则求值。
       // put 的值就是一次取值，故与取值段同一条出口；真实源 ruleBookInfo.init 的六键形态全靠这条
-      // （2026-09 真机审计：曾被段切分撕开 + 被 v1 白名单拒掉）。
+      // 注意：这类值要跳过段切分并进子规则求值，不能被白名单拒掉。
       if (!subEval) {
         reject(`@put 值是规则串但调用方未接线子规则求值口（evaluate 的 subEval）：${JSON.stringify(value)}`, loc, facet)
       }
@@ -152,7 +151,7 @@ export function evalPut(
       // 键值直接访问口径：**裸值** = 对当前 JSON 条目按键取值（`@put:{img:pic}` → vars.img = 条目.pic）；
       // 键不存在 / 非 JSON 上下文 → 字面存（比空串如实——@get 拿到原文可诊断）。
       // 带双引号的值是用户显式写的字面量，**不做这层推断**（`@put:{img:"pic"}` 存 'pic'）：
-      // 引号是「我要字面量」的唯一记号，把它当裸值会让同一份数据两种结果互相覆盖（2026-09 审查）。
+      // 引号是「我要字面量」的唯一记号，把它当裸值会让同一份数据两种结果互相覆盖。
       const data = quoted ? null : resolveJsonData(ctx)
       if (value !== '' && data !== null && typeof data === 'object' && !Array.isArray(data)
         && Object.prototype.hasOwnProperty.call(data, value)) {

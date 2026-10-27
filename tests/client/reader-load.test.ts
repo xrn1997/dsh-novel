@@ -35,10 +35,9 @@ describe('nextChapterIndex（前向窗口：视口章之后第一个未载章）
 })
 
 describe('nextLoadTarget（哨兵进预取区才加载——旧口径 scrollHeight/scrollTop 已废弃）', () => {
-  // 旧口径 `scrollHeight - scrollTop - clientHeight < 2 屏` 在宿主内容撑高布局下两个方向都失效：
-  // 阅读器容器 clientHeight == scrollHeight（97541 实测）永不滚动；912 章占位块又把 scrollHeight
-  // 撑成整本书高（97579 实测）→ 真滚了也只在全书末尾触发。新签名里没有 scrollHeight/scrollTop，
-  // 判据换成「未载边界哨兵相对视口的 top」——类型层面就堵住旧口径回归。
+  // 判据是「未载边界哨兵相对视口的 top」，不是容器 scrollHeight/scrollTop：宿主内容撑高布局下
+  // 阅读器容器 clientHeight == scrollHeight 永不滚动，占位块又会把 scrollHeight 撑成整本书高，
+  // 按高度差判两个方向都失效。签名里没有高度入参，类型层面就堵住那条回路。
   const chapters = ['a', null, null]
 
   it('在途有章 → 不加载（单在途槽，滚动风暴去重）', () => {

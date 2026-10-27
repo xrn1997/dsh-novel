@@ -65,7 +65,7 @@ export function normalizeSource(raw: unknown): NormalizeResult {
   for (const f of RULE_FIELDS) (rules as unknown as Record<string, unknown>)[f] = str(r[f])
   rules.searchUrl = normalizeSearchUrl(r.searchUrl, warnings)
   // header 单字段两形态：`@js:`/`<js>` 规则 → headerRule；
-  // JSON 对象/JSON 串 → header。两者互斥（同一 raw.header 二选一），规则形态不再是「非法 JSON」警告。
+  // JSON 对象/JSON 串 → header。两者互斥（同一 raw.header 二选一），规则形态不产生「非法 JSON」警告。
   rules.headerRule = normalizeHeaderRule(r.header)
   rules.header = rules.headerRule === null ? normalizeHeader(r.header, warnings) : null
   // ruleExploreKinds 不是字符串（分类入口数组），故不进 RULE_FIELDS 循环。**两个方言共用这一处落位**：
@@ -105,14 +105,14 @@ export function normalizeSource(raw: unknown): NormalizeResult {
 
 /** 内容形态中文名（只服务导入拒绝文案——列表不渲染 type）。Record 由编译器强制穷尽，
  *  故它同时是**值域见证**：`rehydrateStoredSource` 用 `Object.hasOwn(SOURCE_KIND_LABEL, type)` 判旧数据
- *  的 type 还在不在域内（只看自有键——旧口径 `in` 会把 `toString` 这类原型键也当成合法形态），
+ *  的 type 还在不在域内（只看自有键——用 `in` 会把 `toString` 这类原型键也当成合法形态），
  *  不再手写第三份形态清单。 */
 const SOURCE_KIND_LABEL: Record<SourceContentKind, string> = {
   text: '文本', image: '图片', audio: '音频', file: '文件', unknown: '未知',
 }
 
 /** 分组串拆分：一个源可属多个分组，兼容三种分隔符 `,`（主流导出）/`\`（旧阅读端写法）/
- *  `，`（全角）+ trim + 去空段 + 段内去重（曾只按 `\` 拆，逗号粘连把多组并成一个假组名）。
+ *  `，`（全角）+ trim + 去空段 + 段内去重。只按 `\` 拆会让逗号粘连把多组并成一个假组名。
  *  存量脏数据由 SourceRegistry.load 迁移收敛。 */
 export function splitGroups(raw: string): string[] {
   const out: string[] = []
@@ -131,8 +131,8 @@ function stripLeadingIcons(name: string): string {
   return stripped === '' ? name : stripped
 }
 
-/** 书源内容形态取值（由书源格式定义：0/-1/缺省=文本，**1=音频，2=图片，3=文件**——曾把 1/2
- *  读反，漫画/短剧源被误标后混进聚合搜索与文字书架）：-1=ALL 在源里罕见，按文本放行。
+/** 书源内容形态取值（由书源格式定义：0/-1/缺省=文本，**1=音频，2=图片，3=文件**——把 1/2
+ *  读反会让漫画/短剧源被误标后混进聚合搜索与文字书架）：-1=ALL 在源里罕见，按文本放行。
  *  **唯一映射表**：normalize 的拒绝文案与 SourceRegistry.load 的存量重推共用这一份，
  *  不存在第二份编码抄本（wire 单点纪律）。认不出的值 → 'unknown'：读不懂不等于文本。 */
 export const CONTENT_KIND_OF: Record<number, SourceContentKind> = {
@@ -160,9 +160,9 @@ function contentTypeOfRaw(raw: unknown): SourceContentKind | undefined {
  *  容器、平铺/嵌套优先级、Native 隐式 `@text` 全在导入侧那一份里），只是不跑准入（缺必填 / 非文本
  *  源照样读得出该字段——补推不许顺手拒掉存量源）。
  *  返回：派生到的非空串 / null（raw 是对象但派生到空）/ undefined（raw 不是对象，调用方别动）。
- *  新增需要存量收敛的规则字段时**只加调用点**，不要再写第二个读 raw 的函数（曾有第三份自解释，
- *  与导入侧口径不同、补推恒覆盖 → 把正确值改写落盘，读数上看不出来）。
- *  `rawBookMetaFields` 是这条纪律之前的产物：它自带优先级，故只能只填缺席键。 */
+ *  新增需要存量收敛的规则字段时**只加调用点**，不要再写第二个读 raw 的函数
+ *  （第二份解释会与导入侧口径不同、补推恒覆盖 → 把正确值改写落盘，读数上看不出来）。
+ *  `rawBookMetaFields` 自带优先级，故只能只填缺席键。 */
 function deriveRuleField(raw: unknown, field: string): string | null | undefined {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
   const r = isNativeSource(raw)
@@ -268,8 +268,8 @@ const EXPLORE_STRING_MODELS: readonly ExploreStringField[] = VACANT_RULE_FIELDS
  *  与 `rawBookMetaFields` / `rawRulePattern` 同族）。存量 rules 里这一族是空的源，在书城**整个是空的**（kinds 一条不剩、条目规则缺席只能退回
  *  通用搜索规则），这个读口就是把它们从 raw 现推回来。
  *  两方言共用**导入侧那一次 flatten**：方言判定、字符串化容器、平铺/嵌套优先级、Native 的隐式
- *  `@text` 终端全在那一份里（原先本函数自己再调一次 `nativeExploreFields`、并手工补一遍终端，
- *  那是同一条解释的第二份抄本——加字段时两处会分叉，而 legado 方言整个读不到）。
+ *  `@text` 终端全在那一份里。不要在本函数再调一次 `nativeExploreFields` 或手工补终端：
+ *  那是同一条解释的第二份抄本——加字段时两处会分叉，而 legado 方言整个读不到。
  *  「raw 里读不出发现面」如实给全 null + `[]`，与「raw 不是对象」的 undefined 是分开的两档：
  *  前者是「这源没分类」，后者是「这里没读」，不许在返回值里折叠。
  *  warnings 传空数组：留痕是导入那一次的事，补推每次启动都跑，同一批点名再刷一遍只会淹掉真正
@@ -307,7 +307,7 @@ export function rawExploreEnabled(raw: unknown): boolean {
 type Container = { obj: Record<string, unknown> } | { absent: true } | { unreadable: string }
 /**
  * 规则容器解析（书源格式里**每一个** rule 对象都允许两种形态：JSON 对象，或一段 JSON
- * **字符串**——公开书源分享里常这么存；曾对非对象容器直接 continue，这类源导入后规则全丢，
+ * **字符串**——公开书源分享里常这么存；对非对象容器直接 continue，会让这类源导入后规则全丢，
  * 表现成「缺正文规则」，读起来像源坏了而不是格式没接）。
  *
  * 判定边界刻意收窄：只有**以 `{` 开头**的字符串才是容器候选——`ruleContent` 这一键位还有本仓
@@ -461,9 +461,8 @@ function normalizeHeader(v: unknown, warnings: NormalizeIssue[]): Record<string,
  * 才判失败。**只宽在引号形态，不猜结构**：补逗号、去尾逗号、剥注释都不做。
  *
  * 为什么要单点：对面把头 JSON 做成**两段解析**（严格 → 宽松），口径与出处记在矩阵行
- * `b-header-js` / `b-header-static`；本仓头两条路原先都只有一步 `JSON.parse` ⇒ 单引号形态的头
- * 对面读得出、我们静默丢。`request.ts` 的选项 JSON 早就允许单引号，头这条是漏掉的第二处，
- * 故解析口收在这里共用。
+ * `b-header-js` / `b-header-static`；头若只做一步 `JSON.parse`，单引号形态的头会静默丢。
+ * `request.ts` 的选项 JSON 与头必须共用这一解析口，不允许第二处宽松解析。
  */
 export function parseObjectJson(v: unknown): Record<string, unknown> | undefined {
   const tryParse = (t: string): Record<string, unknown> | undefined => {
@@ -509,8 +508,8 @@ function normalizeHeaderRule(v: unknown): string | null {
 
 /** 动态请求头规则判别（**raw 源版**，供 `rehydrateStoredSource` 存量重推，触发点 `SourceRegistry.load`）：
  *  raw.header 是规则字符串 → 原文；raw 在场但非规则 → null；raw 不是对象 → undefined（调用方别动）。
- *  规则形态**不是**「非法 JSON」——它是书源的合法 header 形态（曾被当坏 JSON 丢弃，存量靠
- *  load 迁移按 raw 重推）。 */
+ *  规则形态**不是**「非法 JSON」——它是书源的合法 header 形态；把它当坏 JSON 丢弃会让动态头
+ *  不生效，存量靠 load 迁移按 raw 重推。 */
 export function rawHeaderRule(raw: unknown): string | null | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined
   return normalizeHeaderRule((raw as Record<string, unknown>).header)
@@ -655,8 +654,8 @@ const ALWAYS_READERS: Record<RuleFieldsOf<'always'>, (raw: unknown) => string | 
   // **读路必须是导入侧那一份**（deriveRuleField 直接跑 flattenDialect/flattenNative）：恒覆盖
   // 配第二份解释会把对的改成错的。
   ruleDetailInit: (raw) => deriveRuleField(raw, 'ruleDetailInit'),
-  // headerRule 按 raw 重推：旧版 normalize 把 `@js:` header 当坏 JSON 丢弃（rules.header=null、
-  // 原文只活在 raw 里）——不重推则动态头永远不生效。
+  // headerRule 按 raw 重推：入库时若把 `@js:` header 当坏 JSON 丢弃（rules.header=null、原文只活在
+  // raw 里），不重推则动态头永远不生效。
   headerRule: rawHeaderRule,
   // bookUrlPattern 按 raw 重推：详情页嗅探字段是后来才读的，存量 rules 缺键 → 声明了它的源
   // 搜索时照旧只跑列表规则（补推后命中即按详情页解析）。
@@ -665,9 +664,9 @@ const ALWAYS_READERS: Record<RuleFieldsOf<'always'>, (raw: unknown) => string | 
 
 /** 表里 `conditional` 档的读口：判据自带前置条件，故交整条源。 */
 const CONDITIONAL_READERS: Record<RuleFieldsOf<'conditional'>, (s: NovelSource, mark: () => void) => void> = {
-  // 静态头按 raw 补推（与 headerRule 成对）：单引号形态的头曾被判成坏 JSON 丢弃，只改解析器
+  // 静态头按 raw 补推（与 headerRule 成对）：单引号形态的头若被判成坏 JSON 丢弃，只改解析器
   // 不动存量则受害源的头仍然是空的（现量见矩阵行 `b-header-static`）。
-  // 触发条件刻意收窄到「规则形态为 null 且头表也是 null」：那是旧版判失败的唯一形状，
+  // 触发条件刻意收窄到「规则形态为 null 且头表也是 null」：只有这种形状需要补推，
   // 不会覆盖任何今天被判为有效的值（合法空对象 `{}` 派生出来是 {}，不是 null）。
   header: (s, mark) => {
     if (s.rules.headerRule !== null || s.rules.header !== null) return

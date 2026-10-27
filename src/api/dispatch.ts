@@ -11,7 +11,7 @@ import { NOVEL_API_PREFIX, PARAMS, paramOps, readBodies, ROUTES, SEG } from '../
 import type { RouteTarget } from '../shared/wire.js'
 import { BodyShapeError } from '../shared/wire.js'
 
-/** 「书不在架上」文案单点（此前 shelfPut 两形态逐字两份） */
+/** 「书不在架上」文案单点（shelfPut 两形态共用这一句） */
 const NOT_ON_SHELF = '书不在架上，先带 title 调用加入'
 
 /** SSE 响应头单点（搜索面与发现面两条流共用）。`x-accel-buffering` 那句为什么只写过一份：
@@ -449,7 +449,7 @@ async function route(
   throw unknownRoute(method, segs)
 }
 
-/** 路径段百分号解码：非法编码（decodeURIComponent 抛 URIError）→ 400（此前归 'other' → 500） */
+/** 路径段百分号解码：非法编码（decodeURIComponent 抛 URIError）→ 400；不要归到 'other'，那会变 500 */
 function decodeSegKey(raw: string): string {
   try { return decodeURIComponent(raw) } catch { throw new ApiError('路径含非法百分号编码', 400, 'BadRequest') }
 }

@@ -134,7 +134,7 @@ describe('groupIcon', () => {
 
 /** 列表 UI store：query/chip/selection/editMode 模块级存活——试跑下钻返回不丢现场 */
 describe('sourceListUi store', () => {
-  beforeEach(resetSourceListUi)   // 整现场一次复位——setter 手工复位既啰嗦又漏项（groupFilter 曾被漏过）
+  beforeEach(resetSourceListUi)   // 整现场一次复位——setter 手工复位既啰嗦又易漏项
 
   it('toggleSelect 进出选择集；selectMany 并集', () => {
     toggleSelect('a')

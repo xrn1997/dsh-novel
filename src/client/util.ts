@@ -1,6 +1,6 @@
 /**
- * client 中立小工具：debounce 与 localStorage guard 不属于
- * 「阅读进度」也不属于「轻量 store」——此前住在这两个 module 里，找它们要靠 grep。
+ * client 中立小工具：debounce 与 localStorage guard 不属于「阅读进度」也不属于「轻量 store」，
+ * 单独住这里，避免找它们要靠 grep。
  */
 import type { ChapterContent } from '../shared/wire.js'
 
@@ -13,8 +13,7 @@ export const JOB_POLL_MS = 600
 
 /** 常驻状态层盯**写任务**（导入 / 批量验证）的节拍。与上面那个数**不是一种参数的两个值**：
  *  观察通道量的是「书一条条出来」的即时感，状态层量的是一条整批写任务的进度，界面只读「在跑 /
- *  跑完」两态。原先这里是裸 `1000`，注释还说「同一个数写两份必然只改到一份」——那份说法只覆盖
- *  了两条观察通道，这第三处节拍就躲在字面量里没人改得到。落进常量是为了改名与调档有一个家。 */
+ *  跑完」两态。这个节拍必须落进常量，不要在字面量里写裸数字：改名与调档需要一个家。 */
 export const STATUS_POLL_MS = 1000
 
 /** 正文节点的 DOM 钩子（`ChapterBody` 渲染时写在每个可定位节点上）。

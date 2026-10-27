@@ -10,9 +10,8 @@ export function novelDir(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /** 原子写与损坏备份的命名约定——**唯一住址在这里**。
- *  病根（一处隐式耦合）：删书的清点原先自己写死 `.tmp` / `.bak` 去猜低层留下的名字，
- *  「今天两处都对」靠的是没人改过命名，而不是有守卫。改成一个名字的现在：低层写与消费方
- *  （`localbooks.discard`）都从这里取值，改名只红一处。 */
+ *  低层写与消费方（`localbooks.discard`）都必须从这里取值；若各自写死 `.tmp` / `.bak`
+ *  去猜低层留下的名字，「两处都对」就只靠没人改过命名，而不是有守卫。改名只该红一处。 */
 const TEMP_SUFFIX = '.tmp'
 const BACKUP_SUFFIX = '.bak'
 
@@ -66,9 +65,9 @@ export async function readJson<T>(file: string, fallback: T): Promise<T> {
 }
 
 /** 同文件写串行化：并发 rename 同一目标在 Windows 上互斥失败（EPERM——批量导入与并发读正文
- *  都实测炸过）。按文件名排队，后写等前写落地再 rename，语义不变（最终落盘的仍是最后一次写的
- *  数据）。这是**所有**落盘的唯一低层写路径：注册表/书架 JSON 与 PageCache 正文共用
- *  （PageCache 曾自抄一份无排队的写，与导出/工具并发抓同章即 EPERM→500）。 */
+ *  都会触发）。按文件名排队，后写等前写落地再 rename，语义不变（最终落盘的仍是最后一次写的
+ *  数据）。这是**所有**落盘的唯一低层写路径：注册表/书架 JSON 与 PageCache 正文共用；
+ *  PageCache 不要自抄一份无排队的写，与导出/工具并发抓同章即 EPERM→500。 */
 const renameChains = new Map<string, Promise<void>>()
 
 /** 瞬时 rename 冲突的有限重试：Windows 上杀软/索引器短暂持有目标文件会报 EPERM/EBUSY。

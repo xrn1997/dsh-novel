@@ -9,8 +9,7 @@ import type { SettingsDeps } from '../../src/client/deps.js'
 import type { JobState } from '../../src/client/views/types.js'
 
 /**
- * 导入区接线测试：ImportPane 有 deps seam 却此前零 jsdom 驱动测试——
- * submitFiles / importPaste / 失败上报全裸奔。本文件经假 deps 把三条路径钉死：
+ * 导入区接线测试：ImportPane 的 deps seam 由本文件经假 deps 驱动，三条路径各钉一条：
  * 文件直通提交、粘贴小道提交、任务失败的 pushError 上报（不许静默吞掉）。
  * 桩工厂统一到 tests/client/fake-deps.ts。
  */

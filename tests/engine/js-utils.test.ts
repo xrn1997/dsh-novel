@@ -15,7 +15,7 @@ import {
 } from '../../src/engine/js-utils.js'
 
 /** 纯工具直测（「纯工具出走」）：
- *  此前这些函数埋在 js-sandbox 模块私有，只能整体过 vm；现可不进沙箱直接钉行为。 */
+ *  不进沙箱直接钉行为，失败能落到具体函数上。 */
 describe('js-utils 纯工具', () => {
   it('md5Hex：标准向量（md5("abc")）', () => {
     expect(md5Hex('abc')).toBe('900150983cd24fb0d6963f7d28e17f72')
@@ -45,7 +45,7 @@ describe('js-utils 纯工具', () => {
     expect(hexDecodeToString('')).toBe('')
     expect(hexDecodeToString('abc')).toBe('') // 奇数长
     expect(hexDecodeToString('zz')).toBe('') // 非 hex 字符
-    expect(hexDecodeToString('0x12')).toBe('') // 前缀形态不支持 → 空串（与旧实现一致）
+    expect(hexDecodeToString('0x12')).toBe('') // 前缀形态不支持 → 空串（只认纯 hex 位）
   })
 
   it('fmtTime：utc=true 钉死 UTC 分量', () => {
@@ -74,7 +74,7 @@ describe('js-utils 纯工具', () => {
     const $ = load('<h1>标题</h1>')
     // nodes 口径 = cheerio .html()（**内部** HTML，不含外层标签——与既有引擎行为一致）
     expect(engineValueToString({ kind: 'nodes', nodes: $('h1') })).toBe('标题')
-    // 'outer' = @js host.result 口径（outerHTML）；同一实现在此显式分叉，不再两份抄本
+    // 'outer' = @js host.result 口径（outerHTML）；同一实现在此显式分叉，避免两份抄本
     expect(engineValueToString({ kind: 'nodes', nodes: $('h1') }, 'outer')).toBe('<h1>标题</h1>')
     expect(engineValueToString({ kind: 'miss', detail: 'x' })).toBe('')
   })

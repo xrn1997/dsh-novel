@@ -14,7 +14,7 @@ import { searchErrorCodeOf } from '../../src/services/search-face.js'
  * 错误分类学表测试（扩四类目）：
  * 「类 → 类目 → 两投影（HTTP 状态 / wire 错误码）」的完整映射钉在一张表上——
  * 加一个错误类或改一条映射，这张表先红，而不是靠两个 destination 模块各自的记忆。
- * LocalImportError 不再自带 status（错误体携带 HTTP 码是被删过的模式），
+ * LocalImportError 不自带 status（错误体携带 HTTP 码是被否掉的模式），
  * JobRunningError 的 409 特判包装、本地书面的路由侧 catch 全部收进这张表。
  */
 
@@ -38,7 +38,8 @@ const TABLE: Array<[unknown, ErrorCategory, number, string, string]> = [
   [new ChapterNotFoundError(9, 42), 'not-found', 404, 'NotFound', 'Error'],
   // 值域错（非空 / 非负整数 / 比例在 [0,1]）：门住门面动词，两个调用面（HTTP、agent 工具）共用
   [new InvalidRequestError('加书需带非空 sourceId'), 'bad-request', 400, 'BadRequest', 'Error'],
-  // 新收三类目（此前：LocalImportError 自带 status / JobRunningError 409 特判包装 / 本地未挂载靠路由 catch）
+  // 三类目各在自己的类上：LocalImportError / JobRunningError / LocalNotMountedError，
+  // status 一律由本表给出，路由不再特判包装
   [new LocalImportError('文件为空'), 'local-import', 400, 'BadRequest', 'Error'],
   [new LocalFileTooLargeError('文件超限'), 'local-too-large', 413, 'PayloadTooLarge', 'Error'],
   [new LocalNotMountedError(), 'unavailable', 503, 'Unavailable', 'Error'],
@@ -73,7 +74,7 @@ describe('错误分类学表（classify → 双投影）', () => {
   it('表覆盖全部 ErrorCategory 成员（新类目忘了进表 → 这条红）', () => {
     const covered = new Set(TABLE.map(([, c]) => c))
     // satisfies Record<ErrorCategory, true>：给 ErrorCategory 加成员而不在此列出 → **编译期**报错
-    // （此前是手写字面量数组，新类目加了它还是 9 项、用例照绿）
+    // （手写字面量数组漏项时照绿：新类目加了它还是 9 项、用例照绿）
     const all = {
       'rule-eval': true, 'rule-missing': true, fetch: true, 'not-found': true, 'bad-request': true,
       'local-import': true, 'local-too-large': true, unavailable: true, 'job-running': true, other: true,

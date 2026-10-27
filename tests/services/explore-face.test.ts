@@ -136,8 +136,8 @@ describe('explore-face：单源一次分类抓取', () => {
     expect(seen[0]).toBe('https://s.com/top/1')        // 原生方言在这一位会裁成 /top（见本文件第一条用例）
   })
 
-  // 矩阵行 `d-explore-fallback-search-rule` 的分母全是 legado 方言的源，而整套回落原先只有原生桩钉着
-  // ——legado 侧一条用例都没有，把这一路写坏（例如给它单独拼半套）没有一条用例会红。这条给它一个真
+  // 矩阵行 `d-explore-fallback-search-rule` 的分母全是 legado 方言的源：整套回落必须有 legado 用例
+  // 钉住，否则把这一路写坏（例如给它单独拼半套）没有一条用例会红。这条给一个真
   // 命中：条目三件全取自通用搜索规则，发现面那一侧一条规则都没落位。
   it('legado 形态：ruleExplore 整块缺席 → 条目整套走通用搜索规则（回落判据两方言同一条）', async () => {
     const seen: string[] = []

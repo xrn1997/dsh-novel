@@ -14,7 +14,7 @@ import type { ShelfEntry } from '../../src/client/views/types.js'
 beforeEach(resetPanelShelf)
 
 /**
- * 书架多选批量删除的接线测试（2026 新需求：一次删一批）。
+ * 书架多选批量删除的接线测试：一次删一批，不循环发单本 DELETE。
  *
  * 口径（与书源管理 tab 的批量删除同款，词汇也照抄——「已选 N / 清空选择 / 删除所选」）：
  * - 勾选是**现场**：点卡片只切选择，不发任何请求、不进阅读器；

@@ -9,7 +9,7 @@ type CssSegment = Extract<Segment, { kind: 'css' }>
 /**
  * jsoup 的 `[attr~=regex]`：**正则匹配**，不是标准 CSS 的「属性值按空白分词后含该词」。
  * `[property~=category|status|update_time]`、`[href~=/read/\d+]` 这类只有正则读法讲得通；走标准
- * CSS 拿属性值去比字面词恒不命中（曾致 `ruleToc.chapterList = a[href~=/read/\d+]` 零命中、目录 0 章）。
+ * 按标准 CSS 把属性值当空白分词去比字面词会恒不命中；`a[href~=/read/\d+]` 这类规则会零命中、目录 0 章。
  * 求值前把 `~=` 谓词摘出来：选择器里改写成「只要有这个属性」（`[attr]`），再按正则逐元素筛。
  * 正则非法 → 与「选择器写错」同档，如实 RuleEvalError，不静默零命中。
  */
@@ -80,7 +80,8 @@ function parseSelector(selector: string, loc: SegmentLoc, facet: Facet): ParsedS
  *   （hits=0，说明是选择器写错而非语法外构造）；**本层自己抛的 RuleEvalError 原样上抛**——
  *   再包一层会让消息自嵌套（`CSS 选择器无法解析：sel（CSS 选择器无法解析：sel（…））`）。
  * - `!` 排除与位置后缀、空态裁决走 reducePicked 单点：零命中 / 排除后为空 / 取位越界（`oob`）
- *   一律 Miss（选择失败），与 default 选择段同口径——此前两处各写一份且已语义分叉。
+ *   一律 Miss（选择失败），与 default 选择段同口径；两处必须共用 reducePicked，
+ *   各写一份会让同一种取位给出两种结果。
  * css 显式形态无位置后缀（恒整集）；隐式 CSS 回落（a.0/.odd.0）可携带位置后缀，按其取位。
  */
 export function evalCss(
@@ -111,8 +112,8 @@ export function evalCss(
   }
   const reduced = reducePicked(picked.toArray(), seg.exclude, seg.index ?? null)
   if (!reduced.ok) {
-    // reason 只有三态（`PickedOutcome`）：zero / excluded / oob——本层没有「切片」取位可言，
-    // 曾有第四态随那个误读一起删（口径见 `select.ts` 的 reducePicked）。
+    // reason 只有三态（`PickedOutcome`）：zero / excluded / oob——本层没有「切片」取位；
+    // 不要新增第四态，取位口径统一见 `select.ts` 的 reducePicked。
     const detail =
       reduced.reason === 'zero' ? `css 选择器 ${seg.selector} 零命中`
         : reduced.reason === 'excluded' ? `css 选择器 ${seg.selector} 排除 ${JSON.stringify(seg.exclude)} 后为空`

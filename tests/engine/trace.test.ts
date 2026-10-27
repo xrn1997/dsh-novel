@@ -25,8 +25,8 @@ describe('evaluateWithTrace 端到端', () => {
   it('链尾 (…) 不当 js 改写（对面从不切它：这条形态与 text下一页 同族，如实失败）', async () => {
     // 只在 @js:/<js>/@XPath:/@Json: 等前缀上定模式，找分隔符时 `(` 是平衡组（跳过、不是切开）；
     // Default 链末段整串走属性读 → 取空。
-    // 本仓曾把 (…) 当链尾 js 表达式（detectTailJs），实测会把耽美小说 `/text()` 切碎；已移除。
-    // 移除后这条形态落到「认不出的末段」——与 `text下一页` 同族，抛错而不是静默改写值。
+    // 改这里注意：别把 (…) 当链尾 js 表达式——切开会把 `/text()`（耽美小说）切碎。
+    // 这条形态落到「认不出的末段」——与 `text下一页` 同族，抛错而不是静默改写值。
     await expect(evaluateWithTrace('class.name@text(result.replace(/凡人/,"某凡"))', { html: searchHtml }, 'search'))
       .rejects.toThrow(/text\(result\.replace/)
   })
@@ -42,7 +42,7 @@ describe('evaluateWithTrace 端到端', () => {
   })
   it('独立净化形态：##a##b 以整页原文为基值', async () => {
     const t = await evaluateWithTrace('##搜索.*手机访问|##', { html: '<p>正文</p>搜索.手机访问' }, 'content')
-    // 基值 = ctx.html 原文，净化后原样给出（不再走 DOM all 分支）
+    // 基值 = ctx.html 原文，净化后原样给出（不走 DOM all 分支）
     expect(t.value).toEqual({ kind: 'value', text: '<p>正文</p>' })
   })
   it('独立净化：无 html 时以 String(ctx.json) 为基值', async () => {
@@ -73,7 +73,7 @@ describe('evaluate 总装（引擎语义复查）', () => {
   it('Miss ≠ 空列表：css 零命中链透传 Miss；取位失败（索引越界）也是 Miss；合法零条目才是空 List', async () => {
     const miss = await evaluate('@css:.nope@text', { html: searchHtml }, 'search')
     expect(miss.kind).toBe('miss')
-    // 取值段索引全越界 = 取位失败 → Miss（与选择段 reducePicked 同口径；此前误判「合法空 List」）。
+    // 取值段索引全越界 = 取位失败 → Miss（与选择段 reducePicked 同口径，不是「合法空 List」）。
     // 用单个 .name 的确定页面：`.5:9` 逐个越界 → 集合空 → Miss。
     const empty = await evaluate('@css:.name@text.5:9', { html: '<p class="name">甲</p>' }, 'search')
     expect(empty.kind).toBe('miss')
@@ -95,11 +95,11 @@ describe('evaluate 总装（引擎语义复查）', () => {
     ])
   })
   it('jsonpath 中链：节点集上游如实求值错；Value 上游按 JSON 求值（上游修复后 legado 语义）', async () => {
-    // 节点集不是 JSON → 求值期如实 RuleEvalError（此前在解析期以「非分支首位」预拒——
-    // 那条预拒建在旧 bug 语义上：JS 返回对象不分发 Mode，本仓按修复后语义走）
+    // 节点集不是 JSON → 求值期如实 RuleEvalError。别挪回解析期预拒（「非分支首位」那条判据）：
+    // js 返回对象也要能进 jsonpath，在解析期拒会把合法形态判死。
     await expect(evaluate('@css:.name@json:$..x', { html: searchHtml, json: {} }, 'search'))
       .rejects.toThrow(/无法按 JSON 求值/)
-    // 「js 返回对象再取字段」形态现在合法：<js> 产出 JSON 文本 → 中链 jsonpath 按 JSON 求值
+    // 「js 返回对象再取字段」形态合法：<js> 产出 JSON 文本 → 中链 jsonpath 按 JSON 求值
     const v = await evaluate('<js>JSON.stringify({a:{b:7}})</js>$.a.b', { html: '' }, 'search')
     expect(v).toEqual({ kind: 'value', text: '7' })
   })

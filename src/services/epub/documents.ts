@@ -46,7 +46,7 @@ export interface ImageBinding {
  * 因为富文本树里没有第二张「锚点表」：客户端只能按节点 ID 定位（wire 的 `ReadingTarget.anchorId`）。
  *
  * `strippedAnchors` 是与 `anchors` **分开的一份事实**：这些名字在被剥离的子树里，内容不在树上、
- * 没有可落的位置所以不铸 ID，但「它曾经存在」是绑定期降级而非拒整本的判据（口径见文件头注④）——
+ * 没有可落的位置所以不铸 ID，但「源里出现过这个锚点」是绑定期降级而非拒整本的判据（口径见文件头注④）——
  * 两件事折叠成一件就会让一层装饰杀掉整本书。
  *
  * `images` 与 `links` 都是**原始 href**（还没按文档目录解释）：调用方要在转换之前把它们全部
@@ -296,7 +296,7 @@ function soleInlineSvg(body: Element): Element | null {
  * body → 目标元素这条路径上各容器承载的锚点 ID（外层在前）。
  *
  * 与 `soleInlineSvg` 同一处起点（body）与同一条遍历：整页 SVG 被一张图顶替后，路径上那些容器
- * 都不在树上了，它们原先承载的锚点必须有新落点（见 `SvgOnlyPage.carriedAnchors`）。
+ * 都不在树上了，它们承载过的锚点必须有新落点（见 `SvgOnlyPage.carriedAnchors`）。
  * `ctx.anchors` 里查不到的名字（例如 svg 自己的 id——它在扫描期进了 `strippedAnchors`）不算。
  */
 function droppedAnchorIds(body: Element, target: Element, ctx: Ctx): string[] {

@@ -3,8 +3,8 @@ import { evaluate, evaluateWithTrace } from '../../src/engine/evaluate.js'
 
 /**
  * 同步环路真实覆盖：「evaluate → evalJs → java.getString → evaluateRef(真身)
- * → runParsedSync」整环此前只有 fake evaluateRef 的间接测试（js-sandbox.test.ts 全注入假回调）——
- * 本文件用 evaluate() 直接跑真环路，钉死同步 runner 的既有语义，供双 runner 收拢重构作行为表征。
+ * → runParsedSync」整环经真 evaluateRef 走通（js-sandbox.test.ts 注入假回调，到不了这里）。
+ * 本文件用 evaluate() 直接跑真环路，钉住同步 runner 的语义，改 runner 时以此为准。
  */
 const HTML = '<html><body><h1>标题甲</h1><p>段一</p><p>段二</p><div class="c"><a href="/1.html">章壹</a></div></body></html>'
 

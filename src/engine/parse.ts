@@ -112,8 +112,8 @@ function splitTop(s: string): TopPart[] {
   while (i < s.length) {
     const jsEnd = jsRegionEnd(s, i)
     if (jsEnd !== null) { i = jsEnd; continue }
-    // `@put:{…}` 整体跳过：值里的 `||`/`&&` 是值内规则文本，不是连接符（splitElements 早已认
-    // putRegionEnd，splitTop 曾经不认——`@put:{l:"[a]@content||[b]@content"}` 被撕开）
+    // `@put:{…}` 整体跳过：值里的 `||`/`&&` 是值内规则文本，不是连接符。
+    // splitTop 与 splitElements 必须都先认 putRegionEnd，否则 `@put:{l:"[a]@content||[b]@content"}` 会被撕开。
     const putEnd = putRegionEnd(s, i)
     if (putEnd !== null) { i = putEnd; continue }
     const brace = braceRegion(s, i)
@@ -262,7 +262,7 @@ function parseBranch(text: string, ctx: ParseCtx): Branch | null {
     return { segments: [{ kind: 'regexRow', raw }], raws: [text] }
   }
   // 模板态（对面 SourceRule 的 Mode.Regex 翻转：受保护区**之外**出现 `{{…}}` 或 `@get:{…}`）：文本段
-  // 按字面、`@` 不再是段界——对面先做插值再谈切分（`最近更新：@get:{time}` 的 `最近更新：` 是字面文本）。
+  // 按字面、`@` 不是段界——对面先做插值再谈切分（`最近更新：@get:{time}` 的 `最近更新：` 是字面文本）。
   // 只看掩码后：对面先抽 js 块，js 代码里的 `{{baseUrl}}` 从不触发这次翻转（`class.a@text@js:…{{…}}`
   // 若按原文判，`@` 不切段会把 `class.a@text` 整串当 class 选择器参数、静默零命中）。
   ctx.template = hasMark && TEMPLATE_MARK.test(marked)
@@ -275,8 +275,8 @@ function parseBranch(text: string, ctx: ParseCtx): Branch | null {
     const isLast = i === els.length - 1
 
     // 链尾没有「(jsCode) 表达式形态」这一切法——`/` 开头的整条就是 XPath（`/text()` 原样进
-    // XPath 求值），切分遇到 `(` 是整体跳过平衡组而不是切分点。（曾有 detectTailJs 按此切尾，
-    // 把 `/text()` 切成 `/text`+`()` 后脚本编译炸——已删；这类形态只能按真入口重算，不复述计数。）
+    // XPath 求值），切分遇到 `(` 是整体跳过平衡组而不是切分点。不要按尾括号切尾：
+    // 把 `/text()` 切成 `/text`+`()` 后脚本编译会炸；这类形态只能按真入口重算，不复述计数。
     const seg = classifySegment(el, ctx, isLast)
     segments.push(seg)
     raws.push(el)
@@ -311,7 +311,7 @@ function classifySegment(el: string, ctx: ParseCtx, isLast: boolean): Segment {
   if (raw.startsWith('$')) return { kind: 'jsonpath', path: raw }
   // XPath（形态判定单点 grammar.isXPathForm：`@xpath:`/`xpath:` 前缀，或 `//`/`.//`/`/` 开头且无
   // 插值区）。`/` 开头但含插值区（`{{…}}` 或 `{$.…}`）→ 是 URL 模板不是 XPath：插值优先于前缀判定，
-  // 落到下方 isLiteralForm 成为字面段（曾被 `/` 前缀抢先截走 →「XPath 步骤不支持」）。
+  // 落到下方 isLiteralForm 成为字面段（若被 `/` 前缀抢先截走，会报「XPath 步骤不支持」）。
   if (isXPathForm(raw)) {
     return { kind: 'xpath', path: raw.replace(/^@?xpath:/i, '') }
   }
@@ -480,7 +480,7 @@ function classifyDefault(raw: string, exclude: number[] | undefined, el: string,
   }
 
   // 属性终端：**取值用途 + 链尾**的未知提取指令 = HTML 属性名，按该属性
-  // 取值（空值丢弃、去重在求值层）。曾落进隐式 CSS 按标签选择器求值 → 恒零命中 → 搜索能搜到但
+  // 取值（空值丢弃、去重在求值层）。若落进隐式 CSS 按标签选择器求值，会恒零命中 → 搜索能搜到但
   // 书目 URL 全空。列表用途链尾未知词仍是选择器——列表入口只出元素、不取属性。
   if (ctx.usage === 'value' && isLast && isAttrName(name)) {
     if (effExclude !== undefined && index !== null) {
@@ -490,8 +490,8 @@ function classifyDefault(raw: string, exclude: number[] | undefined, el: string,
   }
 
   // 隐式 CSS 回落（官方简写 + 考证：#page/.txt-list/li/a/div[itemscope] 都是选择器）。
-  // 位置后缀随 css 段带走（`a.0` = 选择 a 再取第 0 个——真实源高频形态，
-  // 此前被并进选择器 `a.0` 当 class 选择 → 恒零命中 → 首条书名为空）。
+  // 位置后缀随 css 段带走（`a.0` = 选择 a 再取第 0 个——真实源高频形态）。
+  // 不要把后缀并进选择器：`a.0` 会被当成 class 选择 → 恒零命中 → 首条书名为空。
   // 无索引时不带 index 字段（AST 精确形态，toEqual 口径）
   if (isImplicitCss(name)) {
     if (effExclude !== undefined && index !== null) {
@@ -515,8 +515,8 @@ function classifyDefault(raw: string, exclude: number[] | undefined, el: string,
 
 /** 位置后缀解析：`all` | 整数（含负） | 冒号分隔的**索引列表**（`0:2` = 第0与第2个）
  *  位置后缀的集合口径：对 `.`/`:`/`!` 一律「取下一个数字进集合」，冒号不是区间运算符——
- *  本仓曾把它读成半开切片（`.0:2` 出 [0,1) = A、B，正确口径出 A、C），
- *  且 `-1:10:2` 这种合法写法整个被当选择器炸掉。 */
+ *  不要把它读成半开切片：`.0:2` 会出 [0,1) = A、B，正确口径出 A、C；
+ *  `-1:10:2` 这种合法写法也会整个被当选择器炸掉。 */
 function parseIndexSuffix(suffix: string): IndexSpec | null {
   if (suffix === 'all') return { kind: 'all' }
   if (/^-?\d+$/.test(suffix)) return { kind: 'index', value: Number(suffix) }

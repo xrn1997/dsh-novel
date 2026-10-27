@@ -33,7 +33,7 @@ export interface VerifyDeps {
 /** 书源验证的领域动作（验证编排收拢于此）。
  *  三个入口（待办箱 / 行内「验证/重验」/ 批量「验证所选」）只表达「验证哪些源」；提交后的编排
  *  收在这一处：成功 → 催任务读面（源列表刷新归任务终态，`SettingsSection` 按 job.id 记账一次）；
- *  失败 → 一处反馈（文案单点 `sources.verify.startFailed`；此前三处各持一份，一改即漂移）。
+ *  失败 → 一处反馈（文案单点 `sources.verify.startFailed`；三处入口不要各持一份，否则一改即漂移）。
  *  ids 在此按点击时快照：调用方传进来的数组可能随后变异，POST 载荷不许跟着动。
  *  `t` 缺省 zhTranslate：三个入口都从 `useCopy()` 交当前 `t`，失败那句与入口同语言。 */
 export async function startSourceVerification(

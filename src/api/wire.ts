@@ -47,8 +47,8 @@ export function isTrustedRequest(req: Pick<IncomingMessage, 'headers' | 'socket'
 export const DEFAULT_JSON_BODY_MAX_BYTES = 1024 * 1024
 
 /**
- * 带上限的流式读 body：**两份字节上限逻辑的唯一实现**（JSON 信封体与本地导入的原始字节共用它——
- * 此前各写一份流式计数循环）。超限即抛 413；`overMessage` 由调用方给，因为两处的用户措辞不同
+ * 带上限的流式读 body：**两份字节上限逻辑的唯一实现**（JSON 信封体与本地导入的原始字节共用它；
+ * 不要各写一份流式计数循环）。超限即抛 413；`overMessage` 由调用方给，因为两处的用户措辞不同
  * （信封体说字节数、上传文件说 MB）。
  * 钉死：超限只 throw 不 destroy（destroy 会断 PassThrough 流）。
  */

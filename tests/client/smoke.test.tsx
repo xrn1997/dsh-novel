@@ -58,13 +58,13 @@ describe('NovelView smoke（renderToString 不炸——数据获取在 effect，
     expect(html).toContain('data-novel-source-list')
     expect(html).toContain('data-novel-source-filter')
     expect(html).toContain('data-novel-group-filter')            // 分组下拉过滤
-    expect(html).toContain('data-novel-status-filter')           // 状态 chips → 下拉（2026 改版）
-    expect(html).not.toContain('data-novel-chip=')               // 状态 chips 退役（读数归待办箱）
+    expect(html).toContain('data-novel-status-filter')           // 状态筛选是下拉
+    expect(html).not.toContain('data-novel-chip=')               // 状态 chips 不在树上（读数归列表头状态带）
     expect(html).toContain('data-novel-edit-toggle')             // 「编辑」显式切换
     expect(html).not.toContain('type="checkbox"')                // 浏览态无复选框
-    expect(html).not.toContain('危险操作（整库级）')              // 危险区退役：删除=统一模态二次确认
+    expect(html).not.toContain('危险操作（整库级）')              // 无危险区：删除走统一模态二次确认
     expect(html).not.toContain('data-novel-inbox')               // sources 未加载：待办不渲染（不拿未知当「全部良好」）
-    expect(html).not.toContain('data-novel-section-toggle')      // 手风琴退役（sections.ts 已删）
+    expect(html).not.toContain('data-novel-section-toggle')      // 无手风琴：区块不做折叠开关
   })
   it('IA：列表级操作在表格之前——长列表下表格之下摸不着（2026 改版：操作收进列表头）', () => {
     const html = renderToString(createElement(SettingsSection))
@@ -79,7 +79,7 @@ describe('NovelView smoke（renderToString 不炸——数据获取在 effect，
     expect(html).toContain('.novel-btn')
   })
   it('状态条不吃布局（闪烁修复）：条身 absolute、锚是铺满视口的常驻层（默认 click-through）', () => {
-    // 病因：状态条曾以流内元素挂在区块首，一次启停就把整块顶下去 35px 再弹回（真机逐帧实测）
+    // 状态条不许吃布局：条身 absolute，锚是铺满视口的常驻层——启停不得顶动区块（真机逐帧实测过跳动）
     expect(NOVEL_CSS).toMatch(/\.novel-status-bar\s*\{[^}]*position:\s*absolute/)
     expect(NOVEL_CSS).toMatch(/\.novel-shell-status\s*\{[^}]*pointer-events:\s*none/)
     expect(NOVEL_CSS).toMatch(/\.novel-shell-status \.novel-status-bar\s*\{[^}]*pointer-events:\s*auto/)
@@ -111,9 +111,8 @@ describe('NovelView smoke（renderToString 不炸——数据获取在 effect，
     routeStore.set({ route: { name: 'reader', sourceId: 's', bookKey: 'k', title: 'T' } as any })
     const html = renderToString(createElement(NovelView))
     expect(html).toContain('data-novel-view="reader"')
-    // 回归钉子：曾有 `.novel-root/.novel-main:has([data-novel-view="reader"])` 放开规则，
-    // 2026-09 迁全局面板后宿主链 centerCol/frame 双 overflow:hidden、链上无 scrollport，
-    // 放开即滚轮无效。放开 = 回归。
+    // 回归钉子：宿主链 centerCol/frame 双 overflow:hidden、链上无 scrollport，
+    // `.novel-main` 自己是唯一的滚动容器；放开 :has 规则即滚轮无效。
     expect(NOVEL_CSS).not.toContain('.novel-root:has([data-novel-view="reader"])')
     expect(NOVEL_CSS).not.toContain('.novel-main:has([data-novel-view="reader"])')
   })

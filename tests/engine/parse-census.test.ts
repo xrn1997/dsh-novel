@@ -13,13 +13,13 @@ import { COVERAGE, ROW_DEMAND } from '../legado-coverage/matrix.js'
 
 /**
  * **解析面全库普查（`DSH_PARSE_CENSUS=1` 才跑；离线、秒级）**——「书源里写下的规则形态，本插件
- * 都能正确解析」这条目标的**进度读数口**（此前靠一份会消失的一次性脚本，且只跑了 `parseRule` 一面）：
+ * 都能正确解析」这条目标的**进度读数口**：
  * - **面 A · 规则语法**：现库每条规则串（`raw` 的 rule 容器全集，含本仓字段映射没接的）过真实入口
  *   `parseRule`，收抛错骨架。
  * - **面 B · js 宿主调用**：静态抽 `java.<m>(` / `Packages.<a.b.C>` 调用名比对桥表。静态抽名连注释、
  *   死分支也采到，所以**读数给数量与样例、由人判**，断言只对「抽到且不在已知集合」的形态开火。
  * - **面 C · 桥可达性**：面 B 只问「挂没挂」，问不出「挂的是实现还是桩」——协议表有实现的名字
- *   不许在沙箱里仍被「需要安卓宿主环境」桩覆盖（`digestHex` 一族曾实现了却够不着）。
+ *   不许在沙箱里仍被「需要安卓宿主环境」桩覆盖（协议表有实现的名字必须真的可达）。
  * - **面 D · 需求读数表**：登记册那些「N 源带值」的复数入口一条命令全出，判据跟着数字印。**读数本身
  *   不判红**（分母随增删漂，钉死等于每次改库改测试；要防的是复数只能靠不入库的手写脚本）。判红三件
  *   与分母无关的事：表短了/整表全 0（空转）、`ROW_DEMAND` 绑定落空、零读数判据在合成样品上也为 0。
@@ -145,7 +145,7 @@ const hasKeyDeep = (node: unknown, name: string): boolean => {
 
 /**
  * CSS 选择器位的取值路径（矩阵 `a-css-case-insensitive-match` 的上界判据用）。必须限路径：
- * 整串 raw 扫会把文件后缀、URL 段、js 属性访问算进来（曾量出 107 源的假读数）；取这些字段前
+ * 整串 raw 扫会把文件后缀、URL 段、js 属性访问算进来（读数会被撑成假量级）；取这些字段前
  * 先剥 js 片段。
  */
 const CSS_SELECTOR_PATHS = [
@@ -197,8 +197,8 @@ export const DEMAND_KEYS: Array<{ key: string; label: string; test: (raw: any) =
   { key: 'javaRefreshExplore', label: '调用名 `java.refreshExplore(` 出现（按 raw 全串；「会不会被执行」要逐处读上下文，本表只给上界，见矩阵 h-source-refresh-explore）', test: (r) => anyStr(r, /java\.refreshExplore\s*\(/) },
   { key: 'sourceStateStore', label: '调用名 `source.{setVariable,getVariable,getKey,put,get}(` 出现（上界：静态写容器≠需要跨重启存活）', test: (r) => anyStr(r, /\bsource\.(?:setVariable|getVariable|getKey|put|get)\s*\(/) },
   { key: 'jsLib', label: 'jsLib 非空', test: (r) => rawField(r, 'jsLib') },
-  // 探针关键词：`services/types.ts` 的 probeKeyword 词条曾引一个漂掉的数——注释里的数没有复数
-  // 入口就会这样过期。键放这儿，词条只指这条命令。
+  // 探针关键词：`services/types.ts` 的 probeKeyword 词条只指这条命令，不写数——注释里的数没有
+  // 复入口，会静默过期。
   { key: 'probeKeyword', label: 'ruleSearch.checkKeyWord 非空（顶层 checkKeyWord 也算；探针首词的需求方）', test: (r) => boxField(r, 'ruleSearch', 'checkKeyWord') || rawField(r, 'checkKeyWord') },
   { key: 'nonTextSource', label: '非文本源（bookSourceType 有值且不是 0/"0"）', test: (r) => r?.bookSourceType !== undefined && r?.bookSourceType !== 0 && r?.bookSourceType !== '0' && r?.bookSourceType !== null && r?.bookSourceType !== '' },
   // URL 页码形态 `<a,b,c>`：判据在**这里唯一地**写死（分桶重叠会造出假负结果，见矩阵
@@ -292,10 +292,9 @@ const KNOWN_RULE_SHAPES: Record<string, string> = {
 
 /**
  * 在册已知桥缺口：脚本用得到、本仓没挂、已在矩阵行排队的 `java.*` 方法名。只为让**新**缺口冒出来
- * 即红、不给存量挡红：加条目必须先有矩阵行 id。**按名字点，不数第几条**（加过一条就把「前三条」这类
- * 说法作废过一次）：t2s / cacheFile / toURL 三条来自换分母那批（2026-09-22，本库之外另取两份公开
- * 合集，`DSH_PARSE_CENSUS_FILE` 指过去可复现）；s2t / getVerificationCode / ajaxTestAll /
- * queryBase64TTF 四条随本库需求方出现登记。t2s 的需求方在本库（6 源 14 处——**只 Linpx / 兽人小说站
+ * 即红、不给存量挡红：加条目必须先有矩阵行 id。**按名字点，不数第几条**（点序会随增删漂）：
+ * t2s / cacheFile / toURL 三条由另取的两份公开合集撞出（`DSH_PARSE_CENSUS_FILE` 指过去可复现）；
+ * s2t / getVerificationCode / ajaxTestAll / queryBase64TTF 四条随本库需求方出现登记。t2s 的需求方在本库（6 源 14 处——**只 Linpx / 兽人小说站
  * 是搜索面**，其余 4 源跨正文/目录/详情/发现，读数按面拆见矩阵 `h-java-t2s`）；「本库从未用过」只对
  * cacheFile / toURL 成立。
  */
@@ -393,7 +392,7 @@ describe.skipIf(!ON)('解析面全库普查（DSH_PARSE_CENSUS=1）', () => {
       console.log(`[parse-census] 脚本调了、快照里有、本仓没挂的 java.* 方法 ${bridgeGaps.length} 种：`)
       console.log(fmt(new Map(bridgeGaps)))
       // **两类分开展印**：在册那几条**只报不红**（登记过的缺席）——「需求方出现了」只在这行的
-      // 非 0 里看得见，别以为门会替它响（矩阵 h-java-unmounted-uncalled 的重开条件曾误写成「门会红」）。
+      // 非 0 里看得见，别以为门会替它响（矩阵 h-java-unmounted-uncalled 的重开条件是需求方出现，不是门红）。
       const rostered = bridgeGaps.filter(([n]) => KNOWN_BRIDGE_GAPS[n]).map(([n]) => n)
       const unlisted = bridgeGaps.filter(([n]) => !KNOWN_BRIDGE_GAPS[n]).map(([n]) => n)
       console.log(`    在册只报：${rostered.join(' / ') || '无'} ｜ 未在册即红：${unlisted.join(' / ') || '无'}`)
@@ -442,7 +441,7 @@ describe.skipIf(!ON)('解析面全库普查（DSH_PARSE_CENSUS=1）', () => {
       : `[parse-census] 需求读数对账：${Object.keys(ROW_DEMAND).length} 行绑定的读数与现算一致`)
     expect(badBinding, `读数绑定指向了不存在的东西：\n  ${badBinding.join('\n  ')}`).toEqual([])
 
-    // ── 面 C：桥可达性对账（协议表有真实现的名字，不许在沙箱里仍是抛错桩；病史见文件头面 C）──
+    // ── 面 C：桥可达性对账（协议表有真实现的名字，不许在沙箱里仍是抛错桩；口径见文件头面 C）──
     const clobbered = JAVA_PROTOCOL.map(r => r.name).filter(n => stubs.has(n))
 
     // ── 断言：未知形态为 0 ─────────────────────────────────────────

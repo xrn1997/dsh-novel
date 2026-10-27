@@ -55,7 +55,7 @@ describe('全局状态条渲染分支（renderToString；住址＝shell.overlay 
     expect(html).toContain('已保存登录态')
   })
   it('状态条＝浮层：锚是铺满视口的 .novel-shell-status（默认 click-through），条身不吃布局', () => {
-    // 闪烁回归锁的另一半：泳道挂载不参与布局（真机实测曾整块 +35px 再弹回）
+    // 闪烁回归锁的另一半：泳道挂载不参与布局——否则整块高度会突变（真机实测过跳动）
     pushOk('已保存登录态')
     const html = renderToString(createElement(NovelStatusOverlay, { focusPanel: () => {} }))
     expect(html).toContain('novel-shell-status')

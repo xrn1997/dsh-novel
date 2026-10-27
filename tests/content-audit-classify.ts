@@ -19,11 +19,11 @@ export interface ClassifiableErr {
 
 /** 本仓宿主面缺口的消息锚点（每条都是代码里真实存在的措辞片段） */
 const HOST_GAP = [
-  'is not a function',                       // 沙箱里缺某个 jsoup/宿主方法（如曾经的 Elements.remove）
+  'is not a function',                       // 沙箱里缺某个 jsoup/宿主方法（如 Elements.remove）
   '无法识别的段类型',                         // 解析期不认的段形态
   '未知 java 方法',                           // js-protocol：脚本调了没登记的 java.*
   '未知 Packages 桥操作',                     // Packages.* 未登记的路径（重活通道 `__pkg.*`）
-  '未知 Packages 包路径',                     // 包路径整体未实现（如 java.net / android.webkit）——此前是裸 TypeError，归因认不出
+  '未知 Packages 包路径',                     // 包路径整体未实现（如 java.net / android.webkit）——若是裸 TypeError，归因认不出
   '未知元素桥操作',                           // 元素桥未实现的操作
   'XPath 步骤不支持',                         // 求值层未实现的 XPath 形态
   'XPath 轴不支持',                           // 轴子集之外
@@ -71,7 +71,7 @@ export function attributeError(err: ClassifiableErr | undefined): Attribution {
   const name = err.name ?? ''
   const msg = err.message ?? ''
   // 网络错里嵌着的脚本错（`java.ajax` 打不通）同样归网络、不算本仓缺口——这一跳同时按 error name
-  // 与消息锚点判（此处曾重复一次锚点判断，是不可达代码）
+  // 与消息锚点判（不要重复锚点判断：那会成不可达代码）
   if (name === 'FetchError' || matches(msg, NETWORK)) return 'network'
   if (name === 'RuleMissingError') return 'guard'
   if (matches(msg, HOST_GAP)) return 'host-gap'
@@ -138,8 +138,8 @@ export function messageSkeleton(msg: string): string {
 }
 
 /**
- * 搜索面「没给出任何带地址的条目」时的 stage 判据。**桶名不是归因**（2026-09-28 教训：
- * `no-book-url` 曾同时罩住两件事，15 条文本源被笼统写成站点侧）——
+ * 搜索面「没给出任何带地址的条目」时的 stage 判据。**桶名不是归因**：
+ * `no-book-url` 若同时罩住两件事，文本源就会被笼统写成站点侧——
  *  - `search-no-hit`：列表规则零命中，条目**根**就没出来 → 查列表规则与站点；
  *  - `no-book-url`：条目出来了、地址全 null → 查 bookUrl 规则。
  * 两者下一步动作不同，合成一个桶就只能靠再跑一次才发现是谁。

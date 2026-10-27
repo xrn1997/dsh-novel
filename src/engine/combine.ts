@@ -22,8 +22,8 @@ export interface CombineOpts {
  *   全 Miss → Miss；全空 List（无 Miss）→ 空 List（不折叠成 Miss——Miss≠空 List）。
  * - `and`（&&）：语义是「合并所有非空分支」——**空/Miss 分支静默跳过**，
  *   非空结果按序拼接（Value 间 `\n` 连接，List 摊平，**nodes 合并成节点集**）；全空/Miss → Miss。
- *   （此前实现为「任一 Miss → 整体 Miss」——与本口径相反；而 nodes 分支在这段什么也不贡献，
- *   于是 `tag.li&&tag.ul` 在列表用途下合并成空列表 = 目录整块消失且不报错。）
+ *   注意：空/Miss 分支只跳过，不代表整体 Miss——改成「任一 Miss → 整体 Miss」会让缺一支的
+ *   目录整块判失败；nodes 分支漏算时则合并成空列表（目录消失且不报错）。
  * - `zip`（%%）：交叉合并——第 i 轮按分支顺序各取第 i 项，**驱动长度 = 首个参与分支的长度**
  *   （列表 / 取值两条用途各自的首支，见 CombineOpts.usage），更长分支的尾项不产出。
  *   遇 Matches（AllInOne 2-D）→ UnsupportedRuleError（宁炸不猜）。
@@ -60,8 +60,8 @@ function combineAnd(
   const kept = values.filter((v) => v.kind !== 'miss' && !(v.kind === 'list' && v.items.length === 0))
   if (kept.length === 0) return { kind: 'miss', detail: '&& 所有分支未命中' }
   // Matches（2-D）无法摊平进 1-D——单分支透传原样；多分支混合无意义。
-  // 与 `%%` 同款宁炸不猜：曾用 Miss 冒充失败（同文件另一组合符的做法就是抛），
-  // 「用 Miss 冒充失败」正是本仓定为最高罪的那条。
+  // 与 `%%` 同款宁炸不猜：二维结果无法合并时抛错，不用 Miss 冒充失败——
+  // 空结果冒充失败是本仓定的最高罪。
   if (kept.some((v) => v.kind === 'matches')) {
     if (kept.length === 1) return kept[0]
     throw new UnsupportedRuleError('&& 混合 AllInOne(matches) 二维结果无法合并', mergeErrCtx(usage, loc))

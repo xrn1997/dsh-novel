@@ -93,8 +93,8 @@ describe('writeFileAtomic（PageCache/JSON 共用低层）', () => {
   })
 
   it('定时器路径的写失败会留下可见错误，flush 如实抛出（不成为 unhandled）', async () => {
-    // 病根：flush 原先只看 pending。定时器触发后 pending 立刻被删、rename 还在途的这段窗口里，
-    // flush 会误判「没有挂起写」而 resolve，失败只能留给下一次 flush——收尾时即未处理拒绝。
+    // flush 必须等真在途的写，不能只看 pending：定时器取走 pending 后 rename 仍在途，
+    // 此时误判「没有挂起写」的 flush 会 resolve，失败只能留给下一次 flush——收尾时即未处理拒绝。
     // 这里用可控 rename 把窗口钉死：写真的在途，flush 必须等它并以同一个错误 reject。
     const dir = await tmp()
     const file = path.join(dir, 'debounced-fail.json')
@@ -153,8 +153,8 @@ describe('createDebouncedWriter', () => {
     expect(await readJson(b, null)).toEqual({ x: 2 })
   })
   it('flush 排到静默：第一轮在途期间新调度的写也必须在返回前落地', async () => {
-    // 病根：flush 原先排的是**调用那一刻的快照**（`[...pending.keys()]` 一次），不是「等齐」。
-    // 于是「第一轮 I/O 在途时又来一次 schedule」的写会留在计时器里——测试收尾把临时目录删了
+    // flush 排的是「等齐」，不是调用那一刻的快照（pending 只取一次）。
+    // 否则「第一轮 I/O 在途时又来一次 schedule」的写会留在计时器里——测试收尾把临时目录删了
     // 它才烧，rename 撞上 Windows 的 EPERM（全量门里那种「1920 全绿但 exit≠0」的现场）。
     // 窗口刻意放到 10_000ms：这条用例里 b 绝不可能靠计时器落地，只能靠 flush 排干净——
     // 既不需要 sleep，也不给「放宽断言」留余地。
@@ -223,8 +223,8 @@ describe('createDebouncedWriter', () => {
 })
 
 describe('原子写与备份的命名约定（唯一住址在 storage.ts）', () => {
-  // 病根：删书的清点原先自己写死 `.tmp` / `.bak` 两个字面量去猜低层写的命名——今天两处都对，
-  // 靠的是「没人改过命名」，不是有守卫。命名收在一处之后，改命名只会红一处。
+  // 命名只住 storage.ts：清点若自己写死 `.tmp` / `.bak` 两个后缀去猜低层命名，改命名时两处会悄悄分叉。
+  // 命名收在一处之后，改命名只会红一处。
   const target = path.join(path.sep + 'x', 'local', 'b1.json')
 
   it('tempPathOf 产出的裸名，正是 isAtomicTemp 认的那一个', () => {

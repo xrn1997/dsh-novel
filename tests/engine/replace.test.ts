@@ -19,7 +19,7 @@ describe('applyReplaces 净化（## 替换）', () => {
 
   /**
    * 空 pattern 的替换步**整步跳过**——对面那侧每一处替换都门在 `replaceRegex.isNotEmpty()` 上，
-   * 空串正则根本不执行。本仓此前无条件执行：JS 的空正则配 `g` 在每个字符位置都匹配，
+   * 空串正则根本不执行。改这里注意：别无条件执行空正则——JS 配 `g` 时在每个字符位置都匹配，
    * 于是真库那条 `class.font_max@html####本章未完.*##`（`##` 尾的第 2 段是空串、第 3 段才是正则）
    * 把 6.5KB 的一页灌成 **732,311 字符**并写进缓存（一章变半本书）。
    * 这条与 `##` 的「只有一对 + 第 4 段开关」那条分叉是两件事，后者仍登记在矩阵行
@@ -56,8 +56,7 @@ describe('applyReplaces 净化（## 替换）', () => {
 
   it('OnlyOne 先截取首个匹配、再在该匹配内替换（对面 replaceRegex 的 replaceFirst 分支）', () => {
     // 先取**首个匹配**的那一小段，替换再作用在该小段上——产物就是那一小段
-    // （不是「原文里只改第一处」）。此前本仓按后者实现：'aXaX' → 'a-aX'（错值，
-    // 净化尾因此留下本该被裁掉的尾巴）。
+    // （不是「原文里只改第一处」；按后者读会得错值，净化尾因此留下本该被裁掉的尾巴）。
     const v = { kind: 'value', text: 'aXaX' } as const
     expect(applyReplaces(v as unknown as EngineValue, [step('X', '-')], true))
       .toEqual({ kind: 'value', text: '-' })
@@ -72,7 +71,7 @@ describe('applyReplaces 净化（## 替换）', () => {
   })
 
   it('OnlyOne 的捕获组引用在截取的匹配内解析', () => {
-    // 'xabyab' 首个匹配是 'ab'，在其内 $2$1 → 'ba'（保留原文两处的那条旧实现给不出这个值）
+    // 'xabyab' 首个匹配是 'ab'，在其内 $2$1 → 'ba'（保留原文两处就给不出这个值）
     expect(applyReplaces({ kind: 'value', text: 'xabyab' }, [step('(a)(b)', '$2$1')], true))
       .toEqual({ kind: 'value', text: 'ba' })
   })

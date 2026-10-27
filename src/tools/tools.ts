@@ -64,8 +64,8 @@ const ACTION_FIELD = { type: 'string', required: true, description: '回显所�
  * （凭据红线同 HTTP——分组/书目/源清单全经服务层投影）；render 只做文本投影，规范值全文保留。
  *
  * 名字全部锁 `dshnovel_` 前缀（tests/tools/tools.test.ts 断言名字集合）：宿主对工具重名直接抛
- * `already registered`，前缀是与生态其他插件的硬边界——2026-09 全生态核查时 `novel_` 前缀已被
- * 写作类插件占了 80+ 个词，阅读域的新词（toc/source）虽暂无占用，但插件专属前缀才是根治。
+ * `already registered`，前缀是与生态其他插件的硬边界——`novel_` 前缀属于写作类插件，
+ * 阅读域的新词（toc/source）不能保证不被占用，插件专属前缀才是根治。
  *
  * 形状取「工具少 + action 枚举」而非每动词一工具：弱模型对 6 个工具名的辨识远好于 11+，
  * action 的合法取值、描述与缺参清单从 action 行派生，渲染纯函数住 `tools/render.ts`。
@@ -144,7 +144,7 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
       //（空结果冒充对世界的判断是本仓定的最高罪）。分档读数由 `summarizeRound` 汇总
       //（`shared/relevance.ts` 单点判据），不在这里复述 containment。
       // searchOne 的失败组恒带空 hits，所以归并与计数里把它们排除在外是口径防御而非活路——
-      // 失败源唯一的活出口是 `failed` 列（「失败源贡献行」不可观测，2026-10 审查证过）。
+      // 失败源唯一的活出口是 `failed` 列（「失败源贡献行」不可观测）。
       const filtered = counts.suspect
       // 缺键纪律归 project()（tools/project.ts 单点）：null/undefined 字段整键省略——
       // harness 的 lossless-JSON 校验对 undefined 属性值一票否决；truncated 缺席即没截断。

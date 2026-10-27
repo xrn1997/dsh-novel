@@ -479,8 +479,8 @@ describe('活动内容与可见图形的处置', () => {
 
   it('内联 SVG 是文档唯一内容（真书的整页封面形状）：本层交回 svgOnly 候选，不认识图', () => {
     // 拒绝与降级都不在这一层定：只有编排层知道那张图能不能落到书内资源里（`import.ts`）。
-    // 判据从「文档层直接报错」挪到这里，是因为真书里这个形状**有内容**——一张书内封面图，
-    // 直接拒整本会把 Gutenberg 那类标准封面写法当坏书（2026-09-26 真书反例）。
+    // 判据住在这里而不在文档层，是因为真书里这个形状**有内容**——一张书内封面图，
+    // 直接拒整本会把 Gutenberg 那类标准封面写法当坏书（真书反例）。
     const rectOnly = '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4"/></svg>'
     const out = convert(rectOnly)
     expect(out.nodes).toEqual([])

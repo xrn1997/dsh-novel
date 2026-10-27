@@ -7,14 +7,14 @@ import type { JobState } from './types.js'
 
 /**
  * 全局状态条（瞬态统一层的呈现端）：错误(红,sticky) > 运行任务 > 成功(自动退场）。
- * **浮层**：absolute 定位、不参与布局（挂载/卸载不顶动区块内容——曾把整块顶下去 35px 造成
- * 启停闪烁，见 styles/shell.ts 的 `.novel-status-bar` 注释）；空闲零占用（无条目无任务不渲染）。
+ * **浮层**：absolute 定位、不参与布局（挂载/卸载不顶动区块内容——占布局会把整块顶下去 35px
+ * 造成启停闪烁，见 styles/shell.ts 的 `.novel-status-bar` 注释）；空闲零占用（无条目无任务不渲染）。
  * 任务泳道保留 data-novel-job-status（smoke 断言）。
  * interface：job（任务现场）+ onOpen（点任务泳道跳转到对应区块）。
  */
 
-/** 泳道形状（栏数 / 弱底 / 光标）归样式类 .novel-lane.cols-*：原先由 statusLane() 工厂
- *  每次渲染现造五个 style 对象，样式表里搜不到这些规则，改观感要改 JS。 */
+/** 泳道形状（栏数 / 弱底 / 光标）归样式类 .novel-lane.cols-*：不要在渲染时用工厂现造
+ *  style 对象，否则样式表里搜不到这些规则，改观感要改 JS。 */
 
 export function GlobalStatusBar({ job, stale = false, onOpen }: { job: JobState | null; stale?: boolean; onOpen: () => void }): ReactNode {
   const t = useCopy()

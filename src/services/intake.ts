@@ -8,8 +8,8 @@ import type { NovelSource } from './types.js'
  * normalize → 批内去重（留首条）→ 按址去重（同 baseUrl 只留一条，
  * 已有 verified 优先保留；无可用者 → 新条替换 preferred，复用旧 id，清同键脏数据）。
  *
- * 此前这套规则只住在后台导入任务（import-job.runImport）里，同步 importOne（工具面）
- * 缺去重——同一 baseUrl 可重复入库，入库规则半套。现在两条调用路（同步 / 任务）都只是调用方。
+ * 规则只住这里：后台导入任务（import-job.runImport）与同步 importOne（工具面）
+ * 都必须经本模块去重；任一路自己入库会让同一 baseUrl 重复入库，入库规则只剩半套。
  * 批 = 一个 SourceIntake 实例的生命周期：库内快照在构造时冻结，批内新键实时并入。
  */
 
@@ -56,7 +56,7 @@ export class SourceIntake {
     if (existing !== undefined && existing.length > 0) {
       const preferred = existing.find((s) => s.status === 'verified') ?? existing[0]
       if (preferred.status === 'verified') {
-        this.batchKeys.add(key)                       // 与任务旧口径一致：verified 跳过也占批内键
+        this.batchKeys.add(key)                       // verified 跳过也占批内键（两条导入路径同口径）
         return { kind: 'skipped', reason: 'verified', name, existing: preferred, warnings: result.warnings }
       }
       // 无可用者：新条替换 preferred（新导出的规则通常更新），顺带清掉其余同键条目（历史脏数据收敛到一条）
@@ -77,7 +77,7 @@ export class SourceIntake {
   }
 }
 
-/** 归一化前的名称兜底（同步/任务两条路同一口径——此前两份手抄靠注释对齐） */
+/** 归一化前的名称兜底（同步/任务两条路必须共用这一份，否则口径会分叉） */
 function rawName(item: unknown): string {
   const r = item as Record<string, unknown> | null
   return typeof r?.bookSourceName === 'string' && r.bookSourceName !== '' ? r.bookSourceName : '(未命名)'

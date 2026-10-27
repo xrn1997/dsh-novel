@@ -8,9 +8,9 @@ import { JOB_POLL_MS } from './util.js'
  * client 依赖 seam：束按**读者**切，不按方便切。
  *
  * 为什么收窄：视图硬 import 真实现时，接线层的 bug（乐观态不回滚、陈旧回调、误导性空态）无法被
- * 测试驱动——interface 即测试面。而一条测试要构造的成员数就是它的固定成本：原先所有吃「核心束」的
+ * 测试驱动——interface 即测试面。而一条测试要构造的成员数就是它的固定成本：若所有吃「核心束」的
  * 读者都被迫提供 `apiUpload`（只有书架读）与 `apiEventStream`（只有两条观察通道读），
- * 那两位的成本付在每一个用例上，收益落在零个用例上。
+ * 那两位的成本会付在每一个用例上，收益落在零个用例上。
  *
  * 分工：
  * - `ClientCoreDeps` = 三视图与浮层真正共用的那四件（两条 wire 口 + 瞬态上报两位）。
@@ -35,8 +35,8 @@ export interface ClientCoreDeps {
 }
 
 /** 观察一条在跑的后台任务所需的通道：读面 + 推送加速器 + 节奏。
- *  节奏是 seam 的一格而不是常量：观察通道的节拍原先只有常量一个家，测试要驱动「等到下一拍」
- *  就得干等墙钟（一条用例 700ms 起）。缺省仍是 `JOB_POLL_MS`——生产接线零变化。 */
+ *  节奏是 seam 的一格而不是常量：节拍必须可注入，否则测试要驱动「等到下一拍」就得干等墙钟
+ *  （一条用例 700ms 起）。缺省仍是 `JOB_POLL_MS`——生产接线零变化。 */
 export interface JobWatchDeps {
   apiGet: typeof apiGet
   apiSend: typeof apiSend
@@ -91,7 +91,7 @@ export const prodDeps: SettingsDeps = {
 }
 
 /** 阅读区依赖束：核心束超集 + 导出流（streamExport/saveBlob）。
- *  ReaderView 此前是三个主视图里唯一不吃 ClientCoreDeps 的——口径自此与 ShelfView/SearchView 齐平。 */
+ *  ReaderView 与 ShelfView/SearchView 同吃 ClientCoreDeps 的核心面；阅读区只加导出流两件。 */
 export interface ReaderDeps extends ClientCoreDeps {
   /** 流式导出（fetch 流读取 → Blob）与落盘下载；编排归 export-run.ts */
   streamExport: typeof streamExport

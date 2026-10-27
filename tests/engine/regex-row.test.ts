@@ -10,7 +10,7 @@ import { evaluate } from '../../src/engine/evaluate.js'
  * `chapterName = $2$3`、`chapterUrl = https://…/$1`——`$n` 取当前行的第 n 组，
  * `$0` 取整段匹配。两条口径（对读记录与出处见矩阵行 `a-allinone-group-zero`）：
  * ① 只扫 `##` 之前的支文本（替换尾里的 `$n` 是替换段的组引用）；
- * ② 含 `$\d` 的支整体进正则模式，绑定后的**原文**就是值（不再按规则解析）。
+ * ② 含 `$\d` 的支整体进正则模式，绑定后的**原文**就是值（不按规则解析）。
  */
 describe('AllInOne 行绑定 $n', () => {
   const row = ['整段匹配', 'g1', 'g2', 'g3']

@@ -1,6 +1,6 @@
 /**
- * 沙箱宿主纯工具。曾埋在 js-sandbox 的 makeJavaBridge 附近只能整体过 vm 测试——现抽成无状态纯函数
- * （无 vm、无 EvalContext、无会话状态，直接可测，tests/engine/js-utils.test.ts）。
+ * 沙箱宿主纯工具：无 vm、无 EvalContext、无会话状态，直接可测
+ * （tests/engine/js-utils.test.ts）。
  * 纪律：本文件不进 engine barrel——仅由 js-protocol/js-sandbox 内部引用。
  */
 import crypto from 'node:crypto'
@@ -87,7 +87,7 @@ export function uriEncode(s: string): string {
   return encodeURIComponent(String(s))
 }
 
-/** 十六进制串 → UTF-8 字符串；空串/奇数长/含非 hex 字符 → ''（宁空不猜，与旧实现逐字一致） */
+/** 十六进制串 → UTF-8 字符串；空串/奇数长/含非 hex 字符 → ''（宁空不猜） */
 export function hexDecodeToString(hex: string): string {
   const clean = String(hex).trim()
   if (clean === '' || clean.length % 2 !== 0 || /[^0-9a-fA-F]/.test(clean)) return ''
@@ -194,7 +194,7 @@ export function fmtTime(ts: number | string, utc: boolean): string {
   return `${y}/${p2(mo + 1)}/${p2(da)} ${p2(h)}:${p2(mi)}`
 }
 
-/** EngineValue → 单串（**唯一实现**；nodes 两种宿主口径由参数显式区分，不再是两份抄本）。
+/** EngineValue → 单串（**唯一实现**；nodes 两种宿主口径由参数显式区分，只有一份实现）。
  *  nodesMode：'inner' = `html()`（java.getString 口径，默认）；'outer' = `toString()`（@js host.result 口径）。
  *  其余分支：list 换行拼接、matches 行内 tab、miss → ''。 */
 export function engineValueToString(v: EngineValue, nodesMode: 'inner' | 'outer' = 'inner'): string {

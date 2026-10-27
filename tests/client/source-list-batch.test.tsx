@@ -12,15 +12,14 @@ import { paramOps, ROUTES } from '../../src/shared/wire.js'
 import type { JobState, SourcePublic } from '../../src/client/views/types.js'
 
 /**
- * 选中动作条 + 删除确认流的接线测试。2026 调度台改版（用户逐项裁定）后本文件随之重写：
+ * 选中动作条 + 删除确认流的接线测试。当前口径：
  * - 删除确认统一为**模态二次确认**（与书架删书同款：点名后果 + Esc/遮罩取消 + ids 点击时快照）；
- * - 「>20 条手输删除」双强度确认与危险区退役（`source-batch.ts` 整模块退役）；行内「⋯」菜单提供
- *   单源删除入口。启停/验证批量的写口载荷、失败上报、防重复提交口径不变。
+ * - 行内「⋯」菜单提供单源删除入口，没有手输口令式的双强度确认；
+ * - 启停/验证批量的写口载荷、失败上报、防重复提交口径仍钉在这里。
  *
  * **onChanged 是「重取源列表」的出口 Mock**（启停/删除成功后必须被调）；「验证 → 催任务读面」收进
- * `jobs.ts` 的领域动作，读面观测经 `useJobPolling` 的取数计数。病史：曾因 refresh/onChanged 都传
- * 空函数，批量启停接错出口（该重取却只重启轮询）在本文件测不出、实机界面停在旧值（2026-09 回归）
- * ——分工断言仍钉在两个用例里，观测面换了。
+ * `jobs.ts` 的领域动作，读面观测经 `useJobPolling` 的取数计数。回归要点：批量启停该重取源列表，
+ * 不能只重启轮询——否则界面停在旧值。分工断言钉在两个用例里，观测面在轮询取数计数。
  */
 
 const src = (over: Partial<SourcePublic> & { id: string }): SourcePublic => ({
@@ -73,13 +72,13 @@ describe('选中动作条：启用/停用/验证所选（写口载荷 + 成功�
 
     await waitFor(() => expect(deps.apiSend).toHaveBeenCalledWith(
       ROUTES.sourcesBatchEnabled, { ids: ['s1', 's2'], enabled: true }))
-    // 启停改的是源本身 → 必须重取 sources（onChanged）。曾经这里走的是「重启任务轮询」
-    // 的出口，写成功后没人重读，界面停在旧值、要重开视图才对（2026-09 实机 bug）；
+    // 启停改的是源本身 → 必须重取 sources（onChanged），不能只重启任务轮询——否则写成功后
+    // 没人重读，界面停在旧值、要重开视图才对；
     // 对向断言（验证 → 催任务读面、不重取源列表）在「验证所选」用例，经轮询取数计数观测。
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
     expect(deps.pushOk).toHaveBeenCalledWith('已启用 1 个源')   // 批量必须有条：被改的行可能在屏幕外
     // 这批源做完启停**还在列表里**，勾选就是它们的现场：留着才能连着点「验证所选」/改主意
-    // 再停用，不必重勾（2026-09 用户裁定：清勾选「不应该」）
+    // 再停用，不必重勾（清勾选「不应该」）
     expect(screen.getByText('完成')).toBeTruthy()                      // 还在编辑态
     expect(document.querySelector('[data-novel-selbar]')).not.toBeNull()
     expect((screen.getByLabelText('选择 源一') as HTMLInputElement).checked).toBe(true)
@@ -278,8 +277,8 @@ describe('删除：统一模态二次确认（2026 改版——手输口令与�
     ;(screen.getByText('确认删除') as HTMLElement).focus()      // 用户把焦点移进模态
     expect(document.activeElement?.textContent).toBe('确认删除')
     // 壳层重渲染 × 2（模拟 useJobPolling 轮询 tick：新 job 对象 → SourceList 重渲染 → 新 onCancel 闭包）。
-    // 旧实现：effect 依赖 [onCancel] → 每次重渲染 cleanup+重跑 → 焦点被劫回「取消」、
-    // opener 被重捕获成模态内按钮（关闭时焦点落 body）。挂载作用域化后焦点必须原地不动。
+    // 挂载作用域化：焦点 effect 不得依赖 onCancel，否则每次重渲染 cleanup+重跑 → 焦点被劫回
+    // 「取消」、opener 被重捕获成模态内按钮（关闭时焦点落 body）。重渲染后焦点必须原地不动。
     rerender(view(deps))
     rerender(view(deps))
     expect(document.activeElement?.textContent).toBe('确认删除')
@@ -294,8 +293,8 @@ describe('删除：统一模态二次确认（2026 改版——手输口令与�
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
     expect(screen.getByText('删除《源一》？')).toBeTruthy()
     expect(screen.getByText(/停用 ≠ 删除/)).toBeTruthy()
-    // 焦点闭环对这条路也必须成立：菜单项点完即随菜单卸载，旧实现读 document.activeElement
-    // 拿到的是 body（取消后焦点掉 body，2026-09 审查发现的空承诺）——归还对象是行内 ⋯ 钮。
+    // 焦点闭环对这条路也必须成立：菜单项点完即随菜单卸载，归还对象是行内 ⋯ 钮——
+    // 不能读 document.activeElement（此刻已是 body）。
     expect(document.activeElement?.textContent).toBe('取消')
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(document.activeElement).toBe(screen.getByLabelText('更多动作 源一'))
@@ -311,10 +310,9 @@ describe('删除：统一模态二次确认（2026 改版——手输口令与�
 })
 
 describe('⋯ 菜单的开合方向：下方放不下就朝上开（长列表滚到滚动口底）', () => {
-  // 病史（2026-09-26 用户实机 + 真 Edge 逐点命中）：表格自身的裁剪修掉后仍有一档——列表很长、
-  // 滚到滚动口底再点末行的 ⋯，菜单向下展开会越出滚动口的可见底：3 项菜单可达率只有 23%，
-  // 菜单越长越差（4 项 16% / 6 项 11%）。修法是按剩余空间翻方向，判据用「真正会裁它的盒子」
-  // = 滚动口（宿主面板比视口小，拿视口判会把「放不下」算成放得下）。
+  // 列表很长、滚到滚动口底再点末行的 ⋯，菜单向下展开会越出滚动口的可见底：项数越多可达率
+  // 越低。修法是按剩余空间翻方向，判据用「真正会裁它的盒子」= 滚动口（宿主面板比视口小，拿视口
+  // 判会把「放不下」算成放得下）。
   // jsdom 无排版：滚动口身份靠 overflow-y + 可滚高度认（与 `scrollport.findScrollport` 同一判据），
   // 几何由用例给——这里让 body 当那个滚动口，触发件与它的 rect 按用例摆布。
   const realGBCR = Element.prototype.getBoundingClientRect
@@ -382,9 +380,8 @@ describe('⋯ 菜单的开合方向：下方放不下就朝上开（长列表滚
 })
 
 describe('「去登录」接线（runLogin 两形态 / 未声明回站点）', () => {
-  // 病史：这个钮原先恒 `window.open(source.baseUrl)`——
-  // 既没问服务端要真 loginUrl，也从没触发 JS 形态的登录脚本，而 README 已宣称两者都支持。
-  // 判据是服务端投影出来的事实 `hasLoginUrl`，不在客户端按错误文案猜分支。
+  // 「去登录」不问 baseUrl 直开，也不在客户端猜分支：先向服务端要真 loginUrl / 触发 JS 登录脚本，
+  // 再看服务端投影出来的事实 `hasLoginUrl`。
   beforeEach(() => { vi.spyOn(window, 'open').mockImplementation(() => null) })
   afterEach(() => { vi.restoreAllMocks() })
 

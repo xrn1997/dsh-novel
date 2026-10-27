@@ -227,7 +227,7 @@ describe('正文内链的返回栈（窗口内状态，绝不落盘）', () => {
 
     h.port.node = { index: 1, nodeId: 'q1', offsetWithinNode: 8 }
     h.session.followLink('local:b1', { kind: 'chapter', index: 0, anchorId: 'a1' }, 'backlink')
-    expect(h.session.state.returnDepth).toBe(0)                      // 旧实现：返回动作又压了一条
+    expect(h.session.state.returnDepth).toBe(0)                      // 回归：返回动作不得再压一条
     expect(h.session.state.pendingJump).toMatchObject({ index: 0, anchorId: 'a1' })
   })
 
@@ -250,7 +250,7 @@ describe('正文内链的返回栈（窗口内状态，绝不落盘）', () => {
     expect(h.session.state.returnDepth).toBe(1)
 
     h.session.followLink('local:b1', { kind: 'chapter', index: 1, anchorId: null }, 'normal')   // 面板里点到主序列
-    expect(h.session.state.returnDepth).toBe(1)                       // 旧实现：2（同一处的第二份抄本）
+    expect(h.session.state.returnDepth).toBe(1)                       // 回归：同一处只许一条（第二份抄本多一步返回）
   })
 
   it('关闭面板只消费「开面板时压入的那一条」：栈顶已换人时只关面板，不动主序列', async () => {
@@ -277,8 +277,8 @@ describe('正文内链的返回栈（窗口内状态，绝不落盘）', () => {
 
     const saves = [...h.saves]
     h.session.closeSupplement('local:b1', entry)                     // ④ 关面板：栈顶已是 E1（别人的原处）
-    expect(h.session.state.pendingJump).toBeNull()                   // 旧实现：指向第 1 章（真的跳了）
-    expect(h.saves).toEqual(saves)                                   // 旧实现：多一笔 [0, …]（写进存档）
+    expect(h.session.state.pendingJump).toBeNull()                   // 回归：关面板不得跳到别章
+    expect(h.saves).toEqual(saves)                                   // 回归：关面板不得写存档
     expect(h.session.state.returnDepth).toBe(1)
   })
 })

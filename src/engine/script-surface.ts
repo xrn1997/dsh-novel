@@ -3,10 +3,9 @@ import type { EvalContext } from './types.js'
 /**
  * 脚本可见性清单：`EvalContext` 的每个字段都必须在下面有一行归属。
  *
- * 为什么要有这张表：同一份「脚本能看到什么」此前散在三处手抄——`EvalContext` 的字段、
- * `initOf` 的 JSON 键、BOOTSTRAP 的 `g.*` 全局名。任何一处漏投影都不会报错，只是脚本读到
- * undefined 后走默认分支（`sourceComment` 就这么漏过一次）。表用 `Record<keyof EvalContext, …>`
- * 声明，漏一个字段 tsc 当场报；运行期再抽 key 断言，挡住表退化。
+ * 为什么要有这张表：脚本能看到什么必须同时对齐三处消费面——`EvalContext` 的字段、`initOf` 的
+ * JSON 键、BOOTSTRAP 的 `g.*` 全局名；任何一处漏投影都不会报错，只是脚本读到 undefined 后走默认分支。
+ * 表用 `Record<keyof EvalContext, …>` 声明，漏一个字段 tsc 当场报；运行期再抽 key 断言，挡住表退化。
  *
  * 两档归属：
  * - `visible`：进 init，按 `key` 落 JSON 键；有 `global` 的由 BOOTSTRAP 物化。

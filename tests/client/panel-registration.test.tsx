@@ -6,13 +6,13 @@ import { apply, inject as clientInject } from '../../src/client/index.js'
 import { fakeCtx, fakeHost } from './fake-host.js'
 
 /**
- * 客户端注册面：小说 = **全局面板**（2026-09 迁移，用户拍板），不再是对话区 tab。
+ * 客户端注册面：小说 = **全局面板**（用户拍板），不是对话区 tab。
  * 宿主契约：`sidebar.panellist` 每条 entry 是
  * 侧栏一行（注册 `{ id, order?, label? }`，占用者只收 owner props `{ size, active }`）；`main` 是
  * 同 id 选中后按 `{ key }` 渲染的占用者；「selecting a missing main entry throws」⇒ 两个座位必须
  * 同批注册（apply 内同步完成）。
  * 本文件钉注册面本身（seam = `apply(ctx)` + 假体，假体住址 `fake-host.ts`）：inject 集合、座位名、
- * id/key 一致性、owner props、main 占用者渲染 NovelView、`conversation.view` 撤除。
+ * id/key 一致性、owner props、main 占用者渲染 NovelView、不注册 `conversation.view`。
  */
 
 afterEach(cleanup)

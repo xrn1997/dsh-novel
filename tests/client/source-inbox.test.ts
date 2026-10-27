@@ -15,7 +15,7 @@ describe('sourceInbox（书源待办派生）', () => {
       src({ id: 'ok1', status: 'verified' }),
       src({ id: 'b1', status: 'broken' }),
       src({ id: 'u1', status: 'unverified' }),
-      // 停用只摘掉「参与聚合搜索」，不改状态归属（2026-09 裁定：停用 ≠ 免验）——
+      // 停用只摘掉「参与聚合搜索」，不改状态归属（停用 ≠ 免验）——
       // 停用的坏源仍进坏源集合、停用的未验证仍进未验证集合（一键验证覆盖得到它）
       src({ id: 'off-ok', status: 'verified', enabled: false }),
       src({ id: 'off-broken', status: 'broken', enabled: false }),
@@ -38,7 +38,7 @@ describe('sourceInbox（书源待办派生）', () => {
   })
 })
 
-/** 待办卡的「忽略」语义（2026-09 用户裁定）：待办是**提示**，不是工单分派——关掉一张卡 =
+/** 待办卡的「忽略」语义（用户裁定）：待办是**提示**，不是工单分派——关掉一张卡 =
  *  这批成员我不再需要被提醒，但成员集一变（新坏源 / 新导入未验证）提示就该回来。
  *  故静音记录按**成员签名**（排序后的 id 串）记账，不认人也不认脸。 */
 describe('inboxCards / visibleInboxCards：卡 = 成员非空的一种待办 + 成员签名', () => {

@@ -4,7 +4,7 @@ import { isValueTerminal } from './select.js'
 import type { Facet, RuleUsage, Segment } from './types.js'
 
 /** 子规则的求值体：文本 + **已定的用途**。用途与文本绑成一个值，递归入口拿不到
- *  「只有文本、用途另配」的组合——后者曾让每个入口各自判一次，新增入口漏判时链尾未知词
+ *  「只有文本、用途另配」的组合；否则每个入口都要各自判一次，新增入口漏判时链尾未知词
  *  会从属性名静默翻成选择器（判据本身的 why 见下）。 */
 export interface SubRule {
   readonly rule: string

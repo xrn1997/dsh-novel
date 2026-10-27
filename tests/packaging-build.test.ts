@@ -20,7 +20,7 @@ describe.skipIf(!hasLib)('构建产物（先跑 pnpm build 或 pnpm test:pack）
     expect(footerMatch).not.toBeNull()
     const mapIdx = js.indexOf('//# sourceMappingURL=')
     expect(mapIdx).toBeGreaterThan(footerMatch!.index)
-    expect(js).toContain('sidebar.panellist')           // 全局面板双注册进了 bundle（2026-09 迁移）
+    expect(js).toContain('sidebar.panellist')           // 全局面板入口进了 bundle
     expect(js).toContain('novel-status')                // 常驻状态层注册仍在
     // 断言编译后的调用形状，而不是裸字符串：源文件 JSDoc 里也抄着同一个槽名，注册被删而注释还在时
     // 裸串断言照样绿（最终评审钉出的假绿面）。

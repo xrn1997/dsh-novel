@@ -9,9 +9,9 @@ import type { JobState } from '../../src/client/views/types.js'
 /**
  * 任务轮询驱动的接线测试：取数走注入 deps（`SettingsDeps.fetchJobStatus` 不是假 seam），
  * 挂载即拉一次、`refreshJob()` 触发重拉、卸载后轮询终止，三条时序全部可测。
- * 2026-09 住址变更：驱动从 `useJobStatus`（hook 局部 state）改为 `useJobPolling` + `jobSurface`
- * 模块镜像——轮询单实例搬到 shell.overlay 的常驻层，视图环内的消费者只读镜像。
- * 本文件钉的是**驱动行为**（节拍 / 卸载停 / stale），与住在哪个组件无关，故钉子逐条保留。
+ * 驱动是 `useJobPolling` + `jobSurface` 模块镜像——轮询单实例住 shell.overlay 的常驻层，
+ * 视图环内的消费者只读镜像。本文件钉的是**驱动行为**（节拍 / 卸载停 / stale），与住在哪个
+ * 组件无关，改动驱动时先跑这里。
  */
 
 const probeJob = (done: number): JobState => ({

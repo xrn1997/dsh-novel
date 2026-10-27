@@ -324,7 +324,7 @@ function axisPool(ctx: AnyNode, axis: Axis): AnyNode[] {
       const i = sibs.indexOf(ctx)
       // preceding-sibling 是**逆向轴**：XPath 1.0 §2.4 规定其位置按逆文档序编号——
       // 池按逆文档序（最近的在前），谓词位置才与规范一致（`[1]`=最近者，`[last()]`=最远者）。
-      // 此前按文档序切片（slice(0,i)）+ 文档序编号 → `[1]`/`[last()]` 双双与规范相反。
+      // 不要按文档序切片或编号：`[1]`/`[last()]` 会双双与规范相反。
       return i === -1 ? [] : sibs.slice(0, i).reverse()
     }
   }

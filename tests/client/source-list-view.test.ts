@@ -4,10 +4,10 @@ import type { SourceListUi } from '../../src/client/source-list.js'
 import type { SourcePublic } from '../../src/client/views/types.js'
 
 /**
- * 源列表派生 view-model 的纯函数单测（曾是组件体闭包、零直接覆盖）。逐条钉语义，尤其「分组选项集
+ * 源列表派生 view-model 的纯函数单测。逐条钉语义，尤其「分组选项集
  * 不随状态过滤缩水」这个语义决策——改了它过滤器就不可组合。
- * 2026 调度台改版口径：状态 chips 退役 → 下拉，chipCount 移除；坏源/未验证 id 集合归
- * source-inbox.ts，本 view-model 不再重复派生。2026-09 续：读数落点收敛为**仅列表头部状态带**
+ * 口径：状态筛选是下拉，不出 chipCount；坏源/未验证 id 集合归
+ * source-inbox.ts，本 view-model 不重复派生。读数落点只有**列表头部状态带**
  * （待办卡可忽略后，读数不能跟着提示一起消失）。
  */
 
@@ -114,7 +114,7 @@ describe('deriveSourceListView：登录态计数（删除确认模态的点名�
   })
 })
 
-/** 列表头**状态带**（2026-09）：读数从待办卡搬来此处唯一住址——卡可被忽略，读数不能跟着消失。
+/** 列表头**状态带**：读数的唯一住址——卡可被忽略，读数不能跟着消失。
  *  启用/停用是 enabled 维、未验证/坏源是 status 维，两个正交维并列显示，不做合计约束。 */
 describe('deriveSourceListView：stats（状态带计数）', () => {
   it('五个读数为真：共 5 · 已启用 3 · 已停用 2 · 未验证 1 · 坏源 2', () => {

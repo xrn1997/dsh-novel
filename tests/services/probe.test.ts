@@ -30,8 +30,8 @@ describe('probeSource（search 面）', () => {
     expect(r.firstTitle).toBe('斗罗大陆')
   })
   it('书名规则以属性终端收尾 → 与搜索面同 usage，不误判坏源（2026-09 审查）', async () => {
-    // 标题住在属性里：usage='value' 时链尾未知词是 HTML 属性名，usage='list'（缺省）时
-    // 它是选择器——探针曾漏传该参数，于是搜索面读得出书名的源被报「首条书名为空」的 broken。
+    // 标题住在属性里：usage='value' 时链尾未知词是 HTML 属性名，usage='list'（缺省）时是选择器。
+    // 回归钉子：探针必须把 usage 传给求值，否则搜索面读得出书名的源会被报「首条书名为空」的 broken。
     const html = '<html><body><div class="b"><a href="/book/1/" title="斗罗大陆">进入</a></div></body></html>'
     const f = createFetcher({ fetchImpl: async () => new Response(html) })
     const r = await probeSource(src({ ruleBookName: 'tag.a@title' }), fakeSourceRequest(f))
@@ -72,8 +72,8 @@ describe('probeSource（search 面）', () => {
   })
   it('不支持的规则语法 → UnsupportedRuleError 如实透出（探针不冒充空结果）', async () => {
     const f = createFetcher({ fetchImpl: async () => new Response(SEARCH_HTML) })
-    // 取真·构不成选择器的形态：`词.词`（如 weirdsyntax.x）自 2026-09-22 起
-    // 交 CSS 求值，不再是解析期错误
+    // 取真·构不成选择器的形态：`词.词`（如 weirdsyntax.x）
+    // 交 CSS 求值，不是解析期错误
     const r = await probeSource(src({ ruleBookName: 'weirdsyntax$.x@text' }), fakeSourceRequest(f))
     expect(r.ok).toBe(false)
     expect(r.error?.code).toBe('UnsupportedRuleError')

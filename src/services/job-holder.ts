@@ -5,11 +5,10 @@ import { DEFAULT_JOB_OUTPUT_BYTES, JobTail } from './job-tail.js'
  * 共用的**只有这一件事**：向 `ctx.jobs` 登记一条任务，并把「宿主请求收手」「终态结算」
  * 「过程行往哪交」三根线接回来。
  *
- * 为什么要独立一家：这段机械原先在三个文件里各写一遍（含 `subscribe`/`notify` 连注释一起抄）。
- * 宿主契约一变（0.2.1-rc.1 那次就是整行禁用插件），三处要各自发现；而「UI 说跑完了、宿主那边
- * 还挂着 running」这条缺陷，恰恰只在漏改的那一处出现。收成一处之后，各持有者剩下的差异是
- * **快照形状、槽政策与业务判据**——那三样本来就不该共用（`docs/adr/0018` 裁的是槽与读模型，
- * 不是这段接线仪式）。
+ * 为什么要独立一家：这段机械由三个持有者共用；分散在各文件里会让宿主契约变更时三处各自发现，
+ * 而「UI 说跑完了、宿主那边还挂着 running」这条缺陷，恰恰只在漏改的那一处出现。集中后，
+ * 各持有者剩下的差异是**快照形状、槽政策与业务判据**——那三样本来就不该共用
+ * （`docs/adr/0018` 裁的是槽与读模型，不是这段接线仪式）。
  *
  * 这里刻意**不**做的事：不接管状态形状、不设「任务运行器」泛型、不统一槽政策。抽一层只有转发
  * 位的壳，比三份各写一遍更坏——壳会把「谁负责收手」这条线切成两半。
@@ -18,8 +17,8 @@ import { DEFAULT_JOB_OUTPUT_BYTES, JobTail } from './job-tail.js'
 /** 宿主登记任务的终态词汇（唯一住址：三个持有者共读这一份联合类型） */
 export type JobOutcome = { status: 'completed' | 'killed' | 'failed'; detail?: string }
 
-/** 宿主后台任务注册表（`ctx.jobs`）在本插件用到的子集——与宿主真名真形对齐（2026-10-17 对宿主
- *  jobs 包的实证）：宿主侧叫 `JobStart`/`JobHooks`，`run()` **无入参**，
+/** 宿主后台任务注册表（`ctx.jobs`）在本插件用到的子集——与宿主真名真形对齐：
+ *  宿主侧叫 `JobStart`/`JobHooks`，`run()` **无入参**，
  *  hooks 面是 `{ cancel, done, readOutput? }`——**没有 append/log/write**，输出是拉：注册表（经 `job_output` 工具）
  *  调生产方自己的 `readOutput()`，宿主任务面板没有文本面。
  *  **本地窄面镜像，不引类型包**：照 `src/index.ts` 既有的 `NovelContext` + `*Like` 先例办，只声明用到的成员。
@@ -101,8 +100,8 @@ export class HostTie {
 }
 
 /** 一条「状态变了」信号：观察者各持自己的游标，持有者只发信号不发数据。
- *  搜索面与发现面两条 SSE 原先各抄一份 `Set` + 快照成数组那两行——漏抄「快照成数组」的那一处，
- *  就变成「回调里再 subscribe/unsubscribe 会让本轮漏发给别人」。 */
+ *  搜索面与发现面两条 SSE 必须共用这一份；若各写一份 `Set` + 快照成数组，漏掉「快照成数组」，
+ *  就会变成「回调里再 subscribe/unsubscribe 会让本轮漏发给别人」。 */
 export class ChangeSignal {
   private readonly listeners = new Set<() => void>()
 

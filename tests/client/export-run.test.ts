@@ -5,8 +5,8 @@ import { ApiClientError } from '../../src/client/api.js'
 import { enTranslate, zhTranslate } from '../../src/client/copy/index.js'
 
 /**
- * 范围导出流编排：此前整段住在 ReaderView（硬 import streamExport/saveBlob），
- * 零测试。现在收成独立 module——start/cancel/状态三态 + 卸载 abort 全部可被假 streamExport 驱动。
+ * 范围导出流编排：独立 module，不挂在 ReaderView 里——start/cancel/状态三态 + 卸载 abort
+ * 全部由假 streamExport 驱动。改动这里要注意：视图只做接线，时序口径都归这一层。
  */
 
 interface Deferred {
@@ -168,8 +168,8 @@ describe('createExportRun：成功 / 失败（错误类目投影）/ 取消 / �
   })
 })
 
-/** 导出范围草稿：缺省 / 档位算术 / 校验的单一主人。视图此前三件事分住 openExport、onPreset、
- *  onConfirm 三处，面板再把 from/to/total 摊在三格 props 里——同一件事的第四份抄本。
+/** 导出范围草稿：缺省 / 档位算术 / 校验的单一主人。视图只把 from/to/total 摊成 props，
+ *  草稿口径别在视图里另存一份。
  *  章数**不进草稿**：它是调用方每次现读的活值（当前目录长度），收进草稿就会停在开面板那一下的
  *  读数上——目录迟到即失真，预设也跟着回不到合法区间。 */
 describe('export draft', () => {
@@ -203,7 +203,7 @@ describe('export draft', () => {
   })
   it('preset rest 在当章 0（目录未就绪）时从第 1 章起：两格全由 kind / currentChapter / total 派生', () => {
     // 「不收草稿」是签名级的关闭（`applyPreset` 没有草稿形参，tsc 挡加宽对象透传），
-    // 这里只钉 rest 分支在 0 位上的形状；旧实现以草稿为底会把多余格带进 setExpDraft，本用例不替那条作证。
+    // 这里只钉 rest 分支在 0 位上的形状；applyPreset 不得以草稿为底回写，本用例不替那条作证。
     expect(applyPreset('rest', 0, 12)).toEqual({ from: '1', to: '12' })
   })
 })

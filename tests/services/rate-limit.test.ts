@@ -40,7 +40,7 @@ describe('RateLimiter', () => {
       sleep: async (ms) => { sleeps.push(ms); now += ms },
     })
     await limiter.acquire()
-    now = 1000                    // 空闲 1s：旧实现不会清掉 0 那一笔，之后永久放行
+    now = 1000                    // 空闲 1s：过期的那笔必须清出窗口，留着会让此后永久放行
     await limiter.acquire()
     await limiter.acquire()
     expect(sleeps).toEqual([100])

@@ -116,8 +116,8 @@ describe('@put / @get 变量', () => {
   })
 
   it('带引号的值是显式字面量，不吃裸值的键访问（@put:{img:"pic"} ≠ @put:{img:pic}）', () => {
-    // 病史（2026-09 审查）：parsePairs 丢掉「值是否带引号」，于是显式字面量也被
-    // 键访问分支接管，静默变成条目里的 pic 字段——用户写的字面量拿不到。
+    // 改这里注意：parsePairs 必须留住「值是否带引号」——丢了它，显式字面量会被
+    // 键访问分支接管，静默变成条目里的 pic 字段，用户写的字面量拿不到。
     const quoted: EvalContext = { vars: {}, html: JSON.stringify({ pic: '不该被取到' }) }
     evalPut('{img:"pic"}', quoted, L, 'search')
     expect(quoted.vars!.img).toBe('pic')                       // 字面量原样落盘

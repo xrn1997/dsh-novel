@@ -9,7 +9,7 @@ export type AddBookInput = { bookKey: string; sourceId: string; title: string }
   & Omit<ShelfMetaPatch, 'sourceId' | 'title'>
 
 /** patch 写口入参：**null/undefined 键 = 保值**——
- *  这条语义在 interface 上，不再是调用方各自筛键的民俗（此前三处复读同一纪律）。
+ *  这条语义在 interface 上，调用方不要各自筛键。
  *  wire 上可空字段本就是 null；调用方可以直接透传未知形状。
  *  字段集本身归 SHELF_META，此处只保留名字以贴合 module 语境。 */
 export type BookPatch = ShelfMetaPatch

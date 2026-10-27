@@ -9,7 +9,7 @@ import { SourceRegistry } from '../../src/services/sources.js'
 
 /**
  * AllInOne 目录的 `$n` 字段映射（库内实证源 若夏）：目录规则是整页正则形态，
- * `chapterName = $2$3`（行组引用）。此前引擎只有 group 1..n 的行、没有 `$n` 绑定——`$2$3` 被当
+ * `chapterName = $2$3`（行组引用）。`$n` 绑定是目录正则取值语言的一部分：缺了它，`$2$3` 会被当
  * JSONPath 求值当场抛「意外字符 "2"」，整条目录不可用（宁炸不猜如实炸，不静默）。
  *
  * fixture 与原文的一处差异：站点响应体是异步接口返回的 HTML 片段，这里用等价形状的静态页代替

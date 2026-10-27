@@ -56,10 +56,11 @@ function hostArgs(args: unknown[]): [unknown, ...unknown[]] {
   return [head, ...rest.map(textOf)]
 }
 
-/** `loader/volatile-update` 的载荷：0.2.1-rc.2 的 Loader 实测为顶层路径段数组（`string[][]`），
- *  且宿主会捕获监听器抛出的错误、不中断配置保存。解析仍按 unknown 收窄并容忍字符串 / 嵌套段：
- *  那是面向旧代次 Loader 的跨版本硬化，不是对现行形状的猜测——异形载荷上只许留下可读痕迹，
- *  不许把纯观测升级成故障。数组段按段拼成可读路径；只有顶层单段的 `proxyUrl` 才重算代理。
+/** `loader/volatile-update` 的载荷：当前 Loader 给顶层路径段数组（`string[][]`），
+ *  且宿主会捕获监听器抛出的错误、不中断配置保存。解析按 unknown 收窄并容忍字符串 / 嵌套段：
+ *  那是对旧代次 Loader 的跨版本硬化，不是对现行形状的猜测——异形载荷上只许留下可读痕迹，
+ *  不许把纯观测升级成故障。
+ *  数组段按段拼成可读路径；只有顶层单段的 `proxyUrl` 才重算代理。
  *  最外层兜底吞掉连字符串化都会抛的极端载荷（revoked Proxy、无原型对象…）。 */
 function readVolatilePaths(payload: unknown): { text: string; proxyUrl: boolean } {
   try {

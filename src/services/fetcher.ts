@@ -293,7 +293,7 @@ export function decodeBody(page: FetchedPage, declaredCharset?: string): string 
 
 /**
  * 抓取 + 解码 + 落地地址的单点；调用方只学这一个入口；charset 为选项声明的解码优先级。
- * 超时收口在 fetcher 自身（曾在这里再竞速一个**不 abort** 的定时器，两套超时并存、文案相同）。
+ * 超时只由 fetcher 自身收口；不要在这里再竞速一个**不 abort** 的定时器，否则两套超时并存、文案相同。
  */
 export async function fetchTextPage(
   fetcher: Fetcher, url: string,

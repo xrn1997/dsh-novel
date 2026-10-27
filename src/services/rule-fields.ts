@@ -19,7 +19,7 @@ import type { NormalizedRules } from './types.js'
  *  - `always`：单一读口恒覆盖（导入与重推跑同一份 raw 解释，覆盖不会把对的改成错的）；
  *  - `vacant`：发现面那族，派生值只有一份来源，老库里的 null 与空数组不代表「读过且为空」；
  *  - `missing`：分类/字数那族，有两条读路且优先级不同（导入侧平铺优先、重推侧容器优先），只填缺席键；
- *  - `conditional`：静态头，只有「规则形态与头表都为空」这一种旧形状才补推；
+ *  - `conditional`：静态头，只有「规则形态与头表都为空」这一种存量形状才补推；
  *  - `none`：入库时落位，存量不重推。 */
 export type RehydrateMode = 'always' | 'vacant' | 'missing' | 'conditional' | 'none'
 

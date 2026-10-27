@@ -137,8 +137,7 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
   }, nodeId)
 
   /** 指定节点**之后**第一个正文节点的 id。图片位置读数必须量它：图**之前**的节点在「框塌陷 /
-   *  框到手才撑开」时一动不动，量它抓不到「正文被推走」——那正是预留框要保的事
-   *  （2026-09-28 整改过读数：原读数量的是图前段落，断言触达面比措辞窄）。 */
+   *  框到手才撑开」时一动不动，量它抓不到「正文被推走」——那正是预留框要保的事。 */
   const nodeBelow = (s: PageSession, nodeId: string): Promise<string | null> => s.page.evaluate((id) => {
     const fig = document.querySelector(`[data-novel-node="${id}"]`)
     if (fig === null) return null
@@ -426,7 +425,7 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
   it('EPUB3：插图真解码出 2×3、预留框按可信比例；图到手前后同一节点的视口偏移 ≤2px', async () => {
     await withHost(async (s, host) => {
       // 「慢图片」走**可显式释放的挂起**（不是有界延迟）：在途窗口里量一次读数，随后 release 让图真到手
-      // 再量一次。延迟那版的读数是「窗口够不够宽」的赌注——极慢机器上会响亮假红（2026-09-28 改成挂起）。
+      // 再量一次。有界延迟考的是「窗口够不够宽」——极慢机器上会响亮假红。
       const holdImage = host.hold({ pathIncludes: '/novel-api/local/resource' })
       await uploadFixture(s, 'epub3-rich', '图文样本.epub')
       await s.page.waitForSelector('[data-chapter] [data-novel-node]', { timeout: 20_000 })
@@ -487,7 +486,7 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
 
   it('EPUB3：链接里的插图也先占位（链接是块级容器，收缩包裹会让框塌成 0）', async () => {
     // 链接（`<button>`）缺省收缩包裹，里面 `width: 100%` 的插图框解析成 auto——图未解码时无内在尺寸，
-    // 框塌成 0、到手后整段位移（实测 0×0 → 600×900）。修法：含块内容的链接改块级容器。这条只有真
+    // 框塌成 0、到手后整段位移（实测 0×0 → 600×900）。口径：含块内容的链接必须是块级容器。这条只有真
     // 排版量得出来——jsdom 里 rect 恒 0，塌不塌都一样。
     await withHost(async (s, host) => {
       host.delayNext({ pathIncludes: '/novel-api/local/resource' }, 2_500)
@@ -780,7 +779,7 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       await clickLeaf(s, '第二章')
       await settle(1_100)
       // 末章在这个高度下够不到视口顶：可滚范围小于章块顶位置——落位被钳，「视口顶所在的章」按产品
-      // 口径仍是第 1 章（2026-09 无头 Edge 实测，几何读数详见那次现场）。短书里可测的口径是
+      // 口径仍是第 1 章（无头 Edge 实测：钳位让末章顶永远到不了视口顶）。短书里可测的口径是
       // 「目标章真的进了视野」+「导航事件立刻落盘」（这两条钳位改不掉）。
       expect(await chapterVisible(s, 1), '点第 2 章后它必须真的进入视野（落位被钳 ≠ 没跳）').toBe(true)
       expect(await s.page.$$eval('[data-chapter]', (els) => els.map((e) => e.getAttribute('data-chapter'))),
@@ -993,9 +992,9 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
   // ══ 9. 只读浮层不改写主阅读位置（开面板 / 开抽屉不是导航事件）════════════
 
   /**
-   * 打开目录抽屉**不得**移动主阅读位置，也不得因此多落一笔进度。曾对一处实测缺陷写成「诚实红」：
-   * 开抽屉的 `scrollIntoView` 让浏览器居中**下一个能滚的祖先** `.novel-main`，scrollTop 216 → 0
-   * 并改写章号；修法是落位只滚抽屉自己（口径见 `src/client/util.ts` 的 `centerInScroller`）。
+   * 打开目录抽屉**不得**移动主阅读位置，也不得因此多落一笔进度。陷阱：`scrollIntoView` 会居中
+   * **下一个能滚的祖先** `.novel-main`，scrollTop 216 → 0 并改写章号；落位只许滚抽屉自己
+   * （口径见 `src/client/util.ts` 的 `centerInScroller`）。
    * jsdom 侧只能钉 API 选择，几何与「有没有多落盘」只有真浏览器量得到。
    */
   it('打开目录抽屉不改写主阅读位置，也不产生进度落盘', async () => {
@@ -1021,9 +1020,9 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
   }, 180_000)
 
   /**
-   * 注释面板是**视口浮层**：打开不动主阅读位置，主序列滚动时它留在视口里。原先也对着实测缺陷写
-   * （诚实红）：`.novel-notes` 曾 absolute 挂在正文**内容盒**上，内容盒一滚面板跟着走（scrollTop
-   * 2016 → 0）。修法：与目录抽屉**共用同一条锚视口的 sticky 槽**，落位只滚面板自己的身体——
+   * 注释面板是**视口浮层**：打开不动主阅读位置，主序列滚动时它留在视口里。陷阱：`.novel-notes`
+   * 若 absolute 挂在正文**内容盒**上，内容盒一滚面板就跟着走（scrollTop 2016 → 0）。
+   * 口径：与目录抽屉**共用同一条锚视口的 sticky 槽**，落位只滚面板自己的身体——
    * 同族浮层并存两套锚定就是缺陷的根子，防漂移的钉子在 tests/client/ui-system.test.tsx。
    */
   it('注释面板按视口定位：开面板不动主阅读位置，主序列滚动后它仍留在视口里', async () => {

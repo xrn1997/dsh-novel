@@ -1,6 +1,6 @@
 /**
  * JavaBridge 协议表：**唯一登记点**。每行 = 方法名 · sync/async · 沙箱挂载点 · 宿主实现（inline 闭包）。
- * 曾要同步改 4 处（interface / BOOTSTRAP 名单 / switch 分派 / 实现），现全部从表派生：
+ * 类型面、BOOTSTRAP 名单与宿主分派全部从表派生：
  * JavaBridge 类型用 mapped type 推导（不存在第二份手写 interface）、SANDBOX_MOUNTS 供引导脚本挂载、
  * invokeJavaMethod 按名查行分派。加一个 **sync** 方法 = 本表加一行；加一个 **async** 方法 = 一行 +
  * 一个 `bridge` 判别（壳形态 / 挂载名 / 路由探针——桥壳源码与 `g.java` 挂载由表生成）。
@@ -139,7 +139,7 @@ function evalSubRule(d: BridgeDeps, rule: unknown, content?: unknown): EngineVal
  *  · `getString(rule)` —— 缺省：反转义做、不做绝对化；
  *  · `getString(rule, unescape)` —— 第二参布尔就是「要不要再做一次 HTML 反转义」；
  *  · `getString(rule, content, isUrl)` —— 第二参是基内容、第三参才是 isUrl。
- *  （曾只有 `(rule, isUrl?)` 一个签名，两个布尔语义都接错——已按三形态重建。） */
+ *  三个形态靠实参类型分派；不要把第二参的布尔一律当 isUrl——二参形态里它是 unescape。 */
 function parseGetStringArgs(arg2?: unknown, arg3?: unknown): { content?: unknown; isUrl: boolean; unescape: boolean } {
   if (typeof arg2 === 'boolean') return { content: undefined, isUrl: false, unescape: arg2 }
   return { content: arg2, isUrl: arg3 === true, unescape: true }
@@ -174,8 +174,8 @@ export const JAVA_PROTOCOL = [
       throw new JsSandboxError('该源未提供网络能力（ctx.fetch 缺失）', { ...d.loc, facet: d.facet, script: d.code })
     }
     // 参数规约按 String 形参强制转换：`java.ajax(result)` 传进来的常是上一段的值——JSONPath 给
-    // 单元素数组时按 toString 拼成那条 URL（曾把原值交给请求组装层炸成 `template.replace is not a
-    // function`）。null/undefined 不猜成 "null" 去打站点，点名参数缺失。
+    // 单元素数组时按 toString 拼成那条 URL；直接把原值交给请求组装层会在 template.replace 处抛
+    // 「is not a function」。null/undefined 不猜成 "null" 去打站点，点名参数缺失。
     if (url === null || url === undefined) {
       throw new JsSandboxError('java.ajax 参数为空（脚本传进 null/undefined）', { ...d.loc, facet: d.facet, script: d.code })
     }
@@ -321,8 +321,8 @@ export const JAVA_PROTOCOL = [
     routeProbe: 'java.head("https://m.example.com")',
   }),
   // ── 沙箱变量（java.get/put）─────────────────────────────────────────
-  // 未设 → **空串**（变量读的收口是「本表 → 大变量表 → 空串」三级回落）。曾返 undefined 过 JSON 桥
-  // 变成 null：`String(java.get('x'))` 得到字面量 "null" 拼进密钥/URL（静默错值）。
+  // 未设 → **空串**（变量读的收口是「本表 → 大变量表 → 空串」三级回落）。不要返回 undefined：
+  // 过 JSON 桥会变成 null，`String(java.get('x'))` 得到字面量 "null" 拼进密钥/URL，静默错值。
   method('get', { obj: 'java' }, (d) => (key: string): string =>
     getRuleVar(d.ctx, String(key)) ?? ''),
   method('put', { obj: 'java' }, (d) => (key: string, value: unknown): void => {
@@ -366,7 +366,7 @@ export const JAVA_PROTOCOL = [
   }),
   method('getElement', { obj: 'java' }, (d) => (rule: string): { html: string; text: string } | null => {
     const v = evalRule(d, subRuleOf(String(rule), d.facet, 'list'))
-    // 非 nodes 或空选择集 → null（旧行为 = getElements(rule)[0] ?? null）
+    // 非 nodes 或空选择集 → null（取首项，取不到即 null）
     if (v.kind === 'miss') return null
     if (v.kind !== 'nodes') {
       const items = v.kind === 'list' ? v.items : v.kind === 'value' ? [v.text] : []
@@ -439,8 +439,8 @@ export const JAVA_PROTOCOL = [
     return parts.join('; ')
   }),
   // ── 源级状态（挂 source.getVariable/setVariable/get/put 与 cache.*）─────
-  // 口径是**三处独立存储**：单串槽 / 键值表 / 缓存表，按源建档、互不串味（曾混在一张 Map 里
-  // 互相污染，见 SourceSession 注释）。
+  // 口径是**三处独立存储**：单串槽 / 键值表 / 缓存表，按源建档、互不串味；不要合并成一张 Map，
+  // 否则 setVariable 会清掉键值表或缓存（见 SourceSession 注释）。
   method('sourceGetVariable', { obj: 'source', as: 'getVariable' }, (d) => (): string =>
     d.session.sourceString(d.sourceKey)),
   method('sourceSetVariable', { obj: 'source', as: 'setVariable' }, (d) => (value: string | null): void => {
@@ -464,8 +464,8 @@ export const JAVA_PROTOCOL = [
     sourceCache(d).delete(String(key))
   }),
   // ── cache 内存三别名（putMemory/getFromMemory/deleteMemory）──
-  // 内存/磁盘分层在本仓不存在：cache 垫片本来就是进程内键值表，三个别名与 get/put/delete 同存储，
-  // 只为真实源脚本的调用名而在（曾报 not a function）。
+  // 内存/磁盘分层在本仓不存在：cache 垫片就是进程内键值表，三个别名与 get/put/delete 同存储；
+  // 它们只为真实源脚本的调用名而存在，不要按「另一层缓存」实现。
   method('cachePutMemory', { obj: 'cache', as: 'putMemory' }, (d) => (key: string, value: unknown): void => {
     sourceCache(d).set(String(key), value === null || value === undefined ? '' : String(value))
   }),
@@ -633,8 +633,8 @@ export function invokeJavaMethod(d: BridgeDeps, name: string, rawArgs: readonly 
 export const SYNC_AJAX_SENTINEL = '__dsh_sync_ajax_required__'
 
 /** 异步行的沙箱侧同步桥源码——插进 `js-sandbox.ts` 的 `BOOTSTRAP` 模板串。生成逻辑住这，
- *  不在 js-sandbox 手抄八段：加一行 async 方法只该动表，而手抄那八段曾让「挂载」与「路由」
- *  两处完全没有闸。输出被当**文本**插进模板串，故不得含反引号或 `${`。
+ *  js-sandbox 不得手抄桥段：加一行 async 方法只该动表，手抄会让「挂载」与「路由」两处失去闸。
+ *  输出被当**文本**插进模板串，故不得含反引号或 `${`。
  *
  *  生成文本的自由标识符**只许**这四个，且全部由 BOOTSTRAP 的作用域供出：`d.syncAjax`（worker /
  *  主线程分支开关）、`invoke`（序列化 + 宿主调用）、`msg`（错误取消息）、`materialize`（响应描述符
@@ -645,7 +645,7 @@ export function asyncBridgeSource(): string {
     if (r.mode !== 'async' || r.bridge === undefined) return []
     const call = `invoke(${JSON.stringify(r.name)}, [].slice.call(arguments))`
     // 主线程分支一律在**发起宿主调用之前**抛哨兵：evalJs 捕获后换 worker 重跑同一段，请求没
-    // 发出去、不多打站点。曾有一版在这里返回 Promise——ajax 的同步语义静默换成异步。
+    // 发出去、不多打站点。不要在这里返回 Promise——ajax 的同步语义会静默变成异步。
     const head = `  const ${r.name} = d.syncAjax ? function () {`
     const tail = `  } : function () { ${THROW} }`
     switch (r.bridge.shim) {

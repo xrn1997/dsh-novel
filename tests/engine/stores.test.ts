@@ -26,9 +26,9 @@ describe('file store', () => {
     expect(s.get('a')).not.toBeUndefined()
     expect(s.get('b')).not.toBeUndefined()
   })
-  // 与旧 storeFile 的顺序等价：先判单文件字节上限（超限抛错不入表），再在条数满时淘汰最旧，
-  // 最后 set（覆盖已有键也照样先淘汰）。
-  // 加这条是因为前一条用例在「先删后插」的写法下同样会绿，钉不住顺序。
+  // 顺序：先判单文件字节上限（超限抛错不入表），再在条数满时淘汰最旧，最后 set
+  // （覆盖已有键也照样先淘汰）。
+  // 回归钉子：前一条用例在「先删后插」的写法下同样会绿，钉不住顺序。
   it('满表时覆盖已有键也先按插入序淘汰最旧', () => {
     const s = createFileStore({ entries: 2, bytes: 1024 })
     s.put('a', bytes('1'))

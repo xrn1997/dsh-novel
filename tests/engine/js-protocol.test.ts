@@ -105,10 +105,10 @@ describe('invokeJavaMethod 分派（不进 vm 的直测）', () => {
     expect(deps.ctx.vars?.k).toBe('v')
     expect(invokeJavaMethod(deps, 'get', ['k'])).toBe('v')
     // 对面 `RuleDataInterface.getVariable` 是 `variableMap[key] ?: getBigVariable(key) ?: ""`：未设给空串。
-    // 此前本仓返 undefined → JSON 桥把它变成 **null** → 脚本里 `String(java.get('x'))` 得到字面量 "null"
-    // （移动阅读拼进 DES 密钥）、`java.get('x').split(...)` 抛 `Cannot read properties of null`（海棠搜书）。
+    // 改这里注意：未设必须给空串，不能返 undefined——JSON 桥把 undefined 变成 **null**，
+    // 脚本里 String(...) 得到字面量 "null"（移动阅读拼进 DES 密钥）、对 null 再调方法即抛（海棠搜书）。
     expect(invokeJavaMethod(deps, 'get', ['nope'])).toBe('')
-    // 非字符串值按 String() 落位（与旧分派逐案转换口径一致）
+    // 非字符串值按 String() 落位（各方法同一转换口径）
     invokeJavaMethod(deps, 'put', ['n', 42])
     expect(deps.ctx.vars?.n).toBe('42')
   })
@@ -133,9 +133,8 @@ describe('invokeJavaMethod 分派（不进 vm 的直测）', () => {
 
   it('getString 重载分派：二参布尔是 unescape（对面双参重载），不是 isUrl，也不再抛', () => {
     // `getString(ruleStr, unescape: Boolean)` 与 `getString(ruleStr, mContent, isUrl)`
-    // 是两个不同形态，后者的 unescape **缺省 true**。本仓此前把第二参当 isUrl：
-    // `true` 当场 UnsupportedRuleError，`false` 不抛但把「不要反转义」的意图静默反做
-    // （本意要原文，本仓给解码后的值）。
+    // 是两个不同形态，后者的 unescape **缺省 true**。改这里注意：二参布尔是 unescape，不是 isUrl——
+    // 按 isUrl 读会把「不要反转义」的意图静默反做（本意要原文，却给解码后的值）；isUrl 在第三参。
     const fake = (): EngineValue => ({ kind: 'value', text: 'A&amp;B' })
     const deps = depsOf({ evaluateRef: fake })
     expect(invokeJavaMethod(deps, 'getString', ['tag.p@text', false])).toBe('A&amp;B')
@@ -237,7 +236,7 @@ describe('invokeJavaMethod 分派（不进 vm 的直测）', () => {
     expect(invokeJavaMethod(deps, 'sourceVarGet', ['abc'])).toBe('')          // 串槽的**值**不是键值表的键
     invokeJavaMethod(deps, 'sourceVarPut', ['k', 'v'])
     invokeJavaMethod(deps, 'sourceSetVariable', ['第二次'])
-    // 旧实现把两件事塞进同一张 Map，setVariable 先 clear() 整表 ⇒ 这里曾是 ''（键值被顺手清空）
+    // 串槽与键值表分开存：写串槽不许清键值表（合成同一张 Map 时键值会被顺手清空）
     expect(invokeJavaMethod(deps, 'sourceVarGet', ['k'])).toBe('v')
     expect(invokeJavaMethod(deps, 'sourceGetVariable', [])).toBe('第二次')
     // cache 又是第三处：缓存本是全局表（本仓按源隔离是在册裁决），不许漏进键值表
@@ -323,8 +322,8 @@ describe('async 行的能力位闸（表行 ↔ 沙箱包装 ↔ 服务层装配
   })
 
   it('每条 async 行都：有桥壳、有可达入口、被路由启发式认出', () => {
-    // ① 桥壳：生成器必须为每一行产出一段 `const <name> = d.syncAjax`（串是生成的，
-    //    所以这条只防生成器漏行，不再防手抄漂移）
+    // ① 桥壳：生成器必须为每一行产出一段 `const <name> = d.syncAjax`
+    //    （串由生成器出，这条只防漏行）
     const bridgeSrc = asyncBridgeSource()
     for (const r of JAVA_PROTOCOL.filter((x) => x.mode === 'async')) {
       expect(bridgeSrc).toContain(`const ${r.name} = d.syncAjax`)
@@ -351,8 +350,8 @@ describe('async 行的能力位闸（表行 ↔ 沙箱包装 ↔ 服务层装配
   })
 
   it('哨兵只有一个主人：生成的桥壳抛的就是路由认的那一个，两个模块里不许有第二份字面量', () => {
-    // 抛侧搬进生成器后，字面量极易跟着抄一份：值一改另一头认不出，脚本拿到的就是哨兵错误本身
-    // （不再换 worker 重跑），而这条路只在真跑同步网络桥的源上炸。
+    // 字面量只有一份：抄第二份时值一改另一头认不出，脚本拿到的就是哨兵错误本身
+    // （不换 worker 重跑），而这条路只在真跑同步网络桥的源上炸。
     expect(asyncBridgeSource()).toContain(SYNC_AJAX_SENTINEL)
     const sandboxSrc = read('../../src/engine/js-sandbox.ts')
     expect(`${protocolSrc}\n${sandboxSrc}`.match(/__dsh_sync_ajax_required__/g)).toHaveLength(1)

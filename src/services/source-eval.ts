@@ -40,7 +40,7 @@ export interface SourceEvalBookContext {
 /** 脚本可见的 `book` 镜像（对面脚本里的 `book` 是书架上那本书）。三项身份由本仓按面给
  *  （`bookUrl`/`origin`/目录面的 `tocUrl`），其余字段取**书架那条**（`title` 映射成脚本读的 `name`）；
  *  书架没有的字段不注入（读到 undefined 与「未设置」同形，不编值）。
- *  逐面实读与缺口病史：矩阵行 `h-book-mirror-fields`。 */
+ *  逐面实读与缺口：矩阵行 `h-book-mirror-fields`。 */
 export function bookMirrorOf(ctx: SourceEvalBookContext): Record<string, unknown> {
   const s = ctx.shelfBook
   return {
@@ -101,8 +101,8 @@ function rawStringField(raw: unknown, field: string): string {
 
 /** 源级求值上下文组装单点：「引擎上下文该有哪些字段」的唯一实现——
  *  fetch（守门 + auth 头合并）/ source / vars / jsLib 全在此拼装；面（facet）只决定
- *  html/json/baseUrl 的取值（曾多处各拼一份，漏字段只在特定路径炸——新面接入 = 传参数，
- *  不 = 再手拼一份）。 */
+ *  html/json/baseUrl 的取值（不要多处各拼一份：漏字段只在特定路径炸——新面接入 = 传参数，
+ *  不是再手拼一份）。 */
 export function engineContextOf(
   fetcher: Fetcher, source: NovelSource,
   opts: {
@@ -251,7 +251,7 @@ export async function resolveHeaders(
         ...(opts?.jsTimeoutMs === undefined ? {} : { jsTimeoutMs: opts.jsTimeoutMs }),
       }),
       // 头规则脚本的六个出站口用静态头打底（不递归）；「不递归」现在是 engineContextOf 的一个入参，
-      // 不再是六个键的手抄覆盖——手抄那份曾把 deviceId 漏在 headerRule 外面，且能力位闸看不见它。
+      // 不要退回六个键的手抄覆盖：手抄会把 deviceId 漏在 headerRule 外面，且能力位闸看不见它。
       loc: { segmentIndex: 0, segmentRaw: rule },
       facet: 'rule',
       scriptForm: true,

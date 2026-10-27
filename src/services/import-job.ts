@@ -194,7 +194,7 @@ export class SourceJobs {
         if (i >= valid.length) return
         const id = valid[i]
         // 重查：任务运行期间源可能被删——取不到就点名跳过，不产生 TypeError 垃圾失败
-        // （此前的缺陷正是这里不重查，undefined 喂给探针 → 抛 TypeError 冒充正常失败）
+        // （不重查会让 undefined 喂给探针 → 抛 TypeError 冒充正常失败）
         const s = this.deps.registry.get(id)
         if (s === undefined) {
           this.issue(state, 'failed', id, '源不存在（运行中被删除，已跳过）')

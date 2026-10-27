@@ -65,7 +65,7 @@ export function shelfCardMeta(b: ShelfBook, t: Translate = zhTranslate): { text:
  *   - 本地书 → null：本地身份已由封面「本地」与角标承担，同一事实不出第三个说法；
  *   - 源名可用 → 直出源名；
  *   - 服务端 join 不到（源已被删/从未存在，`sourceName === null`）→ 灰字「来源已删除」，
- *     `deleted` 供样式降调（宁如实说来源没了，也不拿空串或旧名糊过去）。 */
+ *     `deleted` 供样式降调（宁如实说来源没了，也不拿空串或过期源名糊过去）。 */
 export function shelfSourceTag(b: ShelfEntry, t: Translate = zhTranslate): { text: string; deleted: boolean } | null {
   if (b.sourceId === LOCAL_SOURCE_ID) return null
   const name = b.sourceName

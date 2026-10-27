@@ -24,9 +24,8 @@ import type {
 } from '../../src/client/views/types.js'
 
 /**
- * 接线层交互测试·第二梯队：deps seam 此前只盖设置区，书架/搜索/试跑器的历史 bug 形态
- * （陈旧回调、乐观删除、误导性空态、失败假死）用核心依赖束（ClientCoreDeps）逐条钉死。
- * 桩工厂统一到 fake-deps.ts。
+ * 接线层交互测试：书架/搜索/试跑器的失败形态（陈旧回调、乐观删除、误导性空态、失败假死）
+ * 用核心依赖束（ClientCoreDeps）逐条钉死。桩工厂统一到 fake-deps.ts。
  */
 
 const coreDeps = (over: DepsOverrides): FakeViewDeps => makeCoreDeps(over)
@@ -66,7 +65,7 @@ describe('ShelfView 接线（deps seam 驱动）', () => {
     progress: { chapterIndex: 0, offsetRatio: 0, updatedAt: 1 },
   }
 
-  /** EPUB 导入（2026-09）：上传面从「只收 TXT」扩到两种格式，导入回执还要把**持久 warnings**
+  /** EPUB 导入：上传面收 TXT 与 EPUB 两种格式，导入回执还要把**持久 warnings**
    *  交代出来——它们是这本书的真实状态（被剥离的活动内容、降级的锚点），跳过就等于吞掉。 */
   const epubFile = (): File => new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], '图文书.epub', { type: 'application/epub+zip' })
   const localImport = (over: Partial<LocalImportResponse> = {}): LocalImportResponse => ({
@@ -675,8 +674,8 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
   })
 
   // 回执自己抛错（pushError/onLanded 都来自壳层，行为不受本组件控制）：加架那一发的
-  // rejection 必须被两处入口各自接住——点行阅读照旧导航，兄弟「＋ 加书架」不许把 rejection
-  // 漏成无人处理的一发。旧实现只有前者接了 rejection 分支，后者 `void add()` 裸奔。
+  // rejection 必须被两处入口各自接住——点行阅读照旧导航，兄弟「＋ 加书架」也不许把 rejection
+  // 漏成无人处理的一发（`void add()` 裸奔即回归）。
   it('加架回执自己抛错：点行阅读仍进阅读器，兄弟加架不漏 unhandled rejection', async () => {
     navigate({ name: 'shelf' })
     const apiSend = vi.fn(async () => { throw new Error('disk') })
@@ -1189,7 +1188,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
       sourceId: 's1', sourceName: 'S', status: 'verified',
       hits: [{ title: '斗罗', author: null, url, coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null }],
     }]
-    // 第二轮的基线只在身份切换后被读到（since=0）；此前每次读都回「还没有任务」
+    // 第二轮的基线只在身份切换后被读到（since=0）；没有任务身份时读回「还没有任务」
     let baseline: SearchJobSnapshot | null = null
     // POST search/job 要回 jobId（否则整轮被读成「任务已不可读」），PUT 的返回值没人读
     const apiSend = vi.fn(async (_target: { method: string; path: string }, _body?: unknown) => ({ jobId: 'j1' }))
@@ -1490,7 +1489,7 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
     render(createElement(SettingsSection, { deps }))
     expect(await screen.findByText('? 未验证')).toBeTruthy()
     expect(screen.getByText('✗ 坏源')).toBeTruthy()
-    // 读数只印一遍：卡标题带计数 = 与状态带各说各话（2026-09 读数唯一住址收敛到状态带）
+    // 读数只印一遍：读数的唯一住址是列表头状态带，卡标题带计数就是两份抄本各说各话
     expect(screen.queryByText('✗ 坏源 1')).toBeNull()
     expect(screen.queryByText('? 未验证 1')).toBeNull()
     const brokenCard = document.querySelector('[data-novel-todo="broken"]')
@@ -1514,9 +1513,9 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
   })
 
   it('忽略过的那批整批消失后再回来，提示照旧出现：失效记录跟着取数落动作废，不替用户记住他没做过的「已看过」', async () => {
-    // 病史这一族的形状：忽略按**成员签名**记账，签名一模一样就遮。删光坏源 → 再导入同一批 id
-    // → 签名复现，若失效记录还活着，这张卡会被一次用户从未做过的动作吞掉。
-    // 作废挂在「清单落地的那一处」（SettingsSection 的 reload），不是挂在 effect 上等人记得调。
+    // 忽略按**成员签名**记账，签名一模一样就遮；所以清单落地时必须作废失效记录——删光坏源
+    // 后再导入同一批 id 会复现签名，残留记录会吞掉一张用户从未忽略过的卡。
+    // 作废挂在「清单落地的那一处」（SettingsSection 的 reload），不挂 effect 等人记得调。
     const { unmount } = render(createElement(SettingsSection, { deps: settingsDeps({}, [brokenSrc]) }))
     await screen.findByText('批量重验')
     fireEvent.click(screen.getByLabelText('忽略 坏源 提示'))
@@ -1549,8 +1548,7 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
   })
 
   it('0 源（删光了）：列表头与「＋ 导入书源」必须在场，且能点开弹层', async () => {
-    // 病史（2026-09 实机）：0 源时组件 early-return 提示「点右上『＋ 导入书源』」，而列表头连同
-    // 那颗钮根本没渲染——提示在指一个不存在的控件。
+    // 0 源时组件不许 early-return：提示指向的「＋ 导入书源」必须真的在树上，且能打开弹层。
     // **先等取数落定再查按钮**：sources 为 null 的首帧照样渲染列表头，边等边查会拿到随后被卸载
     // 的节点，点它没反应的假绿比红更贵。
     const deps = settingsDeps({}, [])
@@ -1713,9 +1711,8 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
   })
 
   it('导入弹层焦点不被壳层重渲染劫持（useJobPolling 1s 轮询 tick → 新 onClose 闭包；mount-scoped 口径）', async () => {
-    // 病史（当时是真回归）：当时的导入弹层（现 `Dialog`）焦点 effect 依赖 [onClose]，而 onClose 是壳层每 render
-    // 新造的内联箭头 → 轮询每秒重渲染 → effect 重跑 → 焦点每秒被劫回「关闭」钮。挂载作用域化后
-    // 焦点必须原地不动。
+    // 焦点 effect 不得依赖 [onClose]：onClose 是壳层每 render 新造的内联箭头 → 轮询每秒重渲染
+    // → effect 重跑 → 焦点每秒被劫回「关闭」钮。挂载作用域化后焦点必须原地不动。
     const deps = settingsDeps()
     const { rerender } = render(createElement(SettingsSection, { deps }))
     fireEvent.click(await screen.findByText('＋ 导入书源'))
@@ -1726,7 +1723,7 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
     dropzone.focus()                                     // 用户把焦点移进弹层内容
     rerender(createElement(SettingsSection, { deps }))   // 模拟轮询 tick 的壳层重渲染 ×2
     rerender(createElement(SettingsSection, { deps }))
-    expect(document.activeElement).toBe(dropzone)        // 旧实现：每次重渲染都被劫回关闭钮
+    expect(document.activeElement).toBe(dropzone)        // 回归：重渲染不得把焦点劫回关闭钮
     fireEvent.keyDown(document, { key: 'Escape' })       // Esc 监听不因挂载作用域化丢注册（走 ref 调最新闭包）
     await waitFor(() => expect(screen.queryByText(/选择或拖入 legado 书源文件/)).toBeNull())
   })
@@ -1885,8 +1882,8 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
     expect(pushError).not.toHaveBeenCalled()                 // 不散落页面流
   })
 
-  // 同场时 Esc 归谁：判据在 `reader-surfaces.escOwner`（模态在场时浮层的 Esc 监听不安装）。
-  // 旧实现两条监听同挂 document，一次 Esc 既收回模态、又走 closeAll 把目录也收掉。
+  // 同场时 Esc 归谁：判据在 `reader-surfaces.escOwner`（模态在场时浮层的 Esc 监听不安装），
+  // 否则一次 Esc 既收回模态、又走 closeAll 把目录也收掉。
   it('目录开着 + 入架一问：Esc 只关模态，目录仍在场、进度不变', async () => {
     const deps = readerDeps()
     const { container } = render(reader(deps))
@@ -2003,10 +2000,11 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
   })
 
   /**
-   * 本组「不写主进度」断言的**地基**，病史两段：① jsdom 无排版、rect 全 0，视口采点把「读到哪儿」
-   * 认成最后一块 → 挂载期落伪进度，整组因此换确定性视口（第 1 段在视口里）；② 确定视口消掉的是
-   * 乱参数，不是「站定也写」的冗余 PUT——那正是 2026-09-26 偶发红的机制（墙钟超防抖窗时挂起的写
-   * 跨进观察窗），根因按「不写幽灵写」收在会话侧，本用例窗口随之放宽到整个防抖窗。
+   * 本组「不写主进度」断言的**地基**：
+   * ① jsdom 无排版、rect 全 0，视口若按假几何采点会把「读到哪儿」认成最后一块 → 挂载期落伪进度，
+   *    故整组固定视口（第 1 段在视口里）；
+   * ② 固定视口消掉的是乱参数，不是「站定也写」的冗余 PUT——幽灵写若发生，会挂在防抖窗到期那一刻
+   *    跨进观察窗，根因按「不写幽灵写」收在会话侧；
    * ③ 观察窗不必拿真墙钟买：防抖窗可注入（`ReaderDeps.saveDebounceMs`，jobs 轮询同款先例），
    * 此处收紧到 50ms——幽灵写若有必落在 50ms+双帧内，等 300ms 观察的是同一段语义。
    */
@@ -2174,9 +2172,9 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
   })
 
   it('工具栏返回之后关面板：不许再替用户跳一次（面板的「回引用处」只认它打开时压入的那条）', async () => {
-    // 实测路径：内链去第 2 章 → 点脚注 → 工具栏返回 → 关面板。旧实现按「面板是内链开的」弹栈，
-    // 弹掉的是**更早那条**（别人记的原处）→ 主序列被送回上一章且写进存档；修法是记条目身份，
-    // 栈顶换了人就只关面板。jsdom 无排版，用**可切换**的 rect 桩顶替布局（第 1 章读 p1、第 2 章读 q1）。
+    // 实测路径：内链去第 2 章 → 点脚注 → 工具栏返回 → 关面板。关面板只认它打开时压入的那条
+    // （按条目身份判）；按「面板是内链开的」弹栈会弹掉**更早那条**，主序列被送回上一章且写进存档。
+    // jsdom 无排版，用**可切换**的 rect 桩顶替布局（第 1 章读 p1、第 2 章读 q1）。
     const proto = Element.prototype as unknown as { getBoundingClientRect: () => DOMRect }
     const original = proto.getBoundingClientRect
     let readingChapter2 = false
@@ -2203,7 +2201,7 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
       const atClose = deps.apiSend.mock.calls.length
       fireEvent.click(within(panel).getByRole('button', { name: '关闭' }))      // ④ 关面板
       await waitFor(() => expect(screen.queryByRole('dialog', { name: '注释' })).toBeNull())
-      expect(jumpedTo(deps, atClose)).toEqual([])                             // 旧实现：[0]（把用户送回上一章）
+      expect(jumpedTo(deps, atClose)).toEqual([])                             // 回归：关面板不得再跳一次
       expect(screen.getByRole('button', { name: /返回原处/ })).toBeTruthy()     // E1 还在（没被误消费）
     } finally {
       proto.getBoundingClientRect = original
@@ -2318,7 +2316,7 @@ describe('NovelView 顶部 tab 导航（书架|书城|书源管理 并列；sett
     fireEvent.click(tabs().getByRole('button', { name: '书城' }))
     await waitFor(() => expect(screen.getByPlaceholderText('搜索书源')).toBeTruthy())
     expect(screen.queryByPlaceholderText(/搜书名/)).toBeNull()
-    // 书源管理：SettingsSection（原宿主设置「小说」区块整体）渲染在小说视图内
+    // 书源管理：SettingsSection（书源管理整块）渲染在小说视图内
     fireEvent.click(tabs().getByRole('button', { name: '书源管理' }))
     await waitFor(() => expect(document.querySelector('[data-novel-view="sources"]')).not.toBeNull())
     expect(screen.queryByPlaceholderText('搜索书源')).toBeNull()
@@ -2329,8 +2327,8 @@ describe('NovelView 顶部 tab 导航（书架|书城|书源管理 并列；sett
 })
 
 /**
- * 「离开界面即完蛋」的正面解法（旧实测缺陷：卸载后又发请求、重挂载整轮重打）。批循环搬到 Node 半
- * 之后，卸载只意味着「没人看了」：轮询停掉，服务端那轮继续跑完并持有结果。
+ * 卸载只意味着「没人看了」：轮询停掉，服务端那轮继续跑完并持有结果（批循环住 Node 半）。
+ * 回归：卸载后不得再发请求，重挂载不得重打一整轮。
  */
 describe('SearchView 离开界面：停看不停工（结果由服务端持有）', () => {
   it('卸载后不再发任何请求；重挂载从 since=0 重读即恢复，且不再提交一轮', async () => {
@@ -2366,7 +2364,7 @@ describe('SearchView 离开界面：停看不停工（结果由服务端持有�
 
   it('退出小说界面再进：route 仍带关键词的重挂载也只恢复，不重新提交（真机 bug：整轮从头重搜）', async () => {
     // 真机路径：书架搜索框带 keyword 进搜索页；routeStore 跨卸载存活，退出再进 = route 还带关键词
-    // 重新挂载。旧行为：挂载 effect 无条件 submit → POST 替换单槽里在跑的同一轮 → 整轮从头重搜。
+    // 重新挂载。挂载 effect 不得据此无条件 submit——那会 POST 替换单槽里在跑的同一轮，整轮从头重搜。
     navigate({ name: 'search', keyword: '斗罗' })
     const deps = coreDeps({
       apiSend: vi.fn(async () => ({ jobId: 'j1' })),

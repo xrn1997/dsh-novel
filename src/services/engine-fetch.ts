@@ -24,8 +24,8 @@ export function cookiesOf(setCookie: string[]): Record<string, string> {
  * 不解析的话整串（含 `,{...}`）被当 URL 发出，站点直接 403/404（脚本拼
  * `search.php,{'body':...}` 形态实证）。
  *
- * 请求语义不再自持一份：选项解释 / POST 表单默认头 / init 姿态全部走 assembleRequest + fetchInitOf
- * （此前这里手写一遍「与 buildSearchRequest 同口径」——注释同步的分叉，现已收口）。
+ * 请求语义不自持一份：选项解释 / POST 表单默认头 / init 姿态全部走 assembleRequest + fetchInitOf；
+ * 不要在这里手写「与 buildSearchRequest 同口径」的副本，那会造出注释同步的分叉。
  * 本模块只负责「源级 header 打底 + 解码」这两件引擎桥特有的事；落地地址（finalUrl）随数据面透出——
  * 脚本经 `java.connect(u).raw().request().url()` 取的就是它（`raw()` 与 `url()` 同值，都指
  * **跟随重定向后的末次请求**地址；缺失时由桥按请求地址兜底）。

@@ -25,7 +25,7 @@ describe('链首裸取值终端的上下文（真源 ruleToc.chapterName = "text
 
 describe('点号位置后缀 = 索引列表（对面 ElementsSingle.findIndexSet 的 legacy 分支）', () => {
   // `.` / `:` / `!` 分隔的**每个数字都收成一个索引**（`tag.div.-1:10:2` = 倒数第一、第十、第二），
-  // 冒号不是区间符。本仓原先把 `.a:b` 读成半开切片 → `.0:2` 在四项上取 A、B（应为 A、C），
+  // 冒号不是区间符：按半开切片读，`.0:2` 在四项上取 A、B（应为 A、C），
   // 落在目录/列表规则上就是**少一章、错一章**的静默错值。
   const FOUR = '<ul><li>A</li><li>B</li><li>C</li><li>D</li></ul>'
   const at = (rule: string) => import('../../src/engine/evaluate.js')
@@ -44,9 +44,8 @@ describe('点号位置后缀 = 索引列表（对面 ElementsSingle.findIndexSet
 
 describe('列表规则链首 `+` 前缀（列表入口剥除）', () => {
   // **列表入口**先剥 `-`（置 reverse）再剥 `+`（不做事），剥完照常求值后续规则——
-  // 所以 `+tag.li` 出的是整个列表，不是「认不出」。本仓此前不认它：链尾当 CSS/属性段处理
-  // ⇒ 恒 Miss ⇒ 搜索列表与目录**一条都不出**（矩阵 a-plus-prefix 原先写「本仓会在解析期炸」，
-  // 那句对本仓行为也不成立——本轮实测是 Miss）。
+  // 所以 `+tag.li` 出的是整个列表，不是「认不出」。改这里注意：前缀必须在链首剥离——
+  // 落到链尾按 CSS/属性段处理就恒 Miss，搜索列表与目录**一条都不出**（矩阵 a-plus-prefix）。
   const html = '<ul><li>A</li><li>B</li></ul>'
   const run = (rule: string, usage: 'list' | 'value') => import('../../src/engine/evaluate.js')
     .then(({ evaluate }) => evaluate(rule, { html, baseUrl: 'https://a.com' }, 'toc', usage))
@@ -78,10 +77,10 @@ describe('default 选择段', () => {
   })
   it('`class.a b` = 同时含两个类（不是后代选择器，也不是把整串当一个类名）', () => {
     // 三种读法里只有一种能读出现库的真实源：对面把整串当一个类名交给 jsoup（`getElementsByClass`），
-    // 带空格的类名在按空白分词比对 class 属性时不可能命中；曾经直译成 `.x y`（后代选择器）也恒零命中
+    // 带空格的类名在按空白分词比对 class 属性时不可能命中；直译成 `.x y`（后代选择器）也恒零命中
     // ——两个类在同一元素上时，后代里没有满足 `.x y` 的东西。本仓解成 `.a.b`（同时含所有类）。
-    // 这一侧是**库里 78 段 / 27 源**（2026-09-28 按 raw 全串重数）赖以读出的语义。
-    // 红检：把 `case 'class'` 改回 `.x y` 的直译即红（同一元素两个类 → 后代选择器零命中）。
+    // 这一侧是真实源赖以读出的语义。
+    // 红检：把 `case 'class'` 改成 `.x y` 的直译即红（同一元素两个类 → 后代选择器零命中）。
     const H = cheerio.load('<div id="w"><div class="col-12 col-md-6 x"><span>甲</span></div></div>')
     const hit = evalDefault({ kind: 'default', mode: 'class', arg: 'col-12 col-md-6', index: null }, H, H('#w') as any, loc(0, 'class.col-12 col-md-6'), 'toc')
     expect(hit.kind).toBe('nodes')
@@ -232,7 +231,7 @@ describe('default 取值段', () => {
   })
   it('text 取后代文本（li 内的 <a> 也算）；ownText 严格直系 → List{[]}', () => {
     // 口径：text 含全部后代；ownText 才是直系。
-    // （曾按「text 亦直系」实现——真实源打不动：笔趣阁正文 `.con@text` 而 .con 里全是 <p>）
+    // （按「text 亦直系」读打不动真实源：笔趣阁正文 `.con@text` 而 .con 里全是 <p>）
     const all = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: null }, $, root(), loc(0, 'class.item'), 'toc') as any
     const t = evalDefault({ kind: 'default', mode: 'text', arg: null, index: null }, $, all.nodes, loc(1, 'text'), 'toc')
     expect(t).toEqual({ kind: 'list', items: ['第一章 起点2024-01-01', '第二章 转折2024-01-02', '第三章 高潮2024-01-03'] })

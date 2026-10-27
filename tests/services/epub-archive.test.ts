@@ -106,7 +106,7 @@ describe('打开阶段的安全门（解压任何字节之前）', () => {
     expectEpubError(await openRejection('entry-limit', { entries: 5 }), /条目数超过上限 5/)
   })
 
-  // 上面那条只把预算缩到 5 走同一条代码路径；设计定的那个数（10_000）原先没有任何实证——
+  // 上面那条只把预算缩到 5 走同一条代码路径；设计定的那个数（10_000）需要直接实证——
   // 计数从 0 起还是从 1 起、`>=` 与 `>` 写反，都能让「5 条时红」而真机上放进来 10_001 条。
   it('真实上限实证：恰好 10_000 条在默认预算下打得开（等于上限不是越界）', async () => {
     const archive = await openEpubArchive(makeEpubFixture('entry-limit-exact'))

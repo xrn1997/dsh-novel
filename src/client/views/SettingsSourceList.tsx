@@ -18,11 +18,11 @@ import { Dialog } from './dialog.js'
 import type { JobState, SourcePublic } from './types.js'
 
 /**
- * 源列表（书源管理 tab 的资产清单，2026 调度台 IA）：
+ * 源列表（书源管理 tab 的资产清单）：
  * 列表头（标题 + **状态带**（全库读数唯一住址，窄列退化见样式层）+ 文本/状态/分组过滤 +
  * 编辑切换 + ＋导入书源）+ 编辑态批量条 + 六列表格 + 前端分页。
  *
- * 与旧版的差异（用户逐项裁定）：状态下拉只过滤不总览（读数归状态带）；删除走**统一模态二次确认**
+ * 交互口径：状态下拉只过滤不总览（读数归状态带）；删除走**统一模态二次确认**
  * （点名后果 + Esc/遮罩零写口 + 焦点闭环 + 在途防重 + ids 点击时快照；失败即收模态、错误进全局
  * 条——与书架「失败留在框内」是刻意差异：删源失败必须停在模态里等人处置，不能像搜索失败那样
  * 留在结果框里被忽略）；行内动作浏览态常驻
@@ -71,8 +71,8 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
   // document.activeElement——⋯ 菜单项在模态挂载前就随菜单卸载了，activeElement 已是 body
   const [pending, setPending] = useState<{ ids: string[]; title: string; opener: HTMLElement | null } | null>(null)
   const [delBusy, setDelBusy] = useState(false)     // 删除提交在途：确认钮禁用 + 重入口拒绝（与书架 delBusy 同款）
-  // 0 源与取数失败**不换掉列表头**（2026-09 实机 bug：这里曾整块 early-return 一句
-  // 「点右上『＋ 导入书源』」，而那颗钮就在被跳过的表头里——提示指向一个不存在的控件）。
+  // 0 源与取数失败**不换掉列表头**（整块 early-return 一句「点右上『＋ 导入书源』」会让提示
+  // 指向被跳过的表头里那颗钮——一个不存在的控件）。
   // 表头是工具条（导入是与源数无关的顶层动作），只有表体换内容。
   const all = sources ?? []
   const loaded = sources !== null
@@ -89,12 +89,12 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
   /** 批量写口提交：成功后**重读哪一面由调用点指定**，两者不可互换——
    *  启停改的是源本身 → `onChanged`（重新 GET sources）；验证起的是后台任务 → **不走本
    *  helper**：归 `jobs.ts` 的 `startSourceVerification`（提交 → 催任务读面 / 失败一处反馈）。
-   *  启停若走错出口，写完没人重取源列表，行开关与计数全停在点之前的值（2026-09 实机报）。 */
+   *  启停若走错出口，写完没人重取源列表，行开关与计数全停在点之前的值。 */
   const submit = <T,>(fn: () => Promise<T>, after: (res: T) => void): void => {
     void fn().then(after, (e) => deps.pushError(t('sources.batch.failed', { detail: describeError(e, t) })))
   }
-  /** 批量启停：ids 点击时快照；成功只重取源列表，**留在编辑态且勾选保留**（2026-09 用户裁定：
-   *  这批源还在列表里，勾选是它们的现场）。清勾选只在「删除所选」成功后做——对象已不存在。
+  /** 批量启停：ids 点击时快照；成功只重取源列表，**留在编辑态且勾选保留**
+   *  （这批源还在列表里，勾选是它们的现场）。清勾选只在「删除所选」成功后做——对象已不存在。
    *  成功进反馈条：分页 + 过滤下被改的行可能在屏幕外，批量必须有一条与视口无关的确认。
    *  计数用服务端回包的 `updated`（未知 id 会被静默跳过，报「我勾了几个」会说谎）。 */
   const batchEnabled = (enabled: boolean): void => {
@@ -124,9 +124,9 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
   }
   /** 行内启停开关：单击即切——乐观更新在行内组件。
    *
-   *  **秒级操作不进瞬态泳道**（闪烁回归锁）：单源启停往返 13~20ms ≈ 1 帧，而状态条**原先**
-   *  是流内元素、挂上就把设置区顶下去再弹回（真机逐帧实测 +35px layout-shift；现状态条已改为浮层，
-   *  这条具体读数不再复现，口径保留：秒级操作的反馈不占布局位置）。在途只留行内
+   *  **秒级操作不进瞬态泳道**（闪烁回归锁）：单源启停往返 13~20ms ≈ 1 帧，状态条若占布局，
+   *  挂上会把设置区顶下去再弹回（真机逐帧实测 +35px layout-shift）。状态条现为浮层，
+   *  口径仍保留：秒级操作的反馈不占布局位置。在途只留行内
    *  `savingN` 装饰（开关降透明 + wait + title「保存中…」）；成功静默（开关翻转本身即反馈），
    *  只有失败才进 error 泳道并挂行锚点（全局条「定位 →」+ 行内红边）。 */
   const toggleEnabled = (s: SourcePublic, next: boolean): Promise<boolean> => {
@@ -146,7 +146,7 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
         <strong>{t('sources.list.title')}</strong>
         {/* 状态带：全库读数的**唯一**住址（待办卡可忽略，读数不能跟着提示消失）。0 也显示
             （「坏源 0」是结论）；纯读数不可点——过滤归同一行的下拉与文本框，「带计数的状态
-            chips」是 2026 已否决的设计。窄列退化规则在样式层（@container）。
+            chips」这种设计。窄列退化规则在样式层（@container）。
             **只在真有数据可报时在场**：加载中不报 = 不拿未知冒充结论；0 源不报 = 空态已说同一件事。 */}
         {loaded && all.length > 0 && (
           <span className="novel-src-stats" data-novel-src-stats>
@@ -227,7 +227,7 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
           </div>
         )}
 
-        {/* 删除二次确认（统一模态口径，2026 改版）：ids 点击时快照 → 模态点名后果 → 确认提交。
+        {/* 删除二次确认（统一模态口径）：ids 点击时快照 → 模态点名后果 → 确认提交。
             危险性由文案与确认动作表达，不设「危险区」专区（用户裁定）。
             焦点闭环与 Esc 归 `views/dialog.tsx`；opener 仍由这里显式传——⋯ 菜单项在模态挂载前已随
             菜单卸载，那一刻读 `document.activeElement` 只会读到 body。 */}
@@ -251,8 +251,8 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
           )
         })()}
 
-        {/* 表体三态：0 源 → 空态引导（它指的「＋ 导入书源」就在上面的表头里——曾整块 early-return
-            把表头一起跳过 = 提示指向不存在的控件）；取数失败 → 这里不出声，壳层红字更全（同一
+        {/* 表体三态：0 源 → 空态引导（它指的「＋ 导入书源」就在上面的表头里——整块 early-return
+            会把表头一起跳过，提示指向不存在的控件）；取数失败 → 这里不出声，壳层红字更全（同一
             失败不抄两遍，也不许伪装成「还没有书源」）；其余（含加载中）→ 表格。 */}
         {loadError !== null ? null : showEmpty ? (
           <div className="novel-muted">{t('sources.empty')}</div>
@@ -329,8 +329,7 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
   /**
    * 开菜单前定一次方向：长列表滚到滚动口底时，末行菜单向下展开会越过滚动口的可见底——是它
    * 伸到了容器外面。判据用「真正会裁它的盒子」= 滚动口而不是视口（宿主面板比视口小，拿视口
-   * 判会把「其实放不下」算成放得下）。量不到触发件时不翻转——默认方向就是原行为
-   * （病史：这一档原先拿视口判，用户实机两次才发现菜单伸出滚动口外）。
+   * 判会把「其实放不下」算成放得下）。量不到触发件时不翻转——默认方向就是原行为。
    */
   const toggleMenu = (): void => {
     if (menuOpen) { setMenuOpen(false); return }
@@ -370,7 +369,7 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
     setSavingN((n) => n + 1)
     void onToggleEnabled(s, next).then((ok) => {
       setSavingN((n) => n - 1)
-      if (!ok) setOptimistic(null)                    // 失败即刻回滚（历史 bug：乐观态无人清零 → 开关永久停错态）
+      if (!ok) setOptimistic(null)                    // 失败即刻回滚（乐观态无人清零会让开关永久停在错态）
     })
   }
   /** 行内「验证/重验」：与待办箱、批量条同一条领域动作——本入口只表达「验证这一源」，提交后的
@@ -386,7 +385,7 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
           {editMode && <input type="checkbox" checked={selected} onChange={() => toggleSelect(s.id)} aria-label={t('sources.row.select', { name: s.name })} />}
           <strong>{s.name}</strong>
         </span>
-        {/* 状态列只放验证状态：曾用类型徽标（bookSourceType）顶掉验证位，实测造成误读——已撤 */}
+        {/* 状态列只放验证状态：不要用类型徽标（bookSourceType）顶掉验证位，会造成误读 */}
         <span><StatusBadge status={s.status} /></span>
         {/* 分组格：只留图标——图标即组的视觉身份，hover 出全名；无图标组回退全名（不造图标） */}
         <span className="novel-cell-groups" title={s.groups.length > 0 ? s.groups.join(' / ') : undefined}>
@@ -403,10 +402,10 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
         </span>
         <span className="novel-actions">
           {/* 操作列：浏览态常驻（试跑是排查主路径）；异常态多一个状态动作钮（验证/重验）。
-              **不渲染「启用」文字钮**：启停唯一入口 = 最右开关——重复入口曾让列宽随状态漂移、
+              **不渲染「启用」文字钮**：启停唯一入口 = 最右开关——重复入口会让列宽随状态漂移、
               右缘按钮组不对齐（用户实机反馈）。列轨道定宽右锚在 styles/controls.ts 的 `.novel-tr.src`。
               批量任务在途时禁验证类动作（防重复提交），试跑不受影响（独立请求）。
-              验证钮**不看 enabled**（2026-09 裁定）：停用 ≠ 免验——曾挂过的 `!enabled` 门造成
+              验证钮**不看 enabled**：停用 ≠ 免验——挂 `!enabled` 门会造成
               「批量能验、单点不能验」，与待办箱入口自相矛盾。 */}
           {s.status === 'unverified'
             ? <button className="novel-btn sm" disabled={probing} onClick={verifyThis}>{t('sources.row.verify')}</button>
@@ -554,7 +553,7 @@ function SourceAuthPane({ source, onDone, deps = prodDeps }: {
 }
 
 /** 批量验证运行卡：kind 分家的「验证」侧——渲染在壳层任务槽（待办箱下方）。
- * 外壳归 bits.RunCard（与 ImportRunCard 曾是近逐字同构的双胞胎），此处只供文案与 counts。 */
+ * 外壳归 bits.RunCard（与 ImportRunCard 共用同一外壳），此处只供文案与 counts。 */
 export function ProbeRunCard({ job }: { job: JobState }): ReactNode {
   const t = useCopy()
   const pct = jobPct(job)

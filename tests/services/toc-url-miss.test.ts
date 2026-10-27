@@ -40,10 +40,10 @@ describe('tocUrl 模板插值的两种情形', () => {
 /**
  * 绝对 XPath 形态的 tocUrl：`//…` 既像 URL（协议相对形态）又是 XPath 的绝对形态。
  *
- * 库内 `若夏` / `思兔阅读` / `爱丽丝书屋` 的 `ruleBookInfo.tocUrl` 都是这种规则。旧实现的
- * 「静态 URL 短路」（`^(https?:)?//` 命中 → `absUrl(...) ?? bookUrl`）把它们当 URL：`absUrl`
+ * 库内 `若夏` / `思兔阅读` / `爱丽丝书屋` 的 `ruleBookInfo.tocUrl` 都是这种规则。「静态 URL
+ * 短路」（`^(https?:)?//` 命中 → `absUrl(...) ?? bookUrl`）把它们当 URL：`absUrl`
  * 对这种串解不出 → **回退 bookUrl**，于是目录请求打到书籍页、一条章节也列不出。
- * 真机读数（2026-09-28，经本地代理）：若夏 `getDetail().tocUrl` 恒为 bookUrl、`getToc` 0 章、
+ * 真机读数（经本地代理）：若夏 `getDetail().tocUrl` 恒为 bookUrl、`getToc` 0 章、
  * 审计把它分在 `EmptyToc` 桶里；而这条规则单独求值是好的（`…/chapter/123313`）。
  */
 describe('tocUrl 是绝对 XPath 规则时不许被当静态 URL', () => {

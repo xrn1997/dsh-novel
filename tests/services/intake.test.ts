@@ -6,7 +6,7 @@ import { makeTempDir } from '../temp-dir.js'
 
 /**
  * 源入库：normalize → 批内去重 → 按址去重 → add/replace 的唯一实现。
- * 此前这套规则只住在后台导入任务里，同步 importOne（工具面）没有去重——同一 baseUrl 可重复入库。
+ * 后台导入任务与同步 importOne（工具面）都必须走这里——少了去重，同一 baseUrl 可重复入库。
  * 一个 SourceIntake 实例 = 一批；批内留首条与库内语义分列，不混用。
  */
 const raw = (n: string, url: string): Record<string, unknown> => ({

@@ -6,9 +6,9 @@ export const SHELL_CSS = `
    五分支共用同一条 overflow 链：.novel-root 定高 overflow:hidden、.novel-main
    flex:1 + overflow-y:auto 自己滚（阅读器一视同仁），谁在滚由 src/client/scrollport.ts
    向上探测判定（现即 .novel-main）。注意本文件是模板字符串：注释里不写反引号。
-   **别把放开规则加回来**：阅读器曾放过这两层 overflow 交给宿主 scrollport 承载——那是
-   conversation.view 时代的前提，迁全局面板后链上再无 scrollport，放开 = 整条链没人滚
-   （滚轮无效、正文裁在首屏、scroll 事件永不发生，进度落盘/预取/回跳一并死）。 */
+   **别把放开规则加回来**：若把这两层 overflow 放开交给宿主 scrollport 承载，全局面板链上
+   没有 scrollport，结果就是整条链没人滚（滚轮无效、正文裁在首屏、scroll 事件永不发生，
+   进度落盘/预取/回跳一并死）。 */
 .novel-root { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 .novel-main { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 /* 「小说」视图在场时收掉宿主常驻 composer（AI 输入框）：它是会话壳的固定座位，view 环切换不卸载
@@ -65,10 +65,10 @@ export const SHELL_CSS = `
   box-sizing: border-box;
 }
 .novel-view { padding: var(--novel-sp-4) var(--novel-sp-5); display: flex; flex-direction: column; gap: var(--novel-sp-4); }
-/* ── 顶部 tab 导航（书架 | 书城 | 书源管理）：IA 上三者并列（2026 变更，用户拍板）——
-   选择即切换下方内容。曾经的「书城预留位占位 chip」退役：占位不如真导航（书城已是两级分类
-   浏览页本身，不再是占位空态）；书源管理 = 原宿主设置「小说」区块整体搬入（settings.section
-   注册撤除，单一归属）。reader/search 是 tab 之下的沉浸内容流，各有自己的返回导航，本行不随行。 */
+/* ── 顶部 tab 导航（书架 | 书城 | 书源管理）：IA 上三者并列，选择即切换下方内容。
+   不做「书城预留位占位 chip」：占位不如真导航（书城已是两级分类浏览页本身）；书源管理 =
+   宿主设置「小说」区块整体搬入（settings.section 注册撤除，单一归属）。
+   reader/search 是 tab 之下的沉浸内容流，各有自己的返回导航，本行不随行。 */
 .novel-tabs { display: flex; gap: var(--novel-sp-0); padding: var(--novel-sp-4) var(--novel-sp-5) 0; }
 .novel-tabs button {
   background: none; border: none; color: var(--novel-text-2); font-size: var(--novel-fs-base);
@@ -79,13 +79,13 @@ export const SHELL_CSS = `
 .novel-tabs button:hover { color: var(--novel-text); }
 .novel-tabs button.on { color: var(--novel-brand-strong); background: var(--novel-brand-tint); font-weight: 600; }
 /* ── 全局状态条＝浮层 ─────────────────────────
-   病根：状态条原本是**普通流内**元素，泳道一挂就把下面内容顶下去、settle 再弹回（逐帧实测
-   +35px、每次启停 2 条 layout-shift），而单源启停往返 ≈1 帧 = 肉眼可见的闪烁。
-   修法：容器 position:relative + 状态条 absolute——泳道来去不再参与布局。代价是条目浮在上方
+   状态条必须是**浮层**：作为普通流内元素，泳道一挂就把下面内容顶下去、settle 再弹回
+   （逐帧实测 +35px、每次启停 2 条 layout-shift），而单源启停往返 ≈1 帧 = 肉眼可见的闪烁。
+   做法：容器 position:relative + 状态条 absolute——泳道来去不再参与布局。代价是条目浮在上方
    一小条（自带底/描边/投影），仍可点（任务条=跳转、错误条=定位/忽略）。
-   2026-09 住址变更：锚点从视图内换成宿主 shell.overlay 的 .novel-shell-status——中央呈现座位
-   一次只渲染一个面板，住在视图环内切走即失去读数。该层默认 click-through，故条目自己收回
-   pointer-events。**条身锚右下而非顶部通栏**：overlay 铺满整个 frame，顶部通栏实测正盖在宿主
+   锚点住宿主 shell.overlay 的 .novel-shell-status——中央呈现座位一次只渲染一个面板，
+   住在视图环内切走即失去读数。该层默认 click-through，故条目自己收回
+   pointer-events。**条身锚右下而非顶部通栏**：overlay 铺满整个 frame，顶部通栏会正盖在宿主
    会话标题行上（pointer-events:auto ⇒ 任务在跑时宿主钮点不到）；右下角落无宿主 chrome。 */
 .novel-shell-status {
   position: fixed; inset: 0; pointer-events: none; z-index: var(--novel-z-status);
@@ -118,7 +118,7 @@ export const SHELL_CSS = `
 .novel-btn.primary:hover { background: var(--novel-primary-hover); }
 /* 选中/在态的 ghost 钮（状态 chips、表头「编辑」）：brand 描边 + brand 弱底 */
 .novel-btn.on { border-color: var(--novel-brand); background: var(--novel-brand-tint); color: var(--novel-brand-strong); }
-/* 危险动作：红字红边，但底不刷红——危险性由文案与确认动作表达（危险区专区已退役，删除确认统一模态） */
+/* 危险动作：红字红边，但底不刷红——危险性由文案与确认动作表达（删除确认统一走模态） */
 .novel-btn.danger { color: var(--novel-err); border-color: var(--novel-err-line); }
 .novel-btn.danger:hover { background: var(--novel-err-weak); }
 `

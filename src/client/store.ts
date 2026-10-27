@@ -1,4 +1,4 @@
-/** 平台的 dsh-client-store 刻意不用（2026-10-17 宿主实测裁决）：它是 immer+rafFlush+persist
+/** 平台的 dsh-client-store 刻意不用（宿主实测裁决）：它是 immer+rafFlush+persist
  *  的组合态引擎、且 hook 合成权在 ui-renderer 的 owner props（模块头注「NO selector hook」）。
  *  本仓的客户端本地 store 是 get/set(patch)/subscribe 小面 + 一个 uSES 桥，换引擎是语义搬家
  *  不是删抄本；rafFlush 还会改通知时机，tests/client 的行为网要整体重验。 */
@@ -30,9 +30,9 @@ export function useStore<T extends object>(store: Store<T>): T {
 }
 
 // ── 路由（view 内路由，无 URL 路由）─────────────────────────────
-// 五成员（2026 IA 变更，用户拍板）：书架/书城/书源管理是小说视图内**并列 tab**——
-// 选择即切换下方内容；书源管理 = 原宿主设置「小说」区块整体（settings.section 注册已撤，
-// 单一归属）。reader/search 是 tab 之下的沉浸内容流，各有自己的返回导航，顶部 tab 不随行。
+// 五成员：书架/书城/书源管理是小说视图内**并列 tab**——选择即切换下方内容；
+// 书源管理 = 宿主设置「小说」区块整体（单一归属）。
+// reader/search 是 tab 之下的沉浸内容流，各有自己的返回导航，顶部 tab 不随行。
 export type ViewRoute =
   | { name: 'shelf' }
   | { name: 'city' }

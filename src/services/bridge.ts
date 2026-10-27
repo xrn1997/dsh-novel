@@ -47,7 +47,7 @@ export function firstValue(v: EngineValue, facet: Facet = 'rule'): string | null
 /** **URL 位**的值规约：与 `firstValue` 只差一处——`list` 取**首项**而不是 `join('\n')`。
  *
  *  对面「URL 取值」那一支一律取 `list[0]`，多值 join 只服务非 URL 取值（对读证据与实测读数：
- *  矩阵行 `b-url-value-first-item`）。本仓曾一律 join：一个条目里多个 `<a>` 的源把地址拼成多行串，
+ *  矩阵行 `b-url-value-first-item`）。URL 位不要用 join：一个条目里多个 `<a>` 会把地址拼成多行串，
  *  被 `absUrl` 换行守卫判死 → **整条书目丢地址**（表现不是报错而是「搜到了打不开」）。
  *  URL 里不可能有换行——join 在 URL 位上永远是错的，这不是口径分歧。 */
 export function firstUrlValue(v: EngineValue, facet: Facet = 'rule'): string | null {
@@ -194,7 +194,7 @@ export async function wordCountFieldOf(
 
 /** 详情上下文解析（`ruleBookInfo.init` 口径：init 先求值，其结果**整体替换**后续详情规则的求值上下文
  *  **与 html**——内容单点全换）：
- *  JSON 产物 → html 与 ctx.json **同步换根**（曾 html 留原页只换 json，`{{result.…}}` 模板插值 Miss
+ *  JSON 产物 → html 与 ctx.json **同步换根**（只换 json 会让 `{{result.…}}` 模板插值 Miss
  *  → tocUrl 回退详情页 → 目录空；换根后的 result/content 就是 init 产物本身）；
  *  非 JSON 文本/HTML 片段 → 作为 html 上下文（同前）。
  *  init 非空但零命中 → 默认 RuleEvalError 点名 ruleDetailInit——不拿整页冒充上下文（静默降级会让
@@ -300,7 +300,7 @@ export async function detailFieldsOf(
 /** tocUrl 的**无需详情上下文**那一半：非 null 规则里的真静态 URL 直接绝对化；
  *  返回 null = 这条规则要拿到详情上下文后过引擎（`tocUrlFromContext`）。
  *
- *  静态 URL 短路的歧义前缀按两档分（完整病史与钉子：矩阵行 `b-toc-url-xpath-vs-url`）：
+ *  静态 URL 短路的歧义前缀按两档分（边界与钉子：矩阵行 `b-toc-url-xpath-vs-url`）：
  *  ① `//`/`.//` 开头（非插值）= 绝对 XPath **绝不短路**——「absUrl 解得出」分不开它与协议相对
  *     地址（裸标签 XPath 会被 `new URL` 解成 `https://div/a/@href` 野地址）；
  *  ② 单 `/` 开头（非插值）= 站点相对静态 URL，**解得出才短路**（单 `/` 纯路径 XPath 与它同形

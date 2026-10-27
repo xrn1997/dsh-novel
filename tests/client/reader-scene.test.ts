@@ -7,7 +7,7 @@ import type { ReadingTarget, SupplementTarget } from '../../src/client/views/typ
 
 /**
  * 阅读场景的交互律：互斥、返回句柄、Esc 归属、离开一问、入架写入。
- * 这些断言此前只能靠整页渲染 + 伪造几何来证——场景把它们搬到无 DOM 的单测里。
+ * 这些断言住无 DOM 的单测里，不靠整页渲染 + 伪造几何——改场景交互先跑这里。
  */
 
 const target: SupplementTarget = { kind: 'supplement', documentId: 'note-1', anchorId: null }

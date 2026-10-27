@@ -53,7 +53,7 @@ describe('assembleRequest + fetchInitOf（选项语义唯一主人）', () => {
     expect(plan.charset).toBeUndefined()
   })
   it('HEAD：带 method 且不带 body（与对面同口径——元数据探测不发体，出处见矩阵 b-opt-method-head）', () => {
-    // 病史（矩阵 b-opt-method-head）：此前 method 只判 `=== "POST"`，HEAD 落到 GET——把降级当成了实现。
+    // 矩阵行 b-opt-method-head：method 按声明原样用（HEAD 不是 POST）——把它降级成 GET 等于把降级当成实现。
     const plan = assembleRequest('https://s.com/s,{"method":"HEAD","body":"a=1"}', {}, null)
     expect(plan.method).toBe('HEAD')
     expect(plan.body, 'HEAD 声明了 body 也不发（否则一次探测变成真的写请求）').toBeUndefined()
@@ -66,7 +66,7 @@ describe('assembleRequest + fetchInitOf（选项语义唯一主人）', () => {
   it('charset 透传到计划（解码优先级交给 fetchTextPage）', () => {
     expect(assembleRequest('https://s.com/x,{"charset":"gbk"}', {}, null).charset).toBe('gbk')
   })
-  it('buildSearchRequest 仍是薄壳（历史名字不改语义）', () => {
+  it('buildSearchRequest 是 assembleRequest 的搜索专用薄壳', () => {
     expect(buildSearchRequest('/so/{{key}}/{{page}}', { key: 'a', page: 1 }, 'https://s.com', { trimFirstPage: true }).url)
       .toBe('https://s.com/so/a')
   })
@@ -74,8 +74,8 @@ describe('assembleRequest + fetchInitOf（选项语义唯一主人）', () => {
 
 /** 表单体的 charset 编码：声明了非 UTF-8 charset 时，表单体（含 `{{key}}` 代入的关键词）
  *  按该 charset 编码后再发。
- *  本仓此前把 charset 只用在**解码链**（fetchTextPage → decodeBody）：GBK 站点收到 UTF-8 关键词
- *  就搜不到（辣妹小说实测：UTF-8 体 0 条、GBK 体 131 条）。
+ *  charset 同时管请求编码与解码链：只用在解码链（fetchTextPage → decodeBody）时，GBK 站点收到
+ *  UTF-8 关键词就搜不到（辣妹小说实测：UTF-8 体 0 条、GBK 体 131 条）。
  *  注：未转义的体可直接按表单百分号编码；本仓的体已过 interpolateUrl 的 UTF-8 转义，
  *  故按「转义段解码后重编码」处理——效果等价，且不会二次编码。 */
 describe('charset 参与请求编码（对面 encodeParams 口径）', () => {
@@ -125,7 +125,7 @@ describe('parseUrlOption', () => {
   })
   it('选项 JSON 非法 → URL 仍无条件切分，只是没有选项（legado analyzeUrl 口径）', () => {
     // 解析选项**之前**就把 URL 切干净——解析失败只意味着「没有选项」，不意味着
-    // 「整串是 URL」。旧行为把 `,{…}` 留在 URL 里 → 站点 404（年代小说弯引号选项实证）。
+    // 「整串是 URL」。留着 `,{…}` 会得站点 404（年代小说弯引号选项实证）。
     const r = parseUrlOption('/x,{not json at all}')
     expect(r.urlPart).toBe('/x')
     expect(r.option).toBeUndefined()
@@ -256,7 +256,7 @@ describe('resolveJsSearchTemplate', () => {
     await expect(resolveJsSearchTemplate(mkSource(), '@js:null.x', 'x', 1, fetcher)).rejects.toThrow()
   })
   // `<js>…</js>` 闭区间可出现在**任意位置**，`@js:` 吃到串尾；块间的字面文本按 `@result` 拼接。
-  // 旧实现只认整串前缀形态，两条真实源因此判坏（啦啦小说网 / 全本同人小说网）。
+  // 回归钉子：块可出现在**任意位置**，不是只在整串前缀（啦啦小说网 / 全本同人小说网 都是内嵌形态）。
   it('内嵌 <js> 块 + 字面尾巴：字面文本即 URL（块只做副作用）', async () => {
     const t = await resolveJsSearchTemplate(mkSource(),
       '<js>cookie.removeCookie(source.key);</js>/search/?searchkey={{key}}', '书', 1, fetcher)
@@ -312,9 +312,9 @@ describe('preEvaluateUrlJs', () => {
     const t = await preEvaluateUrlJs(mkSource(), '/s?q={{key}}&n={{1+2}}', 'x', 1, fetcher)
     expect(t).toBe('/s?q={{key}}&n=3')
   })
-  // **每一段** `{{…}}` 都过 evalJS，而 evalJS 的引擎里装着源级 jsLib——
+  // **每一段** `{{…}}` 都过 evalJS，裸标识符同样如此——evalJS 的引擎里装着源级 jsLib，
   // 故 jsLib 定义的全局变量能在 URL 模板里取到值。
-  // 旧实现把"裸标识符"一律当变量占位留给 interpolateUrl（它只认 key/page）→ `{{host}}` 原样留在 URL
+  // 留给 interpolateUrl（它只认 key/page）会让 `{{host}}` 原样留在 URL
   // 上被百分号编码成 `%7B%7Bhost%7D%7D`（得间小说真机 404；手工还原 host 后 API 正常返回 JSON）。
   it('jsLib 定义的全局变量在 {{}} 里取到值（{{host}} 形态）', async () => {
     const src = mkSource('host = "https://wechat.idejian.com/api/wechat";')

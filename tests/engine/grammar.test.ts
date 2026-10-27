@@ -5,7 +5,7 @@ import {
 
 /**
  * 规则文法：构词与解析同属一处——round-trip 性质测试钉死
- * 「normalize 拼出来的正是 parse 认的」（此前靠注释跨半同步）。
+ * 「normalize 拼出来的正是 parse 认的」——两侧对读由测试钉住，不靠注释跨半同步。
  */
 
 describe('parseTails（## 尾解析——构词的回程口径）', () => {

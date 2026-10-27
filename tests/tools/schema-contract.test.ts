@@ -12,13 +12,12 @@ import { makeTempDir, trackService } from '../temp-dir.js'
 /**
  * 工具 schema 契约测试：
  * 六份手写 schema 是工具对 harness 的 interface（additionalProperties:false——execute 多吐一个键、
- * wire 类型加一个字段，整个工具调用被 lossless-JSON 校验拒收）。此前 project.ts 声称
- * 「schema 侧的一致性由 tools 的用例钉住」但并不存在——本文件把声明证成：
+ * wire 类型加一个字段，整个工具调用被 lossless-JSON 校验拒收）。声明必须被本文件证成：
  * ① 每工具 execute 输出过 harness 同款校验（validateJsonSchemaValue）；
- * ② **从 wire 派生的字段清单是三面钉死**（2026-09-28 收紧）：`MergedBook`/`MergedSource`（`dshnovel_search`
+ * ② **从 wire 派生的字段清单是三面钉死**：`MergedBook`/`MergedSource`（`dshnovel_search`
  *    从第二批起投影的是作品视图）、`ChapterEntry`、`ShelfBook` 的字段清单住在 `*_FIELDS` 常量里——
  *    **运行时**拿它与 schema 的属性集比、**编译期**再用 `Assert<Eq<keyof Wire, …>>` 把同一份清单绑回
- *    wire 类型；于是 wire 加/改字段会让 `pnpm typecheck` 红（此前只有字面快照，wire 改名要人工记得同步，
+ *    wire 类型；于是 wire 加/改字段会让 `pnpm typecheck` 红（纯字面快照则要人记得同步，
  *    缺口就在那里）。`SearchGroup`/`SearchHit` 的清单与编译期绑定**保留**——它们仍是跨半形状
  *    （HTTP 面与逐源折叠照旧消费），只是不再被这个工具直接投影。
  *    另三份（`dshnovel_read`/`dshnovel_import_source`/`dshnovel_source`）是**工具自己的**投影形状，

@@ -24,7 +24,7 @@ describe('URL 模板插值', () => {
 })
 
 // 「是不是占位」= 标识符 **且** 在 vars 里或带 `||` 兜底——搜索面照它决定走 JS 求值还是原样编码。
-// 只看词法（旧口径）会把源级 jsLib 定义的全局也当占位（`{{host}}` 得间小说实证：404）。
+// 只看词法会把源级 jsLib 定义的全局也当占位（`{{host}}` 得间小说实证：404）。
 describe('isPlaceholderExpr', () => {
   it('vars 里的标识符与带 || 兜底的形态是占位', () => {
     expect(isPlaceholderExpr('key', { key: 'x', page: 1 })).toBe(true)

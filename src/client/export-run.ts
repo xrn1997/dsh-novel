@@ -6,9 +6,8 @@ import type { CopyKey, Translate } from './copy/index.js'
 /**
  * 范围导出流编排（从 ReaderView 的 ExportPanel 收出）：start(范围) / cancel / 状态三态 + 卸载 abort。
  *
- * 为什么收出来：整段原先住在 ReaderView 里硬 import 真实现，导出时序零测试覆盖。现编排自持、
- * 依赖经参数注入：视图只接线（onProgress → setState、按钮 → start/cancel、卸载 → dispose），
- * 时序归本 module 单测。
+ * 为什么收出来：导出时序必须可单测。编排自持、依赖经参数注入：
+ * 视图只接线（onProgress → setState、按钮 → start/cancel、卸载 → dispose），时序归本 module 单测。
  */
 
 /** 导出流依赖（ReaderDeps 的子面）：流式抓取 + 落盘 */
@@ -67,8 +66,8 @@ export function parseRange(fromStr: string, toStr: string, total: number): Range
 }
 
 /** 导出范围草稿：面板上那两个输入框的全部状态——**只有用户输入的两格**。
- *  缺省、档位算术、校验三件事只住这里——视图此前各持一份（openExport 写缺省、onPreset 算档位、
- *  onConfirm 再校验一次），四处各写一遍同一件事就是没有 locality。
+ *  缺省、档位算术、校验三件事只住这里；若 openExport 写缺省、onPreset 算档位、onConfirm 再校验，
+ * 同一件事会散成四处，没有 locality。
  *  章数刻意不进草稿：它是视图的**活值**（当前目录长度），抄进草稿就会停在装配或开面板那一下的读数上
  *  （目录迟到 / 变化即失真）——调用方每次把当下章数传进来。 */
 export interface ExportDraft { from: string; to: string }

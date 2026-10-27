@@ -3,11 +3,11 @@ import { bodies, BODY, encodeQuery, LOCAL_SOURCE_ID, PARAMS, paramOps, pickShelf
 import { LOCAL_SOURCE_ID as NODE_LOCAL_SOURCE_ID } from '../../src/services/localbooks.js'
 
 /**
- * **`SHELF_META` ↔ `ShelfBook` 的两向绑定不需要额外守卫（2026-09-28 实测确认，别再补）**：
+ * **`SHELF_META` ↔ `ShelfBook` 的两向绑定不需要额外守卫（实测确认，别再补）**：
  * 加编译期断言的方案被否——现有类型结构**本来就会红**（表里类型串写错 → pickShelfMeta 的字面
  * 比较 TS2367；表里加 ShelfBook 没有的键 → ShelfMetaPatch 索引 TS2536），加断言只是复述同一件事。
  * 真正需要守卫的是**跨面**的东西：见 `tests/tools/schema-contract.test.ts`（工具 schema ↔ wire，
- * 已从手抄快照改成编译期钉死）。
+ * 编译期钉死）。
  */
 
 describe('LOCAL_SOURCE_ID（跨半契约常量的唯一主人）', () => {
@@ -63,7 +63,7 @@ const PARAM_IDENTITIES = {
   shelfDelete: { method: 'DELETE', key: 'local:x', path: 'shelf/local%3Ax' },
 } as const
 
-describe('路由表计数钉死（「17 条路由」注释曾腐烂且无测试）', () => {
+describe('路由表计数钉死（总数只有一个家，别处不许手写）', () => {
   it('静态路由 30 条、参数操作 6 条', () => {
     expect(Object.keys(ROUTES)).toHaveLength(30)
     expect(Object.keys(paramOps)).toHaveLength(6)
@@ -315,7 +315,7 @@ describe('写路由 body：构造器与读口同源（wire 单点承诺的另一
     expect(() => readBodies.exploreList({ sourceId: 's' })).toThrow(/kind/)
     expect(() => readBodies.auth(null)).toThrow(/cookies/)
     expect(() => readBodies.auth({ cookies: [] })).toThrow(/cookies/)
-    // 认不出的 headers 不再静默丢掉（原先整字段被忽略＝拿半份配置冒充录入了）
+    // 认不出的 headers 不许静默丢掉：整字段被忽略等于拿半份配置冒充录入了
     expect(() => readBodies.auth({ cookies: {}, headers: 'x' })).toThrow(/headers/)
     expect(() => readBodies.auth({ loginAction: '   ' })).toThrow(/loginAction/)
   })

@@ -273,7 +273,7 @@ describe('批量验证任务', () => {
     expect(j.issues.some((i) => i.detail.includes('undefined') || i.detail.includes('TypeError'))).toBe(false)
   })
   it('探针在途删掉被探源（最窄交错窗口）：setStatus 打在已删除 id 上 = 优雅 no-op，任务照常收尾、无幽灵源', async () => {
-    // 用户拍板（2026）：验证在途允许删除，前提 = 无并发安全问题。本用例钉最窄的窗口——
+    // 口径（用户拍板）：验证在途允许删除，前提 = 无并发安全问题。本用例钉最窄的窗口——
     // worker 已通过重查、探针请求在途，此刻删除落在**被探源自己**头上；探针 resolve 后
     // worker 才写回 setStatus(已删除 id)。安全依据：sources.ts setStatus 首行
     // `if (!s) return false`（查不到即 no-op，不抛、不复活），edit recipe 同步执行原子。

@@ -60,7 +60,7 @@ export function ErrorBanner({ error, onRetry }: { error: ApiErrorLike; onRetry?:
   )
 }
 
-/** 空态：标题 + 动作按钮组。字色走 --novel-text-2（旧实现写 opacity:.75 = 主动削弱对比度，
+/** 空态：标题 + 动作按钮组。字色走 --novel-text-2（不要写 opacity:.75——那会主动削弱对比度，
  *  浅色底上会掉到 4.5:1 以下） */
 export function EmptyState({ title, hint, actions }: { title: string; hint?: string; actions?: ReactNode }): ReactNode {
   return (
@@ -110,10 +110,9 @@ export function ProgressBar({ pct, style }: { pct: number; style?: CSSProperties
   )
 }
 
-/** 运行卡外壳：导入/批量验证两卡此前近逐字同构——浮层底 + 标题行 + 进度段
- *  + counts 尾行 + 「可以关掉设置页，任务在服务端继续」全同，差异仅 label/meta 文案与
- *  dupSkipped 等条件行。本组件持公共外壳（brand 派生色走 --novel-brand-* token），
- *  两卡收薄为调用、差异插槽化（meta/counts）。
+/** 运行卡外壳：导入/批量验证两卡共用浮层底 + 标题行 + 进度段 + counts 尾行 +
+ *  「可以关掉设置页，任务在服务端继续」，差异仅 label/meta 文案与 dupSkipped 等条件行。
+ *  本组件持公共外壳（brand 派生色走 --novel-brand-* token），两卡只传差异（meta/counts）。
  *  根节点同时是「任务去现场」的登记点（`run-card.ts`）：按 `kind` 分桶登记——两张运行卡
  *  可以同时在树上，去现场只该滚自己那一种。 */
 export function RunCard({ kind, label, meta, pct, counts }: {
@@ -146,8 +145,8 @@ export function RunCard({ kind, label, meta, pct, counts }: {
 }
 
 /** 导入告警清单：一条 = 码 + 资源 + 人读的交代。**标记的唯一住址**在这里——
- *  阅读器的导入说明面板与书架的导入回执原先各抄一份 JSX（CSS 共享而标记不共享，改一条口径必漏
- *  另一处），现在两处都渲染这一个组件；样式仍住样式层（.novel-warn-list / -code）。 */
+ *  阅读器的导入说明面板与书架的导入回执都渲染这一个组件；不要各写一份 JSX
+ *  （CSS 共享而标记不共享时，改一条口径必漏另一处）。样式仍住样式层（.novel-warn-list / -code）。 */
 export function WarningList({ warnings }: { warnings: readonly LocalImportWarning[] }): ReactNode {
   return (
     <ul className="novel-warn-list">

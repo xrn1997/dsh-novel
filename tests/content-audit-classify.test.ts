@@ -68,7 +68,7 @@ describe('审计失败归因', () => {
 
   it('对不上任何锚点 → unattributed（不许静默归到轻松的那栏）', () => {
     expect(attributeError(realMessages.unclassified)).toBe('unattributed')
-    // 没有错误对象可判也走这一栏：此前默认 site-side，等于把「没东西可归因」静默算成站点侧
+    // 没有错误对象可判也走这一栏；默认 site-side 等于把「没东西可归因」静默算成站点侧
     expect(attributeError(undefined)).toBe('unattributed')
   })
 

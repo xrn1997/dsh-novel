@@ -146,7 +146,7 @@ describe('followPages 目录知识闸 + 列表 next + 部分重叠不停（legad
   /**
    * 多候选模式的「零新增」不是一条全局闸。真机形态：目录入口页（书籍详情页）自己就列着第 1 页，
    * 而翻页规则同时把 index_1（与入口页同内容）和 index_2…index_N 一起列出来。
-   * 曾按链式那侧的语义把「整页零新增」判成回环 → `break` 掉整个循环 → 队列里其余候选一起被丢掉：
+   * 回归钉子：某一候选整页零新增只丢它自己，不得中止整轮——中止会把队列里其余候选一起丢掉：
    * 笔趣阁 165 章读成 100、第一小说 1839 章读成 100、阳光中文网 1586 章读成 100。
    * 对面那侧多候选是逐条并发全抓、条目最后统一去重，没有这道早停。
    * 链式单候选的 loop / zero-new 两态不变（由上面的「回环」与「零新增」两条钉子守着）。
@@ -185,7 +185,7 @@ describe('followPages 目录知识闸 + 列表 next + 部分重叠不停（legad
       { maxPages: 10 }, 'toc', subEval)
     expect(r.stoppedBy).toBe('end')
     expect(r.pages).toBe(3)
-    expect(r.items).toEqual(['A', 'B', 'C', 'D'])   // 此前「出现重复即停」会截断在 t1（只出 A、B）
+    expect(r.items).toEqual(['A', 'B', 'C', 'D'])   // 「出现重复即停」会截断在 t1（只出 A、B）
   })
   it('URL 防环：同地址重复出现只抓一次', async () => {
     let fetches = 0

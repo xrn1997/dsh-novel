@@ -13,7 +13,7 @@ export function filterSources(sources: SourcePublic[], query: string): SourcePub
 }
 
 /** 状态下拉过滤：五维单选，与文本过滤交集（先 filterByStatus 再 filterSources）。
- *  读数归列表头**状态带**（`source-list-view.ts` 的 `stats`），下拉不带计数——旧状态 chips 随改版退役。
+ *  读数归列表头**状态带**（`source-list-view.ts` 的 `stats`），下拉不带计数。
  *  'disabled' 维度是 enabled 布尔而非 status——停用与坏源是两个正交维度。 */
 export type StatusFilter = 'all' | 'verified' | 'broken' | 'unverified' | 'disabled'
 
@@ -70,8 +70,8 @@ export function setEditMode(editMode: boolean): void {
   sourceListUi.set(editMode ? { editMode } : { editMode, selection: [] })
 }
 /** 只清勾选、不动编辑态：「清空选择」钮 + 删除成功后的收尾（对象没了，勾选留着是幽灵 id）。
- *  批量启停**不**用它——那批源还在列表里，勾选是它们的现场（2026-09 用户裁定）。
- *  此原语此前不存在，调用点只能借 `setEditMode(false)` 顺手清，连带把编辑态一起退掉。 */
+ *  批量启停**不**用它——那批源还在列表里，勾选是它们的现场。
+ *  不要借 `setEditMode(false)` 顺手清：那会连带把编辑态一起退掉。 */
 export function clearSelection(): void { sourceListUi.set({ selection: [] }) }
 export function toggleSelect(id: string): void {
   const cur = sourceListUi.get().selection
@@ -83,5 +83,5 @@ export function selectMany(ids: string[]): void {
 }
 
 /** 测试专用：整现场一次复位（模块级 store 跨用例残留——先例 transient.resetTransient）。
- *  五个 setter 手工复位既啰嗦又漏项（groupFilter 就曾被漏过）。 */
+ *  不要用五个 setter 手工复位：既啰嗦又容易漏项（例如 groupFilter）。 */
 export function resetSourceListUi(): void { sourceListUi.set(initial) }

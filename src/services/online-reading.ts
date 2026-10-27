@@ -79,7 +79,7 @@ export class OnlineReading {
     // 矩阵行 `g-cache-slot-chapter-name`）。代价如实记：热正文缓存不再能单独服务一章——
     // 目录缺失时会真发一次目录抓取（章名只存在于目录里，这是必然代价不是疏忽）。
     const toc = await this.toc(sourceId, bookKey)
-    // 双边守卫：负数曾绕过只拦上界的旧守卫 → toc[-1].name TypeError → 500；
+    // 双边守卫：只拦上界会让负数绕过 → toc[-1].name TypeError → 500；
     // HTTP 面有 /^\d+$/ 而工具面无下限，守卫必须盖住两面入口。
     if (chIndex < 0 || chIndex >= toc.length) throw new ChapterNotFoundError(chIndex, toc.length)
     const target = toc[chIndex]
@@ -90,7 +90,7 @@ export class OnlineReading {
         // 代际只覆盖规则、不覆盖代码版本：升级后仍会读到旧提取代码写下的条目（如 @html 源的
         // 带标签正文）——出边界再收一次口（contentToText 幂等），旧条目照样无害。
         const text = contentToText(cached)
-        // 空正文一律当未命中：0 字节缓存会永远吐空（曾被静默写入），借此失效重取
+        // 空正文一律当未命中：0 字节缓存会永远吐空（不要静默写入），借此失效重取
         if (text.trim() !== '') return text
       }
     }
@@ -113,7 +113,7 @@ export class OnlineReading {
       })
     // 「空正文必炸」管的是**首屏**：跟进链上的续页取不出正文，只说明这一章到此为止，
     // 不许把已经拼好的首屏一起判死（真机形状：最后一章的「下一章」链接指向书详情页，
-    // 那页没有正文容器 ⇒ 此前整章抛错，前两页的正文一并丢掉）。
+    // 那页没有正文容器；若整章抛错，前两页的正文会一并丢掉）。
     // 首屏那一半一字未放宽：空正文仍然抛、仍然不写缓存（矩阵行 `g-content-empty-exception`）。
     // 续页交空数组即可——`followPages` 的 zero-new 闸本就负责停跟进。
     const subContentRule = s.rules.ruleContentSubContent ?? null
@@ -137,7 +137,7 @@ export class OnlineReading {
       // 先转纯文本再走行规约（矩阵行 `g-html-to-text`）
       const plain = normalizeChapterText(contentToText(text))
       if (plain.trim() === '') {
-        // 零命中不得静默：空正文曾被当正常结果写进缓存（整章 0 字节，用户只见「不出正文」）。
+        // 零命中不得静默：把空正文当正常结果写进缓存会让整章 0 字节，用户只见「不出正文」。
         // 报错带规则与落点（请求地址 + 实际落地地址，两者不同即被跳转走了）——矩阵行 `g-content-empty-exception`。
         if (!firstPage) return []
         const landed = page.requestedUrl === undefined || page.requestedUrl === page.url
@@ -230,7 +230,7 @@ export class OnlineReading {
           : firstValue(await subEval(updateTimeRule, ctx, 'toc', 'value'), 'toc') ?? undefined
         // 章节 URL 常带 `,{"webView":true}` 等选项后缀（嗅探语义）——**保留后缀落库**，
         // 抓取时由 fetchPage → assembleRequest 解释（矩阵行 `b-url-option-on-chapter-url`）；
-        // URL 取不到时回退目录页地址——不整条丢弃（曾「url null → 跳过」把整站目录清成 0 章，
+        // URL 取不到时回退目录页地址——不整条丢弃（「url null → 跳过」会把整站目录清成 0 章，
         // 矩阵行 `f-toc-url-fallback`）
         const missing = href === null || href.trim() === ''
         const url = href !== null && href.trim() !== '' ? absUrlKeepOption(href, page.url) : page.url
@@ -312,7 +312,7 @@ export class OnlineReading {
 
 /** tocUrl 解析（钉死）：null→bookUrl **全串**（回退即「目录在本书地址上」——抓取仍按选项发请求）；
  *  纯静态 URL → 字面绝对化，不抓详情页；其余（带 `{{$.…}}` 插值段的 URL 模板与一切规则形态）
- *  → 按**详情上下文**过规则引擎求值（init 换根后嵌套字段才有解；曾按空 vars 插值留下残地址
+ *  → 按**详情上下文**过规则引擎求值（init 换根后嵌套字段才有解；按空 vars 插值会留下残地址
  *  → 0 章）。本函数只剩「什么时候需要详情页」这一件事：短路判据与上下文求值分别住
  *  `bridge.staticTocUrl` / `bridge.tocUrlFromContext`（`detailReadOf` 共用同一份）。
  *  求值走调用方的 subEval（完整上下文单点——jsLib/vars/fetch/source 全可见）。 */

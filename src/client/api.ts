@@ -57,7 +57,7 @@ export function networkErrorOf(e: unknown): ApiClientError {
   return new ApiClientError('NetworkError', 0, `网络请求失败: ${(e as Error).message}`, undefined, 'request-failed')
 }
 
-/** 响应体 → JSON（失败 = NetworkError，消息与旧实现一字不差） */
+/** 响应体 → JSON（失败 = NetworkError，reason 固定为 not-json） */
 async function jsonOf(res: Response): Promise<unknown> {
   try {
     return await res.json()
@@ -66,7 +66,7 @@ async function jsonOf(res: Response): Promise<unknown> {
   }
 }
 
-/** 信封解析单点（旧实现 request/apiUpload 各一份，已合并）：ok → value；否则抛 ApiClientError */
+/** 信封解析单点：ok → value；否则抛 ApiClientError。request/apiUpload 都必须走这一份。 */
 function unwrap<T>(body: unknown, status: number): T {
   const env = body as ApiEnvelope<T>
   if (env.ok === true) return env.value as T

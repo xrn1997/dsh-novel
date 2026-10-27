@@ -81,7 +81,7 @@ type DebouncedSave = ((chapterIndex: number, offsetRatio: number) => void) & { c
 
 /** 恢复位预约：目录已发布但存档章还没问回来时，预取会先抢走在途槽（哨兵此时在视口顶 →
  *  目标 = 第 0 章），open() 的恢复 load 半路静默返回——整条恢复丢失、退出再进回到第一章。
- *  所以目录一发布就占槽到存档章落定（2026-09-22 实测；打点见 `load()` 的 early-return）。 */
+ *  所以目录一发布就占槽到存档章落定（打点见 `load()` 的 early-return）。 */
 const RESTORE_SLOT = -1
 
 export class ReaderSession {
@@ -209,7 +209,7 @@ export class ReaderSession {
       const next = [...this.chaptersNow]
       next[index] = content
       this.chaptersNow = next
-      // 成功即清错（此前错误条粘屏：成功 load 不清 error、会话无 clearError 接口，重试还是空操作）
+      // 成功即清错：成功 load 必须同时清 error，否则错误条粘屏、重试看似无效
       this.failedIndex = null
       this.store.set({ chapters: next, error: null })
       this.pruneToViewport()                                  // 跳章目标到货：窗口跟着视口收口（不串章）

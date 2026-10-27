@@ -1,8 +1,8 @@
 import type { ReplaceStep, RuleUsage } from './types.js'
 
 /**
- * 规则文法：同一文法的构词与解析同属一处——此前构词散在三个
- * 跨半 module、没有任何东西验证「normalize 拼出来的正是 parse 认的」，文法一改全靠注释同步。
+ * 规则文法：同一文法的构词与解析同属一处。normalize 的构词、template 的变量词法、
+ * parse/literal/sub-rule 的解析都从这里取；改文法时只改这一处，避免「拼出来的」与「认的」分叉。
  *
  * 本 module 持有：`##` 尾的解析（parseTails）与构词（appendTail）、Native 隐式终端构词
  * （withImplicitText）、URL 模板 JS 形态判定（isJsForm）、`{{…}}` 变量词法（splitVarExpr）与
@@ -30,8 +30,8 @@ export function parseTails(rule: string): ParsedTails {
   const s = onlyOne ? trimmed.slice(0, -1) : trimmed
   // `##` 切分跳过受保护区：`<js>…</js>` 块内的 `##` 是 JS 文本/正则净化串，`{{…}}` 区内的 `##`
   // 属于插值表达式，`@put:{…}` 值区内的 `##` 属于值内规则文本——对面先剥 @put、先抽 js 块、
-  // 先做插值，替换尾只在剩余文本上切。茄子免费小说 `<js>##[…]</js>` 实证：块内那个 `##` 曾把链
-  // 切断、残链被误报成「缺 </js> 结束标记」。只跳块形态（jsBlockEnd），`@js:code##re##rep` 的
+  // 先做插值，替换尾只在剩余文本上切。`<js>##[…]</js>` 块内的 `##` 属于 JS 文本，
+  // 若被当成替换尾会把链切断、残链误报成「缺 </js> 结束标记」。只跳块形态（jsBlockEnd），`@js:code##re##rep` 的
   // `##` 仍按替换尾切——与对面净结果一致。
   const parts: string[] = []
   let start = 0
@@ -96,8 +96,8 @@ export function appendTail(rule: string, pattern: string, replacement: string): 
 }
 
 /**
- * JS 段区域探测（构词与解析**共用**：此前构词侧裸 `split('||')` 会把 JS 体内的 `||` 当连接符撕开，
- * 而解析侧整体跳过，两侧对同一文法认知不一致）。返回区域结束位置（不含）；不在 JS 段起点 → null。
+ * JS 段区域探测（构词与解析**共用**）：构词侧切 `||`、解析侧跳段都必须用这一份，
+ * 否则 JS 体内的 `||` 会被当连接符撕开。返回区域结束位置（不含）；不在 JS 段起点 → null。
  *  `<js>…</js>`：块整体是一个段——块内 ||/&&/%%/@ 是 JS 代码，不是连接符/段界（任意位置可起块）；
  *  `js:`（链首或段界 @ 后）：js 只能是末段 → 吃到链尾（真实源 @js 代码里大量 ||/&&/字符串 @）。
  */
@@ -131,8 +131,8 @@ function startsWithAt(s: string, prefix: string, i: number): boolean {
 }
 
 /**
- * `@put:{…}` 区域终点（`@put:{…}` 在任何切分之前先剥离，所以体内 `@` 不是段界——曾被
- * splitElements 撕段、解析期当场抛错）。吃到第一个 `}` 为止：不嵌套，值里带 `}` 的规则本就不合法，
+ * `@put:{…}` 区域终点（`@put:{…}` 在任何切分之前先剥离，所以体内 `@` 不是段界；
+ * 若让 splitElements 进到体内会把值撕成段、解析期当场抛错）。吃到第一个 `}` 为止：不嵌套，值里带 `}` 的规则本就不合法，
  * 不另造更宽的判据。只在段首成立（链首或前一字符是段界 `@`；`@@` 是字面 @，不起段）。
  */
 export function putRegionEnd(s: string, i: number): number | null {
@@ -179,7 +179,7 @@ export function braceRegion(s: string, i: number): BraceRegion | null {
 
 /** 该分支是否含 JS 区域（`<js>…</js>` 或 `js:`/`@js:` 末段）——构词侧据此不再补隐式 `@text`
  *  （JS 已是终端），解析侧据此豁免行模板判定（脚本里的 `'$1'` 是正则反向引用，不是行组）。
- *  两处共用这一份——此前 parse.ts 抄了一份逐字副本，同一支规则可能在一处豁免、另一处不豁免。 */
+ *  两处必须共用这一份；若 parse.ts 另抄一份，同一支规则可能在一处豁免、另一处不豁免。 */
 export function hasJsRegion(s: string): boolean {
   let i = 0
   while (i < s.length) {
@@ -249,7 +249,7 @@ export interface VarExpr {
 }
 
 /** `{{inner}}` 词法拆分：变量名 + 缺省值。template.interpolateUrl 与 isPlaceholderExpr
- *  共用此拆分——此前两边各写一份拆分逻辑，文法一改靠注释同步。 */
+ *  必须共用此拆分；各写一份会在文法改动时分叉。 */
 export function splitVarExpr(inner: string): VarExpr {
   const orIdx = inner.indexOf('||')
   return orIdx === -1

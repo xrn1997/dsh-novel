@@ -5,7 +5,7 @@ import { parseRule } from '../../src/engine/parse.js'
 import { applyReplaces } from '../../src/engine/replace.js'
 import { UnsupportedRuleError } from '../../src/engine/errors.js'
 
-// 本轮正文链路修复的引擎钉子：
+// 正文链路分类的引擎钉子：
 // ① default 方言 `text.<串>` 选择语义（按文本选元素）
 // ② 属性终端（链尾未知提取指令 = HTML 属性名）+ 取值用途
 // ③ 模板字面段（URL 模板 / {{expr}} 插值 / {$.path} 内嵌）
@@ -177,7 +177,8 @@ describe('⑥ 二轮补齐（元素包装 / AllInOne 行内标志 / 方括号索
   })
   it('方括号多条目：并集按**写入序**、部分越界只留合法项、全越界 → Miss；[!0,2] 多值排除', async () => {
     // 条目收进 Set（越界的静默丢弃），取位时按**插入序**遍历，
-    // 所以 `[3,1]` 出的是「第4个、第2个」，不是文档序。（本仓此前 sort 成文档序：写序影响结果才叫保真。）
+    // 所以 `[3,1]` 出的是「第4个、第2个」，不是文档序。改这里注意别 sort 成文档序：
+    // 写序影响结果才叫保真。
     const html = '<ul><li>一</li><li>二</li><li>三</li><li>四</li></ul>'
     expect(await evaluate('li[2,3]@text', { html }, 'toc', 'list'))
       .toEqual({ kind: 'list', items: ['三', '四'] })
@@ -237,8 +238,8 @@ describe('`{{@@规则}}`：花括号区内的 @ 不是段界（真源 intro 四�
 
 describe('JSON 条目上的裸词终端（真源 ruleChapterUrl: url / href，2026-09 审计 3 源）', () => {
   // 按内容类型分派：条目是 JSON 时整条规则按 JSON 解析，
-  // 所以裸词 `url` 在 JSON 条目上是**属性读**；本仓此前只在 DOM 上找同名属性 → 恒 0 命中
-  // → 逐章回退目录页 → 「未取到任何章节地址」RuleEvalError。
+  // 所以裸词 `url` 在 JSON 条目上是**属性读**。改这里注意：JSON 条目上没有同名 DOM 属性，
+  // 退回 DOM 查找则恒 0 命中 → 逐章回退目录页 → 「未取到任何章节地址」RuleEvalError。
   const ITEM = '{"url":"/c/123.html","href":"/c/124.html","name":"第十二章","id":7}'
   it('取值用途 + 链尾裸词 → 读 JSON 属性', async () => {
     const v = await evaluate('url', { html: ITEM }, 'toc', 'value')

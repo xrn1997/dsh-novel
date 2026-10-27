@@ -6,8 +6,8 @@ import { describe, expect, it } from 'vitest'
 /**
  * 探针 verdict → status 的**唯一写口**：`probe.applyProbeResult`。
  *
- * 为什么要有机器门：这条 invariant 此前只是「单点探针与批量探针都调 applyProbeResult」的
- * 语义默会——任何新调用方（任务重试、工具面、将来的自动复检）都能悄悄写出第三处
+ * 为什么要有机器门：这条 invariant 只能靠机器守——任何新调用方（任务重试、工具面、将来的自动复检）
+ * 都能悄悄写出第三处
  * `registry.edit(setStatus)`，而 detail 清空 / probedAt 盖章的口径不会跟着改。
  * 门只认调用点：`setStatus(` 只许出现在 applyProbeResult 与注册表自己的 `SourceEdit` 实现里。
  */

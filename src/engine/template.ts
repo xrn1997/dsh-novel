@@ -3,7 +3,7 @@ import { splitVarExpr } from './grammar.js'
 /** URL 与 `,{json}` 选项的分界：逗号后紧跟花括号即选项起点，故 URL 自身含逗号时不受影响；
  *  逗号两侧允许空白（真实源大量写 `, {...}`，不许空格会把选项串并进 URL）。
  *  **单点**：服务半 `services/request.ts` 的选项切分与 `js-protocol.ts` 的 downloadFile 去后缀
- *  共用此式（放引擎侧是因为 js-protocol 不能 import services；曾两处各抄一份、漂移过一次）。 */
+ *  共用此式（放引擎侧是因为 js-protocol 不能 import services；两处各抄一份会漂移）。 */
 export const URL_OPTION_SPLIT = /\s*,\s*(?=\{)/
 
 export function interpolateUrl(
@@ -24,7 +24,7 @@ export function interpolateUrl(
  *  interpolateUrl 与搜索面 preEvaluateUrlJs 共用这一条：前者照它做编码，后者照它决定
  *  「原样留给编码」还是「当 JS 表达式进沙箱」。
  *
- *  为什么必须判 vars 而不是只看词法（旧口径只看词法）：源级 jsLib 定义的全局变量在模板里也是
+ *  为什么必须判 vars 而不是只看词法：源级 jsLib 定义的全局变量在模板里也是
  *  裸标识符（`{{host}}`），一律当占位会让这类模板把字面花括号发上网（`%7B%7Bhost%7D%7D` → 404）。 */
 export function isPlaceholderExpr(inner: string, vars: Record<string, string | number>): boolean {
   const { name, fallback } = splitVarExpr(inner)
@@ -46,7 +46,7 @@ const PAGE_ANGLE_LIST = /<(.*?)>/g
  * - `pages = 内容.split(',')`，`page < pages.length` 取 `pages[page-1]`，**越界取末项**（= 到底）；
  * - 取出的项只剥首尾控制符/空白；
  * - 每个匹配**全量**替换该匹配串（替换全部出现，不是只替第一个）。
- * 曾原样带尖括号发出去（page=1 按本口径应换成空串）。
+ * 不要原样带尖括号发出去：page=1 按本口径应换成空串。
  */
 export function expandPageAngleList(url: string, page: number | null | undefined): string {
   if (page === null || page === undefined) return url

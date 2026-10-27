@@ -204,7 +204,7 @@ describe('CityView', () => {
     expect(container.querySelectorAll('.novel-city-kids')).toHaveLength(1)
     expect(screen.getByRole('button', { name: /^半夏小说/ }).getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByRole('button', { name: /^多看阅读/ }).getAttribute('aria-expanded')).toBe('false')
-    // s2 声明了「玄幻」，但它没收着就没人替它列出来——一栏两列分类是旧形状
+    // 分类只长在收着的源下面：s2 虽声明「玄幻」，未选中就不该被列出——一栏两列分类不算合规
     expect(screen.queryByRole('button', { name: '玄幻' })).toBeNull()
   })
 
@@ -245,7 +245,7 @@ describe('CityView', () => {
   it('卡片上没有跨源角标：整屏不出现「N 源」字样', async () => {
     const { container } = render(<CityView deps={depsOf()} />)
     await waitFor(() => expect(screen.getByText('剑起长安')).toBeTruthy())
-    // 反向断言防的是归并那层的残影：旧版卡片角标正是 `2 源`，改回跨源计数这条就红
+    // 反向往返钉：卡片角标只印本条命中，改成跨源计数这条就红
     expect(container.textContent).not.toMatch(/\d+ 源/)
   })
 

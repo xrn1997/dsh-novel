@@ -45,8 +45,8 @@ export function stripUrlOption(href: string): string {
 }
 
 /** 绝对化并保留选项后缀（章节/下一页 URL 的组装口径：
- *  URL 部分按 baseUrl 绝对化，`",{option}"` 接回）。此前先 strip 再绝对化 → POST/charset
- *  选项在目录落库时被丢弃，API 型章节端点（POST body 模板）全部退化成裸 GET。 */
+ *  URL 部分按 baseUrl 绝对化，`",{option}"` 接回）。不要先 strip 再绝对化：POST/charset
+ *  选项会在目录落库时被丢弃，API 型章节端点（POST body 模板）会全部退化成裸 GET。 */
 export function absUrlKeepOption(href: string, base: string): string | null {
   const { url, suffix } = splitUrlOption(href)
   const abs = absUrl(url, base)

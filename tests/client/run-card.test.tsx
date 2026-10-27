@@ -9,12 +9,10 @@ import { ImportRunCard } from '../../src/client/views/SettingsImportPane.js'
 import type { JobState } from '../../src/client/views/types.js'
 
 /**
- * 运行卡双胞胎抽共：ProbeRunCard（SettingsSourceList）与 ImportRunCard
- * （SettingsImportPane）此前近逐字同构——外框浮层、progress bar、counts 尾行、「可以关掉
- * 设置页，任务在服务端继续」文案全同，差异仅 label/meta 文案与 dupSkipped 行。抽 RunCard
- * 后两卡收薄为调用；本文件钉死两卡的公共外壳与各自差异（含 total=0 防除零与内联 hex 归零）。
- * 注：文案随 2026 IA 变更改为「可以关掉页面，任务在服务端继续」——书源管理已从宿主设置页
- * 搬入小说视图 tab，「设置页」字样不再成立；钉子跟文案走。
+ * 运行卡双胞胎抽共：ProbeRunCard（SettingsSourceList）与 ImportRunCard（SettingsImportPane）
+ * 共用外框浮层、progress bar、counts 尾行、「可以关掉页面，任务在服务端继续」文案，差异仅在
+ * label/meta 文案与 dupSkipped 行。改公共外壳先跑本文件：它钉死两卡的公共部分与各自差异
+ * （含 total=0 防除零与内联 hex 归零）。
  */
 
 const job = (over: Partial<JobState> = {}): JobState => ({
@@ -79,10 +77,10 @@ describe('RunCard 公共外壳（抽共）', () => {
 
 /**
  * 任务去现场的第三跳：状态层点任务泳道后，`SettingsSection` 要在卡片挂载之后把它带进视野。
- * 这一跳此前是 `setTimeout` + 属性选择器（字符串接口、消费半无用例）；现在卡片挂载即登记，
- * 消费方只调 `focusRunCard`。jsdom 没有排版引擎，滚动调用本身用替身量。
+ * 卡片挂载即登记，消费方只调 `focusRunCard`；不许退回按属性选择器现查。
+ * jsdom 没有排版引擎，滚动调用本身用替身量。
  * 现场按任务种类分桶：导入卡与验证卡可以同时在树上（缓存回执 + 在跑任务），
- * 去现场与卸载都必须只作用自己那一种——最后登记者赢的旧口径会滚错卡。
+ * 去现场与卸载都必须只作用自己那一种——按「最后登记者」取卡的写法会滚错卡。
  */
 describe('focusRunCard：运行卡现场注册表（按任务种类分桶）', () => {
   const cardOf = (container: HTMLElement): HTMLElement => {

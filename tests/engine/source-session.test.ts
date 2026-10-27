@@ -5,9 +5,8 @@ const loc = { segmentIndex: -1, segmentRaw: '(source-session)' }
 
 /**
  * 源会话：
- * cookie 垫片与源变量此前是模块级进程 Map——「按源隔离」只写在注释里，跨源污染类用例
- * 写不出来（写一次污染整模块）。现在经 RunScriptOptions.session 显式注入：
- * 生产缺省进程级实例（跨调用存活，行为不变），测试注入 createSourceSession() 隔离实例。
+ * cookie 垫片与源变量按源隔离，经 RunScriptOptions.session 显式注入：生产缺省进程级实例
+ * （跨调用存活），测试注入 createSourceSession() 取隔离实例——共用一个实例就会跨用例污染。
  */
 
 const cookieOf = async (session: ReturnType<typeof createSourceSession>, source: string, name: string): Promise<string> => {
@@ -20,7 +19,7 @@ describe('源会话：脚本可见状态经 session 注入', () => {
     const session = createSourceSession()
     await runScript({ code: 'cookie.setCookie("token", "A-token"); "ok"', source: 'https://a.com', session, loc, facet: 'rule' })
     expect(await cookieOf(session, 'https://a.com', 'token')).toBe('A-token')
-    expect(await cookieOf(session, 'https://b.com', 'token')).toBe('(未设)')   // 隔离断言（此前写不出来的用例）
+    expect(await cookieOf(session, 'https://b.com', 'token')).toBe('(未设)')   // 隔离断言：源 B 看不到源 A 的 cookie
   })
 
   it('实例隔离：两个 session 互不可见——跨源污染测试第一次可写', async () => {

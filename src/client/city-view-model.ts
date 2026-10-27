@@ -5,9 +5,9 @@ import type { Translate } from './copy/index.js'
 /** 分类页的**纯派生**层：派生文案的组装与判据只此一处（字面量住 `copy/city.ts`），视图里不再各拼一份（客户端逻辑层测试口径：
  *  纯函数、不持 React 状态、零 DOM——这些函数能在没有 DOM 的情况下被钉住）。
  *
- *  浏览轴收成按源后（`docs/adr/0028`），「一本书来自几个源」这类跨源读数在本层没有对象了：
- *  旧的 `sourceCountLabel`（卡片角标）、`cityProgress`（「已 x / y 源」）、`failureSummary`（失败清单
- *  摘要）一并删除——单源下它们要么恒为 1、要么退化成一条错误。本层只说一个源的一轮能诚实说的事。
+ *  浏览轴按源（`docs/adr/0028`），「一本书来自几个源」这类跨源读数在本层没有对象：
+ *  卡片角标、「已 x / y 源」这类跨源进度读数与失败清单摘要都不在这里——单源下它们要么恒为 1、
+ *  要么退化成一条错误。本层只说一个源的一轮能诚实说的事。
  *
  *  零本书有六种形状，谁都不许冒充谁：**还在跑 / 被停止 / 这一类真的没货** 这一族归本层
  *  （`bookListEmpty` + `roundReadout`）；**这一页没回来** 那一族由界面上的失败横幅说，本层只保证它
@@ -46,8 +46,8 @@ export function pageReadout(page: number, count: number, t: Translate = zhTransl
 }
 
 /** 空态分支的唯一判据：**可选源数**为 0 = 库里没有源提供分类浏览（与「这一类零结果」是两件事）。
- *  入参从旧的「分类数」换成按源的「声明了分类入口的源数」——两态语义一致（没货 vs 没路），
- *  签名不变，只是数的东西换了轴，返回的分支名因此也跟着轴走。 */
+ *  入参是「声明了分类入口的源数」而不是分类数——两态语义一致（没货 vs 没路），
+ *  返回的分支名跟着这条轴走。 */
 export function cityEmptyState(sourceCount: number): 'no-sources' | 'has-sources' {
   return sourceCount === 0 ? 'no-sources' : 'has-sources'
 }

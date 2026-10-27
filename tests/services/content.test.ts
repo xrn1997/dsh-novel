@@ -71,7 +71,7 @@ describe('contentToText（正文取值收口）', () => {
   it('藏在 noscript 里的 img 也取回地址，不许把字面标签当正文吐出来', () => {
     // domhandler 把 noscript 内容按 raw text 解析（noscript.children 只有一个 text 节点，
     // find('img') 为 0）——「透明下钻」必须把那段文本再当 HTML 解析一次，否则读者看到的是
-    // `<img src="/a.jpg">` 这串标记本身（2026-09 审查实测）。
+    // `<img src="/a.jpg">` 这串标记本身（审查实测）。
     expect(contentToText('<p>前<noscript><img src="/a.jpg"></noscript>后</p>')).toBe('前\n/a.jpg\n后')
     expect(contentToText('<div class="gic"><noscript><img data-original="/b.jpg" /></noscript></div>'))
       .toBe('/b.jpg')

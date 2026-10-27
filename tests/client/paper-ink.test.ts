@@ -4,7 +4,7 @@ import { paperInk } from '../../src/client/util.js'
 /**
  * 正文层字色择选：纸张色由 prefs 固定、永不接宿主 token，故字色必须**由纸张色算**
  * ——写死深色字在自选深色纸上等于隐形。按感知亮度（WCAG 线性化 + Rec.709 权重）择一，
-  * 阈值 0.35 两侧都够对比。此前住在 ReaderView 里零测试，现居 util.ts 纯函数住址。
+  * 阈值 0.35 两侧都够对比。住 util.ts 纯函数，改阈值先看这里的四款预设纸。
  */
 describe('paperInk：纸张色 → 字色（感知亮度）', () => {
   it('深纸 → 浅字（#e8e8ea）', () => {

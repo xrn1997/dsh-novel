@@ -5,7 +5,7 @@ import { JsSandboxError } from '../../src/engine/errors.js'
 const loc = { segmentIndex: -1, segmentRaw: '(test)' }
 
 /** runScript：evalJs 的单对象入口——host/ctx 重叠字段在 engine 内合并，
- *  调用方只学一个形状（此前 request.ts 双拼两份上下文写了两遍）。 */
+ *  调用方只学一个形状，不各拼一份上下文。 */
 describe('runScript', () => {
   it('完成值即结果（scriptForm 缺省 true：legado @js 口径）', async () => {
     const out = await runScript({ code: '1 + 1', loc, facet: 'search' })

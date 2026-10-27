@@ -252,7 +252,7 @@ describe('规则容器的字符串化形态', () => {
     expect(r.warnings.some((w) => w.field === 'ruleSearch' && /不是合法 JSON/.test(w.message))).toBe(true)
   })
   it('读不出的 ruleContent 容器不许冒充规则串（键名本身就是规则位）', () => {
-    // 曾经只清「读得出的」那种容器原文：读不出的留在合并视图里，被当成正文规则一路带到求值期
+    // 读不出的容器必须清掉：留着会被当成正文规则一路带到求值期
     // （表现成「有规则但一读就炸」），而不是本仓要的缺席。清掉之后走的是既有的诚实拦截。
     const r = normalizeSource(strung({ ruleContent: '{"content":' }))
     expect(r.ok).toBe(false)

@@ -8,8 +8,8 @@ import type { NovelSource } from '../../src/services/types.js'
 /**
  * 动态请求头（headerRule）回归钉子：
  * `@js:`/`<js>` header 规则经沙箱求值得 JSON 头表；求值失败 → warn 回退静态头（不炸请求）。
- * 真机实证：顶点小说（device-id/Authorization 全在 @js 规则里）此前被 normalize 当坏 JSON 丢弃
- * → 请求 4004 → ruleDetailInit `$.data` 空 → 详情/目录全链路失败。
+ * 真机实证：顶点小说（device-id/Authorization 全在 @js 规则里）——把 @js 头规则当坏 JSON 丢弃
+ * 会让请求 4004 → ruleDetailInit `$.data` 空 → 详情/目录全链路失败。
  */
 
 const mkSource = (over: Partial<NovelSource> = {}): NovelSource => ({
@@ -95,8 +95,8 @@ describe('resolveHeaders（legado getHeaderMap 口径）', () => {
       rules: { ...mkSource().rules, headerRule: '@js:JSON.stringify({"X-Android": java.androidId()})' },
     })
     const withDevice: Fetcher = { ...fetcher, deviceId: 'dev-1' }
-    // 回归：resolveHeaders 曾手拼上下文，只带 fetch/userAgent/jsLib；deviceId 已接在引擎上下文
-    // 单点里，却到不了头规则脚本 → java.androidId 抛「ctx.deviceId 未接线」并被回退吞掉。
+    // 回归钉子：头规则必须走引擎上下文单点——手拼上下文（只带 fetch/userAgent/jsLib）会让
+    // deviceId 到不了脚本，java.androidId 抛「ctx.deviceId 未接线」并被回退吞掉。
     expect((await resolveHeaders(withDevice, s))['X-Android']).toBe('dev-1')
   })
   it('randomUUID 逐次求值 → device id 每请求刷新（legado 每请求 getHeaderMap 口径）', async () => {
@@ -140,9 +140,8 @@ describe('effectiveUserAgent（java.getWebViewUA 的取值口径）', () => {
 
 /**
  * 头 JSON 的**宽松度**（对面把头做成两段解析：严格 → 宽松，口径与出处记在矩阵行 `b-header-js`）。
- * 本仓此前只有一步 `JSON.parse`，于是
- * 「单引号形态的头」对面读得出、我们静默丢（样本：阅读书屋 / 猫眼看书 / PO5）。
- * 选项 JSON 早就允许单引号（`request.ts` 的 parseOptionJson 注释即此），头这条是漏掉的第二处。
+ * 严格解析一步到底时，「单引号形态的头」对面读得出、我们静默丢（样本：阅读书屋 / 猫眼看书 / PO5）。
+ * 选项 JSON 走的是同一套宽松解析（`request.ts` 的 parseOptionJson），头这条必须跟上。
  */
 describe('头 JSON 的单引号宽松度（与选项 JSON 同一口径）', () => {
   it('静态 header 是单引号 JSON → 派生成头表，不再当坏 JSON 丢弃', () => {

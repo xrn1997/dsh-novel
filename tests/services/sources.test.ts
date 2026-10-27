@@ -103,8 +103,8 @@ describe('SourceRegistry', () => {
     expect((await SourceRegistry.load(dir)).get(src.id)).toMatchObject({ status: 'broken', statusDetail: '[search#段0] 没取到' })
   })
   it('flush 返回后不留挂起的待写：flush 在途期间发生的 edit 也算在内', async () => {
-    // 病根与 `createDebouncedWriter.flush` 同族（那条已在 `tests/services/storage.test.ts` 钉住）：
-    // flush 原先只 await「调用那一刻」的写链尾，于是落在那次写 I/O 期间的 edit 会换成一枚新的
+    // 同族约束见 `tests/services/storage.test.ts` 那条 flush 钉子：flush 不能只等「调用那一刻」的写链尾，
+    // 否则落在那次写 I/O 期间的 edit 会换成一枚新的
     // 防抖计时器挂着——进程/测试收尾把数据根删掉之后它才烧，rename 被系统拒绝成为未处理拒绝
     // （全量门里那种「用例全绿但 exit≠0」的现场）。计时器用 fake 钟**数**出来：不靠 sleep，
     // 也不给「放宽断言」留余地。
@@ -297,7 +297,7 @@ describe('load 内容形态迁移（bookSourceType 编码的存量收敛）', ()
     expect(reg.list()[0].rules.ruleDetailInit).toBe('$.data.bookInfo')   // 入库时已映射
     await reg.edit(() => {
       const s = reg.list()[0]
-      delete (s.rules as unknown as Record<string, unknown>).ruleDetailInit          // 模拟旧版派生的存量形态
+      delete (s.rules as unknown as Record<string, unknown>).ruleDetailInit          // 模拟存量库：该键缺席
     })
     await reg.flush()
     expect((await SourceRegistry.load(dir)).list()[0].rules.ruleDetailInit).toBe('$.data.bookInfo')
@@ -342,7 +342,7 @@ describe('load 内容形态迁移（bookSourceType 编码的存量收敛）', ()
     expect(reg.list()[0].rules.ruleExploreKinds).toHaveLength(2)                 // 入库时已映射
     await reg.edit(() => {
       const rules = reg.list()[0].rules as unknown as Record<string, unknown>
-      for (const k of Object.keys(rules)) if (k.startsWith('ruleExplore')) delete rules[k]  // 旧版派生的存量形态
+      for (const k of Object.keys(rules)) if (k.startsWith('ruleExplore')) delete rules[k]  // 模拟存量库：发现面键整批缺席
     })
     await reg.flush()
     const rules = (await SourceRegistry.load(dir)).list()[0].rules
@@ -374,7 +374,7 @@ describe('load 内容形态迁移（bookSourceType 编码的存量收敛）', ()
       bookSourceName: '甲', bookSourceUrl: 'https://a.com', ruleContent: '@css:#c@text',
       exploreUrl: '玄幻::/xh/{{page}}', ruleExplore: { bookList: '.e@li', name: 'tag.a@text' },
     }
-    // 旧版本入库的形状：发现面十一键**在场但全是空**（那一版还没接 legado）。
+    // 存量形状：发现面十一键**在场但全是空**，而 raw 里有 legado 的 exploreUrl/ruleExplore。
     // 手写 sources.json 而不是 edit(add)——后者入库的源已带新派生值，造不出这个现场。
     const stale = {
       id: 's1', name: '甲', baseUrl: 'https://a.com', enabled: true, type: 'text',
@@ -406,7 +406,7 @@ describe('load 内容形态迁移（bookSourceType 编码的存量收敛）', ()
     const after = await fs.stat(file)
     expect([after.mtimeMs, await fs.readFile(file, 'utf8')]).toEqual([epoch.getTime(), bytesBefore])
   })
-  // ⑥ 的读原先是自己解释 raw 的**第二份**规则解释：只认对象容器、且容器优先于平铺——
+  // ⑥ 的读不许自成 raw 的**第二份**规则解释：只认对象容器、且容器优先于平铺——
   // 与导入侧（flattenDialect：字符串化容器照解析、平铺优先）在两种形态上分岔。恒覆盖
   // 于是会把导入侧派生的正确值改写掉（抹成 null 或换成另一处的值），且落盘后看不出来。
   it('⑥ init 往返：字符串化 ruleBookInfo 容器不被 load 抹成 null', async () => {
@@ -441,7 +441,7 @@ describe('load 内容形态迁移（bookSourceType 编码的存量收敛）', ()
     })))
     await reg.edit(() => {
       const s = reg.list()[0]
-      s.rules.ruleDetailInit = null                              // 模拟旧实现已经写坏并落盘的存量
+      s.rules.ruleDetailInit = null                              // 模拟已被写坏并落盘的存量
     })
     await reg.flush()
     const re = (await SourceRegistry.load(dir)).list()[0]
@@ -457,7 +457,7 @@ describe('load 内容形态迁移（bookSourceType 编码的存量收敛）', ()
     })))
     expect(reg.list()[0].rules.bookUrlPattern).toBe('https://sniff\\.example\\.com/book/\\d+/')
     await reg.edit(() => {
-      delete (reg.list()[0].rules as unknown as Record<string, unknown>).bookUrlPattern  // 旧版派生的存量形态
+      delete (reg.list()[0].rules as unknown as Record<string, unknown>).bookUrlPattern  // 存量形状：键缺席
     })
     await reg.flush()
     expect((await SourceRegistry.load(dir)).list()[0].rules.bookUrlPattern)
@@ -489,7 +489,7 @@ describe('load 内容形态迁移（bookSourceType 编码的存量收敛）', ()
     const reg = await SourceRegistry.load(dir)
     // 两条读路的**优先级不同**：导入侧平铺优先（setIfVacant），raw 重推侧容器优先（inBox 先取）——
     // 夹具要让两处给出**不同的值**，这条用例才有可证伪性：同值夹具下「只填缺席」与「恒覆盖」同绿
-    // （曾用字符串化容器当夹具，两路算出同一个值，改坏了也照绿）。
+    // （同值夹具下两路算出同一个值，改坏了也照绿）。
     await reg.edit((tx) => tx.add(normalizeSource({
       bookSourceName: '两说', bookSourceUrl: 'https://two.example.com', ruleContent: 'x',
       ruleKind: 'tag.flat@text',
@@ -517,7 +517,7 @@ describe('load 分组迁移（逗号粘连存量收敛）', () => {  it('早期�
     const dir = await tmp()
     const reg = await SourceRegistry.load(dir)
     const src = await reg.edit((tx) => tx.add(normalizeSource(raw)))
-    // 回灌脏数据（当年只按 \ 拆的产物）——直改活体对象，包进 edit 以标脏落盘
+    // 回灌脏数据（只按 `\` 拆分组的产物）——直改活体对象，包进 edit 以标脏落盘
     await reg.edit(() => { src.groups = ['快速书源 ⚡,通常书源 📂', '小说'] })
     await reg.flush()
     const reg2 = await SourceRegistry.load(dir)
@@ -531,7 +531,7 @@ describe('load 名称迁移（前缀图标收敛）', () => {
     const dir = await tmp()
     const reg = await SourceRegistry.load(dir)
     const src = await reg.edit((tx) => tx.add(normalizeSource(raw)))
-    await reg.edit(() => { src.name = '⚡📂旧名' })               // 回灌脏数据（迁移前的存量形态）
+    await reg.edit(() => { src.name = '⚡📂旧名' })               // 回灌脏数据（带装饰前缀的名字）
     await reg.flush()
     const reg2 = await SourceRegistry.load(dir)
     expect(reg2.get(src.id)!.name).toBe('旧名')

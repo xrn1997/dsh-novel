@@ -23,9 +23,9 @@ export interface RequestOption {
 }
 
 /**
- * 请求计划（原 SearchRequest，语义不变）：模板 + 变量 + baseUrl 的**唯一**可执行形态。
+ * 请求计划：模板 + 变量 + baseUrl 的**唯一**可执行形态。
  * 选项语义（method 判定 / body 插值 / headers / POST 表单默认 urlencoded / charset）只在
- * assembleRequest 里解释一遍——此前 buildSearchRequest 与 engineFetch 各写一份、靠「同口径」注释同步。
+ * assembleRequest 里解释一遍；不要在 buildSearchRequest 或 engineFetch 另写一份。
  */
 export interface RequestPlan {
   url: string
@@ -41,18 +41,15 @@ export interface RequestPlan {
   webJs?: string
 }
 
-/** 兼容别名：历史名字（搜索面/详情面旧 import 路径不改） */
-export type SearchRequest = RequestPlan
-
-/** `,{` 切分单点在 `engine/template.ts` 的 `URL_OPTION_SPLIT`（切分式与病史都记在那里）——
+/** `,{` 切分单点在 `engine/template.ts` 的 `URL_OPTION_SPLIT`（切分式与边界都记在那里）——
  *  本文件与 `engine/js-protocol.ts` 共用同一式，不再各抄一份。 */
 /** searchUrl → { URL 部分, 选项 }。不含 `,{` → 选项 undefined。 */
 export function parseUrlOption(template: string): { urlPart: string; option: RequestOption | undefined } {
   const m = URL_OPTION_SPLIT.exec(template)
   if (m === null) return { urlPart: template, option: undefined }
   // 切分口径：`\s*,\s*(?=\{)` 命中即**无条件切分** URL——选项 JSON 是否合法只决定「拿没拿到
-  // 选项」，不决定「URL 干不干净」。曾把整串（含 `,{…}`）当 URL 发出 → 站点 404（弯引号等
-  // 坏选项形态实证，矩阵行 `b-split-unconditional`）。
+  // 选项」，不决定「URL 干不干净」。不要把整串（含 `,{…}`）当 URL 发出，否则站点 404
+  // （弯引号等坏选项形态，矩阵行 `b-split-unconditional`）。
   const urlPart = template.slice(0, m.index).trimEnd()
   const option = parseOptionJson(template.slice(m.index + m[0].length))
   if (option === undefined) {
@@ -133,8 +130,8 @@ function decodePercentRun(run: string): string | null {
 /**
  * 选项语义的唯一主人：模板 + 变量 + baseUrl（null = 不做绝对化，@js ajax 形态用）→ 请求计划。
  * method 判定 / body 插值 / POST 表单默认 urlencoded / headers / charset 全部只在这里解释一遍
- * （曾两处各写一份、靠「与对方同口径」注释同步）。相对 URL 按 baseUrl 解析（官方「支持相对URL」；
- * 曾直接喂 fetch，相对 URL 全数打不到）。
+ * （不要在别处再写一份「与对方同口径」的副本）。相对 URL 按 baseUrl 解析（官方「支持相对URL」；
+ * 直接喂 fetch 会让相对 URL 全数打不到）。
  * trimFirstPage：Native 分页语义——模板以 `/{{page}}` 结尾时首页裁掉页码段（带 /1 站点直接 404）。
  */
 export function assembleRequest(
@@ -152,7 +149,7 @@ export function assembleRequest(
   const withPageList = expandPageAngleList(interpolated, typeof vars.page === 'number' ? vars.page : null)
   const url = baseUrl === null ? withPageList : (absUrl(withPageList, baseUrl) ?? withPageList)
   // method 三态（对面把 POST/HEAD 各分一支、其余落 GET——出处与对读记录见矩阵行 `b-opt-method-head`）：
-  // HEAD 此前被并进「不是 POST 就 GET」那条路 → 声明 HEAD 的源实际发的是 GET（降级当成了实现）。
+  // HEAD 不能被并进「不是 POST 就 GET」那条路——声明 HEAD 的源会实际发 GET（降级当成了实现）。
   const rawMethod = (option?.method ?? 'GET').toUpperCase()
   const method: RequestPlan['method'] = rawMethod === 'POST' ? 'POST' : rawMethod === 'HEAD' ? 'HEAD' : 'GET'
   const plan: RequestPlan = {
@@ -177,7 +174,7 @@ export function assembleRequest(
 }
 
 /**
- * fetch init 姿态的单点（此前 search-face / reading / bridge 三处各组装一遍）：
+ * fetch init 姿态的单点（search-face / reading / bridge 都必须走这一份）：
  * GET **不带 method 键**（fetch 缺省即 GET）；POST 带 method 与插值后的 body；
  * HEAD 带 method 且**不带 body**（与对面同口径：HEAD 是元数据探测，不该把体发出去）。
  * baseHeaders（如源级 headerOf）打底，计划 headers 覆盖同名。
@@ -208,8 +205,8 @@ export function fetchInitOf(
   return init
 }
 
-/** 兼容 re-export：URL 绝对化与选项后缀那一族迁至 url.ts（bridge 也要 absUrlKeepOption，
- *  而 bridge→request→bridge 就是 url.ts 当初拆掉的那个环）。既有 import 路径保持可用。 */
+/** URL 绝对化与选项后缀那一族的 re-export：实现住 url.ts（bridge 也要 absUrlKeepOption，
+ *  url.ts 用来拆 request ↔ bridge 的环）。既有 import 路径保持可用。 */
 export { absUrlKeepOption, splitUrlOption, stripUrlOption } from './url.js'
 
 /** 比对口径（串章闸/防环）：剥选项后缀 → URL 归一化（new URL().href）；解析失败回原文。
@@ -219,7 +216,7 @@ export function canonUrl(u: string, base?: string): string {
   try { return new URL(url, base).href } catch { return url }
 }
 
-/** 搜索面入口（历史名字保留）：assembleRequest 的搜索专用薄壳 */
+/** 搜索面入口：assembleRequest 的搜索专用薄壳 */
 export function buildSearchRequest(
   template: string, vars: Record<string, string | number>, baseUrl: string,
   opts?: { trimFirstPage?: boolean },

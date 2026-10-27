@@ -19,7 +19,7 @@ export type SourceStatus = 'unverified' | 'verified' | 'broken'
 
 /** 书源内容形态（书源格式的 bookSourceType：0/-1/缺省=文本，**1=音频，2=图片，3=文件**）。
  *  `unknown` = **编码读不懂**（不是认得的整数值），不是第五种媒介而是「这本文源不规范」：
- *  读不懂不等于文本，一律不进参与集（曾按文本处理，误标的短剧/漫画源混进聚合搜索——已推翻）。
+ *  读不懂不等于文本，一律不进参与集（按文本处理会让误标的短剧/漫画源混进聚合搜索）。
  *  它也不写 `status`：探针按搜索面重判，这类源的搜索面恰恰是好的，用状态承载会被下一次重验洗白。
  *  本插件当前只支持文本源：导入预检点名拒绝非文本与未知；参与集 = enabled ∧ type==='text'
  *  （判定单点在 services/participation.ts 的 participates 谓词）；存量误标由 SourceRegistry.load 按 raw 重推收敛。 */
@@ -193,7 +193,7 @@ export interface SearchJobSnapshot {
  *  **只给标题、不给入口地址**——两方言的地址语义不同（原生是填进源级模板 `{{kind}}` 的 slug，
  *  legado 的 `url` 本身就是那一类的完整模板），这份差异因此继续只住服务端一侧，不外泄到跨半契约。
  *  路由名仍是 `explore/kinds`：它给的就是分类入口清单，只是按源分组了。
- *  曾经的形状是「跨源精确同名并集 + 每条计数」——那条轴把左栏撑成了各站自造词的长列表，
+ *  不做「跨源精确同名并集 + 每条计数」——那条轴会把左栏撑成各站自造词的长列表，
  *  且绝大多数词条只挂一个源，见 `docs/adr/0028`。
  *  源行上的 `groups` 与 `status` **只是展示标签与状态角标，不是浏览轴**：同一篇 ADR 刚把「分组→源
  *  两级」列为被否决做法，这一面逛的轴是「点名一个源」，不是「按分组逛」——别让这两个字段躺在
@@ -228,7 +228,7 @@ export interface ExploreBook {
 /** 单源分类轮次的读面快照。
  *  **仍是全量快照、仍整帧替换**：跨页累积住在服务端持有者（`services/explore-job.ts`），
  *  客户端不持有任何要跟着翻页对齐的东西。
- *  曾经的形状带着 `total`/`done`/`failures`：`total` 在单源下恒为 1，是常数；`done`/`failures`
+ *  本形状不带 `total`/`done`/`failures`：`total` 在单源下恒为 1，是常数；`done`/`failures`
  *  是「一轮打多个源」的读数。单源的失败只有一条泳道，由 `error` 承载——**它不是 `phase` 的替身**：
  *  执行体从不抛错，抓取失败是以带 `error` 的组交回来的，所以「这一页没问到」必须落在 `error` 上，
  *  否则它会与「这一类真的没货」折成同一帧（写它的责任在 `services/explore-job.ts` 的 `absorb`）。 */
@@ -288,8 +288,8 @@ export interface BookDetail {
 export type ShelfProgress = { chapterIndex: number; offsetRatio: number; updatedAt: number }
 
 /** 「这本书读过没有」——存档恢复与书架卡片（在读/未读筛选、进度行）共用这一份判定。
- *  口径是「章 > 0 **或** 章内比例 > 0」：第 0 章里的位置同样是进度。曾两处各写一份且相反，
- *  同一条存档「在读」与「没读过」互相矛盾——单点在此。 */
+ *  口径是「章 > 0 **或** 章内比例 > 0」：第 0 章里的位置同样是进度。两处各写一份且相反时，
+ *  同一条存档会「在读」与「没读过」互相矛盾——单点在此。 */
 export function hasProgress(p: ShelfProgress): boolean {
   return p.chapterIndex > 0 || p.offsetRatio > 0
 }
@@ -532,8 +532,8 @@ export function route<M extends HttpMethod>(method: M, ...segs: string[]): Route
   return { method, path: segs.join('/'), segs }
 }
 
-/** 静态路由表（无参数的部分，共 30 条；另有 6 条参数操作见 paramOps）——
- *  路由总数由 tests/shared/wire-builders.test.ts 钉死（此前的「17 条路由」注释既烂又无测试）。
+/** 静态路由表（无参数的部分；参数操作见 paramOps）——路由总数由
+ *  tests/shared/wire-builders.test.ts 钉死，不要在这里手写一个会腐烂的计数。
  *  方法随行：客户端写口取 `ROUTES.x.method`，dispatch 的 guard 读同一份。 */
 export const ROUTES = {
   health: route('GET'),
@@ -612,8 +612,8 @@ export const paramOps = {
 } as const
 
 // ── query 参数名与构造器 ───────────────────────────────────────────────
-// 此前参数名散在 dispatch 与四个 client 文件里各写一份，改名无处编译报错；
-// SearchView 曾手拼 `shelf/${...}` 绕过 paramOps（活漂移）。构造器把「参数名 + 字段取舍」
+// 参数名若散在 dispatch 与四个 client 文件里各写一份，改名无处编译报错；
+// 不要手拼 `shelf/${...}` 绕过 paramOps（会活漂移）。构造器把「参数名 + 字段取舍」
 // 收进契约：client 半 inline 本文件，故保持零运行时依赖（下面全是纯函数/常量）。
 
 /** query 参数名的唯一字面量来源：dispatch 的读取与构造器的写入同源 */
@@ -703,9 +703,9 @@ export function resourceUrl(bookKey: string, resourceId: string): string {
 }
 
 // ── 写路由的 body：字段名、构造器、读口同源 ────────────────────────────
-// 此前只有书架那三种形态有主人：其余写路由的键名由浏览器半手写、Node 半逐一手读，改名不会有任何
-// 东西变红——而「wire 单点」这条硬约束承诺的正是 body 构造器与读口成对。两者同住这里，是因为它们
-// 答的是同一件事（「这个 body 该长什么样」），分家就会立刻生成两份抄本。
+// 所有写路由的键名都必须有主人：若浏览器半手写、Node 半逐一手读，改名不会有什么变红——
+// 「wire 单点」这条硬约束承诺的正是 body 构造器与读口成对。两者同住这里，因为答的是同一件事
+// （「这个 body 该长什么样」），分家就会立刻生成两份抄本。
 // 本文件被 inline 进 client bundle，故以下全部零运行时依赖（纯函数 + 本地错误类）。
 
 /** body 字段名（只列 query 那侧没有的词）。与 `PARAMS` 撞上的业务名词（`keyword` / `sourceIds` /

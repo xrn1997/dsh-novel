@@ -159,8 +159,8 @@ function standaloneBase(rt: Runtime): EngineValue {
 // 一条取值链的执行语义只此一份，以 generator 表达：非 js 段同步推进，js 段 yield 出完整 evalJs
 // 入参给驱动器。两个驱动器只喂结果、零链知识：异步驱动（主路径）await 回喂；同步驱动
 // （java.getString* 的 evaluateRef 专用）遇第一次 yield 即「子规则内不支持 js 段」宁炸不猜。
-// 曾是两份逐条镜像的孪生 runner（特判段双写、同步环路零测试）——已收拢，见
-// tests/engine/evaluate-sync-loop.test.ts。
+// 两个驱动器只喂结果，不得各自实现链语义；同步环路的覆盖由
+// tests/engine/evaluate-sync-loop.test.ts 钉住。
 
 /** 驱动器回喂给 generator 的求值结局（取值 + 日志）；驱动器对段零知识。 */
 type JsOutcome = Awaited<ReturnType<typeof evalJs>>
@@ -191,8 +191,8 @@ function* branchGen(
       if (seg.kind === 'js') {
         const prev: EngineValue | null = cur // 首段（prev=null）时 host.result 取整页原文
         // 驱动器经 gen.throw(e) 把 evalJs 失败投回此处——错误步与重抛走同一条 catch（单点）
-        // scriptForm:true（@js 段口径）：最后一个表达式的值即结果（曾走 wrapped async IIFE，
-        // 无 return 的表达式恒 undefined → Miss，`$.id@js:"…"+result` 主导形态整批静默取空）。
+        // scriptForm:true（@js 段口径）：最后一个表达式的值即结果。不要改回 wrapped async IIFE——
+        // 无 return 的表达式会恒 undefined → Miss，`$.id@js:"…"+result` 这类形态会整批静默取空。
         // **插值先重写规则文本本身，再按 mode 分发**，故 js 段代码里的 `{{…}}` 先按当前链上下文
         // 插值（不插值就把字面花括号发上网打到 404；形态计数只能按真入口重算，故不写「N 源在用」）。
         // 插值段 Miss → 整段 Miss，与模板字面段同一口径。

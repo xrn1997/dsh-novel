@@ -75,8 +75,8 @@ describe('exportBook', () => {
 
   it('空目录 / 越界 / 倒置 → 一律抛，不再有各自的静默出口', async () => {
     const empty = { getToc: async (): Promise<ChapterEntry[]> => [], getChapter: async () => '' }
-    // 旧形态：空目录只发一个 BOM（首包已 200，状态码改不了）——「只有 BOM 的文件」和
-    // 「导完的空书」在用户手里没区别，正是本仓定的最高罪。现在合起来判：范围不是 toc 的一段即抛。
+    // 拒绝的形态：空目录只发一个 BOM（首包已 200，状态码改不了）——「只有 BOM 的文件」和
+    // 「导完的空书」在用户手里没区别，正是本仓定的最高罪。合起来判：范围不是 toc 的一段即抛。
     await expect(collect(exportBook(empty, 's', 'b', { title: 'x', delayMs: 1, from: 1, to: 1 })))
       .rejects.toThrow(/导出范围越界.*不在 \[1, 0\]/)
     const { deps, calls } = makeDeps()

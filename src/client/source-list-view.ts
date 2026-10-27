@@ -4,8 +4,8 @@ import type { SourceListUi } from './source-list.js'
 import type { SourcePublic } from './views/types.js'
 
 /**
- * 源列表的派生 view-model：SettingsSourceList 曾把计数 / 分组图例 /
- * 过滤管线 / 选中态派生写成组件体里的闭包——纯计算被 React 接线包住，只能整壳 jsdom 间接验。
+ * 源列表的派生 view-model：计数 / 分组图例 / 过滤管线 / 选中态派生都是纯计算，
+ * 不写成组件体里的闭包——否则会被 React 接线包住，只能整壳 jsdom 间接验。
  * 本 module 把「全库源列表 + UI 现场 → 展示所需派生值」收成一个纯函数：输入相同输出必相同，
  * 无 React、无 store、无 IO——逻辑可单测，视图只做接线。
  *
@@ -13,15 +13,15 @@ import type { SourcePublic } from './views/types.js'
  * - 分组下拉选项集按**全库**聚合计数，不随状态/文本过滤缩水——筛选器的选项集要稳定，
  *   否则选了「坏源」状态后非坏源的分组就从下拉里消失，没法组合过滤；
  * - 'disabled' 维度是 enabled 布尔而非 status（停用与坏源正交）——沿用 source-list.ts 口径；
- * - 状态下拉**不带计数**（2026 调度台改版）：下拉只做过滤不做总览；全部读数的唯一住址是
- *   列表头**状态带**（`stats`，本 view-model 派生）——2026-09 起待办卡可被忽略，读数不能再
- *   住在那里；坏源/未验证的 id 集合归 source-inbox.ts（待办派生的唯一住址），本层**读它的集合**
+ * - 状态下拉**不带计数**：下拉只做过滤不做总览；全部读数的唯一住址是
+ *   列表头**状态带**（`stats`，本 view-model 派生）——待办卡可被忽略，读数不能住在那里；
+ *   坏源/未验证的 id 集合归 source-inbox.ts（待办派生的唯一住址），本层**读它的集合**
  *   算这两维计数，不再 filter 第二遍。
  */
 
 /** 列表头状态带的五个读数：`enabled/disabled` 是 enabled 维，`unverified/broken` 是 status 维
  *  （两者正交，故不做「合计 = total」这种假约束）。口径：算全库、不看过滤，且**停用源照样
- *  计入**未验证/坏源（2026-09 裁定：停用 ≠ 免验）——这两维**直接读 `source-inbox.ts` 的集合**，
+ *  计入**未验证/坏源（停用 ≠ 免验）——这两维**直接读 `source-inbox.ts` 的集合**，
  *  与待办合同一口径、由构造相等。0 也要显示（「坏源 0」本身就是结论，且数字位忽隐忽现会让这条带子一直抖）。 */
 export interface SourceStats { total: number; enabled: number; disabled: number; unverified: number; broken: number }
 
@@ -57,7 +57,7 @@ export function deriveSourceListView(all: SourcePublic[], ui: SourceListUi, limi
   for (const s of all) for (const g of s.groups) groupCounts.set(g, (groupCounts.get(g) ?? 0) + 1)
   const ungroupedCount = all.filter((s) => s.groups.length === 0).length
   // 状态带：`enabled/disabled` 一趟算齐；`unverified/broken` **直接读待办派生**（同一份判据、
-  // 同一份集合，两张读数由构造相等——此前这里再 filter 一遍，只能靠一条测试维持两边相等）
+  // 同一份集合，两张读数由构造相等——不要在这里再 filter 一遍，那只能靠测试维持两边相等）
   const inbox = sourceInbox(all)
   const stats: SourceStats = { total: all.length, enabled: 0, disabled: 0, unverified: inbox.unverified.length, broken: inbox.broken.length }
   for (const s of all) {

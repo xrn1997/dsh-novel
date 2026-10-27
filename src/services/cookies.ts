@@ -48,8 +48,8 @@ export class CookieJar {
       let domain = host
       let hostOnly = true
       let path = '/'
-      // Max-Age 与 Expires 按 RFC 6265 分开记：Max-Age 优先，且不受属性顺序影响
-      // （旧实现后出现的 Expires 会覆盖先出现的 Max-Age，`Max-Age=3600; Expires=过去` 会被误删）
+      // Max-Age 与 Expires 按 RFC 6265 分开记：Max-Age 优先，且不受属性顺序影响。
+      // 若按属性出现顺序让后出现的 Expires 覆盖先出现的 Max-Age，`Max-Age=3600; Expires=过去` 会被误删。
       let maxAgeExpires: number | null = null
       let expiresAt: number | null = null
       let domainAttr: string | null = null

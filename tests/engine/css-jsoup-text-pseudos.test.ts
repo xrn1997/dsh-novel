@@ -1,6 +1,6 @@
 /**
  * **jsoup 的文本伪类：`:contains(…)` 忽略大小写、`:containsOwn(…)` 只看元素自己的文本。**
- * 两条都是**对读对面依赖的那个库实测**得到的形状（2026-09-28 本机 JDK 跑 jsoup；版本成色写在
+ * 两条都是**对读对面依赖的那个库实测**得到的形状（本机 JDK 跑 jsoup；版本成色写在
  * 矩阵 `a-css-jsoup-text-pseudos`，不在这里重复）：
  * - `:contains` 在 jsoup 不分大小写、cheerio 分——这条有真实需求方（现量重算走 `DSH_PARSE_CENSUS=1`），
  *   所以按对面语义放宽；

@@ -8,9 +8,9 @@ import { LocalNotMountedError } from './errors.js'
  * 三个读动词（以及上层的内容读取）不再各自判 `__local__`；来源**展示**判据
  * （如门面的 `sourceNameOf`、书目筛选）仍按本地源常量判来源身份，不属于内容读取分流。
  *
- * 为什么在门面与两个来源之间再放一层：三个读动词此前各写一次
- * `sourceId === LOCAL_SOURCE_ID ? local : online`；更要紧的是正文文字规约只在线那条路上过，
- * 本地 TXT 直接把切片原样交出去（CRLF、连续空行留在导出与 AI 读到的正文里）。
+ * 为什么在门面与两个来源之间再放一层：三个读动词都需要同一条本地/在线分流，
+ * 且正文文字规约必须对两条路一致——只在线路做规约会让本地 TXT 把 CRLF、连续空行
+ * 留在导出与 AI 读到的正文里。
  * 文字规约是本读面的**契约**：两个适配器的 `chapterContent` 出口都过
  * `normalizeChapterText`（幂等），EPUB 的 rich 树不解释。
  *

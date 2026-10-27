@@ -5,8 +5,8 @@ import { prodCoreDeps, prodDeps, prodReaderDeps } from '../../src/client/deps.js
 import type { ClientCoreDeps, JobViewDeps, ReaderDeps, SettingsDeps, ShelfDeps } from '../../src/client/deps.js'
 
 /**
- * 测试假依赖束——桩工厂唯一住址（此前三处测试各造一份形状略异的桩，主干加成员要同步多处且漂移
- * 无编译信号）。现在：返回类型绑主干束、靠 `...prod*` spread 自动跟上（缺成员声明处即红），
+ * 测试假依赖束——桩工厂唯一住址（别在用例里另造形状略异的桩：主干加成员要同步多处且漂移
+ * 无编译信号）。返回类型绑主干束、靠 `...prod*` spread 自动跟上（缺成员声明处即红），
  * 覆写键绑**所有束的成员并集**（写错成员名即红，而不必先想清楚这个读者吃哪一束），
  * 缺省值全是确定性 vi.fn 假实现（零网络）。
  * `as` 收在本文件内各一处——Mock 与真实现的泛化签名互不兼容，逐处 cast 是工厂的职责。

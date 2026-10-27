@@ -57,7 +57,7 @@ function NavItem({ item, current, onNavigate }: {
   onNavigate: (target: ReadingTarget) => void
 }): ReactNode {
   const target = item.target
-  // 叶项复用抽屉既有按钮类：高亮、焦点环、省略号截断全与旧目录同一个源
+  // 叶项复用抽屉既有按钮类：高亮、焦点环、省略号截断与目录同一个源
   const leaf = target === null ? null : (
     <button
       type="button"

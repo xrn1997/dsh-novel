@@ -8,9 +8,9 @@ import { DEFAULT_MAX_IMPORT_BYTES } from '../../src/services/localbooks.js'
 import { DEFAULT_JS_BUDGET_MS, DEFAULT_SEARCH_PARALLEL } from '../../src/services/reading.js'
 
 /**
- * 可调参数的**缺省值单点化**（病史：同一批数字原先在
- * 四处各写一份，生产路径显式传值，所以改岔了不会当场报错，只会让「配置表看到的默认值」与「服务层
- * 实际回退值」悄悄分叉）。
+ * 可调参数的**缺省值单点化**：每个数字只有一个主人（消费模块的 `DEFAULT_*` 常量）。
+ * 生产路径显式传值，所以缺省改岔不会当场报错，只会让「配置表看到的默认值」与「服务层
+ * 实际回退值」悄悄分叉——这两条钉子守的就是这个分叉。
  *
  * 两类钉子：
  * ① 值本身钉死——改缺省是一次有意的产品行为变更，应当在这里留下一笔；

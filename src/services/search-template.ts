@@ -14,7 +14,7 @@ import type { NovelSource } from './types.js'
 
 /** URL 模板（含 POST body）内 `{{...}}` 全部按 JS 求值——
  *  `{{java.encodeURI(key)}}`、`{{page*2}}`、`{{java.base64Encode("/s?k="+key)}}` 等形态
- *  （此前只做纯变量替换，JS 表达式被原样拼进 URL 必炸）。**只有真正的变量占位不动**：
+ *  （只做纯变量替换会让 JS 表达式被原样拼进 URL 必炸）。**只有真正的变量占位不动**：
  *  占位判定是「标识符 **且** 在 vars 里或带 `||` 兜底」（`template.isPlaceholderExpr`）——
  *  jsLib 定义的全局（`{{host}}`）也走 JS 求值（每段 `{{…}}` 无例外地过沙箱）。 */
 export async function preEvaluateUrlJs(
@@ -68,7 +68,7 @@ const URL_JS_BLOCK_RE = /<js>([\s\S]*?)<\/js>|(?:@|^\s*)js:([\s\S]*)/gi
  *  无占位时文本整体**取代**累积值，正合「块只做副作用、URL 是尾巴字面文本」的源），每个块拿到的
  *  `result` 全局就是当时的累积值。
  *
- *  为什么是这个口径（而不是「前缀形态」那条旧口径）：① 内嵌形态整串进沙箱 → 报
+ *  为什么是这个口径：① 内嵌形态整串进沙箱 → 报
  *  `Unexpected token '<'`；② 尾部 `@js:` 形态连 `,{…}` 选项一起当 URL 发 → 选项被静默丢掉 +
  *  0 命中。顺序也有讲究：js 块先于 `{{...}}` 预求值，故 js 代码里的 `{{…}}` 不预先插值，
  *  留在 js **产物**上再被 preEvaluateUrlJs 处理。 */
@@ -110,7 +110,7 @@ function nonEmpty(v: string | undefined): string | undefined {
   return v === undefined || v === '' ? undefined : v
 }
 
-// ── runScript 入参构造的单点（此前两处各写一遍近逐字的 host/ctx 双拼——已收口）────────
+// ── runScript 入参构造的单点（两处都必须走这一份，不要各拼一份 host/ctx）────────
 
 function scriptOf(
   source: NovelSource, code: string, key: string, page: number, fetcher: Fetcher, segmentRaw: string,

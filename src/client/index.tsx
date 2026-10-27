@@ -15,9 +15,9 @@ import { NovelView } from './views/NovelView.js'
 export const inject = ['slots', 'layout']
 
 /**
- * 浏览器半入口：把「小说」注册为**全局面板**（2026-09 迁移，用户拍板）——侧栏
- * `sidebar.panellist` 一行图标 + `main` keyed 槽同 id 的中央面板，不再是对话区
- * `conversation.view` tab。宿主契约（本机 host checkout 实证）：
+ * 浏览器半入口：把「小说」注册为**全局面板**——侧栏
+ * `sidebar.panellist` 一行图标 + `main` keyed 槽同 id 的中央面板。
+ * 宿主契约（本机 host checkout 实证）：
  *
  * - `sidebar.panellist`（root 作用域 list）：注册项 `{ id, order?, label? }`；宿主 sidebar
  *   shell 自带行按钮、`aria-current` 选中态、折叠 tooltip，点击 = `ctx.layout.selectPanel(id)`；
@@ -28,11 +28,11 @@ export const inject = ['slots', 'layout']
  * - **两个座位必须同批注册**：官方契约明写「selecting a missing main entry throws without
  *   changing the current selection」——apply 内同步双注册，不存在半注册窗口。
  *
- * `conversation.view` 注册随之**撤除**：单一归属口径延续（2026 IA 撤 `settings.section`、
- * 本轮撤对话区 tab）——小说只挂全局面板这一个入口。视图环内的状态不留：业务真相在服务端
+ * 小说只挂全局面板这一个入口：不注册 `conversation.view`，也不注册 `settings.section`
+ * （单一归属）。视图环内的状态不留：业务真相在服务端
  * （后台任务 + 显式快照），交互现场在模块级 store（routeStore / sourceListUi / jobSurface），
  * keyed 槽切走面板即卸载组件树，回来照常恢复。常驻状态层仍住 `shell.overlay`（root 作用域、
- * list 基数、默认 click-through）：任务读数要在**任何面板**都说得出口，与本次迁移正交。
+ * list 基数、默认 click-through）：任务读数要在**任何面板**都说得出口。
  */
 
 /** 全局面板行的图标：宿主行给 `{ size, active }`（`SidebarPanelIconOwnerProps`），

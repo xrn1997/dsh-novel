@@ -224,7 +224,7 @@ describe('agent 工具六件套', () => {
   it('dshnovel_shelf：值域门在门面动词上，工具面写不进非法值（与 HTTP 面同一道门）', async () => {
     const s = await svc()
     const key = 'https://s.com/book/3/'
-    // 空 sourceId 此前只在路由拦——工具面直穿，落一条永远读不了的书（getToc('') 才炸）
+    // 值域门在门面动词上：只在路由拦时工具面会直穿，落一条永远读不了的书（getToc('') 才炸）
     await expect(run(s, 'dshnovel_shelf', { action: 'add', bookKey: key, title: 'T3', sourceId: '' }))
       .rejects.toThrow(/非空 sourceId/)
     await expect(run(s, 'dshnovel_shelf', { action: 'add', bookKey: key, title: '', sourceId }))

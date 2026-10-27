@@ -3,12 +3,12 @@
 export const READER_CSS = `
 /* ── 阅读器：控制器条/正文列/目录抽屉/Aa 面板（z 序仍归 CTRL_Z 常量，布局归样式类）── */
 /* 纸面 full-bleed：**纸张色涂满整个阅读区**（值槽 --novel-paper 由 ReaderView 行内写在阅读区根上），
-   正文列只决定「文字排到哪儿为止」。旧做法把纸色涂在 .novel-rdr-body 上，宽屏下就是一张
-   680px 的窄带飘在宿主底色里（实测 1500px 视口左右各漏底 410px）——那不是留白，是纸没铺开。
+   正文列只决定「文字排到哪儿为止」。不要把纸色只涂在 .novel-rdr-body 上——宽屏下就是一张
+   680px 的窄带飘在宿主底色里（实测 1500px 视口左右各漏底 410px），那不是留白，是纸没铺开。
    min-height 一屏：正文短于一屏时纸面也要铺满，不许下面漏底色。 */
 .novel-rdr { position: relative; display: flex; flex-direction: column; min-height: 100vh; }
 /* 控制器条**跟纸走，不跟宿主 chrome 走**：条底 = 纸往墨压一档，整屏读作「一张纸的顶部折了一道」。
-   旧做法条底读 --novel-bg（宿主 App 底色），与用户自选纸色毫无关系——实测接缝对比度 15.51:1，
+   条底不要读 --novel-bg（宿主 App 底色）——那与用户自选纸色毫无关系，实测接缝对比度 15.51:1，
    而黑白极限才 21:1，那是「两块板拼起来」而不是「一页纸」。判据到这句就闭合：条底与纸底不同源，
    接缝就是可量的缺陷，不需要拿别的产品的做法来背书（那种断言在盘上回查不到）。
    条上的深浅一律 inherit + opacity 分主次——这样「控制器层跟随深色」只需重钉条根一个 color，
@@ -49,7 +49,7 @@ export const READER_CSS = `
 }
 .novel-rdr-ctl:hover { background: color-mix(in srgb, currentColor 10%, transparent); opacity: 1; }
 .novel-rdr-ctl svg { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-/* 章进度：墨色凹槽（底槽 + 实心），不再是压在纸上的第三条外来横带。brand 蓝在控制器层只留给
+/* 章进度：墨色凹槽（底槽 + 实心），不是压在纸上的第三条外来横带。brand 蓝在控制器层只留给
    选中态（Aa 面板的 .on），条下沿这一道归纸。跨章才变——低频量，故不进每帧读数的滚动路径。
    实心走 ::after：轨道本体留着承载行内写入的 --novel-pct（浏览器台按它读「读到第几章」）。 */
 .novel-rdr-trail {
@@ -68,8 +68,8 @@ export const READER_CSS = `
 .novel-rdr-main { position: relative; flex: 1 1 auto; min-height: 0; display: flex; align-items: flex-start; background: var(--novel-paper); }
 /* 正文列宽随字号走：--novel-measure（缺省 36em，行内由 prefs.measure 覆写；em 跟着
    prefs.fontSize 变，中文一行约 36 字）。
-   旧实现 padding 写死 calc(50% - 320px) = 恒 640px 列 → 12px 字号约 53 字/行、
-   28px 字号约 23 字/行，两端都出了舒适区。 */
+   不要把 padding 写死成固定列宽（如 calc(50% - 320px) = 恒 640px 列）——12px 字号约 53 字/行、
+   28px 字号约 23 字/行，两端都会出舒适区。 */
 .novel-rdr-body {
   flex: 1 1 auto; min-width: 0; max-width: var(--novel-measure); margin-inline: auto;
   overflow-y: auto; padding: var(--novel-sp-7) var(--novel-sp-5) calc(var(--novel-sp-7) * 3);
@@ -79,8 +79,8 @@ export const READER_CSS = `
    第一行就是同一句章名（stripLeadingTitle 剥得掉），但即便剥掉，居中粗体大标题在连续滚动的
    章与章之间也像另起了一页书。仍是 h2：阅读器这一屏没有更高的标题占位，从 h3 起等于给读屏一份
    断了头的大纲。字号走 em：它随 prefs.fontSize 一起缩放，28px 字号下不该还是 12px。
-   正文里嵌来的 h2（图文章）不再被这条规则命中——那是 .novel-body h1..h6 的地盘，
-   旧写法把内容标题一起居中了，属误伤。 */
+   正文里嵌来的 h2（图文章）不该被这条规则命中——那是 .novel-body h1..h6 的地盘，
+   否则内容标题会被一起居中，属误伤。 */
 .novel-rdr-body h2.novel-rdr-mark {
   display: flex; align-items: center; gap: var(--novel-sp-3);
   font-size: .72em; font-weight: 400; letter-spacing: .06em; opacity: .55;
@@ -212,7 +212,7 @@ export const READER_CSS = `
 }
 /* 注释面板（与导入说明面板同几何）：尺寸与锚定**都**走目录抽屉那一条——外层 .novel-notes-slot
    的 sticky 锚视口（槽几何与抽屉共用同一条规则，见上），本体 absolute 浮在右上。
-   曾经的缺陷正是同族浮层并存两套锚定：面板 absolute 挂在 .novel-rdr-main（**内容盒**）上，
+   不要给同族浮层并存两套锚定：面板 absolute 挂在 .novel-rdr-main（**内容盒**）上，
    内容盒一滚面板就跟着走，读到章末时飘在视口上方，对位还顺手把主滚动拉回内容顶部。
    落位只滚面板自己的 body，理由与口径见 src/client/util.ts 的 centerInScroller。
    z 走浮层单表——面板挂阅读区任意一层都不必依赖外层槽的 z。

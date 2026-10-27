@@ -6,8 +6,8 @@ import { Dialog } from '../../src/client/views/dialog.js'
 
 /**
  * 模态契约的行为钉子（契约的语义与口径见 `src/client/views/dialog.tsx` 与 `CONTEXT.md` 的
- * 「模态契约（dialog）」）。这一族断言原先散在五处浮层里各抄一遍，抄到第五处已经长出两种行为；
- * 现在它们只在这一处钉一次——调用点的钉子只负责「该挂的时候挂了、opener 传的是对的触发件」。
+ * 「模态契约（dialog）」）。这一族断言只在这一处钉一次，别在各浮层抄第二份——抄本一多就会长出
+ * 两种行为。调用点的钉子只负责「该挂的时候挂了、opener 传的是对的触发件」。
  *
  * jsdom 的 `click` 不聚焦（真实浏览器会），凡断言焦点的用例都先显式 `focus()` 建立现场。
  */
@@ -184,8 +184,8 @@ describe('重渲染不扰焦点', () => {
     const { rerender } = render(threeButtons(() => undefined))
     const confirm = screen.getByText('确认')
     confirm.focus()
-    rerender(threeButtons(() => undefined))              // 与旧缺陷同形：轮询 tick → 新闭包 → 新 render
-    expect(document.activeElement).toBe(confirm)         // 旧实现会把焦点劫回「取消」
+    rerender(threeButtons(() => undefined))              // 与真实轮询同形：tick → 新闭包 → 新 render
+    expect(document.activeElement).toBe(confirm)         // 回归：焦点不得被劫回「取消」
     rerender(threeButtons(() => undefined))
     fireEvent.keyDown(document, { key: 'Escape' })
     cleanup()

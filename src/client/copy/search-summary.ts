@@ -16,8 +16,8 @@ export interface SummarySegment { text: string; emphasis?: boolean }
 /** 收口句的语法归字典：模板决定子句顺序与标点，视图只交数字。
  *  为什么是整句模板而不是碎片拼装：碎片各带前导标点，词序就落在拼装处、字典只剩词——
  *  换语序要两处一起改才成立。整句模板把顺序与标点一并收回字典。
- *  计数拆成「数字段 + 单位段」：只有数字进 emphasis，与旧 UI 的 <b> 边界一致（answered 与 relevant
- *  不加粗）；failed 子句无条件出现（`0 家未响应` 也是结论，与旧 JSX 的无条件失败段一致）。
+ *  计数拆成「数字段 + 单位段」：只有数字进 emphasis（answered 与 relevant 不加粗）；
+ *  failed 子句无条件出现（`0 家未响应` 也是结论）。
  *  已知限制：relevant 子句键自带前导 `，` / `, `（住 `search.ts`），这是当前两语种共享的标点假设；
  *  换用别的标点形态的语种要先裁一次键形，不在本次范围内改。 */
 export function searchSummarySegments(t: Translate, c: SearchSummaryCounts): SummarySegment[] {

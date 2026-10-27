@@ -26,7 +26,7 @@ export const OVERLAYS_CSS = `
 .novel-btn.danger.solid:hover { filter: brightness(1.08); background: var(--novel-err); }
 @keyframes novel-fade { from { opacity: 0; } }
 @keyframes novel-rise { from { opacity: 0; transform: translateY(6px) scale(.98); } }
-/* ── 状态条泳道：栏位形状由类给出（此前是 statusLane() 工厂每次渲染造五个 style 对象）── */
+/* ── 状态条泳道：栏位形状由类给出（不要在渲染时用工厂造 style 对象）── */
 .novel-lane {
   display: grid; gap: var(--novel-sp-3); align-items: center; width: 100%; text-align: left;
   border: none; padding: var(--novel-sp-1) var(--novel-sp-4);

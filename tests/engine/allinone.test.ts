@@ -44,7 +44,7 @@ describe('AllInOne 整页正则（二维产物不压平）', () => {
     // 行含 group 0 之后，沙箱的串化读侧会把整段一起序列化；服务面的条目取值走 rowParts 剥掉
     // （`tests/services/toc-allinone.test.ts` 钉着那一半）。两侧不同形是有意的：整段只供字段规则
     // 的 `$n` 绑定。**但这条不声称对面也这么给**——js 面该不该剥没有对面证据，改它之前先做
-    // `getAll` 返回值形状的对读（口径与病史住矩阵行 a-allinone-group-zero）。
+    // `getAll` 返回值形状的对读（口径住矩阵行 a-allinone-group-zero）。
     const v = evalAllInOne({ kind: 'allinone', pattern: 'href="(/read[^"]*html)">([^<]*)', flags: '' }, tocHtml, L, 'toc')
     expect(engineValueToString(v)).toBe([
       'href="/read/30394_20940996.html">第一章 初入江湖\t/read/30394_20940996.html\t第一章 初入江湖',

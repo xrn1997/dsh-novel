@@ -15,7 +15,7 @@ import { readJson, writeJsonAtomic, isAtomicTemp, backupPathOf } from './storage
 import { readValue, type ValueSource } from './value-source.js'
 
 /** 本地书的保留源 id：**单主人是 shared/wire.ts**（跨半契约常量）。服务半可直接 import shared
- *  （services/types.ts、reading.ts 已在做），故此处不再是第二份声明——re-export 保留既有 import 路径。 */
+ *  （services/types.ts、reading.ts 已在做），故此处不另写声明——re-export 保留既有 import 路径。 */
 export { LOCAL_SOURCE_ID }
 
 /** 章节偏移表项：字符偏移区间 [start, end)，name 为标题行原文（或兜底「正文」） */
@@ -452,7 +452,7 @@ export class LocalBooks {
     const entries = await fs.readdir(this.localDir).catch((): string[] => [])
     const json = this.fileOf(id, 'json')
     const txt = this.fileOf(id, 'txt')
-    // 残留与备份的**命名判据归 storage**（isAtomicTemp / backupPathOf）：这里原先自己写死
+    // 残留与备份的**命名判据归 storage**（isAtomicTemp / backupPathOf）：不要在这里写死
     // `.tmp` 与 `.bak` 去猜低层的名字，低层一改命名就会悄悄漏清（残留留在盘上没人知道）。
     const temps = entries.filter((f) => isAtomicTemp(json, f) || isAtomicTemp(txt, f))
     await Promise.all([

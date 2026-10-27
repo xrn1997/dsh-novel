@@ -21,7 +21,7 @@ import { RuleEvalError } from './errors.js'
 /**
  * 行内标志前缀（正则的行内标志写法 `(?s)` / `(?i)` / `(?si)`——JS 无行内标志语法）：
  * 出现在模式开头时剥掉并转成 JS flags（s=dotAll、i、m、u；其余字符不剥，编译期如实报错）。
- * 真实源有 `:(?s)(\d+)" class="…` 形态——曾直接喂 new RegExp 必炸 Invalid group。
+ * 真实源有 `:(?s)(\d+)" class="…` 形态；直接交给 RegExp 会报 Invalid group，故前缀必须先剥掉再编译。
  */
 const INLINE_FLAG_RE = /^\(\?([imsu]+)\)/
 

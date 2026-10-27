@@ -1,7 +1,7 @@
 /**
  * 侧栏「小说」面板与插件卡片共用的字形单点。
  *
- * 字形 = android-ebook 的启动器前景（用户指定，2026-09）：pathData 原样保留、
+ * 字形 = android-ebook 的启动器前景（用户指定）：pathData 原样保留、
  * 裁掉自适应图标的安全区留白——viewBox 取 group 坐标系 `0 0 1025 1025`
  * （原 canvas 里字形只占约一半，16px 行图标下会糊成一点）。侧栏用 currentColor
  * 随宿主行前景色走明暗；icon.svg 是宿主按图片读的静态资源，不能 import 本模块，

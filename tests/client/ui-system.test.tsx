@@ -60,14 +60,14 @@ function ruleBody(selector: string): string {
 }
 
 /** 剥掉注释再扫：守卫管的是**声明**，不是文档。本文件与 styles/ 各块的注释里
- *  大量出现「曾经的假 token 名」（那正是文档的价值所在），照扫即误报。 */
+ *  会出现「不存在的假 token 名」（那正是文档的价值所在），照扫即误报。 */
 function strip(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 }
 
 /** vitest 未开 globals ⇒ RTL 的自动 cleanup 不注册（同目录别的文件都显式挂了这一行）。
- *  本文件此前漏了，于是上一个用例的 DOM 一直留在 body 里，`screen.*` 能命中别人的元素：
- *  「命中行是可聚焦按钮」那条实际读到的是**书架卡片**（搜索命中的断言从未成立，假绿）。 */
+ *  漏掉这一行，上一个用例的 DOM 就留在 body 里，`screen.*` 会命中别人的元素：
+ *  「命中行是可聚焦按钮」那条实际读到的是**书架卡片**（断言从未成立，假绿）。 */
 afterEach(cleanup)
 
 describe('token 层自足守卫（引用未定义的本层 token 即红）', () => {
@@ -200,7 +200,7 @@ describe('布局单位与视口约束（阅读器不能被正文高度绑架）'
   })
 
   it('状态带：容器查询退化在位（窄列掉 .slim 留「共 N · 已启用 M」），但整条带子不许被隐藏', () => {
-    // 状态带是读数的唯一住址（2026-09：待办卡可忽略之后读数不能跟着提示一起消失）——
+    // 状态带是读数的唯一住址（待办卡可忽略，读数不能跟着提示一起消失）——
     // 窄列只能牺牲 .slim 那几项，把它们全隐了等于把整块台账抹掉。
     expect(ruleBody('.novel-list-head'), '列表头必须是容器查询锚（量自身宽度，会话列可拖——与 .novel-table 收地址列同一理由）')
       .toMatch(/container-type:\s*inline-size/)
@@ -223,10 +223,9 @@ describe('布局单位与视口约束（阅读器不能被正文高度绑架）'
   })
 
   it('源列表表格不许自己裁：圆角落首/末行，不靠 .novel-table 的 overflow:hidden', () => {
-    // 病史（2026-09-26 用户实机 + 真 NOVEL_CSS/真 Edge 实测）：.novel-table 曾带 overflow:hidden
-    // 收圆角，而 ⋯ 菜单的包含块 .novel-actions 就在表内 ⇒ 菜单被锁进表格盒，超表底的部分
-    // 点不到：末行菜单可达率 **5% → 去掉裁剪后 100%**（逐点命中测试；残余 = 长列表滚到底仍被
-    // .novel-main 裁）。
+    // 表格不许自裁：⋯ 菜单的包含块 .novel-actions 在表内，表格一 overflow:hidden 收圆角
+    // 就把它锁进表格盒，超表底的部分点不到。圆角改由首/末行自持；残余风险是长列表滚到底
+    // 仍被 .novel-main 裁。
     expect(ruleBody('.novel-table'), '表格一裁，行内浮层就出不去（菜单/将来的下拉同族）').not.toMatch(/overflow:\s*hidden/)
     expect(ruleBody('.novel-table'), '圆角仍在——裁剪换成首/末行自持，不等于放弃圆角').toMatch(/border-radius:/)
     for (const [sel, corner] of [['.novel-table > .novel-tr:first-child', 'top'], ['.novel-table > .novel-tr:last-child', 'bottom']] as const) {
@@ -235,8 +234,8 @@ describe('布局单位与视口约束（阅读器不能被正文高度绑架）'
   })
 
   it('书架筛选簇不贴右；顶部 tab 导航在场且有激活态（IA：书架|书城|书源管理 并列）', () => {
-    // 病史：排序灰字 margin-left:auto 在 1600px 内容列里被钉到最右端（实测 x1472 vs pills x75）＝悬浮碎片；
-    // 书城预留位 chip 已随 tab 化退役——占位不如真导航（书城已是分类浏览页本身，不再是占位空态）
+    // 排序灰字若 margin-left:auto，在 1600px 内容列里会被钉到最右端，成悬浮碎片；
+    // 书城是分类浏览页本身，不设占位 chip——占位不如真导航。
     expect(ruleBody('.novel-shelf-sort'), '排序灰字跟簇尾，不许贴列右端').not.toMatch(/margin-left:\s*auto/)
     expect(ruleBody('.novel-shelf-filter'), '筛选簇整簇左聚簇').not.toMatch(/margin-left:\s*auto/)
     const tabs = ruleBody('.novel-tabs')
@@ -283,7 +282,7 @@ describe('呈现层的单点（两处抄同一串东西必漂移）', () => {
   })
 
   it('告警清单的标记只住 bits.tsx（两处各抄一份 JSX 必漂移）', () => {
-    // CSS（.novel-warn-list / -code）原先就是共享的，**标记**却是两份：
+    // CSS（.novel-warn-list / -code）归样式层，**标记**只住 bits.tsx——
     // 阅读器的导入说明面板与书架的导入回执各写一遍一条告警长什么样。
     for (const view of ['ReaderView.tsx', 'ShelfView.tsx']) {
       expect(viewSource(view), `${view} 里又出现一份告警清单的 JSX——改一条口径必漏另一处`).not.toContain('novel-warn-list')
