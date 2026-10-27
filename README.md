@@ -1,8 +1,9 @@
 # dsh-novel
 
+[![CI](https://github.com/xrn1997/dsh-novel/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/xrn1997/dsh-novel/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@xrn1997/dsh-novel.svg)](https://www.npmjs.com/package/@xrn1997/dsh-novel)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-![Tested with DSH Desktop 0.1.5-rc.1 / 0.1.7-rc.1 / 0.1.7-rc.2 / 0.2.0-rc.2 / 0.2.1-rc.1 / 0.2.1-rc.2 / 0.2.1-rc.3](https://img.shields.io/badge/DSH%20Desktop-0.1.5--rc.1%20%7C%200.1.7--rc.1%20%7C%200.1.7--rc.2%20%7C%200.2.0--rc.2%20%7C%200.2.1--rc.1%20%7C%200.2.1--rc.2%20%7C%200.2.1--rc.3-brightgreen)
+[![Tested with DSH Desktop 0.1.5-rc.1 ~ 0.2.1-rc.3](https://img.shields.io/badge/DSH%20Desktop-0.1.5--rc.1%20~%200.2.1--rc.3-brightgreen)](#安装)
 
 **在 DeepSeek Harness（DSH）里读网络小说。** 导入 [legado](https://github.com/gedoor/legado) 书源，聚合搜索或按分类逛书城，把书加入书架，连续滚动阅读。它还有本地 TXT / EPUB、中英界面和六个 `dshnovel_` AI 助手工具——找书、读章、管源都可以在对话里完成。
 
