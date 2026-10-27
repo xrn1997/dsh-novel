@@ -6,10 +6,11 @@ import { SHELF_META } from '../shared/wire.js'
  *  刻意不投影的三项由 `SHELF_ITEM_EXCLUDED` 点名。加一个 SHELF_META 字段时，
  *  要么进这张表、要么进排除表，下面的编译期断言会逼你选一个。 */
 type ShelfItemFieldSpec = {
-  type: 'string' | 'integer' | 'object'
+  type: 'string' | 'integer' | 'number' | 'object'
   required?: true
   description: string
   additionalProperties?: boolean
+  properties?: Record<string, ShelfItemFieldSpec>
 }
 
 export const SHELF_ITEM_EXCLUDED = ['coverUrl', 'intro', 'totalChapters'] as const
@@ -22,7 +23,14 @@ export const SHELF_ITEM_FIELDS = {
   lastChapterName: { type: 'string', description: '最新章名' },
   kind: { type: 'string', description: '分类' },
   wordCount: { type: 'string', description: '字数（站点文案原样）' },
-  progress: { type: 'object', required: true, description: '{chapterIndex, offsetRatio, updatedAt}', additionalProperties: true },
+  progress: {
+    type: 'object', required: true, description: '{chapterIndex, offsetRatio, updatedAt}', additionalProperties: false,
+    properties: {
+      chapterIndex: { type: 'integer', required: true, description: '章序（0 起）' },
+      offsetRatio: { type: 'number', required: true, description: '章内比例（0~1）' },
+      updatedAt: { type: 'integer', required: true, description: '更新时间戳' },
+    },
+  },
   addedAt: { type: 'integer', required: true, description: '加入时间戳' },
 } as const satisfies Partial<Record<keyof ShelfBook, ShelfItemFieldSpec>>
 
@@ -39,6 +47,12 @@ type MissingShelfMeta = Exclude<
   keyof typeof SHELF_META,
   ShelfItemField | (typeof SHELF_ITEM_EXCLUDED)[number]
 >
+type Eq<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
 type Assert<T extends true> = T
 type _ShelfMetaCovered = Assert<MissingShelfMeta extends never ? true : false>
-export type { _ShelfMetaCovered }
+/** 嵌套的 `progress` schema 也绑回 wire：键集两向相等，改 `ShelfProgress` 而漏改 schema 当场红。 */
+type _ShelfProgressCovered = Assert<Eq<
+  keyof ShelfBook['progress'],
+  keyof (typeof SHELF_ITEM_FIELDS)['progress']['properties']
+>>
+export type { _ShelfMetaCovered, _ShelfProgressCovered }

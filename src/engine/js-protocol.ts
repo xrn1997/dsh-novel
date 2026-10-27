@@ -7,12 +7,13 @@
  * 纪律：本文件不进 engine barrel——仅由 js-sandbox 内部引用。
  */
 import crypto from 'node:crypto'
-import type { EngineValue, EvalContext, Facet, RuleUsage, SegmentLoc } from './types.js'
+import type { EngineValue, EvalContext, Facet, SegmentLoc } from './types.js'
 import { JsSandboxError } from './errors.js'
 import { responseOf } from './host-object.js'
 import type { ResponseHost } from './host-object.js'
 import { URL_OPTION_SPLIT } from './template.js'
-import { usageOfSubRule } from './sub-rule.js'
+import { subRuleOf } from './sub-rule.js'
+import type { SubRule } from './sub-rule.js'
 import type { EvaluateRef } from './js-sandbox.js'
 import type { SourceSession } from './session.js'
 import { createFileStore } from './stores.js'
@@ -112,26 +113,26 @@ function method<N extends string, F extends HostFn>(
   }
 }
 
-/** java.getString* 的递归求值（evaluateRef 未注入 → 宁炸不猜）
- *  `usage` 决定链尾未知词按属性还是选择器；`content` 是**显式基内容**：给了就以它为基
- *  （优先于上一段结果），null/undefined 回落到本仓的 contentBase ?? result（java.setContent 那条路）。 */
-function evalRule(d: BridgeDeps, rule: string, usage: RuleUsage, content?: unknown): EngineValue {
+/** java.getString* 的递归求值（evaluateRef 未注入 → 宁炸不猜）。求值体（文本 + 已定用途）由
+ *  调用点经 `subRuleOf` 构造——「恒列表」的桥方法（getElements/getElement）交 `forceUsage`，
+ *  其余按规则本身判。`content` 是**显式基内容**：给了就以它为基（优先于上一段结果），
+ *  null/undefined 回落到本仓的 contentBase ?? result（java.setContent 那条路）。 */
+function evalRule(d: BridgeDeps, sub: SubRule, content?: unknown): EngineValue {
   if (!d.evaluateRef) {
-    throw new JsSandboxError(`java 递归求值需要引擎接线（evaluateRef 未注入，规则: ${JSON.stringify(rule)}）`, {
+    throw new JsSandboxError(`java 递归求值需要引擎接线（evaluateRef 未注入，规则: ${JSON.stringify(sub.rule)}）`, {
       ...d.loc,
       facet: d.facet,
       script: d.code,
     })
   }
   const base = content === undefined || content === null ? d.contentBase ?? d.result : content
-  return d.evaluateRef(rule, base, usage)
+  return d.evaluateRef(sub, base)
 }
 
 /** getString / getStringList 共用的子规则求值入口：串化 + 用途判据一处收口（两个桥方法只差
  *  结果侧的串化/绝对化，求值这一段不许各写一份——用途判据一改这里只动一处）。 */
 function evalSubRule(d: BridgeDeps, rule: unknown, content?: unknown): EngineValue {
-  const r = String(rule)
-  return evalRule(d, r, usageOfSubRule(r, d.facet), content)
+  return evalRule(d, subRuleOf(String(rule), d.facet), content)
 }
 
 /** getString / getStringList 的实参分派：**三个重载形态**的位置语义不同（按实参类型分派）。
@@ -353,7 +354,7 @@ export const JAVA_PROTOCOL = [
     return out
   }),
   method('getElements', { obj: 'java' }, (d) => (rule: string): Array<{ html: string; text: string }> => {
-    const v = evalRule(d, String(rule), 'list')
+    const v = evalRule(d, subRuleOf(String(rule), d.facet, 'list'))
     if (v.kind === 'nodes') {
       return v.nodes.toArray().map((_, i) => ({ html: v.nodes.eq(i).toString(), text: v.nodes.eq(i).text() }))
     }
@@ -364,7 +365,7 @@ export const JAVA_PROTOCOL = [
     return []
   }),
   method('getElement', { obj: 'java' }, (d) => (rule: string): { html: string; text: string } | null => {
-    const v = evalRule(d, String(rule), 'list')
+    const v = evalRule(d, subRuleOf(String(rule), d.facet, 'list'))
     // 非 nodes 或空选择集 → null（旧行为 = getElements(rule)[0] ?? null）
     if (v.kind === 'miss') return null
     if (v.kind !== 'nodes') {

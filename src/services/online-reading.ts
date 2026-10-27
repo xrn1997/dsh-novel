@@ -4,6 +4,7 @@ import { detailContextOf, firstValue, itemContextsOf, staticTocUrl, tocUrlFromCo
 import type { Page, SubRuleEval } from './bridge.js'
 import type { PageCache } from './cache.js'
 import { contentSlot, rulesEpoch } from './cache-epoch.js'
+import { normalizeChapterText } from './chapter-content.js'
 import { contentToText } from './content.js'
 import { ChapterNotFoundError, RuleMissingError, SourceNotFoundError } from './errors.js'
 import { followPages } from './pagination.js'
@@ -18,8 +19,9 @@ import type { ChapterEntry } from '../shared/wire.js'
 
 /**
  * 在线阅读：一条在线书的**目录**与**正文**取值管线（缓存优先 → 目录在途去重 → 翻页跟进 → 缓存写回）。
- * 缓存键、在途身份、代际、翻页闸、subContent 与空正文策略只住这一处，门面只做本地书分流与委托——
- * 为的是这几条语义不必拼齐整部门面部件就能被测到（裁决见 `docs/adr/0043`）。
+ * 缓存键、在途身份、代际、翻页闸、subContent 与空正文策略只住这一处；本地/在线分流归
+ * `book-content` 的 `BookContent`，门面只委托——
+ * 为的是这几条语义不必拼齐整部门面部件就能被测到（裁决见 `docs/adr/0047`）。
  *
  * 刻意**不含**本地书：本地书不认识 HTTP 与在线缓存，塞进来会扩大 interface。
  * 缓存有效性判据仍由 `cache-epoch` 给，本模块只消费。
@@ -326,19 +328,6 @@ export async function tocUrlOf(
   // 解析 base 剥 `,{option}`（选项不属于链接解析域）
   const dctx = await detailContextOf(ruleDetailInit, html, stripUrlOption(bookUrl), subEval)
   return tocUrlFromContext(ruleTocUrl, dctx, bookUrl, subEval)
-}
-
-/** 正文规约：逐行 trim → 去首尾空行 → 相邻空行折叠一个 */
-export function normalizeChapterText(raw: string): string {
-  const lines = raw.split('\n').map((l) => l.trim())
-  while (lines.length > 0 && lines[0] === '') lines.shift()
-  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
-  const out: string[] = []
-  for (const l of lines) {
-    if (l === '' && out[out.length - 1] === '') continue
-    out.push(l)
-  }
-  return out.join('\n')
 }
 
 /** 上游 `String.isTrue` 口径：空/字面 null 与整串 `false|no|not|0|0.0` 为假，其余非空为真。 */

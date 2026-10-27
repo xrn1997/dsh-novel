@@ -8,6 +8,7 @@ import { plural, useCopy, zhTranslate } from '../copy/index.js'
 import type { Translate } from '../copy/index.js'
 import type { JobViewDeps, RowActionDeps } from '../deps.js'
 import { useSearchJob } from '../search-job.js'
+import { markPanelShelfLanded } from '../panel-shelf.js'
 import { addShelfSeat } from '../shelf-action.js'
 import { navigate } from '../store.js'
 import { Dialog } from './dialog.js'
@@ -44,7 +45,7 @@ import { Dialog } from './dialog.js'
  * 一问、导入弹层同一份）；抽屉档的几何仍归样式层（`.novel-city-scrim` / `.novel-city-drawer`）。
  *
  * **一次跨源会换掉搜索面的那一轮**：服务端搜索槽只有一个（`services/search-job.ts`），在书城发起
- * 的这轮同样会替换它——这是既有裁决「跟随最近一轮」（`docs/adr/0023`）的另一处落点，不是缺陷；
+ * 的这轮同样会替换它——这是既有裁决「跟随最近一轮」（`docs/adr/0046`）的另一处落点，不是缺陷；
  * 代价写在 `docs/adr/0028`。
  *
  * `deps` 由父层（`CityView`）透传：行内写口同样要能被测试驱动（与 `SearchView` 的命中行同口径）。
@@ -62,7 +63,7 @@ export function CityBookSheet({ book, sourceId, sourceName, deps, onClose }: {
   /** 跨源那一次的关键词，本层只在这里向 `sheetKeyword` 取一次：它只服务相关性与提交文本；
    *  本轮身份认 `ownId`，不是这个串。 */
   const keyword = sheetKeyword(book)
-  /** 本轮身份守卫：服务端只有一个槽、观察者跟随最近一轮（`docs/adr/0023`），
+  /** 本轮身份守卫：服务端只有一个槽、观察者跟随最近一轮（`docs/adr/0046`），
    *  而挂载恢复交回的那一轮可能属于另一本书。本层只认自己 POST 回来的 jobId——
    *  关键词相同也不是身份。**不顺手 cancel**：那是别人正在看的轮次，浮层没有停它的权利。 */
   const round = search.round
@@ -191,8 +192,12 @@ function hitRow(g: SearchGroup, h: SearchHit): SheetRowData {
 function addToShelf(row: SheetRowData & { url: string }, deps: RowActionDeps, t: Translate = zhTranslate): void {
   // 书目字段不在这里列：pickShelfMeta / SHELF_META 是唯一过滤点；sourceName/listed 会被整键丢
   void addShelfSeat(row, deps).then((outcome) => {
-    if (outcome.ok) deps.pushOk(t('city.sheet.added', { title: row.title }))
-    else deps.pushError(t('city.sheet.addFailed', { detail: describeError(outcome.error, t) }))
+    if (outcome.ok) {
+      markPanelShelfLanded([row.url])          // 与搜索行共用面板期落架账，重挂后不再写「加书架」
+      deps.pushOk(t('city.sheet.added', { title: row.title }))
+    } else {
+      deps.pushError(t('city.sheet.addFailed', { detail: describeError(outcome.error, t) }))
+    }
   })
 }
 

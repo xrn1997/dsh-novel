@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { useCallback, useEffect, useState } from 'react'
-import { paramRoutes, ROUTES } from '../../shared/wire.js'
+import { paramOps, ROUTES } from '../../shared/wire.js'
 import { describeError } from '../api.js'
 import { plural, useCopy, type CopyKey } from '../copy/index.js'
 import { prodDeps } from '../deps.js'
@@ -256,7 +256,7 @@ export function ProbePane({ sourceId, onBack, deps = prodDeps }: {
   const [failed, setFailed] = useState<string | null>(null)
   const run = useCallback((): void => {
     setFailed(null)
-    void deps.apiSend<ProbeResult>('POST', paramRoutes.sourceProbe(sourceId))
+    void deps.apiSend<ProbeResult>(paramOps.sourceProbe.at(sourceId))
       .then(setResult, (e: unknown) => setFailed(describeError(e, t)))
     // deps 与 t 身份稳定（见上方 reload 同款口径），故 run 只随 sourceId 换——
     // [run] 与原先的 [sourceId] 触发次数一致。

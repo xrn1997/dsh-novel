@@ -1,14 +1,17 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createElement } from 'react'
 import { ShelfView } from '../../src/client/views/ShelfView.js'
+import { resetPanelShelf } from '../../src/client/panel-shelf.js'
 import { CopyProvider, enTranslate } from '../../src/client/copy/index.js'
 import { routeStore } from '../../src/client/store.js'
 import { ROUTES } from '../../src/shared/wire.js'
 import { makeCoreDeps } from './fake-deps.js'
 import type { FakeViewDeps } from './fake-deps.js'
 import type { ShelfEntry } from '../../src/client/views/types.js'
+
+beforeEach(resetPanelShelf)
 
 /**
  * 书架多选批量删除的接线测试（2026 新需求：一次删一批）。
@@ -134,7 +137,7 @@ describe('删除所选：一次批请求 + 模态口径 + 失败留框内', () =
 
     fireEvent.click(screen.getByText('确认删除'))
     await waitFor(() => expect(deps.apiSend).toHaveBeenCalledTimes(1))
-    expect(deps.apiSend).toHaveBeenCalledWith('POST', ROUTES.shelfBatchDelete.path, { keys: ['k-a', 'k-b'] })
+    expect(deps.apiSend).toHaveBeenCalledWith(ROUTES.shelfBatchDelete, { keys: ['k-a', 'k-b'] })
     // 成功：被删的两张卡片消失、未点名的本地书还在、选择清零并退出多选态
     await waitFor(() => expect(screen.queryByText('斗罗')).toBeNull())
     expect(screen.queryByText('剑来')).toBeNull()
@@ -195,8 +198,8 @@ describe('删除所选：一次批请求 + 模态口径 + 失败留框内', () =
     expect(screen.getByText('删除《斗罗》？')).toBeTruthy()
     fireEvent.click(screen.getByText('确认删除'))
     await waitFor(() => expect(deps.apiSend).toHaveBeenCalledTimes(1))
-    expect(deps.apiSend.mock.calls[0][0]).toBe('DELETE')
-    expect(String(deps.apiSend.mock.calls[0][1])).toContain('shelf/')
+    expect((deps.apiSend.mock.calls[0][0] as { method: string }).method).toBe('DELETE')
+    expect(String((deps.apiSend.mock.calls[0][0] as { path: string }).path)).toContain('shelf/')
   })
 })
 

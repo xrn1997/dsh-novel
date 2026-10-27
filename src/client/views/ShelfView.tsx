@@ -1,17 +1,17 @@
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
-import { bodies, LOCAL_SOURCE_ID, paramRoutes, queries, ROUTES } from '../../shared/wire.js'
+import { bodies, LOCAL_SOURCE_ID, paramOps, queries, ROUTES } from '../../shared/wire.js'
 import { describeError } from '../api.js'
 import { plural, useCopy } from '../copy/index.js'
 import { prodShelfDeps } from '../deps.js'
 import type { ShelfDeps } from '../deps.js'
-import { navigate } from '../store.js'
+import { loadPanelShelf, panelShelf, removePanelShelfBooks, setPanelShelfFilter, setPanelShelfKeyword } from '../panel-shelf.js'
+import { navigate, useStore } from '../store.js'
 import type { LocalImportResponse, ShelfEntry } from './types.js'
 import { coverFallbackChar, EmptyState, ProgressBar, SearchIcon, WarningList } from './bits.js'
 import { Dialog } from './dialog.js'
 import { deleteBookCopy, deleteBooksCopy } from '../shelf-delete.js'
 import { filterShelfBooks, localImportLabel, localImportNote, SHELF_FILTERS, shelfCardMeta, shelfSourceTag } from '../shelf-view-model.js'
-import type { ShelfFilterKey } from '../shelf-view-model.js'
 import { coverTintClass, sourceTintClass } from '../util.js'
 
 /** 本地书保留源 id 归 wire 契约（`LOCAL_SOURCE_ID`）：此前此处手抄 '__local__'——
@@ -39,10 +39,9 @@ import { coverTintClass, sourceTintClass } from '../util.js'
 
 export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): ReactNode {
   const t = useCopy()
-  const [books, setBooks] = useState<ShelfEntry[] | null>(null)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const [keyword, setKeyword] = useState('')
-  const [filter, setFilter] = useState<ShelfFilterKey>('all')
+  // 书架读取面、筛选/关键字与落架账都住面板期投影（`panel-shelf`）：切 tab / 进阅读器再回来，
+  // 筛选与已落架的账不被卸载洗掉；真相仍在服务端，挂载时重取。
+  const { books, error: loadError, keyword, filter } = useStore(panelShelf)
   const [imgFailed, setImgFailed] = useState<Record<string, boolean>>({})
   // 本地书导入（TXT / EPUB 按内容分流，服务端说了算）：隐藏 file input + 上传后直进阅读器
   const [importError, setImportError] = useState<string | null>(null)
@@ -82,10 +81,10 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
     const targetKeys = new Set(targets.map((b) => b.bookKey))
     setDelBusy(true)
     void (batch
-      ? deps.apiSend('POST', ROUTES.shelfBatchDelete.path, bodies.keys([...targetKeys]))
-      : deps.apiSend('DELETE', paramRoutes.shelfKey(targets[0].bookKey))
+      ? deps.apiSend(ROUTES.shelfBatchDelete, bodies.keys([...targetKeys]))
+      : deps.apiSend(paramOps.shelfDelete.at(targets[0].bookKey))
     ).then(() => {
-      setBooks((prev) => (prev ?? []).filter((b) => !targetKeys.has(b.bookKey)))
+      removePanelShelfBooks(targetKeys)
       setSelected((prev) => prev.filter((k) => !targetKeys.has(k)))
       if (batch) setSelectMode(false)          // 批量成功即收工（这一批现场已消费完）
       cancelDel()
@@ -95,15 +94,12 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
       setDelBusy(false)
     })
   }
-  /** 取书架（挂载一次 + 有警告的导入留在本页后一次）：
-   *  失败不许伪装成空架（历史 bug：网络失败 setBooks([]) → 渲染「书架空空」误导） */
+  /** 取书架（挂载一次 + 有警告的导入留在本页后一次）：失败由投影落成 `[] + error`，
+   *  不许伪装成空架（历史 bug：网络失败 setBooks([]) → 渲染「书架空空」误导）。 */
   const loadShelf = (): void => {
-    void deps.apiGet<ShelfEntry[]>(ROUTES.shelf.path).then((list) => {
-      setBooks(list)
-      setLoadError(null)
-    }, (e) => {
-      setBooks([])
-      setLoadError(describeError(e, t))
+    void loadPanelShelf({
+      apiGet: deps.apiGet,
+      describeError: (e) => describeError(e, t),
     })
   }
   useEffect(() => { loadShelf() }, [])   // eslint-disable-line react-hooks/exhaustive-deps
@@ -152,7 +148,7 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
                 <SearchIcon />
                 <input
                   value={keyword}
-                  onChange={(e) => setKeyword(e.target.value)}
+                  onChange={(e) => setPanelShelfKeyword(e.target.value)}
                   placeholder={t('shelf.search.placeholder')}
                   aria-label={t('shelf.search.label')}
                 />
@@ -182,7 +178,7 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
                     key={f.key}
                     className={filter === f.key ? 'on' : undefined}
                     aria-pressed={filter === f.key}
-                    onClick={() => setFilter(f.key)}
+                    onClick={() => setPanelShelfFilter(f.key)}
                   >{t(f.labelKey)}</button>
                 ))}
               </div>

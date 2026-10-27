@@ -1,23 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SearchHit } from '../shared/wire.js'
+import { markPanelShelfLanded, panelShelf } from './panel-shelf.js'
 import { addAllReceipt, isSeatLanded } from './search-view-model.js'
 import type { AddAllReceipt, RowRef } from './search-view-model.js'
 import type { ShelfAddOutcome, ShelfSeatInput } from './shelf-action.js'
+import { useStore } from './store.js'
 
 /**
- * 搜索结果页的**落架现场**：本轮挂载里哪些架位已经落过、哪一本的「都加架」还在途，
+ * 搜索结果页的**落架现场**：面板期里哪些架位已经落过、哪一本的「都加架」还在途，
  * 以及逐条 / 整本两条加架入口的排队。写口仍是 `shelf-action.addShelfSeat`（幂等 PUT，由视图
- * 以 `addSeat` 注入），架位算式仍是 `search-view-model` 的四条纯函数；本 module 只持状态与顺序，
- * 回执选哪条通道、说什么话仍归视图——措辞是界面的事，不是落架的事实。
+ * 以 `addSeat` 注入），架位算式仍是 `search-view-model` 的四条纯函数；本 module 只持在途排队，
+ * 落架账住 `panel-shelf`，回执选哪条通道、说什么话仍归视图——措辞是界面的事，不是落架的事实。
  *
- * 为什么落架账住在行之上：逐源行随展开区收起而整块离开 DOM（那是这一行的性能账），行自己的
- * state 会被卸载洗掉；而「都加架」与「＋ 加书架」是同一件事的两个入口，各记一份就会出现
- * 批量加完、行上还写着「＋ 加书架」，按钮也就无从知道自己该退休。
- * 为什么这份账只是**会话内读数**：`SearchHit` 没带在架标记，本 module 不预读书架；真相在
- * `Shelf`，「这一发 PUT 我们发成功过」才是它确切的语义，写口幂等兜住其余。
+ * 落架账住在 `panel-shelf`（面板期投影，为什么不再放组件 state 见 `docs/adr/0046`）：逐源行
+ * 随展开区收起而整块离开 DOM，切去阅读器再回来组件 state 也会被卸载洗掉；账与书架读取面同住
+ * 一份投影后，「都加架」与「＋ 加书架」仍读同一份，重挂载后也不会重新写「＋ 加书架」。
+ * 真相仍在服务端：投影里的账是「这一发 PUT 我们发成功过」，幂等写口兜住其余。
  */
 export interface SearchLanding {
-  /** 本轮挂载里落过架的架位（凭地址认，口径住 `services/shelf.ts` 的 `Shelf`） */
+  /** 面板期里落过架的架位（凭地址认，口径住 `services/shelf.ts` 的 `Shelf`） */
   landed: ReadonlySet<string>
   /** 「都加架」在途的书行键（按书）。为何不是全局布尔：按钮一行一个，全局态会把没点过的
    *  行一起禁用、标签也跟着写错。 */
@@ -48,13 +49,8 @@ export function useSearchLanding(deps: {
   const addSeat = useRef(deps.addSeat)
   useEffect(() => { addSeat.current = deps.addSeat }, [deps.addSeat])
 
-  const [landed, setLanded] = useState<ReadonlySet<string>>(() => new Set())
   const [adding, setAdding] = useState<ReadonlySet<string>>(() => new Set())
-
-  /** 记账按地址去重：同址两行各发一发幂等 PUT，落下的还是同一个架位。 */
-  const markLanded = useCallback((id: string): void => {
-    setLanded((prev) => (prev.has(id) ? prev : new Set(prev).add(id)))
-  }, [])
+  const { landed } = useStore(panelShelf)
 
   const add = useCallback(async (row: RowRef): Promise<ShelfAddOutcome> => {
     const input = seatInputOf(row)
@@ -62,9 +58,9 @@ export function useSearchLanding(deps: {
     // 不抛也不发空架位 PUT。
     if (input === null) return { ok: false, error: null }
     const outcome = await addSeat.current(input)
-    if (outcome.ok) markLanded(input.url)
+    if (outcome.ok) markPanelShelfLanded([input.url])
     return outcome
-  }, [markLanded])
+  }, [])
 
   const addAll = useCallback(async (bookKey: string, rows: RowRef[]): Promise<AddAllReceipt> => {
     const addable = rows.filter((r) => r.hit.url !== null)

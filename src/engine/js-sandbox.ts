@@ -3,13 +3,15 @@ import crypto from 'node:crypto'
 import { isTag } from 'domhandler'
 import type { Element } from 'domhandler'
 import { DEFAULT_JS_TIMEOUT_MS } from './types.js'
-import type { EngineValue, EvalContext, Facet, RuleUsage, SegmentLoc } from './types.js'
+import type { EngineValue, EvalContext, Facet, SegmentLoc } from './types.js'
+import type { SubRule } from './sub-rule.js'
 import type { SourceSession } from './session.js'
 import { JsSandboxError } from './errors.js'
 import { SANDBOX_MOUNTS, SYNC_AJAX_SENTINEL, asyncBridgeSource, asyncMountSource, invokeJavaMethod } from './js-protocol.js'
 import type { BridgeDeps } from './js-protocol.js'
 import { loadHtml, nodeText } from './dom.js'
 import { decodePngToArgb, javaDecode } from './js-utils.js'
+import { scriptGlobals, scriptGlobalOf, scriptInitOf, scriptKeyOf } from './script-surface.js'
 
 /** JavaBridge 协议的唯一登记点在 js-protocol.ts 的 JAVA_PROTOCOL 表；此处只 re-export 类型。 */
 export type { JavaBridge } from './js-protocol.js'
@@ -104,10 +106,10 @@ export interface JsOutcome {
 }
 
 /** 规则递归求值回调（避免与求值层循环依赖，由求值层注入真实现）。
- *  rule + data（data 作为子规则的 html 上下文）+ usage（链尾未知词的用途：getString* 按
- *  `sub-rule.ts` 的 `usageOfSubRule` 判，getElements/getElement 恒 list）。baseUrl 由外层
- *  EvalContext 经 `{...ctx, html}` 继承。 */
-export type EvaluateRef = (rule: string, data: unknown, usage: RuleUsage) => EngineValue
+ *  收 `SubRule`（文本 + 已定用途）与 data（子规则的 html 上下文）；用途不再作为第三参外传——
+ *  桥方法要强制列表时由 `subRuleOf` 的 `forceUsage` 在构造期定，入口没有机会把用途配错。
+ *  baseUrl 由外层 EvalContext 经 `{...ctx, html}` 继承。 */
+export type EvaluateRef = (sub: SubRule, data: unknown) => EngineValue
 
 /** 求值层 → 沙箱的**唯一调用描述符**：链上的 js 段与 runScript 都交这一份。
  *  位置元组曾是链协议，加一格要同时改两处 yield 与 driveSync 的下标；命名后加字段只改这里。 */
@@ -169,8 +171,24 @@ export function ensureUnhandledGuard(sink: GuardSink = consoleGuardSink): () => 
   }
 }
 
+/** 简单脚本全局由可见性清单派生（book/chapter/source 有自定义物化，不在其中）。 */
+const SIMPLE_GLOBALS = scriptGlobals().map((g) => `  g.${g.name} = d.${g.key}`).join('\n')
+
+/** 物化字段的 init 键与全局名也从清单取：BOOTSTRAP 不再手抄第二份 `d.book` / `g.source`。 */
+const BOOK_KEY = scriptKeyOf('book')
+const CHAPTER_KEY = scriptKeyOf('chapter')
+const SOURCE_KEY = scriptKeyOf('source')
+const SOURCE_NAME_KEY = scriptKeyOf('sourceName')
+const SOURCE_COMMENT_KEY = scriptKeyOf('sourceComment')
+const BOOK_GLOBAL = scriptGlobalOf('book')
+const CHAPTER_GLOBAL = scriptGlobalOf('chapter')
+const SOURCE_GLOBAL = scriptGlobalOf('source')
+
 /**
  * 沙箱引导脚本（在 vm 上下文内执行一次）。
+ *
+ * `book` / `chapter` 的全局只在这里物化一次：本串之外再补一句裸赋值会把 `mkHostObj` 给它们装上的
+ * 宿主方法面覆盖成普通对象（`tests/engine/js-sandbox.test.ts` 的「book/chapter 保留宿主方法面」钉住）。
  *
  * 逃逸防御核心：宿主绝不把函数/对象直接交给用户代码——唯一入口 `__host_call__` 被本闭包捕获后
  * 即从全局锁死；暴露给用户的 `java`/`console` 全是 vm realm 包装函数，参数与返回值 JSON 双向序列化，
@@ -847,16 +865,16 @@ ${asyncMountSource()}
   }
   g.console = { log: log('console.log'), error: log('console.error') }
   g.__d__ = d
-  g.__src__ = { key: d.source, bookSourceUrl: d.source, bookSourceName: d.sourceName || '',
+  g.__src__ = { key: d.${SOURCE_KEY}, bookSourceUrl: d.${SOURCE_KEY}, bookSourceName: d.${SOURCE_NAME_KEY} || '',
     // 脚本可见的源实体字段（对面脚本里的 source 就是书源实体）；只投影现库真读到的那个
-    bookSourceComment: d.sourceComment || '', loginUrl: '',
+    bookSourceComment: d.${SOURCE_COMMENT_KEY} || '', loginUrl: '',
     header: d.header || '{}',
-    getKey: function () { return d.source },
+    getKey: function () { return d.${SOURCE_KEY} },
     // 登录面投影：服务层供出 loginInfo；未接线时空。形状先按上游 Java Map / String 给，
     // 让脚本的 info.get(...) / source.getLoginHeader() 不再因 TypeError 整段炸。
     getLoginHeader: function () { return d.loginHeader || '' },
     getLoginInfoMap: function () { return materialize({ __host: 'map', entries: d.loginInfo || {} }) },
-    toString: function () { return d.source }, valueOf: function () { return d.source } }
+    toString: function () { return d.${SOURCE_KEY} }, valueOf: function () { return d.${SOURCE_KEY} } }
   // 源变量垫片方法（getVariable/setVariable/get/put）同样从协议表派生
   d.mounts.source.forEach(function (p) { g.__src__[p.key] = sync(p.name) })
   g.result = d.resultHost !== null && d.resultHost !== undefined
@@ -889,22 +907,19 @@ ${asyncMountSource()}
     t.setType = function (n) { t.type = n }
     t.getName = function () { return String(t.name ?? t.title ?? '') }
     t.getBookUrl = function () { return String(t.bookUrl ?? '') }
-    t.getOrigin = function () { return String(t.origin ?? t.baseUrl ?? d.source) }
+    t.getOrigin = function () { return String(t.origin ?? t.baseUrl ?? d.${SOURCE_KEY}) }
     // chapter.isVip()/isVolume()/isPay()（目录 ruleToc 标记折出的实体字段；非章节实体不挂也不冒充）
     if (t.vip !== undefined) t.isVip = function () { return t.vip === true }
     if (t.volume !== undefined) t.isVolume = function () { return t.volume === true }
     if (t.pay !== undefined) t.isPay = function () { return t.pay === true }
     return t
   }
-  g.book = mkHostObj(d.book)
-  g.chapter = mkHostObj(d.chapter)
-  g.baseUrl = d.baseUrl
-  g.source = g.__src__
+  g.${BOOK_GLOBAL} = mkHostObj(d.${BOOK_KEY})
+  g.${CHAPTER_GLOBAL} = mkHostObj(d.${CHAPTER_KEY})
+${SIMPLE_GLOBALS}
+  g.${SOURCE_GLOBAL} = g.__src__
   g.key = d.key
   g.page = d.page
-  g.src = d.src || ''
-  g.book = d.book || {}
-  g.chapter = d.chapter || {}
 })(globalThis)`
 
 /**
@@ -964,22 +979,12 @@ export async function evalJs(call: JsCall): Promise<JsOutcome> {
   // init 按 syncAjax 参数化：worker 重跑（哨兵路线）必须拿 syncAjax:true 的那一份，
   // 复用主线程的 init 会让 worker 里的 ajax 包装再抛一次哨兵。
   const initOf = (syncAjax: boolean): string => JSON.stringify({
+    ...scriptInitOf(ctx),
     result: pageRaw, resultKind: host.resultKind ?? '', resultJson,
     resultHost: host.resultHost ?? null,
     resultMap: host.resultMap ?? null,
     resultCtx: host.resultCtx ?? 'value',
-    deviceId: ctx.deviceId ?? '',
-    baseUrl: ctx.baseUrl ?? '', source: ctx.source ?? '',
     key: host.key ?? '', page: host.page ?? 1, header: host.header ?? '{}',
-    loginInfo: ctx.loginInfo ?? {}, loginHeader: ctx.loginHeader ?? '',
-    // 源实体字段（脚本可见的 `source.bookSourceComment` / `source.bookSourceName`）：只投影脚本真读到的
-    sourceComment: ctx.sourceComment ?? '', sourceName: ctx.sourceName ?? '',
-    // 沙箱全局 `src` = 当前页面原文（html 优先；纯 JSON 页给序列化文本——与 host.result 的
-    // 首段口径同源）。真实源 `JSON.parse(src)` / `src.match(...)` 全靠它。
-    src: ctx.html ?? (ctx.json === undefined ? '' : String(ctx.json)),
-    // `book` / `chapter` 变量：目录/正文面脚本常见 `book.bookUrl`、`chapter.title`——
-    // 服务层按面注入（缺席给空对象：脚本读字段得 undefined，与「未设置」同形）
-    book: ctx.book ?? {}, chapter: ctx.chapter ?? {},
     syncAjax,
     // 沙箱挂载清单从协议表派生（见 js-protocol.SANDBOX_MOUNTS）
     mounts: SANDBOX_MOUNTS,

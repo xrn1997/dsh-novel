@@ -13,11 +13,11 @@ import { STATUS_POLL_MS } from './util.js'
  */
 
 export async function startImportJob(files: Array<{ name: string; text: string }>): Promise<{ jobId: string }> {
-  return apiSend<{ jobId: string }>('POST', ROUTES.sourcesImport.path, bodies.import(files))
+  return apiSend<{ jobId: string }>(ROUTES.sourcesImport, bodies.import(files))
 }
 
 export async function startBatchProbeJob(ids: string[]): Promise<{ jobId: string }> {
-  return apiSend<{ jobId: string }>('POST', ROUTES.sourcesBatchProbe.path, bodies.ids(ids))
+  return apiSend<{ jobId: string }>(ROUTES.sourcesBatchProbe, bodies.ids(ids))
 }
 
 /** 书源验证提交的依赖面（窄接口：三入口的 SettingsDeps 都结构满足；测试注入假实现） */

@@ -3,15 +3,18 @@ import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { createElement } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NOVEL_CSS } from '../../src/client/styles.js'
+import { resetPanelShelf } from '../../src/client/panel-shelf.js'
 import { CTRL_Z, ReaderView } from '../../src/client/views/ReaderView.js'
 import { ShelfView } from '../../src/client/views/ShelfView.js'
 import { SearchView } from '../../src/client/views/SearchView.js'
 import { routeStore } from '../../src/client/store.js'
-import { planarNavigation } from '../../src/shared/wire.js'
+import { planarNavigation, ROUTES } from '../../src/shared/wire.js'
 import { makeCoreDeps, makeReaderDeps } from './fake-deps.js'
 import { rect, stubLayout } from './scroll-stub.js'
+
+beforeEach(resetPanelShelf)
 
 /**
  * UI 系统守卫：呈现层的不变量（token 自足 / 标度 / 焦点与键盘可达 / 布局单位）。
@@ -372,7 +375,9 @@ describe('键盘可达的承载元素（主操作不许只绑鼠标）', () => {
     }
     let reads = 0
     const deps = makeCoreDeps({
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []                                        // 落架基线那一问不归本用例
+        : ({
         job: ++reads === 1 ? null : {
           id: 'j1', keyword: '斗罗', phase: 'done', total: 1, done: 1, added: [group], next: 1, startedAt: 0,
         },
@@ -382,7 +387,7 @@ describe('键盘可达的承载元素（主操作不许只绑鼠标）', () => {
     routeStore.set({ route: { name: 'search', keyword: '斗罗' } as never })   // 带关键词挂载即提交一轮后台任务
     const { container } = render(createElement(SearchView, { deps }))
     await waitFor(() => expect(screen.getByText(/1 家源/)).toBeTruthy())
-    expect(deps.apiSend).toHaveBeenCalledWith('POST', 'search/job', { keyword: '斗罗' })
+    expect(deps.apiSend).toHaveBeenCalledWith(ROUTES.searchJob, { keyword: '斗罗' })
     // 命中行的钉子打在**按源那一档**里：默认那档是按书视图，书名在两轴各现一次（jsdom 里
     // 收起的 details 照样查得到），不按容器取就会拿到两本
     const perSource = container.querySelector('[data-novel-per-source]')

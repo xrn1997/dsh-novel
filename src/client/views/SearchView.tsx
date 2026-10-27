@@ -7,6 +7,7 @@ import type { Translate } from '../copy/index.js'
 import { searchSummarySegments } from '../copy/search-summary.js'
 import { prodJobViewDeps } from '../deps.js'
 import type { JobViewDeps, RowActionDeps } from '../deps.js'
+import { ensurePanelShelf } from '../panel-shelf.js'
 import { useSearchJob } from '../search-job.js'
 import { useSearchLanding } from '../search-landing.js'
 import type { SearchLanding } from '../search-landing.js'
@@ -61,6 +62,16 @@ export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): 
     filled.current = true
     setKeyword(round.keyword)
   }, [round])   // eslint-disable-line react-hooks/exhaustive-deps
+  /** 落架基线：投影随面板卸载清空，而 `routeStore` 跨卸载存活（`client/store.ts`）——面板重开
+   *  直接落在搜索结果页时，投影里还没有服务端书架列表，已在架的书会重新写成「＋ 加书架」，
+   *  「都加架」还会把已在架的架位再 PUT 一遍并报成「已加 N 个」（裁决见 `docs/adr/0046`）。
+   *  只为基线、不为某一本书，故不带 bookKey；投影读过就不再付第二发。 */
+  useEffect(() => {
+    void ensurePanelShelf({
+      apiGet: deps.apiGet,
+      describeError: (e: unknown): string => describeError(e, t),
+    })
+  }, [])   // eslint-disable-line react-hooks/exhaustive-deps
 
   const running = round !== null && round.running
   const progress = round !== null && round.running ? { done: round.done, total: round.total } : null
@@ -70,8 +81,9 @@ export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): 
   const view = useMemo<RoundView | null>(() => (round === null ? null : deriveRound(round)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [round?.id, round?.keyword, round?.groups.length])
-  /** 落架现场（哪些架位落过、哪一本的在途）与两条加架入口的排队住 `search-landing.ts`；
-   *  写口仍是 `addShelfSeat`，视图只把它包成 `addSeat` 注入，并保留回执的措辞与通道。 */
+  /** 落架账（哪些架位落过）住 `panel-shelf.ts`；加架排队（哪一本在途、两条入口）住
+   *  `search-landing.ts`。写口仍是 `addShelfSeat`，视图只把它包成 `addSeat` 注入，
+   *  并保留回执的措辞与通道。 */
   const landing = useSearchLanding({ addSeat: (input) => addShelfSeat(input, deps) })
   const summary = view !== null && !running ? view.summary : null
   // 空参与集与「搜了没命中」是两件事：前者 total=0（源全停用/未导入），后者有源但零分组

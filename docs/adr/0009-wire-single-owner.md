@@ -2,9 +2,9 @@
 
 Status: accepted
 
-`/novel-api` 的路由名、值形状、query 参数名、body 构造器、书目字段集，全部只住 `src/shared/wire.ts`；Node 半与浏览器半 import 同一份。`src/client/views/types.ts` 只是再导出桶。
+`/novel-api` 的路由身份（method + path）、值形状、query 参数名、body 构造器、书目字段集，全部只住 `src/shared/wire.ts`；Node 半与浏览器半 import 同一份。`src/client/views/types.ts` 只是再导出桶。
 
-动机：参数名曾散在路由与四个 client 文件里各写一份，改名无处编译报错；视图曾手拼 `shelf/${…}` 绕过 `paramRoutes`——那是**活漂移**，不是理论风险。文档化的路由表同样是契约的第二份抄本，所以「API 文档」这条路被排除在真相链之外（`CONTEXT.md` 把「API 文档」列为禁词）。
+动机：参数名曾散在路由与四个 client 文件里各写一份，改名无处编译报错；视图曾手拼 `shelf/${…}` 绕过 `paramOps`——那是**活漂移**，不是理论风险。方法轴后来也露出同一形态：服务端 `guard`、客户端 `apiSend` 与测试各持一份方法字面量；现在静态 `Route` 与参数 `paramOps` 都自带 method，写口只接受 `WriteMethod`，`guard` 从同一个目标取方法与路径。例外只有两处，且都不是路由身份：原始字节上传 `apiUpload` 仍自己发 `POST`（它收整条路径与 Blob，不承载路由表里的写路由），`GET /novel-api` 根健康检查的 path 是前缀本身（method 仍取自 `ROUTES.health`）。文档化的路由表同样是契约的第二份抄本，所以「API 文档」这条路被排除在真相链之外（`CONTEXT.md` 把「API 文档」列为禁词）。
 
 一并定的三条边界：
 - **书目字段集**只住 `SHELF_META` + `pickShelfMeta`：加字段 = 只改这张表，`Shelf.applyPatch` / `bodies.shelfAdd` 与 `bodies.shelfPatch` / `readBodies.shelfPut` 三个消费方全从它派生；逐字段 `typeof` 筛键的抄本是禁词。
@@ -13,4 +13,4 @@ Status: accepted
 
 一处已知落差：`ROUTES.*.segs` 的**生产消费者为零**（只有 `tests/api/routes.test.ts` 拿它做命名空间自洽校验，段匹配读的是运行时 URL 切分）——写新路由时别以为存在第二份权威。
 
-锚点：`src/shared/wire.ts`；`tests/shared/wire-builders.test.ts`（路由计数与「手拼路径」漂移守卫）；`tests/api/routes.test.ts`；`tsdown.config.ts` 的 `dsh-novel-bundle-purity`；`CONTEXT.md`「wire 契约」「书目字段集」「来源投影」。
+锚点：`src/shared/wire.ts`；`tests/shared/wire-builders.test.ts`（路由计数、方法与「手拼路径」漂移守卫）；`tests/api/routes.test.ts`；`tsdown.config.ts` 的 `dsh-novel-bundle-purity`；`CONTEXT.md`「wire 契约」「书目字段集」「来源投影」。

@@ -264,7 +264,7 @@ export function splitVarExpr(inner: string): VarExpr {
  * - `hasListEntryMarker` / `hasExplicitValueHead`：判「剥完 `-` 后紧跟链首的那一格」，`+` 归列表
  *   入口（value 求值不认它，按 value 解析会把整条读错）、`@` 归显式取值头。
  * 两判都不容前导空白：调用方先经 `parseTails(rule).chain` 取同一条链——parseRule 的剥除与
- * `usageOfSubRule` 的判读都读它，不要拿原始规则串直接判。
+ * `subRuleOf` 的判读都读它，不要拿原始规则串直接判。
  */
 function reversePrefix(chain: string): { rest: string; reverse: boolean } {
   if (!chain.startsWith('-')) return { rest: chain, reverse: false }

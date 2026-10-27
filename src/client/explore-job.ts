@@ -185,7 +185,7 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
     if (s === '' || k === '') return
     void (async () => {
       try {
-        const { jobId } = await deps.apiSend<{ jobId: string }>('POST', ROUTES.exploreList.path, bodies.exploreList(s, k))
+        const { jobId } = await deps.apiSend<{ jobId: string }>(ROUTES.exploreList, bodies.exploreList(s, k))
         if (!alive.current) return
         submitted.current = true             // 新轮出生：此后的挂载恢复（读的是上一轮）一律让位
         // 提交返回的 id 就是本轮身份：先落一帧空态再开始盯（避免旧轮的条目在新轮里停留）。
@@ -215,7 +215,7 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
     setRound((r) => (r === null ? null : { ...r, running: true }))
     void (async () => {
       try {
-        await deps.apiSend<{ jobId: string }>('POST', ROUTES.exploreListMore.path)
+        await deps.apiSend<{ jobId: string }>(ROUTES.exploreListMore)
         if (!alive.current) return
         setError(null)
         watch()

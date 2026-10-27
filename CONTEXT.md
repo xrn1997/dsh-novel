@@ -76,16 +76,21 @@ _Avoid_: 跨源合并器（那是发现面已下线那一层的历史名字，�
 **搜索结果页派生（search view-model）**:
 「一轮命中现场 → 轮级计数（条／本／家）、两条呈现轴的行身份与逐源回读」的唯一住址：判据在此，视图只接线与渲染。轮级派生一次给齐预算值——逐源组的两档行与行 key、每本的逐源行与架位全集都随 `deriveRound` 算好，渲染路径不再为每帧每击键各算一趟。
 _唯一实现_: `shared/round-summary.ts` 的 `summarizeRound`（轮级分区与计数，每源只分区一次）；`client/search-view-model.ts` 的 `deriveRound`（返回 `parts` / `summary` / `merged` 与 `groupViews` / `bookViews`——行身份、行 key、逐源行与架位全集都在它里面预算）/ `rowId` / `rowKeys` / `rowMeta` / `bookRows` / `shelfSeats` / `isSeatLanded` / `newlyLandedSeats` / `addAllReceipt`
-_Avoid_: 搜索结果状态（那住 `client/search-job.ts` 的观察通道）、加架账（落架现场住 `client/search-landing.ts` 的 `useSearchLanding`，本层只给架位与回执算式）
+_Avoid_: 搜索结果状态（那住 `client/search-job.ts` 的观察通道）、加架账（落架账住 `client/panel-shelf.ts` 的 `panelShelf`，加架排队住 `client/search-landing.ts`；本层只给架位与回执算式）
 
 **搜索落架（search landing）**:
-搜索结果页一次挂载里的落架现场与加架排队：哪些架位已经落过、哪一本的「都加架」还在途，逐条与整本两条入口共用这一份账。**在途读数逐本记**（书行键 `bookRowKey`）：每本书行一颗钮，一个全局布尔会把没碰过的书一并禁掉、还给它们挂上「加架中…」；**回执只给数**——加成 / 仍缺 / 无地址三笔账由视图按落架回执选通道与措辞。落架账是会话内读数（「这一发 PUT 发成功过」），不是书架真相：真相在 `Shelf`，写口幂等兜住其余。
-_唯一实现_: `client/search-landing.ts` 的 `useSearchLanding`（返回 `landed` / `adding` / `isLanded` / `add` / `addAll`；写口仍是 `client/shelf-action.ts` 的 `addShelfSeat`，由视图以 `addSeat` 注入；架位与回执算式复用 `client/search-view-model.ts`）
+搜索结果页的落架现场与加架排队：哪些架位已经落过、哪一本的「都加架」还在途，逐条与整本两条入口共用面板期书架投影里的同一份账。**在途读数逐本记**（书行键 `bookRowKey`）：每本书行一颗钮，一个全局布尔会把没碰过的书一并禁掉、还给它们挂上「加架中…」；**回执只给数**——加成 / 仍缺 / 无地址三笔账由视图按落架回执选通道与措辞。落架账随面板存活；服务端书架列表是基线（挂载重取、写成功并入、删除对账），不是第二份书架真相。
+_唯一实现_: `client/search-landing.ts` 的 `useSearchLanding`（返回 `landed` / `adding` / `isLanded` / `add` / `addAll`；写口仍是 `client/shelf-action.ts` 的 `addShelfSeat`，由视图以 `addSeat` 注入；架位与回执算式复用 `client/search-view-model.ts`；账与书架投影住 `client/panel-shelf.ts`）
 _Avoid_: 搜索结果状态（那是 `client/search-job.ts` 的观察通道）、批量写口 / 加架事务（没有第二条写路由：整本就是一串幂等 PUT）、落架回执文案（措辞与通道住视图）
+
+**面板书架投影（panel shelf projection）**:
+面板存活期的一份可丢弃书架投影：书架读取面、落架账、筛选与关键字同住；挂载重取、加架并入落架账并作废旧读、删除对账，面板卸载即丢。阅读器问当前书时，在途刷新先等落地，投影缺这本书或上次读失败会重取一次再答，不把「还没刷到」答成「不在架」；搜索结果页挂载时向同一条路要整份基线（不带当前书身份）。真相仍在服务端。
+_唯一实现_: `client/panel-shelf.ts` 的 `panelShelf` / `loadPanelShelf` / `ensurePanelShelf` / `readPanelShelf` / `markPanelShelfLanded` / `removePanelShelfBooks` / `resetPanelShelf` / `setPanelShelfFilter` / `setPanelShelfKeyword`（`NovelView` 卸载时清空）
+_Avoid_: 书架真相（那是 `services/shelf.ts` 的 `Shelf`）、搜索轮次（`client/search-job.ts` 的观察通道）
 
 **工具面披露三件套（searched / answered / filtered）**:
 `dshnovel_search` 对「这一轮为什么给出这些」自报的三条计数：本轮跑了多少家、多少家干净答话（答了零条也算答话）、多少行因被判不相关移出默认返回。界面上同一事实由逐源轴与折叠区承接，工具面没有折叠，用数字承接——「没人答话」与「答话了但全不相关」不许折成同一种结局。
-_唯一实现_: `tools/tools.ts` 的 `dshnovel_search` 的 execute（逐家点名的 `failed` 同住这一主人；裁决与必然后果见 `docs/adr/0033`）
+_唯一实现_: `tools/tools.ts` 的 `dshnovel_search` 的 execute（三条计数的算式在 `shared/round-summary.ts` 的 `summarizeRound`；逐家点名的 `failed` 与超限那句 `truncated` 是 `tools/search-value.ts` 的 `failedSources` / `truncationNotice`；裁决与必然后果见 `docs/adr/0033`）
 _Avoid_: 有命中的源数（answered 数的是「答话」，不是「有命中」——答了空页的源也计答话）
 
 **书籍详情浮层（book sheet）**:
@@ -146,7 +151,7 @@ _Avoid_: 逐字段解析（太泛——不含选项保留绝对化与简介净�
 
 **取值用途（rule usage）**:
 同一条规则串在两种用途下**链尾未知词**的语义不同，调用方显式声明：`'value'` → 未知词按 HTML 属性名；`'list'` → 未知词按 CSS。递归求值口（`java.getString*` / 模板规则插值 / `@put` 的值）的用途同样由调用方交，定档的那一处见 `_唯一实现_`。
-_唯一实现_: `engine/parse.ts` 的 `classifyDefault`；子规则判据 `engine/sub-rule.ts` 的 `usageOfSubRule`
+_唯一实现_: `engine/parse.ts` 的 `classifyDefault`；子规则判据 `engine/sub-rule.ts` 的 `subRuleOf`（`SubRule` = 文本 + 已定用途）
 _Avoid_: 模式、场景（太泛——这是「链尾未知词」的裁决轴）
 
 **属性终端（attr terminal）**:
@@ -197,6 +202,11 @@ _Avoid_: 变量池（太泛）、缓存（`cache` 是按源隔离的另一套键
 一条书源上的**一次**脚本 / 规则求值：能力位（fetch 族 / 浏览器 / cookie / device / 源实体字段）、动态头求值、非递归与回退、脚本可见的 `book` 镜像都从这一处装配，调用方只交规则与上下文（`chapter` 由调用方构造后原样透传）。逐面 `book` 字段集由调用方给的 shelf 上下文塑形，**不**在这里统一成全集。
 _唯一实现_: `services/source-eval.ts` 的 `createSourceEval` / `engineContextOf` / `resolveHeaders` / `bookMirrorOf`
 _Avoid_: 规则引擎（那是 `engine/` 的事）、求值上下文（那只是它产出的 `EvalContext`）
+
+**脚本可见面（script surface）**:
+`EvalContext` 的每个字段在脚本里能看到什么、以什么 init 键与全局名出现，收在一张 `Record<keyof EvalContext, …>` 的清单里；宿主能力与求值层内部字段显式标 `excluded`，不静默漏。BOOTSTRAP 的简单全局由清单生成，book/chapter/source 的自定义物化仍留在沙箱。
+_唯一实现_: `engine/script-surface.ts` 的 `SCRIPT_FIELDS` / `scriptInitOf` / `scriptGlobals`（消费点 `engine/js-sandbox.ts` 的 `initOf` 与 `BOOTSTRAP`）
+_Avoid_: 能力清单（那常指 `source-eval.engineContextOf` 的装配面）、白名单（太泛）
 
 **动态请求头（headerRule）**:
 legado `header` 字段的 `@js:`/`<js>` 规则形态的内部名（与静态 JSON 形态互斥同源）。求值失败 → warn 后回退静态头，不吞请求也不炸整链。
@@ -305,10 +315,25 @@ _Avoid_: 翻页循环、重复过滤（判据是「本页零新增」与「URL �
 _唯一实现_: `client/reader-session.ts`（状态）+ `client/progress.ts`（位置 ⇄ 像素）+ `shared/wire.ts` 的 `ShelfProgress`、`hasProgress`
 _Avoid_: 进度（要区分「元数据」与「阅读位置」）、scrollTop（像素是测量值，不是位置本身）
 
+**阅读器几何（reader geometry）**:
+`ReaderPort` 的纯几何实现：从滚动容器、章块与哨兵读出锚点、视口偏移、目标偏移与当前节点；两套坐标系（内容原点 / 视口顶）只在这里换算。视图只交 ref 读数，会话只读 port。
+_唯一实现_: `client/reader-geometry.ts` 的 `createReaderGeometry` / `currentNodeOf`（底层坐标换算 `client/scrollport.ts`）
+_Avoid_: 阅读时序（`client/reader-session.ts`）、滚动容器探测（`client/scrollport.ts` 的 `findScrollport`）
+
 **在线阅读（online reading）**:
-一条在线书的目录与正文取值管线：缓存优先、目录在途去重（身份含代际与 refresh）、翻页跟进、缓存写回，连同 tocUrl 解析、subContent 追加、正文行规约与空正文异常。**在途去重只服务目录**（单章在途由阅读会话保证，正文不另立全局表）。**本地书不走这条线**——门面只做本地书分流与委托，搜索/发现/书架/导入/详情仍归门面（裁决见 `docs/adr/0043`）。
-_唯一实现_: `services/online-reading.ts` 的 `OnlineReading`（目录 `toc` / 正文 `chapterText`；`tocUrlOf` / `normalizeChapterText` 同住）
+一条在线书的目录与正文取值管线：缓存优先、目录在途去重（身份含代际与 refresh）、翻页跟进、缓存写回，连同 tocUrl 解析、subContent 追加与空正文异常。**在途去重只服务目录**（单章在途由阅读会话保证，正文不另立全局表）。**本地书不走这条线**——本地/在线分流与文字规约归书内容读面，门面只委托；搜索/发现/书架/导入/详情仍归门面（裁决见 `docs/adr/0047`）。
+_唯一实现_: `services/online-reading.ts` 的 `OnlineReading`（目录 `toc` / 正文 `chapterText`；`tocUrlOf` 同住）
 _Avoid_: 阅读服务（`ReadingService` 是门面，不是管线）、抓取（出站执行归 `services/source-request.ts`）
+
+**书内容读面（book content read surface）**:
+目录、导航与正文的本地/在线分流与文字规约：本地书与在线书是两个适配器，三个读动词不再各自判 `__local__`，正文 text 出口统一过行规约；来源展示判据（如 `sourceNameOf`）仍按本地源常量判来源身份。
+_唯一实现_: `services/book-content.ts` 的 `BookContent`（适配器 `LocalBooks` / `OnlineReading`）；正文文字规约 `services/chapter-content.ts` 的 `normalizeChapterText`
+_Avoid_: 阅读服务（`ReadingService` 是门面）、在线阅读（那是 `OnlineReading` 的管线）
+
+**正文文字规约（chapter text normalization）**:
+纯文本正文的行规约：逐行 trim、去首尾空行、相邻空行折叠一个；只动空白与换行，不解释尖括号与实体。在线正文与本地 TXT 共用，幂等。
+_唯一实现_: `services/chapter-content.ts` 的 `normalizeChapterText`（`chapterContentToText` 的 text 分支过它）
+_Avoid_: 正文清理（太泛）、HTML 转文本（后者是 `contentToText` / `chapterContentToText` 的结构映射）
 
 **缓存代际（epoch）**:
 「这份目录 / 正文缓存还有效吗」的唯一算式：按面细分的规则指纹 + baseUrl，**入缓存文件名**而不是删除式失效。刻意不含 `auth`（登录态刷新会整源缓存全灭）。
@@ -350,8 +375,8 @@ _唯一实现_: `services/explore.ts` 的 `deriveExploreSources`；跨半形状 
 _Avoid_: 分类目录（那是站点侧的分类，词表是各源自己声明的标题）、分类计数（旧版那份「被多少源声明」的读数随跨源轴一起走了）
 
 **wire 契约（wire contract）**:
-`/novel-api` 规范 JSON 的值形状、路由名与**写路由的 body 形状**——Node 半与浏览器半之间的唯一真相，代码只许有一个主人。body 的两半成对住这里（`bodies` 构造器给浏览器半、`readBodies` 读口给 Node 半），键名同理只有一处字面量（`BODY`，与 query 同名的业务键沿用 `PARAMS`）。
-_唯一实现_: `shared/wire.ts`
+`/novel-api` 规范 JSON 的值形状、路由身份（method + path）与**写路由的 body 形状**——Node 半与浏览器半之间的唯一真相，代码只许有一个主人。body 的两半成对住这里（`bodies` 构造器给浏览器半、`readBodies` 读口给 Node 半），键名同理只有一处字面量（`BODY`，与 query 同名的业务键沿用 `PARAMS`）。method 不许在 dispatch 与客户端调用点各写一份：静态路由的 `Route` 与参数操作的 `paramOps.*` 都自带方法，写口只接受 `WriteMethod`（GET 走 `apiGet` / SSE）。
+_唯一实现_: `shared/wire.ts` 的 `Route` / `ROUTES` / `paramOps` / `bodies` / `readBodies`
 _Avoid_: API 文档（文档是它的抄本）、body 校验（形状判据在契约、状态码归传输层）
 
 **缺键投影（missing-key projection）**:
@@ -361,8 +386,13 @@ _Avoid_: 字段过滤
 
 **规范值（canonical value）**:
 工具输出的完整 JSON 值；render 只是它的文本投影。
-_唯一实现_: `tools/tools.ts` 各工具的 `render`（投影侧）与 `tools/project.ts` 的 `project`（缺键省略侧）
+_唯一实现_: `tools/render.ts` 的纯 render 函数（投影侧）与 `tools/project.ts` 的 `project`（缺键省略侧）；工具定义只把结果包成 `text()`
 _Avoid_: 渲染结果（值与投影不是一回事）
+
+**工具声明（tool declaration）**:
+一工具一声明、一 action 一行：action 的说明、缺参清单、执行体与纯 render 同住一行；action enum 与工具描述从行派生。render 是模型唯一读到的文案，纯函数可直接喂规范值测。
+_唯一实现_: `tools/tools.ts` 的 `buildTools`（`shelfRows` / `sourceRows`）+ `tools/render.ts`
+_Avoid_: 工具描述（模型可见的那段散文是声明的一部分）、缺键投影（`tools/project.ts`）
 
 **语义覆盖矩阵（legado coverage matrix）**:
 「本插件对 legado 书源格式做到哪一步」的唯一读数口：一行一条 legado 语义，归属只能是 实现 / 环境不适用 / 待拍板 三态（不设「未知」）。

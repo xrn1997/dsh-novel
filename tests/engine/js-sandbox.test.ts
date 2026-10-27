@@ -436,7 +436,7 @@ describe('@js 沙箱', () => {
   })
 
   it('evaluateRef 注入后：getString/getStringList 经其递归求值并对 result 序列化', async () => {
-    const fake = (rule: string, data: unknown): EngineValue => ({ kind: 'value', text: `X(${rule}|${data})` })
+    const fake = (sub: { rule: string }, data: unknown): EngineValue => ({ kind: 'value', text: `X(${sub.rule}|${data})` })
     const v = await run('return java.getString("@css:h1")', hostOf({ result: 'prev' }), ctxOf(), fake)
     expect(v.value).toEqual({ kind: 'value', text: 'X(@css:h1|prev)' })
     const fakeList = (): EngineValue => ({ kind: 'list', items: ['a', 'b'] })
@@ -501,7 +501,7 @@ describe('宿主垫片（真实源用到的缺失 API）', () => {
   })
   it('java.setContent：后续 getString 以设定内容为基（而非上一段 result）', async () => {
     const seen: unknown[] = []
-    const fake = (_rule: string, data: unknown): EngineValue => { seen.push(data); return { kind: 'value', text: String(data) } }
+    const fake = (_sub: { rule: string }, data: unknown): EngineValue => { seen.push(data); return { kind: 'value', text: String(data) } }
     const v = await run('java.setContent("<h1>新基</h1>"); return java.getString("@css:h1")', hostOf({ result: '旧result' }), ctxOf(), fake)
     expect(seen[0]).toBe('<h1>新基</h1>')
     expect(v.value).toEqual({ kind: 'value', text: '<h1>新基</h1>' })
@@ -512,6 +512,21 @@ describe('宿主垫片（真实源用到的缺失 API）', () => {
     expect((await run('return "" + source')).value).toEqual({ kind: 'value', text: 'https://m.example.com' })
     expect((await run('return source.key + "/api/search"')).value)
       .toEqual({ kind: 'value', text: 'https://m.example.com/api/search' })
+  })
+  it('源实体字段按可见性清单进脚本：source.bookSourceComment / bookSourceName', async () => {
+    const v = await run(
+      'return source.bookSourceComment + "|" + source.bookSourceName',
+      hostOf(), ctxOf({ sourceComment: 'C', sourceName: 'S' }),
+    )
+    expect(v.value).toEqual({ kind: 'value', text: 'C|S' })
+  })
+  it('book/chapter 保留宿主方法面（后置的裸赋值曾把 mkHostObj 覆盖成普通对象）', async () => {
+    const v = await run(
+      'book.putVariable("k", "v"); book.setType(2); chapter.setType(3);'
+      + ' return book.getVariable("k") + "|" + book.getType() + "|" + chapter.getType()',
+      hostOf(), ctxOf({ book: { name: 'B' }, chapter: { title: 'T' } }),
+    )
+    expect(v.value).toEqual({ kind: 'value', text: 'v|2|3' })
   })
   it('cookie 垫片：set/get/remove 往返（按源隔离——最小仿真）', async () => {
     const ctx = ctxOf()

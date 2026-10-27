@@ -179,6 +179,10 @@ describe('工具 schema 契约（execute 输出 ≡ 声明 schema；schema ≡ w
     expect(shelfItem, '工具投影表必须与「SHELF_META 减去刻意不投影的三项」逐键相等')
       .toEqual(new Set([...[...shelfMeta].filter((k) => !(SHELF_ITEM_EXCLUDED as readonly string[]).includes(k)), 'bookKey', 'progress', 'addedAt']))
     expect(propsOf(schemaOf(s, 'dshnovel_shelf'), 'books', '[]')).toEqual(shelfItem)
+    expect(propsOf(schemaOf(s, 'dshnovel_shelf'), 'books', '[]', 'progress'))
+      .toEqual(new Set(['chapterIndex', 'offsetRatio', 'updatedAt']))
+    expect(requiredOf(schemaOf(s, 'dshnovel_shelf'), 'books', '[]', 'progress'))
+      .toEqual(['chapterIndex', 'offsetRatio', 'updatedAt'])
     // add/save_progress 的单本回执与 list 的条目同形（同一投影，不长第二份）
     expect(propsOf(schemaOf(s, 'dshnovel_shelf'), 'book')).toEqual(shelfItem)
     expect(propsOf(schemaOf(s, 'dshnovel_shelf'))).toEqual(new Set(['action', 'books', 'book', 'removed']))

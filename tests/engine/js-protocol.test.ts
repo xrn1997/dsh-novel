@@ -149,9 +149,9 @@ describe('invokeJavaMethod 分派（不进 vm 的直测）', () => {
     // 「取到 URL 后再抓一次」这条语义不存在。
     // 本 deps 的 ctx 没有 fetch：实现若去抓站点会当场抛「网络能力」，用例即红 ⇒ 零抓取是断言出来的。
     const seen: unknown[] = []
-    const fake = (rule: string, data: unknown): EngineValue => {
+    const fake = (sub: { rule: string }, data: unknown): EngineValue => {
       seen.push(data)
-      return { kind: 'value', text: rule === 'blank' ? '' : '/book/1' }
+      return { kind: 'value', text: sub.rule === 'blank' ? '' : '/book/1' }
     }
     const deps = depsOf({
       ctx: { vars: {}, baseUrl: 'https://m.example.com/read/index.html' } satisfies EvalContext,
@@ -176,7 +176,7 @@ describe('invokeJavaMethod 分派（不进 vm 的直测）', () => {
 
   it('getString/getStringList 经 evaluateRef 递归求值（基内容 = contentBase ?? result）', () => {
     const seen: unknown[] = []
-    const fake = (rule: string, data: unknown): EngineValue => { seen.push(data); return { kind: 'value', text: `${rule}|${data}` } }
+    const fake = (sub: { rule: string }, data: unknown): EngineValue => { seen.push(data); return { kind: 'value', text: `${sub.rule}|${data}` } }
     const deps = depsOf({ result: 'prev', evaluateRef: fake })
     expect(invokeJavaMethod(deps, 'getString', ['@css:h1'])).toBe('@css:h1|prev')
     invokeJavaMethod(deps, 'setContent', ['<h1>新基</h1>'])
@@ -198,8 +198,8 @@ describe('invokeJavaMethod 分派（不进 vm 的直测）', () => {
   it('子规则求值把用途交给引擎：显式取值尾 value、裸选择 list；getElements/getElement list', () => {
     const calls: Array<[string, string]> = []
     const deps = depsOf({
-      evaluateRef: (rule, _data, usage) => {
-        calls.push([String(rule), usage])
+      evaluateRef: (sub, _data) => {
+        calls.push([sub.rule, sub.usage])
         return { kind: 'miss', detail: 'x' }
       },
     })

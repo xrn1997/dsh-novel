@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { usageOfSubRule } from '../../src/engine/sub-rule.js'
+import { subRuleOf } from '../../src/engine/sub-rule.js'
 
-describe('usageOfSubRule（子规则用途判据）', () => {
+describe('subRuleOf（子规则用途判据与求值体）', () => {
   it('显式取值尾 → value，裸选择/混合分支 → list', () => {
     const cases = [
       ['tag.a@href', 'value'],
@@ -25,6 +25,12 @@ describe('usageOfSubRule（子规则用途判据）', () => {
       ['a@text||b', 'list'],
       ['@text||@html', 'list'],         // 多分支里的单段 @ 头不单独升级（ADR 0007）
     ] as const
-    for (const [rule, usage] of cases) expect(usageOfSubRule(rule, 'rule'), rule).toBe(usage)
+    for (const [rule, usage] of cases) expect(subRuleOf(rule, 'rule').usage, rule).toBe(usage)
+  })
+
+  it('forceUsage 覆盖判据：getElements/getElement 恒 list，规则文本原样保留', () => {
+    const sub = subRuleOf('tag.a@href', 'rule', 'list')
+    expect(sub.usage).toBe('list')
+    expect(sub.rule).toBe('tag.a@href')
   })
 })

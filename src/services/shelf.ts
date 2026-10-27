@@ -102,9 +102,9 @@ export class Shelf {
     return this.removeMany([bookKey]).length === 1
   }
 
-  /** 批量移除（书架多选删除的写口）：一趟扫描裁掉全部命中项，**返回被删条目**（调用方据此
-   *  处理连带副作用——本地书副本连删只该对本就在架的键做，与单删的 `removed && isLocal` 同一条）；
-   *  未知键静默跳过、重复键幂等，只 schedule 一次落盘。 */
+  /** 批量移除（书架多选删除的写口）：一趟扫描裁掉全部命中项，**返回被删条目**（调用方取条数当回执）；
+   *  未知键静默跳过、重复键幂等，只 schedule 一次落盘。本地书副本的连删不在这一层——门面在移除
+   *  **之前**按「真在架的键」删副本（`services/reading.ts` 的 `removeShelfAndLocal` / `removeBooks`）。 */
   removeMany(bookKeys: readonly string[]): ShelfBook[] {
     const want = new Set(bookKeys)
     if (want.size === 0) return []

@@ -270,6 +270,22 @@ describe('agent 工具六件套', () => {
     const s = await svc()
     await expect(run(s, 'dshnovel_source', { action: 'probe' })).rejects.toThrow(/缺少参数/)
   })
+  it('六个工具各至少一条 render：规范值经各自 render 成模型读到的文案', async () => {
+    const s = await svc()
+    const bookKey = 'https://s.com/book/1/'
+    const read = await run(s, 'dshnovel_read', { sourceId, bookKey, chapterIndex: 0 })
+    expect(renderOf(s, 'dshnovel_read', { sourceId, bookKey, chapterIndex: 0 }, read)).toContain('第一章')
+    const toc = await run(s, 'dshnovel_toc', { sourceId, bookKey })
+    expect(renderOf(s, 'dshnovel_toc', { sourceId, bookKey }, toc)).toContain('共 1 章')
+    const added = await run(s, 'dshnovel_shelf', { action: 'add', bookKey, title: 'T', sourceId })
+    expect(renderOf(s, 'dshnovel_shelf', { action: 'add' }, added)).toContain('已加书：《T》')
+    const sources = await run(s, 'dshnovel_source', { action: 'list' })
+    expect(renderOf(s, 'dshnovel_source', { action: 'list' }, sources)).toContain('共 1 个源')
+    const imported = await run(s, 'dshnovel_import_source', { sourceJson: '[{"bookSourceName":"B","bookSourceUrl":"https://b","ruleContent":"x"}]' })
+    expect(renderOf(s, 'dshnovel_import_source', {}, imported)).toContain('✓ B')
+    const searched = await run(s, 'dshnovel_search', { keyword: '斗罗' })
+    expect(renderOf(s, 'dshnovel_search', { keyword: '斗罗' }, searched)).toContain('本（跑了')
+  })
   it('registerTools：6 次注册 + disposer 聚合全触发', () => {
     const calls: string[] = []
     const ctxLike = { tools: { register: (t: any) => { calls.push(t.name); return () => calls.push(`off:${t.name}`) } } }

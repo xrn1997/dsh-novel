@@ -9,6 +9,7 @@ import { chapterContentToText } from './chapter-content.js'
 import { InvalidRequestError, LocalNotMountedError, SourceNotFoundError } from './errors.js'
 import { createFetcher, DEFAULT_TIMEOUT_MS, type FetcherOptions } from './fetcher.js'
 import { CookieJar } from './cookies.js'
+import { BookContent } from './book-content.js'
 import { WebViewRuntime } from './webview.js'
 import { createFileSourceSession } from './source-session.js'
 import type { Fetcher } from './fetcher.js'
@@ -45,7 +46,6 @@ import type { ValueSource } from './value-source.js'
 export type { SearchHit, SearchGroup, ChapterEntry, BookDetail, SearchJobSnapshot, ExploreSources, ExploreSnapshot } from '../shared/wire.js'
 /** 本地资源读口（含流/MIME 的 Node 内部形状）：api 层从本模块取用，不去 localbooks 抄第二处 */
 export type { LocalResource } from './localbooks.js'
-import { planarNavigation } from '../shared/wire.js'
 import { parseCookieString } from '../shared/cookies.js'
 import type {
   BookDetail, BookNavigation, ChapterContent, ExploreSources, ExploreSnapshot, LocalImportResponse, LocalImportWarning,
@@ -131,8 +131,9 @@ function staticLiveConfig(parts: {
 /**
  * 阅读链路门面：HTTP API / agent 工具 / UI 三个面的**唯一**业务入口。
  * 规则求值全部经引擎；抓取全部经守门 fetcher；缓存/书架/注册表在其上编排。
- * 在线目录与正文的管线归 `OnlineReading`（本文件只做本地书分流与委托），
- * 搜索/发现/书架/导入/登录/详情仍住这里（边界见 `docs/adr/0043`）。
+ * 在线目录与正文的管线归 `OnlineReading`，本地/在线分流与正文文字规约归 `BookContent`
+ * （本文件只委托跨面动词），
+ * 搜索/发现/书架/导入/登录/详情仍住这里（边界见 `docs/adr/0047`）。
  */
 export class ReadingService {
   private constructor(
@@ -145,8 +146,8 @@ export class ReadingService {
     private readonly fetcher: Fetcher,
     /** 一次出站抓取的唯一装配点（动态头 → 限速 → webview/HTTP → loginCheck） */
     private readonly sourceRequest: SourceRequest,
-    /** 在线目录 / 正文管线（缓存键、在途去重、翻页闸、subContent 与空正文策略在这条缝里） */
-    private readonly online: OnlineReading,
+    /** 书内容读面：目录 / 导航 / 正文的本地与在线分流与文字规约都在这条缝里 */
+    private readonly content: BookContent,
     private readonly jobs: SourceJobs,
     /** 聚合搜索的后台持有者（读任务，与写的 `jobs` 分槽——见 services/search-job.ts 的理由） */
     private readonly searchJobs: SearchJobs,
@@ -254,9 +255,10 @@ export class ReadingService {
       tocMaxPages: parts.tocMaxPages ?? 200,
       contentMaxPages: parts.contentMaxPages ?? 50,
     })
+    const content = new BookContent({ local: parts.local ?? null, online })
     return new ReadingService(
       live,
-      parts.registry, parts.shelf, parts.fetcher, sourceRequest, online,
+      parts.registry, parts.shelf, parts.fetcher, sourceRequest, content,
       new SourceJobs({
         registry: parts.registry,
         probe: (s) => probeSource(s, sourceRequest, { timeoutMs: live.searchTimeoutMs, jsTimeoutMs: live.jsTimeoutMs }),
@@ -518,24 +520,39 @@ export class ReadingService {
     return this.shelf.get(bookKey) ?? null
   }
 
-  /** 删书：本地书连带删文件（防孤儿 invariant 归门面——此前住 dispatch 路由分支） */
-  async removeBook(bookKey: string): Promise<{ removed: boolean }> {
-    const removed = this.shelf.remove(bookKey)
-    if (removed && isLocalBookKey(bookKey) && this.local !== null) await this.local.remove(bookKey)
-    return { removed }
+  /** 删本地副本：只对真在架的本地键做（`localEvenIfOffShelf` 只给 `removeLocalBook`——
+   *  它点名的是磁盘上的本地书，即使不在架也要清副本），返回实际删掉的副本数。
+   *  单删、批删与本地删共用这一处顺序与判据：文件删失败即抛出，调用方保留架位可重试。 */
+  private async removeLocalCopies(keys: Iterable<string>, localEvenIfOffShelf: boolean): Promise<number> {
+    if (this.local === null) return 0
+    let removed = 0
+    for (const key of new Set(keys)) {
+      if (!isLocalBookKey(key)) continue
+      if (!localEvenIfOffShelf && this.shelf.get(key) === undefined) continue
+      if (await this.local.remove(key)) removed += 1
+    }
+    return removed
   }
 
-  /** 批量删书（书架多选）：与逐本 removeBook 同一条 invariant——本地书副本连删**只对真在架的键**做
-   *  （故取 removeMany 的返回条目而不是把请求键全过一遍：幽灵键不该去动磁盘）。
-   *  未知键静默跳过、重复键幂等，返回实际删除数（与批路由同口径）。 */
+  /** 删一本：先删本地副本，再移架位（单删、本地删与批删三条入口共用同一顺序）。
+   *  文件删失败时架位保留，用户可重试；反过来会留下没有架位的磁盘孤儿。 */
+  private async removeShelfAndLocal(bookKey: string, localEvenIfOffShelf: boolean): Promise<boolean> {
+    const localRemoved = await this.removeLocalCopies([bookKey], localEvenIfOffShelf) > 0
+    const shelfRemoved = this.shelf.remove(bookKey)
+    return shelfRemoved || localRemoved
+  }
+
+  /** 删书：本地书连带删文件（防孤儿 invariant 归门面——此前住 dispatch 路由分支；副本先删，失败则架位保留可重试） */
+  async removeBook(bookKey: string): Promise<{ removed: boolean }> {
+    return { removed: await this.removeShelfAndLocal(bookKey, false) }
+  }
+
+  /** 批量删书（书架多选）：与单删共用 `removeLocalCopies`——本地书副本连删**只对真在架的键**做
+   *  （幽灵键不该去动磁盘），且副本先删：删失败即抛出、架位整批保留可重试，反过来会留下
+   *  没有架位的磁盘孤儿。未知键静默跳过、重复键幂等，返回实际删除数（与批路由同口径）。 */
   async removeBooks(bookKeys: readonly string[]): Promise<{ removed: number }> {
-    const gone = this.shelf.removeMany(bookKeys)
-    if (this.local !== null) {
-      for (const b of gone) {
-        if (isLocalBookKey(b.bookKey)) await this.local.remove(b.bookKey)
-      }
-    }
-    return { removed: gone.length }
+    await this.removeLocalCopies(bookKeys, false)
+    return { removed: this.shelf.removeMany(bookKeys).length }
   }
 
   // ── 任务动词 ──
@@ -581,11 +598,6 @@ export class ReadingService {
     }
   }
 
-  /** 本地书目录（bookKey 即本地书 id）——私有：分流归 getToc，路由层不再持 LOCAL 知识 */
-  private localToc(bookKey: string): Promise<ChapterEntry[]> {
-    return this.requireLocal().getToc(bookKey)
-  }
-
   /** 补充文档（脚注/附录）图文正文：本地 EPUB 专有（「文档」这一层只有它有） */
   getLocalSupplement(bookKey: string, documentId: string): Promise<ChapterContent> {
     return this.requireLocal().getSupplement(bookKey, documentId)
@@ -601,11 +613,10 @@ export class ReadingService {
     return this.requireLocal().getImportWarnings(bookKey)
   }
 
-  /** 删本地书：文件 + 书架条目一并删（任一命中即 removed） */
+  /** 删本地书：文件 + 书架条目一并删（任一命中即 removed；与单删同一条「先副本、后架位」顺序） */
   async removeLocalBook(id: string): Promise<{ removed: boolean }> {
-    const localRemoved = await this.requireLocal().remove(id)
-    const shelfRemoved = this.shelf.remove(id)
-    return { removed: localRemoved || shelfRemoved }
+    this.requireLocal()
+    return { removed: await this.removeShelfAndLocal(id, true) }
   }
 
   private requireLocal(): LocalBooks {
@@ -844,27 +855,22 @@ export class ReadingService {
 
   // ── 目录 ─────────────────────────────────────────────────────────────
 
-  /** 目录：本地书分流在门面内（sourceId=__local__ 走本地书面——dispatch 不再持 LOCAL 分流知识，
-   *  localToc 收为私有）；在线书交给 `OnlineReading`（缓存优先、在途去重、翻页闸与错误语义都在那条缝里）。
-   *  `async` 只为把分流与源查找的抛错收成 rejection：HTTP 面与工具面都按 promise 消费。 */
+  /** 目录：本地与在线的分流归 `BookContent`（缓存优先、在途去重、翻页闸与错误语义都在那条缝里）。 */
   async getToc(sourceId: string, bookUrl: string, opts?: { refresh?: boolean }): Promise<ChapterEntry[]> {
-    if (sourceId === LOCAL_SOURCE_ID) return this.localToc(bookUrl)
-    return this.online.toc(sourceId, bookUrl, opts)
+    return this.content.toc(sourceId, bookUrl, opts)
   }
 
   /** 目录导航：`chapters` 是线性阅读序列（与 getToc 同一份），`items` 是展示用树。
    *  本地书读持久化导航（EPUB 原生 nav/NCX；TXT 由线性序列派生），其他书按目录派生平面导航——
-   *  派生单点在 wire 的 `planarNavigation`，不在这里另造一棵树，也不在客户端重推导。 */
+   *  派生单点是 wire 的 `planarNavigation`（消费点 `services/book-content.ts`），门面只委托。 */
   async getNavigation(sourceId: string, bookUrl: string): Promise<BookNavigation> {
-    if (sourceId === LOCAL_SOURCE_ID) return this.requireLocal().getNavigation(bookUrl)
-    const chapters = await this.getToc(sourceId, bookUrl)
-    return { chapters, items: planarNavigation(chapters) }
+    return this.content.navigation(sourceId, bookUrl)
   }
 
   // ── 正文 ─────────────────────────────────────────────────────────────
 
   /** 章节正文（**文字面**）：现有 AI 工具 / TXT 导出 / 阅读器的文字出口——经**唯一**投影
-   *  `chapterContentToText`（TXT 与在线文本逐字通过，幂等），不写第二份文字实现。 */
+   *  `chapterContentToText`（TXT 与在线文本同过一条行规约，幂等），不写第二份文字实现。 */
   async getChapter(sourceId: string, bookKey: string, chIndex: number, opts?: { refresh?: boolean }): Promise<string> {
     return chapterContentToText(await this.getChapterContent(sourceId, bookKey, chIndex, opts))
   }
@@ -873,13 +879,12 @@ export class ReadingService {
    * 章节正文（**图文面**）：本地 EPUB 返回规范化图文树（按需读该章的文档 JSON），
    * 本地 TXT 与在线书返回文字章。
    *
-   * 在线那条交给 `OnlineReading` 的文本路径：不在这里第二次规范化，也不让两者互调
-   * （互调 = 递归 + 双份归一，正文会按调用方向被处理两遍）。本地书的分流也归门面：
-   * dispatch 与工具面都不持 LOCAL 知识。
+   * 本地/在线分流与正文文字规约归 `BookContent`（`services/book-content.ts`），门面只委托；
+   * dispatch 与工具面都不持 LOCAL 知识。文字面（`getChapter`）仍经唯一投影
+   * `chapterContentToText`——text 分支再过一次行规约，幂等。
    */
   getChapterContent(sourceId: string, bookKey: string, chIndex: number, opts?: { refresh?: boolean }): Promise<ChapterContent> {
-    if (sourceId === LOCAL_SOURCE_ID) return this.requireLocal().getChapterContent(bookKey, chIndex)
-    return this.online.chapterText(sourceId, bookKey, chIndex, opts).then((text) => ({ kind: 'text', text }))
+    return this.content.chapterContent(sourceId, bookKey, chIndex, opts)
   }
 
   /** 收尾落盘：书架（防抖进度）+ 注册表（合并写）一并等齐 */

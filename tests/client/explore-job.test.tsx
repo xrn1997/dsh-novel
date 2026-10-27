@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react'
 import { ApiClientError } from '../../src/client/api.js'
 import { toRound, useExploreJob } from '../../src/client/explore-job.js'
+import { ROUTES } from '../../src/shared/wire.js'
 import type { ExploreBook, ExploreSnapshot } from '../../src/shared/wire.js'
 import { makeCoreDeps } from './fake-deps.js'
 import type { DepsOverrides } from './fake-deps.js'
@@ -101,8 +102,8 @@ describe('useExploreJob', () => {
   it('submit 带 sourceId：POST 的 body 是 { sourceId, kind } 两个字段', async () => {
     const calls: Array<{ path: string; body: unknown }> = []
     const deps = makeCoreDeps({
-      apiSend: vi.fn(async (_method: string, path: string, body: unknown) => {
-        calls.push({ path, body })
+      apiSend: vi.fn(async (target: { path: string }, body: unknown) => {
+        calls.push({ path: target.path, body })
         return { jobId: 'j1' }
       }),
     })
@@ -222,7 +223,7 @@ describe('useExploreJob · 续页（loadMore）', () => {
     act(() => { seen?.loadMore() })
     await waitFor(() => { expect(seen?.round?.running).toBe(true) })
     expect(deps.apiSend).toHaveBeenCalledTimes(1)
-    expect(deps.apiSend).toHaveBeenCalledWith('POST', 'explore/list/more')
+    expect(deps.apiSend).toHaveBeenCalledWith(ROUTES.exploreListMore)
     // 页码归服务端的下一个快照：本地自己加一，就是把「已 N 页」提前念成还没发生的事
     expect(seen?.round?.page).toBe(1)
   })

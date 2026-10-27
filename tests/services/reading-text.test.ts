@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeChapterText } from '../../src/services/online-reading.js'
+import { normalizeChapterText } from '../../src/services/chapter-content.js'
 
 /**
- * `normalizeChapterText` 的三条口径（`online-reading.ts` 的注释也这么写）此前**没有直接钉子**——
+ * `normalizeChapterText` 的三条口径（`chapter-content.ts` 的注释也这么写）此前**没有直接钉子**——
  * 它只被 `getChapter` 间接走到，而它塑造的是**每一章**的文字输出（正文/导出/工具三面同源）。
  * 早前的登记笔记把它记成「注释自称供测试/复用但无测试 import」，本文件把那句话兑现。
  */

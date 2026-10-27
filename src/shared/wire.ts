@@ -516,77 +516,104 @@ export const SEG = {
   warnings: 'warnings',
 } as const
 
-/** 双形态路由：path（客户端 fetch 用）与 segs（结构自洽校验用——服务端段匹配读的是运行时 URL
- *  切出来的段，不读这份 `ROUTES.*.segs`；把它当第二份权威是错的） */
-export interface Route { path: string; segs: string[] }
-export function route(...segs: string[]): Route { return { path: segs.join('/'), segs } }
+/** HTTP 方法：路由身份的第二条腿。与 path 同源，别再散到 dispatch 与客户端调用点两处。 */
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE'
+/** 写方法：写口只接受这三种；GET 只能走 apiGet / SSE，类型面直接挡住。 */
+export type WriteMethod = Exclude<HttpMethod, 'GET'>
 
-/** 静态路由表（无参数的部分，共 30 条；另有 5 条参数路由见 paramRoutes）——
- *  路由总数由 tests/shared/wire-builders.test.ts 钉死（此前的「17 条路由」注释既烂又无测试）。 */
+/** 路由身份：方法与路径绑成一个目标。写口只收这一份，不再让调用方分别传 method 与 path
+ *  （两参形式允许配错，且让 dispatch 的 guard 重述一遍 same shape）。 */
+export interface RouteTarget<M extends HttpMethod = HttpMethod> { method: M; path: string }
+/** 双形态路由：path（客户端 fetch 用）、segs（结构自洽校验用——服务端段匹配读的是运行时 URL
+ *  切出来的段，不读这份 `ROUTES.*.segs`；把它当第二份权威是错的）、method（写路由的身份）。
+ *  method 用字面量泛型保留：写口拿 `ROUTES.x` 时 tsc 能挡住「把 GET 路由交给 apiSend」。 */
+export interface Route<M extends HttpMethod = HttpMethod> extends RouteTarget<M> { segs: string[] }
+export function route<M extends HttpMethod>(method: M, ...segs: string[]): Route<M> {
+  return { method, path: segs.join('/'), segs }
+}
+
+/** 静态路由表（无参数的部分，共 30 条；另有 6 条参数操作见 paramOps）——
+ *  路由总数由 tests/shared/wire-builders.test.ts 钉死（此前的「17 条路由」注释既烂又无测试）。
+ *  方法随行：客户端写口取 `ROUTES.x.method`，dispatch 的 guard 读同一份。 */
 export const ROUTES = {
-  health: route(),
-  sources: route(SEG.sources),
-  sourcesImport: route(SEG.sources, SEG.import),
-  sourcesJobStatus: route(SEG.sources, SEG.jobStatus),
-  sourcesBatchProbe: route(SEG.sources, SEG.batchProbe),
-  sourcesBatchEnabled: route(SEG.sources, SEG.batchEnabled),
-  sourcesBatchDelete: route(SEG.sources, SEG.batchDelete),
-  search: route(SEG.search),
+  health: route('GET'),
+  sources: route('GET', SEG.sources),
+  sourcesImport: route('POST', SEG.sources, SEG.import),
+  sourcesJobStatus: route('GET', SEG.sources, SEG.jobStatus),
+  sourcesBatchProbe: route('POST', SEG.sources, SEG.batchProbe),
+  sourcesBatchEnabled: route('POST', SEG.sources, SEG.batchEnabled),
+  sourcesBatchDelete: route('POST', SEG.sources, SEG.batchDelete),
+  search: route('GET', SEG.search),
   /** 搜索参与计划：本次聚合搜索的真实参与者 ids——参与集的唯一主人在服务端，
    *  客户端不再为进度条自行重推导「哪些源参搜」（启停 invariant 单一定义） */
-  searchPlan: route(SEG.search, SEG.plan),
+  searchPlan: route('GET', SEG.search, SEG.plan),
   /** 聚合搜索后台任务：提交即由 Node 半跑完并持有结果（离开界面不影响它），读用 searchJobStatus，
    *  要「不等下一拍就看到」就用 searchJobStream（同一份快照的 SSE 推送，首帧是 baseline） */
-  searchJob: route(SEG.search, SEG.job),
-  searchJobStatus: route(SEG.search, SEG.jobStatus),
-  searchJobStream: route(SEG.search, SEG.jobStream),
+  searchJob: route('POST', SEG.search, SEG.job),
+  searchJobStatus: route('GET', SEG.search, SEG.jobStatus),
+  searchJobStream: route('GET', SEG.search, SEG.jobStream),
   /** 停止本轮聚合搜索：只停「还要去搜的源」，已搜出的命中一律保留（读面照旧可读） */
-  searchJobCancel: route(SEG.search, SEG.jobCancel),
+  searchJobCancel: route('POST', SEG.search, SEG.jobCancel),
   /** 按源列出的分类入口清单（本地派生，零网络请求，只出标题） */
-  exploreKinds: route(SEG.explore, SEG.kinds),
+  exploreKinds: route('GET', SEG.explore, SEG.kinds),
   /** 提交一轮分类抓取 */
-  exploreList: route(SEG.explore, SEG.list),
+  exploreList: route('POST', SEG.explore, SEG.list),
   /** 续页：把**当前这一轮**再打一页（同一轮 id，客户端整帧替换的读模型不因此换脸）；
    *  没有源还能再要一页时回 409——「加载更多」钮据此收掉，而不是假装又开了一轮 */
-  exploreListMore: route(SEG.explore, SEG.list, SEG.more),
+  exploreListMore: route('POST', SEG.explore, SEG.list, SEG.more),
   /** 分类轮次的全量快照（无游标——快照形状见 ExploreSnapshot 的注释） */
-  exploreListStatus: route(SEG.explore, SEG.list, SEG.jobStatus),
+  exploreListStatus: route('GET', SEG.explore, SEG.list, SEG.jobStatus),
   /** 分类轮次的状态信号流（SSE，每帧一份全量快照） */
-  exploreListStream: route(SEG.explore, SEG.list, SEG.jobStream),
-  book: route(SEG.book),
-  toc: route(SEG.toc),
-  chapter: route(SEG.chapter),
+  exploreListStream: route('GET', SEG.explore, SEG.list, SEG.jobStream),
+  book: route('GET', SEG.book),
+  toc: route('GET', SEG.toc),
+  chapter: route('GET', SEG.chapter),
   /** 目录导航：`chapters` 线性（旧 toc 口径）+ `items` 展示树（EPUB 原生 nav/NCX，
    *  其他书由 toc 派生）——沿用 toc 的 sourceId+url 入参 */
-  navigation: route(SEG.navigation),
-  shelf: route(SEG.shelf),
+  navigation: route('GET', SEG.navigation),
+  shelf: route('GET', SEG.shelf),
   /** 书架批量删除（多选）：body `{ keys: string[] }`（keys = bookKey，走 JSON body 故无需编码）；
    *  一趟删一批，替代客户端循环 N 次 DELETE shelf/:key——本地书连带删副本的 invariant 同单删一条 */
-  shelfBatchDelete: route(SEG.shelf, SEG.batchDelete),
-  exportBook: route(SEG.export),
-  localImport: route(SEG.local, SEG.import),
-  local: route(SEG.local),
+  shelfBatchDelete: route('POST', SEG.shelf, SEG.batchDelete),
+  exportBook: route('GET', SEG.export),
+  localImport: route('POST', SEG.local, SEG.import),
+  local: route('DELETE', SEG.local),
   /** 补充文档（脚注/附录）的图文正文：`id=bookKey` + `documentId` */
-  localDocument: route(SEG.local, SEG.document),
+  localDocument: route('GET', SEG.local, SEG.document),
   /** 本地资源（插图/封面）：`id=bookKey` + `resourceId`；只认不透明 ID，不接收路径 */
-  localResource: route(SEG.local, SEG.resource),
+  localResource: route('GET', SEG.local, SEG.resource),
   /** 导入说明（告警）：`id=bookKey`——按需查看，不随每次取章重复携带 */
-  localWarnings: route(SEG.local, SEG.warnings),
+  localWarnings: route('GET', SEG.local, SEG.warnings),
 } as const
 
-/** 参数路由（客户端填参；服务端按 SEG 段位匹配）。id 为注册表 uuid（无需编码）；
- *  bookKey 是 URL / local:<uuid>，必须编码。 */
-export const paramRoutes = {
-  sourceProbe: (id: string): string => `${ROUTES.sources.path}/${id}/${SEG.probe}`,
-  sourceEnabled: (id: string): string => `${ROUTES.sources.path}/${id}/${SEG.enabled}`,
-  sourceAuth: (id: string): string => `${ROUTES.sources.path}/${id}/${SEG.auth}`,
-  sourceDelete: (id: string): string => `${ROUTES.sources.path}/${id}`,
-  shelfKey: (bookKey: string): string => `${ROUTES.shelf.path}/${encodeURIComponent(bookKey)}`,
+/** 参数操作：方法与路径构造同住一行。`at(...)` 把两者绑成一个目标，客户端写口不再手写方法。
+ *  id 为注册表 uuid（无需编码）；bookKey 是 URL / local:<uuid>，必须编码。 */
+export interface ParamOperation<A extends unknown[], M extends WriteMethod = WriteMethod> {
+  readonly method: M
+  path(...args: A): string
+  at(...args: A): RouteTarget<M>
+}
+
+function paramOp<M extends WriteMethod, A extends unknown[]>(
+  method: M, path: (...args: A) => string,
+): ParamOperation<A, M> {
+  return { method, path, at: (...args) => ({ method, path: path(...args) }) }
+}
+
+const shelfKeyPath = (bookKey: string): string => `${ROUTES.shelf.path}/${encodeURIComponent(bookKey)}`
+
+export const paramOps = {
+  sourceProbe: paramOp('POST', (id: string) => `${ROUTES.sources.path}/${id}/${SEG.probe}`),
+  sourceEnabled: paramOp('POST', (id: string) => `${ROUTES.sources.path}/${id}/${SEG.enabled}`),
+  sourceAuth: paramOp('POST', (id: string) => `${ROUTES.sources.path}/${id}/${SEG.auth}`),
+  sourceDelete: paramOp('DELETE', (id: string) => `${ROUTES.sources.path}/${id}`),
+  shelfPut: paramOp('PUT', shelfKeyPath),
+  shelfDelete: paramOp('DELETE', shelfKeyPath),
 } as const
 
 // ── query 参数名与构造器 ───────────────────────────────────────────────
 // 此前参数名散在 dispatch 与四个 client 文件里各写一份，改名无处编译报错；
-// SearchView 曾手拼 `shelf/${...}` 绕过 paramRoutes（活漂移）。构造器把「参数名 + 字段取舍」
+// SearchView 曾手拼 `shelf/${...}` 绕过 paramOps（活漂移）。构造器把「参数名 + 字段取舍」
 // 收进契约：client 半 inline 本文件，故保持零运行时依赖（下面全是纯函数/常量）。
 
 /** query 参数名的唯一字面量来源：dispatch 的读取与构造器的写入同源 */

@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { SourceList } from '../../src/client/views/SettingsSourceList.js'
 import { makeDeps } from './fake-deps.js'
 import { resetSourceListUi } from '../../src/client/source-list.js'
-import { bodies, paramRoutes } from '../../src/shared/wire.js'
+import { bodies, paramOps } from '../../src/shared/wire.js'
 import type { SourcePublic } from '../../src/client/views/types.js'
 
 /** loginUi 的 text/password/button 渲染与提交（@js 生成与 webView 行仍按矩阵 b-login-ui 记 open）。 */
@@ -53,8 +53,7 @@ describe('SourceAuthPane 的 loginUi 文本/密码行', () => {
 
     await waitFor(() => expect(deps.apiSend).toHaveBeenCalledTimes(1))
     expect(deps.apiSend).toHaveBeenCalledWith(
-      'POST',
-      paramRoutes.sourceAuth('s1'),
+      paramOps.sourceAuth.at('s1'),
       bodies.authLoginInfo({ user: 'alice', pass: 'secret' }),
     )
     expect(deps.pushOk).toHaveBeenCalledWith('已保存登录态')
@@ -77,8 +76,8 @@ describe('SourceAuthPane 的 loginUi 文本/密码行', () => {
     fireEvent.click(screen.getByRole('button', { name: '打开' }))
 
     await waitFor(() => expect(apiSend).toHaveBeenCalledTimes(2))
-    expect(apiSend).toHaveBeenNthCalledWith(1, 'POST', paramRoutes.sourceAuth('s1'), bodies.authLoginInfo({ user: 'alice' }))
-    expect(apiSend).toHaveBeenNthCalledWith(2, 'POST', paramRoutes.sourceAuth('s1'), bodies.loginAction('打开'))
+    expect(apiSend).toHaveBeenNthCalledWith(1, paramOps.sourceAuth.at('s1'), bodies.authLoginInfo({ user: 'alice' }))
+    expect(apiSend).toHaveBeenNthCalledWith(2, paramOps.sourceAuth.at('s1'), bodies.loginAction('打开'))
     expect(open).toHaveBeenCalledWith('https://login.example/x', '_blank', 'noopener,noreferrer')
     expect(deps.pushOk).not.toHaveBeenCalled()
     expect(onChanged).not.toHaveBeenCalled()
@@ -97,7 +96,7 @@ describe('SourceAuthPane 的 loginUi 文本/密码行', () => {
     fireEvent.click(screen.getByRole('button', { name: '执行' }))
 
     await waitFor(() => expect(apiSend).toHaveBeenCalledTimes(1))
-    expect(apiSend).toHaveBeenCalledWith('POST', paramRoutes.sourceAuth('s1'), bodies.loginAction('执行'))
+    expect(apiSend).toHaveBeenCalledWith(paramOps.sourceAuth.at('s1'), bodies.loginAction('执行'))
     await waitFor(() => expect(deps.pushOk).toHaveBeenCalledWith('按钮动作已执行'))
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
   })

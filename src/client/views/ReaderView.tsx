@@ -1,31 +1,30 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { LOCAL_SOURCE_ID, bodies, paramRoutes, queries, ROUTES } from '../../shared/wire.js'
+import { LOCAL_SOURCE_ID, bodies, paramOps, queries } from '../../shared/wire.js'
 import { describeError } from '../api.js'
 import { plural, useCopy } from '../copy/index.js'
 import { prodReaderDeps } from '../deps.js'
+import { markPanelShelfLanded, readPanelShelf } from '../panel-shelf.js'
 import type { ReaderDeps } from '../deps.js'
 import { applyPreset, createExportRun, draftOf, IDLE_EXPORT, validRangeOf } from '../export-run.js'
 import type { ExportDraft, ExportRunState, RangeParse } from '../export-run.js'
 import { navigate, prefsStore, setPref, useStore } from '../store.js'
 import { FONT_STEPS, LINE_HEIGHTS, MEASURES, PAPER_PRESETS } from '../prefs-ui.js'
-import type { ChapterAnchor } from '../progress.js'
 import { ReaderScene } from '../reader-scene.js'
 import { ReaderSession } from '../reader-session.js'
 import type { ReaderPort, VisibleNode } from '../reader-session.js'
 import { escOwner, maskFor } from '../reader-surfaces.js'
 import { nextChapterIndex } from '../reader-load.js'
-import {
-  contentOriginTop, findScrollport, portScrollHeight, portScrollTop, portViewHeight, portViewTop, setPortScrollTop,
-} from '../scrollport.js'
+import { createReaderGeometry } from '../reader-geometry.js'
+import { findScrollport } from '../scrollport.js'
 import { addShelfSeat } from '../shelf-action.js'
-import { paperInk, findNovelNode, novelNodes, centerInScroller, stripLeadingTitle } from '../util.js'
+import { paperInk, centerInScroller, stripLeadingTitle } from '../util.js'
 import { ErrorBanner, WarningList } from './bits.js'
 import { ChapterBody } from './ChapterBody.js'
 import { Dialog } from './dialog.js'
 import { ReaderNavigation } from './ReaderNavigation.js'
 import { ReaderNotes } from './ReaderNotes.js'
-import type { BookNavigation, ChapterContent, LocalImportWarning, ShelfBook } from './types.js'
+import type { BookNavigation, ChapterContent, LocalImportWarning } from './types.js'
 
 /** 正文层字色由纸张色算：纯函数住址在 util.ts，此处只接线。 */
 
@@ -219,24 +218,6 @@ export function ImportNotesPanel({ warnings, onClose }: {
   )
 }
 
-/** 视口顶所在的正文节点：取「视口顶已越过」的节点里最靠下的那个（视口顶就在它内部或它之后）；
- *  一个都没越过（视口还在第一个节点之上）→ 取文档顺序里第一个。没有可定位节点（文字章）→ null。 */
-function currentNodeOf(blocks: Array<HTMLDivElement | null>, viewTop: number): VisibleNode | null {
-  let best: { index: number; nodeId: string; top: number } | undefined
-  let first: { index: number; nodeId: string; top: number } | undefined
-  blocks.forEach((block, index) => {
-    for (const el of novelNodes(block)) {
-      const nodeId = el.getAttribute('data-novel-node')
-      if (nodeId === null) continue
-      const cand = { index, nodeId, top: el.getBoundingClientRect().top - viewTop }
-      if (first === undefined) first = cand
-      if (cand.top <= 0 && (best === undefined || cand.top > best.top)) best = cand
-    }
-  })
-  const hit = best ?? first
-  return hit === undefined ? null : { index: hit.index, nodeId: hit.nodeId, offsetWithinNode: -hit.top }
-}
-
 /**
  * 阅读器：连续滚动流（章章首尾相接）。两块状态各有主人——阅读时序归「阅读会话」
  * （reader-session.ts），浮层/注释载荷/Esc/离开一问/入架写入归「阅读场景」（reader-scene.ts）；
@@ -262,41 +243,11 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   const portRef = useRef<HTMLElement | null>(null)                     // 真实滚动容器缓存（内容变化时刷新）
   const chapterRefs = useRef<Array<HTMLDivElement | null>>([])
 
-  /** DOM 测量口：会话只读不碰 DOM——测量语义（两套坐标系不许混用）全在这一个对象里 */
-  const readerPort = useMemo<ReaderPort>(() => ({
-    measureAnchors: (): ChapterAnchor[] => {
-      // 锚点 = 章块相对「滚动内容原点」的偏移 + **该章渲染高度**（跨度的唯一来源：存与取
-      // 都用它，两个方向才互逆）。不能用 offsetTop：宿主的滚动容器在阅读器之外，
-      // 两套坐标系混用会让 locateChapter 恒判第 0 章（进度不落地）
-      const origin = contentOriginTop(portRef.current)
-      const list: ChapterAnchor[] = []
-      chapterRefs.current.forEach((el, i) => {
-        if (el !== null && el !== undefined) {
-          const rect = el.getBoundingClientRect()
-          list.push({ index: i, start: rect.top - origin, height: rect.height })
-        }
-      })
-      return list
-    },
-    scrollTop: () => portScrollTop(portRef.current),
-    setScrollTop: (px) => setPortScrollTop(portRef.current, px),
-    viewHeight: () => portViewHeight(portRef.current),
-    scrollHeight: () => portScrollHeight(portRef.current),
-    sentinelOffset: () => {
-      const sentinel = sentinelRef.current
-      if (sentinel === null) return null
-      return sentinel.getBoundingClientRect().top - portViewTop(portRef.current)
-    },
-    /** 目标 = 章块顶（anchorId null）或章内那个锚点节点；两者相对**滚动视口顶**。
-     *  章块/节点不在 DOM → null（会话据此不落位、等下一轮）。 */
-    targetOffset: (index, anchorId) => {
-      const block = chapterRefs.current[index]
-      if (block === null || block === undefined) return null
-      const target = anchorId === null ? block : findNovelNode(block, anchorId)
-      if (target === null) return null
-      return target.getBoundingClientRect().top - portViewTop(portRef.current)
-    },
-    currentNode: () => currentNodeOf(chapterRefs.current, portViewTop(portRef.current)),
+  /** DOM 测量口：会话只读不碰 DOM——几何语义全在 `reader-geometry`，视图只交 ref 读数。 */
+  const readerPort = useMemo<ReaderPort>(() => createReaderGeometry({
+    port: () => portRef.current,
+    sentinel: () => sentinelRef.current,
+    chapters: () => chapterRefs.current,
   }), [])
 
   /** 会话依赖束：网络 + 帧调度（rAF 双帧 = 等布局落定再测量）；网络走注入 deps。
@@ -306,14 +257,17 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   const session = useMemo(() => new ReaderSession({
     fetchNavigation: (s, b) => deps.apiGet<BookNavigation>(queries.navigation({ sourceId: s, url: b })),
     fetchChapter: (s, b, i) => deps.apiGet<ChapterContent>(queries.chapter({ sourceId: s, url: b, index: i })),
-    fetchShelf: () => deps.apiGet<ShelfBook[]>(ROUTES.shelf.path),
+    fetchShelf: () => readPanelShelf({
+      apiGet: deps.apiGet,
+      describeError: (e: unknown): string => describeError(e, t),
+    }, bookKey),
     saveProgress: (chapterIndex, offsetRatio) => {
-      void deps.apiSend('PUT', paramRoutes.shelfKey(bookKey), bodies.shelfProgress(chapterIndex, offsetRatio)).catch(() => undefined)
+      void deps.apiSend(paramOps.shelfPut.at(bookKey), bodies.shelfProgress(chapterIndex, offsetRatio)).catch(() => undefined)
     },
     saveTotalChapters: (total) => {
       // 幂等补数据：缺 totalChapters 才回写；patch 形态只发这一个字段——
       // 保值语义在 Shelf.update 的 interface 上，不再被迫重发 sourceId+title
-      void deps.apiSend('PUT', paramRoutes.shelfKey(bookKey),
+      void deps.apiSend(paramOps.shelfPut.at(bookKey),
         bodies.shelfPatch({ totalChapters: total })).catch(() => undefined)
     },
     afterFrames: (cb) => { requestAnimationFrame(() => requestAnimationFrame(cb)) },
@@ -338,7 +292,11 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     session, sourceId, bookKey, title,
     tocLength: () => tocLenRef.current,
     navigate,
-    addSeat: (input) => addShelfSeat(input, deps),
+    addSeat: async (input) => {
+      const outcome = await addShelfSeat(input, deps)
+      if (outcome.ok) markPanelShelfLanded([input.url])
+      return outcome
+    },
     pushOk: deps.pushOk, t,
   }), [session, sourceId, bookKey, title, deps, t])
   // 第三参 = getServerSnapshot：renderToString（smoke/SSR）必需，缺了直接抛

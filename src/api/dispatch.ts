@@ -7,7 +7,8 @@ import { log } from '../services/log.js'
 import { formatByteLimit } from '../services/size.js'
 import { readValue, type ValueSource } from '../services/value-source.js'
 import { ApiError, isTrustedRequest, readCappedBody, readJsonBody, writeError, writeOk } from './wire.js'
-import { NOVEL_API_PREFIX, PARAMS, paramRoutes, readBodies, ROUTES, SEG } from '../shared/wire.js'
+import { NOVEL_API_PREFIX, PARAMS, paramOps, readBodies, ROUTES, SEG } from '../shared/wire.js'
+import type { RouteTarget } from '../shared/wire.js'
 import { BodyShapeError } from '../shared/wire.js'
 
 /** 「书不在架上」文案单点（此前 shelfPut 两形态逐字两份） */
@@ -85,14 +86,14 @@ async function route(
 
   // 健康检查（GET /novel-api）
   if (segs.length === 0) {
-    guard(method, 'GET', 'sources 面之外仅 GET / 健康检查')
+    guard(method, { method: ROUTES.health.method, path: NOVEL_API_PREFIX })
     writeOk(res, { name: 'dsh-novel', apiVersion: 1 })
     return
   }
 
   if (a === SEG.sources) {
     if (b === undefined) {
-      if (method === 'GET') {
+      if (method === ROUTES.sources.method) {
         writeOk(res, service.listPublicSources())
         return
       }
@@ -100,7 +101,7 @@ async function route(
       throw methodNotAllowed(method, ROUTES.sources.path, '导入走 POST /sources/import')
     }
     if (b === SEG.import) {
-      guard(method, 'POST', ROUTES.sourcesImport.path)
+      guard(method, ROUTES.sourcesImport)
       // 真实多源导出常见数 MB 级——上限 32MB，默认 1MB 会把最大流量的包挡在门外
       const body = await readJsonBody<Record<string, unknown> | null>(req, null, 32 * 1024 * 1024)
       writeOk(res, service.startImportJob(readBodies.import(body).files))
@@ -108,29 +109,29 @@ async function route(
     }
     if (b === SEG.jobStatus) {
       // 任务结束后结果保留到下一个任务开始——关设置/刷新页面后重挂载即可恢复展示
-      guard(method, 'GET', ROUTES.sourcesJobStatus.path)
+      guard(method, ROUTES.sourcesJobStatus)
       writeOk(res, { job: service.jobStatus() })
       return
     }
     if (b === SEG.batchProbe) {
-      guard(method, 'POST', ROUTES.sourcesBatchProbe.path)
+      guard(method, ROUTES.sourcesBatchProbe)
       const body = await readJsonBody<Record<string, unknown> | null>(req, null)
       writeOk(res, service.startBatchProbeJob(readBodies.ids(body)))
       return
     }
     if (c === SEG.probe) {
-      guard(method, 'POST', paramRoutes.sourceProbe(b))
+      guard(method, paramOps.sourceProbe.at(b))
       writeOk(res, await service.probe(b))
       return
     }
     if (c === SEG.auth) {
-      guard(method, 'POST', paramRoutes.sourceAuth(b))
+      guard(method, paramOps.sourceAuth.at(b))
       await authRoute(service, b, req, res)
       return
     }
     if (c === SEG.enabled) {
       // 单源启停：停用 = 不参与聚合搜索，试跑/验证不受影响
-      guard(method, 'POST', paramRoutes.sourceEnabled(b))
+      guard(method, paramOps.sourceEnabled.at(b))
       const body = await readJsonBody<Record<string, unknown> | null>(req, null)
       const enabled = readBodies.enabled(body)
       // 未知 id 由门面抛 SourceNotFoundError；classify 的表把它投影成 404 NotFound，
@@ -140,7 +141,7 @@ async function route(
       return
     }
     if (b === SEG.batchEnabled) {
-      guard(method, 'POST', ROUTES.sourcesBatchEnabled.path)
+      guard(method, ROUTES.sourcesBatchEnabled)
       const body = await readJsonBody<Record<string, unknown> | null>(req, null)
       const { ids, enabled } = readBodies.batchEnabled(body)
       // 未知 id 静默跳过、重复 id 幂等；一次 edit 一次合并落盘——配方知识归门面动词
@@ -150,13 +151,13 @@ async function route(
     }
     if (b === SEG.batchDelete) {
       // 批量删除：门面动词（一次 edit 合并落盘），替代逐删逐写的 N 次全量重写
-      guard(method, 'POST', ROUTES.sourcesBatchDelete.path)
+      guard(method, ROUTES.sourcesBatchDelete)
       const body = await readJsonBody<Record<string, unknown> | null>(req, null)
       const removed = await service.removeSources(readBodies.ids(body))
       writeOk(res, { removed })
       return
     }
-    if (c === undefined && method === 'DELETE') {
+    if (c === undefined && method === paramOps.sourceDelete.method) {
       const removed = await service.removeSource(b)
       writeOk(res, { removed })
       return
@@ -167,13 +168,13 @@ async function route(
   // ── reading 面（query 驱动， GET）────────────────────────────────────
   if (a === SEG.search && b === SEG.plan) {
     // 搜索参与计划：参与集唯一主人在服务端——客户端分批/进度按此走
-    guard(method, 'GET', ROUTES.searchPlan.path)
+    guard(method, ROUTES.searchPlan)
     writeOk(res, service.searchPlan())
     return
   }
   if (a === SEG.search && b === SEG.job) {
     // 提交即由 Node 半跑完并持有整轮结果——浏览器半只负责看，切界面不再作废在途搜索
-    guard(method, 'POST', ROUTES.searchJob.path)
+    guard(method, ROUTES.searchJob)
     const body = await readJsonBody<Record<string, unknown> | null>(req, null)
     const { keyword, sourceIds } = readBodies.searchJob(body)
     writeOk(res, service.startSearchJob(keyword, sourceIds === undefined ? undefined : { sourceIds }))
@@ -181,7 +182,7 @@ async function route(
   }
   if (a === SEG.search && b === SEG.jobCancel) {
     // 停止 ≠ 放弃：本轮立即进终态（不再开新的源），已搜出的分组仍留在读面可翻
-    guard(method, 'POST', ROUTES.searchJobCancel.path)
+    guard(method, ROUTES.searchJobCancel)
     writeOk(res, service.cancelSearchJob())
     return
   }
@@ -190,7 +191,7 @@ async function route(
     // 终态即关流。断线重连 = 重起一条并带已收到的游标——「推送不 replay、显式 query 才是真相」这
     // 条口径由推送与轮询两通道共用同一游标兑现（since 语义与游标兜底由 tests/api/dispatch-reading.test.ts 钉住），
     // 客户端的合并代码因此只有一份。
-    guard(method, 'GET', ROUTES.searchJobStream.path)
+    guard(method, ROUTES.searchJobStream)
     const raw = Number(url.searchParams.get(PARAMS.since) ?? '0')
     let cursor = Number.isInteger(raw) && raw > 0 ? raw : 0
     // 游标只在这一面推进（发现面没有游标这回事）：它是 `frame` 闭包里的私有状态，机械不认识
@@ -202,13 +203,13 @@ async function route(
     return
   }
   if (a === SEG.search && b === SEG.jobStatus) {
-    guard(method, 'GET', ROUTES.searchJobStatus.path)
+    guard(method, ROUTES.searchJobStatus)
     const since = Number(url.searchParams.get(PARAMS.since) ?? '0')
     writeOk(res, { job: service.searchJobSnapshot(Number.isInteger(since) && since > 0 ? since : 0) })
     return
   }
   if (a === SEG.search && b === undefined) {
-    guard(method, 'GET', ROUTES.search.path)
+    guard(method, ROUTES.search)
     // 「关键词去空白后非空才算在场」这一把尺在两条入口上是同一把：body 那侧住 `readBodies.searchJob`，
     // query 这侧走 requireQuery（它同时是「缺 query 参数 X」这句措辞的唯一家）
     const [keyword] = requireQuery(url, PARAMS.keyword)
@@ -221,7 +222,7 @@ async function route(
     // 清单是本地派生（按源列出各自声明的分类入口标题，主人 `services/explore.ts` 的
     // `deriveExploreSources`），零网络请求——参与集判据归门面。
     // **只出标题、不出入口地址**：两方言的地址语义不同，那份差异不外泄到跨半契约（`ExploreSources`）
-    guard(method, 'GET', ROUTES.exploreKinds.path)
+    guard(method, ROUTES.exploreKinds)
     writeOk(res, service.exploreSources())
     return
   }
@@ -230,7 +231,7 @@ async function route(
     // **浏览轴是「先点名一个源、逛它自己的分类」**（`docs/adr/0028`）：两个点名都进 body，
     // 缺任何一个都是路由自检的 body 形状判据（400 BadRequest 点名缺哪个）；点了个不存在的源
     // 则由门面的值域判据抛错，经同一份映射落成同一个状态码——路由不复制那份判据。
-    guard(method, 'POST', ROUTES.exploreList.path)
+    guard(method, ROUTES.exploreList)
     const body = await readJsonBody<Record<string, unknown> | null>(req, null)
     const { sourceId, kind } = readBodies.exploreList(body)
     writeOk(res, service.startExploreJob(sourceId, kind))
@@ -239,7 +240,7 @@ async function route(
   if (a === SEG.explore && b === SEG.list && c === SEG.more) {
     // 续页：同一轮再要一页。门面说「没得发」就是**没有更多**——回 409 而不是静默成功，
     // 客户端据此把按钮收掉；假装又加载了一轮是拿假事实喂 UI。
-    guard(method, 'POST', ROUTES.exploreListMore.path)
+    guard(method, ROUTES.exploreListMore)
     const r = service.loadMoreExploreJob()
     if (r === null) throw new ApiError('没有更多了', 409, 'Conflict')
     writeOk(res, r)
@@ -247,14 +248,14 @@ async function route(
   }
   if (a === SEG.explore && b === SEG.list && c === SEG.jobStatus) {
     // 全量快照（跨页累积住在服务端持有者，整帧替换才读得出「这一轮到此刻」——见 ExploreSnapshot）
-    guard(method, 'GET', ROUTES.exploreListStatus.path)
+    guard(method, ROUTES.exploreListStatus)
     writeOk(res, { job: service.exploreJobSnapshot() })
     return
   }
   if (a === SEG.explore && b === SEG.list && c === SEG.jobStream) {
     // 与 search 流同一份形状：每帧都是同一份快照，终态即关流。但**这一条流的订阅者不认帧的 id**：
     // 发现面整帧替换（CONTEXT「整帧替换」、`client/explore-job.ts` 的 `apply`），search 面才按 id 验身份。
-    guard(method, 'GET', ROUTES.exploreListStream.path)
+    guard(method, ROUTES.exploreListStream)
     openJobStream(res, (notify) => service.subscribeExploreJob(notify), () => {
       const job = service.exploreJobSnapshot()
       return { job, done: job !== null && job.phase !== 'running' }
@@ -263,27 +264,27 @@ async function route(
   }
 
   if (a === SEG.book && b === undefined) {
-    guard(method, 'GET', ROUTES.book.path)
+    guard(method, ROUTES.book)
     const { sourceId, url: bookUrl } = requireSourceUrl(url)
     writeOk(res, await service.getDetail(sourceId, bookUrl))
     return
   }
   if (a === SEG.toc && b === undefined) {
-    guard(method, 'GET', ROUTES.toc.path)
+    guard(method, ROUTES.toc)
     const { sourceId, url: bookUrl } = requireSourceUrl(url)
-    // 本地书分流归门面：__local__ 不查注册表，路由层零 LOCAL 知识
+    // 本地书分流归书内容读面：__local__ 不查注册表，路由层零 LOCAL 知识
     writeOk(res, await service.getToc(sourceId, bookUrl, { refresh: url.searchParams.get(PARAMS.refresh) === '1' }))
     return
   }
   if (a === SEG.navigation && b === undefined) {
-    guard(method, 'GET', ROUTES.navigation.path)
+    guard(method, ROUTES.navigation)
     const { sourceId, url: bookUrl } = requireSourceUrl(url)
     // 目录树读面：chapters 线性 + items 展示树（EPUB 原生目录；其他书由 toc 派生平面导航）
     writeOk(res, await service.getNavigation(sourceId, bookUrl))
     return
   }
   if (a === SEG.chapter && b === undefined) {
-    guard(method, 'GET', ROUTES.chapter.path)
+    guard(method, ROUTES.chapter)
     const { sourceId, url: bookUrl } = requireSourceUrl(url)
     const indexRaw = url.searchParams.get(PARAMS.index)
     if (indexRaw === null || !/^\d+$/.test(indexRaw)) {
@@ -299,20 +300,20 @@ async function route(
     if (b === SEG.batchDelete) {
       // 书架批量删除（多选）：一趟删一批。本地书副本连删的 invariant 归门面 removeBooks——
       // 与单删 removeBook 同一条，路由只做 body 校验与信封。bookKey 走 JSON body，不必编码。
-      guard(method, 'POST', ROUTES.shelfBatchDelete.path)
+      guard(method, ROUTES.shelfBatchDelete)
       const body = await readJsonBody<Record<string, unknown> | null>(req, null)
       writeOk(res, await service.removeBooks(readBodies.keys(body)))
       return
     }
-    if (b === undefined && method === 'GET') {
+    if (b === undefined && method === ROUTES.shelf.method) {
       writeOk(res, service.shelfList())
       return
     }
-    if (b !== undefined && method === 'PUT') {
+    if (b !== undefined && method === paramOps.shelfPut.method) {
       await shelfPut(service, decodeSegKey(b), req, res)
       return
     }
-    if (b !== undefined && method === 'DELETE') {
+    if (b !== undefined && method === paramOps.shelfDelete.method) {
       // 本地书连带删文件（防孤儿 invariant）已归门面 removeBook——路由只剩键解码与信封
       writeOk(res, await service.removeBook(decodeSegKey(b)))
       return
@@ -322,7 +323,7 @@ async function route(
 
   // ── 章节范围导出（流式，from/to 缺席 = 全本）──────────────────────────
   if (a === SEG.export) {
-    guard(method, 'GET', ROUTES.exportBook.path)
+    guard(method, ROUTES.exportBook)
     const { sourceId, url: bookUrl } = requireSourceUrl(url)
     const title = url.searchParams.get(PARAMS.title)?.trim() || '未命名'
     // 范围参数（1 基含端）：非整数 = 400（先于目录抓取，快速失败）；缺席 = 全本默认
@@ -388,7 +389,7 @@ async function route(
   // ── 本地书（TXT / EPUB）面 ────────────────────────────────────────────
   if (a === SEG.local) {
     if (b === SEG.import) {
-      guard(method, 'POST', ROUTES.localImport.path)
+      guard(method, ROUTES.localImport)
       const [name] = requireQuery(url, PARAMS.name)
       const max = service.localImportMaxBytes
       // 流读与上限判据归 readCappedBody（与 JSON 信封体同一份实现），本处只给措辞
@@ -399,20 +400,20 @@ async function route(
     }
     if (b === SEG.document) {
       // 补充文档（脚注/附录）的图文正文：`id=bookKey` + `documentId`
-      guard(method, 'GET', ROUTES.localDocument.path)
+      guard(method, ROUTES.localDocument)
       const [id, documentId] = requireQuery(url, PARAMS.id, PARAMS.documentId)
       writeOk(res, await service.getLocalSupplement(id, documentId))
       return
     }
     if (b === SEG.warnings) {
       // 导入说明按需查看（不随每次取章重复携带）
-      guard(method, 'GET', ROUTES.localWarnings.path)
+      guard(method, ROUTES.localWarnings)
       const [id] = requireQuery(url, PARAMS.id)
       writeOk(res, await service.getLocalImportWarnings(id))
       return
     }
     if (b === SEG.resource) {
-      guard(method, 'GET', ROUTES.localResource.path)
+      guard(method, ROUTES.localResource)
       const [id, resourceId] = requireQuery(url, PARAMS.id, PARAMS.resourceId)
       // 资源读口只认不透明 ID（查资源表 → 打开文件）：查不到/文件不在都在**发头之前**抛（404）
       const resource = await service.getLocalResource(id, resourceId)
@@ -437,7 +438,7 @@ async function route(
     }
     // 注：id 在 query（DELETE /novel-api/local?id=…，测试钉死），不是路径段——b === 'id' 不匹配任何 segs
     if (b === undefined) {
-      guard(method, 'DELETE', ROUTES.local.path)
+      guard(method, ROUTES.local)
       const [id] = requireQuery(url, PARAMS.id)
       writeOk(res, await service.removeLocalBook(id))
       return
@@ -549,8 +550,12 @@ async function authRoute(service: ReadingService, id: string, req: IncomingMessa
   writeOk(res, { auth: true })
 }
 
-function guard(method: string, want: string, what: string): void {
-  if (method !== want) throw new ApiError(`方法不允许: ${method}（${what} 需 ${want}）`, 405, 'MethodNotAllowed')
+/** 方法守卫：目标自带方法与路径（静态路由直接给 `Route`，参数路由给 `paramOps.x.at(...)`），
+ *  调用点不再手写方法字面量。 */
+function guard(method: string, route: RouteTarget): void {
+  if (method !== route.method) {
+    throw new ApiError(`方法不允许: ${method}（${route.path} 需 ${route.method}）`, 405, 'MethodNotAllowed')
+  }
 }
 
 /** 「未知路由」404 的唯一措辞处。三个落点各写一遍时，改前缀必然漏改一处——而

@@ -16,7 +16,7 @@ import type { Page } from '../../src/services/bridge.js'
 /**
  * 在线阅读管线的接缝测试：只拼 `OnlineReading` 需要的五件部件（源查找 / 书架 / 文件缓存 /
  * 源请求 / 源求值），用假 `SourceRequest` 驱动页面，不起 HTTP 门面服务。
- * 门面一侧的本地书分流与委托冒烟住 `tests/services/reading.test.ts`。
+ * 门面一侧的委托与书内容读面冒烟住 `tests/services/reading.test.ts` 与 `tests/services/book-content.test.ts`。
  */
 
 const BASE = 'https://s.com'

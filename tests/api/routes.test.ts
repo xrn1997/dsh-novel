@@ -7,7 +7,7 @@ import { createFetcher } from '../../src/services/fetcher.js'
 import { CookieJar } from '../../src/services/cookies.js'
 import { startServer } from './helpers.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
-import { NOVEL_API_PREFIX, paramRoutes, ROUTES, SEG } from '../../src/shared/wire.js'
+import { NOVEL_API_PREFIX, paramOps, ROUTES, SEG } from '../../src/shared/wire.js'
 
 /**
  * 路由契约测试：
@@ -80,14 +80,11 @@ describe('路由契约：ROUTES → 真实 dispatch 落点', () => {
     expect(bd.json.value.removed).toBe(0)
   })
 
-  it('已知 POST-only 子路由用错方法 → 405（此前 404-未知路由）', async () => {
-    for (const r of [ROUTES.sourcesImport, ROUTES.sourcesBatchProbe, ROUTES.sourcesBatchEnabled, ROUTES.sourcesBatchDelete, ROUTES.shelfBatchDelete, ROUTES.localImport, ROUTES.searchJob, ROUTES.searchJobCancel]) {
-      const res = await call(r.path, 'GET')
+  it('已知路由用错方法 → 405（此前 404-未知路由；错方法取路由表之外的 PATCH，不从被测表自己派生）', async () => {
+    for (const r of [ROUTES.sourcesImport, ROUTES.sourcesBatchProbe, ROUTES.sourcesBatchEnabled, ROUTES.sourcesBatchDelete, ROUTES.shelfBatchDelete, ROUTES.localImport, ROUTES.searchJob, ROUTES.searchJobCancel, ROUTES.sourcesJobStatus, ROUTES.searchJobStatus]) {
+      const res = await call(r.path, 'PATCH')
       expect(res.status, r.path).toBe(405)
       expect(res.json.error.code, r.path).toBe('MethodNotAllowed')
-    }
-    for (const r of [ROUTES.sourcesJobStatus, ROUTES.searchJobStatus]) {
-      expect((await call(r.path, 'POST')).status, r.path).toBe(405)
     }
   })
 
@@ -122,7 +119,7 @@ describe('路由契约：ROUTES → 真实 dispatch 落点', () => {
 
     expect((await call(ROUTES.shelf.path, 'GET')).status).toBe(200)
 
-    const shelfPut = await call(paramRoutes.shelfKey('k'), 'PUT', {})
+    const shelfPut = await call(paramOps.shelfPut.path('k'), 'PUT', {})
     expect(shelfPut.status).toBe(400)
     expect(landed(shelfPut)).toBe(true)
 
@@ -174,16 +171,16 @@ describe('路由契约：ROUTES → 真实 dispatch 落点', () => {
   it('参数路由落点（段位匹配）', async () => {
     // probe / enabled / auth 带不存在的 id → 落在「源不存在」404（不是未知路由）
     const cases: Array<[string, unknown]> = [
-      [paramRoutes.sourceProbe('nope'), {}],
-      [paramRoutes.sourceEnabled('nope'), { enabled: true }],
-      [paramRoutes.sourceAuth('nope'), {}],
+      [paramOps.sourceProbe.path('nope'), {}],
+      [paramOps.sourceEnabled.path('nope'), { enabled: true }],
+      [paramOps.sourceAuth.path('nope'), {}],
     ]
     for (const [route, body] of cases) {
       const res = await call(route, 'POST', body)
       expect(res.status, route).toBe(404)
       expect(res.json.error.message.startsWith('源不存在'), route).toBe(true)
     }
-    const del = await call(paramRoutes.sourceDelete('nope'), 'DELETE')
+    const del = await call(paramOps.sourceDelete.path('nope'), 'DELETE')
     expect(del.status).toBe(200)
     expect(del.json.value).toEqual({ removed: false })
   })
@@ -198,7 +195,7 @@ describe('路由契约：ROUTES → 真实 dispatch 落点', () => {
   it('SEG 每一段都被某条路由使用（单一真相自洽：无孤儿段、无手抄段）', () => {
     const used = new Set<string>()
     for (const r of Object.values(ROUTES)) for (const s of r.segs) used.add(s)
-    for (const f of Object.values(paramRoutes)) for (const s of f('x').split('/')) used.add(s)
+    for (const op of Object.values(paramOps)) for (const s of op.path('x').split('/')) used.add(s)
     for (const [name, seg] of Object.entries(SEG)) {
       expect(used.has(seg), `SEG.${name}（${seg}）未被任何路由使用`).toBe(true)
     }

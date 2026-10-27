@@ -7,8 +7,9 @@ import { ApiClientError } from '../../src/client/api.js'
 import { CopyProvider, enTranslate } from '../../src/client/copy/index.js'
 import { CityBookSheet } from '../../src/client/views/CityBookSheet.js'
 import { CityView } from '../../src/client/views/CityView.js'
+import { panelShelf, resetPanelShelf } from '../../src/client/panel-shelf.js'
 import { cityStore } from '../../src/client/store.js'
-import { ROUTES, paramRoutes } from '../../src/shared/wire.js'
+import { ROUTES, paramOps } from '../../src/shared/wire.js'
 import type { ExploreBook, SearchGroup, SearchJobSnapshot } from '../../src/shared/wire.js'
 import { makeCoreDeps } from './fake-deps.js'
 import type { DepsOverrides, FakeViewDeps } from './fake-deps.js'
@@ -57,14 +58,14 @@ const serve = (sourceId: string, kind: string): unknown => ({
   ...snap, sourceId, sourceName: sources.sources.find((s) => s.id === sourceId)?.name ?? '', kind,
 })
 
-beforeEach(() => { submitted.length = 0; current = null })
+beforeEach(() => { submitted.length = 0; current = null; resetPanelShelf() })
 afterEach(() => { cleanup(); cityStore.set({ sourceId: null, kind: null }) })
 
 const depsOf = (over: DepsOverrides = {}) => makeCoreDeps({
   apiGet: vi.fn(async (p: string) => (p.includes('kinds') ? sources : { job: current })),
-  apiSend: vi.fn(async (m: string, p: string, body: { sourceId: string; kind: string }) => {
-    if (p === 'explore/list/more') return { jobId: 'j1' }   // 续页：不是提交，也不动 current
-    if (m === 'PUT') return {}                              // 入架：写的是书架，与这一轮的读面无关
+  apiSend: vi.fn(async (target: { method: string; path: string }, body: { sourceId: string; kind: string }) => {
+    if (target.path === 'explore/list/more') return { jobId: 'j1' }   // 续页：不是提交，也不动 current
+    if (target.method === 'PUT') return {}                              // 入架：写的是书架，与这一轮的读面无关
     submitted.push([body.sourceId, body.kind])              // 提交落地即起一轮，之后各帧推的就是它
     current = serve(body.sourceId, body.kind)
     return { jobId: 'j1' }
@@ -321,8 +322,8 @@ describe('CityView', () => {
     const more: string[] = []
     let release: () => void = () => {}
     const deps = depsOf({
-      apiSend: vi.fn(async (_m: string, p: string) => {
-        if (p === 'explore/list/more') { more.push(p); await new Promise<void>((r) => { release = r }) }   // 卡住这一页，看「在途」那一小段
+      apiSend: vi.fn(async (target: { path: string }) => {
+        if (target.path === 'explore/list/more') { more.push(target.path); await new Promise<void>((r) => { release = r }) }   // 卡住这一页，看「在途」那一小段
         return { jobId: 'j1' }
       }),
       ...over,
@@ -350,8 +351,8 @@ describe('CityView', () => {
   it('续页撞 409（此刻没得可加载）：钮收掉、不报红条——没得加载不是故障', async () => {
     current = { ...snap, hasMore: true }
     const deps = depsOf({
-      apiSend: vi.fn(async (_m: string, p: string) => {
-        if (p === 'explore/list/more') throw new ApiClientError('Conflict', 409, '没有更多了')
+      apiSend: vi.fn(async (target: { path: string }) => {
+        if (target.path === 'explore/list/more') throw new ApiClientError('Conflict', 409, '没有更多了')
         return { jobId: 'j1' }
       }),
     })
@@ -421,7 +422,7 @@ function depsWithGroups(groups: SearchGroup[], job: Partial<SearchJobSnapshot> =
   /** 快照按请求带的游标切片（与服务端同语义）：不切就会把同一批命中累第二遍 */
   const payload = (path: string): { job: SearchJobSnapshot } => ({ job: { ...snap, added: snap.added.slice(sinceOf(path)) } })
   return makeCoreDeps({
-    apiSend: vi.fn(async (_m: string, path: string) => (path === ROUTES.searchJob.path ? { jobId: snap.id } : {})),
+    apiSend: vi.fn(async (target: { path: string }) => (target.path === ROUTES.searchJob.path ? { jobId: snap.id } : {})),
     apiGet: vi.fn(async (path: string) => payload(path)),
     apiEventStream: vi.fn(async (path: string, onFrame: (data: string) => void) => { onFrame(JSON.stringify(payload(path))) }),
   })
@@ -460,9 +461,10 @@ describe('CityBookSheet（书籍详情浮层：本源两动作 + 跨源那一次
     openSheet(<CityBookSheet book={aBook} {...own} deps={deps} onClose={noop} />)
     fireEvent.click(screen.getByRole('button', { name: '加入书架' }))
     await waitFor(() => expect(deps.pushOk).toHaveBeenCalledWith('已加入书架：半城风月'))
-    expect(deps.apiSend).toHaveBeenCalledWith('PUT', paramRoutes.shelfKey('/b/1'), expect.objectContaining({
+    expect(deps.apiSend).toHaveBeenCalledWith(paramOps.shelfPut.at('/b/1'), expect.objectContaining({
       sourceId: 's1', title: '半城风月',
     }))
+    expect(panelShelf.get().landed.has('/b/1'), '书城加架与搜索行共用落架账').toBe(true)
     expect(deps.pushError, '成功不该走失败泳道').not.toHaveBeenCalled()
   })
 
@@ -481,7 +483,7 @@ describe('CityBookSheet（书籍详情浮层：本源两动作 + 跨源那一次
     const calls: Array<{ p: string; b: unknown }> = []
     const deps = makeCoreDeps({
       apiGet: vi.fn(async () => ({ job: null })),
-      apiSend: vi.fn(async (_m: string, p: string, b: unknown) => { calls.push({ p, b }); return { jobId: 'j9' } }),
+      apiSend: vi.fn(async (target: { path: string }, b: unknown) => { calls.push({ p: target.path, b }); return { jobId: 'j9' } }),
     })
     openSheet(<CityBookSheet book={aBook} {...own} deps={deps} onClose={noop} />)
     fireEvent.click(screen.getByRole('button', { name: /在其他源找这本/ }))
@@ -613,7 +615,7 @@ describe('CityBookSheet（书籍详情浮层：本源两动作 + 跨源那一次
     fireEvent.click(screen.getByRole('button', { name: /在其他源找这本/ }))
     await waitFor(() => expect(screen.getByText(/已问到 3 \/ 142 家/)).toBeTruthy(), { timeout: 2500 })
     fireEvent.click(screen.getByRole('button', { name: '停止' }))
-    expect(deps.apiSend).toHaveBeenLastCalledWith('POST', ROUTES.searchJobCancel.path, {})
+    expect(deps.apiSend).toHaveBeenLastCalledWith(ROUTES.searchJobCancel, {})
     expect(screen.queryByText(/失败/)).toBeNull()
     expect(document.querySelector('.novel-err')).toBeNull()
   })
@@ -636,7 +638,7 @@ describe('CityBookSheet（书籍详情浮层：本源两动作 + 跨源那一次
     expect(screen.queryByText(/没有一家按这个书名搜到/)).toBeNull()
   })
 
-  // 搜索面只有一个槽、观察者跟随最近一轮（`docs/adr/0023`）：浮层挂载时的恢复读交回的很可能是
+  // 搜索面只有一个槽、观察者跟随最近一轮（`docs/adr/0046`）：浮层挂载时的恢复读交回的很可能是
   // **另一本书**那一轮，而 `asked` 在点击瞬间即真——本次 POST 回包之前手上的就是它。
   // 那一列认的是本层 POST 回来的 jobId（关键词不是身份；也不替别人 cancel）。
   it('挂载恢复带来的「上一本书那一轮」不当成本书的结果：那一列不出现、也不报零命中', async () => {

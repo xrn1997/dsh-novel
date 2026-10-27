@@ -171,6 +171,12 @@ describe('格式判定与 TXT 存量', () => {
     expect(r).toMatchObject({ format: 'txt', encoding: 'utf-8', chapterCount: 2, title: '我的书', warnings: [], book: {} })
   })
 
+  it('CRLF TXT 的文字面经同一行规约（\\r 与连续空行不留在正文里）', async () => {
+    const { lb } = await mk()
+    const r = await lb.import(Buffer.from('第1章 起\r\n  内容一  \r\n\r\n\r\n内容二\r\n', 'utf8'), 'crlf.txt')
+    expect(await lb.getChapter(r.bookKey, 0)).toBe('内容一\n\n内容二')
+  })
+
   it('存量 TXT（无 schemaVersion 的既有元数据）重启后仍可读目录/正文/导航', async () => {
     const { dir } = await mk()
     const id = '11111111-1111-4111-8111-111111111111'

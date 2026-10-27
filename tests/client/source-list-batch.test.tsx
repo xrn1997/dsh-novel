@@ -8,7 +8,7 @@ import { MENU_ITEM_COUNT, SourceList } from '../../src/client/views/SettingsSour
 import { makeDeps } from './fake-deps.js'
 import type { FakeSettingsDeps } from './fake-deps.js'
 import { resetSourceListUi } from '../../src/client/source-list.js'
-import { paramRoutes, ROUTES } from '../../src/shared/wire.js'
+import { paramOps, ROUTES } from '../../src/shared/wire.js'
 import type { JobState, SourcePublic } from '../../src/client/views/types.js'
 
 /**
@@ -72,7 +72,7 @@ describe('选中动作条：启用/停用/验证所选（写口载荷 + 成功�
     fireEvent.click(screen.getByText('启用所选'))
 
     await waitFor(() => expect(deps.apiSend).toHaveBeenCalledWith(
-      'POST', ROUTES.sourcesBatchEnabled.path, { ids: ['s1', 's2'], enabled: true }))
+      ROUTES.sourcesBatchEnabled, { ids: ['s1', 's2'], enabled: true }))
     // 启停改的是源本身 → 必须重取 sources（onChanged）。曾经这里走的是「重启任务轮询」
     // 的出口，写成功后没人重读，界面停在旧值、要重开视图才对（2026-09 实机 bug）；
     // 对向断言（验证 → 催任务读面、不重取源列表）在「验证所选」用例，经轮询取数计数观测。
@@ -93,7 +93,7 @@ describe('选中动作条：启用/停用/验证所选（写口载荷 + 成功�
     selectRows(['源三'])
     fireEvent.click(screen.getByText('停用所选'))
     await waitFor(() => expect(deps.apiSend).toHaveBeenCalledWith(
-      'POST', ROUTES.sourcesBatchEnabled.path, { ids: ['s3'], enabled: false }))
+      ROUTES.sourcesBatchEnabled, { ids: ['s3'], enabled: false }))
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
     expect(document.querySelector('[data-novel-selbar]')).not.toBeNull()
   })
@@ -177,7 +177,7 @@ describe('删除：统一模态二次确认（2026 改版——手输口令与�
 
     fireEvent.click(screen.getByText('确认删除'))
     await waitFor(() => expect(deps.apiSend).toHaveBeenCalledWith(
-      'POST', ROUTES.sourcesBatchDelete.path, { ids: ['s1', 's2'] }))
+      ROUTES.sourcesBatchDelete, { ids: ['s1', 's2'] }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(onChanged).toHaveBeenCalledTimes(1)
     expect(deps.pushOk).toHaveBeenCalledWith('已删除 2 个源')
@@ -264,7 +264,7 @@ describe('删除：统一模态二次确认（2026 改版——手输口令与�
     fireEvent.click(screen.getByLabelText('选择 源三'))   // 模态开着：现场再勾一个（jsdom 无遮罩命中测试，事件直达复选框）
     fireEvent.click(screen.getByText('确认删除'))
     await waitFor(() => expect(deps.apiSend).toHaveBeenCalledWith(
-      'POST', ROUTES.sourcesBatchDelete.path, { ids: ['s1', 's2'] }))   // 不含 s3——pending.ids 是开模时的快照
+      ROUTES.sourcesBatchDelete, { ids: ['s1', 's2'] }))   // 不含 s3——pending.ids 是开模时的快照
   })
 
   it('重渲染不扰焦点：父层 re-render（任务轮询 1s 一次的新闭包）不重抢焦点，Esc 关闭后焦点仍还给触发件', () => {
@@ -398,7 +398,7 @@ describe('「去登录」接线（runLogin 两形态 / 未声明回站点）', (
     render(view(makeDeps({ apiSend }), [src({ id: 's1', name: '源一', hasLoginUrl: true })]))
     openAuthPane()
     fireEvent.click(screen.getByText('去登录'))
-    await waitFor(() => expect(apiSend).toHaveBeenCalledWith('POST', paramRoutes.sourceAuth('s1'), { runLogin: true }))
+    await waitFor(() => expect(apiSend).toHaveBeenCalledWith(paramOps.sourceAuth.at('s1'), { runLogin: true }))
     await waitFor(() => expect(window.open).toHaveBeenCalledWith('https://login.example/x', '_blank', 'noopener,noreferrer'))
     expect(window.open).not.toHaveBeenCalledWith('https://s1.com', '_blank', 'noopener,noreferrer')
   })

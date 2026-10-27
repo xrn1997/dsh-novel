@@ -1,6 +1,6 @@
 # 在线阅读是独立 module；门面只留本地分流与跨面动词
 
-Status: accepted
+Status: superseded by 0047
 
 目录与正文的缓存键、目录在途去重、代际、翻页闸、subContent 与空正文策略此前都藏在 `ReadingService` 的私有方法里，测试要拼整部门面部件。现在这些语义归 `online-reading`，门面只做本地书分流与委托。在途表只服务目录：单章在途由阅读会话保证，正文不下第二道全局闸。
 

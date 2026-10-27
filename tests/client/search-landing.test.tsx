@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, renderHook } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { resetPanelShelf } from '../../src/client/panel-shelf.js'
 import { useSearchLanding } from '../../src/client/search-landing.js'
 import type { AddAllReceipt, RowRef } from '../../src/client/search-view-model.js'
 import type { ShelfAddOutcome, ShelfSeatInput } from '../../src/client/shelf-action.js'
@@ -18,6 +19,8 @@ function hit(partial: Partial<SearchHit> & { title: string }): SearchHit {
   return { author: null, url: null, coverUrl: null, intro: null, lastChapterName: null, kind: null, wordCount: null, ...partial }
 }
 const row = (url: string | null, sourceId = 's1'): RowRef => ({ sourceId, hit: hit({ title: 'a', url }) })
+
+beforeEach(resetPanelShelf)
 
 describe('useSearchLanding', () => {
   it('落成的架位进本轮账：同址两条 hit 都认得，写口只发过一发', async () => {
@@ -72,5 +75,14 @@ describe('useSearchLanding', () => {
     expect(result.current.adding.has('b2')).toBe(false)
     await act(async () => { release({ ok: true, bookKey: 'u1' }); await pending })
     expect(result.current.adding.has('b1')).toBe(false)
+  })
+
+  it('落架账跨挂载保留：卸载重挂后仍认得已落的架位（面板期投影）', async () => {
+    const addSeat = vi.fn(async () => ({ ok: true as const, bookKey: 'u1' }))
+    const first = renderHook(() => useSearchLanding({ addSeat }))
+    await act(async () => { await first.result.current.add(row('u1')) })
+    first.unmount()
+    const second = renderHook(() => useSearchLanding({ addSeat }))
+    expect(second.result.current.isLanded(hit({ title: 'a', url: 'u1' }))).toBe(true)
   })
 })

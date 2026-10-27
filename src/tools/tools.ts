@@ -1,10 +1,16 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import type { InferValue } from '@deepseek-ai/dsh-tools'
 import type { ReadingService } from '../services/reading.js'
 import { mergePartitioned } from '../shared/merge-by-book.js'
 import { summarizeRound } from '../shared/round-summary.js'
 import { project } from './project.js'
+import {
+  renderImport, renderRead, renderSearch, renderShelfBook, renderShelfList, renderShelfRemove,
+  renderSourceList, renderSourceProbe, renderSourceRemove, renderSourceToggle, renderToc,
+} from './render.js'
 import { pickShelfItem, SHELF_ITEM_FIELDS } from './shelf-item.js'
 import type { ShelfItem } from './shelf-item.js'
+import { failedSources, truncationNotice } from './search-value.js'
 
 /** defineTool 产物（registry-ready definition）；registerTools 的 ctxLike 结构镜像 Cordis ToolRuntime */
 export type ToolDefinition = ReturnType<typeof defineTool>
@@ -13,12 +19,45 @@ export interface ToolsCtxLike {
   tools: { register(t: ToolDefinition): () => void }
 }
 
-/** action 枚举工具的参数缺口防线（宁炸不猜）：schema 层 enum 拦未知 action，
- *  这里拦「action 对但参数没给」——缺参静默兜底会写出永远读不了的书 / 摸到不存在的源。 */
-const requireArgs = (action: string, present: Record<string, unknown>, needs: readonly string[]): void => {
-  const missing = needs.filter((k) => present[k] === undefined || present[k] === null)
+/** action 行是唯一清单：schema 的 enum 由行派生，这里按行的 `needs` 拦「action 对但参数没给」。
+ *  缺参静默兜底会写出永远读不了的书 / 摸到不存在的源（宁炸不猜）。 */
+const requireArgs = (action: string, present: object, needs: readonly string[]): void => {
+  const values = present as Record<string, unknown>
+  const missing = needs.filter((k) => values[k] === undefined || values[k] === null)
   if (missing.length > 0) throw new Error(`dshnovel_${action} 缺少参数：${missing.join('、')}`)
 }
+
+/** action 行的唯一查找口：execute 与 render 共用，未知 action 在这里炸，不印兜底话。 */
+const rowOf = <R>(rows: Record<string, R>, action: string, tool: string): R => {
+  const row = rows[action]
+  if (row === undefined) throw new Error(`${tool} 未知 action：${action}`)
+  return row
+}
+
+/** 两个 action 工具共用一条行形：doc / 缺参 / 执行 / 纯文本投影。 */
+interface ActionRow<A, V> {
+  readonly doc: string
+  readonly needs: readonly (keyof A & string)[]
+  execute(args: A): Promise<V>
+  render(value: V): string
+}
+
+const requiredActionsOf = (rows: Record<string, { needs: readonly string[] }>, key: string): string[] =>
+  Object.entries(rows).filter(([, row]) => row.needs.includes(key)).map(([action]) => action)
+
+/** 参数描述里的「哪个 action 必填」从行派生：加一个 action 不必回来改第二份清单。 */
+const needsDoc = (rows: Record<string, { needs: readonly string[] }>, key: string): string => {
+  const all = Object.keys(rows)
+  const required = requiredActionsOf(rows, key)
+  if (required.length === 0) return ''
+  if (required.length === all.length) return '（所有 action 必填）'
+  if (required.length === 1) return `（仅 ${required[0]} 必填）`
+  const unused = all.filter((action) => !required.includes(action))
+  return `（${required.join('/')} 必填${unused.length === 0 ? '' : `；${unused.join('/')} 不用`}）`
+}
+
+/** 两个 action 工具的出参 schema 共用同一条 action 回显字段。 */
+const ACTION_FIELD = { type: 'string', required: true, description: '回显所执行的 action' } as const
 
 /**
  * agent 六工具：与 HTTP 面共用 ReadingService，返回值一律规范 JSON
@@ -29,7 +68,7 @@ const requireArgs = (action: string, present: Record<string, unknown>, needs: re
  * 写作类插件占了 80+ 个词，阅读域的新词（toc/source）虽暂无占用，但插件专属前缀才是根治。
  *
  * 形状取「工具少 + action 枚举」而非每动词一工具：弱模型对 6 个工具名的辨识远好于 11+，
- * action 的合法取值锁在 schema enum 里，缺参由 requireArgs 抛清楚的错。
+ * action 的合法取值、描述与缺参清单从 action 行派生，渲染纯函数住 `tools/render.ts`。
  */
 export function buildTools(service: ReadingService): ToolDefinition[] {
   const text = (s: string): Array<{ type: 'text'; text: string }> => [{ type: 'text', text: s }]
@@ -91,21 +130,7 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
           truncated: { type: 'string', description: '本轮本数超过返回上限时的如实说明（缺席=没截断）' },
         },
       },
-      render: (_args, v) => {
-        // render 拿到的是缺键投影后的规范值：缺作者是整键不在（project() 把 null 与 undefined 同省），
-        // 判在场只能按键缺席认——旧式按 null 哨兵比对的写法漏判，会给模型印出「 / undefined」的幽灵作者
-        //（2026-10 审查记下的真 bug，文本断言钉在 tests/tools/tools.test.ts）。
-        // 截断省略号按**行数**判不按家数判：sources 是行、sourceCount 是家，一家两行时按家数会漏报截断。
-        // 摘要行是恒在的结论行，books 为空时后面不接列表段——那一行空行冒充的是一条不存在的分隔，
-        // 而模型读到的整段文案就是这一轮的覆盖面回执（2026-10 审查）。
-        const lines = v.books.map((b) => `《${b.title}》${b.author === undefined ? '' : ` / ${b.author}`} · ${b.sourceCount} 家源：${
-          b.sources.slice(0, 3).map((s) => `${s.sourceName}(${s.url ?? '无地址'})`).join('；')}${b.sources.length > 3 ? '…' : ''}`)
-        const fails = v.failed.map((f) => `${f.sourceName}：${f.code}`).join('；')
-        return text(`${v.books.length} 本（跑了 ${v.searched} 家、答话 ${v.answered} 家、滤去 ${v.filtered} 条不相关）：${
-          lines.length === 0 ? '' : `\n${lines.join('\n')}`}`
-          + `${v.failed.length === 0 ? '' : `\n${v.failed.length} 家未答话：${fails}`}`
-          + `${v.truncated === undefined ? '' : `\n${v.truncated}`}`)
-      },
+      render: (_args, v) => text(renderSearch(v)),
     },
     execute: async (args: { keyword: string; sourceIds?: string[] }) => {
       const round = await service.search(args.keyword, args.sourceIds === undefined ? undefined : { sourceIds: args.sourceIds })
@@ -135,13 +160,11 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
           title: b.title, author: b.author, relevance: b.relevance, sourceCount: b.sourceCount,
           sources: b.sources.map((s) => ({ sourceId: s.sourceId, sourceName: s.sourceName, title: s.title, author: s.author, url: s.url })),
         })),
-        failed: round.flatMap((g) => g.error === undefined ? [] : [{
-          sourceId: g.sourceId, sourceName: g.sourceName, code: g.error.code, message: g.error.message,
-        }]),
+        failed: failedSources(round),
         searched: counts.searched,
         answered: counts.answered,
         filtered,
-        truncated: total > books.length ? `本轮共 ${total} 本，只返回前 ${books.length} 本` : undefined,
+        truncated: truncationNotice(total, books.length),
       })
       return out
     },
@@ -166,7 +189,7 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
           text: { type: 'string', required: true, description: '正文纯文本' },
         },
       },
-      render: (_args, v) => text(`《${v.bookKey}》第 ${v.chapterIndex} 章（${v.chapterName}）共 ${v.text.length} 字：\n${v.text.slice(0, 2000)}${v.text.length > 2000 ? '…（截断，规范值含全文）' : ''}`),
+      render: (_args, v) => text(renderRead(v)),
     },
     execute: async (args: { sourceId: string; bookKey: string; chapterIndex: number }) => {
       const toc = await service.getToc(args.sourceId, args.bookKey)
@@ -204,7 +227,7 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
           },
         },
       },
-      render: (_args, v) => text(`《${v.bookKey}》共 ${v.total} 章：\n${v.chapters.slice(0, 10).map((c) => `[${c.chapterIndex}] ${c.name}`).join('\n')}${v.total > 10 ? '\n…（截断，规范值含全部）' : ''}`),
+      render: (_args, v) => text(renderToc(v)),
     },
     execute: async (args: { sourceId: string; bookKey: string; refresh?: boolean }) => {
       const toc = await service.getToc(args.sourceId, args.bookKey, args.refresh === true ? { refresh: true } : undefined)
@@ -213,139 +236,157 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
     },
   })
 
-  const shelf = defineTool({
-    name: 'dshnovel_shelf',
-    description: '书架与阅读进度。action 必填：list=列书与进度（只读，可单独用）；add=加书，需同时给 bookKey、title、sourceId；save_progress=存进度，需 bookKey、chapterIndex（0 起）、offsetRatio（0~1，书须已在架）；remove=移出书架，需 bookKey。按所选 action 提供对应参数，缺参会报错。',
-    parameters: {
-      action: { type: 'string', required: true, enum: ['list', 'add', 'save_progress', 'remove'], description: '操作类型' },
-      bookKey: { type: 'string', description: '书籍详情页 URL（add/save_progress/remove 必填）' },
-      title: { type: 'string', description: '书名（仅 add 必填）' },
-      sourceId: { type: 'string', description: '源 id（仅 add 必填）' },
-      chapterIndex: { type: 'integer', description: '读到的章序 0 起（仅 save_progress 必填）' },
-      offsetRatio: { type: 'number', description: '章内进度 0~1（仅 save_progress 必填）' },
-    },
-    output: {
-      schema: {
-        type: 'object', additionalProperties: false,
-        properties: {
-          action: { type: 'string', required: true, description: '回显所执行的 action' },
-          books: {
-            type: 'array', description: '书架条目（仅 list）',
-            items: {
-              type: 'object', additionalProperties: false,
-              properties: SHELF_ITEM_FIELDS,
-            },
-          },
-          book: {
-            type: 'object', additionalProperties: false,
-            description: '受影响的单本条目（仅 add/save_progress，字段与 books 条目同形）',
-            properties: SHELF_ITEM_FIELDS,
-          },
-          removed: { type: 'boolean', description: '是否真的移除了（仅 remove）' },
+  interface ShelfArgs {
+    action: 'list' | 'add' | 'save_progress' | 'remove'
+    bookKey?: string; title?: string; sourceId?: string; chapterIndex?: number; offsetRatio?: number
+  }
+  type ShelfAction = ShelfArgs['action']
+  /** 规范值形状同时是 render/execute 的类型源：schema 改一个字段，行的入参类型跟着变。 */
+  const shelfOutputSchema = {
+    type: 'object', additionalProperties: false,
+    properties: {
+      action: ACTION_FIELD,
+      books: {
+        type: 'array', description: '书架条目（仅 list）',
+        items: {
+          type: 'object', additionalProperties: false,
+          properties: SHELF_ITEM_FIELDS,
         },
       },
-      render: (args, v) => {
-        if (args.action === 'list') {
-          return text((v.books ?? []).length === 0
-            ? '书架是空的。'
-            : (v.books ?? []).map((b) => {
-              const p = (b.progress ?? {}) as { chapterIndex?: number; offsetRatio?: number }
-              return `《${b.title}》${b.author === undefined ? '' : ` / ${String(b.author)}`} 读到第 ${p.chapterIndex ?? 0} 章（${Math.round((p.offsetRatio ?? 0) * 100)}%）`
-            }).join('\n'))
-        }
-        if (args.action === 'remove') return text(`已移出书架（removed=${String(v.removed)}）`)
-        const b = v.book!
-        const p = (b.progress ?? {}) as { chapterIndex?: number }
-        return text(args.action === 'add'
-          ? `已加书：《${b.title}》`
-          : `已存进度：《${b.title}》读到第 ${p.chapterIndex ?? 0} 章`)
+      book: {
+        type: 'object', additionalProperties: false,
+        description: '受影响的单本条目（仅 add/save_progress，字段与 books 条目同形）',
+        properties: SHELF_ITEM_FIELDS,
       },
+      removed: { type: 'boolean', description: '是否真的移除了（仅 remove）' },
     },
-    execute: async (args: {
-      action: 'list' | 'add' | 'save_progress' | 'remove'
-      bookKey?: string; title?: string; sourceId?: string; chapterIndex?: number; offsetRatio?: number
-    }) => {
-      if (args.action === 'list') {
+  } as const
+  type ShelfOutput = InferValue<typeof shelfOutputSchema>
+  /** 书架：一 action 一行。action enum、工具描述与缺参检查都从这张表派生，
+   *  不再在 description / enum / requireArgs / execute / render 五处各列一遍。 */
+  const shelfRows = {
+    list: {
+      doc: '列书与进度（只读，可单独用）',
+      needs: [],
+      execute: async (_args: ShelfArgs) => {
         const books: ShelfItem[] = project(service.shelfList().map(pickShelfItem))
         return { action: 'list' as const, books }
-      }
-      if (args.action === 'add') {
-        requireArgs(args.action, args, ['bookKey', 'title', 'sourceId'])
+      },
+      render: (v) => renderShelfList(v),
+    },
+    add: {
+      doc: '加书，需同时给 bookKey、title、sourceId',
+      needs: ['bookKey', 'title', 'sourceId'],
+      execute: async (args: ShelfArgs) => {
         // 投影改变类型（可空→缺席），出参类型由调用方断言——tools/project.ts 口径
         const book: ShelfItem = project(pickShelfItem(service.shelfAdd(args.bookKey!, { sourceId: args.sourceId!, title: args.title! })))
         return { action: 'add' as const, book }
-      }
-      if (args.action === 'save_progress') {
-        requireArgs(args.action, args, ['bookKey', 'chapterIndex', 'offsetRatio'])
+      },
+      render: (v) => renderShelfBook('add', v),
+    },
+    save_progress: {
+      doc: '存进度，需 bookKey、chapterIndex（0 起）、offsetRatio（0~1，书须已在架）',
+      needs: ['bookKey', 'chapterIndex', 'offsetRatio'],
+      execute: async (args: ShelfArgs) => {
         // 不在架 → null：镜像 HTTP 面 400，不静默造书（reading.shelfSaveProgress 口径）
         const updated = service.shelfSaveProgress(args.bookKey!, args.chapterIndex!, args.offsetRatio!)
         if (updated === null) throw new Error(`dshnovel_shelf 书架里没有这本书：${args.bookKey}`)
         const book: ShelfItem = project(pickShelfItem(updated))
         return { action: 'save_progress' as const, book }
-      }
-      // remove：remove 自身的 boolean 就是权威回执（未知键 false），不再二次核存在性
-      requireArgs(args.action, args, ['bookKey'])
-      const { removed } = await service.removeBook(args.bookKey!)
-      return { action: 'remove' as const, removed }
+      },
+      render: (v) => renderShelfBook('save_progress', v),
+    },
+    remove: {
+      doc: '移出书架，需 bookKey',
+      needs: ['bookKey'],
+      execute: async (args: ShelfArgs) => {
+        // remove 自身的 boolean 就是权威回执（未知键 false），不再二次核存在性
+        const { removed } = await service.removeBook(args.bookKey!)
+        return { action: 'remove' as const, removed }
+      },
+      render: (v) => renderShelfRemove(v),
+    },
+  } satisfies Record<ShelfAction, ActionRow<ShelfArgs, ShelfOutput>>
+  const shelfActionNames = Object.keys(shelfRows) as ShelfAction[]
+
+  const shelf = defineTool({
+    name: 'dshnovel_shelf',
+    description: `书架与阅读进度。action 必填：${Object.entries(shelfRows).map(([k, r]) => `${k}=${r.doc}`).join('；')}。按所选 action 提供对应参数，缺参会报错。`,
+    parameters: {
+      action: { type: 'string', required: true, enum: shelfActionNames, description: '操作类型' },
+      bookKey: { type: 'string', description: `书籍详情页 URL${needsDoc(shelfRows, 'bookKey')}` },
+      title: { type: 'string', description: `书名${needsDoc(shelfRows, 'title')}` },
+      sourceId: { type: 'string', description: `源 id${needsDoc(shelfRows, 'sourceId')}` },
+      chapterIndex: { type: 'integer', description: `读到的章序 0 起${needsDoc(shelfRows, 'chapterIndex')}` },
+      offsetRatio: { type: 'number', description: `章内进度 0~1${needsDoc(shelfRows, 'offsetRatio')}` },
+    },
+    output: {
+      schema: shelfOutputSchema,
+      render: (args, v) => text(rowOf(shelfRows, (args as ShelfArgs).action, 'dshnovel_shelf').render(v)),
+    },
+    execute: async (args) => {
+      const a = args as ShelfArgs
+      const row = rowOf(shelfRows, a.action, 'dshnovel_shelf')
+      requireArgs(a.action, a, row.needs)
+      return await row.execute(a)
     },
   })
 
-  const sourceTool = defineTool({
-    name: 'dshnovel_source',
-    description: '书源管理。action 必填：list=列出全部源（只读）；probe=对单源发真实搜索请求验证可用性，需 sourceId，返回实测结论与失败定位；enable/disable=启停单源，需 sourceId；remove=删除单源，需 sourceId。导入新源走 dshnovel_import_source。',
-    parameters: {
-      action: { type: 'string', required: true, enum: ['list', 'probe', 'enable', 'disable', 'remove'], description: '操作类型' },
-      sourceId: { type: 'string', description: '源 id（probe/enable/disable/remove 必填；list 不用）' },
-    },
-    output: {
-      schema: {
-        type: 'object', additionalProperties: false,
-        properties: {
-          action: { type: 'string', required: true, description: '回显所执行的 action' },
-          sources: {
-            type: 'array', description: '源清单（仅 list）',
-            items: {
-              type: 'object', additionalProperties: false,
-              properties: {
-                sourceId: { type: 'string', required: true, description: '源 id' },
-                name: { type: 'string', required: true, description: '源名' },
-                baseUrl: { type: 'string', required: true, description: '源站地址' },
-                enabled: { type: 'boolean', required: true, description: '是否启用（参与搜索）' },
-                type: { type: 'string', required: true, description: '内容形态（text=文本）' },
-                status: { type: 'string', required: true, description: 'verified/broken/unverified' },
-                statusDetail: { type: 'string', description: 'broken 原因（含段级定位）' },
-              },
-            },
+  interface SourceArgs {
+    action: 'list' | 'probe' | 'enable' | 'disable' | 'remove'
+    sourceId?: string
+  }
+  type SourceAction = SourceArgs['action']
+  /** 规范值形状同时是 render/execute 的类型源：schema 改一个字段，行的入参类型跟着变。 */
+  const sourceOutputSchema = {
+    type: 'object', additionalProperties: false,
+    properties: {
+      action: ACTION_FIELD,
+      sources: {
+        type: 'array', description: '源清单（仅 list）',
+        items: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            sourceId: { type: 'string', required: true, description: '源 id' },
+            name: { type: 'string', required: true, description: '源名' },
+            baseUrl: { type: 'string', required: true, description: '源站地址' },
+            enabled: { type: 'boolean', required: true, description: '是否启用（参与搜索）' },
+            type: { type: 'string', required: true, description: '内容形态（text=文本）' },
+            status: { type: 'string', required: true, description: 'verified/broken/unverified' },
+            statusDetail: { type: 'string', description: 'broken 原因（含段级定位）' },
           },
-          sourceId: { type: 'string', description: '目标源 id（probe/enable/disable/remove 回显）' },
-          enabled: { type: 'boolean', description: '启停后的状态（仅 enable/disable）' },
-          removed: { type: 'boolean', description: '是否真的删除了（仅 remove）' },
-          status: { type: 'string', description: '探针后状态 verified/broken（仅 probe）' },
-          ok: { type: 'boolean', description: '探针是否跑通（仅 probe）' },
-          itemCount: { type: 'integer', description: '搜索命中条目数（仅 probe）' },
-          firstTitle: { type: 'string', description: '首条书名（仅 probe）' },
-          error: { type: 'object', additionalProperties: true, description: '失败原因，含段级定位（仅 probe）' },
-          probedAt: { type: 'integer', description: '探针时间戳（仅 probe）' },
         },
       },
-      render: (args, v) => {
-        if (args.action === 'list') {
-          const on = (v.sources ?? []).filter((s) => s.enabled).length
-          return text(`共 ${v.sources?.length ?? 0} 个源（启用 ${on}）：${(v.sources ?? []).slice(0, 10).map((s) => `${s.name}（${s.status}${s.enabled ? '' : '，已停用'}）`).join('；')}${(v.sources?.length ?? 0) > 10 ? '…（截断，规范值含全部）' : ''}`)
-        }
-        if (args.action === 'probe') {
-          return text(v.ok
-            ? `源可用：命中 ${v.itemCount ?? 0} 条，首条「${v.firstTitle ?? ''}」`
-            : `源不可用：${v.error?.code ?? ''} ${v.error?.message ?? ''}`)
-        }
-        if (args.action === 'remove') return text(`已删除源 ${String(v.sourceId)}（removed=${String(v.removed)}）`)
-        return text(`已${v.enabled ? '启用' : '停用'}源 ${String(v.sourceId)}`)
+      sourceId: { type: 'string', description: '目标源 id（probe/enable/disable/remove 回显）' },
+      enabled: { type: 'boolean', description: '启停后的状态（仅 enable/disable）' },
+      removed: { type: 'boolean', description: '是否真的删除了（仅 remove）' },
+      status: { type: 'string', description: '探针后状态 verified/broken（仅 probe）' },
+      ok: { type: 'boolean', description: '探针是否跑通（仅 probe）' },
+      itemCount: { type: 'integer', description: '搜索命中条目数（仅 probe）' },
+      firstTitle: { type: 'string', description: '首条书名（仅 probe）' },
+      error: {
+        type: 'object', additionalProperties: false, description: '失败原因，含段级定位（仅 probe）',
+        properties: {
+          code: { type: 'string', required: true, description: '失败码' },
+          message: { type: 'string', required: true, description: '失败原因（含段级定位时在此）' },
+        },
       },
+      probedAt: { type: 'integer', description: '探针时间戳（仅 probe）' },
     },
-    execute: async (args: {
-      action: 'list' | 'probe' | 'enable' | 'disable' | 'remove'; sourceId?: string
-    }) => {
-      if (args.action === 'list') {
+  } as const
+  type SourceOutput = InferValue<typeof sourceOutputSchema>
+  /** enable/disable 的共用执行体：只差目标状态；存在性防线归门面（未知 id 抛
+   *  SourceNotFoundError），工具面不再预检。 */
+  const toggleSource = (enabled: boolean) => async (args: SourceArgs) => {
+    await service.setEnabled(args.sourceId!, enabled)
+    return { action: enabled ? 'enable' as const : 'disable' as const, sourceId: args.sourceId!, enabled }
+  }
+  /** 书源管理：同样一 action 一行；enable/disable 共用 `toggleSource`。 */
+  const sourceRows = {
+    list: {
+      doc: '列出全部源（只读）',
+      needs: [],
+      execute: async () => {
         const sources: Array<{
           sourceId: string; name: string; baseUrl: string; enabled: boolean
           type: string; status: string; statusDetail?: string
@@ -354,26 +395,63 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
           type: s.type, status: s.status, statusDetail: s.statusDetail,
         })))
         return { action: 'list' as const, sources }
-      }
-      requireArgs(args.action, args, ['sourceId'])
-      const id = args.sourceId!
-      if (args.action === 'probe') {
-        const r = await service.probe(id)
+      },
+      render: (v) => renderSourceList(v),
+    },
+    probe: {
+      doc: '对单源发真实搜索请求验证可用性，需 sourceId，返回实测结论与失败定位',
+      needs: ['sourceId'],
+      execute: async (args: SourceArgs) => {
+        const r = await service.probe(args.sourceId!)
         return project({
-          action: 'probe', sourceId: id, status: r.ok ? 'verified' : 'broken',
+          action: 'probe', sourceId: args.sourceId!, status: r.ok ? 'verified' : 'broken',
           ok: r.ok, itemCount: r.itemCount, probedAt: r.probedAt,
           firstTitle: r.firstTitle ?? undefined, error: r.error,
         })
-      }
-      if (args.action === 'enable' || args.action === 'disable') {
-        const enabled = args.action === 'enable'
-        // 存在性防线已收进门面：未知 id 抛 SourceNotFoundError，工具面不再预检。
-        await service.setEnabled(id, enabled)
-        return { action: args.action, sourceId: id, enabled }
-      }
-      const removed = await service.removeSource(id)
-      if (!removed) throw new Error(`dshnovel_source 源不存在：${id}`)
-      return { action: 'remove' as const, sourceId: id, removed }
+      },
+      render: (v) => renderSourceProbe(v),
+    },
+    enable: {
+      doc: '启用单源，需 sourceId',
+      needs: ['sourceId'],
+      execute: toggleSource(true),
+      render: (v) => renderSourceToggle(v),
+    },
+    disable: {
+      doc: '停用单源，需 sourceId',
+      needs: ['sourceId'],
+      execute: toggleSource(false),
+      render: (v) => renderSourceToggle(v),
+    },
+    remove: {
+      doc: '删除单源，需 sourceId',
+      needs: ['sourceId'],
+      execute: async (args: SourceArgs) => {
+        const removed = await service.removeSource(args.sourceId!)
+        if (!removed) throw new Error(`dshnovel_source 源不存在：${args.sourceId}`)
+        return { action: 'remove' as const, sourceId: args.sourceId!, removed }
+      },
+      render: (v) => renderSourceRemove(v),
+    },
+  } satisfies Record<SourceAction, ActionRow<SourceArgs, SourceOutput>>
+  const sourceActionNames = Object.keys(sourceRows) as SourceAction[]
+
+  const sourceTool = defineTool({
+    name: 'dshnovel_source',
+    description: `书源管理。action 必填：${Object.entries(sourceRows).map(([k, r]) => `${k}=${r.doc}`).join('；')}。导入新源走 dshnovel_import_source。`,
+    parameters: {
+      action: { type: 'string', required: true, enum: sourceActionNames, description: '操作类型' },
+      sourceId: { type: 'string', description: `源 id${needsDoc(sourceRows, 'sourceId')}` },
+    },
+    output: {
+      schema: sourceOutputSchema,
+      render: (args, v) => text(rowOf(sourceRows, (args as SourceArgs).action, 'dshnovel_source').render(v)),
+    },
+    execute: async (args) => {
+      const a = args as SourceArgs
+      const row = rowOf(sourceRows, a.action, 'dshnovel_source')
+      requireArgs(a.action, a, row.needs)
+      return await row.execute(a)
     },
   })
 
@@ -396,18 +474,32 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
                 name: { type: 'string', required: true, description: '源名' },
                 ok: { type: 'boolean', required: true, description: '规范化是否通过' },
                 dupSkipped: { type: 'boolean', description: '按址去重命中：同址已有可用源，保留已有未新增' },
-                missing: { type: 'array', description: '缺的必填字段' },
-                warnings: { type: 'array', description: '警告（header 解析等）' },
+                missing: {
+                  type: 'array', description: '缺的必填字段',
+                  items: {
+                    type: 'object', additionalProperties: false,
+                    properties: {
+                      field: { type: 'string', required: true, description: '字段名' },
+                      message: { type: 'string', required: true, description: '缺失说明' },
+                    },
+                  },
+                },
+                warnings: {
+                  type: 'array', description: '警告（header 解析等）',
+                  items: {
+                    type: 'object', additionalProperties: false,
+                    properties: {
+                      field: { type: 'string', required: true, description: '字段名' },
+                      message: { type: 'string', required: true, description: '警告说明' },
+                    },
+                  },
+                },
               },
             },
           },
         },
       },
-      render: (_args, v) => text((v.outcomes ?? []).map((o) => {
-        if (!o.ok) return `✗ ${o.name}：缺 ${(o.missing ?? []).map((m) => String((m as { field?: unknown })?.field ?? '?')).join('、')}`
-        if (o.dupSkipped === true) return `↷ ${o.name}：同址已有可用源，按址去重保留已有（未新增）`
-        return `✓ ${o.name}（已导入，未验证——用 dshnovel_source probe 验证）`
-      }).join('\n')),
+      render: (_args, v) => text(renderImport(v)),
     },
     execute: async (args: { sourceJson: string }) => {
       let parsed: unknown

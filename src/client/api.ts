@@ -1,4 +1,4 @@
-import type { ApiEnvelope } from '../shared/wire.js'
+import type { ApiEnvelope, RouteTarget, WriteMethod } from '../shared/wire.js'
 import { NOVEL_API_PREFIX } from '../shared/wire.js'
 import { zhTranslate } from './copy/index.js'
 import type { Translate } from './copy/index.js'
@@ -89,8 +89,8 @@ async function request<T>(path: string, method: string, body?: unknown): Promise
 }
 
 export function apiGet<T>(path: string): Promise<T> { return request<T>(path, 'GET') }
-export function apiSend<T>(method: 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<T> {
-  return request<T>(path, method, body)
+export function apiSend<T>(target: RouteTarget<WriteMethod>, body?: unknown): Promise<T> {
+  return request<T>(target.path, target.method, body)
 }
 
 /** 原始字节上传（本地书导入 TXT / EPUB，UI）：octet-stream body，响应仍走信封 */

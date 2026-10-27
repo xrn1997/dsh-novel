@@ -191,7 +191,7 @@ export function useSearchJob(deps: JobWatchDeps, t: Translate = zhTranslate): Se
     const mine = ++submitSeq.current
     return (async () => {
       try {
-        const { jobId } = await deps.apiSend<{ jobId: string }>('POST', ROUTES.searchJob.path, bodies.searchJob(kw))
+        const { jobId } = await deps.apiSend<{ jobId: string }>(ROUTES.searchJob, bodies.searchJob(kw))
         if (mine !== submitSeq.current) return null   // 迟到回包：后一次提交已起跑，旧回包不许倒回观察者
         // 提交在飞时挂载恢复也可能已经落地——POST 的结果说了算（新一轮替换上一轮），故此后置
         begin({ id: jobId, keyword: kw, total: 0, cancelled: false, since: 0, groups: [] })
@@ -229,7 +229,7 @@ export function useSearchJob(deps: JobWatchDeps, t: Translate = zhTranslate): Se
   const cancel = (): void => {
     const a = acc.current
     if (a === null) return                             // 视图只在「还在跑」时给这个钮，这里只挡「压根没提交过」
-    void deps.apiSend('POST', ROUTES.searchJobCancel.path, {}).catch((e): void => {
+    void deps.apiSend(ROUTES.searchJobCancel, {}).catch((e): void => {
       if (acc.current !== a || !alive.current) return
       setError(t('search.job.cancelFailed', { detail: describeError(e, t) }))
     })

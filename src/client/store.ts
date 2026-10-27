@@ -5,7 +5,9 @@
 import { useSyncExternalStore } from 'react'
 import { ls } from './util.js'
 
-/** 轻量 store（useSyncExternalStore 驱动）：业务数据不进 store——每次挂载经 api 拉取，组件内 useState 持有。 */
+/** 轻量 store（useSyncExternalStore 驱动）：只承担**跨卸载要活下来**的现场——视图内路由、偏好、
+ *  列表筛选与勾选、任务面镜像、瞬态队列。业务真相仍在服务端、每次挂载经 api 拉；唯一例外是书架的
+ *  **读取面与落架账**升格成面板期投影（`client/panel-shelf.ts`，裁决见 `docs/adr/0046`）。 */
 export interface Store<T> {
   get(): T
   set(patch: Partial<T>): void
@@ -31,15 +33,15 @@ export function useStore<T extends object>(store: Store<T>): T {
 // 五成员（2026 IA 变更，用户拍板）：书架/书城/书源管理是小说视图内**并列 tab**——
 // 选择即切换下方内容；书源管理 = 原宿主设置「小说」区块整体（settings.section 注册已撤，
 // 单一归属）。reader/search 是 tab 之下的沉浸内容流，各有自己的返回导航，顶部 tab 不随行。
-export type Route =
+export type ViewRoute =
   | { name: 'shelf' }
   | { name: 'city' }
   | { name: 'sources' }
   | { name: 'reader'; sourceId: string; bookKey: string; title: string }
   | { name: 'search'; keyword?: string }
 
-export const routeStore = createStore<{ route: Route }>({ route: { name: 'shelf' } })
-export function navigate(route: Route): void { routeStore.set({ route }) }
+export const routeStore = createStore<{ route: ViewRoute }>({ route: { name: 'shelf' } })
+export function navigate(route: ViewRoute): void { routeStore.set({ route }) }
 
 // ── 阅读偏好（localStorage 持久；进度不进 prefs——进度归服务端 shelf）──────
 

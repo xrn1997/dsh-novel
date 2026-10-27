@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { parseCookieString } from '../../shared/cookies.js'
-import { bodies, paramRoutes, ROUTES } from '../../shared/wire.js'
+import { bodies, paramOps, ROUTES } from '../../shared/wire.js'
 import { describeError } from '../api.js'
 import { plural, useCopy, type CopyKey } from '../copy/index.js'
 import { prodDeps } from '../deps.js'
@@ -99,7 +99,7 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
    *  计数用服务端回包的 `updated`（未知 id 会被静默跳过，报「我勾了几个」会说谎）。 */
   const batchEnabled = (enabled: boolean): void => {
     const ids = [...ui.selection]
-    submit(() => deps.apiSend<{ updated: number }>('POST', ROUTES.sourcesBatchEnabled.path, bodies.batchEnabled(ids, enabled)), (r) => {
+    submit(() => deps.apiSend<{ updated: number }>(ROUTES.sourcesBatchEnabled, bodies.batchEnabled(ids, enabled)), (r) => {
       deps.pushOk(enabled
         ? plural(t, r.updated, 'sources.batch.enabled.one', 'sources.batch.enabled.other')
         : plural(t, r.updated, 'sources.batch.disabled.one', 'sources.batch.disabled.other'))
@@ -110,7 +110,7 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
     if (pending === null || delBusy) return          // 在途防重：双击「确认删除」不许双 POST（修过的真双写窗口）
     const ids = pending.ids                          // 点击时快照，不随列表变化重算
     setDelBusy(true)
-    void deps.apiSend<{ removed: number }>('POST', ROUTES.sourcesBatchDelete.path, bodies.ids(ids)).then((r) => {
+    void deps.apiSend<{ removed: number }>(ROUTES.sourcesBatchDelete, bodies.ids(ids)).then((r) => {
       setPending(null)
       setDelBusy(false)
       clearSelection()                               // 已删的 id 留在选择集里是幽灵勾选（动作条计数虚高、后续批量动作带死 id）
@@ -130,7 +130,7 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
    *  `savingN` 装饰（开关降透明 + wait + title「保存中…」）；成功静默（开关翻转本身即反馈），
    *  只有失败才进 error 泳道并挂行锚点（全局条「定位 →」+ 行内红边）。 */
   const toggleEnabled = (s: SourcePublic, next: boolean): Promise<boolean> => {
-    return deps.apiSend('POST', paramRoutes.sourceEnabled(s.id), bodies.enabled(next)).then(() => {
+    return deps.apiSend(paramOps.sourceEnabled.at(s.id), bodies.enabled(next)).then(() => {
       onChanged()
       return true
     }, (e) => {
@@ -472,7 +472,7 @@ function SourceAuthPane({ source, onDone, deps = prodDeps }: {
       window.open(source.baseUrl, '_blank', 'noopener,noreferrer')
       return
     }
-    void deps.apiSend<{ mode?: string; loginUrl?: string }>('POST', paramRoutes.sourceAuth(source.id), bodies.runLogin()).then((r) => {
+    void deps.apiSend<{ mode?: string; loginUrl?: string }>(paramOps.sourceAuth.at(source.id), bodies.runLogin()).then((r) => {
       if (r.mode === 'manual' && typeof r.loginUrl === 'string' && r.loginUrl !== '') {
         window.open(r.loginUrl, '_blank', 'noopener,noreferrer')
         return
@@ -484,14 +484,14 @@ function SourceAuthPane({ source, onDone, deps = prodDeps }: {
   const save = (): void => {
     if (source.loginUi !== undefined) {
       void (async () => {
-        await deps.apiSend('POST', paramRoutes.sourceAuth(source.id), bodies.authLoginInfo(loginInfo))
-        if (source.hasLoginUrl) await deps.apiSend('POST', paramRoutes.sourceAuth(source.id), bodies.runLogin())
+        await deps.apiSend(paramOps.sourceAuth.at(source.id), bodies.authLoginInfo(loginInfo))
+        if (source.hasLoginUrl) await deps.apiSend(paramOps.sourceAuth.at(source.id), bodies.runLogin())
         deps.pushOk(t('sources.auth.saved'))
         onDone()
       })().catch((e) => deps.pushError(t('sources.auth.saveFailed', { detail: describeError(e, t) }), rowAnchorOf(source.id)))
       return
     }
-    void deps.apiSend('POST', paramRoutes.sourceAuth(source.id), bodies.authCookies(parseCookieString(cookie))).then(() => {
+    void deps.apiSend(paramOps.sourceAuth.at(source.id), bodies.authCookies(parseCookieString(cookie))).then(() => {
       setCookie('')                      // 输入值即刻清空
       deps.pushOk(t('sources.auth.saved'))
       onDone()
@@ -502,10 +502,10 @@ function SourceAuthPane({ source, onDone, deps = prodDeps }: {
   const runRowAction = (name: string): void => {
     void (async () => {
       if ((source.loginUi ?? []).some((f) => f.type !== 'button')) {
-        await deps.apiSend('POST', paramRoutes.sourceAuth(source.id), bodies.authLoginInfo(loginInfo))
+        await deps.apiSend(paramOps.sourceAuth.at(source.id), bodies.authLoginInfo(loginInfo))
       }
       const r = await deps.apiSend<{ mode?: string; url?: string }>(
-        'POST', paramRoutes.sourceAuth(source.id), bodies.loginAction(name),
+        paramOps.sourceAuth.at(source.id), bodies.loginAction(name),
       )
       if (r.mode === 'external' && typeof r.url === 'string') {
         window.open(r.url, '_blank', 'noopener,noreferrer')

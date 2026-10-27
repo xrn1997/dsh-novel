@@ -30,10 +30,15 @@ describe('chapterContentToText', () => {
   })
 
   it('形如标签的正文原样通过，不套用 HTML 判定', () => {
-    // 服务层的文字已经规范化过一次（contentToText + normalizeChapterText）；再解释一遍
+    // text 分支只做空白行规约（normalizeChapterText）；再解释一遍
     // 会把正文里合法的尖括号当标签吃掉，并顺手把 &amp; 这类字面量解成实体
     const text = '<p>正文里的标签字样</p>'
     expect(chapterContentToText({ kind: 'text', text })).toBe(text)
+  })
+
+  it('text 分支只做空白行规约：CRLF/首尾空白/连续空行收口，标签与实体原样', () => {
+    expect(chapterContentToText({ kind: 'text', text: '  甲 \r\n\r\n 乙 \n' })).toBe('甲\n\n乙')
+    expect(chapterContentToText({ kind: 'text', text: '<p>正文 &amp;</p>\n\n' })).toBe('<p>正文 &amp;</p>')
   })
 
   it('图片投影为说明，不泄露资源标识', () => {

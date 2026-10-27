@@ -5,7 +5,7 @@ import path from 'node:path'
 import { ReadingService } from '../../src/services/reading.js'
 import { chapterContentToText } from '../../src/services/chapter-content.js'
 import type { ChapterContent } from '../../src/shared/wire.js'
-import { LOCAL_SOURCE_ID, paramRoutes, queries, ROUTES } from '../../src/shared/wire.js'
+import { LOCAL_SOURCE_ID, paramOps, queries, ROUTES } from '../../src/shared/wire.js'
 import { IMAGE_SAMPLES, makeEpubFixture } from '../fixtures/epub.js'
 import { startServer } from './helpers.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
@@ -256,7 +256,7 @@ describe('EPUB 的失败与删除（真实 HTTP）', () => {
 
     const single = await importBook('epub2-basic', 'b.epub')
     const another = await importBook('epub3-rich', 'c.epub')
-    await fetch(api(paramRoutes.shelfKey(single.bookKey)), { method: 'DELETE' })
+    await fetch(api(paramOps.shelfDelete.path(single.bookKey)), { method: 'DELETE' })
     // 只删这本的目录与元数据：另一本照旧在
     await expectGone(single.bookKey)
     await expectPresent(another.bookKey)

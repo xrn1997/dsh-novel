@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bodies, BODY, encodeQuery, LOCAL_SOURCE_ID, PARAMS, paramRoutes, pickShelfMeta, planarNavigation, queries, readBodies, ROUTES, SHELF_META } from '../../src/shared/wire.js'
+import { bodies, BODY, encodeQuery, LOCAL_SOURCE_ID, PARAMS, paramOps, pickShelfMeta, planarNavigation, queries, readBodies, ROUTES, SHELF_META } from '../../src/shared/wire.js'
 import { LOCAL_SOURCE_ID as NODE_LOCAL_SOURCE_ID } from '../../src/services/localbooks.js'
 
 /**
@@ -19,37 +19,98 @@ describe('LOCAL_SOURCE_ID（跨半契约常量的唯一主人）', () => {
   })
 })
 
+/** 路由身份的字面快照：不写函数、不从 `ROUTES` 自己派生——表写错也照样绿的表等于没断。
+ *  加/改一条路由必须回来改这里，方法轴与路径轴各自逐条作证。 */
+const ROUTE_IDENTITIES = {
+  health: { method: 'GET', path: '' },
+  sources: { method: 'GET', path: 'sources' },
+  sourcesImport: { method: 'POST', path: 'sources/import' },
+  sourcesJobStatus: { method: 'GET', path: 'sources/job-status' },
+  sourcesBatchProbe: { method: 'POST', path: 'sources/batch-probe' },
+  sourcesBatchEnabled: { method: 'POST', path: 'sources/batch-enabled' },
+  sourcesBatchDelete: { method: 'POST', path: 'sources/batch-delete' },
+  search: { method: 'GET', path: 'search' },
+  searchPlan: { method: 'GET', path: 'search/plan' },
+  searchJob: { method: 'POST', path: 'search/job' },
+  searchJobStatus: { method: 'GET', path: 'search/job-status' },
+  searchJobStream: { method: 'GET', path: 'search/job-stream' },
+  searchJobCancel: { method: 'POST', path: 'search/job-cancel' },
+  exploreKinds: { method: 'GET', path: 'explore/kinds' },
+  exploreList: { method: 'POST', path: 'explore/list' },
+  exploreListMore: { method: 'POST', path: 'explore/list/more' },
+  exploreListStatus: { method: 'GET', path: 'explore/list/job-status' },
+  exploreListStream: { method: 'GET', path: 'explore/list/job-stream' },
+  book: { method: 'GET', path: 'book' },
+  toc: { method: 'GET', path: 'toc' },
+  chapter: { method: 'GET', path: 'chapter' },
+  navigation: { method: 'GET', path: 'navigation' },
+  shelf: { method: 'GET', path: 'shelf' },
+  shelfBatchDelete: { method: 'POST', path: 'shelf/batch-delete' },
+  exportBook: { method: 'GET', path: 'export' },
+  localImport: { method: 'POST', path: 'local/import' },
+  local: { method: 'DELETE', path: 'local' },
+  localDocument: { method: 'GET', path: 'local/document' },
+  localResource: { method: 'GET', path: 'local/resource' },
+  localWarnings: { method: 'GET', path: 'local/warnings' },
+} as const
+
+const PARAM_IDENTITIES = {
+  sourceProbe: { method: 'POST', key: 'x', path: 'sources/x/probe' },
+  sourceEnabled: { method: 'POST', key: 'x', path: 'sources/x/enabled' },
+  sourceAuth: { method: 'POST', key: 'x', path: 'sources/x/auth' },
+  sourceDelete: { method: 'DELETE', key: 'x', path: 'sources/x' },
+  shelfPut: { method: 'PUT', key: 'local:x', path: 'shelf/local%3Ax' },
+  shelfDelete: { method: 'DELETE', key: 'local:x', path: 'shelf/local%3Ax' },
+} as const
+
 describe('路由表计数钉死（「17 条路由」注释曾腐烂且无测试）', () => {
-  it('静态路由 30 条、参数路由 5 条', () => {
+  it('静态路由 30 条、参数操作 6 条', () => {
     expect(Object.keys(ROUTES)).toHaveLength(30)
-    expect(Object.keys(paramRoutes)).toHaveLength(5)
+    expect(Object.keys(paramOps)).toHaveLength(6)
+  })
+
+  it('每个静态路由的 method/path 与字面快照逐条一致', () => {
+    expect(Object.keys(ROUTES).sort()).toEqual(Object.keys(ROUTE_IDENTITIES).sort())
+    for (const [name, expected] of Object.entries(ROUTE_IDENTITIES)) {
+      expect(ROUTES[name as keyof typeof ROUTES], name).toMatchObject(expected)
+    }
+  })
+
+  it('每个参数操作的 method/path/at 与字面快照逐条一致', () => {
+    expect(Object.keys(paramOps).sort()).toEqual(Object.keys(PARAM_IDENTITIES).sort())
+    for (const [name, expected] of Object.entries(PARAM_IDENTITIES)) {
+      const op = paramOps[name as keyof typeof paramOps]
+      expect(op.method, name).toBe(expected.method)
+      expect(op.path(expected.key), name).toBe(expected.path)
+      expect(op.at(expected.key), name).toEqual({ method: expected.method, path: expected.path })
+    }
   })
 
   it('explore 路由的 path 与 segs', () => {
-    expect(ROUTES.exploreKinds).toEqual({ path: 'explore/kinds', segs: ['explore', 'kinds'] })
-    expect(ROUTES.exploreList).toEqual({ path: 'explore/list', segs: ['explore', 'list'] })
-    expect(ROUTES.exploreListMore).toEqual({ path: 'explore/list/more', segs: ['explore', 'list', 'more'] })
-    expect(ROUTES.exploreListStatus).toEqual({ path: 'explore/list/job-status', segs: ['explore', 'list', 'job-status'] })
-    expect(ROUTES.exploreListStream).toEqual({ path: 'explore/list/job-stream', segs: ['explore', 'list', 'job-stream'] })
+    expect(ROUTES.exploreKinds).toEqual({ method: 'GET', path: 'explore/kinds', segs: ['explore', 'kinds'] })
+    expect(ROUTES.exploreList).toEqual({ method: 'POST', path: 'explore/list', segs: ['explore', 'list'] })
+    expect(ROUTES.exploreListMore).toEqual({ method: 'POST', path: 'explore/list/more', segs: ['explore', 'list', 'more'] })
+    expect(ROUTES.exploreListStatus).toEqual({ method: 'GET', path: 'explore/list/job-status', segs: ['explore', 'list', 'job-status'] })
+    expect(ROUTES.exploreListStream).toEqual({ method: 'GET', path: 'explore/list/job-stream', segs: ['explore', 'list', 'job-stream'] })
   })
 
   it('分类词参数名在 PARAMS 里', () => {
     expect(PARAMS.kind).toBe('kind')
   })
   it('书架批量删除：path 与 segs 同源（复用 batch-delete 段，与书源批删同段名）', () => {
-    expect(ROUTES.shelfBatchDelete).toEqual({ path: 'shelf/batch-delete', segs: ['shelf', 'batch-delete'] })
+    expect(ROUTES.shelfBatchDelete).toEqual({ method: 'POST', path: 'shelf/batch-delete', segs: ['shelf', 'batch-delete'] })
   })
   it('搜索任务两面：path 与 segs 同源（服务端段匹配读 segs）', () => {
-    expect(ROUTES.searchJob).toEqual({ path: 'search/job', segs: ['search', 'job'] })
-    expect(ROUTES.searchJobStatus).toEqual({ path: 'search/job-status', segs: ['search', 'job-status'] })
-    expect(ROUTES.searchJobStream).toEqual({ path: 'search/job-stream', segs: ['search', 'job-stream'] })
-    expect(ROUTES.searchJobCancel).toEqual({ path: 'search/job-cancel', segs: ['search', 'job-cancel'] })
+    expect(ROUTES.searchJob).toEqual({ method: 'POST', path: 'search/job', segs: ['search', 'job'] })
+    expect(ROUTES.searchJobStatus).toEqual({ method: 'GET', path: 'search/job-status', segs: ['search', 'job-status'] })
+    expect(ROUTES.searchJobStream).toEqual({ method: 'GET', path: 'search/job-stream', segs: ['search', 'job-stream'] })
+    expect(ROUTES.searchJobCancel).toEqual({ method: 'POST', path: 'search/job-cancel', segs: ['search', 'job-cancel'] })
   })
   it('导航与本地三读口：path 与 segs 同源（本地读口不用路径段——bookKey 里的 / 不必编码成段）', () => {
-    expect(ROUTES.navigation).toEqual({ path: 'navigation', segs: ['navigation'] })
-    expect(ROUTES.localDocument).toEqual({ path: 'local/document', segs: ['local', 'document'] })
-    expect(ROUTES.localResource).toEqual({ path: 'local/resource', segs: ['local', 'resource'] })
-    expect(ROUTES.localWarnings).toEqual({ path: 'local/warnings', segs: ['local', 'warnings'] })
+    expect(ROUTES.navigation).toEqual({ method: 'GET', path: 'navigation', segs: ['navigation'] })
+    expect(ROUTES.localDocument).toEqual({ method: 'GET', path: 'local/document', segs: ['local', 'document'] })
+    expect(ROUTES.localResource).toEqual({ method: 'GET', path: 'local/resource', segs: ['local', 'resource'] })
+    expect(ROUTES.localWarnings).toEqual({ method: 'GET', path: 'local/warnings', segs: ['local', 'warnings'] })
   })
 })
 
@@ -193,11 +254,14 @@ describe('书架 PUT 三形态（body 形状纪律）', () => {
 })
 
 describe('漂移守卫', () => {
-  it('命中行加书架的路径必须走 paramRoutes.shelfKey——手拼 shelf/… 曾是活漂移', () => {
+  it('命中行加书架的路径必须走 paramOps.shelfPut——手拼 shelf/… 曾是活漂移', () => {
     const bookKey = 'https://a.com/book/1/?x=1&y=2'
-    expect(paramRoutes.shelfKey(bookKey)).toBe(`shelf/${encodeURIComponent(bookKey)}`)
+    expect(paramOps.shelfPut.path(bookKey)).toBe(`shelf/${encodeURIComponent(bookKey)}`)
+    expect(paramOps.shelfPut.method).toBe('PUT')
+    expect(paramOps.shelfDelete.path(bookKey)).toBe(paramOps.shelfPut.path(bookKey))
+    expect(paramOps.shelfDelete.method).toBe('DELETE')
     // 统一断言：任何 client 装配点产出的 shelf 路径都要能被这个构造器生成
-    expect(paramRoutes.shelfKey('local:00000000-0000-0000-0000-000000000000')).toBe(`shelf/${encodeURIComponent('local:00000000-0000-0000-0000-000000000000')}`)
+    expect(paramOps.shelfPut.path('local:00000000-0000-0000-0000-000000000000')).toBe(`shelf/${encodeURIComponent('local:00000000-0000-0000-0000-000000000000')}`)
   })
 })
 

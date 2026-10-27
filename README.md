@@ -131,7 +131,7 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 
 ## HTTP API
 
-所有路由以 `/novel-api` 为前缀（仅接受本机 loopback；Origin/Referer 在场时必须同源，缺席放行以支持本机工具 / curl）。JSON 响应使用统一信封 `{ ok, value | error }`，错误附带 `code` 与可选的规则段级定位；`GET /export`、两条 SSE 流与 `GET /local/resource` 是流式 / 二进制响应，不套信封。共 35 条路由（30 静态 + 5 参数，计数由 `tests/shared/wire-builders.test.ts` 钉死）。**路由名与值形状的代码真相在 `src/shared/wire.ts`**——Node 半与浏览器半共用同一份定义，契约测试逐条把守。
+所有路由以 `/novel-api` 为前缀（仅接受本机 loopback；Origin/Referer 在场时必须同源，缺席放行以支持本机工具 / curl）。JSON 响应使用统一信封 `{ ok, value | error }`，错误附带 `code` 与可选的规则段级定位；`GET /export`、两条 SSE 流与 `GET /local/resource` 是流式 / 二进制响应，不套信封。共 36 条路由（30 静态 + 6 参数操作，计数由 `tests/shared/wire-builders.test.ts` 钉死）。**路由身份（method + path）与值形状的代码真相在 `src/shared/wire.ts`**——Node 半与浏览器半共用同一份定义，契约测试逐条把守。
 
 | 面 | 路由 |
 | --- | --- |

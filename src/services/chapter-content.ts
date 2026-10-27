@@ -7,8 +7,8 @@ import type { ChapterContent, ContentNode } from '../shared/wire.js'
  * 是同一批内容的两个出口——各写一份投影，同一本书的导出与 AI 读到的正文就会分叉。
  *
  * 两个分支的口径：
- * ① `text` **逐字通过**：服务层交给这里的文字已经收过口（contentToText + normalizeChapterText），
- *    再解释一次会把小说里合法的尖括号当标签吃掉，还会把 `&amp;` 这类字面量解成实体；
+ * ① `text` **行内逐字通过**：只过一条空白行规约（`normalizeChapterText`，幂等），不解释尖括号、
+ *    不把 `&amp;` 解成实体——再解释一次会把小说里合法的标签字样吃掉。本地 TXT 与在线正文都走这一条；
  * ② `rich` **只遍历本树**：不追链接目标（脚注/目录互指会绕着圈把整本书重复输出），
  *    不输出资源 ID、节点 ID 与任何存储路径（wire 与 AI 输出都不该出现本地存储标识）。
  *
@@ -24,8 +24,8 @@ import type { ChapterContent, ContentNode } from '../shared/wire.js'
  *   这条不是可选优化：把子树当行内片段摊平会让这两种结构静默失真（实测 `甲\t乙` 变 `甲乙`、
  *   pre 的缩进换行被折成一行），而导出与 AI 读到的正文正是这条投影的输出。
  *
- * **行规约（源码空白折成单空格、逐行 trim、丢弃空行）由投影自己承担，不交给 normalizeChapterText**：
- * 文字面直接取本函数的输出（getChapter、TXT 导出、AI 工具）、rich 文字根本不经过它，而它逐行 trim
+ * **rich 分支的行规约（源码空白折成单空格、逐行 trim、丢弃空行）由投影自己承担**：
+ * rich 文字不经过 `normalizeChapterText`，而它逐行 trim
  * 会把 pre 的缩进一起丢；反过来投影里不做规约也不行——EPUB 的排版 XHTML（`<p>\n  正文\n</p>`）
  * 会把缩进与首空行原样带进文字面。故非 pre 内容收口、pre 子树整棵绕过。
  *
@@ -51,8 +51,23 @@ const CELL_TAGS: ReadonlySet<string> = new Set(['td', 'th'])
 const SOURCE_WS = /\s+/g
 
 export function chapterContentToText(content: ChapterContent): string {
-  // text 分支恒等：不给它套 contentToText/htmlToText（头注 ①）
-  return content.kind === 'text' ? content.text : flowText(content.nodes, false)
+  // text 分支只做空白行规约：不套 contentToText/htmlToText（头注 ①）
+  return content.kind === 'text' ? normalizeChapterText(content.text) : flowText(content.nodes, false)
+}
+
+/** 正文文字的行规约（逐行 trim → 去首尾空行 → 相邻空行折叠一个）。
+ *  online 正文与本地 TXT 的文字面共用这一份；对已规约文本幂等（导出/TXT 链路会重复过手）。
+ *  **只动空白与换行**：尖括号、实体串、行内空白原样保留。 */
+export function normalizeChapterText(raw: string): string {
+  const lines = raw.split('\n').map((l) => l.trim())
+  while (lines.length > 0 && lines[0] === '') lines.shift()
+  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+  const out: string[] = []
+  for (const l of lines) {
+    if (l === '' && out[out.length - 1] === '') continue
+    out.push(l)
+  }
+  return out.join('\n')
 }
 
 /** 行规约：行内空白折成单空格、逐行去首尾空白、丢弃空行（头注「行规约」）。只在非 pre 的行上调用。

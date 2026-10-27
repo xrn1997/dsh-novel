@@ -44,7 +44,7 @@ export interface VisibleNode { index: number; nodeId: string; offsetWithinNode: 
  *  只有「回到链接来源」会带上非零偏移（让返回落在同一个节点内的同一处，而不是节点顶）。 */
 export interface JumpTarget { index: number; anchorId: string | null; offsetWithinNode: number }
 
-/** DOM 测量口（视图实现；会话只读不碰 DOM） */
+/** DOM 测量口（`client/reader-geometry.ts` 实现；会话只读不碰 DOM） */
 export interface ReaderPort {
   measureAnchors(): ChapterAnchor[]
   scrollTop(): number

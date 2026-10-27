@@ -1155,6 +1155,29 @@ describe('本地 EPUB 门面：导入回执、图文读取、导航与资源', (
     expect(await fsPromises.readdir(path.join(dir, 'local'))).toEqual([])
   })
 
+  it('本地副本删失败：架位保留可重试（单删与批删共用「先副本、后架位」这一条顺序）', async () => {
+    const { svc } = await mk()
+    const a = await svc.localImport(makeEpubFixture('epub3-rich'), 'a.epub')
+    const b = await svc.localImport(makeEpubFixture('epub2-basic'), 'b.epub')
+    const realRm = fsPromises.rm
+    // 只拦「本地书目录」那一次 rm：`.json` / `.txt` / staging 与 shelf.json 的落盘都不匹配这条形状
+    const spy = vi.spyOn(fsPromises, 'rm').mockImplementation(async (p, o) => {
+      if (/[\\/]local[\\/][0-9a-f-]{36}$/.test(String(p))) throw new Error('模拟副本删失败')
+      return realRm(p, o)
+    })
+    try {
+      // 反过来（先移架位再删副本）就是没有架位的磁盘孤儿：这里三条入口都必须把架位留住
+      await expect(svc.removeBook(a.bookKey)).rejects.toThrow(/副本删失败/)
+      expect(svc.shelfList().some((x) => x.bookKey === a.bookKey)).toBe(true)
+      await expect(svc.removeBooks([b.bookKey])).rejects.toThrow(/副本删失败/)
+      expect(svc.shelfList().some((x) => x.bookKey === b.bookKey)).toBe(true)
+      await expect(svc.removeLocalBook(a.bookKey)).rejects.toThrow(/副本删失败/)
+      expect(svc.shelfList().some((x) => x.bookKey === a.bookKey)).toBe(true)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('提交标记写失败：本次 UUID 落盘物回收、不造书架条目、既有书照读', async () => {
     const { svc, dir } = await mk()
     const keep = await svc.localImport(Buffer.from('第1章 A\n内容', 'utf8'), '既有.txt')

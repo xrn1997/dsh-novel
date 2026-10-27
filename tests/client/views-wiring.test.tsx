@@ -11,9 +11,10 @@ import { ReaderView } from '../../src/client/views/ReaderView.js'
 import { ShelfView } from '../../src/client/views/ShelfView.js'
 import { SearchView } from '../../src/client/views/SearchView.js'
 import { resetSourceInboxUi } from '../../src/client/source-inbox-ui.js'
+import { loadPanelShelf, panelShelf, resetPanelShelf } from '../../src/client/panel-shelf.js'
 import { resetJobSurface, useJobPolling } from '../../src/client/jobs.js'
 import { navigate, routeStore, setPref } from '../../src/client/store.js'
-import { LOCAL_SOURCE_ID, ROUTES, SEARCH_BOOKS_CAP, paramRoutes, queries } from '../../src/shared/wire.js'
+import { LOCAL_SOURCE_ID, ROUTES, SEARCH_BOOKS_CAP, paramOps, queries } from '../../src/shared/wire.js'
 import type { SearchJobSnapshot } from '../../src/shared/wire.js'
 import { makeCoreDeps, makeDeps, makeReaderDeps } from './fake-deps.js'
 import type { DepsOverrides, FakeViewDeps, FakeReaderDeps, FakeSettingsDeps } from './fake-deps.js'
@@ -30,7 +31,14 @@ import type {
 
 const coreDeps = (over: DepsOverrides): FakeViewDeps => makeCoreDeps(over)
 
+/** 快照轮询的读数：搜索结果页挂载还会向投影问一次书架基线（`docs/adr/0046`），
+ *  「本轮到底打了几发读取」按任务状态那一条路径数，别把基线那一发混进轮询账。 */
+const snapshotReads = (apiGet: unknown): number =>
+  ((apiGet as ReturnType<typeof vi.fn>).mock.calls
+    .filter((c) => String(c[0]).startsWith(`${ROUTES.searchJobStatus.path}?`)).length)
+
 afterEach(cleanup)
+beforeEach(resetPanelShelf)
 
 describe('ProbePane：失败显式呈现（历史 bug：.then(setResult) 无 rejection handler → 永久「探针执行中…」）', () => {
   const probeDeps = (apiSend: unknown): FakeSettingsDeps => makeDeps({ apiSend })
@@ -358,6 +366,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
       apiSend: vi.fn(async () => { submitted = true; return { jobId: 'j1' } }),
       apiGet: vi.fn(async (path: string) => {
         reads.push(path)
+        if (String(path) === ROUTES.shelf.path) return []      // 落架基线那一问（`docs/adr/0046`）
         return { job: submitted ? snap({ added: [hitGroup('斗罗后台命中')], next: 1 }) : null }
       }),
     })
@@ -369,14 +378,17 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     const sub = openPerSourceAxis().querySelector('.novel-hit-sub')
     expect(sub, '按源那一档的命中行副行未渲染').not.toBeNull()
     expect(sub!.textContent).toBe('')
-    expect(deps.apiSend).toHaveBeenCalledWith('POST', ROUTES.searchJob.path, { keyword: '斗罗' })
-    // 全部读取都是快照：没有任何一次 search?keyword= 的批请求从浏览器半发出
-    expect(reads.every((r) => r.startsWith(`${ROUTES.searchJobStatus.path}?`))).toBe(true)
+    expect(deps.apiSend).toHaveBeenCalledWith(ROUTES.searchJob, { keyword: '斗罗' })
+    // 全部读取只有两类：落架基线那一发（`docs/adr/0046`）与快照游标读——没有任何一次
+    // search?keyword= 的批请求从浏览器半发出
+    expect(reads.every((r) => r === ROUTES.shelf.path || r.startsWith(`${ROUTES.searchJobStatus.path}?`))).toBe(true)
   })
 
   it('挂载即恢复：服务端持有本轮结果 → 直接渲染且不重新提交', async () => {
     const deps = coreDeps({
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({ keyword: '上一轮', phase: 'done', added: [hitGroup('上一轮的命中')], next: 1 }),
       })),
     })
@@ -397,7 +409,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
 
   it('相关性档改变默认视野但不改账目：suspect 收进组内折叠，展开后仍是可点的命中行', async () => {
     const deps = coreDeps({
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({
           keyword: '斗罗', phase: 'done', next: 1, total: 1, done: 1,
           added: [{
@@ -438,7 +452,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
 
   it('整组都被判 suspect：一条不丢——折叠区带着全部条数在案，不许读成「搜了没命中」', async () => {
     const deps = coreDeps({
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({ keyword: '斗罗', phase: 'done', next: 1, total: 1, done: 1, added: [hitGroup('命中', 's1', { inView: false })] }),
       })),
     })
@@ -449,7 +465,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
 
   it('默认按书：同一本的多源收成一行，「读这本」只在展开后的逐源行里', async () => {
     const deps = coreDeps({
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1'), hitGroup('斗罗', 's2')] }),
       })),
     })
@@ -477,11 +495,13 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
   })
 
   it('都加架：逐条走既有 PUT（幂等归服务端），每条带自己那个源，不开新写口', async () => {
-    // 桩要按 apiSend 的真实 arity 声明，否则 mock.calls 的元素被推成空元组、按下标取值即 TS 红
-    const apiSend = vi.fn(async (_m: 'POST' | 'PUT' | 'DELETE', _path: string, _body?: unknown) => ({}))
+    // 桩按 apiSend 的新 arity（目标 + body）声明，mock.calls 才能按下标取到 method/path/body
+    const apiSend = vi.fn(async (_target: { method: string; path: string }, _body?: unknown) => ({}))
     const deps = coreDeps({
       apiSend,
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1'), hitGroup('斗罗', 's2')] }),
       })),
     })
@@ -489,12 +509,12 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     await waitFor(() => expect(screen.getByText(/2 家源/)).toBeTruthy())
     fireEvent.click(within(booksAxis()).getByRole('button', { name: '都加架' }))
     await waitFor(() => expect(apiSend).toHaveBeenCalledTimes(2))
-    const key = paramRoutes.shelfKey('https://s.com/book/1')
-    expect(apiSend).toHaveBeenCalledWith('PUT', key, expect.objectContaining({ title: '斗罗' }))
+    const key = paramOps.shelfPut.path('https://s.com/book/1')
+    expect(apiSend).toHaveBeenCalledWith({ method: 'PUT', path: key }, expect.objectContaining({ title: '斗罗' }))
     // 两家给的是同一个地址 ⇒ 路径分不出谁是谁，只有 body 里的 sourceId 认得出「这条 PUT 是哪家那一行」
-    expect(apiSend.mock.calls.map((c) => (c[2] as { sourceId: string }).sourceId),
+    expect(apiSend.mock.calls.map((c) => (c[1] as { sourceId: string }).sourceId),
       '逐条各带自己那个源（同址只落一个架位，署名就靠 body 里的 sourceId）').toEqual(['s1', 's2'])
-    expect(apiSend.mock.calls.map((c) => [c[0], c[1]]), '只复用 PUT shelf/:key 那一条既有路').toEqual([['PUT', key], ['PUT', key]])
+    expect(apiSend.mock.calls.map((c) => [c[0].method, c[0].path]), '只复用 PUT shelf/:key 那一条既有路').toEqual([['PUT', key], ['PUT', key]])
   })
 
   it('作者串是整张配音表那种长度：行上只留前两位加「等」，全串归 title 与展开后的逐源行', async () => {
@@ -502,7 +522,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     // 无障碍名——不收，读屏每本念一遍名单，视觉上还把尾巴与「都加架」顶下两行。
     const longAuthor = '张沛,黑石稔,陈奕雯,高其昌,筱筝,鬼月'
     const deps = coreDeps({
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({
           keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1,
           added: [{
@@ -530,7 +552,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
   it('作者只有两位或那种空格分隔的角色表：一字不改（没有第三位可「等」，也不拿逗号去切）', async () => {
     const cases = ['天蚕土豆', '甲,乙', '萧炎：锦鲤 药老：北炎 美杜莎：常蓉珊']
     const deps = coreDeps({
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({
           keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1,
           added: [{
@@ -554,10 +578,12 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     // 症状：都加架把两条都写上了架，界面上却什么都没变——按钮仍「都加架」、
     // 两条仍「＋ 加书架」，于是用户再点一次，把重复写当成没生效的反馈。
     const releases: Array<() => void> = []
-    const apiSend = vi.fn((_m: 'POST' | 'PUT' | 'DELETE', _path: string, _body?: unknown) => new Promise<void>((res) => { releases.push(res) }))
+    const apiSend = vi.fn((_target: { method: string; path: string }, _body?: unknown) => new Promise<void>((res) => { releases.push(res) }))
     const deps = coreDeps({
       apiSend,
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1'), hitGroup('斗罗', 's2')] }),
       })),
     })
@@ -565,7 +591,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     await waitFor(() => expect(screen.getByText(/2 家源/)).toBeTruthy())
     const row = bookRow('斗罗')
     fireEvent.click(row.querySelector('.novel-book-main') as HTMLElement)   // 展开
-    const putCount = (): number => apiSend.mock.calls.filter((c) => c[0] === 'PUT').length
+    const putCount = (): number => apiSend.mock.calls.filter((c) => c[0].method === 'PUT').length
     fireEvent.click(within(row).getByRole('button', { name: '都加架' }))
     const busy = within(row).getByRole('button', { name: '加架中…' }) as HTMLButtonElement
     expect(busy.disabled, '在途要禁点，也要有个在途读数（只灰不改字＝没人知道点没点上）').toBe(true)
@@ -580,11 +606,13 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
   })
 
   it('先单加一条再点都加架：只补没落架的那一条，落架账不重复', async () => {
-    const apiSend = vi.fn(async (_m: 'POST' | 'PUT' | 'DELETE', _path: string, _body?: unknown) => ({}))
+    const apiSend = vi.fn(async (_target: { method: string; path: string }, _body?: unknown) => ({}))
     const pushOk = vi.fn()
     const deps = coreDeps({
       apiSend, pushOk,
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1', { url: 'https://s.com/1' }), hitGroup('斗罗', 's2', { url: 'https://s.com/2' })] }),
       })),
     })
@@ -592,7 +620,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     await waitFor(() => expect(screen.getByText(/2 家源/)).toBeTruthy())
     const row = bookRow('斗罗')
     fireEvent.click(row.querySelector('.novel-book-main') as HTMLElement)
-    const putCount = (): number => apiSend.mock.calls.filter((c) => c[0] === 'PUT').length
+    const putCount = (): number => apiSend.mock.calls.filter((c) => c[0].method === 'PUT').length
     fireEvent.click(within(row).getAllByRole('button', { name: '＋ 加书架' })[0])
     await waitFor(() => expect(putCount()).toBe(1))
     expect(within(row).getByRole('button', { name: '都加架' }), '只落了一条：整本还没齐').toBeTruthy()
@@ -609,7 +637,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     const pushError = vi.fn()
     const deps = coreDeps({
       apiSend, pushError,
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({ keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1, added: [hitGroup('斗罗')] }),
       })),
     })
@@ -628,7 +658,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     const pushError = vi.fn()
     const deps = coreDeps({
       apiSend, pushError,
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({ keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1, added: [hitGroup('斗罗')] }),
       })),
     })
@@ -651,7 +683,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     const pushError = vi.fn(() => { throw new Error('回执炸了') })
     const deps = coreDeps({
       apiSend, pushError,
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({ keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1, added: [hitGroup('斗罗')] }),
       })),
     })
@@ -680,10 +714,12 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
 
   it('收起再展开：已在架的行仍显示已在书架（账住在行之上，不在那一行自己肚子里）', async () => {
     // 展开区收起时不渲染（那是这一行的性能账），所以落架的账必须存在比这一行更长寿的地方。
-    const apiSend = vi.fn(async (_m: 'POST' | 'PUT' | 'DELETE', _path: string, _body?: unknown) => ({}))
+    const apiSend = vi.fn(async (_target: { method: string; path: string }, _body?: unknown) => ({}))
     const deps = coreDeps({
       apiSend,
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1'), hitGroup('斗罗', 's2')] }),
       })),
     })
@@ -700,6 +736,59 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     expect(within(bookRow('斗罗')).getByRole('button', { name: '都在架' })).toBeTruthy()
   })
 
+  it('切阅读器再回搜索：落架行仍显示已落（落架账在面板期投影里，不随视图卸载蒸发）', async () => {
+    const apiSend = vi.fn(async () => ({}))
+    const searchDeps = coreDeps({
+      apiSend,
+      apiGet: vi.fn(async (path: string) => {
+        if (String(path) === ROUTES.shelf.path) return []
+        return { job: snap({ keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1, added: [hitGroup('斗罗')] }) }
+      }),
+    })
+    const first = render(createElement(SearchView, { deps: searchDeps }))
+    await waitFor(() => expect(screen.getByText(/1 家源/)).toBeTruthy())
+    fireEvent.click(bookRow('斗罗').querySelector('.novel-book-main') as HTMLElement)
+    fireEvent.click(within(bookRow('斗罗')).getByRole('button', { name: '＋ 加书架' }))
+    await waitFor(() => expect(within(bookRow('斗罗')).getAllByRole('button', { name: '已在书架' })).toHaveLength(1))
+    first.unmount()
+
+    const readerApi = makeReaderDeps()
+    const reader = render(createElement(ReaderView, {
+      sourceId: 's1', bookKey: 'https://s.com/book/1', title: '斗罗', deps: readerApi,
+    }))
+    await waitFor(() => expect(
+      (readerApi.apiGet as ReturnType<typeof vi.fn>).mock.calls.some((c) => String(c[0]).startsWith(ROUTES.shelf.path)),
+    ).toBe(true))
+    reader.unmount()
+
+    render(createElement(SearchView, { deps: searchDeps }))
+    await waitFor(() => expect(screen.getByText(/1 家源/)).toBeTruthy())
+    fireEvent.click(bookRow('斗罗').querySelector('.novel-book-main') as HTMLElement)
+    expect(within(bookRow('斗罗')).getAllByRole('button', { name: '已在书架' }), '切去阅读器再回来把落架账洗掉了').toHaveLength(1)
+    expect(within(bookRow('斗罗')).queryAllByRole('button', { name: '＋ 加书架' })).toHaveLength(0)
+  })
+
+  it('面板重开直接落在搜索页：投影先取服务端书架当基线，已在架的书不再写成「＋ 加书架」', async () => {
+    // routeStore 跨卸载存活、panelShelf 随面板卸载清空：只进过搜索页的面板重开时，基线不能指
+    // 望书架 tab 或阅读器替它取（裁决与后果见 `docs/adr/0046`）。
+    const onShelf = {
+      bookKey: 'https://s.com/book/1', sourceId: 's1', title: '斗罗', addedAt: 1,
+      progress: { chapterIndex: 0, offsetRatio: 0, updatedAt: 1 },
+    }
+    const deps = coreDeps({
+      apiSend: vi.fn(async () => ({})),
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? [onShelf]
+        : ({ job: snap({ keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1, added: [hitGroup('斗罗')] }) })),
+    })
+    render(createElement(SearchView, { deps }))
+    await waitFor(() => expect(bookRow('斗罗')).toBeTruthy())
+    fireEvent.click(bookRow('斗罗').querySelector('.novel-book-main') as HTMLElement)
+    expect(within(bookRow('斗罗')).getByRole('button', { name: '已在书架' }), '服务端在册的书又被写成「＋ 加书架」').toBeTruthy()
+    expect(within(bookRow('斗罗')).getByRole('button', { name: '都在架' })).toBeTruthy()
+    expect(deps.apiSend, '基线已在册：不该再为它们发幂等 PUT').not.toHaveBeenCalled()
+  })
+
   it('一家给两行：家数报 1、都加架发两条、回执单位是「条」', async () => {
     // `searchOne` 不做源内去重，同一家把装饰写法与裸写法各给一条是常态：拿行数当家数会把
     // 「只有一家答话」念成两家，拿家数当回执数会把没上架的那条吞掉。
@@ -707,7 +796,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     const pushOk = vi.fn()
     const deps = coreDeps({
       apiSend, pushOk,
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({
           keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1,
           added: [{
@@ -751,7 +842,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     const pushError = vi.fn()
     const deps = coreDeps({
       apiSend, pushOk, pushError,
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({
           keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1,
           added: [{
@@ -783,7 +876,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     const pushError = vi.fn()
     const deps = coreDeps({
       apiSend, pushOk, pushError,
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1', { url: 'https://s.com/a' }), hitGroup('斗罗', 's2', { url: 'https://s.com/a' })] }),
       })),
     })
@@ -805,7 +900,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     const pushError = vi.fn()
     const deps = coreDeps({
       apiSend, pushOk, pushError,
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1', { url: 'https://s.com/1' }), hitGroup('斗罗', 's2', { url: 'https://s.com/2' })] }),
       })),
     })
@@ -819,12 +916,14 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
   it('都加架不替「没有地址」那一行发 PUT，也不把它算成失败', async () => {
     // 无 url 的命中在逐源行上本就不给动作（既进不了阅读器也加不了架）；书行的批量动作替它
     // 发一发空架位 PUT，就是写进一条没有书面的架位、还要回头报「已加」——两头谎。
-    const apiSend = vi.fn(async (_m: 'POST' | 'PUT' | 'DELETE', _path: string, _body?: unknown) => ({}))
+    const apiSend = vi.fn(async (_target: { method: string; path: string }, _body?: unknown) => ({}))
     const pushOk = vi.fn()
     const pushError = vi.fn()
     const deps = coreDeps({
       apiSend, pushOk, pushError,
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({
           keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1,
           added: [{
@@ -842,7 +941,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     fireEvent.click(within(booksAxis()).getByRole('button', { name: '都加架' }))
     await waitFor(() => expect(pushOk).toHaveBeenCalledWith('已加 1 个架位：斗罗'))
     expect(apiSend).toHaveBeenCalledTimes(1)                     // 只发有地址那一行
-    expect(apiSend.mock.calls[0][1]).toBe(paramRoutes.shelfKey('https://s.com/a'))
+    expect(apiSend.mock.calls[0][0].path).toBe(paramOps.shelfPut.path('https://s.com/a'))
     expect(pushError).toHaveBeenCalledWith('1 条没有地址，加不了架')   // 没试过不是失败，点名说清
     expect(pushError.mock.calls.map((c) => String(c[0])).join(), '不许把没发的算进失败数').not.toMatch(/加入失败/)
   })
@@ -851,12 +950,14 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     // 撤掉「有加成才报成功」那道闸的变异就在这一条红：整行没有地址时 ok 恒 0，
     // 「已加 0 个架位：X」是给一次没发生的写入报喜——点了一下、什么都没加，成功 toast 却响了。
     // 架空与全部 PUT 失败读出来都是 0，两种结局挤进同一句成功话；零加成的交代改由错误通道给。
-    const apiSend = vi.fn(async (_m: 'POST' | 'PUT' | 'DELETE', _path: string, _body?: unknown) => ({}))
+    const apiSend = vi.fn(async (_target: { method: string; path: string }, _body?: unknown) => ({}))
     const pushOk = vi.fn()
     const pushError = vi.fn()
     const deps = coreDeps({
       apiSend, pushOk, pushError,
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({
           keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1,
           added: [{
@@ -888,7 +989,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     const pushError = vi.fn()
     const deps = coreDeps({
       apiSend, pushOk, pushError,
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1', { url: 'https://s.com/1' }), hitGroup('斗罗', 's2', { url: 'https://s.com/2' })] }),
       })),
     })
@@ -903,10 +1006,12 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
   it('书行的动作不带第二份字段映射：加架发的还是那一份元数据（封面／简介／最新章回读本组命中）', async () => {
     // 归并只带「这一家把它叫作什么」与地址；按书成了默认视图之后，若这条 PUT 不再回读命中本身，
     // 书架卡片就少一张封面——那是主路径的可见退化，不是「少带一个可选字段」。
-    const apiSend = vi.fn(async (_m: 'POST' | 'PUT' | 'DELETE', _path: string, _body?: unknown) => ({}))
+    const apiSend = vi.fn(async (_target: { method: string; path: string }, _body?: unknown) => ({}))
     const deps = coreDeps({
       apiSend,
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({
           keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1,
           added: [{
@@ -927,7 +1032,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     })
     render(createElement(SearchView, { deps }))
     await waitFor(() => expect(screen.getByText(/1 家源/)).toBeTruthy())
-    const putBodies = (): unknown[] => apiSend.mock.calls.filter((c) => c[0] === 'PUT').map((c) => c[2])
+    const putBodies = (): unknown[] => apiSend.mock.calls.filter((c) => c[0].method === 'PUT').map((c) => c[1])
     // 展开后的逐源行走同一条接线：＋加书架 不许比都加架少带字段（先真展开：读的是展开区）
     openBookFold()
     fireEvent.click(within(booksAxis()).getAllByRole('button', { name: '＋ 加书架' })[0])
@@ -944,11 +1049,13 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
 
   it('同一家给两种写法：逐源行各回读各的元数据（地址参与行身份）', async () => {
     // 行身份少了地址，第二条就会顶用第一条的封面与最新章——两行看着都动了作，存的却是同一份元数据
-    const apiSend = vi.fn(async (_m: 'POST' | 'PUT' | 'DELETE', _path: string, _body?: unknown) => ({}))
+    const apiSend = vi.fn(async (_target: { method: string; path: string }, _body?: unknown) => ({}))
     const pushOk = vi.fn()
     const deps = coreDeps({
       apiSend, pushOk,
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({
           keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1,
           added: [{
@@ -965,8 +1072,8 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     await waitFor(() => expect(screen.getByText(/1 家源/)).toBeTruthy())
     fireEvent.click(within(booksAxis()).getByRole('button', { name: '都加架' }))
     await waitFor(() => expect(pushOk).toHaveBeenCalledWith('已加 2 个架位：斗罗'))
-    expect(apiSend.mock.calls.map((c) => (c[2] as { coverUrl: string }).coverUrl)).toEqual(['https://c/a.jpg', 'https://c/b.jpg'])
-    expect(apiSend.mock.calls.map((c) => (c[2] as { title: string }).title)).toEqual(['斗罗', '《斗罗》'])
+    expect(apiSend.mock.calls.map((c) => (c[1] as { coverUrl: string }).coverUrl)).toEqual(['https://c/a.jpg', 'https://c/b.jpg'])
+    expect(apiSend.mock.calls.map((c) => (c[1] as { title: string }).title)).toEqual(['斗罗', '《斗罗》'])
   })
 
   it('超出上限：那一行报出全量本数，不把「还有更多」吞成结束', async () => {
@@ -975,7 +1082,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
       intro: null, lastChapterName: null, kind: null, wordCount: null,
     }))
     const deps = coreDeps({
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({ keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1, added: [{ sourceId: 's1', sourceName: 'S', status: 'verified', hits }] }),
       })),
     })
@@ -988,7 +1097,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
 
   it('整轮都被判 suspect：按书视图空着也不许读成「没有结果」——账在按源那一档里', async () => {
     const deps = coreDeps({
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({ keyword: '斗罗', phase: 'done', total: 1, done: 1, next: 1, added: [hitGroup('命中', 's1', { inView: false })] }),
       })),
     })
@@ -1006,7 +1117,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     // 变异：把这一档的 <details> 换成 <div>（或删掉 summary）——整串用例只读文本，换掉照样绿，
     // 于是「降级成折叠」这条裁决可以在没人看见的地方被翻回去。钉的是 DOM 事实，不是文本在场。
     const deps = coreDeps({
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({ keyword: '斗罗', phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗', 's1'), hitGroup('斗罗', 's2')] }),
       })),
     })
@@ -1030,7 +1143,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     const frames: Array<(data: string) => void> = []
     const deps = coreDeps({
       apiSend: vi.fn(async () => ({ jobId: 'j1' })),
-      apiGet: vi.fn(async () => ({ job: null })),
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({ job: null })),
       apiEventStream: vi.fn(async (_p: string, onFrame: (d: string) => void) => {
         frames.push(onFrame)
         return new Promise<void>(() => {})
@@ -1077,11 +1192,13 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     // 第二轮的基线只在身份切换后被读到（since=0）；此前每次读都回「还没有任务」
     let baseline: SearchJobSnapshot | null = null
     // POST search/job 要回 jobId（否则整轮被读成「任务已不可读」），PUT 的返回值没人读
-    const apiSend = vi.fn(async (_m: 'POST' | 'PUT' | 'DELETE', _path: string, _body?: unknown) => ({ jobId: 'j1' }))
+    const apiSend = vi.fn(async (_target: { method: string; path: string }, _body?: unknown) => ({ jobId: 'j1' }))
     const frames: Array<(data: string) => void> = []
     const deps = coreDeps({
       apiSend,
-      apiGet: vi.fn(async () => ({ job: baseline })),
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({ job: baseline })),
       apiEventStream: vi.fn(async (_p: string, onFrame: (d: string) => void) => {
         frames.push(onFrame)
         return new Promise<void>(() => {})
@@ -1105,9 +1222,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     // 那一行确实活着（不是「查不到才看着像未加」）：点它，PUT 落在新地址上
     fireEvent.click(within(bookRow('斗罗')).getByRole('button', { name: '＋ 加书架' }))
     await waitFor(() => expect(within(bookRow('斗罗')).getByRole('button', { name: '已在书架' })).toBeTruthy())
-    const puts = apiSend.mock.calls.filter((c) => c[0] === 'PUT')
+    const puts = apiSend.mock.calls.filter((c) => c[0].method === 'PUT')
     expect(puts, '两轮各点各的：上一轮那一发不是这一行点的').toHaveLength(2)
-    expect(puts[1]?.[1]).toBe(paramRoutes.shelfKey('https://s.com/b'))
+    expect(puts[1]?.[0].path).toBe(paramOps.shelfPut.path('https://s.com/b'))
   })
 
   it('陈旧快照防线：第二轮落地后，第一轮的迟到响应不许污染结果', async () => {
@@ -1116,6 +1233,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     const deps = coreDeps({
       apiSend: vi.fn(async () => { posts++; return { jobId: posts === 1 ? 'A' : 'B' } }),
       apiGet: vi.fn((path: string) => {
+        if (String(path) === ROUTES.shelf.path) return Promise.resolve([])       // 落架基线那一问不归本用例
         if (path !== `${ROUTES.searchJobStatus.path}?since=0`) return Promise.resolve({ job: null })
         if (posts === 0) return Promise.resolve({ job: null })                  // 挂载读：还没有任务
         if (posts === 1) return new Promise((res) => { resolveStale = res })     // 第一轮首拍挂起
@@ -1128,7 +1246,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     const input = screen.getByPlaceholderText('书名 / 作者')
     fireEvent.change(input, { target: { value: '第一轮' } })
     fireEvent.submit(screen.getByRole('form'))
-    await waitFor(() => expect(deps.apiGet).toHaveBeenCalledTimes(2))            // 挂载读 + 第一轮首拍
+    await waitFor(() => expect(snapshotReads(deps.apiGet)).toBe(2))              // 挂载读 + 第一轮首拍
     fireEvent.change(input, { target: { value: '第二轮' } })
     fireEvent.submit(screen.getByRole('form'))
     await waitFor(() => expect(bookRow('第二轮书')).toBeTruthy())
@@ -1141,12 +1259,12 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
 
   it('空参与集与「搜了没命中」分得清：total=0 → 引导导入书源；total>0 零分组 → 换关键词', async () => {
     const view = render(createElement(SearchView, {
-      deps: coreDeps({ apiGet: vi.fn(async () => ({ job: snap({ total: 0, done: 0, next: 0 }) })) }),
+      deps: coreDeps({ apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path ? [] : ({ job: snap({ total: 0, done: 0, next: 0 }) })) }),
     }))
     await waitFor(() => expect(screen.getByText(/没有参与搜索的书源/)).toBeTruthy())
     view.unmount()
     render(createElement(SearchView, {
-      deps: coreDeps({ apiGet: vi.fn(async () => ({ job: snap({ added: [], next: 0 }) })) }),
+      deps: coreDeps({ apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path ? [] : ({ job: snap({ added: [], next: 0 }) })) }),
     }))
     await waitFor(() => expect(screen.getByText('没有结果')).toBeTruthy())
   })
@@ -1154,7 +1272,8 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
   it('读面失败：显式「搜索中断」且不再排下一次轮询（历史形态：spinner 到天荒地老）', async () => {
     let reads = 0
     const deps = coreDeps({
-      apiGet: vi.fn(async () => {
+      apiGet: vi.fn(async (path: string) => {
+        if (String(path) === ROUTES.shelf.path) return []      // 落架基线那一问不归本用例
         reads++
         if (reads === 1) return { job: null }                 // 挂载读：还没有任务
         throw new Error('连接断了')                            // 提交后的首拍失败
@@ -1171,7 +1290,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
 
   it('提交失败：如实报错，且不清掉已在手上的上一轮结果', async () => {
     const deps = coreDeps({
-      apiGet: vi.fn(async () => ({ job: snap({ keyword: '上一轮', added: [hitGroup('上一轮命中')], next: 1 }) })),
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({ job: snap({ keyword: '上一轮', added: [hitGroup('上一轮命中')], next: 1 }) })),
       apiSend: vi.fn(async () => { throw new Error('服务未挂载') }),
     })
     render(createElement(SearchView, { deps }))
@@ -1186,7 +1307,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     const frames: Array<(data: string) => void> = []
     const deps = coreDeps({
       apiSend: vi.fn(async () => ({ jobId: 'j1' })),
-      apiGet: vi.fn(async () => ({ job: null })),
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({ job: null })),
       apiEventStream: vi.fn(async (_p: string, onFrame: (d: string) => void) => {
         frames.push(onFrame)
         return new Promise<void>(() => {})              // 流一直开着：读数只可能来自帧
@@ -1202,7 +1325,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     frames[0](JSON.stringify({ job: snap({ phase: 'running', total: 3, done: 1, next: 1, added: [hitGroup('斗罗先回来的书')] }) }))
     await waitFor(() => expect(within(openPerSourceAxis()).getByText('斗罗先回来的书')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: '停止搜索' }))
-    expect(deps.apiSend).toHaveBeenLastCalledWith('POST', ROUTES.searchJobCancel.path, {})
+    expect(deps.apiSend).toHaveBeenLastCalledWith(ROUTES.searchJobCancel, {})
     frames[0](JSON.stringify({ job: snap({ phase: 'failed', cancelled: true, error: '任务已取消：用户停止了搜索',
       total: 3, done: 2, next: 2, added: [hitGroup('斗罗停止前又回来一本', 's2')] }) }))
     await waitFor(() => expect(screen.getByText(/已停止 · 本轮搜过/)).toBeTruthy())
@@ -1222,7 +1345,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     const frames: Array<(data: string) => void> = []
     const deps = coreDeps({
       apiSend: vi.fn(async () => ({ jobId: 'j1' })),
-      apiGet: vi.fn(async () => ({ job: null })),                 // 只有挂载那一次读
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({ job: null })),                 // 只有挂载那一次读
       apiEventStream: vi.fn(async (_path: string, onFrame: (d: string) => void, signal: AbortSignal) => {
         frames.push(onFrame)
         await new Promise<void>((r) => signal.addEventListener('abort', () => { closed = true; r() }))
@@ -1235,7 +1360,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     frames[0](JSON.stringify({ job: snap({ phase: 'running', total: 2, done: 1, next: 1, added: [hitGroup('斗罗推送来的书')] }) }))
     await waitFor(() => expect(within(openPerSourceAxis()).getByText('斗罗推送来的书')).toBeTruthy())
     await new Promise((r) => setTimeout(r, 900))                  // 越过两个 JOB_POLL_MS 节拍
-    expect(deps.apiGet).toHaveBeenCalledTimes(1)                  // 一轮都没轮：流在，就不必问
+    expect(snapshotReads(deps.apiGet)).toBe(1)                   // 一轮都没轮：流在，就不必问
     frames[0](JSON.stringify({ job: snap({ phase: 'done', total: 2, done: 2, next: 2, added: [hitGroup('斗罗收尾的书', 's2')] }) }))
     await waitFor(() => expect(screen.getByText(/本轮搜过/)).toBeTruthy())
     expect(within(openPerSourceAxis()).getByText('斗罗收尾的书')).toBeTruthy()
@@ -1243,7 +1368,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
   })
 
   it('英文：搜索框占位与提交按钮', async () => {
-    const deps = coreDeps({ apiGet: vi.fn(async () => ({ job: null })) })
+    const deps = coreDeps({ apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path ? [] : ({ job: null })) })
     render(createElement(CopyProvider, { value: enTranslate, children: createElement(SearchView, { deps }) }))
     expect(screen.getByPlaceholderText('Book title / author')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Search' })).toBeTruthy()
@@ -1254,7 +1379,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
    *  同时钉 from 子句的前导空格：少了它，英文会渲染成「2 books(from 2 sources…」。 */
   it('英文：收口汇总的相关数按命中条数报（单数）', async () => {
     const deps = coreDeps({
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({
           keyword: '斗罗', phase: 'done', next: 1, total: 1, done: 1,
           added: [{
@@ -1275,7 +1402,9 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
 
   it('英文：收口汇总的相关数按命中条数报（复数）', async () => {
     const deps = coreDeps({
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({
           keyword: '斗罗', phase: 'done', next: 2, total: 2, done: 2,
           added: [
@@ -1338,8 +1467,8 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
     const server: SourcePublic[] = [{ ...unverifiedSrc }]
     const deps = makeDeps({
       apiGet: vi.fn(async (path: string) => (path === 'sources' ? server.map((s) => ({ ...s })) : null)),
-      apiSend: vi.fn(async (_m: 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown) => {
-        if (path === ROUTES.sourcesBatchEnabled.path) {
+      apiSend: vi.fn(async (target: { method: string; path: string }, body?: unknown) => {
+        if (target.path === ROUTES.sourcesBatchEnabled.path) {
           const { ids, enabled } = body as { ids: string[]; enabled: boolean }
           for (const s of server) if (ids.includes(s.id)) s.enabled = enabled
         }
@@ -1352,7 +1481,7 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
     fireEvent.click(screen.getByLabelText('选择 未验源'))
     fireEvent.click(screen.getByText('停用所选'))
     await waitFor(() => expect(deps.apiSend).toHaveBeenCalledWith(
-      'POST', ROUTES.sourcesBatchEnabled.path, { ids: ['u1'], enabled: false }))
+      ROUTES.sourcesBatchEnabled, { ids: ['u1'], enabled: false }))
     await screen.findByRole('switch', { name: '启用 未验源' })           // 服务端已停用 → 界面跟上
   })
 
@@ -1671,10 +1800,11 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
     fireEvent.click(screen.getByRole('button', { name: /加入书架并返回/ }))
     await waitFor(() => expect(pushOk).toHaveBeenCalled())
     // 按 body 形状认这一发（阅读器还会发 progress / patch 两种 PUT，路径同一条）
-    const add = deps.apiSend.mock.calls.find((c) => c[0] === 'PUT' && 'title' in (c[2] as object))
+    const add = deps.apiSend.mock.calls.find((c) => c[0].method === 'PUT' && 'title' in (c[1] as object))
     expect(add).toBeDefined()
-    expect(String(add![1])).toBe(`${ROUTES.shelf.path}/k1`)
-    expect(add![2]).toMatchObject({ sourceId: 's1', title: '斗罗', totalChapters: 1 })
+    expect(String(add![0].path)).toBe(`${ROUTES.shelf.path}/k1`)
+    expect(add![1]).toMatchObject({ sourceId: 's1', title: '斗罗', totalChapters: 1 })
+    expect(panelShelf.get().landed.has('k1'), '阅读器入架同样并入面板期落架账').toBe(true)
   })
 
   it('已在架的书：点「书架」直接走，不多问一句', async () => {
@@ -1684,6 +1814,33 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
     ])
     const { container } = render(reader(deps))
     await waitFor(() => expect(container.querySelector('[data-chapter="0"]')).not.toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: '书架' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('书架读面失败：离开直接走——「问不到」不冒充「不在架」', async () => {
+    const fallback = readerDeps()
+    const deps = readerDeps({
+      apiGet: vi.fn(async (path: string) => {
+        if (String(path) === ROUTES.shelf.path) throw new Error('书架读面挂了')
+        return fallback.apiGet(path)
+      }),
+    })
+    const { container } = render(reader(deps))
+    await waitFor(() => expect(container.querySelector('[data-chapter="0"]')).not.toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: '书架' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('投影停在加架前：阅读器为当前书重取一次，不误问加入', async () => {
+    // 旧投影是空架（例如面板早先取过一次）；当前书在服务端已在架，阅读器必须重取再判。
+    await loadPanelShelf({ apiGet: async () => [], describeError: String })
+    const deps = readerDeps({}, [
+      { sourceId: 's1', bookKey: 'k1', title: '斗罗', addedAt: 0, progress: { chapterIndex: 0, offsetRatio: 0, updatedAt: 0 } },
+    ])
+    const { container } = render(reader(deps))
+    await waitFor(() => expect(container.querySelector('[data-chapter="0"]')).not.toBeNull())
+    expect(deps.apiGet.mock.calls.some((c) => String(c[0]) === ROUTES.shelf.path)).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: '书架' }))
     expect(screen.queryByRole('dialog')).toBeNull()
   })
@@ -1713,8 +1870,8 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
     const pushError = vi.fn()
     const deps = readerDeps({
       pushError,
-      apiSend: vi.fn(async (m: 'POST' | 'PUT' | 'DELETE', _path: string, body?: unknown) => {
-        if (m === 'PUT' && body !== null && typeof body === 'object' && 'title' in body) throw new Error('磁盘只读')
+      apiSend: vi.fn(async (target: { method: string; path: string }, body?: unknown) => {
+        if (target.method === 'PUT' && body !== null && typeof body === 'object' && 'title' in body) throw new Error('磁盘只读')
         return {}
       }),
     })
@@ -1859,7 +2016,7 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
     await screen.findByText('第一章第一段')
     // 等过会话的帧调度（双 rAF）**与整个进度防抖窗**：要落的话就落在这个窗口里
     await act(async () => { await new Promise((r) => setTimeout(r, 300)) })
-    expect(deps.apiSend.mock.calls.map((c) => c[2])).toEqual([])
+    expect(deps.apiSend.mock.calls.map((c) => c[1])).toEqual([])
   })
 
   const chapters: ChapterEntry[] = [
@@ -1925,7 +2082,7 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
    *  读数噪声——本组只认**导航落到了哪一章**，不认总笔数（时序笔数归 reader-session.test.ts）。 */
   const jumpedTo = (deps: FakeReaderDeps, from: number): number[] => [...new Set(
     deps.apiSend.mock.calls.slice(from).map((c) => {
-      const body = c[2] as { progress: { chapterIndex: number } }
+      const body = c[1] as { progress: { chapterIndex: number } }
       return body.progress.chapterIndex
     }),
   )]
@@ -2181,6 +2338,7 @@ describe('SearchView 离开界面：停看不停工（结果由服务端持有�
     const deps = coreDeps({
       apiSend: vi.fn(async () => ({ jobId: 'j1' })),
       apiGet: vi.fn(async (path: string) => {
+        if (String(path) === ROUTES.shelf.path) return []        // 落架基线那一问不归本用例
         reads.push(path)
         return { job: snap({ phase: 'running', done: 0, next: 0 }) }   // 一直「在跑」：轮询不会自己收
       }),
@@ -2196,6 +2354,7 @@ describe('SearchView 离开界面：停看不停工（结果由服务端持有�
 
     reads.length = 0
     deps.apiGet.mockImplementation(async (path: string) => {
+      if (String(path) === ROUTES.shelf.path) return []          // 同上：基线那一问不进这条账
       reads.push(path)
       return { job: snap({ phase: 'done', done: 1, next: 1, added: [hitGroup('斗罗切走期间搜完的书')] }) }
     })
@@ -2211,7 +2370,9 @@ describe('SearchView 离开界面：停看不停工（结果由服务端持有�
     navigate({ name: 'search', keyword: '斗罗' })
     const deps = coreDeps({
       apiSend: vi.fn(async () => ({ jobId: 'j1' })),
-      apiGet: vi.fn(async () => ({
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({
         job: snap({ phase: 'running', done: 3, total: 10, next: 3, added: [hitGroup('斗罗切走前已搜到的书')] }),
       })),
     })
@@ -2230,7 +2391,8 @@ describe('SearchView 离开界面：停看不停工（结果由服务端持有�
   it('StrictMode 双挂载：两次恢复读只许落地一次（分组不重复累加）', async () => {
     let reads = 0
     const deps = coreDeps({
-      apiGet: vi.fn(async () => {
+      apiGet: vi.fn(async (path: string) => {
+        if (String(path) === ROUTES.shelf.path) return []        // 落架基线那一问不归本用例
         reads++
         return { job: snap({ phase: 'done', done: 1, next: 1, added: [hitGroup('斗罗只该出现一次的书')] }) }
       }),
@@ -2247,7 +2409,9 @@ describe('SearchView 离开界面：停看不停工（结果由服务端持有�
     let reads = 0
     const deps = coreDeps({
       apiSend: vi.fn(async () => ({ jobId: 'j1' })),
-      apiGet: vi.fn(async () => ({ job: (++reads === 1 ? snap({ phase: 'running', done: 0, next: 0 }) : null) })),
+      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+        ? []
+        : ({ job: (++reads === 1 ? snap({ phase: 'running', done: 0, next: 0 }) : null) })),
     })
     render(createElement(SearchView, { deps }))
     fireEvent.change(screen.getByPlaceholderText('书名 / 作者'), { target: { value: '斗罗' } })
