@@ -31,6 +31,7 @@ pnpm build        # 必须在源码目录手动跑一次，缺这步宿主起不
 ## 门（自动）
 
 ```powershell
+pnpm gates         # 一次跑完 typecheck / lint / test / test:pack / test:compat；CI 与发版工作流共用
 pnpm test          # 常规集（引擎 / 服务 / API / 工具 / 入口 / 前端逻辑与 smoke / 兼容判据四门 / 文档门）
 pnpm test:compat   # 兼容性回放（compat/fixtures → 离线复算；报告写 compat/report.md，产物不入库）
 pnpm test:pack     # 构建 + 产物自检
@@ -42,7 +43,7 @@ pnpm lint          # react-hooks 一条规则集（未豁免的界面依赖数�
 
 **文档门是三件套**：`tests/docs-liveness.test.ts` 扫 `AGENTS.md` / `CONTEXT.md` / `README.md` / `CONTRIBUTING.md` / `CHANGELOG.md`、`docs/**` 与 `src/**`、`tests/**` 的正文与注释，钉住点名的 `src/`、`tests/`、`docs/`、`locale/` 路径真实存在、已废的文档称呼不再出现、`§N` 与中文小节名指路活着、相对链接与锚点指得到东西、ADR 编号连续且标题 / `Status` / `锚点：` 齐全、索引双向完整且没有重复行、README 截图三方一致、README 的窗口 / 真机名单 / 徽章从 `package.json` 投影、主人清单 / 界面规格 / 文档标准各只有一份、根 `AGENTS.md` 预算；`tests/context-terms.test.ts` 查 `CONTEXT.md` 点名的符号在生产代码里现查得到；`tests/comment-altitude.test.ts` 查注释不抄代码表达式。路径若有意保留历史名走 `ALLOWED` 白名单，加一条要写清为什么；死名没有豁免。文档门自己从语料里排除：它的正文必须引用已废称呼，扫自己必然自红；这是唯一的自排除。
 
-**CI 的分工**：GitHub Actions（`.github/workflows/ci.yml`）在 push / PR 上跑离线门——`pnpm typecheck`、`pnpm lint`、`pnpm test`、`pnpm test:pack`、`pnpm test:compat`。真链路门（下面的 `DSH_*` 系列）不进 CI：它们需要真实站点、真浏览器或本机宿主，仍按本机命令手动跑；CI 绿不代表站点可用性或安装链路通过。
+**CI 的分工**：GitHub Actions（`.github/workflows/ci.yml`）在 push / PR 上跑 `pnpm gates`（清单住 `package.json`；pnpm 版本住 `packageManager`，Node 版本在两条工作流里各写一次）。发版由 `.github/workflows/release.yml` 承接，tag push 与手动干跑的分工见「发版流程」第 5 步。真链路门（下面的 `DSH_*` 系列）不进 CI：它们需要真实站点、真浏览器或本机宿主，仍按本机命令手动跑；CI 绿不代表站点可用性或安装链路通过——发版工作流的绿只证明门与资产上传成功，装不装得进由 `DSH_INSTALL_CHECK` 量。
 
 ### 真链路门控（默认跳过、需显式打开）
 
@@ -72,6 +73,7 @@ pnpm vitest run --config vitest.compat.config.ts tests/compat/capture.test.ts
 # 采完离线复算：pnpm test:compat —— 落盘的必须是脱敏后的产物（见下）
 
 # 真安装链路：dsh plugin add → profile bundles 挂载 + lib/client.js / cordis.patch.yml 就位
+# 两格：源码目录（pnpm 的 link 语义）/ `pnpm pack` 的 tarball（GitHub Release 资产形态）
 $env:DSH_INSTALL_CHECK='1'; pnpm vitest run tests/packaging-install.test.ts
 
 # 真浏览器 WebView 门（离线，需本机装 Edge 或 Chrome）：webView 渲染与 webJs 页面内执行
@@ -119,21 +121,24 @@ pnpm vitest run tests/legado-coverage/capture-upstream-snapshot.test.ts
 
 ## 真机验证（硬约束，别跳）
 
-`DSH_INSTALL_CHECK` 只证明**源码装入这一格**（一次性 profile、自建 `lib/`、断言 bundles 与产物就位，跑完自己 `remove`）。它不起宿主，所以不证明插件树真能被挂载、也不证明六个工具在宿主里跑得通。那两件事只能手工做：
+`DSH_INSTALL_CHECK` 证明**两种装入**（一次性 profile、断言 bundles 与产物就位，跑完自己 `remove`）：源码目录（`link:`）与 `pnpm pack` 的 tarball（GitHub Release 资产形态）。它不起宿主，所以不证明插件树真能被挂载、也不证明六个工具在宿主里跑得通。那两件事只能手工做：
 
 1. **前置**：先 `pnpm build`。宿主 profile 必须**可由 CLI 写**——保留名 `desktop` 归宿主应用独占，普通 CLI 会以 `profile "desktop" is managed exclusively by the Electron application` 拒写；写不了就改用 CLI 自建的一次性 profile（`dsh plugin --profile <名> add <本地路径>` 初始化它，再把 `@deepseek-ai/dsh-web-app` 加进 `dsh.profile.bundles`），它组出同一棵树。
-2. **装载与挂载**：`dsh plugin --profile <名> add link:<本仓目录>`（本包没有 `prepare`：`github:` 直装不会自动构建、缺 `lib/` 会被宿主拒挂——冒烟对象是上一步构建出的本仓产物，源码装一律先构建再 link，见「构建与日常开发」）→ `dsh --profile <名> --dump-config` 的组合树里出现本插件 → 起 `dsh --profile <名>`，看组合树里没有 `plugin tree failed to load`。
+2. **装载与挂载**：`dsh plugin --profile <名> add link:<本仓目录>`（本包没有 `prepare`：`github:` 直装不会自动构建、缺 `lib/` 会被宿主拒挂——冒烟对象是上一步构建出的本仓产物，源码装一律先构建再 link，见「构建与日常开发」）→ `dsh --profile <名> --dump-config` 的组合树里出现本插件 → 起 `dsh --profile <名>`，看组合树里没有 `plugin tree failed to load`。Release 资产那一格（`add <tarball>`）由同一道门的第二格量；真实 Release 下载地址的安装同样要手工过第 2–3 步。
 3. **工具面与一条真路径**：六个 `dshnovel_` 工具各真调一次；再走一条真实业务：搜 → 详情 → 目录 → 正文并翻一页（顺带覆盖出站代理与解码链）。
 
 **它证明什么**：当前宿主版本上「装得进、挂得上、工具面活着、业务链路走得通一次」。**它不证明**：任何站点的正文可读率（那是 `DSH_CONTENT_AUDIT` 的分桶报告，报告不等于通过率）、浏览器里的渲染与图片解码（那是 `DSH_EPUB_BROWSER`），也不证明其它宿主版本——每次 bump 编译所依（把新宿主加进实测名单）都要重跑这三步，并如实更新 `package.json` 的实测名单与 README 投影。
 
 ## 发版流程
 
-1. **三道门**：`pnpm typecheck`、`pnpm test`、`pnpm test:pack`，退出码逐个看过（0/0/0）。
+1. **三道门**：`pnpm typecheck`、`pnpm test`、`pnpm test:pack`，退出码逐个看过（0/0/0）；要连 `lint` / `compat` 一起跑就用 `pnpm gates`（组成住 `package.json`）。
 2. **写发布记录**：在 `CHANGELOG.md` 追加这一版（新增 / 变更 / 修复 / 升级注意）；未发布改动不预写，历史版本不回溯改写（已废称呼与不可回查的批次号按文档门清理），逐提交明细留 git。
-3. **版本前移**：`package.json` 的 `version` 提一笔 `chore: 发版 x.y.z`；提交、打 annotated tag `Vx.y.z`、push。
-4. **`npm publish`**：`prepack` 会跑 `build`；`files` 是**精确清单**——构建每新多出一个要发布的产物，就要同时加进 `files`。
-5. **README 徽章与实测名单**：徽章读 npm `latest` 清单，工作树改了不会变——发版后现查 npm `latest`，别把某次读数写死；实测名单按当次真机代次更新。
+3. **版本前移**：`package.json` 的 `version` 提一笔 `chore: 发版 x.y.z`；提交并 push。
+4. **`npm publish`**：`prepack` 会跑 `build`；`files` 是**精确清单**——构建每新多出一个要发布的产物，就要同时加进 `files`。先发 npm 再推 tag：npm 失败时不会留下一个只有 GitHub 侧到位的版本。
+5. **GitHub Release 资产（自动）**：给第 3 步的提交打 annotated tag `Vx.y.z` 并 push，触发 `.github/workflows/release.yml`——先校验 tag = `V` + `package.json` 版本，再跑 `pnpm gates` → `pnpm pack` → 断言 tarball 里的挂载产物齐全（清单住 workflow）→ 挂到 Release。每个 Release 两份资产：版本名 `xrn1997-dsh-novel-<版本>.tgz` 与稳定别名 `dsh-novel.tgz`；tag 带 `-` 的按 prerelease 处理（新建时直接标，已存在时补标），不抢 `latest`；Release 已存在时资产覆盖。`workflow_dispatch` 只干跑：跑门 + 打包 + 传 workflow artifact，不建 Release。
+6. **README 徽章与实测名单**：徽章读 npm `latest` 清单，工作树改了不会变——发版后现查 npm `latest`，别把某次读数写死；实测名单按当次真机代次更新。
+
+npm 与 GitHub Release 是两条渠道，靠同一个 tag 对齐；发版后核对两边都在位。
 
 ### 宿主兼容与实测名单
 
@@ -147,6 +152,7 @@ pnpm vitest run tests/legado-coverage/capture-upstream-snapshot.test.ts
 
 - **Windows 沙箱下 node 的子进程 spawn 一律 EPERM**：vitest 起 esbuild 服务会撞上——那不是本仓代码的问题，换个不受限的执行环境即可。
 - **npm cache EPERM**：`npm view` 偶尔撞 `AppData\Local\npm-cache` 临时文件锁，重试或换查询方式。
+- **GitHub git 端口不可达**：`github.com:443` 超时但 `api.github.com` 通时，`git push` 推不了 tag；可临时走 `git push ssh://git@ssh.github.com:443/xrn1997/dsh-novel.git <tag>`。Release 资产下载同样要能到 `github.com`。
 - **`lib/` 是构建产物且不入库**：先 `pnpm build`，否则整个插件树拒绝挂载（`plugin tree failed to load` + `ERR_MODULE_NOT_FOUND`）。
 - **改动生效分两半**：浏览器半由宿主 HMR 热推，Node 半必须重启宿主。
 - **出站代理**：DSH 的 Node 进程走 undici，**不读系统代理**；只有代理能到的站点必须在插件里配 `proxyUrl`，否则表现为「浏览器能开、插件打不开」。

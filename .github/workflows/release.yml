@@ -1,0 +1,124 @@
+name: Release
+
+# 发版资产：`V*` tag push 时把 `pnpm pack` 的 tarball 挂到 GitHub Release，给不想构建的
+# 用户一条免构建的安装路径（`lib/` 仍不入库，仓库 URL 的 github:/git: 直装依旧不支持）。
+# 决策与被否方案见 `ADR-0049`；安装 URL 与发版步骤住 `README.md`「安装」与
+# `docs/development.md`「发版流程」。
+
+on:
+  push:
+    tags: ['V*']
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify tarball
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 与 ci.yml 相同：pnpm 版本住 packageManager，Node 版本两处各写一次。
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 先验 tag 再跑门：版本对不上时立刻红，不必烧完整套离线门。
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          node -e "const v=require('./package.json').version; if (process.env.GITHUB_REF_NAME !== 'V'+v) { console.error('tag ' + process.env.GITHUB_REF_NAME + ' does not match package version V' + v); process.exit(1) }"
+
+      # 与 ci.yml 共用 package.json 的 gates 清单；tag 不保证落在 main 上，产物必须自证。
+      - name: Offline gates
+        run: pnpm gates
+
+      - name: Pack tarball
+        run: |
+          mkdir -p dist
+          pnpm pack --pack-destination dist
+          tgz=$(ls dist/*.tgz)
+          version=$(node -p "require('./package.json').version")
+          pkg=$(node -p "require('./package.json').name")
+          expected="${pkg#@}"
+          expected="${expected/\//-}-${version}.tgz"
+          # 钉版本 URL 写的就是这个文件名（README「安装」）；pnpm 改名时这里先红。
+          test "$(basename "$tgz")" = "$expected" || {
+            echo "unexpected tarball name: $(basename "$tgz") (expected $expected)"
+            exit 1
+          }
+          # 稳定别名给 releases/latest/download 用，README 里的 URL 不随版本腐烂。
+          cp "$tgz" dist/dsh-novel.tgz
+          echo "TGZ=$tgz" >> "$GITHUB_ENV"
+
+      - name: Verify tarball contents
+        run: |
+          for p in \
+            package/lib/index.js \
+            package/lib/client.js \
+            package/lib/types/index.d.ts \
+            package/lib/types/client/index.d.ts \
+            package/cordis.patch.yml \
+            package/icon.svg \
+            package/package.json; do
+            tar -tzf "$TGZ" | grep -Fqx "$p" || { echo "tarball missing $p"; exit 1; }
+          done
+          for f in locale/*.json; do
+            tar -tzf "$TGZ" | grep -Fqx "package/$f" || { echo "tarball missing $f"; exit 1; }
+          done
+
+      # 同一份 artifact 两个用途：dry run 的产物；tag 运行时给 publish job 交接。
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-novel-tarball
+          path: dist/*.tgz
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release assets
+    needs: build
+    # dispatch 即使在 tag ref 上也只是干跑；只有 push tag 才发布。
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Download tarball artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dsh-novel-tarball
+          path: dist
+
+      - name: Publish GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          prerelease=()
+          case "$tag" in *-*) prerelease=(--prerelease) ;; esac
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/*.tgz --clobber
+            if [ "${#prerelease[@]}" -gt 0 ]; then gh release edit "$tag" --prerelease; fi
+          else
+            gh release create "$tag" dist/*.tgz --verify-tag --title "$tag" --generate-notes "${prerelease[@]}"
+          fi

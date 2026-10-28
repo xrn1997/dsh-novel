@@ -219,4 +219,4 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 后台任务 / 过程行 / 宿主观察 | 第 4 节的 `HostTie`、`JobTail`、`ChangeSignal` 行；`ADR-0018`、`ADR-0034` |
 | 宿主接入 / 打包 / 插件页 | 第 1 节；`ADR-0020`、`ADR-0021`、`ADR-0035`；`docs/development.md` 的「宿主兼容与实测名单」 |
 | legado 兼容判据 / 新写法 | 先查 `tests/legado-coverage/matrix.ts` 有没有那一行；`ADR-0003`、`ADR-0024`、`ADR-0025`；`docs/development.md` 的「兼容判据四门」 |
-| 文档 / ADR / 发布流程 | `docs/AGENTS.md`；`docs/adr/README.md`、`docs/adr/ADR-FORMAT.md`、`ADR-0048`；`CONTRIBUTING.md`、`CHANGELOG.md`；`docs/development.md` |
+| 文档 / ADR / 发布流程 | `docs/AGENTS.md`；`docs/adr/README.md`、`docs/adr/ADR-FORMAT.md`、`ADR-0048`、`ADR-0049`；`CONTRIBUTING.md`、`CHANGELOG.md`；`docs/development.md` |

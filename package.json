@@ -24,6 +24,7 @@
     "url": "https://github.com/xrn1997/dsh-novel/issues"
   },
   "type": "module",
+  "packageManager": "pnpm@11.25.0",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
   "exports": {
@@ -79,6 +80,7 @@
     "test:watch": "vitest",
     "test:compat": "vitest run --config vitest.compat.config.ts",
     "test:pack": "pnpm build && vitest run --config vitest.pack.config.ts",
+    "gates": "pnpm typecheck && pnpm lint && pnpm test && pnpm test:pack && pnpm test:compat",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

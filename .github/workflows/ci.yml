@@ -21,18 +21,17 @@ concurrency:
 
 jobs:
   offline-gates:
-    name: Offline gates (Ubuntu, Node 24)
+    name: Offline gates (Ubuntu)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 与 pnpm-lock.yaml 的 lockfileVersion 9 和本机 pnpm 11 对齐；升级时两处一起改。
+      # pnpm 版本住 package.json 的 packageManager；Node 版本在本文件与 release.yml 各写一次，升级时一起改。
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: '11.25.0'
           run_install: false
 
       - name: Set up Node
@@ -44,17 +43,5 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Lint
-        run: pnpm lint
-
-      - name: Unit and contract tests
-        run: pnpm test
-
-      - name: Packaging self-check
-        run: pnpm test:pack
-
-      - name: Compat replay
-        run: pnpm test:compat
+      - name: Offline gates
+        run: pnpm gates

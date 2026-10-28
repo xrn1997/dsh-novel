@@ -74,10 +74,13 @@ dsh plugin --profile <profile> add @xrn1997/dsh-novel
 
 重启宿主后，左侧栏出现「小说」全局面板入口（图标行；点击即在中央面板打开书架 / 书城 / 书源管理 tab）。侧栏入口需要宿主提供 `slots` / `layout` 的界面 bundle（通常由 `@deepseek-ai/dsh-web-app` 提供）；不带它的 profile 只挂 Node 半与 AI 工具，界面上不会多出入口。
 
-两种装法：
+三种装法：
 
 - **npm 安装**（推荐）：使用预构建产物，秒装、无需构建授权。
-- **从源码装**：本包没有 `prepare`，从远端源码直装（`github:` / `git:` 形态）不会自动构建，装出来缺 `lib/` 会被宿主拒绝挂载。要先从 GitHub 或 GitCode 克隆仓库并 `pnpm install && pnpm build`，再用 `dsh plugin --profile <profile> add link:<克隆目录>` 挂载。
+- **GitHub Release 装**（不碰 npm registry，也不需要构建工具链）：发版工作流在 `V*` tag 上产出预构建 tarball。装最新 Release：
+  `dsh plugin --profile <profile> add https://github.com/xrn1997/dsh-novel/releases/latest/download/dsh-novel.tgz`
+  钉版本就换成 `https://github.com/xrn1997/dsh-novel/releases/download/V<版本>/xrn1997-dsh-novel-<版本>.tgz`；tarball 自带 `lib/`，装的是预构建产物，宿主能否挂载仍由兼容闸与真机验证决定。Releases 页还没有对应版本时，用 npm 或源码装。
+- **从源码装**：本包没有 `prepare`，从远端源码直装（`github:` / `git:` 形态）不会自动构建，装出来缺 `lib/` 会被宿主拒绝挂载——Release 资产是另一条路，不改变这条。要先从 GitHub 或 GitCode 克隆仓库并 `pnpm install && pnpm build`，再用 `dsh plugin --profile <profile> add link:<克隆目录>` 挂载。
 
 卸载：
 
@@ -193,7 +196,7 @@ URL 模板语义按 legado 书源格式对齐：`url,{json}` 选项的逗号两�
 本插件用 `playwright-core` 驱动本机已安装的 Edge/Chrome（不下载浏览器）。装一个 Edge 或 Chrome 即可；两者都没有时会如实报错，不会静默退回普通 HTTP 请求。
 
 **安装后侧栏没有出现「小说」入口？**
-先重启宿主。若从源码目录安装，确认已先 `pnpm build` 生成 `lib/`（构建产物缺失会让整个插件树拒绝挂载，宿主直接启动失败而非静默降级），详见 [docs/development.md 的「本地源码调试」](docs/development.md#本地源码调试)；装进了没有 `slots` / `layout` 界面 bundle 的 profile，则本就只有工具面、没有侧栏入口。
+先重启宿主。若从源码目录安装，确认已先 `pnpm build` 生成 `lib/`（构建产物缺失会让整个插件树拒绝挂载，宿主直接启动失败而非静默降级），详见 [docs/development.md 的「本地源码调试」](docs/development.md#本地源码调试)；GitHub Release 的 tarball 自带 `lib/`，不必构建。装进了没有 `slots` / `layout` 界面 bundle 的 profile，则本就只有工具面、没有侧栏入口。
 
 ## 开发
 

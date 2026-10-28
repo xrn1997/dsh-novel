@@ -30,6 +30,7 @@ type(scope): 描述
 ## 发版边界
 
 - 版本号、tag 与 `npm publish` 由维护者执行；贡献者不要自行 bump 或发布。
-- 发版前跑 `pnpm typecheck` / `pnpm test` / `pnpm build`；`files` 是精确清单，构建每多出一个要发布的产物就同步加进去。
+- `V*` tag push 触发发版工作流，把预构建 tarball 挂成 GitHub Release 资产；`npm publish` 仍在 CI 外、由维护者手动执行。两条渠道靠同一个 tag 对齐，细节见 `docs/development.md`「发版流程」；不恢复 `prepare`、不把 `lib/` 入库（理由见 `ADR-0049`）。
+- 发版前跑 `pnpm gates`；`files` 是精确清单，构建每多出一个要发布的产物就同步加进去。
 - 发版流程见 `docs/development.md`；发布历史见 `CHANGELOG.md`。
 - 贡献按 Apache-2.0 授权，与仓库许可一致。
