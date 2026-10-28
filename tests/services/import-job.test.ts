@@ -184,7 +184,7 @@ describe('批量验证任务', () => {
       raw('A', 'https://a.com'), raw('B', 'https://b.com'), raw('C', 'https://c.com'),
     ]) }])
     const imported = await waitDone(jobs)
-    await registry.flush()                                     // 排到静默：挂起写归零；阈值计数按 ADR 0011 跨写累计
+    await registry.flush()                                     // 排到静默：挂起写归零；阈值计数按 ADR-0011 跨写累计
     const id = registry.list()[0].id
     // 导入的每条 added/replaced 各算一次 edit（这里 3 条）；把第 PERSIST_EVERY 次变更正好对齐到
     // 「某家探针写回状态」那一格——阈值那次等写落地并如实抛。

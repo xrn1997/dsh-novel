@@ -117,7 +117,7 @@ export async function writeJsonAtomic(file: string, data: unknown): Promise<void
 
 /** 进程内防抖合并连续写：窗口内同文件多次 schedule 只落最后一次；flush 等待全部落地。
  *  可选 `threshold`：累计到第 N 次 schedule 时立即写，并把「这次写落地」交给调用方 await——
- *  计数跨定时器/flush 写累计，只有阈值触发才复位（ADR 0011 的「累计 N 次」）；
+ *  计数跨定时器/flush 写累计，只有阈值触发才复位（ADR-0011 的「累计 N 次」）；
  *  阈值与窗口的取值由调用方给（如 `SourceRegistry` 的 `PERSIST_EVERY`），防抖/计数/排队/失败合同只住这里。 */
 export function createDebouncedWriter(delayMs = 100, opts: { threshold?: number } = {}) {
   type PendingWrite = { data: unknown; timer: ReturnType<typeof setTimeout> }

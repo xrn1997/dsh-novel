@@ -57,7 +57,8 @@ function anchors(body: string): string[] {
   return [...body.matchAll(/`([^`]+)`/g)].map((m) => m[1])
 }
 const isPath = (t: string) => /\.[tj]sx?$/.test(t) && !t.includes(' ')
-const isSymbol = (t: string) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(t)
+// 含 `$` 的不是可回查符号：`$DSH_HOME` 是环境变量，`$n` 是规则模板占位。
+const isSymbol = (t: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(t)
 const isMatrixRow = (t: string) => /^[a-k]-[a-z0-9-]+$/.test(t)
 
 function pathExists(t: string): boolean {

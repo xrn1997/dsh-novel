@@ -99,7 +99,7 @@ export function apply(ctx: Context, config?: NovelConfig): void {
   // 另挂 console exporter 插件），且缺省级别闸只放行 error/info、吞掉 warn/debug——只走那条腿会让
   // warn 级留痕进不了宿主面、又把本机 stdout 做暗。console 这条腿保本机可见性，不是冗余（info 腿走
   // stdout、warn/error 腿走 stderr，三级一律直传原样参数——Error 原样进 stderr 才保住栈形；成形只在
-  // logger 腿，因为只有它要喂宿主的「format + rest」方法）。窄镜像（ADR 0020）只管没装的宿主包
+  // logger 腿，因为只有它要喂宿主的「format + rest」方法）。窄镜像（ADR-0020）只管没装的宿主包
   // webServer / tools / jobs；ctx.logger 是已 type-import 的官方 Context 成员，直接吃，不再镜像一遍。
   const named = ctx.logger('dsh-novel')
   setLogSink({

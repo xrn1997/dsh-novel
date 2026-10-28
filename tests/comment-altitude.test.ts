@@ -116,7 +116,7 @@ describe('注释不抄代码表达式（高度规范的机器面）', () => {
   it('字符类里带反引号的指针正则不把后续模板串误当注释体', () => {
     const pointerShape = [
       'const POINTER = /矩阵[`\'“"]?([a-z-]+)/g',
-      'const where = `详见 docs/design/*.md 一侧`',
+      'const where = `详见 docs/adr/*.md 一侧`',
       'const open = COVERAGE.filter((r) => r.status === \'open\')',
     ].join('\n')
     const fakes = commentBodies(pointerShape).filter((b) => b.includes('*.md'))

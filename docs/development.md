@@ -1,6 +1,6 @@
 # 开发与验证
 
-这份文档是贡献者的入口：构建、本地调试、宿主兼容与发版、全部测试门控与真宿主冒烟。用户怎么装、怎么用、有哪些配置键与 HTTP 路由，见 `README.md`；模块为什么这么切、某条语义归谁，见 `docs/architecture.md`；决策与被否决的方案见 `docs/adr/`。这里只写「怎么做」与「怎么验」。
+这份文档是贡献者的入口：构建、本地调试、门、真机验证与发版；提交信息与 PR 约定见 `CONTRIBUTING.md`。用户怎么装、怎么用、有哪些配置键与 HTTP 路由，见 `README.md`；模块为什么这么切、某条语义归谁，见 `docs/architecture.md`；界面规格见 `docs/ui-spec.md`；裁决见 `docs/adr/`。这里只写「怎么做」与「怎么验」。
 
 ## 构建与日常开发
 
@@ -28,18 +28,10 @@ pnpm build        # 必须在源码目录手动跑一次，缺这步宿主起不
 
 `link:` 只建目录链接、绝不触碰对端目录，pnpm 不会在对端执行 `prepare`（本包也没有 `prepare`：git 直装不会自动构建，源码安装一律先手动 build），反复重跑也不会生成 `lib/`。缺失时的报错是 `dsh: plugin tree failed to load` + `ERR_MODULE_NOT_FOUND`，指向 `lib/index.js`。
 
-## 宿主兼容与发版
-
-安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`。实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本。两层由 `tests/packaging.test.ts` 同时看住：编译期 devDependency 必须被 peer 区间放行，且必须出现在实测声明里。
-
-宿主发新版分两种：**线内**（当前 `>=0.0.1-rc.5 <0.3.0-0` 的 rc / patch）不要求本插件跟版；要声称实测兼容时，升级编译所依、重读新宿主的浏览器模块表（宿主前端的 `staticModules()`）并对齐 `PLATFORM_MODULES`、真机确认后加实测条目。**跨线**（如 `0.3.0`）必须先真机验，再把 peer 上界开到下一条线。编译所依被 peer 放行且出现在实测声明里由 `tests/packaging.test.ts` 钉住；模块表与实测条目靠真机与人工核对。
-
-宿主依赖包的**发布冷却闸**（pnpm 的 `minimumReleaseAge`，24 小时内发布的版本不许进 lockfile）对 `@deepseek-ai/dsh-*` 整 scope 放行，写死在 `pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude`——所以 bump 宿主不必再动一份逐代手写的放行名单（理由与被否决的做法见 `docs/adr/0026`）。
-
-## 测试与真链路门控
+## 门（自动）
 
 ```powershell
-pnpm test          # 常规集（引擎 / 服务 / API / 工具 / 入口 / 前端逻辑与 smoke / 兼容判据四门）
+pnpm test          # 常规集（引擎 / 服务 / API / 工具 / 入口 / 前端逻辑与 smoke / 兼容判据四门 / 文档门）
 pnpm test:compat   # 兼容性回放（compat/fixtures → 离线复算；报告写 compat/report.md，产物不入库）
 pnpm test:pack     # 构建 + 产物自检
 pnpm typecheck     # tsc --noEmit —— 必须与 pnpm test 同批跑
@@ -48,9 +40,13 @@ pnpm lint          # react-hooks 一条规则集（未豁免的界面依赖数�
 
 > **跑门取退出码，别看管道说了什么**：`pnpm test | tail` 之后退出码是管道工具的，红会被吃掉。先把输出灌进文件、再单独打印退出码，汇报里把**退出码连同计数**一起抄；**跑门与提交必须是两条命令**。
 
+**文档门是三件套**：`tests/docs-liveness.test.ts` 扫 `AGENTS.md` / `CONTEXT.md` / `README.md` / `CONTRIBUTING.md` / `CHANGELOG.md`、`docs/**` 与 `src/**`、`tests/**` 的正文与注释，钉住点名的 `src/`、`tests/`、`docs/`、`locale/` 路径真实存在、已废的文档称呼不再出现、`§N` 与中文小节名指路活着、相对链接与锚点指得到东西、ADR 编号连续且标题 / `Status` / `锚点：` 齐全、索引双向完整且没有重复行、README 截图三方一致、README 的窗口 / 真机名单 / 徽章从 `package.json` 投影、主人清单 / 界面规格 / 文档标准各只有一份、根 `AGENTS.md` 预算；`tests/context-terms.test.ts` 查 `CONTEXT.md` 点名的符号在生产代码里现查得到；`tests/comment-altitude.test.ts` 查注释不抄代码表达式。路径若有意保留历史名走 `ALLOWED` 白名单，加一条要写清为什么；死名没有豁免。文档门自己从语料里排除：它的正文必须引用已废称呼，扫自己必然自红；这是唯一的自排除。
+
 **CI 的分工**：GitHub Actions（`.github/workflows/ci.yml`）在 push / PR 上跑离线门——`pnpm typecheck`、`pnpm lint`、`pnpm test`、`pnpm test:pack`、`pnpm test:compat`。真链路门（下面的 `DSH_*` 系列）不进 CI：它们需要真实站点、真浏览器或本机宿主，仍按本机命令手动跑；CI 绿不代表站点可用性或安装链路通过。
 
-**默认跳过、需显式打开的门控**（`pnpm test` 全绿**不覆盖**它们；常规集证明引擎 / 服务 / 契约 / 前端逻辑，**不证明任何真实站点可用性、也不证明安装链路**）：
+### 真链路门控（默认跳过、需显式打开）
+
+`pnpm test` 全绿**不覆盖**它们；常规集证明引擎 / 服务 / 契约 / 前端逻辑，**不证明任何真实站点可用性、也不证明安装链路**：
 
 ```powershell
 # 真机全量重探：改动抓取 / 规则引擎后实测书源**搜索面**可用率（真实联网，耗时数分钟）
@@ -121,7 +117,7 @@ $env:DSH_CAPTURE_UPSTREAM='1'; $env:DSH_LEGADO_REF='<对面 checkout 路径>'
 pnpm vitest run tests/legado-coverage/capture-upstream-snapshot.test.ts
 ```
 
-### 真宿主冒烟（手工，动的是宿主与环境，属授权项——仓内没有自动化替代）
+## 真机验证（硬约束，别跳）
 
 `DSH_INSTALL_CHECK` 只证明**源码装入这一格**（一次性 profile、自建 `lib/`、断言 bundles 与产物就位，跑完自己 `remove`）。它不起宿主，所以不证明插件树真能被挂载、也不证明六个工具在宿主里跑得通。那两件事只能手工做：
 
@@ -129,4 +125,32 @@ pnpm vitest run tests/legado-coverage/capture-upstream-snapshot.test.ts
 2. **装载与挂载**：`dsh plugin --profile <名> add link:<本仓目录>`（本包没有 `prepare`：`github:` 直装不会自动构建、缺 `lib/` 会被宿主拒挂——冒烟对象是上一步构建出的本仓产物，源码装一律先构建再 link，见「构建与日常开发」）→ `dsh --profile <名> --dump-config` 的组合树里出现本插件 → 起 `dsh --profile <名>`，看组合树里没有 `plugin tree failed to load`。
 3. **工具面与一条真路径**：六个 `dshnovel_` 工具各真调一次；再走一条真实业务：搜 → 详情 → 目录 → 正文并翻一页（顺带覆盖出站代理与解码链）。
 
-**它证明什么**：当前宿主版本上「装得进、挂得上、工具面活着、业务链路走得通一次」。**它不证明**：任何站点的正文可读率（那是 `DSH_CONTENT_AUDIT` 的分桶报告，报告不等于通过率）、浏览器里的渲染与图片解码（那是 `DSH_EPUB_BROWSER`），也不证明其它宿主版本——每次 bump 编译所依（把新宿主加进实测名单）都要重跑这三步，并把结果如实加进上面的实测名单。
+**它证明什么**：当前宿主版本上「装得进、挂得上、工具面活着、业务链路走得通一次」。**它不证明**：任何站点的正文可读率（那是 `DSH_CONTENT_AUDIT` 的分桶报告，报告不等于通过率）、浏览器里的渲染与图片解码（那是 `DSH_EPUB_BROWSER`），也不证明其它宿主版本——每次 bump 编译所依（把新宿主加进实测名单）都要重跑这三步，并如实更新 `package.json` 的实测名单与 README 投影。
+
+## 发版流程
+
+1. **三道门**：`pnpm typecheck`、`pnpm test`、`pnpm test:pack`，退出码逐个看过（0/0/0）。
+2. **写发布记录**：在 `CHANGELOG.md` 追加这一版（新增 / 变更 / 修复 / 升级注意）；未发布改动不预写，历史版本不回溯改写（已废称呼与不可回查的批次号按文档门清理），逐提交明细留 git。
+3. **版本前移**：`package.json` 的 `version` 提一笔 `chore: 发版 x.y.z`；提交、打 annotated tag `Vx.y.z`、push。
+4. **`npm publish`**：`prepack` 会跑 `build`；`files` 是**精确清单**——构建每新多出一个要发布的产物，就要同时加进 `files`。
+5. **README 徽章与实测名单**：徽章读 npm `latest` 清单，工作树改了不会变——发版后现查 npm `latest`，别把某次读数写死；实测名单按当次真机代次更新。
+
+### 宿主兼容与实测名单
+
+安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`。实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本。两层由 `tests/packaging.test.ts` 同时看住：编译期 devDependency 必须被 peer 区间放行，且必须出现在实测声明里。
+
+宿主发新版分两种：**线内**（当前 `>=0.0.1-rc.5 <0.3.0-0` 的 rc / patch）不要求本插件跟版；要声称实测兼容时，升级编译所依、重读新宿主的浏览器模块表（宿主前端的 `staticModules()`）并对齐 `PLATFORM_MODULES`、真机确认后加实测条目。**跨线**（如 `0.3.0`）必须先真机验，再把 peer 上界开到下一条线。编译所依被 peer 放行且出现在实测声明里由 `tests/packaging.test.ts` 钉住；模块表与实测条目靠真机与人工核对。
+
+宿主依赖包的**发布冷却闸**（pnpm 的 `minimumReleaseAge`，24 小时内发布的版本不许进 lockfile）对 `@deepseek-ai/dsh-*` 整 scope 放行，写死在 `pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude`——所以 bump 宿主不必再动一份逐代手写的放行名单（理由与被否决的做法见 `ADR-0026`）。
+
+## 已知的环境坑
+
+- **Windows 沙箱下 node 的子进程 spawn 一律 EPERM**：vitest 起 esbuild 服务会撞上——那不是本仓代码的问题，换个不受限的执行环境即可。
+- **npm cache EPERM**：`npm view` 偶尔撞 `AppData\Local\npm-cache` 临时文件锁，重试或换查询方式。
+- **`lib/` 是构建产物且不入库**：先 `pnpm build`，否则整个插件树拒绝挂载（`plugin tree failed to load` + `ERR_MODULE_NOT_FOUND`）。
+- **改动生效分两半**：浏览器半由宿主 HMR 热推，Node 半必须重启宿主。
+- **出站代理**：DSH 的 Node 进程走 undici，**不读系统代理**；只有代理能到的站点必须在插件里配 `proxyUrl`，否则表现为「浏览器能开、插件打不开」。
+- **运行时数据不在仓库**：书源 / 书架 / 缓存 / 本地书住 `$DSH_HOME/novel/`（缺省 `~/.dsh/novel/`；`dataDir` 可改）。
+- **`compat/report.md` 是跑门产物**：`pnpm test:compat` 每次覆盖写，已 gitignore；它的分母是 `compat/fixtures/` 下的 fixture，**不是站点可用率**。
+- **冒烟启动宿主时日志里那行带 token 的 URL 是活的凭据**：别留在日志或会话输出里，测完删文件。
+- **`.qoder/repowiki` 是生成的知识库快照**：基线 commit 只记在 `.qoder/repowiki/knowledge/zh/_index.yaml` 里（要对照就现查那份，篇数与 hash 都不在这里抄——抄一次就多一个会腐烂的镜像）。仓内**没有**再生成它的路径（只能在 Qoder 里重跑），所以它永远可能落后于代码；它不是事实源，判断口径见 `docs/AGENTS.md`。

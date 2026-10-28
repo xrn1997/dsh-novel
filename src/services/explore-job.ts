@@ -12,7 +12,7 @@ import { canonUrl } from './request.js'
  * 为什么另起一个持有者而不扩 `SearchJobs`：那边是**游标增量**（`added`/`next`），读方自己把帧接成
  * 列表；这里的读模型是「零累积、整帧替换」——续页改写的不只是新条目，还有 `page` / `hasMore`
  * 这些**整轮**读数，游标装不下「同一轮的读数变了」。本模块不走跨源归并：一条命中就是一本书，
- * 不替同一本在几个源上的情况折成一条（浏览轴的口径见 `docs/adr/0028`）。
+ * 不替同一本在几个源上的情况折成一条（浏览轴的口径见 `ADR-0028`）。
  *
  * **为什么累积住在这里**：续页要跨页记忆——一个源第 2 页带回的书里有多少是新的（去重），
  * 有多少是本页零新增（= 这个源到底了），两件都需要「上一页收到了什么」，而浏览器半刻意什么都不握
@@ -115,7 +115,7 @@ function dedupKeyOf(hit: SearchHit): string {
 }
 
 /** 组里的命中 → 快照里的书。**不做任何合并**：一条命中就是一本书，顺序就是站点给的顺序。
- *  本模块不做跨源归并：不把「同一本在几个源上」折进一条（口径见 `docs/adr/0028`）。
+ *  本模块不做跨源归并：不把「同一本在几个源上」折进一条（口径见 `ADR-0028`）。
  *  放在本文件而不是 wire：它是快照的形状（读面的一次投影），不是引擎语义。
  *  可空字段照 `SearchHit` 原样落 `null`，**不折成缺键**（wire 文件头的可空口径：null 是在场的值）；
  *  唯一的收口是空串封面——站点给 `coverUrl: ''` 说的是「没封面」，让它穿过去会让 `<img src="">`
@@ -191,7 +191,7 @@ export class ExploreJobs {
     return this.launch(h, run)
   }
 
-  /** 起跑一段（`start` 的第 1 批与 `advance` 的每一批共用这一处）：宿主登记 + 变了就 `notify`
+  /** 起跑一段（`start` 的首批与 `advance` 的每一批共用这一处）：宿主登记 + 变了就 `notify`
    *  + 同步起跑 + 终态单点收口。两处各抄一遍就会长出两种收尾口径。
    *
    *  一批起跑即领一代（`generation`）：交给运行器的 `emit` / `shouldStop` 与这批的收尾都认这一代。
@@ -223,7 +223,7 @@ export class ExploreJobs {
       this.absorb(h, group)
       // 每翻一页留一行过程行进尾缓冲（缺席即 h.tail 为空，不写）：行文把「本轮条数」与
       // 「源状态」分成两轴——status 是源的验证态、不是这一页的结果；页码与失败 `error.code`
-      // 照旧。整轮结果（读面 snapshot）分工照 ADR 0018 不变。
+      // 照旧。整轮结果（读面 snapshot）分工照 ADR-0018 不变。
       h.tail?.push(group.error !== undefined
         ? `${group.sourceName}：第 ${h.attempted} 页失败（${group.error.code}）`
         : `${group.sourceName}：第 ${h.attempted} 页 ${group.hits.length} 条（源 ${group.status}）`)

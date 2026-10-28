@@ -196,7 +196,7 @@ describe('createDebouncedWriter', () => {
     await w.flush()
     expect(await readJson(file, null)).toEqual({ n: 3 })
   })
-  it('threshold 计数跨定时器写累计（ADR 0011 的「累计 N 次」）', async () => {
+  it('threshold 计数跨定时器写累计（ADR-0011 的「累计 N 次」）', async () => {
     const dir = await tmp()
     const file = path.join(dir, 'threshold-cumulative.json')
     const w = createDebouncedWriter(5, { threshold: 3 })

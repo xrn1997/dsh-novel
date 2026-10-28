@@ -14,7 +14,7 @@ import { LocalNotMountedError } from './errors.js'
  * 文字规约是本读面的**契约**：两个适配器的 `chapterContent` 出口都过
  * `normalizeChapterText`（幂等），EPUB 的 rich 树不解释。
  *
- * 刻意**不**把本地书塞进 `OnlineReading`（`docs/adr/0047`）：在线那条只认识 HTTP 与文件缓存，
+ * 刻意**不**把本地书塞进 `OnlineReading`（`ADR-0047`）：在线那条只认识 HTTP 与文件缓存，
  * 本地适配器不认识它们；本模块只拥有「按来源分流 + 文字规约」，不拥有两边各自的取数语义。
  */
 export interface BookContentLocal {

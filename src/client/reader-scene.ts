@@ -13,7 +13,7 @@ import type { LinkRole, ReadingTarget, SupplementTarget } from './views/types.js
  *
  * 为什么独立于视图：这些律的缺陷全出在次序上（谁先退场、谁消费返回项、写完能不能被打断），
  * 而判据散在视图的 state 与闭包里时，证它们要整页渲染并伪造滚动几何。命令与 state 收在这里、
- * 无 DOM 可测，视图只渲染与接线（裁决见 `docs/adr/0045-reader-scene-controller.md`）。
+ * 无 DOM 可测，视图只渲染与接线（裁决见 `ADR-0045`）。
  *
  * 边界（别把这三样搬进来）：
  * - 阅读时序（目录→恢复→懒加载→预取→进度落盘）归 `client/reader-session.ts`；
@@ -122,7 +122,7 @@ export class ReaderScene {
   /** 离开阅读器回书架：这本书**不在架上**时先问一句要不要加入。在架与「问不到」都不问——
    *  书架拉不到是「不知道」，不是「没有」，不许拿不知道拦用户。
    *  为什么不在「读这本」那一刻静默加：书城那一层刻意把「加入书架」与「读这本」分成两个动作
-   *  （`docs/adr/0028`），静默代劳就是替用户做一个他没要过的写操作。
+   *  （`ADR-0028`），静默代劳就是替用户做一个他没要过的写操作。
    *  不问会丢什么：不在架的书，进度 PUT 被服务端判 `NOT_ON_SHELF`，`saveProgress` 咽掉那句 400 ⇒
    *  这一屏读到哪儿就此消失。先入架再离开，会话 dispose 那一次 flush 才落得到地上。 */
   exitToShelf(): void {

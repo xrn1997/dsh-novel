@@ -27,6 +27,6 @@ Status: accepted
 - **把 `Dialog` 塞进 `client/views/bits.tsx`**：`bits` 是六视图共用的**呈现小件**（徽标、进度段、空态、告警清单），没有行为契约；模态契约带焦点与键盘接管，混进去会让 `bits` 同时是抽屉和主人。
 - **抽屉与模态合成一套标记**：几何不同族（`.novel-modal` / `.novel-modal.wide` / `.novel-city-drawer` + `.novel-city-scrim`），主人是样式层；`variant` 只选哪一档标记，不接管内部排版——两档的标题行/动作行照旧用原类名（`.novel-modal-title` / `.novel-modal-actions` / `.novel-city-drawer-head`），这次改造不动任何行的几何。
 - **阅读浮层做成 reducer/状态机框架**：判据只有「哪一角在场 + 退场怎么表态」两问，一个纯函数族就够；引框架会把视图改成派发点，而真正的 bug（互斥漏抄、Esc 分叉）在判据住址，不在调度形式。
-- **借会话持有浮层在场**：会话深且只拥有阅读时序（`docs/adr/0022`）；「此刻哪个面板开着」不是位置真相，塞进去会让会话的 interface 长出只有视图用的格。
+- **借会话持有浮层在场**：会话深且只拥有阅读时序（`ADR-0022`）；「此刻哪个面板开着」不是位置真相，塞进去会让会话的 interface 长出只有视图用的格。
 
 锚点：`src/client/views/dialog.tsx`（`Dialog` / `FOCUSABLE`）；`src/client/reader-surfaces.ts`（`openSurface` / `closeAll` / `dismissSurface` / `maskFor` / `escOwner` / `SupplementExit`）；`src/client/reader-session.ts` 的 `closeSupplement`（消费返回项那一侧的主人）；`tests/client/dialog.test.tsx`、`tests/client/reader-surfaces.test.ts`、`tests/client/views-wiring.test.tsx` 的「导入弹层焦点不被壳层重渲染劫持」与「入架一问」两条。

@@ -70,13 +70,13 @@ export function apply(ctx: Context): void {
       register(options: Record<string, unknown>, component: unknown): () => void
     }
   }).slots
-  // 宿主 layout 服务窄镜像（ADR 0020：只声明用到的成员、一次强转）：把面板带到前台是宿主的活，
+  // 宿主 layout 服务窄镜像（ADR-0020：只声明用到的成员、一次强转）：把面板带到前台是宿主的活，
   // 插件不碰 sidebar shell 的行按钮与选中态，只在「去现场」时调它同款的 selectPanel。
   const { layout } = ctx as unknown as { layout: { selectPanel(id: string | null): void } }
   // 文案入口只有这一处：locale 服务缺席（老宿主 / 测试假体）时回退 zhTranslate，侧栏 / 面板 /
   // 状态层 / 配置页共用同一个 t。宿主槽位缓存的 inject 结果是这个稳定函数本身，切语言由它在
   // 调用时读当前 locale，故这里不订阅。不声明 slot 的 `locale` 席位：那条路在未安装 locale face
-  // 的宿主上会抛，与可选回退冲突（`docs/adr/0038`）；换语言靠 outlet 的 locale revision 重渲。
+  // 的宿主上会抛，与可选回退冲突（`ADR-0038`）；换语言靠 outlet 的 locale revision 重渲。
   const t = createTranslate(ctx as unknown as CopyHostLike)
   // 全局面板双注册（同 id/key「novel」，必须同批——官方契约：选中缺失的 main entry 会抛）
   ctx.effect(() => slots.inject('sidebar.panellist', () => slots.register(

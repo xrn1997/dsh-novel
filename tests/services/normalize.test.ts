@@ -432,7 +432,7 @@ describe('原生方言的 ruleFind 映射（发现面数据面）', () => {
     expect(r.source!.rules.ruleExploreKinds).toEqual([{ title: '玄幻', url: 'xuanhuan' }])
   })
 
-  it('ruleRank 仍然是不支持字段（对面 ADR 0027 已删这条链）', () => {
+  it('ruleRank 仍然是不支持字段（对面已删这条链）', () => {
     const r = normalizeSource({ ...native, ruleRank: { url: '/paihang' } })
     if (!r.ok) throw new Error('应能规范化')
     expect(r.warnings.some((w) => w.message.includes('ruleRank'))).toBe(true)

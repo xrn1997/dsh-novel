@@ -23,7 +23,7 @@ describe('subRuleOf（子规则用途判据与求值体）', () => {
       ['@css:p', 'list'],
       ['a@text||b@text', 'value'],
       ['a@text||b', 'list'],
-      ['@text||@html', 'list'],         // 多分支里的单段 @ 头不单独升级（ADR 0007）
+      ['@text||@html', 'list'],         // 多分支里的单段 @ 头不单独升级（ADR-0007）
     ] as const
     for (const [rule, usage] of cases) expect(subRuleOf(rule, 'rule').usage, rule).toBe(usage)
   })

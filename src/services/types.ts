@@ -22,7 +22,7 @@ export interface NormalizedRules {
   /** 源级分类页 URL 模板，含 `{{kind}}`（替换成入口自带的地址）与 `{{page}}`：原生方言由
    *  `ruleFind.url` 落位，平铺 raw 顶层写同名键也直通这一格——所以**这一格有没有值不由方言决定**。
    *  它与「入口自带地址」谁优先、首页裁不裁页，主人是 `explore-face.fetchKindPage`（裁决见
-   *  `docs/adr/0027`），这里不复述判据。 */
+   *  `ADR-0027`），这里不复述判据。 */
   ruleExploreUrl: string | null
   /** 分类入口（顶层一层；`children` 本期不做，见 normalize 的告警）：原生 `ruleFind.kinds`、
    *  legado `exploreUrl` 解出的条目、平铺 raw 自带那一格，三处共用这一个形状；地址语义按方言不同，

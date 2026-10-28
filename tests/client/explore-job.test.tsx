@@ -11,7 +11,7 @@ import type { DepsOverrides } from './fake-deps.js'
 afterEach(cleanup)
 
 /** 单源的一轮快照：两个点名（源身份 + 类）就在形状里，没有跨源读数——
- *  `total`/`done`/`failures` 那份清单随 `docs/adr/0028` 一起走了。 */
+ *  `total`/`done`/`failures` 那份清单随 `ADR-0028` 一起走了。 */
 const snap = (over: Partial<ExploreSnapshot> = {}): ExploreSnapshot => ({
   id: 'j1', sourceId: 's9', sourceName: '站点甲', kind: '玄幻', phase: 'running', cancelled: false,
   page: 1, hasMore: false, books: [], startedAt: 1, ...over,

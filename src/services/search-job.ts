@@ -95,7 +95,7 @@ export class SearchJobs {
     // 每源答话留一行过程行进尾缓冲（没登记宿主即 `tie` 为 null，不写）：行文把「结果条数」与
     // 「源状态」分成两轴——status 是源的验证态、不是本轮结果；条数用 cap 后实际进快照的数，
     // 截断时附原始数（上限见 SEARCH_HITS_CAP_PER_SOURCE）。单源失败点名 `error.code`；
-    // 与整轮结果（读面 snapshot）分工照 ADR 0018 不变。
+    // 与整轮结果（读面 snapshot）分工照 ADR-0018 不变。
     const emit = (group: SearchGroup): void => {
       const capped = capHits(group)
       held.groups.push(capped)

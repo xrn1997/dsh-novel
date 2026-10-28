@@ -56,7 +56,7 @@ export async function fetchKindPage(
   source: NovelSource, kindUrl: string, request: SourceRequest, timeoutMs?: number, jsTimeoutMs?: number,
   page = 1,
 ): Promise<KindPageResult> {
-  // 「这次用哪份模板」的判据（本函数是它的主人，裁决与被否决的方案见 `docs/adr/0027`）：
+  // 「这次用哪份模板」的判据（本函数是它的主人，裁决与被否决的方案见 `ADR-0027`）：
   // **先问源级模板 `ruleExploreUrl` 在场吗**——在场就用它（它带的就是原生分页语义，`{{kind}}` 填入口
   // 地址、`{{page}}` 走首页裁页）；平铺 raw 顶层写了同名键时非原生方言也走得进这一格，所以**方言
   // 不决定它的有无**。源级缺席才按方言兜底：legado 的分类入口**自带**整条模板（自带 `{{page}}`，

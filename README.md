@@ -85,7 +85,7 @@ dsh plugin --profile <profile> add @xrn1997/dsh-novel
 dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 ```
 
-**宿主兼容声明分两层**：安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`；peer 区间按宿主线开口，线内 rc / patch 不跟版，跨线才重验。实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本（宿主不读这个字段——安装许可只认上面那组 peer 区间；这一行是给人看的记录）。宿主发版、peer 区间与浏览器模块表的维护流程，以及发布冷却闸，见 [docs/development.md](docs/development.md#宿主兼容与发版)。
+**宿主兼容声明分两层**：安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`；peer 区间按宿主线开口，线内 rc / patch 不跟版，跨线才重验。实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本：**DSH 0.1.5-rc.1、0.1.7-rc.1、0.1.7-rc.2、0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2、0.2.1-rc.3**（宿主不读这个字段——安装许可只认上面那组 peer 区间；这一行是给人看的记录，文档门会核对它与 `package.json` 一致）。宿主发版、peer 区间与浏览器模块表的维护流程，以及发布冷却闸，见 [docs/development.md](docs/development.md#宿主兼容与实测名单)。
 
 ## 首次使用
 
@@ -205,7 +205,7 @@ pnpm build        # 构建 lib/（Node 半 + 浏览器半 + lib/types 声明）�
 pnpm dev          # = tsdown --watch，日常开发建议挂着
 ```
 
-本地源码调试、构建产物与热更新、宿主兼容与发版、全部测试门控与真宿主冒烟见 [docs/development.md](docs/development.md)；模块形状与语义归属见 [docs/architecture.md](docs/architecture.md)。
+本地源码调试、构建产物与热更新、宿主兼容、发版与真机验证、全部测试门控见 [docs/development.md](docs/development.md)；模块形状与语义归属见 [docs/architecture.md](docs/architecture.md)。
 
 ## 文档
 
@@ -215,7 +215,7 @@ pnpm dev          # = tsdown --watch，日常开发建议挂着
 
 ## 贡献
 
-欢迎 Issue 与 PR。提交信息、PR 与发版边界见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。提交改动前请确保 `pnpm test` 与 `pnpm typecheck` 通过，且**两条命令的退出码都亲眼看过**；完整的真链路门控与真宿主冒烟见 [docs/development.md 的「测试与真链路门控」](docs/development.md#测试与真链路门控)。若扩展了书源语法，请优先补充对应的回放测试 fixture（脱敏判据见 `tests/compat/sanitize.ts`），并把新形态在 `tests/legado-coverage/matrix.ts` 里落到正确的那一态。提交即表示你同意以 [Apache-2.0](LICENSE) 协议授权你的贡献。
+欢迎 Issue 与 PR。提交信息、PR 与发版边界见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。提交改动前请确保 `pnpm test` 与 `pnpm typecheck` 通过，且**两条命令的退出码都亲眼看过**；完整的真链路门控见 [docs/development.md 的「门（自动）」](docs/development.md#门自动)，真宿主冒烟见同一份文档的「真机验证」。若扩展了书源语法，请优先补充对应的回放测试 fixture（脱敏判据见 `tests/compat/sanitize.ts`），并把新形态在 `tests/legado-coverage/matrix.ts` 里落到正确的那一态。提交即表示你同意以 [Apache-2.0](LICENSE) 协议授权你的贡献。
 
 ## 致谢
 

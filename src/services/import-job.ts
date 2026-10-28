@@ -203,8 +203,8 @@ export class SourceJobs {
           settled++
           continue
         }
-        // 站点判据先记账，再写回状态：`applyProbeResult` 会把落盘失败如实抛（ADR 0011 / 0013），
-        // 把它折进「这一家 broken」就是把磁盘侧事实记进站点判据分母（ADR 0011 的写盘失败边界）；
+        // 站点判据先记账，再写回状态：`applyProbeResult` 会把落盘失败如实抛（ADR-0011 / ADR-0013），
+        // 把它折进「这一家 broken」就是把磁盘侧事实记进站点判据分母（ADR-0011 的写盘失败边界）；
         // 这里把失败移交给注册表（retainWriteFailure），收尾 flush 会如实抛，只补一条任务读数。
         try {
           const r = await this.deps.probe(s)

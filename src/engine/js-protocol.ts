@@ -629,7 +629,7 @@ export function invokeJavaMethod(d: BridgeDeps, name: string, rawArgs: readonly 
 
 /** 主线程那一臂抛的哨兵：`asyncBridgeSource` 把它写进每个 async 桥，路由侧（js-sandbox 的
  *  `needsSyncBridge`）按同一个值换 worker 重跑。**抛与认只许一个主人**——值抄成第二份时，
- *  改一头另一头跟不上，认不出哨兵等于脚本直接拿到一条错误而不是换道重跑（口径见 `docs/adr/0005`）。 */
+ *  改一头另一头跟不上，认不出哨兵等于脚本直接拿到一条错误而不是换道重跑（口径见 `ADR-0005`）。 */
 export const SYNC_AJAX_SENTINEL = '__dsh_sync_ajax_required__'
 
 /** 异步行的沙箱侧同步桥源码——插进 `js-sandbox.ts` 的 `BOOTSTRAP` 模板串。生成逻辑住这，

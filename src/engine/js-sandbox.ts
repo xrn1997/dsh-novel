@@ -196,7 +196,7 @@ const SOURCE_GLOBAL = scriptGlobalOf('source')
  * 宿主 realm；vm realm 内 codeGeneration:{strings:true} 允许 eval / Function，但入口仍锁死。
  * **宿主帧通道已单独关掉**：V8 会把 CallSite 交给 `Error.prepareStackTrace`，worker 的 CJS 宿主帧
  * 可经它的 `getThis()`/`getFunction()` 取到 `require`；本闭包必须把该属性锁死。
- * vm 仍是纵深防御层，不是 OS 级安全沙箱（见 `docs/adr/0004`）。
+ * vm 仍是纵深防御层，不是 OS 级安全沙箱（见 `ADR-0004`）。
  */
 const BOOTSTRAP = `;(function (g) {
   'use strict'

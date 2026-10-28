@@ -7,7 +7,7 @@ import { ls } from './util.js'
 
 /** 轻量 store（useSyncExternalStore 驱动）：只承担**跨卸载要活下来**的现场——视图内路由、偏好、
  *  列表筛选与勾选、任务面镜像、瞬态队列。业务真相仍在服务端、每次挂载经 api 拉；唯一例外是书架的
- *  **读取面与落架账**升格成面板期投影（`client/panel-shelf.ts`，裁决见 `docs/adr/0046`）。 */
+ *  **读取面与落架账**升格成面板期投影（`client/panel-shelf.ts`，裁决见 `ADR-0046`）。 */
 export interface Store<T> {
   get(): T
   set(patch: Partial<T>): void

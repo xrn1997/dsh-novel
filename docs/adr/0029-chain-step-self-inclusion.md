@@ -16,6 +16,6 @@ default 方言的 class / id / tag 三种选择步，与隐式及显式 CSS 步�
 
 **代价**：含自身**改变取位顺序**。`.0` / `[0]` 的含义从「第一个后代」变成「自身」，所以现在靠后代语义才碰对的写法可能被挪到容器上。这不是零风险，因此随本篇一起：取位与「自身优先」由 `tests/engine/select.test.ts` 的「default 选择段含当前元素自身」和 `tests/engine/css.test.ts` 的「@css 链步含当前元素自身」钉死；真机侧改前/改后逐源读数按 `docs/development.md` 的 `DSH_REPROBE`、`DSH_CONTENT_AUDIT` 重取，量出来的回归如实写进矩阵行的 `note`，不藏进提交信息。
 
-本篇不推翻 `docs/adr/0003`（判「支持不支持」以对面的读法为基准）——它就是那条基准的一次落地。与 `docs/adr/0001`、`docs/adr/0002` 无冲突：链步空态仍按 `reducePicked` 判 Miss，本篇只改「空」的判据里候选集合该不该包含自身。
+本篇不推翻 `ADR-0003`（判「支持不支持」以对面的读法为基准）——它就是那条基准的一次落地。与 `ADR-0001`、`ADR-0002` 无冲突：链步空态仍按 `reducePicked` 判 Miss，本篇只改「空」的判据里候选集合该不该包含自身。
 
 锚点：`src/engine/select.ts` 的 `selectStepWithSelf`（命中集含自身的唯一实现）、`evalDefault` 的 class / id / tag 三支；`src/engine/css.ts` 的 `evalCss`；矩阵行 `a-default-step-self-inclusion`（JVM 实测与真机读数的家）、`a-class-multi-token-arg`（同族里「本仓更宽」的那一侧）。

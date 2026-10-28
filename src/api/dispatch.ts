@@ -228,7 +228,7 @@ async function route(
   }
   if (a === SEG.explore && b === SEG.list && c === undefined) {
     // 分类轮次复用搜索那套「提交 + 快照 + SSE」的读面形状：提交即由 Node 半跑完并持有整轮。
-    // **浏览轴是「先点名一个源、逛它自己的分类」**（`docs/adr/0028`）：两个点名都进 body，
+    // **浏览轴是「先点名一个源、逛它自己的分类」**（`ADR-0028`）：两个点名都进 body，
     // 缺任何一个都是路由自检的 body 形状判据（400 BadRequest 点名缺哪个）；点了个不存在的源
     // 则由门面的值域判据抛错，经同一份映射落成同一个状态码——路由不复制那份判据。
     guard(method, ROUTES.exploreList)
@@ -494,7 +494,7 @@ async function shelfPut(
   const body = await readJsonBody<Record<string, unknown> | null>(req, null)
   if (body === null || typeof body !== 'object') throw new ApiError('body 需为 JSON 对象', 400, 'BadRequest')
   // body 的**形状**判据（哪种形态、字段取值）住 wire 的 readBodies.shelfPut；这里只留「这一形态
-  // 交给哪个门面动词」——那是传输关注点（`docs/adr/0036` 第①条）。**值域门**（能不能进架、进度
+  // 交给哪个门面动词」——那是传输关注点（`ADR-0036` 第①条）。**值域门**（能不能进架、进度
   // 取值范围）归门面动词：同一条判断要同时护 HTTP 面与 agent 工具面。
   const want = readBodies.shelfPut(body)
   if (want.mode === 'add') {
@@ -580,7 +580,7 @@ function methodNotAllowed(method: string, at: string, hint?: string): ApiError {
 
 /** 这里留下的三处「看着像业务判据」的东西，各自的归属是定过的，别当违规清理：
  *  ① `shelfPut` / `authRoute` 按 body 形状分派到哪个门面动词——那是「调用方要的是哪个动作」，
- *    传输关注点；**值域**判据（能不能进架、进度取值范围）全在门面（`docs/adr/0019` 那条同一件事）。
+ *    传输关注点；**值域**判据（能不能进架、进度取值范围）全在门面（`ADR-0019` 那条同一件事）。
  *    body 的*形状*判据不在这里重复：它住 `shared/wire.ts` 的 `readBodies`。
  *  ② 导出区间的裁剪与两条 422：主人是这一层，`services/export.ts` 的头注就是这条分工的记录
  *    （它只在拿到越界区间时抛，防的是未来的第二个调用方）。

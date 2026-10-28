@@ -89,7 +89,7 @@ export interface ImportOutcome {
 
 /** 一次点名解析出来的那一**条**分类入口：执行体要的三样（打哪个源、拿什么地址、按哪份代际存快照）。
  *  `pickEntry` 交出它、`runExplorePage` 收下它，两处各写一遍匿名形状就是让这条契约没有名字。
- *  不叫 `ExploreTarget`：那枚名字属于跨源编排那一层（一轮打多家），它随浏览轴一起撤了（`docs/adr/0028`）。 */
+ *  不叫 `ExploreTarget`：那枚名字属于跨源编排那一层（一轮打多家），它随浏览轴一起撤了（`ADR-0028`）。 */
 interface ExploreEntry {
   source: NovelSource
   kindUrl: string
@@ -133,7 +133,7 @@ function staticLiveConfig(parts: {
  * 规则求值全部经引擎；抓取全部经守门 fetcher；缓存/书架/注册表在其上编排。
  * 在线目录与正文的管线归 `OnlineReading`，本地/在线分流与正文文字规约归 `BookContent`
  * （本文件只委托跨面动词），
- * 搜索/发现/书架/导入/登录/详情仍住这里（边界见 `docs/adr/0047`）。
+ * 搜索/发现/书架/导入/登录/详情仍住这里（边界见 `ADR-0047`）。
  */
 export class ReadingService {
   private constructor(

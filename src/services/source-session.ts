@@ -79,7 +79,7 @@ function readState(file: string): State {
 /** 源状态持久化：写操作只标脏（脚本方法面同步），求值边界/卸载时 flush 一次整份落盘——
  *  同一段脚本的多次 set 合并成一次写；跨重启保留源变量/单串槽/cache/cookie 垫片。
  *
- *  **同步写是 ADR 0013 的刻意例外**：SourceSession 的方法面是同步的（脚本 `source.get`/`cache.get`
+ *  **同步写是 ADR-0013 的刻意例外**：SourceSession 的方法面是同步的（脚本 `source.get`/`cache.get`
  *  不能等 IO），所以 flush 用同一种 tmp+rename（命名仍走 storage 的 `tempPathOf`/`backupPathOf`），
  *  由单线程同步调用保证同一文件的写不会互相插队。写失败只记日志、不打断读链路，脏标记留到
  *  下一次 flush 重试；进程崩溃最多丢当前求值批的写入（源状态是派生数据）。 */

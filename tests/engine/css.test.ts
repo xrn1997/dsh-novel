@@ -75,7 +75,7 @@ describe('@css 选择器段', () => {
  * 的中间步是一条裸词 CSS 选择器。对面 `Element.select` 的命中集**含当前元素**（本机实测：
  * `self.select("a")` = 1；版本成色写在矩阵 `a-default-step-self-inclusion`，不在这里重复），
  * 本仓 `cur.find()` 只给后代 = 0 → 整条链读空 → 目录翻页规则后面的脚本拿 `undefined` 拼出下一页
- * 地址 → 404 把整棵目录带走。裁决与代价见 `docs/adr/0029`，
+ * 地址 → 404 把整棵目录带走。裁决与代价见 `ADR-0029`，
  * 读数在矩阵行 `a-default-step-self-inclusion`。
  */
 describe('@css 链步含当前元素自身', () => {

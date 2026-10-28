@@ -113,7 +113,7 @@ export interface JobState {
 
 /** 一条命中与本轮关键词的关系（判据的唯一实现见 `shared/relevance.ts`）。
  *  `suspect`＝不进默认视野的档、不删（不是「坏数据」也不是「已丢弃」）；空关键词时这一维不生效。
- *  「为什么折叠而不丢弃、空串为何不参与比较」的裁决只住 `docs/adr/0032`，这里不复述。 */
+ *  「为什么折叠而不丢弃、空串为何不参与比较」的裁决只住 `ADR-0032`，这里不复述。 */
 export type Relevance = 'exact' | 'contains' | 'suspect'
 
 /** 搜索命中条目：可空即 `null`，不是缺键 */
@@ -157,7 +157,7 @@ export interface MergedSource {
 export interface MergedBook {
   title: string
   author: string | null
-  /** 只会是 `exact`/`contains`：suspect 不进归并（裁决见 `docs/adr/0033`） */
+  /** 只会是 `exact`/`contains`：suspect 不进归并（裁决见 `ADR-0033`） */
   relevance: 'exact' | 'contains'
   sources: MergedSource[]
   sourceCount: number
@@ -194,7 +194,7 @@ export interface SearchJobSnapshot {
  *  legado 的 `url` 本身就是那一类的完整模板），这份差异因此继续只住服务端一侧，不外泄到跨半契约。
  *  路由名仍是 `explore/kinds`：它给的就是分类入口清单，只是按源分组了。
  *  不做「跨源精确同名并集 + 每条计数」——那条轴会把左栏撑成各站自造词的长列表，
- *  且绝大多数词条只挂一个源，见 `docs/adr/0028`。
+ *  且绝大多数词条只挂一个源，见 `ADR-0028`。
  *  源行上的 `groups` 与 `status` **只是展示标签与状态角标，不是浏览轴**：同一篇 ADR 刚把「分组→源
  *  两级」列为被否决做法，这一面逛的轴是「点名一个源」，不是「按分组逛」——别让这两个字段躺在
  *  契约里被读成分组又变回了一级轴。 */
@@ -207,7 +207,7 @@ export interface ExploreSources {
  *  手动聚合搜索承担（主人 `client/search-job.ts`，不是这里）。
  *  `author` 为空的条目照旧合法（重名书大量存在，而**类型面与落盘这一侧从不按书名合并任何东西**——
  *  搜索面那一层按规范化 `(书名, 作者)` 归并的是呈现层投影，不落盘、不改这里的字段与架位，
- *  见 `MergedBook` 与 `docs/adr/0033`）。
+ *  见 `MergedBook` 与 `ADR-0033`）。
  *  **与 `SearchHit` 同字段集而三处异名（`name`/`bookUrl`/`lastChapter`）是刻意的两份语义**：
  *  这一张是浏览轴上「一家给的一条」，那一张是聚合搜索里「多家撞来的命中」——把它们并成一张，
  *  「一条命中就是一本书」与「同一本在几个源上」这两种判断就会在类型面上重新长在一起。
@@ -730,7 +730,7 @@ export const BODY = {
 
 /** body 形状不符（缺字段、类型错、空数组）。消息文本就是给终端用户看的那句 400 说明——
  *  「路由自检错误」这一类，由 `api/dispatch.ts` 落成 `ApiError(…, 400, 'BadRequest')`：
- *  判据住这里，状态码归传输层（口径两分法见 `docs/adr/0016`）。 */
+ *  判据住这里，状态码归传输层（口径两分法见 `ADR-0016`）。 */
 export class BodyShapeError extends Error {}
 
 function bodyBad(message: string): never {
@@ -858,7 +858,7 @@ export const readBodies = {
     }
     return { keyword, ...(raw === undefined ? {} : { sourceIds: raw as string[] }) }
   },
-  /** 分类轮次提交：两个点名都在 body 里（浏览轴是「先点名一个源、逛它自己的分类」，`docs/adr/0028`） */
+  /** 分类轮次提交：两个点名都在 body 里（浏览轴是「先点名一个源、逛它自己的分类」，`ADR-0028`） */
   exploreList: (body: Record<string, unknown> | null): { sourceId: string; kind: string } => ({
     sourceId: readRequiredText(body, PARAMS.sourceId),
     kind: readRequiredText(body, PARAMS.kind),

@@ -44,13 +44,13 @@ export function relevanceOf(keyword: string, item: RelevanceInput): Relevance {
 }
 
 export type MarkedHit = { hit: SearchHit; relevance: Relevance }
-/** kept 档的窄面：suspect 不进归并（裁决见 `docs/adr/0033`），归并面的档位字段随它收窄到两档 */
+/** kept 档的窄面：suspect 不进归并（裁决见 `ADR-0033`），归并面的档位字段随它收窄到两档 */
 export type KeptHit = MarkedHit & { relevance: 'exact' | 'contains' }
 export interface RelevancePartition { kept: KeptHit[]; suspect: MarkedHit[] }
 
 /** 一趟命中分成「默认视野」与「折叠区」：`suspect` 只换位置不删；空关键词＝没有这一维（全归 kept）——
  *  空串是任何串的子串，让空串参与比较会把整轮悄悄判成「全命中」。
- *  「为什么折叠而不丢弃」的裁决只住 `docs/adr/0032`，这里不复述。 */
+ *  「为什么折叠而不丢弃」的裁决只住 `ADR-0032`，这里不复述。 */
 export function partitionByRelevance(keyword: string, hits: readonly SearchHit[]): RelevancePartition {
   const marked = hits.map((h) => ({ hit: h, relevance: relevanceOf(keyword, h) }))
   const kept = marked.filter((m): m is KeptHit => m.relevance !== 'suspect')

@@ -27,7 +27,7 @@ _Avoid_: 格式、模板
 
 **规则字段表（rule-field table）**:
 书源规则字段的登记处：一个模型键一行，写明它在两方言里的容器与子字段路径（发现面条目字段没有路径列，见下）、Native 隐式终端标记与存量收敛的覆盖模式。通用容器字段的导入循环名单、两方言通用展平映射、Native 隐式终端清单与存量重推的档位都从它派生；发现面条目字段（`ruleExplore*`）是边界——`ruleExplore` / Native `ruleFind` 的整套切换仍归 `normalize` 的显式分支，表只为它们登记模型键、隐式终端与覆盖模式。
-_唯一实现_: `services/rule-fields.ts` 的 `RULE_FIELD_SPECS`（派生 `RULE_FIELDS` / `DIALECT_MAP` / `NATIVE_MAP` / `NATIVE_TEXT_FIELDS`；裁决见 `docs/adr/0044-rule-field-table.md`）
+_唯一实现_: `services/rule-fields.ts` 的 `RULE_FIELD_SPECS`（派生 `RULE_FIELDS` / `DIALECT_MAP` / `NATIVE_MAP` / `NATIVE_TEXT_FIELDS`；裁决见 `ADR-0044`）
 _Avoid_: 字段清单（它只是这张表的投影）、规则映射（映射只是表的一列）
 
 **存量收敛（stored-source rehydration）**:
@@ -54,24 +54,24 @@ _唯一实现_: `services/search-face.ts`；「谁参与」的判据同住 `serv
 _Avoid_: 搜索服务
 
 **发现面（explore face / 书城）**:
-「**一个源 + 这个源自己声明的一个分类名 + 第几页**」到「该分类在这个源上、这一页的书目」的完整请求语义与其整轮编排——浏览轴就是这三样，没有跨源那一维（裁决见 `docs/adr/0028`）；用户可见的名字是面板里的「书城」tab。参与集判据四条：**启用 ∧ 文本源 ∧ 声明了分类入口 ∧ 没把发现关掉**。
+「**一个源 + 这个源自己声明的一个分类名 + 第几页**」到「该分类在这个源上、这一页的书目」的完整请求语义与其整轮编排——浏览轴就是这三样，没有跨源那一维（裁决见 `ADR-0028`）；用户可见的名字是面板里的「书城」tab。参与集判据四条：**启用 ∧ 文本源 ∧ 声明了分类入口 ∧ 没把发现关掉**。
 _唯一实现_: 单源一次抓取 `services/explore-face.ts` 的 `fetchKindPage`（页码由调用方给）；单源一页的执行体 `services/explore.ts` 的 `fetchExploreGroup`（**从不抛错**：抓取失败以带 `error` 的组交回）；「谁进城」的谓词 `services/participation.ts` 的 `exploreParticipates`（发现开关的 raw 读口 `services/normalize.ts` 的 `rawExploreEnabled`）
 _Avoid_: 书城列表页、分类搜索（发现面是另一条链路，不是聚合搜索的第二次调用）
 
 **分类入口（explore kinds）**:
-一个源「有哪些分类」的逐源声明（用户面与 `docs/adr/0027` 里也叫**发现入口**，指同一件事）。**两方言的地址语义不同**：原生 `ruleFind.kinds` 里的地址是填进源级模板 `{{kind}}` 的值，legado `exploreUrl` 里的地址本身就是那一类的完整模板（自带页码位）；落位后统一成模型里的 `ruleExploreKinds` 一个形状。**「这次用哪份模板」先问源级模板在场吗，方言只决定兜底、不决定优先**——判据的主人是 `explore-face.fetchKindPage`（裁决见 `docs/adr/0027`），此处不复述。脚本形态（`@js:` / `<js>`）本期不执行，声明它的源在书城没有分类。
+一个源「有哪些分类」的逐源声明（用户面与 `ADR-0027` 里也叫**发现入口**，指同一件事）。**两方言的地址语义不同**：原生 `ruleFind.kinds` 里的地址是填进源级模板 `{{kind}}` 的值，legado `exploreUrl` 里的地址本身就是那一类的完整模板（自带页码位）；落位后统一成模型里的 `ruleExploreKinds` 一个形状。**「这次用哪份模板」先问源级模板在场吗，方言只决定兜底、不决定优先**——判据的主人是 `explore-face.fetchKindPage`（裁决见 `ADR-0027`），此处不复述。脚本形态（`@js:` / `<js>`）本期不执行，声明它的源在书城没有分类。
 _唯一实现_: 解析与形态判定 `services/explore-url.ts` 的 `parseExploreKinds`（判据同住 `exploreKindsFormOf`，条目可用尺同住 `usableKind`——两档解析、原生侧条目、平铺优先的数组尺四家共读这一把）；落位在 `services/normalize.ts`——导入侧 `flattenDialect`（legado，条目尺同住 `parseExploreKinds`）与 `flattenNative`（原生，条目尺同住 `nativeExploreFields`），存量按 raw 补推同住 `rawExploreFields`（两方言跑的是同一个 flatten）
 _Avoid_: 分类词表（那是一个源自己声明的分类标题摊开后的清单，主人是 `deriveExploreSources`）、发现列表
 
 **相关性（relevance）**:
-本轮关键词与一条命中的关系档位：`exact`（书名或作者整串等于规范化关键词）／`contains`（书名、作者、分类任一含关键词，或复合关键词的任一 token 被书名含）／`suspect`（都不含、不删，只移出默认视野）。空关键词＝没有这一维。「为什么折叠而不丢弃」（含空串为何不参与比较）的裁决只住 `docs/adr/0032`，此处不复述。
+本轮关键词与一条命中的关系档位：`exact`（书名或作者整串等于规范化关键词）／`contains`（书名、作者、分类任一含关键词，或复合关键词的任一 token 被书名含）／`suspect`（都不含、不删，只移出默认视野）。空关键词＝没有这一维。「为什么折叠而不丢弃」（含空串为何不参与比较）的裁决只住 `ADR-0032`，此处不复述。
 _唯一实现_: `shared/relevance.ts` 的 `relevanceOf` / `partitionByRelevance`（三档的序读数同住 `RELEVANCE_RANK`）；形状 `Relevance` 声明在 `shared/wire.ts`
 _Avoid_: 过滤（它不是丢弃）、降噪、二次搜索、相关性分数（只有三档枚举，没有阈值）
 
 **作品视图（按书）**:
 一轮聚合搜索里「同一本（规范化书名 + 规范化作者）在若干家源上」的呈现轴：一本一行、逐源在下面可展开、可一次把这一本的各家逐条都加架。它是**派生投影**，不是存储身份——架位凭 `bookKey`（词条见「架位」），进度不跨源搬。单位律是三条身份：**条**＝那一本书在一个源上的那一行——逐源轴的组头计数、收口的命中读数、书行的展开钮都数它；**本**＝归并后的那一本——书行一行一本，收口的并书读数与超限行数它；**家**＝一个源——「N 家源」与收口的搜过/未响应数的是去重后的家。三条读数绝不折叠；加架回执数的是落架的**架位**（同一地址的两种写法各是一行、只落一个架位）。
 _唯一实现_: `shared/merge-by-book.ts` 的 `mergePartitioned`（生产两个消费点的归并入口：吃 `shared/round-summary.ts` 的分区，同一轮只分区一次；形状 `MergedBook` / `MergedSource` 与上限 `SEARCH_BOOKS_CAP` 在 `shared/wire.ts`；本轮收口形状 `MergedRound` 不过 HTTP，就住 `mergePartitioned` 旁边；键上的名字取首个到达源原样，不投票）；`mergeBooks` 只是「一轮 → 归并」的 convenience（测试与审计脚本用），不是第二个实现
-_Avoid_: 跨源合并器（那是发现面已下线那一层的历史名字，见 `docs/adr/0028`）、同书去重（不去重，多源都在案）、作品（本仓不用这个词指存储实体）
+_Avoid_: 跨源合并器（那是发现面已下线那一层的历史名字，见 `ADR-0028`）、同书去重（不去重，多源都在案）、作品（本仓不用这个词指存储实体）
 
 **搜索结果页派生（search view-model）**:
 「一轮命中现场 → 轮级计数（条／本／家）、两条呈现轴的行身份与逐源回读」的唯一住址：判据在此，视图只接线与渲染。轮级派生一次给齐预算值——逐源组的两档行与行 key、每本的逐源行与架位全集都随 `deriveRound` 算好，渲染路径不再为每帧每击键各算一趟。
@@ -90,16 +90,16 @@ _Avoid_: 书架真相（那是 `services/shelf.ts` 的 `Shelf`）、搜索轮次
 
 **工具面披露三件套（searched / answered / filtered）**:
 `dshnovel_search` 对「这一轮为什么给出这些」自报的三条计数：本轮跑了多少家、多少家干净答话（答了零条也算答话）、多少行因被判不相关移出默认返回。界面上同一事实由逐源轴与折叠区承接，工具面没有折叠，用数字承接——「没人答话」与「答话了但全不相关」不许折成同一种结局。
-_唯一实现_: `tools/tools.ts` 的 `dshnovel_search` 的 execute（三条计数的算式在 `shared/round-summary.ts` 的 `summarizeRound`；逐家点名的 `failed` 与超限那句 `truncated` 是 `tools/search-value.ts` 的 `failedSources` / `truncationNotice`；裁决与必然后果见 `docs/adr/0033`）
+_唯一实现_: `tools/tools.ts` 的 `dshnovel_search` 的 execute（三条计数的算式在 `shared/round-summary.ts` 的 `summarizeRound`；逐家点名的 `failed` 与超限那句 `truncated` 是 `tools/search-value.ts` 的 `failedSources` / `truncationNotice`；裁决与必然后果见 `ADR-0033`）
 _Avoid_: 有命中的源数（answered 数的是「答话」，不是「有命中」——答了空页的源也计答话）
 
 **书籍详情浮层（book sheet）**:
-书城右区一本**已经点名的源上的书**的落点：整段简介（浮层里不夹行，卡片上才夹一行）+ 本源那两个动作（读这本 / 加入书架）+「在其他源找这本」那一次**手动**聚合搜索。源不在这层点名——浏览轴收成按源后，源在左栏第一层就点完名了（裁决见 `docs/adr/0028`）。逐源行列出是这一层的轴，**刻意不吃**搜索面的按书归并（归并只进结果页与工具面，裁决见 `docs/adr/0033`，有钉子钉着这一不下场）：「不替用户判是不是同一本书」在这一层仍是事实，搜索面则按键判同；「不替他判该用哪一家读」两层都成立。
+书城右区一本**已经点名的源上的书**的落点：整段简介（浮层里不夹行，卡片上才夹一行）+ 本源那两个动作（读这本 / 加入书架）+「在其他源找这本」那一次**手动**聚合搜索。源不在这层点名——浏览轴收成按源后，源在左栏第一层就点完名了（裁决见 `ADR-0028`）。逐源行列出是这一层的轴，**刻意不吃**搜索面的按书归并（归并只进结果页与工具面，裁决见 `ADR-0033`，有钉子钉着这一不下场）：「不替用户判是不是同一本书」在这一层仍是事实，搜索面则按键判同；「不替他判该用哪一家读」两层都成立。
 _唯一实现_: `client/views/CityBookSheet.tsx`（跨源那一次复用搜索面，不新造第二条跨源遍历；关键词构造同住 `client/city-view-model.ts` 的 `sheetKeyword`）
 _Avoid_: 选源（这一层不做这个动作，源已定）、详情面板（「面板」在本仓指宿主里那个全局面板，这层只是它内部的一层覆盖；也别与规则求值的那个**详情面**混为一谈——那是一条取值链路，不是一层界面）
 
 **模态契约（dialog）**:
-带遮罩那一层浮层的行为口径：Esc 退出、入场焦点落面板内第一颗未禁用钮、Tab 圈认面板内全部可聚焦件（拖放区 / 文本框也算）、关闭后焦点还给触发件、`role=dialog` 与 `aria-modal` 的标记与遮罩点空退出——五处浮层共用这一份，调用方只交标题、内容、动作行与归还对象（被否决的做法见 `docs/adr/0037`）。
+带遮罩那一层浮层的行为口径：Esc 退出、入场焦点落面板内第一颗未禁用钮、Tab 圈认面板内全部可聚焦件（拖放区 / 文本框也算）、关闭后焦点还给触发件、`role=dialog` 与 `aria-modal` 的标记与遮罩点空退出——五处浮层共用这一份，调用方只交标题、内容、动作行与归还对象（被否决的做法见 `ADR-0037`）。
 _唯一实现_: `client/views/dialog.tsx` 的 `Dialog`
 _Avoid_: 弹窗工具、焦点 hook（说「模态契约」）；也别与**阅读浮层**混称——那是阅读器里不带遮罩的角落面板，只管「此刻哪一面在场」
 
@@ -114,7 +114,7 @@ _唯一实现_: `src/services/source-request.ts` 的 `createSourceRequest` / `So
 _Avoid_: 抓取工具、fetcher 包装（它拥有执行顺序，不是转发壳；模板解析仍归「请求组装」）。
 
 **HTTP cookie jar**:
-请求层那张域/路径/过期/`Secure` 感知的 cookie 表：响应 `Set-Cookie` 自动落库，请求缺省回带；一张表**跨源共享**（上游 `CookieStore` 同粒度，同站两源复用登录态）。与脚本侧按源隔离的 cookie 垫片是两张表。裁决与公共后缀残留见 `docs/adr/0039`。
+请求层那张域/路径/过期/`Secure` 感知的 cookie 表：响应 `Set-Cookie` 自动落库，请求缺省回带；一张表**跨源共享**（上游 `CookieStore` 同粒度，同站两源复用登录态）。与脚本侧按源隔离的 cookie 垫片是两张表。裁决与公共后缀残留见 `ADR-0039`。
 _唯一实现_: `src/services/cookies.ts` 的 `CookieJar`；自动吸收/回带归 `services/fetcher.ts`，浏览器与 jar 的双向桥归 `services/source-request.ts`
 _Avoid_: cookie 垫片（那是 `SourceSession.cookieJar` 的按源键值表）、CookieManager（那是 Android 类名，脚本桥面）
 
@@ -296,7 +296,7 @@ _唯一实现_: `client/reader-session.ts`
 _Avoid_: 阅读器状态管理（视图里的 state 只是它的投影）；也别与**阅读场景**混称——那个词指浮层、注释载荷、Esc 归属与入架一问的交互现场
 
 **阅读浮层（reader surface）**:
-阅读器右上角那一层的在场判据：Aa／目录／导出／注释／导入说明**至多一角在场**（同住右上角的两面叠起来，底下那面看得见点不动）；换角时注释面板只收不消费，Esc 走「关闭」那条语义（裁决见 `docs/adr/0037`）。
+阅读器右上角那一层的在场判据：Aa／目录／导出／注释／导入说明**至多一角在场**（同住右上角的两面叠起来，底下那面看得见点不动）；换角时注释面板只收不消费，Esc 走「关闭」那条语义（裁决见 `ADR-0037`）。
 _唯一实现_: `client/reader-surfaces.ts`（`openSurface` / `closeAll` / `dismissSurface` / `maskFor` / `escOwner`）
 _Avoid_: 浮层状态管理（阅读场景里的 `surface` 只是它的投影）、在各 opener 里逐处抄「先关别人」；也别与**模态契约**混称——带遮罩的入架一问走 `client/views/dialog.tsx`
 
@@ -321,7 +321,7 @@ _唯一实现_: `client/reader-geometry.ts` 的 `createReaderGeometry` / `curren
 _Avoid_: 阅读时序（`client/reader-session.ts`）、滚动容器探测（`client/scrollport.ts` 的 `findScrollport`）
 
 **在线阅读（online reading）**:
-一条在线书的目录与正文取值管线：目录读数先走一层进程内缓存（键含代际，refresh 绕过读；写回有序——晚到的旧目录不许盖掉刚刷新的那份），其后是磁盘缓存优先、目录在途去重（身份含代际与 refresh）、翻页跟进、缓存写回，连同 tocUrl 解析、subContent 追加与空正文异常；全目录的规范化地址集随目录缓存一份，供串章闸放行当前章。**在途去重与进程内缓存都只服务目录**（单章在途由阅读会话保证，正文不另立全局表；缓存里的目录与地址集是共享值，消费方不得原地改）。**本地书不走这条线**——本地/在线分流与文字规约归书内容读面，门面只委托；搜索/发现/书架/导入/详情仍归门面（裁决见 `docs/adr/0047`）。
+一条在线书的目录与正文取值管线：目录读数先走一层进程内缓存（键含代际，refresh 绕过读；写回有序——晚到的旧目录不许盖掉刚刷新的那份），其后是磁盘缓存优先、目录在途去重（身份含代际与 refresh）、翻页跟进、缓存写回，连同 tocUrl 解析、subContent 追加与空正文异常；全目录的规范化地址集随目录缓存一份，供串章闸放行当前章。**在途去重与进程内缓存都只服务目录**（单章在途由阅读会话保证，正文不另立全局表；缓存里的目录与地址集是共享值，消费方不得原地改）。**本地书不走这条线**——本地/在线分流与文字规约归书内容读面，门面只委托；搜索/发现/书架/导入/详情仍归门面（裁决见 `ADR-0047`）。
 _唯一实现_: `services/online-reading.ts` 的 `OnlineReading`（目录 `toc` / 正文 `chapterText`；`tocUrlOf` 同住）
 _Avoid_: 阅读服务（`ReadingService` 是门面，不是管线）、抓取（出站执行归 `services/source-request.ts`）
 
@@ -355,7 +355,7 @@ _Avoid_: 文案表、客户端 UI 文案的外挂 i18n 资源（字典是同一�
 **错误展示（error display）**:
 上屏错误的一句话归谁出：客户端自造的网络错误按 `reason` 走当前语言；服务端错误原文透传（与书源数据同一条边界），错误码与段级定位原样呈现。
 _唯一实现_: `src/client/api.ts` 的 `describeError` / `NetworkReason`（只翻客户端自造的三条）
-_Avoid_: 按 message 前缀判来源（文案一改就漂，见 `docs/adr/0016`）
+_Avoid_: 按 message 前缀判来源（文案一改就漂，见 `ADR-0016`）
 
 ### 跨半契约
 
@@ -370,7 +370,7 @@ _唯一实现_: `services/reading.ts` 的 `sourceNameOf`（读面入口 `shelfLi
 _Avoid_: 来源字段（那是落盘书目字段的说法）、来源快照（同址替换会复用 sourceId，快照会静默陈旧）
 
 **分类词表（kind vocabulary）**:
-书城那份可看清单的**按源**形状：一个源自己声明了哪些分类标题，按该源声明的原样顺序给、同源内去重。**不造同义词表**（「玄幻」≠「奇幻」是站点的真实分歧），跨源合并同名也不做——浏览轴的这一维是「点名一个源」（裁决见 `docs/adr/0028`）。
+书城那份可看清单的**按源**形状：一个源自己声明了哪些分类标题，按该源声明的原样顺序给、同源内去重。**不造同义词表**（「玄幻」≠「奇幻」是站点的真实分歧），跨源合并同名也不做——浏览轴的这一维是「点名一个源」（裁决见 `ADR-0028`）。
 _唯一实现_: `services/explore.ts` 的 `deriveExploreSources`；跨半形状 `shared/wire.ts` 的 `ExploreSources`
 _Avoid_: 分类目录（那是站点侧的分类，词表是各源自己声明的标题）、分类计数（旧版那份「被多少源声明」的读数随跨源轴一起走了）
 

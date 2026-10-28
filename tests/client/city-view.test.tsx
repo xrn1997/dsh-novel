@@ -638,7 +638,7 @@ describe('CityBookSheet（书籍详情浮层：本源两动作 + 跨源那一次
     expect(screen.queryByText(/没有一家按这个书名搜到/)).toBeNull()
   })
 
-  // 搜索面只有一个槽、观察者跟随最近一轮（`docs/adr/0046`）：浮层挂载时的恢复读交回的很可能是
+  // 搜索面只有一个槽、观察者跟随最近一轮（`ADR-0046`）：浮层挂载时的恢复读交回的很可能是
   // **另一本书**那一轮，而 `asked` 在点击瞬间即真——本次 POST 回包之前手上的就是它。
   // 那一列认的是本层 POST 回来的 jobId（关键词不是身份；也不替别人 cancel）。
   it('挂载恢复带来的「上一本书那一轮」不当成本书的结果：那一列不出现、也不报零命中', async () => {
@@ -706,7 +706,7 @@ describe('CityBookSheet（书籍详情浮层：本源两动作 + 跨源那一次
 
   // 浮层维持逐源轴：这一层谈的**本来就是一本**，按书归并（`shared/merge-by-book.ts` 的 `mergeBooks`，
   // 只进搜索面）在这里买不到任何浓缩，却会吞掉三条既有读数——有命中／答了但零条／未响应，逐源各说各的。
-  // 这条钉子不改行为，挡的是将来「顺手统一」把逐源轴拆了（裁决见 docs/adr/0033，本浮层刻意不吃归并）。
+  // 这条钉子不改行为，挡的是将来「顺手统一」把逐源轴拆了（裁决见 ADR-0033，本浮层刻意不吃归并）。
   it('浮层的跨源那一列不折叠成一本：三家答法各异，逐行各自可见', async () => {
     openSheet(<CityBookSheet book={aBook} {...own} deps={depsWithGroups([
       group('s2', '顶点', [{ title: '半城风月（顶点叫法）', author: '沈念', url: 'https://v/9', lastChapterName: null }]),

@@ -15,4 +15,4 @@ Status: accepted
 
 待裁（属改进不属决策）：宿主每代的 `staticModules()` 名单目前只能每次 bump 现读，因此「重读新表」这一件事无法机器判——可选做法是照 `compat/upstream/snapshot.json` 的先例给宿主模块表也做一份按代次冻结的仓内快照。
 
-锚点：`tsdown.config.ts`（`PLATFORM_MODULES` 头注 = 判据的家、`dsh-novel-bundle-purity`、三段式 banner 的 id 必须等于包名）；`tests/packaging-build.test.ts` 的「client 半纯度：require 白名单外零泄漏」；`src/shared/wire.ts` 文件头；`docs/development.md`「宿主兼容与发版」。
+锚点：`tsdown.config.ts`（`PLATFORM_MODULES` 头注 = 判据的家、`dsh-novel-bundle-purity`、三段式 banner 的 id 必须等于包名）；`tests/packaging-build.test.ts` 的「client 半纯度：require 白名单外零泄漏」；`src/shared/wire.ts` 文件头；`docs/development.md`「宿主兼容与实测名单」。

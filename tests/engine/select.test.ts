@@ -111,7 +111,7 @@ describe('default 选择段', () => {
 })
 
 /**
- * default 选择段含当前元素自身（对面 jsoup 语义；裁决见 docs/adr/0029，读数在矩阵行
+ * default 选择段含当前元素自身（对面 jsoup 语义；裁决见 ADR-0029，读数在矩阵行
  * `a-default-step-self-inclusion`）。
  *
  * 为什么钉这一条：对面那四种选择步（class / tag / id / CSS）都交给同一个 DOM 库 jsoup 求值，

@@ -15,7 +15,7 @@ Status: accepted
 被否决的做法：
 
 - **自造相似度阈值**（判据换成「像不像」的分数）：一个没人认领的魔法数，而对面那条 contains 已是可回查的在册判据（读数住矩阵行 `d-search-relevance`）——在册判据在场，本仓就不该另立一个量出来的数；三档枚举因此没有阈值可调。
-- **把档位做成字段进契约**（`SearchHit`/`SearchGroup` 加 `relevance`）：档位是「这一轮关键词」的函数，不是命中的属性——写进快照，换词重算时上一轮的携带值就是陈旧真相。而这两个形状并不是只有搜索面在用：发现面的单源执行体与快照缓存用的正是它们（`src/services/explore.ts` 的 `fetchExploreGroup` 返回 `SearchGroup`，其下 `src/services/explore-face.ts` 的 `KindPageResult` 成功支交回 `SearchHit[]`，`src/services/explore-cache.ts` 的 `KindCache` 存的也是 `SearchGroup`），那条链却没有关键词这一维；换成刻意另立的 `ExploreBook` 要等到交进浏览器半的那一次投影（唯一主人 `src/services/explore-job.ts` 的 `booksOf`；两份形状为什么不许并成一份，口径住 `src/shared/wire.ts` 的 `ExploreBook` 注释）。字段一进，这条链就得回答「没有关键词时那一格填什么」。且 `tests/tools/schema-contract.test.ts` 编译期绑着的是 `SearchHit`/`SearchGroup` 这两份字段清单（`ExploreBook` 不在绑定的清单里），加字段＝两半同批的契约升级（`docs/adr/0019`）。判据现算即得、零成本，没有理由把答案存起来。
+- **把档位做成字段进契约**（`SearchHit`/`SearchGroup` 加 `relevance`）：档位是「这一轮关键词」的函数，不是命中的属性——写进快照，换词重算时上一轮的携带值就是陈旧真相。而这两个形状并不是只有搜索面在用：发现面的单源执行体与快照缓存用的正是它们（`src/services/explore.ts` 的 `fetchExploreGroup` 返回 `SearchGroup`，其下 `src/services/explore-face.ts` 的 `KindPageResult` 成功支交回 `SearchHit[]`，`src/services/explore-cache.ts` 的 `KindCache` 存的也是 `SearchGroup`），那条链却没有关键词这一维；换成刻意另立的 `ExploreBook` 要等到交进浏览器半的那一次投影（唯一主人 `src/services/explore-job.ts` 的 `booksOf`；两份形状为什么不许并成一份，口径住 `src/shared/wire.ts` 的 `ExploreBook` 注释）。字段一进，这条链就得回答「没有关键词时那一格填什么」。且 `tests/tools/schema-contract.test.ts` 编译期绑着的是 `SearchHit`/`SearchGroup` 这两份字段清单（`ExploreBook` 不在绑定的清单里），加字段＝两半同批的契约升级（`ADR-0019`）。判据现算即得、零成本，没有理由把答案存起来。
 - **全局「显示全部」开关**：组内折叠已经是那一个口；出现第二个主人，两处口径迟早分叉。
 - **cordis 配置项**：把一次呈现裁决焊成持久配置，要动 `src/config.ts` 的 schema 与 `defaults.test.ts`——把本已归一的那一处判据再交给一个持久主人。
 

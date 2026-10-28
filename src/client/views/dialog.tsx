@@ -39,7 +39,7 @@ export interface DialogProps {
   opener?: HTMLElement | null
 }
 
-/** 入场焦点只认面板内第一颗未禁用钮（口径见 `docs/adr/0037`） */
+/** 入场焦点只认面板内第一颗未禁用钮（口径见 `ADR-0037`） */
 const FIRST_BUTTON = 'button:not([disabled])'
 /** Tab 圈认全部可聚焦件：只认 `<button>` 会把导入弹层的拖放区（`role=button` 的 div）与粘贴框
  *  （textarea）排除在键盘之外——那两个才是那一层的主入口。 */

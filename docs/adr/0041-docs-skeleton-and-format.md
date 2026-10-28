@@ -1,6 +1,6 @@
 # 文档规范收成一套：骨架、ADR 格式与门禁清单各只有一份
 
-Status: accepted
+Status: superseded by 0048
 
 根 `AGENTS.md` 此前同时承担先读表、硬约束与文档治理，ADR 的格式与索引规则又住在索引页，提交与发版边界散在 README 与开发手册里。本篇把文档规范拆成一个入口 `docs/AGENTS.md`、一个 ADR 格式入口 `docs/adr/ADR-FORMAT.md`，根 AGENTS 只留常驻规则；开发手册改名为 `docs/development.md`，提交与发版边界归 `CONTRIBUTING.md`，发布历史归 `CHANGELOG.md`。`ADR-0040` 的分层结论保留，它关于「根 AGENTS 不另拆文档治理文件」「ADR 不另立格式文件」的条款由本篇取代。
 
@@ -16,7 +16,7 @@ Status: accepted
 2. **文档分层、放置判据、写作规则与生命周期住 `docs/AGENTS.md`**：回答「这条内容该放哪、什么时候更新、什么时候归档」；根 AGENTS 只留每次会话必须可见的先读表、硬约束与门。
 3. **ADR 的书写形状住 `docs/adr/ADR-FORMAT.md`**：编号只追加、每篇紧跟标题写 `Status: accepted` 或 `Status: superseded by NNNN`、每篇在索引恰好出现一次、文末必须有 `锚点：`、正文只写当前真相；索引页只做导航。
 4. **文档门补齐机械检查**：`tests/docs-liveness.test.ts` 在既有索引一一对应之上，增加核心文件在场、根 AGENTS 字符预算（≤ 8,000）与 ADR `Status` 形状；不新增独立检查命令，`pnpm test` 仍是默认门。
-5. **过程工件与规格层维持 0040 的结论**：过程工件只住本机 `.superpowers/`，不入库；本仓不设 `docs/specs/`，跨半契约的唯一主人是 `src/shared/wire.ts`；读数住矩阵行 `note` 与代码注释。
+5. **过程工件与规格层维持 `ADR-0040` 的结论**：过程工件只住本机 `.superpowers/`，不入库；本仓不设 `specs/`，跨半契约的唯一主人是 `src/shared/wire.ts`；读数住矩阵行 `note` 与代码注释。
 
 ## 迁移
 
@@ -29,7 +29,7 @@ Status: accepted
 
 - **继续把文档纪律放在根 AGENTS**：根文件已承担先读表、硬约束与门；再装分层、生命周期与 ADR 格式会让每次会话都为细节付费，且没有一个入口回答「这条内容该放哪」。
 - **ADR 格式继续住在索引页**：索引是导航，格式是规则；混在一起后，改格式要动导航页，新增 ADR 要打开两个地方。`ADR-0040` 的「ADR 的写作规则住索引页」条款即此方案，本篇取代。
-- **为每种文档再开一层目录（`docs/specs/`、`docs/agents/` 等）**：本仓没有对应体量，空壳目录只会多出维护面；跨半契约的唯一主人仍是 `src/shared/wire.ts`。
+- **为每种文档再开一层目录（`specs/`、`docs/agents/` 等）**：本仓没有对应体量，空壳目录只会多出维护面；跨半契约的唯一主人仍是 `src/shared/wire.ts`。
 
 ## 后果
 
@@ -38,4 +38,4 @@ Status: accepted
 - 预算与门禁清单进测试，不再写在散文里；以后调预算只改测试与 `docs/AGENTS.md` 的口径，不靠记忆。
 - `ADR-0040` 仍可回查当时的分层取舍；当前文档规范以本篇与 `docs/AGENTS.md` 为准。
 
-锚点：`docs/AGENTS.md`；`docs/adr/ADR-FORMAT.md`；`tests/docs-liveness.test.ts`；`tests/context-terms.test.ts`；`AGENTS.md`；`README.md`；`CONTRIBUTING.md`；`CHANGELOG.md`；`docs/development.md`；`docs/adr/0040-docs-layering.md`。
+锚点：`docs/AGENTS.md`；`docs/adr/ADR-FORMAT.md`；`tests/docs-liveness.test.ts`；`tests/context-terms.test.ts`；`AGENTS.md`；`README.md`；`CONTRIBUTING.md`；`CHANGELOG.md`；`docs/development.md`；`ADR-0040`。

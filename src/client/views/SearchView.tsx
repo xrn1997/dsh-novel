@@ -64,7 +64,7 @@ export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): 
   }, [round])   // eslint-disable-line react-hooks/exhaustive-deps
   /** 落架基线：投影随面板卸载清空，而 `routeStore` 跨卸载存活（`client/store.ts`）——面板重开
    *  直接落在搜索结果页时，投影里还没有服务端书架列表，已在架的书会重新写成「＋ 加书架」，
-   *  「都加架」还会把已在架的架位再 PUT 一遍并报成「已加 N 个」（裁决见 `docs/adr/0046`）。
+   *  「都加架」还会把已在架的架位再 PUT 一遍并报成「已加 N 个」（裁决见 `ADR-0046`）。
    *  只为基线、不为某一本书，故不带 bookKey；投影读过就不再付第二发。 */
   useEffect(() => {
     void ensurePanelShelf({

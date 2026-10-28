@@ -177,8 +177,8 @@ export class PageCache {
     }
   }
 
-  /** 目录缓存是**域形状**，不是裸文本：坏字节与错形状都读作 miss（ADR 0017 的降级边界内），
-   *  下一次抓取按同一代际重写；不新增清缓存出口（ADR 0012）。 */
+  /** 目录缓存是**域形状**，不是裸文本：坏字节与错形状都读作 miss（ADR-0017 的降级边界内），
+   *  下一次抓取按同一代际重写；不新增清缓存出口（ADR-0012）。 */
   private async readToc(file: string): Promise<ChapterEntry[] | null> {
     const raw = await this.read(file)
     if (raw === null) return null

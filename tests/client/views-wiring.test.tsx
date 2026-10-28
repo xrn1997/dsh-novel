@@ -30,7 +30,7 @@ import type {
 
 const coreDeps = (over: DepsOverrides): FakeViewDeps => makeCoreDeps(over)
 
-/** 快照轮询的读数：搜索结果页挂载还会向投影问一次书架基线（`docs/adr/0046`），
+/** 快照轮询的读数：搜索结果页挂载还会向投影问一次书架基线（`ADR-0046`），
  *  「本轮到底打了几发读取」按任务状态那一条路径数，别把基线那一发混进轮询账。 */
 const snapshotReads = (apiGet: unknown): number =>
   ((apiGet as ReturnType<typeof vi.fn>).mock.calls
@@ -365,7 +365,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
       apiSend: vi.fn(async () => { submitted = true; return { jobId: 'j1' } }),
       apiGet: vi.fn(async (path: string) => {
         reads.push(path)
-        if (String(path) === ROUTES.shelf.path) return []      // 落架基线那一问（`docs/adr/0046`）
+        if (String(path) === ROUTES.shelf.path) return []      // 落架基线那一问（`ADR-0046`）
         return { job: submitted ? snap({ added: [hitGroup('斗罗后台命中')], next: 1 }) : null }
       }),
     })
@@ -378,7 +378,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     expect(sub, '按源那一档的命中行副行未渲染').not.toBeNull()
     expect(sub!.textContent).toBe('')
     expect(deps.apiSend).toHaveBeenCalledWith(ROUTES.searchJob, { keyword: '斗罗' })
-    // 全部读取只有两类：落架基线那一发（`docs/adr/0046`）与快照游标读——没有任何一次
+    // 全部读取只有两类：落架基线那一发（`ADR-0046`）与快照游标读——没有任何一次
     // search?keyword= 的批请求从浏览器半发出
     expect(reads.every((r) => r === ROUTES.shelf.path || r.startsWith(`${ROUTES.searchJobStatus.path}?`))).toBe(true)
   })
@@ -477,7 +477,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     const row = books.querySelector('[data-novel-book]') as HTMLElement
     const main = row.querySelector('.novel-book-main') as HTMLElement
     // 行头主钮只做「展开」这一件事：本仓没有能替用户选源的读数（探针 verified 只证搜索面），
-    // 所以「读这本」永远在展开后的逐源行里，行上一颗都没有（裁决见 docs/adr/0033）
+    // 所以「读这本」永远在展开后的逐源行里，行上一颗都没有（裁决见 ADR-0033）
     expect(main.getAttribute('aria-expanded'), '默认收起').toBe('false')
     // 主钮的无障碍名来自内容拼接：它得把「N 条」那笔账带进名字（收起时行上唯一说得出条数的地方），
     // 又不许混进行以外的字——按 name 子串钉，抄整串会把排版空格也钉死。
@@ -769,7 +769,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
 
   it('面板重开直接落在搜索页：投影先取服务端书架当基线，已在架的书不再写成「＋ 加书架」', async () => {
     // routeStore 跨卸载存活、panelShelf 随面板卸载清空：只进过搜索页的面板重开时，基线不能指
-    // 望书架 tab 或阅读器替它取（裁决与后果见 `docs/adr/0046`）。
+    // 望书架 tab 或阅读器替它取（裁决与后果见 `ADR-0046`）。
     const onShelf = {
       bookKey: 'https://s.com/book/1', sourceId: 's1', title: '斗罗', addedAt: 1,
       progress: { chapterIndex: 0, offsetRatio: 0, updatedAt: 1 },
@@ -1783,7 +1783,7 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
     expect(navs()[1], '重开那一发问的必须是新源').toContain('sourceId=s2')
   })
 
-  // 从书城「读这本」进来的书不在架上（那一层刻意把入架与阅读分成两个动作，`docs/adr/0028`），
+  // 从书城「读这本」进来的书不在架上（那一层刻意把入架与阅读分成两个动作，`ADR-0028`），
   // 而不在架的书进度 PUT 会被服务端判 `NOT_ON_SHELF` 并咽掉。离开那一跳因此先问一句。
   it('不在架的书：点「书架」先问要不要加入，确认后 PUT 的是这本书的架位并带上总章数', async () => {
     const pushOk = vi.fn()

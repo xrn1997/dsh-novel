@@ -120,7 +120,7 @@ const RELATIVE_SELECTOR = /(?:^|,)\s*[>+~]|\(\s*[>+~]/
  * 四步全含、自身优先（版本成色住矩阵行 `a-default-step-self-inclusion`）。cheerio 只有后代语义，于是
  * 「类名与标签长在同一个元素上」的写法（真形如 `<a class="page-link">` 配 `.page-link@a@href`）
  * 对面读得出、我们读空。裁决、代价与被否决的一侧
- * 见 `docs/adr/0029`；真机读数在矩阵行 `a-default-step-self-inclusion`。
+ * 见 `ADR-0029`；真机读数在矩阵行 `a-default-step-self-inclusion`。
  * 顺序不是细节：含自身会把 `.0`/`[0]` 的取位从「第一个后代」挪到「自身」，那是对面本来就在给的语义。
  */
 export function selectStepWithSelf(

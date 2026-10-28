@@ -231,7 +231,7 @@ describe('searchOne 的 info 形态命中（对面 getInfoItem）', () => {
     expect(groups[0].hits[0].title).toBe('剑来')
     expect(groups[0].hits[0].url).toBe(`${BASE}/book/123/`)
   })
-  it('回落遇上 init 零命中 → 0 命中而不是搜索错误（对面 setContent(null) 后就没书目；把空结果升级成整源失败是第 19 批真机抓回的回退）', async () => {
+  it('回落遇上 init 零命中 → 0 命中而不是搜索错误（对面 setContent(null) 后就没书目；把空结果升级成整源失败是真机抓回的回退）', async () => {
     const { svc, id } = await makeSvc({
       ...PATTERN_SRC,
       searchUrl: `${BASE}/search?q={{key}}`, bookUrlPattern: undefined,

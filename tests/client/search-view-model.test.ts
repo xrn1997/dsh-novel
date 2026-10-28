@@ -7,7 +7,7 @@ import {
 import type { RowRef } from '../../src/client/search-view-model.js'
 
 /**
- * 搜索结果页派生的钉子（判据的「为什么」住 `CONTEXT.md` 的单位律词条与 `docs/adr/0032` / `0033`，
+ * 搜索结果页派生的钉子（判据的「为什么」住 `CONTEXT.md` 的单位律词条与 `ADR-0032` / `ADR-0033`，
  * 这里只钉算式本身）。单位律、行身份与逐源回读各自一条钉子，都不必起 DOM——视图只消费
  * 这一层的派生结果。
  */

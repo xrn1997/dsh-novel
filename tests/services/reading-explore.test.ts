@@ -6,7 +6,7 @@ import { settleExploreRound } from '../explore-settle.js'
 
 /** legado 方言的发现面夹具：`exploreUrl` 的「标题::URL」多行形态（解析单点 `parseExploreKinds`）。
  *  两类各带**自己**的整条分页模板，于是「同一源的两个类」天然是两个槽位——按源浏览要的就是这一档
- *  （数据面的裁决见 `docs/adr/0027`，浏览轴的见 `docs/adr/0028`）。
+ *  （数据面的裁决见 `ADR-0027`，浏览轴的见 `ADR-0028`）。
  *  规则一律显式写 `@text` 终端：补隐式文本是原生方言那一档的口径，对象方言不补。 */
 const LEGADO = {
   bookSourceName: '站点甲', bookSourceUrl: 'https://s.com',

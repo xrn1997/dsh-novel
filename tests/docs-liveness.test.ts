@@ -1,247 +1,485 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { join, posix } from 'node:path'
+/**
+ * **文档门（三件套之一）**：文档与代码注释里点名的仓内路径必须真实存在，已废的文档称呼不再出现，
+ * 指路的 `§N` 必须点名一个还活着的家，ADR 的编号、索引、状态与锚点各只有一份形态。
+ *
+ * 为什么用它：本仓的不变量是「一条事实只住一个家」，而文档里到处是指向那个家的路径与小节号。
+ * 模块改名、符号搬家、路由判据换文件时，代码与测试会跟着红，**文档不会**——它只会留下一个
+ * 指不到东西的名字，而下一个 agent 恰好只读文档。所以这条门是确定性的、可重跑的。
+ *
+ * 三条配套判据各管一段，别合并：
+ * - `tests/context-terms.test.ts`：`CONTEXT.md` 点名的符号能不能现查得到；
+ * - `tests/comment-altitude.test.ts`：代码注释是不是在抄代码；
+ * - 本文件：**全部手写文档**的路径、引用形态、职责边界与 ADR 形状。
+ *
+ * 两类例外要写明理由再进白名单：留在 ADR 里的「当时」坐标，与看着像路径其实不是路径的串。
+ * 白名单不是「改不动就跳过」——那种条目应当改文档。死名没有豁免。
+ */
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
+const ROOT = resolve(fileURLToPath(import.meta.url), '../..')
+
+/** 报错信息里用相对路径，别把这台机器的绝对路径打进测试输出。 */
+function rel(file: string): string {
+  return file.slice(ROOT.length + 1).replace(/\\/g, '/')
+}
+
+/** 生成快照与构建产物不是判据的家；`lib` 与 `.qoder` 一律不进语料。 */
+function walk(dir: string, out: string[] = []): string[] {
+  for (const entry of readdirSync(dir)) {
+    if (entry === 'node_modules' || entry === 'lib' || entry === '.git' || entry === '.qoder') continue
+    const p = join(dir, entry)
+    if (statSync(p).isDirectory()) walk(p, out)
+    else if (/\.(md|ts|tsx|css)$/.test(entry)) out.push(p)
+  }
+  return out
+}
+
 /**
- * 文档的引用活性：根目录的在册散文文档（`README.md` / `AGENTS.md` / `CONTEXT.md` / `CONTRIBUTING.md` / `CHANGELOG.md`）
- * 与 `docs/**\/*.md` 不许指着读者拿不到的东西。
- *
- * 引用活性五条判据：前三条防的是文档漂移，后两条补两个盲区：
- * 1. **路径必须在场**——文档改了文件名而引用没跟上，读者就会去开一个不存在的文件；
- * 2. **不许写行号**（`file.ext:123` 形态）——行号随任何一次编辑漂移，校它等于造一道天天假红、
- *    终被习惯性忽略的门；要指实现就指符号锚；
- * 3. **不许指已出库的文档与已撤的守卫**，也不许把 `.superpowers/` 的过程产物当证据；
- * 4. **ADR 索引必须与文件一一对应**——新增 ADR 不补索引，索引页就会漏掉它；
- * 5. **Markdown 链接的路径与标题锚点必须在场**——反引号路径由第 1 条管，链接形态单独管。
- *
- * 另有一组骨架检查：核心文档在场、根 AGENTS 字符预算与指针、ADR `Status` 形状；命令仍是 `pnpm test`。
- *
- * 与 `context-terms.test.ts` 的分工：那份管**词汇表**点名的符号能不能现查得到；这一份管
- * **全部文档**的路径与引用形态。两个判据不同，合成一份只会互相拖累（词汇表的符号判据套到 ADR
- * 上会把「对面叫 `getElementsByClass`」这类外部符号判成悬空）。
+ * 被测的是手写的那几份 + 代码注释；生成的 `.qoder/repowiki` 不在内。
+ * 自排除：本文件正文引用着被禁的称呼与历史文件名，扫自己必然自红。这是唯一的自排除。
  */
+const targets = [
+  join(ROOT, 'AGENTS.md'),
+  join(ROOT, 'CONTEXT.md'),
+  join(ROOT, 'README.md'),
+  join(ROOT, 'CONTRIBUTING.md'),
+  join(ROOT, 'CHANGELOG.md'),
+  ...walk(join(ROOT, 'docs')),
+  ...walk(join(ROOT, 'src')),
+  ...walk(join(ROOT, 'tests')),
+].filter((f) => f !== join(ROOT, 'tests', 'docs-liveness.test.ts'))
 
-const ROOT = fileURLToPath(new URL('..', import.meta.url))
+/** 一次读进来，下面几道门共用这份语料。 */
+const corpus = targets.map((file) => ({
+  file,
+  lines: readFileSync(file, 'utf8').split(/\r?\n/),
+}))
 
-/** 在册的散文文档：根目录这几份 + docs/ 下的全部 .md */
-function docFiles(): string[] {
-  const top = ['README.md', 'AGENTS.md', 'CONTEXT.md', 'CONTRIBUTING.md', 'CHANGELOG.md'].filter((f) => existsSync(join(ROOT, f)))
-  const walk = (dir: string, out: string[]): string[] => {
-    for (const e of readdirSync(join(ROOT, dir), { withFileTypes: true })) {
-      const rel = `${dir}/${e.name}`
-      if (e.isDirectory()) walk(rel, out)
-      else if (e.name.endsWith('.md')) out.push(rel)
-    }
-    return out
+/** 手写文档（根文档 + docs/**）；结构门只看这些，src/tests 的注释不参与。 */
+const rootDocs = new Set([
+  join(ROOT, 'AGENTS.md'),
+  join(ROOT, 'CONTEXT.md'),
+  join(ROOT, 'README.md'),
+  join(ROOT, 'CONTRIBUTING.md'),
+  join(ROOT, 'CHANGELOG.md'),
+])
+const docsRoot = join(ROOT, 'docs') + sep
+const docCorpus = corpus.filter(({ file }) => rootDocs.has(file) || file.startsWith(docsRoot))
+
+function eachLine(visit: (file: string, line: string, index: number) => void): void {
+  for (const { file, lines } of corpus) lines.forEach((line, index) => visit(file, line, index))
+}
+
+/** 指向仓内文件的相对路径：`src/…`、`tests/…`、`docs/…`、`locale/…`。 */
+const PATH_REF = /(?:^|[^A-Za-z0-9_./~-])(src|tests|docs|locale)\/([A-Za-z0-9_\-./]*)/g
+/** 反引号里带目录的裸相对路径：`tools/shelf-item.ts` 省掉 `src/` 的写法，先按仓根、再按 `src/` 解析。 */
+const BACKTICK_REL = /`([A-Za-z0-9_-]+\/[A-Za-z0-9_./-]*\.(?:ts|tsx|js|mjs|cjs|json|md|yml|yaml))`/g
+
+/** 看着像路径、其实不是路径，或故意保留的历史名。每条都要有理由。 */
+const ALLOWED: Record<string, string> = {}
+/** 判据自身的负控夹具：这些文件在内存里搭合成依赖图，写的不是仓内路径。 */
+const SYNTHETIC = new Set([join(ROOT, 'tests', 'layering.test.ts')])
+
+/** 已废的称呼：批次号、已改名的开发手册、以及它们的「复核候选」编号——都没有可查的坐标了。 */
+const DEAD_NAMES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/docs\/developing\.md/, '开发手册统一为 docs/development.md'],
+  [/现状稿/, '现状住 `docs/architecture.md`；「现状稿」这个名字已废'],
+  [/第\s*[0-9一二三四五六七八九十百零Nn]+\s*批/, '批次号没有可查的坐标；引用历史写日期，有 commit 就带上，要指裁决就指 ADR 篇号'],
+  [/设计稿\s*§|稿\s*§/, '「设计稿 §N」指向已删的批次日志；改指还活着的家'],
+  [/复核候选/, '候选编号随批次日志一起删了；要指裁决就指 ADR 篇号，要指判据就指文件或测试'],
+  [/`docs\/adr\/\d{4}/, 'ADR 互引统一写 `ADR-NNNN`；文件路径只写 `docs/adr/` 或 `docs/adr/README.md`'],
+  [/\.superpowers\/[A-Za-z0-9_-]+\/?[A-Za-z0-9_.-]*\.(?:md|json|ts|js|cjs|mjs)/, '本机过程产物不是可回查的出处'],
+]
+
+/** 每个 `§N` 指路必须点名一个还活着的家（本节内部则写「本文 §N」）。 */
+const SECTION_REF = /§\s*\d/
+const SECTION_ANCHORS = ['docs/architecture.md', 'architecture.md', 'docs/ui-spec.md', 'ui-spec.md', 'ui-spec', '本文']
+/** 行号引用：`file.ext:123` 会随任何一次编辑漂移，要指实现就指符号锚。 */
+const LINE_REF = /\b[A-Za-z0-9_./-]+\.(?:ts|tsx|js|mjs|json|md|yml):[0-9]+\b/g
+
+/** 行号形态的引用。 */
+function lineRefs(line: string): string[] {
+  return [...line.matchAll(LINE_REF)].map((match) => match[0])
+}
+
+/**
+ * 裸篇号的 ADR 互引：一行里已经出现全形 `ADR-NNNN`，同行的四位数 `00NN` 就是漏写前缀的第二枚——
+ * 读者得自己猜那串数字是什么。`Status:` 行、索引首列与「已被 NNNN 取代」都不含全形，落不进这条判据。
+ */
+function bareAdrIds(line: string): string[] {
+  if (!/\bADR-\d{4}\b/.test(line)) return []
+  return [...line.matchAll(/(?<![\dA-Za-z.-])00\d{2}(?![-\d.])/g)].map((match) => match[0])
+}
+
+/** `§N` 在给定小节集合里找不到即 offender。 */
+function missingSections(sections: Set<string>, line: string): string[] {
+  return [...line.matchAll(/§\s*(\d+(?:\.\d+)*)/g)]
+    .filter((match) => !sections.has(match[1]!))
+    .map((match) => `§${match[1]}`)
+}
+
+/** 按文档解析编号小节；判据与正控共用这一份。 */
+const sectionCache = new Map<string, Set<string>>()
+function sectionsOf(doc: string): Set<string> {
+  let found = sectionCache.get(doc)
+  if (found === undefined) {
+    found = numberedSections(doc)
+    sectionCache.set(doc, found)
   }
-  return [...top, ...walk('docs', [])]
+  return found
 }
 
-const FILES = docFiles()
-/** 索引页 `docs/adr/README.md` 不是 ADR：它没有编号，也不该被要求点名锚点 */
-const ADRS = FILES.filter((f) => /^docs\/adr\/\d{4}-.*\.md$/.test(f)).sort()
-/** 反引号里的路径：必须含 `/` 且带代码/文档扩展名（裸文件名与运行时数据路径不在判据内） */
-const PATH_TOKEN = /`([A-Za-z0-9_./-]*\/[A-Za-z0-9_.-]+\.(?:ts|tsx|js|mjs|cjs|json|md|yml|yaml))`/g
-/** ADR 互引允许省掉 `.md`：`docs/adr/0007-usage-axis-single` 或 `docs/adr/0007` */
-const ADR_REF = /`docs\/adr\/([0-9]{4}[A-Za-z0-9-]*)`/g
-/** 构建产物与跑门产物：它们在盘上但故意不入库，文档可以正当提到 */
-const GENERATED = [/^lib\//, /^compat\/report\.md$/]
-const isGenerated = (p: string) => GENERATED.some((re) => re.test(p))
-const LINE_REF = /\b[A-Za-z0-9_./-]+\.(?:ts|tsx|js|mjs|json|md|yml):[0-9]{2,}\b/g
-/** `.superpowers/` 的**具体产物**（两级以下路径）不许当证据；单纯提这个目录作为「过程产物写哪」是正当的 */
-const DEAD = /docs\/developing\.md|docs\/design\/|docs\/reference\/|compat\/README\.md|(?<![-\w])coverage\.test\.ts|citation-liveness|matrix-pointers|docs-module-symbols|docs-references|docs-pinned-copy|known-open|\.superpowers\/[A-Za-z0-9_-]+\/?[A-Za-z0-9_.-]*\.(?:md|json|ts|js|cjs|mjs)/
-
-function resolveInRepo(p: string): boolean {
-  if (existsSync(join(ROOT, p))) return true
-  return p.startsWith('src/') ? false : existsSync(join(ROOT, 'src', p))
+interface CompatibilityManifest {
+  engines?: { dsh?: string }
+  dsh?: { compatibility?: { dshReleases?: Record<string, string> } }
 }
 
-interface DocFile { path: string; text: string }
+function normalize(raw: string): string {
+  // 中文句读与括号会紧跟在路径后面：剥掉尾部噪声
+  return raw.replace(/[.,;:!?)\]}、。，；：）】」]+$/u, '')
+}
 
-/** 代码围栏内的行不算文档链接；返回逐行文本，围栏行置空以保留行号。 */
-function stripFencedLines(text: string): string[] {
-  let inFence = false
-  return text.split('\n').map((line) => {
-    if (/^\s*(```|~~~)/.test(line)) { inFence = !inFence; return '' }
-    return inFence ? '' : line
+function read(relPath: string): string {
+  return readFileSync(join(ROOT, relPath), 'utf8')
+}
+
+function pathExists(path: string): boolean {
+  try {
+    statSync(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function stripFencedCode(markdown: string): string {
+  return markdown.replace(/^```[\s\S]*?^```/gm, '')
+}
+
+function slugify(text: string): string {
+  return text
+    .trim()
+    .replace(/<[^>]+>/g, '')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[*_~]/g, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s_-]/gu, '')
+    // GitHub 口径：一个空格换一个连字符，不折叠。「TXT / EPUB」去掉斜杠后是两个空格 → 两个连字符。
+    .replace(/\s/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+function headingSlugs(markdown: string): Set<string> {
+  const seen = new Map<string, number>()
+  const slugs = new Set<string>()
+  for (const line of stripFencedCode(markdown).split(/\r?\n/)) {
+    const match = /^#{1,6}\s+(.+?)\s*#*\s*$/.exec(line)
+    if (match === null) continue
+    const base = slugify(match[1]!)
+    const count = seen.get(base) ?? 0
+    slugs.add(count === 0 ? base : `${base}-${count}`)
+    seen.set(base, count + 1)
+  }
+  return slugs
+}
+
+/** 标题原文：中文小节名指路（`docs/development.md` 的「门（自动）」）也要指得到标题。 */
+function headingTexts(markdown: string): string[] {
+  return stripFencedCode(markdown)
+    .split(/\r?\n/)
+    .map((line) => /^#{1,6}\s+(.+?)\s*#*\s*$/.exec(line)?.[1])
+    .filter((text): text is string => text !== undefined)
+}
+
+function linkTargets(markdown: string): string[] {
+  return [...stripFencedCode(markdown).matchAll(/\]\(([^)]+)\)/g)]
+    .map((match) => match[1]!.split(/\s+/)[0]!)
+    // `java["ajax"]("…")` 这类代码片段长得像链接；目标以引号开头的一律不算。
+    .filter((target) => !/^["'“”‘’]/.test(target))
+}
+
+function decodeAnchor(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
+function brokenLinks(file: string, markdown: string): string[] {
+  const broken: string[] = []
+  const ownSlugs = headingSlugs(markdown)
+  for (const target of linkTargets(markdown)) {
+    if (/^(?:https?:|mailto:|tel:)/i.test(target)) continue
+    if (target.startsWith('<')) continue
+    const [rawPath = '', ...rawAnchor] = target.split('#')
+    const anchor = rawAnchor.join('#')
+    const path = rawPath.split('?')[0]!
+    if (path === '') {
+      if (anchor !== '' && !ownSlugs.has(decodeAnchor(anchor))) broken.push(`${rel(file)} → #${anchor}`)
+      continue
+    }
+    const resolved = resolve(dirname(file), decodeAnchor(path))
+    if (!pathExists(resolved)) {
+      broken.push(`${rel(file)} → ${target}`)
+      continue
+    }
+    if (anchor !== '' && resolved.endsWith('.md')) {
+      const targetSlugs = headingSlugs(readFileSync(resolved, 'utf8'))
+      if (!targetSlugs.has(decodeAnchor(anchor))) broken.push(`${rel(file)} → ${target}`)
+    }
+  }
+  return broken
+}
+
+/** 文档里实际存在的编号小节（`## 1. ...` / `## 2.3 ...`）。 */
+function numberedSections(relPath: string): Set<string> {
+  const sections = new Set<string>()
+  for (const line of read(relPath).split(/\r?\n/)) {
+    const match = /^#{1,4}\s+(\d+(?:\.\d+)*)\.?\s/.exec(line)
+    if (match) sections.add(match[1]!)
+  }
+  return sections
+}
+
+function exists(path: string): boolean {
+  const candidates = [
+    path,
+    // 代码注释里的 ESM 请求带 `.js`，源文件是 `.ts` / `.tsx`
+    path.replace(/\.js$/, '.ts'),
+    path.replace(/\.js$/, '.tsx'),
+    path.replace(/\.ts$/, '.tsx'),
+  ]
+  return candidates.some((c) => {
+    try {
+      const s = statSync(join(ROOT, c))
+      return s.isFile() || s.isDirectory()
+    } catch {
+      return false
+    }
   })
 }
 
-/** 标题 slug 按 GitHub 口径：小写、去标点、逐空格换连字符（中文保留）。 */
-function headingSlugs(text: string): Set<string> {
-  const out = new Set<string>()
-  for (const line of stripFencedLines(text)) {
-    const m = /^(#{1,6})\s+(.+?)\s*$/.exec(line)
-    if (!m) continue
-    const raw = m[2].replace(/`/g, '').replace(/<[^>]+>/g, '')
-    const slug = raw.toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, '').trim().replace(/\s/g, '-')
-    out.add(slug)
-  }
-  return out
-}
-
-/** 索引表格里的裸编号与 ADR 文件名必须一一对应。 */
-function adrIndexProblems(indexText: string, files: string[]): string[] {
-  const indexed = [...indexText.matchAll(/^\| `(\d{4})`/gm)].map((m) => m[1])
-  const fileNums = files
-    .filter((f) => /^\d{4}-/.test(f))
-    .map((f) => f.slice(0, 4))
-    .sort()
-  const seen = new Set<string>()
-  const dupes = new Set<string>()
-  for (const n of indexed) {
-    if (seen.has(n)) dupes.add(n)
-    seen.add(n)
-  }
-  const missing = fileNums.filter((n) => !seen.has(n)).map((n) => `索引缺少 ADR ${n}`)
-  const stale = [...seen]
-    .filter((n) => !fileNums.includes(n))
-    .sort()
-    .map((n) => `索引指向不存在的 ADR ${n}`)
-  const repeated = [...dupes].sort().map((n) => `索引重复登记 ADR ${n}`)
-  return [...missing, ...stale, ...repeated]
-}
-
-/** inline Markdown 链接；reference-style 不在本门。代码围栏与行内代码里的 `](` 不算。 */
-function markdownLinks(text: string): { line: number; target: string }[] {
-  const out: { line: number; target: string }[] = []
-  stripFencedLines(text).forEach((line, i) => {
-    const clean = line.replace(/`[^`]*`/g, '')
-    for (const m of clean.matchAll(/!?\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
-      out.push({ line: i + 1, target: m[1] })
-    }
-  })
-  return out
-}
-
-/** 本仓 GitHub 绝对链接映射回仓内路径；其余外链不校。 */
-function githubLocalTarget(url: string): { path: string; fragment: string } | null {
-  const m = /^https:\/\/github\.com\/xrn1997\/dsh-novel\/(?:blob|tree)\/main\/([^#?]+)(?:#(.+))?$/.exec(url)
-  if (!m) return null
-  return { path: decodeURIComponent(m[1]), fragment: m[2] ? decodeURIComponent(m[2]) : '' }
-}
-
-/** Markdown 链接的路径与标题锚点必须在场；外链只校本仓 GitHub 绝对链接。 */
-function linkProblems(docs: DocFile[], fileExists: (path: string) => boolean): string[] {
-  const byPath = new Map(docs.map((d) => [d.path, d.text]))
-  const problems: string[] = []
-  for (const doc of docs) {
-    const dir = posix.dirname(doc.path)
-    for (const { line, target } of markdownLinks(doc.text)) {
-      const external = /^[a-z][a-z0-9+.-]*:/i.test(target)
-      let path: string
-      let fragment: string
-      if (external) {
-        const local = githubLocalTarget(target)
-        if (!local) continue
-        path = local.path
-        fragment = local.fragment
-      } else {
-        if (target.startsWith('/')) continue
-        const hash = target.indexOf('#')
-        const rawPath = hash === -1 ? target : target.slice(0, hash)
-        fragment = hash === -1 ? '' : decodeURIComponent(target.slice(hash + 1))
-        path = rawPath === '' ? doc.path : posix.normalize(posix.join(dir, rawPath))
-      }
-      if (isGenerated(path)) continue
-      if (!fileExists(path)) {
-        problems.push(`${doc.path}:${line} → ${target}（文件不在场）`)
-        continue
-      }
-      if (fragment === '') continue
-      const text = byPath.get(path)
-      if (text === undefined) {
-        problems.push(`${doc.path}:${line} → ${target}（目标不是 Markdown，不能校标题锚点）`)
-        continue
-      }
-      if (!headingSlugs(text).has(fragment)) {
-        problems.push(`${doc.path}:${line} → ${target}（标题锚点不在场）`)
-      }
-    }
-  }
-  return problems
-}
-
-describe('文档里的路径引用必须在场', () => {
+describe('文档门 · 指名的仓内路径必须存在', () => {
   it('扫描面非空（守卫不许对着空集合报绿）', () => {
-    expect(FILES.length).toBeGreaterThan(5)
-    expect(FILES.filter((f) => f.startsWith('docs/adr/')).length, 'ADR 一份都不在？').toBeGreaterThan(5)
+    expect(corpus.length, '一个文件都没扫到？目录或后缀判据漂了').toBeGreaterThan(50)
+    expect(docCorpus.length, '手写文档一份都没进语料？').toBeGreaterThan(10)
+    expect(corpus.filter(({ file }) => rel(file).startsWith('docs/adr/')).length, 'ADR 一份都不在？').toBeGreaterThan(5)
   })
 
-  it('反引号里的仓内路径逐个存在', () => {
-    const bad: string[] = []
-    for (const rel of FILES) {
-      const text = readFileSync(join(ROOT, rel), 'utf8')
-      for (const m of text.matchAll(PATH_TOKEN)) {
-        const p = m[1]
-        if (isGenerated(p)) continue
-        if (!resolveInRepo(p)) bad.push(`${rel} → ${p}`)
+  it('文档与代码注释里点名的 src/tests/docs/locale 路径都指得到东西', () => {
+    const broken: string[] = []
+    eachLine((file, line, i) => {
+      if (SYNTHETIC.has(file)) return
+      for (const m of line.matchAll(PATH_REF)) {
+        const raw = normalize(`${m[1]}/${m[2]}`)
+        if (raw.includes('*') || raw.includes('<')) continue
+        // 目录引用（尾斜杠）也要验：被删掉的家同样该红
+        const path = raw.endsWith('/') ? raw.slice(0, -1) : raw
+        if (path in ALLOWED) continue
+        if (!exists(path)) broken.push(`${rel(file)}:${i + 1} → ${raw}`)
       }
-      for (const m of text.matchAll(ADR_REF)) {
-        const numOrSlug = m[1]
-        const hit = FILES.some((f) => f === `docs/adr/${numOrSlug}.md` || f.startsWith(`docs/adr/${numOrSlug}-`))
-        if (!hit) bad.push(`${rel} → docs/adr/${numOrSlug}（ADR 不在册）`)
+    })
+    expect(broken, `断链：\n${broken.join('\n')}`).toEqual([])
+  })
+
+  it('手写文档里反引号点名的裸路径也指得到东西', () => {
+    const broken: string[] = []
+    for (const { file, lines } of docCorpus) {
+      for (const [i, line] of lines.entries()) {
+        for (const m of line.matchAll(BACKTICK_REL)) {
+          const p = m[1]!
+          if (/^(?:\.{0,2}\/|https?:)/.test(p) || p.includes('*') || p.includes('<')) continue
+          // 带前缀的路径已由上一枚判据管；这里只收裸相对路径。
+          if (/^(?:src|tests|docs|locale|node_modules|compat)\//.test(p)) continue
+          if (p in ALLOWED || `src/${p}` in ALLOWED) continue
+          // 首段既不在仓根也不在 src/ 下 ⇒ 这是外部包的路径，不是本仓的。
+          const first = p.split('/')[0]!
+          if (!exists(first) && !exists(`src/${first}`) && !exists(`tests/${first}`)) continue
+          if (exists(p) || exists(`src/${p}`) || exists(`tests/${p}`)) continue
+          broken.push(`${rel(file)}:${i + 1} → ${p}`)
+        }
       }
     }
-    expect(bad, `悬空路径引用：\n${bad.join('\n')}`).toEqual([])
+    expect(broken, `悬空路径：\n${broken.join('\n')}`).toEqual([])
+  })
+
+  it('白名单里没有已经不再出现的僵尸条目', () => {
+    const seen = new Set<string>()
+    eachLine((_file, line) => {
+      for (const m of line.matchAll(PATH_REF)) {
+        const raw = normalize(`${m[1]}/${m[2]}`)
+        const path = raw.endsWith('/') ? raw.slice(0, -1) : raw
+        if (path in ALLOWED) seen.add(path)
+      }
+    })
+    expect(Object.keys(ALLOWED).filter((key) => !seen.has(key)), '这些白名单条目已无对应引用，删掉它们').toEqual([])
   })
 })
 
-describe('引用形态纪律', () => {
+describe('文档门 · 引用形态纪律', () => {
   it('不许写行号（会随任何一次编辑漂移）', () => {
     const bad: string[] = []
-    for (const rel of FILES) {
-      const lines = readFileSync(join(ROOT, rel), 'utf8').split('\n')
-      lines.forEach((l, i) => {
-        for (const m of l.matchAll(LINE_REF)) bad.push(`${rel}:${i + 1} → ${m[0]}`)
-      })
-    }
+    eachLine((file, line, i) => {
+      for (const ref of lineRefs(line)) bad.push(`${rel(file)}:${i + 1} → ${ref}`)
+    })
     expect(bad, `行号形态的引用（改指符号锚）：\n${bad.join('\n')}`).toEqual([])
   })
 
-  it('不许指已出库的文档、已撤的守卫或过程产物目录', () => {
-    const bad: string[] = []
-    for (const rel of FILES) {
-      const lines = readFileSync(join(ROOT, rel), 'utf8').split('\n')
-      lines.forEach((l, i) => {
-        const m = DEAD.exec(l)
-        if (m) bad.push(`${rel}:${i + 1} → ${m[0]}`)
+  it('「现状稿」「第 N 批」「设计稿 §N」「复核候选」都不再出现', () => {
+    const offenders: string[] = []
+    eachLine((file, line, i) => {
+      for (const [pattern, why] of DEAD_NAMES) {
+        const hit = pattern.exec(line)
+        if (hit) offenders.push(`${rel(file)}:${i + 1} → ${hit[0]}\n    ${why}`)
+      }
+    })
+    expect(offenders, `还在这样称呼的：\n${offenders.join('\n')}`).toEqual([])
+  })
+
+  it('每个 `§N` 指路都点名一个还活着的家', () => {
+    const offenders: string[] = []
+    // 只判手写文档：代码注释里的「XPath 1.0 §2.4」是外部规范编号，不需要本仓的指路纪律。
+    for (const { file, lines } of docCorpus) {
+      lines.forEach((line, i) => {
+        if (!SECTION_REF.test(line)) return
+        if (SECTION_ANCHORS.some((anchor) => line.includes(anchor))) return
+        offenders.push(`${rel(file)}:${i + 1} → ${line.trim()}`)
       })
     }
-    expect(bad, `读者拿不到的出处：\n${bad.join('\n')}`).toEqual([])
+    expect(
+      offenders,
+      '`§N` 单独出现指不到东西（小节号只在那一份文档里有序）。要指现状就写 `docs/architecture.md` §N，'
+        + `要指判据就写文件。\n${offenders.join('\n')}`,
+    ).toEqual([])
+  })
+
+  it('ADR 互引都写 `ADR-NNNN` 且那篇在册', () => {
+    const numbers = new Set(
+      readdirSync(join(ROOT, 'docs', 'adr'))
+        .filter((name) => /^\d{4}-.+\.md$/.test(name))
+        .map((name) => name.slice(0, 4)),
+    )
+    const bad: string[] = []
+    eachLine((file, line, i) => {
+      for (const m of line.matchAll(/ADR-(\d{4})/g)) {
+        if (!numbers.has(m[1]!)) bad.push(`${rel(file)}:${i + 1} → ${m[0]}（不在册）`)
+      }
+    })
+    expect(bad, `悬空的 ADR 互引：\n${bad.join('\n')}`).toEqual([])
+  })
+
+  it('ADR 互引不写不带连字符的 `ADR NNNN`', () => {
+    const bad: string[] = []
+    eachLine((file, line, i) => {
+      const hit = /\bADR[ \t]+\d{4}\b/.exec(line)
+      if (hit) bad.push(`${rel(file)}:${i + 1} → ${hit[0]}`)
+    })
+    expect(bad, `ADR 互引统一写 \`ADR-NNNN\`：\n${bad.join('\n')}`).toEqual([])
+  })
+
+  // 一行里已经出现全形，同行的裸 00NN 就是漏了前缀的第二枚互引——读者得自己猜那串数字是什么。
+  // 误伤面：`Status:` 行、索引首列与「已被 NNNN 取代」都不含全形，因此不在这一判据的语料里。
+  it('ADR 互引不写裸篇号（`ADR-0032` / `0033` 这类）', () => {
+    const bad: string[] = []
+    eachLine((file, line, i) => {
+      for (const bare of bareAdrIds(line)) bad.push(`${rel(file)}:${i + 1} → ${bare}（写全 \`ADR-${bare}\`）`)
+    })
+    expect(bad, `裸篇号的 ADR 互引：\n${bad.join('\n')}`).toEqual([])
+  })
+
+  it('判据认得出行号引用、裸篇号与死小节号（正控）', () => {
+    expect(lineRefs('归属见 `client/panel-shelf.ts:9`'), '个位数的行号也要红').not.toEqual([])
+    expect(bareAdrIds('见 `ADR-0032` / `0033`')).toEqual(['0033'])
+    expect(bareAdrIds('见 `ADR-0032` / `ADR-0033`'), '全形不算裸篇号').toEqual([])
+    expect(bareAdrIds('Status: superseded by 0048'), 'ADR-FORMAT 定义的 Status 形态不算互引').toEqual([])
+    expect(missingSections(new Set(['1', '2']), '运行参数走配置卡（本文 §5）')).toEqual(['§5'])
+    expect(missingSections(sectionsOf('docs/ui-spec.md'), '本文 §5')).toEqual([])
   })
 })
 
-describe('ADR 编号与形状', () => {
-  it('编号连续不重号（改名重排会留下断号，断号即有人抄不到那一页）', () => {
-    expect(ADRS.length, '一篇 ADR 都没扫到？').toBeGreaterThan(5)
-    const nums = ADRS.map((f) => Number(/^docs\/adr\/(\d{4})-/.exec(f)![1]))
-    expect(nums.some(Number.isNaN), 'ADR 文件名必须是 NNNN-slug.md').toBe(false)
-    const sorted = [...nums].sort((a, b) => a - b)
-    const gaps: string[] = []
-    for (let n = sorted[0]; n <= sorted[sorted.length - 1]; n++) if (!sorted.includes(n)) gaps.push(String(n))
-    expect(gaps, `断号：${gaps.join(', ')}（只许追加，不许重排）`).toEqual([])
+describe('文档门 · 职责边界', () => {
+  // 只认小节标题（`##` 及更深）；H1 是篇名，篇名里提一句主题不算第二份。
+  it('“唯一主人清单”标题只出现在 architecture.md', () => {
+    const offenders = docCorpus
+      .filter(({ file, lines }) => rel(file) !== 'docs/architecture.md'
+        && lines.some((line) => /^#{2,4}\s.*唯一主人清单/.test(line)))
+      .map(({ file }) => rel(file))
+    expect(offenders, '主人清单只能有一份；CONTEXT 只定义词，不重复归属').toEqual([])
   })
 
-  it('每篇第一行是标题、并点名锚点', () => {
-    const bad = ADRS.filter((f) => {
-      const text = readFileSync(join(ROOT, f), 'utf8')
-      return !/^# \S/.test(text) || !text.includes('锚点：')
-    })
-    expect(bad, `缺标题或缺「锚点：」那一行：${bad.join(', ')}`).toEqual([])
+  it('“界面规格”标题只出现在 docs/ui-spec.md', () => {
+    const offenders = docCorpus
+      .filter(({ file, lines }) => rel(file) !== 'docs/ui-spec.md'
+        && lines.some((line) => /^#{2,4}\s.*界面规格/.test(line)))
+      .map(({ file }) => rel(file))
+    expect(offenders, '界面规格是一个独立文档；architecture 只留指针').toEqual([])
   })
 
-  it('每篇紧跟标题有 Status 行', () => {
-    const bad = ADRS.filter((f) => {
-      const lines = readFileSync(join(ROOT, f), 'utf8').split(/\r?\n/)
-      return !/^Status: (accepted|superseded by \d{4})$/.test(lines[2] ?? '')
+  it('“文档规范”标题只出现在 docs/AGENTS.md', () => {
+    const offenders = docCorpus
+      .filter(({ file, lines }) => rel(file) !== 'docs/AGENTS.md'
+        && lines.some((line) => /^#{2,4}\s.*文档规范/.test(line)))
+      .map(({ file }) => rel(file))
+    expect(offenders, '文档分层与生命周期只能有一份').toEqual([])
+  })
+
+  it('AGENTS.md 是入口，不是仓库手册', () => {
+    const chars = [...read('AGENTS.md')].length
+    expect(chars, `AGENTS.md ${chars} 字符；超过 8,000 先搬迁或压缩，提额要写理由`).toBeLessThanOrEqual(8000)
+  })
+
+  it('点名的小节号在目标文档里真的存在', () => {
+    // 用编号小节指路的就这两份；`本文 §N` 按说话那份自己的标题解析。
+    const numbered = ['docs/architecture.md', 'docs/ui-spec.md']
+    const offenders: string[] = []
+    eachLine((file, line, i) => {
+      const where = `${rel(file)}:${i + 1}`
+      const named = numbered.filter((doc) => line.includes(doc.slice(doc.lastIndexOf('/') + 1)))
+      // 一行同时点两份文档时不猜每个 § 归谁；分开写清楚再指。
+      if (named.length === 1) {
+        for (const dead of missingSections(sectionsOf(named[0]!), line)) offenders.push(`${where} → ${named[0]} ${dead}`)
+      }
+      const self = numbered.find((doc) => rel(file) === doc)
+      if (self !== undefined && line.includes('本文')) {
+        for (const dead of missingSections(sectionsOf(self), line)) offenders.push(`${where} → ${self} ${dead}`)
+      }
     })
-    expect(bad, `缺 Status 或状态不合规：${bad.join(', ')}`).toEqual([])
+    expect(offenders, '小节号只在那份文档里有序；搬家或重排后要同步指路').toEqual([])
+  })
+
+  it('点名 development.md / AGENTS.md 的中文小节名真的存在', () => {
+    const named: Array<[string, string[]]> = [
+      ['docs/development.md', headingTexts(read('docs/development.md'))],
+      ['AGENTS.md', headingTexts(read('AGENTS.md'))],
+    ]
+    const offenders: string[] = []
+    eachLine((file, line, i) => {
+      for (const [doc, headings] of named) {
+        const escaped = doc.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        const pattern = new RegExp('(?<![A-Za-z0-9_./-])' + escaped + '`?[ \\t]*(?:的[ \\t]*)?「([^」]+)」', 'g')
+        for (const match of line.matchAll(pattern)) {
+          const name = match[1]!
+          if (!headings.some((heading) => heading.includes(name))) {
+            offenders.push(`${rel(file)}:${i + 1} → ${doc} 的「${name}」`)
+          }
+        }
+      }
+    })
+    expect(offenders, `中文小节名指不到标题：\n${offenders.join('\n')}`).toEqual([])
   })
 })
 
-describe('文档骨架与 ADR 规范', () => {
+describe('文档门 · 文档分层与 ADR 形状', () => {
+  it('文档标准存在，根 AGENTS 指向它', () => {
+    expect(existsSync(join(ROOT, 'docs', 'AGENTS.md')), '文档分层与生命周期应住 docs/AGENTS.md').toBe(true)
+    expect(read('AGENTS.md')).toContain('docs/AGENTS.md')
+  })
+
   it('核心文档在场', () => {
     const required = [
       'AGENTS.md',
@@ -251,70 +489,142 @@ describe('文档骨架与 ADR 规范', () => {
       'CHANGELOG.md',
       'docs/AGENTS.md',
       'docs/architecture.md',
+      'docs/ui-spec.md',
       'docs/development.md',
       'docs/adr/README.md',
       'docs/adr/ADR-FORMAT.md',
+      'docs/agents/issue-tracker.md',
+      'docs/agents/triage-labels.md',
+      'docs/agents/domain.md',
     ]
     const missing = required.filter((f) => !existsSync(join(ROOT, f)))
     expect(missing, `缺少核心文档：${missing.join(', ')}`).toEqual([])
   })
 
-  it('根 AGENTS 在 8,000 字符预算内', () => {
-    const text = readFileSync(join(ROOT, 'AGENTS.md'), 'utf8')
-    const chars = [...text].length
-    expect(chars, `AGENTS.md ${chars} 字符；超过 8,000 先搬迁或压缩，提额要写理由`).toBeLessThanOrEqual(8000)
+  const adrFiles = () => readdirSync(join(ROOT, 'docs', 'adr')).filter((name) => /^\d{4}-.+\.md$/.test(name))
+
+  it('ADR 编号连续不重号（重排会留下断号，断号即有人抄不到那一页）', () => {
+    const files = adrFiles()
+    expect(files.length, 'ADR 目录没有扫到任何文件').toBeGreaterThan(0)
+    const nums = files.map((name) => Number(name.slice(0, 4))).sort((a, b) => a - b)
+    expect(new Set(nums).size, 'ADR 有重号').toBe(nums.length)
+    const gaps: string[] = []
+    for (let n = nums[0]!; n <= nums[nums.length - 1]!; n++) if (!nums.includes(n)) gaps.push(String(n))
+    expect(gaps, `断号：${gaps.join(', ')}（只许追加，不许重排）`).toEqual([])
   })
 
-  it('根 AGENTS 指向文档规范与开发手册', () => {
-    const text = readFileSync(join(ROOT, 'AGENTS.md'), 'utf8')
-    expect(text).toContain('docs/AGENTS.md')
-    expect(text).toContain('docs/development.md')
+  it('每个 ADR 都进索引，索引里也没有不存在的篇，且每篇恰好一行', () => {
+    const files = adrFiles().map((name) => name.slice(0, 4))
+    // 只认索引表第一列（`| `0001` | …`）：正文里互引别的 ADR 不算重复行。
+    const listed = [...read('docs/adr/README.md').matchAll(/^\| `(\d{4})`/gm)].map((match) => match[1]!)
+    expect(listed.length, 'ADR 索引没有解析出任何编号').toBeGreaterThan(0)
+    expect(new Set(listed).size, 'ADR 索引里有重复行').toBe(listed.length)
+    expect(files.filter((id) => !listed.includes(id)), '这些 ADR 没进 docs/adr/README.md').toEqual([])
+    expect(listed.filter((id) => !files.includes(id)), '索引指向不存在的 ADR').toEqual([])
+  })
+
+  it('每个 ADR 第一行是标题、紧跟标题有 Status 行', () => {
+    const bad: string[] = []
+    for (const name of adrFiles()) {
+      const lines = readFileSync(join(ROOT, 'docs', 'adr', name), 'utf8').split(/\r?\n/)
+      if (!/^# .+/.test(lines[0] ?? '')) bad.push(`${name}: 缺标题`)
+      if (!/^Status: (accepted|superseded by \d{4})$/.test(lines[2] ?? '')) bad.push(`${name}: 缺 Status 或状态不合规`)
+    }
+    expect(bad, bad.join('\n')).toEqual([])
+  })
+
+  it('每个 ADR 都以锚点段收尾（允许折行）', () => {
+    const bad = adrFiles().filter((name) => {
+      const blocks = readFileSync(join(ROOT, 'docs', 'adr', name), 'utf8')
+        .split(/\r?\n\s*\r?\n/)
+        .filter((block) => block.trim() !== '')
+      return !/^锚点：/.test((blocks.at(-1) ?? '').trimStart())
+    })
+    expect(bad, `末段不是锚点：${bad.join(', ')}`).toEqual([])
   })
 })
 
-describe('ADR 索引与文件一一对应', () => {
-  it('合成样品：缺行、悬空行都会被点名', () => {
-    const index = '| `0001` | a |\n| `0003` | c |\n| `0005` | e |\n'
-    const files = ['0001-a.md', '0002-b.md', '0003-c.md', '0004-d.md']
-    expect(adrIndexProblems(index, files)).toEqual([
-      '索引缺少 ADR 0002',
-      '索引缺少 ADR 0004',
-      '索引指向不存在的 ADR 0005',
-    ])
+describe('文档门 · 兼容性事实单源', () => {
+  const manifest = JSON.parse(read('package.json')) as CompatibilityManifest
+  const releases = Object.keys(manifest.dsh?.compatibility?.dshReleases ?? {})
+  const window = manifest.engines?.dsh
+
+  /** 徽章只投影首末代次：全量枚举会随每次实测变长，完整名单由正文钉住。 */
+  const badgeVersions = releases.length > 1 ? [releases[0]!, releases[releases.length - 1]!] : releases
+  const badge = `DSH-${badgeVersions.map((version) => version.replaceAll('-', '--')).join('%20%E2%80%A6%20')}`
+
+  const projectionDrift = (readme: string): string[] => {
+    const snippets = [
+      ...(window === undefined ? [] : [window]),
+      ...releases,
+      `${badge}-brightgreen`,
+    ]
+    return snippets.filter((snippet) => !readme.includes(snippet))
+  }
+
+  it('README 的窗口、真机名单与徽章都从 package.json 投影', () => {
+    expect(releases.length, 'package.json 没有 dsh.compatibility.dshReleases').toBeGreaterThan(0)
+    const drift = projectionDrift(read('README.md'))
+    expect(drift, `README 与 package.json 不一致：\n${drift.join('\n')}`).toEqual([])
   })
 
-  it('真实索引覆盖全部 ADR（新增不补索引即红）', () => {
-    const index = readFileSync(join(ROOT, 'docs/adr/README.md'), 'utf8')
-    const problems = adrIndexProblems(index, ADRS.map((f) => f.slice(f.lastIndexOf('/') + 1)))
-    expect(problems, problems.join('\n')).toEqual([])
+  it('判据认得出漂移（正控）', () => {
+    const drifted = read('README.md').replaceAll(releases[0]!, '0.0.0-not-real')
+    expect(projectionDrift(drifted)).not.toEqual([])
+  })
+
+  it('AGENTS 只把 package.json 说成兼容性事实源', () => {
+    const agents = read('AGENTS.md')
+    expect(agents).toContain('事实源是 `package.json`')
   })
 })
 
-describe('Markdown 链接与标题锚点', () => {
-  const docs: DocFile[] = [
-    {
-      path: 'README.md',
-      text: '# 标题\n[ok](docs/guide.md#小标题)\n[bad](docs/missing.md)\n[bad-anchor](docs/guide.md#不存在)\n```md\n[ignored](docs/missing.md)\n```\n`[inline](docs/missing.md)`\n[ext](https://example.com/x)',
-    },
-    { path: 'docs/guide.md', text: '# 小标题\n' },
-  ]
-
-  it('合成样品：坏路径与坏锚点会被点名，代码围栏与外链不算', () => {
-    const problems = linkProblems(docs, (p) => docs.some((d) => d.path === p))
-    expect(problems).toEqual([
-      'README.md:3 → docs/missing.md（文件不在场）',
-      'README.md:4 → docs/guide.md#不存在（标题锚点不在场）',
-    ])
+describe('文档门 · 相对链接与锚点', () => {
+  it('手写文档里的相对链接与锚点都指得到东西', () => {
+    const broken = docCorpus.flatMap(({ file, lines }) => brokenLinks(file, lines.join('\n')))
+    expect(broken, `断链或死锚点：\n${broken.join('\n')}`).toEqual([])
   })
 
-  it('标题 slug 与 GitHub 口径一致', () => {
-    const slugs = headingSlugs('# 本地书格式（TXT / EPUB）\n## AI 助手工具\n')
-    expect([...slugs].sort()).toEqual(['ai-助手工具', '本地书格式txt--epub'])
+  it('判据认得出缺失文件与死锚点（正控）', () => {
+    const readme = read('README.md')
+    const missingFile = brokenLinks(join(ROOT, 'README.md'), `${readme}\n[x](definitely-missing.md)`)
+    const missingAnchor = brokenLinks(join(ROOT, 'README.md'), `${readme}\n[x](#definitely-missing-anchor)`)
+    expect(missingFile).not.toEqual([])
+    expect(missingAnchor).not.toEqual([])
+  })
+})
+
+describe('文档门 · 截图清单', () => {
+  const manifest = JSON.parse(read('screenshots.json')) as string[]
+  const images = [...read('README.md').matchAll(/!\[[^\]]*\]\(([^)\s]+)/g)]
+    .map((match) => /(docs\/screenshots\/[^)\s]+)/.exec(match[1]!)?.[1])
+    .filter((path): path is string => path !== undefined)
+
+  const drift = (found: string[], listed: string[]): string[] => {
+    const a = [...new Set(found)].sort()
+    const b = [...new Set(listed)].sort()
+    return [
+      ...a.filter((path) => !b.includes(path)).map((path) => `README 有、清册没有：${path}`),
+      ...b.filter((path) => !a.includes(path)).map((path) => `清册有、README 没有：${path}`),
+    ]
+  }
+
+  it('README 截图、screenshots.json、本地文件三者一致', () => {
+    expect(images.length, 'README 没有引用任何截图').toBeGreaterThan(0)
+    expect(images.length, 'README 截图重复').toBe(new Set(images).size)
+    expect(manifest.length, 'screenshots.json 重复').toBe(new Set(manifest).size)
+    const now = drift(images, manifest)
+    expect(now, now.join('\n')).toEqual([])
+    for (const path of manifest) expect(pathExists(join(ROOT, path)), path).toBe(true)
+    // 反方向：本地多出来的图也必须进清单，否则它既没人引用、也不会被核对。
+    const local = readdirSync(join(ROOT, 'docs', 'screenshots'))
+      .filter((name) => /\.(png|jpe?g)$/i.test(name))
+      .map((name) => `docs/screenshots/${name}`)
+    expect(local.filter((path) => !manifest.includes(path)), '本地有、清单没有').toEqual([])
   })
 
-  it('真实文档的 Markdown 链接与锚点在册', () => {
-    const all = FILES.map((path) => ({ path, text: readFileSync(join(ROOT, path), 'utf8') }))
-    const problems = linkProblems(all, (p) => existsSync(join(ROOT, p)))
-    expect(problems, problems.join('\n')).toEqual([])
+  it('判据认得出漂移（正控）', () => {
+    expect(drift([...images, 'docs/screenshots/extra.png'], manifest)).not.toEqual([])
+    expect(drift(images, [...manifest, 'docs/screenshots/extra.png'])).not.toEqual([])
   })
 })

@@ -46,7 +46,7 @@ describe('包形态声明', () => {
     // 所以 client bundle 的 require 集合仍只有平台模块表里那些（见 tsdown.config.ts）。
     // locale 是唯一的在册条目：文案字典靠 ctx.get('locale') 读宿主语言服务。这条边只保证包
     // 按序到达；服务本身由 locale 包的 immediately 在正常组合里先提供——apply 时读一次，
-    // 晚到/缺席退回内置中文（ADR 0038），不炸。
+    // 晚到/缺席退回内置中文（ADR-0038），不炸。
     // 其余到达依赖（如 ui-primitives）仍不声明——require 集合里没有它，声明即过度声明，
     // 激活期会与别的解析失败聚合成 AggregateError。
     expect(pkg.dsh.client.inject).toEqual(['@deepseek-ai/dsh-client-locale'])

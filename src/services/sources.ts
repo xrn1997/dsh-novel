@@ -149,7 +149,7 @@ export class SourceRegistry {
   }
 
   /** 调用方接住了 `edit` 的落盘失败、但仍要让收尾 `flush` 看见时，把失败移交给 writer 的失败账；
-   *  同一文件下一次写成功即清账。批量探针用它把磁盘侧失败留在自己的道上（ADR 0011）。 */
+   *  同一文件下一次写成功即清账。批量探针用它把磁盘侧失败留在自己的道上（ADR-0011）。 */
   retainWriteFailure(error: unknown): void {
     this.writer.retainFailure(this.file, error)
   }

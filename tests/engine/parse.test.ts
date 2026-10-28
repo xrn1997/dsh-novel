@@ -297,7 +297,7 @@ describe('连接符与段界的区域感知（2026-09 全库普查 10/2360 残�
     expect(p.branches[0].segments.map((s) => s.kind)).toEqual(['default', 'default', 'js'])
   })
   it('连接符切出的**空白分支**被丢弃（对面 splitRule 不过滤空串，空规则取值即空列表，合并时不贡献）', () => {
-    // 真源形态（解析面普查第 22 批抓到的 ruleBookInfo.kind）：多行 && 串里夹了 `&&&&`
+    // 真源形态（解析面普查（2026-09-28）抓到的 ruleBookInfo.kind）：多行 && 串里夹了 `&&&&`
     const p = parseRule(
       'class.info@class.small@tag.span.4@text&&\nclass.info@class.small@tag.span.1@text&&&&\nclass.info@class.small@tag.span.2@text##分类：|状态：|更新时间：',
       'detail',

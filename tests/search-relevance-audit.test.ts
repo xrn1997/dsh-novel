@@ -52,7 +52,7 @@ describe.skipIf(process.env.DSH_SEARCH_FILTER_AUDIT !== '1')('搜索相关性分
     }
 
     const k = normalizeRelevance(KEYWORD)
-    // 待判样例①的**排序键**：只决定先看哪几条，不是判据——判据只有三档、没有阈值可拧（自造相似度是 `docs/adr/0032` 明确否决的那条）。
+    // 待判样例①的**排序键**：只决定先看哪几条，不是判据——判据只有三档、没有阈值可拧（自造相似度是 `ADR-0032` 明确否决的那条）。
     const overlap = (s: string): number => {
       const t = normalizeRelevance(s)
       let shared = 0
