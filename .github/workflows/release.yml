@@ -103,6 +103,12 @@ jobs:
       contents: write
       actions: read
     steps:
+      # gh release create --generate-notes 要读本地 git 历史与上一个 tag。
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
       - name: Download tarball artifact
         uses: actions/download-artifact@v8
         with:
