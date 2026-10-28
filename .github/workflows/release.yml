@@ -23,16 +23,16 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # 与 ci.yml 相同：pnpm 版本住 packageManager，Node 版本两处各写一次。
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           run_install: false
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
@@ -86,7 +86,7 @@ jobs:
 
       # 同一份 artifact 两个用途：dry run 的产物；tag 运行时给 publish job 交接。
       - name: Upload tarball artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dsh-novel-tarball
           path: dist/*.tgz
@@ -104,7 +104,7 @@ jobs:
       actions: read
     steps:
       - name: Download tarball artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dsh-novel-tarball
           path: dist
