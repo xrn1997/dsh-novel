@@ -4,6 +4,7 @@ import type { ToolOutputDefinition } from '@deepseek-ai/dsh-tools'
 import { ReadingService } from '../../src/services/reading.js'
 import { SEARCH_BOOKS_CAP } from '../../src/shared/wire.js'
 import { buildTools, registerTools } from '../../src/tools/tools.js'
+import { TOC_CHAPTERS_CAP } from '../../src/tools/render.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
 
 /** 三条 .b：① 含关键词且带作者、② 与关键词无涉、③ 含关键词而无作者 span。
@@ -180,6 +181,16 @@ describe('agent 工具六件套', () => {
     expect(v).toMatchObject({ sourceId, bookKey: 'https://s.com/book/1/', total: 1 })
     expect(v.chapters[0]).toMatchObject({ chapterIndex: 0, name: '第一章', url: 'https://s.com/c/1.html' })
     expect(hasUndefined(v)).toBe(false)
+  })
+  it('dshnovel_toc：规范值超过章数上限时截断，total 仍报全书章数（读取不因此受限）', async () => {
+    const many = Array.from({ length: TOC_CHAPTERS_CAP + 1 }, (_, i) => ({ name: `第${i}章`, url: `https://s.com/c/${i}` }))
+    const stub = { getToc: async () => many } as unknown as ReadingService
+    const v = await run(stub, 'dshnovel_toc', { sourceId: 's', bookKey: 'k' })
+    expect(v.total).toBe(TOC_CHAPTERS_CAP + 1)                 // total 是全书章数
+    expect(v.chapters).toHaveLength(TOC_CHAPTERS_CAP)          // 规范值本身有上限
+    expect(v.chapters[TOC_CHAPTERS_CAP - 1].chapterIndex).toBe(TOC_CHAPTERS_CAP - 1)
+    expect(renderOf(stub, 'dshnovel_toc', { sourceId: 's', bookKey: 'k' }, v))
+      .toContain(`规范值只含前 ${TOC_CHAPTERS_CAP} 章`)
   })
   it('dshnovel_import_source：好/坏 JSON 文本各走其道（导入不含探针——outcome 无 probe 键）', async () => {
     const s = await svc()
