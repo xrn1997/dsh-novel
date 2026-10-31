@@ -139,6 +139,70 @@ describe('ReaderSession.open（目录 → 存档恢复 → 载后定位）', () 
     expect(h.port.top).toBe(3000)
   })
 
+  it('存档恢复的双帧落位之前，旧视口读数不许触发回溯补载', async () => {
+    const port = fakePort()
+    port.anchors = [{ index: 2, start: 2000, height: 2000 }]
+    port.height = 1000
+    port.scrollH = 8000
+    port.top = 0
+    const frames: Array<() => void> = []
+    const fetched: number[] = []
+    const session = new ReaderSession({
+      fetchNavigation: async () => ({ chapters: toc, items: planarNavigation(toc) }),
+      fetchChapter: async (_s, _b, i) => { fetched.push(i); return text(i) },
+      fetchShelf: async () => [shelfBook({ chapterIndex: 2, offsetRatio: 0.5, updatedAt: 0 })],
+      saveProgress: () => {}, saveTotalChapters: () => {},
+      afterFrames: (cb) => { frames.push(cb) },
+    }, port)
+    await session.open('src', 'https://s.com/book/1')
+    expect(fetched).toEqual([2])
+    session.handleViewportChange('src')                    // 落位前的旧视口（top 仍是进入前的 0）
+    await new Promise((r) => setTimeout(r, 0))
+    expect(fetched, '恢复落位前的旧视口不是补载证据').toEqual([2])
+    while (frames.length > 0) frames.shift()!()            // 跑完双帧：落位
+    expect(port.top).toBe(3000)
+    session.handleViewportChange('src')                    // 落位后的真实视口才开始判断补载
+    await new Promise((r) => setTimeout(r, 0))
+    expect(fetched).toContain(1)
+  })
+
+  it('空目录 + 有存档比例：恢复载入根本不发生，闸不许把会话钉在「等待落位」里', async () => {
+    // 空目录 → 没有可恢复的章，`load` 直接返回、双帧落位永不发生。`restoring` 若照落真，
+    // 此后每次视口读数都在 `handleViewportChange` 顶部被吞：预取、位置提交与补载全停，
+    // 会话对滚动彻底失聪（且不报任何错）。
+    const port = fakePort()
+    let measures = 0
+    port.measureAnchors = () => { measures++; return port.anchors }
+    const fetched: number[] = []
+    const session = new ReaderSession({
+      fetchNavigation: async () => ({ chapters: [], items: [] }),
+      fetchChapter: async (_s, _b, i) => { fetched.push(i); return text(i) },
+      fetchShelf: async () => [shelfBook({ chapterIndex: 0, offsetRatio: 0.5, updatedAt: 0 })],
+      saveProgress: () => {}, saveTotalChapters: () => {},
+      afterFrames: (cb) => cb(),
+    }, port)
+    await session.open('src', 'https://s.com/book/1')
+    expect(fetched, '空目录没有任何章可载').toEqual([])
+    expect(session.state.currentChapter, '位置停在 0，不是越界夹出来的 -1').toBe(0)
+    session.handleViewportChange('src', { layoutChanged: true })
+    expect(measures, '视口读数照常处理（读被吞 = 会话已失聪）').toBe(1)
+  })
+
+  it('负下标存档（手改过的落盘元数据）：夹回第 0 章照常载入', async () => {
+    // clamp 只朝「越界」一侧做就会把 -5 原样交给 `load`（早退 = 同样的空转）。两头都要夹。
+    const port = fakePort()
+    const fetched: number[] = []
+    const session = new ReaderSession({
+      fetchNavigation: async () => ({ chapters: toc, items: planarNavigation(toc) }),
+      fetchChapter: async (_s, _b, i) => { fetched.push(i); return text(i) },
+      fetchShelf: async () => [shelfBook({ chapterIndex: -5, offsetRatio: 0.5, updatedAt: 0 })],
+      saveProgress: () => {}, saveTotalChapters: () => {},
+      afterFrames: (cb) => cb(),
+    }, port)
+    await session.open('src', 'https://s.com/book/1')
+    expect(fetched).toEqual([0])
+  })
+
   it('进书：目录一发布就来的预取不许抢走存档恢复的在途槽', async () => {
     // 视图侧事实：toc 一发布就 afterRender，此刻哨兵在视口顶 → 预取目标 = 第 0 章，
     // 而存档章要等 fetchShelf 回来才知道。在途槽若被预取抢走，open() 的恢复 load 会半路静默短路
@@ -858,5 +922,166 @@ describe('ReaderSession 代际（卸载/换书后的迟到续作）', () => {
     void session.load('src', 1)
     await new Promise((r) => setTimeout(r, 0))
     expect(fetched).toEqual([1])                         // 回归：dispose 后不得让 RESTORE_SLOT 一直占槽
+  })
+})
+
+describe('连续阅读的已载窗口上限（裁章补偿 + 回溯补载）', () => {
+  const many: ChapterEntry[] = Array.from({ length: 60 }, (_, i) => ({ name: `第${i + 1}章`, url: `https://s.com/c/${i}` }))
+
+  /** 长书会话：假 port 按「当前已载表」重建锚点（DOM 顺序 = 已载章顺序，裁章后起点整体上移）。 */
+  const makeLongSession = (chapterHeight: number) => {
+    const port = fakePort()
+    port.height = 1000
+    port.scrollH = 60 * chapterHeight
+    port.sentinel = null                                  // 预取不由本组用例驱动
+    const fetched: number[] = []
+    const session = new ReaderSession({
+      fetchNavigation: async () => ({ chapters: many, items: planarNavigation(many) }),
+      fetchChapter: async (_s, _b, i) => { fetched.push(i); return text(i) },
+      fetchShelf: async () => [], saveProgress: () => {}, saveTotalChapters: () => {},
+      afterFrames: (cb) => cb(),
+    }, port, 5)
+    const render = (): void => {
+      const mounted: number[] = []
+      session.state.chapters.forEach((c, i) => { if (c !== null) mounted.push(i) })
+      const base = mounted[0] ?? 0
+      port.anchors = mounted.map((i) => ({ index: i, start: (i - base) * chapterHeight, height: chapterHeight }))
+      session.afterRender('src')
+    }
+    return { port, session, fetched, render }
+  }
+
+  it('连续前读：窗口只保留视口前 6 章，裁章后滚动位按实测高度回补（DOM 不再线性增长）', async () => {
+    const { port, session, render } = makeLongSession(1000)
+    await session.open('src', 'https://s.com/book/1')
+    render()
+    for (let i = 1; i <= 20; i++) {
+      await session.load('src', i)
+      render()
+      const a = port.anchors.find((x) => x.index === i)!
+      port.top = a.start + 300
+      session.handleViewportChange('src')
+      render()
+    }
+    const kept = session.state.chapters.flatMap((c, i) => (c === null ? [] : [i]))
+    expect(kept).toEqual([14, 15, 16, 17, 18, 19, 20])    // 视口 20、前留 6 章
+    const a20 = port.anchors.find((x) => x.index === 20)!
+    expect(port.top).toBe(a20.start + 300)                 // 补偿后视口仍停在第 20 章同一处
+  })
+
+  it('回溯补载不越过裁章下界：不重取会被 prune 立刻裁掉的章', async () => {
+    const { port, session, fetched, render } = makeLongSession(10)   // 章高远小于两屏 → 距离判据不会自行收敛
+    await session.open('src', 'https://s.com/book/1')
+    fetched.length = 0                                               // 只数这一轮补载
+    render()
+    session.requestJump('src', 30)
+    await new Promise((r) => setTimeout(r, 0))
+    port.chapterOff = 0
+    render()
+    for (let i = 0; i < 40; i++) {
+      session.handleViewportChange('src')
+      await new Promise((r) => setTimeout(r, 0))
+      render()
+    }
+    const backfilled = fetched.filter((i) => i < 30)
+    // 视口固定在 30 → keepLo = 24；补载只许到 24，再往前的章会被 prune 当场裁掉并重取
+    expect(backfilled).toEqual([29, 28, 27, 26, 25, 24])
+    expect(fetched.filter((i) => i < 24), '不许反复重取下界之外的那一章').toEqual([])
+  })
+
+  it('高度量不到（0）时不按视口补载：距离证据不可用', async () => {
+    const { port, session, fetched, render } = makeLongSession(0)
+    await session.open('src', 'https://s.com/book/1')
+    fetched.length = 0                                               // 只数这一轮补载
+    render()
+    session.requestJump('src', 10)
+    await new Promise((r) => setTimeout(r, 0))
+    port.chapterOff = 0
+    render()
+    port.top = 0
+    for (let i = 0; i < 10; i++) {
+      session.handleViewportChange('src')
+      await new Promise((r) => setTimeout(r, 0))
+      render()
+    }
+    expect(fetched.filter((i) => i < 10)).toEqual([])
+  })
+
+  it('回溯：滚到窗口顶补载上一章，前插后视口仍停在原处', async () => {
+    const { port, session, fetched, render } = makeLongSession(3000)   // 章高 3 屏 → 一次补载即够缓冲
+    await session.open('src', 'https://s.com/book/1')
+    render()
+    session.requestJump('src', 10)
+    await new Promise((r) => setTimeout(r, 0))
+    port.chapterOff = 0
+    render()                                               // settleJump 落位（targetOffset 读 chapterOff）
+    const a10 = port.anchors.find((x) => x.index === 10)!
+    port.top = a10.start + 100
+    session.handleViewportChange('src')                    // 靠近窗口顶 → 触发补载第 9 章
+    await new Promise((r) => setTimeout(r, 0))
+    expect(session.state.chapters[9]).not.toBeNull()
+    expect(fetched).toContain(9)
+    render()                                               // 前插补偿：视口下移一章高
+    const a10new = port.anchors.find((x) => x.index === 10)!
+    expect(port.top).toBe(a10new.start + 100)              // 视觉位置没动
+  })
+
+  /** 额度闸用例的现场：跳到第 30 章后把锚点测量喂成失真读数（谎报窗口顶在第 25 章）。
+   *  诚实测量下同一章重取风暴起不来（裁章下界与 prune 严格互补，每个位置最多 6 发），
+   *  额度闸兜的正是「测量失真那一天」——所以这里制造它存在的那种失真：每轮 afterRender 都让
+   *  checkBackfill 重取第 24 章，而 24 与真已载集（第 30 章）不相邻、落地即被 prune 裁掉，
+   *  下一轮又重取同一章。 */
+  const makeStorm = async () => {
+    const h = makeLongSession(1000)
+    await h.session.open('src', 'https://s.com/book/1')
+    h.render()
+    h.session.handleViewportChange('src')        // 真实视口读过一次（回溯判据的前提；视口在第 0 章首不补载）
+    h.session.requestJump('src', 30)             // 跳章 = 新 episode：额度 16 起算
+    await new Promise((r) => setTimeout(r, 0))   // 第 30 章到货
+    h.port.chapterOff = 0                        // settleJump 落位读数
+    const lie: ChapterAnchor[] = [{ index: 25, start: 0, height: 1000 }]
+    h.fetched.length = 0                         // 只数额度内的自动补载
+    return {
+      ...h,
+      storm: async (): Promise<void> => {
+        h.port.anchors = lie
+        h.session.afterRender('src')
+        await new Promise((r) => setTimeout(r, 0))
+      },
+    }
+  }
+
+  it('回溯补载额度是 episode 的硬上界：锚点失真的同一章重取风暴在 16 发后被额度闸挡死', async () => {
+    // 一个 episode（open / 跳章 / 跨章换位）就 16 发，不多一发——距离判据依赖高度测量，
+    // 测量失真时它永不收敛，这道闸是那个日子里唯一的刹车。
+    const { storm, fetched } = await makeStorm()
+    for (let i = 0; i < 16; i++) await storm()
+    expect(fetched, '同一章（24）被反复重取，恰好花完整个 episode 的 16 发额度').toEqual(Array(16).fill(24))
+    for (let i = 0; i < 3; i++) await storm()
+    expect(fetched, '额度耗尽后自动补载停手：第 17 发被闸住，不是「再试一次就好」').toHaveLength(16)
+  })
+
+  it('跳章把回溯补载额度复位：额度耗尽后，新 episode 的同一发补载又活了', async () => {
+    const { storm, session, fetched } = await makeStorm()
+    for (let i = 0; i < 16; i++) await storm()
+    expect(fetched).toHaveLength(16)
+    session.requestJump('src', 30)               // 跳章（跳回同一章也一样）= 新 episode，额度复位
+    await storm()
+    expect(fetched, '额度随跳章复位：同一发补载重新可用').toHaveLength(17)
+  })
+
+  it('渲染前窗口：load 换了已载表但 DOM 未提交时，滚动读数要重测锚点（不拿旧布局冒充新表）', async () => {
+    const h = makeSession()
+    await h.session.open('src', 'https://s.com/book/1')
+    h.port.anchors = [{ index: 0, start: 0, height: 1000 }]
+    h.session.afterRender('src')                           // 首轮渲染：锚点表对应已载 [0]
+    h.session.handleViewportChange('src')                  // 视口读过一次（回溯判据的前提）
+    await h.session.load('src', 1)                         // 已载表换成 [0,1]；视图 afterRender 尚未跑
+    // 模拟 React 已把第 1 章提交进 DOM，而滚动事件先于 afterRender 到达
+    h.port.anchors = [{ index: 0, start: 0, height: 1000 }, { index: 1, start: 1000, height: 1000 }]
+    h.port.top = 1300
+    h.session.handleViewportChange('src')
+    expect(h.session.state.currentChapter, '旧锚点表会把视口读成第 0 章尾').toBe(1)
+    expect(h.saves.at(-1)).toEqual([1, 0.3])
   })
 })
