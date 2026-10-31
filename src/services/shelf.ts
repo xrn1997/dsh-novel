@@ -43,7 +43,8 @@ export class Shelf {
     private readonly writer: ReturnType<typeof createDebouncedWriter>,
   ) {}
 
-  /** dir = novel 根；读 shelf.json（不存在/坏文件按空架起步） */
+  /** dir = novel 根；读 shelf.json（不存在 → 空架；存在但解析失败 → readJson 备份后抛
+   *  CorruptJsonError，坏字节不许静默折成空架） */
   static async load(dir: string): Promise<Shelf> {
     const books = await readJson<ShelfBook[]>(path.join(dir, 'shelf.json'), [])
     return new Shelf(dir, books, createDebouncedWriter())
