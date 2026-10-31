@@ -221,7 +221,16 @@ export class OnlineReading {
       )
       if (sub !== null && sub.trim() !== '') {
         const raw = sub.trim()
-        const body = /^https?:\/\//i.test(raw) ? await fetchSourceText(this.parts.request, s, raw) : raw
+        // 取回失败视同「取不到」：正文页已抓全，追加段链接失效/站点拒绝只丢追加段，
+        // 不许把整章判死，也不许因此不落缓存（规则求值本身的错仍然抛——那是规则的错）
+        let body = raw
+        if (/^https?:\/\//i.test(raw)) {
+          try {
+            body = await fetchSourceText(this.parts.request, s, raw)
+          } catch {
+            body = ''
+          }
+        }
         const plainSub = normalizeChapterText(contentToText(body))
         if (plainSub.trim() !== '') text += '\n' + plainSub
       }

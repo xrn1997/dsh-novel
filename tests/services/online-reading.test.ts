@@ -253,6 +253,30 @@ describe('OnlineReading', () => {
     expect(await rig.online.chapterText('i', BOOK, 0)).toBe('正文一\n歌词')
   })
 
+  it('ruleContent.subContent：子正文取回失败只丢追加段，整章照常返回并落缓存', async () => {
+    // 追加物不是正文：子正文链接失效/站点拒绝时，正文页已经抓全，不许把整章判死，
+    // 更不许因此不落缓存（否则每次重读都要为一条坏链接重抓整章）。
+    const rig = await makeRig({
+      over: {
+        ruleContent: '@css:#content@text',
+        ruleContentSubContent: `@js:"${BASE}/lyric.html"`,
+        nextPageUrl: undefined,
+      },
+      htmlOf: (u) => {
+        if (u.includes('/c/1.html')) return '<html><body><div id="content">正文一</div></body></html>'
+        return defaultHtml(u)
+      },
+    })
+    rig.setBeforeFetch((url) => {
+      if (url.includes('/lyric.html')) throw new Error('lyric 站点 503')
+    })
+    expect(await rig.online.chapterText('i', BOOK, 0)).toBe('正文一')
+    expect(rig.fetches).toContain(`${BASE}/lyric.html`)
+    const fetched = rig.fetches.length
+    expect(await rig.online.chapterText('i', BOOK, 0)).toBe('正文一')   // 缓存命中
+    expect(rig.fetches).toHaveLength(fetched)
+  })
+
   it('缺目录规则 → RuleMissingError（点名 facet 与规则名）', async () => {
     const rig = await makeRig({
       over: { ruleChapterName: undefined, ruleChapterUrl: undefined, ruleTocUrl: undefined },
