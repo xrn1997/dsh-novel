@@ -232,3 +232,17 @@ describe('链首 CSS 直达', () => {
     }
   })
 })
+
+describe('@css 属性正则死线（灾难回溯）', () => {
+  it('病态属性正则 → RuleEvalError（不钉住主线程）', () => {
+    const $bad = cheerio.load(`<div><a data-x="${'a'.repeat(40)}b">x</a></div>`)
+    const err = (() => {
+      try {
+        evalCss(seg('a[data-x~=^(?:a+)+$]'), $bad as any, $bad('div') as any, loc(0, 'a[data-x~=…]'), 'toc')
+      } catch (e) { return e }
+      return null
+    })()
+    expect(err).toBeInstanceOf(RuleEvalError)
+    expect((err as RuleEvalError).message).toContain('求值超时')
+  })
+})

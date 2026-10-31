@@ -2,6 +2,7 @@ import type { Cheerio, CheerioAPI } from 'cheerio'
 import type { AnyNode } from 'domhandler'
 import type { EngineValue, Facet, Segment, SegmentLoc } from './types.js'
 import { RuleEvalError } from './errors.js'
+import { guardedFilter, RegexDeadlineError } from './regex-guard.js'
 import { containsText, reducePicked, selectStepWithSelf, textOf } from './select.js'
 
 type CssSegment = Extract<Segment, { kind: 'css' }>
@@ -102,10 +103,19 @@ export function evalCss(
     throw new RuleEvalError(`CSS 选择器无法解析：${seg.selector}（${(e as Error).message}）`, { ...loc, facet, hits: 0 })
   }
   for (const f of attrFilters) {
-    picked = picked.filter((_i, el) => {
-      const value = $(el).attr(f.attr)
-      return value !== undefined && f.re.test(value)
-    })
+    // 用户正则走死线守卫（一批一次 vm 往返）：灾难回溯只许废掉这条选择器，不许钉住主线程
+    let kept: AnyNode[]
+    try {
+      kept = guardedFilter(picked.toArray(), f.re, (el) => $(el).attr(f.attr))
+    } catch (e) {
+      if (!(e instanceof RegexDeadlineError)) throw e
+      throw new RuleEvalError(
+        `CSS 属性正则求值超时（疑似灾难性回溯）：${seg.selector}（[${f.attr}~=…]）`,
+        { ...loc, facet, hits: 0 },
+      )
+    }
+    const keep = new Set(kept)
+    picked = picked.filter((_i, el) => keep.has(el))
   }
   // 逐元素取文本只在真用到时做（`:contains` 常见形态是 f.own=false，只看 $el.text()）——
   // 先算 own 再看用不用是每候选元素三次数组分配的白费。

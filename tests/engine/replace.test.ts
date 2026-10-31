@@ -140,3 +140,19 @@ describe('interp 查表只认自有键（不许顺原型链捞 Object.prototype 
       .toEqual({ kind: 'value', text: 'https://x.com' })
   })
 })
+
+describe('applyReplaces 死线（灾难回溯）', () => {
+  it('合法但病态的尾正则 → RuleEvalError 带段定位（不再钉住主线程）', () => {
+    // `^(?:a+)+$` 对「长 a + b」是指数级回溯：宁可在死线内判死这一条规则
+    const text = `${'a'.repeat(40)}b`
+    const err = (() => {
+      try {
+        applyReplaces({ kind: 'value', text }, [step('', ''), step('^(?:a+)+$', 'x')], false, { facet: 'content' })
+      } catch (e) { return e }
+      return null
+    })()
+    expect(err).toBeInstanceOf(RuleEvalError)
+    expect((err as RuleEvalError).message).toContain('求值超时')
+    expect((err as RuleEvalError).segmentIndex).toBe(1)
+  })
+})

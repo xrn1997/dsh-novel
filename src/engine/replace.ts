@@ -1,5 +1,6 @@
 import type { EngineValue, Facet, ReplaceStep } from './types.js'
 import { RuleEvalError } from './errors.js'
+import { guardedOnlyOneReplace, guardedReplace, RegexDeadlineError } from './regex-guard.js'
 
 /**
  * `##` 替换求值（净化 + OnlyOne，语义钉死）：
@@ -28,7 +29,7 @@ export function applyReplaces(
   if (v.kind === 'nodes') return v
 
   // 预编译全部正则：任一步非法立即抛错（段定位指向该步），不半途替换
-  const compiled: { re: RegExp; replacement: string }[] = []
+  const compiled: { re: RegExp; replacement: string; index: number; raw: string }[] = []
   for (let i = 0; i < replaces.length; i++) {
     const step = replaces[i]
     const flags = onlyOne
@@ -43,7 +44,7 @@ export function applyReplaces(
     if (pattern === '') continue
     const replacement = interpolate(step.replacement, interp)
     try {
-      compiled.push({ re: new RegExp(pattern, flags), replacement })
+      compiled.push({ re: new RegExp(pattern, flags), replacement, index: i, raw: `${step.pattern}##${step.replacement}` })
     } catch {
       throw new RuleEvalError(`## 替换正则非法: ${pattern}`, {
         facet: loc?.facet ?? 'rule',
@@ -56,15 +57,16 @@ export function applyReplaces(
 
   const runOne = (text: string): string => {
     let out = text
-    for (const { re, replacement } of compiled) {
-      if (onlyOne) {
-        // OnlyOne 口径：拿到首个匹配后，替换**作用在那一段上**，产物即那一段——
-        // 不是「原文里只改第一处」；无匹配给空串。re 已剥 g（非全局），
-        // exec 与段内 replace 都停在首个匹配，捕获组引用因此在匹配内解析。
-        const m = re.exec(out)
-        out = m === null ? '' : m[0].replace(re, replacement)
-      } else {
-        out = out.replace(re, replacement)
+    for (const { re, replacement, index, raw } of compiled) {
+      try {
+        // 执行走死线守卫：合法但病态的正则（灾难回溯）只许把这一条替换判死，
+        // 不许把主线程钉住（见 regex-guard 的取舍）
+        out = onlyOne ? guardedOnlyOneReplace(re, out, replacement) : guardedReplace(re, out, replacement)
+      } catch (e) {
+        if (!(e instanceof RegexDeadlineError)) throw e
+        throw new RuleEvalError(`## 替换正则求值超时（疑似灾难性回溯）: ${re.source}`, {
+          facet: loc?.facet ?? 'rule', segmentIndex: index, segmentRaw: raw, hits: 0,
+        })
       }
     }
     return out

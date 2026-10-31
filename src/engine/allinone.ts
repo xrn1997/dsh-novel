@@ -1,5 +1,6 @@
 import type { EngineValue, Facet, Segment, SegmentLoc } from './types.js'
 import { RuleEvalError } from './errors.js'
+import { guardedMatchAll, RegexDeadlineError } from './regex-guard.js'
 
 /**
  * AllInOne 整页正则（口径：二维不压平）。
@@ -48,12 +49,17 @@ export function evalAllInOne(
     )
   }
 
-  const rows: string[][] = []
-  let m: RegExpExecArray | null
-  while ((m = re.exec(page)) !== null) {
-    // 未参与的 `(x)?` 组在 JS 里是 undefined，对面给 ""——按空串收，`$n` 才能直接拼
-    rows.push(Array.from(m, (v) => v ?? ''))
-    if (m[0] === '') re.lastIndex++ // 零长度匹配强制前进，防死循环
+  // 整页扫描走死线守卫：合法但病态的正则（灾难回溯）只许废掉这一条规则，
+  // 不许把主线程钉住（见 regex-guard 的取舍）；行口径与旧的内联循环一致
+  let rows: string[][]
+  try {
+    rows = guardedMatchAll(re, page)
+  } catch (e) {
+    if (!(e instanceof RegexDeadlineError)) throw e
+    throw new RuleEvalError(
+      `AllInOne 正则求值超时（疑似灾难性回溯）：${seg.pattern}`,
+      { ...loc, facet, hits: 0 },
+    )
   }
   return rows.length > 0 ? { kind: 'matches', rows } : { kind: 'list', items: [] }
 }

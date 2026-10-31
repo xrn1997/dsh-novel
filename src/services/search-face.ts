@@ -1,4 +1,5 @@
 import { interpolateUrl } from '../engine/index.js'
+import { guardedTest, RegexDeadlineError } from '../engine/regex-guard.js'
 import { itemContextsOf } from './bridge.js'
 import type { ItemContext } from './bridge.js'
 import type { SubRuleEval } from './bridge.js'
@@ -102,13 +103,26 @@ export async function fetchSearchPage(
   // 为守卫，而本仓的详情字段对平铺方言会回退搜索条目规则——不这么闸，一次「零结果」的搜索
   // 就会被按 `tag.a@text` 展开成「以页面第一个链接当书名」的假书目（冒充成功）。
   const canInfo = (source.rules.ruleDetailName ?? null) !== null
-  if (canInfo && sniff !== null && sniff.test(landedUrl)) return info('pattern')
+  if (canInfo && startsDetail(sniff, landedUrl, source.name)) return info('pattern')
   // 缺列表规则不是缺规则：空规则求值即得空列表，
   // 然后走上②那条详情回落。书名规则仍是硬要求（空规则返回整页文本，会造垃圾标题）。
   const contexts = ruleBookList === null ? []
     : itemContextsOf(await subEval(ruleBookList, { html: text, baseUrl: landedUrl }, 'search', 'list'), landedUrl)
   if (canInfo && contexts.length === 0 && (bookUrlPattern === null || bookUrlPattern.trim() === '')) return info('empty-list')
   return { ok: true, shape: 'list', contexts, landedUrl, subEval }
+}
+
+/** 落地 URL 是否命中 `bookUrlPattern`。执行走死线守卫（灾难回溯不许钉住主线程）；
+ *  超时与「正则非法」同一处置：留痕后按未命中处理，不让一条坏规则废掉整次搜索。 */
+function startsDetail(sniff: RegExp | null, url: string, sourceName: string): boolean {
+  if (sniff === null) return false
+  try {
+    return guardedTest(sniff, url)
+  } catch (e) {
+    if (!(e instanceof RegexDeadlineError)) throw e
+    log.warn(`源「${sourceName}」的 bookUrlPattern 求值超时（疑似灾难性回溯），已忽略详情页嗅探：${sniff.source}`)
+    return false
+  }
 }
 
 /** `bookUrlPattern` → 整串匹配正则（空 / 缺 → null）。
