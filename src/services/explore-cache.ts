@@ -41,6 +41,14 @@ export class KindCache {
   }
 
   put(k: KindCacheKey, group: SearchGroup, now: number): void {
+    // 过期条目的清理由 put 一并承担：只在 get 时惰性清理时，换规则/换页留下的旧代际条目
+    // 要等「恰好再取同一键」才被回收，长驻进程里会按代际数累积。
+    // 这一趟是 O(表大小)/写。这里**没有硬容量闸**：表只由「TTL 内的活跃键」决定，跨窗口的旧条目
+    // 每次 put 都会收走，所以不随运行时长无限累积；但同一 TTL 窗口内的键数仍随请求量增长——
+    // 这是已知代价，不拿一个拍脑袋的条数上限去换「误删刚拿到的书单」。
+    for (const [key, hit] of this.map) {
+      if (now - hit.at > EXPLORE_CACHE_TTL_MS) this.map.delete(key)
+    }
     this.map.set(KindCache.keyOf(k), { group, at: now })
   }
 }

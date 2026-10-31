@@ -805,11 +805,14 @@ export const bodies = {
     ({ [BODY.patch]: pickShelfMeta(p) as Record<string, string | number> }),
 } as const
 
-/** 对象位（cookie/header 表）：非对象、null、数组一律不算在场 */
+/** 对象位（cookie/header 表）：非对象、null、数组一律不算在场。
+ *  值必须是字符串：混进对象/数字会原样进 SourceAuth，最后被 fetch 的 WebIDL 强转成
+ *  `"[object Object]"` 之类的垃圾出站头——形状错在边界处报，不在请求线上发作。 */
 function readRecordField(body: Record<string, unknown>, field: string): Record<string, string> | undefined {
   const v = body[field]
   if (v === undefined) return undefined
-  if (typeof v !== 'object' || v === null || Array.isArray(v)) bodyBad(`body 需为 { ${BODY.cookies}: Record<string,string>, ${BODY.headers}?: Record<string,string> }`)
+  if (typeof v !== 'object' || v === null || Array.isArray(v)
+    || !Object.values(v).every((x) => typeof x === 'string')) bodyBad(`body 需为 { ${BODY.cookies}: Record<string,string>, ${BODY.headers}?: Record<string,string> }`)
   return v as Record<string, string>
 }
 

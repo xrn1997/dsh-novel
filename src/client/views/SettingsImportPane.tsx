@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { describeError } from '../api.js'
 import { validateSourceJson } from '../importer.js'
 import type { ItemCheck } from '../importer.js'
@@ -54,6 +54,8 @@ export function ImportPane({ job, refresh, unverifiedCount, onVerifyUnverified, 
     const r = validateSourceJson(v, t)
     setCheck({ ok: r.ok, total: r.total, bad: r.bad })
   }, 300), [t])
+  // 弹层关闭后挂起的 300ms 预检不再落地（否则对已卸载组件 setState，纯噪声）
+  useEffect(() => () => recheck.cancel(), [recheck])
   /** 文件直通：读原文 → 一次性提交服务端任务，不经 textarea（MB 级文本零进出 React） */
   const submitFiles = (files: FileList | null): void => {
     if (files === null || files.length === 0) return

@@ -139,6 +139,11 @@ _Avoid_: 步骤
 _唯一实现_: `engine/select.ts` 的 `reducePicked`（选择段与取值段共用）；JSONPath 侧 `engine/jsonpath.ts` 同口径
 _Avoid_: 空结果（太泛——Miss 与空 List 是两种值）
 
+**死线（regex deadline）**:
+一条用户正则最多被允许占着主线程多久；到点判「这条规则跑不动」，**不**判「结果为空」。预算随工作量放宽并封顶——写死一个数会把大而合法的整页扫描误判成病态。
+_唯一实现_: `engine/regex-guard.ts` 的 `deadlineFor`（超时抛 `RegexDeadlineError`，由调用点就地转成带段级定位的错误；口径的 why 见 `ADR-0050`）
+_Avoid_: 超时（太泛——`jsTimeoutMs` 是脚本预算、`WORKER_RPC_DEADLINE_MS` 是单次宿主往返，是另外几条闸）、正则黑名单（形状判死会误杀合法写法）
+
 **值投影（value projection）**:
 服务层把链尾 `EngineValue` 收成业务串的三种口径：单值文本位、URL 位、多值位。
 _唯一实现_: `services/bridge.ts` 的 `firstValue` / `firstUrlValue` / `listValue`（字段侧入口同名分家：`fieldOf`/`urlFieldOf` 不吞错，`auxFieldOf`/`auxUrlFieldOf` 读不出留空）
@@ -295,6 +300,16 @@ _Avoid_: 选中状态（太泛）；也别与「书城进入判据」混称—�
 _唯一实现_: `client/reader-session.ts`
 _Avoid_: 阅读器状态管理（视图里的 state 只是它的投影）；也别与**阅读场景**混称——那个词指浮层、注释载荷、Esc 归属与入架一问的交互现场
 
+**已载窗口（mounted window）**:
+阅读器里真正在 DOM 里的那几章 = 视口章所属的**连续区间** ∩ 视口之前 `KEEP_BEHIND` 章的深度。裁它是防连续前读时 DOM 只增不减；窗口顶之外由 `checkBackfill` 按真实视口补回，回溯阅读不因此失效。
+_唯一实现_: `client/reader-session.ts` 的 `pruneToViewport` / `checkBackfill`
+_Avoid_: 缓存（磁盘那一层是 `services/cache.ts` 的 `PageCache`）、预取（那是向后的另一半）
+
+**滚动补偿（scroll fix）**:
+裁掉视口上方的章、往窗口顶前插一章之后，让读者眼前的正文**原地不动**的那笔账：DOM 提交前量不到新布局，所以只记账、在 `afterRender` 按实测高度结算。浏览器的自动锚定在阅读器子树整棵关掉（`overflow-anchor: none`），否则一次内容位移会被补两遍。
+_唯一实现_: `client/reader-session.ts` 的 `pendingScrollFixes` / `applyScrollFixes`（关锚定住 `client/styles/reader.ts`）
+_Avoid_: 锚点（那是测量的静态位置，`client/reader-geometry.ts`）、进度恢复（那是 `client/progress.ts`）；也别叫「滚动锚定」——那个名字属于被关掉的浏览器行为
+
 **阅读浮层（reader surface）**:
 阅读器右上角那一层的在场判据：Aa／目录／导出／注释／导入说明**至多一角在场**（同住右上角的两面叠起来，底下那面看得见点不动）；换角时注释面板只收不消费，Esc 走「关闭」那条语义（裁决见 `ADR-0037`）。
 _唯一实现_: `client/reader-surfaces.ts`（`openSurface` / `closeAll` / `dismissSurface` / `maskFor` / `escOwner`）
@@ -409,6 +424,11 @@ _唯一实现_: `tsdown.config.ts` 的 `dsh-novel-bundle-purity` 插件 + 平台
 _Avoid_: external / noExternal 配置（那是宿主侧 bundler 的事）
 
 ## 基础设施与装配
+
+**同源 fence（origin fence）**:
+`/novel-api` 的进入判据四步：远端是 loopback → `Host` 在本机名单（`localhost` / `127.0.0.1` / `[::1]`，可经 `apiAllowHosts` 追加别名）→ Origin 在场必须同源 → Referer 在场必须同源。钉 Host 那一步防的是 DNS rebinding：攻击者域名解析到 `127.0.0.1` 时，「远端是本机」与「Origin 与 Host 同源」会同时成立。无 Origin / 无 Referer 放行是给本机工具与 curl 的承诺。
+_唯一实现_: `api/wire.ts` 的 `fenceDenialOf`（四步判据）与 `fenceAllowlist`（名单归一，构造期一次）；403 的可行动措辞在 `api/dispatch.ts` 的 `fenceDenialMessage`；`apiAllowHosts` 是配置键（静态、需重启），追加别名的代价见 `ADR-0016`
+_Avoid_: CORS（那是浏览器的跨源放行，不是本闸）、鉴权（这一闸不认用户身份）、只比 Referer（Origin 缺席那条路会漏）
 
 **配置缝（config seam）**:
 原始 cordis 配置 → 类型 / schema / 缺省 / 值域的唯一边界；缺省字面量的主人仍是各消费模块的 `DEFAULT_*` 常量。

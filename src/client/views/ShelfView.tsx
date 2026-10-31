@@ -101,6 +101,11 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
     void loadPanelShelf({
       apiGet: deps.apiGet,
       describeError: (e) => describeError(e, t),
+    }).then((outcome) => {
+      // 读面成功才清封面失败表：一次瞬时失败不许在面板存活期内永久降级成首字块
+      //（书城换轮即清同一族）。`failed` 不清——旧表对应的仍是用户看得见的那批卡片；
+      // `stale` 也不清——那一发读的不是这一屏，判据必须取「这一发的落点」而不是投影里的旧读数。
+      if (outcome === 'ok') setImgFailed({})
     })
   }
   useEffect(() => { loadShelf() }, [])   // eslint-disable-line react-hooks/exhaustive-deps

@@ -109,8 +109,8 @@ function requireParallelStep(n: number): number {
 /** 服务的直装缝：把逐字段值装成 ResolvedConfig 形状。不能调 resolveConfig——config.ts 已 import
  *  本文件的 DEFAULT_*，反向运行期依赖会成环；ResolvedConfig 只做 type-only import。
  *  `exportDelayMs` 不是服务的旋钮（HTTP 导出面自己读组合根给的值），这里给缺省只为满足读数面的形状；
- *  proxyUrl / dataDir 不在这里出现——它们是可选格，代理读数归 fetcher 自己的复用/关闭语义
- *  （由 createFetcherWith 单独传入），数据目录归组合根。 */
+ *  proxyUrl / dataDir / apiAllowHosts 不在这里出现——它们是可选格，代理读数归 fetcher 自己的复用/关闭语义
+ *  （由 createFetcherWith 单独传入），数据目录归组合根，fence 的别名名单归 HTTP 门面（api/dispatch）。 */
 function staticLiveConfig(parts: {
   searchTimeoutMs?: number
   searchParallel?: number

@@ -53,7 +53,9 @@ export function CityBookSheet({ book, sourceId, sourceName, deps, onClose }: {
   book: ExploreBook; sourceId: string; sourceName: string; deps: JobViewDeps; onClose: () => void
 }): ReactNode {
   const t = useCopy()
-  const search = useSearchJob(deps, t)
+  // 恢复读只落快照、不开观察通道：本层只认自己 POST 回来的 ownId，恢复读到的那轮一条都展示不了，
+  // 为它开流/轮询纯属白占连接（搜索面才需要完整恢复）。
+  const search = useSearchJob(deps, t, { resume: false })
   /** 按过那颗钮才算「要跨源」：在那之前搜索面持有的轮次不是本浮层的读数，一条都不列 */
   const [asked, setAsked] = useState(false)
   /** 本浮层最近一次成功 POST 回来的轮次 id（同关键词的别人那轮不认）。 */

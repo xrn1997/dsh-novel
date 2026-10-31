@@ -1,5 +1,6 @@
 import { chromium } from 'playwright-core'
 import type { Browser, BrowserContext } from 'playwright-core'
+import { FetchError } from './errors.js'
 import { splitUserAgent } from './fetcher.js'
 import { isDirectProxy, parseProxyUrl, proxyUrlWithScheme } from './proxy.js'
 import { readValue, type ValueSource } from './value-source.js'
@@ -107,6 +108,16 @@ export class WebViewRuntime {
   }
 
   async fetch(url: string, opts: WebViewOptions = {}): Promise<WebViewPage> {
+    // scheme 闸：HTTP 支线经 undici 天然只支持 http(s)，浏览器支线没有等效约束——
+    // 放行 file:// 等于把「书源脚本可读任意本地路径」这条已被引擎拒绝的能力从侧门还回去。
+    // 读面（webView:true）与脚本面（java.webView / @webjs:）都从这一个收口进出。
+    let scheme: string
+    try { scheme = new URL(url).protocol } catch {
+      throw new FetchError(`WebView 地址不是合法 URL：${url}`, { url })
+    }
+    if (scheme !== 'http:' && scheme !== 'https:') {
+      throw new FetchError(`WebView 只接受 http(s) 地址，拒绝 ${scheme}：${url}`, { url })
+    }
     const browser = await this.launch()
     const proxy = proxyConfig(readValue(this.opts.proxyUrl ?? null))
     // UA 归 context.userAgent：塞进 extraHTTPHeaders 会被浏览器默认 UA 覆盖/并存

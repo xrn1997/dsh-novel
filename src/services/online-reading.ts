@@ -8,6 +8,7 @@ import { normalizeChapterText } from './chapter-content.js'
 import { contentToText } from './content.js'
 import { ChapterNotFoundError, RuleMissingError, SourceNotFoundError } from './errors.js'
 import { lruGet, lruSet } from './lru.js'
+import { log } from './log.js'
 import { followPages } from './pagination.js'
 import type { FollowResult } from './pagination.js'
 import { absUrlKeepOption, assembleRequest, canonUrl, stripUrlOption } from './request.js'
@@ -57,6 +58,23 @@ interface TocMemo {
 
 /** 目录内存缓存上限：读面一次只读一本，留几本给换书/返回；超出按最久未用淘汰。 */
 const TOC_MEMO_LIMIT = 8
+
+/** 追加地址进日志前脱敏：定位需要 origin + path，query / fragment 里的签名、过期 token 不该
+ *  跟着进宿主持久日志。解析不出就截断——留痕宁短勿泄。 */
+function redactSubUrl(raw: string): string {
+  try {
+    const url = new URL(raw)
+    return `${url.origin}${url.pathname}${url.search === '' ? '' : '?…'}${url.hash === '' ? '' : '#…'}`
+  } catch {
+    return raw.length > 120 ? `${raw.slice(0, 120)}…` : raw
+  }
+}
+
+/** 脱敏错误消息里自带的地址：`FetchError` 的措辞就是 `请求失败 503: <url>` / `请求超时 …: <url>`，
+ *  只脱敏单独打印的那条链接不够——消息里的原串照样会把 query 凭证带进日志。 */
+function redactUrlsIn(text: string): string {
+  return text.replace(/https?:\/\/[^\s"'<>）)]+/gi, (url) => redactSubUrl(url))
+}
 
 export class OnlineReading {
   private readonly tocInflight = new Map<string, Promise<TocMemo>>()
@@ -213,7 +231,8 @@ export class OnlineReading {
     )
     let text = result.items.join('\n')
     // subContent 在**拼页之后**求值（上游 BookContent.kt 口径：循环结束后用 analyzeRule 的末页上下文），
-    // 以 http 开头时先把那页取回来当子正文；取不到/为空静默跳过——它是追加物，不该把整章判死。
+    // 以 http 开头时先把那页取回来当子正文。它是追加物，链接坏了不许把整章判死（规则求值本身的错仍然抛）。
+    let subFetchFailed = false
     if (subContentRule !== null && lastPage.page !== null) {
       const sub = firstValue(
         await subEval(subContentRule, { html: lastPage.page.body, json: lastPage.page.json, baseUrl: lastPage.page.url }, 'content', 'value'),
@@ -221,12 +240,26 @@ export class OnlineReading {
       )
       if (sub !== null && sub.trim() !== '') {
         const raw = sub.trim()
-        const body = /^https?:\/\//i.test(raw) ? await fetchSourceText(this.parts.request, s, raw) : raw
+        // 「取回失败」与「取回后为空」是两种值，不许折叠（取值规约同 `ADR-0002` 那一族）：
+        // 空 = 这源此刻确实没有追加段，落缓存没问题；失败 = 我们不知道，一次瞬时 503 若跟着落盘，
+        // 「缺追加段的残章」就钉在这个槽位上直到代际更替才自愈——那是拿合法形状冒充完整正文。
+        // 因此失败这一次照读、留痕点名是哪一章哪条链接，但**不落缓存**，下一次重取。
+        let body = raw
+        if (/^https?:\/\//i.test(raw)) {
+          try {
+            body = await fetchSourceText(this.parts.request, s, raw)
+          } catch (e) {
+            body = ''
+            subFetchFailed = true
+            log.warn(`子正文取回失败（源「${s.name}」第 ${chIndex + 1} 章「${target.name}」，追加地址 ${redactSubUrl(raw)}）：`
+              + `${redactUrlsIn(e instanceof Error ? e.message : String(e))}——本次只交正文页，且不落缓存`)
+          }
+        }
         const plainSub = normalizeChapterText(contentToText(body))
         if (plainSub.trim() !== '') text += '\n' + plainSub
       }
     }
-    await this.parts.cache.setContent(sourceId, bookKey, chIndex, slot, text)
+    if (!subFetchFailed) await this.parts.cache.setContent(sourceId, bookKey, chIndex, slot, text)
     return text
   }
 

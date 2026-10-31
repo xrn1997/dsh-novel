@@ -200,3 +200,39 @@ describe('panelShelf（面板期书架投影）', () => {
     expect(panelShelf.get().landed.size).toBe(0)
   })
 })
+
+/**
+ * 落点（`PanelShelfRead`）住在 `panel-shelf.ts`，视图不再自己从投影里猜「这一发成没成」：
+ * 被代际作废的那发提前 resolve 时，`panelShelf.get()` 里躺着的是**上一发**的读数——
+ * 拿它当本轮成功，书架视图就会在错误的时机清掉封面失败表。
+ */
+describe('loadPanelShelf 的落点', () => {
+  it('成功 = ok，读面失败 = failed，被作废 = stale', async () => {
+    expect(await loadPanelShelf(deps(async () => [entry('k1')]))).toBe('ok')
+    expect(await loadPanelShelf(deps(async () => { throw new Error('x') }))).toBe('failed')
+    let release!: (list: ShelfEntry[]) => void
+    const pending = loadPanelShelf(deps(() => new Promise<ShelfEntry[]>((r) => { release = r })))
+    resetPanelShelf()
+    release([entry('k1')])
+    expect(await pending).toBe('stale')
+  })
+
+  it('作废那发的 resolve 时刻，投影里的 error 仍是上一发留下的 null——所以判据不能取 store', async () => {
+    await loadPanelShelf(deps(async () => [entry('k1')]))      // 上一发成功：error === null
+    let release!: (list: ShelfEntry[]) => void
+    const pending = loadPanelShelf(deps(() => new Promise<ShelfEntry[]>((r) => { release = r })))
+    markPanelShelfLanded(['u1'])                                // 加架作废这一发
+    release([entry('k1')])
+    expect(await pending).toBe('stale')
+    expect(panelShelf.get().error, 'store 读数是别人的成功，不是这一发的落点').toBeNull()
+  })
+
+  it('并到同一发的调用方拿到同一个落点', async () => {
+    let release!: (list: ShelfEntry[]) => void
+    const apiGet = vi.fn(() => new Promise<ShelfEntry[]>((r) => { release = r }))
+    const p1 = loadPanelShelf(deps(apiGet))
+    const p2 = loadPanelShelf(deps(apiGet))
+    release([entry('k1')])
+    expect(await Promise.all([p1, p2])).toEqual(['ok', 'ok'])
+  })
+})

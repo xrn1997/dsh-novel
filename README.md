@@ -103,7 +103,7 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 | --- | --- |
 | `dshnovel_search` | 在已启用的**文本**书源中聚合搜索（当前仅支持小说文本面），与界面同判据、同视图：按书返回——同一（书名，作者）多家归并成一本、逐源各留一行，`failed` 逐家点名未答话的源，`searched`/`answered`/`filtered` 自报本轮账目；返回的 `url` 就是其他工具的 `bookKey`，调 `read` / `toc` 时还要带上该行的 `sourceId` |
 | `dshnovel_read` | 取某本书第 N 章（0 起）的正文纯文本（含章名）；章序从 `dshnovel_toc` 查。图文书同样只给文字：插图落成 `[图片：替代文字]` 占位（无替代文字则 `[图片]`） |
-| `dshnovel_toc` | 取书籍目录：逐章返回章名与 0 起 `chapterIndex`（章名→下标的唯一映射处）与章节 URL |
+| `dshnovel_toc` | 取书籍目录：逐章返回章名与 0 起 `chapterIndex`（章名→下标的唯一映射处）与章节 URL；目录超 1000 章时规范值只含前 1000 章，`total` 仍为全书章数、`chapterIndex` 仍可读任意章 |
 | `dshnovel_shelf` | 书架与阅读进度：`list` / `add` / `save_progress` / `remove` |
 | `dshnovel_source` | 书源管理：`list` / `probe`（真实搜索请求 + 失败定位）/ `enable`·`disable` / `remove` |
 | `dshnovel_import_source` | 导入 legado 书源 JSON 文本（内容可为对象或数组）；只做规范化 + 落盘不探针，逐条结果在 `outcomes[]`（含 `ok` / `missing` / `dupSkipped`） |
@@ -128,14 +128,15 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 | `exportDelayMs` | `300` | 范围导出的章节间抓取间隔（毫秒，串行限速） |
 | `localImportMaxBytes` | `52428800`（50MB） | 本地文件导入大小上限（字节，TXT / EPUB 共用） |
 | `proxyUrl` | 启动时自动探测 | 出站代理，见[常见问题](#常见问题)；`'direct'` 强制直连，或显式指定如 `'http://127.0.0.1:7897'` |
+| `apiAllowHosts` | 不追加 | `/novel-api` 同源 fence 的本机 Host 名单追加项，如 `['dsh.local']`；只有用自定义域名（hosts / 内部 DNS）打开宿主面板时才需要。每项只比主机名，端口只做形状校验、不参与匹配（`dsh.local:8080` 也放行 `dsh.local:9999`）。改它需重启；填进去的每个名字都是把 DNS rebinding 防线在那个域名上让掉，只填自己控制的 |
 
-除 `dataDir` 外，其余 7 项还可在宿主的「插件」页 → `@xrn1997/dsh-novel` 详情里的「运行参数」中编辑（需宿主支持插件配置页）；保存后立即生效，不需要重启插件。旧宿主没有这一页时，配置仍写在 profile 的 `cordis.patch.yml`。`dataDir` 始终需改该文件并重启。
+除 `dataDir` 与 `apiAllowHosts` 外，其余 7 项还可在宿主的「插件」页 → `@xrn1997/dsh-novel` 详情里的「运行参数」中编辑（需宿主支持插件配置页）；保存后立即生效，不需要重启插件。旧宿主没有这一页时，配置仍写在 profile 的 `cordis.patch.yml`。`dataDir` 与 `apiAllowHosts` 始终需改该文件并重启。
 
-数值项按整数校验；`proxyUrl` 只接受 `direct`、空串或 http(s) 地址（裸 `host:port` 按 `http://` 补全）。非法值（含 `NaN` / `Infinity`）在插件加载期报错；在插件页保存时被同样拒绝，页面保留草稿供修改。显式 `null` 按未设置处理、取缺省。
+数值项按整数校验；`proxyUrl` 只接受 `direct`、空串或 http(s) 地址（裸 `host:port` 按 `http://` 补全）；`apiAllowHosts` 每项只接受 `host` 或 `host:port`（不带 scheme、路径与空白），且必须是 URL 解析不改写的主机名写法——`2130706433` 这类会被改写成 IP 的别名在 fence 侧等于无效，加载期直接拒绝、不留静默空转。非法值（含 `NaN` / `Infinity`）在插件加载期报错；在插件页保存时被同样拒绝，页面保留草稿供修改。显式 `null` 按未设置处理、取缺省。
 
 ## HTTP API
 
-所有路由以 `/novel-api` 为前缀（仅接受本机 loopback；Origin/Referer 在场时必须同源，缺席放行以支持本机工具 / curl）。JSON 响应使用统一信封 `{ ok, value | error }`，错误附带 `code` 与可选的规则段级定位；`GET /export`、两条 SSE 流与 `GET /local/resource` 是流式 / 二进制响应，不套信封。共 36 条路由（30 静态 + 6 参数操作，计数由 `tests/shared/wire-builders.test.ts` 钉死）。**路由身份（method + path）与值形状的代码真相在 `src/shared/wire.ts`**——Node 半与浏览器半共用同一份定义，契约测试逐条把守。
+所有路由以 `/novel-api` 为前缀（信任判据四步：请求来自本机 loopback → `Host` 在本机名单内（`localhost` / `127.0.0.1` / `[::1]`，自己的别名走 `apiAllowHosts`）→ Origin 在场必须同源 → Referer 在场必须同源；Origin / Referer 缺席放行，那是给本机工具与 curl 的承诺。被 Host 名单挡住时 403 点名是哪个 Host、并指路 `apiAllowHosts`）。JSON 响应使用统一信封 `{ ok, value | error }`，错误附带 `code` 与可选的规则段级定位；`GET /export`、两条 SSE 流与 `GET /local/resource` 是流式 / 二进制响应，不套信封。共 36 条路由（30 静态 + 6 参数操作，计数由 `tests/shared/wire-builders.test.ts` 钉死）。**路由身份（method + path）与值形状的代码真相在 `src/shared/wire.ts`**——Node 半与浏览器半共用同一份定义，契约测试逐条把守。
 
 | 面 | 路由 |
 | --- | --- |
@@ -180,7 +181,7 @@ $DSH_HOME/novel/
 
 URL 模板语义按 legado 书源格式对齐：`url,{json}` 选项的逗号两侧允许空白；模板内 `{{...}}` 按 JS 求值（`{{java.encodeURI(key)}}`、`{{page*2}}`、源级 `jsLib` 定义的全局如 `{{host}}`），变量占位 `{{key}}`/`{{page}}` 保持原有的 URL 编码口径；URL 里的 js 块可出现在任意位置（`<js>…</js>` 闭区间、`@js:` 吃到串尾、块间字面文本按 `@result` 拼接）；`charset` 同时用于**请求体编码**与响应解码（GBK 站点才搜得到）；`&&` 跳过空 / Miss 分支后按序合并，`%%` 在取值用途跳过空 / Miss、列表用途按首支驱动（首支为空则整条为空）。
 
-遇到不认识的语法，本插件选择**报错而不是猜测**——错误定位到出错的规则段，而不是产出错误结果。`webView`/`webJs` 走本机已装的 Edge/Chrome；没有可用浏览器、或书源依赖安卓专有 API / 加密侧能力时，会明确报告不支持。
+遇到不认识的语法，本插件选择**报错而不是猜测**——错误定位到出错的规则段，而不是产出错误结果。语法合法但跑得炸的正则（嵌套量词遇上不匹配的长输入）同一条路：每条用户正则都有一条随工作量放宽的时间死线，到点只废掉那一条规则并点名它，不会让一条坏正则把宿主的主线程钉住。`webView`/`webJs` 走本机已装的 Edge/Chrome；没有可用浏览器、或书源依赖安卓专有 API / 加密侧能力时，会明确报告不支持。
 
 **「做到哪一步」有机器口径**：`tests/legado-coverage/matrix.ts` 一行一条 legado 语义，每行归入 实现 / 环境不适用 / 待拍板 三态之一：implemented 行带实现符号与钉住用例，not-applicable 行写裁决理由，open 行带 `2026-MM-DD` 复核戳。四门默认随 `pnpm test` 跑（见 [docs/development.md 的「兼容判据四门」](docs/development.md#兼容判据四门)）。想查某个字段支不支持：在矩阵里按 `id` 或能力名搜那一行即可。
 
@@ -194,6 +195,12 @@ URL 模板语义按 legado 书源格式对齐：`url,{json}` 选项的逗号两�
 
 **`webView` / `webJs` 源报「WebView 不可用」？**
 本插件用 `playwright-core` 驱动本机已安装的 Edge/Chrome（不下载浏览器）。装一个 Edge 或 Chrome 即可；两者都没有时会如实报错，不会静默退回普通 HTTP 请求。
+
+**某条规则报「正则求值超时（疑似灾难性回溯）」？**
+那条写法语法合法，但遇上不匹配的长输入会指数级回溯。插件给它一条随页面大小放宽的时间死线，到点只废掉**这一条规则**并点名它，而不是让整台宿主卡住——所以症状是「这一源这一段报错」，不是「读不了」。解决：改源里那条正则（去掉嵌套量词），或换一家源。
+
+**面板满屏报「非受信来源」403？**
+`/novel-api` 的同源 fence 只认本机 Host（`localhost` / `127.0.0.1` / `[::1]`），这是 DNS rebinding 的防线：攻击者把自家域名的 A 记录指到 `127.0.0.1` 时，「远端是本机」与「Origin 与 Host 同源」会同时成立。若你用自己的域名、hosts 别名，或用反向代理改写了 Host 打开宿主面板，把那个名字加进配置 `apiAllowHosts` 并重启插件；403 的正文会点名是哪个 Host 被拒。要清楚代价：填进去的每个名字，都是在那个域名上把这道防线让掉——只填自己控制的。
 
 **安装后侧栏没有出现「小说」入口？**
 先重启宿主。若从源码目录安装，确认已先 `pnpm build` 生成 `lib/`（构建产物缺失会让整个插件树拒绝挂载，宿主直接启动失败而非静默降级），详见 [docs/development.md 的「本地源码调试」](docs/development.md#本地源码调试)；GitHub Release 的 tarball 自带 `lib/`，不必构建。装进了没有 `slots` / `layout` 界面 bundle 的 profile，则本就只有工具面、没有侧栏入口。

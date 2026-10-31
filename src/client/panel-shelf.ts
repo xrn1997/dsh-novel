@@ -36,10 +36,16 @@ export interface PanelShelfDeps {
   describeError: (error: unknown) => string
 }
 
-let inflight: Promise<void> | null = null
+let inflight: Promise<PanelShelfRead> | null = null
 /** 投影代际：卸载、删除对账与新记入的加架都递增，起始更早的在途响应按它丢弃——
  *  卸载后旧请求不许回写新投影，删前/加前快照也不许把书架读数打回去。 */
 let generation = 0
+
+/** 一发读取的落点。`ok` = 这一发**胜出代际**且读面成功；`failed` = 胜出但读面失败（投影已写成
+ *  `[] + error`）；`stale` = 被代际作废，它读到的那一屏不是用户现在看的这一屏。
+ *  调用方要区分「读面成功」与「这一发还算数吗」：只读 `panelShelf.get()` 会拿到**别人的**成功——
+ *  作废的那发提前 resolve 时，投影里仍是上一发留下的读数。 */
+export type PanelShelfRead = 'ok' | 'failed' | 'stale'
 
 /** 作废旧读：三者都改变书架读取面；新的一发由下一次挂载 / `ensurePanelShelf` / `loadPanelShelf` 再起。 */
 function invalidateReads(): void {
@@ -48,20 +54,23 @@ function invalidateReads(): void {
 }
 
 /** 取一次书架（并发调用并到同一发）。成功后以服务端列表为基线，与既有落架账取并集
- *  （写成功过、服务端列表短暂滞后也不丢账）；删除由 `removePanelShelfBooks` 对账。 */
-export function loadPanelShelf(deps: PanelShelfDeps): Promise<void> {
+ *  （写成功过、服务端列表短暂滞后也不丢账）；删除由 `removePanelShelfBooks` 对账。
+ *  落点是**这一发**的（`PanelShelfRead`），不是投影里此刻的读数——作废的那发也会 resolve。 */
+export function loadPanelShelf(deps: PanelShelfDeps): Promise<PanelShelfRead> {
   if (inflight !== null) return inflight
   const gen = generation
   inflight = deps.apiGet(ROUTES.shelf.path).then(
-    (list) => {
-      if (gen !== generation) return
+    (list): PanelShelfRead => {
+      if (gen !== generation) return 'stale'
       const landed = new Set([...panelShelf.get().landed, ...list.map((b) => b.bookKey)])
       panelShelf.set({ books: list, error: null, landed })
+      return 'ok'
     },
-    (e) => {
-      if (gen !== generation) return
+    (e): PanelShelfRead => {
+      if (gen !== generation) return 'stale'
       // 失败不伪装成空架：books 置空 + error，视图据此显示不可用而不是「书架空空」
       panelShelf.set({ books: [], error: deps.describeError(e) })
+      return 'failed'
     },
   ).finally(() => {
     // 旧代的 finally 不许清掉新一代的在途句柄

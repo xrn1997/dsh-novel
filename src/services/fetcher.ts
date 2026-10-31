@@ -226,8 +226,11 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
           // 交给 loginCheckJs 先看正文，补抛由源请求缝在「脚本没替换」时做。
           const failed = init?.manual === true ? false : init?.noFollow === true ? res.status >= 400 : !res.ok
           if (failed) {
-            if (attempt < attempts) continue
+            // 失败响应体也要归还连接池：不消费不 cancel 时 undici 不回收 socket，
+            // 批量验源（每源 1–4 次失败请求）会瞬时攥住一串连接，只能等 GC 兜底。
+            if (attempt < attempts) { await res.body?.cancel().catch(() => undefined); continue }
             if (init?.allowError !== true) {
+              await res.body?.cancel().catch(() => undefined)
               throw new FetchError(`请求失败 ${res.status}: ${url}`, { url, status: res.status })
             }
           }

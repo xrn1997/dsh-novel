@@ -313,6 +313,9 @@ describe('写路由 body：构造器与读口同源（wire 单点承诺的另一
     expect(() => readBodies.searchJob({ keyword: '   ' })).toThrow(/缺 body 字段/)
     expect(() => readBodies.searchJob({ keyword: 'k', sourceIds: 's1' })).toThrow(/需为 string\[\]/)
     expect(() => readBodies.exploreList({ sourceId: 's' })).toThrow(/kind/)
+    // 表位值类型也要查：非字符串值会一路拼出 "[object Object]" 垃圾出站头
+    expect(() => readBodies.auth({ [BODY.cookies]: { token: 1 } })).toThrow(/Record<string,string>/)
+    expect(() => readBodies.auth({ [BODY.cookies]: { token: 'a' }, [BODY.headers]: { ua: null } })).toThrow(/Record<string,string>/)
     expect(() => readBodies.auth(null)).toThrow(/cookies/)
     expect(() => readBodies.auth({ cookies: [] })).toThrow(/cookies/)
     // 认不出的 headers 不许静默丢掉：整字段被忽略等于拿半份配置冒充录入了

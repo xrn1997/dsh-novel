@@ -65,6 +65,41 @@ describe('retry option', () => {
   })
 })
 
+describe('失败响应体归还连接池', () => {
+  /** 真 ReadableStream 的响应：`cancel` 被调用才算连接没攥在手里等 GC（不消费不 cancel 时 undici 不回收 socket）。
+   *  `end` = 流会自行关闭：已关闭的流上 `cancel` 是 no-op，所以「验证不许 cancel」那侧必须让流活着到读完之后。 */
+  function trackedResponse(status: number, cancelled: string[], end: boolean): Response {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('nope'))
+        if (end) setTimeout(() => { try { controller.close() } catch { /* 已被 cancel 关掉 */ } }, 0)
+      },
+      cancel(reason) { cancelled.push(String(reason)) },
+    })
+    return new Response(stream, { status })
+  }
+
+  it('重试的每一发失败体都 cancel；最终抛错那一发也 cancel', async () => {
+    const cancelled: string[] = []
+    let calls = 0
+    const f = createFetcher({ fetchImpl: async () => { calls++; return trackedResponse(503, cancelled, false) } })
+    await expect(f.fetchPage('https://a.test/x', { retry: 1 }))
+      .rejects.toMatchObject({ name: 'FetchError', status: 503 })
+    expect(calls).toBe(2)
+    await new Promise((r) => setTimeout(r, 0))          // cancel 由流协议异步落地
+    expect(cancelled, '两发失败体都要归还：批量验源会瞬时攥住一串连接').toHaveLength(2)
+  })
+
+  it('allowError 的失败页照旧交给调用方读：不许 cancel（cancel 会把内容吞掉）', async () => {
+    const cancelled: string[] = []
+    const f = createFetcher({ fetchImpl: async () => trackedResponse(503, cancelled, true) })
+    const page = await f.fetchPage('https://a.test/x', { allowError: true })
+    expect(page.status).toBe(503)
+    expect(page.raw.toString()).toBe('nope')
+    expect(cancelled, '调用方还要读这具尸体').toHaveLength(0)
+  })
+})
+
 describe('cookie jar', () => {
   it('absorbs Set-Cookie and sends it on the next request', async () => {
     const seen: Array<Record<string, string> | undefined> = []

@@ -62,7 +62,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 
 一条不对称要记住：**面（`Facet`）不改变求值语义**，它只进错误定位与 trace；**用途（`RuleUsage`）改变形状**，且只有这一个轴被允许改变形状（`ADR-0007`）。把它们混为一谈会生出「面决定语义」的假口径。
 
-链语义是单点：一条链只有一份 generator，两个驱动器对链本身零知识；js 段是唯一需要跨 `await` / 跨线程的段，所以它是唯一的 `yield` 点，也是唯一允许把宿主能力带进求值层的口子（`ADR-0005`）。服务层跑脚本只走 `js-sandbox.ts` 的 `runScript` 一扇门，而它的入参**就是 `EvalContext`**（曾逐字段抄一份能力清单，于是同一段脚本从这扇门进就少 `fetchPost`/`userAgent`/`book`/`chapter`）；超时预算的三个数各有名字与家：调用方给的 `jsTimeoutMs`、worker 那条 race 的 `ASYNC_GRACE_MS`、worker 内单次宿主往返的 `WORKER_RPC_DEADLINE_MS`。递归求值口的用途判据同样只有一处（`engine/sub-rule.ts` 的 `subRuleOf`，归属见本文 §4 的子规则行；why 与被否方案见 `ADR-0007`）。
+链语义是单点：一条链只有一份 generator，两个驱动器对链本身零知识；js 段是唯一需要跨 `await` / 跨线程的段，所以它是唯一的 `yield` 点，也是唯一允许把宿主能力带进求值层的口子（`ADR-0005`）。服务层跑脚本只走 `js-sandbox.ts` 的 `runScript` 一扇门，而它的入参**就是 `EvalContext`**（曾逐字段抄一份能力清单，于是同一段脚本从这扇门进就少 `fetchPost`/`userAgent`/`book`/`chapter`）；超时预算的三个数各有名字与家：调用方给的 `jsTimeoutMs`、worker 那条 race 的 `ASYNC_GRACE_MS`、worker 内单次宿主往返的 `WORKER_RPC_DEADLINE_MS`。用户正则另有一条**独立**预算（随工作量放宽，见 `ADR-0050`），它不在那三个数里：那条闸守的不是「脚本能跑多久」，而是「主线程被一条正则钉多久」（单点 `engine/regex-guard.ts`，归属见本文 §4 的死线行）。递归求值口的用途判据同样只有一处（`engine/sub-rule.ts` 的 `subRuleOf`，归属见本文 §4 的子规则行；why 与被否方案见 `ADR-0007`）。
 
 文法区域（`{{…}}` / `@put:{…}` / `<js>`）先于任何切分被整体剥离，判据只住在 `engine/grammar.ts`——区域里的 `||`、`&&`、`@`、`$1` 是代码内容而不是文法记号。构词与解析同属一处，方言拼串走 round-trip 自校验。
 
@@ -100,6 +100,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 组合符形状与驱动长度 | `engine/combine.ts`（读 `usage`） | 链衔接 |
 | 子规则求值用途（`java.getString*` / 模板 `{{…}}` / `@put` 的 value/list 判据） | `engine/sub-rule.ts` 的 `subRuleOf`（文本 + 用途绑成 `SubRule`；取值终端判据 `engine/select.ts` 的 `isValueTerminal`）；求值入口 `engine/evaluate.ts` 的 `evaluateRef` / 模板插值 `interpolateTemplate` / `engine/js-protocol.ts` 的 `evalRule` | 主链用途（`engine/parse.ts` 的 `classifyDefault` / `ParsedRule.usage`）、组合符语义（`engine/combine.ts`） |
 | 行模板的判定与绑定 | `engine/regex-row.ts`（同一份文法的两面） | 模板字面段 |
+| 用户正则的死线求值（时间预算算式、批量一趟且批内每条独立的口径、超时把 `lastIndex` 归零、跨 realm 返回值的实情） | `engine/regex-guard.ts` 的 `deadlineFor` 与五条 `vm.Script`（取舍与被否方案见 `ADR-0050`） | 规则语法解析（`engine/grammar.ts`）、超时落成哪条带定位的错误（各调用点转 `RuleEvalError`，见 `engine/errors.ts` 的 `RegexDeadlineError` 归属）、js 沙箱那条预算（`config.ts` 的 `jsTimeoutMs`） |
 | `EngineValue → 单串` | `engine/js-utils.ts` 的 `engineValueToString` | 业务字段语义 |
 | 宿主方法面（名字 / 挂载 / 分派 / async 桥） | `engine/js-protocol.ts` 的协议表（async 行另带 `bridge` 判别：壳形态、挂载名、路由探针；桥壳源码与 `g.java` 挂载由表生成，生成文本插进 `js-sandbox.ts` 的 `BOOTSTRAP` 串——沙箱边界见 `ADR-0004`，主线程与 worker 同口径见 `ADR-0005`）。加一个 **sync** 方法 = 表加一行；加一个 **async** 方法 = 表加一行 + 一个 `bridge`；且它读的 `ctx.*` 能力位必须由 `services/source-eval.ts` 的 `engineContextOf` 供出——桥壳 / 挂载 / 路由与能力位都有机器闸（`tests/engine/js-protocol.test.ts` 的 async 行闸） | 真实网络 |
 | 脚本可见面（`EvalContext` 字段 → init 键 → 脚本全局名 / excluded） | `engine/script-surface.ts` 的 `SCRIPT_FIELDS`（`Record<keyof EvalContext, …>`：加字段时 `tsc` 逼你选归属）/ `scriptInitOf` / `scriptGlobals`（消费点 `js-sandbox.ts` 的 `initOf` 与 BOOTSTRAP 简单全局） | `result` / `mounts` 等求值期字段（`js-sandbox.ts` 的 `initOf`）、book/chapter/source 的自定义物化（BOOTSTRAP） |
@@ -109,7 +110,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 出站（超时 / 代理 / 解码 / 状态） | `services/fetcher.ts`，`@js` 复用同一出口 | 缓存与业务 |
 | 源请求执行（动态头 / 限速 / webview / loginCheck（含 4xx、5xx 错误页）/ cookie 桥；只按计划**选 charset**——解码本身归 `services/fetcher.ts` 的 `decodeBody`） | `src/services/source-request.ts` 的 `createSourceRequest` / `SourceRequest`（`fetcherFor` 给脚本出站与引擎脚本的浏览器能力，`fetchText` / `fetchPage` 给读面） | 模板解析与选项语义（归 `services/request.ts` 的 `assembleRequest`）、解码（`decodeBody`）、动态头规则本身的求值（归 `services/source-eval.ts` 的 `resolveHeaders`）、缓存与业务判据、探针判据 |
 | 源脚本求值（能力面装配 / 动态头求值、非递归与回退 / 脚本可见的 `book` 镜像） | `services/source-eval.ts` 的 `createSourceEval` / `engineContextOf` / `resolveHeaders` / `bookMirrorOf` | 面枚举与 `EvalContext` 形状（`engine/types.ts`）、抓取与限速（`source-request`）、逐面给哪些身份字段与 `chapter` 的形状（调用方） |
-| HTTP cookie jar（域/路径/过期/Secure；跨源共享） | `services/cookies.ts` 的 `CookieJar`；Set-Cookie 自动吸收/回带归 `services/fetcher.ts` | 脚本侧按源隔离的 cookie 垫片（`SourceSession.cookieJar`）、浏览器 cookie 桥（`source-request`）；跨源共享的裁决见 `ADR-0039` |
+| HTTP cookie jar（域/路径/过期/Secure/容量闸；跨源共享） | `services/cookies.ts` 的 `CookieJar`；Set-Cookie 自动吸收/回带归 `services/fetcher.ts` | 脚本侧按源隔离的 cookie 垫片（`SourceSession.cookieJar`）、浏览器 cookie 桥（`source-request`）；跨源共享的裁决见 `ADR-0039` |
 | 源状态会话（脚本可见的四张按源表；写只标脏，求值边界与卸载成批同步落盘（`evalJs` 的 `finally`、`ReadingService.flush`、组合根 dispose），删源当场落盘且此后该源的在途句柄不再写回） | `services/source-session.ts` 的 `FileSourceSession`（`forget` / `flush`）；接口在 `engine/session.ts` 的 `SourceSession`（落盘缝是可选方法） | 页面缓存（`services/cache.ts`）、登录态 `SourceAuth`（`services/sources.ts`）；同步写的例外与理由见 `ADR-0013` |
 | 真浏览器运行时（启动 Edge/Chrome、上下文、超时、关闭） | `services/webview.ts` 的 `WebViewRuntime` | 限速与 cookie 桥（`source-request`）、规则求值 |
 | 源级限速（`concurrentRate` 解析与令牌桶） | `services/rate-limit.ts` 的 `parseConcurrentRate` / `RateLimiter` | 出站时序与按源装配（`source-request`） |
@@ -135,8 +136,9 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 本地书身份（`bookKey` 的 `local:<uuid>` 形态） | `services/localbooks.ts` 的 `BOOK_KEY_RE` / `isLocalBookKey`（`LOCAL_SOURCE_ID` 常量本身归 `shared/wire.ts`） | 本地/在线内容分流（`services/book-content.ts`）、EPUB 包内解析（`services/epub/`） |
 | 聚合搜索的参与集 | `services/participation.ts` 的 `participates`（发现面谓词 `exploreParticipates` 同文件） | 源清单读写 |
 | 错误类目 → HTTP | `services/errors.ts` + `api/wire.ts`（两分法） | 路由自检错误 |
+| 同源 fence 的四步判据（远端 → Host → Origin → Referer）与本机 Host 名单 | `api/wire.ts` 的 `fenceDenialOf`（`isTrustedRequest` 只是它的布尔投影）/ `fenceAllowlist` / `LOOPBACK_HOSTNAMES`；追加别名的形状与缺省住 `config.ts` 的 `apiAllowHosts`，403 的可行动措辞住 `api/dispatch.ts` 的 `fenceDenialMessage`；为什么要这一闸与让渡了什么见 `ADR-0016` | 路由身份与 body 形状（`shared/wire.ts`）、错误 → 状态码的两分法（上一行） |
 | cookie 串的 `k=v;` 解析（登录脚本产出与登录面板手工输入同一条语法） | `shared/cookies.ts` 的 `parseCookieString` | 登录态往哪落盘（`services/reading.ts` 的 `saveAuth` / `runLogin`） |
-| 日志前缀与级别出口 | 唯一主人 `services/log.ts` 的 `log` / `setLogSink`（运行时 adapter = console + 宿主 `ctx.logger` 双腿，组合根卸载时复位 console）；**例外**：engine 防线的缺省 sink（`engine/js-sandbox.ts` 的 `consoleGuardSink`）自持一份前缀——依赖方向红线要求 engine 不得 import services，只有注入路径的前缀归缝 | 日志往哪投（宿主日志面的去向归宿主） |
+| 日志前缀与级别出口 | 唯一主人 `services/log.ts` 的 `log` / `setLogSink`（运行时 adapter = console + 宿主 `ctx.logger` 双腿，组合根卸载时复位 console）；**例外**：engine 防线的缺省 sink（`engine/js-sandbox.ts` 的 `consoleGuardSink`）自持一份前缀——依赖方向红线要求 engine 不得 import services，只有注入路径的前缀归缝。未处理 rejection 的级别裁决（引擎错误与泄漏的 `RegexDeadlineError` → `error`，脚本侧 → `warn`）住同一文件的 `unhandledGuardHandler` | 日志往哪投（宿主日志面的去向归宿主） |
 | 任务过程行 | 缓冲与上限：`services/job-tail.ts` 的 `JobTail`；接到宿主 `readOutput` 上那段登记机械：`services/job-holder.ts` 的 `HostTie`（三个持有者共读这一份，`start()` 内同步取 hooks 的顺序只在这里记一次） | 整轮结果与业务明细（那归各持有者的快照读面，`ADR-0018`）；状态形状与槽政策 |
 | 「本轮状态变了」信号 | `services/job-holder.ts` 的 `ChangeSignal`（只发信号不发数据；观察者自取快照、各持游标） | 快照形状、游标推进、换轮与整帧替换的裁决（那归浏览器半两个观察模块） |
 | 整轮搜索结果 | `services/search-job.ts`（Node 半持有） | wire 形状 |
@@ -165,10 +167,10 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 客户端可见文案与错误展示 | `client/copy/index.tsx` 的 `ZH` / `EN` / `createTranslate` / `zhTranslate` / `CopyProvider` / `useCopy`（字典与取词入口）+ `client/copy/search.ts`（搜索收口句的整句模板与子句键）+ `client/copy/search-summary.ts` 的 `searchSummarySegments`（按模板组装成段）+ `client/api.ts` 的 `describeError` / `NetworkReason`（客户端网络错误的翻译判据） | 服务端错误原文、AI 工具描述、插件卡片的 `locale` 元信息 |
 | 阅读时序 | `client/reader-session.ts` | DOM 测量实现（`client/reader-geometry.ts`） |
 | 阅读器几何（`ReaderPort` 的纯几何实现：锚点/视口偏移/目标偏移（逐个与批量同读数，批量只建一次章内节点索引）/当前节点） | `client/reader-geometry.ts` 的 `createReaderGeometry` / `currentNodeOf`（底层坐标换算 `client/scrollport.ts`） | 阅读时序（`client/reader-session.ts`）、滚动/排版事件（`ReaderView`） |
-| 阅读渲染后拍点（落位 → 预取 → 重测锚点；这一趟无条件重测——它是唯一知道新章块已提交进 DOM 的时刻，滚动帧那次可能量在提交之前） | `client/reader-session.ts` 的 `afterRender`（视图只 `refreshPort` 后调它） | DOM 测量（`client/reader-geometry.ts` 的 `ReaderPort`）、滚动/排版事件（`ReaderView`） |
+| 阅读渲染后拍点（落位 → 重测锚点 → 结算滚动补偿 → 预取/回溯补载；这一趟无条件重测——它是唯一知道新章块已提交进 DOM 的时刻，滚动帧那次可能量在提交之前） | `client/reader-session.ts` 的 `afterRender`（视图只 `refreshPort` 后调它） | DOM 测量（`client/reader-geometry.ts` 的 `ReaderPort`）、滚动/排版事件（`ReaderView`） |
 | 阅读浮层在场与互斥（至多一角、换角退场语义、哪面带遮罩、模态同场时 Esc 归谁） | `client/reader-surfaces.ts`（`openSurface` / `closeAll` / `dismissSurface` / `maskFor` / `escOwner`；阅读场景的 `surface` 只是它的投影） | 阅读位置与返回栈（`reader-session.ts`）、带遮罩模态（`client/views/dialog.tsx`） |
 | 阅读场景（当场面与注释载荷、返回句柄、Esc 命令、离开一问与入架写入） | `client/reader-scene.ts` 的 `ReaderScene`（命令面 `toggle` / `openNote` / `close` / `handleEsc` / `dismissAsk` / `openTarget` / `bodyLink` / `panelLink` / `exitToShelf` / `joinAndBack`；写口以 `addSeat` 注入，生产是 `client/shelf-action.ts` 的 `addShelfSeat`） | 阅读时序（`client/reader-session.ts`）、至多一角的纯判据（`client/reader-surfaces.ts`）、模态契约与焦点（`client/views/dialog.tsx`）、DOM 测量与滚动事件（`ReaderView`）、导出编排（`client/export-run.ts`）、文案（`client/copy/`） |
-| 章节窗口与预取判据 | `client/reader-load.ts` | 会话状态 |
+| 章节窗口的向前判据（边界哨兵 + 两屏 → 视口章之后第一个未载章） | `client/reader-load.ts` 的 `nextLoadTarget` / `nextChapterIndex` | 会话状态；已载窗口的保留深度、滚动补偿与回溯补载（归 `client/reader-session.ts`，见上「阅读时序」行与 `CONTEXT.md` 的「已载窗口」） |
 | 阅读位置 ⇄ 像素 | `client/progress.ts`（两侧同跨度才互逆） | 落盘时机 |
 | 视觉 token 与标度 | `client/styles/tokens.ts` 的 `TOKENS_CSS`（配色契约、named 标度与 `--novel-*` 缺省定义）；暗层重钉住 `client/styles/shell.ts` 的 `.novel-dark`；`client/styles.tsx` 只是拼装点（把十块按原次序连成 `NOVEL_CSS`，`NovelStyles` 注入） | 视图局部布局（归 `client/styles/` 各块）、块间次序（次序即行为，重排等于改样式） |
 | 兼容读数与裁决 | `tests/legado-coverage/matrix.ts` 的行 | 复述进文档 |

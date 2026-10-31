@@ -54,9 +54,18 @@ export interface TocRenderValue {
   chapters: Array<{ chapterIndex: number; name: string }>
 }
 
-/** 目录：只印前 10 章，规范值含全部。 */
+/** 目录规范值的章数上限：千章目录的 JSON 可达数百 KB，整份喂进 AI 上下文会挤掉正文。
+ *  超限后 `total` 仍是全书章数、`chapterIndex` 仍可直接读任意章，只是超限部分的章名不在
+ *  规范值里——render 如实报「只含前 N 章」，不假装目录被取全了。 */
+export const TOC_CHAPTERS_CAP = 1000
+
+/** 目录：只印前 10 章；规范值超 TOC_CHAPTERS_CAP 时说明只含前 N 章。 */
 export function renderToc(v: TocRenderValue): string {
-  return `《${v.bookKey}》共 ${v.total} 章：\n${v.chapters.slice(0, 10).map((c) => `[${c.chapterIndex}] ${c.name}`).join('\n')}${v.total > 10 ? '\n…（截断，规范值含全部）' : ''}`
+  const shown = v.chapters.slice(0, 10).map((c) => `[${c.chapterIndex}] ${c.name}`).join('\n')
+  const omitted = v.total > v.chapters.length
+    ? `\n…（截断，规范值只含前 ${v.chapters.length} 章，全书共 ${v.total} 章）`
+    : v.total > 10 ? '\n…（截断，规范值含全部）' : ''
+  return `《${v.bookKey}》共 ${v.total} 章：\n${shown}${omitted}`
 }
 
 export interface ShelfListRenderValue { books?: ShelfItem[] }

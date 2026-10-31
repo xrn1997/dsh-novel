@@ -40,6 +40,15 @@ describe('WebView 代理解析（纯函数，不要真浏览器）', () => {
   })
 })
 
+describe('WebView 出口的 scheme 闸（拒绝发生在启动浏览器之前）', () => {
+  it('file://、javascript: 与坏 URL 一律拒：浏览器支线不许读本地文件', async () => {
+    const wv = new WebViewRuntime()
+    await expect(wv.fetch('file:///etc/passwd')).rejects.toThrow(/只接受 http\(s\) 地址/)
+    await expect(wv.fetch('javascript:alert(1)')).rejects.toThrow(/只接受 http\(s\) 地址/)
+    await expect(wv.fetch('not a url')).rejects.toThrow(/不是合法 URL/)
+  })
+})
+
 describe.skipIf(process.env.DSH_WEBVIEW !== '1')('WebViewRuntime（真浏览器）', () => {
   it('renders a page and runs webJs in the page context', async () => {
     const wv = new WebViewRuntime()

@@ -131,4 +131,25 @@ describe('搜索观察 module：轮次身份与游标不可分开（换轮 = 丢
     expect(apiGet.mock.calls.filter((c) => String(c[0]).includes('since=0')).length).toBeGreaterThanOrEqual(2)
     expect(streams[0].signal.aborted).toBe(true)
   })
+
+  it('resume:false：快照读照做，但不开观察通道；自己提交后观察照常', async () => {
+    // 浮层只认自己 POST 回来的 ownId——恢复读到的那轮一条都展示不了，为它开流/轮询纯属白占连接。
+    const jobs = makeJobs()
+    startRound(jobs, '甲词', ['A-result'])
+    const { streams, apiEventStream } = captureStreams()
+    const apiSend = vi.fn(async () => {
+      startRound(jobs, '乙词', ['B-first'])          // POST 起乙轮（服务端单槽替换）
+      return { jobId: 'B' }
+    })
+    const deps = serverDeps(jobs, { apiEventStream, apiSend })
+    const hook = renderHook(() => useSearchJob(deps, undefined, { resume: false }))
+    await waitFor(() => expect(hook.result.current.round?.id).toBe('A'))   // 恢复快照照读
+    expect(streams).toHaveLength(0)                                        // 但不为它开流
+
+    await act(async () => { await hook.result.current.submit('乙词') })
+    await waitFor(() => expect(streams.length).toBe(1))                     // 自己提交后才开观察
+    await act(async () => { streams[0].onFrame(JSON.stringify({ job: jobs.snapshot(0) })) })
+    await waitFor(() => expect(hook.result.current.round?.id).toBe('B'))
+    expect(hook.result.current.round?.groups.map((g) => g.sourceId)).toEqual(['B-first'])
+  })
 })

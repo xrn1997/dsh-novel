@@ -7,6 +7,7 @@ import { Shelf } from '../../src/services/shelf.js'
 import { normalizeSource } from '../../src/services/normalize.js'
 import { createSourceEval } from '../../src/services/source-eval.js'
 import { ChapterNotFoundError, RuleMissingError, SourceNotFoundError } from '../../src/services/errors.js'
+import { setLogSink } from '../../src/services/log.js'
 import { makeTempDir } from '../temp-dir.js'
 import type { NovelSource } from '../../src/services/types.js'
 import type { NormalizedRules } from '../../src/services/types.js'
@@ -251,6 +252,84 @@ describe('OnlineReading', () => {
       },
     })
     expect(await rig.online.chapterText('i', BOOK, 0)).toBe('正文一\n歌词')
+  })
+
+  it('ruleContent.subContent：子正文取回失败只丢追加段，但留痕点名且不落缓存', async () => {
+    // 追加物不是正文：链接失效/站点拒绝时正文页已抓全，不许把整章判死。
+    // 「取回失败」也不许折叠成「没有追加段」：把缺段的残章落进缓存，等于让一次瞬时 503
+    // 钉死这个槽位直到代际更替——口径同 ADR-0017「正文质量不足 → 不写缓存」。
+    const rig = await makeRig({
+      over: {
+        ruleContent: '@css:#content@text',
+        ruleContentSubContent: `@js:"${BASE}/lyric.html"`,
+        nextPageUrl: undefined,
+      },
+      htmlOf: (u) => {
+        if (u.includes('/c/1.html')) return '<html><body><div id="content">正文一</div></body></html>'
+        return defaultHtml(u)
+      },
+    })
+    rig.setBeforeFetch((url) => {
+      if (url.includes('/lyric.html')) throw new Error('lyric 站点 503')
+    })
+    const warns: string[] = []
+    setLogSink({ warn: (...a) => { warns.push(a.map(String).join(' ')) }, info: () => {}, error: () => {} })
+    try {
+      expect(await rig.online.chapterText('i', BOOK, 0)).toBe('正文一')
+      expect(rig.fetches).toContain(`${BASE}/lyric.html`)
+      expect(warns.join('\n'), '降级必须点名是哪一章哪条链接').toContain('/lyric.html')
+      expect(warns.join('\n')).toContain('第一章')
+      const fetched = rig.fetches.length
+      expect(await rig.online.chapterText('i', BOOK, 0)).toBe('正文一')
+      expect(rig.fetches.length, '失败那一次不许落缓存：重读要再走一遍取回').toBeGreaterThan(fetched)
+    } finally { setLogSink(console) }
+  })
+
+  it('ruleContent.subContent：失败留痕不带走追加地址的 query（签名 / 过期 token 不进日志）', async () => {
+    const rig = await makeRig({
+      over: {
+        ruleContent: '@css:#content@text',
+        ruleContentSubContent: `@js:"${BASE}/lyric.html?token=super-secret"`,
+        nextPageUrl: undefined,
+      },
+      htmlOf: (u) => {
+        if (u.includes('/c/1.html')) return '<html><body><div id="content">正文一</div></body></html>'
+        return defaultHtml(u)
+      },
+    })
+    rig.setBeforeFetch((url) => {
+      // 真实抓取的失败消息由 FetchError 拼成「请求失败 503: <原地址>」——消息本身也带 query 凭证
+      if (url.includes('/lyric.html')) throw new Error(`请求失败 503: ${url}`)
+    })
+    const warns: string[] = []
+    setLogSink({ warn: (...a) => { warns.push(a.map(String).join(' ')) }, info: () => {}, error: () => {} })
+    try {
+      await rig.online.chapterText('i', BOOK, 0)
+      const line = warns.join('\n')
+      expect(line, '仍要能定位是哪条追加地址').toContain('/lyric.html')
+      expect(line, '失败原因仍要留痕').toContain('请求失败 503')
+      expect(line, 'query 里的凭证不许进宿主持久日志（消息里的原地址也算）').not.toContain('super-secret')
+    } finally { setLogSink(console) }
+  })
+
+  it('ruleContent.subContent：取回成功但追加段为空 = 确实没有，静默并落缓存', async () => {
+    // 与上一条是一对：空与失败是两种值，折叠任一边都会把「站点没有」读成「我们没取到」。
+    const rig = await makeRig({
+      over: {
+        ruleContent: '@css:#content@text',
+        ruleContentSubContent: `@js:"${BASE}/lyric.html"`,
+        nextPageUrl: undefined,
+      },
+      htmlOf: (u) => {
+        if (u.includes('/c/1.html')) return '<html><body><div id="content">正文一</div></body></html>'
+        if (u.includes('/lyric.html')) return '<html><body><div id="sub"></div></body></html>'
+        return defaultHtml(u)
+      },
+    })
+    expect(await rig.online.chapterText('i', BOOK, 0)).toBe('正文一')
+    const fetched = rig.fetches.length
+    expect(await rig.online.chapterText('i', BOOK, 0)).toBe('正文一')   // 缓存命中
+    expect(rig.fetches).toHaveLength(fetched)
   })
 
   it('缺目录规则 → RuleMissingError（点名 facet 与规则名）', async () => {

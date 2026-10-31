@@ -7,6 +7,7 @@ import { project } from './project.js'
 import {
   renderImport, renderRead, renderSearch, renderShelfBook, renderShelfList, renderShelfRemove,
   renderSourceList, renderSourceProbe, renderSourceRemove, renderSourceToggle, renderToc,
+  TOC_CHAPTERS_CAP,
 } from './render.js'
 import { pickShelfItem, SHELF_ITEM_FIELDS } from './shelf-item.js'
 import type { ShelfItem } from './shelf-item.js'
@@ -81,7 +82,11 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
       + '未答话的书源在 `failed` 里逐家点名；`books` 为空时先看 `searched`/`answered`/`filtered`——「没人答话」与「答话了但全不相关」是两回事，别转述成「没找到」。',
     parameters: {
       keyword: { type: 'string', required: true, description: '书名/作者关键词' },
-      sourceIds: { type: 'array', description: '限定源 id 列表（缺省搜全部启用的文本源）' },
+      sourceIds: {
+        type: 'array',
+        items: { type: 'string' },
+        description: '限定源 id 列表（缺省搜全部启用的文本源）',
+      },
     },
     output: {
       schema: {
@@ -201,7 +206,7 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
 
   const tocTool = defineTool({
     name: 'dshnovel_toc',
-    description: '取书籍目录：逐章返回章名与 0 起的 chapterIndex（章名→下标的唯一映射处，dshnovel_read 靠它定位）、章 URL。sourceId/bookKey 来自 dshnovel_search 的结果。目录可能上千章——render 只显示前 10 章，规范值含全部。',
+    description: `取书籍目录：逐章返回章名与 0 起的 chapterIndex（章名→下标的唯一映射处，dshnovel_read 靠它定位）、章 URL。sourceId/bookKey 来自 dshnovel_search 的结果。目录可能上千章——render 只显示前 10 章，规范值最多 ${TOC_CHAPTERS_CAP} 章（超出时 total 仍为全书章数，chapterIndex 仍可直接读任意章）。`,
     parameters: {
       sourceId: { type: 'string', required: true, description: '源 id' },
       bookKey: { type: 'string', required: true, description: '书籍详情页 URL' },
@@ -231,7 +236,7 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
     },
     execute: async (args: { sourceId: string; bookKey: string; refresh?: boolean }) => {
       const toc = await service.getToc(args.sourceId, args.bookKey, args.refresh === true ? { refresh: true } : undefined)
-      const chapters = toc.map((c, i) => ({ chapterIndex: i, name: c.name, url: c.url }))
+      const chapters = toc.slice(0, TOC_CHAPTERS_CAP).map((c, i) => ({ chapterIndex: i, name: c.name, url: c.url }))
       return project({ sourceId: args.sourceId, bookKey: args.bookKey, total: toc.length, chapters })
     },
   })

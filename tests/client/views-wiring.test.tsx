@@ -267,6 +267,26 @@ describe('ShelfView 接线（deps seam 驱动）', () => {
     navigate({ name: 'shelf' })
   })
 
+  it('封面挂图后一次成功的书架重取 → 失败表清空、封面重试（一次瞬时失败不许永久降级）', async () => {
+    navigate({ name: 'shelf' })
+    const cover = '/novel-api/local/resource?id=local%3Au1&resourceId=r0'
+    const shelfBook = { ...book, bookKey: 'local:u1', sourceId: '__local__', sourceName: null, title: '有封面', coverUrl: cover }
+    const deps = coreDeps({
+      apiGet: vi.fn(async () => [shelfBook]),
+      // 带持久警告的导入留在本页 → 收尾会触发一次书架重取（这是唯一的第二次读面）
+      apiUpload: vi.fn(async () => localImport({ title: '新书', warnings: [svgWarning] })),
+    })
+    render(createElement(ShelfView, { deps }))
+    await waitFor(() => expect(screen.getByText('有封面')).toBeTruthy())
+    const cellImg = (): HTMLImageElement | null => document.querySelector('.novel-cell img.novel-cover')
+    fireEvent.error(cellImg()!)                        // 一次坏图 → 这张卡降级为首字块
+    await waitFor(() => expect(cellImg()).toBeNull())
+    fireEvent.change(document.querySelector('.novel-file-hidden')!, { target: { files: [txtFile()] } })
+    // 读面成功（落点 = 'ok'）才清失败表；判据取「这一发的落点」而不是投影里的旧读数
+    await waitFor(() => expect(cellImg(), '读面成功就该重试封面，而不是永久降级').not.toBeNull())
+    navigate({ name: 'shelf' })
+  })
+
   it('本地书有封面走已有封面 img 分支；无封面仍是本地占位（不发明第二条封面路）', async () => {
     const cover = '/novel-api/local/resource?id=local%3Au1&resourceId=r0'
     const deps = coreDeps({
