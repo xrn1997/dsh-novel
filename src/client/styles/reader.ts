@@ -7,6 +7,10 @@ export const READER_CSS = `
    680px 的窄带飘在宿主底色里（实测 1500px 视口左右各漏底 410px），那不是留白，是纸没铺开。
    min-height 一屏：正文短于一屏时纸面也要铺满，不许下面漏底色。 */
 .novel-rdr { position: relative; display: flex; flex-direction: column; min-height: 100vh; }
+/* 滚动锚定归会话：裁章/前插的补偿由 reader-session 在渲染后按实测高度补 scrollTop，
+   浏览器再自动锚定一次就是双重补偿（内容跳两倍）。overflow-anchor 不继承、滚动容器是
+   祖先 .novel-main，所以必须盖住阅读器整棵子树——只写 .novel-rdr-body 挡不住章块自己当选锚点。 */
+.novel-rdr, .novel-rdr * { overflow-anchor: none; }
 /* 控制器条**跟纸走，不跟宿主 chrome 走**：条底 = 纸往墨压一档，整屏读作「一张纸的顶部折了一道」。
    条底不要读 --novel-bg（宿主 App 底色）——那与用户自选纸色毫无关系，实测接缝对比度 15.51:1，
    而黑白极限才 21:1，那是「两块板拼起来」而不是「一页纸」。判据到这句就闭合：条底与纸底不同源，

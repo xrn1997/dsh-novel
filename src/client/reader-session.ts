@@ -87,6 +87,13 @@ type DebouncedSave = ((chapterIndex: number, offsetRatio: number) => void) & { c
  *  所以目录一发布就占槽到存档章落定（打点见 `load()` 的 early-return）。 */
 const RESTORE_SLOT = -1
 
+/** 连续阅读保留在视口之前的已载章数：跳远端仍由「视口所在连续区间」收口；连续前读按这个窗口裁，
+ *  否则已载集只增不减（DOM/锚点测量随会话线性变贵）。向上滚到窗口顶时 `checkBackfill` 补回上一章，
+ *  回溯阅读不失效。 */
+const KEEP_BEHIND = 6
+/** 视口顶距已载窗口顶不足这么多屏 → 补载上一章（与预取的屏数量级相同）。 */
+const BACKFILL_SCREENS = 2
+
 export class ReaderSession {
   private readonly store = createStore<ReaderSessionState>({
     toc: null, navigation: null, chapters: [], loadingIdx: null, error: null,
@@ -124,6 +131,12 @@ export class ReaderSession {
    *  就是给同一个问题立第二个主人。阅读场景据此在离开阅读器时问一次——不在架的书，进度 PUT 会被
    *  服务端判 `NOT_ON_SHELF`，这一屏读到哪儿就此静默消失。 */
   private onShelfNow: 'unknown' | 'on' | 'off' = 'unknown'
+  /** 渲染后要结的滚动补偿：DOM 提交前量不到新布局（前插一章的高度、裁掉一段后的落点），
+   *  统一在 `afterRender` 里按实测值补 scrollTop。跳章会清空——落位由 settleJump 自己负责。 */
+  private pendingScrollFixes: Array<{ kind: 'drop'; px: number } | { kind: 'prepend'; index: number }> = []
+  /** 视口读数至少来过一次（`open` 复位）。回溯补载只认真实视口：存档恢复的双帧落位之前，
+   *  scrollTop 还是进入前的旧值（常见为 0），据此补载上一章是拿错证据做的决定。 */
+  private viewportSeen = false
   private readonly save: DebouncedSave
 
   constructor(
@@ -159,6 +172,8 @@ export class ReaderSession {
     this.inflight = null
     this.failedIndex = null
     this.returnStack = []
+    this.pendingScrollFixes = []
+    this.viewportSeen = false
     this.onShelfNow = 'unknown'                           // 换书即重问：上一本的在架状态不带到这一本
     this.save.cancel()
     this.store.set({
@@ -205,8 +220,9 @@ export class ReaderSession {
     }
   }
 
-  /** 加载某章（单在途槽：同章并发/滚动风暴去重）；restoreRatio>0 = 双帧后按锚点定位 */
-  async load(sourceId: string, index: number, restoreRatio = 0): Promise<void> {
+  /** 加载某章（单在途槽：同章并发/滚动风暴去重）；restoreRatio>0 = 双帧后按锚点定位。
+   *  `keepViewport` = 前插（回溯补载）：新章加在已载窗口**上方**，渲染后按它的高度下移滚动位。 */
+  async load(sourceId: string, index: number, restoreRatio = 0, opts?: { keepViewport?: boolean }): Promise<void> {
     const toc = this.tocNow
     if (toc === null || index < 0 || index >= toc.length) return
     if (this.inflight !== null) return
@@ -217,6 +233,10 @@ export class ReaderSession {
       const content = await this.deps.fetchChapter(sourceId, this.bookKey, index)
       // 迟到（换书/卸载）的正文什么都不做：不落位、不落盘、不碰新会话的在途槽（finally 同一条闸）
       if (gen !== this.generation) return
+      // 前插的高度要等 DOM 提交才量得到：先记账，afterRender 里补 scrollTop（长文回溯不跳屏）
+      if (opts?.keepViewport === true && this.store.get().pendingJump === null) {
+        this.pendingScrollFixes.push({ kind: 'prepend', index })
+      }
       const next = [...this.chaptersNow]
       next[index] = content
       this.chaptersNow = next
@@ -257,6 +277,7 @@ export class ReaderSession {
         this.inflight = null
         this.store.set({ loadingIdx: null })
         this.settlePendingLoad()
+        this.checkBackfill(sourceId)                          // 在途被预取占掉时错过的回溯补载，在这里补
       }
     }
   }
@@ -298,8 +319,26 @@ export class ReaderSession {
     if (target !== null && target !== this.failedIndex) void this.load(sourceId, target)
   }
 
-  /** 已载集裁到「视口章所属的连续区间」：未载章不进 DOM，不裁则跳远端再回来时缺的章被跳过，
-   *  渲染顺序不再等于书的顺序。只在视口章已载时裁：它在途时裁会把用户手上的正文清空。 */
+  /** 视口接近已载窗口**顶** → 补载上一章（裁掉远章之后的回溯路径；没有它，连续前读裁掉的历史
+   *  就再也滚不回去）。单在途；正文已在载或刚失败过（等用户重试）则不动。 */
+  private checkBackfill(sourceId: string): void {
+    if (!this.viewportSeen) return                              // 视口还没读过：不做回溯判断
+    if (this.inflight !== null) return
+    if (this.store.get().pendingJump !== null) return            // 在途导航优先，不给视口补章
+    if (this.anchorsFrom !== this.chaptersNow) this.recalcAnchors()
+    const first = this.anchorsNow[0]
+    if (first === undefined || first.index === 0) return
+    const prev = first.index - 1
+    if (this.mounted(prev) || prev === this.failedIndex) return
+    if (this.port.scrollTop() - first.start > this.port.viewHeight() * BACKFILL_SCREENS) return
+    void this.load(sourceId, prev, 0, { keepViewport: true })
+  }
+
+  /** 已载集裁到「视口章所属的连续区间」，并在连续区间内按 `KEEP_BEHIND` 裁掉远在视口之前的章：
+   *  前者防跳远端再回来时缺章串读（渲染顺序不等于书的顺序），后者防连续阅读时 DOM 只增不减。
+   *  只在视口章已载时裁：它在途时裁会把用户手上的正文清空。
+   *  裁掉的是视口**上方**的章 → 内容整体上移，滚动位按实测高度在 afterRender 里回补；
+   *  跳章（pendingJump 在场）不补——落位由 settleJump 重测目标，补了会叠加。 */
   private pruneToViewport(): void {
     const at = this.position.chapterIndex
     if (!this.mounted(at)) return
@@ -307,10 +346,16 @@ export class ReaderSession {
     while (lo > 0 && this.mounted(lo - 1)) lo--
     let hi = at
     while (hi + 1 < this.chaptersNow.length && this.mounted(hi + 1)) hi++
-    if (this.mountedSet.size === hi - lo + 1) return
+    const keepLo = Math.max(lo, at - KEEP_BEHIND)
     const dropped: number[] = []
-    for (const i of this.mountedSet) if (i < lo || i > hi) dropped.push(i)
+    for (const i of this.mountedSet) if (i < keepLo || i > hi) dropped.push(i)
     if (dropped.length === 0) return
+    const behind = dropped.filter((i) => i < at)
+    if (behind.length > 0 && this.store.get().pendingJump === null) {
+      const heights = new Map(this.port.measureAnchors().map((a) => [a.index, a.height]))
+      const px = behind.reduce((sum, i) => sum + (heights.get(i) ?? 0), 0)
+      if (px > 0) this.pendingScrollFixes.push({ kind: 'drop', px })
+    }
     const next = [...this.chaptersNow]
     for (const i of dropped) {
       next[i] = null
@@ -352,10 +397,12 @@ export class ReaderSession {
   handleViewportChange(sourceId: string, opts?: { layoutChanged?: boolean }): void {
     this.checkPreload(sourceId)
     if (opts?.layoutChanged === true || this.anchorsFrom !== this.chaptersNow) this.recalcAnchors()
-    if (this.anchorsNow.length === 0) return
+    if (this.anchorsNow.length === 0) return               // 还没有可读的视口证据（首帧/正文未到）
+    this.viewportSeen = true
     if (this.store.get().pendingJump !== null) return
     const { chapterIndex, offsetRatio } = locateChapter(this.anchorsNow, this.port.scrollTop())
     this.commit(chapterIndex === this.position.chapterIndex ? 'scroll' : 'cross', chapterIndex, offsetRatio)
+    this.checkBackfill(sourceId)                            // 滚到窗口顶 → 补回上一章（裁章后的回溯路径）
   }
 
   /** 导航直达（目录点击 / 注释面板转交的主序列目标）：目标章未载则加载（落地后由 settleJump 定位）。
@@ -447,6 +494,7 @@ export class ReaderSession {
     // 越界目标（导航树带来的坏下标 / 陈旧的目标）什么都不做：写进去等于当下就把「读到第 N 章」
     // 落成存档里一个不存在的章，同时 pendingJump 再也等不到挂载——那本书的进度从此停摆。
     if (!this.inRange(target.index)) return
+    this.pendingScrollFixes = []                         // 导航落位归 settleJump，旧补偿作废
     this.store.set({ pendingJump: target })
     this.commit('jump', target.index, 0)
     if (!this.mounted(target.index)) {
@@ -477,13 +525,15 @@ export class ReaderSession {
   }
 
   /** 视图唯一渲染后拍点：章节 DOM 或 pendingJump 变化后调用。
-   *  次序固定在这里：落位（内部在滚动后自刷锚点）→ 按落定后的位置预取 → 重测锚点。
+   *  次序固定在这里：落位（内部在滚动后自刷锚点）→ 重测锚点 → 结算滚动补偿 → 预取/回溯补载。
    *  这一趟的重测无条件：它是唯一知道「新章块已经提交进 DOM」的时刻——滚动帧里那次可能量在
-   *  提交之前（那一刻 DOM 还没有这一章），不能替它免掉。视图不再认识这三个内部阶段。 */
+   *  提交之前（那一刻 DOM 还没有这一章），不能替它免掉。视图不再认识这些内部阶段。 */
   afterRender(sourceId: string): void {
     this.settleJump()
-    this.checkPreload(sourceId)
     this.recalcAnchors()
+    this.applyScrollFixes()
+    this.checkPreload(sourceId)
+    this.checkBackfill(sourceId)
   }
 
   /** pendingJump 的目标已渲染 → 按真实位置定位并清零；未落地则下轮再试。
@@ -523,6 +573,23 @@ export class ReaderSession {
     this.anchorsFrom = this.chaptersNow
   }
 
+  /** 渲染后结算滚动补偿：裁掉视口上方的章 → scrollTop 减去实测高度；前插一章 → 加上它的高度
+   *  （两者的目的都是让读者眼前的正文原地不动）。只改滚动位、不碰位置真相——下一次视口读数
+   *  照常修正。补偿在 DOM 提交之后做：裁章/前插都把内容整体挪位，提交前量不到新布局。 */
+  private applyScrollFixes(): void {
+    const fixes = this.pendingScrollFixes
+    if (fixes.length === 0) return
+    this.pendingScrollFixes = []
+    for (const fix of fixes) {
+      if (fix.kind === 'drop') {
+        this.port.setScrollTop(this.port.scrollTop() - fix.px)
+        continue
+      }
+      const a = this.anchorsNow.find((x) => x.index === fix.index)
+      if (a !== undefined) this.port.setScrollTop(this.port.scrollTop() + a.height)
+    }
+  }
+
   /** 退出阅读器：先作废在途续作（代际 +1），再把防抖窗口里的进度补落盘——flush 不 cancel，
    *  cancel 会静默丢最后一段章内偏移，而 fetch 卸载后照样完成，没有「来不及存」的结构理由。
    *  在途槽一并复位：本代到此为止。**同一实例还会被下一次 open 复用**（同址换源时视图的会话
@@ -530,6 +597,7 @@ export class ReaderSession {
   dispose(): void {
     this.generation++
     this.inflight = null
+    this.pendingScrollFixes = []
     this.save.flush()
   }
 }

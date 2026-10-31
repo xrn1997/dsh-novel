@@ -860,3 +860,67 @@ describe('ReaderSession 代际（卸载/换书后的迟到续作）', () => {
     expect(fetched).toEqual([1])                         // 回归：dispose 后不得让 RESTORE_SLOT 一直占槽
   })
 })
+
+describe('连续阅读的已载窗口上限（裁章补偿 + 回溯补载）', () => {
+  const many: ChapterEntry[] = Array.from({ length: 60 }, (_, i) => ({ name: `第${i + 1}章`, url: `https://s.com/c/${i}` }))
+
+  /** 长书会话：假 port 按「当前已载表」重建锚点（DOM 顺序 = 已载章顺序，裁章后起点整体上移）。 */
+  const makeLongSession = (chapterHeight: number) => {
+    const port = fakePort()
+    port.height = 1000
+    port.scrollH = 60 * chapterHeight
+    port.sentinel = null                                  // 预取不由本组用例驱动
+    const fetched: number[] = []
+    const session = new ReaderSession({
+      fetchNavigation: async () => ({ chapters: many, items: planarNavigation(many) }),
+      fetchChapter: async (_s, _b, i) => { fetched.push(i); return text(i) },
+      fetchShelf: async () => [], saveProgress: () => {}, saveTotalChapters: () => {},
+      afterFrames: (cb) => cb(),
+    }, port, 5)
+    const render = (): void => {
+      const mounted: number[] = []
+      session.state.chapters.forEach((c, i) => { if (c !== null) mounted.push(i) })
+      const base = mounted[0] ?? 0
+      port.anchors = mounted.map((i) => ({ index: i, start: (i - base) * chapterHeight, height: chapterHeight }))
+      session.afterRender('src')
+    }
+    return { port, session, fetched, render }
+  }
+
+  it('连续前读：窗口只保留视口前 6 章，裁章后滚动位按实测高度回补（DOM 不再线性增长）', async () => {
+    const { port, session, render } = makeLongSession(1000)
+    await session.open('src', 'https://s.com/book/1')
+    render()
+    for (let i = 1; i <= 20; i++) {
+      await session.load('src', i)
+      render()
+      const a = port.anchors.find((x) => x.index === i)!
+      port.top = a.start + 300
+      session.handleViewportChange('src')
+      render()
+    }
+    const kept = session.state.chapters.flatMap((c, i) => (c === null ? [] : [i]))
+    expect(kept).toEqual([14, 15, 16, 17, 18, 19, 20])    // 视口 20、前留 6 章
+    const a20 = port.anchors.find((x) => x.index === 20)!
+    expect(port.top).toBe(a20.start + 300)                 // 补偿后视口仍停在第 20 章同一处
+  })
+
+  it('回溯：滚到窗口顶补载上一章，前插后视口仍停在原处', async () => {
+    const { port, session, fetched, render } = makeLongSession(3000)   // 章高 3 屏 → 一次补载即够缓冲
+    await session.open('src', 'https://s.com/book/1')
+    render()
+    session.requestJump('src', 10)
+    await new Promise((r) => setTimeout(r, 0))
+    port.chapterOff = 0
+    render()                                               // settleJump 落位（targetOffset 读 chapterOff）
+    const a10 = port.anchors.find((x) => x.index === 10)!
+    port.top = a10.start + 100
+    session.handleViewportChange('src')                    // 靠近窗口顶 → 触发补载第 9 章
+    await new Promise((r) => setTimeout(r, 0))
+    expect(session.state.chapters[9]).not.toBeNull()
+    expect(fetched).toContain(9)
+    render()                                               // 前插补偿：视口下移一章高
+    const a10new = port.anchors.find((x) => x.index === 10)!
+    expect(port.top).toBe(a10new.start + 100)              // 视觉位置没动
+  })
+})
