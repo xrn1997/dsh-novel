@@ -11,6 +11,11 @@ export interface CookieEntry {
 
 const keyOf = (domain: string, path: string, name: string): string => `${domain}\n${path}\n${name}`
 
+/** 容量闸（与 Chrome 同量级：单域 180、总量 3300）。jar 跨源共享且 headerFor 全表扫描，
+ *  没有闸时一个恶意源站点就能灌爆它并拖慢此后每个请求；超出按插入序淘汰最旧的。 */
+const MAX_COOKIES_PER_DOMAIN = 180
+const MAX_COOKIES = 3300
+
 function pathMatches(requestPath: string, cookiePath: string): boolean {
   if (requestPath === cookiePath) return true
   if (!requestPath.startsWith(cookiePath)) return false
@@ -90,6 +95,25 @@ export class CookieJar {
         continue
       }
       this.store.set(key, { domain, hostOnly, path, name, value, expires, secure })
+      this.evictOverflow(domain)
+    }
+  }
+
+  /** 插一条后收口：先按域裁到上限，再按总量裁；Map 插入序即「最旧在前」。 */
+  private evictOverflow(domain: string): void {
+    let inDomain = 0
+    for (const e of this.store.values()) if (e.domain === domain) inDomain++
+    if (inDomain > MAX_COOKIES_PER_DOMAIN) {
+      for (const [key, e] of this.store) {
+        if (e.domain !== domain) continue
+        this.store.delete(key)
+        if (--inDomain <= MAX_COOKIES_PER_DOMAIN) break
+      }
+    }
+    while (this.store.size > MAX_COOKIES) {
+      const oldest = this.store.keys().next().value
+      if (oldest === undefined) break
+      this.store.delete(oldest)
     }
   }
 

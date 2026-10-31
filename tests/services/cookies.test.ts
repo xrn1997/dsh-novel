@@ -84,4 +84,25 @@ describe('CookieJar', () => {
     jar.removeSessionCookies()
     expect(jar.headerFor('https://a.test/')).toBe('p=2')
   })
+
+  it('单域容量闸：超出 180 条按插入序淘汰最旧的', () => {
+    const jar = new CookieJar()
+    for (let i = 0; i < 200; i++) jar.absorb('https://a.test/', [`c${i}=v; Path=/`])
+    const entries = jar.entries()
+    expect(entries).toHaveLength(180)
+    expect(entries.some((e) => e.name === 'c0')).toBe(false)      // 最旧的被裁
+    expect(entries.some((e) => e.name === 'c199')).toBe(true)     // 最新的在
+  })
+
+  it('总量容量闸：跨域累计超 3300 条时淘汰最旧的', () => {
+    const jar = new CookieJar()
+    // 19 个域 × 180 条 = 3420 > 3300；每域都不超单域上限
+    for (let d = 0; d < 19; d++) {
+      for (let i = 0; i < 180; i++) jar.absorb(`https://d${d}.test/`, [`c${i}=v; Path=/`])
+    }
+    expect(jar.entries()).toHaveLength(3300)
+    // 3420 − 3300 = 120 条最早插入的被挤出，全部来自第一个域
+    expect(jar.entries().filter((e) => e.domain === 'd0.test')).toHaveLength(60)
+    expect(jar.entries().filter((e) => e.domain === 'd18.test')).toHaveLength(180)
+  })
 })

@@ -38,6 +38,14 @@ describe('KindCache', () => {
     c.put({ ...key, page: 1 }, group('A'), 1000)
     expect(c.get({ ...key, page: 2 }, 1000)).toBeNull()
   })
+
+  it('put 顺手清过期条目：旧代际不会等到「再取同一键」才回收', () => {
+    const c = new KindCache()
+    c.put({ ...key, epoch: 7 }, group('A'), 1000)
+    c.put({ ...key, epoch: 8 }, group('B'), 1000 + EXPLORE_CACHE_TTL_MS + 1)
+    // 旧条目已被 put 删除：用回放时钟取也拿不回来（若只在 get 时惰性清理，这里会命中）
+    expect(c.get({ ...key, epoch: 7 }, 1000)).toBeNull()
+  })
 })
 
 /** 原生方言源（同 tests/services/explore-face.test.ts 的桩）：ruleFind 声明一条分类入口，
