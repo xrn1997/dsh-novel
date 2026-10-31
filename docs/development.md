@@ -56,6 +56,8 @@ $env:DSH_REPROBE='1'; pnpm vitest run tests/reprobe.test.ts
 
 # 正文链路全量审计：搜索→目录→正文逐段实测 + 失败分桶（正文可用率以本审计为准）
 # 它是**报告**：分桶读数靠人判，代码不设通过率断言，只断言每个注册源都进了审计
+# 改动正则求值面（`engine/regex-guard.ts` 的死线、AllInOne / `##` / CSS 属性过滤 / `bookUrlPattern` 嗅探的口径）必跑这一条：
+# 死线对「大而合法」页面的误伤只在真页面上显形，离线门全绿证不了它
 $env:DSH_CONTENT_AUDIT='1'; pnpm vitest run tests/content-audit.test.ts
 $env:DSH_AUDIT_KEYWORDS='小说,完本,的'   # 旋钮（都可省）：关键词表 / 并发 / 每本抽哪几章 / 只审某些源
 $env:DSH_AUDIT_WORKERS='5'

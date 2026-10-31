@@ -72,3 +72,16 @@ describe('AllInOne 整页正则（二维产物不压平）', () => {
     }
   })
 })
+
+describe('AllInOne 死线（灾难回溯）', () => {
+  it('合法但病态的整页正则 → RuleEvalError（不再钉住主线程）', () => {
+    const err = (() => {
+      try {
+        evalAllInOne({ kind: 'allinone', pattern: '^(?:a+)+$', flags: '' }, `${'a'.repeat(40)}b`, L, 'toc')
+      } catch (e) { return e }
+      return null
+    })()
+    expect(err).toBeInstanceOf(RuleEvalError)
+    expect((err as RuleEvalError).message).toContain('求值超时')
+  })
+})

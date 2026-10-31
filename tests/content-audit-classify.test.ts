@@ -29,6 +29,10 @@ const realMessages = {
     name: 'JsSandboxError',
     message: '[detail#段2] 脚本编译/同步执行失败：java.webView 不支持：需要安卓宿主环境（第297行）',
   },
+  guardRegexDeadline: {
+    name: 'RuleEvalError',
+    message: '[content#段3] AllInOne 正则求值超时（疑似灾难性回溯）：^(?:a+)+$（命中 0 个）（规则片段: "…"）',
+  },
   siteSideNullMatch: {
     name: 'JsSandboxError',
     message: "[toc#段0] 脚本编译/同步执行失败：Cannot read properties of null (reading '1')（第2行）",
@@ -54,6 +58,8 @@ describe('审计失败归因', () => {
   it('刻意闸口（对面静默、我们明确失败）→ guard', () => {
     expect(attributeError(realMessages.guardTocFallback)).toBe('guard')
     expect(attributeError(realMessages.guardAndroid)).toBe('guard')
+    // 用户正则的死线：这一栏非零就是要人判「大而合法被误杀」，不能被算成站点坏
+    expect(attributeError(realMessages.guardRegexDeadline)).toBe('guard')
   })
 
   it('站点与脚本侧 → site-side', () => {

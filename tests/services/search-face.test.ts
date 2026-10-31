@@ -3,6 +3,7 @@ import { createFetcher, fetchTextPage } from '../../src/services/fetcher.js'
 import { fetchSearchPage, searchErrorCodeOf } from '../../src/services/search-face.js'
 import { normalizeSource } from '../../src/services/normalize.js'
 import { DecodeError, FetchError } from '../../src/services/errors.js'
+import { setLogSink } from '../../src/services/log.js'
 import { RuleEvalError } from '../../src/engine/index.js'
 import { fakeSourceRequest } from './fake-source-request.js'
 import type { NovelSource } from '../../src/services/types.js'
@@ -62,6 +63,25 @@ describe('fetchSearchPage', () => {
     expect(body).toBe('s=%E4%B9%A6&t=1')
     expect(headers?.Referer).toBe('https://ref.com')
     expect(r.ok).toBe(true)
+  })
+  it('bookUrlPattern 灾难回溯：死线内判死这条嗅探并留痕，整次搜索照常按列表走', async () => {
+    // `^(?:…)$` 包一层后仍能炸的形态：前缀锚到落地地址、尾段是嵌套量词。长串由关键词造
+    // ——`a×40 + b` 对 `(a+)+$` 是指数级回溯（与 regex-guard 的用例同一形态）。
+    const f = createFetcher({ fetchImpl: async () => html(SEARCH_HTML) })
+    const warns: string[] = []
+    setLogSink({ warn: (...a) => { warns.push(a.map(String).join(' ')) }, info: () => {}, error: () => {} })
+    try {
+      const r = await fetchSearchPage(
+        src({
+          ruleBookInfo: { name: 'tag.h1@text' },          // canInfo 的前提：详情面有书名规则
+          bookUrlPattern: 'https:\\/\\/s\\.com\\/search\\?q=(a+)+',
+        }),
+        `${'a'.repeat(40)}b`, fakeSourceRequest(f))
+      expect(r.ok).toBe(true)
+      if (!r.ok || r.shape !== 'list') return
+      expect(r.contexts, '嗅探判死只是「没认出详情页」，不许把整次搜索判死').toHaveLength(2)
+      expect(warns.join('\n'), '降级必须点名是哪条规则').toContain('bookUrlPattern')
+    } finally { setLogSink(console) }
   })
 })
 

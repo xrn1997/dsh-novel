@@ -41,6 +41,10 @@ const GUARD = [
   '无法解码 charset',                         // 声明了非法 charset 时不猜
   '需要安卓宿主环境',                         // java.webView 等——安卓宿主面对本仓环境不适用
   '缺目录规则',                               // RuleMissingError
+  // 用户正则的死线（AllInOne / CSS 属性 / ## 替换 / RegexDeadlineError 四条文案共用这一串锚）。
+  // 它进 guard 而不是 host-gap：闸本身是刻意的；这一栏** nonzero 就是要人判误伤**——
+  // 「大而合法」的页面被 200ms 基础预算误杀时，读数只在这里显形（口径见 ADR-0050）。
+  '正则求值超时',
 ]
 
 /** 站点/脚本侧：页面上没这结构、源脚本自己的匹配取到 null */
