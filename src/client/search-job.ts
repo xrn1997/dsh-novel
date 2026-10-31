@@ -68,7 +68,16 @@ export interface SearchJobView {
   submit: (keyword: string) => Promise<string | null>
 }
 
-export function useSearchJob(deps: JobWatchDeps, t: Translate = zhTranslate): SearchJobView {
+export function useSearchJob(
+  deps: JobWatchDeps,
+  t: Translate = zhTranslate,
+  opts?: {
+    /** 挂载恢复是否开观察通道（缺省 true = 搜索面）。浮层（`CityBookSheet`）只认自己 POST 回来的
+     *  轮次，恢复读到的是别人的轮次、一条都展示不了——快照读照做（恢复路径只有这一条），
+     *  但流/轮询纯属白占连接，故关掉。 */
+    resume?: boolean
+  },
+): SearchJobView {
   const acc = useRef<Acc | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const publishTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -210,13 +219,14 @@ export function useSearchJob(deps: JobWatchDeps, t: Translate = zhTranslate): Se
   }
 
   /** 起跑一轮的读取（提交成功后、挂载恢复时同一条路）。
-   *  `running=false` 用于恢复一个已终态的轮次：结果就在手上，不必再开一条流。 */
-  const begin = (a: Acc, running = true): void => {
+   *  `running=false` 用于恢复一个已终态的轮次：结果就在手上，不必再开一条流。
+   *  `watch=false` 只落快照、不开观察通道（浮层：它不展示恢复来的轮次）。 */
+  const begin = (a: Acc, running = true, watchRun = running): void => {
     acc.current = a
     if (timer.current !== null) { clearTimeout(timer.current); timer.current = null }
     setError(null)
     publish(a, running, true)
-    if (running) watch(a)
+    if (watchRun) watch(a)
   }
 
   const submit = (keyword: string): Promise<string | null> => {
@@ -248,7 +258,7 @@ export function useSearchJob(deps: JobWatchDeps, t: Translate = zhTranslate): Se
       } catch { return }                               // 首屏读不到就是没有：静默（真去搜时会再报错）
       if (!alive.current || job === null || acc.current !== null) return   // 提交先回来 → 不覆盖新一轮
       begin({ id: job.id, keyword: job.keyword, total: job.total, cancelled: job.cancelled === true, since: job.next, groups: [...job.added] },
-        job.phase === 'running')
+        job.phase === 'running', job.phase === 'running' && opts?.resume !== false)
       if (job.error !== undefined) setError(job.error)
     })()
     return () => {

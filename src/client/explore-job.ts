@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { bodies, ROUTES } from '../shared/wire.js'
 import type { ExploreBook, ExploreSnapshot } from '../shared/wire.js'
 import { ApiClientError, describeError } from './api.js'
@@ -108,19 +108,22 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
   const [error, setError] = useState<string | null>(null)
   const [restored, setRestored] = useState(false)
 
-  const stopChannels = (): void => {
+  const stopChannels = useCallback((): void => {
     gen.current += 1
     if (timer.current !== null) { clearTimeout(timer.current); timer.current = null }
     stream.current?.abort(); stream.current = null
-  }
+  }, [])
 
-  const armPoll = (): void => {
+  /** 轮询那一发经 ref 取：`armPoll` 与 `poll` 互为引用（一个排下一个），只有 ref 能让两者
+   *  同时保持稳定身份——`submit`/`loadMore` 的 useCallback 依赖它们（视图 effect 不再逐渲染重跑）。 */
+  const pollRef = useRef<() => Promise<void>>(async () => {})
+  const armPoll = useCallback((): void => {
     if (timer.current !== null) clearTimeout(timer.current)
-    timer.current = setTimeout(() => { void poll() }, deps.jobPollMs ?? JOB_POLL_MS)
-  }
+    timer.current = setTimeout(() => { void pollRef.current() }, deps.jobPollMs ?? JOB_POLL_MS)
+  }, [deps])
 
   /** 一帧落地：整体替换 + 判「还要不要继续看」。服务端连一轮都没有 = 没有可显示的结果，如实说 */
-  const apply = (job: ExploreSnapshot | null): boolean => {
+  const apply = useCallback((job: ExploreSnapshot | null): boolean => {
     if (job === null) {
       stopChannels()
       setError(t('city.job.unavailable'))
@@ -131,9 +134,9 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
     setError(job.phase === 'running' || job.cancelled === true ? null : job.error ?? null)
     setRound(toRound(job))
     return job.phase === 'running'
-  }
+  }, [stopChannels, t])
 
-  const poll = async (): Promise<void> => {
+  const poll = useCallback(async (): Promise<void> => {
     const g = gen.current
     if (!alive.current) return
     let job: ExploreSnapshot | null
@@ -150,12 +153,13 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
     }
     if (!alive.current || gen.current !== g) return
     if (apply(job) && alive.current) armPoll()
-  }
+  }, [deps, t, apply, armPoll])
+  useEffect(() => { pollRef.current = poll }, [poll])
 
   /** 盯住这一轮：先开 SSE；断开 / 连不上 / 提前结束而本轮未终态 → 回落轮询。
    *  进门先 `stopChannels` 接管通道：旧流与它可能已经排好的下一发轮询一起撤——只 abort 流不清 timer，
    *  续页与新提交就会留下一条 SSE 加一条轮询并行推进（口径见文件头「任一时刻只有一条通道」）。 */
-  const watch = (): void => {
+  const watch = useCallback((): void => {
     stopChannels()
     const g = gen.current
     const ctrl = new AbortController()
@@ -176,9 +180,9 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
       if (!alive.current || gen.current !== g) return   // 这条流已被更新的通道顶掉：残影不许再排一轮轮询
       if (running) armPoll()
     })()
-  }
+  }, [deps, apply, armPoll, stopChannels])
 
-  const submit = (sourceId: string, kind: string): void => {
+  const submit = useCallback((sourceId: string, kind: string): void => {
     const s = sourceId.trim()
     const k = kind.trim()
     if (s === '' || k === '') return
@@ -199,7 +203,7 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
         setError(t('city.job.submitFailed', { detail: describeError(e, t) }))   // 服务端没起新轮：上一轮结果照旧可读，不清屏
       }
     })()
-  }
+  }, [deps, t, watch])
 
   /**
    * 把这一轮再打一页。**这是本模块唯一的乐观态**，且只动 `running`：按下即进「加载中」——
@@ -210,7 +214,7 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
    * 能按下就说明服务端**那一刻手里没有在途的批**（`hasMore` 为真蕴含它），所以失败时把本地按下去的
    * `running` 还回来是诚实的：那种情况下服务端也没起任何东西。
    */
-  const loadMore = (): void => {
+  const loadMore = useCallback((): void => {
     setRound((r) => (r === null ? null : { ...r, running: true }))
     void (async () => {
       try {
@@ -229,7 +233,7 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
         setRound((r) => (r === null ? null : { ...r, running: false }))
       }
     })()
-  }
+  }, [deps, t, watch])
 
   useEffect(() => {
     alive.current = true
