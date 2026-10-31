@@ -6,7 +6,7 @@ import { DEFAULT_JS_TIMEOUT_MS } from './types.js'
 import type { EngineValue, EvalContext, Facet, SegmentLoc } from './types.js'
 import type { SubRule } from './sub-rule.js'
 import type { SourceSession } from './session.js'
-import { JsSandboxError } from './errors.js'
+import { JsSandboxError, isEngineError } from './errors.js'
 import { SANDBOX_MOUNTS, SYNC_AJAX_SENTINEL, asyncBridgeSource, asyncMountSource, invokeJavaMethod } from './js-protocol.js'
 import type { BridgeDeps } from './js-protocol.js'
 import { loadHtml, nodeText } from './dom.js'
@@ -143,13 +143,19 @@ const WORKER_RPC_DEADLINE_MS = 300_000
  *  所以不能「evalJs 期间挂、finally 摘」——摘早了照样漏；加载期常驻拦住默认 throw，插件 dispose 才摘。 */
 let guardInstalled = false
 /** 注入 sink 的形状：引擎不认识 services（依赖方向红线），日志缝因此不进这里，由组合根递进来。 */
-export interface GuardSink { warn(...args: unknown[]): void }
+export interface GuardSink { warn(...args: unknown[]): void; error?(...args: unknown[]): void }
 /** 缺省 sink 仍走 console——引擎离线直用（探针、普查、测试）时防线照样出声。
  *  前缀归 sink 的家：缺省这条自己缀一次（读数要认得出是谁家的日志），而注入方（日志缝）
  *  已经负责前缀，所以守卫这条**消息本身不带字面前缀**——两处各缀一次就是双前缀。 */
 const consoleGuardSink: GuardSink = { warn: (...args) => { console.warn('[dsh-novel]', ...args) } }
 let guardSink: GuardSink = consoleGuardSink
 function unhandledGuardHandler(reason: unknown): void {
+  // 引擎错误类来自插件自己的代码（不是脚本的 fire-and-forget）：升级到 error，
+  // 否则真 bug 与脚本噪声同档，进程级信号被 warn 淹没。脚本侧的 rejection 仍是 warn。
+  if (isEngineError(reason) && guardSink.error !== undefined) {
+    guardSink.error('未处理的 rejection（插件内部错误，已捕获）:', reason)
+    return
+  }
   guardSink.warn('沙箱脚本产生未处理的 rejection（已捕获，不影响进程）:',
     reason instanceof Error ? reason.message : reason)
 }

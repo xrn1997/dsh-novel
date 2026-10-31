@@ -168,7 +168,7 @@ export function apply(ctx: Context, config?: NovelConfig): void {
   // sink 也从这里递进去：防线幂等且先挂者定 sink，所以入口必须抢在第一次跑脚本之前挂，
   // 这条留痕才走得到日志缝（宿主日志面），而不是落在引擎的缺省 console 上。
   ctx.effect(() => {
-    const detach = ensureUnhandledGuard({ warn: (...a) => log.warn(...a) })
+    const detach = ensureUnhandledGuard({ warn: (...a) => log.warn(...a), error: (...a) => log.error(...a) })
     return () => { detach() }
   }, 'dsh-novel: unhandledRejection guard')
 
