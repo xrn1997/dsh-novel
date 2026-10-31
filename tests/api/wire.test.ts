@@ -25,6 +25,16 @@ describe('isTrustedRequest', () => {
   it('非 loopback → 拒', () => {
     expect(isTrustedRequest(reqWith({ host: 'h' }, '192.168.1.9'))).toBe(false)
   })
+  it('Host 不是 loopback → 拒（DNS rebinding：Origin 与 Host 同为攻击者域名时同源判定天然成立）', () => {
+    expect(isTrustedRequest(reqWith({ host: 'attacker.com:3000', origin: 'http://attacker.com:3000' }))).toBe(false)
+    expect(isTrustedRequest(reqWith({ host: 'attacker.com:3000' }))).toBe(false)          // 无 Origin/Referer 也拒
+    expect(isTrustedRequest(reqWith({ host: '127.0.0.1.evil.com:3000', referer: 'http://127.0.0.1.evil.com:3000/x' }))).toBe(false)
+    expect(isTrustedRequest(reqWith({ host: 'localhost:3000' }))).toBe(true)
+    expect(isTrustedRequest(reqWith({ host: '[::1]:3000' }))).toBe(true)
+  })
+  it('缺 Host → 拒（HTTP/1.1 必有；缺了就无从证明同源）', () => {
+    expect(isTrustedRequest({ headers: {}, socket: { remoteAddress: '127.0.0.1' } } as unknown as Pick<IncomingMessage, 'headers' | 'socket'>)).toBe(false)
+  })
 })
 
 describe('readJsonBody', () => {

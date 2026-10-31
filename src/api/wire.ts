@@ -23,17 +23,29 @@ export class ApiError extends Error {
 }
 
 /**
- * 同源 fence：仅放行 loopback 且（无 referer 或 referer 与 host 同源）且（无 origin 或 origin 与 host
- * 同源）的请求。
+ * 同源 fence：仅放行 loopback 且 Host 是 loopback 且（无 referer 或 referer 与 host 同源）
+ * 且（无 origin 或 origin 与 host 同源）的请求。
  * 显式取舍：**无 referer / 无 origin** 放行，是为了本机工具 / curl 能直接用（注释即此承诺）。
  * 看 origin 而不只看 referer 的理由（安全）：恶意页 `<meta name="referrer" content="no-referrer">`
  * 可让 Referer 缺席，但浏览器对跨源 POST **总是**发 Origin——所以「Origin 存在且跨源」必须拒，
  * 否则 `content-type: text/plain` 的 simple POST（不触发 preflight）可 CSRF 打 import/batch/auth。
+ * 先钉 Host 的理由（安全）：DNS rebinding 下攻击者域名的 A 记录指向 127.0.0.1，远端是 loopback、
+ * Origin 与 Host 又天然同源——只比同源等于没设防。Host 只可能是 loopback 名单（浏览器半走根相对
+ * 同源 fetch），不是就拒。
  */
+const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]'])
+
+function hostnameOf(host: string): string | null {
+  try { return new URL(`http://${host}`).hostname.toLowerCase() } catch { return null }
+}
+
 export function isTrustedRequest(req: Pick<IncomingMessage, 'headers' | 'socket'>): boolean {
   const remote = req.socket.remoteAddress ?? ''
   if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(remote)) return false
   const host = req.headers.host
+  if (host === undefined) return false
+  const hostname = hostnameOf(host)
+  if (hostname === null || !LOOPBACK_HOSTNAMES.has(hostname)) return false
   const origin = req.headers.origin
   if (origin !== undefined) {                       // Origin 在场 → 必须同源（curl 不发起源头）
     try { if (new URL(origin).host !== host) return false } catch { return false }
