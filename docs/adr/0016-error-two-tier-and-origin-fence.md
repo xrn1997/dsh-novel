@@ -1,4 +1,4 @@
-# 错误→HTTP 是两分法；同源 fence 必须看 Origin，无 Origin / 无 Referer 放行
+# 错误→HTTP 是两分法；同源 fence 既看 Origin 也钉 Host，无 Origin / 无 Referer 放行
 
 Status: accepted
 
@@ -7,6 +7,12 @@ Status: accepted
 
 **同源 fence**：`/novel-api` 只放行 loopback，且 Origin 在场必须与 Host 同源、Referer 在场必须与 Host 同源；**无 Origin / 无 Referer 视为合法**——这是给本机工具与 curl 的显式承诺，不是漏洞。只看 Referer 不够：恶意页可用 `<meta name="referrer" content="no-referrer">` 让 Referer 缺席，而浏览器对跨源 POST **总是**发 Origin；不拒「Origin 存在且跨源」，则 `content-type: text/plain` 的 simple POST（不触发 preflight）就能 CSRF 打到导入 / 批量 / 登录路由。被否决：要求 Referer 必须在场（会打死本机 curl 与 agent 工具面）。
 
+**Host 也必须在名单里**（远端 → Host → Origin → Referer 四步的第二步）：DNS rebinding 下攻击者域名的 A 记录指向 `127.0.0.1`，于是远端是 loopback、Origin 与 Host 又天然同源——上面那两条同源判定**同时**成立，等于没设防。Host 缺省只认 `localhost` / `127.0.0.1` / `[::1]`（浏览器半走根相对同源 fetch，本来就用不出别的形状），名单之外一律拒。比对前先归一（小写、剥端口），但**只认「URL 解析不改写」的写法**：`2130706433` 这类十进制 / 十六进制 / 八进制 IP 会被 WHATWG 归成 `127.0.0.1` 从而落进名单，那是只有 rebinding 工具才发得出的形状，放行等于把这道闸从后门拆掉。
+
+同源判定里，Host 侧 `:80` / `:443` 都按缺席归一——Host 头不带 scheme，反向代理做 TLS 终止时 443 可能只是连接默认端口；Origin / Referer 自己带 scheme，交给 WHATWG 只折算**各自 scheme** 的默认端口，因此 `http://localhost:443` 不会被并成 `http://localhost`。`apiAllowHosts` 的条目只比主机名，端口只做形状校验、不参与匹配（`dsh.local:8080` 与 `dsh.local:9999` 等价）——保留端口写法是为了让用户能照 Host 的原样抄进来，不是承诺端口生效。名单在 `createApiHandler` 构造期归一一次，逐请求只查表。
+
+**代价与逃生口一起记**：用 hosts 或内部 DNS 把宿主面板指到别名（`dsh.local → 127.0.0.1`）的合法用户会被同一把闸挡住——他的请求与攻击者在结构上无法区分。所以名单可由配置 `apiAllowHosts` 追加，且 403 的措辞点名 Host 并指路这个键（只写「非受信来源」等于让被挡住的人无从下手）。这条让渡是有意的：**填进去的每一个名字，都是把 rebinding 防线在那个域名上让掉**，只该填自己控制的名字。被否决两案：把「解析结果落在 loopback 段」当判据（`0.0.0.0`、十进制写法与攻击者域名都会从这一条挤进来）；把它做成活配置（安全边界能在运行中热改，比它要防的东西更危险——改它等价于重启，与 `dataDir` 同档）。
+
 在册待裁：`tests/api/routes.test.ts` 仍以中文措辞「未知路由」为判据（钉措辞而非结构码，文案一改即整套误红）——要么给未知路由单独一个码并改判据（属契约面扩张：客户端消费 `code`，新码要在 UI 上有中文映射），要么维持现状加这条注记。
 
-锚点：`src/services/errors.ts` 的 `classify` / `ErrorCategory`；`src/api/wire.ts` 的 `ApiError` / `isTrustedRequest` / `STATUS_OF` / `readCappedBody`；`src/api/dispatch.ts` 的 `createApiHandler`；`tests/api/wire.test.ts`。
+锚点：`src/services/errors.ts` 的 `classify` / `ErrorCategory`；`src/api/wire.ts` 的 `ApiError` / `fenceDenialOf`（四步判据的唯一实现）与 `isTrustedRequest`（它的布尔投影）/ `fenceAllowlist` / `LOOPBACK_HOSTNAMES` / `STATUS_OF` / `readCappedBody`；`src/api/dispatch.ts` 的 `createApiHandler` / `fenceDenialMessage`；`src/config.ts` 的 `apiAllowHosts`；`tests/api/wire.test.ts`、`tests/api/fence-403.test.ts`。

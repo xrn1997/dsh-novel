@@ -23,24 +23,106 @@ export class ApiError extends Error {
 }
 
 /**
- * 同源 fence：仅放行 loopback 且（无 referer 或 referer 与 host 同源）且（无 origin 或 origin 与 host
- * 同源）的请求。
+ * 同源 fence：仅放行 **远端是 loopback** 且 **Host 在本机名单里** 且（无 referer 或 referer 与 host
+ * 同源）且（无 origin 或 origin 与 host 同源）的请求。
  * 显式取舍：**无 referer / 无 origin** 放行，是为了本机工具 / curl 能直接用（注释即此承诺）。
  * 看 origin 而不只看 referer 的理由（安全）：恶意页 `<meta name="referrer" content="no-referrer">`
  * 可让 Referer 缺席，但浏览器对跨源 POST **总是**发 Origin——所以「Origin 存在且跨源」必须拒，
  * 否则 `content-type: text/plain` 的 simple POST（不触发 preflight）可 CSRF 打 import/batch/auth。
+ * 先钉 Host 的理由（安全）：DNS rebinding 下攻击者域名的 A 记录指向 127.0.0.1，远端是 loopback、
+ * Origin 与 Host 又天然同源——只比同源等于没设防。Host 默认只可能是本机名单（浏览器半走根相对
+ * 同源 fetch），不是就拒。
+ * 逃生口（代价照实记）：用自定义域名打开面板的人会被这条名单拒之门外（`dsh.local → 127.0.0.1`
+ * 与攻击者的域名在结构上无法区分），所以名单可由配置 `apiAllowHosts` 追加。**加进去的每一个名字
+ * 都是把 rebinding 防线在那个域名上让掉**——只填自己控制的名字。
  */
-export function isTrustedRequest(req: Pick<IncomingMessage, 'headers' | 'socket'>): boolean {
+const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]'])
+
+/** fence 拒绝的那一步（给路由层翻成可行动的 403 措辞用；判据只有 `fenceDenialOf` 一处）。 */
+export type FenceDenial = 'remote' | 'host' | 'origin' | 'referer'
+
+/** 已归一的名单（构造期 `fenceAllowlist` 的产物）或原始配置项。 */
+export type FenceAllowHosts = readonly string[] | ReadonlySet<string>
+
+export interface FenceOptions {
+  /** 配置 `apiAllowHosts` 追加的本机别名（只比主机名：大小写归一、端口剥掉）。
+   *  传 Set = 已由 `fenceAllowlist` 算好（含缺省三值），路由构造期算一次、逐请求复用。 */
+  allowHosts?: FenceAllowHosts
+}
+
+/**
+ * Host → 可比对的主机名，**只认「URL 解析不改写」的写法**（「哪些主机名写法可信」这一判据的
+ * 唯一实现：配置侧 `config.ts` 的 `apiAllowHosts` 校验同用这把尺，别处不许再抄一份）。
+ * 归一（小写、剥端口、默认 80 不出现）照做，但解析结果一旦与原文不同就判不可信：
+ * `2130706433` / `0x7f000001` 这类写法会被 WHATWG 归成 `127.0.0.1`，从而落在名单里——
+ * 那是只有 rebinding 工具才会发的形状（用户的面板不会长这样），放行等于把刚立起来的这道闸
+ * 从后门拆掉。端口按 RFC 允许出现（`localhost:80` 与 `localhost` 是同一个 origin）。
+ */
+export function hostNameOf(host: string): string | null {
+  let url: URL
+  try { url = new URL(`http://${host}`) } catch { return null }
+  const name = url.hostname.toLowerCase()
+  if (name === '') return null
+  const withoutPort = url.port !== ''
+    ? host.slice(0, host.length - url.port.length - 1)
+    : host.replace(/:80$/i, '')                       // 默认端口不进 url.port，但合法的 Host 会带着它
+  return withoutPort.toLowerCase() === name ? name : null
+}
+
+/** Host 头不带 scheme，`:80` / `:443` 都可能只是该连接默认端口的写法（反代 TLS 终止时尤其如此），
+ *  所以 Host 侧两者都按缺席归一。Origin / Referer 自己带 scheme，交给 WHATWG 只折算该 scheme 的
+ *  默认端口——`http://localhost:443` 是一个真实不同的源，不会被并成 `http://localhost`。 */
+function hostKeyOf(host: string): string {
+  const url = new URL(`http://${host}`)
+  const port = url.port === '' || url.port === '80' || url.port === '443' ? '' : `:${url.port}`
+  return `${url.hostname.toLowerCase()}${port}`
+}
+
+/** 同源比对用的键：主机名 + 端口（URL 已按 scheme 折算默认端口：`http://localhost:80` → 无端口）。 */
+function originKeyOf(url: URL): string {
+  return `${url.hostname.toLowerCase()}${url.port === '' ? '' : `:${url.port}`}`
+}
+
+/** 本机名单 = 缺省三值 + 配置追加的别名。传 Set = 已算好的名单，直接复用（路由构造期一次）。
+ *  配置里的坏形状在加载期已被配置缝挡掉（同一把尺：`config.ts` 的 `resolveConfig` 用 `hostNameOf`
+ *  拒过一遍），这里仍按「解析不出就丢」处理：fence 是最后一道闸，
+ *  不该因为一条脏配置整体放行；字符串不是名单，不许按字符拆成若干名字。 */
+export function fenceAllowlist(extra?: FenceAllowHosts): ReadonlySet<string> {
+  if (extra instanceof Set) return extra
+  const allow = new Set(LOOPBACK_HOSTNAMES)
+  if (!Array.isArray(extra)) return allow
+  for (const entry of extra) {
+    if (typeof entry !== 'string') continue
+    const name = hostNameOf(entry)
+    if (name !== null) allow.add(name)
+  }
+  return allow
+}
+
+/** 这一发为什么不被信任（`null` = 放行）。顺序即判据顺序：远端 → Host → Origin → Referer。 */
+export function fenceDenialOf(
+  req: Pick<IncomingMessage, 'headers' | 'socket'>, opts: FenceOptions = {},
+): FenceDenial | null {
   const remote = req.socket.remoteAddress ?? ''
-  if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(remote)) return false
+  if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(remote)) return 'remote'
   const host = req.headers.host
+  if (host === undefined) return 'host'
+  const hostname = hostNameOf(host)
+  if (hostname === null || !fenceAllowlist(opts.allowHosts).has(hostname)) return 'host'
+  const hostKey = hostKeyOf(host)
   const origin = req.headers.origin
   if (origin !== undefined) {                       // Origin 在场 → 必须同源（curl 不发起源头）
-    try { if (new URL(origin).host !== host) return false } catch { return false }
+    try { if (originKeyOf(new URL(origin)) !== hostKey) return 'origin' } catch { return 'origin' }
   }
   const referer = req.headers.referer
-  if (referer === undefined) return true            // 无 referer：本机工具/curl 合法
-  try { return new URL(referer).host === host } catch { return false }
+  if (referer === undefined) return null            // 无 referer：本机工具/curl 合法
+  try { return originKeyOf(new URL(referer)) === hostKey ? null : 'referer' } catch { return 'referer' }
+}
+
+export function isTrustedRequest(
+  req: Pick<IncomingMessage, 'headers' | 'socket'>, opts: FenceOptions = {},
+): boolean {
+  return fenceDenialOf(req, opts) === null
 }
 
 /** JSON 信封体的字节上限（缺省 1MiB）。**这个数是唯一主人**：调用方要放宽就传参，别再写第二个字面量。 */

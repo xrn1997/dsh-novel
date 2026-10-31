@@ -83,4 +83,27 @@ describe('配置收缝', () => {
     expect(() => resolveConfig({ proxyUrl: 'http://bad host' })).toThrow(/配置非法/)
     expect(() => resolveConfig({ proxyUrl: 'ftp://127.0.0.1' })).toThrow(/配置非法/)
   })
+  it('apiAllowHosts：形状闸只收 host / host:port，且它是静态位（fence 的名单不做热更）', () => {
+    expect(resolveConfig({ apiAllowHosts: ['dsh.local'] }).apiAllowHosts).toEqual(['dsh.local'])
+    expect(resolveConfig({ apiAllowHosts: ['dsh.local:8080'] }).apiAllowHosts).toEqual(['dsh.local:8080'])
+    expect(resolveConfig({}).apiAllowHosts, '缺席 = 不追加任何名字').toEqual([])
+    expect(resolveConfig({ apiAllowHosts: null as never }).apiAllowHosts).toEqual([])
+    for (const bad of [['http://dsh.local'], ['dsh local'], ['dsh.local/path'], [''], [1]]) {
+      expect(() => resolveConfig({ apiAllowHosts: bad as never }), JSON.stringify(bad)).toThrow(/配置非法/)
+    }
+    // 静态位：宿主声明里不是活 ref（改了要重启），与 dataDir 同档
+    const cfg = Config(undefined as any) as any
+    expect(typeof cfg.apiAllowHosts, '静态位不该是 ref').not.toBe('function')
+    expect(cfg.apiAllowHosts.get).toBeUndefined()
+  })
+  it('apiAllowHosts：URL 解析会改写的主机名写法加载期拒绝（fence 侧静默丢弃 = 配置合法却毫无效果）', () => {
+    for (const bad of [['2130706433'], ['0x7f000001'], ['0177.0.0.1'], ['2130706433:8080']]) {
+      expect(() => resolveConfig({ apiAllowHosts: bad }), JSON.stringify(bad)).toThrow(/配置非法/)
+    }
+    // 只认「URL 解析不改写」的写法：自定义域名照收（大小写归一与端口剥除在 fence 侧做，配置原样留）
+    expect(resolveConfig({ apiAllowHosts: ['dsh.local', 'DSH.LOCAL:8080'] }).apiAllowHosts)
+      .toEqual(['dsh.local', 'DSH.LOCAL:8080'])
+    expect(resolveConfig({ apiAllowHosts: ['127.0.0.1', 'localhost'] }).apiAllowHosts,
+      '本机三值本身解析不改写').toEqual(['127.0.0.1', 'localhost'])
+  })
 })

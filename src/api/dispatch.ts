@@ -6,7 +6,8 @@ import { SVG_MEDIA_TYPE } from '../services/epub/resources.js'
 import { log } from '../services/log.js'
 import { formatByteLimit } from '../services/size.js'
 import { readValue, type ValueSource } from '../services/value-source.js'
-import { ApiError, isTrustedRequest, readCappedBody, readJsonBody, writeError, writeOk } from './wire.js'
+import { ApiError, fenceAllowlist, fenceDenialOf, readCappedBody, readJsonBody, writeError, writeOk } from './wire.js'
+import type { FenceDenial } from './wire.js'
 import { NOVEL_API_PREFIX, PARAMS, paramOps, readBodies, ROUTES, SEG } from '../shared/wire.js'
 import type { RouteTarget } from '../shared/wire.js'
 import { BodyShapeError } from '../shared/wire.js'
@@ -51,6 +52,26 @@ function openJobStream(res: ServerResponse, subscribe: (notify: () => void) => (
  * 下一次导出即用新值，但**一次导出只读一次**——导出中途换节奏会让同一份文件前后快慢不一。 */
 export interface ApiHandlerOptions {
   exportDelayMs?: ValueSource<number>
+  /** 同源 fence 的本机名单追加项（配置 `apiAllowHosts`）。启动期读一次就定：它是一条安全边界，
+   *  不做热更——「运行中随时让掉一个名字」的口子比它要防的东西更危险。 */
+  allowHosts?: readonly string[]
+}
+
+/** 403 回显 Host 的长度上限：拒绝理由给别人看，不该被一个超长头撑成整屏。 */
+const HOST_ECHO_MAX = 120
+
+/** 403 要说得可行动：只写「非受信来源」的人分不清自己是网络位置不对还是 Host 不对，
+ *  而后者是他自己能配的（判据本身住 `api/wire.ts` 的 `fenceDenialOf`，这里只翻措辞）。 */
+function fenceDenialMessage(denial: FenceDenial, host: string | undefined): string {
+  if (denial === 'remote') return '非受信来源：请求不是从本机 loopback 发来的'
+  if (denial === 'host') {
+    const shown = host === undefined
+      ? '(缺失)'
+      : host.length > HOST_ECHO_MAX ? `${host.slice(0, HOST_ECHO_MAX)}…` : host
+    return `非受信来源：Host「${shown}」不在本机名单（localhost / 127.0.0.1 / [::1]）里。`
+      + '用自定义域名打开宿主面板时，把那个域名加进配置 apiAllowHosts 并重启插件'
+  }
+  return '非受信来源：Origin / Referer 与本服务不同源'
 }
 
 /**
@@ -58,10 +79,13 @@ export interface ApiHandlerOptions {
  * 不依赖 Cordis——纯构造器，测试用真 http.Server 承载（tests/api/helpers.ts）。
  */
 export function createApiHandler(service: ReadingService, opts: ApiHandlerOptions = {}) {
+  // 名单是静态配置：构造期归一一次，逐请求只查表（`fenceDenialOf` 仍是唯一判据）
+  const allowHosts = fenceAllowlist(opts.allowHosts)
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     try {
-      if (!isTrustedRequest(req)) {
-        throw new ApiError('非受信来源', 403, 'Forbidden')
+      const denial = fenceDenialOf(req, { allowHosts })
+      if (denial !== null) {
+        throw new ApiError(fenceDenialMessage(denial, req.headers.host), 403, 'Forbidden')
       }
       const url = new URL(req.url ?? '/', 'http://dsh.internal')
       if (!url.pathname.startsWith(NOVEL_API_PREFIX)) {

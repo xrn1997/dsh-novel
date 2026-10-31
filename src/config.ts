@@ -1,4 +1,5 @@
 import Schema from '@deepseek-ai/schemastery'
+import { hostNameOf } from './api/wire.js'
 import { DEFAULT_CACHE_MAX_BYTES } from './services/cache.js'
 import { DEFAULT_EXPORT_DELAY_MS } from './services/export.js'
 import { DEFAULT_TIMEOUT_MS } from './services/fetcher.js'
@@ -33,6 +34,10 @@ const CONFIG_FIELDS = {
   localImportMaxBytes: numberField(DEFAULT_MAX_IMPORT_BYTES, 1),
   /** 出站代理：'direct' = 强制直连；显式地址 = 用它；缺省 = 环境变量 → Windows 系统代理 → 直连 */
   proxyUrl: proxyField(),
+  /** `/novel-api` 同源 fence 的本机名单追加项：只有用自定义域名（hosts / 内部 DNS）打开宿主面板
+   *  时才需要填。刻意不做成活值（同 `dataDir`）：它是一条安全边界，热改等于「运行中随时把
+   *  rebinding 防线让掉一个名字」，改它等价于重启。 */
+  apiAllowHosts: hostListField(),
 } as const
 
 /** 数值位：整数 + 下界。六个数值位的单位都是整数（毫秒 / 字节 / 并发数），`.step(1)` 同时钉整数并
@@ -58,6 +63,19 @@ function proxyField() {
   return {
     default: undefined as string | undefined, volatile: true as const,
     schema: () => Schema.string().pattern(/^(?:|direct|(?:https?:\/\/)?(?!.*:\/\/)[^\s/]+(?::\d+)?(?:\/\S*)?)$/i),
+  }
+}
+
+/** 本机别名列表位（非活值、可缺席）：每项 `host` 或 `host:port`，不许带 scheme / 路径 / 空白，
+ *  且必须是 URL 解析不改写的主机名写法（判据住 `api/wire.ts` 的 `hostNameOf`，与 fence 同一把尺；
+ *  `2130706433` 这类形状闸放行、构造期却会被静默丢弃的写法由 `resolveConfig` 在加载期拒掉）。
+ *  端口只用于形状校验、不参与匹配——名单比的是主机名，`dsh.local:8080` 也放行 `dsh.local:9999`。
+ *  缺席 = 不追加任何名字。这里没有会漂移的数值主人——「名单本体」的唯一主人仍是
+ *  `api/wire.ts` 的 `LOOPBACK_HOSTNAMES`，这一格只回答「用户还追加了谁」。 */
+function hostListField() {
+  return {
+    default: undefined as readonly string[] | undefined, volatile: false as const,
+    schema: () => Schema.array(Schema.string().pattern(/^[A-Za-z0-9._-]+(?::\d+)?$/)),
   }
 }
 
@@ -98,7 +116,7 @@ function maybeVolatile<T extends object>(schema: T): T {
   return typeof method === 'function' ? (method.call(schema) as T) : schema
 }
 
-/** 表 → schema：标了 `volatile` 的行才挂 `.volatile()`，其余（dataDir）一律静态。 */
+/** 表 → schema：标了 `volatile` 的行才挂 `.volatile()`，其余（dataDir / apiAllowHosts）一律静态。 */
 export const Config = Schema.object(
   Object.fromEntries(Object.entries(CONFIG_FIELDS).map(([name, spec]) =>
     [name, spec.volatile ? maybeVolatile(spec.schema()) : spec.schema()])),
@@ -121,6 +139,16 @@ export function resolveConfig(raw?: NovelConfig | ConfigInput): ResolvedConfig {
       out = Config((input ?? {}) as any) as unknown as ConfigInput
     } catch (e) {
       throw new Error(`[dsh-novel] 配置非法（见 README 配置表）：${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+  // apiAllowHosts 还要过「URL 解析不改写」判据（唯一实现 = api/wire.ts 的 hostNameOf，fence 同一把尺）：
+  // `2130706433` 这类写法形状闸放行、`fenceAllowlist` 构造期却会静默丢弃——「配置合法却毫无效果」
+  // 比报错难查得多（README 承诺非法值加载期报错，这里就是那半步）。放在这里而不是 schema 里，
+  // 是为了同时盖住 ref 快路径（快路径整份跳过 schema，这格虽是纯值也不该漏检）。
+  const allowHosts = readField(out.apiAllowHosts) ?? []
+  for (const entry of allowHosts) {
+    if (typeof entry !== 'string' || hostNameOf(entry) === null) {
+      throw new Error(`[dsh-novel] 配置非法（见 README 配置表）：apiAllowHosts 的条目 ${JSON.stringify(entry)} 不是「URL 解析不改写」的主机名写法（会被 URL 解析改写成 IP 的别名在 fence 侧等于无效，不收）`)
     }
   }
   // 读数面由表生成：每格一个 getter，读的就是 `out` 里那一格的**当前**值（ref 走 get()）
