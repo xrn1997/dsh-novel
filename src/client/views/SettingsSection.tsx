@@ -52,7 +52,7 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
       // `source-inbox-ui.ts`）。**取数失败那一支不作废**：加载失败是「不知道」，不是「这批没了」，
       // 拿它清掉用户的忽略现场就是把未知当结论。
       pruneInboxMuted(sourceInbox(list))
-    }, (e) => {
+    }, (e: unknown) => {
       setSources([])
       setLoadError(describeError(e, t))
     })

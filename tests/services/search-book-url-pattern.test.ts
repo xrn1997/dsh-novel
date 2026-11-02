@@ -11,6 +11,8 @@ import { normalizeSource } from '../../src/services/normalize.js'
 import { fakeSourceRequest } from './fake-source-request.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
 import type { NovelSource } from '../../src/services/types.js'
+import { must, pick } from '../support/fixture.js'
+import { requestUrlOf } from '../support/fetch-input.js'
 
 /**
  * bookUrlPattern 嗅探（命中 pattern 即按详情页
@@ -35,7 +37,7 @@ function src(over: Record<string, unknown> = {}): NovelSource {
     ruleContent: '@css:#content@textNodes', ...over,
   }
   const n = normalizeSource(raw)
-  return { id: 'i', status: 'unverified', importedAt: 0, ...n.source! } as NovelSource
+  return { id: 'i', status: 'unverified', importedAt: 0, ...must(n.source, 'n 归一化后的 source') }
 }
 
 const htmlPage = (text: string, finalUrl?: string): Response => finalUrl === undefined
@@ -168,18 +170,18 @@ async function makeSvc(raw: Record<string, unknown>, finalUrlOf: (url: string) =
   const registry = trackService(await SourceRegistry.load(dir))
   const shelf = trackService(await Shelf.load(dir))
   const impl = async (input: RequestInfo | URL): Promise<Response> => {
-    const url = String(input)
+    const url = requestUrlOf(input)
     const body = /\/search|\/book\/123/.test(url) ? DETAIL_BODY : LIST_BODY
     return htmlPage(body, finalUrlOf(url) ?? undefined)
   }
   const jar = new CookieJar()
   const svc = trackService(await ReadingService.from({
     registry, shelf, cache: new PageCache(dir),
-    fetcher: createFetcher({ fetchImpl: impl as never, cookieJar: jar }),
+    fetcher: createFetcher({ fetchImpl: impl, cookieJar: jar }),
     cookieJar: jar,
   }))
   await svc.importOne(raw)
-  return { svc, id: registry.list()[0].id }
+  return { svc, id: pick(registry.list(), 0).id }
 }
 
 const PATTERN_SRC = {
@@ -196,9 +198,10 @@ describe('searchOne 的 info 形态命中（对面 getInfoItem）', () => {
   it('一条命中：字段走 ruleDetail*（不是搜索条目规则），封面按落地地址绝对化', async () => {
     const { svc, id } = await makeSvc(PATTERN_SRC)
     const groups = await svc.search('书', { sourceIds: [id] })
-    expect(groups[0].error).toBeUndefined()
-    expect(groups[0].hits).toHaveLength(1)
-    const hit = groups[0].hits[0]
+    const group = pick(groups, 0)
+    expect(group.error).toBeUndefined()
+    expect(group.hits).toHaveLength(1)
+    const hit = pick(group.hits, 0)
     expect(hit.title).toBe('剑来')
     expect(hit.author).toBe('烽火戏诸侯')
     expect(hit.intro).toContain('简介')
@@ -213,13 +216,13 @@ describe('searchOne 的 info 形态命中（对面 getInfoItem）', () => {
       bookUrlPattern: 'https://s\\.com/book/\\d+/\\?q=.+',
     })
     const groups = await svc.search('书', { sourceIds: [id] })
-    expect(groups[0].hits[0].url).toBe(`${BASE}/book/123/?q=%E4%B9%A6,{"method":"POST","body":"s=1"}`)
+    expect(pick(pick(groups, 0).hits, 0).url).toBe(`${BASE}/book/123/?q=%E4%B9%A6,{"method":"POST","body":"s=1"}`)
   })
   it('详情书名为空 → 0 命中（对面 book.name.isNotBlank() 才收），不报错', async () => {
     const { svc, id } = await makeSvc({ ...PATTERN_SRC, ruleDetailName: '@css:#nosuch@text' })
     const groups = await svc.search('书', { sourceIds: [id] })
-    expect(groups[0].error).toBeUndefined()
-    expect(groups[0].hits).toEqual([])
+    expect(pick(groups, 0).error).toBeUndefined()
+    expect(pick(groups, 0).hits).toEqual([])
   })
   it('重定向命中 → URL 用落地地址（搜索地址本身不是可重访的详情页）', async () => {
     const { svc, id } = await makeSvc(
@@ -227,9 +230,10 @@ describe('searchOne 的 info 形态命中（对面 getInfoItem）', () => {
       (u) => (/\/search/.test(u) ? `${BASE}/book/123/` : null),
     )
     const groups = await svc.search('书', { sourceIds: [id] })
-    expect(groups[0].hits).toHaveLength(1)
-    expect(groups[0].hits[0].title).toBe('剑来')
-    expect(groups[0].hits[0].url).toBe(`${BASE}/book/123/`)
+    const group = pick(groups, 0)
+    expect(group.hits).toHaveLength(1)
+    expect(pick(group.hits, 0).title).toBe('剑来')
+    expect(pick(group.hits, 0).url).toBe(`${BASE}/book/123/`)
   })
   it('回落遇上 init 零命中 → 0 命中而不是搜索错误（对面 setContent(null) 后就没书目；把空结果升级成整源失败是真机抓回的回退）', async () => {
     const { svc, id } = await makeSvc({
@@ -238,7 +242,7 @@ describe('searchOne 的 info 形态命中（对面 getInfoItem）', () => {
       ruleBookList: '@css:.nosuch', ruleDetailInit: '@css:#no-such-node@html',
     })
     const groups = await svc.search('书', { sourceIds: [id] })
-    expect(groups[0].error).toBeUndefined()
-    expect(groups[0].hits).toEqual([])
+    expect(pick(groups, 0).error).toBeUndefined()
+    expect(pick(groups, 0).hits).toEqual([])
   })
 })

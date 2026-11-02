@@ -7,6 +7,8 @@ import { RateLimiter } from '../../src/services/rate-limit.js'
 import { assembleRequest } from '../../src/services/request.js'
 import { createSourceRequest } from '../../src/services/source-request.js'
 import type { NovelSource } from '../../src/services/types.js'
+import { must } from '../support/fixture.js'
+import { requestUrlOf } from '../support/fetch-input.js'
 
 function src(over: Record<string, unknown> = {}): NovelSource {
   const raw = {
@@ -18,7 +20,7 @@ function src(over: Record<string, unknown> = {}): NovelSource {
   }
   const n = normalizeSource(raw)
   if (!n.ok) throw new Error(`桩源应能规范化：${JSON.stringify(n.missing)}`)
-  return { id: 'i', status: 'unverified', importedAt: 0, ...n.source! } as NovelSource
+  return { id: 'i', status: 'unverified', importedAt: 0, ...must(n.source, 'n 归一化后的 source') }
 }
 
 const html = (text: string): Response =>
@@ -33,7 +35,7 @@ const webview = {
 describe('SourceRequest', () => {
   it('fetchText / fetchPage 走基础 fetcher，返回落点与正文', async () => {
     const seen: string[] = []
-    const fetcher = createFetcher({ fetchImpl: async (input) => { seen.push(String(input)); return html('ok') } })
+    const fetcher = createFetcher({ fetchImpl: async (input) => { seen.push(requestUrlOf(input)); return html('ok') } })
     const sr = createSourceRequest({
       fetcher, webview, cookieJar: new CookieJar(), jsTimeoutMs: () => 1000,
     })
@@ -87,8 +89,8 @@ describe('SourceRequest', () => {
     const urls: string[] = []
     const fetcher = createFetcher({
       fetchImpl: async (input) => {
-        urls.push(String(input))
-        return html(String(input).endsWith('/next') ? 'next' : 'first')
+        urls.push(requestUrlOf(input))
+        return html(requestUrlOf(input).endsWith('/next') ? 'next' : 'first')
       },
     })
     const sr = createSourceRequest({
@@ -140,7 +142,7 @@ describe('SourceRequest', () => {
     })
     const sr = createSourceRequest({
       fetcher: createFetcher({ fetchImpl: async () => html('h') }),
-      webview: { fetch: webviewFetch } as never,
+      webview: { fetch: webviewFetch },
       cookieJar: new CookieJar(),
       jsTimeoutMs: () => 1000,
     })
@@ -161,7 +163,7 @@ describe('SourceRequest', () => {
     const jar = new CookieJar()
     const sr = createSourceRequest({
       fetcher: createFetcher({ fetchImpl: async () => html('h') }),
-      webview: { fetch: webviewFetch } as never,
+      webview: { fetch: webviewFetch },
       cookieJar: jar,
       jsTimeoutMs: () => 1000,
     })
@@ -169,7 +171,7 @@ describe('SourceRequest', () => {
     await sr.fetchText(s, { ...assembleRequest('https://s.com/w', {}, s.baseUrl), webView: true })
     expect(jar.headerFor('https://s.com/x')).toContain('sid=1')
     expect(jar.headerFor('http://s.com/x')).toBe('')       // Secure 不能经 http 发出
-    const entry = jar.entries().find((e) => e.name === 'sid')!
+    const entry = must(jar.entries().find((e) => e.name === 'sid'), 'jar.entries() 里 find 命中的那一项')
     expect(entry.secure).toBe(true)
     expect(entry.expires).toBeGreaterThan(Date.now())
   })
@@ -182,7 +184,7 @@ describe('SourceRequest', () => {
     const jar = new CookieJar()
     const sr = createSourceRequest({
       fetcher: createFetcher({ fetchImpl: async () => html('h') }),
-      webview: { fetch: webviewFetch } as never,
+      webview: { fetch: webviewFetch },
       cookieJar: jar,
       jsTimeoutMs: () => 1000,
     })
@@ -220,7 +222,7 @@ describe('SourceRequest', () => {
     jar.absorb('https://s.com', ['dom=1; Domain=.s.com; Path=/'])
     const sr = createSourceRequest({
       fetcher: createFetcher({ fetchImpl: async () => html('h') }),
-      webview: { fetch: webviewFetch } as never,
+      webview: { fetch: webviewFetch },
       cookieJar: jar,
       jsTimeoutMs: () => 1000,
       rateLimiterFor: () => limiter,
@@ -328,7 +330,7 @@ describe('SourceRequest', () => {
     const seen: string[] = []
     const fetcher = createFetcher({
       fetchImpl: async (input) => {
-        const url = String(input)
+        const url = requestUrlOf(input)
         seen.push(url)
         if (url.endsWith('/h')) {
           return new Response('{"X-Dyn":"1"}', { headers: { 'content-type': 'application/json' } })
@@ -353,7 +355,7 @@ describe('SourceRequest', () => {
     const seen: string[] = []
     const fetcher = createFetcher({
       fetchImpl: async (input) => {
-        const url = String(input)
+        const url = requestUrlOf(input)
         seen.push(url)
         if (url.endsWith('/h')) {
           return new Response('{"X-Dyn":"1"}', { headers: { 'content-type': 'application/json' } })
@@ -378,7 +380,7 @@ describe('SourceRequest', () => {
     const seen: string[] = []
     const fetcher = createFetcher({
       fetchImpl: async (input) => {
-        const url = String(input)
+        const url = requestUrlOf(input)
         seen.push(url)
         if (url.endsWith('/h')) {
           return new Response('{"X-Dyn":"1"}', { headers: { 'content-type': 'application/json' } })
@@ -410,7 +412,7 @@ describe('SourceRequest', () => {
     const seen: string[] = []
     const fetcher = createFetcher({
       fetchImpl: async (input) => {
-        const url = String(input)
+        const url = requestUrlOf(input)
         seen.push(url)
         if (url.endsWith('/h')) {
           return new Response('{"X-Dyn":"1"}', { headers: { 'content-type': 'application/json' } })
@@ -432,7 +434,7 @@ describe('SourceRequest', () => {
       now: () => now, sleep: async (ms) => { sleeps.push(ms); now += ms },
     })
     const fetcher = createFetcher({
-      fetchImpl: async (input) => html(String(input).endsWith('/next') ? 'next' : 'first'),
+      fetchImpl: async (input) => html(requestUrlOf(input).endsWith('/next') ? 'next' : 'first'),
     })
     const sr = createSourceRequest({
       fetcher, webview, cookieJar: new CookieJar(), jsTimeoutMs: () => 1000, rateLimiterFor: () => limiter,

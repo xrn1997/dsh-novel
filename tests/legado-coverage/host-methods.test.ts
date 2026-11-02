@@ -59,7 +59,13 @@ describe('对面 java 宿主方法面：没做到的必须在矩阵里逐字点�
     const row = matrix.split('\n').find((l) => l.includes("id: 'h-java-unmounted-uncalled'")) ?? ''
     expect(row.length, '矩阵里没有 h-java-unmounted-uncalled 行').toBeGreaterThan(0)
     // 反引号里的驼峰标识符 = 这行点名的宿主方法（全大写常量名与短散文词被形状筛挡掉）
-    const cited = [...row.matchAll(/`([a-z][A-Za-z0-9_]{3,})`/g)].map((m) => m[1])
+    const cited: string[] = []
+    for (const m of row.matchAll(/`([a-z][A-Za-z0-9_]{3,})`/g)) {
+      const name = m[1]
+      // 捕获体缺席只可能是正则被改坏：跳过等于让这个名字躲过反向判据，故宁可炸
+      if (name === undefined) throw new Error(`点名行里的反引号片段没有捕获体：${m[0]}`)
+      cited.push(name)
+    }
     expect(cited.length, '这行没点到方法名，判据退化').toBeGreaterThan(10)
     const stale = cited.filter((n) => implemented.has(n))
     expect(stale, `这些名字其实已真实现，却被列在未挂名册里：${stale.join(', ')}`).toEqual([])

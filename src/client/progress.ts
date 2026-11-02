@@ -17,13 +17,17 @@ export function ratioWithin(a: ChapterAnchor, scrollTop: number): number {
 
 /** 定位当前章与章内比例：取起点不晚于滚动位的最大锚点；比例 = 章内已滚过的高度占比 */
 export function locateChapter(anchors: ChapterAnchor[], scrollTop: number): { chapterIndex: number; offsetRatio: number } {
-  if (anchors.length === 0) return { chapterIndex: 0, offsetRatio: 0 }
-  let idx = anchors[0].index
+  const [head] = anchors
+  // 没有锚点 = 还没量到任何章：章号与比例都留在基线 0（不是"取位失败"，这里就没有取位这回事）
+  if (head === undefined) return { chapterIndex: 0, offsetRatio: 0 }
+  let idx = head.index
   for (const a of anchors) {
     if (a.start <= scrollTop) idx = a.index
     else break
   }
-  const a = anchors.find((x) => x.index === idx)!
+  const a = anchors.find((x) => x.index === idx)
+  // 与空表同一出口（还没量到任何章）：找不到就不编一个比例，章号与比例都留在基线 0
+  if (a === undefined) return { chapterIndex: 0, offsetRatio: 0 }
   return { chapterIndex: idx, offsetRatio: ratioWithin(a, scrollTop) }
 }
 

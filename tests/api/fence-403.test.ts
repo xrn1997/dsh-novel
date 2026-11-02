@@ -42,9 +42,9 @@ beforeAll(async () => {
   const dir = await makeTempDir('novel-fence-')
   svc = trackService(await ReadingService.create({
     dir,
-    fetchImpl: (async () => new Response('<html></html>', {
+    fetchImpl: async () => new Response('<html></html>', {
       headers: { 'content-type': 'text/html; charset=utf-8' },
-    })) as never,
+    }),
   }))
 })
 afterAll(async () => {

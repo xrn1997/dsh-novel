@@ -9,6 +9,7 @@ import { ApiClientError, apiGet, apiUpload } from '../../src/client/api.js'
 import { streamExport } from '../../src/client/download.js'
 import { coverFallbackChar, searchPct } from '../../src/client/views/bits.js'
 import { LOCAL_SOURCE_ID } from '../../src/shared/wire.js'
+import { must, pick } from '../support/fixture.js'
 
 describe('首页封面降级', () => {
   it('取首字；空/全空白标题回退「书」', () => {
@@ -38,7 +39,7 @@ describe('progress 数学', () => {
   })
   it('anchorTop 与 locateChapter 互逆（尾章同样往返——旧版本尾章取回章顶）', () => {
     for (const [i, inside] of [[0, 300], [1, 750], [2, 400]] as const) {
-      const at = anchors[i].start + inside
+      const at = pick(anchors, i).start + inside
       const { offsetRatio } = locateChapter(anchors, at)
       expect(anchorTop(anchors, i, offsetRatio, 4000, 500)).toBeCloseTo(at, 5)
     }
@@ -133,7 +134,7 @@ describe('streamExport', () => {
 
 describe('streamExport 范围参数', () => {
   it('from/to 传入时进 query（缺省不出现——全本旧链接零参数）', async () => {
-    const fetchMock = vi.fn(async (_url: unknown, _init?: unknown) => new Response(
+    const fetchMock = vi.fn<(url: string) => Promise<Response>>(async () => new Response(
       new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('x')); c.close() } }),
       { status: 200, headers: { 'content-type': 'text/plain' } }))
     vi.stubGlobal('fetch', fetchMock)
@@ -141,7 +142,7 @@ describe('streamExport 范围参数', () => {
       sourceId: 's', bookKey: 'b', title: '书', from: 5, to: 80,
       onProgress: () => {}, signal: new AbortController().signal,
     })
-    expect(String(fetchMock.mock.calls[0][0])).toContain('from=5&to=80')
+    expect(pick(pick(fetchMock.mock.calls, 0), 0)).toContain('from=5&to=80')
     vi.unstubAllGlobals()
   })
 })
@@ -207,10 +208,11 @@ describe('styles token 迁移', () => {
   })
   it('命中行是 flex 行（回归钉：.novel-row 丢 display:flex 会让「＋ 加书架」掉到标题下方堆叠）', () => {
     // 真机踩过：样式块重写时把 display/align-items 弄丢，行退化成块级堆叠，marginLeft:auto 失效
-    const m = NOVEL_CSS.match(/\.novel-row\s*\{[^}]*\}/)
-    expect(m, 'NOVEL_CSS 里找不到 .novel-row 规则').toBeTruthy()
-    expect(m![0], '.novel-row 必须是 flex 行').toContain('display: flex')
-    expect(m![0]).toContain('align-items: center')
+    const mOf = NOVEL_CSS.match(/\.novel-row\s*\{[^}]*\}/)
+    expect(mOf, 'NOVEL_CSS 里找不到 .novel-row 规则').toBeTruthy()
+    const m = must(mOf, 'NOVEL_CSS 里的 .novel-row 规则')
+    expect(m[0], '.novel-row 必须是 flex 行').toContain('display: flex')
+    expect(m[0]).toContain('align-items: center')
   })
    it('视图层源码（src/client/views/*.tsx）无旧 --ds- 假 token', async () => {
     const dir = fileURLToPath(new URL('../../src/client/views/', import.meta.url))

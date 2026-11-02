@@ -161,6 +161,8 @@ export function engineContextOf(
 } {
   const headers: HeadersInput = opts.headers
     ?? (() => resolveHeaders(fetcher, source, { jsTimeoutMs: opts.jsTimeoutMs }))
+  // jar 的能力位只在这里收窄一次：三个脚本口共用同一个局部，缺席时整块本来就不建（不写 `!`）
+  const cookieJar = fetcher.cookieJar
   return {
     ...(opts.html === undefined ? {} : { html: opts.html }),
     ...(opts.json === undefined ? {} : { json: opts.json }),
@@ -212,17 +214,17 @@ export function engineContextOf(
     },
     ...(fetcher.deviceId === undefined ? {} : { deviceId: fetcher.deviceId }),
     ...(fetcher.sourceSession === undefined ? {} : { session: fetcher.sourceSession }),
-    ...(fetcher.cookieJar === undefined ? {} : {
+    ...(cookieJar === undefined ? {} : {
       httpCookies: {
-        headerFor: (url: string) => fetcher.cookieJar!.headerFor(url),
+        headerFor: (url: string) => cookieJar.headerFor(url),
         // CookieManager/CookieStore.setCookie 收的是 **cookie 串**（`getCookie` 的原样回写，
         // 常见 `a=1; b=2`），不是 Set-Cookie 头；整串塞给 absorb 会把第二个键当成属性丢掉。
         setCookie: (url: string, raw: string) => {
           const pairs = raw.split(';').map((s) => s.trim()).filter((s) => s !== '')
             .filter((s) => !/^(?:path|domain|expires|max-age|secure|httponly|samesite)\s*=/i.test(s))
-          if (pairs.length > 0) fetcher.cookieJar!.absorb(url, pairs)
+          if (pairs.length > 0) cookieJar.absorb(url, pairs)
         },
-        removeSessionCookies: () => fetcher.cookieJar!.removeSessionCookies(),
+        removeSessionCookies: () => cookieJar.removeSessionCookies(),
       },
     }),
   }
@@ -238,7 +240,7 @@ export function engineContextOf(
  * 否则头规则里一次 java.ajax 就会重新求值头规则。
  */
 export async function resolveHeaders(
-  fetcher: Fetcher, source: NovelSource, opts?: { jsTimeoutMs?: number },
+  fetcher: Fetcher, source: NovelSource, opts?: { jsTimeoutMs?: number | undefined },
 ): Promise<Record<string, string>> {
   const rule = source.rules.headerRule
   const staticHeaders = headerOf(source)
@@ -301,7 +303,9 @@ export function createSourceEval(
   return {
     subEval(o) {
       const sub: SubRuleEval = (rule, ctx, facet, usage) => evaluate(rule, ctxOf({
-        baseUrl: ctx.baseUrl, html: ctx.html, json: ctx.json,
+        baseUrl: ctx.baseUrl,
+        ...(ctx.html === undefined ? {} : { html: ctx.html }),
+        ...(ctx.json === undefined ? {} : { json: ctx.json }),
         ...(ctx.regexRow === undefined ? {} : { regexRow: ctx.regexRow }),
         ...(o?.vars === undefined ? {} : { vars: o.vars }),
         ...(o?.book === undefined ? {} : { book: o.book }),

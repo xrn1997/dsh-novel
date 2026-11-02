@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { CONFIG_FIELDS } from '../../src/config.js'
 import { GROUPS } from '../../src/client/config-groups.js'
 import { SETTINGS_ZH } from '../../src/client/copy/settings.js'
+import { must } from '../support/fixture.js'
 
 /**
  * 配置页「界面隐身」的机器面：一个 volatile 字段要真能被看见，靠的是三份清单同时认它——
@@ -24,7 +25,7 @@ describe('volatile 字段的文案与分区交叉校验', () => {
       for (const suffix of ['label', 'meaning']) {
         const key = `config.field.${name}.${suffix}`
         expect(zh[key], `缺文案键 ${key}`).toBeTypeOf('string')
-        expect(zh[key]?.trim(), `文案键 ${key} 是空串`).not.toBe('')
+        expect(must(zh[key], `文案键 ${key}`).trim(), `文案键 ${key} 是空串`).not.toBe('')
       }
     }
   })

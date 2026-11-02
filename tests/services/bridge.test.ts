@@ -15,6 +15,7 @@ import { tocUrlOf } from '../../src/services/online-reading.js'
 import { createSourceEval, DEFAULT_JS_BUDGET_MS, engineContextOf } from '../../src/services/source-eval.js'
 import type { NovelSource } from '../../src/services/types.js'
 import { absUrl, stripUrlOption } from '../../src/services/url.js'
+import { must, pick } from '../support/fixture.js'
 
 describe('值规约', () => {
   it('miss → null（源没这条信息）', () => {
@@ -54,9 +55,9 @@ describe('engineContextOf 的 HTTP cookie 桥', () => {
       ruleBookList: '@css:.b', ruleBookName: 'tag.a@text', ruleBookUrl: 'tag.a@href',
       ruleContent: '@css:#c@text',
     })
-    const source: NovelSource = { ...normalized.source!, id: 'cookie-src', status: 'unverified', importedAt: 0 }
+    const source: NovelSource = { ...must(normalized.source, 'normalized 归一化后的 source'), id: 'cookie-src', status: 'unverified', importedAt: 0 }
     const ctx = engineContextOf(fetcher, source, { baseUrl: source.baseUrl })
-    ctx.httpCookies!.setCookie('https://a.test/x', 'a=1; b=2; Path=/; Secure')
+    must(ctx.httpCookies, 'ctx.httpCookies').setCookie('https://a.test/x', 'a=1; b=2; Path=/; Secure')
     expect(jar.entries().map((e) => `${e.name}=${e.value}`)).toEqual(['a=1', 'b=2'])
     expect(jar.headerFor('https://a.test/x')).toBe('a=1; b=2')
   })
@@ -97,7 +98,8 @@ describe('engineFetch（java.ajax 出口）', () => {
   // 整串当 URL 发出会得站点 403/404（真实源：@js 脚本把带 body 的
   // `search.php,{'body':...}` 传给 java.ajax）。
   const mkFetcher = () => {
-    const seen: Array<{ url: string; init?: { method?: string; headers?: Record<string, string>; body?: string } }> = []
+    // 记下的就是真发出去的那两个参数：init 缺席（纯 GET）也是一条读数，所以键必在、值可为 undefined。
+    const seen: Array<{ url: string; init: { method?: string; headers?: Record<string, string>; body?: string } | undefined }> = []
     return {
       seen,
       fetcher: {
@@ -113,25 +115,27 @@ describe('engineFetch（java.ajax 出口）', () => {
     const { seen, fetcher } = mkFetcher()
     const f = engineFetch(fetcher, { 'User-Agent': 'DEFAULT' })
     await f("https://m.a.com/search.php,{'body':'k={{key}}','method':'POST','headers':{'User-Agent':'UA-TEST'}}")
-    expect(seen[0].url).toBe('https://m.a.com/search.php')
-    expect(seen[0].init?.method).toBe('POST')
-    expect(seen[0].init?.headers?.['User-Agent']).toBe('UA-TEST')
-    expect(seen[0].init?.headers?.['Content-Type']).toBe('application/x-www-form-urlencoded')
+    const request = pick(seen, 0)
+    expect(request.url).toBe('https://m.a.com/search.php')
+    expect(request.init?.method).toBe('POST')
+    expect(request.init?.headers?.['User-Agent']).toBe('UA-TEST')
+    expect(request.init?.headers?.['Content-Type']).toBe('application/x-www-form-urlencoded')
   })
 
   it('body 内 {{key}} 经 vars 插值（encodeURIComponent 口径）', async () => {
     const { seen, fetcher } = mkFetcher()
     const f = engineFetch(fetcher, {}, { key: '凡人' })
     await f("https://m.a.com/s,{'body':'k={{key}}','method':'POST'}")
-    expect(seen[0].init?.body).toBe('k=%E5%87%A1%E4%BA%BA')
+    expect(pick(seen, 0).init?.body).toBe('k=%E5%87%A1%E4%BA%BA')
   })
 
   it('无选项的纯 URL → 直接 GET（行为不变）', async () => {
     const { seen, fetcher } = mkFetcher()
     const f = engineFetch(fetcher, { 'User-Agent': 'UA' })
     await f('https://m.a.com/plain.json')
-    expect(seen[0].url).toBe('https://m.a.com/plain.json')
-    expect(seen[0].init?.method).toBeUndefined()
+    const request = pick(seen, 0)
+    expect(request.url).toBe('https://m.a.com/plain.json')
+    expect(request.init?.method).toBeUndefined()
   })
 })
 
@@ -145,7 +149,7 @@ describe('分类字段 kindFieldOf（对面 getStringList → joinToString(",") 
   /** 走真引擎的 subEval + 同一段片段上下文：字段语义的钉子要真求值，不造桩 */
   const at = (html: string) => ({
     sub: ((rule, ctx, facet, usage) =>
-      evaluate(rule, { html: ctx.html, baseUrl: ctx.baseUrl }, facet, usage ?? 'value')) as SubRuleEval,
+      evaluate(rule, ctx, facet, usage ?? 'value')) as SubRuleEval,
     ctx: { html, baseUrl: 'https://a.com/book/1/' },
   })
   const BASE = 'https://a.com/book/1/'
@@ -180,7 +184,7 @@ describe('分类字段 kindFieldOf（对面 getStringList → joinToString(",") 
 describe('字数字段 wordCountFieldOf（数字串 → x字 / x.x万字）', () => {
   const at = (html: string) => ({
     sub: ((rule, ctx, facet, usage) =>
-      evaluate(rule, { html: ctx.html, baseUrl: ctx.baseUrl }, facet, usage ?? 'value')) as SubRuleEval,
+      evaluate(rule, ctx, facet, usage ?? 'value')) as SubRuleEval,
     ctx: { html, baseUrl: 'https://a.com/book/1/' },
   })
 
@@ -238,7 +242,7 @@ describe('hitFieldsOf（一条命中的装配单点）', () => {
       ...over,
     })
     if (!n.ok) throw new Error(`桩源应能规范化：${JSON.stringify(n.missing)}`)
-    return { id: 'asm-src', status: 'unverified', importedAt: 0, ...n.source! }
+    return { id: 'asm-src', status: 'unverified', importedAt: 0, ...must(n.source, 'n 归一化后的 source') }
   }
   const LANDED = 'https://b.example/list/1'
 
@@ -259,9 +263,9 @@ describe('hitFieldsOf（一条命中的装配单点）', () => {
       ctx, LANDED,
     )
     expect(hit).not.toBeNull()
-    expect(hit!.title).toBe('甲书')
-    expect([hit!.intro, hit!.lastChapterName, hit!.kind, hit!.wordCount]).toEqual([null, null, null, null])
-    expect(hit!.coverUrl).toBeNull()
+    expect(must(hit, '搜索命中').title).toBe('甲书')
+    expect([must(hit, '搜索命中').intro, must(hit, '搜索命中').lastChapterName, must(hit, '搜索命中').kind, must(hit, '搜索命中').wordCount]).toEqual([null, null, null, null])
+    expect(must(hit, '搜索命中').coverUrl).toBeNull()
   })
 
   it('作者与书地址是裸奔项：读不出来抛穿，归类由调用方决定（装配层不自立第二套吞错口径）', async () => {
@@ -278,8 +282,8 @@ describe('hitFieldsOf（一条命中的装配单点）', () => {
       evalOf({ N: val('甲'), U: val('/book/1,{"method":"POST"}'), C: val('/cover.jpg') }),
       ctx, 'https://b.example/search?q=x',
     )
-    expect(hit!.url).toBe('https://b.example/book/1,{"method":"POST"}')
-    expect(hit!.coverUrl).toBe('https://b.example/cover.jpg')
+    expect(must(hit, '搜索命中').url).toBe('https://b.example/book/1,{"method":"POST"}')
+    expect(must(hit, '搜索命中').coverUrl).toBe('https://b.example/cover.jpg')
   })
 
   it('简介走搜索面口径：渲染指令前缀不保留；字数在解析层就格式化', async () => {
@@ -288,8 +292,8 @@ describe('hitFieldsOf（一条命中的装配单点）', () => {
       evalOf({ N: val('甲'), I: val('<md>正文简介</md>'), W: val('12345') }),
       ctx, 'https://b.example/',
     )
-    expect(hit!.intro).toBe('正文简介')
-    expect(hit!.wordCount).toBe('1.2万字')
+    expect(must(hit, '搜索命中').intro).toBe('正文简介')
+    expect(must(hit, '搜索命中').wordCount).toBe('1.2万字')
   })
 
   it('每一槽传的面恒为 search、用途恒为 value（面与用途都在门内，调用方不传）', async () => {
@@ -413,7 +417,7 @@ describe('detailReadOf（详情 init 单次求值）', () => {
     },
   })
   const source: NovelSource = {
-    ...normalized.source!, id: 'detail-src', status: 'unverified', importedAt: 0,
+    ...must(normalized.source, 'normalized 归一化后的 source'), id: 'detail-src', status: 'unverified', importedAt: 0,
   }
   // 本用例只求规则、不发请求：真 Fetcher 的 fetchPage 一旦被调用就是规则形态写错了
   const fetcher: Fetcher = { fetchPage: async () => { throw new Error('规则求值不该发请求') } }
@@ -435,7 +439,7 @@ describe('detailReadOf（详情 init 单次求值）', () => {
         ...(ruleTocUrl === null ? {} : { tocUrl: ruleTocUrl }),
       },
     })
-    return { ...n.source!, id, status: 'unverified', importedAt: 0 }
+    return { ...must(n.source, 'n 归一化后的 source'), id, status: 'unverified', importedAt: 0 }
   }
 
   it('init 只求值一次，fields/tocUrl 与旧组合（detailFieldsOf + tocUrlOf）逐值一致', async () => {

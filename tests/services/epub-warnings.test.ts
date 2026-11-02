@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { EpubWarningLog } from '../../src/services/epub/warnings.js'
+import { must, pick } from '../support/fixture.js'
 
 const CODE = 'epub-external-link'
 const RES = 'OEBPS/ch1.xhtml'
@@ -16,7 +17,9 @@ const ACTION = '取消了书外链接的可点击性'
 /** 从合并后的 message 里取「例：…」那一段的例子（没写就是空表） */
 function examplesOf(message: string): string[] {
   const m = /例：([^）]*)）/.exec(message)
-  return m === null || m[1] === '' ? [] : m[1].split('、')
+  if (m === null) return []
+  const joined = must(m[1], 'm[1]')
+  return joined === '' ? [] : joined.split('、')
 }
 
 describe('EpubWarningLog：合并、计数与例子上限', () => {
@@ -30,7 +33,7 @@ describe('EpubWarningLog：合并、计数与例子上限', () => {
   it('单处且带细节：不写处数前缀，细节直接跟在动作后', () => {
     const log = new EpubWarningLog()
     log.add(CODE, RES, ACTION, 'https://a.invalid/1')
-    expect(log.list()[0].message).toBe(`${ACTION}：https://a.invalid/1`)
+    expect(pick(log.list(), 0).message).toBe(`${ACTION}：https://a.invalid/1`)
   })
 
   it('例子最多留三个，处数**不受**上限影响', () => {
@@ -39,8 +42,9 @@ describe('EpubWarningLog：合并、计数与例子上限', () => {
     for (let i = 0; i < total; i += 1) log.add(CODE, RES, ACTION, `https://example.invalid/${i}`)
     const list = log.list()
     expect(list).toHaveLength(1)
-    expect(list[0].message).toMatch(new RegExp(`^${total} 处`))          // 处数一个不少
-    const examples = examplesOf(list[0].message)
+    const only = pick(list, 0)
+    expect(only.message).toMatch(new RegExp(`^${total} 处`))          // 处数一个不少
+    const examples = examplesOf(only.message)
     expect(examples).toHaveLength(3)                                     // 例子被上限截住
     for (const e of examples) expect(e).toMatch(/^https:\/\/example\.invalid\/\d+$/)
   })
@@ -50,7 +54,7 @@ describe('EpubWarningLog：合并、计数与例子上限', () => {
     log.add(CODE, RES, ACTION, 'https://a.invalid/1')
     log.add(CODE, RES, ACTION, 'https://a.invalid/1')
     log.add(CODE, RES, ACTION, 'https://a.invalid/2')
-    const m = log.list()[0].message
+    const m = pick(log.list(), 0).message
     expect(m).toMatch(/^3 处/)
     expect(examplesOf(m)).toEqual(['https://a.invalid/1', 'https://a.invalid/2'])
   })

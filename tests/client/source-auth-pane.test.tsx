@@ -6,6 +6,7 @@ import { makeDeps } from './fake-deps.js'
 import { resetSourceListUi } from '../../src/client/source-list.js'
 import { bodies, paramOps } from '../../src/shared/wire.js'
 import type { SourcePublic } from '../../src/client/views/types.js'
+import { must } from '../support/fixture.js'
 
 /** loginUi 的 text/password/button 渲染与提交（@js 生成与 webView 行仍按矩阵 b-login-ui 记 open）。 */
 const authSrc: SourcePublic = {
@@ -40,11 +41,11 @@ describe('SourceAuthPane 的 loginUi 文本/密码行', () => {
     const { container } = render(
       <SourceList sources={[authSrc]} job={null} onChanged={onChanged} onProbe={() => {}} onImport={() => {}} deps={deps} />,
     )
-    fireEvent.click(container.querySelector('button[aria-haspopup="menu"]')!)
+    fireEvent.click(must(container.querySelector('button[aria-haspopup="menu"]'), '行内 ⋯ 菜单钮'))
     fireEvent.click(screen.getByRole('menuitem', { name: /登录态/ }))
 
-    const user = screen.getByLabelText('user') as HTMLInputElement
-    const pass = screen.getByLabelText('pass') as HTMLInputElement
+    const user = screen.getByLabelText<HTMLInputElement>('user')
+    const pass = screen.getByLabelText<HTMLInputElement>('pass')
     expect(user.value).toBe('u')
     expect(pass.value).toBe('')
     fireEvent.change(user, { target: { value: 'alice' } })
@@ -70,7 +71,7 @@ describe('SourceAuthPane 的 loginUi 文本/密码行', () => {
     const { container } = render(
       <SourceList sources={[buttonSrc]} job={null} onChanged={onChanged} onProbe={() => {}} onImport={() => {}} deps={deps} />,
     )
-    fireEvent.click(container.querySelector('button[aria-haspopup="menu"]')!)
+    fireEvent.click(must(container.querySelector('button[aria-haspopup="menu"]'), '行内 ⋯ 菜单钮'))
     fireEvent.click(screen.getByRole('menuitem', { name: /登录态/ }))
     fireEvent.change(screen.getByLabelText('user'), { target: { value: 'alice' } })
     fireEvent.click(screen.getByRole('button', { name: '打开' }))
@@ -90,7 +91,7 @@ describe('SourceAuthPane 的 loginUi 文本/密码行', () => {
     const { container } = render(
       <SourceList sources={[onlyButtonSrc]} job={null} onChanged={onChanged} onProbe={() => {}} onImport={() => {}} deps={deps} />,
     )
-    fireEvent.click(container.querySelector('button[aria-haspopup="menu"]')!)
+    fireEvent.click(must(container.querySelector('button[aria-haspopup="menu"]'), '行内 ⋯ 菜单钮'))
     fireEvent.click(screen.getByRole('menuitem', { name: /登录态/ }))
     expect(screen.queryByRole('button', { name: '保存登录' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '执行' }))

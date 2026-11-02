@@ -101,13 +101,16 @@ export function debounce<A extends unknown[]>(
 
 /** localStorage guard：renderToString/无 DOM 环境退内存 Map（不许炸）——prefs 等持久位共用 */
 const memory = new Map<string, string>()
+/** lib.dom 把 localStorage 声明成必然存在，可无 DOM 的宿主里它就是缺席的——按本地窄镜像取一格，
+ *  别让 lib 的声明替运行时作保（这是防线，不是冗余判空）。 */
+const hostWindow: { localStorage?: Storage } = globalThis
 export const ls: Pick<Storage, 'getItem' | 'setItem'> = {
   getItem: (k) => {
-    try { return globalThis.localStorage?.getItem(k) ?? memory.get(k) ?? null } catch { return memory.get(k) ?? null }
+    try { return hostWindow.localStorage?.getItem(k) ?? memory.get(k) ?? null } catch { return memory.get(k) ?? null }
   },
   setItem: (k, v) => {
     memory.set(k, v)
-    try { globalThis.localStorage?.setItem(k, v) } catch { /* 无 DOM：内存兜底 */ }
+    try { hostWindow.localStorage?.setItem(k, v) } catch { /* 无 DOM：内存兜底 */ }
   },
 }
 
@@ -118,10 +121,13 @@ export const ls: Pick<Storage, 'getItem' | 'setItem'> = {
 export function paperInk(paper: string): string {
   const hex = paper.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)
   if (hex === null) return '#222'                       // 非 hex（color input 也可能给 rgb()）：退回原行为
-  const h = hex[1].length === 3 ? hex[1].split('').map((c) => c + c).join('') : hex[1]
-  const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255)
+  const digits = hex[1]
+  // 交替分支里有一支必然参与：捕获组缺席只可能是正则与这里对不上了，走同一条「非 hex」退路
+  if (digits === undefined) return '#222'
+  const h = digits.length === 3 ? digits.split('').map((c) => c + c).join('') : digits
+  const channel = (offset: number): number => parseInt(h.slice(offset, offset + 2), 16) / 255
   const lin = (v: number): number => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
-  const L = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+  const L = 0.2126 * lin(channel(0)) + 0.7152 * lin(channel(2)) + 0.0722 * lin(channel(4))
   return L > 0.35 ? '#222' : '#e8e8ea'
 }
 
@@ -146,9 +152,15 @@ export function stripLeadingTitle(content: ChapterContent, chapterName: string):
   const key = chapterName.replace(/\s+/g, '')
   if (key === '') return content
   const lines = content.text.split('\n')
+  // 逐行拿「当前行」比对、不按下标取：行用尽时手里就是 undefined，与「首行不是章名」汇到同一条出口
+  // （都在下面原样返回正文）
   let i = 0
-  while (i < lines.length && lines[i].trim() === '') i += 1
-  if (i >= lines.length || lines[i].replace(/\s+/g, '') !== key) return content
+  let line = lines[0]
+  while (line !== undefined && line.trim() === '') {
+    i += 1
+    line = lines[i]
+  }
+  if (line === undefined || line.replace(/\s+/g, '') !== key) return content
   return { kind: 'text', text: lines.slice(i + 1).join('\n') }
 }
 
@@ -164,12 +176,12 @@ function tintTier(text: string): 1 | 2 | 3 | 4 {
  *  theme-tokens 守卫口径）。按首字符 codePoint 求和派生——同书恒同色、可复现；
  *  空标题回 t1（与 coverFallbackChar 的「书」同防）。 */
 export function coverTintClass(title: string): 'novel-cover-t1' | 'novel-cover-t2' | 'novel-cover-t3' | 'novel-cover-t4' {
-  return `novel-cover-t${tintTier(title)}` as 'novel-cover-t1' | 'novel-cover-t2' | 'novel-cover-t3' | 'novel-cover-t4'
+  return `novel-cover-t${tintTier(title)}`
 }
 
 /** 来源色点的档位（书架卡片「来源 chip」的色点）：按 **sourceId** 派生——同一书源在整架书上是同一个颜色，
  *  一屏之内一眼分得出来源不同。类名刻意不复用 cover 的（色点是点、封面是块，同一张卡上两块颜色可以不同），
  *  但档位色仍是同四档 token（hex 不出 token 层）。空 id 回 t1。 */
 export function sourceTintClass(sourceId: string): 'novel-src-t1' | 'novel-src-t2' | 'novel-src-t3' | 'novel-src-t4' {
-  return `novel-src-t${tintTier(sourceId)}` as 'novel-src-t1' | 'novel-src-t2' | 'novel-src-t3' | 'novel-src-t4'
+  return `novel-src-t${tintTier(sourceId)}`
 }

@@ -33,7 +33,7 @@ describe.skipIf(process.env.DSH_REPROBE !== '1')('真机重探（全量 probe �
         try {
           const out = await svc.importOne(item.raw)
           // 导入不探针——重探统计口径：导入后显式探一次
-          const probe = out.sourceId === null || out.sourceId === undefined ? null : await svc.probe(out.sourceId)
+          const probe = out.sourceId === null ? null : await svc.probe(out.sourceId)
           if (probe?.ok === true) verified++
           else {
             const code = probe?.error?.code ?? (out.ok ? '(无探针)' : '导入失败')
@@ -41,9 +41,9 @@ describe.skipIf(process.env.DSH_REPROBE !== '1')('真机重探（全量 probe �
             if (code !== '导入失败' && code !== '(无探针)') {
               const raw = item.raw as { bookSourceName?: string } | null
               engineFails.push({
-                name: String(raw?.bookSourceName ?? '(未命名)'),
+                name: raw?.bookSourceName ?? '(未命名)',
                 code,
-                msg: String(probe?.error?.message ?? '').replace(/\s+/g, ' ').slice(0, 140),
+                msg: (probe?.error?.message ?? '').replace(/\s+/g, ' ').slice(0, 140),
               })
             }
           }

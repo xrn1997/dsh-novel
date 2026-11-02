@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import * as cheerio from 'cheerio'
+import type { Cheerio } from 'cheerio'
+import type { AnyNode } from 'domhandler'
 import { evalDefault, selectStepWithSelf } from '../../src/engine/select.js'
+import type { EngineValue, IndexSpec } from '../../src/engine/types.js'
+import { must } from '../support/fixture.js'
+import { elementOf, itemsOf, nodesOf, valueTextOf } from './value.js'
 
 const html = `<div id="wrap"><ul class="list">
   <li class="item"><a href="/b/1">第一章 起点</a><span class="date">2024-01-01</span></li>
@@ -11,7 +16,7 @@ const html = `<div id="wrap"><ul class="list">
 // 修正说明：evalDefault 的第 2 个参数是 $（CheerioAPI），
 // 供函数内部重建节点集 / 逐节点取值。
 const $ = cheerio.load(html)
-const root = () => $('#wrap') as any
+const root = () => $('#wrap')
 const loc = (i: number, raw: string) => ({ segmentIndex: i, segmentRaw: raw })
 
 describe('链首裸取值终端的上下文（真源 ruleToc.chapterName = "text"）', () => {
@@ -52,10 +57,10 @@ describe('列表规则链首 `+` 前缀（列表入口剥除）', () => {
 
   it('列表用途下 `+tag.li@text` 出全部条目（与不带 + 的同一条规则同形）', async () => {
     expect(await run('+tag.li@text', 'list')).toEqual(await run('tag.li@text', 'list'))
-    expect((await run('+tag.li@text', 'list') as { items: string[] }).items).toEqual(['A', 'B'])
+    expect(itemsOf(await run('+tag.li@text', 'list'))).toEqual(['A', 'B'])
   })
   it('`-` 与 `+` 同时在前时按对面次序：先剥 - 反序、再剥 +', async () => {
-    expect((await run('-+tag.li@text', 'list') as { items: string[] }).items).toEqual(['B', 'A'])
+    expect(itemsOf(await run('-+tag.li@text', 'list'))).toEqual(['B', 'A'])
   })
   it('取值用途不在对面的剥除点上（只列表入口剥 +），本仓不扩大豁免', async () => {
     expect((await run('+tag.li@text', 'value')).kind).not.toBe('list')
@@ -65,15 +70,15 @@ describe('列表规则链首 `+` 前缀（列表入口剥除）', () => {
 describe('default 选择段', () => {
   it('class / tag / id / child / children', () => {
     const v = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: null }, $, root(), loc(0, 'class.item'), 'toc')
-    expect(v.kind).toBe('nodes'); expect((v as any).nodes).toHaveLength(3)
+    expect(v.kind).toBe('nodes'); expect(nodesOf(v)).toHaveLength(3)
     const v2 = evalDefault({ kind: 'default', mode: 'id', arg: 'meta', index: null }, $, root(), loc(1, 'id.meta'), 'toc')
-    expect((v2 as any).nodes).toHaveLength(1)
+    expect(nodesOf(v2)).toHaveLength(1)
     const v3 = evalDefault({ kind: 'default', mode: 'child', arg: 'ul', index: null }, $, root(), loc(2, 'child.ul'), 'toc')
-    expect((v3 as any).nodes).toHaveLength(1)
+    expect(nodesOf(v3)).toHaveLength(1)
     const v4 = evalDefault({ kind: 'default', mode: 'tag', arg: 'li', index: null }, $, root(), loc(3, 'tag.li'), 'toc')
-    expect((v4 as any).nodes).toHaveLength(3)
+    expect(nodesOf(v4)).toHaveLength(3)
     const v5 = evalDefault({ kind: 'default', mode: 'children', arg: null, index: null }, $, root(), loc(4, 'children'), 'toc')
-    expect((v5 as any).nodes).toHaveLength(2)
+    expect(nodesOf(v5)).toHaveLength(2)
   })
   it('`class.a b` = 同时含两个类（不是后代选择器，也不是把整串当一个类名）', () => {
     // 三种读法里只有一种能读出现库的真实源：对面把整串当一个类名交给 jsoup（`getElementsByClass`），
@@ -82,11 +87,11 @@ describe('default 选择段', () => {
     // 这一侧是真实源赖以读出的语义。
     // 红检：把 `case 'class'` 改成 `.x y` 的直译即红（同一元素两个类 → 后代选择器零命中）。
     const H = cheerio.load('<div id="w"><div class="col-12 col-md-6 x"><span>甲</span></div></div>')
-    const hit = evalDefault({ kind: 'default', mode: 'class', arg: 'col-12 col-md-6', index: null }, H, H('#w') as any, loc(0, 'class.col-12 col-md-6'), 'toc')
+    const hit = evalDefault({ kind: 'default', mode: 'class', arg: 'col-12 col-md-6', index: null }, H, H('#w'), loc(0, 'class.col-12 col-md-6'), 'toc')
     expect(hit.kind).toBe('nodes')
-    expect((hit as any).nodes).toHaveLength(1)
+    expect(nodesOf(hit)).toHaveLength(1)
     // 只含其中一个类 → 不命中（是「同时含」，不是「含任一」）
-    const miss = evalDefault({ kind: 'default', mode: 'class', arg: 'col-12 col-lg-3', index: null }, H, H('#w') as any, loc(1, 'class.col-12 col-lg-3'), 'toc')
+    const miss = evalDefault({ kind: 'default', mode: 'class', arg: 'col-12 col-lg-3', index: null }, H, H('#w'), loc(1, 'class.col-12 col-lg-3'), 'toc')
     expect(miss.kind).toBe('miss')
   })
   it('零命中选择 → Miss', () => {
@@ -94,18 +99,18 @@ describe('default 选择段', () => {
     expect(v.kind).toBe('miss')
   })
   it('位置索引：正/负/越界', () => {
-    const at = (index: any) => evalDefault({ kind: 'default', mode: 'class', arg: 'item', index }, $, root(), loc(0, 'x'), 'toc')
-    expect((at({ kind: 'index', value: 0 }) as any).nodes).toHaveLength(1)
-    expect((at({ kind: 'index', value: -1 }) as any).nodes[0].attribs.class).toContain('odd')
+    const at = (index: IndexSpec) => evalDefault({ kind: 'default', mode: 'class', arg: 'item', index }, $, root(), loc(0, 'x'), 'toc')
+    expect(nodesOf(at({ kind: 'index', value: 0 }))).toHaveLength(1)
+    expect(must(nodesOf(at({ kind: 'index', value: -1 })).eq(0).attr('class'), '第一个 li 的 class')).toContain('odd')
     expect(at({ kind: 'index', value: 5 }).kind).toBe('miss')     // 越界不抛 → Miss
     expect(at({ kind: 'index', value: -9 }).kind).toBe('miss')   // 负数越界同样 → Miss
   })
   it('多索引取位：写入序、越界者逐个丢弃、全越界 → Miss', () => {
-    const multi = (...v: number[]) => ({ kind: 'multi', entries: v.map((x) => ({ kind: 'index', value: x })) })
-    const at = (index: any) => evalDefault({ kind: 'default', mode: 'class', arg: 'item', index }, $, root(), loc(0, 'x'), 'toc')
+    const multi = (...v: number[]): IndexSpec => ({ kind: 'multi', entries: v.map((x) => ({ kind: 'index', value: x })) })
+    const at = (index: IndexSpec) => evalDefault({ kind: 'default', mode: 'class', arg: 'item', index }, $, root(), loc(0, 'x'), 'toc')
     // 取位按**插入序**（不是文档序）：写 [2,0] 出的是「第3个、第1个」
-    expect((at(multi(2, 0)) as any).nodes.toArray().map((n: any) => n.attribs.class)).toEqual(['item odd', 'item'])
-    expect((at(multi(1, 99)) as any).nodes).toHaveLength(1)          // 越界的 99 静默丢弃
+    expect(nodesOf(at(multi(2, 0))).toArray().map((n) => elementOf(n).attribs['class'])).toEqual(['item odd', 'item'])
+    expect(nodesOf(at(multi(1, 99)))).toHaveLength(1)                // 越界的 99 静默丢弃
     expect(at(multi(5, 9)).kind).toBe('miss')                        // 全越界 → 选择失败
   })
 })
@@ -128,126 +133,128 @@ describe('default 选择段含当前元素自身（class / id / tag），childre
     + '<li class="pi"><a class="page-link" href="/107/107609/index_2.html">2</a></li>'
     + '</ul><div class="box" id="outer">外<div class="box" id="inner">内</div></div></div>'
   const $$ = cheerio.load(SELF_HTML)
-  const links = () => $$('.page-link') as any
-  const outer = () => $$('#outer') as any
-  const at = (mode: string, arg: string | null, cur: any, index: any = null) =>
-    evalDefault({ kind: 'default', mode, arg, index } as any, $$, cur, loc(0, `${mode}.${arg ?? ''}`), 'toc')
+  const links = () => $$('.page-link')
+  const outer = () => $$('#outer')
+  const at = (mode: string, arg: string | null, cur: Cheerio<AnyNode>, index: IndexSpec | null = null) =>
+    evalDefault({ kind: 'default', mode, arg, index }, $$, cur, loc(0, `${mode}.${arg ?? ''}`), 'toc')
 
   it('tag 步：当前元素自己就是该标签 → 入选（容器即目标的写法读得出）', () => {
     const v = at('tag', 'a', links())
     expect(v.kind).toBe('nodes')
-    expect((v as any).nodes).toHaveLength(2)
+    expect(nodesOf(v)).toHaveLength(2)
   })
   it('class 步：当前元素自己带该类 → 入选', () => {
     const v = at('class', 'page-link', links())
     expect(v.kind).toBe('nodes')
-    expect((v as any).nodes).toHaveLength(2)
+    expect(nodesOf(v)).toHaveLength(2)
   })
   it('id 步：当前元素自己就是该 id → 入选', () => {
-    const v = at('id', 'inner', $$('#inner') as any)
+    const v = at('id', 'inner', $$('#inner'))
     expect(v.kind).toBe('nodes')
-    expect((v as any).nodes).toHaveLength(1)
+    expect(nodesOf(v)).toHaveLength(1)
   })
   it('children 步不含自身（这条维持子节点语义）', () => {
     // #outer 自己带 class="box"：含自身的步会出 2（outer+inner），children 只能出 1（inner）
-    expect((at('children', null, outer()) as any).nodes).toHaveLength(1)
-    expect((at('child', 'div', outer()) as any).nodes).toHaveLength(1)
+    expect(nodesOf(at('children', null, outer()))).toHaveLength(1)
+    expect(nodesOf(at('child', 'div', outer()))).toHaveLength(1)
   })
   it('自身排在全部后代之前：`.0` 取到的是容器自己', () => {
-    const idx = { kind: 'index', value: 0 }
-    const v = at('class', 'box', outer(), idx) as any
+    const idx = { kind: 'index' as const, value: 0 }
+    const v = at('class', 'box', outer(), idx)
     expect(v.kind).toBe('nodes')
-    expect(v.nodes).toHaveLength(1)
-    expect(v.nodes.attr('id')).toBe('outer')
+    const nodes = nodesOf(v)
+    expect(nodes).toHaveLength(1)
+    expect(nodes.attr('id')).toBe('outer')
   })
   it('自身不匹配时，后代读数与文档序不变（不因为含自身而多捞、也不打乱顺序）', () => {
-    const v = at('class', 'box', $$('#pg') as any) as any
-    expect(v.nodes).toHaveLength(2)
-    expect(v.nodes.toArray().map((n: any) => n.attribs.id)).toEqual(['outer', 'inner'])
+    const nodes = nodesOf(at('class', 'box', $$('#pg')))
+    expect(nodes).toHaveLength(2)
+    expect(nodes.toArray().map((n) => elementOf(n).attribs['id'])).toEqual(['outer', 'inner'])
   })
 })
 
 describe('default 取值段', () => {
   it('单节点 href → Value；多节点 → List', () => {
-    const lis = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: { kind: 'index', value: 0 } }, $, root(), loc(0, 'class.item.0'), 'toc') as any
-    const href = evalDefault({ kind: 'default', mode: 'href', arg: null, index: null }, $, lis.nodes, loc(1, 'href'), 'toc')
+    const lis = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: { kind: 'index', value: 0 } }, $, root(), loc(0, 'class.item.0'), 'toc')
+    const href = evalDefault({ kind: 'default', mode: 'href', arg: null, index: null }, $, nodesOf(lis), loc(1, 'href'), 'toc')
     expect(href).toEqual({ kind: 'value', text: '/b/1' })          // 原样属性值，引擎不拼绝对 URL
     // 链首 $('*') 上下文（片段求值的 @href 裸规则）：html/body 包装元素不向下兜底——
     // 否则三份同值 → \n 拼接 → URL 解析剥换行拼成 /x.html/x.html/x.html 事故（真实源回归）
     const $frag = cheerio.load('<a href="/read/49/45792/1.html">内容简介</a>')
-    const fragAll = $frag('*') as any
+    const fragAll = $frag('*')
     const fragHref = evalDefault({ kind: 'default', mode: 'href', arg: null, index: null }, $frag, fragAll, loc(1, 'href'), 'toc')
     expect(fragHref).toEqual({ kind: 'list', items: ['/read/49/45792/1.html'] }) // 单值，无包装元素重复
     // li 上 @href → 内层 a 的兜底语义保留（钉死）
     const $li = cheerio.load('<li><a href="/x/2">章</a></li>')
-    const liOnly = $li('li') as any
+    const liOnly = $li('li')
     const liHref = evalDefault({ kind: 'default', mode: 'href', arg: null, index: null }, $li, liOnly, loc(1, 'href'), 'toc')
     expect(liHref).toEqual({ kind: 'value', text: '/x/2' })
-    const all = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: null }, $, root(), loc(0, 'class.item'), 'toc') as any
+    const all = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: null }, $, root(), loc(0, 'class.item'), 'toc')
     // 章节名在 <a> 内：显式 select 到 tag.a 再取 text（推荐写法，源里也这么写）
-    const as = evalDefault({ kind: 'default', mode: 'tag', arg: 'a', index: null }, $, all.nodes, loc(1, 'tag.a'), 'toc') as any
-    const texts = evalDefault({ kind: 'default', mode: 'text', arg: null, index: null }, $, as.nodes, loc(2, 'text'), 'toc')
+    const as = evalDefault({ kind: 'default', mode: 'tag', arg: 'a', index: null }, $, nodesOf(all), loc(1, 'tag.a'), 'toc')
+    const texts = evalDefault({ kind: 'default', mode: 'text', arg: null, index: null }, $, nodesOf(as), loc(2, 'text'), 'toc')
     expect(texts).toEqual({ kind: 'list', items: ['第一章 起点', '第二章 转折', '第三章 高潮'] })
     // 直接对 li 取 text：口径 = 全部后代文本，故 <a> 与 <span> 的文本都在（粘连：
     // 只在块级元素间补空格，行内元素之间不补——想要纯章名就 select 到 a）
-    const liText = evalDefault({ kind: 'default', mode: 'text', arg: null, index: null }, $, all.nodes, loc(1, 'text'), 'toc')
+    const liText = evalDefault({ kind: 'default', mode: 'text', arg: null, index: null }, $, nodesOf(all), loc(1, 'text'), 'toc')
     expect(liText).toEqual({ kind: 'list', items: ['第一章 起点2024-01-01', '第二章 转折2024-01-02', '第三章 高潮2024-01-03'] })
   })
   it('零节点取值 → Miss', () => {
-    const none = $('.nope') as any
+    const none = $('.nope')
     const v = evalDefault({ kind: 'default', mode: 'text', arg: null, index: null }, $, none, loc(0, 'text'), 'toc')
     expect(v.kind).toBe('miss')
   })
   it('取值段位置索引越界 → Miss（不回退全集）', () => {
-    const all = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: null }, $, root(), loc(0, 'class.item'), 'toc') as any
-    const v = evalDefault({ kind: 'default', mode: 'text', arg: null, index: { kind: 'index', value: 9 } }, $, all.nodes, loc(1, 'text'), 'toc')
+    const all = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: null }, $, root(), loc(0, 'class.item'), 'toc')
+    const v = evalDefault({ kind: 'default', mode: 'text', arg: null, index: { kind: 'index', value: 9 } }, $, nodesOf(all), loc(1, 'text'), 'toc')
     expect(v.kind).toBe('miss')
   })
   it('取值段索引全越界 → Miss（与选择段同口径；此前分叉给空 List）', () => {
-    const all = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: null }, $, root(), loc(0, 'class.item'), 'toc') as any
-    const v = evalDefault({ kind: 'default', mode: 'text', arg: null, index: { kind: 'multi', entries: [{ kind: 'index', value: 5 }, { kind: 'index', value: 9 }] } }, $, all.nodes, loc(1, 'text'), 'toc')
+    const all = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: null }, $, root(), loc(0, 'class.item'), 'toc')
+    const v = evalDefault({ kind: 'default', mode: 'text', arg: null, index: { kind: 'multi', entries: [{ kind: 'index', value: 5 }, { kind: 'index', value: 9 }] } }, $, nodesOf(all), loc(1, 'text'), 'toc')
     expect(v.kind).toBe('miss')
   })
   it('text 清洗：全角空格与连续空白', () => {
     const $p = cheerio.load('<p>你　好\n\n  世界</p>')
-    const v = evalDefault({ kind: 'default', mode: 'text', arg: null, index: null }, $p, $p('p') as any, loc(0, 'text'), 'content')
+    const v = evalDefault({ kind: 'default', mode: 'text', arg: null, index: null }, $p, $p('p'), loc(0, 'text'), 'content')
     expect(v).toEqual({ kind: 'value', text: '你 好 世界' })
   })
   it('html（内层）/ all（outerHTML）/ content（属性原样）', () => {
-    const li = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: { kind: 'index', value: 0 } }, $, root(), loc(0, 'x'), 'toc') as any
-    const h = evalDefault({ kind: 'default', mode: 'html', arg: null, index: null }, $, li.nodes, loc(1, 'html'), 'toc')
+    const li = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: { kind: 'index', value: 0 } }, $, root(), loc(0, 'x'), 'toc')
+    const h = evalDefault({ kind: 'default', mode: 'html', arg: null, index: null }, $, nodesOf(li), loc(1, 'html'), 'toc')
     expect(h).toEqual({ kind: 'value', text: '<a href="/b/1">第一章 起点</a><span class="date">2024-01-01</span>' })
-    const a = evalDefault({ kind: 'default', mode: 'all', arg: null, index: null }, $, li.nodes, loc(2, 'all'), 'toc') as any
-    expect(a.text).toContain('<li class="item">')
-    expect(a.text).toContain('</li>')
+    const a = evalDefault({ kind: 'default', mode: 'all', arg: null, index: null }, $, nodesOf(li), loc(2, 'all'), 'toc')
+    expect(valueTextOf(a)).toContain('<li class="item">')
+    expect(valueTextOf(a)).toContain('</li>')
     const $m = cheerio.load('<meta name="d" content="C1">')
-    const c = evalDefault({ kind: 'default', mode: 'content', arg: null, index: null }, $m, $m('meta') as any, loc(3, 'content'), 'detail')
+    const c = evalDefault({ kind: 'default', mode: 'content', arg: null, index: null }, $m, $m('meta'), loc(3, 'content'), 'detail')
     expect(c).toEqual({ kind: 'value', text: 'C1' })
   })
   it('属性缺失取到空 → List{[]}（合法空，区别于 Miss）', () => {
-    const span = $('#wrap .date') as any
+    const span = $('#wrap .date')
     const v = evalDefault({ kind: 'default', mode: 'src', arg: null, index: null }, $, span, loc(0, 'src'), 'toc')
     expect(v).toEqual({ kind: 'list', items: [] })
   })
   it('text 取后代文本（li 内的 <a> 也算）；ownText 严格直系 → List{[]}', () => {
     // 口径：text 含全部后代；ownText 才是直系。
     // （按「text 亦直系」读打不动真实源：笔趣阁正文 `.con@text` 而 .con 里全是 <p>）
-    const all = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: null }, $, root(), loc(0, 'class.item'), 'toc') as any
-    const t = evalDefault({ kind: 'default', mode: 'text', arg: null, index: null }, $, all.nodes, loc(1, 'text'), 'toc')
+    const all = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: null }, $, root(), loc(0, 'class.item'), 'toc')
+    const t = evalDefault({ kind: 'default', mode: 'text', arg: null, index: null }, $, nodesOf(all), loc(1, 'text'), 'toc')
     expect(t).toEqual({ kind: 'list', items: ['第一章 起点2024-01-01', '第二章 转折2024-01-02', '第三章 高潮2024-01-03'] })
-    const own = evalDefault({ kind: 'default', mode: 'ownText', arg: null, index: null }, $, all.nodes, loc(2, 'ownText'), 'toc')
+    const own = evalDefault({ kind: 'default', mode: 'ownText', arg: null, index: null }, $, nodesOf(all), loc(2, 'ownText'), 'toc')
     expect(own).toEqual({ kind: 'list', items: [] })
   })
   it('对 Value 套选择段 → RuleEvalError', () => {
-    const val: any = { kind: 'value', text: 'x' }
-    expect(() => evalDefault({ kind: 'default', mode: 'class', arg: 'a', index: null }, $, val, loc(0, 'class.a'), 'toc')).toThrow(/不是节点集/)
+    // 故意喂一个非节点集：`evalDefault` 的守卫按 isNodeValue 的鸭子判定拒收。
+    const val: EngineValue = { kind: 'value', text: 'x' }
+    expect(() => evalDefault({ kind: 'default', mode: 'class', arg: 'a', index: null }, $, val as never, loc(0, 'class.a'), 'toc')).toThrow(/不是节点集/)
   })
 })
 
 // 第 4 组断言：text / textAll / textNodes / ownText 四者差别
 describe('text / textAll / textNodes / ownText 区分', () => {
   const $p = cheerio.load('<p>外<b>内</b>尾</p>')
-  const p = () => $p('p') as any
+  const p = () => $p('p')
   const get = (mode: string) => evalDefault({ kind: 'default', mode, arg: null, index: null }, $p, p(), loc(0, mode), 'content')
 
   it('text 取全部后代文本（legado/Jsoup element.text() 口径）', () => {
@@ -264,7 +271,7 @@ describe('text / textAll / textNodes / ownText 区分', () => {
   })
   it('text 块级边界落成换行（正文按 \\n 分段；cheerio .text() 会拼成一整行）', () => {
     const $c = cheerio.load('<div class="con"><h1>第2章 斗气大陆</h1><p>月如银盘，漫天繁星。</p><p>山崖之颠。</p></div>')
-    const v = evalDefault({ kind: 'default', mode: 'text', arg: null, index: null }, $c, $c('.con') as any, loc(0, 'text'), 'content')
+    const v = evalDefault({ kind: 'default', mode: 'text', arg: null, index: null }, $c, $c('.con'), loc(0, 'text'), 'content')
     // 笔趣阁（bqquge）真实形态：.con 里全是 <p> —— 直系文本为空，只有后代文本有内容
     expect(v).toEqual({ kind: 'value', text: '第2章 斗气大陆\n月如银盘，漫天繁星。\n山崖之颠。' })
   })
@@ -278,17 +285,17 @@ describe('text / textAll / textNodes / ownText 区分', () => {
 describe('链首 default 选择段直达', () => {
   const NESTED = '<div id="w"><div class="item"><span class="item">内</span></div><div class="item">外</div></div>'
   const $n = cheerio.load(NESTED)
-  const htmlOf = (v: any): string[] => v.kind === 'nodes'
-    ? v.nodes.toArray().map((n: any) => $n.html(n))
+  const htmlOf = (v: EngineValue): string[] => v.kind === 'nodes'
+    ? v.nodes.toArray().map((n) => $n.html(n))
     : []
 
   it('class/id/tag 在链首不遍历当前全集，且与逐元素并集同结果', () => {
     for (const [mode, arg] of [['class', 'item'], ['tag', 'div'], ['id', 'w']] as const) {
       let walked = false
-      const cur = { length: 0, text: () => '', toArray: () => { walked = true; return $n('*').toArray() } } as any
+      const cur = { length: 0, text: () => '', toArray: () => { walked = true; return $n('*').toArray() } } as never
       const fast = evalDefault({ kind: 'default', mode, arg, index: null }, $n, cur, loc(0, `${mode}.${arg}`), 'toc', true)
       expect(walked).toBe(false)
-      const slow = evalDefault({ kind: 'default', mode, arg, index: null }, $n, $n('*') as any, loc(0, `${mode}.${arg}`), 'toc')
+      const slow = evalDefault({ kind: 'default', mode, arg, index: null }, $n, $n('*'), loc(0, `${mode}.${arg}`), 'toc')
       expect(htmlOf(fast)).toEqual(htmlOf(slow))
       expect(htmlOf(fast).length).toBeGreaterThan(0)
     }

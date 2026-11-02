@@ -43,10 +43,12 @@ interface Clock {
 export class RateLimiter {
   private readonly times: number[] = []
   private readonly rule: RateRule | null
+  private readonly clock: Clock
   private tail: Promise<void> = Promise.resolve()
 
-  constructor(rule: RateRule | null, private readonly clock: Clock = {}) {
+  constructor(rule: RateRule | null, clock: Clock = {}) {
     this.rule = rule
+    this.clock = clock
   }
 
   acquire(): Promise<void> {
@@ -64,12 +66,20 @@ export class RateLimiter {
 
     for (;;) {
       const at = now()
-      while (this.times.length > 0 && at - this.times[0]! >= rule.intervalMs) this.times.shift()
+      // 逐次取窗口头再判空：`times.length > 0` 只是循环条件，编译器不据此收窄索引；
+      // 取不到即窗口已清空，退出。
+      for (let head = this.times[0]; head !== undefined && at - head >= rule.intervalMs; head = this.times[0]) {
+        this.times.shift()
+      }
       if (this.times.length < rule.limit) {
         this.times.push(at)
         return
       }
-      await sleep(rule.intervalMs - (at - this.times[0]!))
+      const head = this.times[0]
+      // 清窗之后窗口里至少留着 rule.limit 次（解析期已拒非正数，limit ≥ 1）：头取不到即内部状态坏了，
+      // 不拿「不等待」冒充一次正常放行。
+      if (head === undefined) throw new Error('限速器状态不一致：窗口内记了 limit 次却取不到最早一次')
+      await sleep(rule.intervalMs - (at - head))
     }
   }
 }

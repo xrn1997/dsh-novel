@@ -37,7 +37,12 @@ export function evalAllInOne(
   const inline = INLINE_FLAG_RE.exec(pattern)
   if (inline !== null) {
     pattern = pattern.slice(inline[0].length)
-    for (const c of inline[1]) if (!flags.includes(c)) flags += c
+    // 组 1 是模式的必选段（`[imsu]+`），命中即非空——判空落在本函数已有的「正则形态坏」通道上
+    const inlineFlags = inline[1]
+    if (inlineFlags === undefined) {
+      throw new RuleEvalError(`AllInOne 行内标志组缺失：${inline[0]}`, { ...loc, facet, hits: 0 })
+    }
+    for (const c of inlineFlags) if (!flags.includes(c)) flags += c
   }
   let re: RegExp
   try {

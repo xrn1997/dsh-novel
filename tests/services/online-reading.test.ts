@@ -14,6 +14,7 @@ import type { NovelSource } from '../../src/services/types.js'
 import type { NormalizedRules } from '../../src/services/types.js'
 import type { SourceRequest } from '../../src/services/source-request.js'
 import type { Page } from '../../src/services/bridge.js'
+import { must, pick } from '../support/fixture.js'
 
 /**
  * 在线阅读管线的接缝测试：只拼 `OnlineReading` 需要的五件部件（源查找 / 书架 / 文件缓存 /
@@ -81,7 +82,7 @@ async function makeRig(opts: {
   const shelf = await Shelf.load(dir)
   const cache = new PageCache(dir)
   const toSource = (over?: Record<string, unknown>): NovelSource => ({
-    ...normalizeSource({ ...raw, ...over }).source!, id: 'i', status: 'unverified', importedAt: 0,
+    ...must(normalizeSource({ ...raw, ...over }).source, '归一化结果里的 source'), id: 'i', status: 'unverified', importedAt: 0,
   })
   let source = toSource(opts.over)
   let htmlOf = opts.htmlOf ?? defaultHtml
@@ -222,7 +223,7 @@ describe('OnlineReading', () => {
     await rig.online.toc('i', BOOK)
     const tocDir = path.join(rig.dir, 'cache', 'toc')
     const [file] = await fsPromises.readdir(tocDir)
-    await fsPromises.writeFile(path.join(tocDir, file!), '{not json', 'utf8')
+    await fsPromises.writeFile(path.join(tocDir, must(file, '目录文件名')), '{not json', 'utf8')
     // 新实例的内存缓存为空：这条钉的是磁盘坏字节的降级，不是进程内缓存
     const toc = await rig.reopen().toc('i', BOOK)
     expect(toc.map((c) => c.name)).toEqual(['第一章', '第三章'])
@@ -374,10 +375,11 @@ describe('OnlineReading', () => {
       },
     })
     const toc = await rig.online.toc('i', BOOK)
-    expect(toc[0]).toMatchObject({ isVip: true, isVolume: true, isPay: true, updateTime: '2026-10-20' })
-    expect(toc[1].isVip).toBeUndefined()
-    expect(toc[1].isVolume).toBeUndefined()
-    expect(toc[1].isPay).toBeUndefined()
+    expect(pick(toc, 0)).toMatchObject({ isVip: true, isVolume: true, isPay: true, updateTime: '2026-10-20' })
+    const second = pick(toc, 1)
+    expect(second.isVip).toBeUndefined()
+    expect(second.isVolume).toBeUndefined()
+    expect(second.isPay).toBeUndefined()
   })
 
   it('整本取不到章节 URL → 如实抛错，不产出全指目录页的假目录', async () => {
@@ -391,8 +393,8 @@ describe('OnlineReading', () => {
     const rig = await makeRig({ htmlOf: (u) => (u.includes('/book/1/') ? mixed : null) })
     const toc = await rig.online.toc('i', BOOK)
     expect(toc.map((c) => c.name)).toEqual(['第一章', '第二章'])
-    expect(toc[0].url).toBe(`${BASE}/c/1.html`)
-    expect(toc[1].url).toBe(BOOK) // 缺链接的那章回退目录页地址，不丢条目
+    expect(pick(toc, 0).url).toBe(`${BASE}/c/1.html`)
+    expect(pick(toc, 1).url).toBe(BOOK) // 缺链接的那章回退目录页地址，不丢条目
   })
 
   it('@html 正文转纯文本（@html 源收的是 HTML 片段——标签不许打给读者）', async () => {
@@ -457,9 +459,9 @@ describe('OnlineReading', () => {
       over: { ruleTocUrl: undefined, ruleBookList: '@css:.old' },
       htmlOf: () => PAGE,
     })
-    expect((await rig.online.toc('i', bookKey))[0]?.name).toBe('旧目录')
+    expect(pick(await rig.online.toc('i', bookKey), 0).name).toBe('旧目录')
     rig.replace({ ruleTocUrl: undefined, ruleBookList: '@css:.new' })
-    expect((await rig.online.toc('i', bookKey))[0]?.name).toBe('新目录')
+    expect(pick(await rig.online.toc('i', bookKey), 0).name).toBe('新目录')
   })
 
   it('同 id 换正文规则后默认读取即新正文：正文代际端到端随 ruleContent 走', async () => {
@@ -524,8 +526,8 @@ describe('OnlineReading', () => {
     release()
     const [a, b] = await Promise.all([p1, p2])
     expect(calls).toBe(2)
-    expect(a[0]?.name).toBe('第一章')
-    expect(b[0]?.name).toBe('第二章')
+    expect(pick(a, 0).name).toBe('第一章')
+    expect(pick(b, 0).name).toBe('第二章')
   })
 
   it('目录并发：换代际后的新读不 join 旧代际的在途（旧读仍按自己的代际交结果）', async () => {
@@ -552,8 +554,8 @@ describe('OnlineReading', () => {
     const p2 = rig.online.toc('i', BOOK)
     release()
     const [oldRead, newRead] = await Promise.all([p1, p2])
-    expect(oldRead[0]?.url).toBe(`${BASE}/c/old.html`)     // 旧在途按起飞代际交自己的结果
-    expect(newRead[0]?.url).toBe(`${BASE}/c/new.html`)     // 新读另起一发，不拿旧代际的章节
+    expect(pick(oldRead, 0).url).toBe(`${BASE}/c/old.html`)     // 旧在途按起飞代际交自己的结果
+    expect(pick(newRead, 0).url).toBe(`${BASE}/c/new.html`)     // 新读另起一发，不拿旧代际的章节
     expect(rig.fetches.filter((u) => u === `${BASE}/book/1/`)).toHaveLength(1)
     expect(rig.fetches.filter((u) => u === `${BASE}/book/2/`)).toHaveLength(1)
   })
@@ -580,7 +582,7 @@ describe('OnlineReading', () => {
     const [a, b] = await Promise.all([p1, p2])
     expect(rig.fetches.filter((u) => u === `${BASE}/book/1/`), '同一身份并发只该抓一次').toHaveLength(1)
     expect(a).toEqual(b)
-    expect(a[0]?.url).toBe(`${BASE}/c/1.html`)
+    expect(pick(a, 0).url).toBe(`${BASE}/c/1.html`)
   })
 
   it('换目录规则而章名一字不变：正文代际仍跟着走，不端旧地址抓来的正文', async () => {
@@ -598,7 +600,7 @@ describe('OnlineReading', () => {
     })
     expect(await rig.online.chapterText('i', bookKey, 0)).toContain('正文旧地址')
     rig.replace({ ruleTocUrl: `${BASE}/toc2` })
-    expect((await rig.online.toc('i', bookKey))[0]?.name).toBe('第一章')   // 章名确实没变
+    expect(pick(await rig.online.toc('i', bookKey), 0).name).toBe('第一章')   // 章名确实没变
     expect(await rig.online.chapterText('i', bookKey, 0)).toContain('正文新地址')
   })
 

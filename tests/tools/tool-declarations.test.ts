@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildTools } from '../../src/tools/tools.js'
 import type { ReadingService } from '../../src/services/reading.js'
+import { must } from '../support/fixture.js'
 
 /**
  * 工具声明面钉子：action 行是唯一清单。
@@ -19,7 +20,7 @@ const tools = buildTools(service)
 const toolNamed = (name: string): ReturnType<typeof buildTools>[number] => {
   const tool = tools.find((t) => t.name === name)
   expect(tool, `工具 ${name} 不存在`).toBeDefined()
-  return tool!
+  return must(tool, `工具 ${name}`)
 }
 
 interface ParamSchema {
@@ -27,12 +28,12 @@ interface ParamSchema {
 }
 
 const paramsOf = (tool: ReturnType<typeof buildTools>[number]): ParamSchema =>
-  tool.parameters as unknown as ParamSchema
+  tool.parameters
 
 const actionsOf = (name: string): string[] => {
   const values = paramsOf(toolNamed(name)).properties?.action?.enum
   expect(values, `${name} 没有 action enum`).toBeDefined()
-  return values!
+  return must(values, `${name} 的 action enum`)
 }
 
 const exec = { signal: new AbortController().signal } as never
@@ -69,7 +70,8 @@ describe('工具声明：action 行是唯一清单', () => {
     for (const name of ['dshnovel_shelf', 'dshnovel_source']) {
       const tool = toolNamed(name)
       for (const action of actionsOf(name)) {
-        const blocks = tool.output.render({ action }, renderValues[name]![action]! as never)
+        const value = must(must(renderValues[name], `${name} 的 render 样本`)[action], `${name}.${action} 的 render 样本`)
+        const blocks = tool.output.render({ action }, value as never)
         expect(blocks.length, `${name}.${action} 没有 render 输出`).toBeGreaterThan(0)
         expect(JSON.stringify(blocks), `${name}.${action} 落到未知 action 兜底`).not.toContain('未知 action')
       }
@@ -77,12 +79,12 @@ describe('工具声明：action 行是唯一清单', () => {
   })
 
   it('参数描述里的必填 action 由行派生（加 action 不再手改第二份清单）', () => {
-    const shelf = paramsOf(toolNamed('dshnovel_shelf')).properties!
+    const shelf = must(paramsOf(toolNamed('dshnovel_shelf')).properties, 'dshnovel_shelf 参数表')
     expect(shelf.bookKey?.description).toBe('书籍详情页 URL（add/save_progress/remove 必填；list 不用）')
     expect(shelf.title?.description).toBe('书名（仅 add 必填）')
     expect(shelf.sourceId?.description).toBe('源 id（仅 add 必填）')
     expect(shelf.chapterIndex?.description).toBe('读到的章序 0 起（仅 save_progress 必填）')
-    const source = paramsOf(toolNamed('dshnovel_source')).properties!
+    const source = must(paramsOf(toolNamed('dshnovel_source')).properties, 'dshnovel_source 参数表')
     expect(source.sourceId?.description).toBe('源 id（probe/enable/disable/remove 必填；list 不用）')
   })
 
@@ -93,7 +95,9 @@ describe('工具声明：action 行是唯一清单', () => {
       for (const action of actionsOf(name)) {
         const error = await tool.execute({ action }, exec).then(() => null, (e: unknown) => e)
         if (error === null) continue   // list 无必填：stub 服务直接跑通
-        const message = String((error as Error).message ?? error)
+        // 抛出值可能是任何东西：先取它的 message，取不到就把值本身串起来（与原口径一致）
+        const thrown: unknown = error
+        const message = String((thrown as { message?: unknown }).message ?? thrown)
         expect(message, `${name}.${action} 缺参没有点名`).toContain('缺少参数：')
         const keys = message.slice(message.indexOf('缺少参数：') + '缺少参数：'.length).split('、')
         for (const key of keys) expect(properties[key], `${name}.${action} 的 ${key} 不在参数表`).toBeDefined()

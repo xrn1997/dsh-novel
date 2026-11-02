@@ -82,8 +82,11 @@ export class OnlineReading {
   /** refresh 写回即 +1：普通读只在自己起飞后没有 refresh 写回时才允许覆盖内存目录——
    *  在途普通读可能读的是刷新前的盘，晚到的旧结果不能把刚刷新的那一份盖回去。 */
   private memoWriteSeq = 0
+  private readonly parts: OnlineReadingParts
 
-  constructor(private readonly parts: OnlineReadingParts) {}
+  constructor(parts: OnlineReadingParts) {
+    this.parts = parts
+  }
 
   /** 目录：进程内缓存优先（refresh 绕过）+ 磁盘缓存/in-flight 去重（身份见 `tocReadKey`）+ 翻页闸跟进。
    *  `async` 只为把源查找的抛错收成 rejection：HTTP 面与工具面都按 promise 消费，
@@ -141,10 +144,10 @@ export class OnlineReading {
     // 目录缺失时会真发一次目录抓取（章名只存在于目录里，这是必然代价不是疏忽）。
     const tocMemo = await this.tocMemoOf(sourceId, bookKey)
     const toc = tocMemo.chapters
-    // 双边守卫：只拦上界会让负数绕过 → toc[-1].name TypeError → 500；
-    // HTTP 面有 /^\d+$/ 而工具面无下限，守卫必须盖住两面入口。
-    if (chIndex < 0 || chIndex >= toc.length) throw new ChapterNotFoundError(chIndex, toc.length)
+    // 双边守卫合并在取位处：负数与越上界同样取不到（只拦上界会让负数绕过 →
+    // 取位失败按 404 那一类交回，不造默认章）；HTTP 面有 /^\d+$/ 而工具面无下限，守卫必须盖住两面入口。
     const target = toc[chIndex]
+    if (target === undefined) throw new ChapterNotFoundError(chIndex, toc.length)
     const slot = contentSlot(epoch, target.name)
     if (opts?.refresh !== true) {
       const cached = await this.parts.cache.getContent(sourceId, bookKey, chIndex, slot)

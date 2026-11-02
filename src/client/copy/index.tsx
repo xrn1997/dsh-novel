@@ -33,8 +33,9 @@ export function interpolate(template: string, params?: CopyParams): string {
     name in params ? String(params[name]) : match)
 }
 
-export const zhTranslate: Translate = (key, params) => interpolate(ZH[key] ?? key, params)
-export const enTranslate: Translate = (key, params) => interpolate(EN[key] ?? key, params)
+/** 两张表都被 `Record<CopyKey, string>` 钉成全键表，键在类型面就保证有值——这里不再兜底。 */
+export const zhTranslate: Translate = (key, params) => interpolate(ZH[key], params)
+export const enTranslate: Translate = (key, params) => interpolate(EN[key], params)
 
 /** 数量句：中文两侧同文，英文由 one/other 决定单复数。 */
 export function plural(

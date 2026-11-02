@@ -53,9 +53,13 @@ export function expandPageAngleList(url: string, page: number | null | undefined
   const matches = [...url.matchAll(PAGE_ANGLE_LIST)]
   let out = url
   for (const m of matches) {
-    const pages = m[1].split(',')
+    const inner = m[1]
+    // 组 1 是模式的必选段（`<(.*?)>`），命中即齐全；取不到就跳过这一处（不补造一个空页列表）
+    if (inner === undefined) continue
+    const pages = inner.split(',')
     const picked = page < pages.length ? pages[page - 1] : pages[pages.length - 1]
-    out = out.split(m[0]).join((picked ?? '').replace(/^[\s\x00-\x1F]+|[\s\x00-\x1F]+$/g, ''))
+    // 首尾空白与 C0 控制字符一起去掉：控制字符在这里是清理对象本身，不是排版噪音
+    out = out.split(m[0]).join((picked ?? '').replace(/^[\s\x00-\x1F]+|[\s\x00-\x1F]+$/g, '')) // eslint-disable-line no-control-regex -- 控制字符正是清理对象
   }
   return out
 }

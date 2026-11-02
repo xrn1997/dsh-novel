@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { evaluate, evaluateWithTrace } from '../../src/engine/evaluate.js'
+import { pick } from '../support/fixture.js'
 
 /**
  * 同步环路真实覆盖：「evaluate → evalJs → java.getString → evaluateRef(真身)
@@ -69,6 +70,6 @@ describe('java.getString 真实环路（沙箱宿主桥 → evaluateRef 真身 �
     const r = await evaluateWithTrace('<js>return java.getString("@css:h1@text")</js>', { html: HTML, baseUrl: '' }, 'search')
     expect(r.value).toEqual({ kind: 'value', text: '标题甲' })
     expect(r.steps).toHaveLength(1)
-    expect(r.steps[0].segmentKind).toBe('js')
+    expect(pick(r.steps, 0).segmentKind).toBe('js')
   })
 })

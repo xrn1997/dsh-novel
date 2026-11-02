@@ -10,7 +10,7 @@ import type { EngineValue } from './types.js'
 
 /** md5 → 32 位小写十六进制 */
 export function md5Hex(s: string): string {
-  return crypto.createHash('md5').update(String(s), 'utf8').digest('hex')
+  return crypto.createHash('md5').update(s, 'utf8').digest('hex')
 }
 
 /** java.md5Encode16 语义：32 位 md5 取中 16 位（slice(8, 24)） */
@@ -35,7 +35,7 @@ const JCA_TO_NODE_HASH: Record<string, string> = {
 /** `stripHmac` 为 HMAC 族而设：JCA 叫 `HmacSHA256`，node 的 `createHmac` 要的是摘要名 `sha256`
  *  （HMAC 族的算法名只承担「用哪个摘要」，`Hmac` 前缀是冗余的）。 */
 export function jcaHashName(algorithm: string, stripHmac = false): string {
-  const raw = String(algorithm)
+  const raw = algorithm
   const base = stripHmac ? raw.replace(/^hmac[-_]?/i, '') : raw
   const key = base.replace(/[-_\s]/g, '').toLowerCase()
   const hit = JCA_TO_NODE_HASH[key]
@@ -47,34 +47,34 @@ export function jcaHashName(algorithm: string, stripHmac = false): string {
 
 /** java.digestHex(data, algorithm)：**data 在前、算法在后**，data 按 UTF-8 取字节 */
 export function digestHex(data: string, algorithm: string): string {
-  return crypto.createHash(jcaHashName(algorithm)).update(String(data), 'utf8').digest('hex')
+  return crypto.createHash(jcaHashName(algorithm)).update(data, 'utf8').digest('hex')
 }
 
 /** java.digestBase64Str：标准 base64、无换行（形态同 Android `Base64.NO_WRAP`） */
 export function digestBase64(data: string, algorithm: string): string {
-  return crypto.createHash(jcaHashName(algorithm)).update(String(data), 'utf8').digest('base64')
+  return crypto.createHash(jcaHashName(algorithm)).update(data, 'utf8').digest('base64')
 }
 
 /** java.HMacHex(data, algorithm, key)：key 与 data 都按 UTF-8 取字节 */
 export function hMacHex(data: string, algorithm: string, key: string): string {
-  return crypto.createHmac(jcaHashName(algorithm, true), Buffer.from(String(key), 'utf8'))
-    .update(String(data), 'utf8').digest('hex')
+  return crypto.createHmac(jcaHashName(algorithm, true), Buffer.from(key, 'utf8'))
+    .update(data, 'utf8').digest('hex')
 }
 
 /** java.HMacBase64(data, algorithm, key)：输出 base64（取字节口径同 HMacHex） */
 export function hMacBase64(data: string, algorithm: string, key: string): string {
-  return crypto.createHmac(jcaHashName(algorithm, true), Buffer.from(String(key), 'utf8'))
-    .update(String(data), 'utf8').digest('base64')
+  return crypto.createHmac(jcaHashName(algorithm, true), Buffer.from(key, 'utf8'))
+    .update(data, 'utf8').digest('base64')
 }
 
 /** base64 编码（UTF-8 字节） */
 export function base64Encode(s: string): string {
-  return Buffer.from(String(s), 'utf8').toString('base64')
+  return Buffer.from(s, 'utf8').toString('base64')
 }
 
 /** base64 解码（→ UTF-8 字符串） */
 export function base64Decode(s: string): string {
-  return Buffer.from(String(s), 'base64').toString('utf8')
+  return Buffer.from(s, 'base64').toString('utf8')
 }
 
 /** 字节组 → base64（btoa 的二进制语义；与 base64Encode 的 UTF-8 语义分开） */
@@ -84,19 +84,19 @@ export function base64EncodeBytes(bytes: number[]): string {
 
 /** java.encodeURI 垫片：语义 = encodeURIComponent（中文/空格/斜杠全部转义） */
 export function uriEncode(s: string): string {
-  return encodeURIComponent(String(s))
+  return encodeURIComponent(s)
 }
 
 /** 十六进制串 → UTF-8 字符串；空串/奇数长/含非 hex 字符 → ''（宁空不猜） */
 export function hexDecodeToString(hex: string): string {
-  const clean = String(hex).trim()
+  const clean = hex.trim()
   if (clean === '' || clean.length % 2 !== 0 || /[^0-9a-fA-F]/.test(clean)) return ''
   return Buffer.from(clean, 'hex').toString('utf8')
 }
 
 /** UTF-8 字符串 → 十六进制串（`java.hexEncodeToString` 宿主实现；对面 Kotlin `toHexString` = 小写）。 */
 export function hexEncodeToString(utf8: string): string {
-  return Buffer.from(String(utf8), 'utf8').toString('hex')
+  return Buffer.from(utf8, 'utf8').toString('hex')
 }
 
 /**
@@ -169,7 +169,7 @@ function safeFromCodePoint(code: number, fallback: string): string {
  * 这一步的上下文里，此处以规则求值的 base 为最近似，差异记在矩阵 `h-abs-urls`）。
  */
 export function absolutizeUrl(base: string | null | undefined, relative: string): string {
-  const rel = String(relative).trim()
+  const rel = relative.trim()
   if (base === undefined || base === null || base === '') return rel
   const baseUrl = base.split(',')[0]
   if (/^(?:https?|ftp|file|mailto|tel):/i.test(rel) || /^data:/i.test(rel)) return rel
@@ -192,6 +192,22 @@ export function fmtTime(ts: number | string, utc: boolean): string {
   const h = utc ? d.getUTCHours() : d.getHours()
   const mi = utc ? d.getUTCMinutes() : d.getMinutes()
   return `${y}/${p2(mo + 1)}/${p2(da)} ${p2(h)}:${p2(mi)}`
+}
+
+/** 形状不可知的值 → 单串（`String(v)` 的**唯一实现**）：只用于**过线原值**——引导层 JSON.parse 出来的
+ *  脚本实参、脚本返回值、宿主响应载荷这类「声明的形状不可信」的地方。对象走到这里得到 JS 默认串化
+ *  （`[object Object]`，与脚本侧 `String(v)` 同口径）；要可读内容请各自判形（如 `engineValueToString`）。
+ *  与 `no-base-to-string` 的分界：那条规则管的是「已知可能为对象却直接串化」，这里的入参类型是 unknown，
+ *  串化是**兜底口径**而不是对象读数。 */
+export function textOf(v: unknown): string {
+  return String(v)
+}
+
+/** 抛错值 → 文案（`err.message` 有就用它，否则按脚本侧口径串化原值）。脚本可以
+ *  `throw { message, stack }`，worker 边界回来的也是这个形状——故不假定它是 Error 实例。 */
+export function messageOf(e: unknown): string {
+  const message = e !== null && typeof e === 'object' ? (e as { message?: unknown }).message : undefined
+  return message === undefined || message === null ? textOf(e) : textOf(message)
 }
 
 /** EngineValue → 单串（**唯一实现**；nodes 两种宿主口径由参数显式区分，只有一份实现）。
@@ -241,6 +257,10 @@ export function engineValueToStrings(v: EngineValue): string[] {
  */
 export function decodePngToArgb(bytes: Uint8Array, maxPixels?: number): { width: number; height: number; pixels: number[] } {
   const fail = (msg: string): never => { throw new Error(`PNG 解码失败：${msg}`) }
+  // 逐字节读口：越界在这里是**真实输入状态**（chunk 截断 / 尺寸与数据不符），走本函数已有的抛错通道；
+  // 内部缓冲（img）同样经它——那里的越界是解码器自伤，也不折叠成 0（那会把坏数据冒充成合法数据）。
+  const byte = (src: Uint8Array, at: number, what: string): number =>
+    src[at] ?? fail(`${what} 越界（偏移 ${at}，长度 ${src.length}）`)
   const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
   if (bytes.length < 8 || sig.some((b, i) => bytes[i] !== b)) fail('不是 PNG 数据')
   let pos = 8
@@ -251,13 +271,18 @@ export function decodePngToArgb(bytes: Uint8Array, maxPixels?: number): { width:
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
   while (pos + 8 <= bytes.length) {
     const len = dv.getUint32(pos)
-    const type = String.fromCharCode(bytes[pos + 4], bytes[pos + 5], bytes[pos + 6], bytes[pos + 7])
+    // 循环条件已让头 8 字节整体可读：类型名的四个字节必在界内
+    const type = String.fromCharCode(
+      byte(bytes, pos + 4, 'chunk 类型'), byte(bytes, pos + 5, 'chunk 类型'),
+      byte(bytes, pos + 6, 'chunk 类型'), byte(bytes, pos + 7, 'chunk 类型'),
+    )
     const dataStart = pos + 8
     if (dataStart + len + 4 > bytes.length) fail(`chunk ${type} 越界`)
     const data = bytes.subarray(dataStart, dataStart + len)
     if (type === 'IHDR') {
       width = dv.getUint32(dataStart); height = dv.getUint32(dataStart + 4)
-      bitDepth = data[8]; colorType = data[9]; interlace = data[12]
+      bitDepth = byte(data, 8, 'IHDR 位深'); colorType = byte(data, 9, 'IHDR 颜色类型')
+      interlace = byte(data, 12, 'IHDR 隔行标志')
     } else if (type === 'PLTE') palette = data.slice()
     else if (type === 'tRNS') trns = data.slice()
     else if (type === 'IDAT') idat.push(Buffer.from(data))
@@ -268,8 +293,8 @@ export function decodePngToArgb(bytes: Uint8Array, maxPixels?: number): { width:
   if (maxPixels !== undefined && width * height > maxPixels) fail(`图片过大（${width}×${height}）——超过 ${maxPixels} 像素上限（尺寸读出即判，未解像素）`)
   if (interlace !== 0) fail('暂不支持隔行（Adam7）PNG——请换非隔行源图')
   const channelsOf: Record<number, number> = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }
-  const channels = channelsOf[colorType]
-  if (channels === undefined) fail(`未知颜色类型 ${colorType}`)
+  // 认不出的颜色类型不猜通道数：按本函数已有的抛错通道点名
+  const channels = channelsOf[colorType] ?? fail(`未知颜色类型 ${colorType}`)
   if (![1, 2, 4, 8, 16].includes(bitDepth)) fail(`未知位深 ${bitDepth}`)
   if (bitDepth === 16 && colorType === 3) fail('调色板不支持 16 位')
 
@@ -284,13 +309,13 @@ export function decodePngToArgb(bytes: Uint8Array, maxPixels?: number): { width:
   // 逐行去滤波（Sub/Up/Average/Paeth，PNG 规范标准式）
   const img = Buffer.alloc(height * rowBytes)
   for (let y = 0; y < height; y++) {
-    const ft = raw[y * (rowBytes + 1)]
+    const ft = byte(raw, y * (rowBytes + 1), 'IDAT 滤波类型字节')
     const src = (y * (rowBytes + 1)) + 1
     for (let x = 0; x < rowBytes; x++) {
-      const a = x >= bpp ? img[y * rowBytes + x - bpp] : 0
-      const b = y > 0 ? img[(y - 1) * rowBytes + x] : 0
-      const c = (x >= bpp && y > 0) ? img[(y - 1) * rowBytes + x - bpp] : 0
-      const v = raw[src + x]
+      const a = x >= bpp ? byte(img, y * rowBytes + x - bpp, '去滤波左参照') : 0
+      const b = y > 0 ? byte(img, (y - 1) * rowBytes + x, '去滤波上参照') : 0
+      const c = (x >= bpp && y > 0) ? byte(img, (y - 1) * rowBytes + x - bpp, '去滤波左上参照') : 0
+      const v = byte(raw, src + x, 'IDAT 行数据')
       let out: number
       switch (ft) {
         case 0: out = v; break
@@ -307,12 +332,12 @@ export function decodePngToArgb(bytes: Uint8Array, maxPixels?: number): { width:
   // 位深采样 → 8 位 → ARGB
   const sampleAt = (row: number, col: number, ch: number): number => {
     const idx = col * channels + ch
-    if (bitDepth === 8) return img[row * rowBytes + idx]
-    if (bitDepth === 16) return img[row * rowBytes + idx * 2] // 取高字节（16→8 常规降采样）
+    if (bitDepth === 8) return byte(img, row * rowBytes + idx, '采样点')
+    if (bitDepth === 16) return byte(img, row * rowBytes + idx * 2, '采样点') // 取高字节（16→8 常规降采样）
     const bitPos = idx * bitDepth
-    const byte = img[row * rowBytes + (bitPos >> 3)]
+    const byteVal = byte(img, row * rowBytes + (bitPos >> 3), '位深采样字节')
     const shift = 8 - bitDepth - (bitPos & 7)
-    return (byte >> shift) & ((1 << bitDepth) - 1)
+    return (byteVal >> shift) & ((1 << bitDepth) - 1)
   }
   const maxValue = bitDepth >= 8 ? 255 : (1 << bitDepth) - 1
   const scale = (v: number): number => (maxValue === 255 ? v : Math.round((v * 255) / maxValue))
@@ -325,12 +350,14 @@ export function decodePngToArgb(bytes: Uint8Array, maxPixels?: number): { width:
         const pi = sampleAt(y, x, 0)
         if (palette === null) throw new Error('PNG 解码失败：调色板颜色类型缺 PLTE chunk')
         if (pi * 3 + 2 >= palette.length) throw new Error(`PNG 解码失败：调色板索引 ${pi} 越界`)
-        r = palette[pi * 3]; g = palette[pi * 3 + 1]; b = palette[pi * 3 + 2]
-        if (trns !== null && pi < trns.length) al = trns[pi]
+        r = byte(palette, pi * 3, '调色板')
+        g = byte(palette, pi * 3 + 1, '调色板')
+        b = byte(palette, pi * 3 + 2, '调色板')
+        if (trns !== null && pi < trns.length) al = byte(trns, pi, '透明色表')
       } else if (colorType === 0) {
         r = g = b = scale(sampleAt(y, x, 0))
         if (trns !== null && trns.length >= 2) {
-          const key = (trns[0] << 8) | trns[1]
+          const key = (byte(trns, 0, '透明色键') << 8) | byte(trns, 1, '透明色键')
           if (sampleAt(y, x, 0) === (bitDepth === 16 ? key >> 8 : key)) al = 0
         }
       } else if (colorType === 4) {
@@ -338,7 +365,9 @@ export function decodePngToArgb(bytes: Uint8Array, maxPixels?: number): { width:
       } else if (colorType === 2) {
         r = scale(sampleAt(y, x, 0)); g = scale(sampleAt(y, x, 1)); b = scale(sampleAt(y, x, 2))
         if (trns !== null && trns.length >= 6) {
-          const kr = (trns[0] << 8) | trns[1], kg = (trns[2] << 8) | trns[3], kb = (trns[4] << 8) | trns[5]
+          const kr = (byte(trns, 0, '透明色键') << 8) | byte(trns, 1, '透明色键')
+          const kg = (byte(trns, 2, '透明色键') << 8) | byte(trns, 3, '透明色键')
+          const kb = (byte(trns, 4, '透明色键') << 8) | byte(trns, 5, '透明色键')
           const key16 = sampleAt(y, x, 0) === (kr >> 8) && sampleAt(y, x, 1) === (kg >> 8) && sampleAt(y, x, 2) === (kb >> 8)
           const key8 = r === (kr >> 8) && g === (kg >> 8) && b === (kb >> 8)
           if (bitDepth === 16 ? key16 : key8) al = 0
@@ -362,12 +391,12 @@ function paeth(a: number, b: number, c: number): number {
 /** Java charset 名归一（legado 书源脚本传 `ISO8859_1` 这类 Java 别名）：剥分隔符小写后查表，
  *  未命中回传原名交给 iconv 判定（encodingExists 不成立 → 调用方如实报错，不猜编码）。 */
 export function normalizeCharset(raw: string): string {
-  const s = String(raw).trim().replace(/[-_\s]/g, '').toLowerCase()
+  const s = raw.trim().replace(/[-_\s]/g, '').toLowerCase()
   if (s === '' || s === 'utf8' || s === 'utf8bom') return 'utf8'
   if (s === 'iso88591' || s === 'latin1') return 'latin1' // 字节往返必须无损（downloadFile↔readTxtFile）
   if (s === 'ascii' || s === 'usascii') return 'ascii'
-  if (s === 'gbk' || s === 'gb2312' || s === 'gb18030') return String(raw).trim().toUpperCase()
-  return String(raw).trim()
+  if (s === 'gbk' || s === 'gb2312' || s === 'gb18030') return raw.trim().toUpperCase()
+  return raw.trim()
 }
 
 /** 字符串 → 字节（`java.strToBytes` 宿主实现）。未知 charset → 抛错（不拿 UTF-8 冒充）。 */
@@ -391,18 +420,21 @@ export function javaDecode(bytes: Uint8Array, charset: string): string {
 // 「补一位」处理 = 1×1000/10，而 `一千二百` 是 1200），源作者要的就是这个输出——换一套算法会
 // 静默改掉他们排序与标题规整的结果。两个样例都钉在 `tests/engine/js-utils.test.ts`。
 const CHN_MAP: Record<string, number> = {}
-for (const [i, ch] of [...'零一二三四五六七八九十'].entries()) CHN_MAP[ch] = i
-for (const [i, ch] of [...'〇壹贰叁肆伍陆柒捌玖拾'].entries()) CHN_MAP[ch] = i
+for (const [i, ch] of Array.from('零一二三四五六七八九十').entries()) CHN_MAP[ch] = i
+for (const [i, ch] of Array.from('〇壹贰叁肆伍陆柒捌玖拾').entries()) CHN_MAP[ch] = i
 Object.assign(CHN_MAP, { 两: 2, 百: 100, 佰: 100, 千: 1000, 仟: 1000, 万: 10000, 萬: 10000, 亿: 100000000 })
 
 /** 中文数字 → 整数；含认不出的字符 → -1（失败给哨兵值，不抛错） */
 export function chineseNumToInt(chNum: string): number {
-  const cn = [...chNum]
+  const cn = Array.from(chNum)
   let result = 0
   let tmp = 0
   let billion = 0
   for (let i = 0; i < cn.length; i++) {
-    const num = CHN_MAP[cn[i]]
+    const ch = cn[i]
+    // 字符串摊开是密数组、循环条件钉住 i 在界内 ⇒ ch 必在；取不到按本函数的失败口径给 -1（不猜数字）
+    if (ch === undefined) return -1
+    const num = CHN_MAP[ch]
     if (num === undefined) return -1
     if (num === 100000000) {
       result = (result + tmp) * num
@@ -417,9 +449,11 @@ export function chineseNumToInt(chNum: string): number {
       result += num * tmp
       tmp = 0
     } else {
-      tmp = (i >= 2 && i === cn.length - 1 && (CHN_MAP[cn[i - 1]] ?? 0) > 10)
-        ? (num * (CHN_MAP[cn[i - 1]] ?? 0)) / 10
-        : tmp * 10 + num
+      // 上一位的数值（`一千一` 要按「补一位」读成 1100）：i >= 2 时 i-1 必在界内，
+      // 且它已在上一轮过了 CHN_MAP 那关——两处判空只为让编译器跟上这条界内证明。
+      const prevCh = cn[i - 1]
+      const prev = prevCh === undefined ? 0 : (CHN_MAP[prevCh] ?? 0)
+      tmp = (i >= 2 && i === cn.length - 1 && prev > 10) ? (num * prev) / 10 : tmp * 10 + num
     }
   }
   return result + tmp + billion
@@ -436,5 +470,10 @@ export function stringToInt(str: string): number {
 export function toNumChapter(s: string): string {
   const m = /(第)(.+?)(章)/.exec(s)
   if (m === null) return s
-  return `${m[1]}${stringToInt(m[2])}${m[3]}`
+  const head = m[1]
+  const body = m[2]
+  const tail = m[3]
+  // 正则三组都是必选段，命中即齐全；取不到按「认不出这个形态」原样返回（不猜段位）
+  if (head === undefined || body === undefined || tail === undefined) return s
+  return `${head}${stringToInt(body)}${tail}`
 }

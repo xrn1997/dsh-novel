@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { ReaderNavigation } from '../../src/client/views/ReaderNavigation.js'
 import type { NavigationItem } from '../../src/client/views/types.js'
+import { pick } from '../support/fixture.js'
 
 /**
  * 目录树（ReaderNavigation）的结构钉子：条目是**树**不是线性表（目录叶数可多于阅读单元，
@@ -73,7 +74,7 @@ describe('当前项（会话给 id，组件只打标）', () => {
     const { container } = render(<ReaderNavigation items={items} activeId="s1" onNavigate={() => {}} />)
     const marked = container.querySelectorAll('[aria-current="true"]')
     expect(marked).toHaveLength(1)
-    expect(marked[0].textContent).toBe('第二节')
+    expect(pick([...marked], 0).textContent).toBe('第二节')
   })
 
   it('activeId 不在目录里（或为 null）时零 aria-current', () => {
@@ -92,6 +93,6 @@ describe('当前项（会话给 id，组件只打标）', () => {
     const { container } = render(<ReaderNavigation items={dup} activeId="x" onNavigate={() => {}} />)
     const marked = container.querySelectorAll('[aria-current="true"]')
     expect(marked).toHaveLength(1)
-    expect(marked[0].textContent).toBe('甲')
+    expect(pick([...marked], 0).textContent).toBe('甲')
   })
 })

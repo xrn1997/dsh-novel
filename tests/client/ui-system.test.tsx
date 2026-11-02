@@ -12,6 +12,7 @@ import { SearchView } from '../../src/client/views/SearchView.js'
 import { routeStore } from '../../src/client/store.js'
 import { planarNavigation, ROUTES } from '../../src/shared/wire.js'
 import { makeCoreDeps, makeReaderDeps } from './fake-deps.js'
+import { must } from '../support/fixture.js'
 import { rect, stubLayout } from './scroll-stub.js'
 
 beforeEach(resetPanelShelf)
@@ -54,7 +55,8 @@ function ruleBody(selector: string): string {
   const re = /([^{}]+)\{([^{}]*)\}/g
   const css = strip(NOVEL_CSS)
   for (let m = re.exec(css); m !== null; m = re.exec(css)) {
-    if (m[1].split(',').some((s) => s.trim() === wanted)) return m[2]
+    const selectorGroup = must(m[1], '正则捕获组 1（选择器组）')
+    if (selectorGroup.split(',').some((s) => s.trim() === wanted)) return must(m[2], '正则捕获组 2（规则体）')
   }
   return ''
 }
@@ -73,17 +75,19 @@ afterEach(cleanup)
 describe('token 层自足守卫（引用未定义的本层 token 即红）', () => {
   it('NOVEL_CSS 与视图里每个 var(--novel-*) 都在 token 层有定义', () => {
     const defined = new Set<string>()
-    for (const m of NOVEL_CSS.matchAll(/(--novel-[\w-]+)\s*:/g)) defined.add(m[1])
+    for (const m of NOVEL_CSS.matchAll(/(--novel-[\w-]+)\s*:/g)) defined.add(must(m[1], '正则捕获组 1（--novel-* 定义名）'))
     const bad: string[] = []
     for (const m of strip(NOVEL_CSS).matchAll(/var\(\s*(--novel-[\w-]+)/g)) {
-      if (!defined.has(m[1])) bad.push(`styles/（NOVEL_CSS 拼装层）: ${m[1]}`)
+      const token = must(m[1], '正则捕获组 1（--novel-* 引用名）')
+      if (!defined.has(token)) bad.push(`styles/（NOVEL_CSS 拼装层）: ${token}`)
     }
     for (const { file, text } of clientSources()) {
       // 样式层（拼装点 + styles/ 各块）正是上面那个串的来源，逐块再扫是同一批文本的第二遍；
       // 拼装点自身没有 CSS（只剩 import 与 `NOVEL_CSS` 的连接）。
       if (file === 'styles.tsx' || file.startsWith('styles/')) continue
       for (const m of strip(text).matchAll(/var\(\s*(--novel-[\w-]+)/g)) {
-        if (!defined.has(m[1])) bad.push(`${file}: ${m[1]}`)
+        const token = must(m[1], '正则捕获组 1（--novel-* 引用名）')
+        if (!defined.has(token)) bad.push(`${file}: ${token}`)
       }
     }
     expect(bad, `引用了本层不存在的 token（background 等简写会整条落 unset，实测＝静默无底）：\n${bad.join('\n')}`).toEqual([])
@@ -91,7 +95,7 @@ describe('token 层自足守卫（引用未定义的本层 token 即红）', () 
 
   it('负断言：守卫自身别空转——假 token 引用必须被抓出来', () => {
     const defined = new Set<string>()
-    for (const m of NOVEL_CSS.matchAll(/(--novel-[\w-]+)\s*:/g)) defined.add(m[1])
+    for (const m of NOVEL_CSS.matchAll(/(--novel-[\w-]+)\s*:/g)) defined.add(must(m[1], '正则捕获组 1（--novel-* 定义名）'))
     expect(defined.has('--novel-layer')).toBe(false)               // 本轮病根：无裸 --novel-layer
     expect(defined.has('--novel-layer-2')).toBe(true)
     expect(NOVEL_CSS).toMatch(/\.novel-searchbox\s*\{[^}]*background:\s*var\(--novel-layer-[12]\)/)
@@ -206,7 +210,7 @@ describe('布局单位与视口约束（阅读器不能被正文高度绑架）'
       .toMatch(/container-type:\s*inline-size/)
     const degrade = strip(NOVEL_CSS).match(/@container[^{]*\{\s*\.novel-src-stats \.slim\s*\{([^}]*)\}/)
     expect(degrade, '缺窄列退化规则（.novel-src-stats .slim）').not.toBeNull()
-    expect(degrade![1], '退化=隐藏 .slim 那几项').toMatch(/display:\s*none/)
+    expect(must(degrade, '窄列退化规则')[1], '退化=隐藏 .slim 那几项').toMatch(/display:\s*none/)
     expect(ruleBody('.novel-src-stats'), '状态带本体不能被整体隐藏/绝对定位（读数必须常驻列表头）')
       .not.toMatch(/display:\s*none|position:\s*absolute/)
   })
@@ -255,7 +259,7 @@ describe('焦点与指针无关可达（键盘/触屏不再是二等公民）', 
   it('触屏兜底：无 hover 能力时删除 ✕ 常驻可见', () => {
     const m = NOVEL_CSS.match(/@media\s*\(hover:\s*none\)\s*\{([\s\S]*?)\}\s*\n/)
     expect(m, '缺 @media (hover: none) 分支').not.toBeNull()
-    expect(m![1]).toMatch(/\.novel-card-x[^{]*\{[^}]*opacity:\s*1/)
+    expect(must(m, '@media (hover: none) 分支')[1]).toMatch(/\.novel-card-x[^{]*\{[^}]*opacity:\s*1/)
   })
 
   it('动效可关：prefers-reduced-motion 下取消位移与 shimmer', () => {
@@ -298,8 +302,8 @@ describe('目录抽屉：当前章可见 + 打开即定位到当前章', () => {
     routeStore.set({ route: { name: 'reader', sourceId: 's1', bookKey: 'k1', title: 'T' } as never })
     const deps = makeReaderDeps({
       apiGet: vi.fn(async (p: string) => {
-        if (String(p).includes('navigation')) return { chapters: toc, items: planarNavigation(toc) }
-        if (String(p).includes('chapter')) return { kind: 'text', text: '正文段落' }
+        if (p.includes('navigation')) return { chapters: toc, items: planarNavigation(toc) }
+        if (p.includes('chapter')) return { kind: 'text', text: '正文段落' }
         return []
       }),
     })
@@ -324,8 +328,8 @@ describe('目录抽屉：当前章可见 + 打开即定位到当前章', () => {
       routeStore.set({ route: { name: 'reader', sourceId: 's1', bookKey: 'k1', title: 'T' } as never })
       const deps = makeReaderDeps({
         apiGet: vi.fn(async (p: string) => {
-          if (String(p).includes('navigation')) return { chapters: toc, items: planarNavigation(toc) }
-          if (String(p).includes('chapter')) return { kind: 'text', text: '正文段落' }
+          if (p.includes('navigation')) return { chapters: toc, items: planarNavigation(toc) }
+          if (p.includes('chapter')) return { kind: 'text', text: '正文段落' }
           return []
         }),
       })
@@ -374,7 +378,7 @@ describe('键盘可达的承载元素（主操作不许只绑鼠标）', () => {
     }
     let reads = 0
     const deps = makeCoreDeps({
-      apiGet: vi.fn(async (path: string) => String(path) === ROUTES.shelf.path
+      apiGet: vi.fn(async (path: string) => path === ROUTES.shelf.path
         ? []                                        // 落架基线那一问不归本用例
         : ({
         job: ++reads === 1 ? null : {
@@ -389,42 +393,44 @@ describe('键盘可达的承载元素（主操作不许只绑鼠标）', () => {
     expect(deps.apiSend).toHaveBeenCalledWith(ROUTES.searchJob, { keyword: '斗罗' })
     // 命中行的钉子打在**按源那一档**里：默认那档是按书视图，书名在两轴各现一次（jsdom 里
     // 收起的 details 照样查得到），不按容器取就会拿到两本
-    const perSource = container.querySelector('[data-novel-per-source]')
+    const perSource = container.querySelector<HTMLElement>('[data-novel-per-source]')
     expect(perSource, '按源那一档没渲染').not.toBeNull()
+    const perSourceEl = must(perSource, '按源那一档')
     // 这一档默认收着（收起/展开由 views-wiring 的 DOM 事实钉住），读它里面的东西先展开：
     // 不展开就取用，证的是 jsdom 能打进收起 details 这个巧合，不是界面
-    fireEvent.click(perSource!.querySelector('summary') as HTMLElement)
-    const hit = within(perSource as HTMLElement).getByText('斗罗').closest('button')
+    fireEvent.click(must(perSourceEl.querySelector('summary'), '按源那一档的 summary'))
+    const hit = within(perSourceEl).getByText('斗罗').closest('button')
     expect(hit, '命中行标题该落在真 <button> 里').not.toBeNull()
-    expect(hit!.querySelectorAll('button'), '按钮里不套按钮').toHaveLength(0)
+    expect(must(hit, '命中行按钮').querySelectorAll('button'), '按钮里不套按钮').toHaveLength(0)
     // 默认那一档（按书）自己也有两处新形状：展开区里的逐源行、带动作钮的行头。钉子必须两轴都打——
     // 只钉按源就等于让新的默认视图绕过这条守卫（书架卡片那次的病根正是行壳冒充按钮）。
-    const books = container.querySelector('[data-novel-books]')
+    const books = container.querySelector<HTMLElement>('[data-novel-books]')
     expect(books, '按书那一档没渲染').not.toBeNull()
+    const booksEl = must(books, '按书那一档')
     // 一行一本的标记打在行上，且只属于这一档：按源轴与页尾折叠借了它，就会共享同一份呈现口径。
     // 按**计数**钉（只钉「存在」抓不住漏贴或连贴）。
-    expect(books!.querySelectorAll('[data-novel-book]'), '按书那一档的标记恰一条：一本一行').toHaveLength(1)
+    expect(booksEl.querySelectorAll('[data-novel-book]'), '按书那一档的标记恰一条：一本一行').toHaveLength(1)
     expect(container.querySelectorAll('[data-novel-book]').length,
       '这一标记只属于按书那一行：按源轴与书城不许借').toBe(1)
     // 不借 <details> 的形状：借回来就得把整本逐源行渲染进 DOM 再藏起来，还要背上右端动作钮
     // 从展开区里挤掉的那一条宽度（形状取舍的实测理由写在 BookRow 的注释头上）
-    expect(books!.querySelectorAll('details, summary'), '按书那一行不借折叠形').toHaveLength(0)
+    expect(booksEl.querySelectorAll('details, summary'), '按书那一行不借折叠形').toHaveLength(0)
     // 收起时展开区不在 DOM 里：先点行头主钮，断言证的才是「展开后」这三个字
-    const main = books!.querySelector('.novel-book-main') as HTMLElement
+    const main = must(booksEl.querySelector('.novel-book-main'), '书行行头主钮')
     expect(main, '书行没有行头主钮').not.toBeNull()
     fireEvent.click(main)
-    const expandedHit = within(books as HTMLElement)
+    const expandedHit = within(booksEl)
       .getAllByText('斗罗')
       .find((el) => el.classList.contains('novel-hit-title'))
     expect(expandedHit, '书行展开后的逐源行未渲染').toBeTruthy()
-    const bookMain = expandedHit!.closest('button')
+    const bookMain = must(expandedHit, '展开后的命中行标题').closest('button')
     expect(bookMain, '展开后的命中行标题同样要落在真 <button> 里').not.toBeNull()
-    expect(bookMain!.querySelectorAll('button'), '按钮里不套按钮（按书那一档）').toHaveLength(0)
+    expect(must(bookMain, '展开后的命中行按钮').querySelectorAll('button'), '按钮里不套按钮（按书那一档）').toHaveLength(0)
     // 行头主钮与「都加架」是兄弟：主钮只做展开（aria-expanded 已翻面），动作钮不在它肚子里。
     // 「书行整行不是按钮」这条旧钉子在此正面改写——行头**就是**一颗按钮，但它不替用户选一家读。
     expect(main.getAttribute('aria-expanded'), '点过之后展开').toBe('true')
-    const row = books!.querySelector('[data-novel-book]')
-    expect(row!.querySelectorAll(':scope > button'), '行头主钮与「都加架」两颗平级兄弟').toHaveLength(2)
+    const row = must(booksEl.querySelector('[data-novel-book]'), '按书那一行的标记')
+    expect(must(row, '按书那一行').querySelectorAll(':scope > button'), '行头主钮与「都加架」两颗平级兄弟').toHaveLength(2)
     expect(container.querySelectorAll('button [role="button"], button button'),
       '书行的展开区与动作钮都不许嵌进按钮里').toHaveLength(0)
     expect(container.querySelectorAll('[role="button"]')).toHaveLength(0)

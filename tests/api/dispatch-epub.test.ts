@@ -4,11 +4,14 @@ import { Readable } from 'node:stream'
 import path from 'node:path'
 import { ReadingService } from '../../src/services/reading.js'
 import { chapterContentToText } from '../../src/services/chapter-content.js'
-import type { ChapterContent } from '../../src/shared/wire.js'
+import type {
+  ApiEnvelope, BookNavigation, ChapterContent, ChapterEntry, LocalImportResponse, LocalImportWarning, ShelfEntry,
+} from '../../src/shared/wire.js'
 import { LOCAL_SOURCE_ID, paramOps, queries, ROUTES } from '../../src/shared/wire.js'
 import { IMAGE_SAMPLES, makeEpubFixture } from '../fixtures/epub.js'
-import { startServer } from './helpers.js'
+import { must, pick } from '../support/fixture.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
+import { envelopeOf, errorOf, startServer, valueOf } from './helpers.js'
 
 /**
  * 本地 EPUB 的 HTTP 集成：真 http.Server + 真 ReadingService + 临时数据根（无假 handler）。
@@ -22,7 +25,7 @@ beforeAll(async () => {
   dataDir = await makeTempDir('novel-apiep-')
   svc = trackService(await ReadingService.create({
     dir: dataDir,
-    fetchImpl: (async () => new Response('', { status: 404 })) as never,   // 本地书面不触网
+    fetchImpl: async () => new Response('', { status: 404 }),   // 本地书面不触网
   }))
   ;({ base, close } = await startServer(svc))
 })
@@ -30,14 +33,18 @@ afterAll(async () => { await svc.flush(); await close() })
 
 const api = (route: string): string => `${base}/novel-api/${route}`
 
+/** fixture 的 Buffer → BodyInit：DOM 的 BodyInit 不收 Buffer（ArrayBufferLike 泛型差异），字节原样拷一份 */
+const bodyOf = (fixture: string): BodyInit => new Uint8Array(makeEpubFixture(fixture))
+
 /** 真 HTTP 导入一份 fixture；失败时把错误体带进断言消息 */
-async function importBook(fixture: string, name: string): Promise<any> {
+async function importBook(fixture: string, name: string): Promise<LocalImportResponse> {
   const r = await fetch(api(queries.localImport({ name })), {
-    method: 'POST', body: makeEpubFixture(fixture) as unknown as BodyInit,
+    method: 'POST', body: bodyOf(fixture),
   })
   const text = await r.text()
   expect(r.status, text).toBe(200)
-  return (JSON.parse(text) as { value: any }).value
+  const env = JSON.parse(text) as ApiEnvelope<LocalImportResponse>
+  return must(env.value, '导入回执')
 }
 
 const localEntries = async (): Promise<string[]> => (await fs.readdir(path.join(dataDir, 'local'))).sort()
@@ -65,47 +72,50 @@ describe('EPUB 导入 → 阅读（真实 HTTP）', () => {
     })
     // 封面走 wire 的资源路径构造器（本地资源口），前端拿到即可显示
     expect(book.coverUrl).toBe(`/novel-api/${queries.localResource({ id: book.bookKey, resourceId: 'r0' })}`)
-    const shelf = (await (await fetch(api('shelf'))).json() as any).value as Array<{ bookKey: string }>
+    const shelf = await valueOf<ShelfEntry[]>(await fetch(api('shelf')))
     expect(shelf.map((b) => b.bookKey)).toContain(book.bookKey)
   })
 
   it('GET /chapter 返回图文树，文字投影与它同源', async () => {
     const book = await importBook('epub3-rich', '样本.epub')
-    const { value: content } = await (await fetch(chapterUrl(book.bookKey, 0))).json() as any
+    const content = await valueOf<ChapterContent>(await fetch(chapterUrl(book.bookKey, 0)))
     expect(content.kind).toBe('rich')
+    if (content.kind !== 'rich') throw new Error('期望图文正文（rich）')
     expect(content.documentId).toBe('d0')
-    expect(content.nodes[0]).toMatchObject({ kind: 'element', tag: 'h1' })
-    expect(await svc.getChapter(LOCAL_SOURCE_ID, book.bookKey, 0)).toBe(chapterContentToText(content as ChapterContent))
+    expect(pick(content.nodes, 0)).toMatchObject({ kind: 'element', tag: 'h1' })
+    expect(await svc.getChapter(LOCAL_SOURCE_ID, book.bookKey, 0)).toBe(chapterContentToText(content))
     // 章号越界 → 404（本地产物不存在），不是 500
     expect((await fetch(chapterUrl(book.bookKey, 99))).status).toBe(404)
   })
 
   it('GET /toc 仍是线性旧响应；GET /navigation 给线性序列 + 原生目录树（同章多锚点各自成条）', async () => {
     const book = await importBook('epub3-rich', '样本.epub')
-    const { value: toc } = await (await fetch(api(queries.toc({ sourceId: LOCAL_SOURCE_ID, url: book.bookKey })))).json() as any
+    const toc = await valueOf<ChapterEntry[]>(await fetch(api(queries.toc({ sourceId: LOCAL_SOURCE_ID, url: book.bookKey }))))
     expect(toc).toEqual([
       { name: '第一章', url: `${book.bookKey}#0` },
       { name: '第二章', url: `${book.bookKey}#1` },
     ])
-    const { value: nav } = await (await fetch(api(queries.navigation({ sourceId: LOCAL_SOURCE_ID, url: book.bookKey })))).json() as any
+    const nav = await valueOf<BookNavigation>(await fetch(api(queries.navigation({ sourceId: LOCAL_SOURCE_ID, url: book.bookKey }))))
     expect(nav.chapters).toEqual(toc)                       // 线性序列与 toc 同一份（进度/导出口径）
-    expect(nav.items.map((i: any) => i.label)).toEqual(['第一卷'])
-    expect(nav.items[0].children.map((i: any) => i.label)).toEqual(['甲', '乙', '丙'])
-    expect(nav.items[0].target).toBeNull()                  // 分组标题没有目标
-    const leaves = nav.items[0].children
-    expect(leaves.map((i: any) => i.target)).toEqual([
-      { kind: 'chapter', index: 0, anchorId: expect.stringMatching(/^a\d+$/) },
-      { kind: 'chapter', index: 0, anchorId: expect.stringMatching(/^a\d+$/) },
-      { kind: 'chapter', index: 1, anchorId: expect.stringMatching(/^a\d+$/) },
+    expect(nav.items.map((i) => i.label)).toEqual(['第一卷'])
+    const root = pick(nav.items, 0)
+    expect(root.children.map((i) => i.label)).toEqual(['甲', '乙', '丙'])
+    expect(root.target).toBeNull()                  // 分组标题没有目标
+    const leaves = root.children
+    expect(leaves.map((i) => i.target)).toEqual([
+      { kind: 'chapter', index: 0, anchorId: expect.stringMatching(/^a\d+$/) as string },
+      { kind: 'chapter', index: 0, anchorId: expect.stringMatching(/^a\d+$/) as string },
+      { kind: 'chapter', index: 1, anchorId: expect.stringMatching(/^a\d+$/) as string },
     ])
-    expect(leaves[0].target.anchorId).not.toBe(leaves[1].target.anchorId)
+    expect(must(pick(leaves, 0).target, '叶目标').anchorId)
+      .not.toBe(must(pick(leaves, 1).target, '叶目标').anchorId)
   })
 
   it('GET local/document 读补充文档（脚注）；未知文档 ID → 404', async () => {
     const book = await importBook('epub3-rich', '样本.epub')
-    const { value: notes } = await (await fetch(api(queries.localDocument({ id: book.bookKey, documentId: 'd2' })))).json() as any
+    const notes = await valueOf<ChapterContent>(await fetch(api(queries.localDocument({ id: book.bookKey, documentId: 'd2' }))))
     expect(notes).toMatchObject({ kind: 'rich', documentId: 'd2' })
-    expect(chapterContentToText(notes as ChapterContent)).toContain('脚注一')
+    expect(chapterContentToText(notes)).toContain('脚注一')
     expect((await fetch(api(queries.localDocument({ id: book.bookKey, documentId: 'd99' })))).status).toBe(404)
     // 原型链成员（JSON.parse 出的普通对象会命中它们）不是文档 ID：取到 undefined 的 file 会炸成 500，
     // 只按自有键查表才落回「找不到」的既有路径
@@ -142,9 +152,9 @@ describe('EPUB 导入 → 阅读（真实 HTTP）', () => {
   it('GET local/warnings 回持久化的导入说明（干净书空数组）', async () => {
     const clean = await importBook('epub3-rich', '干净.epub')
     const degraded = await importBook('epub3-inline-svg-anchor', '降级.epub')
-    expect((await (await fetch(api(queries.localWarnings({ id: clean.bookKey })))).json() as any).value).toEqual([])
-    const warnings = (await (await fetch(api(queries.localWarnings({ id: degraded.bookKey })))).json() as any).value
-    expect(warnings.map((w: { code: string }) => w.code)).toContain('epub-degraded-anchor')
+    expect(await valueOf<LocalImportWarning[]>(await fetch(api(queries.localWarnings({ id: clean.bookKey }))))).toEqual([])
+    const warnings = await valueOf<LocalImportWarning[]>(await fetch(api(queries.localWarnings({ id: degraded.bookKey }))))
+    expect(warnings.map((w) => w.code)).toContain('epub-degraded-anchor')
   })
 
   it('跨源 Origin 被既有 fence 拒（资源口也不例外）', async () => {
@@ -208,34 +218,36 @@ describe('EPUB 的失败与删除（真实 HTTP）', () => {
     const keep = await importBook('epub3-rich', '既有.epub')
     const before = await localEntries()
     const r = await fetch(api(queries.localImport({ name: '坏.epub' })), {
-      method: 'POST', body: makeEpubFixture('epub3-broken-cover') as unknown as BodyInit,
+      method: 'POST', body: bodyOf('epub3-broken-cover'),
     })
     expect(r.status).toBe(400)
-    expect(((await r.json()) as any).error.code).toBe('BadRequest')
+    const env = await envelopeOf<LocalImportResponse>(r)
+    expect(must(env.error, '错误信封').code).toBe('BadRequest')
     expect(await localEntries()).toEqual(before)
     expect((await fetch(chapterUrl(keep.bookKey, 0))).status).toBe(200)
   })
 
   it('导入的内容不是可读 EPUB → 400 且点名（内容判定：改名字不能绕过）', async () => {
     const r = await fetch(api(queries.localImport({ name: '伪装.txt' })), {
-      method: 'POST', body: makeEpubFixture('epub-entity-internal') as unknown as BodyInit,
+      method: 'POST', body: bodyOf('epub-entity-internal'),
     })
     expect(r.status).toBe(400)
-    expect(((await r.json()) as any).error.message).toContain('实体声明')
+    expect((await errorOf(r)).message).toContain('实体声明')
   })
 
   it('ZIP 加密条目的归档 → 400：不落成 format:txt 的乱码书，也不入架', async () => {
     const before = await localEntries()
     const shelfOf = async (): Promise<string[]> =>
-      ((await (await fetch(api('shelf'))).json() as any).value as Array<{ bookKey: string }>).map((b) => b.bookKey)
+      (await valueOf<ShelfEntry[]>(await fetch(api('shelf')))).map((b) => b.bookKey)
     const shelfBefore = await shelfOf()
     const r = await fetch(api(queries.localImport({ name: '加密.zip' })), {
-      method: 'POST', body: makeEpubFixture('encrypted-entry') as unknown as BodyInit,
+      method: 'POST', body: bodyOf('encrypted-entry'),
     })
     expect(r.status).toBe(400)
-    const body = await r.json() as any
-    expect(body.error.code).toBe('BadRequest')
-    expect(body.error.message).toContain('加密')
+    const body = await envelopeOf<LocalImportResponse>(r)
+    const error = must(body.error, '错误信封')
+    expect(error.code).toBe('BadRequest')
+    expect(error.message).toContain('加密')
     // 回执不是成功信封：没有 value（也就不可能带 format:'txt' 的乱码书）
     expect(body.value).toBeUndefined()
     expect(await localEntries()).toEqual(before)
@@ -263,7 +275,7 @@ describe('EPUB 的失败与删除（真实 HTTP）', () => {
     const batch = await fetch(api(ROUTES.shelfBatchDelete.path), {
       method: 'POST', body: JSON.stringify({ keys: [another.bookKey] }),
     })
-    expect(((await batch.json()) as any).value.removed).toBe(1)
+    expect((await valueOf<{ removed: number }>(batch)).removed).toBe(1)
     await expectGone(another.bookKey)
   })
 })

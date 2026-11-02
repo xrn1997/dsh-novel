@@ -10,7 +10,7 @@ import { JsSandboxError, RegexDeadlineError, isEngineError } from './errors.js'
 import { SANDBOX_MOUNTS, SYNC_AJAX_SENTINEL, SYNC_WORKER_RE, asyncBridgeSource, asyncMountSource, invokeJavaMethod } from './js-protocol.js'
 import type { BridgeDeps } from './js-protocol.js'
 import { loadHtml, nodeText } from './dom.js'
-import { decodePngToArgb, javaDecode } from './js-utils.js'
+import { decodePngToArgb, javaDecode, messageOf, textOf } from './js-utils.js'
 import { scriptGlobals, scriptGlobalOf, scriptInitOf, scriptKeyOf } from './script-surface.js'
 
 /** JavaBridge 协议的唯一登记点在 js-protocol.ts 的 JAVA_PROTOCOL 表；此处只 re-export 类型。 */
@@ -126,7 +126,9 @@ export interface JsCall {
   opts?: EvalJsOptions
 }
 
-const TIMEOUT = Symbol('js-sandbox-timeout')
+/** 超时哨兵。作为 Promise 的 rejection 原因出门（`prefer-promise-reject-errors` 要求 Error 实例），
+ *  两处判定都按**同一性**比较、从不读它的文案——不要改成按 message 认（文案是给人看的，不是判据）。 */
+const TIMEOUT = new Error('js-sandbox-timeout')
 
 /** worker 那条 race 的宽限（消费点两处：外层 race 的加项与下方 RPC 死线的派生加项）：`vm` 的
  *  timeout 杀的是 worker 内的同步死循环，这一条管「await 一个永不 settle 的 promise」。它必须
@@ -493,7 +495,7 @@ ${asyncBridgeSource()}
           ENCRYPT_MODE: 1,
           DECRYPT_MODE: 2,
           getInstance: function (trans) {
-            // 注意：BOOTSTRAP 是模板字符串，正则字面量里的 \/ 会被模板层解转义成 / 截断正则——
+            // 注意：BOOTSTRAP 是模板字符串，正则字面量里的斜杠转义会被模板层吃掉成 / 截断正则——
             // 用 new RegExp 构造（同理此处任何含 / 的模式都不得用字面量）
             if (!new RegExp('^AES/CBC/PKCS[57]Padding$', 'i').test(String(trans))) {
               throw new Error('不支持的加密变换：' + trans + '（v1 实现 AES/CBC/PKCS5|7Padding）')
@@ -990,7 +992,7 @@ async function evalJsCore(call: JsCall): Promise<JsOutcome> {
     code,
     loc,
     facet,
-    result: host.result ?? '',
+    result: host.result,
     session,
     sourceKey: ctx.source ?? ctx.baseUrl ?? '',
     evaluateRef,
@@ -1005,7 +1007,7 @@ async function evalJsCore(call: JsCall): Promise<JsOutcome> {
   // JSON 页的 `result` 绑定：整页/条目上下文是合法 JSON 时按**解析后的对象**绑定——
   // `result.chapterTitle`、`result.data.list` 这类字段访问形态全靠它；若绑成原文字符串，
   // 字段会全 undefined，目录脚本产空。
-  const pageRaw = host.result ?? ''
+  const pageRaw = host.result
   const trimmedResult = pageRaw.trim()
   const resultJson = host.resultKind === 'page'
     && ((trimmedResult.startsWith('{') && trimmedResult.endsWith('}')) || (trimmedResult.startsWith('[') && trimmedResult.endsWith(']')))
@@ -1065,7 +1067,7 @@ async function evalJsCore(call: JsCall): Promise<JsOutcome> {
           // 没有「等主线程替 worker 服务一发宿主调用」那种额外往返。worker 那条才加
           // `ASYNC_GRACE_MS`（见 `evalJsInWorker`），两处的差是 realm 结构决定的，不是漂移。
           timer = setTimeout(() => reject(TIMEOUT), timeout)
-          timer?.unref?.()
+          timer.unref()
         }),
       ])
       return { value: toEngineValue(ret), logs }
@@ -1120,19 +1122,21 @@ export function runInContextVm(
     scriptForm: boolean
   },
 ): unknown {
+  // 本函数经 toString() 注入 worker（闭包自由）：串化只能就地定义，不许引用模块级符号。
+  const asText = (v: unknown): string => String(v)
   const tag = (e: unknown, phase: 'bootstrap' | 'jsLib' | 'compile'): unknown => {
     if (e !== null && typeof e === 'object') {
       const t = e as { phase?: string; timedOut?: boolean }
       // 冻结/不可扩展的抛错对象在严格模式下赋值会抛 TypeError，那会盖掉原错误——打标失败就放弃标记
       try {
         t.phase = phase
-        t.timedOut = /Script execution timed out/i.test(String((e as { message?: unknown }).message ?? e))
+        t.timedOut = /Script execution timed out/i.test(asText((e as { message?: unknown }).message ?? e))
       } catch { /* 打标只是旁注，原错误照原样 rethrow */ }
     }
     return e
   }
   const context = vmMod.createContext(
-    { __host_call__: deps.hostCall, __init__: deps.init } as unknown as vm.Context,
+    { __host_call__: deps.hostCall, __init__: deps.init },
     { codeGeneration: { strings: true, wasm: false } },
   )
 
@@ -1214,12 +1218,15 @@ const SAB_RESP_BYTES = 16 * 1024 * 1024
  *  **export 明写为测试缝**（测试钉 `toString()` 自含；语义由主线程/worker 两条路的往返用例间接覆盖），
  *  不为生产导出面加宽。 */
 export function sanitizeForPost(v: unknown): unknown {
+  // 原值留一份 unknown 形的 alias：下面的分支把 v 收窄成对象之后，兜底串化仍要按**过线原值**口径走
+  // （循环引用 / 含 BigInt 的对象过不去 JSON，回退脚本侧 String(v)），不是把对象读成可读串。
+  const original: unknown = v
   if (v === null || v === undefined) return null
   const t = Object.prototype.toString.call(v)
-  if (t === '[object String]') return String(v)
-  if (typeof v === 'function') return String(v)
+  if (t === '[object String]') return String(original)
+  if (typeof v === 'function') return String(original)
   if (typeof v === 'object') {
-    try { return JSON.parse(JSON.stringify(v)) } catch (e) { return String(v) }
+    try { return JSON.parse(JSON.stringify(v)) } catch { return String(original) }
   }
   return v
 }
@@ -1333,9 +1340,9 @@ async function evalJsInWorker(a: WorkerRunArgs): Promise<JsOutcome> {
   try {
     const result = await new Promise<{ ok: boolean; ret?: unknown; message?: string; stack?: string; phase?: string; timedOut?: boolean }>((resolve, reject) => {
       const timer = setTimeout(() => reject(TIMEOUT), a.timeout + ASYNC_GRACE_MS)
-      timer.unref?.()
+      timer.unref()
       worker.on('message', (m: { ok: boolean; ret?: unknown; message?: string; stack?: string; phase?: string; timedOut?: boolean; rpc?: boolean }) => {
-        if (m?.rpc === true) { void serviceRpc(); return }
+        if (m.rpc === true) { void serviceRpc(); return }
         clearTimeout(timer)
         resolve(m)
       })
@@ -1367,12 +1374,12 @@ function toEngineValue(ret: unknown): EngineValue {
   if (ret === null || ret === undefined || ret === '') return { kind: 'miss', detail: 'js 返回空' }
   // 元素包装对象（String 对象——脚本 `return result` 形态）按原文产出，不走 JSON.stringify 加引号
   if (Object.prototype.toString.call(ret) === '[object String]') {
-    const s = String(ret)
+    const s = textOf(ret)
     return s === '' ? { kind: 'miss', detail: 'js 返回空' } : { kind: 'value', text: s }
   }
   if (Array.isArray(ret)) return { kind: 'list', items: ret.map(serializeJsElement) }
   if (typeof ret === 'object') return { kind: 'value', text: JSON.stringify(ret) }
-  return { kind: 'value', text: String(ret) }
+  return { kind: 'value', text: textOf(ret) }
 }
 
 /** js 数组产物的元素字符串化：字符串原样；元素包装对象（String 对象/带 html 字段）取原文/inner html；
@@ -1380,13 +1387,26 @@ function toEngineValue(ret: unknown): EngineValue {
  *  序列化后，后继 `$.x` 规则能对条目 JSON 求值） */
 function serializeJsElement(x: unknown): string {
   if (typeof x === 'string') return x
-  if (Object.prototype.toString.call(x) === '[object String]') return String(x)
+  if (Object.prototype.toString.call(x) === '[object String]') return textOf(x)
   if (x !== null && typeof x === 'object') {
     const html = (x as { html?: unknown }).html
     if (typeof html === 'string') return html
     return JSON.stringify(x)
   }
-  return String(x)
+  return textOf(x)
+}
+
+/** 协议响应恒为 JSON 串：`JSON.stringify` 的类型面声明返回 string，但 undefined / function / symbol
+ *  实参在运行期返回 undefined（类型面在这一处撒谎）。桥必须回一条脚本能 JSON.parse 的串，故兜底 'null'。 */
+function jsonText(v: unknown): string {
+  const text: unknown = JSON.stringify(v)
+  return typeof text === 'string' ? text : 'null'
+}
+
+/** 引导层载荷（`__elem.*` / `__pkg.*` 的实参）：BOOTSTRAP 恒送 JSON 对象；非对象是接线自伤，
+ *  按空载荷走——与「直接取字段」的可观测结果同（字段全 undefined）。 */
+function wireRecord(v: unknown): Record<string, unknown> {
+  return v !== null && typeof v === 'object' ? (v as Record<string, unknown>) : {}
 }
 
 /** 宿主侧唯一入口：与沙箱引导层约定 (name, argsJson) → JSON 字符串（ajax 为 Promise<string>）。
@@ -1399,7 +1419,8 @@ function makeHostCall(
 ): (name: string, argsJson: string) => string | Promise<string> {
   return (name: string, argsJson: string): string | Promise<string> => {
     if (name === 'console.log' || name === 'console.error') {
-      const arr: unknown[] = JSON.parse(argsJson)
+      const parsed: unknown = JSON.parse(argsJson)
+      const arr: unknown[] = Array.isArray(parsed) ? parsed : [parsed]
       logs.push(arr.join(' '))
       if (name === 'console.log') hostConsole?.log(...arr)
       else hostConsole?.error(...arr)
@@ -1408,18 +1429,21 @@ function makeHostCall(
     // 元素包装对象的宿主侧求值（__elem.*）：cheerio 在宿主 realm 求值，返回纯 JSON——
     // 不进协议表（它不是 java.* 面，是沙箱包装对象的内部桥），与 console.* 同为特判通道
     if (name.startsWith('__elem.')) {
-      return JSON.stringify(elemHostOp(name.slice('__elem.'.length), JSON.parse(argsJson))) ?? 'null'
+      const payload: unknown = JSON.parse(argsJson)
+      return jsonText(elemHostOp(name.slice('__elem.'.length), wireRecord(payload)))
     }
     // Packages.* 的宿主重活（__pkg.*）：PNG 解码 / AES-CBC / HMAC / 字节→串——同 __elem 纪律，
     // 不进协议表（它是 Packages 包路径面，不是 java.* 方法），返回纯 JSON
     if (name.startsWith('__pkg.')) {
-      return JSON.stringify(pkgHostOp(name.slice('__pkg.'.length), JSON.parse(argsJson), deps)) ?? 'null'
+      const payload: unknown = JSON.parse(argsJson)
+      return jsonText(pkgHostOp(name.slice('__pkg.'.length), wireRecord(payload), deps))
     }
-    const args: unknown[] = JSON.parse(argsJson)
+    const parsed: unknown = JSON.parse(argsJson)
+    const args: unknown[] = Array.isArray(parsed) ? parsed : [parsed]
     const out = invokeJavaMethod(deps, name, args)
-    if (out instanceof Promise) return out.then((v) => JSON.stringify(v))
+    if (out instanceof Promise) return out.then(jsonText)
     // undefined（java.get 未命中 / void 方法）→ 'null'：与旧逐案分派的 `?? null` / `'null'` 口径一致
-    return JSON.stringify(out) ?? 'null'
+    return jsonText(out)
   }
 }
 
@@ -1441,15 +1465,15 @@ function elemHostOp(op: string, payload: { html?: unknown; name?: unknown; rule?
   }
   const $ = api
   const firstEl = (): Element | null => {
-    for (const n of $('*').toArray()) if (isTag(n)) return n as Element
+    for (const n of $('*').toArray()) if (isTag(n)) return n
     return null
   }
   switch (op) {
     case 'attr': {
-      const name = String(payload.name ?? '')
+      const name = textOf(payload.name ?? '')
       const el = firstEl()
       if (el === null || name === '') return ''
-      const own = el.attribs?.[name] ?? ''
+      const own = el.attribs[name] ?? ''
       if (own !== '') return own
       return $(el).find(`[${name}]`).first().attr(name) ?? ''
     }
@@ -1462,12 +1486,12 @@ function elemHostOp(op: string, payload: { html?: unknown; name?: unknown; rule?
       return el === null ? '' : $(el).html() ?? ''
     }
     case 'select': {
-      const rule = String(payload.rule ?? '')
+      const rule = textOf(payload.rule ?? '')
       if (rule === '') return []
       try {
-        return $(rule).toArray().map((n) => $.html(n) ?? '')
+        return $(rule).toArray().map((n) => $.html(n))
       } catch (e) {
-        throw new Error(`选择器无法解析：${rule}（${(e as Error).message}）`)
+        throw new Error(`选择器无法解析：${rule}（${(e as Error).message}）`, { cause: e })
       }
     }
     case 'split': {
@@ -1476,23 +1500,23 @@ function elemHostOp(op: string, payload: { html?: unknown; name?: unknown; rule?
       // 「元素」，其 text() 反而是整段拼接（size/get/each 全错位）。
       const body = $('body')
       const kids = body.length > 0 ? body.children() : $.root().children()
-      return kids.toArray().filter((n) => isTag(n)).map((n) => $.html(n) ?? '')
+      return kids.toArray().filter((n) => isTag(n)).map((n) => $.html(n))
     }
     case 'remove': {
       // 元素桥的摘除回写：remove() 只把节点从**父**上摘掉、子树跟着节点走——el.select(...).remove()
       // 把 el 自己摘走后，el.html() 仍要读到没被命中的内容。做法：先按原形状记下顶层节点，摘完再
       // 串化它们（节点还在，串化即为净化后的片段）。文档级片段串化整份文档，其余串化 body 顶层子节点。
-      const rule = String(payload.rule ?? '')
+      const rule = textOf(payload.rule ?? '')
       const isDoc = /^\s*(?:<!doctype\s|<html[\s>])/i.test(html)
       const top = (isDoc ? $.root().contents() : $('body').contents()).toArray()
       if (rule !== '') {
         try {
           $(rule).remove()
         } catch (e) {
-          throw new Error(`选择器无法解析：${rule}（${(e as Error).message}）`)
+          throw new Error(`选择器无法解析：${rule}（${(e as Error).message}）`, { cause: e })
         }
       }
-      return isDoc ? ($.html() ?? '') : top.map((n) => $(n).toString()).join('')
+      return isDoc ? $.html() : top.map((n) => $(n).toString()).join('')
     }
     default:
       throw new Error(`未知元素桥操作：${op}`)
@@ -1526,7 +1550,7 @@ function pkgHostOp(op: string, payload: Record<string, unknown>, deps: BridgeDep
         const d = crypto.createDecipheriv(`aes-${key.length * 8}-cbc`, Buffer.from(key), Buffer.from(iv))
         return Array.from(Buffer.concat([d.update(Buffer.from(data)), d.final()])) // PKCS7 自动校验（=PKCS5）
       } catch (e) {
-        throw new Error(`AES-CBC 解密失败（${e instanceof Error ? e.message : String(e)}）`)
+        throw new Error(`AES-CBC 解密失败（${e instanceof Error ? e.message : textOf(e)}）`, { cause: e })
       }
     }
     case 'hmac': {
@@ -1541,12 +1565,12 @@ function pkgHostOp(op: string, payload: Record<string, unknown>, deps: BridgeDep
     case 'cookieGet': {
       const jar = deps.ctx.httpCookies
       if (jar === undefined) throw new Error('cookie jar 未接线：该源未提供 HTTP cookie jar')
-      return jar.headerFor(String(payload.url ?? ''))
+      return jar.headerFor(textOf(payload.url ?? ''))
     }
     case 'cookieSet': {
       const jar = deps.ctx.httpCookies
       if (jar === undefined) throw new Error('cookie jar 未接线：该源未提供 HTTP cookie jar')
-      jar.setCookie(String(payload.url ?? ''), String(payload.cookie ?? ''))
+      jar.setCookie(textOf(payload.url ?? ''), textOf(payload.cookie ?? ''))
       return null
     }
     case 'cookieRemoveSession': {
@@ -1618,9 +1642,13 @@ export function createSourceSession(): SourceSession {
 }
 
 function jsErr(e: unknown, code: string, loc: SegmentLoc, facet: Facet, prefix: string): JsSandboxError {
-  const msg = (e as Error)?.message ?? String(e)
-  const line = parseLineFromStack((e as Error)?.stack ?? '')
-  return new JsSandboxError(`${prefix}：${msg}`, { ...loc, facet, script: code, line })
+  // e 的形参是 unknown（脚本可 `throw { message, stack }`，worker 边界回来的也是这个形状）
+  const msg = messageOf(e)
+  const frame = e !== null && typeof e === 'object' ? (e as { stack?: unknown }).stack : undefined
+  const line = parseLineFromStack(typeof frame === 'string' ? frame : '')
+  // 行号缺席就整键不建（`errors.ts` 的 loc 侧按「有没有这个键」决定消息里带不带「第 N 行」，
+  // 而 `line ?` 对 undefined 与缺席同判——不建键比塞一个 undefined 更贴近「无行号」这件事）
+  return new JsSandboxError(`${prefix}：${msg}`, { ...loc, facet, script: code, ...(line === undefined ? {} : { line }) })
 }
 
 /** 共享体错误标 → 错误前缀（**主线程 catch 与 evalJsInWorker 两处调用点共读这一份**——
@@ -1647,7 +1675,8 @@ function isVmTimeout(e: unknown): boolean {
  *  内层 catch 会把它包成 JsSandboxError，但 jsErr 是 `${prefix}：${msg}` 拼接，原文仍在 message 里，
  *  故按子串判定即可。 */
 function needsSyncBridge(e: unknown): boolean {
-  return String((e as { message?: unknown })?.message ?? '').includes(SYNC_AJAX_SENTINEL)
+  const message = e !== null && typeof e === 'object' ? (e as { message?: unknown }).message : undefined
+  return textOf(message ?? '').includes(SYNC_AJAX_SENTINEL)
 }
 
 function parseLineFromStack(stack: string): number | undefined {

@@ -195,9 +195,12 @@ async function orchestrate(archive: EpubArchive, outputDir: string, limits: Part
   for (const [index, docPath] of pkg.spine.entries()) await enqueue(docPath, index, 'OPF 主序列')
   // 导航指到的文档也算可达（目录要能跳到它，比如附录）；它可能本身就不在 spine 里
   for (const href of navTargets(pkg.navigation)) await enqueue(href.path, null, `导航目标（${href.path}）`)
-  // 正文链接的传递闭包（活队列：新收的文档也要继续顺链走），已访问集合自然终止环路
-  for (let at = 0; at < queue.length; at += 1) {
-    const doc = docs.get(queue[at]) as ScannedDocument
+  // 正文链接的传递闭包（活队列：新收的文档也要继续顺链走），已访问集合自然终止环路。
+  // `for…of` 与按下标读同一份活队列等价（数组迭代器每步重读长度），故循环中新入队的文档照样会被走到。
+  for (const docPath of queue) {
+    const doc = docs.get(docPath)
+    // 活队列的每一项都由 enqueue 先写进 docs 再入队：取不到即内部一致性被破坏，按本层既有错误点名
+    if (doc === undefined) throw new EpubImportError(`正文链接活队列里的 ${docPath} 不在文档表里（内部一致性被破坏）`)
     for (const link of doc.links) {
       const cls = classifyHref(link, doc.path)
       if (cls.kind !== 'internal') continue
@@ -460,8 +463,11 @@ function classifyHref(href: string, from: string): HrefClass {
   if (trimmed.startsWith('//')) return { kind: 'external' }
   const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):/.exec(trimmed)
   if (scheme !== null) {
-    const name = scheme[1].toLowerCase()
-    return UNFOLLOWABLE_SCHEMES.has(name) ? { kind: 'unfollowable', label: `${name}:` } : { kind: 'external' }
+    const name = scheme[1]
+    // 认不出 scheme 名即读不懂这条链接：按坏书点名拒收（本层既有失败通道），不当外站链接猜
+    if (name === undefined) throw new EpubImportError(`${from}：认不出链接的 scheme（段 ${shortLabel(trimmed)}）`)
+    const lowered = name.toLowerCase()
+    return UNFOLLOWABLE_SCHEMES.has(lowered) ? { kind: 'unfollowable', label: `${lowered}:` } : { kind: 'external' }
   }
   return { kind: 'internal', href: resolveEpubHref(from, trimmed) }
 }

@@ -32,10 +32,15 @@ export function isAtomicTemp(file: string, entry: string): boolean {
 
 /** 数据文件存在但解析失败——与「文件不存在」是两回事，见 readJson。 */
 export class CorruptJsonError extends Error {
-  constructor(readonly file: string, override readonly cause: unknown) {
+  readonly file: string
+  override readonly cause: unknown
+
+  constructor(file: string, cause: unknown) {
     const why = cause instanceof Error ? cause.message : String(cause)
     super(`数据文件损坏，拒绝按空结果继续（原文件已备份为 ${backupPathOf(file)}）：${file}（${why}）`)
     this.name = 'CorruptJsonError'
+    this.file = file
+    this.cause = cause
   }
 }
 
@@ -83,8 +88,10 @@ async function renameWithRetry(tmp: string, file: string): Promise<void> {
       return
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code
-      if (!RENAME_RETRYABLE.has(code ?? '') || attempt >= RENAME_RETRY_DELAYS_MS.length) throw e
-      await sleep(RENAME_RETRY_DELAYS_MS[attempt]!)
+      const delay = RENAME_RETRY_DELAYS_MS[attempt]
+      // 取不到这一档延迟即重试次数用尽：与「不可重试的码」同一条出口，不拿 0 冒充一次等待
+      if (!RENAME_RETRYABLE.has(code ?? '') || delay === undefined) throw e
+      await sleep(delay)
     }
   }
 }

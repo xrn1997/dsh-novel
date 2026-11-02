@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ReadingService } from '../../src/services/reading.js'
-import { startServer } from './helpers.js'
+import type { SourcePublic } from '../../src/shared/wire.js'
+import { pick } from '../support/fixture.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
+import { envelopeOf, requestUrl, startServer, valueOf } from './helpers.js'
 
 const BASE = 'https://s.com'
 const TOC_HTML = '<html><body><div class="b ch"><a href="/c/1.html">第一章</a></div><div class="b ch"><a href="/c/2.html">第二章</a></div></body></html>'
@@ -21,8 +23,8 @@ beforeAll(async () => {
   const dir = await makeTempDir('novel-apiex-')
   svc = trackService(await ReadingService.create({
     dir,
-    fetchImpl: (async (input: RequestInfo | URL) => {
-      const u = String(input)
+    fetchImpl: async (input: RequestInfo | URL) => {
+      const u = requestUrl(input)
       if (u.includes('/book/empty/')) return new Response(EMPTY_TOC_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } })
       if (u.includes('/book/1/')) return new Response(TOC_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } })
       if (u.includes('/c/')) {
@@ -30,7 +32,7 @@ beforeAll(async () => {
         return new Response(`<html><body><div id="content">第${n}章正文</div></body></html>`, { headers: { 'content-type': 'text/html; charset=utf-8' } })
       }
       return new Response('', { status: 404 })
-    }) as any,
+    },
   }))
   await svc.importOne(rawSource)
   ;({ base, close } = await startServer(svc, { exportDelayMs: 1 }))   // 测试不睡
@@ -38,8 +40,8 @@ beforeAll(async () => {
 afterAll(async () => { await svc.flush(); await close() })
 
 async function sourceId(): Promise<string> {
-  const { value: src } = await (await fetch(`${base}/novel-api/sources`)).json() as any
-  return src[0].id
+  const src = await valueOf<SourcePublic[]>(await fetch(`${base}/novel-api/sources`))
+  return pick(src, 0).id
 }
 
 describe('GET /novel-api/export', () => {
@@ -73,7 +75,7 @@ describe('GET /novel-api/export', () => {
     const id = await sourceId()
     const r = await fetch(`${base}/novel-api/export?sourceId=${id}&url=${encodeURIComponent(`${BASE}/book/1/`)}&title=t&from=2&to=1`)
     expect(r.status).toBe(422)
-    const env = await r.json() as any
+    const env = await envelopeOf<unknown>(r)
     expect(env.ok).toBe(false)
     expect(env.error?.code).toBe('BadRange')
   })
@@ -81,7 +83,7 @@ describe('GET /novel-api/export', () => {
     const id = await sourceId()
     const r = await fetch(`${base}/novel-api/export?sourceId=${id}&url=${encodeURIComponent(`${BASE}/book/1/`)}&title=t&from=9&to=1`)
     expect(r.status).toBe(422)
-    const env = await r.json() as any
+    const env = await envelopeOf<unknown>(r)
     expect(env.ok).toBe(false)
     expect(env.error?.code).toBe('BadRange')
     // 原始 9/1 与裁剪后的 2/1 不同：文案若用原始值就说明门面的裁剪结果没被原样交接
@@ -91,7 +93,7 @@ describe('GET /novel-api/export', () => {
     const id = await sourceId()
     const r = await fetch(`${base}/novel-api/export?sourceId=${id}&url=${encodeURIComponent(`${BASE}/book/empty/`)}&title=x`)
     expect(r.status).toBe(422)
-    const env = await r.json() as any
+    const env = await envelopeOf<unknown>(r)
     expect(env.ok).toBe(false)
     expect(env.error?.code).toBe('EmptyToc')
     expect(env.error?.message).toBe('目录为空，无内容可导出')
@@ -100,7 +102,7 @@ describe('GET /novel-api/export', () => {
     const id = await sourceId()
     const r = await fetch(`${base}/novel-api/export?sourceId=${id}&url=${encodeURIComponent(`${BASE}/book/1/`)}&title=t&from=abc`)
     expect(r.status).toBe(400)
-    const env = await r.json() as any
+    const env = await envelopeOf<unknown>(r)
     expect(env.error?.code).toBe('BadRequest')
   })
   it('范围越界裁剪：from=0&to=99 → 全书两章照出', async () => {
@@ -115,7 +117,7 @@ describe('GET /novel-api/export', () => {
     const id = await sourceId()
     const r = await fetch(`${base}/novel-api/export?sourceId=${id}&url=${encodeURIComponent(`${BASE}/不存在/`)}&title=x`)
     expect(r.status).toBe(502)
-    const env = await r.json() as any                      // 走了信封而非流 → 可 json 解析
+    const env = await envelopeOf<unknown>(r)                      // 走了信封而非流 → 可 json 解析
     expect(env.ok).toBe(false)
     expect(env.error?.code).toBe('FetchError')             // 守门 fetcher：404 → FetchError → 502
   })

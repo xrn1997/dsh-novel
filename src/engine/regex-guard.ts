@@ -88,7 +88,7 @@ interface GuardedEval {
   slots: Record<string, unknown>
 }
 
-function evaluateIn<T>({ script, re, volume, slots }: GuardedEval): T {
+function evaluateIn({ script, re, volume, slots }: GuardedEval): unknown {
   if (inGuard) {
     throw new Error('regex-guard 重入：上一次求值未结束就起了第二次（求值窗口内不得回调宿主或嵌套守卫）')
   }
@@ -97,7 +97,7 @@ function evaluateIn<T>({ script, re, volume, slots }: GuardedEval): T {
   sandbox.__re = re
   Object.assign(sandbox, slots)
   try {
-    return script.runInContext(context, { timeout: deadlineMs }) as T
+    return script.runInContext(context, { timeout: deadlineMs })
   } catch (e) {
     // vm 的超时错误来自另一个 realm：不能靠 instanceof Error，认 code
     if ((e as { code?: unknown } | null)?.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT') {
@@ -108,29 +108,56 @@ function evaluateIn<T>({ script, re, volume, slots }: GuardedEval): T {
     }
     throw e
   } finally {
-    delete sandbox.__re
-    for (const key of Object.keys(slots)) delete sandbox[key]
+    Reflect.deleteProperty(sandbox, '__re')
+    for (const key of Object.keys(slots)) Reflect.deleteProperty(sandbox, key)
     inGuard = false
   }
 }
 
+/** 守卫脚本返回值判形：返回值来自另一个 realm（形状约束见文件顶注），按目标形状显式判，
+ *  对不上就抛——这是「不认识的返回值」，不是可以断言掉的东西。 */
+function shapeFail(what: string, v: unknown): never {
+  throw new TypeError(`regex 守卫的脚本返回值不是 ${what}（实际 ${typeof v}）`)
+}
+
+function boolOf(v: unknown): boolean {
+  if (typeof v !== 'boolean') shapeFail('boolean', v)
+  return v
+}
+
+function stringOf(v: unknown): string {
+  if (typeof v !== 'string') shapeFail('string', v)
+  return v
+}
+
+/** matchAll 的行 = group 0 + 捕获组，每格都是串（脚本已把 undefined 折成 ''） */
+function stringRowsOf(v: unknown): string[][] {
+  if (!Array.isArray(v)) shapeFail('string[][]', v)
+  const rows: unknown[] = v
+  return rows.map((row) => {
+    if (!Array.isArray(row)) shapeFail('string[]（行）', row)
+    const cells: unknown[] = row
+    return cells.map(stringOf)
+  })
+}
+
 /** `re.test(text)`；超时抛 `RegexDeadlineError` */
 export function guardedTest(re: RegExp, text: string): boolean {
-  return evaluateIn<boolean>({ script: testScript, re, volume: text.length, slots: { __text: text } })
+  return boolOf(evaluateIn({ script: testScript, re, volume: text.length, slots: { __text: text } }))
 }
 
 /** 全局 `text.replace(re, replacement)`；超时抛 `RegexDeadlineError` */
 export function guardedReplace(re: RegExp, text: string, replacement: string): string {
-  return evaluateIn<string>({
+  return stringOf(evaluateIn({
     script: replaceScript, re, volume: text.length, slots: { __text: text, __repl: replacement },
-  })
+  }))
 }
 
 /** OnlyOne 口径（先 exec 再段内 replace）；超时抛 `RegexDeadlineError` */
 export function guardedOnlyOneReplace(re: RegExp, text: string, replacement: string): string {
-  return evaluateIn<string>({
+  return stringOf(evaluateIn({
     script: onlyOneScript, re, volume: text.length, slots: { __text: text, __repl: replacement },
-  })
+  }))
 }
 
 /** 整页全局扫描，返回每行的 group 数组；超时抛 `RegexDeadlineError`。
@@ -142,7 +169,7 @@ export function guardedMatchAll(re: RegExp, text: string): string[][] {
   if (!re.global && !re.sticky) {
     throw new TypeError('guardedMatchAll 只收全局（g）或粘滞（y）正则：非全局正则的 exec 不推进 lastIndex，会打满死线并被误诊成灾难性回溯')
   }
-  return evaluateIn<string[][]>({ script: matchAllScript, re, volume: text.length, slots: { __text: text } })
+  return stringRowsOf(evaluateIn({ script: matchAllScript, re, volume: text.length, slots: { __text: text } }))
 }
 
 /**
@@ -167,7 +194,10 @@ export function guardedFilter<T>(
     if (value !== undefined) volume += value.length
   }
   const savedLastIndex = re.lastIndex
-  const kept = evaluateIn<T[]>({ script: filterScript, re, volume, slots: { __items: items, __values: values } })
+  const kept = evaluateIn({ script: filterScript, re, volume, slots: { __items: items, __values: values } })
   re.lastIndex = savedLastIndex
-  return kept
+  if (!Array.isArray(kept)) shapeFail('数组', kept)
+  // 脚本只把 __items 的原物推进结果（跨 realm 约定见文件顶注）；数组形状已验，原样交回。
+  // 不按值重建：值相等的不同条目（尤其原始值）会被折叠成同一份，取位结果就不再是「这些位置上的条目」。
+  return kept as T[]
 }

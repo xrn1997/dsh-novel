@@ -51,7 +51,9 @@ export async function followPages<T>(
   let pages = 0
   let stoppedBy: FollowResult<T>['stoppedBy'] = 'end'
   outer: while (queue.length > 0) {
-    const entry = queue.shift()!
+    const entry = queue.shift()
+    // 循环条件已保证队列非空：这一判只让类型跟上那个证明，取不到就按追页收尾
+    if (entry === undefined) break
     if (seenUrls.has(entry.url)) continue
     if (pages >= opts.maxPages) { stoppedBy = 'cap'; break }
     seenUrls.add(entry.url)

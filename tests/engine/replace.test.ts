@@ -2,13 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { applyReplaces } from '../../src/engine/replace.js'
 import type { EngineValue, ReplaceStep } from '../../src/engine/types.js'
 import { RuleEvalError } from '../../src/engine/errors.js'
+import { valueTextOf } from './value.js'
 
 const step = (pattern: string, replacement = '', flags = ''): ReplaceStep => ({ pattern, flags, replacement })
 
 describe('applyReplaces 净化（## 替换）', () => {
   it('净化：循环替换，逐项作用', () => {
-    const v = { kind: 'list', items: ['第一 章　起 点', '第二章 转折'] } as const
-    expect(applyReplaces(v as unknown as EngineValue, [step('\\s+', '', 'g')], false))
+    const v: EngineValue = { kind: 'list', items: ['第一 章　起 点', '第二章 转折'] }
+    expect(applyReplaces(v, [step('\\s+', '', 'g')], false))
       .toEqual({ kind: 'list', items: ['第一章起点', '第二章转折'] })
   })
 
@@ -50,18 +51,18 @@ describe('applyReplaces 净化（## 替换）', () => {
       expect(bare.kind).toBe('value')
       expect(tailed.kind).toBe('value')
       // 空 pattern 那步被跳过 ⇒ 与不带尾同形（对面在这条源上也是「不替换」）
-      expect((tailed as any).text).toBe((bare as any).text)
+      expect(valueTextOf(tailed)).toBe(valueTextOf(bare))
     })
   })
 
   it('OnlyOne 先截取首个匹配、再在该匹配内替换（对面 replaceRegex 的 replaceFirst 分支）', () => {
     // 先取**首个匹配**的那一小段，替换再作用在该小段上——产物就是那一小段
     // （不是「原文里只改第一处」；按后者读会得错值，净化尾因此留下本该被裁掉的尾巴）。
-    const v = { kind: 'value', text: 'aXaX' } as const
-    expect(applyReplaces(v as unknown as EngineValue, [step('X', '-')], true))
+    const v: EngineValue = { kind: 'value', text: 'aXaX' }
+    expect(applyReplaces(v, [step('X', '-')], true))
       .toEqual({ kind: 'value', text: '-' })
-    const list = { kind: 'list', items: ['aXaX', 'bXbX'] } as const
-    expect(applyReplaces(list as unknown as EngineValue, [step('X', '-')], true))
+    const list: EngineValue = { kind: 'list', items: ['aXaX', 'bXbX'] }
+    expect(applyReplaces(list, [step('X', '-')], true))
       .toEqual({ kind: 'list', items: ['-', '-'] })
   })
 
@@ -104,10 +105,10 @@ describe('applyReplaces 净化（## 替换）', () => {
   })
 
   it('miss / matches 透传（不替换、同引用）', () => {
-    const m = { kind: 'miss', detail: 'd' } as const
-    expect(applyReplaces(m as unknown as EngineValue, [step('a', 'b')], false)).toBe(m)
-    const matches = { kind: 'matches', rows: [['a', 'b']] } as const
-    expect(applyReplaces(matches as unknown as EngineValue, [step('a', 'b')], false)).toBe(matches)
+    const m: EngineValue = { kind: 'miss', detail: 'd' }
+    expect(applyReplaces(m, [step('a', 'b')], false)).toBe(m)
+    const matches: EngineValue = { kind: 'matches', rows: [['a', 'b']] }
+    expect(applyReplaces(matches, [step('a', 'b')], false)).toBe(matches)
   })
 
   it('非法正则 → RuleEvalError 且带段定位（hits=0，段定位指向该替换步）', () => {

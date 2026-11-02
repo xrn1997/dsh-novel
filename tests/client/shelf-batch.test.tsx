@@ -9,6 +9,7 @@ import { routeStore } from '../../src/client/store.js'
 import { ROUTES } from '../../src/shared/wire.js'
 import { makeCoreDeps } from './fake-deps.js'
 import type { FakeViewDeps } from './fake-deps.js'
+import { pick } from '../support/fixture.js'
 import type { ShelfEntry } from '../../src/client/views/types.js'
 
 beforeEach(resetPanelShelf)
@@ -38,7 +39,7 @@ const L = entry({ bookKey: 'local:u1', title: '本地书', sourceId: '__local__'
 async function mount(books: ShelfEntry[], apiSend?: unknown): Promise<FakeViewDeps> {
   const deps = makeCoreDeps({ apiGet: vi.fn(async () => books), ...(apiSend === undefined ? {} : { apiSend }) })
   render(createElement(ShelfView, { deps }))
-  await waitFor(() => expect(screen.getByText(books[0].title)).toBeTruthy())
+  await waitFor(() => expect(screen.getByText(pick(books, 0).title)).toBeTruthy())
   return deps
 }
 
@@ -48,20 +49,20 @@ const selbar = (): HTMLElement => {
   return bar as HTMLElement
 }
 const barButton = (label: string): HTMLElement => {
-  const btn = [...selbar().querySelectorAll('button')].find((b) => b.textContent?.trim() === label)
+  const btn = [...selbar().querySelectorAll('button')].find((b) => b.textContent.trim() === label)
   expect(btn, `批量条上没有「${label}」`).toBeDefined()
   return btn as HTMLElement
 }
 /** 卡片主钮按书名取（多选态它的 aria-label 换成「选择/取消选择《书名》」） */
 const card = (title: string): HTMLElement => {
-  const el = [...document.querySelectorAll<HTMLElement>('.novel-card')].find((c) => c.textContent?.includes(title))
+  const el = [...document.querySelectorAll<HTMLElement>('.novel-card')].find((c) => c.textContent.includes(title))
   expect(el, `卡片「${title}」不在场`).toBeDefined()
   return el as HTMLElement
 }
 const enterSelect = (): void => { fireEvent.click(screen.getByText('选择')) }
 
 /** 单本 ✕（多本书时不止一个，取第一张卡片的） */
-const firstX = (): HTMLElement => screen.getAllByTitle('删除本书')[0]
+const firstX = (): HTMLElement => pick(screen.getAllByTitle('删除本书'), 0)
 
 afterEach(cleanup)
 
@@ -198,8 +199,8 @@ describe('删除所选：一次批请求 + 模态口径 + 失败留框内', () =
     expect(screen.getByText('删除《斗罗》？')).toBeTruthy()
     fireEvent.click(screen.getByText('确认删除'))
     await waitFor(() => expect(deps.apiSend).toHaveBeenCalledTimes(1))
-    expect((deps.apiSend.mock.calls[0][0] as { method: string }).method).toBe('DELETE')
-    expect(String((deps.apiSend.mock.calls[0][0] as { path: string }).path)).toContain('shelf/')
+    expect((pick(pick(deps.apiSend.mock.calls, 0), 0) as { method: string }).method).toBe('DELETE')
+    expect((pick(pick(deps.apiSend.mock.calls, 0), 0) as { path: string }).path).toContain('shelf/')
   })
 })
 

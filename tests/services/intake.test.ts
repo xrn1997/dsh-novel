@@ -3,6 +3,7 @@ import { SourceIntake, dedupKey } from '../../src/services/intake.js'
 import { SourceRegistry } from '../../src/services/sources.js'
 import { normalizeSource } from '../../src/services/normalize.js'
 import { makeTempDir } from '../temp-dir.js'
+import { pick } from '../support/fixture.js'
 
 /**
  * 源入库：normalize → 批内去重 → 按址去重 → add/replace 的唯一实现。
@@ -34,7 +35,7 @@ describe('SourceIntake 入库语义', () => {
     const d2 = await intake.intake(raw('A2', 'https://a.com'))
     expect(d2).toMatchObject({ kind: 'skipped', reason: 'batch', name: 'A2' })
     expect(registry.list()).toHaveLength(1)
-    expect(registry.list()[0].name).toBe('A1')
+    expect(pick(registry.list(), 0).name).toBe('A1')
   })
 
   it('已有 verified 同址 → skipped reason=verified，保留已有（入库规则：已有可用者优先）', async () => {
@@ -46,7 +47,7 @@ describe('SourceIntake 入库语义', () => {
     expect(d).toMatchObject({ kind: 'skipped', reason: 'verified', name: '新' })
     expect((d as { existing?: { id: string } }).existing?.id).toBe(first.id)
     expect(registry.list()).toHaveLength(1)
-    expect(registry.list()[0].name).toBe('旧')
+    expect(pick(registry.list(), 0).name).toBe('旧')
   })
 
   it('已有 broken/unverified 同址 → replaced（复用旧 id，内容更新）', async () => {
@@ -56,7 +57,7 @@ describe('SourceIntake 入库语义', () => {
     const d = await intake.intake(raw('新', 'https://a.com'))
     expect(d.kind).toBe('replaced')
     expect(registry.list()).toHaveLength(1)
-    expect(registry.list()[0]).toMatchObject({ id: first.id, name: '新' })
+    expect(pick(registry.list(), 0)).toMatchObject({ id: first.id, name: '新' })
   })
 
   it('同址脏数据多条 → replace 时清同键其余条目（历史收敛到一条）', async () => {
@@ -68,7 +69,7 @@ describe('SourceIntake 入库语义', () => {
     const d = await intake.intake(raw('新', 'https://a.com'))
     expect(d).toMatchObject({ kind: 'replaced', clearedRest: 1 })
     expect(registry.list()).toHaveLength(1)
-    expect(registry.list()[0].id).toBe(first.id)
+    expect(pick(registry.list(), 0).id).toBe(first.id)
   })
 
   it('dedupKey 口径：尾斜杠与首尾空白视为同址，大小写不魔改', () => {

@@ -19,6 +19,7 @@ import { EpubImportError } from '../../src/services/epub/errors.js'
 import { importEpub, type EpubImportData } from '../../src/services/epub/import.js'
 import { makeEpubFixture } from '../fixtures/epub.js'
 import { makeTempDir } from '../temp-dir.js'
+import { must, pick } from '../support/fixture.js'
 
 async function importOf(name: string, limits?: Partial<EpubLimits>): Promise<{ book: EpubImportData; dir: string }> {
   const dir = await makeTempDir('novel-epub-')
@@ -47,8 +48,7 @@ function expectEpubError(e: Error, pattern: RegExp): void {
 
 /** 读回落盘的文档 JSON（内容值断言都建立在它上面，只断言「文件存在」等于没断言） */
 async function readDocument(dir: string, book: EpubImportData, documentId: string): Promise<ChapterContent> {
-  const ref = book.documents[documentId]
-  expect(ref, `文档 ${documentId} 不在索引里`).toBeTruthy()
+  const ref = must(book.documents[documentId], `文档索引 ${documentId}（导入回执里没有这一份）`)
   return JSON.parse(await fs.readFile(path.join(dir, ref.file), 'utf8')) as ChapterContent
 }
 
@@ -72,7 +72,7 @@ function collectIds(nodes: readonly ContentNode[]): Set<string> {
 
 /** 结构投影（去掉每次都变的 ID，便于整树断言） */
 function shape(nodes: readonly ContentNode[]): unknown[] {
-  return nodes.map((n) => {
+  return nodes.map((n): unknown => {
     switch (n.kind) {
       case 'text': return n.text
       case 'break': return 'br'
@@ -89,13 +89,17 @@ function navShape(items: readonly NavigationItem[]): unknown[] {
   return items.map((i) => ({ label: i.label, target: i.target, children: navShape(i.children) }))
 }
 
+/** 锚点号 / 文档号在期望值里是运行期匹配器，不是被断言到的那串值——收成 unknown，不冒充 string。 */
+const anchorMatching = (): unknown => expect.stringMatching(/^a\d+$/)
+const documentIdMatching = (): unknown => expect.any(String)
+
 describe('epub3-rich：主序列计章、补充文档可打开但不计章', () => {
   it('脚注在补充文档中，不改变正文计数', async () => {
     const dir = await makeTempDir('novel-epub-')
     const book = await importEpub(makeEpubFixture('epub3-rich'), dir)
     expect(book.chapters).toHaveLength(2)
     expect(Object.keys(book.documents)).toHaveLength(3)
-    expect(book.items[0].children).toHaveLength(3)
+    expect(pick(book.items, 0).children).toHaveLength(3)
   })
 
   it('主序列按 spine 排（ZIP 顺序反着写也不影响），补充文档 index 为 null', async () => {
@@ -103,9 +107,9 @@ describe('epub3-rich：主序列计章、补充文档可打开但不计章', () 
     expect(book.title).toBe('图文样本')
     expect(book.author).toBe('样本作者')
     expect(book.chapters.map((c) => [c.index, c.label])).toEqual([[0, '第一章'], [1, '第二章']])
-    const main = book.chapters.map((c) => book.documents[c.documentId])
+    const main = book.chapters.map((c) => must(book.documents[c.documentId], `文档索引 ${c.documentId}`))
     expect(main.map((d) => d.index)).toEqual([0, 1])
-    expect(main[0].file).toMatch(/^documents\/\w+\.json$/)
+    expect(pick(main, 0).file).toMatch(/^documents\/\w+\.json$/)
     // 脚注文档：不在阅读序列里，但落盘可读
     const notes = Object.values(book.documents).find((d) => d.index === null)
     expect(notes?.path).toBe('OEBPS/notes.xhtml')
@@ -115,26 +119,26 @@ describe('epub3-rich：主序列计章、补充文档可打开但不计章', () 
     const { book, dir } = await importOf('epub3-rich')
     expect(navShape(book.items)).toEqual([
       { label: '第一卷', target: null, children: [
-        { label: '甲', target: { kind: 'chapter', index: 0, anchorId: expect.stringMatching(/^a\d+$/) as unknown as string }, children: [] },
-        { label: '乙', target: { kind: 'chapter', index: 0, anchorId: expect.stringMatching(/^a\d+$/) as unknown as string }, children: [] },
-        { label: '丙', target: { kind: 'chapter', index: 1, anchorId: expect.stringMatching(/^a\d+$/) as unknown as string }, children: [] },
+        { label: '甲', target: { kind: 'chapter', index: 0, anchorId: anchorMatching() }, children: [] },
+        { label: '乙', target: { kind: 'chapter', index: 0, anchorId: anchorMatching() }, children: [] },
+        { label: '丙', target: { kind: 'chapter', index: 1, anchorId: anchorMatching() }, children: [] },
       ] },
     ])
-    const leaves = book.items[0].children
+    const leaves = pick(book.items, 0).children
     const ids = new Set<string>()
     for (const chapter of book.chapters) for (const id of collectIds(nodesOf(await readDocument(dir, book, chapter.documentId)))) ids.add(id)
     for (const leaf of leaves) {
       const target = leaf.target as Extract<ReadingTarget, { kind: 'chapter' }>
       expect(target.kind).toBe('chapter')
-      if (target.kind === 'chapter' && target.anchorId !== null) expect(ids.has(target.anchorId), `锚点 ${target.anchorId} 不在文档树里`).toBe(true)
+      if (target.anchorId !== null) expect(ids.has(target.anchorId), `锚点 ${target.anchorId} 不在文档树里`).toBe(true)
     }
     // 同一文档的两个锚点各自成条：anchorId 必须不同（否则两个叶指向同一处）
-    expect((leaves[0].target as { anchorId: string }).anchorId).not.toBe((leaves[1].target as { anchorId: string }).anchorId)
+    expect((pick(leaves, 0).target as { anchorId: string }).anchorId).not.toBe((pick(leaves, 1).target as { anchorId: string }).anchorId)
   })
 
   it('正文内容值：粗斜体、列表编号、表格跨行跨列、pre/sup/sub/换行/分隔线', async () => {
     const { book, dir } = await importOf('epub3-rich')
-    const nodes = nodesOf(await readDocument(dir, book, book.chapters[0].documentId))
+    const nodes = nodesOf(await readDocument(dir, book, pick(book.chapters, 0).documentId))
     expect(shape(nodes)).toEqual([
       { tag: 'h1', start: null, value: null, rowSpan: null, colSpan: null, children: ['第一章'] },
       { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: [
@@ -176,9 +180,9 @@ describe('epub3-rich：主序列计章、补充文档可打开但不计章', () 
       ] },
       { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: [
         '脚注',
-        { link: 'noteref', target: { kind: 'supplement', documentId: expect.any(String) as unknown as string, anchorId: expect.stringMatching(/^a\d+$/) as unknown as string }, children: ['1'] },
+        { link: 'noteref', target: { kind: 'supplement', documentId: documentIdMatching(), anchorId: anchorMatching() }, children: ['1'] },
         '与跨章',
-        { link: 'normal', target: { kind: 'chapter', index: 1, anchorId: expect.stringMatching(/^a\d+$/) as unknown as string }, children: ['丙'] },
+        { link: 'normal', target: { kind: 'chapter', index: 1, anchorId: anchorMatching() }, children: ['丙'] },
       ] },
       { tag: 'div', start: null, value: null, rowSpan: null, colSpan: null, children: ['未知容器 ', '下划线', ' 保留子内容'] },
       { tag: 'div', start: null, value: null, rowSpan: null, colSpan: null, children: ['结构容器 ', { tag: 'strong', start: null, value: null, rowSpan: null, colSpan: null, children: ['变粗'] }] },
@@ -189,22 +193,22 @@ describe('epub3-rich：主序列计章、补充文档可打开但不计章', () 
     const { book, dir } = await importOf('epub3-rich')
     const notesRef = Object.values(book.documents).find((d) => d.index === null)
     expect(notesRef).toBeTruthy()
-    const notes = nodesOf(await readDocument(dir, book, notesRef!.id))
+    const notes = nodesOf(await readDocument(dir, book, must(notesRef, '补充文档引用').id))
     const back = notes.find((n) => n.kind === 'element' && n.children.some((c) => c.kind === 'link'))
     const link = (back as Extract<ContentNode, { kind: 'element' }>).children.find((c) => c.kind === 'link') as Extract<ContentNode, { kind: 'link' }>
     expect(link.role).toBe('backlink')
     expect(link.target).toMatchObject({ kind: 'chapter', index: 0 })
     // 反向链接的锚点确实落在第一章的树上（引用锚点）
-    const ch1 = nodesOf(await readDocument(dir, book, book.chapters[0].documentId))
+    const ch1 = nodesOf(await readDocument(dir, book, pick(book.chapters, 0).documentId))
     const target = link.target as Extract<ReadingTarget, { kind: 'chapter' }>
     expect(target.anchorId).not.toBeNull()
-    expect(collectIds(ch1).has(target.anchorId!)).toBe(true)
+    expect(collectIds(ch1).has(must(target.anchorId, '目录叶的锚点号'))).toBe(true)
   })
 
   it('共享图片只落一份资源；资源字节按原样解码得出宽高', async () => {
     const { book, dir } = await importOf('epub3-rich')
     expect(Object.keys(book.resources)).toHaveLength(1)
-    const [res] = Object.values(book.resources)
+    const res = pick(Object.values(book.resources), 0)
     expect(res.mediaType).toBe('image/png')
     expect([res.width, res.height]).toEqual([2, 3])
     expect(res.file).toMatch(/^resources\/r\d+\.png$/)
@@ -215,11 +219,10 @@ describe('epub3-rich：主序列计章、补充文档可打开但不计章', () 
 
   it('封面优先 EPUB3 的 cover-image：封面资源与正文插图是同一份（按书内路径去重）', async () => {
     const { book } = await importOf('epub3-rich')
-    const cover = book.coverResourceId
-    expect(cover).not.toBeNull()
+    const cover = must(book.coverResourceId, 'book.coverResourceId')
     // 正文里也引了同一张图：资源表里只有一份，封面指向它
     expect(Object.keys(book.resources)).toEqual([cover])
-    expect(book.resources[cover!].mediaType).toBe('image/png')
+    expect(must(book.resources[cover], `资源索引 ${cover}`).mediaType).toBe('image/png')
   })
 
   it('好书上没有告警（告警不许在好书上刷存在感）', async () => {
@@ -262,7 +265,7 @@ describe('可达性与补充文档', () => {
     const { book, dir } = await importOf('epub3-link-cycle')
     const c = Object.values(book.documents).find((d) => d.path === 'OEBPS/text/c.xhtml')
     expect(c?.index).toBeNull()
-    const b = Object.values(book.documents).find((d) => d.path === 'OEBPS/text/b.xhtml')!
+    const b = must(Object.values(book.documents).find((d) => d.path === 'OEBPS/text/b.xhtml'), 'find 命中的那一项')
     const nodes = nodesOf(await readDocument(dir, book, b.id))
     const links = nodes.flatMap(function collect(n: ContentNode): ContentNode[] {
       if (n.kind === 'element') return n.children.flatMap(collect)
@@ -270,8 +273,8 @@ describe('可达性与补充文档', () => {
       return []
     }).filter((n): n is Extract<ContentNode, { kind: 'link' }> => n.kind === 'link')
     expect(links.map((l) => l.target)).toEqual([
-      { kind: 'supplement', documentId: book.documents[Object.keys(book.documents).find((k) => book.documents[k].path === 'OEBPS/text/a.xhtml')!].id, anchorId: expect.stringMatching(/^a\d+$/) as unknown as string },
-      { kind: 'supplement', documentId: c!.id, anchorId: expect.stringMatching(/^a\d+$/) as unknown as string },
+      { kind: 'supplement', documentId: must(Object.values(book.documents).find((d) => d.path === 'OEBPS/text/a.xhtml'), 'find 命中的那一项').id, anchorId: anchorMatching() },
+      { kind: 'supplement', documentId: must(c, 'c.xhtml 文档').id, anchorId: anchorMatching() },
     ])
   })
 
@@ -279,11 +282,11 @@ describe('可达性与补充文档', () => {
     const { book } = await importOf('epub3-nav-to-supplement')
     expect(book.chapters).toHaveLength(1)
     expect(Object.values(book.documents).map((d) => d.path).sort()).toEqual(['OEBPS/ch1.xhtml', 'OEBPS/sup.xhtml'])
-    const leaf = book.items[1]
+    const leaf = pick(book.items, 1)
     expect(leaf.label).toBe('附录')
     const target = leaf.target as Extract<ReadingTarget, { kind: 'supplement' }>
     expect(target.kind).toBe('supplement')
-    expect(target.documentId).toBe(Object.values(book.documents).find((d) => d.path === 'OEBPS/sup.xhtml')!.id)
+    expect(target.documentId).toBe(must(Object.values(book.documents).find((d) => d.path === 'OEBPS/sup.xhtml'), 'find 命中的那一项').id)
   })
 
   it('spine 里声明了补充文档但没有任何链接/导航指向它：不解析（未使用条目不受支持要求）', async () => {
@@ -310,10 +313,10 @@ describe('纯插图章节与无封面', () => {
     const { book, dir } = await importOf('epub3-image-only')
     expect(book.chapters).toHaveLength(2)
     expect(Object.keys(book.resources)).toHaveLength(1)
-    const first = nodesOf(await readDocument(dir, book, book.chapters[0].documentId))
+    const first = nodesOf(await readDocument(dir, book, pick(book.chapters, 0).documentId))
     expect(shape(first)).toEqual(['img:整页插图:2x3'])
     // 第二章用 `../OEBPS/...` 那套相对路径引用同一张图：归一到同一份资源
-    const second = nodesOf(await readDocument(dir, book, book.chapters[1].documentId))
+    const second = nodesOf(await readDocument(dir, book, pick(book.chapters, 1).documentId))
     expect(shape(second)).toEqual([
       { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: ['接着看图', 'img::2x3'] },
     ])
@@ -328,22 +331,21 @@ describe('纯插图章节与无封面', () => {
   it('EPUB2：NCX 的目标绑到锚点，封面走 meta name="cover"', async () => {
     const { book } = await importOf('epub2-basic')
     expect(navShape(book.items)).toEqual([
-      { label: '上卷', target: { kind: 'chapter', index: 0, anchorId: expect.stringMatching(/^a\d+$/) as unknown as string }, children: [
-        { label: '第一章', target: { kind: 'chapter', index: 0, anchorId: expect.stringMatching(/^a\d+$/) as unknown as string }, children: [] },
+      { label: '上卷', target: { kind: 'chapter', index: 0, anchorId: anchorMatching() }, children: [
+        { label: '第一章', target: { kind: 'chapter', index: 0, anchorId: anchorMatching() }, children: [] },
       ] },
       { label: '第二章', target: { kind: 'chapter', index: 1, anchorId: null }, children: [] },
     ])
-    const cover = book.coverResourceId
-    expect(cover).not.toBeNull()
-    expect(book.resources[cover!]).toMatchObject({ mediaType: 'image/png', width: 2, height: 3 })
+    const cover = must(book.coverResourceId, 'book.coverResourceId')
+    expect(must(book.resources[cover], `资源索引 ${cover}`)).toMatchObject({ mediaType: 'image/png', width: 2, height: 3 })
   })
 
   it('两种封面声明同时在：取 EPUB3 的 cover-image（EPUB2 的 meta 只是其次）', async () => {
     const { book, dir } = await importOf('epub3-cover-priority')
-    const cover = book.coverResourceId
-    expect(cover).not.toBeNull()
-    expect(book.resources[cover!]).toMatchObject({ mediaType: 'image/png', width: 2, height: 3 })
-    expect((await fs.readFile(path.join(dir, book.resources[cover!].file))).equals(makePngSample())).toBe(true)
+    const cover = must(book.coverResourceId, 'book.coverResourceId')
+    const coverRes = must(book.resources[cover], `资源索引 ${cover}`)
+    expect(coverRes).toMatchObject({ mediaType: 'image/png', width: 2, height: 3 })
+    expect((await fs.readFile(path.join(dir, coverRes.file))).equals(makePngSample())).toBe(true)
     // 没被采纳的那条不登记（也未使用）：EPUB2 那份声明的字节是垃圾，取错就会当场报错而不是悄悄换一张
     expect(Object.keys(book.resources)).toEqual([cover])
   })
@@ -352,9 +354,9 @@ describe('纯插图章节与无封面', () => {
     const { book } = await importOf('epub3-paths')
     expect(book.chapters.map((c) => c.label)).toEqual(['中文'])
     // 第二个导航叶指向导航文档自己的锚点：那份文档按「导航可达」转成补充文档
-    const leaf = book.items[1]
+    const leaf = pick(book.items, 1)
     expect(leaf.label).toBe('本页顶')
-    expect(leaf.target).toMatchObject({ kind: 'supplement', anchorId: expect.stringMatching(/^a\d+$/) as unknown as string })
+    expect(leaf.target).toMatchObject({ kind: 'supplement', anchorId: anchorMatching() })
   })
 })
 
@@ -362,18 +364,18 @@ describe('EPUB2 命名锚点与声明形态', () => {
   it('目录目标指向 <a name="x">：整本可导入，目标绑到那个锚点（且锚点真的落在生成物里）', async () => {
     const { book, dir } = await importOf('epub2-named-anchor')
     expect(book.chapters).toHaveLength(1)
-    const documentId = book.chapters[0].documentId
+    const documentId = pick(book.chapters, 0).documentId
     const nodes = nodesOf(await readDocument(dir, book, documentId))
     const ids = collectIds(nodes)
     const targets = book.items.map((i) => i.target as Extract<ReadingTarget, { kind: 'chapter' }>)
     expect(targets.map((t) => t.kind)).toEqual(['chapter', 'chapter', 'chapter', 'chapter'])
     for (const t of targets) {
       expect(t.anchorId).toMatch(/^a\d+$/)
-      expect(ids.has(t.anchorId!), `锚点 ${t.anchorId} 不在文档树里`).toBe(true)
+      expect(ids.has(must(t.anchorId, '锚点号')), `锚点 ${t.anchorId} 不在文档树里`).toBe(true)
     }
     // 只有 name / name 与 id 双写 / 一个元素上两个不同的名字：都指向各自那个元素的落点
-    expect(targets[0].anchorId).not.toBe(targets[1].anchorId)
-    expect(targets[2].anchorId).toBe(targets[3].anchorId)
+    expect(pick(targets, 0).anchorId).not.toBe(pick(targets, 1).anchorId)
+    expect(pick(targets, 2).anchorId).toBe(pick(targets, 3).anchorId)
     expect(shape(nodes)).toEqual([
       { tag: 'h1', start: null, value: null, rowSpan: null, colSpan: null, children: ['第一章'] },
       { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: [
@@ -394,7 +396,7 @@ describe('EPUB2 命名锚点与声明形态', () => {
     // 导航文档自己也成了可达文档（导航的第二个叶指向它自己的锚点）
     expect(Object.values(book.documents).map((d) => d.path).sort())
       .toEqual(['OEBPS/ch1.xhtml', 'OEBPS/nav.xhtml'])
-    expect(book.items[1].target).toMatchObject({ kind: 'supplement', anchorId: expect.stringMatching(/^a\d+$/) as unknown as string })
+    expect(pick(book.items, 1).target).toMatchObject({ kind: 'supplement', anchorId: anchorMatching() })
   })
 })
 
@@ -402,7 +404,7 @@ describe('SVG：独立插图重建、包装封面解析成栅格', () => {
   it('插图为重建后的 SVG 资源（落盘内容与返回的 content 一致）', async () => {
     const { book, dir } = await importOf('epub3-svg-figure')
     expect(Object.keys(book.resources)).toHaveLength(2)
-    const fig = Object.values(book.resources).find((r) => r.mediaType === 'image/svg+xml')!
+    const fig = must(Object.values(book.resources).find((r) => r.mediaType === 'image/svg+xml'), 'find 命中的那一项')
     expect(fig.file).toMatch(/^resources\/r\d+\.svg$/)
     expect([fig.width, fig.height]).toEqual([10, 20])
     const onDisk = await fs.readFile(path.join(dir, fig.file), 'utf8')
@@ -414,7 +416,7 @@ describe('SVG：独立插图重建、包装封面解析成栅格', () => {
     expect(onDisk).not.toMatch(/url\(#grad\)/i)
     expect(onDisk).not.toMatch(/<script|alert\(1\)|<style/)
     // 插图节点用重建后的宽高占位（首帧即有尺寸，加载完不跳版）
-    const nodes = nodesOf(await readDocument(dir, book, book.chapters[0].documentId))
+    const nodes = nodesOf(await readDocument(dir, book, pick(book.chapters, 0).documentId))
     expect(shape(nodes)).toEqual([
       { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: ['插图', 'img:矢量插图:10x20'] },
     ])
@@ -422,11 +424,11 @@ describe('SVG：独立插图重建、包装封面解析成栅格', () => {
 
   it('SVG 单图包装封面：封面资源是它包的那张 PNG，不是那份 SVG', async () => {
     const { book, dir } = await importOf('epub3-svg-figure')
-    const cover = book.coverResourceId
-    expect(cover).not.toBeNull()
-    expect(book.resources[cover!]).toMatchObject({ mediaType: 'image/png', width: 2, height: 3 })
-    expect(book.resources[cover!].file).toMatch(/\.png$/)
-    expect((await fs.readFile(path.join(dir, book.resources[cover!].file))).equals(makePngSample())).toBe(true)
+    const cover = must(book.coverResourceId, 'book.coverResourceId')
+    const coverRes = must(book.resources[cover], `资源索引 ${cover}`)
+    expect(coverRes).toMatchObject({ mediaType: 'image/png', width: 2, height: 3 })
+    expect(coverRes.file).toMatch(/\.png$/)
+    expect((await fs.readFile(path.join(dir, coverRes.file))).equals(makePngSample())).toBe(true)
     // 包装用的 SVG 本身没有落盘（它不是内容，只是一层包装）
     expect(Object.values(book.resources).some((r) => r.file.includes('cover'))).toBe(false)
     expect(await fs.readdir(path.join(dir, 'resources'))).toHaveLength(2)
@@ -514,8 +516,8 @@ describe('安全面：拒绝要有精确错误', () => {
       caught = e as Error
     }
     expect(caught).toBeInstanceOf(EpubImportError)
-    expect(caught!.message).toMatch(/documents\/d\d+\.json/)
-    expect(caught!.message).not.toContain(dir)   // 主机布局不进用户可见文案
+    expect(must(caught, '捕获到的错误').message).toMatch(/documents\/d\d+\.json/)
+    expect(must(caught, '捕获到的错误').message).not.toContain(dir)   // 主机布局不进用户可见文案
   })
 
   it('超深正文：默认深度预算即报错，且是本子树的异常类（不是爆栈）', async () => {
@@ -547,7 +549,7 @@ describe('安全面：安全去除项要有告警，不默默失去内容', () =
     expect(book.warnings.map((w) => w.code).sort())
       .toEqual(['epub-active-attribute', 'epub-css-attribute', 'epub-external-link', 'epub-link-not-followable', 'epub-removed-active-content'])
     for (const w of book.warnings) expect(w.resource).toBe('OEBPS/ch1.xhtml')
-    const nodes = nodesOf(await readDocument(dir, book, book.chapters[0].documentId))
+    const nodes = nodesOf(await readDocument(dir, book, pick(book.chapters, 0).documentId))
     expect(shape(nodes)).toEqual([
       { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: ['点击这里'] },
       { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: ['JS 链', 'FILE 链', 'DATA 链', '外站链'] },
@@ -569,10 +571,10 @@ describe('安全面：安全去除项要有告警，不默默失去内容', () =
     expect(book.chapters).toHaveLength(1)
     const svgWarn = book.warnings.filter((w) => w.code === 'epub-removed-inline-svg')
     expect(svgWarn).toHaveLength(1)
-    expect(svgWarn[0].resource).toBe('OEBPS/ch1.xhtml')
-    expect(svgWarn[0].message).toMatch(/svg/)
+    expect(pick(svgWarn, 0).resource).toBe('OEBPS/ch1.xhtml')
+    expect(pick(svgWarn, 0).message).toMatch(/svg/)
     // 被剥离的是内联 SVG 那一块，正文文字照旧（不静默丢内容：丢了什么看得见）
-    const nodes = nodesOf(await readDocument(dir, book, book.chapters[0].documentId))
+    const nodes = nodesOf(await readDocument(dir, book, pick(book.chapters, 0).documentId))
     expect(shape(nodes)).toEqual([
       { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: ['图：'] },
     ])
@@ -589,9 +591,9 @@ describe('整页 SVG 图形页：按其内唯一一张书内图降级成单图�
   it('封面页导入成功：章按 spine 计、图与声明的封面共用一份资源、降级看得见', async () => {
     const { book, dir } = await importOf('epub3-svg-cover-page')
     expect(book.chapters.map((c) => c.label)).toEqual(['封面', '第一章'])
-    const nodes = nodesOf(await readDocument(dir, book, book.chapters[0].documentId))
+    const nodes = nodesOf(await readDocument(dir, book, pick(book.chapters, 0).documentId))
     expect(nodes).toHaveLength(1)
-    const img = nodes[0]
+    const img = pick(nodes, 0)
     expect(img.kind).toBe('image')
     if (img.kind !== 'image') throw new Error(`封面页应当是一张图，实际 ${img.kind}`)
     // 宽高取自**图片本身**的事实（2×3 的 PNG），不是 SVG 上那套 width="100%" 的百分比
@@ -603,7 +605,7 @@ describe('整页 SVG 图形页：按其内唯一一张书内图降级成单图�
     const codes = book.warnings.map((w) => w.code)
     expect(codes).toContain('epub-svg-image-page')
     expect(codes).not.toContain('epub-removed-inline-svg')
-    const warn = book.warnings.find((w) => w.code === 'epub-svg-image-page')!
+    const warn = must(book.warnings.find((w) => w.code === 'epub-svg-image-page'), 'book.warnings 里 find 命中的那一项')
     expect(warn.resource).toBe('OEBPS/wrap0000.xhtml')
     expect(warn.message).toMatch(/图/)
   })
@@ -624,14 +626,14 @@ describe('整页 SVG 图形页：按其内唯一一张书内图降级成单图�
     // 容器（`div#cover`）被那张图顶替，它承载的锚点在扫描期已铸成 ID。替代出来的树上必须有这个
     // ID 的落点，否则目录那条目标指向一个不存在的节点（阅读会话退回章首、目录当前项量不到）。
     const { book, dir } = await importOf('epub3-svg-cover-anchor')
-    const leaf = book.items.flatMap(function flat(i: NavigationItem): NavigationItem[] {
+    const leaf = must(book.items.flatMap(function flat(i: NavigationItem): NavigationItem[] {
       return [i, ...i.children.flatMap(flat)]
-    }).find((i) => i.label === '封面')!
+    }).find((i) => i.label === '封面'), 'find 命中的那一项')
     expect(leaf.target).toMatchObject({ kind: 'chapter', index: 0 })
     const anchorId = (leaf.target as { anchorId: string | null }).anchorId
     expect(anchorId).toMatch(/^a\d+$/)
-    const nodes = nodesOf(await readDocument(dir, book, book.chapters[0].documentId))
-    expect(collectIds(nodes).has(anchorId!), `锚点 ${anchorId} 不在文档树里`).toBe(true)
+    const nodes = nodesOf(await readDocument(dir, book, pick(book.chapters, 0).documentId))
+    expect(collectIds(nodes).has(must(anchorId, '锚点号')), `锚点 ${anchorId} 不在文档树里`).toBe(true)
   })
 
   it('SVG 资源按 XML 类别的字节预算读：同一样本默认导入成功、预算收紧即拒', async () => {
@@ -647,7 +649,7 @@ describe('整页 SVG 图形页：按其内唯一一张书内图降级成单图�
   it('有正文的页里夹一棵单图 SVG：照旧剥离 + 告警，不因新判据多落一张图', async () => {
     const { book, dir } = await importOf('epub3-inline-svg-image-with-text')
     expect(Object.keys(book.resources)).toHaveLength(0)
-    const nodes = nodesOf(await readDocument(dir, book, book.chapters[0].documentId))
+    const nodes = nodesOf(await readDocument(dir, book, pick(book.chapters, 0).documentId))
     expect(shape(nodes)).toEqual([
       { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: ['正文与花饰'] },
     ])
@@ -672,9 +674,9 @@ describe('目标锚点随被剥离内容消失：降级 + 告警，不拒整本'
     const { book } = await importOf('epub3-inline-svg-anchor')
     expect(book.chapters).toHaveLength(1)
     // 目标降级成「该文档 + 无片段」：文档还在、位置退到开头，导航仍然可用
-    expect(book.items[0].target).toEqual({ kind: 'chapter', index: 0, anchorId: null })
+    expect(pick(book.items, 0).target).toEqual({ kind: 'chapter', index: 0, anchorId: null })
     // 对照组：真锚点照旧绑到落点——降级不是「这份文档的锚点全都不绑了」
-    expect(book.items[1].target).toMatchObject({ anchorId: expect.stringMatching(/^a\d+$/) as unknown as string })
+    expect(pick(book.items, 1).target).toMatchObject({ anchorId: anchorMatching() })
     const { nav } = await degradedWarnings('epub3-inline-svg-anchor')
     expect(nav).toHaveLength(1)
     expect(nav[0]).toContain('OEBPS/ch1.xhtml')   // 告警点名文档
@@ -683,14 +685,15 @@ describe('目标锚点随被剥离内容消失：降级 + 告警，不拒整本'
 
   it('正文内链指向同一处：该链接降级成纯文本（只留子内容），并留同风格告警', async () => {
     const { book, dir } = await importOf('epub3-inline-svg-anchor')
-    const nodes = nodesOf(await readDocument(dir, book, book.chapters[0].documentId))
+    const nodes = nodesOf(await readDocument(dir, book, pick(book.chapters, 0).documentId))
     // 降级的那条只剩文字（不再有 link 节点），同一段里指向真锚点的另一条照旧是链接
+    // 期望里那一格声明成 unknown：兄弟项是字符串，直接写成对象字面量会被按 `string` 上下文查键
+    const expectedLink: unknown = { link: 'normal', target: { kind: 'chapter', index: 0, anchorId: anchorMatching() }, children: ['开头'] }
     expect(shape(nodes)).toEqual([
       { tag: 'h1', start: null, value: null, rowSpan: null, colSpan: null, children: ['第一章'] },
       { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: ['图：'] },
       { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: [
-        '看', '这张图', '与',
-        { link: 'normal', target: { kind: 'chapter', index: 0, anchorId: expect.stringMatching(/^a\d+$/) as unknown as string }, children: ['开头'] },
+        '看', '这张图', '与', expectedLink,
       ] },
     ])
     expect(JSON.stringify(nodes)).not.toMatch(/ornament/)

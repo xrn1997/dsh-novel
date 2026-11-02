@@ -7,6 +7,7 @@ import { ROUTES } from '../../src/shared/wire.js'
 import type { ExploreBook, ExploreSnapshot } from '../../src/shared/wire.js'
 import { makeCoreDeps } from './fake-deps.js'
 import type { DepsOverrides } from './fake-deps.js'
+import { pick } from '../support/fixture.js'
 
 afterEach(cleanup)
 
@@ -110,8 +111,8 @@ describe('useExploreJob', () => {
     const { result } = renderHook(() => useExploreJob(deps))
     act(() => result.current.submit('s9', '玄幻'))
     await waitFor(() => expect(calls).toHaveLength(1))
-    expect(calls[0].path).toBe('explore/list')
-    expect(calls[0].body).toEqual({ sourceId: 's9', kind: '玄幻' })
+    expect(pick(calls, 0).path).toBe('explore/list')
+    expect(pick(calls, 0).body).toEqual({ sourceId: 's9', kind: '玄幻' })
   })
 
   it('提交落地即关闸：空帧带着这一轮的点名，源名留给服务端那一帧（客户端不编名字）', async () => {

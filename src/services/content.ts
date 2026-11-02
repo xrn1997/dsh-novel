@@ -71,9 +71,9 @@ const NL_RUN = new RegExp(AW + '*\\n+' + AW + '*', 'g')
 /** 串首空白（`^[\n\s]+`）。这里**额外含全角空格**：若先把换行换成「换行 + 缩进」、再给串首补一次
  *  缩进，首行就成了四个全角空格；本仓按「各来源的段首缩进宽度不一，先清空再统一补两个全角空格」
  *  的终态出（`formatIntro` 的第二条有意偏差，只裁空白不动文字）。 */
-const LEAD_WS = /^[\s　]+/
+const LEAD_WS = /^[\s\u3000]+/
 /** 串尾空白——本仓额外含全角空格，见 formatIntro 的「有意偏差」 */
-const TAIL_WS = /[\s　]+$/
+const TAIL_WS = /[\s\u3000]+$/
 
 /** 渲染指令前缀（`usehtml`/`useweb`/`md` 三判据）：命中即**整段原样保留**，
  *  交给渲染层按前缀选 HTML/Markdown/WebView 渲染器；本仓没有那三种渲染器，保留前缀的意义在于
@@ -101,7 +101,7 @@ export function formatIntro(raw: string, opts?: { keepDirective?: boolean }): st
   const out = trimmed
     .replace(/(&nbsp;)+/g, ' ')
     .replace(/(&ensp;|&emsp;)/g, ' ')
-    .replace(/(&thinsp;|&zwnj;|&zwj;| |‌|‍)/g, '')
+    .replace(/(&thinsp;|&zwnj;|&zwj;|\u2009|\u200c|\u200d)/g, '')
     .replace(/<\/?(?:div|p|br|hr|h\d|article|dd|dl)[^>]*>/g, '\n')
     .replace(/<!--[^>]*-->/g, '')
     .replace(/<\/?[a-zA-Z]+(?=[ >])[^<>]*>/g, '')

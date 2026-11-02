@@ -18,7 +18,7 @@ describe('nextChapterIndex（前向窗口：视口章之后第一个未载章）
     expect(nextChapterIndex([null, null, 'c', null, null], 2)).toBe(3)
   })
   it('倒退跳章后预取跟着视口走，不跟最大已载章（旧口径会取到 51，用户读第 11 章末尾接上第 51 章）', () => {
-    const chapters: Array<string | null> = new Array(60).fill(null)
+    const chapters = new Array<string | null>(60).fill(null)
     chapters[0] = 'a'; chapters[1] = 'b'; chapters[10] = 'k'; chapters[50] = 'y'
     expect(nextChapterIndex(chapters, 10)).toBe(11)
   })

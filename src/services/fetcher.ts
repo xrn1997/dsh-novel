@@ -1,5 +1,6 @@
 import iconv from 'iconv-lite'
 import { ProxyAgent } from 'undici'
+import { encodingKnown } from './encoding.js'
 import { DecodeError, FetchError } from './errors.js'
 import { normalizeProxyUrl, parseProxyUrl, redactProxyUrl } from './proxy.js'
 import type { NovelSource } from './types.js'
@@ -134,14 +135,14 @@ export function effectiveUserAgent(source: Pick<NovelSource, 'rules' | 'auth'>):
  * 源声明的 UA / Accept 就此失效——比覆盖更坏。同表内的重名（如 auth 声明的 `cookie`）同样归并。
  */
 function mergeHeaders(init?: Record<string, string>): Record<string, string> {
-  const out: Record<string, string> = { ...DEFAULT_HEADERS }
+  // 逐条重排而不是删键：同义键（大小写不同）连键名一起摘掉，源声明的拼写随后落位——
+  // 与「表内重名归并成一条」同一条判据，只是不在原地做删除
+  let entries: Array<[string, string]> = Object.entries(DEFAULT_HEADERS)
   for (const [k, v] of Object.entries(init ?? {})) {
-    for (const key of Object.keys(out)) {
-      if (key !== k && key.toLowerCase() === k.toLowerCase()) delete out[key]
-    }
-    out[k] = v
+    const same = k.toLowerCase()
+    entries = [...entries.filter(([key]) => key.toLowerCase() !== same), [k, v]]
   }
-  return out
+  return Object.fromEntries(entries)
 }
 
 /**
@@ -288,7 +289,7 @@ export function decodeBody(page: FetchedPage, declaredCharset?: string): string 
   // 用声明值解会把替换正文解成乱码；此时按 page.charset（替换时置 utf-8）走。
   const declared = page.replaced === true ? undefined : declaredCharset
   const cs = nonEmpty(declared) ?? nonEmpty(page.charset) ?? sniffCharset(page.raw)
-  if (!iconv.encodingExists(cs)) {
+  if (!encodingKnown(cs)) {
     throw new DecodeError(`无法解码 charset=${cs}: ${page.finalUrl}`, { url: page.finalUrl, charset: cs })
   }
   return iconv.decode(page.raw, cs)

@@ -80,16 +80,19 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
     if (pendingDel === null || delBusy) return
     const { books: targets, batch } = pendingDel
     const targetKeys = new Set(targets.map((b) => b.bookKey))
+    // 两个入口都保证至少一本（单本 ✕ 恒给 [b]，多选入口挡过空集）：这一支不可达，返回即不改现场
+    const [only] = targets
+    if (only === undefined) return
     setDelBusy(true)
     void (batch
       ? deps.apiSend(ROUTES.shelfBatchDelete, bodies.keys([...targetKeys]))
-      : deps.apiSend(paramOps.shelfDelete.at(targets[0].bookKey))
+      : deps.apiSend(paramOps.shelfDelete.at(only.bookKey))
     ).then(() => {
       removePanelShelfBooks(targetKeys)
       setSelected((prev) => prev.filter((k) => !targetKeys.has(k)))
       if (batch) setSelectMode(false)          // 批量成功即收工（这一批现场已消费完）
       cancelDel()
-    }, (e) => {
+    }, (e: unknown) => {
       // 失败留在模态内：错误就地呈现，可重试可取消（错误不再散落到页面流里粘屏）
       setDelError(describeError(e, t))
       setDelBusy(false)
@@ -213,7 +216,7 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
                   return
                 }
                 navigate({ name: 'reader', sourceId: book.sourceId, bookKey: book.bookKey, title: book.title })
-              }, (err) => {
+              }, (err: unknown) => {
                 // 导入失败的具体原因由服务端给（固定版式 / 加密条目 / 是 ZIP 魔数但读不成 EPUB 归档 /
                 // 超限），这里原样透出——换成「导入失败」一句泛话，用户与我们都无从下手；
                 // 非 ZIP 字节不走这条路（它照 TXT 解码链导入）
@@ -258,9 +261,11 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
             点名副本连删。测试钉子：✕ 的 title「删除本书」、按钮文案「确认删除」、
             失败文案「删除失败：…」、批量标题「删除选中的 N 本书？」。 */}
         {pendingDel === null ? null : (() => {
-          const copy = pendingDel.batch
+          const [only] = pendingDel.books
+          // 单本入口恒带 1 本：`only` 缺席这一支不可达，落到多选口径只为不造第四条渲染分支
+          const copy = pendingDel.batch || only === undefined
             ? deleteBooksCopy(pendingDel.books, t)
-            : deleteBookCopy(pendingDel.books[0].title, pendingDel.books[0].sourceId === LOCAL_SOURCE_ID, t)
+            : deleteBookCopy(only.title, only.sourceId === LOCAL_SOURCE_ID, t)
           return (
             <Dialog title={copy.confirm} onClose={cancelDel}
               actions={<>

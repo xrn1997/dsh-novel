@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CookieJar } from '../../src/services/cookies.js'
+import { pick } from '../support/fixture.js'
 
 describe('CookieJar', () => {
   it('host-only cookie is sent to the same host only', () => {
@@ -60,7 +61,7 @@ describe('CookieJar', () => {
     const jar = new CookieJar()
     jar.absorb('https://a.test/', ['sid=1; Max-Age=3600; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/'])
     expect(jar.headerFor('https://a.test/')).toBe('sid=1')
-    expect(jar.entries()[0]!.expires).toBeGreaterThan(Date.now())
+    expect(pick(jar.entries(), 0).expires).toBeGreaterThan(Date.now())
   })
 
   it('rejects a single-label Domain (public-suffix guard for the shared jar)', () => {

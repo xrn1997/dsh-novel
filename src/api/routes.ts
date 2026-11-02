@@ -60,14 +60,14 @@ export function matchRoute(method: string, segs: readonly string[]): Match {
   for (const name of Object.keys(paramOps) as ParamRouteName[]) {
     const patternSegs = PARAM_PATTERN_PATHS[name].split('/')
     if (patternSegs.length !== segs.length) continue
-    const params: string[] = []
-    let same = true
-    for (let i = 0; i < patternSegs.length; i++) {
-      const literal = patternSegs[i]
-      if (literal.startsWith(':')) params.push(segs[i])
-      else if (literal !== segs[i]) { same = false; break }
-    }
-    if (!same) continue
+    // 段数先判等 ⇒ 两张表的同一下标同界：字面段先逐位比完，参数值只在全对上之后才收。
+    // 下面那次滤空是让编译器跟上这条构造性证明，不是给缺值补缺省值（缺值只可能来自长度不等，
+    // 而那条上一行已经 continue 掉）。
+    const literalsMatch = patternSegs.every((literal, i) => literal.startsWith(':') || literal === segs[i])
+    if (!literalsMatch) continue
+    const params = patternSegs
+      .flatMap((literal, i) => (literal.startsWith(':') ? [segs[i]] : []))
+      .filter((segment): segment is string => segment !== undefined)
     if (paramOps[name].method === method) return { kind: 'param-hit', route: name, params }
     if (mismatch === null) {
       mismatch = { kind: 'method-mismatch', expectedMethod: paramOps[name].method, pathForMessage: PARAM_PATTERN_PATHS[name] }

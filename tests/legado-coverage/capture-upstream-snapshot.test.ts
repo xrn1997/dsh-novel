@@ -10,7 +10,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
-  JS_HOST_FILE, RULE_CLASSES, RULE_DIR, SNAPSHOT_PATH, UPSTREAM_ROOTS,
+  JS_HOST_FILE, MAIN_ROOT, RULE_CLASSES, RULE_DIR, SNAPSHOT_PATH, UPSTREAM_ROOTS,
   fieldsOf, javaMethodNames, listFiles,
 } from './upstream-facts.js'
 
@@ -38,13 +38,13 @@ describe.skipIf(process.env.DSH_CAPTURE_UPSTREAM !== '1')('刷新对面事实快
     // 字段面：7 个规则实体的字段名
     const ruleFields: Record<string, string[]> = {}
     for (const cls of RULE_CLASSES) {
-      const p = path.join(ref, UPSTREAM_ROOTS[0], RULE_DIR, `${cls}.kt`)
+      const p = path.join(ref, MAIN_ROOT, RULE_DIR, `${cls}.kt`)
       if (!fs.existsSync(p)) throw new Error(`对面的 ${cls}.kt 不在场：${p}（上游改名/挪目录，归属表要跟着对账）`)
       ruleFields[cls] = fieldsOf(fs.readFileSync(p, 'utf8')).sort()
     }
 
     // java 宿主方法名集
-    const jsHost = path.join(ref, UPSTREAM_ROOTS[0], JS_HOST_FILE)
+    const jsHost = path.join(ref, MAIN_ROOT, JS_HOST_FILE)
     if (!fs.existsSync(jsHost)) throw new Error(`对面的 ${JS_HOST_FILE} 不在场：${jsHost}`)
     const javaMethods = javaMethodNames(fs.readFileSync(jsHost, 'utf8'))
 

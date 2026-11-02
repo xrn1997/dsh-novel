@@ -19,10 +19,13 @@ export class JobTail {
   private delivered = 0
   private dropped = 0
   private reportedDropped = 0
+  readonly maxBytes: number
 
   /** 缓冲预算：既是淘汰尺，也是持有者向宿主自报的 `outputLimitBytes`——帽值只有一个家，
    *  向宿主声明的那个数必须跟着**实际接手的这块缓冲**走，不能另报一个缺省。 */
-  constructor(readonly maxBytes: number) {}
+  constructor(maxBytes: number) {
+    this.maxBytes = maxBytes
+  }
 
   push(line: string): void {
     this.lines.push(line)

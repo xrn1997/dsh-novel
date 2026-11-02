@@ -63,14 +63,16 @@ function combineAnd(
   // 与 `%%` 同款宁炸不猜：二维结果无法合并时抛错，不用 Miss 冒充失败——
   // 空结果冒充失败是本仓定的最高罪。
   if (kept.some((v) => v.kind === 'matches')) {
-    if (kept.length === 1) return kept[0]
+    const only = kept[0]
+    // kept 非空（上面判过全丢空）⇒ 首项必在；单分支才透传，多分支混合无意义
+    if (kept.length === 1 && only !== undefined) return only
     throw new UnsupportedRuleError('&& 混合 AllInOne(matches) 二维结果无法合并', mergeErrCtx(usage, loc))
   }
   if (kept.some((v) => v.kind === 'nodes')) {
     if (!kept.every((v) => v.kind === 'nodes')) {
       throw new UnsupportedRuleError('&& 混合节点集与字符串结果无法合并（列表路径的分支只会是节点集）', mergeErrCtx(usage, loc))
     }
-    return mergeNodes(kept.map((v) => (v as { kind: 'nodes'; nodes: Cheerio<AnyNode> }).nodes))
+    return mergeNodes(kept.map((v) => v.nodes))
   }
   if (kept.every((v) => v.kind === 'value')) {
     return { kind: 'value', text: kept.map((v) => (v as { text: string }).text).join('\n') }
@@ -92,7 +94,7 @@ function combineZip(
   //  · 列表用途：分支无条件入列 → 空首支也占第一位，
   //    驱动长度 = 首支长度（首支为空 ⇒ 整条为空）。
   const branches = (usage === 'list'
-    ? values.map((v) => (v.kind === 'miss' ? { kind: 'list', items: [] } as EngineValue : v))
+    ? values.map((v): EngineValue => (v.kind === 'miss' ? { kind: 'list', items: [] } : v))
     : values.filter((v) => v.kind !== 'miss' && !(v.kind === 'list' && v.items.length === 0)))
   if (branches.length === 0) return { kind: 'miss', detail: '%% 所有分支未命中' }
   if (branches.some((v) => v.kind === 'matches')) {
@@ -103,10 +105,17 @@ function combineZip(
     if (!branches.every((v) => v.kind === 'nodes')) {
       throw new UnsupportedRuleError('%% 混合节点集与字符串结果无法合并（列表路径的分支只会是节点集）', mergeErrCtx(usage, loc))
     }
-    const sets = branches.map((v) => (v as { kind: 'nodes'; nodes: Cheerio<AnyNode> }).nodes)
-    const driver = sets[0]?.length ?? 0
+    const sets = branches.map((v) => v.nodes)
+    const columns = sets.map((s) => s.toArray())
+    const driver = columns[0]?.length ?? 0
     const out: AnyNode[] = []
-    for (let i = 0; i < driver; i++) for (const s of sets) if (i < s.length) out.push(s.toArray()[i])
+    for (let i = 0; i < driver; i++) {
+      for (const col of columns) {
+        const node = col[i]
+        // 短于驱动长度的支没有第 i 项：交叉取数只按首支驱动，缺项不补（越界即不产出）
+        if (node !== undefined) out.push(node)
+      }
+    }
     // 首支为空 = 驱动 0 轮 = 整条无条目，取位为空即选择失败
     if (out.length === 0) return { kind: 'miss', detail: '%% 首个分支为空，交叉取数无从驱动' }
     return mergeNodes(sets, out)
@@ -117,7 +126,9 @@ function combineZip(
   const items: string[] = []
   for (let i = 0; i < max; i++) {
     for (const list of lists) {
-      if (i < list.length) items.push(list[i])
+      const item = list[i]
+      // 短于驱动长度的支没有第 i 项：同节点集分支一样不补空项
+      if (item !== undefined) items.push(item)
     }
   }
   if (items.length === 0) return { kind: 'miss', detail: '%% 首个分支为空，交叉取数无从驱动' }
@@ -129,7 +140,7 @@ function mergeNodes(sets: Cheerio<AnyNode>[], nodes?: AnyNode[]): EngineValue {
   const first = sets[0]
   if (first === undefined) return { kind: 'list', items: [] }
   const all = nodes ?? sets.flatMap((s) => s.toArray())
-  return { kind: 'nodes', nodes: (first as Cheerio<AnyNode>)._make(all) }
+  return { kind: 'nodes', nodes: first._make(all) }
 }
 
 function mergeErrCtx(usage: RuleUsage, loc?: { facet?: Facet; segmentIndex: number; segmentRaw: string }) {
@@ -150,7 +161,7 @@ export function reverseList(v: EngineValue): EngineValue {
     case 'matches': return { kind: 'matches', rows: [...v.rows].reverse() }
     case 'nodes': {
       const reversed = v.nodes.toArray().reverse()
-      return { kind: 'nodes', nodes: (v.nodes as Cheerio<AnyNode>)._make(reversed) }
+      return { kind: 'nodes', nodes: v.nodes._make(reversed) }
     }
     default: return v // value / miss 原样
   }

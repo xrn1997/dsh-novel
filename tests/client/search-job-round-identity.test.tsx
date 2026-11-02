@@ -6,6 +6,7 @@ import { SearchJobs } from '../../src/services/search-job.js'
 import type { SearchGroup } from '../../src/shared/wire.js'
 import { makeCoreDeps } from './fake-deps.js'
 import type { DepsOverrides } from './fake-deps.js'
+import { pick } from '../support/fixture.js'
 
 /**
  * 搜索观察 module 的**轮次身份**测试（身份与游标不可分开）。
@@ -32,7 +33,7 @@ const startRound = (jobs: SearchJobs, keyword: string, emitIds: string[]): void 
 /** 身份序列确定性的持有者：第一轮 A、第二轮 B */
 const makeJobs = (): SearchJobs => {
   let seq = 0
-  return new SearchJobs({ uuid: () => ['A', 'B'][seq++] })
+  return new SearchJobs({ uuid: () => pick(['A', 'B'], seq++) })
 }
 
 /** 查询串里的 since（缺省 0）——模拟「服务端只认当前槽 + 数字游标」的读面 */
@@ -74,7 +75,7 @@ describe('搜索观察 module：轮次身份与游标不可分开（换轮 = 丢
     // B-first 已被 since 吃掉）——这就是「旧 since 读新任务」在推送侧的形态
     startRound(jobs, '乙词', ['B-first', 'B-second'])
     expect(jobs.snapshot(1)?.added.map((g) => g.sourceId)).toEqual(['B-second'])
-    await act(async () => { streams[0].onFrame(JSON.stringify({ job: jobs.snapshot(1) })) })
+    await act(async () => { pick(streams, 0).onFrame(JSON.stringify({ job: jobs.snapshot(1) })) })
 
     await waitFor(() => expect(groupIds(hook)).toEqual(['B-first', 'B-second']))
     const round = hook.result.current.round
@@ -83,7 +84,7 @@ describe('搜索观察 module：轮次身份与游标不可分开（换轮 = 丢
     expect(round?.done).toBe(2)
     // 旧连接不留下：换轮后被 abort，且为新轮重开了一条观察
     await waitFor(() => expect(streams.length).toBe(2))
-    expect(streams[0].signal.aborted).toBe(true)
+    expect(pick(streams, 0).signal.aborted).toBe(true)
   })
 
   it('旧 since 读新任务（快照轮询）：轮询带旧游标读到新轮切片 → 收敛到乙轮完整基线，B-first 不丢', async () => {
@@ -123,13 +124,13 @@ describe('搜索观察 module：轮次身份与游标不可分开（换轮 = 丢
     await waitFor(() => expect(streams.length).toBe(1))
 
     startRound(jobs, '乙词', ['B-first', 'B-second'])
-    await act(async () => { streams[0].onFrame(JSON.stringify({ job: jobs.snapshot(1) })) })
+    await act(async () => { pick(streams, 0).onFrame(JSON.stringify({ job: jobs.snapshot(1) })) })
 
     await waitFor(() => expect(groupIds(hook)).toEqual(['B-first', 'B-second']))
     expect(hook.result.current.round?.id).toBe('B')
     // 恢复走显式基线重读（挂载一次 + 换轮一次），不是把首帧切片当基线
-    expect(apiGet.mock.calls.filter((c) => String(c[0]).includes('since=0')).length).toBeGreaterThanOrEqual(2)
-    expect(streams[0].signal.aborted).toBe(true)
+    expect(apiGet.mock.calls.filter((c) => c[0].includes('since=0')).length).toBeGreaterThanOrEqual(2)
+    expect(pick(streams, 0).signal.aborted).toBe(true)
   })
 
   it('resume:false：快照读照做，但不开观察通道；自己提交后观察照常', async () => {
@@ -148,7 +149,7 @@ describe('搜索观察 module：轮次身份与游标不可分开（换轮 = 丢
 
     await act(async () => { await hook.result.current.submit('乙词') })
     await waitFor(() => expect(streams.length).toBe(1))                     // 自己提交后才开观察
-    await act(async () => { streams[0].onFrame(JSON.stringify({ job: jobs.snapshot(0) })) })
+    await act(async () => { pick(streams, 0).onFrame(JSON.stringify({ job: jobs.snapshot(0) })) })
     await waitFor(() => expect(hook.result.current.round?.id).toBe('B'))
     expect(hook.result.current.round?.groups.map((g) => g.sourceId)).toEqual(['B-first'])
   })

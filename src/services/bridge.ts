@@ -400,7 +400,7 @@ export function hitRuleOf(
   const explore = EXPLORE_OF_GENERIC[model]
   if (explore === undefined) {
     // 加载期已检查九项齐全；运行期走到这里只可能是表被改坏，宁可当场炸也不悄悄回读通用键
-    throw new Error(`规则字段表缺 ${String(model)} 的发现面配对：整套启用时读不到这一格`)
+    throw new Error(`规则字段表缺 ${model} 的发现面配对：整套启用时读不到这一格`)
   }
   return textRuleOf(rules, explore)
 }

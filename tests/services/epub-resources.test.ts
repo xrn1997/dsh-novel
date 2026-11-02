@@ -15,6 +15,7 @@ import { EpubWarningLog } from '../../src/services/epub/warnings.js'
 import { EpubImportError } from '../../src/services/epub/errors.js'
 import { validateImage, type ImageFacts } from '../../src/services/epub/resources.js'
 import { IMAGE_SAMPLES } from '../fixtures/epub.js'
+import { must, pick } from '../support/fixture.js'
 
 const LIMITS = { depth: 128, nodes: 200_000 }
 
@@ -108,7 +109,7 @@ describe('光栅图：容器结构要完整（不只信文件头）', () => {
 
   it('PNG chunk 的 CRC 对不上：报错（内容是坏的，不是「解析不出」）', () => {
     const corrupt = Buffer.from(IMAGE_SAMPLES.png)
-    corrupt[45] = corrupt[45] ^ 0xff          // IHDR 数据区内的一个字节
+    corrupt[45] = must(corrupt[45], 'corrupt[45]') ^ 0xff          // IHDR 数据区内的一个字节
     expectEpubError(rejection(corrupt, 'image/png'), /CRC|损坏/)
   })
 
@@ -187,8 +188,9 @@ describe('独立 SVG：白名单重建', () => {
     expect(facts.content).not.toMatch(/alert\(1\)/)
     expect(facts.content).not.toMatch(/fill:green/)
     expect(warnings.map((w) => w.code).sort()).toEqual(['epub-removed-active-content'])
-    expect(warnings[0].resource).toBe('images/fig.bin（引用处 OEBPS/ch1.xhtml）')
-    expect(warnings[0].message).toMatch(/script/)
+    const warning = pick(warnings, 0)
+    expect(warning.resource).toBe('images/fig.bin（引用处 OEBPS/ch1.xhtml）')
+    expect(warning.message).toMatch(/script/)
   })
 
   it('script 里的内容不进产物：只留静态矢量图形，没有任何脚本面', () => {

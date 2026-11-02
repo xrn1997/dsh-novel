@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { withoutComments } from '../without-comments.js'
 import { NOVEL_CSS } from '../../src/client/styles.js'
+import { must } from '../support/fixture.js'
 
 /**
  * 宿主设计 token 词表守卫（防「引用了宿主根本不存在的 token」这类静默失败）：不存在的别名
@@ -95,7 +96,8 @@ describe('宿主 token 词表守卫（--dsw-* 必须是宿主真名）', () => {
     const bad: string[] = []
     for (const { file, text } of sources) {
       for (const m of text.matchAll(/var\(\s*(--dsw-[\w-]+)/g)) {
-        if (!HOST_TOKENS.has(m[1])) bad.push(`${file}: ${m[1]}`)
+        const token = must(m[1], '正则捕获组 1（--dsw-* token 名）')
+        if (!HOST_TOKENS.has(token)) bad.push(`${file}: ${token}`)
       }
     }
     expect(bad, `引用了宿主不存在的 token（会静默落回 fallback）：\n${bad.join('\n')}`).toEqual([])
@@ -104,7 +106,8 @@ describe('宿主 token 词表守卫（--dsw-* 必须是宿主真名）', () => {
   it('NOVEL_CSS 里引用的 --dsw-* 都在宿主词表内', () => {
     const bad: string[] = []
     for (const m of NOVEL_CSS.matchAll(/var\(\s*(--dsw-[\w-]+)/g)) {
-      if (!HOST_TOKENS.has(m[1])) bad.push(m[1])
+      const token = must(m[1], '正则捕获组 1（--dsw-* token 名）')
+      if (!HOST_TOKENS.has(token)) bad.push(token)
     }
     expect(bad).toEqual([])
   })

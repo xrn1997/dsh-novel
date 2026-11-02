@@ -3,6 +3,7 @@ import { ExploreJobs, MAX_EXPLORE_PAGES } from '../../src/services/explore-job.j
 import type { JobHost } from '../../src/services/job-holder.js'
 import { DEFAULT_JOB_OUTPUT_BYTES } from '../../src/services/job-tail.js'
 import type { SearchGroup, SearchHit } from '../../src/shared/wire.js'
+import { must, pick } from '../support/fixture.js'
 
 /** 单源分类轮次的持有者：一轮 = **一个源 + 一个类**，跨页累积与「零新增即到底」的记忆都住在这里
  *  （浏览器半刻意什么都不握，读面是整帧替换的全量快照）。
@@ -43,7 +44,7 @@ describe('ExploreJobs 单源轮次：跨页累积与到底判据', () => {
     const jobs = new ExploreJobs({ now: () => 1000, uuid: () => 'j1' })
     const r1 = jobs.start('s1', '玄幻', async (emit) => { emit(group([hit('a'), hit('b')])) })
     await tick()
-    const first = jobs.snapshot()!
+    const first = must(jobs.snapshot(), '轮次快照')
     expect(first.id).toBe('j1')
     expect(first.phase).toBe('done')
     expect(first.page).toBe(1)
@@ -54,7 +55,7 @@ describe('ExploreJobs 单源轮次：跨页累积与到底判据', () => {
     const r2 = jobs.advance('玄幻', async (emit) => { emit(group([hit('b'), hit('c')])) })
     expect(r2.jobId).toBe(r1.jobId)                       // 换页不换轮：客户端零累积的前提
     await tick()
-    const snap = jobs.snapshot()!
+    const snap = must(jobs.snapshot(), '轮次快照')
     expect(snap.books.map((b) => b.name)).toEqual(['a', 'b', 'c'])   // 去重后并入
     expect(snap.page).toBe(2)
     expect(snap.hasMore).toBe(true)
@@ -64,23 +65,23 @@ describe('ExploreJobs 单源轮次：跨页累积与到底判据', () => {
     const jobs = new ExploreJobs({ now: () => 1000, uuid: () => 'j2' })
     jobs.start('s1', '玄幻', async (emit) => { emit(group([hit('a')])) })
     await tick()
-    expect(jobs.snapshot()!.hasMore).toBe(true)
+    expect(must(jobs.snapshot(), '轮次快照').hasMore).toBe(true)
     jobs.advance('玄幻', async (emit) => { emit(group([hit('a')])) })   // 站点把上一页又给了一遍
     await tick()
-    expect(jobs.snapshot()!.hasMore).toBe(false)
+    expect(must(jobs.snapshot(), '轮次快照').hasMore).toBe(false)
   })
 
   it('这一页抓取失败不算到底、也不许抹掉已累积的书单；下一次成功把它清掉', async () => {
     const jobs = new ExploreJobs({ now: () => 1000, uuid: () => 'j3' })
     jobs.start('s1', '玄幻', async (emit) => { emit(group([hit('a')])) })
     await tick()
-    expect(jobs.snapshot()!.error).toBeUndefined()
+    expect(must(jobs.snapshot(), '轮次快照').error).toBeUndefined()
 
     jobs.advance('玄幻', async (emit) => {
       emit({ ...blankGroup, error: { code: 'Timeout', message: '第 2 页超时' } })
     })
     await tick()
-    const snap = jobs.snapshot()!
+    const snap = must(jobs.snapshot(), '轮次快照')
     expect(snap.books.map((b) => b.name)).toEqual(['a'])   // 已累积的一条都没被划掉
     expect(snap.hasMore).toBe(true)                        // 失败的一页不是到底那一页
     expect(snap.page).toBe(1)                              // 失败的那一页不占号（占号在成功并入那一拍，读数停在真到手的那页）
@@ -90,7 +91,7 @@ describe('ExploreJobs 单源轮次：跨页累积与到底判据', () => {
 
     jobs.advance('玄幻', async (emit) => { emit(group([hit('z')])) })   // 下一次照旧打得出去
     await tick()
-    const after = jobs.snapshot()!
+    const after = must(jobs.snapshot(), '轮次快照')
     expect(after.books.map((b) => b.name)).toEqual(['a', 'z'])
     expect(after.page).toBe(2)                             // 占号发生在这一批成功并入的一刻
     expect(after.error).toBeUndefined()                    // 成功的一页把那次失败清掉
@@ -109,12 +110,12 @@ describe('ExploreJobs 单源轮次：跨页累积与到底判据', () => {
       handed.push(page); emit({ ...blankGroup, error: { code: 'Timeout', message: '第 2 页超时' } })
     })
     await tick()
-    expect(jobs.snapshot()!.page).toBe(1)
+    expect(must(jobs.snapshot(), '轮次快照').page).toBe(1)
     jobs.advance('玄幻', async (emit, _shouldStop, page) => { handed.push(page); emit(group([hit('b')])) })
     await tick()
     expect(handed).toEqual([1, 2, 2])                      // 重打第 2 页，不是跳去第 3 页
-    expect(jobs.snapshot()!.page).toBe(2)
-    expect(jobs.snapshot()!.books.map((b) => b.name)).toEqual(['a', 'b'])
+    expect(must(jobs.snapshot(), '轮次快照').page).toBe(2)
+    expect(must(jobs.snapshot(), '轮次快照').books.map((b) => b.name)).toEqual(['a', 'b'])
   })
 
   it('触到 MAX_EXPLORE_PAGES 上限即 hasMore false（上限是兜底，不是「没有更多」）', async () => {
@@ -127,20 +128,21 @@ describe('ExploreJobs 单源轮次：跨页累积与到底判据', () => {
       await tick()
     }
     // 每一页都带回一本新书（这个源一页都没重复）——唯独页码到了上限：hasMore 为假说的是上限
-    expect(jobs.snapshot()!.books).toHaveLength(MAX_EXPLORE_PAGES)
-    const snap = jobs.snapshot()!
+    expect(must(jobs.snapshot(), '轮次快照').books).toHaveLength(MAX_EXPLORE_PAGES)
+    const snap = must(jobs.snapshot(), '轮次快照')
     expect(snap.page).toBe(MAX_EXPLORE_PAGES)
     expect(snap.hasMore).toBe(false)
   })
 
   it('换源提交即替换整轮：旧轮在途批次的结果一律弃', async () => {
     const jobs = new ExploreJobs({ now: () => 1000, uuid: () => 'j5' })
-    let lateEmit: ((g: SearchGroup) => void) | null = null
-    jobs.start('s1', '玄幻', (emit) => { lateEmit = emit; return new Promise<void>(() => {}) })
+    // 捕获槽用对象而不是 `let … | null`：回调里的赋值不在本流程的收窄里，`let` 会被收窄成 null。
+    const captured: { emit?: (g: SearchGroup) => void } = {}
+    jobs.start('s1', '玄幻', (emit) => { captured.emit = emit; return new Promise<void>(() => {}) })
     jobs.start('s2', '都市', async (emit) => { emit(group([hit('新源的书')], 's2')) })
-    lateEmit!(group([hit('旧源迟到的书')]))                // 旧批还在跑，它已不再拥有这一轮
+    must(captured.emit, 'captured.emit')(group([hit('旧源迟到的书')]))                // 旧批还在跑，它已不再拥有这一轮
     await tick()
-    const snap = jobs.snapshot()!
+    const snap = must(jobs.snapshot(), '轮次快照')
     expect(snap.sourceId).toBe('s2')
     expect(snap.sourceName).toBe('s2')
     expect(snap.kind).toBe('都市')
@@ -156,7 +158,7 @@ describe('ExploreJobs 单源轮次：跨页累积与到底判据', () => {
     jobs.advance('玄幻', async (emit) => { emit(page1) })   // 同一个对象再交一次：缓存命中的形状
     await tick()
     expect(page1.hits.map((h) => h.title)).toEqual(['a'])   // 一个字段都没被改
-    const snap = jobs.snapshot()!
+    const snap = must(jobs.snapshot(), '轮次快照')
     expect(snap.books.map((b) => b.name)).toEqual(['a'])    // 并进来的还是那一条，没翻倍
     expect(snap.page).toBe(2)
     expect(snap.hasMore).toBe(false)                       // 同一条 ⇒ 零新增 ⇒ 到底
@@ -168,26 +170,26 @@ describe('ExploreJobs 单源轮次：跨页累积与到底判据', () => {
     await tick()
     jobs.advance('玄幻', async (emit) => { emit(group([hit('a', { url: 'https://S1/a' })])) })
     await tick()
-    expect(jobs.snapshot()!.books.map((b) => b.name)).toEqual(['a'])
-    expect(jobs.snapshot()!.hasMore).toBe(false)
+    expect(must(jobs.snapshot(), '轮次快照').books.map((b) => b.name)).toEqual(['a'])
+    expect(must(jobs.snapshot(), '轮次快照').hasMore).toBe(false)
   })
 
   it('没地址的命中退回「书名 + NUL + 作者」去重，并把 null 地址如实带进快照', async () => {
     const jobs = new ExploreJobs()
     jobs.start('s1', '玄幻', async (emit) => { emit(group([hit('a', { url: null })])) })
     await tick()
-    expect(jobs.snapshot()!.books[0].bookUrl).toBeNull()   // 这个源没给入口：读与架都不给按钮
+    expect(pick(must(jobs.snapshot(), '轮次快照').books, 0).bookUrl).toBeNull()   // 这个源没给入口：读与架都不给按钮
     jobs.advance('玄幻', async (emit) => { emit(group([hit('a', { url: null })])) })
     await tick()
-    expect(jobs.snapshot()!.books.map((b) => b.name)).toEqual(['a'])
-    expect(jobs.snapshot()!.hasMore).toBe(false)
+    expect(must(jobs.snapshot(), '轮次快照').books.map((b) => b.name)).toEqual(['a'])
+    expect(must(jobs.snapshot(), '轮次快照').hasMore).toBe(false)
   })
 
   it('这一类真的没货：空 hits 是 done 且没有 error，不与「这一页没问到」折叠成同一帧', async () => {
     const jobs = new ExploreJobs()
     jobs.start('s1', '玄幻', async (emit) => { emit(blankGroup) })
     await tick()
-    const snap = jobs.snapshot()!
+    const snap = must(jobs.snapshot(), '轮次快照')
     expect(snap.phase).toBe('done')
     expect(snap.books).toEqual([])
     expect(snap.error).toBeUndefined()
@@ -200,7 +202,7 @@ describe('ExploreJobs 单源轮次：跨页累积与到底判据', () => {
       emit({ ...blankGroup, error: { code: 'FetchError', message: '首页超时' } })
     })
     await tick()
-    const s = jobs.snapshot()!
+    const s = must(jobs.snapshot(), '轮次快照')
     expect(s.phase).toBe('done')                            // 整轮跑完了，只是那一页没问到
     expect(s.error).toContain('首页超时')
     expect(s.books).toEqual([])                             // 一条都没累积
@@ -209,7 +211,7 @@ describe('ExploreJobs 单源轮次：跨页累积与到底判据', () => {
     jobs.start('s1', '玄幻', async (emit) => { emit(group([hit('a')])) })
     await tick()
     expect(jobs.snapshot()).toMatchObject({ page: 1, hasMore: true })
-    expect(jobs.snapshot()!.error).toBeUndefined()          // 上一轮那次失败不跨轮传染
+    expect(must(jobs.snapshot(), '轮次快照').error).toBeUndefined()          // 上一轮那次失败不跨轮传染
   })
 
   it('书目就是站点给的那一条：不做任何合并，顺序与字段照原样', async () => {
@@ -221,13 +223,13 @@ describe('ExploreJobs 单源轮次：跨页累积与到底判据', () => {
       ]))
     })
     await tick()
-    const books = jobs.snapshot()!.books
+    const books = must(jobs.snapshot(), '轮次快照').books
     expect(books.map((b) => b.name)).toEqual(['剑起长安', '万古天河'])
-    expect(books[0]).toEqual({
+    expect(pick(books, 0)).toEqual({
       name: '剑起长安', author: '甲', bookUrl: 'https://s1/剑起长安', coverUrl: 'https://s1/c.jpg',
       kind: '玄幻', lastChapter: '第九章', intro: '简介', wordCount: '3.2万字',
     })
-    expect(books[1].coverUrl).toBe(null)                     // 空串收口成 null：键在场，值说「没给封面」
+    expect(pick(books, 1).coverUrl).toBe(null)                     // 空串收口成 null：键在场，值说「没给封面」
   })
 })
 
@@ -344,7 +346,7 @@ describe('ExploreJobs 终态之后迟到的批次', () => {
     expect(jobs.cancel('用户停止')).toBe(true)
     late({ ...blankGroup, error: { code: 'Timeout', message: '第 1 页超时' } })   // 迟到的失败组
     late(group([hit('幽灵书')]))                                                   // 同批迟到的成功组
-    const s = jobs.snapshot()!
+    const s = must(jobs.snapshot(), '轮次快照')
     expect(s.error).toBe('任务已取消：用户停止')            // 终态那句说的是这一轮为什么结束
     expect(s.cancelled).toBe(true)
     expect(s.phase).toBe('failed')
@@ -360,7 +362,7 @@ describe('ExploreJobs 终态之后迟到的批次', () => {
     jobs.start('s1', '玄幻', (emit) => { late = emit; return new Promise<void>(() => {}) })
     expect(jobs.cancel('用户停止')).toBe(true)                 // 一轮在没有任何组时就落定了
     late({ ...group([hit('幽灵书')]), sourceName: '迟到批次的自我报名' })
-    const s = jobs.snapshot()!
+    const s = must(jobs.snapshot(), '轮次快照')
     expect(s.sourceName).toBe('')
     expect(s.books.map((b) => b.name)).toEqual(['幽灵书'])      // 条目照旧并入
   })
@@ -373,14 +375,14 @@ describe('ExploreJobs 终态之后迟到的批次', () => {
       emit({ ...blankGroup, error: { code: 'Timeout', message: '第 2 页超时' } })
     })
     await tick()
-    expect(jobs.snapshot()!.error).toContain('这一页没回来')     // 页泳道此刻就是这一轮的错误读数
+    expect(must(jobs.snapshot(), '轮次快照').error).toContain('这一页没回来')     // 页泳道此刻就是这一轮的错误读数
     let late: (g: SearchGroup) => void = () => {}
     jobs.advance('玄幻', (emit) => { late = emit; return new Promise<void>(() => {}) })
     expect(jobs.cancel('用户停止')).toBe(true)
-    expect(jobs.snapshot()!.error).toBe('任务已取消：用户停止')   // 新一批起跑时那句页级读数让位了
+    expect(must(jobs.snapshot(), '轮次快照').error).toBe('任务已取消：用户停止')   // 新一批起跑时那句页级读数让位了
     late(group([hit('z')]))                                       // 那一批手里还攥着上一次失败的记录
     await tick()
-    const s = jobs.snapshot()!
+    const s = must(jobs.snapshot(), '轮次快照')
     expect(s.error).toBe('任务已取消：用户停止')
     expect(s.books.map((b) => b.name)).toEqual(['a', 'z'])
   })
@@ -435,7 +437,7 @@ describe('ExploreJobs 登记给宿主 ctx.jobs', () => {
     expect(line).toContain('第 1 页')
     expect(line).toContain('源 verified')                 // 源状态与结果分成两轴
     expect(hooks?.readOutput?.()).toBe('')                // 消费式：同一批增量不重复交付
-    expect(spec!.outputLimitBytes).toBe(DEFAULT_JOB_OUTPUT_BYTES)
+    expect(must(spec, '任务 spec').outputLimitBytes).toBe(DEFAULT_JOB_OUTPUT_BYTES)
   })
 
   it('续页复用同一轮尾缓冲：早页 jobId 的消费者会一起拉走后页行', async () => {
@@ -454,10 +456,10 @@ describe('ExploreJobs 登记给宿主 ctx.jobs', () => {
     })
     await tick()
     expect(hooks).toHaveLength(2)
-    const fromFirst = hooks[0].readOutput!()
+    const fromFirst = must(pick(hooks, 0).readOutput, 'hooks.readOutput 读口')()
     expect(fromFirst).toContain('第 1 页')
     expect(fromFirst).toContain('第 2 页 1 条（源 unverified）')
-    expect(hooks[1].readOutput!()).toBe('')               // 同一份游标：后页 jobId 不再重复交付
+    expect(must(pick(hooks, 1).readOutput, 'hooks.readOutput 读口')()).toBe('')               // 同一份游标：后页 jobId 不再重复交付
   })
 
   it('新一轮替换在跑的那轮：旧轮以 killed 结算给宿主，不留两条在途任务', async () => {

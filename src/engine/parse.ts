@@ -149,7 +149,7 @@ function maskRegions(s: string): string {
     if (putEnd !== null) { out += ' '.repeat(putEnd - i); i = putEnd; continue }
     const brace = braceRegion(s, i)
     if (brace !== null) { out += ' '.repeat(brace.end - i); i = brace.end; continue }
-    out += s[i]
+    out += s.charAt(i) // 循环条件已钉住 i 在界内；charAt 在界外给空串，与这里同一界
     i++
   }
   return out
@@ -185,7 +185,7 @@ function splitElements(s: string, template = false): string[] {
       // 模板态下 `@` 是字面字符（不切段），行尾的 `@` 属于 js 标记（对面 JS_PATTERN 的匹配含
       // `@`）——剥掉再收；块后推送条件在模板态恒成立（没有 `@` 来收尾了）
       if (template && cur.endsWith('@')) cur = cur.slice(0, -1)
-      if (cur !== '') { out.push(cur); cur = '' }
+      if (cur !== '') out.push(cur)
       cur = s.slice(i, jsEnd)
       i = jsEnd
       if (template || (i < s.length && s[i] !== '@')) {
@@ -199,7 +199,7 @@ function splitElements(s: string, template = false): string[] {
     if (putEnd !== null) {
       // 模板态同 js 块：行尾 `@` 属于标记、剥掉；块后推送条件恒成立
       if (template && cur.endsWith('@')) cur = cur.slice(0, -1)
-      if (cur !== '') { out.push(cur); cur = '' }
+      if (cur !== '') out.push(cur)
       cur = s.slice(i, putEnd)
       i = putEnd
       if (template || (i < s.length && s[i] !== '@')) {
@@ -218,12 +218,12 @@ function splitElements(s: string, template = false): string[] {
     }
     if (s[i] === '@') {
       // 模板态：`@` 是字面字符（插值先于一切切分；`@get:` 等插值点在字面段内部由 splitLiteral 认）
-      if (template) { cur += s[i]; i++; continue }
+      if (template) { cur += s.charAt(i); i++; continue }
       if (s[i + 1] === '@') { cur += '@'; i += 2; continue }
       // 吃掉两个 @：只进一位会让第二个 @ 变成段界，于是 `@@css:.x`（「`@@<rule>` 强制按
       // Default 处理」形态）被切成 ['@', 'css:.x'] 两段，第一段认不出就抛错——链首形态必炸。
       if (xpathPending && !(i > 0 && depth === 0 && quote === '' && s[i - 1] !== '/')) {
-        cur += s[i] // 谓词 @class / 属性步 /@href：字面保留
+        cur += s.charAt(i) // 谓词 @class / 属性步 /@href：字面保留
         i++
         continue
       }
@@ -232,11 +232,13 @@ function splitElements(s: string, template = false): string[] {
       xpathPending = false
       i++
     } else {
-      if (quote !== '') { if (s[i] === quote) quote = '' }
-      else if (s[i] === '"' || s[i] === "'") quote = s[i]
-      else if (s[i] === '[' || s[i] === '(') depth++
-      else if (s[i] === ']' || s[i] === ')') depth--
-      cur += s[i]
+      // 逐字符读用 charAt：循环条件已钉住 i 在界内，两者结果一致，且不必为「可能越界」再造分支
+      const ch = s.charAt(i)
+      if (quote !== '') { if (ch === quote) quote = '' }
+      else if (ch === '"' || ch === "'") quote = ch
+      else if (ch === '[' || ch === '(') depth++
+      else if (ch === ']' || ch === ')') depth--
+      cur += ch
       i++
     }
   }
@@ -270,8 +272,7 @@ function parseBranch(text: string, ctx: ParseCtx): Branch | null {
   if (els.length === 0) return null
   const segments: Segment[] = []
   const raws: string[] = []
-  for (let i = 0; i < els.length; i++) {
-    const el = els[i]
+  for (const [i, el] of els.entries()) {
     const isLast = i === els.length - 1
 
     // 链尾没有「(jsCode) 表达式形态」这一切法——`/` 开头的整条就是 XPath（`/text()` 原样进
@@ -292,7 +293,11 @@ const EXCLUDE_RE = /^(.+?)!(-?\d+(?::-?\d+)*)$/
 function splitExclude(el: string): { base: string; exclude: number[] | undefined } {
   const m = EXCLUDE_RE.exec(el)
   if (m === null) return { base: el, exclude: undefined }
-  return { base: m[1], exclude: m[2].split(':').map(Number) }
+  const base = m[1]
+  const indexText = m[2]
+  // 两组都是模式的必选段；取不到与「不匹配排除形态」同一落点：整串原样交回常规识别（不猜排除位）
+  if (base === undefined || indexText === undefined) return { base: el, exclude: undefined }
+  return { base, exclude: indexText.split(':').map(Number) }
 }
 
 function classifySegment(el: string, ctx: ParseCtx, isLast: boolean): Segment {
@@ -428,9 +433,13 @@ function splitBracketSuffix(
   const m = BRACKET_RE.exec(raw)
   if (m === null) return null
   const base = m[1]
-  const entries = m[3].split(',').map((s) => s.trim()).filter((s) => s !== '')
+  const bang = m[2]
+  const body = m[3]
+  // 三组都是模式的必选段；取不到与「不匹配方括号形态」同一落点：交回常规识别（不猜索引）
+  if (base === undefined || bang === undefined || body === undefined) return null
+  const entries = body.split(',').map((s) => s.trim()).filter((s) => s !== '')
   if (entries.length === 0) return null
-  if (m[2] === '!') {
+  if (bang === '!') {
     const nums: number[] = []
     for (const e of entries) {
       if (!/^-?\d+$/.test(e)) return null // 排除区间形态 v1 不支持 → 交回常规识别（求值层如实报错）
@@ -448,7 +457,10 @@ function splitBracketSuffix(
     }
     return { base, index: { kind: 'multi', entries: specs } }
   }
-  return { base, index: parseBracketEntry(entries[0]) }
+  const only = entries[0]
+  // 上面两判已送走空集与多项集 ⇒ 这里恰剩一项；取不到与「多条目里有认不出的」同一落点
+  if (only === undefined) return null
+  return { base, index: parseBracketEntry(only) }
 }
 
 function classifyDefault(raw: string, exclude: number[] | undefined, el: string, ctx: ParseCtx, isLast: boolean): Segment {

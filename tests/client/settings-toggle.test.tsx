@@ -8,6 +8,7 @@ import type { FakeSettingsDeps, DepsOverrides } from './fake-deps.js'
 import { resetSourceListUi, UNGROUPED } from '../../src/client/source-list.js'
 import { pushError, pushOk, resetTransient, transientEntries } from '../../src/client/transient.js'
 import type { SourcePublic } from '../../src/client/views/types.js'
+import { pick } from '../support/fixture.js'
 
 /**
   * 接线层交互测试：启停开关的「乐观翻转 → 在途 → 失败即刻回滚
@@ -75,17 +76,18 @@ describe('SourceList 启停开关接线（deps seam 驱动）', () => {
     await waitFor(() => expect(deps.pushError).toHaveBeenCalledTimes(1))
 
     expect(checked()).toBe('true')                        // 回滚：不许永久停在错误的乐观态
-    const [label, anchor] = deps.pushError.mock.calls[0]
-    expect(String(label)).toContain('启停失败')
-    expect(String(label)).toContain('boom')
+    // 假依赖束把上报口声明成 `Mock`（参数面是 any）：用例在这里判形一次，之后就是有名字的字符串
+    const [label, anchor] = pick(deps.pushError.mock.calls, 0) as [message: string, anchor: string]
+    expect(label).toContain('启停失败')
+    expect(label).toContain('boom')
     expect(anchor).toBe('[data-novel-source-row="s1"]')   // 全局条「定位 →」与行内红边共用的选择器
     expect(document.querySelector(anchor)?.getAttribute('data-novel-source-row')).toBe('s1')
     // 真瞬态层读数：只有那一枚 error（带行锚点），没有多余条目
     const entries = transientEntries()
     expect(entries).toHaveLength(1)
-    expect(entries[0].kind).toBe('error')
-    expect(entries[0].label).toContain('启停失败')
-    expect(entries[0].anchor).toBe('[data-novel-source-row="s1"]')
+    expect(pick(entries, 0).kind).toBe('error')
+    expect(pick(entries, 0).label).toContain('启停失败')
+    expect(pick(entries, 0).anchor).toBe('[data-novel-source-row="s1"]')
     // 行内红边由同一个真实 store 驱动（错误条与行内装饰不是两套判据）
     await waitFor(() => {
       expect(document.querySelector('[data-novel-source-row="s1"]')?.className).toContain('row-err')
@@ -159,8 +161,8 @@ describe('SourceList 行内验证入口与启停正交（编排收进 jobs.ts �
     render(node)
     fireEvent.click(screen.getByText('验证'))
     await waitFor(() => expect(deps.pushError).toHaveBeenCalledTimes(1))
-    expect(String(deps.pushError.mock.calls[0][0])).toContain('启动验证失败')
-    expect(String(deps.pushError.mock.calls[0][0])).toContain('boom')
+    expect(String(pick(pick(deps.pushError.mock.calls, 0), 0))).toContain('启动验证失败')
+    expect(String(pick(pick(deps.pushError.mock.calls, 0), 0))).toContain('boom')
   })
 
   it('停用 + 坏源 → 仍出「重验」钮（异常还在，停用不是免验理由）', () => {
@@ -180,7 +182,7 @@ describe('SourceList 分组下拉「未分组」伪选项', () => {
   const ungrouped: SourcePublic = { ...src, id: 's2', name: '源B', baseUrl: 'https://b.com', groups: [] }
   const renderWith = (sources: SourcePublic[]): HTMLSelectElement => {
     render(<SourceList sources={sources} job={null} onChanged={() => {}} onProbe={() => {}} onImport={() => {}} deps={makeDeps()} />)
-    return screen.getByLabelText('按分组过滤') as HTMLSelectElement
+    return screen.getByLabelText<HTMLSelectElement>('按分组过滤')
   }
 
   it('有无分组源 → 出现「未分组（n）」选项；选中后只显示无分组源', () => {

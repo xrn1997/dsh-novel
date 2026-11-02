@@ -17,8 +17,10 @@ export interface TransientEntry {
   id: number
   kind: TransientKind
   label: string
-  /** 出错对象锚点（CSS 选择器，如 `[data-novel-source-row="x"]`）：定位跳转 + 行内标记共用 */
-  anchor?: string
+  /** 出错对象锚点（CSS 选择器，如 `[data-novel-source-row="x"]`）：定位跳转 + 行内标记共用。
+   *  这一层是**内存里的瞬态条目**（不落盘、不上 wire）：读者一律按「值是不是 undefined」判，
+   *  所以键的缺席与显式 undefined 在这里是同一件事。 */
+  anchor?: string | undefined
 }
 
 const store = createStore<{ entries: TransientEntry[] }>({ entries: [] })

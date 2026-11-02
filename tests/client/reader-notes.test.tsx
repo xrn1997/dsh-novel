@@ -9,6 +9,7 @@ import { ReaderNotes } from '../../src/client/views/ReaderNotes.js'
 import type { SupplementTarget } from '../../src/client/views/types.js'
 import type { ChapterContent, ContentNode } from '../../src/client/views/types.js'
 import { makeReaderDeps } from './fake-deps.js'
+import { pick } from '../support/fixture.js'
 import { rect, stubLayout } from './scroll-stub.js'
 
 /**
@@ -233,7 +234,7 @@ describe('乱序与卸载（两把锁）', () => {
     d.reject(new Error('脚注读取失败'))
     await tick()
     expect(deps.pushError).toHaveBeenCalledTimes(1)
-    expect(String(deps.pushError.mock.calls[0][0])).toContain('脚注')
+    expect(String(pick(pick(deps.pushError.mock.calls, 0), 0))).toContain('脚注')
   })
 })
 

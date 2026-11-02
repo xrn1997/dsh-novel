@@ -11,6 +11,8 @@
  * 这是投影的固有代价；schema 侧的一致性由 tests/tools/schema-contract.test.ts 钉住
  * （execute 输出过 harness 同款校验 + schema 属性集 ≡ wire 字段集表断言）。
  */
+// TOut 只出现在返回位是刻意的：调用点靠上下文标注推出它
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- 投影改变类型（可空→缺席），去掉这个返回位参数就得在每个调用点写 `as`
 export function project<TIn, TOut = TIn>(value: TIn): TOut {
   return projectUnknown(value) as TOut
 }

@@ -45,7 +45,15 @@ function terms(): Term[] {
   let cur: Term | null = null
   lines.forEach((l, i) => {
     const m = /^\*\*(.+?)\*\*:\s*$/.exec(l)
-    if (m) { cur = { name: m[1], body: l, line: i + 1 }; out.push(cur); return }
+    if (m) {
+      const name = m[1]
+      // 捕获体缺席只可能是标题正则被改坏：跳过等于让这个词条脱离判据，故宁可炸
+      if (name === undefined) throw new Error(`词条标题没有捕获体：第 ${i + 1} 行`)
+      const term: Term = { name, body: l, line: i + 1 }
+      cur = term
+      out.push(term)
+      return
+    }
     if (cur && l.trim() !== '') cur.body += `\n${l}`
     if (l.trim() === '') cur = null
   })
@@ -54,7 +62,14 @@ function terms(): Term[] {
 
 /** 反引号里的记号：路径 / 标识符 / 矩阵行 id 三类才回查，其余（键名、CSS、短语）跳过 */
 function anchors(body: string): string[] {
-  return [...body.matchAll(/`([^`]+)`/g)].map((m) => m[1])
+  const out: string[] = []
+  for (const m of body.matchAll(/`([^`]+)`/g)) {
+    const a = m[1]
+    // 捕获体缺席只可能是正则被改坏：跳过等于让这个锚点脱离回查，故宁可炸
+    if (a === undefined) throw new Error(`反引号片段没有捕获体：${m[0]}`)
+    out.push(a)
+  }
+  return out
 }
 const isPath = (t: string) => /\.[tj]sx?$/.test(t) && !t.includes(' ')
 // 含 `$` 的不是可回查符号：`$DSH_HOME` 是环境变量，`$n` 是规则模板占位。

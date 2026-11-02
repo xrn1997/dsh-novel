@@ -1,6 +1,7 @@
 import { load } from 'cheerio'
 import iconv from 'iconv-lite'
-import type { AnyNode, Element } from 'domhandler'
+import type { AnyNode, CDATA, Element, Text } from 'domhandler'
+import { encodingKnown } from '../encoding.js'
 import { EpubImportError } from './errors.js'
 
 /**
@@ -65,7 +66,7 @@ export function decodeEpubXml(bytes: Buffer): string {
   if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) return iconv.decode(bytes.subarray(2), 'utf16-be')
   const declared = declaredEncoding(bytes)
   if (declared === null || /^utf-?8$/i.test(declared)) return decodeStrictUtf8(bytes)
-  if (!iconv.encodingExists(declared)) throw new EpubImportError(`XML 声明的编码不认识（不猜、不回退 GBK）：${declared}`)
+  if (!encodingKnown(declared)) throw new EpubImportError(`XML 声明的编码不认识（不猜、不回退 GBK）：${declared}`)
   const text = iconv.decode(bytes, declared)
   // iconv 对非法字节给 U+FFFD：声明与字节不符时如实报错，不把替换字符当正文
   if (text.includes('\uFFFD')) throw new EpubImportError(`XML 文档按声明编码 ${declared} 解出非法字节（声明与内容不符）`)
@@ -84,7 +85,9 @@ function decodeStrictUtf8(bytes: Buffer): string {
 function declaredEncoding(bytes: Buffer): string | null {
   const head = bytes.subarray(0, 1024).toString('latin1')
   const m = /<\?xml[\s?][^>]*?encoding\s*=\s*["']([^"']+)["']/.exec(head)
-  return m === null ? null : m[1].trim().toLowerCase()
+  const declared = m === null ? undefined : m[1]
+  // 声明里切不出编码名与「没有声明」同路：交给后面的默认 UTF-8，不猜一个编码
+  return declared === undefined ? null : declared.trim().toLowerCase()
 }
 
 // ── 只读解析 ───────────────────────────────────────────────────────────────────
@@ -103,7 +106,8 @@ export function parseXml(text: string, budget: XmlBudget): Element {
   scanXml(text, budget.what)
   const doc = load(text, { xml: true })
   const roots = (doc.root().get(0)?.children ?? []).filter(isElement)
-  if (roots.length === 0) throw new EpubImportError(`${budget.what} 不是可解析的 XML（没有根元素）`)
+  const root = roots[0]
+  if (root === undefined) throw new EpubImportError(`${budget.what} 不是可解析的 XML（没有根元素）`)
   // 良构 XML 只有一个文档元素。解析器（htmlparser2 的 xml 模式）**不查良构**，多根时它把每根都交出来，
   // 只取第一个就是把后面的内容静默丢掉（实测：两份 <html> 拼接的文件只留下前半）。本仓不按半途结果读。
   if (roots.length > 1) {
@@ -112,7 +116,7 @@ export function parseXml(text: string, budget: XmlBudget): Element {
     )
   }
   walkTree(roots, budget, NOOP)
-  return roots[0]
+  return root
 }
 
 /**
@@ -137,6 +141,8 @@ function scanXml(text: string, what: string): void {
   if (body.includes('<!ENTITY')) throw new EpubImportError(`${what}：含实体声明（本层不解析 DTD 实体，也不做实体展开）`)
   for (const m of body.matchAll(ENTITY_REF)) {
     const name = m[1]
+    // 捕获必齐（正则只有一个分组）：缺了就是这条闸自己的判据坏了，不按「非内建实体」拒整本
+    if (name === undefined) continue
     if (name.startsWith('#')) continue   // 数值字符引用：与 DTD 无关，XML 规范直接成立
     if (!PREDEFINED_ENTITIES.has(name)) throw new EpubImportError(`${what}：引用了未声明的实体 &${name};（本层不解析 DTD）`)
   }
@@ -203,7 +209,8 @@ export function descendants(root: Element, local: string, budget: XmlBudget): El
 
 export function firstDescendant(root: Element, local: string, budget: XmlBudget): Element | null {
   const list = descendants(root, local, budget)
-  return list.length === 0 ? null : list[0]
+  const first = list[0]
+  return first === undefined ? null : first
 }
 
 /**
@@ -217,8 +224,8 @@ export function textOf(node: { readonly children: AnyNode[] }, budget: XmlBudget
   const walk = (n: { readonly children: AnyNode[] }, depth: number): void => {
     enter(depth)
     for (const child of n.children) {
-      if (child.type === 'text') out.push(child.data)
-      else if (child.type === 'cdata' || isElement(child)) walk(child, depth + 1)
+      if (isTextNode(child)) out.push(child.data)
+      else if (isCdataNode(child) || isElement(child)) walk(child, depth + 1)
     }
   }
   walk(node, 1)
@@ -233,8 +240,22 @@ export function localName(name: string): string {
   return colon < 0 ? name : name.slice(colon + 1)
 }
 
+/** 节点类型码。domhandler 的节点类型是**字符串枚举**（运行时取值就是 `'tag'` / `'text'` 这些字面量），
+ *  枚举成员与字面量直接比会被判成跨枚举比较，故统一在字符串面上比较（同 engine/xpath.ts 的 nodeType）。
+ *  与 domhandler 的 `isTag` 不等价：`isTag` 还认 script/style，而这里只认纯元素。 */
+const nodeType = (n: AnyNode): string => n.type
+
+/** 纯元素 / 文本节点 / CDATA 容器（判据见上面 nodeType：三者按节点类型码的字面量判定） */
 export function isElement(node: AnyNode): node is Element {
-  return node.type === 'tag'
+  return nodeType(node) === 'tag'
+}
+
+export function isTextNode(node: AnyNode): node is Text {
+  return nodeType(node) === 'text'
+}
+
+export function isCdataNode(node: AnyNode): node is CDATA {
+  return nodeType(node) === 'cdata'
 }
 
 /** 直系子元素里 `local` 的那些（不递归：这一层只做一层判定，深走法归 `descendants`） */
@@ -246,7 +267,8 @@ export function childElements(parent: Element, local: string): Element[] {
 
 export function firstChild(parent: Element, local: string): Element | null {
   const list = childElements(parent, local)
-  return list.length === 0 ? null : list[0]
+  const first = list[0]
+  return first === undefined ? null : first
 }
 
 /** 属性按本地名取（`epub:type` 与 `type` 都算 `type`）：同名多写时取靠前那个 */

@@ -50,6 +50,11 @@ export async function* exportBook(
   }
   for (let i = from - 1; i <= to - 1; i++) {
     if (opts.signal?.aborted === true) return
+    const chapter = toc[i]
+    // 区间已由上面那道门夹在目录界内；取不到与「越界」同一件事，仍按越界抛（不给一个空章名）
+    if (chapter === undefined) {
+      throw new Error(`导出范围越界：[${from}, ${to}] 不在 [1, ${toc.length}] 内（裁剪归门面 exportRange）`)
+    }
     let text: string
     try {
       text = await deps.getChapter(sourceId, bookKey, i)
@@ -57,10 +62,10 @@ export async function* exportBook(
       // 失败即停：HTTP 首包后状态码不可改，用文本标记告知文件不完整；重跑只补缺章。
       // 章号用绝对 i+1（不是段内序号）——与目录、阅读器进度同一套坐标
       const reason = e instanceof Error ? e.message.split('\n')[0] : String(e)
-      yield `\n[导出中断于第 ${i + 1} 章《${toc[i].name}》：${reason}]\n`
+      yield `\n[导出中断于第 ${i + 1} 章《${chapter.name}》：${reason}]\n`
       return
     }
-    yield `《${opts.title}》· ${toc[i].name}\n\n${text}\n\n`
+    yield `《${opts.title}》· ${chapter.name}\n\n${text}\n\n`
     if (i < to - 1) await sleep(opts.delayMs)                // 段内 k-1 次：段末章后不睡
   }
 }

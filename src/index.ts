@@ -52,8 +52,8 @@ let applied = false
  *  尾随一个 error。 */
 function hostArgs(args: unknown[]): [unknown, ...unknown[]] {
   const [head, ...rest] = args
-  const textOf = (v: unknown): unknown => (v instanceof Error ? (v.stack ?? v.message) : v)
-  return [head, ...rest.map(textOf)]
+  const logArg = (v: unknown): unknown => (v instanceof Error ? (v.stack ?? v.message) : v)
+  return [head, ...rest.map(logArg)]
 }
 
 /** `loader/volatile-update` 的载荷：当前 Loader 给顶层路径段数组（`string[][]`），
@@ -143,7 +143,7 @@ export function apply(ctx: Context, config?: NovelConfig): void {
    *  套上这层等 ready 的延迟就会让最后一笔写丢窗、让常驻防线迟到。 */
   const afterReady = (
     ready: Promise<{ service: ReadingService } | null>,
-    attach: (r: { service: ReadingService }) => (() => void) | void,
+    attach: (r: { service: ReadingService }) => (() => void) | null,
     label: string,
   ): void => {
     let dispose: (() => void) | null = null
@@ -186,7 +186,7 @@ export function apply(ctx: Context, config?: NovelConfig): void {
     // 出站代理：Node 的 fetch（undici）不读系统代理，有代理才通的站点直连会被 302/重置
     // （实测笔趣阁）——fallback（环境变量 > Windows 系统代理）启动期只取一次，显式配置覆盖它；
     // 完整优先级见 services/proxy.ts 的 resolveProxyUrl。
-    const fallbackProxy = await resolveProxyUrl({ env: process.env, systemProxy: await readSystemProxy() })
+    const fallbackProxy = resolveProxyUrl({ env: process.env, systemProxy: await readSystemProxy() })
     const proxyUrl = (): string | null => {
       const explicit = resolved.proxyUrl?.trim()
       return explicit === undefined || explicit === ''
@@ -231,8 +231,10 @@ export function apply(ctx: Context, config?: NovelConfig): void {
   afterReady(ready, (r) => {
     const handler = createApiHandler(r.service, {
       exportDelayMs: () => resolved.exportDelayMs,
-      // 本机别名名单走启动期快照（非活值）：fence 的判据在 api/wire.ts，这里只递「用户还追加了谁」
-      allowHosts: resolved.apiAllowHosts,
+      // 本机别名名单走启动期快照（非活值）：fence 的判据在 api/wire.ts，这里只递「用户还追加了谁」。
+      // 没配就**不建这个键**（不是递一个 undefined）：选项包的缺席与空名单在语义上都是「没追加」，
+      // 但契约面只认缺席。
+      ...(resolved.apiAllowHosts === undefined ? {} : { allowHosts: resolved.apiAllowHosts }),
     })
     return c.webServer.register({
       kind: 'prefix',

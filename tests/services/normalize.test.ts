@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import * as normalizeModule from '../../src/services/normalize.js'
 import { normalizeSource, rawExploreEnabled, rawExploreFields, rehydrateStoredSource } from '../../src/services/normalize.js'
 import type { NormalizeIssue } from '../../src/services/normalize.js'
+import { must, pick } from '../support/fixture.js'
 
 const realSource = {
   bookSourceName: '笔趣阁',
@@ -31,20 +32,20 @@ describe('normalizeSource 真实形态', () => {
       name: '笔趣阁', baseUrl: 'https://m.example.com',
       enabled: false, groups: ['热门', '本地'],
     })
-    expect(r.source!.rules.ruleBookList).toBe('@css:.list@li')
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleBookList).toBe('@css:.list@li')
     // searchUrl 的落位与形态警告同住 `normalizeSearchUrl`（矩阵行 `c-search-url` 的实现锚）
-    expect(r.source!.rules.searchUrl).toBe('/search?keyword={{key}}&page={{page}}')
-    expect(r.source!.rules.ruleChapterUrl).toBe('tag.a@href')
-    expect(r.source!.rules.nextPageUrl).toBe('tag.a.next@href')
-    expect(r.source!.rules.header).toEqual({ 'User-Agent': 'UA' })
-    expect(r.source!.raw).toBe(realSource) // 引用同一对象，未 mutate
+    expect(must(r.source, 'r 归一化后的 source').rules.searchUrl).toBe('/search?keyword={{key}}&page={{page}}')
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleChapterUrl).toBe('tag.a@href')
+    expect(must(r.source, 'r 归一化后的 source').rules.nextPageUrl).toBe('tag.a.next@href')
+    expect(must(r.source, 'r 归一化后的 source').rules.header).toEqual({ 'User-Agent': 'UA' })
+    expect(must(r.source, 'r 归一化后的 source').raw).toBe(realSource) // 引用同一对象，未 mutate
   })
   it('缺省：enabled=true、groups=[]、各规则 null', () => {
     const r = normalizeSource({ bookSourceName: 'A', bookSourceUrl: 'https://a', ruleContent: 'x' })
     expect(r.ok).toBe(true)
     expect(r.source).toMatchObject({ enabled: true, groups: [] })
-    expect(r.source!.rules.searchUrl).toBeNull()
-    expect(r.source!.rules.ruleBookList).toBeNull()
+    expect(must(r.source, 'r 归一化后的 source').rules.searchUrl).toBeNull()
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleBookList).toBeNull()
   })
 })
 
@@ -65,13 +66,13 @@ describe('warning 口径', () => {
   it('header JSON 解析失败 → warning + null，不阻塞导入', () => {
     const r = normalizeSource({ ...realSource, header: '{bad json' })
     expect(r.ok).toBe(true)
-    expect(r.source!.rules.header).toBeNull()
+    expect(must(r.source, 'r 归一化后的 source').rules.header).toBeNull()
     expect(r.warnings.some((w) => w.field === 'header')).toBe(true)
   })
   it('searchUrl 对象形态 → warning + null（v1 仅字符串模板）', () => {
     const r = normalizeSource({ ...realSource, searchUrl: { action: 'post' } })
     expect(r.ok).toBe(true)
-    expect(r.source!.rules.searchUrl).toBeNull()
+    expect(must(r.source, 'r 归一化后的 source').rules.searchUrl).toBeNull()
     expect(r.warnings.some((w) => w.field === 'searchUrl')).toBe(true)
   })
 })
@@ -111,7 +112,7 @@ describe('对象形态方言（legado 嵌套导出）', () => {
   it('ruleSearch 子字段 → 搜索面字段；ruleBookInfo → ruleDetail* 详情面字段', () => {
     const r = normalizeSource(objectSource)
     expect(r.ok).toBe(true)
-    const rules = r.source!.rules
+    const rules = must(r.source, 'r 归一化后的 source').rules
     expect(rules.ruleBookList).toBe('@css:.sl@li')
     expect(rules.ruleBookName).toBe('tag.a@text')
     expect(rules.ruleAuthor).toBe('tag.span@text')
@@ -133,27 +134,27 @@ describe('对象形态方言（legado 嵌套导出）', () => {
       ruleBookInfo: { init: '$.data.bookInfo', name: '$.name' },
     })
     expect(r.ok).toBe(true)
-    expect(r.source!.rules.ruleDetailInit).toBe('$.data.bookInfo')
-    expect(r.source!.rules.ruleDetailName).toBe('$.name')   // 同上下文其余字段照常映射
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleDetailInit).toBe('$.data.bookInfo')
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleDetailName).toBe('$.name')   // 同上下文其余字段照常映射
   })
   it('ruleToc → ruleChapterList/Name/Url + nextTocUrl；ruleContent → ruleContent/nextPageUrl', () => {
-    const rules = normalizeSource(objectSource).source!.rules
+    const rules = must(normalizeSource(objectSource).source, '归一化结果里的 source').rules
     expect(rules.ruleChapterList).toBe('@css:#chs@li')
     expect(rules.ruleChapterName).toBe('tag.a@text')
     expect(rules.ruleChapterUrl).toBe('tag.a@href')
     expect(rules.nextTocUrl).toBe('tag.a.next@href')
-    expect(rules.ruleContent!.startsWith('@css:#content@textNodes')).toBe(true) // 净化尾见下一用例
+    expect(must(rules.ruleContent, 'rules.ruleContent').startsWith('@css:#content@textNodes')).toBe(true) // 净化尾见下一用例
     expect(rules.nextPageUrl).toBe('a.next@href')
   })
   it('replaceRegex → 追加 ##净化## 尾（legado 语义：匹配替换为空串）', () => {
-    const rules = normalizeSource(objectSource).source!.rules
+    const rules = must(normalizeSource(objectSource).source, '归一化结果里的 source').rules
     expect(rules.ruleContent).toBe('@css:#content@textNodes##广告\\S*##')
   })
   it('平铺字段优先：平铺与对象并存时对象不覆盖平铺', () => {
-    const rules = normalizeSource({
+    const rules = must(normalizeSource({
       ...objectSource,
       ruleBookName: 'flat@text', ruleChapterList: '@css:.flat@li',
-    }).source!.rules
+    }).source, '归一化结果里的 source').rules
     expect(rules.ruleBookName).toBe('flat@text')
     expect(rules.ruleChapterList).toBe('@css:.flat@li')
   })
@@ -170,13 +171,13 @@ describe('对象形态方言（legado 嵌套导出）', () => {
     expect(warn).toContain('ruleContent.callBackJs')
     // ruleExplore 现在**被消费**（整套覆盖），不再是「整块未启用」的点名对象
     expect(r.warnings.some((w) => w.field === 'ruleExplore')).toBe(false)
-    expect(r.source!.rules.ruleExploreList).toBe('@css:.e@li')
-    expect(r.source!.rules.ruleExploreName).toBe('tag.a@text')
-    expect(r.source!.rules.ruleExploreBookUrl).toBe('tag.a@href')
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleExploreList).toBe('@css:.e@li')
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleExploreName).toBe('tag.a@text')
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleExploreBookUrl).toBe('tag.a@href')
     // kind/wordCount 已接入取值链路（`ruleKind`/`ruleWordCount`），不再是"未支持字段"
     expect(warn).not.toContain('ruleSearch.kind')
-    expect(r.source!.rules.ruleKind).toBe('玄幻')
-    expect(r.source!.rules.ruleWordCount).toBe('100万字')
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleKind).toBe('玄幻')
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleWordCount).toBe('100万字')
   })
 })
 
@@ -220,36 +221,36 @@ describe('规则容器的字符串化形态', () => {
   it('ruleSearch 是 JSON 字符串 → 子字段照常展平（此前整块被当非对象跳过 → 搜索面规则全丢）', () => {
     const r = normalizeSource(strung())
     expect(r.ok).toBe(true)
-    expect(r.source!.rules.ruleBookList).toBe('.sl li')
-    expect(r.source!.rules.ruleBookName).toBe('a@text')
-    expect(r.source!.rules.ruleAuthor).toBe('span@text')
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleBookList).toBe('.sl li')
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleBookName).toBe('a@text')
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleAuthor).toBe('span@text')
   })
   it('字符串化的 ruleToc / ruleBookInfo 同样生效（五块共用一条口径）', () => {
-    const rules = normalizeSource(strung({
+    const rules = must(normalizeSource(strung({
       ruleToc: JSON.stringify({ chapterList: '#chs a', chapterName: 'a@text', chapterUrl: 'a@href' }),
       ruleBookInfo: JSON.stringify({ init: '$.data.bookInfo', name: '$.name' }),
-    })).source!.rules
+    })).source, '归一化结果里的 source').rules
     expect(rules.ruleChapterList).toBe('#chs a')
     expect(rules.ruleDetailInit).toBe('$.data.bookInfo')
     expect(rules.ruleDetailName).toBe('$.name')
   })
   it('字符串化里的 replaceRegex → ##净化尾照样追加（解析后的对象与真对象走同一条路径）', () => {
-    const rules = normalizeSource({
+    const rules = must(normalizeSource({
       bookSourceName: 'S', bookSourceUrl: 'https://s.com',
       ruleContent: JSON.stringify({ content: '@css:#c@textNodes', replaceRegex: '/广告/' }),
-    }).source!.rules
+    }).source, '归一化结果里的 source').rules
     expect(rules.ruleContent).toBe('@css:#c@textNodes##/广告/##')
   })
   it('值是 "null" 字面量 → 按缺席处理，不产 warning（对面 GSON 同样解出 null）', () => {
     const r = normalizeSource(strung({ ruleToc: 'null' }))
     expect(r.ok).toBe(true)
-    expect(r.source!.rules.ruleChapterList).toBeNull()
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleChapterList).toBeNull()
     expect(r.warnings.filter((w) => w.field === 'ruleToc')).toEqual([])
   })
   it('值不是合法 JSON → warning 点名并按缺席处理（不静默丢，也不让一块坏字符串炸掉整源导入）', () => {
     const r = normalizeSource(strung({ ruleSearch: '{"bookList":' }))
     expect(r.ok).toBe(true)
-    expect(r.source!.rules.ruleBookList).toBeNull()
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleBookList).toBeNull()
     expect(r.warnings.some((w) => w.field === 'ruleSearch' && /不是合法 JSON/.test(w.message))).toBe(true)
   })
   it('读不出的 ruleContent 容器不许冒充规则串（键名本身就是规则位）', () => {
@@ -263,11 +264,11 @@ describe('规则容器的字符串化形态', () => {
   it('读不出的非必填容器（ruleToc）→ 该位缺席，不影响整源导入', () => {
     const r = normalizeSource(strung({ ruleToc: '{"chapterList":' }))
     expect(r.ok).toBe(true)
-    expect(r.source!.rules.ruleChapterList).toBeNull()
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleChapterList).toBeNull()
   })
   it('解析出来是数组 → 按缺席处理且不 warning（对面 deserializer 的 else 分支同样落 null）', () => {
     const r = normalizeSource(strung({ ruleSearch: '[1,2]' }))
-    expect(r.source!.rules.ruleBookList).toBeNull()
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleBookList).toBeNull()
     expect(r.warnings.filter((w) => w.field === 'ruleSearch')).toEqual([])
   })
 })
@@ -278,15 +279,15 @@ describe('Native 格式（android-ebook 原生规则）', () => {
     const r = normalizeSource(input)
     expect(r.ok).toBe(true)
     expect(r.source).toMatchObject({ name: '笔趣阁', baseUrl: 'https://www.bqquge.com', groups: ['小说'] })
-    expect(r.source!.rules.header).toEqual({ 'User-Agent': 'UA' })
-    expect(r.source!.raw).toBe(input) // raw 原样保留（引用同一对象）
+    expect(must(r.source, 'r 归一化后的 source').rules.header).toEqual({ 'User-Agent': 'UA' })
+    expect(must(r.source, 'r 归一化后的 source').raw).toBe(input) // raw 原样保留（引用同一对象）
   })
   it('searchUrl {{keyword}} → {{key}} 占位符改写；{{page}} 不动', () => {
-    const rules = normalizeSource(nativeSource).source!.rules
+    const rules = must(normalizeSource(nativeSource).source, '归一化结果里的 source').rules
     expect(rules.searchUrl).toBe('/so/{{key}}/{{page}}')
   })
   it('三个规则对象 list 三件套 → 搜索/详情/目录面字段；取值字段补隐式 @text 终端', () => {
-    const rules = normalizeSource(nativeSource).source!.rules
+    const rules = must(normalizeSource(nativeSource).source, '归一化结果里的 source').rules
     expect(rules.ruleBookList).toBe('.item')                     // list 字段保持节点集，不补终端
     expect(rules.ruleBookName).toBe('.itemtxt h3 a@text')        // 裸选择器 = 取文本（Native 终端语义）
     expect(rules.ruleDetailName).toBe('.booktxt h1@text')
@@ -296,32 +297,32 @@ describe('Native 格式（android-ebook 原生规则）', () => {
     expect(rules.ruleChapterUrl).toBe('a@href')
   })
   it('authorPrefix → 详情面作者规则 ##^前缀## 净化尾（正则转义；@text 在链体、尾不动）', () => {
-    const rules = normalizeSource(nativeSource).source!.rules
+    const rules = must(normalizeSource(nativeSource).source, '归一化结果里的 source').rules
     expect(rules.ruleDetailAuthor).toBe(".booktxt p a[href^='/zuozhe']@text##^作者：##")
     // 前缀含正则元字符时转义
-    const r2 = normalizeSource({
+    const r2 = must(normalizeSource({
       ...nativeSource, ruleBookInfo: { ...nativeSource.ruleBookInfo, authorPrefix: '作者(a)：' },
-    }).source!.rules
+    }).source, '归一化结果里的 source').rules
     expect(r2.ruleDetailAuthor).toBe(".booktxt p a[href^='/zuozhe']@text##^作者\\(a\\)：##")
   })
   it('ruleContent.nextPage → nextPageUrl；replaceRules[] → ##正则##替换## 尾（enabled:false 跳过）', () => {
-    const rules = normalizeSource(nativeSource).source!.rules
+    const rules = must(normalizeSource(nativeSource).source, '归一化结果里的 source').rules
     expect(rules.ruleContent).toBe('.con@text##天才一秒记住.*?地址####请收藏本站.*?地址##')
     expect(rules.nextPageUrl).toBe('.prenext span:last-child a@href') // URL 字段不补终端
   })
   it('隐式终端边界：legado 显式 @ 不重复补；|| 分支逐段补', () => {
-    const rules = normalizeSource({
+    const rules = must(normalizeSource({
       name: 'A', url: 'https://a',
       ruleSearch: { name: 'tag.h1@text' },
       ruleBookInfo: { intro: '.left||.right' },
       ruleContent: { content: '@css:#c@textNodes' },
-    }).source!.rules
+    }).source, '归一化结果里的 source').rules
     expect(rules.ruleBookName).toBe('tag.h1@text')            // 已有 @ → 不动
     expect(rules.ruleDetailIntro).toBe('.left@text||.right@text') // 每个 || 分支各自补
     expect(rules.ruleContent).toBe('@css:#c@textNodes')
   })
   it('Native 的 kind/wordCount → 直通 ruleKind/ruleWordCount（隐式终端补 @text）', () => {
-    const rules = normalizeSource(nativeSource).source!.rules
+    const rules = must(normalizeSource(nativeSource).source, '归一化结果里的 source').rules
     expect(rules.ruleKind).toBe('.itemtxt p span:last-child@text')
     expect(rules.ruleDetailKind).toBe('.booktxt p:nth-child(2)@text')
     expect(rules.ruleWordCount).toBeNull()   // 该 fixture 不带 wordCount
@@ -342,8 +343,8 @@ describe('Native 格式（android-ebook 原生规则）', () => {
   it('最小形态：仅 name/url/ruleContent 对象 → ok，其余规则 null', () => {
     const r = normalizeSource({ name: 'A', url: 'https://a', ruleContent: { content: '#c' } })
     expect(r.ok).toBe(true)
-    expect(r.source!.rules.ruleContent).toBe('#c@text')
-    expect(r.source!.rules.ruleBookList).toBeNull()
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleContent).toBe('#c@text')
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleBookList).toBeNull()
   })
   it('ruleContent 对象缺 content → missing ruleContent（与 legado 口径一致）', () => {
     const r = normalizeSource({ name: 'A', url: 'https://a', ruleContent: { nextPage: 'x@href' } })
@@ -383,8 +384,8 @@ describe('原生方言的 ruleFind 映射（发现面数据面）', () => {
     const r = normalizeSource(native)
     expect(r.ok).toBe(true)
     if (!r.ok) return
-    expect(r.source!.rules.ruleExploreUrl).toBe('/{{kind}}/{{page}}')
-    expect(r.source!.rules.ruleExploreKinds).toEqual([
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleExploreUrl).toBe('/{{kind}}/{{page}}')
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleExploreKinds).toEqual([
       { title: '玄幻', url: 'xuanhuan' },
       { title: '都市', url: 'dushi' },
     ])
@@ -400,26 +401,26 @@ describe('原生方言的 ruleFind 映射（发现面数据面）', () => {
     }
     const r = normalizeSource(dirty)
     if (!r.ok) throw new Error('应能规范化')
-    expect(r.source!.rules.ruleExploreKinds).toEqual([{ title: '玄幻', url: 'xuanhuan' }])
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleExploreKinds).toEqual([{ title: '玄幻', url: 'xuanhuan' }])
   })
 
   it('ruleFind.ruleSearch 非空即整套覆盖；缺失则留 null（回落通用搜索规则）', () => {
     const withOwn = { ...native, ruleFind: { ...native.ruleFind, ruleSearch: { list: '.book', name: '.title' } } }
     const a = normalizeSource(withOwn)
     if (!a.ok) throw new Error('应能规范化')
-    expect(a.source!.rules.ruleExploreList).toBe('.book')
-    expect(a.source!.rules.ruleExploreName).toBe('.title@text')  // Native 裸选择器 = 取文本（隐式 @text）
+    expect(must(a.source, 'a 归一化后的 source').rules.ruleExploreList).toBe('.book')
+    expect(must(a.source, 'a 归一化后的 source').rules.ruleExploreName).toBe('.title@text')  // Native 裸选择器 = 取文本（隐式 @text）
     // 未给的子字段仍是 null —— 提醒使用者「整套切换」而非逐字段回落。这条断言要挑**通用规则声明过**
     // 的字段：`ruleExploreBookUrl` 的通用侧（ruleBookUrl）是命得中的，逐字段回落会让它冒出通用那本书
     // 地址，于是这里正是「整套」与「逐字段」的分野；作者/分类两边都空，断言它们对实现无区分力。
-    expect(a.source!.rules.ruleExploreBookUrl).toBeNull()
-    expect(a.source!.rules.ruleExploreAuthor).toBeNull()
+    expect(must(a.source, 'a 归一化后的 source').rules.ruleExploreBookUrl).toBeNull()
+    expect(must(a.source, 'a 归一化后的 source').rules.ruleExploreAuthor).toBeNull()
 
     const b = normalizeSource(native)
     if (!b.ok) throw new Error('应能规范化')
-    expect(b.source!.rules.ruleExploreList).toBeNull()
-    expect(b.source!.rules.ruleExploreName).toBeNull()
-    expect(b.source!.rules.ruleExploreUrl).toBe('/{{kind}}/{{page}}') // 不随 ruleSearch 缺席而消失
+    expect(must(b.source, 'b 归一化后的 source').rules.ruleExploreList).toBeNull()
+    expect(must(b.source, 'b 归一化后的 source').rules.ruleExploreName).toBeNull()
+    expect(must(b.source, 'b 归一化后的 source').rules.ruleExploreUrl).toBe('/{{kind}}/{{page}}') // 不随 ruleSearch 缺席而消失
   })
 
   it('kinds 的 children 非空 → 如实进 warning（本期不递归二级分类）', () => {
@@ -430,7 +431,7 @@ describe('原生方言的 ruleFind 映射（发现面数据面）', () => {
     const r = normalizeSource(nested)
     if (!r.ok) throw new Error('应能规范化')
     expect(r.warnings.some((w) => w.field === 'ruleFind.kinds' && w.message.includes('children'))).toBe(true)
-    expect(r.source!.rules.ruleExploreKinds).toEqual([{ title: '玄幻', url: 'xuanhuan' }])
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleExploreKinds).toEqual([{ title: '玄幻', url: 'xuanhuan' }])
   })
 
   it('ruleRank 仍然是不支持字段（对面已删这条链）', () => {
@@ -442,11 +443,11 @@ describe('原生方言的 ruleFind 映射（发现面数据面）', () => {
   it('legado 方言同样落 ruleExploreKinds 键（恒为数组，消费者不必判空）', () => {
     const flat = normalizeSource({ bookSourceName: 'A', bookSourceUrl: 'https://a', ruleContent: 'x' })
     if (!flat.ok) throw new Error('应能规范化')
-    expect(flat.source!.rules.ruleExploreKinds).toEqual([])
-    expect(flat.source!.rules.ruleExploreUrl).toBeNull()
+    expect(must(flat.source, 'flat 归一化后的 source').rules.ruleExploreKinds).toEqual([])
+    expect(must(flat.source, 'flat 归一化后的 source').rules.ruleExploreUrl).toBeNull()
     const obj = normalizeSource(objectSource)
     if (!obj.ok) throw new Error('应能规范化')
-    expect(obj.source!.rules.ruleExploreKinds).toEqual([])
+    expect(must(obj.source, 'obj 归一化后的 source').rules.ruleExploreKinds).toEqual([])
   })
 })
 
@@ -473,7 +474,7 @@ describe('rawExploreFields（存量按 raw 补推发现面的读口）', () => {
   }
 
   it('原生 ruleFind 的子字段按导入侧同一份映射派生（取值字段补隐式 @text，list/url 三件套不补）', () => {
-    const got = rawExploreFields(withOwn)!
+    const got = must(rawExploreFields(withOwn), 'rawExploreFields 的读口')
     expect(got.ruleExploreUrl).toBe('/{{kind}}/{{page}}')
     expect(got.ruleExploreKinds).toEqual([
       { title: '玄幻', url: 'xuanhuan' }, { title: '都市', url: 'dushi' },
@@ -485,7 +486,7 @@ describe('rawExploreFields（存量按 raw 补推发现面的读口）', () => {
   })
 
   it('ruleSearch 缺 list → 八字段整套不给（判据只看 list）；url 照旧派生', () => {
-    const got = rawExploreFields({ ...native, ruleFind: { ...native.ruleFind, ruleSearch: { name: '.title' } } })!
+    const got = must(rawExploreFields({ ...native, ruleFind: { ...native.ruleFind, ruleSearch: { name: '.title' } } }), 'rawExploreFields 的读口')
     expect(got.ruleExploreUrl).toBe('/{{kind}}/{{page}}')
     const nine = ['ruleExploreList', 'ruleExploreName', 'ruleExploreAuthor', 'ruleExploreBookUrl',
       'ruleExploreCoverUrl', 'ruleExploreIntro', 'ruleExploreKind', 'ruleExploreLastChapter', 'ruleExploreWordCount'] as const
@@ -493,18 +494,18 @@ describe('rawExploreFields（存量按 raw 补推发现面的读口）', () => {
   })
 
   it('非原生方言（raw 里同名块也不认）/ 无 ruleFind：全 null + []；raw 非对象 → undefined 叫调用方别动', () => {
-    const flat = rawExploreFields({ bookSourceName: 'A', bookSourceUrl: 'https://a', ruleContent: 'x', ruleFind: native.ruleFind })!
+    const flat = must(rawExploreFields({ bookSourceName: 'A', bookSourceUrl: 'https://a', ruleContent: 'x', ruleFind: native.ruleFind }), 'rawExploreFields 的读口')
     expect(flat.ruleExploreUrl).toBeNull()               // 方言判定复用 isNativeSource，不自己再写一份
     expect(flat.ruleExploreKinds).toEqual([])
-    const bare = rawExploreFields({ ...native, ruleFind: undefined })!
+    const bare = must(rawExploreFields({ ...native, ruleFind: undefined }), 'rawExploreFields 的读口')
     expect(bare.ruleExploreUrl).toBeNull()
     expect(bare.ruleExploreKinds).toEqual([])
     expect(rawExploreFields('not-an-object')).toBeUndefined()
   })
 
   it('与 flattenNative 共用同一份映射：逐键等于 normalizeSource 的 rules（分头写两份解释即在此分叉）', () => {
-    const rules = normalizeSource(withOwn).source!.rules as unknown as Record<string, unknown>
-    for (const [k, v] of Object.entries(rawExploreFields(withOwn)!)) expect(rules[k]).toEqual(v)
+    const rules = must(normalizeSource(withOwn).source, '归一化结果里的 source').rules as unknown as Record<string, unknown>
+    for (const [k, v] of Object.entries(must(rawExploreFields(withOwn), 'rawExploreFields 的读口'))) expect(rules[k]).toEqual(v)
   })
 
   // legado 方言的存量收敛：发现面接进来之前入库的源，raw 里躺着 exploreUrl / ruleExplore 却推不出东西
@@ -514,7 +515,7 @@ describe('rawExploreFields（存量按 raw 补推发现面的读口）', () => {
     exploreUrl: '玄幻::/xh/{{page}}', ruleExplore: { bookList: '.box', name: 'tag.a', wordCount: '.wc' },
   }
   it('legado 的 raw（顶层 exploreUrl + 嵌套 ruleExplore）同样推得出分类入口与条目规则', () => {
-    const got = rawExploreFields(legadoRaw)!
+    const got = must(rawExploreFields(legadoRaw), 'rawExploreFields 的读口')
     expect(got.ruleExploreKinds).toEqual([{ title: '玄幻', url: '/xh/{{page}}' }])
     expect(got.ruleExploreList).toBe('.box')
     expect(got.ruleExploreName).toBe('tag.a')          // 隐式 @text 是原生方言的终端语义，不套到 legado 上
@@ -523,8 +524,8 @@ describe('rawExploreFields（存量按 raw 补推发现面的读口）', () => {
   })
 
   it('legado 侧也逐键等于 normalizeSource 的 rules：两个读口共用同一份解释，不是各写一份碰巧同值', () => {
-    const rules = normalizeSource(legadoRaw).source!.rules as unknown as Record<string, unknown>
-    for (const [k, v] of Object.entries(rawExploreFields(legadoRaw)!)) expect(rules[k], `键 ${k}`).toEqual(v)
+    const rules = must(normalizeSource(legadoRaw).source, '归一化结果里的 source').rules as unknown as Record<string, unknown>
+    for (const [k, v] of Object.entries(must(rawExploreFields(legadoRaw), 'rawExploreFields 的读口'))) expect(rules[k], `键 ${k}`).toEqual(v)
   })
 })
 
@@ -546,7 +547,7 @@ describe('bookSourceType（内容形态，增补 2026-09-16）', () => {
     for (const v of [undefined, 0, -1] as const) {
       const r = normalizeSource(v === undefined ? base : { ...base, bookSourceType: v })
       expect(r.ok).toBe(true)
-      expect(r.source!.type).toBe('text')
+      expect(must(r.source, 'r 归一化后的 source').type).toBe('text')
       expect(r.warnings).toHaveLength(0)
     }
   })
@@ -581,7 +582,7 @@ describe('分组拆分 splitGroups（修复 2026-09-16：真实导出是逗号�
   const groupsOf = (g: string): string[] => {
     const r = normalizeSource({ bookSourceName: 'A', bookSourceUrl: 'https://a', ruleContent: 'x', bookSourceGroup: g })
     expect(r.ok).toBe(true)
-    return r.source!.groups
+    return must(r.source, 'r 归一化后的 source').groups
   }
   it('半角逗号（本库 201 源实测主流形态）逐段拆开——多组源每组独立成段', () => {
     expect(groupsOf('快速书源 ⚡,通常书源 📂')).toEqual(['快速书源 ⚡', '通常书源 📂'])
@@ -601,7 +602,7 @@ describe('名称前缀图标剥离（修复 2026-09-16）', () => {
   const nameOf = (n: string): string => {
     const r = normalizeSource({ bookSourceName: n, bookSourceUrl: 'https://a', ruleContent: 'x' })
     expect(r.ok).toBe(true)
-    return r.source!.name
+    return must(r.source, 'r 归一化后的 source').name
   }
   it('上游分组装饰前缀剥掉——图标即分组徽标，分组列已独立呈现', () => {
     expect(nameOf('⚡📂听小说APP')).toBe('听小说APP')
@@ -633,13 +634,13 @@ describe('legado 发现面（exploreUrl + ruleExplore）', () => {
   const rulesOf = (raw: Record<string, unknown>): Record<string, string | null> => {
     const r = normalizeSource(raw)
     expect(r.ok).toBe(true)
-    return r.source!.rules as unknown as Record<string, string | null>
+    return must(r.source, 'r 归一化后的 source').rules as unknown as Record<string, string | null>
   }
   /** 「未支持子字段」那条聚合 warning 点名的清单（这类文案全仓只许有一条，第二条即抄本）。 */
   const unsupportedNames = (warnings: NormalizeIssue[]): string[] => {
     const aggregated = warnings.filter((w) => w.field === '(未支持子字段)')
     expect(aggregated, '未消费的子字段一条都没被点名').toHaveLength(1)
-    return aggregated[0].message.replace(/^已忽略不支持的子字段：/, '').split('、')
+    return pick(aggregated, 0).message.replace(/^已忽略不支持的子字段：/, '').split('、')
   }
   const legado = {
     bookSourceName: '站点甲', bookSourceUrl: 'https://a.com', ruleContent: '@css:#c@text',
@@ -650,12 +651,12 @@ describe('legado 发现面（exploreUrl + ruleExplore）', () => {
   it('exploreUrl 的文本档落进 ruleExploreKinds（标题与地址一起走，地址就是该类的模板）', () => {
     const r = normalizeSource(legado)
     expect(r.ok).toBe(true)
-    expect(r.source!.rules.ruleExploreKinds).toEqual([
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleExploreKinds).toEqual([
       { title: '玄幻', url: '/list/xh/{{page}}.html' },
       { title: '都市', url: '/list/ds/{{page}}.html' },
     ])
     // 这一份夹具没写顶层 ruleExploreUrl：源级模板不是「解出分类入口」的副产品，得源自己声明
-    expect(r.source!.rules.ruleExploreUrl).toBe(null)
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleExploreUrl).toBe(null)
   })
   it('ruleExplore 九键整套逐键落位（判据只看 bookList）', () => {
     const rules = rulesOf({ ...legado, ruleExplore: nineExplore })
@@ -688,19 +689,19 @@ describe('legado 发现面（exploreUrl + ruleExplore）', () => {
       bookSourceName: '平铺甲', bookSourceUrl: 'https://f.com', ruleContent: 'x', ruleExploreKinds: kinds,
     })
     expect(r.ok).toBe(true)
-    expect(r.source!.rules.ruleExploreKinds).toEqual(kinds)
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleExploreKinds).toEqual(kinds)
   })
   it('平铺自带与 exploreUrl 派生并存 → 平铺胜（派生值只填空位，不改写在场的那一份）', () => {
     const kinds = [{ title: '平铺类', url: '/flat/{{page}}' }]
     const r = normalizeSource({ ...legado, ruleExploreKinds: kinds })
-    expect(r.source!.rules.ruleExploreKinds).toEqual(kinds)
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleExploreKinds).toEqual(kinds)
   })
   // 「在场」的尺判到**条目级**而不是只判容器：脏数组与「没写」在平铺优先这条尺上是同一种值——
   // 都不算在场，交派生值接管。只判容器就等于让 `[{}]` 这类东西进模型，而派生面读的是 `k.title`，
   // 于是一个空名分类在书城有个入口、点下去取不到任何东西（宁炸不猜：不许拿脏值冒充分类）。
   it('平铺自带的分类数组里有脏条目 → 不算在场，由 exploreUrl 派生值接管', () => {
     const r = normalizeSource({ ...legado, ruleExploreKinds: [{}, 42] })
-    expect(r.source!.rules.ruleExploreKinds).toEqual([
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleExploreKinds).toEqual([
       { title: '玄幻', url: '/list/xh/{{page}}.html' },
       { title: '都市', url: '/list/ds/{{page}}.html' },
     ])
@@ -710,7 +711,7 @@ describe('legado 发现面（exploreUrl + ruleExplore）', () => {
       bookSourceName: '平铺乙', bookSourceUrl: 'https://f.com', ruleContent: 'x',
       ruleExploreKinds: [{}, 42, { title: '没地址的类', url: '' }, null],
     })
-    expect(r.source!.rules.ruleExploreKinds).toEqual([])
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleExploreKinds).toEqual([])
   })
   it('bookList 缺席即整套不用（条目规则走通用搜索面，见 bridge.hitRuleOf）', () => {
     const rules = rulesOf({ ...legado, ruleExplore: { name: '.t a@text', bookUrl: '.t a@href' } })
@@ -735,34 +736,34 @@ describe('legado 发现面（exploreUrl + ruleExplore）', () => {
   })
   it('js 档不执行：入口如实为空并点名（宁吵不瞒，不静默当「这源没分类」）', () => {
     const r = normalizeSource({ ...legado, exploreUrl: '@js:\nresult' })
-    expect(r.source!.rules.ruleExploreKinds).toEqual([])
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleExploreKinds).toEqual([])
     expect(r.warnings.map((w) => w.field)).toContain('exploreUrl')
     expect(r.warnings.some((w) => w.message.includes('脚本'))).toBe(true)
   })
   it('认不出或一条都不读的 exploreUrl 形状点名，而不是当成空', () => {
     const broken = normalizeSource({ ...legado, exploreUrl: '[{坏 JSON' })
-    expect(broken.source!.rules.ruleExploreKinds).toEqual([])
+    expect(must(broken.source, 'broken 归一化后的 source').rules.ruleExploreKinds).toEqual([])
     expect(broken.warnings.some((w) => w.field === 'exploreUrl')).toBe(true)
     const unusable = normalizeSource({ ...legado, exploreUrl: '[{"title":"甲"}]' })
-    expect(unusable.source!.rules.ruleExploreKinds).toEqual([])
+    expect(must(unusable.source, 'unusable 归一化后的 source').rules.ruleExploreKinds).toEqual([])
     expect(unusable.warnings.some((w) => w.field === 'exploreUrl')).toBe(true)
   })
   it('没有 exploreUrl 的源不产出任何 exploreUrl warning（搜索面源在书城只是不进城）', () => {
     const r = normalizeSource({ bookSourceName: 'B', bookSourceUrl: 'https://b.com', ruleContent: 'x' })
     expect(r.warnings.filter((w) => w.field === 'exploreUrl')).toHaveLength(0)
-    expect(r.source!.rules.ruleExploreKinds).toEqual([])
+    expect(must(r.source, 'r 归一化后的 source').rules.ruleExploreKinds).toEqual([])
   })
 })
 
 describe('rehydrateStoredSource（存量收敛）', () => {
   it('按 raw 补推 ruleDetailInit / headerRule / bookUrlPattern，幂等', () => {
     const s = {
-      ...normalizeSource({
+      ...must(normalizeSource({
         bookSourceName: 'A', bookSourceUrl: 'https://a.com', ruleContent: 'x',
         ruleBookInfo: { init: '@css:#ctx' },
         header: '@js:({Cookie:"x"})',
         bookUrlPattern: '/book/\\d+',
-      }).source!,
+      }).source, '归一化结果里的 source'),
       id: 's', status: 'unverified' as const, importedAt: 0,
     }
     delete (s.rules as unknown as Record<string, unknown>).ruleDetailInit
@@ -777,10 +778,10 @@ describe('rehydrateStoredSource（存量收敛）', () => {
 
   it('大小写变体 @jS: 的 header 清空后按 raw 补回原文，幂等', () => {
     const s = {
-      ...normalizeSource({
+      ...must(normalizeSource({
         bookSourceName: 'A', bookSourceUrl: 'https://a.com', ruleContent: 'x',
         header: '@jS:JSON.stringify({"A":"b"})',
-      }).source!,
+      }).source, '归一化结果里的 source'),
       id: 's', status: 'unverified' as const, importedAt: 0,
     }
     const rules = s.rules as unknown as Record<string, unknown>
@@ -793,10 +794,10 @@ describe('rehydrateStoredSource（存量收敛）', () => {
 
   it('kind/wordCount 只填缺席，不覆盖已有值', () => {
     const s = {
-      ...normalizeSource({
+      ...must(normalizeSource({
         bookSourceName: 'A', bookSourceUrl: 'https://a.com', ruleContent: 'x',
         ruleSearch: { kind: '玄幻', wordCount: '1000' },
-      }).source!,
+      }).source, '归一化结果里的 source'),
       id: 's', status: 'unverified' as const, importedAt: 0,
     }
     const rules = s.rules as unknown as Record<string, unknown>

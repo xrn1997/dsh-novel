@@ -4,6 +4,8 @@ import { normalizeSource } from '../../src/services/normalize.js'
 import { ReadingService } from '../../src/services/reading.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
 import { settleExploreRound } from '../explore-settle.js'
+import { must, pick } from '../support/fixture.js'
+import { requestUrlOf } from '../support/fetch-input.js'
 
 /**
  * 发现面的**离线全链路钉子**：一份原生方言书源 JSON 从盘上进来，书城轮次快照里的书单出去——
@@ -33,27 +35,27 @@ describe('书城发现面：离线全链路', () => {
     const svc = trackService(await ReadingService.create({
       dir,
       fetchImpl: (async (input: RequestInfo | URL) => {
-        seen.push(String(input))
+        seen.push(requestUrlOf(input))
         return new Response(LIST_HTML, HTML)
-      }) as never,
+      }),
     }))
     await svc.importOne(raw)
 
-    const listed = svc.exploreSources().sources[0]
-    const id = svc.listPublicSources()[0].id
+    const listed = pick(svc.exploreSources().sources, 0)
+    const id = pick(svc.listPublicSources(), 0).id
     expect(listed.id).toBe(id)
     // 分类标题从派生面自取（夹具自己声明的第一类）：硬编标题的话，夹具一改这条就假红
-    const kind = listed.kinds[0]
+    const kind = pick(listed.kinds, 0)
 
     svc.startExploreJob(id, kind)
     await settleExploreRound(svc)
-    const snap = svc.exploreJobSnapshot()
-    expect(snap?.phase).toBe('done')
-    expect(snap?.sourceId).toBe(id)
-    expect(snap?.kind).toBe(kind)
-    expect(snap?.books.map((b) => b.name)).toEqual(['剑起长安', '万古天河'])
+    const snap = must(svc.exploreJobSnapshot(), '分类轮次快照')
+    expect(snap.phase).toBe('done')
+    expect(snap.sourceId).toBe(id)
+    expect(snap.kind).toBe(kind)
+    expect(snap.books.map((b) => b.name)).toEqual(['剑起长安', '万古天河'])
     // 书地址落在书目这条本身上：浏览轴是单源，一条命中就是一本书，不再有「来源入口」那一层
-    expect(snap?.books[0].bookUrl).toBe('https://www.bqquge.com/book/1')
+    expect(pick(snap.books, 0).bookUrl).toBe('https://www.bqquge.com/book/1')
 
     // 这条请求地址才是「派生用的分类入口真进了请求」的唯一读数：
     // 钉子页的相对书地址对任何分类路径都解析成同一个绝对地址，光看快照里的书目分不出请求打到哪去了。

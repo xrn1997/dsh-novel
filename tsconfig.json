@@ -6,6 +6,8 @@
     // 只会让 vitest 的 esbuild 报「Unrecognized target environment」并退回默认档。
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "isolatedModules": true, "verbatimModuleSyntax": true, "noImplicitOverride": true,
+    "noUncheckedIndexedAccess": true, "exactOptionalPropertyTypes": true,
+    "erasableSyntaxOnly": true, "noFallthroughCasesInSwitch": true,
     "noUnusedLocals": true, "noUnusedParameters": true,
     "types": ["node"], "esModuleInterop": true,
     "jsx": "react-jsx"

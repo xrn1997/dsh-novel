@@ -8,6 +8,7 @@ import { decodePngToArgb, javaDecode, javaEncode, normalizeCharset } from '../..
 import { parseRule } from '../../src/engine/parse.js'
 import { JsSandboxError } from '../../src/engine/errors.js'
 import type { EvalContext, Facet, SegmentLoc } from '../../src/engine/types.js'
+import { pick } from '../support/fixture.js'
 
 /**
  * 真机缺口的回归钉子（29 条书架实测诊断出的五处缺口）：
@@ -31,7 +32,7 @@ const depsOf = (over: Partial<BridgeDeps> = {}): BridgeDeps => ({
   ...over,
 })
 const run = (code: string, ctx: EvalContext = {}): Promise<{ value: { kind: string; text?: string } }> =>
-  runScript({ code, loc: L, facet: FACET, scriptForm: true, ...ctx } as Parameters<typeof runScript>[0]) as never
+  runScript({ code, loc: L, facet: FACET, scriptForm: true, ...ctx })
 
 describe('A. cache 内存三别名 + randomUUID（协议表行）', () => {
   it('putMemory/getFromMemory/deleteMemory 与 put/get/delete 同存储（本仓 cache 本就纯内存）', () => {
@@ -65,18 +66,18 @@ describe('A. cache 内存三别名 + randomUUID（协议表行）', () => {
 describe('B. 段尾点号剥离（看书源 tag.li.!0:1:-1 实证）', () => {
   it('!排除 切走后的尾点不再进选择器：mode/arg 干净、exclude 保留', () => {
     const p = parseRule('class.pages@tag.ul@tag.li.!0:1:-1@tag.a@href')
-    const seg = p.branches[0].segments[2] as { kind: string; mode: string; arg: string; exclude: number[] }
+    const seg = pick(pick(p.branches, 0).segments, 2) as { kind: string; mode: string; arg: string; exclude: number[] }
     expect(seg).toMatchObject({ kind: 'default', mode: 'tag', arg: 'li' })
     expect(seg.exclude).toEqual([0, 1, -1])
   })
   it('无排除的裸尾点同样剥离：tag.li. → tag.li', () => {
     const p = parseRule('tag.li.@text')
-    const seg = p.branches[0].segments[0] as { mode: string; arg: string }
+    const seg = pick(pick(p.branches, 0).segments, 0) as { mode: string; arg: string }
     expect(seg).toMatchObject({ mode: 'tag', arg: 'li' })
   })
   it('中段点不受影响（class.note.clearfix 语义不动）', () => {
     const p = parseRule('class.note.clearfix@text')
-    const seg = p.branches[0].segments[0] as { mode: string; arg: string }
+    const seg = pick(pick(p.branches, 0).segments, 0) as { mode: string; arg: string }
     expect(seg).toMatchObject({ mode: 'class', arg: 'note.clearfix' })
   })
 })
@@ -135,7 +136,7 @@ describe('E-2. downloadFile ↔ readTxtFile（进程内暂存，不暴露真实�
       'var p = java.downloadFile("https://x.com/k.png"); p.indexOf("/dsh-cache/") === 0 ? "ok:" + p.length : "bad"',
       { fetchRaw: async () => Buffer.from([1, 2, 3]) },
     )
-    expect(String((r.value as { text?: string }).text ?? '')).toMatch(/^ok:\d+$/)
+    expect((r.value as { text?: string }).text ?? '').toMatch(/^ok:\d+$/)
   })
 })
 
@@ -164,7 +165,7 @@ function makePng(width: number, height: number, colorType: 0 | 6, px: number[][]
   for (let y = 0; y < height; y++) {
     const row = Buffer.alloc(1 + width * ch)
     for (let x = 0; x < width; x++) {
-      const p = px[y][x]
+      const p = pick(pick(px, y), x)
       if (colorType === 6) { row[1 + x * 4] = (p >> 16) & 0xff; row[2 + x * 4] = (p >> 8) & 0xff; row[3 + x * 4] = p & 0xff; row[4 + x * 4] = (p >>> 24) & 0xff }
       else row[1 + x] = p & 0xff
     }
@@ -183,13 +184,13 @@ describe('E-3. decodePngToArgb（BitmapFactory 宿主实现）', () => {
     const png = makePng(2, 1, 6, [[0xff112233, 0x80445566]])
     const r = decodePngToArgb(new Uint8Array(png))
     expect(r).toMatchObject({ width: 2, height: 1 })
-    expect(r.pixels[0] >>> 0).toBe(0xff112233 >>> 0)
-    expect(r.pixels[1] >>> 0).toBe(0x80445566 >>> 0)
+    expect(pick(r.pixels, 0) >>> 0).toBe(0xff112233 >>> 0)
+    expect(pick(r.pixels, 1) >>> 0).toBe(0x80445566 >>> 0)
   })
   it('灰度8：扩展到 RGB 三通道', () => {
     const png = makePng(1, 1, 0, [[0x7f]])
     const r = decodePngToArgb(new Uint8Array(png))
-    expect(r.pixels[0] >>> 0).toBe(0xff7f7f7f >>> 0)
+    expect(pick(r.pixels, 0) >>> 0).toBe(0xff7f7f7f >>> 0)
   })
   it('非 PNG 数据 / 隔行标志 → 如实抛错（宁炸不猜）', () => {
     expect(() => decodePngToArgb(new Uint8Array([1, 2, 3]))).toThrow(/不是 PNG/)
@@ -263,8 +264,8 @@ describe('E-4. Packages.* 沙箱面（爱腐文密钥图解密链的载体）', 
     const std = Buffer.from(bytes).toString('base64')     // 含 + 与 /
     const urlAlph = Buffer.from(bytes).toString('base64url') // 含 - 与 _
     for (const [flag, input] of [[0, std], [8, urlAlph], [8, std], [0, urlAlph]] as const) {
-      const r = await run('JSON.stringify(Packages.android.util.Base64.decode(' + JSON.stringify(input) + ', ' + flag + '))')
-      expect(JSON.parse(String((r.value as { text?: string }).text)), 'flag=' + flag + ' input=' + input).toEqual(bytes)
+      const r = await run(`JSON.stringify(Packages.android.util.Base64.decode(${JSON.stringify(input)}, ${flag}))`)
+      expect(JSON.parse(String((r.value as { text?: string }).text)), `flag=${flag} input=${input}`).toEqual(bytes)
     }
   })
   it('decode 容忍缺填充与内嵌换行（与 Android 解码器同向）', async () => {
@@ -288,12 +289,12 @@ describe('E-4. Packages.* 沙箱面（爱腐文密钥图解密链的载体）', 
     // java.net.URL 走 ctx.fetchConn 挂载（安全重开），不在未实现路径集合里
     const u = await run("String(new Packages.java.net.URL('https://x'))")
     expect(String((u.value as { text?: string }).text)).toBe('https://x')
-    const e2 = await run('new Packages.android.webkit.WebView()').catch((x: Error) => x)
-    expect(String((e2 as Error).message)).toMatch(/未知 Packages 包路径：android\.webkit\.WebView/)
+    const e2 = await run('new Packages.android.webkit.WebView()').catch((x: unknown) => x)
+    expect((e2 as Error).message).toMatch(/未知 Packages 包路径：android\.webkit\.WebView/)
   })
   it('不支持的变换/仅解密 → 如实报错', async () => {
-    const e1 = await run('Packages.javax.crypto.Cipher.getInstance("DES/ECB/PKCS5Padding")').catch((x: Error) => x)
-    expect(String((e1 as Error).message)).toMatch(/不支持的加密变换/)
+    const e1 = await run('Packages.javax.crypto.Cipher.getInstance("DES/ECB/PKCS5Padding")').catch((x: unknown) => x)
+    expect((e1 as Error).message).toMatch(/不支持的加密变换/)
   })
   it('HmacSHA256：与 Node crypto 同值', async () => {
     const expectMac = Array.from(crypto.createHmac('sha256', Buffer.from([1, 2, 3])).update(Buffer.from([4, 5])).digest())

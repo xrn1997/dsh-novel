@@ -57,9 +57,10 @@ export class ReaderScene {
     surface: null, note: null, askShelf: false, joinBusy: false, joinError: null,
     mask: false, escOwner: 'none',
   })
+  private readonly deps: ReaderSceneDeps
   private noteSeq = 0
 
-  constructor(private readonly deps: ReaderSceneDeps) {}
+  constructor(deps: ReaderSceneDeps) { this.deps = deps }
 
   get state(): ReaderSceneState { return this.store.get() }
 

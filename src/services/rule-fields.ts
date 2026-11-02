@@ -191,7 +191,7 @@ export const VACANT_RULE_FIELDS: readonly RuleFieldsOf<'vacant'>[] = RULE_FIELD_
 function specOf(model: keyof NormalizedRules): RuleFieldSpec {
   const found = RULE_FIELD_SPECS.find((s) => s.model === model)
   if (found === undefined) {
-    throw new Error(`规则字段表缺 ${String(model)} 这一行：配对目标必须落在表内`)
+    throw new Error(`规则字段表缺 ${model} 这一行：配对目标必须落在表内`)
   }
   return found
 }
@@ -206,11 +206,12 @@ export const PAIR_OF: Readonly<Partial<Record<keyof NormalizedRules, keyof Norma
 type GateSpec = Extract<(typeof RULE_FIELD_SPECS)[number], { wholeSetGate: true }>
 /** 整套闸的行：恰好一行。两行闸就是两套启用判据各自为政，宁可当场炸也不让它们悄悄并存。 */
 function gateSpec(): GateSpec {
-  const gates = RULE_FIELD_SPECS.filter((s): s is GateSpec => 'wholeSetGate' in s && s.wholeSetGate === true)
-  if (gates.length !== 1) {
+  const gates = RULE_FIELD_SPECS.filter((s): s is GateSpec => 'wholeSetGate' in s)
+  const only = gates[0]
+  if (only === undefined || gates.length !== 1) {
     throw new Error(`规则字段表的 wholeSetGate 必须恰好一行（现在 ${gates.length} 行）`)
   }
-  return gates[0]
+  return only
 }
 const GATE: GateSpec = gateSpec()
 /** 发现面整套启用的判据所在字段（闸行的模型键）。 */
@@ -221,7 +222,7 @@ export const WHOLE_SET_FIELD: keyof NormalizedRules = GATE.model
 function dialectSubOf(spec: RuleFieldSpec, dialect: 'legado' | 'native'): string {
   const key = dialect === 'legado' ? spec.legadoKey : spec.nativeKey
   if (key === undefined) {
-    throw new Error(`规则字段表里 ${String(spec.model)} 没有 ${dialect} 子字段：反推不出发现面方言名`)
+    throw new Error(`规则字段表里 ${spec.model} 没有 ${dialect} 子字段：反推不出发现面方言名`)
   }
   return key
 }
@@ -247,7 +248,7 @@ function subMapOf(dialect: 'legado' | 'native'): Record<string, keyof Normalized
     // 子字段名撞车时后写覆盖前写：两行发现面字段会悄悄挤进同一个方言键，读起来却像表是对的
     if (out[key] !== undefined) {
       throw new Error(
-        `规则字段表里发现面 ${dialect} 子字段 ${key} 被两行登记（${String(out[key])} 与 ${String(model)}）`,
+        `规则字段表里发现面 ${dialect} 子字段 ${key} 被两行登记（${out[key]} 与 ${model}）`,
       )
     }
     out[key] = model
@@ -291,11 +292,11 @@ for (const { model, target } of EXPLORE_PAIRS) {
   const key = GENERIC_HIT.find((k) => k === target.model)
   if (key === undefined) {
     throw new Error(
-      `规则字段表里发现面字段 ${String(model)} 的配对目标 ${String(target.model)} 不在条目装配的字段位里`,
+      `规则字段表里发现面字段 ${model} 的配对目标 ${target.model} 不在条目装配的字段位里`,
     )
   }
   if (exploreOfGeneric[key] !== undefined) {
-    throw new Error(`规则字段表里 ${key} 被两行发现面字段配对（${String(exploreOfGeneric[key])} 与 ${String(model)}）`)
+    throw new Error(`规则字段表里 ${key} 被两行发现面字段配对（${exploreOfGeneric[key]} 与 ${model}）`)
   }
   exploreOfGeneric[key] = model
 }

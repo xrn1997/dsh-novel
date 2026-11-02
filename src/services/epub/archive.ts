@@ -12,7 +12,7 @@ type Crc32 = { readonly unsigned: (buffer: Buffer, partial?: number) => number }
  * 所以取 default、取不到退回 namespace：两条解析路径下 default 都指同一个函数对象。
  * 这里是本文件唯一为依赖包缺陷让路的地方。
  */
-const crc32 = ((rawBufferCrc32 as unknown as { default?: Crc32 }).default ?? (rawBufferCrc32 as unknown as Crc32))
+const crc32 = ((rawBufferCrc32 as unknown as { default?: Crc32 }).default ?? rawBufferCrc32)
 
 /**
  * 增量 CRC32（`unsigned` 的取值口径：partial 传上一次的返回值）。

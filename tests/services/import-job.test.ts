@@ -6,6 +6,7 @@ import { JobRunningError, SourceJobs, dedupKey } from '../../src/services/import
 import type { JobState } from '../../src/services/import-job.js'
 import { DEFAULT_JOB_OUTPUT_BYTES } from '../../src/services/job-tail.js'
 import { makeTempDir } from '../temp-dir.js'
+import { must, pick } from '../support/fixture.js'
 
 afterEach(() => { vi.restoreAllMocks() })
 
@@ -81,7 +82,7 @@ describe('导入流水线 + 去重', () => {
     expect(j.fileErrors).toEqual([{ file: 'bad.json', error: 'JSON 解析失败' }])
     expect(j.counts.ok).toBe(1)
     expect(registry.list()).toHaveLength(1)
-    expect(registry.list()[0].status).toBe('unverified')
+    expect(pick(registry.list(), 0).status).toBe('unverified')
   })
   it('BOM 剥离 + 对象/数组混拼', async () => {
     const { jobs, registry } = await mkJobs()
@@ -102,30 +103,30 @@ describe('导入流水线 + 去重', () => {
     expect(j.counts).toMatchObject({ ok: 1, dupSkipped: 2 })
     expect(j.issues.filter((i) => i.kind === 'dup')).toHaveLength(2)
     expect(registry.list()).toHaveLength(1)
-    expect(registry.list()[0].name).toBe('First')
+    expect(pick(registry.list(), 0).name).toBe('First')
   })
   it('与已有 verified 重复 → 保留已有跳过新条（以可用的为主）', async () => {
     const { jobs, registry } = await mkJobs()
     jobs.startImport([{ name: 'seed.json', text: JSON.stringify(raw('Old', 'https://dup.com')) }])
     await waitDone(jobs)
-    await registry.edit((tx) => tx.setStatus(registry.list()[0].id, 'verified'))
+    await registry.edit((tx) => tx.setStatus(pick(registry.list(), 0).id, 'verified'))
     jobs.startImport([{ name: 'new.json', text: JSON.stringify(raw('New', 'https://dup.com')) }])
     const j = await waitDone(jobs)
     expect(j.counts).toMatchObject({ dupSkipped: 1, ok: 0 })
     expect(registry.list()).toHaveLength(1)
-    expect(registry.list()[0].name).toBe('Old')
+    expect(pick(registry.list(), 0).name).toBe('Old')
   })
   it('与已有 broken/unverified 重复 → 新条替换旧条，复用旧 id，status 复位', async () => {
     const { jobs, registry } = await mkJobs()
     jobs.startImport([{ name: 'seed.json', text: JSON.stringify(raw('Old', 'https://dup.com')) }])
     await waitDone(jobs)
-    const oldId = registry.list()[0].id
+    const oldId = pick(registry.list(), 0).id
     await registry.edit((tx) => tx.setStatus(oldId, 'broken', 'x'))
     jobs.startImport([{ name: 'new.json', text: JSON.stringify(raw('New', 'https://dup.com')) }])
     const j = await waitDone(jobs)
     expect(j.counts).toMatchObject({ replaced: 1, ok: 0 })
     expect(registry.list()).toHaveLength(1)
-    expect(registry.list()[0]).toMatchObject({ id: oldId, name: 'New', status: 'unverified' })
+    expect(pick(registry.list(), 0)).toMatchObject({ id: oldId, name: 'New', status: 'unverified' })
   })
   it('同库历史多同键：替换时收敛为一条', async () => {
     const { jobs, registry } = await mkJobs()
@@ -142,8 +143,9 @@ describe('导入流水线 + 去重', () => {
     ]) }])
     const j = await waitDone(jobs)
     expect(j.counts).toMatchObject({ ok: 1, failed: 1 })
-    expect(j.issues[0]).toMatchObject({ kind: 'failed', name: 'NoUrl' })
-    expect(j.issues[0].detail).toContain('bookSourceUrl')
+    const issue = pick(j.issues, 0)
+    expect(issue).toMatchObject({ kind: 'failed', name: 'NoUrl' })
+    expect(issue.detail).toContain('bookSourceUrl')
   })
   it('dedupKey：trim + 去尾部斜杠，不改大小写', () => {
     expect(dedupKey(' https://a.com/ ')).toBe('https://a.com')
@@ -185,7 +187,7 @@ describe('批量验证任务', () => {
     ]) }])
     const imported = await waitDone(jobs)
     await registry.flush()                                     // 排到静默：挂起写归零；阈值计数按 ADR-0011 跨写累计
-    const id = registry.list()[0].id
+    const id = pick(registry.list(), 0).id
     // 导入的每条 added/replaced 各算一次 edit（这里 3 条）；把第 PERSIST_EVERY 次变更正好对齐到
     // 「某家探针写回状态」那一格——阈值那次等写落地并如实抛。
     const importedEdits = imported.counts.ok + imported.counts.replaced
@@ -207,7 +209,7 @@ describe('批量验证任务', () => {
     jobs.startImport([{ name: 'a.json', text: JSON.stringify([raw('A', 'https://a.com')]) }])
     const imported = await waitDone(jobs)
     await registry.flush()
-    const id = registry.list()[0].id
+    const id = pick(registry.list(), 0).id
     const importedEdits = imported.counts.ok + imported.counts.replaced
     for (let i = 0; i < PERSIST_EVERY - 1 - importedEdits; i++) await registry.edit((tx) => tx.setStatus(id, 'unverified'))
     vi.spyOn(fs, 'rename').mockRejectedValueOnce(
@@ -227,7 +229,7 @@ describe('批量验证任务', () => {
     jobs.startBatchProbe(registry.list().map((s) => s.id))
     const j = await waitDone(jobs)
     expect(j.counts).toMatchObject({ failed: 1, ok: 0 })
-    expect(registry.list()[0].status).toBe('broken')
+    expect(pick(registry.list(), 0).status).toBe('broken')
   })
   it('未知 id：issues 点名「源不存在」，total 只计有效 id', async () => {
     const { jobs } = await mkJobs()
@@ -265,7 +267,7 @@ describe('批量验证任务', () => {
       raw('A', 'https://a.com'), raw('B', 'https://b.com'),
     ]) }])
     await waitDone(jobs)
-    victimId = registry.list()[1].id
+    victimId = pick(registry.list(), 1).id
     jobs.startBatchProbe(registry.list().map((s) => s.id))
     const j = await waitDone(jobs)
     expect(j.phase).toBe('done')
@@ -291,7 +293,7 @@ describe('批量验证任务', () => {
       raw('A', 'https://a.com'), raw('B', 'https://b.com'),
     ]) }])
     await waitDone(jobs)
-    victimId = registry.list()[0].id
+    victimId = pick(registry.list(), 0).id
     jobs.startBatchProbe(registry.list().map((s) => s.id))
     const j = await waitDone(jobs)
     expect(j.phase).toBe('done')                     // 单条交错不炸整任务
@@ -312,7 +314,8 @@ function fakeHost(): { host: JobHost; ties: Tie[] } {
   const host: JobHost = {
     start: (spec) => {
       const hooks = spec.run()
-      ties.push({ spec, cancel: hooks.cancel, done: hooks.done })
+      // cancel 是钩子对象上的方法：脱离对象取引用会让 this 丢，包一层箭头保住调用点
+      ties.push({ spec, cancel: (reason?: string) => { hooks.cancel(reason) }, done: hooks.done })
       return `${spec.kind}-${ties.length}`
     },
   }
@@ -335,11 +338,12 @@ describe('任务生命周期归 ctx.jobs（生产方接线 + 协作式取消）'
       { name: 'b.json', text: JSON.stringify([raw('B', 'https://b.com')]) },
     ])
     expect(ties).toHaveLength(1)
-    expect(ties[0].spec.kind).toBe('novel-import')
-    expect(ties[0].spec.label).toContain('2')                     // 宿主/模型看得见这活有多大
+    const tie = pick(ties, 0)
+    expect(tie.spec.kind).toBe('novel-import')
+    expect(tie.spec.label).toContain('2')                     // 宿主/模型看得见这活有多大
     const j = await waitDone(jobs)
     expect(j.phase).toBe('done')                                  // 自有 JobState 语义一字未改
-    await expect(ties[0].done).resolves.toMatchObject({ status: 'completed' })
+    await expect(tie.done).resolves.toMatchObject({ status: 'completed' })
   })
 
   it('批量验证登记为 novel-probe；宿主 cancel 后在取下一条前收手，跑过的不抹除', async () => {
@@ -354,7 +358,7 @@ describe('任务生命周期归 ctx.jobs（生产方接线 + 协作式取消）'
     const gate = new Promise<void>((r) => { release = r })
     const jobs = new SourceJobs({ registry, probe: async () => { await gate; return okProbe }, host })
     jobs.startBatchProbe(ids)
-    const tie = ties[ties.length - 1]
+    const tie = must(ties.at(-1), 'ties 的最后一项')
     expect(tie.spec.kind).toBe('novel-probe')
     await new Promise((r) => setTimeout(r, 5))
     tie.cancel('用户从宿主取消')                                    // 在途 5 发探针不打断，只拦后续取条目
@@ -390,8 +394,8 @@ describe('任务生命周期归 ctx.jobs（生产方接线 + 协作式取消）'
     jobs.startImport([{ name: 'a.json', text: JSON.stringify([raw('A', 'https://a.com')]) }])
     await waitDone(jobs)
     expect(typeof hooks?.readOutput).toBe('function')
-    expect(hooks!.readOutput!()).toContain('A')       // 每单元收尾一行，行文含源名
-    expect(spec!.outputLimitBytes).toBe(DEFAULT_JOB_OUTPUT_BYTES)
+    expect(must(must(hooks, '任务钩子').readOutput, 'hooks.readOutput 读口')()).toContain('A')       // 每单元收尾一行，行文含源名
+    expect(must(spec, '任务 spec').outputLimitBytes).toBe(DEFAULT_JOB_OUTPUT_BYTES)
   })
 
   it('过程行也覆盖文件级解析失败与预筛无效 id', async () => {
@@ -407,10 +411,10 @@ describe('任务生命周期归 ctx.jobs（生产方接线 + 协作式取消）'
     const jobs = new SourceJobs({ registry, probe: async () => okProbe, uuid: () => 'job-readout-err', host })
     jobs.startImport([{ name: 'bad.json', text: '{' }])
     await waitDone(jobs)
-    expect(hooks!.readOutput!()).toContain('bad.json：JSON 解析失败')
+    expect(must(must(hooks, '任务钩子').readOutput, 'hooks.readOutput 读口')()).toContain('bad.json：JSON 解析失败')
     jobs.startBatchProbe(['nope'])
     await waitDone(jobs)
-    expect(hooks!.readOutput!()).toContain('nope：源不存在')
+    expect(must(must(hooks, '任务钩子').readOutput, 'hooks.readOutput 读口')()).toContain('nope：源不存在')
   })
 
   it('探针抛错时过程行点名异常上的 error.code', async () => {
@@ -419,7 +423,7 @@ describe('任务生命周期归 ctx.jobs（生产方接线 + 协作式取消）'
     const seeder = new SourceJobs({ registry, probe: async () => okProbe, uuid: () => 'seed' })
     seeder.startImport([{ name: 'a.json', text: JSON.stringify([raw('A', 'https://a.com')]) }])
     await waitDone(seeder)
-    const id = registry.list()[0].id
+    const id = pick(registry.list(), 0).id
     let hooks = null as { readOutput?: () => string } | null
     const host: JobHost = {
       start: (spec) => {
@@ -432,6 +436,6 @@ describe('任务生命周期归 ctx.jobs（生产方接线 + 协作式取消）'
     const jobs = new SourceJobs({ registry, probe: async () => { throw boom }, uuid: () => 'probe', host })
     jobs.startBatchProbe([id])
     await waitDone(jobs)
-    expect(hooks!.readOutput!()).toContain('broken（ECONNRESET）')
+    expect(must(must(hooks, '任务钩子').readOutput, 'hooks.readOutput 读口')()).toContain('broken（ECONNRESET）')
   })
 })

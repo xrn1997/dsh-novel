@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { evaluate, evaluateWithTrace } from '../../src/engine/index.js'
 import type { EvalContext } from '../../src/engine/index.js'
 import { parseRule } from '../../src/engine/parse.js'   // 内部 seam 直引（卡10 barrel 收窄：parse 不再是对外承诺）
+import { pick } from '../support/fixture.js'
+import { rowsOf } from './value.js'
 
 const searchHtml = `<div><ul>
   <li class="book"><a class="name" href="/book/1">凡人修仙传</a><span class="author">忘语</span></li>
@@ -13,14 +15,14 @@ describe('evaluateWithTrace 端到端', () => {
     const t = await evaluateWithTrace('@css:li.book@css:.name@text', { html: searchHtml }, 'search')
     expect(t.value).toEqual({ kind: 'list', items: ['凡人修仙传', '仙逆'] })
     expect(t.steps.map(s => s.segmentKind)).toEqual(['css', 'css', 'default'])
-    expect(t.steps[0].hits).toBe(2)
-    expect(t.steps[2].preview).toContain('凡人')
+    expect(pick(t.steps, 0).hits).toBe(2)
+    expect(pick(t.steps, 2).preview).toContain('凡人')
   })
   it('|| 短路：首分支 miss 走次分支', async () => {
     const t = await evaluateWithTrace('@css:.nope@text||@css:.name@text', { html: searchHtml }, 'search')
     expect(t.value).toEqual({ kind: 'list', items: ['凡人修仙传', '仙逆'] })
-    expect(t.steps[0].error?.code).toBeUndefined()   // css 零命中是 miss，不是 error——miss 在 steps 里以 hits=0 呈现
-    expect(t.steps[0].hits).toBe(0)
+    expect(pick(t.steps, 0).error?.code).toBeUndefined()   // css 零命中是 miss，不是 error——miss 在 steps 里以 hits=0 呈现
+    expect(pick(t.steps, 0).hits).toBe(0)
   })
   it('链尾 (…) 不当 js 改写（对面从不切它：这条形态与 text下一页 同族，如实失败）', async () => {
     // 只在 @js:/<js>/@XPath:/@Json: 等前缀上定模式，找分隔符时 `(` 是平衡组（跳过、不是切开）；
@@ -37,7 +39,7 @@ describe('evaluateWithTrace 端到端', () => {
     const page = '<a href="/c/1.html">第一章</a><a href="/c/2.html">第二章</a>'
     const t = await evaluateWithTrace('-:href="(/c/[^"]*)">([^<]*)', { html: page }, 'toc')
     // 反序后首行 = 原文最后一条（行 = [整段, 组 1..n]，故组 2 在 [2]）
-    expect((t.value as any).rows[0][2]).toBe('第二章')
+    expect(pick(pick(rowsOf(t.value), 0), 2)).toBe('第二章')
     expect(t.reverse).toBe(true)
   })
   it('独立净化形态：##a##b 以整页原文为基值', async () => {
@@ -87,9 +89,9 @@ describe('evaluate 总装（引擎语义复查）', () => {
   })
   it('AllInOne 二维产物不压平：matches.rows 原样透出（行含 group 0 = 整段）', async () => {
     const page = '<a href="/c/1.html">第一章</a><a href="/c/2.html">第二章</a>'
-    const v = (await evaluate(':href="(/c/[^"]*)">([^<]*)', { html: page }, 'toc')) as any
+    const v = await evaluate(':href="(/c/[^"]*)">([^<]*)', { html: page }, 'toc')
     expect(v.kind).toBe('matches')
-    expect(v.rows).toEqual([
+    expect(rowsOf(v)).toEqual([
       ['href="/c/1.html">第一章', '/c/1.html', '第一章'],
       ['href="/c/2.html">第二章', '/c/2.html', '第二章'],
     ])
@@ -110,8 +112,9 @@ describe('evaluate 总装（引擎语义复查）', () => {
   it('evaluate(ParsedRule) 直通不重 parse：改 AST 后结果随动', async () => {
     const parsed = parseRule('@css:.name@text', 'search')
     // 若直通路径重 parse（原始串 .name），结果仍是 name 列表；改 AST 为 .author 后结果必须变
-    parsed.branches[0].segments[0] = { kind: 'css', selector: '.author' }
-    parsed.branches[0].raws[0] = 'css:.author'
+    const branch = pick(parsed.branches, 0)
+    branch.segments[0] = { kind: 'css', selector: '.author' }
+    branch.raws[0] = 'css:.author'
     const v = await evaluate(parsed, { html: searchHtml })
     expect(v).toEqual({ kind: 'list', items: ['忘语', '耳根'] })
   })

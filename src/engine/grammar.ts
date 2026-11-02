@@ -33,7 +33,11 @@ export function parseTails(rule: string): ParsedTails {
   // 先做插值，替换尾只在剩余文本上切。`<js>##[…]</js>` 块内的 `##` 属于 JS 文本，
   // 若被当成替换尾会把链切断、残链误报成「缺 </js> 结束标记」。只跳块形态（jsBlockEnd），`@js:code##re##rep` 的
   // `##` 仍按替换尾切——与对面净结果一致。
-  const parts: string[] = []
+  const replaces: ReplaceStep[] = []
+  // 首个切点之前是链体；其后每段按「pattern 在前、replacement 在后」两两配对
+  let chain = s
+  let cut = false
+  const restSegs: string[] = []
   let start = 0
   let scan = 0
   while (scan < s.length) {
@@ -44,23 +48,32 @@ export function parseTails(rule: string): ParsedTails {
     const brace = braceRegion(s, scan)
     if (brace !== null) { scan = brace.end; continue }
     if (s.startsWith('##', scan)) {
-      parts.push(s.slice(start, scan))
+      const body = s.slice(start, scan)
+      if (cut) restSegs.push(body)
+      else { chain = body; cut = true }
       scan += 2
       start = scan
       continue
     }
     scan++
   }
-  parts.push(s.slice(start))
-  const chain = parts[0]
-  const restSegs = parts.slice(1)
-  const replaces: ReplaceStep[] = []
-  for (let i = 0; i < restSegs.length; i += 2) {
-    if (i + 1 < restSegs.length) {
-      replaces.push({ pattern: restSegs[i], flags: '', replacement: restSegs[i + 1] })
-    } else if (restSegs[i] !== '') {
-      replaces.push({ pattern: restSegs[i], flags: '', replacement: '' })
+  // 收尾段：出现过切点就进替换尾，否则整串就是链体（无 `##` 时 chain 保持初值、这里重新落成同一段）
+  const tail = s.slice(start)
+  if (cut) restSegs.push(tail)
+  else chain = tail
+  // 每两项一对；奇数残项按「只有 pattern、替换为空串」收编，空串残项忽略
+  for (let i = 0; i + 1 < restSegs.length; i += 2) {
+    const pattern = restSegs[i]
+    const replacement = restSegs[i + 1]
+    // 循环条件给到 i + 1 项 ⇒ 两者都在界内；判空只为让编译器跟上这条界内证明
+    if (pattern !== undefined && replacement !== undefined) {
+      replaces.push({ pattern, flags: '', replacement })
     }
+  }
+  if (restSegs.length % 2 === 1) {
+    const lone = restSegs[restSegs.length - 1]
+    // 长度为奇数 ⇒ 末项就是落单那项；空串残项不算一步（与配对上的一侧同为「空串忽略」）
+    if (lone !== undefined && lone !== '') replaces.push({ pattern: lone, flags: '', replacement: '' })
   }
   return { chain, replaces, onlyOne }
 }
@@ -84,7 +97,11 @@ export function appendTail(rule: string, pattern: string, replacement: string): 
   const same = back.chain === base.chain
     && back.onlyOne === base.onlyOne
     && back.replaces.length === want.length
-    && back.replaces.every((r, i) => r.pattern === want[i].pattern && r.replacement === want[i].replacement)
+    && back.replaces.every((r, i) => {
+      const intended = want[i]
+      // 上一行已判两串等长 ⇒ 下标必在界内；判空只为让编译器跟上，缺项按「不一致」处理（回程越界）
+      return intended !== undefined && r.pattern === intended.pattern && r.replacement === intended.replacement
+    })
   if (!same) {
     return {
       rule,

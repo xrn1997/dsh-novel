@@ -4,6 +4,7 @@ import { normalizeSource } from '../../src/services/normalize.js'
 import type { Fetcher } from '../../src/services/fetcher.js'
 import type { NovelSource } from '../../src/services/types.js'
 import type { ShelfBook } from '../../src/shared/wire.js'
+import { must } from '../support/fixture.js'
 
 /**
  * 源求值缝自己的账：`book` 镜像的逐面字段集、动态头与静态头的次序、登录面投影的优先级。
@@ -17,7 +18,7 @@ const raw = {
   header: '{"X-Static":"1"}',
 }
 // normalizeSource 只产出源主体；id/status/importedAt 是注册表侧字段，测试补上即可（与 source-request.test 同形）
-const source: NovelSource = { id: 'i', status: 'unverified', importedAt: 0, ...normalizeSource(raw).source! }
+const source: NovelSource = { id: 'i', status: 'unverified', importedAt: 0, ...must(normalizeSource(raw).source, 'normalizeSource(raw) 归一化后的 source') }
 // 本文件的断言都不触网（脚本只读 book / 头表 / 登录位）；可选能力位归那条能力位闸验
 const fetcher: Fetcher = { fetchPage: async () => { throw new Error('不应触网') } }
 // 阅读那条路递给镜像的架位实体：给一条真的，不靠 cast 蒙过字段集

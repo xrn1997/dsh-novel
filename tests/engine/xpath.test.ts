@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { load } from 'cheerio'
+import type { Cheerio } from 'cheerio'
+import type { AnyNode } from 'domhandler'
 import { evalXPath } from '../../src/engine/xpath.js'
 import { UnsupportedRuleError } from '../../src/engine/errors.js'
+import type { EngineValue } from '../../src/engine/types.js'
+import { elementOf, itemsOf, nodesOf } from './value.js'
 
 // 样本取自真实源包里 XPath 规则的代表性形态；fixture 规整化以钉死语义
 const html = `<html><body>
@@ -33,11 +37,11 @@ const html = `<html><body>
 </body></html>`
 
 const $ = load(html)
-const root = () => $.root().children().first() as any
+const root = () => $.root().children().first()
 const L = { segmentIndex: 0, segmentRaw: '//x' }
-const evalX = (path: string, cur?: any) => evalXPath({ kind: 'xpath', path }, $, cur ?? root(), L, 'search' as const)
+const evalX = (path: string, cur?: Cheerio<AnyNode>) => evalXPath({ kind: 'xpath', path }, $, cur ?? root(), L, 'search')
 
-const texts = (v: any): string[] => (v.kind === 'list' ? v.items : v.kind === 'value' ? [v.text] : [])
+const texts = (v: EngineValue): string[] => (v.kind === 'list' ? v.items : v.kind === 'value' ? [v.text] : [])
 
 describe('XPath last() 偏移', () => {
   it('last()/last()-1 选择末尾节点', () => {
@@ -50,7 +54,7 @@ describe('XPath 子集：路径与末段（真实样本）', () => {
   it(' //*[@id="sitebox"]/dl —— id 谓词 + 子步 → nodes', () => {
     const v = evalX('//*[@id="sitebox"]/dl')
     expect(v.kind).toBe('nodes')
-    expect((v as any).nodes).toHaveLength(3)
+    expect(nodesOf(v)).toHaveLength(3)
   })
   it(' //dt/a/@href —— 末段属性提取（从候选元素读属性，不是过滤子节点）', () => {
     expect(texts(evalX('//dt/a/@href'))).toEqual(['/book/1/', '/book/2/', '/book/3/'])
@@ -71,7 +75,7 @@ describe('XPath 子集：路径与末段（真实样本）', () => {
   it(' //ul[contains(@class,"vodlist")]/li —— 元素末段 → nodes（可继续链）', () => {
     const v = evalX('//ul[contains(@class,"vodlist")]/li')
     expect(v.kind).toBe('nodes')
-    expect((v as any).nodes).toHaveLength(2)
+    expect(nodesOf(v)).toHaveLength(2)
   })
   it(' //a[text()="阅读"]/@href —— text() 等值谓词', () => {
     expect(texts(evalX('//a[text()="阅读"]/@href'))).toEqual(['/read/9.html'])
@@ -81,7 +85,7 @@ describe('XPath 子集：路径与末段（真实样本）', () => {
   })
   it(' //*[@id="allchapter"]//dd[a] —— 后代步 + 子元素存在谓词', () => {
     const v = evalX('//*[@id="allchapter"]//dd[a]')
-    expect((v as any).nodes).toHaveLength(3)
+    expect(nodesOf(v)).toHaveLength(3)
   })
   it(' //a[contains(text(), "下一页")]/@href —— contains(text())', () => {
     expect(texts(evalX('//a[contains(text(), "下一页")]/@href'))).toEqual(['/toc/2.html'])
@@ -93,12 +97,12 @@ describe('XPath 子集：路径与末段（真实样本）', () => {
     expect(texts(evalX('//meta[@property="og:novel:author"]/@content'))).toEqual(['唐家三少'])
   })
   it(' .//a/text() —— 相对路径在上下文节点内作用域（条目内取值）', () => {
-    const item = evalX('//ul[@class="novel_list"]/li') as any
-    const v = evalXPath({ kind: 'xpath', path: './/a/text()' }, $, item.nodes.eq(0), L, 'toc')
+    const item = evalX('//ul[@class="novel_list"]/li')
+    const v = evalXPath({ kind: 'xpath', path: './/a/text()' }, $, nodesOf(item).eq(0), L, 'toc')
     // li 内无 a → Miss（作用域正确，不外溢到全文档）
     expect(v.kind).toBe('miss')
-    const dt = evalX('//dl') as any
-    const v2 = evalXPath({ kind: 'xpath', path: './/a/@href' }, $, dt.nodes.eq(0), L, 'toc')
+    const dt = evalX('//dl')
+    const v2 = evalXPath({ kind: 'xpath', path: './/a/@href' }, $, nodesOf(dt).eq(0), L, 'toc')
     expect(texts(v2)).toEqual(['/book/1/'])
   })
 })
@@ -117,7 +121,7 @@ describe('XPath 子集：轴与函数（真实样本低频形态）', () => {
     // 所有 dd 都有 class 的容器（#ddbox/#infobox）无命中；#allchapter 的 dd 无 class → 命中 3
     const v = evalX('//dd[not(@class)]')
     expect(v.kind).toBe('nodes')
-    expect((v as any).nodes).toHaveLength(3)
+    expect(nodesOf(v)).toHaveLength(3)
     // position()=last() 按父分组：每个 dt 的最后一个 a（各 dt 仅一个 a）→ 全部
     expect(texts(evalX('//dt/a[position()=last()]/@href'))).toEqual(['/book/1/', '/book/2/', '/book/3/'])
   })
@@ -129,16 +133,16 @@ describe('XPath 子集：轴与函数（真实样本低频形态）', () => {
 describe('XPath：与引擎链协作', () => {
   it(' xpath 段产出 nodes 可被后续 css/取值段消费（混链形态）', async () => {
     const { evaluate } = await import('../../src/engine/index.js')
-    const v = await evaluate('//ul[contains(@class,"vodlist")]@css:li>a@text', { html: $.html()! }, 'toc' as any)
+    const v = await evaluate('//ul[contains(@class,"vodlist")]@css:li>a@text', { html: $.html() }, 'toc')
     expect(v.kind === 'list' || v.kind === 'value').toBe(true)
-    expect(v.kind === 'value' ? v.text : (v as any).items.join(',')).toContain('影一')
+    expect(v.kind === 'value' ? v.text : itemsOf(v).join(',')).toContain('影一')
   })
   it(' ## 替换尾与 XPath 组合（真实样本：作者：xx##作者：）', async () => {
     const { evaluate } = await import('../../src/engine/index.js')
-    const v = await evaluate('//span[contains(@class,"author")]/text()##作者：', { html: $.html()! }, 'search' as any)
+    const v = await evaluate('//span[contains(@class,"author")]/text()##作者：', { html: $.html() }, 'search')
     expect(v.kind === 'list' || v.kind === 'value').toBe(true)
-    expect(v.kind === 'value' ? v.text : (v as any).items.join('')).toContain('唐家三少')
-    expect(v.kind === 'value' ? v.text : (v as any).items.join('')).not.toContain('作者：')
+    expect(v.kind === 'value' ? v.text : itemsOf(v).join('')).toContain('唐家三少')
+    expect(v.kind === 'value' ? v.text : itemsOf(v).join('')).not.toContain('作者：')
   })
 })
 
@@ -148,22 +152,22 @@ describe('XPath 父步 `..`（真机新暴露：本机库 2 源 4 条规则、�
   it(' 三级父步后接逆向兄弟轴：preceding-sibling::div[1] = 最近前序兄弟', () => {
     const v = evalX('//a[@id="pgnext"]/../../../preceding-sibling::div[1]')
     expect(v.kind).toBe('nodes')
-    expect((v as any).nodes.text().trim()).toBe('上一章')
+    expect(nodesOf(v).text().trim()).toBe('上一章')
   })
   it(' 两级父步后接正向兄弟轴再接子步 → 该 li 之后的兄弟 li 的 a（节点集，目录面形态）', () => {
     const v = evalX('//a[@id="pgcur"]/../following-sibling::li/a')
     expect(v.kind).toBe('nodes')
-    expect((v as any).nodes.toArray().map((n: any) => n.attribs.href)).toEqual(['/v/8', '/v/9'])
+    expect(nodesOf(v).toArray().map((n) => elementOf(n).attribs['href'])).toEqual(['/v/8', '/v/9'])
   })
   it(' 单父步取父元素；父步后接属性末段 = 提取父的属性', () => {
-    expect((evalX('//a[@id="pgnext"]/..') as any).nodes.attr('class')).toBe('cell')
+    expect(nodesOf(evalX('//a[@id="pgnext"]/..')).attr('class')).toBe('cell')
     expect(texts(evalX('//a[@id="pgnext"]/../@class'))).toEqual(['cell'])
   })
   it(' 攀过文档根：文档节点不是元素 → 零命中 Miss（不猜成 html）', () => {
     expect(evalX('//a[@id="next"]/../../..').kind).toBe('miss')
   })
   it(' 父步上的谓词按分组生效：..[1] 仍取到父（单元素组第 1 个）', () => {
-    expect((evalX('//a[@id="pgnext"]/..[1]') as any).nodes.attr('class')).toBe('cell')
+    expect(nodesOf(evalX('//a[@id="pgnext"]/..[1]')).attr('class')).toBe('cell')
   })
 })
 
@@ -189,18 +193,18 @@ describe('相对路径存在性谓词（li[.//a] 一类，真源 搬山人小说
   it('.//a 命中「后代里有 a」的 li（直系谓词 [a] 命不中，差的就是这一层）', () => {
     const v = evalX(`${vols}/li[.//a]`)
     expect(v.kind).toBe('nodes')
-    expect((v as any).nodes.length).toBe(1)
-    expect((v as any).nodes.text()).toContain('甲')
+    expect(nodesOf(v).length).toBe(1)
+    expect(nodesOf(v).text()).toContain('甲')
     expect(evalX(`${vols}/li[a]`).kind).toBe('miss')
   })
   it('谓词里的路径可以带属性步：[.//a/@href] = 后代里有带 href 的 a', () => {
     const v = evalX(`${vols}/li[.//a/@href]`)
     expect(v.kind).toBe('nodes')
-    expect((v as any).nodes.length).toBe(1)
+    expect(nodesOf(v).length).toBe(1)
   })
   it('与 and/@attr 组合照常走（谓词树递归复用同一求值）', () => {
     const v = evalX(`${vols}/li[.//a and @class]`)
-    expect((v as any).nodes.length).toBe(1)
+    expect(nodesOf(v).length).toBe(1)
     expect(evalX(`${vols}/li[not(.//a)]`).kind).toBe('nodes')
   })
   it('谓词内 // 起步如实抛（文档根绝对轴不在本求值器的上下文里）', () => {

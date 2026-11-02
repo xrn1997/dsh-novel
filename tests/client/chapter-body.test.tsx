@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { ChapterBody } from '../../src/client/views/ChapterBody.js'
 import type { ChapterContent, ContentNode, ContentTag, ReadingTarget } from '../../src/client/views/types.js'
+import { pick } from '../support/fixture.js'
 
 /**
  * 图文正文渲染器（ChapterBody）的结构钉子。
@@ -106,8 +107,8 @@ describe('图文面（kind:rich）：白名单 React 映射', () => {
       />,
     )
     const items = [...container.querySelectorAll('li')]
-    expect(items[0].getAttribute('value')).toBe('7')
-    expect(items[1].getAttribute('value')).toBeNull()
+    expect(pick(items, 0).getAttribute('value')).toBe('7')
+    expect(pick(items, 1).getAttribute('value')).toBeNull()
     expect(container.querySelector('p')?.getAttribute('start')).toBeNull()
   })
 
@@ -319,8 +320,8 @@ describe('内部跳转（不是 <a>，不走 raw href）', () => {
         onNavigate={() => {}}
       />,
     )
-    expect(container.querySelectorAll('[data-novel-node="l1"]')[0].classList.contains('novel-ref-block')).toBe(true)
-    expect(container.querySelectorAll('[data-novel-node="l2"]')[0].classList.contains('novel-ref-block')).toBe(false)
+    expect(pick([...container.querySelectorAll('[data-novel-node="l1"]')], 0).classList.contains('novel-ref-block')).toBe(true)
+    expect(pick([...container.querySelectorAll('[data-novel-node="l2"]')], 0).classList.contains('novel-ref-block')).toBe(false)
   })
 })
 

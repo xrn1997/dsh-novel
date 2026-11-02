@@ -9,9 +9,11 @@ import { ls } from './util.js'
  *  列表筛选与勾选、任务面镜像、瞬态队列。业务真相仍在服务端、每次挂载经 api 拉；唯一例外是书架的
  *  **读取面与落架账**升格成面板期投影（`client/panel-shelf.ts`，裁决见 `ADR-0046`）。 */
 export interface Store<T> {
-  get(): T
-  set(patch: Partial<T>): void
-  subscribe(cb: () => void): () => void
+  // 三格写成属性而非方法简写：它们是**可拆开传递**的裸函数（`useSyncExternalStore` 直接吃
+  // get/subscribe），方法简写会声明一个隐式 this，拆开传就等于丢掉了它——这里根本没有 this 可丢。
+  get: () => T
+  set: (patch: Partial<T>) => void
+  subscribe: (cb: () => void) => () => void
 }
 
 export function createStore<T extends object>(initial: T): Store<T> {

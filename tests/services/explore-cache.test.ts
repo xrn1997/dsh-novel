@@ -6,6 +6,8 @@ import { fetchExploreGroup } from '../../src/services/explore.js'
 import { fakeSourceRequest } from './fake-source-request.js'
 import type { NovelSource } from '../../src/services/types.js'
 import type { SearchGroup } from '../../src/shared/wire.js'
+import { must } from '../support/fixture.js'
+import { requestUrlOf } from '../support/fetch-input.js'
 
 const group = (id: string): SearchGroup => ({ sourceId: id, sourceName: id, status: 'verified', hits: [] })
 const key = { sourceId: 'A', kind: '玄幻', epoch: 7, page: 1 }
@@ -61,7 +63,7 @@ function source(over: Record<string, unknown> = {}): NovelSource {
     ...over,
   })
   if (!n.ok) throw new Error(`桩源应能规范化：${JSON.stringify(n.missing)}`)
-  return { id: 'i', status: 'unverified', importedAt: 0, ...n.source! } as NovelSource
+  return { id: 'i', status: 'unverified', importedAt: 0, ...must(n.source, 'n 归一化后的 source') }
 }
 const LIST_HTML = '<html><body><div class="item"><h3><a href="/book/1">剑起长安</a></h3>' +
   '<p><a href="/zuozhe/a">青衫客</a></p></div></body></html>'
@@ -71,7 +73,7 @@ const html = (text: string): Response => new Response(text, { headers: { 'conten
  *  代际在这里就是常量：执行体只收**调用方算好的**代际值，不认识规则形状，所以这一层不必替
  *  `exploreEpoch` 作证（那一份由 cache-epoch 的用例钉）。 */
 const cfg = (cache?: KindCache): Parameters<typeof fetchExploreGroup>[3] =>
-  ({ timeoutMs: 5_000, cache, epoch: 7 })
+  ({ timeoutMs: 5_000, ...(cache !== undefined ? { cache } : {}), epoch: 7 })
 
 describe('fetchExploreGroup：单源一页的缓存语义', () => {
   // 命中那一轮交回的必须是**缓存持有的那个对象本身**，不是它的等价抄本：`explore-job` 的
@@ -98,7 +100,7 @@ describe('fetchExploreGroup：单源一页的缓存语义', () => {
   it('page 打在请求地址上，也切出两个互不命中的槽位', async () => {
     const seen: string[] = []
     let fetches = 0
-    const f = createFetcher({ fetchImpl: async (input) => { fetches++; seen.push(String(input)); return html(LIST_HTML) } })
+    const f = createFetcher({ fetchImpl: async (input) => { fetches++; seen.push(requestUrlOf(input)); return html(LIST_HTML) } })
     const cache = new KindCache()
     const at = 1_000
     const p1 = { ...cfg(cache), now: () => at }

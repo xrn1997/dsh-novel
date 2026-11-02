@@ -6,7 +6,7 @@ import { crc32Unsigned } from './archive.js'
 import { EpubImportError } from './errors.js'
 import { normalizeMediaType, resolveEpubHref } from './package.js'
 import {
-  attrOf, decodeEpubXml, isElement, localName, parseXml, textOf, xmlBudget,
+  attrOf, decodeEpubXml, isCdataNode, isElement, isTextNode, localName, parseXml, textOf, xmlBudget,
   type XmlBudget, type XmlLimits,
 } from './xml.js'
 
@@ -191,6 +191,14 @@ function verifyPng(bytes: Buffer, what: string): void {
   throw new EpubImportError(`PNG 数据损坏（缺 IEND，文件被截断）：${what}`)
 }
 
+/** 按字节偏移取一个字节。越界在这里是**真实输入状态**（截断/损坏的图），走本层的 `EpubImportError`
+ *  而不是补一个 0——把截断读成合法字节正是「坏数据冒充可读」。 */
+function byteAt(bytes: Buffer, at: number, what: string): number {
+  const v = bytes[at]
+  if (v === undefined) throw new EpubImportError(`图片数据在偏移 ${at} 处被截断：${what}`)
+  return v
+}
+
 function verifyJpeg(bytes: Buffer, what: string): void {
   if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) {
     throw new EpubImportError(`JPEG 数据损坏（没有 SOI）：${what}`)
@@ -198,8 +206,8 @@ function verifyJpeg(bytes: Buffer, what: string): void {
   let p = 2
   while (p + 1 < bytes.length) {
     if (bytes[p] !== 0xff) { p += 1; continue }
-    let marker = bytes[p + 1]
-    while (marker === 0xff && p + 2 < bytes.length) { p += 1; marker = bytes[p + 1] }
+    let marker = byteAt(bytes, p + 1, what)
+    while (marker === 0xff && p + 2 < bytes.length) { p += 1; marker = byteAt(bytes, p + 1, what) }
     if (marker === 0xd9) return                                     // EOI：完整
     if ((marker >= 0xd0 && marker <= 0xd7) || marker === 0x01) { p += 2; continue }   // 不带长度段的标记
     if (marker === 0xda) return verifyJpegScan(bytes, p, what)      // SOS：之后是熵编码数据，找 EOI
@@ -215,7 +223,7 @@ function verifyJpeg(bytes: Buffer, what: string): void {
 function verifyJpegScan(bytes: Buffer, from: number, what: string): void {
   for (let p = from + 2; p + 1 < bytes.length; p += 1) {
     if (bytes[p] !== 0xff) continue
-    const next = bytes[p + 1]
+    const next = byteAt(bytes, p + 1, what)
     if (next === 0xff || next === 0x00 || (next >= 0xd0 && next <= 0xd7)) continue
     if (next === 0xd9) return
   }
@@ -357,8 +365,10 @@ export function soleRasterHref(root: Element): string | null {
     }
   }
   collect(root)
-  if (visible.length !== 1 || localName(visible[0].name) !== 'image') return null
-  const href = attrOf(visible[0], 'href')
+  const only = visible.length === 1 ? visible[0] : undefined
+  // 不是「恰好一棵 <image>」即不是包装（本函数已有的 null 出口），不拿第一棵充数
+  if (only === undefined || localName(only.name) !== 'image') return null
+  const href = attrOf(only, 'href')
   return href === null || href.trim() === '' ? null : href.trim()
 }
 
@@ -367,15 +377,18 @@ class SvgBuilder {
   private readonly idMap = new Map<string, string>()
   private readonly gradientIds = new Set<string>()
   private nextId = 0
+  private readonly what: string
+  private readonly budget: XmlBudget
+  private readonly warnings: EpubWarningLog
 
   width: number | null = null
   height: number | null = null
 
-  constructor(
-    private readonly what: string,
-    private readonly budget: XmlBudget,
-    private readonly warnings: EpubWarningLog,
-  ) {}
+  constructor(what: string, budget: XmlBudget, warnings: EpubWarningLog) {
+    this.what = what
+    this.budget = budget
+    this.warnings = warnings
+  }
 
   emit(root: Element): string {
     this.registerGradients(root)
@@ -417,8 +430,8 @@ class SvgBuilder {
     const attrs = this.attributes(el, root)
     let children = ''
     for (const child of el.children) {
-      if (child.type === 'text') children += escapeText(child.data)
-      else if (child.type === 'cdata') children += escapeText(textOf(child, this.budget))
+      if (isTextNode(child)) children += escapeText(child.data)
+      else if (isCdataNode(child)) children += escapeText(textOf(child, this.budget))
       else if (isElement(child)) children += this.element(child, false)
     }
     return children === '' ? `<${name}${attrs}/>` : `<${name}${attrs}>${children}</${name}>`
@@ -474,10 +487,11 @@ class SvgBuilder {
   /** 渐变引用只许指向同文件已登记的渐变，并把 ID 重写成安全串（原 ID 不出现在产物里） */
   private rewriteUrl(value: string, element: string, attr: string): string {
     const m = URL_REF_ONLY.exec(value.trim())
-    if (m === null) {
+    const id = m === null ? undefined : m[1]
+    // 切不出 url(#id) 与「整值不是同文件引用」是同一件事：都按不支持点名拒收，不补一个空 id
+    if (id === undefined) {
       throw new EpubImportError(`${this.what}：SVG 的 <${element}> 属性 ${attr} 不是可支持的同文件引用：${value}`)
     }
-    const id = m[1]
     if (!this.gradientIds.has(id)) {
       throw new EpubImportError(`${this.what}：SVG 引用了本文件里没有登记的渐变 #${id}（不支持的引用不改成别的）`)
     }
@@ -489,8 +503,10 @@ class SvgBuilder {
 function svgLength(value: string | null): number | null {
   if (value === null) return null
   const m = /^\s*([0-9]*\.?[0-9]+)\s*(px)?\s*$/.exec(value)
-  if (m === null) return null
-  const n = Number.parseFloat(m[1])
+  const digits = m === null ? undefined : m[1]
+  // 认不出数值即「宽高读不出」（本函数已有的 null 出口），不补一个长度
+  if (digits === undefined) return null
+  const n = Number.parseFloat(digits)
   return Number.isFinite(n) && n > 0 ? n : null
 }
 
@@ -499,8 +515,9 @@ function viewBoxSize(value: string | null, width: boolean): number | null {
   if (value === null) return null
   const parts = value.trim().split(/[\s,]+/).map((p) => Number.parseFloat(p))
   if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) return null
+  // 四个数已验齐：取不到即这一格没有可用长度，仍归 null（不猜一个尺寸）
   const n = width ? parts[2] : parts[3]
-  return n > 0 ? n : null
+  return n !== undefined && n > 0 ? n : null
 }
 
 function escapeAttr(value: string): string {

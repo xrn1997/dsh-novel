@@ -61,7 +61,7 @@ interface HeldSource {
    *  读面只出一行人类可读的串（`ExploreSnapshot.error` 的形状就是 `string`），
    *  错误码不该只活在拼出来的中文里；`end()` 的整轮级失败盖掉那一行时，这条记录盖不掉。
    *  它与「这个源到底了」那条判据分开存的意义不变：**「这一页没问到」与「这一类真的没货」是两件事**。 */
-  pageError?: { code: string; message: string }
+  pageError?: { code: string; message: string } | undefined
 }
 
 /** 服务端持有的整轮结果（内部态；跨半只出 `ExploreSnapshot`，不泄这份累积器） */
@@ -94,13 +94,13 @@ interface Held {
   phase: 'running' | 'done' | 'failed'
   /** 这一轮被取消（终态但仍可读）；只有 cancel() 会置位，被新一轮替换不算 */
   cancelled: boolean
-  finishedAt?: number
+  finishedAt?: number | undefined
   /** 这一轮的**一条**失败泳道：整轮级失败（运行器抛错、被取消）由 `end` 写，
    *  「这一页没问到」由 `absorb` 写、下一批成功的一页把它清掉——两个写主都只在轮次还在跑时成立，
    *  终态之后 `absorb` 不再碰这条泳道（边界为什么在那里，写在 `absorb` 的口径里）。
    *  执行体从不抛错，抓取失败是以带 `error` 的组交回来的——少了后半条，「这一类没问到」就会与
    *  「这一类真的没货」折成同一帧。 */
-  error?: string
+  error?: string | undefined
   /** 与**当前这批**宿主登记之间的挂点（`launch` 每批换一次；一轮一份尾缓冲见 `tail`）。 */
   tie: HostTie | null
   /** 过程行的有界尾缓冲：**一轮一份**（续页复用同一轮 ⇒ 同一份），仅在登记给宿主时存在。 */
@@ -140,12 +140,21 @@ export class ExploreJobs {
    *  **只发信号不发数据**：快照由订阅者自取，故多个观察者（SSE 每条连接各一份）共用同一份持有物。 */
   readonly signal = new ChangeSignal()
 
-  constructor(private readonly deps: {
+  private readonly deps: {
     /** 宿主 `ctx.jobs` 的窄面；缺省即不登记（单测直构与无 jobs 的组合走这条） */
     host?: JobHost
     now?: () => number
     uuid?: () => string
-  } = {}) {}
+  }
+
+  constructor(deps: {
+    /** 宿主 `ctx.jobs` 的窄面；缺省即不登记（单测直构与无 jobs 的组合走这条） */
+    host?: JobHost
+    now?: () => number
+    uuid?: () => string
+  } = {}) {
+    this.deps = deps
+  }
 
   /** 提交一轮分类浏览：**一个源、一个类、从第 1 页起**。**只留最近一轮**：新提交即替换上一轮——
    *  上一轮若在跑则被协作式收手，读面立刻指向新一轮（两真相同时在场是更坏的选择）。

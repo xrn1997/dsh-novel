@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_EPUB_LIMITS, openEpubArchive, type EpubArchive, type EpubLimits } from '../../src/services/epub/archive.js'
 import { EpubImportError } from '../../src/services/epub/errors.js'
 import { makeEpubFixture } from '../fixtures/epub.js'
+import { pick } from '../support/fixture.js'
 
 /** 收下被拒绝的异常：断言要同时看「哪个类」与「点名了谁」，所以要拿到 error 本体。
  *  万一没拒（坏归档冒充可读是本仓的最高罪），把已经开出来的归档关掉再炸：测试自己也不许把句柄
@@ -47,7 +48,7 @@ describe('zip-baseline：正常样本读得回来', () => {
       const ch1 = (await archive.read('OEBPS/ch1.xhtml')).toString('utf8')
       expect(ch1).toContain('<h1>第1章</h1>')
       // 声明大小与实际大小在同一份正常样本里也必须一致（读端的长度核对不靠声明，这里只是交叉验证）
-      expect(archive.entries[3].size).toBe(Buffer.byteLength(ch1, 'utf8'))
+      expect(pick(archive.entries, 3).size).toBe(Buffer.byteLength(ch1, 'utf8'))
     } finally {
       archive.close()
     }

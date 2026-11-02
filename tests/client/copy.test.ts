@@ -20,7 +20,8 @@ function fakeLocale() {
     dicts = value
     return () => { dicts = undefined }
   })
-  const bind = vi.fn((_ns: string) => (key: string, params?: Record<string, string | number>) => {
+  // 语言服务把 ns 交给 bind 再取词；本替身的字典表是整份的，ns 不参与取词，故签名从简
+  const bind = vi.fn(() => (key: string, params?: Record<string, string | number>) => {
     const template = dicts?.[active][key] ?? key
     return template.replace(/\{(\w+)\}/g, (match, name: string) =>
       params?.[name] === undefined ? match : String(params[name]))

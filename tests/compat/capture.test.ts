@@ -4,6 +4,8 @@ import path from 'node:path'
 import { ReadingService } from '../../src/services/reading.js'
 import { readSystemProxy, resolveProxyUrl } from '../../src/services/proxy.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
+import { must } from '../support/fixture.js'
+import { requestUrlOf } from '../support/fetch-input.js'
 import { sanitize } from './sanitize.js'
 import { declaresDetail } from './harness.js'
 import { recordBodyOf } from './record.js'
@@ -20,12 +22,14 @@ const KEYWORD = process.env.COMPAT_KEYWORD ?? '书'
 function recordFetch() {
   const pages = new Map<string, { body: string; contentType?: string }>()
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input)
+    const url = requestUrlOf(input)
     const res = await globalThis.fetch(input, init)
     const clone = res.clone()
     const buf = Buffer.from(await clone.arrayBuffer())
     const ct = clone.headers.get('content-type') ?? undefined
-    pages.set(url, { body: recordBodyOf(buf, res.url || url, ct, res.status), contentType: ct })
+    const page = { body: recordBodyOf(buf, res.url || url, ct, res.status) }
+    // 无 content-type 时**不建这个键**（与「值是 undefined」在序列化后是两件事）
+    pages.set(url, ct === undefined ? page : { ...page, contentType: ct })
     return res
   }) as typeof globalThis.fetch
   return { fetchImpl, pages }
@@ -49,32 +53,39 @@ describe.skipIf(process.env.COMPAT_CAPTURE !== '1')('compat 采集', () => {
     console.log(`[compat] 源总数 ${files.length}；出站代理 ${proxyUrl ?? '(直连)'}`)
     for (const f of files) {
       const caseName = f.replace(/\.json$/, '')
-      const raw = JSON.parse(await fs.readFile(path.join(sourcesDir, f), 'utf8'))
+      const raw = JSON.parse(await fs.readFile(path.join(sourcesDir, f), 'utf8')) as Record<string, unknown>
       const { fetchImpl, pages } = recordFetch()
       const dir = await makeTempDir('compat-cap-')
       const svc = trackService(await ReadingService.create({ dir, fetchImpl, proxyUrl }))
       const outcome = (await svc.importSource(raw))[0]
+      // 一次导入必回一条回执：回执缺席即采集本身失效——响亮失败，不静默跳过这个源
+      if (outcome === undefined) throw new Error(`${caseName}: 导入没有回执（importSource 返回空数组）`)
       expect(outcome.ok, `${caseName}: 导入规范化失败——${outcome.missing.map((m) => m.field).join(',')}`).toBe(true)
       // 导入不探针——采集口径与回放一致：导入后显式探一次
-      const probe = await svc.probe(outcome.sourceId!)
+      const sourceId = must(outcome.sourceId, `${caseName}: 导入回执没有 sourceId`)
+      const probe = await svc.probe(sourceId)
       expect(probe.ok, `${caseName}: 探针失败——${probe.error?.message}`).toBe(true)
       const groups = await svc.search(KEYWORD)
       const hit = groups.flatMap((g) => g.hits).find((h) => h.url !== null)
       expect(hit, `${caseName}: 搜索零命中（关键词 ${KEYWORD}）`).toBeTruthy()
-      const toc = await svc.getToc(outcome.sourceId!, hit!.url!)
+      const bookUrl = must(
+        must(hit, `${caseName}: 搜索零命中（关键词 ${KEYWORD}）`).url,
+        `${caseName}: 搜索命中没有地址`,
+      )
+      const toc = await svc.getToc(sourceId, bookUrl)
       expect(toc.length, `${caseName}: 目录为空`).toBeGreaterThan(0)
-      const text = await svc.getChapter(outcome.sourceId!, hit!.url!, 0)
+      const text = await svc.getChapter(sourceId, bookUrl, 0)
       expect(text.length, `${caseName}: 首章正文为空`).toBeGreaterThan(0)
       // 详情面：与回放**同一份判据**（`declaresDetail`，声明即须到货）。采集侧此前不查这一面，
       // 于是能采出「采集绿、回放红」的 fixture（2026-09-28 米读看书实证：它是纯 API 源、没有
       // ruleBookInfo，回放却在「详情书名为空」处红）——采集必须把回放会断的每一条都先断一遍。
-      const detail = await svc.getDetail(outcome.sourceId!, hit!.url!)
+      const detail = await svc.getDetail(sourceId, bookUrl)
       if (declaresDetail(raw, 'name')) {
         expect(detail.title?.trim(), `${caseName}: 详情书名为空（源声明了详情面书名规则）`).toBeTruthy()
       }
       for (const f of ['kind', 'wordCount'] as const) {
         if (declaresDetail(raw, f)) {
-          expect(String(detail[f] ?? '').trim(), `${caseName}: 详情字段未到货：${f}`).toBeTruthy()
+          expect((detail[f] ?? '').trim(), `${caseName}: 详情字段未到货：${f}`).toBeTruthy()
         }
       }
       await svc.flush()

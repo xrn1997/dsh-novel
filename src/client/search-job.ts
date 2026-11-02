@@ -84,6 +84,9 @@ export function useSearchJob(
   const pendingPublish = useRef<{ a: Acc; running: boolean } | null>(null)
   const stream = useRef<AbortController | null>(null)
   const alive = useRef(true)
+  /** 通道是否还活着：**每次现读**。卸载时翻面的那次写入落在 await 之后——编译器看不见闭包里的写入，
+   *  同一个流程里的第二次读会被当成常量收窄；这道守卫是运行时防线，读法必须留在调用边界上。 */
+  const aliveNow = (): boolean => alive.current
   /** 起跑序号：只有最后一次 `submit` 的回包能 `begin`/报错。只挡调用方的认领不够——
    *  前一次提交的迟到回包若照样 `begin`，观察者会被倒回旧轮，下一次快照身份闸才发现。 */
   const submitSeq = useRef(0)
@@ -137,12 +140,12 @@ export function useSearchJob(
     }
     a.keyword = job.keyword
     a.total = job.total
-    a.cancelled = job.cancelled === true
+    a.cancelled = job.cancelled
     a.groups.push(...job.added)
     a.since = job.next                                // 服务端给的游标为准（它可能夹过界）
     const running = job.phase === 'running'
     // 停止不是失败：取消后不挂红条（也不把服务端那句「任务已取消」当错误念给用户）
-    setError(running || job.cancelled === true ? null : job.error ?? null)
+    setError(running || job.cancelled ? null : job.error ?? null)
     publish(a, running)
     return running
   }
@@ -157,18 +160,18 @@ export function useSearchJob(
     try {
       job = (await deps.apiGet<{ job: SearchJobSnapshot | null }>(queries.searchJobStatus(0))).job
     } catch (e) {
-      if (acc.current !== stale || !alive.current) return
+      if (acc.current !== stale || !aliveNow()) return
       setError(t('search.job.readFailed', { detail: describeError(e, t) }))
       publish(stale, false)
       return
     }
-    if (!alive.current || acc.current !== stale) return   // 已卸载，或本页提交已落地（POST 说了算）
+    if (!aliveNow() || acc.current !== stale) return   // 已卸载，或本页提交已落地（POST 说了算）
     if (job === null) {                                    // 服务端连新一轮也没了：如实说，不伪装
       setError(t('search.job.unavailable'))
       publish(stale, false)
       return
     }
-    begin({ id: job.id, keyword: job.keyword, total: job.total, cancelled: job.cancelled === true,
+    begin({ id: job.id, keyword: job.keyword, total: job.total, cancelled: job.cancelled,
       since: job.next, groups: [...job.added] }, job.phase === 'running')
     if (job.error !== undefined) setError(job.error)      // 终态轮次的失败原因（若新轮已终态）
   }
@@ -181,18 +184,18 @@ export function useSearchJob(
   /** 地基通道：读一次快照。读不到就收手（读不到还转圈只会刷屏）。 */
   const poll = async (): Promise<void> => {
     const a = acc.current
-    if (a === null || !alive.current) return
+    if (a === null || !aliveNow()) return
     let job: SearchJobSnapshot | null
     try {
       job = (await deps.apiGet<{ job: SearchJobSnapshot | null }>(queries.searchJobStatus(a.since))).job
     } catch (e) {
-      if (acc.current !== a || !alive.current) return
+      if (acc.current !== a || !aliveNow()) return
       setError(t('search.job.readFailed', { detail: describeError(e, t) }))
       publish(a, false)
       return
     }
-    if (acc.current !== a || !alive.current) return   // 陈旧回包：已被新一轮替换或已卸载
-    if (apply(a, job) && acc.current === a && alive.current) armPoll()
+    if (acc.current !== a || !aliveNow()) return   // 陈旧回包：已被新一轮替换或已卸载
+    if (apply(a, job) && acc.current === a && aliveNow()) armPoll()
   }
 
   /** 盯住这一轮：先开 SSE；断开 / 连不上 / 提前结束而本轮未终态 → 回落轮询。 */
@@ -202,9 +205,11 @@ export function useSearchJob(
     stream.current = ctrl
     void (async (): Promise<void> => {
       let running = true
+      /** 这一轮的结局由帧回调写回：编译器看不见闭包里的赋值，故经函数读，别让它当成常量 */
+      const stillRunning = (): boolean => running
       try {
         await deps.apiEventStream(queries.searchJobStream(a.since), (data): void => {
-          if (acc.current !== a || !alive.current) return
+          if (acc.current !== a || !aliveNow()) return
           let job: SearchJobSnapshot | null
           try {
             job = (JSON.parse(data) as { job: SearchJobSnapshot | null }).job
@@ -213,8 +218,8 @@ export function useSearchJob(
           if (!running) ctrl.abort()                   // 终态：自己关流，不留着占连接
         }, ctrl.signal)
       } catch { /* 连不上或断线：一律走下面的回落，不单独报错（轮询失败才会真的报错） */ }
-      if (acc.current !== a || !alive.current) return
-      if (running) armPoll()
+      if (acc.current !== a || !aliveNow()) return
+      if (stillRunning()) armPoll()
     })()
   }
 
@@ -256,8 +261,8 @@ export function useSearchJob(
       try {
         job = (await deps.apiGet<{ job: SearchJobSnapshot | null }>(queries.searchJobStatus(0))).job
       } catch { return }                               // 首屏读不到就是没有：静默（真去搜时会再报错）
-      if (!alive.current || job === null || acc.current !== null) return   // 提交先回来 → 不覆盖新一轮
-      begin({ id: job.id, keyword: job.keyword, total: job.total, cancelled: job.cancelled === true, since: job.next, groups: [...job.added] },
+      if (!aliveNow() || job === null || acc.current !== null) return   // 提交先回来 → 不覆盖新一轮
+      begin({ id: job.id, keyword: job.keyword, total: job.total, cancelled: job.cancelled, since: job.next, groups: [...job.added] },
         job.phase === 'running', job.phase === 'running' && opts?.resume !== false)
       if (job.error !== undefined) setError(job.error)
     })()
@@ -276,8 +281,8 @@ export function useSearchJob(
   const cancel = (): void => {
     const a = acc.current
     if (a === null) return                             // 视图只在「还在跑」时给这个钮，这里只挡「压根没提交过」
-    void deps.apiSend(ROUTES.searchJobCancel, {}).catch((e): void => {
-      if (acc.current !== a || !alive.current) return
+    void deps.apiSend(ROUTES.searchJobCancel, {}).catch((e: unknown): void => {
+      if (acc.current !== a || !aliveNow()) return
       setError(t('search.job.cancelFailed', { detail: describeError(e, t) }))
     })
   }

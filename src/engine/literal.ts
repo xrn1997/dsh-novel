@@ -43,7 +43,7 @@ export function splitLiteral(raw: string, opts?: { doubleBraceOnly?: boolean }):
   while (i < raw.length) {
     // @get:{key} / @get:key 形态（求值期的变量插值点）
     if (!doubleOnly && raw.startsWith('@get:', i)) {
-      let name = ''
+      let name: string
       let j: number
       if (raw[i + 5] === '{') {
         const end = raw.indexOf('}', i + 6)
@@ -51,8 +51,10 @@ export function splitLiteral(raw: string, opts?: { doubleBraceOnly?: boolean }):
         name = raw.slice(i + 6, end); j = end + 1
       } else {
         const m = /^@get:([\w.-]+)/.exec(raw.slice(i))
-        if (m === null) { buf += raw[i]; i++; continue }
-        name = m[1]; j = i + m[0].length
+        const captured = m?.[1]
+        // 组 1 是模式的必选段；未命中或取不到都与「这里不像 @get: 形态」同一落点：原文留存（不猜）
+        if (m === null || captured === undefined) { buf += raw.charAt(i); i++; continue }
+        name = captured; j = i + m[0].length
       }
       flushText(); parts.push({ kind: 'getvar', text: name }); i = j; continue
     }
@@ -72,7 +74,7 @@ export function splitLiteral(raw: string, opts?: { doubleBraceOnly?: boolean }):
     if (single !== null) {
       flushText(); parts.push({ kind: 'jsonpath', text: `$${single[1]}` }); i += single[0].length; continue
     }
-    buf += raw[i]; i++
+    buf += raw.charAt(i); i++
   }
   flushText()
   return parts

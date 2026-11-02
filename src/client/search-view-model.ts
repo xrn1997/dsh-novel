@@ -169,9 +169,13 @@ export function isSeatLanded(landed: ReadonlySet<string>, hit: SearchHit): boole
  *  再造一层反译，那层反译只是把「成功/失败」换个名字写第二遍。 */
 export function newlyLandedSeats(todo: RowRef[], outcomes: readonly ShelfAddOutcome[]): string[] {
   const seats = new Set<string>()
-  outcomes.forEach((outcome, i) => {
-    const url = todo[i].hit.url
-    if (outcome.ok && url !== null) seats.add(url)
+  // 以 todo 为轴逐行读自己的结局（`Promise.all` 按 todo 逐条发，两表一一对应）：
+  // 没有结局的那几行本来就不该记进回执，与「失败的结局也不算落架」汇成同一条闸。
+  todo.forEach((row, i) => {
+    const outcome = outcomes[i]
+    const url = row.hit.url
+    if (outcome === undefined || !outcome.ok || url === null) return
+    seats.add(url)
   })
   return [...seats]
 }

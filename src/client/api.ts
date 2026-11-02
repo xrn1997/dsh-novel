@@ -15,8 +15,10 @@ export type NetworkReason = 'not-json' | 'request-failed' | 'stream-unavailable'
 export class ApiClientError extends Error {
   readonly code: string
   readonly status: number
-  readonly segment?: { facet: string; segmentIndex: number; segmentRaw: string }
-  readonly reason?: NetworkReason
+  /** 段级定位（服务端信封带出来的那个）。这两个字段是**内存里的错误对象**：不落盘、不进信封，
+   *  构造器按位置参数传，所以「显式给 undefined」是它们既有的用法，类型面照收。 */
+  readonly segment?: { facet: string; segmentIndex: number; segmentRaw: string } | undefined
+  readonly reason?: NetworkReason | undefined
   constructor(
     code: string,
     status: number,
@@ -66,10 +68,12 @@ async function jsonOf(res: Response): Promise<unknown> {
   }
 }
 
-/** 信封解析单点：ok → value；否则抛 ApiClientError。request/apiUpload 都必须走这一份。 */
-function unwrap<T>(body: unknown, status: number): T {
-  const env = body as ApiEnvelope<T>
-  if (env.ok === true) return env.value as T
+/** 信封解析单点：ok → value；否则抛 ApiClientError。request/apiUpload 都必须走这一份。
+ *  交回的是**未判形的负载**：信封只保证有 value 位，载荷形状归调用方那一侧的类型参数——
+ *  把形状参数提到这里，等于让信封解析器替所有调用方作保。 */
+function unwrap(body: unknown, status: number): unknown {
+  const env = body as ApiEnvelope<unknown>
+  if (env.ok) return env.value
   const err = env.error
   throw new ApiClientError(err?.code ?? 'Unknown', status, err?.message ?? `HTTP ${status}`, err?.segment)
 }
@@ -79,13 +83,13 @@ async function request<T>(path: string, method: string, body?: unknown): Promise
   try {
     res = await fetch(PREFIX + path, {
       method,
-      headers: body === undefined ? undefined : { 'content-type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      // 无体请求不建 headers/body 键：RequestInit 是随请求发出去的载荷，「缺席」才是它的空态
+      ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
     })
   } catch (e) {
     throw networkErrorOf(e)
   }
-  return unwrap<T>(await jsonOf(res), res.status)
+  return unwrap(await jsonOf(res), res.status) as T
 }
 
 export function apiGet<T>(path: string): Promise<T> { return request<T>(path, 'GET') }
@@ -101,7 +105,7 @@ export async function apiUpload<T>(pathWithQuery: string, body: Blob): Promise<T
   } catch (e) {
     throw networkErrorOf(e)
   }
-  return unwrap<T>(await jsonOf(res), res.status)
+  return unwrap(await jsonOf(res), res.status) as T
 }
 
 /**

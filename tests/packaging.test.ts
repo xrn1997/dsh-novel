@@ -3,7 +3,50 @@ import { readFileSync } from 'node:fs'
 import * as semver from 'semver'
 import { NOVEL_GLYPH_PATH, NOVEL_GLYPH_VIEWBOX } from '../src/client/novel-glyph.js'
 
-const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
+/**
+ * `package.json` / locale 文件的读数面：`JSON.parse` 交出来的是 unknown，这里按路径逐段取。
+ * 这是**发布产物清单门**，所以取法必须是「取不到就抛」——静默读到 undefined 会让下面的
+ * toBe 断言变成「两个 undefined 相等」的假绿。
+ */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function at(root: unknown, ...path: string[]): unknown {
+  let cur = root
+  for (const key of path) {
+    if (!isRecord(cur)) throw new Error(`清单路径 ${path.join('.')} 在 ${key} 处不是对象`)
+    if (!(key in cur)) throw new Error(`清单缺键：${path.join('.')}`)
+    cur = cur[key]
+  }
+  return cur
+}
+
+function textAt(root: unknown, ...path: string[]): string {
+  const value = at(root, ...path)
+  if (typeof value !== 'string') throw new Error(`清单 ${path.join('.')} 不是字符串`)
+  return value
+}
+
+function recordAt(root: unknown, ...path: string[]): Record<string, unknown> {
+  const value = at(root, ...path)
+  if (!isRecord(value)) throw new Error(`清单 ${path.join('.')} 不是对象`)
+  return value
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item: unknown) => typeof item === 'string')
+}
+
+function stringsAt(root: unknown, ...path: string[]): string[] {
+  const value = at(root, ...path)
+  if (!isStringArray(value)) throw new Error(`清单 ${path.join('.')} 不是字符串数组`)
+  return value
+}
+
+const jsonOf = (file: string): unknown => JSON.parse(readFileSync(file, 'utf8'))
+
+const pkg = jsonOf('package.json')
 const patch = readFileSync('cordis.patch.yml', 'utf8')
 
 /** 宿主版本号 → 可比较元组 `[major, minor, patch, 预发布档, 预发布序号]`。
@@ -24,23 +67,27 @@ const verTuple = (v: unknown): number[] => {
  *  `0.1.5-rc.2 → 0.1.7-rc.1`、`0.1.7-rc.1 → 0.1.8-rc.1` 这类同代漂移静默通过。 */
 const cmpVer = (a: number[], b: number[]): number => {
   for (let i = 0; i < a.length; i += 1) {
-    if (a[i] !== b[i]) return a[i] - b[i]
+    const x = a[i]
+    const y = b[i]
+    // 两侧元组由 verTuple 恒造 5 位；长度不齐说明有别的构造口混进来，宁可炸也不给出错的次序
+    if (x === undefined || y === undefined) throw new Error('版本元组长度不一致：两侧都该是 5 位')
+    if (x !== y) return x - y
   }
   return 0
 }
 
 describe('包形态声明', () => {
   it('入口与 exports', () => {
-    expect(pkg.main).toBe('lib/index.js')
-    expect(pkg.types).toBe('lib/types/index.d.ts')
-    expect(pkg.exports['./client'].types).toBe('./lib/types/client/index.d.ts')
-    expect(pkg.exports['./client'].default).toBe('./lib/client.js')
-    expect(pkg.exports['.'].default).toBe('./lib/index.js')
-    expect(pkg.exports['.'].types).toBe('./lib/types/index.d.ts')
+    expect(at(pkg, 'main')).toBe('lib/index.js')
+    expect(at(pkg, 'types')).toBe('lib/types/index.d.ts')
+    expect(at(pkg, 'exports', './client', 'types')).toBe('./lib/types/client/index.d.ts')
+    expect(at(pkg, 'exports', './client', 'default')).toBe('./lib/client.js')
+    expect(at(pkg, 'exports', '.', 'default')).toBe('./lib/index.js')
+    expect(at(pkg, 'exports', '.', 'types')).toBe('./lib/types/index.d.ts')
   })
   it('dsh 声明（嵌套形态，client-modules 与 plugin add 依赖它）', () => {
-    expect(pkg.dsh.bundle.patch).toBe('./cordis.patch.yml')
-    expect(pkg.dsh.client.platform).toBe('web')
+    expect(at(pkg, 'dsh', 'bundle', 'patch')).toBe('./cordis.patch.yml')
+    expect(at(pkg, 'dsh', 'client', 'platform')).toBe('web')
     // dsh.client.inject 是**包名**依赖边（宿主 client-modules 的 WebBootEntry，可选），与客户端
     // 条目里那份**服务名** inject 是两套东西：这条只管激活期排序，不产生运行时 import，
     // 所以 client bundle 的 require 集合仍只有平台模块表里那些（见 tsdown.config.ts）。
@@ -49,51 +96,51 @@ describe('包形态声明', () => {
     // 晚到/缺席退回内置中文（ADR-0038），不炸。
     // 其余到达依赖（如 ui-primitives）仍不声明——require 集合里没有它，声明即过度声明，
     // 激活期会与别的解析失败聚合成 AggregateError。
-    expect(pkg.dsh.client.inject).toEqual(['@deepseek-ai/dsh-client-locale'])
+    expect(stringsAt(pkg, 'dsh', 'client', 'inject')).toEqual(['@deepseek-ai/dsh-client-locale'])
     // 「对话区 tab 已撤 / 单一归属」由 tests/client/panel-registration.test.tsx 钉（座位集合），
     // 本文件不重复那条读数，只钉包声明面。
   })
   it('兼容面声明：编译所依的宿主必须在册，且状态词只许「compatible」', () => {
-    const releases = pkg.dsh.compatibility?.dshReleases
+    const releases = at(pkg, 'dsh', 'compatibility', 'dshReleases')
     expect(releases).toBeDefined()
     // 编译所依的 dsh-tools 号 = 宿主号（官方包同号下发）：它必须自己就在册，
     // 否则就是拿一版没声明过的类型面在编译
-    const dev = pkg.devDependencies['@deepseek-ai/dsh-tools']
-    expect(releases[dev]).toBe('compatible')   // 在册即声称实测过：每一版「真跑了什么」住把它加进册的那次提交正文，注释不抄那份读数
+    const dev = textAt(pkg, 'devDependencies', '@deepseek-ai/dsh-tools')
+    expect(at(releases, dev)).toBe('compatible')   // 在册即声称实测过：每一版「真跑了什么」住把它加进册的那次提交正文，注释不抄那份读数
     // 只许出现已验过的状态词：多一个 'unknown' / 'incompatible' 就是把「没验过」写进兼容门面
-    expect([...new Set(Object.values(releases))]).toEqual(['compatible'])
+    expect([...new Set(Object.values(recordAt(releases)))]).toEqual(['compatible'])
   })
   it('编译期 dsh-tools：精确钉版 + 不早于已声明兼容的最新宿主（否则漂移 typecheck 抓不住）', () => {
-    const dev = pkg.devDependencies['@deepseek-ai/dsh-tools']
+    const dev = textAt(pkg, 'devDependencies', '@deepseek-ai/dsh-tools')
     // 精确版本（不带 ^/>=）：契约对齐口径——range 会让「今天绿」随安装悄悄漂
     expect(dev).toMatch(/^\d+\.\d+\.\d+(?:-[a-z]+\.\d+)?$/)
     // 已声明兼容的宿主版本里取最高宿主，逐位比到预发布序号
-    const newest = Object.keys(pkg.dsh.compatibility.dshReleases)
+    const newest = Object.keys(recordAt(pkg, 'dsh', 'compatibility', 'dshReleases'))
       .map(verTuple)
       .reduce((a, b) => (cmpVer(b, a) > 0 ? b : a))
     // devDep 编译于比声称兼容的宿主更老的类型面 = 假绿
     expect(cmpVer(verTuple(dev), newest)).toBeGreaterThanOrEqual(0)
   })
   it('files 含 lib 与 cordis.patch.yml', () => {
-    expect(pkg.files).toContain('lib')
-    expect(pkg.files).toContain('cordis.patch.yml')
+    expect(stringsAt(pkg, 'files')).toContain('lib')
+    expect(stringsAt(pkg, 'files')).toContain('cordis.patch.yml')
   })
   it('展示元信息：icon 与 locale meta 随包导出（宿主未激活也读，缺失即落包名与默认插画）', () => {
-    expect(pkg.icon).toBe('./icon.svg')
-    expect(pkg.exports['./icon']).toBe('./icon.svg')
-    expect(pkg.exports['./locale/*.json']).toBe('./locale/*.json')
-    expect(pkg.files).toEqual(expect.arrayContaining(['locale', 'icon.svg']))
+    expect(at(pkg, 'icon')).toBe('./icon.svg')
+    expect(at(pkg, 'exports', './icon')).toBe('./icon.svg')
+    expect(at(pkg, 'exports', './locale/*.json')).toBe('./locale/*.json')
+    expect(stringsAt(pkg, 'files')).toEqual(expect.arrayContaining(['locale', 'icon.svg']))
     const icon = readFileSync('icon.svg', 'utf8')
     expect(icon).toContain('<svg')
     // 宿主把解析后的主题写成根节点 color-scheme，SVG 内部据此切换深浅两档颜色
     expect(icon).toContain('prefers-color-scheme: dark')
     expect(Buffer.byteLength(icon)).toBeLessThanOrEqual(256 * 1024)
     for (const lang of ['zh', 'en']) {
-      const { meta } = JSON.parse(readFileSync(`locale/${lang}.json`, 'utf8'))
+      const meta = recordAt(jsonOf(`locale/${lang}.json`), 'meta')
       expect(typeof meta.title).toBe('string')
-      expect(meta.title.trim().length).toBeGreaterThan(0)
+      expect(textAt(meta, 'title').trim().length).toBeGreaterThan(0)
       expect(typeof meta.description).toBe('string')
-      expect(meta.description.trim().length).toBeGreaterThan(0)
+      expect(textAt(meta, 'description').trim().length).toBeGreaterThan(0)
     }
   })
   it('图标字形与侧栏组件同一份 pathData（静态资源不能 import 单点，测试对齐）', () => {
@@ -102,14 +149,14 @@ describe('包形态声明', () => {
     expect(icon).toContain(`d="${NOVEL_GLYPH_PATH}"`)
   })
   it('peerDeps 覆盖宿主面：官方 @deepseek-ai/* 一律 peer，不进 dependencies', () => {
-    expect(Object.keys(pkg.peerDependencies)).toEqual(
+    expect(Object.keys(recordAt(pkg, 'peerDependencies'))).toEqual(
       expect.arrayContaining(['@deepseek-ai/cordis', '@deepseek-ai/dsh-tools', '@deepseek-ai/schemastery', 'react', 'react-dom']))
     // 官方包由宿主提供（收录规范：官方 @deepseek-ai/* 用 peerDependencies 声明）
-    expect(Object.keys(pkg.dependencies).filter((name) => name.startsWith('@deepseek-ai/'))).toEqual([])
+    expect(Object.keys(recordAt(pkg, 'dependencies')).filter((name) => name.startsWith('@deepseek-ai/'))).toEqual([])
   })
   it('dsh-tools peer 区间按宿主线开口——线内 rc / patch 放行，跨线挡住', () => {
-    const range = pkg.peerDependencies['@deepseek-ai/dsh-tools']
-    const dev = pkg.devDependencies['@deepseek-ai/dsh-tools']
+    const range = textAt(pkg, 'peerDependencies', '@deepseek-ai/dsh-tools')
+    const dev = textAt(pkg, 'devDependencies', '@deepseek-ai/dsh-tools')
     // 宿主安装闸按 `includePrerelease` 比较 peer 区间：一条连续区间即可放行线内所有 rc / patch，
     // 不必逐代开口。这里钉区间语义而不是字符串形状——线内自动放行，跨到下一宿主线才要重验。
     // 比较模式必须与宿主一致：若按默认 semver（排除预发布）来验，会得出相反读数。

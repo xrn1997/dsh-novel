@@ -41,12 +41,15 @@ export function resolveCitySelection(
   sources: ExploreSources['sources'] | null,
   remembered: RememberedSelection,
 ): CitySelection | null {
-  if (sources === null || sources.length === 0) return null
-  const source = sources.find((s) => s.id === remembered.sourceId) ?? sources[0]
-  if (source.kinds.length === 0) return null
+  if (sources === null) return null
+  const [first] = sources
+  if (first === undefined) return null          // 清单为空：没有可落的源，回落也无对象可指
+  const source = sources.find((s) => s.id === remembered.sourceId) ?? first
+  const [firstKind] = source.kinds
+  if (firstKind === undefined) return null      // 零分类：口径见本函数头注（不借别的源的分类）
   const kind = remembered.kind !== null && source.kinds.includes(remembered.kind)
     ? remembered.kind
-    : source.kinds[0]
+    : firstKind
   return { sourceId: source.id, kind }
 }
 

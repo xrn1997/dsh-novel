@@ -12,7 +12,7 @@ export interface ViewportRect { top: number; height: number }
 
 /** 用例写几何用的构造器（DOMRect 的其余字段本仓的落位算式不读） */
 export function rect(top: number, height: number): DOMRect {
-  return { top, height, bottom: top + height, left: 0, right: 0, width: 10, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+  return { top, height, bottom: top + height, left: 0, right: 0, width: 10, x: 0, y: 0, toJSON: () => ({}) }
 }
 
 export interface LayoutStub {
@@ -27,7 +27,6 @@ export function stubLayout(geometry: (el: Element) => DOMRect | null): LayoutStu
   const scrolls: Array<{ el: Element; to: number }> = []
   const into: Element[] = []
   const proto = Element.prototype as unknown as { scrollIntoView?: (this: Element, arg?: unknown) => void }
-  const hadInto = proto.scrollIntoView !== undefined
   const originalInto = proto.scrollIntoView
   proto.scrollIntoView = function (this: Element): void { into.push(this) }
   const rectSpy = vi.spyOn(Element.prototype, 'getBoundingClientRect')
@@ -40,7 +39,7 @@ export function stubLayout(geometry: (el: Element) => DOMRect | null): LayoutStu
     restore: () => {
       topSpy.mockRestore()
       rectSpy.mockRestore()
-      if (!hadInto) delete proto.scrollIntoView
+      if (originalInto === undefined) delete proto.scrollIntoView
       else proto.scrollIntoView = originalInto
     },
   }

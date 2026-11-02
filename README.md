@@ -68,6 +68,8 @@ TXT / EPUB 直接进书架，有损导入会留下可回看的「导入说明」
 
 插件装进哪个 profile，就在那个 profile 里生效——本插件不绑定宿主的发行形态，只认 DSH 的插件生态。
 
+本插件声明 `engines.node >= 24`（事实源住 `package.json`；从源码装时构建链同样要求该版本）。
+
 ```powershell
 dsh plugin --profile <profile> add @xrn1997/dsh-novel
 ```

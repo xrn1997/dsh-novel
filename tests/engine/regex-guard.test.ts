@@ -4,6 +4,7 @@ import {
   deadlineFor, guardedFilter, guardedMatchAll, guardedOnlyOneReplace, guardedReplace, guardedTest,
   REGEX_DEADLINE_BASE_MS, REGEX_DEADLINE_MAX_MS,
 } from '../../src/engine/regex-guard.js'
+import { must } from '../support/fixture.js'
 
 /** 经典灾难回溯形态：合法、能编译，但对不匹配的长串是指数级 */
 const CATASTROPHIC = /^(?:a+)+$/
@@ -48,8 +49,8 @@ describe('regex-guard：死线（灾难回溯只许废掉这一条正则）', ()
     try { guardedTest(CATASTROPHIC, BLOWUP) } catch (e) { err = e as RegexDeadlineError }
     expect(err, '病态正则该抛').not.toBeNull()
     expect(err).toBeInstanceOf(RegexDeadlineError)
-    expect(err!.pattern).toBe(CATASTROPHIC.source)
-    expect(err!.deadlineMs, '几十字符的规则花的是基础预算，不是封顶值').toBe(REGEX_DEADLINE_BASE_MS)
+    expect(must(err, '抛出的 RegexDeadlineError').pattern).toBe(CATASTROPHIC.source)
+    expect(must(err, '抛出的 RegexDeadlineError').deadlineMs, '几十字符的规则花的是基础预算，不是封顶值').toBe(REGEX_DEADLINE_BASE_MS)
   })
   it('超时把那把全局正则的 lastIndex 归零：半截状态不许留给下一次', () => {
     const re = /(x)|(?:(a+)+$)/g

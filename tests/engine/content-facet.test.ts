@@ -4,6 +4,7 @@ import { splitLiteral, isLiteralForm } from '../../src/engine/literal.js'
 import { parseRule } from '../../src/engine/parse.js'
 import { applyReplaces } from '../../src/engine/replace.js'
 import { UnsupportedRuleError } from '../../src/engine/errors.js'
+import { pick } from '../support/fixture.js'
 
 // 正文链路分类的引擎钉子：
 // ① default 方言 `text.<串>` 选择语义（按文本选元素）
@@ -57,10 +58,10 @@ describe('② 属性终端与取值用途', () => {
   })
   it('列表用途链尾未知词仍是选择器（getElements 口径——ruleChapterList 形态）', async () => {
     const parsed = parseRule('ul.list li', 'toc', 'list')
-    expect(parsed.branches[0].segments[0]).toEqual({ kind: 'css', selector: 'ul.list li' })
+    expect(pick(pick(parsed.branches, 0).segments, 0)).toEqual({ kind: 'css', selector: 'ul.list li' })
   })
   it('词.词形态（nonsense.x）按对面兜底定性为 css 段；含非法字符的段仍解析期抛', () => {
-    expect(parseRule('nonsense.x', 'toc', 'value').branches[0].segments[0])
+    expect(pick(pick(parseRule('nonsense.x', 'toc', 'value').branches, 0).segments, 0))
       .toMatchObject({ kind: 'css', selector: 'nonsense.x' })
     try { parseRule('nonsense$.x', 'toc', 'value'); expect.unreachable() }
     catch (e) { expect(e).toBeInstanceOf(UnsupportedRuleError) }

@@ -1,7 +1,7 @@
 import { LOCAL_SOURCE_ID, planarNavigation } from '../shared/wire.js'
 import type { BookNavigation, ChapterContent, ChapterEntry } from '../shared/wire.js'
 import { chapterContentToText, normalizeChapterText } from './chapter-content.js'
-import { LocalNotMountedError } from './errors.js'
+import { ChapterNotFoundError, LocalNotMountedError } from './errors.js'
 
 /**
  * 书内容读面：目录、导航与正文的**唯一**业务入口。本地书与在线书是两个适配器，
@@ -35,7 +35,11 @@ export interface BookContentParts {
 }
 
 export class BookContent {
-  constructor(private readonly parts: BookContentParts) {}
+  private readonly parts: BookContentParts
+
+  constructor(parts: BookContentParts) {
+    this.parts = parts
+  }
 
   /** 目录：本地适配器读持久化目录；在线适配器走缓存/在途去重/翻页那条管线。
    *  三个读动词一律 `async`：分流与「本地书未挂载」的抛错收成 rejection，HTTP 面与工具面
@@ -76,7 +80,11 @@ export class BookContent {
   async readChapter(sourceId: string, bookKey: string, chapterIndex: number): Promise<{ name: string; text: string }> {
     const chapters = await this.toc(sourceId, bookKey)
     const content = await this.chapterContent(sourceId, bookKey, chapterIndex)
-    return { name: chapters[chapterIndex].name, text: chapterContentToText(content) }
+    const chapter = chapters[chapterIndex]
+    // 正文取到即章号在同一份目录的界内（越界先前已由适配器抛分类错误，见上）；这里只让编译器跟上
+    // 这条证明，取不到仍归 404 那一类，不造默认章名。
+    if (chapter === undefined) throw new ChapterNotFoundError(chapterIndex, chapters.length)
+    return { name: chapter.name, text: chapterContentToText(content) }
   }
 
   private isLocal(sourceId: string): boolean {

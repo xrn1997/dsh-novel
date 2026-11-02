@@ -21,7 +21,7 @@ type(scope): 描述
 
 ## 提交前
 
-- 至少跑 `pnpm test` 与 `pnpm typecheck`，**两条命令同批跑并确认退出码**；界面改动再跑 `pnpm lint`。完整门控见 `docs/development.md`。
+- 至少跑 `pnpm test`、`pnpm typecheck` 与 `pnpm lint`，**同批跑并确认退出码**。完整门控见 `docs/development.md`。
 - 改抓取 / 规则引擎 / 打包链路，或改相关性判据 / 按书归并时，按 `docs/development.md` 跑对应的真链路门控；`pnpm test` 不证明真实站点可用性，也不证明安装链路。
 - 文档改动会过三件套：`tests/docs-liveness.test.ts`、`tests/context-terms.test.ts` 与 `tests/comment-altitude.test.ts`（各管哪一段见 `docs/development.md` 的「门（自动）」）。改路径、改 ADR 编号、改 README 兼容性投影都要同批改门。
 - 客户端半由宿主 HMR 热推，Node 半改动要重启宿主；需要真实浏览器读数的界面改动走 `docs/development.md` 的真浏览器门。

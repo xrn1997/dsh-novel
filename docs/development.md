@@ -36,8 +36,18 @@ pnpm test          # 常规集（引擎 / 服务 / API / 工具 / 入口 / 前�
 pnpm test:compat   # 兼容性回放（compat/fixtures → 离线复算；报告写 compat/report.md，产物不入库）
 pnpm test:pack     # 构建 + 产物自检
 pnpm typecheck     # tsc --noEmit —— 必须与 pnpm test 同批跑
-pnpm lint          # react-hooks 一条规则集（未豁免的界面依赖数组；存量 eslint-disable 另计）；只此一集，不引格式类规则
+pnpm lint          # 类型感知 ESLint：显式 any、any 扩散（no-unsafe-*）、悬浮 Promise、非空断言 + react-hooks 两条；不引格式类规则
 ```
+
+### 编译器档位与 lint 归属
+
+`tsconfig.json` 在 `strict` 之上开着 `noUncheckedIndexedAccess`、`exactOptionalPropertyTypes`、`erasableSyntaxOnly`、`noFallthroughCasesInSwitch`、`noImplicitOverride`；判据与弃选项住 `ADR-0053`。三条纪律单列：
+
+- **取值不折叠**：引擎取值链的空态不折叠——取位失败 → Miss、解析到空集合 → 空 List，两者是两种值，不许用 `?? []` / `?? ''` 之类的缺省把它们折成同一种结局（取值规约见 `CONTEXT.md`）；服务层对合法缺省的 `??` 收口不在禁令内。测试夹具的位置取位走 `tests/support/fixture.ts` 的 `pick` / `last`，需要断言存在性的查找走 `must`，越界即抛「夹具缺第几项、共几项」，不改成 `?.`。
+- **`no-unnecessary-condition` 的命中分两类**：真死代码删；「本地窄镜像钉死 ≠ 运行时必有」与「TS 看不见闭包写入」的判空**保留**，并在注释里写清为什么（注释只写为什么，不抄表达式）。
+- **`eslint-disable` 只用于确证误报**，每处带理由；`require-await` 在 `tests/**` 关闭——替身的 `async` 就是为回一个 Promise。
+
+lint 与 tsc 的分工：`tsc` 管类型形状与可赋值性，**`any` 归 ESLint**——`tsc` 从不拒绝显式 `any`，把这条记到 tsc 头上等于没有门。
 
 > **跑门取退出码，别看管道说了什么**：`pnpm test | tail` 之后退出码是管道工具的，红会被吃掉。先把输出灌进文件、再单独打印退出码，汇报里把**退出码连同计数**一起抄；**跑门与提交必须是两条命令**。
 

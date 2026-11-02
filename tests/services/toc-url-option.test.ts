@@ -6,6 +6,8 @@ import { CookieJar } from '../../src/services/cookies.js'
 import { PageCache } from '../../src/services/cache.js'
 import { Shelf } from '../../src/services/shelf.js'
 import { SourceRegistry } from '../../src/services/sources.js'
+import { must } from '../support/fixture.js'
+import { requestUrlOf } from '../support/fetch-input.js'
 
 /**
  * `ruleBookInfo.tocUrl` 带 `,{option}` 后缀时的组装口径（真机实证：悦读小说、新小书亭）。
@@ -61,7 +63,7 @@ async function makeSvc(): Promise<{ svc: ReadingService; registry: SourceRegistr
     fetcher: createFetcher({
       cookieJar: jar,
       fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
-        const u = String(input)
+        const u = requestUrlOf(input)
         const method = init?.method ?? 'GET'
         const body = typeof init?.body === 'string' ? init.body : undefined
         calls.push({ url: u, method, ...(body === undefined ? {} : { body }) })
@@ -73,7 +75,7 @@ async function makeSvc(): Promise<{ svc: ReadingService; registry: SourceRegistr
           return new Response(TOC_JSON, { headers: { 'content-type': 'application/json' } })
         }
         return new Response('', { status: 404 })
-      }) as never,
+      }),
     }),
     cookieJar: jar,
   }))
@@ -84,7 +86,7 @@ async function makeSvc(): Promise<{ svc: ReadingService; registry: SourceRegistr
 describe('tocUrl 带 ,{option} 后缀', () => {
   it('目录请求打到干净端点并带 POST 选项（bookId 由 baseUrl 插值）', async () => {
     const { svc, registry, calls } = await makeSvc()
-    const src = registry.list().find((s) => s.name === '悦读型源')!
+    const src = must(registry.list().find((s) => s.name === '悦读型源'), 'registry.list() 里 find 命中的那一项')
     const toc = await svc.getToc(src.id, BOOK_URL)
     const tocCall = calls.find((c) => c.url === TOC_ENDPOINT)
     expect(tocCall, `目录端点没被打到，实际调用: ${JSON.stringify(calls)}`).toBeDefined()
@@ -104,7 +106,7 @@ describe('tocUrl 带 ,{option} 后缀', () => {
       String.fromCharCode(123) + "'method':'POST','body':'id=9'" + String.fromCharCode(125),
     ].join('') }
     await svc.importOne(raw2)
-    const src = registry.list().find((s) => s.name === '静态目录源')!
+    const src = must(registry.list().find((s) => s.name === '静态目录源'), 'registry.list() 里 find 命中的那一项')
     const toc = await svc.getToc(src.id, BOOK_URL)
     const hit = calls.find((c) => c.url === 'https://hareading.com/books/staticList')
     expect(hit, `静态目录端点没被打到，实际调用: ${JSON.stringify(calls)}`).toBeDefined()

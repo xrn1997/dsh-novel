@@ -46,9 +46,10 @@ export function searchSummarySegments(t: Translate, c: SearchSummaryCounts): Sum
   if (c.stopped) segments.push({ text: t('search.summary.stopped') })
   for (const part of raw.split(/(\{\w+\})/)) {
     if (part === '') continue
-    const m = /^\{(\w+)\}$/.exec(part)
-    if (m === null) { segments.push({ text: part }); continue }
-    const value = params[m[1]]
+    // 占位符名 = 大括号里那段（分隔捕获组把整个占位符单独切出来）：名字由整段裁出，
+    // 不再另读捕获组——模板串里没有第二种占位符形状，裁一裁就是唯一口径。
+    if (!/^\{\w+\}$/.test(part)) { segments.push({ text: part }); continue }
+    const value = params[part.slice(1, -1)]
     if (value === undefined) { segments.push({ text: part }); continue }
     segments.push(...value)
   }

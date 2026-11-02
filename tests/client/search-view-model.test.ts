@@ -5,6 +5,7 @@ import {
   rowMeta, shelfSeats, shortAuthor,
 } from '../../src/client/search-view-model.js'
 import type { RowRef } from '../../src/client/search-view-model.js'
+import { pick } from '../support/fixture.js'
 
 /**
  * 搜索结果页派生的钉子（判据的「为什么」住 `CONTEXT.md` 的单位律词条与 `ADR-0032` / `ADR-0033`，
@@ -87,7 +88,7 @@ describe('按书轴：行 key 认名字对、逐源行回读命中', () => {
       group('s2', [hit({ title: '斗罗大陆', author: '唐家三少', url: 'u2' })], { statusDetail: 'ok' }),
     ],
   })
-  const book = view.merged.books[0]
+  const book = pick(view.merged.books, 0)
 
   it('bookRowKey 认 (书名, 作者)，不认它排在第几（同档按家数重排不许把展开态串到别的书上）', () => {
     const same = { ...book, sources: [...book.sources].reverse() }
@@ -100,9 +101,9 @@ describe('按书轴：行 key 认名字对、逐源行回读命中', () => {
       group('s2', [hit({ title: '斗罗大陆', author: '唐家三少', url: 'u2' })], { statusDetail: 'ok' }),
     ]))
     expect(rows).toHaveLength(2)
-    expect(rows[1].hit.coverUrl).toBeNull()          // s2 那条命中没有封面
-    expect(rows[0].hit.coverUrl).toBe('c1')
-    expect(Object.keys(rows[1].hit).sort()).toEqual(
+    expect(pick(rows, 1).hit.coverUrl).toBeNull()          // s2 那条命中没有封面
+    expect(pick(rows, 0).hit.coverUrl).toBe('c1')
+    expect(Object.keys(pick(rows, 1).hit).sort()).toEqual(
       ['author', 'coverUrl', 'intro', 'kind', 'lastChapterName', 'title', 'url', 'wordCount'],
     )
   })
@@ -127,10 +128,10 @@ describe('deriveRound 预计算行身份与架位', () => {
       keyword: '斗罗',
       groups: [group('s1', [hit({ title: '斗罗1', url: 'u1' }), hit({ title: '无关', url: 'u2' })])],
     })
-    expect(view.groupViews[0].keptRows.map((r) => r.hit.url)).toEqual(['u1'])
-    expect(view.groupViews[0].keptKeys).toEqual([rowId('s1', 'u1')])
-    expect(view.groupViews[0].suspectRows.map((r) => r.hit.url)).toEqual(['u2'])
-    expect(view.groupViews[0].suspectKeys).toEqual([rowId('s1', 'u2')])
+    expect(pick(view.groupViews, 0).keptRows.map((r) => r.hit.url)).toEqual(['u1'])
+    expect(pick(view.groupViews, 0).keptKeys).toEqual([rowId('s1', 'u1')])
+    expect(pick(view.groupViews, 0).suspectRows.map((r) => r.hit.url)).toEqual(['u2'])
+    expect(pick(view.groupViews, 0).suspectKeys).toEqual([rowId('s1', 'u2')])
   })
 
   it('books carry rows, keys and the seat set', () => {
@@ -141,9 +142,9 @@ describe('deriveRound 预计算行身份与架位', () => {
         group('s2', [hit({ title: '斗罗大陆', author: '唐家三少', url: 'u2' })]),
       ],
     })
-    expect(view.bookViews[0].rows.map((r) => r.hit.url)).toEqual(['u1', 'u2'])
-    expect(view.bookViews[0].keys).toEqual(view.bookViews[0].rows.map((r) => rowId(r.sourceId, r.hit.url)))
-    expect([...view.bookViews[0].seats]).toEqual(['u1', 'u2'])
+    expect(pick(view.bookViews, 0).rows.map((r) => r.hit.url)).toEqual(['u1', 'u2'])
+    expect(pick(view.bookViews, 0).keys).toEqual(pick(view.bookViews, 0).rows.map((r) => rowId(r.sourceId, r.hit.url)))
+    expect([...pick(view.bookViews, 0).seats]).toEqual(['u1', 'u2'])
   })
 })
 

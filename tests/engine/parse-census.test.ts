@@ -10,6 +10,7 @@ import { JAVA_PROTOCOL } from '../../src/engine/js-protocol.js'
 import { messageSkeleton } from '../content-audit-classify.js'
 import { readSnapshot } from '../legado-coverage/upstream-facts.js'
 import { COVERAGE, ROW_DEMAND } from '../legado-coverage/matrix.js'
+import { must } from '../support/fixture.js'
 
 /**
  * **解析面全库普查（`DSH_PARSE_CENSUS=1` 才跑；离线、秒级）**——「书源里写下的规则形态，本插件
@@ -66,28 +67,54 @@ const isRuleField = (field: string) => {
 
 interface RuleSite { src: string; where: string; rule: string; usage: 'list' | 'value' }
 
+/** 普查输入是外来 JSON（书源库文件）：边界处判形一次，之后按 `RawSource` 走。 */
+type RawSource = Record<string, unknown>
+const isRecord = (v: unknown): v is RawSource => typeof v === 'object' && v !== null
+
+/** 条目 → raw 容器（`raw` 缺席时条目本身就是 raw 层，与导入前的旧库形态同口径） */
+const rawOf = (entry: unknown): RawSource => {
+  if (!isRecord(entry)) return {}
+  return isRecord(entry.raw) ? entry.raw : entry
+}
+
+/** 报告里的源名（条目名优先，其次 raw.bookSourceName；都没有才用兜底串） */
+const sourceNameOf = (entry: unknown, fallback: string): string => {
+  if (!isRecord(entry)) return fallback
+  if (typeof entry.name === 'string') return entry.name
+  const rawName = rawOf(entry).bookSourceName
+  return typeof rawName === 'string' ? rawName : fallback
+}
+
+/** 抛错骨架的两半（`parseRule` 抛的是 Error 子类；外来抛出物按有 name/message 串的对象读） */
+const errNameOf = (e: unknown): string => (isRecord(e) && typeof e.name === 'string' ? e.name : 'Error')
+const errMessageOf = (e: unknown): string => (isRecord(e) && typeof e.message === 'string' ? e.message : '')
+
 /** 收集一个源里所有「会当规则求值」的字符串（数组元素逐个收，如 nextContentUrl: [..]） */
-function collectRules(entry: any): RuleSite[] {
-  const raw = entry?.raw ?? entry ?? {}
-  const src = String(entry?.name ?? raw.bookSourceName ?? '?')
+function collectRules(entry: unknown): RuleSite[] {
+  const raw = rawOf(entry)
+  const src = sourceNameOf(entry, '?')
   const out: RuleSite[] = []
   for (const container of RULE_CONTAINERS) {
     const box = raw[container]
     if (typeof box === 'string') {
       // 字符串化容器（本仓导入时二次 parse；容器本身也可能是 JSON 文本，两种形态都要接）
-      try { collectBox(container, JSON.parse(box), src, out) } catch { /* 坏 JSON 由导入面点名，不在这里重复判 */ }
+      try {
+        const parsed: unknown = JSON.parse(box)
+        if (isRecord(parsed)) collectBox(container, parsed, src, out)
+      } catch { /* 坏 JSON 由导入面点名，不在这里重复判 */ }
       continue
     }
-    if (box && typeof box === 'object') collectBox(container, box, src, out)
+    if (isRecord(box)) collectBox(container, box, src, out)
   }
   return out
 }
 
-function collectBox(container: string, box: Record<string, unknown>, src: string, out: RuleSite[]) {
+function collectBox(container: string, box: RawSource, src: string, out: RuleSite[]) {
   for (const [field, value] of Object.entries(box)) {
     if (!isRuleField(field)) continue
     const usage = FIELD_CONSUMERS[field] === 'rule-list' ? 'list' : 'value'
-    const vals = Array.isArray(value) ? value : [value]
+    // Json 数组元素在运行时是任意 JSON；逐个判形，元素不是串就不进规则面。
+    const vals: unknown[] = Array.isArray(value) ? value as unknown[] : [value]
     for (const v of vals) {
       if (typeof v === 'string' && v.trim() !== '') out.push({ src, where: `${container}.${field}`, rule: v, usage })
     }
@@ -106,7 +133,7 @@ function allStrings(node: unknown, acc: string[] = []): string[] {
  * **零读数的反空转样品**：真库上的 0 有两种成因——真没人用，或判据接不上任何东西，表里长得一样。
  * 每条「当下为 0」的判据都必须在这条样品上数出非 0；加新的零读数判据时把形状塞进来。
  */
-const KITCHEN_SINK: any = {
+const KITCHEN_SINK: RawSource = {
   bookSourceName: '反空转样品',
   searchUrl: '/search?q={{key}}&retry=1&charset=gbk',
   preUpdateJs: '@js:1',
@@ -126,12 +153,13 @@ const KITCHEN_SINK: any = {
  * 同一个键经常有两种数法（非空 168 vs 带发现面 172、`head` 子串撞 `header`），抄数就连判据一起抄。
  */
 const nonEmpty = (v: unknown): boolean => typeof v === 'string' ? v.trim() !== '' : v !== undefined && v !== null && v !== ''
-const boxField = (raw: any, box: string, field: string): boolean => {
+const boxField = (raw: RawSource | undefined, box: string, field: string): boolean => {
   const b = raw?.[box]
-  return !!b && typeof b === 'object' && (b as any)[field] !== undefined && nonEmpty((b as any)[field])
+  if (!isRecord(b)) return false
+  return b[field] !== undefined && nonEmpty(b[field])
 }
-const rawField = (raw: any, field: string): boolean => nonEmpty(raw?.[field])
-const anyStr = (raw: any, re: RegExp): boolean => allStrings(raw).some((s) => re.test(s))
+const rawField = (raw: RawSource | undefined, field: string): boolean => nonEmpty(raw?.[field])
+const anyStr = (raw: unknown, re: RegExp): boolean => allStrings(raw).some((s) => re.test(s))
 /** 任一层键叫 `name` 且值非空（`boxField` 只到顶层的一个容器，而 `rules` 那种归一化容器在更深处） */
 const hasKeyDeep = (node: unknown, name: string): boolean => {
   if (Array.isArray(node)) return node.some((v) => hasKeyDeep(v, name))
@@ -157,12 +185,12 @@ const CSS_SELECTOR_PATHS = [
   'ruleToc.chapterList', 'ruleToc.chapterName', 'ruleToc.chapterUrl', 'ruleToc.updateTime', 'ruleToc.isVolume', 'ruleToc.isVip',
   'ruleContent.content', 'ruleContent.title', 'ruleContent.replaceRegex', 'ruleContent.nextContentUrl', 'ruleContent.subContent',
 ]
-const cssSelectorStrings = (raw: any): string[] => CSS_SELECTOR_PATHS.map((p) =>
-  p.split('.').reduce<any>((o, k) => (o == null ? undefined : o[k]), raw),
+const cssSelectorStrings = (raw: RawSource | undefined): string[] => CSS_SELECTOR_PATHS.map((p) =>
+  p.split('.').reduce<unknown>((o, k) => (isRecord(o) ? o[k] : undefined), raw),
 ).filter((v): v is string => typeof v === 'string' && v.trim() !== '')
   .map((v) => v.replace(/\{\{[\s\S]*?\}\}|<js>[\s\S]*?<\/js>|@js:[\s\S]*/gi, ''))
 
-export const DEMAND_KEYS: Array<{ key: string; label: string; test: (raw: any) => boolean }> = [
+export const DEMAND_KEYS: Array<{ key: string; label: string; test: (raw: RawSource | undefined) => boolean }> = [
   { key: 'exploreUrl', label: '顶层 exploreUrl 非空（D1 的主判据）', test: (r) => rawField(r, 'exploreUrl') },
   { key: 'exploreUrlRuleExploreOnly', label: '只带 ruleExplore 容器、exploreUrl 为空（D1 的"另一半"）', test: (r) => !rawField(r, 'exploreUrl') && allStrings(r?.ruleExplore).some((s) => s.trim() !== '') },
   { key: 'exploreBookList', label: 'ruleExplore.bookList 非空（自带列表规则的发现面源）', test: (r) => boxField(r, 'ruleExplore', 'bookList') },
@@ -200,7 +228,7 @@ export const DEMAND_KEYS: Array<{ key: string; label: string; test: (raw: any) =
   // 探针关键词：`services/types.ts` 的 probeKeyword 词条只指这条命令，不写数——注释里的数没有
   // 复入口，会静默过期。
   { key: 'probeKeyword', label: 'ruleSearch.checkKeyWord 非空（顶层 checkKeyWord 也算；探针首词的需求方）', test: (r) => boxField(r, 'ruleSearch', 'checkKeyWord') || rawField(r, 'checkKeyWord') },
-  { key: 'nonTextSource', label: '非文本源（bookSourceType 有值且不是 0/"0"）', test: (r) => r?.bookSourceType !== undefined && r?.bookSourceType !== 0 && r?.bookSourceType !== '0' && r?.bookSourceType !== null && r?.bookSourceType !== '' },
+  { key: 'nonTextSource', label: '非文本源（bookSourceType 有值且不是 0/"0"）', test: (r) => r?.bookSourceType !== undefined && r.bookSourceType !== 0 && r.bookSourceType !== '0' && r.bookSourceType !== null && r.bookSourceType !== '' },
   // URL 页码形态 `<a,b,c>`：判据在**这里唯一地**写死（分桶重叠会造出假负结果，见矩阵
   // d-search-paging）——剥 js 与 `{{}}` 后 URL 位仍含 `<…>` 组，按**源**去重；别的宽度只在矩阵行
   // 留读数，不当第二个主人。
@@ -332,8 +360,10 @@ describe.skipIf(!ON)('解析面全库普查（DSH_PARSE_CENSUS=1）', () => {
         '或导入书源后再跑。',
       )
     }
-    const parsed = JSON.parse(fs.readFileSync(sj, 'utf8'))
-    const entries: any[] = Array.isArray(parsed) ? parsed : (parsed.sources ?? [])
+    const parsed: unknown = JSON.parse(fs.readFileSync(sj, 'utf8'))
+    const entries: unknown[] = Array.isArray(parsed)
+      ? parsed as unknown[]
+      : isRecord(parsed) && Array.isArray(parsed.sources) ? parsed.sources as unknown[] : []
     expect(entries.length, '普查分母为空').toBeGreaterThan(0)
 
     // ── 面 A：规则语法 ──────────────────────────────────────────────
@@ -342,8 +372,8 @@ describe.skipIf(!ON)('解析面全库普查（DSH_PARSE_CENSUS=1）', () => {
     for (const s of sites) {
       try {
         parseRule(s.rule, 'rule', s.usage)
-      } catch (e: any) {
-        const sk = `${e?.name ?? 'Error'} | ${messageSkeleton(String(e?.message ?? ''))}`
+      } catch (e) {
+        const sk = `${errNameOf(e)} | ${messageSkeleton(errMessageOf(e))}`
         const hit = ruleRejects.get(sk) ?? { n: 0, srcs: new Set<string>(), sample: s.rule.slice(0, 160) }
         hit.n++; hit.srcs.add(s.src)
         if (hit.sample.startsWith('') && hit.n === 1) hit.sample = `${s.where} ← ${s.rule.slice(0, 160)}`
@@ -357,14 +387,17 @@ describe.skipIf(!ON)('解析面全库普查（DSH_PARSE_CENSUS=1）', () => {
     const javaCalls = new Map<string, { n: number; srcs: Set<string> }>()
     const packages = new Map<string, { n: number; srcs: Set<string> }>()
     entries.forEach((e, i) => {
-      for (const text of allStrings(e?.raw ?? e)) {
+      for (const text of allStrings(rawOf(e))) {
         for (const m of text.matchAll(/\bjava\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)) {
-          const hit = javaCalls.get(m[1]) ?? { n: 0, srcs: new Set<string>() }
-          hit.n++; hit.srcs.add(String(e?.name ?? `#${i}`)); javaCalls.set(m[1], hit)
+          // 正则唯一捕获组匹配成功时必在场；缺席即提取逻辑脱节，当场抛。
+          const name = must(m[1], 'java.<方法名> 捕获组')
+          const hit = javaCalls.get(name) ?? { n: 0, srcs: new Set<string>() }
+          hit.n++; hit.srcs.add(sourceNameOf(e, `#${i}`)); javaCalls.set(name, hit)
         }
         for (const m of text.matchAll(/\bPackages\.((?:[A-Za-z_][A-Za-z0-9_]*\.)*(?:[A-Z][A-Za-z0-9_]*))/g)) {
-          const hit = packages.get(m[1]) ?? { n: 0, srcs: new Set<string>() }
-          hit.n++; hit.srcs.add(String(e?.name ?? `#${i}`)); packages.set(m[1], hit)
+          const name = must(m[1], 'Packages.<类路径> 捕获组')
+          const hit = packages.get(name) ?? { n: 0, srcs: new Set<string>() }
+          hit.n++; hit.srcs.add(sourceNameOf(e, `#${i}`)); packages.set(name, hit)
         }
       }
     })
@@ -407,7 +440,7 @@ describe.skipIf(!ON)('解析面全库普查（DSH_PARSE_CENSUS=1）', () => {
     }
 
     // ── 面 D：需求读数表（登记册那些「N 源带值」的复数入口）────────────
-    const demand = DEMAND_KEYS.map((d) => ({ key: d.key, label: d.label, test: d.test, hits: entries.filter((e: any) => d.test(e?.raw ?? e)).length }))
+    const demand = DEMAND_KEYS.map((d) => ({ key: d.key, label: d.label, test: d.test, hits: entries.filter((e) => d.test(rawOf(e))).length }))
     // 当下数出 0 的判据，必须在反空转样品上数得出东西来——否则那个 0 分不清「没人用」与「判据坏了」。
     const silentZero = demand.filter((d) => d.hits === 0 && !d.test(KITCHEN_SINK)).map((d) => d.key)
     console.log(`[parse-census] 需求读数（分母 ${entries.length} 源；括号内是判据，不是键名——同一个键常有两种数法）：`)

@@ -8,6 +8,8 @@ import type { ShelfItemField } from '../../src/tools/shelf-item.js'
 import { SHELF_META } from '../../src/shared/wire.js'
 import type { ChapterEntry, MergedBook, MergedSource, SearchGroup, SearchHit, ShelfBook } from '../../src/shared/wire.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
+import { requestUrlOf } from '../support/fetch-input.js'
+import { must } from '../support/fixture.js'
 
 /**
  * 工具 schema 契约测试：
@@ -29,16 +31,17 @@ import { makeTempDir, trackService } from '../temp-dir.js'
 type Eq<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
 type Assert<T extends true> = T
 
-/** 下面这份清单是**唯一**一份：运行时比 schema，编译期比 wire 类型 */
-const GROUP_FIELDS = ['sourceId', 'sourceName', 'status', 'statusDetail', 'hits', 'error'] as const
-const HIT_FIELDS = ['title', 'author', 'url', 'coverUrl', 'intro', 'lastChapterName', 'kind', 'wordCount'] as const
+/** 下面这份清单是**唯一**一份：运行时比 schema，编译期比 wire 类型。
+ *  `SearchGroup`/`SearchHit` 已不被这个工具直接投影，它们的清单只剩编译期绑定，故写成类型清单。 */
+type GroupFields = 'sourceId' | 'sourceName' | 'status' | 'statusDetail' | 'hits' | 'error'
+type HitFields = 'title' | 'author' | 'url' | 'coverUrl' | 'intro' | 'lastChapterName' | 'kind' | 'wordCount'
 const BOOK_FIELDS = ['title', 'author', 'relevance', 'sources', 'sourceCount'] as const
 const BOOK_SOURCE_FIELDS = ['sourceId', 'sourceName', 'title', 'author', 'url'] as const
 const CHAPTER_FIELDS = ['chapterIndex', 'name', 'url'] as const
 
 // 逐条 export（不攒第二份清单，理由同住 `tests/engine/js-protocol.test.ts`）
-export type _GroupWire = Assert<Eq<keyof SearchGroup, typeof GROUP_FIELDS[number]>>
-export type _HitWire = Assert<Eq<keyof SearchHit, typeof HIT_FIELDS[number]>>
+export type _GroupWire = Assert<Eq<keyof SearchGroup, GroupFields>>
+export type _HitWire = Assert<Eq<keyof SearchHit, HitFields>>
 export type _BookWire = Assert<Eq<keyof MergedBook, typeof BOOK_FIELDS[number]>>
 export type _BookSourceWire = Assert<Eq<keyof MergedSource, typeof BOOK_SOURCE_FIELDS[number]>>
 export type _ChapterWire = Assert<Eq<keyof ChapterEntry, Extract<typeof CHAPTER_FIELDS[number], 'name' | 'url'> | 'isVip' | 'isVolume' | 'isPay' | 'updateTime'>>
@@ -69,33 +72,40 @@ async function svc(): Promise<ReadingService> {
   const s = trackService(await ReadingService.create({
     dir,
     fetchImpl: (async (input: RequestInfo | URL) => {
-      const u = String(input)
+      const u = requestUrlOf(input)
       const body = u.includes('/search') ? SEARCH_HTML
         : u.includes('/c/1.html') ? CONTENT_HTML
           : u.includes('/book/1') ? TOC_HTML : null
       return body === null
         ? new Response('', { status: 404 })
         : new Response(body, { headers: { 'content-type': 'text/html; charset=utf-8' } })
-    }) as never,
+    }),
   }))
-  sourceId = (await s.importOne(rawSource)).sourceId!
+  sourceId = must((await s.importOne(rawSource)).sourceId, '导入回执没有 sourceId')
   await s.probe(sourceId)
   return s
 }
 
 const toolsOf = (s: ReadingService): ReturnType<typeof buildTools> => buildTools(s)
 const schemaOf = (s: ReadingService, name: string): JsonSchemaNode =>
-  toolsOf(s).find((t) => t.name === name)!.output.schema
+  must(toolsOf(s).find((t) => t.name === name), `工具 ${name}`).output.schema
+
+/** 沿路径下钻一段：段缺席（items 或该属性名）即 schema 与契约表不符——响亮抛，不静默读空 */
+const stepOf = (node: JsonSchemaNode, p: string): JsonSchemaNode => {
+  const next = p === '[]' ? node.items : node.properties?.[p]
+  if (next === undefined) throw new Error(`schema 路径段不存在：${p}`)
+  return next
+}
 
 /** 对象节点的属性名集（契约表断言用）：路径段=属性名，'[]'=穿数组 items（编译后 required 是兄弟数组） */
 const propsOf = (node: JsonSchemaNode, ...path: string[]): Set<string> => {
   let cur: JsonSchemaNode = node
-  for (const p of path) cur = p === '[]' ? cur.items! : cur.properties![p]
+  for (const p of path) cur = stepOf(cur, p)
   return new Set(Object.keys(cur.properties ?? {}))
 }
 const requiredOf = (node: JsonSchemaNode, ...path: string[]): string[] => {
   let cur: JsonSchemaNode = node
-  for (const p of path) cur = p === '[]' ? cur.items! : cur.properties![p]
+  for (const p of path) cur = stepOf(cur, p)
   return [...(cur.required ?? [])].sort()
 }
 
@@ -121,7 +131,7 @@ describe('工具 schema 契约（execute 输出 ≡ 声明 schema；schema ≡ w
       ['dshnovel_shelf', { action: 'remove', bookKey: 'https://s.com/book/9/' }],
     ]
     for (const [name, args] of calls) {
-      const tool = toolsOf(s).find((t) => t.name === name)!
+      const tool = must(toolsOf(s).find((t) => t.name === name), `工具 ${name}`)
       const value = await tool.execute(args, exec)
       const violations = validateJsonSchemaValue(tool.output.schema, value, name)
       expect(violations, `${name} 输出违反自身声明 schema：${violations.join('；')}`).toEqual([])

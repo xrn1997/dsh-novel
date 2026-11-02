@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { resolveConfig } from '../../src/config.js'
 import { ReadingService } from '../../src/services/reading.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
+import { must, pick } from '../support/fixture.js'
 
 function ref<T>(value: T) {
   let current = value
@@ -17,10 +18,10 @@ describe('ReadingService 活配置', () => {
     const max = ref(1024)
     const svc = trackService(await ReadingService.create({
       dir,
-      config: resolveConfig({ localImportMaxBytes: max } as any),
+      config: resolveConfig({ localImportMaxBytes: max }),
     }))
     expect(svc.localImportMaxBytes).toBe(1024)
-    ;(max as any)[Symbol.for('cosmokit.volatile.write')](2048)
+    flip(max, 2048)
     expect(svc.localImportMaxBytes).toBe(2048)
     svc.dispose()
     await svc.flush()
@@ -28,8 +29,11 @@ describe('ReadingService 活配置', () => {
 })
 
 /** 活 ref 的写口（Loader 侧就是按这个 symbol 写回当前值） */
-function flip<T>(target: object, value: T): void {
-  const write = (target as Record<symbol, (next: T) => void>)[Symbol.for('cosmokit.volatile.write')]
+function flip(target: object, value: unknown): void {
+  const write = must(
+    (target as Record<symbol, ((next: unknown) => void) | undefined>)[Symbol.for('cosmokit.volatile.write')],
+    '(target as Record<symbol, ((next: unkn…',
+  )
   write(value)
 }
 
@@ -50,13 +54,13 @@ describe('ReadingService 活配置：服务侧每轮现读', () => {
     const timeoutMs = ref(20)
     const svc = trackService(await ReadingService.create({
       dir,
-      config: resolveConfig({ searchTimeoutMs: timeoutMs } as never),
+      config: resolveConfig({ searchTimeoutMs: timeoutMs }),
       fetchImpl: (() => new Promise(() => {})) as never,
     }))
     await svc.importOne(liveSource('超时源', 'https://live.example.com'))
-    expect((await svc.search('斗罗'))[0].error?.message).toMatch(/请求超时 20ms/)
+    expect(pick(await svc.search('斗罗'), 0).error?.message).toMatch(/请求超时 20ms/)
     flip(timeoutMs, 60)
-    expect((await svc.search('斗罗'))[0].error?.message).toMatch(/请求超时 60ms/)
+    expect(pick(await svc.search('斗罗'), 0).error?.message).toMatch(/请求超时 60ms/)
   })
 
   it('jsTimeoutMs：第二次搜索用翻过的新沙箱预算', async () => {
@@ -64,14 +68,14 @@ describe('ReadingService 活配置：服务侧每轮现读', () => {
     const jsTimeoutMs = ref(60)
     const svc = trackService(await ReadingService.create({
       dir,
-      config: resolveConfig({ jsTimeoutMs } as never),
+      config: resolveConfig({ jsTimeoutMs }),
       fetchImpl: (async () => new Response('<html><body><div class="b"><a href="/book/1/">斗罗</a><span>唐家</span></div></body></html>',
-        { headers: { 'content-type': 'text/html; charset=utf-8' } })) as never,
+        { headers: { 'content-type': 'text/html; charset=utf-8' } })),
     }))
     await svc.importOne(liveSource('JS源', 'https://live.example.com', busyJs(400, 'https://live.example.com')))
-    expect((await svc.search('斗罗'))[0].error?.message).toMatch(/脚本超时（>60ms）/)
+    expect(pick(await svc.search('斗罗'), 0).error?.message).toMatch(/脚本超时（>60ms）/)
     flip(jsTimeoutMs, 120)
-    expect((await svc.search('斗罗'))[0].error?.message).toMatch(/脚本超时（>120ms）/)
+    expect(pick(await svc.search('斗罗'), 0).error?.message).toMatch(/脚本超时（>120ms）/)
   })
 
   it('searchParallel：新一轮的批步长按当前值走（上一轮的步长不带过来）', async () => {
@@ -81,14 +85,14 @@ describe('ReadingService 活配置：服务侧每轮现读', () => {
     let peak = 0
     const svc = trackService(await ReadingService.create({
       dir,
-      config: resolveConfig({ searchParallel } as never),
+      config: resolveConfig({ searchParallel }),
       fetchImpl: (async () => {
         peak = Math.max(peak, ++inFlight)            // 进入即计数：同一批的两条都在此叠起来
         await new Promise((r) => setTimeout(r, 0))
         inFlight -= 1
         return new Response('<html><body><div class="b"><a href="/book/1/">斗罗</a><span>唐家</span></div></body></html>',
           { headers: { 'content-type': 'text/html; charset=utf-8' } })
-      }) as never,
+      }),
     }))
     await svc.importOne(liveSource('甲源', 'https://a.example.com'))
     await svc.importOne(liveSource('乙源', 'https://b.example.com'))
@@ -105,9 +109,9 @@ describe('ReadingService 活配置：服务侧每轮现读', () => {
     const searchParallel = ref(2)
     const svc = trackService(await ReadingService.create({
       dir,
-      config: resolveConfig({ searchParallel } as never),
+      config: resolveConfig({ searchParallel }),
       fetchImpl: (async () => new Response('<html></html>',
-        { headers: { 'content-type': 'text/html; charset=utf-8' } })) as never,
+        { headers: { 'content-type': 'text/html; charset=utf-8' } })),
     }))
     await svc.importOne(liveSource('甲源', 'https://a.example.com'))
     flip(searchParallel, 0)

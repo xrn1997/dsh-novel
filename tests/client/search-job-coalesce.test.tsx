@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useSearchJob } from '../../src/client/search-job.js'
 import type { SearchGroup, SearchJobSnapshot } from '../../src/shared/wire.js'
 import { makeCoreDeps } from './fake-deps.js'
+import { pick } from '../support/fixture.js'
 
 afterEach(() => {
   cleanup()
@@ -39,14 +40,14 @@ describe('搜索观察通道：大轮次合并 UI 更新', () => {
     expect(frames).toHaveLength(1)
 
     await act(async () => {
-      for (let i = 1; i <= 20; i++) frames[0]!(JSON.stringify({ job: snapshot(i) }))
+      for (let i = 1; i <= 20; i++) pick(frames, 0)(JSON.stringify({ job: snapshot(i) }))
     })
     // 前 16 组即时落；17..20 合并进一次待发更新
     expect(hook.result.current.round?.groups).toHaveLength(16)
     await act(async () => { vi.advanceTimersByTime(200) })
     expect(hook.result.current.round?.groups).toHaveLength(20)
 
-    await act(async () => { frames[0]!(JSON.stringify({ job: snapshot(21, 'done') })) })
+    await act(async () => { pick(frames, 0)(JSON.stringify({ job: snapshot(21, 'done') })) })
     expect(hook.result.current.round?.groups).toHaveLength(21)
     expect(hook.result.current.round?.running).toBe(false)
   })
@@ -63,11 +64,11 @@ describe('搜索观察通道：大轮次合并 UI 更新', () => {
     const hook = renderHook(() => useSearchJob(deps))
     await act(async () => { await Promise.resolve() })
     await act(async () => {
-      for (let i = 1; i <= 20; i++) frames[0]!(JSON.stringify({ job: snapshot(i) }))
+      for (let i = 1; i <= 20; i++) pick(frames, 0)(JSON.stringify({ job: snapshot(i) }))
     })
     expect(hook.result.current.round?.groups).toHaveLength(16)   // 17..20 还在待发里
 
-    await act(async () => { frames[0]!(JSON.stringify({ job: snapshot(1, 'running', 'K') })) })
+    await act(async () => { pick(frames, 0)(JSON.stringify({ job: snapshot(1, 'running', 'K') })) })
     expect(hook.result.current.round?.id).toBe('K')
     await act(async () => { vi.advanceTimersByTime(200) })
     expect(hook.result.current.round?.id).toBe('K')

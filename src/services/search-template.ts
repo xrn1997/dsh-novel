@@ -29,11 +29,13 @@ export async function preEvaluateUrlJs(
   let m: RegExpExecArray | null
   while ((m = re.exec(template)) !== null) {
     if (m.index > last) parts.push({ kind: 'text', text: template.slice(last, m.index) })
-    if (isPlaceholderExpr(m[1], vars)) {
+    // 表达式正文按 `{{` / `}}` 两端从原串切出（等价于第一个捕获组，但不经过「可能越界的索引」）
+    const expr = template.slice(m.index + 2, m.index + m[0].length - 2)
+    if (isPlaceholderExpr(expr, vars)) {
       // 纯变量占位原样保留，交给后续 interpolateUrl（保持既有编码口径）
       parts.push({ kind: 'text', text: m[0] })
     } else {
-      parts.push({ kind: 'js', expr: m[1] })
+      parts.push({ kind: 'js', expr })
     }
     last = m.index + m[0].length
   }
@@ -80,7 +82,7 @@ export async function resolveJsSearchTemplate(
   let start = 0
   let result = template
   for (const m of blocks) {
-    const at = m.index ?? 0
+    const at = m.index
     result = spliceLiteral(result, template.slice(start, at))
     const code = nonEmpty(m[2]) ?? nonEmpty(m[1]) ?? ''
     const outcome = await scriptOf(source, code, key, page, fetcher, m[0].slice(0, 200), jsTimeoutMs, result)

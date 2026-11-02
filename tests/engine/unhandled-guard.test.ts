@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { pick } from '../support/fixture.js'
 
 /** 防线 sink 注入：引擎不认识 services，前缀/去向由组合根递进来；这里钉「注入的 sink 真收到
  *  告警」这一条（默认 console sink 的离线行为另由 log 缝的缺省路径覆盖）。 */
@@ -12,8 +13,8 @@ describe('unhandledRejection guard 的注入 sink', () => {
     try {
       process.emit('unhandledRejection', new Error('boom'), Promise.resolve())
       expect(warn).toHaveBeenCalledTimes(1)
-      expect(String(warn.mock.calls[0][0])).toContain('未处理的 rejection')
-      expect(warn.mock.calls[0][1]).toBe('boom')
+      expect(String(pick(warn.mock.calls, 0)[0])).toContain('未处理的 rejection')
+      expect(pick(warn.mock.calls, 0)[1]).toBe('boom')
     } finally {
       consoleSpy.mockRestore()
       detach()
@@ -32,7 +33,7 @@ describe('unhandledRejection guard 的注入 sink', () => {
         facet: 'content', segmentIndex: 0, segmentRaw: 'x', hits: 0,
       }), Promise.resolve())
       expect(error).toHaveBeenCalledTimes(1)
-      expect(String(error.mock.calls[0][0]), '读数要说清是谁家的错').toContain('插件内部错误')
+      expect(String(pick(error.mock.calls, 0)[0]), '读数要说清是谁家的错').toContain('插件内部错误')
       expect(warn, '同一条不该两档都出声').not.toHaveBeenCalled()
     } finally {
       detach()
@@ -65,7 +66,7 @@ describe('unhandledRejection guard 的注入 sink', () => {
     try {
       process.emit('unhandledRejection', new RegexDeadlineError('(?:a+)+$', 200), Promise.resolve())
       expect(error, '漏转 = 插件 bug：升档不降档').toHaveBeenCalledTimes(1)
-      expect(String(error.mock.calls[0][0]), '读数要认得出是插件内部的错').toContain('插件内部错误')
+      expect(String(pick(error.mock.calls, 0)[0]), '读数要认得出是插件内部的错').toContain('插件内部错误')
       expect(warn, '不许以「沙箱脚本产生」的标签混进脚本噪声').not.toHaveBeenCalled()
     } finally {
       detach()
@@ -81,7 +82,7 @@ describe('unhandledRejection guard 的注入 sink', () => {
     try {
       process.emit('unhandledRejection', new RegexDeadlineError('(?:a+)+$', 200), Promise.resolve())
       expect(warn).toHaveBeenCalledTimes(1)
-      expect(String(warn.mock.calls[0][0]), '退 warn 可以，改口说「沙箱脚本产生」不行').toContain('插件内部错误')
+      expect(String(pick(warn.mock.calls, 0)[0]), '退 warn 可以，改口说「沙箱脚本产生」不行').toContain('插件内部错误')
     } finally {
       detach()
     }
@@ -99,8 +100,8 @@ describe('unhandledRejection guard 的注入 sink', () => {
         facet: 'content', segmentIndex: 0, segmentRaw: '???',
       }), Promise.resolve())
       expect(errorSpy).toHaveBeenCalledTimes(1)
-      expect(errorSpy.mock.calls[0][0], '缺省 sink 自己缀前缀（注入方的前缀归那条腿）').toBe('[dsh-novel]')
-      expect(String(errorSpy.mock.calls[0][1])).toContain('插件内部错误')
+      expect(pick(errorSpy.mock.calls, 0)[0], '缺省 sink 自己缀前缀（注入方的前缀归那条腿）').toBe('[dsh-novel]')
+      expect(String(pick(errorSpy.mock.calls, 0)[1])).toContain('插件内部错误')
       expect(warnSpy, '标签说「脚本产生」而它来自插件自己的代码——谎报要红').not.toHaveBeenCalled()
     } finally {
       errorSpy.mockRestore()

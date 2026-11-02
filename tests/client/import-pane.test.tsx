@@ -7,6 +7,7 @@ import { ImportPane } from '../../src/client/views/SettingsImportPane.js'
 import { makeDeps } from './fake-deps.js'
 import type { SettingsDeps } from '../../src/client/deps.js'
 import type { JobState } from '../../src/client/views/types.js'
+import { pick } from '../support/fixture.js'
 
 /**
  * 导入区接线测试：ImportPane 的 deps seam 由本文件经假 deps 驱动，三条路径各钉一条：
@@ -62,8 +63,8 @@ describe('ImportPane 接线（deps seam 驱动）', () => {
     fireEvent.change(fileInput(container), { target: { files: [file] } })
 
     await waitFor(() => expect(deps.pushError).toHaveBeenCalledTimes(1))
-    expect(String(deps.pushError.mock.calls[0][0])).toContain('导入提交失败')
-    expect(String(deps.pushError.mock.calls[0][0])).toContain('boom')
+    expect(String(pick(pick(deps.pushError.mock.calls, 0), 0))).toContain('导入提交失败')
+    expect(String(pick(pick(deps.pushError.mock.calls, 0), 0))).toContain('boom')
   })
 
   it('粘贴小道：格式预检通过后按钮放行 → startImportJob 收「粘贴内容」单条任务', async () => {

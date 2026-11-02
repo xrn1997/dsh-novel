@@ -22,7 +22,7 @@ describe('cityMeta（卡片元信息：缺字段就不显示）', () => {
     expect(cityMeta(book({ author: null }))).toBe('')
   })
   it('缺中间段不留空位（不出现「 · 」双分隔符）', () => {
-    expect(cityMeta(book({ kind: undefined, wordCount: '92.4 万字' }))).toBe('青衫客 · 92.4 万字')
+    expect(cityMeta(book({ wordCount: '92.4 万字' }))).toBe('青衫客 · 92.4 万字')
   })
 })
 

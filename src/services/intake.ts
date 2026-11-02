@@ -30,8 +30,10 @@ export class SourceIntake {
   private readonly byKey = new Map<string, NovelSource[]>()
   /** 批内已落键：批内重复留首条（不与「库内已有」的替换语义混用） */
   private readonly batchKeys = new Set<string>()
+  private readonly registry: SourceRegistry
 
-  constructor(private readonly registry: SourceRegistry) {
+  constructor(registry: SourceRegistry) {
+    this.registry = registry
     for (const s of registry.list()) {
       const k = dedupKey(s.baseUrl)
       const arr = this.byKey.get(k)
@@ -53,8 +55,10 @@ export class SourceIntake {
       return { kind: 'skipped', reason: 'batch', name, existing: this.byKey.get(key)?.[0] ?? null, warnings: result.warnings }
     }
     const existing = this.byKey.get(key)
-    if (existing !== undefined && existing.length > 0) {
-      const preferred = existing.find((s) => s.status === 'verified') ?? existing[0]
+    // 表头那一条也是「同址已有源」的候选：取不到（空桶）与查不到同路，都落到下面的新增分支
+    const head = existing?.[0]
+    if (existing !== undefined && head !== undefined) {
+      const preferred = existing.find((s) => s.status === 'verified') ?? head
       if (preferred.status === 'verified') {
         this.batchKeys.add(key)                       // verified 跳过也占批内键（两条导入路径同口径）
         return { kind: 'skipped', reason: 'verified', name, existing: preferred, warnings: result.warnings }

@@ -3,6 +3,7 @@ import { followPages } from '../../src/services/pagination.js'
 import { listValue } from '../../src/services/bridge.js'
 import { evaluate } from '../../src/engine/index.js'
 import type { Page, SubRuleEval } from '../../src/services/bridge.js'
+import { must } from '../support/fixture.js'
 
 // 3 页站点：/p1 /p2 /p3，每页 2 条目 + a.next；/p3 无 next
 function site(): Map<string, Page> {
@@ -16,7 +17,7 @@ function site(): Map<string, Page> {
   p(1, '/p2'); p(2, '/p3'); p(3, null)
   return pages
 }
-const subEval: SubRuleEval = async (rule, ctx, facet) => evaluate(rule, { html: ctx.html, baseUrl: ctx.baseUrl }, facet)
+const subEval: SubRuleEval = async (rule, ctx, facet) => evaluate(rule, ctx, facet)
 const extract = async (page: Page): Promise<string[]> =>
   listValue(await evaluate('@css:.it@textNodes', { html: page.body, baseUrl: page.url }, 'toc'), 'toc') ?? []
 const keyOf = (s: string) => s
@@ -31,15 +32,15 @@ const candidateEntry = (): [string, Page] => ['https://x.com/p1', {
 describe('followPages 翻页闸（停止判据次序）', () => {
   it('正常跟完 3 页 → end，items 不重复', async () => {
     const pages = site()
-    const r = await followPages('https://x.com/p1', async (u) => pages.get(u)!, extract, 'tag.a.next@href', keyOf, { maxPages: 10 }, 'toc', subEval)
+    const r = await followPages('https://x.com/p1', async (u) => must(pages.get(u), 'pages 里查到的那一条'), extract, 'tag.a.next@href', keyOf, { maxPages: 10 }, 'toc', subEval)
     expect(r.pages).toBe(3)
     expect(r.stoppedBy).toBe('end')
     expect(r.items).toEqual(['条1A', '条1B', '条2A', '条2B', '条3A', '条3B'])
   })
   it('回环（越界页重复首页内容）→ loop 停，重复条目不收', async () => {
     const pages = site()
-    pages.set('https://x.com/p3', { url: 'https://x.com/p3', body: pages.get('https://x.com/p1')!.body }) // p3 复制 p1 内容
-    const r = await followPages('https://x.com/p1', async (u) => pages.get(u)!, extract, 'tag.a.next@href', keyOf, { maxPages: 10 }, 'toc', subEval)
+    pages.set('https://x.com/p3', { url: 'https://x.com/p3', body: must(pages.get('https://x.com/p1'), 'pages 里查到的那一条').body }) // p3 复制 p1 内容
+    const r = await followPages('https://x.com/p1', async (u) => must(pages.get(u), 'pages 里查到的那一条'), extract, 'tag.a.next@href', keyOf, { maxPages: 10 }, 'toc', subEval)
     expect(r.stoppedBy).toBe('loop')
     expect(r.pages).toBe(3)
     expect(new Set(r.items).size).toBe(r.items.length)
@@ -50,14 +51,14 @@ describe('followPages 翻页闸（停止判据次序）', () => {
       ['https://x.com/p2', { url: 'https://x.com/p2', body: '<p>这页没有任何条目</p><a class="next" href="/p3">x</a>' }],
       ['https://x.com/p3', { url: 'https://x.com/p3', body: '<div class="it">C</div>' }],
     ])
-    const r = await followPages('https://x.com/p1', async (u) => pages.get(u)!, extract, 'tag.a.next@href', keyOf, { maxPages: 10 }, 'toc', subEval)
+    const r = await followPages('https://x.com/p1', async (u) => must(pages.get(u), 'pages 里查到的那一条'), extract, 'tag.a.next@href', keyOf, { maxPages: 10 }, 'toc', subEval)
     expect(r.stoppedBy).toBe('zero-new')
     expect(r.pages).toBe(2) // p2 空页即停，不进 p3
     expect(r.items).toEqual(['A'])
   })
   it('上限闸 cap', async () => {
     const mk = (n: number): Page => ({ url: `https://x.com/p${n}`, body: `<div class="it">条${n}</div><a class="next" href="/p${n + 1}">x</a>` })
-    const r = await followPages('https://x.com/p1', async (u) => Promise.resolve(mk(Number(u.match(/p(\d+)/)![1]))), extract, 'tag.a.next@href', keyOf, { maxPages: 3 }, 'toc', subEval)
+    const r = await followPages('https://x.com/p1', async (u) => Promise.resolve(mk(Number(must(u.match(/p(\d+)/), '页码捕获组')[1]))), extract, 'tag.a.next@href', keyOf, { maxPages: 3 }, 'toc', subEval)
     expect(r.stoppedBy).toBe('cap')
     expect(r.pages).toBe(3)
     expect(r.items).toEqual(['条1', '条2', '条3'])
@@ -68,7 +69,7 @@ describe('followPages 翻页闸（停止判据次序）', () => {
       ['https://x.com/c/1', { url: 'https://x.com/c/1', body: '<div class="it">本章正文</div><a class="next" href="/c/2">下一章</a>' }],
       ['https://x.com/c/2', { url: 'https://x.com/c/2', body: '<div class="it">下一章正文</div>' }],
     ])
-    const r = await followPages('https://x.com/c/1', async (u) => pages.get(u)!, extract, 'tag.a.next@href', keyOf,
+    const r = await followPages('https://x.com/c/1', async (u) => must(pages.get(u), 'pages 里查到的那一条'), extract, 'tag.a.next@href', keyOf,
       { maxPages: 10, sameChapterBase: 'https://x.com/c/1' }, 'content', subEval)
     expect(r.stoppedBy).toBe('chapter-boundary')
     expect(r.pages).toBe(1)
@@ -79,7 +80,7 @@ describe('followPages 翻页闸（停止判据次序）', () => {
       ['https://x.com/c/1.html', { url: 'https://x.com/c/1.html', body: '<div class="it">第一页</div><a class="next" href="/c/1p2.html">下一页</a>' }],
       ['https://x.com/c/1p2.html', { url: 'https://x.com/c/1p2.html', body: '<div class="it">第二页</div>' }],
     ])
-    const r = await followPages('https://x.com/c/1.html', async (u) => pages.get(u)!, extract, 'tag.a.next@href', keyOf,
+    const r = await followPages('https://x.com/c/1.html', async (u) => must(pages.get(u), 'pages 里查到的那一条'), extract, 'tag.a.next@href', keyOf,
       { maxPages: 10, sameChapterBase: 'https://x.com/c/1.html' }, 'content', subEval)
     expect(r.stoppedBy).toBe('end')
     expect(r.pages).toBe(2)
@@ -93,7 +94,7 @@ describe('followPages 目录知识闸 + 列表 next + 部分重叠不停（legad
       ['https://x.com/c/1', { url: 'https://x.com/c/1', body: '<div class="it">本章正文</div><a class="next" href="/c/2">下一章</a>' }],
       ['https://x.com/c/2', { url: 'https://x.com/c/2', body: '<div class="it">下一章正文</div>' }],
     ])
-    const r = await followPages('https://x.com/c/1', async (u) => pages.get(u)!, extract, 'tag.a.next@href', keyOf,
+    const r = await followPages('https://x.com/c/1', async (u) => must(pages.get(u), 'pages 里查到的那一条'), extract, 'tag.a.next@href', keyOf,
       { maxPages: 10, stopUrls: new Set(['https://x.com/c/2']) }, 'content', subEval)
     expect(r.stoppedBy).toBe('chapter-boundary')
     expect(r.pages).toBe(1)
@@ -105,7 +106,7 @@ describe('followPages 目录知识闸 + 列表 next + 部分重叠不停（legad
       ['https://x.com/read.php?id=1&cid=10&page=2', { url: 'https://x.com/read.php?id=1&cid=10&page=2', body: '<div class="it">第二页</div>' }],
     ])
     // 目录知识：下一章是 cid=11——分页地址 cid=10&page=2 不在其中 → 放行
-    const r = await followPages('https://x.com/read.php?id=1&cid=10', async (u) => pages.get(u)!, extract, 'tag.a.next@href', keyOf,
+    const r = await followPages('https://x.com/read.php?id=1&cid=10', async (u) => must(pages.get(u), 'pages 里查到的那一条'), extract, 'tag.a.next@href', keyOf,
       { maxPages: 10, stopUrls: new Set(['https://x.com/read.php?id=1&cid=11']) }, 'content', subEval)
     expect(r.stoppedBy).toBe('end')
     expect(r.pages).toBe(2)
@@ -116,7 +117,7 @@ describe('followPages 目录知识闸 + 列表 next + 部分重叠不停（legad
       ['https://x.com/c/1', { url: 'https://x.com/c/1', body: `<div class="it">第一页</div><a class="next" href='/c/1,{"webView":true}'>下一页</a>` }],
       ['https://x.com/c/1,{"webView":true}', { url: 'https://x.com/c/1,{"webView":true}', body: '<div class="it">第二页</div>' }],
     ])
-    const r = await followPages('https://x.com/c/1', async (u) => pages.get(u)!, extract, 'tag.a.next@href', keyOf,
+    const r = await followPages('https://x.com/c/1', async (u) => must(pages.get(u), 'pages 里查到的那一条'), extract, 'tag.a.next@href', keyOf,
       {
         maxPages: 10,
         stopUrls: new Set(['https://x.com/c/1', 'https://x.com/c/2']),
@@ -135,7 +136,7 @@ describe('followPages 目录知识闸 + 列表 next + 部分重叠不停（legad
       ['https://x.com/book/1/2.html', { url: 'https://x.com/book/1/2.html', body: '<div class="it">第二页</div><a class="next" href="/book/1/3.html">下一章</a>' }],
       ['https://x.com/book/1/3.html', { url: 'https://x.com/book/1/3.html', body: '<div class="it">下一章正文</div>' }],
     ])
-    const r = await followPages('https://x.com/book/1/1.html', async (u) => pages.get(u)!, extract, 'tag.a.next@href', keyOf,
+    const r = await followPages('https://x.com/book/1/1.html', async (u) => must(pages.get(u), 'pages 里查到的那一条'), extract, 'tag.a.next@href', keyOf,
       {
         maxPages: 10,
         sameChapterBase: 'https://x.com/book/1/1.html',
@@ -152,7 +153,7 @@ describe('followPages 目录知识闸 + 列表 next + 部分重叠不停（legad
       ['https://x.com/q2', { url: 'https://x.com/q2', body: '<div class="it">页B</div><a class="next" href="/q9">深层</a>' }],
       ['https://x.com/q9', { url: 'https://x.com/q9', body: '<div class="it">不该被抓</div>' }],
     ])
-    const r = await followPages('https://x.com/p1', async (u) => pages.get(u)!, extract, '.nx a@href', keyOf,
+    const r = await followPages('https://x.com/p1', async (u) => must(pages.get(u), 'pages 里查到的那一条'), extract, '.nx a@href', keyOf,
       { maxPages: 10 }, 'toc', subEval)
     expect(r.pages).toBe(3)
     expect(r.items).toEqual(['首页', '页A', '页B'])   // q9 不抓（多候选不递归）
@@ -172,7 +173,7 @@ describe('followPages 目录知识闸 + 列表 next + 部分重叠不停（legad
       ['https://x.com/q1', { url: 'https://x.com/q1', body: '<div class="it">首页</div>' }],  // 与入口页同内容
       ['https://x.com/q2', { url: 'https://x.com/q2', body: '<div class="it">页B</div>' }],
     ])
-    const r = await followPages('https://x.com/p1', async (u) => pages.get(u)!, extract, '.nx a@href', keyOf,
+    const r = await followPages('https://x.com/p1', async (u) => must(pages.get(u), 'pages 里查到的那一条'), extract, '.nx a@href', keyOf,
       { maxPages: 10 }, 'toc', subEval)
     expect(r.items).toEqual(['首页', '页B'])
     expect(r.pages).toBe(3)
@@ -185,7 +186,7 @@ describe('followPages 目录知识闸 + 列表 next + 部分重叠不停（legad
       ['https://x.com/q2', { url: 'https://x.com/q2', body: '<div class="it">页B</div>' }],
       ['https://x.com/q9', { url: 'https://x.com/q9', body: '<div class="it">不该被抓</div>' }],
     ])
-    const r = await followPages('https://x.com/p1', async (u) => pages.get(u)!, extract, '.nx a@href', keyOf,
+    const r = await followPages('https://x.com/p1', async (u) => must(pages.get(u), 'pages 里查到的那一条'), extract, '.nx a@href', keyOf,
       { maxPages: 10 }, 'toc', subEval)
     expect(r.items).toEqual(['首页', '页B'])
     expect(r.stoppedBy).toBe('end')
@@ -196,7 +197,7 @@ describe('followPages 目录知识闸 + 列表 next + 部分重叠不停（legad
       ['https://x.com/t2', { url: 'https://x.com/t2', body: '<div class="it">B</div><div class="it">C</div><a class="next" href="/t3">n</a>' }],
       ['https://x.com/t3', { url: 'https://x.com/t3', body: '<div class="it">D</div>' }],
     ])
-    const r = await followPages('https://x.com/t1', async (u) => pages.get(u)!, extract, 'tag.a.next@href', keyOf,
+    const r = await followPages('https://x.com/t1', async (u) => must(pages.get(u), 'pages 里查到的那一条'), extract, 'tag.a.next@href', keyOf,
       { maxPages: 10 }, 'toc', subEval)
     expect(r.stoppedBy).toBe('end')
     expect(r.pages).toBe(3)

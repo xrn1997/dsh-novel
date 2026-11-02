@@ -62,7 +62,7 @@ describe.skipIf(!ENABLED)('浏览器几何：书籍详情浮层的本源那一�
   let browser: Browser
 
   beforeAll(async () => { browser = await launchBrowser() }, 90_000)
-  afterAll(async () => { await browser?.close() })
+  afterAll(async () => { await browser.close() })
 
   async function measure(b: ExploreBook): Promise<RowRects> {
     const markup = renderToStaticMarkup(

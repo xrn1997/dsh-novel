@@ -96,8 +96,9 @@ function stable(v: RuleValue | undefined): string {
   return Array.isArray(v) ? v.map(encodeOrdered).join('\u0002') : encodeOrdered(v)
 }
 
-/** 对象 → 键排序的 `k=v&…`（键序不入指纹） */
-function encodeOrdered(o: Record<string, unknown>): string {
+/** 对象 → 键排序的 `k=v&…`（键序不入指纹）。值的真实域是规则标量（字符串）——
+ *  收成 unknown 只会让插值退化，按域写清即可（将来值域退化由上面 `RuleValue` 那道闸抓）。 */
+function encodeOrdered(o: Record<string, string>): string {
   return Object.keys(o).sort().map((k) => `${k}=${o[k]}`).join('&')
 }
 

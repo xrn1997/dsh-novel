@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { evalAllInOne } from '../../src/engine/allinone.js'
 import { engineValueToString, engineValueToStrings } from '../../src/engine/js-utils.js'
 import { RuleEvalError } from '../../src/engine/errors.js'
+import { pick } from '../support/fixture.js'
+import { rowsOf } from './value.js'
 
 const L = { segmentIndex: 0, segmentRaw: ':pattern' }
 
@@ -22,7 +24,7 @@ describe('AllInOne 整页正则（二维产物不压平）', () => {
     // 可选组 `(isvip)?` 第二行不参与：JS 给 undefined，Kotlin groupValues 给 ""
     const v = evalAllInOne({ kind: 'allinone', pattern: '(\\d+)" class="(isvip)?[^"]*name[^>]*>([^<]*)', flags: '' },
       '7" class="isvip name">第一章< 8" class=" name">第二章<', L, 'toc')
-    expect((v as any).rows).toEqual([
+    expect(rowsOf(v)).toEqual([
       ['7" class="isvip name">第一章', '7', 'isvip', '第一章'],
       ['8" class=" name">第二章', '8', '', '第二章'],
     ])
@@ -37,7 +39,7 @@ describe('AllInOne 整页正则（二维产物不压平）', () => {
   // 本用例保留原意（无捕获组 → 单元素行 [full]）
   it('无捕获组 → 单元素行', () => {
     const v = evalAllInOne({ kind: 'allinone', pattern: '\\d+_\\d+', flags: '' }, tocHtml, L, 'toc')
-    expect((v as any).rows).toEqual([['30394_20940996'], ['30394_20940997']])
+    expect(rowsOf(v)).toEqual([['30394_20940996'], ['30394_20940997']])
   })
 
   it('AllInOne 值走 js 宿主面：整段（group 0）排在每行最前——第三读侧的现状钉子', () => {
@@ -52,12 +54,12 @@ describe('AllInOne 整页正则（二维产物不压平）', () => {
     ].join('\n'))
     const lines = engineValueToStrings(v)
     expect(lines).toHaveLength(2)
-    expect(lines[0].startsWith('href="'), '整段没排在最前——读侧形状变了，先回矩阵行改口径再动代码').toBe(true)
+    expect(pick(lines, 0).startsWith('href="'), '整段没排在最前——读侧形状变了，先回矩阵行改口径再动代码').toBe(true)
   })
 
   it('零长度匹配强制前进，不死循环', () => {
     const v = evalAllInOne({ kind: 'allinone', pattern: 'x*', flags: '' }, 'axb', L, 'content')
-    expect((v as any).rows).toEqual([[''], ['x'], [''], ['']])
+    expect(rowsOf(v)).toEqual([[''], ['x'], [''], ['']])
   })
 
   it('非法正则 → RuleEvalError（hits=0，段级定位，消息含坏 pattern）', () => {

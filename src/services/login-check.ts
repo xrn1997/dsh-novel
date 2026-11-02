@@ -44,8 +44,9 @@ export async function applyLoginCheck(
       headers: page.headers ?? {},
       cookies: cookiesOf(page.setCookie),
       body,
-      contentType: page.contentType,
-      charset: page.charset,
+      // 响应描述符跨 JSON 桥进沙箱：这两格缺席即不建键（序列化后同样是丢掉 undefined）
+      ...(page.contentType === undefined ? {} : { contentType: page.contentType }),
+      ...(page.charset === undefined ? {} : { charset: page.charset }),
     }),
     loc: { segmentIndex: 0, segmentRaw: code },
   })
@@ -63,8 +64,8 @@ export async function applyLoginCheck(
     }
     if (p.__host === 'response' && p.__data !== undefined) {
       const d = p.__data
-      const newBody = d.body === undefined ? body : String(d.body)
-      const newUrl = resolveRetryUrl(d.url === undefined ? page.finalUrl : String(d.url), page.finalUrl)
+      const newBody = scalarText(d.body) ?? body
+      const newUrl = resolveRetryUrl(scalarText(d.url) ?? page.finalUrl, page.finalUrl)
       const newStatus = typeof d.statusCode === 'number' ? d.statusCode : page.status
       const newHeaders = stringRecordOf(d.headers) ?? page.headers
       const newContentType = typeof d.contentType === 'string' ? d.contentType : page.contentType
@@ -107,6 +108,16 @@ function resolveRetryUrl(raw: string, base: string): string {
   try { return new URL(raw, base).toString() } catch { return raw }
 }
 
+/** JSON 标量 → 文本（与 `String()` 同口径：字符串原样、数字/布尔按字面、null 成字）。对象与数组
+ *  不在这条转换里：`String()` 在它们身上只会给出一句 "[object Object]"，那是垃圾不是正文或地址，
+ *  按「这一格没给」处理比把垃圾喂给下游诚实。 */
+function scalarText(v: unknown): string | undefined {
+  if (typeof v === 'string') return v
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v)
+  if (v === null) return 'null'
+  return undefined
+}
+
 /** 重试描述符里的 headers：只收字符串值；空表视为未声明（不覆盖原请求头）。 */
 function stringRecordOf(v: unknown): Record<string, string> | undefined {
   if (v === null || typeof v !== 'object' || Array.isArray(v)) return undefined
@@ -116,8 +127,11 @@ function stringRecordOf(v: unknown): Record<string, string> | undefined {
 }
 
 function sameStringRecord(a: Record<string, string> | undefined, b: Record<string, string> | undefined): boolean {
-  const ak = Object.keys(a ?? {})
-  const bk = Object.keys(b ?? {})
+  // 缺席即空表：两侧都缺席时两把键集都是空的，走同一条「相等」出口
+  const left = a ?? {}
+  const right = b ?? {}
+  const ak = Object.keys(left)
+  const bk = Object.keys(right)
   if (ak.length !== bk.length) return false
-  return ak.every((k) => Object.prototype.hasOwnProperty.call(b ?? {}, k) && a![k] === b![k])
+  return ak.every((k) => Object.prototype.hasOwnProperty.call(right, k) && left[k] === right[k])
 }

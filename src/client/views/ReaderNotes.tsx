@@ -66,7 +66,8 @@ export function ReaderNotes({ bookKey, target, requestSeq, deps, onNavigate, onC
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const alive = useRef(true)
   const seq = useRef(0)
-  const current = stack[stack.length - 1]
+  // 栈永不为空（初值就是那个目标，`back` 只在长度大于 1 时裁）：栈顶缺席即等于「还停在开面板时那一条」
+  const current = stack.at(-1) ?? target
   const docId = current.documentId
 
   useEffect(() => {

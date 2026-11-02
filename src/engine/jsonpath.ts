@@ -57,7 +57,8 @@ function tokenize(path: string, loc: SegmentLoc, facet: Facet): Token[] {
         // `..name` 递归下降（名字必填；`..*` 不在子集内）
         i += 2
         const start = i
-        while (i < path.length && NAME_CHAR.test(path[i])) i++
+        // charAt 在界外给空串（正则不命中）：与循环条件同一个界，选它就不必为「i 可能越界」再造分支
+        while (i < path.length && NAME_CHAR.test(path.charAt(i))) i++
         if (i === start) reject(path, loc, facet, `递归下降缺少属性名（位置 ${start}）`)
         tokens.push({ kind: 'descend', name: path.slice(start, i) })
         continue
@@ -70,7 +71,7 @@ function tokenize(path: string, loc: SegmentLoc, facet: Facet): Token[] {
         continue
       }
       const start = i
-      while (i < path.length && NAME_CHAR.test(path[i])) i++
+      while (i < path.length && NAME_CHAR.test(path.charAt(i))) i++
       if (i === start) reject(path, loc, facet, `点后缺少属性名（位置 ${start}）`)
       tokens.push({ kind: 'child', name: path.slice(start, i) })
       continue
@@ -85,7 +86,12 @@ function tokenize(path: string, loc: SegmentLoc, facet: Facet): Token[] {
       if (inner.startsWith('(') || inner.includes('(')) reject(path, loc, facet, `脚本表达式 [()] 不支持`)
       if (/^-?\d+$/.test(inner)) { tokens.push({ kind: 'index', value: Number(inner) }); continue }
       if (/^(-?\d+)?:(-?\d+)?$/.test(inner)) {
-        const [a, b] = inner.split(':')
+        const sides = inner.split(':')
+        const a = sides[0]
+        const b = sides[1]
+        // 上面那条模式只接受「恰好一个冒号、两侧各自为空或整数」，拆不出两段只可能是模式被改坏——
+        // 走本函数已有的「下标内容不合法」通道（宁炸不猜），不给开区间补造端点。
+        if (a === undefined || b === undefined) reject(path, loc, facet, `下标内容不合法：${JSON.stringify(inner)}`)
         tokens.push({ kind: 'slice', from: a === '' ? null : Number(a), to: b === '' ? null : Number(b) })
         continue
       }
@@ -122,7 +128,7 @@ function applyToken(cur: unknown[], tok: Token): unknown[] {
     switch (tok.kind) {
       case 'child': {
         if (!isObjectLike(v)) break
-        const got = (v as Record<string, unknown>)[tok.name]
+        const got = v[tok.name]
         if (got !== null && got !== undefined) out.push(got)
         break
       }
@@ -133,7 +139,7 @@ function applyToken(cur: unknown[], tok: Token): unknown[] {
         if (!Array.isArray(v)) break
         const i = tok.value < 0 ? v.length + tok.value : tok.value   // 负数从尾数（与 select.applyIndex 同口径）
         if (i < 0 || i >= v.length) break
-        const got = v[i]
+        const got: unknown = v[i]
         if (got !== null && got !== undefined) out.push(got)
         break
       }

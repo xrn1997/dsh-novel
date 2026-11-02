@@ -111,9 +111,9 @@ function encodeFormCharset(body: string, charset: string): string {
   if (!iconv.encodingExists(charset) || /^utf-?8$/i.test(charset.replace(/_/g, '-'))) return body
   const encode = (text: string): string =>
     [...iconv.encode(text, charset)].map((b) => `%${b.toString(16).toUpperCase().padStart(2, '0')}`).join('')
-  return body.replace(/%[0-9A-Fa-f]{2}(?:%[0-9A-Fa-f]{2})*|[^\x00-\x7F]+/g, (run) => {
+  return body.replace(/%[0-9A-Fa-f]{2}(?:%[0-9A-Fa-f]{2})*|[^\p{ASCII}]+/gu, (run) => {
     const text = run.startsWith('%') ? decodePercentRun(run) : run
-    if (text === null || /^[\x00-\x7F]*$/.test(text)) return run
+    if (text === null || /^[\p{ASCII}]*$/u.test(text)) return run
     return encode(text)
   })
 }

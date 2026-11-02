@@ -3,6 +3,7 @@ import { applyLoginCheck } from '../../src/services/login-check.js'
 import { decodeBody } from '../../src/services/fetcher.js'
 import type { FetchedPage, Fetcher } from '../../src/services/fetcher.js'
 import type { NovelSource } from '../../src/services/types.js'
+import { pick } from '../support/fixture.js'
 
 const page = (over: Partial<FetchedPage> = {}): FetchedPage => ({
   raw: Buffer.from('BODY'),
@@ -91,8 +92,8 @@ describe('loginCheckJs', () => {
       page(),
     )
     expect(out.finalUrl).toBe('https://a.test/login')
-    expect(seen[0]!.url).toBe('https://a.test/login')
-    expect(seen[0]!.init).toMatchObject({ method: 'POST', body: 'b', headers: { 'X-A': '1' } })
+    expect(pick(seen, 0).url).toBe('https://a.test/login')
+    expect(pick(seen, 0).init).toMatchObject({ method: 'POST', body: 'b', headers: { 'X-A': '1' } })
   })
 
   it('decodes the original page with the URL option charset (no Content-Type charset)', async () => {

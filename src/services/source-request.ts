@@ -31,8 +31,10 @@ export interface ScriptEvalSurface {
   /** 真浏览器出站：限速 + cookie 桥已接，**没有** loginCheck（该判据只属 HTTP） */
   webview: NonNullable<Fetcher['webview']>
   cookieJar: CookieJar
-  deviceId?: Fetcher['deviceId']
-  sourceSession?: Fetcher['sourceSession']
+  /** 与 `Fetcher` 同名能力位，但只在有值时建键（`NonNullable`）：显式 `undefined` 不是本面的形状——
+   *  它是交给引擎脚本的上下文，缺席就是「这台没有这一位」。 */
+  deviceId?: NonNullable<Fetcher['deviceId']>
+  sourceSession?: NonNullable<Fetcher['sourceSession']>
   dispose?(): void
 }
 
@@ -84,7 +86,10 @@ export function createSourceRequest(deps: SourceRequestDeps): SourceRequest {
     const rate = raw !== null && typeof raw === 'object'
       ? (raw as Record<string, unknown>).concurrentRate
       : undefined
-    const rateKey = typeof rate === 'string' ? rate.trim() : String(rate ?? '')
+    // 速率键只做「同一份配置」的判等：字符串去空白、数字/布尔按字面，其余（对象/数组/null）落空键——
+    // 那些形态 parseConcurrentRate 也认不出，退化成同一个键不影响限速行为
+    const rateKey = typeof rate === 'string' ? rate.trim()
+      : typeof rate === 'number' || typeof rate === 'boolean' ? String(rate) : ''
     const cached = limiters.get(source.id)
     if (cached !== undefined && cached.rateKey === rateKey) return cached.limiter
     const limiter = new RateLimiter(parseConcurrentRate(rate))
@@ -95,7 +100,8 @@ export function createSourceRequest(deps: SourceRequestDeps): SourceRequest {
   /** 一次浏览器抓取：限速 + cookie 双向桥。读面与引擎面（`@webjs:` / `java.webView`）共用这一层；
    *  不要从基础 fetcher 直接取浏览器——那会绕限速，并各自抄一遍 cookie 回灌。 */
   const webviewFor = (source: NovelSource): Pick<WebViewRuntime, 'fetch'> => ({
-    fetch: async (url: string, opts: WebViewOptions = {}): Promise<WebViewPage> => {
+    fetch: async (url: string, opts?: WebViewOptions): Promise<WebViewPage> => {
+      opts ??= {}                       // 缺省在体内补：签名上这一格本来就是可选的
       await limiterFor(source).acquire()
       // 引擎面裸调 webView 时也得带源静态头与 UA；读面已在 opts 里带齐（动态头 + UA），同名后者优先
       const base = splitUserAgent(headerOf(source))

@@ -5,6 +5,7 @@ import type { ReaderSessionDeps, ReaderViewportFeed, VisibleNode } from '../../s
 import type { ChapterAnchor } from '../../src/client/progress.js'
 import { DEFAULT_PREFS, setPref } from '../../src/client/store.js'
 import type { ChapterContent, ChapterEntry, NavigationItem, ShelfBook } from '../../src/client/views/types.js'
+import { last, must, pick } from '../support/fixture.js'
 
 /**
  * 阅读会话的时序测试：在途槽、双帧恢复、切章强制存 vs 同章防抖存、哨兵预取、目录直达重试，
@@ -121,7 +122,9 @@ function makeSession(opts?: {
     saveProgress: (i, r) => { saves.push([i, r]) },
     saveTotalChapters: (n) => { totals.push(n) },
     afterFrames: (cb) => cb(),                       // 测试：同步落定
-    viewport: opts?.viewport,
+    // 缺省不建这个键：`ReaderSessionDeps.viewport` 是「缺席走缺省」的契约（`?? IMMEDIATE_VIEWPORT_FEED`），
+    // 不拿显式 undefined 冒充缺席。
+    ...(opts?.viewport === undefined ? {} : { viewport: opts.viewport }),
   }
   return { session: new ReaderSession(deps, port, opts?.debounceMs ?? 20), port, fetched, saves, totals }
 }
@@ -194,7 +197,7 @@ describe('ReaderSession.open（目录 → 存档恢复 → 载后定位）', () 
     session.handleViewportChange('src')                    // 落位前的旧视口（top 仍是进入前的 0）
     await new Promise((r) => setTimeout(r, 0))
     expect(fetched, '恢复落位前的旧视口不是补载证据').toEqual([2])
-    while (frames.length > 0) frames.shift()!()            // 跑完双帧：落位
+    while (frames.length > 0) must(frames.shift(), '待跑的双帧')()            // 跑完双帧：落位
     expect(port.top).toBe(3000)
     session.handleViewportChange('src')                    // 落位后的真实视口才开始判断补载
     await new Promise((r) => setTimeout(r, 0))
@@ -706,16 +709,16 @@ describe('ReaderSession 锚点跳转（待定位目标 = 章号 + 锚点 + 节�
     expect(h.port.top).toBe(400)                          // 锚点落在视口顶（不是章首 0）
     expect(h.saves).toHaveLength(2)                       // 意图即时落 + 落位后真实比例
     expect(h.saves[0]).toEqual([0, 0])
-    expect(h.saves[1][0]).toBe(0)
-    expect(h.saves[1][1]).toBeCloseTo(400 / 3000)         // 不钉裸浮点字面量（同文件邻近用例都是 toBeCloseTo）
+    expect(pick(h.saves, 1)[0]).toBe(0)
+    expect(pick(h.saves, 1)[1]).toBeCloseTo(400 / 3000)   // 不钉裸浮点字面量（同文件邻近用例都是 toBeCloseTo）
 
     h.port.targetOffs.set('a2', 800)                      // a2 在绝对 1200（此刻视口在 400）
     h.session.requestJump('src', 0, 'a2')
     h.session.afterRender('src')
     expect(h.port.top).toBe(1200)
     expect(h.saves[2]).toEqual([0, 0])
-    expect(h.saves[3][0]).toBe(0)
-    expect(h.saves[3][1]).toBeCloseTo(0.4)                // 1200 / 3000：落位后的真实比例
+    expect(pick(h.saves, 3)[0]).toBe(0)
+    expect(pick(h.saves, 3)[1]).toBeCloseTo(0.4)          // 1200 / 3000：落位后的真实比例
   })
 
   it('章首直达落位后也补一笔真实比例（章号意图之外，补的是「落位后读到章内哪儿」）', async () => {
@@ -752,14 +755,14 @@ describe('ReaderSession 锚点跳转（待定位目标 = 章号 + 锚点 + 节�
     expect(h.port.top).toBe(500)                          // 回归：悬空锚点必须退回章首，不许永久挂住
     expect(h.session.state.pendingJump).toBeNull()
     expect(h.saves).toHaveLength(2)                       // 章号意图 + 章首的真实比例
-    expect(h.saves[1][0]).toBe(0)
-    expect(h.saves[1][1]).toBeCloseTo(500 / 3000)
+    expect(pick(h.saves, 1)[0]).toBe(0)
+    expect(pick(h.saves, 1)[1]).toBeCloseTo(500 / 3000)
 
     h.port.top = 900                                      // 挂住解除后，滚动读数照常落盘
     h.session.handleViewportChange('src')
     await new Promise((r) => setTimeout(r, 40))           // 防抖窗口（makeSession 缺省 20ms）
-    expect(h.saves.at(-1)?.[0]).toBe(0)
-    expect(h.saves.at(-1)?.[1]).toBeCloseTo(0.3)
+    expect(pick(last(h.saves), 0)).toBe(0)
+    expect(pick(last(h.saves), 1)).toBeCloseTo(0.3)
   })
 
   it('章块还没挂载（章节在途）→ 仍挂住待定位目标，等挂载后下一轮再定位', async () => {
@@ -993,14 +996,14 @@ describe('连续阅读的已载窗口上限（裁章补偿 + 回溯补载）', (
     for (let i = 1; i <= 20; i++) {
       await session.load('src', i)
       render()
-      const a = port.anchors.find((x) => x.index === i)!
+      const a = must(port.anchors.find((x) => x.index === i), `第 ${i} 章的锚点`)
       port.top = a.start + 300
       session.handleViewportChange('src')
       render()
     }
     const kept = session.state.chapters.flatMap((c, i) => (c === null ? [] : [i]))
     expect(kept).toEqual([14, 15, 16, 17, 18, 19, 20])    // 视口 20、前留 6 章
-    const a20 = port.anchors.find((x) => x.index === 20)!
+    const a20 = must(port.anchors.find((x) => x.index === 20), '第 20 章的锚点')
     expect(port.top).toBe(a20.start + 300)                 // 补偿后视口仍停在第 20 章同一处
   })
 
@@ -1050,14 +1053,14 @@ describe('连续阅读的已载窗口上限（裁章补偿 + 回溯补载）', (
     await new Promise((r) => setTimeout(r, 0))
     port.chapterOff = 0
     render()                                               // settleJump 落位（targetOffset 读 chapterOff）
-    const a10 = port.anchors.find((x) => x.index === 10)!
+    const a10 = must(port.anchors.find((x) => x.index === 10), '第 10 章的锚点')
     port.top = a10.start + 100
     session.handleViewportChange('src')                    // 靠近窗口顶 → 触发补载第 9 章
     await new Promise((r) => setTimeout(r, 0))
     expect(session.state.chapters[9]).not.toBeNull()
     expect(fetched).toContain(9)
     render()                                               // 前插补偿：视口下移一章高
-    const a10new = port.anchors.find((x) => x.index === 10)!
+    const a10new = must(port.anchors.find((x) => x.index === 10), '前插后第 10 章的锚点')
     expect(port.top).toBe(a10new.start + 100)              // 视觉位置没动
   })
 
@@ -1183,8 +1186,8 @@ describe('ReaderSession 视口喂入（合帧）', () => {
     const order: string[] = []
     const h = makeSession({
       viewport: {
-        scheduleFrame: base.scheduleFrame,
-        cancelFrame: base.cancelFrame,
+        scheduleFrame: (cb) => base.scheduleFrame(cb),
+        cancelFrame: (h) => base.cancelFrame(h),
         refreshPort: () => { order.push('refresh'); base.refreshPort() },
       },
     })
@@ -1273,7 +1276,7 @@ describe('ReaderSession 排版前采点与复位', () => {
       { index: 0, nodeId: 'p1', offsetWithinNode: 40 },
       { index: 0, nodeId: 'p2', offsetWithinNode: 90 },
     ]
-    h.port.currentNode = () => (nodes.length > 0 ? nodes.shift()! : null)
+    h.port.currentNode = () => (nodes.length > 0 ? must(nodes.shift(), '下一个节点') : null)
     h.port.targetOffs.set('p1', 120)
     h.port.targetOffs.set('p2', 30)
     setPref({ fontSize: 22 })                              // 采点 #1 = p1

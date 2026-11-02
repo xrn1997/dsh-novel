@@ -12,7 +12,11 @@ async function resolveHeadersInput(headers: HeadersInput): Promise<Record<string
 
 /** `Set-Cookie` 列表 → name→value 表（取每条第一个 `;` 前段）。post/get 共用。 */
 export function cookiesOf(setCookie: string[]): Record<string, string> {
-  return Object.fromEntries(setCookie.map(h => h.split(';')[0]).map(p => {
+  return Object.fromEntries(setCookie.map(h => {
+    // 用 indexOf 定位第一个 `;` 再切前段，而不是 split 后取 [0]：切点缺席即整串，
+    // 不经过「可能越界的索引」这一步。
+    const semi = h.indexOf(';')
+    const p = semi < 0 ? h : h.slice(0, semi)
     const i = p.indexOf('=')
     return i < 0 ? [p, ''] : [p.slice(0, i), p.slice(i + 1)]
   }))
@@ -40,7 +44,12 @@ export function engineFetch(
       plan.url,
       fetchInitOf({ ...plan, headers: { ...plan.headers, ...(hdrs ?? {}) } }, await resolveHeadersInput(headers)),
     )
-    return { body: decodeBody(page, plan.charset), contentType: page.contentType, finalUrl: page.finalUrl }
+    return {
+      body: decodeBody(page, plan.charset),
+      // 这份形状要跨 JSON 桥进沙箱：缺席与显式 undefined 在序列化后是两件事，故按需建键
+      ...(page.contentType === undefined ? {} : { contentType: page.contentType }),
+      finalUrl: page.finalUrl,
+    }
   }
 }
 
@@ -65,8 +74,9 @@ export function engineFetchPost(
     return {
       url: page.finalUrl,
       body: decodeBody(page, plan.charset),
-      contentType: page.contentType,
-      charset: page.charset,
+      // 跨 JSON 桥的响应数据面：缺席即不建键（序列化同样会丢掉 undefined）
+      ...(page.contentType === undefined ? {} : { contentType: page.contentType }),
+      ...(page.charset === undefined ? {} : { charset: page.charset }),
       statusCode: page.status,
       headers: page.headers ?? {},
       // `java.post(...).cookies()` 的返回值 = 响应 cookie 表（name → value）
@@ -129,8 +139,9 @@ export function engineFetchGet(
     return {
       url: page.finalUrl,
       body: decodeBody(page, plan.charset),
-      contentType: page.contentType,
-      charset: page.charset,
+      // 同 java.post：跨 JSON 桥的数据面，缺席即不建键
+      ...(page.contentType === undefined ? {} : { contentType: page.contentType }),
+      ...(page.charset === undefined ? {} : { charset: page.charset }),
       statusCode: page.status,
       headers: page.headers ?? {},
       cookies: cookiesOf(page.setCookie),

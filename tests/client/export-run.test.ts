@@ -3,6 +3,7 @@ import { applyPreset, createExportRun, draftOf, parseRange, validRangeOf } from 
 import type { ExportRunDeps, ExportRunState } from '../../src/client/export-run.js'
 import { ApiClientError } from '../../src/client/api.js'
 import { enTranslate, zhTranslate } from '../../src/client/copy/index.js'
+import { pick } from '../support/fixture.js'
 
 /**
  * 范围导出流编排：独立 module，不挂在 ReaderView 里——start/cancel/状态三态 + 卸载 abort
@@ -71,9 +72,9 @@ describe('createExportRun：成功 / 失败（错误类目投影）/ 取消 / �
     run.start({ from: 5, to: 80, total: 100 })
     await vi.waitFor(() => expect(run.state.running).toBe(false))
 
-    expect(streamExport.mock.calls[0][0]).toMatchObject({ from: 5, to: 80 })
+    expect(pick(pick(streamExport.mock.calls, 0), 0)).toMatchObject({ from: 5, to: 80 })
     expect(saveBlob).toHaveBeenCalledWith(blob, '斗罗（第5-80章）.txt')
-    expect(states[0].range).toEqual({ from: 5, to: 80, total: 100 })
+    expect(pick(states, 0).range).toEqual({ from: 5, to: 80, total: 100 })
     expect(run.state.total).toBe('76')                     // total-chapters 头 = 段内章数
   })
 
@@ -86,7 +87,7 @@ describe('createExportRun：成功 / 失败（错误类目投影）/ 取消 / �
     const { run } = setup({ streamExport, saveBlob })
     run.start({ from: 1, to: 100, total: 100 })
     await vi.waitFor(() => expect(run.state.running).toBe(false))
-    expect(saveBlob.mock.calls[0][1]).toBe('斗罗.txt')
+    expect(pick(pick(saveBlob.mock.calls, 0), 1)).toBe('斗罗.txt')
   })
 
   it('parseRange：倒置 / 越界 / 非整数 → 拒；合法 → ok（面板确认钮的判据）', () => {

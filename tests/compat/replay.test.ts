@@ -2,10 +2,12 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { loadCases, renderReport, runCase } from './harness.js'
+import { must } from '../support/fixture.js'
 
 // case 布局：compat/fixtures/<caseName>/——loadCases 扫 root 子目录
 const root = path.resolve('compat/fixtures')
 const cases = loadCases(root)
+// 空分母是**被显式处理的状态**（下面那条用例负责报红），不是夹具脱节——这里不能抛
 const keywordOfFirst = cases[0]?.manifest.keyword
 
 describe('compat 全链路回放', () => {
@@ -20,7 +22,10 @@ describe('compat 全链路回放', () => {
     it(`${c.caseName} 全链路`, async () => {
       const r = await runCase(c)
       const fail = r.steps.find((s) => !s.ok)
-      if (fail !== undefined) throw new Error(`[${fail.face}] ${fail.error!.code}: ${fail.error!.message}`)
+      if (fail !== undefined) {
+        const error = must(fail.error, '失败步错误')
+        throw new Error(`[${fail.face}] ${error.code}: ${error.message}`)
+      }
       expect(r.ok).toBe(true)
     })
   }

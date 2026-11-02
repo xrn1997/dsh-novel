@@ -42,7 +42,7 @@ function openJobStream(res: ServerResponse, subscribe: (notify: () => void) => (
     if (f.done) { off?.(); res.end() }
   }
   off = subscribe(pump)
-  res.on('close', () => { off?.() })                 // 关页/断连即退订：不给死连接攒帧，也不让监听器长驻持有者
+  res.on('close', () => { off() })                 // 关页/断连即退订：不给死连接攒帧，也不让监听器长驻持有者
   pump()                                            // 首帧（可能是 `{job:null}`：还没提交过，流继续等）
 }
 
@@ -114,13 +114,14 @@ type HandlerCtx = {
 }
 
 /** 30 条静态路由的穷尽分发表：键集由 `RouteName` 逼，漏接/多接都是 tsc 红；
- *  臂体是原路由分支的原样搬移（传输机械一字未动）。 */
-const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => Promise<void> } = {
-  health: async ({ res }) => {
+ *  臂体是原路由分支的原样搬移（传输机械一字未动）。臂体可回值也可回 Promise——分派点一律
+ *  `await`，故不需要为「回 Promise」硬加 async（真异步的臂体自己就是 async）。 */
+const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } = {
+  health: ({ res }) => {
     // 健康检查（GET /novel-api）
     writeOk(res, { name: 'dsh-novel', apiVersion: 1 })
   },
-  sources: async ({ res, service }) => {
+  sources: ({ res, service }) => {
     // 同步 POST 导入已移除——导入走 sources/import 后台任务（错方法由匹配器落 405）
     writeOk(res, service.listPublicSources())
   },
@@ -129,7 +130,7 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => Promise<void> } = {
     const body = await readJsonBody<Record<string, unknown> | null>(req, null, 32 * 1024 * 1024)
     writeOk(res, service.startImportJob(readBodies.import(body).files))
   },
-  sourcesJobStatus: async ({ res, service }) => {
+  sourcesJobStatus: ({ res, service }) => {
     // 任务结束后结果保留到下一个任务开始——关设置/刷新页面后重挂载即可恢复展示
     writeOk(res, { job: service.jobStatus() })
   },
@@ -153,12 +154,12 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => Promise<void> } = {
   search: async ({ url, res, service }) => {
     // 「关键词去空白后非空才算在场」这一把尺在两条入口上是同一把：body 那侧住 `readBodies.searchJob`，
     // query 这侧走 requireQuery（它同时是「缺 query 参数 X」这句措辞的唯一家）
-    const [keyword] = requireQuery(url, PARAMS.keyword)
+    const keyword = requireQuery(url, PARAMS.keyword)
     const ids = url.searchParams.get(PARAMS.sourceIds)?.split(',').filter(Boolean)
     writeOk(res, await service.search(keyword, ids === undefined ? undefined : { sourceIds: ids }))
   },
   // ── reading 面（query 驱动， GET）────────────────────────────────────
-  searchPlan: async ({ res, service }) => {
+  searchPlan: ({ res, service }) => {
     // 搜索参与计划：参与集唯一主人在服务端——客户端分批/进度按此走
     writeOk(res, service.searchPlan())
   },
@@ -168,11 +169,11 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => Promise<void> } = {
     const { keyword, sourceIds } = readBodies.searchJob(body)
     writeOk(res, service.startSearchJob(keyword, sourceIds === undefined ? undefined : { sourceIds }))
   },
-  searchJobCancel: async ({ res, service }) => {
+  searchJobCancel: ({ res, service }) => {
     // 停止 ≠ 放弃：本轮立即进终态（不再开新的源），已搜出的分组仍留在读面可翻
     writeOk(res, service.cancelSearchJob())
   },
-  searchJobStream: async ({ url, res, service }) => {
+  searchJobStream: ({ url, res, service }) => {
     // 进度推送的加速器（SSE）：首帧 = 带 `since` 的同一份快照（baseline），此后每次状态变化补一帧，
     // 终态即关流。断线重连 = 重起一条并带已收到的游标——「推送不 replay、显式 query 才是真相」这
     // 条口径由推送与轮询两通道共用同一游标兑现（since 语义与游标兜底由 tests/api/dispatch-reading.test.ts 钉住），
@@ -186,12 +187,12 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => Promise<void> } = {
       return { job, done: job !== null && job.phase !== 'running' }
     })
   },
-  searchJobStatus: async ({ url, res, service }) => {
+  searchJobStatus: ({ url, res, service }) => {
     const since = Number(url.searchParams.get(PARAMS.since) ?? '0')
     writeOk(res, { job: service.searchJobSnapshot(Number.isInteger(since) && since > 0 ? since : 0) })
   },
   // ── 书城发现面（按源列出的分类入口：清单 / 分类书单）──────────────────
-  exploreKinds: async ({ res, service }) => {
+  exploreKinds: ({ res, service }) => {
     // 清单是本地派生（按源列出各自声明的分类入口标题，主人 `services/explore.ts` 的
     // `deriveExploreSources`），零网络请求——参与集判据归门面。
     // **只出标题、不出入口地址**：两方言的地址语义不同，那份差异不外泄到跨半契约（`ExploreSources`）
@@ -206,18 +207,18 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => Promise<void> } = {
     const { sourceId, kind } = readBodies.exploreList(body)
     writeOk(res, service.startExploreJob(sourceId, kind))
   },
-  exploreListMore: async ({ res, service }) => {
+  exploreListMore: ({ res, service }) => {
     // 续页：同一轮再要一页。门面说「没得发」就是**没有更多**——回 409 而不是静默成功，
     // 客户端据此把按钮收掉；假装又加载了一轮是拿假事实喂 UI。
     const r = service.loadMoreExploreJob()
     if (r === null) throw new ApiError('没有更多了', 409, 'Conflict')
     writeOk(res, r)
   },
-  exploreListStatus: async ({ res, service }) => {
+  exploreListStatus: ({ res, service }) => {
     // 全量快照（跨页累积住在服务端持有者，整帧替换才读得出「这一轮到此刻」——见 ExploreSnapshot）
     writeOk(res, { job: service.exploreJobSnapshot() })
   },
-  exploreListStream: async ({ res, service }) => {
+  exploreListStream: ({ res, service }) => {
     // 与 search 流同一份形状：每帧都是同一份快照，终态即关流。但**这一条流的订阅者不认帧的 id**：
     // 发现面整帧替换（CONTEXT「整帧替换」、`client/explore-job.ts` 的 `apply`），search 面才按 id 验身份。
     openJobStream(res, (notify) => service.subscribeExploreJob(notify), () => {
@@ -249,7 +250,7 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => Promise<void> } = {
     writeOk(res, await service.getChapterContent(sourceId, bookUrl, Number(indexRaw), { refresh: url.searchParams.get(PARAMS.refresh) === '1' }))
   },
   // ── shelf 面 ────────────────────────────────────────────────────────
-  shelf: async ({ res, service }) => {
+  shelf: ({ res, service }) => {
     writeOk(res, service.shelfList())
   },
   shelfBatchDelete: async ({ req, res, service }) => {
@@ -295,7 +296,7 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => Promise<void> } = {
         if (res.writableEnded) break
         if (!res.write(chunk)) {
           // 背压：等 drain 前先查死连接——destroyed 的响应不会再发 'drain'，挂等会吞掉断连取消
-          if (res.destroyed || res.writableEnded) break
+          if (res.destroyed) break
           await new Promise<void>((r) => res.once('drain', r))
         }
       }
@@ -311,11 +312,11 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => Promise<void> } = {
   // ── 本地书（TXT / EPUB）面 ────────────────────────────────────────────
   local: async ({ res, service, url }) => {
     // 注：id 在 query（DELETE /novel-api/local?id=…，测试钉死），不是路径段——路径段里出现 'id' 不匹配任何表项
-    const [id] = requireQuery(url, PARAMS.id)
+    const id = requireQuery(url, PARAMS.id)
     writeOk(res, await service.removeLocalBook(id))
   },
   localImport: async ({ req, res, service, url }) => {
-    const [name] = requireQuery(url, PARAMS.name)
+    const name = requireQuery(url, PARAMS.name)
     const max = service.localImportMaxBytes
     // 流读与上限判据归 readCappedBody（与 JSON 信封体同一份实现），本处只给措辞
     const bytes = await readCappedBody(req, max, (m) => `文件超过 ${formatByteLimit(m)} 上限`)
@@ -324,11 +325,13 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => Promise<void> } = {
   },
   localDocument: async ({ res, service, url }) => {
     // 补充文档（脚注/附录）的图文正文：`id=bookKey` + `documentId`
-    const [id, documentId] = requireQuery(url, PARAMS.id, PARAMS.documentId)
+    const id = requireQuery(url, PARAMS.id)
+    const documentId = requireQuery(url, PARAMS.documentId)
     writeOk(res, await service.getLocalSupplement(id, documentId))
   },
   localResource: async ({ res, service, url }) => {
-    const [id, resourceId] = requireQuery(url, PARAMS.id, PARAMS.resourceId)
+    const id = requireQuery(url, PARAMS.id)
+    const resourceId = requireQuery(url, PARAMS.resourceId)
     // 资源读口只认不透明 ID（查资源表 → 打开文件）：查不到/文件不在都在**发头之前**抛（404）
     const resource = await service.getLocalResource(id, resourceId)
     res.writeHead(200, resourceHeaders(resource.mediaType, resource.bytes))
@@ -351,44 +354,38 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => Promise<void> } = {
   },
   localWarnings: async ({ res, service, url }) => {
     // 导入说明按需查看（不随每次取章重复携带）
-    const [id] = requireQuery(url, PARAMS.id)
+    const id = requireQuery(url, PARAMS.id)
     writeOk(res, await service.getLocalImportWarnings(id))
   },
 }
 
 /** 6 条参数路由的穷尽分发表（键集由 `ParamRouteName` 逼）：`params` 里是 `:` 段的原值。 */
-const PARAM_HANDLERS: { [K in ParamRouteName]: (ctx: HandlerCtx) => Promise<void> } = {
+const PARAM_HANDLERS: { [K in ParamRouteName]: (ctx: HandlerCtx) => void | Promise<void> } = {
   sourceProbe: async ({ res, service, params }) => {
-    const [id] = params
-    writeOk(res, await service.probe(id))
+    writeOk(res, await service.probe(paramOf(params)))
   },
   sourceEnabled: async ({ req, res, service, params }) => {
-    const [id] = params
     // 单源启停：停用 = 不参与聚合搜索，试跑/验证不受影响
     const body = await readJsonBody<Record<string, unknown> | null>(req, null)
     const enabled = readBodies.enabled(body)
     // 未知 id 由门面抛 SourceNotFoundError；classify 的表把它投影成 404 NotFound，
     // 路由层不再自带第二份判据。
-    await service.setEnabled(id, enabled)
+    await service.setEnabled(paramOf(params), enabled)
     writeOk(res, { enabled })
   },
   sourceAuth: async ({ req, res, service, params }) => {
-    const [id] = params
-    await authRoute(service, id, req, res)
+    await authRoute(service, paramOf(params), req, res)
   },
   sourceDelete: async ({ res, service, params }) => {
-    const [id] = params
-    const removed = await service.removeSource(id)
+    const removed = await service.removeSource(paramOf(params))
     writeOk(res, { removed })
   },
   shelfPut: async ({ req, res, service, params }) => {
-    const [key] = params
-    await shelfPut(service, decodeSegKey(key), req, res)
+    await shelfPut(service, decodeSegKey(paramOf(params)), req, res)
   },
   shelfDelete: async ({ res, service, params }) => {
     // 本地书连带删文件（防孤儿 invariant）已归门面 removeBook——路由只剩键解码与信封
-    const [key] = params
-    writeOk(res, await service.removeBook(decodeSegKey(key)))
+    writeOk(res, await service.removeBook(decodeSegKey(paramOf(params))))
   },
 }
 
@@ -412,17 +409,26 @@ function decodeSegKey(raw: string): string {
 
 /** book/toc/chapter 共用：sourceId 与 url 必填（参数名归 wire 契约 PARAMS） */
 function requireSourceUrl(url: URL): { sourceId: string; url: string } {
-  const [sourceId, bookUrl] = requireQuery(url, PARAMS.sourceId, PARAMS.url)
+  const sourceId = requireQuery(url, PARAMS.sourceId)
+  const bookUrl = requireQuery(url, PARAMS.url)
   return { sourceId, url: bookUrl }
 }
 
-/** 必填 query 参数的唯一尺与唯一措辞处：按序取、trim 后非空才算在场，缺席点名缺哪一个。 */
-function requireQuery(url: URL, ...names: string[]): string[] {
-  return names.map((name) => {
-    const v = url.searchParams.get(name)?.trim() ?? ''
-    if (v === '') throw new ApiError(`缺 query 参数 ${name}`, 400, 'BadRequest')
-    return v
-  })
+/** 必填 query 参数的唯一尺与唯一措辞处：trim 后非空才算在场，缺席点名缺哪一个。
+ *  多参数路由按参数序逐条调用：报出来的仍是第一个缺的那个（顺序即入参序，与一次取齐同一次序）。 */
+function requireQuery(url: URL, name: string): string {
+  const v = url.searchParams.get(name)?.trim() ?? ''
+  if (v === '') throw new ApiError(`缺 query 参数 ${name}`, 400, 'BadRequest')
+  return v
+}
+
+/** 参数路由的 `:` 段取值：`PARAM_PATTERN_PATHS` 逐条只有一个 `:` 段，匹配器又按段数判等才给
+ *  param-hit，故首项在构造上必在界内。这层判空是让编译器跟上那条表内证明；它真落空意味着匹配器
+ *  契约已破，落点与「路径没被认出」同属 404 家族。 */
+function paramOf(params: readonly string[]): string {
+  const [only] = params
+  if (only === undefined) throw new ApiError('路径参数缺失', 404, 'NotFound')
+  return only
 }
 
 /**

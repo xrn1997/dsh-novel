@@ -348,7 +348,7 @@ export function pickShelfMeta(raw: Record<string, unknown>): ShelfMetaPatch {
     if (kind === 'string' && typeof v === 'string') out[k] = v
     else if (kind === 'number' && typeof v === 'number' && Number.isFinite(v)) out[k] = v
   }
-  return out as ShelfMetaPatch
+  return out
 }
 
 // ── 本地图文面（EPUB 导入；身份锚在保留源 id LOCAL_SOURCE_ID）──────────────────────
@@ -741,7 +741,7 @@ function readIdList(body: Record<string, unknown> | null, field: string): string
   if (!Array.isArray(v) || v.length === 0 || !v.every((x) => typeof x === 'string')) {
     bodyBad(`body 需为非空 { ${field}: string[] }`)
   }
-  return v as string[]
+  return v
 }
 
 /** 必填串位（去空白后非空才算在场）：缺席/非串/全空白同值 → 点名缺哪个字段 */
@@ -800,7 +800,7 @@ export const bodies = {
   /** ③ patch 形态=对在架书打补丁：字段缺省/null 一律不出现在 body（缺席键保值——ReaderView 回写
    *  totalChapters 只发一个字段，不必再重发 sourceId+title）。取舍同走 `pickShelfMeta` 单点 */
   shelfPatch: (p: ShelfMetaPatch): Record<string, unknown> =>
-    ({ [BODY.patch]: pickShelfMeta(p) as Record<string, string | number> }),
+    ({ [BODY.patch]: pickShelfMeta(p) }),
 } as const
 
 /** 对象位（cookie/header 表）：非对象、null、数组一律不算在场。
@@ -863,7 +863,7 @@ export const readBodies = {
     if (raw !== undefined && (!Array.isArray(raw) || !raw.every((x) => typeof x === 'string'))) {
       bodyBad(`body.${PARAMS.sourceIds} 需为 string[]`)
     }
-    return { keyword, ...(raw === undefined ? {} : { sourceIds: raw as string[] }) }
+    return { keyword, ...(raw === undefined ? {} : { sourceIds: raw }) }
   },
   /** 分类轮次提交：两个点名都在 body 里（浏览轴是「先点名一个源、逛它自己的分类」，`ADR-0028`） */
   exploreList: (body: Record<string, unknown> | null): { sourceId: string; kind: string } => ({
@@ -878,7 +878,7 @@ export const readBodies = {
     | { mode: 'cookies'; cookies: Record<string, string>; headers?: Record<string, string>; loginInfo?: Record<string, string> }
     | { mode: 'login-info'; loginInfo: Record<string, string> } => {
     if (body?.[BODY.runLogin] === true) return { mode: 'run-login' }
-    const b = (body ?? {}) as Record<string, unknown>
+    const b = body ?? {}
     const loginAction = b[BODY.loginAction]
     if (loginAction !== undefined) {
       if (typeof loginAction !== 'string' || loginAction.trim() === '') bodyBad(`body.${BODY.loginAction} 需为非空 string`)
@@ -899,7 +899,7 @@ export const readBodies = {
    *  不裁决形态——「非空 title 才算加书、三形态皆无 → 400」是分派，归 `api/dispatch.ts` 的 shelfPut 臂。
    *  全空 body 回空事实（不是抛错）：读口交事实，传输层决定报什么。 */
   shelfPut: (body: Record<string, unknown> | null): ShelfPutFields => {
-    const b = (body ?? {}) as Record<string, unknown>
+    const b = body ?? {}
     const patch = b[BODY.patch]
     const progress = b[BODY.progress]
     const p = progress !== null && typeof progress === 'object' ? progress as Record<string, unknown> : null

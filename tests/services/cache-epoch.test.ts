@@ -62,7 +62,7 @@ describe('rulesEpoch', () => {
       const bumped = {
         ...NULLS,
         [key]: key === 'header' ? { 'X-A': '1' } : `${key}-value`,
-      } as NormalizedRules
+      }
       // 影响面若没被 FACES_OF 接住，两个 moved 都会是 false = 静默退化成 none，这里就红。
       // 期望值写的是不变量本身：影响目录的字段必然影响正文（正文的输入是目录的产物），
       // 只影响正文的字段不影响目录，none 两边都不动。
@@ -82,10 +82,11 @@ describe('rulesEpoch', () => {
   })
 
   it('存量数据缺 ruleDetailInit 键（undefined）按缺省参与指纹——老 sources.json 不炸、与显式 null 同代际', () => {
-    const { ruleDetailInit: _legacyOmit, ...legacy } = NULLS
-    expect(rulesEpoch(legacy as NormalizedRules, 'https://s.com', 'toc'))
+    const legacy = { ...NULLS }
+    Reflect.deleteProperty(legacy, 'ruleDetailInit')   // 存量库：老 sources.json 里这一格整键缺席
+    expect(rulesEpoch(legacy, 'https://s.com', 'toc'))
       .toBe(rulesEpoch(NULLS, 'https://s.com', 'toc'))
-    expect(rulesEpoch(legacy as NormalizedRules, 'https://s.com', 'content'))
+    expect(rulesEpoch(legacy, 'https://s.com', 'content'))
       .toBe(rulesEpoch(NULLS, 'https://s.com', 'content'))
   })
 })
@@ -108,7 +109,7 @@ describe('exploreEpoch', () => {
   it('十个发现面自有字段逐个翻转都换指纹（换探索规则即换键，不必等 TTL 兜底）', () => {
     const base = exploreEpoch(NULLS, 'https://s.com')
     for (const key of EXPLORE_OWN_FIELDS) {
-      const bumped = { ...NULLS, [key]: `${key}-value` } as NormalizedRules
+      const bumped = { ...NULLS, [key]: `${key}-value` }
       expect({ key, moved: exploreEpoch(bumped, 'https://s.com') !== base }).toEqual({ key, moved: true })
     }
   })
@@ -116,7 +117,7 @@ describe('exploreEpoch', () => {
   it('回落分支的九个通用书目字段逐个翻转都换指纹（「只声明 ruleFind.kinds 的源」靠这九个取书目）', () => {
     const base = exploreEpoch(NULLS, 'https://s.com')
     for (const key of EXPLORE_FALLBACK_FIELDS) {
-      const bumped = { ...NULLS, [key]: `${key}-value` } as NormalizedRules
+      const bumped = { ...NULLS, [key]: `${key}-value` }
       expect({ key, moved: exploreEpoch(bumped, 'https://s.com') !== base }).toEqual({ key, moved: true })
     }
   })

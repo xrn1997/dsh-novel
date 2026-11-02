@@ -139,6 +139,11 @@ _Avoid_: 步骤
 _唯一实现_: `engine/select.ts` 的 `reducePicked`（选择段与取值段共用）；JSONPath 侧 `engine/jsonpath.ts` 同口径
 _Avoid_: 空结果（太泛——Miss 与空 List 是两种值）
 
+**过线原值（wire value）**:
+引导层 JSON.parse 出来的脚本实参、脚本返回值与宿主响应载荷：类型面声明的形状不可信，按运行时原值处理。
+_唯一实现_: `engine/js-utils.ts` 的 `textOf`（`String(v)` 的兜底口径，与脚本侧同名转换同义；要可读内容先各自判形）
+_Avoid_: 空值（`null` / `undefined` 是过线后的真实取值，不是「这一格没有」）
+
 **死线（regex deadline）**:
 一条用户正则最多被允许占着主线程多久；到点判「这条规则跑不动」，**不**判「结果为空」。预算随工作量放宽并封顶——写死一个数会把大而合法的整页扫描误判成病态。
 _唯一实现_: `engine/regex-guard.ts` 的 `deadlineFor`（超时抛 `RegexDeadlineError`，由调用点就地转成带段级定位的错误；口径的 why 见 `ADR-0050`）

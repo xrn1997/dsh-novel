@@ -89,11 +89,14 @@ export interface ExploreJobView {
 export const toRound = (job: ExploreSnapshot): ExploreRound => ({
   id: job.id, sourceId: job.sourceId, sourceName: job.sourceName, kind: job.kind,
   books: job.books, running: job.phase === 'running',
-  cancelled: job.cancelled === true, page: job.page, hasMore: job.hasMore,
+  cancelled: job.cancelled, page: job.page, hasMore: job.hasMore,
 })
 
 export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): ExploreJobView {
   const alive = useRef(true)
+  /** 通道是否还活着：**每次现读**。卸载时翻面的那次写入落在 await 之后——编译器看不见闭包里的写入，
+   *  同一个流程里的第二次读会被当成常量收窄；这道守卫是运行时防线，读法必须留在调用边界上。 */
+  const aliveNow = (): boolean => alive.current
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const stream = useRef<AbortController | null>(null)
   /** 「本页已经提交过」闸：POST 的回包说了算（它是新一轮的出生证明）。挂载恢复读到的是**上一轮**
@@ -131,14 +134,14 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
       return false
     }
     // 停止不是失败：取消后不挂红条（也不把服务端那句「任务已取消」当错误念给用户）
-    setError(job.phase === 'running' || job.cancelled === true ? null : job.error ?? null)
+    setError(job.phase === 'running' || job.cancelled ? null : job.error ?? null)
     setRound(toRound(job))
     return job.phase === 'running'
   }, [stopChannels, t])
 
   const poll = useCallback(async (): Promise<void> => {
     const g = gen.current
-    if (!alive.current) return
+    if (!aliveNow()) return
     let job: ExploreSnapshot | null
     try {
       // 读面缺 `job` 键与「`job` 为 null」是同一件事（没有一轮）——边界输入不该把渲染打崩
@@ -146,13 +149,13 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
     } catch (e) {
       // 代际已换 = 这一发属于一条已被撤掉的通道：连那句「读取失败」都不许报，
       // 否则旧通道的断线会把新轮的一帧好结果刷成红条
-      if (!alive.current || gen.current !== g) return
+      if (!aliveNow() || gen.current !== g) return
       setError(t('city.job.readFailed', { detail: describeError(e, t) }))
       setRound((r) => (r === null ? null : { ...r, running: false }))
       return
     }
-    if (!alive.current || gen.current !== g) return
-    if (apply(job) && alive.current) armPoll()
+    if (!aliveNow() || gen.current !== g) return
+    if (apply(job) && aliveNow()) armPoll()
   }, [deps, t, apply, armPoll])
   useEffect(() => { pollRef.current = poll }, [poll])
 
@@ -166,9 +169,11 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
     stream.current = ctrl
     void (async (): Promise<void> => {
       let running = true
+      /** 这一轮的结局由帧回调写回：编译器看不见闭包里的赋值，故经函数读，别让它当成常量 */
+      const stillRunning = (): boolean => running
       try {
         await deps.apiEventStream(ROUTES.exploreListStream.path, (data): void => {
-          if (!alive.current || gen.current !== g) return
+          if (!aliveNow() || gen.current !== g) return
           let job: ExploreSnapshot | null
           try {
             job = (JSON.parse(data) as { job: ExploreSnapshot | null }).job
@@ -177,8 +182,8 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
           if (!running) ctrl.abort()               // 终态：自己关流，不留着占连接
         }, ctrl.signal)
       } catch { /* 连不上或断线：一律回落轮询，不单独报错（只有轮询失败才真的报错） */ }
-      if (!alive.current || gen.current !== g) return   // 这条流已被更新的通道顶掉：残影不许再排一轮轮询
-      if (running) armPoll()
+      if (!aliveNow() || gen.current !== g) return   // 这条流已被更新的通道顶掉：残影不许再排一轮轮询
+      if (stillRunning()) armPoll()
     })()
   }, [deps, apply, armPoll, stopChannels])
 
@@ -189,7 +194,7 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
     void (async () => {
       try {
         const { jobId } = await deps.apiSend<{ jobId: string }>(ROUTES.exploreList, bodies.exploreList(s, k))
-        if (!alive.current) return
+        if (!aliveNow()) return
         submitted.current = true             // 新轮出生：此后的挂载恢复（读的是上一轮）一律让位
         // 提交返回的 id 就是本轮身份：先落一帧空态再开始盯（避免旧轮的条目在新轮里停留）。
         // 撤通道归 `watch` 的接管那一步（这一段没有 await，旧通道的迟到帧插不进来）。
@@ -199,7 +204,7 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
         setRound({ id: jobId, sourceId: s, sourceName: '', kind: k, page: 1, hasMore: false, books: [], running: true, cancelled: false })
         watch()
       } catch (e) {
-        if (!alive.current) return
+        if (!aliveNow()) return
         setError(t('city.job.submitFailed', { detail: describeError(e, t) }))   // 服务端没起新轮：上一轮结果照旧可读，不清屏
       }
     })()
@@ -219,11 +224,11 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
     void (async () => {
       try {
         await deps.apiSend<{ jobId: string }>(ROUTES.exploreListMore)
-        if (!alive.current) return
+        if (!aliveNow()) return
         setError(null)
         watch()
       } catch (e) {
-        if (!alive.current) return
+        if (!aliveNow()) return
         if (e instanceof ApiClientError && e.status === 409) {
           // 409 = 「此刻没得可加载」：钮照实收掉，不报红——这一条不是故障，是「到头了」
           setRound((r) => (r === null ? null : { ...r, running: false, hasMore: false }))
@@ -245,10 +250,10 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
       } catch {
         // 首屏读不到就是没有：静默（真去看时会再报错）。但闸要落下——不落，调用方会一直等着
         // 「那一轮在不在」的答案，点了没反应比读到空更糟
-        if (alive.current) setRestored(true)
+        if (aliveNow()) setRestored(true)
         return
       }
-      if (!alive.current) return
+      if (!aliveNow()) return
       if (job !== null && !submitted.current && apply(job)) watch()   // 提交先回来 → 不覆盖新一轮
       setRestored(true)
     })()

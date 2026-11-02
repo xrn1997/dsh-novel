@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { evalGetVar, evalPut, getScopedVar, getRuleVar } from '../../src/engine/variables.js'
 import { UnsupportedRuleError } from '../../src/engine/errors.js'
 import type { EvalContext } from '../../src/engine/types.js'
+import { must } from '../support/fixture.js'
 
 const L = { segmentIndex: 0, segmentRaw: '@put' }
 
@@ -22,13 +23,13 @@ describe('@put / @get 变量', () => {
   it('put 值为 JSONPath 规则 → 对 ctx.json 求值', () => {
     const ctx: EvalContext = { vars: {}, json: { _id: '9527' } }
     evalPut('{bid:"$._id"}', ctx, L, 'detail')
-    expect(ctx.vars!.bid).toBe('9527')
+    expect(must(ctx.vars, 'vars').bid).toBe('9527')
   })
 
   it('@json: 剥前缀后按 JSONPath 对 ctx.json 求值', () => {
     const ctx: EvalContext = { vars: {}, json: { book: { name: '凡人' } } }
     evalPut('{title:"@json:$.book.name"}', ctx, L, 'detail')
-    expect(ctx.vars!.title).toBe('凡人')
+    expect(must(ctx.vars, 'vars').title).toBe('凡人')
   })
 
   it('$.. 递归下降仍被路由到 JSONPath（$. 前缀覆盖；集合型末段 → List → \\n 拼接存）', () => {
@@ -106,13 +107,13 @@ describe('@put / @get 变量', () => {
   it('值不带引号 → legado 口径收（JSONPath / 键访问 / 字面串；v1 曾一律抛「必须带引号」）', () => {
     const ctx1: EvalContext = { vars: {}, json: { _id: '9527' } }
     evalPut('{bid:$._id}', ctx1, L, 'detail')
-    expect(ctx1.vars!.bid).toBe('9527') // 裸 JSONPath 照常求值
+    expect(must(ctx1.vars, 'vars').bid).toBe('9527') // 裸 JSONPath 照常求值
     const ctx2: EvalContext = { vars: {}, html: JSON.stringify({ ComicID: '88' }) }
     evalPut('{cid:ComicID}', ctx2, L, 'search')
-    expect(ctx2.vars!.cid).toBe('88') // 键访问：裸值当当前 JSON 条目的字段名取（键不在才字面存）
+    expect(must(ctx2.vars, 'vars').cid).toBe('88') // 键访问：裸值当当前 JSON 条目的字段名取（键不在才字面存）
     const ctx3: EvalContext = { vars: {} }
     evalPut('{img:pic}', ctx3, L, 'toc')
-    expect(ctx3.vars!.img).toBe('pic') // 非 JSON 上下文 → 字面存（如实，@get 可诊断）
+    expect(must(ctx3.vars, 'vars').img).toBe('pic') // 非 JSON 上下文 → 字面存（如实，@get 可诊断）
   })
 
   it('带引号的值是显式字面量，不吃裸值的键访问（@put:{img:"pic"} ≠ @put:{img:pic}）', () => {
@@ -120,10 +121,10 @@ describe('@put / @get 变量', () => {
     // 键访问分支接管，静默变成条目里的 pic 字段，用户写的字面量拿不到。
     const quoted: EvalContext = { vars: {}, html: JSON.stringify({ pic: '不该被取到' }) }
     evalPut('{img:"pic"}', quoted, L, 'search')
-    expect(quoted.vars!.img).toBe('pic')                       // 字面量原样落盘
+    expect(must(quoted.vars, 'vars').img).toBe('pic')                       // 字面量原样落盘
     const bare: EvalContext = { vars: {}, html: JSON.stringify({ pic: '键访问值' }) }
     evalPut('{img:pic}', bare, L, 'search')
-    expect(bare.vars!.img).toBe('键访问值')                      // 裸值仍走键访问，两种值不折叠
+    expect(must(bare.vars, 'vars').img).toBe('键访问值')                      // 裸值仍走键访问，两种值不折叠
   })
 
   it('值引号未闭合 → UnsupportedRuleError', () => {

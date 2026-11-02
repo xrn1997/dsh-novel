@@ -62,12 +62,21 @@ export class SearchJobs {
    *  共用同一份持有物而不互相踩。 */
   readonly signal = new ChangeSignal()
 
-  constructor(private readonly deps: {
+  private readonly deps: {
     /** 宿主 `ctx.jobs` 的窄面；缺省即不登记（单测直构与无 jobs 的组合走这条） */
     host?: JobHost
     now?: () => number
     uuid?: () => string
-  } = {}) {}
+  }
+
+  constructor(deps: {
+    /** 宿主 `ctx.jobs` 的窄面；缺省即不登记（单测直构与无 jobs 的组合走这条） */
+    host?: JobHost
+    now?: () => number
+    uuid?: () => string
+  } = {}) {
+    this.deps = deps
+  }
 
   /** 提交一轮搜索。**只留最近一轮**：新提交即替换上一轮——上一轮若在跑则被协作式收手，
    *  读面立刻指向新一轮（旧结果不再可读，避免两真相同时在场）。 */

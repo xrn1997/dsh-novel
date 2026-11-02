@@ -172,15 +172,16 @@ export class ReaderSession {
   private lastVisibleBeforePrefs: VisibleNode | null = null
   private prefsUnsub: (() => void) | null = null
   private readonly save: DebouncedSave
+  private readonly deps: ReaderSessionDeps
+  private readonly port: ReaderPort
+  /** 错误快照的语言：生成时定（与 job store 同一条已知限制）。视图传当前 t，测试缺省 zh。 */
+  private readonly t: Translate
 
-  constructor(
-    private readonly deps: ReaderSessionDeps,
-    private readonly port: ReaderPort,
-    /** 滚动防抖窗口（缺省 2s；测试收紧） */
-    saveDebounceMs = 2000,
-    /** 错误快照的语言：生成时定（与 job store 同一条已知限制）。视图传当前 t，测试缺省 zh。 */
-    private readonly t: Translate = zhTranslate,
-  ) {
+  /** `saveDebounceMs` 是滚动防抖窗口（缺省 2s；测试收紧） */
+  constructor(deps: ReaderSessionDeps, port: ReaderPort, saveDebounceMs = 2000, t: Translate = zhTranslate) {
+    this.deps = deps
+    this.port = port
+    this.t = t
     const d = debounce((chapterIndex: number, offsetRatio: number): void => {
       deps.saveProgress(chapterIndex, offsetRatio)
     }, saveDebounceMs)
@@ -570,10 +571,12 @@ export class ReaderSession {
     const offsets = this.port.targetOffsets(chapter, candidates.map((c) => c.anchorId))
     let best: { id: string; off: number } | null = null
     let below: { id: string; off: number } | null = null
-    for (let i = 0; i < candidates.length; i++) {
+    // `targetOffsets` 与 candidates 同批、等长（同一组锚点一次 map 出来）：逐个配对读，
+    // 拿不到偏移 (null/缺席) 一律不是候选——两者都表示「这个目标不在 DOM」
+    for (const [i, candidate] of candidates.entries()) {
       const off = offsets[i]
-      if (off === null) continue                       // 这个目标不在 DOM：不是候选
-      const id = candidates[i].id
+      if (off === null || off === undefined) continue
+      const id = candidate.id
       if (off <= 0) {
         if (best === null || off > best.off) best = { id, off }
       } else if (below === null || off < below.off) {
@@ -740,7 +743,7 @@ export class ReaderSession {
 }
 
 function toErrorInfo(e: unknown, t: Translate = zhTranslate): { code?: string; message?: string } {
-  const err = e as { code?: unknown }
+  const err = e as { code?: unknown } | null
   return {
     ...(typeof err?.code === 'string' ? { code: err.code } : {}),
     message: describeError(e, t),

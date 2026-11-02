@@ -16,6 +16,7 @@ import { EpubImportError } from '../../src/services/epub/errors.js'
 import { readEpubPackage, resolveEpubHref, type EpubHref, type EpubPackage } from '../../src/services/epub/package.js'
 import { decodeEpubXml, parseXml } from '../../src/services/epub/xml.js'
 import { makeEpubFixture } from '../fixtures/epub.js'
+import { pick } from '../support/fixture.js'
 
 /** 开归档 → 读包 → 交给断言；读完一律关归档（预期拒绝时也不许把句柄漏在半开状态） */
 async function withBook<T>(name: string, fn: (book: EpubPackage, archive: EpubArchive) => T, limits?: Partial<EpubLimits>): Promise<T> {
@@ -75,7 +76,7 @@ describe('epub3-rich：阅读顺序按 spine，不按 ZIP 顺序或目录叶数'
       // 它仍在 manifest 里（补充文档按需可读），只是不接进阅读流
       expect(book.manifest.get('notes')).toMatchObject({ path: 'OEBPS/notes.xhtml', mediaType: 'application/xhtml+xml' })
       // 目录叶三条 + 卷组一条，没有被 notes 变成第四条叶
-      expect(book.navigation[0].children).toHaveLength(3)
+      expect(pick(book.navigation, 0).children).toHaveLength(3)
     })
   })
 
@@ -83,7 +84,7 @@ describe('epub3-rich：阅读顺序按 spine，不按 ZIP 顺序或目录叶数'
     await withBook('epub3-rich', (book) => {
       expect(book.navigationSource).toBe('nav')
       expect(book.navigation).toHaveLength(1)
-      const [group] = book.navigation
+      const group = pick(book.navigation, 0)
       expect(group.label).toBe('第一卷')
       // 卷组只有标题没有目标（分组标题才允许 null）
       expect(group.target).toBeNull()
@@ -248,9 +249,10 @@ describe('导航派生顺序：nav → NCX → spine', () => {
       expect(book.navigationSource).toBe('ncx')
       expect(book.navigation.map((n) => n.label)).toEqual(['上卷', '第二章'])
       expect(book.warnings).toHaveLength(1)
-      expect(book.warnings[0].code).toBe('epub-navigation-degraded')
-      expect(book.warnings[0].resource).toBe('OEBPS/toc.ncx')
-      expect(book.warnings[0].message).toMatch(/NCX/)
+      const warning = pick(book.warnings, 0)
+      expect(warning.code).toBe('epub-navigation-degraded')
+      expect(warning.resource).toBe('OEBPS/toc.ncx')
+      expect(warning.message).toMatch(/NCX/)
     })
   })
 
@@ -262,7 +264,7 @@ describe('导航派生顺序：nav → NCX → spine', () => {
         ['ch2', target('OEBPS/ch2.xhtml', null), []],
       ])
       expect(book.warnings.map((w) => w.code)).toEqual(['epub-navigation-synthesized'])
-      expect(book.warnings[0].resource).toBeNull()
+      expect(pick(book.warnings, 0).resource).toBeNull()
     })
   })
 

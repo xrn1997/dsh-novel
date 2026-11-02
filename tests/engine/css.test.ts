@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import * as cheerio from 'cheerio'
+import type { CheerioAPI } from 'cheerio'
 import { evalCss } from '../../src/engine/css.js'
 import { RuleEvalError } from '../../src/engine/errors.js'
+import type { EngineValue, Segment } from '../../src/engine/types.js'
+import { detailOf, elementOf, nodesOf } from './value.js'
 
 // fixture 与 select.test.ts 同源：3 个 li.clearfix（第 3 个 odd），章节名在 a.name 内
 const html = `<div id="wrap"><ul class="list">
@@ -11,45 +14,45 @@ const html = `<div id="wrap"><ul class="list">
 </ul><div id="meta"><p>作者：甲</p><p>字数：10万</p></div></div>`
 
 const $ = cheerio.load(html)
-const root = () => $('#wrap') as any
-const seg = (selector: string) => ({ kind: 'css', selector }) as const
+const root = () => $('#wrap')
+const seg = (selector: string): Extract<Segment, { kind: 'css' }> => ({ kind: 'css', selector })
 const loc = (i: number, raw: string) => ({ segmentIndex: i, segmentRaw: raw })
 
 describe('@css 选择器段', () => {
   it('命中 3 个 li.clearfix → nodes', () => {
     const v = evalCss(seg('li.clearfix'), $, root(), loc(0, '@css:li.clearfix'), 'toc')
     expect(v.kind).toBe('nodes')
-    expect((v as any).nodes).toHaveLength(3)
+    expect(nodesOf(v)).toHaveLength(3)
   })
   it('零命中 .nope → Miss（detail 提到零命中与选择器）', () => {
     const v = evalCss(seg('.nope'), $, root(), loc(0, '@css:.nope'), 'toc')
     expect(v.kind).toBe('miss')
-    expect((v as any).detail).toContain('零命中')
-    expect((v as any).detail).toContain('.nope')
+    expect(detailOf(v)).toContain('零命中')
+    expect(detailOf(v)).toContain('.nope')
   })
   it('在当前节点集内选（含当前元素自身），不做全文档查找', () => {
-    const meta = $('#meta') as any
+    const meta = $('#meta')
     const v = evalCss(seg('li'), $, meta, loc(0, '@css:li'), 'toc')
     expect(v.kind).toBe('miss') // li 都在 #meta 之外，#meta 自己也不是 li
     const inWrap = evalCss(seg('li'), $, root(), loc(1, '@css:li'), 'toc')
-    expect((inWrap as any).nodes).toHaveLength(3)
+    expect(nodesOf(inWrap)).toHaveLength(3)
   })
   it('子组合器 + 伪类：.list>li:nth-child(2) → 1 个且是第二章', () => {
     const v = evalCss(seg('.list>li:nth-child(2)'), $, root(), loc(0, '@css:.list>li:nth-child(2)'), 'toc')
     expect(v.kind).toBe('nodes')
-    expect((v as any).nodes).toHaveLength(1)
-    expect($(v.kind === 'nodes' ? (v.nodes as any)[0] : null).find('a').attr('href')).toBe('/b/2')
+    expect(nodesOf(v)).toHaveLength(1)
+    expect(nodesOf(v).eq(0).find('a').attr('href')).toBe('/b/2')
   })
   it('属性伪类：.name[href$="2"] → 1 个', () => {
     const v = evalCss(seg('.name[href$="2"]'), $, root(), loc(0, '@css:.name[href$="2"]'), 'toc')
     expect(v.kind).toBe('nodes')
-    expect((v as any).nodes).toHaveLength(1)
-    expect((v as any).nodes.text()).toBe('第二章 转折')
+    expect(nodesOf(v)).toHaveLength(1)
+    expect(nodesOf(v).text()).toBe('第二章 转折')
   })
   it('命中产物可用 $ 继续消费（nodes 重建）', () => {
-    const v = evalCss(seg('.date'), $, root(), loc(0, '@css:.date'), 'toc') as any
-    expect(v.nodes).toHaveLength(3)
-    expect(v.nodes.eq(0).text()).toBe('2024-01-01')
+    const nodes = nodesOf(evalCss(seg('.date'), $, root(), loc(0, '@css:.date'), 'toc'))
+    expect(nodes).toHaveLength(3)
+    expect(nodes.eq(0).text()).toBe('2024-01-01')
   })
   it('非法选择器 @css:@@@ → RuleEvalError（message 提到选择器，hits=0，段级定位）', () => {
     let caught: unknown
@@ -87,9 +90,9 @@ describe('@css 链步含当前元素自身', () => {
   const p$ = cheerio.load(PL_HTML)
 
   it('裸词步 a 在当前集全是 a.page-link 时入选（对面同形）', () => {
-    const v = evalCss(seg('a'), p$, p$('.page-link') as any, loc(0, '@css:a'), 'toc')
+    const v = evalCss(seg('a'), p$, p$('.page-link'), loc(0, '@css:a'), 'toc')
     expect(v.kind).toBe('nodes')
-    expect((v as any).nodes).toHaveLength(3)
+    expect(nodesOf(v)).toHaveLength(3)
   })
   it('整条链 .page-link@a@href 读出两条真地址（事故现场的最小复现）', async () => {
     const { evaluate } = await import('../../src/engine/evaluate.js')
@@ -99,32 +102,32 @@ describe('@css 链步含当前元素自身', () => {
   })
   it('自身与后代同时命中时，自身排在全部后代之前', () => {
     const nested = cheerio.load('<div id="w" class="box">外<div class="box" id="i">内</div></div>')
-    const v = evalCss(seg('.box'), nested, nested('#w') as any, loc(0, '@css:.box'), 'toc') as any
-    expect(v.nodes.toArray().map((n: any) => n.attribs.id)).toEqual(['w', 'i'])
+    const nodes = nodesOf(evalCss(seg('.box'), nested, nested('#w'), loc(0, '@css:.box'), 'toc'))
+    expect(nodes.toArray().map((n) => elementOf(n).attribs['id'])).toEqual(['w', 'i'])
   })
   it('自身不匹配时行为不变：仍只出后代、仍文档序', () => {
-    const v = evalCss(seg('.page-link'), p$, p$('ul.pages') as any, loc(0, '@css:.page-link'), 'toc') as any
-    expect(v.nodes).toHaveLength(3)
+    const v = evalCss(seg('.page-link'), p$, p$('ul.pages'), loc(0, '@css:.page-link'), 'toc')
+    expect(nodesOf(v)).toHaveLength(3)
   })
 })
 
 describe('! 排除语法（求值层：官方「!是排除，0 是第1个，负数为倒数」）', () => {
-  const segEx = (selector: string, exclude: number[]) => ({ kind: 'css', selector, exclude }) as any
+  const segEx = (selector: string, exclude: number[]): Extract<Segment, { kind: 'css' }> => ({ kind: 'css', selector, exclude })
   it('li!0 → 3 个 li 去掉第 1 个 = 2 个', () => {
     const v = evalCss(segEx('li', [0]), $, root(), loc(0, 'li!0'), 'toc')
     expect(v.kind).toBe('nodes')
-    expect((v as any).nodes).toHaveLength(2)
-    expect((v as any).nodes.eq(0).text()).toContain('第二章')
+    expect(nodesOf(v)).toHaveLength(2)
+    expect(nodesOf(v).eq(0).text()).toContain('第二章')
   })
   it('负数排除：li!-1 去掉最后一个', () => {
     const v = evalCss(segEx('li', [-1]), $, root(), loc(0, 'li!-1'), 'toc')
-    expect((v as any).nodes).toHaveLength(2)
-    expect((v as any).nodes.eq(1).text()).toContain('第二章')
+    expect(nodesOf(v)).toHaveLength(2)
+    expect(nodesOf(v).eq(1).text()).toContain('第二章')
   })
   it('多值排除 li!0:2 → 只剩第 2 个', () => {
     const v = evalCss(segEx('li', [0, 2]), $, root(), loc(0, 'li!0:2'), 'toc')
-    expect((v as any).nodes).toHaveLength(1)
-    expect((v as any).nodes.text()).toContain('第二章')
+    expect(nodesOf(v)).toHaveLength(1)
+    expect(nodesOf(v).text()).toContain('第二章')
   })
   it('排除后为空 → Miss（不是崩溃）', () => {
     const v = evalCss(segEx('li', [0, 1, 2]), $, root(), loc(0, 'li!0:1:2'), 'toc')
@@ -146,26 +149,26 @@ describe('jsoup 的 [attr~=regex]（正则匹配，不是 CSS 的词表包含）
     <meta property="og:image" content="https://x/cover.jpg">
   </head><body><ul><li><a href="/read/123.html">第一章</a><a href="/other/1.html">别的</a></li></ul></body></html>`
   const $h = cheerio.load(h)
-  const hroot = () => $h('html') as any
+  const hroot = () => $h('html')
 
   it('择一正则（category|status|update_time）命中', () => {
     const v = evalCss(seg('meta[property~=category|status|update_time]'), $h, hroot(), loc(0, 'meta[property~=…]'), 'detail')
     expect(v.kind).toBe('nodes')
-    expect((v as any).nodes).toHaveLength(1)
-    expect((v as any).nodes.attr('content')).toBe('都市')
+    expect(nodesOf(v)).toHaveLength(1)
+    expect(nodesOf(v).attr('content')).toBe('都市')
   })
 
   it('可选字符正则（las?test_chapter_name）命中', () => {
     const v = evalCss(seg('meta[property~=las?test_chapter_name]'), $h, hroot(), loc(0, 'meta[property~=…]'), 'detail')
-    expect((v as any).nodes.attr('content')).toBe('第9章 收尾')
+    expect(nodesOf(v).attr('content')).toBe('第9章 收尾')
   })
 
   it('路径正则（a[href~=/read/\\d+]）只留命中项', () => {
     // 用 String.raw 保住正则里的 `\d`（普通字符串里 `'\d'` 会被 JS 吃成 `d`）
     const sel = String.raw`a[href~=/read/\d+]`
     const v = evalCss(seg(sel), $h, hroot(), loc(0, 'a[href~=…]'), 'toc')
-    expect((v as any).nodes).toHaveLength(1)
-    expect((v as any).nodes.attr('href')).toBe('/read/123.html')
+    expect(nodesOf(v)).toHaveLength(1)
+    expect(nodesOf(v).attr('href')).toBe('/read/123.html')
   })
 
   it('正则不匹配 → 零命中 Miss（不是把属性值当词表比）', () => {
@@ -186,8 +189,8 @@ describe('jsoup 的 [attr~=regex]（正则匹配，不是 CSS 的词表包含）
 describe('链首 CSS 直达', () => {
   const NESTED = '<div id="w"><div class="item"><span class="item">内</span></div><div class="item">外</div></div>'
   const $n = cheerio.load(NESTED)
-  const htmlOf = (doc: any, v: any): string[] => v.kind === 'nodes'
-    ? v.nodes.toArray().map((n: any) => doc.html(n))
+  const htmlOf = (doc: CheerioAPI, v: EngineValue): string[] => v.kind === 'nodes'
+    ? v.nodes.toArray().map((n) => doc.html(n))
     : []
 
   it('不遍历当前全集，且与逐元素并集同结果（含 :contains 过滤）', () => {
@@ -195,10 +198,10 @@ describe('链首 CSS 直达', () => {
     // SET_SCOPED_PSEUDO 当成集合型伪类放行给慢路径。
     for (const selector of ['.item', 'div.item:contains(外)', 'div:first-child']) {
       let walked = false
-      const cur = { length: 0, text: () => '', toArray: () => { walked = true; return $n('*').toArray() } } as any
+      const cur = { length: 0, text: () => '', toArray: () => { walked = true; return $n('*').toArray() } } as never
       const fast = evalCss(seg(selector), $n, cur, loc(0, `@css:${selector}`), 'toc', true)
       expect(walked).toBe(false)
-      const slow = evalCss(seg(selector), $n, $n('*') as any, loc(0, `@css:${selector}`), 'toc')
+      const slow = evalCss(seg(selector), $n, $n('*'), loc(0, `@css:${selector}`), 'toc')
       expect(htmlOf($n, fast)).toEqual(htmlOf($n, slow))
       expect(htmlOf($n, fast).length).toBeGreaterThan(0)
     }
@@ -209,10 +212,10 @@ describe('链首 CSS 直达', () => {
     // 快路径不能把这类选择器换成全文档选择，否则同一份规则会换出一组元素。
     const H = cheerio.load('<div><ul><li>A</li><li>B</li></ul><ul><li>C</li><li>D</li></ul></div>')
     let walked = false
-    const cur = { length: 0, text: () => '', toArray: () => { walked = true; return H('*').toArray() } } as any
+    const cur = { length: 0, text: () => '', toArray: () => { walked = true; return H('*').toArray() } } as never
     const fast = evalCss(seg('li:first'), H, cur, loc(0, '@css:li:first'), 'toc', true)
     expect(walked).toBe(true)
-    const slow = evalCss(seg('li:first'), H, H('*') as any, loc(0, '@css:li:first'), 'toc')
+    const slow = evalCss(seg('li:first'), H, H('*'), loc(0, '@css:li:first'), 'toc')
     expect(htmlOf(H, fast)).toEqual(htmlOf(H, slow))
     expect(htmlOf(H, fast).length).toBeGreaterThan(0)
   })
@@ -223,10 +226,10 @@ describe('链首 CSS 直达', () => {
     const H = cheerio.load('<div><ul><li>A</li><li>B</li></ul><ul><li>C</li><li>D</li></ul></div>')
     for (const selector of ['> li', '+ ul', '~ ul', 'div, > li', ':is(> li)', ':where(> li)']) {
       let walked = false
-      const cur = { length: 0, text: () => '', toArray: () => { walked = true; return H('*').toArray() } } as any
+      const cur = { length: 0, text: () => '', toArray: () => { walked = true; return H('*').toArray() } } as never
       const fast = evalCss(seg(selector), H, cur, loc(0, `@css:${selector}`), 'toc', true)
       expect(walked).toBe(true)
-      const slow = evalCss(seg(selector), H, H('*') as any, loc(0, `@css:${selector}`), 'toc')
+      const slow = evalCss(seg(selector), H, H('*'), loc(0, `@css:${selector}`), 'toc')
       expect(htmlOf(H, fast)).toEqual(htmlOf(H, slow))
       expect(htmlOf(H, fast).length).toBeGreaterThan(0)
     }
@@ -238,7 +241,7 @@ describe('@css 属性正则死线（灾难回溯）', () => {
     const $bad = cheerio.load(`<div><a data-x="${'a'.repeat(40)}b">x</a></div>`)
     const err = (() => {
       try {
-        evalCss(seg('a[data-x~=^(?:a+)+$]'), $bad as any, $bad('div') as any, loc(0, 'a[data-x~=…]'), 'toc')
+        evalCss(seg('a[data-x~=^(?:a+)+$]'), $bad, $bad('div'), loc(0, 'a[data-x~=…]'), 'toc')
       } catch (e) { return e }
       return null
     })()

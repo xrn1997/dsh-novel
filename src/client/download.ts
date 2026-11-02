@@ -13,7 +13,12 @@ export async function streamExport(opts: {
   onProgress: (bytes: number, totalChapters: string | null) => void
   signal: AbortSignal
 }): Promise<Blob> {
-  const q = queries.exportBook({ sourceId: opts.sourceId, url: opts.bookKey, title: opts.title, from: opts.from, to: opts.to })
+  // 范围键按需建：两个键都缺席 = 零参数旧链接（`encodeQuery` 本来也丢 undefined，这里只是不建键）
+  const q = queries.exportBook({
+    sourceId: opts.sourceId, url: opts.bookKey, title: opts.title,
+    ...(opts.from === undefined ? {} : { from: opts.from }),
+    ...(opts.to === undefined ? {} : { to: opts.to }),
+  })
   let res: Response
   try {
     res = await fetch(`${NOVEL_API_PREFIX}/${q}`, { signal: opts.signal })

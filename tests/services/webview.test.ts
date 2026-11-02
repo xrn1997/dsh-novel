@@ -8,6 +8,7 @@ import { CookieJar } from '../../src/services/cookies.js'
 import { assembleRequest } from '../../src/services/request.js'
 import { normalizeSource } from '../../src/services/normalize.js'
 import type { NovelSource } from '../../src/services/types.js'
+import { must } from '../support/fixture.js'
 
 let server: http.Server
 let base = ''
@@ -138,7 +139,7 @@ describe.skipIf(process.env.DSH_WEBVIEW !== '1')('WebViewRuntime（真浏览器�
         ruleBookList: '@css:.b', ruleBookName: 'tag.a@text', ruleBookUrl: 'tag.a@href',
         ruleContent: '@css:#c@text',
       })
-      const source: NovelSource = { ...normalized.source!, id: 'bridge', status: 'unverified', importedAt: 0 }
+      const source: NovelSource = { ...must(normalized.source, 'normalized 归一化后的 source'), id: 'bridge', status: 'unverified', importedAt: 0 }
       const plan = { ...assembleRequest(url, {}, source.baseUrl), webView: true }
       const out = await sr.fetchText(source, plan)
       // JAR 里的 pre=1 进了浏览器；浏览器响应里的 sid=abc 又回了 jar

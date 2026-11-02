@@ -23,7 +23,7 @@ export function GlobalStatusBar({ job, stale = false, onOpen }: { job: JobState 
   const oks = entries.filter((e) => e.kind === 'ok')
   const running = job !== null && job.phase === 'running'
   if (errors.length === 0 && oks.length === 0 && !running && !stale) return null
-  const pct = running && job !== null ? jobPct(job) : 0
+  const pct = running ? jobPct(job) : 0
   return (
     <div data-novel-status-bar className="novel-status-bar">
       {stale && (
@@ -44,7 +44,7 @@ export function GlobalStatusBar({ job, stale = false, onOpen }: { job: JobState 
           <button className="novel-btn sm" aria-label={t('status.dismissError')} onClick={() => dismiss(e.id)}>✕</button>
         </div>
       ))}
-      {running && job !== null && (
+      {running && (
         <button data-novel-job-status className="novel-lane cols-job" onClick={onOpen}>
           <span className="novel-muted">{t('job.progress', { kind: jobKindLabel(job.kind, t) })}</span>
           <span className="novel-muted">{t('job.counts', { done: job.done, total: job.total, pct })}</span>

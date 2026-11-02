@@ -4,6 +4,7 @@ import { headerOf, effectiveUserAgent } from '../../src/services/fetcher.js'
 import type { Fetcher } from '../../src/services/fetcher.js'
 import { normalizeSource, rawHeaderRule } from '../../src/services/normalize.js'
 import type { NovelSource } from '../../src/services/types.js'
+import { must } from '../support/fixture.js'
 
 /**
  * 动态请求头（headerRule）回归钉子：
@@ -40,45 +41,45 @@ describe('normalize：header 单字段两形态', () => {
     const rule = '@js:\nvar uid=java.randomUUID();\nJSON.stringify({"X-Device": String(uid)})'
     const r = normalizeSource({ ...base, header: rule })
     expect(r.ok).toBe(true)
-    expect(r.source!.rules.headerRule).toBe(rule)
-    expect(r.source!.rules.header).toBeNull()
+    expect(must(r.source, 'r 归一化后的 source').rules.headerRule).toBe(rule)
+    expect(must(r.source, 'r 归一化后的 source').rules.header).toBeNull()
     expect(r.warnings.some((w) => w.field === 'header')).toBe(false)
   })
   it('<js>…</js> 规则形态同样识别（legado getHeaderMap 双前缀）', () => {
     const rule = '<js>JSON.stringify({"A":"b"})</js>'
     const r = normalizeSource({ ...base, header: rule })
-    expect(r.source!.rules.headerRule).toBe(rule)
-    expect(r.source!.rules.header).toBeNull()
+    expect(must(r.source, 'r 归一化后的 source').rules.headerRule).toBe(rule)
+    expect(must(r.source, 'r 归一化后的 source').rules.header).toBeNull()
   })
   it('漏枚举的大小写变体 @jS: 同样判规则（判据不是前缀枚举清单）', () => {
     const rule = '@jS:JSON.stringify({"A":"b"})'
     const r = normalizeSource({ ...base, header: rule })
-    expect(r.source!.rules.headerRule).toBe(rule)
-    expect(r.source!.rules.header).toBeNull()
+    expect(must(r.source, 'r 归一化后的 source').rules.headerRule).toBe(rule)
+    expect(must(r.source, 'r 归一化后的 source').rules.header).toBeNull()
     expect(r.warnings.some((w) => w.field === 'header')).toBe(false)
   })
   it('前导空白 + <js> 闭合标签 → 规则形态，原文（含空白）照存', () => {
     const rule = '  <js>JSON.stringify({"A":"b"})</js>'
     const r = normalizeSource({ ...base, header: rule })
-    expect(r.source!.rules.headerRule).toBe(rule)
-    expect(r.source!.rules.header).toBeNull()
+    expect(must(r.source, 'r 归一化后的 source').rules.headerRule).toBe(rule)
+    expect(must(r.source, 'r 归一化后的 source').rules.header).toBeNull()
     expect(r.warnings.some((w) => w.field === 'header')).toBe(false)
   })
   it('裸 js: 不判规则、按坏 JSON 点名（与 URL 模板侧 isJsForm 的刻意宽窄差）', () => {
     const r = normalizeSource({ ...base, header: 'js:JSON.stringify({"A":"b"})' })
-    expect(r.source!.rules.headerRule).toBeNull()
-    expect(r.source!.rules.header).toBeNull()
+    expect(must(r.source, 'r 归一化后的 source').rules.headerRule).toBeNull()
+    expect(must(r.source, 'r 归一化后的 source').rules.header).toBeNull()
     expect(r.warnings.some((w) => w.field === 'header')).toBe(true)
   })
   it('静态 JSON 形态：header 解析、headerRule 为 null（互斥同源）', () => {
     const r = normalizeSource({ ...base, header: '{"User-Agent":"UA"}' })
-    expect(r.source!.rules.header).toEqual({ 'User-Agent': 'UA' })
-    expect(r.source!.rules.headerRule).toBeNull()
+    expect(must(r.source, 'r 归一化后的 source').rules.header).toEqual({ 'User-Agent': 'UA' })
+    expect(must(r.source, 'r 归一化后的 source').rules.headerRule).toBeNull()
   })
   it('非规则的坏 JSON → 仍报警告（老口径不动）', () => {
     const r = normalizeSource({ ...base, header: '{bad json' })
-    expect(r.source!.rules.header).toBeNull()
-    expect(r.source!.rules.headerRule).toBeNull()
+    expect(must(r.source, 'r 归一化后的 source').rules.header).toBeNull()
+    expect(must(r.source, 'r 归一化后的 source').rules.headerRule).toBeNull()
     expect(r.warnings.some((w) => w.field === 'header')).toBe(true)
   })
   it('rawHeaderRule：raw 版判别（load 存量重推通道）——非对象返回 undefined（别动存量）', () => {
@@ -174,7 +175,7 @@ describe('resolveHeaders（legado getHeaderMap 口径）', () => {
 describe('effectiveUserAgent（java.getWebViewUA 的取值口径）', () => {
   it('源静态头里的 User-Agent 优先；没覆盖时回落缺省 UA（与 fetch 实际发的一致）', () => {
     expect(effectiveUserAgent(mkSource())).toMatch(/^Mozilla\/5\.0/)
-    const s = mkSource({ rules: { ...mkSource().rules, header: { 'User-Agent': 'UA-from-source' } } as NovelSource['rules'] })
+    const s = mkSource({ rules: { ...mkSource().rules, header: { 'User-Agent': 'UA-from-source' } } })
     expect(effectiveUserAgent(s)).toBe('UA-from-source')
   })
 })

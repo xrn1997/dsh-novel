@@ -3,6 +3,7 @@ import { join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import ts from 'typescript'
+import { must } from './support/fixture.js'
 
 /**
  * 仓内方向守卫：`docs/architecture.md` §2「Node 半的分层与依赖方向」（外加浏览器半那条）
@@ -52,7 +53,7 @@ function edgesOf(rel: string, code: string): Edge[] {
   const walk = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node)) {
       const spec = (node.moduleSpecifier as ts.StringLiteral).text
-      edges.push({ from: rel, spec, typeOnly: node.importClause?.isTypeOnly === true })
+      edges.push({ from: rel, spec, typeOnly: node.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword })
     } else if (ts.isExportDeclaration(node) && node.moduleSpecifier !== undefined) {
       const clause = node.exportClause
       const allType = clause !== undefined && ts.isNamedExports(clause)
@@ -63,6 +64,13 @@ function edgesOf(rel: string, code: string): Edge[] {
   }
   walk(file)
   return edges
+}
+
+/** 取自测样本的第一项：样本长度由构造决定，取不到即本门自身失效——响亮抛，不静默读 undefined */
+function firstOf<T>(items: readonly T[], what: string): T {
+  const v = items[0]
+  if (v === undefined) throw new Error(`自测样本为空：${what}`)
+  return v
 }
 
 /** specifier 折成仓内相对路径（纯词法，不碰真实 fs——合成负例要在没有磁盘文件时也解析得动）；
@@ -135,18 +143,24 @@ function strongComponents(adj: ReadonlyMap<string, readonly string[]>): string[]
     index.set(node, counter); low.set(node, counter); counter += 1
     stack.push(node); onStack.add(node)
     for (const next of adj.get(node) ?? []) {
-      if (!index.has(next)) { strong(next); low.set(node, Math.min(low.get(node)!, low.get(next)!)) }
-      else if (onStack.has(next)) { low.set(node, Math.min(low.get(node)!, index.get(next)!)) }
+      if (!index.has(next)) {
+        strong(next)
+        low.set(node, Math.min(must(low.get(node), 'low[node]'), must(low.get(next), 'low[next]')))
+      } else if (onStack.has(next)) {
+        low.set(node, Math.min(must(low.get(node), 'low[node]'), must(index.get(next), 'index[next]')))
+      }
     }
     if (low.get(node) === index.get(node)) {
       const comp: string[] = []
       for (;;) {
-        const m = stack.pop()!
+        const m = must(stack.pop(), 'SCC 栈顶')
         onStack.delete(m)
         comp.push(m)
         if (m === node) break
       }
-      const selfLoop = comp.length === 1 && (adj.get(comp[0]) ?? []).includes(comp[0])
+      // 单成员分量才算得自环：成员缺席（空分量不可能出现）即不算，别把「没有成员」读成自环
+      const only = comp.length === 1 ? comp[0] : undefined
+      const selfLoop = only !== undefined && (adj.get(only) ?? []).includes(only)
       if (comp.length > 1 || selfLoop) sccs.push(comp.sort())
     }
   }
@@ -224,15 +238,15 @@ describe('仓内方向守卫', () => {
     const a = edgesOf('src/a.ts', `import type { X } from './b.js'`)
     expect(a).toEqual([{ from: 'src/a.ts', spec: './b.js', typeOnly: true }])
     const b = edgesOf('src/a.ts', `import { type X, y } from './b.js'`)
-    expect(b[0].typeOnly).toBe(false)
+    expect(firstOf(b, '行内 type 标记').typeOnly).toBe(false)
   })
 
   it('具名 re-export 也是值边；只有全类型 specifier 才算类型边', () => {
     expect(edgesOf('src/a.ts', `export { x } from './b.js'`))
       .toEqual([{ from: 'src/a.ts', spec: './b.js', typeOnly: false }])
-    expect(edgesOf('src/a.ts', `export { type X } from './b.js'`)[0].typeOnly).toBe(true)
-    expect(edgesOf('src/a.ts', `export * from './b.js'`)[0].typeOnly).toBe(false)
-    expect(edgesOf('src/a.ts', `export type * from './b.js'`)[0].typeOnly).toBe(true)
+    expect(firstOf(edgesOf('src/a.ts', `export { type X } from './b.js'`), '全类型具名 re-export').typeOnly).toBe(true)
+    expect(firstOf(edgesOf('src/a.ts', `export * from './b.js'`), 'export *').typeOnly).toBe(false)
+    expect(firstOf(edgesOf('src/a.ts', `export type * from './b.js'`), 'export type *').typeOnly).toBe(true)
   })
 
   it('wire 只禁值边：import type 不算运行时依赖', () => {

@@ -43,8 +43,10 @@ export function PrefsPanel(): ReactNode {
   const prefs = useStore(prefsStore)
   const step = (delta: number): void => {
     const i = FONT_STEPS.indexOf(prefs.fontSize)
-    const next = FONT_STEPS[Math.min(FONT_STEPS.length - 1, Math.max(0, (i === -1 ? 3 : i) + delta))]
-    setPref({ fontSize: next })
+    const at = Math.min(FONT_STEPS.length - 1, Math.max(0, (i === -1 ? 3 : i) + delta))
+    // 下标已夹在表内：取不到这一步在构造上不成立，夹取证明就在上一行
+    const next = FONT_STEPS.at(at)
+    if (next !== undefined) setPref({ fontSize: next })
   }
   return (
     <div

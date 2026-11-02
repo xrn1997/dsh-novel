@@ -19,7 +19,7 @@ const PRELOAD_SCREENS = 2
  * @param chapters 已载正文数组（null/空洞 = 未载）
  * @param from 视口所在章下标（会话的阅读位置）
  */
-export function nextChapterIndex(chapters: ReadonlyArray<unknown | null>, from: number): number {
+export function nextChapterIndex(chapters: ReadonlyArray<unknown>, from: number): number {
   if (chapters.length === 0) return -1
   const start = Math.min(Math.max(0, from), chapters.length - 1)
   if (chapters[start] === null || chapters[start] === undefined) return start
@@ -41,7 +41,7 @@ export function nextChapterIndex(chapters: ReadonlyArray<unknown | null>, from: 
  */
 export function nextLoadTarget(
   sentinelTop: number, viewportHeight: number,
-  opts: { chapters: ReadonlyArray<unknown | null>; loading: number | null; from: number },
+  opts: { chapters: ReadonlyArray<unknown>; loading: number | null; from: number },
 ): number | null {
   if (opts.loading !== null) return null                          // 单在途：滚动风暴去重
   const next = nextChapterIndex(opts.chapters, opts.from)

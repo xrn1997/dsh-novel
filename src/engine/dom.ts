@@ -1,14 +1,14 @@
 import * as cheerio from 'cheerio'
 import type { Cheerio } from 'cheerio'
 import { isTag, isText } from 'domhandler'
-import type { AnyNode, Element, Text } from 'domhandler'
+import type { AnyNode } from 'domhandler'
 
 /** cheerio.load 薄封装，供 select / css 段共用 */
 export function loadHtml(html: string): cheerio.CheerioAPI {
   return cheerio.load(html)
 }
 
-/** 文本清洗：全角空格 　 → 半角空格、连续空白折叠为单空格、去首尾空白 */
+/** 文本清洗：全角空格（U+3000）→ 半角空格、连续空白折叠为单空格、去首尾空白 */
 export function cleanText(s: string): string {
   return s.replace(/\u3000/g, ' ').replace(/[ \t\r\n]+/g, ' ').trim()
 }
@@ -23,7 +23,7 @@ export function cleanText(s: string): string {
  * 被重复判定时才有。
  */
 export function rawTextOf(node: AnyNode): string {
-  if (isText(node)) return (node as Text).data ?? ''
+  if (isText(node)) return node.data
   const children = (node as { children?: AnyNode[] }).children
   if (children === undefined) return ''
   let out = ''
@@ -31,9 +31,19 @@ export function rawTextOf(node: AnyNode): string {
   return out
 }
 
+/** 元素属性读取：非元素节点没有 `attribs`（`as Element` 只是取口的形状声称，文本节点上运行时是空的）。 */
+export function attribOf(node: AnyNode, name: string): string | undefined {
+  return isTag(node) ? node.attribs[name] : undefined
+}
+
+/** 元素标签名（非元素节点 → undefined，由调用点按「不匹配」处理）。 */
+export function tagNameOf(node: AnyNode): string | undefined {
+  return isTag(node) ? node.name : undefined
+}
+
 /** 判定「上游结果是节点集」（Cheerio 集有 length 与 text()；普通 Value 对象没有） */
 export function isNodeValue(v: unknown): v is Cheerio<AnyNode> {
-  return typeof v === 'object' && v !== null && 'length' in (v as any) && typeof (v as any).text === 'function'
+  return typeof v === 'object' && v !== null && 'length' in v && typeof (v as { text?: unknown }).text === 'function'
 }
 
 // ── 块级感知的纯文本（本插件的正文契约：按 \n 分段）─────────────────────
@@ -77,20 +87,20 @@ export function nodeText(node: AnyNode, opts?: { keepImages?: boolean }): string
     buf = ''
   }
   const visit = (n: AnyNode): void => {
-    if (isText(n)) { buf += (n as Text).data; return }
+    if (isText(n)) { buf += n.data; return }
     if (!isTag(n)) {
       // Document/片段容器（cheerio 的 root）：无标签语义，继续下钻子节点
       const kids = (n as { children?: AnyNode[] }).children
       if (kids !== undefined) for (const child of kids) visit(child)
       return
     }
-    const el = n as Element
+    const el = n
     const tag = el.name.toLowerCase()
     if (tag === 'img') {
       if (keepImages) {
         // img 取址三形态：src / data-src|src / 任意 data-*——
         // 懒加载漫画站大量只有 data-original/data-echo/data-page-image-url
-        const a = el.attribs ?? {}
+        const a = el.attribs
         const src = a.src ?? a['data-src'] ?? a['data-original'] ?? a['data-echo']
           ?? a['data-url'] ?? a['data-page-image-url'] ?? firstDataAttr(a)
         if (src.trim() !== '') { flush(); lines.push(src.trim()) }
@@ -102,7 +112,7 @@ export function nodeText(node: AnyNode, opts?: { keepImages?: boolean }): string
       // 正文面 keepImages 口径下要取回它。但 domhandler 把 noscript 内容按 **raw text** 解析
       // （noscript.children 只有一个 text 节点、find('img') 为 0），直接下钻等于把字面
       // `<img src="…">` 当正文吐给读者——所以把那层文本再当 HTML 解析一次再走同一套行规约。
-      const raw = el.children.map((c) => (isText(c) ? (c as Text).data : '')).join('')
+      const raw = el.children.map((c) => (isText(c) ? c.data : '')).join('')
       if (raw.trim() === '') return
       flush()
       const inner = loadHtml(raw).root().get(0)

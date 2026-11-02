@@ -79,18 +79,22 @@ export class SourceRegistry {
   /** 落盘调度只住 writer：注册表只排写（调用 schedule）与等 flush，不另持 timer/chain。 */
   private readonly writer: ReturnType<typeof createDebouncedWriter>
   private readonly tx: SourceEdit
+  private readonly dir: string
+  private readonly sources: NovelSource[]
 
-  private constructor(private readonly dir: string, private readonly sources: NovelSource[]) {
+  private constructor(dir: string, sources: NovelSource[]) {
+    this.dir = dir
+    this.sources = sources
     this.writer = createDebouncedWriter(PERSIST_WINDOW_MS, { threshold: PERSIST_EVERY })
-    const self = this
+    // 箭头函数天然捕获本实例的 this：不需要（也不该）先把它别名为一个局部变量
     this.tx = {
-      add: (r) => self.add(r),
-      replace: (id, r) => self.replace(id, r),
-      remove: (id) => self.remove(id),
-      removeAll: (ids) => self.removeAll(ids),
-      setStatus: (id, s, d, p) => self.setStatus(id, s, d, p),
-      setEnabled: (id, e) => self.setEnabled(id, e),
-      setAuth: (id, a) => self.setAuth(id, a),
+      add: (r) => this.add(r),
+      replace: (id, r) => this.replace(id, r),
+      remove: (id) => this.remove(id),
+      removeAll: (ids) => this.removeAll(ids),
+      setStatus: (id, s, d, p) => this.setStatus(id, s, d, p),
+      setEnabled: (id, e) => this.setEnabled(id, e),
+      setAuth: (id, a) => this.setAuth(id, a),
     }
   }
 
@@ -116,24 +120,27 @@ export class SourceRegistry {
    *  落盘由内部合并调度——累计 ≥PERSIST_EVERY 的那次 edit 会**等写落地**（旧「每 20 条 persist」同款），
    *  否则 100ms 尾沿防抖后台合并；需要立即持久的收尾点用 flush()。 */
   async edit<T>(recipe: (tx: SourceEdit) => T): Promise<T> {
-    let ok = false
+    // recipe 的结果先收在手里再落盘：写盘失败要看它是否已成立，但**不在 finally 里抛**
+    // （finally 抛会盖掉在途的 recipe 错误，也会替换掉那次 return）
+    let result: { ok: true; value: T } | { ok: false; error: unknown }
     try {
-      const out = recipe(this.tx)
-      ok = true
-      return out
-    } finally {
-      try {
-        // 阈值到点的那次返回写 promise（失败如实抛）；其余交给 writer 的尾沿防抖。
-        await this.scheduleWrite()
-      } catch (e) {
-        // recipe 已在抛错时，写失败没有交付路径：记进 writer 的失败账，收尾 flush 可见；
-        // recipe 的错误优先，不能被写失败盖掉。recipe 成功时写失败直接抛给调用方，
-        // 是否留给收尾 flush 由调用方用 retainWriteFailure 显式移交（不重复报同一个错）。
-        if (ok) throw e
-        this.writer.retainFailure(this.file, e)
-        log.error('recipe 抛错期间的落盘失败（保留 recipe 错误）:', e)
-      }
+      result = { ok: true, value: recipe(this.tx) }
+    } catch (e) {
+      result = { ok: false, error: e }
     }
+    try {
+      // 阈值到点的那次返回写 promise（失败如实抛）；其余交给 writer 的尾沿防抖。
+      await this.scheduleWrite()
+    } catch (e) {
+      // recipe 已在抛错时，写失败没有交付路径：记进 writer 的失败账，收尾 flush 可见；
+      // recipe 的错误优先，不能被写失败盖掉。recipe 成功时写失败直接抛给调用方，
+      // 是否留给收尾 flush 由调用方用 retainWriteFailure 显式移交（不重复报同一个错）。
+      if (result.ok) throw e
+      this.writer.retainFailure(this.file, e)
+      log.error('recipe 抛错期间的落盘失败（保留 recipe 错误）:', e)
+    }
+    if (!result.ok) throw result.error
+    return result.value
   }
 
   /** 排一次写：writer 的 schedule 是唯一写调度入口；阈值返回写 promise，其余返回 undefined。 */
@@ -180,9 +187,11 @@ export class SourceRegistry {
       groups: s.groups,
       type: s.type,
       status: s.status,
-      statusDetail: s.statusDetail,
+      // 对外投影是会过 JSON 的载荷：缺席与显式 undefined 在序列化后是两件事，
+      // 故这两格按需建键（不给 wire 类型补 `| undefined`，那等于把标志在整面关掉）。
+      ...(s.statusDetail === undefined ? {} : { statusDetail: s.statusDetail }),
       importedAt: s.importedAt,
-      lastProbedAt: s.lastProbedAt,
+      ...(s.lastProbedAt === undefined ? {} : { lastProbedAt: s.lastProbedAt }),
       hasHeader: s.rules.header != null || s.rules.headerRule != null,
       hasAuth: !!s.auth,
       authExpired: s.auth?.expired ?? false,
@@ -230,7 +239,8 @@ export class SourceRegistry {
     const doomed = new Set(ids)
     const before = this.sources.length
     for (let i = this.sources.length - 1; i >= 0; i--) {   // 倒序 splice：就地删，保持 readonly 引用
-      if (doomed.has(this.sources[i].id)) this.sources.splice(i, 1)
+      const victim = this.sources[i]
+      if (victim !== undefined && doomed.has(victim.id)) this.sources.splice(i, 1)
     }
     return before - this.sources.length
   }

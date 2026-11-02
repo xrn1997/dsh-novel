@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { bindRegexRow } from '../../src/engine/regex-row.js'
 import { parseRule } from '../../src/engine/parse.js'
 import { evaluate } from '../../src/engine/evaluate.js'
+import { pick } from '../support/fixture.js'
 
 /**
  * AllInOne 行 → 字段规则文本的 `$n` 绑定（矩阵行 `a-allinone-group-zero` 的实现钉子）。
@@ -44,12 +45,12 @@ describe('AllInOne 行绑定 $n', () => {
   // 对面只在 `##` **之前**的支文本上扫 `$\d`（splitRegex 只看 ruleStrArray[0]），
   // 故替换尾里的 `$1` 仍是「替换段的捕获组引用」，不是行组引用。
   it('替换尾里的 $n 不是行组引用（只扫 `##` 之前的支文本）', () => {
-    const kinds = parseRule('class.a@text##pat##$1', 'rule', 'value').branches[0].segments.map((s) => s.kind)
+    const kinds = pick(parseRule('class.a@text##pat##$1', 'rule', 'value').branches, 0).segments.map((s) => s.kind)
     expect(kinds).not.toContain('regexRow')
   })
 
   it('js 区域豁免：脚本里的 $1 是正则反向引用，不是行组', () => {
-    const kinds = parseRule("js:result.replace(/(\\d+)/, '$1')", 'rule', 'value').branches[0].segments.map((s) => s.kind)
+    const kinds = pick(parseRule("js:result.replace(/(\\d+)/, '$1')", 'rule', 'value').branches, 0).segments.map((s) => s.kind)
     expect(kinds).not.toContain('regexRow')
   })
 

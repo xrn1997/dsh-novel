@@ -2,6 +2,7 @@
 import { renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetJobSurface, startSourceVerification, useJobPolling } from '../../src/client/jobs.js'
+import { pick } from '../support/fixture.js'
 
 /**
  * 书源验证领域动作（验证编排收拢）的 seam 测试。
@@ -36,8 +37,8 @@ describe('startSourceVerification：验证提交的编排单点', () => {
       refresh,
     })
     expect(pushError).toHaveBeenCalledTimes(1)
-    expect(String(pushError.mock.calls[0][0])).toContain('启动验证失败')
-    expect(String(pushError.mock.calls[0][0])).toContain('boom')
+    expect(String(pick(pick(pushError.mock.calls, 0), 0))).toContain('启动验证失败')
+    expect(String(pick(pick(pushError.mock.calls, 0), 0))).toContain('boom')
     expect(refresh).not.toHaveBeenCalled()
   })
 

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { MockInstance } from 'vitest'
 import { cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { CopyProvider, enTranslate } from '../../src/client/copy/index.js'
@@ -10,6 +11,7 @@ import type { FakeSettingsDeps } from './fake-deps.js'
 import { resetSourceListUi } from '../../src/client/source-list.js'
 import { paramOps, ROUTES } from '../../src/shared/wire.js'
 import type { JobState, SourcePublic } from '../../src/client/views/types.js'
+import { must, pick } from '../support/fixture.js'
 
 /**
  * 选中动作条 + 删除确认流的接线测试。当前口径：
@@ -54,7 +56,7 @@ function selectRows(names: string[]): void {
 function selbarButton(label: string): HTMLElement {
   const bar = document.querySelector<HTMLElement>('[data-novel-selbar]')
   expect(bar, '选中动作条未出现').not.toBeNull()
-  const btn = [...(bar as HTMLElement).querySelectorAll('button')].find((b) => b.textContent?.trim() === label)
+  const btn = [...(bar as HTMLElement).querySelectorAll('button')].find((b) => b.textContent.trim() === label)
   expect(btn, `动作条上找不到「${label}」`).toBeDefined()
   return btn as HTMLElement
 }
@@ -81,8 +83,8 @@ describe('选中动作条：启用/停用/验证所选（写口载荷 + 成功�
     // 再停用，不必重勾（清勾选「不应该」）
     expect(screen.getByText('完成')).toBeTruthy()                      // 还在编辑态
     expect(document.querySelector('[data-novel-selbar]')).not.toBeNull()
-    expect((screen.getByLabelText('选择 源一') as HTMLInputElement).checked).toBe(true)
-    expect((screen.getByLabelText('选择 源二') as HTMLInputElement).checked).toBe(true)
+    expect(screen.getByLabelText<HTMLInputElement>('选择 源一').checked).toBe(true)
+    expect(screen.getByLabelText<HTMLInputElement>('选择 源二').checked).toBe(true)
     expect(deps.pushError).not.toHaveBeenCalled()
   })
 
@@ -122,8 +124,8 @@ describe('选中动作条：启用/停用/验证所选（写口载荷 + 成功�
     selectRows(['源一'])
     fireEvent.click(screen.getByText('验证所选'))
     await waitFor(() => expect(deps.pushError).toHaveBeenCalledTimes(1))
-    expect(String(deps.pushError.mock.calls[0][0])).toContain('启动验证失败')
-    expect(String(deps.pushError.mock.calls[0][0])).toContain('boom')
+    expect(String(pick(pick(deps.pushError.mock.calls, 0), 0))).toContain('启动验证失败')
+    expect(String(pick(pick(deps.pushError.mock.calls, 0), 0))).toContain('boom')
     expect(onChanged).not.toHaveBeenCalled()
     await new Promise((r) => setTimeout(r, 20))
     expect(fetchJobStatus).toHaveBeenCalledTimes(1)                     // 失败不催读面
@@ -146,8 +148,8 @@ describe('选中动作条：启用/停用/验证所选（写口载荷 + 成功�
     selectRows(['源一'])
     fireEvent.click(screen.getByText('启用所选'))
     await waitFor(() => expect(deps.pushError).toHaveBeenCalledTimes(1))
-    expect(String(deps.pushError.mock.calls[0][0])).toContain('操作失败')
-    expect(String(deps.pushError.mock.calls[0][0])).toContain('boom')
+    expect(String(pick(pick(deps.pushError.mock.calls, 0), 0))).toContain('操作失败')
+    expect(String(pick(pick(deps.pushError.mock.calls, 0), 0))).toContain('boom')
     expect(onChanged).not.toHaveBeenCalled()
     expect(document.querySelector('[data-novel-selbar]')).not.toBeNull()   // 勾选留着：失败不许把现场一起清掉
   })
@@ -235,8 +237,8 @@ describe('删除：统一模态二次确认（2026 改版——手输口令与�
     fireEvent.click(screen.getByText('确认删除'))
 
     await waitFor(() => expect(deps.pushError).toHaveBeenCalledTimes(1))
-    expect(String(deps.pushError.mock.calls[0][0])).toContain('批量删除失败')
-    expect(String(deps.pushError.mock.calls[0][0])).toContain('磁盘只读')
+    expect(String(pick(pick(deps.pushError.mock.calls, 0), 0))).toContain('批量删除失败')
+    expect(String(pick(pick(deps.pushError.mock.calls, 0), 0))).toContain('磁盘只读')
     expect(screen.queryByRole('dialog')).toBeNull()       // 失败也收模态（错误进全局条，可重开）
     expect(onChanged).not.toHaveBeenCalled()
     expect(document.querySelector('[data-novel-selbar]')).not.toBeNull()   // 没删成就不清勾选（现场留着重试）
@@ -274,7 +276,7 @@ describe('删除：统一模态二次确认（2026 改版——手输口令与�
     opener.focus()                                       // jsdom 的 click 不聚焦（真实浏览器会）——先显式聚焦
     fireEvent.click(opener)
     expect(document.activeElement?.textContent).toBe('取消')   // 入场焦点
-    ;(screen.getByText('确认删除') as HTMLElement).focus()      // 用户把焦点移进模态
+    ;screen.getByText('确认删除').focus()      // 用户把焦点移进模态
     expect(document.activeElement?.textContent).toBe('确认删除')
     // 壳层重渲染 × 2（模拟 useJobPolling 轮询 tick：新 job 对象 → SourceList 重渲染 → 新 onCancel 闭包）。
     // 挂载作用域化：焦点 effect 不得依赖 onCancel，否则每次重渲染 cleanup+重跑 → 焦点被劫回
@@ -315,7 +317,8 @@ describe('⋯ 菜单的开合方向：下方放不下就朝上开（长列表滚
   // 判会把「放不下」算成放得下）。
   // jsdom 无排版：滚动口身份靠 overflow-y + 可滚高度认（与 `scrollport.findScrollport` 同一判据），
   // 几何由用例给——这里让 body 当那个滚动口，触发件与它的 rect 按用例摆布。
-  const realGBCR = Element.prototype.getBoundingClientRect
+  // 原型上的实现按属性描述符保存/还原：直接抄一份方法引用会在 lint 面上成为游离方法
+  const realGBCR = must(Object.getOwnPropertyDescriptor(Element.prototype, 'getBoundingClientRect'), 'getBoundingClientRect 的描述符')
   const realScrollHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight')
   const realClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
   let port: { top: number; bottom: number }
@@ -334,11 +337,11 @@ describe('⋯ 菜单的开合方向：下方放不下就朝上开（长列表滚
       const box = this === document.body ? port
         : this.getAttribute('aria-label')?.startsWith('更多动作') === true ? trigger
           : { top: 0, bottom: 0 }
-      return { ...box, left: 0, right: 0, width: 0, height: 0, x: 0, y: box.top, toJSON: () => ({}) } as DOMRect
+      return { ...box, left: 0, right: 0, width: 0, height: 0, x: 0, y: box.top, toJSON: () => ({}) }
     }
   })
   afterEach(() => {
-    Element.prototype.getBoundingClientRect = realGBCR
+    Object.defineProperty(Element.prototype, 'getBoundingClientRect', realGBCR)
     vi.restoreAllMocks()
     if (realScrollHeight !== undefined) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', realScrollHeight)
     if (realClientHeight !== undefined) Object.defineProperty(HTMLElement.prototype, 'clientHeight', realClientHeight)
@@ -382,7 +385,8 @@ describe('⋯ 菜单的开合方向：下方放不下就朝上开（长列表滚
 describe('「去登录」接线（runLogin 两形态 / 未声明回站点）', () => {
   // 「去登录」不问 baseUrl 直开，也不在客户端猜分支：先向服务端要真 loginUrl / 触发 JS 登录脚本，
   // 再看服务端投影出来的事实 `hasLoginUrl`。
-  beforeEach(() => { vi.spyOn(window, 'open').mockImplementation(() => null) })
+  let openSpy: MockInstance<typeof window.open>
+  beforeEach(() => { openSpy = vi.spyOn(window, 'open').mockImplementation(() => null) })
   afterEach(() => { vi.restoreAllMocks() })
 
   const openAuthPane = (): void => {
@@ -396,8 +400,8 @@ describe('「去登录」接线（runLogin 两形态 / 未声明回站点）', (
     openAuthPane()
     fireEvent.click(screen.getByText('去登录'))
     await waitFor(() => expect(apiSend).toHaveBeenCalledWith(paramOps.sourceAuth.at('s1'), { runLogin: true }))
-    await waitFor(() => expect(window.open).toHaveBeenCalledWith('https://login.example/x', '_blank', 'noopener,noreferrer'))
-    expect(window.open).not.toHaveBeenCalledWith('https://s1.com', '_blank', 'noopener,noreferrer')
+    await waitFor(() => expect(openSpy).toHaveBeenCalledWith('https://login.example/x', '_blank', 'noopener,noreferrer'))
+    expect(openSpy).not.toHaveBeenCalledWith('https://s1.com', '_blank', 'noopener,noreferrer')
   })
 
   it('声明了 loginUrl（JS 形态）→ 服务端跑完脚本：报成功、收起面板、不开任何页面', async () => {
@@ -406,7 +410,7 @@ describe('「去登录」接线（runLogin 两形态 / 未声明回站点）', (
     openAuthPane()
     fireEvent.click(screen.getByText('去登录'))
     await waitFor(() => expect(deps.pushOk).toHaveBeenCalledWith('登录脚本已执行，登录态已保存'))
-    expect(window.open).not.toHaveBeenCalled()
+    expect(openSpy).not.toHaveBeenCalled()
     await waitFor(() => expect(screen.queryByText('去登录')).toBeNull())
   })
 
@@ -415,7 +419,7 @@ describe('「去登录」接线（runLogin 两形态 / 未声明回站点）', (
     render(view(makeDeps({ apiSend }), [src({ id: 's1', name: '源一', hasLoginUrl: false })]))
     openAuthPane()
     fireEvent.click(screen.getByText('去登录'))
-    expect(window.open).toHaveBeenCalledWith('https://s1.com', '_blank', 'noopener,noreferrer')
+    expect(openSpy).toHaveBeenCalledWith('https://s1.com', '_blank', 'noopener,noreferrer')
     expect(apiSend).not.toHaveBeenCalled()
   })
 
@@ -425,7 +429,7 @@ describe('「去登录」接线（runLogin 两形态 / 未声明回站点）', (
     openAuthPane()
     fireEvent.click(screen.getByText('去登录'))
     await waitFor(() => expect(deps.pushError).toHaveBeenCalledWith(expect.stringContaining('去登录失败：loginUrl 未产出 cookie'), expect.anything()))
-    expect(window.open).not.toHaveBeenCalled()
+    expect(openSpy).not.toHaveBeenCalled()
   })
 })
 

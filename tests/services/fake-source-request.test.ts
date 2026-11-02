@@ -4,6 +4,8 @@ import { normalizeSource } from '../../src/services/normalize.js'
 import { assembleRequest } from '../../src/services/request.js'
 import type { NovelSource } from '../../src/services/types.js'
 import { fakeSourceRequest } from './fake-source-request.js'
+import { must } from '../support/fixture.js'
+import { requestUrlOf } from '../support/fetch-input.js'
 
 /** 假件的两条口径钉：它由真缝 `createSourceRequest` 装配，故源静态头与 headerRule 都按真缝行为生效。
  *  这两条在旧假件（自持一条 charset-only 的组合）上都红——那是假件向真缝靠拢的已声明差异。 */
@@ -18,7 +20,7 @@ function src(over: Record<string, unknown> = {}): NovelSource {
   }
   const n = normalizeSource(raw)
   if (!n.ok) throw new Error(`桩源应能规范化：${JSON.stringify(n.missing)}`)
-  return { id: 'i', status: 'unverified', importedAt: 0, ...n.source! } as NovelSource
+  return { id: 'i', status: 'unverified', importedAt: 0, ...must(n.source, 'n 归一化后的 source') }
 }
 
 const html = (text: string): Response =>
@@ -41,7 +43,7 @@ describe('fakeSourceRequest（由 createSourceRequest 装配）', () => {
     let mainHeaders: Record<string, string> | undefined
     const f = createFetcher({
       fetchImpl: async (input, init) => {
-        const url = String(input)
+        const url = requestUrlOf(input)
         seen.push(url)
         if (url.endsWith('/h')) {
           return new Response('{"X-Dyn":"1"}', { headers: { 'content-type': 'application/json' } })

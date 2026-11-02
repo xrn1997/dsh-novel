@@ -10,6 +10,7 @@
  * 一轮真链路审计」（README 那条门的口径）。
  */
 import { describe, expect, it } from 'vitest'
+import { isTag } from 'domhandler'
 import { evaluate } from '../../src/engine/evaluate.js'
 
 const HTML = '<div class="wrap"><ul>'
@@ -18,7 +19,7 @@ const HTML = '<div class="wrap"><ul>'
 
 const hitTags = async (rule: string, html = HTML): Promise<string[]> => {
   const v = await evaluate(rule, { html }, 'toc')
-  return v.kind === 'nodes' ? v.nodes.toArray().map((e: any) => String(e.tagName)) : []
+  return v.kind === 'nodes' ? v.nodes.toArray().map((e) => (isTag(e) ? e.tagName : '')) : []
 }
 
 const hitCount = async (rule: string, html = HTML): Promise<number> => {

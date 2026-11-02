@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { mergeBooks } from '../../src/shared/merge-by-book.js'
-import type { SearchGroup, SearchHit } from '../../src/shared/wire.js'
+import type { MergedRound } from '../../src/shared/merge-by-book.js'
+import type { MergedBook, SearchGroup, SearchHit } from '../../src/shared/wire.js'
 
 /**
  * 归并面的钉子。夹具的分工要读得出：同不同键由「规范化后的书名＋作者」说了算，所以
@@ -19,12 +20,20 @@ const group = (sourceId: string, hits: SearchHit[]): SearchGroup =>
 
 const KW = '冰魔女的契约'
 
+/** 首个书行：每条用例都先钉过 total，取不到即用例自身失效——响亮抛，不用 ?. 把缺席读成 undefined */
+function firstBook(r: MergedRound): MergedBook {
+  const b = r.books[0]
+  if (b === undefined) throw new Error(`归并结果没有书行（total=${r.total}）`)
+  return b
+}
+
 describe('mergeBooks：归并键与输入范围', () => {
   it('同键跨源归并成一本，sources 按到达序累积', () => {
     const r = mergeBooks(KW, [group('a', [hit('冰魔女的契约', { author: '狐不妖' })]), group('b', [hit('《冰魔女的契约》', { author: '狐不妖' })])])
     expect(r.total).toBe(1)
-    expect(r.books[0].sources.map((s) => s.sourceId)).toEqual(['a', 'b'])
-    expect(r.books[0].sourceCount).toBe(2)
+    const b = firstBook(r)
+    expect(b.sources.map((s) => s.sourceId)).toEqual(['a', 'b'])
+    expect(b.sourceCount).toBe(2)
   })
 
   it('书名或作者规范化后不同即两本（重名书大量存在）', () => {
@@ -55,8 +64,9 @@ describe('mergeBooks：归并键与输入范围', () => {
     // 会报出没有答话的家，二是这一家在序里压过两家真答话的源。
     const r = mergeBooks(KW, [group('a', [hit('冰魔女的契约', { author: '狐不妖' }), hit('《冰魔女的契约》', { author: '狐不妖' })])])
     expect(r.total).toBe(1)
-    expect(r.books[0].sources.length).toBe(2)
-    expect(r.books[0].sourceCount).toBe(1)
+    const b = firstBook(r)
+    expect(b.sources.length).toBe(2)
+    expect(b.sourceCount).toBe(1)
   })
 
   it('带 error 的组整个跳过（失败源是排查轴，不是一本空书）', () => {
@@ -72,7 +82,7 @@ describe('mergeBooks：归并键与输入范围', () => {
     const fresh: SearchGroup = { sourceId: 'n', sourceName: '新源', status: 'unverified', hits: [hit('冰魔女的契约', { author: '狐不妖' })] }
     const r = mergeBooks(KW, [fresh])
     expect(r.total).toBe(1)
-    expect(r.books[0].sourceCount).toBe(1)
+    expect(firstBook(r).sourceCount).toBe(1)
   })
 })
 
@@ -147,14 +157,16 @@ describe('mergeBooks：书行那两个名字', () => {
       group('c', [hit('冰魔女的契约', { author: '狐不妖' })]),
     ])
     expect(r.total).toBe(1)
-    expect(r.books[0].title).toBe('『冰魔女的契约』')
-    expect(r.books[0].author).toBe('狐不妖 ')
-    expect(r.books[0].relevance).toBe('exact')
+    const b = firstBook(r)
+    expect(b.title).toBe('『冰魔女的契约』')
+    expect(b.author).toBe('狐不妖 ')
+    expect(b.relevance).toBe('exact')
   })
 
   it('sources 各条带着自己那一家的名字与地址（归并只收视图，不夺走任何一条的动作）', () => {
     const r = mergeBooks(KW, [group('a', [hit('冰魔女的契约', { author: '狐不妖' })]), group('b', [hit('《冰魔女的契约》', { author: ' 狐不妖' })])])
-    expect(r.books[0].sources.map((s) => `${s.sourceName}|${s.title}|${s.author}`)).toEqual(['源a|冰魔女的契约|狐不妖', '源b|《冰魔女的契约》| 狐不妖'])
-    expect(r.books[0].sources.map((s) => s.url)).toEqual(['https://x/冰魔女的契约', 'https://x/《冰魔女的契约》'])
+    const b = firstBook(r)
+    expect(b.sources.map((s) => `${s.sourceName}|${s.title}|${s.author}`)).toEqual(['源a|冰魔女的契约|狐不妖', '源b|《冰魔女的契约》| 狐不妖'])
+    expect(b.sources.map((s) => s.url)).toEqual(['https://x/冰魔女的契约', 'https://x/《冰魔女的契约》'])
   })
 })

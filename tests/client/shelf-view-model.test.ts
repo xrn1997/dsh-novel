@@ -11,11 +11,11 @@ const book = (over: Partial<ShelfBook>): ShelfBook => ({
   bookKey: 'k', sourceId: 's', title: '书', addedAt: 1,
   progress: { chapterIndex: 0, offsetRatio: 0, updatedAt: 1 },
   ...over,
-} as ShelfBook)
+})
 
 /** 读取面条目：书架条目 + 服务端 join 出来的源名投影 */
 const entry = (over: Partial<ShelfEntry>): ShelfEntry =>
-  ({ ...book({}), sourceName: null, ...over } as ShelfEntry)
+  ({ ...book({}), sourceName: null, ...over })
 
 describe('filterShelfBooks（筛选口径）', () => {
   const list = [

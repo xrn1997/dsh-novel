@@ -66,7 +66,7 @@ export function loadPanelShelf(deps: PanelShelfDeps): Promise<PanelShelfRead> {
       panelShelf.set({ books: list, error: null, landed })
       return 'ok'
     },
-    (e): PanelShelfRead => {
+    (e: unknown): PanelShelfRead => {
       if (gen !== generation) return 'stale'
       // 失败不伪装成空架：books 置空 + error，视图据此显示不可用而不是「书架空空」
       panelShelf.set({ books: [], error: deps.describeError(e) })

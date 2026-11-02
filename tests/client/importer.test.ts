@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { validateSourceJson } from '../../src/client/importer.js'
 import { clearSelection, filterByGroup, filterByStatus, filterSources, groupIcon, selectMany, setEditMode, setGroupFilter, setQuery, setStatusFilter, resetSourceListUi, sourceListUi, toggleSelect, UNGROUPED } from '../../src/client/source-list.js'
 import type { SourcePublic } from '../../src/client/views/types.js'
+import { pick } from '../support/fixture.js'
 
 /** 导入预检：结构可解析即可导入（服务端 normalize 是权威）；条目缺失只提示不连坐。
  * 注：文件导入不经此——原文直通服务端后台任务，无客户端合并/分批逻辑。 */
@@ -29,7 +30,7 @@ describe('validateSourceJson', () => {
   it('对象 ruleContent 缺 content 子字段 → 缺失点名 ruleContent', () => {
     const c = validateSourceJson('{"bookSourceName":"A","bookSourceUrl":"https://a","ruleContent":{"webJs":""}}')
     expect(c.ok).toBe(true)
-    expect(c.bad[0]?.missing).toContain('ruleContent')
+    expect(pick(c.bad, 0).missing).toContain('ruleContent')
   })
   it('坏 JSON / 空文本 → ok false（按钮禁用）', () => {
     expect(validateSourceJson('not json').ok).toBe(false)

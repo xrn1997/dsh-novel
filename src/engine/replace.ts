@@ -32,6 +32,8 @@ export function applyReplaces(
   const compiled: { re: RegExp; replacement: string; index: number; raw: string }[] = []
   for (let i = 0; i < replaces.length; i++) {
     const step = replaces[i]
+    // 循环条件给到第 i 项 ⇒ step 必在界内；判空只为让编译器跟上（不补一条空替换步）
+    if (step === undefined) continue
     const flags = onlyOne
       ? step.flags.replace('g', '')
       : step.flags + (step.flags.includes('g') ? '' : 'g')
@@ -84,6 +86,9 @@ export function applyReplaces(
  *  （钉子 `tests/engine/replace.test.ts` 的 `describe('interp 查表只认自有键…')`）。 */
 function interpolate(s: string, interp?: Record<string, string>): string {
   if (interp === undefined || !s.includes('{{')) return s
-  return s.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (m, path: string) =>
-    (Object.hasOwn(interp, path) ? interp[path] : m))
+  return s.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (m, path: string) => {
+    const hit = Object.hasOwn(interp, path) ? interp[path] : undefined
+    // 自有键查不到值（只可能是键被并发删掉）与「查不到这个占位」同一落点：原文保留（不猜）
+    return hit ?? m
+  })
 }

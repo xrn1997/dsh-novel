@@ -51,7 +51,10 @@ export async function probeSource(
       // 用 'value'）。规则以属性终端收尾（`@onclick`/`@_src`）时两种用途结果不同——
       // 探针漏传该参数会把搜索面读得出书名的源判成「首条书名为空」的坏源。用途定档收在
       // `bridge.fieldOf` 门内，探针只交规则与本条上下文，不自己接住求值产物。
-      const first = await fieldOf(page.subEval, nameRule, page.contexts[0], 'search')
+      const firstCtx = page.contexts[0]
+      // 取不到首条与上面「0 条」同路：换下一个关键词，不拿空上下文去求值
+      if (firstCtx === undefined) continue
+      const first = await fieldOf(page.subEval, nameRule, firstCtx, 'search')
       if (first === null || first.trim() === '') {
         return fail('RuleEvalError', `首条书名为空（段 ruleBookName: ${nameRule}）`, page.contexts.length)
       }

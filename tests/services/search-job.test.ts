@@ -5,6 +5,7 @@ import { SEARCH_HITS_CAP_PER_SOURCE, SEARCH_JOB_RETENTION_MS } from '../../src/s
 import type { SearchGroup, SearchHit } from '../../src/shared/wire.js'
 import type { JobHost } from '../../src/services/job-holder.js'
 import { DEFAULT_JOB_OUTPUT_BYTES } from '../../src/services/job-tail.js'
+import { must, pick } from '../support/fixture.js'
 
 /** 搜索后台任务的持有者：整轮结果住服务端，读面给游标增量。它存在的理由是实测缺陷——
  *  浏览器半自持在途循环，切界面即丢结果。 */
@@ -58,7 +59,7 @@ describe('SearchJobs 读面快照', () => {
     expect(first?.added).toEqual([])
     m.emit(group('a', 1))
     m.emit(group('b', 2))
-    const second = jobs.snapshot(first!.next)
+    const second = jobs.snapshot(must(first, '第一轮快照').next)
     expect(second?.added.map((g) => g.sourceId)).toEqual(['a', 'b'])    // 完成序累积
     expect(second).toMatchObject({ done: 2, next: 2, phase: 'running' })
     expect(jobs.snapshot(99)?.added).toEqual([])                        // 超前游标：不抛，只给空增量
@@ -76,9 +77,9 @@ describe('SearchJobs 读面快照', () => {
     m.emit(group('big', SEARCH_HITS_CAP_PER_SOURCE + 30))
     m.finish()
     await tick()
-    const snap = jobs.snapshot(0)
-    expect(snap?.added[0].hits).toHaveLength(SEARCH_HITS_CAP_PER_SOURCE)
-    expect(snap?.done).toBe(1)
+    const snap = must(jobs.snapshot(0), '搜索轮次快照')
+    expect(pick(snap.added, 0).hits).toHaveLength(SEARCH_HITS_CAP_PER_SOURCE)
+    expect(snap.done).toBe(1)
   })
 
   it('只留最近一轮：新提交即替换，旧任务读不出来', async () => {
@@ -171,7 +172,7 @@ describe('SearchJobs 登记给宿主 ctx.jobs（与写任务同一口径）', ()
     m.finish()
     expect(hooks?.readOutput?.()).toContain('a')
     expect(hooks?.readOutput?.()).toBe('')            // 消费式
-    expect(spec!.outputLimitBytes).toBe(DEFAULT_JOB_OUTPUT_BYTES)
+    expect(must(spec, '任务 spec').outputLimitBytes).toBe(DEFAULT_JOB_OUTPUT_BYTES)
   })
 
   it('过程行把源状态与截断分轴：条数用 cap 后值，截断时附原始数', () => {
@@ -189,7 +190,7 @@ describe('SearchJobs 登记给宿主 ctx.jobs（与写任务同一口径）', ()
     m.emit({ ...group('a', raw), status: 'unverified' })
     m.emit({ ...group('b', 0), error: { code: 'Timeout', message: '慢' } })
     m.finish()
-    const out = hooks!.readOutput!()
+    const out = must(must(hooks, '任务钩子').readOutput, 'hooks.readOutput 读口')()
     expect(out).toContain(`${SEARCH_HITS_CAP_PER_SOURCE} 条`)
     expect(out).toContain(`原始 ${raw}`)
     expect(out).toContain('源 unverified')

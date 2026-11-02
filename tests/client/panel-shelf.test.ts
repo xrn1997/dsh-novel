@@ -4,6 +4,7 @@ import {
   removePanelShelfBooks, resetPanelShelf, setPanelShelfFilter, setPanelShelfKeyword,
 } from '../../src/client/panel-shelf.js'
 import type { ShelfEntry } from '../../src/shared/wire.js'
+import { pick } from '../support/fixture.js'
 
 const entry = (bookKey: string, title = bookKey): ShelfEntry => ({
   bookKey, sourceId: 's1', sourceName: null, title, addedAt: 1,
@@ -174,7 +175,7 @@ describe('panelShelf（面板期书架投影）', () => {
     const apiGet = vi.fn(() => new Promise<ShelfEntry[]>((resolve) => { releases.push(resolve) }))
     const read = readPanelShelf(deps(apiGet), 'k1')
     resetPanelShelf()
-    releases[0]!([entry('k1')])
+    pick(releases, 0)([entry('k1')])
     await expect(read).rejects.toThrow('panel shelf projection unavailable')
   })
 

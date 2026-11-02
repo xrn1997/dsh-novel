@@ -15,7 +15,7 @@ import type { Relevance, SearchHit } from './wire.js'
 
 /** 参与比较的全部「装饰」字符：空白、成对的书名号类括号、中英标点。写宽一档（含全部非字母数字）
  *  会把「冰魔女契约」这种少字形态判成不等——那是另一条放行链，此处不预设。 */
-const DECORATION = /[\s《》〈〉「」『』【】\[\]()（）｛｝·、,，.。:：;；!！?？\-—–_~*'"“”‘’/\\|+]/g
+const DECORATION = /[\s《》〈〉「」『』【】[\]()（）｛｝·、,，.。:：;；!！?？\-—–_~*'"“”‘’/\\|+]/g
 
 /** 三档的序读数：排序面读这一份，别处不许再写第二份 */
 export const RELEVANCE_RANK = { exact: 0, contains: 1, suspect: 2 } as const satisfies Record<Relevance, number>

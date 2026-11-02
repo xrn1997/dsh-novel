@@ -37,7 +37,8 @@ const FIELD_OWNERSHIP: Record<string, { row: string; why: string }> = {
 
 /** 矩阵是否认领这个字段：整词匹配，容忍本仓换名（首字母大写 + `rule` 前缀） */
 function claimedByMatrix(field: string, matrixText: string): boolean {
-  const forms = [field, `rule${field[0].toUpperCase()}${field.slice(1)}`]
+  const head = field.slice(0, 1)
+  const forms = [field, `rule${head.toUpperCase()}${field.slice(1)}`]
   return forms.some(f => new RegExp(`(?<![A-Za-z0-9_])${f}(?![A-Za-z0-9_])`, 'i').test(matrixText))
 }
 

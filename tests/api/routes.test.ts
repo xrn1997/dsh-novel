@@ -5,11 +5,13 @@ import { Shelf } from '../../src/services/shelf.js'
 import { PageCache } from '../../src/services/cache.js'
 import { createFetcher } from '../../src/services/fetcher.js'
 import { CookieJar } from '../../src/services/cookies.js'
-import { startServer } from './helpers.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
+import type { ApiEnvelope, SearchPlan } from '../../src/shared/wire.js'
 import { NOVEL_API_PREFIX, paramOps, ROUTES, SEG } from '../../src/shared/wire.js'
 import { matchRoute, PARAM_PATTERN_PATHS } from '../../src/api/routes.js'
 import type { ParamRouteName } from '../../src/api/routes.js'
+import { must } from '../support/fixture.js'
+import { envelopeOf, errorOf, startServer } from './helpers.js'
 
 /**
  * 路由契约测试。身份对齐（表与分发）已由派生匹配 + 穷尽 Record 在编译期保证（ADR-0051），
@@ -88,30 +90,32 @@ beforeAll(async () => {
   const dir = await makeTempDir('novel-routes-')
   svc = trackService(await ReadingService.create({
     dir,
-    fetchImpl: (async () => new Response('<html></html>', { headers: { 'content-type': 'text/html; charset=utf-8' } })) as never,
+    fetchImpl: async () => new Response('<html></html>', { headers: { 'content-type': 'text/html; charset=utf-8' } }),
   }))
   ;({ base, close } = await startServer(svc))
 })
 afterAll(async () => { await svc.flush(); await close() })
 
-async function call(route: string, method: string, body?: unknown): Promise<{ status: number; json: any }> {
+async function call<T = unknown>(route: string, method: string, body?: unknown): Promise<{ status: number; json: ApiEnvelope<T> }> {
+  // 无体时不建 body/headers 键：显式 `undefined` 在 fetch 的 init 上非法（载荷类形状按缺席表达）
   const r = await fetch(`${base}${NOVEL_API_PREFIX}${route === '' ? '' : `/${route}`}`, {
     method,
-    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   })
-  return { status: r.status, json: await r.json() as any }
+  return { status: r.status, json: await envelopeOf<T>(r) }
 }
 
 /** 落点判据：不是「未知路由」404 */
-const landed = (res: { status: number; json: any }): boolean =>
-  !(res.status === 404 && typeof res.json?.error?.message === 'string' && res.json.error.message.startsWith('未知路由'))
+const landed = (res: { status: number; json: ApiEnvelope<unknown> }): boolean => {
+  const error = res.json.error
+  return !(res.status === 404 && error !== undefined && error.message.startsWith('未知路由'))
+}
 
 /** 烟雾调用：判据只到落点，故非流路由读完整信封；两条观察流（path 以 job-stream 段收尾）读到
  *  首帧就断流——不掐的话活连接挂到 afterAll，真 http.Server 的 close 永远等不到（整文件超时）。
  *  掐流后没有错误信封可读，故流的落点证据由首帧承担（`framed` 标记、载荷随 `json` 带回）：
  *  未知路由 404 是 JSON 信封、没有 data 行，落回通用 `landed` 判负。 */
-async function smoke(target: { method: string; path: string }): Promise<{ status: number; json: any; framed: boolean }> {
+async function smoke(target: { method: string; path: string }): Promise<{ status: number; json: ApiEnvelope<unknown>; framed: boolean }> {
   if (!target.path.endsWith(`/${SEG.jobStream}`)) {
     return { ...await call(target.path, target.method), framed: false }
   }
@@ -122,9 +126,10 @@ async function smoke(target: { method: string; path: string }): Promise<{ status
   ac.abort()                              // 断流：不留活连接给 afterAll
   const text = new TextDecoder().decode(first?.value)
   const frame = text.split(/\r?\n/).find((line) => line.startsWith('data: '))
+  // 帧不是信封：这里只当未知 JSON 承载，用例对它仅做「带 job 键」的断言
   return frame === undefined
-    ? { status, json: JSON.parse(text), framed: false }    // 错误信封（小，首块即全）
-    : { status, json: JSON.parse(frame.slice('data: '.length)), framed: true }
+    ? { status, json: JSON.parse(text) as ApiEnvelope<unknown>, framed: false }    // 错误信封（小，首块即全）
+    : { status, json: JSON.parse(frame.slice('data: '.length)) as ApiEnvelope<unknown>, framed: true }
 }
 
 /** 参数路由的代表实例目标（客户端视角：原始值过构造器，编码由构造器负责） */
@@ -156,20 +161,20 @@ describe('全表烟雾：正确方法 → 落点（非未知路由 404）', () =
   })
 
   it('health → 200 与信封', async () => {
-    const res = await call(ROUTES.health.path, 'GET')
+    const res = await call<{ name: string; apiVersion: number }>(ROUTES.health.path, 'GET')
     expect(res.status).toBe(200)
     expect(res.json).toMatchObject({ ok: true, value: { name: 'dsh-novel', apiVersion: 1 } })
   })
 
   it('sources/batch-delete 未知 id → removed:0（未知 id 静默跳过，不是失败）', async () => {
-    const bd = await call(ROUTES.sourcesBatchDelete.path, 'POST', { ids: ['nope'] })
+    const bd = await call<{ removed: number }>(ROUTES.sourcesBatchDelete.path, 'POST', { ids: ['nope'] })
     expect(bd.status).toBe(200)
-    expect(bd.json.value.removed).toBe(0)
+    expect(must(bd.json.value, 'removed').removed).toBe(0)
   })
 
   it('reading 面 query 齐全 → 落点（searchPlan 空参与集；book/toc/chapter/navigation 落在源不存在）', async () => {
     // 搜索参与计划：参与集唯一主人在服务端，空库 → 空参与集
-    const plan = await call(ROUTES.searchPlan.path, 'GET')
+    const plan = await call<SearchPlan>(ROUTES.searchPlan.path, 'GET')
     expect(plan.status).toBe(200)
     expect(plan.json.value).toEqual({ sourceIds: [] })
 
@@ -189,9 +194,9 @@ describe('全表烟雾：正确方法 → 落点（非未知路由 404）', () =
     for (const [route, body] of cases) {
       const res = await call(route, 'POST', body)
       expect(res.status, route).toBe(404)
-      expect(res.json.error.message.startsWith('源不存在'), route).toBe(true)
+      expect(must(res.json.error, '错误信封').message.startsWith('源不存在'), route).toBe(true)
     }
-    const del = await call(paramOps.sourceDelete.path('nope'), 'DELETE')
+    const del = await call<{ removed: boolean }>(paramOps.sourceDelete.path('nope'), 'DELETE')
     expect(del.status).toBe(200)
     expect(del.json.value).toEqual({ removed: false })
   })
@@ -199,11 +204,11 @@ describe('全表烟雾：正确方法 → 落点（非未知路由 404）', () =
   it('auth 路由：垃圾 body {}/未知源 → 400（body 形状分派先于存在性——此前存在性预检先回 404，行为收紧钉）；合法 body + 未知源 → 404「源不存在」', async () => {
     const bad = await call(paramOps.sourceAuth.path('nope'), 'POST', {})
     expect(bad.status).toBe(400)
-    expect(bad.json.error.message.startsWith('body 需为')).toBe(true)
+    expect(must(bad.json.error, '错误信封').message.startsWith('body 需为')).toBe(true)
     // 404 通道仍活：形状过了 readBodies.auth，门内 requireSource 接棒（SourceNotFoundError 经 classify）
     const gone = await call(paramOps.sourceAuth.path('nope'), 'POST', { runLogin: true })
     expect(gone.status).toBe(404)
-    expect(gone.json.error.message.startsWith('源不存在')).toBe(true)
+    expect(must(gone.json.error, '错误信封').message.startsWith('源不存在')).toBe(true)
   })
 
   it('本地三读口参数齐全 → 404「本地产物不存在」（不是未知路由）', async () => {
@@ -221,7 +226,7 @@ describe('已知路由错方法 → 405（全表扫描）', () => {
     for (const [name, target] of Object.entries(ROUTES)) {
       const res = await call(target.path, 'PATCH')
       expect(res.status, `${name} ${target.path}`).toBe(405)
-      expect(res.json.error.code, `${name} ${target.path}`).toBe('MethodNotAllowed')
+      expect(must(res.json.error, '错误信封').code, `${name} ${target.path}`).toBe('MethodNotAllowed')
     }
   })
 
@@ -230,15 +235,15 @@ describe('已知路由错方法 → 405（全表扫描）', () => {
       const target = paramTarget(name)
       const res = await call(target.path, 'PATCH')
       expect(res.status, `${name} ${target.path}`).toBe(405)
-      expect(res.json.error.code, `${name} ${target.path}`).toBe('MethodNotAllowed')
+      expect(must(res.json.error, '错误信封').code, `${name} ${target.path}`).toBe('MethodNotAllowed')
     }
   })
 
   it('GET sources/xyz → 405 需 DELETE（行为收紧钉子：此前落 404 未知路由）', async () => {
     const res = await call(`${ROUTES.sources.path}/xyz`, 'GET')
     expect(res.status).toBe(405)
-    expect(res.json.error.code).toBe('MethodNotAllowed')
-    expect(res.json.error.message).toBe('方法不允许: GET（/novel-api/sources/:id 需 DELETE）')
+    expect(must(res.json.error, '错误信封').code).toBe('MethodNotAllowed')
+    expect(must(res.json.error, '错误信封').message).toBe('方法不允许: GET（/novel-api/sources/:id 需 DELETE）')
   })
 })
 
@@ -246,14 +251,14 @@ describe('负对照', () => {
   it('未知路由 / 错误前缀仍是 404', async () => {
     const unknown = await call('nope', 'GET')
     expect(unknown.status).toBe(404)
-    expect(unknown.json.error.message.startsWith('未知路由')).toBe(true)
+    expect(must(unknown.json.error, '错误信封').message.startsWith('未知路由')).toBe(true)
     expect((await fetch(`${base}/other/sources`)).status).toBe(404)
   })
 
   it('shelf key 非法百分号编码 → 400（此前 URIError 归 other → 500）', async () => {
     const d = await fetch(`${base}${NOVEL_API_PREFIX}/shelf/%E0%A4%A`, { method: 'DELETE' })
     expect(d.status).toBe(400)
-    expect((await d.json() as any).error.code).toBe('BadRequest')
+    expect((await errorOf(d)).code).toBe('BadRequest')
   })
 
   it('local part 缺席（from() 不传 local）→ 503 Unavailable（判据归门面动词）', async () => {
@@ -276,7 +281,7 @@ describe('负对照', () => {
       ] as const) {
         const r = await fetch(`${b2}${NOVEL_API_PREFIX}/${route}`, { method })
         expect(r.status, route).toBe(503)
-        expect((await r.json() as any).error.code).toBe('Unavailable')
+        expect((await errorOf(r)).code).toBe('Unavailable')
       }
     } finally {
       await c2()

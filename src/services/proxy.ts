@@ -112,7 +112,9 @@ export async function readSystemProxy(): Promise<string | null> {
   if (out === null) return null
   if (!/ProxyEnable\s+REG_DWORD\s+0x1/i.test(out)) return null
   const matched = /ProxyServer\s+REG_SZ\s+(.+)/i.exec(out)
-  return matched === null ? null : normalizeProxyServer(matched[1].trim())
+  const server = matched === null ? undefined : matched[1]
+  // 切不出地址与「注册表没有这项」同路：都按没有系统代理交回 null，不猜一个地址
+  return server === undefined ? null : normalizeProxyServer(server.trim())
 }
 
 function runReg(args: string[]): Promise<string | null> {

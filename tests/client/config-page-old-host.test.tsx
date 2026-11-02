@@ -15,7 +15,8 @@ import { fakeConfigForms, fakeCtx, fakeHost } from './fake-host.js'
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   SettingsForm: () => null,
-  SettingsFormModel: class {},
+  // 宿主原语的表单模型类：本门只验模块加载面，模型从不被实例化，留一处字段让替身不是空壳
+  SettingsFormModel: class { readonly kind = 'settings-form-model-double' },
   SettingsValueField: () => null,
   // 值显式 undefined，而非省略键：client bundle 是 CJS 闭合工厂，宿主模块表按属性作答，
   // 缺导出在运行时就是 undefined（调用才炸）；Vitest 的 mock 代理对「键不存在」逢读即抛，

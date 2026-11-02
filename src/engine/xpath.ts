@@ -1,10 +1,17 @@
 import type { Cheerio, CheerioAPI } from 'cheerio'
-import type { AnyNode, Element, Text } from 'domhandler'
+import { hasChildren, isText } from 'domhandler'
+import type { AnyNode, Element } from 'domhandler'
 import type { EngineValue, Facet, Segment, SegmentLoc } from './types.js'
 import { RuleEvalError, UnsupportedRuleError } from './errors.js'
-import { cleanText, rawTextOf } from './dom.js'
+import { attribOf, cleanText, rawTextOf, tagNameOf } from './dom.js'
 
 type XPathSegment = Extract<Segment, { kind: 'xpath' }>
+
+/** 节点类型码。domhandler 的 `ElementType` 是**字符串枚举**（运行时取值就是 `'tag'` / `'text'` 这些
+ *  字面量），这里取到的正是它在 wire 上的字符串形态；统一在字符串面上比较，是因为枚举成员与字面量
+ *  直接比会被 no-unsafe-enum-comparison 判成跨枚举比较。注意它与 `isTag` 不等价：`isTag` 还认
+ *  script/style，而 `'tag'` 只认纯元素——本求值器按后者（`//script` 不当元素步命中）。 */
+const nodeType = (n: AnyNode): string => n.type
 
 /**
  * XPath 子集求值器（哪几处边界是裁决、为什么不给现量读数，见矩阵行 `a-xpath-subset`）：
@@ -35,15 +42,14 @@ export function evalXPath(
   }
 
   let candidates: AnyNode[] = cur.toArray()
-  for (let si = 0; si < steps.length; si++) {
-    const step = steps[si]
+  for (const [si, step] of steps.entries()) {
     const isLast = si === steps.length - 1
     // 末段提取步：@attr 读候选元素自身属性；text() 取候选的文本子节点——不是过滤
     const lastTest = isLast ? step.test : null
     if (lastTest !== null && lastTest.kind === 'attr') {
       const attrName = lastTest.name
       const values = candidates
-        .map((n) => (n as Element).attribs?.[attrName] ?? '')
+        .map((n) => attribOf(n, attrName) ?? '')
         .filter((v) => v !== '')
       return valuesList(values)
     }
@@ -51,8 +57,8 @@ export function evalXPath(
       const values: string[] = []
       const collect = (n: AnyNode): void => {
         for (const ch of nodeChildren(n)) {
-          if (ch.type === 'text') {
-            const t = cleanText((ch as Text).data ?? '')
+          if (isText(ch)) {
+            const t = cleanText(ch.data)
             if (t !== '') values.push(t)
           } else if (step.axis === 'descendant') collect(ch) // //text() = 后代全部文本；/text() = 仅直系
         }
@@ -69,7 +75,9 @@ export function evalXPath(
 
 function valuesList(values: string[]): EngineValue {
   if (values.length === 0) return { kind: 'miss', detail: 'XPath 取值为空' }
-  if (values.length === 1) return { kind: 'value', text: values[0] }
+  const only = values[0]
+  // 单值位只在长度恰为 1 时成立，那时首项必在（空集已在上面返回）——判空只为让编译器跟上
+  if (values.length === 1 && only !== undefined) return { kind: 'value', text: only }
   return { kind: 'list', items: values }
 }
 
@@ -116,8 +124,9 @@ function parseXPath(path: string): Step[] {
 /** 按 / 与 // 切步骤（括号深度感知——谓词内的 / 不切）。
  *  返回的 axis 是「该步前方分隔符」的轴（首步占位 child，由 parseXPath 覆盖）。 */
 function splitBySteps(s: string): Array<{ text: string; axis: Axis }> {
-  const texts: string[] = []
-  const axesAfter: Axis[] = []   // axesAfter[k] = 第 k 个分隔符的轴
+  // 每条结果带的是「该步**前方分隔符**」的轴：首步没有分隔符，占位 child（由 parseXPath 覆盖）
+  const out: Array<{ text: string; axis: Axis }> = []
+  let prevAxis: Axis = 'child'
   let depth = 0
   let start = 0
   let i = 0
@@ -126,18 +135,17 @@ function splitBySteps(s: string): Array<{ text: string; axis: Axis }> {
     if (c === '[') depth++
     else if (c === ']') depth--
     else if (c === '/' && depth === 0) {
-      texts.push(s.slice(start, i))
+      out.push({ text: s.slice(start, i), axis: prevAxis })
       const isDouble = s[i + 1] === '/'
-      axesAfter.push(isDouble ? 'descendant' : 'child')
+      prevAxis = isDouble ? 'descendant' : 'child'
       i += isDouble ? 2 : 1
       start = i
       continue
     }
     i++
   }
-  texts.push(s.slice(start))
-  // 平移：out[k].axis = 第 k-1 个分隔符的轴（首步无分隔符——占位 child）
-  return texts.map((text, k) => ({ text, axis: k === 0 ? 'child' : axesAfter[k - 1] }))
+  out.push({ text: s.slice(start), axis: prevAxis })
+  return out
 }
 
 const AXIS_NAMES: Record<string, Axis> = { 'following-sibling': 'fwd', 'preceding-sibling': 'bwd' }
@@ -207,34 +215,62 @@ function parsePredicate(content: string): Predicate {
   // position()/last() 比较
   const pos = /^position\(\)\s*(=|>=|<=|>|<)\s*(last\(\)|\d+)$/.exec(c)
   if (pos) {
-    const rhs = pos[2] === 'last()' ? 'last' : Number(pos[2])
-    return { kind: 'pos', op: pos[1] as '=' | '>' | '<' | '>=' | '<=', rhs }
+    const op = pos[1]
+    const rhsText = pos[2]
+    // 组 1 的备选就是这五个比较符、组 2 必选——判形代替断言：形态对不上按本函数已有的「谓词无法识别」抛
+    if (op !== '=' && op !== '>' && op !== '<' && op !== '>=' && op !== '<=') {
+      throw new Error(`位置谓词比较符不合法: ${c}`)
+    }
+    if (rhsText === undefined) throw new Error(`位置谓词缺少右值: ${c}`)
+    const rhs = rhsText === 'last()' ? 'last' : Number(rhsText)
+    return { kind: 'pos', op, rhs }
   }
   const lastOffset = /^last\(\)\s*([+-])\s*(\d+)$/.exec(c)
   if (lastOffset) {
-    const n = Number(lastOffset[2])
-    return { kind: 'pos', op: '=', rhs: 'last', offset: lastOffset[1] === '-' ? -n : n }
+    const sign = lastOffset[1]
+    const digits = lastOffset[2]
+    if ((sign !== '+' && sign !== '-') || digits === undefined) throw new Error(`last() 偏移形态不合法: ${c}`)
+    const n = Number(digits)
+    return { kind: 'pos', op: '=', rhs: 'last', offset: sign === '-' ? -n : n }
   }
   if (c === 'last()') return { kind: 'pos', op: '=', rhs: 'last' }
   if (/^\d+$/.test(c)) return { kind: 'pos', op: '=', rhs: Number(c) }
   // contains / starts-with
   const fn = /^(contains|starts-with)\s*\((.+)\)$/.exec(c)
   if (fn) {
-    const inner = splitTop(fn[2], ',')
-    if (inner.length !== 2) throw new Error(`函数参数不是二元: ${fn[1]}`)
-    const target = inner[0].trim()
-    const lit = parseLiteral(inner[1].trim())
-    if (target === 'text()') return { kind: 'fn', fn: fn[1] as 'contains' | 'starts-with', target: 'text', lit }
-    if (target.startsWith('@')) return { kind: 'fn', fn: fn[1] as 'contains' | 'starts-with', target: { attr: target.slice(1) }, lit }
+    const fnName = fn[1]
+    // 组 1 的备选就这两个名字（同一模式字面量钉住）——用比较判形，代替「捕获转字面量联合」的断言
+    if (fnName !== 'contains' && fnName !== 'starts-with') throw new Error(`函数名不合法: ${c}`)
+    const argsRaw = fn[2]
+    if (argsRaw === undefined) throw new Error(`函数参数缺失: ${c}`)
+    const inner = splitTop(argsRaw, ',')
+    const [targetRaw, litRaw] = inner
+    if (inner.length !== 2 || targetRaw === undefined || litRaw === undefined) {
+      throw new Error(`函数参数不是二元: ${fnName}`)
+    }
+    const target = targetRaw.trim()
+    const lit = parseLiteral(litRaw.trim())
+    if (target === 'text()') return { kind: 'fn', fn: fnName, target: 'text', lit }
+    if (target.startsWith('@')) return { kind: 'fn', fn: fnName, target: { attr: target.slice(1) }, lit }
     throw new UnsupportedRuleError(`XPath 函数目标不支持: ${target}（仅 text()/@attr）`, { facet: 'rule', segmentIndex: -1, segmentRaw: content })
   }
   // @attr='v' / @attr（存在）
   const attrEq = /^@([\w.-]+)\s*=\s*(.+)$/.exec(c)
-  if (attrEq) return { kind: 'attrEq', attr: attrEq[1], lit: parseLiteral(attrEq[2].trim()) }
+  if (attrEq) {
+    const attr = attrEq[1]
+    const litRaw = attrEq[2]
+    // 两组都是必选段；取不到按本函数已有的「谓词无法识别」抛，不拿空名字去取值
+    if (attr === undefined || litRaw === undefined) throw new Error(`属性谓词形态不合法: ${c}`)
+    return { kind: 'attrEq', attr, lit: parseLiteral(litRaw.trim()) }
+  }
   if (/^@[\w.-]+$/.test(c)) return { kind: 'attrExists', attr: c.slice(1) }
   // text()='v' / text()（存在）
   const textEq = /^text\(\)\s*=\s*(.+)$/.exec(c)
-  if (textEq) return { kind: 'textEq', lit: parseLiteral(textEq[1].trim()) }
+  if (textEq) {
+    const litRaw = textEq[1]
+    if (litRaw === undefined) throw new Error(`text() 谓词形态不合法: ${c}`)
+    return { kind: 'textEq', lit: parseLiteral(litRaw.trim()) }
+  }
   if (c === 'text()') return { kind: 'textExists' }
   // 子元素存在（[dd[a]]）
   if (/^[A-Za-z_][\w.-]*$/.test(c)) return { kind: 'elemExists', name: c }
@@ -251,7 +287,9 @@ function parsePredicate(content: string): Predicate {
   }
   // 白名单外函数（count/sum 等）→ 宁炸不猜
   if (/^[A-Za-z-]+\s*\(/.test(c)) {
-    throw new UnsupportedRuleError(`XPath 函数不支持: ${c.split('(')[0].trim()}（子集：contains/starts-with/not/position/last）`, {
+    const open = c.indexOf('(')
+    // 上一条模式保证括号在场，切出的前半段就是认不出的那个函数名
+    throw new UnsupportedRuleError(`XPath 函数不支持: ${c.slice(0, open).trim()}（子集：contains/starts-with/not/position/last）`, {
       facet: 'rule', segmentIndex: -1, segmentRaw: content,
     })
   }
@@ -289,8 +327,8 @@ function splitTop(s: string, sep: string): string[] {
 // ── 求值 ───────────────────────────────────────────────────────────────
 
 function nodeChildren(n: AnyNode): AnyNode[] {
-  const kids = (n as Element).children
-  return kids ? [...kids] : []
+  // 文本/注释/指令节点没有 children——`as Element` 是取口的形状声称，运行时必须按「有子节点」判形
+  return hasChildren(n) ? [...n.children] : []
 }
 
 function descendants(n: AnyNode): AnyNode[] {
@@ -332,10 +370,10 @@ function axisPool(ctx: AnyNode, axis: Axis): AnyNode[] {
 
 function testNode(n: AnyNode, test: Test): boolean {
   switch (test.kind) {
-    case 'text': return n.type === 'text'
-    case 'attr': return n.type === 'tag' && (n as Element).attribs?.[test.name] !== undefined
-    case 'star': return n.type === 'tag'
-    case 'elem': return n.type === 'tag' && (n as Element).tagName?.toLowerCase() === test.name.toLowerCase()
+    case 'text': return isText(n)
+    case 'attr': return nodeType(n) === 'tag' && attribOf(n, test.name) !== undefined
+    case 'star': return nodeType(n) === 'tag'
+    case 'elem': return nodeType(n) === 'tag' && tagNameOf(n)?.toLowerCase() === test.name.toLowerCase()
   }
 }
 
@@ -402,16 +440,16 @@ function evalPredicate(p: Predicate, n: AnyNode, pos: number, size: number): boo
       }
       return false
     }
-    case 'attrExists': return n.type === 'tag' && (n as Element).attribs?.[p.attr] !== undefined
+    case 'attrExists': return nodeType(n) === 'tag' && attribOf(n, p.attr) !== undefined
     case 'textExists': return predText(n) !== ''
-    case 'elemExists': return nodeChildren(n).some((c) => c.type === 'tag' && (c as Element).tagName?.toLowerCase() === p.name.toLowerCase())
+    case 'elemExists': return nodeChildren(n).some((c) => nodeType(c) === 'tag' && tagNameOf(c)?.toLowerCase() === p.name.toLowerCase())
     case 'pathExists': return pathHits(n, p.steps).length > 0
-    case 'attrEq': return n.type === 'tag' && ((n as Element).attribs?.[p.attr] ?? '') === p.lit
+    case 'attrEq': return nodeType(n) === 'tag' && (attribOf(n, p.attr) ?? '') === p.lit
     case 'textEq': return predText(n) === p.lit
     case 'fn': {
       const subject = p.target === 'text'
         ? predText(n)
-        : (n.type === 'tag' ? (n as Element).attribs?.[p.target.attr] ?? '' : '')
+        : (nodeType(n) === 'tag' ? attribOf(n, p.target.attr) ?? '' : '')
       return p.fn === 'contains' ? subject.includes(p.lit) : subject.startsWith(p.lit)
     }
     case 'not': return !evalPredicate(p.inner, n, pos, size)

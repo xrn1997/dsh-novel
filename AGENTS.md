@@ -22,7 +22,7 @@ DeepSeek Harness（DSH）的「小说」插件：导入 legado 书源 → 聚合
 ## 必须过的门
 
 1. **`pnpm test` 与 `pnpm typecheck` 同批跑**：tests 在 tsconfig 内而 vitest 不查类型，props 缝加宽而某个测试文件没跟上，只有 tsc 抓得住。`pnpm test` 全绿只证明引擎 / 服务 / 契约 / 前端逻辑：**不证明**任何真实站点可用性，也不证明安装链路。
-2. **`pnpm lint`**：把界面那一头**未豁免**的 react-hooks 依赖数组（`src/client` 里仍在的 `eslint-disable` 是存量豁免清单，不在本门覆盖内）；仓内方向与值环由 `tests/layering.test.ts` 随 `pnpm test` 把，不额外要一条命令。
+2. **`pnpm lint`**：类型感知 ESLint——显式 `any`、`any` 扩散（`no-unsafe-*`）、悬浮 Promise、非空断言，外加界面那一头**未豁免**的 react-hooks 依赖数组（`src/client` 里仍在的 `eslint-disable` 是存量豁免清单，不在本门覆盖内）；仓内方向与值环由 `tests/layering.test.ts` 随 `pnpm test` 把，不额外要一条命令。档位与取舍住 `ADR-0053`。
 3. **真链路门控**：改动抓取 / 规则引擎 / 打包链路，或改相关性判据 / 按书归并时，按 `docs/development.md` 的「门（自动）」跑对应那条，并把结论**如实**写进汇报。注意分工：`DSH_REPROBE` 只验**搜索面**，`verified` 不证明正文可读；正文口径是 `DSH_CONTENT_AUDIT`，它是**审计报告**、不设通过率断言（分桶读数要人判）；`DSH_SEARCH_FILTER_AUDIT` 也是**报告**，唯一断言只是判据自洽（分档不丢条）；`DSH_EPUB_BROWSER` 只在本机浏览器里量渲染与几何，不起服务也不访问站点。
 4. **legado 兼容四门**（`pnpm test` 默认跑，运行时不依赖任何外部 checkout）：`status-evidence` 逐行验证据可回查——`implemented` 的实现符号在剥注释后的代码里、钉子用例在测试里，`not-applicable` 必须写明裁决理由，`open` 必须带复核戳，任何 `N 源` 形态的现量读数都要有日期锚（最危险的不是「还没做」，是旧批读数被当现状用）；`inventory-coverage` 要求每个能力单元各挂 ≥2 条真实矩阵行；`upstream-fields` 与 `host-methods` 的分母是仓内快照 `compat/upstream/snapshot.json`。快照由开发阶段的 `DSH_CAPTURE_UPSTREAM=1`（需 `DSH_LEGADO_REF` 指路）抽一次；**快照不在场即红，不要改成 skip-if-missing**——「静默转 skip、无一物变红」是这扇门专门删掉的旧失效模式。
 5. **取门的退出码，别看管道说了什么**：跑门与提交必须是两条命令；完整口径见 `docs/development.md`。

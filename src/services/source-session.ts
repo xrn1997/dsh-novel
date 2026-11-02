@@ -52,7 +52,8 @@ function readState(file: string): State {
     if (table === null || typeof table !== 'object' || Array.isArray(table)) {
       corrupt(file, new Error(`${bucket} 不是对象`))
     }
-    for (const [key, entries] of Object.entries(table)) {
+    const tableEntries: Array<[string, unknown]> = Object.entries(table)
+    for (const [key, entries] of tableEntries) {
       if (entries === null || typeof entries !== 'object' || Array.isArray(entries)) {
         corrupt(file, new Error(`${bucket}.${key} 不是键值表`))
       }
@@ -84,9 +85,13 @@ function readState(file: string): State {
  *  由单线程同步调用保证同一文件的写不会互相插队。写失败只记日志、不打断读链路，脏标记留到
  *  下一次 flush 重试；进程崩溃最多丢当前求值批的写入（源状态是派生数据）。 */
 class PersistentMap extends Map<string, string> {
-  constructor(entries: Record<string, string>, private readonly onChange: () => void) {
+  private readonly onChange: () => void
+
+  constructor(entries: Record<string, string>, onChange: () => void) {
     super()
-    // 不能在 super(...) 里喂 entries：那会调用被覆写的 set，而 onChange 参数属性尚未赋值
+    // onChange 在 super() 之后才赋值，而下面的灌入若走被覆写的 set 就会在赋值前调到它——
+    // 所以直呼 Map.prototype.set。
+    this.onChange = onChange
     for (const [k, v] of Object.entries(entries)) Map.prototype.set.call(this, k, v)
   }
 
@@ -146,6 +151,9 @@ export class FileSourceSession implements SourceSession {
     }
   }
 
+  /** 建表读口：`create` 为 true 时保证返回（调用点因此不必写非空断言）；两个签名把这件事写进类型面 */
+  private mapOf(bucket: Bucket, sourceKey: string, create: true): Map<string, string>
+  private mapOf(bucket: Bucket, sourceKey: string, create: boolean): Map<string, string> | undefined
   private mapOf(bucket: Bucket, sourceKey: string, create: boolean): Map<string, string> | undefined {
     const id = `${bucket}\n${sourceKey}`
     const held = this.maps.get(id)
@@ -158,11 +166,11 @@ export class FileSourceSession implements SourceSession {
   }
 
   cookieJar(sourceKey: string): Map<string, string> {
-    return this.mapOf('cookies', sourceKey, true)!
+    return this.mapOf('cookies', sourceKey, true)
   }
 
   sourceVars(sourceKey: string): Map<string, string> {
-    return this.mapOf('vars', sourceKey, true)!
+    return this.mapOf('vars', sourceKey, true)
   }
 
   peekSourceVars(sourceKey: string): Map<string, string> | undefined {
@@ -174,13 +182,13 @@ export class FileSourceSession implements SourceSession {
   }
 
   setSourceString(sourceKey: string, value: string | null): void {
-    if (value === null) delete this.state.strings[sourceKey]
+    if (value === null) Reflect.deleteProperty(this.state.strings, sourceKey)
     else this.state.strings[sourceKey] = value
     this.dirty = true
   }
 
   cacheStore(sourceKey: string): Map<string, string> {
-    return this.mapOf('cache', sourceKey, true)!
+    return this.mapOf('cache', sourceKey, true)
   }
 
   /** 删源时清掉该源的全部源级状态（键值表/单串槽/cache/cookie 垫片）。
@@ -191,13 +199,13 @@ export class FileSourceSession implements SourceSession {
     let changed = false
     for (const bucket of BUCKETS) {
       if (this.state[bucket][sourceKey] !== undefined) {
-        delete this.state[bucket][sourceKey]
+        Reflect.deleteProperty(this.state[bucket], sourceKey)
         changed = true
       }
       this.maps.delete(`${bucket}\n${sourceKey}`)
     }
     if (this.state.strings[sourceKey] !== undefined) {
-      delete this.state.strings[sourceKey]
+      Reflect.deleteProperty(this.state.strings, sourceKey)
       changed = true
     }
     if (changed) {

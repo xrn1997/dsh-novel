@@ -422,8 +422,10 @@ export class LocalBooks {
 
   private idOf(bookKey: string): string {
     const m = BOOK_KEY_RE.exec(bookKey)
-    if (m === null) throw new LocalArtifactNotFoundError(`非法本地书 key: ${bookKey}`)
-    return m[1]
+    const id = m === null ? undefined : m[1]
+    // 切不出 id 与「整体不匹配」同路：都按非法本地书 key 拒收（本函数已有的错误通道）
+    if (id === undefined) throw new LocalArtifactNotFoundError(`非法本地书 key: ${bookKey}`)
+    return id
   }
 
   private async metaOf(bookKey: string): Promise<LocalMeta> {

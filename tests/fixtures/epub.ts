@@ -39,8 +39,8 @@ const CONTENT_OPF = '<?xml version="1.0" encoding="UTF-8"?>\n'
 
 function chapterXml(n: number): string {
   return '<?xml version="1.0" encoding="UTF-8"?>\n'
-    + '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>第' + n + '章</title></head>'
-    + '<body><h1>第' + n + '章</h1><p>第' + n + '章的正文。</p></body></html>'
+    + `<html xmlns="http://www.w3.org/1999/xhtml"><head><title>第${n}章</title></head>`
+    + `<body><h1>第${n}章</h1><p>第${n}章的正文。</p></body></html>`
 }
 
 /** 大条目内容：3 字节/字的文本，配合缩小的预算触发单条/累计上限 */
@@ -463,7 +463,7 @@ function deepNavOf(depth: number): string {
 
 /** 宽目录：`items` 个真条目（目标都存在，条目全合法），只是节点数远超调小的节点预算 */
 function wideNavOf(items: number): string {
-  const entries = Array.from({ length: items }, (_, i) => '<li><a href="ch1.xhtml#a">第' + (i + 1) + '章</a></li>').join('')
+  const entries = Array.from({ length: items }, (_, i) => `<li><a href="ch1.xhtml#a">第${i + 1}章</a></li>`).join('')
   return '<?xml version="1.0" encoding="UTF-8"?>\n' + XHTML_DOCTYPE + '\n'
     + '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>宽目录</title></head><body>'
     + '<nav epub:type="toc"><ol>' + entries + '</ol></nav></body></html>'

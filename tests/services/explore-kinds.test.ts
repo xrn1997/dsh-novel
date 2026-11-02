@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { deriveExploreSources } from '../../src/services/explore.js'
 import type { NovelSource } from '../../src/services/types.js'
+import { pick } from '../support/fixture.js'
 
 const src = (id: string, kinds: Array<{ title: string; url: string }>, over: Partial<NovelSource> = {}): NovelSource => ({
   id, name: id, baseUrl: 'https://e.com', enabled: true, type: 'text', groups: ['通常书源'],
@@ -20,11 +21,11 @@ describe('deriveExploreSources：按源列出分类标题', () => {
     ])
   })
   it('顺序是源作者写的顺序，不是热度序（旧版那条按收录源数降序在单源下没有读数可排）', () => {
-    expect(deriveExploreSources([src('A', [{ title: '乙', url: 'b' }, { title: '甲', url: 'a' }])])[0].kinds)
+    expect(pick(deriveExploreSources([src('A', [{ title: '乙', url: 'b' }, { title: '甲', url: 'a' }])]), 0).kinds)
       .toEqual(['乙', '甲'])
   })
   it('同源内重复标题只留一次（一个源把同一类声明两遍不构成第二个入口）', () => {
-    expect(deriveExploreSources([src('A', [{ title: '玄幻', url: 'a1' }, { title: '玄幻', url: 'a2' }])])[0].kinds)
+    expect(pick(deriveExploreSources([src('A', [{ title: '玄幻', url: 'a1' }, { title: '玄幻', url: 'a2' }])]), 0).kinds)
       .toEqual(['玄幻'])
   })
   it('禁用 / 非文本 / 关掉发现的源不出现（参与判据只有一个主人 exploreParticipates）', () => {

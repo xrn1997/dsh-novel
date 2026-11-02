@@ -3,6 +3,7 @@ import { ReaderSession } from '../../src/client/reader-session.js'
 import type { ReaderSessionDeps, VisibleNode } from '../../src/client/reader-session.js'
 import type { ChapterAnchor } from '../../src/client/progress.js'
 import type { ChapterContent, ChapterEntry, NavigationItem } from '../../src/client/views/types.js'
+import { last, pick } from '../support/fixture.js'
 
 /**
  * EPUB 图文阅读流：图文正文进已载表、目录树高亮、正文内链的返回栈、补充文档不碰主进度。
@@ -216,8 +217,8 @@ describe('正文内链的返回栈（窗口内状态，绝不落盘）', () => {
     h.port.targetOffs.set('p7', 300)                                 // 节点此刻在视口下 300px
     h.session.afterRender('local:b1')
     expect(h.port.top).toBe(500 + 300 + 64)                          // 回到「节点顶在视口顶上方 64px」
-    expect(h.saves.at(-1)?.[0]).toBe(0)                              // 位置提交仍归会话
-    expect(h.saves.at(-1)?.[1]).toBeCloseTo((500 + 300 + 64) / 2000)
+    expect(pick(last(h.saves), 0)).toBe(0)                              // 位置提交仍归会话
+    expect(pick(last(h.saves), 1)).toBeCloseTo((500 + 300 + 64) / 2000)
   })
 
   it('返回链接（backlink）是返回动作本身：不压栈，并消费掉栈里那条', async () => {

@@ -19,7 +19,8 @@ export type BookPatch = ShelfMetaPatch
  *  `pickShelfMeta` 搬来的**落盘归一化**，主人只剩这一处——客户端 body 与 agent 工具都只交形状，
  *  HTTP 输出与落盘值由本处在落地前收口。加书目字段只改表，此处零改动。 */
 function applyPatch(book: ShelfBook, patch: BookPatch): void {
-  const put = <K extends ShelfMetaField>(k: K, v: BookPatch[K]): void => {
+  // 值收 `undefined`：patch 的稀疏形态（缺席键）在运行时就是 undefined，类型面只写 `null` 是它在撒谎
+  const put = <K extends ShelfMetaField>(k: K, v: BookPatch[K] | undefined): void => {
     if (v === null || v === undefined) return
     book[k] = SHELF_META[k] === 'number' ? Math.max(0, Math.floor(v as number)) as ShelfBook[K] : v
   }
@@ -41,11 +42,15 @@ function applyPatch(book: ShelfBook, patch: BookPatch): void {
  * 「一本书挂多源」的待裁问题看起来已解决。
  */
 export class Shelf {
-  private constructor(
-    private readonly dir: string,
-    private books: ShelfBook[],
-    private readonly writer: ReturnType<typeof createDebouncedWriter>,
-  ) {}
+  private readonly dir: string
+  private books: ShelfBook[]
+  private readonly writer: ReturnType<typeof createDebouncedWriter>
+
+  private constructor(dir: string, books: ShelfBook[], writer: ReturnType<typeof createDebouncedWriter>) {
+    this.dir = dir
+    this.books = books
+    this.writer = writer
+  }
 
   /** dir = novel 根；读 shelf.json（不存在 → 空架；存在但解析失败 → readJson 备份后抛
    *  CorruptJsonError，坏字节不许静默折成空架） */

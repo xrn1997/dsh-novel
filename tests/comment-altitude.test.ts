@@ -34,6 +34,7 @@ function commentBodies(text: string): string[] {
   let i = 0
   let prev = ''
   while (i < text.length) {
+    const ch = text[i]
     const two = text.slice(i, i + 2)
     if (two === '//') {
       const end = text.indexOf('\n', i)
@@ -45,13 +46,13 @@ function commentBodies(text: string): string[] {
       out.push(text.slice(i, end === -1 ? text.length : end + 2))
       i = end === -1 ? text.length : end + 2
       prev = '/'
-    } else if (text[i] === "'" || text[i] === '"' || text[i] === '`') {
-      const quote = text[i]
+    } else if (ch === "'" || ch === '"' || ch === '`') {
+      const quote = ch
       i++
       while (i < text.length && text[i] !== quote) i += text[i] === '\\' ? 2 : 1
       i++
       prev = quote
-    } else if (text[i] === '/' && REGEX_START.has(prev)) {
+    } else if (ch === '/' && REGEX_START.has(prev)) {
       i++ // 进正则体
       let inClass = false
       while (i < text.length && text[i] !== '\n') {
@@ -61,11 +62,16 @@ function commentBodies(text: string): string[] {
         else if (text[i] === '/' && !inClass) { i++; break }
         i++
       }
-      while (i < text.length && /[a-z]/i.test(text[i])) i++ // 正则 flag
+      // 正则 flag 段：走到非字母即止
+      while (i < text.length) {
+        const flag = text[i]
+        if (flag === undefined || !/[a-z]/i.test(flag)) break
+        i++
+      }
       prev = '/'
     } else {
-      if (text[i] === '\n') prev = '\n'
-      else if (!/\s/.test(text[i])) prev = text[i]
+      if (ch === '\n') prev = '\n'
+      else if (ch !== undefined && !/\s/.test(ch)) prev = ch
       i++
     }
   }
@@ -78,7 +84,10 @@ function copiedExpressions(fileText: string): string[] {
   const out: string[] = []
   for (const c of commentBodies(fileText)) {
     for (const m of c.matchAll(/`([^`]+)`/g)) {
-      const span = m[1].trim()
+      const raw = m[1]
+      // 捕获体缺席只可能是正则被改坏：跳过等于少查一段注释，故宁可炸
+      if (raw === undefined) throw new Error(`反引号片段没有捕获体：${m[0]}`)
+      const span = raw.trim()
       if (span.length >= 8 && OP.test(span) && code.includes(span)) out.push(span)
     }
     for (const m of c.replace(/`[^`]*`/g, '').matchAll(/[\w$.[\]()'" ]*(?:===|!==|==|>=|<=|\?\?|\?\.|=>|&&|\|\|)[\w$.[\]()'" ]*/g)) {

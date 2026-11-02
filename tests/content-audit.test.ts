@@ -50,22 +50,22 @@ interface SourceAudit {
 }
 
 function errInfo(e: unknown): ErrInfo {
-  const any = e as { name?: string; message?: string; facet?: string; segmentIndex?: number; segmentRaw?: string; url?: string; status?: number }
+  const info = e as { name?: string; message?: string; facet?: string; segmentIndex?: number; segmentRaw?: string; url?: string; status?: number }
   return {
-    name: any?.name ?? 'Unknown',
-    message: String(any?.message ?? e).slice(0, 400),
-    ...(any?.facet === undefined ? {} : { facet: any.facet }),
-    ...(any?.segmentIndex === undefined ? {} : { segmentIndex: any.segmentIndex }),
-    ...(any?.segmentRaw === undefined ? {} : { segmentRaw: String(any.segmentRaw).slice(0, 200) }),
-    ...(any?.url === undefined ? {} : { url: any.url }),
-    ...(any?.status === undefined ? {} : { status: any.status }),
+    name: info.name ?? 'Unknown',
+    message: String(info.message ?? e).slice(0, 400),
+    ...(info.facet === undefined ? {} : { facet: info.facet }),
+    ...(info.segmentIndex === undefined ? {} : { segmentIndex: info.segmentIndex }),
+    ...(info.segmentRaw === undefined ? {} : { segmentRaw: info.segmentRaw.slice(0, 200) }),
+    ...(info.url === undefined ? {} : { url: info.url }),
+    ...(info.status === undefined ? {} : { status: info.status }),
   }
 }
 
 /** 错误归一化成桶键：URL/数字/引号内容压掉，保留语义骨架（骨架单点在 content-audit-classify） */
 function bucketKey(stage: string, err?: ErrInfo): string {
   if (err === undefined) return stage
-  return `${stage} | ${err.name} | ${messageSkeleton(err.message ?? '')}`
+  return `${stage} | ${err.name} | ${messageSkeleton(err.message)}`
 }
 
 describe.skipIf(process.env.DSH_CONTENT_AUDIT !== '1')('正文链路全量审计（search → toc → content）', () => {
@@ -145,15 +145,15 @@ describe.skipIf(process.env.DSH_CONTENT_AUDIT !== '1')('正文链路全量审计
     // 书目字段到货读数（只算搜索面）：字段级异常被吞成 null，失败分桶看不见——量的是「值真的到了」
     // 而非「接进了链路」；分母用 `ruleSearch.kind` 非空（详情面的 kind 不在这条链路）。
     const arrival = (field: 'withKind' | 'withWordCount', declares: 'declaresKind' | 'declaresWordCount') => {
-      const withHits = audits.filter(a => a.fields?.[declares] === true && (a.fields?.hits ?? 0) > 0)
+      const withHits = audits.filter(a => a.fields?.[declares] === true && a.fields.hits > 0)
       const arrived = withHits.filter(a => (a.fields?.[field] ?? 0) > 0)
       const declaredTotal = audits.filter(a => a.fields?.[declares] === true).length
       return {
         declares: declaredTotal,
         searchedWithHits: withHits.length,
         arrivedSources: arrived.length,
-        hitRatio: withHits.reduce((n, a) => n + (a.fields?.[field] ?? 0), 0)
-          + '/' + withHits.reduce((n, a) => n + (a.fields?.hits ?? 0), 0),
+        hitRatio: `${withHits.reduce((n, a) => n + (a.fields?.[field] ?? 0), 0)}`
+          + `/${withHits.reduce((n, a) => n + (a.fields?.hits ?? 0), 0)}`,
       }
     }
     const report = {
@@ -213,7 +213,7 @@ async function auditOne(
       const groups = await svc.search(kw, { sourceIds: [src.id] })
       const g = groups[0]
       if (g === undefined) continue
-      if (g.error !== undefined && g.error !== null) {
+      if (g.error !== undefined) {
         return { ...base, stage: 'search', searchKeyword: kw, error: { name: g.error.code, message: g.error.message.slice(0, 400) } }
       }
       maxHits = Math.max(maxHits, g.hits.length)

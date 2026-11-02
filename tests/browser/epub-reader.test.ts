@@ -12,6 +12,7 @@ import type { Browser } from 'playwright'
 import iconv from 'iconv-lite'
 import type { BookNavigation, ChapterContent, ContentNode, ShelfEntry } from '../../src/shared/wire.js'
 import { LOCAL_SOURCE_ID, queries } from '../../src/shared/wire.js'
+import { must, pick } from '../support/fixture.js'
 import {
   apiJson, installOnlineSource, launchBrowser, openPage, seedShelf, settle, startEpubHost, uploadBytes, uploadFixture,
   withTimeout, ONLINE_BOOK, ONLINE_CHAPTERS, type EpubHost, type PageSession,
@@ -61,7 +62,8 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
   let browser: Browser
 
   beforeAll(async () => { browser = await launchBrowser() }, 90_000)
-  afterAll(async () => { await browser?.close() })
+  // `beforeAll` 抛错时 `afterAll` 仍会跑；此处不再二次抛错掩盖首个失败
+  afterAll(async () => { await browser.close() })
 
   /**
    * 一例 = 一台真服务 + 一个临时数据根 + 一页（独立 context ⇒ localStorage 干净）。
@@ -175,7 +177,7 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
     }, label)
   }
   const drawerLeaves = (s: PageSession): Promise<string[]> =>
-    s.page.$$eval('.novel-drawer-item', (els) => els.map((e) => e.textContent as string))
+    s.page.$$eval('.novel-drawer-item', (els) => els.map((e) => e.textContent))
 
   /**
    * 工具栏细线 `--novel-pct` = (章号+1)/章数——**会话「读到第几章」的 DOM 投影**。短章在线书里
@@ -236,10 +238,11 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       // 白名单把 tr 直接建在 table 下（React 的 createElement 不走 HTML 解析，浏览器不会补 tbody）：
       // DOM 就此非法一步（渲染仍对），React 开发版提示一次——这就是清单里那条告警的来源，如实记下来
       expect(dom.rows.map((r) => r.parent), 'table > tr（无 tbody）是本仓现状').toEqual(['TABLE', 'TABLE'])
-      expect(dom.rows[0].cells.map((c) => `${c.tag}:${c.text}`)).toEqual(['TH:竖跨', 'TD:横跨'])
-      expect(dom.rows[0].cells[0].rowSpan).toBe(2)
-      expect(dom.rows[0].cells[1].colSpan).toBe(2)
-      expect(dom.rows[1].cells.map((c) => c.text)).toEqual(['右', '下'])
+      const headRow = pick(dom.rows, 0)
+      expect(headRow.cells.map((c) => `${c.tag}:${c.text}`)).toEqual(['TH:竖跨', 'TD:横跨'])
+      expect(pick(headRow.cells, 0).rowSpan).toBe(2)
+      expect(pick(headRow.cells, 1).colSpan).toBe(2)
+      expect(pick(dom.rows, 1).cells.map((c) => c.text)).toEqual(['右', '下'])
       expect(dom.olStart).toBe('3')
       expect(dom.liValue).toBe('7')
       expect(dom.pre, 'pre 的空白是内容：换行与两空格原样保留').toBe('pre 里  的空白\n  原样保留')
@@ -275,11 +278,13 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       const key = await keyOf(host, '图文样本')
       const nav = await navOf(host, key)
       expect(nav.items.map((i) => i.label)).toEqual(['第一卷'])
-      expect(nav.items[0].target, '卷组头不带目标（不可点，也不伪造导航）').toBeNull()
-      expect(nav.items[0].children.map((c) => c.label)).toEqual(['甲', '乙', '丙'])
+      const volItem = pick(nav.items, 0)
+      expect(volItem.target, '卷组头不带目标（不可点，也不伪造导航）').toBeNull()
+      expect(volItem.children.map((c) => c.label)).toEqual(['甲', '乙', '丙'])
       const anchorOf = (label: string): string => {
-        const leaf = nav.items[0].children.find((c) => c.label === label)!
-        return leaf.target!.kind === 'chapter' ? leaf.target!.anchorId! : ''
+        const leaf = must(volItem.children.find((c) => c.label === label), `目录叶「${label}」`)
+        const target = must(leaf.target, `目录叶「${label}」的目标`)
+        return target.kind === 'chapter' ? must(target.anchorId, `目录叶「${label}」的锚点`) : ''
       }
       expect([anchorOf('甲'), anchorOf('乙'), anchorOf('丙')]).toEqual(['a1', 'a2', 'a4'])
 
@@ -403,7 +408,8 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       // 回书架删书（本地书连带删副本）：删前资源可读，删后必须 404
       await s.page.click('button:has-text("书架")')
       await s.page.waitForSelector('button[aria-label="删除 图文样本"]', { timeout: 10_000 })
-      const coverUrl = (await shelf(host))[0].coverUrl!
+      const firstOnShelf = pick(await shelf(host), 0)
+      const coverUrl = must(firstOnShelf.coverUrl, '首本书的封面地址')
       expect(coverUrl).toContain('/novel-api/local/resource')
       expect((await s.page.request.get(s.url(coverUrl))).status(), '删前资源可读').toBe(200)
       await s.page.click('button[aria-label="删除 图文样本"]')
@@ -434,19 +440,22 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       const key = await keyOf(host, '图文样本')
       const figs = imagesOf(await chapterOf(host, key, 0))
       expect(figs).toHaveLength(2)
-      expect({ w: figs[0].width, h: figs[0].height }).toEqual({ w: 2, h: 3 })
+      const fig = pick(figs, 0)
+      expect({ w: fig.width, h: fig.height }).toEqual({ w: 2, h: 3 })
 
       // 图还没到：框已按可信宽高比占在那里（量的是框，不是图）
       const boxBefore = await s.page.evaluate((id) => {
-        const el = document.querySelector(`[data-novel-node="${id}"]`) as HTMLElement
-        const img = el.querySelector('img') as HTMLImageElement | null
+        const el = document.querySelector<HTMLElement>(`[data-novel-node="${id}"]`)
+        if (el === null) throw new Error(`探针缺节点 ${id}`)
+        const img = el.querySelector<HTMLImageElement>('img')
         const r = el.getBoundingClientRect()
         return { h: r.height, ratio: r.width / r.height, hasImg: img !== null, natural: img?.naturalWidth ?? null }
-      }, figs[0].id)
+      }, fig.id)
       // 量**图之后**的节点：框「到手才撑开」会把它推下去，图前的节点对这件事无感
-      const belowId = await nodeBelow(s, figs[0].id)
+      const belowId = await nodeBelow(s, fig.id)
       expect(belowId, '图之后必须有正文节点（否则这条读数证明不了正文没被推走）').not.toBeNull()
-      const offBefore = await offsetOf(s, belowId!)
+      const belowNode = must(belowId, '图之后的正文节点')
+      const offBefore = must(await offsetOf(s, belowNode), '图之后那段正文的偏移')
       expect(boxBefore.hasImg).toBe(true)
       // 封面与插图共用同一份 png：**必须量到目标图自己是 0**——否则「一次延迟全都未解码」会让这条
       // 读数与目标资源无关（换一份封面另用的书就会静默变成恒真）
@@ -455,9 +464,9 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
 
       holdImage.release()
       await s.page.waitForFunction((id) => {
-        const img = document.querySelector(`[data-novel-node="${id}"] img`) as HTMLImageElement | null
+        const img = document.querySelector<HTMLImageElement>(`[data-novel-node="${id}"] img`)
         return img !== null && img.complete && img.naturalWidth > 0
-      }, figs[0].id, { timeout: 25_000 })
+      }, fig.id, { timeout: 25_000 })
       await settle(500)
       const decoded = await s.page.evaluate((id) => {
         const el = document.querySelector(`[data-novel-node="${id}"]`) as HTMLElement
@@ -470,7 +479,7 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
           ratio: r.width / r.height, src: img.getAttribute('src'),
           column: body.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
         }
-      }, figs[0].id)
+      }, fig.id)
       expect({ w: decoded.w, h: decoded.h }, '图片必须**真被浏览器解码**（naturalWidth 来自解码结果）').toEqual({ w: 2, h: 3 })
       expect(decoded.src, '图片走本地资源口（同源，不落书内路径）').toContain('/novel-api/local/resource')
       expect(decoded.ratio, '框按可信比例 2/3 预留（不是加载后才跳出来）').toBeCloseTo(2 / 3, 2)
@@ -478,8 +487,8 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       // 这条钉的是「换实现时别悄悄改口径」。
       expect(Math.abs(decoded.boxW - decoded.column), '插图框宽度 = 正文栏宽（现状：铺满整栏）').toBeLessThanOrEqual(2)
       expect(Math.abs(decoded.boxH - boxBefore.h), '图到手后预留框高度不变（不跳版）').toBeLessThanOrEqual(1)
-      const offAfter = await offsetOf(s, belowId!)
-      expect(Math.abs(offAfter! - offBefore!), '图到手前后**图之后**的正文视口相对偏移 ≤2 CSS px（框预留住了，没把正文推下去）').toBeLessThanOrEqual(2)
+      const offAfter = must(await offsetOf(s, belowNode), '图到手后图之后那段正文的偏移')
+      expect(Math.abs(offAfter - offBefore), '图到手前后**图之后**的正文视口相对偏移 ≤2 CSS px（框预留住了，没把正文推下去）').toBeLessThanOrEqual(2)
       expect(host.pendingFaults(), '注入的挂起必须真的被吃掉（否则上面的读数只是「图本来就没在请求」）').toBe(0)
     })
   }, 180_000)
@@ -499,8 +508,9 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       /** 链接里那张图的框、链接自身的 display、以及图之后那个文本节点的视口偏移 */
       const read = (): Promise<{ h: number; w: number; natural: number; linkDisplay: string; cTop: number }> =>
         s.page.evaluate(() => {
-          const fig = document.querySelector('.novel-ref .novel-fig') as HTMLElement
-          const img = fig.querySelector('img') as HTMLImageElement | null
+          const fig = document.querySelector<HTMLElement>('.novel-ref .novel-fig')
+          if (fig === null) throw new Error('探针缺链接里的插图框')
+          const img = fig.querySelector<HTMLImageElement>('img')
           const box = fig.getBoundingClientRect()
           const main = document.querySelector('[data-novel-main]') as HTMLElement
           // 图之后那段正文：按正文层里的最后一个段落取（不按原书 id——节点 ID 是导入期铸的 opaque 串）
@@ -521,7 +531,7 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       expect(before.h, '图未到时框高就应按可信比例占好').toBeGreaterThan(100)
 
       await s.page.waitForFunction(() => {
-        const img = document.querySelector('.novel-ref .novel-fig img') as HTMLImageElement | null
+        const img = document.querySelector<HTMLImageElement>('.novel-ref .novel-fig img')
         return img !== null && img.complete && img.naturalWidth > 0
       }, undefined, { timeout: 25_000 })
       await settle(500)
@@ -544,7 +554,7 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       await s.page.waitForSelector('[data-chapter] [data-novel-node]', { timeout: 20_000 })
       await withTimeout(hold.arrived, 15_000, '插图的资源请求没到（挂起注入没生效？）')
       await settle(500)
-      const fig = imagesOf(await chapterOf(host, await keyOf(host, '图文样本'), 0))[0]
+      const fig = pick(imagesOf(await chapterOf(host, await keyOf(host, '图文样本'), 0)), 0)
       // 量**图之后**的节点 + 框高：图前的节点对「框塌陷」无感，只比值也证明不了框高没变
       const boxBefore = await s.page.evaluate((id) => {
         const el = document.querySelector(`[data-novel-node="${id}"]`) as HTMLElement
@@ -552,7 +562,8 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       }, fig.id)
       const belowId = await nodeBelow(s, fig.id)
       expect(belowId, '图之后必须有正文节点（否则这条读数证明不了正文没被推走）').not.toBeNull()
-      const offBefore = await offsetOf(s, belowId!)
+      const belowNode = must(belowId, '图之后的正文节点')
+      const offBefore = must(await offsetOf(s, belowNode), '失败响应发出前图之后那段正文的偏移')
       expect(offBefore, '失败响应还没发时就该量得到图之后那段正文的位置').not.toBeNull()
       expect(await s.page.$(`[data-novel-node="${fig.id}"] img`), '前置：失败响应还没发，img 还在请求中').not.toBeNull()
 
@@ -570,9 +581,9 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       expect(failed.imgs).toBe(0)
       expect(failed.ratio, '失败时仍是同一块按比例预留的框').toBeCloseTo(2 / 3, 2)
       expect(Math.abs(failed.h - boxBefore), '失败时框高不变（比值相同不代表高度相同）').toBeLessThanOrEqual(1)
-      const offAfter = await offsetOf(s, belowId!)
+      const offAfter = must(await offsetOf(s, belowNode), '失败后图之后那段正文的偏移')
       expect(offAfter, '失败后同一文本节点仍量得到（没有整块消失）').not.toBeNull()
-      expect(Math.abs(offAfter! - offBefore!), '图片请求失败不得移动正文：**图之后**节点的视口相对偏移差 ≤2 CSS px')
+      expect(Math.abs(offAfter - offBefore), '图片请求失败不得移动正文：**图之后**节点的视口相对偏移差 ≤2 CSS px')
         .toBeLessThanOrEqual(2)
       expect(host.pendingFaults(), '失败注入必须真的被吃掉').toBe(0)
     }, { networkReports: 1 })
@@ -591,20 +602,21 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       await s.page.waitForSelector('.novel-fig-fail', { timeout: 15_000 })
       await settle(700)
       const reading = await s.page.evaluate((ids) => ids.map((id) => {
-        const el = document.querySelector(`[data-novel-node="${id}"]`) as HTMLElement
+        const el = document.querySelector<HTMLElement>(`[data-novel-node="${id}"]`)
+        if (el === null) throw new Error(`探针缺节点 ${id}`)
         const box = el.getBoundingClientRect()
-        const fail = el.querySelector('.novel-fig-fail') as HTMLElement | null
+        const fail = el.querySelector<HTMLElement>('.novel-fig-fail')
         return {
           text: fail?.textContent ?? null, aria: fail?.getAttribute('aria-label') ?? null,
           ratio: box.height === 0 ? null : Number((box.width / box.height).toFixed(3)),
-          natural: (el.querySelector('img') as HTMLImageElement | null)?.naturalWidth ?? null,
+          natural: el.querySelector<HTMLImageElement>('img')?.naturalWidth ?? null,
         }
       }), figs.map((f) => f.id))
       expect(reading.map((r) => r.text)).toEqual(['图片加载失败', '图片加载失败'])
       expect(reading.map((r) => r.aria)).toEqual(['图片加载失败：结构完整却解不开的 PNG', '图片加载失败：只剩 trailer 的 GIF'])
       expect(reading.map((r) => r.natural), '没有可用解码结果').toEqual([null, null])
-      expect(reading[0].ratio, '2×3 → 2/3 的框仍在').toBeCloseTo(2 / 3, 2)
-      expect(reading[1].ratio, '1×1 → 1 的框仍在').toBeCloseTo(1, 2)
+      expect(pick(reading, 0).ratio, '2×3 → 2/3 的框仍在').toBeCloseTo(2 / 3, 2)
+      expect(pick(reading, 1).ratio, '1×1 → 1 的框仍在').toBeCloseTo(1, 2)
     })
   }, 180_000)
 
@@ -673,8 +685,9 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       const puts = host.progressPuts()
       expect(before.chapter, '滚过了两章，视口应在第 1 章').toBe('1')
       expect(puts.length, '滚动应已把位置落盘').toBeGreaterThan(0)
-      expect(puts[puts.length - 1].chapterIndex).toBe(1)
-      const savedRatio = puts[puts.length - 1].offsetRatio
+      const lastPut = pick(puts, puts.length - 1)
+      expect(lastPut.chapterIndex).toBe(1)
+      const savedRatio = lastPut.offsetRatio
       expect(savedRatio, '落到章内的位置（恒 0 就分不出「存了比例」与「只存了章号」）').toBeGreaterThan(0)
       expect(box1, '前置读数：存档章块量得到').not.toBeNull()
 
@@ -692,7 +705,9 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       // 恢复位 = 存档比例 × 该章渲染高度（会话的 anchorTop 反函数）：这一条同时证明「章对了」与
       // 「章内比例也落回去了」——只恢复章首会差出整整一个比例（本样本约 30px），远大于容差。
       expect(box1After, '重挂后存档章块量得到').not.toBeNull()
-      expect(Math.abs(box1After!.top - (-savedRatio * box1!.height)),
+      const savedBox = must(box1, '存档章块的几何')
+      const restoredBox = must(box1After, '重挂后存档章块的几何')
+      expect(Math.abs(restoredBox.top - (-savedRatio * savedBox.height)),
         '恢复位落在存档比例处（±8px：允许排版舍入）').toBeLessThanOrEqual(8)
     })
   }, 180_000)
@@ -764,7 +779,7 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       const nav = await navOf(host, key)
       expect(nav.chapters.map((c) => c.name)).toEqual(['第一章', '第二章'])
       expect(nav.items.map((i) => i.label)).toEqual(['上卷', '第二章'])
-      expect(nav.items[0].children.map((c) => c.label)).toEqual(['第一章'])
+      expect(pick(nav.items, 0).children.map((c) => c.label)).toEqual(['第一章'])
 
       await openDrawer(s)
       expect(await drawerLeaves(s)).toEqual(['上卷', '第一章', '第二章'])
@@ -814,12 +829,13 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       const keyB = await keyOf(host, '图文样本')
       const navB = await navOf(host, keyB)
       const anchorA = 'a0'                                                              // A 的原书 #a
-      const anchorB = navB.items[0].children.find((c) => c.label === '乙')!.target!.anchorId!   // B 的原书 #b
+      const leafB = must(pick(navB.items, 0).children.find((c) => c.label === '乙'), 'B 书目录叶「乙」')
+      const anchorB = must(must(leafB.target, 'B 书目录叶「乙」的目标').anchorId, 'B 书目录叶「乙」的锚点')   // B 的原书 #b
       expect(anchorB).toBe('a2')
-      expect((await navOf(host, keyA)).items[0].target!.anchorId).toBe(anchorA)
+      expect(must(pick((await navOf(host, keyA)).items, 0).target, 'A 书目录首项的目标').anchorId).toBe(anchorA)
 
       const domIdOf = (id: string) => s.page.evaluate((nodeId) =>
-        (document.querySelector(`[data-chapter] [data-novel-node="${nodeId}"]`) as HTMLElement | null)?.id ?? null, id)
+        document.querySelector<HTMLElement>(`[data-chapter] [data-novel-node="${nodeId}"]`)?.id ?? null, id)
       const domPrefix = (key: string): string => `novel--${key.replace(/[^\w-]+/g, '-')}--`
 
       // B 书：跳它自己的 #b，落点是 B 的 #b 内容（「实体 & 与 &amp; 与 A」），不是 A 的 #b
@@ -860,7 +876,9 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       await settle(800)
       const nav = await navOf(host, await keyOf(host, '内联矢量锚点样本'))
       expect(nav.items.map((i) => i.label)).toEqual(['花饰', '开头'])
-      expect(nav.items[0].target!.kind === 'chapter' ? nav.items[0].target!.anchorId : 'x',
+      const firstNav = pick(nav.items, 0)
+      const firstNavTarget = must(firstNav.target, '目录叶「花饰」的目标')
+      expect(firstNavTarget.kind === 'chapter' ? firstNavTarget.anchorId : 'x',
         '消失的锚点降级为该文档开头（不是拒整本，也不是假装有锚点）').toBeNull()
       await openDrawer(s)
       await clickLeaf(s, '花饰')
@@ -921,7 +939,7 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
         .toEqual(['夜里挑灯看剑', '第二段正文'])
       expect(await s.page.$$eval('[data-novel-view="reader"] button', (els) => els.map((e) => e.textContent)),
         'TXT 无插图，不该出现导入说明入口').not.toContain('导入说明')
-      const entry = (await shelf(host))[0]
+      const entry = pick(await shelf(host), 0)
       expect(entry.title).toBe('gbk书')
       expect(entry.totalChapters).toBe(1)
     })
@@ -943,13 +961,13 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       // 「不从头」的硬证据 = 载入集**从存档章起**（第 0 章不在 DOM）。但不能要求「只有一章」：
       // 在线章短，边界哨兵恒在预取区、后面几章会被一并联进来；可测不变量是「已载章连续无空洞」。
       const loaded = await loadedChapters(s)
-      expect(loaded[0], '恢复后从存档章（第 3 章）开始载入，第 0 章不回来').toBe(2)
-      expect(loaded, '已载章按书序连续（正文渲染顺序 = 书的顺序）').toEqual(loaded.map((_, k) => loaded[0] + k))
+      expect(pick(loaded, 0), '恢复后从存档章（第 3 章）开始载入，第 0 章不回来').toBe(2)
+      expect(loaded, '已载章按书序连续（正文渲染顺序 = 书的顺序）').toEqual(loaded.map((_, k) => pick(loaded, 0) + k))
       expect(await currentPct(s), '会话的阅读位置就在存档章（--novel-pct = (章号+1)/章数）')
         .toBe(String((2 + 1) / ONLINE_CHAPTERS.length))
       const patch = host.requests.find((r) => r.method === 'PUT' && r.path.includes('/novel-api/shelf/') && (r.body ?? '').includes('totalChapters'))
       expect(patch, '缺 totalChapters 时应回写总章数（幂等补数据）').toBeDefined()
-      expect(JSON.parse(patch!.body!) as unknown).toEqual({ patch: { totalChapters: 4 } })
+      expect(JSON.parse(must(must(patch, 'PUT 请求').body, 'PUT 请求体')) as unknown).toEqual({ patch: { totalChapters: 4 } })
       expect(host.refusedOutbound, '全程不许有出站尝试（假源之外的 URL 一律被拒才看得见）').toEqual([])
       expect(host.servedOutbound.length, '假站点确实被抓过（否则上面读的正文不知从哪来）').toBeGreaterThan(0)
       expect([...new Set(host.servedOutbound.map((u) => new URL(u).host))]).toEqual(['novel-browser.invalid'])
@@ -968,7 +986,7 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       expect(await s.page.textContent('.novel-rdr-title')).toContain(`/ ${ONLINE_CHAPTERS.length}`)
       await openDrawer(s)
       expect(await drawerLeaves(s)).toEqual([...ONLINE_CHAPTERS])
-      await clickLeaf(s, ONLINE_CHAPTERS[1])
+      await clickLeaf(s, pick(ONLINE_CHAPTERS, 1))
       await settle(1_300)
       // 在线章很短：滚动会被 clamp，所以这里量「目标章进了 DOM 且在视口内可见」，
       // 「锚点落在视口顶 ±4px」那条归有长内容的 epub3 用例（那里滚动有余量）
@@ -976,14 +994,14 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       expect(await s.page.textContent('[data-chapter="1"]')).toContain('假站点的第 2 章正文第一段')
       const loadedOnline = await loadedChapters(s)
       expect(loadedOnline, '目标章进了 DOM').toContain(1)
-      expect(loadedOnline, '已载章按书序连续（无空洞）').toEqual(loadedOnline.map((_, k) => loadedOnline[0] + k))
+      expect(loadedOnline, '已载章按书序连续（无空洞）').toEqual(loadedOnline.map((_, k) => pick(loadedOnline, 0) + k))
       expect(await currentPct(s), '会话的阅读位置就是第 2 章').toBe(String((1 + 1) / ONLINE_CHAPTERS.length))
       expect(await s.page.evaluate(() => {
         const main = document.querySelector('[data-novel-main]') as HTMLElement
         const r = (document.querySelector('[data-chapter="1"]') as HTMLElement).getBoundingClientRect()
         return r.top < main.getBoundingClientRect().bottom && r.bottom > main.getBoundingClientRect().top
       }), '目标章在视口内可见').toBe(true)
-      expect(host.progressPuts().at(-1)!.chapterIndex).toBe(1)
+      expect(must(host.progressPuts().at(-1), '最后一次进度 PUT').chapterIndex).toBe(1)
       expect(host.refusedOutbound).toEqual([])
       expect([...new Set(host.servedOutbound.map((u) => new URL(u).host))]).toEqual(['novel-browser.invalid'])
     })

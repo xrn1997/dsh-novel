@@ -6,6 +6,7 @@ import { apply } from '../../src/client/index.js'
 import { NovelConfigCardView } from '../../src/client/config-page.js'
 import { enTranslate, type Translate } from '../../src/client/copy/index.js'
 import { fakeConfigForms, fakeCtx, fakeHost } from './fake-host.js'
+import { must } from '../support/fixture.js'
 
 /**
  * 配置页接入面：插件页（`plugins.bundle.config`）里的「运行参数」表单。
@@ -40,7 +41,7 @@ function mountConfigPage(
   const forms = fakeConfigForms(scope ?? {}, opts)
   const h = fakeHost({ configForms: forms })
   apply(fakeCtx(h) as never)
-  const reg = h.registrations.find((r) => r.name === 'plugins.bundle.config')!
+  const reg = must(h.registrations.find((r) => r.name === 'plugins.bundle.config'), 'bundle.config 注册')
   const view = render(createElement(reg.component as never, t === undefined ? {} : { t }))
   return { forms, reg, view }
 }
@@ -56,7 +57,7 @@ describe('插件页配置页', () => {
 
   it('有 configForms：注册 bundle.config，key 是包名，七个字段 + dataDir 说明', () => {
     const { reg } = mountConfigPage({ searchParallel: 5, proxyUrl: '' })
-    expect(reg?.options.key).toBe('@xrn1997/dsh-novel')
+    expect(reg.options.key).toBe('@xrn1997/dsh-novel')
     expect(screen.getByText('运行参数')).toBeTruthy()
     expect(screen.getByText(/dataDir/)).toBeTruthy()
     for (const label of [
@@ -108,7 +109,7 @@ describe('插件页配置页', () => {
   it('点预设档写入整字节数，省掉手敲九位', async () => {
     const { forms, view } = mountConfigPage({ cacheMaxBytes: 209715200 })
     fireEvent.click(view.getByRole('button', { name: '500 MB' }))
-    expect((screen.getByLabelText('磁盘缓存上限') as HTMLInputElement).value).toBe('524288000')
+    expect(screen.getByLabelText<HTMLInputElement>('磁盘缓存上限').value).toBe('524288000')
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
     await Promise.resolve()
     expect(forms.get('dsh-novel').mutate).toHaveBeenCalledWith(
@@ -153,9 +154,9 @@ describe('插件页配置页', () => {
     // 真容的 SettingsForm 只在 unavailable 时收起 children；只读只加一条提示，禁用归页面。
     mountConfigPage({ searchParallel: 5 }, { writable: false })
     expect(screen.getByText('本部署的配置为只读。')).toBeTruthy()
-    const field = screen.getByLabelText('搜索并发源数') as HTMLInputElement
+    const field = screen.getByLabelText<HTMLInputElement>('搜索并发源数')
     expect(field.disabled).toBe(true)
-    expect((screen.getByRole('button', { name: '保存' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '保存' }).disabled).toBe(true)
   })
 
   it('条目不可用：显示不可用文案，表单字段不出现', () => {
@@ -179,7 +180,7 @@ describe('配置页的非法值呈现', () => {
 
   it('非法字段就地报原文、标 aria-invalid，且不因非法而丢草稿', () => {
     const actions = { save: () => {}, discard: () => {}, edit: () => {}, resetField: () => {} }
-    render(createElement(NovelConfigCardView, { state: state as never, actions: actions as never }))
+    render(createElement(NovelConfigCardView, { state: state, actions: actions }))
     const box = screen.getByLabelText('磁盘缓存上限')
     expect(box.getAttribute('aria-invalid')).toBe('true')
     expect(screen.getByText('请填数字')).toBeTruthy()
@@ -190,7 +191,7 @@ describe('配置页的非法值呈现', () => {
   it('非法值没有换算可给：回读位留空而不是编一个数', () => {
     const actions = { save: () => {}, discard: () => {}, edit: () => {}, resetField: () => {} }
     const { container } = render(
-      createElement(NovelConfigCardView, { state: state as never, actions: actions as never }),
+      createElement(NovelConfigCardView, { state: state, actions: actions }),
     )
     expect(readback(container, 'cacheMaxBytes')).toBeNull()
   })

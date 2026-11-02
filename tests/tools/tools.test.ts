@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import type { ToolOutputDefinition } from '@deepseek-ai/dsh-tools'
 import { ReadingService } from '../../src/services/reading.js'
+import type { ChapterEntry, MergedBook, ShelfBook } from '../../src/shared/wire.js'
 import { SEARCH_BOOKS_CAP } from '../../src/shared/wire.js'
 import { buildTools, registerTools } from '../../src/tools/tools.js'
+import type { ToolsCtxLike } from '../../src/tools/tools.js'
 import { TOC_CHAPTERS_CAP, TOC_RENDER_CAP } from '../../src/tools/render.js'
+import { must, pick } from '../support/fixture.js'
+import { requestUrlOf } from '../support/fetch-input.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
 
 /** 三条 .b：① 含关键词且带作者、② 与关键词无涉、③ 含关键词而无作者 span。
@@ -21,7 +25,48 @@ const rawSource = {
   ruleBookList: '@css:.b', ruleBookName: 'tag.a@text', ruleAuthor: 'tag.span@text', ruleBookUrl: 'tag.a@href',
   ruleChapterName: 'tag.a@text', ruleChapterUrl: 'tag.a@href', ruleContent: '@css:#content@textNodes',
 }
-const exec = { signal: new AbortController().signal } as any
+/** 工具体不读 exec（六个工具的 execute 都只碰 args）：按 harness 的 ToolRunContext 位置交一份最小面，
+ *  与 tests/tools/{tool-declarations,schema-contract}.test.ts 同一手法。 */
+const exec = { signal: new AbortController().signal } as never
+
+/** 工具 execute 的静态返回是 `unknown`（harness 契约：出参形状由各工具的 output.schema 声明，
+ *  逐键钉在 tests/tools/schema-contract.test.ts）。用例读到的形状在这里点名声明一次：
+ *  读错字段会在读的时候炸，而不是靠 any 蒙过去。 */
+interface SearchOut {
+  books: MergedBook[]
+  failed: Array<{ sourceId: string; sourceName: string; code: string; message: string }>
+  searched: number
+  answered: number
+  filtered: number
+  truncated?: string
+}
+interface ReadOut { sourceId: string; bookKey: string; chapterIndex: number; chapterName: string; text: string }
+interface ChapterRow extends ChapterEntry { chapterIndex: number }
+interface TocOut { sourceId: string; bookKey: string; total: number; chapters: ChapterRow[] }
+interface ImportOutcome {
+  sourceId?: string
+  name: string
+  ok: boolean
+  dupSkipped?: boolean
+  missing: Array<{ field: string; reason?: string }>
+  warnings?: string[]
+}
+interface ImportOut { outcomes: ImportOutcome[] }
+interface ShelfOut { action: string; books?: ShelfBook[]; book?: ShelfBook; removed?: boolean }
+interface SourceRow { sourceId: string; name: string; baseUrl: string; enabled: boolean; type: string; status: string }
+interface SourceOut {
+  action: string
+  sources?: SourceRow[]
+  sourceId?: string
+  enabled?: boolean
+  removed?: boolean
+  status?: string
+  ok?: boolean
+  itemCount?: number
+  firstTitle?: string | null
+  error?: { code: string; message: string }
+  probedAt?: number
+}
 
 /** lossless JSON 兜底：值为 undefined 的属性键会让 harness 拒收整个工具输出
  *（"value is not lossless JSON"——真实结果被吞）。递归断言输出里没有任何 undefined。 */
@@ -34,30 +79,32 @@ async function svc(): Promise<ReadingService> {
   const dir = await makeTempDir('novel-tools-')
   const s = trackService(await ReadingService.create({
     dir,
-    fetchImpl: (async (input: any) => {
-      const u = String(input)
+    // 站点替身按 URL 分流：fetchImpl 的面就是 `typeof globalThis.fetch`，参数照它收窄即可
+    fetchImpl: async (input: RequestInfo | URL) => {
+      const u = requestUrlOf(input)
       const body = u.includes('/search') ? SEARCH_HTML
         : u.includes('/c/1.html') ? CONTENT_HTML
           : u.includes('/book/1') ? TOC_HTML : null
       return body === null
         ? new Response('', { status: 404 })
         : new Response(body, { headers: { 'content-type': 'text/html; charset=utf-8' } })
-    }) as any,
+    },
   }))
-  sourceId = (await s.importOne(rawSource)).sourceId!
+  sourceId = must((await s.importOne(rawSource)).sourceId, 'importOne 受理的 sourceId')
   await s.probe(sourceId)   // 导入不探针——搜索用例要 verified 态，显式探一次
   return s
 }
-const run = async (s: ReadingService, name: string, args: unknown): Promise<any> => {
-  const tool = buildTools(s).find((t) => t.name === name)!
-  return tool.execute(args, exec)
+const run = async <T>(s: ReadingService, name: string, args: unknown): Promise<T> => {
+  const tool = must(buildTools(s).find((t) => t.name === name), `工具 ${name}`)
+  return await tool.execute(args, exec) as T
 }
 /** render 的产物是 content 块数组，拼回一句文本才是模型读到的那一份——文案断言只能量这里。
  *  入参类型取自 harness 的 ToolOutputDefinition，不在测试里放宽成 any：render 只认规范 JSON 值 */
 const asText = (blocks: unknown): string => (blocks as Array<{ type: 'text'; text: string }>).map((c) => c.text).join('')
-const renderOf = (s: ReadingService, name: string, args: unknown,
-  value: Parameters<ToolOutputDefinition['render']>[1]): string =>
-  asText(buildTools(s).find((t) => t.name === name)!.output.render(args, value))
+const renderOf = (s: ReadingService, name: string, args: unknown, value: unknown): string =>
+  asText(must(buildTools(s).find((t) => t.name === name), `工具 ${name}`)
+    // render 的 value 位是规范 JSON 值：上面各 Out 声明的就是规范值形状，交出去这一处不丢检查
+    .output.render(args, value as Parameters<ToolOutputDefinition['render']>[1]))
 
 describe('agent 工具六件套', () => {
   it('工具名齐 6 个且全部带 dshnovel_ 前缀（防生态撞名——宿主重名直接抛错）；dshnovel_search 按书返回且不摆疑似无关', async () => {
@@ -67,14 +114,14 @@ describe('agent 工具六件套', () => {
       ['dshnovel_import_source', 'dshnovel_read', 'dshnovel_search', 'dshnovel_shelf', 'dshnovel_source', 'dshnovel_toc'])
     // 名字集合是占位锁：新增/改名工具必须显式过这条——前缀是与生态其他插件的硬边界
     for (const n of names) expect(n.startsWith('dshnovel_'), `${n} 缺 dshnovel_ 前缀`).toBe(true)
-    const v = await run(s, 'dshnovel_search', { keyword: '斗罗' })
+    const v = await run<SearchOut>(s, 'dshnovel_search', { keyword: '斗罗' })
     // 按书视图：档序在前（exact 的斗罗先于 contains 的斗罗外传）；无名书与关键词无涉 ⇒ 整行不进输出
     //（与用户看到的默认视野同一份，模型不该多看见一条）。列表式 toEqual 同时钉住「谁不进」与档序。
-    expect(v.books.map((b: { title: string }) => b.title)).toEqual(['斗罗', '斗罗外传'])
-    expect(v.books[0]).toMatchObject({ title: '斗罗', author: '唐家', relevance: 'exact', sourceCount: 1 })
+    expect(v.books.map((b) => b.title)).toEqual(['斗罗', '斗罗外传'])
+    expect(pick(v.books, 0)).toMatchObject({ title: '斗罗', author: '唐家', relevance: 'exact', sourceCount: 1 })
     // 逐源行的 sourceId 必须留在册——bookKey 单独不够，其他工具调用要行自己那一家的 id
-    expect(v.books[0].sources[0]).toMatchObject({ sourceId, sourceName: 'S', title: '斗罗', url: 'https://s.com/book/1/' })
-    expect(v.books[1].relevance).toBe('contains')
+    expect(pick(pick(v.books, 0).sources, 0)).toMatchObject({ sourceId, sourceName: 'S', title: '斗罗', url: 'https://s.com/book/1/' })
+    expect(pick(v.books, 1).relevance).toBe('contains')
     expect(v.failed).toEqual([])
     expect(JSON.stringify(v)).not.toContain('raw')     // 凭据/原文红线
     // 覆盖面三读数：跑了几家、几家干净答话、几条因不相关被移出默认视野——
@@ -83,16 +130,16 @@ describe('agent 工具六件套', () => {
     expect('truncated' in v).toBe(false)               // 缺席=没截断：上限读数不许常驻
     // 工具面真实输出整键缺席（project() 自身的形状纪律由 tests/tools/project.test.ts 钉住）——
     // 这里是唯一证明 execute 真走了 project() 而非绕过的地方；hasUndefined 只管值不许是 undefined，管不到键。
-    expect('author' in v.books[1]).toBe(false)
-    expect('author' in v.books[1].sources[0]).toBe(false)
+    expect('author' in pick(v.books, 1)).toBe(false)
+    expect('author' in pick(pick(v.books, 1).sources, 0)).toBe(false)
     expect(hasUndefined(v)).toBe(false)
   })
   it('dshnovel_search：books 为空时分得开「没人答话」「答了但全不相关」「答了但 0 条」（三读数 + failed 逐家点名）', async () => {
     const dir = await makeTempDir('novel-disclose-')
     const s = trackService(await ReadingService.create({
       dir,
-      fetchImpl: (async (input: any) => {
-        const u = String(input)
+      fetchImpl: async (input: RequestInfo | URL) => {
+        const u = requestUrlOf(input)
         // A 家答话但唯一一条与关键词无涉；B 家直接 404（本轮没答话）
         if (u.includes('/searchA')) {
           return new Response('<html><body><div class="b"><a href="/a/1/">射雕</a></div></body></html>',
@@ -105,18 +152,18 @@ describe('agent 工具六件套', () => {
           return new Response('<html><body></body></html>', { headers: { 'content-type': 'text/html; charset=utf-8' } })
         }
         return new Response('', { status: 404 })
-      }) as any,
+      },
     }))
     await s.importOne({ ...rawSource, bookSourceName: 'A', bookSourceUrl: 'https://a.com', searchUrl: 'https://a.com/searchA?q={{key}}' })
-    const idB = (await s.importOne({ ...rawSource, bookSourceName: 'B', bookSourceUrl: 'https://b.com', searchUrl: 'https://b.com/searchB?q={{key}}' })).sourceId!
+    const idB = must((await s.importOne({ ...rawSource, bookSourceName: 'B', bookSourceUrl: 'https://b.com', searchUrl: 'https://b.com/searchB?q={{key}}' })).sourceId, 'importOne 受理的 sourceId')
     await s.importOne({ ...rawSource, bookSourceName: 'C', bookSourceUrl: 'https://c.com', searchUrl: 'https://c.com/searchC?q={{key}}' })
-    const v = await run(s, 'dshnovel_search', { keyword: '斗罗' })
+    const v = await run<SearchOut>(s, 'dshnovel_search', { keyword: '斗罗' })
     expect(v.books).toEqual([])
     // 界面上这一轮是「相关 0 · 共 1」外加折叠；工具面没有折叠，只能靠读数分开几回事——
     // C 家计入 answered 却不给 filtered 添一笔
     expect({ searched: v.searched, answered: v.answered, filtered: v.filtered }).toEqual({ searched: 3, answered: 2, filtered: 1 })
     expect(v.failed).toEqual([expect.objectContaining({ sourceId: idB, sourceName: 'B' })])
-    expect(typeof v.failed[0].code).toBe('string')
+    expect(typeof pick(v.failed, 0).code).toBe('string')
     expect(hasUndefined(v)).toBe(false)
     // 三读数进了结构字段还不算交付：模型读的是文案里「答话 N 家」那一分句，它得在场上
     const say = renderOf(s, 'dshnovel_search', { keyword: '斗罗' }, v)
@@ -131,23 +178,23 @@ describe('agent 工具六件套', () => {
       `<div class="b"><a href="/book/${i}/">斗罗第${i}部</a><span>唐家</span></div>`).join('')
     const s = trackService(await ReadingService.create({
       dir,
-      fetchImpl: (async () => new Response(`<html><body>${many}</body></html>`,
-        { headers: { 'content-type': 'text/html; charset=utf-8' } })) as any,
+      fetchImpl: async () => new Response(`<html><body>${many}</body></html>`,
+        { headers: { 'content-type': 'text/html; charset=utf-8' } }),
     }))
     await s.importOne(rawSource)
-    const v = await run(s, 'dshnovel_search', { keyword: '斗罗' })
+    const v = await run<SearchOut>(s, 'dshnovel_search', { keyword: '斗罗' })
     expect(v.books.length).toBe(SEARCH_BOOKS_CAP)
     // 两个数各指各的：共几本说全量、只返回前几本说返回量——调换了模型就会以为没丢东西
     expect(v.truncated).toBe(`本轮共 ${SEARCH_BOOKS_CAP + 1} 本，只返回前 ${SEARCH_BOOKS_CAP} 本`)
     expect('truncated' in v).toBe(true)
     // 声明了却没值的键钉不住 schema（tests/tools/schema-contract.test.ts 的口径）——
     // 截断那一支也过一次 harness 同款校验，不靠字面量独自作证
-    const tool = buildTools(s).find((t) => t.name === 'dshnovel_search')!
+    const tool = must(buildTools(s).find((t) => t.name === 'dshnovel_search'), '工具 dshnovel_search')
     expect(validateJsonSchemaValue(tool.output.schema, v, 'dshnovel_search')).toEqual([])
   })
   it('dshnovel_search 的 render：逐书一行、缺作者不印幽灵、行超 3 才标 …、覆盖面与未答话点名', async () => {
     const s = await svc()
-    const body = renderOf(s, 'dshnovel_search', { keyword: '斗罗' }, await run(s, 'dshnovel_search', { keyword: '斗罗' }))
+    const body = renderOf(s, 'dshnovel_search', { keyword: '斗罗' }, await run<SearchOut>(s, 'dshnovel_search', { keyword: '斗罗' }))
     expect(body).toContain('《斗罗》 / 唐家 · 1 家源：S(https://s.com/book/1/)')
     // 缺作者是整键不在（规范值经缺键投影）——按 null 哨兵比对的老写法会在这里印出「 / undefined」的幽灵作者
     expect(body).toContain('《斗罗外传》 · 1 家源：S(https://s.com/book/3/)')
@@ -172,29 +219,29 @@ describe('agent 工具六件套', () => {
   })
   it('dshnovel_read：按 index 取正文', async () => {
     const s = await svc()
-    const v = await run(s, 'dshnovel_read', { sourceId: sourceId, bookKey: 'https://s.com/book/1/', chapterIndex: 0 })
+    const v = await run<ReadOut>(s, 'dshnovel_read', { sourceId: sourceId, bookKey: 'https://s.com/book/1/', chapterIndex: 0 })
     expect(v).toMatchObject({ chapterIndex: 0, chapterName: '第一章', text: '正文内容' })
   })
   it('dshnovel_toc：章名→0 起下标（跳章流的地基——dshnovel_read 的 chapterIndex 从这里查）', async () => {
     const s = await svc()
-    const v = await run(s, 'dshnovel_toc', { sourceId, bookKey: 'https://s.com/book/1/' })
+    const v = await run<TocOut>(s, 'dshnovel_toc', { sourceId, bookKey: 'https://s.com/book/1/' })
     expect(v).toMatchObject({ sourceId, bookKey: 'https://s.com/book/1/', total: 1 })
-    expect(v.chapters[0]).toMatchObject({ chapterIndex: 0, name: '第一章', url: 'https://s.com/c/1.html' })
+    expect(pick(v.chapters, 0)).toMatchObject({ chapterIndex: 0, name: '第一章', url: 'https://s.com/c/1.html' })
     expect(hasUndefined(v)).toBe(false)
   })
   it('dshnovel_toc：规范值超过章数上限时截断，total 仍报全书章数（读取不因此受限）', async () => {
     const many = Array.from({ length: TOC_CHAPTERS_CAP + 1 }, (_, i) => ({ name: `第${i}章`, url: `https://s.com/c/${i}` }))
     const stub = { getToc: async () => many } as unknown as ReadingService
-    const v = await run(stub, 'dshnovel_toc', { sourceId: 's', bookKey: 'k' })
+    const v = await run<TocOut>(stub, 'dshnovel_toc', { sourceId: 's', bookKey: 'k' })
     expect(v.total).toBe(TOC_CHAPTERS_CAP + 1)                 // total 是全书章数
     expect(v.chapters).toHaveLength(TOC_CHAPTERS_CAP)          // 规范值本身有上限
-    expect(v.chapters[TOC_CHAPTERS_CAP - 1].chapterIndex).toBe(TOC_CHAPTERS_CAP - 1)
+    expect(pick(v.chapters, TOC_CHAPTERS_CAP - 1).chapterIndex).toBe(TOC_CHAPTERS_CAP - 1)
     expect(renderOf(stub, 'dshnovel_toc', { sourceId: 's', bookKey: 'k' }, v))
       .toContain(`规范值只含前 ${TOC_CHAPTERS_CAP} 章`)
   })
   it('dshnovel_toc：描述与 render 同源——渲染上限与规范值上限各就各位，不混名', async () => {
     const s = await svc()
-    const desc = buildTools(s).find((t) => t.name === 'dshnovel_toc')!.description
+    const desc = must(buildTools(s).find((t) => t.name === 'dshnovel_toc'), '工具 dshnovel_toc').description
     // 两个常数是两个事实：文案里「只显示前 N 章」必须来自 TOC_RENDER_CAP（与 renderToc 的 slice 同源），
     // 「规范值最多 N 章」必须来自 TOC_CHAPTERS_CAP。任一被写成另一枚的字面量，这条就红。
     expect(desc).toContain(`前 ${TOC_RENDER_CAP} 章`)
@@ -202,38 +249,38 @@ describe('agent 工具六件套', () => {
   })
   it('dshnovel_import_source：好/坏 JSON 文本各走其道（导入不含探针——outcome 无 probe 键）', async () => {
     const s = await svc()
-    const v = await run(s, 'dshnovel_import_source', { sourceJson: '[{"bookSourceName":"B","bookSourceUrl":"https://b","ruleContent":"x"}]' })
-    expect(v.outcomes[0]).toMatchObject({ ok: true })
-    expect('probe' in v.outcomes[0]).toBe(false)     // 导入不探针：好条目也不带 probe 键
+    const v = await run<ImportOut>(s, 'dshnovel_import_source', { sourceJson: '[{"bookSourceName":"B","bookSourceUrl":"https://b","ruleContent":"x"}]' })
+    expect(pick(v.outcomes, 0)).toMatchObject({ ok: true })
+    expect('probe' in pick(v.outcomes, 0)).toBe(false)     // 导入不探针：好条目也不带 probe 键
     expect(hasUndefined(v)).toBe(false)
-    const bad = await run(s, 'dshnovel_import_source', { sourceJson: '{oops' })
-    expect(bad.outcomes[0].ok).toBe(false)
-    expect(bad.outcomes[0].missing[0].field).toBe('sourceJson')
+    const bad = await run<ImportOut>(s, 'dshnovel_import_source', { sourceJson: '{oops' })
+    expect(pick(bad.outcomes, 0).ok).toBe(false)
+    expect(pick(pick(bad.outcomes, 0).missing, 0).field).toBe('sourceJson')
   })
   it('dshnovel_import_source：规范化失败的 outcome 缺键而非 undefined（失败原因能报出来，不被 harness 吞掉）', async () => {
     const s = await svc()
     // Native 判别边界外的残缺源：既无 bookSource* 也无 name+url → 书源路径报三件套缺失
-    const bad = await run(s, 'dshnovel_import_source', { sourceJson: '[{"name":"X"}]' })
-    expect(bad.outcomes[0].ok).toBe(false)
-    expect(bad.outcomes[0].missing.length).toBeGreaterThan(0)
-    expect('sourceId' in bad.outcomes[0]).toBe(false)
-    expect('probe' in bad.outcomes[0]).toBe(false)
+    const bad = await run<ImportOut>(s, 'dshnovel_import_source', { sourceJson: '[{"name":"X"}]' })
+    expect(pick(bad.outcomes, 0).ok).toBe(false)
+    expect(pick(bad.outcomes, 0).missing.length).toBeGreaterThan(0)
+    expect('sourceId' in pick(bad.outcomes, 0)).toBe(false)
+    expect('probe' in pick(bad.outcomes, 0)).toBe(false)
     expect(hasUndefined(bad)).toBe(false)
   })
   it('dshnovel_shelf：list/add/save_progress/remove 全 action 走通', async () => {
     const s = await svc()
-    const added = await run(s, 'dshnovel_shelf', { action: 'add', bookKey: 'https://s.com/book/2/', title: 'T2', sourceId })
+    const added = await run<ShelfOut>(s, 'dshnovel_shelf', { action: 'add', bookKey: 'https://s.com/book/2/', title: 'T2', sourceId })
     expect(added).toMatchObject({ action: 'add', book: { title: 'T2', sourceId } })
     expect(hasUndefined(added)).toBe(false)
-    const saved = await run(s, 'dshnovel_shelf', { action: 'save_progress', bookKey: 'https://s.com/book/2/', chapterIndex: 3, offsetRatio: 0.5 })
+    const saved = await run<ShelfOut>(s, 'dshnovel_shelf', { action: 'save_progress', bookKey: 'https://s.com/book/2/', chapterIndex: 3, offsetRatio: 0.5 })
     expect(saved).toMatchObject({ action: 'save_progress', book: { progress: { chapterIndex: 3, offsetRatio: 0.5 } } })
-    const shelf = await run(s, 'dshnovel_shelf', { action: 'list' })
-    expect(shelf.books.some((b: { title: string }) => b.title === 'T2')).toBe(true)
+    const shelf = await run<ShelfOut>(s, 'dshnovel_shelf', { action: 'list' })
+    expect(must(shelf.books, 'shelf 回执的 books').some((b) => b.title === 'T2')).toBe(true)
     expect(hasUndefined(shelf)).toBe(false)
-    const removed = await run(s, 'dshnovel_shelf', { action: 'remove', bookKey: 'https://s.com/book/2/' })
+    const removed = await run<ShelfOut>(s, 'dshnovel_shelf', { action: 'remove', bookKey: 'https://s.com/book/2/' })
     expect(removed).toMatchObject({ action: 'remove', removed: true })
-    const after = await run(s, 'dshnovel_shelf', { action: 'list' })
-    expect(after.books.some((b: { title: string }) => b.title === 'T2')).toBe(false)
+    const after = await run<ShelfOut>(s, 'dshnovel_shelf', { action: 'list' })
+    expect(must(after.books, 'shelf 回执的 books').some((b) => b.title === 'T2')).toBe(false)
   })
   it('dshnovel_shelf：action 缺该 action 的必填参数时抛清楚的错（宁炸不猜）', async () => {
     const s = await svc()
@@ -254,31 +301,31 @@ describe('agent 工具六件套', () => {
       .rejects.toThrow(/offsetRatio/)
     await expect(run(s, 'dshnovel_shelf', { action: 'save_progress', bookKey: key, chapterIndex: 1.5, offsetRatio: 0 }))
       .rejects.toThrow(/chapterIndex/)
-    const shelf = await run(s, 'dshnovel_shelf', { action: 'list' })
-    const b = shelf.books.find((x: { title: string }) => x.title === 'T3')
+    const shelf = await run<ShelfOut>(s, 'dshnovel_shelf', { action: 'list' })
+    const b = must(must(shelf.books, 'shelf 回执的 books').find((x) => x.title === 'T3'), '书架里的 T3')
     expect(b.progress).toMatchObject({ chapterIndex: 0, offsetRatio: 0 })
   })
   it('dshnovel_source：list/probe/enable/disable/remove 走通', async () => {
     const s = await svc()
     const id = sourceId
-    const list = await run(s, 'dshnovel_source', { action: 'list' })
-    expect(list.sources[0]).toMatchObject({ sourceId: id, name: 'S', enabled: true, status: 'verified' })
+    const list = await run<SourceOut>(s, 'dshnovel_source', { action: 'list' })
+    expect(pick(must(list.sources, 'source 回执的 sources'), 0)).toMatchObject({ sourceId: id, name: 'S', enabled: true, status: 'verified' })
     expect(hasUndefined(list)).toBe(false)
     // 探针成功：error 键不存在而非 error:undefined（同款 lossless 雷）
     // itemCount 是**搜索面解析到的条数**，与相关性视野无关（探针答的是「这一家能不能搜出东西」，
     // 不是「这一家有几本相关」）——夹具三条 .b 就是三条。
-    const p = await run(s, 'dshnovel_source', { action: 'probe', sourceId: id })
+    const p = await run<SourceOut>(s, 'dshnovel_source', { action: 'probe', sourceId: id })
     expect(p).toMatchObject({ action: 'probe', sourceId: id, ok: true, itemCount: 3 })
     expect('error' in p).toBe(false)
     expect(hasUndefined(p)).toBe(false)
-    const off = await run(s, 'dshnovel_source', { action: 'disable', sourceId: id })
+    const off = await run<SourceOut>(s, 'dshnovel_source', { action: 'disable', sourceId: id })
     expect(off).toMatchObject({ action: 'disable', sourceId: id, enabled: false })
-    const on = await run(s, 'dshnovel_source', { action: 'enable', sourceId: id })
+    const on = await run<SourceOut>(s, 'dshnovel_source', { action: 'enable', sourceId: id })
     expect(on).toMatchObject({ action: 'enable', sourceId: id, enabled: true })
-    const rm = await run(s, 'dshnovel_source', { action: 'remove', sourceId: id })
+    const rm = await run<SourceOut>(s, 'dshnovel_source', { action: 'remove', sourceId: id })
     expect(rm).toMatchObject({ action: 'remove', sourceId: id, removed: true })
-    const empty = await run(s, 'dshnovel_source', { action: 'list' })
-    expect(empty.sources).toHaveLength(0)
+    const empty = await run<SourceOut>(s, 'dshnovel_source', { action: 'list' })
+    expect(must(empty.sources, 'source 回执的 sources')).toHaveLength(0)
   })
   it('dshnovel_source：enable 未知 id 必抛错（不静默回「已启用」）', async () => {
     const s = await svc()
@@ -292,22 +339,22 @@ describe('agent 工具六件套', () => {
   it('六个工具各至少一条 render：规范值经各自 render 成模型读到的文案', async () => {
     const s = await svc()
     const bookKey = 'https://s.com/book/1/'
-    const read = await run(s, 'dshnovel_read', { sourceId, bookKey, chapterIndex: 0 })
+    const read = await run<ReadOut>(s, 'dshnovel_read', { sourceId, bookKey, chapterIndex: 0 })
     expect(renderOf(s, 'dshnovel_read', { sourceId, bookKey, chapterIndex: 0 }, read)).toContain('第一章')
-    const toc = await run(s, 'dshnovel_toc', { sourceId, bookKey })
+    const toc = await run<TocOut>(s, 'dshnovel_toc', { sourceId, bookKey })
     expect(renderOf(s, 'dshnovel_toc', { sourceId, bookKey }, toc)).toContain('共 1 章')
-    const added = await run(s, 'dshnovel_shelf', { action: 'add', bookKey, title: 'T', sourceId })
+    const added = await run<ShelfOut>(s, 'dshnovel_shelf', { action: 'add', bookKey, title: 'T', sourceId })
     expect(renderOf(s, 'dshnovel_shelf', { action: 'add' }, added)).toContain('已加书：《T》')
-    const sources = await run(s, 'dshnovel_source', { action: 'list' })
+    const sources = await run<SourceOut>(s, 'dshnovel_source', { action: 'list' })
     expect(renderOf(s, 'dshnovel_source', { action: 'list' }, sources)).toContain('共 1 个源')
-    const imported = await run(s, 'dshnovel_import_source', { sourceJson: '[{"bookSourceName":"B","bookSourceUrl":"https://b","ruleContent":"x"}]' })
+    const imported = await run<ImportOut>(s, 'dshnovel_import_source', { sourceJson: '[{"bookSourceName":"B","bookSourceUrl":"https://b","ruleContent":"x"}]' })
     expect(renderOf(s, 'dshnovel_import_source', {}, imported)).toContain('✓ B')
-    const searched = await run(s, 'dshnovel_search', { keyword: '斗罗' })
+    const searched = await run<SearchOut>(s, 'dshnovel_search', { keyword: '斗罗' })
     expect(renderOf(s, 'dshnovel_search', { keyword: '斗罗' }, searched)).toContain('本（跑了')
   })
   it('registerTools：6 次注册 + disposer 聚合全触发', () => {
     const calls: string[] = []
-    const ctxLike = { tools: { register: (t: any) => { calls.push(t.name); return () => calls.push(`off:${t.name}`) } } }
+    const ctxLike: ToolsCtxLike = { tools: { register: (t) => { calls.push(t.name); return () => calls.push(`off:${t.name}`) } } }
     const off = registerTools(ctxLike, {} as ReadingService)
     expect(calls.filter((c) => !c.startsWith('off:'))).toHaveLength(6)
     off()
@@ -317,15 +364,15 @@ describe('agent 工具六件套', () => {
     const dir = await makeTempDir('novel-native-')
     const s = trackService(await ReadingService.create({
       dir,
-      fetchImpl: (async (input: any) => {
-        const u = String(input)
+      fetchImpl: async (input: RequestInfo | URL) => {
+        const u = requestUrlOf(input)
         // 站点首页路径不带页码：/so/书/1 → 404；/so/书 → 搜索结果页
         if (u === 'https://n.com/so/%E4%B9%A6/1') return new Response('nf', { status: 404 })
         if (u === 'https://n.com/so/%E4%B9%A6') {
           return new Response(SEARCH_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } })
         }
         return new Response('', { status: 404 })
-      }) as any,
+      },
     }))
     const outcome = await s.importOne({
       name: 'N', url: 'https://n.com', searchUrl: '/so/{{keyword}}/{{page}}',
@@ -334,7 +381,7 @@ describe('agent 工具六件套', () => {
     })
     expect(outcome.ok).toBe(true)
     // 导入不探针——显式探一次验证 Native 分页语义：首页裁掉 /{{page}} 页码段
-    const probe = await s.probe(outcome.sourceId!)
+    const probe = await s.probe(must(outcome.sourceId, 'importOne 受理的 sourceId'))
     expect(probe.ok).toBe(true)
   })
 })

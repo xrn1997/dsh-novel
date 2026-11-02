@@ -75,7 +75,7 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
     void (async () => {
       let list: ExploreSources['sources']
       try {
-        list = (await deps.apiGet<ExploreSources>(ROUTES.exploreKinds.path)).sources ?? []
+        list = (await deps.apiGet<ExploreSources>(ROUTES.exploreKinds.path)).sources
       } catch (e) {
         // 读不到源清单 ≠ 没有源可用：只报错，不落空列表（落空列表会多摆一个「还没有源提供分类」的假空态）
         setSourcesError(t('city.kindsReadFailed', { detail: describeError(e, t) }))

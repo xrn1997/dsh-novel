@@ -72,6 +72,18 @@ export function proxyConfig(raw: string | null | undefined): { server: string; u
   }
 }
 
+/** 页面上下文里跑书源的 webJs：上游交来的就是**脚本体**（常见 `return` 一句），页面里没有
+ *  第二种能接受脚本体、还能把返回值带出来的通道——动态执行在这里是需求本身，不是图省事。 */
+const runWebJs = (code: string): unknown => {
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval -- webJs 是书源自带的脚本体，本仓要的就是执行它；这是唯一出口
+  const fn = new Function(code) as () => unknown
+  return fn()
+}
+
+/** JSON.stringify 的 lib 声明说它必回字符串；运行时空值输入（undefined / 函数）交回的是 undefined。
+ *  按真实形状收窄，调用点的判空才是真判空而不是死代码。 */
+const jsonTextOf = (v: unknown): string | undefined => JSON.stringify(v)
+
 /**
  * 真浏览器 WebView：用本机已装的 Edge/Chrome（playwright-core，不下载浏览器）。
  * `webView:true` 页面抓取与 `webJs` 页面内执行都走这里；浏览器 cookie 由 context 自管，
@@ -80,8 +92,11 @@ export function proxyConfig(raw: string | null | undefined): { server: string; u
 export class WebViewRuntime {
   private browser: Browser | null = null
   private launching: Promise<Browser> | null = null
+  private readonly opts: WebViewOptions
 
-  constructor(private readonly opts: WebViewOptions = {}) {}
+  constructor(opts: WebViewOptions = {}) {
+    this.opts = opts
+  }
 
   private async launch(): Promise<Browser> {
     if (this.browser !== null) return this.browser
@@ -132,7 +147,7 @@ export class WebViewRuntime {
       // 源级头只随**目标站点**出站：extraHTTPHeaders 会发给页面加载的每个第三方子资源，
       // Cookie/Authorization 这类头不能这样漏。同 host/父子域（含 http→https、m.→www 重定向）
       // 才合并请求头，第三方子资源原样走。
-      if (extraHeaders !== undefined && Object.keys(extraHeaders).length > 0) {
+      if (Object.keys(extraHeaders).length > 0) {
         const scoped = Object.fromEntries(
           Object.entries(extraHeaders).map(([k, v]) => [k.toLowerCase(), v]),
         )
@@ -159,12 +174,12 @@ export class WebViewRuntime {
       if (opts.webJs !== undefined && opts.webJs.trim() !== '') {
         // 上游 webJs 是脚本体（常见 `return`）；用页面上下文的 Function 执行，返回值即正文。
         // evaluate 自身没有超时（页面里的死循环会一直挂住），与导航共用同一个预算。
-        const value = await withTimeout(
-          page.evaluate((code) => new Function(code)(), opts.webJs),
+        const value: unknown = await withTimeout(
+          page.evaluate(runWebJs, opts.webJs),
           timeoutMs,
           `webJs 执行超时 ${timeoutMs}ms：${url}`,
         )
-        html = typeof value === 'string' ? value : (JSON.stringify(value) ?? '')
+        html = typeof value === 'string' ? value : (jsonTextOf(value) ?? '')
       }
       // 取 context 的全部 cookie（不是只看当前 URL）：重定向/脚本为其他路径设置的 cookie 也要回灌
       const cookies = await context.cookies()

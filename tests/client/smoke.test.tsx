@@ -6,27 +6,31 @@ import { SettingsSection } from '../../src/client/views/SettingsSection.js'
 import { ImportPane } from '../../src/client/views/SettingsImportPane.js'
 import { NOVEL_CSS } from '../../src/client/styles.js'
 import { routeStore } from '../../src/client/store.js'
+import type { ViewRoute } from '../../src/client/store.js'
+
+/** 五个成员各来一条：路由表的域就是这条用例的输入面（未知名另有用例单钉兜底） */
+const ROUTES: Array<[string, ViewRoute]> = [
+  ['shelf', { name: 'shelf' }],
+  ['city', { name: 'city' }],
+  ['sources', { name: 'sources' }],
+  ['reader', { name: 'reader', sourceId: 's', bookKey: 'k', title: 'T' }],
+  ['search', { name: 'search' }],
+]
 
 describe('NovelView smoke（renderToString 不炸——数据获取在 effect，smoke 只锁渲染分支）', () => {
-  it.each([
-    ['shelf', { name: 'shelf' }],
-    ['city', { name: 'city' }],
-    ['sources', { name: 'sources' }],
-    ['reader', { name: 'reader', sourceId: 's', bookKey: 'k', title: 'T' }],
-    ['search', { name: 'search' }],
-  ])('route=%s 可渲染', (_n, route) => {
-    routeStore.set({ route: route as any })
+  it.each(ROUTES)('route=%s 可渲染', (_n, route) => {
+    routeStore.set({ route })
     const html = renderToString(createElement(NovelView))
     expect(html).toContain('data-novel')             // 根容器标记
   })
   it('首页 = 顶部搜索 + 封面网格（书架 tab）', () => {
-    routeStore.set({ route: { name: 'shelf' } as any })
+    routeStore.set({ route: { name: 'shelf' } })
     const html = renderToString(createElement(NovelView))
     expect(html).toContain('data-novel-view="shelf"')
     expect(html).toContain('placeholder="搜书名 / 作者"')   // 书架搜索框
   })
   it('书城 tab = 分类浏览页骨架（左栏一条源列表；内容随读面加载）', () => {
-    routeStore.set({ route: { name: 'city' } as any })
+    routeStore.set({ route: { name: 'city' } })
     const html = renderToString(createElement(NovelView))
     expect(html).toContain('data-novel-view="city"')
     expect(html).toContain('placeholder="搜索书源"')     // 源筛选框常驻（按源清单未到也在场）
@@ -85,21 +89,21 @@ describe('NovelView smoke（renderToString 不炸——数据获取在 effect，
     expect(NOVEL_CSS).toMatch(/\.novel-shell-status \.novel-status-bar\s*\{[^}]*pointer-events:\s*auto/)
   })
   it('样式层注入：渲染含 <style data-novel-style> 与基础类', () => {
-    routeStore.set({ route: { name: 'shelf' } as any })
+    routeStore.set({ route: { name: 'shelf' } })
     const html = renderToString(createElement(NovelView))
     expect(html).toContain('data-novel-style')
     expect(html).toContain('.novel-btn')
   })
   it('样式层恰一条：书源管理 tab 不再同树注两遍（SettingsSection 单飞时仍自带）', () => {
     const count = (s: string): number => (s.match(/data-novel-style/g) ?? []).length
-    routeStore.set({ route: { name: 'sources' } as any })
+    routeStore.set({ route: { name: 'sources' } })
     expect(count(renderToString(createElement(NovelView)))).toBe(1)   // 宿主根注入，子组件让位
-    routeStore.set({ route: { name: 'shelf' } as any })
+    routeStore.set({ route: { name: 'shelf' } })
     expect(count(renderToString(createElement(NovelView)))).toBe(1)
     expect(count(renderToString(createElement(SettingsSection)))).toBe(1)  // 离开宿主仍自足
   })
   it('布局修复：根容器是 flex 列布局（视图区 flex:1——此前被 height:100% 挤出视口）', () => {
-    routeStore.set({ route: { name: 'shelf' } as any })
+    routeStore.set({ route: { name: 'shelf' } })
     const html = renderToString(createElement(NovelView))
     expect(html).toContain('data-novel-root')
     expect(html).toContain('data-novel-main')
@@ -108,7 +112,7 @@ describe('NovelView smoke（renderToString 不炸——数据获取在 effect，
     expect(css).toContain('flex-direction: column')
   })
   it('阅读器：不放开 overflow——.novel-main 自己是 scrollport（放开曾致整条宿主链没人滚）', () => {
-    routeStore.set({ route: { name: 'reader', sourceId: 's', bookKey: 'k', title: 'T' } as any })
+    routeStore.set({ route: { name: 'reader', sourceId: 's', bookKey: 'k', title: 'T' } })
     const html = renderToString(createElement(NovelView))
     expect(html).toContain('data-novel-view="reader"')
     // 回归钉子：宿主链 centerCol/frame 双 overflow:hidden、链上无 scrollport，
@@ -117,7 +121,7 @@ describe('NovelView smoke（renderToString 不炸——数据获取在 effect，
     expect(NOVEL_CSS).not.toContain('.novel-main:has([data-novel-view="reader"])')
   })
   it('阅读器：未载章节不进 DOM（旧实现渲染 912 个占位块 → scrollHeight 被撑成整本书高，预取判据失效）', () => {
-    routeStore.set({ route: { name: 'reader', sourceId: 's', bookKey: 'k', title: 'T' } as any })
+    routeStore.set({ route: { name: 'reader', sourceId: 's', bookKey: 'k', title: 'T' } })
     const html = renderToString(createElement(NovelView))
     expect(html).toContain('目录加载中…')                    // 目录未到：不渲染任何章块，也不渲染哨兵
     expect(html).not.toContain('data-chapter=')
@@ -128,7 +132,7 @@ describe('NovelView smoke（renderToString 不炸——数据获取在 effect，
     expect(NOVEL_CSS).toContain('[data-conversation-scroll]:has([data-novel-root]) [data-chain-overlay-fallback="conversation.composer"]')
     expect(NOVEL_CSS).toContain('display: none !important')  // 盖 inline display:contents；不整座藏（否则吞掉提问/审批接管）
     expect(NOVEL_CSS).not.toContain('[data-composer-seat] { display: none')
-    routeStore.set({ route: { name: 'reader', sourceId: 's', bookKey: 'k', title: 'T' } as any })
+    routeStore.set({ route: { name: 'reader', sourceId: 's', bookKey: 'k', title: 'T' } })
     expect(renderToString(createElement(NovelView))).toContain('data-novel-style')   // 样式层确实随视图注入
   })
   it('小说视图收掉配套的列宽拖拽把手（data-width-handle，调 AI 输入框宽度那条）——兄弟选择器，不误伤对话视图', () => {
@@ -137,17 +141,19 @@ describe('NovelView smoke（renderToString 不炸——数据获取在 effect，
     expect(NOVEL_CSS).not.toContain(']) [data-width-handle]')             // 不是后代选择器：chat 视图的把手照旧可见可拖
   })
   it('tab 栏已退役', () => {
-    routeStore.set({ route: { name: 'shelf' } as any })
+    routeStore.set({ route: { name: 'shelf' } })
     const html = renderToString(createElement(NovelView))
     expect(html).not.toContain('data-novel="tabbar"')
   })
   it('搜索面渲染进度容器（分批进度条常驻）', () => {
-    routeStore.set({ route: { name: 'search' } as any })
+    routeStore.set({ route: { name: 'search' } })
     const html = renderToString(createElement(NovelView))
     expect(html).toContain('data-novel-search-progress')
   })
   it('未知 route 兜底 shelf', () => {
-    routeStore.set({ route: { name: 'nonexistent' } as any })
+    // 域外的名字只可能来自旧 persisted 现场（store 是内存态，不落盘；这里模拟越域值）：
+    // ViewRoute 是闭合联合，故这一次断言必须越过类型面——兜底分支正是为它存在的。
+    routeStore.set({ route: { name: 'nonexistent' } as never })
     expect(renderToString(createElement(NovelView))).toContain('data-novel-view="shelf"')
   })
 })

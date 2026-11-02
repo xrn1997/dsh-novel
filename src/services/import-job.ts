@@ -28,6 +28,12 @@ export { JobRunningError }
 export { dedupKey } from './intake.js'
 
 const ISSUE_CAP = 200
+
+/** JSON.parse 的产物按数组读。`Array.isArray` 在 lib 里只把它收窄成 `any[]`，直接往下传等于
+ *  让 any 渗进条目清单——这里换成 `unknown[]` 的类型谓词，边界判形只做一次。 */
+function isUnknownArray(v: unknown): v is unknown[] {
+  return Array.isArray(v)
+}
 const PROBE_CONCURRENCY = 5
 // 落盘粒度已内聚进注册表（edit 合并写，调度归 createDebouncedWriter：每 20 次变更强制落盘 + 尾沿防抖）——
 // 任务运行器不再持有 persist 节流常量
@@ -35,14 +41,25 @@ const PROBE_CONCURRENCY = 5
 export class SourceJobs {
   private current: JobState | null = null
   private readonly ties = new WeakMap<JobState, HostTie>()
-  constructor(private readonly deps: {
+  private readonly deps: {
     registry: SourceRegistry
     probe(source: NovelSource): Promise<ProbeResult>
     /** 宿主 `ctx.jobs` 的窄面；缺省即不登记（任务照跑） */
     host?: JobHost
     now?: () => number
     uuid?: () => string
-  }) {}
+  }
+
+  constructor(deps: {
+    registry: SourceRegistry
+    probe(source: NovelSource): Promise<ProbeResult>
+    /** 宿主 `ctx.jobs` 的窄面；缺省即不登记（任务照跑） */
+    host?: JobHost
+    now?: () => number
+    uuid?: () => string
+  }) {
+    this.deps = deps
+  }
 
   status(): JobState | null { return this.current }
 
@@ -137,7 +154,7 @@ export class SourceJobs {
         this.note(state, `${f.name}：JSON 解析失败`)
         continue
       }
-      if (Array.isArray(parsed)) items.push(...parsed)
+      if (isUnknownArray(parsed)) items.push(...parsed)
       else items.push(parsed)
     }
     state.total = items.length
@@ -186,13 +203,13 @@ export class SourceJobs {
     }
     state.total = valid.length
     let cursor = 0
-    let settled = 0
     const worker = async (): Promise<void> => {
       for (;;) {
         if (this.cancelled(state)) return                 // 协作式收手：取下一条前查一次
         const i = cursor++
-        if (i >= valid.length) return
         const id = valid[i]
+        // 取不到即游标已过表尾（与 `i >= valid.length` 同一条出口），不把 undefined 喂给下游
+        if (id === undefined) return
         // 重查：任务运行期间源可能被删——取不到就点名跳过，不产生 TypeError 垃圾失败
         // （不重查会让 undefined 喂给探针 → 抛 TypeError 冒充正常失败）
         const s = this.deps.registry.get(id)
@@ -200,7 +217,6 @@ export class SourceJobs {
           this.issue(state, 'failed', id, '源不存在（运行中被删除，已跳过）')
           this.note(state, `${id}：源不存在`)
           state.done++
-          settled++
           continue
         }
         // 站点判据先记账，再写回状态：`applyProbeResult` 会把落盘失败如实抛（ADR-0011 / ADR-0013），
@@ -226,7 +242,6 @@ export class SourceJobs {
           this.note(state, `${s.name}：broken（${errCode(e)}）`)
         }
         state.done++
-        settled++
       }
     }
     await Promise.all(Array.from({ length: Math.min(PROBE_CONCURRENCY, Math.max(valid.length, 1)) }, worker))

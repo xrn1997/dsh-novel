@@ -193,6 +193,6 @@ describe('wire 契约归位', () => {
     const ok = { ok: true, value: 1 } satisfies ApiEnvelope<number>
     const err = { ok: false, error: { code: 'NotFound', message: 'x' } } satisfies ApiEnvelope<number>
     expect(ok.value).toBe(1)
-    expect(err.error?.code).toBe('NotFound')
+    expect(err.error.code).toBe('NotFound')
   })
 })

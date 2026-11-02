@@ -8,11 +8,15 @@
  */
 import { describe, expect, it } from 'vitest'
 import { evaluate } from '../../src/engine/evaluate.js'
+import type { EngineValue } from '../../src/engine/types.js'
+import { elementOf } from './value.js'
 
 const HTML = '<div id="v1" class="Foo BAR" data-kind="Chapter">a</div>'
   + '<div id="v2" class="foo bar" data-kind="chapter">b</div>'
 
-const ids = (v: any): string[] => (v?.kind === 'nodes' ? v.nodes.toArray().map((e: any) => e.attribs?.id) : [])
+const ids = (v: EngineValue): Array<string | undefined> => (v.kind === 'nodes'
+  ? v.nodes.toArray().map((e) => elementOf(e).attribs['id'])
+  : [])
 
 describe('CSS 类名与属性值的大小写敏感性（本仓 = 敏感；对面 jsoup = 不敏感）', () => {
   it('.Foo 只命中 class 里真有 Foo 的那个元素', async () => {

@@ -91,7 +91,7 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
    *  helper**：归 `jobs.ts` 的 `startSourceVerification`（提交 → 催任务读面 / 失败一处反馈）。
    *  启停若走错出口，写完没人重取源列表，行开关与计数全停在点之前的值。 */
   const submit = <T,>(fn: () => Promise<T>, after: (res: T) => void): void => {
-    void fn().then(after, (e) => deps.pushError(t('sources.batch.failed', { detail: describeError(e, t) })))
+    void fn().then(after, (e: unknown) => deps.pushError(t('sources.batch.failed', { detail: describeError(e, t) })))
   }
   /** 批量启停：ids 点击时快照；成功只重取源列表，**留在编辑态且勾选保留**
    *  （这批源还在列表里，勾选是它们的现场）。清勾选只在「删除所选」成功后做——对象已不存在。
@@ -116,7 +116,7 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
       clearSelection()                               // 已删的 id 留在选择集里是幽灵勾选（动作条计数虚高、后续批量动作带死 id）
       deps.pushOk(plural(t, r.removed, 'sources.delete.removed.one', 'sources.delete.removed.other'))
       onChanged()
-    }, (e) => {
+    }, (e: unknown) => {
       setPending(null)
       setDelBusy(false)
       deps.pushError(t('sources.delete.failed', { detail: describeError(e, t) }))
@@ -133,7 +133,7 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
     return deps.apiSend(paramOps.sourceEnabled.at(s.id), bodies.enabled(next)).then(() => {
       onChanged()
       return true
-    }, (e) => {
+    }, (e: unknown) => {
       deps.pushError(
         t('sources.toggle.failedNamed', { name: s.name, detail: describeError(e, t) }), rowAnchorOf(s.id))
       onChanged()                                        // 服务端为准的二次校准（行内已即刻回滚）
@@ -478,7 +478,7 @@ function SourceAuthPane({ source, onDone, deps = prodDeps }: {
       }
       deps.pushOk(t('sources.auth.scriptDone'))
       onDone()
-    }, (e) => deps.pushError(t('sources.auth.goFailed', { detail: describeError(e, t) }), rowAnchorOf(source.id)))
+    }, (e: unknown) => deps.pushError(t('sources.auth.goFailed', { detail: describeError(e, t) }), rowAnchorOf(source.id)))
   }
   const save = (): void => {
     if (source.loginUi !== undefined) {
@@ -487,14 +487,14 @@ function SourceAuthPane({ source, onDone, deps = prodDeps }: {
         if (source.hasLoginUrl) await deps.apiSend(paramOps.sourceAuth.at(source.id), bodies.runLogin())
         deps.pushOk(t('sources.auth.saved'))
         onDone()
-      })().catch((e) => deps.pushError(t('sources.auth.saveFailed', { detail: describeError(e, t) }), rowAnchorOf(source.id)))
+      })().catch((e: unknown) => deps.pushError(t('sources.auth.saveFailed', { detail: describeError(e, t) }), rowAnchorOf(source.id)))
       return
     }
     void deps.apiSend(paramOps.sourceAuth.at(source.id), bodies.authCookies(parseCookieString(cookie))).then(() => {
       setCookie('')                      // 输入值即刻清空
       deps.pushOk(t('sources.auth.saved'))
       onDone()
-    }, (e) => deps.pushError(t('sources.auth.saveFailed', { detail: describeError(e, t) }), rowAnchorOf(source.id)))
+    }, (e: unknown) => deps.pushError(t('sources.auth.saveFailed', { detail: describeError(e, t) }), rowAnchorOf(source.id)))
   }
   /** RowUi button：先落当前 text/password 的 loginInfo，再按行名跑服务端动作。
    *  外链只开新页；脚本动作成功后刷新源列表（动作可能改了登录态）。 */
@@ -512,7 +512,7 @@ function SourceAuthPane({ source, onDone, deps = prodDeps }: {
       }
       deps.pushOk(t('sources.auth.actionDone'))
       onDone()
-    })().catch((e) => deps.pushError(t('sources.auth.actionFailed', { detail: describeError(e, t) }), rowAnchorOf(source.id)))
+    })().catch((e: unknown) => deps.pushError(t('sources.auth.actionFailed', { detail: describeError(e, t) }), rowAnchorOf(source.id)))
   }
   return (
     <span className="novel-auth-pane" onClick={(e) => e.stopPropagation()}>

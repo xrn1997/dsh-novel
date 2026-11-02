@@ -5,6 +5,8 @@ import { createSourceSession, evalJs, runInContextVm, runScript, sanitizeForPost
 import type { EvaluateRef, JsHost } from '../../src/engine/js-sandbox.js'
 import { JsSandboxError } from '../../src/engine/errors.js'
 import type { EngineValue, EvalContext } from '../../src/engine/types.js'
+import { must, pick } from '../support/fixture.js'
+import { textOrItemsOf, valueTextOf } from './value.js'
 
 const ctxOf = (over: Partial<EvalContext> = {}): EvalContext => ({
   baseUrl: 'https://m.example.com/read/1',
@@ -24,7 +26,7 @@ const run = (
   host: JsHost = hostOf(),
   ctx: EvalContext = ctxOf(),
   evaluateRef?: EvaluateRef,
-) => evalJs({ code, host, ctx, loc: L, facet: 'content', evaluateRef })
+) => evalJs({ code, host, ctx, loc: L, facet: 'content', ...(evaluateRef !== undefined ? { evaluateRef } : {}) })
 
 describe('@js 沙箱', () => {
   it('基本求值：字符串/数组/空值/对象 → 四种 EngineValue', async () => {
@@ -63,9 +65,9 @@ describe('@js 沙箱', () => {
 
   it('异步永不 settle 也被 jsTimeoutMs 约束（外层硬超时）', async () => {
     const err = await run('await new Promise(() => {}); return 1', hostOf(), ctxOf({ jsTimeoutMs: 150 }))
-      .then(() => null, (e) => e)
+      .then(() => null, (e: unknown) => e)
     expect(err).toBeInstanceOf(JsSandboxError)
-    expect(String(err.message)).toMatch(/脚本超时（>150ms）/)
+    expect((err as Error).message).toMatch(/脚本超时（>150ms）/)
   })
 
   it('沙箱逃逸：require/process/global 不可见（typeof 返回字符串 undefined）', async () => {
@@ -222,7 +224,7 @@ describe('@js 沙箱', () => {
   it('java.get/put 读写 ctx.vars', async () => {
     const ctx = ctxOf()
     await run('java.put("k","v"); return "x"', hostOf(), ctx)
-    expect(ctx.vars!.k).toBe('v')
+    expect(must(ctx.vars, 'vars').k).toBe('v')
     expect((await run('return java.get("k")', hostOf(), ctxOf({ vars: { k: 'vv' } }))).value).toEqual({ kind: 'value', text: 'vv' })
     expect((await run('return java.get("nope")')).value.kind).toBe('miss')
   })
@@ -273,7 +275,7 @@ describe('@js 沙箱', () => {
       hostOf(), ctx,
     )
     expect(v.value).toEqual({ kind: 'value', text: '302|https://i.pximg.net/a.png|https://i.pximg.net/a.png|https://i.pximg.net/a.png|1' })
-    expect(seen[0]?.[1]).toEqual({ 'X-Requested-With': 'XMLHttpRequest' })
+    expect(pick(seen, 0)[1]).toEqual({ 'X-Requested-With': 'XMLHttpRequest' })
   })
   it('java.head：请求头 JSON 串两形态都收；未接 fetchHead / 参数空 → 点名', async () => {
     const ctx = ctxOf({ fetchHead: async () => ({ url: 'u', statusCode: 200, headers: {} }) })
@@ -354,14 +356,14 @@ describe('@js 沙箱', () => {
     expect(v.value).toEqual({ kind: 'value', text: 'BODY|200|https://m.example.com/final|abc' })
     // 第三参：脚本内联给 JS 对象（独立合集里的真形态），也接受 JSON 串；
     // 两种都要落到同一份头表
-    expect(seen[0][0]).toBe('https://m.example.com/a')
-    expect(seen[0][1]).toBe('k=1')
-    expect(seen[0][2]).toEqual({ 'Content-Type': 'application/x-www-form-urlencoded' })
+    expect(pick(seen, 0)[0]).toBe('https://m.example.com/a')
+    expect(pick(seen, 0)[1]).toBe('k=1')
+    expect(pick(seen, 0)[2]).toEqual({ 'Content-Type': 'application/x-www-form-urlencoded' })
     const viaJson = await run(
       'return (await java.post("https://m.example.com/b", "x", "{\\"a\\":\\"b\\"}")).body()', hostOf(), ctx,
     )
     expect(viaJson.value).toEqual({ kind: 'value', text: 'BODY' })
-    expect(seen[1][2]).toEqual({ a: 'b' })
+    expect(pick(seen, 1)[2]).toEqual({ a: 'b' })
   })
   it('java.post 的 header 不是 JSON → 点名（不静默丢脚本的请求头）；未接 fetchPost → 点名', async () => {
     const ctx = ctxOf({ fetchPost: async () => ({ url: 'u', body: '', statusCode: 200, headers: {}, cookies: {} }) })
@@ -388,30 +390,30 @@ describe('@js 沙箱', () => {
   })
 
   it('java.ajax 无 ctx.fetch → JsSandboxError（该源未提供网络能力）', async () => {
-    const err = await run('await java.ajax("https://m.example.com/x")', hostOf(), ctxOf()).then(() => null, (e) => e)
+    const err = await run('await java.ajax("https://m.example.com/x")', hostOf(), ctxOf()).then(() => null, (e: unknown) => e)
     expect(err).toBeInstanceOf(JsSandboxError)
-    expect(String(err.message)).toMatch(/网络能力/)
+    expect((err as Error).message).toMatch(/网络能力/)
   })
 
   it('脚本抛错 → JsSandboxError 带脚本原文与行号', async () => {
-    const err = await run('null.x').then(() => null, (e) => e)
+    const err = await run('null.x').then(() => null, (e: unknown) => e)
     expect(err).toBeInstanceOf(JsSandboxError)
-    expect(err.script).toBe('null.x')
-    expect(String(err.message)).toMatch(/脚本/)
+    expect((err as JsSandboxError).script).toBe('null.x')
+    expect((err as Error).message).toMatch(/脚本/)
     // 多行脚本：错误在用户脚本第 2 行（wrapper 首行偏移 1）。显式 scriptForm:false 钉 **wrapped 路**
     // 的行号映射——opts 缺省已统一为 scriptForm（两路同口径）；wrapped 路仍真实存在（脚本形态经
     // 编译期 SyntaxError 回落它），其 wrapper 偏移补偿只有这条显式路径才走得到。
     const err2 = await evalJs({
       code: 'const a = 1\nnull.x', host: hostOf(), ctx: ctxOf(), loc: L, facet: 'content',
       opts: { scriptForm: false },
-    }).then(() => null, (e) => e)
-    expect(err2.line).toBe(2)
+    }).then(() => null, (e: unknown) => e)
+    expect((err2 as JsSandboxError).line).toBe(2)
   })
 
   it('语法错误 → JsSandboxError（编译失败）', async () => {
-    const err = await run('return )').then(() => null, (e) => e)
+    const err = await run('return )').then(() => null, (e: unknown) => e)
     expect(err).toBeInstanceOf(JsSandboxError)
-    expect(String(err.message)).toMatch(/编译|同步执行失败/)
+    expect((err as Error).message).toMatch(/编译|同步执行失败/)
   })
 
   it('md5/base64 往返', async () => {
@@ -432,17 +434,17 @@ describe('@js 沙箱', () => {
   })
 
   it('evaluateRef 未注入：getString* 抛清晰 JsSandboxError（接线）', async () => {
-    const err = await run('return java.getString("@css:h1")').then(() => null, (e) => e)
+    const err = await run('return java.getString("@css:h1")').then(() => null, (e: unknown) => e)
     expect(err).toBeInstanceOf(JsSandboxError)
-    expect(String(err.message)).toMatch(/evaluateRef/)
-    const err2 = await run('return java.getStringList("@css:p")').then(() => null, (e) => e)
+    expect((err as Error).message).toMatch(/evaluateRef/)
+    const err2 = await run('return java.getStringList("@css:p")').then(() => null, (e: unknown) => e)
     expect(err2).toBeInstanceOf(JsSandboxError)
-    const err3 = await run('return java.getElements("@css:p")').then(() => null, (e) => e)
+    const err3 = await run('return java.getElements("@css:p")').then(() => null, (e: unknown) => e)
     expect(err3).toBeInstanceOf(JsSandboxError)
   })
 
   it('evaluateRef 注入后：getString/getStringList 经其递归求值并对 result 序列化', async () => {
-    const fake = (sub: { rule: string }, data: unknown): EngineValue => ({ kind: 'value', text: `X(${sub.rule}|${data})` })
+    const fake = (sub: { rule: string }, data: unknown): EngineValue => ({ kind: 'value', text: `X(${sub.rule}|${String(data)})` })
     const v = await run('return java.getString("@css:h1")', hostOf({ result: 'prev' }), ctxOf(), fake)
     expect(v.value).toEqual({ kind: 'value', text: 'X(@css:h1|prev)' })
     const fakeList = (): EngineValue => ({ kind: 'list', items: ['a', 'b'] })
@@ -550,10 +552,10 @@ describe('宿主垫片（真实源用到的缺失 API）', () => {
     expect((await run('return java.hexDecodeToString("e4bda0")')).value).toEqual({ kind: 'value', text: '你' })
   })
   it('webView 未接线 → 点名；android.* 仍如实报不支持（不静默 no-op）', async () => {
-    const err = await run('return java.webView("<p/>", "https://a.com", "")').then(() => null, (e) => e)
-    expect(String(err.message)).toMatch(/ctx\.webView 未接线/)
-    const err2 = await run('return android.foo()').then(() => null, (e) => e)
-    expect(String(err2.message)).toMatch(/需要安卓宿主环境/)
+    const err = await run('return java.webView("<p/>", "https://a.com", "")').then(() => null, (e: unknown) => e)
+    expect((err as Error).message).toMatch(/ctx\.webView 未接线/)
+    const err2 = await run('return android.foo()').then(() => null, (e: unknown) => e)
+    expect((err2 as Error).message).toMatch(/需要安卓宿主环境/)
   })
   it('AES 解密桥（legado createSymmetricCrypto().decryptStr / aesBase64DecodeToString——Node crypto 实现）', async () => {
     const crypto = await import('node:crypto')
@@ -567,10 +569,10 @@ describe('宿主垫片（真实源用到的缺失 API）', () => {
     const v2 = await run(`return java.aesBase64DecodeToString("${b64}","${key}","AES/CBC/PKCS5Padding","${key}")`)
     expect(v2.value).toEqual({ kind: 'value', text: '你好章节' })
     // 密文/密钥不对 → 如实报 AES 解密失败（宁炸，不返回假明文）；encryptStr v1 不支持
-    const err = await run('return java.aesBase64DecodeToString("AAAA","0123456789abcdef","AES/CBC/PKCS5Padding","0123456789abcdef")').then(() => null, (e) => e)
-    expect(String(err.message)).toMatch(/AES 解密失败/)
-    const err2 = await run(`return java.createSymmetricCrypto("AES/CBC/PKCS5Padding","${key}","${key}").encryptStr("x")`).then(() => null, (e) => e)
-    expect(String(err2.message)).toMatch(/不支持/)
+    const err = await run('return java.aesBase64DecodeToString("AAAA","0123456789abcdef","AES/CBC/PKCS5Padding","0123456789abcdef")').then(() => null, (e: unknown) => e)
+    expect((err as Error).message).toMatch(/AES 解密失败/)
+    const err2 = await run(`return java.createSymmetricCrypto("AES/CBC/PKCS5Padding","${key}","${key}").encryptStr("x")`).then(() => null, (e: unknown) => e)
+    expect((err2 as Error).message).toMatch(/不支持/)
   })
   it('source.getVariable/setVariable 是**单串槽**（与 source.put 的键值表分开存）', async () => {
     const ctx = ctxOf()
@@ -698,8 +700,8 @@ describe('nodes 结果的元素集表面（对面 result 是 org.jsoup Elements�
   const HTML = '<ul class="c"><li><a href="/1">一</a></li><li><a href="/2">二</a></li><li><a href="/3">三</a></li></ul>'
   const runJs = async (code: string) => {
     const { evaluate } = await import('../../src/engine/index.js')
-    const v: any = await evaluate(`class.c@li\n<js>${code}</js>`, { html: HTML }, 'toc', 'list')
-    return v.text ?? v.items
+    const v = await evaluate(`class.c@li\n<js>${code}</js>`, { html: HTML }, 'toc', 'list')
+    return textOrItemsOf(v)
   }
   it('size() = 顶层元素数（3 个 li），toArray() 同数', async () => {
     expect(await runJs('result.size() + "|" + result.toArray().length')).toBe('3|3')
@@ -716,8 +718,8 @@ describe('列表上下文的 result 是元素集（对面 result = java List/Ele
   const HTML = '<ul class="c"><li><a href="/1">一</a></li><li><a href="/2">二</a></li><li><a href="/3">三</a></li></ul>'
   const runJs = async (code: string, usage: 'list' | 'value' = 'list') => {
     const { evaluate } = await import('../../src/engine/index.js')
-    const v: any = await evaluate(`class.c@li\n<js>${code}</js>`, { html: HTML }, 'toc', usage)
-    return v.items ?? v.text
+    const v = await evaluate(`class.c@li\n<js>${code}</js>`, { html: HTML }, 'toc', usage)
+    return textOrItemsOf(v)
   }
   it('forEach 遍历成员（西瓜书屋 ruleChapterList 形态）', async () => {
     expect(await runJs("var o=[];result.forEach(function(e){o.push(e.text())});o.join(',')")).toBe('一,二,三')
@@ -738,7 +740,7 @@ describe('对面 Rhino 面：Packages.org.jsoup 与 book 实体方法（真机�
   const opts = (code: string, over: Record<string, unknown> = {}) => ({
     code, loc: { segmentIndex: 0, segmentRaw: code }, facet: 'content' as const,
     source: 'https://x.com', baseUrl: 'https://x.com', html: '<html></html>',
-    session: undefined as unknown as undefined, ...over,
+    ...over,
   }) as never
   it('Packages.org.jsoup.Jsoup.parse 与 org.jsoup.Jsoup.parse 同一份实现（金银小说网 ruleContent）', async () => {
     const { runScript, createSourceSession } = await import('../../src/engine/js-sandbox.js')
@@ -753,12 +755,12 @@ describe('对面 Rhino 面：Packages.org.jsoup 与 book 实体方法（真机�
   })
   it('book.setType/getType 与 getVariable/putVariable 可调（终极全栖、穿越小说形态）', async () => {
     const { evaluate } = await import('../../src/engine/index.js')
-    const v: any = await evaluate(
+    const v = await evaluate(
       '<js>book.setType(4);var t=book.getType();var v=book.getVariable("custom");' +
       'book.putVariable("custom","X");t+"|"+v+"|"+book.getVariable("custom")+"|"+book.getName()+"|"+book.getOrigin()</js>',
       { html: '<p>x</p>', book: { name: '书甲', origin: 'https://x.com' } }, 'toc', 'value',
     )
-    expect(v.text).toBe('4||X|书甲|https://x.com')
+    expect(valueTextOf(v)).toBe('4||X|书甲|https://x.com')
   })
   it('没在上下文里给 book/chapter 时，方法面照样在场（BOOTSTRAP 末尾两行赋值是冗余，不是覆盖）', async () => {
     // 一看像缺陷：BOOTSTRAP 先 `g.book = mkHostObj(d.book)` 补齐方法面，紧跟 `g.book = d.book || {}`。
@@ -766,35 +768,35 @@ describe('对面 Rhino 面：Packages.org.jsoup 与 book 实体方法（真机�
     // mkHostObj 就地给同一个对象加方法、那行再把同一个对象赋回去。**先测再改**：本用例写出来就直接绿。
     // 回归钉子：方法面不该依赖「调用方注入了什么」。
     const { evaluate } = await import('../../src/engine/index.js')
-    const v: any = await evaluate(
+    const v = await evaluate(
       '<js>typeof book.getVariable + "/" + typeof chapter.putVariable + "/" + typeof book.getOrigin</js>',
       { html: '<p>x</p>' }, 'toc', 'value',
     )
-    expect(v.text).toBe('function/function/function')
-    const r: any = await evaluate(
+    expect(valueTextOf(v)).toBe('function/function/function')
+    const r = await evaluate(
       '<js>book.putVariable("custom","X");book.getVariable("custom")+"|"+book.getType()</js>',
       { html: '<p>x</p>' }, 'toc', 'value',
     )
-    expect(r.text).toBe('X|0')
+    expect(valueTextOf(r)).toBe('X|0')
   })
   it('源实体字段 bookSourceComment / bookSourceName 脚本可见（对面 source 就是 BookSource 实体）', async () => {
     // 现库按 raw 全串扫的命中样本：涩涩俱乐部把 `source.bookSourceComment` 当**解密脚本的存放处**
     // （ruleContent.replaceRegex 里插值读它再执行）；`bookSourceName` 是顺手补正（BOOTSTRAP 早就
     // 读 `d.sourceName`，若不接线则恒空串、属静默错值）。服务层按 raw 现读（bridge.rawStringField）。
-    const r: any = await runScript({
+    const r = await runScript({
       code: 'source.bookSourceComment + "|" + source.bookSourceName',
       loc: { segmentIndex: 0, segmentRaw: '@js:test' }, facet: 'rule', scriptForm: true,
       sourceComment: 'let m={};', sourceName: '涩涩俱乐部',
     })
-    expect((r.value as { text?: string }).text).toBe('let m={};|涩涩俱乐部')
+    expect(valueTextOf(r.value)).toBe('let m={};|涩涩俱乐部')
   })
   it('Book 变量表与 source 变量表互不串味（对面 Book.variables 与 BookSource.variables 是两个存储）', async () => {
     const { evaluate } = await import('../../src/engine/index.js')
-    const v: any = await evaluate(
+    const v = await evaluate(
       '<js>source.put("k","S");book.putVariable("k","B");book.getVariable("k")+"/"+source.get("k")+"/"+book.getVariable("nope")</js>',
       { html: '<p>x</p>', book: {}, source: 'https://x.com' }, 'toc', 'value',
     )
-    expect(v.text).toBe('B/S/')
+    expect(valueTextOf(v)).toBe('B/S/')
   })
 })
 
@@ -805,8 +807,8 @@ describe('元素桥 remove()：对面在活文档树上摘节点，摘完再读�
   const ART = '<div class="art"><p>正文一</p><script>var x=1</script><em class="n_3">丙</em><div class="hide">广告</div></div>'
   const runJs = async (code: string) => {
     const { evaluate } = await import('../../src/engine/index.js')
-    const v: any = await evaluate(`<js>${code}</js>`, { html: ART }, 'content', 'value')
-    return v.text
+    const v = await evaluate(`<js>${code}</js>`, { html: ART }, 'content', 'value')
+    return valueTextOf(v)
   }
   it('Jsoup.parse 后 select().remove()：整棵树串化时已不含被摘节点（悦读小说形态）', async () => {
     const t = await runJs('var doc=org.jsoup.Jsoup.parse(result);doc.select(".hide").remove();String(doc)')
@@ -1101,7 +1103,7 @@ describe('worker 路与主线程的错误前缀同口径（runInContextVm 收口
       baseUrl: 'https://x.com', source: 'https://x.com',
       fetch: async () => { ajaxCalls++; return { body: 'BODY' } },
     }).then(() => null, (e: unknown) => e)
-    expect(String((err as Error).message)).toContain('jsLib 执行失败')
+    expect((err as Error).message).toContain('jsLib 执行失败')
     expect(ajaxCalls).toBe(0)
   })
 
@@ -1115,7 +1117,7 @@ describe('worker 路与主线程的错误前缀同口径（runInContextVm 收口
       baseUrl: 'https://x.com', source: 'https://x.com',
       fetch: async () => { ajaxCalls++; return { body: 'BODY' } },
     }).then(() => null, (e: unknown) => e)
-    expect(String((err as Error).message)).toContain('脚本编译/同步执行失败')
+    expect((err as Error).message).toContain('脚本编译/同步执行失败')
     expect(ajaxCalls).toBe(0)
   })
 
@@ -1132,17 +1134,17 @@ describe('worker 路与主线程的错误前缀同口径（runInContextVm 收口
       code: 'return "x"', jsLib: 'throw new Error("boom")',
       loc: L, facet: 'content', scriptForm: true, baseUrl: 'https://x.com',
     }).then(() => null, (e: unknown) => e)
-    expect(String((jsLibErr as Error).message)).toContain('jsLib 执行失败')
+    expect((jsLibErr as Error).message).toContain('jsLib 执行失败')
     const compileErr = await runScript({
       code: 'return (', loc: L, facet: 'content', scriptForm: true, baseUrl: 'https://x.com',
     }).then(() => null, (e: unknown) => e)
-    expect(String((compileErr as Error).message)).toContain('脚本编译/同步执行失败')
+    expect((compileErr as Error).message).toContain('脚本编译/同步执行失败')
     // 「脚本执行抛错」仍可达：顶层 return → 编译期判别回落 wrapped → 异步完成值 rejection
     // （不打段标，两路同为此前缀）
     const runtimeErr = await runScript({
       code: 'return null.x', loc: L, facet: 'content', scriptForm: true, baseUrl: 'https://x.com',
     }).then(() => null, (e: unknown) => e)
-    expect(String((runtimeErr as Error).message)).toContain('脚本执行抛错')
+    expect((runtimeErr as Error).message).toContain('脚本执行抛错')
   })
 })
 

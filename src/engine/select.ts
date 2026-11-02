@@ -1,9 +1,9 @@
 import type { Cheerio, CheerioAPI } from 'cheerio'
-import { isTag } from 'domhandler'
-import type { AnyNode, Element, Text } from 'domhandler'
+import { hasChildren, isTag, isText } from 'domhandler'
+import type { AnyNode, Text } from 'domhandler'
 import type { EngineValue, Facet, IndexSpec, Segment, SegmentLoc } from './types.js'
 import { RuleEvalError, UnsupportedRuleError } from './errors.js'
-import { cleanText, isNodeValue, nodeText, rawTextOf } from './dom.js'
+import { attribOf, cleanText, isNodeValue, nodeText, rawTextOf, tagNameOf } from './dom.js'
 
 type DefaultSegment = Extract<Segment, { kind: 'default' }>
 
@@ -32,41 +32,48 @@ export function isGetValueSegment(seg: DefaultSegment): boolean {
  */
 /** 索引条目 → **位置**集合（越界位置静默丢弃；`multi` 的并集在此展开） */
 function positionsFor(len: number, index: IndexSpec): number[] {
-  if (index.kind === 'all') return [...Array(len).keys()]
-  if (index.kind === 'index') {
-    const i = index.value < 0 ? len + index.value : index.value
-    return i < 0 || i >= len ? [] : [i]
+  switch (index.kind) {
+    case 'all': return [...Array(len).keys()]
+    case 'index': {
+      const i = index.value < 0 ? len + index.value : index.value
+      return i < 0 || i >= len ? [] : [i]
+    }
+    case 'multi': {
+      // 条目收进 Set（去重、越界静默丢弃），取位时按**插入序**遍历——
+      // 写序影响结果，不是「按文档序过滤」。
+      const set = new Set<number>()
+      for (const spec of index.entries) for (const p of positionsFor(len, spec)) set.add(p)
+      return [...set]
+    }
+    case 'range': {
+      // 方括号区间：闭区间 + 负数从尾数 + 端点越界钳到边界；
+      // step 缺省按方向自动（from>to → -1，即倒序取）——`[-1:0]` = 整表倒序
+      if (len === 0) return []
+      const norm = (v: number): number => (v < 0 ? len + v : v)
+      const from = Math.min(len - 1, Math.max(0, norm(index.from)))
+      const to = Math.min(len - 1, Math.max(0, norm(index.to)))
+      const step = index.step !== undefined && index.step !== 0 ? index.step : (from > to ? -1 : 1)
+      const out: number[] = []
+      for (let i = from; step > 0 ? i <= to : i >= to; i += step) out.push(i)
+      return out
+    }
+    default: {
+      // 形态穷尽由编译器把住：新增 IndexSpec 形态而忘了在这里落位 ⇒ 下面这行编译不过
+      // （不留「认不出就当空集合」的兜底——那正是本仓定的「空结果冒充失败」）。
+      const impossible: never = index
+      throw new UnsupportedRuleError(`未知索引形态 ${JSON.stringify(impossible)}`, {
+        facet: 'rule', segmentIndex: -1, segmentRaw: '位置后缀',
+      })
+    }
   }
-  if (index.kind === 'multi') {
-    // 条目收进 Set（去重、越界静默丢弃），取位时按**插入序**遍历——
-    // 写序影响结果，不是「按文档序过滤」。
-    const set = new Set<number>()
-    for (const spec of index.entries) for (const p of positionsFor(len, spec)) set.add(p)
-    return [...set]
-  }
-  if (index.kind === 'range') {
-    // 方括号区间：闭区间 + 负数从尾数 + 端点越界钳到边界；
-    // step 缺省按方向自动（from>to → -1，即倒序取）——`[-1:0]` = 整表倒序
-    if (len === 0) return []
-    const norm = (v: number): number => (v < 0 ? len + v : v)
-    const from = Math.min(len - 1, Math.max(0, norm(index.from)))
-    const to = Math.min(len - 1, Math.max(0, norm(index.to)))
-    const step = index.step !== undefined && index.step !== 0 ? index.step : (from > to ? -1 : 1)
-    const out: number[] = []
-    for (let i = from; step > 0 ? i <= to : i >= to; i += step) out.push(i)
-    return out
-  }
-  // 形态穷尽由编译器把住：新增 IndexSpec 形态而忘了在这里落位 ⇒ 下面这行编译不过
-  // （不留「认不出就当空集合」的兜底——那正是本仓定的「空结果冒充失败」）。
-  const impossible: never = index
-  throw new UnsupportedRuleError(`未知索引形态 ${JSON.stringify(impossible)}`, {
-    facet: 'rule', segmentIndex: -1, segmentRaw: '位置后缀',
-  })
 }
 
 export function applyIndex<T>(arr: T[], index: IndexSpec | null): T[] | 'miss' {
   if (index === null || index.kind === 'all') return arr
-  const out = positionsFor(arr.length, index).map((i) => arr[i])
+  // 位置由 positionsFor 按本数组长度算出、且只产出界内项（越界者在它里面就被丢弃或钳到边界），
+  // 所以取位本身不会落空：断言只收回 noUncheckedIndexedAccess 多出来的 `| undefined`，不是补缺省值。
+  // 不能改成滤空——那会把数组里字面的 undefined 条目静默吃掉，取位结果就不再是「原样取这些位置」。
+  const out = positionsFor(arr.length, index).map((i) => arr[i] as T)
   // 取位为空 = 「选择失败」语义 → Miss（空 List 不是节点集，中链必抛「上游结果不是节点集」）
   return out.length === 0 ? 'miss' : out
 }
@@ -179,17 +186,20 @@ export function evalDefault(
     throw new RuleEvalError('未知 default 段模式', { ...loc, facet, hits: 0 })
   }
 
+  // 选择段实参：解析层只在 `x.y` 形态给 arg，裸 `x` 形态为 null。cheerio 对 null 与 '' 同义
+  // （`$(null)` 空集、`children(null)` 全部子节点，实测与 '' 逐项一致），故统一按空串取。
+  const arg = seg.arg ?? ''
   let picked: Cheerio<AnyNode>
   try {
     switch (seg.mode) {
       // `class.x y` = 同时含所有类 → CSS `.x.y` 链（直译后代选择器恒零命中；上游把整串当**一个**
       // 类名交给 jsoup 同样读不出——本仓这一侧更宽，矩阵行 `a-class-multi-token-arg`；
       // 钉子 `tests/engine/select.test.ts` 的「同时含两个类」）
-      case 'class': picked = $(selectStepWithSelf($, cur, '.' + (seg.arg ?? '').trim().split(/\s+/).filter(Boolean).join('.'), fromRoot)); break
-      case 'id': picked = $(selectStepWithSelf($, cur, '#' + seg.arg, fromRoot)); break
-      case 'tag': picked = $(selectStepWithSelf($, cur, seg.arg!, fromRoot)); break
+      case 'class': picked = $(selectStepWithSelf($, cur, '.' + arg.trim().split(/\s+/).filter(Boolean).join('.'), fromRoot)); break
+      case 'id': picked = $(selectStepWithSelf($, cur, '#' + arg, fromRoot)); break
+      case 'tag': picked = $(selectStepWithSelf($, cur, arg, fromRoot)); break
       // child/children 不含自身：对面这两支走 `temp.children()`，本来就不算当前元素自己
-      case 'child': picked = cur.children(seg.arg!); break
+      case 'child': picked = cur.children(arg); break
       default: picked = cur.children(); break // children
     }
   } catch (e) {
@@ -232,8 +242,7 @@ function textContaining(
     if (seen.has(n)) return
     seen.add(n)
     if (isTag(n)) candidates.push(n)
-    const kids = (n as Element).children
-    if (kids !== undefined) for (const c of kids) visit(c as AnyNode)
+    if (hasChildren(n)) for (const c of n.children) visit(c)
   }
   for (const n of cur.toArray()) visit(n)
   return $(candidates.filter((el) => containsText(textOf($, el, scope), needle)))
@@ -289,7 +298,9 @@ function getValue(
       out.push(v)
     }
     if (out.length === 0) return { kind: 'list', items: [] } // 元素在、取值全空 → 空 List（非 Miss）
-    if (applied.length === 1 && arr.length === 1) return { kind: 'value', text: out[0] }
+    const only = out[0]
+    // out 非空（上一行已返回空集）⇒ 首项必在；判空只为让编译器跟上这条界内证明
+    if (only !== undefined && applied.length === 1 && arr.length === 1) return { kind: 'value', text: only }
     return { kind: 'list', items: out }
   }
 
@@ -323,36 +334,37 @@ function getValue(
     texts.push(t)
   }
   if (texts.length === 0) return { kind: 'list', items: [] } // 取到空（合法零条目），区别于 Miss
-  if (applied.length === 1 && arr.length === 1) return { kind: 'value', text: texts[0] }
+  const only = texts[0]
+  // texts 非空（上一行已返回空集）⇒ 首项必在；判空只为让编译器跟上这条界内证明
+  if (only !== undefined && applied.length === 1 && arr.length === 1) return { kind: 'value', text: only }
   return { kind: 'list', items: texts }
 }
 
 /** 深度优先收集全部后代文本节点（含元素内层，如 <b> 内文本） */
 function collectTextNodes(node: AnyNode, out: Text[]): void {
-  if (node.type === 'text') {
-    out.push(node as Text)
+  if (isText(node)) {
+    out.push(node)
     return
   }
-  const children = (node as Element).children
-  if (children) for (const c of children) collectTextNodes(c as AnyNode, out)
+  if (hasChildren(node)) for (const c of node.children) collectTextNodes(c, out)
 }
 
 /** 直系文本节点合并（排除后代元素内的文本） */
 function directText($: CheerioAPI, el: AnyNode): string {
-  return $(el).contents().filter((_, node) => node.type === 'text').text()
+  return $(el).contents().filter((_, node) => isText(node)).text()
 }
 
 /** 属性取值兜底单点：自身属性 →（html/body 除外）第一个含该属性的后代 */
 function attrFallback($: CheerioAPI, el: AnyNode, name: string, fallbackSel?: string): string {
-  const own = (el as Element).attribs?.[name] ?? ''
+  const own = attribOf(el, name) ?? ''
   if (own !== '') return own
-  const tag = (el as Element).name
+  const tag = tagNameOf(el)
   if (tag === 'html' || tag === 'body') return ''
   if (fallbackSel !== undefined) return $(el).find(fallbackSel).first().attr(name) ?? ''
   // 属性名可含冒号（`isAttrName` 放行 `xlink:href` 这类命名空间形态），拼成 CSS 属性选择器会
   // 炸成逃逸错误分类的裸 Error——按「第一个含该属性的后代」口径直接遍历取值。
   for (const node of $(el).find('*').toArray()) {
-    const v = (node as Element).attribs?.[name]
+    const v = attribOf(node, name)
     if (v !== undefined && v !== '') return v
   }
   return ''
@@ -373,7 +385,7 @@ function extract($: CheerioAPI, el: AnyNode, mode: string): string {
     case 'html':
       return $(el).html() ?? ''
     case 'all':
-      return $.html(el) ?? ''
+      return $.html(el)
     // 原样属性值（相对 URL 的绝对化由 service 层负责，引擎不拼）。
     // 自身属性为空时向下兜底——href/src 取第一个含该属性的后代，
     // content 取第一个 meta 的 content（钉死语义：li 上 @href → 内层 a 的 href）。

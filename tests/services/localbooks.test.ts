@@ -5,11 +5,28 @@ import { describe, expect, it, vi } from 'vitest'
 import iconv from 'iconv-lite'
 import { chapterContentToText } from '../../src/services/chapter-content.js'
 import { EpubImportError } from '../../src/services/epub/errors.js'
+import type { EpubChapterRef, EpubDocumentRef, EpubResourceRef } from '../../src/services/epub/import.js'
 import {
   LocalArtifactNotFoundError, LocalBooks, LocalFileTooLargeError, LocalImportError, decodeLocalText, isLocalBookKey, splitChapters,
 } from '../../src/services/localbooks.js'
 import { IMAGE_SAMPLES, makeEpubFixture } from '../fixtures/epub.js'
 import { makeTempDir } from '../temp-dir.js'
+import { pick } from '../support/fixture.js'
+
+/** 落盘顶层元数据在测试侧的读面：形状主人是 `localbooks.ts` 的 `LocalEpubMeta`（未导出），
+ *  这里只声明断言真正碰到的那几格，多一个字段都不放开。 */
+interface PublishedEpubMeta {
+  schemaVersion: 2
+  format: 'epub'
+  title: string
+  author: string | null
+  originalName: string
+  chapters: EpubChapterRef[]
+  documents: Record<string, EpubDocumentRef>
+  resources: Record<string, EpubResourceRef>
+  navigation: Array<{ label: string; target: unknown }>
+  warnings: unknown[]
+}
 
 describe('decodeLocalText', () => {
   it('UTF-8 无 BOM', () => {
@@ -38,14 +55,14 @@ describe('splitChapters', () => {
     const spans = splitChapters(text)
     expect(spans.map((s) => s.name)).toEqual(['楔子', '第1章 初', '第一章 终', '卷二·试炼', '尾声', '番外 一'])
     // 切片往返：每段内容正确
-    expect(text.slice(spans[1].start, spans[1].end).trim()).toBe('B')
-    expect(text.slice(spans[5].start, spans[5].end).trim()).toBe('F')
+    expect(text.slice(pick(spans, 1).start, pick(spans, 1).end).trim()).toBe('B')
+    expect(text.slice(pick(spans, 5).start, pick(spans, 5).end).trim()).toBe('F')
   })
   it('章前有引言 → 补「正文」首段', () => {
     const text = '这是一段引言\n\n第1章 起\n正文内容'
     const spans = splitChapters(text)
     expect(spans.map((s) => s.name)).toEqual(['正文', '第1章 起'])
-    expect(text.slice(spans[0].start, spans[0].end).trim()).toBe('这是一段引言')
+    expect(text.slice(pick(spans, 0).start, pick(spans, 0).end).trim()).toBe('这是一段引言')
   })
   it('无章节标题 → 整本单章「正文」（不炸）', () => {
     const text = '只有正文\n没有标题'
@@ -120,7 +137,7 @@ describe('LocalBooks', () => {
     const { lb } = await mk()
     const keys: string[] = []
     for (let i = 0; i < 4; i++) keys.push((await lb.import(Buffer.from(`第1章 A${i}\nA${i}`, 'utf8'), `b${i}.txt`)).bookKey)
-    expect(await lb.getChapter(keys[0], 0)).toBe('A0')
+    expect(await lb.getChapter(pick(keys, 0), 0)).toBe('A0')
   })
 
   it('remove 删两文件；非法 bookKey → false', async () => {
@@ -328,9 +345,9 @@ describe('EPUB 发布、重启读取与资源读口', () => {
     expect((await fs.readdir(path.join(dir, 'local'))).sort()).toEqual([id, `${id}.json`])
     expect((await fs.readdir(path.join(dir, 'local', id))).sort()).toEqual(['documents', 'original.epub', 'resources'])
     expect(await fs.readFile(path.join(dir, 'local', id, 'original.epub'))).toEqual(buf)   // 原字节一字不差
-    const meta = JSON.parse(await fs.readFile(path.join(dir, 'local', `${id}.json`), 'utf8')) as any
+    const meta = JSON.parse(await fs.readFile(path.join(dir, 'local', `${id}.json`), 'utf8')) as PublishedEpubMeta
     expect(meta).toMatchObject({ schemaVersion: 2, format: 'epub', title: '图文样本', author: '样本作者', originalName: '样本.epub' })
-    expect(meta.chapters.map((c: any) => [c.index, c.label, c.documentId])).toEqual([[0, '第一章', 'd0'], [1, '第二章', 'd1']])
+    expect(meta.chapters.map((c) => [c.index, c.label, c.documentId])).toEqual([[0, '第一章', 'd0'], [1, '第二章', 'd1']])
     expect(Object.keys(meta.documents)).toHaveLength(3)
     expect(meta.documents.d2).toMatchObject({ index: null, label: '注释', path: 'OEBPS/notes.xhtml' })
     // 资源：共享插图与封面是同一份（按书内路径去重），字节数就是落盘字节数
@@ -352,7 +369,7 @@ describe('EPUB 发布、重启读取与资源读口', () => {
     const nav = await again.getNavigation(r.bookKey)
     expect(nav.chapters.map((c) => c.name)).toEqual(['第一章', '第二章'])          // 线性序列 = 进度/导出口径
     expect(nav.items.map((i) => i.label)).toEqual(['第一卷'])                      // 展示树 = 原生目录
-    expect(nav.items[0].children.map((c) => c.label)).toEqual(['甲', '乙', '丙'])
+    expect(pick(nav.items, 0).children.map((c) => c.label)).toEqual(['甲', '乙', '丙'])
 
     // 补充文档（脚注）可打开、不计章
     expect(chapterContentToText(await again.getSupplement(r.bookKey, 'd2'))).toContain('脚注一')

@@ -13,6 +13,7 @@ import { ROUTES, paramOps } from '../../src/shared/wire.js'
 import type { ExploreBook, SearchGroup, SearchJobSnapshot } from '../../src/shared/wire.js'
 import { makeCoreDeps } from './fake-deps.js'
 import type { DepsOverrides, FakeViewDeps } from './fake-deps.js'
+import { must, pick } from '../support/fixture.js'
 import { rect, stubLayout } from './scroll-stub.js'
 
 /**
@@ -250,16 +251,16 @@ describe('CityView', () => {
     // scrollIntoView——那个 API 会连可滚祖先一起滚（本仓落位的统一口径，见 util.ts）
     const layout = stubLayout((el) => {
       const c = el.classList
-      if (c?.contains('novel-city-rail')) return rect(0, 300)
-      if (c?.contains('novel-city-source') && c.contains('on')) return rect(260, 28)
-      if (c?.contains('novel-city-kids')) return rect(288, 200)      // 底边 488 > 框底 300：装不下
+      if (c.contains('novel-city-rail')) return rect(0, 300)
+      if (c.contains('novel-city-source') && c.contains('on')) return rect(260, 28)
+      if (c.contains('novel-city-kids')) return rect(288, 200)      // 底边 488 > 框底 300：装不下
       return null
     })
     try {
       const { container } = render(<CityView deps={depsOf()} />)
       await waitFor(() => expect(submitted).toEqual([['s1', '现代情感']]))
       expect(layout.scrolls.map((s) => s.to)).toEqual([260])
-      expect(layout.scrolls[0].el).toBe(container.querySelector('.novel-city-rail'))
+      expect(pick(layout.scrolls, 0).el).toBe(container.querySelector('.novel-city-rail'))
       expect(layout.into, '落位不许碰 scrollIntoView').toEqual([])
     } finally { layout.restore() }
   })
@@ -267,9 +268,9 @@ describe('CityView', () => {
   it('展开串本来就放得下：一次 scrollTop 都不写（点完看见整列跳一格就是这条）', async () => {
     const layout = stubLayout((el) => {
       const c = el.classList
-      if (c?.contains('novel-city-rail')) return rect(0, 600)
-      if (c?.contains('novel-city-source') && c.contains('on')) return rect(20, 28)
-      if (c?.contains('novel-city-kids')) return rect(48, 200)       // 底边 248 < 框底 600：放得下
+      if (c.contains('novel-city-rail')) return rect(0, 600)
+      if (c.contains('novel-city-source') && c.contains('on')) return rect(20, 28)
+      if (c.contains('novel-city-kids')) return rect(48, 200)       // 底边 248 < 框底 600：放得下
       return null
     })
     try {
@@ -317,7 +318,7 @@ describe('CityView', () => {
     }
     const { container } = render(<CityView deps={depsOf()} />)
     await waitFor(() => { expect(container.querySelectorAll('img.novel-city-cover')).toHaveLength(4) })
-    fireEvent.error(container.querySelectorAll('img.novel-city-cover')[0])
+    fireEvent.error(pick([...container.querySelectorAll('img.novel-city-cover')], 0))
     await waitFor(() => { expect(container.querySelectorAll('img.novel-city-cover')).toHaveLength(3) })
     expect(container.querySelectorAll('.novel-city-cover:not(img)')).toHaveLength(1)   // 只有那一条降级成首字块
   })
@@ -328,7 +329,7 @@ describe('CityView', () => {
     current = { ...snap, phase: 'running', books: [book] }
     const { container } = render(<CityView deps={depsOf(over)} />)
     await waitFor(() => { expect(container.querySelectorAll('img.novel-city-cover')).toHaveLength(1) })
-    fireEvent.error(container.querySelector('img.novel-city-cover')!)
+    fireEvent.error(must(container.querySelector('img.novel-city-cover'), '封面图'))
     await waitFor(() => { expect(container.querySelectorAll('img.novel-city-cover')).toHaveLength(0) })
     act(() => { frame({ ...snap, id: 'j2', phase: 'running', books: [book] }) })
     await waitFor(() => { expect(container.querySelectorAll('img.novel-city-cover')).toHaveLength(1) })
@@ -455,7 +456,7 @@ function depsWithGroups(groups: SearchGroup[], job: Partial<SearchJobSnapshot> =
     id: 'sj1', keyword: '半城风月 沈念', phase: 'done', cancelled: false,
     total: 142, done: groups.length, added: groups, next: groups.length, startedAt: 1, ...job,
   }
-  const sinceOf = (path: string): number => Number(new URLSearchParams(String(path).split('?')[1] ?? '').get('since') ?? '0')
+  const sinceOf = (path: string): number => Number(new URLSearchParams(path.split('?')[1] ?? '').get('since') ?? '0')
   /** 快照按请求带的游标切片（与服务端同语义）：不切就会把同一批命中累第二遍 */
   const payload = (path: string): { job: SearchJobSnapshot } => ({ job: { ...snap, added: snap.added.slice(sinceOf(path)) } })
   return makeCoreDeps({
@@ -490,7 +491,7 @@ describe('CityBookSheet（书籍详情浮层：本源两动作 + 跨源那一次
     expect(screen.queryByText(/最新/)).toBeNull()
     const metas = Array.from(document.querySelectorAll('.novel-city-bookhead-meta'))
     expect(metas).toHaveLength(1)                          // 只剩元信息那一段，简介那段整段不走
-    expect(metas[0].textContent).toContain('现代情感')       // 元信息没被误伤
+    expect(pick(metas, 0).textContent).toContain('现代情感')       // 元信息没被误伤
   })
 
   it('本源那一行「加入书架」成功：走 PUT 架位并进成功泳道报书名', async () => {
@@ -554,13 +555,14 @@ describe('CityBookSheet（书籍详情浮层：本源两动作 + 跨源那一次
     await waitFor(() => expect(screen.getByText('顶点')).toBeTruthy(), { timeout: 2500 })
     // 折叠判据只能钉 DOM 事实：jsdom 没有 UA 样式表，closed <details> 的内容照样查得到，
     // 用 queryByText(...).toBeNull() 既红得莫名其妙，又会在「实现真把条目删了」时假绿。
-    const fold = document.querySelector('details')
-    expect(fold, '该组要有折叠区').not.toBeNull()
-    expect(fold!.open, '默认收起').toBe(false)
+    const foldOf = document.querySelector('details')
+    expect(foldOf, '该组要有折叠区').not.toBeNull()
+    const fold = must(foldOf, '该组的折叠区')
+    expect(fold.open, '默认收起').toBe(false)
     expect(screen.getByText(/半城风月（顶点叫法）/).closest('details'), '相关那条不在折叠区里').toBeNull()
-    expect(fold!.textContent).toContain('与这本无关的推荐位')
-    fireEvent.click(fold!.querySelector('summary')!)
-    expect(fold!.open, '点了要展开').toBe(true)
+    expect(fold.textContent).toContain('与这本无关的推荐位')
+    fireEvent.click(must(fold.querySelector('summary'), '折叠区的 summary'))
+    expect(fold.open, '点了要展开').toBe(true)
     expect(screen.getAllByRole('button', { name: '读这本' }).length).toBeGreaterThanOrEqual(2)
   })
 
@@ -588,15 +590,16 @@ describe('CityBookSheet（书籍详情浮层：本源两动作 + 跨源那一次
     ])} onClose={noop} />)
     fireEvent.click(screen.getByRole('button', { name: /在其他源找这本/ }))
     await waitFor(() => expect(screen.getByText('书海')).toBeTruthy(), { timeout: 2500 })
-    const fold = document.querySelector('details')
-    expect(fold, '只回无关条目那组要有折叠区').not.toBeNull()
+    const foldOf = document.querySelector('details')
+    expect(foldOf, '只回无关条目那组要有折叠区').not.toBeNull()
+    const fold = must(foldOf, '只回无关条目那组的折叠区')
     // 回正标记按计数钉：疑似折叠恰一条（styles 里那条标记级规则认领的就是它，标记掉了规则成死规则；
     // 贴到别家折叠上则由下一条用例红）
-    expect(fold!.hasAttribute('data-novel-city-suspect'), '疑似折叠要带标记：非故障的容器靠它回正线条与底色').toBe(true)
+    expect(fold.hasAttribute('data-novel-city-suspect'), '疑似折叠要带标记：非故障的容器靠它回正线条与底色').toBe(true)
     expect(document.querySelectorAll('[data-novel-city-suspect]'),
       '标记只属于疑似折叠：这一轮一家疑似，恰一条').toHaveLength(1)
-    expect(fold!.textContent).toContain('与这本无关的推荐位')
-    expect(fold!.querySelector('summary')?.textContent).toContain('顶点')   // 默认视野只有这一行要说得出是谁家的
+    expect(fold.textContent).toContain('与这本无关的推荐位')
+    expect(fold.querySelector('summary')?.textContent).toContain('顶点')   // 默认视野只有这一行要说得出是谁家的
     expect(screen.queryByText(/这一家没有按这个书名搜到/)).toBeNull()
     expect(screen.queryByText(/没有一家按这个书名搜到/)).toBeNull()
   })
@@ -734,9 +737,9 @@ describe('CityBookSheet（书籍详情浮层：本源两动作 + 跨源那一次
     fireEvent.click(button)
     fireEvent.click(button)
     expect(deps.apiSend).toHaveBeenCalledTimes(2)                 // 第一颗挂着挡不住再点一次
-    releases[1]({ jobId: 'mine' })                                // 后一次点击的回包先落地
+    pick(releases, 1)({ jobId: 'mine' })                                // 后一次点击的回包先落地
     await waitFor(() => expect(screen.getByText(/正在启动跨源搜索/)).toBeTruthy(), { timeout: 2500 })
-    releases[0]({ jobId: 'late' })                                // 旧回包后落地：不许把观察者倒回旧轮
+    pick(releases, 0)({ jobId: 'late' })                                // 旧回包后落地：不许把观察者倒回旧轮
     await new Promise((r) => setTimeout(r, 20))
     expect(screen.getByText(/正在启动跨源搜索/)).toBeTruthy()
   })

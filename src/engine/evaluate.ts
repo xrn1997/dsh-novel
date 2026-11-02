@@ -14,7 +14,7 @@ import type { EvaluateRef, JsCall, JsHost } from './js-sandbox.js'
 import { combine, reverseList } from './combine.js'
 import { applyReplaces } from './replace.js'
 import { loadHtml } from './dom.js'
-import { engineValueToString } from './js-utils.js'
+import { engineValueToString, messageOf, textOf } from './js-utils.js'
 import { splitLiteral } from './literal.js'
 import { isJsonRule } from './mode.js'
 import { subRuleOf } from './sub-rule.js'
@@ -124,7 +124,7 @@ function makeRuntime(ctx: EvalContext, facet: Facet, usage: RuleUsage): Runtime 
     facet,
     usage,
     $: () => (api ??= loadHtml(ctx.html ?? '')),
-    pageText: () => (page ??= ctx.html ?? String(ctx.json ?? '')),
+    pageText: () => (page ??= ctx.html ?? textOf(ctx.json ?? '')),
     jsonData: () => {
       if (!jsonParsed) {
         jsonParsed = true
@@ -136,7 +136,7 @@ function makeRuntime(ctx: EvalContext, facet: Facet, usage: RuleUsage): Runtime 
     // json 必须摘掉：外层是 JSON 页时，子规则拿到的若是 HTML 片段，留着 ctx.json 会让
     // isJsonRule 把 `div.x` 这类选择器判成 JSONPath 而静默 Miss。
     evaluateRef: (sub, data) => {
-      const subCtx = { ...ctx, html: String(data ?? ''), json: undefined }
+      const subCtx = { ...ctx, html: textOf(data ?? ''), json: undefined }
       return runParsedSync(
         parseRule(sub.rule, facet, sub.usage, isJsonRule(sub.rule, subCtx) ? 'json' : undefined),
         subCtx,
@@ -185,7 +185,15 @@ function* branchGen(
   let cur: EngineValue | null = null // null = 尚未起链（select 段落地时取根节点集 $('*')）
   for (let i = 0; i < branch.segments.length; i++) {
     const seg = branch.segments[i]
-    const loc: SegmentLoc = { segmentIndex: offset + i, segmentRaw: branch.raws[i] }
+    const segRaw = branch.raws[i]
+    // 建支不变量：raws 与 segments 一一对应（parse 的每条分支都成对 push），i 在 segments 界内即两者
+    // 都在界内。缺项只可能是 AST 形状坏了——按段级定位如实抛，不当成「这一段不存在」静默跳过去。
+    if (seg === undefined || segRaw === undefined) {
+      throw new RuleEvalError('段表与段原文不同长', {
+        facet: rt.facet, segmentIndex: offset + i, segmentRaw: '', hits: 0,
+      })
+    }
+    const loc: SegmentLoc = { segmentIndex: offset + i, segmentRaw: segRaw }
     try {
       checkChainStart(seg, i, loc, rt.facet)
       if (seg.kind === 'js') {
@@ -217,18 +225,19 @@ function* branchGen(
         // 无匹配给空串，不是「原文里改第一处」。这条轴与规则级仍待裁的配对分叉同属
         // `a-replace-tail-single-pair`，此处先按对面字面实现，规则级那条不跟着动。
         const jsParts = code.split('##')
-        const jsCode = jsParts[0]
+        const jsCode = jsParts.at(0)
         const jsTail = jsParts.length > 1 ? jsParts.slice(1) : null
         let out: EngineValue = cur ?? { kind: 'miss', detail: '空链值' }
         let jsLogs: string[] | undefined
-        if (jsCode.trim() !== '') {
+        // 首段取不到（split 恒有首段，这只可能是编译器保守）与首段为空同一落点：整块只当净化步
+        if (jsCode !== undefined && jsCode.trim() !== '') {
           const outcome: JsOutcome = yield {
             code: jsCode,
             host: jsHostOf(prev, rt),
             ctx: rt.ctx,
             loc,
             facet: rt.facet,
-            ...(rt.evaluateRef === undefined ? {} : { evaluateRef: rt.evaluateRef }),
+            evaluateRef: rt.evaluateRef,
             opts: { scriptForm: true },
           }
           out = outcome.value
@@ -326,7 +335,7 @@ function* interpolateTemplate(
           ctx: rt.ctx,
           loc,
           facet: rt.facet,
-          ...(rt.evaluateRef === undefined ? {} : { evaluateRef: rt.evaluateRef }),
+          evaluateRef: rt.evaluateRef,
           opts: { scriptForm: true },
         }
         piece = outcome.value
@@ -404,7 +413,8 @@ function evalNonJs(
   rt: Runtime,
   loc: SegmentLoc,
 ): EngineValue {
-  const $ = rt.$
+  // 取文档口：`rt.$` 是带 `this` 的方法，脱开对象另存会被 unbound-method 挡，包一层即可
+  const $ = (): CheerioAPI => rt.$()
   switch (seg.kind) {
     case 'css': {
       if (cur?.kind === 'miss') return cur // Miss 穿透：选择/取值段对 Miss 上游原样透传
@@ -484,7 +494,11 @@ function jsonObjectOf(cur: EngineValue | null, rt: Runtime): unknown {
 /** 模板字面段的 JSON 数据源：链上有值 → 优先按上游文本解析（toc 条目 JSON 形态）；否则整页口径 */
 function literalJsonData(rt: Runtime, cur: EngineValue | null): unknown {
   if (cur?.kind === 'value') return tryParseJson(cur.text)
-  if (cur?.kind === 'list' && cur.items.length > 0) return tryParseJson(cur.items[0])
+  if (cur?.kind === 'list') {
+    const first = cur.items.at(0)
+    // 空 List 没有首项 → 落回整页口径（列表为空不是「首项为空串」，不补造一条）
+    if (first !== undefined) return tryParseJson(first)
+  }
   return rt.jsonData()
 }
 
@@ -644,6 +658,6 @@ function errorStepOf(e: unknown, seg: Segment, loc: SegmentLoc): TraceStep {
     segmentKind: seg.kind,
     hits: e instanceof RuleEvalError ? e.hits : null,
     preview: '',
-    error: { code, message: isEngineError(e) ? e.message : String((e as Error)?.message ?? e) },
+    error: { code, message: isEngineError(e) ? e.message : messageOf(e) },
   }
 }

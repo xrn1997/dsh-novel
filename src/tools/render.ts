@@ -32,8 +32,8 @@ export function renderSearch(v: SearchRenderValue): string {
   const fails = v.failed.map((f) => `${f.sourceName}：${f.code}`).join('；')
   return `${v.books.length} 本（跑了 ${v.searched} 家、答话 ${v.answered} 家、滤去 ${v.filtered} 条不相关）：${
     lines.length === 0 ? '' : `\n${lines.join('\n')}`}`
-    + `${v.failed.length === 0 ? '' : `\n${v.failed.length} 家未答话：${fails}`}`
-    + `${v.truncated === undefined ? '' : `\n${v.truncated}`}`
+    + (v.failed.length === 0 ? '' : `\n${v.failed.length} 家未答话：${fails}`)
+    + (v.truncated === undefined ? '' : `\n${v.truncated}`)
 }
 
 export interface ReadRenderValue {

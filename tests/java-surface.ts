@@ -25,9 +25,11 @@ export async function probeJavaSurface(): Promise<{ names: Set<string>; stubs: S
   const names = new Set<string>()
   const stubs = new Set<string>()
   for (const line of text.split('\n').filter(Boolean)) {
-    const [n, tag] = line.split('\t')
-    names.add(n)
-    if (tag === 'STUB') stubs.add(n)
+    const [name, tag] = line.split('\t')
+    // 每行形如「方法名」或「方法名<TAB>STUB」：名字位缺席只可能是自报格式崩了，宁可炸
+    if (name === undefined) throw new Error(`沙箱自报的挂载行没有方法名：${JSON.stringify(line)}`)
+    names.add(name)
+    if (tag === 'STUB') stubs.add(name)
   }
   expect(names.size, `沙箱报出的 java 方法名只有 ${names.size} 个，探针或挂载面出了问题`).toBeGreaterThan(20)
   return { names, stubs }

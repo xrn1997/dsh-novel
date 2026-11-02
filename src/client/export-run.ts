@@ -152,8 +152,8 @@ export function createExportRun(ctx: {
         sourceId: ctx.sourceId,
         bookKey: ctx.bookKey,
         title: ctx.title,
-        from: range?.from,
-        to: range?.to,
+        // 无范围 = 全本：两个键缺席（不是显式 undefined），与零参数旧链接同一形状
+        ...(range === null ? {} : { from: range.from, to: range.to }),
         onProgress: (bytes, total) => set({ kb: Math.round(bytes / 1024), total: total ?? '' }),
         signal: c.signal,
       }).then((blob) => {

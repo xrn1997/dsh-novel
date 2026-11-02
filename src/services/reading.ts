@@ -160,9 +160,11 @@ const SERVED_DEFAULTS: Record<VolatileNumberFieldName, number> = {
   localImportMaxBytes: DEFAULT_MAX_IMPORT_BYTES,
 }
 
-/** 漏服务一格就在这里变成编译错：`SERVED` 少一个名字，这个空对象就缺一个键。 */
+/** 漏服务一格就在这里变成编译错：`SERVED` 少一个名字，下面这个断言类型就不再是真值那一支，
+ *  值也赋不过去（编译错的文案里直接点名漏掉的那个字段）。 */
 type UnservedName = Exclude<VolatileNumberFieldName, (typeof SERVED)[number]>
-const servedCoversAll: Record<UnservedName, never> = {}
+type ServedCoversAll = [UnservedName] extends [never] ? true : UnservedName
+const servedCoversAll: ServedCoversAll = true
 void servedCoversAll
 
 /** 服务的直装缝：把逐字段值装成 ResolvedConfig 形状。不能调 resolveConfig——config.ts 已 import
@@ -188,28 +190,54 @@ export function staticLiveConfig(parts: Partial<Record<VolatileNumberFieldName, 
  * 搜索/发现/书架/导入/登录/详情仍住这里（边界见 `ADR-0047`）。
  */
 export class ReadingService {
+  /** 活配置读数面：所有可热改字段在使用时读当前值——装配期抄快照会让配置页的改动等到重启。
+   *  dataDir 不在其中（启动期定址）。 */
+  private readonly live: ResolvedConfig
+  private readonly registry: SourceRegistry
+  private readonly shelf: Shelf
+  /** 基础 fetcher 只留给 dispose / sourceSession；脚本出站与抓取一律走 sourceRequest */
+  private readonly fetcher: Fetcher
+  /** 一次出站抓取的唯一装配点（动态头 → 限速 → webview/HTTP → loginCheck） */
+  private readonly sourceRequest: SourceRequest
+  /** 书内容读面：目录 / 导航 / 正文的本地与在线分流与文字规约都在这条缝里 */
+  private readonly content: BookContent
+  private readonly jobs: SourceJobs
+  /** 聚合搜索的后台持有者（读任务，与写的 `jobs` 分槽——见 services/search-job.ts 的理由） */
+  private readonly searchJobs: SearchJobs
+  /** 分类浏览的后台持有者（与 `searchJobs` 同一档：读任务，与写的 `jobs` 分槽——理由同 services/explore-job.ts） */
+  private readonly exploreJobs: ExploreJobs
+  /** 逐源分类快照：**一份实例**服务全部轮次与全部调用方，否则「重复进同一分类」永远打站点 */
+  private readonly exploreCache: KindCache
+  private readonly local: LocalBooks | null
+  private readonly webview: WebViewRuntime
+
   private constructor(
-    /** 活配置读数面：所有可热改字段在使用时读当前值——装配期抄快照会让配置页的改动等到重启。
-     *  dataDir 不在其中（启动期定址）。 */
-    private readonly live: ResolvedConfig,
-    private readonly registry: SourceRegistry,
-    private readonly shelf: Shelf,
-    /** 基础 fetcher 只留给 dispose / sourceSession；脚本出站与抓取一律走 sourceRequest */
-    private readonly fetcher: Fetcher,
-    /** 一次出站抓取的唯一装配点（动态头 → 限速 → webview/HTTP → loginCheck） */
-    private readonly sourceRequest: SourceRequest,
-    /** 书内容读面：目录 / 导航 / 正文的本地与在线分流与文字规约都在这条缝里 */
-    private readonly content: BookContent,
-    private readonly jobs: SourceJobs,
-    /** 聚合搜索的后台持有者（读任务，与写的 `jobs` 分槽——见 services/search-job.ts 的理由） */
-    private readonly searchJobs: SearchJobs,
-    /** 分类浏览的后台持有者（与 `searchJobs` 同一档：读任务，与写的 `jobs` 分槽——理由同 services/explore-job.ts） */
-    private readonly exploreJobs: ExploreJobs,
-    /** 逐源分类快照：**一份实例**服务全部轮次与全部调用方，否则「重复进同一分类」永远打站点 */
-    private readonly exploreCache: KindCache,
-    private readonly local: LocalBooks | null,
-    private readonly webview: WebViewRuntime,
-  ) {}
+    live: ResolvedConfig,
+    registry: SourceRegistry,
+    shelf: Shelf,
+    fetcher: Fetcher,
+    sourceRequest: SourceRequest,
+    content: BookContent,
+    jobs: SourceJobs,
+    searchJobs: SearchJobs,
+    exploreJobs: ExploreJobs,
+    exploreCache: KindCache,
+    local: LocalBooks | null,
+    webview: WebViewRuntime,
+  ) {
+    this.live = live
+    this.registry = registry
+    this.shelf = shelf
+    this.fetcher = fetcher
+    this.sourceRequest = sourceRequest
+    this.content = content
+    this.jobs = jobs
+    this.searchJobs = searchJobs
+    this.exploreJobs = exploreJobs
+    this.exploreCache = exploreCache
+    this.local = local
+    this.webview = webview
+  }
 
   /** 本地书导入上限（传输层流式计数与本地书 domain 上限同一读数口——每次读活配置当前值） */
   get localImportMaxBytes(): number { return this.live.localImportMaxBytes }
@@ -243,10 +271,11 @@ export class ReadingService {
       cache: new PageCache(opts.dir, () => live.cacheMaxBytes),
       local: await LocalBooks.create(opts.dir, { maxImportBytes: () => live.localImportMaxBytes }),
       config: live,
-      jobHost: opts.jobHost,
-      tocMaxPages: opts.tocMaxPages,
-      contentMaxPages: opts.contentMaxPages,
-      proxyUrl: opts.proxyUrl,
+      // 可选项按需建键：显式 `undefined` 与「没有这个键」在装配面上是两件事（后者才落回缺省）
+      ...(opts.jobHost === undefined ? {} : { jobHost: opts.jobHost }),
+      ...(opts.tocMaxPages === undefined ? {} : { tocMaxPages: opts.tocMaxPages }),
+      ...(opts.contentMaxPages === undefined ? {} : { contentMaxPages: opts.contentMaxPages }),
+      ...(opts.proxyUrl === undefined ? {} : { proxyUrl: opts.proxyUrl }),
     })
   }
 
@@ -261,6 +290,7 @@ export class ReadingService {
    * 逐字段数值是直装缝：给了 `config` 就全按它读（逐字段值让位于活配置），
    * 没有才把逐字段值装成一份静态读数——配置页的改动只走 `config` 那条路生效。
    */
+  // eslint-disable-next-line @typescript-eslint/require-await -- 装配全程同步；async 是契约：构造失败必须以 rejection 交付，不能同步抛。
   static async from(parts: {
     registry: SourceRegistry
     shelf: Shelf
@@ -708,7 +738,9 @@ export class ReadingService {
     const want = opts?.sourceIds
     const sources = this.registry.list().filter((s) =>
       participates(s) && (want === undefined || want.length === 0 || want.includes(s.id)))
-    const groups: SearchGroup[] = new Array(sources.length)
+    // new Array 是**稀疏**的：元素要按完成序回填，中途停止就会留洞——类型照实写，别让
+    // 「每格都有值」的声称把洞藏起来（收尾那道 filter 谓词才是洞的唯一出口）
+    const groups = new Array<SearchGroup | undefined>(sources.length)
     const step = requireParallelStep(this.live.searchParallel)
     for (let i = 0; i < sources.length; i += step) {
       if (opts?.shouldStop?.() === true) break
@@ -846,9 +878,11 @@ export class ReadingService {
   subscribeExploreJob(listener: () => void): () => void { return this.exploreJobs.signal.subscribe(listener) }
 
   private async searchOne(s: NovelSource, keyword: string): Promise<SearchGroup> {
+    // 源状态失败原因按需建键：SearchGroup 是跨半载荷，缺席与显式 undefined 序列化后是两件事
     const base = {
       sourceId: s.id, sourceName: s.name, status: s.status,
-      statusDetail: s.statusDetail, hits: [] as SearchHit[],
+      ...(s.statusDetail === undefined ? {} : { statusDetail: s.statusDetail }),
+      hits: [] as SearchHit[],
     }
     try {
       // 请求语义全走搜索面（search-face.ts，与探针同一实现）：模板解析/组装/超时/解码/列表求值
@@ -1016,7 +1050,9 @@ function stripLoginPrefix(raw: string): string {
   const t = raw.trim()
   if (/^@js:/i.test(t)) return t.slice(4)
   const m = /^<js>([\s\S]*)<\/js>$/i.exec(t)
-  return m === null ? t : m[1]
+  const body = m === null ? undefined : m[1]
+  // 切不出块体与「本来就不是块形态」同路：原文交给沙箱，不补一个空脚本
+  return body === undefined ? t : body
 }
 
 /** 数据根级设备 ID：首次生成、此后稳定复用（androidId 的替代，不用随机值每轮冒充设备） */
@@ -1049,5 +1085,7 @@ function createFetcherWith(
 }
 
 function errorMessageOf(e: unknown): string {
-  return e instanceof Error ? e.message.split('\n')[0] : String(e)
+  if (!(e instanceof Error)) return String(e)
+  const nl = e.message.indexOf('\n')
+  return nl < 0 ? e.message : e.message.slice(0, nl)
 }

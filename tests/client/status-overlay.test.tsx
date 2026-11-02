@@ -188,7 +188,6 @@ describe('任务卡去现场（消费半：喂现场 → 消费意图 → 滚动
     // 卡片随「退回列表」这一拍才挂载，scrollIntoView 在同一次 commit 的 effect 里就已被调用 ⇒
     // 替身必须先上原型（单卡赋值赶不上）；`mock.instances` 记 `this`，落点仍是卡片本身。
     const proto = Element.prototype as unknown as { scrollIntoView?: (arg?: unknown) => void }
-    const hadInto = proto.scrollIntoView !== undefined
     const originalInto = proto.scrollIntoView
     const into = vi.fn()
     proto.scrollIntoView = into
@@ -207,7 +206,7 @@ describe('任务卡去现场（消费半：喂现场 → 消费意图 → 滚动
       expect(screen.queryByText('← 返回源列表'), '意图到达后应已退回源列表、不在子视图里').toBeNull()
       expect(takeJobOpen()).toBeNull()
     } finally {
-      if (!hadInto) delete proto.scrollIntoView
+      if (originalInto === undefined) delete proto.scrollIntoView
       else proto.scrollIntoView = originalInto
     }
   })

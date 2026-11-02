@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { loadCases, makeReplayFetch, renderReport, runCase } from './harness.js'
+import type { CompatCase } from './harness.js'
 import { makeTempDir } from '../temp-dir.js'
+import { must } from '../support/fixture.js'
 const rawSource = {
   bookSourceName: 'S', bookSourceUrl: 'https://s.com', searchUrl: 'https://s.com/search?q={{key}}',
   ruleBookList: '@css:.b', ruleBookName: 'tag.a@text', ruleBookUrl: 'tag.a@href',
@@ -28,9 +30,16 @@ async function makeCaseDir(capturedAt = 1): Promise<string> {
   return dir
 }
 
+/** 合成 case 目录必须被 loadCases 收回一条：收不回来是用例自身失效——响亮抛，不静默跳过 */
+function onlyCase(cases: CompatCase[]): CompatCase {
+  const [c] = cases
+  if (c === undefined) throw new Error('loadCases 没收回合成的 case（source.json / manifest.json 没写到点上）')
+  return c
+}
+
 describe('compat harness（离线自测）', () => {
   it('runCase 全链路四步跑通', async () => {
-    const [c] = loadCases(await makeCaseDir())
+    const c = onlyCase(loadCases(await makeCaseDir()))
     const r = await runCase(c)
     expect(r.ok).toBe(true)
     expect(r.steps.every((s) => s.ok)).toBe(true)
@@ -38,17 +47,17 @@ describe('compat harness（离线自测）', () => {
   })
   it('fixture 缺 URL → 明确报「fixture 缺失」', async () => {
     const dir = await makeCaseDir()
-    const mf = JSON.parse(await fs.readFile(path.join(dir, 'manifest.json'), 'utf8'))
+    const mf = JSON.parse(await fs.readFile(path.join(dir, 'manifest.json'), 'utf8')) as { pages: Record<string, string> }
     delete mf.pages['https://s.com/c/1.html']
     await fs.writeFile(path.join(dir, 'manifest.json'), JSON.stringify(mf), 'utf8')
-    const [c] = loadCases(dir)
+    const c = onlyCase(loadCases(dir))
     const r = await runCase(c)
     expect(r.ok).toBe(false)
-    const failed = r.steps.find((s) => !s.ok)!
-    expect(failed.error!.message).toContain('fixture 缺失')
+    const failed = must(r.steps.find((s) => !s.ok), '失败步')
+    expect(must(failed.error, '失败步错误').message).toContain('fixture 缺失')
   })
   it('renderReport：总计行 + 明细表（行键 = caseName = 目录名）', async () => {
-    const [c] = loadCases(await makeCaseDir())
+    const c = onlyCase(loadCases(await makeCaseDir()))
     const ok = await runCase(c)
     const md = renderReport([ok])
     expect(md).toContain('全链路跑通 1 条')
@@ -59,13 +68,13 @@ describe('compat harness（离线自测）', () => {
     expect(md).toContain('| 详情 kind/wordCount |')
   })
   it('renderReport：采集来的 case（manifest 带真采集时刻）计入真站侧', async () => {
-    const [c] = loadCases(await makeCaseDir(Date.now()))
+    const c = onlyCase(loadCases(await makeCaseDir(Date.now())))
     const ok = await runCase(c)
     expect(ok.fromCapture, '采集时刻在 manifest 里，判据却读不到——分母构成会报错').toBe(true)
     expect(renderReport([ok])).toContain('本批 1 条真站采集 + 0 条合成基线')
   })
   it('makeReplayFetch 未命中 URL 的确定性报错（补 capture 的指引）', async () => {
-    const [c] = loadCases(await makeCaseDir())
+    const c = onlyCase(loadCases(await makeCaseDir()))
     const f = makeReplayFetch(c)
     await expect(f('https://unknown.example/x')).rejects.toThrowError(/fixture 缺失/)
   })

@@ -38,6 +38,7 @@ import {
   javaEncode,
   md5Hex,
   md5Hex16,
+  textOf,
   toNumChapter,
   unescapeHtml4,
   uriEncode,
@@ -136,7 +137,7 @@ function evalRule(d: BridgeDeps, sub: SubRule, content?: unknown): EngineValue {
 /** getString / getStringList 共用的子规则求值入口：串化 + 用途判据一处收口（两个桥方法只差
  *  结果侧的串化/绝对化，求值这一段不许各写一份——用途判据一改这里只动一处）。 */
 function evalSubRule(d: BridgeDeps, rule: unknown, content?: unknown): EngineValue {
-  return evalRule(d, subRuleOf(String(rule), d.facet), content)
+  return evalRule(d, subRuleOf(textOf(rule), d.facet), content)
 }
 
 /** getString / getStringList 的实参分派：**三个重载形态**的位置语义不同（按实参类型分派）。
@@ -169,6 +170,11 @@ const sourceCache = (d: BridgeDeps): Map<string, string> => d.session.cacheStore
 /**
  * JavaBridge 协议表：**唯一登记点**。行序即文档序（网络 / 变量 / 递归求值 / 工具 / 垫片分组）。
  * 添加方法只改此处一行（含实现）——类型面/BOOTSTRAP 名单/宿主分派全部派生跟随。
+ *
+ * 过线实参的字符串化：协议行的形参类型（`string` / `string | null` …）是**脚本契约的窄镜像**，
+ * 运行时拿到的是引导层 JSON.parse 的原值——`invokeJavaMethod` 按 `unknown[]` 调下来，脚本常把上一段
+ * 的值（JSONPath 的单元素数组、数字）直接递进来。所以每一步 String() 都是运行时防线而不是空转换；
+ * 写法收口到 `textOf`（形参 `unknown` 即声明真相）。
  */
 export const JAVA_PROTOCOL = [
   // ── 网络 ────────────────────────────────────────────────────────────
@@ -186,7 +192,7 @@ export const JAVA_PROTOCOL = [
     // 如实失败：ajax 这里不挂任何 rejection 防线——主线程在发起宿主调用前抛哨兵（evalJs 换
     // worker 重跑）、worker 同步返回，两条路都不产生悬空 Promise；进程级 ensureUnhandledGuard
     // 是常驻最后防线，管的是脚本自建的异步工作。见 js-sandbox 的 BOOTSTRAP 注释。
-    return fetchFn(String(url)).then((r) => r?.body ?? '')
+    return fetchFn(textOf(url)).then((r) => r.body)
   }, 'async', {
     shim: 'body',
     mountAs: 'ajax',
@@ -206,8 +212,8 @@ export const JAVA_PROTOCOL = [
       throw new JsSandboxError('java.connect 参数为空（脚本传进 null/undefined）', { ...d.loc, facet: d.facet, script: d.code })
     }
     const hdrs = parseHeaderArg(d, 'java.connect', header)
-    const u = String(url)
-    return fetchFn(u, hdrs).then((r) => ({ url: r?.finalUrl ?? u, body: r?.body ?? '' }))
+    const u = textOf(url)
+    return fetchFn(u, hdrs).then((r) => ({ url: r.finalUrl ?? u, body: r.body }))
   }, 'async', {
     shim: 'connect',
     mountAs: 'connect',
@@ -228,7 +234,7 @@ export const JAVA_PROTOCOL = [
       throw new JsSandboxError('java.post 参数为空（脚本传进 null/undefined）', { ...d.loc, facet: d.facet, script: d.code })
     }
     const hdrs = parseHeaderArg(d, 'java.post', headersArg)
-    const r = await postFn(String(url), body === null || body === undefined ? '' : String(body), hdrs)
+    const r = await postFn(textOf(url), body === null || body === undefined ? '' : textOf(body), hdrs)
     return responseOf({ ...r })
   }, 'async', {
     shim: 'response',
@@ -249,7 +255,7 @@ export const JAVA_PROTOCOL = [
       throw new JsSandboxError('java.get 参数为空（脚本传进 null/undefined）', { ...d.loc, facet: d.facet, script: d.code })
     }
     const hdrs = parseHeaderArg(d, 'java.get', headersArg)
-    return responseOf({ ...(await getFn(String(url), hdrs)) })
+    return responseOf({ ...(await getFn(textOf(url), hdrs)) })
   }, 'async', {
     shim: 'response',
     mountAs: null,
@@ -302,7 +308,7 @@ export const JAVA_PROTOCOL = [
     if (url === null || url === undefined) {
       throw new JsSandboxError('java.webView 参数为空（脚本传进 null/undefined）', { ...d.loc, facet: d.facet, script: d.code })
     }
-    return fn(String(url))
+    return fn(textOf(url))
   }, 'async', {
     shim: 'raw',
     mountAs: 'webView',
@@ -324,7 +330,7 @@ export const JAVA_PROTOCOL = [
       throw new JsSandboxError('java.head 参数为空（脚本传进 null/undefined）', { ...d.loc, facet: d.facet, script: d.code })
     }
     const hdrs = parseHeaderArg(d, 'java.head', headersArg)
-    const r = await headFn(String(url), hdrs)
+    const r = await headFn(textOf(url), hdrs)
     return responseOf({ url: r.url, statusCode: r.statusCode, headers: r.headers, cookies: r.cookies ?? {}, body: '' })
   }, 'async', {
     shim: 'response',
@@ -336,10 +342,10 @@ export const JAVA_PROTOCOL = [
   // 未设 → **空串**（变量读的收口是「本表 → 大变量表 → 空串」三级回落）。不要返回 undefined：
   // 过 JSON 桥会变成 null，`String(java.get('x'))` 得到字面量 "null" 拼进密钥/URL，静默错值。
   method('get', { obj: 'java' }, (d) => (key: string): string =>
-    getRuleVar(d.ctx, String(key)) ?? ''),
+    getRuleVar(d.ctx, textOf(key)) ?? ''),
   method('put', { obj: 'java' }, (d) => (key: string, value: unknown): void => {
     d.ctx.vars ??= {}
-    d.ctx.vars[String(key)] = String(value)
+    d.ctx.vars[textOf(key)] = textOf(value)
   }),
   // ── 递归求值（实参类型分派，见 parseGetStringArgs：二参布尔 = unescape 开关，三参布尔 = isUrl 绝对化）──────────
   method('getString', { obj: 'java' }, (d) => (rule: unknown, arg2?: unknown, isUrlArg?: unknown): string => {
@@ -366,7 +372,7 @@ export const JAVA_PROTOCOL = [
     return out
   }),
   method('getElements', { obj: 'java' }, (d) => (rule: string): Array<{ html: string; text: string }> => {
-    const v = evalRule(d, subRuleOf(String(rule), d.facet, 'list'))
+    const v = evalRule(d, subRuleOf(textOf(rule), d.facet, 'list'))
     if (v.kind === 'nodes') {
       return v.nodes.toArray().map((_, i) => ({ html: v.nodes.eq(i).toString(), text: v.nodes.eq(i).text() }))
     }
@@ -377,75 +383,77 @@ export const JAVA_PROTOCOL = [
     return []
   }),
   method('getElement', { obj: 'java' }, (d) => (rule: string): { html: string; text: string } | null => {
-    const v = evalRule(d, subRuleOf(String(rule), d.facet, 'list'))
+    const v = evalRule(d, subRuleOf(textOf(rule), d.facet, 'list'))
     // 非 nodes 或空选择集 → null（取首项，取不到即 null）
     if (v.kind === 'miss') return null
     if (v.kind !== 'nodes') {
       const items = v.kind === 'list' ? v.items : v.kind === 'value' ? [v.text] : []
-      return items.length === 0 ? null : { html: items[0], text: items[0] }
+      const first = items.at(0)
+      // 空集与「首项取不到」同一落点：都没有可给的元素（取首项，取不到即 null）
+      return first === undefined ? null : { html: first, text: first }
     }
     if (v.nodes.length === 0) return null
     return { html: v.nodes.eq(0).toString(), text: v.nodes.eq(0).text() }
   }),
   method('setContent', { obj: 'java' }, (d) => (content: unknown): void => {
     // 后续 getString* 以设定内容为基，而非上一段 result
-    d.contentBase = content === null || content === undefined ? null : String(content)
+    d.contentBase = content === null || content === undefined ? null : textOf(content)
   }),
   // ── 纯工具（实现走 js-utils，可直测）────────────────────────────────
   method('timeFormat', { obj: 'java' }, () => (ts: number | string): string => fmtTime(ts, false)),
   method('timeFormatUTC', { obj: 'java' }, () => (ts: number | string): string => fmtTime(ts, true)),
-  method('base64Encode', { obj: 'java' }, () => (s: string): string => base64Encode(String(s))),
+  method('base64Encode', { obj: 'java' }, () => (s: string): string => base64Encode(textOf(s))),
   method('base64EncodeBytes', { obj: 'java' }, () => (bytes: number[]): string => base64EncodeBytes(bytes)),
-  method('base64Decode', { obj: 'java' }, () => (s: string): string => base64Decode(String(s))),
-  method('md5Encode', { obj: 'java' }, () => (s: string): string => md5Hex(String(s))),
-  method('md5Encode16', { obj: 'java' }, () => (s: string): string => md5Hex16(String(s))),
+  method('base64Decode', { obj: 'java' }, () => (s: string): string => base64Decode(textOf(s))),
+  method('md5Encode', { obj: 'java' }, () => (s: string): string => md5Hex(textOf(s))),
+  method('md5Encode16', { obj: 'java' }, () => (s: string): string => md5Hex16(textOf(s))),
   // ── 摘要 / HMAC 族（实参都是 data 在前）────────────────────────────────
   method('digestHex', { obj: 'java' }, () => (data: string, algorithm: string): string =>
-    digestHex(String(data), String(algorithm))),
+    digestHex(textOf(data), textOf(algorithm))),
   method('digestBase64Str', { obj: 'java' }, () => (data: string, algorithm: string): string =>
-    digestBase64(String(data), String(algorithm))),
+    digestBase64(textOf(data), textOf(algorithm))),
   // 名字大写 H 是**原样保留的畸形名**（`HMacHex` / `HMacBase64`）——脚本里怎么写就得怎么
   // callable，改名等于把这条 API 弄没
   method('HMacHex', { obj: 'java' }, () => (data: string, algorithm: string, key: string): string =>
-    hMacHex(String(data), String(algorithm), String(key))),
+    hMacHex(textOf(data), textOf(algorithm), textOf(key))),
   method('HMacBase64', { obj: 'java' }, () => (data: string, algorithm: string, key: string): string =>
-    hMacBase64(String(data), String(algorithm), String(key))),
+    hMacBase64(textOf(data), textOf(algorithm), textOf(key))),
   // 章节标题中文数字规整（真实源用它把「第五百章」写成「第500章」）
-  method('toNumChapter', { obj: 'java' }, () => (s: string): string => toNumChapter(String(s))),
-  method('encodeURI', { obj: 'java' }, () => (s: string): string => uriEncode(String(s))),
-  method('hexDecodeToString', { obj: 'java' }, () => (hex: string): string => hexDecodeToString(String(hex))),
-  method('hexEncodeToString', { obj: 'java' }, () => (utf8: string): string => hexEncodeToString(String(utf8))),
+  method('toNumChapter', { obj: 'java' }, () => (s: string): string => toNumChapter(textOf(s))),
+  method('encodeURI', { obj: 'java' }, () => (s: string): string => uriEncode(textOf(s))),
+  method('hexDecodeToString', { obj: 'java' }, () => (hex: string): string => hexDecodeToString(textOf(hex))),
+  method('hexEncodeToString', { obj: 'java' }, () => (utf8: string): string => hexEncodeToString(textOf(utf8))),
   // ── AES 解密桥（真实源正文解密形态
   //    `java.aesBase64DecodeToString(data, key, transformation, iv)`——key/iv 为 utf8 字符串，
   //    PKCS5Padding ≡ PKCS7，Node crypto 原生支持）──
   method('aesBase64DecodeToString', { obj: 'java' }, (d) =>
     (data: string, key: string, transformation?: string, iv?: string): string =>
-      aesDecryptB64(String(data), String(key), String(transformation ?? 'AES/CBC/PKCS5Padding'), String(iv ?? ''), d)),
+      aesDecryptB64(textOf(data), textOf(key), transformation ?? 'AES/CBC/PKCS5Padding', iv ?? '', d)),
   // `createSymmetricCrypto(...).decrypt(data)` 的宿主口：返回**字节**（number[]），脚本常再接
   // `java.bytesToStr(decrypted)`（对面 SymmetricCrypto.decrypt 返 ByteArray；见 js-sandbox 的链式壳）。
   method('aesDecryptToBytes', { obj: 'java' }, (d) =>
     (data: string, key: string, transformation?: string, iv?: string): number[] =>
-      Array.from(aesDecryptB64Buffer(String(data), String(key), String(transformation ?? 'AES/CBC/PKCS5Padding'), String(iv ?? ''), d))),
+      Array.from(aesDecryptB64Buffer(textOf(data), textOf(key), transformation ?? 'AES/CBC/PKCS5Padding', iv ?? '', d))),
   // ── cookie 垫片（挂 cookie.getCookie/setCookie/removeCookie）─────────
   method('cookieGet', { obj: 'cookie', as: 'getCookie' }, (d) => (name: string): string | null =>
-    jar(d).get(String(name)) ?? null),
+    jar(d).get(textOf(name)) ?? null),
   method('cookieSet', { obj: 'cookie', as: 'setCookie' }, (d) => (name: string, value: string): void => {
-    jar(d).set(String(name), String(value))
+    jar(d).set(textOf(name), textOf(value))
   }),
   method('cookieRemove', { obj: 'cookie', as: 'removeCookie' }, (d) => (name: string): void => {
-    jar(d).delete(String(name))
+    jar(d).delete(textOf(name))
   }),
   // cookie.replaceCookie(url, cookieString)：对面按 url 取旧表、合并新串再写回（CookieStore.kt）；
   // 本仓垫片是按源键值表（无域），故只做「新串逐对覆盖」——与对面在单表内的可观测结果一致。
   method('cookieReplace', { obj: 'cookie', as: 'replaceCookie' }, (d) => (_url: string, raw: string): void => {
     const j = jar(d)
-    for (const [k, v] of Object.entries(parseCookieString(String(raw)))) j.set(k, v)
+    for (const [k, v] of Object.entries(parseCookieString(textOf(raw)))) j.set(k, v)
   }),
   // java.getCookie(tag[, key])：对面按 url-tag 读 CookieStore；本仓 jar 按**源**隔离（name→value），
   // tag 不进判据——无 key 时取整表拼 cookie 串（近似，矩阵 `h-java-getcookie` 记差）。
   method('getCookie', { obj: 'java' }, (d) => (_tag: string, key?: unknown): string => {
     const j = jar(d)
-    if (key !== undefined && key !== null && String(key) !== '') return j.get(String(key)) ?? ''
+    if (key !== undefined && key !== null && textOf(key) !== '') return j.get(textOf(key)) ?? ''
     const parts: string[] = []
     for (const [k, v] of j) parts.push(`${k}=${v}`)
     return parts.join('; ')
@@ -455,36 +463,36 @@ export const JAVA_PROTOCOL = [
   // 否则 setVariable 会清掉键值表或缓存（见 SourceSession 注释）。
   method('sourceGetVariable', { obj: 'source', as: 'getVariable' }, (d) => (): string =>
     d.session.sourceString(d.sourceKey)),
-  method('sourceSetVariable', { obj: 'source', as: 'setVariable' }, (d) => (value: string | null): void => {
-    d.session.setSourceString(d.sourceKey, value === null || value === undefined ? null : String(value))
+  method('sourceSetVariable', { obj: 'source', as: 'setVariable' }, (d) => (value: string | null | undefined): void => {
+    d.session.setSourceString(d.sourceKey, value === null || value === undefined ? null : textOf(value))
   }),
   method('sourceVarGet', { obj: 'source', as: 'get' }, (d) => (key: string): string =>
-    sourceVars(d).get(String(key)) ?? ''),
+    sourceVars(d).get(textOf(key)) ?? ''),
   method('sourceVarPut', { obj: 'source', as: 'put' }, (d) => (key: string, value: string): string => {
-    const v = String(value)
-    sourceVars(d).set(String(key), v)
+    const v = textOf(value)
+    sourceVars(d).set(textOf(key), v)
     return v          // put 返回写入的值（脚本有 `var x = source.put(k,v)` 的连写形态）
   }),
   // ── cache 垫片（最小仿真：按源隔离的进程内键值表，
   //    真实源 `cache.put('kkmh', …)` 搜索面写、目录面 `cache.get('kkmh')` 读的跨面形态）──
   method('cacheGet', { obj: 'cache', as: 'get' }, (d) => (key: string): string | null =>
-    sourceCache(d).get(String(key)) ?? null),
+    sourceCache(d).get(textOf(key)) ?? null),
   method('cachePut', { obj: 'cache', as: 'put' }, (d) => (key: string, value: unknown): void => {
-    sourceCache(d).set(String(key), value === null || value === undefined ? '' : String(value))
+    sourceCache(d).set(textOf(key), value === null || value === undefined ? '' : textOf(value))
   }),
   method('cacheDelete', { obj: 'cache', as: 'delete' }, (d) => (key: string): void => {
-    sourceCache(d).delete(String(key))
+    sourceCache(d).delete(textOf(key))
   }),
   // ── cache 内存三别名（putMemory/getFromMemory/deleteMemory）──
   // 内存/磁盘分层在本仓不存在：cache 垫片就是进程内键值表，三个别名与 get/put/delete 同存储；
   // 它们只为真实源脚本的调用名而存在，不要按「另一层缓存」实现。
   method('cachePutMemory', { obj: 'cache', as: 'putMemory' }, (d) => (key: string, value: unknown): void => {
-    sourceCache(d).set(String(key), value === null || value === undefined ? '' : String(value))
+    sourceCache(d).set(textOf(key), value === null || value === undefined ? '' : textOf(value))
   }),
   method('cacheGetFromMemory', { obj: 'cache', as: 'getFromMemory' }, (d) => (key: string): string | null =>
-    sourceCache(d).get(String(key)) ?? null),
+    sourceCache(d).get(textOf(key)) ?? null),
   method('cacheDeleteMemory', { obj: 'cache', as: 'deleteMemory' }, (d) => (key: string): void => {
-    sourceCache(d).delete(String(key))
+    sourceCache(d).delete(textOf(key))
   }),
   // ── 纯工具（续）────────────────────────────────────────────────────
   // randomUUID：小写带连字符的 UUID（crypto.randomUUID()）——
@@ -493,9 +501,9 @@ export const JAVA_PROTOCOL = [
   // ── 字节组（strToBytes / hex·base64 ToByteArray）─────────────────────
   // 脚本侧字节统一用 number[]（0-255）承载：JSON 可序列化（跨 SAB RPC 安全）、`& 0xff` 语义不变。
   method('strToBytes', { obj: 'java' }, () => (s: string, charset?: string): number[] =>
-    Array.from(javaEncode(String(s), charset ?? 'UTF-8'))),
+    Array.from(javaEncode(textOf(s), charset ?? 'UTF-8'))),
   method('hexDecodeToByteArray', { obj: 'java' }, () => (hex: string): number[] => {
-    const clean = String(hex).trim()
+    const clean = textOf(hex).trim()
     if (clean === '' ) return []
     if (clean.length % 2 !== 0 || /[^0-9a-fA-F]/.test(clean)) {
       throw new JsSandboxError(`hexDecodeToByteArray：非法 hex 串（长度 ${clean.length}）`, { facet: 'rule', segmentIndex: -1, segmentRaw: clean.slice(0, 64), script: '' })
@@ -503,15 +511,15 @@ export const JAVA_PROTOCOL = [
     return Array.from(Buffer.from(clean, 'hex'))
   }),
   method('base64DecodeToByteArray', { obj: 'java' }, () => (b64: string): number[] =>
-    Array.from(Buffer.from(String(b64), 'base64'))),
+    Array.from(Buffer.from(textOf(b64), 'base64'))),
   // bytesToStr：与 strToBytes 互逆（真实源 AES 解密链 `java.bytesToStr(crypto.decrypt(x))`——
   // 丁丁/盗版顶点/笔趣阁三源章节 URL）。默认 charset = UTF-8（对面 `String(bytes, charset("UTF-8"))`）。
   method('bytesToStr', { obj: 'java' }, () => (bytes: unknown, charset?: unknown): string => {
     if (!Array.isArray(bytes) && !(bytes instanceof Uint8Array)) {
-      throw new JsSandboxError(`bytesToStr 参数不是字节数组（${typeof bytes}）`, { facet: 'rule', segmentIndex: -1, segmentRaw: String(bytes).slice(0, 64), script: '' })
+      throw new JsSandboxError(`bytesToStr 参数不是字节数组（${typeof bytes}）`, { facet: 'rule', segmentIndex: -1, segmentRaw: textOf(bytes).slice(0, 64), script: '' })
     }
     const buf = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes as number[])
-    const cs = charset === undefined || charset === null || String(charset) === '' ? 'UTF-8' : String(charset)
+    const cs = charset === undefined || charset === null || textOf(charset) === '' ? 'UTF-8' : textOf(charset)
     return javaDecode(buf, cs)
   }),
   // ── 文件下载（downloadFile / readTxtFile）───────────────────────────
@@ -524,12 +532,14 @@ export const JAVA_PROTOCOL = [
     if (!raw) {
       throw new JsSandboxError('该源未提供二进制抓取能力（ctx.fetchRaw 缺失）', { ...d.loc, facet: d.facet, script: d.code })
     }
-    const u = String(url)
+    const u = textOf(url)
     // 选项后缀 `,{…}` 不参与文件名推断——分界式与 services/request.ts 同源（engine/template.ts
     // 的 URL_OPTION_SPLIT；此处只剥不解释，抓取本身由 engineFetchRaw 经 assembleRequest 解释）
     const cut = URL_OPTION_SPLIT.exec(u)
     const clean = (cut === null ? u : u.slice(0, cut.index)).trimEnd()
-    const ext = (clean.split(/[?#]/)[0].match(/\.[A-Za-z0-9]{1,6}$/) ?? ['.bin'])[0]
+    // 路径段（split 恒有首段）里推扩展名；取不到段或没有扩展名都落到既有的 `.bin` 缺省
+    const head = clean.split(/[?#]/).at(0)
+    const ext = (head === undefined ? null : /\.[A-Za-z0-9]{1,6}$/.exec(head))?.[0] ?? '.bin'
     const bytes = await raw(u)
     const path = `/dsh-cache/${md5Hex(u)}${ext}`
     storeFile(path, bytes)
@@ -541,9 +551,9 @@ export const JAVA_PROTOCOL = [
     routePattern: String.raw`downloadFile\s*\(`,
   }),
   method('readTxtFile', { obj: 'java' }, () => (path: string, charset?: string): string => {
-    const bytes = fileStore.get(String(path))
+    const bytes = fileStore.get(textOf(path))
     if (bytes === undefined) {
-      throw new JsSandboxError(`readTxtFile：文件不存在（只支持本进程 downloadFile 的产物，未暴露真实文件系统）：${String(path)}`, { facet: 'rule', segmentIndex: -1, segmentRaw: String(path).slice(0, 200), script: '' })
+      throw new JsSandboxError(`readTxtFile：文件不存在（只支持本进程 downloadFile 的产物，未暴露真实文件系统）：${textOf(path)}`, { facet: 'rule', segmentIndex: -1, segmentRaw: textOf(path).slice(0, 200), script: '' })
     }
     return javaDecode(bytes, charset ?? 'UTF-8')
   }),
@@ -594,7 +604,7 @@ function aesDecryptB64Buffer(data: string, key: string, transformation: string, 
     decipher.setAutoPadding(true)
     return Buffer.concat([decipher.update(Buffer.from(data, 'base64')), decipher.final()])
   } catch (e) {
-    return fail(`AES 解密失败：${String((e as Error)?.message ?? e)}`)
+    return fail(`AES 解密失败：${e instanceof Error ? e.message : textOf(e)}`)
   }
 }
 
@@ -630,7 +640,7 @@ export const SANDBOX_MOUNTS = {
  * 参数为引导层 JSON.parse 出的原始数组——实现内部自行防御转换（与旧 switch 逐案
  * String()/Number() 的行为一致）。
  */
-export function invokeJavaMethod(d: BridgeDeps, name: string, rawArgs: readonly unknown[]): unknown | Promise<unknown> {
+export function invokeJavaMethod(d: BridgeDeps, name: string, rawArgs: readonly unknown[]): unknown {
   const row = PROTOCOL_INDEX.get(name)
   if (row === undefined) {
     throw new JsSandboxError(`未知 java 方法: ${name}`, { facet: 'rule', segmentIndex: -1, segmentRaw: name, script: name })

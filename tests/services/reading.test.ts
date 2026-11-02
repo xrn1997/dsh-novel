@@ -17,6 +17,8 @@ import { PageCache } from '../../src/services/cache.js'
 import { Shelf } from '../../src/services/shelf.js'
 import { SourceRegistry } from '../../src/services/sources.js'
 import { ChapterNotFoundError, SourceNotFoundError } from '../../src/services/errors.js'
+import { must, pick } from '../support/fixture.js'
+import { requestUrlOf } from '../support/fetch-input.js'
 
 async function streamToBuffer(stream: Readable): Promise<Buffer> {
   const chunks: Buffer[] = []
@@ -39,8 +41,8 @@ function route(
   onFetch?: (url: string, headers: Record<string, string>) => void,
 ) {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    onFetch?.(String(input), (init?.headers ?? {}) as Record<string, string>)
-    const body = htmlOf(String(input))
+    onFetch?.(requestUrlOf(input), (init?.headers ?? {}) as Record<string, string>)
+    const body = htmlOf(requestUrlOf(input))
     return body === null ? new Response('', { status: 404 }) : new Response(body, { headers: { 'content-type': 'text/html; charset=utf-8' } })
   }
 }
@@ -75,7 +77,7 @@ async function makeService(
   const shelf = trackService(await Shelf.load(dir))
   const jar = new CookieJar()
   const fetcher = createFetcher({
-    fetchImpl: route(htmlOf, opts?.onFetch) as never,
+    fetchImpl: route(htmlOf, opts?.onFetch),
     cookieJar: jar,
     ...(opts?.sourceSession === undefined ? {} : { sourceSession: opts.sourceSession }),
   })
@@ -91,22 +93,22 @@ describe('ReadingService', () => {
   describe('写侧动词', () => {
     it('setEnabled / setEnabledMany：单改与批改（未知 id 静默跳过、重复 id 幂等——旧 dispatch 配方语义原样入门面）', async () => {
       const { svc, registry } = await makeService(() => null)
-      const [a] = registry.list()
+      const a = pick(registry.list(), 0)
       const bRaw = { ...rawSource, bookSourceName: 'B', bookSourceUrl: 'https://b2.com' }
-      const b = (await svc.importOne(bRaw)).sourceId!
+      const b = must((await svc.importOne(bRaw)).sourceId, '导入回执的 sourceId')
       // 单源启停：成功即返回（无 bool 回执）；未知 id 抛 SourceNotFoundError——
       // 「源不存在」只在门面断言一次，两个投影面不再各译一遍。
       await expect(svc.setEnabled(a.id, false)).resolves.toBeUndefined()
       expect(registry.list().find((s) => s.id === a.id)?.enabled).toBe(false)
       // setEnabledMany 是另一份契约：未知 id 静默跳过、重复 id 幂等
       expect(await svc.setEnabledMany([a.id, b, b, 'nope'], true)).toBe(2)   // 重复 b 计一次、nope 跳过
-      expect(registry.get(a.id)!.enabled).toBe(true)
+      expect(must(registry.get(a.id), 'registry 里查到的那一条').enabled).toBe(true)
       await expect(svc.setEnabled('nope', true)).rejects.toBeInstanceOf(SourceNotFoundError)
     })
     it('removeSource / removeSources：单删与批删；不存在 → false/0', async () => {
       const { svc, registry } = await makeService(() => null)
-      const [a] = registry.list()
-      const b = (await svc.importOne({ ...rawSource, bookSourceName: 'B', bookSourceUrl: 'https://b3.com' })).sourceId!
+      const a = pick(registry.list(), 0)
+      const b = must((await svc.importOne({ ...rawSource, bookSourceName: 'B', bookSourceUrl: 'https://b3.com' })).sourceId, '导入回执的 sourceId')
       expect(await svc.removeSources([a.id, b, 'nope'])).toBe(2)
       expect(registry.list()).toHaveLength(0)
       expect(await svc.removeSource('nope')).toBe(false)
@@ -124,9 +126,9 @@ describe('ReadingService', () => {
         forget: (key) => { forgotten.push(key) },
       }
       const { svc, registry } = await makeService(() => null, { sourceSession: session })
-      const [a] = registry.list()
-      const b = (await svc.importOne({ ...rawSource, bookSourceName: 'B', bookSourceUrl: 'https://b3.com' })).sourceId!
-      const keys = [registry.get(a.id)!.baseUrl, registry.get(b)!.baseUrl]
+      const a = pick(registry.list(), 0)
+      const b = must((await svc.importOne({ ...rawSource, bookSourceName: 'B', bookSourceUrl: 'https://b3.com' })).sourceId, '导入回执的 sourceId')
+      const keys = [must(registry.get(a.id), 'registry 里查到的那一条').baseUrl, must(registry.get(b), 'registry 里查到的那一条').baseUrl]
       expect(await svc.removeSources([b, 'nope'])).toBe(1)
       expect(forgotten).toEqual([keys[1]])
       expect(await svc.removeSource(a.id)).toBe(true)
@@ -134,23 +136,23 @@ describe('ReadingService', () => {
     })
     it('saveAuth：cookie 录入带 acquiredAt（旧 dispatch 手拼 SourceAuth 的知识归门面）', async () => {
       const { svc, registry } = await makeService(() => null)
-      const [a] = registry.list()
+      const a = pick(registry.list(), 0)
       const before = Date.now()
       await svc.saveAuth(a.id, { cookie: 'k=v' }, { 'X-Token': 't' })
-      const auth = registry.get(a.id)!.auth!
+      const auth = must(must(registry.get(a.id), 'registry 里查到的那一条').auth, '登录态')
       expect(auth.cookies).toEqual({ cookie: 'k=v' })
       expect(auth.headers).toEqual({ 'X-Token': 't' })
       expect(auth.acquiredAt).toBeGreaterThanOrEqual(before)
       await svc.saveAuth(a.id, { cookie: 'k2=v2' })
-      expect(registry.get(a.id)!.auth!.headers).toBeUndefined()    // 不带 headers → 无该键
+      expect(must(must(registry.get(a.id), 'registry 里查到的那一条').auth, '登录态').headers).toBeUndefined()    // 不带 headers → 无该键
     })
     it('saveLoginInfo：只更新 loginInfo，保留既有 cookie/header', async () => {
       const { svc, registry } = await makeService(() => null)
-      const [a] = registry.list()
+      const a = pick(registry.list(), 0)
       await svc.saveAuth(a.id, { cookie: 'k=v' }, { 'X-Token': 't' })
       const before = Date.now()
       await svc.saveLoginInfo(a.id, { user: 'u' })
-      const auth = registry.get(a.id)!.auth!
+      const auth = must(must(registry.get(a.id), 'registry 里查到的那一条').auth, '登录态')
       expect(auth.cookies).toEqual({ cookie: 'k=v' })
       expect(auth.headers).toEqual({ 'X-Token': 't' })
       expect(auth.loginInfo).toEqual({ user: 'u' })
@@ -160,25 +162,26 @@ describe('ReadingService', () => {
       const { svc } = await makeService(() => null)
       const list = svc.listPublicSources()
       expect(list).toHaveLength(1)
-      expect(list[0]).toMatchObject({ name: 'S' })
-      expect('raw' in list[0]).toBe(false)
-      expect('rules' in list[0]).toBe(false)
-      expect('auth' in list[0]).toBe(false)
+      const only = pick(list, 0)
+      expect(only).toMatchObject({ name: 'S' })
+      expect('raw' in only).toBe(false)
+      expect('rules' in only).toBe(false)
+      expect('auth' in only).toBe(false)
     })
     it('searchPlan：参与集唯一主人（启停 invariant 在服务端——客户端不再自行重推导）', async () => {
       const { svc, registry } = await makeService(() => null)
-      const [a] = registry.list()
-      const b = (await svc.importOne({ ...rawSource, bookSourceName: 'B', bookSourceUrl: 'https://b-plan.com' })).sourceId!
+      const a = pick(registry.list(), 0)
+      const b = must((await svc.importOne({ ...rawSource, bookSourceName: 'B', bookSourceUrl: 'https://b-plan.com' })).sourceId, '导入回执的 sourceId')
       expect(svc.searchPlan().sourceIds.sort()).toEqual([a.id, b].sort())   // 两个启用源全参搜
       await svc.setEnabled(a.id, false)
       expect(svc.searchPlan().sourceIds).toEqual([b])                        // 停用即出参与集
     })
   it('searchPlan/聚合搜索参与集：非文本源不参搜（当前仅支持小说文本面；源留库不删不改启用态）', async () => {
     const { svc, registry } = await makeService((u) => (u.includes('/search') ? SEARCH_HTML('斗罗') : null))
-    const [a] = registry.list()
-    const bId = (await svc.importOne({ ...rawSource, bookSourceName: '漫画源', bookSourceUrl: 'https://manga.example.com' })).sourceId!
+    const a = pick(registry.list(), 0)
+    const bId = must((await svc.importOne({ ...rawSource, bookSourceName: '漫画源', bookSourceUrl: 'https://manga.example.com' })).sourceId, '导入回执的 sourceId')
     expect(svc.searchPlan().sourceIds.sort()).toEqual([a.id, bId].sort())    // 文本源照旧参搜
-    const b = registry.list().find((s) => s.id === bId)!
+    const b = must(registry.list().find((s) => s.id === bId), 'registry.list() 里 find 命中的那一项')
     await registry.edit(() => { b.type = 'image' })                         // 模拟存量非文本源（intake 拒非文本入库，只能注册表侧造）
     expect(svc.searchPlan().sourceIds).toEqual([a.id])                       // 参与集唯一判定 excludes 非文本
     await registry.edit(() => { b.type = 'unknown' })                        // 表外编码同档：读不懂不等于文本
@@ -193,15 +196,16 @@ describe('ReadingService', () => {
       u.includes('/search') ? SEARCH_HTML('斗罗') : null)
     const groups = await svc.search('斗罗')
     expect(groups).toHaveLength(1)
-    expect(groups[0].error).toBeUndefined()
-    expect(groups[0].hits[0]).toMatchObject({ title: '斗罗·斗罗', url: `${BASE}/book/1/` })
+    const group = pick(groups, 0)
+    expect(group.error).toBeUndefined()
+    expect(pick(group.hits, 0)).toMatchObject({ title: '斗罗·斗罗', url: `${BASE}/book/1/` })
 
     // 造一个会失败的源
     const raw2 = { ...rawSource, bookSourceName: 'B', bookSourceUrl: 'https://b.com', searchUrl: 'https://b.com/s?q={{key}}' }
     await svc.importOne(raw2)
     const g2 = await svc.search('斗罗')
     expect(g2).toHaveLength(2)
-    const bad = g2.find((g) => g.sourceName === 'B')!
+    const bad = must(g2.find((g) => g.sourceName === 'B'), 'g2 里 find 命中的那一项')
     expect(bad.error?.code).toBe('FetchError')
     expect(bad.hits).toEqual([])
   })
@@ -218,9 +222,9 @@ describe('ReadingService', () => {
       + '<a href="/book/1/9.html">最新章节</a></div></body></html>'
     const { svc } = await makeService((u) => (u.includes('/search') ? MULTI_A('斗罗') : null))
     await svc.importOne({ ...rawSource, ruleBookName: 'h3@text' })
-    const g = (await svc.search('斗罗')).find((x) => x.sourceName === 'S')!
+    const g = must((await svc.search('斗罗')).find((x) => x.sourceName === 'S'), '(await svc.search(\'斗罗\')) 里 find 命中的那一项')
     expect(g.error).toBeUndefined()
-    expect(g.hits[0]).toMatchObject({ title: '斗罗·斗罗', url: `${BASE}/book/1/` })
+    expect(pick(g.hits, 0)).toMatchObject({ title: '斗罗·斗罗', url: `${BASE}/book/1/` })
   })
 
   it('源实体字段 `bookSourceComment` 脚本可见（涩涩俱乐部把解密脚本存在那里）', async () => {
@@ -237,7 +241,7 @@ describe('ReadingService', () => {
       searchUrl: "@js:'https://cmt.example.com/search?q='+key+'&c='+source.bookSourceComment",
       bookSourceComment: 'COMMENTMARK',
     })
-    const g = (await svc.search('斗罗')).find((x) => x.sourceName === '带注释')!
+    const g = must((await svc.search('斗罗')).find((x) => x.sourceName === '带注释'), '(await svc.search(\'斗罗\')) 里 find 命中的那一项')
     expect(g.error).toBeUndefined()
     expect(seen).toContain('c=COMMENTMARK')
   })
@@ -252,15 +256,15 @@ describe('ReadingService', () => {
       ruleIntro: '0',            // 无 @ 无 $ 的单段：本仓解析期抛 UnsupportedRuleError
       ruleCoverUrl: '0', ruleLastChapter: '0',
     })
-    const soft = (await svc.search('斗罗')).find((g) => g.sourceName === '坏简介')!
+    const soft = must((await svc.search('斗罗')).find((g) => g.sourceName === '坏简介'), '(await svc.search(\'斗罗\')) 里 find 命中的那一项')
     expect(soft.error, '书目在场、这三个字段空：不许把整组判死').toBeUndefined()
-    expect(soft.hits[0]).toMatchObject({ title: '斗罗·斗罗', intro: null, coverUrl: null, lastChapterName: null })
+    expect(pick(soft.hits, 0)).toMatchObject({ title: '斗罗·斗罗', intro: null, coverUrl: null, lastChapterName: null })
 
     await svc.importOne({
       ...rawSource, bookSourceName: '坏作者', bookSourceUrl: 'https://bad-author.example.com',
       searchUrl: 'https://bad-author.example.com/search?q={{key}}', ruleAuthor: '0',
     })
-    const hard = (await svc.search('斗罗')).find((g) => g.sourceName === '坏作者')!
+    const hard = must((await svc.search('斗罗')).find((g) => g.sourceName === '坏作者'), '(await svc.search(\'斗罗\')) 里 find 命中的那一项')
     expect(hard.error?.code).toBeDefined()        // 作者裸奔：宁炸不猜的口径不变
     expect(hard.hits).toEqual([])
   })
@@ -270,7 +274,7 @@ describe('ReadingService', () => {
     // 空数组 = 未限定（搜全部启用源），不是「搜零个源」的零分组空结果
     const groups = await svc.search('斗罗', { sourceIds: [] })
     expect(groups).toHaveLength(1)
-    expect(groups[0].hits[0]).toMatchObject({ title: '斗罗·斗罗' })
+    expect(pick(pick(groups, 0).hits, 0)).toMatchObject({ title: '斗罗·斗罗' })
   })
 
   it('重定向：搜索按落地地址解析相对链接（浏览器语义，与目录/正文同口径）', async () => {
@@ -281,11 +285,11 @@ describe('ReadingService', () => {
       headers: new Headers({ 'content-type': 'text/html; charset=utf-8' }),
       arrayBuffer: async () => new TextEncoder().encode(landedHtml).buffer,
     } as unknown as Response)
-    const svc = trackService(await ReadingService.create({ dir, fetchImpl: fetchImpl as never }))
+    const svc = trackService(await ReadingService.create({ dir, fetchImpl: fetchImpl }))
     await svc.importOne(rawSource)
     const groups = await svc.search('斗罗')
     // 解析基准是 302 落地地址；拿请求地址当基准会少掉 /landed/ 前缀
-    expect(groups[0].hits[0].url).toBe('https://s.com/landed/book/1/')
+    expect(pick(pick(groups, 0).hits, 0).url).toBe('https://s.com/landed/book/1/')
   })
 
   it('getToc 两页跟 nextTocUrl 翻页闸合并，二次命中缓存零网络', async () => {
@@ -295,10 +299,10 @@ describe('ReadingService', () => {
       if (u.includes('/toc2.html')) { tocFetches++; return TOC2_HTML }
       return u.includes('/search') ? SEARCH_HTML('x') : null
     })
-    const src = registry.list()[0]
+    const src = pick(registry.list(), 0)
     const toc = await svc.getToc(src.id, `${BASE}/book/1/`)
     expect(toc.map((c) => c.name)).toEqual(['第一章', '第二章', '第三章'])
-    expect(toc[2].url).toBe(`${BASE}/c/3.html`)
+    expect(pick(toc, 2).url).toBe(`${BASE}/c/3.html`)
     const before = tocFetches
     await svc.getToc(src.id, `${BASE}/book/1/`)
     expect(tocFetches).toBe(before) // 缓存命中
@@ -313,7 +317,7 @@ describe('ReadingService', () => {
       if (u.includes('/toc2.html')) return TOC2_HTML
       return u.includes('/search') ? SEARCH_HTML('x') : null
     })
-    const src = registry.list()[0]
+    const src = pick(registry.list(), 0)
     const text = await svc.getChapter(src.id, `${BASE}/book/1/`, 0)
     expect(text).toBe('正文一\n第二段\n第三段\n尾段') // textNodes 逐文本节点分行；多页 join('\n')
     const before = contentFetches
@@ -338,7 +342,7 @@ describe('ReadingService', () => {
     const cache = new PageCache(dir)
     const jar = new CookieJar()
     const fetcher = createFetcher({
-      fetchImpl: route((u) => (u.includes('/search') ? SEARCH_HTML('斗罗') : null)) as never,
+      fetchImpl: route((u) => (u.includes('/search') ? SEARCH_HTML('斗罗') : null)),
       cookieJar: jar,
     })
     const svc = trackService(await ReadingService.from({ registry, shelf, cache, fetcher, cookieJar: jar }))
@@ -346,11 +350,12 @@ describe('ReadingService', () => {
     expect(fetcher.webview).toBeUndefined()
     await svc.importOne(rawSource)
     const groups = await svc.search('斗罗')
-    expect(groups[0].error).toBeUndefined()
-    expect(groups[0].hits[0].title).toContain('斗罗')
+    const group = pick(groups, 0)
+    expect(group.error).toBeUndefined()
+    expect(pick(group.hits, 0).title).toContain('斗罗')
     // 注入的 registry 与门面持有同一实例（部件收 private 后以行为证成：部件直改可见于门面读口）
-    await registry.edit((tx) => tx.setEnabled(registry.list()[0].id, false))
-    expect(registry.list()[0].enabled).toBe(false)
+    await registry.edit((tx) => tx.setEnabled(pick(registry.list(), 0).id, false))
+    expect(pick(registry.list(), 0).enabled).toBe(false)
   })
 
   it('静态头进入搜索/详情/目录/正文四面出站请求（源请求缝是唯一装配点）', async () => {
@@ -366,9 +371,9 @@ describe('ReadingService', () => {
       over: { header: '{"X-Dyn":"1"}' },
       onFetch: (url, headers) => seen.push({ url, headers }),
     })
-    const src = registry.list()[0]
+    const src = pick(registry.list(), 0)
     const groups = await svc.search('斗罗')
-    expect(groups[0].error).toBeUndefined()
+    expect(pick(groups, 0).error).toBeUndefined()
     await svc.getDetail(src.id, `${BASE}/book/1/`)
     expect((await svc.getToc(src.id, `${BASE}/book/1/`)).map((c) => c.name))
       .toEqual(['第一章', '第二章', '第三章'])
@@ -386,7 +391,7 @@ describe('ReadingService', () => {
     const registry = trackService(await SourceRegistry.load(dir))
     const shelf = trackService(await Shelf.load(dir))
     const jarA = new CookieJar()
-    const fetcher = createFetcher({ fetchImpl: (async () => new Response('')) as never, cookieJar: jarA })
+    const fetcher = createFetcher({ fetchImpl: (async () => new Response('')), cookieJar: jarA })
     await expect(ReadingService.from({
       registry, shelf, cache: new PageCache(dir), fetcher, cookieJar: new CookieJar(),
     })).rejects.toThrow(/同一张/)
@@ -396,7 +401,7 @@ describe('ReadingService', () => {
     const dir = await makeTempDir('novel-rd-')
     const registry = trackService(await SourceRegistry.load(dir))
     const shelf = trackService(await Shelf.load(dir))
-    const fetcher = createFetcher({ fetchImpl: (async () => new Response('')) as never })
+    const fetcher = createFetcher({ fetchImpl: (async () => new Response('')) })
     const jar = new CookieJar()
     trackService(await ReadingService.from({ registry, shelf, cache: new PageCache(dir), fetcher, cookieJar: jar }))
     expect(fetcher.cookieJar).toBeUndefined()
@@ -409,7 +414,7 @@ describe('ReadingService', () => {
     const jar = new CookieJar()
     jar.absorb(`${BASE}/`, ['sid=1; Path=/'])
     const fetcher = createFetcher({
-      fetchImpl: route((u) => (u.includes('/search') ? SEARCH_HTML('斗罗') : null)) as never,
+      fetchImpl: route((u) => (u.includes('/search') ? SEARCH_HTML('斗罗') : null)),
       cookieJar: jar,
     })
     const svc = trackService(await ReadingService.from({
@@ -422,7 +427,7 @@ describe('ReadingService', () => {
     })
     const groups = await svc.search('斗罗')
     // 源请求缝的 fetcherFor 暴露的是同一张 jar；两处各持一张时这里会 Miss（书名空 → 无书目）
-    expect(groups[0].hits[0]?.title).toBe('sid=1')
+    expect(pick(pick(groups, 0).hits, 0).title).toBe('sid=1')
   })
 
   it('importSource 数组逐条：坏条目不连坐，导入不探针（验证归批量验证）', async () => {
@@ -435,7 +440,7 @@ describe('ReadingService', () => {
       shelf,
       cache: new PageCache(dir),
       fetcher: createFetcher({
-        fetchImpl: route((u) => u.includes('/search') ? SEARCH_HTML('x') : null) as never,
+        fetchImpl: route((u) => u.includes('/search') ? SEARCH_HTML('x') : null),
         cookieJar: jar,
       }),
       cookieJar: jar,
@@ -446,11 +451,14 @@ describe('ReadingService', () => {
       { notASource: true },
     ])
     expect(out).toHaveLength(3)
-    expect(out[0].ok).toBe(true)
-    expect(out[0].probe).toBeNull()                        // 导入不含探针（钉死）
-    expect(out[1].ok).toBe(true)                           // 坏源也导入成功（缺搜索规则不影响入库）
-    expect(out[1].probe).toBeNull()
-    expect(out[2].ok).toBe(false)                          // 缺必填
+    const first = pick(out, 0)
+    const second = pick(out, 1)
+    const third = pick(out, 2)
+    expect(first.ok).toBe(true)
+    expect(first.probe).toBeNull()                        // 导入不含探针（钉死）
+    expect(second.ok).toBe(true)                           // 坏源也导入成功（缺搜索规则不影响入库）
+    expect(second.probe).toBeNull()
+    expect(third.ok).toBe(false)                          // 缺必填
     expect(registry.list()).toHaveLength(2)
     expect(registry.list().every((s) => s.status === 'unverified')).toBe(true)
   })
@@ -466,7 +474,7 @@ describe('ReadingService', () => {
       ruleDetailName: 'tag.h1@text',        // 详情上下文：h1
       searchUrl: undefined,
     })
-    const src = registry.list().at(-1)!   // makeService 已导过 rawSource，取最后导入的
+    const src = must(registry.list().at(-1), 'registry.list() 的最后一项')   // makeService 已导过 rawSource，取最后导入的
     const detail = await svc.getDetail(src.id, `${BASE}/book/1/`)
     expect(detail.title).toBe('详情标题')   // 走 ruleDetailName
   })
@@ -481,7 +489,7 @@ describe('ReadingService', () => {
       searchUrl: undefined, ruleDetailName: 'tag.h1@text',
       ruleDetailIntro: '书名：{{book.name}}｜标签：{{book.kind}}',
     })
-    const src = registry.list().at(-1)!
+    const src = must(registry.list().at(-1), 'registry.list() 的最后一项')
     svc.shelfAdd(`${BASE}/book/1/`, { sourceId: src.id, title: '镜像书名', kind: '都市' })
     const detail = await svc.getDetail(src.id, `${BASE}/book/1/`)
     expect(detail.intro).toBe('书名：镜像书名｜标签：都市')
@@ -492,9 +500,9 @@ describe('ReadingService', () => {
       dir: await makeTempDir('novel-rd-'),
       fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
         methods.push(init?.method ?? 'GET')
-        const u = String(input)
+        const u = requestUrlOf(input)
         return new Response(u.includes('/search') ? SEARCH_HTML('斗罗') : '', { headers: { 'content-type': 'text/html; charset=utf-8' } })
-      }) as any,
+      }),
     }))
     await svc.importOne({
       ...rawSource,
@@ -502,8 +510,8 @@ describe('ReadingService', () => {
     })
     const groups = await svc.search('斗罗')
     expect(methods).not.toContain('GET')                        // 探针与搜索全部走 POST
-    expect(groups[0].error).toBeUndefined()
-    expect(groups[0].hits).toHaveLength(1)
+    expect(pick(groups, 0).error).toBeUndefined()
+    expect(pick(groups, 0).hits).toHaveLength(1)
   })
 })
 
@@ -530,9 +538,9 @@ describe('书 URL 承载请求选项（,{option} 随身份存取）', () => {
     const { svc } = await makeService((u) => (u.includes('/search') ? SEARCH_HTML_OPT : null))
     await svc.importOne(API_RAW)
     const groups = await svc.search('斗破')
-    const g = groups.find((x) => x.sourceName === 'API源')!
+    const g = must(groups.find((x) => x.sourceName === 'API源'), 'groups 里 find 命中的那一项')
     expect(g.error).toBeUndefined()
-    expect(g.hits[0].url).toBe(API_BOOK)   // URL 即请求规格：选项不剥离，book_id 随 body 一起保住
+    expect(pick(g.hits, 0).url).toBe(API_BOOK)   // URL 即请求规格：选项不剥离，book_id 随 body 一起保住
   })
 
   it('getDetail 按 bookKey 的 ,{option} 真发 POST 并带 body（此前 fetchText 裸抓带选项 URL 必炸）', async () => {
@@ -548,7 +556,7 @@ describe('书 URL 承载请求选项（,{option} 随身份存取）', () => {
       fetcher: createFetcher({
         cookieJar: jar,
         fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
-          const u = String(input)
+          const u = requestUrlOf(input)
           calls.push({ url: u, method: init?.method ?? 'GET', ...(typeof init?.body === 'string' ? { body: init.body } : {}) })
           if (u.includes('/search')) {
             return new Response(SEARCH_HTML_OPT, { headers: { 'content-type': 'text/html; charset=utf-8' } })
@@ -558,12 +566,12 @@ describe('书 URL 承载请求选项（,{option} 随身份存取）', () => {
               { headers: { 'content-type': 'application/json' } })
           }
           return new Response('', { status: 404 })
-        }) as never,
+        }),
       }),
       cookieJar: jar,
     }))
     await svc.importOne(API_RAW)
-    const src = registry.list().find((s) => s.name === 'API源')!
+    const src = must(registry.list().find((s) => s.name === 'API源'), 'registry.list() 里 find 命中的那一项')
     const d = await svc.getDetail(src.id, API_BOOK)
     expect(calls.some((c) =>
       c.url === 'https://api.example.com/fiction/book/getDetail' && c.method === 'POST' && c.body === 'app=x&book_id=42',
@@ -615,7 +623,7 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
       fetcher: createFetcher({
         cookieJar: jar,
         fetchImpl: (async (input: RequestInfo | URL) => {
-          const u = String(input)
+          const u = requestUrlOf(input)
           calls.push(u)
           const json = (body: string) => new Response(body, { headers: { 'content-type': 'application/json' } })
           if (u.includes('/s?')) return new Response(SEARCH_QQ, { headers: { 'content-type': 'text/html; charset=utf-8' } })
@@ -626,7 +634,7 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
               { headers: { 'content-type': 'text/html; charset=utf-8' } })
           }
           return new Response('', { status: 404 })
-        }) as never,
+        }),
       }),
       cookieJar: jar,
     }))
@@ -641,7 +649,7 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
 
   it('getDetail 经 ruleBookInfo.init 换上下文：$.resourceName/$.author/$.summary 在 init 子 JSON 上命中', async () => {
     const { svc, registry } = await makeQq(DETAIL_JSON)
-    const src = registry.list().find((s) => s.name === '正版源')!
+    const src = must(registry.list().find((s) => s.name === '正版源'), 'registry.list() 里 find 命中的那一项')
     const d = await svc.getDetail(src.id, DETAIL_URL)
     expect(d.title).toBe('斗破苍穹')
     expect(d.author).toBe('天蚕土豆')
@@ -663,7 +671,7 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
       fetcher: createFetcher({
         cookieJar: jar,
         fetchImpl: (async (input: RequestInfo | URL) => {
-          const u = String(input)
+          const u = requestUrlOf(input)
           if (u === 'https://once.example.com/init-hit') {
             initHits.push(u)
             return new Response('ok')
@@ -672,7 +680,7 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
             return new Response('<html><body>详情页</body></html>', { headers: { 'content-type': 'text/html; charset=utf-8' } })
           }
           return new Response('', { status: 404 })
-        }) as never,
+        }),
       }),
       cookieJar: jar,
     }))
@@ -686,7 +694,7 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
       },
       ruleToc: { chapterList: '$.rows', chapterName: '$.n', chapterUrl: '$.u' },
     })
-    const src = registry.list().find((s) => s.name === '单次 init 源')!
+    const src = must(registry.list().find((s) => s.name === '单次 init 源'), 'registry.list() 里 find 命中的那一项')
     const d = await svc.getDetail(src.id, DETAIL)
     expect(d).toMatchObject({ title: '单次', author: '甲', tocUrl: 'https://once.example.com/toc?b=one' })
     expect(initHits).toHaveLength(1)
@@ -724,12 +732,12 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
       fetcher: createFetcher({
         cookieJar: jar,
         fetchImpl: (async (input: RequestInfo | URL) => {
-          const u = String(input)
+          const u = requestUrlOf(input)
           if (u === META_URL || u === 'https://meta.example.com/book/77') {
             return new Response(META_PAGE, { headers: { 'content-type': 'text/html; charset=utf-8' } })
           }
           return new Response('', { status: 404 })
-        }) as never,
+        }),
       }),
       cookieJar: jar,
     }))
@@ -739,7 +747,7 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
 
   it('纯 @put 的 ruleDetailInit：只设变量、不换根——详情四字段经 @get:{k} 全部取到', async () => {
     const { svc, registry } = await makeMeta()
-    const src = registry.list().find((s) => s.name === '元信息源')!
+    const src = must(registry.list().find((s) => s.name === '元信息源'), 'registry.list() 里 find 命中的那一项')
     const d = await svc.getDetail(src.id, META_URL)
     expect(d).toMatchObject({
       title: '武动乾坤', author: '天蚕土豆', intro: '少年林动，一夜蜕变', lastChapterName: '第1章 蜕变',
@@ -748,7 +756,7 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
 
   it('ruleDetailInit 非空但零命中 → RuleEvalError 点名 ruleDetailInit（宁炸：不拿整页冒充上下文）', async () => {
     const { svc, registry } = await makeQq(JSON.stringify({ ret: 0, data: {} }))   // init 路径不存在
-    const src = registry.list().find((s) => s.name === '正版源')!
+    const src = must(registry.list().find((s) => s.name === '正版源'), 'registry.list() 里 find 命中的那一项')
     await expect(svc.getDetail(src.id, DETAIL_URL)).rejects.toThrowError(/ruleDetailInit/)
   })
 
@@ -783,7 +791,7 @@ describe('js 沙箱预算走配置出口（jsTimeoutMs）', () => {
       fetcher: createFetcher({
         cookieJar: jar,
         fetchImpl: (async (input: RequestInfo | URL) => {
-          const u = String(input)
+          const u = requestUrlOf(input)
           if (u.includes('/s?')) {
             return new Response('<html><body><div class="b"><a href="/book/1/">斗罗</a><span>唐家</span></div></body></html>',
               { headers: { 'content-type': 'text/html; charset=utf-8' } })
@@ -797,7 +805,7 @@ describe('js 沙箱预算走配置出口（jsTimeoutMs）', () => {
               { headers: { 'content-type': 'text/html; charset=utf-8' } })
           }
           return new Response('', { status: 404 })
-        }) as never,
+        }),
       }),
       cookieJar: jar,
       ...(opts.jsTimeoutMs === undefined ? {} : { jsTimeoutMs: opts.jsTimeoutMs }),
@@ -818,7 +826,7 @@ describe('js 沙箱预算走配置出口（jsTimeoutMs）', () => {
       jsTimeoutMs: 300,
       ruleTocUrl: slowJs(800, 'https://js.example.com/toc'),
     })
-    const src = registry.list().find((s) => s.name === 'JS源')!
+    const src = must(registry.list().find((s) => s.name === 'JS源'), 'registry.list() 里 find 命中的那一项')
     await expect(svc.getToc(src.id, 'https://js.example.com/book/1'))
       .rejects.toThrowError(/脚本超时（>300ms）/)
   })
@@ -827,7 +835,7 @@ describe('js 沙箱预算走配置出口（jsTimeoutMs）', () => {
     const { svc, registry } = await makeJsService({
       ruleTocUrl: slowJs(2400, 'https://js.example.com/toc'),
     })
-    const src = registry.list().find((s) => s.name === 'JS源')!
+    const src = must(registry.list().find((s) => s.name === 'JS源'), 'registry.list() 里 find 命中的那一项')
     const toc = await svc.getToc(src.id, 'https://js.example.com/book/1')
     expect(toc.map((c) => c.name)).toEqual(['第一章'])
   }, 20_000)
@@ -838,8 +846,8 @@ describe('js 沙箱预算走配置出口（jsTimeoutMs）', () => {
       searchUrl: `@js: var t = Date.now(); while (Date.now() - t < 800) {}; 'https://js.example.com/s?q=' + key`,
     })
     const groups = await svc.search('斗罗')
-    expect(groups[0].error?.code).toBe('JsSandboxError')
-    expect(groups[0].error?.message).toMatch(/脚本超时（>300ms）/)
+    expect(pick(groups, 0).error?.code).toBe('JsSandboxError')
+    expect(pick(groups, 0).error?.message).toMatch(/脚本超时（>300ms）/)
   })
 
   // 回归钉子：搜索面与探针面同口径——门面 probe 漏传 jsTimeoutMs 会让同一个源在导入期探针与
@@ -849,7 +857,7 @@ describe('js 沙箱预算走配置出口（jsTimeoutMs）', () => {
       jsTimeoutMs: 300,
       searchUrl: `@js: var t = Date.now(); while (Date.now() - t < 800) {}; 'https://js.example.com/s?q=' + key`,
     })
-    const src = registry.list().find((s) => s.name === 'JS源')!
+    const src = must(registry.list().find((s) => s.name === 'JS源'), 'registry.list() 里 find 命中的那一项')
     const r = await svc.probe(src.id)
     expect(r.ok).toBe(false)
     expect(r.error?.code).toBe('JsSandboxError')
@@ -867,7 +875,7 @@ describe('同步导入走 intake 入库规则（此前工具面导入无去重�
       registry,
       shelf: await Shelf.load(dir),
       cache: new PageCache(dir),
-      fetcher: createFetcher({ fetchImpl: route(() => null) as never, cookieJar: jar }),
+      fetcher: createFetcher({ fetchImpl: route(() => null), cookieJar: jar }),
       cookieJar: jar,
     }))
     return { svc, registry }
@@ -876,11 +884,11 @@ describe('同步导入走 intake 入库规则（此前工具面导入无去重�
   it('importOne 同址二次导入（已有 verified）：dupSkipped=true，库不增，sourceId=已有可用条目', async () => {
     const { svc, registry } = await mk()
     const first = await svc.importOne(rawSource)
-    await registry.edit((tx) => tx.setStatus(first.sourceId!, 'verified', undefined, 1))
+    await registry.edit((tx) => tx.setStatus(must(first.sourceId, 'first 的 sourceId'), 'verified', undefined, 1))
     const second = await svc.importOne({ ...rawSource, bookSourceName: 'S 改名重导' })
     expect(second).toMatchObject({ ok: true, dupSkipped: true, sourceId: first.sourceId })
     expect(registry.list()).toHaveLength(1)
-    expect(registry.list()[0].name).toBe('S')             // 已有可用者优先保留（入库规则）
+    expect(pick(registry.list(), 0).name).toBe('S')             // 已有可用者优先保留（入库规则）
   })
 
   it('同址已有 unverified → replaced（复用 id）——与任务路径同口径', async () => {
@@ -889,7 +897,7 @@ describe('同步导入走 intake 入库规则（此前工具面导入无去重�
     const second = await svc.importOne({ ...rawSource, bookSourceName: 'S2', bookSourceUrl: `${BASE}/` })
     expect(second.ok).toBe(true)
     expect(registry.list()).toHaveLength(1)
-    expect(registry.list()[0]).toMatchObject({ id: first.sourceId, name: 'S2' })
+    expect(pick(registry.list(), 0)).toMatchObject({ id: first.sourceId, name: 'S2' })
   })
 
   it('importSource 数组批内同址 → 留首条，后者 dupSkipped（批=一个 intake 实例）', async () => {
@@ -899,9 +907,9 @@ describe('同步导入走 intake 入库规则（此前工具面导入无去重�
       { ...rawSource, bookSourceName: 'S 重复' },
     ])
     expect(out.map((o) => o.ok)).toEqual([true, true])
-    expect(out[1].dupSkipped).toBe(true)
+    expect(pick(out, 1).dupSkipped).toBe(true)
     expect(registry.list()).toHaveLength(1)
-    expect(registry.list()[0].name).toBe('S')
+    expect(pick(registry.list(), 0).name).toBe('S')
   })
 })
 
@@ -919,8 +927,8 @@ describe('求值上下文组装单点（runLogin/tocUrl 此前漏 jsLib，潜伏
       loginUrl: 'return buildCookie()',   // runLogin 统一加 @js: 前缀;evaluate 路径是函数体形态,完成值需显式 return
       jsLib: 'function buildCookie() { return "sid=abc; uid=7" }',
     })
-    expect(await svc.login(out.sourceId!)).toEqual({ kind: 'authed' })   // 门面出口是 outcome（旧口 runLogin 回 SourceAuth|null）
-    expect(registry.get(out.sourceId!)?.auth?.cookies).toEqual({ sid: 'abc', uid: '7' })
+    expect(await svc.login(must(out.sourceId, 'out 的 sourceId'))).toEqual({ kind: 'authed' })   // 门面出口是 outcome（旧口 runLogin 回 SourceAuth|null）
+    expect(registry.get(must(out.sourceId, 'out 的 sourceId'))?.auth?.cookies).toEqual({ sid: 'abc', uid: '7' })
   })
 
   it('runLogin 认 <js>…</js> 登录脚本（不再套出 @js:<js> 语法错）', async () => {
@@ -929,8 +937,8 @@ describe('求值上下文组装单点（runLogin/tocUrl 此前漏 jsLib，潜伏
       ...rawSource, bookSourceUrl: 'https://login-js-tag.com',
       loginUrl: '<js>return "sid=tag"</js>',
     })
-    expect(await svc.login(out.sourceId!)).toEqual({ kind: 'authed' })
-    expect(registry.get(out.sourceId!)?.auth?.cookies).toEqual({ sid: 'tag' })
+    expect(await svc.login(must(out.sourceId, 'out 的 sourceId'))).toEqual({ kind: 'authed' })
+    expect(registry.get(must(out.sourceId, 'out 的 sourceId'))?.auth?.cookies).toEqual({ sid: 'tag' })
   })
 
   it('runLogin 写 cookie 时保留已保存的 loginInfo / headers', async () => {
@@ -939,9 +947,9 @@ describe('求值上下文组装单点（runLogin/tocUrl 此前漏 jsLib，潜伏
       ...rawSource, bookSourceUrl: 'https://login-keep.com',
       loginUrl: 'return "sid=abc"',
     })
-    await svc.saveAuth(out.sourceId!, {}, { 'X-Auth': '1' }, { user: 'alice' })
-    expect(await svc.login(out.sourceId!)).toEqual({ kind: 'authed' })
-    const auth = registry.get(out.sourceId!)?.auth
+    await svc.saveAuth(must(out.sourceId, 'out 的 sourceId'), {}, { 'X-Auth': '1' }, { user: 'alice' })
+    expect(await svc.login(must(out.sourceId, 'out 的 sourceId'))).toEqual({ kind: 'authed' })
+    const auth = registry.get(must(out.sourceId, 'out 的 sourceId'))?.auth
     expect(auth?.cookies).toEqual({ sid: 'abc' })
     expect(auth?.headers).toEqual({ 'X-Auth': '1' })
     expect(auth?.loginInfo).toEqual({ user: 'alice' })
@@ -953,9 +961,9 @@ describe('求值上下文组装单点（runLogin/tocUrl 此前漏 jsLib，潜伏
       ...rawSource, bookSourceUrl: 'https://login-empty.com',
       loginUrl: 'return ""',
     })
-    expect(await svc.login(out.sourceId!)).toEqual({ kind: 'empty-output' })   // 旧口回 null；翻 422 的翻译在 authRoute
-    expect(registry.get(out.sourceId!)?.auth).toBeUndefined()
-    expect(svc.listPublicSources().find((s) => s.id === out.sourceId!)?.hasAuth).toBe(false)
+    expect(await svc.login(must(out.sourceId, 'out 的 sourceId'))).toEqual({ kind: 'empty-output' })   // 旧口回 null；翻 422 的翻译在 authRoute
+    expect(registry.get(must(out.sourceId, 'out 的 sourceId'))?.auth).toBeUndefined()
+    expect(svc.listPublicSources().find((s) => s.id === must(out.sourceId, 'out 的 sourceId'))?.hasAuth).toBe(false)
   })
 
   it('runLoginAction：外链回传；JS 动作以 loginInfo 为 result 执行', async () => {
@@ -967,22 +975,22 @@ describe('求值上下文组装单点（runLogin/tocUrl 此前漏 jsLib，潜伏
         { name: '执行', type: 'button', action: 'throw new Error("user=" + result.get("user"))' },
       ]),
     })
-    expect(await svc.runLoginAction(out.sourceId!, '打开')).toEqual({ mode: 'external', url: 'https://login.example/x' })
-    await svc.saveLoginInfo(out.sourceId!, { user: 'alice' })
-    await expect(svc.runLoginAction(out.sourceId!, '执行')).rejects.toThrow('user=alice')
+    expect(await svc.runLoginAction(must(out.sourceId, 'out 的 sourceId'), '打开')).toEqual({ mode: 'external', url: 'https://login.example/x' })
+    await svc.saveLoginInfo(must(out.sourceId, 'out 的 sourceId'), { user: 'alice' })
+    await expect(svc.runLoginAction(must(out.sourceId, 'out 的 sourceId'), '执行')).rejects.toThrow('user=alice')
   })
 
   it('tocUrl 规则求值同走完整上下文（jsLib 可见——此前裸 {html,baseUrl} 连 source/fetch 都没有）', async () => {
     const svc = trackService(await ReadingService.create({
       dir: await makeTempDir('novel-rd-'),
-      fetchImpl: route((u) => (u.includes('/book/1/') ? '<html><body><h1>详情</h1></body></html>' : null)) as any,
+      fetchImpl: route((u) => (u.includes('/book/1/') ? '<html><body><h1>详情</h1></body></html>' : null)),
     }))
     const out = await svc.importOne({
       ...rawSource, bookSourceUrl: 'https://tocjs.com',
       ruleTocUrl: '@js: return libToc()',
       jsLib: 'function libToc() { return "https://toc.example.com/list" }',
     })
-    const detail = await svc.getDetail(out.sourceId!, 'https://tocjs.com/book/1/')
+    const detail = await svc.getDetail(must(out.sourceId, 'out 的 sourceId'), 'https://tocjs.com/book/1/')
     expect(detail.tocUrl).toBe('https://toc.example.com/list')
   })
 })
@@ -995,8 +1003,8 @@ describe('login(id) outcome（门内串 requireSource→形态判别→执行；
     const out = await svc.importOne({
       ...rawSource, bookSourceUrl: 'https://login-a.com', loginUrl: 'return "sid=abc; uid=7"',
     })
-    expect(await svc.login(out.sourceId!)).toEqual({ kind: 'authed' })
-    const auth = registry.get(out.sourceId!)?.auth
+    expect(await svc.login(must(out.sourceId, 'out 的 sourceId'))).toEqual({ kind: 'authed' })
+    const auth = registry.get(must(out.sourceId, 'out 的 sourceId'))?.auth
     expect(auth?.cookies).toEqual({ sid: 'abc', uid: '7' })
     expect(auth?.acquiredAt).toBeTypeOf('number')
   })
@@ -1006,14 +1014,14 @@ describe('login(id) outcome（门内串 requireSource→形态判别→执行；
     const out = await svc.importOne({
       ...rawSource, bookSourceUrl: 'https://login-b.com', loginUrl: 'return ""',
     })
-    expect(await svc.login(out.sourceId!)).toEqual({ kind: 'empty-output' })
-    expect(registry.get(out.sourceId!)?.auth).toBeUndefined()
+    expect(await svc.login(must(out.sourceId, 'out 的 sourceId'))).toEqual({ kind: 'empty-output' })
+    expect(registry.get(must(out.sourceId, 'out 的 sourceId'))?.auth).toBeUndefined()
   })
 
   it('login 未声明 loginUrl → {kind:"no-login-url"}（路由翻 400，不是 500）', async () => {
     const { svc } = await mk()
     const out = await svc.importOne({ ...rawSource, bookSourceUrl: 'https://login-c.com' })
-    expect(await svc.login(out.sourceId!)).toEqual({ kind: 'no-login-url' })
+    expect(await svc.login(must(out.sourceId, 'out 的 sourceId'))).toEqual({ kind: 'no-login-url' })
   })
 
   it('login 未知 id → 抛 SourceNotFoundError（门内 requireSource，路由不再预检——classify 免费拿 404）', async () => {
@@ -1026,9 +1034,9 @@ describe('login(id) outcome（门内串 requireSource→形态判别→执行；
     const out = await svc.importOne({
       ...rawSource, bookSourceUrl: 'https://login-d.com', loginUrl: 'https://login.com/x',
     })
-    expect(await svc.login(out.sourceId!)).toEqual({ kind: 'manual', loginUrl: 'https://login.com/x' })
-    expect(registry.get(out.sourceId!)?.auth).toBeUndefined()   // 不执行也不写登录态
-    expect(svc.listPublicSources().find((s) => s.id === out.sourceId!)?.hasAuth).toBe(false)
+    expect(await svc.login(must(out.sourceId, 'out 的 sourceId'))).toEqual({ kind: 'manual', loginUrl: 'https://login.com/x' })
+    expect(registry.get(must(out.sourceId, 'out 的 sourceId'))?.auth).toBeUndefined()   // 不执行也不写登录态
+    expect(svc.listPublicSources().find((s) => s.id === must(out.sourceId, 'out 的 sourceId'))?.hasAuth).toBe(false)
   })
 })
 
@@ -1048,7 +1056,7 @@ describe('exportRange outcome（区间判据归门面：缺省、裁剪与两条
 
   it('正常范围 → plan：from/to/totalInRange 保形，流与 exportBook 同形（BOM 开头 + 《书名》· 章名）', async () => {
     const { svc, registry } = await serviceOf(TOC5_HTML)
-    const out = await svc.exportRange(registry.list()[0].id, BOOK, 2, 4, { title: '测试书', delayMs: 1, signal: signal() })
+    const out = await svc.exportRange(pick(registry.list(), 0).id, BOOK, 2, 4, { title: '测试书', delayMs: 1, signal: signal() })
     if (out.kind !== 'plan') throw new Error(`期望 plan，收到 ${out.kind}`)
     expect([out.plan.from, out.plan.to, out.plan.totalInRange]).toEqual([2, 4, 3])
     const chunks: string[] = []
@@ -1063,22 +1071,22 @@ describe('exportRange outcome（区间判据归门面：缺省、裁剪与两条
 
   it('空目录 → {kind:"empty-toc"}（路由翻 422 EmptyToc）', async () => {
     const { svc, registry } = await serviceOf('<html><body><p>无章节</p></body></html>')
-    expect(await svc.exportRange(registry.list()[0].id, BOOK, null, null, { title: 't', delayMs: 1, signal: signal() }))
+    expect(await svc.exportRange(pick(registry.list(), 0).id, BOOK, null, null, { title: 't', delayMs: 1, signal: signal() }))
       .toEqual({ kind: 'empty-toc' })
   })
 
   it('裁剪后倒置 → {kind:"bad-range", from, to}（交回裁剪后的数，路由拿去做 422 文案）', async () => {
     const { svc, registry } = await serviceOf(TOC5_HTML)
-    expect(await svc.exportRange(registry.list()[0].id, BOOK, 4, 2, { title: 't', delayMs: 1, signal: signal() }))
+    expect(await svc.exportRange(pick(registry.list(), 0).id, BOOK, 4, 2, { title: 't', delayMs: 1, signal: signal() }))
       .toEqual({ kind: 'bad-range', from: 4, to: 2 })
     // 9 越界裁到 5 后仍倒置：结局必须带裁剪后的数——4/2 那次裁剪是恒等，抓不到把原始数交回调用的回归
-    expect(await svc.exportRange(registry.list()[0].id, BOOK, 9, 2, { title: 't', delayMs: 1, signal: signal() }))
+    expect(await svc.exportRange(pick(registry.list(), 0).id, BOOK, 9, 2, { title: 't', delayMs: 1, signal: signal() }))
       .toEqual({ kind: 'bad-range', from: 5, to: 2 })
   })
 
   it('越界与缺席都裁进 [1, 目录长]：from=-5&to=99 → 1..5；两端缺席 → 全本', async () => {
     const { svc, registry } = await serviceOf(TOC5_HTML)
-    const id = registry.list()[0].id
+    const id = pick(registry.list(), 0).id
     const clipped = await svc.exportRange(id, BOOK, -5, 99, { title: 't', delayMs: 1, signal: signal() })
     if (clipped.kind !== 'plan') throw new Error(`期望 plan，收到 ${clipped.kind}`)
     expect([clipped.plan.from, clipped.plan.to, clipped.plan.totalInRange]).toEqual([1, 5, 5])
@@ -1093,11 +1101,11 @@ describe('门面 probe 与搜索同耐心', () => {
     const svc = trackService(await ReadingService.create({
       dir: await makeTempDir('novel-rd-'),
       searchTimeoutMs: 50,
-      fetchImpl: (() => new Promise<Response>(() => { /* 永不返回 */ })) as never,
+      fetchImpl: (() => new Promise<Response>(() => { /* 永不返回 */ })),
     }))
     const out = await svc.importOne({ ...rawSource })
     const t0 = Date.now()
-    const r = await svc.probe(out.sourceId!)
+    const r = await svc.probe(must(out.sourceId, 'out 的 sourceId'))
     expect(Date.now() - t0).toBeLessThan(1500)
     expect(r.ok).toBe(false)
     expect(r.error?.code).toBe('FetchError')
@@ -1107,7 +1115,7 @@ describe('门面 probe 与搜索同耐心', () => {
 describe('门面直测（invariant 与 loginPlan 不再只穿 HTTP 测）', () => {
   const mk = async (): Promise<ReadingService> => trackService(await ReadingService.create({
     dir: await makeTempDir('novel-rd-'),
-    fetchImpl: route(() => null) as any,
+    fetchImpl: route(() => null),
   }))
 
   it('login() 三分支（URL / JS / 未声明）→ manual / authed / no-login-url；不存在 → SourceNotFoundError', async () => {
@@ -1117,9 +1125,9 @@ describe('门面直测（invariant 与 loginPlan 不再只穿 HTTP 测）', () =
     const none = await svc.importOne({ ...rawSource, bookSourceUrl: 'https://n.com' })
     // loginPlan 降为门内判别构件（三分支语义不变）；门面出口经 login() 看到的是 outcome——
     // 旧口的 null → kind:"no-login-url"（400 的翻译在 authRoute），SourceNotFoundError 原样穿门
-    expect(await svc.login(manual.sourceId!)).toEqual({ kind: 'manual', loginUrl: 'https://login.com/x' })
-    expect(await svc.login(js.sourceId!)).toEqual({ kind: 'authed' })
-    expect(await svc.login(none.sourceId!)).toEqual({ kind: 'no-login-url' })
+    expect(await svc.login(must(manual.sourceId, 'manual 的 sourceId'))).toEqual({ kind: 'manual', loginUrl: 'https://login.com/x' })
+    expect(await svc.login(must(js.sourceId, 'js 的 sourceId'))).toEqual({ kind: 'authed' })
+    expect(await svc.login(must(none.sourceId, 'none 的 sourceId'))).toEqual({ kind: 'no-login-url' })
     await expect(svc.login('nope')).rejects.toThrow(/源不存在/)
   })
 
@@ -1170,7 +1178,7 @@ describe('门面直测（invariant 与 loginPlan 不再只穿 HTTP 测）', () =
   it('shelfList 来源投影：源名实时 join——源删了投影跟着变 null，本地书恒 null', async () => {
     const svc = await mk()
     const src = await svc.importOne(rawSource)                       // bookSourceName: 'S'
-    svc.shelfAdd('k1', { sourceId: src.sourceId!, title: 'T' })
+    svc.shelfAdd('k1', { sourceId: must(src.sourceId, 'src 的 sourceId'), title: 'T' })
     svc.shelfAdd('k2', { sourceId: 'no-such-source', title: 'U' })   // 已被删的源
     const local = await svc.localImport(Buffer.from('第1章 A\n内容', 'utf8'), 'x.txt')
     const nameOf = (k: string): string | null | undefined => svc.shelfList().find((b) => b.bookKey === k)?.sourceName
@@ -1178,7 +1186,7 @@ describe('门面直测（invariant 与 loginPlan 不再只穿 HTTP 测）', () =
     expect(nameOf('k2')).toBeNull()
     expect(nameOf(local.bookKey)).toBeNull()
     // 实时 join 不是快照：源一删，同一本书读面投影即刻变 null
-    await svc.removeSource(src.sourceId!)
+    await svc.removeSource(must(src.sourceId, 'src 的 sourceId'))
     expect(nameOf('k1')).toBeNull()
   })
 })
@@ -1186,7 +1194,7 @@ describe('门面直测（invariant 与 loginPlan 不再只穿 HTTP 测）', () =
 describe('本地 EPUB 门面：导入回执、图文读取、导航与资源', () => {
   const mk = async (): Promise<{ svc: ReadingService; dir: string }> => {
     const dir = await makeTempDir('novel-rde-')
-    return { svc: trackService(await ReadingService.create({ dir, fetchImpl: route(() => null) as any })), dir }
+    return { svc: trackService(await ReadingService.create({ dir, fetchImpl: route(() => null) })), dir }
   }
 
   it('图文读取与现有文字读取共用内容', async () => {
@@ -1318,14 +1326,14 @@ describe('后台搜索任务：增量出口只此一处（不许出现第二个�
     const slow = new Promise<void>((r) => { releaseSlow = r })
     const plain = route(() => SEARCH_HTML('斗罗'))
     const fetchImpl = async (input: RequestInfo | URL): Promise<Response> => {
-      const u = String(input)
+      const u = requestUrlOf(input)
       if (arm && u.includes('b-late.com')) await slow
       return plain(u)
     }
     const jar = new CookieJar()
     const svc = trackService(await ReadingService.from({
       registry, shelf, cache: new PageCache(dir),
-      fetcher: createFetcher({ fetchImpl: fetchImpl as never, cookieJar: jar }),
+      fetcher: createFetcher({ fetchImpl: fetchImpl, cookieJar: jar }),
       cookieJar: jar,
     }))
     await svc.importOne(rawSource)
@@ -1334,10 +1342,10 @@ describe('后台搜索任务：增量出口只此一处（不许出现第二个�
     arm = true
     svc.startSearchJob('斗罗')
     await new Promise((r) => setTimeout(r, 30))
-    expect(svc.searchJobSnapshot(0)!.added.map((g) => g.sourceName)).toEqual(['S'])   // 增量：慢源未回，快源已交付
+    expect(must(svc.searchJobSnapshot(0), '搜索轮次快照').added.map((g) => g.sourceName)).toEqual(['S'])   // 增量：慢源未回，快源已交付
     releaseSlow()
     await settleSearchJob(svc)
-    const snap = svc.searchJobSnapshot(0)!
+    const snap = must(svc.searchJobSnapshot(0), '搜索轮次快照')
     expect(snap.phase).toBe('done')
     expect(snap.added.map((g) => g.sourceName).sort()).toEqual(order.slice().sort())  // 两条都收齐
     // 一次性读面与后台任务同集（同一份批循环的两个消费方）；返回序 = 参搜源序
@@ -1350,7 +1358,7 @@ describe('后台搜索任务：增量出口只此一处（不许出现第二个�
     const { svc } = await makeService((u) => (u.includes('/search') ? SEARCH_HTML('斗罗') : null))
     svc.startSearchJob('斗罗')
     await settleSearchJob(svc)
-    const snap = svc.searchJobSnapshot(0)!
+    const snap = must(svc.searchJobSnapshot(0), '搜索轮次快照')
     expect(snap.phase).toBe('done')
     expect((await svc.search('斗罗')).map((g) => g.sourceName).sort())
       .toEqual(snap.added.map((g) => g.sourceName).sort())

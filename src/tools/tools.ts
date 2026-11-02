@@ -28,6 +28,13 @@ const requireArgs = (action: string, present: object, needs: readonly string[]):
   if (missing.length > 0) throw new Error(`dshnovel_${action} 缺少参数：${missing.join('、')}`)
 }
 
+/** 必填实参取用：`requireArgs` 已按行声明的 `needs` 逐项验过（缺则抛），这里只把「刚验过」这件事
+ *  写进类型面——取不到是不可能状态，仍按同一条错误通道炸，不静默把 undefined 递给服务层。 */
+const needArg = <T>(value: T | undefined, name: string): T => {
+  if (value === undefined) throw new Error(`缺少必填参数：${name}`)
+  return value
+}
+
 /** action 行的唯一查找口：execute 与 render 共用，未知 action 在这里炸，不印兜底话。 */
 const rowOf = <R>(rows: Record<string, R>, action: string, tool: string): R => {
   const row = rows[action]
@@ -39,7 +46,8 @@ const rowOf = <R>(rows: Record<string, R>, action: string, tool: string): R => {
 interface ActionRow<A, V> {
   readonly doc: string
   readonly needs: readonly (keyof A & string)[]
-  execute(args: A): Promise<V>
+  /** 同步值或 Promise 都收：调用点一律 `await`，故不需要为「回 Promise」硬加 async */
+  execute(args: A): V | Promise<V>
   render(value: V): string
 }
 
@@ -273,7 +281,7 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
     list: {
       doc: '列书与进度（只读，可单独用）',
       needs: [],
-      execute: async (_args: ShelfArgs) => {
+      execute: () => {
         const books: ShelfItem[] = project(service.shelfList().map(pickShelfItem))
         return { action: 'list' as const, books }
       },
@@ -282,9 +290,11 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
     add: {
       doc: '加书，需同时给 bookKey、title、sourceId',
       needs: ['bookKey', 'title', 'sourceId'],
-      execute: async (args: ShelfArgs) => {
+      execute: (args: ShelfArgs) => {
         // 投影改变类型（可空→缺席），出参类型由调用方断言——tools/project.ts 口径
-        const book: ShelfItem = project(pickShelfItem(service.shelfAdd(args.bookKey!, { sourceId: args.sourceId!, title: args.title! })))
+        const book: ShelfItem = project(pickShelfItem(service.shelfAdd(needArg(args.bookKey, 'bookKey'), {
+          sourceId: needArg(args.sourceId, 'sourceId'), title: needArg(args.title, 'title'),
+        })))
         return { action: 'add' as const, book }
       },
       render: (v) => renderShelfBook('add', v),
@@ -292,9 +302,11 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
     save_progress: {
       doc: '存进度，需 bookKey、chapterIndex（0 起）、offsetRatio（0~1，书须已在架）',
       needs: ['bookKey', 'chapterIndex', 'offsetRatio'],
-      execute: async (args: ShelfArgs) => {
+      execute: (args: ShelfArgs) => {
         // 不在架 → null：镜像 HTTP 面 400，不静默造书（reading.shelfSaveProgress 口径）
-        const updated = service.shelfSaveProgress(args.bookKey!, args.chapterIndex!, args.offsetRatio!)
+        const updated = service.shelfSaveProgress(
+          needArg(args.bookKey, 'bookKey'), needArg(args.chapterIndex, 'chapterIndex'), needArg(args.offsetRatio, 'offsetRatio'),
+        )
         if (updated === null) throw new Error(`dshnovel_shelf 书架里没有这本书：${args.bookKey}`)
         const book: ShelfItem = project(pickShelfItem(updated))
         return { action: 'save_progress' as const, book }
@@ -306,7 +318,7 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
       needs: ['bookKey'],
       execute: async (args: ShelfArgs) => {
         // remove 自身的 boolean 就是权威回执（未知键 false），不再二次核存在性
-        const { removed } = await service.removeBook(args.bookKey!)
+        const { removed } = await service.removeBook(needArg(args.bookKey, 'bookKey'))
         return { action: 'remove' as const, removed }
       },
       render: (v) => renderShelfRemove(v),
@@ -327,10 +339,10 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
     },
     output: {
       schema: shelfOutputSchema,
-      render: (args, v) => text(rowOf(shelfRows, (args as ShelfArgs).action, 'dshnovel_shelf').render(v)),
+      render: (args, v) => text(rowOf(shelfRows, args.action, 'dshnovel_shelf').render(v)),
     },
     execute: async (args) => {
-      const a = args as ShelfArgs
+      const a = args
       const row = rowOf(shelfRows, a.action, 'dshnovel_shelf')
       requireArgs(a.action, a, row.needs)
       return await row.execute(a)
@@ -383,15 +395,16 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
   /** enable/disable 的共用执行体：只差目标状态；存在性防线归门面（未知 id 抛
    *  SourceNotFoundError），工具面不再预检。 */
   const toggleSource = (enabled: boolean) => async (args: SourceArgs) => {
-    await service.setEnabled(args.sourceId!, enabled)
-    return { action: enabled ? 'enable' as const : 'disable' as const, sourceId: args.sourceId!, enabled }
+    const sourceId = needArg(args.sourceId, 'sourceId')
+    await service.setEnabled(sourceId, enabled)
+    return { action: enabled ? 'enable' as const : 'disable' as const, sourceId, enabled }
   }
   /** 书源管理：同样一 action 一行；enable/disable 共用 `toggleSource`。 */
   const sourceRows = {
     list: {
       doc: '列出全部源（只读）',
       needs: [],
-      execute: async () => {
+      execute: () => {
         const sources: Array<{
           sourceId: string; name: string; baseUrl: string; enabled: boolean
           type: string; status: string; statusDetail?: string
@@ -407,9 +420,10 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
       doc: '对单源发真实搜索请求验证可用性，需 sourceId，返回实测结论与失败定位',
       needs: ['sourceId'],
       execute: async (args: SourceArgs) => {
-        const r = await service.probe(args.sourceId!)
+        const sourceId = needArg(args.sourceId, 'sourceId')
+        const r = await service.probe(sourceId)
         return project({
-          action: 'probe', sourceId: args.sourceId!, status: r.ok ? 'verified' : 'broken',
+          action: 'probe', sourceId, status: r.ok ? 'verified' : 'broken',
           ok: r.ok, itemCount: r.itemCount, probedAt: r.probedAt,
           firstTitle: r.firstTitle ?? undefined, error: r.error,
         })
@@ -432,9 +446,10 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
       doc: '删除单源，需 sourceId',
       needs: ['sourceId'],
       execute: async (args: SourceArgs) => {
-        const removed = await service.removeSource(args.sourceId!)
-        if (!removed) throw new Error(`dshnovel_source 源不存在：${args.sourceId}`)
-        return { action: 'remove' as const, sourceId: args.sourceId!, removed }
+        const sourceId = needArg(args.sourceId, 'sourceId')
+        const removed = await service.removeSource(sourceId)
+        if (!removed) throw new Error(`dshnovel_source 源不存在：${sourceId}`)
+        return { action: 'remove' as const, sourceId, removed }
       },
       render: (v) => renderSourceRemove(v),
     },
@@ -450,10 +465,10 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
     },
     output: {
       schema: sourceOutputSchema,
-      render: (args, v) => text(rowOf(sourceRows, (args as SourceArgs).action, 'dshnovel_source').render(v)),
+      render: (args, v) => text(rowOf(sourceRows, args.action, 'dshnovel_source').render(v)),
     },
     execute: async (args) => {
-      const a = args as SourceArgs
+      const a = args
       const row = rowOf(sourceRows, a.action, 'dshnovel_source')
       requireArgs(a.action, a, row.needs)
       return await row.execute(a)

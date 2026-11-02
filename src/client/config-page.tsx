@@ -244,7 +244,7 @@ export function NovelConfigCardView({ state, actions }: { state: NovelConfigStat
     save: t('config.save'),
     saving: t('config.saving'),
   }
-  const disabled = !state.writable || state.saving === true
+  const disabled = !state.writable || state.saving
   return (
     <section data-novel-scope className="novel-cfg">
       {/* 本页不在 NovelView 树下，拿不到它注入的样式层：与 SettingsSection 单飞同一口径，自带。 */}

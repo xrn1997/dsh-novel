@@ -570,11 +570,12 @@ function pickRootfile(text: string, containerPath: string, budget: XmlBudget, na
   const rootfiles = descendants(root, 'rootfile', budget)
   if (rootfiles.length === 0) throw new EpubImportError(`OCF 容器里没有 rootfile：${containerPath}`)
   const supported = rootfiles.filter((el) => mediaTypeOf(el) === OPF_MEDIA_TYPE)
-  if (supported.length === 0) {
+  const first = supported[0]
+  if (first === undefined) {
     const seen = [...new Set(rootfiles.map((el) => mediaTypeOf(el) ?? '(缺 media-type)'))].join('、')
     throw new EpubImportError(`OCF 容器里没有受支持的 rootfile（要求 media-type=${OPF_MEDIA_TYPE}，实际有：${seen}）：${containerPath}`)
   }
-  const fullPath = attrOf(supported[0], 'full-path')
+  const fullPath = attrOf(first, 'full-path')
   if (fullPath === null || fullPath.trim() === '') throw new EpubImportError(`OCF rootfile 缺 full-path：${containerPath}`)
   const opfPath = rootRelativeHref(containerPath, fullPath)
   if (!names.has(opfPath)) throw new EpubImportError(`OCF rootfile 指向归档里不存在的文件：${opfPath}（${containerPath}）`)

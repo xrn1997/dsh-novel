@@ -15,6 +15,11 @@ import { LOCAL_SOURCE_ID as NODE_LOCAL_SOURCE_ID } from '../../src/services/loca
  * wire，编译期钉死）。
  */
 
+/** 客户端运行期拼出来的 meta 里会出现显式 `undefined`（可选字段直拼），而 `ShelfMetaPatch` 的
+ *  类型面只收「缺席」或 null——那是 wire 契约，不收 undefined 是对的。本文件只为量构造口的
+ *  **运行期**行为而造出这一个值：body 里必须没有它对应的键。类型面之外的走法只此一处、带名。 */
+const EXPLICIT_UNDEFINED = undefined as unknown as string
+
 describe('LOCAL_SOURCE_ID（跨半契约常量的唯一主人）', () => {
   it('持久化值钉死：改它会让既有 sources.json/shelf.json 里的本地书静默失联', () => {
     expect(LOCAL_SOURCE_ID).toBe('__local__')
@@ -187,12 +192,12 @@ describe('SHELF_META 字段集（书目元数据的唯一主人）', () => {
   })
 
   // 反向绑定（书 → 表）：TableMisses = ShelfBook 有而 SHELF_META 漏掉的键。
-  // 现表与书相等时它是 never（Record<never, never> 即 {}）；一旦书加了书目字段而表没加，
-  // `Record<TableMisses, never>` 要求该键存在且值为 never——`missing` 缺键即本行 typecheck 红。
+  // 现表与书相等时它是 never（映射类型空腹即 {}）；一旦书加了书目字段而表没加，
+  // 下面这条类型要求该键存在且值为 never——`missing` 缺键即本行 typecheck 红。
   type BookMetaKeys = Exclude<keyof ShelfBook, 'bookKey' | 'progress' | 'addedAt'>
   type TableMisses = Exclude<BookMetaKeys, ShelfMetaField>
   it('反向绑定：ShelfBook 加书目字段而表漏加 → 本行 typecheck 红', () => {
-    const missing: Record<TableMisses, never> = {}
+    const missing: { [K in TableMisses]: never } = {}
     expect(missing).toEqual({})
   })
 })
@@ -217,8 +222,10 @@ describe('pickShelfMeta（任意 JSON body → 合法元数据字段；类型判
 
 describe('书架 PUT 三形态（body 形状纪律）', () => {
   it('shelfAdd：null/undefined 字段一律缺键（{...existing,...input} 下 :undefined 会抹掉已有元数据）', () => {
+    // 显式 undefined 是客户端从可选字段直拼 meta 时会出现、而 `ShelfMetaPatch` 类型面不收的运行期值：
+    // 造值只走带名的 EXPLICIT_UNDEFINED，其余字段照旧过类型检查；要钉的是运行期「缺键」这条性质
     const body = bodies.shelfAdd('s', {
-      title: '斗罗', author: '唐家', coverUrl: null, intro: undefined,
+      title: '斗罗', author: '唐家', coverUrl: null, intro: EXPLICIT_UNDEFINED,
       lastChapterName: null, totalChapters: 300,
     })
     expect(body).toEqual({ sourceId: 's', title: '斗罗', author: '唐家', totalChapters: 300 })
@@ -246,7 +253,8 @@ describe('书架 PUT 三形态（body 形状纪律）', () => {
   })
   it('patch：缺省/null 字段不出现在 body（与 Shelf.update 保值语义双保险；ReaderView 回写单字段形态）', () => {
     expect(bodies.shelfPatch({ totalChapters: 300 })).toEqual({ patch: { totalChapters: 300 } })
-    expect(bodies.shelfPatch({ author: null, coverUrl: undefined, title: 'T' })).toEqual({ patch: { title: 'T' } })
+    // 造值走带名的 EXPLICIT_UNDEFINED，其余字段照旧过类型检查
+    expect(bodies.shelfPatch({ author: null, coverUrl: EXPLICIT_UNDEFINED, title: 'T' })).toEqual({ patch: { title: 'T' } })
   })
   it('三形态各自 round-trip：构造器产的东西拆成字段事实（meta / patch / progress）', () => {
     expect(readBodies.shelfPut(bodies.shelfAdd('s', { title: '斗罗' })))
@@ -316,7 +324,7 @@ describe('写路由 body：构造器与读口同源（wire 单点承诺的另一
     expect(bodies.authCookies({})).toHaveProperty(BODY.cookies)
     // 与 query 同名的业务键沿用 PARAMS——同一个业务名词不许有第二个字面量
     expect(bodies.searchJob('k')).toHaveProperty(PARAMS.keyword)
-    expect(bodies.searchJob('k', ['s']).hasOwnProperty(PARAMS.sourceIds)).toBe(true)
+    expect(Object.hasOwn(bodies.searchJob('k', ['s']), PARAMS.sourceIds)).toBe(true)
     expect(bodies.exploreList('s', 'k')).toHaveProperty(PARAMS.sourceId)
     expect(bodies.exploreList('s', 'k')).toHaveProperty(PARAMS.kind)
   })

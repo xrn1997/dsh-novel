@@ -41,9 +41,6 @@ export function normalizeSource(raw: unknown): NormalizeResult {
   const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null)
 
   const nameRaw = str(r.bookSourceName); if (!nameRaw) missing.push({ field: 'bookSourceName', message: '缺书源名称' })
-  // 名称前缀图标剥离：真实书源包惯用分组图标打头（「⚡📂听小说APP」——图标是它自己分组的图标，
-  // 给阅读端界面看的）；本插件分组已独立成列，名字再带一遍是重复。
-  const name = nameRaw === null ? null : stripLeadingIcons(nameRaw)
   const baseUrl = str(r.bookSourceUrl); if (!baseUrl) missing.push({ field: 'bookSourceUrl', message: '缺书源地址' })
   // bookSourceType：非文本源点名拒绝——图片/音频/文件源规则体系完全不同，落到 ruleContent 校验
   // 会报「缺正文规则」，语义误导（它不是缺规则，是本插件不支持）。认不出的编码同样拒绝：
@@ -54,10 +51,18 @@ export function normalizeSource(raw: unknown): NormalizeResult {
       `类型 ${JSON.stringify(r.bookSourceType)}（${SOURCE_KIND_LABEL[type]}）——本插件仅支持文本源（0）` })
   }
   const ruleContent = str(r.ruleContent); if (!ruleContent) missing.push({ field: 'ruleContent', message: '缺正文规则（ruleContent 需为字符串，或对象形态下含非空 content 子字段）' })
-  if (missing.length > 0) return { ok: false, missing, warnings }
+  // 四类「进不了库」收成一道门：缺名 / 缺址 / 非文本源 / 缺正文规则。合成一个条件还让编译器
+  // 跟上「name 与 baseUrl 到这里一定非空」这条证明——不必用 `!` 声称。
+  if (nameRaw === null || baseUrl === null || type !== 'text' || ruleContent === null || missing.length > 0) {
+    return { ok: false, missing, warnings }
+  }
+  // 名称前缀图标剥离：真实书源包惯用分组图标打头（「⚡📂听小说APP」——图标是它自己分组的图标，
+  // 给阅读端界面看的）；本插件分组已独立成列，名字再带一遍是重复。
+  const name = stripLeadingIcons(nameRaw)
 
-  const rules = {} as NormalizedRules
-  for (const f of RULE_FIELDS) (rules as unknown as Record<string, unknown>)[f] = str(r[f])
+  const rules = blankRules()
+  // 平铺方言的键与模型键同名：逐键过 str（缺省落 null），名单仍由字段表派生（见 rule-fields.ts）
+  Object.assign(rules, Object.fromEntries(RULE_FIELDS.map((f) => [f, str(r[f])])))
   rules.searchUrl = normalizeSearchUrl(r.searchUrl, warnings)
   // header 单字段两形态：`@js:`/`<js>` 规则 → headerRule；
   // JSON 对象/JSON 串 → header。两者互斥（同一 raw.header 二选一），规则形态不产生「非法 JSON」警告。
@@ -91,10 +96,46 @@ export function normalizeSource(raw: unknown): NormalizeResult {
   return {
     ok: true, missing, warnings,
     source: {
-      name: name!, baseUrl: baseUrl!,
+      name, baseUrl,
       enabled: typeof r.enabled === 'boolean' ? r.enabled : true,
       groups, type, raw, rules,
     },
+  }
+}
+
+/**
+ * 规则集的全键底盘：**每个模型键都显式列出**，少一格是编译错——故「漏填字段」由编译器把关，
+ * 不靠「空对象 + 断言」把这类检查关掉。值一律取模型的「没有这条规则」形态（null / 空表），
+ * 随后按字段表（平铺键）与显式分支覆盖；底盘本身从不作为结果交出去。
+ */
+function blankRules(): NormalizedRules {
+  return {
+    searchUrl: null, exploreUrl: null,
+    ruleExploreUrl: null,
+    ruleExploreKinds: [],
+    ruleExploreList: null, ruleExploreName: null, ruleExploreAuthor: null, ruleExploreBookUrl: null,
+    ruleExploreCoverUrl: null, ruleExploreIntro: null, ruleExploreKind: null, ruleExploreLastChapter: null,
+    ruleExploreWordCount: null,
+    probeKeyword: null,
+    ruleBookList: null, ruleBookName: null, ruleAuthor: null,
+    ruleBookUrl: null, ruleCoverUrl: null, ruleIntro: null,
+    ruleLastChapter: null, ruleTocUrl: null,
+    ruleKind: null, ruleWordCount: null,
+    bookUrlPattern: null,
+    ruleChapterList: null,
+    ruleChapterName: null, ruleChapterUrl: null,
+    ruleChapterIsVip: null, ruleChapterIsVolume: null, ruleChapterIsPay: null, ruleChapterUpdateTime: null,
+    ruleDetailName: null, ruleDetailAuthor: null,
+    ruleDetailCoverUrl: null, ruleDetailIntro: null,
+    ruleDetailLastChapter: null,
+    ruleDetailKind: null, ruleDetailWordCount: null,
+    ruleDetailInit: null,
+    ruleContent: null,
+    ruleContentSubContent: null,
+    nextTocUrl: null, nextPageUrl: null,
+    header: null, loginUrl: null,
+    headerRule: null,
+    jsLib: null,
   }
 }
 
@@ -165,7 +206,7 @@ function deriveRuleField(raw: unknown, field: string): string | null | undefined
   const r = isNativeSource(raw)
     ? flattenNative(raw as Record<string, unknown>, [])
     : flattenDialect(raw as Record<string, unknown>, [])
-  const v = (r as Record<string, unknown>)[field]
+  const v = r[field]
   return typeof v === 'string' && v.length > 0 ? v : null
 }
 
@@ -182,7 +223,7 @@ function rawRulePattern(raw: unknown): string | null | undefined {
  *  子字段名取自同一行的 legado 路径——平铺方言把同一个键写在 raw 顶层（下面回落到 `r[model]`），
  *  对象/Native 方言住在容器里。 */
 const BOOK_META_KEYS = RULE_FIELD_SPECS.flatMap((s) => (
-  s.rehydrate === 'missing' && s.legadoObject !== undefined && s.legadoKey !== undefined
+  s.rehydrate === 'missing'
     ? [{ container: s.legadoObject, nested: s.legadoKey, model: s.model }]
     : []
 ))
@@ -201,8 +242,8 @@ function rawBookMetaFields(raw: unknown): Record<string, string | null> | undefi
   const out: Record<string, string | null> = {}
   for (const { container, nested, model } of BOOK_META_KEYS) {
     const box = ruleContainer(r[container])
-    const inBox = 'obj' in box ? (box.obj as Record<string, unknown>)[nested] : undefined
-    const v = typeof inBox === 'string' ? inBox : (typeof r[model] === 'string' ? r[model] as string : undefined)
+    const inBox = 'obj' in box ? box.obj[nested] : undefined
+    const v = typeof inBox === 'string' ? inBox : (typeof r[model] === 'string' ? r[model] : undefined)
     const trimmed = v === undefined || v.trim() === '' ? null : v
     out[model] = trimmed !== null && native ? withImplicitText(trimmed) : trimmed
   }
@@ -270,10 +311,9 @@ const EXPLORE_STRING_MODELS: readonly ExploreStringField[] = VACANT_RULE_FIELDS
  *  的导入问题（与 `deriveRuleField` 同口径）。 */
 export function rawExploreFields(raw: unknown): Pick<NormalizedRules, ExploreField> | undefined {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
-  const view = (isNativeSource(raw)
+  const view = isNativeSource(raw)
     ? flattenNative(raw as Record<string, unknown>, [])
     : flattenDialect(raw as Record<string, unknown>, [])
-  ) as Record<string, unknown>
   const vacantNulls = Object.fromEntries(EXPLORE_STRING_MODELS.map((model) => [model, null])) as Record<ExploreStringField, string | null>
   const out: Pick<NormalizedRules, ExploreField> = { ruleExploreKinds: [], ...vacantNulls }
   for (const k of Object.keys(out) as ExploreField[]) {
@@ -369,7 +409,7 @@ function flattenDialect(raw: Record<string, unknown>, warnings: NormalizeIssue[]
     // 字符串形态的容器值住在这一键上——它是容器原文不是平铺规则，不清掉会挡住 setIfVacant、
     // 甚至把整段 JSON 当规则串用下去；读不出的坏串同清（那才是「坏 JSON 冒充规则串」，
     // 这个键名本身就是规则位）。两半的另一半见 ruleContainer。
-    if (typeof raw[objField] === 'string' && raw[objField].trim().startsWith('{')) delete out[objField]
+    if (typeof raw[objField] === 'string' && raw[objField].trim().startsWith('{')) Reflect.deleteProperty(out, objField)
     if (obj === undefined) continue
     for (const [sub, v] of Object.entries(obj)) {
       const field = mapping[sub]
@@ -691,8 +731,11 @@ const CONDITIONAL_READERS: Record<RuleFieldsOf<'conditional'>, (s: NovelSource, 
  * 幂等：收敛过一次后再进来不再产生改动。
  */
 export function rehydrateStoredSource(s: NovelSource): boolean {
-  if (typeof s.rules !== 'object' || s.rules === null) {
-    throw new Error(`sources.json 条目缺少 rules 对象（id=${String(s.id)}）：拒绝按空规则继续`)
+  // sources.json 是盘上 JSON：`rules` 的类型是模型形状，但损坏条目 / 手改过的文件可以缺它——
+  // 故按过线原值验一遍（镜像钉死 ≠ 运行时必有）
+  const rulesShape: unknown = s.rules
+  if (typeof rulesShape !== 'object' || rulesShape === null) {
+    throw new Error(`sources.json 条目缺少 rules 对象（id=${s.id}）：拒绝按空规则继续`)
   }
   let changed = false
   const mark = (): void => { changed = true }
@@ -700,8 +743,10 @@ export function rehydrateStoredSource(s: NovelSource): boolean {
    *  入参键类型取自表的 `always` 档，读口由 `ALWAYS_READERS` 以同一键集做 Record——
    *  表加一行而没补读口，`tsc` 当场红。逐字段的 why 住各读口上。 */
   const syncRule = (key: RuleFieldsOf<'always'>, want: string | null | undefined): void => {
-    if (want !== undefined && s.rules[key] !== want) { s.rules[key] = want; mark() }
-    else if (s.rules[key] === undefined) { s.rules[key] = null; mark() }
+    // 盘上老条目可以整键缺席（模型的 required 形状管不到已落盘的 JSON）：按过线原值读，缺席才补 null
+    const current: unknown = s.rules[key]
+    if (want !== undefined && current !== want) { s.rules[key] = want; mark() }
+    else if (current === undefined) { s.rules[key] = null; mark() }
   }
 
   // enabled 缺省归一为 true——早期数据无此字段，缺省即「启用」，否则参与集判据

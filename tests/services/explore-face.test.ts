@@ -4,6 +4,8 @@ import { normalizeSource } from '../../src/services/normalize.js'
 import { fetchKindPage } from '../../src/services/explore-face.js'
 import { fakeSourceRequest } from './fake-source-request.js'
 import type { NovelSource } from '../../src/services/types.js'
+import { must, pick } from '../support/fixture.js'
+import { requestUrlOf } from '../support/fetch-input.js'
 
 const LIST_HTML = '<html><body><div class="item"><h3><a href="/book/1">剑起长安</a></h3>' +
   '<p><a href="/zuozhe/a">青衫客</a><span>玄幻</span></p></div></body></html>'
@@ -22,7 +24,7 @@ function source(over: Record<string, unknown> = {}): NovelSource {
   }
   const n = normalizeSource(raw)
   if (!n.ok) throw new Error(`桩源应能规范化：${JSON.stringify(n.missing)}`)
-  return { id: 'i', status: 'unverified', importedAt: 0, ...n.source! } as NovelSource
+  return { id: 'i', status: 'unverified', importedAt: 0, ...must(n.source, 'n 归一化后的 source') }
 }
 
 /** legado 方言源：带 `bookSourceName` ⇒ 不走 Native 判别，发现面来自 `exploreUrl` + `ruleExplore` */
@@ -38,14 +40,20 @@ function legadoSource(over: Record<string, unknown> = {}): NovelSource {
   }
   const n = normalizeSource(raw)
   if (!n.ok) throw new Error(`桩源应能规范化：${JSON.stringify(n.missing)}`)
-  return { id: 'l', status: 'unverified', importedAt: 0, ...n.source! } as NovelSource
+  return { id: 'l', status: 'unverified', importedAt: 0, ...must(n.source, 'n 归一化后的 source') }
 }
 const html = (text: string): Response => new Response(text, { headers: { 'content-type': 'text/html; charset=utf-8' } })
+
+/** 规则缺失的结果形态（不对称匹配器只比 message 的片段）。`expect.stringContaining` 的返回是 any，
+ *  落进有类型的期望对象前先收成 unknown：匹配器是运行期值，不是被断言的那个字符串。 */
+const ruleMissing = (fragment: string): { ok: false; code: 'RuleMissing'; message: unknown } => ({
+  ok: false, code: 'RuleMissing', message: expect.stringContaining(fragment),
+})
 
 describe('explore-face：单源一次分类抓取', () => {
   it('{{kind}} 换成分类 slug，{{page}} 走首页裁页（地址是裸路径，不带 /1）', async () => {
     const seen: string[] = []
-    const f = createFetcher({ fetchImpl: async (input) => { seen.push(String(input)); return html(LIST_HTML) } })
+    const f = createFetcher({ fetchImpl: async (input) => { seen.push(requestUrlOf(input)); return html(LIST_HTML) } })
     const r = await fetchKindPage(source(), 'xuanhuan', fakeSourceRequest(f))
     expect(r.ok).toBe(true)
     expect(seen[0]).toBe('https://s.com/xuanhuan')
@@ -56,9 +64,9 @@ describe('explore-face：单源一次分类抓取', () => {
     const r = await fetchKindPage(source(), 'xuanhuan', fakeSourceRequest(f))
     if (!r.ok) throw new Error('应能取到条目')
     expect(r.hits).toHaveLength(1)
-    expect(r.hits[0].title).toBe('剑起长安')
-    expect(r.hits[0].author).toBe('青衫客')
-    expect(r.hits[0].url).toBe('https://s.com/book/1')
+    expect(pick(r.hits, 0).title).toBe('剑起长安')
+    expect(pick(r.hits, 0).author).toBe('青衫客')
+    expect(pick(r.hits, 0).url).toBe('https://s.com/book/1')
   })
 
   // explore-own 那一支在这份文件里从未真正产出过条目（其余各条都走回落那侧），于是它整支被写坏
@@ -73,7 +81,7 @@ describe('explore-face：单源一次分类抓取', () => {
     const r = await fetchKindPage(source(own), 'x', fakeSourceRequest(f))
     if (!r.ok) throw new Error('应能取到条目')
     expect(r.hits).toHaveLength(1)
-    expect(r.hits[0].title).toBe('剑起长安')
+    expect(pick(r.hits, 0).title).toBe('剑起长安')
   })
 
   // 这一条只钉列表规则那一侧（列表命中 0 → 空 List，不是 Miss）。它对「整套切换」没有区分力：
@@ -95,13 +103,13 @@ describe('explore-face：单源一次分类抓取', () => {
     const r = await fetchKindPage(corrupt, 'xuanhuan', fakeSourceRequest(f))
     if (!r.ok) throw new Error('坏库值应回落通用规则，不是失败形态')
     expect(r.hits).toHaveLength(1)
-    expect(r.hits[0].title).toBe('剑起长安')
+    expect(pick(r.hits, 0).title).toBe('剑起长安')
   })
 
   it('缺 ruleFind.url → RuleMissing（结果形态，不是异常）', async () => {
     const f = createFetcher({ fetchImpl: async () => html(LIST_HTML) })
     const r = await fetchKindPage(source({ ruleFind: { kinds: [{ title: '玄幻', url: 'x' }] } }), 'x', fakeSourceRequest(f))
-    expect(r).toEqual({ ok: false, code: 'RuleMissing', message: expect.stringContaining('发现规则缺失') })
+    expect(r).toEqual(ruleMissing('发现规则缺失'))
   })
 
   // 发现面的列表规则命中条目、书名规则却匹配不到：整套切换下这本书的标题读不出来，它是**空分类**
@@ -121,12 +129,12 @@ describe('explore-face：单源一次分类抓取', () => {
     const own = { ruleFind: { url: '/{{kind}}/{{page}}', kinds: [{ title: '玄幻', url: 'x' }], ruleSearch: { list: '.item' } } }
     const f = createFetcher({ fetchImpl: async () => html(LIST_HTML) })
     const r = await fetchKindPage(source(own), 'x', fakeSourceRequest(f))
-    expect(r).toEqual({ ok: false, code: 'RuleMissing', message: expect.stringContaining('发现规则缺失') })
+    expect(r).toEqual(ruleMissing('发现规则缺失'))
   })
 
   it('page=2 → 地址带页码段（首页裁页不误伤后续页）', async () => {
     const seen: string[] = []
-    const f = createFetcher({ fetchImpl: async (input) => { seen.push(String(input)); return html(LIST_HTML) } })
+    const f = createFetcher({ fetchImpl: async (input) => { seen.push(requestUrlOf(input)); return html(LIST_HTML) } })
     const r = await fetchKindPage(source(), 'xuanhuan', fakeSourceRequest(f), undefined, undefined, 2)
     expect(r.ok).toBe(true)
     expect(seen[0]).toBe('https://s.com/xuanhuan/2')      // 不是 /xuanhuan、也不是 /xuanhuan/2 被裁掉
@@ -134,7 +142,7 @@ describe('explore-face：单源一次分类抓取', () => {
 
   it('legado 形态：源级模板缺席时用该分类自带的地址当模板，页码由它自己带', async () => {
     const seen: string[] = []
-    const f = createFetcher({ fetchImpl: async (input) => { seen.push(String(input)); return html(LIST_HTML) } })
+    const f = createFetcher({ fetchImpl: async (input) => { seen.push(requestUrlOf(input)); return html(LIST_HTML) } })
     const s = legadoSource()
     expect(s.rules.ruleExploreUrl).toBeNull()          // 前提（不是装饰）：这份桩没写源级模板，兜底那一档才轮得到
     const r = await fetchKindPage(s, '/list/xh/{{page}}.html', fakeSourceRequest(f), undefined, undefined, 2)
@@ -143,7 +151,7 @@ describe('explore-face：单源一次分类抓取', () => {
   })
   it('legado 形态：模板以 /{{page}} 结尾时首页**不裁**（裁页是 Native 分页语义，不是通用语义）', async () => {
     const seen: string[] = []
-    const f = createFetcher({ fetchImpl: async (input) => { seen.push(String(input)); return html(LIST_HTML) } })
+    const f = createFetcher({ fetchImpl: async (input) => { seen.push(requestUrlOf(input)); return html(LIST_HTML) } })
     await fetchKindPage(legadoSource(), '/top/{{page}}', fakeSourceRequest(f))
     expect(seen[0]).toBe('https://s.com/top/1')        // 原生方言在这一位会裁成 /top（见本文件第一条用例）
   })
@@ -153,7 +161,7 @@ describe('explore-face：单源一次分类抓取', () => {
   // 命中：条目三件全取自通用搜索规则，发现面那一侧一条规则都没落位。
   it('legado 形态：ruleExplore 整块缺席 → 条目整套走通用搜索规则（回落判据两方言同一条）', async () => {
     const seen: string[] = []
-    const f = createFetcher({ fetchImpl: async (input) => { seen.push(String(input)); return html(LIST_HTML) } })
+    const f = createFetcher({ fetchImpl: async (input) => { seen.push(requestUrlOf(input)); return html(LIST_HTML) } })
     const s = legadoSource({
       ruleExplore: undefined,
       // 通用侧写全终端：legado 方言没有隐式 @text（那是原生方言的终端语义），不写就拿回整段元素
@@ -163,9 +171,9 @@ describe('explore-face：单源一次分类抓取', () => {
     const r = await fetchKindPage(s, '/list/xh/{{page}}.html', fakeSourceRequest(f))
     if (!r.ok) throw new Error('回落应产出条目')
     expect(r.hits).toHaveLength(1)
-    expect(r.hits[0].title).toBe('剑起长安')
-    expect(r.hits[0].author).toBe('青衫客')
-    expect(r.hits[0].url).toBe('https://s.com/book/1')
+    expect(pick(r.hits, 0).title).toBe('剑起长安')
+    expect(pick(r.hits, 0).author).toBe('青衫客')
+    expect(pick(r.hits, 0).url).toBe('https://s.com/book/1')
     expect(seen[0]).toBe('https://s.com/list/xh/1.html')   // 页码由入口自带的那份模板给，首页不裁
   })
 
@@ -174,7 +182,7 @@ describe('explore-face：单源一次分类抓取', () => {
   // 正是裁页要防的那类 404。这条在「方言判据」下必红，是那条判据的反例钉桩。
   it('非原生方言但源级模板在场 → 首页仍裁（用的就是源级那份模板，与方言无关）', async () => {
     const seen: string[] = []
-    const f = createFetcher({ fetchImpl: async (input) => { seen.push(String(input)); return html(LIST_HTML) } })
+    const f = createFetcher({ fetchImpl: async (input) => { seen.push(requestUrlOf(input)); return html(LIST_HTML) } })
     const s = legadoSource({ ruleExploreUrl: '/flat/{{kind}}/{{page}}' })
     expect(s.rules.ruleExploreUrl).toBe('/flat/{{kind}}/{{page}}')   // 前提：非原生方言也能有源级模板
     const r = await fetchKindPage(s, 'xh', fakeSourceRequest(f))

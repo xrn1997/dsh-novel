@@ -39,7 +39,7 @@ export interface FakeHost {
     register: (options: Record<string, unknown>, component: unknown) => () => void
   }
   layout: { selectPanel: Mock }
-  configForms?: FakeConfigForms
+  configForms?: FakeConfigForms | undefined
   injected: string[]
   registrations: Registration[]
   effects: string[]

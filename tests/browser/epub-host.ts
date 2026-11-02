@@ -28,6 +28,7 @@ import type { Browser, BrowserContext, Page } from 'playwright'
 import { createApiHandler } from '../../src/api/dispatch.js'
 import { ReadingService } from '../../src/services/reading.js'
 import { makeEpubFixture } from '../fixtures/epub.js'
+import { requestUrlOf } from '../support/fetch-input.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -87,8 +88,8 @@ function onlinePage(url: string): string | null {
 
 /** 注入服务层的 fetchImpl：只答假站点，其余 599（未触网的事实要能被读出来） */
 function makeOfflineFetch(record: { refused: string[]; served: string[] }): typeof globalThis.fetch {
-  return (async (input: RequestInfo | URL): Promise<Response> => {
-    const url = String(input)
+  return async (input: RequestInfo | URL): Promise<Response> => {
+    const url = requestUrlOf(input)
     const body = onlinePage(url)
     if (body === null) {
       record.refused.push(url)
@@ -96,7 +97,7 @@ function makeOfflineFetch(record: { refused: string[]; served: string[] }): type
     }
     record.served.push(url)
     return new Response(body, { headers: { 'content-type': 'text/html; charset=utf-8' } })
-  }) as unknown as typeof globalThis.fetch
+  }
 }
 
 // ── 浏览器：只能用**已安装**的，绝不下载 ───────────────────────────────────────
@@ -180,7 +181,8 @@ export interface HoldOptions { status?: number; body?: string }
 
 interface HoldFault {
   kind: 'hold'; match: FaultMatch; gate: Promise<void>; release: () => void; arrived: () => void; arrivedAt: Promise<void>
-  outcome?: HoldOptions
+  /** 缺省键 = 释放后交回真路由；显式 `undefined` 与缺席同义（只在测试台内消费，不落盘不序列化） */
+  outcome?: HoldOptions | undefined
 }
 interface DelayFault { kind: 'delay'; match: FaultMatch; remaining: number; ms: number }
 type Fault = HoldFault | DelayFault
@@ -265,9 +267,10 @@ export async function startEpubHost(opts: { fetchImpl?: typeof globalThis.fetch 
       res.end(shell)
       return
     }
-    if (assets[url.pathname] !== undefined) {
+    const asset = assets[url.pathname]
+    if (asset !== undefined) {
       res.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-store' })
-      res.end(await fs.readFile(assets[url.pathname]))
+      res.end(await fs.readFile(asset))
       return
     }
     if (!url.pathname.startsWith('/novel-api')) {
@@ -307,7 +310,7 @@ export async function startEpubHost(opts: { fetchImpl?: typeof globalThis.fetch 
     res.writeHead = ((status: number, ...rest: unknown[]): ServerResponse => {
       rec.status = status
       return (writeHead as (...a: unknown[]) => ServerResponse)(status, ...rest)
-    }) as typeof res.writeHead
+    })
     res.on('close', () => { if (rec.status === 0) rec.status = -1 })          // 客户端中途断开（导出取消）
     await handler(replay(req, raw), res)
   }

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { Shelf } from '../../src/services/shelf.js'
+import type { AddBookInput, BookPatch } from '../../src/services/shelf.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
+import { must } from '../support/fixture.js'
 
 /** 测试自持 Shelf：trackService 登记写侧收尾——add/updateProgress 的 100ms 尾沿防抖写若晚于删目录，
  *  writeJsonAtomic 的 mkdir -p 会把删掉的目录建回来（实测复活）。dir 供「重载往返」用例。 */
@@ -37,7 +39,7 @@ describe('Shelf', () => {
     s.updateProgress('k', 2, 0.2)
     s.updateProgress('k', 3, 0.9)
     await s.flush()
-    expect((await Shelf.load(dir)).get('k')!.progress).toMatchObject({ chapterIndex: 3, offsetRatio: 0.9 })
+    expect(must((await Shelf.load(dir)).get('k'), '读到的那一条').progress).toMatchObject({ chapterIndex: 3, offsetRatio: 0.9 })
   })
   it('totalChapters：add 携带 → 落架；再 add 不带 → 保留（合并语义）', async () => {
     const { s } = await tmpShelf()
@@ -111,9 +113,13 @@ describe('Shelf', () => {
     it('显式 null/undefined 键同样保值（调用方可以直接透传未知形状，不必先筛键）', async () => {
       const { s } = await tmpShelf()
       s.add({ sourceId: 's1', bookKey: 'k', title: 'T', author: 'A' })
-      s.update('k', { author: null, coverUrl: undefined, lastChapterName: '第3章' })
+      // 透传的这份「未知形状」自有键 `coverUrl`、值为 undefined：wire 的 JSON 带不出这一档，
+      // 进程内的直接透传带得出——patch 写口承诺不筛键也保值（`applyPatch` 的 `v === undefined` 分支）。
+      // 类型面 `ShelfMetaPatch` 按 wire 口径不收显式 undefined，所以这一档只能越过类型构造。
+      const passthrough = { author: null, coverUrl: undefined, lastChapterName: '第3章' } as unknown as BookPatch
+      s.update('k', passthrough)
       expect(s.get('k')).toMatchObject({ author: 'A', lastChapterName: '第3章' })
-      expect('coverUrl' in s.get('k')!).toBe(false)
+      expect('coverUrl' in must(s.get('k'), 's 里查到的那一条')).toBe(false)
     })
     it('带值则更新；不在架 → null（不静默造书）', async () => {
       const { s } = await tmpShelf()
@@ -125,7 +131,9 @@ describe('Shelf', () => {
       const { s } = await tmpShelf()
       s.add({ sourceId: 's1', bookKey: 'k', title: 'T', author: 'A' })
       // 模拟调用方构造的 input 带 `: undefined` 自有键——保值语义同样适用，author 不被抹掉
-      s.add({ sourceId: 's1', bookKey: 'k', title: 'T2', author: undefined })
+      // （越过类型构造的理由同上：`AddBookInput` 的元数据位来自 wire 的 `ShelfMetaPatch`）
+      const input = { sourceId: 's1', bookKey: 'k', title: 'T2', author: undefined } as unknown as AddBookInput
+      s.add(input)
       expect(s.get('k')).toMatchObject({ title: 'T2', author: 'A' })
     })
   })

@@ -7,12 +7,13 @@ import {
 import type { RuleFieldsOf } from '../../src/services/rule-fields.js'
 import { rawExploreFields } from '../../src/services/normalize.js'
 import type { NormalizedRules } from '../../src/services/types.js'
+import { must } from '../support/fixture.js'
 
 describe('rule-field table', () => {
   it('every field appears exactly once', () => {
     const seen = new Set<string>()
     for (const spec of RULE_FIELD_SPECS) {
-      expect(seen.has(spec.model), `duplicate ${String(spec.model)}`).toBe(false)
+      expect(seen.has(spec.model), `duplicate ${spec.model}`).toBe(false)
       seen.add(spec.model)
     }
     expect(seen.size).toBe(RULE_FIELD_SPECS.length)
@@ -21,8 +22,8 @@ describe('rule-field table', () => {
   })
 
   it('derives the legado and Native maps from the same rows', () => {
-    expect(DIALECT_MAP.ruleSearch.name).toBe('ruleBookName')
-    expect(NATIVE_MAP.ruleToc.url).toBe('ruleChapterUrl')
+    expect(must(DIALECT_MAP.ruleSearch, 'DIALECT_MAP.ruleSearch').name).toBe('ruleBookName')
+    expect(must(NATIVE_MAP.ruleToc, 'NATIVE_MAP.ruleToc').url).toBe('ruleChapterUrl')
     expect(NATIVE_TEXT_FIELDS).toContain('ruleBookName')
     expect(NATIVE_TEXT_FIELDS).not.toContain('ruleChapterUrl')
   })
@@ -104,13 +105,13 @@ describe('rule-field table: 配对 / 整套闸 / 段序三列', () => {
     const rows = new Map<string, (typeof RULE_FIELD_SPECS)[number]>(RULE_FIELD_SPECS.map((s) => [s.model, s]))
     for (const [from, to] of Object.entries(PINNED_PAIRS) as Array<[keyof NormalizedRules, keyof NormalizedRules]>) {
       const target = rows.get(to)
-      expect(target, `${String(from)} 的配对目标 ${String(to)} 不在表里`).toBeDefined()
-      expect('pairWith' in target!, `${String(to)} 自身还带 pairWith——配对成了链`).toBe(false)
+      expect(target, `${from} 的配对目标 ${to} 不在表里`).toBeDefined()
+      expect('pairWith' in must(target, 'target'), `${to} 自身还带 pairWith——配对成了链`).toBe(false)
     }
   })
 
   it('整套闸只登记一行：WHOLE_SET_FIELD 与两方言子字段名（经配对目标反推）', () => {
-    const gates = RULE_FIELD_SPECS.filter((s) => 'wholeSetGate' in s && s.wholeSetGate === true)
+    const gates = RULE_FIELD_SPECS.filter((s) => 'wholeSetGate' in s)
     expect(gates.map((s) => s.model)).toEqual(['ruleExploreList'])
     expect(WHOLE_SET_FIELD).toBe('ruleExploreList')
     expect(EXPLORE_GATE_SUBS).toEqual({ legado: 'bookList', native: 'list' })
@@ -144,12 +145,12 @@ describe('rule-field table: 配对 / 整套闸 / 段序三列', () => {
   it('wholeSetEnabled：非空串才算整套启用', () => {
     expect(wholeSetEnabled('.box')).toBe(true)
     for (const v of ['', null, undefined, 42, ['x'], { a: 1 }]) {
-      expect(wholeSetEnabled(v), `值 ${JSON.stringify(v) ?? String(v)} 不应当成套`).toBe(false)
+      expect(wholeSetEnabled(v), `值 ${JSON.stringify(v)} 不应当成套`).toBe(false)
     }
   })
 
   it('rawExploreFields 的键集恰为 vacant 档 + 分类入口数组（派生真的被读口消费）', () => {
-    const got = rawExploreFields({ bookSourceName: 'A', bookSourceUrl: 'https://a', ruleContent: 'x' })!
+    const got = must(rawExploreFields({ bookSourceName: 'A', bookSourceUrl: 'https://a', ruleContent: 'x' }), 'rawExploreFields 的读口')
     expect(Object.keys(got).sort()).toEqual([...VACANT_RULE_FIELDS, 'ruleExploreKinds'].sort())
   })
 })

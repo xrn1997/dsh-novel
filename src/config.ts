@@ -124,7 +124,7 @@ function isVolatileRef(value: unknown): value is VolatileRef<unknown> {
 
 /** 纯值是测试/直装路径；ref 是 Loader 解析后的活值。两种都收，对外统一成 getter。 */
 function readField<T>(value: Field<T> | null | undefined): T | undefined {
-  return isVolatileRef(value) ? (value.get() as T) : (value ?? undefined)
+  return isVolatileRef(value) ? value.get() : (value ?? undefined)
 }
 
 /** 旧 schemastery 没有 .volatile()：字段退化为普通值，插件仍能加载；配置页由 configForms 能力闸另判。 */
@@ -137,7 +137,7 @@ function maybeVolatile<T extends object>(schema: T): T {
 export const Config = Schema.object(
   Object.fromEntries(Object.entries(CONFIG_FIELDS).map(([name, spec]) =>
     [name, spec.volatile ? maybeVolatile(spec.schema()) : spec.schema()])),
-).default({} as any)
+).default({})
 
 /** 原始配置 → 合法配置的唯一缝：纯输入走 schema 校验；Loader 已解析的 ref 输入不重跑 schema
  *  （volatile ref 会被 `expected number but got [object Object]` 拒绝）。
@@ -149,13 +149,13 @@ export function resolveConfig(raw?: NovelConfig | ConfigInput): ResolvedConfig {
   const names = Object.keys(CONFIG_FIELDS) as ConfigFieldName[]
   const resolved = input !== undefined && names.some((name) => isVolatileRef(input[name]))
   let out: ConfigInput
-  if (resolved && input !== undefined) {
+  if (resolved) {
     out = input
   } else {
     try {
-      out = Config((input ?? {}) as any) as unknown as ConfigInput
+      out = Config((input ?? {}) as Parameters<typeof Config>[0])
     } catch (e) {
-      throw new Error(`[dsh-novel] 配置非法（见 README 配置表）：${e instanceof Error ? e.message : String(e)}`)
+      throw new Error(`[dsh-novel] 配置非法（见 README 配置表）：${e instanceof Error ? e.message : String(e)}`, { cause: e })
     }
   }
   // apiAllowHosts 还要过「URL 解析不改写」判据（唯一实现 = api/wire.ts 的 hostNameOf，fence 同一把尺）：

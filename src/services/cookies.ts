@@ -39,8 +39,9 @@ export class CookieJar {
     const host = parsed.hostname.toLowerCase()
     for (const raw of setCookie) {
       const parts = raw.split(';').map(s => s.trim())
-      if (parts.length === 0) continue
       const pair = parts[0]
+      // 首段即 name=value：切不出首段就没有可读的条目，与本循环的其余跳过同路
+      if (pair === undefined) continue
       const eq = pair.indexOf('=')
       if (eq <= 0) continue
       const name = pair.slice(0, eq).trim()
@@ -48,6 +49,7 @@ export class CookieJar {
       if (name === '') continue
 
       // 头注入防线：名字/值里的控制字符一律拒绝（Cookie 值来自站点响应，不许带 CR/LF 进请求头）
+      // eslint-disable-next-line no-control-regex -- 控制字符正是这一格的匹配对象（头注入防线），不是笔误
       if (/[\x00-\x1f\x7f]/.test(name) || /[\x00-\x1f\x7f]/.test(value)) continue
 
       let domain = host
@@ -82,6 +84,7 @@ export class CookieJar {
         // 公共后缀表没接；至少拒绝「单标签且不等于请求 host」的 Domain（`Domain=com` 会让一个源把
         // cookie 种给所有 .com 站点，而 jar 是跨源共享的）。`Domain=localhost` 这种 host 自身形态放行。
         // 多标签公共后缀（如 co.uk）仍是已知残留，记在矩阵 b-cookie-jar。
+        // eslint-disable-next-line no-control-regex -- 同一条头注入防线：Domain 属性里的控制字符也是拒绝对象
         if ((!domainAttr.includes('.') && domainAttr !== host) || /[\s\x00-\x1f\x7f]/.test(domainAttr)) continue
         domain = domainAttr
         hostOnly = false

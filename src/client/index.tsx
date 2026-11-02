@@ -5,7 +5,6 @@ import {
   CopyProvider,
   createTranslate,
   zhTranslate,
-  type CopyHostLike,
   type Translate,
 } from './copy/index.js'
 import { NOVEL_GLYPH_PATH, NOVEL_GLYPH_VIEWBOX } from './novel-glyph.js'
@@ -77,7 +76,7 @@ export function apply(ctx: Context): void {
   // 状态层 / 配置页共用同一个 t。宿主槽位缓存的 inject 结果是这个稳定函数本身，切语言由它在
   // 调用时读当前 locale，故这里不订阅。不声明 slot 的 `locale` 席位：那条路在未安装 locale face
   // 的宿主上会抛，与可选回退冲突（`ADR-0038`）；换语言靠 outlet 的 locale revision 重渲。
-  const t = createTranslate(ctx as unknown as CopyHostLike)
+  const t = createTranslate(ctx)
   // 全局面板双注册（同 id/key「novel」，必须同批——官方契约：选中缺失的 main entry 会抛）
   ctx.effect(() => slots.inject('sidebar.panellist', () => slots.register(
     { name: 'sidebar.panellist', id: NOVEL_PANEL_ID, order: 20, label: () => t('nav.panel') },

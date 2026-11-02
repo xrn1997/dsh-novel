@@ -6,6 +6,8 @@ import { CookieJar } from '../../src/services/cookies.js'
 import { PageCache } from '../../src/services/cache.js'
 import { Shelf } from '../../src/services/shelf.js'
 import { SourceRegistry } from '../../src/services/sources.js'
+import { must } from '../support/fixture.js'
+import { requestUrlOf } from '../support/fetch-input.js'
 
 /**
  * AllInOne 目录的 `$n` 字段映射（库内实证源 若夏）：目录规则是整页正则形态，
@@ -50,10 +52,10 @@ async function makeSvc(): Promise<{ svc: ReadingService; registry: SourceRegistr
     cache: new PageCache(dir),
     fetcher: createFetcher({
       fetchImpl: (async (input: RequestInfo | URL) => {
-        const u = String(input)
+        const u = requestUrlOf(input)
         if (u === TOC_URL) return new Response(TOC_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } })
         return new Response('', { status: 404 })
-      }) as never,
+      }),
       cookieJar: jar,
     }),
     cookieJar: jar,
@@ -65,7 +67,7 @@ async function makeSvc(): Promise<{ svc: ReadingService; registry: SourceRegistr
 describe('AllInOne 目录的 $n 字段映射', () => {
   it('$1/$2$3 按行组取值：目录书名与章节地址都取到真值', async () => {
     const { svc, registry } = await makeSvc()
-    const src = registry.list().find((s) => s.name === '若夏型源')!
+    const src = must(registry.list().find((s) => s.name === '若夏型源'), 'registry.list() 里 find 命中的那一项')
     const toc = await svc.getToc(src.id, BOOK_URL)
     expect(toc).toEqual([
       { name: '第一章 初入江湖', url: 'https://a.heiyan.com/ajax/chapter/content/30394' },

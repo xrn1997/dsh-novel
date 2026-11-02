@@ -70,9 +70,10 @@ export function Dialog({ title, label, onClose, children, actions, variant = 'mo
       if (e.key === 'Escape') { onCloseRef.current(); return }
       if (e.key !== 'Tab') return
       const f = focusables()
-      if (f.length === 0) { e.preventDefault(); return }
-      const first = f[0]
-      const last = f[f.length - 1]
+      const [first] = f
+      const last = f.at(-1)
+      // 空表即没有可聚焦件：Tab 不出框（首、末任一缺席都是这一支，故只留一道闸）
+      if (first === undefined || last === undefined) { e.preventDefault(); return }
       if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
       else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
     }

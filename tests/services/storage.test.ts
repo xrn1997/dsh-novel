@@ -17,10 +17,10 @@ function fsError(code: string, message = code): NodeJS.ErrnoException {
 
 describe('novelDir', () => {
   it('DSH_HOME 存在时取 $DSH_HOME/novel', () => {
-    expect(novelDir({ DSH_HOME: 'D:/dh' } as NodeJS.ProcessEnv)).toBe(path.join('D:/dh', 'novel'))
+    expect(novelDir({ DSH_HOME: 'D:/dh' })).toBe(path.join('D:/dh', 'novel'))
   })
   it('DSH_HOME 缺省取 ~/.dsh/novel', () => {
-    expect(novelDir({} as NodeJS.ProcessEnv)).toMatch(/[\\/]novel$/)
+    expect(novelDir({})).toMatch(/[\\/]novel$/)
   })
 })
 
@@ -103,7 +103,7 @@ describe('writeFileAtomic（PageCache/JSON 共用低层）', () => {
       () => new Promise<void>((_resolve, reject) => { rejectRename = reject }),
     )
     const w = createDebouncedWriter(1)
-    w.schedule(file, { v: 1 })
+    void w.schedule(file, { v: 1 })
     await vi.waitFor(() => { expect(renameMock).toHaveBeenCalled() }, { timeout: 5_000 })
     const flushed = w.flush(file)          // pending 已被定时器取走，rename 仍在途
     rejectRename(fsError('EACCES', 'denied'))
@@ -122,7 +122,7 @@ describe('writeFileAtomic（PageCache/JSON 共用低层）', () => {
     )
     const errorSpy = vi.spyOn(log, 'error').mockImplementation(() => undefined)
     const w = createDebouncedWriter(1)
-    w.schedule(file, { v: 1 })
+    void w.schedule(file, { v: 1 })
     await vi.waitFor(() => { expect(renameMock).toHaveBeenCalled() }, { timeout: 5_000 })
     rejectRename(fsError('EACCES', 'denied'))
     await vi.waitFor(() => { expect(errorSpy).toHaveBeenCalled() }, { timeout: 5_000 })
@@ -146,7 +146,7 @@ describe('createDebouncedWriter', () => {
       return fakeSetTimeout(cb, delay, ...args)
     }) as typeof globalThis.setTimeout
     try {
-      createDebouncedWriter().schedule(path.join(dir, 'default-window.json'), {})
+      void createDebouncedWriter().schedule(path.join(dir, 'default-window.json'), {})
       expect(delays).toEqual([PERSIST_WINDOW_MS])
     } finally {
       globalThis.setTimeout = fakeSetTimeout
@@ -157,7 +157,7 @@ describe('createDebouncedWriter', () => {
     const dir = await tmp()
     const file = path.join(dir, 'd.json')
     const w = createDebouncedWriter(10)
-    w.schedule(file, { v: 1 }); w.schedule(file, { v: 2 }); w.schedule(file, { v: 3 })
+    void w.schedule(file, { v: 1 }); void w.schedule(file, { v: 2 }); void w.schedule(file, { v: 3 })
     await w.flush()
     expect(await readJson(file, null)).toEqual({ v: 3 })
   })
@@ -169,7 +169,7 @@ describe('createDebouncedWriter', () => {
     const dir = await tmp()
     const a = path.join(dir, 'a.json'); const b = path.join(dir, 'b.json')
     const w = createDebouncedWriter(10)
-    w.schedule(a, { x: 1 }); w.schedule(b, { x: 2 })
+    void w.schedule(a, { x: 1 }); void w.schedule(b, { x: 2 })
     await w.flush()
     expect(await readJson(a, null)).toEqual({ x: 1 })
     expect(await readJson(b, null)).toEqual({ x: 2 })
@@ -183,9 +183,9 @@ describe('createDebouncedWriter', () => {
     const dir = await tmp()
     const a = path.join(dir, 'a.json'); const b = path.join(dir, 'b.json')
     const w = createDebouncedWriter(10_000)
-    w.schedule(a, { v: 1 })
+    void w.schedule(a, { v: 1 })
     const p = w.flush()               // 第一轮只看见 a；a 的 mkdir/write 仍在途
-    w.schedule(b, { v: 2 })           // 就落在这个窗口里
+    void w.schedule(b, { v: 2 })      // 就落在这个窗口里
     await p
     expect(await readJson(b, null)).toEqual({ v: 2 })
   })
@@ -223,7 +223,8 @@ describe('createDebouncedWriter', () => {
     const file = path.join(dir, 'threshold-cumulative.json')
     const w = createDebouncedWriter(5, { threshold: 3 })
     expect(w.schedule(file, { n: 1 })).toBeUndefined()
-    for (let i = 0; i < 100 && (await readJson(file, null)) === null; i++) {
+    // 这一轮只问「落地了没有」：读回的形态由下面的断言管，所以按 unknown 读
+    for (let i = 0; i < 100 && (await readJson<unknown>(file, null)) === null; i++) {
       await new Promise((r) => setTimeout(r, 5))              // 等定时器路径写真正落地
     }
     expect(await readJson(file, null)).toEqual({ n: 1 })      // 那一笔落地不清计数
@@ -238,7 +239,7 @@ describe('createDebouncedWriter', () => {
     w.retainFailure(file, fsError('EACCES', 'denied'))
     await expect(w.flush(file)).rejects.toMatchObject({ code: 'EACCES' })
     w.retainFailure(file, fsError('EACCES', 'denied'))
-    w.schedule(file, { v: 1 })
+    void w.schedule(file, { v: 1 })
     await w.flush()
     await expect(w.flush(file)).resolves.toBeUndefined()
   })

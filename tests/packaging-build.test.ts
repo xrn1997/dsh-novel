@@ -17,9 +17,9 @@ describe.skipIf(!hasLib)('构建产物（先跑 pnpm build 或 pnpm test:pack）
     // sourcemap: true 时 footer 之后还有 //# sourceMappingURL 注释（官方样例同款形态）；
     // rolldown 会把 footer 拆行——用容忍空白的正则匹配 `return module.exports; } });`
     const footerMatch = /return module\.exports;\s*\}\s*\}\);/.exec(js)
-    expect(footerMatch).not.toBeNull()
+    if (footerMatch === null) throw new Error('构建产物里找不到 footer（rolldown 输出形状变了？）')
     const mapIdx = js.indexOf('//# sourceMappingURL=')
-    expect(mapIdx).toBeGreaterThan(footerMatch!.index)
+    expect(mapIdx).toBeGreaterThan(footerMatch.index)
     expect(js).toContain('sidebar.panellist')           // 全局面板入口进了 bundle
     expect(js).toContain('novel-status')                // 常驻状态层注册仍在
     // 断言编译后的调用形状，而不是裸字符串：源文件 JSDoc 里也抄着同一个槽名，注册被删而注释还在时
@@ -28,7 +28,13 @@ describe.skipIf(!hasLib)('构建产物（先跑 pnpm build 或 pnpm test:pack）
   })
   it('client 半纯度：require 白名单外零泄漏', () => {
     const js = readFileSync('lib/client.js', 'utf8')
-    const requires = [...js.matchAll(/require\("([^"]+)"\)/g)].map((m) => m[1])
+    const requires: string[] = []
+    for (const m of js.matchAll(/require\("([^"]+)"\)/g)) {
+      const spec = m[1]
+      // 捕获体缺席只可能是正则被改坏：跳过等于漏看一条 require，纯度门就少守一段，故宁可炸
+      if (spec === undefined) throw new Error(`require 片段没有捕获体：${m[0]}`)
+      requires.push(spec)
+    }
     // 这份清单是**独立抄本**（不 import tsdown.config.ts 的 PLATFORM_MODULES），否则「配置写宽了」
     // 会连同测试一起变宽，守卫退化成回声。分母是宿主 web shell 的 `staticModules()`：裸 `cordis`
     // 在 0.2.0-rc.2 的运行时表里没有（只有 `@deepseek-ai/cordis`），抄本与允许表都不许留它。

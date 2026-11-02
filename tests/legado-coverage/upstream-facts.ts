@@ -10,11 +10,14 @@ import { fileURLToPath } from 'node:url'
  * 单一事实来源：抽取正则、实体清单都在这里，生成器与三个闸门共用（两边各写必漂）。
  */
 
+/** 对面主源根：规则实体与 java 宿主面都住这里（命名成常量，免得靠「数组第 0 项」这种位置约定） */
+export const MAIN_ROOT = 'app/src/main/java/io/legado/app'
+
+/** 对面测试源根：分析器的复现测试只在这里 */
+export const TEST_ROOT = 'app/src/test/java/io/legado/app'
+
 /** 对面源根：主源与测试源都要认（测试源码根下才有分析器的复现测试） */
-export const UPSTREAM_ROOTS = [
-  'app/src/main/java/io/legado/app',
-  'app/src/test/java/io/legado/app',
-]
+export const UPSTREAM_ROOTS = [MAIN_ROOT, TEST_ROOT]
 
 /** 对面的规则实体类：书源 JSON 里每个 rules 容器各对应一份 */
 export const RULE_CLASSES = [
@@ -31,7 +34,10 @@ const NOT_A_FIELD = new Set(['jsonDeserializer'])
 export function fieldsOf(src: string): string[] {
   const out: string[] = []
   for (const m of src.matchAll(/^\s*(?:override\s+)?(?:var|val)\s+([A-Za-z][A-Za-z0-9]*)\s*:/gm)) {
-    if (!NOT_A_FIELD.has(m[1])) out.push(m[1])
+    const name = m[1]
+    // 捕获体缺席只可能是抽取正则被改坏：跳过等于让这个字段逃出分母，故宁可炸
+    if (name === undefined) throw new Error(`抽取到的字段名没有捕获体：${m[0]}`)
+    if (!NOT_A_FIELD.has(name)) out.push(name)
   }
   return out
 }
@@ -40,7 +46,10 @@ export function fieldsOf(src: string): string[] {
 export function javaMethodNames(src: string): string[] {
   const out = new Set<string>()
   for (const m of src.matchAll(/^\s{4}(?:@\w+(?:\([^)]*\))?\s+)*(?:open |override |suspend )*fun ([a-zA-Z][A-Za-z0-9]*)\s*\(/gm)) {
-    out.add(m[1])
+    const name = m[1]
+    // 捕获体缺席只可能是抽取正则被改坏：跳过等于让这个方法逃出分母，故宁可炸
+    if (name === undefined) throw new Error(`抽取到的宿主方法名没有捕获体：${m[0]}`)
+    out.add(name)
   }
   return [...out].sort()
 }
@@ -82,9 +91,15 @@ export function readSnapshot(): UpstreamSnapshot {
       '生成时需要对面 checkout（DSH_LEGADO_REF 指路）。',
     )
   }
-  const snap = JSON.parse(fs.readFileSync(SNAPSHOT_PATH, 'utf8')) as UpstreamSnapshot
+  const parsed: unknown = JSON.parse(fs.readFileSync(SNAPSHOT_PATH, 'utf8'))
+  const snap = parsed as UpstreamSnapshot
   for (const k of ['paths', 'ruleFields', 'javaMethods'] as const) {
-    if (!snap[k] || (Array.isArray(snap[k]) ? snap[k].length === 0 : Object.keys(snap[k]).length === 0)) {
+    // 取值走宽视（快照是盘上的 JSON，坏形状只有到运行时才看得见）
+    const bucket: unknown = (parsed as Record<string, unknown>)[k]
+    const size = Array.isArray(bucket)
+      ? bucket.length
+      : bucket !== null && typeof bucket === 'object' ? Object.keys(bucket).length : 0
+    if (size === 0) {
       throw new Error(`快照的 ${k} 是空的：${SNAPSHOT_PATH}（分母读空即判据失效，不许静默放行）`)
     }
   }

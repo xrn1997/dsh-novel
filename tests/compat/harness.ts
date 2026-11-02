@@ -2,6 +2,8 @@ import { existsSync, promises as fs, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { ReadingService } from '../../src/services/reading.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
+import { must } from '../support/fixture.js'
+import { requestUrlOf } from '../support/fetch-input.js'
 
 /**
  * compat 回放 harness：真实源 + 脱敏页面 fixture 的离线回放（全程零网络）。
@@ -49,12 +51,14 @@ export function loadCases(root: string): CompatCase[] {
     const manifestPath = path.join(dir, 'manifest.json')
     if (!existsSync(sourcePath) || !existsSync(manifestPath)) return
     try {
-      const source = JSON.parse(readFileSync(sourcePath, 'utf8'))
-      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as CompatCase['manifest']
-      if (typeof manifest.keyword !== 'string' || typeof manifest.pages !== 'object' || manifest.pages === null) {
+      const source: unknown = JSON.parse(readFileSync(sourcePath, 'utf8'))
+      const manifest: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'))
+      if (typeof manifest !== 'object' || manifest === null) throw new Error('manifest 缺 keyword/pages')
+      const fields = manifest as { keyword?: unknown; pages?: unknown }
+      if (typeof fields.keyword !== 'string' || typeof fields.pages !== 'object' || fields.pages === null) {
         throw new Error('manifest 缺 keyword/pages')
       }
-      out.push({ caseName, dir, source, manifest })
+      out.push({ caseName, dir, source, manifest: manifest as CompatCase['manifest'] })
     } catch (e) {
       console.warn(`[compat] 跳过坏 case ${caseName}: ${String(e)}`)
     }
@@ -72,14 +76,14 @@ export function loadCases(root: string): CompatCase[] {
 /** manifest 精确 URL 匹配的回放 fetch（响应 content-type 按扩展名）；未命中 → 确定性报错指引重跑 capture */
 export function makeReplayFetch(c: CompatCase): typeof globalThis.fetch {
   return (async (input: RequestInfo | URL): Promise<Response> => {
-    const url = String(input)
+    const url = requestUrlOf(input)
     const rel = c.manifest.pages[url]
     if (rel === undefined) throw new Error(`fixture 缺失: ${url}（重跑 capture 补齐）`)
     const body = await fs.readFile(path.join(c.dir, rel))
-    return new Response(body as unknown as BodyInit, {
+    return new Response(body, {
       headers: { 'content-type': rel.endsWith('.json') ? 'application/json' : 'text/html; charset=utf-8' },
     })
-  }) as typeof globalThis.fetch
+  })
 }
 
 const faceOrder: CompatFace[] = ['import', 'search', 'detail', 'toc', 'chapter']
@@ -108,17 +112,24 @@ export async function runCase(c: CompatCase): Promise<CaseResult> {
     searchHits: 0, tocChapters: 0, chapterChars: 0, detailKind: null, detailWordCount: null,
   }
   let ok = true
+  /** 取首行（报告的「错误」列只放一行）：不靠 split 的下标，空串与无换行都给原文 */
+  const firstLine = (s: string): string => {
+    const i = s.indexOf('\n')
+    return i === -1 ? s : s.slice(0, i)
+  }
   const fail = (face: CompatFace, e: unknown): void => {
     ok = false
-    steps.push({ face, ok: false, error: { code: e instanceof Error ? e.constructor.name : 'Error', message: e instanceof Error ? e.message.split('\n')[0] : String(e) } })
+    steps.push({ face, ok: false, error: { code: e instanceof Error ? e.constructor.name : 'Error', message: e instanceof Error ? firstLine(e.message) : String(e) } })
   }
   try {
     const svc = trackService(await ReadingService.create({ dir: tmp, fetchImpl: makeReplayFetch(c) }))
     try {
       // ① import（规范化入库后显式探针——导入不探针，验证归 probe 单点）
       const outcome = (await svc.importSource(c.source))[0]
+      // 一次导入必回一条回执：回执缺席即这条 case 本身失效（走下面同一失败通道，不静默跳过）
+      if (outcome === undefined) throw new Error('导入没有回执（importSource 返回空数组）')
       if (!outcome.ok) throw new Error(`规范化失败：${outcome.missing.map((m) => m.field).join(',')}`)
-      const sourceId = outcome.sourceId!
+      const sourceId = must(outcome.sourceId, '导入回执没有 sourceId')
       const probe = await svc.probe(sourceId)
       if (!probe.ok) {
         throw new Error(`探针失败：${probe.error?.code ?? '?'} ${probe.error?.message ?? ''}`)
@@ -126,7 +137,7 @@ export async function runCase(c: CompatCase): Promise<CaseResult> {
       steps.push({ face: 'import', ok: true })
 
       // ② search（首个非空组首条）
-      const groups = await svc.search(String(c.manifest.keyword))
+      const groups = await svc.search(c.manifest.keyword)
       const hit = groups.flatMap((g) => g.hits).find((h) => h.url !== null)
       if (hit === undefined || hit.url === null) {
         const gerr = groups.find((g) => g.error !== undefined)?.error
@@ -145,7 +156,7 @@ export async function runCase(c: CompatCase): Promise<CaseResult> {
       }
       for (const f of ['kind', 'wordCount'] as const) {
         const declared = declaresDetail(c.source, f)
-        const arrived = detail[f] !== null && String(detail[f]).trim() !== ''
+        const arrived = detail[f] !== null && detail[f].trim() !== ''
         if (declared) stats[f === 'kind' ? 'detailKind' : 'detailWordCount'] = arrived
         if (declared && !arrived) {
           throw new Error(`详情字段未到货：${f}（源声明了该规则，采集时也取到了值）`)

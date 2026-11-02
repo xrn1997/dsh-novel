@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ReadingService } from '../../src/services/reading.js'
-import { startServer } from './helpers.js'
+import type { ImportFileBody, JobState, ProbeResult, SourcePublic } from '../../src/shared/wire.js'
+import { must, pick } from '../support/fixture.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
+import { errorOf, startServer, valueOf } from './helpers.js'
 
 const rawSource = {
   bookSourceName: 'S', bookSourceUrl: 'https://s.com',
@@ -16,24 +18,24 @@ beforeAll(async () => {
   const dir = await makeTempDir('novel-api-')
   svc = trackService(await ReadingService.create({
     dir,
-    fetchImpl: (async () => new Response(SEARCH_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } })) as any,
+    fetchImpl: async () => new Response(SEARCH_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } }),
   }))
   ;({ base, close } = await startServer(svc))
 })
 afterAll(async () => { await svc.flush(); await close() })
 
 /** 提交导入 → 轮询 job-status 至收尾 → 返回 JobState（新任务面的统一驱动方式，UI 同款） */
-async function importAndDone(files: Array<{ name: string; text: string }>): Promise<any> {
+async function importAndDone(files: ImportFileBody[]): Promise<JobState> {
   const r = await fetch(`${base}/novel-api/sources/import`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ files }),
   })
   expect(r.status).toBe(200)
   return pollDone(base)
 }
-async function pollDone(b: string): Promise<any> {
+async function pollDone(b: string): Promise<JobState> {
   for (let i = 0; i < 500; i++) {
-    const { value } = await (await fetch(`${b}/novel-api/sources/job-status`)).json() as any
-    if (value.job !== null && value.job.phase !== 'running') return value.job
+    const { job } = await valueOf<{ job: JobState | null }>(await fetch(`${b}/novel-api/sources/job-status`))
+    if (job !== null && job.phase !== 'running') return job
     await new Promise((r) => setTimeout(r, 5))
   }
   throw new Error('job 未在限时内收尾')
@@ -46,22 +48,23 @@ describe('sources 面（后台任务版）', () => {
       body: JSON.stringify({ files: [{ name: 'a.json', text: JSON.stringify([rawSource, { bad: 1 }]) }] }),
     })
     expect(r1.status).toBe(200)
-    const { value: started } = await r1.json() as any
+    const started = await valueOf<{ jobId: string }>(r1)
     expect(started.jobId).toBeTypeOf('string')
     const job = await pollDone(base)
     expect(job).toMatchObject({ id: started.jobId, kind: 'import', phase: 'done' })
     expect(job.counts).toMatchObject({ ok: 1, failed: 1 })
 
-    const { value: list } = await (await fetch(`${base}/novel-api/sources`)).json() as any
+    const list = await valueOf<SourcePublic[]>(await fetch(`${base}/novel-api/sources`))
     expect(list).toHaveLength(1)
-    expect(list[0]).toMatchObject({ name: 'S', status: 'unverified', hasHeader: false, hasAuth: false })
-    expect(list[0]).not.toHaveProperty('raw')
-    expect(list[0]).not.toHaveProperty('auth')
+    expect(pick(list, 0)).toMatchObject({ name: 'S', status: 'unverified', hasHeader: false, hasAuth: false })
+    expect(pick(list, 0)).not.toHaveProperty('raw')
+    expect(pick(list, 0)).not.toHaveProperty('auth')
   })
   it('job done 后结果保留：再查 job-status 仍拿到同一份汇总（重开 UI 可恢复）', async () => {
-    const { value } = await (await fetch(`${base}/novel-api/sources/job-status`)).json() as any
-    expect(value.job).toMatchObject({ kind: 'import', phase: 'done' })
-    expect(value.job.counts.ok).toBe(1)
+    const { job } = await valueOf<{ job: JobState | null }>(await fetch(`${base}/novel-api/sources/job-status`))
+    const current = must(job, '任务快照')
+    expect(current).toMatchObject({ kind: 'import', phase: 'done' })
+    expect(current.counts.ok).toBe(1)
   })
   it('坏文件点名：fileErrors 有记录，好文件照常导入', async () => {
     const job = await importAndDone([
@@ -72,20 +75,20 @@ describe('sources 面（后台任务版）', () => {
     expect(job.counts.ok).toBe(1)
   })
   it('POST /sources/:id/probe → ProbeResult 并落状态', async () => {
-    const { value: list } = await (await fetch(`${base}/novel-api/sources`)).json() as any
-    const r = await fetch(`${base}/novel-api/sources/${list[0].id}/probe`, { method: 'POST' })
-    const { value: probe } = await r.json() as any
+    const list = await valueOf<SourcePublic[]>(await fetch(`${base}/novel-api/sources`))
+    const r = await fetch(`${base}/novel-api/sources/${pick(list, 0).id}/probe`, { method: 'POST' })
+    const probe = await valueOf<ProbeResult>(r)
     expect(probe).toMatchObject({ ok: true, itemCount: 1, firstTitle: '斗罗' })
-    const { value: after } = await (await fetch(`${base}/novel-api/sources`)).json() as any
-    expect(after.find((s: any) => s.id === list[0].id).status).toBe('verified')
+    const after = await valueOf<SourcePublic[]>(await fetch(`${base}/novel-api/sources`))
+    expect(must(after.find((s) => s.id === pick(list, 0).id), '探针后的源').status).toBe('verified')
   })
   it('POST /sources/batch-probe：ids 校验 400 + 正常收尾状态翻转 verified', async () => {
     expect((await fetch(`${base}/novel-api/sources/batch-probe`, { method: 'POST' })).status).toBe(400)
     expect((await fetch(`${base}/novel-api/sources/batch-probe`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids: [] }),
     })).status).toBe(400)
-    const { value: list } = await (await fetch(`${base}/novel-api/sources`)).json() as any
-    const unprobed = list.filter((s: any) => s.status !== 'verified').map((s: any) => s.id)
+    const list = await valueOf<SourcePublic[]>(await fetch(`${base}/novel-api/sources`))
+    const unprobed = list.filter((s) => s.status !== 'verified').map((s) => s.id)
     if (unprobed.length > 0) {
       const r = await fetch(`${base}/novel-api/sources/batch-probe`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids: unprobed }),
@@ -94,8 +97,8 @@ describe('sources 面（后台任务版）', () => {
       const job = await pollDone(base)
       expect(job.kind).toBe('batch-probe')
       expect(job.counts.ok).toBe(unprobed.length)
-      const { value: after } = await (await fetch(`${base}/novel-api/sources`)).json() as any
-      expect(after.every((s: any) => s.status === 'verified')).toBe(true)
+      const after = await valueOf<SourcePublic[]>(await fetch(`${base}/novel-api/sources`))
+      expect(after.every((s) => s.status === 'verified')).toBe(true)
     }
   })
   it('运行中再提交 → 409 JobRunning（gated 探针把任务钉在 running）', async () => {
@@ -104,7 +107,7 @@ describe('sources 面（后台任务版）', () => {
     const dir = await makeTempDir('novel-api-')
     const svc2 = trackService(await ReadingService.create({
       dir,
-      fetchImpl: (async () => { await gate; return new Response(SEARCH_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } }) }) as any,
+      fetchImpl: async () => { await gate; return new Response(SEARCH_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } }) },
     }))
     const s2 = await startServer(svc2)
     try {
@@ -114,22 +117,22 @@ describe('sources 面（后台任务版）', () => {
         body: JSON.stringify({ files: [{ name: 'a.json', text: JSON.stringify(rawSource) }] }),
       })
       await pollDone(s2.base)
-      const { value: list } = await (await fetch(`${s2.base}/novel-api/sources`)).json() as any
+      const list = await valueOf<SourcePublic[]>(await fetch(`${s2.base}/novel-api/sources`))
       await fetch(`${s2.base}/novel-api/sources/batch-probe`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids: [list[0].id] }),
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids: [pick(list, 0).id] }),
       })
       const r = await fetch(`${s2.base}/novel-api/sources/import`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ files: [{ name: 'b.json', text: '{}' }] }),
       })
       expect(r.status).toBe(409)
-      expect((await r.json() as any).error.code).toBe('JobRunning')
+      expect((await errorOf(r)).code).toBe('JobRunning')
     } finally { release(); await svc2.flush(); await s2.close() }
   })
   it('POST /sources（旧同步路由）→ 405（已移除；统一 mismatch 措辞指明本路径需 GET，导入归 sources/import）', async () => {
     const r = await fetch(`${base}/novel-api/sources`, { method: 'POST', body: '[]' })
     expect(r.status).toBe(405)
-    expect((await r.json() as any).error.message).toBe('方法不允许: POST（/novel-api/sources 需 GET）')
+    expect((await errorOf(r)).message).toBe('方法不允许: POST（/novel-api/sources 需 GET）')
   })
   it('import body 校验：空 files / 缺 name|text → 400', async () => {
     const post = (body: unknown) => fetch(`${base}/novel-api/sources/import`, {
@@ -140,15 +143,15 @@ describe('sources 面（后台任务版）', () => {
     expect((await post(null)).status).toBe(400)
   })
   it('POST /sources/:id/enabled：置位翻转 + GET 可见 + persist；未知 id 404；非法 body 400', async () => {
-    const { value: list } = await (await fetch(`${base}/novel-api/sources`)).json() as any
-    const id = list[0].id
+    const list = await valueOf<SourcePublic[]>(await fetch(`${base}/novel-api/sources`))
+    const id = pick(list, 0).id
     const r = await fetch(`${base}/novel-api/sources/${id}/enabled`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: false }),
     })
     expect(r.status).toBe(200)
-    expect((await r.json() as any).value).toEqual({ enabled: false })
-    const { value: after } = await (await fetch(`${base}/novel-api/sources`)).json() as any
-    expect(after.find((s: any) => s.id === id).enabled).toBe(false)
+    expect(await valueOf<{ enabled: boolean }>(r)).toEqual({ enabled: false })
+    const after = await valueOf<SourcePublic[]>(await fetch(`${base}/novel-api/sources`))
+    expect(must(after.find((s) => s.id === id), '启停后的源').enabled).toBe(false)
     // 持久化：服务重启（重 load）后仍停用——registry.persist 已在路由内
     expect((await fetch(`${base}/novel-api/sources/${id}/enabled`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: true }),
@@ -165,7 +168,7 @@ describe('sources 面（后台任务版）', () => {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: true }),
     })
     expect(r.status).toBe(404)
-    expect((await r.json() as any).error.code).toBe('NotFound')
+    expect((await errorOf(r)).code).toBe('NotFound')
   })
   it('POST /sources/batch-enabled：批量启停 + 未知跳过 + 重复幂等 + 空/非法 400', async () => {
     const seed = await importAndDone([{ name: 'be.json', text: JSON.stringify([
@@ -173,16 +176,16 @@ describe('sources 面（后台任务版）', () => {
       { ...rawSource, bookSourceName: 'BE2', bookSourceUrl: 'https://be2.com' },
     ]) }])
     expect(seed.counts.ok).toBe(2)
-    const { value: list } = await (await fetch(`${base}/novel-api/sources`)).json() as any
-    const ids = list.filter((s: any) => s.name.startsWith('BE')).map((s: any) => s.id)
+    const list = await valueOf<SourcePublic[]>(await fetch(`${base}/novel-api/sources`))
+    const ids = list.filter((s) => s.name.startsWith('BE')).map((s) => s.id)
     const r = await fetch(`${base}/novel-api/sources/batch-enabled`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ids: [...ids, 'fake-uuid', ids[0]], enabled: false }),   // 未知跳过 + 重复幂等
+      body: JSON.stringify({ ids: [...ids, 'fake-uuid', pick(ids, 0)], enabled: false }),   // 未知跳过 + 重复幂等
     })
     expect(r.status).toBe(200)
-    expect((await r.json() as any).value.updated).toBe(2)
-    const { value: after } = await (await fetch(`${base}/novel-api/sources`)).json() as any
-    expect(after.filter((s: any) => s.name.startsWith('BE')).every((s: any) => s.enabled === false)).toBe(true)
+    expect((await valueOf<{ updated: number }>(r)).updated).toBe(2)
+    const after = await valueOf<SourcePublic[]>(await fetch(`${base}/novel-api/sources`))
+    expect(after.filter((s) => s.name.startsWith('BE')).every((s) => !s.enabled)).toBe(true)
     expect((await fetch(`${base}/novel-api/sources/batch-enabled`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids: [], enabled: true }),
     })).status).toBe(400)
@@ -197,14 +200,16 @@ describe('sources 面（后台任务版）', () => {
     expect(job.counts.ok).toBe(1)
   })
   it('POST /sources/batch-delete：多 id + 未知 id + 重复 id → 实删计数；空/非法 → 400', async () => {
-    const { value: list } = await (await fetch(`${base}/novel-api/sources`)).json() as any
-    const [x, y] = list.map((s: any) => s.id)
+    const list = await valueOf<SourcePublic[]>(await fetch(`${base}/novel-api/sources`))
+    const ids = list.map((s) => s.id)
+    const x = pick(ids, 0)
+    const y = pick(ids, 1)
     const r = await fetch(`${base}/novel-api/sources/batch-delete`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ ids: [x, 'fake-uuid', x, y] }),       // 未知跳过 + 重复幂等
     })
     expect(r.status).toBe(200)
-    expect((await r.json() as any).value.removed).toBe(Math.min(2, list.length))
+    expect((await valueOf<{ removed: number }>(r)).removed).toBe(Math.min(2, list.length))
     expect((await fetch(`${base}/novel-api/sources/batch-delete`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids: [] }),
     })).status).toBe(400)
@@ -213,24 +218,25 @@ describe('sources 面（后台任务版）', () => {
     })).status).toBe(400)
   })
   it('POST /sources/:id/auth 录入形态 → hasAuth 位翻转，凭据不外泄', async () => {
-    const { value: list } = await (await fetch(`${base}/novel-api/sources`)).json() as any
+    const list = await valueOf<SourcePublic[]>(await fetch(`${base}/novel-api/sources`))
     if (list.length === 0) return                                    // 前序批量删空则跳过（auth 语义在 sources.test 有专测）
-    const r = await fetch(`${base}/novel-api/sources/${list[0].id}/auth`, {
+    const first = pick(list, 0)
+    const r = await fetch(`${base}/novel-api/sources/${first.id}/auth`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cookies: { token: 'SECRET' } }),
     })
-    expect((await r.json() as any).value).toEqual({ auth: true })
-    const { value: after } = await (await fetch(`${base}/novel-api/sources`)).json() as any
-    expect(after[0]).toMatchObject({ hasAuth: true, authExpired: false })
+    expect(await valueOf<{ auth: true }>(r)).toEqual({ auth: true })
+    const after = await valueOf<SourcePublic[]>(await fetch(`${base}/novel-api/sources`))
+    expect(pick(after, 0)).toMatchObject({ hasAuth: true, authExpired: false })
     expect(JSON.stringify(after)).not.toContain('SECRET')
     // login-info 形态：只更新登录信息，不改 cookie/header（保留语义在 reading.test 有专测）
-    const r2 = await fetch(`${base}/novel-api/sources/${list[0].id}/auth`, {
+    const r2 = await fetch(`${base}/novel-api/sources/${first.id}/auth`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ loginInfo: { user: 'LOGIN-SECRET' } }),
     })
     expect(r2.status).toBe(200)
-    expect((await r2.json() as any).value).toEqual({ auth: true })
-    const { value: after2 } = await (await fetch(`${base}/novel-api/sources`)).json() as any
+    expect(await valueOf<{ auth: true }>(r2)).toEqual({ auth: true })
+    const after2 = await valueOf<SourcePublic[]>(await fetch(`${base}/novel-api/sources`))
     expect(JSON.stringify(after2)).not.toContain('LOGIN-SECRET')
-    await fetch(`${base}/novel-api/sources/${list[0].id}`, { method: 'DELETE' })
+    await fetch(`${base}/novel-api/sources/${first.id}`, { method: 'DELETE' })
   })
   it('POST /sources/:id/auth loginAction → 按按钮名回传外链；未知按钮 400', async () => {
     const job = await importAndDone([{
@@ -241,14 +247,14 @@ describe('sources 面（后台任务版）', () => {
       }),
     }])
     expect(job.phase).toBe('done')
-    const { value: list } = await (await fetch(`${base}/novel-api/sources`)).json() as any
-    const btn = list.find((s: any) => s.name === 'Btn')
+    const list = await valueOf<SourcePublic[]>(await fetch(`${base}/novel-api/sources`))
+    const btn = must(list.find((s) => s.name === 'Btn'), 'Btn 源')
     expect(btn).toBeTruthy()
     const r = await fetch(`${base}/novel-api/sources/${btn.id}/auth`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ loginAction: '打开' }),
     })
     expect(r.status).toBe(200)
-    expect((await r.json() as any).value).toEqual({ mode: 'external', url: 'https://login.example/x' })
+    expect(await valueOf<{ mode: 'external'; url: string }>(r)).toEqual({ mode: 'external', url: 'https://login.example/x' })
     const bad = await fetch(`${base}/novel-api/sources/${btn.id}/auth`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ loginAction: '不存在' }),
     })
@@ -263,25 +269,25 @@ describe('sources 面（后台任务版）', () => {
       }),
     }])
     expect(job.phase).toBe('done')
-    const { value: list } = await (await fetch(`${base}/novel-api/sources`)).json() as any
-    const s = list.find((x: any) => x.name === 'EmptyLogin')
+    const list = await valueOf<SourcePublic[]>(await fetch(`${base}/novel-api/sources`))
+    const s = must(list.find((x) => x.name === 'EmptyLogin'), 'EmptyLogin 源')
     expect(s).toBeTruthy()
     const r = await fetch(`${base}/novel-api/sources/${s.id}/auth`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ runLogin: true }),
     })
     expect(r.status).toBe(422)
-    const env = await r.json() as any
-    expect(env.error.code).toBe('LoginFailed')
-    expect(env.error.message).toBe('loginUrl 未产出 cookie（脚本未 return 或为空）——登录未生效，未写入登录态')
+    const env = await errorOf(r)
+    expect(env.code).toBe('LoginFailed')
+    expect(env.message).toBe('loginUrl 未产出 cookie（脚本未 return 或为空）——登录未生效，未写入登录态')
     // 空产出不算登录：hasAuth 不许被点亮（门面不落空 auth）
-    const { value: after } = await (await fetch(`${base}/novel-api/sources`)).json() as any
-    expect(after.find((x: any) => x.id === s.id).hasAuth).toBe(false)
+    const after = await valueOf<SourcePublic[]>(await fetch(`${base}/novel-api/sources`))
+    expect(must(after.find((x) => x.id === s.id), '登录态未变的源').hasAuth).toBe(false)
     await fetch(`${base}/novel-api/sources/${s.id}`, { method: 'DELETE' })
   })
   it('未知路由 → 404 NotFound；方法不对 → 405', async () => {
     const r1 = await fetch(`${base}/novel-api/nope`)
     expect(r1.status).toBe(404)
-    expect((await r1.json() as any).error.code).toBe('NotFound')
+    expect((await errorOf(r1)).code).toBe('NotFound')
     const r2 = await fetch(`${base}/novel-api/sources`, { method: 'PUT' })
     expect(r2.status).toBe(405)
   })

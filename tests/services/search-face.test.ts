@@ -7,6 +7,8 @@ import { setLogSink } from '../../src/services/log.js'
 import { RuleEvalError } from '../../src/engine/index.js'
 import { fakeSourceRequest } from './fake-source-request.js'
 import type { NovelSource } from '../../src/services/types.js'
+import { must } from '../support/fixture.js'
+import { requestBodyOf } from '../support/fetch-input.js'
 
 /** 搜索面：探针与聚合搜索共用的请求语义 */
 
@@ -21,7 +23,7 @@ function src(over: Record<string, unknown> = {}): NovelSource {
     ruleContent: '@css:#c@text', ...over,
   }
   const n = normalizeSource(raw)
-  return { id: 'i', status: 'unverified', importedAt: 0, auth: undefined, ...n.source! } as NovelSource
+  return { id: 'i', status: 'unverified', importedAt: 0, ...must(n.source, 'n 归一化后的 source') }
 }
 const html = (text: string): Response => new Response(text, { headers: { 'content-type': 'text/html; charset=utf-8' } })
 
@@ -52,7 +54,7 @@ describe('fetchSearchPage', () => {
     let method = ''; let body = ''; let headers: Record<string, string> | undefined
     const f = createFetcher({ fetchImpl: async (_input, init) => {
       method = init?.method ?? 'GET'
-      body = String(init?.body ?? '')
+      body = requestBodyOf(init)
       headers = init?.headers as Record<string, string>
       return html(SEARCH_HTML)
     } })

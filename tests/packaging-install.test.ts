@@ -8,11 +8,37 @@ import path from 'node:path'
 // 不碰用户日常 web profile；最终挂进 web profile 的命令在 README，由用户执行）
 
 const repo = process.cwd()
-const manifest = JSON.parse(readFileSync(path.join(repo, 'package.json'), 'utf8')) as {
-  name: string
-  version: string
+
+/** 清单读数面：`JSON.parse` 给 unknown，按路径取（取不到就抛——本文件量的就是发布产物）。 */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
 }
-const PLUGIN_ID = manifest.name
+
+function at(root: unknown, ...path: string[]): unknown {
+  let cur = root
+  for (const key of path) {
+    if (!isRecord(cur)) throw new Error(`清单路径 ${path.join('.')} 在 ${key} 处不是对象`)
+    if (!(key in cur)) throw new Error(`清单缺键：${path.join('.')}`)
+    cur = cur[key]
+  }
+  return cur
+}
+
+function textAt(root: unknown, ...path: string[]): string {
+  const value = at(root, ...path)
+  if (typeof value !== 'string') throw new Error(`清单 ${path.join('.')} 不是字符串`)
+  return value
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item: unknown) => typeof item === 'string')
+}
+
+const jsonOf = (file: string): unknown => JSON.parse(readFileSync(file, 'utf8'))
+
+const manifest = jsonOf(path.join(repo, 'package.json'))
+const PLUGIN_ID = textAt(manifest, 'name')
+const PLUGIN_VERSION = textAt(manifest, 'version')
 const PROFILE = 'novel-smoke'
 
 /** shell: true 只负责解析 dsh.cmd；路径要自己加引号，否则用户名/仓库路径带空格会断参。 */
@@ -26,11 +52,37 @@ const profileDir = () =>
 const installedDir = () =>
   path.join(profileDir(), 'node_modules', ...PLUGIN_ID.split('/'))
 
-const readProfile = () => JSON.parse(readFileSync(path.join(profileDir(), 'package.json'), 'utf8'))
+const readProfile = (): unknown => jsonOf(path.join(profileDir(), 'package.json'))
+
+/** `dsh.profile.bundles` 位：**可缺席**——profile 还没认领任何插件时它本来就不在。
+ *  在场但不是字符串数组 = 宿主面变了，仍然抛。 */
+function maybeBundles(): string[] | undefined {
+  const pkg = readProfile()
+  if (!isRecord(pkg) || !('dsh' in pkg) || !isRecord(pkg.dsh) || !('profile' in pkg.dsh)) return undefined
+  const profile = pkg.dsh.profile
+  if (!isRecord(profile) || !('bundles' in profile)) return undefined
+  if (!isStringArray(profile.bundles)) throw new Error('profile 的 dsh.profile.bundles 不是字符串数组')
+  return profile.bundles
+}
+
+/** 挂载面读数用严格口径：这里读不到 bundles 就是安装没落地，不许当成「没什么可认领」 */
+function claimedBundles(): string[] {
+  const bundles = at(readProfile(), 'dsh', 'profile', 'bundles')
+  if (!isStringArray(bundles)) throw new Error('profile 的 dsh.profile.bundles 不是字符串数组')
+  return bundles
+}
+
+/** profile 的 dependencies 里有没有这个键（宿主 remove 只摘 bundles，依赖行可能还在） */
+function hasDependency(name: string): boolean {
+  const pkg = readProfile()
+  if (!isRecord(pkg) || !('dependencies' in pkg)) return false
+  const dependencies = pkg.dependencies
+  return isRecord(dependencies) && name in dependencies
+}
 
 /** 装进去的账：bundles 认领本插件，且预构建产物与补丁文件真在挂载点就位。 */
 function expectMounted() {
-  expect(readProfile().dsh.profile.bundles).toContain(PLUGIN_ID)
+  expect(claimedBundles()).toContain(PLUGIN_ID)
   expect(existsSync(path.join(installedDir(), 'lib', 'client.js'))).toBe(true)
   expect(existsSync(path.join(installedDir(), 'cordis.patch.yml'))).toBe(true)
 }
@@ -51,9 +103,8 @@ function removeInstalledPackage() {
 function resetProfile() {
   const pkgPath = path.join(profileDir(), 'package.json')
   if (existsSync(pkgPath)) {
-    const profilePkg = readProfile()
-    const installed = profilePkg.dsh?.profile?.bundles?.includes(PLUGIN_ID)
-      || profilePkg.dependencies?.[PLUGIN_ID] !== undefined
+    // 认领（bundles）或依赖行任一在场都算装过；两者都缺席 = 已经是干净 profile
+    const installed = maybeBundles()?.includes(PLUGIN_ID) === true || hasDependency(PLUGIN_ID)
     if (installed) uninstall()
   }
   removeInstalledPackage()
@@ -61,7 +112,7 @@ function resetProfile() {
 
 /** remove 之后 profile 不再认领本插件；挂载目录由 removeInstalledPackage 清掉。 */
 function expectUninstalled() {
-  expect(readProfile().dsh.profile.bundles).not.toContain(PLUGIN_ID)
+  expect(claimedBundles()).not.toContain(PLUGIN_ID)
   expect(existsSync(installedDir())).toBe(false)
 }
 
@@ -101,7 +152,7 @@ describe.skipIf(process.env.DSH_INSTALL_CHECK !== '1')(`真装载链路（一次
       const tgz = path.isAbsolute(printed) ? printed : path.join(tmp, printed)
       // README 钉版本 URL 用的就是这个名字；pnpm 改名时这里先红，不必等发版后 404。
       expect(path.basename(tgz)).toBe(
-        `${PLUGIN_ID.replace(/^@/, '').replace('/', '-')}-${manifest.version}.tgz`,
+        `${PLUGIN_ID.replace(/^@/, '').replace('/', '-')}-${PLUGIN_VERSION}.tgz`,
       )
       installRoundTrip(tgz)
     } finally {

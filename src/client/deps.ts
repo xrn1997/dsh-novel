@@ -46,7 +46,7 @@ export interface JobWatchDeps {
 }
 
 /** 把任务观察嵌进界面的读者：搜索结果页、书籍详情浮层、书城 */
-export interface JobViewDeps extends ClientCoreDeps, JobWatchDeps {}
+export type JobViewDeps = ClientCoreDeps & JobWatchDeps
 
 /** 需要原始字节上传的读者（本地书导入：TXT / EPUB 按内容分流） */
 export interface ShelfDeps extends ClientCoreDeps {
@@ -59,7 +59,7 @@ export const prodCoreDeps: ClientCoreDeps = { apiGet, apiSend, pushError, pushOk
 /** **行内动作**读者的依赖面：一发写请求 + 两句上报。行与浮层里的每一条都一样只管动作，
  *  既不读面、也不观察任务——`jobs.ts` 的 `JobStatusDeps` 是同一先例的更早一份。
  *  宽束仍由整壳读者（`SearchView` / `CityBookSheet` / `SourceList` 的壳层）持有并原样传下来。 */
-export interface RowActionDeps extends Pick<ClientCoreDeps, 'apiSend' | 'pushOk' | 'pushError'> {}
+export type RowActionDeps = Pick<ClientCoreDeps, 'apiSend' | 'pushOk' | 'pushError'>
 
 /** 观察通道的生产依赖 */
 export const prodJobWatchDeps: JobWatchDeps = { apiGet, apiSend, apiEventStream, jobPollMs: JOB_POLL_MS }

@@ -1,7 +1,7 @@
 import type { EngineValue, EvalContext, Facet, SegmentLoc } from './types.js'
 import { UnsupportedRuleError } from './errors.js'
 import { evalJsonPath } from './jsonpath.js'
-import { engineValueToString } from './js-utils.js'
+import { engineValueToString, textOf } from './js-utils.js'
 
 /**
  * JSONPath 求值数据解析（evaluate 的 Runtime 与 @put 共用）：ctx.json 优先；缺席且 html 是合法
@@ -59,9 +59,10 @@ function parsePairs(pairsRaw: string, loc: SegmentLoc, facet: Facet): Array<[str
   const pairs: Array<[string, string, boolean]> = []
   const n = inner.length
   let i = 0
-  const skipWs = (): void => { while (i < n && /\s/.test(inner[i])) i++ }
+  // charAt 在界外给空串（空白判据不命中）：与循环条件共用同一个界，不必为「i 可能越界」再造分支
+  const skipWs = (): void => { while (i < n && /\s/.test(inner.charAt(i))) i++ }
 
-  while (true) {
+  for (;;) {
     skipWs()
     if (i >= n) break
     // key：读到冒号为止
@@ -80,9 +81,9 @@ function parsePairs(pairsRaw: string, loc: SegmentLoc, facet: Facet): Array<[str
       let closed = false
       while (i < n) {
         const c = inner[i]
-        if (c === '\\' && i + 1 < n) { value += inner[i + 1]; i += 2; continue } // \" 转义
+        if (c === '\\' && i + 1 < n) { value += inner[i + 1] ?? ''; i += 2; continue } // \" 转义
         if (c === '"') { closed = true; i++; break }
-        value += c
+        value += c ?? ''
         i++
       }
       if (!closed) reject('@put 值引号未闭合', loc, facet)
@@ -175,8 +176,9 @@ export function evalPut(
  * 自有键判定不能省：`ctx.vars?.[name]` 顺原型链会把 `Object.prototype.toString` 当变量值返回。
  */
 export function getRuleVar(ctx: EvalContext, name: string): string | undefined {
-  if (name === "bookName" && ctx.book !== undefined) return String(ctx.book.name ?? "")
-  if (name === "title" && ctx.chapter !== undefined) return String(ctx.chapter.title ?? "")
+  // book/chapter 是 `Record<string, unknown>` 的窄镜像：字段值未必是 string，按过线原值口径串化
+  if (name === "bookName" && ctx.book !== undefined) return textOf(ctx.book.name ?? "")
+  if (name === "title" && ctx.chapter !== undefined) return textOf(ctx.chapter.title ?? "")
   return getScopedVar(ctx, name)
 }
 

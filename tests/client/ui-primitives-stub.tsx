@@ -48,8 +48,30 @@ void _shapeGate
 export function settingsNumberField(name: string): StubField { return { name, kind: 'number' } }
 export function settingsTextField(name: string): StubField { return { name, kind: 'text' } }
 
+/** 宿主配置作用域（替身**只**碰到的那一面）：快照读数与写入口，成员全可缺席——页面/测试
+ *  递进来的作用域是 host 侧真物，替身只按用到的成员收窄，多猜一个就是替真容立规。 */
+interface StubScopeSnapshot {
+  value?: Record<string, unknown>
+  user?: Record<string, unknown>
+  status?: string
+  writable?: boolean
+  revision?: number
+}
+interface StubScope {
+  getSnapshot?: () => StubScopeSnapshot
+  mutate?: (ops: Array<{ op: 'set' | 'unset'; path: string[]; value?: unknown }>, revision?: number) => void
+}
+
+/** 字段值 → 文本：真容这层只放标量（number / string / boolean），标量按 String 原样；
+ *  非标量按 JSON 文本送（`[object Object]` 那种什么都读不出的影子没有诊断价值）。 */
+function fieldTextOf(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value)
+  return JSON.stringify(value)
+}
+
 export class SettingsFormModel {
-  private readonly scope: any
+  private readonly scope: StubScope | undefined
   private readonly fields: StubField[]
   private readonly edits = new Map<string, { op: 'set' | 'unset'; value?: unknown }>()
   private listeners = new Set<() => void>()
@@ -58,7 +80,7 @@ export class SettingsFormModel {
   private cached: unknown
   private projection: (() => unknown) | null = null
 
-  constructor(scope: any, fields: StubField[]) {
+  constructor(scope: StubScope | undefined, fields: StubField[]) {
     this.scope = scope
     this.fields = fields
   }
@@ -66,7 +88,7 @@ export class SettingsFormModel {
     const base = { ...(this.scope?.getSnapshot?.().value ?? {}) }
     for (const [key, edit] of this.edits) {
       if (edit.op === 'set') base[key] = edit.value
-      else delete base[key]
+      else Reflect.deleteProperty(base, key)
     }
     return base
   }
@@ -75,7 +97,7 @@ export class SettingsFormModel {
     const edit = this.edits.get(name)
     const user = this.scope?.getSnapshot?.().user
     return {
-      text: value === undefined || value === null ? '' : String(value),
+      text: value === undefined || value === null ? '' : fieldTextOf(value),
       // 真容：staged 的 set 才算覆盖（staged 的 clear 不算）；没动过的字段看 user 层有没有这个键，
       // 与「值恰好等于缺省」无关。
       overridden: edit === undefined ? user !== undefined && Object.hasOwn(user, name) : edit.op === 'set',
@@ -126,7 +148,11 @@ export class SettingsFormModel {
           if (edit.op === 'set') ops.push({ op: 'set', path: [field], value: edit.value })
           else if (user !== undefined && Object.hasOwn(user, field)) ops.push({ op: 'unset', path: [field] })
         }
-        if (ops.length > 0) void this.scope?.mutate?.(ops, this.scope?.getSnapshot?.().revision)
+        if (ops.length > 0) {
+          // 快照先读：写入口的 revision 是「这次写基于哪版」，读在调用的同一拍上（宿主真容同序）
+          const revision = this.scope?.getSnapshot?.().revision
+          void this.scope?.mutate?.(ops, revision)
+        }
         this.edits.clear()
         this.notify()
       },
@@ -149,21 +175,26 @@ export class SettingsFormModel {
  * 「输入框禁用 ⇒ 改不动 ⇒ 不 dirty」自然落到禁用，壳层不额外判 writable。
  * 这里没有「放弃」按钮：真容的放弃是离开页面时 `onDiscard` 被调用，不是一枚控件。
  */
-export function SettingsForm({ labels, state, onSave, children }: any): ReactNode {
+export function SettingsForm({ labels, state, onSave, children }: {
+  labels: Record<string, string>
+  state: StubFormState
+  onSave: () => void
+  children?: ReactNode
+}): ReactNode {
   if (!state.available) {
     return createElement('p', { role: 'status' }, labels.unavailable)
   }
-  const saveDisabled = state.dirty !== true || state.invalid === true || state.saving === true
+  const saveDisabled = !state.dirty || state.invalid || state.saving
   return createElement('div', { className: 'novel-test-form' },
-    state.writable === true ? null : createElement('p', { role: 'status' }, labels.readOnly),
+    state.writable ? null : createElement('p', { role: 'status' }, labels.readOnly),
     children,
     createElement('div', { className: 'novel-test-form-footer' },
-      state.failed === true ? createElement('p', { role: 'status' }, labels.saveFailed) : null,
+      state.failed ? createElement('p', { role: 'status' }, labels.saveFailed) : null,
       createElement('button', {
         type: 'button',
         disabled: saveDisabled,
         onClick: onSave,
-      }, state.saving === true ? labels.saving : labels.save),
+      }, state.saving ? labels.saving : labels.save),
     ),
   )
 }

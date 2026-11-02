@@ -6,6 +6,8 @@ import { SourceRegistry } from '../../src/services/sources.js'
 import { fakeSourceRequest } from './fake-source-request.js'
 import { makeTempDir } from '../temp-dir.js'
 import type { NovelSource } from '../../src/services/types.js'
+import { must, pick } from '../support/fixture.js'
+import { requestBodyOf, requestUrlOf } from '../support/fetch-input.js'
 
 const SEARCH_HTML = '<html><body><div class="b"><a href="/book/1/">斗罗大陆</a><span>唐家三少</span></div>' +
   '<div class="b"><a href="/book/2/">凡人修仙传</a><span>忘语</span></div></body></html>'
@@ -18,7 +20,7 @@ function src(over: Record<string, unknown> = {}): NovelSource {
     ruleContent: '@css:#c@text', ...over,
   }
   const n = normalizeSource(raw)
-  return { id: 'i', status: 'unverified', importedAt: 0, auth: undefined, ...n.source! } as NovelSource
+  return { id: 'i', status: 'unverified', importedAt: 0, ...must(n.source, 'n 归一化后的 source') }
 }
 
 describe('probeSource（search 面）', () => {
@@ -42,11 +44,11 @@ describe('probeSource（search 面）', () => {
     const seen: string[] = []
     const f = createFetcher({
       fetchImpl: (async (input: RequestInfo | URL) => {
-        const u = decodeURIComponent(String(input))
+        const u = decodeURIComponent(requestUrlOf(input))
         seen.push(u)
         return new Response(u.includes('q=勇者') ? SEARCH_HTML : '<html></html>',
           { headers: { 'content-type': 'text/html; charset=utf-8' } })
-      }) as never,
+      }),
     })
     const r = await probeSource(src({ ruleSearch: { checkKeyWord: '勇者' } }), fakeSourceRequest(f))
     expect(r.ok).toBe(true)
@@ -59,7 +61,7 @@ describe('probeSource（search 面）', () => {
       ruleBookList: '@css:.b', ruleBookName: 'tag.a@text', ruleContent: '@css:#c@text',
       ruleSearch: { checkKeyWord: 'https://s.com/book/1' },
     })
-    expect(n.source!.rules.probeKeyword).toBeNull()
+    expect(must(n.source, 'n 归一化后的 source').rules.probeKeyword).toBeNull()
   })
 
 
@@ -81,7 +83,7 @@ describe('probeSource（search 面）', () => {
   it('首词 0 命中 → 换词重试，任一命中即 verified（词被站点停用不误杀）', async () => {
     const seen: string[] = []
     const f = createFetcher({ fetchImpl: async (input) => {
-      const url = String(input)
+      const url = requestUrlOf(input)
       seen.push(decodeURIComponent(url.split('q=')[1] ?? ''))
       // 「书」0 命中；「小说」有结果——模拟 aijjxs 站停用单字「书」的行为
       const html = url.includes(encodeURIComponent('书')) && !url.includes(encodeURIComponent('小说'))
@@ -146,7 +148,7 @@ describe('probeSource（search 面）', () => {
   it('相对 searchUrl 按 bookSourceUrl 解析成绝对 URL（此前直接喂 fetch 必炸）', async () => {
     let seen = ''
     const f = createFetcher({ fetchImpl: async (input) => {
-      seen = String(input)
+      seen = requestUrlOf(input)
       return new Response(SEARCH_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } })
     } })
     const r = await probeSource(src({ searchUrl: '/search?q={{key}}' }), fakeSourceRequest(f))
@@ -158,7 +160,7 @@ describe('probeSource（search 面）', () => {
     let body = ''
     const f = createFetcher({ fetchImpl: async (_input, init) => {
       method = init?.method ?? 'GET'
-      body = String(init?.body ?? '')
+      body = requestBodyOf(init)
       return new Response(SEARCH_HTML)   // 无 content-type——charset 声明覆盖解码
     } })
     const r = await probeSource(src({
@@ -186,7 +188,7 @@ describe('applyProbeResult（verdict → status 单点）', () => {
     await registry.edit((tx) => tx.add(normalizeSource({
       bookSourceName: 'S', bookSourceUrl: 'https://s.com', ruleContent: '@css:#c@text',
     })))
-    const [s] = registry.list()
+    const s = pick(registry.list(), 0)
     await applyProbeResult(registry, s.id, {
       ok: false, itemCount: 0, firstTitle: null, probedAt: 7,
       error: { code: 'RuleEvalError', message: 'bad' },

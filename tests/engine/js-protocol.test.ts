@@ -7,6 +7,7 @@ import { createSourceSession } from '../../src/engine/js-sandbox.js'
 import { JsSandboxError } from '../../src/engine/errors.js'
 import { engineContextOf } from '../../src/services/source-eval.js'
 import type { EngineValue, EvalContext, Facet, SegmentLoc } from '../../src/engine/types.js'
+import { must } from '../support/fixture.js'
 
 const L: SegmentLoc = { segmentIndex: 0, segmentRaw: '@js:test' }
 const FACET: Facet = 'content'
@@ -175,7 +176,7 @@ describe('invokeJavaMethod 分派（不进 vm 的直测）', () => {
 
   it('getString/getStringList 经 evaluateRef 递归求值（基内容 = contentBase ?? result）', () => {
     const seen: unknown[] = []
-    const fake = (sub: { rule: string }, data: unknown): EngineValue => { seen.push(data); return { kind: 'value', text: `${sub.rule}|${data}` } }
+    const fake = (sub: { rule: string }, data: unknown): EngineValue => { seen.push(data); return { kind: 'value', text: `${sub.rule}|${String(data)}` } }
     const deps = depsOf({ result: 'prev', evaluateRef: fake })
     expect(invokeJavaMethod(deps, 'getString', ['@css:h1'])).toBe('@css:h1|prev')
     invokeJavaMethod(deps, 'setContent', ['<h1>新基</h1>'])
@@ -197,7 +198,7 @@ describe('invokeJavaMethod 分派（不进 vm 的直测）', () => {
   it('子规则求值把用途交给引擎：显式取值尾 value、裸选择 list；getElements/getElement list', () => {
     const calls: Array<[string, string]> = []
     const deps = depsOf({
-      evaluateRef: (sub, _data) => {
+      evaluateRef: (sub) => {
         calls.push([sub.rule, sub.usage])
         return { kind: 'miss', detail: 'x' }
       },
@@ -308,7 +309,8 @@ describe('async 行的能力位闸（表行 ↔ 沙箱包装 ↔ 服务层装配
   const protocolSrc = read('../../src/engine/js-protocol.ts')
   const asyncRows = JAVA_PROTOCOL.filter((r) => r.mode === 'async').map((r) => r.name)
   const capabilityNames = [...new Set(
-    [...protocolSrc.matchAll(/d\.ctx\.([a-zA-Z]+)/g)].map((m) => m[1]),
+    // 正则唯一捕获组（`d\.ctx\.([a-zA-Z]+)`）：匹配成功时它必在场，缺席即提取逻辑脱节。
+    [...protocolSrc.matchAll(/d\.ctx\.([a-zA-Z]+)/g)].map((m) => must(m[1], 'd.ctx.<能力名> 捕获组')),
   )]
   // 六支松散分支的等价样本（每支 ≥2 正例 + ≥1 反例）：迁自「派生正则 vs 旧手写字面量」的
   // 等价对照脚手架——脚手架与旧字面量副本已随裁定删除，样本并入本闸，防派生重组时
@@ -364,8 +366,9 @@ describe('async 行的能力位闸（表行 ↔ 沙箱包装 ↔ 服务层装配
     const mounted = new Set(SANDBOX_MOUNTS.javaAsyncMounts.map((m) => m.target))
     for (const r of JAVA_PROTOCOL.filter((x) => x.mode === 'async')) {
       expect(r.bridge, `${r.name} 缺 bridge 判别`).toBeDefined()
-      if (r.bridge!.mountAs !== null) expect(mounted.has(r.bridge!.mountAs)).toBe(true)
-      else expect(r.bridge!.routeProbe).toMatch(/java\s*\.\s*get\s*\(|openConnection\s*\(/)
+      const bridge = must(r.bridge, `${r.name} 缺 bridge 判别`)
+      if (bridge.mountAs !== null) expect(mounted.has(bridge.mountAs)).toBe(true)
+      else expect(bridge.routeProbe).toMatch(/java\s*\.\s*get\s*\(|openConnection\s*\(/)
     }
     // ③ 路由：每种可达写法都必须被 SYNC_WORKER_RE 认出——认不出时主线程抛哨兵，
     //    而脚本自己的 try/catch 会把哨兵吞掉（见 js-sandbox「同步桥」一节），
@@ -384,8 +387,9 @@ describe('async 行的能力位闸（表行 ↔ 沙箱包装 ↔ 服务层装配
     //    （把 routePattern 当**样本**断言 SYNC_WORKER_RE.test(routePattern) 不成立——正则原文
     //     含 `\s*\(` 这类转义，永远不以脚本拼写形态出现；超集语义只能在正则面验。）
     for (const r of JAVA_PROTOCOL.filter((x) => x.mode === 'async')) {
-      expect(new RegExp(r.bridge!.routePattern).test(r.bridge!.routeProbe),
-        `${r.name} 的路由分支认不出本行写法：${r.bridge!.routePattern}`).toBe(true)
+      const bridge = must(r.bridge, `${r.name} 缺 bridge 判别`)
+      expect(new RegExp(bridge.routePattern).test(bridge.routeProbe),
+        `${r.name} 的路由分支认不出本行写法：${bridge.routePattern}`).toBe(true)
     }
     // ⑤ 六支松散分支的等价样本仍同判（来源见本 describe 顶部的 ROUTE_SAMPLES）
     for (const [sample, routed] of ROUTE_SAMPLES) {
@@ -403,7 +407,8 @@ describe('async 行的能力位闸（表行 ↔ 沙箱包装 ↔ 服务层装配
     // 断言必须带 `(?:…)` 包裹：每支自成一组，组装若退回裸拼，子串判定（toContain(routePattern)）
     // 仍会绿——它只证「串在场」，证不了「它是一支」，pattern 里的顶层 `|` 还会与相邻支混在一起。
     for (const r of JAVA_PROTOCOL.filter((x) => x.mode === 'async')) {
-      expect(SYNC_WORKER_RE.source, `${r.name} 的路由分支没拼进 SYNC_WORKER_RE`).toContain(`(?:${r.bridge!.routePattern})`)
+      const bridge = must(r.bridge, `${r.name} 缺 bridge 判别`)
+      expect(SYNC_WORKER_RE.source, `${r.name} 的路由分支没拼进 SYNC_WORKER_RE`).toContain(`(?:${bridge.routePattern})`)
     }
   })
 

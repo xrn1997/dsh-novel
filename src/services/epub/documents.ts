@@ -3,7 +3,7 @@ import type { ContentNode, ContentTag, LinkRole, ReadingTarget } from '../../sha
 import { EpubImportError } from './errors.js'
 import type { EpubWarningLog } from './warnings.js'
 import { WARN_ACTIVE_ATTR, WARN_CSS_ATTR, WARN_INLINE_SVG, WARN_REMOVED } from './warnings.js'
-import { attrOf, firstDescendant, isElement, localName, textOf, type XmlBudget } from './xml.js'
+import { attrOf, firstDescendant, isCdataNode, isElement, isTextNode, localName, textOf, type XmlBudget } from './xml.js'
 
 /**
  * 正文文档层：一份 XHTML → 白名单图文树，以及文档内的**锚点/链接映射**。
@@ -289,7 +289,8 @@ function soleInlineSvg(body: Element): Element | null {
     }
   }
   walk(body)
-  return found.length === 1 ? found[0] : null
+  const only = found.length === 1 ? found[0] : undefined
+  return only === undefined ? null : only
 }
 
 /**
@@ -356,8 +357,8 @@ export function documentTitle(root: Element, budget: XmlBudget): string | null {
 function convertChildren(children: readonly AnyNode[], ctx: Ctx): ContentNode[] {
   const out: ContentNode[] = []
   for (const child of children) {
-    if (child.type === 'text') out.push({ kind: 'text', text: child.data })
-    else if (child.type === 'cdata') out.push({ kind: 'text', text: textOf(child, ctx.budget) })
+    if (isTextNode(child)) out.push({ kind: 'text', text: child.data })
+    else if (isCdataNode(child)) out.push({ kind: 'text', text: textOf(child, ctx.budget) })
     else if (isElement(child)) {
       for (const node of convertElement(child, ctx)) out.push(node)
     }

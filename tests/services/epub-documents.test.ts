@@ -15,6 +15,7 @@ import {
 import { EpubWarningLog } from '../../src/services/epub/warnings.js'
 import { EpubImportError } from '../../src/services/epub/errors.js'
 import { parseXml, xmlBudget } from '../../src/services/epub/xml.js'
+import { pick } from '../support/fixture.js'
 
 const LIMITS = { depth: 128, nodes: 200_000 }
 
@@ -61,7 +62,7 @@ function convertRejection(body: string): Error {
 
 /** 只留结构（去掉 id/alt 这类每次都变的字段），便于整树断言 */
 function shape(nodes: readonly ContentNode[]): unknown[] {
-  return nodes.map((n) => {
+  return nodes.map((n): unknown => {
     switch (n.kind) {
       case 'text': return n.text
       case 'break': return 'br'
@@ -161,17 +162,18 @@ describe('元素白名单映射', () => {
   it('表格跨行跨列：rowSpan/colSpan 只落单元格，其余位置恒 null', () => {
     const { nodes } = convert('<table><caption>表</caption><thead><tr><th rowspan="2">竖</th></tr></thead>'
       + '<tbody><tr><td colspan="3">横</td><td colspan="0">坏值</td></tr></tbody></table>')
-    const [table] = nodes
+    const table = pick(nodes, 0)
     expect(table.kind).toBe('element')
     const cells = shape(nodes)[0] as { tag: string; children: Array<{ tag: string; children: unknown[] }> }
     expect(cells.tag).toBe('table')
     expect(cells.children[0]).toEqual({ tag: 'caption', start: null, value: null, rowSpan: null, colSpan: null, children: ['表'] })
     const thead = cells.children[1] as { children: Array<{ children: Array<Record<string, unknown>> }> }
-    expect(thead.children[0].children[0]).toMatchObject({ tag: 'th', rowSpan: 2, colSpan: null })
+    expect(pick(thead.children, 0).children[0]).toMatchObject({ tag: 'th', rowSpan: 2, colSpan: null })
     const tbody = cells.children[2] as { children: Array<{ children: Array<Record<string, unknown>> }> }
-    expect(tbody.children[0].children[0]).toMatchObject({ tag: 'td', colSpan: 3, rowSpan: null })
+    const bodyRow = pick(tbody.children, 0)
+    expect(bodyRow.children[0]).toMatchObject({ tag: 'td', colSpan: 3, rowSpan: null })
     // colspan="0" 不是合法列跨度（0 在 HTML 里是「到本节末尾」的古怪写法）：按缺席，不猜
-    expect(tbody.children[0].children[1]).toMatchObject({ tag: 'td', colSpan: null })
+    expect(bodyRow.children[1]).toMatchObject({ tag: 'td', colSpan: null })
   })
 
   it('实体只解一次：`&amp;` → `&`，`&amp;amp;` → 字面 `&amp;`，数值引用按字符取', () => {
@@ -219,7 +221,7 @@ describe('元素白名单映射', () => {
 
   it('节点只带明确字段：raw attributes 一律不传播（class/title/data-*/style 都不上树）', () => {
     const { nodes } = convert('<p class="x" title="提示" data-role="note" dir="rtl" style="color:red">文字</p>')
-    const [p] = nodes
+    const p = pick(nodes, 0)
     expect(p.kind).toBe('element')
     expect(Object.keys(p).sort()).toEqual(['children', 'colSpan', 'id', 'kind', 'rowSpan', 'start', 'tag', 'value'])
     expect(shape(nodes)).toEqual([
@@ -370,7 +372,7 @@ describe('锚点：原书 id 只进映射，节点 ID 一律 opaque', () => {
       resolveImage: () => ({ resourceId: 'r0', width: 1, height: 1 }),
       nextNodeId: seq('n'), warnings: new EpubWarningLog(),
     })
-    const [p] = nodes
+    const p = pick(nodes, 0)
     expect(p.kind).toBe('element')
     expect((p as Extract<ContentNode, { kind: 'element' }>).children[0])
       .toMatchObject({ kind: 'link', id: anchors.get('x'), role: 'normal', target })
@@ -444,9 +446,10 @@ describe('活动内容与可见图形的处置', () => {
     ])
     expect(warnings.map((w) => w.code)).toEqual(['epub-removed-active-content'])
     // 告警点名文档，并说清移除了什么（读者要能判断自己丢了什么）
-    expect(warnings[0].resource).toBe('OEBPS/ch1.xhtml')
-    expect(warnings[0].message).toMatch(/script/)
-    expect(warnings[0].message).toMatch(/iframe/)
+    const warning = pick(warnings, 0)
+    expect(warning.resource).toBe('OEBPS/ch1.xhtml')
+    expect(warning.message).toMatch(/script/)
+    expect(warning.message).toMatch(/iframe/)
   })
 
   it('事件属性与 style 属性剥除；同类多处合并成一条计数告警（不刷屏）', () => {
@@ -469,12 +472,12 @@ describe('活动内容与可见图形的处置', () => {
     ])
     expect(warnings.map((w) => w.code)).toEqual(['epub-removed-inline-svg'])
     // 告警要点名文档（读者才知道去翻哪一份），并说清移除了什么
-    expect(warnings[0].resource).toBe('OEBPS/ch1.xhtml')
-    expect(warnings[0].message).toMatch(/svg/)
+    expect(pick(warnings, 0).resource).toBe('OEBPS/ch1.xhtml')
+    expect(pick(warnings, 0).message).toMatch(/svg/)
     // 同类多处合并成一条计数告警，不刷屏
     const many = convert('<p>前<svg xmlns="http://www.w3.org/2000/svg"/><svg xmlns="http://www.w3.org/2000/svg"/>后</p>')
     expect(many.warnings.map((w) => w.code)).toEqual(['epub-removed-inline-svg'])
-    expect(many.warnings[0].message).toMatch(/2 处/)
+    expect(pick(many.warnings, 0).message).toMatch(/2 处/)
   })
 
   it('内联 SVG 是文档唯一内容（真书的整页封面形状）：本层交回 svgOnly 候选，不认识图', () => {

@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { Browser } from 'playwright'
 import { NovelConfigCardView } from '../../src/client/config-page.js'
+import { must, pick } from '../support/fixture.js'
 import { launchBrowser } from './epub-host.js'
 
 /**
@@ -74,12 +75,12 @@ describe.skipIf(!ENABLED)('浏览器几何：插件页「运行参数」自绘�
   let browser: Browser
 
   beforeAll(async () => { browser = await launchBrowser() }, 90_000)
-  afterAll(async () => { await browser?.close() })
+  afterAll(async () => { await browser.close() })
 
   /** 在给定容器宽度下量一次：配置页的退档按 `.novel-cfg` 自身宽度判定，所以限宽即限档。 */
   async function measure(px: number): Promise<Read> {
     const markup = renderToStaticMarkup(
-      <NovelConfigCardView state={state as never} actions={actions as never} />,
+      <NovelConfigCardView state={state} actions={actions} />,
     )
     const page = await (await browser.newContext({ viewport: { width: 1400, height: 900 } })).newPage()
     await page.setContent(
@@ -91,7 +92,7 @@ describe.skipIf(!ENABLED)('浏览器几何：插件页「运行参数」自绘�
     return out
   }
 
-  const row = (r: Read, name: string): RowRead => r.rows.find((x) => x.name === name)!
+  const row = (r: Read, name: string): RowRead => must(r.rows.find((x) => x.name === name), `行「${name}」`)
 
   it('宽档：单位在框内、数字框被限宽、回读成人话', async () => {
     const r = await measure(1000)
@@ -121,7 +122,7 @@ describe.skipIf(!ENABLED)('浏览器几何：插件页「运行参数」自绘�
 
     // 分区在宽档并排成列：四个区叠成一列等于没有分区
     expect(row(r, 'searchParallel').cardRight).toBe(row(r, 'searchTimeoutMs').cardRight)
-    expect(r.groups[1].top, '宽档下第 2 区应与第 1 区并排').toBe(r.groups[0].top)
+    expect(pick(r.groups, 1).top, '宽档下第 2 区应与第 1 区并排').toBe(pick(r.groups, 0).top)
 
     // 预设档是这一页省掉手敲的那只手：点得到（在卡片内）且够高（拇指/触屏）
     expect(r.chips.length).toBe(8)
@@ -133,7 +134,7 @@ describe.skipIf(!ENABLED)('浏览器几何：插件页「运行参数」自绘�
 
   it('窄档：行折成单列，回读与单位都还在，且谁都不溢出', async () => {
     const r = await measure(420)
-    expect(r.groups[1].top, '窄档下四区应叠成一列').toBeGreaterThan(r.groups[0].top)
+    expect(pick(r.groups, 1).top, '窄档下四区应叠成一列').toBeGreaterThan(pick(r.groups, 0).top)
     for (const x of r.rows) {
       expect.soft(x.rowScroll, `${x.name} 在窄档溢出 ${x.rowScroll - x.rowClient}px`)
         .toBeLessThanOrEqual(x.rowClient)

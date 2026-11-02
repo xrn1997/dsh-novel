@@ -104,8 +104,8 @@ describe('沙箱 legado 绑定与作用域（本轮修复钉子）', () => {
       loc, facet: 'content', scriptForm: true,
       baseUrl: 'https://x.com', source: 'https://x.com',
       fetch: async () => { throw new Error('站点挂了') },
-    }).then(() => null, (e) => e)
-    expect(String(err.message)).toContain('站点挂了')
+    }).then(() => null, (e: unknown) => e)
+    expect((err as Error).message).toContain('站点挂了')
   })
   it('java.ajax 参数规约：非串按 String(值) 交下去（Rhino 的 String 形参转换），空值点名且不发请求', async () => {
     const seen: unknown[] = []
@@ -125,7 +125,7 @@ describe('沙箱 legado 绑定与作用域（本轮修复钉子）', () => {
       code: 'java.ajax(null)', loc, facet: 'content', scriptForm: true,
       baseUrl: 'https://x.com', source: 'https://x.com', fetch: fetchImpl,
     }).then(() => null, (e: unknown) => e)
-    expect(String((err as Error).message)).toMatch(/java\.ajax 参数为空/)
+    expect((err as Error).message).toMatch(/java\.ajax 参数为空/)
     expect(seen).toHaveLength(2)   // 空值不拿 "null" 去打站点
   })
   it('worker 路线自身的逃逸防御与超时（不是主线程用例的复述）', async () => {    // 只有脚本提到 java.ajax( 才走 worker + SAB RPC（`SYNC_WORKER_RE`）——本用例靠 fetch 计数

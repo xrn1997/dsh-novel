@@ -40,9 +40,10 @@ function usageOfChain(chain: string, facet: Facet): RuleUsage {
   const explicitPrefix = parsed.branches.length === 1 && hasExplicitValueHead(chain)
   let saw = false
   for (const branch of parsed.branches) {
-    if (branch.segments.length === 0) continue
+    const last = branch.segments[branch.segments.length - 1]
+    if (last === undefined) continue // 空分支：没有取值尾可判（与下面 saw 的判据同一条）
     saw = true
-    if (!endsInExplicitValue(branch.segments[branch.segments.length - 1]!, branch.raws.length, explicitPrefix)) {
+    if (!endsInExplicitValue(last, branch.raws.length, explicitPrefix)) {
       return 'list'
     }
   }
