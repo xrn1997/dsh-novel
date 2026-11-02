@@ -2,7 +2,7 @@ import type { Page } from './bridge.js'
 import type { CookieJar } from './cookies.js'
 import { FetchError } from './errors.js'
 import { decodeBody, fetchTextPage, headerOf, splitUserAgent } from './fetcher.js'
-import type { Fetcher } from './fetcher.js'
+import type { FetchedPage, Fetcher, FetchInit } from './fetcher.js'
 import { applyLoginCheck, loginCheckOf } from './login-check.js'
 import { parseConcurrentRate, RateLimiter } from './rate-limit.js'
 import { assembleRequest, fetchInitOf } from './request.js'
@@ -22,9 +22,24 @@ export interface SourceRequestDeps {
   rateLimiterFor?: (source: NovelSource) => RateLimiter
 }
 
-/** 一次出站抓取的两个消费面：只要正文与落点，或要整页（面层再拿去求值规则）。 */
+/** 引擎脚本出站面：只给 source-eval 的能力装配消费。
+ *  两条不变量在这里从注释变成结构：浏览器只有 `webview` 一个入口（它不带 loginCheck），
+ *  HTTP 只有 `fetchPage`（浏览器两键在类型上不可表达，运行时闯入即点名拒收）。 */
+export interface ScriptEvalSurface {
+  /** HTTP 出站（loginCheck 后置处理在内）；浏览器两键在类型上不可表达，运行时闯入即点名拒收 */
+  fetchPage(url: string, init?: Omit<FetchInit, 'webView' | 'webJs'>): Promise<FetchedPage>
+  /** 真浏览器出站：限速 + cookie 桥已接，**没有** loginCheck（该判据只属 HTTP） */
+  webview: NonNullable<Fetcher['webview']>
+  cookieJar: CookieJar
+  deviceId?: Fetcher['deviceId']
+  sourceSession?: Fetcher['sourceSession']
+  dispose?(): void
+}
+
+/** 一次出站抓取的两个消费面：脚本求值面（`fetcherFor`）与读面（`fetchText` / `fetchPage`）。
+ *  读面自带 `webView` / `webJs` 计划与 loginCheck；脚本面只给 HTTP + 浏览器两个出口。 */
 export interface SourceRequest {
-  fetcherFor(source: NovelSource): Fetcher
+  fetcherFor(source: NovelSource): ScriptEvalSurface
   fetchText(source: NovelSource, plan: RequestPlan, opts?: { timeoutMs?: number }): Promise<{ text: string; landedUrl: string }>
   fetchPage(source: NovelSource, plan: RequestPlan, opts?: { timeoutMs?: number }): Promise<Page>
 }
@@ -36,6 +51,8 @@ export interface SourceRequest {
  * `resolveHeaders`，只有阅读门面的源级外观带限速与 loginCheck），真浏览器抓取会绕开限速、
  * 头部由每个调用方自己求值，头规则脚本里的一次网络调用还可能回头再求值头规则。
  * 要发请求的调用方只交 (source, plan)，不自己拼这份顺序。
+ * 两个消费面按用途分开：`fetcherFor` 交出**脚本求值面**（HTTP 已过 loginCheck、浏览器只经
+ * `webview`），`fetchText` / `fetchPage` 是**读面**（保留 `webView` / `webJs` 计划与 loginCheck）。
  *
  * 三条不变量（本 module 的存在理由，改动前先读）：
  * - **真浏览器也过限速**：限速与动态头是共同前置，不挂在 HTTP 那一支上。引擎面
@@ -139,15 +156,12 @@ export function createSourceRequest(deps: SourceRequestDeps): SourceRequest {
     }
   }
 
-  const fetcherFor = (source: NovelSource): Fetcher => {
+  /** HTTP 出站：限速 + loginCheck（读面与脚本面的 HTTP 共用；真浏览器形态不经此处）。 */
+  const httpCheckedFor = (source: NovelSource): Fetcher => {
     const raw = rawFetcherFor(source)
     return {
       ...raw,
-      // 脚本侧动态头由 engineContextOf 的惰性 provider 解析；本外观必须不再解析——再解析一次
-      // 会让每个脚本请求叠加一次头规则求值（头规则里的 java.ajax 会回头再求值头规则）
       fetchPage: async (url, init) => {
-        // 真浏览器页面原样返回（loginCheck 只作用于 HTTP 分支）
-        if (init?.webView === true || init?.webJs !== undefined) return raw.fetchPage(url, init)
         // 没有 loginCheck 的源保持守门错误：不把 4xx 正文读进内存再抛
         if (loginCheckOf(source) === '') return raw.fetchPage(url, init)
         // loginCheck 的需求方正是 Cloudflare 403/503 拦截页：先放行最终错误页给它看正文；
@@ -159,6 +173,44 @@ export function createSourceRequest(deps: SourceRequestDeps): SourceRequest {
         }
         return checked
       },
+    }
+  }
+
+  /** 读面 fetcher：自带 `webView` / `webJs` 计划（`fetchText` 的浏览器计划是现网行为，不改）；
+   *  其余 HTTP 出站走 loginCheck 版。 */
+  const readFetcherFor = (source: NovelSource): Fetcher => {
+    const raw = rawFetcherFor(source)
+    const checked = httpCheckedFor(source)
+    return {
+      ...raw,
+      fetchPage: async (url, init) => {
+        // 真浏览器页面原样返回（loginCheck 只作用于 HTTP 分支）
+        if (init?.webView === true || init?.webJs !== undefined) return raw.fetchPage(url, init)
+        return checked.fetchPage(url, init)
+      },
+    }
+  }
+
+  /** 脚本求值面：只给 source-eval 的能力装配消费。动态头不经本面求值——脚本侧的头由
+   *  `engineContextOf` 的惰性 provider 提供、由读面/init 带入；本面多求值一次就会让每个
+   *  脚本请求叠加一次头规则求值（头规则里的 java.ajax 会回头再求值头规则）。 */
+  const fetcherFor = (source: NovelSource): ScriptEvalSurface => {
+    const http = httpCheckedFor(source)
+    return {
+      fetchPage: async (url, init) => {
+        // 类型上浏览器两键已不可表达；运行时闯入（js 调用方 / 断言绕过）点名拒收，不悄悄降级成 HTTP
+        const raw = init as FetchInit | undefined
+        if (raw?.webView === true || raw?.webJs !== undefined) {
+          throw new Error(`脚本求值面的 fetchPage 只走 HTTP：真浏览器出站请走 webview（${url}）`)
+        }
+        return http.fetchPage(url, init)
+      },
+      webview: webviewFor(source),
+      cookieJar: deps.cookieJar,
+      ...(deps.fetcher.deviceId === undefined ? {} : { deviceId: deps.fetcher.deviceId }),
+      ...(deps.fetcher.sourceSession === undefined ? {} : { sourceSession: deps.fetcher.sourceSession }),
+      // 与旧源级外观同面：交给脚本的 adapter 也保留关出站 dispatcher 的能力位
+      dispose: () => deps.fetcher.dispose?.(),
     }
   }
 
@@ -178,10 +230,10 @@ export function createSourceRequest(deps: SourceRequestDeps): SourceRequest {
     fetcherFor,
     async fetchText(source, plan, opts) {
       // 文本面复用「抓取 + 解码」的单点 `fetchTextPage`，本缝不再抄第二遍组合
-      return fetchTextPage(fetcherFor(source), plan.url, await initFor(source, plan, opts), charsetOf(plan))
+      return fetchTextPage(readFetcherFor(source), plan.url, await initFor(source, plan, opts), charsetOf(plan))
     },
     async fetchPage(source, plan, opts) {
-      const page = await fetcherFor(source).fetchPage(plan.url, await initFor(source, plan, opts))
+      const page = await readFetcherFor(source).fetchPage(plan.url, await initFor(source, plan, opts))
       return { url: page.finalUrl, requestedUrl: plan.url, body: decodeBody(page, charsetOf(plan)) }
     },
   }
@@ -199,10 +251,10 @@ export async function fetchSourceText(
   return text
 }
 
-/** 浏览器 → JAR 的单点（组合根给基础 fetcher 挂的兜底能力也走这一份）。
- *  **按 cookie 自己的域落**：浏览器 context 里可能同时有重定向前后几个域的 cookie，
- *  拿最终 URL 的 host 当缺省域会把别的域的 host-only cookie 种到最终站点上。 */
-export function absorbWebviewCookies(jar: CookieJar, page: WebViewPage): void {
+/** 浏览器 → JAR 的单点：**按 cookie 自己的域落**——浏览器 context 里可能同时有重定向前后几个域的
+ *  cookie，拿最终 URL 的 host 当缺省域会把别的域的 host-only cookie 种到最终站点上。
+ *  模块私有：浏览器 cookie 桥只住本文件。 */
+function absorbWebviewCookies(jar: CookieJar, page: WebViewPage): void {
   for (const c of page.cookies) {
     const host = c.domain.replace(/^\./, '')
     const scheme = c.secure === true ? 'https' : 'http'

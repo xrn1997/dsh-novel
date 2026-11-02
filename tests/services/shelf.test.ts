@@ -49,6 +49,15 @@ describe('Shelf', () => {
     s.add({ sourceId: 'u', bookKey: 'k1', title: 'T2', totalChapters: 120 })
     expect(s.get('k1')?.totalChapters).toBe(120)   // 带则更新
   })
+  it('totalChapters 落盘前归一化：floor + 负数钳 0', async () => {
+    const { s } = await tmpShelf()
+    s.add({ sourceId: 'u', bookKey: 'k1', title: 'T', totalChapters: 12.9 })
+    expect(s.get('k1')?.totalChapters).toBe(12)
+    s.add({ sourceId: 'u', bookKey: 'k2', title: 'T', totalChapters: -3 })
+    expect(s.get('k2')?.totalChapters).toBe(0)
+    s.update('k1', { totalChapters: 9.8 })
+    expect(s.get('k1')?.totalChapters).toBe(9)
+  })
   it('四兄弟（author/coverUrl/intro/lastChapterName）：add 不带键 → 保留（dispatch 条件展开同形）', async () => {
     const { s } = await tmpShelf()
     s.add({ sourceId: 'u', bookKey: 'k', title: 'T', author: 'A', coverUrl: 'https://a.com/c.jpg', intro: '简介', lastChapterName: '第9章' })

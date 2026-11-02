@@ -59,12 +59,17 @@ export interface TocRenderValue {
  *  规范值里——render 如实报「只含前 N 章」，不假装目录被取全了。 */
 export const TOC_CHAPTERS_CAP = 1000
 
-/** 目录：只印前 10 章；规范值超 TOC_CHAPTERS_CAP 时说明只含前 N 章。 */
+/** 工具面**只印这么多章**：与 `TOC_CHAPTERS_CAP`（规范值上限）是两个事实——那是喂给 render
+ *  的值的上限，这是模型读到的文案的篇幅。文案里「只显示前 N 章」与 `renderToc` 的 slice 必须
+ *  同源于这一枚，别各写一份字面量（两处一旦分头漂，描述就在教模型读一份它读不到的东西）。 */
+export const TOC_RENDER_CAP = 10
+
+/** 目录：只印前 `TOC_RENDER_CAP` 章；规范值超 TOC_CHAPTERS_CAP 时说明只含前 N 章。 */
 export function renderToc(v: TocRenderValue): string {
-  const shown = v.chapters.slice(0, 10).map((c) => `[${c.chapterIndex}] ${c.name}`).join('\n')
+  const shown = v.chapters.slice(0, TOC_RENDER_CAP).map((c) => `[${c.chapterIndex}] ${c.name}`).join('\n')
   const omitted = v.total > v.chapters.length
     ? `\n…（截断，规范值只含前 ${v.chapters.length} 章，全书共 ${v.total} 章）`
-    : v.total > 10 ? '\n…（截断，规范值含全部）' : ''
+    : v.total > TOC_RENDER_CAP ? '\n…（截断，规范值含全部）' : ''
   return `《${v.bookKey}》共 ${v.total} 章：\n${shown}${omitted}`
 }
 

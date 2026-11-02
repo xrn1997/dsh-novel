@@ -906,56 +906,60 @@ describe('同步导入走 intake 入库规则（此前工具面导入无去重�
 })
 
 describe('求值上下文组装单点（runLogin/tocUrl 此前漏 jsLib，潜伏期最长的一处）', () => {
-  const mk = async (): Promise<ReadingService> => trackService(await ReadingService.create({
-    dir: await makeTempDir('novel-rd-'),
-    fetchImpl: route(() => null) as any,
-  }))
+  // 登录用例改走公开动词 login()（runLogin 已降门内私有）；cookie 落盘经 registry 组合根 seam 佐证
+  const mk = async (): Promise<{ svc: ReadingService; registry: SourceRegistry }> => {
+    const { svc, registry } = await makeService(() => null)
+    return { svc, registry }
+  }
 
   it('runLogin：@js 登录上下文带 jsLib（此前手拼上下文漏 jsLib——jsLib 函数只在登录那一刻炸 not defined）', async () => {
-    const svc = await mk()
+    const { svc, registry } = await mk()
     const out = await svc.importOne({
       ...rawSource, bookSourceUrl: 'https://login.com',
       loginUrl: 'return buildCookie()',   // runLogin 统一加 @js: 前缀;evaluate 路径是函数体形态,完成值需显式 return
       jsLib: 'function buildCookie() { return "sid=abc; uid=7" }',
     })
-    const auth = await svc.runLogin(out.sourceId!)
-    expect(auth?.cookies).toEqual({ sid: 'abc', uid: '7' })
+    expect(await svc.login(out.sourceId!)).toEqual({ kind: 'authed' })   // 门面出口是 outcome（旧口 runLogin 回 SourceAuth|null）
+    expect(registry.get(out.sourceId!)?.auth?.cookies).toEqual({ sid: 'abc', uid: '7' })
   })
 
   it('runLogin 认 <js>…</js> 登录脚本（不再套出 @js:<js> 语法错）', async () => {
-    const svc = await mk()
+    const { svc, registry } = await mk()
     const out = await svc.importOne({
       ...rawSource, bookSourceUrl: 'https://login-js-tag.com',
       loginUrl: '<js>return "sid=tag"</js>',
     })
-    expect((await svc.runLogin(out.sourceId!))?.cookies).toEqual({ sid: 'tag' })
+    expect(await svc.login(out.sourceId!)).toEqual({ kind: 'authed' })
+    expect(registry.get(out.sourceId!)?.auth?.cookies).toEqual({ sid: 'tag' })
   })
 
   it('runLogin 写 cookie 时保留已保存的 loginInfo / headers', async () => {
-    const svc = await mk()
+    const { svc, registry } = await mk()
     const out = await svc.importOne({
       ...rawSource, bookSourceUrl: 'https://login-keep.com',
       loginUrl: 'return "sid=abc"',
     })
     await svc.saveAuth(out.sourceId!, {}, { 'X-Auth': '1' }, { user: 'alice' })
-    const auth = await svc.runLogin(out.sourceId!)
+    expect(await svc.login(out.sourceId!)).toEqual({ kind: 'authed' })
+    const auth = registry.get(out.sourceId!)?.auth
     expect(auth?.cookies).toEqual({ sid: 'abc' })
     expect(auth?.headers).toEqual({ 'X-Auth': '1' })
     expect(auth?.loginInfo).toEqual({ user: 'alice' })
   })
 
   it('runLogin 空产出 → null 且不写登录态（不伪造 hasAuth）', async () => {
-    const svc = await mk()
+    const { svc, registry } = await mk()
     const out = await svc.importOne({
       ...rawSource, bookSourceUrl: 'https://login-empty.com',
       loginUrl: 'return ""',
     })
-    expect(await svc.runLogin(out.sourceId!)).toBe(null)
+    expect(await svc.login(out.sourceId!)).toEqual({ kind: 'empty-output' })   // 旧口回 null；翻 422 的翻译在 authRoute
+    expect(registry.get(out.sourceId!)?.auth).toBeUndefined()
     expect(svc.listPublicSources().find((s) => s.id === out.sourceId!)?.hasAuth).toBe(false)
   })
 
   it('runLoginAction：外链回传；JS 动作以 loginInfo 为 result 执行', async () => {
-    const svc = await mk()
+    const { svc } = await mk()
     const out = await svc.importOne({
       ...rawSource, bookSourceUrl: 'https://login-action.com',
       loginUi: JSON.stringify([
@@ -983,6 +987,107 @@ describe('求值上下文组装单点（runLogin/tocUrl 此前漏 jsLib，潜伏
   })
 })
 
+describe('login(id) outcome（门内串 requireSource→形态判别→执行；authRoute 只翻译）', () => {
+  const mk = async (): Promise<{ svc: ReadingService; registry: SourceRegistry }> => makeService(() => null)
+
+  it('login js 形态产出 cookie → {kind:"authed"} 且 auth 落盘', async () => {
+    const { svc, registry } = await mk()
+    const out = await svc.importOne({
+      ...rawSource, bookSourceUrl: 'https://login-a.com', loginUrl: 'return "sid=abc; uid=7"',
+    })
+    expect(await svc.login(out.sourceId!)).toEqual({ kind: 'authed' })
+    const auth = registry.get(out.sourceId!)?.auth
+    expect(auth?.cookies).toEqual({ sid: 'abc', uid: '7' })
+    expect(auth?.acquiredAt).toBeTypeOf('number')
+  })
+
+  it('login js 形态空产出 → {kind:"empty-output"} 且不写登录态', async () => {
+    const { svc, registry } = await mk()
+    const out = await svc.importOne({
+      ...rawSource, bookSourceUrl: 'https://login-b.com', loginUrl: 'return ""',
+    })
+    expect(await svc.login(out.sourceId!)).toEqual({ kind: 'empty-output' })
+    expect(registry.get(out.sourceId!)?.auth).toBeUndefined()
+  })
+
+  it('login 未声明 loginUrl → {kind:"no-login-url"}（路由翻 400，不是 500）', async () => {
+    const { svc } = await mk()
+    const out = await svc.importOne({ ...rawSource, bookSourceUrl: 'https://login-c.com' })
+    expect(await svc.login(out.sourceId!)).toEqual({ kind: 'no-login-url' })
+  })
+
+  it('login 未知 id → 抛 SourceNotFoundError（门内 requireSource，路由不再预检——classify 免费拿 404）', async () => {
+    const { svc } = await mk()
+    await expect(svc.login('nope')).rejects.toBeInstanceOf(SourceNotFoundError)
+  })
+
+  it('login manual 形态 → {kind:"manual", loginUrl} 且不执行沙箱（URL 形态进沙箱必炸或落空产出——两种都到不了 manual）', async () => {
+    const { svc, registry } = await mk()
+    const out = await svc.importOne({
+      ...rawSource, bookSourceUrl: 'https://login-d.com', loginUrl: 'https://login.com/x',
+    })
+    expect(await svc.login(out.sourceId!)).toEqual({ kind: 'manual', loginUrl: 'https://login.com/x' })
+    expect(registry.get(out.sourceId!)?.auth).toBeUndefined()   // 不执行也不写登录态
+    expect(svc.listPublicSources().find((s) => s.id === out.sourceId!)?.hasAuth).toBe(false)
+  })
+})
+
+describe('exportRange outcome（区间判据归门面：缺省、裁剪与两条失败结局都是值）', () => {
+  // 5 章目录：倒置用例必须选一个**裁剪后仍倒置**的区间（from=4 / to=2），否则测到的是裁剪不是倒置
+  const TOC5_HTML = `<html><body>${[1, 2, 3, 4, 5]
+    .map((n) => `<div class="b ch"><a href="/c/${n}.html">第${n}章</a></div>`)
+    .join('')}</body></html>`
+  const BOOK = `${BASE}/book/1/`
+  const signal = (): AbortSignal => new AbortController().signal
+  const serviceOf = async (tocHtml: string) => makeService((u) => {
+    if (u.includes('/book/1/')) return tocHtml
+    const m = /\/c\/(\d+)\.html$/.exec(u)
+    if (m !== null) return `<html><body><div id="content">第${m[1]}章正文</div></body></html>`
+    return u.includes('/search') ? SEARCH_HTML('x') : null
+  })
+
+  it('正常范围 → plan：from/to/totalInRange 保形，流与 exportBook 同形（BOM 开头 + 《书名》· 章名）', async () => {
+    const { svc, registry } = await serviceOf(TOC5_HTML)
+    const out = await svc.exportRange(registry.list()[0].id, BOOK, 2, 4, { title: '测试书', delayMs: 1, signal: signal() })
+    if (out.kind !== 'plan') throw new Error(`期望 plan，收到 ${out.kind}`)
+    expect([out.plan.from, out.plan.to, out.plan.totalInRange]).toEqual([2, 4, 3])
+    const chunks: string[] = []
+    for await (const chunk of out.plan.stream) chunks.push(chunk)
+    expect(chunks[0]).toBe('\uFEFF')                       // BOM 是首包（Windows 记事本兼容）
+    const text = chunks.join('')
+    expect(text.match(/《测试书》· 第\d章/g)).toHaveLength(3)
+    expect(text).toContain('《测试书》· 第2章\n\n第2章正文')
+    expect(text).not.toContain('《测试书》· 第1章')
+    expect(text).not.toContain('《测试书》· 第5章')
+  })
+
+  it('空目录 → {kind:"empty-toc"}（路由翻 422 EmptyToc）', async () => {
+    const { svc, registry } = await serviceOf('<html><body><p>无章节</p></body></html>')
+    expect(await svc.exportRange(registry.list()[0].id, BOOK, null, null, { title: 't', delayMs: 1, signal: signal() }))
+      .toEqual({ kind: 'empty-toc' })
+  })
+
+  it('裁剪后倒置 → {kind:"bad-range", from, to}（交回裁剪后的数，路由拿去做 422 文案）', async () => {
+    const { svc, registry } = await serviceOf(TOC5_HTML)
+    expect(await svc.exportRange(registry.list()[0].id, BOOK, 4, 2, { title: 't', delayMs: 1, signal: signal() }))
+      .toEqual({ kind: 'bad-range', from: 4, to: 2 })
+    // 9 越界裁到 5 后仍倒置：结局必须带裁剪后的数——4/2 那次裁剪是恒等，抓不到把原始数交回调用的回归
+    expect(await svc.exportRange(registry.list()[0].id, BOOK, 9, 2, { title: 't', delayMs: 1, signal: signal() }))
+      .toEqual({ kind: 'bad-range', from: 5, to: 2 })
+  })
+
+  it('越界与缺席都裁进 [1, 目录长]：from=-5&to=99 → 1..5；两端缺席 → 全本', async () => {
+    const { svc, registry } = await serviceOf(TOC5_HTML)
+    const id = registry.list()[0].id
+    const clipped = await svc.exportRange(id, BOOK, -5, 99, { title: 't', delayMs: 1, signal: signal() })
+    if (clipped.kind !== 'plan') throw new Error(`期望 plan，收到 ${clipped.kind}`)
+    expect([clipped.plan.from, clipped.plan.to, clipped.plan.totalInRange]).toEqual([1, 5, 5])
+    const whole = await svc.exportRange(id, BOOK, null, null, { title: 't', delayMs: 1, signal: signal() })
+    if (whole.kind !== 'plan') throw new Error(`期望 plan，收到 ${whole.kind}`)
+    expect([whole.plan.from, whole.plan.to, whole.plan.totalInRange]).toEqual([1, 5, 5])
+  })
+})
+
 describe('门面 probe 与搜索同耐心', () => {
   it('probe 认 searchTimeoutMs：挂起抓取在限时内回 FetchError，不落回 fetcher 固定 15s', async () => {
     const svc = trackService(await ReadingService.create({
@@ -1005,15 +1110,17 @@ describe('门面直测（invariant 与 loginPlan 不再只穿 HTTP 测）', () =
     fetchImpl: route(() => null) as any,
   }))
 
-  it('loginPlan 三分支：URL 形态→manual（回传 loginUrl）；JS 形态→js；未声明→null；不存在→SourceNotFoundError', async () => {
+  it('login() 三分支（URL / JS / 未声明）→ manual / authed / no-login-url；不存在 → SourceNotFoundError', async () => {
     const svc = await mk()
     const manual = await svc.importOne({ ...rawSource, bookSourceUrl: 'https://m.com', loginUrl: 'https://login.com/x' })
     const js = await svc.importOne({ ...rawSource, bookSourceUrl: 'https://j.com', loginUrl: 'return "a=1"' })
     const none = await svc.importOne({ ...rawSource, bookSourceUrl: 'https://n.com' })
-    expect(svc.loginPlan(manual.sourceId!)).toEqual({ mode: 'manual', loginUrl: 'https://login.com/x' })
-    expect(svc.loginPlan(js.sourceId!)).toEqual({ mode: 'js' })
-    expect(svc.loginPlan(none.sourceId!)).toBe(null)
-    expect(() => svc.loginPlan('nope')).toThrow(/源不存在/)
+    // loginPlan 降为门内判别构件（三分支语义不变）；门面出口经 login() 看到的是 outcome——
+    // 旧口的 null → kind:"no-login-url"（400 的翻译在 authRoute），SourceNotFoundError 原样穿门
+    expect(await svc.login(manual.sourceId!)).toEqual({ kind: 'manual', loginUrl: 'https://login.com/x' })
+    expect(await svc.login(js.sourceId!)).toEqual({ kind: 'authed' })
+    expect(await svc.login(none.sourceId!)).toEqual({ kind: 'no-login-url' })
+    await expect(svc.login('nope')).rejects.toThrow(/源不存在/)
   })
 
   it('localImport 自动上架 + removeBook 防孤儿文件（两 invariant 门面直测）', async () => {

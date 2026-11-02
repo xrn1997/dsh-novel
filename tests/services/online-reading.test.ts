@@ -3,6 +3,7 @@ import { promises as fsPromises } from 'node:fs'
 import path from 'node:path'
 import { OnlineReading } from '../../src/services/online-reading.js'
 import { PageCache } from '../../src/services/cache.js'
+import { CookieJar } from '../../src/services/cookies.js'
 import { Shelf } from '../../src/services/shelf.js'
 import { normalizeSource } from '../../src/services/normalize.js'
 import { createSourceEval } from '../../src/services/source-eval.js'
@@ -87,7 +88,12 @@ async function makeRig(opts: {
   let beforeFetch: ((url: string) => Promise<void> | void) | undefined
   const fetches: string[] = []
   const request: SourceRequest = {
-    fetcherFor: () => ({ fetchPage: async () => { throw new Error('no raw fetch') } }),
+    // 脚本求值面（S6）：本 rig 只驱动读面，脚本出站与浏览器入口都点名不可用
+    fetcherFor: () => ({
+      fetchPage: async () => { throw new Error('no raw fetch') },
+      webview: { fetch: async () => { throw new Error('no webview') } },
+      cookieJar: new CookieJar(),
+    }),
     fetchText: async (_s, plan) => {
       // 先取页再门控：页内容代表「请求到达站点那一刻」的响应，不随后来的门控/换规则漂移
       const text = htmlOf(plan.url) ?? ''

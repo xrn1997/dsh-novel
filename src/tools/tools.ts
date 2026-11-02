@@ -7,7 +7,7 @@ import { project } from './project.js'
 import {
   renderImport, renderRead, renderSearch, renderShelfBook, renderShelfList, renderShelfRemove,
   renderSourceList, renderSourceProbe, renderSourceRemove, renderSourceToggle, renderToc,
-  TOC_CHAPTERS_CAP,
+  TOC_CHAPTERS_CAP, TOC_RENDER_CAP,
 } from './render.js'
 import { pickShelfItem, SHELF_ITEM_FIELDS } from './shelf-item.js'
 import type { ShelfItem } from './shelf-item.js'
@@ -197,16 +197,16 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
       render: (_args, v) => text(renderRead(v)),
     },
     execute: async (args: { sourceId: string; bookKey: string; chapterIndex: number }) => {
-      const toc = await service.getToc(args.sourceId, args.bookKey)
-      // 越界判定归服务层（ChapterNotFoundError）——此处不再复读同一检查与文案
-      const textValue = await service.getChapter(args.sourceId, args.bookKey, args.chapterIndex)
-      return { sourceId: args.sourceId, bookKey: args.bookKey, chapterIndex: args.chapterIndex, chapterName: toc[args.chapterIndex].name, text: textValue }
+      // 目录 + 正文 + 章名的编排归服务层（`ReadingService.readChapter` → `BookContent.readChapter`）：
+      // 章名与正文出自同一次目录读数，越界也在那条缝里按既有错误语义上抛——此处不做二次判。
+      const { name, text } = await service.readChapter(args.sourceId, args.bookKey, args.chapterIndex)
+      return { sourceId: args.sourceId, bookKey: args.bookKey, chapterIndex: args.chapterIndex, chapterName: name, text }
     },
   })
 
   const tocTool = defineTool({
     name: 'dshnovel_toc',
-    description: `取书籍目录：逐章返回章名与 0 起的 chapterIndex（章名→下标的唯一映射处，dshnovel_read 靠它定位）、章 URL。sourceId/bookKey 来自 dshnovel_search 的结果。目录可能上千章——render 只显示前 10 章，规范值最多 ${TOC_CHAPTERS_CAP} 章（超出时 total 仍为全书章数，chapterIndex 仍可直接读任意章）。`,
+    description: `取书籍目录：逐章返回章名与 0 起的 chapterIndex（章名→下标的唯一映射处，dshnovel_read 靠它定位）、章 URL。sourceId/bookKey 来自 dshnovel_search 的结果。目录可能上千章——render 只显示前 ${TOC_RENDER_CAP} 章，规范值最多 ${TOC_CHAPTERS_CAP} 章（超出时 total 仍为全书章数，chapterIndex 仍可直接读任意章）。`,
     parameters: {
       sourceId: { type: 'string', required: true, description: '源 id' },
       bookKey: { type: 'string', required: true, description: '书籍详情页 URL' },

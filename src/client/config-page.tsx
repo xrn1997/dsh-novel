@@ -13,6 +13,8 @@ import type { VolatileConfigFieldName } from '../config.js'
 import {
   CopyProvider, useCopy, zhTranslate, type CopyKey, type Translate,
 } from './copy/index.js'
+/** 分区表住 `config-groups.ts`：纯数据模块，Node 侧测试要拿它与字段表、文案字典交叉校验。 */
+import { GROUPS } from './config-groups.js'
 import { NovelStyles } from './styles.js'
 
 /**
@@ -111,15 +113,6 @@ const FIELDS: Record<FieldName, FieldSpec> = {
     invalidKey: 'config.field.proxyUrl.invalid',
   },
 }
-
-/** 分区按「你什么时候会来动它」切，不按实现模块切：七个字段等权排一条纵列时，
- *  第 7 项在首屏之外，而最常调的两个（超时、并发）和最不敢调的两个（字节数）占一样的地方。 */
-const GROUPS: { titleKey: CopyKey; names: readonly FieldName[] }[] = [
-  { titleKey: 'config.group.search', names: ['searchTimeoutMs', 'searchParallel'] },
-  { titleKey: 'config.group.reading', names: ['jsTimeoutMs', 'exportDelayMs'] },
-  { titleKey: 'config.group.storage', names: ['cacheMaxBytes', 'localImportMaxBytes'] },
-  { titleKey: 'config.group.network', names: ['proxyUrl'] },
-]
 
 /** 字段状态与壳层状态都直接取宿主声明的窄镜像（`host-ui.d.ts`）：不可用 / 只读 / 保存失败的
  *  文案与禁用态由宿主的 `SettingsForm` 按这些键驱动，本仓不再抄一份同形类型。 */

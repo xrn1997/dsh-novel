@@ -1,6 +1,7 @@
+import fs from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { load } from 'cheerio'
-import { createSourceSession, evalJs, runScript } from '../../src/engine/js-sandbox.js'
+import { createSourceSession, evalJs, runInContextVm, runScript, sanitizeForPost } from '../../src/engine/js-sandbox.js'
 import type { EvaluateRef, JsHost } from '../../src/engine/js-sandbox.js'
 import { JsSandboxError } from '../../src/engine/errors.js'
 import type { EngineValue, EvalContext } from '../../src/engine/types.js'
@@ -397,8 +398,13 @@ describe('@js 沙箱', () => {
     expect(err).toBeInstanceOf(JsSandboxError)
     expect(err.script).toBe('null.x')
     expect(String(err.message)).toMatch(/脚本/)
-    // 多行脚本：错误在用户脚本第 2 行（wrapper 首行偏移 1）
-    const err2 = await run('const a = 1\nnull.x').then(() => null, (e) => e)
+    // 多行脚本：错误在用户脚本第 2 行（wrapper 首行偏移 1）。显式 scriptForm:false 钉 **wrapped 路**
+    // 的行号映射——opts 缺省已统一为 scriptForm（两路同口径）；wrapped 路仍真实存在（脚本形态经
+    // 编译期 SyntaxError 回落它），其 wrapper 偏移补偿只有这条显式路径才走得到。
+    const err2 = await evalJs({
+      code: 'const a = 1\nnull.x', host: hostOf(), ctx: ctxOf(), loc: L, facet: 'content',
+      opts: { scriptForm: false },
+    }).then(() => null, (e) => e)
     expect(err2.line).toBe(2)
   })
 
@@ -1076,5 +1082,79 @@ describe('host object 形状（Response/Map/Element/UUID）', () => {
       'var e = org.jsoup.Jsoup.parse(\'<p class="a b">\').selectFirst("p"); return e.hasClass("b") + "|" + e.hasClass("c")',
     )
     expect(v.value).toEqual({ kind: 'value', text: 'true|false' })
+  })
+})
+
+// ── A-a 收口：runInContextVm 共享体（worker 与主线程同一份求值序列 + 错误前缀同口径）──
+
+describe('worker 路与主线程的错误前缀同口径（runInContextVm 收口钉子）', () => {
+  // worker 路由由 SYNC_WORKER_RE 按**脚本文本**判（含 `java.ajax(` 即整段进 worker）——
+  // 与 js-bindings.test.ts 的强制法同款。错误前缀必须两路一致：同一源在 worker 里炸出的
+  // 错误与主线程炸出的必须同前缀，否则按前缀归因/分类的读数会随路由漂。
+  it('worker 路与主线程的错误前缀同口径（jsLib 段）', async () => {
+    // jsLib 先于用户代码执行：它抛错时 ajax 一次都没打出去（fetch 计数钉住这一点）
+    let ajaxCalls = 0
+    const err = await runScript({
+      code: 'var b = java.ajax("https://x.com/p"); return b',
+      jsLib: 'throw new Error("boom")',
+      loc: L, facet: 'content', scriptForm: true,
+      baseUrl: 'https://x.com', source: 'https://x.com',
+      fetch: async () => { ajaxCalls++; return { body: 'BODY' } },
+    }).then(() => null, (e: unknown) => e)
+    expect(String((err as Error).message)).toContain('jsLib 执行失败')
+    expect(ajaxCalls).toBe(0)
+  })
+
+  it('worker 路与主线程的错误前缀同口径（compile 段）', async () => {
+    // scriptForm: true，code 语法坏（`return (` 未闭合）→ wrapped 同样 SyntaxError → compile 段。
+    // 编译期就炸，一行都没执行（fetch 计数 0 自证没打站点）
+    let ajaxCalls = 0
+    const err = await runScript({
+      code: 'java.ajax("https://x.com/p"); return (',
+      loc: L, facet: 'content', scriptForm: true,
+      baseUrl: 'https://x.com', source: 'https://x.com',
+      fetch: async () => { ajaxCalls++; return { body: 'BODY' } },
+    }).then(() => null, (e: unknown) => e)
+    expect(String((err as Error).message)).toContain('脚本编译/同步执行失败')
+    expect(ajaxCalls).toBe(0)
+  })
+
+  it('runInContextVm 与 sanitizeForPost 闭包自由（toString 自含）', () => {
+    // worker 经 toString() 注入这两个函数——引用模块级符号（wrappedFormOf/jsErr/...）在
+    // worker 里就是 ReferenceError，必须字符串自含
+    expect(runInContextVm.toString()).not.toMatch(/wrappedFormOf|jsErr|makeHostCall|isVmTimeout|WORKER_RPC|ASYNC_GRACE/)
+    expect(sanitizeForPost.toString()).not.toMatch(/wrappedFormOf|jsErr/)
+  })
+
+  it('主线程侧错误前缀对照不变（jsLib 段 / compile 段 / 异步完成值抛错仍可达）', async () => {
+    // 无 ajax → 主线程路。同一前缀表（prefixOfPhase）两条路共读——主线程前缀不因收口漂移：
+    const jsLibErr = await runScript({
+      code: 'return "x"', jsLib: 'throw new Error("boom")',
+      loc: L, facet: 'content', scriptForm: true, baseUrl: 'https://x.com',
+    }).then(() => null, (e: unknown) => e)
+    expect(String((jsLibErr as Error).message)).toContain('jsLib 执行失败')
+    const compileErr = await runScript({
+      code: 'return (', loc: L, facet: 'content', scriptForm: true, baseUrl: 'https://x.com',
+    }).then(() => null, (e: unknown) => e)
+    expect(String((compileErr as Error).message)).toContain('脚本编译/同步执行失败')
+    // 「脚本执行抛错」仍可达：顶层 return → 编译期判别回落 wrapped → 异步完成值 rejection
+    // （不打段标，两路同为此前缀）
+    const runtimeErr = await runScript({
+      code: 'return null.x', loc: L, facet: 'content', scriptForm: true, baseUrl: 'https://x.com',
+    }).then(() => null, (e: unknown) => e)
+    expect(String((runtimeErr as Error).message)).toContain('脚本执行抛错')
+  })
+})
+
+// ── D-a：worker 侧宿主往返死线由调用方预算派生（300s 字面量退场）──
+
+describe('worker RPC 死线派生', () => {
+  it('worker RPC 死线由预算派生（无 300s 字面量，也无硬编码死线）', () => {
+    const src = fs.readFileSync(new URL('../../src/engine/js-sandbox.ts', import.meta.url), 'utf8')
+    expect(src).not.toMatch(/300[_ ]?000/)
+    // 「由预算派生」钉实到表达式：把死线改成硬编码（如 25_000）时 rpcDeadlineMs 键还在、
+    // 上一条仍绿——键在场不等于派生在场
+    expect(src).toMatch(/timeout \+ ASYNC_GRACE_MS \+ WORKER_RPC_MARGIN_MS/)
+    expect(src).toMatch(/rpcDeadlineMs/)   // 经 workerData 传入
   })
 })

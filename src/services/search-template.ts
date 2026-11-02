@@ -2,7 +2,7 @@ import { RuleEvalError } from '../engine/index.js'
 import { isPlaceholderExpr } from '../engine/index.js'
 import type { JsOutcome } from '../engine/js-sandbox.js'
 import type { Fetcher } from './fetcher.js'
-import { createSourceEval } from './source-eval.js'
+import { createSourceEval, DEFAULT_JS_BUDGET_MS } from './source-eval.js'
 import type { NovelSource } from './types.js'
 
 /**
@@ -117,8 +117,9 @@ function scriptOf(
   jsTimeoutMs?: number, result = '',
 ): Promise<JsOutcome> {
   // 重叠字段（baseUrl/source/vars/fetch/jsLib/jsTimeoutMs）走 source-eval 的上下文单点——
-  // runScript 面独有的字段（code/key/page/header/result/loc/facet/scriptForm）在此补齐
-  return createSourceEval(fetcher, source, jsTimeoutMs === undefined ? undefined : { jsTimeoutMs })
+  // runScript 面独有的字段（code/key/page/header/result/loc/facet/scriptForm）在此补齐。
+  // 预算无条件交（构造器必填）：调用方没给就落服务缺省
+  return createSourceEval(fetcher, source, { jsTimeoutMs: jsTimeoutMs ?? DEFAULT_JS_BUDGET_MS })
     .runScript(code, {
       baseUrl: source.baseUrl,
       vars: { key, page: String(page) },

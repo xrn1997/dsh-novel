@@ -1,4 +1,4 @@
-import { hasProgress } from '../shared/wire.js'
+import { hasProgress } from '../shared/reading-position.js'
 import { describeError } from './api.js'
 import { zhTranslate } from './copy/index.js'
 import type { Translate } from './copy/index.js'
@@ -6,7 +6,7 @@ import { anchorTop, locateChapter, ratioWithin } from './progress.js'
 import type { ChapterAnchor } from './progress.js'
 import { debounce } from './util.js'
 import { nextLoadTarget } from './reader-load.js'
-import { createStore } from './store.js'
+import { createStore, prefsStore } from './store.js'
 import type { BookNavigation, ChapterContent, ChapterEntry, LinkRole, NavigationItem, ReadingTarget, ShelfBook } from './views/types.js'
 
 /**
@@ -32,6 +32,23 @@ export interface ReaderSessionDeps {
   saveTotalChapters(total: number): void
   /** 布局落定后的回调调度 */
   afterFrames(cb: () => void): void
+  /** 视口喂入的帧调度（缺省 = 立即执行，既有内联 deps 一字不用改）；视图注入 rAF，测试注入手动泵 */
+  viewport?: ReaderViewportFeed
+}
+
+/** 视口喂入的帧调度缝：视图 = rAF + 重取滚动容器（`findScrollport`）；测试 = 手动泵；
+ *  缺省 = 同步执行回调——阅读时序的零 DOM 单测与「视图只装监听」的分工都靠这条缝。 */
+export interface ReaderViewportFeed {
+  scheduleFrame(cb: () => void): number
+  cancelFrame(handle: number): void
+  /** 帧首重取滚动容器（视图 = findScrollport；测试 = 计数/空实现） */
+  refreshPort(): void
+}
+
+const IMMEDIATE_VIEWPORT_FEED: ReaderViewportFeed = {
+  scheduleFrame: (cb) => { cb(); return 0 },
+  cancelFrame: () => {},
+  refreshPort: () => {},
 }
 
 /** 当前位置锚：视口顶所在的正文节点（章 + 节点 + 节点内偏移）。
@@ -145,6 +162,15 @@ export class ReaderSession {
   private restoring = false
   /** 本次视口 episode 剩余的自动补载次数（跨章/跳章/换书重置）。 */
   private backfillBudget = BACKFILL_MAX_CHAPTERS
+  /** 挂起中的视口帧：令牌 + 句柄。**令牌**让同步执行的调度器也不出错——帧体在
+   *  `scheduleFrame` 返回之前就跑完时，事后写回的是令牌的句柄，不会复活已完成的帧位。 */
+  private frame: { handle: number } | null = null
+  /** 挂起帧是否要按「布局变了」处理：scroll / resize / ResizeObserver 多来源按或合并。 */
+  private pendingLayout = false
+  /** 排版变化前视口顶所在节点：`setPref` 的同步调用栈里采（此刻 DOM 还是旧排版）；
+   *  排版复位用它算落点，复位后重采。换书/退出即清。 */
+  private lastVisibleBeforePrefs: VisibleNode | null = null
+  private prefsUnsub: (() => void) | null = null
   private readonly save: DebouncedSave
 
   constructor(
@@ -169,6 +195,11 @@ export class ReaderSession {
   /** 进入一本书：目录 → 存档恢复；无存档/书架拉不到 → 从头 */
   async open(sourceId: string, bookKey: string): Promise<void> {
     const gen = ++this.generation                       // 换书/重开：上一代的一切在途续作自此作废
+    this.cancelPendingFrame()                           // 上一代的挂起视口帧同样作废
+    this.lastVisibleBeforePrefs = null                  // 上一本的采点不带到这一本（旧快照只会量成 null 或误跳）
+    // 采点订阅挂在同步头部：它只对 `setPref` 的同步栈负责，与目录是否到货无关——正文未渲染时
+    // 采到的空快照在复位时是 no-op，不会误跳；重开幂等（守卫只订一次）。
+    this.subscribePrefs()
     this.sourceId = sourceId
     this.bookKey = bookKey
     this.tocNow = null
@@ -212,7 +243,7 @@ export class ReaderSession {
         this.onShelfNow = mine === undefined ? 'off' : 'on'
         if (mine !== undefined) {
           if (typeof mine.totalChapters !== 'number') this.deps.saveTotalChapters(toc.length)
-          // 「有没有存档」判据单点归 wire.hasProgress（第 0 章的章内位置也算进度）；
+          // 「有没有存档」判据单点归 `shared/reading-position.ts` 的 `hasProgress`（第 0 章的章内位置也算进度）；
           // 存档章越出目录（换源/目录变短/缓存重建）→ clamp 到最后一章，不许落成空白阅读器；
           // 负下标（手改过的落盘元数据）同样夹回第 0 章。**空目录没有可恢复的目标**：夹不到任何
           // 章时 `load` 会直接返回、双帧落位永不发生，而那正是下面 `restoring` 闸的前提。
@@ -425,6 +456,28 @@ export class ReaderSession {
     this.save(chapterIndex, offsetRatio)
     if (cause !== 'scroll') this.save.flush()
   }
+  /** 视口喂入的唯一入口（视图的 scroll / resize / ResizeObserver 监听器都调它）：同一静默期的
+   *  事件合成一帧，`layoutChanged` 按**或**合并——两类来源各排一次会重复采点、重复落一笔进度。
+   *  帧体先重取滚动容器再让会话读视口：内容变化后旧缓存量到的是上一版布局。 */
+  feedViewport(layoutChanged = false): void {
+    this.pendingLayout = this.pendingLayout || layoutChanged
+    if (this.frame !== null) return
+    const token = { handle: 0 }
+    this.frame = token
+    token.handle = this.viewportFeed.scheduleFrame(() => {
+      if (this.frame !== token) return          // 已被 open/dispose 取消：这一帧不读视口
+      this.frame = null
+      const changed = this.pendingLayout
+      this.pendingLayout = false
+      this.viewportFeed.refreshPort()
+      this.handleViewportChange(this.sourceId, { layoutChanged: changed })
+    })
+  }
+
+  private get viewportFeed(): ReaderViewportFeed {
+    return this.deps.viewport ?? IMMEDIATE_VIEWPORT_FEED
+  }
+
   /** 视口变化：预取 + 位置修正（跨章是导航事件，同章滚动是连续量）。
    *  纯滚动只读锚点缓存（锚点是绝对位置，滚动不改变它）；`layoutChanged` 或已载表换了版本才重测。
    *  目录跳章在途期间**不采信读数**：视口还是旧位置，采信等于用旧证据推翻用户刚下的导航
@@ -578,6 +631,21 @@ export class ReaderSession {
     this.checkBackfill(sourceId)
   }
 
+  /** 排版复位：视图排版 effect（三个 prefs 量变化后）的唯一入口，触发仍归视图。
+   *  把「变化前视口顶所在节点」拉回同一视口相对位置；目标量不到 → 不落位、**快照不清**
+   *  （miss 发生在新排版量得到之前，清掉等于让这一轮排版再也找不回锚）。
+   *  不等图片下载、也不轮询图片：插图框已按可信宽高预留（ChapterBody），排版后量到的偏移
+   *  就是可信的。位置提交仍归会话：复位后喂一次视口读数，由会话按真实读数修正比例（此处不写进度）。 */
+  applyTypesetRelocation(): void {
+    const snap = this.lastVisibleBeforePrefs
+    if (snap === null) return
+    const off = this.port.targetOffset(snap.index, snap.nodeId)
+    if (off === null) return
+    this.port.setScrollTop(this.port.scrollTop() + off + snap.offsetWithinNode)
+    this.sampleVisibleBeforePrefsChange()            // 复位后重采：连调两次排版也各有正确锚
+    this.handleViewportChange(this.sourceId, { layoutChanged: true })
+  }
+
   /** pendingJump 的目标已渲染 → 按真实位置定位并清零；未落地则下轮再试。
    *  **先挂载再测量**是硬次序：章块与锚点节点不在 DOM 时无可测量。
    *  定位后补一笔**真实比例**（章号意图 requestJump 已落盘，这里补「落位后读到章内哪儿」）。
@@ -632,12 +700,38 @@ export class ReaderSession {
     }
   }
 
+  /** 采点：prefsStore 的订阅者在 `setPref` 的同步调用栈里执行——那一刻 React 还没重渲染、
+   *  DOM 还是旧排版，这是唯一拿得到「变化前位置」的时刻（任何 effect 都在新排版落定之后才跑）。 */
+  private sampleVisibleBeforePrefsChange(): void {
+    this.lastVisibleBeforePrefs = this.port.currentNode()
+  }
+
+  /** prefs 采点订阅（`open` 挂、`dispose` 摘）：StrictMode 双挂载与同实例重开都只许订一次——
+   *  采样本身幂等，但叠订阅会让一次 `setPref` 读两遍节点。 */
+  private subscribePrefs(): void {
+    if (this.prefsUnsub !== null) return
+    this.prefsUnsub = prefsStore.subscribe(() => { this.sampleVisibleBeforePrefsChange() })
+  }
+
+  /** 取消挂起帧并清布局标记：上一代（换书/退出）的视口事件不再代表任何东西。 */
+  private cancelPendingFrame(): void {
+    if (this.frame === null) return
+    const handle = this.frame.handle
+    this.frame = null
+    this.pendingLayout = false
+    this.viewportFeed.cancelFrame(handle)
+  }
+
   /** 退出阅读器：先作废在途续作（代际 +1），再把防抖窗口里的进度补落盘——flush 不 cancel，
    *  cancel 会静默丢最后一段章内偏移，而 fetch 卸载后照样完成，没有「来不及存」的结构理由。
    *  在途槽一并复位：本代到此为止。**同一实例还会被下一次 open 复用**（同址换源时视图的会话
    *  memo 不重建，cleanup 的 dispose 之后紧接着 open 新源），留着旧槽会让那次加载被无声挡下。 */
   dispose(): void {
     this.generation++
+    this.cancelPendingFrame()
+    this.prefsUnsub?.()                                  // 采点订阅随会话结束：此后 setPref 不读节点
+    this.prefsUnsub = null
+    this.lastVisibleBeforePrefs = null
     this.inflight = null
     this.pendingScrollFixes = []
     this.restoring = false

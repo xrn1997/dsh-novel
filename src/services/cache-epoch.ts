@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { Facet } from '../engine/index.js'
+import { EXPLORE_FALLBACK_FIELDS, VACANT_RULE_FIELDS } from './rule-fields.js'
 import type { NormalizedRules } from './types.js'
 
 /**
@@ -114,23 +115,13 @@ export function rulesEpoch(rules: NormalizedRules, baseUrl: string, facet: Cache
   return digest(parts)
 }
 
-/** 发现面指纹的字段表，分三组，**组即「它为什么在这里」**。`satisfies` 只保证名字都是真字段
- *  （拼错即 tsc 红）；**刻意不按命名前缀自动收**，也不随 `NormalizedRules` 加字段自动长大——
- *  「指纹收谁」由发现面求值真正经过谁决定，不由名字长什么样决定。 */
-
-/** ① 发现面自有规则：`ruleExploreList` 非空时整套用它（`explore-face.ts` 的 `rulesFor`）。 */
-const EXPLORE_OWN_FIELDS = [
-  'ruleExploreUrl', 'ruleExploreList', 'ruleExploreName', 'ruleExploreAuthor',
-  'ruleExploreBookUrl', 'ruleExploreCoverUrl', 'ruleExploreIntro', 'ruleExploreKind',
-  'ruleExploreLastChapter', 'ruleExploreWordCount',
-] as const satisfies readonly (keyof NormalizedRules)[]
-
-/** ② **回落分支**读的那九个通用书目字段：`ruleExploreList === null` 时整套改用它们，
- *  「只声明了 `ruleFind.kinds` 的源」是常见形态——漏收这一组，改书名/作者规则就不动缓存键。 */
-const EXPLORE_FALLBACK_FIELDS = [
-  'ruleBookList', 'ruleBookName', 'ruleAuthor', 'ruleBookUrl', 'ruleCoverUrl',
-  'ruleIntro', 'ruleLastChapter', 'ruleKind', 'ruleWordCount',
-] as const satisfies readonly (keyof NormalizedRules)[]
+/** 发现面指纹的字段表，分三组，**组即「它为什么在这里」**。前两组不再住本模块：
+ *  ① 发现面自有规则就是表里 `vacant` 档的键集（`VACANT_RULE_FIELDS`；`ruleExploreList` 非空时
+ *  整套用它，见 `bridge.ts` 的 `hitRuleOf`）；
+ *  ② **回落分支**读的九个通用书目字段由发现面行的配对列反推（`EXPLORE_FALLBACK_FIELDS`，按表
+ *  行序）——「只声明了 `ruleFind.kinds` 的源」是常见形态，漏收这一组，改书名/作者规则就不动缓存键。
+ *  判据仍是「发现面求值真正经过谁」：表的覆盖模式与配对列登记的就是这件事，不是按名字前缀自动收；
+ *  同名加一行也不会被误收（`ruleExploreKinds` / `exploreUrl` 不在两组里，理由住 `exploreEpoch`）。 */
 
 /** ③ 请求修饰符：`header` 与 `headerRule` 定发出去的请求长什么样（`source-eval.ts` 的 `resolveHeaders`），
  *  `jsLib` 是 JS 规则的库——三者任一变了，同一个分类地址可以拿回完全不同的页面。 */
@@ -140,7 +131,7 @@ const EXPLORE_REQUEST_FIELDS = [
 
 /** 三组的并集即指纹字段集。`baseUrl` 不在此表内（它不是规则字段），由 `exploreEpoch` 入参带入。 */
 const EXPLORE_FINGERPRINT: readonly (keyof NormalizedRules)[] = [
-  ...EXPLORE_OWN_FIELDS, ...EXPLORE_FALLBACK_FIELDS, ...EXPLORE_REQUEST_FIELDS,
+  ...VACANT_RULE_FIELDS, ...EXPLORE_FALLBACK_FIELDS, ...EXPLORE_REQUEST_FIELDS,
 ]
 
 /**

@@ -129,6 +129,56 @@ describe('ReaderScene', () => {
     expect(scene.state.surface).toBe('toc')
   })
 
+  it('遮罩投影跟着面走：Aa 与导出面板有，目录与注释面板没有，收场即清', () => {
+    const { scene } = makeScene()
+    expect(scene.state.mask, '无面不挂遮罩').toBe(false)
+
+    scene.toggle('prefs')
+    expect(scene.state.mask, 'Aa 面板要「点外面关掉」').toBe(true)
+    scene.toggle('prefs')
+    expect(scene.state.mask).toBe(false)
+
+    scene.toggle('toc')
+    expect(scene.state.mask, '目录抽屉自带收场钮，不借遮罩').toBe(false)
+    scene.openNote(target, entry)
+    expect(scene.state.mask, '注释面板同目录').toBe(false)
+
+    scene.toggle('export')
+    expect(scene.state.mask, '导出面板是第二个借遮罩收场的面').toBe(true)
+    scene.close()
+    expect(scene.state.mask).toBe(false)
+  })
+
+  it('两枚投影与面同笔落定：每次通知里 mask/escOwner 都与面自洽', () => {
+    const { scene } = makeScene()
+    const check = (): void => {
+      const s = scene.state
+      expect(s.mask, `面=${String(s.surface)} 的遮罩投影`).toBe(s.surface === 'prefs' || s.surface === 'export')
+      expect(s.escOwner, `面=${String(s.surface)}、入架一问=${String(s.askShelf)} 的 Esc 归属`)
+        .toBe(s.askShelf ? 'modal' : s.surface === null ? 'none' : 'surface')
+    }
+    const stop = scene.subscribe(check)
+    scene.toggle('prefs')
+    scene.toggle('toc')
+    scene.openNote(target, entry)
+    scene.close()
+    scene.exitToShelf()
+    scene.dismissAsk()
+    stop()
+    check()
+  })
+
+  it('Esc 归属投影：无面无模态 none、有面 surface、入架一问 modal、收回后回 surface', () => {
+    const { scene } = makeScene()
+    expect(scene.state.escOwner).toBe('none')
+    scene.toggle('toc')
+    expect(scene.state.escOwner).toBe('surface')
+    scene.exitToShelf()                                  // 缺省 onShelf='off'：问到入架一问
+    expect(scene.state.escOwner).toBe('modal')
+    scene.dismissAsk()
+    expect(scene.state.escOwner, '模态退场后浮层重新持有 Esc').toBe('surface')
+  })
+
   it('Esc while no modal is open closes the surface on the close path', () => {
     const { scene, session } = makeScene()
     scene.openNote(target, entry)

@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { planarNavigation } from '../../src/shared/wire.js'
 import { ReaderSession } from '../../src/client/reader-session.js'
-import type { ReaderSessionDeps, VisibleNode } from '../../src/client/reader-session.js'
+import type { ReaderSessionDeps, ReaderViewportFeed, VisibleNode } from '../../src/client/reader-session.js'
 import type { ChapterAnchor } from '../../src/client/progress.js'
+import { DEFAULT_PREFS, setPref } from '../../src/client/store.js'
 import type { ChapterContent, ChapterEntry, NavigationItem, ShelfBook } from '../../src/client/views/types.js'
 
 /**
@@ -33,6 +34,8 @@ function fakePort() {
     targetOffs: new Map<string, number>(),
     /** 视口顶所在正文节点（返回栈采点与排版复位共用） */
     node: null as VisibleNode | null,
+    /** currentNode 读取计数：排版前采点必须发生在 setPref 的同步栈里，退订后不再读 */
+    nodeReads: 0,
     /** setScrollTop 历史（证明「不许落位」的用例：一次都不许发生） */
     tops: [] as number[],
     measureAnchors: (): ChapterAnchor[] => port.anchors,
@@ -46,9 +49,38 @@ function fakePort() {
     /** 批量口径 = 逐个读数（会话侧只钉「一批候选都拿到」，真实索引实现归 reader-geometry.test.ts） */
     targetOffsets: (index: number, anchorIds: ReadonlyArray<string | null>): Array<number | null> =>
       anchorIds.map((anchorId) => port.targetOffset(index, anchorId)),
-    currentNode: (): VisibleNode | null => port.node,
+    currentNode: (): VisibleNode | null => { port.nodeReads++; return port.node },
   }
   return port
+}
+
+/** 手动帧泵：`flush()` 按登记顺序跑掉挂起帧；`cancelled` 记 cancelFrame 收到的句柄 */
+function makeFramePump(): {
+  feed: ReaderViewportFeed
+  pending: () => number
+  flush: () => void
+  cancelled: number[]
+  refreshCount: () => number
+} {
+  const queue = new Map<number, () => void>()
+  const cancelled: number[] = []
+  let nextHandle = 1
+  let refreshes = 0
+  return {
+    feed: {
+      scheduleFrame: (cb) => { const h = nextHandle++; queue.set(h, cb); return h },
+      cancelFrame: (h) => { cancelled.push(h); queue.delete(h) },
+      refreshPort: () => { refreshes++ },
+    },
+    pending: () => queue.size,
+    flush: () => {
+      const cbs = [...queue.values()]
+      queue.clear()
+      for (const cb of cbs) cb()
+    },
+    cancelled,
+    refreshCount: () => refreshes,
+  }
 }
 
 interface FakeHarness {
@@ -68,6 +100,8 @@ function makeSession(opts?: {
   navigation?: NavigationItem[]
   failChapter?: number
   debounceMs?: number
+  /** 视口帧调度（缺省不传 = 会话的立即执行缺省，与既有内联 deps 同口径） */
+  viewport?: ReaderViewportFeed
 }): FakeHarness {
   const port = fakePort()
   const fetched: number[] = []
@@ -87,6 +121,7 @@ function makeSession(opts?: {
     saveProgress: (i, r) => { saves.push([i, r]) },
     saveTotalChapters: (n) => { totals.push(n) },
     afterFrames: (cb) => cb(),                       // 测试：同步落定
+    viewport: opts?.viewport,
   }
   return { session: new ReaderSession(deps, port, opts?.debounceMs ?? 20), port, fetched, saves, totals }
 }
@@ -1083,5 +1118,211 @@ describe('连续阅读的已载窗口上限（裁章补偿 + 回溯补载）', (
     h.session.handleViewportChange('src')
     expect(h.session.state.currentChapter, '旧锚点表会把视口读成第 0 章尾').toBe(1)
     expect(h.saves.at(-1)).toEqual([1, 0.3])
+  })
+})
+
+describe('ReaderSession 视口喂入（合帧）', () => {
+  it('连喂 3 次只排一帧，帧内锚点只重测一次', async () => {
+    const pump = makeFramePump()
+    const h = makeSession({ viewport: pump.feed })
+    await h.session.open('src', 'https://s.com/book/1')
+    h.port.anchors = [{ index: 0, start: 0, height: 3000 }]
+    const measure = vi.spyOn(h.port, 'measureAnchors')
+    const refreshBefore = pump.refreshCount()
+
+    h.session.feedViewport()
+    h.session.feedViewport()
+    h.session.feedViewport()
+    expect(pump.pending(), '三次事件共用同一帧').toBe(1)
+    pump.flush()
+    expect(measure, '帧内只重测一次锚点（首帧对齐已载表）').toHaveBeenCalledTimes(1)
+    expect(pump.refreshCount(), '帧体只重取一次滚动容器').toBe(refreshBefore + 1)
+    h.session.dispose()
+  })
+
+  it('layoutChanged 按或合并：先 true 后 false / 先 false 后 true 都重测锚点', async () => {
+    const pump = makeFramePump()
+    const h = makeSession({ viewport: pump.feed })
+    await h.session.open('src', 'https://s.com/book/1')
+    h.port.anchors = [{ index: 0, start: 0, height: 3000 }]
+    h.session.feedViewport()                               // 对齐 anchorsFrom
+    pump.flush()
+    const measure = vi.spyOn(h.port, 'measureAnchors')
+
+    h.session.feedViewport(true)
+    h.session.feedViewport()
+    pump.flush()
+    expect(measure, '先布局后滚动：布局标记不许被普通事件吃掉').toHaveBeenCalledTimes(1)
+
+    measure.mockClear()
+    h.session.feedViewport()
+    h.session.feedViewport(true)
+    pump.flush()
+    expect(measure, '先滚动后布局：同帧内布局标记照样生效').toHaveBeenCalledTimes(1)
+    h.session.dispose()
+  })
+
+  it('无布局标记且已载表未换版本 → 帧内不重测锚点（纯滚动只读缓存）', async () => {
+    const pump = makeFramePump()
+    const h = makeSession({ viewport: pump.feed })
+    await h.session.open('src', 'https://s.com/book/1')
+    h.port.anchors = [{ index: 0, start: 0, height: 3000 }]
+    h.session.feedViewport()                               // 对齐 anchorsFrom
+    pump.flush()
+    const measure = vi.spyOn(h.port, 'measureAnchors')
+
+    h.session.feedViewport()
+    pump.flush()
+    expect(measure).not.toHaveBeenCalled()
+    h.session.dispose()
+  })
+
+  it('帧体次序：先 refreshPort 再 measureAnchors', async () => {
+    const pump = makeFramePump()
+    const base = pump.feed
+    const order: string[] = []
+    const h = makeSession({
+      viewport: {
+        scheduleFrame: base.scheduleFrame,
+        cancelFrame: base.cancelFrame,
+        refreshPort: () => { order.push('refresh'); base.refreshPort() },
+      },
+    })
+    await h.session.open('src', 'https://s.com/book/1')
+    h.port.anchors = [{ index: 0, start: 0, height: 3000 }]
+    const original = h.port.measureAnchors
+    h.port.measureAnchors = () => { order.push('measure'); return original() }
+
+    h.session.feedViewport()
+    pump.flush()
+    expect(order.slice(0, 2), '帧首重取滚动容器，之后才量锚点').toEqual(['refresh', 'measure'])
+    h.session.dispose()
+  })
+
+  it('会话不自排初始帧；dispose 取消挂起帧；open 重开取消上一代挂起帧', async () => {
+    const pump = makeFramePump()
+    const h = makeSession({ viewport: pump.feed })
+    await h.session.open('src', 'https://s.com/book/1')
+    expect(pump.pending(), 'open 不自排帧：初始视口帧仍由视图安装处发起').toBe(0)
+    const measure = vi.spyOn(h.port, 'measureAnchors')
+
+    h.session.feedViewport()
+    expect(pump.pending()).toBe(1)
+    h.session.feedViewport(true)                           // 挂起期间再喂：不排第二帧、布局标记合并
+    expect(pump.pending()).toBe(1)
+    h.session.dispose()
+    expect(pump.cancelled, 'cancelFrame 收到挂起帧的句柄').toHaveLength(1)
+    pump.flush()
+    expect(measure, '取消的帧不跑：不重测、不读视口').not.toHaveBeenCalled()
+
+    await h.session.open('src', 'https://s.com/book/1')     // 同一实例重开（换书路径）
+    h.session.feedViewport()
+    expect(pump.pending()).toBe(1)
+    await h.session.open('src', 'https://s.com/book/1')
+    expect(pump.cancelled, '上一代的挂起帧作废').toHaveLength(2)
+    pump.flush()
+    expect(measure).not.toHaveBeenCalled()
+  })
+})
+
+describe('ReaderSession 排版前采点与复位', () => {
+  afterEach(() => {
+    // 三个排版量复位到缺省：prefsStore 是模块级 store，跨用例串味会让「同值再设」的用例失真
+    setPref({ fontSize: DEFAULT_PREFS.fontSize, lineHeight: DEFAULT_PREFS.lineHeight, measure: DEFAULT_PREFS.measure })
+  })
+
+  it('open 后 setPref 在同步栈采点；复位落位 = 原 top + 目标偏移 + 节点内偏移', async () => {
+    const h = makeSession()
+    await h.session.open('src', 'https://s.com/book/1')
+    h.port.top = 100
+    h.port.node = { index: 0, nodeId: 'p1', offsetWithinNode: 40 }
+    const reads = h.port.nodeReads
+    setPref({ fontSize: 22 })
+    expect(h.port.nodeReads, 'setPref 的同步调用栈里采点').toBe(reads + 1)
+    h.port.targetOffs.set('p1', 250)
+    h.session.applyTypesetRelocation()
+    expect(h.port.top).toBe(100 + 250 + 40)
+    h.session.dispose()
+  })
+
+  it('目标量不到 → 不落位、快照保留（补上目标后同一发再试与第二次 setPref 后都生效）', async () => {
+    const h = makeSession()
+    await h.session.open('src', 'https://s.com/book/1')
+    h.port.top = 100
+    h.port.node = { index: 0, nodeId: 'p1', offsetWithinNode: 40 }
+    setPref({ fontSize: 22 })
+    h.session.applyTypesetRelocation()                     // p1 还量不到
+    expect(h.port.tops, '量不到目标不许凭空落位').toEqual([])
+
+    h.port.targetOffs.set('p1', 120)
+    h.session.applyTypesetRelocation()                     // 快照没被 miss 清掉：没有新采点也能落
+    expect(h.port.top).toBe(100 + 120 + 40)
+
+    h.port.top = 50                                        // 读者又滚到别处
+    setPref({ fontSize: 24 })                              // 第二次 setPref：同步栈重新采点
+    h.session.applyTypesetRelocation()
+    expect(h.port.top).toBe(50 + 120 + 40)
+    h.session.dispose()
+  })
+
+  it('复位后重采：连调两次排版，第二次用复位时记下的新锚', async () => {
+    const h = makeSession()
+    await h.session.open('src', 'https://s.com/book/1')
+    h.port.top = 100
+    const nodes: Array<VisibleNode | null> = [
+      { index: 0, nodeId: 'p1', offsetWithinNode: 40 },
+      { index: 0, nodeId: 'p2', offsetWithinNode: 90 },
+    ]
+    h.port.currentNode = () => (nodes.length > 0 ? nodes.shift()! : null)
+    h.port.targetOffs.set('p1', 120)
+    h.port.targetOffs.set('p2', 30)
+    setPref({ fontSize: 22 })                              // 采点 #1 = p1
+    h.session.applyTypesetRelocation()                     // 落位 p1，复位后重采 #2 = p2
+    expect(h.port.top).toBe(100 + 120 + 40)
+    h.session.applyTypesetRelocation()                     // 第二次直接用重采到的 p2
+    expect(h.port.top).toBe(260 + 30 + 90)
+    h.session.dispose()
+  })
+
+  it('复位后喂一次 layoutChanged 视口读数（先对齐锚点，复位后 measureAnchors +1）', async () => {
+    const h = makeSession()
+    await h.session.open('src', 'https://s.com/book/1')
+    h.port.anchors = [{ index: 0, start: 0, height: 3000 }]
+    h.session.afterRender('src')                           // 对齐 anchorsFrom === chaptersNow
+    h.port.top = 100
+    h.port.node = { index: 0, nodeId: 'p1', offsetWithinNode: 40 }
+    h.port.targetOffs.set('p1', 250)
+    const measure = vi.spyOn(h.port, 'measureAnchors')
+    setPref({ fontSize: 22 })
+    h.session.applyTypesetRelocation()
+    expect(measure, '复位后的视口读数按布局变化重测，位置提交仍归会话').toHaveBeenCalledTimes(1)
+    h.session.dispose()
+  })
+
+  it('dispose 退订并清快照：之后 setPref 不再读节点，复位为 no-op', async () => {
+    const h = makeSession()
+    await h.session.open('src', 'https://s.com/book/1')
+    h.port.top = 100
+    h.port.node = { index: 0, nodeId: 'p1', offsetWithinNode: 40 }
+    setPref({ fontSize: 22 })
+    const reads = h.port.nodeReads
+    h.session.dispose()
+    setPref({ fontSize: 24 })
+    expect(h.port.nodeReads, '退订后不再采点').toBe(reads)
+    h.port.targetOffs.set('p1', 120)
+    h.session.applyTypesetRelocation()
+    expect(h.port.tops, '快照已清：退订后的复位不落位').toEqual([])
+  })
+
+  it('dispose 后再 open：订阅重新生效且只采一次（幂等守卫挡住双订阅）', async () => {
+    const h = makeSession()
+    await h.session.open('src', 'https://s.com/book/1')
+    h.session.dispose()
+    await h.session.open('src', 'https://s.com/book/1')
+    await h.session.open('src', 'https://s.com/book/1')   // 同实例连开两次：不许长出第二份订阅
+    const reads = h.port.nodeReads
+    setPref({ fontSize: 24 })
+    expect(h.port.nodeReads, '一次 setPref 只读一次节点（双订阅会读两次）').toBe(reads + 1)
+    h.session.dispose()
   })
 })

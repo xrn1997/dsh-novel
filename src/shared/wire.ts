@@ -287,13 +287,6 @@ export interface BookDetail {
  *  interface 无隐式 index signature 会在这里炸（实测）——别改回 interface。 */
 export type ShelfProgress = { chapterIndex: number; offsetRatio: number; updatedAt: number }
 
-/** 「这本书读过没有」——存档恢复与书架卡片（在读/未读筛选、进度行）共用这一份判定。
- *  口径是「章 > 0 **或** 章内比例 > 0」：第 0 章里的位置同样是进度。两处各写一份且相反时，
- *  同一条存档会「在读」与「没读过」互相矛盾——单点在此。 */
-export function hasProgress(p: ShelfProgress): boolean {
-  return p.chapterIndex > 0 || p.offsetRatio > 0
-}
-
 /** 书架条目：元数据 + 阅读进度 */
 export interface ShelfBook {
   sourceId: string
@@ -311,10 +304,11 @@ export interface ShelfBook {
   addedAt: number
 }
 
-/** 书目元数据字段集（唯一主人）：9 个元数据字段的
- *  「名称 × wire 类型判别 × 归一化」只准活在这张表 + pickShelfMeta 里。
+/** 书目元数据字段集（唯一主人）：9 个元数据字段的「名称 × wire 类型判别」只准活在这张表 +
+ *  pickShelfMeta 里。数值位的**落盘归一化**（非负整数）不在这里——它是落盘侧的口径，归
+ *  `services/shelf.ts` 的 `Shelf.applyPatch`（客户端 body 只交形状，服务端唯一权威在落地前归一）。
  *  消费方三面：Shelf.applyPatch（保值覆盖遍历表）、`bodies.shelfAdd` / `bodies.shelfPatch`（客户端 body
- *  构造——只走 pick，不列字段位）、dispatch.shelfPut（未知 JSON body → 归一化字段）。
+ *  构造——只走 pick，不列字段位）、dispatch.shelfPut（未知 JSON body → 类型判别过的字段事实）。
  *  **加一个书目字段 = 改这张表**：客户端三个入架口交进来的是整条命中或一份 meta，不是逐字段的抄本，
  *  所以新字段不会「表里有、body 里没有」。
  *  bookKey（身份）/ progress、addedAt（系统字段）不属于元数据写口，不进表；
@@ -342,16 +336,17 @@ export type ShelfEntry = ShelfBook & { sourceName: string | null }
 /** 书目元数据 patch：null/undefined 键 = 保值（Shelf.update 的 interface 语义，见 shelf.ts） */
 export type ShelfMetaPatch = { [K in ShelfMetaField]?: ShelfBook[K] | null }
 
-/** 任意 JSON 值 → 合法元数据字段（类型判别与归一化的唯一实现）：
- *  类型不符 / null / undefined / 未知键一律缺席；totalChapters 取 Math.max(0, Math.floor)，非有限数缺席。
- *  空串保留——「title 非空才加书」的分叉判别归调用方（shelfPut）。 */
+/** 任意 JSON 值 → 合法元数据字段（**类型判别单点**）：
+ *  类型不符 / null / undefined / 未知键一律缺席；数值位只过 `typeof === 'number' && Number.isFinite`
+ *  （NaN / Infinity 缺席），**不夹紧**——数值归一化（非负整数）归 `services/shelf.ts` 的 `Shelf`。
+ *  空串保留——「title 非空才加书」的形态分派归 `api/dispatch.ts` 的 shelfPut 臂。 */
 export function pickShelfMeta(raw: Record<string, unknown>): ShelfMetaPatch {
   const out: Record<string, string | number> = {}
   for (const [k, kind] of Object.entries(SHELF_META)) {
     const v = raw[k]
     if (v === undefined || v === null) continue
     if (kind === 'string' && typeof v === 'string') out[k] = v
-    else if (kind === 'number' && typeof v === 'number' && Number.isFinite(v)) out[k] = Math.max(0, Math.floor(v))
+    else if (kind === 'number' && typeof v === 'number' && Number.isFinite(v)) out[k] = v
   }
   return out as ShelfMetaPatch
 }
@@ -522,11 +517,14 @@ export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE'
 export type WriteMethod = Exclude<HttpMethod, 'GET'>
 
 /** 路由身份：方法与路径绑成一个目标。写口只收这一份，不再让调用方分别传 method 与 path
- *  （两参形式允许配错，且让 dispatch 的 guard 重述一遍 same shape）。 */
+ *  （两参形式允许配错，且会让每个路由点各自重述一遍路径与参数的身份）。路径/参数的匹配机械
+ *  归 `src/api/routes.ts` 的 `matchRoute`，方法不符的 405 由 `api/dispatch.ts` 的
+ *  `methodMismatchError` 单点承接——两边都不逐路由重述。 */
 export interface RouteTarget<M extends HttpMethod = HttpMethod> { method: M; path: string }
-/** 双形态路由：path（客户端 fetch 用）、segs（结构自洽校验用——服务端段匹配读的是运行时 URL
- *  切出来的段，不读这份 `ROUTES.*.segs`；把它当第二份权威是错的）、method（写路由的身份）。
- *  method 用字面量泛型保留：写口拿 `ROUTES.x` 时 tsc 能挡住「把 GET 路由交给 apiSend」。 */
+/** 双形态路由：`path` 是 `segs` 的 join 投影——api 侧匹配器收**请求**切出的段（同为 segs 形态），
+ *  join 后拿这份 `path` 当等值比对的键；表里那份 `segs` 不进匹配（消费者只有结构自洽校验），
+ *  把它当第二份权威是错的。method（写路由的身份）用字面量泛型保留：写口拿 `ROUTES.x` 时
+ *  tsc 能挡住「把 GET 路由交给 apiSend」。 */
 export interface Route<M extends HttpMethod = HttpMethod> extends RouteTarget<M> { segs: string[] }
 export function route<M extends HttpMethod>(method: M, ...segs: string[]): Route<M> {
   return { method, path: segs.join('/'), segs }
@@ -534,7 +532,7 @@ export function route<M extends HttpMethod>(method: M, ...segs: string[]): Route
 
 /** 静态路由表（无参数的部分；参数操作见 paramOps）——路由总数由
  *  tests/shared/wire-builders.test.ts 钉死，不要在这里手写一个会腐烂的计数。
- *  方法随行：客户端写口取 `ROUTES.x.method`，dispatch 的 guard 读同一份。 */
+ *  方法随行：客户端写口取 `ROUTES.x.method`，api 侧匹配器 `matchRoute` 读同一份。 */
 export const ROUTES = {
   health: route('GET'),
   sources: route('GET', SEG.sources),
@@ -816,12 +814,18 @@ function readRecordField(body: Record<string, unknown>, field: string): Record<s
   return v as Record<string, string>
 }
 
-/** `PUT shelf/:key` 的三种形态（一条判别式读口收一个 shape 家族——与 `auth` 同先例：三个构造器、
- *  一个读口，判别只到形状层）。值域判据（能不能进架、进度取值范围）不在这份类型里，归门面动词。 */
-export type ShelfPutBody =
-  | { mode: 'add'; meta: ShelfMetaPatch & { title: string } }
-  | { mode: 'patch'; patch: ShelfMetaPatch }
-  | { mode: 'progress'; chapterIndex: number; offsetRatio: number }
+/** `PUT shelf/:key` body 的**字段事实**（不裁决形态）：三个构造器（三形态）产出的东西都能拆成
+ *  这三个事实位，读口只做字段集类型判别。
+ *  - `meta` = 顶层认得出的书目元数据（title 可以是空串——空标题是事实，不是缺席）；
+ *  - `patch` = body.patch 是对象才非 null；
+ *  - `progress` = 两个键都是 number 才非 null（值域归门面动词）。
+ *  三形态的优先级（title 非空 → patch → progress）与「皆无 → 400」是派发，归
+ *  `src/api/dispatch.ts` 的 shelfPut 臂（传输关注点，见 `ADR-0036`）。 */
+export interface ShelfPutFields {
+  meta: ShelfMetaPatch
+  patch: ShelfMetaPatch | null
+  progress: { chapterIndex: number; offsetRatio: number } | null
+}
 
 export const readBodies = {
   /** 导入任务：`{ files: [{ name, text }] }`（真实多源导出常见数 MB 级，上限归路由的读体） */
@@ -891,26 +895,20 @@ export const readBodies = {
       ...(loginInfo === undefined ? {} : { loginInfo }),
     }
   },
-  /** 书架 PUT 的三形态判别（顺序即优先级：title → patch → progress，与路由层的分派同序）。
-   *  「非空 title 才算加书」在这里，「能不能进架 / 进度取值范围」不在——后者是门面的值域门。 */
-  shelfPut: (body: Record<string, unknown> | null): ShelfPutBody => {
+  /** 书架 PUT 的**字段事实**读口：只做字段集类型判别（meta / patch 形状 / progress 两键都是数），
+   *  不裁决形态——「非空 title 才算加书、三形态皆无 → 400」是分派，归 `api/dispatch.ts` 的 shelfPut 臂。
+   *  全空 body 回空事实（不是抛错）：读口交事实，传输层决定报什么。 */
+  shelfPut: (body: Record<string, unknown> | null): ShelfPutFields => {
     const b = (body ?? {}) as Record<string, unknown>
-    const meta = pickShelfMeta(b)
-    const title = meta.title
-    if (typeof title === 'string' && title !== '') {
-      return { mode: 'add', meta: { ...meta, title } as ShelfMetaPatch & { title: string } }
-    }
     const patch = b[BODY.patch]
-    if (patch !== undefined && typeof patch === 'object' && patch !== null) {
-      return { mode: 'patch', patch: pickShelfMeta(patch as Record<string, unknown>) }
-    }
     const progress = b[BODY.progress]
-    if (progress !== undefined && typeof progress === 'object' && progress !== null) {
-      const p = progress as Record<string, unknown>
-      if (typeof p[BODY.chapterIndex] === 'number' && typeof p[BODY.offsetRatio] === 'number') {
-        return { mode: 'progress', chapterIndex: p[BODY.chapterIndex] as number, offsetRatio: p[BODY.offsetRatio] as number }
-      }
+    const p = progress !== null && typeof progress === 'object' ? progress as Record<string, unknown> : null
+    return {
+      meta: pickShelfMeta(b),
+      patch: patch !== null && typeof patch === 'object' ? pickShelfMeta(patch as Record<string, unknown>) : null,
+      progress: p !== null && typeof p[BODY.chapterIndex] === 'number' && typeof p[BODY.offsetRatio] === 'number'
+        ? { chapterIndex: p[BODY.chapterIndex] as number, offsetRatio: p[BODY.offsetRatio] as number }
+        : null,
     }
-    return bodyBad(`body 需带 ${PARAMS.title}（加书）/ ${BODY.patch}（打补丁）/ ${BODY.progress}:{${BODY.chapterIndex},${BODY.offsetRatio}}（更新进度）`)
   },
 } as const

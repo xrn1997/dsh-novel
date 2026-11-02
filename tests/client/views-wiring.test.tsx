@@ -1924,6 +1924,20 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
     expect(screen.getByRole('button', { name: '目录' }).getAttribute('aria-expanded')).toBe('false')
   })
 
+  // 遮罩只在「点外面关掉它」的两面在场（判据住 `reader-surfaces.maskFor`，视图只读阅读场景的
+  // `mask` 投影）。投影与面同笔落定归 `reader-scene.test.ts`，这里只钉「点 Aa 真的把它带到屏上、
+  // 换目录真的收走」这条接线。
+  it('遮罩随面：点 Aa 出遮罩，换到目录即没有', async () => {
+    const deps = readerDeps()
+    const { container } = render(reader(deps))
+    await waitFor(() => expect(container.querySelector('[data-chapter="0"]')).not.toBeNull())
+    expect(container.querySelector('[data-novel-ctrl-mask]')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '阅读设置' }))
+    expect(container.querySelector('[data-novel-ctrl-mask]')).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '目录' }))
+    expect(container.querySelector('[data-novel-ctrl-mask]')).toBeNull()
+  })
+
   it('正文首行与章名同句 → 呈现层剥掉它（章名只留 h2 那一份）', async () => {
     // 在线源很常见：正文第一行就是「第1章 ××」。判据是相等才丢，所以这里同时钉「其余行原序在」。
     const name = '第1章 夜航'
@@ -2247,9 +2261,11 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
     expect(screen.queryByRole('button', { name: /返回原处/ })).toBeNull()
   })
 
-  it('排版（字号）变化：按变化前的可见节点把视口拉回同一相对位置，且不自我触发重定位', async () => {
-    // jsdom 无排版：用**按读取次序改值**的 rect 桩顶替（第 1 次读=变化前、之后=重排后）。本用例钉
-    // 采点时刻与算式；「字号变了正文停在同一句」只能由浏览器门证明。
+  it('排版（字号）变化：按变化前的可见节点把视口拉回同一相对位置，同值再设不再定位', async () => {
+    // 接线钉：视图只剩「触发」——采点（`setPref` 的同步栈）与复位算式、miss/重采分支归
+    // `reader-session.test.ts` 的「排版前采点与复位」族；这里钉的是排版 effect 真的把复位交到
+    // 会话，且同值再设不重跑（effect 依赖仍是三个排版量）。jsdom 无排版：用**按读取次序改值**的
+    // rect 桩顶替（第 1 次读=变化前、之后=重排后）；「字号变了正文停在同一句」只能由浏览器门证明。
     const proto = Element.prototype as unknown as { getBoundingClientRect: () => DOMRect }
     const original = proto.getBoundingClientRect
     let p1Reads = 0

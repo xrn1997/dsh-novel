@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { CorruptJsonError, backupPathOf, isAtomicTemp, novelDir, readJson, tempPathOf, writeFileAtomic, writeJsonAtomic, createDebouncedWriter } from '../../src/services/storage.js'
+import { CorruptJsonError, PERSIST_WINDOW_MS, backupPathOf, isAtomicTemp, novelDir, readJson, tempPathOf, writeFileAtomic, writeJsonAtomic, createDebouncedWriter } from '../../src/services/storage.js'
 import { log } from '../../src/services/log.js'
 import { makeTempDir } from '../temp-dir.js'
 
@@ -131,6 +131,28 @@ describe('writeFileAtomic（PageCache/JSON 共用低层）', () => {
 })
 
 describe('createDebouncedWriter', () => {
+  it('防抖窗口唯一主人：缺省用 storage 的 PERSIST_WINDOW_MS', async () => {
+    // 窗口缺省不再由各消费方各写一个 100：storage 的常量是唯一主人，注册表显式引用它，书架用缺省。
+    // fake timers 下记录 setTimeout 实参：定时器只在 schedule 时开一次，延迟必须恰是常量本身。
+    // 这里不用 vi.spyOn 记录：它的恢复值钉在「安装时那个函数」上，afterEach 的 restoreAllMocks 会把
+    // fake clock 重新装回 global，后续用例等真 setTimeout 就永远等不到（spy 那条路会毒化本文件）。
+    expect(PERSIST_WINDOW_MS).toBe(100)
+    const dir = await tmp()
+    vi.useFakeTimers()
+    const fakeSetTimeout = globalThis.setTimeout
+    const delays: Array<number | undefined> = []
+    globalThis.setTimeout = ((cb: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+      delays.push(delay)
+      return fakeSetTimeout(cb, delay, ...args)
+    }) as typeof globalThis.setTimeout
+    try {
+      createDebouncedWriter().schedule(path.join(dir, 'default-window.json'), {})
+      expect(delays).toEqual([PERSIST_WINDOW_MS])
+    } finally {
+      globalThis.setTimeout = fakeSetTimeout
+      vi.useRealTimers()
+    }
+  })
   it('同文件连续调度合并为最后一次落地', async () => {
     const dir = await tmp()
     const file = path.join(dir, 'd.json')

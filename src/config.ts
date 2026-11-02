@@ -4,15 +4,16 @@ import { DEFAULT_CACHE_MAX_BYTES } from './services/cache.js'
 import { DEFAULT_EXPORT_DELAY_MS } from './services/export.js'
 import { DEFAULT_TIMEOUT_MS } from './services/fetcher.js'
 import { DEFAULT_MAX_IMPORT_BYTES } from './services/localbooks.js'
-import { DEFAULT_JS_BUDGET_MS, DEFAULT_SEARCH_PARALLEL } from './services/reading.js'
+import { DEFAULT_SEARCH_PARALLEL } from './services/reading.js'
+import { DEFAULT_JS_BUDGET_MS } from './services/source-eval.js'
 
 /**
  * 配置字段表（唯一主人）：一个字段一行，名字 × 缺省 × 值域（schema 同时声明类型）× 是否活值全在这一行上。
  * `NovelConfig` / `ResolvedConfig` / 输入形状 / schema / 读数面全部由它派生——加一个字段 = 加一行，
- * 而不是在六份清单上各抄一次（抄本迟早分叉，而分叉的表现是「改了 schema 忘了改读数面」）。
+ * 而不是在各份清单上各抄一次（抄本迟早分叉，而分叉的表现是「改了 schema 忘了改读数面」）。
  *
- * 缺省值一律引各消费模块的常量：本表只给「怎么校验」，不长出第二个字面量主人（「缺省值五个各自主人」
- * 这条纪律不破）。
+ * 缺省值一律引各消费模块的常量：本表只给「怎么校验」，不长出第二个字面量主人（「每个缺省值
+ * 只住一个主人」这条纪律不破；主人有几个会随配置面长，计数不进文档——现值看 defaults.test 钉的常量）。
  *
  * default 的填充语义是确定的（undefined / {} / 字段缺失都按 default 填）；
  * `.default({})` 只作 cordis 缺省 config 行（undefined 输入）的兜底。显式 `null` 也按「未设置」填
@@ -20,8 +21,11 @@ import { DEFAULT_JS_BUDGET_MS, DEFAULT_SEARCH_PARALLEL } from './services/readin
  * cordis 装载期会自己用导出的 `Config` 校验并填充 patch 行的 config，所以 resolveConfig 在生产路径上
  * 近似幂等——但它仍是本仓唯一被测试穿透的配置缝（官方 config 页「加载时校验、错则失败」与本仓
  * 「宁炸不猜」都挂在这一个 interface 上），这一步不可省。
+ *
+ * 导出 `CONFIG_FIELDS` 只为交叉校验（`tests/client/config-fields.test.ts` 把 volatile 行与客户端
+ * 文案、配置页分区对读）：生产消费面仍是 `Config` / `resolveConfig`，别处不要按表名去筛键。
  */
-const CONFIG_FIELDS = {
+export const CONFIG_FIELDS = {
   /** 书架 / 缓存 / 本地书的落盘根。刻意不做成活值：运行期换根会让新旧数据分家，改它等价于重启。 */
   dataDir: textField(),
   searchTimeoutMs: numberField(DEFAULT_TIMEOUT_MS, 1),
@@ -40,7 +44,7 @@ const CONFIG_FIELDS = {
   apiAllowHosts: hostListField(),
 } as const
 
-/** 数值位：整数 + 下界。六个数值位的单位都是整数（毫秒 / 字节 / 并发数），`.step(1)` 同时钉整数并
+/** 数值位：整数 + 下界。数值位的单位都是整数（毫秒 / 字节 / 并发数），`.step(1)` 同时钉整数并
  *  挡掉 NaN/Infinity——`.min`/`.max` 对 NaN 的比较为假，挡不住（宁炸不猜）。 */
 function numberField(defaultValue: number, min: number) {
   return {
@@ -86,6 +90,19 @@ type OptionalFieldKey = { [K in ConfigFieldName]: undefined extends ConfigTable[
 type MandatoryFieldKey = Exclude<ConfigFieldName, OptionalFieldKey>
 /** 标 `volatile` 的那些格才是配置页可编辑的运行参数：其余改了要重启，不进表单。 */
 export type VolatileConfigFieldName = { [K in ConfigFieldName]: ConfigTable[K]['volatile'] extends true ? K : never }[ConfigFieldName]
+
+/** volatile 字段的消费桶：service-live = 服务/部件每次用时读活值；composition-root = 只由组合根
+ *  读并接线。键集由 `VolatileConfigFieldName` 钉死——新增 volatile 字段忘归桶是编译错，
+ *  归错桶是 `tests/config.test.ts` 红；归桶义务从「读代码才知道」变成「编译器问你要」。 */
+export const VOLATILE_CONSUMERS: Record<VolatileConfigFieldName, 'service-live' | 'composition-root'> = {
+  searchTimeoutMs: 'service-live',
+  searchParallel: 'service-live',
+  jsTimeoutMs: 'service-live',
+  cacheMaxBytes: 'service-live',
+  localImportMaxBytes: 'service-live',
+  exportDelayMs: 'composition-root',
+  proxyUrl: 'composition-root',
+}
 
 /** 用户写的原始配置（插件页 / profile / `cordis.patch.yml` 三处同源）：字段全部可选。 */
 export type NovelConfig = { [K in ConfigFieldName]?: ConfigTable[K]['default'] }

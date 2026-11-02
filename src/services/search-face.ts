@@ -2,7 +2,7 @@ import { interpolateUrl } from '../engine/index.js'
 // 死线守卫与它的中继错误按子模块直取：RegexDeadlineError 不在引擎公开面上（归属裁决见 engine/errors.ts）
 import { RegexDeadlineError } from '../engine/errors.js'
 import { guardedTest } from '../engine/regex-guard.js'
-import { itemContextsOf } from './bridge.js'
+import { listContextsOf } from './bridge.js'
 import type { ItemContext } from './bridge.js'
 import type { SubRuleEval } from './bridge.js'
 import { classify } from './errors.js'
@@ -11,7 +11,7 @@ import { log } from './log.js'
 import { isNativeSource } from './normalize.js'
 import { absUrlKeepOption, buildSearchRequest, canonUrl } from './request.js'
 import { resolveSearchTemplate } from './search-template.js'
-import { createSourceEval } from './source-eval.js'
+import { createSourceEval, DEFAULT_JS_BUDGET_MS } from './source-eval.js'
 import type { SourceRequest } from './source-request.js'
 import type { ProbeErrorCode } from '../shared/wire.js'
 import type { NovelSource } from './types.js'
@@ -78,8 +78,9 @@ export async function fetchSearchPage(
     return { ok: false, code: 'RuleMissing', message: `搜索规则缺失或形态不支持：缺 ${missing.join('、')}` }
   }
   // 一条源一个求值器：列表形态与详情形态共用它，差别只在 info 那一份多带 `book` 绑定。
+  // 预算无条件交（构造器必填）：调用方没给就落服务缺省
   const evalr = createSourceEval(request.fetcherFor(source), source,
-    jsTimeoutMs === undefined ? undefined : { jsTimeoutMs })
+    { jsTimeoutMs: jsTimeoutMs ?? DEFAULT_JS_BUDGET_MS })
   const subEval = evalr.subEval()
   // 模板里的 js 脚本出站也走源级外观：拿基础 fetcher 会让脚本请求绕过限速（见 source-request 的头条裁决）
   const template = await resolveSearchTemplate(source, searchUrl, keyword, 1, request.fetcherFor(source), jsTimeoutMs)
@@ -108,8 +109,9 @@ export async function fetchSearchPage(
   if (canInfo && startsDetail(sniff, landedUrl, source.name)) return info('pattern')
   // 缺列表规则不是缺规则：空规则求值即得空列表，
   // 然后走上②那条详情回落。书名规则仍是硬要求（空规则返回整页文本，会造垃圾标题）。
-  const contexts = ruleBookList === null ? []
-    : itemContextsOf(await subEval(ruleBookList, { html: text, baseUrl: landedUrl }, 'search', 'list'), landedUrl)
+  const contexts = ruleBookList === null
+    ? []
+    : await listContextsOf(subEval, ruleBookList, { html: text, baseUrl: landedUrl }, 'search')
   if (canInfo && contexts.length === 0 && (bookUrlPattern === null || bookUrlPattern.trim() === '')) return info('empty-list')
   return { ok: true, shape: 'list', contexts, landedUrl, subEval }
 }

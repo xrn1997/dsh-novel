@@ -17,4 +17,4 @@ legado 的 `exploreUrl`（一个源「有哪些分类」的声明）接**声明�
 
 **重开条件**（脚本档）：出现一条真要靠脚本才拿得到分类的常用源，并且「什么时候重算分类、由谁触发」先单独裁下来——那时接的是求值，口径已经有了。
 
-锚点：`src/services/explore-url.ts` 的 `parseExploreKinds` 与 `exploreKindsFormOf`；`src/services/normalize.ts` 的 `flattenDialect` 与 `rawExploreFields`；`src/services/explore-face.ts` 的 `rulesFor`（整套回落的单点）与 `fetchKindPage`（「用哪份模板」「首页裁不裁页码」的判据主人，本篇那句跟着模板主人走就落在这里）；`src/services/participation.ts` 的 `exploreParticipates`；矩阵行 `c-explore-url`、`d-explore-three-forms`、`d-explore-fallback-search-rule`、`h-source-refresh-explore`。
+锚点：`src/services/explore-url.ts` 的 `parseExploreKinds` 与 `exploreKindsFormOf`；`src/services/normalize.ts` 的 `flattenDialect` 与 `rawExploreFields`；`src/services/bridge.ts` 的 `hitRuleOf`（整套回落的单点）与 `src/services/explore-face.ts` 的 `fetchKindPage`（「用哪份模板」「首页裁不裁页码」的判据主人，本篇那句跟着模板主人走就落在这里）；`src/services/participation.ts` 的 `exploreParticipates`；矩阵行 `c-explore-url`、`d-explore-three-forms`、`d-explore-fallback-search-rule`、`h-source-refresh-explore`。

@@ -10,7 +10,7 @@ const TOC: ChapterEntry[] = [
   { name: '第三章 转', url: 'u3' },
 ]
 
-// 范围由调用方裁好（判据单点在路由层）——本文件的直调用 FULL 代表全本
+// 范围由调用方裁好（判据单点在 `services/reading.ts` 的 `exportRange`）——本文件的直调用 FULL 代表全本
 const FULL = { from: 1, to: TOC.length }
 
 function makeDeps(overrides?: { failAt?: number; failMsg?: string }): {

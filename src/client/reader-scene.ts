@@ -1,7 +1,7 @@
 import { describeError } from './api.js'
 import type { Translate } from './copy/index.js'
-import { closeAll, dismissSurface, escOwner, openSurface } from './reader-surfaces.js'
-import type { ReaderSurface, SurfaceChange } from './reader-surfaces.js'
+import { closeAll, dismissSurface, escOwner, maskFor, openSurface } from './reader-surfaces.js'
+import type { EscOwner, ReaderSurface, SurfaceChange } from './reader-surfaces.js'
 import type { ReaderSession, VisibleNode } from './reader-session.js'
 import type { ShelfAddOutcome, ShelfSeatInput } from './shelf-action.js'
 import { createStore } from './store.js'
@@ -32,6 +32,9 @@ export interface ReaderSceneState {
   askShelf: boolean
   joinBusy: boolean
   joinError: string | null
+  /** 纯判据的两枚投影：每次写入按合并后的 surface/askShelf 重算，与状态同一笔通知 */
+  mask: boolean
+  escOwner: EscOwner
 }
 
 export interface ReaderSceneDeps {
@@ -52,6 +55,7 @@ export interface ReaderSceneDeps {
 export class ReaderScene {
   private readonly store = createStore<ReaderSceneState>({
     surface: null, note: null, askShelf: false, joinBusy: false, joinError: null,
+    mask: false, escOwner: 'none',
   })
   private noteSeq = 0
 
@@ -82,10 +86,11 @@ export class ReaderScene {
     this.applySurface(closeAll(this.state.surface))
   }
 
-  /** 浮层那条 Esc。归属先问判据：模态在场时**视图那条监听根本不安装**（一次 Esc 不许既关模态
-   *  又收浮层）；这里再判一次，是为了让命令自身也守得住这条律。模态的 Esc 走 `dismissAsk`。 */
+  /** 浮层那条 Esc。归属读场景自己的 `escOwner` 投影（判据仍住 `reader-surfaces`）：模态在场时
+   *  视图那条监听根本不安装（一次 Esc 不许既关模态又收浮层）；这里再判一次，是为了让命令自身
+   *  也守得住这条律。模态的 Esc 走 `dismissAsk`。 */
   handleEsc(): void {
-    if (escOwner(this.state.surface, this.state.askShelf) !== 'surface') return
+    if (this.state.escOwner !== 'surface') return
     this.close()
   }
 
@@ -168,6 +173,9 @@ export class ReaderScene {
   }
 
   private set(patch: Partial<ReaderSceneState>): void {
-    this.store.set(patch)
+    // 两枚投影按合并后的状态重算、与 patch 同一笔写入：订阅者不会读到「面已换、遮罩/归属还是上一面」
+    // 的中间态，通知次数也与逐字段函数现判时相同。
+    const next = { ...this.state, ...patch }
+    this.store.set({ ...patch, mask: maskFor(next.surface), escOwner: escOwner(next.surface, next.askShelf) })
   }
 }

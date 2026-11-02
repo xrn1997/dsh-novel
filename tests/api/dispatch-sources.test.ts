@@ -126,10 +126,10 @@ describe('sources 面（后台任务版）', () => {
       expect((await r.json() as any).error.code).toBe('JobRunning')
     } finally { release(); await svc2.flush(); await s2.close() }
   })
-  it('POST /sources（旧同步路由）→ 405（已移除，指向新任务面）', async () => {
+  it('POST /sources（旧同步路由）→ 405（已移除；统一 mismatch 措辞指明本路径需 GET，导入归 sources/import）', async () => {
     const r = await fetch(`${base}/novel-api/sources`, { method: 'POST', body: '[]' })
     expect(r.status).toBe(405)
-    expect((await r.json() as any).error.message).toContain('sources/import')
+    expect((await r.json() as any).error.message).toBe('方法不允许: POST（/novel-api/sources 需 GET）')
   })
   it('import body 校验：空 files / 缺 name|text → 400', async () => {
     const post = (body: unknown) => fetch(`${base}/novel-api/sources/import`, {
@@ -253,6 +253,30 @@ describe('sources 面（后台任务版）', () => {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ loginAction: '不存在' }),
     })
     expect(bad.status).toBe(400)
+  })
+  it('POST /sources/:id/auth run-login JS 空产出 → 422 LoginFailed（保形文案逐字；不写登录态）', async () => {
+    const job = await importAndDone([{
+      name: 'empty-login.json',
+      text: JSON.stringify({
+        ...rawSource, bookSourceName: 'EmptyLogin', bookSourceUrl: 'https://empty-login.com',
+        loginUrl: 'return ""',
+      }),
+    }])
+    expect(job.phase).toBe('done')
+    const { value: list } = await (await fetch(`${base}/novel-api/sources`)).json() as any
+    const s = list.find((x: any) => x.name === 'EmptyLogin')
+    expect(s).toBeTruthy()
+    const r = await fetch(`${base}/novel-api/sources/${s.id}/auth`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ runLogin: true }),
+    })
+    expect(r.status).toBe(422)
+    const env = await r.json() as any
+    expect(env.error.code).toBe('LoginFailed')
+    expect(env.error.message).toBe('loginUrl 未产出 cookie（脚本未 return 或为空）——登录未生效，未写入登录态')
+    // 空产出不算登录：hasAuth 不许被点亮（门面不落空 auth）
+    const { value: after } = await (await fetch(`${base}/novel-api/sources`)).json() as any
+    expect(after.find((x: any) => x.id === s.id).hasAuth).toBe(false)
+    await fetch(`${base}/novel-api/sources/${s.id}`, { method: 'DELETE' })
   })
   it('未知路由 → 404 NotFound；方法不对 → 405', async () => {
     const r1 = await fetch(`${base}/novel-api/nope`)

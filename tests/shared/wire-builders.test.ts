@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { bodies, BODY, encodeQuery, LOCAL_SOURCE_ID, PARAMS, paramOps, pickShelfMeta, planarNavigation, queries, readBodies, ROUTES, SHELF_META } from '../../src/shared/wire.js'
+import type { ShelfBook, ShelfMetaField } from '../../src/shared/wire.js'
 import { LOCAL_SOURCE_ID as NODE_LOCAL_SOURCE_ID } from '../../src/services/localbooks.js'
 
 /**
- * **`SHELF_META` ↔ `ShelfBook` 的两向绑定不需要额外守卫（实测确认，别再补）**：
- * 加编译期断言的方案被否——现有类型结构**本来就会红**（表里类型串写错 → pickShelfMeta 的字面
- * 比较 TS2367；表里加 ShelfBook 没有的键 → ShelfMetaPatch 索引 TS2536），加断言只是复述同一件事。
- * 真正需要守卫的是**跨面**的东西：见 `tests/tools/schema-contract.test.ts`（工具 schema ↔ wire，
- * 编译期钉死）。
+ * **`SHELF_META` ↔ `ShelfBook` 的三向绑定**：
+ * ① 表 → 书：表里类型串写错 → pickShelfMeta 的字面比较 TS2367；表里多出 `ShelfBook` 没有的键 →
+ *    `ShelfMetaPatch` 索引 TS2536——这两向已被类型结构把住，不需要额外守卫。
+ * ② 书 → 表：`ShelfBook` 加了书目字段而表漏加，类型结构不会红（多出的键只是「不在表里」）——
+ *    由 `SHELF_META` describe 里的 `Record<TableMisses, never>` 反向钉把住。钉子必须是
+ *    `Record<缺失键, never>`：空数组声明对任何元素类型都合法，等于没钉。
+ * 系统字段（bookKey / progress / addedAt）是显式排除项：加新字段时必须在排除表里或进
+ * `SHELF_META`，二选一。跨面投影的守卫见 `tests/tools/schema-contract.test.ts`（工具 schema ↔
+ * wire，编译期钉死）。
  */
 
 describe('LOCAL_SOURCE_ID（跨半契约常量的唯一主人）', () => {
@@ -100,7 +105,7 @@ describe('路由表计数钉死（总数只有一个家，别处不许手写）'
   it('书架批量删除：path 与 segs 同源（复用 batch-delete 段，与书源批删同段名）', () => {
     expect(ROUTES.shelfBatchDelete).toEqual({ method: 'POST', path: 'shelf/batch-delete', segs: ['shelf', 'batch-delete'] })
   })
-  it('搜索任务两面：path 与 segs 同源（服务端段匹配读 segs）', () => {
+  it('搜索任务两面：path 与 segs 同源（匹配器收请求 segs、join 后与 path 比对；表里这份只做结构自洽）', () => {
     expect(ROUTES.searchJob).toEqual({ method: 'POST', path: 'search/job', segs: ['search', 'job'] })
     expect(ROUTES.searchJobStatus).toEqual({ method: 'GET', path: 'search/job-status', segs: ['search', 'job-status'] })
     expect(ROUTES.searchJobStream).toEqual({ method: 'GET', path: 'search/job-stream', segs: ['search', 'job-stream'] })
@@ -180,22 +185,32 @@ describe('SHELF_META 字段集（书目元数据的唯一主人）', () => {
       ['author', 'coverUrl', 'intro', 'kind', 'lastChapterName', 'sourceId', 'title', 'totalChapters', 'wordCount'],
     )
   })
+
+  // 反向绑定（书 → 表）：TableMisses = ShelfBook 有而 SHELF_META 漏掉的键。
+  // 现表与书相等时它是 never（Record<never, never> 即 {}）；一旦书加了书目字段而表没加，
+  // `Record<TableMisses, never>` 要求该键存在且值为 never——`missing` 缺键即本行 typecheck 红。
+  type BookMetaKeys = Exclude<keyof ShelfBook, 'bookKey' | 'progress' | 'addedAt'>
+  type TableMisses = Exclude<BookMetaKeys, ShelfMetaField>
+  it('反向绑定：ShelfBook 加书目字段而表漏加 → 本行 typecheck 红', () => {
+    const missing: Record<TableMisses, never> = {}
+    expect(missing).toEqual({})
+  })
 })
 
-describe('pickShelfMeta（任意 JSON body → 合法元数据字段，判别/归一化单点）', () => {
+describe('pickShelfMeta（任意 JSON body → 合法元数据字段；类型判别单点，数值归一化归 Shelf）', () => {
   it('类型判别：string 字段非 string 缺席、number 字段非 number 缺席、未知键缺席', () => {
     expect(pickShelfMeta({ author: 42, totalChapters: '300', hacker: true })).toEqual({})
   })
   it('null/undefined 键缺席（保值语义的缺席形态）', () => {
     expect(pickShelfMeta({ author: null, coverUrl: undefined, intro: 'x' })).toEqual({ intro: 'x' })
   })
-  it('totalChapters 归一化：floor + 负数钳 0；非有限数缺席', () => {
-    expect(pickShelfMeta({ totalChapters: 12.9 })).toEqual({ totalChapters: 12 })
-    expect(pickShelfMeta({ totalChapters: -3 })).toEqual({ totalChapters: 0 })
+  it('数值位只过类型与有限性：12.9 / -3 原样（钳位归 Shelf.applyPatch）；NaN / Infinity 缺席', () => {
+    expect(pickShelfMeta({ totalChapters: 12.9 })).toEqual({ totalChapters: 12.9 })
+    expect(pickShelfMeta({ totalChapters: -3 })).toEqual({ totalChapters: -3 })
     expect(pickShelfMeta({ totalChapters: Number.NaN })).toEqual({})
     expect(pickShelfMeta({ totalChapters: Infinity })).toEqual({})
   })
-  it('空串保留——title 非空判别归调用方（shelfPut 的 add/patch 分叉语义）', () => {
+  it('空串保留——title 非空判别归调用方（dispatch 的 shelfPut 臂）', () => {
     expect(pickShelfMeta({ title: '' })).toEqual({ title: '' })
   })
 })
@@ -222,9 +237,9 @@ describe('书架 PUT 三形态（body 形状纪律）', () => {
     })
     expect('url' in bodies.shelfAdd('s9', hit)).toBe(false)
   })
-  it('shelfAdd：走 pickShelfMeta 同一口径——totalChapters 客户端即归一化', () => {
+  it('shelfAdd：走 pickShelfMeta 同一口径——12.9 原样上行（落盘归一化归 Shelf）', () => {
     expect(bodies.shelfAdd('s', { title: 'T', totalChapters: 12.9 }))
-      .toEqual({ sourceId: 's', title: 'T', totalChapters: 12 })
+      .toEqual({ sourceId: 's', title: 'T', totalChapters: 12.9 })
   })
   it('progress：只带 progress 两字段（形状判据，值域门归门面）', () => {
     expect(bodies.shelfProgress(3, 0.42)).toEqual({ progress: { chapterIndex: 3, offsetRatio: 0.42 } })
@@ -233,23 +248,24 @@ describe('书架 PUT 三形态（body 形状纪律）', () => {
     expect(bodies.shelfPatch({ totalChapters: 300 })).toEqual({ patch: { totalChapters: 300 } })
     expect(bodies.shelfPatch({ author: null, coverUrl: undefined, title: 'T' })).toEqual({ patch: { title: 'T' } })
   })
-  it('三形态各自 round-trip：构造器产的东西，判别读口按同一形态收回来', () => {
+  it('三形态各自 round-trip：构造器产的东西拆成字段事实（meta / patch / progress）', () => {
     expect(readBodies.shelfPut(bodies.shelfAdd('s', { title: '斗罗' })))
-      .toEqual({ mode: 'add', meta: { sourceId: 's', title: '斗罗' } })
+      .toEqual({ meta: { sourceId: 's', title: '斗罗' }, patch: null, progress: null })
     expect(readBodies.shelfPut(bodies.shelfProgress(3, 0.42)))
-      .toEqual({ mode: 'progress', chapterIndex: 3, offsetRatio: 0.42 })
+      .toEqual({ meta: {}, patch: null, progress: { chapterIndex: 3, offsetRatio: 0.42 } })
     expect(readBodies.shelfPut(bodies.shelfPatch({ totalChapters: 300 })))
-      .toEqual({ mode: 'patch', patch: { totalChapters: 300 } })
+      .toEqual({ meta: {}, patch: { totalChapters: 300 }, progress: null })
   })
-  it('三形态皆无 → 点名三种出路（这句措辞的家在读口，不在路由层）', () => {
-    expect(() => readBodies.shelfPut({})).toThrow(/title（加书）.*patch（打补丁）.*progress/)
+  it('三形态皆无 → 空事实（读口不再裁决形态；那句 400 归 dispatch 的 shelfPut 臂）', () => {
+    expect(readBodies.shelfPut({})).toEqual({ meta: {}, patch: null, progress: null })
   })
-  it('分派优先级 title → patch → progress：同 body 里 title 在场就按加书走', () => {
-    expect(readBodies.shelfPut({ title: 'T', patch: { kind: '玄幻' } })).toMatchObject({ mode: 'add' })
+  it('title 与 patch 同场 → 两个事实并存（title 非空才加书的优先级归 dispatch）', () => {
+    expect(readBodies.shelfPut({ title: 'T', patch: { kind: '玄幻' } }))
+      .toEqual({ meta: { title: 'T' }, patch: { kind: '玄幻' }, progress: null })
   })
-  it('progress 只判形状：Infinity 照样收成 progress 形态，值域门留给门面', () => {
+  it('progress 只判形状：Infinity 照样收成 progress 事实，值域门留给门面', () => {
     expect(readBodies.shelfPut({ progress: { chapterIndex: Infinity, offsetRatio: 0.5 } }))
-      .toMatchObject({ mode: 'progress', chapterIndex: Infinity })
+      .toEqual({ meta: {}, patch: null, progress: { chapterIndex: Infinity, offsetRatio: 0.5 } })
   })
 })
 

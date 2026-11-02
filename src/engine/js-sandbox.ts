@@ -7,7 +7,7 @@ import type { EngineValue, EvalContext, Facet, SegmentLoc } from './types.js'
 import type { SubRule } from './sub-rule.js'
 import type { SourceSession } from './session.js'
 import { JsSandboxError, RegexDeadlineError, isEngineError } from './errors.js'
-import { SANDBOX_MOUNTS, SYNC_AJAX_SENTINEL, asyncBridgeSource, asyncMountSource, invokeJavaMethod } from './js-protocol.js'
+import { SANDBOX_MOUNTS, SYNC_AJAX_SENTINEL, SYNC_WORKER_RE, asyncBridgeSource, asyncMountSource, invokeJavaMethod } from './js-protocol.js'
 import type { BridgeDeps } from './js-protocol.js'
 import { loadHtml, nodeText } from './dom.js'
 import { decodePngToArgb, javaDecode } from './js-utils.js'
@@ -39,6 +39,9 @@ export interface JsHost {
   header?: string
   console?: { log: (...a: unknown[]) => void; error: (...a: unknown[]) => void }
 }
+
+/** 脚本形态缺省的唯一主人：`scriptForm` 未给即按脚本形态跑（完成值即结果，见 `EvalJsOptions`）。 */
+const DEFAULT_SCRIPT_FORM = true
 
 export interface EvalJsOptions {
   /** 脚本完成值语义：代码作为脚本执行，最后一个表达式的值即结果；
@@ -96,7 +99,7 @@ export function runScript(o: RunScriptOptions): Promise<JsOutcome> {
   return evalJs({
     code, host, ctx, loc, facet,
     ...(evaluateRef === undefined ? {} : { evaluateRef }),
-    opts: { scriptForm: scriptForm ?? true, ...(session === undefined ? {} : { session }) },
+    opts: { scriptForm: scriptForm ?? DEFAULT_SCRIPT_FORM, ...(session === undefined ? {} : { session }) },
   })
 }
 
@@ -125,17 +128,19 @@ export interface JsCall {
 
 const TIMEOUT = Symbol('js-sandbox-timeout')
 
-/** worker 那条 race 的宽限（唯一消费点在 `runInWorker`）：`vm` 的 timeout 杀的是 worker 内的同步
- *  死循环，这一条管「await 一个永不 settle 的 promise」。它必须**晚于**调用方预算到，否则跑满预算
- *  的脚本会被自己判死；额外的那一截是给「主线程替 worker 服务一发宿主调用」的往返留的余量——
- *  主线程自己那条 race 没有这趟往返，因此用整额预算，不加宽限（见 `evalJs` 里的 race）。
- *  这个宽限必须独立命名并只在这里定义；不要在 race 的参数式里写裸数字，否则没人看得出它的归属。 */
+/** worker 那条 race 的宽限（消费点两处：外层 race 的加项与下方 RPC 死线的派生加项）：`vm` 的
+ *  timeout 杀的是 worker 内的同步死循环，这一条管「await 一个永不 settle 的 promise」。它必须
+ *  **晚于**调用方预算到，否则跑满预算的脚本会被自己判死；额外的那一截是给「主线程替 worker 服务
+ *  一发宿主调用」的往返留的余量——主线程自己那条 race 没有这趟往返，因此用整额预算，不加宽限
+ *  （见 `evalJs` 里的 race）。这个宽限必须独立命名并只在这里定义；不要在 race 的参数式里写裸数字，
+ *  否则没人看得出它的归属。 */
 const ASYNC_GRACE_MS = 5_000
 
-/** worker 侧单次宿主往返的兜底死线：脚本在 worker 里同步等主线程服务那一发，等到这里就抛。
- *  **刻意不从调用方预算推出来**：预算约束整段脚本，这条只防「主线程再也不来服务这一发」，
- *  两者不同轴——把它跟着预算缩到 2s，反而会给慢站点制造假失败。 */
-const WORKER_RPC_DEADLINE_MS = 300_000
+/** worker 侧单次宿主往返死线的 **terminate 落地余量**：外层 race（预算 + `ASYNC_GRACE_MS`）到期即
+ *  terminate worker，worker 侧死线必须**严格晚于**它才不产生第二错源——两个计时器同时响时，
+ *  先落地的报错会替真正的超时背锅。所以 worker 侧死线不再独立定数，由调用方预算派生（组装在
+ *  `evalJsInWorker` 的 workerData，键 `rpcDeadlineMs` = 预算 + `ASYNC_GRACE_MS` + 本余量）。 */
+const WORKER_RPC_MARGIN_MS = 5_000
 
 /** 进程级 unhandledRejection 防线（加载期常驻，幂等挂载一次）。
  *  脚本自建又 fire-and-forget 的异步工作，其 rejection 在 settle 之后才悬空触发（晚于 evalJs 返回），
@@ -1025,52 +1030,30 @@ async function evalJsCore(call: JsCall): Promise<JsOutcome> {
   if (useWorker) {
     return evalJsInWorker({
       bootstrap: BOOTSTRAP, init, code, wrapped, jsLib: jsLibCode, timeout,
-      scriptForm: opts?.scriptForm ?? true, call: hostCall, logs, loc, facet,
+      scriptForm: opts?.scriptForm ?? DEFAULT_SCRIPT_FORM, call: hostCall, logs, loc, facet,
     })
   }
   // 主线程整段包一层哨兵捕获：四个可能冒出哨兵的位置（BOOTSTRAP init / jsLib / 同步执行 /
   // await 到的完成值——`await` 形态下哨兵是 rejection）都要能兜住，故包在最外层而不是逐处判定。
   try {
-    const context = vm.createContext(
-      { __host_call__: hostCall, __init__: init } as unknown as vm.Context,
-      { codeGeneration: { strings: true, wasm: false } },
-    )
-
-    try {
-      vm.runInContext(BOOTSTRAP, context, { timeout })
-    } catch (e) {
-      throw jsErr(e, code, loc, facet, '沙箱初始化失败')
-    }
-
-    // jsLib（源级全局函数库）：先于用户代码在同一上下文执行——函数定义落全局，用户 @js 里直接
-    // 调用。它本身不是求值目标：抛错如实上报（jsLib 坏了整源的 js 都不可信）。用**已解析**的库
-    // 文本（URL 字典在 evalJs 顶部下载拼好）——两条路必须同一份，否则同一源在两路少一层库。
-    const jsLib = jsLibCode
-    if (jsLib.trim() !== '') {
-      try {
-        vm.runInContext(jsLib, context, { timeout })
-      } catch (e) {
-        if (isVmTimeout(e)) throw jsTimeoutErr(timeout, jsLib.slice(0, 200), loc, facet)
-        throw jsErr(e, jsLib.slice(0, 200), loc, facet, 'jsLib 执行失败')
-      }
-    }
-
-    // key/page/result/baseUrl/source/src/book/chapter 已由 bootstrap 注入为全局——wrapper 不再声明
-    // 同名参数（真源有 `let page = java.get("page")` 的重声明形态，参数位会撞 Identifier already declared）。
-    // **非严格模式（钉死）**：书源脚本按 sloppy 语义执行，`next = []` 这类未声明赋值就是写全局，
-    // 真实源大量依赖（读数与普查口径住矩阵行 `h-rhino-vs-vm` 的 note）。
-    // 逃逸防御不靠严格模式：vm realm 隔离 + 宿主入口锁死才是边界（eval 允许，但不跨 realm），见 BOOTSTRAP 顶注。
-    // wrapped 文本在 evalJs 顶部构造（与 worker 共用同一份）。
-
     let started: unknown
     try {
-      started = opts?.scriptForm === true
-        // 完成值语义：代码是脚本，最后一个表达式的值即结果（顶层 return/await → SyntaxError → 回落函数体）
-        ? runAsScript(code, wrapped, context, timeout)
-        : vm.runInContext(wrapped, context, { timeout })
+      // 求值序列（createContext → bootstrap → jsLib → started）收在共享体里：worker 经 toString()
+      // 注入同一份——两份实现 = 两套语义，改一处漏一处。错误按段打标（phase/timedOut），映射在这层。
+      started = runInContextVm(vm, {
+        hostCall,
+        bootstrap: BOOTSTRAP,
+        init,
+        jsLib: jsLibCode,
+        code,
+        wrapped,
+        timeout,
+        scriptForm: opts?.scriptForm ?? DEFAULT_SCRIPT_FORM,
+      })
     } catch (e) {
-      if (isVmTimeout(e)) throw jsTimeoutErr(timeout, code, loc, facet)
-      throw jsErr(e, code, loc, facet, '脚本编译/同步执行失败')
+      const t = e as { phase?: string; timedOut?: boolean }
+      if (t.timedOut === true) throw jsTimeoutErr(timeout, code, loc, facet)
+      throw jsErr(e, code, loc, facet, prefixOfPhase(t.phase))
     }
 
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -1080,7 +1063,7 @@ async function evalJsCore(call: JsCall): Promise<JsOutcome> {
         new Promise<never>((_, reject) => {
           // 主线程这条 race 用的是**整额预算**、不加宽限：这里的 await 全在本 realm 里推进，
           // 没有「等主线程替 worker 服务一发宿主调用」那种额外往返。worker 那条才加
-          // `ASYNC_GRACE_MS`（见 `runInWorker`），两处的差是 realm 结构决定的，不是漂移。
+          // `ASYNC_GRACE_MS`（见 `evalJsInWorker`），两处的差是 realm 结构决定的，不是漂移。
           timer = setTimeout(() => reject(TIMEOUT), timeout)
           timer?.unref?.()
         }),
@@ -1089,7 +1072,7 @@ async function evalJsCore(call: JsCall): Promise<JsOutcome> {
     } catch (e) {
       if (e === TIMEOUT || isVmTimeout(e)) throw jsTimeoutErr(timeout, code, loc, facet)
       if (e instanceof JsSandboxError) throw e
-      throw jsErr(e, code, loc, facet, '脚本执行抛错')
+      throw jsErr(e, code, loc, facet, prefixOfPhase(undefined))
     } finally {
       if (timer) clearTimeout(timer)
       // unhandledRejection 防线常驻（不再此处摘除）——见 ensureUnhandledGuard
@@ -1101,28 +1084,101 @@ async function evalJsCore(call: JsCall): Promise<JsOutcome> {
     logs.length = 0
     return evalJsInWorker({
       bootstrap: BOOTSTRAP, init: initOf(true), code, wrapped, jsLib: jsLibCode, timeout,
-      scriptForm: opts?.scriptForm ?? true, call: hostCall, logs, loc, facet,
+      scriptForm: opts?.scriptForm ?? DEFAULT_SCRIPT_FORM, call: hostCall, logs, loc, facet,
     })
   }
 }
 
-/** 脚本形态执行：完成值即结果；**编译期** SyntaxError（顶层 return/await）回落 async IIFE 函数体形态。
- *  判别必须在编译期（new vm.Script 只编译不执行）。不要按执行后的异常类名判：运行时 SyntaxError
- *  （JSON.parse 坏串等）会被误判成顶层 return 形态并静默回落 wrapped，表达式脚本恒 Miss（比报错更坏）。
- *  跨 realm `instanceof SyntaxError` 不成立，按 constructor.name 判定。
- *  **worker 里有这份的文本抄本**（WORKER_SRC 的 runAsScript，worker 代码以字符串交付够不到本函数）：
- *  改这里必须同时改那里，两路一致由 `tests/engine/json-parse-object-idempotent.test.ts` 钉住。 */
-function runAsScript(code: string, wrapped: string, context: vm.Context, timeout: number): unknown {
-  try {
-    // 只编译不执行：SyntaxError = 语法层（含顶层 return/await）→ 回落 wrapped
-    new vm.Script(code)
-  } catch (e) {
-    if ((e as { constructor?: { name?: string } })?.constructor?.name === 'SyntaxError') {
-      return vm.runInContext(wrapped, context, { timeout })
+/** A-a 共享求值体：createContext → bootstrap → jsLib → started（脚本/函数体两形态）。
+ *  主线程直调；worker 经 `toString()` 注入（`new Worker(src, {eval:true})` 字符串交付）——
+ *  两份实现 = 两套语义，改一处漏一处，所以收成这一份。**闭包自由是硬约束**：引用任何模块级
+ *  符号（wrappedFormOf / jsErr / …）在 worker 里就是 ReferenceError，由
+ *  `runInContextVm 与 sanitizeForPost 闭包自由` 钉子守住。vm 由入参传入（主线程传 node:vm
+ *  命名空间，worker 传 `require('node:vm')`）。
+ *  **export 明写为测试缝**（测试钉 `toString()` 自含；语义由主线程/worker 两条路的往返用例间接覆盖），
+ *  不为生产导出面加宽。
+ *
+ *  错误约定：bootstrap / jsLib / compile 三段 catch 给错误对象挂 `phase` 与 `timedOut`
+ *  （`/Script execution timed out/i` 判——worker 边界只过得来 message/stack 与自挂属性），
+ *  然后 rethrow **原错误**；异步完成值抛错不打标（两路本来就同为「脚本执行抛错」）。
+ *  前缀映射住主线程侧（`prefixOfPhase`，两处调用点共读一份），共享体只负责打标。
+ *  返回 `started`（可能是 promise 或值，不 await——异步段由调用方的 race 约束）。
+ *
+ *  **非严格模式（钉死）**：书源脚本按 sloppy 语义执行，`next = []` 这类未声明赋值就是写全局，
+ *  真实源大量依赖（读数与普查口径住矩阵行 `h-rhino-vs-vm` 的 note）。逃逸防御不靠严格模式：
+ *  vm realm 隔离 + 宿主入口锁死才是边界（eval 允许，但不跨 realm），见 BOOTSTRAP 顶注。 */
+export function runInContextVm(
+  vmMod: typeof vm,
+  deps: {
+    hostCall: (name: string, argsJson: string) => string | Promise<string>
+    bootstrap: string
+    init: string
+    jsLib: string
+    code: string
+    wrapped: string
+    timeout: number
+    scriptForm: boolean
+  },
+): unknown {
+  const tag = (e: unknown, phase: 'bootstrap' | 'jsLib' | 'compile'): unknown => {
+    if (e !== null && typeof e === 'object') {
+      const t = e as { phase?: string; timedOut?: boolean }
+      // 冻结/不可扩展的抛错对象在严格模式下赋值会抛 TypeError，那会盖掉原错误——打标失败就放弃标记
+      try {
+        t.phase = phase
+        t.timedOut = /Script execution timed out/i.test(String((e as { message?: unknown }).message ?? e))
+      } catch { /* 打标只是旁注，原错误照原样 rethrow */ }
     }
-    throw e
+    return e
   }
-  return vm.runInContext(code, context, { timeout })
+  const context = vmMod.createContext(
+    { __host_call__: deps.hostCall, __init__: deps.init } as unknown as vm.Context,
+    { codeGeneration: { strings: true, wasm: false } },
+  )
+
+  try {
+    vmMod.runInContext(deps.bootstrap, context, { timeout: deps.timeout })
+  } catch (e) {
+    throw tag(e, 'bootstrap')
+  }
+
+  // jsLib（源级全局函数库）：先于用户代码在同一上下文执行——函数定义落全局，用户 @js 里直接
+  // 调用。它本身不是求值目标：抛错如实上报（jsLib 坏了整源的 js 都不可信）。用**已解析**的库
+  // 文本（URL 字典在 evalJs 顶部下载拼好）——两条路必须同一份，否则同一源在两路少一层库。
+  if (deps.jsLib.trim() !== '') {
+    try {
+      vmMod.runInContext(deps.jsLib, context, { timeout: deps.timeout })
+    } catch (e) {
+      throw tag(e, 'jsLib')
+    }
+  }
+
+  // key/page/result/baseUrl/source/src/book/chapter 已由 bootstrap 注入为全局——wrapper 不再声明
+  // 同名参数（真源有 `let page = java.get("page")` 的重声明形态，参数位会撞 Identifier already declared）。
+  // wrapped 文本在 evalJs 顶部构造一次（主线程与 worker 共用同一份，worker 经 workerData 拿成品串）。
+  let started: unknown
+  try {
+    if (deps.scriptForm) {
+      // 脚本形态：完成值即结果；**编译期** SyntaxError（顶层 return/await）回落函数体形态。
+      // 判别必须在编译期（new Script 只编译不执行）：按执行后的异常类名判会把运行时 SyntaxError
+      // （JSON.parse 坏串等）误当顶层 return 回落，表达式脚本恒 Miss（比报错更坏，见
+      // json-parse-object-idempotent 钉子）。跨 realm `instanceof SyntaxError` 不成立，
+      // 按 constructor.name 判定。
+      let asScript = true
+      try {
+        new vmMod.Script(deps.code)
+      } catch (e) {
+        if ((e as { constructor?: { name?: string } }).constructor?.name !== 'SyntaxError') throw e
+        asScript = false
+      }
+      started = vmMod.runInContext(asScript ? deps.code : deps.wrapped, context, { timeout: deps.timeout })
+    } else {
+      started = vmMod.runInContext(deps.wrapped, context, { timeout: deps.timeout })
+    }
+  } catch (e) {
+    throw tag(e, 'compile')
+  }
+  return started
 }
 
 /** 函数体形态（wrapped）文本：把用户代码包进 async IIFE，`return` 有处可去。
@@ -1143,19 +1199,30 @@ function wrappedFormOf(code: string): string {
 // 纵深防御层，不是 OS 沙箱），SAB 上只有 JSON 字符串。超时双闸：
 // worker 内 vm timeout 杀同步死循环，主线程 Promise.race（timeout + 5s）后 terminate。
 // worker 代码以字符串交付（tsdown 打包后无独立文件可解析），BOOTSTRAP/init/code/wrapped 全走
-// workerData，不产生第二份引导抄本；唯一无法共用的是 runAsScript（见 WORKER_SRC 内注释）。
+// workerData，不产生第二份引导抄本；求值序列本体由 runInContextVm 共享——worker 经 toString()
+// 注入同一份（见 WORKER_SRC 顶）。
 
-/** 路由启发式（**只影响性能与稳健性，不影响语义**——语义由桥给）。刻意过近似而不求精确：
- *  ① `\.ajax\s*\(` 认任何 `.ajax(`；② `downloadFile\s*\(`（与 ajax 同款的哨兵桥）；
- *  ③ `java\s*\[` 认任何对 java 桥的下标访问；④ 其余直接挂在 `java` 上的同步网络桥（connect/post/head/
- *  webView/webViewGetSource 与双参 get、URL.openConnection）必须逐个列出——它们在主线程抛哨兵，
- *  脚本自己的 try/catch 会把哨兵吞掉；只靠哨兵兜底等于让 catch 分支拿到 undefined。
- *  协议表每一行的 `bridge.routeProbe` 都被测试钉在这条正则上（漏列即红），不再靠记性。
- *  仍漏的只有真正间接形态（解构、with，以及首个实参里带右括号的 `java.get(...)`——双参 get 那条
- *  正则的 `[^)]*` 在实参内部的右括号处断掉）。 */
-export const SYNC_WORKER_RE = /\.ajax\s*\(|downloadFile\s*\(|java\s*\[|java\s*\.\s*(?:connect|post|head|webView|webViewGetSource)\s*\(|java\s*\.\s*get\s*\([^)]*,|openConnection\s*\(/
+// 路由谓词住协议表（js-protocol 的 `SYNC_WORKER_RE`，由全局松散支 + 各 async 行的
+// routePattern 拼出）——此处只消费，不养第二份手写正则（口径与被否方案见 ADR-0005）。
 const SAB_REQ_BYTES = 4 * 1024 * 1024
 const SAB_RESP_BYTES = 16 * 1024 * 1024
+
+/** 完成值过界前的清洗（worker 回传 ret 前那一步的唯一实现）：null/undefined→null、
+ *  String 对象→String 原文、function→String、object→JSON 兜底 String(v)。
+ *  **闭包自由**——与 runInContextVm 同款经 toString() 注入 worker（见 WORKER_SRC）：
+ *  引用模块级符号在 worker 里就是 ReferenceError，由闭包自由钉子守住。
+ *  **export 明写为测试缝**（测试钉 `toString()` 自含；语义由主线程/worker 两条路的往返用例间接覆盖），
+ *  不为生产导出面加宽。 */
+export function sanitizeForPost(v: unknown): unknown {
+  if (v === null || v === undefined) return null
+  const t = Object.prototype.toString.call(v)
+  if (t === '[object String]') return String(v)
+  if (typeof v === 'function') return String(v)
+  if (typeof v === 'object') {
+    try { return JSON.parse(JSON.stringify(v)) } catch (e) { return String(v) }
+  }
+  return v
+}
 
 const WORKER_SRC = `
 const { parentPort, workerData } = require('node:worker_threads')
@@ -1174,9 +1241,9 @@ function hostCall(name, argsJson) {
   Atomics.store(reqFlag, 0, 1)
   parentPort.postMessage({ rpc: true })   // 唤醒主线程来服务（数据走 SAB，消息只做信号）
   Atomics.notify(reqFlag, 0)
-  const deadline = Date.now() + ${WORKER_RPC_DEADLINE_MS}
+  const deadline = Date.now() + workerData.rpcDeadlineMs
   while (Atomics.load(respFlag, 0) === 0) {
-    if (Date.now() > deadline) throw new Error('宿主调用等待超时（${WORKER_RPC_DEADLINE_MS / 1000}s）')
+    if (Date.now() > deadline) throw new Error('宿主调用等待超时（' + Math.round(workerData.rpcDeadlineMs / 1000) + 's）')
     Atomics.wait(respFlag, 0, 0, 1000)
   }
   const len = new DataView(respSab).getInt32(0, true)
@@ -1186,47 +1253,26 @@ function hostCall(name, argsJson) {
   if (parsed !== null && typeof parsed === 'object' && parsed.__error) throw new Error(String(parsed.__error))
   return json
 }
-function sanitize(v) {
-  if (v === null || v === undefined) return null
-  const t = Object.prototype.toString.call(v)
-  if (t === '[object String]') return String(v)
-  if (typeof v === 'function') return String(v)
-  if (typeof v === 'object') {
-    try { return JSON.parse(JSON.stringify(v)) } catch (e) { return String(v) }
-  }
-  return v
+// 求值序列与主线程是**同一份实现**（runInContextVm / sanitizeForPost 闭包自由，宿主侧 toString()
+// 注入——不再有 runAsScript / sanitize 的文本抄本）。错误的 phase / timedOut 标记由共享体打好，
+// postFail 随 message/stack 一起带出边界，前缀映射住主线程 prefixOfPhase（两路同一张表）。
+const runInContextVm = ${runInContextVm.toString()}
+const sanitizeForPost = ${sanitizeForPost.toString()}
+function postFail(e) {
+  parentPort.postMessage({
+    ok: false,
+    message: e && e.message ? String(e.message) : String(e),
+    stack: e && e.stack ? String(e.stack) : '',
+    phase: e && e.phase,
+    timedOut: e && e.timedOut,
+  })
 }
-// 脚本形态判别：**编译期**判 SyntaxError，与主线程 runAsScript 同口径。这里是那份的文本抄本
-// （worker 代码以字符串交付，够不到宿主函数）——改一处必须改两处，两路一致由
-// tests/engine/json-parse-object-idempotent.test.ts 钉住。不要按执行后异常类名判：运行时
-// SyntaxError 会被误当顶层 return 形态并重跑（ajax 重发、站点两趟，且可能静默 Miss）。
-function runAsScript(code, wrapped, context, timeout) {
-  try { new vm.Script(code) }
-  catch (e) {
-    if (e && e.constructor && e.constructor.name === 'SyntaxError') return vm.runInContext(wrapped, context, { timeout })
-    throw e
-  }
-  return vm.runInContext(code, context, { timeout })
-}
-;(function () {
-  const context = vm.createContext(
-    { __host_call__: hostCall, __init__: init },
-    { codeGeneration: { strings: true, wasm: false } },
-  )
-  try {
-    vm.runInContext(bootstrap, context, { timeout })
-    if (jsLib.trim() !== '') vm.runInContext(jsLib, context, { timeout })
-    const started = scriptForm
-      ? runAsScript(code, wrapped, context, timeout)
-      : vm.runInContext(wrapped, context, { timeout })
-    Promise.resolve(started).then(
-      function (ret) { parentPort.postMessage({ ok: true, ret: sanitize(ret) }) },
-      function (e) { parentPort.postMessage({ ok: false, message: e && e.message ? String(e.message) : String(e), stack: e && e.stack ? String(e.stack) : '' }) },
-    )
-  } catch (e) {
-    parentPort.postMessage({ ok: false, message: e && e.message ? String(e.message) : String(e), stack: e && e.stack ? String(e.stack) : '' })
-  }
-})()
+try {
+  const started = runInContextVm(vm, { hostCall, bootstrap, init, jsLib, code, wrapped, timeout, scriptForm })
+  Promise.resolve(started).then(
+    function (ret) { parentPort.postMessage({ ok: true, ret: sanitizeForPost(ret) }) },
+    function (e) { postFail(e) })
+} catch (e) { postFail(e) }
 `
 
 interface WorkerRunArgs {
@@ -1256,6 +1302,9 @@ async function evalJsInWorker(a: WorkerRunArgs): Promise<JsOutcome> {
     workerData: {
       bootstrap: a.bootstrap, init: a.init, code: a.code, wrapped: a.wrapped, jsLib: a.jsLib,
       timeout: a.timeout, scriptForm: a.scriptForm,
+      // worker 侧宿主往返死线：必须严格晚于外层 race（timeout + ASYNC_GRACE_MS）才不产生第二错源，
+      // 差额就是 WORKER_RPC_MARGIN_MS（terminate 落地余量）
+      rpcDeadlineMs: a.timeout + ASYNC_GRACE_MS + WORKER_RPC_MARGIN_MS,
       reqSab, respSab, reqFlagSab, respFlagSab,
     },
   })
@@ -1282,10 +1331,10 @@ async function evalJsInWorker(a: WorkerRunArgs): Promise<JsOutcome> {
     Atomics.notify(respFlagArr, 0)
   }
   try {
-    const result = await new Promise<{ ok: boolean; ret?: unknown; message?: string; stack?: string }>((resolve, reject) => {
+    const result = await new Promise<{ ok: boolean; ret?: unknown; message?: string; stack?: string; phase?: string; timedOut?: boolean }>((resolve, reject) => {
       const timer = setTimeout(() => reject(TIMEOUT), a.timeout + ASYNC_GRACE_MS)
       timer.unref?.()
-      worker.on('message', (m: { ok: boolean; ret?: unknown; message?: string; stack?: string; rpc?: boolean }) => {
+      worker.on('message', (m: { ok: boolean; ret?: unknown; message?: string; stack?: string; phase?: string; timedOut?: boolean; rpc?: boolean }) => {
         if (m?.rpc === true) { void serviceRpc(); return }
         clearTimeout(timer)
         resolve(m)
@@ -1294,19 +1343,21 @@ async function evalJsInWorker(a: WorkerRunArgs): Promise<JsOutcome> {
       worker.on('exit', (code) => { clearTimeout(timer); reject(new Error(`js worker 提前退出（code ${code}）`)) })
     })
     if (!result.ok) {
-      // worker 里 vm 的超时错误只有 message/stack 过得到边界（`ERR_SCRIPT_EXECUTION_TIMEOUT`
-      // 这个 code 留在对端 realm）——在此映射回本仓口径「脚本超时（>Nms）」，否则同一条件
-      // 在主线程与 worker 两条路上报两种错，用户与错误分类都看不出是超时。
-      if (/Script execution timed out/i.test(result.message ?? '')) {
+      // 超时：优先共享体打的 timedOut 标（bootstrap/jsLib/compile 三段同步超时），无标再按
+      // message 正则兜底（`ERR_SCRIPT_EXECUTION_TIMEOUT` 的 code 留在对端 realm，只有 message
+      // 过得来）——同一条件在主线程与 worker 两条路上必须报同一种错「脚本超时（>Nms）」。
+      if (result.timedOut ?? /Script execution timed out/i.test(result.message ?? '')) {
         throw jsTimeoutErr(a.timeout, a.code, a.loc, a.facet)
       }
-      throw jsErr({ message: result.message, stack: result.stack }, a.code, a.loc, a.facet, '脚本执行抛错')
+      // 前缀按共享体的 phase 标从同一张表选（prefixOfPhase，与主线程 catch 共读）——
+      // 无标（异步完成值抛错）落「脚本执行抛错」，两路同口径。
+      throw jsErr({ message: result.message, stack: result.stack }, a.code, a.loc, a.facet, prefixOfPhase(result.phase))
     }
     return { value: toEngineValue(result.ret), logs: a.logs }
   } catch (e) {
     if (e === TIMEOUT) throw jsTimeoutErr(a.timeout, a.code, a.loc, a.facet)
     if (e instanceof JsSandboxError) throw e
-    throw jsErr(e, a.code, a.loc, a.facet, '脚本执行抛错')
+    throw jsErr(e, a.code, a.loc, a.facet, prefixOfPhase(undefined))
   } finally {
     void worker.terminate()
   }
@@ -1570,6 +1621,18 @@ function jsErr(e: unknown, code: string, loc: SegmentLoc, facet: Facet, prefix: 
   const msg = (e as Error)?.message ?? String(e)
   const line = parseLineFromStack((e as Error)?.stack ?? '')
   return new JsSandboxError(`${prefix}：${msg}`, { ...loc, facet, script: code, line })
+}
+
+/** 共享体错误标 → 错误前缀（**主线程 catch 与 evalJsInWorker 两处调用点共读这一份**——
+ *  映射抄成两份就会两路漂：worker 把 phase 随 message 带出边界后，这里按同一张表选前缀。
+ *  无标（异步完成值抛错）→ 脚本执行抛错，两路本来就同此口径。前缀串里只有「脚本超时」进
+ *  `tests/content-audit-classify.ts` 的 `CODE_ANCHORS`（按字面存活校验）；编译前缀只在该文件的
+ *  `RUNTIME_ANCHORS` 里刻意认运行时措辞，其余前缀不是锚点——改文案前先看清落哪一栏。 */
+function prefixOfPhase(phase: string | undefined): string {
+  if (phase === 'bootstrap') return '沙箱初始化失败'
+  if (phase === 'jsLib') return 'jsLib 执行失败'
+  if (phase === 'compile') return '脚本编译/同步执行失败'
+  return '脚本执行抛错'
 }
 
 function jsTimeoutErr(timeout: number, code: string, loc: SegmentLoc, facet: Facet): JsSandboxError {

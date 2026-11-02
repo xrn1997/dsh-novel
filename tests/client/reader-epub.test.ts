@@ -233,6 +233,19 @@ describe('正文内链的返回栈（窗口内状态，绝不落盘）', () => {
     expect(h.session.state.pendingJump).toMatchObject({ index: 0, anchorId: 'a1' })
   })
 
+  it('越界目标：不采点、不导航、不落盘（followLink 返回 null，返回栈原样）', async () => {
+    // 目录只有 3 章：越界下标若照走采点/导航，会压一条永远落不了的返回项、并把不存在的章写进存档。
+    const h = makeHarness()
+    await h.session.open('local:b1', 'local:b1')
+    h.port.node = { index: 0, nodeId: 'p7', offsetWithinNode: 64 }
+    const entry = h.session.followLink('local:b1', { kind: 'chapter', index: 9, anchorId: null }, 'normal')
+    expect(entry).toBeNull()
+    expect(h.session.state.returnDepth).toBe(0)
+    expect(h.session.state.pendingJump).toBeNull()
+    expect(h.saves).toEqual([])
+    expect(h.port.tops).toEqual([])
+  })
+
   it('无返回项可弹时 goBack 是空操作（不造幽灵落位、不写进度）', async () => {
     const h = makeHarness()
     await h.session.open('local:b1', 'local:b1')

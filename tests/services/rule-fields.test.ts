@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { DIALECT_MAP, NATIVE_MAP, NATIVE_TEXT_FIELDS, RULE_FIELDS, RULE_FIELD_SPECS, VACANT_RULE_FIELDS } from '../../src/services/rule-fields.js'
+import {
+  DIALECT_MAP, EXPLORE_FALLBACK_FIELDS, EXPLORE_GATE_SUBS, EXPLORE_LEGADO_SUBS, EXPLORE_NATIVE_SUBS,
+  NATIVE_MAP, NATIVE_TEXT_FIELDS, PAIR_OF, REHYDRATE_PHASE, REHYDRATE_PHASES,
+  RULE_FIELDS, RULE_FIELD_SPECS, VACANT_RULE_FIELDS, WHOLE_SET_FIELD, wholeSetEnabled,
+} from '../../src/services/rule-fields.js'
 import type { RuleFieldsOf } from '../../src/services/rule-fields.js'
+import { rawExploreFields } from '../../src/services/normalize.js'
 import type { NormalizedRules } from '../../src/services/types.js'
 
 describe('rule-field table', () => {
@@ -75,5 +80,76 @@ describe('rule-field table', () => {
       loginUrl: true,
     } satisfies Record<Exclude<keyof NormalizedRules, 'ruleExploreKinds'>, true>
     expect(Object.keys(coverage).sort()).toEqual(RULE_FIELD_SPECS.map((s) => s.model).sort())
+  })
+})
+
+describe('rule-field table: 配对 / 整套闸 / 段序三列', () => {
+  /** 测试侧名单**不派生**（派生即同义反复）：这里照抄一份期望，实现那边改一处而这里没跟才叫钉子。 */
+  const PINNED_PAIRS = {
+    header: 'headerRule',
+    ruleDetailName: 'ruleBookName', ruleDetailAuthor: 'ruleAuthor', ruleDetailCoverUrl: 'ruleCoverUrl',
+    ruleDetailIntro: 'ruleIntro', ruleDetailLastChapter: 'ruleLastChapter',
+    ruleDetailKind: 'ruleKind', ruleDetailWordCount: 'ruleWordCount',
+    ruleExploreList: 'ruleBookList', ruleExploreName: 'ruleBookName', ruleExploreAuthor: 'ruleAuthor',
+    ruleExploreBookUrl: 'ruleBookUrl', ruleExploreCoverUrl: 'ruleCoverUrl', ruleExploreIntro: 'ruleIntro',
+    ruleExploreKind: 'ruleKind', ruleExploreLastChapter: 'ruleLastChapter',
+    ruleExploreWordCount: 'ruleWordCount',
+  } as const satisfies Partial<Record<keyof NormalizedRules, keyof NormalizedRules>>
+
+  it('PAIR_OF 逐键等于钉住的字面：header 一对、详情面七对、发现面九对', () => {
+    expect(PAIR_OF).toEqual(PINNED_PAIRS)
+  })
+
+  it('配对不成链：每个目标都在表里，且目标行自身不再带 pairWith', () => {
+    const rows = new Map<string, (typeof RULE_FIELD_SPECS)[number]>(RULE_FIELD_SPECS.map((s) => [s.model, s]))
+    for (const [from, to] of Object.entries(PINNED_PAIRS) as Array<[keyof NormalizedRules, keyof NormalizedRules]>) {
+      const target = rows.get(to)
+      expect(target, `${String(from)} 的配对目标 ${String(to)} 不在表里`).toBeDefined()
+      expect('pairWith' in target!, `${String(to)} 自身还带 pairWith——配对成了链`).toBe(false)
+    }
+  })
+
+  it('整套闸只登记一行：WHOLE_SET_FIELD 与两方言子字段名（经配对目标反推）', () => {
+    const gates = RULE_FIELD_SPECS.filter((s) => 'wholeSetGate' in s && s.wholeSetGate === true)
+    expect(gates.map((s) => s.model)).toEqual(['ruleExploreList'])
+    expect(WHOLE_SET_FIELD).toBe('ruleExploreList')
+    expect(EXPLORE_GATE_SUBS).toEqual({ legado: 'bookList', native: 'list' })
+  })
+
+  it('实现派生 == 钉住字面：发现面两方言子字段九项（经 pair 目标的方言键反推）', () => {
+    expect(EXPLORE_LEGADO_SUBS).toEqual({
+      bookList: 'ruleExploreList', name: 'ruleExploreName', author: 'ruleExploreAuthor',
+      bookUrl: 'ruleExploreBookUrl', coverUrl: 'ruleExploreCoverUrl', intro: 'ruleExploreIntro',
+      kind: 'ruleExploreKind', lastChapter: 'ruleExploreLastChapter', wordCount: 'ruleExploreWordCount',
+    })
+    expect(EXPLORE_NATIVE_SUBS).toEqual({
+      list: 'ruleExploreList', name: 'ruleExploreName', author: 'ruleExploreAuthor',
+      bookUrl: 'ruleExploreBookUrl', coverUrl: 'ruleExploreCoverUrl', intro: 'ruleExploreIntro',
+      kind: 'ruleExploreKind', lastChapter: 'ruleExploreLastChapter', wordCount: 'ruleExploreWordCount',
+    })
+  })
+
+  it('EXPLORE_FALLBACK_FIELDS 九键且按表行序（次序即 exploreEpoch 指纹次序，不许漂）', () => {
+    expect([...EXPLORE_FALLBACK_FIELDS]).toEqual([
+      'ruleBookList', 'ruleBookName', 'ruleAuthor', 'ruleBookUrl', 'ruleCoverUrl',
+      'ruleIntro', 'ruleLastChapter', 'ruleKind', 'ruleWordCount',
+    ])
+  })
+
+  it('段序：REHYDRATE_PHASE 是表级段号，REHYDRATE_PHASES 按段号升序', () => {
+    expect(REHYDRATE_PHASE).toEqual({ always: 10, vacant: 20, conditional: 30, missing: 40 })
+    expect([...REHYDRATE_PHASES]).toEqual(['always', 'vacant', 'conditional', 'missing'])
+  })
+
+  it('wholeSetEnabled：非空串才算整套启用', () => {
+    expect(wholeSetEnabled('.box')).toBe(true)
+    for (const v of ['', null, undefined, 42, ['x'], { a: 1 }]) {
+      expect(wholeSetEnabled(v), `值 ${JSON.stringify(v) ?? String(v)} 不应当成套`).toBe(false)
+    }
+  })
+
+  it('rawExploreFields 的键集恰为 vacant 档 + 分类入口数组（派生真的被读口消费）', () => {
+    const got = rawExploreFields({ bookSourceName: 'A', bookSourceUrl: 'https://a', ruleContent: 'x' })!
+    expect(Object.keys(got).sort()).toEqual([...VACANT_RULE_FIELDS, 'ruleExploreKinds'].sort())
   })
 })

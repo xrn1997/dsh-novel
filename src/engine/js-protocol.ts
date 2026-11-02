@@ -1,9 +1,10 @@
 /**
  * JavaBridge 协议表：**唯一登记点**。每行 = 方法名 · sync/async · 沙箱挂载点 · 宿主实现（inline 闭包）。
- * 类型面、BOOTSTRAP 名单与宿主分派全部从表派生：
+ * 类型面、BOOTSTRAP 名单、宿主分派与 worker 路由谓词全部从表派生：
  * JavaBridge 类型用 mapped type 推导（不存在第二份手写 interface）、SANDBOX_MOUNTS 供引导脚本挂载、
- * invokeJavaMethod 按名查行分派。加一个 **sync** 方法 = 本表加一行；加一个 **async** 方法 = 一行 +
- * 一个 `bridge` 判别（壳形态 / 挂载名 / 路由探针——桥壳源码与 `g.java` 挂载由表生成）。
+ * invokeJavaMethod 按名查行分派、SYNC_WORKER_RE 由全局松散支与各 async 行的 routePattern 拼出。
+ * 加一个 **sync** 方法 = 本表加一行；加一个 **async** 方法 = 一行 +
+ * 一个 `bridge` 判别（壳形态 / 挂载名 / 路由探针 / 路由分支——桥壳源码与 `g.java` 挂载由表生成）。
  * 纪律：本文件不进 engine barrel——仅由 js-sandbox 内部引用。
  */
 import crypto from 'node:crypto'
@@ -84,6 +85,9 @@ export interface AsyncBridgeSpec {
   /** 证明该行的可达写法会被 `SYNC_WORKER_RE` 认出的脚本片段（测试逐行钉住；漏列即红——
    *  认不出时主线程抛哨兵，脚本自己的 try/catch 会把它吞成 undefined）。 */
   routeProbe: string
+  /** 本行在 `SYNC_WORKER_RE` 里的那一支（松散正则原文，由组装处拼进谓词）：必须作为**正则**
+   *  认得出本行的 routeProbe（测试逐行钉——挂空即该行写法退化成主线程撞哨兵单点兜底）。 */
+  routePattern: string
 }
 
 interface JavaMethod<N extends string, F extends HostFn> {
@@ -187,6 +191,7 @@ export const JAVA_PROTOCOL = [
     shim: 'body',
     mountAs: 'ajax',
     routeProbe: 'java.ajax("https://m.example.com")',
+    routePattern: String.raw`\.ajax\s*\(`,
   }),
   // java.connect：返回带结果对象的响应，与 ajax 只差一层壳。三点刻意取舍：
   // ① header JSON 经 parseHeaderArg 叠到源级头之后（与 post 同口径）；callTimeout 走进程级超时；
@@ -207,6 +212,7 @@ export const JAVA_PROTOCOL = [
     shim: 'connect',
     mountAs: 'connect',
     routeProbe: 'java.connect("https://m.example.com")',
+    routePattern: String.raw`java\s*\.\s*connect\s*\(`,
   }),
   // java.post：脚本以 POST 发请求、拿响应对象（`res.body()` / `res.cookies()`）。宿主侧返回数据面，
   // `.body()` 那层壳在 BOOTSTRAP 里包（跨 worker 只走 JSON）。headers 照收并叠到源级头之上
@@ -228,6 +234,7 @@ export const JAVA_PROTOCOL = [
     shim: 'response',
     mountAs: 'post',
     routeProbe: 'java.post("https://m.example.com", "a=1")',
+    routePattern: String.raw`java\s*\.\s*post\s*\(`,
   }),
   // java.get 的 HTTP 重载：上游 JsExtensions.get(url, headers) 返回 Connection.Response。
   // 单参变量 getter 仍走下面的 get 行；BOOTSTRAP 按实参个数分派（显式 undefined 仍是双参 HTTP）。
@@ -247,6 +254,7 @@ export const JAVA_PROTOCOL = [
     shim: 'response',
     mountAs: null,
     routeProbe: 'java.get("https://m.example.com", {})',
+    routePattern: String.raw`java\s*\.\s*get\s*\([^)]*,`,
   }),
   // java.net.URL.openConnection 的宿主口：跟重定向、可 GET/POST，返回原始字节。
   // 安全重开裁决：走 ctx.fetchConn（同一守门 fetcher），不给脚本开裸 socket。
@@ -266,6 +274,7 @@ export const JAVA_PROTOCOL = [
     shim: 'raw',
     mountAs: null,
     routeProbe: 'new java.net.URL("https://m.example.com").openConnection()',
+    routePattern: String.raw`openConnection\s*\(`,
   }),
   // java.getWebViewUA：本仓的 WebView 只服务 webView 源；普通请求走 HTTP 客户端，故这里给的是
   // 我们实际发出去的那条 UA（不是浏览器/WebView 内核 UA，属近似；矩阵 `h-java-webview-ua` 记差）。
@@ -298,6 +307,8 @@ export const JAVA_PROTOCOL = [
     shim: 'raw',
     mountAs: 'webView',
     routeProbe: 'java.webView("https://m.example.com")',
+    // 别名 webViewGetSource 由挂载清单登记（表里没有这个脚本拼写），其写法随本行路由
+    routePattern: String.raw`java\s*\.\s*(?:webView|webViewGetSource)\s*\(`,
   }),
   // java.head(url, headers[, timeout])：HEAD 请求、**不跟重定向**（对面 followRedirects(false)），
   // 数据面 = { url, statusCode, headers }；`.headers()` 方法壳在 BOOTSTRAP 里包（同 post，跨桥只走
@@ -319,6 +330,7 @@ export const JAVA_PROTOCOL = [
     shim: 'response',
     mountAs: 'head',
     routeProbe: 'java.head("https://m.example.com")',
+    routePattern: String.raw`java\s*\.\s*head\s*\(`,
   }),
   // ── 沙箱变量（java.get/put）─────────────────────────────────────────
   // 未设 → **空串**（变量读的收口是「本表 → 大变量表 → 空串」三级回落）。不要返回 undefined：
@@ -526,6 +538,7 @@ export const JAVA_PROTOCOL = [
     shim: 'body',
     mountAs: 'downloadFile',
     routeProbe: 'java.downloadFile("https://m.example.com/a.png")',
+    routePattern: String.raw`downloadFile\s*\(`,
   }),
   method('readTxtFile', { obj: 'java' }, () => (path: string, charset?: string): string => {
     const bytes = fileStore.get(String(path))
@@ -684,3 +697,23 @@ export function asyncRouteProbes(): { name: string; probe: string }[] {
   return JAVA_PROTOCOL.flatMap((r) =>
     r.mode === 'async' && r.bridge !== undefined ? [{ name: r.name, probe: r.bridge.routeProbe }] : [])
 }
+
+/** 路由谓词的全局松散支：认「对 java 的任意下标访问」。动态键写法（`java["ajax"]` 这类）不在
+ *  任何表行的可达写法里，只能宽认；它是无主启发，故留在表外。 */
+const GLOBAL_LOOSE = String.raw`java\s*\[`
+
+/** worker 路由谓词（evalJs 的 `useWorker` 判据）：全局松散支 + 表内 async 行的 routePattern
+ *  拼出，**没有第二份手写正则**（旧字面量副本在迁移时随等价对照删除——改表漏改它就是路由与
+ *  表行静默分叉）。**只影响性能与稳健性，不影响语义**：语义由哨兵桥给，认不出的等价写法先白跑
+ *  主线程、撞哨兵后换 worker 重跑（needsSyncBridge），两路同一口径（ADR-0005）。宽拼写
+ *  （任何对象的 `.ajax(` / `.downloadFile(` 调用）随各自的表行登记——那是那一行的可达写法家族，
+ *  不是无主启发。仍漏的只有真正间接形态（解构、with，以及首个实参里带右括号的双参 get）。
+ *  逐行可达写法由 routeProbe 钉、逐行分支由 routePattern 钉（tests/engine/js-protocol.test.ts）。 */
+export const SYNC_WORKER_RE = new RegExp(
+  [GLOBAL_LOOSE, ...JAVA_PROTOCOL.flatMap((r) =>
+    (r.mode === 'async' && r.bridge !== undefined ? [r.bridge.routePattern] : []))]
+    // 每支自成一组：routePattern 日后带顶层 `|` 也只在自家支内择一，不会与相邻支拼成一棵
+    // 新的选择树（对现表是等价变换——派生钉按 `(?:…)` 包裹后的形态断言）。
+    .map((branch) => `(?:${branch})`)
+    .join('|'),
+)

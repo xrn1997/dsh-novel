@@ -86,6 +86,18 @@ describe('explore-face：单源一次分类抓取', () => {
     expect(r.hits).toEqual([])                    // .nothing 命中 0 → 空列表（不是 miss）
   })
 
+  // 存量坏库这一格：`ruleExploreList` 是空串时，发现面规则在场也不能当整套启用——
+  // 判据是「非空串」。若按「非 null」判，列表规则拿到空串、条目整片消失，且看不出是哪个判据坏了。
+  it('ruleExploreList 为空串（坏库值）→ 闸按关闭，条目走通用搜索规则', async () => {
+    const s = source()
+    const corrupt: NovelSource = { ...s, rules: { ...s.rules, ruleExploreList: '', ruleExploreName: '.nomatch' } }
+    const f = createFetcher({ fetchImpl: async () => html(LIST_HTML) })
+    const r = await fetchKindPage(corrupt, 'xuanhuan', fakeSourceRequest(f))
+    if (!r.ok) throw new Error('坏库值应回落通用规则，不是失败形态')
+    expect(r.hits).toHaveLength(1)
+    expect(r.hits[0].title).toBe('剑起长安')
+  })
+
   it('缺 ruleFind.url → RuleMissing（结果形态，不是异常）', async () => {
     const f = createFetcher({ fetchImpl: async () => html(LIST_HTML) })
     const r = await fetchKindPage(source({ ruleFind: { kinds: [{ title: '玄幻', url: 'x' }] } }), 'x', fakeSourceRequest(f))

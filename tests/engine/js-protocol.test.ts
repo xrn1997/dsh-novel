@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { load } from 'cheerio'
-import { JAVA_PROTOCOL, SANDBOX_MOUNTS, SYNC_AJAX_SENTINEL, asyncBridgeSource, asyncRouteProbes, invokeJavaMethod } from '../../src/engine/js-protocol.js'
+import { JAVA_PROTOCOL, SANDBOX_MOUNTS, SYNC_AJAX_SENTINEL, SYNC_WORKER_RE, asyncBridgeSource, asyncRouteProbes, invokeJavaMethod } from '../../src/engine/js-protocol.js'
 import type { BridgeDeps, JavaBridge } from '../../src/engine/js-protocol.js'
-import { SYNC_WORKER_RE, createSourceSession } from '../../src/engine/js-sandbox.js'
+import { createSourceSession } from '../../src/engine/js-sandbox.js'
 import { JsSandboxError } from '../../src/engine/errors.js'
 import { engineContextOf } from '../../src/services/source-eval.js'
 import type { EngineValue, EvalContext, Facet, SegmentLoc } from '../../src/engine/types.js'
@@ -310,6 +310,38 @@ describe('async 行的能力位闸（表行 ↔ 沙箱包装 ↔ 服务层装配
   const capabilityNames = [...new Set(
     [...protocolSrc.matchAll(/d\.ctx\.([a-zA-Z]+)/g)].map((m) => m[1]),
   )]
+  // 六支松散分支的等价样本（每支 ≥2 正例 + ≥1 反例）：迁自「派生正则 vs 旧手写字面量」的
+  // 等价对照脚手架——脚手架与旧字面量副本已随裁定删除，样本并入本闸，防派生重组时
+  // 某支悄悄变宽（反例被路由）或变窄（正例脱路由）。
+  const ROUTE_SAMPLES: Array<[sample: string, routed: boolean]> = [
+    // `.ajax(` 宽拼写（认任何对象的 .ajax( 调用）
+    ['java.ajax("https://m.example.com")', true],
+    ['let r = api.ajax (url)', true],
+    ['ajax("https://m.example.com")', false],            // 无点：不路由（主线程跑，哨兵兜底）
+    // `downloadFile(` 宽拼写（与 ajax 同款的哨兵桥）
+    ['java.downloadFile("https://m.example.com/a.png")', true],
+    ['const p = downloadFile (url)', true],
+    ['downloadFile url', false],                          // 无调用括号：不路由
+    // `java[` 下标访问（动态键写法不在任何表行的可达写法里，只能宽认）
+    ['java["ajax"]("https://m.example.com")', true],
+    ["java ['post'] (u, 'a=1')", true],
+    ['java(u[0])', false],                                // java 后不是下标：不路由
+    // 直挂同步桥（connect / post / head / webView / webViewGetSource）
+    ['java.connect("https://m.example.com")', true],
+    ['java . post("https://m.example.com", "a=1")', true],
+    ['java.head(url, {"Referer": "/"})', true],
+    ['java.webView("https://m.example.com")', true],
+    ['java.webViewGetSource("https://m.example.com")', true],
+    ['java.connect', false],                              // 无调用括号：不路由
+    // 双参 get（HTTP 重载）
+    ['java.get("https://m.example.com", {})', true],
+    ['java.get (url , headers)', true],
+    ['java.get("page")', false],                          // 单参是变量读，不是 HTTP——刻意不路由
+    // openConnection
+    ['new java.net.URL("https://m.example.com").openConnection()', true],
+    ['conn = x.openConnection ()', true],
+    ['openConnection', false],                            // 无调用括号：不路由
+  ]
 
   it('bridge 只长在 async 行上（sync 行混进 bridge 会被 javaSync 名单静默收编成双挂载）', () => {
     // 表的类型只把 bridge 标成可选，挡不住「sync 行也带 bridge」：那一行会同时进 javaSync
@@ -346,6 +378,32 @@ describe('async 行的能力位闸（表行 ↔ 沙箱包装 ↔ 服务层装配
     // 别名不在表行上（表里只有宿主方法名），只能经挂载清单钉：它同样在引导层抛哨兵。
     for (const m of SANDBOX_MOUNTS.javaAsyncMounts) {
       expect(SYNC_WORKER_RE.test(`java.${m.target}("https://m.example.com")`), `${m.target} 的挂载名不会被路由`).toBe(true)
+    }
+    // ④ routePattern（拼进 SYNC_WORKER_RE 的那一支）作为**正则**必须认出本行的 routeProbe：
+    //    认不出即该支挂空，这一行的可达写法退化成「主线程撞哨兵」单点兜底。
+    //    （把 routePattern 当**样本**断言 SYNC_WORKER_RE.test(routePattern) 不成立——正则原文
+    //     含 `\s*\(` 这类转义，永远不以脚本拼写形态出现；超集语义只能在正则面验。）
+    for (const r of JAVA_PROTOCOL.filter((x) => x.mode === 'async')) {
+      expect(new RegExp(r.bridge!.routePattern).test(r.bridge!.routeProbe),
+        `${r.name} 的路由分支认不出本行写法：${r.bridge!.routePattern}`).toBe(true)
+    }
+    // ⑤ 六支松散分支的等价样本仍同判（来源见本 describe 顶部的 ROUTE_SAMPLES）
+    for (const [sample, routed] of ROUTE_SAMPLES) {
+      expect(SYNC_WORKER_RE.test(sample), `路由样本判定漂移：${sample}`).toBe(routed)
+    }
+  })
+
+  it('SYNC_WORKER_RE 由协议表派生（表外无手写分支）', () => {
+    // 谓词的家只有一处：协议表组装导出。js-sandbox 里再出现 `SYNC_WORKER_RE =` 的手写定义，
+    // 就是第二份抄本——改表漏改它，路由与表行静默分叉，只在真跑同步桥的源上炸。
+    const sandboxSrc = read('../../src/engine/js-sandbox.ts')
+    expect(sandboxSrc).not.toMatch(/SYNC_WORKER_RE\s*=/)
+    expect(sandboxSrc).toContain('SYNC_WORKER_RE')   // 消费点仍在（import 使用，不是定义）
+    // 派生面：每条 async 行的 routePattern 都是拼进最终正则的一支（行漏拼 → 该行写法不再被路由）。
+    // 断言必须带 `(?:…)` 包裹：每支自成一组，组装若退回裸拼，子串判定（toContain(routePattern)）
+    // 仍会绿——它只证「串在场」，证不了「它是一支」，pattern 里的顶层 `|` 还会与相邻支混在一起。
+    for (const r of JAVA_PROTOCOL.filter((x) => x.mode === 'async')) {
+      expect(SYNC_WORKER_RE.source, `${r.name} 的路由分支没拼进 SYNC_WORKER_RE`).toContain(`(?:${r.bridge!.routePattern})`)
     }
   })
 

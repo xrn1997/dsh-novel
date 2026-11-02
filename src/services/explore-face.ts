@@ -1,14 +1,14 @@
-import { hitFieldsOf, itemContextsOf } from './bridge.js'
+import { hitFieldsOf, hitRuleOf, listContextsOf } from './bridge.js'
 import { isNativeSource } from './normalize.js'
 import { buildSearchRequest } from './request.js'
-import { createSourceEval } from './source-eval.js'
+import { createSourceEval, DEFAULT_JS_BUDGET_MS } from './source-eval.js'
 import type { SourceRequest } from './source-request.js'
 import type { SearchHit } from '../shared/wire.js'
 import type { NovelSource } from './types.js'
 
 /**
  * 发现面（书城分类）单源一次抓取：「发一次分类页请求并取回该分类的书目」的唯一实现。
- * 与搜索面同构，差别只有两处——URL 模板与规则来源：
+ * 与搜索面同构，差别只有两处——URL 模板与规则来源档（`bridge.hitRuleOf` 的 `'explore'`）：
  * 请求组装归 `request.buildSearchRequest`（首页裁页那条语义的主人是 `request.assembleRequest`），
  * 抓取+解码归 `source-request.SourceRequest.fetchText`（限速/动态头/loginCheck 的装配与超时单点），
  * 条目装配归 `bridge.hitFieldsOf`（与聚合搜索同一份，档位与槽序的理由住那里）——
@@ -22,36 +22,11 @@ export type KindPageResult =
   | { ok: false; code: 'RuleMissing'; message: string }
   | { ok: true; hits: SearchHit[] }
 
-/** 一个源在一次分类抓取里要用的那**一整套**条目规则（键名即本模块内的位置，不另立模型字段）。 */
-interface ExploreRules {
-  list: string | null; name: string | null; author: string | null; url: string | null
-  cover: string | null; intro: string | null; last: string | null
-  kind: string | null; wordCount: string | null
-}
-
-/** 规则来源的整套切换：对面语义是「`ruleFind.ruleSearch.list` 非空就整套用它，否则整套回落通用
- *  搜索规则」，判据只看列表规则一条。**不许逐字段回落**——半套（列表用发现面的、书名用通用搜索的）
- *  会把源的意图读歪，且这种歪法在条目上表现为「标题全是另一个选择器的产物」而无人察觉。 */
-function rulesFor(source: NovelSource): ExploreRules {
-  const r = source.rules
-  return r.ruleExploreList === null
-    ? {
-      list: r.ruleBookList, name: r.ruleBookName, author: r.ruleAuthor, url: r.ruleBookUrl,
-      cover: r.ruleCoverUrl, intro: r.ruleIntro, last: r.ruleLastChapter,
-      kind: r.ruleKind, wordCount: r.ruleWordCount,
-    }
-    : {
-      list: r.ruleExploreList, name: r.ruleExploreName, author: r.ruleExploreAuthor, url: r.ruleExploreBookUrl,
-      cover: r.ruleExploreCoverUrl, intro: r.ruleExploreIntro, last: r.ruleExploreLastChapter,
-      kind: r.ruleExploreKind, wordCount: r.ruleExploreWordCount,
-    }
-}
-
 /** 发一次分类页请求并取回条目。
  *  **第几页由调用方给**（缺省第 1 页）：一轮里抓哪些页、抓几页是编排方的事——书城先摊开首页，
  *  再翻才是用户点出来的（跨源翻页的代价是「分类数 × 页数」的请求数，所以「翻」不能是默认行为）。
- *  条目装配不在本模块：一套规则加一个条目上下文怎么收成一条书目，单点在 `bridge.hitFieldsOf`
- *  （两档档位与理由也住那里）。 */
+ *  条目装配不在本模块：规则来源档、字段位与一个条目上下文怎么收成一条书目，单点在
+ *  `bridge.hitFieldsOf`（档位与理由也住那里）。 */
 export async function fetchKindPage(
   source: NovelSource, kindUrl: string, request: SourceRequest, timeoutMs?: number, jsTimeoutMs?: number,
   page = 1,
@@ -65,8 +40,9 @@ export async function fetchKindPage(
   // 一句话：**方言只决定兜底，不决定优先。**
   const sourceTemplate = source.rules.ruleExploreUrl
   const template = sourceTemplate ?? (isNativeSource(source.raw) ? null : kindUrl)
-  const R = rulesFor(source)
-  const name = R.name
+  // 书名规则按**规则来源档**取：整套启用时换发现面那一套，闸关照读通用搜索键（整档一刀切，
+  // 不逐字段回落——判据与理由住 `bridge.hitRuleOf` / `ADR-0027`）
+  const name = hitRuleOf(source, 'explore', 'ruleBookName')
   // 书名规则缺失按**规则缺失**回报，而不是产出一串没有标题的书目：对面在这种源上会静默给 0 本，
   // 本仓的口径是「空结果不得冒充失败」，反过来让「读不出任何东西」冒充成一次正常空分类同样不许。
   if (template === null || name === null) {
@@ -78,8 +54,9 @@ export async function fetchKindPage(
     ].filter((x): x is string => x !== null)
     return { ok: false, code: 'RuleMissing', message: `发现规则缺失：缺 ${missing.join('、')}` }
   }
+  // 预算无条件交（构造器必填）：调用方没给就落服务缺省
   const subEval = createSourceEval(request.fetcherFor(source), source,
-    jsTimeoutMs === undefined ? undefined : { jsTimeoutMs }).subEval()
+    { jsTimeoutMs: jsTimeoutMs ?? DEFAULT_JS_BUDGET_MS }).subEval()
   // 裁页跟着「本次用的是哪份模板」走，不跟着方言走：源级模板带的就是原生分页语义（首页不裁的代价见
   // `request.assembleRequest`）；分类自带地址那一份怎么翻页是源自己写死的，替它裁等于改它的语义。
   // 变量恒给 kind 与 page 两个：模板里没写的占位不参与替换（判据见 `engine/template.isPlaceholder`），
@@ -90,16 +67,13 @@ export async function fetchKindPage(
     timeoutMs === undefined ? undefined : { timeoutMs })
   // 列表规则缺失（发现面整套覆盖里 list 恒非空，故只可能来自回落那一侧）：空规则求值即空列表，
   // 是「这个分类没条目」不是「规则没了」——与搜索面同一条口径，不折叠成失败。
-  if (R.list === null) return { ok: true, hits: [] }
+  const list = hitRuleOf(source, 'explore', 'ruleBookList')
+  if (list === null) return { ok: true, hits: [] }
   // 求值与相对链接基准 = 落地地址（浏览器语义，与搜索/目录/正文面同口径）
-  const contexts = itemContextsOf(await subEval(R.list, { html: text, baseUrl: landedUrl }, 'search', 'list'), landedUrl)
+  const contexts = await listContextsOf(subEval, list, { html: text, baseUrl: landedUrl }, 'search')
   const hits: SearchHit[] = []
   for (const ctx of contexts) {
-    const hit = await hitFieldsOf(
-      { name, author: R.author, url: R.url, cover: R.cover, intro: R.intro,
-        last: R.last, kind: R.kind, wordCount: R.wordCount },
-      subEval, ctx, landedUrl,
-    )
+    const hit = await hitFieldsOf(source, 'explore', subEval, ctx, landedUrl)
     if (hit !== null) hits.push(hit)
   }
   return { ok: true, hits }

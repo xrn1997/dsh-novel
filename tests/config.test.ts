@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { Config, resolveConfig } from '../src/config.js'
+import { Config, resolveConfig, VOLATILE_CONSUMERS } from '../src/config.js'
 import { DEFAULT_CACHE_MAX_BYTES } from '../src/services/cache.js'
 import { DEFAULT_EXPORT_DELAY_MS } from '../src/services/export.js'
 import { DEFAULT_TIMEOUT_MS } from '../src/services/fetcher.js'
 import { DEFAULT_MAX_IMPORT_BYTES } from '../src/services/localbooks.js'
-import { DEFAULT_JS_BUDGET_MS, DEFAULT_SEARCH_PARALLEL } from '../src/services/reading.js'
+import { DEFAULT_SEARCH_PARALLEL } from '../src/services/reading.js'
+import { DEFAULT_JS_BUDGET_MS } from '../src/services/source-eval.js'
 
 function ref<T>(value: T) {
   let current = value
@@ -38,6 +39,17 @@ describe('配置收缝', () => {
       cacheMaxBytes: DEFAULT_CACHE_MAX_BYTES,
       exportDelayMs: DEFAULT_EXPORT_DELAY_MS,
       localImportMaxBytes: DEFAULT_MAX_IMPORT_BYTES,
+    })
+  })
+  it('volatile 字段的消费桶恰为现状地图（service-live 五格 / composition-root 两格）', () => {
+    expect(VOLATILE_CONSUMERS).toEqual({
+      searchTimeoutMs: 'service-live',
+      searchParallel: 'service-live',
+      jsTimeoutMs: 'service-live',
+      cacheMaxBytes: 'service-live',
+      localImportMaxBytes: 'service-live',
+      exportDelayMs: 'composition-root',
+      proxyUrl: 'composition-root',
     })
   })
   it('值域非法在加载期响亮失败，不静默夹紧（searchParallel ≤ 0 批循环 i+=0 会永久挂起）', () => {

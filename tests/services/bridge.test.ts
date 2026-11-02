@@ -1,17 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { evaluate } from '../../src/engine/index.js'
+import { evaluate, RuleEvalError } from '../../src/engine/index.js'
 import type { EngineValue } from '../../src/engine/index.js'
 import type { SubRuleEval } from '../../src/services/bridge.js'
 import {
   detailFieldsOf, detailReadOf, extractItems, firstUrlValue, firstValue,
-  formatWordCount, hitFieldsOf, kindFieldOf, listValue, wordCountFieldOf,
+  formatWordCount, hitFieldsOf, hitRuleOf, kindFieldOf, listValue, wordCountFieldOf,
 } from '../../src/services/bridge.js'
+import { EXPLORE_OF_GENERIC, HIT_FIELD_MODELS } from '../../src/services/rule-fields.js'
 import { CookieJar } from '../../src/services/cookies.js'
 import { engineFetch } from '../../src/services/engine-fetch.js'
 import type { Fetcher } from '../../src/services/fetcher.js'
 import { normalizeSource } from '../../src/services/normalize.js'
 import { tocUrlOf } from '../../src/services/online-reading.js'
-import { createSourceEval, engineContextOf } from '../../src/services/source-eval.js'
+import { createSourceEval, DEFAULT_JS_BUDGET_MS, engineContextOf } from '../../src/services/source-eval.js'
 import type { NovelSource } from '../../src/services/types.js'
 import { absUrl, stripUrlOption } from '../../src/services/url.js'
 
@@ -223,20 +224,39 @@ describe('hitFieldsOf（一条命中的装配单点）', () => {
       return v ?? { kind: 'miss', detail: `未登记的规则：${rule}` }
     }
   const ctx = { html: '<li>x</li>', baseUrl: 'https://b.example/list/1' }
-  const rules = { name: 'N', author: 'A', url: 'U', cover: 'C', intro: 'I', last: 'L', kind: 'K', wordCount: 'W' }
   const val = (text: string): EngineValue => ({ kind: 'value', text })
+  /** 本文件局部桩源：`ruleSearch` 八子字段各给一条可记账的规则串（N/A/U/C/I/L/K/W），
+   *  发现面覆盖用 `ruleExplore` 叠加（同一批子字段换另一组串）。 */
+  const sourceOf = (over: Record<string, unknown> = {}): NovelSource => {
+    const n = normalizeSource({
+      bookSourceName: '装配源', bookSourceUrl: 'https://b.example',
+      ruleSearch: {
+        bookList: '.item', name: 'N', author: 'A', bookUrl: 'U',
+        coverUrl: 'C', intro: 'I', lastChapter: 'L', kind: 'K', wordCount: 'W',
+      },
+      ruleContent: '@css:#c@text',
+      ...over,
+    })
+    if (!n.ok) throw new Error(`桩源应能规范化：${JSON.stringify(n.missing)}`)
+    return { id: 'asm-src', status: 'unverified', importedAt: 0, ...n.source! }
+  }
+  const LANDED = 'https://b.example/list/1'
 
   it('书名 Miss 或去空白后为空 → null（这一条不成书，不产出空标题书目冒充命中）', async () => {
-    expect(await hitFieldsOf(rules, evalOf({}), ctx, 'https://b.example/list/1')).toBeNull()
-    const blank = evalOf({ N: val('   ') })
-    expect(await hitFieldsOf(rules, blank, ctx, 'https://b.example/list/1')).toBeNull()
+    const s = sourceOf()
+    expect(await hitFieldsOf(s, 'search', evalOf({}), ctx, LANDED)).toBeNull()
+    expect(await hitFieldsOf(s, 'search', evalOf({ N: val('   ') }), ctx, LANDED)).toBeNull()
   })
 
   it('坏规则只丢该字段：辅助五项各自炸，书目照收', async () => {
     const hit = await hitFieldsOf(
-      rules,
-      evalOf({ N: val('甲书'), A: val('作者'), U: val('/book/1'), I: new Error('坏简介规则'), L: new Error('坏章名规则'), K: new Error('坏分类规则'), W: new Error('坏字数规则') }),
-      ctx, 'https://b.example/list/1',
+      sourceOf(), 'search',
+      evalOf({
+        N: val('甲书'), A: val('作者'), U: val('/book/1'),
+        C: new Error('坏封面规则'), I: new Error('坏简介规则'), L: new Error('坏章名规则'),
+        K: new Error('坏分类规则'), W: new Error('坏字数规则'),
+      }),
+      ctx, LANDED,
     )
     expect(hit).not.toBeNull()
     expect(hit!.title).toBe('甲书')
@@ -245,13 +265,16 @@ describe('hitFieldsOf（一条命中的装配单点）', () => {
   })
 
   it('作者与书地址是裸奔项：读不出来抛穿，归类由调用方决定（装配层不自立第二套吞错口径）', async () => {
-    await expect(hitFieldsOf(rules, evalOf({ N: val('甲'), A: new Error('坏作者') }), ctx, 'https://b.example/'))
+    const s = sourceOf()
+    await expect(hitFieldsOf(s, 'search', evalOf({ N: val('甲'), A: new Error('坏作者') }), ctx, LANDED))
       .rejects.toThrow('坏作者')
+    await expect(hitFieldsOf(s, 'search', evalOf({ N: val('甲'), U: new Error('坏书地址') }), ctx, LANDED))
+      .rejects.toThrow('坏书地址')
   })
 
   it('书地址保留 `,{option}` 后缀，封面按落地地址绝对化（URL 即请求规格）', async () => {
     const hit = await hitFieldsOf(
-      rules,
+      sourceOf(), 'search',
       evalOf({ N: val('甲'), U: val('/book/1,{"method":"POST"}'), C: val('/cover.jpg') }),
       ctx, 'https://b.example/search?q=x',
     )
@@ -261,7 +284,7 @@ describe('hitFieldsOf（一条命中的装配单点）', () => {
 
   it('简介走搜索面口径：渲染指令前缀不保留；字数在解析层就格式化', async () => {
     const hit = await hitFieldsOf(
-      rules,
+      sourceOf(), 'search',
       evalOf({ N: val('甲'), I: val('<md>正文简介</md>'), W: val('12345') }),
       ctx, 'https://b.example/',
     )
@@ -269,16 +292,105 @@ describe('hitFieldsOf（一条命中的装配单点）', () => {
     expect(hit!.wordCount).toBe('1.2万字')
   })
 
-  it('每一槽传的面恒为 search（面不进 interface，只进错误定位）', async () => {
-    const facets: string[] = []
-    const rec: SubRuleEval = async (rule, _ctx, facet) => {
-      facets.push(facet)
+  it('每一槽传的面恒为 search、用途恒为 value（面与用途都在门内，调用方不传）', async () => {
+    const seen: Array<{ rule: string; facet: string; usage: string }> = []
+    const rec: SubRuleEval = async (rule, _ctx, facet, usage) => {
+      seen.push({ rule, facet, usage: usage ?? '(缺省)' })
       return rule === 'N' ? val('甲') : { kind: 'miss', detail: rule }
     }
-    const hit = await hitFieldsOf(rules, rec, ctx, 'https://b.example/')
+    const hit = await hitFieldsOf(sourceOf(), 'search', rec, ctx, LANDED)
     expect(hit).not.toBeNull()
-    expect(facets).toEqual(Array.from({ length: facets.length }, () => 'search'))
-    expect(facets).toHaveLength(8)
+    expect(seen.map((c) => c.rule)).toEqual(['N', 'A', 'U', 'C', 'I', 'L', 'K', 'W'])
+    expect(seen.every((c) => c.facet === 'search')).toBe(true)
+    expect(seen.every((c) => c.usage === 'value')).toBe(true)
+  })
+
+  it('门内缺书名规则 → RuleEvalError（调用方已在外层按 RuleMissing 拦，防御合同不折成空结果）', async () => {
+    const noGenericName = sourceOf({ ruleSearch: { bookList: '.item', author: 'A' } })
+    await expect(hitFieldsOf(noGenericName, 'search', evalOf({}), ctx, LANDED))
+      .rejects.toBeInstanceOf(RuleEvalError)
+    // 闸开时整档换发现面那一套：发现面缺书名规则同样当场抛，不悄悄回落通用书名
+    const noExploreName = sourceOf({ ruleExplore: { bookList: '.item' } })
+    await expect(hitFieldsOf(noExploreName, 'explore', evalOf({}), ctx, LANDED))
+      .rejects.toBeInstanceOf(RuleEvalError)
+  })
+
+  /** 规则来源档：'search' 恒读通用搜索键；'explore' 只在发现面整套启用（闸行非空）时整套换到
+   *  发现面键，闸关照读通用键——整档一刀切，不逐字段回落（ADR-0027）。 */
+  describe('规则来源档（hitRuleOf）', () => {
+    const exploreSource = (): NovelSource => sourceOf({
+      ruleExplore: {
+        bookList: 'EL', name: 'EN', author: 'EA', bookUrl: 'EU',
+        coverUrl: 'EC', intro: 'EI', lastChapter: 'ELC', kind: 'EK', wordCount: 'EW',
+      },
+    })
+
+    it('字段位与整套映射都由规则字段表派生（八槽 + ruleBookList）', () => {
+      expect(HIT_FIELD_MODELS).toEqual([
+        'ruleBookName', 'ruleAuthor', 'ruleBookUrl', 'ruleCoverUrl',
+        'ruleIntro', 'ruleLastChapter', 'ruleKind', 'ruleWordCount',
+      ])
+      expect(EXPLORE_OF_GENERIC).toEqual({
+        ruleBookList: 'ruleExploreList',
+        ruleBookName: 'ruleExploreName', ruleAuthor: 'ruleExploreAuthor',
+        ruleBookUrl: 'ruleExploreBookUrl', ruleCoverUrl: 'ruleExploreCoverUrl',
+        ruleIntro: 'ruleExploreIntro', ruleLastChapter: 'ruleExploreLastChapter',
+        ruleKind: 'ruleExploreKind', ruleWordCount: 'ruleExploreWordCount',
+      })
+    })
+
+    it("'search' 档恒用通用搜索键（发现面整套启用也不换）", () => {
+      const s = exploreSource()
+      expect(hitRuleOf(s, 'search', 'ruleBookList')).toBe('.item')
+      expect(hitRuleOf(s, 'search', 'ruleBookName')).toBe('N')
+      expect(hitRuleOf(s, 'search', 'ruleAuthor')).toBe('A')
+    })
+
+    it("'explore' 档：闸开 → 整套换成发现面那一套（含列表）", () => {
+      const s = exploreSource()
+      expect(hitRuleOf(s, 'explore', 'ruleBookList')).toBe('EL')
+      expect(hitRuleOf(s, 'explore', 'ruleBookName')).toBe('EN')
+      expect(hitRuleOf(s, 'explore', 'ruleAuthor')).toBe('EA')
+      expect(hitRuleOf(s, 'explore', 'ruleBookUrl')).toBe('EU')
+      expect(hitRuleOf(s, 'explore', 'ruleCoverUrl')).toBe('EC')
+      expect(hitRuleOf(s, 'explore', 'ruleIntro')).toBe('EI')
+      expect(hitRuleOf(s, 'explore', 'ruleLastChapter')).toBe('ELC')
+      expect(hitRuleOf(s, 'explore', 'ruleKind')).toBe('EK')
+      expect(hitRuleOf(s, 'explore', 'ruleWordCount')).toBe('EW')
+    })
+
+    it("'explore' 档：闸关 → 整档回通用搜索键", () => {
+      const s = sourceOf()
+      expect(hitRuleOf(s, 'explore', 'ruleBookList')).toBe('.item')
+      expect(hitRuleOf(s, 'explore', 'ruleBookName')).toBe('N')
+      expect(hitRuleOf(s, 'explore', 'ruleAuthor')).toBe('A')
+    })
+
+    it("'explore' 档：闸开但发现面某一槽缺席 → null，不回落通用键（反逐字段回落钉子）", () => {
+      // 整套启用后，某一格缺席必须读成「发现面没这条」，不能悄悄回读通用键：逐字段回落会让
+      // 「只写了一半发现面规则」的源在半套语义下拼书目，而对面那条链接用的是整套（ADR-0027）
+      const s = sourceOf({ ruleExplore: { bookList: 'EL', name: 'EN' } })
+      expect(s.rules.ruleAuthor).toBe('A')      // 通用键在场：回落若发生，这里会读到它
+      expect(hitRuleOf(s, 'explore', 'ruleBookName')).toBe('EN')   // 闸确实开着、发现面确实在读
+      expect(hitRuleOf(s, 'explore', 'ruleAuthor')).toBeNull()
+    })
+
+    it('hitFieldsOf 按档取规则串：假求值器按规则串记账', async () => {
+      const s = exploreSource()
+      const explore = await hitFieldsOf(
+        s, 'explore',
+        evalOf({ EN: val('发现书名'), EA: val('发现作者'), EU: val('/eb/1'), K: val('不该用到'), N: val('不该用到') }),
+        ctx, LANDED,
+      )
+      expect(explore).toMatchObject({ title: '发现书名', author: '发现作者', url: 'https://b.example/eb/1' })
+      // 同一份源换 'search' 档：读回通用那一套（两条链路的规则串互不串门）
+      const generic = await hitFieldsOf(
+        s, 'search',
+        evalOf({ N: val('通用书名'), A: val('通用作者'), U: val('/gb/1') }),
+        ctx, LANDED,
+      )
+      expect(generic).toMatchObject({ title: '通用书名', author: '通用作者', url: 'https://b.example/gb/1' })
+    })
   })
 })
 
@@ -306,7 +418,7 @@ describe('detailReadOf（详情 init 单次求值）', () => {
   // 本用例只求规则、不发请求：真 Fetcher 的 fetchPage 一旦被调用就是规则形态写错了
   const fetcher: Fetcher = { fetchPage: async () => { throw new Error('规则求值不该发请求') } }
   const counting = (seen: string[], src: NovelSource = source): SubRuleEval => {
-    const real = createSourceEval(fetcher, src).subEval()
+    const real = createSourceEval(fetcher, src, { jsTimeoutMs: DEFAULT_JS_BUDGET_MS }).subEval()
     return (rule, ctx, facet, usage) => {
       seen.push(rule)
       return real(rule, ctx, facet, usage)

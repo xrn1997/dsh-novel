@@ -12,8 +12,7 @@ import { navigate, prefsStore, setPref, useStore } from '../store.js'
 import { FONT_STEPS, LINE_HEIGHTS, MEASURES, PAPER_PRESETS } from '../prefs-ui.js'
 import { ReaderScene } from '../reader-scene.js'
 import { ReaderSession } from '../reader-session.js'
-import type { ReaderPort, VisibleNode } from '../reader-session.js'
-import { escOwner, maskFor } from '../reader-surfaces.js'
+import type { ReaderPort } from '../reader-session.js'
 import { nextChapterIndex } from '../reader-load.js'
 import { createReaderGeometry } from '../reader-geometry.js'
 import { findScrollport } from '../scrollport.js'
@@ -32,7 +31,8 @@ import type { BookNavigation, ChapterContent, LinkRole, LocalImportWarning, Read
  *  面板嵌在 sticky 工具栏里，而 sticky + z-index 的工具栏**自成 stacking context**——面板自己的
  *  z-index 只在工具栏内部有效。工具栏若 ≤ 遮罩，透明遮罩反压整层：面板看得见但点不了（「Aa 能
  *  弹出但点不了」）。守卫见 tests/client/reader-ctrl-z.test.ts；目录抽屉同用 panel 值
- *  （哪一面带遮罩由 `reader-surfaces.maskFor` 判：只有 Aa 与导出面板要「点外面关掉它」）。 */
+ *  （哪一面带遮罩由阅读场景的 `mask` 投影给，判据仍住 `reader-surfaces`：只有 Aa 与导出面板
+ *  要「点外面关掉它」）。 */
 export const CTRL_Z = { toolbar: 12, mask: 10, panel: 11 } as const
 
 /** 阅读控制器面板：挂 sticky 工具栏内（定位与滚动锚在工具栏上；z 序见 CTRL_Z），点遮罩关闭。
@@ -272,7 +272,11 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     chapters: () => chapterRefs.current,
   }), [])
 
-  /** 会话依赖束：网络 + 帧调度（rAF 双帧 = 等布局落定再测量）；网络走注入 deps。
+  /** 刷新滚动容器缓存（内容变化/视口变化时） */
+  const refreshPort = useCallback((): void => { portRef.current = findScrollport(bodyRef.current) }, [])
+
+  /** 会话依赖束：网络 + 帧调度（rAF 双帧 = 等布局落定再测量；视口喂入的合帧状态机住会话，
+   *  帧调度与滚动容器重取经 `viewport` 注入）；网络走注入 deps。
    *  目录走 navigation 读面（线性 chapters + 展示树 items 同一份响应），正文一律 ChapterContent。
    *  `t` 只进构造：会话的错误快照在生成时定语言（与 job store 同一条已知限制），
    *  语言切换不重开会话——重开会丢目录与阅读位置，代价远大于旧错误条仍说旧语言。 */
@@ -293,9 +297,15 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
         bodies.shelfPatch({ totalChapters: total })).catch(() => undefined)
     },
     afterFrames: (cb) => { requestAnimationFrame(() => requestAnimationFrame(cb)) },
+    // 视口喂入的帧调度缝：视图只给 rAF 与滚动容器重取，合帧/布局标记合并/帧取消都归会话
+    viewport: {
+      scheduleFrame: (cb) => requestAnimationFrame(cb),
+      cancelFrame: (h) => cancelAnimationFrame(h),
+      refreshPort,
+    },
     // bookKey 必须留在这格：saveProgress 与 saveTotalChapters 两枚闭包捕的就是它，摘掉会让进度
     // 一路写给第一本书的地址。sourceId 与 title 不在本工厂里被读——换源走下面那条 open() 的 effect。
-  }, readerPort, deps.saveDebounceMs, t), [readerPort, deps, bookKey, t])
+  }, readerPort, deps.saveDebounceMs, t), [readerPort, deps, bookKey, t, refreshPort])
 
   // 第三参 = getServerSnapshot：renderToString（smoke/SSR）必需，缺了直接抛
   const st = useSyncExternalStore(session.subscribe, () => session.state, () => session.state)
@@ -306,13 +316,11 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
    *  视图只持它的投影与命令，外加一份导出范围草稿——缺省/档位/校验归 `export-run` 的
    *  draftOf / applyPreset / validRangeOf，这里只持值并转发编辑；章数不进草稿，调用时现读目录。 */
   const [expDraft, setExpDraft] = useState<ExportDraft>(() => draftOf(0))
-  /** 目录总章数：场景只在「加入书架」那一刻读一次。目录未到 = 不知道（null），
-   *  不许落成 0——0 会被写成架位上的真读数，并挡住会话的幂等补数。 */
-  const tocLenRef = useRef<number | null>(null)
-  useEffect(() => { tocLenRef.current = toc?.length ?? null }, [toc])
   const scene = useMemo(() => new ReaderScene({
     session, sourceId, bookKey, title,
-    tocLength: () => tocLenRef.current,
+    // 目录总章数现读会话状态（场景只在「加入书架」那一刻取一次）：目录未到 = 不知道（null），
+    // 口径见 ReaderSceneDeps 的 tocLength。
+    tocLength: () => session.state.toc?.length ?? null,
     navigate,
     addSeat: async (input) => {
       const outcome = await addShelfSeat(input, deps)
@@ -333,19 +341,17 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
    *  入口只在**真有告警**时出现（正常无警告不新增干扰），面板只展示已取到的清单。 */
   const [importNotes, setImportNotes] = useState<LocalImportWarning[] | null>(null)
   const drawerRef = useRef<HTMLDivElement | null>(null)
-  /** 排版变化前的可见节点采点（字号/行距/栏宽变化 → 复位用） */
-  const visibleRef = useRef<VisibleNode | null>(null)
   /** 目录当前项：会话按「当前章内最近的已登记导航锚点」裁决，视图只负责在被问到时取一次 */
   const [navActive, setNavActive] = useState<string | null>(null)
-  // 浮层共用一条 Esc：归属由 `escOwner` 裁——模态（入架一问）在场时浮层这条不装，Esc 只归
-  // `views/dialog.tsx` 的模态契约（收回那一问走场景的 `dismissAsk`）。`askShelf` 必须在依赖里，
-  // 否则模态上场时这条监听撤不下来（一次 Esc 会既关模态又收浮层）。归属裁决本身仍归场景命令。
+  // 浮层共用一条 Esc：归属读场景的 `escOwner` 投影（模态在场时它是 'modal'，这条监听不装——
+  // Esc 只归 `views/dialog.tsx` 的模态契约，收回那一问走场景的 `dismissAsk`）。`escOwner` 必须在
+  // 依赖里，否则模态上场时这条监听撤不下来（一次 Esc 会既关模态又收浮层）。判据仍住 `reader-surfaces`。
   useEffect(() => {
-    if (escOwner(sceneState.surface, sceneState.askShelf) !== 'surface') return
+    if (sceneState.escOwner !== 'surface') return
     const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') scene.handleEsc() }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [scene, sceneState.surface, sceneState.askShelf])
+  }, [scene, sceneState.escOwner])
   /** 目录高亮：只在抽屉开着时取（一次 DOM 测量，不在滚动路径上）；只在**跨章**与换书时重算
    *  （`currentChapter` 变才醒）——同章内滚动是每帧的量，不值得为一条 aria-current 按帧唤醒。 */
   useEffect(() => {
@@ -393,9 +399,6 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   }, [deps, sourceId, bookKey])
   const hasImportNotes = importNotes !== null && importNotes.length > 0
 
-  /** 刷新滚动容器缓存（内容变化/视口变化时） */
-  const refreshPort = useCallback((): void => { portRef.current = findScrollport(bodyRef.current) }, [])
-
   // 进入：开会话（目录→恢复→懒加载）；卸载：关会话（清防抖定时器）
   useEffect(() => {
     chapterRefs.current = []
@@ -411,61 +414,36 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chapters, st.pendingJump])
 
-  // 视口变化：capture 阶段收「任意容器」的 scroll（scroll 不冒泡，但捕获阶段会经过 document——
-  // 滚动容器（.novel-main 或更外层）的滚动因此都收得到）；rAF 合帧。滚动只读锚点缓存，
-  // 只有窗口 resize 与内容高度变化（图片解码完成等，走 ResizeObserver）才标「布局变了」——
-  // 两类来源共用这一条 rAF：同一帧里各自排一次会重复采点、重复落一笔进度。
+  // 视口事件的监听安装：capture 阶段收「任意容器」的 scroll（scroll 不冒泡，但捕获阶段会经过
+  // document——滚动容器（.novel-main 或更外层）的滚动因此都收得到）。合帧、布局标记合并与帧调度
+  // 归会话的 `feedViewport`；这里只装监听、换源时重装并再补一次初始喂入（sourceId 是重装版本键，
+  // 与 open() 的换书键同一把），挂起帧由 `session.dispose()` 取消。
   useEffect(() => {
-    let raf = 0
-    let pendingLayout = false
-    const schedule = (layoutChanged: boolean): void => {
-      pendingLayout = pendingLayout || layoutChanged
-      if (raf !== 0) return
-      raf = requestAnimationFrame(() => {
-        raf = 0
-        const changed = pendingLayout
-        pendingLayout = false
-        refreshPort()
-        session.handleViewportChange(sourceId, { layoutChanged: changed })
-      })
-    }
-    const onScroll = (): void => schedule(false)
-    const onResize = (): void => schedule(true)
+    const onScroll = (): void => session.feedViewport(false)
+    const onResize = (): void => session.feedViewport(true)
     document.addEventListener('scroll', onScroll, { capture: true, passive: true })
     window.addEventListener('resize', onResize)
-    // 内容高度变化不经过 window resize；观察到就并入上面那条合帧，不再另起一条 rAF
+    // 内容高度变化不经过 window resize；观察到就按「布局变了」并入会话的同一条合帧
     const el = bodyRef.current
     let ro: ResizeObserver | null = null
     if (el !== null && typeof ResizeObserver !== 'undefined') {
-      ro = new ResizeObserver(() => { schedule(true) })
+      ro = new ResizeObserver(() => { session.feedViewport(true) })
       ro.observe(el)
     }
-    schedule(false)
+    session.feedViewport()
     return () => {
       document.removeEventListener('scroll', onScroll, { capture: true })
       window.removeEventListener('resize', onResize)
       ro?.disconnect()
-      if (raf !== 0) cancelAnimationFrame(raf)
     }
-  }, [session, sourceId, refreshPort])
+  }, [session, sourceId])
 
-  /** 排版变化前的采点：prefsStore 的订阅者在 `setPref` 的同步调用栈里执行——那一刻 React 还没重渲染、
-   *  DOM 还是旧排版，这是唯一能拿到「变化前位置」的时刻（任何 effect 都在新排版落定之后才跑）。 */
-  useEffect(() => prefsStore.subscribe(() => { visibleRef.current = readerPort.currentNode() }), [readerPort])
-
-  /** 字号/行距/栏宽变化 → 重排：把「变化前视口顶所在的那个节点」拉回同一视口相对位置。
-   *  插图框已按可信宽高预留（ChapterBody），所以这里不必等图片下载完；这里也不轮询图片。
-   *  自限：effect 只依赖三个排版量、自己不写 prefs，所以不可能自我触发成重定位环。
-   *  位置提交仍归会话——复位后喂一次视口读数，由会话按真实读数修正比例（此处不写进度）。 */
+  /** 字号/行距/栏宽变化 → 排版复位：触发仍归视图（只有提交后的 effect 知道新排版已落定），
+   *  采点时刻（`setPref` 同步栈）、复位算式与 miss/重采分支归会话的 `applyTypesetRelocation`。
+   *  自限：effect 只依赖三个排版量、自己不写 prefs，所以不可能自我触发成重定位环。 */
   useEffect(() => {
-    const snap = visibleRef.current
-    if (snap === null) return
-    const off = readerPort.targetOffset(snap.index, snap.nodeId)
-    if (off === null) return
-    readerPort.setScrollTop(readerPort.scrollTop() + off + snap.offsetWithinNode)
-    visibleRef.current = readerPort.currentNode()        // 复位后重采：连调两次排版也各有正确锚
-    session.handleViewportChange(sourceId, { layoutChanged: true })
-  }, [prefs.fontSize, prefs.lineHeight, prefs.measure, readerPort, session, sourceId])
+    session.applyTypesetRelocation()
+  }, [prefs.fontSize, prefs.lineHeight, prefs.measure, session])
 
   const shownError = error ?? exportState.error
   /** 纸与墨：条底、条上控件、进度槽全由这两个值槽派生（规则住样式层，行内只给值）。
@@ -474,8 +452,9 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   return (
     <div data-novel-view="reader" className="novel-rdr" style={paper}>
       {/* 偏好/导出面板遮罩：挂 reader 根容器盖满整个阅读区——只盖工具栏条时点正文关不掉面板；
-          哪些面带遮罩由 `maskFor` 说了算（目录/注释/导入说明自带收场的钮，不借遮罩顺手关）。 */}
-      {maskFor(sceneState.surface) && (
+          遮罩在不在场读阅读场景的 `mask` 投影（判据仍住 `reader-surfaces`：目录/注释/导入说明
+          自带收场的钮，不借遮罩顺手关）。 */}
+      {sceneState.mask && (
         <div data-novel-ctrl-mask onClick={closeCurrent}
           style={{ position: 'absolute', inset: 0, zIndex: CTRL_Z.mask }} />
       )}

@@ -3,7 +3,7 @@ import path from 'node:path'
 import type { NovelSource, SourceAuth, SourceStatus } from './types.js'
 import type { NormalizeResult } from './normalize.js'
 import { rehydrateStoredSource } from './normalize.js'
-import { createDebouncedWriter, readJson } from './storage.js'
+import { createDebouncedWriter, PERSIST_WINDOW_MS, readJson } from './storage.js'
 import { log } from './log.js'
 
 /**
@@ -30,8 +30,6 @@ export interface SourceEdit {
  *  （「每 20 条 persist 一次」的既有决策——从任务运行器搬进注册表，调用方不再知道粒度存在）。
  *  export 只为测试能按它把第 N 次变更对齐到阈值那一格；生产调用方一律不认识这个数。 */
 export const PERSIST_EVERY = 20
-/** 尾沿防抖窗口：阈值内的零散变更合并为一次写（shelf 进度同款 100ms 口径） */
-const PERSIST_WINDOW_MS = 100
 
 /**
  * 书源注册表：加载 / 变更（edit 原子入口）/ 只读投影 / 合并落盘。

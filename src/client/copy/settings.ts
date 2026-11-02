@@ -24,7 +24,7 @@ export const SETTINGS_ZH = {
   'config.unit.sources.one': '个源',
   'config.unit.bytes': '字节',
   'config.unit.bytes.one': '字节',
-  // 六个数值位认不出数字时是同一句话——同一事实只住一个键。
+  // 各数值位认不出数字时是同一句话——同一事实只住一个键。
   'config.invalid.number': '请填数字',
   'config.field.searchTimeoutMs.label': '单源搜索超时',
   'config.field.searchTimeoutMs.meaning': '一次聚合搜索里，单个书源等多久就放弃。整次搜索的耗时由它与并发源数一起决定。',

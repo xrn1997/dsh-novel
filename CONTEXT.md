@@ -26,8 +26,8 @@ _唯一实现_: `services/normalize.ts`
 _Avoid_: 格式、模板
 
 **规则字段表（rule-field table）**:
-书源规则字段的登记处：一个模型键一行，写明它在两方言里的容器与子字段路径（发现面条目字段没有路径列，见下）、Native 隐式终端标记与存量收敛的覆盖模式。通用容器字段的导入循环名单、两方言通用展平映射、Native 隐式终端清单与存量重推的档位都从它派生；发现面条目字段（`ruleExplore*`）是边界——`ruleExplore` / Native `ruleFind` 的整套切换仍归 `normalize` 的显式分支，表只为它们登记模型键、隐式终端与覆盖模式。
-_唯一实现_: `services/rule-fields.ts` 的 `RULE_FIELD_SPECS`（派生 `RULE_FIELDS` / `DIALECT_MAP` / `NATIVE_MAP` / `NATIVE_TEXT_FIELDS`；裁决见 `ADR-0044`）
+书源规则字段的登记处：一个模型键一行，写明它在两方言里的容器与子字段路径（发现面条目字段没有路径列，见下）、Native 隐式终端标记、存量收敛的覆盖模式，以及两列行级登记——同一事实的另一键（`pairWith`：header ↔ headerRule、详情面与发现面 → 通用搜索面）与发现面整套启用的闸（`wholeSetGate`，只有 `ruleExploreList` 一行）；存量收敛的段序是表级映射（`REHYDRATE_PHASE`），不逐行重复。通用容器字段的导入循环名单、两方言通用展平映射、Native 隐式终端清单、配对索引、发现面两方言子字段名（经配对目标的方言列反推）、回落九键与存量重推的档位及段序都从它派生；发现面的实现侧名单（legado 子字段映射、Native 条目清单、`ExploreField` 类型、`vacant` 档字符串键清单、发现面指纹两组字段）也一并收编，测试侧名单刻意独立写死。发现面条目字段（`ruleExplore*`）是边界——`ruleExplore` / Native `ruleFind` 的整套落位与展平仍归 `normalize` 的显式分支，条目装配侧的整套切换归 `bridge.hitRuleOf`；表只为它们登记模型键、隐式终端、覆盖模式与配对目标。
+_唯一实现_: `services/rule-fields.ts` 的 `RULE_FIELD_SPECS`（派生 `RULE_FIELDS` / `DIALECT_MAP` / `NATIVE_MAP` / `NATIVE_TEXT_FIELDS` / `PAIR_OF` / `WHOLE_SET_FIELD` / `EXPLORE_LEGADO_SUBS` / `EXPLORE_NATIVE_SUBS` / `EXPLORE_FALLBACK_FIELDS` / `HIT_FIELD_MODELS` / `EXPLORE_OF_GENERIC` / `REHYDRATE_PHASES`；裁决见 `ADR-0044`）
 _Avoid_: 字段清单（它只是这张表的投影）、规则映射（映射只是表的一列）
 
 **存量收敛（stored-source rehydration）**:
@@ -142,16 +142,17 @@ _Avoid_: 空结果（太泛——Miss 与空 List 是两种值）
 **死线（regex deadline）**:
 一条用户正则最多被允许占着主线程多久；到点判「这条规则跑不动」，**不**判「结果为空」。预算随工作量放宽并封顶——写死一个数会把大而合法的整页扫描误判成病态。
 _唯一实现_: `engine/regex-guard.ts` 的 `deadlineFor`（超时抛 `RegexDeadlineError`，由调用点就地转成带段级定位的错误；口径的 why 见 `ADR-0050`）
-_Avoid_: 超时（太泛——`jsTimeoutMs` 是脚本预算、`WORKER_RPC_DEADLINE_MS` 是单次宿主往返，是另外几条闸）、正则黑名单（形状判死会误杀合法写法）
+_Avoid_: 超时（太泛——`jsTimeoutMs` 是脚本预算、worker 内宿主往返死线（派生闸，随预算）是另外几条闸）、正则黑名单（形状判死会误杀合法写法）
 
 **值投影（value projection）**:
 服务层把链尾 `EngineValue` 收成业务串的三种口径：单值文本位、URL 位、多值位。
+条目装配面只经读口消费投影——探针的 `fieldOf`、搜索面与发现面的 `listContextsOf`——不跨缝拿 `EngineValue`；目录 / 正文管线（`online-reading`）自己求值后仍按 `itemContextsOf` / `firstValue` 派生。
 _唯一实现_: `services/bridge.ts` 的 `firstValue` / `firstUrlValue` / `listValue`（字段侧入口同名分家：`fieldOf`/`urlFieldOf` 不吞错，`auxFieldOf`/`auxUrlFieldOf` 读不出留空）
 _Avoid_: 取值规约（那是引擎层的空态裁决；这条是服务层的值收口）
 
 **条目装配（一条命中）**:
-「一套条目规则 + 一个条目上下文 + 落地地址」收成**一条书目**的唯一语义。聚合搜索与发现面共用同一份，两档档位（书名非空才算书目 / 作者与书地址是裸奔项 / 其余五项坏规则只丢该字段）只在这里说一次。
-_唯一实现_: `services/bridge.ts` 的 `hitFieldsOf`（入参形状 `HitRules` 同文件）
+「一个源 + 一个规则来源档 + 一个条目上下文 + 落地地址」收成**一条书目**的唯一语义。聚合搜索与发现面共用同一份，三档档位（书名非空才算书目 / 作者与书地址是裸奔项 / 其余五项坏规则只丢该字段）只在这里说一次。
+_唯一实现_: `services/bridge.ts` 的 `hitFieldsOf`（规则来源档 `HitRuleSource` 与字段位由 `services/rule-fields.ts` 的表派生；面恒 `'search'`、用途恒 `'value'`，都在门内；调用方只交源、档、求值器、条目上下文与落地地址）
 _Avoid_: 逐字段解析（太泛——不含选项保留绝对化与简介净化那一半）、搜索面装配（发现面也走这一份）、命中构造器（面不进 interface）
 
 **取值用途（rule usage）**:
@@ -215,7 +216,7 @@ _Avoid_: 能力清单（那常指 `source-eval.engineContextOf` 的装配面）�
 
 **动态请求头（headerRule）**:
 legado `header` 字段的 `@js:`/`<js>` 规则形态的内部名（与静态 JSON 形态互斥同源）。求值失败 → warn 后回退静态头，不吞请求也不炸整链。
-_唯一实现_: `services/source-eval.ts` 的 `resolveHeaders`
+_唯一实现_: `services/normalize.ts` 的 `jsHeaderCodeOf`（形态判别与剥前缀）；`services/source-eval.ts` 的 `resolveHeaders`（求值与回退）
 _Avoid_: header 规则、动态 header（说内部名）
 
 **探针（probe）**:
@@ -291,12 +292,12 @@ _唯一实现_: `client/city-entry.ts` 的 `decideCityEntry` / `resolveCitySelec
 _Avoid_: 进入逻辑（太泛）、自动加载开关（判据产出的是动作，不是可配开关）；也别与「分类轮次」混称——那个词指 Node 半的持有物，这里只是客户端的一次决策。
 
 **书城选中态（city selection）**:
-书城左栏当前源+分类的本挂载投影与跨卸载现场：唯一写口 `select` 同时写两者；`isAsked` 是本挂载的 one-shot（自动那条路最多动作一次，卸载即重置；进入判据把它作为 `asked` 入参），与分类轮次的提交闸（`client/explore-job.ts` 的 `submitted`）不是同一条语义。
+书城左栏当前源+分类的跨卸载现场与它的本挂载投影：唯一写口 `select` 只写 `cityStore`，hook 给出的 `selection` 就是 store 的投影（不再有第二份 React state，外部写 store 也驱动渲染）；`isAsked` 是本挂载的 one-shot（自动那条路最多动作一次，卸载即重置；进入判据把它作为 `asked` 入参），与分类轮次的提交闸（`client/explore-job.ts` 的 `submitted`）不是同一条语义。
 _唯一实现_: `client/city-selection.ts` 的 `useCitySelection` / `rememberedCitySelection`
 _Avoid_: 选中状态（太泛）；也别与「书城进入判据」混称——判据产出动作，这里只持有选中态。
 
 **阅读会话（reader session）**:
-「目录 → 存档恢复 → 逐章懒加载 → 预取 → 进度落盘」的时序持有者；DOM 测量经 `ReaderPort` 注入，视图只渲染与接线。同一时刻只允许一章在途（`inflight`），滚动风暴与目录直达只记意图（`pendingJump`），刚失败过的同一章不自动重试。
+「目录 → 存档恢复 → 逐章懒加载 → 预取 → 进度落盘」的时序持有者；DOM 测量经 `ReaderPort` 注入，视图只渲染与接线。同一时刻只允许一章在途（`inflight`），滚动风暴与目录直达只记意图（`pendingJump`），刚失败过的同一章不自动重试。视图把 scroll / resize / ResizeObserver 事件喂给 `feedViewport`（合帧住会话，`scheduleFrame` / `cancelFrame` / `refreshPort` 经注入），排版前采点与排版复位（`applyTypesetRelocation`）也在这里。
 _唯一实现_: `client/reader-session.ts`
 _Avoid_: 阅读器状态管理（视图里的 state 只是它的投影）；也别与**阅读场景**混称——那个词指浮层、注释载荷、Esc 归属与入架一问的交互现场
 
@@ -311,12 +312,12 @@ _唯一实现_: `client/reader-session.ts` 的 `pendingScrollFixes` / `applyScro
 _Avoid_: 锚点（那是测量的静态位置，`client/reader-geometry.ts`）、进度恢复（那是 `client/progress.ts`）；也别叫「滚动锚定」——那个名字属于被关掉的浏览器行为
 
 **阅读浮层（reader surface）**:
-阅读器右上角那一层的在场判据：Aa／目录／导出／注释／导入说明**至多一角在场**（同住右上角的两面叠起来，底下那面看得见点不动）；换角时注释面板只收不消费，Esc 走「关闭」那条语义（裁决见 `ADR-0037`）。
+阅读器右上角那一层的在场判据：Aa／目录／导出／注释／导入说明**至多一角在场**（同住右上角的两面叠起来，底下那面看得见点不动）；换角时注释面板只收不消费，Esc 走「关闭」那条语义（裁决见 `ADR-0037`）。视图经阅读场景拿 `maskFor` / `escOwner` 的投影（`ReaderScene` 的 `mask` / `escOwner`）。
 _唯一实现_: `client/reader-surfaces.ts`（`openSurface` / `closeAll` / `dismissSurface` / `maskFor` / `escOwner`）
 _Avoid_: 浮层状态管理（阅读场景里的 `surface` 只是它的投影）、在各 opener 里逐处抄「先关别人」；也别与**模态契约**混称——带遮罩的入架一问走 `client/views/dialog.tsx`
 
 **阅读场景（reader scene）**:
-阅读器里互相咬合的交互现场：当场面、注释面板的目标与**返回项句柄**、Esc 归属、离开时那一句入架询问与它的写入回执。视图只渲染它的投影并接线，阅读时序不在这里。
+阅读器里互相咬合的交互现场：当场面、注释面板的目标与**返回项句柄**、Esc 归属、离开时那一句入架询问与它的写入回执。视图只渲染它的投影并接线，阅读时序不在这里。`mask` / `escOwner` 两枚投影是纯判据的落点，`handleEsc` 也读投影。
 _唯一实现_: `client/reader-scene.ts` 的 `ReaderScene`（`toggle` / `openNote` / `close` / `handleEsc` / `dismissAsk` / `openTarget` / `bodyLink` / `panelLink` / `exitToShelf` / `joinAndBack`）
 _Avoid_: 阅读器状态（时序归 `client/reader-session.ts`）、至多一角的纯判据（`client/reader-surfaces.ts`）；DOM 测量、取数与导出编排也不归它
 
@@ -327,7 +328,7 @@ _Avoid_: 翻页循环、重复过滤（判据是「本页零新增」与「URL �
 
 **阅读位置（reading position）**:
 「这本书读到哪儿」= 章 + 章内比例（`{chapterIndex, offsetRatio}`）。在会话里是状态：`position` 是唯一真相，滚动测量 / 目录选中 / 存档恢复都只是修正它；落盘由单点 `commit(cause)` 判定。服务端 last-write-wins，前提是「只有一个读者」。
-_唯一实现_: `client/reader-session.ts`（状态）+ `client/progress.ts`（位置 ⇄ 像素）+ `shared/wire.ts` 的 `ShelfProgress`、`hasProgress`
+_唯一实现_: `client/reader-session.ts`（状态）+ `client/progress.ts`（位置 ⇄ 像素）+ `shared/wire.ts` 的 `ShelfProgress` + `shared/reading-position.ts` 的 `hasProgress`
 _Avoid_: 进度（要区分「元数据」与「阅读位置」）、scrollTop（像素是测量值，不是位置本身）
 
 **阅读器几何（reader geometry）**:
@@ -341,7 +342,7 @@ _唯一实现_: `services/online-reading.ts` 的 `OnlineReading`（目录 `toc` 
 _Avoid_: 阅读服务（`ReadingService` 是门面，不是管线）、抓取（出站执行归 `services/source-request.ts`）
 
 **书内容读面（book content read surface）**:
-目录、导航与正文的本地/在线分流与文字规约：本地书与在线书是两个适配器，三个读动词不再各自判 `__local__`，正文 text 出口统一过行规约；来源展示判据（如 `sourceNameOf`）仍按本地源常量判来源身份。
+目录、导航与正文的本地/在线分流与文字规约：本地书与在线书是两个适配器，读动词（`toc` / `navigation` / `chapterContent` / `readChapter`）不再各自判 `__local__`，正文 text 出口统一过行规约；来源展示判据（如 `sourceNameOf`）仍按本地源常量判来源身份。
 _唯一实现_: `services/book-content.ts` 的 `BookContent`（适配器 `LocalBooks` / `OnlineReading`）；正文文字规约 `services/chapter-content.ts` 的 `normalizeChapterText`
 _Avoid_: 阅读服务（`ReadingService` 是门面）、在线阅读（那是 `OnlineReading` 的管线）
 
@@ -375,7 +376,7 @@ _Avoid_: 按 message 前缀判来源（文案一改就漂，见 `ADR-0016`）
 ### 跨半契约
 
 **书目字段集（shelf metadata field-set）**:
-书架条目元数据的「名称 × 类型判别 × 归一化」唯一主人；加字段只改这张表。
+书架条目元数据的「名称 × 类型判别」唯一主人；加字段只改这张表。数值位的落盘归一化（非负整数）不在这张表里——归 `services/shelf.ts` 的 `Shelf`（写盘前收口）。
 _唯一实现_: `shared/wire.ts` 的 `SHELF_META` + `pickShelfMeta`
 _Avoid_: 逐字段 typeof 筛键（那是这张表的抄本）
 
@@ -431,7 +432,7 @@ _唯一实现_: `api/wire.ts` 的 `fenceDenialOf`（四步判据）与 `fenceAll
 _Avoid_: CORS（那是浏览器的跨源放行，不是本闸）、鉴权（这一闸不认用户身份）、只比 Referer（Origin 缺席那条路会漏）
 
 **配置缝（config seam）**:
-原始 cordis 配置 → 类型 / schema / 缺省 / 值域的唯一边界；缺省字面量的主人仍是各消费模块的 `DEFAULT_*` 常量。
+原始 cordis 配置 → 类型 / schema / 缺省 / 值域的唯一边界；缺省字面量的主人仍是各消费模块的 `DEFAULT_*` 常量。volatile 字段的消费桶 `VOLATILE_CONSUMERS`（service-live / composition-root）同住 `config.ts`：键集由 `VolatileConfigFieldName` 钉死，新增 volatile 字段忘归桶是编译错。
 _唯一实现_: `config.ts` 的 `CONFIG_FIELDS`（一个字段一行：名字 × 类型 × 缺省 × 值域 × 是否活值）与 `resolveConfig`（schema 与读数面都从这张表派生，不再各写一份清单）
 _Avoid_: DEFAULTS / assertConfig 抄本、在装配处再写一份缺省字面量
 

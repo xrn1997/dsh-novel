@@ -101,7 +101,10 @@ export interface EvalContext {
   regexRow?: string[]
 }
 
-export const DEFAULT_JS_TIMEOUT_MS = 2000
+/** 脚本预算缺省（`EvalContext.jsTimeoutMs` 缺席时的回退）：与服务缺省 `DEFAULT_JS_BUDGET_MS` 同值——
+ *  两个名字一个事实，对齐由 tests/services/defaults.test.ts 钉住；引擎直连（普查/回放/测试）
+ *  不带预算时按用户面承诺的 15s 走。 */
+export const DEFAULT_JS_TIMEOUT_MS = 15_000
 
 // ── parseRule 产物 AST ────────────────────────────────────────────────
 

@@ -2,7 +2,7 @@ import { responseOf } from '../engine/host-object.js'
 import { cookiesOf } from './engine-fetch.js'
 import { decodeBody } from './fetcher.js'
 import type { FetchedPage, Fetcher } from './fetcher.js'
-import { createSourceEval } from './source-eval.js'
+import { createSourceEval, DEFAULT_JS_BUDGET_MS } from './source-eval.js'
 import type { NovelSource } from './types.js'
 
 type FetchInit = Parameters<Fetcher['fetchPage']>[1]
@@ -34,7 +34,8 @@ export async function applyLoginCheck(
   if (code === '') return page
   // 与读面同一个声明优先级：URL 选项 charset 可能只在这里（响应头没 charset）
   const body = decodeBody(page, init?.declaredCharset)
-  const outcome = await createSourceEval(fetcher, source, opts).runScript(code, {
+  const outcome = await createSourceEval(fetcher, source,
+    { jsTimeoutMs: opts?.jsTimeoutMs ?? DEFAULT_JS_BUDGET_MS }).runScript(code, {
     baseUrl: page.finalUrl,
     facet: 'rule',
     resultHost: responseOf({

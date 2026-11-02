@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   renderImport, renderRead, renderSearch, renderShelfBook, renderShelfList, renderShelfRemove,
   renderSourceList, renderSourceProbe, renderSourceRemove, renderSourceToggle, renderToc,
+  TOC_RENDER_CAP,
 } from '../../src/tools/render.js'
 import type { ShelfItem } from '../../src/tools/shelf-item.js'
 
@@ -51,11 +52,11 @@ describe('renderRead / renderToc（截断口径）', () => {
     expect(long).toContain('…（截断，规范值含全文）')
   })
 
-  it('目录只印前 10 章，超过时标注', () => {
-    const chapters = Array.from({ length: 12 }, (_, i) => ({ chapterIndex: i, name: `第${i}章` }))
-    const text = renderToc({ bookKey: 'k', total: 12, chapters })
-    expect(text).toContain('[9] 第9章')
-    expect(text).not.toContain('[10] 第10章')
+  it('目录只印前 TOC_RENDER_CAP 章，超过时标注（渲染上限按常数走，不再写死字面量）', () => {
+    const chapters = Array.from({ length: TOC_RENDER_CAP + 2 }, (_, i) => ({ chapterIndex: i, name: `第${i}章` }))
+    const text = renderToc({ bookKey: 'k', total: chapters.length, chapters })
+    expect(text).toContain(`[${TOC_RENDER_CAP - 1}] 第${TOC_RENDER_CAP - 1}章`)
+    expect(text).not.toContain(`[${TOC_RENDER_CAP}] 第${TOC_RENDER_CAP}章`)
     expect(text).toContain('…（截断，规范值含全部）')
   })
 })

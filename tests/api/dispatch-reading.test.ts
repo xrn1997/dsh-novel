@@ -106,11 +106,30 @@ describe('reading/shelf 面', () => {
     expect((await del.json() as any).value.removed).toBe(true)
     expect((await (await fetch(`${base}/novel-api/shelf`)).json() as any).value).toHaveLength(0)
   })
-  it('shelf PUT 无 title 且无 progress → 400；书不在架 → 400', async () => {
-    expect((await fetch(`${base}/novel-api/shelf/${encodeURIComponent('k')}`, { method: 'PUT', body: '{}' })).status).toBe(400)
+  it('shelf PUT 无 title 且无 progress → 400（文案逐字点名三种出路）；书不在架 → 400', async () => {
+    const empty = await fetch(`${base}/novel-api/shelf/${encodeURIComponent('k')}`, { method: 'PUT', body: '{}' })
+    expect(empty.status).toBe(400)
+    const { error } = await empty.json() as any
+    // 全文等值：这句是用户可见文案（PARAMS/BODY 常量展开后的成品），只钉片段时另两条出路改错字仍全绿
+    expect(error.message).toBe('body 需带 title（加书）/ patch（打补丁）/ progress:{chapterIndex,offsetRatio}（更新进度）')
     expect((await fetch(`${base}/novel-api/shelf/${encodeURIComponent('k2')}`, {
       method: 'PUT', body: JSON.stringify({ progress: { chapterIndex: 1, offsetRatio: 0 } }),
     })).status).toBe(400)
+  })
+  it('shelf PUT 空 body → 400「body 需为 JSON 对象」（非对象 body 的传输闸，文案逐字）', async () => {
+    const r = await fetch(`${base}/novel-api/shelf/${encodeURIComponent('k-empty')}`, { method: 'PUT' })
+    expect(r.status).toBe(400)
+    const { error } = await r.json() as any
+    expect(error.message).toBe('body 需为 JSON 对象')
+  })
+  it('title 非空即按加书分派：同场的 patch 不抢（400 来自加书值域门，不是三形态皆无）', async () => {
+    const r = await fetch(`${base}/novel-api/shelf/${encodeURIComponent('k-title-wins')}`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'T', patch: { kind: '玄幻' } }),
+    })
+    expect(r.status).toBe(400)
+    const { error } = await r.json() as any
+    expect(error.message).toMatch(/加书需带非空 sourceId/)
   })
   it('加书缺/空 sourceId → 400（此前静默兜底成空串，写入 200、读取才炸）', async () => {
     for (const body of [{ title: 'T' }, { title: 'T', sourceId: '' }, { title: 'T', sourceId: 7 }]) {

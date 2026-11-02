@@ -2,7 +2,8 @@ import type { ChapterEntry } from './reading.js'
 
 /**
  * 范围导出核心：串行逐章 + 章间节流 + 失败即停 + abort 即停。范围**由调用方裁好**
- * （判据单点在 `api/dispatch.ts`），本 module 只在越界时抛——见 `ExportOptions.from` 注。
+ * （判据单点在 `services/reading.ts` 的 `exportRange`），本 module 只在越界时抛——见
+ * `ExportOptions.from` 注。
  * 限流敬畏是第一原则——绝不并行抓章；getChapter 缓存优先语义即天然断点续传。
  */
 /** 范围导出的章间节流（缺省 300ms）。**这个数是唯一主人**：缺省装配处 `src/config.ts` 的 schema `.default()`
@@ -21,10 +22,11 @@ export interface ExportOptions {
   title: string
   /** 章间节流毫秒（配置 exportDelayMs） */
   delayMs: number
-  /** 起始章（1 基含端）。**必须已裁剪**：越界裁剪与「缺省 = 全本」是路由层的策略单点
-   *  （它要在首包前拿这些数去写 `x-novel-total-chapters` / `x-novel-range`），本 module
-   *  不再抄第二份判据——两边各写一份 `clip` 与「导出范围非法」会让判据分叉。
-   *  越界只可能来自新调用方，故按前置条件抛，不静默产废包。 */
+  /** 起始章（1 基含端）。**必须已裁剪**：越界裁剪与「缺省 = 全本」是 `services/reading.ts` 的
+   *  `exportRange` 的策略单点（它要在首包前交回区间两端与段内章数——路由拿它们写
+   *  `x-novel-total-chapters` / `x-novel-range`，故区间先于流定案），本 module 不再抄第二份判据——
+   *  两边各写一份裁剪与「导出范围非法」会让判据分叉。越界只可能来自新调用方，故按前置条件抛，
+   *  不静默产废包。 */
   from: number
   /** 结束章（1 基含端）。同 `from`。 */
   to: number
@@ -44,7 +46,7 @@ export async function* exportBook(
   // 不要给这两类留静默出口（空目录只发 BOM、倒置靠 clip 折回来）：
   // 越界继续往下跑会印出「《书名》· undefined」的废包，那比抛错坏得多。
   if (from < 1 || to > toc.length || from > to) {
-    throw new Error(`导出范围越界：[${from}, ${to}] 不在 [1, ${toc.length}] 内（裁剪归路由层）`)
+    throw new Error(`导出范围越界：[${from}, ${to}] 不在 [1, ${toc.length}] 内（裁剪归门面 exportRange）`)
   }
   for (let i = from - 1; i <= to - 1; i++) {
     if (opts.signal?.aborted === true) return

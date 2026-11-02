@@ -9,7 +9,7 @@ import { engineFetch, engineFetchConn, engineFetchGet, engineFetchHead, engineFe
 import type { HeadersInput } from './engine-fetch.js'
 import { headerOf, effectiveUserAgent } from './fetcher.js'
 import type { Fetcher } from './fetcher.js'
-import { parseObjectJson, stringTableOf } from './normalize.js'
+import { jsHeaderCodeOf, parseObjectJson, stringTableOf } from './normalize.js'
 import { firstValue } from './bridge.js'
 import type { SubRuleEval } from './bridge.js'
 import { log } from './log.js'
@@ -36,6 +36,14 @@ export interface SourceEvalBookContext {
   tocUrl?: string
   shelfBook?: ShelfBook
 }
+
+/** js 沙箱预算缺省（15s）：**服务侧缺省的唯一主人**——`config.ts` 的 schema `.default()`、
+ *  阅读服务的 live 回退与装配缝漏传的回落都引这里，别处不再写字面量。住在求值缝里：它是预算的
+ *  最低消费点，装配缝（搜索面 / 发现面 / 模板 / 登录检查）都在阅读服务下方，回落若反向引
+ *  阅读服务就成值环（`tests/layering.test.ts` 的值环闸）。引擎直连那个同值缺省
+ *  （`engine/types.ts` 的 `DEFAULT_JS_TIMEOUT_MS`）是另一个名字一个事实，同值由
+ *  `tests/services/defaults.test.ts` 的对齐钉子守——引擎不许反向引这里（依赖方向红线）。 */
+export const DEFAULT_JS_BUDGET_MS = 15_000
 
 /** 脚本可见的 `book` 镜像（对面脚本里的 `book` 是书架上那本书）。三项身份由本仓按面给
  *  （`bookUrl`/`origin`/目录面的 `tocUrl`），其余字段取**书架那条**（`title` 映射成脚本读的 `name`）；
@@ -234,14 +242,11 @@ export async function resolveHeaders(
 ): Promise<Record<string, string>> {
   const rule = source.rules.headerRule
   const staticHeaders = headerOf(source)
-  if (rule == null || rule.trim() === '') return staticHeaders
-  // 规则前缀剥离（`@js:` 去前 4 字符；`<js>…</js>` 取两标记之间的内容）
-  let code = rule
-  if (/^@js:/i.test(rule)) code = rule.slice(4)
-  else if (/^<js>/i.test(rule)) {
-    const close = rule.lastIndexOf('<')
-    code = close > 4 ? rule.slice(4, close) : rule.slice(4)
-  }
+  // 判据与剥前缀是同一把尺（`normalize.jsHeaderCodeOf`）：若这一侧另写一遍剥法，
+  // 放宽判据时剥法没跟就会落成「判了规则但求值必炸」的假支持。非规则值（含缺席与空白）
+  // 按静态头直答，warn 回退仍只属于求值那一段。
+  const code = jsHeaderCodeOf(rule)
+  if (rule === null || code === null) return staticHeaders
   try {
     const outcome = await runScript({
       code,
@@ -272,11 +277,13 @@ export async function resolveHeaders(
 
 /** 源求值缝的构造器：闭包持有 fetcher / 源 / js 预算，调用方只交每次求值的上下文。
  *  预算只由构造时给——配置页热改只影响新构造的那份，调用方（源请求缝、在线阅读管线）
- *  每次出站都重新构造，故读到的是当次值。 */
+ *  每次出站都重新构造，故读到的是当次值。
+ *  `jsTimeoutMs` **必填**：装配缝漏传曾静默落回引擎缺省（2s 金丝雀），现在漏交就是编译错；
+ *  services 侧缺省回落的唯一主人是本文件的 `DEFAULT_JS_BUDGET_MS`。 */
 export function createSourceEval(
-  fetcher: Fetcher, source: NovelSource, opts?: { jsTimeoutMs?: number },
+  fetcher: Fetcher, source: NovelSource, opts: { jsTimeoutMs: number },
 ): SourceEval {
-  const defaultBudget = opts?.jsTimeoutMs
+  const defaultBudget = opts.jsTimeoutMs
   /** 引擎上下文单点：`book` 从调用方的 SourceEvalBookContext 塑形，其余原样透传。 */
   const ctxOf = (o: {
     baseUrl: string; html?: string; json?: unknown; regexRow?: string[]
@@ -289,7 +296,7 @@ export function createSourceEval(
     ...(o.vars === undefined ? {} : { vars: o.vars }),
     ...(o.book === undefined ? {} : { book: bookMirrorOf(o.book) }),
     ...(o.chapter === undefined ? {} : { chapter: o.chapter }),
-    ...(defaultBudget === undefined ? {} : { jsTimeoutMs: defaultBudget }),
+    jsTimeoutMs: defaultBudget,
   })
   return {
     subEval(o) {
@@ -331,7 +338,7 @@ export function createSourceEval(
       })
     },
     headers() {
-      return resolveHeaders(fetcher, source, defaultBudget === undefined ? undefined : { jsTimeoutMs: defaultBudget })
+      return resolveHeaders(fetcher, source, { jsTimeoutMs: defaultBudget })
     },
   }
 }

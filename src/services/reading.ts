@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
-import type { ResolvedConfig } from '../config.js'
+import type { ResolvedConfig, VolatileConfigFieldName } from '../config.js'
 import { detailFieldsOf, detailReadOf, firstValue, hitFieldsOf } from './bridge.js'
 import { DEFAULT_CACHE_MAX_BYTES, PageCache } from './cache.js'
 import { exploreEpoch } from './cache-epoch.js'
@@ -16,7 +16,7 @@ import type { Fetcher } from './fetcher.js'
 import { KindCache } from './explore-cache.js'
 import { ExploreJobs } from './explore-job.js'
 import { deriveExploreSources, fetchExploreGroup } from './explore.js'
-import { DEFAULT_EXPORT_DELAY_MS } from './export.js'
+import { DEFAULT_EXPORT_DELAY_MS, exportBook } from './export.js'
 import { SourceJobs } from './import-job.js'
 import { SearchJobs } from './search-job.js'
 import type { JobHost } from './job-holder.js'
@@ -33,7 +33,7 @@ import type { ProbeResult } from './probe.js'
 import { fetchSearchPage, searchErrorCodeOf } from './search-face.js'
 import type { SearchFaceResult } from './search-face.js'
 import { Shelf } from './shelf.js'
-import { createSourceEval } from './source-eval.js'
+import { createSourceEval, DEFAULT_JS_BUDGET_MS } from './source-eval.js'
 import { createSourceRequest, fetchSourceText } from './source-request.js'
 import type { SourceRequest } from './source-request.js'
 import { loginUiOf, SourceRegistry } from './sources.js'
@@ -51,11 +51,10 @@ import type {
   BookDetail, BookNavigation, ChapterContent, ExploreSources, ExploreSnapshot, LocalImportResponse, LocalImportWarning,
   SearchGroup, SearchHit, SearchPlan, SearchJobSnapshot, ChapterEntry, ShelfBook, ShelfEntry, ShelfMetaPatch, SourcePublic,
 } from '../shared/wire.js'
-/** 聚合搜索并发（缺省 5）与 js 沙箱预算（缺省 15s）：**这两个数的唯一主人**——缺省装配处
- *  `src/config.ts` 的 schema `.default()` 与本文件 `from()` 回退都引这里，别处不再写字面量。15s 而非引擎 2s：多请求目录脚本 2s 必炸；
- *  名字带「预算」以别于引擎 `DEFAULT_JS_TIMEOUT_MS`，两层各有默认，同名会让按名 import 落错主人。 */
+/** 聚合搜索并发缺省：**这个数的唯一主人**——缺省装配处 `src/config.ts` 的 schema `.default()`
+ *  与本文件 `from()` 回退都引这里，别处不再写字面量。js 沙箱预算缺省的家在
+ *  `services/source-eval.ts` 的 `DEFAULT_JS_BUDGET_MS`（为什么不住这里见那里的注释）。 */
 export const DEFAULT_SEARCH_PARALLEL = 5
-export const DEFAULT_JS_BUDGET_MS = 15_000
 
 export interface ReadingServiceOptions {
   dir: string                       // novel 根目录（测试注入 mkdtemp）
@@ -87,6 +86,38 @@ export interface ImportOutcome {
   dupSkipped?: boolean
 }
 
+/** run-login 深动词的 outcome 判别联合：登录的两条失败结局是**值**不是异常——路由把它们
+ *  翻译成 400 / 422（文案主人在路由层），门内执行不带 HTTP 语义。 */
+export type LoginOutcome =
+  | { kind: 'manual'; loginUrl: string }   // URL 形态：不执行沙箱，回传 UI 开新 tab + cookie 录入
+  | { kind: 'authed' }                     // JS 形态且产出登录态（已落盘 setAuth + persist）
+  | { kind: 'no-login-url' }               // 未声明 loginUrl（路由翻 400「该源未声明 loginUrl」）
+  | { kind: 'empty-output' }               // 脚本未 return 或为空产出（路由翻 422 LoginFailed）
+
+/** runLogin 两条自卫 Error 的私有类型（未声明 loginUrl / URL 形态进沙箱）：login() 的前置判别
+ *  已吸收它们，正常路径到不了；留着是防御私有面未来被误用。用类型而不是消息串认领——
+ *  `login()` 精确包成 `no-login-url`，沙箱自身的失败（超时/脚本抛错）不在此列、照旧走 classify。 */
+class LoginScriptAbsentError extends Error {}
+
+/** 一次导出的执行计划：区间两端（1 基含端）与段内章数由门面裁好，`stream` 是 `exportBook`
+ *  组装的实际流。路由拿这三个数写响应头、再逐块搬流——头必须仍先于**首块**写出，
+ *  故区间在拿到流之前就得定案（这也是它与 `exportBook` 分开的原因）。
+ *  与 `ExportOutcome` 同住本文件的理由见 `exportRange`。 */
+export type ExportPlan = {
+  from: number
+  to: number
+  totalInRange: number
+  stream: AsyncGenerator<string>
+}
+
+/** 范围导出的 outcome 判别联合：两条失败结局是**值**不是异常——路由把它们翻成 422 EmptyToc /
+ *  BadRange（文案主人在路由层），门内不带 HTTP 语义。`bad-range` 带的是**裁剪后**的两个数：
+ *  路由的文案模板原样用它们，裁剪只在门内发生一次。 */
+export type ExportOutcome =
+  | { kind: 'empty-toc' }
+  | { kind: 'bad-range'; from: number; to: number }
+  | { kind: 'plan'; plan: ExportPlan }
+
 /** 一次点名解析出来的那一**条**分类入口：执行体要的三样（打哪个源、拿什么地址、按哪份代际存快照）。
  *  `pickEntry` 交出它、`runExplorePage` 收下它，两处各写一遍匿名形状就是让这条契约没有名字。
  *  不叫 `ExploreTarget`：那枚名字属于跨源编排那一层（一轮打多家），它随浏览轴一起撤了（`ADR-0028`）。 */
@@ -100,32 +131,53 @@ interface ExploreEntry {
 
 /** `searchParallel` 的值域尺（唯一住址）：非正整数会让批循环 `i += n` 永不终止——挂死而非报错，
  *  所以一律炸。装配期挡不住配置页后来的改动，故读数口每轮再过一次；一轮只取一个值，两次读之间
- *  翻页会让 `i += n` 与 `slice(i, i + n)` 用不同步长，批次就会重叠或漏行。 */
+ *  翻页会让 `i += n` 与 `slice(i, i + n)` 用不同步长，批次就会重叠或漏行。
+ *  与表里 numberField 的 `.min(1).step(1)` 是同一判据的两道读数口：ref 快路径整份跳过 schema，
+ *  故读数口每轮再过这一把。 */
 function requireParallelStep(n: number): number {
   if (!Number.isInteger(n) || n < 1) throw new RangeError(`searchParallel 必须为正整数，收到 ${String(n)}`)
   return n
 }
 
+/** 直装缝实际服务的字段名：配置缝的活值键里再筛出数值位（proxyUrl 是文本位，不进这套读数面）。 */
+type VolatileNumberFieldName = {
+  [K in VolatileConfigFieldName]: NonNullable<ResolvedConfig[K]> extends number ? K : never
+}[VolatileConfigFieldName]
+
+/** 服务的六格：行序即读数面的键序。`satisfies` 让每个名字都必须仍是活值数值位。 */
+const SERVED = [
+  'searchTimeoutMs', 'searchParallel', 'jsTimeoutMs',
+  'cacheMaxBytes', 'exportDelayMs', 'localImportMaxBytes',
+] as const satisfies readonly VolatileNumberFieldName[]
+
+/** 每格的缺省：一律引消费模块的常量，本文件不长出第二个字面量主人。 */
+const SERVED_DEFAULTS: Record<VolatileNumberFieldName, number> = {
+  searchTimeoutMs: DEFAULT_TIMEOUT_MS,
+  searchParallel: DEFAULT_SEARCH_PARALLEL,
+  jsTimeoutMs: DEFAULT_JS_BUDGET_MS,
+  cacheMaxBytes: DEFAULT_CACHE_MAX_BYTES,
+  exportDelayMs: DEFAULT_EXPORT_DELAY_MS,
+  localImportMaxBytes: DEFAULT_MAX_IMPORT_BYTES,
+}
+
+/** 漏服务一格就在这里变成编译错：`SERVED` 少一个名字，这个空对象就缺一个键。 */
+type UnservedName = Exclude<VolatileNumberFieldName, (typeof SERVED)[number]>
+const servedCoversAll: Record<UnservedName, never> = {}
+void servedCoversAll
+
 /** 服务的直装缝：把逐字段值装成 ResolvedConfig 形状。不能调 resolveConfig——config.ts 已 import
  *  本文件的 DEFAULT_*，反向运行期依赖会成环；ResolvedConfig 只做 type-only import。
  *  `exportDelayMs` 不是服务的旋钮（HTTP 导出面自己读组合根给的值），这里给缺省只为满足读数面的形状；
  *  proxyUrl / dataDir / apiAllowHosts 不在这里出现——它们是可选格，代理读数归 fetcher 自己的复用/关闭语义
- *  （由 createFetcherWith 单独传入），数据目录归组合根，fence 的别名名单归 HTTP 门面（api/dispatch）。 */
-function staticLiveConfig(parts: {
-  searchTimeoutMs?: number
-  searchParallel?: number
-  jsTimeoutMs?: number
-  cacheMaxBytes?: number
-  localImportMaxBytes?: number
-}): ResolvedConfig {
-  return {
-    get searchTimeoutMs() { return parts.searchTimeoutMs ?? DEFAULT_TIMEOUT_MS },
-    get searchParallel() { return parts.searchParallel ?? DEFAULT_SEARCH_PARALLEL },
-    get jsTimeoutMs() { return parts.jsTimeoutMs ?? DEFAULT_JS_BUDGET_MS },
-    get cacheMaxBytes() { return parts.cacheMaxBytes ?? DEFAULT_CACHE_MAX_BYTES },
-    get exportDelayMs() { return DEFAULT_EXPORT_DELAY_MS },
-    get localImportMaxBytes() { return parts.localImportMaxBytes ?? DEFAULT_MAX_IMPORT_BYTES },
+ *  （由 createFetcherWith 单独传入），数据目录归组合根，fence 的别名名单归 HTTP 门面（api/dispatch）。
+ *  导出只为缺省对齐钉子（`tests/services/defaults.test.ts` 逐格对 `resolveConfig(undefined)`）；
+ *  生产路径只经 `create()` / `from()`。 */
+export function staticLiveConfig(parts: Partial<Record<VolatileNumberFieldName, number>>): ResolvedConfig {
+  const out: Record<string, unknown> = {}
+  for (const name of SERVED) {
+    Object.defineProperty(out, name, { enumerable: true, get: () => parts[name] ?? SERVED_DEFAULTS[name] })
   }
+  return out as unknown as ResolvedConfig
 }
 
 /**
@@ -335,7 +387,7 @@ export class ReadingService {
   }
 
   /** 单源启停：未知 id → 抛 SourceNotFoundError（「源不存在」只在门面断言一次；
-   *  路由面由 classify 免费拿 404，工具面不再先 hasSource 预检——bool 回执的语义不自明）。 */
+   *  路由面由 classify 免费拿 404，工具面不再先做存在性预检——bool 回执的语义不自明）。 */
   async setEnabled(id: string, enabled: boolean): Promise<void> {
     const found = await this.registry.edit((tx) => tx.setEnabled(id, enabled))
     if (!found) throw new SourceNotFoundError(id)
@@ -400,12 +452,14 @@ export class ReadingService {
    *  与 HTTP jar 不是一张；HTTP 响应的 `Set-Cookie` 现由 fetcher 自动落 jar，口径见矩阵 `b-cookie-jar`）
    *  **不算登录**：
    *  返回 null 且不写 auth（落空 auth 会把 hasAuth 点亮成「已登录」而零凭据）。
-   * URL 形态由调用侧分流（不在此处理——开新 tab + cookie 录入，不注入 WebView）。 */
-  async runLogin(id: string): Promise<SourceAuth | null> {
+   * URL 形态由调用侧分流（不在此处理——开新 tab + cookie 录入，不注入 WebView）。
+   * 门内构件（`login()` 的前置判别先于执行）：两条自卫 Error 走 `LoginScriptAbsentError`——
+   * 正常路径到不了，真到也不再是 500 潜伏通道（login() 把它包成 no-login-url）。 */
+  private async runLogin(id: string): Promise<SourceAuth | null> {
     const s = this.requireSource(id)
     const loginUrl = s.rules.loginUrl
-    if (loginUrl === null) throw new Error(`源「${s.name}」未声明 loginUrl`)
-    if (/^https?:\/\//i.test(loginUrl)) throw new Error(`源「${s.name}」的登录地址是 URL，不是 JS 登录脚本`)
+    if (loginUrl === null) throw new LoginScriptAbsentError(`源「${s.name}」未声明 loginUrl`)
+    if (/^https?:\/\//i.test(loginUrl)) throw new LoginScriptAbsentError(`源「${s.name}」的登录地址是 URL，不是 JS 登录脚本`)
     // 与按钮动作共用同一条前缀剥离：`<js>…</js>` 不能再套一个 `@js:`（会变成语法错）
     const v = await createSourceEval(this.sourceRequest.fetcherFor(s), s, { jsTimeoutMs: this.live.jsTimeoutMs })
       .evaluate('@js:' + stripLoginPrefix(loginUrl), { baseUrl: s.baseUrl })
@@ -449,23 +503,37 @@ export class ReadingService {
     return { mode: 'script' }
   }
 
-  /** 登录计划：loginUrl 形态判别归门面——URL 形态 → manual（回传 UI 开新 tab），
-   *  JS 形态 → 沙箱执行 runLogin；未声明 loginUrl → null（路由映射 400）。dispatch 不再读 rules。 */
-  loginPlan(id: string): { mode: 'manual'; loginUrl: string } | { mode: 'js' } | null {
+  /** 登录计划（`login()` 的判别构件，降门内私有）：loginUrl 形态判别——URL 形态 → manual
+   *  （回传 UI 开新 tab），JS 形态 → js（交给 login() 沙箱执行 runLogin）；未声明 loginUrl → null。
+   *  dispatch 不再读 rules、也不再直调本构件（只认 login() 的 outcome）。 */
+  private loginPlan(id: string): { mode: 'manual'; loginUrl: string } | { mode: 'js' } | null {
     const s = this.requireSource(id)
     const loginUrl = s.rules.loginUrl
     if (loginUrl === null) return null
     return /^https?:\/\//i.test(loginUrl) ? { mode: 'manual', loginUrl } : { mode: 'js' }
   }
 
-  // ── 门面动词：部件收 private，dispatch/tools 只经动词 ──────────────────────
-
-  /** 源存在性判别：listSources/getSource 删除——全量 NovelSource 投影
-   *  （含 raw/rules/auth）出服务层破凭据红线，而生产唯一用途只是存在性判别；
-   *  测试经组合根自持 registry 部件（from），不为断言开门面洞。 */
-  hasSource(id: string): boolean {
-    return this.registry.get(id) !== undefined
+  /** run-login 深动词（auth 路由的 run-login 分支只做它的 outcome→HTTP 翻译）：门内串
+   *  requireSource（未知 id 抛 SourceNotFoundError——路由不再预检存在性，classify 投影成 404）
+   *  → loginPlan 形态判别 → JS 形态才执行 runLogin。两条失败结局是值不是异常：未声明 →
+   *  no-login-url（路由翻 400）、空产出 → empty-output（路由翻 422 LoginFailed）——runLogin
+   *  的两条自卫 Error 被前置判别吸收，残留也归进 outcome（500 潜伏通道消灭）；
+   *  manual 形态不碰沙箱（不执行也不写登录态）。 */
+  async login(id: string): Promise<LoginOutcome> {
+    const plan = this.loginPlan(id)
+    if (plan === null) return { kind: 'no-login-url' }
+    if (plan.mode === 'manual') return { kind: 'manual', loginUrl: plan.loginUrl }
+    let auth: SourceAuth | null
+    try {
+      auth = await this.runLogin(id)
+    } catch (e) {
+      if (e instanceof LoginScriptAbsentError) return { kind: 'no-login-url' }
+      throw e                              // 沙箱自身的失败（超时/脚本抛错/FetchError）照旧走 classify
+    }
+    return auth === null ? { kind: 'empty-output' } : { kind: 'authed' }
   }
+
+  // ── 门面动词：部件收 private，dispatch/tools 只经动词 ──────────────────────
 
   // ── 书架动词 ──
 
@@ -795,18 +863,13 @@ export class ReadingService {
       }
       const hits: SearchHit[] = []
       // 求值与相对链接基准 = 落地地址（浏览器语义，与目录/正文面同口径——重定向站点不再错位）；
-      // 上下文由搜索面按条目产出（AllInOne 条目带行，字段规则的 `$n` 在引擎入口绑定）
+      // 上下文由搜索面按条目产出（AllInOne 条目带行，字段规则的 `$n` 在引擎入口绑定）。
       // ruleBookName 的非空保障在搜索面（缺规则整体 RuleMissing，不降级 `?? ''`——空串规则返回
-      // 整页文本会造垃圾标题），这一格只为 `hitFieldsOf` 的 name 恒非空契约而写
-      const R = {
-        name: s.rules.ruleBookName ?? '', author: s.rules.ruleAuthor, url: s.rules.ruleBookUrl,
-        cover: s.rules.ruleCoverUrl, intro: s.rules.ruleIntro, last: s.rules.ruleLastChapter,
-        kind: s.rules.ruleKind, wordCount: s.rules.ruleWordCount,
-      }
+      // 整页文本会造垃圾标题）；这里不再补空串，门内缺书名规则是防御性抛错。
       for (const ctx of page.contexts) {
-        // 档位与槽序的单点在 bridge.hitFieldsOf（书名非空才算书目 / 裸奔项 / 坏规则只丢该字段）；
+        // 规则来源档与槽序的单点在 bridge.hitFieldsOf（书名非空才算书目 / 裸奔项 / 坏规则只丢该字段）；
         // 这里的 try/catch 才是「整组归错码」的主人
-        const hit = await hitFieldsOf(R, page.subEval, ctx, page.landedUrl)
+        const hit = await hitFieldsOf(s, 'search', page.subEval, ctx, page.landedUrl)
         if (hit !== null) hits.push(hit)
       }
       return { ...base, hits }
@@ -885,6 +948,49 @@ export class ReadingService {
    */
   getChapterContent(sourceId: string, bookKey: string, chIndex: number, opts?: { refresh?: boolean }): Promise<ChapterContent> {
     return this.content.chapterContent(sourceId, bookKey, chIndex, opts)
+  }
+
+  /** 一章的**文字面读**（`dshnovel_read` 的深动词）：目录取一次，章名与正文成对交回。
+   *  「目录 → 正文 → 章名」的编排归 `BookContent.readChapter`——章名与正文出自同一次目录读数，
+   *  越界交回适配器各自的既有错误语义；门面只委托（`ADR-0047`），不在此复述任何判据。 */
+  async readChapter(sourceId: string, bookKey: string, chapterIndex: number): Promise<{ name: string; text: string }> {
+    return this.content.readChapter(sourceId, bookKey, chapterIndex)
+  }
+
+  // ── 导出 ─────────────────────────────────────────────────────────────
+
+  /** 范围导出的**深动词**：一次目录读数定案——空目录、裁剪后的区间、以及由 `exportBook`
+   *  组装的实际流。缺省全本、越界裁剪与裁剪后倒置是同一件事的三面：「[from, to] 是不是目录的
+   *  一段」；这条判据属于导出这个动作，不属于任何传输面（`ADR-0052`；`ADR-0036` 的导出条款
+   *  随此窄翻案，路由只留参数形态校验、写头与流式机械）。
+   *  两条失败结局交回值，路由翻成 422（文案主人在路由）——门内不写头、不碰状态码、不读配置：
+   *  标题、节流与中断信号都是调用方交来的值。
+   *  `exportBook` 的 deps 注入原样保留：它自己的越界即抛仍是前置校验，防的是绕过本门面的新
+   *  调用方，不是第二份裁剪策略。
+   *  `ExportPlan` / `ExportOutcome` 同住本文件：plan 只由本动词产出、只经 outcome 交出，没有
+   *  第二个产出点。 */
+  async exportRange(sourceId: string, bookUrl: string, from: number | null, to: number | null,
+    opts: { title: string; delayMs: number; signal: AbortSignal },
+  ): Promise<ExportOutcome> {
+    const toc = await this.getToc(sourceId, bookUrl)
+    if (toc.length === 0) return { kind: 'empty-toc' }
+    const clip = (n: number): number => Math.min(Math.max(n, 1), toc.length)
+    const start = clip(from ?? 1)
+    const end = clip(to ?? toc.length)
+    if (start > end) return { kind: 'bad-range', from: start, to: end }
+    return {
+      kind: 'plan',
+      plan: {
+        from: start,
+        to: end,
+        totalInRange: end - start + 1,
+        stream: exportBook(
+          { getToc: (s, b) => this.getToc(s, b), getChapter: (s, b, i) => this.getChapter(s, b, i) },
+          sourceId, bookUrl,
+          { title: opts.title, delayMs: opts.delayMs, from: start, to: end, signal: opts.signal },
+        ),
+      },
+    }
   }
 
   /** 收尾落盘：书架（防抖进度）+ 注册表（合并写）+ 源状态（求值边界外的脏标记）一并等齐 */

@@ -24,7 +24,7 @@ export interface RememberedSelection {
   kind: string | null
 }
 
-/** 落位的源+分类对：唯一写口是 `city-selection.ts` 的 `select`（本挂载投影与 `cityStore` 一起写） */
+/** 落位的源+分类对：唯一写口是 `city-selection.ts` 的 `select`（只写 `cityStore`；本挂载投影是它的读面） */
 export interface CitySelection {
   sourceId: string
   kind: string

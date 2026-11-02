@@ -58,7 +58,7 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
   /** 可选源清单（`null` = 还在读）：**空清单**是「库里没有源提供分类浏览」，与读面失败不是一件事 */
   const [sources, setSources] = useState<ExploreSources['sources'] | null>(null)
   const [sourcesError, setSourcesError] = useState<string | null>(null)
-  /** 当前源与当前分类：唯一写口是 `useCitySelection` 的 select（本挂载投影 + cityStore 一起写）。 */
+  /** 当前源与当前分类：唯一写口是 `useCitySelection` 的 select（只写 `cityStore`）；本视图读的是 store 投影。 */
   const { selection, select, isAsked } = useCitySelection()
   const sourceId = selection?.sourceId ?? null
   const kind = selection?.kind ?? null
@@ -95,7 +95,7 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
    * 进入即加载：**只在该源+该分类没有轮次时提交**。轮次住在服务端（`ExploreJob` 的槽），离开再回来
    * 只该看它跑完——重提一次会把它杀掉，书单空闪一帧再从头抓，正是本条要守住的性质。
    * 源/分类的回落、恢复读定没定、自动那条路走没走，三者一起收在 `city-entry.ts` 的
-   * `decideCityEntry` 里；本视图只把 `select` 落成本挂载投影，`isAsked` 守自动这条路的
+   * `decideCityEntry` 里；本视图读 store 投影（`select` 只写 store），`isAsked` 守自动这条路的
    * one-shot，`action` 只决定要不要提交（`follow` = 服务端那一轮就是它的家）。
    */
   useEffect(() => {
@@ -130,6 +130,10 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
   const shownSources = sources === null ? [] : sources.filter((s) => s.name.includes(sourceQuery.trim()))
   const currentSource = sources === null ? null : sources.find((s) => s.id === sourceId) ?? null
   const shownKinds = currentSource === null ? [] : currentSource.kinds.filter((k) => k.includes(kindQuery.trim()))
+  /** 分类头与顺序说明的显示条件：**当前源在场且声明了这个分类**。选中态是 store 投影，记住的那一对在
+   *  解析结果落空时（没有可选源、源被删/禁用、分类入口读失败、这一源零分类）照样在场；头若只认分类，
+   *  就会在没有任何一轮可逛的内容上方悬着一个假头。 */
+  const headKind = currentSource !== null && kind !== null && currentSource.kinds.includes(kind) ? kind : null
   /** 换源后把展开的那一行抬到框顶——只在展开出来的一串装不下时才动（策略与理由见 `topAlignIfClipped`）。
    *  跟一次 `shownSources.length`：源清单后到时选中才落地，那一刻才是第一次真正展开。 */
   useEffect(() => {
@@ -191,13 +195,13 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
           })}
         </aside>
         <section className="novel-city-main">
-          {kind === null ? null : (
+          {headKind === null ? null : (
             <header className="novel-city-head">
-              <h2>{kind}</h2>
+              <h2>{headKind}</h2>
               {currentSource === null ? null : <span className="novel-city-sub">{sourceSub(currentSource)}</span>}
             </header>
           )}
-          {kind === null ? null : <div className="novel-city-note">{t('city.orderNote')}</div>}
+          {headKind === null ? null : <div className="novel-city-note">{t('city.orderNote')}</div>}
           {sourcesError === null ? null : <div className="novel-err novel-note-sm">{sourcesError}</div>}
           {/* 抓失败说在这一条横幅上：已到的书单留在原位、尾行只报跑到哪儿。
               被停止的那一轮到不了这里——`useExploreJob` 已把「任务已取消」那句咽掉，停止不是失败。 */}

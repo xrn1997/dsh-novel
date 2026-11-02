@@ -6,8 +6,9 @@ Status: accepted
 
 ## 边界
 - 特殊字段（`searchUrl`、`exploreUrl`、header 两形态（`header` / `headerRule`）、`ruleExploreKinds`、`jsLib`、章节 flag）仍由 `normalize` 的显式分支处理。
-- 发现面条目字段（`ruleExplore*`）没有方言路径列：legado `ruleExplore` 与 Native `ruleFind` 的整套启用/展平判据仍住 `normalize`；表只为它们登记模型键、隐式终端与覆盖模式。
+- 发现面条目字段（`ruleExplore*`）没有方言路径列：legado `ruleExplore` 与 Native `ruleFind` 的整套启用/展平落位仍住 `normalize`；表为它们登记模型键、隐式终端、覆盖模式、配对目标（`pairWith`）与整套闸（`wholeSetGate`），方言子字段名由配对目标的方言列反推。
 - 覆盖模式保留 `always` / `vacant` / `missing` / `conditional` 四档（入库落位、存量不重推的字段记 `none`），不合并成一种「有值就写」。`vacant` / `missing` 的读口由表派生；`always` / `conditional` 的读口以表的键集做 Record——表加一行而读口没补，`tsc` 当场红。
+- 三列是**登记事实**而非实现：`pairWith`（同一事实的另一键，只登记在派生侧）与 `wholeSetGate`（发现面整套启用的闸，`ruleExploreList` 唯一）登记在行上，`REHYDRATE_PHASE` 是表级段序登记（段序不是逐行事实，逐行重复就是 `rehydrateStoredSource` 的第二份抄本）。发现面的两方言子字段名经配对目标的方言列反推（`EXPLORE_LEGADO_SUBS` / `EXPLORE_NATIVE_SUBS`），表仍不为发现面行登记方言路径；整套切换的落位与展平实现仍住 `normalize` 的显式分支，条目装配侧的整套切换实现住 `bridge.hitRuleOf`——表只供判据。
 
 ## 被否方案
 - 只用 TypeScript 类型生成表：类型推不出方言路径与覆盖模式。

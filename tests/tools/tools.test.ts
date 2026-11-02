@@ -4,7 +4,7 @@ import type { ToolOutputDefinition } from '@deepseek-ai/dsh-tools'
 import { ReadingService } from '../../src/services/reading.js'
 import { SEARCH_BOOKS_CAP } from '../../src/shared/wire.js'
 import { buildTools, registerTools } from '../../src/tools/tools.js'
-import { TOC_CHAPTERS_CAP } from '../../src/tools/render.js'
+import { TOC_CHAPTERS_CAP, TOC_RENDER_CAP } from '../../src/tools/render.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
 
 /** 三条 .b：① 含关键词且带作者、② 与关键词无涉、③ 含关键词而无作者 span。
@@ -191,6 +191,14 @@ describe('agent 工具六件套', () => {
     expect(v.chapters[TOC_CHAPTERS_CAP - 1].chapterIndex).toBe(TOC_CHAPTERS_CAP - 1)
     expect(renderOf(stub, 'dshnovel_toc', { sourceId: 's', bookKey: 'k' }, v))
       .toContain(`规范值只含前 ${TOC_CHAPTERS_CAP} 章`)
+  })
+  it('dshnovel_toc：描述与 render 同源——渲染上限与规范值上限各就各位，不混名', async () => {
+    const s = await svc()
+    const desc = buildTools(s).find((t) => t.name === 'dshnovel_toc')!.description
+    // 两个常数是两个事实：文案里「只显示前 N 章」必须来自 TOC_RENDER_CAP（与 renderToc 的 slice 同源），
+    // 「规范值最多 N 章」必须来自 TOC_CHAPTERS_CAP。任一被写成另一枚的字面量，这条就红。
+    expect(desc).toContain(`前 ${TOC_RENDER_CAP} 章`)
+    expect(desc).toContain(`${TOC_CHAPTERS_CAP} 章`)
   })
   it('dshnovel_import_source：好/坏 JSON 文本各走其道（导入不含探针——outcome 无 probe 键）', async () => {
     const s = await svc()

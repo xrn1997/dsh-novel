@@ -1,11 +1,14 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_JSON_BODY_MAX_BYTES } from '../../src/api/wire.js'
+import { resolveConfig } from '../../src/config.js'
 import { DEFAULT_CACHE_MAX_BYTES } from '../../src/services/cache.js'
 import { DEFAULT_EXPORT_DELAY_MS } from '../../src/services/export.js'
 import { DEFAULT_TIMEOUT_MS } from '../../src/services/fetcher.js'
 import { DEFAULT_MAX_IMPORT_BYTES } from '../../src/services/localbooks.js'
-import { DEFAULT_JS_BUDGET_MS, DEFAULT_SEARCH_PARALLEL } from '../../src/services/reading.js'
+import { DEFAULT_SEARCH_PARALLEL, staticLiveConfig } from '../../src/services/reading.js'
+import { DEFAULT_JS_BUDGET_MS } from '../../src/services/source-eval.js'
+import { DEFAULT_JS_TIMEOUT_MS } from '../../src/engine/types.js'
 
 /**
  * 可调参数的**缺省值单点化**：每个数字只有一个主人（消费模块的 `DEFAULT_*` 常量）。
@@ -27,11 +30,28 @@ describe('可调参数的缺省值单点化', () => {
     expect(DEFAULT_JSON_BODY_MAX_BYTES).toBe(1024 * 1024)
   })
 
+  it('引擎缺省与配置缺省同值（单一缺省主人）', () => {
+    expect(DEFAULT_JS_TIMEOUT_MS).toBe(DEFAULT_JS_BUDGET_MS)   // 15_000
+  })
+
+  it('staticLiveConfig 服务恰为六个活值数值位，缺省逐格 === resolveConfig(undefined)', () => {
+    const served = staticLiveConfig({})
+    const names = [
+      'searchTimeoutMs', 'searchParallel', 'jsTimeoutMs',
+      'cacheMaxBytes', 'exportDelayMs', 'localImportMaxBytes',
+    ] as const
+    expect(Object.keys(served).sort()).toEqual([...names].sort())
+    const resolved = resolveConfig(undefined)
+    for (const name of names) {
+      expect(served[name], name).toBe(resolved[name])
+    }
+  })
+
   it('config.ts 的字段表缺省只引常量：数值位一律 numberField(DEFAULT_*, 下界)', () => {
     const src = readFileSync(new URL('../../src/config.ts', import.meta.url), 'utf8')
     // 先剥注释：注释里出现 `.default(0)` 不是 schema 缺省，不该把守卫弄红。
     const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
-    // 六个数值位各引一个消费模块常量作缺省：少一个就是有人把某项缺省挪走或在表里写死数字
+    // 每个数值位各引一个消费模块常量作缺省：少一个就是有人把某项缺省挪走或在表里写死数字
     const rowConstants = [...code.matchAll(/numberField\((DEFAULT_[A-Z0-9_]+),/g)].map((m) => m[1]).sort()
     expect(rowConstants).toEqual([
       'DEFAULT_CACHE_MAX_BYTES', 'DEFAULT_EXPORT_DELAY_MS', 'DEFAULT_JS_BUDGET_MS',

@@ -6,6 +6,8 @@ Status: accepted
 
 递归求值口（`java.getString*` / `getElements` / `getElement` / 模板 `{{…}}` / `@put` 的值）同样由求值体携带 usage：java 桥与 `@put` 经求值层的 `evaluateRef`，模板插值直接取求值体；判据单点是 `engine/sub-rule.ts` 的 `subRuleOf`（getElements / getElement 用 `forceUsage` 恒 `'list'`）：每条非空分支都以**显式**取值尾（`@` 切出的属性终端与 `text` / `html` 那一类，或 js / 变量 / 字面段 / 行模板）收尾才用 `'value'`，其余用 `'list'`（单段默认尾只有在分支确实被 `@` 切成多段、或整条规则单分支且以显式 `@` 开头时才算显式；多分支里的单段 `@` 头不单独升级）；`getElements` / `getElement` 恒 `'list'`。判据自己先在 `'value'` 形态解析一次：解析失败就落 `'list'`，错误留给真正的求值入口带段级定位抛出（分类器不抢先判死）。链首 `+`（列表入口标记，value 用途不认）与 `@`（显式取值头）两判与 `parseRule` ③/③b 的剥除共读 `engine/grammar.ts` 那一份词法。
 
+条目装配同样只走这条轴：`services/bridge.ts` 的 `hitFieldsOf` 在门内把每个字段位的用途显式定为 `'value'`（声明点收进门内，仍显式、不猜），调用方不再各传；面（`facet`）只用于错误定位，不参与任何求值形状的判断。
+
 **这一条比对面窄，是刻意偏离**：对面 `AnalyzeByJSoup` 的取值口（`getResultList` → `getResultLast`）把 `@` 切分后的最后一段**无条件**当取值段——认不出就当属性名读，规则里没有 `@` 时整条规则就是那最后一段，所以对面 `java.getString("div.item")` 读出空白。本仓把裸选择留在 `'list'`，是因为这类子规则在既有读数里产出的是元素内容：全按对面收，单词形链尾会被打成属性空值、仍按 CSS 认出的选择器会被串成 outerHTML，把已经出正文、出条目的源洗成空。分档形状与后果记在矩阵行 `h-sub-rule-usage`，钉子是 `tests/engine/sub-rule-usage.test.ts`。
 
 动机：自建第三份判据（按值 kind 猜、或在 combine / sandbox 各写一份）会让同一个分派随链长与分支顺序漂移。列表用途下前一段零命中时 `result` **仍是空元素集**（`size()` / `toArray()` 照样在）——退化成原文字符串会让真源共用的 toc 模板第一行就抛沙箱错误，把「站点页面没有这个结构」这个**站点侧事实记成引擎侧失败**，污染判据分母。

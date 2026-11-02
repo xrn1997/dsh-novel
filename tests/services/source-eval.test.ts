@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createSourceEval, engineContextOf, resolveHeaders } from '../../src/services/source-eval.js'
+import { createSourceEval, DEFAULT_JS_BUDGET_MS, engineContextOf, resolveHeaders } from '../../src/services/source-eval.js'
 import { normalizeSource } from '../../src/services/normalize.js'
 import type { Fetcher } from '../../src/services/fetcher.js'
 import type { NovelSource } from '../../src/services/types.js'
@@ -35,19 +35,19 @@ const bookOf = async (ev: ReturnType<typeof createSourceEval>, ctx: { tocUrl?: s
 
 describe('SourceEval: one seam for source script evaluation', () => {
   it('without a shelf book, the book mirror keeps the search-face field set', async () => {
-    const ev = createSourceEval(fetcher, source)
+    const ev = createSourceEval(fetcher, source, { jsTimeoutMs: DEFAULT_JS_BUDGET_MS })
     expect(await bookOf(ev)).toEqual({ bookUrl: 'u', origin: 'https://a.com' })
   })
 
   it('with a shelf book, the same builder adds the reading-face fields', async () => {
-    const ev = createSourceEval(fetcher, source)
+    const ev = createSourceEval(fetcher, source, { jsTimeoutMs: DEFAULT_JS_BUDGET_MS })
     expect(await bookOf(ev, { shelfBook })).toEqual({
       bookUrl: 'u', origin: 'https://a.com', name: '书名', author: '作者',
     })
   })
 
   it('the toc/content face adds tocUrl, the detail face does not（逐面字段集仍由调用方给）', async () => {
-    const ev = createSourceEval(fetcher, source)
+    const ev = createSourceEval(fetcher, source, { jsTimeoutMs: DEFAULT_JS_BUDGET_MS })
     expect(await bookOf(ev, { tocUrl: 'https://a.com/toc' })).toEqual({
       bookUrl: 'u', origin: 'https://a.com', tocUrl: 'https://a.com/toc',
     })
@@ -55,7 +55,7 @@ describe('SourceEval: one seam for source script evaluation', () => {
 
   it('headers() keeps static headers and dynamic-rule precedence', async () => {
     const dynamic = { ...source, rules: { ...source.rules, headerRule: '@js:JSON.stringify({"X-Dev":"d1"})' } }
-    const ev = createSourceEval(fetcher, dynamic)
+    const ev = createSourceEval(fetcher, dynamic, { jsTimeoutMs: DEFAULT_JS_BUDGET_MS })
     const h = await ev.headers()
     expect(h['X-Static']).toBe('1')
     expect(h['X-Dev']).toBe('d1')

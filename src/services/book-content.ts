@@ -1,6 +1,6 @@
 import { LOCAL_SOURCE_ID, planarNavigation } from '../shared/wire.js'
 import type { BookNavigation, ChapterContent, ChapterEntry } from '../shared/wire.js'
-import { normalizeChapterText } from './chapter-content.js'
+import { chapterContentToText, normalizeChapterText } from './chapter-content.js'
 import { LocalNotMountedError } from './errors.js'
 
 /**
@@ -62,6 +62,21 @@ export class BookContent {
     }
     const text = await this.parts.online.chapterText(sourceId, bookKey, index, opts)
     return normalizeText({ kind: 'text', text })
+  }
+
+  /** 一章的**文字面读**（章名与正文一起要的调用面的唯一入口，如 `dshnovel_read`）：
+   *  目录一次 + 章名 + 正文文字面。分两次问本读面会让上层先取目录、再让正文重读一遍目录，
+   *  章名与正文有可能出自两份目录——编排住这里，上层只拿成对的值。
+   *
+   *  **正文先取、章名后解引用**：越界时交回适配器各自的既有错误语义（在线 `ChapterNotFoundError`、
+   *  本地 EPUB `LocalArtifactNotFoundError`、本地 TXT 的适配器错误），本层不新立界判。
+   *  反过来先解引用章名，越界会变成未捕获的 TypeError——把一条已分类的 404 换成 500。
+   *
+   *  文字面经**唯一投影** `chapterContentToText`：text 与 rich 两个分支都在它手里，不写第二份。 */
+  async readChapter(sourceId: string, bookKey: string, chapterIndex: number): Promise<{ name: string; text: string }> {
+    const chapters = await this.toc(sourceId, bookKey)
+    const content = await this.chapterContent(sourceId, bookKey, chapterIndex)
+    return { name: chapters[chapterIndex].name, text: chapterContentToText(content) }
   }
 
   private isLocal(sourceId: string): boolean {

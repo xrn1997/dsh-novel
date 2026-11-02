@@ -395,6 +395,36 @@ describe('SourceRequest', () => {
     expect(seen).toContain('https://s.com/x')
   })
 
+  it('脚本求值面只有 HTTP：浏览器形态在类型上不可表达，运行时闯入点名拒收', async () => {
+    const sr = createSourceRequest({
+      fetcher: createFetcher({ fetchImpl: async () => html('ok') }),
+      webview, cookieJar: new CookieJar(), jsTimeoutMs: () => 1000,
+    })
+    const s = src()
+    // @ts-expect-error 浏览器形态只经 webview（loginCheck 只作用 HTTP）
+    await expect(sr.fetcherFor(s).fetchPage('https://s.com/w', { webView: true }))
+      .rejects.toThrow(/只走 HTTP/)
+  })
+
+  it('脚本求值面不解析动态头：头只经 init 带入', async () => {
+    const seen: string[] = []
+    const fetcher = createFetcher({
+      fetchImpl: async (input) => {
+        const url = String(input)
+        seen.push(url)
+        if (url.endsWith('/h')) {
+          return new Response('{"X-Dyn":"1"}', { headers: { 'content-type': 'application/json' } })
+        }
+        return html('ok')
+      },
+    })
+    const sr = createSourceRequest({ fetcher, webview, cookieJar: new CookieJar(), jsTimeoutMs: () => 1000 })
+    const s = src({ header: `@js:java.ajax('https://s.com/h')` })
+    // 若本面偷偷跑 initFor / resolveHeaders，头规则里的 /h 就会出现
+    await sr.fetcherFor(s).fetchPage('https://s.com/x', { headers: { 'X-A': '1' } })
+    expect(seen).toEqual(['https://s.com/x'])
+  })
+
   it('loginCheck 重试也过限速', async () => {
     let now = 0
     const sleeps: number[] = []

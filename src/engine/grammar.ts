@@ -220,7 +220,9 @@ export function withImplicitText(rule: string): string {
 
 /** URL 模板 JS 形态判定：`@js:` / `js:` / `<js>` 开头（容前导空白）。
  *  形态面的消费方是搜索面块扫描（`search-template.ts` 的 `URL_JS_BLOCK_RE`，与本判定同判据）；
- *  本函数是这条词法事实的**登记处**（整串判定暂无生产调用方）。 */
+ *  本函数是这条词法事实的**登记处**（整串判定暂无生产调用方）。
+ *  header 侧另有一把更窄的尺（`services/normalize.ts` 的 `jsHeaderCodeOf`）：请求头只认
+ *  `@js:` / `<js>` 两种前缀，裸 `js:` 不在其中——宽窄差是两条语义，不是漂移。 */
 export function isJsForm(template: string): boolean {
   return /^\s*(?:@?js:|<js>)/i.test(template)
 }

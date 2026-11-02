@@ -50,6 +50,26 @@ describe('normalize：header 单字段两形态', () => {
     expect(r.source!.rules.headerRule).toBe(rule)
     expect(r.source!.rules.header).toBeNull()
   })
+  it('漏枚举的大小写变体 @jS: 同样判规则（判据不是前缀枚举清单）', () => {
+    const rule = '@jS:JSON.stringify({"A":"b"})'
+    const r = normalizeSource({ ...base, header: rule })
+    expect(r.source!.rules.headerRule).toBe(rule)
+    expect(r.source!.rules.header).toBeNull()
+    expect(r.warnings.some((w) => w.field === 'header')).toBe(false)
+  })
+  it('前导空白 + <js> 闭合标签 → 规则形态，原文（含空白）照存', () => {
+    const rule = '  <js>JSON.stringify({"A":"b"})</js>'
+    const r = normalizeSource({ ...base, header: rule })
+    expect(r.source!.rules.headerRule).toBe(rule)
+    expect(r.source!.rules.header).toBeNull()
+    expect(r.warnings.some((w) => w.field === 'header')).toBe(false)
+  })
+  it('裸 js: 不判规则、按坏 JSON 点名（与 URL 模板侧 isJsForm 的刻意宽窄差）', () => {
+    const r = normalizeSource({ ...base, header: 'js:JSON.stringify({"A":"b"})' })
+    expect(r.source!.rules.headerRule).toBeNull()
+    expect(r.source!.rules.header).toBeNull()
+    expect(r.warnings.some((w) => w.field === 'header')).toBe(true)
+  })
   it('静态 JSON 形态：header 解析、headerRule 为 null（互斥同源）', () => {
     const r = normalizeSource({ ...base, header: '{"User-Agent":"UA"}' })
     expect(r.source!.rules.header).toEqual({ 'User-Agent': 'UA' })
@@ -63,6 +83,8 @@ describe('normalize：header 单字段两形态', () => {
   })
   it('rawHeaderRule：raw 版判别（load 存量重推通道）——非对象返回 undefined（别动存量）', () => {
     expect(rawHeaderRule({ header: '@js:1' })).toBe('@js:1')
+    // 存量读口与导入侧同一把尺：前导空白不挡判别，原文照回（求值侧再剥）
+    expect(rawHeaderRule({ header: ' @js:1' })).toBe(' @js:1')
     expect(rawHeaderRule({ header: '{"A":"b"}' })).toBeNull()
     expect(rawHeaderRule(null)).toBeUndefined()
     expect(rawHeaderRule('not-an-object')).toBeUndefined()
@@ -89,6 +111,12 @@ describe('resolveHeaders（legado getHeaderMap 口径）', () => {
     expect(h['X-Device']).toBe('dev-1')
     expect(h['X-Shared']).toBe('from-auth') // auth 在后占优
     expect(h.Cookie).toBe('sid=s')
+  })
+  it('存量 headerRule 带前导空白：判据与剥前缀同一把尺，规则照常生效', async () => {
+    const s = mkSource({
+      rules: { ...mkSource().rules, headerRule: ' @js:JSON.stringify({"X-Dev":"d1"})' },
+    })
+    expect(await resolveHeaders(fetcher, s)).toMatchObject({ 'X-Dev': 'd1' })
   })
   it('headerRule 脚本拿到 engineContextOf 的非头能力位（deviceId）', async () => {
     const s = mkSource({
@@ -127,6 +155,19 @@ describe('resolveHeaders（legado getHeaderMap 口径）', () => {
       const h = await resolveHeaders(fetcher, s)
       expect(h).toEqual(headerOf(s))
     } finally { console.warn = warn }
+  })
+  it('存量脏值 headerRule（判据不认的形态）→ 静态头直答、不 warn', async () => {
+    // 这一支只服务坏库：normalize / rehydrate 只会落 `@js:` / `<js>` 原文或 null。
+    for (const dirty of ['foo', 'js:JSON.stringify({"X-Dev":"d1"})']) {
+      const s = mkSource({ rules: { ...mkSource().rules, headerRule: dirty, header: { Referer: 'https://r' } } })
+      const warn = console.warn
+      const captured: unknown[] = []
+      console.warn = (...a: unknown[]) => { captured.push(a.join(' ')) }
+      try {
+        expect(await resolveHeaders(fetcher, s)).toEqual(headerOf(s))
+        expect(captured, `${dirty} 不该产生 warning`).toHaveLength(0)
+      } finally { console.warn = warn }
+    }
   })
 })
 

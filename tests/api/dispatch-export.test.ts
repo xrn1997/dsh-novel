@@ -5,6 +5,7 @@ import { makeTempDir, trackService } from '../temp-dir.js'
 
 const BASE = 'https://s.com'
 const TOC_HTML = '<html><body><div class="b ch"><a href="/c/1.html">第一章</a></div><div class="b ch"><a href="/c/2.html">第二章</a></div></body></html>'
+const EMPTY_TOC_HTML = '<html><body></body></html>'
 const rawSource = {
   bookSourceName: 'S', bookSourceUrl: BASE,
   searchUrl: `${BASE}/search?q={{key}}`,
@@ -22,6 +23,7 @@ beforeAll(async () => {
     dir,
     fetchImpl: (async (input: RequestInfo | URL) => {
       const u = String(input)
+      if (u.includes('/book/empty/')) return new Response(EMPTY_TOC_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } })
       if (u.includes('/book/1/')) return new Response(TOC_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } })
       if (u.includes('/c/')) {
         const n = u.includes('/c/1') ? '一' : '二'
@@ -74,6 +76,25 @@ describe('GET /novel-api/export', () => {
     const env = await r.json() as any
     expect(env.ok).toBe(false)
     expect(env.error?.code).toBe('BadRange')
+  })
+  it('原始区间倒置 from=9&to=1 → 422，文案里的 from/to 是裁剪后的 2/1（交接精度）', async () => {
+    const id = await sourceId()
+    const r = await fetch(`${base}/novel-api/export?sourceId=${id}&url=${encodeURIComponent(`${BASE}/book/1/`)}&title=t&from=9&to=1`)
+    expect(r.status).toBe(422)
+    const env = await r.json() as any
+    expect(env.ok).toBe(false)
+    expect(env.error?.code).toBe('BadRange')
+    // 原始 9/1 与裁剪后的 2/1 不同：文案若用原始值就说明门面的裁剪结果没被原样交接
+    expect(env.error?.message).toBe('导出范围非法：from(2) > to(1)')
+  })
+  it('目录为空 → 422 EmptyToc 错误信封（非流）', async () => {
+    const id = await sourceId()
+    const r = await fetch(`${base}/novel-api/export?sourceId=${id}&url=${encodeURIComponent(`${BASE}/book/empty/`)}&title=x`)
+    expect(r.status).toBe(422)
+    const env = await r.json() as any
+    expect(env.ok).toBe(false)
+    expect(env.error?.code).toBe('EmptyToc')
+    expect(env.error?.message).toBe('目录为空，无内容可导出')
   })
   it('from 非整数 → 400 BadRequest 错误信封', async () => {
     const id = await sourceId()

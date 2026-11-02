@@ -127,11 +127,48 @@ describe('CityView', () => {
     expect(container.querySelector('.novel-city-foot')).toBeNull()
   })
 
+  // 选中态是 store 投影（S9 之后）：记住的那一对在解析结果落空时仍然在场。分类头与顺序说明只对
+  // **可解析的一对**说话——落空时还照分类渲染，就是在空态/错误上方悬一个「逛的是某个分类」的假头。
+  it('没有源可逛而记住的源与分类悬着：不出分类头与顺序说明，空态照旧', async () => {
+    cityStore.set({ sourceId: 's1', kind: '现代情感' })
+    const d = depsOf({ apiGet: vi.fn(async (p: string) => (p.includes('kinds') ? { sources: [] } : { job: null })) })
+    render(<CityView deps={d} />)
+    await waitFor(() => expect(screen.getByText(/还没有书源提供分类浏览/)).toBeTruthy())
+    expect(screen.queryByRole('heading', { name: '现代情感' })).toBeNull()
+    expect(screen.queryByText('按书源声明的顺序')).toBeNull()
+  })
+
+  it('记住的源还在清单里但声明零分类：同样不出分类头（源在场不等于这一对可解析）', async () => {
+    const bare = { sources: [{ id: 's1', name: '空分类源', groups: [], status: 'unverified', kinds: [] }] }
+    cityStore.set({ sourceId: 's1', kind: '现代情感' })
+    const d = depsOf({ apiGet: vi.fn(async (p: string) => (p.includes('kinds') ? bare : { job: null })) })
+    const { container } = render(<CityView deps={d} />)
+    await waitFor(() => expect(screen.getByRole('button', { name: /^空分类源/ })).toBeTruthy())
+    expect(screen.queryByRole('heading', { name: '现代情感' })).toBeNull()
+    expect(screen.queryByText('按书源声明的顺序')).toBeNull()
+    expect(submitted).toEqual([])                                             // 没有可落的分类对：一轮都不提交
+    expect(container.querySelector('.novel-city-gridwrap')).not.toBeNull()    // 有源那一侧照旧铺（空的）网格
+  })
+
+  it('分类入口读失败：只留错误横幅，不留记住的分类头', async () => {
+    cityStore.set({ sourceId: 's1', kind: '现代情感' })
+    const d = depsOf({ apiGet: vi.fn(async (p: string) => {
+      if (p.includes('kinds')) throw new Error('boom')
+      return { job: null }
+    }) })
+    const { container } = render(<CityView deps={d} />)
+    await waitFor(() => { expect(container.querySelector('.novel-err')?.textContent).toContain('分类入口读取失败') })
+    expect(screen.queryByRole('heading', { name: '现代情感' })).toBeNull()
+    expect(screen.queryByText('按书源声明的顺序')).toBeNull()
+  })
+
   it('记住的上次源与分类仍在场 → 加载它，而不是榜首', async () => {
     cityStore.set({ sourceId: 's1', kind: '穿越重生' })
     render(<CityView deps={depsOf()} />)
     await waitFor(() => expect(submitted).toEqual([['s1', '穿越重生']]))
     expect(screen.getByRole('button', { name: '穿越重生' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('heading', { name: '穿越重生' })).toBeTruthy()   // 可解析的一对照旧出头
+    expect(screen.getByText('按书源声明的顺序')).toBeTruthy()
   })
 
   it('恢复回来的是同一源同类 → 一个提交都不发（服务端那一轮就是它的家，回来看它跑完）', async () => {

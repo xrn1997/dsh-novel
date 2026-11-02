@@ -115,11 +115,16 @@ export async function writeJsonAtomic(file: string, data: unknown): Promise<void
   await writeFileAtomic(file, JSON.stringify(data, null, 2))
 }
 
+/** 防抖窗口的缺省值——**唯一主人在这里**。`createDebouncedWriter` 的缺省参数取它：
+ *  书架直接用缺省，注册表显式传入（调用点可读「注册表用 100ms 窗口」）。阈值不归本模块。 */
+export const PERSIST_WINDOW_MS = 100
+
 /** 进程内防抖合并连续写：窗口内同文件多次 schedule 只落最后一次；flush 等待全部落地。
  *  可选 `threshold`：累计到第 N 次 schedule 时立即写，并把「这次写落地」交给调用方 await——
  *  计数跨定时器/flush 写累计，只有阈值触发才复位（ADR-0011 的「累计 N 次」）；
- *  阈值与窗口的取值由调用方给（如 `SourceRegistry` 的 `PERSIST_EVERY`），防抖/计数/排队/失败合同只住这里。 */
-export function createDebouncedWriter(delayMs = 100, opts: { threshold?: number } = {}) {
+ *  阈值由调用方给（如 `SourceRegistry` 的 `PERSIST_EVERY`），窗口缺省住本模块的 `PERSIST_WINDOW_MS`；
+ *  防抖/计数/排队/失败合同只住这里。 */
+export function createDebouncedWriter(delayMs = PERSIST_WINDOW_MS, opts: { threshold?: number } = {}) {
   type PendingWrite = { data: unknown; timer: ReturnType<typeof setTimeout> }
   const pending = new Map<string, PendingWrite>()
   const counts = new Map<string, number>()

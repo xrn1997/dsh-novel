@@ -15,10 +15,13 @@ export type AddBookInput = { bookKey: string; sourceId: string; title: string }
 export type BookPatch = ShelfMetaPatch
 
 /** patch 应用单点：遍历 SHELF_META——缺席/空值键跳过（保值），带值键覆盖。
- *  加书目字段只改表，此处零改动。 */
+ *  数值位（表里标为 number 的键）在写值前归一化成非负整数（floor 后钳到 0 以上）：这是从 wire 的
+ *  `pickShelfMeta` 搬来的**落盘归一化**，主人只剩这一处——客户端 body 与 agent 工具都只交形状，
+ *  HTTP 输出与落盘值由本处在落地前收口。加书目字段只改表，此处零改动。 */
 function applyPatch(book: ShelfBook, patch: BookPatch): void {
   const put = <K extends ShelfMetaField>(k: K, v: BookPatch[K]): void => {
-    if (v !== null && v !== undefined) book[k] = v
+    if (v === null || v === undefined) return
+    book[k] = SHELF_META[k] === 'number' ? Math.max(0, Math.floor(v as number)) as ShelfBook[K] : v
   }
   for (const k of Object.keys(SHELF_META) as ShelfMetaField[]) put(k, patch[k])
 }
@@ -28,6 +31,7 @@ function applyPatch(book: ShelfBook, patch: BookPatch): void {
  * 两种元数据写口各司其职：add = 不在架才插入（已有书 = patch 语义）；
  * update = 对在架书打补丁（缺席键保值）——merge 规则住在本 module，调用方不再各自筛键。
  * updateProgress 对不在架的书静默不写。
+ * 所有写动词只经私有 `edit(recipe)` 排一次写：变更与排写不可分，没有变更的早退在进配方口前完成。
  *
  * **架位凭 `bookKey` 单键认**（词条见 CONTEXT 的「架位」；在线书的值就是那条命中行的 URL 原文，
  * 本地书另带 `local:` 前缀）。`sourceId` 与 `title` 是必填的**元数据字段**、不参与查找：同一个地址
@@ -64,38 +68,42 @@ export class Shelf {
   add(input: AddBookInput): ShelfBook {
     const existing = this.get(input.bookKey)
     if (existing !== undefined) {
-      applyPatch(existing, input)
-      void this.writer.schedule(this.file, this.books)
-      return existing
+      return this.edit(() => {
+        applyPatch(existing, input)
+        return existing
+      })
     }
-    const book: ShelfBook = {
-      sourceId: input.sourceId,
-      bookKey: input.bookKey,
-      title: input.title,
-      addedAt: Date.now(),
-      progress: { chapterIndex: 0, offsetRatio: 0, updatedAt: Date.now() },
-    }
-    applyPatch(book, input)
-    this.books.push(book)
-    void this.writer.schedule(this.file, this.books)
-    return book
+    return this.edit(() => {
+      const book: ShelfBook = {
+        sourceId: input.sourceId,
+        bookKey: input.bookKey,
+        title: input.title,
+        addedAt: Date.now(),
+        progress: { chapterIndex: 0, offsetRatio: 0, updatedAt: Date.now() },
+      }
+      applyPatch(book, input)
+      this.books.push(book)
+      return book
+    })
   }
 
   /** patch 写口：对在架书打补丁（null/undefined 键 = 保值）；不在架 → null（不静默造书） */
   update(bookKey: string, patch: BookPatch): ShelfBook | null {
     const book = this.get(bookKey)
     if (book === undefined) return null
-    applyPatch(book, patch)
-    void this.writer.schedule(this.file, this.books)
-    return book
+    return this.edit(() => {
+      applyPatch(book, patch)
+      return book
+    })
   }
 
   /** 更新阅读进度并防抖落盘；bookKey 不在架 → 静默不写（进度只跟已加书走） */
   updateProgress(bookKey: string, chapterIndex: number, offsetRatio: number): void {
     const book = this.get(bookKey)
     if (!book) return
-    book.progress = { chapterIndex, offsetRatio, updatedAt: Date.now() }
-    void this.writer.schedule(this.file, this.books)
+    this.edit(() => {
+      book.progress = { chapterIndex, offsetRatio, updatedAt: Date.now() }
+    })
   }
 
   /** 移除并防抖落盘；返回是否命中 */
@@ -104,20 +112,31 @@ export class Shelf {
   }
 
   /** 批量移除（书架多选删除的写口）：一趟扫描裁掉全部命中项，**返回被删条目**（调用方取条数当回执）；
-   *  未知键静默跳过、重复键幂等，只 schedule 一次落盘。本地书副本的连删不在这一层——门面在移除
+   *  未知键静默跳过、重复键幂等，有命中才 schedule 一次落盘。本地书副本的连删不在这一层——门面在移除
    *  **之前**按「真在架的键」删副本（`services/reading.ts` 的 `removeShelfAndLocal` / `removeBooks`）。 */
   removeMany(bookKeys: readonly string[]): ShelfBook[] {
     const want = new Set(bookKeys)
     if (want.size === 0) return []
     const gone: ShelfBook[] = []
-    this.books = this.books.filter((b) => {
+    const kept = this.books.filter((b) => {
       if (!want.has(b.bookKey)) return true
       gone.push(b)
       return false
     })
     if (gone.length === 0) return gone
+    return this.edit(() => {
+      this.books = kept
+      return gone
+    })
+  }
+
+  /** 写配方口：recipe 改内存 → 排一次防抖写 → 返回 recipe 值。公开写动词一律经它排写，
+   *  「改了却没排写」与「没改也排写」都不在调用点手配——无变更的早退由各动词在进配方口前完成。
+   *  同步执行是公开写动词保持同步签名的前提（排写只是 schedule，不 await 落地）。 */
+  private edit<T>(recipe: () => T): T {
+    const value = recipe()
     void this.writer.schedule(this.file, this.books)
-    return gone
+    return value
   }
 
   /** 等待防抖写落地（测试/进程退出前调用） */

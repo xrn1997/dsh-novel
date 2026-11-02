@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import * as normalizeModule from '../../src/services/normalize.js'
 import { normalizeSource, rawExploreEnabled, rawExploreFields, rehydrateStoredSource } from '../../src/services/normalize.js'
 import type { NormalizeIssue } from '../../src/services/normalize.js'
 
@@ -571,6 +572,12 @@ describe('bookSourceType（内容形态，增补 2026-09-16）', () => {
   })
 })
 describe('分组拆分 splitGroups（修复 2026-09-16：真实导出是逗号分隔）', () => {
+  it('splitGroups / CONTENT_KIND_OF 不对外开：消费者只有本模块', () => {
+    // 两个符号只服务本模块的导入/存量收敛；矩阵的 impl 锚按符号名在剥注释后的代码里查，
+    // 不依赖模块导出面。对外多开一格就是多一份可被误用的能力面。
+    expect('splitGroups' in normalizeModule).toBe(false)
+    expect('CONTENT_KIND_OF' in normalizeModule).toBe(false)
+  })
   const groupsOf = (g: string): string[] => {
     const r = normalizeSource({ bookSourceName: 'A', bookSourceUrl: 'https://a', ruleContent: 'x', bookSourceGroup: g })
     expect(r.ok).toBe(true)
@@ -705,7 +712,7 @@ describe('legado 发现面（exploreUrl + ruleExplore）', () => {
     })
     expect(r.source!.rules.ruleExploreKinds).toEqual([])
   })
-  it('bookList 缺席即整套不用（条目规则走通用搜索面，见 explore-face.rulesFor）', () => {
+  it('bookList 缺席即整套不用（条目规则走通用搜索面，见 bridge.hitRuleOf）', () => {
     const rules = rulesOf({ ...legado, ruleExplore: { name: '.t a@text', bookUrl: '.t a@href' } })
     for (const [sub, field] of NINE) {
       expect(rules[field], `ruleExplore.${sub} → ${field}`).toBe(null)
@@ -765,6 +772,22 @@ describe('rehydrateStoredSource（存量收敛）', () => {
     expect(s.rules.ruleDetailInit).toContain('#ctx')
     expect(s.rules.headerRule).toContain('Cookie')
     expect(s.rules.bookUrlPattern).toContain('/book/')
+    expect(rehydrateStoredSource(s)).toBe(false)
+  })
+
+  it('大小写变体 @jS: 的 header 清空后按 raw 补回原文，幂等', () => {
+    const s = {
+      ...normalizeSource({
+        bookSourceName: 'A', bookSourceUrl: 'https://a.com', ruleContent: 'x',
+        header: '@jS:JSON.stringify({"A":"b"})',
+      }).source!,
+      id: 's', status: 'unverified' as const, importedAt: 0,
+    }
+    const rules = s.rules as unknown as Record<string, unknown>
+    rules.headerRule = null
+    rules.header = null
+    expect(rehydrateStoredSource(s)).toBe(true)
+    expect(s.rules.headerRule).toBe('@jS:JSON.stringify({"A":"b"})')
     expect(rehydrateStoredSource(s)).toBe(false)
   })
 

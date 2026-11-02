@@ -1,6 +1,6 @@
 import type { ProbeErrorCode, ProbeResult } from '../shared/wire.js'
 export type { ProbeResult, ProbeErrorCode } from '../shared/wire.js'
-import { detailFieldsOf, firstValue } from './bridge.js'
+import { detailFieldsOf, fieldOf } from './bridge.js'
 import { fetchSearchPage, searchErrorCodeOf } from './search-face.js'
 import type { SourceRequest } from './source-request.js'
 import type { SourceRegistry } from './sources.js'
@@ -49,8 +49,9 @@ export async function probeSource(
       if (nameRule === null) return fail('RuleMissing', '源未声明 ruleBookName', 0)   // 搜索面已拦；此处为类型收窄
       // usage='value'：与搜索面取书名同口径（`reading.ts` 对同一 ruleBookName、同一 item
       // 用 'value'）。规则以属性终端收尾（`@onclick`/`@_src`）时两种用途结果不同——
-      // 探针漏传该参数会把搜索面读得出书名的源判成「首条书名为空」的坏源。
-      const first = firstValue(await page.subEval(nameRule, page.contexts[0], 'search', 'value'), 'search')
+      // 探针漏传该参数会把搜索面读得出书名的源判成「首条书名为空」的坏源。用途定档收在
+      // `bridge.fieldOf` 门内，探针只交规则与本条上下文，不自己接住求值产物。
+      const first = await fieldOf(page.subEval, nameRule, page.contexts[0], 'search')
       if (first === null || first.trim() === '') {
         return fail('RuleEvalError', `首条书名为空（段 ruleBookName: ${nameRule}）`, page.contexts.length)
       }

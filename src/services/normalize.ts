@@ -1,7 +1,10 @@
 import { appendTail, withImplicitText } from '../engine/grammar.js'
 import { parseExploreKinds, usableKind } from './explore-url.js'
-import { DIALECT_MAP, NATIVE_MAP, NATIVE_TEXT_FIELDS, RULE_FIELD_SPECS, RULE_FIELDS, VACANT_RULE_FIELDS } from './rule-fields.js'
-import type { RuleFieldsOf } from './rule-fields.js'
+import {
+  DIALECT_MAP, EXPLORE_GATE_SUBS, EXPLORE_LEGADO_SUBS, EXPLORE_NATIVE_SUBS, NATIVE_MAP, NATIVE_TEXT_FIELDS,
+  REHYDRATE_PHASES, RULE_FIELD_SPECS, RULE_FIELDS, VACANT_RULE_FIELDS, wholeSetEnabled,
+} from './rule-fields.js'
+import type { RehydrateMode, RuleFieldsOf } from './rule-fields.js'
 import type { NormalizedRules, NovelSource, SourceContentKind } from './types.js'
 
 export interface NormalizeIssue { field: string; message: string }
@@ -17,14 +20,6 @@ export interface NormalizeResult {
     type: SourceContentKind
     raw: unknown; rules: NormalizedRules
   }
-}
-
-/** legado `ruleExplore` 的条目子字段 → 发现面模型字段（`bookList` 是整套启用的判据，故不在循环里）。
- *  与原生侧 `nativeExploreFields` 那组 `put` 同名单——两侧落的是同一批模型键。 */
-const RULE_EXPLORE_MAP: Record<string, string> = {
-  name: 'ruleExploreName', author: 'ruleExploreAuthor', bookUrl: 'ruleExploreBookUrl',
-  coverUrl: 'ruleExploreCoverUrl', intro: 'ruleExploreIntro', kind: 'ruleExploreKind',
-  lastChapter: 'ruleExploreLastChapter', wordCount: 'ruleExploreWordCount',
 }
 
 /** Native 子字段由映射表之外的专门逻辑处理（不点名 unsupported）：authorPrefix → ##净化尾 */
@@ -113,8 +108,9 @@ const SOURCE_KIND_LABEL: Record<SourceContentKind, string> = {
 
 /** 分组串拆分：一个源可属多个分组，兼容三种分隔符 `,`（主流导出）/`\`（旧阅读端写法）/
  *  `，`（全角）+ trim + 去空段 + 段内去重。只按 `\` 拆会让逗号粘连把多组并成一个假组名。
- *  存量脏数据由 SourceRegistry.load 迁移收敛。 */
-export function splitGroups(raw: string): string[] {
+ *  存量脏数据由 SourceRegistry.load 迁移收敛。
+ *  模块私有：导入侧与存量收敛共用；对外不是能力面（矩阵 impl 锚只要求符号在场）。 */
+function splitGroups(raw: string): string[] {
   const out: string[] = []
   for (const part of raw.split(/[\\,，]/)) {
     const g = part.trim()
@@ -134,8 +130,9 @@ function stripLeadingIcons(name: string): string {
 /** 书源内容形态取值（由书源格式定义：0/-1/缺省=文本，**1=音频，2=图片，3=文件**——把 1/2
  *  读反会让漫画/短剧源被误标后混进聚合搜索与文字书架）：-1=ALL 在源里罕见，按文本放行。
  *  **唯一映射表**：normalize 的拒绝文案与 SourceRegistry.load 的存量重推共用这一份，
- *  不存在第二份编码抄本（wire 单点纪律）。认不出的值 → 'unknown'：读不懂不等于文本。 */
-export const CONTENT_KIND_OF: Record<number, SourceContentKind> = {
+ *  不存在第二份编码抄本（wire 单点纪律）。认不出的值 → 'unknown'：读不懂不等于文本。
+ *  模块私有：导入侧与存量收敛共用；对外不是能力面（矩阵 impl 锚只要求符号在场）。 */
+const CONTENT_KIND_OF: Record<number, SourceContentKind> = {
   0: 'text', [-1]: 'text', 1: 'audio', 2: 'image', 3: 'file',
 }
 
@@ -212,17 +209,16 @@ function rawBookMetaFields(raw: unknown): Record<string, string | null> | undefi
   return out
 }
 
-/** 发现面十一键（键名直接取自 `NormalizedRules`，不另立一份同名字段表）。 */
-type ExploreField =
-  | 'ruleExploreUrl' | 'ruleExploreKinds' | 'ruleExploreList' | 'ruleExploreName'
-  | 'ruleExploreAuthor' | 'ruleExploreBookUrl' | 'ruleExploreCoverUrl' | 'ruleExploreIntro'
-  | 'ruleExploreKind' | 'ruleExploreLastChapter' | 'ruleExploreWordCount'
+/** 发现面键：表里 `vacant` 档的模型键 + 分类入口数组（`ruleExploreKinds` 是数组不是字符串，
+ *  不进表——ADR-0044）。键集由表派生，不另立一份同名字段表；表改档，本类型与
+ *  `rawExploreFields` 的返回对象一起变。 */
+type ExploreField = RuleFieldsOf<'vacant'> | 'ruleExploreKinds'
 
 /** 原生 `ruleFind` → 发现面取值（由导入侧 `flattenNative` 调用；存量补推侧 `rawExploreFields`
  *  跑的是同一个 flatten，两条路因此不可能分叉）。这个函数只交材料、不产留痕——`sawChildren` 回给
  *  调用方点名，因为导入与补推的留痕渠道不同。口径三条（判据只在能分叉的地方钉死）：整套覆盖的
- *  启用判据只看 `ruleSearch` 的 list 非空（逐字段回落会把对面本该用通用规则的源读成半套）、
- *  kinds 只收标题与地址**去空白后**非空的顶层项、`children` 非空要如实报。
+ *  启用判据只看闸行的 native 子字段非空（`EXPLORE_GATE_SUBS`；逐字段回落会把对面本该用通用规则的
+ *  源读成半套）、kinds 只收标题与地址**去空白后**非空的顶层项、`children` 非空要如实报。
  *  非对象形态的 `ruleFind` 不在此列（同 `ruleRank` 一族：静默忽略）。 */
 function nativeExploreFields(f: Record<string, unknown>): {
   values: Record<string, string>
@@ -246,12 +242,10 @@ function nativeExploreFields(f: Record<string, unknown>): {
   const own = f.ruleSearch
   if (typeof own === 'object' && own !== null && !Array.isArray(own)) {
     const o = own as Record<string, unknown>
-    if (typeof o.list === 'string' && o.list.length > 0) {
-      put('ruleExploreList', o.list)
-      put('ruleExploreName', o.name); put('ruleExploreAuthor', o.author)
-      put('ruleExploreBookUrl', o.bookUrl); put('ruleExploreCoverUrl', o.coverUrl)
-      put('ruleExploreIntro', o.intro); put('ruleExploreKind', o.kind)
-      put('ruleExploreLastChapter', o.lastChapter); put('ruleExploreWordCount', o.wordCount)
+    // 闸与子字段名都读表派生（与 legado 侧同一个判据、同一批配对目标），f.url 与本函数的
+    // sawChildren 留显式：它们不是条目子字段。
+    if (wholeSetEnabled(o[EXPLORE_GATE_SUBS.native])) {
+      for (const [sub, field] of Object.entries(EXPLORE_NATIVE_SUBS)) put(field, o[sub])
     }
   }
   return { values, kinds, sawChildren }
@@ -403,18 +397,18 @@ function flattenDialect(raw: Record<string, unknown>, warnings: NormalizeIssue[]
       out.ruleContent = t.rule
     }
   }
-  // ruleExplore：判据只看 bookList，为什么不逐字段回落住在 `explore-face.rulesFor`（整套切换的
-  // 实现那一侧）；这块里没被消费的**非空**子字段并入上面那圈 unsupported 的点名，不另开一条。
+  // ruleExplore：判据只看闸行（`EXPLORE_GATE_SUBS` 的 legado 子字段），子字段名与目标模型由表派生；
+  // 为什么不逐字段回落住在 `bridge.hitRuleOf`（整套切换的实现那一侧）。这块里没被消费的
+  // **非空**子字段并入上面那圈 unsupported 的点名，不另开一条。
   const explore = containers.ruleExplore
   if (explore !== undefined) {
-    const wholeSet = typeof explore.bookList === 'string' && explore.bookList.length > 0
+    const wholeSet = wholeSetEnabled(explore[EXPLORE_GATE_SUBS.legado])
     if (wholeSet) {
-      setIfVacant('ruleExploreList', explore.bookList)
-      for (const [sub, field] of Object.entries(RULE_EXPLORE_MAP)) setIfVacant(field, explore[sub])
+      for (const [sub, field] of Object.entries(EXPLORE_LEGADO_SUBS)) setIfVacant(field, explore[sub])
     }
     // 未启用的那档整块一条都不被消费，故同样逐条点名（判据与上面那圈同一把尺：非空串才报）
     for (const [sub, v] of Object.entries(explore)) {
-      const consumed = wholeSet && (sub === 'bookList' || sub in RULE_EXPLORE_MAP)
+      const consumed = wholeSet && sub in EXPLORE_LEGADO_SUBS
       if (!consumed && typeof v === 'string' && v.length > 0) unsupported.push(`ruleExplore.${sub}`)
     }
   }
@@ -488,22 +482,36 @@ export function stringTableOf(obj: Record<string, unknown>): Record<string, stri
   return out
 }
 
-/** 存量补推用：按 raw 现读静态头表（规则形态 `@js:`/`<js>` 返回 undefined = 别动这一格） */
+/** 存量补推用：按 raw 现读静态头表（规则形态——与 `normalizeHeaderRule` 同一把尺——返回
+ *  undefined = 别动这一格） */
 function rawHeaderFields(raw: unknown): Record<string, string> | undefined {
   const v = (raw as { header?: unknown } | null | undefined)?.header
-  if (typeof v === 'string' && /^\s*(@js:|<js>)/i.test(v)) return undefined
+  if (jsHeaderCodeOf(v) !== null) return undefined
   const obj = parseObjectJson(v)
   if (obj === undefined) return undefined
   return stringTableOf(obj)
 }
 
-/** 动态请求头规则判别（**合并视图版**，normalize 入库时用）：header 值是 `@js:`/`<js>` 规则
- *  （判别大小写不敏感）→ 返回规则原文；否则 null。 */
-function normalizeHeaderRule(v: unknown): string | null {
+/** header 值是不是 js 规则形态；是 → 剥掉前缀后的脚本体，否 → null。
+ *  判据：trim + 大小写不敏感，形态只有 `@js:` 与 `<js>…</js>` 两种。
+ *  **刻意不认裸 `js:`**：URL 模板侧的 `grammar.isJsForm` 认它，header 侧不认——
+ *  宽窄差是两条语义（模板形态三选一 vs 请求头的两种规则前缀），不是漂移。
+ *  判别与剥前缀同住这一处：若判据放宽而剥法没跟，落成「判了规则但求值必炸」的假支持。 */
+export function jsHeaderCodeOf(v: unknown): string | null {
   if (typeof v !== 'string') return null
-  return v.startsWith('@js:') || v.startsWith('<js>')
-    || v.startsWith('@JS:') || v.startsWith('@Js:') || v.toUpperCase().startsWith('<JS>')
-    ? v : null
+  const t = v.trim()
+  if (/^@js:/i.test(t)) return t.slice(4)
+  if (/^<js>/i.test(t)) {
+    const close = t.lastIndexOf('<')
+    return close > 4 ? t.slice(4, close) : t.slice(4)
+  }
+  return null
+}
+
+/** 动态请求头规则判别（**合并视图版**，normalize 入库时用）：`jsHeaderCodeOf` 认得的形态
+ *  → 返回规则原文（前导空白也原样存，求值侧按同一把尺再剥）；否则 null。 */
+function normalizeHeaderRule(v: unknown): string | null {
+  return typeof v === 'string' && jsHeaderCodeOf(v) !== null ? v : null
 }
 
 /** 动态请求头规则判别（**raw 源版**，供 `rehydrateStoredSource` 存量重推，触发点 `SourceRegistry.load`）：
@@ -677,9 +685,9 @@ const CONDITIONAL_READERS: Record<RuleFieldsOf<'conditional'>, (s: NovelSource, 
 
 /**
  * 存量收敛：把已落盘的 `sources.json` 条目按 raw 重新推导到当前模型形状，原地修改并返回是否有改动。
- * 触发点只有 `SourceRegistry.load`；「哪些字段恒覆盖、哪些只填缺席、哪些键必须恒在场、谁必须排在谁
- * 之后」逐条写在实现它的那一格上面。覆盖策略的材料面住 `rule-fields.ts` 的字段表：每个字段归哪一档
- * （按**生产者数量**分档）由那一行的模式列登记，这里只消费，不另列名单。
+ * 触发点只有 `SourceRegistry.load`；「哪些字段恒覆盖、哪些只填缺席、哪些键必须恒在场」逐条写在
+ * 实现它的那一格上面。覆盖策略的材料面住 `rule-fields.ts` 的字段表：每个字段归哪一档
+ * （按**生产者数量**分档）由那一行的模式列登记，段序由表级段号登记，这里只消费，不另列名单。
  * 幂等：收敛过一次后再进来不再产生改动。
  */
 export function rehydrateStoredSource(s: NovelSource): boolean {
@@ -707,56 +715,67 @@ export function rehydrateStoredSource(s: NovelSource): boolean {
   const derived = contentTypeOfRaw(s.raw)
   if (derived !== undefined && s.type !== derived) { s.type = derived; mark() }
 
-  // 恒覆盖档按表的行逐条走读口：表加一行而 ALWAYS_READERS 没补，`tsc` 当场红。
-  // raw 非对象 → 读口回 undefined（不动）；raw 在场：键恒落成 string | null（required 形状）。
-  for (const spec of RULE_FIELD_SPECS) {
-    if (spec.rehydrate === 'always') syncRule(spec.model, ALWAYS_READERS[spec.model](s.raw))
+  /** 各收敛段的 runner：段序由表的 `REHYDRATE_PHASES` 给（段号是模式的事实，不逐行重复），
+   *  这里只登记每段做什么。段内步序不在表里——`ruleExploreKinds` 不是字符串字段、不进表
+   *  （`ADR-0044`），它的数组归一留在 vacant 段尾。 */
+  const runners: Record<Exclude<RehydrateMode, 'none'>, () => void> = {
+    // 恒覆盖档按表的行逐条走读口：表加一行而 ALWAYS_READERS 没补，`tsc` 当场红。
+    // raw 非对象 → 读口回 undefined（不动）；raw 在场：键恒落成 string | null（required 形状）。
+    always: () => {
+      for (const spec of RULE_FIELD_SPECS) {
+        if (spec.rehydrate === 'always') syncRule(spec.model, ALWAYS_READERS[spec.model](s.raw))
+      }
+    },
+    // ruleExplore* 十一键按 raw 补推（与上面几条同族的存量收敛）：发现面是后来才接的链路，
+    // 存量 rules 里这一族是空的源在书城**整个是空的**（kinds 一条不剩、条目规则缺席只能退回
+    // 通用搜索规则）。读口就是导入侧那一次 flatten（rawExploreFields），不另立第二条规则解释。
+    // **这一族（表里的 `vacant` 档）连「在场但为空」也算可填**，与 kind/wordCount 那族 `missing` 档「只填缺席」不同。差别不在宽容，
+    // 在生产者数量：这一族的派生值只有那份映射一个来源，老库里躺着 null 与空数组不代表
+    // 「读过且为空」，只代表那一版还没接 legado——按 raw 重推才是它的当前真相。那两族有两条读路、
+    // 优先级本就不同（导入侧平铺优先、重推侧容器优先），覆盖会把对的改成错的。
+    // 派生值为空时不写，所以这一步单调且幂等；键恒在场（required 形状的合同）仍由缺席那一支负责。
+    vacant: () => {
+      const wantExplore = rawExploreFields(s.raw)
+      if (wantExplore !== undefined) {
+        const rules = s.rules as unknown as Record<string, unknown>
+        for (const [k, v] of Object.entries(wantExplore)) {
+          const cur = rules[k]
+          const vacant = cur === undefined || cur === null
+            || (Array.isArray(cur) && (cur as unknown[]).length === 0)
+          const hasValue = Array.isArray(v) ? (v as unknown[]).length > 0 : v !== null
+          if (hasValue && vacant) { rules[k] = v; mark() }
+          else if (cur === undefined) { rules[k] = v; mark() }
+        }
+      }
+      // 键恒在场是 required 形状的合同，且**必须在本段补推之后**：消费者按
+      // `rules.ruleExploreKinds.length` 读分类面，raw 不是对象 / raw 里没有发现面 / 键上躺着脏形状
+      // （非数组）都靠这一步收敛成空数组；反过来的顺序会把按 raw 推出来的分类清掉。
+      if (!Array.isArray(s.rules.ruleExploreKinds)) {
+        s.rules.ruleExploreKinds = []; mark()
+      }
+    },
+    // 条件档同样按表走读口（键集由 RuleFieldsOf<'conditional'> 收口）：表加一行而
+    // CONDITIONAL_READERS 没补，`tsc` 当场红。
+    conditional: () => {
+      for (const spec of RULE_FIELD_SPECS) {
+        if (spec.rehydrate === 'conditional') CONDITIONAL_READERS[spec.model](s, mark)
+      }
+    },
+    // kind / wordCount 按 raw 补推（表里的 `missing` 档；与上面几条同族的存量收敛）：这两个字段后来才接进取值链路，
+    // 老数据的 rules 根本没这四个键 → 不补推则读得出的分类/字数对已入库的源永远是 null。
+    // **与上面三条的差别**：只补 `undefined` 的键、不覆盖已有值——新入库的源由 normalize 正确派生
+    // （含字符串化容器那条路径），这里再按 raw 读一遍是第二条路，覆盖会把对的改成错的。
+    missing: () => {
+      const wantMeta = rawBookMetaFields(s.raw)
+      if (wantMeta !== undefined) {
+        for (const [k, v] of Object.entries(wantMeta)) {
+          const rules = s.rules as unknown as Record<string, string | null | undefined>
+          if (rules[k] === undefined) { rules[k] = v; mark() }
+        }
+      }
+    },
   }
-
-  // ruleExplore* 十一键按 raw 补推（与上面几条同族的存量收敛）：发现面是后来才接的链路，
-  // 存量 rules 里这一族是空的源在书城**整个是空的**（kinds 一条不剩、条目规则缺席只能退回
-  // 通用搜索规则）。读口就是导入侧那一次 flatten（rawExploreFields），不另立第二条规则解释。
-  // **这一族（表里的 `vacant` 档）连「在场但为空」也算可填**，与下面 kind/wordCount 那族 `missing` 档「只填缺席」不同。差别不在宽容，
-  // 在生产者数量：这一族的派生值只有那份映射一个来源，老库里躺着 null 与空数组不代表
-  // 「读过且为空」，只代表那一版还没接 legado——按 raw 重推才是它的当前真相。那两族有两条读路、
-  // 优先级本就不同（导入侧平铺优先、重推侧容器优先），覆盖会把对的改成错的。
-  // 派生值为空时不写，所以这一步单调且幂等；键恒在场（required 形状的合同）仍由缺席那一支负责。
-  const wantExplore = rawExploreFields(s.raw)
-  if (wantExplore !== undefined) {
-    const rules = s.rules as unknown as Record<string, unknown>
-    for (const [k, v] of Object.entries(wantExplore)) {
-      const cur = rules[k]
-      const vacant = cur === undefined || cur === null
-        || (Array.isArray(cur) && (cur as unknown[]).length === 0)
-      const hasValue = Array.isArray(v) ? (v as unknown[]).length > 0 : v !== null
-      if (hasValue && vacant) { rules[k] = v; mark() }
-      else if (cur === undefined) { rules[k] = v; mark() }
-    }
-  }
-  // 键恒在场是 required 形状的合同，且**必须在上面那段之后**：消费者按
-  // `rules.ruleExploreKinds.length` 读分类面，raw 不是对象 / raw 里没有发现面 / 键上躺着脏形状
-  // （非数组）都靠这一步收敛成空数组；反过来的顺序会把按 raw 推出来的分类清掉。
-  if (!Array.isArray(s.rules.ruleExploreKinds)) {
-    s.rules.ruleExploreKinds = []; mark()
-  }
-
-  // 条件档同样按表走读口（键集由 RuleFieldsOf<'conditional'> 收口）：表加一行而
-  // CONDITIONAL_READERS 没补，`tsc` 当场红。
-  for (const spec of RULE_FIELD_SPECS) {
-    if (spec.rehydrate === 'conditional') CONDITIONAL_READERS[spec.model](s, mark)
-  }
-
-  // kind / wordCount 按 raw 补推（表里的 `missing` 档；与上面几条同族的存量收敛）：这两个字段后来才接进取值链路，
-  // 老数据的 rules 根本没这四个键 → 不补推则读得出的分类/字数对已入库的源永远是 null。
-  // **与上面三条的差别**：只补 `undefined` 的键、不覆盖已有值——新入库的源由 normalize 正确派生
-  // （含字符串化容器那条路径），这里再按 raw 读一遍是第二条路，覆盖会把对的改成错的。
-  const wantMeta = rawBookMetaFields(s.raw)
-  if (wantMeta !== undefined) {
-    for (const [k, v] of Object.entries(wantMeta)) {
-      const rules = s.rules as unknown as Record<string, string | null | undefined>
-      if (rules[k] === undefined) { rules[k] = v; mark() }
-    }
-  }
+  for (const phase of REHYDRATE_PHASES) runners[phase]()
 
   // groups 拆分迁移——早期只按 `\` 拆，真实导出的逗号粘连组合串按 splitGroups 收敛成多段（幂等）；
   // name 前缀图标迁移——书源包惯用的分组装饰前缀按 stripLeadingIcons 剥掉（幂等）。
