@@ -49,6 +49,11 @@ export default defineConfig([
     outDir: 'lib',
     format: ['cjs'],
     platform: 'browser',
+    // target 必须显式写否则认错运行时：这份产物由宿主在浏览器侧加载，不是 Node 包。省掉它
+    // tsdown 会拿 package.json 的 engines.node 推成 node24，于是 checks.legacyCjs 把「给现代
+    // Node 发 CJS」的判据套上来，打一条「建议改用 ESM」的假阳性 WARN——CJS 恰恰是 ./client
+    // 闭合工厂契约的要求，不该按 Node 库计。
+    target: 'baseline-widely-available',
     dts: false,                 // dts 会把 banner/footer 包进 .d.cts 弄坏解析（官方注释）
     sourcemap: true,
     clean: false,               // host 已 clean；两个配置同写 lib/
