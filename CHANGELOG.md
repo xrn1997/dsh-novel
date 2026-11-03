@@ -4,6 +4,19 @@
 
 0.1.1–0.7.0 的条目按各版本发布提交与 tag 整理。
 
+## 0.9.0 — 2026-11-03
+
+- 安全：`/novel-api` 同源 fence 增第二步 Host 名单判据防 DNS rebinding——攻击者域名 A 记录指向 127.0.0.1 时「远端是 loopback」与「Origin / Host 同源」同时成立，旧判据等于没设防；缺省只认 `localhost` / `127.0.0.1` / `[::1]`，被拒的 403 点名是哪个 Host 并指路新配置键 `apiAllowHosts`（取舍见 ADR-0016）。
+- 修复：病态用户正则（嵌套量词遇上不匹配长输入）不再把 `/novel-api` 连同宿主界面一起钉死——每条用户正则走 `node:vm` 死线（随工作量放宽，封顶 1200ms），到点只废掉那一条规则并点名它（ADR-0050）。
+- 改进：阅读器连续前读的已载窗口裁到视口前 6 章并按实测高度补偿滚动位置，滚到窗口顶按距离补载上一章——长书不再 DOM 只增不减、锚点测量随会话线性变贵，回溯阅读不受影响。
+- 修复：一批边界加固——`webView` 不许从 `file://` 等非 http(s) scheme 进；cookie jar 单域 180 / 总量 3300 容量闸防恶意源灌爆；取回失败的 `subContent` 不落缓存（残章不冒充完整正文）；失败响应体归还连接池；目录规范值封顶 1000 章（`total` 仍为全书章数、任意章仍可读）。
+- 修复：路由匹配改由表派生——路径认得而方法不符从 404 改 405，垃圾尾段不再照接（ADR-0051）；导出区间与两条 422 收进门面 `exportRange`（ADR-0052）；书城源清单缺 `sources` 按「读不到」处置，不再摆假空态。
+- 内部：一次开齐 TypeScript 严格档位（`noUncheckedIndexedAccess` 等），显式 `any` / any 扩散 / 悬浮 Promise / 非空断言划归类型感知 ESLint，判据与取舍见 ADR-0053；规则字段表加 `pairWith` / `wholeSetGate` 派生各处手写名单；「读过没有」判据收进 `shared/reading-position.ts` 单点。
+- 构建：`engines.node >= 24`（`@types/node` 24、CI / Release 工作流 Node 24 对齐），TypeScript 下限抬到 5.9，client bundle 显式钉浏览器基线 target。
+- 兼容：实测名单补 DSH 0.2.1-rc.5（link 装载、组合树、全局面板、`/novel-api` 书架 / 源读面 / 本地书导入到正文链路、六个工具注册在位；工具经模型调用未实测）。
+
+**升级注意**：新增配置键 `apiAllowHosts`（缺省不追加、非活值，改它需重启）——只有用 hosts 别名 / 内部 DNS 打开宿主面板时才需要填；没填而被 403 挡住时按报错指路即可。无数据迁移（缓存与书架落盘格式未变）。声明 `engines.node >= 24`（此前无 `engines` 字段）：npm 安装会按它校验 Node，从源码装时构建链同样要求该版本；宿主兼容窗口（peer 区间与实测名单）未变。
+
 ## 0.8.2 — 2026-10-28
 
 - 新增：GitHub Release 预构建安装渠道——发版工作流在 `V*` tag 上产出带 `lib/` 的 tarball（版本名与 `dsh-novel.tgz` 稳定别名），不碰 npm registry、也不需要构建工具链。
