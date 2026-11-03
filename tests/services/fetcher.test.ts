@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { must } from '../support/fixture.js'
 
 // undici 的 ProxyAgent 会在构造时真的建连接池：测试里换成记账桩，
 // 才量得到「同 URL 复用、换 URL 关旧、dispose 关当前」这三条生命周期。
@@ -209,7 +210,8 @@ describe('fetchPage', () => {
       }),
     })
     await f.fetchPage('https://a.com/x')
-    expect(seen?.dispatcher).toBeUndefined()
+    // 先钉「fetch 真被调到」：直接对可选链取字段时，没调 fetch 也会是 undefined 造成假绿。
+    expect(must(seen, 'fetch 收到的 init').dispatcher).toBeUndefined()
   })
   it('proxyUrl getter：换 URL 建新 dispatcher 并关旧；dispose 关当前（同 URL 复用、dispose 后可重建）', async () => {
     let proxy: string | null = 'http://a:1'

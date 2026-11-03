@@ -187,8 +187,8 @@ export class SourceRegistry {
       groups: s.groups,
       type: s.type,
       status: s.status,
-      // 对外投影是会过 JSON 的载荷：缺席与显式 undefined 在序列化后是两件事，
-      // 故这两格按需建键（不给 wire 类型补 `| undefined`，那等于把标志在整面关掉）。
+      // 对外投影是会过 JSON 的载荷：这两格按需建键，不给 wire 类型补 `| undefined`
+      // （口径与它的理由住 `src/shared/wire.ts` 头注与 `ADR-0053` 的被否方案）
       ...(s.statusDetail === undefined ? {} : { statusDetail: s.statusDetail }),
       importedAt: s.importedAt,
       ...(s.lastProbedAt === undefined ? {} : { lastProbedAt: s.lastProbedAt }),

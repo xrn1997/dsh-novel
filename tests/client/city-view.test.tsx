@@ -163,6 +163,17 @@ describe('CityView', () => {
     expect(screen.queryByText('按书源声明的顺序')).toBeNull()
   })
 
+  it('分类入口响应不带清单（过线形状不对）：走错误态，不摆「还没有源提供分类」的假空态', async () => {
+    // 类型声明不作保：旧宿主/HMR 错位窗口里这一格可能整个缺席。缺清单与零清单是两种事实——
+    // 前者只能说「读不到」，落成空列表会让界面多摆一个「没有源提供分类浏览」的假空态。
+    cityStore.set({ sourceId: 's1', kind: '现代情感' })
+    const d = depsOf({ apiGet: vi.fn(async (p: string) => (p.includes('kinds') ? {} : { job: null })) })
+    const { container } = render(<CityView deps={d} />)
+    await waitFor(() => { expect(container.querySelector('.novel-err')?.textContent).toContain('响应缺分类清单') })
+    expect(screen.queryByText(/还没有书源提供分类浏览/)).toBeNull()   // 空态那一支要 sources 真落地才出
+    expect(submitted).toEqual([])                                   // 清单都没拿到：一轮都不提交
+  })
+
   it('记住的上次源与分类仍在场 → 加载它，而不是榜首', async () => {
     cityStore.set({ sourceId: 's1', kind: '穿越重生' })
     render(<CityView deps={depsOf()} />)

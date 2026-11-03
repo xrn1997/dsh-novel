@@ -39,6 +39,8 @@ function openJobStream(res: ServerResponse, subscribe: (notify: () => void) => (
     if (res.writableEnded || res.destroyed) return
     const f = frame()
     res.write(`data: ${JSON.stringify({ job: f.job })}\n\n`)
+    // `?.` 承重：`off` 要到下一行才赋值，而 `subscribe(pump)` 可能在返回退订函数之前
+    // 就同步调一次 `pump`——那一帧里 `off` 还没有值。
     if (f.done) { off?.(); res.end() }
   }
   off = subscribe(pump)

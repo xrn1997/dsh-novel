@@ -878,7 +878,7 @@ export class ReadingService {
   subscribeExploreJob(listener: () => void): () => void { return this.exploreJobs.signal.subscribe(listener) }
 
   private async searchOne(s: NovelSource, keyword: string): Promise<SearchGroup> {
-    // 源状态失败原因按需建键：SearchGroup 是跨半载荷，缺席与显式 undefined 序列化后是两件事
+    // 源状态失败原因按需建键：SearchGroup 是跨半载荷，走 `src/shared/wire.ts` 的「缺席即不建键」口径
     const base = {
       sourceId: s.id, sourceName: s.name, status: s.status,
       ...(s.statusDetail === undefined ? {} : { statusDetail: s.statusDetail }),

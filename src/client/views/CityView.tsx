@@ -75,7 +75,15 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
     void (async () => {
       let list: ExploreSources['sources']
       try {
-        list = (await deps.apiGet<ExploreSources>(ROUTES.exploreKinds.path)).sources
+        const body = await deps.apiGet<ExploreSources>(ROUTES.exploreKinds.path)
+        // 过线形状不靠类型声明作保（旧宿主与 HMR 错位窗口里这一格可能整个缺席）。缺清单按
+        // 「读不到」处置，与下面 catch 同一口径——落成空列表等于多摆一个假空态。
+        const raw: unknown = body.sources
+        if (!Array.isArray(raw)) {
+          setSourcesError(t('city.kindsReadFailed', { detail: t('city.kindsMalformed') }))
+          return
+        }
+        list = body.sources
       } catch (e) {
         // 读不到源清单 ≠ 没有源可用：只报错，不落空列表（落空列表会多摆一个「还没有源提供分类」的假空态）
         setSourcesError(t('city.kindsReadFailed', { detail: describeError(e, t) }))

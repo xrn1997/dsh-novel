@@ -6,7 +6,7 @@ Status: accepted
 
 ## 决定
 
-**编译器档位**在 `strict` 之上补四项，全部一次开齐：
+**编译器档位**在 `strict` 之上补齐下列标志，全部一次开齐：
 
 - `noUncheckedIndexedAccess`：`arr[i]` / `record[key]` 返回 `T | undefined`。本仓是规则引擎与抓取器，索引取值最密，这一条命中的正是空数组解引用这一类缺陷。
 - `exactOptionalPropertyTypes`：区分「键缺席」与「键值为 `undefined`」。wire 载荷（`src/shared/wire.ts` 的形状）按需建键，不补 `| undefined`——那等于把这个标志在载荷面上关掉。
@@ -28,7 +28,7 @@ Status: accepted
 ## 后果
 
 - 夹具的位置取位统一走 `tests/support/fixture.ts` 的 `pick` / `last`，需要断言存在性的查找走 `must`：越界即抛「夹具缺第几项、共几项」，不折叠成 `undefined`，也不让断言蒙对。
-- `no-unnecessary-condition` 在本仓有一批「保留」而非「删除」的命中：本地窄镜像把宿主字段钉成非空、`lib.dom` 把浏览器全局钉成非空，这些判空是运行时防线，删掉就是把防线拆掉。每处的理由写在代码注释里（注释只写为什么，不抄表达式——`tests/comment-altitude.test.ts` 把这一条）。
+- `no-unnecessary-condition` 的处置分两类：真死代码删；「本地窄镜像钉死 ≠ 运行时必有」与「TS 看不见闭包写入」的判空**保留**。保留的多数是把类型面改诚实——例如 `lib.dom` 把 `localStorage` 钉成非空，本仓按本地窄镜像取一格并留注释（`src/client/util.ts`），让判据重新有意义，而不是靠关规则。
 - 引擎的取值规约不变：取位失败仍是 Miss、解析到空集合仍是空 List，两者不因收窄而折叠。
 - 门的唯一入口是 `pnpm gates`（typecheck / lint / test / test:pack / test:compat；build 在 `test:pack` 内），CI 与发版跑同一条。
 

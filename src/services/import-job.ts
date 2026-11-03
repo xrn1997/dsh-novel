@@ -208,7 +208,9 @@ export class SourceJobs {
         if (this.cancelled(state)) return                 // 协作式收手：取下一条前查一次
         const i = cursor++
         const id = valid[i]
-        // 取不到即游标已过表尾（与 `i >= valid.length` 同一条出口），不把 undefined 喂给下游
+        // 取不到即游标已过表尾（与 `i >= valid.length` 同一条出口），不把 undefined 喂给下游。
+        // 这行同时是类型面的窄化：`noUncheckedIndexedAccess` 下 `valid[i]` 是 `string | undefined`，
+        // 删掉它不会更干净，只会在下一行的 `registry.get(id)` 上撞红 tsc。
         if (id === undefined) return
         // 重查：任务运行期间源可能被删——取不到就点名跳过，不产生 TypeError 垃圾失败
         // （不重查会让 undefined 喂给探针 → 抛 TypeError 冒充正常失败）

@@ -428,12 +428,12 @@ export const JAVA_PROTOCOL = [
   //    PKCS5Padding ≡ PKCS7，Node crypto 原生支持）──
   method('aesBase64DecodeToString', { obj: 'java' }, (d) =>
     (data: string, key: string, transformation?: string, iv?: string): string =>
-      aesDecryptB64(textOf(data), textOf(key), transformation ?? 'AES/CBC/PKCS5Padding', iv ?? '', d)),
+      aesDecryptB64(textOf(data), textOf(key), textOf(transformation ?? 'AES/CBC/PKCS5Padding'), textOf(iv ?? ''), d)),
   // `createSymmetricCrypto(...).decrypt(data)` 的宿主口：返回**字节**（number[]），脚本常再接
   // `java.bytesToStr(decrypted)`（对面 SymmetricCrypto.decrypt 返 ByteArray；见 js-sandbox 的链式壳）。
   method('aesDecryptToBytes', { obj: 'java' }, (d) =>
     (data: string, key: string, transformation?: string, iv?: string): number[] =>
-      Array.from(aesDecryptB64Buffer(textOf(data), textOf(key), transformation ?? 'AES/CBC/PKCS5Padding', iv ?? '', d))),
+      Array.from(aesDecryptB64Buffer(textOf(data), textOf(key), textOf(transformation ?? 'AES/CBC/PKCS5Padding'), textOf(iv ?? ''), d))),
   // ── cookie 垫片（挂 cookie.getCookie/setCookie/removeCookie）─────────
   method('cookieGet', { obj: 'cookie', as: 'getCookie' }, (d) => (name: string): string | null =>
     jar(d).get(textOf(name)) ?? null),

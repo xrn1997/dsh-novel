@@ -573,6 +573,12 @@ describe('宿主垫片（真实源用到的缺失 API）', () => {
     expect((err as Error).message).toMatch(/AES 解密失败/)
     const err2 = await run(`return java.createSymmetricCrypto("AES/CBC/PKCS5Padding","${key}","${key}").encryptStr("x")`).then(() => null, (e: unknown) => e)
     expect((err2 as Error).message).toMatch(/不支持/)
+    // 脚本喂非串的 transformation / iv：桥的收口把它们串化后落到上面那两条具名判错，
+    // 而不是 Node crypto 里的 TypeError 冒充脚本自己的错（改这两格前的形状正是后者）
+    const err3 = await run('return java.aesBase64DecodeToString("AAAA","0123456789abcdef",123,"0123456789abcdef")').then(() => null, (e: unknown) => e)
+    expect((err3 as Error).message).toMatch(/AES 变换不支持：123/)
+    const err4 = await run('return java.aesBase64DecodeToString("AAAA","0123456789abcdef","AES/CBC/PKCS5Padding",1234)').then(() => null, (e: unknown) => e)
+    expect((err4 as Error).message).toMatch(/IV 长度不合法（4 字节，需 16）/)
   })
   it('source.getVariable/setVariable 是**单串槽**（与 source.put 的键值表分开存）', async () => {
     const ctx = ctxOf()

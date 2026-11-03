@@ -141,8 +141,9 @@ function scanXml(text: string, what: string): void {
   if (body.includes('<!ENTITY')) throw new EpubImportError(`${what}：含实体声明（本层不解析 DTD 实体，也不做实体展开）`)
   for (const m of body.matchAll(ENTITY_REF)) {
     const name = m[1]
-    // 捕获必齐（正则只有一个分组）：缺了就是这条闸自己的判据坏了，不按「非内建实体」拒整本
-    if (name === undefined) continue
+    // 捕获必齐（正则只有一个分组）：缺了就是这条闸自己的判据坏了——照「宁炸不猜」抛，
+    // 不按「非内建实体」拒整本，也不能静默放行未声明的引用。
+    if (name === undefined) throw new EpubImportError(`${what}：实体闸判据失效（引用未解析出名字，正则分组变了？）`)
     if (name.startsWith('#')) continue   // 数值字符引用：与 DTD 无关，XML 规范直接成立
     if (!PREDEFINED_ENTITIES.has(name)) throw new EpubImportError(`${what}：引用了未声明的实体 &${name};（本层不解析 DTD）`)
   }

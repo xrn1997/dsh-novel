@@ -46,7 +46,8 @@ export function engineFetch(
     )
     return {
       body: decodeBody(page, plan.charset),
-      // 这份形状要跨 JSON 桥进沙箱：缺席与显式 undefined 在序列化后是两件事，故按需建键
+      // 这份形状要跨 JSON 桥进沙箱：`contentType` 属「可能整键缺席」那一类，按需建键
+      // （可空口径与它的理由住 `src/shared/wire.ts` 头注，不在这里再推一遍）
       ...(page.contentType === undefined ? {} : { contentType: page.contentType }),
       finalUrl: page.finalUrl,
     }
@@ -74,7 +75,7 @@ export function engineFetchPost(
     return {
       url: page.finalUrl,
       body: decodeBody(page, plan.charset),
-      // 跨 JSON 桥的响应数据面：缺席即不建键（序列化同样会丢掉 undefined）
+      // 跨 JSON 桥的响应数据面：这两个可选键同属「缺席即不建键」那一类（口径见 `src/shared/wire.ts`）
       ...(page.contentType === undefined ? {} : { contentType: page.contentType }),
       ...(page.charset === undefined ? {} : { charset: page.charset }),
       statusCode: page.status,

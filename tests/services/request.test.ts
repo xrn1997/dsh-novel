@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { must } from '../support/fixture.js'
 import { assembleRequest, buildSearchRequest, fetchInitOf, parseUrlOption, stripUrlOption, absUrlKeepOption } from '../../src/services/request.js'
 import { preEvaluateUrlJs, resolveJsSearchTemplate } from '../../src/services/search-template.js'
 import type { Fetcher } from '../../src/services/fetcher.js'
@@ -118,7 +119,8 @@ describe('parseUrlOption', () => {
     const r = parseUrlOption('/x,{"headers":"{\\"User-Agent\\":\\"UA\\"}"}')
     expect(r.option?.headers).toEqual({ 'User-Agent': 'UA' })
     const bad = parseUrlOption('/x,{"headers":"not json"}')
-    expect(bad.option?.headers).toBeUndefined()
+    // 先钉「选项在场」：对可选链取字段时，整份选项没解出来也会让这条蒙对
+    expect(must(bad.option, '非法 headers 那次的选项').headers).toBeUndefined()
   })
   it('webView 标志透传（我们不支持，调用方 warning）', () => {
     expect(parseUrlOption('/x,{"webView":true}').option?.webView).toBe(true)

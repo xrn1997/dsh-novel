@@ -1346,7 +1346,10 @@ async function evalJsInWorker(a: WorkerRunArgs): Promise<JsOutcome> {
         clearTimeout(timer)
         resolve(m)
       })
-      worker.on('error', (e) => { clearTimeout(timer); reject(e) })
+      // worker 边界不做 Error 归一：脚本 realm 里 `throw` 的任何值都原样进这个事件。
+      // 过界前先走 `jsErr` 这唯一转换口——它从原对象取 message 与栈里的行号，就地包一层
+      // 新 Error 只会把脚本自己的那一行洗成宿主帧；下游 catch 认 JsSandboxError 原样抛。
+      worker.on('error', (e: unknown) => { clearTimeout(timer); reject(jsErr(e, a.code, a.loc, a.facet, prefixOfPhase(undefined))) })
       worker.on('exit', (code) => { clearTimeout(timer); reject(new Error(`js worker 提前退出（code ${code}）`)) })
     })
     if (!result.ok) {

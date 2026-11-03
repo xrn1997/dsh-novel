@@ -16,8 +16,8 @@ import reactHooks from 'eslint-plugin-react-hooks'
  * 长到了测试面的 300 多处。这条归属错配是本次升级的直接原因。
  *
  * 不写格式类规则：格式主张归格式化工具（仓内暂无），ESLint 代替它立规只会和既有排版打架。
- * `no-confusing-void-expression` 一并关掉——它只改写法、不挡缺陷类（实测本仓 src 内 100+ 处，
- * 改法一律是给箭头简写加大括号）。
+ * `no-confusing-void-expression` 一并关掉——它只改写法、不挡缺陷类（逐处改法就是给箭头简写
+ * 加大括号，改完可观察行为不变）。
  */
 export default tseslint.config(
   { ignores: ['lib/**', 'node_modules/**', '.qoder/**', 'compat/**', 'docs/**'] },

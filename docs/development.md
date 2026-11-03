@@ -45,7 +45,7 @@ pnpm lint          # 类型感知 ESLint：显式 any、any 扩散（no-unsafe-*
 
 - **取值不折叠**：引擎取值链的空态不折叠——取位失败 → Miss、解析到空集合 → 空 List，两者是两种值，不许用 `?? []` / `?? ''` 之类的缺省把它们折成同一种结局（取值规约见 `CONTEXT.md`）；服务层对合法缺省的 `??` 收口不在禁令内。测试夹具的位置取位走 `tests/support/fixture.ts` 的 `pick` / `last`，需要断言存在性的查找走 `must`，越界即抛「夹具缺第几项、共几项」，不改成 `?.`。
 - **`no-unnecessary-condition` 的命中分两类**：真死代码删；「本地窄镜像钉死 ≠ 运行时必有」与「TS 看不见闭包写入」的判空**保留**，并在注释里写清为什么（注释只写为什么，不抄表达式）。
-- **`eslint-disable` 只用于确证误报**，每处带理由；`require-await` 在 `tests/**` 关闭——替身的 `async` 就是为回一个 Promise。
+- **新增的 `eslint-disable` 只用于确证误报，每处带理由**；`src/client` 里那批无理由的 `react-hooks/exhaustive-deps` 是存量豁免清单（见 `AGENTS.md`），不属本门覆盖面。`require-await` 在 `tests/**` 关闭——替身的 `async` 就是为回一个 Promise。
 
 lint 与 tsc 的分工：`tsc` 管类型形状与可赋值性，**`any` 归 ESLint**——`tsc` 从不拒绝显式 `any`，把这条记到 tsc 头上等于没有门。
 
@@ -143,7 +143,7 @@ pnpm vitest run tests/legado-coverage/capture-upstream-snapshot.test.ts
 
 ## 发版流程
 
-1. **三道门**：`pnpm typecheck`、`pnpm test`、`pnpm test:pack`，退出码逐个看过（0/0/0）；要连 `lint` / `compat` 一起跑就用 `pnpm gates`（组成住 `package.json`）。
+1. **一条门**：`pnpm gates`（typecheck / lint / test / test:pack / test:compat，组成住 `package.json`），退出码看过。发版与 CI 跑的是同一条门；别在这里改挑子集，那会让发版门比检查门更宽。
 2. **写发布记录**：在 `CHANGELOG.md` 追加这一版（新增 / 变更 / 修复 / 升级注意）；未发布改动不预写，历史版本不回溯改写（已废称呼与不可回查的批次号按文档门清理），逐提交明细留 git。
 3. **版本前移**：`package.json` 的 `version` 提一笔 `chore: 发版 x.y.z`；提交并 push。
 4. **`npm publish`**：`prepack` 会跑 `build`；`files` 是**精确清单**——构建每新多出一个要发布的产物，就要同时加进 `files`。先发 npm 再推 tag：npm 失败时不会留下一个只有 GitHub 侧到位的版本。

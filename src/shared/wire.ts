@@ -8,7 +8,8 @@
  *  ② type-only 依赖可引（构建期擦除）。
  *
  * 可空口径：wire 上空值字段一律 `| null`，不写 `?:`（JSON 里 null 是在场的值）。
- * 时间戳/状态细节这类「可能整键缺席」的字段保持 `?:`——JSON.stringify 会丢 undefined 键。
+ * 时间戳/状态细节这类「可能整键缺席」的字段保持 `?:`，构造侧按需建键：`exactOptionalPropertyTypes`
+ *  不收 `undefined` 占位，写 `k: undefined` 与不建这个键在类型面是两件事（档位与理由见 `ADR-0053`）。
  * 工具面（src/tools/）的缺键投影（lossless-JSON 约束）是其自身职责，与此口径不冲突。
  */
 
