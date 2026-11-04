@@ -15,7 +15,7 @@ export const loginCheckOf = (source: NovelSource): string => {
 }
 
 /**
- * loginCheckJs（对面每轮响应后跑一次，可返回替换响应）。本仓的安全子集：
+ * loginCheckJs（每轮响应后跑一次，可返回替换响应）。本仓的安全子集：
  * - `result` 绑成 ResponseHost，脚本可用 `result.url()/code()/body()`；
  * - 脚本返回同一个响应对象/空值 → 保留原页；
  * - 返回新响应对象（`__host:'response'`）→ 用它替换；

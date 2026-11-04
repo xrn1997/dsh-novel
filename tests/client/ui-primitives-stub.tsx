@@ -2,17 +2,17 @@ import type { SettingsFieldState, SettingsFormActions, SettingsFormState } from 
 import { createElement, type ReactNode } from 'react'
 
 /**
- * 宿主表单原语（`@deepseek-ai/dsh-client-ui-primitives`）的测试替身。真容是宿主平台模块，
+ * 宿主表单原语的测试替身。它是宿主平台模块（平台模块表住 `tsdown.config.ts`），
  * 本仓不装它（client bundle 留 external）；没有这份替身，配置页的接线（表单模型 → 快照 →
  * 保存动作）就只能对着静态渲染断言，等于把「页面对上了没有」测丢。
  *
- * 替身必须照真容的**语义**走，而不是形状像：`SettingsFormModel.bind` 真会调用投影回调、
- * 按版本缓存快照；`shell()` 的六键（可用 / 可写 / 有改动 / 非法 / 保存中 / 保存失败）驱动
- * `SettingsForm` 的不可用、只读、保存失败与提交禁用；`SettingsForm` 真把提交接到 `onSave`、
+ * 替身必须照本仓镜像（`src/client/host-ui.d.ts`）的**语义**演，而不是形状像：`SettingsFormModel.bind`
+ * 会调用投影回调、按版本缓存快照；`shell()` 的六键（可用 / 可写 / 有改动 / 非法 / 保存中 / 保存失败）
+ * 驱动 `SettingsForm` 的不可用、只读、保存失败与提交禁用；`SettingsForm` 把提交接到 `onSave`、
  * 只在**可用**之后渲染 children——只读部署仍画行（禁用由页面自己决定），只多一条只读提示。
  * 测试因此能以「编辑 → 保存」整条链驱动页面。
  *
- * 这里**没有** `SettingsValueField`：配置页的行是本仓自绘的（宿主原语装不下单位与换算），
+ * 镜像与这里都**没有** `SettingsValueField`：本仓的每一行要带单位与人话换算，所以行是自绘的；
  * 替身只镜像本仓真消费的那几个成员，多留一份就是给一份没人走的接线背书。
  */
 
@@ -34,8 +34,8 @@ export interface StubActions {
 }
 
 /** 替身与宿主镜像（`src/client/host-ui.d.ts`）的形状闸：三个读数形状必须与镜像**互相**可赋值。
- *  双向才拦得住两种漂移——镜像加了成员（替身不再顶替）与替身多带成员（页面读到真容没有的东西）。
- *  没有这道闸，「宿主契约变了这里与配置页一起红」就只是愿望：本仓不装那个包，vitest 又把它
+ *  双向才拦得住两种漂移——镜像加了成员（替身不再顶替）与替身多带成员（页面读到镜像里没有的东西）。
+ *  没有这道闸，「宿主契约变了这里与配置页一起红」就只是愿望：本仓不装那个平台模块，vitest 又把它
  *  alias 到本文件，类型层面两边原本互不相识。 */
 type Mutually<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
 const _shapeGate: [
@@ -49,7 +49,7 @@ export function settingsNumberField(name: string): StubField { return { name, ki
 export function settingsTextField(name: string): StubField { return { name, kind: 'text' } }
 
 /** 宿主配置作用域（替身**只**碰到的那一面）：快照读数与写入口，成员全可缺席——页面/测试
- *  递进来的作用域是 host 侧真物，替身只按用到的成员收窄，多猜一个就是替真容立规。 */
+ *  递进来的作用域是运行时的真物，替身只按用到的成员收窄，多猜一个就是给镜像里没有的成员立规。 */
 interface StubScopeSnapshot {
   value?: Record<string, unknown>
   user?: Record<string, unknown>
@@ -62,7 +62,7 @@ interface StubScope {
   mutate?: (ops: Array<{ op: 'set' | 'unset'; path: string[]; value?: unknown }>, revision?: number) => void
 }
 
-/** 字段值 → 文本：真容这层只放标量（number / string / boolean），标量按 String 原样；
+/** 字段值 → 文本：这一层只放标量（number / string / boolean），标量按 String 原样；
  *  非标量按 JSON 文本送（`[object Object]` 那种什么都读不出的影子没有诊断价值）。 */
 function fieldTextOf(value: unknown): string {
   if (typeof value === 'string') return value
@@ -98,7 +98,7 @@ export class SettingsFormModel {
     const user = this.scope?.getSnapshot?.().user
     return {
       text: value === undefined || value === null ? '' : fieldTextOf(value),
-      // 真容：staged 的 set 才算覆盖（staged 的 clear 不算）；没动过的字段看 user 层有没有这个键，
+      // 口径：staged 的 set 才算覆盖（staged 的 clear 不算）；没动过的字段看 user 层有没有这个键，
       // 与「值恰好等于缺省」无关。
       overridden: edit === undefined ? user !== undefined && Object.hasOwn(user, name) : edit.op === 'set',
       // 替身不重演 schema 的数值校验：只钉页面接线，不钉校验语义。
@@ -108,7 +108,7 @@ export class SettingsFormModel {
   shell(): StubFormState {
     const snapshot = this.scope?.getSnapshot?.() ?? {}
     return {
-      // 真容只把 ready 态算作可用；loading 与 unavailable 都不可用。
+      // 只有 ready 态算作可用；loading 与 unavailable 都不可用。
       available: snapshot.status === 'ready',
       writable: snapshot.writable ?? true,
       dirty: this.edits.size > 0,
@@ -141,7 +141,7 @@ export class SettingsFormModel {
   actions(): StubActions {
     return {
       save: () => {
-        // 真容的 plan：set 直发；clear 只对「user 层真有这个键」的字段发 unset，否则无操作。
+        // 写的计划：set 直发；clear 只对「user 层真有这个键」的字段发 unset，否则无操作。
         const user = this.scope?.getSnapshot?.().user
         const ops: Array<{ op: 'set' | 'unset'; path: string[]; value?: unknown }> = []
         for (const [field, edit] of this.edits) {
@@ -149,7 +149,7 @@ export class SettingsFormModel {
           else if (user !== undefined && Object.hasOwn(user, field)) ops.push({ op: 'unset', path: [field] })
         }
         if (ops.length > 0) {
-          // 快照先读：写入口的 revision 是「这次写基于哪版」，读在调用的同一拍上（宿主真容同序）
+          // 快照先读：写入口的 revision 是「这次写基于哪版」，读必须发生在调用的同一拍上
           const revision = this.scope?.getSnapshot?.().revision
           void this.scope?.mutate?.(ops, revision)
         }
@@ -170,10 +170,10 @@ export class SettingsFormModel {
 }
 
 /**
- * 真容的壳层：不可用 → 只剩一句；可用 → 只读另起一条提示、children 照画（禁用由页面自己给）、
+ * 壳层的口径：不可用 → 只剩一句；可用 → 只读另起一条提示、children 照画（禁用由页面自己给）、
  * 底部是失败提示与保存钮。保存钮的禁用只由「没改动 / 非法 / 保存中」决定——只读部署靠
  * 「输入框禁用 ⇒ 改不动 ⇒ 不 dirty」自然落到禁用，壳层不额外判 writable。
- * 这里没有「放弃」按钮：真容的放弃是离开页面时 `onDiscard` 被调用，不是一枚控件。
+ * 这里没有「放弃」按钮：放弃走离开页面时的 `onDiscard` 回调，不是一枚控件。
  */
 export function SettingsForm({ labels, state, onSave, children }: {
   labels: Record<string, string>

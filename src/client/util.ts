@@ -117,7 +117,7 @@ export const ls: Pick<Storage, 'getItem' | 'setItem'> = {
 /** 正文层字色：纸张色由 prefs 固定（正文层永不接宿主 token，防回归——皮肤 token 是
  *  半透明玻璃值），故字色必须**由纸张色算**：写死深色字在自选深色纸上等于隐形。按感知亮度
  * （WCAG 线性化 + Rec.709 权重，阈值 0.35）择一，深浅两纸两端都够对比。
-  *  纯函数（从 ReaderView 迁入）：无 React、无 IO——可直接单测。 */
+  *  纯函数：无 React、无 IO——可直接单测。 */
 export function paperInk(paper: string): string {
   const hex = paper.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)
   if (hex === null) return '#222'                       // 非 hex（color input 也可能给 rgb()）：退回原行为
@@ -132,8 +132,9 @@ export function paperInk(paper: string): string {
 }
 
 /**
- * 剥掉正文开头那行重复的章名：h2 已经渲染 `toc[i].name`，而相当一部分在线源的正文第一行
- * **就是同一句章名**——屏幕上连着两行同样的字，一行居中粗体一行左对齐，读起来像渲染坏了。
+ * 剥掉正文开头那行重复的章名：h2 已经渲染 `toc[i].name`，而本项目输入的书源里存在
+ * 正文首行**就是同一句章名**的形状（钉子见 `tests/client/chapter-title.test.ts`）——
+ * 屏幕上连着两行同样的字，一行居中粗体一行左对齐，读起来像渲染坏了。
  *
  * 三条口径，缺一即错：
  *  ① **相等才丢**。归一化只去空白（`\s` 含全角空格），不做包含、不做前缀、不做大小写折叠——

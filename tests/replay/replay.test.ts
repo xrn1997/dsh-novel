@@ -1,21 +1,21 @@
 import { afterAll, describe, expect, it } from 'vitest'
 import { promises as fs } from 'node:fs'
-import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { loadCases, renderReport, runCase } from './harness.js'
 import { must } from '../support/fixture.js'
 
-// case 布局：compat/fixtures/<caseName>/——loadCases 扫 root 子目录
-const root = path.resolve('compat/fixtures')
+// case 布局：tests/replay/fixtures/<caseName>/——loadCases 扫 root 子目录
+const root = fileURLToPath(new URL('./fixtures/', import.meta.url))
 const cases = loadCases(root)
 // 空分母是**被显式处理的状态**（下面那条用例负责报红），不是夹具脱节——这里不能抛
 const keywordOfFirst = cases[0]?.manifest.keyword
 
 describe('compat 全链路回放', () => {
   if (cases.length === 0) {
-    // 空分母不许当通过：`compat/fixtures/` 里那条手写基线是**入库内容**，它不见了就等于回放面
+    // 空分母不许当通过：`tests/replay/fixtures/` 里那条手写基线是**入库内容**，它不见了就等于回放面
     // 整条不再验证任何东西——报红，不给「跑了一个空测试」的机会（skip-if-missing 是本仓删掉的旧失效模式）。
     it('compat case 为空——分母消失，回放面没在验证任何东西', () => {
-      expect(cases.length, 'compat/fixtures 下数不到 case：手写基线被删/挪走？（compat case 是入库的手写离线基线，采集须先过脱敏门禁）').toBeGreaterThan(0)
+      expect(cases.length, 'tests/replay/fixtures 下数不到 case：手写基线被删/挪走？（回放 case 是入库的手写离线基线，采集须先过脱敏门禁）').toBeGreaterThan(0)
     })
   }
   for (const c of cases) {
@@ -33,6 +33,6 @@ describe('compat 全链路回放', () => {
     // afterAll 重跑一遍拿全量 CaseResult 写报告——case 少、纯离线，双跑钉死接受（>100 case 再优化共享缓存）
     const results = []
     for (const c of cases) results.push(await runCase(c))
-    await fs.writeFile(path.resolve('compat/report.md'), renderReport(results, keywordOfFirst), 'utf8')
+    await fs.writeFile(fileURLToPath(new URL('./report.md', import.meta.url)), renderReport(results, keywordOfFirst), 'utf8')
   })
 })

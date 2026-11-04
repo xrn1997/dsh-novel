@@ -6,7 +6,7 @@ import { must } from '../support/fixture.js'
 import { requestUrlOf } from '../support/fetch-input.js'
 
 /**
- * compat 回放 harness：真实源 + 脱敏页面 fixture 的离线回放（全程零网络）。
+ * compat 回放 harness：源 + 脱敏页面 fixture 的离线回放（全程零网络）。
   * 「全链路跑通」口径：import 探针 verified → 聚合搜索命中 ≥1 → **详情书名为空即失败** →
   * 首本 getToc 非空 → 首章 getChapter 非空文本；另按**声明即须到货**断言详情面的 kind/wordCount
   * （与正文链路审计的字段到货读数同口径——fixture 的意义是冻结一次真实读数，
@@ -90,9 +90,9 @@ const faceOrder: CompatFace[] = ['import', 'search', 'detail', 'toc', 'chapter']
 
 /** 详情面字段是否被**该源自己声明**（`ruleBookInfo` 对象或字符串化 JSON；也认平铺的 ruleKind/ruleWordCount）。
  *  `name` 只认**详情面专属**的声明（`ruleBookInfo.name` / 平铺 `ruleDetailName`）：不算 `ruleBookName`
- *  那条平铺回退——纯 API 源（米读看书）没有 `ruleBookInfo`，书名只在**搜索条目**上给，详情页（章节表 JSON）
- *  里根本没有它，拿搜索面的规则去要求详情面等于**给源加它没声明的义务**（2026-09-28 实证：米读 的 fixture
- *  采集通过、回放却在「详情书名为空」处红）。 */
+ *  那条平铺回退——纯 API 源没有 `ruleBookInfo`，书名只在**搜索条目**上给，详情页（章节表 JSON）
+ *  里根本没有它，拿搜索面的规则去要求详情面等于**给源加它没声明的义务**（fixture 采集能过、
+ *  回放在「详情书名为空」处红）。 */
 export function declaresDetail(source: unknown, field: 'name' | 'kind' | 'wordCount'): boolean {
   const raw = source as Record<string, unknown>
   const nonEmpty = (v: unknown) => typeof v === 'string' && v.trim() !== ''
@@ -187,8 +187,8 @@ export async function runCase(c: CompatCase): Promise<CaseResult> {
 }
 
 /** 报告渲染（按「报告格式」节）：总计行 + 失败原因分布 + 逐源明细。
- *  刻意**不写生成时间**：时间戳会让每次 `pnpm test:compat` 都改写入库文件、把 diff 噪声
-  *  带进提交。分母口径写进报告头，避免把「合成 fixture 跑通率」误读为站点兼容率。 */
+ *  刻意**不写生成时间**：这份报告是跑门产物、每次覆盖写（已 gitignore），时间戳只会让
+ *  产物无意义抖动。分母口径写进报告头，避免把「合成 fixture 跑通率」误读为站点兼容率。 */
 export function renderReport(results: CaseResult[], keyword?: string): string {
   const total = results.length
   const passed = results.filter((r) => r.ok).length
@@ -197,8 +197,8 @@ export function renderReport(results: CaseResult[], keyword?: string): string {
   const lines: string[] = [
     '# compat 报告',
     '',
-    `> 分母 = \`compat/fixtures/\` 下的 fixture（本批 ${captured} 条真站采集 + ${total - captured} 条合成基线；离线回放，零网络）。`,
-    '> **回放跑通率不是站点可用率**——真源 fixture 冻结的是**采集那一刻**的页面，站点后来变了它照样绿。',
+    `> 分母 = \`tests/replay/fixtures/\` 下的 fixture（本批 ${captured} 条真站采集 + ${total - captured} 条合成基线；离线回放，零网络）。`,
+    '> **回放跑通率不是站点可用率**——fixture 冻结的是**采集那一刻**的页面，站点后来变了它照样绿。',
     '> 站点可用率请看真机重探：`$env:DSH_REPROBE=\'1\'; pnpm vitest run tests/reprobe.test.ts`。',
     '',
   ]

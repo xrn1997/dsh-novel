@@ -107,7 +107,7 @@ function spliceLiteral(result: string, text: string): string {
   return t === '' ? result : t.replace(/@result/g, result)
 }
 
-/** 空串与 undefined 同义（对面组取值的「未匹配则退到前一分支」语义——对读住矩阵行 `b-url-js-anywhere`） */
+/** 空串与 undefined 同义（「未匹配则退到前一分支」的组取值语义——对读住矩阵行 `b-url-js-anywhere`） */
 function nonEmpty(v: string | undefined): string | undefined {
   return v === undefined || v === '' ? undefined : v
 }

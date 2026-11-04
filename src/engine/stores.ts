@@ -4,7 +4,7 @@
  *  与 interface 之外。生产仍是模块级单例（只有一处 adapter，不造注入 seam）。
  *
  *  如实说清边界：这两道闸限的是**条目数与单文件大小**，不是总常驻字节——上限相乘后的最坏情况
- *  仍达 4GB，要收总盘子得再加一道字节计数淘汰；当前没加，因为真实源下载的是 KB 级密钥图。 */
+ *  仍达 4GB，要收总盘子得再加一道字节计数淘汰；当前没加——输入里下载的是 KB 级密钥图，两道闸够用。 */
 
 export interface FileStore {
   put(path: string, bytes: Uint8Array): void
@@ -15,8 +15,8 @@ export function createFileStore(opts: { entries: number; bytes: number }): FileS
   const m = new Map<string, Uint8Array>()
   return {
     put(path, bytes) {
-      // 语义与旧 storeFile 逐条同序：先判单文件字节上限（超了不入表），再在条数满时淘汰最旧，
-      // 最后写入。覆盖已有键也照此淘汰——改顺序会改变「哪一条被挤掉」，就不是等价搬移了。
+      // 淘汰次序钉死：先判单文件字节上限（超了不入表），再在条数满时淘汰最旧，
+      // 最后写入。覆盖已有键也照此次序——「哪一条被挤掉」的可观测结果就绑在这条次序上，换序即换行为。
       if (bytes.byteLength > opts.bytes) {
         throw new Error(`文件超过 ${opts.bytes / 1024 / 1024}MB 上限`)
       }

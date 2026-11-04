@@ -7,8 +7,8 @@ import { engineValueToString, textOf } from './js-utils.js'
  * JSONPath 求值数据解析（evaluate 的 Runtime 与 @put 共用）：ctx.json 优先；缺席且 html 是合法
  * JSON 时回退解析 html（内容合法即为 JSON 数据——搜索链路只传 html 不传 json，
  * 不回退的话所有 $. 规则对 JSON API 源恒 Miss）。
- * 住址从 evaluate 迁来：evaluate 值 import 本模块、本模块又值 import evaluate 形成唯一运行时环
- * ——本函数只依赖 EvalContext，搬来即打破环。
+ * 住在这里而不是 evaluate：evaluate 值 import 本模块、本模块又值 import evaluate 形成唯一运行时环
+ * ——本函数只依赖 EvalContext，放在这里即打破环。
  */
 export function resolveJsonData(ctx: EvalContext): unknown {
   if (ctx.json !== undefined) return ctx.json
@@ -103,7 +103,7 @@ function parsePairs(pairsRaw: string, loc: SegmentLoc, facet: Facet): Array<[str
 }
 
 /** 值是否构成规则形态（决定「按子规则求值」还是「字面存」）。判据刻意从宽在「含段界 @ / 组合符 /
- *  规则起始符」这三类记号上——它们不出现在真实源的普通字面值里；反过来 `123`、`凡人修仙传,全本`
+ *  规则起始符」这三类记号上——普通字面值不常见这些记号；反过来 `123`、`凡人修仙传,全本`
  *  这类字面值不能被误打成规则（它们取不到东西；本仓按字面存是超集且如实）。 */
 function isRuleFormValue(v: string): boolean {
   return /[@|]|\|\||&&|%%/.test(v) || /^[@/[<.#]/.test(v)
@@ -142,7 +142,7 @@ export function evalPut(
       putJsonPath(key, value.slice('@json:'.length))
     } else if (isRuleFormValue(value)) {
       // 规则形态的值（`[property$=x]@content`、`//xpath`、`@css:`、`i@text`…）→ 按子规则求值。
-      // put 的值就是一次取值，故与取值段同一条出口；真实源 ruleBookInfo.init 的六键形态全靠这条
+      // put 的值就是一次取值，故与取值段同一条出口；ruleBookInfo.init 存在整串多键子规则形态（计数见矩阵 c-rule-book-info-init），全靠这条
       // 注意：这类值要跳过段切分并进子规则求值，不能被白名单拒掉。
       if (!subEval) {
         reject(`@put 值是规则串但调用方未接线子规则求值口（evaluate 的 subEval）：${JSON.stringify(value)}`, loc, facet)

@@ -1,7 +1,7 @@
 import type { EvalContext } from './types.js'
 
 /**
- * 整条规则是否按 JSONPath 取值（对照 legado AnalyzeRule 的 isJSON 分派）：
+ * 整条规则是否按 JSONPath 取值：
  * 显式段前缀各有自己的取值器，**整条规则模式不接管**——接管会把 `@json:$.a` 的前缀原样交给
  * JSONPath tokenizer（`@` 被拒）或在 `json:$.a` 前补出 `$.json:$.a`（冒号被拒）。
  * 模板、链段与 URL 不是一条整段 JSONPath；`$.` / `$[` 起头时走 JSONPath；

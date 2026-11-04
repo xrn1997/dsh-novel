@@ -262,7 +262,7 @@ export class ReadingService {
     const deviceId = await readDeviceId(opts.dir)
     const sourceSession = createFileSourceSession(opts.dir)
     return ReadingService.from({
-      // HTTP cookie 按域共享（与上游 CookieStore 同粒度）；脚本侧 source cookie 仍按源隔离。
+      // HTTP cookie 按域/路径共享一张表；脚本侧 source cookie 仍按源隔离。
       // 运行期字段（deviceId / sourceSession）随构造进 fetcher——门面不再往注入物上写回。
       fetcher: createFetcherWith(opts.fetchImpl, opts.proxyUrl, cookieJar, { deviceId, sourceSession }),
       cookieJar,
@@ -509,7 +509,7 @@ export class ReadingService {
     return auth
   }
 
-  /** RowUi button action：绝对 URL 回传给 UI 打开；其余按上游把 loginUrl 脚本拼在 action 前执行，
+  /** `loginUi` 行的按钮动作：绝对 URL 回传给 UI 打开；其余把 loginUrl 脚本拼在 action 前执行，
    *  `result` 绑定当前 loginInfo 的 Map。按钮按名字查服务端源数据，客户端不持脚本。 */
   async runLoginAction(id: string, name: string): Promise<{ mode: 'external'; url: string } | { mode: 'script' }> {
     const s = this.requireSource(id)
@@ -1045,7 +1045,7 @@ export class ReadingService {
 
 // ── 模块级助手 ─────────────────────────────────────────────────────────
 
-/** 登录按钮动作前拼的 loginUrl 脚本：剥离规则前缀；URL 形态不拼（上游 getLoginJs 只给 JS 形态）。 */
+/** 登录按钮动作前拼的 loginUrl 脚本：剥离规则前缀；URL 形态不拼（那是给浏览器打开的地址，不是脚本体）。 */
 function stripLoginPrefix(raw: string): string {
   const t = raw.trim()
   if (/^@js:/i.test(t)) return t.slice(4)

@@ -17,7 +17,7 @@ describe('nextChapterIndex（前向窗口：视口章之后第一个未载章）
   it('目录直达跳章 → 从跳到的章继续往下读（不回头补前面的洞）', () => {
     expect(nextChapterIndex([null, null, 'c', null, null], 2)).toBe(3)
   })
-  it('倒退跳章后预取跟着视口走，不跟最大已载章（旧口径会取到 51，用户读第 11 章末尾接上第 51 章）', () => {
+  it('倒退跳章后预取跟着视口走，不跟最大已载章（否则读第 11 章末尾会接上第 51 章）', () => {
     const chapters = new Array<string | null>(60).fill(null)
     chapters[0] = 'a'; chapters[1] = 'b'; chapters[10] = 'k'; chapters[50] = 'y'
     expect(nextChapterIndex(chapters, 10)).toBe(11)
@@ -34,7 +34,7 @@ describe('nextChapterIndex（前向窗口：视口章之后第一个未载章）
   })
 })
 
-describe('nextLoadTarget（哨兵进预取区才加载——旧口径 scrollHeight/scrollTop 已废弃）', () => {
+describe('nextLoadTarget（哨兵进预取区才加载，判据不看高度差）', () => {
   // 判据是「未载边界哨兵相对视口的 top」，不是容器 scrollHeight/scrollTop：宿主内容撑高布局下
   // 阅读器容器 clientHeight == scrollHeight 永不滚动，占位块又会把 scrollHeight 撑成整本书高，
   // 按高度差判两个方向都失效。签名里没有高度入参，类型层面就堵住那条回路。
@@ -46,7 +46,7 @@ describe('nextLoadTarget（哨兵进预取区才加载——旧口径 scrollHeig
   it('读尽 → 不加载', () => {
     expect(nextLoadTarget(0, 500, { chapters: ['a', 'b'], loading: null, from: 1 })).toBeNull()
   })
-  it('哨兵进「视口底 +2 屏」→ 加载下一未载章；恰好 2 屏 → 不加载（严格小于，口径与历史实现同源）', () => {
+  it('哨兵进「视口底 +2 屏」→ 加载下一未载章；恰好 2 屏 → 不加载（边界取严格小于）', () => {
     expect(nextLoadTarget(1500, 500, { chapters, loading: null, from: 0 })).toBeNull()   // 1500 == 500 * (1+2)
     expect(nextLoadTarget(1499, 500, { chapters, loading: null, from: 0 })).toBe(1)
     expect(nextLoadTarget(0, 500, { chapters, loading: null, from: 0 })).toBe(1)         // 哨兵在视口顶：首屏没填满，继续补

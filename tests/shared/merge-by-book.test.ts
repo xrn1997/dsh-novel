@@ -48,7 +48,7 @@ describe('mergeBooks：归并键与输入范围', () => {
     expect(r.books.map((b) => b.author)).toEqual([null, '狐不妖'])
   })
 
-  it('作者缺席照旧参与归并（对面同键含空作者）', () => {
+  it('作者缺席照旧参与归并（空作者也算同键）', () => {
     const r = mergeBooks(KW, [group('a', [hit('冰魔女的契约')]), group('b', [hit('冰魔女的契约')])])
     expect(r.total).toBe(1)
   })

@@ -16,20 +16,19 @@ import { registerTools } from './tools/tools.js'
 export { Config, type NovelConfig, type ResolvedConfig } from './config.js'
 
 /** 结构镜像：webServer/tools/jobs 的 declare module 增强来自未安装的宿主包——
- * 本仓库不装 dsh-host-webserver（peer，运行时由宿主提供），类型面按 d.ts 证据镜像最小形状。
+ * 本仓库不装 dsh-host-webserver（peer，运行时由宿主提供），类型面只镜像本插件用到的最小形状，
+ * 完整签名以宿主发布物为准。
  * 注意不能 extends Context（dsh-tools 已对 tools 做了更宽的增强，交叉会冲突）——独立形状 + 强转。
  * `jobs` = 宿主后台任务注册表（ctx.jobs）：只镜像我们用到的两成员（`start` 与下面的 `attachController`）。
  * `start` 交出的 spec 形状由 services/job-holder.ts 的 `JobHostSpec` 唯一持有——宿主真名真形与
  * 输出拉模型（`readOutput`）的窄面镜像注释都在那里，本处不复述。
- * kind 是自由字符串（注册表按不透明命名空间处理，唯一判据非空，
- * 见 `dsh-jobs-local` 的 `invalid job kind: expected a non-empty string`）。 */
+ * kind 是自由字符串，本仓给的取值一律非空、带 `novel-` 前缀，与宿主自带的任务命名隔开。 */
 interface WebServerLike { register(route: { kind: 'prefix'; path: string; handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void> }): () => void }
 interface ToolsRuntimeLike { register(tool: unknown): () => void }
 interface JobsRuntimeLike extends JobHost {
-  /** 准入闸：`start` 拒绝「没有已挂载 controller 服务该 owner」的工作。
-   *  从本插件（非 scoped 上下文）挂的 controller 进 global layer，对所有 owner 有效
-   *  （`dsh-jobs-local` 的 `servesOwner` 首行即查 global layer）。宿主自带的 `tool-jobs`
-   *  在本机 web profile 里是 `disabled: true`，所以这一句必须由我们自己来。 */
+  /** 准入闸：`start` 拒绝「没有已挂载 controller 服务该 owner」的工作——本插件的 owner
+   *  只有我们自己挂的 controller，所以这一句必须由我们来挂。
+   *  从本插件（非 scoped 上下文）挂的 controller 进 global layer，对所有 owner 有效。 */
   attachController(name: string): () => void
 }
 interface NovelContext { webServer: WebServerLike; tools: ToolsRuntimeLike; jobs: JobsRuntimeLike }
@@ -40,12 +39,12 @@ export const name = '@xrn1997/dsh-novel'
  *  缺了就该响亮失败；名字集合由 `tests/index.test.ts` 钉住） */
 export const inject = ['webServer', 'tools', 'jobs']
 
-/** 双重启用防御：bundles+插槽双启用时重复注册 /novel-api 会崩宿主进程（dsh-reader 验证过的坑）。
- * 语义钉死「当前有一份实例已注册」——dispose 复位，使 cordis 配置热替换（unload→load）后
- * 新实例可正常注册（dsh-reader 原模式无复位，HMR 场景会误拦）。 */
+/** 双重启用防御：bundles+插槽双启用时重复注册 /novel-api 会崩宿主进程。
+ * 语义钉死「当前有一份实例已注册」——dispose 复位，配置热替换（unload→load）与 HMR 之后
+ * 新实例照样能正常注册，不误拦。 */
 let applied = false
 
-/** 缝送来的 args → 宿主 severity 方法能吃的形状。真签名核证（cordis 发布物 logger.d.ts）：
+/** 缝送来的 args → 宿主 severity 方法能吃的形状（签名以宿主发布物为准）：
  *  每条级别方法是「printf 模板位打头（必填）+ 可选 rest」，整串变参展开接不进去；第二参不是
  *  meta 对象。模板位就取缝的第一条（前缀），其余按 rest 递；尾随的 Error 先成形为文本——宿主
  *  格式化器对对象一律 JSON 化，没成形的 Error 进 ring buffer 会塌成空壳，而本仓留痕几乎每条
@@ -56,9 +55,9 @@ function hostArgs(args: unknown[]): [unknown, ...unknown[]] {
   return [head, ...rest.map(logArg)]
 }
 
-/** `loader/volatile-update` 的载荷：当前 Loader 给顶层路径段数组（`string[][]`），
- *  且宿主会捕获监听器抛出的错误、不中断配置保存。解析按 unknown 收窄并容忍字符串 / 嵌套段：
- *  那是对旧代次 Loader 的跨版本硬化，不是对现行形状的猜测——异形载荷上只许留下可读痕迹，
+/** `loader/volatile-update` 的载荷：宿主给顶层路径段数组（`string[][]`），
+ *  且会捕获监听器抛出的错误、不中断配置保存。解析按 unknown 收窄并容忍字符串 / 嵌套段：
+ *  载荷形状不在本仓的钉死范围，异形载荷仍可能到达——那上面只许留下可读痕迹，
  *  不许把纯观测升级成故障。
  *  数组段按段拼成可读路径；只有顶层单段的 `proxyUrl` 才重算代理。
  *  最外层兜底吞掉连字符串化都会抛的极端载荷（revoked Proxy、无原型对象…）。 */
@@ -115,8 +114,8 @@ export function apply(ctx: Context, config?: NovelConfig): void {
   // 因为 fallback（环境变量 / 系统代理）启动期只取一次，显式值热更会翻转「显式 > fallback」的结果。
   // 代理日志必须过 redactProxyUrl：地址可能带 userinfo 密码。
   let proxyFor: (() => string | null) | null = null
-  // 载荷照 unknown 收、解析归 readVolatilePaths：现行 Loader 的形状已核实（顶层 `string[][]`），
-  // 但旧代次的异形载荷仍可能到达；按窄镜像硬吃会把纯观测变成运行期 throw。
+  // 载荷照 unknown 收、解析归 readVolatilePaths：事件面的载荷形状不由本仓钉死，异形仍可能到达；
+  // 按窄镜像硬吃会把纯观测变成运行期 throw。
   const events = ctx as unknown as {
     on(event: 'loader/volatile-update', listener: (payload: unknown) => void): () => boolean
   }
@@ -132,13 +131,13 @@ export function apply(ctx: Context, config?: NovelConfig): void {
     return () => { off() }
   }, 'dsh-novel: volatile config log')
 
-  // 守卫放到宿主成员同步调用（logger/sink、volatile 监听）都装好之后：旧代次缺成员时 apply 会
+  // 守卫放到宿主成员同步调用（logger/sink、volatile 监听）都装好之后：宿主成员缺席时 apply 会
   // 同步抛错；若先置 applied，抛错后没有 effect 可复位，后续重试会被 duplicate apply 挡死。
   applied = true
 
   /** 入口各注册共用的同一支时序舞——等 ready、被取消就收手、拆时调 disposer 并复位 applied——
-   *  收成一个私有闭包：以前它在路由与工具两条 effect 里各抄一份，第四个注册还得再抄，
-   *  时序口径因此散成多处（locality）。走不走这条缝只有一条分界：注册排在 ready 之后的才收进来；
+   *  收成一个私有闭包：让每个注册点各抄一份，同一条时序口径就会散成多处（locality）。
+   *  走不走这条缝只有一条分界：注册排在 ready 之后的才收进来；
    *  flush 与 unhandledRejection 守卫刻意留在外面——它们靠「注册得早 ⇒ 拆得晚」的次序成立，
    *  套上这层等 ready 的延迟就会让最后一笔写丢窗、让常驻防线迟到。 */
   const afterReady = (
@@ -160,11 +159,11 @@ export function apply(ctx: Context, config?: NovelConfig): void {
   }
 
   // 沙箱 unhandledRejection 常驻防线：脚本在 vm realm 里**自建**又 fire-and-forget 的异步工作
-  // （Promise 与宿主同一 isolate），其 rejection 会悬空冒到进程顶层。Node 20+ 默认把这类
-  // unhandled rejection 当致命 → 整个 dsh 进程死（用户看到「请求失败 403/404」fatal），
-  // 尤其在导入书源时（探针逐源跑 @js）。java.ajax 本身已不再产出 Promise（同步语义唯一，
-  // 见 engine/js-sandbox.ts 的哨兵口径），但这条防线仍然必需。
-  // 挂上后常驻至插件 dispose——早前「evalJs 期间挂、finally 摘」摘早了照样漏。
+  // （Promise 与宿主同一 isolate），其 rejection 会悬空冒到进程顶层。Node 默认把这类
+  // unhandled rejection 当致命 → 整个宿主进程死（用户看到「请求失败 403/404」fatal），
+  // 尤其在导入书源时（探针逐源跑 @js）。java.ajax 走同步语义、调用点不产 rejection（口径见
+  // engine/js-sandbox.ts 的哨兵），但脚本自建的 Promise 照样会，这条防线仍然必需。
+  // 挂上后常驻至插件 dispose：只在跑脚本那一段挂、收尾就摘，摘完之后迟到的 rejection 照样漏。
   // sink 也从这里递进去：防线幂等且先挂者定 sink，所以入口必须抢在第一次跑脚本之前挂，
   // 这条留痕才走得到日志缝（宿主日志面），而不是落在引擎的缺省 console 上。
   ctx.effect(() => {
@@ -172,19 +171,19 @@ export function apply(ctx: Context, config?: NovelConfig): void {
     return () => { detach() }
   }, 'dsh-novel: unhandledRejection guard')
 
-  // 宿主任务注册表的 controller：`start` 的准入闸要求「有已挂载 controller 服务该 owner」。
-  // 本机 web profile 里宿主自带的 `tool-jobs` 是 `disabled: true`（宿主注释：注册表留在 host plane，
-  // 搬走的只是模型侧控件），不挂这一句我们的 start 会被拒（报 "background jobs unavailable…"）。
+  // 宿主任务注册表的 controller：`start` 的准入闸要求「有已挂载 controller 服务该 owner」，
+  // 而本插件的 owner 只有自己这一份 controller 服务——不挂这一句我们的 start 会被拒
+  // （报 "background jobs unavailable…"）。
   // 从本插件这种非 scoped 上下文挂载 → 进 global layer → 对所有 owner 有效（disposer 随 fiber 走）。
   ctx.effect(() => c.jobs.attachController('dsh-novel'), 'dsh-novel: job controller')
 
   // ready 失败吞掉不炸整树（源数据损坏不值得整个 profile 起不来）——收敛为 null，日志留痕一次；
-  // 派生 then 链若不带 catch 会产生 unhandled rejection（实测钉死）。
+  // 派生 then 链必须带 catch：不带就是往进程顶层丢一个 unhandled rejection。
   // LocalBooks 初始化失败同样不炸树——与 ReadingService 同口径 catch 语义，合并进同一 catch。
   const ready = (async () => {
     const dir = resolved.dataDir ?? novelDir()
     // 出站代理：Node 的 fetch（undici）不读系统代理，有代理才通的站点直连会被 302/重置
-    // （实测笔趣阁）——fallback（环境变量 > Windows 系统代理）启动期只取一次，显式配置覆盖它；
+    // （库里有命中这一形态的源）——fallback（环境变量 > Windows 系统代理）启动期只取一次，显式配置覆盖它；
     // 完整优先级见 services/proxy.ts 的 resolveProxyUrl。
     const fallbackProxy = resolveProxyUrl({ env: process.env, systemProxy: await readSystemProxy() })
     const proxyUrl = (): string | null => {
@@ -213,8 +212,9 @@ export function apply(ctx: Context, config?: NovelConfig): void {
     return null
   })
 
-  // 卸载时把防抖写落地：书架与源注册表的落盘都带防抖窗口（shelf = 100ms），
-  // 宿主重启（SIGINT → fiber 卸载）会把窗口里的最后一条写丢掉——「刚读到的位置」正好死在
+  // 卸载时把防抖写落地：书架与源注册表的落盘都带防抖窗口（窗口值的唯一主人是
+  // services/storage.ts 的 `PERSIST_WINDOW_MS`），宿主重启（SIGINT → fiber 卸载）会把
+  // 窗口里的最后一条写丢掉——「刚读到的位置」正好死在
   // 窗口里（进度是高频写，退出那一刻往往就是最后一次）。注册得早 ⇒ 拆得晚。
   // 同一处顺手关掉出站 dispatcher：代理连接池不该活过插件实例（Fetcher.dispose）。
   ctx.effect(() => {

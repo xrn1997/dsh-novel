@@ -15,7 +15,7 @@ describe('looksLikeHtml（白名单标签判定——纯文本正文不许误伤
 })
 
 describe('htmlToText（HTML 片段 → 纯文本）', () => {
-  it('块级元素边界换行（久久小说网 @html 实测形态：一串 <p>）', () => {
+  it('块级元素边界换行（`@html` 收到的一串 <p> 输入形态）', () => {
     expect(htmlToText('<p>第一段</p><p>第二段</p><p>第三段</p>')).toBe('第一段\n第二段\n第三段')
   })
   it('br 换行、嵌套块展开、空块不留空行', () => {
@@ -64,14 +64,14 @@ describe('contentToText（正文取值收口）', () => {
     expect(once).toBe('第一段\n第二段')
     expect(contentToText(once)).toBe(once)
   })
-  it('img 保留为地址行（漫画/图片章节不再整章零命中）', () => {
+  it('img 保留为地址行（漫画/图片章节靠 img 收地址，不落整章零命中）', () => {
     const html = '<img src="https://cdn.x.com/1.jpg">\n<img data-src="/rel/2.png">'
     expect(contentToText(html)).toBe('https://cdn.x.com/1.jpg\n/rel/2.png')
   })
   it('藏在 noscript 里的 img 也取回地址，不许把字面标签当正文吐出来', () => {
     // domhandler 把 noscript 内容按 raw text 解析（noscript.children 只有一个 text 节点，
     // find('img') 为 0）——「透明下钻」必须把那段文本再当 HTML 解析一次，否则读者看到的是
-    // `<img src="/a.jpg">` 这串标记本身（审查实测）。
+    // `<img src="/a.jpg">` 这串标记本身。
     expect(contentToText('<p>前<noscript><img src="/a.jpg"></noscript>后</p>')).toBe('前\n/a.jpg\n后')
     expect(contentToText('<div class="gic"><noscript><img data-original="/b.jpg" /></noscript></div>'))
       .toBe('/b.jpg')

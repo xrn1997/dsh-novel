@@ -24,7 +24,7 @@ const nodeType = (n: AnyNode): string => n.type
  *   ——XPath 的节点集谓词，非空即真）、`and`/`or` 组合；
  * - 函数白名单外（count/sum 等）→ UnsupportedRuleError。
  * 实现：直接在 domhandler 节点树上求值（cheerio 底层 DOM）——HTML→XML 重解析会错位。
- * 近似说明：谓词里的 text() 用元素 textContent（拼接后代文本）——真实样本全落此口径。
+ * 近似说明：谓词里的 text() 用元素 textContent（拼接后代文本）——近似已登记在矩阵行 `a-xpath-subset`。
  */
 export function evalXPath(
   seg: XPathSegment,
@@ -274,7 +274,7 @@ function parsePredicate(content: string): Predicate {
   if (c === 'text()') return { kind: 'textExists' }
   // 子元素存在（[dd[a]]）
   if (/^[A-Za-z_][\w.-]*$/.test(c)) return { kind: 'elemExists', name: c }
-  // 相对路径存在性谓词（XPath 1.0 的节点集谓词：**非空即真**，真源 `li[.//a]` 形态）。属性步按
+  // 相对路径存在性谓词（XPath 1.0 的节点集谓词：**非空即真**，输入里有 `li[.//a]` 形态）。属性步按
   // 属性节点存在性判（testNode 的 attr 分支就是「该元素有这个属性」），故 [a/@href] 同样成立。
   // `//` 起步在谓词里是**文档根**绝对轴，本求值器手里只有上下文节点，不猜成后代——如实抛。
   if (c.startsWith('//')) {

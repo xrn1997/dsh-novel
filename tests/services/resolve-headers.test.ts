@@ -9,7 +9,7 @@ import { must } from '../support/fixture.js'
 /**
  * 动态请求头（headerRule）回归钉子：
  * `@js:`/`<js>` header 规则经沙箱求值得 JSON 头表；求值失败 → warn 回退静态头（不炸请求）。
- * 真机实证：顶点小说（device-id/Authorization 全在 @js 规则里）——把 @js 头规则当坏 JSON 丢弃
+ * 这类写法把设备号/鉴权头全放在 @js 规则里——把 @js 头规则当坏 JSON 丢弃
  * 会让请求 4004 → ruleDetailInit `$.data` 空 → 详情/目录全链路失败。
  */
 
@@ -37,7 +37,7 @@ describe('normalize：header 单字段两形态', () => {
   const base = {
     bookSourceName: 'X', bookSourceUrl: 'https://a.com', ruleContent: 'id.c@text',
   }
-  it('@js: 规则形态 → headerRule 保留、header 为 null、**不再报「非法 JSON」警告**', () => {
+  it('@js: 规则形态 → headerRule 保留、header 为 null、不报「非法 JSON」警告', () => {
     const rule = '@js:\nvar uid=java.randomUUID();\nJSON.stringify({"X-Device": String(uid)})'
     const r = normalizeSource({ ...base, header: rule })
     expect(r.ok).toBe(true)
@@ -45,7 +45,7 @@ describe('normalize：header 单字段两形态', () => {
     expect(must(r.source, 'r 归一化后的 source').rules.header).toBeNull()
     expect(r.warnings.some((w) => w.field === 'header')).toBe(false)
   })
-  it('<js>…</js> 规则形态同样识别（legado getHeaderMap 双前缀）', () => {
+  it('<js>…</js> 规则形态同样识别（两前缀都算规则形态）', () => {
     const rule = '<js>JSON.stringify({"A":"b"})</js>'
     const r = normalizeSource({ ...base, header: rule })
     expect(must(r.source, 'r 归一化后的 source').rules.headerRule).toBe(rule)
@@ -76,7 +76,7 @@ describe('normalize：header 单字段两形态', () => {
     expect(must(r.source, 'r 归一化后的 source').rules.header).toEqual({ 'User-Agent': 'UA' })
     expect(must(r.source, 'r 归一化后的 source').rules.headerRule).toBeNull()
   })
-  it('非规则的坏 JSON → 仍报警告（老口径不动）', () => {
+  it('非规则的坏 JSON → 仍报警告（坏 JSON 不参与规则判别）', () => {
     const r = normalizeSource({ ...base, header: '{bad json' })
     expect(must(r.source, 'r 归一化后的 source').rules.header).toBeNull()
     expect(must(r.source, 'r 归一化后的 source').rules.headerRule).toBeNull()
@@ -92,7 +92,7 @@ describe('normalize：header 单字段两形态', () => {
   })
 })
 
-describe('resolveHeaders（legado getHeaderMap 口径）', () => {
+describe('resolveHeaders（静态头 + 动态头规则的合并口径）', () => {
   it('无规则 → 静态头直答（含 auth/cookie 合并）', async () => {
     const s = mkSource({ rules: { ...mkSource().rules, header: { Referer: 'https://r' } }, auth: { cookies: { a: '1' } } })
     const h = await resolveHeaders(fetcher, s)
@@ -128,7 +128,7 @@ describe('resolveHeaders（legado getHeaderMap 口径）', () => {
     // deviceId 到不了脚本，java.androidId 抛「ctx.deviceId 未接线」并被回退吞掉。
     expect((await resolveHeaders(withDevice, s))['X-Android']).toBe('dev-1')
   })
-  it('randomUUID 逐次求值 → device id 每请求刷新（legado 每请求 getHeaderMap 口径）', async () => {
+  it('randomUUID 逐次求值 → 设备号每请求刷新（头规则每请求求值一次，不缓存结果）', async () => {
     const s = mkSource({
       rules: { ...mkSource().rules, headerRule: '@js:JSON.stringify({"D": java.randomUUID()})' },
     })
@@ -137,7 +137,7 @@ describe('resolveHeaders（legado getHeaderMap 口径）', () => {
     expect(a.D).not.toBe(b.D)
     expect(String(a.D)).toMatch(/^[0-9a-f-]{36}$/)
   })
-  it('规则求值抛错 → warn 后回退静态头（不炸请求，legado try/catch 口径）', async () => {
+  it('规则求值抛错 → warn 后回退静态头（不炸请求：动态头拿不到就用声明里那份静态的）', async () => {
     const s = mkSource({ rules: { ...mkSource().rules, headerRule: '@js:null.boom', header: { 'X-Fallback': '1' } } })
     const warn = console.warn
     const captured: unknown[] = []
@@ -181,12 +181,12 @@ describe('effectiveUserAgent（java.getWebViewUA 的取值口径）', () => {
 })
 
 /**
- * 头 JSON 的**宽松度**（对面把头做成两段解析：严格 → 宽松，口径与出处记在矩阵行 `b-header-js`）。
- * 严格解析一步到底时，「单引号形态的头」对面读得出、我们静默丢（样本：阅读书屋 / 猫眼看书 / PO5）。
+ * 头 JSON 的**宽松度**：严格解析失败后回落宽松解析两段式（口径与出处记在矩阵行 `b-header-js`）。
+ * 严格解析一步到底时，「单引号形态的头」会被静默丢——这份输入允许把头写成单引号形态。
  * 选项 JSON 走的是同一套宽松解析（`request.ts` 的 parseOptionJson），头这条必须跟上。
  */
 describe('头 JSON 的单引号宽松度（与选项 JSON 同一口径）', () => {
-  it('静态 header 是单引号 JSON → 派生成头表，不再当坏 JSON 丢弃', () => {
+  it('静态 header 是单引号 JSON → 派生成头表，不作坏 JSON 丢弃', () => {
     const r = normalizeSource({
       bookSourceName: 'X', bookSourceUrl: 'https://a.com', ruleContent: 'id.c@text',
       header: "{'Referer':'https://r','User-Agent':'UA-x'}",
@@ -195,7 +195,7 @@ describe('头 JSON 的单引号宽松度（与选项 JSON 同一口径）', () =
     expect(r.source?.rules.header).toEqual({ Referer: 'https://r', 'User-Agent': 'UA-x' })
   })
 
-  it('动态头规则产出单引号 JSON → 同样生效（对面宽松解析那一段的等价）', async () => {
+  it('动态头规则产出单引号 JSON → 同样生效（宽松解析段兜住）', async () => {
     const s = mkSource({
       rules: { ...mkSource().rules, headerRule: "@js:\"{'X-Dev':'d1'}\"" },
     })

@@ -72,14 +72,13 @@ describe('@css 选择器段', () => {
 })
 
 /**
- * @css 链步含当前元素自身——本仓与对面 jsoup 的真实分叉（真机 404 实证）。
+ * @css 链步含当前元素自身——本仓 CSS 求值的一处刻意分叉。
  *
  * 病态：`<a class="page-link">` 这种「类名长在标签自己身上」的写法，规则 `.page-link@a@href`
- * 的中间步是一条裸词 CSS 选择器。对面 `Element.select` 的命中集**含当前元素**（本机实测：
- * `self.select("a")` = 1；版本成色写在矩阵 `a-default-step-self-inclusion`，不在这里重复），
- * 本仓 `cur.find()` 只给后代 = 0 → 整条链读空 → 目录翻页规则后面的脚本拿 `undefined` 拼出下一页
- * 地址 → 404 把整棵目录带走。裁决与代价见 `ADR-0029`，
- * 读数在矩阵行 `a-default-step-self-inclusion`。
+ * 的中间步是一条裸词 CSS 选择器。裸词步的命中集**含当前元素自身**
+ * （读数在矩阵 `a-default-step-self-inclusion`），而本仓 `cur.find()` 只给后代 = 0
+ * → 整条链读空 → 目录翻页规则后面的脚本拿 `undefined` 拼出下一页地址 → 404 把整棵目录带走。
+ * 裁决与代价见 `ADR-0029`。
  */
 describe('@css 链步含当前元素自身', () => {
   const PL_HTML = '<div id="pg"><ul class="pages">'
@@ -89,7 +88,7 @@ describe('@css 链步含当前元素自身', () => {
     + '</ul></div>'
   const p$ = cheerio.load(PL_HTML)
 
-  it('裸词步 a 在当前集全是 a.page-link 时入选（对面同形）', () => {
+  it('裸词步 a 在当前集全是 a.page-link 时入选', () => {
     const v = evalCss(seg('a'), p$, p$('.page-link'), loc(0, '@css:a'), 'toc')
     expect(v.kind).toBe('nodes')
     expect(nodesOf(v)).toHaveLength(3)
@@ -111,7 +110,7 @@ describe('@css 链步含当前元素自身', () => {
   })
 })
 
-describe('! 排除语法（求值层：官方「!是排除，0 是第1个，负数为倒数」）', () => {
+describe('! 排除语法（求值层：!是排除，0 是第 1 个，负数为倒数）', () => {
   const segEx = (selector: string, exclude: number[]): Extract<Segment, { kind: 'css' }> => ({ kind: 'css', selector, exclude })
   it('li!0 → 3 个 li 去掉第 1 个 = 2 个', () => {
     const v = evalCss(segEx('li', [0]), $, root(), loc(0, 'li!0'), 'toc')
@@ -136,13 +135,14 @@ describe('! 排除语法（求值层：官方「!是排除，0 是第1个，负�
 })
 
 /**
- * jsoup 的 `[attr~=regex]`——库里 26 处这么写：`[property~=category|status|update_time]`、
+ * `[attr~=regex]` 走**正则**匹配（现量住矩阵 `a-css-attr-regex`）：
+ * `[property~=category|status|update_time]`、
  * `[property~=las?test_chapter_name]`、`[property~=image]`、`[href~=/read/\d+]`、
  * `[style~=width:100%;]`（`s?` 的可选与 `a|b|c` 的择一只有**正则**读法讲得通）。
  * 标准 CSS 的 `~=` 是「属性值按空白分词后含该词」，拿它比 `og:novel:category` 恒不命中；
- * 本仓选择器引擎走标准 CSS，故在求值前把 `~=` 谓词摘出来按正则筛（jsoup 的口径）。
+ * 本仓选择器引擎走标准 CSS，故在求值前把 `~=` 谓词摘出来按正则筛。
  */
-describe('jsoup 的 [attr~=regex]（正则匹配，不是 CSS 的词表包含）', () => {
+describe('[attr~=regex] 按正则匹配（不是 CSS 的词表包含）', () => {
   const h = `<html><head>
     <meta property="og:novel:category" content="都市">
     <meta property="og:novel:latest_chapter_name" content="第9章 收尾">

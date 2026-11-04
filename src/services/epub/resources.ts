@@ -456,8 +456,9 @@ class SvgBuilder {
       // 命名空间声明与编辑器/元数据属性（含 `:` 的、`data-*`、`class`）：不是可见内容，丢掉
       if (attr.startsWith('xmlns') || attr.startsWith('data-') || attr === 'class') continue
       // 带命名空间前缀的 href（`xlink:href`）不是元数据：在渐变上是**继承**（引用另一处渐变的 stop），
-      // 在别处是外部引用——两者都改变可见外观。静默丢掉会让图形少一块却报成功：实测
-      // `<linearGradient xlink:href="#base"/>` 被剥成空渐变、矩形失去填充且不留任何告警。
+      // 在别处是外部引用——两者都改变可见外观。静默丢掉会让图形少一块却报成功：
+      // `<linearGradient xlink:href="#base"/>` 被剥成空渐变、矩形失去填充且不留任何告警
+      // （钉子：`tests/services/epub-resources.test.ts` 的渐变继承那一组）。
       // 不可支持的引用照本层口径点名报错（与 url(...)/白名单外元素同一条）。
       if (localName(attr) === 'href') {
         throw new EpubImportError(

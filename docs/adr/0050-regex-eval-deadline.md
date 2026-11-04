@@ -2,7 +2,7 @@
 
 Status: accepted
 
-书源规则里的正则是用户写的。一条合法、能编译、却病态的模式（嵌套量词遇上不匹配的长输入）在主线程上是指数级回溯——几十毫秒还是几十分钟，只差几个字符的长度，而插件与宿主同进程，钉住主线程等于让这一进程里所有其他请求与界面一起排队。本仓把**所有**过用户正则的求值收进 `engine/regex-guard.ts`：在 `node:vm` 的上下文里跑，用 V8 的执行超时兜底——irregexp 的回溯循环会检查这个 timeout，超时即抛 `RegexDeadlineError`。
+书源规则里的正则是用户写的。一条合法、能编译、却病态的模式（嵌套量词遇上不匹配的长输入）在主线程上是指数级回溯——几十毫秒还是几十分钟，只差几个字符的长度，而插件与宿主同进程，钉住主线程等于让这一进程里所有其他请求与界面一起排队。本仓把**所有**过用户正则的求值收进 `engine/regex-guard.ts`：在 `node:vm` 的上下文里跑，用 vm 脚本执行的超时兜底——超时即抛 `RegexDeadlineError`，不赌回溯的形状与深度。
 
 ## 决定
 
@@ -19,6 +19,6 @@ Status: accepted
 
 ## 代价
 
-每趟多一次 vm 脚本执行（十微秒量级）。返回值跨 realm：test / replace / OnlyOne 给原生布尔与字符串，matchAll 与 filter 的数组在 vm realm 里构造——`instanceof Array` 对它不成立（`Array.isArray` 成立），filter 数组里装的仍是宿主原物。消费点因此不许用 realm 相关判据；这条口径写在模块头注释里一次，不在各调用点重述。
+每趟多一次 vm 脚本执行。返回值跨 realm：test / replace / OnlyOne 给原生布尔与字符串，matchAll 与 filter 的数组在 vm realm 里构造——`instanceof Array` 对它不成立（`Array.isArray` 成立），filter 数组里装的仍是宿主原物。消费点因此不许用 realm 相关判据；这条口径写在模块头注释里一次，不在各调用点重述。
 
 锚点：`src/engine/regex-guard.ts` 的 `deadlineFor` 与五条 `vm.Script`；`src/engine/errors.ts` 的 `RegexDeadlineError`；消费点 `src/engine/allinone.ts` / `src/engine/css.ts` / `src/engine/replace.ts` / `src/services/search-face.ts` 的 `startsDetail`；`tests/engine/regex-guard.test.ts`；正文侧的站点可用性读数归 `DSH_CONTENT_AUDIT`（见 `docs/development.md` 的「真链路门控」）。

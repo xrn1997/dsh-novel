@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { COVERAGE } from './matrix.js'
+import { DATE_ANCHOR, MATRIX_ROWS, dateAnchorsIn } from './matrix-source.js'
 import { withoutComments } from '../without-comments.js'
 
 /**
@@ -11,16 +12,15 @@ import { withoutComments } from '../without-comments.js'
  *   implemented → `impl` 的符号必须在实现文件里现查得到（**剥注释后**，注释里提一嘴不算实现），
  *                 `test` 的用例标题片段必须在测试文件里在场；
  *   not-applicable → `note` 必须写明裁决理由（判「不适用」而不写理由 = 把裁决写成遗忘）；
- *   open → `note` 必须带 `2026-MM-DD` 复核戳（最危险的不是「还没做」，是把上一批库上的读数当现状）。
+ *   open → `note` 必须带 `2026-MM-DD` 复核戳（最危险的不是「还没做」，是把过期读数当现状）。
  *
  * 另钉两条表自身的形状：id 唯一（同一能力被抄成两行即红）、**一行一条记录**（本表一半按行读：
- * 审计脚本、`inventory-coverage`、`upstream-fields`，把一条记录折成多行会让这些读数静默漏掉它）。
+ * 审计脚本、`inventory-coverage`，把一条记录折成多行会让这些读数静默漏掉它）。
  *
- * 裁决理由住本行 `note`，不再指任何设计文档：仓里没有第二份兼容裁决文档，指出去就是悬空引用。
+ * 裁决理由只住本行 `note`，不指任何设计文档：仓里没有第二份兼容裁决文档，指出去就是悬空引用。
  */
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
-const DATE = /2026-\d{2}-\d{2}/
 
 function fileText(rel: string): string | null {
   const p = join(ROOT, rel)
@@ -70,18 +70,28 @@ describe('not-applicable 与 open 行的说明纪律', () => {
 
   it('open 行都带复核时效戳（2026-MM-DD）', () => {
     const bad = COVERAGE.filter((r) => r.status === 'open')
-      .filter((r) => !r.note || !DATE.test(r.note))
+      .filter((r) => !r.note || !DATE_ANCHOR.test(r.note))
       .map((r) => r.id)
     expect(bad, `open 行没有日期锚，读数会被当成现状：${bad.join(', ')}`).toEqual([])
   })
 
   it('写了「N 源」这类现量读数的行必须带日期锚（不限状态）', () => {
-    // 「现库有 N 源在用」是会随用户增删漂移的数，没有批次日期的数等于没有出处——
-    // 最危险的不是「还没做」，是上一批读数被当现状用。设计常量（如「每源截断 50 条」）
+    // 「现库有 N 源在用」是会随用户增删漂移的数，没有日期锚的数等于没有出处——
+    // 最危险的不是「还没做」，是过期读数被当现状用。设计常量（如「每源截断 50 条」）
     // 不在此判据内：那是要实现的形状，不是量出来的事实。
     const READING = /[0-9]+ ?个?源/
-    const bad = COVERAGE.filter((r) => r.note && READING.test(r.note) && !DATE.test(r.note)).map((r) => r.id)
+    const bad = COVERAGE.filter((r) => r.note && READING.test(r.note) && !DATE_ANCHOR.test(r.note)).map((r) => r.id)
     expect(bad, `现量读数缺日期锚：${bad.join(', ')}`).toEqual([])
+  })
+
+  it('note 不排成时间线：一条读数最多挂一个日期锚', () => {
+    const bad: string[] = []
+    for (const row of MATRIX_ROWS) {
+      if (row.noteText === undefined) continue
+      const anchors = dateAnchorsIn(row.noteText)
+      if (anchors.length > 1) bad.push(`${row.id} 挂了 ${anchors.length} 个日期`)
+    }
+    expect(bad, `这些行把读数写成了时间线：\n${bad.join('\n')}`).toEqual([])
   })
 })
 
@@ -93,9 +103,10 @@ describe('矩阵表自身的形状', () => {
   })
 
   it('一条记录占一行（本表一半按行读）', () => {
-    const src = readFileSync(join(ROOT, 'tests', 'legado-coverage', 'matrix.ts'), 'utf8')
-    const rowLines = (src.match(/^ {2}\{ id: '/gm) || []).length
-    expect(rowLines, `源码里数到 ${rowLines} 行记录，数组里是 ${COVERAGE.length} 条——有记录被折成多行`).toBe(COVERAGE.length)
+    const sourceIds = MATRIX_ROWS.map((row) => row.id)
+    expect(sourceIds, '源码里的行 id 与数组不一致——有记录没按行读出来').toEqual(COVERAGE.map((row) => row.id))
+    const folded = MATRIX_ROWS.filter((row) => !row.complete).map((row) => row.id)
+    expect(folded, `这些记录折成了多行：${folded.join(', ')}`).toEqual([])
   })
 
   it('note 里不许指着已出库的文档或已删的守卫', () => {

@@ -100,14 +100,14 @@ describe('toNumChapter（中文数字 → 阿拉伯数字）', () => {
     expect(toNumChapter('第12章 已是数字')).toBe('第12章')
     expect(toNumChapter('没有章节号')).toBe('没有章节号')
   })
-  it('中文数字的「补一位」边界：一千一 = 1100，一千二百 = 1200（照抄对面的算法，不是四则运算）', async () => {
+  it('中文数字的「补一位」边界：一千一 = 1100，一千二百 = 1200（补一位，不是四则运算）', async () => {
     const { chineseNumToInt } = await import('../../src/engine/js-utils.js')
     expect(chineseNumToInt('一千一')).toBe(1100)
     expect(chineseNumToInt('一千二百')).toBe(1200)
     expect(chineseNumToInt('十二万三千四百五十六')).toBe(123456)
     expect(chineseNumToInt('认不出的字')).toBe(-1)
   })
-  it('沙箱可见：java.toNumChapter（真实源用它规整正文/目录标题）', async () => {
+  it('沙箱可见：java.toNumChapter（规整正文/目录标题）', async () => {
     const { runScript, createSourceSession } = await import('../../src/engine/js-sandbox.js')
     const r = await runScript({
       code: 'java.toNumChapter("第五百章 起点")', loc: { segmentIndex: 0, segmentRaw: '@js' },
@@ -125,7 +125,7 @@ describe('unescapeHtml4 / absolutizeUrl（getString 重载落地面）', () => {
     expect(unescapeHtml4('&#65;|&#x41;|&amp;|&lt;|&nbsp;')).toBe('A|A|&|<| ')
     expect(unescapeHtml4('&amp;lt;')).toBe('&lt;')
   })
-  it('认不出的实体与裸 & 原样留；无 & 直接返回同串（对面的短路条件）', () => {
+  it('认不出的实体与裸 & 原样留；无 & 直接返回同串', () => {
     expect(unescapeHtml4('&notanentity;')).toBe('&notanentity;')
     expect(unescapeHtml4('Tom & Jerry')).toBe('Tom & Jerry')
     expect(unescapeHtml4('普通文本')).toBe('普通文本')
@@ -134,7 +134,7 @@ describe('unescapeHtml4 / absolutizeUrl（getString 重载落地面）', () => {
     expect(unescapeHtml4('&#xD800;')).toBe('&#xD800;')
     expect(unescapeHtml4('&#x110000;')).toBe('&#x110000;')
   })
-  it('absolutizeUrl 五条约口径（对面 NetworkUtils.getAbsoluteURL）', () => {
+  it('absolutizeUrl 五条约口径', () => {
     const base = 'https://b.test/read/index.html'
     expect(absolutizeUrl(base, '/b/1')).toBe('https://b.test/b/1')
     expect(absolutizeUrl(base, 'https://other.test/x')).toBe('https://other.test/x')

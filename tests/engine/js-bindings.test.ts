@@ -4,8 +4,8 @@ import { JsSandboxError } from '../../src/engine/errors.js'
 
 const loc = { segmentIndex: 0, segmentRaw: '<js>test</js>' }
 
-describe('沙箱 legado 绑定与作用域（本轮修复钉子）', () => {
-  it('非严格模式：未声明赋值写全局（legado sloppy 语义——真实源 `next = []` 形态）', async () => {
+describe('沙箱绑定与作用域（绑定与作用域形状钉子）', () => {
+  it('非严格模式：未声明赋值写全局（sloppy 语义——库里有 `next = []` 这一形态）', async () => {
     const out = await runScript({
       code: 'next = [];\nnext.push(1, 2);\nnext.length',
       loc, facet: 'toc', scriptForm: true,
@@ -83,7 +83,7 @@ describe('沙箱 legado 绑定与作用域（本轮修复钉子）', () => {
     })
     expect(out.value).toEqual({ kind: 'value', text: 'chapter-list' })
   })
-  it('java.ajax 同步语义（worker + SAB RPC 桥——legado runBlocking 口径）', async () => {
+  it('java.ajax 同步语义（worker + SAB RPC 桥——同步阻塞是这条桥的口径）', async () => {
     const fetchImpl = async (url: string): Promise<{ body: string }> => ({ body: `BODY:${url}` })
     const out = await runScript({
       code: 'var b = java.ajax("https://x.com/p"); b.indexOf("BODY") + "|" + b.length',
@@ -91,7 +91,7 @@ describe('沙箱 legado 绑定与作用域（本轮修复钉子）', () => {
       baseUrl: 'https://x.com', source: 'https://x.com', fetch: fetchImpl,
     })
     expect(out.value).toEqual({ kind: 'value', text: '0|20' })
-    // 链式同步消费形态（真实源主导写法）
+    // 链式同步消费形态（脚本把上一段的值直接递下去）
     const out2 = await runScript({
       code: 'java.ajax("https://x.com/q").match(/^BODY:(.*)$/)[1]',
       loc, facet: 'content', scriptForm: true,
@@ -107,13 +107,13 @@ describe('沙箱 legado 绑定与作用域（本轮修复钉子）', () => {
     }).then(() => null, (e: unknown) => e)
     expect((err as Error).message).toContain('站点挂了')
   })
-  it('java.ajax 参数规约：非串按 String(值) 交下去（Rhino 的 String 形参转换），空值点名且不发请求', async () => {
+  it('java.ajax 参数规约：非串按 String(值) 交下去，空值点名且不发请求', async () => {
     const seen: unknown[] = []
     const fetchImpl = async (url: string): Promise<{ body: string }> => { seen.push(url); return { body: 'OK' } }
-    // 真源形态：上一段 JSONPath 产出 `['https://…']`，脚本直接 java.ajax(result)——
+    // 上一段 JSONPath 产出 `['https://…']`，脚本直接 java.ajax(result)——
     // 脚本侧按 String 形参转换，单元素数组的 toString 就是那条 URL。改这里注意：非串参数在入口
     // 就归成串，别把原值交给请求组装层——那边按串操作，会炸成 `template.replace is not a function`
-    // （灯读文学 init 段实证）。
+    // （有源的 init 段就是这么写的）。
     const out = await runScript({
       code: 'java.ajax(["https://x.com/one"]); java.ajax(42); "done"',
       loc, facet: 'content', scriptForm: true,
@@ -154,7 +154,7 @@ describe('沙箱 legado 绑定与作用域（本轮修复钉子）', () => {
       code: 'java.ajax("https://x.com/p"); while(true){}',
     })).rejects.toThrow(/脚本超时/)
   })
-  it('JSON 页 result 按对象绑定（legado isJSON 口径——result.chapterTitle 字段访问形态）', async () => {
+  it('JSON 页 result 按对象绑定（JSON 页判定口径——result.chapterTitle 字段访问形态）', async () => {
     const { evalJs } = await import('../../src/engine/js-sandbox.js')
     const json = JSON.stringify({ chapterTitle: '第9章', chapterId: 77 })
     const out = await evalJs({
@@ -173,7 +173,7 @@ describe('沙箱 legado 绑定与作用域（本轮修复钉子）', () => {
     })
     expect(out2.value).toEqual({ kind: 'value', text: '<p>y页</p>' })
   })
-  it('org.jsoup.Jsoup.parse 最小仿真（select/size/get/text 链——白鹿书院形态）', async () => {
+  it('org.jsoup.Jsoup.parse 最小仿真（select/size/get/text 链）', async () => {
     const out = await runScript({
       code: 'var doc = org.jsoup.Jsoup.parse(result); var els = doc.select("a"); els.size() + "|" + els.get(0).text() + "|" + els.get(0).attr("href")',
       result: '<ol><li><a href="/c/1">第一章</a></li><li><a href="/c/2">第二章</a></li></ol>',
@@ -198,7 +198,7 @@ describe('沙箱 legado 绑定与作用域（本轮修复钉子）', () => {
     expect(bracket.value).toEqual({ kind: 'value', text: 'string' })
     expect(commented.value).toEqual({ kind: 'value', text: 'string' })
     expect(ajaxCalls).toBe(3)                                    // 每段各一次：不多打站点
-    // 同步链式消费形态在别名写法下同样成立（真实源主导写法）
+    // 同步链式消费形态在别名写法下同样成立
     const chained = await runScript({ ...base, code: 'java["ajax"]("https://x.com/q").match(/^BODY:(.*)$/)[1]' })
     expect(chained.value).toEqual({ kind: 'value', text: 'https://x.com/q' })
   })

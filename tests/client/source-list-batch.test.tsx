@@ -132,7 +132,7 @@ describe('选中动作条：启用/停用/验证所选（写口载荷 + 成功�
     expect(document.querySelector('[data-novel-selbar]')).not.toBeNull() // 勾选留着：失败不许清现场
   })
 
-  it('清空选择：只退勾选，不退出编辑态（钮写的是「清空选择」，此前连带把编辑态一起退了）', () => {
+  it('清空选择：只退勾选，不退出编辑态（钮的名字就是它的作用范围）', () => {
     render(view(makeDeps()))
     selectRows(['源一'])
     fireEvent.click(screen.getByText('清空选择'))
@@ -165,7 +165,7 @@ describe('选中动作条：启用/停用/验证所选（写口载荷 + 成功�
   })
 })
 
-describe('删除：统一模态二次确认（2026 改版——手输口令与危险区退役）', () => {
+describe('删除：统一模态二次确认（没有手输口令，也没有危险区）', () => {
   it('删除所选 → 模态点名数量；确认后 POST batch-delete {ids}（点击时快照）+ 勾选清空 + 反馈条', async () => {
     const deps = makeDeps({ apiSend: vi.fn(async () => ({ removed: 2 })) })
     render(view(deps))
@@ -414,7 +414,7 @@ describe('「去登录」接线（runLogin 两形态 / 未声明回站点）', (
     await waitFor(() => expect(screen.queryByText('去登录')).toBeNull())
   })
 
-  it('未声明 loginUrl → 不问服务端，直接开站点自身（保留本按钮原来的行为）', () => {
+  it('未声明 loginUrl → 不问服务端，直接开站点自身（这一条路径不碰服务端表单）', () => {
     const apiSend = vi.fn()
     render(view(makeDeps({ apiSend }), [src({ id: 's1', name: '源一', hasLoginUrl: false })]))
     openAuthPane()
@@ -446,7 +446,7 @@ describe('英文渲染：书源列表', () => {
 describe('分组下拉：真实组选项的计数括号随语言渲染', () => {
   const grouped = [src({ id: 'g1', name: '源甲', groups: ['玄幻'] }), src({ id: 'g2', name: '源乙', groups: ['玄幻'] })]
 
-  it('中文：全角括号（与旧屏上文案逐字一致）', () => {
+  it('中文：分组计数用全角括号', () => {
     render(view(makeDeps(), grouped))
     expect(screen.getByRole('option', { name: '玄幻（2）' })).toBeTruthy()
   })

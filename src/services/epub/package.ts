@@ -374,7 +374,7 @@ function assertSupported(
     if (attrOf(meta, 'property') === 'rendition:layout' && textOf(meta, budget).trim() === 'pre-paginated') {
       throw new EpubImportError(`EPUB 声明固定版式（rendition:layout=pre-paginated），本插件只支持流式排版：${opfPath}`)
     }
-    // EPUB2（iBooks / Kindle 的写法）：meta name="fixed-layout" content="true"
+    // EPUB2 时代包的固定版式声明写法：meta name="fixed-layout" content="true"
     if (attrOf(meta, 'name') === 'fixed-layout' && attrOf(meta, 'content') === 'true') {
       throw new EpubImportError(`EPUB 声明固定版式（meta name="fixed-layout" content="true"），本插件只支持流式排版：${opfPath}`)
     }

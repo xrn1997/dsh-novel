@@ -29,7 +29,7 @@ function threeButtons(close: () => void): ReactNode {
 }
 
 describe('标记：dialog 语义与无障碍名', () => {
-  it('role=dialog + aria-modal + 名字取可见标题本身（不再往 aria-label 抄第二份）', () => {
+  it('role=dialog + aria-modal + 名字取可见标题本身（不往 aria-label 抄第二份）', () => {
     render(threeButtons(() => undefined))
     const dialog = screen.getByRole('dialog')
     expect(dialog.getAttribute('aria-modal')).toBe('true')

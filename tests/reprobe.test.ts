@@ -6,13 +6,12 @@ import { ReadingService } from '../src/services/reading.js'
 import { makeTempDir, trackService } from './temp-dir.js'
 
 // 真机重探（DSH_REPROBE=1 门控——全量真打网络，几分钟量级；不进常规集）
-// 用途：引擎/请求形态改动后实测 verified 率变化（compat 跑通率就是验收标准本身）
+// 用途：引擎/请求形态改动后实测 verified 率变化（重探的 verified 率就是验收标准本身）
 //
 // 读数口径：`导入失败` 桶 = **入库闸拒**（非文本源/未知类型，与矩阵 j-audio-image-file 同源），
 // 不是缺陷也不参探针；其余是真打网络的结果（FetchError/超时=站点或链路脸色）。
 // 引擎类失败（RuleEval/JsSandbox/UnsupportedRule）**逐条点名**——只有这几类可能归因到本仓；
-// 已有逐条落地核对：全是站点侧（人机验证页 / JS 反爬壳 / 镜像站页面），如实报 0 命中
-// 不冒充 verified 即正确行为。
+// 站点侧形态（人机验证页 / JS 反爬壳 / 镜像站页面）如实报 0 命中即可，不许冒充 verified。
 // 跨版本别比聚合数：分母随用户增删漂，站点可用率整体波动。
 
 describe.skipIf(process.env.DSH_REPROBE !== '1')('真机重探（全量 probe 统计）', () => {

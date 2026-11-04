@@ -579,7 +579,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
       )}
       {/* 阅读区（full-bleed：纸铺满这一层）：正文列 + 0 宽 sticky 抽屉槽同在此行。
           纸色走值槽（.novel-rdr 根上行内写、样式层读），条与正文因此读的是同一张纸。
-          抽屉三版死法与现方案的理由见样式层 .novel-drawer-slot 注释。 */}
+          抽屉被否形状与现方案的理由见样式层 .novel-drawer-slot 注释。 */}
       <div className="novel-rdr-main">
         {/* 正文层：字号/行距/栏宽由 prefs 行内固定——永不接宿主 token；字色走 --novel-paper-ink */}
         <div
@@ -613,7 +613,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
             </div>
           )}
         </div>
-        {/* 抽屉：0 宽 sticky 槽 + absolute 本体（锚视口、且不切走正文宽度；三版死法见样式层注释）。
+        {/* 抽屉：0 宽 sticky 槽 + absolute 本体（锚视口、且不切走正文宽度；被否形状见样式层注释）。
             内容 = 目录树（分组标题不可点；同一章可以有多条锚点条目）。 */}
         {sceneState.surface === 'toc' && (
           <div className="novel-drawer-slot">

@@ -5,7 +5,7 @@ import { htmlToText, looksLikeHtml } from '../engine/dom.js'
  *
  * 书源常以 `@html` 收正文（元素 HTML 原样返回），而本插件的正文契约是**纯文本**：
  * 阅读器按 `\n` 分段渲染 `<p>`、导出写 .txt、agent 工具直接回文本。不转换就会把标签
- * 当正文打出来（实测整章一串 `<p>` 原样落库，矩阵行 `g-html-to-text`）。
+ * 当正文打出来（整章 `<p>` 原样落库的口径见矩阵行 `g-html-to-text`）。
  *
  * HTML→文本 的实现在引擎层（engine/dom.ts 的 htmlToText/nodeText）——引擎的 `@text` 段用
  * 同一套口径（块级边界换行），这里只保留「像不像 HTML」的判定与幂等收口。

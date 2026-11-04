@@ -8,9 +8,9 @@ import { must } from '../support/fixture.js'
 
 /**
  * 宿主设计 token 词表守卫（防「引用了宿主根本不存在的 token」这类静默失败）：不存在的别名
- * 不报错、只静默落回硬编码 fallback，深浅两态都不再跟随宿主（深色模式会因此失效）。
- * 词表取自宿主 `@deepseek-ai/dsh-client-ui-theme` 的 design-platform CSS（光/暗两套同名），冻结
- * 在此以免测试依赖宿主安装路径；宿主升级改名 token 时更新本词表（那是契约变了的信号）。
+ * 不报错、只静默落回硬编码 fallback，深浅两态都不跟随宿主（深色模式会因此失效）。
+ * 本词表是宿主 token 名的冻结快照，家就在这个文件里（不依赖宿主安装路径）；宿主契约改名时
+ * 随发布物更新本词表——那是契约变了的信号。光/暗两套同名，故一份名单够用。
  */
 const HOST_TOKENS = new Set<string>([
   "--dsw-alias-bg-base", "--dsw-alias-bg-layer-1", "--dsw-alias-bg-layer-2",
@@ -112,7 +112,7 @@ describe('宿主 token 词表守卫（--dsw-* 必须是宿主真名）', () => {
     expect(bad).toEqual([])
   })
 
-  it('词表自身没有「仅单态存在」的假 token（border-l / bg-layer-4 是两个已踩过的坑）', () => {
+  it('词表自身没有「仅单态存在」的假 token（border-l / bg-layer-4 是反例样本）', () => {
     expect(HOST_TOKENS.has('--dsw-alias-border-l')).toBe(false)
     expect(HOST_TOKENS.has('--dsw-alias-bg-layer-4')).toBe(false)
     // l1..l4 四级齐全、层板止于 layer-3

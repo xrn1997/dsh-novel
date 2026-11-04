@@ -19,7 +19,7 @@ export interface ClassifiableErr {
 
 /** 本仓宿主面缺口的消息锚点（每条都是代码里真实存在的措辞片段） */
 const HOST_GAP = [
-  'is not a function',                       // 沙箱里缺某个 jsoup/宿主方法（如 Elements.remove）
+  'is not a function',                       // 沙箱里缺某个桥方法（如 Elements.remove）
   '无法识别的段类型',                         // 解析期不认的段形态
   '未知 java 方法',                           // js-protocol：脚本调了没登记的 java.*
   '未知 Packages 桥操作',                     // Packages.* 未登记的路径（重活通道 `__pkg.*`）

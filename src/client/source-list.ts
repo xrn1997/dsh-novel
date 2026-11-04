@@ -2,7 +2,7 @@ import { createStore } from './store.js'
 import type { SourcePublic } from './views/types.js'
 
 /** 源列表过滤：名称/地址/分组子串命中（大小写不敏感）；空 query 原样返回。
- *  630+ 源的列表没有过滤无法用——定位是列表化的前提。 */
+ *  大库没有过滤无法用——定位是列表化的前提。 */
 export function filterSources(sources: SourcePublic[], query: string): SourcePublic[] {
   const q = query.trim().toLowerCase()
   if (q === '') return sources
@@ -24,20 +24,20 @@ export function filterByStatus(sources: SourcePublic[], filter: StatusFilter): S
 }
 
 /** 「未分组」伪选项哨兵值：下拉里专门筛 groups 为空的源（给它们补分组的定位入口）。
- *  用不可能出现在真实组名里的哨兵串而非「未分组」字面量——真实组名五花八门，撞名即误筛；
- *  视图渲染时把它显示成「未分组（n）」 */
+ *  用不可能出现在真实组名里的哨兵串而非「未分组」字面量——组名是用户数据、不可枚举，
+ *  撞名即误筛；视图渲染时把它显示成「未分组（n）」 */
 export const UNGROUPED = '__ungrouped__'
 
 /** 分组过滤：'' = 全部（含无分组源——不过滤即全量）；精确匹配分组名，
  *  与状态下拉/文本过滤叠加（交集）；UNGROUPED 哨兵 = 只看无分组源。
- *  分组只出下拉单选（真实组名五花八门，做 chips 收不住宽度）；v1 不做多组并筛（宁窄不宽） */
+ *  分组只出下拉单选（组名是用户数据、不可枚举，做 chips 收不住宽度）；不做多组并筛（宁窄不宽） */
 export function filterByGroup(sources: SourcePublic[], group: string): SourcePublic[] {
   if (group === '') return sources
   if (group === UNGROUPED) return sources.filter((s) => s.groups.length === 0)
   return sources.filter((s) => s.groups.includes(group))
 }
 
-/** 组名装饰图标提取：上游组名自带视觉图标（「快速书源 ⚡」尾部的 ⚡）——
+/** 组名装饰图标提取：输入数据里存在自带装饰图标的组名（「快速书源 ⚡」尾部的 ⚡）——
  *  分组列只显示图标（图标即组的视觉身份），hover 出全名；无符号组（如「小说」）返回 null，
  *  显示侧回退全名（不造图标）。FE0F/ZWJ 是 emoji 组合件，一并纳入图标段 */
 export function groupIcon(group: string): string | null {
@@ -47,7 +47,7 @@ export function groupIcon(group: string): string | null {
 
 // ── 列表 UI 状态────────────────────────────────────────────
 // 模块级 store（routeStore 同款模式）：试跑下钻返回、设置区重开都不丢现场——
-// 642 源的过滤/勾选是「工作现场」，卸载即清零是不可接受的（状态机走查洞 1）。
+// 过滤/勾选是「工作现场」，卸载即清零是不可接受的。
 
 export interface SourceListUi {
   query: string

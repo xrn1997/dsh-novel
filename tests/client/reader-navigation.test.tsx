@@ -40,7 +40,7 @@ describe('树结构', () => {
     expect(screen.queryByRole('button', { name: '卷一 风起' })).toBeNull()
   })
 
-  it('叶项复用现有抽屉按钮类（高亮/焦点环与旧目录同一个源）', () => {
+  it('叶项复用现有抽屉按钮类（高亮/焦点环与抽屉按钮同一个源）', () => {
     const { container } = render(<ReaderNavigation items={items} activeId={null} onNavigate={() => {}} />)
     const first = container.querySelector('button')
     expect(first?.className).toContain('novel-drawer-item')

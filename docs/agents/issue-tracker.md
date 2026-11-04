@@ -29,7 +29,7 @@ GitHub 的 issue 与 PR 共用一个编号空间，裸 `#42` 可能是两者之�
 
 ## Wayfinding 操作
 
-供 `/wayfinder` 使用。**地图**是单个 issue，**子票**是它的子 issue。
+供 wayfinder 那条流程使用。**地图**是单个 issue，**子票**是它的子 issue。
 
 - **地图**：一个打了 `wayfinder:map` 标签的 issue，装 Notes / Decisions-so-far / Fog 正文。`gh issue create --label wayfinder:map`。
 - **子票**：作为地图的 GitHub sub-issue 关联（`gh api` 打 sub-issues 端点）。sub-issue 未启用处，把子票加进地图正文的任务列表，并在子票正文顶部写 `Part of #<map>`。标签：`wayfinder:<type>`（`research`/`prototype`/`grilling`/`task`）。认领后指派给驱动的开发。

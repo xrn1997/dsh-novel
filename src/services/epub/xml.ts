@@ -108,8 +108,9 @@ export function parseXml(text: string, budget: XmlBudget): Element {
   const roots = (doc.root().get(0)?.children ?? []).filter(isElement)
   const root = roots[0]
   if (root === undefined) throw new EpubImportError(`${budget.what} 不是可解析的 XML（没有根元素）`)
-  // 良构 XML 只有一个文档元素。解析器（htmlparser2 的 xml 模式）**不查良构**，多根时它把每根都交出来，
-  // 只取第一个就是把后面的内容静默丢掉（实测：两份 <html> 拼接的文件只留下前半）。本仓不按半途结果读。
+  // 良构 XML 只有一个文档元素，而这里的解析面（`load` 的 xml 模式）**不查良构**，多根时它把每根都交出来，
+  // 只取第一个就是把后面的内容静默丢掉（两份 <html> 拼接的文件只留下前半——钉子见
+  // `tests/services/epub-documents.test.ts` 的多根元素那一组）。本仓不按半途结果读。
   if (roots.length > 1) {
     throw new EpubImportError(
       `${budget.what} 有多个根元素（${roots.length} 个）：畸形 XML 不按半途结果读（只读第一个会静默丢掉后面的内容）`,
@@ -151,7 +152,7 @@ function scanXml(text: string, what: string): void {
 
 /**
  * 摘掉 CDATA 段与注释。注释也必须摘：XML 规范允许注释里出现任何文本，`<!-- 删掉的段落 &nbsp; -->`
- * 里的 `&nbsp;` 不是实体引用——按引用判会把一份本来可读的书整本拒掉（实测）。未闭合的 `<!--`
+ * 里的 `&nbsp;` 不是实体引用——按引用判会把一份本来可读的书整本拒掉。未闭合的 `<!--`
  * 正则匹配不到，原样留给闸门：认不出就不猜。
  */
 function stripLiterals(text: string): string {

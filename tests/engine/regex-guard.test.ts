@@ -19,7 +19,7 @@ describe('regex-guard：正常语义与原生一致', () => {
     // OnlyOne 口径：产物是首个匹配那一段（不是原文只改一处）；无匹配给空串
     expect(guardedOnlyOneReplace(/(a)(b)/, 'xabyab', '$2$1')).toBe('ba')
     expect(guardedOnlyOneReplace(/X/, 'abc', '-')).toBe('')
-    // 未参与的 (x)? 组落空串（对面口径），零长度匹配强制前进（不死循环）
+    // 未参与的 (x)? 组落空串，零长度匹配强制前进（不死循环）
     expect(guardedMatchAll(/(\d)(?:_(\d))?/g, 'a1_2 b3')).toEqual([['1_2', '1', '2'], ['3', '3', '']])
     expect(guardedMatchAll(/(?:)/g, 'ab')).toHaveLength(3)
     // 批量过滤：缺属性的条目不命中；命中项原样交回

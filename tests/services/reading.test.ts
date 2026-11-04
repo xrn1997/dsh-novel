@@ -28,7 +28,7 @@ async function streamToBuffer(stream: Readable): Promise<Buffer> {
 
 const BASE = 'https://s.com'
 const SEARCH_HTML = (q: string) => `<html><body><div class="b"><a href="/book/1/">${q}·斗罗</a><span>唐家</span></div></body></html>`
-// fixture 形态由三处实测缺陷钉出：①目录条目 class 必须命中 ruleBookList（@css:.b，搜索与目录共用）；
+// fixture 形态由三条形状约束钉出：①目录条目 class 必须命中 ruleBookList（@css:.b，搜索与目录共用）；
 // ②getChapter 用例的路由必须同时服务目录页（getChapter 依赖 getToc）；③正文 div 的 id 必须与规则
 // 选择器 #content 一致（对不上必零命中）。
 const TOC_HTML = `<html><body><div class="b ch"><a href="/c/1.html">第一章</a></div><div class="b ch"><a href="/c/2.html">第二章</a></div><a class="tn" href="/toc2.html">下一页</a></body></html>`
@@ -59,7 +59,7 @@ const rawSource = {
 // 组合根 seam：测试自持 registry 部件——listSources/getSource 已从门面删除
 // （全量 NovelSource 投影出服务层破凭据红线），断言走 registry 部件，不为测试开门面洞。
 // flush 归此 seam：SourceRegistry 的 100ms 尾沿防抖写会在文件 teardown 之后才触发，
-// mkdir 把 setup.ts 刚删掉的临时目录又建回来（实测 ENOTEMPTY/复活）。测试自持 registry，
+// mkdir 把 setup.ts 刚删掉的临时目录又建回来（ENOTEMPTY、目录复活）。测试自持 registry，
 // 故在此收口——registry 与 shelf 各 trackService 一次（见 temp-dir.ts），删目录前先等写落地。
 async function makeService(
   htmlOf: (url: string) => string | null,
@@ -89,15 +89,15 @@ async function makeService(
 }
 
 describe('ReadingService', () => {
-  // ── 写侧动词：变更归门面，dispatch 不再手写 registry.edit 配方 ──────────────────
+  // ── 写侧动词：变更只由门面动词落，dispatch 不自己拼写侧配方 ──────────────────
   describe('写侧动词', () => {
-    it('setEnabled / setEnabledMany：单改与批改（未知 id 静默跳过、重复 id 幂等——旧 dispatch 配方语义原样入门面）', async () => {
+    it('setEnabled / setEnabledMany：单改与批改（未知 id 静默跳过、重复 id 幂等——批改与单改是两份契约）', async () => {
       const { svc, registry } = await makeService(() => null)
       const a = pick(registry.list(), 0)
       const bRaw = { ...rawSource, bookSourceName: 'B', bookSourceUrl: 'https://b2.com' }
       const b = must((await svc.importOne(bRaw)).sourceId, '导入回执的 sourceId')
       // 单源启停：成功即返回（无 bool 回执）；未知 id 抛 SourceNotFoundError——
-      // 「源不存在」只在门面断言一次，两个投影面不再各译一遍。
+      // 「源不存在」的存在性判据只在门面一处，两个投影面各自按错误类型分类。
       await expect(svc.setEnabled(a.id, false)).resolves.toBeUndefined()
       expect(registry.list().find((s) => s.id === a.id)?.enabled).toBe(false)
       // setEnabledMany 是另一份契约：未知 id 静默跳过、重复 id 幂等
@@ -134,7 +134,7 @@ describe('ReadingService', () => {
       expect(await svc.removeSource(a.id)).toBe(true)
       expect(forgotten).toEqual([keys[1], keys[0]])
     })
-    it('saveAuth：cookie 录入带 acquiredAt（旧 dispatch 手拼 SourceAuth 的知识归门面）', async () => {
+    it('saveAuth：cookie 录入带 acquiredAt（SourceAuth 的组装知识只住门面）', async () => {
       const { svc, registry } = await makeService(() => null)
       const a = pick(registry.list(), 0)
       const before = Date.now()
@@ -158,7 +158,7 @@ describe('ReadingService', () => {
       expect(auth.loginInfo).toEqual({ user: 'u' })
       expect(auth.acquiredAt).toBeGreaterThanOrEqual(before)
     })
-    it('listPublicSources：凭据红线投影（registry.list().map(toPublic) 的调用方知识入门面）', async () => {
+    it('listPublicSources：凭据红线投影（全量 NovelSource 不出服务层，raw/rules/auth 一律不带）', async () => {
       const { svc } = await makeService(() => null)
       const list = svc.listPublicSources()
       expect(list).toHaveLength(1)
@@ -168,7 +168,7 @@ describe('ReadingService', () => {
       expect('rules' in only).toBe(false)
       expect('auth' in only).toBe(false)
     })
-    it('searchPlan：参与集唯一主人（启停 invariant 在服务端——客户端不再自行重推导）', async () => {
+    it('searchPlan：参与集唯一主人（启停 invariant 只在服务端判定，投影面直接吃这个集合）', async () => {
       const { svc, registry } = await makeService(() => null)
       const a = pick(registry.list(), 0)
       const b = must((await svc.importOne({ ...rawSource, bookSourceName: 'B', bookSourceUrl: 'https://b-plan.com' })).sourceId, '导入回执的 sourceId')
@@ -210,11 +210,11 @@ describe('ReadingService', () => {
     expect(bad.hits).toEqual([])
   })
 
-  it('URL 位取值取 list 首项：条目里多个 <a> 时不再拼成多行串（真源 八一中文网 / Royalroad 的 a@href）', async () => {
-    // 真源形态（审计 `no-book-url` 桶）：条目 = 封面链 + 标题链 + 最新章节链，
+  it('URL 位取值取 list 首项：条目里多个 <a> 时取首项，不拼成多行串', async () => {
+    // 这类条目的形状 = 封面链 + 标题链 + 最新章节链，
     // `tag.a@href` 命中 2..n 个不同 href。URL 位一律取 `list[0]`——值规约若在这里 `join('\n')`，
     // `absUrl` 的换行守卫（`/[\t\n\r]/` 即 null）会**整条书目丢地址**：不报错，而是「搜到了却打不开」，
-    // 在审计里与「列表规则零命中」混在同一个桶。矩阵行 `b-url-value-first-item`；
+    // 症状与「列表规则零命中」混成一类。矩阵行 `b-url-value-first-item`；
     // join 只用于非 URL 取值：URL 里不可能有换行。
     const MULTI_A = (q: string): string => '<html><body><div class="b">'
       + '<a href="/book/1/"><img src="/1.jpg"></a>'
@@ -227,10 +227,10 @@ describe('ReadingService', () => {
     expect(pick(g.hits, 0)).toMatchObject({ title: '斗罗·斗罗', url: `${BASE}/book/1/` })
   })
 
-  it('源实体字段 `bookSourceComment` 脚本可见（涩涩俱乐部把解密脚本存在那里）', async () => {
-    // 对面脚本里的 `source` 就是 BookSource 实体 → `source.bookSourceComment` 必须可读：不投影该字段时
-    // 脚本拿到 undefined（静默不映射、不报错），现库按 raw 全串扫的命中样本是
-    // 涩涩俱乐部 ruleContent.replaceRegex 里的插值。用请求 URL 做观测点：把注释拼进 searchUrl。
+  it('源实体字段 `bookSourceComment` 脚本可见（解密脚本存书源注释的形态）', async () => {
+    // 书源脚本里的 `source` 就是整个源实体 → `source.bookSourceComment` 必须可读：不投影该字段时
+    // 脚本拿到 undefined（静默不映射、不报错）；这份输入就有把解密插值藏在 ruleContent.replaceRegex 的写法。
+    // 用请求 URL 做观测点：把注释拼进 searchUrl。
     let seen = ''
     const { svc } = await makeService((u) => {
       if (u.includes('/search')) { seen = u; return SEARCH_HTML('斗罗') }
@@ -245,7 +245,7 @@ describe('ReadingService', () => {
     expect(g.error).toBeUndefined()
     expect(seen).toContain('c=COMMENTMARK')
   })
-  it('辅助字段的坏规则只丢该字段（对面 try/catch 那五项）；裸奔项仍整组报错', async () => {
+  it('辅助字段的坏规则只丢该字段；裸奔项仍整组报错', async () => {
     // 辅助字段（intro / coverUrl / lastChapter / kind / wordCount）各包 try/catch，
     // name / author / bookUrl 裸奔——一条坏辅助规则不许带走整页书目。边界两侧都要钉：
     // 只钉「吞」会放行「什么都吞」，只钉「抛」会把读得出的源判死。
@@ -325,7 +325,7 @@ describe('ReadingService', () => {
     expect(contentFetches).toBe(before) // 缓存命中
 
     await expect(svc.getChapter(src.id, `${BASE}/book/1/`, 99)).rejects.toThrowError(/目录中没有第 99 章/)
-    // 类型化失败：越界与源不存在都不再是裸 Error——API 层按 instanceof 映射 404
+    // 类型化失败：越界与源不存在都是类型化错误——API 层按 instanceof 映射 404
     await expect(svc.getChapter(src.id, `${BASE}/book/1/`, 99)).rejects.toBeInstanceOf(ChapterNotFoundError)
     await expect(svc.getChapter('nope', `${BASE}/book/1/`, 0)).rejects.toBeInstanceOf(SourceNotFoundError)
   })
@@ -346,7 +346,7 @@ describe('ReadingService', () => {
       cookieJar: jar,
     })
     const svc = trackService(await ReadingService.from({ registry, shelf, cache, fetcher, cookieJar: jar }))
-    // 引擎能力归源请求缝的 sourceRequest.fetcherFor；from() 不再偷偷改注入的基础 fetcher
+    // 引擎能力归源请求缝的 sourceRequest.fetcherFor；from() 不回写注入的基础 fetcher
     expect(fetcher.webview).toBeUndefined()
     await svc.importOne(rawSource)
     const groups = await svc.search('斗罗')
@@ -479,8 +479,8 @@ describe('ReadingService', () => {
     expect(detail.title).toBe('详情标题')   // 走 ruleDetailName
   })
 
-  it('详情面脚本读得到书架镜像字段（`{{book.name}}` 不再渲染成空；快看漫画 detail intro 形态）', async () => {
-    // 对面脚本里的 `book` 是 Book 实体：详情面脚本常拿它拼模板（`{{book.name}}`/`{{book.author}}`/
+  it('详情面脚本读得到书架镜像字段（详情 intro 拿 `{{book.name}}` 拼串的形态）', async () => {
+    // 书源脚本里的 `book` 是书目镜像：详情面脚本常拿它拼模板（`{{book.name}}`/`{{book.author}}`/
     // `{{book.kind}}`），还把 `book.kind` 当 kind 规则的**首选值**（`book.kind || get(…)`）。
     // 详情/目录两面的 book 镜像同样带 name/author/kind——缺了这些读法全是静默空。
     const { svc, registry } = await makeService((u) => (u === `${BASE}/book/1/` ? '<html><body><h1>详情标题</h1></body></html>' : null))
@@ -516,7 +516,7 @@ describe('ReadingService', () => {
 })
 
 // ── 书 URL 承载请求选项（`url,{option}` 随身份存取——URL 字符串即请求规格）────────
-// 口径（书架诊断实证）：URL 字符串即请求规格，命中/书架/抓取全程不剥离，抓取时由 assembleRequest
+// 口径：URL 字符串即请求规格，命中/书架/抓取全程不剥离，抓取时由 assembleRequest
 // 单点解释。API 源的 ruleBookUrl 是 `端点,{"method":"POST",…}` 形态，剥掉选项会让 bookKey 只剩
 // 裸端点、POST body 里的 id 永久丢失，全链路 405。
 describe('书 URL 承载请求选项（,{option} 随身份存取）', () => {
@@ -543,7 +543,7 @@ describe('书 URL 承载请求选项（,{option} 随身份存取）', () => {
     expect(pick(g.hits, 0).url).toBe(API_BOOK)   // URL 即请求规格：选项不剥离，book_id 随 body 一起保住
   })
 
-  it('getDetail 按 bookKey 的 ,{option} 真发 POST 并带 body（此前 fetchText 裸抓带选项 URL 必炸）', async () => {
+  it('getDetail 按 bookKey 的 ,{option} 真发 POST 并带 body（选项串留在 URL 上会得站点错）', async () => {
     const calls: Array<{ url: string; method: string; body?: string }> = []
     const dir = await makeTempDir('novel-rd-')
     const registry = trackService(await SourceRegistry.load(dir))
@@ -582,7 +582,7 @@ describe('书 URL 承载请求选项（,{option} 随身份存取）', () => {
 })
 
 // ── 详情上下文 ruleBookInfo.init + tocUrl 模板过引擎插值 ────────
-// 口径（书架诊断实证）：详情规则依赖 init 换上下文、tocUrl 是带 `{{$.resourceID}}` 的模板。
+// 口径：详情规则依赖 init 换上下文、tocUrl 是带 `{{$.resourceID}}` 的模板。
 // init 先求值，其结果**替换**后续详情规则的求值上下文；URL 模板按该上下文过规则引擎插值——
 // 未插值的模板会把目录打到字面地址（0 章）。
 // init 非空但零命中 → RuleEvalError 点名 ruleDetailInit（宁炸不猜：静默降级会把「规则与站点不符」
@@ -656,9 +656,9 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
     expect(d.intro).toBe('斗气世界简介')
   })
 
-  // 「init 单次求值」的真机危害不是多算一次纯路径：js 形态 init 的第二次求值会**再打一次站点**。
-  // 这里用 `java.ajax` 当计数器——读数不是内部调用次数，而是 init 每被求值一次就多出的真实出站请求。
-  // 各求一次 init 就会在这个源上打两次 /init-hit——这条钉的是单次。
+  // init 多求一次的代价不是多算一次纯路径：js 形态 init 的第二次求值会**再打一次站点**。
+  // 这里用 `java.ajax` 当计数器——计数就是真实出站请求数，不是内部调用次数：init 每被求值一次就多打一次。
+  // 各处只求一次 init，这个源上就只该有一次 /init-hit——这条钉的是单次。
   it('getDetail 只求一次 init：js 形态 init 不双打站点（tocUrl 复用同一份上下文）', async () => {
     const initHits: string[] = []
     const DETAIL = 'https://once.example.com/book/9'
@@ -700,7 +700,7 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
     expect(initHits).toHaveLength(1)
   })
 
-  // 真机分桶实证：ruleBookInfo.init 是**纯 @put**（只设变量），详情面每条规则都是
+  // 这一族的写法是：ruleBookInfo.init 是**纯 @put**（只设变量），详情面每条规则都是
   // `@get:{k}`——三件事必须同时成立：init 不换根、vars 在这次 getDetail 内共享、`@get:{}` 花括号形态认。
   const META_URL = 'https://meta.example.com/book/77'
   const META_PAGE = `<html><head>
@@ -768,9 +768,9 @@ describe('详情上下文 ruleDetailInit + tocUrl 模板插值', () => {
 })
 
 // ── js 沙箱预算走配置出口（jsTimeoutMs）──────────────────────────────────────────
-// 为什么要有这条配置（书架诊断实证）：目录 @js 脚本需多次 java.ajax 往返 + md5 签名，2s 写死预算必炸
-// 「脚本超时」。口径（用户拍板）：插件配置 jsTimeoutMs（缺省 15000）经 ReadingService → bridge →
-// EvalContext 透传（引擎零改动）；搜索面/探针同口径。
+// 为什么要有这条配置：目录 @js 脚本要多次 java.ajax 往返再加签名才出得来结果，预算写死得太小就会把
+// 这类脚本一律判成「脚本超时」。口径：沙箱预算走插件配置 jsTimeoutMs（缺省值住 src/config.ts 的配置面），
+// 经 ReadingService → bridge → EvalContext 透传（引擎零改动）；搜索面/探针同口径。
 describe('js 沙箱预算走配置出口（jsTimeoutMs）', () => {
   const slowJs = (ms: number, url: string): string =>
     `@js: var t = Date.now(); while (Date.now() - t < ${ms}) {}; '${url}'`
@@ -831,7 +831,7 @@ describe('js 沙箱预算走配置出口（jsTimeoutMs）', () => {
       .rejects.toThrowError(/脚本超时（>300ms）/)
   })
 
-  it('缺省预算放行 legado 级脚本（>2s 的多请求目录脚本不再被 2s 写死预算卡死）', async () => {
+  it('缺省预算放行多请求长耗时目录脚本（本用例的脚本跑过 2s 仍照常出目录）', async () => {
     const { svc, registry } = await makeJsService({
       ruleTocUrl: slowJs(2400, 'https://js.example.com/toc'),
     })
@@ -865,7 +865,7 @@ describe('js 沙箱预算走配置出口（jsTimeoutMs）', () => {
   })
 })
 
-describe('同步导入走 intake 入库规则（此前工具面导入无去重，同址可重复入库）', () => {
+describe('同步导入走 intake 入库规则（同步口与任务口共用同一去重主人，同址不重复入库）', () => {
   // 组合根 seam：测试自持 registry 部件（setStatus 播种是测试关注点，不为它开门面洞）
   const mk = async (): Promise<{ svc: ReadingService; registry: SourceRegistry }> => {
     const dir = await makeTempDir('novel-rd-')
@@ -913,25 +913,25 @@ describe('同步导入走 intake 入库规则（此前工具面导入无去重�
   })
 })
 
-describe('求值上下文组装单点（runLogin/tocUrl 此前漏 jsLib，潜伏期最长的一处）', () => {
-  // 登录用例改走公开动词 login()（runLogin 已降门内私有）；cookie 落盘经 registry 组合根 seam 佐证
+describe('求值上下文组装单点（runLogin/tocUrl 共用这一份上下文，jsLib 不得缺席）', () => {
+  // 登录用例走公开动词 login()（runLogin 是门内私有）；cookie 落盘经 registry 组合根 seam 佐证
   const mk = async (): Promise<{ svc: ReadingService; registry: SourceRegistry }> => {
     const { svc, registry } = await makeService(() => null)
     return { svc, registry }
   }
 
-  it('runLogin：@js 登录上下文带 jsLib（此前手拼上下文漏 jsLib——jsLib 函数只在登录那一刻炸 not defined）', async () => {
+  it('runLogin：@js 登录上下文带 jsLib（另拼一份手拼上下文会在登录那一刻炸 not defined）', async () => {
     const { svc, registry } = await mk()
     const out = await svc.importOne({
       ...rawSource, bookSourceUrl: 'https://login.com',
       loginUrl: 'return buildCookie()',   // runLogin 统一加 @js: 前缀;evaluate 路径是函数体形态,完成值需显式 return
       jsLib: 'function buildCookie() { return "sid=abc; uid=7" }',
     })
-    expect(await svc.login(must(out.sourceId, 'out 的 sourceId'))).toEqual({ kind: 'authed' })   // 门面出口是 outcome（旧口 runLogin 回 SourceAuth|null）
+    expect(await svc.login(must(out.sourceId, 'out 的 sourceId'))).toEqual({ kind: 'authed' })   // 门面出口是 outcome，不是登录态对象
     expect(registry.get(must(out.sourceId, 'out 的 sourceId'))?.auth?.cookies).toEqual({ sid: 'abc', uid: '7' })
   })
 
-  it('runLogin 认 <js>…</js> 登录脚本（不再套出 @js:<js> 语法错）', async () => {
+  it('runLogin 认 <js>…</js> 登录脚本（两形态直接识别，不做前缀套嵌）', async () => {
     const { svc, registry } = await mk()
     const out = await svc.importOne({
       ...rawSource, bookSourceUrl: 'https://login-js-tag.com',
@@ -961,7 +961,7 @@ describe('求值上下文组装单点（runLogin/tocUrl 此前漏 jsLib，潜伏
       ...rawSource, bookSourceUrl: 'https://login-empty.com',
       loginUrl: 'return ""',
     })
-    expect(await svc.login(must(out.sourceId, 'out 的 sourceId'))).toEqual({ kind: 'empty-output' })   // 旧口回 null；翻 422 的翻译在 authRoute
+    expect(await svc.login(must(out.sourceId, 'out 的 sourceId'))).toEqual({ kind: 'empty-output' })   // 空产出如实给 kind；翻 422 的翻译在 authRoute
     expect(registry.get(must(out.sourceId, 'out 的 sourceId'))?.auth).toBeUndefined()
     expect(svc.listPublicSources().find((s) => s.id === must(out.sourceId, 'out 的 sourceId'))?.hasAuth).toBe(false)
   })
@@ -980,7 +980,7 @@ describe('求值上下文组装单点（runLogin/tocUrl 此前漏 jsLib，潜伏
     await expect(svc.runLoginAction(must(out.sourceId, 'out 的 sourceId'), '执行')).rejects.toThrow('user=alice')
   })
 
-  it('tocUrl 规则求值同走完整上下文（jsLib 可见——此前裸 {html,baseUrl} 连 source/fetch 都没有）', async () => {
+  it('tocUrl 规则求值同走完整上下文（jsLib 可见；裸上下文连 source/fetch 都拿不到）', async () => {
     const svc = trackService(await ReadingService.create({
       dir: await makeTempDir('novel-rd-'),
       fetchImpl: route((u) => (u.includes('/book/1/') ? '<html><body><h1>详情</h1></body></html>' : null)),
@@ -1024,7 +1024,7 @@ describe('login(id) outcome（门内串 requireSource→形态判别→执行；
     expect(await svc.login(must(out.sourceId, 'out 的 sourceId'))).toEqual({ kind: 'no-login-url' })
   })
 
-  it('login 未知 id → 抛 SourceNotFoundError（门内 requireSource，路由不再预检——classify 免费拿 404）', async () => {
+  it('login 未知 id → 抛 SourceNotFoundError（存在性判据在门内 requireSource，路由只 classify，404 由错误类型直接拿到）', async () => {
     const { svc } = await mk()
     await expect(svc.login('nope')).rejects.toBeInstanceOf(SourceNotFoundError)
   })
@@ -1061,7 +1061,7 @@ describe('exportRange outcome（区间判据归门面：缺省、裁剪与两条
     expect([out.plan.from, out.plan.to, out.plan.totalInRange]).toEqual([2, 4, 3])
     const chunks: string[] = []
     for await (const chunk of out.plan.stream) chunks.push(chunk)
-    expect(chunks[0]).toBe('\uFEFF')                       // BOM 是首包（Windows 记事本兼容）
+    expect(chunks[0]).toBe('\uFEFF')                       // BOM 是首包：导出文件在常见桌面文本编辑器里不被当乱码
     const text = chunks.join('')
     expect(text.match(/《测试书》· 第\d章/g)).toHaveLength(3)
     expect(text).toContain('《测试书》· 第2章\n\n第2章正文')
@@ -1112,7 +1112,7 @@ describe('门面 probe 与搜索同耐心', () => {
   })
 })
 
-describe('门面直测（invariant 与 loginPlan 不再只穿 HTTP 测）', () => {
+describe('门面直测（invariant 与 loginPlan 在门面上直接可测，不必穿 HTTP）', () => {
   const mk = async (): Promise<ReadingService> => trackService(await ReadingService.create({
     dir: await makeTempDir('novel-rd-'),
     fetchImpl: route(() => null),
@@ -1123,8 +1123,8 @@ describe('门面直测（invariant 与 loginPlan 不再只穿 HTTP 测）', () =
     const manual = await svc.importOne({ ...rawSource, bookSourceUrl: 'https://m.com', loginUrl: 'https://login.com/x' })
     const js = await svc.importOne({ ...rawSource, bookSourceUrl: 'https://j.com', loginUrl: 'return "a=1"' })
     const none = await svc.importOne({ ...rawSource, bookSourceUrl: 'https://n.com' })
-    // loginPlan 降为门内判别构件（三分支语义不变）；门面出口经 login() 看到的是 outcome——
-    // 旧口的 null → kind:"no-login-url"（400 的翻译在 authRoute），SourceNotFoundError 原样穿门
+    // loginPlan 是门内判别构件（三分支语义不变）；门面出口经 login() 给出 outcome——
+    // 未声明登录 URL 即 kind:"no-login-url"（400 的翻译在 authRoute），SourceNotFoundError 原样穿门
     expect(await svc.login(must(manual.sourceId, 'manual 的 sourceId'))).toEqual({ kind: 'manual', loginUrl: 'https://login.com/x' })
     expect(await svc.login(must(js.sourceId, 'js 的 sourceId'))).toEqual({ kind: 'authed' })
     expect(await svc.login(must(none.sourceId, 'none 的 sourceId'))).toEqual({ kind: 'no-login-url' })

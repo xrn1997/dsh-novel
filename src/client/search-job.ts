@@ -256,7 +256,7 @@ export function useSearchJob(
   useEffect(() => {
     alive.current = true                               // StrictMode 双挂载：上一次卸载置过 false
     void (async () => {
-      // 挂载即恢复：本轮结果住在服务端，切走再切回来不该重打一遍（这正是本次改造的那一半）
+      // 挂载即恢复：本轮结果住在服务端，切走再切回来不该重打一遍
       let job: SearchJobSnapshot | null
       try {
         job = (await deps.apiGet<{ job: SearchJobSnapshot | null }>(queries.searchJobStatus(0))).job

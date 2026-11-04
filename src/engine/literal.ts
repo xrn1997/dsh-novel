@@ -9,9 +9,9 @@ import { braceRegion } from './grammar.js'
  * 插值后整段不构成选择器 → 原样作为字面串产出。`{$.path}`（单括号）是 JSONPath 内嵌形态
  * （平衡括号切分）。
  *
- * 为什么单独成段：真实源大量形态是「URL 模板」型规则（`http://api/novel/{{$.novelId}}`、
- * `{{baseUrl}}catalog/` 等）——它们不是选择器也不是取值终端，若在解析期全抛
- * 「无法识别的段类型」就接不住这类源。
+ * 为什么单独成段：输入里有「URL 模板」型规则（`http://api/novel/{{$.novelId}}`、
+ * `{{baseUrl}}catalog/` 等形态）——它们不是选择器也不是取值终端，若在解析期全抛
+ * 「无法识别的段类型」就接不住这类规则。
  */
 
 export interface LiteralPart {

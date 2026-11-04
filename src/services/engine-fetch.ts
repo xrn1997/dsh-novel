@@ -25,8 +25,8 @@ export function cookiesOf(setCookie: string[]): Record<string, string> {
 /**
  * 引擎 EvalContext.fetch 守门注入：@js 里的 java.ajax 也走守门抓取 + 解码链。
  * java.ajax 的 URL 可带 `url,{json}` 请求选项——
- * 不解析的话整串（含 `,{...}`）被当 URL 发出，站点直接 403/404（脚本拼
- * `search.php,{'body':...}` 形态实证）。
+ * 不解析的话整串（含 `,{...}`）被当 URL 发出，站点直接 403/404（脚本会拼出
+ * `search.php,{'body':...}` 这一形态，钉子见 `tests/services/bridge.test.ts` 的 engineFetch 那组）。
  *
  * 请求语义不自持一份：选项解释 / POST 表单默认头 / init 姿态全部走 assembleRequest + fetchInitOf；
  * 不要在这里手写「与 buildSearchRequest 同口径」的副本，那会造出注释同步的分叉。
@@ -38,7 +38,7 @@ export function engineFetch(
   fetcher: Fetcher, headers: HeadersInput, vars?: Record<string, string | number>,
 ): (url: string, hdrs?: Record<string, string>) => Promise<{ body: string; contentType?: string; finalUrl: string }> {
   return async (rawUrl, hdrs) => {
-    // baseUrl = null：java.ajax 的 URL 由脚本自己拼好，不做绝对化（与原实现一致）
+    // baseUrl = null：java.ajax 的 URL 由脚本自己拼好，不做绝对化——没有可信的基准地址可绝对化
     const plan = assembleRequest(rawUrl, vars ?? {}, null)
     const page = await fetcher.fetchPage(
       plan.url,
@@ -120,9 +120,9 @@ export function engineFetchConn(
   }
 }
 
-/** `java.get(url, headers)` 的引擎桥：GET + **不跟重定向**（上游 `JsExtensions.get` 的
- *  `followRedirects(false)`），返回 jsoup Connection.Response 的数据面。与 `java.head` 的
- * `manual` 不同，这里仍按 jsoup `execute()` 的口径让 >=400 抛错（3xx 原样返回）。
+/** `java.get(url, headers)` 的引擎桥：GET + **不跟重定向**，返回脚本按响应对象读的那张数据面
+ *  （url/body/contentType/charset/statusCode/headers/cookies）。与 `java.head` 的
+ * `manual` 不同，这里 >=400 抛错、3xx 原样返回（钉子：`tests/services/fetcher.test.ts` 的「noFollow 姿态」）。
  * 请求语义仍走 assembleRequest + fetchInitOf，与 ajax/post/head 同一守门 fetcher。 */
 export function engineFetchGet(
   fetcher: Fetcher, headers: HeadersInput, vars?: Record<string, string | number>,
@@ -163,8 +163,8 @@ export function engineFetchRaw(
   }
 }
 
-/** `java.head(url, headers)` 的引擎桥：HEAD + **不跟重定向**（对面 followRedirects(false)——
- *  脚本读 3xx 的 Location/x-origin-url 取图片直链）。请求语义仍走 assembleRequest + fetchInitOf；
+/** `java.head(url, headers)` 的引擎桥：HEAD + **不跟重定向**（脚本读 3xx 的 Location/x-origin-url
+ *  取图片直链，跳转一跟就丢）。请求语义仍走 assembleRequest + fetchInitOf；
  *  fetcher 以 manual 姿态放行非 2xx（要探的就是状态与响应头本身）。 */
 export function engineFetchHead(
   fetcher: Fetcher, headers: HeadersInput, vars?: Record<string, string | number>,

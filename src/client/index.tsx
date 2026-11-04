@@ -16,13 +16,13 @@ export const inject = ['slots', 'layout']
 /**
  * 浏览器半入口：把「小说」注册为**全局面板**——侧栏
  * `sidebar.panellist` 一行图标 + `main` keyed 槽同 id 的中央面板。
- * 宿主契约（本机 host checkout 实证）：
+ * 宿主契约如下（以发布物为准）：
  *
  * - `sidebar.panellist`（root 作用域 list）：注册项 `{ id, order?, label? }`；宿主 sidebar
  *   shell 自带行按钮、`aria-current` 选中态、折叠 tooltip，点击 = `ctx.layout.selectPanel(id)`；
  *   占用者组件只收 owner props `{ size, active }` 出一个图标，无障碍名归宿主行的 label。
  * - `main`（root 作用域 keyed）：「Central panel selected by sidebar entry id」，注册项
- *   `{ key }`；AppFrame 按侧栏选中的 id 渲染 main 里同 key 的占用者。保留键 `conversation`
+ *   `{ key }`；宿主中央面板按侧栏选中的 id 渲染 main 里同 key 的占用者。保留键 `conversation`
  *   归 Conversation；其余 key 无 Session 绑定（小说本就不吃会话数据）。
  * - **两个座位必须同批注册**：官方契约明写「selecting a missing main entry throws without
  *   changing the current selection」——apply 内同步双注册，不存在半注册窗口。
@@ -36,7 +36,7 @@ export const inject = ['slots', 'layout']
 
 /** 全局面板行的图标：宿主行给 `{ size, active }`（`SidebarPanelIconOwnerProps`），
  *  行本体（按钮、aria-current、tooltip、选中底色）全归宿主 sidebar shell——我们只出图，
- *  `active` 刻意不用（宿主行已是唯一选中呈现，契约字段留在类型里即可）。
+ *  `active` 本层不消费（选中态归 shell，契约字段留在类型里即可）。
  *
  * 字形单点见 `novel-glyph.ts`；`fill="currentColor"` 随宿主行前景色走明暗。 */
 function NovelPanelIcon({ size = 16 }: { size?: number; active?: boolean }): ReactNode {
@@ -72,7 +72,7 @@ export function apply(ctx: Context): void {
   // 宿主 layout 服务窄镜像（ADR-0020：只声明用到的成员、一次强转）：把面板带到前台是宿主的活，
   // 插件不碰 sidebar shell 的行按钮与选中态，只在「去现场」时调它同款的 selectPanel。
   const { layout } = ctx as unknown as { layout: { selectPanel(id: string | null): void } }
-  // 文案入口只有这一处：locale 服务缺席（老宿主 / 测试假体）时回退 zhTranslate，侧栏 / 面板 /
+  // 文案入口只有这一处：locale 服务缺席（宿主未提供该 face / 测试假体）时回退 zhTranslate，侧栏 / 面板 /
   // 状态层 / 配置页共用同一个 t。宿主槽位缓存的 inject 结果是这个稳定函数本身，切语言由它在
   // 调用时读当前 locale，故这里不订阅。不声明 slot 的 `locale` 席位：那条路在未安装 locale face
   // 的宿主上会抛，与可选回退冲突（`ADR-0038`）；换语言靠 outlet 的 locale revision 重渲。
@@ -102,7 +102,7 @@ export function apply(ctx: Context): void {
       StatusOverlay,
     )
   }), 'dsh-novel: shell overlay status layer')
-  // 可选能力：旧宿主没有 configForms 时回调不执行，侧栏/面板完全不受影响。
+  // 可选能力：宿主没有 configForms 服务时回调不执行，侧栏/面板完全不受影响。
   ctx.inject(['configForms'], (child) => registerConfigPage(child, t))
 }
 

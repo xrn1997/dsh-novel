@@ -14,8 +14,8 @@ import type { NormalizedRules, NovelSource } from './types.js'
 export interface Page { url: string; requestedUrl?: string; body: string; json?: unknown }
 
 /** 条目片段上的子规则求值器：与引擎内部 evaluateRef 同构（片段即 html 上下文）。
- *  usage（取值用途）：'value'（getString 口径——链尾未知词 = HTML 属性名）/ 'list'（getElements
- *  口径——链尾未知词 = 选择器）。服务层按规则用途显式传，缺省沿用引擎的 'list'。 */
+ *  usage（取值用途）两种语义的判据归 `engine/types.ts` 的 `RuleUsage`——'value' 把链尾未知词读成
+ *  HTML 属性名，'list' 读成选择器。服务层按规则用途显式传，缺省沿用引擎的 'list'。 */
 export interface SubRuleEval {
   (rule: string, ctx: ItemContextPartial, facet: Facet, usage?: RuleUsage): Promise<EngineValue>
 }
@@ -48,8 +48,8 @@ export function firstValue(v: EngineValue, facet: Facet = 'rule'): string | null
 
 /** **URL 位**的值规约：与 `firstValue` 只差一处——`list` 取**首项**而不是 `join('\n')`。
  *
- *  对面「URL 取值」那一支一律取 `list[0]`，多值 join 只服务非 URL 取值（对读证据与实测读数：
- *  矩阵行 `b-url-value-first-item`）。URL 位不要用 join：一个条目里多个 `<a>` 会把地址拼成多行串，
+ *  URL 位一律取 `list[0]`，多值 join 只服务非 URL 取值（口径读数住矩阵行
+ *  `b-url-value-first-item`）。URL 位不要用 join：一个条目里多个 `<a>` 会把地址拼成多行串，
  *  被 `absUrl` 换行守卫判死 → **整条书目丢地址**（表现不是报错而是「搜到了打不开」）。
  *  URL 里不可能有换行——join 在 URL 位上永远是错的，这不是口径分歧。 */
 export function firstUrlValue(v: EngineValue, facet: Facet = 'rule'): string | null {
@@ -179,7 +179,7 @@ export function kindFieldOf(
 /** 字数格式化（在**解析层**调用——存进 book 的已经是格式化后的串，不是「只在 UI 格式化」）：
  *  整串是 `-?[0-9]+` 才转换；>10000 → 除一万保留一位 +「万字」，≤10000 → 原数 +「字」，
  *  ≤0 → 空；认不出数字则原样给回（「120万字」「连载中」这些站点文案本来就是字符串）。
- *  `words * 1.0f` 的 Float 中间态用 `Math.fround` 复现（超大字数下两边取整一致）。 */
+ *  `words * 1.0f` 的 Float 中间态用 `Math.fround` 复现（与该格式书源的字数文案对齐，超大字数下取整一致）。 */
 export function formatWordCount(wc: string | null): string | null {
   if (wc === null) return null
   if (!/^-?[0-9]+$/.test(wc)) return wc
@@ -274,7 +274,7 @@ function pairedRuleOf(rules: NormalizedRules, model: keyof NormalizedRules): str
 }
 
 /** init 换根之后的七字段取值段（`detailFieldsOf` / `detailReadOf` 共用这一份回落链与档位）：
- *  `ruleDetail*` 优先、平铺方言回退同名共用字段（原 v1 行为）；封面按 base 绝对化、
+ *  `ruleDetail*` 优先、平铺方言回退同名共用字段；封面按 base 绝对化、
  *  简介按详情面口径净化（`<usehtml>`/`<md>`/`<useweb>` 前缀原样保留，其余 format + 5000 截断）。 */
 async function detailFieldsFromContext(
   s: NovelSource, subEval: SubRuleEval, dctx: { html: string; json?: unknown }, baseUrl: string,
@@ -301,11 +301,11 @@ async function detailFieldsFromContext(
 
 /** 详情页七字段的读取（**只要字段**的两个消费点）：搜索面的 **info 形态**
  *  （`bookUrlPattern` 命中 / 列表为空回落）与探针。`getDetail` 不走它——那条路要字段 + tocUrl，
- *  由 `detailReadOf` 用**同一次** init 求值一并交出（旧组合在本函数与 tocUrlOf 里各求一次 init）。
+ *  由 `detailReadOf` 用**同一次** init 求值一并交出——若拆成两个动词组合，一次详情读会把 init 求两遍。
  *
  *  `onEmptyInit: 'no-book'` 正是为搜索面准备的：那里的「这是详情页」只是**嗅探出来的猜测**
  *  （守卫是「书名为空即没有书目」——init 取空 → 书名 Miss → 无书目）。让它在搜索面抛错，
- *  会把一次正常的「这个词没搜到东西」升级成整源搜索失败（真机源的 `$.data` 在结果响应里取空）。 */
+ *  会把一次正常的「这个词没搜到东西」升级成整源搜索失败（库里有源在结果响应里 `$.data` 取空这一形态）。 */
 export async function detailFieldsOf(
   s: NovelSource, subEval: SubRuleEval, html: string, baseUrl: string,
   opts: { onEmptyInit: 'no-book' },
@@ -347,7 +347,7 @@ export function staticTocUrl(ruleTocUrl: string, bookUrl: string): string | null
  *  过引擎求值，URL 位按 `firstUrlValue` 取首项（引擎 literal 口径：任一插值段 Miss → 整段 Miss）。
  *  绝对化**只作用在 URL 部分**，`,{option}` 原样接回（与搜索结果 bookUrl、章节 URL 同一层处理）：
  *  先 absUrl 等于让 `new URL()` 先碰选项串——换行被吃、`{` 被百分号编码，`",{` 形状一坏、
- *  抓取层就再也切不到选项 → 整串当路径发出去（两条 POST 型 tocUrl 源实证，矩阵行
+ *  抓取层就再也切不到选项 → 整串当路径发出去（口径见矩阵行
  *  `b-url-option-on-toc-url`）。取不到 → 回退 bookUrl **全串**（目录就在本书地址上，抓取仍按选项发）。 */
 export async function tocUrlFromContext(
   ruleTocUrl: string, dctx: { html: string; json?: unknown }, bookUrl: string, subEval: SubRuleEval,
@@ -361,7 +361,7 @@ export async function tocUrlFromContext(
 }
 
 /** 详情面的**一次**完整读取（`ReadingService.getDetail` 的唯一入口）：init 只求值一次，
- *  七字段与 tocUrl 共用这一份上下文——旧组合（`detailFieldsOf` + `tocUrlOf`）各求一次 init，
+ *  七字段与 tocUrl 共用这一份上下文——若拆成 `detailFieldsOf` 与 `tocUrlOf` 两个动词各求一次 init，
  *  纯规则白白重算，js 形态的 init 还会**双打站点**。
  *  info / 探针仍走 `detailFieldsOf`：那条路只要字段，不付 tocUrl 求值。
  *
@@ -446,7 +446,7 @@ export async function hitFieldsOf(
   ])
   return {
     title, author,
-    // 书地址保留 `,{option}` 后缀落库（URL 即请求规格——米读类 POST API 源的 book_id 藏在选项
+    // 书地址保留 `,{option}` 后缀落库（URL 即请求规格——POST 型 API 源的 book_id 藏在选项
     // body 里，剥掉即身份残废；与章节 URL「保留选项」同源，见 url.absUrlKeepOption）
     url: href === null ? null : absUrlKeepOption(href, landedUrl),
     coverUrl: cover === null ? null : absUrl(cover, landedUrl),

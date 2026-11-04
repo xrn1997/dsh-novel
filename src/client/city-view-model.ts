@@ -14,7 +14,7 @@ import type { Translate } from './copy/index.js'
  *  不冒充「没货」（`bookListEmpty` 认 `error` 那一条）；**跨源一条没搜到 / 跨源有源没响应** 那两族
  *  只在详情浮层的跨源聚合里出现，归 `CityBookSheet`，不在这里造判据。 */
 
-/** 卡片元信息：`作者 · 分类 · 字数`，**缺的整段不出现**（原生源的 ruleSearch 常常没有
+/** 卡片元信息：`作者 · 分类 · 字数`，**缺的整段不出现**（ruleSearch 不保证带
  *  intro/wordCount，写「暂无」就是拿假信息占位）。作者为空是合法的（单源本就不按书名合并任何东西）。 */
 export function cityMeta(book: Pick<ExploreBook, 'author' | 'kind' | 'wordCount'>): string {
   return [book.author ?? '', book.kind ?? '', book.wordCount ?? ''].filter((s) => s !== '').join(' · ')

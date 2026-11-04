@@ -123,7 +123,7 @@ describe('explore-face：单源一次分类抓取', () => {
     expect(r.hits).toEqual([])
   })
 
-  // 发现面整套启用却缺书名规则：如实点名规则缺失，而不是造出没有标题的书目（对面会静默给 0 本）。
+  // 发现面整套启用却缺书名规则：如实点名规则缺失，而不是静默产出没有标题的书目。
   // 逐字段回落在这里同样会红——它回落到通用书名规则，于是「规则缺失」变成了一次带条目的正常返回。
   it('发现面整套启用但缺书名规则 → RuleMissing（如实点名，不产出空书名条目）', async () => {
     const own = { ruleFind: { url: '/{{kind}}/{{page}}', kinds: [{ title: '玄幻', url: 'x' }], ruleSearch: { list: '.item' } } }

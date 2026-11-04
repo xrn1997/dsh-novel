@@ -29,8 +29,9 @@ export const CONFIG_FIELDS = {
   /** 书架 / 缓存 / 本地书的落盘根。刻意不做成活值：运行期换根会让新旧数据分家，改它等价于重启。 */
   dataDir: textField(),
   searchTimeoutMs: numberField(DEFAULT_TIMEOUT_MS, 1),
-  /** js 沙箱预算（vm 同步闸与异步总时长共用）。缺省 15000：真实源的多请求目录脚本
-   *  （java.ajax×2 + md5 签名，txs12 源实测）2s 预算必炸——探针 verified 只证明搜索面。 */
+  /** js 沙箱预算（vm 同步闸与异步总时长共用，缺省值的主人是 `DEFAULT_JS_BUDGET_MS`）。
+   *  刻意宽于请求级缺省：库里有「一轮连打数个 java.ajax 再算签名」形态的目录脚本，
+   *  按请求级预算必炸——探针 verified 只证明搜索面。双闸形状见矩阵行 `h-timeout-double-gate`。 */
   jsTimeoutMs: numberField(DEFAULT_JS_BUDGET_MS, 1),
   searchParallel: numberField(DEFAULT_SEARCH_PARALLEL, 1),
   cacheMaxBytes: numberField(DEFAULT_CACHE_MAX_BYTES, 0),
@@ -127,7 +128,8 @@ function readField<T>(value: Field<T> | null | undefined): T | undefined {
   return isVolatileRef(value) ? value.get() : (value ?? undefined)
 }
 
-/** 旧 schemastery 没有 .volatile()：字段退化为普通值，插件仍能加载；配置页由 configForms 能力闸另判。 */
+/** `.volatile()` 是能力位而非必需项：宿主 schema 不提供它时字段退化为普通值，插件仍能加载；
+ *  配置页的可编辑性由 configForms 能力闸另判。 */
 function maybeVolatile<T extends object>(schema: T): T {
   const method = (schema as T & { volatile?: () => unknown }).volatile
   return typeof method === 'function' ? (method.call(schema) as T) : schema

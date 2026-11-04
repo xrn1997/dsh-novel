@@ -2,7 +2,7 @@
 
 Status: accepted
 
-本仓的 tsconfig 原先只有 `strict` 与其子集，lint 只有 `react-hooks`——那份配置的注释主张「格式与风格主张由 tsc 档位与其它门各管一部分」。这个分工对格式成立，对 `any` 不成立：**`tsc` 从不拒绝显式 `any`**，于是 `any` 在测试面长到三百多处而没有任何一道门看得见。本决策把编译器档位一次补满，并把「tsc 看不见的那一类」正式划给 ESLint。
+本仓的 tsconfig 原先只有 `strict` 与其子集，lint 只有 `react-hooks`——那份配置的注释主张「格式与风格主张由 tsc 档位与其它门各管一部分」。这个分工对格式成立，对 `any` 不成立：**`tsc` 从不拒绝显式 `any`**，于是 `any` 在测试面一路生长而没有任何一道门看得见。本决策把编译器档位一次补满，并把「tsc 看不见的那一类」正式划给 ESLint。
 
 ## 决定
 
@@ -10,8 +10,8 @@ Status: accepted
 
 - `noUncheckedIndexedAccess`：`arr[i]` / `record[key]` 返回 `T | undefined`。本仓是规则引擎与抓取器，索引取值最密，这一条命中的正是空数组解引用这一类缺陷。
 - `exactOptionalPropertyTypes`：区分「键缺席」与「键值为 `undefined`」。wire 载荷（`src/shared/wire.ts` 的形状）按需建键，不补 `| undefined`——那等于把这个标志在载荷面上关掉。
-- `erasableSyntaxOnly`：构造器参数属性、`enum`、有运行时的 `namespace` 一律不认。判据是运行环境：`engines.node >= 24` 的原生 type-stripping 与 `tsdown` 的逐文件转译都只认可擦除语法。
-- `noFallthroughCasesInSwitch` 与 `noImplicitOverride`：实测零改动量。
+- `erasableSyntaxOnly`：构造器参数属性、`enum`、有运行时的 `namespace` 一律不认。判据是运行环境：`engines.node` 所钉 Node 档上的原生 type-stripping 与 `tsdown` 的逐文件转译都只认可擦除语法（版本下限的家是 `package.json`）。
+- `noFallthroughCasesInSwitch` 与 `noImplicitOverride`：只挡真实缺陷类，本仓采纳它们不需要改码。
 
 **明确不开 `noPropertyAccessFromIndexSignature`**：它只把 `env.FOO` 改写成 `env["FOO"]`，挡住零类缺陷。判据是「能挡住真实运行期缺陷类的标志才有资格进基线」。
 
@@ -28,7 +28,7 @@ Status: accepted
 ## 后果
 
 - 夹具的位置取位统一走 `tests/support/fixture.ts` 的 `pick` / `last`，需要断言存在性的查找走 `must`：越界即抛「夹具缺第几项、共几项」，不折叠成 `undefined`，也不让断言蒙对。
-- `no-unnecessary-condition` 的处置分两类：真死代码删；「本地窄镜像钉死 ≠ 运行时必有」与「TS 看不见闭包写入」的判空**保留**。保留的多数是把类型面改诚实——例如 `lib.dom` 把 `localStorage` 钉成非空，本仓按本地窄镜像取一格并留注释（`src/client/util.ts`），让判据重新有意义，而不是靠关规则。
+- `no-unnecessary-condition` 的处置分两类：真死代码删；「本地窄镜像钉死 ≠ 运行时必有」与「TS 看不见闭包写入」的判空**保留**。保留的多数是把类型面改诚实——例如浏览器存储 API 在类型面被钉成非空、运行时却未必有值，本仓按本地窄镜像取一格并留注释（`src/client/util.ts`），让判据重新有意义，而不是靠关规则。
 - 引擎的取值规约不变：取位失败仍是 Miss、解析到空集合仍是空 List，两者不因收窄而折叠。
 - 门的唯一入口是 `pnpm gates`（typecheck / lint / test / test:pack / test:compat；build 在 `test:pack` 内），CI 与发版跑同一条。
 

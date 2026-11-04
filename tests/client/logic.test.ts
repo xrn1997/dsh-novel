@@ -20,7 +20,7 @@ describe('首页封面降级', () => {
 })
 
 describe('progress 数学', () => {
-  // 跨度口径：**该章的实测高度**。不借「到下一章的距离」——那个口径下最后一个已载章的
+  // 跨度口径：**该章量到的高度**。不借「到下一章的距离」——那个口径下最后一个已载章的
   // 比例算不出来（next 缺失 → 恒 0），而最后一个已载章正是用户正在读的那一章。
   const anchors = [
     { index: 0, start: 0, height: 1000 },
@@ -33,11 +33,11 @@ describe('progress 数学', () => {
     expect(locateChapter(anchors, 1000)).toEqual({ chapterIndex: 1, offsetRatio: 0 })
     expect(locateChapter(anchors, 1750)).toEqual({ chapterIndex: 1, offsetRatio: 0.5 })
   })
-  it('尾章也有章内比例（旧口径 next 缺失 → 恒 0）', () => {
+  it('尾章也有章内比例', () => {
     expect(locateChapter(anchors, 2900)).toEqual({ chapterIndex: 2, offsetRatio: 0.5 })
     expect(locateChapter(anchors, 99999)).toEqual({ chapterIndex: 2, offsetRatio: 1 })   // 滚过头夹到 1
   })
-  it('anchorTop 与 locateChapter 互逆（尾章同样往返——旧版本尾章取回章顶）', () => {
+  it('anchorTop 与 locateChapter 互逆（尾章同样往返）', () => {
     for (const [i, inside] of [[0, 300], [1, 750], [2, 400]] as const) {
       const at = pick(anchors, i).start + inside
       const { offsetRatio } = locateChapter(anchors, at)
@@ -175,8 +175,8 @@ describe('apiUpload 信封', () => {
 
 import { NOVEL_CSS } from '../../src/client/styles.js'
 
-describe('styles token 迁移', () => {
-  it('旧 --ds- 假 token 清零；语义 token 全在位；fallback 保留兜底', () => {
+describe('styles 的 token 口径', () => {
+  it('不留 --ds- 形态的假名；语义 token 全在位；fallback 保留兜底', () => {
     // --dsw-alias-* 含子串 "--dsw-"，不会误命中 "--ds-"——逐名断言最稳
     for (const stale of ['--ds-border', '--ds-btn-bg', '--ds-btn-hover', '--ds-input-bg', '--ds-panel']) {
       expect(NOVEL_CSS).not.toContain(stale)
@@ -195,7 +195,7 @@ describe('styles token 迁移', () => {
     }
     expect(NOVEL_CSS).toContain('var(--dsw-alias-border-l2, #ffffff1f)')   // fallback 保留（暗底兜底）
   })
-  it('不再引用宿主不存在的 token（--dsw-alias-border-l 是假名，宿主只有 l1..l4）', () => {
+  it('不引用冻结词表外的宿主 token（--dsw-alias-border-l 是假名；名单的家在 theme-tokens.test.ts）', () => {
     expect(NOVEL_CSS).not.toMatch(/var\(\s*--dsw-alias-border-l\s*[,)]/)
     expect(NOVEL_CSS).not.toMatch(/var\(\s*--dsw-alias-bg-layer-4\s*[,)]/)
   })
@@ -207,14 +207,14 @@ describe('styles token 迁移', () => {
     expect(stripped).not.toContain('--dsw-')
   })
   it('命中行是 flex 行（回归钉：.novel-row 丢 display:flex 会让「＋ 加书架」掉到标题下方堆叠）', () => {
-    // 真机踩过：样式块重写时把 display/align-items 弄丢，行退化成块级堆叠，marginLeft:auto 失效
+    // 这一行必须自带 display 与 align-items：缺一条整行就退化成块级堆叠，右侧按钮的 marginLeft:auto 失效
     const mOf = NOVEL_CSS.match(/\.novel-row\s*\{[^}]*\}/)
     expect(mOf, 'NOVEL_CSS 里找不到 .novel-row 规则').toBeTruthy()
     const m = must(mOf, 'NOVEL_CSS 里的 .novel-row 规则')
     expect(m[0], '.novel-row 必须是 flex 行').toContain('display: flex')
     expect(m[0]).toContain('align-items: center')
   })
-   it('视图层源码（src/client/views/*.tsx）无旧 --ds- 假 token', async () => {
+   it('视图层源码（src/client/views/*.tsx）只引用语义 token，不留 --ds- 形态的假名', async () => {
     const dir = fileURLToPath(new URL('../../src/client/views/', import.meta.url))
     const files = (await fs.readdir(dir)).filter((f) => f.endsWith('.tsx'))
     expect(files.length).toBeGreaterThan(0)
@@ -222,7 +222,7 @@ describe('styles token 迁移', () => {
     for (const f of files) {
       const text = await fs.readFile(path.join(dir, f), 'utf8')
       for (const stale of ['--ds-border', '--ds-btn-bg', '--ds-btn-hover', '--ds-input-bg', '--ds-panel']) {
-        expect(text, `${f} 含旧假 token ${stale}`).not.toContain(stale)
+        expect(text, `${f} 含 --ds- 形态的假名 ${stale}`).not.toContain(stale)
       }
     }
   })
@@ -232,7 +232,7 @@ describe('搜索进度百分比（搜索面的唯一算式，bits.searchPct）',
   it('按源数算：满格是算出来的，被停止的轮次停在它真实走到的位置', () => {
     expect(searchPct(null)).toBe(0)
     expect(searchPct({ done: 0, total: 0 }), '空参与集（源全停用/未导入）不许显示成满格').toBe(0)
-    expect(searchPct({ done: 29, total: 431 }), '曾写死收尾态 100%：29/431 也显示满格').toBe(7)
+    expect(searchPct({ done: 29, total: 431 }), '进度按源数算，与是否收尾无关：29/431 不许显示满格').toBe(7)
     expect(searchPct({ done: 431, total: 431 })).toBe(100)
   })
   it('done 越过 total（跑到一半源被停用/删掉）clamp 到 100，不出现 >100 的读数', () => {

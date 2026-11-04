@@ -62,24 +62,24 @@ describe('④⑤ 分支与段切分', () => {
   it('混用算符抛 UnsupportedRuleError', () => {
     expect(() => parseRule('a||b&&c')).toThrow(UnsupportedRuleError)
   })
-  it('@put 值区的 || 不是连接符（走查存量：独步小说/八一中文网 init 形态）', () => {
+  it('@put 值区的 || 不是连接符（现库 init 形态）', () => {
     const p = parseRule('@put:{n:"[property$=og:title]@content",l:"[a]@content||[b]@content"}', 'rule', 'value')
     expect(p.branches).toHaveLength(1)
     expect(seg(p, 0)).toMatchObject({ kind: 'put' })
   })
-  it('受保护区不切 ## 替换尾：<js> 块 / {{…}} 区 / @put 值区（走查存量）', () => {
-    // 茄子免费小说 lastChapter：<js> 块内正则自带的 ## 不算替换尾（受保护区整块不切）
+  it('受保护区不切 ## 替换尾：<js> 块 / {{…}} 区 / @put 值区（现库形态）', () => {
+    // <js> 块内正则自带的 ## 不算替换尾（受保护区整块不切）
     const egg = parseRule('{{$.t}} • {{java.timeFormat(1)}}\n<js>result.replace(/\\s\\d+:\\d+/,\'\')</js>\n<js>##[\\(（【].*?[】）\\)]</js>', 'rule', 'value')
     expect(egg.replaces).toEqual([])
     expect(branch0(egg).segments.map((s) => s.kind)).toEqual(['literal', 'js', 'js'])
-    // 言情小说大全 intro：{{}} 区内的 ## 属于内嵌子规则自己的替换尾
+    // {{}} 区内的 ## 属于内嵌子规则自己的替换尾（现库 intro 形态）
     const inb = parseRule('封面：{{@@tr:nth-child(6) > td > img@src##.*?level(\\d+).*##$1}}', 'rule', 'value')
     expect(inb.replaces).toEqual([])
     expect(branch0(inb).segments).toHaveLength(1)
-    // @put 值区同理（对面 splitPutRule 先于 ## 处理剥离）
+    // @put 值区同理（先剥 put，再处理 ##）
     expect(parseRule('@put:{x:"a##b"}', 'rule', 'value').replaces).toEqual([])
   })
-  it('模板态：纯文本段按字面、@ 不切段（走查存量：小米阅读/言情小说大全形态）', () => {
+  it('模板态：纯文本段按字面、@ 不切段（现库 intro 形态）', () => {
     const p = parseRule('最近更新：@get:{time}', 'rule', 'value')
     expect(branch0(p).segments).toHaveLength(1)
     expect(seg(p, 0)).toEqual({ kind: 'literal', raw: '最近更新：@get:{time}' })
@@ -90,12 +90,12 @@ describe('④⑤ 分支与段切分', () => {
     // 无模板标记的分支不受影响：纯文本段照旧在解析期抛（宁炸不猜的 guard 面）
     expect(() => parseRule('最近更新：文字', 'rule', 'value')).toThrow(UnsupportedRuleError)
   })
-  it('行模板与模板态都只认受保护区**之外**的标记（走查存量：爱丽丝书屋 init）', () => {
+  it('行模板与模板态都只认受保护区**之外**的标记（现库 init 形态）', () => {
     // @put 值区里的 `$1` 是值内规则自己的替换尾——整支不该被折成行组模板，否则 js 不执行、put 不写
-    // 变量、该源详情面所有 `@get:{…}` 静默取空（对面 splitPutRule 先剥 put 再扫 `$n`，看不到它）
+    // 变量、该源详情面所有 `@get:{…}` 静默取空（先剥 put 再扫 `$n` 就看不到它）
     const p = parseRule('<js>var a = 1</js>\n@put:{z:"class.fix@p.4@text##.*：(.*)·##$1###"}', 'rule', 'value')
     expect(branch0(p).segments.map((s) => s.kind)).toEqual(['js', 'put'])
-    // js 代码里的 `{{…}}` 不触发模板态（对面先抽 js 块，块内标记从不翻转 Mode.Regex）：翻转了就把
+    // js 代码里的 `{{…}}` 不触发模板态（先抽 js 块，块内标记从不翻转模板态）：翻转了就把
     // `class.a@text` 整串当成 class 选择器的参数、零命中而不报错
     const q = parseRule('class.a@text@js:result+"{{baseUrl}}"', 'rule', 'value')
     expect(branch0(q).segments.map((s) => s.kind)).toEqual(['default', 'default', 'js'])
@@ -108,7 +108,7 @@ describe('⑥ 段识别', () => {
     expect(s[1]).toEqual({ kind: 'default', mode: 'class', arg: 'odd', index: { kind: 'index', value: 2 } })
     expect(s[2]).toEqual({ kind: 'default', mode: 'text', arg: null, index: null })
   })
-  it('位置后缀：all / 负索引 / 冒号索引列表（对面 indexDefault 逐个收集，冒号不是区间符）', () => {
+  it('位置后缀：all / 负索引 / 冒号索引列表（逐个收集索引，冒号不是区间符）', () => {
     const segs = branch0(parseRule('tag.a.all@tag.a.-2@tag.a.1:5')).segments
     expect(segKind(pick(segs, 0), 'default').index).toEqual({ kind: 'all' })
     expect(segKind(pick(segs, 1), 'default').index).toEqual({ kind: 'index', value: -2 })
@@ -128,7 +128,7 @@ describe('⑥ 段识别', () => {
   it('put / getvar 识别', () => {
     expect(seg(parseRule('@put:{bid:"123"}'), 0)).toEqual({ kind: 'put', pairsRaw: '{bid:"123"}' })
     // 体内 @ 不是段界（`@put:{…}` 在任何切分之前先整块剥离）——
-    // 回归钉子：真实源 ruleBookInfo.init 的 @put 值区按一个段处理，不被撕成多段。
+    // 回归钉子：ruleBookInfo.init 的 @put 值区按一个段处理，不被撕成多段。
     const put = parseRule('@put:{n:"[property$=book_name]@content", a:"[property$=author]@content"}@get:n')
     expect(seg(put, 0)).toEqual({
       kind: 'put',
@@ -137,7 +137,7 @@ describe('⑥ 段识别', () => {
     expect(seg(put, 1)).toEqual({ kind: 'getvar', name: 'n' })
 
     expect(seg(parseRule('@get:bid'), 0)).toEqual({ kind: 'getvar', name: 'bid' })
-    // 花括号形态（`@get:{…}` 也是合法写法——真实源详情面整条规则就是 `@get:{n}`）
+    // 花括号形态（`@get:{…}` 也是合法写法——详情面整条规则就可以是 `@get:{n}`）
     expect(seg(parseRule('@get:{n}'), 0)).toEqual({ kind: 'getvar', name: 'n' })
   })
   it('js 三种形态；@js: 吞链尾、<js> 块可非末位', () => {
@@ -145,11 +145,11 @@ describe('⑥ 段识别', () => {
     expect(s[2]).toMatchObject({ kind: 'js', form: 'at-js' })
     const s2 = seg(parseRule('<js>result + "!"</js>'), 0)
     expect(s2).toMatchObject({ kind: 'js', form: 'inline' })
-    // @js: 在链首 → 吞掉整条链（代码里的 @ / || / && 是 JS 代码不是段界/连接符——真实源形态）
+    // @js: 在链首 → 吞掉整条链（代码里的 @ / || / && 是 JS 代码不是段界/连接符——这一形态）
     const s3 = branch0(parseRule('@js:var k = key || "";\nreturn k + "@" + page;')).segments
     expect(s3).toHaveLength(1)
     expect(s3[0]).toMatchObject({ kind: 'js', form: 'at-js' })
-    // <js> 块后接选择段（无 @ 分隔）→ 块独立成段，后续起新段（真实源 `<js>…</js>.card-body` 形态）
+    // <js> 块后接选择段（无 @ 分隔）→ 块独立成段，后续起新段（`<js>…</js>.card-body` 形态）
     const s4 = branch0(parseRule('<js>result.replace(/x/,"")</js>.card-body')).segments
     expect(s4).toHaveLength(2)
     expect(s4[0]).toMatchObject({ kind: 'js', form: 'inline' })
@@ -182,9 +182,9 @@ describe('⑥ 段识别', () => {
   })
 })
 
-// ── 真实源方言扩展（官方文档+社区知识库考证；616 broken 归因驱动）──────────
+// ── 方言扩展（这些写法在现库里有声明，解析面须认得）──────────
 
-describe('大小写不敏感特殊前缀（真实源有 @CSS:/@JS: 大写形态）', () => {
+describe('大小写不敏感特殊前缀（`@CSS:`/`@JS:` 大写形态）', () => {
   it('@CSS: / @Json: / @JS: 与小写同义', () => {
     expect(seg(parseRule('@CSS:table.x tr'), 0).kind).toBe('css')
     expect(seg(parseRule('@JSON:$.a.b'), 0).kind).toBe('jsonpath')
@@ -192,7 +192,7 @@ describe('大小写不敏感特殊前缀（真实源有 @CSS:/@JS: 大写形态�
   })
 })
 
-describe('隐式 CSS 回落（官方简写：class.x≡.x、id.x≡#x；社区考证裸词=tag 选择器）', () => {
+describe('隐式 CSS 回落（class.x≡.x、id.x≡#x 简写；裸词按 tag 选择器）', () => {
   it('#id / .class 简写 → css 段', () => {
     expect(seg(parseRule('#page@div[itemscope]'), 0)).toEqual({ kind: 'css', selector: '#page' })
     expect(seg(parseRule('.txt-list@li'), 0)).toEqual({ kind: 'css', selector: '.txt-list' })
@@ -217,7 +217,7 @@ describe('隐式 CSS 回落（官方简写：class.x≡.x、id.x≡#x；社区�
     expect(seg(parseRule('div:has(img)@text'), 0))
       .toEqual({ kind: 'css', selector: 'div:has(img)' })
   })
-  it('词.词形态按对面兜底交 CSS（首词不是合法标签也算——`weirdsyntax.x`）', () => {
+  it('词.词形态按兜底口径交 CSS（首词不是合法标签也算——`weirdsyntax.x`）', () => {
     expect(seg(parseRule('weirdsyntax.x@text', 'content', 'value'), 0))
       .toMatchObject({ kind: 'css', selector: 'weirdsyntax.x' })
   })
@@ -260,13 +260,13 @@ describe('隐式 CSS 新形态（642 源重探归因驱动）', () => {
   it('放宽的边界：无选择器特征的未知串仍在解析期抛（宁炸不猜不外扩）', () => {
     expect(() => parseRule('nonsense span@text')).toThrow(UnsupportedRuleError)  // 空白组合但首词非标签
   })
-  it('词.词形态（`tplData.books`）不再判死：对面 select 兜底，命中与否交给文档', () => {
+  it('词.词形态（`tplData.books`）不再判死：交 select 兜底，命中与否交给文档', () => {
     expect(seg(parseRule('tplData.books@text', 'content', 'value'), 0))
       .toMatchObject({ kind: 'css', selector: 'tplData.books' })
   })
 })
 
-describe('! 排除语法（官方：!是排除，序号用 : 隔开，-1 为倒数）', () => {
+describe('! 排除语法（!是排除，序号用 : 隔开，-1 为倒数）', () => {
   it('li!0 → css li + 排除第 1 个', () => {
     expect(seg(parseRule('.txt-list@li!0'), 1)).toEqual({ kind: 'css', selector: 'li', exclude: [0] })
   })
@@ -302,7 +302,7 @@ describe('连接符与段界的区域感知（2026-09 全库普查 10/2360 残�
     expect(p.branches).toHaveLength(1)
     expect(seg(p, 0).kind).toBe('literal')
   })
-  it('`{{…}}` 内的 `&&` 同样不切（米读小说 intro 多模板形态）', () => {
+  it('`{{…}}` 内的 `&&` 同样不切（intro 规则里多个模板并存）', () => {
     const p = parseRule('前{{a@text}}中{{b@text&&c@text}}后', 'content')
     expect(p.branches).toHaveLength(1)
   })
@@ -310,8 +310,8 @@ describe('连接符与段界的区域感知（2026-09 全库普查 10/2360 残�
     const p = parseRule('tag.a.0@href\n<js>java.ajax(result)</js>\n##window.location.replace\\("([^"]+)"\\);##$1###', 'detail', 'value')
     expect(branch0(p).segments.map((s) => s.kind)).toEqual(['default', 'default', 'js'])
   })
-  it('连接符切出的**空白分支**被丢弃（对面 splitRule 不过滤空串，空规则取值即空列表，合并时不贡献）', () => {
-    // 真源形态（解析面普查（2026-09-28）抓到的 ruleBookInfo.kind）：多行 && 串里夹了 `&&&&`
+  it('连接符切出的**空白分支**被丢弃（空规则取值即空列表，合并时不贡献）', () => {
+    // 现库形态（`ruleBookInfo.kind`）：多行 && 串里夹了 `&&&&`
     const p = parseRule(
       'class.info@class.small@tag.span.4@text&&\nclass.info@class.small@tag.span.1@text&&&&\nclass.info@class.small@tag.span.2@text##分类：|状态：|更新时间：',
       'detail',
@@ -321,13 +321,13 @@ describe('连接符与段界的区域感知（2026-09 全库普查 10/2360 残�
     expect(p.branches).toHaveLength(3) // 第四段（`&&&&` 之后到换行）是空白 → 丢
     expect(p.replaces).toHaveLength(1)
   })
-  it('整条为空 / 全空白分支 → 与 `rest === \'\'` 同路：零分支，不炸（对面 `getElements("")` 得空列表）', () => {
+  it('整条为空 / 全空白分支 → 与 `rest === \'\'` 同路：零分支，不炸', () => {
     for (const r of ['&&', '||', '  \n  ', '%%']) {
       const p = parseRule(r, 'detail', 'value')
       expect(p.branches, r).toEqual([])
     }
   })
-  it('`@html##re##`（空替换尾）不被空白段过滤吃掉——真源剥 HTML 注释形态', () => {
+  it('`@html##re##`（空替换尾）不被空白段过滤吃掉——剥 HTML 注释的形态', () => {
     const p = parseRule('.chapter-content@html##<!--[\\s\\S]*?-->##', 'content', 'value')
     const b = branch0(p)
     expect(b.segments.map((s) => s.kind)).toEqual(['css', 'default'])
@@ -336,7 +336,7 @@ describe('连接符与段界的区域感知（2026-09 全库普查 10/2360 残�
   })
 })
 
-describe('XPath 主导链的裸 @ 终端（对面 splitRule 括号感知后在 @ 处切；本仓此前整链吞进 path）', () => {
+describe('XPath 主导链的裸 @ 终端（本仓此前整链吞进 path）', () => {
   it('`//a[@id="x"]/div[1]@html` → xpath 段 + html 终端段（谓词里的 @ 不算段界）', () => {
     const p = parseRule('//a[@id="x"]/div[1]@html', 'content', 'value')
     const segs = branch0(p).segments
@@ -364,14 +364,14 @@ describe('覆盖矩阵补钉：既有抛错口径此前无标题级钉子', () =
   })
 })
 
-describe('链尾 (…) 不是 js 形态（对面从不切它）', () => {
+describe('链尾 (…) 不是 js 形态', () => {
   /**
    * 两条依据：① 规则形态判定里 `ruleStr.startsWith("/")` 即整条按 XPath，并把 **原文**当 rule
    * （`/text()` 从头到尾没被再切）；② 分段找分隔符时括号是**平衡组**，跳过而非在 `(` 处切开。
    * Default 链的末尾段是属性读（取不到属性就是空）。
    * 改这里注意：别把「末元素以 ) 结尾」当 js 表达式形态——切开会把 `/text()` 拆成 `/text` + `()`，
-   * `()` 当脚本编译当场 Unexpected token（真机实证：耽美小说 ruleToc.chapterName）。
-   * 全库普查里需要这条形态的源为 **0**（分母与现量走 `DSH_PARSE_CENSUS=1`）。
+   * `()` 当脚本编译当场 Unexpected token（`ruleToc.chapterName` 上出现过这一形态）。
+   * 需要这条形态的源数走 `DSH_PARSE_CENSUS=1` 现算。
    */
   it('/text() 整条是一个 XPath 段，不产生 js 段', () => {
     const p = parseRule('/text()', 'toc', 'value')
@@ -393,7 +393,7 @@ describe('链尾 (…) 不是 js 形态（对面从不切它）', () => {
   })
 })
 
-describe('单斜杠开头仍是 XPath（与对面 SourceRule.init 同判据）', () => {
+describe('单斜杠开头仍是 XPath', () => {
   /**
    * 两处判据各管一层，容易混：
    * - **顶层规则** `ruleStr.startsWith("/")` 即整条按 XPath——所以 `/text()`、`/p/text()` 这类
@@ -410,18 +410,18 @@ describe('单斜杠开头仍是 XPath（与对面 SourceRule.init 同判据）',
     expect(seg(p, 0)).toMatchObject({ kind: 'xpath', path: '/p/text()' })
   })
 
-  it('.//a 作为顶层规则同样按 XPath 求值（本仓比对面宽的哪一侧写清楚）', () => {
+  it('.//a 作为顶层规则同样按 XPath 求值', () => {
     const p = parseRule('.//a', 'toc', 'value')
     expect(seg(p, 0)).toMatchObject({ kind: 'xpath', path: './/a' })
   })
 })
 
-describe('对面兜底口径：白名单外的段交 CSS、裸索引段等于 children 索引（ElementsSingle 的 else 分支）', () => {
-  it('`词.词` 首词不是合法标签 → 当 CSS 选择器，不再解析期抛（真源错字 clasd.T-R-T-B2-Box1）', () => {
+describe('兜底口径：白名单外的段交 CSS、裸索引段等于 children 索引', () => {
+  it('`词.词` 首词不是合法标签 → 当 CSS 选择器，不再解析期抛（错字 `clasd.T-R-T-B2-Box1` 那一形态）', () => {
     const p = parseRule('clasd.T-R-T-B2-Box1@text', 'detail', 'value')
     expect(branch0(p).segments.map(s => s.kind)).toEqual(['css', 'default'])
   })
-  it('纯数字段仍解析期抛（对面是 children 索引，本仓故意不接：`children` 根上下文另有分叉）', () => {
+  it('纯数字段仍解析期抛（本仓故意不接 children 索引：`children` 根上下文另有分叉）', () => {
     // 见矩阵 a-bare-index-segment：等 children/根上下文修好再放行本形态，避免两个缺陷叠加
     expect(() => parseRule('0', 'detail', 'value')).toThrow(UnsupportedRuleError)
   })

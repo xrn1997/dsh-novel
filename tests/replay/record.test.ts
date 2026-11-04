@@ -3,7 +3,7 @@ import iconv from 'iconv-lite'
 import { recordBodyOf, declaredCharsetOf } from './record.js'
 
 /**
- * 采集侧落盘解码的钉子。病根：原先 `buf.toString('utf8')` 对 GBK 页产出乱码——采集能过
+ * 采集侧落盘解码的钉子。病根：按 utf8 直读会把 GBK 页存成乱码——采集能过
  * （断言跑在真解码链上）、**回放必红**（回放一律 utf-8 提供文本）。存的必须是**管线读到的那段文本**。
  */
 describe('采集落盘解码（与生产同链）', () => {

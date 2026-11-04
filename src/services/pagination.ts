@@ -11,7 +11,8 @@ export interface FollowOptions {
   sameChapterBase?: string
   /** 目录已知章节地址（防串章的正判据）：候选 == 其他章节 URL → 停。
    *  提供时**取代**启发式——「下一页」指向 `?id=..&cid=..&page=2` 这类非页码键分页地址时，
-   *  启发式会误拦（实测一批源「一章只解析出一页」的根因），而目录知识是正判据。
+   *  启发式会误拦（误拦的表现就是「一章只解析出一页」，钉子见 `tests/services/pagination.test.ts` 的目录知识那组），
+   *  而目录知识是正判据。
    *  **调用方负责先 `canonUrl` 规范化**；本函数不再逐项转换整表。 */
   stopUrls?: ReadonlySet<string>
   /** `stopUrls` 里要放行的一项（当前章地址，已规范化）——避免每章复制整表来排除当前章。 */
@@ -68,7 +69,7 @@ export async function followPages<T>(
     }
     // 多候选（非链式）那侧先走：这一页零新增只说明它和别的候选重叠，不是「判到底」。
     // 一次列出同组各分页时重叠是常态（入口页与第一页常同内容），拿链式那两闸去拦会把队列里
-    // 其余分页一起丢掉——真机读数：165 章的目录读成 100 章。对面那侧逐条全抓、条目最后统一去重。
+    // 其余分页一起丢掉（目录被截掉缺章）。这一侧逐条全抓、条目最后统一去重。
     if (!entry.chain) continue
     if (pageItems.length === 0) { stoppedBy = 'zero-new'; break }   // 零新增闸：空页不追 next
     if (newCount === 0) { stoppedBy = 'loop'; break }               // 回环闸：整页零新增 = 到底/软404

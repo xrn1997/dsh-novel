@@ -21,7 +21,7 @@ import type { ChapterContent, LinkRole, ReadingTarget, SupplementTarget } from '
  *  - **内部栈**：补充→补充在面板里继续跟（栈深度 > 1 才有「返回」）。主序列内的脚注不走这里。
  *    外层每次重新指向都由 `requestSeq` 表达，栈按它重置（只比目标值会漏掉「同一条被再点一次」）。
  *  - `seq`（请求代号）：后点的脚注先返回时，先发出的请求一律不许覆盖新内容；
- *  - `alive`（在场闸）：卸载后到达的响应什么都不做——成功直接丢弃（React 18 的 setState 在
+ *  - `alive`（在场闸）：卸载后到达的响应什么都不做——成功直接丢弃（React 的 setState 在
  *    卸载后本就静默，这条钉的是「不做任何外部动作」），失败转瞬态层（本仓口径：两个半场都不许静默，
  *    与 ShelfView 的异步导入同款）。
  */
@@ -99,8 +99,8 @@ export function ReaderNotes({ bookKey, target, requestSeq, deps, onNavigate, onC
     )
   }, [deps, bookKey, docId, nonce, t])
 
-  // 落位：只滚面板自己的身体（`centerInScroller` 的口径与理由见 util.ts——借 scrollIntoView 会连
-  // 主滚动一起拉走，那是实测过的缺陷）。无锚点的新文档回到顶部，免得停在上一条内容的中段。
+  // 落位：只滚面板自己的身体（`centerInScroller` 的口径与理由见 util.ts——借
+  // scrollIntoView 会连主滚动一起拉走）。无锚点的新文档回到顶部，免得停在上一条内容的中段。
   useEffect(() => {
     if (state.phase !== 'ready') return
     const root = bodyRef.current

@@ -14,7 +14,7 @@ import type { JobState } from './types.js'
 /**
  * 导入现场（书源管理 tab 的导入弹层内容）：拖放主入口 + 三态（空闲/运行/完成汇总）+ 粘贴小道。
  * 职责：只持「导入现场」——job 经 props 注入；import 任务的客户端缓存兜底（getLastImportJob）
- * 留在 jobs.ts 单点。改版口径：导入是低频任务，收纳进弹层（壳层 `Dialog` 的 wide 档）；提交成功后
+ * 留在 jobs.ts 单点。导入是低频任务，收纳进弹层（壳层 `Dialog` 的 wide 档）；提交成功后
  * 经 onSubmitted 关弹层，任务在服务端跑，**完成事项回流待办收件箱**（新导入 → 待验证卡），
  * 不留在原地——闭环。运行卡/完成汇总在弹层内呈现（重开弹层可回看；任务进度同时走全局状态条）。
  */
@@ -216,7 +216,7 @@ export function ImportRunCard({ job }: { job: JobState }): ReactNode {
   )
 }
 
-/** 汇总明细：坏文件 + issues（失败/重复/替换点名），642 条全铺屏是灾难——点开才展示 */
+/** 汇总明细：坏文件 + issues（失败/重复/替换点名），大批量条目全铺屏是灾难——点开才展示 */
 function ImportIssues({ job }: { job: JobState }): ReactNode {
   const t = useCopy()
   return (

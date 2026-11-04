@@ -3,16 +3,17 @@
  *
  *  ── 配色契约（宿主 `@deepseek-ai/dsh-client-ui-theme` 的 alias 语义层）─────────────
  *  宿主把调色板与语义层都挂在 `body` / `body[data-ds-dark-theme]` 上，本插件**只需引用语义
- *  token**，光/暗自动跟随，不判深浅、不写死主题色。踩过的坑（修复的病根）：
- *    ① 引用**不存在的宿主 token**（如 `--dsw-alias-border-l`，宿主只有 l1..l4）——CSS 不报错，
- *       只落到硬编码 fallback，光/暗都不跟随；
- *    ② 写死白色叠层 / 状态色 hex = 钉死一套主题的观感（暗底值在光态下对比度 ≈ 1.00）；
+ *  token**，光/暗自动跟随，不判深浅、不写死主题色。要防的静默失效有三形态：
+ *    ① 引用**不存在的宿主 token**——CSS 不报错，
+ *       只落到硬编码 fallback，光/暗都不跟随；本层消费的宿主名以 `tests/client/theme-tokens.test.ts`
+ *       的词表守卫为家，别凭记忆造名；
+ *    ② 写死白色叠层 / 状态色 hex = 钉死一套主题观感，光暗两头必有一头失衡；
  *    ③ 引用**本层自己不存在的 token**（如 `var(--novel-layer)`，层板只有 -1/-2/-3）——整条
  *       background 简写静默落 `unset`。守卫在 `tests/client/ui-system.test.tsx`：本层每个
  *       `var(--novel-*)` 引用都必须有定义。
  *  本层因此把用到的 token 先收进 `.novel-root, [data-novel-scope]` 一层局部变量：视觉规则
  *  只读局部变量，token→宿主、fallback→暗底老观感。双根覆盖与组件自带 `data-novel-scope` 的
- *  自足性**保留**：组件在哪棵树渲染都应成立（设置区块现在与主视图同树，但规则不依赖这一点）。
+ *  自足性**保留**：组件在哪棵树渲染都应成立（即便与主视图同树，规则也不依赖这一点）。
  *
  *  ── 标度（sp/fs/r/shadow/z/dur）───────────────────────────────────────────────
  *  间距、字阶、圆角、阴影、层级、动效各有一套 named 标度，视觉规则里不散写像素：散值的代价
@@ -28,7 +29,7 @@ export const TOKENS_CSS = `
   --novel-layer-1: var(--dsw-alias-bg-layer-1, #1e1e1e);
   --novel-layer-2: var(--dsw-alias-bg-layer-2, #242426);
   --novel-layer-3: var(--dsw-alias-bg-layer-3, #2b2b2e);
-  /* 描边：容器 l2 / 输入件 l4 / 行内发丝 l1（宿主自己的描边也是 .5px 起步，别用 1px 实心灰） */
+  /* 描边：容器 l2 / 输入件 l4 / 行内发丝 l1（发丝线观感，别用 1px 实心灰） */
   --novel-border: var(--dsw-alias-border-l2, #ffffff1f);
   --novel-border-strong: var(--dsw-alias-border-l4, #fff3);
   --novel-border-faint: var(--dsw-alias-border-l1, #ffffff0f);
@@ -84,8 +85,8 @@ export const TOKENS_CSS = `
   --novel-pct: 0;
   --novel-measure: 36em;
   /* --novel-paper / --novel-paper-ink：正文那一层的纸与墨（prefs.paperColor 与 paperInk 的结果，
-     由 ReaderView 行内写入）。**控制器条由它们派生**——「条底与纸底不同源即缺陷」的判据与实测
-     住 .novel-rdr-bar 那头。缺省值 = 默认纸米黄与其对应墨色。 */
+     由 ReaderView 行内写入）。**控制器条由它们派生**——「条底与纸底不同源即缺陷」的判据
+     住 .novel-rdr-bar 的注释那头。缺省值 = 默认纸米黄与其对应墨色。 */
   --novel-paper: #f7f3e8;
   --novel-paper-ink: #222;
   /* 插图预留宽高比（ChapterBody 由 wire 的可信 width/height 行内写入，规则读本值）：

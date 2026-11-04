@@ -3,8 +3,8 @@ import { stripLeadingTitle } from '../../src/client/util.js'
 import type { ChapterContent, ContentNode, ContentTag } from '../../src/shared/wire.js'
 
 /**
- * 章名在屏幕上连着打两遍的修法：h2 已经渲染 `toc[i].name`，而相当一部分在线源的正文里
- * **第一行就是同一句章名**（真机截图里「第1章 雪地遇袭」居中粗体下面紧跟一行左对齐的同样字）。
+ * 章名在屏幕上连着打两遍的修法：h2 已经渲染 `toc[i].name`，而本项目输入的正文里
+ * **第一行可能就是同一句章名**——呈现层必须去重，否则用户看到同一句话上下各一行。
  *
  * 三条口径，逐条钉在下面：
  *  ① **相等才丢**——归一化只去空白（含全角），不做包含、不做前缀、不做大小写折叠。

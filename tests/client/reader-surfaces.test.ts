@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { closeAll, dismissSurface, escOwner, maskFor, openSurface } from '../../src/client/reader-surfaces.js'
 
 /**
- * 阅读浮层在场判据的钉子：「至多一角在场」与「换角时注释面板怎么退场」这两条以前散在四个
+ * 阅读浮层在场判据的钉子：「至多一角在场」与「换角时注释面板怎么退场」这两条若散在四个
  * opener 的 `setX(false)` 抄写里，抄写一漏就让两面叠住（底下那面看得见点不动）。
  * 为什么互斥、为什么遮罩只跟两面，都写在 `src/client/reader-surfaces.ts` 头上。
  */

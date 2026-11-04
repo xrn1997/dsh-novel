@@ -74,7 +74,7 @@ describe('ImportPane 接线（deps seam 驱动）', () => {
     const textarea = screen.getByPlaceholderText('粘贴 legado 书源 JSON（对象或数组）')
     fireEvent.change(textarea, { target: { value: '[{"bookSourceName":"A","bookSourceUrl":"https://a.com","ruleContent":"x"}]' } })
 
-    // 预检有 300ms 防抖——等校验条出现、校验通过后按钮才放行
+    // 预检带防抖——等校验条出现、校验通过后按钮才放行
     const btn = await screen.findByText('导入粘贴内容', {}, { timeout: 2000 })
     await waitFor(() => expect(btn.getAttribute('disabled')).toBeNull())
     fireEvent.click(btn)
@@ -144,7 +144,7 @@ describe('ImportPane 接线（deps seam 驱动）', () => {
   })
 
   it('完成回执的「查看明细」：issue 与坏文件逐条点名（jobIssueLabel 的渲染接线）', () => {
-    // 本文件的既有用例都走 `issues: []`，明细区的渲染接线一直没被断言；这条补上。
+    // 明细区的渲染接线只在这一条在场（本文件其余用例都给 `issues: []`，够不到这一段）。
     const done: JobState = {
       id: 'imp2', kind: 'import', phase: 'done', total: 2, done: 2,
       counts: { ok: 1, failed: 1, dupSkipped: 0, replaced: 0 },

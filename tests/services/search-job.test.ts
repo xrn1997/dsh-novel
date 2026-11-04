@@ -7,8 +7,8 @@ import type { JobHost } from '../../src/services/job-holder.js'
 import { DEFAULT_JOB_OUTPUT_BYTES } from '../../src/services/job-tail.js'
 import { must, pick } from '../support/fixture.js'
 
-/** 搜索后台任务的持有者：整轮结果住服务端，读面给游标增量。它存在的理由是实测缺陷——
- *  浏览器半自持在途循环，切界面即丢结果。 */
+/** 搜索后台任务的持有者：整轮结果住服务端，读面给游标增量。为什么必须在服务端——
+ *  浏览器半自持在途循环时，切界面即丢结果。 */
 
 const hit = (i: number): SearchHit => ({
   title: `t${i}`, author: null, url: `https://x/${i}`, coverUrl: null, intro: null, lastChapterName: null,
@@ -201,7 +201,7 @@ describe('SearchJobs 登记给宿主 ctx.jobs（与写任务同一口径）', ()
 /** SSE 通道（`GET search/job-stream`）的地基：持有者只发「变了」信号，游标归每条连接。
  *  信号不带数据是刻意的——多观察者各带各的游标读同一份持有物，谁都不替别人决定进度。 */
 describe('SearchJobs.subscribe（推送加速器的事件口）', () => {
-  it('新一轮 / 每次 emit / 终态各响一次；退订后新的一轮不再打扰', async () => {
+  it('新一轮 / 每次 emit / 终态各响一次；退订后静默', async () => {
     const jobs = new SearchJobs()
     const m = manualRun()
     const seen: Array<number | 'new'> = []

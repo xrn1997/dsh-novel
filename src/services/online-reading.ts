@@ -164,7 +164,8 @@ export class OnlineReading {
       // 正文规则缺失不得降级 `?? ''`
       throw new RuleMissingError('content', 'ruleContent', `源「${s.name}」缺正文规则 ruleContent`)
     }
-    // 变量注入：`book`（bookUrl/name…——36小说网 ruleChapterUrl 用 book.bookUrl.replace）
+    // 变量注入：`book`（bookUrl/name…——规则里存在拿 book.bookUrl 做字符串替换的写法，
+    // 这一面必须有值；按面注入的字段清单见矩阵行 `h-book-mirror-fields`）
     // 与 `chapter`（title/index/url——正文脚本 `chapter.title` 广泛使用）
     const shelfBook = this.parts.shelf.get(bookKey)
     const subEval = this.parts.sourceEvalFor(s)
@@ -177,7 +178,7 @@ export class OnlineReading {
         },
       })
     // 「空正文必炸」管的是**首屏**：跟进链上的续页取不出正文，只说明这一章到此为止，
-    // 不许把已经拼好的首屏一起判死（真机形状：最后一章的「下一章」链接指向书详情页，
+    // 不许把已经拼好的首屏一起判死（这一形状是最后一章的「下一章」链接指向书详情页，
     // 那页没有正文容器；若整章抛错，前两页的正文会一并丢掉）。
     // 首屏那一半一字未放宽：空正文仍然抛、仍然不写缓存（矩阵行 `g-content-empty-exception`）。
     // 续页交空数组即可——`followPages` 的 zero-new 闸本就负责停跟进。
@@ -233,7 +234,7 @@ export class OnlineReading {
       },
     )
     let text = result.items.join('\n')
-    // subContent 在**拼页之后**求值（上游 BookContent.kt 口径：循环结束后用 analyzeRule 的末页上下文），
+    // subContent 在**拼页之后**求值（用的是循环结束那一刻的末页上下文），
     // 以 http 开头时先把那页取回来当子正文。它是追加物，链接坏了不许把整章判死（规则求值本身的错仍然抛）。
     let subFetchFailed = false
     if (subContentRule !== null && lastPage.page !== null) {
@@ -281,8 +282,9 @@ export class OnlineReading {
       throw new RuleMissingError('toc', 'ruleChapterList/ruleBookList',
         `源「${s.name}」缺目录规则（ruleChapterList/ruleBookList 之一 + ruleChapterName/ruleChapterUrl）——无法构建目录`)
     }
-    // `book` 变量：目录规则常见 `book.bookUrl`（36小说网 chapterUrl）与 `book.origin`
-    // （努努书坊 ruleTocUrl `{{book.origin}}/e/...`——源站点域名即注册表 baseUrl）
+    // `book` 变量：目录规则常见 `book.bookUrl`（章地址由它替换出来）与 `book.origin`
+    // （ruleTocUrl 用 `{{book.origin}}` 拼目录页——源站点域名即注册表 baseUrl；按面注入的
+    // 字段清单见矩阵行 `h-book-mirror-fields`）
     const tocShelfBook = this.parts.shelf.get(bookUrl)
     const subEval = this.parts.sourceEvalFor(s)
       .subEval({
@@ -412,7 +414,7 @@ export async function tocUrlOf(
   return tocUrlFromContext(ruleTocUrl, dctx, bookUrl, subEval)
 }
 
-/** 上游 `String.isTrue` 口径：空/字面 null 与整串 `false|no|not|0|0.0` 为假，其余非空为真。 */
+/** 规则值折布尔的口径（本仓唯一实现）：空/字面 null 与整串 `false|no|not|0|0.0` 为假，其余非空为真。 */
 function isTrueRuleValue(v: string | null): boolean {
   if (v === null) return false
   const t = v.trim()

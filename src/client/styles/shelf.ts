@@ -9,8 +9,8 @@ export const SHELF_CSS = `
 .novel-shelf-count { color: var(--novel-text-3); font-size: var(--novel-fs-md); margin-left: var(--novel-sp-3); font-weight: 400; }
 /* 书架 tab 顶栏（三行）：行1 内容标题「书架 · N 本」；行2 搜索框独占一行且整簇居中；
    行3 书架筛选簇（pills + 簇尾排序灰字）。
-   为什么不做「工具组与标题同行」：Chrome 把同行 flex item 的假设主尺寸算成 min-content 量级
-   （探针实测四件东西 706px 被算成 651px），搜索框与导入钮在标题旁折行堆叠——显式三行后不存在
+   为什么不做「工具组与标题同行」：flex 布局给同行 item 的假设主尺寸只到它的 min-content 量级，
+   小于内容实际所需，搜索框与导入钮会在标题旁折行堆叠（三行形状由守卫钉住）——显式三行后不存在
    这条折行路径。书架顶栏禁止 margin-left:auto（会把灰字钉到列最右端＝悬浮碎片）。
    （本文件注释里别写反引号：NOVEL_CSS 是模板字符串，反引号会当场截断它。） */
 /* 行2：搜索框单独一行（聚合搜索 = 找新书入口，与书架筛选不是同一语义组）。
@@ -68,7 +68,7 @@ export const SHELF_CSS = `
   gap: var(--novel-sp-6) var(--novel-sp-5); padding-top: var(--novel-sp-5);
 }
 /* 空书架兜底：EmptyState 分支不渲染整网格，导入引导卡以单卡网格居中补位——
-   工具栏导入钮已移除，导入入口不能随之消失（真零本时它恰恰是最刚需的操作）。 */
+   真零本时导入恰恰是最刚需的操作，入口在此卡（唯一入口）。 */
 .novel-grid.solo { max-width: 200px; margin: 0 auto; }
 /* 卡片 = 一格（.novel-cell）里的「打开钮 + 删除钮」两个兄弟按钮：
    打开钮是原生 <button>（Enter/Space 免费可用、焦点环自然），删除钮浮在封面右上；

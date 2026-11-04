@@ -254,7 +254,7 @@ describe('批量验证任务', () => {
     expect(peak).toBeGreaterThan(1)
     expect(peak).toBeLessThanOrEqual(5)
   })
-  it('运行中删源（曾在途源被删会记成垃圾失败）：worker 重查不到 → 记「运行中被删除」跳过，不产生垃圾失败', async () => {
+  it('运行中删源：worker 重查不到 → 记「运行中被删除」跳过，不计失败', async () => {
     let n = 0
     let victimId = ''
     const { jobs, registry } = await mkJobs(async () => {

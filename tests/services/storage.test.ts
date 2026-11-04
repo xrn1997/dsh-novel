@@ -132,7 +132,7 @@ describe('writeFileAtomic（PageCache/JSON 共用低层）', () => {
 
 describe('createDebouncedWriter', () => {
   it('防抖窗口唯一主人：缺省用 storage 的 PERSIST_WINDOW_MS', async () => {
-    // 窗口缺省不再由各消费方各写一个 100：storage 的常量是唯一主人，注册表显式引用它，书架用缺省。
+    // 窗口缺省不在各消费方手里各写一份：storage 的常量是唯一主人，注册表显式引用它，书架用缺省。
     // fake timers 下记录 setTimeout 实参：定时器只在 schedule 时开一次，延迟必须恰是常量本身。
     // 这里不用 vi.spyOn 记录：它的恢复值钉在「安装时那个函数」上，afterEach 的 restoreAllMocks 会把
     // fake clock 重新装回 global，后续用例等真 setTimeout 就永远等不到（spy 那条路会毒化本文件）。
@@ -177,7 +177,7 @@ describe('createDebouncedWriter', () => {
   it('flush 排到静默：第一轮在途期间新调度的写也必须在返回前落地', async () => {
     // flush 排的是「等齐」，不是调用那一刻的快照（pending 只取一次）。
     // 否则「第一轮 I/O 在途时又来一次 schedule」的写会留在计时器里——测试收尾把临时目录删了
-    // 它才烧，rename 撞上 Windows 的 EPERM（全量门里那种「1920 全绿但 exit≠0」的现场）。
+    // 它才烧，rename 撞上 Windows 的 EPERM，成为未处理拒绝——用例全绿而退出码非 0。
     // 窗口刻意放到 10_000ms：这条用例里 b 绝不可能靠计时器落地，只能靠 flush 排干净——
     // 既不需要 sleep，也不给「放宽断言」留余地。
     const dir = await tmp()

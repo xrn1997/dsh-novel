@@ -77,7 +77,7 @@ function fakeCtx() {
   })
   /** 宿主事件面（cordis 的 `ctx.on`）：`loader/volatile-update` 是配置热更的信号口，
    *  假面按事件名收 listener，`emit` 按名分发。disposer 必须真摘 handler——否则「dispose 后
-   *  不再留痕」这条性质在假宿主上无从验证（旧假面返回 no-op，监听会活过卸载）。 */
+   *  不再留痕」这条性质在假宿主上无从验证（disposer 若返 no-op，监听就会活过卸载）。 */
   const handlers: Array<{ event: string; listener: (...args: unknown[]) => void }> = []
   const ctx: FakeCtx = {
     logger: namedLogger,
@@ -147,9 +147,9 @@ function refOf(cfg: unknown, field: string): unknown {
   return value.get()
 }
 
-/** 轮询等到条件成立，而不是硬等一个固定时长：全套 49 个文件并发跑时，异步 init 有可能超过
+/** 轮询等到条件成立，而不是硬等一个固定时长：全套并发跑时，异步 init 有可能超过
  *  固定窗口——断言先抛会让用例里的 disposeAll 不执行，模块级 applied 守卫永久置位，
- *  同文件后续用例被 "duplicate apply ignored" 级联带崩（实测：单跑该文件全绿、全套红 2 个）。
+ *  同文件后续用例被 "duplicate apply ignored" 级联带崩。
  *  等不到的用例仍会如常失败，只是不再污染同文件的其他用例。 */
 async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {
   const deadline = Date.now() + timeoutMs

@@ -146,7 +146,7 @@ function makeRuntime(ctx: EvalContext, facet: Facet, usage: RuleUsage): Runtime 
   }
 }
 
-/** JSONPath 求值数据解析已迁 variables.ts（resolveJsonData）——打破 evaluate ↔ variables 运行时环 */
+/** JSONPath 求值数据解析住在 variables.ts（resolveJsonData）——打破 evaluate ↔ variables 运行时环 */
 
 /** 独立净化形态（##a##b，branches 为空）：基值 = 整页原文（html 优先、否则 json 序列化文本），
  * 不经 DOM——JSON 页（无 html）以序列化文本为基值净化 */
@@ -216,14 +216,14 @@ function* branchGen(
           }
           code = engineValueToString(rewritten, 'inner')
         }
-        // js 文本的 `##` 尾：对面 `makeUpRule` 在插值之后对 js 文本同样切 `##`——首段才是代码、其余是
-        // 「对结果做正则净化」的替换尾；首段为空则整块只当净化步（茄子免费小说 `<js>##[…]</js>` 形态，
-        // 对应对面 `if (rule.isNotEmpty())` 那道门）。替换**不另写一份**：走 `replace.applyReplaces`，
+        // js 文本的 `##` 尾：插值之后对 js 文本同样切 `##`——首段才是代码、其余是
+        // 「对结果做正则净化」的替换尾；首段为空则整块只当净化步（输入里有 `<js>##[…]</js>` 形态，
+        // 对应「首段非空才执行代码」那道门）。替换**不另写一份**：走 `replace.applyReplaces`，
         // 与规则级 `##` 同一个家——miss/nodes 透传（绝不在这里把「没取到」折成空串）、List 逐项、
         // 空 pattern 整步跳过、非法正则抛带段定位的 RuleEvalError。
-        // `onlyOne` 按对面的判据取「切出多于三段」：对面 `##p##r##` 回的是**首个匹配段**的替换结果、
+        // `onlyOne` 取「切出多于三段」：`##p##r##` 回的是**首个匹配段**的替换结果、
         // 无匹配给空串，不是「原文里改第一处」。这条轴与规则级仍待裁的配对分叉同属
-        // `a-replace-tail-single-pair`，此处先按对面字面实现，规则级那条不跟着动。
+        // `a-replace-tail-single-pair`，此处按上述口径实现，规则级那条不跟着动。
         const jsParts = code.split('##')
         const jsCode = jsParts.at(0)
         const jsTail = jsParts.length > 1 ? jsParts.slice(1) : null
@@ -247,7 +247,7 @@ function* branchGen(
         if (prev?.kind === 'list' && out.kind === 'value' && out.text.includes('\n')) {
           out = { kind: 'list', items: out.text.split('\n') }
         }
-        // 尾文本已随整段 `code` 一起插值过（上面那道 `{{` 门），故不再传 bindings——对面也是先插值再切
+        // 尾文本已随整段 `code` 一起插值过（上面那道 `{{` 门），故不再传 bindings——再绑一次是重复劳动
         if (jsTail !== null) {
           out = applyReplaces(
             out,
@@ -280,8 +280,8 @@ function* branchGen(
       }
       if (seg.kind === 'regexRow') {
         // AllInOne 行模板段（矩阵 a-allinone-group-zero）：值 = 用当前行把 `$n` 绑好后的原文，
-        // **不求值**。没有行（非 AllInOne 条目 / 探针直接求这条规则）时给原文——与对面把
-        // 绑定失败回退成规则原文的落点一致，别在这里炸（这条规则本身在非行上下文里没有别的解释）。
+        // **不求值**。没有行（非 AllInOne 条目 / 探针直接求这条规则）时给原文——绑定失败回退成
+        // 规则原文的落点如此，别在这里炸（这条规则本身在非行上下文里没有别的解释）。
         const row = rt.ctx.regexRow
         cur = { kind: 'value', text: row === undefined ? seg.raw : bindRegexRow(seg.raw, row) }
         if (collect) collect.push(stepOf(seg, loc, cur))
@@ -302,7 +302,7 @@ function* branchGen(
  * 换成字符串后拼回原文。
  *
  * 顺序是「先重写**规则文本本身**，再按 mode 分发」——因为重写的就是文本，所以对 `@js:` / `<js>`
- * 代码里的字符串字面量同样生效（真实源大量靠它在 js 代码里拼 URL）。
+ * 代码里的字符串字面量同样生效（输入脚本有靠它在 js 代码里拼 URL 的形态）。
  *
  * 任一插值段 Miss → 返回该 Miss（调用方整段失败）：把 Miss 折成空串会产出**语法合法的残 URL**
  * （`http://api/novel/{{$.id}}` → `http://api/novel/`），拿它发请求比报错更坏。
@@ -429,7 +429,7 @@ function evalNonJs(
     case 'default': {
       if (cur?.kind === 'miss') return cur
       // 链首未起链：**取值段**以文档根为上下文取一次。按 `$('*')`
-      // 全集会让每个祖先各出一份——真源 `ruleToc.chapterName: "text"` 实测章名三遍。
+      // 全集会让每个祖先各出一份——同名文本会被重复多遍（章名一遍变数遍）。
       // 选择段（class/tag/`text.串`）仍从全集往下选。
       // 裸词终端在 JSON 条目上 = 属性读（见 jsonObjectOf）：`url` 与 `href`/`src` 两种形态
       const propName = seg.mode === 'attr' ? seg.arg
@@ -539,7 +539,7 @@ function finalize(parsed: ParsedRule, values: EngineValue[], facet: Facet, rt: R
   if (rt.usage === 'value' && value.kind === 'nodes') value = nodesAsString(value.nodes)
   if (parsed.replaces.length > 0) {
     // `##` 尾的 `{{chapter.title}}` 类插值（替换规则串同样先插值再当正则——
-    // 真实源 `##...|{{chapter.title}}|...##` 去章标题行全靠它）；绑定缺位保持原文字面
+    // 去章标题行的替换尾就依赖这个次序）；绑定缺位保持原文字面
     value = applyReplaces(value, parsed.replaces, parsed.onlyOne, { facet }, interpBindings(rt))
   }
   return value
@@ -583,7 +583,7 @@ function interpBindings(rt: Runtime): Record<string, string> {
 /** js 宿主注入：host.result = 上一段结果的序列化；首个段 → 整页原文（与独立净化同口径）。
  *  resultKind 随行：nodes/page(html) 时沙箱把 result 包成元素包装对象（`result.attr()` 形态）。
  *  **列表用途下的 Miss 也报 nodes**：列表用途下 result 恒是节点集合，零命中只是**空集合**
- *  （`.toArray()`/`.size()` 照样在）；按原文字符串绑定会让真源共用 toc 模板的
+ *  （`.toArray()`/`.size()` 照样在）；按原文字符串绑定会让脚本里共用 toc 模板的
  *  `result.toArray()` 炸成 JsSandboxError，把站点侧事实误记成引擎侧失败。取值路径不变（String 语义）。 */
 function jsHostOf(prev: EngineValue | null, rt: Runtime): JsHost {
   const kind = prev === null ? 'page' : prev.kind

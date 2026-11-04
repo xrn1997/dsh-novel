@@ -44,7 +44,7 @@ interface SourceAudit {
   /** 搜索面收到的条目数（书名为空被丢的不算）——没取到带地址的条目时，这一位就是
    *  `search-no-hit`(0) 与 `no-book-url`(>0) 的分家依据 */
   hits?: number
-  /** 搜索面书目字段的到货读数（`fieldsOf` 在选中那一轮上数出来的）：
+  /** 搜索面书目字段的到货读数（按选中那一轮的书目现数）：
    *  `declaresKind` = 该源 raw 里 `ruleSearch.kind` 非空（分母按真正落到链路里的这一位算） */
   fields?: { hits: number; withKind: number; withWordCount: number; declaresKind: boolean; declaresWordCount: boolean }
 }

@@ -46,7 +46,7 @@ export interface BookView {
  *  以及两条呈现轴预计算好的行身份（`groupViews` / `bookViews`）。
  *  全部派生在轮次身份上，只有轮真变才重算。为什么要调用方 memo：SSE 每帧都发新的 round 对象
  *  （累积器只增不减、组按源只 emit 一次），打字也走同一棵重渲——不 memo 就是每帧每击键重付
- *  整轮派生（2026-10-13 实测：520 源 × 40 条的轮约 38 ms）。重算时各付几趟如实记：轮级分区与
+ *  整轮派生。重算时各付几趟如实记：轮级分区与
  *  计数一趟、归并一趟（吃上面那份分区）、行元数据索引一趟（只为按书轴回读）、两条呈现轴的行身份
  *  各一趟。
  *  轮级只分区一次：收口行的「相关 x 条」、组头的「相关 x · 共 y」与归并取行读的是同一份分区，
@@ -141,9 +141,10 @@ function rowHit(s: MergedSource, meta: SearchHit | undefined): SearchHit {
 }
 
 /** 行上的作者读数：逗号级名单只留前两位，其余由尾缀承担（`search.book.etAl`）。
- *  为什么收：有的源把整张配音表塞进 `author`，而这一段住在主钮的内容里、也就是它的
+ *  为什么收：本项目输入里存在 `author` 是一条长名单的形状（整张配音表塞进这一个字段），
+ *  而这一段住在主钮的内容里、也就是它的
  *  无障碍名——不收，读屏每本念一遍名单，视觉上还把尾巴与「都加架」顶下两行。收的不是信息：
- *  全串在 `title` 与展开后的逐源行里原样都在。
+ *  全串在 `title` 与展开后的逐源行里原样都在（形状钉子见 `tests/client/search-view-model.test.ts`）。
  *  只在逗号处切：「萧炎：锦鲤 药老：北炎」那种空格分隔的角色表切不出「第二位」，整串交给 CSS 省略号。 */
 export function shortAuthor(author: string, t: Translate = zhTranslate): string {
   const head = /^\s*[^,，、]+\s*[,，、]\s*[^,，、]+/.exec(author)

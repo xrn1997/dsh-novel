@@ -12,8 +12,8 @@ import { pick } from '../support/fixture.js'
 
 /**
   * 接线层交互测试：启停开关的「乐观翻转 → 在途 → 失败即刻回滚
- * → error 泳道挂行锚点」整条时序，历史上住着真 bug（「原实现乐观态无人清零，开关会永久停在
- * 错误态」），却因为视图硬 import 真实现而**无法被测试驱动**。现在经 deps seam 注入假 adapter
+ * → error 泳道挂行锚点」整条时序。这一族时序的坑是乐观态无人清零——开关会永久停在
+ * 错误态；而视图若硬 import 真实现就驱动不了它，所以整条经 deps seam 注入假 adapter
   * （桩工厂统一到 tests/client/fake-deps.ts）。
  */
 
@@ -64,7 +64,7 @@ describe('SourceList 启停开关接线（deps seam 驱动）', () => {
     expect(transientEntries()).toEqual([])                // 真 store 里也没有回执条
   })
 
-  it('失败路径：即刻回滚到服务端原态 + error 泳道挂行锚点（历史 bug 回归钉死）', async () => {
+  it('失败路径：即刻回滚到服务端原态 + error 泳道挂行锚点', async () => {
     const deps = makeDeps({
       apiSend: vi.fn(() => Promise.reject(new Error('boom'))),
       ...realTransient(),
@@ -99,7 +99,7 @@ describe('SourceList 启停开关接线（deps seam 驱动）', () => {
     const deps = makeDeps({ apiSend: vi.fn(() => new Promise((res) => { settle = res })), ...realTransient() })
     render(view(deps))
     fireEvent.click(screen.getByRole('switch'))
-    // 请求在途：真瞬态层里没有任何条目，也没有错误（空断言不再靠空桩成立）
+    // 请求在途：真瞬态层里没有任何条目，也没有错误（空断言靠的是真 store，不是空桩）
     expect(transientEntries()).toEqual([])
     expect(deps.pushError).not.toHaveBeenCalled()
     expect(screen.queryByRole('progressbar')).toBeNull()
@@ -108,7 +108,7 @@ describe('SourceList 启停开关接线（deps seam 驱动）', () => {
     expect(transientEntries()).toEqual([])                // 成功静默，不在真 store 里补条
   })
 
-  it('乐观值随服务端值让位：reload 落地即以服务端为准（粘滞乐观态——审查 2026 发现的真缺陷回归钉）', async () => {
+  it('乐观值随服务端值让位：reload 落地即以服务端为准（粘滞乐观态不许顶住显示）', async () => {
     // 乐观值必须随服务端值让位：另一入口（selbar 批量停用 / AI 工具）改了服务端后，
     // reload 落地即以服务端为准，残留的 optimistic 不得顶住显示（key={s.id} 稳定，SourceRow 跨 reload 存活）。
     const deps = makeDeps()                                  // apiSend 缺省成功
@@ -149,13 +149,13 @@ describe('SourceList 行内验证入口与启停正交（编排收进 jobs.ts �
     fireEvent.click(screen.getByText('验证'))
     await waitFor(() => expect(deps.startBatchProbeJob).toHaveBeenCalledWith(['s1']))
     // 验证起任务 → 读任务：命中任务的出口是 refreshJob，不走 onChanged（后者属改源的口径，
-    // 与待办/批量入口一致）；提交成功后「催任务读面」的观测钉在 jobs-verify.test.ts
+    // 与待办/批量入口一致）；提交成功后「催任务读面」这条钉在 jobs-verify.test.ts
     // （缺省 refresh = refreshJob → 轮询立刻重拉）。
     await new Promise((r) => setTimeout(r, 20))
     expect(onChanged).not.toHaveBeenCalled()
   })
 
-  it('行内验证失败 → 与其余入口同一份反馈文案「启动验证失败：…」（不再有第二份抄本）', async () => {
+  it('行内验证失败 → 与其余入口同一份反馈文案「启动验证失败：…」（文案单点）', async () => {
     const { node, deps } = panel({ status: 'unverified' },
       { startBatchProbeJob: vi.fn(async () => { throw new Error('boom') }) })
     render(node)
@@ -177,7 +177,7 @@ describe('SourceList 行内验证入口与启停正交（编排收进 jobs.ts �
   })
 })
 
-/** 分组下拉「未分组」伪选项（增补）：无分组源不属于任何真实组——没有这个入口就定位不到 */
+/** 分组下拉「未分组」伪选项：无分组源不属于任何真实组——没有这个入口就定位不到 */
 describe('SourceList 分组下拉「未分组」伪选项', () => {
   const ungrouped: SourcePublic = { ...src, id: 's2', name: '源B', baseUrl: 'https://b.com', groups: [] }
   const renderWith = (sources: SourcePublic[]): HTMLSelectElement => {

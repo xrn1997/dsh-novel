@@ -36,7 +36,7 @@ export function useTransient(): { entries: TransientEntry[]; dismiss: (id: numbe
 }
 
 /** 行内装饰层用的布尔 selector：useSyncExternalStore 快照是原始值——条目变化只唤醒
- *  快照翻转的行（642 行列表逐条订阅，全量重渲染不可接受）。SSR 快照 false（无标记）。 */
+ *  快照翻转的行（大列表逐条订阅，全量重渲染不可接受）。SSR 快照 false（无标记）。 */
 export function useTransientFlag(match: (e: TransientEntry) => boolean): boolean {
   return useSyncExternalStore(store.subscribe, () => store.get().entries.some(match), () => false)
 }

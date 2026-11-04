@@ -50,15 +50,15 @@ const snapshotReads = (apiGet: unknown): number =>
 afterEach(cleanup)
 beforeEach(resetPanelShelf)
 
-describe('ProbePane：失败显式呈现（历史 bug：.then(setResult) 无 rejection handler → 永久「探针执行中…」）', () => {
+describe('ProbePane：失败显式呈现（缺 rejection handler 就永久停在「探针执行中…」）', () => {
   const probeDeps = (apiSend: unknown): FakeSettingsDeps => makeDeps({ apiSend })
 
-  it('请求失败 → 显示错误卡，不再假死在执行中', async () => {
+  it('请求失败 → 显示错误卡，不许假死在执行中', async () => {
     const deps = probeDeps(vi.fn(() => Promise.reject(new Error('路由 404（请重启 DSH）'))))
     render(createElement(ProbePane, { sourceId: 's1', onBack: () => {}, deps }))
     // 初始：执行中（请求在途）
     expect(screen.getByText(/探针执行中/)).toBeTruthy()
-    // 失败落地：错误显式呈现（不再永久执行中）
+    // 失败落地：错误显式呈现（执行中态不许留住）
     await waitFor(() => expect(screen.getByText(/探针请求失败/)).toBeTruthy())
     expect(screen.queryByText(/探针执行中/)).toBeNull()
   })
@@ -90,7 +90,7 @@ describe('ShelfView 接线（deps seam 驱动）', () => {
     message: '2 处：正文内联 SVG 已剥离（装饰图形不参与阅读）',
   }
 
-  it('加载失败 → 显示错误而非「书架空空」误导性空态（历史 bug 钉死）', async () => {
+  it('加载失败 → 显示错误而非「书架空空」误导性空态', async () => {
     const deps = coreDeps({ apiGet: vi.fn(() => Promise.reject(new Error('网络断了'))) })
     render(createElement(ShelfView, { deps }))
     await waitFor(() => expect(screen.getByText(/书架加载失败/)).toBeTruthy())
@@ -245,7 +245,7 @@ describe('ShelfView 接线（deps seam 驱动）', () => {
     navigate({ name: 'shelf' })
   })
 
-  it('无警告的导入一字不动：成功即进阅读器，且书架上不再多一块提示', async () => {
+  it('无警告的导入一字不动：成功即进阅读器，且书架上不多一块提示', async () => {
     navigate({ name: 'shelf' })
     const deps = coreDeps({
       apiGet: vi.fn(async () => []),
@@ -344,7 +344,7 @@ const snap = (over: Partial<SearchJobSnapshot> = {}): SearchJobSnapshot => ({
 })
 
 /** 结果页现在有两条轴（按书在前、按源在页尾折叠），同一个书名会在两轴各现一次；而 jsdom 没有
- *  浏览器 UA 样式表，收起的 `<details>` 里照样查得到——「唯一匹配」因此不再是默认前提。
+ *  浏览器 UA 样式表，收起的 `<details>` 里照样查得到——「唯一匹配」因此不是默认前提。
  *  用例一律按容器取用，并把「容器不在场」写成 thrown（waitFor 才会重试到超时并把它报出来）。 */
 const booksAxis = (): HTMLElement => {
   const el = document.querySelector('[data-novel-books]')
@@ -359,7 +359,7 @@ const perSourceAxis = (): HTMLElement => {
 /** 读按源那一档**里面**的东西之前先把它展开。
  *  口径：这一档默认收着（收起/展开这两个 DOM 事实由「页尾那条按源折叠」用例钉住），而 jsdom 没有
  *  浏览器 UA 样式表、查询打得进收起的 `<details>`——不先展开就取用，证的是查询器不是界面，
- *  哪天折叠改成懒渲染或换到真浏览器就是一批看不懂的蓝。已开时不再点（waitFor 里可重复调用）。 */
+ *  哪天折叠改成懒渲染或换到真浏览器就是一批看不懂的蓝。已开时不点（waitFor 里可重复调用）。 */
 const openPerSourceAxis = (): HTMLElement => {
   const axis = perSourceAxis()
   if (!(axis as HTMLDetailsElement).open) {
@@ -389,7 +389,7 @@ const bookRow = (title: string): HTMLElement => {
 }
 
 describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游标读快照）', () => {
-  it('提交 = POST search/job，此后只读 job-status——浏览器半不再打批请求', async () => {
+  it('提交 = POST search/job，此后只读 job-status——浏览器半不打批请求', async () => {
     let submitted = false
     const reads: string[] = []
     const deps = coreDeps({
@@ -432,7 +432,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     expect(within(openPerSourceAxis()).getByText('1 条')).toBeTruthy()
     const summaryLine = screen.getByText(/本轮搜过/)
     expect(summaryLine.textContent).toContain('命中 1 条')
-    // 加粗边界与旧 UI 一致：只有数字进 b（含 failed=0 的结论），单位与 answered 是纯文本。
+    // 加粗边界只到数字：只有数字进 b（含 failed=0 的结论），单位与 answered 是纯文本。
     expect([...summaryLine.querySelectorAll('b')].map((b) => b.textContent)).toEqual(['1', '1', '1', '0'])
     expect(summaryLine.textContent).not.toMatch(/其中相关/)
   })
@@ -525,7 +525,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
   })
 
   it('都加架：逐条走既有 PUT（幂等归服务端），每条带自己那个源，不开新写口', async () => {
-    // 桩按 apiSend 的新 arity（目标 + body）声明，mock.calls 才能按下标取到 method/path/body
+    // 桩按 apiSend 的 arity（目标 + body）声明，mock.calls 才能按下标取到 method/path/body
     const apiSend = vi.fn<ApiSendStub>(async () => ({}))
     const deps = coreDeps({
       apiSend,
@@ -548,7 +548,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
   })
 
   it('作者串是整张配音表那种长度：行上只留前两位加「等」，全串归 title 与展开后的逐源行', async () => {
-    // 有的源把配音表整个塞进 author（实测十几位）。这一串现在住在主钮的内容里，也就是它的
+    // 有的源会把整张配音表塞进 author（一整个名单那么长）。这一串住在主钮的内容里，也就是它的
     // 无障碍名——不收，读屏每本念一遍名单，视觉上还把尾巴与「都加架」顶下两行。
     const longAuthor = '张沛,黑石稔,陈奕雯,高其昌,筱筝,鬼月'
     const deps = coreDeps({
@@ -604,7 +604,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
         `「${author}」被改写了`).toBe(author)
   })
 
-  it('都加架成功：按钮与每一条逐源行都记得落过架，再点不再发一发 PUT', async () => {
+  it('都加架成功：按钮与每一条逐源行都记得落过架，再点不发第二发 PUT', async () => {
     // 症状：都加架把两条都写上了架，界面上却什么都没变——按钮仍「都加架」、
     // 两条仍「＋ 加书架」，于是用户再点一次，把重复写当成没生效的反馈。
     const releases: Array<() => void> = []
@@ -660,7 +660,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     expect(within(row).getByRole('button', { name: '都在架' })).toBeTruthy()
   })
 
-  it('单行加架失败：pushError 必须有回执，不再静默吞掉', async () => {
+  it('单行加架失败：pushError 必须有回执，不许静默吞掉', async () => {
     // 症状：单行「＋ 加书架」的 PUT 失败被 catch(() => undefined) 咽掉——按钮还是「＋ 加书架」，
     // 也没有任何回执，用户点了一下界面什么也不说。
     const apiSend = vi.fn(async () => { throw new Error('disk') })
@@ -798,7 +798,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     expect(within(bookRow('斗罗')).queryAllByRole('button', { name: '＋ 加书架' })).toHaveLength(0)
   })
 
-  it('面板重开直接落在搜索页：投影先取服务端书架当基线，已在架的书不再写成「＋ 加书架」', async () => {
+  it('面板重开直接落在搜索页：投影先取服务端书架当基线，已在架的书不写成「＋ 加书架」', async () => {
     // routeStore 跨卸载存活、panelShelf 随面板卸载清空：只进过搜索页的面板重开时，基线不能指
     // 望书架 tab 或阅读器替它取（裁决与后果见 `ADR-0046`）。
     const onShelf = {
@@ -820,7 +820,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
   })
 
   it('一家给两行：家数报 1、都加架发两条、回执单位是「条」', async () => {
-    // `searchOne` 不做源内去重，同一家把装饰写法与裸写法各给一条是常态：拿行数当家数会把
+    // `searchOne` 不做源内去重，同一家可以合法给出装饰写法与裸写法两条：拿行数当家数会把
     // 「只有一家答话」念成两家，拿家数当回执数会把没上架的那条吞掉。
     const apiSend = vi.fn(async () => ({}))
     const pushOk = vi.fn()
@@ -849,7 +849,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
       '展开读的是条不是家').toContain('展开 2 条')
     // 单位律的另外两处读数同样数**行**：这一家给了两行、只归并出一本。负钉按**面**扫——
     // 数行的读数（组头计数、收口的命中条数）念成「本」就红；合法的「N 本」只有并书与超限两处，
-    // 各另有正钉（整页扫会把它们误伤，这正是要改这条负钉的原因）。
+    // 各另有正钉（整页扫会把它们误伤，故这条负钉按面扫）。
     expect(screen.getByText(/本轮搜过/).textContent, '收口报的是条不是本').toContain('命中 2 条')
     expect(screen.getByText(/本轮搜过/).textContent, '并书读数吃归并结果：两行并成一本').toContain('并成 1 本')
     expect(screen.getByText(/本轮搜过/).textContent.replace(/并成 [0-9]+ 本/, ''), '收口里数行的读数不许念成「本」')
@@ -1034,7 +1034,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
   })
 
   it('书行的动作不带第二份字段映射：加架发的还是那一份元数据（封面／简介／最新章回读本组命中）', async () => {
-    // 归并只带「这一家把它叫作什么」与地址；按书成了默认视图之后，若这条 PUT 不再回读命中本身，
+    // 归并只带「这一家把它叫作什么」与地址；按书成了默认视图之后，若这条 PUT 不回读命中本身，
     // 书架卡片就少一张封面——那是主路径的可见退化，不是「少带一个可选字段」。
     const apiSend = vi.fn<ApiSendStub>(async () => ({}))
     const deps = coreDeps({
@@ -1067,7 +1067,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     openBookFold()
     fireEvent.click(pick(within(booksAxis()).getAllByRole('button', { name: '＋ 加书架' }), 0))
     await waitFor(() => expect(putBodies()).toHaveLength(1))
-    // 再点都加架：已落架那一条不再发，补的是第二条（同一份字段映射，两个入口）
+    // 再点都加架：已落架那一条不发，补的是第二条（同一份字段映射，两个入口）
     fireEvent.click(within(booksAxis()).getByRole('button', { name: '都加架' }))
     await waitFor(() => expect(putBodies()).toHaveLength(2))
     for (const body of putBodies())
@@ -1299,7 +1299,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     await waitFor(() => expect(screen.getByText('没有结果')).toBeTruthy())
   })
 
-  it('读面失败：显式「搜索中断」且不再排下一次轮询（历史形态：spinner 到天荒地老）', async () => {
+  it('读面失败：显式「搜索中断」且不排下一次轮询（否则 spinner 到天荒地老）', async () => {
     let reads = 0
     const deps = coreDeps({
       apiGet: vi.fn(async (path: string) => {
@@ -1315,7 +1315,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
     fireEvent.submit(screen.getByRole('form'))
     await waitFor(() => expect(screen.getByText(/搜索中断：搜索结果读取失败：连接断了/)).toBeTruthy())
     await new Promise((r) => setTimeout(r, 900))
-    expect(reads).toBe(2)                                     // 读不到就收手：不再刷屏
+    expect(reads).toBe(2)                                     // 读不到就收手：不刷屏
   })
 
   it('提交失败：如实报错，且不清掉已在手上的上一轮结果', async () => {
@@ -1360,7 +1360,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
       total: 3, done: 2, next: 2, added: [hitGroup('斗罗停止前又回来一本', 's2')] }) }))
     await waitFor(() => expect(screen.getByText(/已停止 · 本轮搜过/)).toBeTruthy())
     // 收口数字只算**真搜完的**：计划 3 家、停止前只回来 2 组，就不许报「搜过 3 家」；
-    // 进度条同理，停止的轮次不倒填 100%（真机实测出的谎报：431 家计划 / 29 家实搜）
+    // 进度条同理：停止的轮次不许倒填 100%——百分比按实际完成与计划之差算
     expect(screen.getByText(/本轮搜过/).textContent).toMatch(/本轮搜过 2 家/)
     expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('67')
     expect(within(openPerSourceAxis()).getByText('斗罗先回来的书')).toBeTruthy()   // 停止 ≠ 放弃已经搜出来的
@@ -1461,7 +1461,7 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
   })
 })
 
-describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层闭环；SettingsDeps 注入）', () => {
+describe('SettingsSection 整壳接线（调度台 IA：待办箱 + 弹层闭环；SettingsDeps 注入）', () => {
   const unverifiedSrc: SourcePublic = {
     id: 'u1', name: '未验源', baseUrl: 'https://u.com', enabled: true, groups: [],
     type: 'text', status: 'unverified', importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false, hasLoginUrl: false,
@@ -1491,7 +1491,7 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
     expect(deps.apiGet).toHaveBeenCalledWith('sources')
   })
 
-  it('批量启停成功后源列表按服务端重取数：行开关即刻翻转（实机 bug：界面停在旧态，须重开视图）', async () => {
+  it('批量启停成功后源列表按服务端重取数：行开关即刻翻转（不重读就停在旧态，逼用户重开视图）', async () => {
     // 假服务端：启停写口真的改内存里的 enabled，取数口回读——只有客户端重新 GET 过，
     // 行开关的 aria-label 才会从「停用 X」变成「启用 X」。
     const server: SourcePublic[] = [{ ...unverifiedSrc }]
@@ -1729,7 +1729,7 @@ describe('SettingsSection 整壳接线（2026 调度台 IA：待办箱 + 弹层�
     expect(screen.queryByText(/全部源状态良好/)).toBeNull()
   })
 
-  it('「去验证」提交失败 → pushError 显式呈现（历史 bug：() => undefined 吞 rejection）', async () => {
+  it('「去验证」提交失败 → pushError 显式呈现（回调不返回 Promise 就吞掉 rejection）', async () => {
     const deps = settingsDeps({
       lastImportJob: () => doneImportJob,
       startBatchProbeJob: vi.fn(async () => { throw new Error('网络失败') }),
@@ -1781,7 +1781,7 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
     expect(within(prefs).getByRole('button', { name: 'Cream' })).toBeTruthy()
   })
 
-  it('阅读会话的网络取数走注入 deps（目录走 navigation 读面，不再硬 import apiGet）', async () => {
+  it('阅读会话的网络取数走注入 deps（目录走 navigation 读面，不硬 import apiGet）', async () => {
     const deps = readerDeps()
     render(reader(deps))
     await waitFor(() => expect(deps.apiGet).toHaveBeenCalled())
@@ -1949,7 +1949,7 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
   })
 
   it('正文首行与章名同句 → 呈现层剥掉它（章名只留 h2 那一份）', async () => {
-    // 在线源很常见：正文第一行就是「第1章 ××」。判据是相等才丢，所以这里同时钉「其余行原序在」。
+    // 本项目输入的正文可能首行重复章名（「第1章 ××」那种）。判据是相等才丢，所以这里同时钉「其余行原序在」。
     const name = '第1章 夜航'
     const deps = readerDeps({
       apiGet: vi.fn(async (path: string) => {
@@ -1998,7 +1998,7 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
     expect(deps.streamExport).not.toHaveBeenCalled()                       // 校验期零请求
   })
 
-  it('导出失败：错误条呈现 code（导出错误与阅读链路 error 分家，历史形态：整段硬 import 零覆盖）', async () => {
+  it('导出失败：错误条呈现 code（导出错误与阅读链路 error 分家，各说各的）', async () => {
     const deps = readerDeps({
       streamExport: vi.fn(async () => { throw new ApiClientError('ExportFailed', 500, '服务端导出失败') }),
     })
@@ -2095,7 +2095,7 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
   const rich1: ChapterContent = {
     kind: 'rich', documentId: 'd1',
     nodes: [para('q1', '第二章正文', [
-      // 第 2 章里也有一条脚注引用：实测路径（跟内链过去 → 在新章点脚注）要它才走得通
+      // 第 2 章里也有一条脚注引用：用户路径（跟内链过去 → 在新章点脚注）要它才走得通
       link('l4', { kind: 'supplement', documentId: 's1', anchorId: 'f2' }, 'noteref', '脚注二'),
     ])],
   }
@@ -2197,8 +2197,8 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
   })
 
   it('目录与脚注面板互斥：点目录收掉脚注面板（否则它盖住目录、条目点不动）', async () => {
-    // 两块浮层同住右上角且脚注面板更宽：同场时命中测试打到面板头，目录条目根本点不动（真浏览器
-    // 实测过）。与导入说明同一口径——只收面板、不消费返回项、不写主进度。
+    // 两块浮层同住右上角且脚注面板更宽：同场时命中测试打到面板头，目录条目根本点不动。
+    // 与导入说明同一口径——只收面板、不消费返回项、不写主进度。
     const deps = richDeps()
     render(richReader(deps))
     await screen.findByText('第一章第一段')
@@ -2215,7 +2215,7 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
   })
 
   it('工具栏返回之后关面板：不许再替用户跳一次（面板的「回引用处」只认它打开时压入的那条）', async () => {
-    // 实测路径：内链去第 2 章 → 点脚注 → 工具栏返回 → 关面板。关面板只认它打开时压入的那条
+    // 用户路径：内链去第 2 章 → 点脚注 → 工具栏返回 → 关面板。关面板只认它打开时压入的那条
     // （按条目身份判）；按「面板是内链开的」弹栈会弹掉**更早那条**，主序列被送回上一章且写进存档。
     // jsdom 无排版，用**可切换**的 rect 桩顶替布局（第 1 章读 p1、第 2 章读 q1）。
     const proto = Element.prototype as unknown as { getBoundingClientRect: () => DOMRect }
@@ -2270,7 +2270,7 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
     expect(screen.queryByRole('button', { name: /返回原处/ })).toBeNull()
   })
 
-  it('排版（字号）变化：按变化前的可见节点把视口拉回同一相对位置，同值再设不再定位', async () => {
+  it('排版（字号）变化：按变化前的可见节点把视口拉回同一相对位置，同值再设不定位', async () => {
     // 接线钉：视图只剩「触发」——采点（`setPref` 的同步栈）与复位算式、miss/重采分支归
     // `reader-session.test.ts` 的「排版前采点与复位」族；这里钉的是排版 effect 真的把复位交到
     // 会话，且同值再设不重跑（effect 依赖仍是三个排版量）。jsdom 无排版：用**按读取次序改值**的
@@ -2292,7 +2292,7 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
       setPref({ fontSize: 22 })                                              // 采点在 setPref 的同步栈里发生
       await waitFor(() => expect(scrollTo).toHaveBeenCalledTimes(1))          // 重排后的复位
       expect(pick(pick(scrollTo.mock.calls, 0), 1)).toBe(-70 + 50)           // 重排后 -70，采点时为 -50
-      setPref({ fontSize: 22 })                                              // 同值再设一次：不重排、不再定位
+      setPref({ fontSize: 22 })                                              // 同值再设一次：不重排、不定位
       await new Promise((r) => setTimeout(r, 20))
       expect(scrollTo).toHaveBeenCalledTimes(1)
     } finally {
@@ -2345,11 +2345,11 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
   })
 })
 
-describe('NovelView 顶部 tab 导航（书架|书城|书源管理 并列；settings.section 注册已撤，书源管理归属主界面）', () => {
+describe('NovelView 顶部 tab 导航（书架|书城|书源管理 并列；不注册 settings.section，书源管理归属主界面）', () => {
   // routeStore 是模块级全局现场——本组每条测完复位 shelf，防止污染后续依赖默认路由的断言
   afterEach(() => { navigate({ name: 'shelf' }) })
 
-  it('点 tab 切换分支：书城=分类浏览页；书源管理=原设置区块渲染在小说视图内；书架=回首页', async () => {
+  it('点 tab 切换分支：书城=分类浏览页；书源管理=设置区块渲染在小说视图内；书架=回首页', async () => {
     render(createElement(NovelView))
     const tabs = () => within(screen.getByRole('group', { name: '小说视图导航' }))
     // 默认书架：tab 组在场（书架 tab 激活）+ 书架内容渲染（搜索框常驻，与加载态无关）
@@ -2376,7 +2376,7 @@ describe('NovelView 顶部 tab 导航（书架|书城|书源管理 并列；sett
  * 回归：卸载后不得再发请求，重挂载不得重打一整轮。
  */
 describe('SearchView 离开界面：停看不停工（结果由服务端持有）', () => {
-  it('卸载后不再发任何请求；重挂载从 since=0 重读即恢复，且不再提交一轮', async () => {
+  it('卸载后不发任何请求；重挂载从 since=0 重读即恢复，且不重新提交一轮', async () => {
     const reads: string[] = []
     const deps = coreDeps({
       apiSend: vi.fn(async () => ({ jobId: 'j1' })),
@@ -2393,7 +2393,7 @@ describe('SearchView 离开界面：停看不停工（结果由服务端持有�
     const atUnmount = reads.length
     view.unmount()
     await new Promise((r) => setTimeout(r, 900))               // 越过 JOB_POLL_MS 节拍
-    expect(reads).toHaveLength(atUnmount)                      // 卸载即停表：一条都不再发
+    expect(reads).toHaveLength(atUnmount)                      // 卸载即停表：之后一条都不发
 
     reads.length = 0
     deps.apiGet.mockImplementation(async (path: string) => {
@@ -2407,8 +2407,8 @@ describe('SearchView 离开界面：停看不停工（结果由服务端持有�
     expect(deps.apiSend).toHaveBeenCalledTimes(1)              // 恢复不重打：第二轮都没提交
   })
 
-  it('退出小说界面再进：route 仍带关键词的重挂载也只恢复，不重新提交（真机 bug：整轮从头重搜）', async () => {
-    // 真机路径：书架搜索框带 keyword 进搜索页；routeStore 跨卸载存活，退出再进 = route 还带关键词
+  it('退出小说界面再进：route 仍带关键词的重挂载也只恢复，不重新提交（否则整轮从头重搜）', async () => {
+    // 入口路径：书架搜索框带 keyword 进搜索页；routeStore 跨卸载存活，退出再进 = route 还带关键词
     // 重新挂载。挂载 effect 不得据此无条件 submit——那会 POST 替换单槽里在跑的同一轮，整轮从头重搜。
     navigate({ name: 'search', keyword: '斗罗' })
     const deps = coreDeps({

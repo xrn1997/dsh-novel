@@ -13,14 +13,14 @@ import { must } from '../support/fixture.js'
  *
  * 钉两件事：
  *
- * **接线**——旧宿主（无 configForms）时静默退让、其余座位原样；有服务时注册在包名 key 上，
+ * **接线**——宿主不暴露 configForms 时静默退让、其余座位原样；有服务时注册在包名 key 上，
  * 编辑 → 保存走「模型动作 → mutate(op, revision)」，证明页面接的是宿主表单模型而不是一张静态表。
- * 壳层分支按真容的键集钉两条：只读部署与条目不可用都在页面上真渲染，不靠旧替身的
- * `status` 字符串自说自话。
+ * 壳层分支按 `src/client/host-ui.d.ts` 镜像声明的键集钉两条：只读部署与条目不可用都在页面上真
+ * 渲染，不靠替身的 `status` 字符串自说自话。
  *
- * **呈现**——行组件是本仓自绘的（宿主 `SettingsValueField` 只吃 label/hint，装不下单位与
- * 换算），所以单位、人话回读、预设档、分区与「已覆盖」这几条都无人背书，必须在这里钉住：
- * 裸字节数（`209715200`）读不出来是这一页最初的病，回读与预设是它的药。
+ * **呈现**——行组件是本仓自绘的（本仓的每一行要带单位与人话换算，替身只镜像本仓消费的那几个
+ * 成员），所以单位、人话回读、预设档、分区与「已覆盖」这几条都无人背书，必须在这里钉住：
+ * 裸字节数（`209715200`）人眼读不出来，回读与预设档就是为了让它一眼读得出来。
  */
 
 afterEach(cleanup)
@@ -77,14 +77,14 @@ describe('插件页配置页', () => {
     expect(forms.servedNamespaces).toEqual([['dsh-novel']])
   })
 
-  it('四个分区各自有题：七个字段不再等权排成一条纵列', () => {
+  it('四个分区各自有题：字段按区归类，不等权排成一条纵列', () => {
     mountConfigPage()
     for (const title of ['搜索', '阅读与导出', '存储上限', '网络']) {
       expect(screen.getByText(title), title).toBeTruthy()
     }
   })
 
-  it('单位落在框内，不再单独占一行', () => {
+  it('单位落在框内，不单独占一行', () => {
     const { view } = mountConfigPage()
     expect(unit(view.container, 'searchTimeoutMs')).toBe('毫秒')
     expect(unit(view.container, 'searchParallel')).toBe('个源')
@@ -126,7 +126,7 @@ describe('插件页配置页', () => {
   })
 
   it('已覆盖的字段一键恢复默认：发 unset，不把缺省值抄回去', async () => {
-    // user 层有值才算「已覆盖」——这也是真实宿主上「恢复默认」会发 unset 的前提。
+    // user 层有值才算「已覆盖」：这一页只持有 user 层那一份改动，unset 撤的正是它。
     const { forms, view } = mountConfigPage({ searchParallel: 5 }, { user: { searchParallel: 5 } })
     expect(view.getByText('已覆盖')).toBeTruthy()
     fireEvent.click(view.getByRole('button', { name: '恢复默认' }))
@@ -151,7 +151,7 @@ describe('插件页配置页', () => {
   })
 
   it('只读部署：文案在、字段仍在但整体禁用、保存不可点', () => {
-    // 真容的 SettingsForm 只在 unavailable 时收起 children；只读只加一条提示，禁用归页面。
+    // 镜像里 SettingsForm 只在 unavailable 时收起 children；只读只加一条提示，禁用归页面。
     mountConfigPage({ searchParallel: 5 }, { writable: false })
     expect(screen.getByText('本部署的配置为只读。')).toBeTruthy()
     const field = screen.getByLabelText<HTMLInputElement>('搜索并发源数')

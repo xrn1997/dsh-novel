@@ -49,7 +49,7 @@ function openJobStream(res: ServerResponse, subscribe: (notify: () => void) => (
 }
 
 /** 路由级可调参数。
- * 本地书面已归门面：LocalBooks 部件与导入上限都在 ReadingService，
+ * 本地书面归门面：LocalBooks 部件与导入上限都在 ReadingService，
  * 此处只剩传输层关注点（导出节流）。`exportDelayMs` 收 getter 形态：配置页热改后
  * 下一次导出即用新值，但**一次导出只读一次**——导出中途换节奏会让同一份文件前后快慢不一。 */
 export interface ApiHandlerOptions {
@@ -124,11 +124,11 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } 
     writeOk(res, { name: 'dsh-novel', apiVersion: 1 })
   },
   sources: ({ res, service }) => {
-    // 同步 POST 导入已移除——导入走 sources/import 后台任务（错方法由匹配器落 405）
+    // 导入只走 sources/import 后台任务，本路由是 GET 列表（错方法由匹配器落 405）
     writeOk(res, service.listPublicSources())
   },
   sourcesImport: async ({ req, res, service }) => {
-    // 真实多源导出常见数 MB 级——上限 32MB，默认 1MB 会把最大流量的包挡在门外
+    // 全本多源导出是大包：读体上限必须显式放宽，缺省值会把最大的包拒在门外
     const body = await readJsonBody<Record<string, unknown> | null>(req, null, 32 * 1024 * 1024)
     writeOk(res, service.startImportJob(readBodies.import(body).files))
   },
@@ -248,7 +248,7 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } 
     if (indexRaw === null || !/^\d+$/.test(indexRaw)) {
       throw new ApiError(`缺或非法 query 参数 ${PARAMS.index}（需非负整数）`, 400, 'BadRequest')
     }
-    // 正文一律是 ChapterContent（文字支 / 图文支由来源与服务层决定，不做旧新双形态兼容）
+    // 正文一律是 ChapterContent（文字支 / 图文支由来源与服务层决定，单一形态、不设形态协商）
     writeOk(res, await service.getChapterContent(sourceId, bookUrl, Number(indexRaw), { refresh: url.searchParams.get(PARAMS.refresh) === '1' }))
   },
   // ── shelf 面 ────────────────────────────────────────────────────────
@@ -371,7 +371,7 @@ const PARAM_HANDLERS: { [K in ParamRouteName]: (ctx: HandlerCtx) => void | Promi
     const body = await readJsonBody<Record<string, unknown> | null>(req, null)
     const enabled = readBodies.enabled(body)
     // 未知 id 由门面抛 SourceNotFoundError；classify 的表把它投影成 404 NotFound，
-    // 路由层不再自带第二份判据。
+    // 路由层不自带第二份判据。
     await service.setEnabled(paramOf(params), enabled)
     writeOk(res, { enabled })
   },
@@ -386,7 +386,7 @@ const PARAM_HANDLERS: { [K in ParamRouteName]: (ctx: HandlerCtx) => void | Promi
     await shelfPut(service, decodeSegKey(paramOf(params)), req, res)
   },
   shelfDelete: async ({ res, service, params }) => {
-    // 本地书连带删文件（防孤儿 invariant）已归门面 removeBook——路由只剩键解码与信封
+    // 本地书连带删文件（防孤儿 invariant）归门面 removeBook——路由只剩键解码与信封
     writeOk(res, await service.removeBook(decodeSegKey(paramOf(params))))
   },
 }
@@ -534,9 +534,9 @@ function unknownRoute(method: string, segs: string[]): ApiError {
   return new ApiError(`未知路由: ${method} ${NOVEL_API_PREFIX}/${segs.join('/')}`, 404, 'NotFound')
 }
 
-/** 任务互斥（409）与本地书面（400/413/503）的错误→HTTP 投影已全数收进分类表
+/** 任务互斥（409）与本地书面（400/413/503）的错误→HTTP 投影全在分类表
  *  口径两分法（见 api/wire）：domain 错误走 classify+STATUS_OF；
- *  路由自检错误走 ApiError（自带 status）。本文件不再 inline writeJson 硬编状态码。 */
+ *  路由自检错误走 ApiError（自带 status）。本文件不 inline writeJson 硬编状态码。 */
 
 /** 这三处「看着像业务判据」的东西，各自的归属是定过的，别当违规清理：
  *  ① `shelfPut` / `authRoute` 按 body 形状分派到哪个门面动词——这一层仍住路由：它们由

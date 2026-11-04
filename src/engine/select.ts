@@ -79,7 +79,7 @@ export function applyIndex<T>(arr: T[], index: IndexSpec | null): T[] | 'miss' {
 }
 
 /**
- * `!` 排除口径（官方文档：!是排除，0 是第1个，-1 最后一个，: 隔开多值）：
+ * `!` 排除口径（下标后缀：! 是排除，0 是第 1 个，-1 最后一个，: 隔开多值）：
  * 从结果集去掉指定位置的元素；越界位置静默忽略（排除语义是过滤，不是定位）。
  */
 export function applyExclude<T>(arr: T[], exclude: number[] | undefined): T[] {
@@ -122,13 +122,12 @@ const RELATIVE_SELECTOR = /(?:^|,)\s*[>+~]|\(\s*[>+~]/
 /**
  * 链步命中集 = 当前元素自身（若它自己就匹配）+ 其后代命中；逐父展开、自身排在其全部后代之前、整体去重。
  *
- * 为什么要含自身：对面 jsoup 的四种选择步（`select` / `getElementsByTag` / `getElementsByClass` /
- * `Collector.collect`）都把当前元素自己算进命中集，只有 `children()` 不算——本机实测 jsoup
- * 四步全含、自身优先（版本成色住矩阵行 `a-default-step-self-inclusion`）。cheerio 只有后代语义，于是
- * 「类名与标签长在同一个元素上」的写法（真形如 `<a class="page-link">` 配 `.page-link@a@href`）
- * 对面读得出、我们读空。裁决、代价与被否决的一侧
- * 见 `ADR-0029`；真机读数在矩阵行 `a-default-step-self-inclusion`。
- * 顺序不是细节：含自身会把 `.0`/`[0]` 的取位从「第一个后代」挪到「自身」，那是对面本来就在给的语义。
+ * 为什么要含自身：default 选择步把当前元素自己算进命中集，只有子节点那一支不算，
+ * 且自身排在其全部后代之前（分叉与读数住矩阵行 `a-default-step-self-inclusion`）。cheerio 只有
+ * 后代语义，于是「类名与标签长在同一个元素上」的写法（真形如 `<a class="page-link">` 配
+ * `.page-link@a@href`）按这条口径读得出、照 cheerio 的后代语义读空。裁决、代价与被否决的一侧见
+ * `ADR-0029`。
+ * 顺序不是细节：含自身会把 `.0`/`[0]` 的取位从「第一个后代」挪到「自身」。
  */
 export function selectStepWithSelf(
   $: CheerioAPI, cur: Cheerio<AnyNode>, selector: string, fromRoot = false,
@@ -172,7 +171,7 @@ export function evalDefault(
 
   // 按文本选元素（选择段语义）：text.x = 含该文本的元素（own text 包含、忽略大小写）；
   // ownText.x 是对称形态（此形态落到 CSS 上恒零命中，故本仓自定为「后代文本包含」，
-  // 与 ownText 终端的「直系」口径互为镜像——实测无源依赖，按更有用的方向实现）
+  // 与 ownText 终端的「直系」口径互为镜像——恒零命中的形态不自立一条读法，按更有用的方向实现）
   if ((seg.mode === 'text' || seg.mode === 'ownText') && seg.arg !== null && seg.arg !== '') {
     const picked = textContaining($, cur, seg.arg, seg.mode === 'text' ? 'own' : 'descendant')
     return pickNodes(seg, $, picked.toArray(), `${seg.mode}.${seg.arg}`)
@@ -187,18 +186,18 @@ export function evalDefault(
   }
 
   // 选择段实参：解析层只在 `x.y` 形态给 arg，裸 `x` 形态为 null。cheerio 对 null 与 '' 同义
-  // （`$(null)` 空集、`children(null)` 全部子节点，实测与 '' 逐项一致），故统一按空串取。
+  // （`$(null)` 空集、`children(null)` 全部子节点，与按 '' 逐项一致），故统一按空串取。
   const arg = seg.arg ?? ''
   let picked: Cheerio<AnyNode>
   try {
     switch (seg.mode) {
-      // `class.x y` = 同时含所有类 → CSS `.x.y` 链（直译后代选择器恒零命中；上游把整串当**一个**
-      // 类名交给 jsoup 同样读不出——本仓这一侧更宽，矩阵行 `a-class-multi-token-arg`；
+      // `class.x y` = 同时含所有类 → CSS `.x.y` 链（直译后代选择器恒零命中；把整串当**一个**
+      // 类名同样读不出——本仓这一侧更宽，矩阵行 `a-class-multi-token-arg`；
       // 钉子 `tests/engine/select.test.ts` 的「同时含两个类」）
       case 'class': picked = $(selectStepWithSelf($, cur, '.' + arg.trim().split(/\s+/).filter(Boolean).join('.'), fromRoot)); break
       case 'id': picked = $(selectStepWithSelf($, cur, '#' + arg, fromRoot)); break
       case 'tag': picked = $(selectStepWithSelf($, cur, arg, fromRoot)); break
-      // child/children 不含自身：对面这两支走 `temp.children()`，本来就不算当前元素自己
+      // child/children 不含自身：这两支按子节点集合，本来就不算当前元素自己
       case 'child': picked = cur.children(arg); break
       default: picked = cur.children(); break // children
     }
@@ -237,7 +236,7 @@ function textContaining(
   const candidates: AnyNode[] = []
   const seen = new Set<AnyNode>()
   // cur 的节点子树互相重叠（链首 $('*') 就是全集）——逐节点下钻必须去重，
-  // 否则同一元素被祖先子树反复收集（`text.下一页@href` 实测一个 href 出 5 份）
+  // 否则同一元素被祖先子树反复收集（`text.下一页@href` 这类形态会让同一个 href 出好几份）
   const visit = (n: AnyNode): void => {
     if (seen.has(n)) return
     seen.add(n)
@@ -249,7 +248,7 @@ function textContaining(
 }
 
 /** 元素文本按口径取：own = 直系文本节点合并（`directText`），descendant = 全部后代文本。
- *  `text.x`/`ownText.x` 选择段与 jsoup `:contains`/`:containsOwn` 伪类（css.ts）共用——
+ *  `text.x`/`ownText.x` 选择段与 `:contains`/`:containsOwn` 文本伪类（css.ts）共用——
  *  「直系文本」与「子树文本」的定义各只住一处（后者是 `dom.ts` 的 `rawTextOf`）。 */
 export function textOf($: CheerioAPI, el: AnyNode, scope: 'own' | 'descendant'): string {
   return scope === 'own' ? directText($, el) : rawTextOf(el)
@@ -286,7 +285,7 @@ function getValue(
 
   // attr 终端：取元素自身属性，空则向下兜底第一个含该属性的后代
   // （与 href/src 同口径，html/body 包装不兜底）；**空值丢弃 + 去重**。
-  // 真实源 ruleBookUrl `@onclick`、`@value`、`@_src` 全靠它。
+  // ruleBookUrl 存在以 `@onclick`、`@value`、`@_src` 取属性的形态，靠这条兜底承接。
   if (seg.mode === 'attr') {
     const name = seg.arg ?? ''
     const seen = new Set<string>()

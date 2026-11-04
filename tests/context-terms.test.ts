@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { MATRIX_ROW_IDS, MATRIX_SOURCE } from './legado-coverage/matrix-source.js'
 import { withoutComments } from './without-comments.js'
 
 /**
@@ -9,7 +10,7 @@ import { withoutComments } from './without-comments.js'
  *
  * 为什么要机器门而不是信任这份表：它是接活时最先读的一页，指着不存在的符号比没有更糟——
  * 「符号删了、文档还留着」正是本门要防的漂移。判据按**符号**查（剥注释后的
- * src/** 与仓库根 `*.ts`），注释里提一嘴不算实现；矩阵行 id 形态另走 `matrix.ts`。
+ * src/** 与仓库根 `*.ts`），注释里提一嘴不算实现；矩阵行 id 形态另走 `matrix-source.ts`。
  *
  * 第二条门守词汇表自身的两条承诺：**每个词条都点名实现位置**（不许退化成散文 glossary）、
  * **不许指已出库的东西**（本仓在册的散文文档是 `README.md` / `AGENTS.md` / 本表与 `docs/**`）。
@@ -36,7 +37,6 @@ function productionText(): string {
   return chunks.join('\n')
 }
 const CODE = productionText()
-const MATRIX_SRC = readFileSync(join(ROOT, 'tests', 'legado-coverage', 'matrix.ts'), 'utf8')
 
 interface Term { name: string; body: string; line: number }
 function terms(): Term[] {
@@ -104,7 +104,7 @@ describe('CONTEXT.md 的词条与锚点', () => {
       for (const a of anchors(t.body)) {
         if (!isSymbol(a) || isPath(a)) continue
         if (CODE.includes(a)) continue
-        if (MATRIX_SRC.includes(a)) continue
+        if (MATRIX_SOURCE.includes(a)) continue
         bad.push(`${t.name} → ${a}`)
       }
     }
@@ -113,7 +113,7 @@ describe('CONTEXT.md 的词条与锚点', () => {
 
   it('引用的矩阵行 id 在册', () => {
     const bad: string[] = []
-    for (const t of T) for (const a of anchors(t.body)) if (isMatrixRow(a) && !MATRIX_SRC.includes(`id: '${a}'`)) bad.push(`${t.name} → ${a}`)
+    for (const t of T) for (const a of anchors(t.body)) if (isMatrixRow(a) && !MATRIX_ROW_IDS.has(a)) bad.push(`${t.name} → ${a}`)
     expect(bad, `指向不存在的矩阵行：\n${bad.join('\n')}`).toEqual([])
   })
 })

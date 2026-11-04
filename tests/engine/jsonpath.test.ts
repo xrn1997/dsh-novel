@@ -56,13 +56,13 @@ describe('JSONPath 子集', () => {
     expect(() => evalJsonPath('$.chapters.&', data, L, 'toc')).toThrow(UnsupportedRuleError)
   })
 
-  it('真实源形态：无点下标与尾通配（冗余点 .[*]）', () => {
+  it('无点下标与尾通配（冗余点 .[*]）', () => {
     expect(
       evalJsonPath('$.chapterInfo.chapters.[*]', { chapterInfo: { chapters: ['x'] } }, L, 'toc'),
     ).toEqual({ kind: 'list', items: ['x'] }) // 允许 `.[*]` 的冗余点
   })
 
-  it('属性通配 .*（真实源 $.data.* / $.comics.*——对象取全部值、数组取全部元素）', () => {
+  it('属性通配 .*（$.data.* / $.comics.*——对象取全部值、数组取全部元素）', () => {
     expect(evalJsonPath('$.data.*', { data: { a: 'x', b: 'y' } }, L, 'search'))
       .toEqual({ kind: 'list', items: ['x', 'y'] })
     expect(evalJsonPath('$.comics.*', { comics: ['c1', 'c2'] }, L, 'search'))

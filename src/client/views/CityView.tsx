@@ -76,7 +76,7 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
       let list: ExploreSources['sources']
       try {
         const body = await deps.apiGet<ExploreSources>(ROUTES.exploreKinds.path)
-        // 过线形状不靠类型声明作保（旧宿主与 HMR 错位窗口里这一格可能整个缺席）。缺清单按
+        // 过线形状不靠类型声明作保（未提供该服务的宿主、或 HMR 错位窗口里这一格可能整个缺席）。缺清单按
         // 「读不到」处置，与下面 catch 同一口径——落成空列表等于多摆一个假空态。
         const raw: unknown = body.sources
         if (!Array.isArray(raw)) {

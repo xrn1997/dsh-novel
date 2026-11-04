@@ -45,7 +45,7 @@ export interface SourceEvalBookContext {
  *  `tests/services/defaults.test.ts` 的对齐钉子守——引擎不许反向引这里（依赖方向红线）。 */
 export const DEFAULT_JS_BUDGET_MS = 15_000
 
-/** 脚本可见的 `book` 镜像（对面脚本里的 `book` 是书架上那本书）。三项身份由本仓按面给
+/** 脚本可见的 `book` 镜像（脚本侧的 `book` 语义就是书架上那本书）。三项身份由本仓按面给
  *  （`bookUrl`/`origin`/目录面的 `tocUrl`），其余字段取**书架那条**（`title` 映射成脚本读的 `name`）；
  *  书架没有的字段不注入（读到 undefined 与「未设置」同形，不编值）。
  *  逐面实读与缺口：矩阵行 `h-book-mirror-fields`。 */
@@ -184,8 +184,8 @@ export function engineContextOf(
     fetchConn: engineFetchConn(fetcher, headers),
     // java.getWebViewUA 的口径：本仓真发出去的那条 UA（同步取，与 fetch 同一套静态头解析）
     userAgent: () => effectiveUserAgent(source),
-    // 脚本可见的源实体字段：**按 raw 现读**，只投影脚本真读到的（对面脚本里的 source 是字段面
-    // 很大的书源实体，本仓按现库需求逐字段接线——现量见矩阵行 `h-source-entity-fields`）。
+    // 脚本可见的源实体字段：**按 raw 现读**，只投影脚本真读到的（脚本里的 source 是一面很大的
+    // 书源实体，本仓按现库需求逐字段接线——现量见矩阵行 `h-source-entity-fields`）。
     sourceName: source.name,
     sourceComment: rawStringField(source.raw, 'bookSourceComment'),
     ...(source.rules.jsLib === null ? {} : { jsLib: source.rules.jsLib }),

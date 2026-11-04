@@ -19,9 +19,8 @@ export function md5Hex16(s: string): string {
 }
 
 /**
- * JCA 算法名 → node 摘要名。脚本按 Java 的算法名传参（JCA 的 `MessageDigest.getInstance(name)` /
- * `Mac.getInstance(name)` 命名族：`MD5`/`SHA-256`/`HmacSHA512`…），node 的名字族不一样，且
- * 名字对不上在 Java 侧要抛 NoSuchAlgorithmException —— 所以**认不出就点名抛错**，绝不静默退成 md5。
+ * 摘要算法名 → node 摘要名。书源脚本按这套命名族传参（`MD5` / `SHA-256` / `HmacSHA512`
+ * 这一族），node 的名字族不一样；名字对不上就点名抛错——**认不出就抛，绝不静默退成 md5**。
  * 刻意用显式表而不是 `crypto.getHashNames()`：后者在部分运行时里不存在（本仓实测 vitest 的
  * node realm 就没有该方法），拿它当白名单会让整桥在加载期炸。
  */
@@ -32,7 +31,7 @@ const JCA_TO_NODE_HASH: Record<string, string> = {
   ripemd160: 'ripemd160',
 }
 
-/** `stripHmac` 为 HMAC 族而设：JCA 叫 `HmacSHA256`，node 的 `createHmac` 要的是摘要名 `sha256`
+/** `stripHmac` 为 HMAC 族而设：脚本传 `HmacSHA256`，node 的 `createHmac` 要的是摘要名 `sha256`
  *  （HMAC 族的算法名只承担「用哪个摘要」，`Hmac` 前缀是冗余的）。 */
 export function jcaHashName(algorithm: string, stripHmac = false): string {
   const raw = algorithm
@@ -50,7 +49,7 @@ export function digestHex(data: string, algorithm: string): string {
   return crypto.createHash(jcaHashName(algorithm)).update(data, 'utf8').digest('hex')
 }
 
-/** java.digestBase64Str：标准 base64、无换行（形态同 Android `Base64.NO_WRAP`） */
+/** java.digestBase64Str：标准 base64、**不插换行**（带换行的 base64 会让站点拒收） */
 export function digestBase64(data: string, algorithm: string): string {
   return crypto.createHash(jcaHashName(algorithm)).update(data, 'utf8').digest('base64')
 }
@@ -94,7 +93,7 @@ export function hexDecodeToString(hex: string): string {
   return Buffer.from(clean, 'hex').toString('utf8')
 }
 
-/** UTF-8 字符串 → 十六进制串（`java.hexEncodeToString` 宿主实现；对面 Kotlin `toHexString` = 小写）。 */
+/** UTF-8 字符串 → 十六进制串（`java.hexEncodeToString` 宿主实现；产出**小写**，与站点侧的期望一致）。 */
 export function hexEncodeToString(utf8: string): string {
   return Buffer.from(utf8, 'utf8').toString('hex')
 }
@@ -161,7 +160,7 @@ function safeFromCodePoint(code: number, fallback: string): string {
 /**
  * 相对地址绝对化（五条口径）：
  *  ① base 空 → 返回 trim 后的相对串（**不猜**成任何站点）；
- *  ② base 先剥 `,` 之后的请求选项（`substringBefore(",")`——URL 即请求规格那条通用教训）；
+ *  ② base 先剥 `,` 之后的请求选项（`substringBefore(",")`——base 常带选项串尾，不剥会被解析进路径）；
  *  ③ 相对串已是绝对地址 / data URI → 原样；
  *  ④ `javascript` 开头 → 空串（口径是返回空串，不是原样透出）；
  *  ⑤ 其余按 base 解析，解析失败回退 trim 原串。
@@ -248,7 +247,7 @@ export function engineValueToStrings(v: EngineValue): string[] {
 
 /**
  * PNG → ARGB 像素数组（`Packages.android.graphics.BitmapFactory.decodeStream` 宿主实现）。
- * Android 那套系统解码在本仓不可用；改以 node:zlib 解 IDAT + 逐行去滤波自实现——
+ * 本仓不引外部位图解码库，改以 node:zlib 解 IDAT + 逐行去滤波自实现——
  * 支持位深 1/2/4/8/16（16 取高字节）、颜色类型 0/2/3/4/6、tRNS 透明、非隔行。
  * 隔行（Adam7）/未知滤波/数据不足 → 抛错（宁炸不猜：给错位像素比报错坏得多）。
  *
@@ -388,7 +387,7 @@ function paeth(a: number, b: number, c: number): number {
   return pa <= pb && pa <= pc ? a : (pb <= pc ? b : c)
 }
 
-/** Java charset 名归一（legado 书源脚本传 `ISO8859_1` 这类 Java 别名）：剥分隔符小写后查表，
+/** charset 名归一（legado 书源脚本传 `ISO8859_1` 这类别名）：剥分隔符小写后查表，
  *  未命中回传原名交给 iconv 判定（encodingExists 不成立 → 调用方如实报错，不猜编码）。 */
 export function normalizeCharset(raw: string): string {
   const s = raw.trim().replace(/[-_\s]/g, '').toLowerCase()
@@ -416,9 +415,9 @@ export function javaDecode(bytes: Uint8Array, charset: string): string {
 }
 
 // ── 中文数字（chineseNumToInt / toNumChapter 共用的一条算法）────────────────────────────
-// 照搬这条既有算法而不是自写一个「更聪明」的：`一千一` 按它算出 1100（末位数字跟在「千」后按
-// 「补一位」处理 = 1×1000/10，而 `一千二百` 是 1200），源作者要的就是这个输出——换一套算法会
-// 静默改掉他们排序与标题规整的结果。两个样例都钉在 `tests/engine/js-utils.test.ts`。
+// 中文数字口径钉在这条算法上，本仓不自写一个「更聪明」的实现：`一千一` 按它算出 1100
+// （末位数字跟在「千」后按「补一位」处理 = 1×1000/10，而 `一千二百` 是 1200）——换一套算法会
+// 静默改掉输入脚本的排序与标题规整结果，这里要交付的是格式口径而不是数学正确。两个样例都钉在 `tests/engine/js-utils.test.ts`。
 const CHN_MAP: Record<string, number> = {}
 for (const [i, ch] of Array.from('零一二三四五六七八九十').entries()) CHN_MAP[ch] = i
 for (const [i, ch] of Array.from('〇壹贰叁肆伍陆柒捌玖拾').entries()) CHN_MAP[ch] = i

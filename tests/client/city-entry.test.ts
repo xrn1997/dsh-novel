@@ -4,8 +4,8 @@ import type { CityEntryInput } from '../../src/client/city-entry.js'
 import type { ExploreSources } from '../../src/shared/wire.js'
 
 /** 书城进入判据的钉子：一张动作表说完「源清单 / 记住的源与分类 / 恢复读是否已定 / 自动那条路是否
- *  已经走过 / 服务端此刻那一轮」到唯一动作的映射。纯函数、零 React、零 DOM——不再靠卡 promise +
- *  sleep 问竞态（那条竞态的接线面仍由 `city-view.test.tsx` 守）。
+ *  已经走过 / 服务端此刻那一轮」到唯一动作的映射。纯函数、零 React、零 DOM——判据只回答该不该动，
+ *  竞态的接线面归 `city-view.test.tsx` 守。
  *
  *  手点路径刻意不在判据里：`CityView` 的 `pick` 不等恢复读、恒提交（切源/切类必须马上有反应）。
  *  这条语义的钉子住在 `city-view.test.tsx` 的「手点当前这一类也照旧提交」——判据只回答自动那条路

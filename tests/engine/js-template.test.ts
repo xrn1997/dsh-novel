@@ -5,19 +5,19 @@ import { evaluate } from '../../src/engine/index.js'
  * **js 段代码文本里的 `{{…}}` 要先被替换，再交给脚本执行**。
  *
  * 段循环的顺序是先对**规则文本本身**做插值（把 `{{…}}` 替换掉），再按 mode 分发到脚本执行——
- * 所以对 js 段里的字符串字面量同样生效。真实源大量靠这条拼 URL：
- * 米读小说的 `ruleBookInfo.tocUrl` 与 `ruleToc.chapterUrl` 都是
+ * 所以对 js 段里的字符串字面量同样生效。脚本拼 URL 就靠这条：
+ * 有源的 `ruleBookInfo.tocUrl` 与 `ruleToc.chapterUrl` 都是
  * `@js: "https://…/chapter_list/100/{{$.book_id}}.txt"`（try/catch 选主备域名）；
  * js 段里嵌 `{{…}}` 的需求方现量重算走 `DSH_PARSE_CENSUS=1`。
  *
  * js 段里的插值在进沙箱前做完：别把 js 段原样送进去，否则脚本返回**带字面花括号的残 URL**
- * 直接发出去（真机实证：米读小说 toc 404 打到编码后的花括号段）。口径与模板字面段同一：
+ * 直接发出去（插值段没被替换就发出去的形状打到 404）。口径与模板字面段同一：
  * 插值段 Miss → 整段 Miss，不发残 URL。
  */
 
 const CTX = { html: '', json: { book_id: '9g7', data: { id: 12 } }, baseUrl: 'https://x.com' }
 
-describe('js 段代码里的 {{…}} 先插值再执行（makeUpRule 口径）', () => {
+describe('js 段代码里的 {{…}} 先插值再执行', () => {
   it('JSONPath 内嵌段被替换进字符串字面量', async () => {
     const v = await evaluate('@js:"https://x.com/l/{{$.book_id}}.txt"', CTX, 'detail', 'value')
     expect(v).toEqual({ kind: 'value', text: 'https://x.com/l/9g7.txt' })
@@ -41,9 +41,9 @@ describe('js 段代码里的 {{…}} 先插值再执行（makeUpRule 口径）',
   })
 })
 
-describe('js 段代码里的 JS 模板字面量不被当插值点（中文书城回归钉）', () => {
+describe('js 段代码里的 JS 模板字面量不被当插值点（回归钉）', () => {
   it('${$.x} 由脚本自己求值，不当成单括号 JSONPath 撕走', async () => {
-    // 中文书城 ruleToc.chapterList 的真形态：JSON.parse(result).list.map($=>{ … `${$.bookid}` … })
+    // `ruleToc.chapterList` 里的形态：JSON.parse(result).list.map($=>{ … `${$.bookid}` … })
     // ——`$` 是回调参数。若把 `{$…}` 当内嵌 JSONPath，这段会整段 Miss，目录 0 章。
     const code = '[{x:7}].map(function($){ return "u=" + `${$.x}!` })[0]'
     const v = await evaluate('@js:' + code,

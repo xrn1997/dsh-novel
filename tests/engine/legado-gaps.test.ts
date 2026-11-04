@@ -11,7 +11,7 @@ import type { EvalContext, Facet, SegmentLoc } from '../../src/engine/types.js'
 import { pick } from '../support/fixture.js'
 
 /**
- * 真机缺口的回归钉子（29 条书架实测诊断出的五处缺口）：
+ * 缺口的回归钉子（脚本打到缺口的五处形态，逐族点名）：
  * A. cache.putMemory/getFromMemory/deleteMemory 三别名 + java.randomUUID
  * B. `tag.li.` 尾点号（!排除 切走 base 后的尾巴）不炸选择器
  * E. 字节组方法 / downloadFile↔readTxtFile / Packages.*（PNG/AES/HMAC）沙箱面
@@ -51,19 +51,19 @@ describe('A. cache 内存三别名 + randomUUID（协议表行）', () => {
     expect(keys).toContain('getFromMemory')
     expect(keys).toContain('deleteMemory')
   })
-  it('java.randomUUID：小写带连字符的 uuid 形态（顶点小说 header 规则实证）', () => {
+  it('java.randomUUID：小写带连字符的 uuid 形态（header 规则里的写法）', () => {
     const d = depsOf()
     const a = invokeJavaMethod(d, 'randomUUID', []) as string
     expect(a).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
     expect(invokeJavaMethod(d, 'randomUUID', [])).not.toBe(a)
   })
-  it('vm 形态：cache.putMemory → cache.getFromMemory 跨段读回（novel.cooks.tw 目录脚本形态）', async () => {
+  it('vm 形态：cache.putMemory → cache.getFromMemory 跨段读回（目录脚本的跨段读回形态）', async () => {
     const r = await run('cache.putMemory("articleid", "abc"); cache.getFromMemory("articleid")')
     expect(r.value).toMatchObject({ kind: 'value', text: 'abc' })
   })
 })
 
-describe('B. 段尾点号剥离（看书源 tag.li.!0:1:-1 实证）', () => {
+describe('B. 段尾点号剥离（`tag.li.!0:1:-1` 形态）', () => {
   it('!排除 切走后的尾点不再进选择器：mode/arg 干净、exclude 保留', () => {
     const p = parseRule('class.pages@tag.ul@tag.li.!0:1:-1@tag.a@href')
     const seg = pick(pick(p.branches, 0).segments, 2) as { kind: string; mode: string; arg: string; exclude: number[] }
@@ -241,11 +241,10 @@ describe('E-4. Packages.* 沙箱面（爱腐文密钥图解密链的载体）', 
     `)
     expect(String((r.value as { text?: string }).text)).toBe('斗破苍穹正文'.repeat(8))
   })
-  it('Packages.android.util.Base64.decode 出字节组：真源的「解 base64 拿真地址」链（Hi歌曲音乐网 ruleContent.content）', async () => {
-    // 现库真量（2026-09-28 按 raw 全串扫）：`Packages.android.util.Base64.decode` **1 源 1 处**——
-    // Hi歌曲音乐网 的正文规则从页面里的 `let code = "…"` 抠出 base64，解成字节再按 UTF-8 还原成
-    // 真正的地址。`android.util` 路径已挂载：缺挂载会抛「未知 Packages 包路径」⇒ 整条正文规则失败
-    // （对面 Rhino 有真 android.util.Base64，对面读得出）。
+  it('Packages.android.util.Base64.decode 出字节组：「解 base64 拿真地址」那一链（形态在册，读数见矩阵 h-packages-android-base64）', async () => {
+    // 现库确有这一形态（读数与锚住矩阵 h-packages-android-base64 行）：那条正文规则从页面里的
+    // `let code = "…"` 抠出 base64，解成字节再按 UTF-8 还原成
+    // 真正的地址。`android.util` 路径已挂载：缺挂载会抛「未知 Packages 包路径」⇒ 整条正文规则失败。
     const realUrl = 'https://higequ.com/play/12345'
     const b64 = Buffer.from(realUrl, 'utf8').toString('base64')
     const r = await run(
@@ -254,12 +253,13 @@ describe('E-4. Packages.* 沙箱面（爱腐文密钥图解密链的载体）', 
     )
     expect(String((r.value as { text?: string }).text)).toBe(realUrl)
   })
-  it('decode 的 flags 不改变常规解码；URL 字母表也收（**比对面宽的刻意子集**，理由见注释）', async () => {
-    // Android `Base64.decode(text, flags)` 里 flags 只有 URL_SAFE(8) 会换字母表，DEFAULT(0) 遇到
-    // `-`/`_` 判坏输入抛错。本仓走 Node 的 base64 解码器——它**两种字母表都收**（实测 `-_-_fwA` 与
-    // `+/+/fwA=` 同解），所以「标志位换字母表」这一条在这里**不可观测**，硬写成断言等于自证 Node 行为。
-    // 维持宽容并记下偏离：现库那条真源的正则已把输入限死在 `[A-Za-z0-9+/=]+`，没有任何源靠「拒 -_」行事，
-    // 因此不为此加一条 stricter-than-needed 的校验（宁缺毋滥的反面是给没需求方的形态发明行为）。
+  it('decode 的 flags 不改变常规解码；URL 字母表也收（理由见注释）', async () => {
+    // 解码器按标志位区分字母表（默认档拒 `-`/`_`、URL_SAFE 档换字母表），但本仓走 Node 的
+    // base64 解码器——它**两种字母表都收**，所以「标志位换字母表」这一条在这里**不可观测**，
+    // 硬写成断言等于自证 Node 行为。
+    // 维持宽容并记下偏离：现库唯一需求方的正则已把输入限死在 `[A-Za-z0-9+/=]+`，没有任何源靠「拒 -_」行事
+    // （读数见矩阵 h-packages-android-base64 行），因此不为此加一条 stricter-than-needed 的校验
+    // （宁缺毋滥的反面是给没需求方的形态发明行为）。
     const bytes = [0xfb, 0xff, 0xbf, 0x7f, 0x00]
     const std = Buffer.from(bytes).toString('base64')     // 含 + 与 /
     const urlAlph = Buffer.from(bytes).toString('base64url') // 含 - 与 _
@@ -268,7 +268,7 @@ describe('E-4. Packages.* 沙箱面（爱腐文密钥图解密链的载体）', 
       expect(JSON.parse(String((r.value as { text?: string }).text)), `flag=${flag} input=${input}`).toEqual(bytes)
     }
   })
-  it('decode 容忍缺填充与内嵌换行（与 Android 解码器同向）', async () => {
+  it('decode 容忍缺填充与内嵌换行（与设备侧解码器同向）', async () => {
     const six = [104, 105, 103, 101, 113, 117]   // 'higequ'
     const a = await run('JSON.stringify(Packages.android.util.Base64.decode("aGlnZXF1", 2))')
     expect(JSON.parse(String((a.value as { text?: string }).text))).toEqual(six)
@@ -277,10 +277,10 @@ describe('E-4. Packages.* 沙箱面（爱腐文密钥图解密链的载体）', 
     const c = await run('JSON.stringify(Packages.android.util.Base64.decode("aGln\\nZXF1", 0))') // 折行
     expect(JSON.parse(String((c.value as { text?: string }).text))).toEqual(six)
   })
-  it('未实现的包路径如实点名——不是裸 TypeError（对面取到包名不炸、用到才炸）', async () => {
-    // 现库真量（2026-09-28 按 raw 全串扫）：`Packages.java.net` 2 处（海棠搜书 loginUrl 的
-    // `new Packages.java.net.URL(u)` 加 openConnection 那一路）、`android.util` / `android.webkit` /
-    // `io.legado` 各 1 处。语义对齐对面 Rhino：`Packages.x.y` 是**惰性命名空间**（truthy，可探测），
+  it('未实现的包路径如实点名——不是裸 TypeError（取到包名不炸、用到才炸）', async () => {
+    // 现库在册形态：`Packages.java.net`（一个源 loginUrl 的 `new Packages.java.net.URL(u)` 加
+    // openConnection 那一路）与 `android.util` / `android.webkit` / `io.legado` 各一处——
+    // 计数与锚住矩阵 h-packages-unknown-path 行。这套 Packages 面的语义是：`Packages.x.y` 是**惰性命名空间**（truthy，可探测），
     // 只有真去 new/调用才抛 ClassNotFound。改这里注意：`g.Packages` 不能是普通对象字面量——
     // 未实现路径会取到 `undefined`、抛裸 TypeError：既没说是哪条包路径，也让审计归因认不出
     // （那条消息不在任何锚点里 → 会落 `unattributed` 而不是 `host-gap`）。

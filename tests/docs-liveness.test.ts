@@ -9,70 +9,27 @@
  * 三条配套判据各管一段，别合并：
  * - `tests/context-terms.test.ts`：`CONTEXT.md` 点名的符号能不能现查得到；
  * - `tests/comment-altitude.test.ts`：代码注释是不是在抄代码；
- * - 本文件：**全部手写文档**的路径、引用形态、职责边界与 ADR 形状。
+ * - 本文件：**全部手写文档**的路径、引用形态、职责边界、ADR 形状，以及散文只对本项目负责。
  *
  * 两类例外要写明理由再进白名单：留在 ADR 里的「当时」坐标，与看着像路径其实不是路径的串。
  * 白名单不是「改不动就跳过」——那种条目应当改文档。死名没有豁免。
  */
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { dirname, join, resolve, sep } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import {
+  CORPUS as corpus,
+  DOC_CORPUS as docCorpus,
+  ROOT,
+  ROOT_DOCS as rootDocs,
+  eachLine,
+  exists,
+  pathExists,
+  read,
+  rel,
+} from './doc-corpus.js'
+import { MATRIX_PATH } from './legado-coverage/matrix-source.js'
 import { must, pick } from './support/fixture.js'
-
-const ROOT = resolve(fileURLToPath(import.meta.url), '../..')
-
-/** 报错信息里用相对路径，别把这台机器的绝对路径打进测试输出。 */
-function rel(file: string): string {
-  return file.slice(ROOT.length + 1).replace(/\\/g, '/')
-}
-
-/** 生成快照与构建产物不是判据的家；`lib` 与 `.qoder` 一律不进语料。 */
-function walk(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir)) {
-    if (entry === 'node_modules' || entry === 'lib' || entry === '.git' || entry === '.qoder') continue
-    const p = join(dir, entry)
-    if (statSync(p).isDirectory()) walk(p, out)
-    else if (/\.(md|ts|tsx|css)$/.test(entry)) out.push(p)
-  }
-  return out
-}
-
-/**
- * 被测的是手写的那几份 + 代码注释；生成的 `.qoder/repowiki` 不在内。
- * 自排除：本文件正文引用着被禁的称呼与历史文件名，扫自己必然自红。这是唯一的自排除。
- */
-const targets = [
-  join(ROOT, 'AGENTS.md'),
-  join(ROOT, 'CONTEXT.md'),
-  join(ROOT, 'README.md'),
-  join(ROOT, 'CONTRIBUTING.md'),
-  join(ROOT, 'CHANGELOG.md'),
-  ...walk(join(ROOT, 'docs')),
-  ...walk(join(ROOT, 'src')),
-  ...walk(join(ROOT, 'tests')),
-].filter((f) => f !== join(ROOT, 'tests', 'docs-liveness.test.ts'))
-
-/** 一次读进来，下面几道门共用这份语料。 */
-const corpus = targets.map((file) => ({
-  file,
-  lines: readFileSync(file, 'utf8').split(/\r?\n/),
-}))
-
-/** 手写文档（根文档 + docs/**）；结构门只看这些，src/tests 的注释不参与。 */
-const rootDocs = new Set([
-  join(ROOT, 'AGENTS.md'),
-  join(ROOT, 'CONTEXT.md'),
-  join(ROOT, 'README.md'),
-  join(ROOT, 'CONTRIBUTING.md'),
-  join(ROOT, 'CHANGELOG.md'),
-])
-const docsRoot = join(ROOT, 'docs') + sep
-const docCorpus = corpus.filter(({ file }) => rootDocs.has(file) || file.startsWith(docsRoot))
-
-function eachLine(visit: (file: string, line: string, index: number) => void): void {
-  for (const { file, lines } of corpus) lines.forEach((line, index) => visit(file, line, index))
-}
 
 /** 指向仓内文件的相对路径：`src/…`、`tests/…`、`docs/…`、`locale/…`。 */
 const PATH_REF = /(?:^|[^A-Za-z0-9_./~-])(src|tests|docs|locale)\/([A-Za-z0-9_\-./]*)/g
@@ -80,7 +37,9 @@ const PATH_REF = /(?:^|[^A-Za-z0-9_./~-])(src|tests|docs|locale)\/([A-Za-z0-9_\-
 const BACKTICK_REL = /`([A-Za-z0-9_-]+\/[A-Za-z0-9_./-]*\.(?:ts|tsx|js|mjs|cjs|json|md|yml|yaml))`/g
 
 /** 看着像路径、其实不是路径，或故意保留的历史名。每条都要有理由。 */
-const ALLOWED: Record<string, string> = {}
+const ALLOWED: Record<string, string> = {
+  'tests/replay/report.md': 'test:compat 的生成物，已 gitignore；跑门后才有',
+}
 /** 判据自身的负控夹具：这些文件在内存里搭合成依赖图，写的不是仓内路径。 */
 const SYNTHETIC = new Set([join(ROOT, 'tests', 'layering.test.ts')])
 
@@ -142,19 +101,6 @@ interface CompatibilityManifest {
 function normalize(raw: string): string {
   // 中文句读与括号会紧跟在路径后面：剥掉尾部噪声
   return raw.replace(/[.,;:!?)\]}、。，；：）】」]+$/u, '')
-}
-
-function read(relPath: string): string {
-  return readFileSync(join(ROOT, relPath), 'utf8')
-}
-
-function pathExists(path: string): boolean {
-  try {
-    statSync(path)
-    return true
-  } catch {
-    return false
-  }
 }
 
 function stripFencedCode(markdown: string): string {
@@ -248,24 +194,6 @@ function numberedSections(relPath: string): Set<string> {
   return sections
 }
 
-function exists(path: string): boolean {
-  const candidates = [
-    path,
-    // 代码注释里的 ESM 请求带 `.js`，源文件是 `.ts` / `.tsx`
-    path.replace(/\.js$/, '.ts'),
-    path.replace(/\.js$/, '.tsx'),
-    path.replace(/\.ts$/, '.tsx'),
-  ]
-  return candidates.some((c) => {
-    try {
-      const s = statSync(join(ROOT, c))
-      return s.isFile() || s.isDirectory()
-    } catch {
-      return false
-    }
-  })
-}
-
 describe('文档门 · 指名的仓内路径必须存在', () => {
   it('扫描面非空（守卫不许对着空集合报绿）', () => {
     expect(corpus.length, '一个文件都没扫到？目录或后缀判据漂了').toBeGreaterThan(50)
@@ -297,7 +225,7 @@ describe('文档门 · 指名的仓内路径必须存在', () => {
           const p = must(m[1], '反引号路径')
           if (/^(?:\.{0,2}\/|https?:)/.test(p) || p.includes('*') || p.includes('<')) continue
           // 带前缀的路径已由上一枚判据管；这里只收裸相对路径。
-          if (/^(?:src|tests|docs|locale|node_modules|compat)\//.test(p)) continue
+          if (/^(?:src|tests|docs|locale|node_modules)\//.test(p)) continue
           if (p in ALLOWED || `src/${p}` in ALLOWED) continue
           // 首段既不在仓根也不在 src/ 下 ⇒ 这是外部包的路径，不是本仓的。
           const first = must(p.split('/')[0], '路径首段')
@@ -530,7 +458,7 @@ describe('文档门 · 文档分层与 ADR 形状', () => {
   it('每个 ADR 第一行是标题、紧跟标题有 Status 行', () => {
     const bad: string[] = []
     for (const name of adrFiles()) {
-      const lines = readFileSync(join(ROOT, 'docs', 'adr', name), 'utf8').split(/\r?\n/)
+      const lines = read(`docs/adr/${name}`).split(/\r?\n/)
       if (!/^# .+/.test(lines[0] ?? '')) bad.push(`${name}: 缺标题`)
       if (!/^Status: (accepted|superseded by \d{4})$/.test(lines[2] ?? '')) bad.push(`${name}: 缺 Status 或状态不合规`)
     }
@@ -539,7 +467,7 @@ describe('文档门 · 文档分层与 ADR 形状', () => {
 
   it('每个 ADR 都以锚点段收尾（允许折行）', () => {
     const bad = adrFiles().filter((name) => {
-      const blocks = readFileSync(join(ROOT, 'docs', 'adr', name), 'utf8')
+      const blocks = read(`docs/adr/${name}`)
         .split(/\r?\n\s*\r?\n/)
         .filter((block) => block.trim() !== '')
       return !/^锚点：/.test((blocks.at(-1) ?? '').trimStart())
@@ -630,5 +558,62 @@ describe('文档门 · 截图清单', () => {
   it('判据认得出漂移（正控）', () => {
     expect(drift([...images, 'docs/screenshots/extra.png'], manifest)).not.toEqual([])
     expect(drift(images, [...manifest, 'docs/screenshots/extra.png'])).not.toEqual([])
+  })
+})
+
+/**
+ * `docs/AGENTS.md` §3 第 14 条的机械面：散文只对本项目负责。
+ * 扫描面是**散文**——手写文档正文、代码/测试的注释行，以及覆盖矩阵的数据行（`capability` 与
+ * `note` 是读数，也是散文）。代码行里的路径与符号是运行面（沙箱垫片名 `Packages.*` 与
+ * `org.jsoup.Jsoup.parse` 这类桥接名），不算指认。README 是出处的唯一家，按判据本身豁免。
+ * 本门只认这六族字面串；归属帽子与裸读数是第 14 条的**人判**面，不进本门判据（下面那条负控钉的就是这个边界）。
+ */
+const PROSE_BANNED: Array<[RegExp, string]> = [
+  [/对面/, '「对面」把外部项目放成了本仓的上位者'],
+  [/参考实现|本 fork/, '「参考实现 / 本 fork」在指认外部项目'],
+  [/\b[A-Za-z][A-Za-z0-9]*\.kt\b/, '点名外部项目的源码文件'],
+  [/HapeLee|gedoor/, '点名外部仓库'],
+  [/\b[0-9a-f]{40}\b/, 'commit sha 是采集记录，住 README'],
+  [/legado\s+\d+\.\d+/, '外部项目的版本号'],
+]
+
+/** 注释行：行注释、块注释的首尾与 JSDoc 续行。其余按代码处理。 */
+function isProseLine(line: string): boolean {
+  const t = line.trim()
+  return t.startsWith('//') || t.startsWith('/*') || t.startsWith('*/') || t.startsWith('*')
+}
+
+function bannedIn(lines: string[]): string[] {
+  const hits: string[] = []
+  lines.forEach((line, i) => {
+    for (const [re, why] of PROSE_BANNED) if (re.test(line)) hits.push(`${i + 1}: ${why}`)
+  })
+  return hits
+}
+
+describe('文档门 · 只对本项目负责', () => {
+  const README = join(ROOT, 'README.md')
+  const MATRIX = MATRIX_PATH
+
+  it('文档与注释不指认外部项目', () => {
+    const offenders: string[] = []
+    for (const { file, lines } of corpus) {
+      if (file === README) continue
+      const isDoc = file.startsWith(join(ROOT, 'docs')) || rootDocs.has(file) || file === MATRIX
+      lines.forEach((line, i) => {
+        if (!isDoc && !isProseLine(line)) return
+        for (const [re, why] of PROSE_BANNED) {
+          if (re.test(line)) offenders.push(`${rel(file)}:${i + 1} → ${why}`)
+        }
+      })
+    }
+    expect(offenders, `散文里还指认着外部项目：\n${offenders.join('\n')}`).toEqual([])
+  })
+
+  it('判据认得出违例（正控）', () => {
+    expect(bannedIn(['  // 判据照对面读法收口'])).not.toEqual([])
+    expect(bannedIn([" * 分母来自 help/AnalyzeRule.kt"])).not.toEqual([])
+    expect(bannedIn(['  // 快照抽自 commit 4285f7f1fe36e3fa556e1232a1f83ee1957b47f2'])).not.toEqual([])
+    expect(bannedIn(['  // 既有读法在此给空串'])).toEqual([])
   })
 })

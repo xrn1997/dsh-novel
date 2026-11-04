@@ -242,7 +242,7 @@ export const JAVA_PROTOCOL = [
     routeProbe: 'java.post("https://m.example.com", "a=1")',
     routePattern: String.raw`java\s*\.\s*post\s*\(`,
   }),
-  // java.get 的 HTTP 重载：上游 JsExtensions.get(url, headers) 返回 Connection.Response。
+  // java.get 的 HTTP 重载：脚本侧 `Connection.Response` 的返回值形状。
   // 单参变量 getter 仍走下面的 get 行；BOOTSTRAP 按实参个数分派（显式 undefined 仍是双参 HTTP）。
   method('getHttp', { obj: 'java' }, (d) => async (
     url: unknown, headersArg?: unknown,
@@ -291,15 +291,15 @@ export const JAVA_PROTOCOL = [
     }
     return d.ctx.userAgent()
   }),
-  // 部分源借 `getUserAgent() === getWebViewUA()` 做「这是源阅还是阅读」的特性探测
-  // （Linpx / 兽人小说站 jsLib）；本仓两者同源，故给同一个值，探测落到「非源阅」分支。
+  // 输入脚本里有拿 `getUserAgent() === getWebViewUA()` 探测特性集差异的形态；本仓两个方法同源，
+  // 返回同一个值，这类探测恒落「相等」一侧。
   method('getUserAgent', { obj: 'java' }, (d) => (): string => {
     if (!d.ctx.userAgent) {
       throw new JsSandboxError('java.getUserAgent 取不到出站 UA（ctx.userAgent 未接线）', { ...d.loc, facet: d.facet, script: d.code })
     }
     return d.ctx.userAgent()
   }),
-  // java.webView(url)：真浏览器取渲染后 HTML（Android WebView 的安全替代）
+  // java.webView(url)：真浏览器取渲染后 HTML（本仓不模拟 WebView 内核，直接用真浏览器）
   method('webView', { obj: 'java' }, (d) => async (url: unknown): Promise<string> => {
     const fn = d.ctx.webView
     if (!fn) {
@@ -316,9 +316,10 @@ export const JAVA_PROTOCOL = [
     // 别名 webViewGetSource 由挂载清单登记（表里没有这个脚本拼写），其写法随本行路由
     routePattern: String.raw`java\s*\.\s*(?:webView|webViewGetSource)\s*\(`,
   }),
-  // java.head(url, headers[, timeout])：HEAD 请求、**不跟重定向**（对面 followRedirects(false)），
+  // java.head(url, headers[, timeout])：HEAD 请求、**不跟重定向**——脚本要的正是跳转目标自身的
+  // 响应头，跟了跳转就拿不到 Location。
   // 数据面 = { url, statusCode, headers }；`.headers()` 方法壳在 BOOTSTRAP 里包（同 post，跨桥只走
-  // JSON）。脚本用它读 `res.headers()["location"]` 取图片直链（Linpx/兽人小说站 jsLib）。
+  // JSON）。脚本用它读 `res.headers()["location"]` 取图片直链。
   method('head', { obj: 'java' }, (d) => async (
     url: unknown, headersArg?: unknown,
   ): Promise<ResponseHost> => {
@@ -418,19 +419,19 @@ export const JAVA_PROTOCOL = [
     hMacHex(textOf(data), textOf(algorithm), textOf(key))),
   method('HMacBase64', { obj: 'java' }, () => (data: string, algorithm: string, key: string): string =>
     hMacBase64(textOf(data), textOf(algorithm), textOf(key))),
-  // 章节标题中文数字规整（真实源用它把「第五百章」写成「第500章」）
+  // 章节标题中文数字规整（输入脚本有用它把「第五百章」写成「第500章」的形态）
   method('toNumChapter', { obj: 'java' }, () => (s: string): string => toNumChapter(textOf(s))),
   method('encodeURI', { obj: 'java' }, () => (s: string): string => uriEncode(textOf(s))),
   method('hexDecodeToString', { obj: 'java' }, () => (hex: string): string => hexDecodeToString(textOf(hex))),
   method('hexEncodeToString', { obj: 'java' }, () => (utf8: string): string => hexEncodeToString(textOf(utf8))),
-  // ── AES 解密桥（真实源正文解密形态
+  // ── AES 解密桥（输入脚本的正文解密形态
   //    `java.aesBase64DecodeToString(data, key, transformation, iv)`——key/iv 为 utf8 字符串，
   //    PKCS5Padding ≡ PKCS7，Node crypto 原生支持）──
   method('aesBase64DecodeToString', { obj: 'java' }, (d) =>
     (data: string, key: string, transformation?: string, iv?: string): string =>
       aesDecryptB64(textOf(data), textOf(key), textOf(transformation ?? 'AES/CBC/PKCS5Padding'), textOf(iv ?? ''), d)),
   // `createSymmetricCrypto(...).decrypt(data)` 的宿主口：返回**字节**（number[]），脚本常再接
-  // `java.bytesToStr(decrypted)`（对面 SymmetricCrypto.decrypt 返 ByteArray；见 js-sandbox 的链式壳）。
+  // `java.bytesToStr(decrypted)`（decrypt 返字节数组；见 js-sandbox 的链式壳）。
   method('aesDecryptToBytes', { obj: 'java' }, (d) =>
     (data: string, key: string, transformation?: string, iv?: string): number[] =>
       Array.from(aesDecryptB64Buffer(textOf(data), textOf(key), textOf(transformation ?? 'AES/CBC/PKCS5Padding'), textOf(iv ?? ''), d))),
@@ -443,13 +444,13 @@ export const JAVA_PROTOCOL = [
   method('cookieRemove', { obj: 'cookie', as: 'removeCookie' }, (d) => (name: string): void => {
     jar(d).delete(textOf(name))
   }),
-  // cookie.replaceCookie(url, cookieString)：对面按 url 取旧表、合并新串再写回（CookieStore.kt）；
-  // 本仓垫片是按源键值表（无域），故只做「新串逐对覆盖」——与对面在单表内的可观测结果一致。
+  // cookie.replaceCookie(url, cookieString)：契约是「把新 cookie 串并进该 url 已有表」。
+  // 本仓垫片是按源键值表（无域分区），故实现为新串逐对覆盖——url 不进判据。
   method('cookieReplace', { obj: 'cookie', as: 'replaceCookie' }, (d) => (_url: string, raw: string): void => {
     const j = jar(d)
     for (const [k, v] of Object.entries(parseCookieString(textOf(raw)))) j.set(k, v)
   }),
-  // java.getCookie(tag[, key])：对面按 url-tag 读 CookieStore；本仓 jar 按**源**隔离（name→value），
+  // java.getCookie(tag[, key])：契约是按 url-tag 读整张 cookie 表；本仓 jar 按**源**隔离（name→value），
   // tag 不进判据——无 key 时取整表拼 cookie 串（近似，矩阵 `h-java-getcookie` 记差）。
   method('getCookie', { obj: 'java' }, (d) => (_tag: string, key?: unknown): string => {
     const j = jar(d)
@@ -473,8 +474,8 @@ export const JAVA_PROTOCOL = [
     sourceVars(d).set(textOf(key), v)
     return v          // put 返回写入的值（脚本有 `var x = source.put(k,v)` 的连写形态）
   }),
-  // ── cache 垫片（最小仿真：按源隔离的进程内键值表，
-  //    真实源 `cache.put('kkmh', …)` 搜索面写、目录面 `cache.get('kkmh')` 读的跨面形态）──
+  // ── cache 垫片（最小仿真：按源隔离的进程内键值表；输入脚本有搜索面写、
+  //    目录面读的跨面形态，表必须跨面存活）──
   method('cacheGet', { obj: 'cache', as: 'get' }, (d) => (key: string): string | null =>
     sourceCache(d).get(textOf(key)) ?? null),
   method('cachePut', { obj: 'cache', as: 'put' }, (d) => (key: string, value: unknown): void => {
@@ -485,7 +486,7 @@ export const JAVA_PROTOCOL = [
   }),
   // ── cache 内存三别名（putMemory/getFromMemory/deleteMemory）──
   // 内存/磁盘分层在本仓不存在：cache 垫片就是进程内键值表，三个别名与 get/put/delete 同存储；
-  // 它们只为真实源脚本的调用名而存在，不要按「另一层缓存」实现。
+  // 它们只为输入脚本的调用名而存在，不要按「另一层缓存」实现。
   method('cachePutMemory', { obj: 'cache', as: 'putMemory' }, (d) => (key: string, value: unknown): void => {
     sourceCache(d).set(textOf(key), value === null || value === undefined ? '' : textOf(value))
   }),
@@ -496,7 +497,7 @@ export const JAVA_PROTOCOL = [
   }),
   // ── 纯工具（续）────────────────────────────────────────────────────
   // randomUUID：小写带连字符的 UUID（crypto.randomUUID()）——
-  // `@js` 动态请求头生成 device id 的真实形态
+  // 输入脚本有 `@js` 动态请求头里用它生成 device id 的形态
   method('randomUUID', { obj: 'java' }, () => (): string => crypto.randomUUID()),
   // ── 字节组（strToBytes / hex·base64 ToByteArray）─────────────────────
   // 脚本侧字节统一用 number[]（0-255）承载：JSON 可序列化（跨 SAB RPC 安全）、`& 0xff` 语义不变。
@@ -512,8 +513,8 @@ export const JAVA_PROTOCOL = [
   }),
   method('base64DecodeToByteArray', { obj: 'java' }, () => (b64: string): number[] =>
     Array.from(Buffer.from(textOf(b64), 'base64'))),
-  // bytesToStr：与 strToBytes 互逆（真实源 AES 解密链 `java.bytesToStr(crypto.decrypt(x))`——
-  // 丁丁/盗版顶点/笔趣阁三源章节 URL）。默认 charset = UTF-8（对面 `String(bytes, charset("UTF-8"))`）。
+  // bytesToStr：与 strToBytes 互逆（输入脚本有 AES 解密链 `java.bytesToStr(crypto.decrypt(x))`——
+  // 走加密目录接口取章节 URL 的那类形态）。默认 charset = UTF-8（按 UTF-8 解字节）。
   method('bytesToStr', { obj: 'java' }, () => (bytes: unknown, charset?: unknown): string => {
     if (!Array.isArray(bytes) && !(bytes instanceof Uint8Array)) {
       throw new JsSandboxError(`bytesToStr 参数不是字节数组（${typeof bytes}）`, { facet: 'rule', segmentIndex: -1, segmentRaw: textOf(bytes).slice(0, 64), script: '' })
@@ -637,8 +638,7 @@ export const SANDBOX_MOUNTS = {
 
 /**
  * 宿主分派（表查，无逐案 switch）：返回 JSON 可序列化的值；async 行返回 Promise。
- * 参数为引导层 JSON.parse 出的原始数组——实现内部自行防御转换（与旧 switch 逐案
- * String()/Number() 的行为一致）。
+ * 参数为引导层 JSON.parse 出的原始数组——实现内部自行防御转换，分派处不逐案转型。
  */
 export function invokeJavaMethod(d: BridgeDeps, name: string, rawArgs: readonly unknown[]): unknown {
   const row = PROTOCOL_INDEX.get(name)
@@ -713,8 +713,7 @@ export function asyncRouteProbes(): { name: string; probe: string }[] {
 const GLOBAL_LOOSE = String.raw`java\s*\[`
 
 /** worker 路由谓词（evalJs 的 `useWorker` 判据）：全局松散支 + 表内 async 行的 routePattern
- *  拼出，**没有第二份手写正则**（旧字面量副本在迁移时随等价对照删除——改表漏改它就是路由与
- *  表行静默分叉）。**只影响性能与稳健性，不影响语义**：语义由哨兵桥给，认不出的等价写法先白跑
+ *  拼出，**没有第二份手写正则**（另存一份就是路由与表行静默分叉的口）。**只影响性能与稳健性，不影响语义**：语义由哨兵桥给，认不出的等价写法先白跑
  *  主线程、撞哨兵后换 worker 重跑（needsSyncBridge），两路同一口径（ADR-0005）。宽拼写
  *  （任何对象的 `.ajax(` / `.downloadFile(` 调用）随各自的表行登记——那是那一行的可达写法家族，
  *  不是无主启发。仍漏的只有真正间接形态（解构、with，以及首个实参里带右括号的双参 get）。

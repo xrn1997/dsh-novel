@@ -55,7 +55,7 @@ describe('审计失败归因', () => {
     expect(attributeError(realMessages.hostGapSegment)).toBe('host-gap')
   })
 
-  it('刻意闸口（对面静默、我们明确失败）→ guard', () => {
+  it('刻意闸口（静默跳过 vs 明确失败）→ guard', () => {
     expect(attributeError(realMessages.guardTocFallback)).toBe('guard')
     expect(attributeError(realMessages.guardAndroid)).toBe('guard')
     // 用户正则的死线：这一栏非零就是要人判「大而合法被误杀」，不能被算成站点坏

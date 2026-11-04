@@ -96,7 +96,7 @@ describe('CityView', () => {
     render(<CityView deps={depsOf()} />)
     await waitFor(() => expect(submitted).toEqual([['s1', '现代情感']]))
     expect(screen.getByRole('heading', { name: '现代情感' })).toBeTruthy()
-    expect(screen.getByText('半夏小说 · 通常书源')).toBeTruthy()   // 头行副标题报的是源，不再是「N 个源收录」
+    expect(screen.getByText('半夏小说 · 通常书源')).toBeTruthy()   // 头行副标题报的是源本身
   })
 
   it('StrictMode 双 effect：自动进入的提交只发一次（one-shot 必须同步可见）', async () => {
@@ -128,7 +128,7 @@ describe('CityView', () => {
     expect(container.querySelector('.novel-city-foot')).toBeNull()
   })
 
-  // 选中态是 store 投影（S9 之后）：记住的那一对在解析结果落空时仍然在场。分类头与顺序说明只对
+  // 选中态是 store 投影：记住的那一对在解析结果落空时仍然在场。分类头与顺序说明只对
   // **可解析的一对**说话——落空时还照分类渲染，就是在空态/错误上方悬一个「逛的是某个分类」的假头。
   it('没有源可逛而记住的源与分类悬着：不出分类头与顺序说明，空态照旧', async () => {
     cityStore.set({ sourceId: 's1', kind: '现代情感' })
@@ -756,7 +756,7 @@ describe('CityBookSheet（书籍详情浮层：本源两动作 + 跨源那一次
   })
 
   // 浮层维持逐源轴：这一层谈的**本来就是一本**，按书归并（`shared/merge-by-book.ts` 的 `mergeBooks`，
-  // 只进搜索面）在这里买不到任何浓缩，却会吞掉三条既有读数——有命中／答了但零条／未响应，逐源各说各的。
+  // 只进搜索面）在这里买不到任何浓缩，却会吞掉三条读数——有命中／答了但零条／未响应，逐源各说各的。
   // 这条钉子不改行为，挡的是将来「顺手统一」把逐源轴拆了（裁决见 ADR-0033，本浮层刻意不吃归并）。
   it('浮层的跨源那一列不折叠成一本：三家答法各异，逐行各自可见', async () => {
     openSheet(<CityBookSheet book={aBook} {...own} deps={depsWithGroups([

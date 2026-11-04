@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { isSameChapterPage, stripExtension } from '../../src/services/chapter-page.js'
 
 // 用例对齐 android-ebook 的 ChapterPageMatcherTest（原生书源同款防串章闸）——同形取舍一起搬过来，
+// 钉死「宁漏页不串章」（分页后缀、章号递增、跨站、混键），
 // 免得后续改动在无人察觉时把「宁漏页不串章」翻成「串章」
 describe('stripExtension', () => {
   it('去结尾扩展名；无扩展名原样', () => {
@@ -28,7 +29,7 @@ describe('isSameChapterPage（候选下一页是否仍属入口章）', () => {
       ['https://x.com/5/3943721', 'https://x.com/5/3943720'],
       ['https://x.com/book/1234-16.html', 'https://x.com/book/1234-15.html'],
       ['https://x.com/book/1234-16', 'https://x.com/book/1234-15.html'],
-      ['https://www.bqquge.org/531/406543', 'https://www.bqquge.org/531/406542'],   // 笔趣阁实测
+      ['https://www.bqquge.org/531/406543', 'https://www.bqquge.org/531/406542'],   // 数字 URL 章号递增即下一章
       ['https://x.com/ch/100-2', 'https://x.com/ch/100-1'],        // 形态不可区分 → 宁漏页
       ['https://x.com/read?cid=2', 'https://x.com/read?cid=1'],     // 非页码键的另一篇内容（串章形态）
       ['https://x.com/read?cid=1&page=2', 'https://x.com/read?cid=1'], // 混键 → 判不准，拦下

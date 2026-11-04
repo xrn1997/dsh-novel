@@ -7,7 +7,7 @@ describe('isScrollport（「谁在滚」的判据）', () => {
     expect(isScrollport('scroll', 2000, 500)).toBe(true)
     expect(isScrollport('overlay', 2000, 500)).toBe(true)
   })
-  it('内容没超出 → 不是（阅读器自己的容器实测就是这种：clientHeight == scrollHeight）', () => {
+  it('内容没超出 → 不是（宿主内容撑高布局下容器自身不滚：可视高度等于内容高度）', () => {
     expect(isScrollport('auto', 97541, 97541)).toBe(false)
   })
   it('overflow 不可滚（visible/hidden/clip）→ 不是（定高层 overflow:hidden 会被误当滚动条）', () => {
@@ -23,13 +23,13 @@ describe('findScrollport（向上找真正在滚的容器）', () => {
   const styleOf = (el: unknown): { overflowY: string } => ({ overflowY: (el as Fake).overflowY })
   const find = (n: Fake | null): unknown => findScrollport(n as unknown as Element | null, styleOf)
 
-  it('自己就是滚动容器 → 返回自己（宿主变回定高布局时正文层自带滚动条）', () => {
+  it('自己就是滚动容器 → 返回自己（宿主是定高布局时正文层自带滚动条）', () => {
     const self = node({ overflowY: 'auto', scrollHeight: 2000, clientHeight: 500 })
     expect(find(self)).toBe(self)
   })
-  it('自己不是 → 向上落到宿主 resident scrollport（真实层级实测复刻）', () => {
-    const host = node({ overflowY: 'auto', scrollHeight: 97579, clientHeight: 558 })          // [data-conversation-scroll]
-    const viewArea = node({ parentElement: host })                                            // data-phase=active：内容撑高，无 overflow
+  it('自己不是 → 向上落到宿主常驻的滚动层（按宿主各层的职责搭出这条链）', () => {
+    const host = node({ overflowY: 'auto', scrollHeight: 97579, clientHeight: 558 })          // 宿主常驻会话层：唯一在滚的那一个
+    const viewArea = node({ parentElement: host })                                            // 视图区：内容撑高，无 overflow
     const root = node({ overflowY: 'hidden', parentElement: viewArea })                       // .novel-root
     const main = node({ overflowY: 'auto', scrollHeight: 97579, clientHeight: 97579, parentElement: root })   // 内容撑高 → 不滚
     const body = node({ overflowY: 'auto', scrollHeight: 97541, clientHeight: 97541, parentElement: main })   // 正文层 → 不滚

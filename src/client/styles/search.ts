@@ -56,7 +56,7 @@ export const SEARCH_CSS = `
    选择器把轴标记与折叠类并写，为的是这一条稳赢 .novel-fail、不靠声明次序；就地改 .novel-fail 会连带
    重画失败源折叠与两处疑似折叠——那三条的灰是「这一家不行／这一条可疑」的语气，不在本条覆盖里。 */
 [data-novel-per-source].novel-fail { color: var(--novel-text); }
-/* 按书那一行（一行一本）。形状取舍的实测理由住在 BookRow 的注释头上（为什么不借 .novel-fail 的折叠），
+/* 按书那一行（一行一本）。形状取舍的理由住在 BookRow 的注释头（为什么不借 .novel-fail 的折叠），
    这里只写几何。两条轴各用一套：按源轴一块好几行、组间距留 sp-6 那一档，按书轴一行一本、
    邻近本身就是分组线，收到 sp-2——再宽就读成「一句书名一条横线」的散装清单。 */
 [data-novel-books].novel-groups { gap: var(--novel-sp-2); }
@@ -122,8 +122,7 @@ export const SEARCH_CSS = `
 .novel-group { display: flex; flex-direction: column; gap: var(--novel-sp-1); }
 /* ── 简约版：通用内容列（书架/搜索用；设置区块不挂此类，布局不受影响）──
    上限按**场景**给，不是一个 900px 通吃：900px 是「文档阅读宽度」的度量，套在缩略图
-   画廊上就成了两边各空两百多 px（实测 1400px 屏空 226px、1800px 空 426px，而网格明明
-   还能长出更多列）。画廊 fill、文字列表留可读行长上限。 */
+   画廊上就两边各空一大段，而网格明明还能长出更多列。画廊 fill、文字列表留可读行长上限。 */
 .novel-wrap { max-width: var(--novel-wrap-max, 900px); margin: 0 auto; padding: 0 var(--novel-sp-6); width: 100%; }
 [data-novel-view="shelf"] .novel-wrap { --novel-wrap-max: 1600px; }
 [data-novel-view="search"] .novel-wrap { --novel-wrap-max: 1100px; }

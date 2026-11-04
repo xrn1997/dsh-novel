@@ -1,5 +1,5 @@
 /**
- * URL 纯工具（从 bridge.ts 迁出——absUrl 是请求组装与链接规约的公共依赖，
+ * URL 纯工具（独立 module：absUrl 是请求组装与链接规约的公共依赖，
  * 放在 bridge 会让 request/engine-fetch/bridge 三方成环：bridge→engineFetch→request→bridge）。
  * 选项后缀那一族同住这里：装配书目的一侧（bridge）也要按同一口径绝对化并保留 `,{option}`，
  * 而它不能 import request——同一个环。
@@ -8,7 +8,7 @@ import { URL_OPTION_SPLIT } from '../engine/index.js'
 
 /** URL 绝对化：空 / javascript: / 值内部含空白（多值拼接的产物）/ new URL 解析失败 → null（不猜）。
  *
- * 「内部含空白」这一条不是防御性冗余，是钉死过的真机事故：属性终端把条目里多个 `<a>` 的同一个
+ * 「内部含空白」这一条不是防御性冗余：属性终端把条目里多个 `<a>` 的同一个
  * href 收成多值后，上层以 `\n` 拼接，而 `new URL()` 会**静默吃掉**换行——两截路径拼成一个
  * 看着合法、实际不存在的 URL（多源同型，证据见矩阵行 `b-url-value-first-item`）。
  * 宁可 null（上层按「URL 取不到」如实报错），不产出冒充成功的错 URL。

@@ -6,9 +6,9 @@ export interface RateRule {
 }
 
 /**
- * 源级 `concurrentRate` 解析（对齐上游 ConcurrentRateLimiter）：
+ * 源级 `concurrentRate` 解析：
  * - `a/b` → a 次 / b 毫秒；
- * - 裸数字 N → 1 次 / N 毫秒（上游的「非并发实际为 1/N 毫秒」口径）；
+ * - 裸数字 N → 1 次 / N 毫秒（裸数字读成**间隔**，不是并发数）；
  * - 空、非数字、非正数 → 不限速（null）。
  */
 export function parseConcurrentRate(raw: unknown): RateRule | null {

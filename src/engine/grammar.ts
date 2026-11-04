@@ -29,10 +29,10 @@ export function parseTails(rule: string): ParsedTails {
   const onlyOne = trimmed.endsWith('###')
   const s = onlyOne ? trimmed.slice(0, -1) : trimmed
   // `##` 切分跳过受保护区：`<js>…</js>` 块内的 `##` 是 JS 文本/正则净化串，`{{…}}` 区内的 `##`
-  // 属于插值表达式，`@put:{…}` 值区内的 `##` 属于值内规则文本——对面先剥 @put、先抽 js 块、
-  // 先做插值，替换尾只在剩余文本上切。`<js>##[…]</js>` 块内的 `##` 属于 JS 文本，
+  // 属于插值表达式，`@put:{…}` 值区内的 `##` 属于值内规则文本——先处理 @put、js 块与插值，
+  // 再谈替换尾，切分只落在这些保护区之外。`<js>##[…]</js>` 块内的 `##` 属于 JS 文本，
   // 若被当成替换尾会把链切断、残链误报成「缺 </js> 结束标记」。只跳块形态（jsBlockEnd），`@js:code##re##rep` 的
-  // `##` 仍按替换尾切——与对面净结果一致。
+  // `##` 仍按替换尾切——替换尾是链顶层的尾，js 段之后同样成立。
   const replaces: ReplaceStep[] = []
   // 首个切点之前是链体；其后每段按「pattern 在前、replacement 在后」两两配对
   let chain = s
@@ -116,7 +116,8 @@ export function appendTail(rule: string, pattern: string, replacement: string): 
  * JS 段区域探测（构词与解析**共用**）：构词侧切 `||`、解析侧跳段都必须用这一份，
  * 否则 JS 体内的 `||` 会被当连接符撕开。返回区域结束位置（不含）；不在 JS 段起点 → null。
  *  `<js>…</js>`：块整体是一个段——块内 ||/&&/%%/@ 是 JS 代码，不是连接符/段界（任意位置可起块）；
- *  `js:`（链首或段界 @ 后）：js 只能是末段 → 吃到链尾（真实源 @js 代码里大量 ||/&&/字符串 @）。
+ *  `js:`（链首或段界 @ 后）：js 只能是末段 → 吃到链尾——js 代码体内的 ||/&&/@ 是代码运算符与字面量，
+ *  不是连接符与段界，按段切会把合法代码撕坏。
  */
 export function jsBlockEnd(s: string, i: number): number | null {
   if (!startsWithAt(s, '<js>', i)) return null
@@ -209,7 +210,7 @@ export function hasJsRegion(s: string): boolean {
 
 /**
  * 构词口：链体每个 `||` 分支无 `@` 且不含 JS 区域 → 补 `@text` 终端（Native 取值字段语义——
- * 裸选择器即「取元素文本」，真实源常用写法）；`##` 净化尾不动（只处理链体）。
+ * 裸选择器即「取元素文本」，是常用写法）；`##` 净化尾不动（只处理链体）。
  * `||` 切分跳过 JS 区域（复用 jsRegionEnd）——`<js>return a||b</js>` 不得被撕成
  * `<js>return a@text||b</js>@text`（正文规则一旦命中即整本书读不出正文且不报错）。
  */

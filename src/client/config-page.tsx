@@ -24,15 +24,15 @@ import { NovelStyles } from './styles.js'
  *
  * 职责边界：壳归宿主、行归本仓。`SettingsForm` 继续独占只读 / 不可用 / 保存失败三条语义，
  * 以及「离开页面即丢弃草稿」的时机；七个字段**每一行的几何**由本文件画。这不是嫌宿主原语丑——
- * 宿主 `SettingsValueField` 的入参只有 label / hint 两个字符串，「单位落在框内」「209715200 要
- * 读得出 200 MB」「给九位数一个不用手敲的入口」这三件事在它的面上没有位置可放。行自绘之后
+ * 宿主壳面的粒度放不下「单位落在框内」「209715200 要
+ * 读得出 200 MB」「给九位数一个不用手敲的入口」这三件事，行几何只能本仓自绘。行自绘之后
  * 那三条没了背书，故由 `tests/client/config-page.test.tsx` 逐条钉住。
  *
  * 值与值域仍以 schema 为唯一主人：本页不出现缺省值与 min/max 的数字（「已覆盖」标记 +
  * 宿主模型的 `resetField` 动作就是回出厂值的路，不需要页面再抄一份出厂值）。预设档是**入口**
  * 不是缺省：它们是给人点的整数 MB，不与 schema 的 `.default()` 构成同一事实。
  *
- * 存活性：旧宿主没有 `configForms` 服务时 `registerConfigPage` 静默返回，侧栏 / 面板 /
+ * 存活性：宿主没有 `configForms` 服务时 `registerConfigPage` 静默返回，侧栏 / 面板 /
  * 状态层完全不受影响——配置页是可选能力，不是加载前提。
  */
 
@@ -289,7 +289,7 @@ interface SlotsLike {
   register(options: Record<string, unknown>, component: unknown): () => void
 }
 
-/** `t` 由浏览器半入口给；缺省 zhTranslate 让测试直渲与未接 locale 的老宿主保持中文。 */
+/** `t` 由浏览器半入口给；缺省 zhTranslate 让测试直渲与未接 locale 的宿主保持中文。 */
 export function registerConfigPage(ctx: Context, t: Translate = zhTranslate): void {
   const host = ctx as unknown as { configForms?: ConfigFormsLike; slots: SlotsLike }
   const forms = host.configForms

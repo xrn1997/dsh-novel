@@ -34,7 +34,7 @@ export type ProbeErrorCode =
 /** 本地书（TXT / EPUB 两支，按内容分流）的保留
  *  源 id——跨半契约常量的**唯一主人**：
  *  client 半与测试直接 import 本处；服务半（src/services/localbooks.ts）也 import 后 re-export，
- *  不再自带第二份声明（服务半不受 client 纯度门禁约束，可直接引 shared）。改名只需改这一行。 */
+ *  第二份声明因此不在服务半出现（服务半不受 client 纯度门禁约束，可直接引 shared）。改名只需改这一行。 */
 export const LOCAL_SOURCE_ID = '__local__'
 
 // ── 书源面 ──────────────────────────────────────────────────────────────
@@ -64,14 +64,14 @@ export interface SourcePublic {
 }
 
 export interface LoginUiText {
-  /** 同时是 loginInfo 的键与界面标签（legado RowUi.name） */
+  /** 同时是 loginInfo 的键与界面标签（书源格式里 `loginUi` 每一行的 `name` 字段） */
   name: string
   type: 'text' | 'password'
   default?: string
 }
 
 export interface LoginUiButton {
-  /** 按钮标签；动作由服务端按同名 RowUi 查，客户端只回传名字、不持脚本 */
+  /** 按钮标签；动作由服务端按 `loginUi` 里同名的那一行查，客户端只回传名字、不持脚本 */
   name: string
   type: 'button'
 }
@@ -191,8 +191,8 @@ export interface SearchJobSnapshot {
 }
 
 /** 发现面的**按源**清单：每个「有分类入口」的源，连它自己声明的分类标题。
- *  **只给标题、不给入口地址**——两方言的地址语义不同（原生是填进源级模板 `{{kind}}` 的 slug，
- *  legado 的 `url` 本身就是那一类的完整模板），这份差异因此继续只住服务端一侧，不外泄到跨半契约。
+ *  **只给标题、不给入口地址**——两方言的地址语义不同（原生方言给的是填进源级模板 `{{kind}}` 的 slug，
+ *  legado 方言的 `url` 本身就是那一类的完整模板），所以这份差异只住服务端一侧，不外泄到跨半契约。
  *  路由名仍是 `explore/kinds`：它给的就是分类入口清单，只是按源分组了。
  *  不做「跨源精确同名并集 + 每条计数」——那条轴会把左栏撑成各站自造词的长列表，
  *  且绝大多数词条只挂一个源，见 `ADR-0028`。
@@ -203,8 +203,8 @@ export interface ExploreSources {
   sources: Array<{ id: string; name: string; groups: string[]; status: SourceStatus; kinds: string[] }>
 }
 
-/** 一本书：**某个源的某个分类下的一条**。不再有 `origins[]`/`sourceCount`——浏览面不跨源，
- *  那两个字段在单源下恒为「1 条 / 1 源」，是谎言字段。跨源视野由详情浮层那一次
+/** 一本书：**某个源的某个分类下的一条**。浏览面不跨源——跨源聚合字段（来源清单、源计数）
+ *  在单源形状下恒为「1 条 / 1 源」，是谎言字段，本形状不带它们。跨源视野由详情浮层那一次
  *  手动聚合搜索承担（主人 `client/search-job.ts`，不是这里）。
  *  `author` 为空的条目照旧合法（重名书大量存在，而**类型面与落盘这一侧从不按书名合并任何东西**——
  *  搜索面那一层按规范化 `(书名, 作者)` 归并的是呈现层投影，不落盘、不改这里的字段与架位，
@@ -239,7 +239,7 @@ export interface ExploreSnapshot {
   sourceName: string
   kind: string
   phase: 'running' | 'done' | 'failed'
-  /** 这一轮被取消（`phase='failed'` 而非失败）：UI 据此不报红条。发现面今天只有宿主侧取消可达 */
+  /** 这一轮被取消（`phase='failed'` 而非失败）：UI 据此不报红条。发现面只有宿主侧取消可达 */
   cancelled: boolean
   /** 这一轮**占到**第几页：第 1 页由提交带来，此后只有成功并入的那一页才占号——失败或被停止的一批
    *  不算，于是下一次续页打回的是同一页（写主 `services/explore-job.ts` 的 `Held.page`） */
@@ -285,7 +285,7 @@ export interface BookDetail {
 // ── 书架面 ──────────────────────────────────────────────────────────────
 
 /** type 别名而非 interface：工具输出 schema 会把它推断进 Record<string, JsonValue>，
- *  interface 无隐式 index signature 会在这里炸（实测）——别改回 interface。 */
+ *  interface 无隐式 index signature 会在这里炸——别改回 interface。 */
 export type ShelfProgress = { chapterIndex: number; offsetRatio: number; updatedAt: number }
 
 /** 书架条目：元数据 + 阅读进度 */
@@ -501,7 +501,7 @@ export const SEG = {
   book: 'book',
   toc: 'toc',
   chapter: 'chapter',
-  /** 目录导航读面（`chapters` 线性 + `items` 展示树）——与 toc 分开：toc 的旧响应一字不改 */
+  /** 目录导航读面（`chapters` 线性 + `items` 展示树）——与 toc 分开：toc 的响应形状原地不动、不受这一端影响 */
   navigation: 'navigation',
   shelf: 'shelf',
   export: 'export',
@@ -567,7 +567,7 @@ export const ROUTES = {
   book: route('GET', SEG.book),
   toc: route('GET', SEG.toc),
   chapter: route('GET', SEG.chapter),
-  /** 目录导航：`chapters` 线性（旧 toc 口径）+ `items` 展示树（EPUB 原生 nav/NCX，
+  /** 目录导航：`chapters` 线性（与 toc 响应同形）+ `items` 展示树（EPUB 原生 nav/NCX，
    *  其他书由 toc 派生）——沿用 toc 的 sourceId+url 入参 */
   navigation: route('GET', SEG.navigation),
   shelf: route('GET', SEG.shelf),
@@ -649,7 +649,8 @@ export function encodeQuery(params: Record<string, string | number | boolean | n
   return parts.join('&')
 }
 
-/** book/toc/chapter/export 的共用入参（bookKey 在 wire 上叫 url——历史口径，别改名） */
+/** book/toc/chapter/export 的共用入参（bookKey 在 wire 上叫 `url`——它是对外契约的 query 键名，
+ *  别为对齐本地叫法去改它） */
 export interface SourceUrlParams { sourceId: string; url: string }
 
 /** `?since=` 的拼接单点（快照查询与 SSE 流共用同一游标口径） */
@@ -753,7 +754,8 @@ function readRequiredText(body: Record<string, unknown> | null, field: string): 
   return t
 }
 
-/** 一条导入文件（`{ name, text }`，与 legado 导出面板给回的形状一致） */
+/** 一条导入文件：`name` = 上传文件的名字（粘贴那一路给一个标签），坏文件由导入任务在 `fileErrors`
+ *  里点名它；`text` = 该文件的原文，解析归服务端 */
 export interface ImportFileBody { name: string; text: string }
 
 /** 写路由 body 的构造器（浏览器半唯一出口）与读口（Node 半唯一入口）。
@@ -829,7 +831,7 @@ export interface ShelfPutFields {
 }
 
 export const readBodies = {
-  /** 导入任务：`{ files: [{ name, text }] }`（真实多源导出常见数 MB 级，上限归路由的读体） */
+  /** 导入任务：`{ files: [{ name, text }] }`（全本多源导出是大包，上限归路由的读体） */
   import: (body: Record<string, unknown> | null): { files: ImportFileBody[] } => {
     const files = body?.[BODY.files]
     if (!Array.isArray(files) || files.length === 0

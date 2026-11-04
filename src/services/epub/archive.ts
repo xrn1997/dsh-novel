@@ -7,10 +7,10 @@ import { EpubImportError } from './errors.js'
 type Crc32 = { readonly unsigned: (buffer: Buffer, partial?: number) => number }
 
 /**
- * buffer-crc32@1.0.0 的两副面孔（该包的打包缺陷，不是本仓偏好）：声明写 `export =`、运行时只导出
+ * buffer-crc32 的声明面与运行时面不一致（不是本仓偏好）：类型声明是 `export =`，运行时只导出
  * `default`——干净写法要么 typecheck 红（判「模块没有 default 导出」）、要么运行时拿不到东西。
  * 所以取 default、取不到退回 namespace：两条解析路径下 default 都指同一个函数对象。
- * 这里是本文件唯一为依赖包缺陷让路的地方。
+ * 这里是本文件唯一为依赖包形状让路的地方。
  */
 const crc32 = ((rawBufferCrc32 as unknown as { default?: Crc32 }).default ?? rawBufferCrc32)
 
@@ -18,7 +18,7 @@ const crc32 = ((rawBufferCrc32 as unknown as { default?: Crc32 }).default ?? raw
  * 增量 CRC32（`unsigned` 的取值口径：partial 传上一次的返回值）。
  *
  * 为什么要对外露这一行：正文层核 PNG chunk 的 CRC 也要算同一件事（「不信元数据」在归档层是
- * 条目 CRC，在图片层是 chunk CRC）。那一层再抄一份依赖包缺陷的让路代码就会长出第二个让路点，
+ * 条目 CRC，在图片层是 chunk CRC）。那一层再抄一份这种让路代码就会长出第二个让路点，
  * 所以让路只留在本文件，别的层从这里取。
  */
 export function crc32Unsigned(buffer: Buffer, partial = 0): number {

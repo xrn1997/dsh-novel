@@ -32,7 +32,7 @@ describe('值规约', () => {
     expect(listValue({ kind: 'matches', rows: [['m1', 't1'], ['m2', 't2']] })).toEqual(['t1', 't2'])
   })
   it('URL 位的值规约：list 取首项（join 出来的多行串会被 absUrl 的换行守卫判死）', () => {
-    // 与 firstValue 的**唯一**差别。多命中取首项 = 对面的 URL 取值口径
+    // 与 firstValue 的**唯一**差别。多命中取首项 = 本仓 URL 位的取值口径
     // （URL 位一律 `list[0]`，join 只服务非 URL 取值——见矩阵行 b-url-value-first-item）。
     expect(firstUrlValue({ kind: 'list', items: ['/book/1/', '/book/1/9.html'] })).toBe('/book/1/')
     // 其余四态与 firstValue 同口径：单值直通、miss→null、空列表→''（同 join 空态）、nodes 抛
@@ -95,7 +95,7 @@ describe('absUrl', () => {
 
 describe('engineFetch（java.ajax 出口）', () => {
   // java.ajax 的 URL 可带 `url,{json}` 请求选项，必须在这里剥下来按选项发。
-  // 整串当 URL 发出会得站点 403/404（真实源：@js 脚本把带 body 的
+  // 整串当 URL 发出会得站点 403/404（@js 脚本会把带 body 的
   // `search.php,{'body':...}` 传给 java.ajax）。
   const mkFetcher = () => {
     // 记下的就是真发出去的那两个参数：init 缺席（纯 GET）也是一条读数，所以键必在、值可为 undefined。
@@ -145,7 +145,7 @@ describe('engineFetch（java.ajax 出口）', () => {
  * wordCount 在**解析层**就格式化（存进书目的已是「1.2万字」这种串），
  * 且这一族的读取包在 try/catch 里（一条坏分类规则不许带走整页书目）。
  */
-describe('分类字段 kindFieldOf（对面 getStringList → joinToString(",") → take(1000)）', () => {
+describe('分类字段 kindFieldOf（列表值 → 逗号串 → 截 1000 字符）', () => {
   /** 走真引擎的 subEval + 同一段片段上下文：字段语义的钉子要真求值，不造桩 */
   const at = (html: string) => ({
     sub: ((rule, ctx, facet, usage) =>
@@ -165,15 +165,15 @@ describe('分类字段 kindFieldOf（对面 getStringList → joinToString(",") 
     const any = at('<p></p>')
     expect(await kindFieldOf(any.sub, null, any.ctx, 'search')).toBeNull()   // 规则缺席
   })
-  it('截断到 1000 个字符（对面 String.take(1000) 与 JS slice 同为 UTF-16 code unit）', async () => {
+  it('截断到 1000 个字符（与 JS slice 同为 UTF-16 code unit 计数）', async () => {
     const f = at(`<p>${Array.from({ length: 200 }, () => '<a>0123456789</a>').join('')}</p>`)
     const v = await kindFieldOf(f.sub, 'tag.a@text', f.ctx, 'search')
     expect(v).not.toBeNull()
     expect((v as string).length).toBe(1000)
   })
-  it('对面 try/catch 那一半：本仓认不出的规则形态只让该字段留空，书目照收', async () => {
+  it('吞掉坏规则的那一半：本仓认不出的规则形态只让该字段留空，书目照收', async () => {
     const f = at('<p><a>玄幻</a></p>')
-    // `kind: "0"` / `kind: "k"` 是真库形态（现量由 `DSH_PARSE_CENSUS` 读数表重算）：
+    // `kind: "0"` / `kind: "k"` 是现库形态（现量由 `DSH_PARSE_CENSUS` 读数表重算）：
     // 无 `@` 单段在解析期抛 UnsupportedRuleError——吞掉它才符合「坏字段不带走整页」，抛出即整组书目变 error。
     expect(await kindFieldOf(f.sub, '0', f.ctx, 'search')).toBeNull()
     // 求值期炸掉（这里是宿主桩抛「需要安卓宿主环境」）同样只让该字段留空
@@ -195,7 +195,7 @@ describe('字数字段 wordCountFieldOf（数字串 → x字 / x.x万字）', ()
     expect(formatWordCount('12345')).toBe('1.2万字')
     expect(formatWordCount('198765')).toBe('19.9万字')
   })
-  it('舍入是 HALF_EVEN（Java DecimalFormat 默认），不是四舍五入', () => {
+  it('舍入按本仓约定取偶数（HALF_EVEN），不是四舍五入（口径的家：矩阵行 e-word-count-format）', () => {
     expect(formatWordCount('12500')).toBe('1.2万字')        // 1.25 → 偶数 1.2
     expect(formatWordCount('13500')).toBe('1.4万字')        // 1.35 → 1.4
   })
@@ -207,7 +207,7 @@ describe('字数字段 wordCountFieldOf（数字串 → x字 / x.x万字）', ()
     expect(formatWordCount('-5')).toBe('')                 // 数字但 ≤0
     expect(formatWordCount(null)).toBeNull()
   })
-  it('取到值才格式化 + 取不出即留空（与 kind 同一条对面闸口）', async () => {
+  it('取到值才格式化 + 取不出即留空（与 kind 同一条闸口）', async () => {
     const hit = at('<span>12345</span>')
     expect(await wordCountFieldOf(hit.sub, 'tag.span@text', hit.ctx, 'detail')).toBe('1.2万字')
     const empty = at('<span></span>')
@@ -372,7 +372,7 @@ describe('hitFieldsOf（一条命中的装配单点）', () => {
 
     it("'explore' 档：闸开但发现面某一槽缺席 → null，不回落通用键（反逐字段回落钉子）", () => {
       // 整套启用后，某一格缺席必须读成「发现面没这条」，不能悄悄回读通用键：逐字段回落会让
-      // 「只写了一半发现面规则」的源在半套语义下拼书目，而对面那条链接用的是整套（ADR-0027）
+      // 「只写了一半发现面规则」的源在半套语义下拼书目，而那条链接用的是整套（`ADR-0027`）
       const s = sourceOf({ ruleExplore: { bookList: 'EL', name: 'EN' } })
       expect(s.rules.ruleAuthor).toBe('A')      // 通用键在场：回落若发生，这里会读到它
       expect(hitRuleOf(s, 'explore', 'ruleBookName')).toBe('EN')   // 闸确实开着、发现面确实在读
@@ -442,7 +442,7 @@ describe('detailReadOf（详情 init 单次求值）', () => {
     return { ...must(n.source, 'n 归一化后的 source'), id, status: 'unverified', importedAt: 0 }
   }
 
-  it('init 只求值一次，fields/tocUrl 与旧组合（detailFieldsOf + tocUrlOf）逐值一致', async () => {
+  it('init 只求值一次，fields/tocUrl 与两条分开求值的组合（detailFieldsOf + tocUrlOf）逐值一致', async () => {
     const seen: string[] = []
     const read = await detailReadOf(source, counting(seen), HTML, BOOK)
     expect(seen.filter((r) => r === INIT)).toHaveLength(1)

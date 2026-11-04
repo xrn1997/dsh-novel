@@ -111,7 +111,8 @@ export interface EpubImportData {
 
 /** 导入期唯一 ID 铸造器：四个命名空间各一条序列（`d`文档 / `n`节点 / `a`锚点 / `r`资源） */
 class IdMinter {
-  // 计数器的名字带 `n` 前缀：与下面的方法名（`node`/`anchor`…）同名会被类字段顶掉（实测：方法直接不见）
+  // 计数器的名字带 `n` 前缀：与下面的方法名（`node`/`anchor`…）同名会被类字段顶掉——
+  // 类字段遮蔽同名原型方法，那些方法直接不见
   private nDoc = 0
   private nNode = 0
   private nAnchor = 0

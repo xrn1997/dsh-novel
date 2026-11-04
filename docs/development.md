@@ -32,12 +32,14 @@ pnpm build        # 必须在源码目录手动跑一次，缺这步宿主起不
 
 ```powershell
 pnpm gates         # 一次跑完 typecheck / lint / test / test:pack / test:compat；CI 与发版工作流共用
-pnpm test          # 常规集（引擎 / 服务 / API / 工具 / 入口 / 前端逻辑与 smoke / 兼容判据四门 / 文档门）
-pnpm test:compat   # 兼容性回放（compat/fixtures → 离线复算；报告写 compat/report.md，产物不入库）
+pnpm test          # 常规集（引擎 / 服务 / API / 工具 / 入口 / 前端逻辑与 smoke / 兼容判据与桥面自证 / 文档门）
+pnpm test:compat   # 兼容性回放（tests/replay/fixtures → 离线复算；报告写 tests/replay/report.md，产物不入库）
 pnpm test:pack     # 构建 + 产物自检
 pnpm typecheck     # tsc --noEmit —— 必须与 pnpm test 同批跑
 pnpm lint          # 类型感知 ESLint：显式 any、any 扩散（no-unsafe-*）、悬浮 Promise、非空断言 + react-hooks 两条；不引格式类规则
 ```
+
+`test:compat` 里的 compat 指**离线 fixture 回归**（`tests/replay/`），与 legado 覆盖矩阵是两条线：前者证明规则引擎在固定样本上可复算，后者证明格式语义有归属。
 
 ### 编译器档位与 lint 归属
 
@@ -79,9 +81,9 @@ $env:DSH_AUDIT_ONLY='源名子串1,源名子串2'
 $env:DSH_SEARCH_FILTER_AUDIT='1'; pnpm vitest run tests/search-relevance-audit.test.ts
 $env:DSH_SEARCH_AUDIT_KEYWORD='冰魔女的契约'   # 旋钮（可省）：审计关键词
 
-# 真采集上游：把真实站点抓成 compat fixture 快照（联网；关键词须与回放同批，缺省「书」）
+# 真采集：把真实站点抓成 compat fixture（联网；关键词须与回放同批，缺省「书」）
 $env:COMPAT_CAPTURE='1'; $env:COMPAT_KEYWORD='书'
-pnpm vitest run --config vitest.compat.config.ts tests/compat/capture.test.ts
+pnpm vitest run --config vitest.compat.config.ts tests/replay/capture.test.ts
 # 采完离线复算：pnpm test:compat —— 落盘的必须是脱敏后的产物（见下）
 
 # 真安装链路：dsh plugin add → profile bundles 挂载 + lib/client.js / cordis.patch.yml 就位
@@ -102,40 +104,35 @@ $env:DSH_EPUB_BROWSER='1'; pnpm vitest run tests/browser/config-page-layout.test
 ```
 
 - **采集三条实践口径**：出站与生产同口径（走 `resolveProxyUrl`：config > 环境变量 > 系统代理 > 直连，缺这条会把反爬壳页采成「正文为空」）；manifest 的键是**请求 URL**而非重定向后的落地地址（搜索类源常「POST 出去、302 落到结果页」）；站点会抖，**别删已采好的 fixture**，重采会覆盖、删除只会让你重新赌一次站点脸色。落盘的是生产解码链读到的文本（`decodeBody`：声明 charset → content-type → `<meta>` 嗅探），GBK 页才存成真中文。
-- **脱敏是门禁**：`tests/compat/sanitize.ts` 在写盘前扫 cookie / token / password / authorization / apiKey 与 `Authorization: Bearer …` 形态（判据与被否决的旧写法住该文件头注），`tests/compat/sanitize.test.ts` 钉住它。自动脱敏**是兜底不是证明**，入库前仍要人工过目。
+- **脱敏是门禁**：`tests/replay/sanitize.ts` 在写盘前扫 cookie / token / password / authorization / apiKey 与 `Authorization: Bearer …` 形态（判据住该文件头注），`tests/replay/sanitize.test.ts` 钉住它。自动脱敏**是兜底不是证明**，入库前仍要人工过目。
 - **`DSH_EPUB_BROWSER` 允许带按应有口径写的「诚实红」**：已知缺陷的读数不削成绿，缺陷与读数登记在该测试文件自己的注释里；修好时按那条记录一起撤下。
 
-**解析面普查（离线，读本地书源库）**——「legado 能解析的书源本插件也能解析」这条目标的进度读数口：把现库**每一条规则串**过 `parseRule`、把**每一个脚本里的 `java.*` 调用**与沙箱实际挂载面对账，输出「本仓拒绝的语法族」「脚本在调而桥没挂的方法」两张清单，并断言**未在册的新形态 = 0**；同时印一张**需求读数表**（矩阵 `note` 里那些「N 源带值」一条命令重算，判据印在数字旁边——同一个键常有两种数法）。
+**解析面普查（离线，读本地书源库）**——「legado 能解析的书源本插件也能解析」这条目标的进度读数口：把现库**每一条规则串**过 `parseRule`、把**每一个脚本里的 `java.*` 调用**与沙箱实际挂载面对账，输出「本仓拒绝的语法族」「脚本在调而桥没挂的方法」两张清单，并断言**未在册的新形态 = 0**；同时印一张**需求读数表**（登记册那些「N 源带值」的读数，矩阵行 `demand` 绑定的键由这一条命令重算，判据印在数字旁边——同一个键常有两种数法）。
 
 ```powershell
 $env:DSH_PARSE_CENSUS='1'; pnpm vitest run tests/engine/parse-census.test.ts
 ```
 
-数不一致只打印漂移、不判红（分母随用户增删漂）；判红的是**绑定落空**（矩阵行 id 被改名 / 删掉、或那个键再也算不出来）与**零读数空转**（当下数出 0 的判据必须在合成样品上数得出非 0，否则分不清「真没人用」与「判据接不上任何东西」）。**分母要定期换**：只跑本机库，一条从未出现过的写法就永远不会露出来——把另一批独立公开合集灌进同一个门（`DSH_PARSE_CENSUS_FILE` 指过去即可，取法见 `tests/engine/parse-census.test.ts` 头注）。
+数不一致只打印漂移、不判红（分母随用户增删漂）；判红的是**绑定落空**（读数绑的键再也算不出来）与**零读数空转**（当下数出 0 的判据必须在合成样品上数得出非 0，否则分不清「真没人用」与「判据接不上任何东西」）。**分母要定期换**：只跑本机库，一条从未出现过的写法就永远不会露出来——把另一批独立公开合集灌进同一个门（`DSH_PARSE_CENSUS_FILE` 指过去即可，取法见 `tests/engine/parse-census.test.ts` 头注）。
 
-### 兼容判据四门
+### 兼容判据与桥面自证
 
 （随 `pnpm test` 默认跑，运行时不需要任何外部 checkout）
 
 | 门 | 判什么 |
 | --- | --- |
 | `status-evidence.test.ts` | 逐行验证据可回查：`implemented` 的实现符号在剥注释后的代码里、钉子用例在测试里；`not-applicable` 必须写明裁决理由；`open` 必须带 `2026-MM-DD` 复核戳；行 id 唯一；一行一条记录 |
-| `inventory-coverage.test.ts` | 每个能力单元各挂 ≥2 条真实矩阵行（分母是矩阵本身，**不读快照**） |
-| `upstream-fields.test.ts` | 对面 7 个规则实体的**每个字段**都要在矩阵有归属 |
-| `host-methods.test.ts` | 对面 `java` 宿主方法名集的归属：要么挂在沙箱自报的方法面上、要么在矩阵里逐字点名 |
+| `inventory-coverage.test.ts` | 每个能力单元各挂 ≥2 条真实矩阵行（分母是矩阵本身） |
+| `bridge-surface.test.ts` | 名册点名的缺席项真的不在沙箱挂载面；名册指向的矩阵行在册；协议表的真实现没被沙箱桩覆盖（只问本仓沙箱，不读书源） |
+| `demand-keys.test.ts` | 矩阵行上的需求读数键都在面 D 的表里、每条带日期锚；记为 0 的读数在反空转样品上数得出 |
 
-后两门的分母是**仓内快照** `compat/upstream/snapshot.json`（对面源根路径集 / 规则实体字段表 / java 宿主方法名集），由开发阶段的门控从对面 checkout 抽一次；日常跑门只读快照，**快照不在场即红**（不静默跳过）：
-
-```powershell
-$env:DSH_CAPTURE_UPSTREAM='1'; $env:DSH_LEGADO_REF='<对面 checkout 路径>'
-pnpm vitest run tests/legado-coverage/capture-upstream-snapshot.test.ts
-```
+格式字段与宿主方法的覆盖走现量口径：读数由上面的解析面普查（`DSH_PARSE_CENSUS`）报告，不进默认门（`ADR-0054`）。默认门自证矩阵证据、能力单元归属、桥面名册与需求读数绑定。
 
 ## 真机验证（硬约束，别跳）
 
 `DSH_INSTALL_CHECK` 证明**两种装入**（一次性 profile、断言 bundles 与产物就位，跑完自己 `remove`）：源码目录（`link:`）与 `pnpm pack` 的 tarball（GitHub Release 资产形态）。它不起宿主，所以不证明插件树真能被挂载、也不证明六个工具在宿主里跑得通。那两件事只能手工做：
 
-1. **前置**：先 `pnpm build`。宿主 profile 必须**可由 CLI 写**——保留名 `desktop` 归宿主应用独占，普通 CLI 会以 `profile "desktop" is managed exclusively by the Electron application` 拒写；写不了就改用 CLI 自建的一次性 profile（`dsh plugin --profile <名> add <本地路径>` 初始化它，再把 `@deepseek-ai/dsh-web-app` 加进 `dsh.profile.bundles`），它组出同一棵树。
+1. **前置**：先 `pnpm build`。宿主 profile 必须**可由 CLI 写**——保留名 `desktop` 归宿主应用独占，普通 CLI 会拒写该保留名；写不了就改用 CLI 自建的一次性 profile（`dsh plugin --profile <名> add <本地路径>` 初始化它，再把 `@deepseek-ai/dsh-web-app` 加进 `dsh.profile.bundles`），它组出同一棵树。
 2. **装载与挂载**：`dsh plugin --profile <名> add link:<本仓目录>`（本包没有 `prepare`：`github:` 直装不会自动构建、缺 `lib/` 会被宿主拒挂——冒烟对象是上一步构建出的本仓产物，源码装一律先构建再 link，见「构建与日常开发」）→ `dsh --profile <名> --dump-config` 的组合树里出现本插件 → 起 `dsh --profile <名>`，看组合树里没有 `plugin tree failed to load`。Release 资产那一格（`add <tarball>`）由同一道门的第二格量；真实 Release 下载地址的安装同样要手工过第 2–3 步。
 3. **工具面与一条真路径**：六个 `dshnovel_` 工具各真调一次；再走一条真实业务：搜 → 详情 → 目录 → 正文并翻一页（顺带覆盖出站代理与解码链）。
 
@@ -154,11 +151,11 @@ npm 与 GitHub Release 是两条渠道，靠同一个 tag 对齐；发版后核�
 
 ### 宿主兼容与实测名单
 
-安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`。实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本。两层由 `tests/packaging.test.ts` 同时看住：编译期 devDependency 必须被 peer 区间放行，且必须出现在实测声明里。
+安装许可由 `package.json` 的 `peerDependencies` 决定，实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本（两层的关系见 `README.md` 与 `ADR-0020`）。两层由 `tests/packaging.test.ts` 同时看住：编译期 devDependency 必须被 peer 区间放行，且必须出现在实测声明里。
 
-宿主发新版分两种：**线内**（当前 `>=0.0.1-rc.5 <0.3.0-0` 的 rc / patch）不要求本插件跟版；要声称实测兼容时，升级编译所依、重读新宿主的浏览器模块表（宿主前端的 `staticModules()`）并对齐 `PLATFORM_MODULES`、真机确认后加实测条目。**跨线**（如 `0.3.0`）必须先真机验，再把 peer 上界开到下一条线。编译所依被 peer 放行且出现在实测声明里由 `tests/packaging.test.ts` 钉住；模块表与实测条目靠真机与人工核对。
+宿主发新版分两种：**线内**（当前 peer 区间内的 rc / patch，上下界现查 `package.json`）不要求本插件跟版；要声称实测兼容时，升级编译所依、重读新宿主的浏览器模块表（宿主前端的 `staticModules()`）并对齐 `PLATFORM_MODULES`、真机确认后加实测条目。**跨线**（跨过一条线）必须先真机验，再把 peer 上界开到下一条线。编译所依被 peer 放行且出现在实测声明里由 `tests/packaging.test.ts` 钉住；模块表与实测条目靠真机与人工核对。
 
-宿主依赖包的**发布冷却闸**（pnpm 的 `minimumReleaseAge`，24 小时内发布的版本不许进 lockfile）对 `@deepseek-ai/dsh-*` 整 scope 放行，写死在 `pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude`——所以 bump 宿主不必再动一份逐代手写的放行名单（理由与被否决的做法见 `ADR-0026`）。
+宿主依赖包的**发布冷却闸**（pnpm 的 `minimumReleaseAge`：刚发布的版本暂不许进 lockfile）对 `@deepseek-ai/dsh-*` 整 scope 放行，写死在 `pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude`——所以 bump 宿主不必再动一份逐代手写的放行名单（理由与被否决的做法见 `ADR-0026`）。
 
 ## 已知的环境坑
 
@@ -169,6 +166,6 @@ npm 与 GitHub Release 是两条渠道，靠同一个 tag 对齐；发版后核�
 - **改动生效分两半**：浏览器半由宿主 HMR 热推，Node 半必须重启宿主。
 - **出站代理**：DSH 的 Node 进程走 undici，**不读系统代理**；只有代理能到的站点必须在插件里配 `proxyUrl`，否则表现为「浏览器能开、插件打不开」。
 - **运行时数据不在仓库**：书源 / 书架 / 缓存 / 本地书住 `$DSH_HOME/novel/`（缺省 `~/.dsh/novel/`；`dataDir` 可改）。
-- **`compat/report.md` 是跑门产物**：`pnpm test:compat` 每次覆盖写，已 gitignore；它的分母是 `compat/fixtures/` 下的 fixture，**不是站点可用率**。
+- **`tests/replay/report.md` 是跑门产物**：`pnpm test:compat` 每次覆盖写，已 gitignore；它的分母是 `tests/replay/fixtures/` 下的 fixture，**不是站点可用率**。
 - **冒烟启动宿主时日志里那行带 token 的 URL 是活的凭据**：别留在日志或会话输出里，测完删文件。
 - **`.qoder/repowiki` 是生成的知识库快照**：基线 commit 只记在 `.qoder/repowiki/knowledge/zh/_index.yaml` 里（要对照就现查那份，篇数与 hash 都不在这里抄——抄一次就多一个会腐烂的镜像）。仓内**没有**再生成它的路径（只能在 Qoder 里重跑），所以它永远可能落后于代码；它不是事实源，判断口径见 `docs/AGENTS.md`。

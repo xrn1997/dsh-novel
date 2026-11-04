@@ -107,7 +107,7 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
     })
   }
   const confirmDelete = (): void => {
-    if (pending === null || delBusy) return          // 在途防重：双击「确认删除」不许双 POST（修过的真双写窗口）
+    if (pending === null || delBusy) return          // 在途防重：双击「确认删除」会双 POST，在途即挡
     const ids = pending.ids                          // 点击时快照，不随列表变化重算
     setDelBusy(true)
     void deps.apiSend<{ removed: number }>(ROUTES.sourcesBatchDelete, bodies.ids(ids)).then((r) => {
@@ -124,9 +124,8 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
   }
   /** 行内启停开关：单击即切——乐观更新在行内组件。
    *
-   *  **秒级操作不进瞬态泳道**（闪烁回归锁）：单源启停往返 13~20ms ≈ 1 帧，状态条若占布局，
-   *  挂上会把设置区顶下去再弹回（真机逐帧实测 +35px layout-shift）。状态条现为浮层，
-   *  口径仍保留：秒级操作的反馈不占布局位置。在途只留行内
+   *  **秒级操作不进瞬态泳道**（闪烁回归锁）：启停是秒级以内的高频操作，反馈若占布局位置，
+   *  挂上会把设置区顶下去再弹回；状态条是浮层、不占位（口径见 `styles/shell.ts`）。在途只留行内
    *  `savingN` 装饰（开关降透明 + wait + title「保存中…」）；成功静默（开关翻转本身即反馈），
    *  只有失败才进 error 泳道并挂行锚点（全局条「定位 →」+ 行内红边）。 */
   const toggleEnabled = (s: SourcePublic, next: boolean): Promise<boolean> => {
@@ -176,7 +175,7 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
         >
           {STATUS_OPTIONS.map((o) => <option key={o.key} value={o.key}>{t(o.labelKey)}</option>)}
         </select>
-        {/* 分组下拉：分组名五花八门不配 chips——下拉单选收敛宽度，与状态/文本过滤叠加；
+        {/* 分组下拉：组名是用户数据、不可枚举，不配 chips——下拉单选收敛宽度，与状态/文本过滤叠加；
             选项集按**全库**聚合计数，不随状态/文本过滤缩水（可组合过滤，语义钉在 view-model） */}
         <select
           data-novel-group-filter
@@ -304,9 +303,9 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
  *  加一项而没改这个数会当场红，不会让翻转预算静默过期、末行菜单再被滚动口裁掉。 */
 export const MENU_ITEM_COUNT = 3
 
-/** 行：「⋯」菜单向下展开所需的最小可用高度 = 项数 × 单项行高（真 Edge 实测 3 项 ≈ 120px ⇒
- *  单项 ≈ 40px）+ 盒体余量 40px。判据是「下方够不够」而非「是不是最后一行」——够不够只跟
- *  剩余空间有关，行在不在末尾只是最常见的那种不够。 */
+/** 行：「⋯」菜单向下展开所需的最小可用高度 = 项数 × 单项行高（40px）+ 盒体余量 40px，
+ *  空间预算按项数推导（项数钉子见 `source-list-batch` 的项数守卫）。判据是「下方够不够」而非
+ *  「是不是最后一行」——够不够只跟剩余空间有关，行在不在末尾只是最常见的那种不够。 */
 const MENU_SPACE_MIN = MENU_ITEM_COUNT * 40 + 40
 
 /** 行：状态/分组/地址常驻；操作列按状态给当下要用的动作（验证/重验按状态出现 + 试跑；
@@ -351,11 +350,11 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
     document.addEventListener('click', close)
     return () => document.removeEventListener('click', close)
   }, [menuOpen])
-  // 乐观态：点击即翻转本地展示——642 行列表的全量 reload 有一拍延迟，没有乐观反馈用户会
+  // 乐观态：点击即翻转本地展示——大列表的全量 reload 有一拍延迟，没有乐观反馈用户会
   // 以为「点不动」。失败即刻清零回滚，不等 reload。
   const [optimistic, setOptimistic] = useState<boolean | null>(null)
   // 服务端值落地即让位（s.enabled 变化 = reload 结果到达 → 清残余乐观值）：只在失败时清的话，
-  // 另一入口（批量停用 / AI 工具）改了服务端后残留值会永久顶住真相（修过的真缺陷）。
+  // 另一入口（批量停用 / AI 工具）改了服务端后，残留的乐观值会永久顶住真相。
   // 「ok = 服务端已应用」是本仓契约，故同值 reload 无需清（清了会在落地前闪回旧态）。
   useEffect(() => { setOptimistic(null) }, [s.enabled])
   const [savingN, setSavingN] = useState(0)             // 在途请求数：「保存中」装饰的精确生命周期
@@ -403,7 +402,7 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
         <span className="novel-actions">
           {/* 操作列：浏览态常驻（试跑是排查主路径）；异常态多一个状态动作钮（验证/重验）。
               **不渲染「启用」文字钮**：启停唯一入口 = 最右开关——重复入口会让列宽随状态漂移、
-              右缘按钮组不对齐（用户实机反馈）。列轨道定宽右锚在 styles/controls.ts 的 `.novel-tr.src`。
+              右缘按钮组不对齐。列轨道定宽右锚在 styles/controls.ts 的 `.novel-tr.src`。
               批量任务在途时禁验证类动作（防重复提交），试跑不受影响（独立请求）。
               验证钮**不看 enabled**：停用 ≠ 免验——挂 `!enabled` 门会造成
               「批量能验、单点不能验」，与待办箱入口自相矛盾。 */}
@@ -465,7 +464,7 @@ function SourceAuthPane({ source, onDone, deps = prodDeps }: {
     initLoginInfo(source.loginUi ?? []))
   /** 「去登录」按源是否有登录脚本分岔（`hasLoginUrl` 是服务端投影的事实，不在客户端猜分支）：
    *  ① 声明了 loginUrl：问服务端要计划——URL 形态开那个 URL，JS 形态服务端沙箱跑完存登录态，
-   *     这里只报成功并刷新；② 未声明：站点的登录页就是它自己，直接开 baseUrl（本按钮原行为）。 */
+   *     这里只报成功并刷新；② 未声明：站点的登录页就是它自己，直接开 baseUrl。 */
   const goLogin = (): void => {
     if (!source.hasLoginUrl) {
       window.open(source.baseUrl, '_blank', 'noopener,noreferrer')
@@ -496,7 +495,7 @@ function SourceAuthPane({ source, onDone, deps = prodDeps }: {
       onDone()
     }, (e: unknown) => deps.pushError(t('sources.auth.saveFailed', { detail: describeError(e, t) }), rowAnchorOf(source.id)))
   }
-  /** RowUi button：先落当前 text/password 的 loginInfo，再按行名跑服务端动作。
+  /** `loginUi` 按钮行：先落当前 text/password 的 loginInfo，再按行名跑服务端动作。
    *  外链只开新页；脚本动作成功后刷新源列表（动作可能改了登录态）。 */
   const runRowAction = (name: string): void => {
     void (async () => {
@@ -517,7 +516,7 @@ function SourceAuthPane({ source, onDone, deps = prodDeps }: {
   return (
     <span className="novel-auth-pane" onClick={(e) => e.stopPropagation()}>
       {/* 书源是任意第三方站点：显式 noopener,noreferrer 关掉新页对 DSH GUI tab 的反向
-          tabnabbing（Chromium ≥88 对 _blank 已隐式 noopener，显式写是零成本保险） */}
+          tabnabbing（新式浏览器多已隐式 noopener，显式写是零成本保险） */}
       <button className="novel-btn sm" onClick={goLogin}>{t('sources.auth.go')}</button>
       {source.loginUi === undefined
         ? <input

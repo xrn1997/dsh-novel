@@ -18,7 +18,7 @@ export interface SourceSession {
    *  setVariable 会顺手 clear() 掉 source.put 的键，getVariable 还会返回整表 JSON 壳。 */
   sourceString(sourceKey: string): string
   setSourceString(sourceKey: string, value: string | null): void
-  /** 某源的 cache 垫片表（缓存本是全局表；按源隔离是 SourceSession 的既定口径；TTL 未接见矩阵 h-cache-ttl）。
+  /** 某源的 cache 垫片表（脚本侧 cache 是全局表，本仓刻意按源隔离——脚本跨面读写互不串源；TTL 未接见矩阵 h-cache-ttl）。
    *  独立于键值表——不要借 sourceVars 加 `cache:` 前缀，否则脚本用 `source.get('cache:x')` 会串味。 */
   cacheStore(sourceKey: string): Map<string, string>
   /** 可选：删源时清掉该源的全部状态（文件实现有；进程内实现无） */

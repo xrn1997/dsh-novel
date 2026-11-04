@@ -85,7 +85,7 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
     if (openRequest === 'import') setImportOpen(true)
     else {
       // 「看任务卡」与导入弹层互斥：弹层开着时卡片被遮罩挡在下面，焦点滚过去也看不见
-      // （真机口径：去现场 = 用户眼前真的出现那张卡）。关掉弹层再推进确认拍。
+      // （口径：去现场 = 用户眼前真的出现那张卡）。关掉弹层再推进确认拍。
       setImportOpen(false)
       setFocusTick((n) => n + 1)
     }

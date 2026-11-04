@@ -19,14 +19,14 @@ describe('applyReplaces 净化（## 替换）', () => {
   })
 
   /**
-   * 空 pattern 的替换步**整步跳过**——对面那侧每一处替换都门在 `replaceRegex.isNotEmpty()` 上，
+   * 空 pattern 的替换步**整步跳过**——每一处替换都门在「正则非空」上，
    * 空串正则根本不执行。改这里注意：别无条件执行空正则——JS 配 `g` 时在每个字符位置都匹配，
-   * 于是真库那条 `class.font_max@html####本章未完.*##`（`##` 尾的第 2 段是空串、第 3 段才是正则）
+   * 于是 `class.font_max@html####本章未完.*##` 那条尾（`##` 尾的第 2 段是空串、第 3 段才是正则）
    * 把 6.5KB 的一页灌成 **732,311 字符**并写进缓存（一章变半本书）。
    * 这条与 `##` 的「只有一对 + 第 4 段开关」那条分叉是两件事，后者仍登记在矩阵行
-   * `a-replace-tail-single-pair`（待裁 D10）。
+   * `a-replace-tail-single-pair`。
    */
-  describe('空 pattern 整步跳过（对面 isNotEmpty 那道门）', () => {
+  describe('空 pattern 整步跳过（「正则非空」那道门）', () => {
     it('全局净化：空 pattern 不执行，原文一字不动', () => {
       expect(applyReplaces({ kind: 'value', text: 'a b c' }, [step('', 'X')], false))
         .toEqual({ kind: 'value', text: 'a b c' })
@@ -43,19 +43,19 @@ describe('applyReplaces 净化（## 替换）', () => {
       expect(applyReplaces({ kind: 'value', text: 'a b c' }, [step('{{t}}', 'X')], false, undefined, { t: '' }))
         .toEqual({ kind: 'value', text: 'a b c' })
     })
-    it('事故形状：真库那条尾（`####正则##`）作用于整页时不得放大文本', async () => {
+    it('事故形状：`####正则##` 那条尾作用于整页时不得放大文本', async () => {
       const { evaluate } = await import('../../src/engine/evaluate.js')
       const html = '<div id="c" class="font_max"><p>正文第一句。</p><p>本章未完，点击下一页继续阅读。</p></div>'
       const bare = await evaluate('class.font_max@html', { html, baseUrl: 'http://x/1.html' }, 'content', 'value')
       const tailed = await evaluate('class.font_max@html####本章未完.*##', { html, baseUrl: 'http://x/1.html' }, 'content', 'value')
       expect(bare.kind).toBe('value')
       expect(tailed.kind).toBe('value')
-      // 空 pattern 那步被跳过 ⇒ 与不带尾同形（对面在这条源上也是「不替换」）
+      // 空 pattern 那步被跳过 ⇒ 与不带尾同形（这条源上同样不该发生替换）
       expect(valueTextOf(tailed)).toBe(valueTextOf(bare))
     })
   })
 
-  it('OnlyOne 先截取首个匹配、再在该匹配内替换（对面 replaceRegex 的 replaceFirst 分支）', () => {
+  it('OnlyOne 先截取首个匹配、再在该匹配内替换（首匹配截取，不整串扫）', () => {
     // 先取**首个匹配**的那一小段，替换再作用在该小段上——产物就是那一小段
     // （不是「原文里只改第一处」；按后者读会得错值，净化尾因此留下本该被裁掉的尾巴）。
     const v: EngineValue = { kind: 'value', text: 'aXaX' }
@@ -66,7 +66,7 @@ describe('applyReplaces 净化（## 替换）', () => {
       .toEqual({ kind: 'list', items: ['-', '-'] })
   })
 
-  it('OnlyOne 无匹配 → 空串（对面 `else -> ""`，不保留原文）', () => {
+  it('OnlyOne 无匹配 → 空串（不保留原文）', () => {
     expect(applyReplaces({ kind: 'value', text: 'abc' }, [step('X', '-')], true))
       .toEqual({ kind: 'value', text: '' })
   })

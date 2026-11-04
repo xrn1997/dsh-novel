@@ -63,7 +63,7 @@ describe('followPages 翻页闸（停止判据次序）', () => {
     expect(r.pages).toBe(3)
     expect(r.items).toEqual(['条1', '条2', '条3'])
   })
-  // 末页「下一页」常指向下一章（笔趣阁 `.prenext`）——跟进去就把后续章节拼成本章（实测 50 章 / 35846 字）
+  // 末页「下一页」常指向下一章——跟进去就把后续章节拼成本章
   it('串章闸：候选下一页不属本章 → chapter-boundary 停，不取那一页', async () => {
     const pages = new Map<string, Page>([
       ['https://x.com/c/1', { url: 'https://x.com/c/1', body: '<div class="it">本章正文</div><a class="next" href="/c/2">下一章</a>' }],
@@ -88,8 +88,8 @@ describe('followPages 翻页闸（停止判据次序）', () => {
   })
 })
 
-describe('followPages 目录知识闸 + 列表 next + 部分重叠不停（legado 对齐）', () => {
-  it('stopUrls：候选 == 目录里其他章节 URL → chapter-boundary（legado 防串章正判据）', async () => {
+describe('followPages 目录知识闸 + 列表 next + 部分重叠不停（目录知识优先）', () => {
+  it('stopUrls：候选 == 目录里其他章节 URL → chapter-boundary（本仓的防串章正判据）', async () => {
     const pages = new Map<string, Page>([
       ['https://x.com/c/1', { url: 'https://x.com/c/1', body: '<div class="it">本章正文</div><a class="next" href="/c/2">下一章</a>' }],
       ['https://x.com/c/2', { url: 'https://x.com/c/2', body: '<div class="it">下一章正文</div>' }],
@@ -127,8 +127,8 @@ describe('followPages 目录知识闸 + 列表 next + 部分重叠不停（legad
     expect(r.pages).toBe(2)
     expect(r.items).toEqual(['第一页', '第二页'])
   })
-  it('两闸同供时目录知识优先：stopUrls 在场则路径启发式完全不参与（2026-09 审查复议维持原裁决）', async () => {
-    // 审查建议「stopSet 未命中时再走收窄到路径变化的启发式」——本用例正是那个形态：入口
+  it('两闸同供时目录知识优先：stopUrls 在场则路径启发式完全不参与', async () => {
+    // 若把「stopSet 未命中时再走收窄到路径变化的启发式」双闸并立，本用例正是会被误拦的形态：入口
     // `/book/1/1.html`、续页 `/book/1/2.html`（路径不同且非前缀，启发式判不同章 → 会漏页），
     // 只有目录知识知道 `/3.html` 才是下一章。钉在这里，防以后被悄悄改回双闸。
     const pages = new Map<string, Page>([
@@ -146,7 +146,7 @@ describe('followPages 目录知识闸 + 列表 next + 部分重叠不停（legad
     expect(r.items).toEqual(['第一页', '第二页'])
     expect(r.stoppedBy).toBe('chapter-boundary')
   })
-  it('next 规则列表语义：多候选全部抓取且不递归翻页（legado getStringList 口径）', async () => {
+  it('next 规则列表语义：多候选全部抓取且不递归翻页（列表语义：全部候选各发一次，不递归下一层）', async () => {
     const pages = new Map<string, Page>([
       candidateEntry(),
       ['https://x.com/q1', { url: 'https://x.com/q1', body: '<div class="it">页A</div><a class="next" href="/q9">深层</a>' }],
@@ -160,11 +160,10 @@ describe('followPages 目录知识闸 + 列表 next + 部分重叠不停（legad
     expect(r.stoppedBy).toBe('end')
   })
   /**
-   * 多候选模式的「零新增」不是一条全局闸。真机形态：目录入口页（书籍详情页）自己就列着第 1 页，
+   * 多候选模式的「零新增」不是一条全局闸。这类输入的常见形状：目录入口页（书籍详情页）自己就列着第 1 页，
    * 而翻页规则同时把 index_1（与入口页同内容）和 index_2…index_N 一起列出来。
-   * 回归钉子：某一候选整页零新增只丢它自己，不得中止整轮——中止会把队列里其余候选一起丢掉：
-   * 笔趣阁 165 章读成 100、第一小说 1839 章读成 100、阳光中文网 1586 章读成 100。
-   * 对面那侧多候选是逐条并发全抓、条目最后统一去重，没有这道早停。
+   * 回归钉子：某一候选整页零新增只丢它自己，不得中止整轮——中止会把队列里其余候选一起丢掉，
+   * 长书就被读成只剩开头一段。
    * 链式单候选的 loop / zero-new 两态不变（由上面的「回环」与「零新增」两条钉子守着）。
    */
   it('多候选：某一候选与入口页整页重复 → 其余候选照抓（不得中止整轮）', async () => {
@@ -191,7 +190,7 @@ describe('followPages 目录知识闸 + 列表 next + 部分重叠不停（legad
     expect(r.items).toEqual(['首页', '页B'])
     expect(r.stoppedBy).toBe('end')
   })
-  it('页间部分重复不判到底：条目去重、继续追 next（legado 目录翻页只按 URL 防环）', async () => {
+  it('页间部分重复不判到底：条目去重、继续追 next（目录翻页只按 URL 防环，条目重复不是环）', async () => {
     const pages = new Map<string, Page>([
       ['https://x.com/t1', { url: 'https://x.com/t1', body: '<div class="it">A</div><div class="it">B</div><a class="next" href="/t2">n</a>' }],
       ['https://x.com/t2', { url: 'https://x.com/t2', body: '<div class="it">B</div><div class="it">C</div><a class="next" href="/t3">n</a>' }],

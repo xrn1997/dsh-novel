@@ -93,7 +93,7 @@ export function makeReaderDeps(over: DepsOverrides = {}, shelf: unknown[] = []):
  *  `apiEventStream` 缺省「立刻结束、一帧不发」= 服务端没有推送可用 ⇒ 用例默认走轮询那条地基；
  *  要测推送就覆写它（帧由用例自己喂）。
  *  `jobPollMs` 缺省给观察通道的生产节拍；要按拍驱动的用例把它调小或换成假时钟，
- *  免得用例拿墙钟干等（原 explore-job 一条用例等 700ms 就是这么来的）。 */
+ *  免得用例拿墙钟干等。 */
 export function makeCoreDeps(over: DepsOverrides = {}): FakeViewDeps {
   return {
     ...prodCoreDeps,

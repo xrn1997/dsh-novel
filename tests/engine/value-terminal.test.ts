@@ -8,9 +8,8 @@ import { evaluate } from '../../src/engine/index.js'
  * （空值归一成 `""` 再 `toString()`），而 XPath 模式在
  * **段内**就完成转换——命中集按换行拼接，每个节点
  * `toString()` = **outerHtml**。
- * 真实源靠它的两例（正文链路审计）：爱丽丝书屋的 `ruleSearch.intro`
- * 选 `//p` 忘写 `/text()`、搬山人小说网的 `ruleSearch.intro` 选 `//div/p` 同样忘写
- * ——都是「选了元素当值用」的写法。
+ * 现库里有靠它读通的形态（正文链路审计的失败分桶）：`ruleSearch.intro`
+ * 选 `//p` 或 `//div/p` 忘写 `/text()`——都是「选了元素当值用」的写法。
  *
  * 口径：节点集在链终点串化，抛错只留给真正的取位失败（Miss）——别把「选了元素当值用」
  * 记成引擎侧失败（服务层 `firstValue` 那层规约也不该抛「结果不是取值而是节点集」）。
@@ -22,12 +21,12 @@ const page = `<div class="box">
 </div>`
 
 describe('取值用途的链终点节点集（legado getString 串化口径）', () => {
-  it('XPath 段收尾且只命中一个元素 → 该元素 outerHTML（真源 intro 形态）', async () => {
+  it('XPath 段收尾且只命中一个元素 → 该元素 outerHTML（intro 形态）', async () => {
     const v = await evaluate(`//p[@class='content-txt']`, { html: page }, 'search', 'value')
     expect(v).toEqual({ kind: 'value', text: '<p class="content-txt">第一段简介</p>' })
   })
 
-  it('XPath 段收尾多命中 → 逐元素 outerHTML 以换行拼接（对面按换行 join）', async () => {
+  it('XPath 段收尾多命中 → 逐元素 outerHTML 以换行拼接', async () => {
     const v = await evaluate(`//li[@class='t']`, { html: page }, 'search', 'value')
     expect(v).toEqual({ kind: 'value', text: '<li class="t">第一章</li>\n<li class="t">第二章</li>' })
   })
@@ -37,7 +36,7 @@ describe('取值用途的链终点节点集（legado getString 串化口径）',
     expect(v.kind).toBe('nodes')
   })
 
-  it('串化发生在 ## 替换之前（对面 replaceRegex 作用于已串化的结果）', async () => {
+  it('串化发生在 ## 替换之前', async () => {
     const v = await evaluate(`//li[@class='t']##<[^>]*>##`, { html: page }, 'search', 'value')
     expect(v).toEqual({ kind: 'value', text: '第一章\n第二章' })
   })

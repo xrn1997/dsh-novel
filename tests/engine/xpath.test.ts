@@ -7,7 +7,7 @@ import { UnsupportedRuleError } from '../../src/engine/errors.js'
 import type { EngineValue } from '../../src/engine/types.js'
 import { elementOf, itemsOf, nodesOf } from './value.js'
 
-// 样本取自真实源包里 XPath 规则的代表性形态；fixture 规整化以钉死语义
+// 样本取 XPath 规则的代表性形态；fixture 规整化以钉死语义
 const html = `<html><body>
 <div id="sitebox">
   <dl class="book"><dt><a href="/book/1/">书一</a></dt><dd class="info">作者甲</dd></dl>
@@ -146,8 +146,8 @@ describe('XPath：与引擎链协作', () => {
   })
 })
 
-describe('XPath 父步 `..`（真机新暴露：本机库 2 源 4 条规则、两种形态，2026-09 步骤普查）', () => {
-  // 真源原文：//a[text()="下一页"]/../../../preceding-sibling::div[1]（正文）
+describe('XPath 父步 `..`（连续父步、攀过文档根、父步上挂谓词与属性末段）', () => {
+  // 原文：//a[text()="下一页"]/../../../preceding-sibling::div[1]（正文）
   //          //a[text()="下一页"]/../following-sibling::li/a（目录）
   it(' 三级父步后接逆向兄弟轴：preceding-sibling::div[1] = 最近前序兄弟', () => {
     const v = evalX('//a[@id="pgnext"]/../../../preceding-sibling::div[1]')
@@ -188,7 +188,7 @@ describe('XPath：宁炸不猜的边界', () => {
   })
 })
 
-describe('相对路径存在性谓词（li[.//a] 一类，真源 搬山人小说网 ruleChapterList）', () => {
+describe('相对路径存在性谓词（li[.//a] 一类，`ruleChapterList` 形态）', () => {
   const vols = '//ul[@class=\'vols\']'
   it('.//a 命中「后代里有 a」的 li（直系谓词 [a] 命不中，差的就是这一层）', () => {
     const v = evalX(`${vols}/li[.//a]`)

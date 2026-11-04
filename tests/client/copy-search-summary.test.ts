@@ -29,7 +29,7 @@ describe('搜索收口整句', () => {
     expect(joined(searchSummarySegments(enTranslate, { ...base, searched: 3, hits: 5, merged: 2, answered: 3, relevant: 4, failed: 1, stopped: false }))).toContain(' · 1 source did not respond')
     expect(joined(searchSummarySegments(enTranslate, { ...base, searched: 3, hits: 5, merged: 2, answered: 3, relevant: 4, failed: 2, stopped: false }))).toContain(' · 2 sources did not respond')
   })
-  it('加粗边界与旧 UI 一致：只加粗数字（searched/hits/merged/failed），answered 不加粗', () => {
+  it('加粗边界：只加粗数字（searched/hits/merged/failed），answered 不加粗', () => {
     const segs = searchSummarySegments(zhTranslate, base)
     expect(segs.filter((s) => s.emphasis).map((s) => s.text)).toEqual(['3', '5', '2', '1'])
   })

@@ -12,7 +12,7 @@ import { pick } from '../support/fixture.js'
  *
  * jsdom 没有排版引擎：本文件能证明的只有**结构**（白名单映射、属性面、跳转载荷、失败占位在场）。
  * 「图片预留宽高比不收缩」「表格在栏内横向滚动」「图片不撑破栏宽」这三条尺寸行为只断言到
- * 「值/类在场」这一层，真实读数留 Task 9 的浏览器门——不在这里谎报量过布局。
+ * 「值/类在场」这一层，真实读数留 `DSH_EPUB_BROWSER` 那条浏览器门（`tests/browser/`）——不在这里谎报量过布局。
  */
 
 const bookKey = 'local:b1'
@@ -139,7 +139,7 @@ describe('图文面（kind:rich）：白名单 React 映射', () => {
     const p = container.querySelector('p')
     expect(p?.getAttribute('rowspan')).toBeNull()
     expect(p?.getAttribute('colspan')).toBeNull()
-    // 宽表滚动的结构前提（滚动行为本身归样式层，实测留 Task 9）
+    // 宽表滚动的结构前提（滚动行为本身归样式层，实测归 `tests/browser/` 那条浏览器门）
     expect(container.querySelector('.novel-table-wrap > table')).not.toBeNull()
   })
 
@@ -215,7 +215,7 @@ describe('插图', () => {
     expect(src).not.toContain('javascript:')
   })
 
-  it('图片失败仍保留预留宽高比（brief 原用例）', () => {
+  it('图片失败仍保留预留宽高比', () => {
     const content: ChapterContent = {
       kind: 'rich',
       documentId: 'd0',
@@ -225,7 +225,7 @@ describe('插图', () => {
     fireEvent.error(screen.getByRole('img', { name: '插图' }))
     expect(screen.getByText('图片加载失败')).toBeTruthy()
     expect(document.querySelector('[data-resource-id="r0"]')).not.toBeNull()
-    // 框还在，且比值取自可信宽高（尺寸稳定本身是 Task 9 的浏览器读数）
+    // 框还在，且比值取自可信宽高（尺寸稳定本身是 `tests/browser/` 的浏览器读数）
     const box = document.querySelector('[data-resource-id="r0"]') as HTMLElement
     expect(box.style.getPropertyValue('--novel-fig-ratio')).toBe('600 / 900')
     expect(box.querySelector('img')).toBeNull()                        // 不留一个破图图标冒充内容
@@ -306,8 +306,8 @@ describe('内部跳转（不是 <a>，不走 raw href）', () => {
 
   it('链接含块级内容时链接自己是块级容器（收缩包裹会让插图占位塌成 0）', () => {
     // `<button>` 缺省按内容收缩包裹，里面的 `width: 100%` 插图框于是解析成 auto——图未解码时没有
-    // 内在尺寸，框塌成 0，图一到手正文整段位移（真浏览器实测 0×0 → 600×900）。含块内容的链接本来
-    // 就是块级（XHTML5 的透明内容模型），这里把它显式化。
+    // 内在尺寸，框塌成 0，图一到手正文整段位移。含块内容的链接本来就是块级（XHTML5 的透明内容模型），
+    // 这里把它显式化。
     const image: ContentNode = { kind: 'image', id: 'i1', resourceId: 'r1', alt: '图', width: 600, height: 900 }
     const withImage: ContentNode = {
       kind: 'link', id: 'l1', target: { kind: 'chapter', index: 1, anchorId: null }, role: 'normal', children: [image],

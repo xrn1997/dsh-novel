@@ -44,7 +44,8 @@ export function normalizeSource(raw: unknown): NormalizeResult {
   const baseUrl = str(r.bookSourceUrl); if (!baseUrl) missing.push({ field: 'bookSourceUrl', message: '缺书源地址' })
   // bookSourceType：非文本源点名拒绝——图片/音频/文件源规则体系完全不同，落到 ruleContent 校验
   // 会报「缺正文规则」，语义误导（它不是缺规则，是本插件不支持）。认不出的编码同样拒绝：
-  // 读不懂不等于文本，宁可不入库也不拿它当文本源参搜（书架诊断实证：误标 text 的短剧源混进了文字书架）。
+  // 读不懂不等于文本，宁可不入库也不拿它当文本源参搜（误标成 text 的短剧源会混进文字书架，
+  // 这道闸就是拦它的；矩阵行 `c-book-source-type`）。
   const type = kindOfSourceValue(r.bookSourceType)
   if (type !== 'text') {
     missing.push({ field: 'bookSourceType', message:
@@ -147,8 +148,9 @@ const SOURCE_KIND_LABEL: Record<SourceContentKind, string> = {
   text: '文本', image: '图片', audio: '音频', file: '文件', unknown: '未知',
 }
 
-/** 分组串拆分：一个源可属多个分组，兼容三种分隔符 `,`（主流导出）/`\`（旧阅读端写法）/
- *  `，`（全角）+ trim + 去空段 + 段内去重。只按 `\` 拆会让逗号粘连把多组并成一个假组名。
+/** 分组串拆分：一个源可属多个分组，分隔形态有 `,` / `\` / `，`（全角）三种，
+ *  一律兼容 + trim + 去空段 + 段内去重。只按 `\` 拆会让逗号粘连把多组并成一个假组名
+ *  （钉子：`tests/services/normalize.test.ts` 的分组拆分那组，口径另见矩阵行 `c-identity`）。
  *  存量脏数据由 SourceRegistry.load 迁移收敛。
  *  模块私有：导入侧与存量收敛共用；对外不是能力面（矩阵 impl 锚只要求符号在场）。 */
 function splitGroups(raw: string): string[] {
@@ -187,8 +189,8 @@ function kindOfSourceValue(v: unknown): SourceContentKind {
 }
 
 /** raw.bookSourceType → 内容形态（quiet 版，供 `rehydrateStoredSource` 存量重推）：
- *  缺省/0/-1 → 'text'，其余（1/2/3 与认不出的值）→ 对应形态或 'unknown'——旧数据当年按
- *  文本入库的误标在此按 raw 重推收敛出去，不再当文本源参搜；raw 不是对象 → undefined（别动）。 */
+ *  缺省/0/-1 → 'text'，其余（1/2/3 与认不出的值）→ 对应形态或 'unknown'——被误标成文本入库的
+ *  存量条目在此按 raw 重推收敛出去，不再当文本源参搜；raw 不是对象 → undefined（别动）。 */
 function contentTypeOfRaw(raw: unknown): SourceContentKind | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined
   return kindOfSourceValue((raw as Record<string, unknown>).bookSourceType)
@@ -229,8 +231,8 @@ const BOOK_META_KEYS = RULE_FIELD_SPECS.flatMap((s) => (
 ))
 
 /** raw 的分类 / 字数四项（供 `rehydrateStoredSource` 存量重推，与 `rawHeaderRule` /
- *  `rawRulePattern` 同族）。这两个字段后接进取值链路，存量 rules 没这四个键 → 源里读得出的
- *  分类/字数对老库**永远是 null**（缺这一步时审计到货率为零）。
+ *  `rawRulePattern` 同族）。分类与字数只从 `rules` 取值，而存量的 rules 可能没这四个键 → 源里读得出的
+ *  分类/字数对老库**永远是 null**，这个读口就是补那一格的。
  *  读口复用导入时的同一套材料：容器走 `ruleContainer`（字符串化容器照解析，不另立规矩）、
  *  容器与键名取自规则字段表的 legado 路径（与 `flattenDialect` 同一批行）、Native 的裸选择器补
  *  隐式 `@text`（`withImplicitText`，与 flattenNative 同口径）。
@@ -258,7 +260,7 @@ type ExploreField = RuleFieldsOf<'vacant'> | 'ruleExploreKinds'
 /** 原生 `ruleFind` → 发现面取值（由导入侧 `flattenNative` 调用；存量补推侧 `rawExploreFields`
  *  跑的是同一个 flatten，两条路因此不可能分叉）。这个函数只交材料、不产留痕——`sawChildren` 回给
  *  调用方点名，因为导入与补推的留痕渠道不同。口径三条（判据只在能分叉的地方钉死）：整套覆盖的
- *  启用判据只看闸行的 native 子字段非空（`EXPLORE_GATE_SUBS`；逐字段回落会把对面本该用通用规则的
+ *  启用判据只看闸行的 native 子字段非空（`EXPLORE_GATE_SUBS`；逐字段回落会把本该走通用规则的
  *  源读成半套）、kinds 只收标题与地址**去空白后**非空的顶层项、`children` 非空要如实报。
  *  非对象形态的 `ruleFind` 不在此列（同 `ruleRank` 一族：静默忽略）。 */
 function nativeExploreFields(f: Record<string, unknown>): {
@@ -283,7 +285,7 @@ function nativeExploreFields(f: Record<string, unknown>): {
   const own = f.ruleSearch
   if (typeof own === 'object' && own !== null && !Array.isArray(own)) {
     const o = own as Record<string, unknown>
-    // 闸与子字段名都读表派生（与 legado 侧同一个判据、同一批配对目标），f.url 与本函数的
+    // 闸与子字段名都读规则字段表派生（两方言共读同一张表，配对目标只有一份），f.url 与本函数的
     // sawChildren 留显式：它们不是条目子字段。
     if (wholeSetEnabled(o[EXPLORE_GATE_SUBS.native])) {
       for (const [sub, field] of Object.entries(EXPLORE_NATIVE_SUBS)) put(field, o[sub])
@@ -457,12 +459,12 @@ function flattenDialect(raw: Record<string, unknown>, warnings: NormalizeIssue[]
   // 那两条文案只答 **exploreUrl 这一档**：平铺 raw 自带分类入口时书城照样有入口，别把文案读成整源判定。
   const parsed = parseExploreKinds(out.exploreUrl)
   // 平铺优先这条尺也管这一格。值不是串、不走 setIfVacant，但规则是同一条：raw 顶层自带分类入口、
-  // exploreUrl 却缺席或读不出的平铺源，被派生值无条件覆盖就是**静默清空**（改动前它进得了书城，
-  // 清空还一处留痕都不留）。在场是非空数组才让位；在场是脏形状（非数组）照旧被派生值接管，
+  // exploreUrl 却缺席或读不出的平铺源，被派生值无条件覆盖就是**静默清空**（本来进得了书城的源
+  // 一处留痕都不留地失去入口，与平铺优先这把尺相违）。在场是非空数组才让位；在场是脏形状（非数组）照旧被派生值接管，
   // 收敛成数组那一步在 normalizeSource 落位处，与「缺键」同档。
   if (!isArrayOfKinds(out.ruleExploreKinds)) out.ruleExploreKinds = parsed.kinds
   if (parsed.form === 'js') {
-    warnings.push({ field: 'exploreUrl', message: '发现入口是脚本形态（@js:/<js>），本期不执行脚本，该源在书城无分类入口' })
+    warnings.push({ field: 'exploreUrl', message: '发现入口是脚本形态（@js:/<js>），本仓不执行脚本，该源在书城无分类入口' })
   } else if (parsed.form === 'unknown') {
     warnings.push({ field: 'exploreUrl', message: '发现入口读不出任何可用分类（声明的形状读不出条目，或形状本身认不出），该源在书城无分类入口' })
   }
@@ -491,10 +493,10 @@ function normalizeHeader(v: unknown, warnings: NormalizeIssue[]): Record<string,
 
 /**
  * 「对象 JSON」的唯一宽松解析（**头与 URL 选项共用这一份**）：严格 JSON 优先，失败再按
- * 单引号交换试一次（`{'a':'b'}` → `{"a":"b"}`——真实源大量存在），两种都不行或形状不是对象
+ * 单引号交换试一次（`{'a':'b'}` → `{"a":"b"}`——单引号形态按合法收），两种都不行或形状不是对象
  * 才判失败。**只宽在引号形态，不猜结构**：补逗号、去尾逗号、剥注释都不做。
  *
- * 为什么要单点：对面把头 JSON 做成**两段解析**（严格 → 宽松），口径与出处记在矩阵行
+ * 为什么要单点：头 JSON 必须**两段解析**（严格 → 宽松），口径与对读记在矩阵行
  * `b-header-js` / `b-header-static`；头若只做一步 `JSON.parse`，单引号形态的头会静默丢。
  * `request.ts` 的选项 JSON 与头必须共用这一解析口，不允许第二处宽松解析。
  */
@@ -632,7 +634,7 @@ function flattenNative(raw: Record<string, unknown>, warnings: NormalizeIssue[])
     }
   }
   // ruleFind（发现面）：url 模板 + kinds 分类入口；ruleSearch 是**整套**覆盖通用搜索规则
-  // （判据只看 list 非空，见 NormalizedRules 的注释）。children 二级分类本期不做——如实进 warning，
+  // （判据只看 list 非空，见 NormalizedRules 的注释）。children 二级分类不接——如实进 warning，
   // 不静默丢（顶层那层照样落位）。
   const find = raw.ruleFind
   if (typeof find === 'object' && find !== null && !Array.isArray(find)) {
@@ -640,7 +642,7 @@ function flattenNative(raw: Record<string, unknown>, warnings: NormalizeIssue[])
     for (const [field, value] of Object.entries(mapped.values)) out[field] = value
     out.ruleExploreKinds = mapped.kinds   // 键恒落位：消费者按 .length 读分类面
     if (mapped.sawChildren) {
-      warnings.push({ field: 'ruleFind.kinds', message: 'kinds[].children（二级分类）本期不支持，已忽略' })
+      warnings.push({ field: 'ruleFind.kinds', message: 'kinds[].children（二级分类）不接，已忽略' })
     }
   }
   // 顶层未支持字段（v1 无 POST/排序面；charset 由抓取链自动识别）
@@ -650,7 +652,7 @@ function flattenNative(raw: Record<string, unknown>, warnings: NormalizeIssue[])
   const method = str(raw.method)
   if (method !== null && method.toUpperCase() !== 'GET') unsupported.push('method')
   for (const f of ['body', 'searchMethod', 'searchBody'] as const) if (str(raw[f]) !== null) unsupported.push(f)
-  // ruleRank 仍然不认：对面已把整条排行榜声明链撤了（那是功能级缺口，不是分页缺口），本仓跟着不接
+  // ruleRank 不认：排行榜是功能级缺口（不是分页缺口），本仓不接，只在这里如实登记为未支持字段
   for (const block of ['ruleRank'] as const) {
     const b = raw[block]
     if (typeof b === 'object' && b !== null && !Array.isArray(b)
@@ -697,7 +699,8 @@ function escapeRegex(s: string): string {
  *  当场红。逐字段的 why 仍写在每个读口上。 */
 const ALWAYS_READERS: Record<RuleFieldsOf<'always'>, (raw: unknown) => string | null | undefined> = {
   // ruleDetailInit 按 raw 重推（init 换根映射的存量收敛）：normalize 只在入库时映射 ruleBookInfo.init，
-  // 存量 rules 缺此键 → 详情换根静默不生效、tocUrl 模板 Miss 回退详情页地址 → EmptyToc（真机实证）。
+  // 存量 rules 缺此键 → 详情换根静默不生效、tocUrl 模板 Miss 回退详情页地址 → EmptyToc
+  // （init 的口径与读数见矩阵行 `c-rule-book-info-init`）。
   // raw 是真相、rules 是派生；定点补这一个字段，不整链重 normalize（那可能拒绝存量源）。
   // **读路必须是导入侧那一份**（deriveRuleField 直接跑 flattenDialect/flattenNative）：恒覆盖
   // 配第二份解释会把对的改成错的。
@@ -715,7 +718,7 @@ const CONDITIONAL_READERS: Record<RuleFieldsOf<'conditional'>, (s: NovelSource, 
   // 静态头按 raw 补推（与 headerRule 成对）：单引号形态的头若被判成坏 JSON 丢弃，只改解析器
   // 不动存量则受害源的头仍然是空的（现量见矩阵行 `b-header-static`）。
   // 触发条件刻意收窄到「规则形态为 null 且头表也是 null」：只有这种形状需要补推，
-  // 不会覆盖任何今天被判为有效的值（合法空对象 `{}` 派生出来是 {}，不是 null）。
+  // 不会覆盖任何已被判为有效的值（合法空对象 `{}` 派生出来是 {}，不是 null）。
   header: (s, mark) => {
     if (s.rules.headerRule !== null || s.rules.header !== null) return
     const wantHeader = rawHeaderFields(s.raw)
@@ -749,13 +752,13 @@ export function rehydrateStoredSource(s: NovelSource): boolean {
     else if (current === undefined) { s.rules[key] = null; mark() }
   }
 
-  // enabled 缺省归一为 true——早期数据无此字段，缺省即「启用」，否则参与集判据
+  // enabled 缺省归一为 true——存量数据可能没有这个字段，缺省即「启用」，否则参与集判据
   // （`services/participation.ts` 的 `participates`）静默排除老源；type 缺省归一为 'text'——
-  // 早期数据无此字段（当时 bookSourceType 根本没读）。
+  // 同一个道理，存量里没有这一格。
   if (typeof s.enabled !== 'boolean') { s.enabled = true; mark() }
   if (!Object.hasOwn(SOURCE_KIND_LABEL, s.type)) { s.type = 'text'; mark() }
-  // type 按 raw.bookSourceType 重推——旧映射把 1/2 读反，漫画/短剧源被误标 text 混进聚合搜索与
-  // 文字书架；**认不出的编码 → 'unknown'**（读不懂不等于文本源，退出参与集；不打 status——
+  // type 按 raw.bookSourceType 重推——库里可能存有 1/2 误标的存量条目（漫画/短剧源被标成 text
+  // 就会混进聚合搜索与文字书架），按 raw 重推即收敛；**认不出的编码 → 'unknown'**（读不懂不等于文本源，退出参与集；不打 status——
   // 探针按搜索面判 verified，坏源那条道会被下一次重验洗白）。
   const derived = contentTypeOfRaw(s.raw)
   if (derived !== undefined && s.type !== derived) { s.type = derived; mark() }
@@ -822,7 +825,7 @@ export function rehydrateStoredSource(s: NovelSource): boolean {
   }
   for (const phase of REHYDRATE_PHASES) runners[phase]()
 
-  // groups 拆分迁移——早期只按 `\` 拆，真实导出的逗号粘连组合串按 splitGroups 收敛成多段（幂等）；
+  // groups 拆分迁移——存量 groups 里可能带逗号粘连的组合串，按 splitGroups 收敛成多段（幂等）；
   // name 前缀图标迁移——书源包惯用的分组装饰前缀按 stripLeadingIcons 剥掉（幂等）。
   if (Array.isArray(s.groups)) {
     const migrated = s.groups.flatMap(splitGroups)

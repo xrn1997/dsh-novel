@@ -4,8 +4,8 @@ import { execFile } from 'node:child_process'
  * 出站代理（系统代理/环境变量的实用子集）。
  *
  * 为什么需要：本插件用 Node 的 fetch（undici）出站，而 **undici 不读系统代理**——WinINET/浏览器
- * 代理设置对它完全无效。于是「浏览器能开、读者打不开」这类型错位就出现了：实测有站对直连的
- * 外网出口一律 302 跳走，走本机代理即 200 真实章节页；表现为本插件里的「网络错误」或「正文零命中」。
+ * 代理设置对它完全无效。于是「浏览器能开、读者打不开」这类型错位就出现了：有站点只认特定出口，
+ * 直连的外网出口一律被 302 跳走、走本机代理才回到真实章节页；表现为本插件里的「网络错误」或「正文零命中」。
  *
  * 取值优先级：`config.proxyUrl`（显式）> 环境变量 HTTPS_PROXY/HTTP_PROXY/ALL_PROXY
  * > Windows 系统代理（HKCU…Internet Settings，ProxyEnable=1 时取 ProxyServer）> 直连。

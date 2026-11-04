@@ -203,7 +203,7 @@ describe('panelShelf（面板期书架投影）', () => {
 })
 
 /**
- * 落点（`PanelShelfRead`）住在 `panel-shelf.ts`，视图不再自己从投影里猜「这一发成没成」：
+ * 落点（`PanelShelfRead`）住在 `panel-shelf.ts`，视图不拿投影读数自己猜「这一发成没成」：
  * 被代际作废的那发提前 resolve 时，`panelShelf.get()` 里躺着的是**上一发**的读数——
  * 拿它当本轮成功，书架视图就会在错误的时机清掉封面失败表。
  */

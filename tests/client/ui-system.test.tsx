@@ -20,12 +20,13 @@ beforeEach(resetPanelShelf)
 /**
  * UI 系统守卫：呈现层的不变量（token 自足 / 标度 / 焦点与键盘可达 / 布局单位）。
  *
- * 病根（本轮实测）：`.novel-searchbox` 引用了 `var(--novel-layer)`，而 token 层只定义
- * `--novel-layer-1/2/3`。CSS 自定义属性「引用未定义」不是忽略这一行，而是让整个
- * `background` 简写落到 unset → 实测计算值 `rgba(0, 0, 0, 0)`（同页引用 `--novel-layer-2`
- * 的对照元素是 `rgb(36, 36, 38)`）。这与 `--dsw-alias-border-l` 那次同罪，但既有
- * `theme-tokens.test.ts` 的词表守卫只扫 `--dsw-*`（宿主名），**不扫本插件自己的 `--novel-*` 层**
- * ——所以测试全绿、界面静默裸奔。本文件的第一条就是补这个洞。
+ * 病根形态：`.novel-searchbox` 一类声明引用了 token 层没有的名字（token 层只定义
+ * `--novel-layer-1/2/3`）。
+ * CSS 自定义属性「引用未定义」不是忽略这一行，而是让整个
+ * `background` 简写落到 unset——底色静默变透明，界面裸奔却无一处报错。
+ * `theme-tokens.test.ts` 的词表守卫只扫宿主名（`--dsw-*`），
+ * **不扫本插件自己的 `--novel-*` 层**——那一层写错时测试全绿、界面静默裸奔，本文件的第一条
+ * 扫的就是这一层。
  */
 
 /** jsdom 环境下 import.meta.url 不是 file 协议（theme-tokens 跑在 node 环境才用得动 URL）——
@@ -69,7 +70,7 @@ function strip(text: string): string {
 
 /** vitest 未开 globals ⇒ RTL 的自动 cleanup 不注册（同目录别的文件都显式挂了这一行）。
  *  漏掉这一行，上一个用例的 DOM 就留在 body 里，`screen.*` 会命中别人的元素：
- *  「命中行是可聚焦按钮」那条实际读到的是**书架卡片**（断言从未成立，假绿）。 */
+ *  「命中行是可聚焦按钮」那条会读到**书架卡片**（断言不成立却照样绿）。 */
 afterEach(cleanup)
 
 describe('token 层自足守卫（引用未定义的本层 token 即红）', () => {
@@ -90,19 +91,19 @@ describe('token 层自足守卫（引用未定义的本层 token 即红）', () 
         if (!defined.has(token)) bad.push(`${file}: ${token}`)
       }
     }
-    expect(bad, `引用了本层不存在的 token（background 等简写会整条落 unset，实测＝静默无底）：\n${bad.join('\n')}`).toEqual([])
+    expect(bad, `引用了本层不存在的 token（background 等简写会整条落 unset，即静默无底）：\n${bad.join('\n')}`).toEqual([])
   })
 
   it('负断言：守卫自身别空转——假 token 引用必须被抓出来', () => {
     const defined = new Set<string>()
     for (const m of NOVEL_CSS.matchAll(/(--novel-[\w-]+)\s*:/g)) defined.add(must(m[1], '正则捕获组 1（--novel-* 定义名）'))
-    expect(defined.has('--novel-layer')).toBe(false)               // 本轮病根：无裸 --novel-layer
+    expect(defined.has('--novel-layer')).toBe(false)               // 本层没有裸 --novel-layer
     expect(defined.has('--novel-layer-2')).toBe(true)
     expect(NOVEL_CSS).toMatch(/\.novel-searchbox\s*\{[^}]*background:\s*var\(--novel-layer-[12]\)/)
   })
 })
 
-describe('z 序单表（控制器层 CTRL_Z 与样式层浮层不再各写各的数）', () => {
+describe('z 序单表（控制器层 CTRL_Z 与样式层浮层只从这一张表出数）', () => {
   const z = (name: string): number => {
     const m = NOVEL_CSS.match(new RegExp(`--novel-z-${name}\\s*:\\s*(\\d+)`))
     return m === null ? NaN : Number(m[1])
@@ -136,11 +137,11 @@ describe('z 序单表（控制器层 CTRL_Z 与样式层浮层不再各写各的
 })
 
 describe('布局单位与视口约束（阅读器不能被正文高度绑架）', () => {
-  it('正文栏宽随字号走：值槽 --novel-measure 以 em 计，不再钉死像素列', () => {
+  it('正文栏宽随字号走：值槽 --novel-measure 以 em 计，不钉死像素列', () => {
     const body = ruleBody('.novel-rdr-body')
     expect(body, '.novel-rdr-body 的 max-width 必须走 --novel-measure').toMatch(/max-width:\s*var\(--novel-measure\)/)
     expect(NOVEL_CSS, '值槽要有 em 缺省（随字号缩放），且必须在词表里在册').toMatch(/--novel-measure:\s*\d+(\.\d+)?em/)
-    expect(strip(NOVEL_CSS), '旧的固定 640px 列').not.toContain('calc(50%')
+    expect(strip(NOVEL_CSS), '栏宽只走值槽，不钉死成固定列').not.toContain('calc(50%')
   })
 
   it('纸张色涂在阅读区，不涂在正文列上（full-bleed：窄带飘在宿主底色里 = 纸没铺开）', () => {
@@ -168,23 +169,23 @@ describe('布局单位与视口约束（阅读器不能被正文高度绑架）'
   })
 
   it('注释面板与目录抽屉共用同一份槽几何（各抄一份 sticky 规则必漂移）', () => {
-    // 缺陷的根子是两块同族浮层走了两套不同的锚定（抽屉锚视口、面板锚内容盒）。
-    // 修好之后本体各自的规则仍管自己的尺寸，但**槽**必须共用同一条。
+    // 根子是两块同族浮层走两套不同的锚定（抽屉锚视口、面板锚内容盒）：本体各自的规则
+    // 只管自己的尺寸，**槽**必须共用同一条。
     expect(ruleBody('.novel-notes-slot')).not.toBe('')
     expect(ruleBody('.novel-notes-slot')).toBe(ruleBody('.novel-drawer-slot'))
   })
 
   it('抽屉条目拒绝 flex 收缩（可滚动 flex 列里，滚动发生前条目会先被压扁）', () => {
-    // 真实回归：给抽屉加视口上限后，60 条目录各被压到 12px 高、文字互相咬住
+    // 机理：视口上限一生效，flex 列先压缩条目再让出滚动条——条目要先免收缩，否则文字互相咬住
     expect(ruleBody('.novel-drawer-item')).toMatch(/flex:\s*none/)
   })
 
   it('窄列不溢出：书架头可折行，搜索框独行且弹性宽', () => {
     expect(ruleBody('.novel-shelf-head')).toMatch(/flex-wrap:\s*wrap/)
-    expect(ruleBody('.novel-shelf-title')).toMatch(/white-space:\s*nowrap/)   // 实测 380px 下标题被压成一个字一行
+    expect(ruleBody('.novel-shelf-title')).toMatch(/white-space:\s*nowrap/)   // 窄列下标题会被压成一个字一行
     expect(ruleBody('.novel-search-bar')).toMatch(/flex-wrap:\s*wrap/)
-    // 搜索框单独一行（IA：聚合搜索是找新书入口，不与书架筛选同簇）——独占行靠 flex-basis 100%，
-    // 旧「与标题同行」结构被 Chrome 算成 min-content 假设主尺寸，簇内折行（探针实测 706→651、215）
+    // 搜索框单独一行（IA：聚合搜索是找新书入口，不与书架筛选同簇）——独占行靠 flex-basis 100%；
+    // 与标题同行的写法会让框按 min-content 解析主尺寸，簇内折行
     expect(ruleBody('.novel-shelf-search')).toMatch(/flex:\s*1 1 100%/)
     expect(ruleBody('.novel-shelf-filter'), '筛选簇独立成行').toMatch(/flex:\s*1 1 100%/)
     const box = ruleBody('.novel-shelf-search form')
@@ -192,14 +193,14 @@ describe('布局单位与视口约束（阅读器不能被正文高度绑架）'
     expect(box).not.toMatch(/(^|;)\s*width:\s*\d+px/)
   })
 
-  it('横向溢出守卫：box-sizing reset 圈住插件两棵树（content-box 下 .novel-wrap 外廓恒超容器 → 窄列底部横滚条；探针实测 vp=970 main sw=1002）', () => {
-    expect(NOVEL_CSS, '缺 .novel-root 侧 border-box reset——窄列横向滚动条会复发（用户真机反馈的「书架宽度」问题根因）')
+  it('横向溢出守卫：box-sizing reset 圈住插件两棵树（content-box 下 .novel-wrap 外廓恒超容器 → 窄列底部横滚条）', () => {
+    expect(NOVEL_CSS, '缺 .novel-root 侧 border-box reset——窄列横向滚动条会复发')
       .toMatch(/\.novel-root[^{]*\{[^}]*box-sizing:\s*border-box/)
     expect(strip(NOVEL_CSS), '缺 [data-novel-scope] 侧 reset（书源管理区块同树，设壳自足性口径）')
       .toMatch(/\[data-novel-scope\][^{]*\{[^}]*box-sizing:\s*border-box/)
   })
 
-  it('源列表操作列定宽右锚：.novel-tr.src 第5轨 148px（auto 轨让右缘按钮组随状态漂移——用户实机反馈「没对齐」）', () => {
+  it('源列表操作列定宽右锚：.novel-tr.src 第5轨 148px（auto 轨会让右缘按钮组随状态漂移）', () => {
     expect(ruleBody('.novel-tr.src'), '操作列轨道必须定宽（148px）').toMatch(/148px/)
   })
 
@@ -217,7 +218,7 @@ describe('布局单位与视口约束（阅读器不能被正文高度绑架）'
 
   it('书源管理：待办箱 = auto-fit 任务卡网格（长条在宽列下是悬浮碎片）；⋯菜单是浮层；导入弹层宽档', () => {
     const grid = ruleBody('.novel-inbox-grid')
-    expect(grid, '待办必须是 auto-fit 卡片网格——横跨整列的长条在 1600px 内容列下中间空、动作钮孤悬列尾（用户实机反馈）')
+    expect(grid, '待办必须是 auto-fit 卡片网格——横跨整列的长条在宽内容列下中间空、动作钮孤悬列尾')
       .toMatch(/grid-template-columns:\s*repeat\(auto-fit/)
     expect(ruleBody('.novel-todo-card'), '任务卡自包含（读数 + 名单 + 处置动作）').toMatch(/display:\s*flex/)
     expect(ruleBody('.novel-menu'), '行内「⋯」菜单是浮层（锚点 .novel-actions position:relative）').toMatch(/position:\s*absolute/)
@@ -238,7 +239,7 @@ describe('布局单位与视口约束（阅读器不能被正文高度绑架）'
   })
 
   it('书架筛选簇不贴右；顶部 tab 导航在场且有激活态（IA：书架|书城|书源管理 并列）', () => {
-    // 排序灰字若 margin-left:auto，在 1600px 内容列里会被钉到最右端，成悬浮碎片；
+    // 排序灰字若 margin-left:auto，在宽内容列里会被钉到最右端，成悬浮碎片；
     // 书城是分类浏览页本身，不设占位 chip——占位不如真导航。
     expect(ruleBody('.novel-shelf-sort'), '排序灰字跟簇尾，不许贴列右端').not.toMatch(/margin-left:\s*auto/)
     expect(ruleBody('.novel-shelf-filter'), '筛选簇整簇左聚簇').not.toMatch(/margin-left:\s*auto/)
@@ -248,7 +249,7 @@ describe('布局单位与视口约束（阅读器不能被正文高度绑架）'
   })
 })
 
-describe('焦点与指针无关可达（键盘/触屏不再是二等公民）', () => {
+describe('焦点与指针无关可达（键盘/触屏与指针同等可达）', () => {
   it('交互件各有 :focus-visible 规则', () => {
     const focusRules = [...NOVEL_CSS.matchAll(/[^{}]*:focus-visible[^{]*\{[^}]*\}/g)].map((m) => m[0]).join('\n')
     for (const sel of ['.novel-card', '.novel-chip', '.novel-drawer-item', '.novel-input', '.novel-rdr-ctl', '.novel-seg button', '.novel-tabs button', '.novel-menu button', '.novel-switch']) {
@@ -279,7 +280,7 @@ describe('进度动画不吃布局', () => {
 })
 
 describe('呈现层的单点（两处抄同一串东西必漂移）', () => {
-  it('源列表列宽住在样式层，视图不再携带列字面量', () => {
+  it('源列表列宽住在样式层，视图不携带列字面量', () => {
     expect(ruleBody('.novel-tr.src')).toMatch(/grid-template-columns:/)
     const src = viewSource('SettingsSourceList.tsx')
     expect(src, 'gridTemplateColumns 字面量该收进样式类').not.toContain('minmax(130px')
@@ -352,7 +353,7 @@ describe('键盘可达的承载元素（主操作不许只绑鼠标）', () => {
     progress: { chapterIndex: 3, offsetRatio: 0.5, updatedAt: 1 },
   }
 
-  it('书架卡片是可聚焦按钮，删除钮不再是按钮里的按钮', async () => {
+  it('书架卡片是可聚焦按钮，删除钮是它的兄弟（不是按钮里的按钮）', async () => {
     routeStore.set({ route: { name: 'shelf' } as never })
     const deps = makeCoreDeps({ apiGet: vi.fn(async () => [book]) })
     const { container } = render(createElement(ShelfView, { deps }))
@@ -403,7 +404,7 @@ describe('键盘可达的承载元素（主操作不许只绑鼠标）', () => {
     expect(hit, '命中行标题该落在真 <button> 里').not.toBeNull()
     expect(must(hit, '命中行按钮').querySelectorAll('button'), '按钮里不套按钮').toHaveLength(0)
     // 默认那一档（按书）自己也有两处新形状：展开区里的逐源行、带动作钮的行头。钉子必须两轴都打——
-    // 只钉按源就等于让新的默认视图绕过这条守卫（书架卡片那次的病根正是行壳冒充按钮）。
+    // 只钉按源就等于让新的默认视图绕过这条守卫（行壳冒充按钮正是这条守卫要拦的形态）。
     const books = container.querySelector<HTMLElement>('[data-novel-books]')
     expect(books, '按书那一档没渲染').not.toBeNull()
     const booksEl = must(books, '按书那一档')
@@ -413,7 +414,7 @@ describe('键盘可达的承载元素（主操作不许只绑鼠标）', () => {
     expect(container.querySelectorAll('[data-novel-book]').length,
       '这一标记只属于按书那一行：按源轴与书城不许借').toBe(1)
     // 不借 <details> 的形状：借回来就得把整本逐源行渲染进 DOM 再藏起来，还要背上右端动作钮
-    // 从展开区里挤掉的那一条宽度（形状取舍的实测理由写在 BookRow 的注释头上）
+    // 从展开区里挤掉的那一条宽度（形状取舍的理由住在 BookRow 的注释头上）
     expect(booksEl.querySelectorAll('details, summary'), '按书那一行不借折叠形').toHaveLength(0)
     // 收起时展开区不在 DOM 里：先点行头主钮，断言证的才是「展开后」这三个字
     const main = must(booksEl.querySelector('.novel-book-main'), '书行行头主钮')
@@ -427,7 +428,7 @@ describe('键盘可达的承载元素（主操作不许只绑鼠标）', () => {
     expect(bookMain, '展开后的命中行标题同样要落在真 <button> 里').not.toBeNull()
     expect(must(bookMain, '展开后的命中行按钮').querySelectorAll('button'), '按钮里不套按钮（按书那一档）').toHaveLength(0)
     // 行头主钮与「都加架」是兄弟：主钮只做展开（aria-expanded 已翻面），动作钮不在它肚子里。
-    // 「书行整行不是按钮」这条旧钉子在此正面改写——行头**就是**一颗按钮，但它不替用户选一家读。
+    // 「书行整行不是按钮」禁的是整行——行头**就是**一颗按钮，但它不替用户选一家读。
     expect(main.getAttribute('aria-expanded'), '点过之后展开').toBe('true')
     const row = must(booksEl.querySelector('[data-novel-book]'), '按书那一行的标记')
     expect(must(row, '按书那一行').querySelectorAll(':scope > button'), '行头主钮与「都加架」两颗平级兄弟').toHaveLength(2)

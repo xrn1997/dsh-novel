@@ -1,7 +1,7 @@
 import type { SearchGroup } from '../shared/wire.js'
 
-/** 分类浏览的内存有效期。**这是估值不是实测**——浏览面不需要秒级新鲜，但也不该让用户
- *  每次进同一个分类都重打一遍站点。真机观察重复进入的命中率后再调。 */
+/** 分类浏览的内存有效期：浏览面不需要秒级新鲜，但也不该让用户
+ *  每次进同一个分类都重打一遍站点——这个值是两者之间的取舍。 */
 export const EXPLORE_CACHE_TTL_MS = 15 * 60_000
 
 export interface KindCacheKey {

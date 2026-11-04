@@ -294,7 +294,7 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
           ))}</div>
           : books.length === 0
             ? (loadError === null
-              // 真零本：空态文案（测试钉子原文）+ 单卡导入兜底——导入入口不能随工具栏钮一起消失
+              // 真零本：空态文案（测试钉子原文）+ 单卡导入兜底——空架也要有导入入口（引导卡是唯一入口）
               ? (<>
                   <EmptyState title={t('shelf.empty.title')} hint={t('shelf.empty.hint')} />
                   <div className="novel-grid solo">{importCard}</div>

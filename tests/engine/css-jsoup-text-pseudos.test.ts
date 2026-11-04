@@ -1,10 +1,9 @@
 /**
- * **jsoup 的文本伪类：`:contains(…)` 忽略大小写、`:containsOwn(…)` 只看元素自己的文本。**
- * 两条都是**对读对面依赖的那个库实测**得到的形状（本机 JDK 跑 jsoup；版本成色写在
- * 矩阵 `a-css-jsoup-text-pseudos`，不在这里重复）：
- * - `:contains` 在 jsoup 不分大小写、cheerio 分——这条有真实需求方（现量重算走 `DSH_PARSE_CENSUS=1`），
- *   所以按对面语义放宽；
- * - `:containsOwn` cheerio 根本不认识（如实 RuleEvalError），jsoup 有：只比元素直接文本节点。
+ * **文本伪类：`:contains(…)` 忽略大小写、`:containsOwn(…)` 只看元素自己的文本。**
+ * 这两条形状登记在矩阵 `a-css-jsoup-text-pseudos`：
+ * - `:contains` 不分大小写（cheerio 原生分大小写，这里放宽为不分）——这条有真实需求方
+ *   （现量重算走 `DSH_PARSE_CENSUS=1`）；
+ * - `:containsOwn` cheerio 根本不认识（如实 RuleEvalError），本仓与 `:contains` 同一条截流点实现：只比元素直接文本节点。
  *
  * 放宽的代价：同一选择器可能多命中、取位（`.0`）随之变——所以「改选择语义要连带重跑引擎全测 +
  * 一轮真链路审计」（README 那条门的口径）。
@@ -27,10 +26,10 @@ const hitCount = async (rule: string, html = HTML): Promise<number> => {
   return v.kind === 'nodes' ? v.nodes.length : -1
 }
 
-describe('jsoup 文本伪类（:contains 不敏感 / :containsOwn 只看自身文本）', () => {
+describe('文本伪类（:contains 不敏感 / :containsOwn 只看自身文本）', () => {
   it(':contains 忽略大小写——同一个词的大写与小写命中同一批元素', async () => {
     expect(await hitCount('.wrap li:contains(Abc)')).toBe(1)
-    // 这一条是本次修复的正身：区分大小写时下面这行会零命中 → Miss
+    // 这一条钉住「大小写放宽」确实在生效：没有放宽时这行会零命中 → Miss
     expect(await hitCount('.wrap li:contains(abc)')).toBe(1)
   })
 
@@ -57,8 +56,8 @@ describe('jsoup 文本伪类（:contains 不敏感 / :containsOwn 只看自身�
     expect(await hitCount('.wrap li:contains(没有这个词)')).toBe(-1)
   })
 
-  it('正则式特殊字符按字面比（对面是文本包含，不是正则）', async () => {
-    // 对面 jsoup 的 :contains 是**字面**包含；把 `(` 当正则会把这条读成非法/零命中
+  it('正则式特殊字符按字面比（文本包含，不是正则）', async () => {
+    // `:contains` 比的是**字面**包含；把 `(` 当正则会把这条读成非法/零命中
     const html = '<div class="wrap"><p>价 (议价) 元</p><p>别</p></div>'
     expect(await hitCount('p:contains("(议价)")', html)).toBe(1)
   })

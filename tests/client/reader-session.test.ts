@@ -35,9 +35,9 @@ function fakePort() {
     targetOffs: new Map<string, number>(),
     /** 视口顶所在正文节点（返回栈采点与排版复位共用） */
     node: null as VisibleNode | null,
-    /** currentNode 读取计数：排版前采点必须发生在 setPref 的同步栈里，退订后不再读 */
+    /** currentNode 读取计数：排版前采点必须发生在 setPref 的同步栈里，退订后不读 */
     nodeReads: 0,
-    /** setScrollTop 历史（证明「不许落位」的用例：一次都不许发生） */
+    /** setScrollTop 的调用记录（证明「不许落位」的用例：一次都不许发生） */
     tops: [] as number[],
     measureAnchors: (): ChapterAnchor[] => port.anchors,
     scrollTop: (): number => port.top,
@@ -149,8 +149,8 @@ describe('ReaderSession.open（目录 → 存档恢复 → 载后定位）', () 
     expect(h.session.state.toc).toHaveLength(3)
   })
 
-  // 在架读数三态（视图据此决定离开那一跳要不要问一句「要不要加入书架」）：它是上面那次存档
-  // 查询的副产品，不是第二次请求。书架拉不到停在 'unknown'——**不知道不等于没有**，不许据此拦用户。
+  // 在架读数三态（视图据此决定离开那一跳要不要问一句「要不要加入书架」）：它是存档查询的副产品，
+  // 不是第二次请求。书架拉不到停在 'unknown'——**不知道不等于没有**，不许据此拦用户。
   it('在架读数：架上 / 不在架 / 书架拉不到', async () => {
     const on = makeSession({ shelf: [shelfBook({ chapterIndex: 0, offsetRatio: 0, updatedAt: 0 })] })
     await on.session.open('src', 'https://s.com/book/1')
@@ -244,7 +244,7 @@ describe('ReaderSession.open（目录 → 存档恢复 → 载后定位）', () 
   it('进书：目录一发布就来的预取不许抢走存档恢复的在途槽', async () => {
     // 视图侧事实：toc 一发布就 afterRender，此刻哨兵在视口顶 → 预取目标 = 第 0 章，
     // 而存档章要等 fetchShelf 回来才知道。在途槽若被预取抢走，open() 的恢复 load 会半路静默短路
-    // （`if (this.inflight !== null) return`）——真机表现即「切走再回来变第一章」。
+    // ——用户侧症状就是「切走再回来变第一章」。
     const port = fakePort()
     const fetched: number[] = []
     let releaseShelf = (): void => {}
@@ -253,7 +253,7 @@ describe('ReaderSession.open（目录 → 存档恢复 → 载后定位）', () 
     })
     const session = new ReaderSession({
       fetchNavigation: async () => ({ chapters: toc, items: planarNavigation(toc) }),
-      // 正文永不落地：真机正文走网络（在途），而书架是本地读、先回来——正是这个先后出的问题
+      // 正文永不落地：正文走网络（一直挂在途），而书架是本地读、先回来——正是这个先后出的问题
       fetchChapter: (_s, _b, i) => { fetched.push(i); return new Promise<ChapterContent>(() => {}) },
       fetchShelf: () => shelfPromise,
       saveProgress: () => {}, saveTotalChapters: () => {}, afterFrames: (cb) => cb(),
@@ -277,7 +277,7 @@ describe('ReaderSession.open（目录 → 存档恢复 → 载后定位）', () 
 
   it('进书：第 0 章的章内位置也算进度（存档 (0, 0.9) 要落回章内，不许当成「无存档」）', async () => {
     // 判据口径：第 0 章里的位置同样是「读过」，存档有无不看 chapterIndex>0——否则读第 1 章的
-    // 进度永远恢复不了，进书后那次视口读数（0,0）还会把存档抹平（真机观测：(0, 0.9999) → (0,0)）。
+    // 进度永远恢复不了，进书后的首次视口读数还会把存档抹平。
     const h = makeSession({ shelf: [shelfBook({ chapterIndex: 0, offsetRatio: 0.9, updatedAt: 1 })] })
     h.port.anchors = [{ index: 0, start: 0, height: 2000 }]
     h.port.scrollH = 3000; h.port.height = 1000
@@ -360,8 +360,8 @@ describe('ReaderSession 进度落盘策略', () => {
   })
 
   it('切章强制存要作废同章防抖窗里的旧值（旧值迟到落盘 = 存档回退到上一章）', async () => {
-    // 真机链路：同章滚动挂起防抖存 → 目录直达后面的章（跨章强制存）→ 旧值迟到落盘覆盖回旧章。
-    // 用户侧症状：存档永远停在「跳章前的章」（真机观测到的正是这条迟到写）。
+    // 链路：同章滚动挂起防抖存 → 目录直达后面的章（跨章强制存）→ 旧值迟到落盘覆盖回旧章。
+    // 用户侧症状：存档永远停在「跳章前的章」——正是这条迟到写。
     const h = makeSession({ debounceMs: 40 })
     await h.session.open('src', 'https://s.com/book/1')
     h.port.anchors = [{ index: 0, start: 0, height: 1000 }, { index: 1, start: 1000, height: 1000 }, { index: 2, start: 2000, height: 1000 }, { index: 3, start: 3000, height: 1000 }]
@@ -460,7 +460,7 @@ describe('ReaderSession 预取与目录直达', () => {
     await new Promise((r) => setTimeout(r, 0))
     expect(h.fetched).toEqual([1])
 
-    // 全载完后不再拉
+    // 全载完后不拉
     await h.session.load('src', 2)
     h.fetched.length = 0
     h.session.afterRender('src')
@@ -501,8 +501,8 @@ describe('ReaderSession 预取与目录直达', () => {
 
   it('目录直达：选中的章立刻落盘（章还在途、视口没动就切走，回来必须还在那一章）', async () => {
     // 选定章之前，落盘只有两个入口：handleViewportChange（要视口真的滚过）与 dispose 的 flush
-    // （只补发防抖窗里的待发值）。目录跳章两者都不占——真机症状：目录选第 N 章后立刻切会话，
-    // 回来仍在原处（无头实测：正文确实取回来了，存档一个字节没动）。
+    // （只补发防抖窗里的待发值）。目录跳章两者都不占——症状就是目录选第 N 章后立刻切会话、回来仍在
+    // 原处：正文确实取回来了，存档一个字节没动。
     const h = makeSession({ debounceMs: 5000 })      // 窗口拉长：证明这一笔不是防抖顺带落的
     await h.session.open('src', 'https://s.com/book/1')
     expect(h.saves).toEqual([])
@@ -524,8 +524,8 @@ describe('ReaderSession 预取与目录直达', () => {
   })
 
   it('倒退跳章：已载集裁到视口所在连续区间（正文顺序不许串章）', async () => {
-    // 真机实测：跳 50 再跳回 10，DOM 里渲染的是 [0, 10, 50]——未载章不进 DOM，缺的章被跳过，
-    // 用户读完第 11 章紧接的是第 51 章。预取跟着视口走，不跟最大已载章（否则会取到 51）。
+    // 未载章不进 DOM，缺的章就会被跳过：跳 50 再跳回 10 后正文顺序断在中间——用户读完第 11 章
+    // 紧接的是第 51 章。预取跟着视口走，不跟最大已载章（否则会取到 51）。
     const many: ChapterEntry[] = Array.from({ length: 60 }, (_, i) => ({ name: `第${i + 1}章`, url: `https://s.com/c/${i}` }))
     const port = fakePort()
     const session = new ReaderSession({
@@ -546,7 +546,7 @@ describe('ReaderSession 预取与目录直达', () => {
   })
 
   it('目录跳章在途时的视口读数不许推翻导航命令', async () => {
-    // 实测（真机复现台）：跳第 20 章后、正文还没到，一次视口读数把位置改回第 1 章——
+    // 这条序列：跳第 20 章后、正文还没到，一次视口读数把位置改回第 1 章——
     // 接着刚到的第 20 章被「窗口跟着视口走」裁掉，用户看到的还是第 1 章。
     // 在途期间视口读数只是「旧位置」的证据，不该压过用户刚下的导航命令。
     const h = makeSession()
@@ -560,7 +560,7 @@ describe('ReaderSession 预取与目录直达', () => {
     expect(h.session.state.pendingJump).toMatchObject({ index: 2 })
   })
 
-   it('在途窗口内目录直达：在途收工后补拉目标章（点击不再无声消失）', async () => {
+   it('在途窗口内目录直达：在途收工后补拉目标章（点击不静默消失）', async () => {
     const h = makeSession()
     await h.session.open('src', 'https://s.com/book/1')
     h.fetched.length = 0
@@ -641,7 +641,7 @@ describe('ReaderSession 跳章失败（位置回退 + 不自动重试）', () =>
 })
 
 describe('ReaderSession 错误清除与重试', () => {
-  it('retry 重拉失败章：成功即清 error（此前成功分支不清 error、视图 onRetry 还是空操作）', async () => {
+  it('retry 重拉失败章：成功即清 error', async () => {
     const port = fakePort()
     let fails = 1
     const session = new ReaderSession({
@@ -744,7 +744,7 @@ describe('ReaderSession 锚点跳转（待定位目标 = 章号 + 锚点 + 节�
 
   it('章块已挂载而锚点找不到（悬空/损坏的元数据）→ 退回章首并提交真实比例，不许让进度停摆', async () => {
     // 挂住的代价不是「这一次没跳成」：pendingJump 非空会把 handleViewportChange 整条早退掉，
-    // 于是滚动不再落盘、currentChapter 冻结——整本书的进度**静默停摆**。
+    // 于是滚动不落盘、currentChapter 冻结——整本书的进度**静默停摆**。
     // 所以宁可落到章首（用户至少还在读这一章），也不留一个永远等不到的目标。
     const h = makeSession()
     await h.session.open('src', 'https://s.com/book/1')
@@ -989,7 +989,7 @@ describe('连续阅读的已载窗口上限（裁章补偿 + 回溯补载）', (
     return { port, session, fetched, render }
   }
 
-  it('连续前读：窗口只保留视口前 6 章，裁章后滚动位按实测高度回补（DOM 不再线性增长）', async () => {
+  it('连续前读：窗口只保留视口前 6 章，裁章后滚动位按量得的高度回补（DOM 规模有界）', async () => {
     const { port, session, render } = makeLongSession(1000)
     await session.open('src', 'https://s.com/book/1')
     render()
@@ -1066,7 +1066,7 @@ describe('连续阅读的已载窗口上限（裁章补偿 + 回溯补载）', (
 
   /** 额度闸用例的现场：跳到第 30 章后把锚点测量喂成失真读数（谎报窗口顶在第 25 章）。
    *  诚实测量下同一章重取风暴起不来（裁章下界与 prune 严格互补，每个位置最多 6 发），
-   *  额度闸兜的正是「测量失真那一天」——所以这里制造它存在的那种失真：每轮 afterRender 都让
+   *  额度闸兜的正是「测量失真」这种情形——所以这里制造它：每轮 afterRender 都让
    *  checkBackfill 重取第 24 章，而 24 与真已载集（第 30 章）不相邻、落地即被 prune 裁掉，
    *  下一轮又重取同一章。 */
   const makeStorm = async () => {
@@ -1091,7 +1091,7 @@ describe('连续阅读的已载窗口上限（裁章补偿 + 回溯补载）', (
 
   it('回溯补载额度是 episode 的硬上界：锚点失真的同一章重取风暴在 16 发后被额度闸挡死', async () => {
     // 一个 episode（open / 跳章 / 跨章换位）就 16 发，不多一发——距离判据依赖高度测量，
-    // 测量失真时它永不收敛，这道闸是那个日子里唯一的刹车。
+    // 测量失真时它永不收敛，这道闸是那种情形下唯一的刹车。
     const { storm, fetched } = await makeStorm()
     for (let i = 0; i < 16; i++) await storm()
     expect(fetched, '同一章（24）被反复重取，恰好花完整个 episode 的 16 发额度').toEqual(Array(16).fill(24))
@@ -1302,7 +1302,7 @@ describe('ReaderSession 排版前采点与复位', () => {
     h.session.dispose()
   })
 
-  it('dispose 退订并清快照：之后 setPref 不再读节点，复位为 no-op', async () => {
+  it('dispose 退订并清快照：之后 setPref 不读节点，复位为 no-op', async () => {
     const h = makeSession()
     await h.session.open('src', 'https://s.com/book/1')
     h.port.top = 100
@@ -1311,7 +1311,7 @@ describe('ReaderSession 排版前采点与复位', () => {
     const reads = h.port.nodeReads
     h.session.dispose()
     setPref({ fontSize: 24 })
-    expect(h.port.nodeReads, '退订后不再采点').toBe(reads)
+    expect(h.port.nodeReads, '退订后不采点').toBe(reads)
     h.port.targetOffs.set('p1', 120)
     h.session.applyTypesetRelocation()
     expect(h.port.tops, '快照已清：退订后的复位不落位').toEqual([])

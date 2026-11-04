@@ -58,7 +58,7 @@ describe('@put / @get 变量', () => {
     expect(ctx.vars).toEqual({ cs: 'c1\nc2' })
   })
 
-  it('值为规则串（CSS + @content 终端）→ 走子规则求值落盘（真实源 ruleBookInfo.init 形态）', async () => {
+  it('值为规则串（CSS + @content 终端）→ 走子规则求值落盘（`ruleBookInfo.init` 形态）', async () => {
     const { evaluate } = await import('../../src/engine/evaluate.js')
     const ctx: EvalContext = {
       vars: {},
@@ -163,11 +163,11 @@ describe('变量读链的 source 层兜底（每级空串继续下找）', () =>
     const ctx = { vars: {}, sourceVar: () => '7' } as EvalContext
     expect(getScopedVar(ctx, 'cid')).toBe('7')
   })
-  it('本层是空串 → 继续下找（对面 takeIf{isNotEmpty}）', () => {
+  it('本层是空串 → 继续下找（非空才收的判据）', () => {
     const ctx = { vars: { cid: '' }, sourceVar: (k: string) => (k === 'cid' ? '9' : undefined) } as EvalContext
     expect(getScopedVar(ctx, 'cid')).toBe('9')
   })
-  it('本层有值优先——顺序不许反（对面 chapter→…→source）', () => {
+  it('本层有值优先——顺序不许反（本层 → 源层的读链）', () => {
     const ctx = { vars: { cid: '本层' }, sourceVar: () => '源层' } as EvalContext
     expect(getScopedVar(ctx, 'cid')).toBe('本层')
   })
@@ -183,13 +183,13 @@ describe('变量读链的 source 层兜底（每级空串继续下找）', () =>
   })
 })
 
-describe("内建伪变量（对面 get() 的两个 when 特例）", () => {
+describe("内建伪变量（bookName / title 两个特例）", () => {
   it("bookName → book.name；title → chapter.title（宿主在场才生效）", () => {
     const ctx = { vars: { bookName: '本层的假值' }, book: { name: '剑来' }, chapter: { title: '第 3 章' } } as EvalContext
     expect(getRuleVar(ctx, 'bookName')).toBe('剑来')
     expect(getRuleVar(ctx, 'title')).toBe('第 3 章')
   })
-  it("宿主缺席 → 不猜，落回读链（对面 book?.let / chapter?.let 同形）", () => {
+  it("宿主缺席 → 不猜，落回读链", () => {
     const ctx = { vars: { bookName: '兜底值' } } as EvalContext
     expect(getRuleVar(ctx, 'bookName')).toBe('兜底值')
     expect(getRuleVar(ctx, 'title')).toBeUndefined()

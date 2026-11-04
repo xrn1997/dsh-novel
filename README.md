@@ -74,7 +74,7 @@ TXT / EPUB 直接进书架，有损导入会留下可回看的「导入说明」
 dsh plugin --profile <profile> add @xrn1997/dsh-novel
 ```
 
-重启宿主后，左侧栏出现「小说」全局面板入口（图标行；点击即在中央面板打开书架 / 书城 / 书源管理 tab）。侧栏入口需要宿主提供 `slots` / `layout` 的界面 bundle（通常由 `@deepseek-ai/dsh-web-app` 提供）；不带它的 profile 只挂 Node 半与 AI 工具，界面上不会多出入口。
+重启宿主后，左侧栏出现「小说」全局面板入口（图标行；点击即在中央面板打开书架 / 书城 / 书源管理 tab）。侧栏入口需要宿主提供 `slots` / `layout` 的界面 bundle；不带它的 profile 只挂 Node 半与 AI 工具，界面上不会多出入口。
 
 三种装法：
 
@@ -90,7 +90,7 @@ dsh plugin --profile <profile> add @xrn1997/dsh-novel
 dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 ```
 
-**宿主兼容声明分两层**：安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`；peer 区间按宿主线开口，线内 rc / patch 不跟版，跨线才重验。实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本：**DSH 0.1.5-rc.1、0.1.7-rc.1、0.1.7-rc.2、0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2、0.2.1-rc.3、0.2.1-rc.5**（宿主不读这个字段——安装许可只认上面那组 peer 区间；这一行是给人看的记录，文档门会核对它与 `package.json` 一致）。宿主发版、peer 区间与浏览器模块表的维护流程，以及发布冷却闸，见 [docs/development.md](docs/development.md#宿主兼容与实测名单)。
+**宿主兼容声明分两层**：安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`；peer 区间按宿主线开口，线内 rc / patch 不跟版，跨线才重验。实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本：**DSH 0.1.5-rc.1、0.1.7-rc.1、0.1.7-rc.2、0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2、0.2.1-rc.3、0.2.1-rc.5**（这一行是给人看的记录，文档门会核对它与 `package.json` 一致；安装许可与实测名单两层的关系见 `ADR-0020`）。宿主发版、peer 区间与浏览器模块表的维护流程，以及发布冷却闸，见 [docs/development.md](docs/development.md#宿主兼容与实测名单)。
 
 ## 首次使用
 
@@ -125,14 +125,14 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 | `dataDir` | `$DSH_HOME/novel/` | 数据根目录（见「数据存储」） |
 | `searchTimeoutMs` | `15000` | 单源搜索超时（毫秒） |
 | `searchParallel` | `5` | 搜索并发源数 |
-| `jsTimeoutMs` | `15000` | js 沙箱预算（毫秒，阅读 / 搜索 / 探针 / 登录全链路共用）。legado 的多请求目录脚本需要秒级预算 |
+| `jsTimeoutMs` | `15000` | js 沙箱预算（毫秒，阅读 / 搜索 / 探针 / 登录全链路共用）。目录脚本可能一次串多个请求，秒级预算才够用 |
 | `cacheMaxBytes` | `209715200`（200MB） | 目录 / 正文缓存上限（字节；按 mtime 最旧的近似 LRU 淘汰，读命中不续命） |
 | `exportDelayMs` | `300` | 范围导出的章节间抓取间隔（毫秒，串行限速） |
 | `localImportMaxBytes` | `52428800`（50MB） | 本地文件导入大小上限（字节，TXT / EPUB 共用） |
 | `proxyUrl` | 启动时自动探测 | 出站代理，见[常见问题](#常见问题)；`'direct'` 强制直连，或显式指定如 `'http://127.0.0.1:7897'` |
 | `apiAllowHosts` | 不追加 | `/novel-api` 同源 fence 的本机 Host 名单追加项，如 `['dsh.local']`；只有用自定义域名（hosts / 内部 DNS）打开宿主面板时才需要。每项只比主机名，端口只做形状校验、不参与匹配（`dsh.local:8080` 也放行 `dsh.local:9999`）。改它需重启；填进去的每个名字都是把 DNS rebinding 防线在那个域名上让掉，只填自己控制的 |
 
-除 `dataDir` 与 `apiAllowHosts` 外，其余 7 项还可在宿主的「插件」页 → `@xrn1997/dsh-novel` 详情里的「运行参数」中编辑（需宿主支持插件配置页）；保存后立即生效，不需要重启插件。旧宿主没有这一页时，配置仍写在 profile 的 `cordis.patch.yml`。`dataDir` 与 `apiAllowHosts` 始终需改该文件并重启。
+除 `dataDir` 与 `apiAllowHosts` 外，其余 7 项还可在宿主的「插件」页 → `@xrn1997/dsh-novel` 详情里的「运行参数」中编辑（需宿主支持插件配置页）；保存后立即生效，不需要重启插件。宿主没有插件配置页时，配置仍写在 profile 的 `cordis.patch.yml`。`dataDir` 与 `apiAllowHosts` 始终需改该文件并重启。
 
 数值项按整数校验；`proxyUrl` 只接受 `direct`、空串或 http(s) 地址（裸 `host:port` 按 `http://` 补全）；`apiAllowHosts` 每项只接受 `host` 或 `host:port`（不带 scheme、路径与空白），且必须是 URL 解析不改写的主机名写法——`2130706433` 这类会被改写成 IP 的别名在 fence 侧等于无效，加载期直接拒绝、不留静默空转。非法值（含 `NaN` / `Infinity`）在插件加载期报错；在插件页保存时被同样拒绝，页面保留草稿供修改。显式 `null` 按未设置处理、取缺省。
 
@@ -169,7 +169,7 @@ $DSH_HOME/novel/
 
 | 格式 | 支持 | 明确不做 / 已知边界 |
 | --- | --- | --- |
-| TXT | BOM 优先 → UTF-8 严格探测 → GBK 回退；标题行切章（第X章 / 卷 / 回 / 节 / 章外篇目 …） | 自定义章名正则（legado 那套「按内容打分挑规则」未接，本仓是一条钉死的正则）；PDF / MOBI / UMD 未接 |
+| TXT | BOM 优先 → UTF-8 严格探测 → GBK 回退；标题行切章（第X章 / 卷 / 回 / 节 / 章外篇目 …） | 自定义章名正则未接（本仓是一条钉死的标题行正则）；PDF / MOBI / UMD 未接 |
 | EPUB 2 / 3（流式排版） | 阅读顺序按 **spine 主序列**计章；原书目录树（EPUB3 nav / EPUB2 NCX，含章内锚点与命名锚点）；封面；正文插图（JPEG/PNG/GIF/WebP 与受限静态 SVG）；基本格式（段落、标题、粗斜体、列表、引用、分隔线、基本表格、上下标、预格式文本）；脚注与附录（补充文档面板，可跟随可返回） | **不加载出版方 CSS 与字体**（排版归本插件阅读设置）；**固定版式**、需 DRM 解密的正文、脚本驱动的交互与音视频不宣称支持（明确拒绝或告警）；正文内联 `<svg>` 装饰图形剥离并记说明（整页是一棵只包一张书内图的 SVG 时按那张图读那一章）；远程图片一律拒绝 |
 
 - **按内容分流、不互相兜底**：文件头是 ZIP 就按 EPUB 解析，失败**不会**回退成 TXT——否则一份加密压缩包会以「一本乱码书」入架；不是 ZIP 的字节才走 TXT 解码链。
@@ -179,21 +179,21 @@ $DSH_HOME/novel/
 
 ## 兼容哪些书源
 
-兼容 legado 书源的**声明式子集**：取值链 / 组合符（`||`、`&&`、`%%`）/ `##` 替换 / AllInOne（单段整页正则） / JSONPath（含 `.*` 属性通配，页面是 JSON 文本时对内容按需解析）/ XPath 子集 / `@put` / `@get` / `@js` 沙箱（脚本完成值语义 + 顶层 `return`/`await` 回落；`eval`/`Function` 在 vm 内可用）/ `jsLib` 源级函数库 / `searchUrl` 的 `@js`/`<js>` 形态 / 对象形态方言（**含 `ruleBookInfo.init` 详情上下文初始化**）/ `url,{json}` POST 请求（选项随书 URL 与章节 URL 全程保留）/ 相对 URL / 隐式 CSS 选择器 / `!` 排除语法，以及 `@js` 宿主垫片（`java.log` / `getElement` / `setContent` / `cookie` / `source.getVariable` 等）。请求状态面还包括真实 cookie jar（`Set-Cookie` 自动落库/回带）、`loginCheckJs`、源级 `concurrentRate` 限速、`webView`/`webJs` 真浏览器抓取与源变量/cache 落盘。缺省请求带浏览器 UA（部分站点 WAF 无 UA 直接 403）。
+兼容 legado 书源的**声明式子集**：取值链 / 组合符（`||`、`&&`、`%%`）/ `##` 替换 / AllInOne（单段整页正则） / JSONPath（含 `.*` 属性通配，页面是 JSON 文本时对内容按需解析）/ XPath 子集 / `@put` / `@get` / `@js` 沙箱（脚本完成值语义 + 顶层 `return`/`await` 回落；`eval`/`Function` 在 vm 内可用）/ `jsLib` 源级函数库 / `searchUrl` 的 `@js`/`<js>` 形态 / 对象形态方言（**含 `ruleBookInfo.init` 详情上下文初始化**）/ `url,{json}` POST 请求（选项随书 URL 与章节 URL 全程保留）/ 相对 URL / 隐式 CSS 选择器 / `!` 排除语法，以及 `@js` 宿主垫片（`java.log` / `getElement` / `setContent` / `cookie` / `source.getVariable` 等）。请求状态面还包括真实 cookie jar（`Set-Cookie` 自动落库/回带）、`loginCheckJs`、源级 `concurrentRate` 限速、`webView`/`webJs` 真浏览器抓取与源变量/cache 落盘。缺省请求带浏览器 UA。
 
-URL 模板语义按 legado 书源格式对齐：`url,{json}` 选项的逗号两侧允许空白；模板内 `{{...}}` 按 JS 求值（`{{java.encodeURI(key)}}`、`{{page*2}}`、源级 `jsLib` 定义的全局如 `{{host}}`），变量占位 `{{key}}`/`{{page}}` 保持原有的 URL 编码口径；URL 里的 js 块可出现在任意位置（`<js>…</js>` 闭区间、`@js:` 吃到串尾、块间字面文本按 `@result` 拼接）；`charset` 同时用于**请求体编码**与响应解码（GBK 站点才搜得到）；`&&` 跳过空 / Miss 分支后按序合并，`%%` 在取值用途跳过空 / Miss、列表用途按首支驱动（首支为空则整条为空）。
+URL 模板语义按 legado 书源格式对齐：`url,{json}` 选项的逗号两侧允许空白；模板内 `{{...}}` 按 JS 求值（`{{java.encodeURI(key)}}`、`{{page*2}}`、源级 `jsLib` 定义的全局如 `{{host}}`），变量占位 `{{key}}`/`{{page}}` 保持与这份输入格式一致的 URL 编码口径；URL 里的 js 块可出现在任意位置（`<js>…</js>` 闭区间、`@js:` 吃到串尾、块间字面文本按 `@result` 拼接）；`charset` 同时用于**请求体编码**与响应解码（GBK 站点才搜得到）；`&&` 跳过空 / Miss 分支后按序合并，`%%` 在取值用途跳过空 / Miss、列表用途按首支驱动（首支为空则整条为空）。
 
-遇到不认识的语法，本插件选择**报错而不是猜测**——错误定位到出错的规则段，而不是产出错误结果。语法合法但跑得炸的正则（嵌套量词遇上不匹配的长输入）同一条路：每条用户正则都有一条随工作量放宽的时间死线，到点只废掉那一条规则并点名它，不会让一条坏正则把宿主的主线程钉住。`webView`/`webJs` 走本机已装的 Edge/Chrome；没有可用浏览器、或书源依赖安卓专有 API / 加密侧能力时，会明确报告不支持。
+遇到不认识的语法，本插件选择**报错而不是猜测**——错误定位到出错的规则段，而不是产出错误结果。语法合法但跑得炸的正则（嵌套量词遇上不匹配的长输入）同一条路：每条用户正则都有一条随工作量放宽的时间死线，到点只废掉那一条规则并点名它，不会让一条坏正则把宿主的主线程钉住。`webView`/`webJs` 走本机已装的 Edge/Chrome；没有可用浏览器、或书源依赖这份格式里需要移动端宿主能力（专有 API / 加密侧能力）的那类规则时，会明确报告不支持。
 
-**「做到哪一步」有机器口径**：`tests/legado-coverage/matrix.ts` 一行一条 legado 语义，每行归入 实现 / 环境不适用 / 待拍板 三态之一：implemented 行带实现符号与钉住用例，not-applicable 行写裁决理由，open 行带 `2026-MM-DD` 复核戳。四门默认随 `pnpm test` 跑（见 [docs/development.md 的「兼容判据四门」](docs/development.md#兼容判据四门)）。想查某个字段支不支持：在矩阵里按 `id` 或能力名搜那一行即可。
+**「做到哪一步」有机器口径**：`tests/legado-coverage/matrix.ts` 一行一条 legado 语义，每行归入 实现 / 环境不适用 / 待拍板 三态之一：implemented 行带实现符号与钉住用例，not-applicable 行写裁决理由，open 行带 `2026-MM-DD` 复核戳。兼容判据默认随 `pnpm test` 跑（见 [docs/development.md 的「兼容判据与桥面自证」](docs/development.md#兼容判据与桥面自证)）。想查某个字段支不支持：在矩阵里按 `id` 或能力名搜那一行即可。
 
 ## 常见问题
 
 **搜索结果全是「网络错误」，或正文显示为空白？**
-多半是代理问题。DSH 的 Node 进程用 undici 发请求，**不会读取系统代理设置**；对代理才可达的站点，直连会被重定向或重置。解决：在配置里显式设 `proxyUrl`（如 Clash 常用端口 `'http://127.0.0.1:7897'`）。缺省的自动探测顺序为：环境变量 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` → Windows 系统代理 → 直连。
+多半是代理问题。DSH 的 Node 进程用 undici 发请求，**不会读取系统代理设置**；对代理才可达的站点，直连会被重定向或重置。解决：在配置里显式设 `proxyUrl`（如常见本地代理端口 `'http://127.0.0.1:7897'`）。缺省的自动探测顺序为：环境变量 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` → Windows 系统代理 → 直连。
 
 **某条书源报「不支持 xx」？**
-本插件只实现 legado 规则的声明式子集（见上节），对无法仿真或不认识的语法会明确报错并定位到规则段，而不会静默给出错误结果。可以尝试换用不依赖安卓专有 API / 加密侧能力的同类书源。
+本插件只实现 legado 规则的声明式子集（见上节），对无法仿真或不认识的语法会明确报错并定位到规则段，而不会静默给出错误结果。可以尝试换用不依赖该类移动端宿主能力（专有 API / 加密侧能力）的同类书源。
 
 **`webView` / `webJs` 源报「WebView 不可用」？**
 本插件用 `playwright-core` 驱动本机已安装的 Edge/Chrome（不下载浏览器）。装一个 Edge 或 Chrome 即可；两者都没有时会如实报错，不会静默退回普通 HTTP 请求。
@@ -227,11 +227,11 @@ pnpm dev          # = tsdown --watch，日常开发建议挂着
 
 ## 贡献
 
-欢迎 Issue 与 PR。提交信息、PR 与发版边界见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。提交改动前请确保 `pnpm test` 与 `pnpm typecheck` 通过，且**两条命令的退出码都亲眼看过**；完整的真链路门控见 [docs/development.md 的「门（自动）」](docs/development.md#门自动)，真宿主冒烟见同一份文档的「真机验证」。若扩展了书源语法，请优先补充对应的回放测试 fixture（脱敏判据见 `tests/compat/sanitize.ts`），并把新形态在 `tests/legado-coverage/matrix.ts` 里落到正确的那一态。提交即表示你同意以 [Apache-2.0](LICENSE) 协议授权你的贡献。
+欢迎 Issue 与 PR。提交信息、PR 与发版边界见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。提交改动前请确保 `pnpm test` 与 `pnpm typecheck` 通过，且**两条命令的退出码都亲眼看过**；完整的真链路门控见 [docs/development.md 的「门（自动）」](docs/development.md#门自动)，真宿主冒烟见同一份文档的「真机验证」。若扩展了书源语法，请优先补充对应的回放测试 fixture（脱敏判据见 `tests/replay/sanitize.ts`），并把新形态在 `tests/legado-coverage/matrix.ts` 里落到正确的那一态。提交即表示你同意以 [Apache-2.0](LICENSE) 协议授权你的贡献。
 
 ## 致谢
 
-书源兼容语义的开发阶段对读，参考了 legado 及其续作 [legado-with-MD3](https://github.com/HapeLee/legado-with-MD3)。对读的结论以**仓内快照**形式留存：`compat/upstream/snapshot.json`（源根路径集 / 规则实体字段表 / java 宿主方法名集），由开发阶段的门控工具抽取一次；**运行与 CI 都不依赖任何外部 checkout**。对读结论只住本文件、覆盖矩阵与快照刷新工具；实现注释里偶有上游 `.kt` 文件名作出处点名，不构成第二份判据。
+书源兼容语义的开发阶段对读，参考了 legado 及其续作 [legado-with-MD3](https://github.com/HapeLee/legado-with-MD3)。对读结论落在代码、测试与覆盖矩阵里；仓内不保留任何外部实现的冻结快照，**运行与 CI 都不依赖外部 checkout**。这段来历只住本文件：仓内的文档与注释只对本项目和当前代码负责，不指认外部项目的名字、代码路径、版本或现状（判据见 [`docs/AGENTS.md`](docs/AGENTS.md) §3）。
 
 ## 说明
 

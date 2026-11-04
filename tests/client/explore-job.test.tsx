@@ -11,8 +11,8 @@ import { pick } from '../support/fixture.js'
 
 afterEach(cleanup)
 
-/** 单源的一轮快照：两个点名（源身份 + 类）就在形状里，没有跨源读数——
- *  `total`/`done`/`failures` 那份清单随 `ADR-0028` 一起走了。 */
+/** 单源的一轮快照：两个点名（源身份 + 类）就在形状里；形状里没有跨源读数，
+ *  跨源那种账归聚合面，不在这一份快照里留第二住址。 */
 const snap = (over: Partial<ExploreSnapshot> = {}): ExploreSnapshot => ({
   id: 'j1', sourceId: 's9', sourceName: '站点甲', kind: '玄幻', phase: 'running', cancelled: false,
   page: 1, hasMore: false, books: [], startedAt: 1, ...over,
@@ -37,7 +37,7 @@ const depsOf = (jobs: Array<ExploreSnapshot | null>, over: DepsOverrides = {}) =
 
 describe('useExploreJob', () => {
   it('全量替换：同一轮的第二帧整体覆盖第一帧（不是累加）', async () => {
-    // 节拍注入 250ms（生产 600）：既不拿墙钟干等，又留够 `waitFor` 50ms 间隔看得见第一帧的余量
+    // 节拍由用例注入（远快于缺省）：既不拿墙钟干等，又留够 `waitFor` 间隔看得见第一帧的余量
     const deps = depsOf([
       snap({ page: 1, books: [book('A')] }),
       snap({ page: 2, hasMore: true, books: [book('A'), book('B')] }),

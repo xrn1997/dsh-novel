@@ -6,11 +6,12 @@ import { apply, inject as clientInject } from '../../src/client/index.js'
 import { fakeCtx, fakeHost } from './fake-host.js'
 
 /**
- * 客户端注册面：小说 = **全局面板**（用户拍板），不是对话区 tab。
- * 宿主契约：`sidebar.panellist` 每条 entry 是
- * 侧栏一行（注册 `{ id, order?, label? }`，占用者只收 owner props `{ size, active }`）；`main` 是
- * 同 id 选中后按 `{ key }` 渲染的占用者；「selecting a missing main entry throws」⇒ 两个座位必须
- * 同批注册（apply 内同步完成）。
+ * 客户端注册面：小说 = **全局面板**，不是对话区 tab。
+ * 座位形状以本仓的镜像声明为准（平台模块表住 `tsdown.config.ts`，宿主表单原语的窄镜像住
+ * `src/client/host-ui.d.ts`）：`sidebar.panellist` 每条 entry 是侧栏一行（注册 `{ id, order?, label? }`，
+ * 占用者只收 owner props `{ size, active }`）；`main` 是同 id 选中后按 `{ key }` 渲染的占用者。
+ * 选中的 id 在 main 侧必须有对应条目，缺一条整块面板就开不出来 ⇒ 两个座位必须同批注册
+ * （apply 内同步完成）。
  * 本文件钉注册面本身（seam = `apply(ctx)` + 假体，假体住址 `fake-host.ts`）：inject 集合、座位名、
  * id/key 一致性、owner props、main 占用者渲染 NovelView、不注册 `conversation.view`。
  */
@@ -18,11 +19,11 @@ import { fakeCtx, fakeHost } from './fake-host.js'
 afterEach(cleanup)
 
 describe('客户端注册面：小说 = 全局面板（main keyed + sidebar.panellist list）', () => {
-  it('客户端 inject 只声明真依赖（sessions 是 conversation.view 时代的死依赖，已摘）', () => {
+  it('客户端 inject 只声明本仓真用到的依赖（slots 与 layout）', () => {
     expect(clientInject).toEqual(['slots', 'layout'])
   })
 
-  it('apply 注入 sidebar.panellist 与 main 两个座位（同 id/key「novel」）；conversation.view 注册撤除', () => {
+  it('apply 注入 sidebar.panellist 与 main 两个座位（同 id/key「novel」）；不注册 conversation.view', () => {
     const s = fakeHost()
     apply(fakeCtx(s) as never)
     expect(s.injected).toContain('sidebar.panellist')
@@ -70,13 +71,13 @@ describe('客户端注册面：小说 = 全局面板（main keyed + sidebar.pane
     expect(c2.querySelector('svg')?.getAttribute('width')).toBe('18')
   })
 
-  it('面板图标 = android-ebook 启动器前景字形（用户指定资产）：pathData 原样来自其 ic_launcher_foreground', () => {
-    // 资产来源（external facts）：xrn1997/android-ebook @ master
+  it('面板图标 = android-ebook 启动器前景字形（用户指定资产）：pathData 原样、viewBox 按字形本体裁、fill 随宿主前景色', () => {
+    // 资产来源：xrn1997/android-ebook @ master
     // `module_app/src/main/res/drawable-v24/ic_launcher_foreground.xml`（viewport
     // 2178.7234 + group translate 577.3617）——本仓按字形本体裁 viewBox（group 坐标系
-    // 0..1025，字形 bbox 约 39..986 × 20..979），fill 用 currentColor 随宿主行前景色；
-    // 背景层（原资产那面是纯白方块的 ic_launcher_background）刻意不搬：侧栏行自带底色，
-    // 白方块在暗色主题下是块白斑。此钉防「图标被随手换回通用书本 stroke」。
+    // 0..1025，字形 bbox 约 39..986 × 20..979）。图形的口径：pathData 逐字保留（不重描、不简化），
+    // fill 用 currentColor 随宿主行前景色；背景层（原资产那面是纯白方块的 ic_launcher_background）刻意不搬：
+    // 侧栏行自带底色，白方块在暗色主题下是块白斑。此钉防「图标被随手换回通用书本 stroke」。
     const s = fakeHost()
     apply(fakeCtx(s) as never)
     const icon = s.registrations.find((r) => r.name === 'sidebar.panellist')?.component as never

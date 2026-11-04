@@ -4,7 +4,7 @@ export const READER_CSS = `
 /* ── 阅读器：控制器条/正文列/目录抽屉/Aa 面板（z 序仍归 CTRL_Z 常量，布局归样式类）── */
 /* 纸面 full-bleed：**纸张色涂满整个阅读区**（值槽 --novel-paper 由 ReaderView 行内写在阅读区根上），
    正文列只决定「文字排到哪儿为止」。不要把纸色只涂在 .novel-rdr-body 上——宽屏下就是一张
-   680px 的窄带飘在宿主底色里（实测 1500px 视口左右各漏底 410px），那不是留白，是纸没铺开。
+   窄带飘在宿主底色里，那不是留白，是纸没铺开。
    min-height 一屏：正文短于一屏时纸面也要铺满，不许下面漏底色。 */
 .novel-rdr { position: relative; display: flex; flex-direction: column; min-height: 100vh; }
 /* 滚动补偿归会话：裁章/前插的补偿由 reader-session 在渲染后按实测高度补 scrollTop，
@@ -12,8 +12,8 @@ export const READER_CSS = `
    祖先 .novel-main，所以必须盖住阅读器整棵子树——只写 .novel-rdr-body 挡不住章块自己当选锚点。 */
 .novel-rdr, .novel-rdr * { overflow-anchor: none; }
 /* 控制器条**跟纸走，不跟宿主 chrome 走**：条底 = 纸往墨压一档，整屏读作「一张纸的顶部折了一道」。
-   条底不要读 --novel-bg（宿主 App 底色）——那与用户自选纸色毫无关系，实测接缝对比度 15.51:1，
-   而黑白极限才 21:1，那是「两块板拼起来」而不是「一页纸」。判据到这句就闭合：条底与纸底不同源，
+   条底不要读 --novel-bg（宿主 App 底色）——那与用户自选纸色毫无关系，两块不同源的底色接在一起，
+   那是「两块板拼起来」而不是「一页纸」。判据到这句就闭合：条底与纸底不同源，
    接缝就是可量的缺陷，不需要拿别的产品的做法来背书（那种断言在盘上回查不到）。
    条上的深浅一律 inherit + opacity 分主次——这样「控制器层跟随深色」只需重钉条根一个 color，
    不必给每一档灰度各写一条覆盖。 */
@@ -44,7 +44,7 @@ export const READER_CSS = `
 .novel-rdr-sep { width: 1px; height: 14px; flex: none; background: currentColor; opacity: .25; }
 /* 条上控件：去框的一档 pill。文案一字不动（歧义出在形状语言那一层，就在那一层修），字形换成与汉字
    同源的 SVG——stroke: currentColor 跟着条的 color 走，深浅两态不必各写一份。
-   代价如实记着：pill 的内边距比描边钮大，钮组实测比现状宽 46px。 */
+   代价如实记着：pill 的内边距比描边钮大，钮组因此更宽。 */
 .novel-rdr-ctl {
   font: inherit; font-size: var(--novel-fs-sm); padding: var(--novel-sp-1) var(--novel-sp-3);
   border: none; border-radius: 999px; background: none; cursor: pointer; color: inherit; opacity: .8;
@@ -71,16 +71,16 @@ export const READER_CSS = `
 .novel-rdr-acts { display: flex; gap: var(--novel-sp-1); align-items: center; }
 .novel-rdr-main { position: relative; flex: 1 1 auto; min-height: 0; display: flex; align-items: flex-start; background: var(--novel-paper); }
 /* 正文列宽随字号走：--novel-measure（缺省 36em，行内由 prefs.measure 覆写；em 跟着
-   prefs.fontSize 变，中文一行约 36 字）。
-   不要把 padding 写死成固定列宽（如 calc(50% - 320px) = 恒 640px 列）——12px 字号约 53 字/行、
-   28px 字号约 23 字/行，两端都会出舒适区。 */
+   prefs.fontSize 变，档位的口径与设计意图见 prefs-ui.ts）。
+   不要把 padding 写死成固定列宽（如 calc(50% - 320px) = 恒 640px 列）——固定列宽不随字号缩放，
+   字号两端的行宽都会掉出档位设计。 */
 .novel-rdr-body {
   flex: 1 1 auto; min-width: 0; max-width: var(--novel-measure); margin-inline: auto;
   overflow-y: auto; padding: var(--novel-sp-7) var(--novel-sp-5) calc(var(--novel-sp-7) * 3);
   color: var(--novel-paper-ink);
 }
-/* 章界：一条「发丝 + 小字 + 发丝」的分带，不再刷成 1.3em 居中大标题——相当一部分在线源的正文
-   第一行就是同一句章名（stripLeadingTitle 剥得掉），但即便剥掉，居中粗体大标题在连续滚动的
+/* 章界：一条「发丝 + 小字 + 发丝」的分带，不是居中大标题——本项目输入里存在
+   正文首行就是同一句章名的形状（形状与钉子见 util.ts 的 stripLeadingTitle），但即便剥掉，居中粗体大标题在连续滚动的
    章与章之间也像另起了一页书。仍是 h2：阅读器这一屏没有更高的标题占位，从 h3 起等于给读屏一份
    断了头的大纲。字号走 em：它随 prefs.fontSize 一起缩放，28px 字号下不该还是 12px。
    正文里嵌来的 h2（图文章）不该被这条规则命中——那是 .novel-body h1..h6 的地盘，
@@ -96,19 +96,19 @@ export const READER_CSS = `
 .novel-rdr-loading { padding: var(--novel-sp-7) 0; text-align: center; opacity: .6; font-size: var(--novel-fs-md); }
 .novel-sentinel { opacity: .5; font-size: var(--novel-fs-sm); padding: var(--novel-sp-6) 0; text-align: center; }
 /* 目录抽屉：锚视口靠**外层 .novel-drawer-slot 的 sticky**，抽屉本体 absolute 浮在正文右缘。
-   为什么外层宽度给 0：抽屉当「有宽度的 flex 兄弟」会从正文列里切走宽度（实测 766px 视口下
-   38 字/行 → 22 字/行）。0 宽槽 + 绝对定位子件 = sticky 跟随性保留、正文列不缩水、窄屏时
+   为什么外层宽度给 0：抽屉当「有宽度的 flex 兄弟」会从正文列里切走宽度。
+   0 宽槽 + 绝对定位子件 = sticky 跟随性保留、正文列不缩水、窄屏时
    抽屉压在正文上（选章是瞬时态，压字可接受，挤列不可接受）。
-   三版死法（各自错在哪一条前提上）：
-     ① flex 兄弟 + sticky 无高度上限 → 整页被目录撑到两万多 px；
-     ② absolute 锚 .novel-rdr-main → 锚的是内容盒起点（读到第 500 章点目录画在头顶上方），
+   被否的形状，各自错在不同前提上：
+     ① flex 兄弟 + sticky 无高度上限 → 整页被目录的内容撑高；
+     ② absolute 锚 .novel-rdr-main → 锚的是内容盒起点，阅读位置越深抽屉越画在头顶上方，
         且 max-height 的 100% 也是正文高度，形同虚设；
-     ③ 兄弟 + 视口上限 → flex 列里的条目在滚动发生前先被 flex-shrink 压扁（每条只剩 12px）。
-        ③ 的两处修正：条目 flex: none（守卫钉住）+ 槽宽 0。
-   sticky 在本环境已被工具栏证明可用（同一祖先链、同一 .novel-main 滚动口径）。
+     ③ flex 列里的条目在滚动发生前先被 flex-shrink 压扁。
+   现形态的不变量正是防③的两处修正：条目 flex: none（守卫钉住）+ 槽宽 0。
+   sticky 在本环境可用（工具栏同款用法在场，同一祖先链、同一 .novel-main 滚动口径）。
    槽几何是**共用的一条**（选择器组）：目录抽屉与右上角那两块面板（注释 / 导入说明）同住阅读区，
-   各抄一份 sticky 就会漂移——漂移的代价实测过两次（面板锚在内容盒上 ⇒ 一滚就飘出视口，
-   且对位时把主滚动拉回内容顶部）。守卫：ui-system 的「共用同一份槽几何」那条。 */
+   各抄一份 sticky 就会漂移——漂移的代价：面板锚在内容盒上 ⇒ 一滚就飘出视口，
+   且对位时把主滚动拉回内容顶部。守卫：ui-system 的「共用同一份槽几何」那条。 */
 .novel-drawer-slot, .novel-notes-slot {
   position: sticky; align-self: flex-start; top: calc(var(--novel-sp-7) + var(--novel-sp-1));
   flex: none; width: 0; height: 0; z-index: var(--novel-z-panel);
@@ -199,8 +199,8 @@ export const READER_CSS = `
 }
 /* 含块级内容的链接（插图/表格/段落等，XHTML5 的透明内容模型允许）本身是块级容器，且**宽度要显式写满**：
    按钮的 width: auto 是「内在宽度」（收缩包裹），不像 div 那样填满包含块——只写 display: block 时
-   里面插图的百分比宽度仍解析成 auto，图未解码就没有内在尺寸，占位框塌成 0（实测真浏览器里 0×0，
-   图一到手跳到 600×900、后文位移近一屏）。width: 100% 让按钮的宽度基准由包含块（正文栏）给出。 */
+   里面插图的百分比宽度仍解析成 auto，图未解码就没有内在尺寸，占位框塌成 0、图一到手
+   后文跟着位移。width: 100% 让按钮的宽度基准由包含块（正文栏）给出。 */
 .novel-ref-block { display: block; width: 100%; }
 /* 链接内容里的块级子节点：XHTML 的 a 允许它们做子节点（源书合法），HTML 的 button 只收短语级元素，
    所以渲染层把块级标签降级成 span，块状观感在这里用 CSS 拿回（内容模型管元素类型，不管 display）。

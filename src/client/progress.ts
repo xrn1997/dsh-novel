@@ -42,5 +42,3 @@ export function anchorTop(
   const raw = a.start + Math.min(1, Math.max(0, offsetRatio)) * a.height
   return Math.min(Math.max(0, scrollHeight - clientHeight), Math.max(0, raw))
 }
-
-// debounce 已迁 util.ts（它不是阅读进度数学）

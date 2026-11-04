@@ -5,7 +5,7 @@ import { preEvaluateUrlJs, resolveJsSearchTemplate } from '../../src/services/se
 import type { Fetcher } from '../../src/services/fetcher.js'
 import type { NovelSource } from '../../src/services/types.js'
 
-/** 宁吵不瞒：选项里的未知键不许静默丢弃（本库有源带 retry/bodyJs/type 等键） */
+/** 宁吵不瞒：选项里的未知键不许静默丢弃（这套输入还带本插件不消费的 dnsIp/bodyJs/type 等键） */
 describe('URL 选项的未知键留痕', () => {
   const captureWarn = (run: () => unknown): string[] => {
     const warns: string[] = []
@@ -53,7 +53,7 @@ describe('assembleRequest + fetchInitOf（选项语义唯一主人）', () => {
     expect(init.headers).toMatchObject({ 'X-A': '1', Cookie: 'c=1', 'Content-Type': 'application/x-www-form-urlencoded' })
     expect(plan.charset).toBeUndefined()
   })
-  it('HEAD：带 method 且不带 body（与对面同口径——元数据探测不发体，出处见矩阵 b-opt-method-head）', () => {
+  it('HEAD：带 method 且不带 body（元数据探测不发体，口径与出处见矩阵 b-opt-method-head）', () => {
     // 矩阵行 b-opt-method-head：method 按声明原样用（HEAD 不是 POST）——把它降级成 GET 等于把降级当成实现。
     const plan = assembleRequest('https://s.com/s,{"method":"HEAD","body":"a=1"}', {}, null)
     expect(plan.method).toBe('HEAD')
@@ -75,11 +75,11 @@ describe('assembleRequest + fetchInitOf（选项语义唯一主人）', () => {
 
 /** 表单体的 charset 编码：声明了非 UTF-8 charset 时，表单体（含 `{{key}}` 代入的关键词）
  *  按该 charset 编码后再发。
- *  charset 同时管请求编码与解码链：只用在解码链（fetchTextPage → decodeBody）时，GBK 站点收到
- *  UTF-8 关键词就搜不到（辣妹小说实测：UTF-8 体 0 条、GBK 体 131 条）。
+ *  charset 同时管请求编码与解码链：只用在解码链（fetchTextPage → decodeBody）时，声明 GBK 的站点
+ *  收到 UTF-8 关键词就搜不到——请求编码与解码共用这份声明，不在两处各判。
  *  注：未转义的体可直接按表单百分号编码；本仓的体已过 interpolateUrl 的 UTF-8 转义，
  *  故按「转义段解码后重编码」处理——效果等价，且不会二次编码。 */
-describe('charset 参与请求编码（对面 encodeParams 口径）', () => {
+describe('charset 参与请求编码（请求编码与解码链共用同一 charset）', () => {
   it('charset=gbk：表单体里的中文按 GBK 转义', () => {
     const plan = assembleRequest('https://s.com/s,{"method":"POST","charset":"gbk","body":"s={{key}}"}', { key: '青春' }, null)
     expect(plan.body).toBe('s=%C7%E0%B4%BA')
@@ -111,7 +111,7 @@ describe('parseUrlOption', () => {
     expect(r.urlPart).toBe('/search.html')
     expect(r.option).toMatchObject({ method: 'POST', body: 'searchkey={{key}}', charset: 'gbk' })
   })
-  it('单引号 JSON 形态：宽容解析（真实源大量存在）', () => {
+  it('单引号 JSON 形态：宽容解析（引号不苛求合法 JSON）', () => {
     const r = parseUrlOption("/s.php,{'charset':'utf-8','method':'POST','body':'s={{key}}'}")
     expect(r.option).toMatchObject({ method: 'POST', body: 's={{key}}' })
   })
@@ -125,9 +125,9 @@ describe('parseUrlOption', () => {
   it('webView 标志透传（我们不支持，调用方 warning）', () => {
     expect(parseUrlOption('/x,{"webView":true}').option?.webView).toBe(true)
   })
-  it('选项 JSON 非法 → URL 仍无条件切分，只是没有选项（legado analyzeUrl 口径）', () => {
+  it('选项 JSON 非法 → URL 仍无条件切分，只是没有选项（切分先于解析）', () => {
     // 解析选项**之前**就把 URL 切干净——解析失败只意味着「没有选项」，不意味着
-    // 「整串是 URL」。留着 `,{…}` 会得站点 404（年代小说弯引号选项实证）。
+    // 「整串是 URL」：留着 `,{…}` 会把选项串带进 URL，站点回 404。
     const r = parseUrlOption('/x,{not json at all}')
     expect(r.urlPart).toBe('/x')
     expect(r.option).toBeUndefined()
@@ -135,8 +135,8 @@ describe('parseUrlOption', () => {
     expect(curly.urlPart).toBe('/c/1.html')
     expect(curly.option).toBeUndefined()
   })
-  // 选项分隔的逗号两侧允许空白（165 条源写 `, {...}` 带空格）
-  it('逗号两侧空白的选项形态（legado paramPattern 考证）', () => {
+  // 选项分隔的逗号两侧允许空白：输入里就写 `, {...}` 带空格，切分不苛求紧贴 `{`
+  it('逗号两侧空白的选项形态（宽容切分）', () => {
     const r = parseUrlOption('/s.php, {   "charset": "gbk",   "method": "POST",   "body": "s={{key}}" }')
     expect(r.urlPart).toBe('/s.php')
     expect(r.option).toMatchObject({ method: 'POST', body: 's={{key}}', charset: 'gbk' })
@@ -144,7 +144,7 @@ describe('parseUrlOption', () => {
 })
 
 describe('buildSearchRequest', () => {
-  it('相对 URL 按 baseUrl 解析成绝对 URL（148 条失败的根因）', () => {
+  it('相对 URL 按 baseUrl 解析成绝对 URL（相对串不绝对化就发不出去）', () => {
     const r = buildSearchRequest('/search.php?q={{key}}', { key: '书' }, 'https://m.biqu.com')
     expect(r.url).toBe('https://m.biqu.com/search.php?q=%E4%B9%A6')
     expect(r.method).toBe('GET')
@@ -184,7 +184,7 @@ describe('buildSearchRequest', () => {
       { trimFirstPage: true })
     expect(second.url).toBe('https://bq.com/so/%E6%96%97%E7%BD%97/2')
   })
-  it('trimFirstPage 不越界：缺省关闭（legado 行为不变）、模板不以 /{{page}} 结尾不裁', () => {
+  it('trimFirstPage 不越界：缺省关闭（裁页只在原生分页模板那档开）、模板不以 /{{page}} 结尾不裁', () => {
     const legado = buildSearchRequest('/so/{{key}}/{{page}}', { key: '斗罗', page: 1 }, 'https://bq.com')
     expect(legado.url).toBe('https://bq.com/so/%E6%96%97%E7%BD%97/1')
     const query = buildSearchRequest('/s?kw={{key}}&p={{page}}', { key: 'x', page: 1 }, 'https://bq.com',
@@ -203,7 +203,7 @@ describe('stripUrlOption', () => {
   })
 })
 
-// ── searchUrl 的 JS 形态（重探归因：失败源的 searchUrl 大量是 @js 脚本形态）──────────
+// ── searchUrl 的 JS 形态（这一族的 searchUrl 就是 @js 脚本形态，得先求值再拼 URL）──────
 
 describe('resolveJsSearchTemplate', () => {
   const mkSource = (header: Record<string, string> | null = null): NovelSource => ({
@@ -258,7 +258,7 @@ describe('resolveJsSearchTemplate', () => {
     await expect(resolveJsSearchTemplate(mkSource(), '@js:null.x', 'x', 1, fetcher)).rejects.toThrow()
   })
   // `<js>…</js>` 闭区间可出现在**任意位置**，`@js:` 吃到串尾；块间的字面文本按 `@result` 拼接。
-  // 回归钉子：块可出现在**任意位置**，不是只在整串前缀（啦啦小说网 / 全本同人小说网 都是内嵌形态）。
+  // 回归钉子：块可出现在**任意位置**，不是只在整串前缀（内嵌形态必须支持）。
   it('内嵌 <js> 块 + 字面尾巴：字面文本即 URL（块只做副作用）', async () => {
     const t = await resolveJsSearchTemplate(mkSource(),
       '<js>cookie.removeCookie(source.key);</js>/search/?searchkey={{key}}', '书', 1, fetcher)
@@ -299,7 +299,7 @@ describe('preEvaluateUrlJs', () => {
   })
   const fetcher: Fetcher = { fetchPage: async () => { throw new Error('不应触网') } }
 
-  it('JS 表达式求值（{{java.encodeURI(key)}} 等——此前原样拼进 URL 必炸）', async () => {
+  it('JS 表达式求值（{{java.encodeURI(key)}} 等——不预求值会把字面花括号发上网）', async () => {
     const t = await preEvaluateUrlJs(mkSource(), '/s?k={{java.encodeURI(key)}}&p={{page*2}}', '剑来', 3, fetcher)
     expect(t).toBe('/s?k=%E5%89%91%E6%9D%A5&p=6')
   })
@@ -316,8 +316,8 @@ describe('preEvaluateUrlJs', () => {
   })
   // **每一段** `{{…}}` 都过 evalJS，裸标识符同样如此——evalJS 的引擎里装着源级 jsLib，
   // 故 jsLib 定义的全局变量能在 URL 模板里取到值。
-  // 留给 interpolateUrl（它只认 key/page）会让 `{{host}}` 原样留在 URL
-  // 上被百分号编码成 `%7B%7Bhost%7D%7D`（得间小说真机 404；手工还原 host 后 API 正常返回 JSON）。
+  // 留给 interpolateUrl（它只认 key/page）会让 `{{host}}` 原样留在 URL 上、被百分号编码成
+  // `%7B%7Bhost%7D%7D`——站点收到的是字面花括号，只能回错误页。
   it('jsLib 定义的全局变量在 {{}} 里取到值（{{host}} 形态）', async () => {
     const src = mkSource('host = "https://wechat.idejian.com/api/wechat";')
     const t = await preEvaluateUrlJs(src, '{{host}}/search/do?keyword={{key}}', '书', 1, fetcher)
@@ -329,7 +329,7 @@ describe('preEvaluateUrlJs', () => {
 })
 
 describe('absUrlKeepOption 不吃换行（多值拼出来的 URL 宁可取不到，也不拼成路径重复的假 URL）', () => {
-  it('值内部有换行 → null（真机实证：条目里 4 个 a 同 href，去重前以 \n 拼接后被 new URL 吃掉换行）', () => {
+  it('值内部有换行 → null（多个同值命中以 \\n 拼接时，new URL 会吃掉换行、拼成假 URL）', () => {
     expect(absUrlKeepOption('/a/b\n/a/b', 'https://x.com/search')).toBeNull()
     expect(absUrlKeepOption('/a/b\n/c,{"method":"POST"}', 'https://x.com/search')).toBeNull()
   })
@@ -339,7 +339,7 @@ describe('absUrlKeepOption 不吃换行（多值拼出来的 URL 宁可取不到
 })
 
 describe('搜索 URL 的页码角列表接线（`<a,b,c>` 走 assembleRequest）', () => {
-  it('page=1 时整段消失（恩京的书房形态：两侧发的 URL 从此一致）', () => {
+  it('page=1 时整段消失（带角标列表的源：两侧发的 URL 从此一致）', () => {
     const p = buildSearchRequest('https://e.example/<,page/{{page}}/>?s={{key}}', { key: '书', page: 1 }, 'https://e.example')
     expect(p.url).toBe('https://e.example/?s=%E4%B9%A6')
   })

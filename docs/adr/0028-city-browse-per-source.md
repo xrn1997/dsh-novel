@@ -21,4 +21,4 @@ Status: accepted
 
 本篇**不推翻 `ADR-0027`**：那篇讲的是发现面接哪几种形态（数据面口径），本篇讲的是接进来之后按什么轴逛（呈现面）。
 
-锚点：`src/shared/wire.ts` 的 `ExploreSources`（跨半契约形状，本篇换的就是它）；`src/services/explore.ts` 的 `deriveExploreSources`（「哪个源自己声明了哪些分类」的唯一派生）；`src/services/participation.ts` 的 `exploreParticipates`（谁进城的那条判据）；`src/client/city-view-model.ts` 的 `sheetKeyword`（跨源那一次的关键词构造，唯一主人）；`src/client/views/CityView.tsx`（左栏两级的落点）；`src/client/views/CityBookSheet.tsx`（浏览器半的书籍详情浮层，本篇把跨源视野挪进来的落点——旧版那一层的职责是替用户点源，点源挪进左栏第一层之后它只剩一本书的落点，名字跟着职责换了）；矩阵行 `c-explore-url`、`d-explore-three-forms`。这一行只点名在盘上能回查的东西。
+锚点：`src/shared/wire.ts` 的 `ExploreSources`（跨半契约形状，本篇换的就是它）；`src/services/explore.ts` 的 `deriveExploreSources`（「哪个源自己声明了哪些分类」的唯一派生）；`src/services/participation.ts` 的 `exploreParticipates`（谁进城的那条判据）；`src/client/city-view-model.ts` 的 `sheetKeyword`（跨源那一次的关键词构造，唯一主人）；`src/client/views/CityView.tsx`（左栏两级的落点）；`src/client/views/CityBookSheet.tsx`（浏览器半的书籍详情浮层，本篇把跨源视野挪进来的落点）；矩阵行 `c-explore-url`、`d-explore-three-forms`。

@@ -34,7 +34,7 @@ export const CONTROLS_CSS = `
 }
 .novel-run-card-head { flex-wrap: wrap; gap: var(--novel-sp-2) var(--novel-sp-4); }
 .novel-muted { color: var(--novel-text-3); font-size: var(--novel-fs-sm); }
-/* 场景内提示行（书架导入/加载错误等）：字号走标度，不再行内 fontSize */
+/* 场景内提示行（书架导入/加载错误等）：字号走标度，不写行内 fontSize */
 .novel-note-sm { font-size: var(--novel-fs-sm); }
 .novel-note-md { font-size: var(--novel-fs-md); line-height: 1.6; }
 /* 隐藏的原生 file input（由拖放区/自绘钮触发）：display:none 不进无障碍树，
@@ -60,8 +60,7 @@ export const CONTROLS_CSS = `
 .novel-group-legend { cursor: help; margin-left: var(--novel-sp-0); }
 /* 表头「?」图例（cursor:help 是「这里有解释」的唯一提示） */
 /* 圆角**不能**靠 overflow: hidden 收：行内「⋯」菜单（.novel-menu 绝对定位）的包含块
-   .novel-actions 就在表内，一裁就把菜单锁进表格盒、超出表底的部分点不到（末行菜单只可见
-   约 1/4）。改为首/末行各自带圆角裁自己的背景——浮层归浮层、圆角归圆角
+   .novel-actions 就在表内，一裁就把菜单锁进表格盒、超出表底的部分点不到。改为首/末行各自带圆角裁自己的背景——浮层归浮层、圆角归圆角
    （「表格自身 overflow」那档同样会裁菜单）。 */
 .novel-table { border: 1px solid var(--novel-border); border-radius: var(--novel-r-md);
   /* 容器查询锚：源列表按**表格自身宽度**（不是视口宽度）收列——宿主会话列可拖窄，
@@ -83,7 +82,7 @@ export const CONTROLS_CSS = `
 .novel-tr.head { background: var(--novel-skeleton); font-size: var(--novel-fs-sm); color: var(--novel-text-2); }
 /* 源列表六列：列宽唯一住址（表头与每一行共用；不要另写一份字面量）。
    操作列（第5轨）**定宽 + 右对齐**：内容随状态增减（异常态多一个
-   验证/重验钮），auto 轨让各行内容宽不一 → 右缘按钮组漂移（用户实机反馈「没对齐」）；
+   验证/重验钮），auto 轨让各行内容宽不一 → 右缘按钮组漂移；
    定宽后「试跑/⋯」右缘全表锚定，状态动作钮向左生长。启停唯一入口 = 最右开关，
    行内不再渲染重复的「启用」文字钮。 */
 .novel-tr.src { grid-template-columns: minmax(120px, 1.3fr) 68px minmax(0, 1fr) minmax(0, 1.6fr) 148px auto; }

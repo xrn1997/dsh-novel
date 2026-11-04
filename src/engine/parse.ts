@@ -10,16 +10,16 @@ import { normalizeJsonPath } from './jsonpath.js'
  *
  * 切分次序（钉死）：
  *   ② 剥 ## 替换尾（含 OnlyOne ###）——只在受保护区**之外**切：`<js>…</js>` 块、`{{…}}` 区、
- *       `@put:{…}` 值区里的 `##` 是区内自己的规则文本（对面先抽 js 块、先剥 @put、先做插值，
- *       替换尾只在剩下的文本上切；单点在 grammar.parseTails）
+ *       `@put:{…}` 值区里的 `##` 是区内自己的规则文本（次序：先抽 js 块、先剥 @put、
+ *       先做插值，替换尾只在剩下的文本上切；单点在 grammar.parseTails）
  *   ③ 剥链首 - 反序前缀
  *   ③b 列表用途剥链首 + 前缀（剥完照常走选择段；见 `grammar.ts` 的 `stripChainPrefixes`）
  *   ① AllInOne：剥完上面各步后仍以 : 开头 → 整链是一个 allinone 段
  *   ④ 分支切分（|| / && / %%，左到右，混用抛错）
  *   ⑤⑥ 段切分与识别（globalIndex 全规则连续编号，写进错误定位）——js 形态在这一段认
  *       （`js:` 前缀 / `<js>` 块）；链尾**没有** (jsCode) 切法，理由见 parseBranch 的说明。
- *       支文本在受保护区**之外**含 `{{…}}` / `@get:{…}` → **模板态**（对面 SourceRule 的 Mode.Regex
- *       翻转）：文本段按字面、`@` 不切段，判据与后果都住 parseBranch
+ *       支文本在受保护区**之外**含 `{{…}}` / `@get:{…}` → **模板态**（这一步把解析
+ *       模式翻一面）：文本段按字面、`@` 不切段，判据与后果都住 parseBranch
  */
 
 // default 段白名单（选择段 + 取值段；白名单之外的串先过隐式 CSS 回落 `isImplicitCss`——
@@ -89,7 +89,7 @@ export function parseRule(
 
 /** JSON 模式分支：整支就是一条 JSONPath，不再按选择器/段语法切分。
  *  显式 `json:` 前缀在默认解析里已由 classifySegment 剥掉；这里再剥一次是为 `parseRule(...,'json')`
- *  的直接调用方（运行时门已不把带前缀的规则送进来）。 */
+ *  的直接调用方（运行时路径进来的已是裸路径）。 */
 function parseJsonBranch(text: string): Branch | null {
   const raw = text.trim().replace(/^@?json:/i, '')
   if (raw === '') return null
@@ -133,8 +133,8 @@ function splitTop(s: string): TopPart[] {
 }
 
 /** 受保护区掩码：`<js>…</js>` 块、`{{…}}` 区、`@put:{…}` 值区各替换为等长空格。
- *  对面判「支文本里有没有 `$n`」「有没有插值标记」之前，先把这三区**摘出去**（先抽 js 块、先剥 @put、
- *  先做插值，见矩阵 `a-js-region-protected`），掩码就是那一步的本仓形态：脚本里的 `'$1'` 是正则反向
+ *  判「支文本里有没有 `$n`」「有没有插值标记」之前必须先把这三区**摘出去**（次序：
+ *  先抽 js 块、先剥 @put、先做插值，见矩阵 `a-js-region-protected`），掩码就是这一步在本仓的实现形态：脚本里的 `'$1'` 是正则反向
  *  引用、`{{…##…##$1}}` 与 `@put:{…"##$1###"}` 里的 `$1` 属于**值内规则自己的替换尾**——三者都不该把
  *  整支判成行组模板，也不该把同支的文本段判成模板态。
  *  js 区用 `jsRegionEnd`（含 `@js:` 吃到串尾），比 `parseTails` 的只认块形态宽——那里的 `##` 已被
@@ -155,7 +155,7 @@ function maskRegions(s: string): string {
   return out
 }
 
-/** 模板态标记（对面 `evalPattern` 匹配的两形：`@get:{…}` 与 `{{…}}`） */
+/** 模板态标记（匹配的两形：`@get:{…}` 与 `{{…}}`） */
 const TEMPLATE_MARK = /@get:\{|{{/
 
 // ── ⑤⑥ 段切分与识别 ───────────────────────────────────────────────────
@@ -178,12 +178,12 @@ function splitElements(s: string, template = false): string[] {
   let i = 0
   while (i < s.length) {
     // JS 区域整体跳过：<js>…</js> 块内与 @js: 链尾段内的 @ 是 JS 代码，不是段界。
-    // `<js>` 可出现在任意位置（真实源有 `text<js>…</js>` 无 @ 直接衔接的形态）：
+    // `<js>` 可出现在任意位置（输入里有 `text<js>…</js>` 无 @ 直接衔接的形态）：
     // 块起始即隐式段界——cur 先独立成段，块本身起新段；块结束若紧跟内容（非 @）同样断段。
     const jsEnd = jsRegionEnd(s, i)
     if (jsEnd !== null) {
-      // 模板态下 `@` 是字面字符（不切段），行尾的 `@` 属于 js 标记（对面 JS_PATTERN 的匹配含
-      // `@`）——剥掉再收；块后推送条件在模板态恒成立（没有 `@` 来收尾了）
+      // 模板态下 `@` 是字面字符（不切段），行尾的 `@` 属于 js 标记（行尾 `@`
+      // 也吃进 js 起始）——剥掉再收；块后推送条件在模板态恒成立（没有 `@` 来收尾了）
       if (template && cur.endsWith('@')) cur = cur.slice(0, -1)
       if (cur !== '') out.push(cur)
       cur = s.slice(i, jsEnd)
@@ -208,7 +208,7 @@ function splitElements(s: string, template = false): string[] {
       }
       continue
     }
-    // `{{…}}` 模板区整体留在当前段：区内的 `@`（`{{@@h1@text}}` 这类真源形态）不是段界——
+    // `{{…}}` 模板区整体留在当前段：区内的 `@`（`{{@@h1@text}}` 这类形态）不是段界——
     // 插值先于任何 `@` 切分。扫描与 literal 共用 grammar.braceRegion。
     const brace = braceRegion(s, i)
     if (brace !== null) {
@@ -263,9 +263,9 @@ function parseBranch(text: string, ctx: ParseCtx): Branch | null {
     const raw = text.trim()
     return { segments: [{ kind: 'regexRow', raw }], raws: [text] }
   }
-  // 模板态（对面 SourceRule 的 Mode.Regex 翻转：受保护区**之外**出现 `{{…}}` 或 `@get:{…}`）：文本段
-  // 按字面、`@` 不是段界——对面先做插值再谈切分（`最近更新：@get:{time}` 的 `最近更新：` 是字面文本）。
-  // 只看掩码后：对面先抽 js 块，js 代码里的 `{{baseUrl}}` 从不触发这次翻转（`class.a@text@js:…{{…}}`
+  // 模板态（在此翻面：受保护区**之外**出现 `{{…}}` 或 `@get:{…}`）：文本段
+  // 按字面、`@` 不是段界——这条次序是先做插值再谈切分（`最近更新：@get:{time}` 的 `最近更新：` 是字面文本）。
+  // 只看掩码后：js 块先被摘出去，js 代码里的 `{{baseUrl}}` 从不触发这次翻转（`class.a@text@js:…{{…}}`
   // 若按原文判，`@` 不切段会把 `class.a@text` 整串当 class 选择器参数、静默零命中）。
   ctx.template = hasMark && TEMPLATE_MARK.test(marked)
   const els = splitElements(text, ctx.template)
@@ -286,7 +286,7 @@ function parseBranch(text: string, ctx: ParseCtx): Branch | null {
   return { segments, raws }
 }
 
-/** `!` 排除语法切分（官方文档：!是排除，序号用 : 隔开，0 是第1个，-1 最后一个）。
+/** `!` 排除语法切分（! 是排除，序号用 : 隔开，0 是第 1 个，-1 最后一个）。
  *  只对选择段（css/default）合法；js 段代码里的 `!0`（布尔取反）在前缀识别时已先行返回，不受影响。 */
 const EXCLUDE_RE = /^(.+?)!(-?\d+(?::-?\d+)*)$/
 
@@ -301,12 +301,12 @@ function splitExclude(el: string): { base: string; exclude: number[] | undefined
 }
 
 function classifySegment(el: string, ctx: ParseCtx, isLast: boolean): Segment {
-  // 段内前后空白修剪（真实源 `<js>…</js>\n$.[*]` 的段间换行——不 trim 的话 `.` 开头判定全失效）；
+  // 段内前后空白修剪（输入里有 `<js>…</js>\n$.[*]` 的段间换行——不 trim 的话 `.` 开头判定全失效）；
   // raws 仍记原文（错误定位不丢原文形态）
   let raw = el.trim()
   if (raw.startsWith('@')) raw = raw.slice(1) // @@ 显式声明形态：剥一个 @
 
-  // 特殊前缀大小写不敏感（真实源有 @CSS:/@JS: 大写形态）
+  // 特殊前缀大小写不敏感（输入里有 @CSS:/@JS: 大写形态）
   const low = raw.toLowerCase()
   if (low.startsWith('css:')) {
     const { base, exclude } = splitExclude(raw.slice(4))
@@ -323,7 +323,7 @@ function classifySegment(el: string, ctx: ParseCtx, isLast: boolean): Segment {
   if (low.startsWith('js:')) return { kind: 'js', code: raw.slice(3), form: 'at-js' }
   if (low.startsWith('put:')) return { kind: 'put', pairsRaw: raw.slice(4) }
   if (low.startsWith('get:')) {
-    // 花括号形态（`@get:\{[^}]+?\}` 这一壳）：真实源详情面整条规则就是 `@get:{n}`
+    // 花括号形态（`@get:\{[^}]+?\}` 这一壳）：详情面存在整条规则就是 `@get:{n}` 的形态
     const name = raw.slice(4).trim().replace(/^\{(.*)\}$/, '$1').trim()
     return { kind: 'getvar', name }
   }
@@ -358,7 +358,7 @@ const HTML_TAGS = new Set([
  *  纯属性选择器、后代/子代组合链——凡构成选择器语法的都交 css-select 求值，命中与否由文档决定；
  *  仍按宁炸不猜抛错的只剩与 default 方言真有歧义的 `nonsense:x`、`nonsense span`。 */
 /**
- * CSS 标识词（jsoup / cheerio 都接受非 ASCII 与自造 tag 名）与「词.词」链判定：
+ * CSS 标识词（cheerio 接受非 ASCII 与自造 tag 名）与「词.词」链判定：
  * 每一段都是合法 CSS 标识符 ⇒ 整段可交给选择器求值。数字开头的段**不算**（那是位置索引形态）。
  */
 const CSS_IDENT = /^[\p{L}_][\p{L}\p{N}_-]*$/u
@@ -372,7 +372,7 @@ function isImplicitCss(name: string): boolean {
   if (/^[a-zA-Z][\w-]*(?:\[[^\]]*\])*$/.test(name)) return true
   // 纯属性选择器：[class="col-12 col-md-6"]（无前导标签）
   if (name.startsWith('[') && name.endsWith(']')) return true
-  // 选择器特征字符（真实源 `ul#ncp3_ul li`、`*[href*=book/chapter]`、`a[href*="_"]`、
+  // 选择器特征字符（`ul#ncp3_ul li`、`*[href*=book/chapter]`、`a[href*="_"]`、
   // `li[style~=width:100%;]`）：含 #/[/>+=~ 等即按 CSS 交给 css-select 求值——
   // 解析不了在求值层如实 RuleEvalError，不再在解析期误报「无法识别的段类型」
   if (name.startsWith('*')) return true
@@ -475,7 +475,7 @@ function classifyDefault(raw: string, exclude: number[] | undefined, el: string,
   const { base: rawName, index: dotIndex } = splitIndexSuffix(target)
   // 尾点号剥离（句点分段口径）：`tag.li.!0:1:-1` 的 !排除 切走后 base 是 `tag.li.`——名字按 `.`
   // 分成段后**逐段取用**，尾部空串自然丢弃；我们把 `li.` 整段当 arg 喂给 css-select 就炸
-  // 「Expected name, found .」（看书源 nextTocUrl 实证）。只剥**尾部**连续点号：中段点仍是
+  // 「Expected name, found .」。只剥**尾部**连续点号：中段点仍是
   // 名称/选择器的一部分（class.note.clearfix 语义不动）。
   const name = rawName.replace(/\.+$/, '')
   const index = bracket?.index ?? dotIndex
@@ -501,8 +501,8 @@ function classifyDefault(raw: string, exclude: number[] | undefined, el: string,
     return effExclude === undefined ? { kind: 'default', mode: 'attr', arg: name, index } : { kind: 'default', mode: 'attr', arg: name, index, exclude: effExclude }
   }
 
-  // 隐式 CSS 回落（官方简写 + 考证：#page/.txt-list/li/a/div[itemscope] 都是选择器）。
-  // 位置后缀随 css 段带走（`a.0` = 选择 a 再取第 0 个——真实源高频形态）。
+  // 隐式 CSS 回落（简写形态：#page/.txt-list/li/a/div[itemscope] 都是选择器）。
+  // 位置后缀随 css 段带走（`a.0` = 选择 a 再取第 0 个，输入里常见）。
   // 不要把后缀并进选择器：`a.0` 会被当成 class 选择 → 恒零命中 → 首条书名为空。
   // 无索引时不带 index 字段（AST 精确形态，toEqual 口径）
   if (isImplicitCss(name)) {
@@ -515,7 +515,7 @@ function classifyDefault(raw: string, exclude: number[] | undefined, el: string,
     return seg
   }
 
-  // 模板态：白名单之外的段是**字面文本**——对面在 Mode.Regex 下把文本原样拼进结果
+  // 模板态：白名单之外的段是**字面文本**——模板态下文本原样拼进结果
   // （`最近更新：@get:{time}` 的 `最近更新：`、`书籍信息：\n编号：` 这类标签段），不做选择器求值
   if (ctx.template) return { kind: 'literal', raw: el.trim() }
   // 纯索引段（`kind: "0"` 这类）**未实现**：裸索引＝根的子元素再取索引，但本仓的

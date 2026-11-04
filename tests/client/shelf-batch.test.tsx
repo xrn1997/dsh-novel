@@ -94,7 +94,7 @@ describe('书架多选态：进态与勾选只动现场，不发请求', () => {
     expect(screen.getByText('已选 1')).toBeTruthy()
     expect(card('斗罗').getAttribute('aria-pressed')).toBe('true')
     expect(card('斗罗').getAttribute('aria-label')).toBe('取消选择《斗罗》')
-    expect(routeStore.get().route.name).toBe('shelf')      // 点卡片不再跳阅读器
+    expect(routeStore.get().route.name).toBe('shelf')      // 点卡片不跳阅读器
 
     fireEvent.click(card('斗罗'))
     expect(screen.getByText('已选 0')).toBeTruthy()

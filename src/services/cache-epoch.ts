@@ -85,7 +85,7 @@ const ORDER = Object.keys(RULE_EPOCH_IMPACT) as Array<keyof NormalizedRules>
 type RuleValue = NormalizedRules[keyof NormalizedRules]
 
 /** 值稳定化：header 是对象、ruleExploreKinds 是分类入口数组，都按排序键拼（同一份值的不同键序
- *  必须同指纹）。数组逐元素编码——发现面这批字段的影响面全是 `none`，今天到不了这里；这条分支
+ *  必须同指纹）。数组逐元素编码——发现面这批字段的影响面全是 `none`，走不到这里；这条分支
  *  是为了「将来谁把它们归进某个面」时指纹依然稳定，而不是让上面那道 tsc 闸被 cast 掉。
  *  null 与 '' 必须分开：空串规则与缺规则在求值层行为不同（见 online-reading.getTocInner 的规则缺失判据）。
  *  存量兼容：老 sources.json 的 rules 可能缺新增字段的键（undefined）——按缺省（≡null）入指纹，
@@ -116,7 +116,7 @@ export function rulesEpoch(rules: NormalizedRules, baseUrl: string, facet: Cache
   return digest(parts)
 }
 
-/** 发现面指纹的字段表，分三组，**组即「它为什么在这里」**。前两组不再住本模块：
+/** 发现面指纹的字段表，分三组，**组即「它为什么在这里」**。前两组由规则字段表派生，本模块不另抄一份：
  *  ① 发现面自有规则就是表里 `vacant` 档的键集（`VACANT_RULE_FIELDS`；`ruleExploreList` 非空时
  *  整套用它，见 `bridge.ts` 的 `hitRuleOf`）；
  *  ② **回落分支**读的九个通用书目字段由发现面行的配对列反推（`EXPLORE_FALLBACK_FIELDS`，按表

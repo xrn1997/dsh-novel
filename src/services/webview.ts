@@ -72,7 +72,7 @@ export function proxyConfig(raw: string | null | undefined): { server: string; u
   }
 }
 
-/** 页面上下文里跑书源的 webJs：上游交来的就是**脚本体**（常见 `return` 一句），页面里没有
+/** 页面上下文里跑书源的 webJs：书源交来的就是**脚本体**（常见 `return` 一句），页面里没有
  *  第二种能接受脚本体、还能把返回值带出来的通道——动态执行在这里是需求本身，不是图省事。 */
 const runWebJs = (code: string): unknown => {
   // eslint-disable-next-line @typescript-eslint/no-implied-eval -- webJs 是书源自带的脚本体，本仓要的就是执行它；这是唯一出口
@@ -172,7 +172,7 @@ export class WebViewRuntime {
       const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs })
       let html = await page.content()
       if (opts.webJs !== undefined && opts.webJs.trim() !== '') {
-        // 上游 webJs 是脚本体（常见 `return`）；用页面上下文的 Function 执行，返回值即正文。
+        // webJs 是脚本体（常见 `return`）；用页面上下文的 Function 执行，返回值即正文。
         // evaluate 自身没有超时（页面里的死循环会一直挂住），与导航共用同一个预算。
         const value: unknown = await withTimeout(
           page.evaluate(runWebJs, opts.webJs),

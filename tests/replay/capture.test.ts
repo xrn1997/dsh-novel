@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { ReadingService } from '../../src/services/reading.js'
 import { readSystemProxy, resolveProxyUrl } from '../../src/services/proxy.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
@@ -13,11 +14,11 @@ import { recordBodyOf } from './record.js'
 const KEYWORD = process.env.COMPAT_KEYWORD ?? '书'
 
 /** 记录型 fetch：passthrough 真请求，同时把每个响应（**请求 URL** → utf8 文本）存进内存供落盘。
- *  **键必须是请求 URL**：回放侧（harness 的 `makeReplayFetch`）就是按请求 URL 查表的。此前用
- *  `res.url`（跟随重定向后的落地地址）当键，于是「POST 出去、302 落到结果页」的搜索请求在
- *  manifest 里根本没有自己的键——采集看起来成功，回放当场报 `fixture 缺失`（九九藏书实证）。
+ *  **键必须是请求 URL**：回放侧（harness 的 `makeReplayFetch`）就是按请求 URL 查表的。拿重定向后的
+ *  落地地址当键，「POST 出去、302 落到结果页」那类搜索请求在 manifest 里根本没有自己的条目——
+ *  采集看起来成功，回放当场报 `fixture 缺失`。
  *  **解码必须走生产那条链**（`decodeBody`：声明 charset → content-type → `<meta>` 嗅探）：
- *  此前是 `buf.toString('utf8')`，GBK 页会被存成乱码——采集能过（断言跑在**真**解码链上）、
+ *  直接把字节按 utf8 解会把 GBK 页存成乱码——采集能过（断言跑在**真**解码链上）、
  *  回放必红（回放一律以 utf-8 提供文本），又一种「采集与回放断的不是同一批」。 */
 function recordFetch() {
   const pages = new Map<string, { body: string; contentType?: string }>()
@@ -43,12 +44,12 @@ function hash8(s: string): string {
 
 describe.skipIf(process.env.COMPAT_CAPTURE !== '1')('compat 采集', () => {
   it('逐源：真请求四步 → fixture 落盘（脱敏两刀）', { timeout: 300_000 }, async () => {
-    const sourcesDir = path.resolve('compat/sources')
+    const sourcesDir = fileURLToPath(new URL('./sources/', import.meta.url))
     const files = (await fs.readdir(sourcesDir).catch(() => [])).filter((f) => f.endsWith('.json'))
-    expect(files.length, `compat/sources 下没有源 JSON——先投放再采集`).toBeGreaterThan(0)
+    expect(files.length, `tests/replay/sources 下没有源 JSON——先投放再采集`).toBeGreaterThan(0)
     // 出站姿态与生产/审计同口径：resolveProxyUrl（config > 环境变量 > 系统代理 > 直连）。
     // 缺这条时采集走直连——只有代理能到的站点会返回反爬/空页，采集在「正文为空」处假红
-    // （实测：若夏的正文接口直连拿到的是壳页，规则照实报零命中）。
+    // （正文接口直连拿到的是壳页，规则照实报零命中）。
     const proxyUrl = resolveProxyUrl({ env: process.env, systemProxy: await readSystemProxy() })
     console.log(`[compat] 源总数 ${files.length}；出站代理 ${proxyUrl ?? '(直连)'}`)
     for (const f of files) {
@@ -76,9 +77,9 @@ describe.skipIf(process.env.COMPAT_CAPTURE !== '1')('compat 采集', () => {
       expect(toc.length, `${caseName}: 目录为空`).toBeGreaterThan(0)
       const text = await svc.getChapter(sourceId, bookUrl, 0)
       expect(text.length, `${caseName}: 首章正文为空`).toBeGreaterThan(0)
-      // 详情面：与回放**同一份判据**（`declaresDetail`，声明即须到货）。采集侧此前不查这一面，
-      // 于是能采出「采集绿、回放红」的 fixture（2026-09-28 米读看书实证：它是纯 API 源、没有
-      // ruleBookInfo，回放却在「详情书名为空」处红）——采集必须把回放会断的每一条都先断一遍。
+      // 详情面：与回放**同一份判据**（`declaresDetail`，声明即须到货）。采集侧不查这一面就会
+      // 采出「采集绿、回放红」的 fixture：纯 API 源没有 ruleBookInfo，回放却按详情面的书名断言——
+      // 采集必须把回放会断的每一条都先断一遍。
       const detail = await svc.getDetail(sourceId, bookUrl)
       if (declaresDetail(raw, 'name')) {
         expect(detail.title?.trim(), `${caseName}: 详情书名为空（源声明了详情面书名规则）`).toBeTruthy()
@@ -91,7 +92,7 @@ describe.skipIf(process.env.COMPAT_CAPTURE !== '1')('compat 采集', () => {
       await svc.flush()
 
       // 落盘：source.json 快照 + manifest（keyword 快照——采集与回放必须同关键词）+ 脱敏 pages
-      const outDir = path.resolve('compat/fixtures', caseName)
+      const outDir = fileURLToPath(new URL(`./fixtures/${caseName}/`, import.meta.url))
       await fs.mkdir(path.join(outDir, 'pages'), { recursive: true })
       await fs.writeFile(path.join(outDir, 'source.json'), JSON.stringify(raw, null, 2), 'utf8')
       const manifest: { keyword: string; capturedAt: number; pages: Record<string, string> } = {

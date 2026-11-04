@@ -19,7 +19,7 @@ const $ = cheerio.load(html)
 const root = () => $('#wrap')
 const loc = (i: number, raw: string) => ({ segmentIndex: i, segmentRaw: raw })
 
-describe('链首裸取值终端的上下文（真源 ruleToc.chapterName = "text"）', () => {
+describe('链首裸取值终端的上下文（`ruleToc.chapterName = "text"`）', () => {
   it('整篇取一次文本，不是逐祖先各出一份', async () => {
     const { evaluate } = await import('../../src/engine/evaluate.js')
     const v = await evaluate('text', { html: '<div id="c"><a href="/1.html">第1章 蜕变</a></div>' }, 'toc')
@@ -28,7 +28,7 @@ describe('链首裸取值终端的上下文（真源 ruleToc.chapterName = "text
   })
 })
 
-describe('点号位置后缀 = 索引列表（对面 ElementsSingle.findIndexSet 的 legacy 分支）', () => {
+describe('点号位置后缀 = 索引列表（每个数字各成一个索引）', () => {
   // `.` / `:` / `!` 分隔的**每个数字都收成一个索引**（`tag.div.-1:10:2` = 倒数第一、第十、第二），
   // 冒号不是区间符：按半开切片读，`.0:2` 在四项上取 A、B（应为 A、C），
   // 落在目录/列表规则上就是**少一章、错一章**的静默错值。
@@ -39,7 +39,7 @@ describe('点号位置后缀 = 索引列表（对面 ElementsSingle.findIndexSet
   it('tag.li.0:2@text → 索引 0 与 2（写入序），不是 [0,2) 切片', async () => {
     expect(await at('tag.li.0:2@text')).toEqual({ kind: 'list', items: ['A', 'C'] })
   })
-  it('负数从尾数、越界者逐个丢弃（对面 if it in 0 until len）', async () => {
+  it('负数从尾数、越界者逐个丢弃（越界只丢那一项，不折成整串失败）', async () => {
     expect(await at('tag.li.-1:10:2@text')).toEqual({ kind: 'list', items: ['D', 'C'] })
   })
   it('全部越界 → Miss（不回退全集）', async () => {
@@ -59,10 +59,10 @@ describe('列表规则链首 `+` 前缀（列表入口剥除）', () => {
     expect(await run('+tag.li@text', 'list')).toEqual(await run('tag.li@text', 'list'))
     expect(itemsOf(await run('+tag.li@text', 'list'))).toEqual(['A', 'B'])
   })
-  it('`-` 与 `+` 同时在前时按对面次序：先剥 - 反序、再剥 +', async () => {
+  it('`-` 与 `+` 同时在前时按既有次序：先剥 - 反序、再剥 +', async () => {
     expect(itemsOf(await run('-+tag.li@text', 'list'))).toEqual(['B', 'A'])
   })
-  it('取值用途不在对面的剥除点上（只列表入口剥 +），本仓不扩大豁免', async () => {
+  it('取值用途不在剥除点上（只列表入口剥 +），本仓不扩大豁免', async () => {
     expect((await run('+tag.li@text', 'value')).kind).not.toBe('list')
   })
 })
@@ -81,10 +81,10 @@ describe('default 选择段', () => {
     expect(nodesOf(v5)).toHaveLength(2)
   })
   it('`class.a b` = 同时含两个类（不是后代选择器，也不是把整串当一个类名）', () => {
-    // 三种读法里只有一种能读出现库的真实源：对面把整串当一个类名交给 jsoup（`getElementsByClass`），
+    // 三种读法里只有一种能读出这一形态：把整串当成一个类名比对（`getElementsByClass`）时，
     // 带空格的类名在按空白分词比对 class 属性时不可能命中；直译成 `.x y`（后代选择器）也恒零命中
-    // ——两个类在同一元素上时，后代里没有满足 `.x y` 的东西。本仓解成 `.a.b`（同时含所有类）。
-    // 这一侧是真实源赖以读出的语义。
+    // ——两个类在同一元素上时，后代里没有满足 `.x y` 的东西。本仓解成 `.a.b`（同时含所有类），
+    // 这就是这一形态赖以读出的语义。
     // 红检：把 `case 'class'` 改成 `.x y` 的直译即红（同一元素两个类 → 后代选择器零命中）。
     const H = cheerio.load('<div id="w"><div class="col-12 col-md-6 x"><span>甲</span></div></div>')
     const hit = evalDefault({ kind: 'default', mode: 'class', arg: 'col-12 col-md-6', index: null }, H, H('#w'), loc(0, 'class.col-12 col-md-6'), 'toc')
@@ -116,18 +116,16 @@ describe('default 选择段', () => {
 })
 
 /**
- * default 选择段含当前元素自身（对面 jsoup 语义；裁决见 ADR-0029，读数在矩阵行
+ * default 选择段含当前元素自身（裁决见 `ADR-0029`，读数在矩阵行
  * `a-default-step-self-inclusion`）。
  *
- * 为什么钉这一条：对面那四种选择步（class / tag / id / CSS）都交给同一个 DOM 库 jsoup 求值，
- * 而 jsoup 的 `getElementsByClass` / `getElementsByTag` / `Collector.collect` / `select` 命中集
- * **含当前元素自身**——本机实测 jsoup：四种全含，且自身排在全部后代之前（版本成色写在矩阵
- * `a-default-step-self-inclusion`）。cheerio 的
+ * 为什么钉这一条：class / tag / id / CSS 四种选择步的命中集
+ * **含当前元素自身**，且自身排在全部后代之前。cheerio 的
  * `find()` 只给后代，于是「类名和标签在同一个元素上」这类写法（`class.page-link@tag.a@href`）
- * 我们读空、对面读得出——真机实证是目录翻页规则整条链读空后，脚本把 `undefined` 拼成下一页地址。
+ * 我们读空、按含自身那一档读得出——症状出在目录翻页规则整条链读空后，脚本把 `undefined` 拼成下一页地址。
  */
 describe('default 选择段含当前元素自身（class / id / tag），children 与 child 不含', () => {
-  // 真机形态：妙笔阁目录页的分页导航——class 就长在 <a> 自己身上
+  // 现库形态：目录页的分页导航——class 就长在 <a> 自己身上
   const SELF_HTML = '<div id="pg"><ul class="pages">'
     + '<li class="pi"><a class="page-link" href="/107/107609/index_1.html">1</a></li>'
     + '<li class="pi"><a class="page-link" href="/107/107609/index_2.html">2</a></li>'
@@ -179,7 +177,7 @@ describe('default 取值段', () => {
     const href = evalDefault({ kind: 'default', mode: 'href', arg: null, index: null }, $, nodesOf(lis), loc(1, 'href'), 'toc')
     expect(href).toEqual({ kind: 'value', text: '/b/1' })          // 原样属性值，引擎不拼绝对 URL
     // 链首 $('*') 上下文（片段求值的 @href 裸规则）：html/body 包装元素不向下兜底——
-    // 否则三份同值 → \n 拼接 → URL 解析剥换行拼成 /x.html/x.html/x.html 事故（真实源回归）
+    // 否则三份同值 → \n 拼接 → URL 解析剥换行拼成 /x.html/x.html/x.html 事故（回归）
     const $frag = cheerio.load('<a href="/read/49/45792/1.html">内容简介</a>')
     const fragAll = $frag('*')
     const fragHref = evalDefault({ kind: 'default', mode: 'href', arg: null, index: null }, $frag, fragAll, loc(1, 'href'), 'toc')
@@ -237,7 +235,7 @@ describe('default 取值段', () => {
   })
   it('text 取后代文本（li 内的 <a> 也算）；ownText 严格直系 → List{[]}', () => {
     // 口径：text 含全部后代；ownText 才是直系。
-    // （按「text 亦直系」读打不动真实源：笔趣阁正文 `.con@text` 而 .con 里全是 <p>）
+    // （按「text 亦直系」读打不动正文规则：`.con@text`，而 .con 里全是 <p>）
     const all = evalDefault({ kind: 'default', mode: 'class', arg: 'item', index: null }, $, root(), loc(0, 'class.item'), 'toc')
     const t = evalDefault({ kind: 'default', mode: 'text', arg: null, index: null }, $, nodesOf(all), loc(1, 'text'), 'toc')
     expect(t).toEqual({ kind: 'list', items: ['第一章 起点2024-01-01', '第二章 转折2024-01-02', '第三章 高潮2024-01-03'] })
@@ -272,7 +270,7 @@ describe('text / textAll / textNodes / ownText 区分', () => {
   it('text 块级边界落成换行（正文按 \\n 分段；cheerio .text() 会拼成一整行）', () => {
     const $c = cheerio.load('<div class="con"><h1>第2章 斗气大陆</h1><p>月如银盘，漫天繁星。</p><p>山崖之颠。</p></div>')
     const v = evalDefault({ kind: 'default', mode: 'text', arg: null, index: null }, $c, $c('.con'), loc(0, 'text'), 'content')
-    // 笔趣阁（bqquge）真实形态：.con 里全是 <p> —— 直系文本为空，只有后代文本有内容
+    // 现库真实形态：.con 里全是 <p> —— 直系文本为空，只有后代文本有内容
     expect(v).toEqual({ kind: 'value', text: '第2章 斗气大陆\n月如银盘，漫天繁星。\n山崖之颠。' })
   })
 })
@@ -303,7 +301,7 @@ describe('链首 default 选择段直达', () => {
 })
 
 /**
- * 链首直达的**差分**钉子：真源规则里出现的 selector 形状逐个走一遍两条路，命中集与顺序必须
+ * 链首直达的**差分**钉子：规则里出现的 selector 形状逐个走一遍两条路，命中集与顺序必须
  * 逐元素相同。例外表（SET_SCOPED_PSEUDO / RELATIVE_SELECTOR）是正则写的，上面那组样品钉不住
  * 「该放行的没放行」——这里按形状铺开，误分类当场红。祖先与后代长同一个类名是最容易把
  * 顺序改岔的形状，故样品里留了一处 `.item` 套 `.item`。

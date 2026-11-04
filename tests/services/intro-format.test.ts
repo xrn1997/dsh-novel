@@ -11,10 +11,10 @@ import { formatIntro } from '../../src/services/content.js'
  *   等书源交互标记会被清理掉，交给渲染层按前缀选渲染器）；否则同样净化后截断。
  *
  * 两侧都不许把原标签透出：普通 HTML 简介会把 `<div>`/`<span>` 带进 UI；带指令前缀的那条
- * （样本是米读小说的整页 CSS + 卡片 HTML）若被净化就丢了书源交互标记。
+ * （整页 CSS + 卡片 HTML 塞进简介的形态）若被净化就丢了书源交互标记。
  */
 
-describe('formatIntro：对面 HtmlFormatter.format 的移植', () => {
+describe('formatIntro：简介展示文本的净化与截断', () => {
   it('块级标签转换行，其余标签连属性一起删，注释删除', () => {
     const raw = '<div class="a">第一段</div><span>旁注</span><!--隐藏--><p>第二段</p>'
     expect(formatIntro(raw)).toBe('　　第一段\n　　旁注\n　　第二段')
@@ -33,12 +33,12 @@ describe('formatIntro：对面 HtmlFormatter.format 的移植', () => {
     expect(formatIntro('<p>甲</p>   \n  ')).toBe('　　甲')
   })
 
-  it('截断到 5000 字符（对面 take(5000)）', () => {
+  it('截断到 5000 字符', () => {
     expect(formatIntro('甲'.repeat(6000)).length).toBe(5000)
   })
 })
 
-describe('formatIntro 的渲染指令前缀豁免（对面只在详情面豁免）', () => {
+describe('formatIntro 的渲染指令前缀豁免（只在详情面豁免）', () => {
   const DIRECTIVE = '<useweb>\n<style>*{box-sizing:border-box}</style>\n<div class="card">简介正文</div>'
 
   it('keepDirective:true（详情面）→ trimStart 后原样保留，连前缀一起', () => {
@@ -47,7 +47,7 @@ describe('formatIntro 的渲染指令前缀豁免（对面只在详情面豁免�
     expect(out.startsWith('<useweb>')).toBe(true)
   })
 
-  it('大小写与前导空白都算命中（对面 IGNORE_CASE + trimStart）', () => {
+  it('大小写与前导空白都算命中', () => {
     expect(formatIntro('  \n <MD>\n# 标题', { keepDirective: true })).toBe('<MD>\n# 标题')
   })
 

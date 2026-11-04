@@ -67,8 +67,9 @@ export class Shelf {
     return this.books.find((b) => b.bookKey === bookKey)
   }
 
-  /** 加书；不在架 → 插入；已在架 → patch 语义（null/undefined 键保值——旧 {...existing,...input}
-   *  下 `: undefined` 自有键会抹掉已有元数据的雷已拆）。立即 schedule 防抖落盘。
+  /** 加书；不在架 → 插入；已在架 → patch 语义（null/undefined 键保值——裸 spread 会把显式
+   *  `: undefined` 的自有键当成「抹掉」，已有元数据就此丢失，所以合并必须走 applyPatch）。
+   *  立即 schedule 防抖落盘。
    *  新书构造也走 applyPatch：可选元数据缺席/null 一律不落键（与 patch 同一纪律） */
   add(input: AddBookInput): ShelfBook {
     const existing = this.get(input.bookKey)

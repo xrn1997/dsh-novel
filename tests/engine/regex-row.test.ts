@@ -9,7 +9,7 @@ import { pick } from '../support/fixture.js'
  *
  * 书源在 AllInOne（整页正则）模式下列出条目后，**同一条目的字段规则是行模板**：
  * `chapterName = $2$3`、`chapterUrl = https://…/$1`——`$n` 取当前行的第 n 组，
- * `$0` 取整段匹配。两条口径（对读记录与出处见矩阵行 `a-allinone-group-zero`）：
+ * `$0` 取整段匹配。两条口径（钉在矩阵行 `a-allinone-group-zero`）：
  * ① 只扫 `##` 之前的支文本（替换尾里的 `$n` 是替换段的组引用）；
  * ② 含 `$\d` 的支整体进正则模式，绑定后的**原文**就是值（不按规则解析）。
  */
@@ -42,7 +42,7 @@ describe('AllInOne 行绑定 $n', () => {
     expect(bindRegexRow('', row)).toBe('')
   })
 
-  // 对面只在 `##` **之前**的支文本上扫 `$\d`（splitRegex 只看 ruleStrArray[0]），
+  // 只在 `##` **之前**的支文本上扫 `$\d`（替换尾里的 `$n` 归替换段），
   // 故替换尾里的 `$1` 仍是「替换段的捕获组引用」，不是行组引用。
   it('替换尾里的 $n 不是行组引用（只扫 `##` 之前的支文本）', () => {
     const kinds = pick(parseRule('class.a@text##pat##$1', 'rule', 'value').branches, 0).segments.map((s) => s.kind)
@@ -54,7 +54,7 @@ describe('AllInOne 行绑定 $n', () => {
     expect(kinds).not.toContain('regexRow')
   })
 
-  it('行模板段：有行给绑定后的原文，没有行给原文（对面 makeUpRule 的两种落点）', async () => {
+  it('行模板段：有行给绑定后的原文，没有行给原文', async () => {
     const row = ['整段匹配', 'g1', 'g2', 'g3']
     expect(await evaluate('$2$3', { html: 'x', regexRow: row }, 'toc', 'value'))
       .toEqual({ kind: 'value', text: 'g2g3' })
@@ -62,7 +62,7 @@ describe('AllInOne 行绑定 $n', () => {
       .toEqual({ kind: 'value', text: '$2$3' })
   })
 
-  it('行模板 + ## 尾：先绑行、再生效替换（对面 makeUpRule → replaceRegex 的顺序）', async () => {
+  it('行模板 + ## 尾：先绑行、再生效替换', async () => {
     const row = ['m', 'a1', 'a2']
     expect(await evaluate('$1##a##A', { html: 'x', regexRow: row }, 'toc', 'value'))
       .toEqual({ kind: 'value', text: 'A1' })

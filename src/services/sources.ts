@@ -14,8 +14,8 @@ import { log } from './log.js'
 export type { SourcePublic } from '../shared/wire.js'
 import type { LoginUiField, LoginUiText, SourcePublic } from '../shared/wire.js'
 
-/** edit 的变更句柄：原注册表公开 mutator 全部迁到此（方法名与语义不变）。
- *  只在 edit 的 recipe 内可用——变更与落盘不再可分。 */
+/** edit 的变更句柄：注册表的 mutator 只有这一套，外部拿不到单独的写方法。
+ *  它们只在 edit 的 recipe 内可用——变更与落盘不可分。 */
 export interface SourceEdit {
   add(result: NormalizeResult): NovelSource
   replace(id: string, result: NormalizeResult): NovelSource
@@ -26,20 +26,20 @@ export interface SourceEdit {
   setAuth(id: string, auth: SourceAuth | undefined): boolean
 }
 
-/** 合并落盘阈值：累计 N 次变更强制写一次（计数跨定时器/flush 写累计，阈值触发才复位）
- *  （「每 20 条 persist 一次」的既有决策——从任务运行器搬进注册表，调用方不再知道粒度存在）。
+/** 合并落盘阈值：累计 N 次变更强制写一次（计数跨定时器/flush 写累计，阈值触发才复位）。
+ *  粒度归注册表——任务运行器与调用方都不需要知道它存在，值也只有这一个主人。
  *  export 只为测试能按它把第 N 次变更对齐到阈值那一格；生产调用方一律不认识这个数。 */
 export const PERSIST_EVERY = 20
 
 /**
  * 书源注册表：加载 / 变更（edit 原子入口）/ 只读投影 / 合并落盘。
  * 落盘是内部事务，不是调用方的纪律——
- * 「改完记得 persist」的顺序约束已从 interface 消灭：公开 persist 不存在，忘了落盘不可表达。
+ * interface 上没有 persist：「改完记得 persist」这类顺序约束根本表达不出来，也就不会忘。
  */
 /** loginUi 的可渲染子集：JSON 数组里的 text/password/button 行；`@js:` 生成形态与字面
  *  `webView` 行不投影，UI 回退 cookie 录入。button 只收有非空 action 的行（无动作按钮是死控件）。
  *  **内部行带 action**：服务端按同名行查脚本；`toPublic` 只投影 name/type，客户端不持脚本。
- *  `name` 同时是 loginInfo 的键与标签（legado RowUi.name）。 */
+ *  `name` 同时是 loginInfo 的键与标签（书源格式里 `loginUi` 每行的 `name`）。 */
 export interface LoginUiActionRow {
   name: string
   type: 'button'

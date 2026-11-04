@@ -250,8 +250,9 @@ const PNG_INVALID_IHDR = (() => {
 })()
 
 /** 1×1 GIF89a：**帧数据与扩展尾巴都不存在**，从扩展中段截断后直接补 trailer 0x3B（头与尾都对）。
- *  本仓 GIF 核对只认魔数与末字节，会当可读资源放行；真解码归浏览器验收门——那边实测（2026-09
- *  无头 Edge）**拒绝**这一份，如实报加载失败且不塌预留框。钉的就是这个差异：结构过关 ≠ 能渲染。 */
+ *  本仓 GIF 核对只认魔数与末字节，会当可读资源放行；真解码归浏览器验收门（`DSH_EPUB_BROWSER`）——
+ *  那一门 2026-09 实测（无头 Edge）**拒绝**这一份，如实报加载失败且不塌预留框。钉的就是这个差异：
+ *  结构过关 ≠ 能渲染。 */
 const GIF_DATA_LOST = Buffer.concat([TINY_GIF.subarray(0, 32), Buffer.from([0x3b])])
 
 /** 最小 WebP（RIFF + 单个 VP8L chunk，3×2，25 字节）：VP8L 头里 14 位宽/14 位高按位打包 */
@@ -361,8 +362,7 @@ const CH2_BODY = '<h1>第二章</h1><p id="c">丙</p>'
 const NOTES_BODY = '<h1>注释</h1><p id="n1">脚注一</p>'
 
 /** 「只包一张书内图」的内联 SVG：viewBox 与 image 尺寸都对上 TINY_PNG 的 2×3。
- *  SVG_COVER_PAGE_BODY 是它在真书里的样子——EPUB3 推荐的整页封面写法（一层 div 包着，
- *  真书取样自 Gutenberg #7337 图像版 `pg7337-images-3.epub`）。 */
+ *  SVG_COVER_PAGE_BODY 是它在真书里的样子——EPUB3 推荐的整页封面写法（一层 div 包着）。 */
 const SVG_ONLY_IMAGE = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"'
   + ' width="100%" height="100%" viewBox="0 0 2 3" preserveAspectRatio="xMidYMid meet" version="1.1">'
   + '<image width="2" height="3" xlink:href="images/cover.png"/></svg>'
@@ -1061,9 +1061,9 @@ const FIXTURES: Record<string, () => Buffer> = {
     '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4"/></svg>')]])),
 
   /**
-   * **真书反例（2026-09-26，Gutenberg #7337 图像版）**：spine 第一项是封面页——整页一棵内联 SVG、
+   * **真书反例（2026-09-26 实测）**：spine 第一项是封面页——整页一棵内联 SVG、
    * 只包书内那张封面 PNG。这是 EPUB3 推荐的封面写法（同图另以 `properties="cover-image"` 声明），
-   * 真实出版方都这么发；它原先被「内联 SVG 是唯一内容即拒整本」那条判据杀掉整本书。
+   * 出版方普遍这么发；「内联 SVG 是唯一内容即拒整本」那条判据会把整本书杀掉，故钉这一份。
    */
   'epub3-svg-cover-page': () => zipOf([
     ['META-INF/container.xml', CONTAINER_OPF],

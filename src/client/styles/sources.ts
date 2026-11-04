@@ -1,8 +1,8 @@
 /** 书源待办收件箱块（`NOVEL_CSS` 的第 4 块）：调度台 IA 的任务卡网格与列表头读数带。 */
 export const SOURCES_CSS = `
 /* ── 书源待办收件箱（反常置顶、任务卡横排）──
-   宽屏口径：auto-fit 卡片网格——横跨整列的长条在 1600px 内容列下中间空、动作钮孤悬列尾
-   （悬浮碎片病，实测用户反馈）；窄屏/会话列拖窄自动堆叠。
+   宽屏口径：auto-fit 卡片网格——横跨整列的长条在宽内容列下中间空、动作钮孤悬列尾
+   （悬浮碎片病），故 auto-fit；窄屏/会话列拖窄自动堆叠。
    读数职责归此处：坏源/未验证的数量与处置动作同框，不用状态 chips。 */
 .novel-inbox { border: 1px solid var(--novel-border); border-radius: var(--novel-r-md); background: var(--novel-layer-2); }
 .novel-inbox-head { display: flex; align-items: center; gap: var(--novel-sp-3);
@@ -38,9 +38,8 @@ export const SOURCES_CSS = `
 .novel-src-stats .warn { color: var(--novel-warn); }
 .novel-src-stats .err { color: var(--novel-err); }
 /* 窄列退化：留「共 N 个源 · 已启用 M」，掉 已停用/未验证/坏源（丢了能从下拉再筛回来，宽列
-   也在同一屏）；再窄由 flex-wrap 自然折行（不裁字）。断点 1000px 由渲染台实测：
-   五项自然宽 326px、退化后 140px，退化买回约 170px 单线余量；宿主内容列常态 ~1600 全五项
-   同线）。 */
+   也在同一屏）；再窄由 flex-wrap 自然折行（不裁字）。1000px 是分档线：宽于此全五项同线，
+   窄于此退化到两读数。 */
 @container (max-width: 1000px) {
   .novel-src-stats .slim { display: none; }
 }

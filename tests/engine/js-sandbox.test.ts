@@ -229,10 +229,10 @@ describe('@js 沙箱', () => {
     expect((await run('return java.get("nope")')).value.kind).toBe('miss')
   })
   it('未设变量取出来是**空串**，不是 undefined（`String(java.get(...))` 不许泄漏字面量 "undefined"）', async () => {
-    // 对面 `RuleDataInterface.getVariable` 收口是 `variableMap[key] ?: getBigVariable(key) ?: ""` → 未设给**空串**。
-    // 本仓 `java.get` 返 undefined，于是：`String(java.get('userId'))` → 字面量 **"undefined"**（移动阅读
+    // 变量取值收口成「本层 → 全局层 → `""`」→ 未设给**空串**。
+    // 本仓 `java.get` 返 undefined，于是：`String(java.get('userId'))` → 字面量 **"undefined"**（现库里
     // `userId=userId||String(java.get('userId'))` 会把它拼进 DES 密钥/URL——**静默错值**），
-    // `java.get('list').split('\n')` → 抛 TypeError（海棠搜书；对面是 `''.split()` = ['']，脚本继续往下跑）。
+    // `java.get('list').split('\n')` → 抛 TypeError（现库同类形态；收口成空串时是 `''.split()` = ['']，脚本继续往下跑）。
     // 注意这条与上面那条**不冲突**：完成值 '' 与 undefined 在值映射里同样落 Miss（返回值映射的口径），
     // 所以观察点必须**带上分隔符**——`String(...)` 的结果本身要看得到（'' vs 'null'）。
     expect((await run('return "[" + String(java.get("nope")) + "]"')).value).toEqual({ kind: 'value', text: '[]' })
@@ -323,7 +323,7 @@ describe('@js 沙箱', () => {
     expect(v.value).toEqual({ kind: 'value', text: 'https://m.example.com/a|B:https://m.example.com/a' })
   })
   // `connect(...)` 的返回对象上，`.url` 与 `.raw().request().url()` 是**同一个值**（跟随重定向后的
-  // 末次请求）；全本同人小说网的 searchUrl 脚本靠 `connect(so).raw().request().url()`
+  // 末次请求）；有源的 searchUrl 脚本靠 `connect(so).raw().request().url()`
   // 取落地地址再拼分页 URL（改这里注意：raw/request 缺一环，整条源在运行时就判坏）。
   it('java.connect(...).raw().request().url() → 落地地址，且与 .url 同值（重定向后的末次请求）', async () => {
     const ctx = ctxOf({ fetch: async () => ({ body: 'B', finalUrl: 'https://m.example.com/final' }) })
@@ -340,7 +340,7 @@ describe('@js 沙箱', () => {
     expect(v.value).toEqual({ kind: 'value', text: 'z' })
     expect(seen).toEqual({ Referer: 'https://r' })
   })
-  it('java.post(url, body, headers) → 对面 Jsoup Response 的**方法壳**（res.body() / res.cookies()）', async () => {
+  it('java.post(url, body, headers) → 响应对象的**方法壳**（res.body() / res.cookies()）', async () => {
     const seen: Array<[string, string, Record<string, string> | undefined]> = []
     const ctx = ctxOf({
       fetchPost: async (u, b, h) => {
@@ -354,7 +354,7 @@ describe('@js 沙箱', () => {
       hostOf(), ctx,
     )
     expect(v.value).toEqual({ kind: 'value', text: 'BODY|200|https://m.example.com/final|abc' })
-    // 第三参：脚本内联给 JS 对象（独立合集里的真形态），也接受 JSON 串；
+    // 第三参：脚本内联给 JS 对象，也接受 JSON 串；
     // 两种都要落到同一份头表
     expect(pick(seen, 0)[0]).toBe('https://m.example.com/a')
     expect(pick(seen, 0)[1]).toBe('k=1')
@@ -456,7 +456,7 @@ describe('@js 沙箱', () => {
     expect(v3.value.kind).toBe('miss')
   })
 
-  it('getElements：evaluateRef 返回 nodes → 元素包装对象（.text()/.attr()/String()——legado 方法面）', async () => {
+  it('getElements：evaluateRef 返回 nodes → 元素包装对象（.text()/.attr()/String()——这一族方法面）', async () => {
     const $ = load('<h1 class="t">标题</h1><p>正文</p>')
     const fake = (): EngineValue => ({ kind: 'nodes', nodes: $('h1') })
     const v = await run(
@@ -468,7 +468,7 @@ describe('@js 沙箱', () => {
     expect(v.value).toEqual({ kind: 'value', text: '1|标题|<h1 class="t">标题</h1>|t|' })
   })
 
-  it('getString 二参布尔 = unescape 开关（对面双参重载），不再被当 isUrl 抛错', async () => {
+  it('getString 二参布尔 = unescape 开关（重载位置的口径），不再被当 isUrl 抛错', async () => {
     // 二参布尔是 unescape，isUrl 在第三参，且 isUrl 也**不抓取**（只绝对化）。
     // 别按 isUrl 读第二参：那会把「不要反转义」的意图反过来执行。见 matrix h-get-string-is-url。
     const fake = (): EngineValue => ({ kind: 'value', text: 'X' })
@@ -486,10 +486,10 @@ describe('@js 沙箱', () => {
   })
 })
 
-// ── 宿主垫片扩展（616 broken 归因：真实源 @js 依赖这些 API）────────────────
+// ── 宿主垫片扩展（覆盖 @js 脚本依赖的宿主 API）────────────────
 
-describe('宿主垫片（真实源用到的缺失 API）', () => {
-  it('java.log ≡ console.log（53 处使用——缺它整个脚本炸）', async () => {
+describe('宿主垫片（@js 脚本会调的缺失 API）', () => {
+  it('java.log ≡ console.log（缺它整个脚本炸）', async () => {
     const v = await run('java.log("dbg", 2); return "ok"')
     expect(v.value).toEqual({ kind: 'value', text: 'ok' })
     expect(v.logs).toEqual(['dbg 2'])
@@ -557,7 +557,7 @@ describe('宿主垫片（真实源用到的缺失 API）', () => {
     const err2 = await run('return android.foo()').then(() => null, (e: unknown) => e)
     expect((err2 as Error).message).toMatch(/需要安卓宿主环境/)
   })
-  it('AES 解密桥（legado createSymmetricCrypto().decryptStr / aesBase64DecodeToString——Node crypto 实现）', async () => {
+  it('AES 解密桥（方言侧 createSymmetricCrypto().decryptStr / aesBase64DecodeToString——Node crypto 实现）', async () => {
     const crypto = await import('node:crypto')
     const key = '0123456789abcdef'
     const cipher = crypto.createCipheriv('aes-128-cbc', Buffer.from(key, 'utf8'), Buffer.from(key, 'utf8'))
@@ -591,7 +591,7 @@ describe('宿主垫片（真实源用到的缺失 API）', () => {
     expect((await run('return JSON.parse(source.getVariable()).host', hostOf(), ctx)).value)
       .toEqual({ kind: 'value', text: 'y.com' })
   })
-  it('source.get/put 键值表：与串槽、cache 各自一处（对面是三个不同前缀）', async () => {
+  it('source.get/put 键值表：与串槽、cache 各自一处（三张表互不共用前缀）', async () => {
     const ctx = ctxOf()
     await run('source.put("token", "t123"); source.put("searchMode", "author"); return "ok"', hostOf(), ctx)
     expect((await run('return source.get("token")', hostOf(), ctx)).value).toEqual({ kind: 'value', text: 't123' })
@@ -615,7 +615,7 @@ describe('宿主垫片（真实源用到的缺失 API）', () => {
   })
 })
 
-describe('scriptForm（legado @js 口径：完成值即结果）', () => {
+describe('scriptForm（`@js` 的口径：完成值即结果）', () => {
   const runScript = (code: string, host: JsHost = hostOf(), ctx: EvalContext = ctxOf()) =>
     evalJs({ code, host, ctx, loc: L, facet: 'search', opts: { scriptForm: true } })
 
@@ -644,7 +644,7 @@ describe('scriptForm（legado @js 口径：完成值即结果）', () => {
   it('空串结果 → Miss（如实，不产假值）', async () => {
     expect((await runScript('""')).value.kind).toBe('miss')
   })
-  it('jsLib 先于用户代码执行：函数定义全局可见（legado 源级函数库口径）', async () => {
+  it('jsLib 先于用户代码执行：函数定义全局可见（源级函数库先装配的口径）', async () => {
     const ctx = ctxOf({ jsLib: 'function host() { return "https://lib.example.com" }\nvar CONST_X = 42;' })
     const v = await evalJs({ code: 'host() + "/" + key', host: hostOf({ key: 'k' }), ctx, loc: L, facet: 'search', opts: { scriptForm: true } })
     expect(v.value).toEqual({ kind: 'value', text: 'https://lib.example.com/k' })
@@ -658,7 +658,7 @@ describe('scriptForm（legado @js 口径：完成值即结果）', () => {
   })
 })
 
-describe('jsLib 的 URL 字典形态（legado SharedJsScope：{"名":"https://…/x.js"}）', () => {
+describe('jsLib 的 URL 字典形态（源级函数库字典：{"名":"https://…/x.js"}）', () => {
   const LIB = 'function signIt(x){ return "S:"+x }'
   const opts = (code: string, url: string, n: { v: number }, fail = false) => ({
     code, loc: { segmentIndex: 0, segmentRaw: '@js' }, facet: 'toc' as const,
@@ -670,7 +670,7 @@ describe('jsLib 的 URL 字典形态（legado SharedJsScope：{"名":"https://�
       return { body: LIB }
     },
   })
-  it('下载下来当库代码执行；同 URL 第二次不再下载（对面按 md5(url) 缓存）', async () => {
+  it('下载下来当库代码执行；同 URL 第二次不再下载（缓存键就是 URL）', async () => {
     const n = { v: 0 }
     const url = 'https://cdn.example/lib-a.js'
     expect((await runScript(opts('signIt("a")', url, n))).value).toEqual({ kind: 'value', text: 'S:a' })
@@ -688,9 +688,9 @@ describe('jsLib 的 URL 字典形态（legado SharedJsScope：{"名":"https://�
   })
 })
 
-describe('链上 result 绑定的空集形态（真源 toc 模板：class.X@li<js>result.toArray()…）', () => {
+describe('链上 result 绑定的空集形态（toc 模板 class.X@li<js>result.toArray()…）', () => {
   const HTML = '<div class="other"><li><a href="/1">第一章</a></li></div>'
-  it('列表用途下前段零命中 → result 仍是空元素集（对面 Java Elements 空集合仍带方法）', async () => {
+  it('列表用途下前段零命中 → result 仍是空元素集（空集合照样带 size()/toArray()，不是 undefined）', async () => {
     const { evaluate } = await import('../../src/engine/index.js')
     const v = await evaluate('class.BCsectionTwo-top-chapter@li\n<js>result.toArray().length + "|" + result.size()</js>', { html: HTML }, 'toc', 'list')
     expect(v).toEqual({ kind: 'value', text: '0|0' })
@@ -702,7 +702,7 @@ describe('链上 result 绑定的空集形态（真源 toc 模板：class.X@li<j
   })
 })
 
-describe('nodes 结果的元素集表面（对面 result 是 org.jsoup Elements，不是单个 Element）', () => {
+describe('nodes 结果的元素集表面（result 是元素集合，不是单个 Element）', () => {
   const HTML = '<ul class="c"><li><a href="/1">一</a></li><li><a href="/2">二</a></li><li><a href="/3">三</a></li></ul>'
   const runJs = async (code: string) => {
     const { evaluate } = await import('../../src/engine/index.js')
@@ -720,35 +720,35 @@ describe('nodes 结果的元素集表面（对面 result 是 org.jsoup Elements�
   })
 })
 
-describe('列表上下文的 result 是元素集（对面 result = java List/Elements，不是 String）', () => {
+describe('列表上下文的 result 是元素集（集合而非 String，方法面按集合给）', () => {
   const HTML = '<ul class="c"><li><a href="/1">一</a></li><li><a href="/2">二</a></li><li><a href="/3">三</a></li></ul>'
   const runJs = async (code: string, usage: 'list' | 'value' = 'list') => {
     const { evaluate } = await import('../../src/engine/index.js')
     const v = await evaluate(`class.c@li\n<js>${code}</js>`, { html: HTML }, 'toc', usage)
     return textOrItemsOf(v)
   }
-  it('forEach 遍历成员（西瓜书屋 ruleChapterList 形态）', async () => {
+  it('forEach 遍历成员（现库 ruleChapterList 的真形态）', async () => {
     expect(await runJs("var o=[];result.forEach(function(e){o.push(e.text())});o.join(',')")).toBe('一,二,三')
   })
-  it('length = 成员数、[i] 取位（穿越小说 r.length-v 形态）', async () => {
+  it('length = 成员数、[i] 取位（现库目录偏移 `r.length-v` 形态）', async () => {
     expect(await runJs('result.length')).toBe('3')
     expect(await runJs('result[1].text()')).toBe('二')
   })
-  it('String(result) = 各元素 outerHtml 无分隔拼接（对面 Elements.toString 口径）', async () => {
+  it('String(result) = 各元素 outerHtml 无分隔拼接（Elements.toString 的口径）', async () => {
     expect(await runJs('String(result)')).toBe('<li><a href="/1">一</a></li><li><a href="/2">二</a></li><li><a href="/3">三</a></li>')
   })
-  it('取值上下文仍是字符串对象：length 是字符数、没有集合方法（对面 getString 路径给 String）', async () => {
+  it('取值上下文仍是字符串对象：length 是字符数、没有集合方法（取值路径给的是 String）', async () => {
     expect(await runJs('(result.length === String(result).length) + "|" + typeof result.forEach', 'value')).toBe('true|undefined')
   })
 })
 
-describe('对面 Rhino 面：Packages.org.jsoup 与 book 实体方法（真机各 1-2 源）', () => {
+describe('Packages.org.jsoup 与 book 实体方法面（读数见矩阵 h-packages-org-jsoup / h-book-entity-methods）', () => {
   const opts = (code: string, over: Record<string, unknown> = {}) => ({
     code, loc: { segmentIndex: 0, segmentRaw: code }, facet: 'content' as const,
     source: 'https://x.com', baseUrl: 'https://x.com', html: '<html></html>',
     ...over,
   }) as never
-  it('Packages.org.jsoup.Jsoup.parse 与 org.jsoup.Jsoup.parse 同一份实现（金银小说网 ruleContent）', async () => {
+  it('Packages.org.jsoup.Jsoup.parse 与 org.jsoup.Jsoup.parse 同一份实现（现库 ruleContent 形态）', async () => {
     const { runScript, createSourceSession } = await import('../../src/engine/js-sandbox.js')
     const o = opts(
       "var doc=Packages.org.jsoup.Jsoup.parse('<div id=htmlContent><p>甲</p><p>乙</p></div>');" +
@@ -759,7 +759,7 @@ describe('对面 Rhino 面：Packages.org.jsoup 与 book 实体方法（真机�
     const v = await runScript(o)
     expect(v.value).toEqual({ kind: 'value', text: '甲|乙' })
   })
-  it('book.setType/getType 与 getVariable/putVariable 可调（终极全栖、穿越小说形态）', async () => {
+  it('book.setType/getType 与 getVariable/putVariable 可调（现库脚本调实体方法的形态）', async () => {
     const { evaluate } = await import('../../src/engine/index.js')
     const v = await evaluate(
       '<js>book.setType(4);var t=book.getType();var v=book.getVariable("custom");' +
@@ -770,8 +770,8 @@ describe('对面 Rhino 面：Packages.org.jsoup 与 book 实体方法（真机�
   })
   it('没在上下文里给 book/chapter 时，方法面照样在场（BOOTSTRAP 末尾两行赋值是冗余，不是覆盖）', async () => {
     // 一看像缺陷：BOOTSTRAP 先 `g.book = mkHostObj(d.book)` 补齐方法面，紧跟 `g.book = d.book || {}`。
-    // 实测是**冗余**而非覆盖——`js-sandbox.ts` 的 init 恒传对象（`book: ctx.book ?? {}`），于是
-    // mkHostObj 就地给同一个对象加方法、那行再把同一个对象赋回去。**先测再改**：本用例写出来就直接绿。
+    // 实际是**冗余**而非覆盖——`js-sandbox.ts` 的 init 恒传对象（`book: ctx.book ?? {}`），于是
+    // mkHostObj 就地给同一个对象加方法、那行再把同一个对象赋回去。
     // 回归钉子：方法面不该依赖「调用方注入了什么」。
     const { evaluate } = await import('../../src/engine/index.js')
     const v = await evaluate(
@@ -785,8 +785,8 @@ describe('对面 Rhino 面：Packages.org.jsoup 与 book 实体方法（真机�
     )
     expect(valueTextOf(r)).toBe('X|0')
   })
-  it('源实体字段 bookSourceComment / bookSourceName 脚本可见（对面 source 就是 BookSource 实体）', async () => {
-    // 现库按 raw 全串扫的命中样本：涩涩俱乐部把 `source.bookSourceComment` 当**解密脚本的存放处**
+  it('源实体字段 bookSourceComment / bookSourceName 脚本可见（source 就是源实体）', async () => {
+    // 读数见矩阵 h-source-entity-fields：有源把 `source.bookSourceComment` 当**解密脚本的存放处**
     // （ruleContent.replaceRegex 里插值读它再执行）；`bookSourceName` 是顺手补正（BOOTSTRAP 早就
     // 读 `d.sourceName`，若不接线则恒空串、属静默错值）。服务层按 raw 现读（bridge.rawStringField）。
     const r = await runScript({
@@ -796,7 +796,7 @@ describe('对面 Rhino 面：Packages.org.jsoup 与 book 实体方法（真机�
     })
     expect(valueTextOf(r.value)).toBe('let m={};|涩涩俱乐部')
   })
-  it('Book 变量表与 source 变量表互不串味（对面 Book.variables 与 BookSource.variables 是两个存储）', async () => {
+  it('Book 变量表与 source 变量表互不串味（书与源各存一份变量）', async () => {
     const { evaluate } = await import('../../src/engine/index.js')
     const v = await evaluate(
       '<js>source.put("k","S");book.putVariable("k","B");book.getVariable("k")+"/"+source.get("k")+"/"+book.getVariable("nope")</js>',
@@ -806,22 +806,22 @@ describe('对面 Rhino 面：Packages.org.jsoup 与 book 实体方法（真机�
   })
 })
 
-describe('元素桥 remove()：对面在活文档树上摘节点，摘完再读要看见', () => {
-  // 两条真源 ruleContent 形态（全库扫描里只有这两处在用 .remove；现量重算走 DSH_PARSE_CENSUS=1）：
-  // 悦读小说 `doc=org.jsoup.Jsoup.parse(result); doc.select(".articleHide").remove(); doc`
-  // 环安小说网 `result=java.getElement(".read_chapterDetail"); result.select("p,script,div").remove(); String(result.html())…`
+describe('元素桥 remove()：在活文档树上摘节点，摘完再读要看见', () => {
+  // 现库里两条 ruleContent 形态（带 `.remove()` 的只有这两处；现量重算走 DSH_PARSE_CENSUS=1）：
+  // 一条 `doc=org.jsoup.Jsoup.parse(result); doc.select(".articleHide").remove(); doc`
+  // 一条 `result=java.getElement(".read_chapterDetail"); result.select("p,script,div").remove(); String(result.html())…`
   const ART = '<div class="art"><p>正文一</p><script>var x=1</script><em class="n_3">丙</em><div class="hide">广告</div></div>'
   const runJs = async (code: string) => {
     const { evaluate } = await import('../../src/engine/index.js')
     const v = await evaluate(`<js>${code}</js>`, { html: ART }, 'content', 'value')
     return valueTextOf(v)
   }
-  it('Jsoup.parse 后 select().remove()：整棵树串化时已不含被摘节点（悦读小说形态）', async () => {
+  it('Jsoup.parse 后 select().remove()：整棵树串化时已不含被摘节点', async () => {
     const t = await runJs('var doc=org.jsoup.Jsoup.parse(result);doc.select(".hide").remove();String(doc)')
     expect(t).not.toContain('广告')
     expect(t).toContain('正文一')
   })
-  it('元素上 select().remove() 后 html() 看见净化结果（环安小说网形态）', async () => {
+  it('元素上 select().remove() 后 html() 看见净化结果（getElement 桥上摘节点的形态）', async () => {
     const t = await runJs('var el=java.getElement(".art");el.select("p,script,div").remove();String(el.html())')
     // remove() 只把节点从父上摘掉、不删子树：div.art 自己也被这条 select 命中，
     // 摘走之后 el 仍持有没被命中的 <em>——净化后只剩它
@@ -834,13 +834,13 @@ describe('元素桥 remove()：对面在活文档树上摘节点，摘完再读�
   })
 })
 
-describe('java.get 的 source 层兜底（对面四级读链；跨调用可见）', () => {
+describe('java.get 的 source 层兜底（变量读链的最后一层；跨调用可见）', () => {
   const url = 'https://scope.example.com/read/1'
   const mk = (session: unknown) => ({
     code: '', loc: { segmentIndex: 0, segmentRaw: '@js:scope' }, facet: 'content' as const,
     baseUrl: url, source: 'https://scope.example.com', vars: {}, session,
   })
-  it('source.put 写进去的变量，下一次调用的 java.get 读得到（对面 source 层落 BookSource.variable）', async () => {
+  it('source.put 写进去的变量，下一次调用的 java.get 读得到（source 层落源级存储，不随调用消失）', async () => {
     const session = createSourceSession()
     await evalJs({
       code: 'source.put("tok","T1"); return "ok"',
@@ -1030,7 +1030,7 @@ describe('host object 形状（Response/Map/Element/UUID）', () => {
     )
     expect(v.value).toEqual({ kind: 'value', text: 'sid=1' })
     expect(ops).toEqual(['set:https://a.com/x:sid=1', 'get:https://a.com/x'])
-    // CookieStore 与 CookieManager 读同一张表；空 jar 返回 null（Android getCookie 口径）
+    // CookieStore 与 CookieManager 读同一张表；空 jar 返回 null（设备侧口径）
     const cs = await run(
       'return Packages.io.legado.app.help.http.CookieStore.getCookie("https://a.com/x")',
       hostOf(), ctxOf({ httpCookies }),
@@ -1154,7 +1154,7 @@ describe('worker 路与主线程的错误前缀同口径（runInContextVm 收口
   })
 })
 
-// ── D-a：worker 侧宿主往返死线由调用方预算派生（300s 字面量退场）──
+// ── D-a：worker 侧宿主往返死线由调用方预算派生 ──
 
 describe('worker RPC 死线派生', () => {
   it('worker RPC 死线由预算派生（无 300s 字面量，也无硬编码死线）', () => {

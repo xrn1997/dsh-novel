@@ -17,7 +17,7 @@ import { launchBrowser } from './epub-host.js'
 
 const ENABLED = process.env.DSH_EPUB_BROWSER === '1'
 
-/** 真机取回的那一条：章名带打赏尾巴，长到会顶满一行 */
+/** 一条真实形状：章名带打赏尾巴，长到会顶满一行 */
 const book: ExploreBook = {
   name: '我加载了武道破限面板', author: null, bookUrl: 'https://example/bk/1',
   coverUrl: null, kind: '玄幻小说', lastChapter: '第919章 不立危墙 问道天河！（谢WII2万币打赏！）',

@@ -62,7 +62,7 @@ export interface SourceRequest {
  *   按源令牌桶；浏览器与 HTTP jar 的双向桥也归这一层（secure/expires 随 cookie 一起过桥）。
  *   引擎裸 `webView` 没有 RequestPlan，带源**静态头与 UA** 打底；动态头只在读面与脚本 HTTP
  *   出站（`source-eval.ts` 的 `engineContextOf` 惰性 provider）求值。
- * - **loginCheck 只作用于 HTTP**：对面把它当 HTTP 响应的后置处理；替真浏览器页面重试/替换
+ * - **loginCheck 只作用于 HTTP**：它是 HTTP 响应的后置处理；替真浏览器页面重试/替换
  *   会把浏览器拿到的正文换成 HTTP 的。loginCheck 的替页与重试都走内部 raw 执行，
  *   所以重试仍受限速与动态头约束，但不会再次触发 loginCheck。
  * - **错误页也要过 loginCheck**：源声明 loginCheckJs 时，4xx/5xx 先以 allowError 返回页面给脚本
@@ -156,7 +156,7 @@ export function createSourceRequest(deps: SourceRequestDeps): SourceRequest {
       webview,
       ...(deps.fetcher.deviceId === undefined ? {} : { deviceId: deps.fetcher.deviceId }),
       ...(deps.fetcher.sourceSession === undefined ? {} : { sourceSession: deps.fetcher.sourceSession }),
-      // 与旧源级外观同面：交给脚本的 adapter 也保留关出站 dispatcher 的能力位
+      // 交给脚本的 adapter 也保留关出站 dispatcher 的能力位
       dispose: () => deps.fetcher.dispose?.(),
       cookieJar: deps.cookieJar,
     }
@@ -215,7 +215,7 @@ export function createSourceRequest(deps: SourceRequestDeps): SourceRequest {
       cookieJar: deps.cookieJar,
       ...(deps.fetcher.deviceId === undefined ? {} : { deviceId: deps.fetcher.deviceId }),
       ...(deps.fetcher.sourceSession === undefined ? {} : { sourceSession: deps.fetcher.sourceSession }),
-      // 与旧源级外观同面：交给脚本的 adapter 也保留关出站 dispatcher 的能力位
+      // 交给脚本的 adapter 也保留关出站 dispatcher 的能力位
       dispose: () => deps.fetcher.dispose?.(),
     }
   }

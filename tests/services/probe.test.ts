@@ -31,7 +31,7 @@ describe('probeSource（search 面）', () => {
     expect(r.itemCount).toBe(2)
     expect(r.firstTitle).toBe('斗罗大陆')
   })
-  it('书名规则以属性终端收尾 → 与搜索面同 usage，不误判坏源（2026-09 审查）', async () => {
+  it('书名规则以属性终端收尾 → 与搜索面同 usage，不误判坏源', async () => {
     // 标题住在属性里：usage='value' 时链尾未知词是 HTML 属性名，usage='list'（缺省）时是选择器。
     // 回归钉子：探针必须把 usage 传给求值，否则搜索面读得出书名的源会被报「首条书名为空」的 broken。
     const html = '<html><body><div class="b"><a href="/book/1/" title="斗罗大陆">进入</a></div></body></html>'
@@ -55,7 +55,7 @@ describe('probeSource（search 面）', () => {
     expect(seen[0]).toContain('q=勇者')
   })
 
-  it('checkKeyWord 含 http/::/++/-- → 按 legado 弃用，回固定词序列', async () => {
+  it('checkKeyWord 含 http/::/++/-- → 本仓按弃用处理，回固定词序列', async () => {
     const n = normalizeSource({
       bookSourceName: 'S', bookSourceUrl: 'https://s.com', searchUrl: 'https://s.com/q={{key}}',
       ruleBookList: '@css:.b', ruleBookName: 'tag.a@text', ruleContent: '@css:#c@text',
@@ -85,7 +85,7 @@ describe('probeSource（search 面）', () => {
     const f = createFetcher({ fetchImpl: async (input) => {
       const url = requestUrlOf(input)
       seen.push(decodeURIComponent(url.split('q=')[1] ?? ''))
-      // 「书」0 命中；「小说」有结果——模拟 aijjxs 站停用单字「书」的行为
+      // 「书」0 命中；「小说」有结果——模拟某个词被站点停用、另一个词照常出结果
       const html = url.includes(encodeURIComponent('书')) && !url.includes(encodeURIComponent('小说'))
         ? '<html></html>' : SEARCH_HTML
       return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8' } })
@@ -113,7 +113,7 @@ describe('probeSource（search 面）', () => {
     expect(r.ok).toBe(false)
     expect(r.error?.code).toBe('RuleMissing')
   })
-  it('探针认 searchTimeoutMs：挂起的抓取在限时内回 FetchError（不再只靠 fetcher 固定 15s）', async () => {
+  it('探针认 searchTimeoutMs：挂起的抓取在限时内回 FetchError（限时来自入参，不靠 fetcher 的缺省超时）', async () => {
     const f = createFetcher({ fetchImpl: () => new Promise<Response>(() => { /* 永不返回 */ }) })
     const t0 = Date.now()
     const r = await probeSource(src(), fakeSourceRequest(f), { timeoutMs: 50 })
@@ -144,8 +144,8 @@ describe('probeSource（search 面）', () => {
     expect(r.error?.code).toBe('DecodeError')
   })
 
-  // ── 请求形态（真实源 300 条失败的根因）──────────
-  it('相对 searchUrl 按 bookSourceUrl 解析成绝对 URL（此前直接喂 fetch 必炸）', async () => {
+  // ── 请求形态（相对串与选项串最容易发错）──────────
+  it('相对 searchUrl 按 bookSourceUrl 解析成绝对 URL（相对串直接喂 fetch 会失败）', async () => {
     let seen = ''
     const f = createFetcher({ fetchImpl: async (input) => {
       seen = requestUrlOf(input)

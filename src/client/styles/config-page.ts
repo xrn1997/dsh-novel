@@ -51,7 +51,8 @@ export const CONFIG_PAGE_CSS = `
   font-size: var(--novel-fs-xs); color: var(--novel-text-3); pointer-events: none;
 }
 .novel-cfg-read { font-size: var(--novel-fs-sm); color: var(--novel-brand-strong); }
-/* 预设档加高到 24px 才点得准（真机量到 21px 时浏览器几何门直接红了）；
+/* 预设档加高到 24px 才点得准（浏览器几何门对档位高度有下限断言，见
+   tests/browser/config-page-layout.test.tsx）；
    inline-flex 是为了加高之后字仍垂直居中，而不是浮在框顶。 */
 .novel-cfg-preset {
   display: inline-flex; align-items: center; min-height: var(--novel-sp-6);

@@ -8,7 +8,7 @@ import { CTRL_Z, PrefsPanel, ReaderView } from '../../src/client/views/ReaderVie
 /**
  * Aa 控制器层 z 序守卫——「能弹出但点不了」防回归。
  *
- * 病根（无头 Edge elementFromPoint 实证）：面板嵌在 sticky 工具栏内，工具栏 position:sticky
+ * 病根：面板嵌在 sticky 工具栏内，工具栏 position:sticky
  * + z-index **自成 stacking context**，面板的 z-index 只在工具栏内部有效。工具栏（5）低于
  * 根部遮罩（10）时，透明遮罩反压整层——面板看得见，但每个点击都被遮罩吞掉直接关面板。
  * 不变量是**工具栏 > 遮罩**（面板 > 遮罩只是工具栏内部的排序）。

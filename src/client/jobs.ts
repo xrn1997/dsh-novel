@@ -125,7 +125,7 @@ export function useJobPolling(deps: JobStatusDeps = prodJobStatusDeps): void {
   }, [n])
 }
 
-/** 标签缺省 zhTranslate：未接 locale 的调用方（测试直渲 / 老宿主）保持既有中文；
+/** 标签缺省 zhTranslate：未接 locale 的调用方（测试直渲 / 宿主未提供 locale 服务）保持既有中文；
  *  有 t 就传——字典是真源，这里不再持有第二份中文。 */
 export function jobKindLabel(kind: JobState['kind'], t: Translate = zhTranslate): string {
   return kind === 'import' ? t('job.kind.import') : t('job.kind.probe')

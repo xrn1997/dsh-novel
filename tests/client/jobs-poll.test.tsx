@@ -72,7 +72,7 @@ describe('任务轮询驱动 useJobPolling（deps seam 驱动，结果进 jobSur
     expect(screen.getByTestId('stale').textContent).toBe('')
   })
 
-  it('1s 轮询节拍可测（假时钟）：卸载后不再取数、不再 setState', async () => {
+  it('1s 轮询节拍可测（假时钟）：卸载后停止取数与 setState', async () => {
     vi.useFakeTimers()
     const fetchJobStatus = vi.fn(async () => probeJob(1))
     const { unmount } = render(<Harness deps={{ fetchJobStatus }} />)

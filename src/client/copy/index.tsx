@@ -50,14 +50,14 @@ interface LocaleServiceLike {
   bind(ns: string): (key: string, params?: CopyParams) => string
 }
 
-/** 可选服务的读面：老宿主没有 `ctx.get` 时也要能回退。 */
+/** 可选服务的读面：宿主没有 `ctx.get` 时也要能回退。 */
 export interface CopyHostLike {
   get?(name: string): unknown
   effect(execute: () => unknown, label?: string): unknown
 }
 
 /**
- * 注册字典并交回本插件的 t。服务缺席（或老宿主没有 ctx.get）时返回 zhTranslate；
+ * 注册字典并交回本插件的 t。服务缺席（或宿主没有 ctx.get）时返回 zhTranslate；
  * apply 时读一次、晚到不追（宿主 locale 包声明 immediately，正常组合里先提供）。
  * 注册必须挂 ctx.effect：register 的 disposer 是官方契约，HMR 重挂不摘会撞 "already has locale"。
  *

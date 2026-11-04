@@ -191,7 +191,7 @@ describe('元素白名单映射', () => {
   })
 
   it('注释里的实体字样不是引用：合法注释不许把整本书拒掉', () => {
-    // 实测缺陷：静态闸门排除了 CDATA 却没排除注释，`<!-- 删掉的段落 &nbsp; -->` 被当成
+    // 静态闸门若只排除 CDATA 却漏掉注释，`<!-- 删掉的段落 &nbsp; -->` 就会被当成
     // 「引用了未声明的实体」——而 XML 规范允许注释里出现任何文本。注释本来就该整条摘掉再判。
     const { nodes } = convert('<p>正文</p><!-- 删掉的段落 &nbsp; 与 <!DOCTYPE 字样 -->')
     expect(shape(nodes)).toEqual([
@@ -202,7 +202,7 @@ describe('元素白名单映射', () => {
   })
 
   it('多根元素：畸形 XML 不按半途结果读（只取第一个会静默丢掉后面的内容）', () => {
-    // 实测缺陷：两份 <html> 拼接的文件被接受，且只有前半留下——「静默丢内容」比报错坏得多
+    // 两份 <html> 拼接的文件若被接受，只有前半留下——「静默丢内容」比报错坏得多
     const two = '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>前</title></head><body><p>前半</p></body></html>'
       + '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>后</title></head><body><p>后半</p></body></html>'
     expect(() => parseXml(two, xmlBudget('OEBPS/ch1.xhtml', LIMITS))).toThrow(EpubImportError)
@@ -212,8 +212,8 @@ describe('元素白名单映射', () => {
   })
 
   it('宽文档（未知容器上提出十几万节点）逐项追加：不撞函数参数上限', () => {
-    // `<dl>` 不在白名单里 → 子内容上提。实测一棵七万项的 dl（140k 节点，**在**节点预算内）
-    // 会让 `push(...nodes)` 抛裸 RangeError——那是宿主异常，服务层按类分流时会把它漏成 500。
+    // `<dl>` 不在白名单里 → 子内容上提。一棵足够宽的 dl（节点数**在**预算内）
+    // 就会让 `push(...nodes)` 抛裸 RangeError——那是宿主异常，服务层按类分流时会把它漏成 500。
     const pairs = 70_000
     const { nodes } = convert('<dl>' + '<dt>a</dt><dd>b</dd>'.repeat(pairs) + '</dl>')
     expect(nodes).toHaveLength(pairs * 2)

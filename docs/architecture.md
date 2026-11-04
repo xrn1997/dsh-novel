@@ -62,7 +62,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 
 一条不对称要记住：**面（`Facet`）不改变求值语义**，它只进错误定位与 trace；**用途（`RuleUsage`）改变形状**，且只有这一个轴被允许改变形状（`ADR-0007`）。把它们混为一谈会生出「面决定语义」的假口径。
 
-链语义是单点：一条链只有一份 generator，两个驱动器对链本身零知识；js 段是唯一需要跨 `await` / 跨线程的段，所以它是唯一的 `yield` 点，也是唯一允许把宿主能力带进求值层的口子（`ADR-0005`）。服务层跑脚本只走 `js-sandbox.ts` 的 `runScript` 一扇门，而它的入参**就是 `EvalContext`**（曾逐字段抄一份能力清单，于是同一段脚本从这扇门进就少 `fetchPost`/`userAgent`/`book`/`chapter`）；超时预算一个缺省主人（`DEFAULT_JS_BUDGET_MS`，引擎缺省同值由对齐钉子守）+ 两条派生闸（worker 外层 race 的 `ASYNC_GRACE_MS` 加项、worker 内 RPC 死线 = 预算+宽限+余量）；用户正则另有独立预算（随工作量放宽，`ADR-0050`），它不在 js 预算那族里：轴是主线程被钉面积、不是脚本时长（单点 `engine/regex-guard.ts`，归属见本文 §4 的死线行）。递归求值口的用途判据同样只有一处（`engine/sub-rule.ts` 的 `subRuleOf`，归属见本文 §4 的子规则行；why 与被否方案见 `ADR-0007`）。
+链语义是单点：一条链只有一份 generator，两个驱动器对链本身零知识；js 段是唯一需要跨 `await` / 跨线程的段，所以它是唯一的 `yield` 点，也是唯一允许把宿主能力带进求值层的口子（`ADR-0005`）。服务层跑脚本只走 `js-sandbox.ts` 的 `runScript` 一扇门，而它的入参**就是 `EvalContext`**（能力清单不许在门外抄第二份——逐字段抄一份，同一段脚本从这扇门进就会少 `fetchPost`/`userAgent`/`book`/`chapter`）；超时预算一个缺省主人（`DEFAULT_JS_BUDGET_MS`，引擎缺省同值由对齐钉子守）+ 两条派生闸（worker 外层 race 的 `ASYNC_GRACE_MS` 加项、worker 内 RPC 死线 = 预算+宽限+余量）；用户正则另有独立预算（随工作量放宽，`ADR-0050`），它不在 js 预算那族里：轴是主线程被钉面积、不是脚本时长（单点 `engine/regex-guard.ts`，归属见本文 §4 的死线行）。递归求值口的用途判据同样只有一处（`engine/sub-rule.ts` 的 `subRuleOf`，归属见本文 §4 的子规则行；why 与被否方案见 `ADR-0007`）。
 
 文法区域（`{{…}}` / `@put:{…}` / `<js>`）先于任何切分被整体剥离，判据只住在 `engine/grammar.ts`——区域里的 `||`、`&&`、`@`、`$1` 是代码内容而不是文法记号。构词与解析同属一处，方言拼串走 round-trip 自校验。
 
@@ -96,7 +96,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 整条规则模式（JSON 内容 → JSONPath；显式前缀不接管） | `engine/mode.ts` 的 `isJsonRule`（求解入口 `engine/evaluate.ts` 调用） | 段级前缀分类（`engine/parse.ts` 的 `classifySegment`） |
 | 段识别与切分次序（含隐式 CSS 回落） | `engine/parse.ts` | 空态裁决 |
 | 空态裁决（Miss vs 空 List） | `engine/select.ts` 的 `reducePicked` | 服务层的值收口 |
-| 判定用的子树文本（cheerio `.text()` 口径：含脚本/样式文本、不含注释） | `engine/dom.ts` 的 `rawTextOf`（消费点：`select.ts` 的 `textOf` / `extract` 与 `xpath.ts` 的谓词文本） | 正文产出文本（`dom.ts` 的 `nodeText`，块级边界落 `\n`）、直系文本（`select.ts` 的 `directText`） |
+| 判定用的子树文本（本仓口径：含脚本/样式文本、不含注释；实现借 cheerio 的 `.text()` 取文本） | `engine/dom.ts` 的 `rawTextOf`（消费点：`select.ts` 的 `textOf` / `extract` 与 `xpath.ts` 的谓词文本） | 正文产出文本（`dom.ts` 的 `nodeText`，块级边界落 `\n`）、直系文本（`select.ts` 的 `directText`） |
 | 组合符形状与驱动长度 | `engine/combine.ts`（读 `usage`） | 链衔接 |
 | 子规则求值用途（`java.getString*` / 模板 `{{…}}` / `@put` 的 value/list 判据） | `engine/sub-rule.ts` 的 `subRuleOf`（文本 + 用途绑成 `SubRule`；取值终端判据 `engine/select.ts` 的 `isValueTerminal`）；求值入口 `engine/evaluate.ts` 的 `evaluateRef` / 模板插值 `interpolateTemplate` / `engine/js-protocol.ts` 的 `evalRule` | 主链用途（`engine/parse.ts` 的 `classifyDefault` / `ParsedRule.usage`）、组合符语义（`engine/combine.ts`） |
 | 行模板的判定与绑定 | `engine/regex-row.ts`（同一份文法的两面） | 模板字面段 |
@@ -176,6 +176,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 阅读位置 ⇄ 像素 | `client/progress.ts`（两侧同跨度才互逆） | 落盘时机 |
 | 视觉 token 与标度 | `client/styles/tokens.ts` 的 `TOKENS_CSS`（配色契约、named 标度与 `--novel-*` 缺省定义）；暗层重钉住 `client/styles/shell.ts` 的 `.novel-dark`；`client/styles.tsx` 只是拼装点（把十块按原次序连成 `NOVEL_CSS`，`NovelStyles` 注入） | 视图局部布局（归 `client/styles/` 各块）、块间次序（次序即行为，重排等于改样式） |
 | 兼容读数与裁决 | `tests/legado-coverage/matrix.ts` 的行 | 复述进文档 |
+| 已知桥缺口名册（脚本在调、本仓没挂的 `java.*` 名字与它的归属行） | `tests/legado-coverage/bridge-gaps.ts` 的 `KNOWN_BRIDGE_GAPS` | 源侧「新名字冒出来」的发现（归解析面普查 `DSH_PARSE_CENSUS`）、这名字该记在哪一行（归矩阵行） |
 
 ## 5. seam：可测性怎么落
 
@@ -192,11 +193,11 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 - **两条求值路必须同口径**（主线程与 worker），由按 fetch 计数自证的跨路钉子守——这是 `ADR-0005` 的产物。
 - 客户端的测试手法是**假 adapter 驱动真实组件**，不是渲染快照；服务端的路由测试用真 HTTP server 承载（`api/dispatch.ts` 不依赖 Cordis，纯构造器）。
 - **门的分工别混**：解析面普查管「能不能解析」，重探只证搜索面，正文审计是**报告**不设通过率，compat 回放的分母是 fixture，真浏览器门只跑本机与本地书，安装门控不起宿主。各自承诺什么写在 `docs/development.md` 的「门（自动）」，不在这里复述。
-- **`compat/` 的家按「对面来路」归，不按「跑不跑」归**：`fixtures` 与 `sources` 喂回放集（默认被 `vitest.config.ts` exclude，`sources` 还是人工投放口——未脱敏的人类输入不进 `tests/`），而 `compat/upstream/snapshot.json` 是 `tests/legado-coverage/` 那两门（`upstream-fields` / `host-methods`）的分母、随 `pnpm test` 默认跑。所以「判据住在 `tests/legado-coverage/`、它的分母住在 `compat/upstream/`」是**刻意的两条边**，不是同一件事抄了两份；搬目录只会把默认跑的与默认不跑的混进一处。**并家（把 `compat/upstream` 搬进 `tests/legado-coverage/`）仍待裁**；这段只解释现状为什么是两条边。
+- **回放数据住自己的家**：`tests/replay/fixtures` 与 `tests/replay/sources` 喂离线回放集（默认被 `vitest.config.ts` exclude，`sources` 还是人工投放口——未脱敏的人类输入不进 `tests/`）。兼容判据不冻结外部格式快照：矩阵的证据与能力单元归属由 `status-evidence` / `inventory-coverage` 自证，桥面名册与需求读数绑定由 `bridge-surface` / `demand-keys` 自证，格式字段与宿主方法的现量覆盖读数走 `DSH_PARSE_CENSUS` 报告（`ADR-0054`）。
 
 ## 6. 数据与生命周期
 
-- 运行时数据全部住数据根（默认 `$DSH_HOME/novel/`，未设置 `DSH_HOME` 时 `~/.dsh/novel/`；`dataDir` 可改）：源清单、书架与进度、页面缓存、本地书副本。构建产物 `lib/` 不入库；`compat/report.md` 是跑门产物。
+- 运行时数据全部住数据根（默认 `$DSH_HOME/novel/`，未设置 `DSH_HOME` 时 `~/.dsh/novel/`；`dataDir` 可改）：源清单、书架与进度、页面缓存、本地书副本。构建产物 `lib/` 不入库；`tests/replay/report.md` 是跑门产物。
 - 读面与写面：源清单与书架都是**内存活体 + 按文件名排队的原子写**；「不存在」与「损坏」绝不折叠（`ADR-0013`）；本地发布与入架之间不建跨文件事务，接受的窗口写进 `ADR-0014`。
 - 缓存有效性靠指纹入名而不是删除式失效，所以**没有清缓存出口是设计而非缺失**（`ADR-0012`）。
 - 任务生命周期：身份与终态在宿主注册表，业务明细与整轮结果在本仓持有者；写任务一槽、搜索另开一槽；任务态不持久化（`ADR-0018`）。
@@ -222,5 +223,5 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 在线目录 / 正文 / 缓存有效性 | 第 4 节的 `OnlineReading`、`BookContent`、`tocUrlOf` 行；`ADR-0047`、`ADR-0012`；`services/online-reading.ts`、`services/book-content.ts`、`services/cache-epoch.ts`；矩阵 `c-toc-*` / `f-toc-*` / `g-content-*` 行 |
 | 后台任务 / 过程行 / 宿主观察 | 第 4 节的 `HostTie`、`JobTail`、`ChangeSignal` 行；`ADR-0018`、`ADR-0034` |
 | 宿主接入 / 打包 / 插件页 | 第 1 节；`ADR-0020`、`ADR-0021`、`ADR-0035`；`docs/development.md` 的「宿主兼容与实测名单」 |
-| legado 兼容判据 / 新写法 | 先查 `tests/legado-coverage/matrix.ts` 有没有那一行；`ADR-0003`、`ADR-0024`、`ADR-0025`；`docs/development.md` 的「兼容判据四门」 |
+| legado 兼容判据 / 新写法 | 先查 `tests/legado-coverage/matrix.ts` 有没有那一行；`ADR-0003`、`ADR-0054`、`ADR-0025`；`docs/development.md` 的「兼容判据与桥面自证」 |
 | 文档 / ADR / 发布流程 | `docs/AGENTS.md`；`docs/adr/README.md`、`docs/adr/ADR-FORMAT.md`、`ADR-0048`、`ADR-0049`；`CONTRIBUTING.md`、`CHANGELOG.md`；`docs/development.md` |

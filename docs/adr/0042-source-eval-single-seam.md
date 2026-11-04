@@ -6,6 +6,6 @@ Status: accepted
 
 ## 被否方案
 - 保留 `engineContextOf` 由调用方各拼一份：能力漏接只在特定路径炸，book 镜像继续有两个主人。
-- 把 book 镜像统一成全集：会改变 search-face 的脚本可见字段，属于行为变化，不在本次重构内。
+- 把 book 镜像统一成全集：会改变 search-face 的脚本可见字段，属可见面行为变化，本篇不裁——要裁就单独裁逐面字段集。
 
 锚点：`src/services/source-eval.ts` 的 `createSourceEval` / `bookMirrorOf`；`tests/services/source-eval.test.ts`；`tests/engine/js-protocol.test.ts` 的能力位闸。

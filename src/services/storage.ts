@@ -123,7 +123,7 @@ export async function writeJsonAtomic(file: string, data: unknown): Promise<void
 }
 
 /** 防抖窗口的缺省值——**唯一主人在这里**。`createDebouncedWriter` 的缺省参数取它：
- *  书架直接用缺省，注册表显式传入（调用点可读「注册表用 100ms 窗口」）。阈值不归本模块。 */
+ *  书架直接用缺省，注册表在自己的调用点显式给窗口（值只住这一处，别处不复述）。阈值不归本模块。 */
 export const PERSIST_WINDOW_MS = 100
 
 /** 进程内防抖合并连续写：窗口内同文件多次 schedule 只落最后一次；flush 等待全部落地。
@@ -208,7 +208,7 @@ export function createDebouncedWriter(delayMs = PERSIST_WINDOW_MS, opts: { thres
       }
       pending.set(file, entry)
       if (count < threshold) return undefined
-      // 阈值触发即复位（与旧 `mutations = 0` 同口径）；定时器与 flush 写都不碰计数。
+      // 阈值触发即复位；定时器与 flush 写都不碰计数。
       counts.delete(file)
       return flushOne(file)
     },
@@ -219,7 +219,7 @@ export function createDebouncedWriter(delayMs = PERSIST_WINDOW_MS, opts: { thres
     },
     /** 等齐落盘：排到**静默**，不是排「调用那一刻的快照」。
      *  只取一次快照的话，第一轮 I/O 在途时新 `schedule` 的那笔写留在计时器里——flush 已返回、
-     *  进程收尾后它才自己烧：Windows 上表现为 `rename` 撞 EPERM 的未处理拒绝（门绿 exit≠0 的现场）。
+     *  进程收尾后它才自己烧：表现为退出期的未处理拒绝（Windows 上 `rename` 撞 EPERM）。
      *  「挂起」同时算计时器里的 pending 与已开写未落地的 inflight：定时器触发后到 rename 落地之间的
      *  窗口也归 flush 管，否则在途失败会让 flush 提前返回、把错误丢给下一次。
      *  终止条件是「这一轮没有挂起写」，**刻意不设轮次上限**：加上限等于把同一个逃逸窗口藏回去。

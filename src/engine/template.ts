@@ -1,7 +1,7 @@
 import { splitVarExpr } from './grammar.js'
 
 /** URL 与 `,{json}` 选项的分界：逗号后紧跟花括号即选项起点，故 URL 自身含逗号时不受影响；
- *  逗号两侧允许空白（真实源大量写 `, {...}`，不许空格会把选项串并进 URL）。
+ *  逗号两侧允许空白（输入里有 `, {...}` 的写法，不许空格会把选项串并进 URL）。
  *  **单点**：服务半 `services/request.ts` 的选项切分与 `js-protocol.ts` 的 downloadFile 去后缀
  *  共用此式（放引擎侧是因为 js-protocol 不能 import services；两处各抄一份会漂移）。 */
 export const URL_OPTION_SPLIT = /\s*,\s*(?=\{)/

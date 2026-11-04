@@ -10,7 +10,7 @@ describe('URL 选项后缀（splitUrlOption / absUrlKeepOption / canonUrl）', (
     expect(splitUrlOption('https://x.com/c/1.html,{"webView":true}'))
       .toEqual({ url: 'https://x.com/c/1.html', suffix: ',{"webView":true}' })
   })
-  it('切分：单引号 JSON 形态（真实源大量存在）', () => {
+  it('切分：单引号 JSON 形态（切分先于解析）', () => {
     const r = splitUrlOption("/c/2.html,{'method':'POST','body':'a=1'}")
     expect(r.url).toBe('/c/2.html')
     expect(r.suffix).toBe(",{'method':'POST','body':'a=1'}")
@@ -19,8 +19,8 @@ describe('URL 选项后缀（splitUrlOption / absUrlKeepOption / canonUrl）', (
     expect(splitUrlOption('https://x.com/read/{a,b}')).toEqual({ url: 'https://x.com/read/{a,b}', suffix: null })
     expect(stripUrlOption('https://x.com/c/1.html')).toBe('https://x.com/c/1.html')
   })
-  it('选项尾段不是合法 JSON 也切分（legado 无条件 substringBefore(paramPattern) 口径）', () => {
-    // 弯引号形态 `,{webView:“true”}`（真实源 @js 拼接）不剥就整串进 URL → 章节 404
+  it('选项尾段不是合法 JSON 也切分（切分先于解析，不先验 JSON）', () => {
+    // 弯引号形态 `,{webView:“true”}`（脚本拼接出的选项串）不剥就整串进 URL → 章节 404
     const r = splitUrlOption('/c/4.html,{webView:“true”}')
     expect(r).toEqual({ url: '/c/4.html', suffix: ',{webView:“true”}' })
     const malformed = splitUrlOption('/c/5.html,{not json}')

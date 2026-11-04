@@ -1,17 +1,17 @@
 import { builtinModules } from 'node:module'
 import { defineConfig } from 'tsdown'
 
-/** 官方平台模块表（镜像宿主 web shell 的 `staticModules()`：它把这些 specifier 种进冻结浏览器模块表，
+/** 平台模块表（镜像宿主 web shell 的 `staticModules()`：它把这些 specifier 种进冻结浏览器模块表，
  *  client bundle 一律留给注入的 require，不得 inline）。
  *  **收录判据是「我们声明兼容的每一代宿主都答得上」（交集），不是把见过的清单并起来**：
- *  - 跨代都在的八个：`react` / `react/jsx-runtime` / `react-dom` / `react-dom/client`、
+ *  - 跨代都在的：`react` / `react/jsx-runtime` / `react-dom` / `react-dom/client`、
  *    `@deepseek-ai/cordis`、`@deepseek-ai/dsh-client-store` / `-ui-slots` / `-ui-primitives`。
- *  - 裸 `cordis` **已撤**：0.2.0-rc.2 的 `staticModules()` 里没有它（只有 `@deepseek-ai/cordis`），
- *    而本插件对 cordis 从头到尾只有 type-only import。留在允许表里 = 允许一次「构建通过、
- *    浏览器 require 落空」——允许表必须比运行时表**窄**，宽出来的每一条都是纯度门的豁免。
- *  - `@deepseek-ai/dsh-client-ui-dockkit`（0.2.0-rc.2 新种进来的）不收：本插件不用它，
- *    而 0.1.x 代没有它，收了就等于用新宿主的表给老宿主放行。
- *  这个方向错了，纯度门就从守卫变成共犯：它证明的从来不是「官方表长这样」，而是「我们只 require 这些」。 */
+ *  - 裸 `cordis` 不收：本插件对 cordis 从头到尾只有 type-only import（编译期已擦除），运行时也不需要它，
+ *    列进允许表 = 允许一次「构建通过、浏览器 require 落空」——允许表必须比运行时表**窄**，
+ *    宽出来的每一条都是纯度门的豁免。
+ *  - `@deepseek-ai/dsh-client-ui-dockkit` 不收：本插件不用它，且并非每一代兼容宿主都答得上它，
+ *    收了就等于拿只有部分宿主答得上的项给全表放行。
+ *  这个方向错了，纯度门就从守卫变成共犯：它证明的从来不是「宿主表长这样」，而是「我们只 require 这些」。 */
 const PLATFORM_MODULES = [
   'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client',
   '@deepseek-ai/cordis',
@@ -44,17 +44,17 @@ export default defineConfig([
     },
   },
   {
-    // client 半：CJS 单文件闭合工厂（三段式 banner/intro/footer——官方 ./client 导出契约）
+    // client 半：CJS 单文件闭合工厂（三段式 banner/intro/footer——宿主 ./client 导出契约）
     entry: { client: 'src/client/index.tsx' },
     outDir: 'lib',
     format: ['cjs'],
     platform: 'browser',
     // target 必须显式写否则认错运行时：这份产物由宿主在浏览器侧加载，不是 Node 包。省掉它
-    // tsdown 会拿 package.json 的 engines.node 推成 node24，于是 checks.legacyCjs 把「给现代
-    // Node 发 CJS」的判据套上来，打一条「建议改用 ESM」的假阳性 WARN——CJS 恰恰是 ./client
+    // tsdown 会拿 package.json 的 engines.node 推出 Node 运行时，于是按「给现代 Node 发 CJS」
+    // 的判据套上来，打一条「建议改用 ESM」的假阳性 WARN——CJS 恰恰是 ./client
     // 闭合工厂契约的要求，不该按 Node 库计。
     target: 'baseline-widely-available',
-    dts: false,                 // dts 会把 banner/footer 包进 .d.cts 弄坏解析（官方注释）
+    dts: false,                 // dts 会把 banner/footer 包进 .d.cts 弄坏解析
     sourcemap: true,
     clean: false,               // host 已 clean；两个配置同写 lib/
     deps: {
@@ -63,22 +63,22 @@ export default defineConfig([
       alwaysBundle: (s) => !isRequested(s),   // 其余全 inline（npm 依赖）
     },
     define: {
-      // 四键缺一，inline 的 node 习惯依赖在浏览器 boot 抛 ReferenceError（官方注释）
+      // 四键缺一，inline 的 node 习惯依赖在浏览器 boot 抛 ReferenceError
       'process.env': '{}',
       'process.env.NODE_ENV': JSON.stringify(NODE_ENV),
       'import.meta.env.MODE': JSON.stringify(NODE_ENV),
       'import.meta.env': JSON.stringify({ MODE: NODE_ENV }),
-      // browser CJS 无模块加载器——杜绝 stray 引用解析到 Node loader（better-sidebar 同款加固）
+      // browser CJS 无模块加载器——杜绝 stray 引用解析到 Node loader
       'import.meta.resolve': 'undefined',
     },
-    // CJS 输出会让部分传递依赖解析到它们的 Node 入口——浏览器条件导出必须权威（better-sidebar 同款）
+    // CJS 输出会让部分传递依赖解析到它们的 Node 入口——浏览器条件导出必须权威
     inputOptions: {
       resolve: { conditionNames: ['browser', 'import', 'require', 'default'] },
     },
-    // （better-sidebar 的 noExternal 双保险不需要——tsdown 0.23 的 deps.alwaysBundle 已是全量 inline 语义，
-    //   noExternal 与之互斥，实测直接构建报错）
+    // （noExternal 双保险不需要——deps.alwaysBundle 已是全量 inline 语义，noExternal 与之互斥，
+    //   两者同时给会让构建直接报错）
     plugins: [{
-      // 构建期纯度门（官方同款机制）：@deepseek-ai/* 值 import 不在平台表 → 构建失败
+      // 构建期纯度门：@deepseek-ai/* 值 import 不在平台表 → 构建失败
       //（type-only import 已被擦除，到不了这道门）；Node builtin 闯进浏览器 bundle 同理必炸
       name: 'dsh-novel-bundle-purity',
       resolveId(source: string) {

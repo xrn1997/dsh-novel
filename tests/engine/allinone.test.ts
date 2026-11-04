@@ -21,7 +21,8 @@ describe('AllInOne 整页正则（二维产物不压平）', () => {
   })
 
   it('未参与的捕获组落空串（不是 undefined）——`$n` 绑定要拿到可拼接的串', () => {
-    // 可选组 `(isvip)?` 第二行不参与：JS 给 undefined，Kotlin groupValues 给 ""
+    // 可选组 `(isvip)?` 第二行不参与：不参与时给空串是另一种口径，本仓 JS 求值给 undefined——
+    // 行绑定统一收成空串，`$n` 拿到的才是可拼接的串。
     const v = evalAllInOne({ kind: 'allinone', pattern: '(\\d+)" class="(isvip)?[^"]*name[^>]*>([^<]*)', flags: '' },
       '7" class="isvip name">第一章< 8" class=" name">第二章<', L, 'toc')
     expect(rowsOf(v)).toEqual([
@@ -45,8 +46,8 @@ describe('AllInOne 整页正则（二维产物不压平）', () => {
   it('AllInOne 值走 js 宿主面：整段（group 0）排在每行最前——第三读侧的现状钉子', () => {
     // 行含 group 0 之后，沙箱的串化读侧会把整段一起序列化；服务面的条目取值走 rowParts 剥掉
     // （`tests/services/toc-allinone.test.ts` 钉着那一半）。两侧不同形是有意的：整段只供字段规则
-    // 的 `$n` 绑定。**但这条不声称对面也这么给**——js 面该不该剥没有对面证据，改它之前先做
-    // `getAll` 返回值形状的对读（口径住矩阵行 a-allinone-group-zero）。
+    // 的 `$n` 绑定。**这条只钉本仓现状**——js 面该不该剥尚无定论，改它之前先核对 `getAll`
+    // 返回值形状（口径住矩阵行 a-allinone-group-zero）。
     const v = evalAllInOne({ kind: 'allinone', pattern: 'href="(/read[^"]*html)">([^<]*)', flags: '' }, tocHtml, L, 'toc')
     expect(engineValueToString(v)).toBe([
       'href="/read/30394_20940996.html">第一章 初入江湖\t/read/30394_20940996.html\t第一章 初入江湖',

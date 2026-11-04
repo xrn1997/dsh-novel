@@ -166,11 +166,10 @@ describe('包形态声明', () => {
     expect(asHost('0.2.2-rc.1')).toBe(true)
     // 上界必须挡住**下一条宿主线**：0.3 起要先真机验过再开口
     expect(asHost('0.3.0-rc.1')).toBe(false)
-    // 下限的理由：三个硬 inject 里只有 `jobs` 有下限——`webServer`（补丁 id 写的是 `webserver`，
-    // 按 camelCase grep 会漏）在 dsh-web-app 每个已发版本里都在，`tools` 连 0.0.1-rc.1 就有。
-    // `jobs` 行在 dsh-base 侧从 0.0.1-rc.3 起就有，但那一版只有组件侧发过（`@deepseek-ai/dsh`
-    // 与 dsh-web-app 都没有这版），所以**可安装的宿主**里最低带 jobs 的是 0.0.1-rc.5。
-    // 故 0.0.1-rc.1 / -rc.2 必须挡在外面：缺 jobs 的宿主插进去整树拒绝挂载。
+    // 下限的理由：三个硬 inject 服务里只有 `jobs` 有下限——`webServer`（补丁 id 写的是 `webserver`，
+    // 按 camelCase grep 会漏）与 `tools` 在实测名单最早那一档就在场，`jobs` 晚几档：组件侧先发的
+    // 版本不算在场，可安装的宿主以宿主侧发过的那一版为准。区间与实测名单的事实源都在 `package.json`
+    // （两层的关系见 `ADR-0020`），这里只钉区间语义：低于下限必须挡——缺 `jobs` 的宿主插进去整棵插件树拒绝挂载。
     expect(asHost('0.0.1-rc.2')).toBe(false)
     expect(asHost('0.0.1-rc.5')).toBe(true)
   })

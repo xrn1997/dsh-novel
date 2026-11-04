@@ -2,7 +2,7 @@
 
 技能们用五个规范 triage 角色说话。本文件把角色映射到本仓 issue tracker 里实际使用的标签串。
 
-| mattpocock/skills 里的标签 | 本仓 tracker 里的标签 | 含义 |
+| 技能侧的规范角色 | 本仓 tracker 里的标签 | 含义 |
 | --- | --- | --- |
 | `needs-triage` | `needs-triage` | 维护者需评估此 issue |
 | `needs-info` | `needs-info` | 等报告者补充信息 |

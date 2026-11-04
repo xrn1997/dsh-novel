@@ -99,7 +99,7 @@ export function nodeText(node: AnyNode, opts?: { keepImages?: boolean }): string
     if (tag === 'img') {
       if (keepImages) {
         // img 取址三形态：src / data-src|src / 任意 data-*——
-        // 懒加载漫画站大量只有 data-original/data-echo/data-page-image-url
+        // 懒加载漫画图存在只有 data-original/data-echo/data-page-image-url、src 空着的形态
         const a = el.attribs
         const src = a.src ?? a['data-src'] ?? a['data-original'] ?? a['data-echo']
           ?? a['data-url'] ?? a['data-page-image-url'] ?? firstDataAttr(a)

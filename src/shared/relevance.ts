@@ -9,8 +9,8 @@ import type { Relevance, SearchHit } from './wire.js'
  * 家必须在 `src/shared/`：浏览器半现下只 import `shared/wire.js`，`services/**` 不在它的可达面里，
  * 而这份判据 Node 半与浏览器半都要用。`wire.ts` 只声明形状，算法住这里，wire 的零运行时依赖不破。
  *
- * 判据不是本仓发明的新语义：忽略大小写的 contains 是通用形状，本仓只在此之上分三档。
- * 对面同源语义的读数、本仓两条偏离及其理由都住矩阵行 `d-search-relevance` 的 note（那一行是唯一主人），这里不复述。
+ * 判据不是本仓发明的新语义：忽略大小写的 contains，本仓只在此之上分三档。
+ * 同一判据的对照读数与本仓两条偏离及其理由，都住矩阵行 `d-search-relevance` 的 note（那一行是唯一主人），这里不复述。
  */
 
 /** 参与比较的全部「装饰」字符：空白、成对的书名号类括号、中英标点。写宽一档（含全部非字母数字）

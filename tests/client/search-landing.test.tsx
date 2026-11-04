@@ -8,7 +8,7 @@ import type { ShelfAddOutcome, ShelfSeatInput } from '../../src/client/shelf-act
 import type { SearchHit } from '../../src/shared/wire.js'
 
 /**
- * 搜索落架缝：落架现场与两条加架入口的排队从 `SearchView` 搬到 `useSearchLanding`。
+ * 搜索落架缝：落架现场与两条加架入口的排队都住在 `useSearchLanding`，`SearchView` 只做接线。
  * 写口是注入的 `addSeat`（生产是 `addShelfSeat`），因此这里不起 DOM、不碰 HTTP，
  * 只钉状态与顺序：落成的架位进本轮账、整本只补没落过的行、零加成不报成功、在途读数逐本记。
  * 「账住在行之上、收起再展开不洗掉」与回执的措辞/通道都不在这一层——那要真的整页折叠才证得出，
@@ -41,12 +41,12 @@ describe('useSearchLanding', () => {
     let receipt: AddAllReceipt | undefined
     await act(async () => { receipt = await result.current.addAll('b1', rows) })
     expect(receipt).toEqual({ newly: ['u1'], stillMissing: 1, noAddress: 1 })
-    // 同址两行各发一发幂等 PUT（旧 `BookRow` 即如此，`views-wiring` 的「同一家同一地址」
-    // 与「两家源给同一个地址」两条都钉着两发）；`newly` 按架位去重，不数 PUT。
+    // 同址两行各发一发幂等 PUT（`views-wiring` 的「同一家同一地址」
+    // 与「两家源给同一个地址」两条各钉着两发）；`newly` 按架位去重，不数 PUT。
     expect(addSeat).toHaveBeenCalledTimes(3)
   })
 
-  it('先单加一条再点都加架：只补本轮没落过的那条，落过的不再发一遍', async () => {
+  it('先单加一条再点都加架：只补本轮没落过的那条，落过的不重发', async () => {
     const addSeat = vi.fn(async (input: ShelfSeatInput) => ({ ok: true as const, bookKey: input.url }))
     const { result } = renderHook(() => useSearchLanding({ addSeat }))
     await act(async () => { await result.current.add(row('u1')) })

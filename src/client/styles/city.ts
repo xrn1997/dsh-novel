@@ -1,16 +1,15 @@
 /** 书城块（`NOVEL_CSS` 的第 9 块）：分类浏览的左栏源列表 + 右区书单网格与窄档容器查询。 */
 export const CITY_CSS = `
 /* ── 书城（分类浏览）：左栏一条源列表（选中的源就地展开自己的分类）+ 右区 4 列书单 ──
-   三条几何口径（界面稿实测，别凭手感改）：
+   三条几何口径（有守卫钉住，别凭手感改）：
    ① 只让书单自己滚（.novel-city-gridwrap），标题行 / 顺序说明 / 错误条 / 尾行读数钉在滚动区外——放进
       滚动区就随书单滚走，读进度得先滚到底。那条前提是本层要把高度收到视图根上（.novel-main 已定高，
       链上有确定高度可分），否则内层滚动容器高度由内容决定、等于没滚。
    ② 4 列必须写 minmax(0, 1fr)：1fr 的 auto 最小值会被 nowrap 的书名 / 元信息行撑开，卡片被推出
-      面板（3 列与 4 列都实测溢出过）。
+      面板——minmax 的 0 就是这道夹子。
    ③ 左栏是**一个**滚动容器，条目一律 flex:none（可滚动 flex 列里的条目在滚动发生前会先被压扁——
-      目录抽屉踩过同一个坑）。源与分类同处一栏，靠缩进与一条竖线分层，不靠第二个标题：一栏两节
-      各自滚时，滚轮落在哪一节由鼠标位置决定，而两句标题加两个筛选框的装饰件会占掉栏高
-      16%（矮面板 27%）。
+      同一条律也管着目录抽屉）。源与分类同处一栏，靠缩进与一条竖线分层，不靠第二个标题：一栏两节
+      各自滚时，滚轮落在哪一节由鼠标位置决定，而两句标题加两个筛选框的装饰件还要占掉栏高。
    窄面板退档（< 900px）那条几何走容器查询，规则与它的理由都写在下面那个 @container 块头上。
    判据是**面板宽度**而不是视口宽度：宿主中央面板可拖窄（侧栏与常驻会话列同时在场时视口远比面板
    宽），视口断点会把 4 列硬塞进一条 400px 的面板。故本视图根自带容器查询锚（与 .novel-table /
@@ -95,7 +94,7 @@ img.novel-city-cover { display: block; object-fit: cover; background: var(--nove
   font-size: var(--novel-fs-sm); color: var(--novel-text-2); line-height: 1.5;
   display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
 }
-/* 未响应那条是本设计的**刻意例外**（与搜索面同哲学：源坏了要如实摊开，不藏在折叠里）——今天只有
+/* 未响应那条是本设计的**刻意例外**（与搜索面同哲学：源坏了要如实摊开，不藏在折叠里）——只有
    书籍详情浮层的跨源那一列用它：摘要行给源名与错误码，展开才补完整 message。同一列那行「疑似无关」
    的折叠共用这个容器（摘要给得出是谁家、多少条，展开才是内容），但它不是故障——容器本来的红线条
    红底默认也罩着它，故由下面带标记的那一条只把这一族回正成中性线条与中性底；只属于真失败的红
@@ -147,7 +146,7 @@ img.novel-city-cover { display: block; object-fit: cover; background: var(--nove
 }
 .novel-city-srcrow-who { flex: 1 1 auto; min-width: 0; font-size: var(--novel-fs-base); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 这一行里该退让的是「最新」那句（省略号收口），不是两颗钮：钮被挤出浮层就是点不到。
-   本源那一行今天根本不带这句——头部那颗 tag 已经把整句说过了（同一层浮层说两遍就是抄本），
+   本源那一行根本不带这句——头部那颗 tag 已经把整句说过了（同一层浮层说两遍就是抄本），
    跨源各行带的是各家的最新，放不下就由它自己收省略号。 */
 .novel-city-srcrow-last {
   flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

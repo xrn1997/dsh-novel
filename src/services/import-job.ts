@@ -35,8 +35,8 @@ function isUnknownArray(v: unknown): v is unknown[] {
   return Array.isArray(v)
 }
 const PROBE_CONCURRENCY = 5
-// 落盘粒度已内聚进注册表（edit 合并写，调度归 createDebouncedWriter：每 20 次变更强制落盘 + 尾沿防抖）——
-// 任务运行器不再持有 persist 节流常量
+// 落盘粒度归注册表（edit 合并写，调度归 createDebouncedWriter 的阈值强制落盘 + 尾沿防抖）——
+// 任务运行器不认识 persist 节流常量，阈值只住注册表那一处
 
 export class SourceJobs {
   private current: JobState | null = null
@@ -184,14 +184,14 @@ export class SourceJobs {
       this.note(state, `${d.kind === 'added' || d.kind === 'replaced' ? d.source.name : d.name}：${d.kind}`)
       state.done++
     }
-    await this.deps.registry.flush()                       // 任务完成 ⇒ 结果已落盘（既有语义不变）
+    await this.deps.registry.flush()                       // 任务完成 ⇒ 结果已落盘（落盘先于终态）
     this.settle(state, 'completed', '')
   }
 
   /**
    * 批量验证：有效 id 并发 5 路探针（限流敬畏——对齐 searchParallel 口径）。
-   * 单条失败即结果（broken/异常记 counts）不中断。落盘粒度已收进注册表（每 20 次变更强制落盘
-   * + 100ms 尾沿防抖，调度归 storage.createDebouncedWriter），任务运行器不再持「每 N 条 persist」的常量。
+   * 单条失败即结果（broken/异常记 counts）不中断。落盘粒度归注册表（阈值强制落盘 + 尾沿防抖，
+   * 调度见 storage.createDebouncedWriter），任务运行器这里没有「每 N 条 persist」的常量。
    */
   private async runBatchProbe(state: JobState, ids: string[]): Promise<void> {
     const valid: string[] = []
@@ -248,7 +248,7 @@ export class SourceJobs {
     }
     await Promise.all(Array.from({ length: Math.min(PROBE_CONCURRENCY, Math.max(valid.length, 1)) }, worker))
     if (this.cancelled(state)) return this.cancelledOut(state)   // 已写回的状态不抹除，只等落盘收工
-    await this.deps.registry.flush()                       // 任务完成 ⇒ 结果已落盘（既有语义不变）
+    await this.deps.registry.flush()                       // 任务完成 ⇒ 结果已落盘（落盘先于终态）
     this.settle(state, 'completed', '')
   }
 }

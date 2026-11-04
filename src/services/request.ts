@@ -7,14 +7,14 @@ import { absUrl, splitUrlOption } from './url.js'
 /** 书源 URL 模板的请求形态（格式钉死这三种）：
  *  ① 纯 URL：`/search?q={{key}}`（支持相对 URL——按 bookSourceUrl 解析）
  *  ② URL+选项：`url,{"method":"POST","body":"...","charset":"gbk","headers":"{...}","webView":true}`
- *  选项 JSON 允许单引号形态（真实源大量存在——宽容引号但不猜结构）；
- *  headers 可为 JSON 字符串（双重编码——真实源常见形态）。 */
+ *  选项 JSON 允许单引号形态（宽容引号但不猜结构）；
+ *  headers 可为 JSON 字符串（双重编码形态）。 */
 export interface RequestOption {
   method?: string
   body?: string
   charset?: string
   headers?: Record<string, string>
-  /** 非 2xx 的额外重试次数（上游 UrlOption.retry；连接层异常不重） */
+  /** 非 2xx 的额外重试次数（URL 选项的 `retry` 键；连接层异常不重） */
   retry?: number | string
   /** 真浏览器抓取（Playwright + 本机 Edge/Chrome） */
   webView?: boolean
@@ -29,7 +29,7 @@ export interface RequestOption {
  */
 export interface RequestPlan {
   url: string
-  /** 三态：GET（缺省）/ POST（带 body）/ HEAD（只看响应头、不带 body）——与对面 RequestMethod 同形 */
+  /** 三态：GET（缺省）/ POST（带 body）/ HEAD（只看响应头、不带 body） */
   method: 'GET' | 'POST' | 'HEAD'
   headers: Record<string, string>
   body?: string
@@ -61,7 +61,7 @@ export function parseUrlOption(template: string): { urlPart: string; option: Req
 
 /** 选项 JSON：宽松引号解析归 `normalize.parseObjectJson` 单点（头与 URL 选项共用同一份——
  *  严格 JSON 优先，失败回退单引号交换，`{'a':'b'}` → `{"a":"b"}`）。 */
-/** 本插件实现的 UrlOption 键集（书源格式的键集更大：retry/type/js/bodyJs/dnsIp/serverID/webJs/origin…） */
+/** 本插件实现的 URL 选项键集（书源格式的键集更大：retry/type/js/bodyJs/dnsIp/serverID/webJs/origin…） */
 const KNOWN_OPTION_KEYS = ['method', 'body', 'charset', 'headers', 'retry', 'webView', 'webJs']
 
 function parseOptionJson(text: string): RequestOption | undefined {
@@ -86,7 +86,7 @@ function parseOptionJson(text: string): RequestOption | undefined {
 }
 
 /** headers 两形态：对象直通；字符串（双重编码的 JSON）再宽松解析一次（同 `parseObjectJson`
- *  口径——单引号形态对面读得出，这里同样读得出）；非法 → undefined（不猜）。
+ *  口径——单引号形态同样读得出）；非法 → undefined（不猜）。
  *  「哪些键活着」走 `normalize.stringTableOf` 单点。 */
 function parseHeaders(v: unknown): Record<string, string> | undefined {
   const obj = parseObjectJson(v)
@@ -105,7 +105,7 @@ function parseHeaders(v: unknown): Record<string, string> | undefined {
  * 会把 `%E4%B9%A6` 二次编码成 `%25E4%B9%A6`；故转义段先按 UTF-8 解码、直写字符直接用，再按 charset
  * 逐字节转义——同一关键词得到同一字节串，且不二次编码。
  * UTF-8 别名与 iconv 认不出的 charset 一律原样返回（认不出的由解码链的 DecodeError 点名，不在此猜）。
- * 真机实证（GBK 站发 UTF-8 关键词恒 0 命中）：见矩阵行 `b-opt-charset`。
+ * GBK 站发 UTF-8 关键词恒 0 命中——读数见矩阵行 `b-opt-charset`。
  */
 function encodeFormCharset(body: string, charset: string): string {
   if (!iconv.encodingExists(charset) || /^utf-?8$/i.test(charset.replace(/_/g, '-'))) return body
@@ -130,7 +130,7 @@ function decodePercentRun(run: string): string | null {
 /**
  * 选项语义的唯一主人：模板 + 变量 + baseUrl（null = 不做绝对化，@js ajax 形态用）→ 请求计划。
  * method 判定 / body 插值 / POST 表单默认 urlencoded / headers / charset 全部只在这里解释一遍
- * （不要在别处再写一份「与对方同口径」的副本）。相对 URL 按 baseUrl 解析（官方「支持相对URL」；
+ * （不要在别处再写一份同口径的副本）。相对 URL 按 baseUrl 解析（书源格式允许写相对地址；
  * 直接喂 fetch 会让相对 URL 全数打不到）。
  * trimFirstPage：Native 分页语义——模板以 `/{{page}}` 结尾时首页裁掉页码段（带 /1 站点直接 404）。
  */
@@ -148,7 +148,7 @@ export function assembleRequest(
   // `b-page-angle-list`），差异不可观测。
   const withPageList = expandPageAngleList(interpolated, typeof vars.page === 'number' ? vars.page : null)
   const url = baseUrl === null ? withPageList : (absUrl(withPageList, baseUrl) ?? withPageList)
-  // method 三态（对面把 POST/HEAD 各分一支、其余落 GET——出处与对读记录见矩阵行 `b-opt-method-head`）：
+  // method 三态（POST/HEAD 各占一支、其余落 GET——判据与对读记录见矩阵行 `b-opt-method-head`）：
   // HEAD 不能被并进「不是 POST 就 GET」那条路——声明 HEAD 的源会实际发 GET（降级当成了实现）。
   const rawMethod = (option?.method ?? 'GET').toUpperCase()
   const method: RequestPlan['method'] = rawMethod === 'POST' ? 'POST' : rawMethod === 'HEAD' ? 'HEAD' : 'GET'
@@ -156,7 +156,7 @@ export function assembleRequest(
     url, method, headers: { ...(option?.headers ?? {}) }, webView: option?.webView === true,
     ...(option?.webJs === undefined ? {} : { webJs: option.webJs }),
   }
-  // HEAD 是「只看响应头」的方法，**不发 body**（对面同规则）：声明了 body 也丢掉，
+  // HEAD 是「只看响应头」的方法，**不发 body**：声明了 body 也丢掉，
   // 免得把表单体连同 urlencoded 头一起发出去，把一次元数据探测变成真的写请求。
   if (option?.body !== undefined && method !== 'HEAD') {
     const raw = interpolateUrl(option.body, vars)
@@ -176,7 +176,7 @@ export function assembleRequest(
 /**
  * fetch init 姿态的单点（search-face / reading / bridge 都必须走这一份）：
  * GET **不带 method 键**（fetch 缺省即 GET）；POST 带 method 与插值后的 body；
- * HEAD 带 method 且**不带 body**（与对面同口径：HEAD 是元数据探测，不该把体发出去）。
+ * HEAD 带 method 且**不带 body**（HEAD 是元数据探测，不该把体发出去）。
  * baseHeaders（如源级 headerOf）打底，计划 headers 覆盖同名。
  */
 export function fetchInitOf(

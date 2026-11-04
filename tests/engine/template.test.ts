@@ -42,7 +42,7 @@ describe('isPlaceholderExpr', () => {
 })
 
 describe('expandPageAngleList（`<a,b,c>` 按页取值）', () => {
-  it('page=1 取首项（真源恩京的书房：首项是空串 ⇒ 整段消失）', () => {
+  it('page=1 取首项：首项是空串 ⇒ 整段消失', () => {
     expect(expandPageAngleList('/<,page/2/>?s=k', 1)).toBe('/?s=k')
   })
   it('page<N 取第 page 项；越界取末项（= 到底）', () => {
@@ -50,7 +50,7 @@ describe('expandPageAngleList（`<a,b,c>` 按页取值）', () => {
     expect(expandPageAngleList('/<,p2,p3/>', 3)).toBe('/p3/')
     expect(expandPageAngleList('/<,p2,p3/>', 9)).toBe('/p3/')
   })
-  it('page 为空（未参与翻页）⇒ 原样不动（对面整段在 page?.let 里）', () => {
+  it('page 为空（未参与翻页）⇒ 原样不动', () => {
     expect(expandPageAngleList('/<,p2/>', null)).toBe('/<,p2/>')
     expect(expandPageAngleList('/<,p2/>', undefined)).toBe('/<,p2/>')
   })

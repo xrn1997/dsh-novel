@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { evaluate } from '../../src/engine/index.js'
 import type { EvalContext } from '../../src/engine/index.js'
 
-// 回归钉子：`/` 开头且含 `{{}}` 的 URL 模板必须先走插值，不能被 XPath 分支抢先截走（真机实证：
-// 顶点小说 tocUrl 插值步报「XPath 步骤不支持: {{$.novelId}}」）。
+// 回归钉子：`/` 开头且含 `{{}}` 的 URL 模板必须先走插值，不能被 XPath 分支抢先截走（真机读数：
+// 带 {{}} 插值步的 tocUrl 曾被报「XPath 步骤不支持: {{$.novelId}}」）。
 describe('URL 模板插值 vs XPath 前缀（classifySegment 判定次序）', () => {
   const ctx: EvalContext = { json: { novelId: 12345 }, baseUrl: 'http://api.anwaben.com' }
 
@@ -19,7 +19,7 @@ describe('URL 模板插值 vs XPath 前缀（classifySegment 判定次序）', (
     const v = await evaluate('/novel/{{$.novelId}}/chapters', ctx, 'rule', 'value')
     expect(v).toEqual({ kind: 'value', text: '/novel/12345/chapters' })
   })
-  // 悦读小说 ruleBookUrl 实证：`{$.rule}` 是内嵌 JSONPath（与 `{{}}` 同属插值），
+  // 真机读数：有源的 ruleBookUrl 里 `{$.rule}` 是内嵌 JSONPath（与 `{{}}` 同属插值），
   // 与 `{{}}` 同样是插值——单反斜杠前缀判定必须一起让位，否则整条 URL 被当 XPath 截走。
   it('单花括号内嵌形态 /books?bookId={$.bookId}', async () => {
     const v = await evaluate('/books?bookId={$.bookId}', { json: { bookId: 'b7' }, baseUrl: 'http://a.com' }, 'rule', 'value')

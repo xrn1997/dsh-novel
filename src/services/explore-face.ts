@@ -43,7 +43,7 @@ export async function fetchKindPage(
   // 书名规则按**规则来源档**取：整套启用时换发现面那一套，闸关照读通用搜索键（整档一刀切，
   // 不逐字段回落——判据与理由住 `bridge.hitRuleOf` / `ADR-0027`）
   const name = hitRuleOf(source, 'explore', 'ruleBookName')
-  // 书名规则缺失按**规则缺失**回报，而不是产出一串没有标题的书目：对面在这种源上会静默给 0 本，
+  // 书名规则缺失按**规则缺失**回报，而不是产出一串没有标题的书目：照赋值路径走会静默出 0 本，
   // 本仓的口径是「空结果不得冒充失败」，反过来让「读不出任何东西」冒充成一次正常空分类同样不许。
   if (template === null || name === null) {
     const missing = [

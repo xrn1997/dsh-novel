@@ -10,6 +10,6 @@ Status: accepted
 
 **进度通道**：地基是**带游标的显式快照查询**（`{added, next}`），SSE 帧体就是同一份快照、两通道共用一个游标，任一时刻只有一条通道在推进游标。理由：宿主口径写死「普通转发通知不会 replay，需要可靠恢复的 stateful domain 必须提供 baseline / cursor / 显式 query」——推送永远需要一条查询兜底，那就不如自己控制两条。**刻意不用 `EventSource`**：它自带重连与 `Last-Event-ID`，等于把游标交给浏览器，与本仓「游标握在客户端、两条通道同源」相反，还会逼出第二份合并代码。不走 Session 事件 + projection：常驻呈现位是 root 作用域、会话无关，而 projection 的读面按会话作用域走。
 
-**任务刻意不传 `owner`**（这条此前在仓内只有实现、没有口径）：任务由浏览器的 HTTP 请求触发，手里没有 live agent 实例；`owner` 的官方语义是「拥有者是活 agent，其析构会 cancel 该任务」——硬凑一个 agent 当 owner 等于把「切走界面就完蛋」换个形式请回来。准入闸是「没有已挂载 controller 服务该 owner 就拒绝 start」，官方出路正是从非 scoped 上下文自挂 controller，我们拿的是**身份、生命周期、随服务卸载而终止**，不是呈现：宿主 job 面没有连续进度，百分比与「跳回现场」仍归本插件。
+**任务刻意不传 `owner`**：任务由浏览器的 HTTP 请求触发，手里没有 live agent 实例；`owner` 的官方语义是「拥有者是活 agent，其析构会 cancel 该任务」——硬凑一个 agent 当 owner 等于把「切走界面就完蛋」换个形式请回来。准入闸是「没有已挂载 controller 服务该 owner 就拒绝 start」，官方出路正是从非 scoped 上下文自挂 controller，我们拿的是**身份、生命周期、随服务卸载而终止**，不是呈现：宿主 job 面没有连续进度，百分比与「跳回现场」仍归本插件。
 
 锚点：`src/services/import-job.ts`（`JobRunningError` / `cancelledOut` / `settle`）；`src/services/job-holder.ts`（`JobHostSpec` / `JobHost` / `HostTie` / `ChangeSignal`，三个持有者共读同一份）；`src/services/search-job.ts`（分槽、`shouldStop`、`subscribe` 只发信号）；`src/client/search-job.ts`；`src/client/api.ts` 的 `apiEventStream`；`src/index.ts` 的 `attachController`；`tests/client/search-job-round-identity.test.tsx`、`tests/services/search-job.test.ts`、`tests/services/job-holder.test.ts`。

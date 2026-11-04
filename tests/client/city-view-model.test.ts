@@ -6,8 +6,8 @@ import type { RoundShape } from '../../src/client/city-view-model.js'
 import type { ExploreBook } from '../../src/shared/wire.js'
 
 /** 分类页 view-model 钉子：卡片元信息 / 源行 / 跨源关键词 / 尾行读数 / 空态判据的唯一算式。
- *  客户端逻辑层测试口径：纯函数、零 React。浏览轴收成按源后，跨源读数（「N 源」「已 x / y 源」）
- *  在本层没有对象——删掉的那几条不复活。 */
+ *  客户端逻辑层测试口径：纯函数、零 React。浏览轴按源，跨源读数（「N 源」「已 x / y 源」）
+ *  在本层没有对象——不另造一份。 */
 
 const book = (over: Partial<ExploreBook> = {}): ExploreBook =>
   ({ name: '剑起长安', author: '青衫客', bookUrl: 'https://a/1',
@@ -35,13 +35,13 @@ describe('按源的派生层', () => {
     expect(sheetKeyword({ name: '半城风月', author: '沈念' })).toBe('半城风月 沈念')
     expect(sheetKeyword({ name: '半城风月', author: null })).toBe('半城风月')
   })
-  it('尾行读数只说页与本数，不再说「N / M 源」', () => {
+  it('尾行读数只说页与本数', () => {
     expect(pageReadout(1, 12)).toBe('第 1 页 · 这一页 12 本')
     expect(pageReadout(3, 47)).toBe('第 3 页 · 累计 47 本')
   })
 })
 
-describe('cityEmptyState（空态分支的唯一判据：轴已从分类数换成可选源数）', () => {
+describe('cityEmptyState（空态分支的唯一判据：轴是可选源数）', () => {
   it('没有源提供分类入口 → 「no-sources」；有可选源但这一类零结果 → 「has-sources」（两态不折叠）', () => {
     expect(cityEmptyState(0)).toBe('no-sources')
     expect(cityEmptyState(3)).toBe('has-sources')
@@ -79,7 +79,7 @@ describe('roundReadout（被停止 / 还在跑 / 本数读数，三条各说各�
   it('跑完有书：归本数读数（页码取快照给的，不由本地加）', () => {
     expect(roundReadout(rnd({ books: [book()] as never[], page: 2 }))).toBe('第 2 页 · 累计 1 本')
   })
-  it('本层不再收 error：错误那句话归失败横幅说，尾行重复一遍就是同一事实两个家', () => {
+  it('本层不收 error：错误那句话归失败横幅说，尾行重复一遍就是同一事实两个家', () => {
     expect(roundReadout(rnd({ page: 2 }))).toBe('第 2 页 · 累计 0 本')
   })
 })

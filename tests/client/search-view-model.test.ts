@@ -43,7 +43,7 @@ describe('轮级读数：条／本／家三条读数绝不折叠', () => {
     expect(s.answered).toBe(2)
     expect(s.failed).toBe(1)
   })
-  it('answered 数答话的家（答零条也算）；found 是历史误名', () => {
+  it('answered 数答话的家（答零条也算）', () => {
     const onlyEmpty = deriveRound({ keyword: 'x', groups: [group('s9', [])] }).summary
     expect(onlyEmpty).toEqual({ searched: 1, answered: 1, failed: 0, hits: 0, kept: 0, suspect: 0 })
   })

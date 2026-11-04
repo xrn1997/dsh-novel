@@ -39,7 +39,7 @@ describe('validateSourceJson', () => {
   })
 })
 
-/** 源列表过滤：名称/地址/分组子串命中，大小写不敏感——630 个源必须能快速定位 */
+/** 源列表过滤：名称/地址/分组子串命中，大小写不敏感——源多到要滚动时，过滤得能快速定位 */
 describe('filterSources', () => {
   const src = (name: string, baseUrl: string, groups: string[] = []): SourcePublic => ({
     id: name, name, baseUrl, enabled: true, groups, type: 'text', status: 'unverified',
@@ -128,7 +128,7 @@ describe('groupIcon', () => {
   it('无符号组返回 null（显示侧回退全名，不造图标）', () => {
     expect(groupIcon('小说')).toBeNull()
   })
-  it('中段图标也取（宽松提取，实测数据都在尾部）', () => {
+  it('中段图标也取（图标位置不固定，故宽松提取）', () => {
     expect(groupIcon('⚡快速')).toBe('⚡')
   })
 })

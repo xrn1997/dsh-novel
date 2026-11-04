@@ -16,8 +16,8 @@ import type { JobState, SourcePublic } from '../../src/client/views/types.js'
 
 /**
  * 常驻状态层（`shell.overlay` 位）的接线钉子。
- * 为什么要存在：`conversation.view` 是 list 基数且壳层只渲染当前激活 entry（官方 slots 层级表 +
- * 宿主壳层 `renderSlot('conversation.view', …, { only: active.id })`），状态条若挂在子视图里，
+ * 为什么要存在：`conversation.view` 座位是 list 基数、壳层只渲染当前激活的那一条，状态条若挂在
+ * 子视图里，
  * 用户一切 tab 就看不见仍在服务端跑的任务——所以它住常驻层。
  * 本文件钉死常驻层的几件事：自带任务泳道、空闲零占用、点击把用户送回现场并记下要看什么，
  * 以及「送回现场」要真的把小说面板带到前台——用户停在宿主别的界面上点「点此查看」，不能点了没反应。
@@ -59,7 +59,7 @@ describe('NovelStatusOverlay（视图环之外的常驻状态层）', () => {
     expect(css).toContain('bottom:')
     expect(css).toContain('right:')
     expect(css).not.toMatch(/\btop:/)
-    // 同时给 left 与 right = 通栏（真机读数：y=6、左右各 8、宽 1264、高 26，正盖在宿主标题行上）
+    // 同时给 left 与 right = 通栏
     expect(css).not.toContain('left:')
     expect(css).toContain('max-width')
   })
@@ -74,13 +74,13 @@ describe('NovelStatusOverlay（视图环之外的常驻状态层）', () => {
     expect(lane.parentElement?.parentElement?.textContent).toContain('100/642')
   })
 
-  it('自带样式层与 token 锚点：小说视图卸载后不许剥成裸文字（真机实测缺陷）', async () => {
+  it('自带样式层与 token 锚点：小说视图卸载后不许剥成裸文字', async () => {
     const { container } = render(<NovelStatusOverlay deps={depsWith(runningImport)} focusPanel={() => {}} />)
     const root = container.querySelector('[data-novel-shell-status]')
     // --novel-* 只定义在 `.novel-root, [data-novel-scope]` 上；overlay 在宿主 overlayLayer 里，
     // 没有 .novel-root 祖先 ⇒ 少了这个属性就整棵取不到值（底色/圆角/z-index 静默失效）
     expect(root?.hasAttribute('data-novel-scope')).toBe(true)
-    // 样式层随视图卸载（切到「对话」tab 即实测 0 条），本层必须自己注一份
+    // 样式层随视图一起卸载，本层必须自己注一份
     expect(root?.querySelector('[data-novel-style]')).not.toBeNull()
   })
 
@@ -110,7 +110,7 @@ describe('NovelStatusOverlay（视图环之外的常驻状态层）', () => {
 })
 
 describe('SettingsSection 让位（同一份任务只有一个轮询实例、一处呈现）', () => {
-  it('书源管理区内不再自带状态条——避免同一条数出现两个住址', async () => {
+  it('书源管理区内不自带状态条——避免同一条数出现两个住址', async () => {
     const { container } = render(<SettingsSection deps={depsWith(runningImport)} />)
     await new Promise((r) => setTimeout(r, 20))
     expect(container.querySelector('[data-novel-status-bar]')).toBeNull()

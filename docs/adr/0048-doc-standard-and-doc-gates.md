@@ -38,8 +38,8 @@ ADR-0041 固定了十份核心文件与一个文档门。本篇把核心文件�
 ## 后果
 
 - 本仓新增 `docs/ui-spec.md` 与 `docs/agents/*`；`docs/AGENTS.md` 的分层表与放置判据随之改口径。
-- 文档门的断言集合变大：新增已废称呼、中文小节名、职责边界、README 徽章投影与截图三方一致五项检查，并把 ADR 互引收紧为 `ADR-NNNN`；代价是文档里重复的标题与旧称呼会被判红，存量里不可回查的批次号已清理为日期或序数。
-- 存量互引从 `docs/adr/` 前缀改写为 `ADR-NNNN`；`锚点：` 的门从「一行」放宽为「一段」。
+- 文档门的断言集合变大：新增已废称呼、中文小节名、职责边界、README 徽章投影与截图三方一致五项检查，并把 ADR 互引收紧为 `ADR-NNNN`；代价是文档里重复的标题与旧称呼会被判红，不可回查的批次号同样红。
+- ADR 互引一律写 `ADR-NNNN`，不写 `docs/adr/` 加篇号的路径形态；`锚点：` 是一段可折行的段落，不是一行。
 - ADR-0041 的十份文件清单与「不设 `docs/agents/`」被取代；ADR-0040 仍可回查分层取舍。
 
 锚点：`docs/AGENTS.md`；`docs/adr/ADR-FORMAT.md`；`docs/ui-spec.md`；`docs/agents/domain.md`；`tests/docs-liveness.test.ts`；`tests/context-terms.test.ts`；`tests/comment-altitude.test.ts`；`AGENTS.md`；ADR-0041。

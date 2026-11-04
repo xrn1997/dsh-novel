@@ -20,9 +20,9 @@
   html, body { margin: 0; height: 100%; font-family: Arial, "Microsoft YaHei", sans-serif; }
   #host { height: 100vh; display: flex; overflow: hidden; }
   /* 挂载点 = 宿主中央面板的替身：**必须是块级容器**（不能 display:flex）。
-     flex 容器会把小说视图根变成 flex item——宽度退化成 max-content（实测 1100px 视口下
-     阅读区只剩 327px，字号/栏宽怎么调都不变），读数会指向一个只存在于壳里的窄屏。
-     块级 + 定高 + overflow:hidden 才是宿主面板的真实几何（视图根的 width:auto 铺满）。 */
+     flex 容器会把小说视图根变成 flex item——宽度退化成 max-content，字号/栏宽怎么调都不跟着变，
+     读数会指向一个只存在于壳里的窄屏。
+     块级 + 定高 + overflow:hidden 是宿主面板的几何口径（视图根的 width:auto 铺满）。 */
   #mount { flex: 1 1 auto; min-width: 0; height: 100%; overflow: hidden; }
   body {
     --dsw-alias-bg-base: #ffffff; --dsw-alias-bg-layer-1: #ffffff; --dsw-alias-bg-layer-2: #f5f5f5;
@@ -38,10 +38,9 @@
 <script>
   // 平台模块表的最小替身：bundle 里留给 `require` 的 specifier 全解答到本页的 React 全局。
   // jsx-runtime 用 createElement 手搓——但**必须把 children 展开成可变参数**（不能整包成
-  // `createElement(type, {children: [...]})`）：后者的 dev 校验路径是空的，React 渲染时会把静态
-  // 多子节点当「无 key 的数组子节点」逐条告警（实测本台第一版就被这一条刷屏，十几条 key 警告
-  // 全是壳造出来的假象）。展开成可变参数后走的是 createElement 的逐子节点校验，与真
-  // jsx/jsxs 运行时的行为一致（jsxs 也只对数组里每一项分别校验）。jsx/jsxs 的第三参是
+  // `createElement(type, {children: [...]})`）：那样 React 会把静态多子节点当「无 key 的数组子
+  // 节点」逐条告警，一屏 key 警告全是壳自造的假象。展开成可变参数走的是逐子节点校验，
+  // 与本壳要演的 jsx/jsxs 语义一致。jsx/jsxs 的第三参是
   // `key`，写在不显式传时即 undefined——恰是「静态子节点不需要 key」的语义。
   function makeElement(type, props, key) {
     var rest = Object.assign({}, props || {});

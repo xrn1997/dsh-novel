@@ -59,7 +59,7 @@ _唯一实现_: 单源一次抓取 `services/explore-face.ts` 的 `fetchKindPage
 _Avoid_: 书城列表页、分类搜索（发现面是另一条链路，不是聚合搜索的第二次调用）
 
 **分类入口（explore kinds）**:
-一个源「有哪些分类」的逐源声明（用户面与 `ADR-0027` 里也叫**发现入口**，指同一件事）。**两方言的地址语义不同**：原生 `ruleFind.kinds` 里的地址是填进源级模板 `{{kind}}` 的值，legado `exploreUrl` 里的地址本身就是那一类的完整模板（自带页码位）；落位后统一成模型里的 `ruleExploreKinds` 一个形状。**「这次用哪份模板」先问源级模板在场吗，方言只决定兜底、不决定优先**——判据的主人是 `explore-face.fetchKindPage`（裁决见 `ADR-0027`），此处不复述。脚本形态（`@js:` / `<js>`）本期不执行，声明它的源在书城没有分类。
+一个源「有哪些分类」的逐源声明（用户面与 `ADR-0027` 里也叫**发现入口**，指同一件事）。**两方言的地址语义不同**：原生 `ruleFind.kinds` 里的地址是填进源级模板 `{{kind}}` 的值，legado `exploreUrl` 里的地址本身就是那一类的完整模板（自带页码位）；落位后统一成模型里的 `ruleExploreKinds` 一个形状。**「这次用哪份模板」先问源级模板在场吗，方言只决定兜底、不决定优先**——判据的主人是 `explore-face.fetchKindPage`（裁决见 `ADR-0027`），此处不复述。脚本形态（`@js:` / `<js>`）的发现入口不执行，声明它的源在书城没有分类。
 _唯一实现_: 解析与形态判定 `services/explore-url.ts` 的 `parseExploreKinds`（判据同住 `exploreKindsFormOf`，条目可用尺同住 `usableKind`——两档解析、原生侧条目、平铺优先的数组尺四家共读这一把）；落位在 `services/normalize.ts`——导入侧 `flattenDialect`（legado，条目尺同住 `parseExploreKinds`）与 `flattenNative`（原生，条目尺同住 `nativeExploreFields`），存量按 raw 补推同住 `rawExploreFields`（两方言跑的是同一个 flatten）
 _Avoid_: 分类词表（那是一个源自己声明的分类标题摊开后的清单，主人是 `deriveExploreSources`）、发现列表
 
@@ -71,7 +71,7 @@ _Avoid_: 过滤（它不是丢弃）、降噪、二次搜索、相关性分数�
 **作品视图（按书）**:
 一轮聚合搜索里「同一本（规范化书名 + 规范化作者）在若干家源上」的呈现轴：一本一行、逐源在下面可展开、可一次把这一本的各家逐条都加架。它是**派生投影**，不是存储身份——架位凭 `bookKey`（词条见「架位」），进度不跨源搬。单位律是三条身份：**条**＝那一本书在一个源上的那一行——逐源轴的组头计数、收口的命中读数、书行的展开钮都数它；**本**＝归并后的那一本——书行一行一本，收口的并书读数与超限行数它；**家**＝一个源——「N 家源」与收口的搜过/未响应数的是去重后的家。三条读数绝不折叠；加架回执数的是落架的**架位**（同一地址的两种写法各是一行、只落一个架位）。
 _唯一实现_: `shared/merge-by-book.ts` 的 `mergePartitioned`（生产两个消费点的归并入口：吃 `shared/round-summary.ts` 的分区，同一轮只分区一次；形状 `MergedBook` / `MergedSource` 与上限 `SEARCH_BOOKS_CAP` 在 `shared/wire.ts`；本轮收口形状 `MergedRound` 不过 HTTP，就住 `mergePartitioned` 旁边；键上的名字取首个到达源原样，不投票）；`mergeBooks` 只是「一轮 → 归并」的 convenience（测试与审计脚本用），不是第二个实现
-_Avoid_: 跨源合并器（那是发现面已下线那一层的历史名字，见 `ADR-0028`）、同书去重（不去重，多源都在案）、作品（本仓不用这个词指存储实体）
+_Avoid_: 跨源合并器（书城没有跨源轴，见 `ADR-0028`）、同书去重（不去重，多源都在案）、作品（本仓不用这个词指存储实体）
 
 **搜索结果页派生（search view-model）**:
 「一轮命中现场 → 轮级计数（条／本／家）、两条呈现轴的行身份与逐源回读」的唯一住址：判据在此，视图只接线与渲染。轮级派生一次给齐预算值——逐源组的两档行与行 key、每本的逐源行与架位全集都随 `deriveRound` 算好，渲染路径不再为每帧每击键各算一趟。
@@ -114,9 +114,9 @@ _唯一实现_: `src/services/source-request.ts` 的 `createSourceRequest` / `So
 _Avoid_: 抓取工具、fetcher 包装（它拥有执行顺序，不是转发壳；模板解析仍归「请求组装」）。
 
 **HTTP cookie jar**:
-请求层那张域/路径/过期/`Secure` 感知的 cookie 表：响应 `Set-Cookie` 自动落库，请求缺省回带；一张表**跨源共享**（上游 `CookieStore` 同粒度，同站两源复用登录态）。与脚本侧按源隔离的 cookie 垫片是两张表。裁决与公共后缀残留见 `ADR-0039`。
+请求层那张域/路径/过期/`Secure` 感知的 cookie 表：响应 `Set-Cookie` 自动落库，请求缺省回带；一张表**跨源共享**——同一站点的两个源复用同一份登录态。与脚本侧按源隔离的 cookie 垫片是两张表。裁决与公共后缀残留见 `ADR-0039`。
 _唯一实现_: `src/services/cookies.ts` 的 `CookieJar`；自动吸收/回带归 `services/fetcher.ts`，浏览器与 jar 的双向桥归 `services/source-request.ts`
-_Avoid_: cookie 垫片（那是 `SourceSession.cookieJar` 的按源键值表）、CookieManager（那是 Android 类名，脚本桥面）
+_Avoid_: cookie 垫片（那是 `SourceSession.cookieJar` 的按源键值表）、CookieManager（指的是脚本侧按源隔离的垫片，不是 HTTP jar）
 
 **源状态会话（source session）**:
 脚本可见的按源状态四张表：cookie 垫片、键值变量、单串槽、cache 垫片。接口面同步（脚本 `source.get`/`cache.get` 不能等 IO）；生产实现把写先标脏、在求值边界或卸载时成批落盘到数据根 `source-state.json`，删源时按 baseUrl 清掉该源四张表。
@@ -176,14 +176,14 @@ _唯一实现_: 识别与切分 `engine/literal.ts`（`isLiteralForm`/`splitLite
 _Avoid_: URL 规则（太泛——不只 URL，任何含插值的字面段都是）
 
 **受保护区（protected region）**:
-规则串里三处「区内字符不属于本层文法」的区域：`<js>…</js>` 块（块内 `##`/`@`/`||` 是 JS 文本）、`{{…}}` 区（区内是插值表达式）、`@put:{…}` 值区（区内是值内规则文本）。对面是把它们**先摘出去**再谈切分（先抽 js 块、先剥 @put、先做插值）；本仓按同一口径**就地跳过**——切 `##` 替换尾、切连接符、判 `$n` 行模板、判模板态，四处都只看区外的字符。
+规则串里三处「区内字符不属于本层文法」的区域：`<js>…</js>` 块（块内 `##`/`@`/`||` 是 JS 文本）、`{{…}}` 区（区内是插值表达式）、`@put:{…}` 值区（区内是值内规则文本）。三处区域都不参与本层切分：本仓的做法是**就地跳过**——切 `##` 替换尾、切连接符、判 `$n` 行模板、判模板态，四处都只看区外的字符。
 _唯一实现_: 三区探测 `engine/grammar.ts`（`jsBlockEnd` / `putRegionEnd` / `braceRegion`；`jsRegionEnd` 比块形态宽，另含 `@js:` 吃到串尾），消费点 `grammar.parseTails` 与 `parse.splitTop` / `splitElements` / `maskRegions`
 _Avoid_: 转义、豁免区（说「受保护区」）；也别把它读成「先摘出去」——跳过与摘出对 `##` 之外那几轴等价，对「尾在前、js 块在后」的形状不等价，残留登记在矩阵 `a-js-block-after-tail`
 
 **模板态（template mode）**:
-支文本在受保护区**之外**含 `{{…}}` 或 `@get:{…}` 时的文法翻转（对面 SourceRule 的 Mode.Regex）：文本段按字面产出、`@` 不再是段界——对面先插值再谈切分，所以 `最近更新：@get:{time}` 的 `最近更新：` 是字面文本，而不是「白名单之外的段」。
+支文本在受保护区**之外**含 `{{…}}` 或 `@get:{…}` 时的文法翻转：文本段按字面产出、`@` 不再是段界——这一支里插值先于切分，所以 `最近更新：@get:{time}` 的 `最近更新：` 是字面文本，而不是「白名单之外的段」。
 _唯一实现_: 判定与传递 `engine/parse.ts` 的 `ParseCtx.template`（`parseBranch` 设、`splitElements` 与 `classifyDefault` 消费）
-_Avoid_: 与「模板字面段」混称（本词是**整支的文法状态**，那个词是**一段的产物形态**）；也别叫「正则模式」——对面那个名字在这里只是标签，不代表按正则求值
+_Avoid_: 与「模板字面段」混称（本词是**整支的文法状态**，那个词是**一段的产物形态**）；也别叫「正则模式」——本形态不按正则求值，说的是插值先于切分
 
 **AllInOne 行模板（row template）**:
 AllInOne 条目下字段规则的形态：支文本在受保护区**之外**出现 `$\d{1,2}` 时整支是行组引用模板，值 = 用当前行把 `$n` 绑好后的原文，不再按规则解析。
@@ -249,7 +249,7 @@ _Avoid_: 删除、隐藏
 **书源待办（source inbox）**:
 书源管理 tab 的首屏任务面：全库源清单派生出「坏源 / 未验证」两集合，反常置顶成任务卡，任务收尾自动消解。只看状态、不看启停；加载失败不渲染待办（不拿未知当「全部良好」）。
 _唯一实现_: `src/client/source-inbox.ts`（派生；列表头状态带的 未验证/坏源 两维同读这一份，不再各 filter 一遍）+ `src/client/source-inbox-ui.ts`（忽略现场与失效判据）+ `src/client/views/SettingsSection.tsx`（渲染；失效作废挂在「清单落地的那一处」= `reload`，不挂在等人记得调的 effect 上）
-_Avoid_: 舰队快照（黑话，已否决）、状态总览 chips（读数与过滤混杂，已退役）
+_Avoid_: 舰队快照（黑话）、状态总览 chips（读数与过滤混杂）
 
 **换轮（round switch）**:
 搜索观察者发现读面身份已变（快照 `job.id` ≠ 观察中的轮次 id）时的唯一裁决：旧累积整体丢弃、`since=0` 重读新轮基线、旧连接 abort、按新轮重建观察。
@@ -267,7 +267,7 @@ _相关实现_: `services/request.ts` 的 `assembleRequest`（解释选项）、
 _Avoid_: id、url（太泛）
 
 **架位（shelf seat）**:
-书架上的一条记录（一个 `ShelfBook`，界面上一张卡），凭 `bookKey` 认：**同一地址不管从哪家源加进来只落一个架位**，`sourceId` 与 `title` 是这条记录的元数据、不参与查找；一本被两家源各给一个地址就是两个架位、两份进度（「换源保持进度」仍未裁）。「都加架」的三态与回执数的是架位，不数 PUT、也不数行。
+书架上的一条记录（一个 `ShelfBook`，界面上一张卡），凭 `bookKey` 认：**同一地址不管从哪家源加进来只落一个架位**，`sourceId` 与 `title` 是这条记录的元数据、不参与查找；一本被两家源各给一个地址就是两个架位、两份进度（进度不跨源搬）。「都加架」的三态与回执数的是架位，不数 PUT、也不数行。
 _唯一实现_: `services/shelf.ts` 的 `Shelf`（按 `bookKey` 单键认）；客户端算式 `client/search-view-model.ts` 的 `shelfSeats` / `isSeatLanded` / `newlyLandedSeats` / `addAllReceipt`
 _Avoid_: 书架身份（它把上面那条 `bookKey` 的「书籍身份」和这个「架位」压成一句，两键误读就从这里长出来）、座位（本仓的「座位」指宿主的槽位）、光杆一个「条目」（那指一条命中，见「条目装配」；要指架上这条就写全「书架条目」或直接写「架位」）
 
@@ -393,7 +393,7 @@ _Avoid_: 来源字段（那是落盘书目字段的说法）、来源快照（�
 **分类词表（kind vocabulary）**:
 书城那份可看清单的**按源**形状：一个源自己声明了哪些分类标题，按该源声明的原样顺序给、同源内去重。**不造同义词表**（「玄幻」≠「奇幻」是站点的真实分歧），跨源合并同名也不做——浏览轴的这一维是「点名一个源」（裁决见 `ADR-0028`）。
 _唯一实现_: `services/explore.ts` 的 `deriveExploreSources`；跨半形状 `shared/wire.ts` 的 `ExploreSources`
-_Avoid_: 分类目录（那是站点侧的分类，词表是各源自己声明的标题）、分类计数（旧版那份「被多少源声明」的读数随跨源轴一起走了）
+_Avoid_: 分类目录（那是站点侧的分类，词表是各源自己声明的标题）、分类计数（这一维不存在：词表按源声明，不做跨源计数，见 `ADR-0028`）
 
 **wire 契约（wire contract）**:
 `/novel-api` 规范 JSON 的值形状、路由身份（method + path）与**写路由的 body 形状**——Node 半与浏览器半之间的唯一真相，代码只许有一个主人。body 的两半成对住这里（`bodies` 构造器给浏览器半、`readBodies` 读口给 Node 半），键名同理只有一处字面量（`BODY`，与 query 同名的业务键沿用 `PARAMS`）。method 不许在 dispatch 与客户端调用点各写一份：静态路由的 `Route` 与参数操作的 `paramOps.*` 都自带方法，写口只接受 `WriteMethod`（GET 走 `apiGet` / SSE）。
@@ -401,7 +401,7 @@ _唯一实现_: `shared/wire.ts` 的 `Route` / `ROUTES` / `paramOps` / `bodies` 
 _Avoid_: API 文档（文档是它的抄本）、body 校验（形状判据在契约、状态码归传输层）
 
 **缺键投影（missing-key projection）**:
-工具面把空值字段从规范值中整键省略的投影——harness 的 lossless-JSON 约束下的职责，不是 wire 口径。
+工具面把空值字段从规范值中整键省略的投影——工具输出既要能读回又要不撒谎，故刻意与 wire 的 `| null` 口径分歧（裁决见 `ADR-0019`）。
 _唯一实现_: `tools/project.ts`
 _Avoid_: 字段过滤
 
@@ -417,11 +417,11 @@ _Avoid_: 工具描述（模型可见的那段散文是声明的一部分）、�
 
 **语义覆盖矩阵（legado coverage matrix）**:
 「本插件对 legado 书源格式做到哪一步」的唯一读数口：一行一条 legado 语义，归属只能是 实现 / 环境不适用 / 待拍板 三态（不设「未知」）。
-_唯一实现_: `tests/legado-coverage/matrix.ts`（数据）；能力单元清单 `tests/legado-coverage/inventory-coverage.test.ts`
+_唯一实现_: `tests/legado-coverage/matrix.ts`（数据；需求读数绑在各行）；能力单元清单 `tests/legado-coverage/inventory-coverage.test.ts`；面 D 键表 `tests/legado-coverage/demand-keys.ts`
 _Avoid_: 兼容性清单、TODO 表
 
 **环境不适用（not-applicable）**:
-一条 legado 语义被判为**不接**的归属；理由写在该矩阵行的 `note` 里（对面自己没实现的字段也归这里，防止「对面没有」被当成「我们该补」）。
+一条 legado 语义被判为**不接**的归属；理由写在该矩阵行的 `note` 里（「输入里带了那个键，但本仓没有承载它的交互或可配字段」的一族也归这里——登记在册是为了防止以后把「用不上」当成「还欠着」）。
 _Avoid_: 不支持（太泛——没说清是裁决还是欠账）、做不了
 
 **构建期纯度门（bundle purity gate）**:

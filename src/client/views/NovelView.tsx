@@ -62,7 +62,7 @@ export function NovelView(): ReactNode {
               ? <CityView />
               : route.name === 'sources'
                 // 样式层本视图根已注入（`<NovelStyles/>` 在上面），这里显式让位——两处各注一份
-                // 就是 58KB CSS 在 DOM 里出现两遍（SettingsSection 单飞时仍自带，默认 true）
+                // 就是同一份 CSS 在 DOM 里出现两遍（SettingsSection 单飞时仍自带，默认 true）
                 ? <SettingsSection withStyles={false} />
                 : <ShelfView />}
       </div>

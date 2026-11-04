@@ -36,7 +36,7 @@ export class ApiClientError extends Error {
 }
 
 /** 错误展示文案的唯一入口：只翻客户端造的 `NetworkReason`，其余原文返回。
- *  默认 zh 让未接 locale 的调用方（测试 / 老宿主）保持现有中文。 */
+ *  默认 zh 让未接 locale 的调用方（测试 / 宿主未提供 locale 服务）保持现有中文。 */
 export function describeError(error: unknown, t: Translate = zhTranslate): string {
   if (error instanceof ApiClientError && error.reason !== undefined) {
     switch (error.reason) {

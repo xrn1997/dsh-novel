@@ -29,7 +29,7 @@ describe('SourceRegistry', () => {
     expect(must(reg2.get(src.id), 'reg2 里查到的那一条').raw).toEqual(raw)
     expect(must(reg2.get(src.id), 'reg2 里查到的那一条').rules.searchUrl).toBeNull()
   })
-  it('load 的存量收敛写回磁盘：首次 load 后文件已是新形状，二次 load 不再改', async () => {
+  it('load 的存量收敛写回磁盘：首次 load 后文件已是新形状，二次 load 无改动', async () => {
     const dir = await tmp()
     const sourceRaw = {
       bookSourceName: 'A', bookSourceUrl: 'https://a.com', ruleContent: 'x',
@@ -106,8 +106,8 @@ describe('SourceRegistry', () => {
   it('flush 返回后不留挂起的待写：flush 在途期间发生的 edit 也算在内', async () => {
     // 同族约束见 `tests/services/storage.test.ts` 那条 flush 钉子：flush 不能只等「调用那一刻」的写链尾，
     // 否则落在那次写 I/O 期间的 edit 会换成一枚新的
-    // 防抖计时器挂着——进程/测试收尾把数据根删掉之后它才烧，rename 被系统拒绝成为未处理拒绝
-    // （全量门里那种「用例全绿但 exit≠0」的现场）。计时器用 fake 钟**数**出来：不靠 sleep，
+    // 防抖计时器挂着——进程/测试收尾把数据根删掉之后它才烧，rename 被系统拒绝、成为未处理拒绝
+    // （用例全绿而退出码非 0）。计时器用 fake 钟**数**出来：不靠 sleep，
     // 也不给「放宽断言」留余地。
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     try {
@@ -253,7 +253,7 @@ describe('SourceRegistry', () => {
 })
 
 describe('load 内容形态迁移（bookSourceType 编码的存量收敛）', () => {
-  it('raw.bookSourceType=2 的存量源：type 由误标的 text 重推为 image（legado 2=图片）；enabled 不动', async () => {
+  it('raw.bookSourceType=2 的存量源：type 由误标的 text 重推为 image（这份输入格式里 2=图片）；enabled 不动', async () => {
     const dir = await tmp()
     const reg = await SourceRegistry.load(dir)
     await reg.edit((tx) => tx.add(normalizeSource(raw)))
@@ -288,7 +288,7 @@ describe('load 内容形态迁移（bookSourceType 编码的存量收敛）', ()
     const re = pick((await SourceRegistry.load(dir)).list(), 0)
     expect(re.type).toBe('text')
   })
-  it('raw.ruleBookInfo.init 存在而 rules 缺 ruleDetailInit → load 按 raw 重推（init 换根映射的存量收敛——QQ 源真机判别实证：缺键则换根静默不生效、tocUrl 回退 → EmptyToc）', async () => {
+  it('raw.ruleBookInfo.init 存在而 rules 缺 ruleDetailInit → load 按 raw 重推（init 换根映射的存量收敛：缺键则换根静默不生效、tocUrl 回退 → EmptyToc）', async () => {
     const dir = await tmp()
     const reg = await SourceRegistry.load(dir)
     await reg.edit((tx) => tx.add(normalizeSource({
@@ -320,14 +320,14 @@ describe('load 内容形态迁移（bookSourceType 编码的存量收敛）', ()
     await reg.edit((tx) => tx.add(normalizeSource(raw)))
     await reg.edit(() => {
       const s = pick(reg.list(), 0)
-      delete (s.rules as unknown as Record<string, unknown>).ruleExploreKinds   // 模拟本任务之前入库的存量
+      delete (s.rules as unknown as Record<string, unknown>).ruleExploreKinds   // 模拟存量形状：老数据里没有这个键
     })
     await reg.flush()
     expect(pick((await SourceRegistry.load(dir)).list(), 0).rules.ruleExploreKinds).toEqual([])
     expect(pick((await SourceRegistry.load(dir)).list(), 0).rules.ruleExploreKinds).toEqual([])  // 二次 load 幂等
     // 这个夹具是 legado 平铺源、raw 里没有发现面：正确值**就是**空数组（不是「没补出来」）
   })
-  it('原生方言的存量源缺 explore 键 → load 按 raw 的 ruleFind 补推（不是补空数组：本机那唯一原生源 raw 带 14 个 kinds，只补 [] 则书城整个是空的；ruleExploreUrl 同样缺席会让分类抓取一律判规则缺失）', async () => {
+  it('原生方言的存量源缺 explore 键 → load 按 raw 的 ruleFind 补推（不是补空数组：raw 里就带着分类清单，只补 [] 则书城整个是空的；ruleExploreUrl 同样缺席会让分类抓取一律判规则缺失）', async () => {
     const dir = await tmp()
     const reg = await SourceRegistry.load(dir)
     await reg.edit((tx) => tx.add(normalizeSource({
@@ -370,14 +370,14 @@ describe('load 内容形态迁移（bookSourceType 编码的存量收敛）', ()
     expect(rules.ruleExploreUrl).toBe('/manual/{{page}}')                        // 恒覆盖的实现会把它改成 /{{kind}}/{{page}}
     expect(rules.ruleExploreKinds).toEqual([{ title: '玄幻', url: 'xuanhuan' }])
   })
-  it('存量 legado 源在 load 时按 raw 补上发现面；第二次 load 不再改动（幂等，且迁移即落盘）', async () => {
+  it('存量 legado 源在 load 时按 raw 补上发现面；第二次 load 无改动（幂等，且迁移即落盘）', async () => {
     const dir = await tmp()
     const staleRaw = {
       bookSourceName: '甲', bookSourceUrl: 'https://a.com', ruleContent: '@css:#c@text',
       exploreUrl: '玄幻::/xh/{{page}}', ruleExplore: { bookList: '.e@li', name: 'tag.a@text' },
     }
     // 存量形状：发现面十一键**在场但全是空**，而 raw 里有 legado 的 exploreUrl/ruleExplore。
-    // 手写 sources.json 而不是 edit(add)——后者入库的源已带新派生值，造不出这个现场。
+    // 手写 sources.json 而不是 edit(add)——后者入库的源已带新派生值，构造不出这个形状。
     const stale = {
       id: 's1', name: '甲', baseUrl: 'https://a.com', enabled: true, type: 'text',
       groups: [], status: 'unverified', importedAt: 0, raw: staleRaw,
@@ -408,10 +408,10 @@ describe('load 内容形态迁移（bookSourceType 编码的存量收敛）', ()
     const after = await fs.stat(file)
     expect([after.mtimeMs, await fs.readFile(file, 'utf8')]).toEqual([epoch.getTime(), bytesBefore])
   })
-  // ⑥ 的读不许自成 raw 的**第二份**规则解释：只认对象容器、且容器优先于平铺——
-  // 与导入侧（flattenDialect：字符串化容器照解析、平铺优先）在两种形态上分岔。恒覆盖
-  // 于是会把导入侧派生的正确值改写掉（抹成 null 或换成另一处的值），且落盘后看不出来。
-  it('⑥ init 往返：字符串化 ruleBookInfo 容器不被 load 抹成 null', async () => {
+  // load 侧这条补推不许自成 raw 的**第二份**规则解释：只认对象容器、且容器优先于平铺——
+  // 与导入侧（flattenDialect：字符串化容器照解析、平铺优先）在两种形态上分岔。恒覆盖配上这样
+  // 的第二份解释，会把导入侧派生的正确值改写掉（抹成 null 或换成另一处的值），且落盘后看不出来。
+  it('init 往返：字符串化 ruleBookInfo 容器不被 load 抹成 null', async () => {
     const dir = await tmp()
     const reg = await SourceRegistry.load(dir)
     await reg.edit((tx) => tx.add(normalizeSource({
@@ -422,7 +422,7 @@ describe('load 内容形态迁移（bookSourceType 编码的存量收敛）', ()
     await reg.flush()
     expect(pick((await SourceRegistry.load(dir)).list(), 0).rules.ruleDetailInit).toBe('$.data')
   })
-  it('⑥ init 往返：平铺与容器并存时 load 与导入侧同一优先级（平铺优先）', async () => {
+  it('init 往返：平铺与容器并存时 load 与导入侧同一优先级（平铺优先）', async () => {
     const dir = await tmp()
     const reg = await SourceRegistry.load(dir)
     await reg.edit((tx) => tx.add(normalizeSource({
@@ -434,7 +434,7 @@ describe('load 内容形态迁移（bookSourceType 编码的存量收敛）', ()
     await reg.flush()
     expect(pick((await SourceRegistry.load(dir)).list(), 0).rules.ruleDetailInit).toBe('$.flat')
   })
-  it('⑥ 单一读路后恒覆盖是幂等的：已被第二条读路抹成 null 的存量在 load 时按 raw 修复', async () => {
+  it('单一读路让恒覆盖幂等：ruleDetailInit 被写坏成 null 的存量在 load 时按 raw 修复', async () => {
     const dir = await tmp()
     const reg = await SourceRegistry.load(dir)
     await reg.edit((tx) => tx.add(normalizeSource({
@@ -450,7 +450,7 @@ describe('load 内容形态迁移（bookSourceType 编码的存量收敛）', ()
     expect(re.rules.ruleDetailInit).toBe('$.data')
     expect(pick((await SourceRegistry.load(dir)).list(), 0).rules.ruleDetailInit).toBe('$.data')  // 二次 load 幂等
   })
-  it('存量 rules 缺 bookUrlPattern 而 raw 带值 → load 按 raw 重推（详情页嗅探是后来才读的字段：不重推则 27 个声明了它的源照旧只跑列表规则）', async () => {
+  it('存量 rules 缺 bookUrlPattern 而 raw 带值 → load 按 raw 重推（不重推则声明了它的源照旧只跑列表规则，嗅探形同没写）', async () => {
     const dir = await tmp()
     const reg = await SourceRegistry.load(dir)
     await reg.edit((tx) => tx.add(normalizeSource({
@@ -465,7 +465,7 @@ describe('load 内容形态迁移（bookSourceType 编码的存量收敛）', ()
     expect(pick((await SourceRegistry.load(dir)).list(), 0).rules.bookUrlPattern)
       .toBe('https://sniff\\.example\\.com/book/\\d+/')
   })
-  it('存量 rules 缺 kind/wordCount 四键 → load 按 raw 补推（审计真机读数：不补则已入库的源到货率恒为 0）', async () => {
+  it('存量 rules 缺 kind/wordCount 四键 → load 按 raw 补推（不补则已入库的源在分类与字数面恒为空）', async () => {
     const dir = await tmp()
     const reg = await SourceRegistry.load(dir)
     await reg.edit((tx) => tx.add(normalizeSource({

@@ -57,7 +57,7 @@ async function captureWarn(run: () => Promise<void>): Promise<string[]> {
 }
 
 describe('fetchSearchPage 的 bookUrlPattern 判定', () => {
-  it('落地地址整串命中 pattern → info 形态（via pattern），列表规则不参与（对面命中即 return）', async () => {
+  it('落地地址整串命中 pattern → info 形态（via pattern），列表规则不参与（命中即 return）', async () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage(DETAIL_BODY) })
     const r = await fetchSearchPage(src({
       searchUrl: `${BASE}/book/123/`, bookUrlPattern: 'https://s\\.com/book/\\d+/',
@@ -67,33 +67,33 @@ describe('fetchSearchPage 的 bookUrlPattern 判定', () => {
     expect(r.via).toBe('pattern')
     expect(r.body).toBe(DETAIL_BODY)
   })
-  it('部分命中不算命中（Kotlin matches = 整串；缺尾锚不许当成详情页）', async () => {
+  it('部分命中不算命中（pattern 是整串匹配；缺尾锚不许当成详情页）', async () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage(LIST_BODY) })
     const r = await fetchSearchPage(src({ bookUrlPattern: 'https://s\\.com/search' }), '书', fakeSourceRequest(f))
     expect(r.ok && r.shape).toBe('list')
     if (!r.ok || r.shape !== 'list') return
     expect(r.contexts).toHaveLength(2)
   })
-  it('命中判定用**落地地址**（重定向后的 res.url，与对面 baseUrl=res.url 同口径）', async () => {
+  it('命中判定用**落地地址**（重定向后的 res.url）', async () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage(DETAIL_BODY, `${BASE}/book/123/`) })
     const r = await fetchSearchPage(src({ bookUrlPattern: 'https://s\\.com/book/\\d+/' }), '书', fakeSourceRequest(f))
     expect(r.ok && r.shape).toBe('info')
   })
-  it('列表 0 条 + 无 pattern → info 回落（via empty-list，对面「列表为空,按详情页解析」）', async () => {
+  it('列表 0 条 + 无 pattern → info 回落（via empty-list，空列表才回落）', async () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage('<html><body>无结果</body></html>') })
     const r = await fetchSearchPage(src(), '书', fakeSourceRequest(f))
     expect(r.ok && r.shape).toBe('info')
     if (!r.ok || r.shape !== 'info') return
     expect(r.via).toBe('empty-list')
   })
-  it('列表 0 条 + pattern 未命中 → 仍 0 条，不再回落详情页（对面守卫是 bookUrlPattern.isNullOrEmpty）', async () => {
+  it('列表 0 条 + pattern 未命中 → 仍 0 条，不再回落详情页（回落只守在「未声明 pattern」那一侧）', async () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage('<html><body>无结果</body></html>') })
     const r = await fetchSearchPage(src({ bookUrlPattern: 'https://s\\.com/x/\\d+' }), '书', fakeSourceRequest(f))
     expect(r.ok && r.shape).toBe('list')
     if (!r.ok || r.shape !== 'list') return
     expect(r.contexts).toEqual([])
   })
-  it('缺 ruleBookList 不再是 RuleMissing（对面 getElements("") = 空列表 → 详情回落）', async () => {
+  it('缺 ruleBookList 不再是 RuleMissing（空规则得空列表 → 详情回落）', async () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage(DETAIL_BODY) })
     const r = await fetchSearchPage(src({
       searchUrl: `${BASE}/book/123/`, ruleBookList: undefined, bookUrlPattern: undefined,
@@ -126,7 +126,7 @@ describe('fetchSearchPage 的 bookUrlPattern 判定', () => {
     })
     expect(warns.join('\n')).toMatch(/bookUrlPattern/)
   })
-  it('info 的 bookUrl：未重定向 = 代入后的模板**含 `,{option}`**（对面 ruleUrl）', async () => {
+  it('info 的 bookUrl：未重定向 = 代入后的模板**含 `,{option}`**（ruleUrl 照样拼进去）', async () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage(DETAIL_BODY) })
     const r = await fetchSearchPage(src({
       searchUrl: `${BASE}/search?q={{key}},{"method":"POST","body":"s=1"}`,
@@ -136,7 +136,7 @@ describe('fetchSearchPage 的 bookUrlPattern 判定', () => {
     if (!r.ok || r.shape !== 'info') return
     expect(r.bookUrl).toBe(`${BASE}/search?q=%E4%B9%A6,{"method":"POST","body":"s=1"}`)
   })
-  it('info 的 bookUrl：重定向 = 落地地址（对面 isRedirect 分支）', async () => {
+  it('info 的 bookUrl：重定向 = 落地地址（重定向后不回头拼模板）', async () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage(DETAIL_BODY, `${BASE}/book/123/`) })
     const r = await fetchSearchPage(src({ bookUrlPattern: 'https://s\\.com/book/\\d+/' }), '书', fakeSourceRequest(f))
     expect(r.ok && r.shape).toBe('info')
@@ -194,7 +194,7 @@ const PATTERN_SRC = {
   ruleContent: '@css:#content@textNodes',
 }
 
-describe('searchOne 的 info 形态命中（对面 getInfoItem）', () => {
+describe('searchOne 的 info 形态命中（嗅探命中后按详情面组装一条书目）', () => {
   it('一条命中：字段走 ruleDetail*（不是搜索条目规则），封面按落地地址绝对化', async () => {
     const { svc, id } = await makeSvc(PATTERN_SRC)
     const groups = await svc.search('书', { sourceIds: [id] })
@@ -209,7 +209,7 @@ describe('searchOne 的 info 形态命中（对面 getInfoItem）', () => {
     expect(hit.coverUrl).toBe(`${BASE}/img/jl.jpg`)
     expect(hit.url).toBe(`${BASE}/book/123/`)
   })
-  it('未重定向 → 书地址带 `,{option}`（对面 getAbsoluteURL(url, ruleUrl)：POST 源的选项即身份）', async () => {
+  it('未重定向 → 书地址带 `,{option}`（绝对化时保留选项段：POST 源的选项即身份）', async () => {
     const { svc, id } = await makeSvc({
       ...PATTERN_SRC,
       searchUrl: `${BASE}/book/123/?q={{key}},{"method":"POST","body":"s=1"}`,
@@ -218,7 +218,7 @@ describe('searchOne 的 info 形态命中（对面 getInfoItem）', () => {
     const groups = await svc.search('书', { sourceIds: [id] })
     expect(pick(pick(groups, 0).hits, 0).url).toBe(`${BASE}/book/123/?q=%E4%B9%A6,{"method":"POST","body":"s=1"}`)
   })
-  it('详情书名为空 → 0 命中（对面 book.name.isNotBlank() 才收），不报错', async () => {
+  it('详情书名为空 → 0 命中（书名非空才收），不报错', async () => {
     const { svc, id } = await makeSvc({ ...PATTERN_SRC, ruleDetailName: '@css:#nosuch@text' })
     const groups = await svc.search('书', { sourceIds: [id] })
     expect(pick(groups, 0).error).toBeUndefined()
@@ -235,7 +235,7 @@ describe('searchOne 的 info 形态命中（对面 getInfoItem）', () => {
     expect(pick(group.hits, 0).title).toBe('剑来')
     expect(pick(group.hits, 0).url).toBe(`${BASE}/book/123/`)
   })
-  it('回落遇上 init 零命中 → 0 命中而不是搜索错误（对面 setContent(null) 后就没书目；把空结果升级成整源失败是真机抓回的回退）', async () => {
+  it('回落遇上 init 零命中 → 0 命中而不是搜索错误（详情面取空就没有书目；把空结果升级成整源失败是回退）', async () => {
     const { svc, id } = await makeSvc({
       ...PATTERN_SRC,
       searchUrl: `${BASE}/search?q={{key}}`, bookUrlPattern: undefined,

@@ -50,7 +50,7 @@ describe('NovelView smoke（renderToString 不炸——数据获取在 effect，
     expect(html).not.toContain('data-novel-dropzone')                // 弹层默认关闭（低频任务不常驻占版面）
     expect(html).not.toContain('data-novel-status-bar')              // 空闲零占用：无条目时全局状态条整体不渲染
   })
-  it('§5.4 风格统一：原生 file input 隐藏（拖放区点击触发，不裸露原生控件）', () => {
+  it('风格统一：原生 file input 隐藏（拖放区点击触发，不裸露原生控件）', () => {
     const paneHtml = renderToString(createElement(ImportPane, {
       job: null, refresh: () => {}, unverifiedCount: 0, onVerifyUnverified: () => {},
     }))
@@ -70,7 +70,7 @@ describe('NovelView smoke（renderToString 不炸——数据获取在 effect，
     expect(html).not.toContain('data-novel-inbox')               // sources 未加载：待办不渲染（不拿未知当「全部良好」）
     expect(html).not.toContain('data-novel-section-toggle')      // 无手风琴：区块不做折叠开关
   })
-  it('IA：列表级操作在表格之前——长列表下表格之下摸不着（2026 改版：操作收进列表头）', () => {
+  it('IA：列表级操作在表格之前——长列表下表格之下摸不着（操作收进列表头）', () => {
     const html = renderToString(createElement(SettingsSection))
     const atTable = html.indexOf('class="novel-table"')
     expect(atTable).toBeGreaterThan(-1)
@@ -82,8 +82,8 @@ describe('NovelView smoke（renderToString 不炸——数据获取在 effect，
     expect(html).toContain('data-novel-style')
     expect(html).toContain('.novel-btn')
   })
-  it('状态条不吃布局（闪烁修复）：条身 absolute、锚是铺满视口的常驻层（默认 click-through）', () => {
-    // 状态条不许吃布局：条身 absolute，锚是铺满视口的常驻层——启停不得顶动区块（真机逐帧实测过跳动）
+  it('状态条不吃布局：条身 absolute、锚是铺满视口的常驻层（默认 click-through）', () => {
+    // 状态条不许吃布局：条身 absolute，锚是铺满视口的常驻层——启停不得顶动区块。
     expect(NOVEL_CSS).toMatch(/\.novel-status-bar\s*\{[^}]*position:\s*absolute/)
     expect(NOVEL_CSS).toMatch(/\.novel-shell-status\s*\{[^}]*pointer-events:\s*none/)
     expect(NOVEL_CSS).toMatch(/\.novel-shell-status \.novel-status-bar\s*\{[^}]*pointer-events:\s*auto/)
@@ -94,7 +94,7 @@ describe('NovelView smoke（renderToString 不炸——数据获取在 effect，
     expect(html).toContain('data-novel-style')
     expect(html).toContain('.novel-btn')
   })
-  it('样式层恰一条：书源管理 tab 不再同树注两遍（SettingsSection 单飞时仍自带）', () => {
+  it('样式层恰一条：书源管理 tab 同树只注一条（SettingsSection 单飞时仍自带）', () => {
     const count = (s: string): number => (s.match(/data-novel-style/g) ?? []).length
     routeStore.set({ route: { name: 'sources' } })
     expect(count(renderToString(createElement(NovelView)))).toBe(1)   // 宿主根注入，子组件让位
@@ -102,7 +102,7 @@ describe('NovelView smoke（renderToString 不炸——数据获取在 effect，
     expect(count(renderToString(createElement(NovelView)))).toBe(1)
     expect(count(renderToString(createElement(SettingsSection)))).toBe(1)  // 离开宿主仍自足
   })
-  it('布局修复：根容器是 flex 列布局（视图区 flex:1——此前被 height:100% 挤出视口）', () => {
+  it('根容器是 flex 列布局（视图区 flex:1——height:100% 会把视图挤出视口）', () => {
     routeStore.set({ route: { name: 'shelf' } })
     const html = renderToString(createElement(NovelView))
     expect(html).toContain('data-novel-root')
@@ -111,16 +111,16 @@ describe('NovelView smoke（renderToString 不炸——数据获取在 effect，
     expect(css).toContain('.novel-root')                  // 样式串含 flex 列定义
     expect(css).toContain('flex-direction: column')
   })
-  it('阅读器：不放开 overflow——.novel-main 自己是 scrollport（放开曾致整条宿主链没人滚）', () => {
+  it('阅读器：不放开 overflow——.novel-main 自己是 scrollport（放开就没有滚的容器）', () => {
     routeStore.set({ route: { name: 'reader', sourceId: 's', bookKey: 'k', title: 'T' } })
     const html = renderToString(createElement(NovelView))
     expect(html).toContain('data-novel-view="reader"')
-    // 回归钉子：宿主链 centerCol/frame 双 overflow:hidden、链上无 scrollport，
+    // 回归钉子：宿主链上的层都不滚（overflow 收着），链里没有 scrollport，
     // `.novel-main` 自己是唯一的滚动容器；放开 :has 规则即滚轮无效。
     expect(NOVEL_CSS).not.toContain('.novel-root:has([data-novel-view="reader"])')
     expect(NOVEL_CSS).not.toContain('.novel-main:has([data-novel-view="reader"])')
   })
-  it('阅读器：未载章节不进 DOM（旧实现渲染 912 个占位块 → scrollHeight 被撑成整本书高，预取判据失效）', () => {
+  it('阅读器：未载章节不进 DOM（渲染占位块会把 scrollHeight 撑成整本书高，预取判据随之失效）', () => {
     routeStore.set({ route: { name: 'reader', sourceId: 's', bookKey: 'k', title: 'T' } })
     const html = renderToString(createElement(NovelView))
     expect(html).toContain('目录加载中…')                    // 目录未到：不渲染任何章块，也不渲染哨兵
@@ -140,7 +140,7 @@ describe('NovelView smoke（renderToString 不炸——数据获取在 effect，
     expect(NOVEL_CSS).toContain('~ [data-width-handle] { display: none; }')   // 兄弟（~）而非后代：chat 视图的把手照旧
     expect(NOVEL_CSS).not.toContain(']) [data-width-handle]')             // 不是后代选择器：chat 视图的把手照旧可见可拖
   })
-  it('tab 栏已退役', () => {
+  it('没有独立的 tab 栏（导航只有顶部三 tab）', () => {
     routeStore.set({ route: { name: 'shelf' } })
     const html = renderToString(createElement(NovelView))
     expect(html).not.toContain('data-novel="tabbar"')
@@ -151,7 +151,7 @@ describe('NovelView smoke（renderToString 不炸——数据获取在 effect，
     expect(html).toContain('data-novel-search-progress')
   })
   it('未知 route 兜底 shelf', () => {
-    // 域外的名字只可能来自旧 persisted 现场（store 是内存态，不落盘；这里模拟越域值）：
+    // 域外的名字只可能是越域输入（store 是内存态，不落盘；这里模拟的就是这一枚越域值）：
     // ViewRoute 是闭合联合，故这一次断言必须越过类型面——兜底分支正是为它存在的。
     routeStore.set({ route: { name: 'nonexistent' } as never })
     expect(renderToString(createElement(NovelView))).toContain('data-novel-view="shelf"')

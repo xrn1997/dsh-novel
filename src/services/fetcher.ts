@@ -35,7 +35,7 @@ export interface FetcherOptions {
   /** 出站代理（见 services/proxy.ts：Node 的 fetch 不读系统代理）；null / '' / direct = 直连。
    *  可以是活 getter——每次请求前读当前值，配置页改了代理不必重建 fetcher。 */
   proxyUrl?: ValueSource<string | null>
-  /** 域/路径感知的 cookie jar（跨源共享，上游 CookieStore 同粒度）：请求缺省带同一 host/path
+  /** 域/路径感知的 cookie jar（一张表跨源共享，按域/路径粒度）：请求缺省带同一 host/path
    *  的 cookie，响应 Set-Cookie 自动落库。显式 Cookie 头优先（源规则/auth 合并后的头照旧占优）。
    *  jar 在构造时给；门面只读不再写回（见 reading.from）。 */
   cookieJar?: CookieJar
@@ -54,7 +54,7 @@ export interface FetchInit {
   timeoutMs?: number
   /** HEAD 探测姿态：redirect:'manual' 且非 2xx 不抛——要的就是 3xx 的状态与头（`java.head`） */
   manual?: boolean
-  /** 不跟重定向但 >=400 仍抛（`java.get` 的 jsoup followRedirects(false) 口径） */
+  /** 不跟重定向但 >=400 仍抛（`java.get` 走这一姿态；钉子见 `tests/services/fetcher.test.ts`） */
   noFollow?: boolean
   /** 规则 URL 选项声明的 charset（`fetchInitOf` 带入；loginCheckJs 读原页时按它解码） */
   declaredCharset?: string
@@ -87,8 +87,8 @@ export interface Fetcher {
 type FetchImplInit = RequestInit & { dispatcher?: unknown }
 type FetchLike = (url: string, init?: FetchImplInit) => Promise<Response>
 
-/** 出站默认耐心（缺省 15s）。**这个数是唯一主人**：缺省装配处 `src/config.ts` 的 schema `.default()`
- *  与 reading.from() 的回退都引它——多请求目录脚本一轮要连打数个请求，窄超时必炸，缺省给得比一般 HTTP 客户端宽。 */
+/** 出站默认耐心。**本常量是缺省值的唯一主人**：缺省装配处 `src/config.ts` 的 schema `.default()`
+ *  与 reading.from() 的回退都引它——多请求目录脚本一轮要连打数个请求，窄超时必炸，所以缺省给得宽。 */
 export const DEFAULT_TIMEOUT_MS = 15_000
 const CHARSET_RE = /charset=([^;\s"']+)/i
 /** 嗅探用：`<meta charset=…>`（HTML5）与 `<meta http-equiv content="…charset=…">`（遗留形态） */
@@ -131,7 +131,7 @@ export function effectiveUserAgent(source: Pick<NovelSource, 'rules' | 'auth'>):
 /**
  * 出站头合并单点：缺省头打底，调用方声明同名头时**按大小写不敏感的同一性覆盖**。
  * 裸 `{...DEFAULT_HEADERS, ...init}` 会让 `user-agent` 与缺省 `User-Agent` 并存，undici 把重名
- * 合成一条 `"默认, 源"` 的畸形头（本机实测：服务端收到 `user-agent: "DEFAULT, SOURCE"`），
+ * 合成一条 `"默认, 源"` 的畸形头（钉子：`tests/services/fetcher.test.ts` 的「两键并存会合成畸形头」那组），
  * 源声明的 UA / Accept 就此失效——比覆盖更坏。同表内的重名（如 auth 声明的 `cookie`）同样归并。
  */
 function mergeHeaders(init?: Record<string, string>): Record<string, string> {
@@ -223,7 +223,7 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
             timeout,
           ])
           // 守门口径：缺省非 2xx 即 FetchError；manual（HEAD 探测——看的就是 3xx 的 Location）放行；
-          // noFollow（java.get）只放行 3xx，>=400 照 jsoup 的 execute() 抛；allowError 把最终错误页
+          // noFollow（java.get）只放行 3xx，>=400 仍抛；allowError 把最终错误页
           // 交给 loginCheckJs 先看正文，补抛由源请求缝在「脚本没替换」时做。
           const failed = init?.manual === true ? false : init?.noFollow === true ? res.status >= 400 : !res.ok
           if (failed) {
@@ -251,7 +251,7 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
           }
         } catch (e) {
           if (e instanceof FetchError) {
-            // 上游 retry 只作用于「拿到响应但状态码不成功」；无 status 的网络/超时错直接抛
+            // retry 只作用于「拿到响应但状态码不成功」；无 status 的网络/超时错直接抛
             if (e.status !== undefined && attempt < attempts) continue
             throw e
           }
@@ -284,7 +284,7 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
  * → ③ 兜底 UTF-8。声明的 charset 解不出 → DecodeError（宁可报错，不拿乱码冒充正文）。
  */
 export function decodeBody(page: FetchedPage, declaredCharset?: string): string {
-  // 空串声明（`charset=` 空值，真实源存在）视为缺位，走后续嗅探链而不是必炸。
+  // 空串声明（`charset=` 空值这一形态）视为缺位，走后续嗅探链而不是必炸。
   // 被 loginCheck 替换过的正文是按 UTF-8 重编码的，声明的 charset（如 GBK 源）对它不成立——
   // 用声明值解会把替换正文解成乱码；此时按 page.charset（替换时置 utf-8）走。
   const declared = page.replaced === true ? undefined : declaredCharset

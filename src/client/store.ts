@@ -1,7 +1,5 @@
-/** 平台的 dsh-client-store 刻意不用（宿主实测裁决）：它是 immer+rafFlush+persist
- *  的组合态引擎、且 hook 合成权在 ui-renderer 的 owner props（模块头注「NO selector hook」）。
- *  本仓的客户端本地 store 是 get/set(patch)/subscribe 小面 + 一个 uSES 桥，换引擎是语义搬家
- *  不是删抄本；rafFlush 还会改通知时机，tests/client 的行为网要整体重验。 */
+/** 本仓的客户端本地 store 只要 get/set(patch)/subscribe 三原语与稳定通知时机，
+ *  通知时机由 tests/client 的行为网钉住；自己持表而不是接宿主的 store 引擎，裁决见 `ADR-0055`。 */
 import { useSyncExternalStore } from 'react'
 import { ls } from './util.js'
 
@@ -48,12 +46,10 @@ export function navigate(route: ViewRoute): void { routeStore.set({ route }) }
 // ── 阅读偏好（localStorage 持久；进度不进 prefs——进度归服务端 shelf）──────
 
 export interface Prefs { fontSize: number; lineHeight: number; measure: number; paperColor: string; darkController: boolean }
-/** measure = 正文列宽（em，随字号缩放）——36em ≈ 中文 36 字/行，是舒适区上沿；
+/** measure = 正文列宽（em，随字号缩放）——宽窄档位的口径与设计意图住 prefs-ui.ts；
  *  它是「值槽」的实际值：行内只写 --novel-measure，规则住在样式层（同 --novel-pct 一路）。 */
 export const DEFAULT_PREFS: Prefs = { fontSize: 18, lineHeight: 1.8, measure: 36, paperColor: '#f7f3e8', darkController: false }
 const PREFS_KEY = 'dsh-novel.prefs'
-
-// ls（localStorage guard）已迁 util.ts（它不是 store 的一部分）
 
 function loadPrefs(): Prefs {
   try {

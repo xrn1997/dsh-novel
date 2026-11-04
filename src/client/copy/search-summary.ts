@@ -19,7 +19,7 @@ export interface SummarySegment { text: string; emphasis?: boolean }
  *  计数拆成「数字段 + 单位段」：只有数字进 emphasis（answered 与 relevant 不加粗）；
  *  failed 子句无条件出现（`0 家未响应` 也是结论）。
  *  已知限制：relevant 子句键自带前导 `，` / `, `（住 `search.ts`），这是当前两语种共享的标点假设；
- *  换用别的标点形态的语种要先裁一次键形，不在本次范围内改。 */
+ *  换用别的标点形态的语种要先裁一次键形。 */
 export function searchSummarySegments(t: Translate, c: SearchSummaryCounts): SummarySegment[] {
   const unit = (n: number, one: CopyKey, other: CopyKey): string =>
     ` ${plural(t, n, one, other, { n })}`

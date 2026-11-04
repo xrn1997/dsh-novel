@@ -35,7 +35,7 @@ export interface JsHost {
   /** searchUrl @js 形态：搜索关键词与页码（沙箱全局变量 key/page） */
   key?: string
   page?: number
-  /** 源静态 header 的 JSON 串（真实源 `JSON.parse(source.header)` 的形态） */
+  /** 源静态 header 的 JSON 串（输入脚本有 `JSON.parse(source.header)` 的形态） */
   header?: string
   console?: { log: (...a: unknown[]) => void; error: (...a: unknown[]) => void }
 }
@@ -165,7 +165,7 @@ function unhandledGuardHandler(reason: unknown): void {
   // 引擎错误类与泄漏的正则死线中继错误都来自插件自己的代码（不是脚本的 fire-and-forget）：升级到
   // error，否则真 bug 与脚本噪声同档，进程级信号被 warn 淹没。RegexDeadlineError 本该被每个
   // 调用点就地转译（归属裁决见 engine/errors.ts），漏转到这里就是插件 bug——不许顶着
-  // 「沙箱脚本产生」的标签混进 warn 档。没 error 通道的旧 sink 退 warn，标签照实不改口。
+  // 「沙箱脚本产生」的标签混进 warn 档。没有 error 通道的 sink 退 warn 档，标签照实不改口。
   if (isEngineError(reason) || reason instanceof RegexDeadlineError) {
     if (guardSink.error !== undefined) {
       guardSink.error('未处理的 rejection（插件内部错误，已捕获）:', reason)
@@ -352,14 +352,14 @@ const BOOTSTRAP = `;(function (g) {
   }
 ${asyncBridgeSource()}
   // ── Packages.*（书源脚本里的 Java 包路径仿真）─────────────────────
-  // 真实源正文解密链用它组织 JVM/Android 类调用。重活（PNG 解码、AES、HMAC、charset 解码）走宿主
+  // 重活（PNG 解码、AES、HMAC、charset 解码）走宿主
   // 调用 __pkg.*（JSON 序列化边界，与 __elem.* 同款纪律）；轻活（流/数组/包装）留在 vm realm 纯 JS。
   // 未知路径 → 如实报「不支持」。
   const pkgCall = function (op, payload) {
     try { return JSON.parse(call('__pkg.' + op, ser(payload))) } catch (e) { throw new Error(msg(e)) }
   }
   // CookieManager/CookieStore 读的是**请求层同一张 jar**（域/路径感知、Set-Cookie 自动落库）——
-  // 不是上面按源隔离的 cookie 垫片；上游这两个类搬的就是引擎的 CookieStore。
+  // 不是上面按源隔离的 cookie 垫片；这两个包路径在沙箱里挂的也是引擎的 CookieStore。
   const cookieJarGet = function (u) {
     var v = pkgCall('cookieGet', { url: String(u) })
     return v === '' ? null : v
@@ -438,7 +438,7 @@ ${asyncBridgeSource()}
   }
   g.Packages = {
     // Packages.org.jsoup.Jsoup.parse(html)：脚本里的 Java 包路径写法，与下方 g.org.jsoup.Jsoup.parse
-    // 同一份实现（脚本两种写法在真实源里都有；BOOTSTRAP 是模板字符串，注释里不能出现反引号）。
+    // 同一份实现（脚本两种写法在输入里都有；BOOTSTRAP 是模板字符串，注释里不能出现反引号）。
     org: { jsoup: { Jsoup: { parse: function (html) { return mkElem(String(html)) } } } },
     java: {
       net: {
@@ -469,12 +469,12 @@ ${asyncBridgeSource()}
           const s = JSON.parse(callHost('__pkg.b2s', ser({ bytes: bytes, charset: charset || 'UTF-8' })))
           return { toString: function () { return s }, valueOf: function () { return s } }
         },
-        // 海棠搜书 loginUrl 的延迟检测用它取时间戳；vm 内 Date 与宿主时钟同源
+        // 登录面脚本的延迟检测形态用它取时间戳；vm 内 Date 与宿主时钟同源
         System: { currentTimeMillis: function () { return Date.now() } },
       },
       util: {
         Arrays: {
-          // Java copyOfRange 语义（负索引从尾数、越长补 0）——脚本用 (0,48)/(48,len) 两形态
+          // copyOfRange 语义（负索引从尾数、越长补 0）——脚本用 (0,48)/(48,len) 两形态
           copyOfRange: function (arr, from, to) {
             const n = arr.length
             let f = from | 0, t = (to === undefined ? n : to) | 0
@@ -520,7 +520,7 @@ ${asyncBridgeSource()}
             const a = String(algo)
             if (!/^HmacSHA(1|256|512)$/.test(a)) throw new Error('不支持的 Mac 算法：' + algo)
             const st = { key: null, parts: [] }
-            // Java 的 Mac 契约：update(byte[]) 累加、update(byte) 追加单字节、doFinal() 结算后复位、
+            // Mac 契约：update(byte[]) 累加、update(byte) 追加单字节、doFinal() 结算后复位、
             // doFinal(input) ≡ update(input) + doFinal()。认不出的字节载荷形态如实抛，不静默丢弃
             // 不要静默丢弃：丢弃会产出零字节签名，站点拒给空/乱正文，是静默错值而不是报错。
             const push = function (v) {
@@ -556,7 +556,7 @@ ${asyncBridgeSource()}
       graphics: {
         BitmapFactory: {
           // PNG 解码全在宿主（node:zlib）；bitmap 包装对象持像素数组，getPixel 纯 vm 内取——
-          // ARGB int 位移语义与 Java int 一致（脚本 (rgb>>16)&0xFF 取 R 通道成立）
+          // ARGB int 用 32 位有符号位移语义（脚本 (rgb>>16)&0xFF 取 R 通道成立）
           decodeStream: function (src) {
             const bytes = src && src._bytes ? src._bytes : src
             const r = pkgCall('png', { bytes: bytes })
@@ -573,8 +573,8 @@ ${asyncBridgeSource()}
         },
       },
       // Packages.android.util.Base64.decode(text, flags) → 字节组。解码复用协议表里的
-      // base64DecodeToByteArray（单一实现）。flags 在这里不构成可观测分支；与上游解码器的偏离与
-      // 判据见 tests/engine/legado-gaps.test.ts 的 E-4，别在这儿再写一份判据。
+      // base64DecodeToByteArray（单一实现）。flags 在这里不构成可观测分支；偏离与判据见
+      // tests/engine/legado-gaps.test.ts 的 E-4，别在这儿再写一份判据。
       util: {
         Base64: { decode: sync('base64DecodeToByteArray') },
       },
@@ -594,7 +594,7 @@ ${asyncBridgeSource()}
                 setCookie: cookieJarSet,
               },
               // 登录校验脚本的响应替换形态：new Packages.io.legado.app.help.http.StrResponse(url, body)
-              // （爱丽丝书屋/点众阅读/聚合书库）。两端契约是 login-check 认的 __host:'response' + __data。
+              // （输入脚本有这一写法）。两端契约是 login-check 认的 __host:'response' + __data。
               StrResponse: function (url, body) {
                 this.__host = 'response'
                 this.__data = {
@@ -617,7 +617,7 @@ ${asyncBridgeSource()}
       },
     },
   }
-  // 未知包路径**如实点名**（上游 Rhino 的 Packages 是惰性命名空间：取到名字不炸、用到才炸——本代理同语义）。
+  // 未知包路径**如实点名**（Packages 是惰性命名空间：取到名字不炸、用到才炸——本代理按此口径同语义）。
   // 未实现路径必须点名到包路径：普通对象字面量会取到 undefined → 抛裸 TypeError，既说不清是哪条
   // 包路径，也不在审计归因的任何锚点里。
   // 注意：本段是 BOOTSTRAP 模板字符串的一部分——注释里不许出现反引号与美元花括号。
@@ -658,7 +658,7 @@ ${asyncBridgeSource()}
   ].forEach(function (pair) {
     if (pair[1] !== null && pair[1] !== undefined) pair[1].__pkgPath = pair[0]
   })
-  // Rhino 的 JavaImporter / importPackage / loadClass：只注入已挂载的 Packages 路径。
+  // JavaImporter / importPackage / loadClass：只注入已挂载的 Packages 路径。
   // with (Importer) 依赖 sloppy 作用域（书源脚本按 sloppy 执行），作用域对象就是本函数返回的普通对象。
   const pkgAt = function (path) {
     var obj = g.Packages
@@ -686,7 +686,7 @@ ${asyncBridgeSource()}
     var s = JavaImporter(p)
     for (var k in s) g[k] = s[k]
   }
-  // Rhino 的 importClass 把类绑到当前作用域的简单名（不是只把类原样返回）。Java 类名首字母
+  // importClass 把类绑到当前作用域的简单名（不是只把类原样返回）。Packages 里的类名首字母
   // 大写、包名不是——这里只收已挂载的类；包路径与未挂载路径如实拒绝/留给惰性代理点名。
   g.importClass = function (cls) {
     var path = cls && cls.__pkgPath
@@ -705,8 +705,8 @@ ${asyncBridgeSource()}
       try { call(kind, ser([].slice.call(arguments))) } catch (e) {}
     }
   }
-  // ── 元素包装对象（jsoup Element/Elements 的最小仿真）──────────────
-  // 真实源 result.attr('href')、result.select('.x').first().text()、java.getElements(r).toArray()
+  // ── 元素包装对象（脚本侧 Element/Elements 表面的最小仿真）──────────────────
+  // 输入脚本有 result.attr('href')、result.select('.x').first().text()、java.getElements(r).toArray()
   // 等形态：String 对象包装（字符串方法照常可用：match/replace/indexOf/模板串），
   // 属性/文本/选择器方法经 __elem.* 宿主调用（cheerio 求值，同步桥）。
   const elemOps = function (op, payload) {
@@ -718,8 +718,8 @@ ${asyncBridgeSource()}
   const wrapElems = function (arr, owner) {
     const out = []
     for (let i = 0; i < arr.length; i++) out.push(mkElem(String(arr[i])))
-    // 集合助手挂成**不可枚举**：上游 result.toArray() 给的是数组、for (i in list) 只遍历下标；
-    // 真源 toc 模板正是 for-in 形态，可枚举的助手会被当元素遍历（list[i].text is not a function）。
+    // 集合助手挂成**不可枚举**：按脚本侧的集合 API，result.toArray() 给的是数组、for (i in list) 只遍历下标；
+    // toc 模板脚本正是 for-in 形态，可枚举的助手会被当元素遍历（list[i].text is not a function）。
     // （BOOTSTRAP 是模板字符串，注释里不能出现反引号。）
     const all = function () { return mkElem(out.join('\\n')) }   // 聚合口径共用元素桥（attr=首个、text=拼接）
     const helpers = {
@@ -730,7 +730,7 @@ ${asyncBridgeSource()}
       first: function () { return out.length > 0 ? out[0] : mkElem('') },
       last: function () { return out.length > 0 ? out[out.length - 1] : mkElem('') },
       each: function (fn) { for (var i = 0; i < out.length; i++) fn(out[i], i); return out },
-      // jsoup Elements 的聚合读法：attr/text/html/select 走整段拼接后的元素桥
+      // 脚本侧 Elements 的聚合读法：attr/text/html/select 走整段拼接后的元素桥
       attr: function (n) { return all().attr(n) },
       text: function () { return all().text() },
       html: function () { return out.length > 0 ? out[0].html() : '' },
@@ -804,8 +804,8 @@ ${asyncMountSource()}
   // 同步方法名单从协议表派生（js-protocol.SANDBOX_MOUNTS，经 __init__ 注入）——
   // 加一个 java 方法只改表一行（async 行另带 bridge），此处零改动；async 行不走 sync()，不在名单内
   d.mounts.javaSync.forEach(function (n) { g.java[n] = sync(n) })
-  // java.get 双形态：单参 = 源变量 getter（同步名单）；双参 = HTTP GET（上游
-  // JsExtensions.get(url, headers) 返回 Connection.Response）。按**实参个数**分派：
+  // java.get 双形态：单参 = 源变量 getter（同步名单）；双参 = HTTP GET（脚本侧 Connection.Response
+  // 形状）。按**实参个数**分派：
   // java.get(url, undefined) 仍是双参 HTTP，按值判会把显式空头误当变量 getter。
   // HTTP 形态走同步 worker，主线程先抛哨兵换道——与 ajax/downloadFile 同一套同步桥。
   const getVar = g.java.get
@@ -813,7 +813,7 @@ ${asyncMountSource()}
     if (arguments.length <= 1) return getVar(key)
     return getHttp.apply(null, arguments)
   }
-  // Packages.java.util.UUID.randomUUID（上游 Java 互操作；真实源用于生成请求 id）
+  // Packages.java.util.UUID.randomUUID（Packages 互操作面；输入脚本有用它生成请求 id 的形态）
   g.Packages.java.util.UUID = { randomUUID: function () { return g.java.randomUUID() } }
   // getElements/getElement 返回值包成元素包装对象（.attr/.select/.toArray 可用）——
   // 宿主侧仍按 {html,text} JSON 序列化，包装在沙箱内完成
@@ -829,21 +829,23 @@ ${asyncMountSource()}
   })
   // 宿主桩名单：只放本仓真没有对应实现的名字（书源会调、但需安卓宿主/WebView/字体栈）。
   // 只列协议表没有真实现的名字；若把已有实现的方法列进来，本循环会把它覆盖成抛错桩，
-  // 协议表测试仍绿而脚本一调就报「需要安卓宿主环境」。普查面 C 钉住这条边界。
+  // 协议表测试仍绿而脚本一调就报「需要安卓宿主环境」。这条边界由
+  // tests/legado-coverage/bridge-surface.test.ts 的「协议表真实现没被沙箱桩覆盖」钉住。
   ;['startBrowserAwait','refreshTocUrl','ajaxAll','createAsymmetricCrypto',
     'aesBase','queryTTF','queryBase','replaceFont',
     'createSign'].forEach(function (n) {
     g.java[n] = function () { throw new Error('java.' + n + ' 不支持：需要安卓宿主环境（WebView/加密/系统服务无法仿真）') }
   })
-  // 设备 ID：上游 Settings.Secure.ANDROID_ID；本仓用数据根 generation 一次的稳定 ID（不随机冒充）
+  // 设备 ID：本仓用数据根 generation 一次的稳定 ID——不随机冒充（脚本要的是宿主级稳定的设备 ID，
+  // 每次调用都变会让按设备绑定的脚本逻辑失效）
   g.java.androidId = function () {
     if (!d.deviceId) throw new Error('java.androidId 需要宿主设备 ID（ctx.deviceId 未接线）')
     return d.deviceId
   }
   g.cookie = {}
   d.mounts.cookie.forEach(function (p) { g.cookie[p.key] = sync(p.name) })
-  // CookieStore.mapToCookie(Map)：Java Map 形（response.cookies() 的产物）→ k=v; … 串；
-  // 空表回 null（上游同口径）。纯值变换，留在 vm 内，不进协议表。
+  // CookieStore.mapToCookie(Map)：Map 形（response.cookies() 的产物）→ k=v; … 串；
+  // 空表回 null。纯值变换，留在 vm 内，不进协议表。
   g.cookie.mapToCookie = function (map) {
     if (map === null || map === undefined) return null
     var keys = typeof map.keySet === 'function' ? map.keySet() : Object.keys(map)
@@ -865,8 +867,8 @@ ${asyncMountSource()}
     } })
   }
   g.android = noHost('android.*')
-  // org.jsoup.Jsoup.parse 最小仿真（真实源脚本直接 org.jsoup.Jsoup.parse(result) 再
-  // .select(...)——安卓 classpath 里 Jsoup 可用；我们以 cheerio 元素包装等价承接 parse 入口，
+  // org.jsoup.Jsoup.parse 最小仿真（输入脚本有直接 org.jsoup.Jsoup.parse(result) 再
+  // .select(...) 的形态；我们以 cheerio 元素包装等价承接 parse 入口，
   // 其余 org.* 仍如实报需要安卓宿主）
   g.org = new Proxy({ jsoup: { Jsoup: { parse: function (html) { return mkElem(String(html)) } } } }, {
     get: function (t, p) {
@@ -891,11 +893,11 @@ ${asyncMountSource()}
   g.console = { log: log('console.log'), error: log('console.error') }
   g.__d__ = d
   g.__src__ = { key: d.${SOURCE_KEY}, bookSourceUrl: d.${SOURCE_KEY}, bookSourceName: d.${SOURCE_NAME_KEY} || '',
-    // 脚本可见的源实体字段（对面脚本里的 source 就是书源实体）；只投影现库真读到的那个
+    // 脚本可见的源实体字段（脚本里 source 就是书源实体）；脚本不读的字段不进投影，面窄是刻意选择
     bookSourceComment: d.${SOURCE_COMMENT_KEY} || '', loginUrl: '',
     header: d.header || '{}',
     getKey: function () { return d.${SOURCE_KEY} },
-    // 登录面投影：服务层供出 loginInfo；未接线时空。形状先按上游 Java Map / String 给，
+    // 登录面投影：服务层供出 loginInfo；未接线时空。形状按 Map / String 给，
     // 让脚本的 info.get(...) / source.getLoginHeader() 不再因 TypeError 整段炸。
     getLoginHeader: function () { return d.loginHeader || '' },
     getLoginInfoMap: function () { return materialize({ __host: 'map', entries: d.loginInfo || {} }) },
@@ -1107,7 +1109,7 @@ async function evalJsCore(call: JsCall): Promise<JsOutcome> {
  *  返回 `started`（可能是 promise 或值，不 await——异步段由调用方的 race 约束）。
  *
  *  **非严格模式（钉死）**：书源脚本按 sloppy 语义执行，`next = []` 这类未声明赋值就是写全局，
- *  真实源大量依赖（读数与普查口径住矩阵行 `h-rhino-vs-vm` 的 note）。逃逸防御不靠严格模式：
+ *  输入脚本有靠这一语义工作的形态（现量读数住在矩阵行 `h-rhino-vs-vm` 的 note）。逃逸防御不靠严格模式：
  *  vm realm 隔离 + 宿主入口锁死才是边界（eval 允许，但不跨 realm），见 BOOTSTRAP 顶注。 */
 export function runInContextVm(
   vmMod: typeof vm,
@@ -1158,7 +1160,7 @@ export function runInContextVm(
   }
 
   // key/page/result/baseUrl/source/src/book/chapter 已由 bootstrap 注入为全局——wrapper 不再声明
-  // 同名参数（真源有 `let page = java.get("page")` 的重声明形态，参数位会撞 Identifier already declared）。
+  // 同名参数（输入脚本有 `let page = java.get("page")` 的重声明形态，参数位会撞 Identifier already declared）。
   // wrapped 文本在 evalJs 顶部构造一次（主线程与 worker 共用同一份，worker 经 workerData 拿成品串）。
   let started: unknown
   try {
@@ -1445,7 +1447,7 @@ function makeHostCall(
     const args: unknown[] = Array.isArray(parsed) ? parsed : [parsed]
     const out = invokeJavaMethod(deps, name, args)
     if (out instanceof Promise) return out.then(jsonText)
-    // undefined（java.get 未命中 / void 方法）→ 'null'：与旧逐案分派的 `?? null` / `'null'` 口径一致
+    // undefined（java.get 未命中 / void 方法）由 jsonText 兜底成 'null'：桥恒回脚本能 JSON.parse 的串
     return jsonText(out)
   }
 }
@@ -1499,7 +1501,7 @@ function elemHostOp(op: string, payload: { html?: unknown; name?: unknown; rule?
     }
     case 'split': {
       // 片段的顶层元素集（Elements.toArray 口径）。parse5 把片段挂进 body，直接取
-      // root().children() 只会得到一个 html——那会让真源 toc 模板的 result.toArray() 恒为 1 个
+      // root().children() 只会得到一个 html——那会让 toc 模板脚本的 result.toArray() 恒为 1 个
       // 「元素」，其 text() 反而是整段拼接（size/get/each 全错位）。
       const body = $('body')
       const kids = body.length > 0 ? body.children() : $.root().children()
@@ -1587,7 +1589,7 @@ function pkgHostOp(op: string, payload: Record<string, unknown>, deps: BridgeDep
   }
 }
 
-/** cookie 垫片存储：按源隔离的脚本键值表（真实源 cookie.removeCookie(url) 后再 ajax 的形态）。
+/** cookie 垫片存储：按源隔离的脚本键值表（输入脚本有 cookie.removeCookie(url) 后再 ajax 的形态）。
  *  它**不是**请求层的 CookieJar——域/路径/过期匹配归 `services/cookies.ts`，两者不是一张表。
  *  存储本体归 SourceSession：这里只是进程级缺省实例的后仓。 */
 const COOKIE_JARS = new Map<string, Map<string, string>>()

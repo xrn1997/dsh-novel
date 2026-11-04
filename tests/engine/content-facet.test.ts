@@ -37,11 +37,11 @@ describe('① text.<串>：按文本选元素（legado 默认方言选择语义�
 })
 
 describe('② 属性终端与取值用途', () => {
-  it('取值用途链尾未知词 = HTML 属性名（onclick 真实源形态）', async () => {
+  it('取值用途链尾未知词 = HTML 属性名（`onclick` 这一形态）', async () => {
     const v = await evaluate('class.card@onclick', { html: tocHtml }, 'search', 'value')
     expect(v).toEqual({ kind: 'value', text: "window.open('/book/7')" })
   })
-  it('属性终端空值丢弃 + 向下兜底（legado else 分支口径）', async () => {
+  it('属性终端空值丢弃 + 向下兜底（兜底走下一档，不折成缺席）', async () => {
     const v = await evaluate('class.card@data-src', { html: tocHtml }, 'search', 'value')
     expect(v).toEqual({ kind: 'value', text: '/cover/7.jpg' })
   })
@@ -60,7 +60,7 @@ describe('② 属性终端与取值用途', () => {
     const parsed = parseRule('ul.list li', 'toc', 'list')
     expect(pick(pick(parsed.branches, 0).segments, 0)).toEqual({ kind: 'css', selector: 'ul.list li' })
   })
-  it('词.词形态（nonsense.x）按对面兜底定性为 css 段；含非法字符的段仍解析期抛', () => {
+  it('词.词形态（nonsense.x）按兜底口径定性为 css 段；含非法字符的段仍解析期抛', () => {
     expect(pick(pick(parseRule('nonsense.x', 'toc', 'value').branches, 0).segments, 0))
       .toMatchObject({ kind: 'css', selector: 'nonsense.x' })
     try { parseRule('nonsense$.x', 'toc', 'value'); expect.unreachable() }
@@ -86,7 +86,7 @@ describe('③ 模板字面段', () => {
     expect(parts).toHaveLength(3)
     expect(parts[0]).toEqual({ kind: 'js', text: 'page*2' })
     expect(parts[2]).toEqual({ kind: 'js', text: '(function(){return 1})()' })
-    // 单括号 JSONPath 内嵌（米读看书形态）
+    // 单括号 JSONPath 内嵌（现库真形态）
     expect(splitLiteral('https://b.com/{$.bookId}.txt')).toEqual([
       { kind: 'text', text: 'https://b.com/' },
       { kind: 'jsonpath', text: '$.bookId' },
@@ -114,7 +114,7 @@ describe('③ 模板字面段', () => {
     const v3 = await evaluate('https://x.com/list/{{page-1}}', { html: '' }, 'search', 'value')
     expect(v3).toEqual({ kind: 'value', text: 'https://x.com/list/0' }) // page 缺省 1
   })
-  it('evaluate：链中模板段替换链值（$.path 后接 URL 模板——多看阅读形态）', async () => {
+  it('evaluate：链中模板段替换链值（$.path 后接 URL 模板的现库形态）', async () => {
     const item = JSON.stringify({ source_id: '9527' })
     const v = await evaluate('$.source_id@js:"https://www.duokan.com/hs/v0/android/fiction/book/"+result',
       { html: item, baseUrl: 'https://x.com/' }, 'search', 'value')
@@ -161,13 +161,13 @@ describe('⑥ 二轮补齐（元素包装 / AllInOne 行内标志 / 方括号索
       { html: page, baseUrl: 'https://x.com/' }, 'toc', 'list')
     expect(v).toEqual({ kind: 'list', items: ['第一章', '第二章'] })
   })
-  it('AllInOne 行内标志 (?s) 剥离 → dotAll（若夏 toc 形态）', async () => {
+  it('AllInOne 行内标志 (?s) 剥离 → dotAll（toc 规则里带 `(?s)` 行内标志）', async () => {
     const page = 'a\nhref="/c/1.html">第一章'
     const v = await evaluate(':(?s)a\\nhref="([^"]*)"', { html: page }, 'toc')
     expect(v.kind).toBe('matches')
     expect((v as { rows: string[][] }).rows).toEqual([['a\nhref="/c/1.html"', '/c/1.html']])
   })
-  it('方括号索引：[-1:0] 整表倒序；[n] 取位；[!n] 排除（legado ElementsSingle 口径）', async () => {
+  it('方括号索引：[-1:0] 整表倒序；[n] 取位；[!n] 排除', async () => {
     const html = '<ul><li>一</li><li>二</li><li>三</li></ul>'
     expect(await evaluate('li[-1:0]@text', { html }, 'toc', 'list'))
       .toEqual({ kind: 'list', items: ['三', '二', '一'] })
@@ -190,12 +190,12 @@ describe('⑥ 二轮补齐（元素包装 / AllInOne 行内标志 / 方括号索
     expect((await evaluate('li[7,9]@text', { html }, 'toc', 'list')).kind).toBe('miss')
     expect(await evaluate('li[!0,2]@text', { html }, 'toc', 'list'))
       .toEqual({ kind: 'list', items: ['二', '四'] })
-    // 真源形态（免费小说 ruleContent.content）：选择段多条目 + 下一段继续选
+    // 现库形态（ruleContent.content）：选择段多条目 + 下一段继续选
     expect(await evaluate('li[0,2]@text', { html }, 'content', 'value'))
       .toEqual({ kind: 'list', items: ['一', '三'] })
   })
 
-  it('cache 垫片：搜索面 put、目录面 get（按源隔离——快看漫画跨面形态）', async () => {
+  it('cache 垫片：搜索面 put、目录面 get（同一份表按源隔离，跨面读写）', async () => {
     const { runScript, createSourceSession } = await import('../../src/engine/js-sandbox.js')
     const session = createSourceSession()
     const loc = { segmentIndex: 0, segmentRaw: 'x' }
@@ -209,7 +209,7 @@ describe('⑥ 二轮补齐（元素包装 / AllInOne 行内标志 / 方括号索
 })
 
 
-describe('XPath 裸 @ 终端整链（腐小说 ruleContent 实证形态，真机审计 2026-09）', () => {
+describe('XPath 裸 @ 终端整链（现库 ruleContent 已有这一形态，读数见矩阵 a-xpath-bare-at-terminal）', () => {
   const HTML = '<div id="pager"><div class="tips">本章完，点击下一页</div><div class="bar"><div class="row"><div class="cell"><a href="/p/2">下一页</a></div></div></div></div>'
   it('`//a[text()="下一页"]/../../../preceding-sibling::div[1]@html` → 取到前序 div 的 html', async () => {
     const v = await evaluate('//a[text()="下一页"]/../../../preceding-sibling::div[1]@html', { html: HTML }, 'content', 'value')
@@ -217,17 +217,17 @@ describe('XPath 裸 @ 终端整链（腐小说 ruleContent 实证形态，真机
   })
 })
 
-describe('`{{@@规则}}`：花括号区内的 @ 不是段界（真源 intro 四例，2026-09 解析普查）', () => {
+describe('`{{@@规则}}`：花括号区内的 @ 不是段界（现库 intro 有此形态，读数见矩阵 a-brace-region-atomic）', () => {
   const HTML = '<html><head><meta property="og:description" content="少年林动，一夜蜕变"></head><body><p class="sum">正文摘要</p></body></html>'
-  it('整段字面 + 区内规则递归求值（对面 makeUpRule 先于 @ 切分）', async () => {
+  it('整段字面 + 区内规则递归求值（@ 切分之前先做整段字面化）', async () => {
     const v = await evaluate('&nbsp;{{@@[property$=description]@content}}', { html: HTML }, 'detail', 'value')
     expect(v).toEqual({ kind: 'value', text: '&nbsp;少年林动，一夜蜕变' })
   })
-  it('多个 `{{@@…}}` 与字面文本混排（错层小说 / 次元姬子形态）', async () => {
+  it('多个 `{{@@…}}` 与字面文本混排（现库 intro 的混排形态）', async () => {
     const v = await evaluate('📜 {{@@p.sum@text}} · {{@@p.sum@html}}', { html: HTML }, 'detail', 'value')
     expect(v.kind === 'value' && v.text.startsWith('📜 正文摘要')).toBe(true)
   })
-  it('模板段带 ## 替换尾 → 先展开后替换，不从页面另取根（对面「整段翻转为 Regex」口径）', async () => {
+  it('模板段带 ## 替换尾 → 先展开后替换，不从页面另取根（「整段翻转为 Regex」那一档）', async () => {
     const v = await evaluate('{{@@[property$=description]@content}}##少年##青年', { html: HTML }, 'detail', 'value')
     expect(v).toEqual({ kind: 'value', text: '青年林动，一夜蜕变' })
   })
@@ -237,7 +237,7 @@ describe('`{{@@规则}}`：花括号区内的 @ 不是段界（真源 intro 四�
   })
 })
 
-describe('JSON 条目上的裸词终端（真源 ruleChapterUrl: url / href，2026-09 审计 3 源）', () => {
+describe('JSON 条目上的裸词终端（现库 ruleChapterUrl: url / href 形态，读数见矩阵 a-json-context-terminal）', () => {
   // 按内容类型分派：条目是 JSON 时整条规则按 JSON 解析，
   // 所以裸词 `url` 在 JSON 条目上是**属性读**。改这里注意：JSON 条目上没有同名 DOM 属性，
   // 退回 DOM 查找则恒 0 命中 → 逐章回退目录页 → 「未取到任何章节地址」RuleEvalError。
@@ -268,8 +268,8 @@ describe('JSON 条目上的裸词终端（真源 ruleChapterUrl: url / href，20
   })
 })
 
-describe('属性取值的去重（对面 getResultLast else 分支 textS.contains 口径；漏去重会把 URL 拼成重复路径）', () => {
-  // 真机实证：久久小说 ruleBookList=class.block + ruleBookUrl=tag.a@href，条目里 4 个 <a> 同一个 href；
+describe('属性取值的去重（属性型终端按 contains 去重；漏去重会把 URL 拼成重复路径）', () => {
+  // 现库形态：ruleBookList=class.block + ruleBookUrl=tag.a@href，条目里 4 个 <a> 同一个 href；
   // 我们收 4 份 → firstValue 以 \n 拼接 → new URL() 吃掉换行 → `/article/…/article/…`（书 URL 被复制）。
   const ITEM = '<div class="block"><div class="bi"><a href="/article/detail/id/6534.html"><img src="/t.png"></a></div>' +
     '<a href="/article/detail/id/6534.html">书名</a><a href="/article/detail/id/6534.html">作者</a></div>'
@@ -277,7 +277,7 @@ describe('属性取值的去重（对面 getResultLast else 分支 textS.contain
     const v = await evaluate('tag.a@href', { html: ITEM }, 'search', 'value')
     expect(v).toEqual({ kind: 'list', items: ['/article/detail/id/6534.html'] })
   })
-  it('text 不去重（对面具名分支无 contains；空文本条目按对面空值丢弃）', async () => {
+  it('text 不去重（文本口径没有 contains 判据；空文本条目按空值丢弃）', async () => {
     const v = await evaluate('tag.a@text', { html: ITEM }, 'toc', 'list')
     expect(v.kind === 'list' && v.items.length).toBe(2)
   })
@@ -287,7 +287,7 @@ describe('属性取值的去重（对面 getResultLast else 分支 textS.contain
   })
 })
 
-describe('js 块的 ## 尾（对面 makeUpRule 对 js 文本同样切 ##；茄子免费小说 lastChapter 形态）', () => {
+describe('js 块的 ## 尾（js 文本同样切 ##；现库 lastChapter 形态）', () => {
   const HTML = '<p class="t">最新章 第1章 【求更】</p>'
   it('首段为空 + ## 尾：不求值，净化作用在链值上', async () => {
     const v = await evaluate('class.t@text\n<js>##[\\(（【].*?[】）\\)]</js>', { html: HTML }, 'toc', 'value')
@@ -298,9 +298,9 @@ describe('js 块的 ## 尾（对面 makeUpRule 对 js 文本同样切 ##；茄�
     expect(v).toEqual({ kind: 'value', text: '最新章 第1章 【求更】CD' })
   })
   // 替换走 replace.applyReplaces（与规则级 `##` 同一个家）——下面四条钉的是「不另写一份」会走偏的地方：
-  // 对面 replaceRegex 在 replaceFirst（切出多于三段）下回的是**首个匹配段**、无匹配给空串，
+  // 「切出多于三段」时回的是**首个匹配段**、无匹配给空串，
   // 不是「原文里改第一处」；而 miss 与「取到空」绝不折叠。
-  it('三段尾 = 只回首个匹配段；无匹配给空串（对面 replaceFirst 口径）', async () => {
+  it('三段尾 = 只回首个匹配段；无匹配给空串（首匹配口径）', async () => {
     const src = { html: '<p class="t">xAyA z</p>' }
     expect(await evaluate('class.t@text\n<js>result##A##B##</js>', src, 'rule', 'value'))
       .toEqual({ kind: 'value', text: 'B' })
@@ -314,7 +314,7 @@ describe('js 块的 ## 尾（对面 makeUpRule 对 js 文本同样切 ##；茄�
     // 上游取位失败时净化尾作用在 miss 上仍是 miss——折成空串就把「没取到」写成「取到空」
     expect(await evaluate('class.none@text\n<js>##[x]</js>', { html: '<p class="t">甲</p>' }, 'rule', 'value'))
       .toMatchObject({ kind: 'miss' })
-    // 上游是 List 时逐项替换（对面 `it.map { replaceRegex(...) }`），不 join 成一条
+    // 上游是 List 时逐项替换（对 List 逐元素替换），不 join 成一条
     expect(await evaluate('tag.p@text\n<js>result##A##B</js>', { html: '<p>aA</p><p>bA</p>' }, 'toc', 'list'))
       .toEqual({ kind: 'list', items: ['aB', 'bB'] })
   })

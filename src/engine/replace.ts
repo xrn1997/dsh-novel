@@ -10,12 +10,12 @@ import { guardedOnlyOneReplace, guardedReplace } from './regex-guard.js'
  *   （OnlyOne 下捕获组在截出的那段内解析）；
  * - 非法正则 → `RuleEvalError`（hits=0，段定位指向该替换步，消息含坏 pattern）；
  * - `replaces` 为空 → 原值透传；`miss` / `matches` → 原样透传（不做替换）；
- * - **空 pattern（含插值后为空）整步跳过**——对面每一处替换都门在「正则非空」上；
+ * - **空 pattern（含插值后为空）整步跳过**——替换步都门在「正则非空」上；
  * - 替换结果变空串的项**保留**（净化不删条目，「取到空」口径不适用在替换层）；
  * - `nodes` 在此层透传原样（求值链应先取值再替换）；
  * - **插值**：pattern / replacement 里的 `{{点路径}}`
  *   （如 `{{chapter.title}}`、`{{book.name}}`）先按 bindings 查表替换再编译正则——
- *   真实源 `##…|{{chapter.title}}|…##` 去章标题行全靠它；查不到的保持原文字面（不猜）。
+ *   去章标题行依赖这条插值（`##…|{{chapter.title}}|…##` 形态）；查不到的保持原文字面（不猜）。
  */
 export function applyReplaces(
   v: EngineValue,
@@ -38,10 +38,11 @@ export function applyReplaces(
       ? step.flags.replace('g', '')
       : step.flags + (step.flags.includes('g') ? '' : 'g')
     const pattern = interpolate(step.pattern, interp)
-    // 空正则整步跳过：对面每一处替换都门在「正则非空」上。JS 的空正则配 `g`
-    // 在每个字符位都匹配，无条件执行会让 replacement 被插进每一个字符之间——真库
-    // `class.font_max@html####本章未完.*##` 这类「第 2 段为空、第 3 段才是正则」的写法
-    // 因此把 6.5KB 的一页灌成 732,311 字符并写进缓存。读数在矩阵行 `a-replace-tail`；
+    // 空正则整步跳过：替换步门在「正则非空」上（钉子见 tests/engine/replace.test.ts
+    // 的「空 pattern 整步跳过」）。JS 的空正则配 `g`
+    // 在每个字符位都匹配，无条件执行会让 replacement 被插进每一个字符之间——`class.font_max@html####本章未完.*##`
+    // 这类「第 2 段为空、第 3 段才是正则」的写法
+    // 因此会把整页灌成插串的超长文本并写进缓存（读数在矩阵行 `a-replace-tail`；
     // 「只有一对 `##` + 第 4 段开关」是另一条分叉，仍待裁（`a-replace-tail-single-pair`）。
     if (pattern === '') continue
     const replacement = interpolate(step.replacement, interp)

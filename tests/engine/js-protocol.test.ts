@@ -40,7 +40,7 @@ export type _Ajax = Assert<Eq<JavaBridge['ajax'], (url: unknown) => Promise<stri
 export type _Get = Assert<Eq<JavaBridge['get'], (key: string) => string>>
 export type _Put = Assert<Eq<JavaBridge['put'], (key: string, value: unknown) => void>>
 // getString 的三个位置各有语义（二参重载 + 三参形态）：第二参布尔 = unescape 开关，
-// 非布尔 = mContent 基内容，第三参布尔 = isUrl 绝对化。**没有「取 URL 后再抓」这条**。
+// 非布尔 = 基内容，第三参布尔 = isUrl 绝对化。**没有「取 URL 后再抓」这条**。
 export type _GetString = Assert<Eq<JavaBridge['getString'], (rule: unknown, arg2?: unknown, isUrl?: unknown) => string>>
 export type _GetElement = Assert<Eq<JavaBridge['getElement'], (rule: string) => { html: string; text: string } | null>>
 export type _SetContent = Assert<Eq<JavaBridge['setContent'], (content: unknown) => void>>
@@ -100,14 +100,14 @@ describe('invokeJavaMethod 分派（不进 vm 的直测）', () => {
     expect(() => invokeJavaMethod(depsOf(), 'noSuchMethod', [])).toThrow(/未知 java 方法/)
   })
 
-  it('get/put：ctx.vars 读写；未命中 → **空串**（对面 getVariable 的收口；返 undefined 会过桥变 null）', () => {
+  it('get/put：ctx.vars 读写；未命中 → **空串**（收口到空串；返 undefined 会过桥变 null）', () => {
     const deps = depsOf()
     invokeJavaMethod(deps, 'put', ['k', 'v'])
     expect(deps.ctx.vars?.k).toBe('v')
     expect(invokeJavaMethod(deps, 'get', ['k'])).toBe('v')
-    // 对面 `RuleDataInterface.getVariable` 是 `variableMap[key] ?: getBigVariable(key) ?: ""`：未设给空串。
+    // 变量收口是「本层 → 全局层 → `""`」：未设给空串。
     // 改这里注意：未设必须给空串，不能返 undefined——JSON 桥把 undefined 变成 **null**，
-    // 脚本里 String(...) 得到字面量 "null"（移动阅读拼进 DES 密钥）、对 null 再调方法即抛（海棠搜书）。
+    // 脚本里 String(...) 得到字面量 "null"（现库有把它拼进 DES 密钥的形态）、对 null 再调方法即抛（现库同类形态）。
     expect(invokeJavaMethod(deps, 'get', ['nope'])).toBe('')
     // 非字符串值按 String() 落位（各方法同一转换口径）
     invokeJavaMethod(deps, 'put', ['n', 42])
@@ -132,9 +132,9 @@ describe('invokeJavaMethod 分派（不进 vm 的直测）', () => {
     }
   })
 
-  it('getString 重载分派：二参布尔是 unescape（对面双参重载），不是 isUrl，也不再抛', () => {
-    // `getString(ruleStr, unescape: Boolean)` 与 `getString(ruleStr, mContent, isUrl)`
-    // 是两个不同形态，后者的 unescape **缺省 true**。改这里注意：二参布尔是 unescape，不是 isUrl——
+  it('getString 重载分派：二参布尔是 unescape（重载位置的口径），不是 isUrl，也不再抛', () => {
+    // 二参形态的第二参是 unescape；三参形态才是 `(rule, 基内容, isUrl)`，
+    // 且后者的 unescape **缺省 true**。改这里注意：二参布尔是 unescape，不是 isUrl——
     // 按 isUrl 读会把「不要反转义」的意图静默反做（本意要原文，却给解码后的值）；isUrl 在第三参。
     const fake = (): EngineValue => ({ kind: 'value', text: 'A&amp;B' })
     const deps = depsOf({ evaluateRef: fake })
@@ -144,7 +144,7 @@ describe('invokeJavaMethod 分派（不进 vm 的直测）', () => {
     expect(invokeJavaMethod(deps, 'getString', ['tag.p@text'])).toBe('A&B')
   })
 
-  it('getString 三参 isUrl：基内容走 mContent、产物按 baseUrl 绝对化，**不发请求**', () => {
+  it('getString 三参 isUrl：基内容走第二参、产物按 baseUrl 绝对化，**不发请求**', () => {
     // isUrl 分支只把产物按 base 绝对化，空白结果回退 baseUrl——
     // 「取到 URL 后再抓一次」这条语义不存在。
     // 本 deps 的 ctx 没有 fetch：实现若去抓站点会当场抛「网络能力」，用例即红 ⇒ 零抓取是断言出来的。
@@ -158,11 +158,11 @@ describe('invokeJavaMethod 分派（不进 vm 的直测）', () => {
       result: 'ignored', evaluateRef: fake,
     })
     expect(invokeJavaMethod(deps, 'getString', ['tag.a@href', '<html>x</html>', true])).toBe('https://m.example.com/book/1')
-    expect(seen).toEqual(['<html>x</html>'])           // mContent 接管基内容，不是脚本的上一段 result
+    expect(seen).toEqual(['<html>x</html>'])           // 第二参接管基内容，不是脚本的上一段 result
     expect(invokeJavaMethod(deps, 'getString', ['blank', '<html>x</html>', true])).toBe('https://m.example.com/read/index.html')
   })
 
-  it('getStringList 三参 isUrl：逐项绝对化 + 去重（对面 urlList 分支），空串按其口径变 base', () => {
+  it('getStringList 三参 isUrl：逐项绝对化 + 去重（列表分支同样逐项），空串换成 base', () => {
     const fake = (): EngineValue => ({ kind: 'list', items: ['/b/1', '/b/1', 'https://x.test/b/2', ''] })
     const deps = depsOf({
       ctx: { vars: {}, baseUrl: 'https://m.example.com/read/index.html' } satisfies EvalContext,
@@ -261,7 +261,7 @@ describe('invokeJavaMethod 分派（不进 vm 的直测）', () => {
  * `HMacHex(data, algorithm, key)` / `HMacBase64(...)`——
  * **实参顺序是 data 在前、算法在后**，且入参按 UTF-8 取字节）。
  *
- * 期望值全部由 **openssl 3.5.6 独立算出**（不是 node crypto——那等于拿实现自证）；
+ * 期望值全部由 **openssl 独立算出**（不是 node crypto——那等于拿实现自证），版本以本机 openssl 为准；
  * `HMacHex('Hi There', 'HmacSHA256', 0x0b×20)` 那一条同时是 RFC 4231 test case 2 的公开值，
  * 两条来路对得上，才敢说这不是「按实现反推的期望」。
  */
@@ -295,7 +295,7 @@ describe('摘要与 HMAC 族（java.digestHex / digestBase64Str / HMacHex / HMac
     const run = (args: unknown[]): unknown => invokeJavaMethod(depsOf(), 'digestHex', args)
     expect(() => run(['abc', 'WHIRLPOOL-9'])).toThrow(/WHIRLPOOL-9/)
   })
-  it('digestHex 拿到 HMAC 算法名 → 同样报「不支持的算法」（对面 MessageDigest 也抛 NoSuchAlgorithmException，不许当成 HMAC 悄悄算）', () => {
+  it('digestHex 拿到 HMAC 算法名 → 同样报「不支持的算法」（摘要与 HMAC 是两个出口，不许当成 HMAC 悄悄算）', () => {
     expect(() => invokeJavaMethod(depsOf(), 'digestHex', ['abc', 'HmacSHA256'])).toThrow(/HmacSHA256/)
   })
 })
@@ -312,9 +312,8 @@ describe('async 行的能力位闸（表行 ↔ 沙箱包装 ↔ 服务层装配
     // 正则唯一捕获组（`d\.ctx\.([a-zA-Z]+)`）：匹配成功时它必在场，缺席即提取逻辑脱节。
     [...protocolSrc.matchAll(/d\.ctx\.([a-zA-Z]+)/g)].map((m) => must(m[1], 'd.ctx.<能力名> 捕获组')),
   )]
-  // 六支松散分支的等价样本（每支 ≥2 正例 + ≥1 反例）：迁自「派生正则 vs 旧手写字面量」的
-  // 等价对照脚手架——脚手架与旧字面量副本已随裁定删除，样本并入本闸，防派生重组时
-  // 某支悄悄变宽（反例被路由）或变窄（正例脱路由）。
+  // 六支松散分支的等价样本（每支 ≥2 正例 + ≥1 反例）：防派生正则重组时
+  // 某支悄悄变宽（反例被路由）或变窄（正例脱路由）——样本即判据，正/反例成对钉住边界。
   const ROUTE_SAMPLES: Array<[sample: string, routed: boolean]> = [
     // `.ajax(` 宽拼写（认任何对象的 .ajax( 调用）
     ['java.ajax("https://m.example.com")', true],

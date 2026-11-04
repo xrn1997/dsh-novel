@@ -59,8 +59,8 @@ const keyOf = (node: ContentNode, index: number): string => (node.kind === 'text
  * 链接内容里有块级内容吗（插图 / 分隔线 / 非短语级元素）。
  *
  * 有的话链接自己必须是**块级容器**（`.novel-ref-block`）：`<button>` 缺省按内容收缩包裹，里面
- * `width: 100%` 的插图框会解析成 auto——图未解码时框塌成 0，到手后后文位移（实测），「图片延迟
- * 不改变恢复位置」失效。XHTML5 的 `<a>` 是透明内容模型，含块内容的链接本来就是块级，这里显式化。
+ * `width: 100%` 的插图框会解析成 auto——图未解码时框塌成 0，到手后后文位移（钉子见
+ * `tests/client/chapter-body.test.tsx`），「图片延迟不改变恢复位置」失效。XHTML5 的 `<a>` 是透明内容模型，含块内容的链接本来就是块级，这里显式化。
  */
 function hasBlockChild(children: readonly ContentNode[]): boolean {
   return children.some((n) => n.kind === 'image' || n.kind === 'rule'

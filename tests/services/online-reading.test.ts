@@ -138,7 +138,7 @@ describe('OnlineReading', () => {
     expect(rig.fetches).toHaveLength(fetched) // 缓存命中零网络
   })
 
-  it('目录在进程内缓存：章节正文读取不再重读/重解析目录', async () => {
+  it('目录在进程内缓存：章节正文读取走内存目录，不重复读盘解析', async () => {
     const rig = await makeRig()
     await rig.online.toc('i', BOOK)
     const getToc = vi.spyOn(rig.cache, 'getToc')
@@ -365,7 +365,7 @@ describe('OnlineReading', () => {
     expect(toc.map((c) => c.name)).toEqual(['第一章', '第三章'])
   })
 
-  it('ruleToc 标记落 ChapterEntry（isVip/isVolume/isPay/updateTime；上游 isTrue 口径）', async () => {
+  it('ruleToc 标记落 ChapterEntry（isVip/isVolume/isPay/updateTime；非零非 false 判真）', async () => {
     const rig = await makeRig({
       over: {
         ruleChapterIsVip: '@js:result.includes("第一章") ? "1" : "0"',
@@ -388,7 +388,7 @@ describe('OnlineReading', () => {
     await expect(rig.online.toc('i', BOOK)).rejects.toThrow(/ruleChapterUrl/)
   })
 
-  it('只有个别章取不到 URL → 仍逐章回退目录页（不许把 legado 对齐改回整条丢弃）', async () => {
+  it('只有个别章取不到 URL → 仍逐章回退目录页（个别缺位不连坐，不许整条丢弃）', async () => {
     const mixed = '<html><body><div class="b ch"><a href="/c/1.html">第一章</a></div><div class="b ch"><a>第二章</a></div></body></html>'
     const rig = await makeRig({ htmlOf: (u) => (u.includes('/book/1/') ? mixed : null) })
     const toc = await rig.online.toc('i', BOOK)
@@ -411,7 +411,7 @@ describe('OnlineReading', () => {
     expect(text).not.toContain('<') // 标签一个都不留
   })
 
-  it('正文零命中 → 段级报错（带落点）且不写缓存——修复前静默写 0 字节缓存，全书空到无感', async () => {
+  it('正文零命中 → 段级报错（带落点）且不写缓存——空正文一旦落盘，整本书就空得毫无痕迹', async () => {
     let serveReal = false
     const rig = await makeRig({
       htmlOf: (u) => {
@@ -423,16 +423,15 @@ describe('OnlineReading', () => {
     await expect(rig.online.chapterText('i', BOOK, 0)).rejects
       .toThrowError(/正文规则零命中.*ruleContent: @css:#content@textNodes.*落点 https:\/\/s\.com\/c\/1\.html/)
     serveReal = true
-    // 零命中没有把空正文写进缓存，也没有污染 —— 站点恢复后立刻抓到真内容
+    // 零命中没有把空正文写进缓存，也没有污染 —— 有正文的那一版页面在场后立刻抓到真内容
     expect(await rig.online.chapterText('i', BOOK, 0)).toBe('正文一\n第二段\n第三段\n尾段')
   })
 
   /**
    * 「空正文必炸」的适用面是**首屏**，不是跟进链上的每一页。
-   * 真机形状：笔趣阁最后一章的「下一章」链接指向书详情页（那页没有正文容器），跟进落到它——
+   * 这类形状：末章的「下一章」链接指向书详情页（那页没有正文容器），跟进落到它——
    * 回归钉子：续页的空态不许抛——一抛就把整章作废，三页正文（前两页有字）全读不出。
-   * 对面那侧只在**整章拼完仍为空**才抛
-   * ContentEmptyException，续页取不出只是不再追加、跟进自然收手。
+   * 续页取不出只是不追加、跟进自然收手；整章拼完仍为空才抛正文空错。
    */
   it('续页取不出正文 → 停止跟进并保留首屏，不连坐整章（两种空态同判）', async () => {
     for (const laterPage of [

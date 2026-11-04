@@ -16,7 +16,7 @@ export interface SourceAuth {
 /** 书源 JSON 的驼峰字段 → 内部规则集规范化后的形态；缺一律 null（「源没这条信息」≠「没解出来」）。
  * 搜索上下文（ruleBookList/ruleBookName/…）与详情上下文（ruleDetail*）分列——
  * 两上下文规则不同，混用会把搜索条目规则套到详情页造垃圾标题；
- * 平铺方言无 ruleDetail* 时详情面回退共用字段（原 v1 行为）。 */
+ * 平铺方言无 ruleDetail* 时详情面回退共用字段。 */
 export interface NormalizedRules {
   searchUrl: string | null; exploreUrl: string | null
   /** 源级分类页 URL 模板，含 `{{kind}}`（替换成入口自带的地址）与 `{{page}}`：原生方言由
@@ -24,14 +24,13 @@ export interface NormalizedRules {
    *  它与「入口自带地址」谁优先、首页裁不裁页，主人是 `explore-face.fetchKindPage`（裁决见
    *  `ADR-0027`），这里不复述判据。 */
   ruleExploreUrl: string | null
-  /** 分类入口（顶层一层；`children` 本期不做，见 normalize 的告警）：原生 `ruleFind.kinds`、
+  /** 分类入口（顶层一层；`children` 不接，见 normalize 的告警）：原生 `ruleFind.kinds`、
    *  legado `exploreUrl` 解出的条目、平铺 raw 自带那一格，三处共用这一个形状；地址语义按方言不同，
    *  「这次用哪份模板」归 `explore-face.fetchKindPage`。 */
   ruleExploreKinds: Array<{ title: string; url: string }>
   /** 发现面条目的九个字段（原生 `ruleFind.ruleSearch` 与 legado `ruleExplore` 落的是同一批模型键）：
-   *  **整套**覆盖通用搜索规则（对面语义是
-   *  `if (findRule.ruleSearch.list.isNotEmpty())` 才用它）——所以判据只看 `ruleExploreList` 是否非空，
-   *  别逐字段回落：那会把「对面本该用通用规则」的源读成半套。 */
+   *  **整套**覆盖通用搜索规则，且只在它的列表规则非空时启用整档——所以判据只看 `ruleExploreList`
+   *  是否非空，别逐字段回落：那会把「本该用通用规则」的源读成半套。 */
   ruleExploreList: string | null; ruleExploreName: string | null
   ruleExploreAuthor: string | null; ruleExploreBookUrl: string | null
   ruleExploreCoverUrl: string | null; ruleExploreIntro: string | null
@@ -55,7 +54,8 @@ export interface NormalizedRules {
   /** 目录列表选择器（对象方言 ruleToc.chapterList；平铺方言缺 → 目录面回退 ruleBookList） */
   ruleChapterList: string | null
   ruleChapterName: string | null; ruleChapterUrl: string | null
-  /** 目录章标记规则（对象方言 ruleToc.isVip/isVolume/isPay/updateTime）；布尔位按上游 isTrue 口径折。
+  /** 目录章标记规则（对象方言 ruleToc.isVip/isVolume/isPay/updateTime）；布尔位按
+   *  `online-reading.isTrueRuleValue` 那条口径折，别在这儿复述。
    *  可选：存量 NormalizedRules 字面量与旧源不必带这几格。 */
   ruleChapterIsVip?: string | null
   ruleChapterIsVolume?: string | null
@@ -81,7 +81,7 @@ export interface NormalizedRules {
    *  存量由 SourceRegistry.load 按 raw 重推。 */
   headerRule: string | null
   /** jsLib：源级全局 JS 函数库（函数定义拼在每段 @js 代码前执行——
-   *  真实源 urlUserFavorite/host/qmSearchUrl 等函数定义在此，缺它整段 js 必炸 not defined） */
+   *  脚本里的 urlUserFavorite/host/qmSearchUrl 等函数定义在此，缺它整段 js 必炸 not defined） */
   jsLib: string | null
 }
 

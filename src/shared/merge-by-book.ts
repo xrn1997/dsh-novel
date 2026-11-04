@@ -10,7 +10,7 @@ import type { MergedBook, MergedSource, SearchGroup } from './wire.js'
  * 书籍详情浮层**刻意不吃**归并（它只谈一本，而它那三条逐源读数会被归并吞掉），只吃相关性。
  * 分区由 `shared/round-summary.ts` 单点给：本面只消费 `RoundPartition` 的 `kept`，不自己跑判据。
  *
- * 归并键取 `(规范化书名, 规范化作者)`，对面那把键的读数住矩阵行 `d-merge-dedup`（唯一主人），这里不复述；
+ * 归并键取 `(规范化书名, 规范化作者)`；同一形状的对照读数住矩阵行 `d-merge-dedup`（唯一主人），这里不复述；
  * 规范化只认 `shared/relevance.ts` 的 `normalizeRelevance` 那一份，不在这里长第二份。
  * 假合并与漏并是这把键的固有代价，
  * 它们只住在呈现层（展开后每条命中的地址与动作都在原处），裁决见 `ADR-0033`。
@@ -20,8 +20,8 @@ import type { MergedBook, MergedSource, SearchGroup } from './wire.js'
  *
  * 行与家是两条读数，绝不折叠：`sources` 留每一行（一家给两种写法就两行都在册，「这一家把它叫作什么」），
  * 家数按**去重后的源**计——那一栏要回答的是「几家答话了」，不是「几行在册」：按行数算会让一家撞两条
- * 的 sloppy 源压过两家真答话的源，而同档那一子句读的就是它。（归并键与序的对面口径唯一读数住矩阵行
- * `d-merge-dedup`；本仓在序的第二子句按去重家数计，这一处偏离与对面是否同样去重都只在那一行登记，裁决见 `ADR-0033`。）
+ * 的 sloppy 源压过两家真答话的源，而同档那一子句读的就是它。（归并键与序的对照读数唯一住矩阵行
+ * `d-merge-dedup`；本仓在序的第二子句按去重家数计，这一处偏离只在那一行登记，裁决见 `ADR-0033`。）
  * 跳过哪一组的闸也只判本轮失败（`error`），不判源的探针状态：新导入的源恒 `unverified`
  * （`importOne` 不探针），按状态筛等于把几乎整轮清空而测试全绿。
  */
@@ -43,7 +43,7 @@ export function mergePartitioned(parts: readonly RoundPartition[], cap: number =
       // 书行那两个名字取首个到达源的原样：后面的源只添自己的那一行，不改写它
       if (slot === undefined) by.set(key, { title: m.hit.title, author: m.hit.author, rank: RELEVANCE_RANK[m.relevance], arrival: arrival++, sources: [row], sourceIds: new Set([group.sourceId]) })
       else {
-        // 取最好的一档。今天同键的 kept 恒同档——只有分类能让某一行抬档，而它抬不到整串命中那一档，
+        // 取最好的一档。同键的 kept 恒同档——只有分类能让某一行抬档，而它抬不到整串命中那一档，
         // 所以这句当下拿不到跨档的输入；哪天 relevanceOf 长出按源或按分类的档位，这句就开始决定序。
         const r = RELEVANCE_RANK[m.relevance]
         if (r < slot.rank) slot.rank = r

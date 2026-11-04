@@ -2,11 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { sanitize } from './sanitize.js'
 
 /**
- * 脱敏门禁（入库 `compat/fixtures/` 前的自动脱敏，规程住本目录 `sanitize.ts`）的钉子。**这之前它没有测试**——而它是
- * `compat/fixtures/` 入库的唯一机器门禁。2026-09-28 真采第一条真源时暴露它的盲区：
- * 正则要求键后紧跟 `:`，于是真页面上最常见的 **JSON 带引号键** `"token":"68d2…"`
- * （企鹅小说的 Cloudflare beacon 就是这一形态）**整条不触发**；`Authorization: Bearer …`
- * 那种头形态也漏（`authorization`/`bearer` 不在键名单里）。
+ * 脱敏门禁（入库 `tests/replay/fixtures/` 前的自动脱敏，规程住本目录 `sanitize.ts`）的钉子——它是
+ * `tests/replay/fixtures/` 入库的唯一机器门禁，形态漏一种就静默漏一种。真页面最常见的形态是
+ * **JSON 带引号键**（`"token":"68d2…"`，站点分析脚本的 beacon 配置就是这么写的）：键名单只认
+ * 「键后紧跟 `:`」时它整条不触发；`Authorization: Bearer …` 那种头形态也要认（无引号那条连前缀一起脱）。
  */
 describe('compat 脱敏两刀', () => {
   it('JSON 带引号键（真页面形态）：值是脱掉的', () => {

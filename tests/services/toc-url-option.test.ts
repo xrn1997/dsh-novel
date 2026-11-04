@@ -10,15 +10,15 @@ import { must } from '../support/fixture.js'
 import { requestUrlOf } from '../support/fetch-input.js'
 
 /**
- * `ruleBookInfo.tocUrl` 带 `,{option}` 后缀时的组装口径（真机实证：悦读小说、新小书亭）。
- * 病态：选项 JSON 写在换行后，实际打出去的地址把选项串整个并进了 URL（审计里是
- * `toc | FetchError | 请求失败 400`）。根因不在选项解析而在**绝对化早于切分**：`tocUrlOf` 求值后
+ * `ruleBookInfo.tocUrl` 带 `,{option}` 后缀时的组装口径（这份输入里存在带选项后缀的 tocUrl）。
+ * 病态：选项 JSON 写在换行后，实际打出去的地址会把选项串整个并进 URL（站点回 400）。
+ * 根因不在选项解析而在**绝对化早于切分**：`tocUrlOf` 求值后
  * 用 `absUrl`，WHATWG 解析器吃掉换行并把花括号百分号编码，`,{` 形状先被破坏、`URL_OPTION_SPLIT`
  * 再也切不到——bookUrl 与章节 URL 早已走 `absUrlKeepOption`（URL 绝对化、`,{option}` 原样接回），
  * tocUrl 这条出口漏了同一层。
  *
  * fixture 与原文的一处差异：正则用数字字符类而不是转义写法——写文件的工具层会吃掉反斜杠，
- * 转义写法在这里等于静默改了规则语义（实测会退化成匹配字母 d）。
+ * 转义写法在这里等于静默改了规则语义（会退化成只匹配字母 d）。
  */
 
 const SOURCE_URL = 'https://hareading.com'

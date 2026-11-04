@@ -6,7 +6,7 @@ import { UnsupportedRuleError } from './errors.js'
  *
  * 支持：`$`、`.name`、`..name`（递归下降，按文档序收集）、`[n]`（下标，**负数从尾数**）、
  * `[a:b]`（半开切片 [a,b)，负数从尾数）、`[*]`（全部）、`[]`（与 `[*]` 同义）、
- * 以及真实源里的冗余点形态 `.[*]`（`[` 前允许一个 `.`）。
+ * 以及输入里的冗余点形态 `.[*]`（`[` 前允许一个 `.`）。
  *
  * 明确拒绝（宁炸不猜 → UnsupportedRuleError，段级定位）：
  * 过滤器 `[?(…)]`、脚本 `[(…)]`、`@`/`&` 特殊符号、以及任何不匹配上述语法的内容。
@@ -21,7 +21,7 @@ import { UnsupportedRuleError } from './errors.js'
 /** `Json:`/裸路径归一：JSONPath 从根起算，无 `$` 视为根相对路径补 `$.`
  *  （`data[*]` → `$.data[*]`，`.data[*]` → `$.data[*]`——前导点只补 `$`，补成 `$..data[*]`
  *  会把根相对路径变成递归下降）；`@` 开头保持原样，由 tokenizer 如实拒绝。
- *  与 legado Jayway 的原始读取不同，这是本仓的有意放宽。 */
+ *  接受裸路径是本仓有意的放宽口径——严格形态要求路径从 `$` 起算，这里补根后照常求值。 */
 export function normalizeJsonPath(path: string): string {
   const p = path.trim()
   if (p.startsWith('$') || p.startsWith('@')) return p
@@ -65,7 +65,7 @@ function tokenize(path: string, loc: SegmentLoc, facet: Facet): Token[] {
       }
       i++
       if (path[i] === '[') continue // 冗余点：`.[` —— 吃掉点，下轮走括号分支
-      if (path[i] === '*') { // `.*` 属性通配（真实源形态：$.data.* / $.comics.*——取对象全部值）
+      if (path[i] === '*') { // `.*` 属性通配（输入形态：$.data.* / $.comics.*——取对象全部值）
         i++
         tokens.push({ kind: 'wildcard' })
         continue
@@ -204,7 +204,7 @@ export function evalJsonPath(path: string, data: unknown, loc: SegmentLoc, facet
     }
   }
   if (cur.length === 0) return { kind: 'miss', detail: `JSONPath 零命中：${path}` }
-  // 集合型末段（[*] / [a:b] / ..name）恒产 List——哪怕只收一个（真实源 `.[*]` 钉死）
+  // 集合型末段（[*] / [a:b] / ..name）恒产 List——哪怕只收一个（钉子用例：tests/engine/jsonpath.test.ts 的 `.[*]` 冗余点）
   const last = tokens[tokens.length - 1]
   const collection = last !== undefined && (last.kind === 'wildcard' || last.kind === 'slice' || last.kind === 'descend')
   if (collection || cur.length > 1) return { kind: 'list', items: cur.map(stringifyElement) }

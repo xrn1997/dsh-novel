@@ -24,7 +24,7 @@ export interface EvalContext {
   baseUrl?: string
   source?: string
   /** 源实体字段 `bookSourceComment`（脚本里的 `source` 就是书源实体，脚本可读它）。
-   *  不是装饰字段：真实源把**解密脚本**存在这里，用插值读 `source.bookSourceComment` 再执行。
+   *  不是装饰字段：输入里有把**解密脚本**存在这里、用插值读 `source.bookSourceComment` 再执行的形态。
    *  必须投影：漏掉时脚本拿到 undefined、静默不映射；服务层从 `raw.bookSourceComment` 现读后经此透传。 */
   sourceComment?: string
   /** 源名（脚本可见的 `source.bookSourceName`）：同源透传（漏写时会恒为空串）。 */
@@ -43,7 +43,7 @@ export interface EvalContext {
    *  点名抛错而不编一个值（矩阵 `h-java-webview-ua`）。 */
   userAgent?: () => string
   /** 二进制抓取（`java.downloadFile` 用）：与 fetch 同请求语义但返回**原始字节**——
-   *  经字符集解码链的字符串会损坏 PNG 等二进制（密钥图提取实证）。缺省缺席 → 下载类方法如实报错。 */
+   *  经字符集解码链的字符串会损坏 PNG 等二进制。缺省缺席 → 下载类方法如实报错。 */
   fetchRaw?: (url: string) => Promise<Uint8Array>
   /** `java.post(url, body, headers)` 的出站口（实现在
    *  `services/engine-fetch.ts` 的 engineFetchPost——**同一个守门 fetcher**，不开第二出口）。 */
@@ -52,12 +52,12 @@ export interface EvalContext {
     headers: Record<string, string>; cookies: Record<string, string>
   }>
   /** `java.head(url, headers)` 的出站口（engineFetchHead）：HEAD + **不跟重定向**，数据面带响应头
-   *  （脚本读 `res.headers()["location"]` 取直链；对面 followRedirects(false) 同口径）。 */
+   *  （脚本读 `res.headers()["location"]` 取直链，跟了跳转就拿不到）。 */
   fetchHead?: (url: string, headers?: Record<string, string>) => Promise<{
     url: string; statusCode: number; headers: Record<string, string>; cookies?: Record<string, string>
   }>
   /** `java.get(url, headers)` 的出站口（engineFetchGet）：GET + **不跟重定向**，返回 Response 数据面
-   *  （上游 `JsExtensions.get` 的 jsoup Connection.Response 形状）。 */
+   *  （脚本侧 `Connection.Response` 的数据面形状）。 */
   fetchGet?: (url: string, headers?: Record<string, string>) => Promise<{
     url: string; body: string; contentType?: string; charset?: string; statusCode: number
     headers: Record<string, string>; cookies: Record<string, string>
@@ -137,7 +137,7 @@ export type Segment =
   // AllInOne 行模板段（矩阵 a-allinone-group-zero 那一行的实现）：支文本里出现 `$\d{1,2}` 时，
   // 整支就是「行组引用模板」——值 = 用当前行把 `$n` 绑好后的原文（`$0` = 整段），
   // **不再按规则解析**（否则 `第一章 初入江湖` 这种产物会被当选择器/JSONPath 判非法）。
-  // 行来自 `EvalContext.regexRow`（只有 AllInOne 条目带）；没有行时给原文（与对面同口径）。
+  // 行来自 `EvalContext.regexRow`（只有 AllInOne 条目带）；没有行时给原文——落点如此。
   | { kind: 'regexRow'; raw: string }
 
 /** raws 与 segments 一一对应，供错误定位 */

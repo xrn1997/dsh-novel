@@ -20,7 +20,7 @@ export const NOVEL_CSS = [
 ].join('\n')
 
 /** 样式注入组件。`NovelView` 在根上注入一次；`SettingsSection` 单飞渲染时自带（`withStyles`
- *  缺省 true），被 NovelView 挂载时让位——同一棵树里注两遍等于 58KB CSS 进 DOM 两次。
+ *  缺省 true），被 NovelView 挂载时让位——同一棵树里注两遍等于同一份 CSS 进 DOM 两次。
  *  以 <style data-novel-style> 注入（renderToString 友好；HMR 重载随 bundle 整体替换）。 */
 export function NovelStyles(): ReactNode {
   return <style data-novel-style>{NOVEL_CSS}</style>

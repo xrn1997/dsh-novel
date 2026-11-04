@@ -14,9 +14,9 @@ export const SHELL_CSS = `
 /* 「小说」视图在场时收掉宿主常驻 composer（AI 输入框）：它是会话壳的固定座位，view 环切换不卸载
    它，切到小说 tab 后仍贴在底部压在正文上；宿主没有「本视图不需要输入框」的钩子，故本样式层用
    :has 判在场性（data-novel-root 进 DOM 才命中，切回「对话」即时恢复）。
-   只藏「默认 composer」那一层（chain 的 overlay fallback 包裹层）而不是整个 [data-composer-seat]
-   ——宿主给该层写的是 inline display:contents 故必须 !important；而 ui-approval /
-   ui-user-questions / ui-subagent 的接管组件是它的**兄弟节点**，照样渲染：小说 tab 里 agent 提问与
+   只藏「默认 composer」那一层（上面属性选择器指认的包裹层）而不是整个 [data-composer-seat]
+   ——那一层带行内 display:contents 的声明、必须 !important 才压得住；而同座位上审批/提问等
+   接管组件是它的**兄弟节点**，照样渲染：小说 tab 里 agent 提问与
    审批提示不会被吞掉（整座 display:none 会吞掉，用户在等待中看不到提问 → 卡死）。 */
 [data-conversation-scroll]:has([data-novel-root]) [data-chain-overlay-fallback="conversation.composer"] { display: none !important; }
 /* 配套控件：会话列宽拖拽把手（40px 透明 col-resize 条，调 AI 输入框宽度）。输入框收掉后它没对象
@@ -57,7 +57,7 @@ export const SHELL_CSS = `
 /* ── border-box 守卫（作用域：插件自己的两棵树，不碰宿主）──
    没有 box-sizing 声明则默认 content-box，凡「显式 width/max-width + padding」的件外廓都比
    容器宽（padding 量）——.novel-wrap 窄列下横向溢出 + .novel-main 把另一轴也算成可滚 →
-   底部横滚条 + 网格右侧截断（用户真机反馈「书架宽度怎么回事」的根因）；modal/drawer/prefs
+   底部横滚条 + 网格右侧截断；modal/drawer/prefs
    定宽同病都肥一圈。reset 只圈 .novel-root 与 [data-novel-scope] 两棵树。
    （本文件注释里别写反引号：NOVEL_CSS 是模板字符串，反引号会当场截断它。） */
 .novel-root, .novel-root *, .novel-root *::before, .novel-root *::after,
@@ -67,7 +67,7 @@ export const SHELL_CSS = `
 .novel-view { padding: var(--novel-sp-4) var(--novel-sp-5); display: flex; flex-direction: column; gap: var(--novel-sp-4); }
 /* ── 顶部 tab 导航（书架 | 书城 | 书源管理）：IA 上三者并列，选择即切换下方内容。
    不做「书城预留位占位 chip」：占位不如真导航（书城已是两级分类浏览页本身）；书源管理 =
-   宿主设置「小说」区块整体搬入（settings.section 注册撤除，单一归属）。
+   宿主设置「小说」区块整体（不在 settings slot 再注册，单一归属在本面板）。
    reader/search 是 tab 之下的沉浸内容流，各有自己的返回导航，本行不随行。 */
 .novel-tabs { display: flex; gap: var(--novel-sp-0); padding: var(--novel-sp-4) var(--novel-sp-5) 0; }
 .novel-tabs button {
@@ -79,8 +79,8 @@ export const SHELL_CSS = `
 .novel-tabs button:hover { color: var(--novel-text); }
 .novel-tabs button.on { color: var(--novel-brand-strong); background: var(--novel-brand-tint); font-weight: 600; }
 /* ── 全局状态条＝浮层 ─────────────────────────
-   状态条必须是**浮层**：作为普通流内元素，泳道一挂就把下面内容顶下去、settle 再弹回
-   （逐帧实测 +35px、每次启停 2 条 layout-shift），而单源启停往返 ≈1 帧 = 肉眼可见的闪烁。
+   状态条必须是**浮层**：作为普通流内元素，泳道一挂就把下面内容顶下去、settle 再弹回，
+   而启停是秒级以内的往返操作 = 肉眼可见的闪烁。
    做法：容器 position:relative + 状态条 absolute——泳道来去不再参与布局。代价是条目浮在上方
    一小条（自带底/描边/投影），仍可点（任务条=跳转、错误条=定位/忽略）。
    锚点住宿主 shell.overlay 的 .novel-shell-status——中央呈现座位一次只渲染一个面板，

@@ -110,8 +110,8 @@ export class LocalNotMountedError extends Error {
 // 这里定义；两个 destination 各写一份会让加一个错误类要动两个模块加一份自觉。
 
 /** 错误类目：规则求值 / 缺规则 / 网络抓取 / 资源缺席 / 本地导入两态 / 本地未挂载 / 任务互斥 / 其他。
- *  LocalImportError 不再自带 status、JobRunningError 的 409 特判包装与本地书面的
- *  路由侧 catch 全部收进本表——错误→HTTP 的 egress 只剩 classify 一处。 */
+ *  错误类自己不带 HTTP status（`LocalImportError`、`JobRunningError` 都一样）——
+ *  错误→HTTP 的 egress 只剩 classify 一处，路由侧不写逐类 catch。 */
 export type ErrorCategory =
   | 'rule-eval' | 'rule-missing' | 'fetch' | 'not-found'
   | 'bad-request'

@@ -11,7 +11,7 @@ export interface CookieEntry {
 
 const keyOf = (domain: string, path: string, name: string): string => `${domain}\n${path}\n${name}`
 
-/** 容量闸（与 Chrome 同量级：单域 180、总量 3300）。jar 跨源共享且 headerFor 全表扫描，
+/** 容量闸（单域 180、总量 3300）。jar 跨源共享且 headerFor 全表扫描，
  *  没有闸时一个恶意源站点就能灌爆它并拖慢此后每个请求；超出按插入序淘汰最旧的。 */
 const MAX_COOKIES_PER_DOMAIN = 180
 const MAX_COOKIES = 3300
@@ -28,7 +28,7 @@ function hostMatches(host: string, entry: CookieEntry): boolean {
 }
 
 /** 域/路径/过期/secure 的 cookie jar（RFC 6265 子集）。
- *  一张表跨源共享（上游 CookieStore 也是按域共享，两个同站源复用登录态）；脚本侧
+ *  一张表跨源共享（按域/路径粒度，两个同站源复用登录态）；脚本侧
  *  `source.cookieJar` 垫片仍按源隔离，两者不是同一张表。 */
 export class CookieJar {
   private readonly store = new Map<string, CookieEntry>()

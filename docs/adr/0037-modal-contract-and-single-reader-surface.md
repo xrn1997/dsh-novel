@@ -19,13 +19,13 @@ Status: accepted
 
 **同场 Esc 的归属**：模态在场时模态先吃 Esc，阅读浮层的 surface 监听在模态在场时不安装；模态关闭后若浮层仍在场，下一次 Esc 按 `reader-surfaces.closeAll` 的语义收场。两家划分不变。
 
-**一处行为变更如实记在此**：`Aa` 此前不关目录抽屉，于是「Aa 上场 + 遮罩出现」时抽屉仍在场却被遮罩压住——正是上面那条要挡的形状。收成单角后 `Aa` 也收目录。这条由这次改造顺带裁掉，**真机验收尚未做**（键盘与遮挡是浏览器半的门，`DSH_EPUB_BROWSER` 那类门只量渲染几何）。
+**一处行为变更如实记在此**：若 `Aa` 不收目录抽屉，「Aa 上场 + 遮罩出现」时抽屉仍在场却被遮罩压住——底下那面看得见点不动，正是上面那条互斥要挡的形状，所以收成单角后 `Aa` 也收目录。这条改动的验收面是浏览器半的键盘与遮挡门，`DSH_EPUB_BROWSER` 那类门只量渲染几何、不覆盖它。
 
 被否决的做法：
 
 - **保持各视图自持 effect**：五份手写已经漂出两种行为，且下一次新增浮层还会继续复制。
 - **把 `Dialog` 塞进 `client/views/bits.tsx`**：`bits` 是六视图共用的**呈现小件**（徽标、进度段、空态、告警清单），没有行为契约；模态契约带焦点与键盘接管，混进去会让 `bits` 同时是抽屉和主人。
-- **抽屉与模态合成一套标记**：几何不同族（`.novel-modal` / `.novel-modal.wide` / `.novel-city-drawer` + `.novel-city-scrim`），主人是样式层；`variant` 只选哪一档标记，不接管内部排版——两档的标题行/动作行照旧用原类名（`.novel-modal-title` / `.novel-modal-actions` / `.novel-city-drawer-head`），这次改造不动任何行的几何。
+- **抽屉与模态合成一套标记**：几何不同族（`.novel-modal` / `.novel-modal.wide` / `.novel-city-drawer` + `.novel-city-scrim`），主人是样式层；`variant` 只选标记档，既不接管内部排版也不动行几何——两档的标题行/动作行仍用各自类名（`.novel-modal-title` / `.novel-modal-actions` / `.novel-city-drawer-head`）。
 - **阅读浮层做成 reducer/状态机框架**：判据只有「哪一角在场 + 退场怎么表态」两问，一个纯函数族就够；引框架会把视图改成派发点，而真正的 bug（互斥漏抄、Esc 分叉）在判据住址，不在调度形式。
 - **借会话持有浮层在场**：会话深且只拥有阅读时序（`ADR-0022`）；「此刻哪个面板开着」不是位置真相，塞进去会让会话的 interface 长出只有视图用的格。
 

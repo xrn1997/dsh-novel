@@ -11,13 +11,13 @@
 declare module '@deepseek-ai/dsh-client-ui-primitives' {
   import type { ReactNode } from 'react'
 
-  /** 字段状态（0.2.1-rc.2 发布物核实）：当前文本、是否覆盖默认、是否非法。 */
+  /** 字段状态：当前文本、是否覆盖默认、是否非法。 */
   export interface SettingsFieldState {
     text: string
     overridden: boolean
     invalid: boolean
   }
-  /** `SettingsFormModel.shell()` 的壳层状态（0.2.1-rc.2 发布物核实）：可用 / 可写 / 有改动 /
+  /** `SettingsFormModel.shell()` 的壳层状态：可用 / 可写 / 有改动 /
    *  有非法字段 / 保存中 / 上次保存失败。只镜像页面读到的这六项。 */
   export interface SettingsFormState {
     available: boolean

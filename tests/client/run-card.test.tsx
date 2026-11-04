@@ -48,7 +48,7 @@ describe('RunCard 公共外壳（抽共）', () => {
     expect(screen.getByText('· 失败 2')).toBeTruthy()
   })
 
-  it('ImportRunCard：零 dupSkipped/failed 不渲染对应行（原条件语义不丢）', () => {
+  it('ImportRunCard：零 dupSkipped/failed 不渲染对应行', () => {
     render(<ImportRunCard job={job({ kind: 'import', counts: { ok: 5, failed: 0, dupSkipped: 0, replaced: 0 } })} />)
     expect(screen.queryByText(/重复跳过/)).toBeNull()
     expect(screen.queryByText(/失败/)).toBeNull()
@@ -126,8 +126,8 @@ describe('focusRunCard：运行卡现场注册表（按任务种类分桶）', (
   })
 
   it('导入卡与验证卡同时在场：去现场各滚各的，卸载只清自己那一种', () => {
-    // 真实现场：验证任务在跑时打开导入弹层，导入卡（可能来自 getLastImportJob 缓存）后登记。
-    // 旧「最后登记者赢」在这棵树上会让 focusRunCard('probe') 滚到导入卡。
+    // 场景：验证任务在跑时打开导入弹层，导入卡（可能来自 getLastImportJob 缓存）后登记。
+    // 按「最后登记者」取卡会滚错卡，所以两类卡按任务种类分桶，focusRunCard 各找各的。
     const probeView = render(<ProbeRunCard job={job()} />)
     const importView = render(<ImportRunCard job={job({ kind: 'import', counts: { ok: 5, failed: 0, dupSkipped: 0, replaced: 0 } })} />)
     const probeCard = cardOf(probeView.container)

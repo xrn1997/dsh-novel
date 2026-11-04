@@ -22,7 +22,7 @@ import { guardedMatchAll } from './regex-guard.js'
 /**
  * 行内标志前缀（正则的行内标志写法 `(?s)` / `(?i)` / `(?si)`——JS 无行内标志语法）：
  * 出现在模式开头时剥掉并转成 JS flags（s=dotAll、i、m、u；其余字符不剥，编译期如实报错）。
- * 真实源有 `:(?s)(\d+)" class="…` 形态；直接交给 RegExp 会报 Invalid group，故前缀必须先剥掉再编译。
+ * 输入里会出现 `:(?s)(\d+)" class="…` 形态；直接交给 RegExp 会报 Invalid group，故前缀必须先剥掉再编译。
  */
 const INLINE_FLAG_RE = /^\(\?([imsu]+)\)/
 
@@ -55,7 +55,7 @@ export function evalAllInOne(
   }
 
   // 整页扫描走死线守卫：合法但病态的正则（灾难回溯）只许废掉这一条规则，
-  // 不许把主线程钉住（见 regex-guard 的取舍）；行口径与旧的内联循环一致
+  // 不许把主线程钉住（见 regex-guard 的取舍）；行口径以 guardedMatchAll 自身为准
   let rows: string[][]
   try {
     rows = guardedMatchAll(re, page)

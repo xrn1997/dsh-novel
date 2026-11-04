@@ -12,13 +12,13 @@ import type { JobHost, JobOutcome } from './job-holder.js'
  * 持有者在 Node 半，「离开界面」就与「任务是否完成」脱钩。
  *
  * 与写任务（`SourceJobs` 的导入 / 批量验证）**分槽**：搜索是读、那两个是写，让搜索挡住导入
- * 等于惩罚探索动作。代价如实记录：宿主侧可同时存在两条 novel 任务（宿主配额
- * `maxConcurrentJobsPerOwner` 缺省 10，够用），UI 的「任何任务在途即禁用」判据只管写任务。
+ * 等于惩罚探索动作。代价如实记录：宿主侧可同时存在两条 novel 任务（并发配额归宿主管，本仓只用到两条），
+ * UI 的「任何任务在途即禁用」判据只管写任务。
  *
  * 生命周期同样登记给 `ctx.jobs`（kind `novel-search`）——身份、终态、取消入口与写任务同口径；
  * 本模块持有「结果集 + 游标」；过程行尾缓冲挂在登记给宿主的那根线上（`job-holder.ts` 的 `HostTie`，
  * 宿主经 `readOutput` 拉）。
- * 宿主任务面板只有 label / detail（另有 `readOutput` 过程行拉取面），装不下整轮结果——结果与明细仍只在这里。
+ * 宿主任务面板的展示面装不下整轮结果（过程行另有 `readOutput` 拉取面）——结果与明细仍只在这里。
  */
 
 /** 运行器契约：门面（`ReadingService`）把 `searchProgressive` 包进来——持有者不认识门面。

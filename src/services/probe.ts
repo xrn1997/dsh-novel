@@ -6,8 +6,8 @@ import type { SourceRequest } from './source-request.js'
 import type { SourceRegistry } from './sources.js'
 import type { NovelSource } from './types.js'
 
-/** 探针关键词序列：单字「书」在个别站被搜索程序停用（实测有站对「书」0 命中、换词即命中）——
- * 首词 0 命中时逐词重试，任一命中即 verified；全部 0 命中才判 broken。 */
+/** 探针关键词序列：单字「书」在个别站会被搜索程序停用（对「书」恒 0 命中、换个词即命中的形态
+ *  库里有，口径见矩阵行 `k-probe`）——首词 0 命中时逐词重试，任一命中即 verified；全部 0 命中才判 broken。 */
 const PROBE_KEYS = ['书', '小说', '的'] as const
 
 /**

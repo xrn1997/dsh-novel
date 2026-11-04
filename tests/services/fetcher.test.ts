@@ -161,11 +161,10 @@ describe('fetchPage', () => {
     expect(p.headers).toMatchObject({ location: 'https://i.pximg.net/a.png', 'x-origin-url': 'https://alt/a.png' })
     // 缺省姿态照旧炸：例外只在那一个调用点开（`ADR-0015` 的 manual 例外）
     await expect(f.fetchPage('https://a.com/img', { method: 'HEAD' })).rejects.toMatchObject({ name: 'FetchError', status: 302 })
-    // 这条桩**证不了** undici 真把 3xx 的状态与头透出来（那是 Node 侧行为，本机以本地 302 服务实测过：
-    // `type: basic`、status 302、location 可读，不是浏览器那种 opaqueredirect 空壳）。
+    // 这条桩**证不了** undici 真把 3xx 的状态与头透出来（那是运行时侧行为，超出本桩的边界）。
     // 这里钉的是本仓自己的两件事：请求确实带 manual 出站、非 2xx 在 manual 下不折叠成错误。
   })
-  it('noFollow 姿态：带 redirect:manual 出站、3xx 返回、>=400 仍抛（java.get 的 jsoup 口径）', async () => {
+  it('noFollow 姿态：带 redirect:manual 出站、3xx 返回、>=400 仍抛（java.get 走这一姿态）', async () => {
     let seen: RequestInit | undefined
     const f = createFetcher({
       fetchImpl: fakeFetch((_url, init) => {
@@ -188,7 +187,7 @@ describe('fetchPage', () => {
     const f = createFetcher({ fetchImpl: () => new Promise(() => {}), timeoutMs: 20 })
     await expect(f.fetchPage('https://slow.com')).rejects.toBeInstanceOf(FetchError)
   })
-  // Node 的 fetch（undici）不读系统代理：有代理才通的站点直连会被 302/重置（实测笔趣阁）
+  // Node 的 fetch（undici）不读系统代理：有代理才通的站点直连会被 302/重置
   it('proxyUrl → 出站带 undici dispatcher', async () => {
     let seen: Record<string, unknown> | undefined
     const f = createFetcher({
@@ -338,7 +337,7 @@ describe('fetchPage', () => {
     expect(last(proxyAgents).url).toBe('http://a:1')
     expect(last(proxyAgents).closed).toBe(false)
   })
-  // Node fetch 默认不带 User-Agent——站点 WAF 按 UA 过滤直接 403（真机实测有这种源；浏览器口径默认带）
+  // Node fetch 默认不带 User-Agent——按 UA 过滤的站点会直接 403，所以缺省带浏览器那套头
   it('缺省带浏览器 UA/Accept 头；调用方声明的同名头优先', async () => {
     let seen: Record<string, unknown> | undefined
     const f = createFetcher({
@@ -357,7 +356,7 @@ describe('fetchPage', () => {
 
   it('源声明**小写** user-agent 同样覆盖缺省 UA（头名不敏感；两键并存会合成畸形头）', async () => {
     // 裸 {...DEFAULT_HEADERS, ...init} 会让 User-Agent 与 user-agent 并存，undici 把它们并成一条
-    // `"默认, 源"`（本机实测服务端收到的就是这串）——源声明的 UA 就此失效，比覆盖更坏。
+    // `"默认, 源"`——源声明的 UA 就此失效，比覆盖更坏。
     let seen: Record<string, unknown> | undefined
     const f = createFetcher({
       fetchImpl: (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -407,8 +406,8 @@ describe('decodeBody 解码链', () => {
     const replaced = { ...page(Buffer.from('替换正文', 'utf8')), charset: 'utf-8', replaced: true }
     expect(decodeBody(replaced, 'gbk')).toBe('替换正文')
   })
-  it('空串 charset 声明视为缺位（真实源 `charset=` 空值——此前必炸 DecodeError）', () => {
-    // 声明缺位 → 嗅探链接管：meta charset=gbk 的页面照常解码，不再空串必炸
+  it('空串 charset 声明按缺位处理（`charset=` 空值这一形态）', () => {
+    // 声明缺位 → 嗅探链接管：meta charset=gbk 的页面照常解码
     const html = Buffer.concat([Buffer.from('<html><head><meta charset="gbk"></head><body>'), gbkHello, Buffer.from('</body></html>')])
     expect(decodeBody(page(html, undefined), '')).toContain('你好')
     expect(() => decodeBody(page(gbkHello, undefined), '')).not.toThrow()

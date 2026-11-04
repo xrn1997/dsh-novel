@@ -14,7 +14,7 @@ import { useCopy } from '../copy/index.js'
  *    是 textarea，Tab 序若也只认钮，导入弹层的主入口就被关在键盘外。
  * ② **焦点 effect 挂载作用域**（空依赖 + `onClose` 走 ref）：模态在场期间父层随时重渲染
  *    （任务轮询每秒一次），依赖里带闭包就会每次把焦点劫回第一颗、opener 被重捕获成模态内按钮
- *    （两处修过的真缺陷，回归钉在 `tests/client/dialog.test.tsx`）。
+ *    （两处竞态形态，回归钉在 `tests/client/dialog.test.tsx`）。
  * ③ **无障碍名默认取可见标题**（`aria-labelledby` 指向面板内那一行）：把同一句话再抄进
  *    `aria-label` 就是给同一读数第二个主人；只有名字要与可见标题不同（浮层带「书籍详情：」前缀）
  *    才用 `label` 那一格。

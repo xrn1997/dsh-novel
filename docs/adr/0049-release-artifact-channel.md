@@ -2,7 +2,7 @@
 
 Status: accepted
 
-`lib/` 是构建产物且不入库，而本包没有 `prepare`——pnpm ≥10 会在源码安装时拦下依赖的生命周期脚本，`github:` / `git:` 直装拿到的是缺 `lib/` 的半成品，宿主整树拒挂。于是「从 GitHub 装」过去只有一条路：克隆、自己 `pnpm install && pnpm build`、再 `link:`。现在补一条不需要构建工具链的路：**`V*` tag push 时由 CI 用 `prepack` 构建好，挂成 GitHub Release 资产**，用户把 `.tgz` 的 URL 直接交给 `dsh plugin add`。
+`lib/` 是构建产物且不入库，而本包没有 `prepare`——pnpm 在源码安装路径上会拦下依赖的生命周期脚本，`github:` / `git:` 直装拿到的是缺 `lib/` 的半成品，宿主整树拒挂。于是「从 GitHub 装」过去只有一条路：克隆、自己 `pnpm install && pnpm build`、再 `link:`。现在补一条不需要构建工具链的路：**`V*` tag push 时由 CI 用 `prepack` 构建好，挂成 GitHub Release 资产**，用户把 `.tgz` 的 URL 直接交给 `dsh plugin add`。
 
 ## 决定
 
@@ -21,7 +21,7 @@ Status: accepted
 
 ## 被否方案
 
-- **恢复 `prepare`**：正是 0.8.1 把它换成 `prepack` 的那条理由——pnpm ≥10 拦下源码安装的生命周期脚本，`prepare` 根本不跑，装出来依旧是缺 `lib/` 的半成品，比现在这种「明确拒挂」更坏，因为它把失败推到运行时才炸。
+- **恢复 `prepare`**：正是 0.8.1 把它换成 `prepack` 的那条理由——pnpm 在源码安装路径拦下依赖的生命周期脚本，`prepare` 根本不跑，装出来依旧是缺 `lib/` 的半成品，比现在这种「明确拒挂」更坏，因为它把失败推到运行时才炸。
 - **把 `lib/` 提交进 git**：产物入树后每次构建都留一份 diff，且与「`files` 是精确清单、构建每多一个产物就同步加进去」的发版纪律相冲。
 - **CI 代发 npm**：要存 `NPM_TOKEN`、把不可逆的发布决定交给机器，还要改写发版边界。本次要的是一条更多人装得上的渠道，不是换掉发布权的归属。
 - **只保留 npm**：GitHub 侧用户要么得配 registry，要么得自备构建工具链；Release 资产是 GitHub 原生的一条路。
