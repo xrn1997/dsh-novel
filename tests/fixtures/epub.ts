@@ -679,6 +679,41 @@ const FIXTURES: Record<string, () => Buffer> = {
       + '<nav epub:type="toc"><ol><li><a href="ch1.xhtml#a">nav 的目录</a></li></ol></nav></body></html>'],
   ])),
 
+  /** EPUB3 的 toc 导航把 ol 写成 ul：结构没有歧义，按列表读并留变体告警，不许整本拒绝 */
+  'epub3-nav-ul': () => zipOf(pkgEntries(opfOf({
+    title: '无序目录样本',
+    manifest: itemXml('ch1', 'ch1.xhtml') + itemXml('nav', 'nav.xhtml', { attrs: ' properties="nav"' }),
+    spine: itemrefXml('ch1'),
+  }), [
+    ['OEBPS/nav.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n'
+      + '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>目录</title></head><body>'
+      + '<nav epub:type="toc"><ul><li><a href="ch1.xhtml#a">第一章</a></li>'
+      + '<li><span>第二卷</span><ul><li><a href="ch1.xhtml#b">第二章</a></li></ul></li></ul></nav></body></html>'],
+  ])),
+
+  /** toc 顶层是 ol、嵌套层写成 ul：变体告警不能只看顶层 */
+  'epub3-nav-ol-nested-ul': () => zipOf(pkgEntries(opfOf({
+    title: '嵌套无序样本',
+    manifest: itemXml('ch1', 'ch1.xhtml') + itemXml('nav', 'nav.xhtml', { attrs: ' properties="nav"' }),
+    spine: itemrefXml('ch1'),
+  }), [
+    ['OEBPS/nav.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n'
+      + '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>目录</title></head><body>'
+      + '<nav epub:type="toc"><ol><li><span>第一卷</span><ul><li><a href="ch1.xhtml#a">第一章</a></li></ul></li></ol></nav>'
+      + '</body></html>'],
+  ])),
+
+  /** toc 导航在，但里面连列表都没有：只容忍 ul 变体，空壳仍是坏目录 */
+  'epub3-nav-no-list': () => zipOf(pkgEntries(opfOf({
+    title: '空目录样本',
+    manifest: itemXml('ch1', 'ch1.xhtml') + itemXml('nav', 'nav.xhtml', { attrs: ' properties="nav"' }),
+    spine: itemrefXml('ch1'),
+  }), [
+    ['OEBPS/nav.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n'
+      + '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>目录</title></head><body>'
+      + '<nav epub:type="toc"><div>目录</div></nav></body></html>'],
+  ])),
+
   /** 只有 spine、没有 nav 也没有 NCX：包层必须按 spine 造平面导航并留告警，而不是报错或空目录 */
   'epub3-no-nav': () => zipOf(pkgEntries(opfOf({
     title: '无目录样本', manifest: TWO_CHAPTER_MANIFEST, spine: TWO_CHAPTER_SPINE,
@@ -827,6 +862,15 @@ const FIXTURES: Record<string, () => Buffer> = {
     + '<package version="3.0" xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid">'
     + '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>&boom;</dc:title></metadata>'
     + '<manifest>' + itemXml('ch1', 'ch1.xhtml') + '</manifest><spine>' + itemrefXml('ch1') + '</spine></package>')),
+
+  /** 正文使用常见的 HTML 命名实体（含 `&nbsp;`）：内建表应解码，不再整本拒绝 */
+  'epub-html-entities': () => zipOf(pkgEntries(opfOf({
+    title: '实体样本',
+    manifest: itemXml('ch1', 'ch1.xhtml') + itemXml('ent', 'entities.xhtml'),
+    spine: itemrefXml('ch1') + itemrefXml('ent'),
+  }), [
+    ['OEBPS/entities.xhtml', xhtmlOf('实体章节', '<h1>实体</h1><p id="e">甲&nbsp;乙&hellip;&copy;</p>')],
+  ])),
 
   // ── 包层预算与路径出处的样本 ────────────────────────────────────────
 

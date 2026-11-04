@@ -256,6 +256,35 @@ describe('导航派生顺序：nav → NCX → spine', () => {
     })
   })
 
+  it('toc 导航把 ol 写成 ul：按列表读并留变体告警，不当坏目录拒整本', async () => {
+    await withBook('epub3-nav-ul', (book) => {
+      expect(book.navigationSource).toBe('nav')
+      // 嵌套的 ul 也要照读：只认 ol 会把整本拒掉，只认第一层会把「第二卷」的子条目丢掉
+      expect(book.navigation.map((n) => [n.label, n.children.map((c) => c.label)])).toEqual([
+        ['第一章', []],
+        ['第二卷', ['第二章']],
+      ])
+      expect(book.warnings).toHaveLength(1)
+      const warning = pick(book.warnings, 0)
+      expect(warning.code).toBe('epub-navigation-unordered-list')
+      expect(warning.resource).toBe('OEBPS/nav.xhtml')
+      expect(warning.message).toMatch(/ul/)
+    })
+  })
+
+  it('顶层 ol、嵌套层 ul：嵌套层的变体也留告警', async () => {
+    await withBook('epub3-nav-ol-nested-ul', (book) => {
+      expect(book.navigation.map((n) => [n.label, n.children.map((c) => c.label)])).toEqual([
+        ['第一卷', ['第一章']],
+      ])
+      expect(book.warnings.map((w) => w.code)).toEqual(['epub-navigation-unordered-list'])
+    })
+  })
+
+  it('toc 导航在但连列表都没有：仍按坏目录报错（只容忍 ul 变体）', async () => {
+    expectEpubError(await packageRejection('epub3-nav-no-list'), /ol\/ul/)
+  })
+
   it('没有 nav 也没有 NCX：按 spine 造平面导航并留持久告警', async () => {
     await withBook('epub3-no-nav', (book) => {
       expect(book.navigationSource).toBe('spine')

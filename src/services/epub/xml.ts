@@ -1,4 +1,5 @@
 import { load } from 'cheerio'
+import { decodeHTML, decodeHTMLAttribute, decodeHTMLStrict } from 'entities'
 import iconv from 'iconv-lite'
 import type { AnyNode, CDATA, Element, Text } from 'domhandler'
 import { encodingKnown } from '../encoding.js'
@@ -15,7 +16,9 @@ import { EpubImportError } from './errors.js'
  * 三条口径（改动这一层先读它们）：
  *
  * ① **解码只按字节事实**：BOM 优先于声明、声明优先于默认 UTF-8，非法字节一律抛（**没有 GBK 猜测链**）。
- * ② **只读解析**：解析前过静态闸门（DOCTYPE 带内部子集、实体声明、未声明的实体引用一律拒）；
+ * ② **只读解析**：解析前先把 HTML 命名实体归一化为数字字符引用（带分号的按内建表、没写分号的按
+ *    HTML 的 legacy 表；正文与标签属性各按浏览器的 data / 属性状态读——都不解析 DTD、不请求远端），
+ *    再过静态闸门（DOCTYPE 带内部子集、实体声明、表外实体引用一律拒）；
  *    无内部子集的标准外部 DOCTYPE 原样留着——解析器忽略它，也就不存在请求远端 DTD 的动作。
  * ③ **单文档 DOM 预算**：深度与结构节点数超限即抛 `EpubImportError`，而不是递归到栈溢出。
  *    字节预算管不住「结构炸弹」：约一万层嵌套（远低于 8 MiB）就足以让无预算的递归吃穿调用栈抛
@@ -103,8 +106,9 @@ function declaredEncoding(bytes: Buffer): string | null {
  *    一并框在预算内，不必每处再各配一套计数。
  */
 export function parseXml(text: string, budget: XmlBudget): Element {
-  scanXml(text, budget.what)
-  const doc = load(text, { xml: true })
+  const normalized = normalizeHtmlNamedEntities(text, budget.what)
+  scanXml(normalized, budget.what)
+  const doc = load(normalized, { xml: true })
   const roots = (doc.root().get(0)?.children ?? []).filter(isElement)
   const root = roots[0]
   if (root === undefined) throw new EpubImportError(`${budget.what} 不是可解析的 XML（没有根元素）`)
@@ -121,18 +125,157 @@ export function parseXml(text: string, budget: XmlBudget): Element {
 }
 
 /**
+ * 把 HTML 命名实体归一化成数字字符引用。
+ *
+ * XML 只预定义 `amp/lt/gt/quot/apos`；实际 EPUB 常用 `&nbsp;`、`&hellip;` 这类 HTML 命名实体，
+ * 而本层不解析 DTD。这里先把它们转成 `&#x...;`，让 XML 解析器按数值引用统一解码
+ * ——**不读 DTD、不请求远端、不做递归展开**，安全面与静态闸门不变。
+ *
+ * 两种写法分开解：**带分号**的按内建表严格解（`&hellip;` 这种靠 DTD 才成立的名字也认得）；
+ * **没写分号**的按 HTML 的 legacy 表解——`&nbsp` 与 `&nbsp;` 同解，且与浏览器同取最长匹配
+ * （`&notin` 解成 `¬in`；`&hellip` 连 legacy 前缀都没有，原样留着）。取「浏览器怎么读就怎么读」
+ * 是因为这一层的读者正是渲染这本书的浏览器；表外且带分号的引用不猜，由闸门点名拒绝。
+ *
+ * **正文与标签分开用浏览器的两套读法**：正文走 HTML 的 data 状态，标签（属性值）走属性状态——
+ * 后者对无分号写法多一条保护：后接字母数字或 `=` 时不算引用。少了这条，`href="?p=1&sect=2"`
+ * 会被解成 `?p=1§=2`（浏览器不会），链接就这样被悄悄改写。
+ *
+ * CDATA 与注释里的字样不是引用，整段原样保留；`&amp;nbsp;` 仍只解一层（`&amp;` 保持预定义实体，
+ * 后面的 `nbsp;` 是字面文本）。
+ */
+function normalizeHtmlNamedEntities(text: string, what: string): string {
+  if (!text.includes('&')) return text
+  return rewriteSegments(text, what, {
+    plain: (segment) => normalizeEntitySegment(segment, decodeHTML),
+    markup: (segment) => normalizeEntitySegment(segment, decodeHTMLAttribute),
+  })
+}
+
+/** 一段正文或标签里把 HTML 表认得的命名实体转成数字字符引用；`decodeNoSemicolon` 是无分号写法
+ *  用的那套读法：正文按 data 状态、标签按属性状态（见 `normalizeHtmlNamedEntities`）。 */
+function normalizeEntitySegment(segment: string, decodeNoSemicolon: (raw: string) => string): string {
+  if (!segment.includes('&')) return segment
+  return segment.replace(NAMED_ENTITY, (
+    whole: string, name: string | undefined, semicolon: string | undefined, offset: number, source: string,
+  ) => {
+    if (name === undefined) return whole
+    // 带分号且名字是 XML 预定义的：留给解析器（`&amp;` 一旦在这儿解回 `&`，下一轮就成了新引用的开头）
+    if (semicolon === ';' && PREDEFINED_ENTITIES.has(name)) return whole
+    if (semicolon === ';') {
+      const decoded = decodeHTMLStrict(whole)
+      return decoded === whole ? whole : numericRefsOf(decoded)
+    }
+    // 无分号：把后一个字符一并交给解码器——属性状态靠它判「后接字母数字或 `=` 时不算引用」。
+    // 只把 `&name` 这一截交进去，解码器看见的是串尾，保护规则就失效了。
+    const probe = whole + source.charAt(offset + whole.length)
+    if (decodeNoSemicolon(probe) === probe) return whole
+    const decoded = decodeNoSemicolon(whole)
+    return decoded === whole ? whole : numericRefsOf(decoded)
+  })
+}
+
+/** 解出来的字符 → 数字字符引用（XML 不认 HTML 的名字，只认数值形式的字符引用） */
+function numericRefsOf(text: string): string {
+  let refs = ''
+  for (const ch of text) {
+    const codePoint = ch.codePointAt(0)
+    if (codePoint !== undefined) refs += `&#x${codePoint.toString(16)};`
+  }
+  return refs
+}
+
+/** 三段落改写：`plain` 处理定界符之外的文本，`literal` 处理整段字面量，`markup` 处理整段标签
+ *  （含尖括号；缺省都原样返回） */
+interface SegmentRewrite {
+  readonly plain?: (segment: string) => string
+  readonly literal?: (segment: string) => string
+  readonly markup?: (segment: string) => string
+}
+
+/**
+ * 把文档切成「正文 / 字面量 / 标签」三类片段再交出去改写。
+ *
+ * **这份定界符知识只在这里写一遍**：归一化要知道哪些字样不是引用、哪一段属于属性值，静态闸门要知道
+ * 哪些不该扫；两处各写一套就会在「哪段算字面量」上分叉，而分叉的那一半必然是误判。
+ *
+ * 未闭合的 `<![CDATA[` / `<!--` 当场抛：它不是良构 XML，放过去只会让闸门把字面量里的字样当引用，
+ * 报出一条与事实相反的理由（`&nbsp;` 明明在内建表里）。边界只能靠猜的东西不猜。
+ * 标签按「引号里的 `>` 不算结束」切：XML 的属性值允许出现裸 `>`，先按 `>` 断开就会把后半个标签
+ * 当正文——那半截里的属性值会被按正文的读法解实体。
+ */
+function rewriteSegments(text: string, what: string, edit: SegmentRewrite): string {
+  const plain = edit.plain ?? identity
+  const literal = edit.literal ?? identity
+  const markup = edit.markup ?? identity
+  const out: string[] = []
+  let cursor = 0
+  while (cursor < text.length) {
+    const start = text.indexOf('<', cursor)
+    if (start < 0) {
+      out.push(plain(text.slice(cursor)))
+      break
+    }
+    if (start > cursor) out.push(plain(text.slice(cursor, start)))
+    const closer = literalCloseOf(text, start)
+    if (closer !== null) {
+      const end = text.indexOf(closer.close, start + closer.open.length)
+      if (end < 0) throw new EpubImportError(`${what}：${closer.open} 没有闭合的 ${closer.close}（未闭合的字面量不是良构 XML）`)
+      const stop = end + closer.close.length
+      out.push(literal(text.slice(start, stop)))
+      cursor = stop
+      continue
+    }
+    const stop = tagEndOf(text, start)
+    if (stop < 0) {
+      // 没有 `>` 的尾部不是本层能判的标签：原样留在正文段里，畸形由解析器报
+      out.push(plain(text.slice(start)))
+      break
+    }
+    out.push(markup(text.slice(start, stop)))
+    cursor = stop
+  }
+  return out.join('')
+}
+
+/** 这个 `<` 是否开了一段字面量；是则给出它的收口 */
+function literalCloseOf(text: string, start: number): { readonly open: string; readonly close: string } | null {
+  if (text.startsWith('<![CDATA[', start)) return { open: '<![CDATA[', close: ']]>' }
+  if (text.startsWith('<!--', start)) return { open: '<!--', close: '-->' }
+  return null
+}
+
+/** 标签段的结束位置（`>` 之后）；引号里的 `>` 不算，找不到 `>` 给 -1 */
+function tagEndOf(text: string, start: number): number {
+  let quote = ''
+  for (let i = start + 1; i < text.length; i += 1) {
+    const ch = text.charAt(i)
+    if (quote !== '') {
+      if (ch === quote) quote = ''
+    } else if (ch === '"' || ch === "'") {
+      quote = ch
+    } else if (ch === '>') {
+      return i + 1
+    }
+  }
+  return -1
+}
+
+const identity = (s: string): string => s
+
+/**
  * 只读解析的四条静态闸门（都在解析之前判，静态文本层面）：
  * ① CDATA 段与**注释**先摘掉——里面的 `&x;` / `<!ENTITY` / `<!DOCTYPE` 是字面文本，不是声明也不是引用；
+ *    字面量没闭合就地拒（它的边界只能猜，而边界猜错就是内容错）；
  * ② DOCTYPE 带内部子集 → 拒（实体声明与属性默认值都在里面，本层一律不认）；
  * ③ 出现 `<!ENTITY` → 拒（外部实体是 XXE 的入口，实体展开是 billion-laughs 的入口）；
- * ④ 除 XML 预定义实体与数值字符引用之外的实体引用 → 拒（`&nbsp;` 这类要靠 DTD 才成立，
+ * ④ 归一化之后，除 XML 预定义实体与数值字符引用之外的实体引用 → 拒（内建 HTML 表之外的名字，
  *    本层不解析 DTD，认不出它就如实报错，不猜也不静默丢掉）。
  *
  * 命名空间：cheerio 的 XML 模式保留前缀原样，不做命名空间解析，所以本层一律按**本地名**判定
  * （`opf:package` 与 `package` 等价）——前缀是书写者的自由，绑定到哪个命名空间才是身份。
  */
 function scanXml(text: string, what: string): void {
-  const body = stripLiterals(text)
+  const body = stripLiterals(text, what)
   const doctype = body.indexOf('<!DOCTYPE')
   if (doctype >= 0) {
     const gt = body.indexOf('>', doctype)
@@ -146,22 +289,24 @@ function scanXml(text: string, what: string): void {
     // 不按「非内建实体」拒整本，也不能静默放行未声明的引用。
     if (name === undefined) throw new EpubImportError(`${what}：实体闸判据失效（引用未解析出名字，正则分组变了？）`)
     if (name.startsWith('#')) continue   // 数值字符引用：与 DTD 无关，XML 规范直接成立
-    if (!PREDEFINED_ENTITIES.has(name)) throw new EpubImportError(`${what}：引用了未声明的实体 &${name};（本层不解析 DTD）`)
+    if (!PREDEFINED_ENTITIES.has(name)) throw new EpubImportError(`${what}：引用了不在内建 HTML 命名实体表里的实体 &${name};（本层不解析 DTD）`)
   }
 }
 
 /**
  * 摘掉 CDATA 段与注释。注释也必须摘：XML 规范允许注释里出现任何文本，`<!-- 删掉的段落 &nbsp; -->`
- * 里的 `&nbsp;` 不是实体引用——按引用判会把一份本来可读的书整本拒掉。未闭合的 `<!--`
- * 正则匹配不到，原样留给闸门：认不出就不猜。
+ * 里的 `&nbsp;` 不是实体引用——按引用判会把一份本来可读的书整本拒掉。
+ * 定界符与「未闭合就拒」的判定全归 `rewriteSegments`，这里只管把字面量整段丢掉。
  */
-function stripLiterals(text: string): string {
-  return text.replace(PRE, '').replace(COMMENT, '')
+function stripLiterals(text: string, what: string): string {
+  return rewriteSegments(text, what, { literal: () => '' })
 }
 
-const PRE = /<!\[CDATA\[[\s\S]*?\]\]>/g
-const COMMENT = /<!--[\s\S]*?-->/g
 const ENTITY_REF = /&([A-Za-z_][\w.-]*|#[0-9]+|#x[0-9A-Fa-f]+);/g
+/** 命名实体引用：分号可有——没写分号的形态按 HTML 的 legacy 表解（见 `normalizeEntitySegment`）。
+ *  名字只收 ASCII 字母数字：HTML 的实体名没有标点；收进 `.`/`-` 会把 `&copy.;` 吞成 `copy.`，
+ *  查表失败后整本被闸门拒掉，而浏览器读作 `©.;`。 */
+const NAMED_ENTITY = /&([A-Za-z][A-Za-z0-9]*)(;?)/g
 const PREDEFINED_ENTITIES = new Set(['amp', 'lt', 'gt', 'quot', 'apos'])
 const NOOP = (): void => {}
 

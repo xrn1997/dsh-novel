@@ -14,7 +14,7 @@ import {
 } from '../../src/services/epub/documents.js'
 import { EpubWarningLog } from '../../src/services/epub/warnings.js'
 import { EpubImportError } from '../../src/services/epub/errors.js'
-import { parseXml, xmlBudget } from '../../src/services/epub/xml.js'
+import { descendants, parseXml, xmlBudget } from '../../src/services/epub/xml.js'
 import { pick } from '../support/fixture.js'
 
 const LIMITS = { depth: 128, nodes: 200_000 }
@@ -183,22 +183,67 @@ describe('元素白名单映射', () => {
     ])
   })
 
-  it('CDATA 是字面文本（不当实体解），注释与指令不上树', () => {
-    const { nodes } = convert('<p><![CDATA[字面 &amp; 与 <b>标签</b>]]><!-- 注释 --></p>')
+  it('内建 HTML 命名实体：正文与属性都解码，`&amp;nbsp;` 只解一层', () => {
+    const { nodes } = convert('<p>甲&nbsp;乙&hellip;&copy; 与 &amp;nbsp;</p>'
+      + '<p><img src="a.png" alt="丙&nbsp;丁"/></p>')
     expect(shape(nodes)).toEqual([
-      { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: ['字面 &amp; 与 <b>标签</b>'] },
+      { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: ['甲\u00a0乙…© 与 &nbsp;'] },
+      { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: ['img:r0:丙\u00a0丁:4x5'] },
     ])
   })
 
-  it('注释里的实体字样不是引用：合法注释不许把整本书拒掉', () => {
+  it('没写分号的命名实体按 HTML legacy 表解（与浏览器同口径），不在表里的名字原样留着', () => {
+    const { nodes } = convert('<p>甲&nbsp乙 &copy 2024 &hellip</p>')
+    expect(shape(nodes)).toEqual([
+      { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: ['甲\u00a0乙 © 2024 &hellip'] },
+    ])
+  })
+
+  it('实体名止于字母数字：`&copy.;` 按 `&copy` + `.;` 解，不被名字里的标点带进闸门', () => {
+    const { nodes } = convert('<p>&copy.;</p>')
+    expect(shape(nodes)).toEqual([
+      { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: ['©.;'] },
+    ])
+  })
+
+  it('属性值按 HTML 的属性规则读：URL 里的 &sect=2 / &section=3 不被改写成字符', () => {
+    // 属性状态对无分号写法多一条保护（后接字母数字或 `=` 时不算引用）。少了它，未转义的 `&`
+    // 会把链接悄悄改掉；`title` 里的裸 `>` 还顺带钉住「引号内的 > 不截断标签」。
+    const root = xhtml('<p><a title="1 > 0" href="x?p=1&sect=2&section=3&amp;q=4">链</a>'
+      + '<img src="a.png" alt="甲&nbsp乙"/></p>')
+    const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS)
+    const [anchor] = descendants(root, 'a', budget)
+    expect(anchor?.attribs.href).toBe('x?p=1&sect=2&section=3&q=4')
+    expect(anchor?.attribs.title).toBe('1 > 0')
+    const [image] = descendants(root, 'img', budget)
+    // 属性状态仍解真引用：`&nbsp` 后接的不是字母数字，按浏览器同一条规则解成不换行空格
+    expect(image?.attribs.alt).toBe('甲\u00a0乙')
+  })
+
+  it('CDATA 是字面文本（不当实体解），注释与指令不上树', () => {
+    const { nodes } = convert('<p><![CDATA[字面 &amp; 与 &nbsp; 与 <b>标签</b>]]><!-- 注释 --></p>')
+    expect(shape(nodes)).toEqual([
+      { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: ['字面 &amp; 与 &nbsp; 与 <b>标签</b>'] },
+    ])
+    // 未闭合的字面量：边界只能猜，就地拒——理由必须说的是「没闭合」，不能栽给实体表。
+    // 第一例不含 `&`（归一化会早退），第二例含 `&`：两条路径都必须落到同一条判据上。
+    expect(() => convert('<p>正文 <![CDATA[未闭合</p>')).toThrow(/未闭合/)
+    expect(() => convert('<p>正文 <!-- 未闭合 &nbsp;</p>')).toThrow(/未闭合/)
+  })
+
+  it('注释里的实体字样不是引用：表外实体仍拒', () => {
     // 静态闸门若只排除 CDATA 却漏掉注释，`<!-- 删掉的段落 &nbsp; -->` 就会被当成
-    // 「引用了未声明的实体」——而 XML 规范允许注释里出现任何文本。注释本来就该整条摘掉再判。
+    // 「引用了不在内建 HTML 命名实体表里的实体」——而 XML 规范允许注释里出现任何文本。
+    // 注释本来就该整条摘掉再判。
     const { nodes } = convert('<p>正文</p><!-- 删掉的段落 &nbsp; 与 <!DOCTYPE 字样 -->')
     expect(shape(nodes)).toEqual([
       { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: ['正文'] },
     ])
-    // 真引用（不在注释里）该拒还是拒：闸门没被顺手关掉
-    expect(() => convert('<p>正文 &nbsp;</p>')).toThrow(/实体/)
+    // 内建表认识的实体按实体解；表外的名字仍按坏书拒（闸门没被顺手关掉）
+    expect(shape(convert('<p>正文 &nbsp;</p>').nodes)).toEqual([
+      { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: ['正文 \u00a0'] },
+    ])
+    expect(() => convert('<p>正文 &bogus;</p>')).toThrow(/实体/)
   })
 
   it('多根元素：畸形 XML 不按半途结果读（只取第一个会静默丢掉后面的内容）', () => {

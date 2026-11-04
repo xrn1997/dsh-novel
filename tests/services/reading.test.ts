@@ -7,7 +7,7 @@ import type { SourceSession } from '../../src/engine/index.js'
 import { detailContextOf } from '../../src/services/bridge.js'
 import type { SubRuleEval } from '../../src/services/bridge.js'
 import { chapterContentToText } from '../../src/services/chapter-content.js'
-import { LocalArtifactNotFoundError } from '../../src/services/localbooks.js'
+import { LOCAL_SOURCE_ID, LocalArtifactNotFoundError, LocalBooks } from '../../src/services/localbooks.js'
 import { IMAGE_SAMPLES, makeEpubFixture } from '../fixtures/epub.js'
 import { settleSearchJob } from '../explore-settle.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
@@ -1197,6 +1197,15 @@ describe('本地 EPUB 门面：导入回执、图文读取、导航与资源', (
     return { svc: trackService(await ReadingService.create({ dir, fetchImpl: route(() => null) })), dir }
   }
 
+  it('XHTML 命名实体按内建表解码：&nbsp; 不再让整本导入失败', async () => {
+    const { svc } = await mk()
+    const book = await svc.localImport(makeEpubFixture('epub-html-entities'), '实体.epub')
+    expect(book.chapterCount).toBe(2)
+    const text = await svc.getChapter('__local__', book.bookKey, 1)
+    expect(text).toContain('甲 乙…©')
+    expect(text).not.toContain('&nbsp;')
+  })
+
   it('图文读取与现有文字读取共用内容', async () => {
     const { svc } = await mk()
     const book = await svc.localImport(makeEpubFixture('epub3-rich'), '样本.epub')
@@ -1222,11 +1231,42 @@ describe('本地 EPUB 门面：导入回执、图文读取、导航与资源', (
     expect(svc.shelfList().find((b) => b.bookKey === book.bookKey)).toMatchObject({ author: '样本作者', totalChapters: 2 })
   })
 
-  it('TXT 回执照旧：encoding 如实回显、书目字段不新增（既有行为不变）', async () => {
+  it('TXT 回执：encoding 如实回显，总章数由 chapterCount 投影进书架', async () => {
     const { svc } = await mk()
     const book = await svc.localImport(Buffer.from('第1章 A\n内容', 'utf8'), 'x.txt')
-    expect(book).toMatchObject({ format: 'txt', encoding: 'utf-8', chapterCount: 1, warnings: [] })
-    expect(book.totalChapters).toBeUndefined()
+    expect(book).toMatchObject({ format: 'txt', encoding: 'utf-8', chapterCount: 1, totalChapters: 1, warnings: [] })
+    expect(svc.shelfList().find((b) => b.bookKey === book.bookKey)?.totalChapters).toBe(1)
+  })
+
+  it('既有条目缺 totalChapters：启动时按本地 meta 补一次，已有值与失效副本都不动', async () => {
+    const dir = await makeTempDir('novel-backfill-')
+    const local = await LocalBooks.create(dir)
+    const old = await local.import(Buffer.from('第1章 A\n内容\n第2章 B\n尾', 'utf8'), 'old.txt')
+    const fresh = await local.import(Buffer.from('第1章 C\n内容', 'utf8'), 'fresh.txt')
+    const row = (bookKey: string, title: string, totalChapters?: number): Record<string, unknown> => ({
+      sourceId: LOCAL_SOURCE_ID, bookKey, title,
+      ...(totalChapters === undefined ? {} : { totalChapters }),
+      progress: { chapterIndex: 0, offsetRatio: 0, updatedAt: 1 }, addedAt: 1,
+    })
+    // 旧版本的落盘形态：缺字段的旧条目要补；已补过的不许覆盖；副本已删的补不了就跳过
+    await fsPromises.writeFile(path.join(dir, 'shelf.json'), JSON.stringify([
+      row(old.bookKey, old.title),
+      row(fresh.bookKey, fresh.title, 99),
+      row('local:gone', '副本已删'),
+    ]))
+    const svc = trackService(await ReadingService.create({ dir, fetchImpl: route(() => null) }))
+    const books = svc.shelfList()
+    expect(books.find((b) => b.bookKey === old.bookKey)?.totalChapters).toBe(2)
+    expect(books.find((b) => b.bookKey === fresh.bookKey)?.totalChapters).toBe(99)
+    expect(books.find((b) => b.bookKey === 'local:gone')?.totalChapters).toBeUndefined()
+    // 补数要落到 shelf.json：界面读的是落盘那份，只改内存等于下次启动再补一遍
+    await svc.flush()
+    const persisted = JSON.parse(await fsPromises.readFile(path.join(dir, 'shelf.json'), 'utf8')) as Array<{
+      bookKey: string
+      totalChapters?: number
+    }>
+    expect(persisted.find((b) => b.bookKey === old.bookKey)?.totalChapters).toBe(2)
+    expect(persisted.find((b) => b.bookKey === 'local:gone')?.totalChapters).toBeUndefined()
   })
 
   it('getNavigation：EPUB 给原生目录树；TXT 由线性序列派生平面导航（toc 旧响应不动）', async () => {

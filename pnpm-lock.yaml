@@ -20,6 +20,9 @@ importers:
       domhandler:
         specifier: ^5.0.3
         version: 5.0.3
+      entities:
+        specifier: ^8.1.0
+        version: 8.1.0
       iconv-lite:
         specifier: ^0.7.3
         version: 0.7.3

@@ -338,7 +338,6 @@ describe('EPUB 发布、重启读取与资源读口', () => {
     expect(r).toMatchObject({ title: '图文样本', format: 'epub', encoding: null, chapterCount: 2, warnings: [] })
     expect(r.book).toEqual({
       author: '样本作者',
-      totalChapters: 2,
       coverUrl: `/novel-api/local/resource?id=${encodeURIComponent(r.bookKey)}&resourceId=r0`,
     })
     // local/ 下只有顶层元数据 + 目录：本次的临时目录已 rename 走，不留 `.importing`

@@ -360,6 +360,19 @@ describe('纯插图章节与无封面', () => {
   })
 })
 
+describe('EPUB3 导航列表形态', () => {
+  it('toc 导航把 ol 写成 ul：整本照读，目录标签与锚点都绑定', async () => {
+    const { book } = await importOf('epub3-nav-ul')
+    expect(book.chapters).toHaveLength(1)
+    expect(navShape(book.items)).toEqual([
+      { label: '第一章', target: { kind: 'chapter', index: 0, anchorId: anchorMatching() }, children: [] },
+      { label: '第二卷', target: null, children: [
+        { label: '第二章', target: { kind: 'chapter', index: 0, anchorId: anchorMatching() }, children: [] },
+      ] },
+    ])
+  })
+})
+
 describe('EPUB2 命名锚点与声明形态', () => {
   it('目录目标指向 <a name="x">：整本可导入，目标绑到那个锚点（且锚点真的落在生成物里）', async () => {
     const { book, dir } = await importOf('epub2-named-anchor')

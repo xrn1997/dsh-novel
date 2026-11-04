@@ -3,8 +3,8 @@ import type { LocalImportWarning } from '../../shared/wire.js'
 import { DEFAULT_EPUB_LIMITS, type EpubArchive, type EpubLimits } from './archive.js'
 import { EpubImportError } from './errors.js'
 import {
-  attrOf, childElements, decodeEpubXml, descendants, firstChild, firstDescendant, localName, parseXml, textOf, xmlBudget,
-  type XmlBudget, type XmlLimits,
+  attrOf, childElements, decodeEpubXml, descendants, firstChild, firstDescendant, isElement, localName, parseXml, textOf,
+  xmlBudget, type XmlBudget, type XmlLimits,
 } from './xml.js'
 
 /**
@@ -19,6 +19,7 @@ import {
  *    「文档 + 文档内锚点」，同一文档的多个锚点各自成条，不复制成多章。两者都不做一一对应的假设。
  * ② **缺目录可以降级，坏目录必须报错**。nav → spine 的 toc 指向的 NCX → 按 spine 造平面导航
  *    （这一步留持久告警）；但「声明了导航文档却读不出 toc」不是缺目录，是坏目录——报错，不静默改走别的路。
+ *    toc 的列表标签写成 ul（规范要求 ol）按列表读并留变体告警：结构没有歧义，不算坏目录；连列表都没有才报错。
  * ③ **本层不产出跨半形状**。导航目标是原始路径 + 片段（`{ path, fragment }`），opaque 的 documentId /
  *    锚点绑定归正文层；本层也不读正文、不认识书架与 HTTP。这样「包结构」与「正文规范化」各自可单独测。
  */
@@ -37,6 +38,7 @@ const NCX_MEDIA_TYPE = 'application/x-dtbncx+xml'
 /** 告警码（稳定标识，导入期原样落进元数据、进书后经「导入说明」重看）：用户看到的是 message，程序按 code 分流 */
 const WARN_NAV_SYNTHESIZED = 'epub-navigation-synthesized'
 const WARN_NAV_DEGRADED = 'epub-navigation-degraded'
+const WARN_NAV_UNORDERED = 'epub-navigation-unordered-list'
 const WARN_ENCRYPTED = 'epub-encrypted-resource'
 
 /** manifest 里的一条：id 是包内身份，path 已相对 OPF 目录解成书内逻辑名 */
@@ -83,7 +85,7 @@ export type EpubNavigationSource = 'nav' | 'ncx' | 'spine'
  * 里的全部目标：spine 里的那些在本层直接拒整本，**其余带出去**——正文层真要用到某个被加密的图片时，
  * 报错原因必须是「被加密（本插件不解密）」，而不是按混淆后的字节说成「图片损坏」（那是误导读者去换图）。
  *
- * `warnings` 的 code 取值见上面三个 `WARN_*` 常量（稳定标识，`resource` 一律是书内逻辑名）。
+ * `warnings` 的 code 取值见上面的 `WARN_*` 常量（稳定标识，`resource` 一律是书内逻辑名）。
  */
 export interface EpubPackage {
   readonly title: string | null
@@ -428,7 +430,7 @@ async function readNavigation(
   const navItem = [...opf.manifest.values()].find((item) => item.properties.includes('nav'))
   if (navItem !== undefined) {
     // 声明了导航文档：读不出 toc 就是坏目录，不能改走 NCX/spine 把问题掩盖过去
-    const items = parseNavDocument(await readXmlText(archive, navItem.path, xmlBytes), navItem.path, names, domLimits)
+    const items = parseNavDocument(await readXmlText(archive, navItem.path, xmlBytes), navItem.path, names, domLimits, warnings)
     return { items, source: 'nav' }
   }
   if (opf.tocIdref !== null) {
@@ -454,18 +456,40 @@ async function readNavigation(
 }
 
 /** EPUB3 的 nav 文档：只取 toc 那一棵（landmarks / page-list 不是正文目录） */
-function parseNavDocument(text: string, navPath: string, names: ReadonlySet<string>, domLimits: XmlLimits): EpubNavItem[] {
+function parseNavDocument(
+  text: string,
+  navPath: string,
+  names: ReadonlySet<string>,
+  domLimits: XmlLimits,
+  warnings: LocalImportWarning[],
+): EpubNavItem[] {
   const budget = xmlBudget(`EPUB3 导航文档 ${navPath}`, domLimits)
   const root = parseXml(text, budget)
   if (localName(root.name) !== 'html') throw new EpubImportError(`manifest 标为 nav 的文档不是 XHTML（根元素是 ${root.name}）：${navPath}`)
   const toc = descendants(root, 'nav', budget).find(isTocNav)
   if (toc === undefined) throw new EpubImportError(`导航文档里没有 toc 导航（landmarks / page-list 不算正文目录）：${navPath}`)
-  const list = firstChild(toc, 'ol')
-  if (list === null) throw new EpubImportError(`toc 导航里没有 ol 列表：${navPath}`)
-  const items = parseNavList(list, navPath, budget)
+  const list = navListsOf(toc)[0]
+  if (list === undefined) throw new EpubImportError(`toc 导航里没有 ol/ul 列表：${navPath}`)
+  const variant = { unordered: false }
+  const items = parseNavList(list, navPath, budget, variant)
   if (items.length === 0) throw new EpubImportError(`toc 导航里没有条目：${navPath}`)
+  if (variant.unordered) {
+    // 规范要求 ol，但有些书用 ul（嵌套层也算）：结构语义没有歧义，按列表读并把「这是变体」记下来；
+    // 不因此改走合成目录，否则真实标题会被文件名盖掉。
+    warnings.push({
+      code: WARN_NAV_UNORDERED,
+      resource: navPath,
+      message: `toc 导航使用 ul（规范要求 ol），已按列表读取：${navPath}`,
+    })
+  }
   assertTargetsExist(items, names, navPath)
   return items
+}
+
+/** toc 的列表：规范是 ol，部分书用 ul；两者按同一语义读，顺序以 DOM 为准 */
+function navListsOf(parent: Element): Element[] {
+  return parent.children.filter((child): child is Element =>
+    isElement(child) && (localName(child.name) === 'ol' || localName(child.name) === 'ul'))
 }
 
 /** toc nav 的两种写法：`epub:type="toc"`（前缀任意）或 `role="doc-toc"` */
@@ -476,9 +500,15 @@ function isTocNav(el: Element): boolean {
   return role !== null && role.split(/\s+/).includes('doc-toc')
 }
 
-function parseNavList(ol: Element, navPath: string, budget: XmlBudget): EpubNavItem[] {
+function parseNavList(
+  list: Element,
+  navPath: string,
+  budget: XmlBudget,
+  variant: { unordered: boolean },
+): EpubNavItem[] {
+  if (localName(list.name) === 'ul') variant.unordered = true
   const items: EpubNavItem[] = []
-  for (const li of childElements(ol, 'li')) {
+  for (const li of childElements(list, 'li')) {
     const anchor = firstChild(li, 'a')
     const labelEl = anchor ?? firstChild(li, 'span')
     if (labelEl === null) throw new EpubImportError(`导航条目缺 a/span 标题：${navPath}`)
@@ -486,7 +516,7 @@ function parseNavList(ol: Element, navPath: string, budget: XmlBudget): EpubNavI
     const href = anchor === null ? null : attrOf(anchor, 'href')
     const target = href === null || href.trim() === '' ? null : resolveEpubHref(navPath, href)
     const children: EpubNavItem[] = []
-    for (const nested of childElements(li, 'ol')) children.push(...parseNavList(nested, navPath, budget))
+    for (const nested of navListsOf(li)) children.push(...parseNavList(nested, navPath, budget, variant))
     items.push({ label: textOf(labelEl, budget).trim(), target, children })
   }
   return items

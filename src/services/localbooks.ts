@@ -117,8 +117,9 @@ interface LocalTextMeta {
  * EPUB 元数据：`schemaVersion: 2` 既是**提交标记**（顶层元数据写完才算发布完成），也是格式判据。
  *
  * 章序列/文档表/资源表直接复用导入层的索引类型：形状主人是 `services/epub/import.ts`，
- * 这里不再抄一份字段表（抄一份的下场是导入端加字段、读端不知道）。书目元数据（作者/封面/总章数）
- * 不进这里——它们走既有 `SHELF_META` 字段集落 shelf.json，本地格式不新增可 patch 字段。
+ * 这里不再抄一份字段表（抄一份的下场是导入端加字段、读端不知道）。`title` / `author` 是**导入时
+ * 读出的书目原件**；它们的**书架投影**与其它书目字段一样走 `SHELF_META` 落 shelf.json，
+ * 本地格式不新增可 patch 字段；总章数同理由门面从 `chapterCount` 投影，不在这里另存一份。
  */
 interface LocalEpubMeta {
   schemaVersion: 2
@@ -143,8 +144,8 @@ function isEpubMeta(meta: LocalMeta): meta is LocalEpubMeta {
 }
 
 /** 导入结果里可进书架的书目字段（字段名与 wire 的 ShelfBook 同源，不另立字段表）。
- *  EPUB 有作者/封面/章数，TXT 全缺席（沿用既有行为：TXT 入架只写 title）。 */
-export type LocalBookMeta = Pick<ShelfBook, 'author' | 'coverUrl' | 'totalChapters'>
+ *  EPUB 有作者/封面，TXT 全缺席；总章数不进这里——它由门面从 `chapterCount` 统一投影。 */
+export type LocalBookMeta = Pick<ShelfBook, 'author' | 'coverUrl'>
 
 /** 本地导入结果（服务层据此入架并投影成 wire 的 LocalImportResponse） */
 export interface LocalImportResult {
@@ -294,6 +295,12 @@ export class LocalBooks {
   /** 目录：线性阅读序列（TXT 的旧响应一字不改；EPUB 按 spine 的章序列、名字取文档标题） */
   async getToc(bookKey: string): Promise<ChapterEntry[]> {
     return this.tocOf(await this.metaOf(bookKey), bookKey)
+  }
+
+  /** 章数：线性阅读序列的长度（TXT 偏移表 / EPUB spine 索引共用 `meta.chapters` 这一份）。
+   *  只要一个数时走这里——`getToc` 会顺带造出整套展示条目，补数不必付那份钱。 */
+  async chapterCount(bookKey: string): Promise<number> {
+    return (await this.metaOf(bookKey)).chapters.length
   }
 
   /** 目录导航：EPUB 读持久化的原生目录树；无原生目录的书（TXT）按线性序列派生平面导航。
@@ -524,12 +531,11 @@ function metaOfImport(data: EpubImportData, name: string): LocalEpubMeta {
   }
 }
 
-/** 导入索引 → 书架书目字段：**复用既有 SHELF_META 字段**（作者/封面/总章数），不新增本地格式字段。
- *  封面 URL 走 `wire.resourceUrl`（唯一构造器，与客户端插图的 src 同一份）——两处各拼一次
- *  会在前缀或参数名改动时分叉成两个半场各说各话。 */
+/** 导入索引 → 书架书目字段：**复用既有 SHELF_META 字段**（作者/封面），不新增本地格式字段；
+ *  总章数由门面从 `chapterCount` 统一投影。封面 URL 走 `wire.resourceUrl`（唯一构造器，与客户端
+ *  插图的 src 同一份）——两处各拼一次会在前缀或参数名改动时分叉成两个半场各说各话。 */
 function bookMetaOf(data: EpubImportData, bookKey: string): LocalBookMeta {
   return {
-    totalChapters: data.chapters.length,
     ...(data.author === null ? {} : { author: data.author }),
     ...(data.coverResourceId === null
       ? {}

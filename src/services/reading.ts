@@ -261,7 +261,7 @@ export class ReadingService {
     const cookieJar = new CookieJar()
     const deviceId = await readDeviceId(opts.dir)
     const sourceSession = createFileSourceSession(opts.dir)
-    return ReadingService.from({
+    const service = await ReadingService.from({
       // HTTP cookie 按域/路径共享一张表；脚本侧 source cookie 仍按源隔离。
       // 运行期字段（deviceId / sourceSession）随构造进 fetcher——门面不再往注入物上写回。
       fetcher: createFetcherWith(opts.fetchImpl, opts.proxyUrl, cookieJar, { deviceId, sourceSession }),
@@ -277,11 +277,14 @@ export class ReadingService {
       ...(opts.contentMaxPages === undefined ? {} : { contentMaxPages: opts.contentMaxPages }),
       ...(opts.proxyUrl === undefined ? {} : { proxyUrl: opts.proxyUrl }),
     })
+    await service.backfillLocalChapterCounts()
+    return service
   }
 
   /**
    * 组合根注入面：接受已建好的部件（registry/shelf/cache/fetcher/local）直接总装——
    * 测试可换内存 registry adapter / 确定性 fetcher，而不必每次 mkdtemp + importOne。
+   * **启动补数不在这里**：本地书 `totalChapters` 的旧条目补数归 `create` 的启动一轮；走 `from` 的注入方没有这轮补数。
    * **只读注入物**：jar 必须是构造方给 fetcher 的同一实例（不一致当场炸，门面不挑一张、
    * 不补写回）；deviceId / sourceSession 这类运行期字段也只由构造方带进 fetcher。
    * 后台任务面在此接线：导入/批量验证的探针口径与 search/probe 同一
@@ -673,14 +676,15 @@ export class ReadingService {
   // ── 本地书动词 ──
 
   /** 本地导入（TXT / EPUB 按**内容**分流）+ 自动上架，返回 wire 的 `LocalImportResponse`
-   *  （dispatch 直接回显，不再逐字段拼装）。书目字段（作者/封面/总章数）走既有 SHELF_META 字段集；
-   *  本地格式不新增可 patch 字段。 */
+   *  （dispatch 直接回显，不再逐字段拼装）。书目字段走既有 SHELF_META 字段集：作者/封面来自
+   *  导入结果，总章数统一由 `chapterCount` 投影；本地格式不新增可 patch 字段。 */
   async localImport(bytes: Buffer, name: string): Promise<LocalImportResponse> {
     const imported = await this.requireLocal().import(bytes, name)
     let book: ShelfBook
     try {
       book = this.shelf.add({
-        sourceId: LOCAL_SOURCE_ID, bookKey: imported.bookKey, title: imported.title, ...imported.book,
+        sourceId: LOCAL_SOURCE_ID, bookKey: imported.bookKey, title: imported.title,
+        ...imported.book, totalChapters: imported.chapterCount,
       })
     } catch (e) {
       // 发布已成功、入架却失败：不回滚就会留一份「长得像书但没人认识」的副本（EPUB 是一整棵目录）
@@ -693,6 +697,25 @@ export class ReadingService {
       format: imported.format,
       encoding: imported.encoding,
       warnings: imported.warnings,
+    }
+  }
+
+  /**
+   * 既有本地书条目的补数（启动时一次）：更早的版本导入时没把章数投影进 `totalChapters`，
+   * 而本地 meta 里一直算得出来——补一次，比让用户逐本打开（打开时才由客户端回写）省事。
+   * 读不到 meta（副本已删 / 元数据坏了）就跳过：补数不是校验，不替书架判那份副本还在不在。
+   */
+  private async backfillLocalChapterCounts(): Promise<void> {
+    if (this.local === null) return
+    const missing = this.shelf.list().filter((b) => b.sourceId === LOCAL_SOURCE_ID && typeof b.totalChapters !== 'number')
+    const local = this.local
+    // 读并行（meta 读口无共享写——损坏时只备份自己的文件；自带在途去重），落账串行——shelf 的写路径按条排队，不并发落盘。
+    // 并发度即缺字段条目数：补数只在启动跑这一轮，不设闸
+    const pairs = await Promise.all(
+      missing.map(async (b) => ({ book: b, count: await local.chapterCount(b.bookKey).catch(() => null) })),
+    )
+    for (const { book, count } of pairs) {
+      if (count !== null) this.shelf.update(book.bookKey, { totalChapters: count })
     }
   }
 
