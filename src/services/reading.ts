@@ -405,9 +405,14 @@ export class ReadingService {
   /** 探针已有源（API/tools 的 probe 路由/工具用）：与 importOne 的探针段同口径。
    *  超时与 js 预算必须与搜索同耐心（`searchTimeoutMs`/`jsTimeoutMs` 两个单点）——漏传会让
    *  同一源在导入期与门面两处探针拿回两个 verdict。 */
-  async probe(id: string): Promise<ProbeResult> {
+  async probe(id: string, opts?: { signal?: AbortSignal }): Promise<ProbeResult> {
     const s = this.requireSource(id)
-    const r = await probeSource(s, this.sourceRequest, { timeoutMs: this.live.searchTimeoutMs, jsTimeoutMs: this.live.jsTimeoutMs })
+    const r = await probeSource(s, this.sourceRequest, {
+      timeoutMs: this.live.searchTimeoutMs, jsTimeoutMs: this.live.jsTimeoutMs, ...(opts?.signal === undefined ? {} : { signal: opts.signal }),
+    })
+    // 取消不该把「跑了一半的探针」写成源的终态：那一半是被我们掐掉的，不是站点给的结论。
+    // probeSource 的 catch 已先查取消并抛出；这里再查一次，保证写终态前信号仍然有效。
+    opts?.signal?.throwIfAborted()
     await applyProbeResult(this.registry, id, r)
     return r
   }
@@ -757,8 +762,12 @@ export class ReadingService {
     onGroup?: (group: SearchGroup, index: number) => void
     /** 协作式停止：置位后**不再开新的源**（在途的不撤回）。搜索做成后台任务时的取消出口。 */
     shouldStop?: () => boolean
+    /** 调用方取消：与 shouldStop 同义但更强——在途请求也随之中止（工具面的 exec.signal）。 */
+    signal?: AbortSignal
   }): Promise<SearchGroup[]> {
     const want = opts?.sourceIds
+    const signal = opts?.signal
+    signal?.throwIfAborted()      // 已取消的调用一条源都不问
     const sources = this.registry.list().filter((s) =>
       participates(s) && (want === undefined || want.length === 0 || want.includes(s.id)))
     // new Array 是**稀疏**的：元素要按完成序回填，中途停止就会留洞——类型照实写，别让
@@ -766,23 +775,26 @@ export class ReadingService {
     const groups = new Array<SearchGroup | undefined>(sources.length)
     const step = requireParallelStep(this.live.searchParallel)
     for (let i = 0; i < sources.length; i += step) {
-      if (opts?.shouldStop?.() === true) break
+      if (opts?.shouldStop?.() === true || signal?.aborted === true) break
       const batch = sources.slice(i, i + step)
       await Promise.all(batch.map(async (s, j) => {
-        if (opts?.shouldStop?.() === true) return         // 收手：该源不发了，结果里也就没有它
+        if (opts?.shouldStop?.() === true || signal?.aborted === true) return   // 收手：该源不发了，结果里也就没有它
         const index = i + j
-        const group = await this.searchOne(s, keyword)
+        const group = await this.searchOne(s, keyword, signal)
         groups[index] = group
         opts?.onGroup?.(group, index)
       }))
     }
-    // 停止时数组可能有洞（filter 天然跳过洞位）；未停止时无洞
+    // 停止时数组可能有洞（filter 天然跳过洞位）；未停止时无洞。
+    // 取消（signal）与「用户停 UI 搜索」（shouldStop）不同：后者保留已搜到的命中，
+    // 前者在工具面必须**抛**——把被掐掉的半轮当成完整结果返回，等于用空/半集冒充事实。
+    signal?.throwIfAborted()
     return groups.filter((g): g is SearchGroup => g !== undefined)
   }
 
   /** 一次性收齐全部命中：`searchProgressive` 的薄壳。**批循环只此一处**——
    *  搜索后台化的正确动作是给上面那份加消费方，不是再写第二个循环。 */
-  search(keyword: string, opts?: { sourceIds?: string[] }): Promise<SearchGroup[]> {
+  search(keyword: string, opts?: { sourceIds?: string[]; signal?: AbortSignal }): Promise<SearchGroup[]> {
     return this.searchProgressive(keyword, opts)
   }
 
@@ -900,7 +912,7 @@ export class ReadingService {
   /** 分类轮次的「变了」信号口（SSE 路由用它拉全量帧；信号不带数据）。返回退订口。 */
   subscribeExploreJob(listener: () => void): () => void { return this.exploreJobs.signal.subscribe(listener) }
 
-  private async searchOne(s: NovelSource, keyword: string): Promise<SearchGroup> {
+  private async searchOne(s: NovelSource, keyword: string, signal?: AbortSignal): Promise<SearchGroup> {
     // 源状态失败原因按需建键：SearchGroup 是跨半载荷，走 `src/shared/wire.ts` 的「缺席即不建键」口径
     const base = {
       sourceId: s.id, sourceName: s.name, status: s.status,
@@ -909,7 +921,10 @@ export class ReadingService {
     }
     try {
       // 请求语义全走搜索面（search-face.ts，与探针同一实现）：模板解析/组装/超时/解码/列表求值
-      const page = await fetchSearchPage(s, keyword, this.sourceRequest, this.live.searchTimeoutMs, this.live.jsTimeoutMs)
+      const page = await fetchSearchPage(s, keyword, this.sourceRequest, {
+        timeoutMs: this.live.searchTimeoutMs, jsTimeoutMs: this.live.jsTimeoutMs,
+        ...(signal === undefined ? {} : { signal }),
+      })
       if (!page.ok) {
         return { ...base, error: { code: 'RuleMissing', message: page.message } }
       }
@@ -931,6 +946,8 @@ export class ReadingService {
       }
       return { ...base, hits }
     } catch (e) {
+      // 取消不是「这一源搜失败了」：不写进结果集——把被掐掉的一轮当成完整事实，比报错更坏
+      if (signal?.aborted === true) throw signal.reason ?? e
       return { ...base, error: { code: searchErrorCodeOf(e), message: errorMessageOf(e) } }
     }
   }

@@ -126,7 +126,7 @@ function HostFrame({ panel, overlay }: { panel: Store<{ id: string }>; overlay: 
   const { route } = useStore(routeStore)
   return (
     <>
-      {id === 'novel' ? <div>小说现场：{route.name}</div> : <div>宿主界面：{id}</div>}
+      {id === '@xrn1997/dsh-novel.panel' ? <div>小说现场：{route.name}</div> : <div>宿主界面：{id}</div>}
       {createElement(overlay as never)}
     </>
   )
@@ -148,7 +148,7 @@ describe('任务泳道 = 跨界面的「去现场」（小说面板不在前台�
     render(<HostFrame panel={panel} overlay={overlay} />)
     fireEvent.click(await screen.findByText('点此查看 →'))
     expect(await screen.findByText('小说现场：sources')).toBeTruthy()
-    expect(host.layout.selectPanel).toHaveBeenCalledWith('novel')
+    expect(host.layout.selectPanel).toHaveBeenCalledWith('@xrn1997/dsh-novel.panel')
   })
 })
 

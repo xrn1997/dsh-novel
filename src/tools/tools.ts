@@ -42,12 +42,22 @@ const rowOf = <R>(rows: Record<string, R>, action: string, tool: string): R => {
   return row
 }
 
+/** 工具体拿到的执行上下文（只声明本仓用到的成员）：宿主为**每次**调用都交来 `signal`，
+ *  用户中止这一轮时它进入 aborted。这里按可选声明只是让离线夹具与最小 exec 面不必造假；
+ *  生产路径上它恒在。契约要求**每个工具体都观察它**——不观察的代价是「点了停止，插件还在
+ *  挨家打站点」。 */
+export interface ToolExec { signal?: AbortSignal }
+
+/** 取消位检查：已取消就抛 `signal.reason`（宿主认这个理由判 ABORTED），不把半轮结果当成功返回。 */
+const checkAbort = (exec?: ToolExec): void => { exec?.signal?.throwIfAborted() }
+
 /** 两个 action 工具共用一条行形：doc / 缺参 / 执行 / 纯文本投影。 */
 interface ActionRow<A, V> {
   readonly doc: string
   readonly needs: readonly (keyof A & string)[]
-  /** 同步值或 Promise 都收：调用点一律 `await`，故不需要为「回 Promise」硬加 async */
-  execute(args: A): V | Promise<V>
+  /** 同步值或 Promise 都收：调用点一律 `await`，故不需要为「回 Promise」硬加 async。
+   *  不用 exec 的行照旧只写 `(args)`（TS 允许少参），用到的行才收第二个参数。 */
+  execute(args: A, exec: ToolExec): V | Promise<V>
   render(value: V): string
 }
 
@@ -145,8 +155,13 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
       },
       render: (_args, v) => text(renderSearch(v)),
     },
-    execute: async (args: { keyword: string; sourceIds?: string[] }) => {
-      const round = await service.search(args.keyword, args.sourceIds === undefined ? undefined : { sourceIds: args.sourceIds })
+    execute: async (args: { keyword: string; sourceIds?: string[] }, exec) => {
+      const round = await service.search(args.keyword, {
+        ...(args.sourceIds === undefined ? {} : { sourceIds: args.sourceIds }),
+        // 取消贯通到 HTTP 抓取层：在途请求随之中止、未开打的源不再发（webView 导航没有取消面，
+        // 见 source-request.ts 的 ReadFetchOptions）。停止语义归 ReadingService.searchProgressive。
+        signal: exec.signal,
+      })
       // 与界面同一份轮级汇总与归并（`shared/round-summary.ts` 单点分区、`shared/merge-by-book.ts`
       // 单点归并）：模型看到的「一本书在几家源上」与覆盖面读数必须与用户点出来的那一份同源——
       // 两处各算一份迟早一边说三家一边说两家。
@@ -204,10 +219,14 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
       },
       render: (_args, v) => text(renderRead(v)),
     },
-    execute: async (args: { sourceId: string; bookKey: string; chapterIndex: number }) => {
+    execute: async (args: { sourceId: string; bookKey: string; chapterIndex: number }, exec) => {
       // 目录 + 正文 + 章名的编排归服务层（`ReadingService.readChapter` → `BookContent.readChapter`）：
       // 章名与正文出自同一次目录读数，越界也在那条缝里按既有错误语义上抛——此处不做二次判。
+      // 取消只能查在请求前后：正文读取的 in-flight 是同书共享的（一个调用方取消不该掐掉
+      // 另一个读同一章的人），真正的深度取消要等共享缓存的取消语义，不在本轮范围。
+      checkAbort(exec)
       const { name, text } = await service.readChapter(args.sourceId, args.bookKey, args.chapterIndex)
+      checkAbort(exec)
       return { sourceId: args.sourceId, bookKey: args.bookKey, chapterIndex: args.chapterIndex, chapterName: name, text }
     },
   })
@@ -242,8 +261,12 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
       },
       render: (_args, v) => text(renderToc(v)),
     },
-    execute: async (args: { sourceId: string; bookKey: string; refresh?: boolean }) => {
+    execute: async (args: { sourceId: string; bookKey: string; refresh?: boolean }, exec) => {
+      // 目录读取有同书共享的在途 memo（`OnlineReading.tocInflight`）：调用方取消只查前后，
+      // 不把 signal 塞进共享 promise（那会让一个人的取消连累另一个读者）。
+      checkAbort(exec)
       const toc = await service.getToc(args.sourceId, args.bookKey, args.refresh === true ? { refresh: true } : undefined)
+      checkAbort(exec)
       const chapters = toc.slice(0, TOC_CHAPTERS_CAP).map((c, i) => ({ chapterIndex: i, name: c.name, url: c.url }))
       return project({ sourceId: args.sourceId, bookKey: args.bookKey, total: toc.length, chapters })
     },
@@ -290,7 +313,9 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
     add: {
       doc: '加书，需同时给 bookKey、title、sourceId',
       needs: ['bookKey', 'title', 'sourceId'],
-      execute: (args: ShelfArgs) => {
+      execute: (args: ShelfArgs, exec) => {
+        // 取消后不许落写：书架的写是持久化的，把「用户已经不要的那一步」写进去比报错更坏
+        checkAbort(exec)
         // 投影改变类型（可空→缺席），出参类型由调用方断言——tools/project.ts 口径
         const book: ShelfItem = project(pickShelfItem(service.shelfAdd(needArg(args.bookKey, 'bookKey'), {
           sourceId: needArg(args.sourceId, 'sourceId'), title: needArg(args.title, 'title'),
@@ -302,7 +327,8 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
     save_progress: {
       doc: '存进度，需 bookKey、chapterIndex（0 起）、offsetRatio（0~1，书须已在架）',
       needs: ['bookKey', 'chapterIndex', 'offsetRatio'],
-      execute: (args: ShelfArgs) => {
+      execute: (args: ShelfArgs, exec) => {
+        checkAbort(exec)
         // 不在架 → null：镜像 HTTP 面 400，不静默造书（reading.shelfSaveProgress 口径）
         const updated = service.shelfSaveProgress(
           needArg(args.bookKey, 'bookKey'), needArg(args.chapterIndex, 'chapterIndex'), needArg(args.offsetRatio, 'offsetRatio'),
@@ -316,7 +342,8 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
     remove: {
       doc: '移出书架，需 bookKey',
       needs: ['bookKey'],
-      execute: async (args: ShelfArgs) => {
+      execute: async (args: ShelfArgs, exec) => {
+        checkAbort(exec)
         // remove 自身的 boolean 就是权威回执（未知键 false），不再二次核存在性
         const { removed } = await service.removeBook(needArg(args.bookKey, 'bookKey'))
         return { action: 'remove' as const, removed }
@@ -341,11 +368,11 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
       schema: shelfOutputSchema,
       render: (args, v) => text(rowOf(shelfRows, args.action, 'dshnovel_shelf').render(v)),
     },
-    execute: async (args) => {
+    execute: async (args, exec) => {
       const a = args
       const row = rowOf(shelfRows, a.action, 'dshnovel_shelf')
       requireArgs(a.action, a, row.needs)
-      return await row.execute(a)
+      return await row.execute(a, exec)
     },
   })
 
@@ -394,7 +421,8 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
   type SourceOutput = InferValue<typeof sourceOutputSchema>
   /** enable/disable 的共用执行体：只差目标状态；存在性防线归门面（未知 id 抛
    *  SourceNotFoundError），工具面不再预检。 */
-  const toggleSource = (enabled: boolean) => async (args: SourceArgs) => {
+  const toggleSource = (enabled: boolean) => async (args: SourceArgs, exec: ToolExec) => {
+    checkAbort(exec)
     const sourceId = needArg(args.sourceId, 'sourceId')
     await service.setEnabled(sourceId, enabled)
     return { action: enabled ? 'enable' as const : 'disable' as const, sourceId, enabled }
@@ -419,9 +447,11 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
     probe: {
       doc: '对单源发真实搜索请求验证可用性，需 sourceId，返回实测结论与失败定位',
       needs: ['sourceId'],
-      execute: async (args: SourceArgs) => {
+      execute: async (args: SourceArgs, exec) => {
         const sourceId = needArg(args.sourceId, 'sourceId')
-        const r = await service.probe(sourceId)
+        // 探针是一串真实站点请求（命中 0 条还会换关键词重试）：取消要能中止在途 HTTP 请求，
+        // 并且不再换下一个词（webView 导航没有取消面，见 source-request.ts 的 ReadFetchOptions）
+        const r = await service.probe(sourceId, { ...(exec.signal === undefined ? {} : { signal: exec.signal }) })
         return project({
           action: 'probe', sourceId, status: r.ok ? 'verified' : 'broken',
           ok: r.ok, itemCount: r.itemCount, probedAt: r.probedAt,
@@ -445,7 +475,8 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
     remove: {
       doc: '删除单源，需 sourceId',
       needs: ['sourceId'],
-      execute: async (args: SourceArgs) => {
+      execute: async (args: SourceArgs, exec) => {
+        checkAbort(exec)
         const sourceId = needArg(args.sourceId, 'sourceId')
         const removed = await service.removeSource(sourceId)
         if (!removed) throw new Error(`dshnovel_source 源不存在：${sourceId}`)
@@ -467,11 +498,11 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
       schema: sourceOutputSchema,
       render: (args, v) => text(rowOf(sourceRows, args.action, 'dshnovel_source').render(v)),
     },
-    execute: async (args) => {
+    execute: async (args, exec) => {
       const a = args
       const row = rowOf(sourceRows, a.action, 'dshnovel_source')
       requireArgs(a.action, a, row.needs)
-      return await row.execute(a)
+      return await row.execute(a, exec)
     },
   })
 
@@ -521,7 +552,8 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
       },
       render: (_args, v) => text(renderImport(v)),
     },
-    execute: async (args: { sourceJson: string }) => {
+    execute: async (args: { sourceJson: string }, exec) => {
+      checkAbort(exec)
       let parsed: unknown
       try {
         parsed = JSON.parse(args.sourceJson)

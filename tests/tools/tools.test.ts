@@ -25,8 +25,9 @@ const rawSource = {
   ruleBookList: '@css:.b', ruleBookName: 'tag.a@text', ruleAuthor: 'tag.span@text', ruleBookUrl: 'tag.a@href',
   ruleChapterName: 'tag.a@text', ruleChapterUrl: 'tag.a@href', ruleContent: '@css:#content@textNodes',
 }
-/** 工具体不读 exec（六个工具的 execute 都只碰 args）：按 harness 的 ToolRunContext 位置交一份最小面，
- *  与 tests/tools/{tool-declarations,schema-contract}.test.ts 同一手法。 */
+/** 工具体从 `exec.signal` 取取消位（六个 execute 里搜索/探针真贯通到抓取层，其余在入口与落写前查）：
+ *  按 harness 的 ToolRunContext 位置交一份最小面，与 tests/tools/{tool-declarations,schema-contract}.test.ts
+ *  同一手法。 */
 const exec = { signal: new AbortController().signal } as never
 
 /** 工具 execute 的静态返回是 `unknown`（harness 契约：出参形状由各工具的 output.schema 声明，
@@ -383,5 +384,25 @@ describe('agent 工具六件套', () => {
     // 导入不探针——显式探一次验证 Native 分页语义：首页裁掉 /{{page}} 页码段
     const probe = await s.probe(must(outcome.sourceId, 'importOne 受理的 sourceId'))
     expect(probe.ok).toBe(true)
+  })
+})
+
+describe('工具面取消（exec.signal）', () => {
+  it('已取消的调用直接抛：搜索不返回空集、探针不发请求、书架不落写', async () => {
+    const s = await svc()
+    const ctrl = new AbortController()
+    ctrl.abort(new Error('用户取消了这一轮'))
+    const cancelled = { signal: ctrl.signal } as never
+    const toolOf = (name: string) => must(buildTools(s).find((t) => t.name === name), `工具 ${name}`)
+
+    // 搜索：空数组是「搜了没命中」的事实，不能拿来冒充「被取消」
+    await expect(toolOf('dshnovel_search').execute({ keyword: '斗罗' }, cancelled)).rejects.toThrow('用户取消了这一轮')
+    // 探针：一次站点请求都不该发（连关键词重试的第一发都不发）
+    await expect(toolOf('dshnovel_source').execute({ action: 'probe', sourceId }, cancelled)).rejects.toThrow('用户取消了这一轮')
+    // 书架：写是持久化的，取消后不许落盘
+    await expect(toolOf('dshnovel_shelf').execute(
+      { action: 'add', bookKey: 'https://s.com/book/cancel', title: '取消', sourceId }, cancelled,
+    )).rejects.toThrow('用户取消了这一轮')
+    expect(s.shelfList().some((b) => b.bookKey === 'https://s.com/book/cancel')).toBe(false)
   })
 })

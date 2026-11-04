@@ -61,7 +61,6 @@
     },
     "compatibility": {
       "dshReleases": {
-        "0.1.5-rc.1": "compatible",
         "0.1.7-rc.1": "compatible",
         "0.1.7-rc.2": "compatible",
         "0.2.0-rc.2": "compatible",
@@ -92,9 +91,11 @@
     "entities": "^8.1.0",
     "iconv-lite": "^0.7.3",
     "image-size": "2.0.4",
-    "playwright-core": "1.63.0",
     "undici": "7.29.1",
     "yauzl": "3.4.0"
+  },
+  "optionalDependencies": {
+    "playwright-core": "1.63.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.5",
@@ -124,7 +125,7 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-tools": ">=0.0.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-tools": ">=0.1.7-rc.1 <0.3.0-0",
     "@deepseek-ai/schemastery": "^3.18.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

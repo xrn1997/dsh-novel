@@ -182,8 +182,9 @@ const REAL_EDGES = (): Map<string, Edge[]> =>
   new Map([...REAL].map(([rel, code]) => [rel, edgesOf(rel, code)]))
 
 /** 允许出现动态 import 的文件（本门看不见动态边的方向，新出现即红、登记后再放行）：
- *  `js-sandbox.ts` 的那处只够 `node:worker_threads`（沙箱 worker 惰性装载） */
-const DYNAMIC_IMPORTS_OK = new Set<string>(['src/engine/js-sandbox.ts'])
+ *  `js-sandbox.ts` 的那处只够 `node:worker_threads`（沙箱 worker 惰性装载）；
+ *  `webview.ts` 的那处只够 `playwright-core`（真浏览器按需加载——它只在书源要用浏览器时才是依赖） */
+const DYNAMIC_IMPORTS_OK = new Set<string>(['src/engine/js-sandbox.ts', 'src/services/webview.ts'])
 
 describe('仓内方向守卫', () => {
   it('真图零方向违例：六组规则全清', () => {

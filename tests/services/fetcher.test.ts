@@ -442,3 +442,30 @@ describe('headerOf', () => {
     expect(h.Referer).toBe('https://r')
   })
 })
+
+describe('调用方取消（FetchInit.signal）', () => {
+  it('已取消的调用一个请求都不发', async () => {
+    let calls = 0
+    const f = createFetcher({
+      fetchImpl: fakeFetch(() => { calls++; return { body: 'x' } }),
+    })
+    const ctrl = new AbortController()
+    ctrl.abort(new Error('不要了'))
+    await expect(f.fetchPage('https://a.test/x', { signal: ctrl.signal })).rejects.toThrow('不要了')
+    expect(calls, '取消后仍发了请求').toBe(0)
+  })
+
+  it('在途中止：抛 signal.reason，不伪装成超时', async () => {
+    const ctrl = new AbortController()
+    const f = createFetcher({
+      fetchImpl: ((_url: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+        })
+      })),
+    })
+    const pending = f.fetchPage('https://a.test/slow', { signal: ctrl.signal })
+    ctrl.abort(new Error('用户取消'))
+    await expect(pending).rejects.toThrow('用户取消')
+  })
+})

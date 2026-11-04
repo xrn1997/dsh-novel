@@ -152,8 +152,13 @@ export class ReaderSession {
    *  服务端判 `NOT_ON_SHELF`，这一屏读到哪儿就此静默消失。 */
   private onShelfNow: 'unknown' | 'on' | 'off' = 'unknown'
   /** 渲染后要结的滚动补偿：DOM 提交前量不到新布局（前插一章的高度、裁掉一段后的落点），
-   *  统一在 `afterRender` 里按实测值补 scrollTop。跳章会清空——落位由 settleJump 自己负责。 */
-  private pendingScrollFixes: Array<{ kind: 'drop'; px: number } | { kind: 'prepend'; index: number }> = []
+   *  统一在 `afterRender` 里按实测值补 scrollTop。跳章会清空——落位由 settleJump 自己负责。
+   *  裁章与前插都记**参考章的新旧起点差**：块高不含章间外边距，只按高度补会让视口漂；
+   *  量不到参考章时才退回高度和（裁章）或新章块高（前插）。 */
+  private pendingScrollFixes: Array<
+    | { kind: 'drop'; px: number; keep: { index: number; start: number } | null }
+    | { kind: 'prepend'; index: number; keep: { index: number; start: number } | null }
+  > = []
   /** 视口读数至少来过一次（`open` 复位）。回溯补载只认真实视口：存档恢复的双帧落位之前，
    *  scrollTop 还是进入前的旧值（常见为 0），据此补载上一章是拿错证据做的决定。 */
   private viewportSeen = false
@@ -236,6 +241,7 @@ export class ReaderSession {
       this.store.set({ toc, navigation: nav.items, chapters: blank })
       let restoreIndex = 0
       let restoreRatio = 0
+      let restore = false
       try {
         const shelf = await this.deps.fetchShelf()
         if (gen !== this.generation) return
@@ -251,26 +257,31 @@ export class ReaderSession {
           if (hasProgress(mine.progress) && toc.length > 0) {
             restoreIndex = Math.min(Math.max(0, mine.progress.chapterIndex), toc.length - 1)
             restoreRatio = mine.progress.offsetRatio
+            restore = true
           }
         }
       } catch { /* 书架拉不到：从头读，不阻断进入 */ }
       if (gen !== this.generation) return
       this.inflight = null
       this.commit('restore', restoreIndex, restoreRatio)      // 站定：位置 = 存档值，不写回
-      // 有章内比例 → 载入后会走双帧落位；落位完成前视口读数是进入前的旧值（见 `restoring`）。
+      // 有存档 → 载入后走双帧落位（含比例 0：不落位到存档章顶的话，回溯补载的前插会让视口
+      // 落进上一章）；落位完成前视口读数是进入前的旧值（见 `restoring`）。
       // 闸跟着「这一趟真会载入」走：目标载不动时 `load` 直接返回、双帧永不发生，闸要是照落，
       // 此后每次视口读数都在 `handleViewportChange` 顶部被吞（预取/位置提交/补载全停）。
-      this.restoring = restoreRatio > 0 && this.inRange(restoreIndex)
-      await this.load(sourceId, restoreIndex, restoreRatio)
+      this.restoring = restore && this.inRange(restoreIndex)
+      await this.load(sourceId, restoreIndex, restoreRatio, restore ? { restore: true } : undefined)
     } catch (e) {
       if (gen !== this.generation) return
       this.store.set({ error: toErrorInfo(e, this.t) })
     }
   }
 
-  /** 加载某章（单在途槽：同章并发/滚动风暴去重）；restoreRatio>0 = 双帧后按锚点定位。
-   *  `keepViewport` = 前插（回溯补载）：新章加在已载窗口**上方**，渲染后按它的高度下移滚动位。 */
-  async load(sourceId: string, index: number, restoreRatio = 0, opts?: { keepViewport?: boolean }): Promise<void> {
+  /** 加载某章（单在途槽：同章并发/滚动风暴去重）；`opts.restore` = 双帧后按锚点定位
+   *  （含 ratio 0：把存档章顶对齐视口，否则回溯补载的前插会让视口落进上一章）。
+   *  `keepViewport` = 前插（回溯补载）：新章加在已载窗口**上方**，渲染后按实测位移下移滚动位。 */
+  async load(
+    sourceId: string, index: number, restoreRatio = 0, opts?: { keepViewport?: boolean; restore?: boolean },
+  ): Promise<void> {
     const toc = this.tocNow
     if (toc === null || index < 0 || index >= toc.length) return
     if (this.inflight !== null) return
@@ -283,7 +294,11 @@ export class ReaderSession {
       if (gen !== this.generation) return
       // 前插的高度要等 DOM 提交才量得到：先记账，afterRender 里补 scrollTop（长文回溯不跳屏）
       if (opts?.keepViewport === true && this.store.get().pendingJump === null) {
-        this.pendingScrollFixes.push({ kind: 'prepend', index })
+        const first = this.anchorsNow[0]
+        this.pendingScrollFixes.push({
+          kind: 'prepend', index,
+          keep: first === undefined ? null : { index: first.index, start: first.start },
+        })
       }
       const next = [...this.chaptersNow]
       next[index] = content
@@ -293,7 +308,7 @@ export class ReaderSession {
       this.failedIndex = null
       this.store.set({ chapters: next, error: null })
       this.pruneToViewport()                                  // 跳章目标到货：窗口跟着视口收口（不串章）
-      if (restoreRatio > 0) {
+      if (opts?.restore === true) {
         this.deps.afterFrames(() => {
           if (gen !== this.generation) return
           this.recalcAnchors()
@@ -310,7 +325,7 @@ export class ReaderSession {
     } catch (e) {
       if (gen !== this.generation) return
       // 恢复章拉取失败：落位不会发生，别把会话钉在「等待落位」里
-      if (restoreRatio > 0) this.restoring = false
+      if (opts?.restore === true) this.restoring = false
       this.failedIndex = index
       // 跳章失败 → 撤销意图：commit('jump') 已把「读到第 N 章」写进存档，而第 N 章从未渲染过
       // ——不回退就是拿用户没见过的章当阅读位置。锚点为空（进入阶段第一章就失败）无可回退。
@@ -334,7 +349,7 @@ export class ReaderSession {
         // 届时 `restoring` 已清，不能把「恢复完成」误读成「视口已稳定」）。
         // 成功那趟换了已载表、DOM 还没提交，补载交给 afterRender；这里只兜表没变的失败那趟
         // （在途被预取占掉时错过的回溯补载）。
-        if (restoreRatio === 0) this.checkBackfill(sourceId)
+        if (opts?.restore !== true) this.checkBackfill(sourceId)
       }
     }
   }
@@ -405,7 +420,8 @@ export class ReaderSession {
   /** 已载集裁到「视口章所属的连续区间」，并在连续区间内按 `KEEP_BEHIND` 裁掉远在视口之前的章：
    *  前者防跳远端再回来时缺章串读（渲染顺序不等于书的顺序），后者防连续阅读时 DOM 只增不减。
    *  只在视口章已载时裁：它在途时裁会把用户手上的正文清空。
-   *  裁掉的是视口**上方**的章 → 内容整体上移，滚动位按实测高度在 afterRender 里回补；
+   *  裁掉的是视口**上方**的章 → 内容整体上移，滚动位按参考章（视口章）的新旧起点差在
+   *  afterRender 里回补——起点差把章间外边距算进去；量不到参考章时退回高度和。
    *  跳章（pendingJump 在场）不补——落位由 settleJump 重测目标，补了会叠加。 */
   private pruneToViewport(): void {
     const at = this.position.chapterIndex
@@ -420,9 +436,15 @@ export class ReaderSession {
     if (dropped.length === 0) return
     const behind = dropped.filter((i) => i < at)
     if (behind.length > 0 && this.store.get().pendingJump === null) {
-      const heights = new Map(this.port.measureAnchors().map((a) => [a.index, a.height]))
+      const anchors = this.port.measureAnchors()
+      const heights = new Map(anchors.map((a) => [a.index, a.height]))
       const px = behind.reduce((sum, i) => sum + (heights.get(i) ?? 0), 0)
-      if (px > 0) this.pendingScrollFixes.push({ kind: 'drop', px })
+      const ref = anchors.find((a) => a.index === at) ?? null
+      if (px > 0 || ref !== null) {
+        this.pendingScrollFixes.push({
+          kind: 'drop', px, keep: ref === null ? null : { index: ref.index, start: ref.start },
+        })
+      }
     }
     const next = [...this.chaptersNow]
     for (const i of dropped) {
@@ -686,14 +708,28 @@ export class ReaderSession {
     this.anchorsFrom = this.chaptersNow
   }
 
-  /** 渲染后结算滚动补偿：裁掉视口上方的章 → scrollTop 减去实测高度；前插一章 → 加上它的高度
-   *  （两者的目的都是让读者眼前的正文原地不动）。只改滚动位、不碰位置真相——下一次视口读数
-   *  照常修正。补偿在 DOM 提交之后做：裁章/前插都把内容整体挪位，提交前量不到新布局。 */
+  /** 参考章的新旧起点差：裁章与前插共享同一条判据。块高不含章间外边距，只按高度补会让
+   *  视口漂；测量不到参考章时返回 null，调用方走各自的回退。 */
+  private anchorDelta(keep: { index: number; start: number } | null): number | null {
+    if (keep === null) return null
+    const after = this.anchorsNow.find((x) => x.index === keep.index)
+    return after === undefined ? null : after.start - keep.start
+  }
+
+  /** 渲染后结算滚动补偿：裁掉视口上方的章 → 按参考章起点差下移；前插一章 → 按原来第一章的
+   *  新旧起点差上移（两者的目的都是让读者眼前的正文原地不动）。只改滚动位、不碰位置真相——
+   *  下一次视口读数照常修正。补偿在 DOM 提交之后做：裁章/前插都把内容整体挪位，提交前量不到
+   *  新布局。参考章量不到时：裁章退回高度和，前插退回新章块高。 */
   private applyScrollFixes(): void {
     const fixes = this.pendingScrollFixes
     if (fixes.length === 0) return
     this.pendingScrollFixes = []
     for (const fix of fixes) {
+      const delta = this.anchorDelta(fix.keep)
+      if (delta !== null) {
+        this.port.setScrollTop(this.port.scrollTop() + delta)
+        continue
+      }
       if (fix.kind === 'drop') {
         this.port.setScrollTop(this.port.scrollTop() - fix.px)
         continue

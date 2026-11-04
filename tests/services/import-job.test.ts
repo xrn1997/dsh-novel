@@ -303,24 +303,7 @@ describe('批量验证任务', () => {
   })
 })
 // ── 宿主后台任务注册表（ctx.jobs）接线：生命周期归宿主，counts 与单槽仍归本插件 ──
-import type { JobHost, JobHostSpec } from '../../src/services/job-holder.js'
-
-type Settled = { status: string; detail?: string }
-interface Tie { spec: JobHostSpec; cancel: (reason?: string) => void; done: Promise<Settled> }
-
-/** 假注册表：记下每次 start 的 spec 与生产方交回的 hooks（宿主对我们说的话只有这两句） */
-function fakeHost(): { host: JobHost; ties: Tie[] } {
-  const ties: Tie[] = []
-  const host: JobHost = {
-    start: (spec) => {
-      const hooks = spec.run()
-      // cancel 是钩子对象上的方法：脱离对象取引用会让 this 丢，包一层箭头保住调用点
-      ties.push({ spec, cancel: (reason?: string) => { hooks.cancel(reason) }, done: hooks.done })
-      return `${spec.kind}-${ties.length}`
-    },
-  }
-  return { host, ties }
-}
+import { jobHostDouble } from '../support/job-host.js'
 
 const filesOf = (n: number) => [{
   name: 'x.json',
@@ -331,14 +314,14 @@ describe('任务生命周期归 ctx.jobs（生产方接线 + 协作式取消）'
   it('导入任务在宿主登记：kind novel-import、label 说清条数，收尾兑现 completed', async () => {
     const dir = await makeTempDir('novel-job-h1-')
     const registry = await SourceRegistry.load(dir)
-    const { host, ties } = fakeHost()
-    const jobs = new SourceJobs({ registry, probe: async () => okProbe, host })
+    const h = jobHostDouble()
+    const jobs = new SourceJobs({ registry, probe: async () => okProbe, host: h.host })
     jobs.startImport([
       { name: 'a.json', text: JSON.stringify([raw('A', 'https://a.com')]) },
       { name: 'b.json', text: JSON.stringify([raw('B', 'https://b.com')]) },
     ])
-    expect(ties).toHaveLength(1)
-    const tie = pick(ties, 0)
+    expect(h.captures).toHaveLength(1)
+    const tie = must(h.captures[0], '宿主登记')
     expect(tie.spec.kind).toBe('novel-import')
     expect(tie.spec.label).toContain('2')                     // 宿主/模型看得见这活有多大
     const j = await waitDone(jobs)
@@ -349,16 +332,16 @@ describe('任务生命周期归 ctx.jobs（生产方接线 + 协作式取消）'
   it('批量验证登记为 novel-probe；宿主 cancel 后在取下一条前收手，跑过的不抹除', async () => {
     const dir = await makeTempDir('novel-job-h2-')
     const registry = await SourceRegistry.load(dir)
-    const { host, ties } = fakeHost()
-    const seeder = new SourceJobs({ registry, probe: async () => okProbe, host })
+    const h = jobHostDouble()
+    const seeder = new SourceJobs({ registry, probe: async () => okProbe, host: h.host })
     seeder.startImport(filesOf(8))                                // 8 源 > PROBE_CONCURRENCY 5
     await waitDone(seeder)
     const ids = registry.list().map((s) => s.id)
     let release: () => void = () => {}
     const gate = new Promise<void>((r) => { release = r })
-    const jobs = new SourceJobs({ registry, probe: async () => { await gate; return okProbe }, host })
+    const jobs = new SourceJobs({ registry, probe: async () => { await gate; return okProbe }, host: h.host })
     jobs.startBatchProbe(ids)
-    const tie = must(ties.at(-1), 'ties 的最后一项')
+    const tie = must(h.captures.at(-1), '宿主登记')
     expect(tie.spec.kind).toBe('novel-probe')
     await new Promise((r) => setTimeout(r, 5))
     tie.cancel('用户从宿主取消')                                    // 在途 5 发探针不打断，只拦后续取条目
@@ -378,43 +361,28 @@ describe('任务生命周期归 ctx.jobs（生产方接线 + 协作式取消）'
     expect((await waitDone(jobs)).phase).toBe('done')
   })
 
-  it('过程行留在 hooks.readOutput 里供宿主 job_output 拉（面板无文本面）', async () => {
+  it('过程行留在 output 拉源里供宿主 job_output 拉（面板无文本面）', async () => {
     const dir = await makeTempDir('novel-job-readout-')
     const registry = await SourceRegistry.load(dir)
-    let hooks = null as { readOutput?: () => string } | null
-    let spec = null as JobHostSpec | null
-    const host: JobHost = {
-      start: (s) => {
-        spec = s
-        hooks = s.run()
-        return `${s.kind}-1`
-      },
-    }
-    const jobs = new SourceJobs({ registry, probe: async () => okProbe, uuid: () => 'job-readout', host })
+    const h = jobHostDouble()
+    const jobs = new SourceJobs({ registry, probe: async () => okProbe, uuid: () => 'job-readout', host: h.host })
     jobs.startImport([{ name: 'a.json', text: JSON.stringify([raw('A', 'https://a.com')]) }])
     await waitDone(jobs)
-    expect(typeof hooks?.readOutput).toBe('function')
-    expect(must(must(hooks, '任务钩子').readOutput, 'hooks.readOutput 读口')()).toContain('A')       // 每单元收尾一行，行文含源名
-    expect(must(spec, '任务 spec').outputLimitBytes).toBe(DEFAULT_JOB_OUTPUT_BYTES)
+    expect(h.last().read()).toContain('A')       // 每单元收尾一行，行文含源名
+    expect(must(h.last().spec, '任务 spec').outputLimitBytes).toBe(DEFAULT_JOB_OUTPUT_BYTES)
   })
 
   it('过程行也覆盖文件级解析失败与预筛无效 id', async () => {
     const dir = await makeTempDir('novel-job-readout-err-')
     const registry = await SourceRegistry.load(dir)
-    let hooks = null as { readOutput?: () => string } | null
-    const host: JobHost = {
-      start: (spec) => {
-        hooks = spec.run()
-        return `${spec.kind}-1`
-      },
-    }
-    const jobs = new SourceJobs({ registry, probe: async () => okProbe, uuid: () => 'job-readout-err', host })
+    const h = jobHostDouble()
+    const jobs = new SourceJobs({ registry, probe: async () => okProbe, uuid: () => 'job-readout-err', host: h.host })
     jobs.startImport([{ name: 'bad.json', text: '{' }])
     await waitDone(jobs)
-    expect(must(must(hooks, '任务钩子').readOutput, 'hooks.readOutput 读口')()).toContain('bad.json：JSON 解析失败')
+    expect(h.last().read()).toContain('bad.json：JSON 解析失败')
     jobs.startBatchProbe(['nope'])
     await waitDone(jobs)
-    expect(must(must(hooks, '任务钩子').readOutput, 'hooks.readOutput 读口')()).toContain('nope：源不存在')
+    expect(h.last().read()).toContain('nope：源不存在')
   })
 
   it('探针抛错时过程行点名异常上的 error.code', async () => {
@@ -424,18 +392,12 @@ describe('任务生命周期归 ctx.jobs（生产方接线 + 协作式取消）'
     seeder.startImport([{ name: 'a.json', text: JSON.stringify([raw('A', 'https://a.com')]) }])
     await waitDone(seeder)
     const id = pick(registry.list(), 0).id
-    let hooks = null as { readOutput?: () => string } | null
-    const host: JobHost = {
-      start: (spec) => {
-        hooks = spec.run()
-        return `${spec.kind}-1`
-      },
-    }
+    const h = jobHostDouble()
     const boom = new Error('boom') as Error & { code?: string }
     boom.code = 'ECONNRESET'
-    const jobs = new SourceJobs({ registry, probe: async () => { throw boom }, uuid: () => 'probe', host })
+    const jobs = new SourceJobs({ registry, probe: async () => { throw boom }, uuid: () => 'probe', host: h.host })
     jobs.startBatchProbe([id])
     await waitDone(jobs)
-    expect(must(must(hooks, '任务钩子').readOutput, 'hooks.readOutput 读口')()).toContain('broken（ECONNRESET）')
+    expect(h.last().read()).toContain('broken（ECONNRESET）')
   })
 })

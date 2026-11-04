@@ -166,12 +166,13 @@ describe('包形态声明', () => {
     expect(asHost('0.2.2-rc.1')).toBe(true)
     // 上界必须挡住**下一条宿主线**：0.3 起要先真机验过再开口
     expect(asHost('0.3.0-rc.1')).toBe(false)
-    // 下限的理由：三个硬 inject 服务里只有 `jobs` 有下限——`webServer`（补丁 id 写的是 `webserver`，
-    // 按 camelCase grep 会漏）与 `tools` 在实测名单最早那一档就在场，`jobs` 晚几档：组件侧先发的
-    // 版本不算在场，可安装的宿主以宿主侧发过的那一版为准。区间与实测名单的事实源都在 `package.json`
-    // （两层的关系见 `ADR-0020`），这里只钉区间语义：低于下限必须挡——缺 `jobs` 的宿主插进去整棵插件树拒绝挂载。
-    expect(asHost('0.0.1-rc.2')).toBe(false)
-    expect(asHost('0.0.1-rc.5')).toBe(true)
+    // 下限的理由是**任务输出契约**：0.1.7-rc.1 起 `JobSpec` 才有 `output` 拉源（注册表按自己的
+    // 字节游标拉 `read(fromByte)`）；更早的 0.1 宿主只有 hooks 上的消费式 `readOutput`，本插件按
+    // 新契约接线，装进去任务过程行会静默丢失。区间与实测名单的事实源都在 `package.json`
+    // （两层的关系见 `ADR-0020`），这里只钉区间语义：低于下限必须挡，实测名单最早的 rc 必须放行。
+    expect(asHost('0.1.5-rc.3')).toBe(false)      // 旧契约：hooks 上的 readOutput
+    expect(asHost('0.1.6-alpha.2')).toBe(false)   // 同上，仍未出现 output 拉源
+    expect(asHost('0.1.7-rc.1')).toBe(true)       // output 拉源从这一版开始
   })
   it('cordis.patch.yml：单条 insert，name=包名', () => {
     expect(patch.trimStart().startsWith('- insert:')).toBe(true)

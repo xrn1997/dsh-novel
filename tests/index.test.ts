@@ -208,7 +208,7 @@ describe('Cordis 插件入口', () => {
       // 「卸载即落盘」写出来。旧口径靠 wall-clock 判（6×10ms 压在 100ms 窗口内），负载下会抖：
       // 慢机器上窗口先到点，断言的就不是这条性质了。setImmediate 留给真实 I/O 轮询。
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
-      // 工具体不读 exec（同 tests/tools）：按位置交一份最小面
+      // 工具体只从 exec.signal 取取消位（可选链，同 tests/tools）：按位置交一份最小面即可
       await shelf.execute({ action: 'add', bookKey: 'k', title: '书', sourceId: 's' }, {} as never)
       await shelf.execute({ action: 'save_progress', bookKey: 'k', chapterIndex: 7, offsetRatio: 0.5 }, {} as never)
       disposeAll()                                   // 立刻卸载
@@ -387,20 +387,20 @@ describe('Cordis 插件入口', () => {
     const a = fakeCtx()
     const b = fakeCtx()
     const seen: unknown[][] = []
-    const spy = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => { seen.push(args) })
+    const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => { seen.push(args) })
     try {
       mount(a.ctx, { dataDir: dir })
       expect(seen, '装 adapter 这一步本身不该吭声').toEqual([])
       expect(a.logs, '装 adapter 这一步本身不该吭声').toEqual([])
-      mount(b.ctx, { dataDir: dir })     // 第二次撞双重启用守卫 → 经缝发一条 warn
+      mount(b.ctx, { dataDir: dir })     // 第二次撞双重启用守卫 → 经缝发一条 error（warn 会被宿主级别闸吞掉）
       expect(seen, 'console 腿没收到（stdout 变暗）').toHaveLength(1)
-      const warnArgs = mustAt(seen, 0)
-      expect(warnArgs[0]).toBe('[dsh-novel]')
-      expect(String(warnArgs[1])).toContain('duplicate apply ignored')
+      const errorArgs = mustAt(seen, 0)
+      expect(errorArgs[0]).toBe('[dsh-novel]')
+      expect(String(errorArgs[1])).toContain('duplicate apply ignored')
       expect(a.logs).toHaveLength(1)
-      const warnLog = mustAt(a.logs, 0)
-      expect(warnLog).toMatchObject({ name: 'dsh-novel', level: 'warn' })
-      expect(warnLog.args).toEqual(['[dsh-novel]', expect.stringContaining('duplicate apply ignored')])
+      const errorLog = mustAt(a.logs, 0)
+      expect(errorLog).toMatchObject({ name: 'dsh-novel', level: 'error' })
+      expect(errorLog.args).toEqual(['[dsh-novel]', expect.stringContaining('duplicate apply ignored')])
     } finally {
       spy.mockRestore()
       a.disposeAll()

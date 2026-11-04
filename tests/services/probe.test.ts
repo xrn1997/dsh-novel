@@ -121,6 +121,25 @@ describe('probeSource（search 面）', () => {
     expect(r.ok).toBe(false)
     expect(r.error?.code).toBe('FetchError')
   })
+  it('取消在途抓取 → 抛出 signal.reason，不把半截探针翻成 broken', async () => {
+    const f = createFetcher({
+      fetchImpl: (_input, init) => new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      }),
+    })
+    const ctrl = new AbortController()
+    const pending = probeSource(src(), fakeSourceRequest(f), { signal: ctrl.signal })
+    ctrl.abort(new Error('用户取消'))
+    await expect(pending).rejects.toThrow('用户取消')
+  })
+  it('已取消的调用一个请求都不发', async () => {
+    let calls = 0
+    const f = createFetcher({ fetchImpl: async () => { calls += 1; return new Response(SEARCH_HTML) } })
+    const ctrl = new AbortController()
+    ctrl.abort(new Error('已取消'))
+    await expect(probeSource(src(), fakeSourceRequest(f), { signal: ctrl.signal })).rejects.toThrow('已取消')
+    expect(calls).toBe(0)
+  })
 
   // 以下为钉死口径的补测
   it('ruleBookName 缺失 → RuleMissing（不进条目求值）', async () => {

@@ -177,6 +177,33 @@ describe('ReaderSession.open（目录 → 存档恢复 → 载后定位）', () 
     expect(h.port.top).toBe(3000)
   })
 
+  it('存档恢复比例 0：落位前旧视口不触发补载，落位对齐存档章顶', async () => {
+    const port = fakePort()
+    port.anchors = [{ index: 2, start: 2000, height: 2000 }]
+    port.height = 1000
+    port.scrollH = 8000
+    port.top = 0
+    const frames: Array<() => void> = []
+    const fetched: number[] = []
+    const session = new ReaderSession({
+      fetchNavigation: async () => ({ chapters: toc, items: planarNavigation(toc) }),
+      fetchChapter: async (_s, _b, i) => { fetched.push(i); return text(i) },
+      fetchShelf: async () => [shelfBook({ chapterIndex: 2, offsetRatio: 0, updatedAt: 0 })],
+      saveProgress: () => {}, saveTotalChapters: () => {},
+      afterFrames: (cb) => { frames.push(cb) },
+    }, port)
+    await session.open('src', 'https://s.com/book/1')
+    expect(fetched).toEqual([2])
+    session.handleViewportChange('src')                    // 落位前的旧视口（top 仍是进入前的 0）
+    await new Promise((r) => setTimeout(r, 0))
+    expect(fetched, '比例 0 的恢复也要等落位：旧视口不是补载证据').toEqual([2])
+    while (frames.length > 0) must(frames.shift(), '待跑的双帧')()            // 跑完双帧：落位
+    expect(port.top, '比例 0 落位到存档章顶').toBe(2000)
+    session.handleViewportChange('src')                    // 落位后的真实视口才开始判断补载
+    await new Promise((r) => setTimeout(r, 0))
+    expect(fetched).toContain(1)
+  })
+
   it('存档恢复的双帧落位之前，旧视口读数不许触发回溯补载', async () => {
     const port = fakePort()
     port.anchors = [{ index: 2, start: 2000, height: 2000 }]
@@ -966,11 +993,12 @@ describe('ReaderSession 代际（卸载/换书后的迟到续作）', () => {
 describe('连续阅读的已载窗口上限（裁章补偿 + 回溯补载）', () => {
   const many: ChapterEntry[] = Array.from({ length: 60 }, (_, i) => ({ name: `第${i + 1}章`, url: `https://s.com/c/${i}` }))
 
-  /** 长书会话：假 port 按「当前已载表」重建锚点（DOM 顺序 = 已载章顺序，裁章后起点整体上移）。 */
-  const makeLongSession = (chapterHeight: number) => {
+  /** 长书会话：假 port 按「当前已载表」重建锚点（DOM 顺序 = 已载章顺序，裁章后起点整体上移）。
+   *  `gap` 模拟真实 DOM 的章间外边距：它只进 `start` 差，不进 `height`——补偿若按高度求和会少补。 */
+  const makeLongSession = (chapterHeight: number, gap = 0) => {
     const port = fakePort()
     port.height = 1000
-    port.scrollH = 60 * chapterHeight
+    port.scrollH = 60 * (chapterHeight + gap)
     port.sentinel = null                                  // 预取不由本组用例驱动
     const fetched: number[] = []
     const session = new ReaderSession({
@@ -983,14 +1011,14 @@ describe('连续阅读的已载窗口上限（裁章补偿 + 回溯补载）', (
       const mounted: number[] = []
       session.state.chapters.forEach((c, i) => { if (c !== null) mounted.push(i) })
       const base = mounted[0] ?? 0
-      port.anchors = mounted.map((i) => ({ index: i, start: (i - base) * chapterHeight, height: chapterHeight }))
+      port.anchors = mounted.map((i) => ({ index: i, start: (i - base) * (chapterHeight + gap), height: chapterHeight }))
       session.afterRender('src')
     }
     return { port, session, fetched, render }
   }
 
-  it('连续前读：窗口只保留视口前 6 章，裁章后滚动位按量得的高度回补（DOM 规模有界）', async () => {
-    const { port, session, render } = makeLongSession(1000)
+  it('连续前读：窗口只保留视口前 6 章，裁章后按参考章起点差回补（章间外边距计入，DOM 规模有界）', async () => {
+    const { port, session, render } = makeLongSession(1000, 120)
     await session.open('src', 'https://s.com/book/1')
     render()
     for (let i = 1; i <= 20; i++) {
@@ -1045,8 +1073,8 @@ describe('连续阅读的已载窗口上限（裁章补偿 + 回溯补载）', (
     expect(fetched.filter((i) => i < 10)).toEqual([])
   })
 
-  it('回溯：滚到窗口顶补载上一章，前插后视口仍停在原处', async () => {
-    const { port, session, fetched, render } = makeLongSession(3000)   // 章高 3 屏 → 一次补载即够缓冲
+  it('回溯：滚到窗口顶补载上一章，前插后视口仍停在原处（章间外边距计入）', async () => {
+    const { port, session, fetched, render } = makeLongSession(3000, 120)   // 章高 3 屏 → 一次补载即够缓冲
     await session.open('src', 'https://s.com/book/1')
     render()
     session.requestJump('src', 10)

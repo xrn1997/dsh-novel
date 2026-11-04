@@ -11,6 +11,11 @@ import { NOVEL_GLYPH_PATH, NOVEL_GLYPH_VIEWBOX } from './novel-glyph.js'
 import { NovelStatusOverlay } from './views/NovelStatusOverlay.js'
 import { NovelView } from './views/NovelView.js'
 
+/** 浏览器半的 fiber 名：cordis 用插件对象的 `name` 命名 fiber，槽位诊断里 `entry.registrant`
+ *  缺省就取 `fiber.name`——缺了它，这份注册在诊断里认不出是谁的。带 `/client` 后缀是为了与
+ *  Node 半的 `name`（包全名）区分开：两半是两个 fiber。 */
+export const name = '@xrn1997/dsh-novel/client'
+
 export const inject = ['slots', 'layout']
 
 /**
@@ -52,8 +57,13 @@ function NovelPanelIcon({ size = 16 }: { size?: number; active?: boolean }): Rea
   )
 }
 
-/** 全局面板的 id/key 同一个词（官方契约：选中缺失的 main entry 会抛）——注册与「带到前台」共用一格。 */
-const NOVEL_PANEL_ID = 'novel'
+/** 全局面板的 id/key 同一个词（官方契约：选中缺失的 main entry 会抛）——注册与「带到前台」共用一格。
+ *  **带插件专属前缀**：宿主对 list id / keyed key 的规则是「复用已有 id = 进那个格子并替换占用者」，
+ *  裸 `novel` 是通用词，别家（或将来的官方小说面板）一旦也用，替换是静默的；前缀是本插件在
+ *  槽位域的硬边界，与工具名的 `dshnovel_` 前缀同一条纪律。 */
+const NOVEL_PANEL_ID = '@xrn1997/dsh-novel.panel'
+/** 常驻状态层的条目 id（`shell.overlay` 是 list 槽，规则同上）。 */
+const NOVEL_STATUS_ID = '@xrn1997/dsh-novel.status'
 
 /** `main` keyed 槽的占用者：小说全局面板本体（root 作用域，无 Session 绑定）。
  *  NovelView 自带样式层与 token 锚点（`data-novel-scope`），在 keyed 槽这棵子树里自足。
@@ -77,7 +87,7 @@ export function apply(ctx: Context): void {
   // 调用时读当前 locale，故这里不订阅。不声明 slot 的 `locale` 席位：那条路在未安装 locale face
   // 的宿主上会抛，与可选回退冲突（`ADR-0038`）；换语言靠 outlet 的 locale revision 重渲。
   const t = createTranslate(ctx)
-  // 全局面板双注册（同 id/key「novel」，必须同批——官方契约：选中缺失的 main entry 会抛）
+  // 全局面板双注册（同 id/key `NOVEL_PANEL_ID`，必须同批——官方契约：选中缺失的 main entry 会抛）
   ctx.effect(() => slots.inject('sidebar.panellist', () => slots.register(
     { name: 'sidebar.panellist', id: NOVEL_PANEL_ID, order: 20, label: () => t('nav.panel') },
     NovelPanelIcon,
@@ -98,7 +108,7 @@ export function apply(ctx: Context): void {
       </CopyProvider>
     )
     return slots.register(
-      { name: 'shell.overlay', id: 'novel-status', order: 100, label: () => t('nav.overlay'), inject: () => ({ t }) },
+      { name: 'shell.overlay', id: NOVEL_STATUS_ID, order: 100, label: () => t('nav.overlay'), inject: () => ({ t }) },
       StatusOverlay,
     )
   }), 'dsh-novel: shell overlay status layer')

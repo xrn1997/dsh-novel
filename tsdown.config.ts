@@ -54,6 +54,12 @@ export default defineConfig([
     // 的判据套上来，打一条「建议改用 ESM」的假阳性 WARN——CJS 恰恰是 ./client
     // 闭合工厂契约的要求，不该按 Node 库计。
     target: 'baseline-widely-available',
+    // 这份产物是**发给浏览器**的：注释、缩进与长标识符全是要用户下载与解析的字节。
+    // 保留 sourcemap 作为可调试性补偿（宿主按 `//# sourceMappingURL` 取图谱），
+    // 所以「压缩了但还能查」两头都在。构建期纯度门与 banner/footer 不受影响；
+    // 产物自检（`tests/packaging-build.test.ts`）按**行为**钉注册壳与 require 集合，
+    // 不按压缩后的文本形状——否则一开压缩，静态扫文本的门就自己睡着了。
+    minify: true,
     dts: false,                 // dts 会把 banner/footer 包进 .d.cts 弄坏解析
     sourcemap: true,
     clean: false,               // host 已 clean；两个配置同写 lib/

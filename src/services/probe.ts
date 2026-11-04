@@ -2,6 +2,7 @@ import type { ProbeErrorCode, ProbeResult } from '../shared/wire.js'
 export type { ProbeResult, ProbeErrorCode } from '../shared/wire.js'
 import { detailFieldsOf, fieldOf } from './bridge.js'
 import { fetchSearchPage, searchErrorCodeOf } from './search-face.js'
+import type { SearchFaceOptions } from './search-face.js'
 import type { SourceRequest } from './source-request.js'
 import type { SourceRegistry } from './sources.js'
 import type { NovelSource } from './types.js'
@@ -18,9 +19,15 @@ const PROBE_KEYS = ['书', '小说', '的'] as const
  *
  * 请求语义全部走搜索面（search-face.ts）：模板解析/请求组装/超时/解码与聚合搜索同一实现——
  * timeoutMs 缺省时探针与搜索同认 ReadingService 的 searchTimeoutMs，不要退到 fetcher 的固定默认值。
+ *
+ * 取消是**例外路径**：抓取层能中止的路径上（HTTP），`signal` 已中止时由抓取层抛 `signal.reason`；
+ * 换词之间也会先查一次。webView 支线没有取消面（见 `source-request.ts` 的 `ReadFetchOptions`），
+ * 可能跑完这次导航才发现取消——写终态前的最后一道检查归门面（`ReadingService.probe`）。半截探针
+ * 是被调用方掐掉的，不是站点给的结论——把它翻成 broken 等于用一次没跑完的读数写源的持久状态。
  */
 export async function probeSource(
-  source: NovelSource, request: SourceRequest, opts?: { timeoutMs?: number; jsTimeoutMs?: number },
+  source: NovelSource, request: SourceRequest,
+  opts?: SearchFaceOptions,
 ): Promise<ProbeResult> {
   try {
     // 源自带校验关键词（`ruleSearch.checkKeyWord`）时先打它：「只搜得到自家书名」的站
@@ -29,7 +36,9 @@ export async function probeSource(
     const own = source.rules.probeKeyword ?? null
     const keys = own === null || own.trim() === '' ? [...PROBE_KEYS] : [own, ...PROBE_KEYS]
     for (const key of keys) {
-      const page = await fetchSearchPage(source, key, request, opts?.timeoutMs, opts?.jsTimeoutMs)
+      // 换词重试之间查一次：取消了就不再多打一个关键词（每次重试都是一次真实站点请求）
+      opts?.signal?.throwIfAborted()
+      const page = await fetchSearchPage(source, key, request, opts)
       if (!page.ok) return fail('RuleMissing', page.message, 0)
       if (page.shape === 'info' && page.via === 'pattern') {
         // 搜索响应即详情页（bookUrlPattern 命中）：书名走**详情规则**，与聚合搜索的 info 形态
@@ -63,6 +72,9 @@ export async function probeSource(
     return fail('RuleEvalError',
       `搜索列表 0 命中（关键词${keys.map((k) => `「${k}」`).join('')}均无结果；段 ruleBookList: ${source.rules.ruleBookList}）`, 0)
   } catch (e) {
+    // 取消优先于归类：中止时抓取层抛的是 signal.reason（或包装过的 AbortError），
+    // 不先查 signal 会把它当成一次站点失败返回。
+    opts?.signal?.throwIfAborted()
     return { ok: false, itemCount: 0, firstTitle: null, error: { code: searchErrorCodeOf(e), message: messageOf(e) }, probedAt: Date.now() }
   }
 }

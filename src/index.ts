@@ -21,7 +21,7 @@ export { Config, type NovelConfig, type ResolvedConfig } from './config.js'
  * 注意不能 extends Context（dsh-tools 已对 tools 做了更宽的增强，交叉会冲突）——独立形状 + 强转。
  * `jobs` = 宿主后台任务注册表（ctx.jobs）：只镜像我们用到的两成员（`start` 与下面的 `attachController`）。
  * `start` 交出的 spec 形状由 services/job-holder.ts 的 `JobHostSpec` 唯一持有——宿主真名真形与
- * 输出拉模型（`readOutput`）的窄面镜像注释都在那里，本处不复述。
+ * 输出拉源（`output`）的窄面镜像注释都在那里，本处不复述。
  * kind 是自由字符串，本仓给的取值一律非空、带 `novel-` 前缀，与宿主自带的任务命名隔开。 */
 interface WebServerLike { register(route: { kind: 'prefix'; path: string; handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void> }): () => void }
 interface ToolsRuntimeLike { register(tool: unknown): () => void }
@@ -41,7 +41,11 @@ export const inject = ['webServer', 'tools', 'jobs']
 
 /** 双重启用防御：bundles+插槽双启用时重复注册 /novel-api 会崩宿主进程。
  * 语义钉死「当前有一份实例已注册」——dispose 复位，配置热替换（unload→load）与 HMR 之后
- * 新实例照样能正常注册，不误拦。 */
+ * 新实例照样能正常注册，不误拦。
+ *
+ * 只拦「注册」这件事，不接管配置：第二份实例的 config 不会生效（生效的是先注册的那一份）。
+ * 所以这条留痕必须是 **error**——宿主缺省级别闸只放行 error/info，warn 进不了宿主日志面、
+ * UI 也看不见；「改了配置却毫无效果」比崩溃难查得多。 */
 let applied = false
 
 /** 缝送来的 args → 宿主 severity 方法能吃的形状（签名以宿主发布物为准）：
@@ -89,7 +93,9 @@ function readVolatilePaths(payload: unknown): { text: string; proxyUrl: boolean 
 export function apply(ctx: Context, config?: NovelConfig): void {
   const resolved = resolveConfig(config)
   if (applied) {
-    log.warn('duplicate apply ignored（插件被重复启用，已跳过注册——防重复路由崩溃）')
+    // error 不是升级语气：这是配置错（同一插件被两个入口同时启用），且第二份 config 被丢弃。
+    // 措辞要点名后果与出口——只写「duplicate apply ignored」的话，用户不知道哪一份在生效。
+    log.error('duplicate apply ignored：本插件已被另一份实例注册，本次不注册路由/工具且配置不生效（请停用重复的入口后重启宿主）')
     return
   }
   const c = ctx as unknown as NovelContext
@@ -158,14 +164,14 @@ export function apply(ctx: Context, config?: NovelConfig): void {
     ctx.effect(() => () => { cancelled = true; applied = false; dispose?.() }, label)
   }
 
-  // 沙箱 unhandledRejection 常驻防线：脚本在 vm realm 里**自建**又 fire-and-forget 的异步工作
-  // （Promise 与宿主同一 isolate），其 rejection 会悬空冒到进程顶层。Node 默认把这类
-  // unhandled rejection 当致命 → 整个宿主进程死（用户看到「请求失败 403/404」fatal），
-  // 尤其在导入书源时（探针逐源跑 @js）。java.ajax 走同步语义、调用点不产 rejection（口径见
-  // engine/js-sandbox.ts 的哨兵），但脚本自建的 Promise 照样会，这条防线仍然必需。
-  // 挂上后常驻至插件 dispose：只在跑脚本那一段挂、收尾就摘，摘完之后迟到的 rejection 照样漏。
-  // sink 也从这里递进去：防线幂等且先挂者定 sink，所以入口必须抢在第一次跑脚本之前挂，
-  // 这条留痕才走得到日志缝（宿主日志面），而不是落在引擎的缺省 console 上。
+  // 沙箱 unhandledRejection 常驻防线：脚本在 vm realm 里**自建**又 fire-and-forget 的异步工作，
+  // 其 rejection 会悬空冒到进程顶层。Node 默认把这类 unhandled rejection 当致命 → 整个宿主进程死
+  // （用户看到「请求失败 403/404」fatal），尤其在导入书源时（探针逐源跑 @js）。java.ajax 走同步
+  // 语义、调用点不产 rejection（口径见 engine/js-sandbox.ts 的哨兵），但脚本自建的 Promise 照样会，
+  // 这条防线仍然必需。挂上后常驻至插件 dispose：只在跑脚本那一段挂、收尾就摘，迟到的 rejection 照样漏。
+  // sink 从这里递进去：真 sink 到场即顶替引擎的 console 兜底（ADR-0059），所以挂上之后防线的
+  // 留痕就走日志缝。抢在第一次跑脚本之前挂仍然对——早于这一步的 rejection 只能先落 console 兜底。
+  // 只拦沙箱 realm 的 promise；非沙箱来源如实记 error 并交回宿主（见 ADR-0059）。
   ctx.effect(() => {
     const detach = ensureUnhandledGuard({ warn: (...a) => log.warn(...a), error: (...a) => log.error(...a) })
     return () => { detach() }
@@ -202,7 +208,7 @@ export function apply(ctx: Context, config?: NovelConfig): void {
       config: resolved,
       // 代理走独立的 proxyUrl 源而非 config.proxyUrl：只传 config 的直装调用方不该因此被接上网关。
       proxyUrl,
-      // 任务生命周期交宿主注册表（身份 `<kind>-N` / running→终态 / 取消入口）；
+      // 任务生命周期交宿主注册表（身份 `<kind>-<短 id>` 由注册表生成 / running→终态 / 取消入口）；
       // 本插件的 JobState 仍是计数与明细的唯一载体，单任务槽互斥也不变。
       jobHost: c.jobs,
     })

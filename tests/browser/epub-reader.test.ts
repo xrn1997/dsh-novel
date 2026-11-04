@@ -77,7 +77,7 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
     const s = await openPage(host, browser, opts.viewport)
     try {
       expect(await s.slots(), '壳应注册出侧栏行 / main 面板 / 常驻状态层三个槽位').toEqual([
-        'sidebar.panellist:novel', 'main:novel', 'shell.overlay:novel-status',
+        'sidebar.panellist:@xrn1997/dsh-novel.panel', 'main:@xrn1997/dsh-novel.panel', 'shell.overlay:@xrn1997/dsh-novel.status',
       ])
       await fn(s, host)
       expect(appErrors(s), '控制台与 pageerror 不应有应用自己的错误').toEqual([])
@@ -149,8 +149,8 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
     return after?.getAttribute('data-novel-node') ?? null
   }, nodeId)
 
-  /** 某章块的几何：顶相对视口顶的偏移 + 渲染高度。**恢复位用章块量不用节点身份**——重挂后只载入
-   *  存档章（预取只向前），上一章尾部那个节点整块消失，节点身份跨剪枝不可比。 */
+  /** 某章块的几何：顶相对视口顶的偏移 + 渲染高度。**恢复位用章块量不用节点身份**——重挂后回溯补载
+   *  会把上一章补回来，节点坐标跟着前插整体挪位；节点身份跨重挂不可比，「章块 + 章内比例」才是存档口径。 */
   const blockBox = (s: PageSession, index: number): Promise<{ top: number; height: number } | null> =>
     s.page.evaluate((i) => {
       const main = document.querySelector('[data-novel-main]') as HTMLElement
@@ -699,9 +699,10 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       const after = await probe(s)
       const box1After = await blockBox(s, 1)
       expect(after.chapter, '重挂后恢复同一章（存档章号）').toBe(before.chapter)
-      expect(await loadedChapters(s), '重挂后只载入存档那一章（预取只向前，上一章不回来）。'
-        + '所以恢复位量的是「章块 + 章内比例」，不是「同一个节点 id」——重挂前视口顶越过的最后一个节点'
-        + '常常属于上一章尾部，它的消失不是位置漂移').toEqual([1])
+      const loaded = await loadedChapters(s)
+      expect(loaded, '存档章必须在场（回溯补载会把它前面的章补回来，不再要求「只有一章」）')
+        .toContain(Number(must(before.chapter, '重挂前视口章')))
+      expect(loaded, '已载章按书序连续（正文渲染顺序 = 书的顺序）').toEqual(loaded.map((_, k) => pick(loaded, 0) + k))
       // 恢复位 = 存档比例 × 该章渲染高度（会话的 anchorTop 反函数）：这一条同时证明「章对了」与
       // 「章内比例也落回去了」——只恢复章首会差出整整一个比例（本样本约 30px），远大于容差。
       expect(box1After, '重挂后存档章块量得到').not.toBeNull()
@@ -731,8 +732,10 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       await s.page.waitForSelector('[data-chapter] [data-novel-node]', { timeout: 20_000 })
       await settle(1_200)
       expect((await probe(s)).chapter, '回来仍读目标章（不因在途被丢弃而退回第 0 章）').toBe('1')
-      expect(await loadedChapters(s),
-        '跳章窗口只留目标章（长书：它之外没有已载章；未载章不进 DOM）').toEqual([1])
+      const loaded = await loadedChapters(s)
+      expect(loaded, '目标章必须在场').toContain(1)
+      expect(loaded, '已载章连续无空洞（回溯补载的前插不改变阅读位置）')
+        .toEqual(loaded.map((_, k) => pick(loaded, 0) + k))
     })
   }, 180_000)
 
@@ -804,6 +807,11 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
 
       await s.page.click('button:has-text("书架")')
       await s.page.waitForSelector('[data-novel-view="shelf"] .novel-card img', { timeout: 10_000 })
+      // 封面是 loading="lazy"：元素在场 ≠ 已解码。与插图那条同一口径，等到 complete 再看 naturalWidth
+      await s.page.waitForFunction(() => {
+        const img = document.querySelector<HTMLImageElement>('[data-novel-view="shelf"] .novel-card img')
+        return img !== null && img.complete && img.naturalWidth > 0
+      }, { timeout: 10_000 })
       const cover = await s.page.evaluate(() => {
         const img = document.querySelector('[data-novel-view="shelf"] .novel-card img') as HTMLImageElement
         return { w: img.naturalWidth, h: img.naturalHeight }
@@ -955,13 +963,13 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       await s.page.click('button[aria-label="阅读 在线样本"]')
       await s.page.waitForSelector('[data-chapter="2"] p', { timeout: 20_000 })
       await settle(1_200)
-      // 阅读位置 = 存档章（只有被读的那一章进 DOM：未载章不渲染）
+      // 阅读位置 = 存档章；相邻章进不进 DOM 由预取/回溯补载决定，可测不变量是「存档章在场」
       expect(await s.page.textContent('[data-chapter="2"]'), '恢复到存档章（第 3 章）而不是从头').toContain(ONLINE_CHAPTERS[2])
       expect(await s.page.textContent('[data-chapter="2"]')).toContain('假站点的第 3 章正文第一段')
-      // 「不从头」的硬证据 = 载入集**从存档章起**（第 0 章不在 DOM）。但不能要求「只有一章」：
-      // 在线章短，边界哨兵恒在预取区、后面几章会被一并联进来；可测不变量是「已载章连续无空洞」。
+      // 相邻章进不进 DOM 由预取/回溯补载决定，不能拿「第 0 章不在 DOM」当不变量；
+      // 可测的两条是「存档章在场」与「已载章连续无空洞」，「不从头」由下面的 currentPct 守。
       const loaded = await loadedChapters(s)
-      expect(pick(loaded, 0), '恢复后从存档章（第 3 章）开始载入，第 0 章不回来').toBe(2)
+      expect(loaded, '存档章必须在场（第 3 章）').toContain(2)
       expect(loaded, '已载章按书序连续（正文渲染顺序 = 书的顺序）').toEqual(loaded.map((_, k) => pick(loaded, 0) + k))
       expect(await currentPct(s), '会话的阅读位置就在存档章（--novel-pct = (章号+1)/章数）')
         .toBe(String((2 + 1) / ONLINE_CHAPTERS.length))

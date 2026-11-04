@@ -29,9 +29,6 @@ importers:
       image-size:
         specifier: 2.0.4
         version: 2.0.4
-      playwright-core:
-        specifier: 1.63.0
-        version: 1.63.0
       undici:
         specifier: 7.29.1
         version: 7.29.1
@@ -111,6 +108,10 @@ importers:
       vitest:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@24.19.2)(jsdom@30.0.1)(supports-color@7.2.0)
+    optionalDependencies:
+      playwright-core:
+        specifier: 1.63.0
+        version: 1.63.0
 
 packages:
 

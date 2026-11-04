@@ -39,11 +39,20 @@ export interface ScriptEvalSurface {
 }
 
 /** 一次出站抓取的两个消费面：脚本求值面（`fetcherFor`）与读面（`fetchText` / `fetchPage`）。
- *  读面自带 `webView` / `webJs` 计划与 loginCheck；脚本面只给 HTTP + 浏览器两个出口。 */
+ *  读面自带 `webView` / `webJs` 计划与 loginCheck；脚本面只给 HTTP + 浏览器两个出口。
+ *  `signal` 只走读面：脚本出站由沙箱预算收口，调用方的取消不该从半路掐断一次 scripts 求值
+ *  （那会让同一次规则求值看到半个响应）。 */
+export interface ReadFetchOptions {
+  timeoutMs?: number
+  /** 调用方取消：透传到 HTTP 出站（已取消的调用不发请求）。webView 支线**没有**取消面
+   *  （浏览器导航不吃 AbortSignal）：那边的取消只在发起之前生效（源之间、换词之间），
+   *  不会掐断在途导航。 */
+  signal?: AbortSignal
+}
 export interface SourceRequest {
   fetcherFor(source: NovelSource): ScriptEvalSurface
-  fetchText(source: NovelSource, plan: RequestPlan, opts?: { timeoutMs?: number }): Promise<{ text: string; landedUrl: string }>
-  fetchPage(source: NovelSource, plan: RequestPlan, opts?: { timeoutMs?: number }): Promise<Page>
+  fetchText(source: NovelSource, plan: RequestPlan, opts?: ReadFetchOptions): Promise<{ text: string; landedUrl: string }>
+  fetchPage(source: NovelSource, plan: RequestPlan, opts?: ReadFetchOptions): Promise<Page>
 }
 
 /**
@@ -221,11 +230,15 @@ export function createSourceRequest(deps: SourceRequestDeps): SourceRequest {
   }
 
   /** 一次出站的前置：动态头求值 + 计划 → init。头规则脚本自己的出站也走本缝（限速/loginCheck）。 */
-  const initFor = async (source: NovelSource, plan: RequestPlan, opts?: { timeoutMs?: number }) => {
+  const initFor = async (source: NovelSource, plan: RequestPlan, opts?: ReadFetchOptions) => {
     // 动态头每请求求值一次；头规则脚本里的 java.ajax 同样过本缝的限速与 loginCheck。
     // 不递归：source-eval 的 resolveHeaders 给这些脚本出站打的是静态头，不会再求值头规则。
     const dynamic = await createSourceEval(fetcherFor(source), source, { jsTimeoutMs: deps.jsTimeoutMs() }).headers()
-    return { ...fetchInitOf(plan, dynamic), ...(opts?.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }) }
+    return {
+      ...fetchInitOf(plan, dynamic),
+      ...(opts?.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
+      ...(opts?.signal === undefined ? {} : { signal: opts.signal }),
+    }
   }
 
   /** webview 的 html 已是 UTF-8 JS 字符串：不按 URL 选项的 charset 二次解码 */
@@ -250,7 +263,7 @@ export function createSourceRequest(deps: SourceRequestDeps): SourceRequest {
  *  可能是 POST 型 API 端点，裸抓带选项的 URL 会得 405；选项语义与解码仍归
  *  `assembleRequest` 与 `SourceRequest.fetchText` 两个单点。 */
 export async function fetchSourceText(
-  request: SourceRequest, source: NovelSource, url: string, opts?: { timeoutMs?: number },
+  request: SourceRequest, source: NovelSource, url: string, opts?: ReadFetchOptions,
 ): Promise<string> {
   const plan = assembleRequest(url, {}, source.baseUrl)
   const { text } = await request.fetchText(source, plan, opts)

@@ -47,7 +47,7 @@ describe('fetchSearchPage', () => {
   it('timeoutMs 生效：挂起的抓取在限时内抛 FetchError', async () => {
     const f = createFetcher({ fetchImpl: () => new Promise<Response>(() => { /* 永不返回 */ }) })
     const t0 = Date.now()
-    await expect(fetchSearchPage(src(), '书', fakeSourceRequest(f), 50)).rejects.toMatchObject({ name: 'FetchError' })
+    await expect(fetchSearchPage(src(), '书', fakeSourceRequest(f), { timeoutMs: 50 })).rejects.toMatchObject({ name: 'FetchError' })
     expect(Date.now() - t0).toBeLessThan(1000)
   })
   it('POST 选项透传：method/body 插值/headers（probe.test 同款断言口径）', async () => {

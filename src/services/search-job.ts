@@ -17,8 +17,8 @@ import type { JobHost, JobOutcome } from './job-holder.js'
  *
  * 生命周期同样登记给 `ctx.jobs`（kind `novel-search`）——身份、终态、取消入口与写任务同口径；
  * 本模块持有「结果集 + 游标」；过程行尾缓冲挂在登记给宿主的那根线上（`job-holder.ts` 的 `HostTie`，
- * 宿主经 `readOutput` 拉）。
- * 宿主任务面板的展示面装不下整轮结果（过程行另有 `readOutput` 拉取面）——结果与明细仍只在这里。
+ * 宿主按自己的字节游标从 `output` 拉源读，`job_output` 因此看得到进度行）。
+ * 宿主任务面板的展示面装不下整轮结果——结果与明细仍只在这里。
  */
 
 /** 运行器契约：门面（`ReadingService`）把 `searchProgressive` 包进来——持有者不认识门面。

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { ExploreJobs, MAX_EXPLORE_PAGES } from '../../src/services/explore-job.js'
-import type { JobHost } from '../../src/services/job-holder.js'
 import { DEFAULT_JOB_OUTPUT_BYTES } from '../../src/services/job-tail.js'
 import type { SearchGroup, SearchHit } from '../../src/shared/wire.js'
 import { must, pick } from '../support/fixture.js'
+import { jobHostDouble } from '../support/job-host.js'
 
 /** 单源分类轮次的持有者：一轮 = **一个源 + 一个类**，跨页累积与「零新增即到底」的记忆都住在这里
  *  （浏览器半刻意什么都不握，读面是整帧替换的全量快照）。
@@ -21,21 +21,6 @@ const group = (hits: SearchHit[], sourceId = 's1'): SearchGroup =>
   ({ sourceId, sourceName: sourceId, status: 'verified', hits })
 
 const blankGroup: SearchGroup = { sourceId: 's1', sourceName: 's1', status: 'verified', hits: [] }
-
-/** 记 specs 与 done 结算的假宿主（与 search-job 测试同形，各自内联：测试桩不是生产逻辑） */
-function fakeHost(): { host: JobHost; kinds: string[]; labels: string[]; settled: string[] } {
-  const kinds: string[] = []
-  const labels: string[] = []
-  const settled: string[] = []
-  const host: JobHost = {
-    start: (spec) => {
-      kinds.push(spec.kind); labels.push(spec.label)
-      void spec.run().done.then((o) => { settled.push(o.status) })
-      return `${spec.kind}-${kinds.length}`
-    },
-  }
-  return { host, kinds, labels, settled }
-}
 
 const tick = async (): Promise<void> => { await new Promise((r) => setTimeout(r, 5)) }
 
@@ -390,7 +375,7 @@ describe('ExploreJobs 终态之后迟到的批次', () => {
 
 describe('ExploreJobs 登记给宿主 ctx.jobs', () => {
   it('kind novel-explore、label 带分类名与页码；自然收尾 completed、被取消 killed', async () => {
-    const h = fakeHost()
+    const h = jobHostDouble()
     const jobs = new ExploreJobs({ host: h.host })
     jobs.start('s1', '玄幻', async () => null)
     expect(h.kinds).toEqual(['novel-explore'])
@@ -406,7 +391,7 @@ describe('ExploreJobs 登记给宿主 ctx.jobs', () => {
   })
 
   it('每一批各领一次登记，页码跟着批次走', async () => {
-    const h = fakeHost()
+    const h = jobHostDouble()
     const jobs = new ExploreJobs({ host: h.host })
     jobs.start('s1', '玄幻', async (emit) => { emit(group([hit('a')])) })
     await tick()
@@ -416,54 +401,43 @@ describe('ExploreJobs 登记给宿主 ctx.jobs', () => {
     expect(h.settled).toEqual(['completed', 'completed'])
   })
 
-  // 与 search-job 的 readOutput 钉子同形：分类这一路的过程行也得真的交得出（那边只靠 tsc 与
+  // 与 search-job 的拉源钉子同形：分类这一路的过程行也得真的交得出（那边只靠 tsc 与
   // 同形推断的话，宿主 `job_output` 拉到的空面没人报）。
-  it('每一页一行留在 readOutput 里，且第二次 read 不重复交付', async () => {
-    let hooks = null as { readOutput?: () => string } | null
-    let spec = null as { outputLimitBytes?: number } | null
-    const host: JobHost = {
-      start: (s) => {
-        spec = s
-        hooks = s.run()
-        return `${s.kind}-1`
-      },
-    }
-    const jobs = new ExploreJobs({ host })
+  it('每一页一行留在 output 拉源里，偏移游标不重复交付', async () => {
+    const h = jobHostDouble()
+    const jobs = new ExploreJobs({ host: h.host })
     jobs.start('s1', '玄幻', async (emit) => { emit(group([hit('a')])) })
     await tick()
-    expect(typeof hooks?.readOutput).toBe('function')
-    const line = hooks?.readOutput?.()
+    const line = h.last().read()
     expect(line).toContain('s1')                          // 行文带源名（组的自我报名）
     expect(line).toContain('第 1 页')
     expect(line).toContain('源 verified')                 // 源状态与结果分成两轴
-    expect(hooks?.readOutput?.()).toBe('')                // 消费式：同一批增量不重复交付
-    expect(must(spec, '任务 spec').outputLimitBytes).toBe(DEFAULT_JOB_OUTPUT_BYTES)
+    expect(h.last().read()).toBe('')                      // 游标已推进：只给增量
+    expect(must(h.last().spec, '任务 spec').outputLimitBytes).toBe(DEFAULT_JOB_OUTPUT_BYTES)
   })
 
-  it('续页复用同一轮尾缓冲：早页 jobId 的消费者会一起拉走后页行', async () => {
-    const hooks: Array<{ readOutput?: () => string }> = []
-    const host: JobHost = {
-      start: (spec) => {
-        hooks.push(spec.run())
-        return `${spec.kind}-${hooks.length}`
-      },
-    }
-    const jobs = new ExploreJobs({ host })
+  it('续页复用同一轮尾缓冲：两个读者各持游标，互不吃掉对方的行', async () => {
+    const h = jobHostDouble()
+    const jobs = new ExploreJobs({ host: h.host })
     jobs.start('s1', '玄幻', async (emit) => { emit(group([hit('a')])) })
     await tick()
+    const first = must(h.captures[0], '第一页的登记')
+    expect(first.read()).toContain('第 1 页')             // 第一个读者先读完第一页
     jobs.advance('玄幻', async (emit) => {
       emit({ ...group([hit('b')]), status: 'unverified' })
     })
     await tick()
-    expect(hooks).toHaveLength(2)
-    const fromFirst = must(pick(hooks, 0).readOutput, 'hooks.readOutput 读口')()
-    expect(fromFirst).toContain('第 1 页')
-    expect(fromFirst).toContain('第 2 页 1 条（源 unverified）')
-    expect(must(pick(hooks, 1).readOutput, 'hooks.readOutput 读口')()).toBe('')               // 同一份游标：后页 jobId 不再重复交付
+    const second = must(h.captures[1], '第二页的登记')
+    // 共享同一份缓冲：第二个读者从 0 读，看得到两页（它自己的游标，与第一个读者无关）
+    expect(second.readFrom(0).text).toContain('第 1 页')
+    expect(second.readFrom(0).text).toContain('第 2 页 1 条（源 unverified）')
+    // 第一个读者继续读：只拿到后页新增的那一行，不重放也不吃别人的
+    expect(first.read()).toContain('第 2 页 1 条（源 unverified）')
+    expect(first.read()).toBe('')
   })
 
   it('新一轮替换在跑的那轮：旧轮以 killed 结算给宿主，不留两条在途任务', async () => {
-    const h = fakeHost()
+    const h = jobHostDouble()
     const jobs = new ExploreJobs({ host: h.host })
     jobs.start('s1', '玄幻', () => new Promise<void>(() => {}))
     jobs.start('s2', '都市', async () => null)

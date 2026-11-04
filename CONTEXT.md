@@ -463,6 +463,6 @@ _唯一实现_: `services/log.ts` 的 `log` / `setLogSink`
 _Avoid_: 逐调用点手写 `[dsh-novel]` 前缀、另开 console 出口
 
 **任务过程行（job progress tail）**:
-宿主 job 输出面的拉模型缓冲：有界、消费式、只装过程行；整轮结果与业务明细归各持有者的快照读面。
-_唯一实现_: `services/job-tail.ts` 的 `JobTail`（缓冲与上限）；`services/job-holder.ts` 的 `HostTie`（把它接到宿主 `readOutput` 上——三个持有者不再各写一遍登记顺序）
-_Avoid_: 把整轮结果塞进 job_output、把过程行当业务快照
+宿主 job 输出面的**偏移可读**缓冲：有界、只装过程行，每个读者各持字节游标；整轮结果与业务明细归各持有者的快照读面。
+_唯一实现_: `services/job-tail.ts` 的 `JobTail`（缓冲、上限与 `readFrom` 偏移读）；`services/job-holder.ts` 的 `HostTie`（把 `readFrom` 接成宿主 `JobSpec.output` 的拉源——三个持有者不再各写一遍登记顺序）
+_Avoid_: 把整轮结果塞进 job_output、把过程行当业务快照、hooks 上的 readOutput 输出面

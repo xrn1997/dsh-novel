@@ -2,7 +2,7 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { createElement } from 'react'
 import { afterEach, describe, expect, it } from 'vitest'
-import { apply, inject as clientInject } from '../../src/client/index.js'
+import { apply, inject as clientInject, name as clientName } from '../../src/client/index.js'
 import { fakeCtx, fakeHost } from './fake-host.js'
 
 /**
@@ -23,7 +23,11 @@ describe('客户端注册面：小说 = 全局面板（main keyed + sidebar.pane
     expect(clientInject).toEqual(['slots', 'layout'])
   })
 
-  it('apply 注入 sidebar.panellist 与 main 两个座位（同 id/key「novel」）；不注册 conversation.view', () => {
+  it('客户端 fiber 名带包名（槽位诊断的 registrant 认得出这份注册）', () => {
+    expect(clientName).toBe('@xrn1997/dsh-novel/client')
+  })
+
+  it('apply 注入 sidebar.panellist 与 main 两个座位（同 id/key「@xrn1997/dsh-novel.panel」）；不注册 conversation.view', () => {
     const s = fakeHost()
     apply(fakeCtx(s) as never)
     expect(s.injected).toContain('sidebar.panellist')
@@ -33,20 +37,20 @@ describe('客户端注册面：小说 = 全局面板（main keyed + sidebar.pane
 
     const icon = s.registrations.find((r) => r.name === 'sidebar.panellist')
     expect(icon, 'sidebar.panellist 未注册').toBeDefined()
-    expect(icon?.options.id).toBe('novel')
+    expect(icon?.options.id).toBe('@xrn1997/dsh-novel.panel')
     const label = icon?.options.label
     expect(typeof label).toBe('function')
     expect((label as () => string)()).toBe('小说')
 
     const panel = s.registrations.find((r) => r.name === 'main')
     expect(panel, 'main 未注册').toBeDefined()
-    expect(panel?.options.key).toBe('novel')                      // 与 panellist id 同一个词
+    expect(panel?.options.key).toBe('@xrn1997/dsh-novel.panel')   // 与 panellist id 同一个词
     // main 的 inject 缝：宿主槽位按它取 t，缺了这个函数面板就没有字典（回退中文只算兜底）
     expect(typeof panel?.options.inject).toBe('function')
     const panelSeams = (panel?.options.inject as () => { t: (key: string) => string })()
     expect(panelSeams.t('nav.panel')).toBe('小说')
 
-    const overlay = s.registrations.find((r) => r.name === 'shell.overlay' && r.options.id === 'novel-status')
+    const overlay = s.registrations.find((r) => r.name === 'shell.overlay' && r.options.id === '@xrn1997/dsh-novel.status')
     expect(overlay, 'shell.overlay 未注册').toBeDefined()
     // 常驻状态层同样两条缝：行标签是读字典的函数，inject 交回同一个 t
     const overlayLabel = overlay?.options.label

@@ -66,9 +66,16 @@ export type SearchFaceResult =
  * ②列表 0 条**且源未声明 pattern** → 同样按详情页（守卫就是「pattern 为空」：声明过却没命中
  *   就是 0 结果，不再回落）。
  */
+export interface SearchFaceOptions {
+  timeoutMs?: number
+  jsTimeoutMs?: number
+  signal?: AbortSignal
+}
+
 export async function fetchSearchPage(
-  source: NovelSource, keyword: string, request: SourceRequest, timeoutMs?: number, jsTimeoutMs?: number,
+  source: NovelSource, keyword: string, request: SourceRequest, opts?: SearchFaceOptions,
 ): Promise<SearchFaceResult> {
+  const { timeoutMs, jsTimeoutMs, signal } = opts ?? {}
   const { searchUrl, ruleBookList, ruleBookName, bookUrlPattern } = source.rules
   if (searchUrl === null || ruleBookName === null) {
     const missing = [
@@ -87,8 +94,11 @@ export async function fetchSearchPage(
   const vars = { key: keyword, page: 1 }
   const plan = buildSearchRequest(template, vars, source.baseUrl,
     { trimFirstPage: isNativeSource(source.raw) })
-  const { text, landedUrl } = await request.fetchText(source, plan,
-    timeoutMs === undefined ? undefined : { timeoutMs })
+  const { text, landedUrl } = await request.fetchText(source, plan, {
+    // 取消与超时是两个轴：超时由 fetcher 自己的预算收口，signal 只表达「调用方不要了」
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(signal === undefined ? {} : { signal }),
+  })
   // 「重定向过」的判据是落地地址 ≠ 请求地址（本仓没有响应对象上的标志可比）
   const redirected = canonUrl(landedUrl) !== canonUrl(plan.url)
   const info = (via: 'pattern' | 'empty-list'): SearchFaceResult => {

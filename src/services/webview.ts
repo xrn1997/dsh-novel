@@ -1,4 +1,3 @@
-import { chromium } from 'playwright-core'
 import type { Browser, BrowserContext } from 'playwright-core'
 import { FetchError } from './errors.js'
 import { splitUserAgent } from './fetcher.js'
@@ -15,6 +14,12 @@ export interface WebViewOptions {
   webJs?: string
   /** 进浏览器前注入的 HTTP jar cookies（浏览器 cookie 桥） */
   cookies?: WebViewCookie[]
+}
+
+/** 运行期选项：比单次抓取多一条「怎么载入 playwright」的测试缝。缺省是动态 import；
+ *  只有真要用浏览器时才调用，测试因此能在不启动真浏览器的情况下钉住缺包路径。 */
+export interface WebViewRuntimeOptions extends WebViewOptions {
+  loadPlaywright?: () => Promise<Pick<typeof import('playwright-core'), 'chromium'>>
 }
 
 export interface WebViewCookie {
@@ -92,22 +97,35 @@ const jsonTextOf = (v: unknown): string | undefined => JSON.stringify(v)
 export class WebViewRuntime {
   private browser: Browser | null = null
   private launching: Promise<Browser> | null = null
-  private readonly opts: WebViewOptions
+  private readonly opts: WebViewRuntimeOptions
 
-  constructor(opts: WebViewOptions = {}) {
+  constructor(opts: WebViewRuntimeOptions = {}) {
     this.opts = opts
   }
 
   private async launch(): Promise<Browser> {
     if (this.browser !== null) return this.browser
     if (this.launching !== null) return this.launching
-    const tryLaunch = async (channel: string): Promise<Browser> =>
-      chromium.launch({ channel, headless: true, args: ['--disable-dev-shm-usage', '--no-first-run'] })
     this.launching = (async () => {
+      // 按需加载：playwright-core 只在「书源真要用浏览器」这条路上才需要。顶层 import 会让
+      // 整个插件在加载期依赖它（它缺了/装坏了会连只用 HTTP 的书源一起起不来）。这里的错误
+      // 措辞要指名缺的是什么、装法是什么——用户看到的不是 ERR_MODULE_NOT_FOUND。
+      const load = this.opts.loadPlaywright ?? ((): Promise<Pick<typeof import('playwright-core'), 'chromium'>> =>
+        import('playwright-core'))
+      let chromium: typeof import('playwright-core').chromium
+      try {
+        ({ chromium } = await load())
+      } catch (e) {
+        throw new Error(
+          `WebView 不可用：未安装 playwright-core（${e instanceof Error ? e.message.split('\n')[0] : String(e)}）。`
+          + '书源本身不需要浏览器时不受影响；要用 webView / webJs 请重装本插件或单独安装 playwright-core。',
+          { cause: e },
+        )
+      }
       const errors: string[] = []
       for (const channel of ['msedge', 'chrome']) {
         try {
-          this.browser = await tryLaunch(channel)
+          this.browser = await chromium.launch({ channel, headless: true, args: ['--disable-dev-shm-usage', '--no-first-run'] })
           return this.browser
         } catch (e) {
           errors.push(`${channel}: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`)

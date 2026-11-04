@@ -277,6 +277,24 @@ describe('ReadingService', () => {
     expect(pick(pick(groups, 0).hits, 0)).toMatchObject({ title: '斗罗·斗罗' })
   })
 
+  it('signal 取消在第 1 源答完后：不再开新源，且整轮抛出而不是冒充完整结果', async () => {
+    let calls = 0
+    const ctrl = new AbortController()
+    const svc = trackService(await ReadingService.create({
+      dir: await makeTempDir('novel-rd-'),
+      searchParallel: 1,
+      fetchImpl: async () => {
+        calls += 1
+        if (calls === 1) ctrl.abort(new Error('用户停止'))
+        return new Response(SEARCH_HTML('斗罗'), { headers: { 'content-type': 'text/html; charset=utf-8' } })
+      },
+    }))
+    await svc.importOne({ ...rawSource })
+    await svc.importOne({ ...rawSource, bookSourceName: 'B', bookSourceUrl: 'https://b-abort.com', searchUrl: 'https://b-abort.com/search?q={{key}}' })
+    await expect(svc.search('斗罗', { signal: ctrl.signal })).rejects.toThrow('用户停止')
+    expect(calls, '第 2 源一次请求都不该发').toBe(1)
+  })
+
   it('重定向：搜索按落地地址解析相对链接（浏览器语义，与目录/正文同口径）', async () => {
     const dir = await makeTempDir('novel-rd-')
     const landedHtml = '<html><body><div class="b"><a href="book/1/">斗罗</a><span>唐家</span></div></body></html>'
@@ -1097,6 +1115,22 @@ describe('exportRange outcome（区间判据归门面：缺省、裁剪与两条
 })
 
 describe('门面 probe 与搜索同耐心', () => {
+  it('probe 取消：抛 signal.reason，且不把半截读数写成源终态', async () => {
+    const svc = trackService(await ReadingService.create({
+      dir: await makeTempDir('novel-rd-'),
+      fetchImpl: (_input, init) => new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      }),
+    }))
+    const out = await svc.importOne({ ...rawSource })
+    const id = must(out.sourceId, 'out 的 sourceId')
+    const before = svc.listPublicSources()
+    const ctrl = new AbortController()
+    const pending = svc.probe(id, { signal: ctrl.signal })
+    ctrl.abort(new Error('用户取消'))
+    await expect(pending).rejects.toThrow('用户取消')
+    expect(svc.listPublicSources()).toEqual(before)
+  })
   it('probe 认 searchTimeoutMs：挂起抓取在限时内回 FetchError，不落回 fetcher 固定 15s', async () => {
     const svc = trackService(await ReadingService.create({
       dir: await makeTempDir('novel-rd-'),

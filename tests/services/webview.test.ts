@@ -50,6 +50,18 @@ describe('WebView 出口的 scheme 闸（拒绝发生在启动浏览器之前）
   })
 })
 
+describe('WebView 缺依赖的失败路径（不启动真浏览器）', () => {
+  it('playwright-core 动态加载失败：指名缺包与装法，不静默退回普通 HTTP', async () => {
+    const wv = new WebViewRuntime({
+      loadPlaywright: async () => { throw new Error('Cannot find module playwright-core') },
+    })
+    // 若静默退回 HTTP，这个地址会正常返回页面而不是 reject——reject 本身就是「没有退路」的证据
+    await expect(wv.fetch(`${base}/`)).rejects.toThrow(/未安装 playwright-core/)
+    await expect(wv.fetch(`${base}/`)).rejects.toThrow(/Cannot find module playwright-core/)
+    await expect(wv.fetch(`${base}/`)).rejects.toThrow(/单独安装 playwright-core/)
+  })
+})
+
 describe.skipIf(process.env.DSH_WEBVIEW !== '1')('WebViewRuntime（真浏览器）', () => {
   it('renders a page and runs webJs in the page context', async () => {
     const wv = new WebViewRuntime()

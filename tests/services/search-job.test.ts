@@ -3,9 +3,9 @@ import { SearchJobs } from '../../src/services/search-job.js'
 import type { SearchJobRun } from '../../src/services/search-job.js'
 import { SEARCH_HITS_CAP_PER_SOURCE, SEARCH_JOB_RETENTION_MS } from '../../src/shared/wire.js'
 import type { SearchGroup, SearchHit } from '../../src/shared/wire.js'
-import type { JobHost } from '../../src/services/job-holder.js'
 import { DEFAULT_JOB_OUTPUT_BYTES } from '../../src/services/job-tail.js'
 import { must, pick } from '../support/fixture.js'
+import { jobHostDouble } from '../support/job-host.js'
 
 /** 搜索后台任务的持有者：整轮结果住服务端，读面给游标增量。为什么必须在服务端——
  *  浏览器半自持在途循环时，切界面即丢结果。 */
@@ -29,22 +29,6 @@ function manualRun(): { run: SearchJobRun; emit: (g: SearchGroup) => void; finis
     return new Promise<void>((res) => { finish = () => { stop = shouldStop(); res() } })
   }
   return { run, emit: (g) => emit(g), finish: () => finish(), stopping: () => stop }
-}
-
-/** 记 specs 与 done 结算的假宿主（与 import-job 测试同形，各自内联：测试桩不是生产逻辑） */
-function fakeHost(): { host: JobHost; kinds: string[]; labels: string[]; settled: string[] } {
-  const kinds: string[] = []
-  const labels: string[] = []
-  const settled: string[] = []
-  const host: JobHost = {
-    start: (spec) => {
-      kinds.push(spec.kind); labels.push(spec.label)
-      const hooks = spec.run()
-      void hooks.done.then((o) => { settled.push(o.status) })
-      return `${spec.kind}-${kinds.length}`
-    },
-  }
-  return { host, kinds, labels, settled }
 }
 
 const tick = async (): Promise<void> => { await new Promise((r) => setTimeout(r, 5)) }
@@ -102,7 +86,7 @@ describe('SearchJobs 读面快照', () => {
   })
 
   it('停止（cancel）：标 cancelled、已 emit 的分组照旧可读、宿主仍结算 killed', async () => {
-    const h = fakeHost()
+    const h = jobHostDouble()
     const jobs = new SearchJobs({ host: h.host })
     const m = manualRun()
     jobs.start('斗罗', 3, m.run)
@@ -137,7 +121,7 @@ describe('SearchJobs 读面快照', () => {
 
 describe('SearchJobs 登记给宿主 ctx.jobs（与写任务同一口径）', () => {
   it('kind novel-search、label 带关键词；自然收尾 completed、被取消 killed', async () => {
-    const h = fakeHost()
+    const h = jobHostDouble()
     const jobs = new SearchJobs({ host: h.host })
     const m = manualRun()
     jobs.start('斗罗', 1, m.run)
@@ -155,42 +139,28 @@ describe('SearchJobs 登记给宿主 ctx.jobs（与写任务同一口径）', ()
     expect(h.settled).toEqual(['completed', 'killed'])
   })
 
-  it('每源答话一行留在 readOutput 里，且第二次 read 不重复交付', async () => {
-    let hooks = null as { readOutput?: () => string } | null
-    let spec = null as { outputLimitBytes?: number } | null
-    const host: JobHost = {
-      start: (s) => {
-        spec = s
-        hooks = s.run()
-        return `${s.kind}-1`
-      },
-    }
+  it('每源答话一行留在 output 拉源里，偏移游标不重复交付', async () => {
+    const h = jobHostDouble()
     const m = manualRun()
-    const jobs = new SearchJobs({ uuid: () => 'sj-readout', host })
+    const jobs = new SearchJobs({ uuid: () => 'sj-readout', host: h.host })
     jobs.start('斗罗', 3, m.run)
     m.emit(group('a', 1))
     m.finish()
-    expect(hooks?.readOutput?.()).toContain('a')
-    expect(hooks?.readOutput?.()).toBe('')            // 消费式
-    expect(must(spec, '任务 spec').outputLimitBytes).toBe(DEFAULT_JOB_OUTPUT_BYTES)
+    expect(h.last().read()).toContain('a')
+    expect(h.last().read()).toBe('')                  // 游标已推进：只给增量
+    expect(must(h.last().spec, '任务 spec').outputLimitBytes).toBe(DEFAULT_JOB_OUTPUT_BYTES)
   })
 
   it('过程行把源状态与截断分轴：条数用 cap 后值，截断时附原始数', () => {
-    let hooks = null as { readOutput?: () => string } | null
-    const host: JobHost = {
-      start: (spec) => {
-        hooks = spec.run()
-        return `${spec.kind}-1`
-      },
-    }
+    const h = jobHostDouble()
     const m = manualRun()
-    const jobs = new SearchJobs({ uuid: () => 'sj-readout-cap', host })
+    const jobs = new SearchJobs({ uuid: () => 'sj-readout-cap', host: h.host })
     jobs.start('斗罗', 1, m.run)
     const raw = SEARCH_HITS_CAP_PER_SOURCE + 5
     m.emit({ ...group('a', raw), status: 'unverified' })
     m.emit({ ...group('b', 0), error: { code: 'Timeout', message: '慢' } })
     m.finish()
-    const out = must(must(hooks, '任务钩子').readOutput, 'hooks.readOutput 读口')()
+    const out = h.last().read()
     expect(out).toContain(`${SEARCH_HITS_CAP_PER_SOURCE} 条`)
     expect(out).toContain(`原始 ${raw}`)
     expect(out).toContain('源 unverified')

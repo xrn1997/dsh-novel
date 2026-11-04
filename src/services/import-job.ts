@@ -117,7 +117,7 @@ export class SourceJobs {
       issues: [], fileErrors: [], startedAt: this.now(),
     }
     this.current = state
-    // 宿主登记：身份/生命周期归 ctx.jobs（`<kind>-N`、running→终态、按 owner 栅栏），
+    // 宿主登记：身份/生命周期归 ctx.jobs（`<kind>-<短 id>` 由注册表生成、running→终态、按 owner 栅栏），
     // 本插件的 JobState 继续是计数与明细的唯一载体。kind 用 novel-* 前缀与 bash/subagent 分namespace。
     // 协作式取消只需记账（取下一条前查 `cancelled`），故不给 onCancel 落点。
     const tie = HostTie.open(this.deps.host, {

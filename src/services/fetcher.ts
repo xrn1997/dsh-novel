@@ -65,6 +65,9 @@ export interface FetchInit {
   webJs?: string
   /** 非 2xx 也返回页面（源请求缝给 loginCheck 看 403/503 正文；未替换时由该缝补抛） */
   allowError?: boolean
+  /** 调用方的取消信号（工具/作业的协作式取消）。中止时**不**当超时归类：抛出 signal.reason，
+   *  让上层把「用户取消」与「站点慢」分成两件事（宿主工具面据此判 ABORTED）。 */
+  signal?: AbortSignal
 }
 
 export interface Fetcher {
@@ -196,8 +199,14 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
       const timeoutMs = init?.timeoutMs ?? defaultTimeoutMs
       const activeDispatcher = currentDispatcher()
       const attempts = Math.max(0, Math.floor(init?.retry ?? 0))
+      const external = init?.signal
+      // 已取消的调用一个字节都不发：请求有副作用（登录、计数），取消了还发等于说谎。
+      external?.throwIfAborted()
       for (let attempt = 0; ; attempt++) {
+        external?.throwIfAborted()
         const ctrl = new AbortController()
+        const abortByCaller = (): void => { ctrl.abort() }
+        external?.addEventListener('abort', abortByCaller, { once: true })
         let timer: ReturnType<typeof setTimeout> | undefined
         const timeout = new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
@@ -250,6 +259,8 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
             headers: Object.fromEntries(res.headers.entries()),
           }
         } catch (e) {
+          // 取消优先于其余归类：中止时 undici 抛 AbortError，若不先认 signal 会被记成「超时」。
+          if (external?.aborted === true) throw external.reason ?? new Error('请求已取消')
           if (e instanceof FetchError) {
             // retry 只作用于「拿到响应但状态码不成功」；无 status 的网络/超时错直接抛
             if (e.status !== undefined && attempt < attempts) continue
@@ -261,6 +272,7 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
           }
           throw new FetchError(`网络错误: ${url}（${String(e)}）`, { url })
         } finally {
+          external?.removeEventListener('abort', abortByCaller)
           if (timer !== undefined) clearTimeout(timer)
         }
       }
