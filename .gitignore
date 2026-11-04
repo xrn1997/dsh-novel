@@ -80,3 +80,7 @@ Thumbs.db
 
 # 视觉工具产物（截图 / 裁剪 / OCR / 预览等 QA 中间件）——本机调试证据，不入库
 .dsh-vision-toolkit/
+
+# Qoder 的本地产物整棵不入库（含生成的 repowiki 知识快照）：工具产物、不是事实源，且只能在
+# Qoder 里整棵重生成；入库会让一份落后的“现状”跟着每次 clone 跑门漂，导致误导。
+.qoder/
