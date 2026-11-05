@@ -3,7 +3,7 @@
 [![CI](https://github.com/xrn1997/dsh-novel/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/xrn1997/dsh-novel/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@xrn1997/dsh-novel.svg)](https://www.npmjs.com/package/@xrn1997/dsh-novel)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Tested with DSH 0.1.7-rc.1 … 0.2.1-rc.5](https://img.shields.io/badge/DSH-0.1.7--rc.1%20%E2%80%A6%200.2.1--rc.5-brightgreen)](#安装)
+[![Tested with DSH 0.1.7-rc.1 … 0.2.2-rc.1](https://img.shields.io/badge/DSH-0.1.7--rc.1%20%E2%80%A6%200.2.2--rc.1-brightgreen)](#安装)
 
 **在 DeepSeek Harness（DSH）里读网络小说。** 导入 [legado](https://github.com/gedoor/legado) 书源，聚合搜索或按分类逛书城，把书加入书架，连续滚动阅读。它还有本地 TXT / EPUB、中英界面和六个 `dshnovel_` AI 助手工具——找书、读章、管源都可以在对话里完成。
 
@@ -90,7 +90,7 @@ dsh plugin --profile <profile> add @xrn1997/dsh-novel
 dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 ```
 
-**宿主兼容声明分两层**：安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`；peer 区间按宿主线开口，下界是 0.1.7-rc.1——更早的 0.1 宿主没有任务输出拉源（`JobSpec.output`），装进去任务过程行会静默丢失，所以安装闸直接拒绝；线内 rc / patch 不跟版，跨线才重验。实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本：**DSH 0.1.7-rc.1、0.1.7-rc.2、0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2、0.2.1-rc.3、0.2.1-rc.5**（这一行是给人看的记录，文档门会核对它与 `package.json` 一致；安装许可与实测名单两层的关系见 `ADR-0020`）。宿主发版、peer 区间与浏览器模块表的维护流程，以及发布冷却闸，见 [docs/development.md](docs/development.md#宿主兼容与实测名单)。
+**宿主兼容声明分两层**：安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`；peer 区间按宿主线开口，下界是 0.1.7-rc.1——更早的 0.1 宿主没有任务输出拉源（`JobSpec.output`），装进去任务过程行会静默丢失，所以安装闸直接拒绝；线内 rc / patch 不跟版，跨线才重验。实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本：**DSH 0.1.7-rc.1、0.1.7-rc.2、0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2、0.2.1-rc.3、0.2.1-rc.5、0.2.2-rc.1**（这一行是给人看的记录，文档门会核对它与 `package.json` 一致；安装许可与实测名单两层的关系见 `ADR-0020`）。宿主发版、peer 区间与浏览器模块表的维护流程，以及发布冷却闸，见 [docs/development.md](docs/development.md#宿主兼容与实测名单)。
 
 ## 首次使用
 
