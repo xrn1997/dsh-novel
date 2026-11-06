@@ -7,14 +7,15 @@
  */
 import type { Element } from 'domhandler'
 import { describe, expect, it } from 'vitest'
-import type { ContentNode, ReadingTarget } from '../../src/shared/wire.js'
+import type { ContentNode, LocalImportWarning, ReadingTarget } from '../../src/shared/wire.js'
 import {
   convertXhtml, documentTitle, scanXhtml,
   type ConvertedXhtml, type XhtmlConvertOptions,
 } from '../../src/services/epub/documents.js'
-import { EpubWarningLog } from '../../src/services/epub/warnings.js'
-import { EpubImportError } from '../../src/services/epub/errors.js'
+import { warningListOf } from '../../src/services/epub/findings.js'
+import { EpubDocumentError } from '../../src/services/epub/errors.js'
 import { descendants, parseXml, xmlBudget } from '../../src/services/epub/xml.js'
+import { chapterContentToText } from '../../src/services/chapter-content.js'
 import { pick } from '../support/fixture.js'
 
 const LIMITS = { depth: 128, nodes: 200_000 }
@@ -23,7 +24,7 @@ const LIMITS = { depth: 128, nodes: 200_000 }
 function xhtml(body: string, head = ''): Element {
   const text = '<?xml version="1.0" encoding="UTF-8"?>\n'
     + '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>文档标题</title>' + head + '</head><body>' + body + '</body></html>'
-  return parseXml(text, xmlBudget('OEBPS/ch1.xhtml', LIMITS))
+  return parseXml(text, xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content'))
 }
 
 /** 顺序 ID（生产里由导入编排铸造；这里只为断言「ID 是 opaque 串」而固定下来） */
@@ -32,32 +33,21 @@ function seq(prefix: string): () => string {
   return () => `${prefix}${i++}`
 }
 
-/** 转换一份文档：默认「没有链接、图片给固定资源」，按需覆盖 */
-function convert(body: string, opts: Partial<XhtmlConvertOptions> = {}): ConvertedXhtml & { warnings: ReturnType<EpubWarningLog['list']> } {
+/** 转换一份文档：默认「没有链接、图片给固定资源」，按需覆盖。
+ *  `warnings` 是给用户看的那份投影（与生产同一条 `warningListOf`）——本层交回的是事实清单。 */
+function convert(body: string, opts: Partial<XhtmlConvertOptions> = {}): ConvertedXhtml & { warnings: LocalImportWarning[] } {
   const root = xhtml(body)
-  const anchors = scanXhtml(root, xmlBudget('OEBPS/ch1.xhtml', LIMITS), seq('a')).anchors
-  const warnings = new EpubWarningLog()
-  return {
-    ...convertXhtml(root, {
-      budget: xmlBudget('OEBPS/ch1.xhtml', LIMITS),
-      anchors,
-      resolveLink: () => null,
-      resolveImage: () => ({ resourceId: 'r0', width: 4, height: 5 }),
-      nextNodeId: seq('n'),
-      warnings,
-      ...opts,
-    }),
-    warnings: warnings.list(),
-  }
-}
-
-function convertRejection(body: string): Error {
-  try {
-    convert(body)
-  } catch (e) {
-    return e as Error
-  }
-  throw new Error(`预期拒绝，实际成功——认不出的正文不按半途结果读（正文：${body}）`)
+  const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content')
+  const anchors = scanXhtml(root, budget, seq('a')).anchors
+  const out = convertXhtml(root, {
+    budget,
+    anchors,
+    resolveLink: () => null,
+    resolveImage: () => ({ resourceId: 'r0', width: 4, height: 5 }),
+    nextNodeId: seq('n'),
+    ...opts,
+  })
+  return { ...out, warnings: warningListOf(out.findings) }
 }
 
 /** 只留结构（去掉 id/alt 这类每次都变的字段），便于整树断言 */
@@ -211,7 +201,7 @@ describe('元素白名单映射', () => {
     // 会把链接悄悄改掉；`title` 里的裸 `>` 还顺带钉住「引号内的 > 不截断标签」。
     const root = xhtml('<p><a title="1 > 0" href="x?p=1&sect=2&section=3&amp;q=4">链</a>'
       + '<img src="a.png" alt="甲&nbsp乙"/></p>')
-    const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS)
+    const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content')
     const [anchor] = descendants(root, 'a', budget)
     expect(anchor?.attribs.href).toBe('x?p=1&sect=2&section=3&q=4')
     expect(anchor?.attribs.title).toBe('1 > 0')
@@ -250,8 +240,9 @@ describe('元素白名单映射', () => {
     // 两份 <html> 拼接的文件若被接受，只有前半留下——「静默丢内容」比报错坏得多
     const two = '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>前</title></head><body><p>前半</p></body></html>'
       + '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>后</title></head><body><p>后半</p></body></html>'
-    expect(() => parseXml(two, xmlBudget('OEBPS/ch1.xhtml', LIMITS))).toThrow(EpubImportError)
-    expect(() => parseXml(two, xmlBudget('OEBPS/ch1.xhtml', LIMITS))).toThrow(/多个根元素/)
+    // 半径跟着预算声明的主语：这一份文档读不成树，就按文档级回来（编排层落空页，不整本拒）
+    expect(() => parseXml(two, xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content'))).toThrow(EpubDocumentError)
+    expect(() => parseXml(two, xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content'))).toThrow(/多个根元素/)
     // 注释与 PI 不算根：一份正常文档不该被这条误伤
     expect(convert('<p>正文</p>').nodes.length).toBe(1)
   })
@@ -276,31 +267,31 @@ describe('元素白名单映射', () => {
 
   it('标题取 head 的 title（无目录时章名的兜底来源）；空白 title 按「没有标题」处理', () => {
     expect(convert('<p>x</p>').title).toBe('文档标题')
-    const blank = parseXml('<html><head><title>  </title></head><body><p>x</p></body></html>', xmlBudget('OEBPS/x.xhtml', LIMITS))
-    expect(documentTitle(blank, xmlBudget('OEBPS/x.xhtml', LIMITS))).toBeNull()
-    const noTitle = parseXml('<html><body><p>x</p></body></html>', xmlBudget('OEBPS/x.xhtml', LIMITS))
+    const blank = parseXml('<html><head><title>  </title></head><body><p>x</p></body></html>', xmlBudget('OEBPS/x.xhtml', LIMITS, 'content'))
+    expect(documentTitle(blank, xmlBudget('OEBPS/x.xhtml', LIMITS, 'content'))).toBeNull()
+    const noTitle = parseXml('<html><body><p>x</p></body></html>', xmlBudget('OEBPS/x.xhtml', LIMITS, 'content'))
     const empty = convertXhtml(noTitle, {
-      budget: xmlBudget('OEBPS/x.xhtml', LIMITS), anchors: new Map(),
+      budget: xmlBudget('OEBPS/x.xhtml', LIMITS, 'content'), anchors: new Map(),
       resolveLink: () => null, resolveImage: () => ({ resourceId: 'r0', width: 1, height: 1 }),
-      nextNodeId: seq('n'), warnings: new EpubWarningLog(),
+      nextNodeId: seq('n'),
     })
     expect(empty.title).toBeNull()
     // documentTitle 单独可用（第一遍要拿它当章名，不必等转换）
-    expect(documentTitle(noTitle, xmlBudget('OEBPS/x.xhtml', LIMITS))).toBeNull()
+    expect(documentTitle(noTitle, xmlBudget('OEBPS/x.xhtml', LIMITS, 'content'))).toBeNull()
   })
 })
 
 describe('锚点：原书 id 只进映射，节点 ID 一律 opaque', () => {
   it('带 id 的元素拿到映射里的锚点 ID；节点里绝不出现原书 id 字面', () => {
     const root = xhtml('<p id="a">甲</p><p id="b">乙</p>')
-    const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS)
+    const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content')
     const { anchors } = scanXhtml(root, budget, seq('a'))
     expect([...anchors.keys()]).toEqual(['a', 'b'])
     expect([...anchors.values()]).toEqual(['a0', 'a1'])
     const { nodes } = convertXhtml(root, {
       budget, anchors, resolveLink: () => null,
       resolveImage: () => ({ resourceId: 'r0', width: 1, height: 1 }),
-      nextNodeId: seq('n'), warnings: new EpubWarningLog(),
+      nextNodeId: seq('n'),
     })
     expect(nodes.map((n) => (n.kind === 'element' ? n.id : '?'))).toEqual(['a0', 'a1'])
     // 不铸锚点的节点用另一个序列（n*），与锚点 ID 分列：两种 ID 的含义不同，不混用
@@ -309,12 +300,12 @@ describe('锚点：原书 id 只进映射，节点 ID 一律 opaque', () => {
 
   it('没有 href 的 a 只是锚点载体：保留成一个 span 包住子内容（脚注目标常这么写）', () => {
     const root = xhtml('<p><a id="fn1"></a>尾</p>')
-    const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS)
+    const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content')
     const { anchors } = scanXhtml(root, budget, seq('a'))
     const { nodes } = convertXhtml(root, {
       budget, anchors, resolveLink: () => null,
       resolveImage: () => ({ resourceId: 'r0', width: 1, height: 1 }),
-      nextNodeId: seq('n'), warnings: new EpubWarningLog(),
+      nextNodeId: seq('n'),
     })
     expect(shape(nodes)).toEqual([
       { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: [
@@ -327,12 +318,12 @@ describe('锚点：原书 id 只进映射，节点 ID 一律 opaque', () => {
 
   it('未知容器只要带 id 也保留一个 span 载体（锚点不许丢）', () => {
     const root = xhtml('<p><u id="mark">重点</u></p>')
-    const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS)
+    const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content')
     const { anchors } = scanXhtml(root, budget, seq('a'))
     const { nodes } = convertXhtml(root, {
       budget, anchors, resolveLink: () => null,
       resolveImage: () => ({ resourceId: 'r0', width: 1, height: 1 }),
-      nextNodeId: seq('n'), warnings: new EpubWarningLog(),
+      nextNodeId: seq('n'),
     })
     expect(shape(nodes)).toEqual([
       { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: [
@@ -341,41 +332,91 @@ describe('锚点：原书 id 只进映射，节点 ID 一律 opaque', () => {
     ])
   })
 
-  it('同一份文档里重复 id：报错并点名（锚点目标有歧义不许猜）', () => {
+  it('同一份文档里重复 id：文档序第一个赢，撞名记进 duplicates（不再整本拒）', () => {
     const root = xhtml('<p id="a">甲</p><p id="a">又一个甲</p>')
-    expect(() => scanXhtml(root, xmlBudget('OEBPS/ch1.xhtml', LIMITS), seq('a'))).toThrow(EpubImportError)
-    expect(() => scanXhtml(root, xmlBudget('OEBPS/ch1.xhtml', LIMITS), seq('a'))).toThrow(/重复/)
-    expect(() => scanXhtml(root, xmlBudget('OEBPS/ch1.xhtml', LIMITS), seq('a'))).toThrow(/OEBPS\/ch1\.xhtml/)
+    const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content')
+    const { anchors, duplicates } = scanXhtml(root, budget, seq('a'))
+    // 撞名不是歧义：树上承载它的是文档序第一个，第二个照样作为内容读出来
+    expect([...anchors.keys()]).toEqual(['a'])
+    expect([...anchors.values()]).toEqual(['a0'])
+    expect(duplicates).toEqual(['a'])
+  })
+
+  it('撞名的元素照样收它的链接与图片：不铸锚点不等于把这一处引用丢掉', () => {
+    // 这曾是「重复 id 不再拒收」引入的回归：扫描期撞名直接跳过整个元素，
+    // 第二个同 id 的 <a>/<img> 的 href/src 就没进清点表——链接丢目标、插图报「清点漏了」的 500
+    const root = xhtml('<p><a id="x" href="one.xhtml">一</a></p><p><a id="x" href="two.xhtml">二</a>'
+      + '<img id="y" src="one.png"/><img id="y" src="two.png"/></p>')
+    const scan = scanXhtml(root, xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content'), seq('a'))
+    expect([...scan.duplicates].sort()).toEqual(['x', 'y'])
+    expect(scan.links).toEqual(['one.xhtml', 'two.xhtml'])
+    expect(scan.images).toEqual(['one.png', 'two.png'])
+  })
+
+  it('撞名只让文档序第一个承载锚点：第二个元素拿普通节点 ID（树上没有两个同 ID 节点）', () => {
+    const root = xhtml('<p id="a">甲</p><p id="a">乙</p>')
+    const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content')
+    const { anchors } = scanXhtml(root, budget, seq('a'))
+    const { nodes } = convertXhtml(root, {
+      budget, anchors, resolveLink: () => null,
+      resolveImage: () => ({ resourceId: 'r0', width: 1, height: 1 }),
+      nextNodeId: seq('n'),
+    })
+    const ids = nodes.map((n) => (n.kind === 'element' ? n.id : '?'))
+    expect(ids).toEqual(['a0', 'n0'])
+    // 第二个照旧读得出（不是被丢掉），只是不再冒充锚点落点
+    expect(shape(nodes)).toEqual([
+      { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: ['甲'] },
+      { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: ['乙'] },
+    ])
   })
 
   it('被移除的活动内容里的 id 不进锚点表，但记入 strippedAnchors（那不是一个能落到的位置）', () => {
     const root = xhtml('<p id="a">甲</p><script id="s">1</script>'
       + '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect id="v" width="1" height="1"/></svg>')
-    const { anchors, strippedAnchors } = scanXhtml(root, xmlBudget('OEBPS/ch1.xhtml', LIMITS), seq('a'))
+    const { anchors, strippedAnchors } = scanXhtml(root, xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content'), seq('a'))
     expect([...anchors.keys()]).toEqual(['a'])
-    // 被剥离的锚点只留名字（不铸 ID、不占锚点序列）：那段内容不在树上，但「它存在过」是绑定期
-    // 把目标降级而不是拒整本所依据的事实——两件事必须分得开
+    // 被剥离的锚点只留名字（不铸 ID、不占锚点序列）：这条分裂只为一件事——把「锚点存在过、被我们剥掉了」
+    // 与「锚点从来不存在」分开，绑定期才能说对动作句；两种缺失都按引用降级
     expect([...strippedAnchors].sort()).toEqual(['s', 'v'])
     expect([...anchors.values()]).toEqual(['a0'])
   })
 
+  it('body 自己的 id 是**文档级锚点**：不进锚点表（树上没有它），但记进 documentAnchor', () => {
+    const root = parseXml('<?xml version="1.0" encoding="UTF-8"?>\n<html xmlns="http://www.w3.org/1999/xhtml">'
+      + '<head><title>封面</title></head><body id="bk"><p id="a">甲</p></body></html>', xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content'))
+    const { anchors, strippedAnchors, documentAnchor } = scanXhtml(root, xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content'), seq('a'))
+    expect(documentAnchor).toBe('bk')
+    expect([...anchors.keys()]).toEqual(['a'])
+    // 也不算「被剥离的锚点」：那段内容在树上（整页正文都在），只是 body 这个容器本身不进树
+    expect([...strippedAnchors]).toEqual([])
+  })
+
+  it('body 与树上元素同名：树上那个照旧进锚点表，绑定期它赢', () => {
+    const root = parseXml('<?xml version="1.0" encoding="UTF-8"?>\n<html xmlns="http://www.w3.org/1999/xhtml">'
+      + '<head><title>封面</title></head><body id="x"><p id="x">甲</p></body></html>', xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content'))
+    const { anchors, documentAnchor } = scanXhtml(root, xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content'), seq('a'))
+    expect([...anchors.keys()]).toEqual(['x'])
+    expect(documentAnchor).toBe('x')
+  })
+
   it('被剥离的内容里自己撞名不是歧义（那段内容不在树上）：不拒', () => {
     const root = xhtml('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect id="q" width="1" height="1"/><rect id="q" width="1" height="1"/></svg><p id="a">甲</p>')
-    const { anchors, strippedAnchors } = scanXhtml(root, xmlBudget('OEBPS/ch1.xhtml', LIMITS), seq('a'))
+    const { anchors, strippedAnchors } = scanXhtml(root, xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content'), seq('a'))
     expect([...anchors.keys()]).toEqual(['a'])
     expect([...strippedAnchors]).toEqual(['q'])
   })
 
   it('同一个名字在正文与内联 SVG 里各出现一次：树上那个赢（被剥离的那份不算重复锚点）', () => {
     const root = xhtml('<p id="x">甲</p><p><svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect id="x" width="1" height="1"/></svg></p>')
-    const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS)
+    const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content')
     const { anchors, strippedAnchors } = scanXhtml(root, budget, seq('a'))
     expect(anchors.get('x')).toBe('a0')
     expect([...strippedAnchors]).toEqual(['x'])
     const { nodes } = convertXhtml(root, {
       budget, anchors, resolveLink: () => null,
       resolveImage: () => ({ resourceId: 'r0', width: 1, height: 1 }),
-      nextNodeId: seq('n'), warnings: new EpubWarningLog(),
+      nextNodeId: seq('n'),
     })
     // 树上只留一个承载锚点的节点：绑定期先查 anchors ⇒ 落到真锚点，既不降级也不报重复
     expect(nodes.map((n) => (n.kind === 'element' ? n.id : '?'))).toEqual(['a0', 'n0'])
@@ -383,7 +424,7 @@ describe('锚点：原书 id 只进映射，节点 ID 一律 opaque', () => {
 
   it('EPUB2 旧式命名锚点 <a name>：与 id 走同一条铸造路径', () => {
     const root = xhtml('<p><a name="legacy"></a>甲</p><p><a name="both" id="both"></a>乙</p><p><a id="alpha" name="beta"></a>丙</p>')
-    const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS)
+    const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content')
     const { anchors } = scanXhtml(root, budget, seq('a'))
     expect([...anchors.keys()]).toEqual(['legacy', 'both', 'alpha', 'beta'])
     // 一个元素上的多个名字指向**同一个**节点 ID（各铸一个会让其中一个名字指不到树上）
@@ -391,7 +432,7 @@ describe('锚点：原书 id 只进映射，节点 ID 一律 opaque', () => {
     const { nodes } = convertXhtml(root, {
       budget, anchors, resolveLink: () => null,
       resolveImage: () => ({ resourceId: 'r0', width: 1, height: 1 }),
-      nextNodeId: seq('n'), warnings: new EpubWarningLog(),
+      nextNodeId: seq('n'),
     })
     // 命名锚点也要在树上留一个可落的位置（目录指到它时才有节点 ID 可绑）
     expect(nodes.map((n) => (n.kind === 'element' ? n.children[0] : null))).toEqual([
@@ -401,21 +442,23 @@ describe('锚点：原书 id 只进映射，节点 ID 一律 opaque', () => {
     ])
   })
 
-  it('name 与 id 撞名（不同元素）：按既有「重复锚点即拒」处理，不猜哪个才算', () => {
+  it('name 与 id 撞名（不同元素）：同样文档序第一个赢并留痕，不拒', () => {
     const root = xhtml('<p id="x">甲</p><p><a name="x">乙</a></p>')
-    expect(() => scanXhtml(root, xmlBudget('OEBPS/ch1.xhtml', LIMITS), seq('a'))).toThrow(EpubImportError)
-    expect(() => scanXhtml(root, xmlBudget('OEBPS/ch1.xhtml', LIMITS), seq('a'))).toThrow(/重复/)
+    const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content')
+    const { anchors, duplicates } = scanXhtml(root, budget, seq('a'))
+    expect([...anchors.values()]).toEqual(['a0'])
+    expect(duplicates).toEqual(['x'])
   })
 
   it('带 name 的 a 作为链接时同时承载锚点（href 与 name 同在一个元素上）', () => {
     const target: ReadingTarget = { kind: 'chapter', index: 1, anchorId: 'a9' }
     const root = xhtml('<p><a name="x" href="ch2.xhtml#c">去</a></p>')
-    const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS)
+    const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content')
     const { anchors } = scanXhtml(root, budget, seq('a'))
     const { nodes } = convertXhtml(root, {
       budget, anchors, resolveLink: () => target,
       resolveImage: () => ({ resourceId: 'r0', width: 1, height: 1 }),
-      nextNodeId: seq('n'), warnings: new EpubWarningLog(),
+      nextNodeId: seq('n'),
     })
     const p = pick(nodes, 0)
     expect(p.kind).toBe('element')
@@ -448,12 +491,12 @@ describe('链接绑定', () => {
 
   it('带 id 的外站链接：文字保留、不生成 link，但锚点仍要在树上（有人在指它）', () => {
     const root = xhtml('<p><a id="k" href="https://example.invalid/x">外站</a></p>')
-    const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS)
+    const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content')
     const { anchors } = scanXhtml(root, budget, seq('a'))
     const { nodes } = convertXhtml(root, {
       budget, anchors, resolveLink: () => null,
       resolveImage: () => ({ resourceId: 'r0', width: 1, height: 1 }),
-      nextNodeId: seq('n'), warnings: new EpubWarningLog(),
+      nextNodeId: seq('n'),
     })
     const p = nodes[0] as Extract<ContentNode, { kind: 'element' }>
     expect(p.children).toHaveLength(1)
@@ -469,10 +512,12 @@ describe('图片节点', () => {
     ])
   })
 
-  it('图片没有 src：报错并点名文档（图片位置无法确定，不静默丢）', () => {
-    expect(convertRejection('<p><img alt="无名"/></p>')).toBeInstanceOf(EpubImportError)
-    expect(() => convert('<p><img alt="无名"/></p>')).toThrow(/src/)
-    expect(() => convert('<p><img alt="无名"/></p>')).toThrow(/OEBPS\/ch1\.xhtml/)
+  it('图片没有 src：这一处不表达（留痕点名文档），但说明文字照留——不是整本失败', () => {
+    const { nodes, warnings } = convert('<p><img alt="无名"/></p>')
+    // 图没了，alt 是内容：它照样读得出（静默失去内容才是本仓的罪）
+    expect(shape(nodes)).toEqual([{ tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: ['无名'] }])
+    expect(warnings.map((w) => w.code)).toContain('epub-img-without-src')
+    expect(pick(warnings.filter((w) => w.code === 'epub-img-without-src'), 0).resource).toBe('OEBPS/ch1.xhtml')
   })
 
   it('纯插图文档：正文只有图片也是有效内容', () => {
@@ -539,9 +584,13 @@ describe('活动内容与可见图形的处置', () => {
     expect(out.warnings.map((w) => w.code)).toEqual([])
   })
 
-  it('svgOnly 候选只认「恰好一棵」内联 SVG：两棵就不是整页图形，仍按唯一内容报错', () => {
+  it('svgOnly 候选只认「恰好一棵」内联 SVG：两棵就不是整页图形，判不可读并点名原因', () => {
     const one = '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>'
-    expect(() => convert(`<p>${one}</p><div>${one}</div>`)).toThrow(/唯一/)
+    const out = convert(`<p>${one}</p><div>${one}</div>`)
+    expect(out.readable).toBe(false)
+    expect(out.svgOnly).toBeNull()
+    const hit = pick(out.warnings.filter((w) => w.code === 'epub-empty-document'), 0)
+    expect(hit.message).toMatch(/唯一/)
     // 真矢量图形（没有 image）也照样是候选——「这张图落不落得下」由编排层回答
     expect(convert('<svg xmlns="http://www.w3.org/2000/svg"><rect width="4" height="4"/></svg>').svgOnly).not.toBeNull()
   })
@@ -553,38 +602,48 @@ describe('活动内容与可见图形的处置', () => {
     expect(out.svgOnly?.element.name).toBe('svg')
   })
 
-  it('正文没有可显示内容（body 空、只有被移除的活动内容、只有空白）：报错', () => {
-    expect(() => convert('')).toThrow(/正文/)
-    expect(() => convert('<script>alert(1)</script>')).toThrow(/正文/)
-    expect(() => convert('   \n  ')).toThrow(/正文/)
+  it('正文没有可显示内容（body 空、只有被移除的活动内容、只有空白）：判为不可读并留痕，不抛', () => {
+    for (const body of ['', '<script>alert(1)</script>', '   \n  ']) {
+      const out = convert(body)
+      expect(out.readable).toBe(false)
+      // 空白是可见性判据，不是空树：结构照留（锚点才有落点），文字面仍为空
+      expect(chapterContentToText({ kind: 'rich', documentId: 'd0', nodes: out.nodes })).toBe('')
+      expect(out.warnings.map((w) => w.code)).toContain('epub-empty-document')
+    }
   })
 
   it('空壳容器不算内容：包一层就冒充成功是判据被绕过', () => {
     // 判据只认「这棵树里有没有会渲染出东西的叶子」，不看容器本身存在与否
-    // （`<p>` 里只剩一棵 SVG 走 svgOnly 候选——拒绝由编排层给，那里有资源事实；见上一组用例）
+    // （`<p>` 里只剩一棵 SVG 走 svgOnly 候选——落不落得下由编排层给，那里有资源事实；见上一组用例）
     expect(convert('<p><svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/></p>').svgOnly?.element.name).toBe('svg')
-    expect(() => convert('<div><section><script>alert(1)</script></section></div>')).toThrow(/正文/)
-    expect(() => convert('<div><p><span></span></p></div>')).toThrow(/正文/)
-    expect(() => convert('<blockquote><p>   \n  </p></blockquote>')).toThrow(/正文/)
-    // 孤立换行/分隔线本身不是正文（没有可读的字，也没有图）
-    expect(() => convert('<p><br/></p>')).toThrow(/正文/)
-    expect(() => convert('<hr/>')).toThrow(/正文/)
+    for (const body of [
+      '<div><section><script>alert(1)</script></section></div>',
+      '<div><p><span></span></p></div>',
+      '<blockquote><p>   \n  </p></blockquote>',
+      '<p><br/></p>',   // 孤立换行本身不是正文（没有可读的字，也没有图）
+      '<hr/>',          // 分隔线同上
+    ]) {
+      expect(convert(body).readable).toBe(false)
+    }
   })
 
   it('递归判据不误伤：深层里真有的文字与图照样算内容', () => {
-    expect(() => convert('<div><section><p>深处<span>的字</span></p></section></div>')).not.toThrow()
-    expect(() => convert('<figure><img src="pics/deep.png" alt="深处的图"/></figure>')).not.toThrow()
+    expect(convert('<div><section><p>深处<span>的字</span></p></section></div>').readable).toBe(true)
+    expect(convert('<figure><img src="pics/deep.png" alt="深处的图"/></figure>').readable).toBe(true)
     // 空兄弟不拖累：一个壳是空的、另一个有货 → 整份文档成立
-    expect(() => convert('<div><p></p><p>有货</p></div>')).not.toThrow()
+    expect(convert('<div><p></p><p>有货</p></div>').readable).toBe(true)
   })
 
-  it('没有 body 的文档：不是可读的 XHTML，报错点名文档', () => {
-    const noBody = parseXml('<html><head><title>x</title></head></html>', xmlBudget('OEBPS/ch1.xhtml', LIMITS))
-    expect(() => convertXhtml(noBody, {
-      budget: xmlBudget('OEBPS/ch1.xhtml', LIMITS), anchors: new Map(),
+  it('没有 body 的文档：判不可读并点名，不抛（一份文档的事实）', () => {
+    const noBody = parseXml('<html><head><title>x</title></head></html>', xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content'))
+    const out = convertXhtml(noBody, {
+      budget: xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content'), anchors: new Map(),
       resolveLink: () => null, resolveImage: () => ({ resourceId: 'r0', width: 1, height: 1 }),
-      nextNodeId: seq('n'), warnings: new EpubWarningLog(),
-    })).toThrow(/body/)
+      nextNodeId: seq('n'),
+    })
+    expect(out.readable).toBe(false)
+    expect(out.nodes).toEqual([])
+    expect(warningListOf(out.findings).map((w) => w.code)).toEqual(['epub-empty-document'])
   })
 })
 
@@ -592,7 +651,7 @@ describe('链接与图片清点（第一遍扫描的口径）', () => {
   it('只收链接与图片引用；被移除子树里的不算（那段内容不在树上）', () => {
     const root = xhtml('<p><a href="ch2.xhtml#c">正</a><img src="pics/a.png"/></p>'
       + '<script><a href="evil.xhtml#x">不存在的链接</a><img src="evil.png"/></script><a href="#same">同页</a>')
-    const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS)
+    const budget = xmlBudget('OEBPS/ch1.xhtml', LIMITS, 'content')
     const { links, images } = scanXhtml(root, budget, seq('a'))
     expect(links).toEqual(['ch2.xhtml#c', '#same'])
     expect(images).toEqual(['pics/a.png'])

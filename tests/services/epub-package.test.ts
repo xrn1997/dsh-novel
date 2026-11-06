@@ -12,9 +12,9 @@
  */
 import { describe, expect, it } from 'vitest'
 import { openEpubArchive, type EpubArchive, type EpubLimits } from '../../src/services/epub/archive.js'
-import { EpubImportError } from '../../src/services/epub/errors.js'
+import { EpubDocumentError, EpubImportError } from '../../src/services/epub/errors.js'
 import { readEpubPackage, resolveEpubHref, type EpubHref, type EpubPackage } from '../../src/services/epub/package.js'
-import { decodeEpubXml, parseXml } from '../../src/services/epub/xml.js'
+import { decodeEpubXml, parseXml, xmlBudget } from '../../src/services/epub/xml.js'
 import { makeEpubFixture } from '../fixtures/epub.js'
 import { pick } from '../support/fixture.js'
 
@@ -54,6 +54,9 @@ function expectEpubError(e: Error, pattern: RegExp): void {
 function target(path: string, fragment: string | null): EpubHref {
   return { path, fragment }
 }
+
+/** 单看解码这一条路时用的包文档预算：包文档读不出＝整本拒（半径由主语决定） */
+const PKG_BUDGET = xmlBudget('OEBPS/content.opf', { depth: 128, nodes: 200_000 }, 'package')
 
 describe('epub3-rich：阅读顺序按 spine，不按 ZIP 顺序或目录叶数', () => {
   it('按 spine 阅读，不按 ZIP 或目录叶节点计章', async () => {
@@ -129,7 +132,7 @@ describe('epub3-rich：阅读顺序按 spine，不按 ZIP 顺序或目录叶数'
 
   it('正常样本没有告警（告警不许在好书上刷存在感）', async () => {
     await withBook('epub3-rich', (book) => {
-      expect(book.warnings).toEqual([])
+      expect(book.findings).toEqual([])
     })
   })
 })
@@ -149,7 +152,7 @@ describe('epub2-basic：EPUB2 用 spine 的 toc 指向的 NCX', () => {
     await withBook('epub2-basic', (book) => {
       // 解析成功本身就是读数：带外部 DOCTYPE 的 NCX 照读，且 EPUB2 用 NCX 是常态，不该有降级告警
       expect(book.navigation.length).toBeGreaterThan(0)
-      expect(book.warnings).toEqual([])
+      expect(book.findings).toEqual([])
     })
   })
 
@@ -206,26 +209,27 @@ describe('编码：BOM 优先，声明的编码照办，非法字节不猜', () 
 
   it('decodeEpubXml 是 BOM/声明解码的唯一入口', () => {
     const utf8 = Buffer.from('<?xml version="1.0" encoding="UTF-8"?><a>样本</a>', 'utf8')
-    expect(decodeEpubXml(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), utf8]))).toBe(utf8.toString('utf8'))
+    expect(decodeEpubXml(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), utf8]), PKG_BUDGET)).toBe(utf8.toString('utf8'))
     // BOM 优先于声明：声明写的是 iso-8859-1，字节其实是带 BOM 的 UTF-8——按 BOM 解才不会把「样本」解成乱码
     const lying = Buffer.from('<?xml version="1.0" encoding="iso-8859-1"?><a>样本</a>', 'utf8')
-    expect(decodeEpubXml(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), lying]))).toBe(lying.toString('utf8'))
+    expect(decodeEpubXml(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), lying]), PKG_BUDGET)).toBe(lying.toString('utf8'))
     // UTF-16 的 LE / BE 都按 BOM 走
     const utf16le = Buffer.from('\ufeff<?xml version="1.0" encoding="utf-16"?><a>样本</a>', 'utf16le')
-    expect(decodeEpubXml(utf16le)).toBe('<?xml version="1.0" encoding="utf-16"?><a>样本</a>')
+    expect(decodeEpubXml(utf16le, PKG_BUDGET)).toBe('<?xml version="1.0" encoding="utf-16"?><a>样本</a>')
     const body = Buffer.from('<?xml version="1.0"?><a>样本</a>', 'utf16le')
-    expect(decodeEpubXml(Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(body).swap16()]))).toBe('<?xml version="1.0"?><a>样本</a>')
+    expect(decodeEpubXml(Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(body).swap16()]), PKG_BUDGET)).toBe('<?xml version="1.0"?><a>样本</a>')
   })
 
-  it('非法 UTF-8 直接抛，不返回替换字符冒充正文', () => {
+  it('非法 UTF-8 直接抛，不返回替换字符冒充正文（包文档的主语＝整本拒）', () => {
     const bad = Buffer.from([0x3c, 0x61, 0x3e, 0x80, 0x3c, 0x2f, 0x61, 0x3e])   // <a>\x80</a>
-    expect(() => decodeEpubXml(bad)).toThrow(EpubImportError)
-    expect(() => decodeEpubXml(bad)).toThrow(/UTF-8|编码/)
+    expect(() => decodeEpubXml(bad, PKG_BUDGET)).toThrow(EpubImportError)
+    expect(() => decodeEpubXml(bad, PKG_BUDGET)).toThrow(/OEBPS\/content\.opf/)
+    expect(() => decodeEpubXml(bad, PKG_BUDGET)).toThrow(/UTF-8|编码/)
   })
 
   it('声明了不认识的编码：报错，不猜', () => {
     const buf = Buffer.from('<?xml version="1.0" encoding="x-no-such-charset"?><a>1</a>', 'utf8')
-    expect(() => decodeEpubXml(buf)).toThrow(/x-no-such-charset/)
+    expect(() => decodeEpubXml(buf, PKG_BUDGET)).toThrow(/x-no-such-charset/)
   })
 
   it('CDATA 里是字面文本：不当实体被拒，也不丢内容', async () => {
@@ -240,7 +244,7 @@ describe('导航派生顺序：nav → NCX → spine', () => {
     await withBook('epub3-nav-and-ncx', (book) => {
       expect(book.navigationSource).toBe('nav')
       expect(book.navigation.map((n) => n.label)).toEqual(['nav 的目录'])
-      expect(book.warnings).toEqual([])
+      expect(book.findings).toEqual([])
     })
   })
 
@@ -248,11 +252,14 @@ describe('导航派生顺序：nav → NCX → spine', () => {
     await withBook('epub3-ncx-fallback', (book) => {
       expect(book.navigationSource).toBe('ncx')
       expect(book.navigation.map((n) => n.label)).toEqual(['上卷', '第二章'])
-      expect(book.warnings).toHaveLength(1)
-      const warning = pick(book.warnings, 0)
+      expect(book.findings).toHaveLength(1)
+      const warning = pick(book.findings, 0)
       expect(warning.code).toBe('epub-navigation-degraded')
       expect(warning.resource).toBe('OEBPS/toc.ncx')
-      expect(warning.message).toMatch(/NCX/)
+      expect(warning.action).toMatch(/NCX/)
+      // 半径是这条事实的一部分：整本书缺目录属 book，不是一份文档的事
+      expect(warning.scope).toBe('book')
+      expect(warning.severity).toBe('notice')
     })
   })
 
@@ -264,11 +271,13 @@ describe('导航派生顺序：nav → NCX → spine', () => {
         ['第一章', []],
         ['第二卷', ['第二章']],
       ])
-      expect(book.warnings).toHaveLength(1)
-      const warning = pick(book.warnings, 0)
+      expect(book.findings).toHaveLength(1)
+      const warning = pick(book.findings, 0)
       expect(warning.code).toBe('epub-navigation-unordered-list')
       expect(warning.resource).toBe('OEBPS/nav.xhtml')
-      expect(warning.message).toMatch(/ul/)
+      expect(warning.action).toMatch(/ul/)
+      // 一条目录声明的变体，半径是 item（不是整本书读不出）
+      expect(warning.scope).toBe('item')
     })
   })
 
@@ -277,7 +286,7 @@ describe('导航派生顺序：nav → NCX → spine', () => {
       expect(book.navigation.map((n) => [n.label, n.children.map((c) => c.label)])).toEqual([
         ['第一卷', ['第一章']],
       ])
-      expect(book.warnings.map((w) => w.code)).toEqual(['epub-navigation-unordered-list'])
+      expect(book.findings.map((w) => w.code)).toEqual(['epub-navigation-unordered-list'])
     })
   })
 
@@ -292,8 +301,8 @@ describe('导航派生顺序：nav → NCX → spine', () => {
         ['ch1', target('OEBPS/ch1.xhtml', null), []],
         ['ch2', target('OEBPS/ch2.xhtml', null), []],
       ])
-      expect(book.warnings.map((w) => w.code)).toEqual(['epub-navigation-synthesized'])
-      expect(pick(book.warnings, 0).resource).toBeNull()
+      expect(book.findings.map((w) => w.code)).toEqual(['epub-navigation-synthesized'])
+      expect(pick(book.findings, 0).resource).toBeNull()
     })
   })
 
@@ -302,8 +311,13 @@ describe('导航派生顺序：nav → NCX → spine', () => {
     expectEpubError(await packageRejection('epub3-nav-broken'), /OEBPS\/nav\.xhtml/)
   })
 
-  it('导航指向归档里不存在的目标：报错并点名目标', async () => {
-    expectEpubError(await packageRejection('epub3-nav-missing-target'), /gone\.xhtml/)
+  it('导航指向归档里不存在的目标：剪那一条并点名目标，别的目录照用', async () => {
+    await withBook('epub3-nav-missing-target', (book) => {
+      const hit = pick(book.findings.filter((f) => f.code === 'epub-item-pruned'), 0)
+      expect(hit.scope).toBe('item')
+      expect(hit.resource).toBe('OEBPS/gone.xhtml')
+      expect(book.navigation).toEqual([])   // 只剪掉那一条：这棵目录里没有指向它的条目了
+    })
   })
 })
 
@@ -358,27 +372,52 @@ describe('包结构的拒绝', () => {
     })
   })
 
-  it('spine 的 idref 不在 manifest 里', async () => {
-    expectEpubError(await packageRejection('epub-spine-missing-idref'), /nope/)
+  it('spine 的 idref 不在 manifest 里：这一条被剪；剪到主序列为空才轮到整本判据', async () => {
+    const e = await packageRejection('epub-spine-missing-idref')
+    expectEpubError(e, /主序列为空/)
+    // 整本拒不能只给一句泛话：被剪的那一条与原因要带得出来
+    expectEpubError(e, /nope/)
+    expectEpubError(e, /不在 manifest 里/)
   })
 
-  it('同一 idref 在 spine 里重复：拒绝（否则锚点目标有歧义）', async () => {
-    expectEpubError(await packageRejection('epub-spine-duplicate-idref'), /重复/)
+  it('同一 idref 在 spine 里重复：第一处照读，后一处被剪并留痕', async () => {
+    await withBook('epub-spine-duplicate-idref', (book) => {
+      expect(book.spine).toEqual(['OEBPS/ch1.xhtml'])
+      const hit = pick(book.findings.filter((f) => f.code === 'epub-item-pruned'), 0)
+      expect(hit.severity).toBe('fatal')
+      expect(hit.resource).toBe('OEBPS/ch1.xhtml')
+    })
   })
 
   it('空主序列（只有 linear="no"）：没有可读正文即失败', async () => {
     expectEpubError(await packageRejection('epub-empty-spine'), /主序列/)
   })
 
-  it('spine 指向的文档不在归档里：悬空阅读单元同样报错', async () => {
-    // 与导航目标的存在性校验同口径：manifest 写得出路径不等于归档里真有那份文档
-    expectEpubError(await packageRejection('epub-spine-missing-entry'), /OEBPS\/ghost\.xhtml/)
-    expectEpubError(await packageRejection('epub-spine-missing-entry'), /spine/)
+  it('spine 指向的文档不在归档里：剪那一条并点名，其余阅读单元照留', async () => {
+    await withBook('epub-spine-missing-entry', (book) => {
+      expect(book.spine).toEqual(['OEBPS/ch1.xhtml'])       // 悬空那条不在阅读序列里
+      const hit = pick(book.findings.filter((f) => f.code === 'epub-item-pruned'), 0)
+      expect(hit.resource).toBe('OEBPS/ghost.xhtml')
+    })
   })
 
-  it('两个 idref 指向同一路径：也拒（idref 不同不等于阅读单元不同）', async () => {
-    expectEpubError(await packageRejection('epub-spine-duplicate-path'), /重复/)
-    expectEpubError(await packageRejection('epub-spine-duplicate-path'), /OEBPS\/ch1\.xhtml/)
+  it('两个 idref 指向同一路径：阅读单元只留第一处，后一处被剪并说清为什么', async () => {
+    await withBook('epub-spine-duplicate-path', (book) => {
+      expect(book.spine).toEqual(['OEBPS/ch1.xhtml'])
+      expect(pick(book.findings.filter((f) => f.code === 'epub-item-pruned'), 0).resource).toBe('OEBPS/ch1.xhtml')
+    })
+  })
+
+  it('linear 写歪：按缺省 yes 读这一条，只记声明变体（不剪、也不冒充成被剪）', async () => {
+    await withBook('epub-spine-linear-variant', (book) => {
+      expect(book.spine).toEqual(['OEBPS/ch1.xhtml'])
+      const hit = pick(book.findings.filter((f) => f.code === 'epub-spine-linear-variant'), 0)
+      expect(hit.scope).toBe('item')
+      expect(hit.severity).toBe('notice')
+      expect(hit.action).toMatch(/maybe/)
+      // 码说的是「变体」：它没有被剪，不许挂到 `epub-item-pruned` 名下（那个码会出现在导入说明里）
+      expect(book.findings.map((f) => f.code)).not.toContain('epub-item-pruned')
+    })
   })
 })
 
@@ -409,13 +448,22 @@ describe('固定版式 / 主序列脚本 / 内容加密', () => {
     expectEpubError(await packageRejection('epub2-fixed-layout'), /fixed-layout/)
   })
 
-  it('固定版式只声明在 itemref 上（包级没有 meta）：同样拒绝', async () => {
-    expectEpubError(await packageRejection('epub3-itemref-fixed-layout'), /pre-paginated/)
-    expectEpubError(await packageRejection('epub3-itemref-fixed-layout'), /OEBPS\/ch1\.xhtml/)
+  it('固定版式只声明在 itemref 上（包级没有 meta）：交回这一份的事实与痕，不牵动整本书', async () => {
+    await withBook('epub3-itemref-fixed-layout', (book) => {
+      const hit = pick(book.findings.filter((f) => f.code === 'epub-fixed-layout-document'), 0)
+      expect(hit.scope).toBe('document')
+      expect(hit.severity).toBe('degraded')
+      expect(hit.resource).toBe('OEBPS/ch1.xhtml')
+    })
   })
 
-  it('主序列文档被声明为 scripted：拒绝（读端不执行书内脚本）', async () => {
-    expectEpubError(await packageRejection('epub3-scripted'), /scripted/)
+  it('主序列文档声明 scripted：交回「这一份读不出」的事实，不整本拒', async () => {
+    await withBook('epub3-scripted', (book) => {
+      const hit = pick(book.findings.filter((f) => f.code === 'epub-scripted-document'), 0)
+      expect(hit.scope).toBe('document')
+      expect(hit.severity).toBe('fatal')
+      expect(book.unreadableSpineDocs).toEqual(new Set(['OEBPS/ch1.xhtml']))
+    })
   })
 
   it('encryption.xml 指向主序列正文：拒绝，不提供解密', async () => {
@@ -427,7 +475,7 @@ describe('固定版式 / 主序列脚本 / 内容加密', () => {
     await withBook('epub-font-obfuscated', (book) => {
       expect(book.spine).toEqual(['OEBPS/ch1.xhtml'])
       // 加密告警点名资源；本样本没有目录，故另有一条合成目录的告警（与加密无关）
-      expect(book.warnings.map((w) => [w.code, w.resource])).toEqual([
+      expect(book.findings.map((w) => [w.code, w.resource])).toEqual([
         ['epub-encrypted-resource', 'OEBPS/fonts/font.otf'],
         ['epub-navigation-synthesized', null],
       ])
@@ -437,7 +485,7 @@ describe('固定版式 / 主序列脚本 / 内容加密', () => {
   it('未使用的音频不把整本误判成有声书（不拒、也不多告警）', async () => {
     await withBook('epub-audio-unused', (book) => {
       expect(book.spine).toEqual(['OEBPS/ch1.xhtml', 'OEBPS/ch2.xhtml'])
-      expect(book.warnings.map((w) => w.code)).toEqual(['epub-navigation-synthesized'])
+      expect(book.findings.map((w) => w.code)).toEqual(['epub-navigation-synthesized'])
     })
   })
 })
@@ -473,18 +521,19 @@ describe('预算：XML 单文档上限', () => {
 })
 
 describe('xml：只读解析与单文档预算（深/宽文档不许爆栈）', () => {
+  // 主语声明成 content：这一份文档读不成树，就按文档级回来（半径跟着主语，不跟着调用点）
   const budget = (over: Partial<{ depth: number; nodes: number }> = {}) => ({
-    what: 'OEBPS/x.xhtml', depth: 128, nodes: 200_000, ...over,
+    what: 'OEBPS/x.xhtml', subject: 'content' as const, depth: 128, nodes: 200_000, ...over,
   })
 
-  it('深度超限：EpubImportError 点名文档与深度预算', () => {
+  it('深度超限：EpubDocumentError 点名文档与深度预算', () => {
     const deep = '<r>' + '<a>'.repeat(200) + '</a>'.repeat(200) + '</r>'
-    expect(() => parseXml(deep, budget({ depth: 32 }))).toThrow(EpubImportError)
+    expect(() => parseXml(deep, budget({ depth: 32 }))).toThrow(EpubDocumentError)
     expect(() => parseXml(deep, budget({ depth: 32 }))).toThrow(/OEBPS\/x\.xhtml/)
     expect(() => parseXml(deep, budget({ depth: 32 }))).toThrow(/深度/)
   })
 
-  it('节点数超限：EpubImportError 点名文档与节点预算', () => {
+  it('节点数超限：EpubDocumentError 点名文档与节点预算', () => {
     const wide = '<r>' + '<i/>'.repeat(50) + '</r>'
     expect(() => parseXml(wide, budget({ nodes: 10 }))).toThrow(/节点/)
     expect(() => parseXml(wide, budget({ nodes: 10 }))).toThrow(/10/)

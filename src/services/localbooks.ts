@@ -10,6 +10,8 @@ import type {
 import { chapterContentToText } from './chapter-content.js'
 import { importEpub } from './epub/import.js'
 import type { EpubChapterRef, EpubDocumentRef, EpubImportData, EpubResourceRef } from './epub/import.js'
+import { warningListOf } from './epub/findings.js'
+import type { FindingEntry } from './epub/findings.js'
 import { lruGet, lruSet } from './lru.js'
 import { formatByteLimit } from './size.js'
 import { readJson, writeJsonAtomic, isAtomicTemp, backupPathOf } from './storage.js'
@@ -134,7 +136,31 @@ interface LocalEpubMeta {
   resources: Record<string, EpubResourceRef>
   /** 展示用目录树（原生 nav/NCX；wire 形状） */
   navigation: NavigationItem[]
-  warnings: LocalImportWarning[]
+  /**
+   * 导入过程的事实清单（半径、动作句、处数与例子）：**拆开落盘**——合并、处数前缀与例子列表由读面
+   * 按当下的 `warningListOf` 现算。动作句本身仍是导入时写下的那句（带着那一次的数值与原文），
+   * 改它的措辞不会回写旧书。
+   */
+  findings?: FindingEntry[]
+  /**
+   * 兼容形状：把事实拼成中文句子后落盘的那一版。新书**同时**写一份投影，好让旧版本的读面在
+   * 降级时仍能显示导入说明；读面优先 `findings`（见 `warningsOf`），旧书没有 `findings` 时用它。
+   */
+  warnings?: LocalImportWarning[]
+}
+
+/**
+ * 元数据 → 给用户看的告警：两种落盘形状各说各的话，收在这一处。
+ *
+ * 为什么不做一次性迁移：这一项只在「导入说明」里重看，从不参与读取、导出或 AI 工具的判断；
+ * 回写旧书元数据要把整份 `LocalEpubMeta` 再写一遍，代价比它换到的东西大得多。旧书读出的是
+ * 当年那句话；新书把合并、处数与例子按当下口径重排（动作句同样是导入时写下的）——两者都不会
+ * 静默变成「没有痕」。新书同时写一份 `warnings` 投影只为旧版本读面降级时还能显示，读面仍以
+ * `findings` 为准（同一份事实的投影，不是第二份账）。
+ */
+function warningsOf(meta: LocalEpubMeta): LocalImportWarning[] {
+  if (meta.findings !== undefined) return warningListOf(meta.findings)
+  return meta.warnings ?? []
 }
 
 type LocalMeta = LocalTextMeta | LocalEpubMeta
@@ -190,6 +216,10 @@ const STAGING_SUFFIX = '.importing'
  *    **任何**失败都照原样上抛（`EpubImportError` → 400），**不做 TXT 兜底**；不是 ZIP 魔数的才走
  *    既有 TXT 解码链（BOM → UTF-8 严格 → GBK 回退，一字不改）。理由与被否决方案
  *    （「先试着开归档、失败就当 TXT」）见 `hasZipMagic` 的注。
+ *    分流之后不是一路放行：认得出的具名容器头（PDF / MOBI / UMD）在入口拒，文件名词尾声明是 EPUB
+ *    而内容没有 ZIP 本地头的字节也在入口拒，TXT 链在解码终点还有一道「这是不是可读文本」的断言
+ *    （`namedContainerMagicOf` / `assertReadableDecodedText`，理由见 `ADR-0065`）——被否的是
+ *    **对一切非 UTF-8 字节判拒**那种全量启发式，不是这几条各自的判据。
  * ② **顶层元数据是提交标记**：EPUB 先在 `local/<uuid>.importing/` 建全部产物，一次 rename 到
  *    `local/<uuid>/`，再原子写 `local/<uuid>.json`，最后才由门面入架。本地目录与 shelf.json 之间
  *    **没有**跨文件事务，不假装有：强杀恰在「元数据写完、书架落盘前」会留一份完整但未入架的副本，
@@ -233,17 +263,31 @@ export class LocalBooks {
     if (buf.length > maxImportBytes) {
       throw new LocalFileTooLargeError(`文件超过 ${formatByteLimit(maxImportBytes)} 上限`)
     }
-    return hasZipMagic(buf) ? this.publishEpub(buf, name) : this.publishText(buf, name)
+    // 具名容器魔数在分流**之前**拒：TXT 链对任何字节都能给出结果（GBK 兜底不会失败、无标题就切一章），
+    // 让 PDF / MOBI / UMD 落进它就等于把一本读不出的书以 200 入架（口径①说的是不拿解析结果改道，
+    // 不是「剩下的字节都算文本」——见 ADR-0014 的在册待裁与 ADR-0065）
+    const named = namedContainerMagicOf(buf)
+    if (named !== null) throw new LocalImportError(`文件是 ${named} 容器，本插件的本地导入只支持 TXT 与 EPUB`)
+    const isZip = hasZipMagic(buf)
+    // 文件名是「该按哪种容器去验、验不过报哪种错」的提示，不是改道的判据：`.txt` 命名的 ZIP 照旧走
+    // EPUB 路径（内容赢）。它只在名字声明了 EPUB、内容却连 ZIP 本地头都没有时生效，把「按 TXT 硬解成
+    // 一本单章书」这条假成功挡掉——只多拒、不静默收，所以名字这个客户端可写的东西仍不是证据。
+    if (!isZip && /\.epub$/i.test(name)) {
+      throw new LocalImportError('文件名声明是 EPUB（.epub），但内容不是 ZIP 容器（缺少 ZIP 本地头签名）：不按 TXT 导入；若文件本是纯文本，请改回 .txt；若本应是 EPUB，文件可能已损坏')
+    }
+    return isZip ? this.publishEpub(buf, name) : this.publishText(buf, name)
   }
 
   /** TXT：布局与元数据形态与既有**完全一致**（`<uuid>.txt` + 无 schemaVersion 的 `<uuid>.json`）——
    *  旧偏移表、旧进度、旧读取路径一字不改。 */
   private async publishText(buf: Buffer, name: string): Promise<LocalImportResult> {
     const { text, encoding } = decodeLocalText(buf)
+    // 判据放在切章之前：切不开也要先把「这不是文本」说出口，别让整本二进制白切一遍再入架
+    assertReadableDecodedText(text)
     const chapters = splitChapters(text)
     const id = randomUUID()
     const meta: LocalTextMeta = {
-      title: titleOf(name.replace(/\.txt$/i, '')), originalName: name,
+      title: titleFromName(name), originalName: name,
       importedAt: Date.now(), encoding, chapters, length: text.length,
     }
     try {
@@ -279,7 +323,7 @@ export class LocalBooks {
       await this.discard(id)
       throw e
     }
-    const title = titleOf(name.replace(/\.[^./\\]+$/, ''))
+    const title = titleFromName(name)
     return {
       bookKey,
       title: data.title ?? title,
@@ -287,7 +331,7 @@ export class LocalBooks {
       format: 'epub',
       // 各文档可能各自编码，不伪称整本 UTF-8
       encoding: null,
-      warnings: [...data.warnings],
+      warnings: warningListOf(data.findings),
       book: bookMetaOf(data, bookKey),
     }
   }
@@ -297,7 +341,7 @@ export class LocalBooks {
     return this.tocOf(await this.metaOf(bookKey), bookKey)
   }
 
-  /** 章数：线性阅读序列的长度（TXT 偏移表 / EPUB spine 索引共用 `meta.chapters` 这一份）。
+  /** 章数：线性阅读序列的长度（TXT 偏移表 / EPUB 的阅读单元共用 `meta.chapters` 这一份）。
    *  只要一个数时走这里——`getToc` 会顺带造出整套展示条目，补数不必付那份钱。 */
   async chapterCount(bookKey: string): Promise<number> {
     return (await this.metaOf(bookKey)).chapters.length
@@ -334,10 +378,10 @@ export class LocalBooks {
     return this.readDocument(bookKey, meta, documentId)
   }
 
-  /** 导入告警（导入说明可重看）：非 EPUB 恒空数组 */
+  /** 导入告警（导入说明可重看）：非 EPUB 恒空数组；EPUB 按落盘的事实清单现算投影 */
   async getImportWarnings(bookKey: string): Promise<LocalImportWarning[]> {
     const meta = await this.metaOf(bookKey)
-    return isEpubMeta(meta) ? meta.warnings : []
+    return isEpubMeta(meta) ? warningsOf(meta) : []
   }
 
   /**
@@ -509,9 +553,15 @@ export class LocalBooks {
 
 // ── 模块级助手 ─────────────────────────────────────────────────────────
 
-/** 上传文件名 → 兜底书名：去掉路径分隔/非法字符（TXT 与 EPUB 共用同一条收口） */
+/** 兜底书名的洗字符收口：去掉路径分隔/非法字符（TXT 与 EPUB 共用；扩展名已由 `titleFromName` 剥掉） */
 function titleOf(base: string): string {
   return base.replace(/[\\/:*?"<>|\r\n]/g, '_').trim() || '未命名'
+}
+
+/** 文件名 → 兜底书名：先剥末级扩展名（任意后缀，不认 `.txt` 一种），再交 `titleOf` 洗字符。
+ *  TXT 与 EPUB 两条发布路径共用这一条——各剥各的会让同一份名字在两处得到两个标题。 */
+function titleFromName(name: string): string {
+  return titleOf(name.replace(/\.[^./\\]+$/, ''))
 }
 
 /** 导入索引 → 持久化元数据：索引里的字段原样落盘（形状主人是导入层），只补书身份与时间戳 */
@@ -519,7 +569,7 @@ function metaOfImport(data: EpubImportData, name: string): LocalEpubMeta {
   return {
     schemaVersion: 2,
     format: 'epub',
-    title: data.title ?? titleOf(name.replace(/\.[^./\\]+$/, '')),
+    title: data.title ?? titleFromName(name),
     author: data.author,
     originalName: name,
     importedAt: Date.now(),
@@ -527,7 +577,9 @@ function metaOfImport(data: EpubImportData, name: string): LocalEpubMeta {
     documents: { ...data.documents },
     resources: { ...data.resources },
     navigation: [...data.items],
-    warnings: [...data.warnings],
+    findings: [...data.findings],
+    // 旧版本读面只认这一项：降级运行时仍能显示导入说明；读面优先 findings，不会两本账各说一套
+    warnings: warningListOf(data.findings),
   }
 }
 
@@ -551,10 +603,48 @@ function bookMetaOf(data: EpubImportData, bookKey: string): LocalBookMeta {
  * 给出结果（GBK 兜底 + 无标题单章）——一份加密 ZIP 会变成 200 的整本乱码。ZIP 就是 ZIP，
  * 是 EPUB 与否由 EPUB 路径自己判并对失败负责。
  *
- * 另一面同样刻意：**不新增「二进制即拒收」
- * 的启发式**——那会让现网本来能读的 TXT（GBK 短篇、含控制字符的导出文件）变成拒收，比乱码更坏。
- * 判据是白名单式的：只有 ZIP 签名改道，其余字节一律走既有 TXT 解码链。
+ * 另一面同样刻意：**不新增「对一切非 UTF-8 字节判拒」的全量启发式**——那会让现网本来能读的 TXT
+ * （GBK 短篇、含控制字符的导出文件）变成拒收，比乱码更坏。判据是白名单式的：只有 ZIP 签名改道，
+ * 其余字节一律走既有 TXT 解码链。白名单之外的三条**具名**判据不在此列（认得出这是别的容器、名字
+ * 声明了 EPUB 而内容没有 ZIP 本地头、解出来根本不含文本，它们不是猜字节像不像文本）——判据各在
+ * `namedContainerMagicOf`、`LocalBooks.import` 与 `assertReadableDecodedText`，口径与被否方案见 `ADR-0065`。
  */
 function hasZipMagic(buf: Buffer): boolean {
   return buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04
+}
+
+/**
+ * 认得出的**具名**容器头：返回它的名字，认不出返回 `null`。
+ *
+ * 这不是「二进制即拒收」的启发式（那条被 ADR-0014 否掉，会误伤 GBK 短篇与含控制字符的导出 TXT）：
+ * 判据是白名单的反面——只在这几个签名对得上时拒，其余字节照旧走解码链。三种容器各自在文件头有
+ * 一串固定字节（UMD 的是偏移 0 起的 `89 9B 9A DE`；该格式没有公开的官方规范，签名由多份彼此独立的
+ * 逆向解析资料一致给出，依据与残余风险见 `ADR-0065`），认出即点名是哪一种；认不出的容器只能靠解码
+ * 终点那道断言兜底，那是本仓承认的残留面（见 `ADR-0065` 的边界）。
+ */
+function namedContainerMagicOf(buf: Buffer): string | null {
+  if (buf.length >= 5 && buf.subarray(0, 5).toString('latin1') === '%PDF-') return 'PDF'
+  // PDB 的 creator/type 在偏移 60 起，MOBI 书恒为 `BOOKMOBI`
+  if (buf.length >= 68 && buf.subarray(60, 68).toString('latin1') === 'BOOKMOBI') return 'MOBI / PDB'
+  // UMD 的容器头：偏移 0 起的四个字节
+  if (buf.length >= 4 && buf[0] === 0x89 && buf[1] === 0x9b && buf[2] === 0x9a && buf[3] === 0xde) return 'UMD'
+  return null
+}
+
+/**
+ * 解码终点断言：**解出来不等于读得懂**。
+ *
+ * TXT 链的两处兜底（GBK 永不失败、无标题就切一章）意味着这条路上没有任何一步会说「不」——
+ * 一份被清零的归档、一本纯空白的文件都会以「1 章导入成功」入架，那正是本仓定义的最高罪。
+ * 解出来的字符串里出现 U+0000，说明字节不是本仓能按 UTF-8/GBK 读出的文本：被清零/截断的二进制，
+ * 或无 BOM 的 UTF-16 一类未识别的编码（这条断言认的是「不是可读文本」，不是「一定是二进制」）；
+ * 整本没有非空白字符则连「有内容」这件事都不成立。
+ */
+function assertReadableDecodedText(text: string): void {
+  if (text.includes('\u0000')) {
+    throw new LocalImportError('文件解码后含空字符（U+0000）：这不是可读文本（可能是被清零/截断的二进制，或本插件不支持的无 BOM 的 UTF-16 一类编码）')
+  }
+  if (text.trim() === '') {
+    throw new LocalImportError('文件里没有可读的内容（全文只有空白）：不按「一章空白正文」入架')
+  }
 }

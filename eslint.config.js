@@ -20,7 +20,7 @@ import reactHooks from 'eslint-plugin-react-hooks'
  * 加大括号，改完可观察行为不变）。
  */
 export default tseslint.config(
-  { ignores: ['lib/**', 'node_modules/**', '.qoder/**', '.task-scratch/**', 'docs/**'] },
+  { ignores: ['lib/**', 'node_modules/**', '.qoder/**', '.task-scratch/**', '.superpowers/**', 'docs/**'] },
 
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,

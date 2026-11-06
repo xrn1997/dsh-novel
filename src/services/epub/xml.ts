@@ -3,7 +3,7 @@ import { decodeHTML, decodeHTMLAttribute, decodeHTMLStrict } from 'entities'
 import iconv from 'iconv-lite'
 import type { AnyNode, CDATA, Element, Text } from 'domhandler'
 import { encodingKnown } from '../encoding.js'
-import { EpubImportError } from './errors.js'
+import { EpubDocumentError, EpubResourceError, rejectBook } from './errors.js'
 
 /**
  * EPUB 的**只读 XML 面**（包、导航、以及正文层的 XHTML/SVG 共用）：唯一解码入口、静态闸门 +
@@ -20,36 +20,62 @@ import { EpubImportError } from './errors.js'
  *    HTML 的 legacy 表；正文与标签属性各按浏览器的 data / 属性状态读——都不解析 DTD、不请求远端），
  *    再过静态闸门（DOCTYPE 带内部子集、实体声明、表外实体引用一律拒）；
  *    无内部子集的标准外部 DOCTYPE 原样留着——解析器忽略它，也就不存在请求远端 DTD 的动作。
- * ③ **单文档 DOM 预算**：深度与结构节点数超限即抛 `EpubImportError`，而不是递归到栈溢出。
+ * ③ **单文档 DOM 预算按主语失败**：解码、静态闸门、解析与深度/节点预算超限都经本层唯一的 `fail`
+ *    出口，按预算自带的 `subject` 决定半径——包文档读不出是整本书的事，正文文档与 SVG 资源读不出
+ *    只是那一页 / 那一张图的事（半径见 `ADR-0063`）。
  *    字节预算管不住「结构炸弹」：约一万层嵌套（远低于 8 MiB）就足以让无预算的递归吃穿调用栈抛
  *    `RangeError`——那是宿主异常，服务层按类分流时会把它漏成 500。
  */
 
 /**
- * 单份 XML 文档的 DOM 预算 + 出错时的点名。
+ * 单份 XML 文档的 DOM 预算 + 出错时的点名 + **这份文档是谁**。
  *
  * 数字来自 `EpubLimits`（**唯一主人**，见 `archive.ts`），本模块不持有任何上限值；`what` 是读者
  * 能去翻的书内位置（`OPF 包文档 OEBPS/content.opf` 这类），由调用方带上——只说「DOM 太深」
  * 无从知道是哪一份文档，畸形文档的报错也就没法定位。
+ *
+ * `subject` 决定这一份文档读不出来之后**归谁**：包文档读不出是整本书的事，正文文档与 SVG 资源
+ * 读不出只是那一格的事（半径见 `ADR-0063`）。为什么在这里声明而不是在 catch 处判：同一套
+ * 解码与预算检查同时服务这三种文档，而「谁的主语」在**构造预算的那一处**就已经确定了——留给
+ * 调用方各自 catch 就会出现「哪一步被 try 包住」决定半径的形状（正文层的解码失败落空页、
+ * 同一份文档的预算失败却整本拒）。
  */
 export interface XmlBudget {
   /** 出错时点名的书内位置（文档名 + 它是什么文档） */
   readonly what: string
+  /** 这份文档归谁：决定读不出之后的半径 */
+  readonly subject: XmlSubject
   /** 元素嵌套深度上限（第 depth + 1 层即报错） */
   readonly depth: number
   /** 结构节点（元素与 CDATA 容器）数上限 */
   readonly nodes: number
 }
 
-/** 单文档 DOM 预算的数字部分：各层只传数字，点名各自带上（避免标签串在两层各写一遍） */
+/** 一份被读的文档在书里的身份：包文档 / 正文文档 / SVG 资源 */
+export type XmlSubject = 'package' | 'content' | 'resource'
+
+/** 单文档 DOM 预算的数字部分：各层只传数字，点名与主语各自带上（避免标签串在两层各写一遍） */
 export interface XmlLimits {
   readonly depth: number
   readonly nodes: number
 }
 
-/** 把预算数字与书内位置配成一次遍历的预算对象 */
-export function xmlBudget(what: string, limits: XmlLimits): XmlBudget {
-  return { what, depth: limits.depth, nodes: limits.nodes }
+/** 把预算数字、书内位置与主语配成一次遍历的预算对象 */
+export function xmlBudget(what: string, limits: XmlLimits, subject: XmlSubject): XmlBudget {
+  return { what, subject, depth: limits.depth, nodes: limits.nodes }
+}
+
+/**
+ * 本层唯一的失败出口：按预算声明的主语给出半径。
+ *
+ * 包文档 → 整本拒（`rejectBook`）；正文文档 → 那一页留空；SVG 资源 → 那张图该处不留。
+ * 解码、静态闸门、解析出口与带预算的走法都只经这里说话，所以「这一份读不出算多大」在本层只有一处。
+ */
+function fail(budget: XmlBudget, message: string): never {
+  const text = `${budget.what}：${message}`
+  if (budget.subject === 'content') throw new EpubDocumentError(text)
+  if (budget.subject === 'resource') throw new EpubResourceError(text)
+  rejectBook(text)
 }
 
 // ── 解码（唯一入口：包、导航、NCX、XHTML/SVG 都走它）─────────────────────────────
@@ -60,27 +86,27 @@ export function xmlBudget(what: string, limits: XmlLimits): XmlBudget {
  * 顺序是 XML 规范定的：BOM 优先于声明（BOM 是字节层的事实，声明是文本层的自述），声明又优先于
  * 「默认 UTF-8」。声明了别的编码就按它解（iconv-lite），**绝无 GBK 猜测链**——TXT 的 GBK 回退是
  * 为「不知道编码的纯文本」准备的启发式，套到声明明确的 XML 上只会把乱码冒充成正文。
- * 解不出合法字符就抛：`Buffer.toString('utf8')` 会把非法字节静默换成 U+FFFD，那正是本仓最忌的
+ * 解不出合法字符就按预算的主语失败：`Buffer.toString('utf8')` 会把非法字节静默换成 U+FFFD，那正是本仓最忌的
  * 「坏数据冒充可读」。返回的字符串不含 BOM。
  */
-export function decodeEpubXml(bytes: Buffer): string {
-  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return decodeStrictUtf8(bytes.subarray(3))
+export function decodeEpubXml(bytes: Buffer, budget: XmlBudget): string {
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return decodeStrictUtf8(bytes.subarray(3), budget)
   if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return iconv.decode(bytes.subarray(2), 'utf16-le')
   if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) return iconv.decode(bytes.subarray(2), 'utf16-be')
   const declared = declaredEncoding(bytes)
-  if (declared === null || /^utf-?8$/i.test(declared)) return decodeStrictUtf8(bytes)
-  if (!encodingKnown(declared)) throw new EpubImportError(`XML 声明的编码不认识（不猜、不回退 GBK）：${declared}`)
+  if (declared === null || /^utf-?8$/i.test(declared)) return decodeStrictUtf8(bytes, budget)
+  if (!encodingKnown(declared)) fail(budget, `XML 声明的编码不认识（不猜、不回退 GBK）：${declared}`)
   const text = iconv.decode(bytes, declared)
   // iconv 对非法字节给 U+FFFD：声明与字节不符时如实报错，不把替换字符当正文
-  if (text.includes('\uFFFD')) throw new EpubImportError(`XML 文档按声明编码 ${declared} 解出非法字节（声明与内容不符）`)
+  if (text.includes('\uFFFD')) fail(budget, `XML 文档按声明编码 ${declared} 解出非法字节（声明与内容不符）`)
   return text
 }
 
-function decodeStrictUtf8(bytes: Buffer): string {
+function decodeStrictUtf8(bytes: Buffer, budget: XmlBudget): string {
   try {
     return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
   } catch {
-    throw new EpubImportError('XML 文档不是合法的 UTF-8（不猜 GBK、不拿替换字符冒充正文）')
+    fail(budget, 'XML 文档不是合法的 UTF-8（不猜 GBK、不拿替换字符冒充正文）')
   }
 }
 
@@ -106,19 +132,17 @@ function declaredEncoding(bytes: Buffer): string | null {
  *    一并框在预算内，不必每处再各配一套计数。
  */
 export function parseXml(text: string, budget: XmlBudget): Element {
-  const normalized = normalizeHtmlNamedEntities(text, budget.what)
-  scanXml(normalized, budget.what)
+  const normalized = normalizeHtmlNamedEntities(text, budget)
+  scanXml(normalized, budget)
   const doc = load(normalized, { xml: true })
   const roots = (doc.root().get(0)?.children ?? []).filter(isElement)
   const root = roots[0]
-  if (root === undefined) throw new EpubImportError(`${budget.what} 不是可解析的 XML（没有根元素）`)
+  if (root === undefined) fail(budget, '不是可解析的 XML（没有根元素）')
   // 良构 XML 只有一个文档元素，而这里的解析面（`load` 的 xml 模式）**不查良构**，多根时它把每根都交出来，
   // 只取第一个就是把后面的内容静默丢掉（两份 <html> 拼接的文件只留下前半——钉子见
   // `tests/services/epub-documents.test.ts` 的多根元素那一组）。本仓不按半途结果读。
   if (roots.length > 1) {
-    throw new EpubImportError(
-      `${budget.what} 有多个根元素（${roots.length} 个）：畸形 XML 不按半途结果读（只读第一个会静默丢掉后面的内容）`,
-    )
+    fail(budget, `有多个根元素（${roots.length} 个）：畸形 XML 不按半途结果读（只读第一个会静默丢掉后面的内容）`)
   }
   walkTree(roots, budget, NOOP)
   return root
@@ -143,9 +167,9 @@ export function parseXml(text: string, budget: XmlBudget): Element {
  * CDATA 与注释里的字样不是引用，整段原样保留；`&amp;nbsp;` 仍只解一层（`&amp;` 保持预定义实体，
  * 后面的 `nbsp;` 是字面文本）。
  */
-function normalizeHtmlNamedEntities(text: string, what: string): string {
+function normalizeHtmlNamedEntities(text: string, budget: XmlBudget): string {
   if (!text.includes('&')) return text
-  return rewriteSegments(text, what, {
+  return rewriteSegments(text, budget, {
     plain: (segment) => normalizeEntitySegment(segment, decodeHTML),
     markup: (segment) => normalizeEntitySegment(segment, decodeHTMLAttribute),
   })
@@ -203,7 +227,7 @@ interface SegmentRewrite {
  * 标签按「引号里的 `>` 不算结束」切：XML 的属性值允许出现裸 `>`，先按 `>` 断开就会把后半个标签
  * 当正文——那半截里的属性值会被按正文的读法解实体。
  */
-function rewriteSegments(text: string, what: string, edit: SegmentRewrite): string {
+function rewriteSegments(text: string, budget: XmlBudget, edit: SegmentRewrite): string {
   const plain = edit.plain ?? identity
   const literal = edit.literal ?? identity
   const markup = edit.markup ?? identity
@@ -219,7 +243,7 @@ function rewriteSegments(text: string, what: string, edit: SegmentRewrite): stri
     const closer = literalCloseOf(text, start)
     if (closer !== null) {
       const end = text.indexOf(closer.close, start + closer.open.length)
-      if (end < 0) throw new EpubImportError(`${what}：${closer.open} 没有闭合的 ${closer.close}（未闭合的字面量不是良构 XML）`)
+      if (end < 0) fail(budget, `${closer.open} 没有闭合的 ${closer.close}（未闭合的字面量不是良构 XML）`)
       const stop = end + closer.close.length
       out.push(literal(text.slice(start, stop)))
       cursor = stop
@@ -274,22 +298,22 @@ const identity = (s: string): string => s
  * 命名空间：cheerio 的 XML 模式保留前缀原样，不做命名空间解析，所以本层一律按**本地名**判定
  * （`opf:package` 与 `package` 等价）——前缀是书写者的自由，绑定到哪个命名空间才是身份。
  */
-function scanXml(text: string, what: string): void {
-  const body = stripLiterals(text, what)
+function scanXml(text: string, budget: XmlBudget): void {
+  const body = stripLiterals(text, budget)
   const doctype = body.indexOf('<!DOCTYPE')
   if (doctype >= 0) {
     const gt = body.indexOf('>', doctype)
     const bracket = body.indexOf('[', doctype)
-    if (bracket >= 0 && (gt < 0 || bracket < gt)) throw new EpubImportError(`${what}：DOCTYPE 带内部子集（实体声明与属性默认值本层不解析）`)
+    if (bracket >= 0 && (gt < 0 || bracket < gt)) fail(budget, 'DOCTYPE 带内部子集（实体声明与属性默认值本层不解析）')
   }
-  if (body.includes('<!ENTITY')) throw new EpubImportError(`${what}：含实体声明（本层不解析 DTD 实体，也不做实体展开）`)
+  if (body.includes('<!ENTITY')) fail(budget, '含实体声明（本层不解析 DTD 实体，也不做实体展开）')
   for (const m of body.matchAll(ENTITY_REF)) {
     const name = m[1]
     // 捕获必齐（正则只有一个分组）：缺了就是这条闸自己的判据坏了——照「宁炸不猜」抛，
     // 不按「非内建实体」拒整本，也不能静默放行未声明的引用。
-    if (name === undefined) throw new EpubImportError(`${what}：实体闸判据失效（引用未解析出名字，正则分组变了？）`)
+    if (name === undefined) fail(budget, '实体闸判据失效（引用未解析出名字，正则分组变了？）')
     if (name.startsWith('#')) continue   // 数值字符引用：与 DTD 无关，XML 规范直接成立
-    if (!PREDEFINED_ENTITIES.has(name)) throw new EpubImportError(`${what}：引用了不在内建 HTML 命名实体表里的实体 &${name};（本层不解析 DTD）`)
+    if (!PREDEFINED_ENTITIES.has(name)) fail(budget, `引用了不在内建 HTML 命名实体表里的实体 &${name};（本层不解析 DTD）`)
   }
 }
 
@@ -298,8 +322,8 @@ function scanXml(text: string, what: string): void {
  * 里的 `&nbsp;` 不是实体引用——按引用判会把一份本来可读的书整本拒掉。
  * 定界符与「未闭合就拒」的判定全归 `rewriteSegments`，这里只管把字面量整段丢掉。
  */
-function stripLiterals(text: string, what: string): string {
-  return rewriteSegments(text, what, { literal: () => '' })
+function stripLiterals(text: string, budget: XmlBudget): string {
+  return rewriteSegments(text, budget, { literal: () => '' })
 }
 
 const ENTITY_REF = /&([A-Za-z_][\w.-]*|#[0-9]+|#x[0-9A-Fa-f]+);/g
@@ -315,7 +339,7 @@ const NOOP = (): void => {}
 /**
  * 元素树的一次深度优先走法：**深度与节点预算的唯一执行点**（`descendants`/`textOf`/解析出口都走它）。
  *
- * 深度在**进层之前**判、节点在访问时判，所以畸形文档在这里拿到 `EpubImportError`，而不是等递归
+ * 深度在**进层之前**判、节点在访问时判，所以畸形文档在这里按预算的主语失败，而不是等递归
  * 把栈吃穿。**共用的只是 `domCounter` 那一份阈值与报错**，「数哪些节点」随走法不同：本函数只数
  * 元素（文本挂在元素上，元素数已把结构规模钉住），`textOf` 另把 CDATA 容器也数一次——那是它取文本
  * 必需的访问（CDATA 是容器不是文本）。两者不冲突：CDATA 容器不能互相嵌套、深度由元素驱动，
@@ -336,11 +360,11 @@ function domCounter(budget: XmlBudget): (depth: number) => void {
   let nodes = 0
   return (depth: number): void => {
     if (depth > budget.depth) {
-      throw new EpubImportError(`${budget.what} 的 DOM 嵌套深度超过上限 ${budget.depth} 层（第 ${depth} 层）：畸形文档不按半途结果读`)
+      fail(budget, `DOM 嵌套深度超过上限 ${budget.depth} 层（第 ${depth} 层）：畸形文档不按半途结果读`)
     }
     nodes += 1
     if (nodes > budget.nodes) {
-      throw new EpubImportError(`${budget.what} 的 DOM 节点数超过上限 ${budget.nodes} 个：畸形文档不按半途结果读`)
+      fail(budget, `DOM 节点数超过上限 ${budget.nodes} 个：畸形文档不按半途结果读`)
     }
   }
 }

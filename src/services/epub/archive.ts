@@ -1,7 +1,7 @@
 import type { Readable } from 'node:stream'
 import * as rawBufferCrc32 from 'buffer-crc32'
 import { fromBuffer, type Entry, type ZipFile } from 'yauzl'
-import { EpubImportError } from './errors.js'
+import { bookError, EpubImportError, rejectBook } from './errors.js'
 
 /** 本层只用增量累计这一个方法，不必把 buffer-crc32 那份声明拖进来 */
 type Crc32 = { readonly unsigned: (buffer: Buffer, partial?: number) => number }
@@ -138,7 +138,7 @@ export class EpubArchive {
         { lazyEntries: true, strictFileNames: true, validateEntrySizes: true },
         (err, zip) => {
           if (err) {
-            reject(new EpubImportError(`EPUB 不是可读的 ZIP 归档：${err.message}`))
+            reject(bookError(`EPUB 不是可读的 ZIP 归档：${err.message}`))
             return
           }
           EpubArchive.scan(zip, budget).then(resolve, reject)
@@ -163,10 +163,10 @@ export class EpubArchive {
       zip.on('entry', (entry: Entry) => {
         try {
           if (table.length >= budget.entries) {
-            throw new EpubImportError(`EPUB 条目数超过上限 ${budget.entries}（第 ${table.length + 1} 条：${entry.fileName}）`)
+            rejectBook(`EPUB 条目数超过上限 ${budget.entries}（第 ${table.length + 1} 条：${entry.fileName}）`)
           }
           const name = normalizeEntryPath(entry.fileName)
-          if (byName.has(name)) throw new EpubImportError(`EPUB 归档内有重名条目：${name}`)
+          if (byName.has(name)) rejectBook(`EPUB 归档内有重名条目：${name}`)
           checkEntryKind(entry, name)
           byName.set(name, entry)
           table.push({ name, size: entry.uncompressedSize })
@@ -192,10 +192,10 @@ export class EpubArchive {
    * 单条目预算是归档层的硬上限，任何调用方都不能把它放宽。
    */
   async read(name: string, maxBytes?: number): Promise<Buffer> {
-    if (this.closed) throw new EpubImportError(`EPUB 归档已关闭，无法读取 ${name}`)
+    if (this.closed) rejectBook(`EPUB 归档已关闭，无法读取 ${name}`)
     const key = normalizeEntryPath(name)
     const entry = this.byName.get(key)
-    if (entry === undefined) throw new EpubImportError(`EPUB 归档中没有条目：${name}`)
+    if (entry === undefined) rejectBook(`EPUB 归档中没有条目：${name}`)
     const cap = Math.min(this.budget.entryBytes, maxBytes ?? this.budget.entryBytes)
 
     let stream: Readable
@@ -215,10 +215,10 @@ export class EpubArchive {
         actual += buf.length
         this.usedBytes += buf.length
         if (actual > cap) {
-          throw new EpubImportError(`EPUB 条目 ${key} 实际解压超过上限 ${cap} 字节`)
+          rejectBook(`EPUB 条目 ${key} 实际解压超过上限 ${cap} 字节`)
         }
         if (this.usedBytes > this.budget.totalBytes) {
-          throw new EpubImportError(`EPUB 累计解压超过上限 ${this.budget.totalBytes} 字节（本条：${key}）`)
+          rejectBook(`EPUB 累计解压超过上限 ${this.budget.totalBytes} 字节（本条：${key}）`)
         }
         runningCrc = crc32.unsigned(buf, runningCrc)
         chunks.push(buf)
@@ -231,7 +231,7 @@ export class EpubArchive {
 
     if ((runningCrc >>> 0) !== (entry.crc32 >>> 0)) {
       this.abort()
-      throw new EpubImportError(`EPUB 条目 ${key} CRC 校验失败：中央目录 ${entry.crc32 >>> 0}，实际 ${runningCrc >>> 0}`)
+      rejectBook(`EPUB 条目 ${key} CRC 校验失败：中央目录 ${entry.crc32 >>> 0}，实际 ${runningCrc >>> 0}`)
     }
     return Buffer.concat(chunks, actual)
   }
@@ -260,16 +260,16 @@ export class EpubArchive {
 /** 加密 / 压缩方式 / 符号链接：决定这个条目是否可信，与「用不用它」无关，所以逐条都判 */
 function checkEntryKind(entry: Entry, name: string): void {
   if (entry.isEncrypted()) {
-    throw new EpubImportError(`EPUB 条目被 ZIP 加密（本插件不提供解密）：${name}`)
+    rejectBook(`EPUB 条目被 ZIP 加密（本插件不提供解密）：${name}`)
   }
   if (entry.compressionMethod !== 0 && entry.compressionMethod !== 8) {
-    throw new EpubImportError(`EPUB 条目用了不支持的压缩方式 ${entry.compressionMethod}（只接受 store/deflate）：${name}`)
+    rejectBook(`EPUB 条目用了不支持的压缩方式 ${entry.compressionMethod}（只接受 store/deflate）：${name}`)
   }
   // 只有 Unix 宿主（versionMadeBy 高字节 3）的外部属性才按 unix 模式位解释：同一段 bit 在 DOS
   // 属性里是只读/隐藏等标志，混读会把普通文件误判成符号链接，而符号链接能把读取引到书外。
   const mode = entry.externalFileAttributes >>> 16
   if ((entry.versionMadeBy >>> 8) === 3 && (mode & 0xf000) === 0xa000) {
-    throw new EpubImportError(`EPUB 条目是符号链接（可能指向书外）：${name}`)
+    rejectBook(`EPUB 条目是符号链接（可能指向书外）：${name}`)
   }
 }
 
@@ -285,33 +285,34 @@ function checkEntryKind(entry: Entry, name: string): void {
 function normalizeEntryPath(raw: string): string {
   // NUL 会截断下游一切把名字当 C 字符串/路径段的地方。yauzl 的 validateFileName 不校验 NUL，
   // 所以这条是**只有本层拦得住**的判据之一。
-  if (raw.includes('\0')) throw new EpubImportError(`EPUB 条目名含 NUL：${JSON.stringify(raw)}`)
+  if (raw.includes('\0')) rejectBook(`EPUB 条目名含 NUL：${JSON.stringify(raw)}`)
   // 下面三条（反斜杠 / 绝对路径 / 盘符）与再下面的 `..`：这四种形态在**条目名**上其实由依赖先拦——
   // yauzl 的 validateFileName 无条件拒含反斜杠、绝对路径与任一 `..` 段的名字，与 strictFileNames 无关。
   // 本层保留同名判据是**纵深防御**（换依赖、或那道门被绕过时不至于裸奔），不是唯一防线；
   // 只有本层拦得住的两类是本条 NUL 与末尾的「归一后为空」。
-  if (raw.includes('\\')) throw new EpubImportError(`EPUB 条目名含反斜杠：${raw}`)
-  if (raw.startsWith('/')) throw new EpubImportError(`EPUB 条目名是绝对路径：${raw}`)
-  if (/^[A-Za-z]:/.test(raw)) throw new EpubImportError(`EPUB 条目名含盘符：${raw}`)
+  if (raw.includes('\\')) rejectBook(`EPUB 条目名含反斜杠：${raw}`)
+  if (raw.startsWith('/')) rejectBook(`EPUB 条目名是绝对路径：${raw}`)
+  if (/^[A-Za-z]:/.test(raw)) rejectBook(`EPUB 条目名含盘符：${raw}`)
   const out: string[] = []
   for (const segment of raw.split('/')) {
     if (segment === '' || segment === '.') continue
     if (segment === '..') {
       // 条目名走不到这里（含 `..` 段的名字被 yauzl 先拒）；这条折叠分支活在查找侧：调用方给出的
       // `OEBPS/sub/../ch1.xhtml` 折叠成 OEBPS/ch1.xhtml；栈里已经空了的 `..` 才是越界。
-      if (out.length === 0) throw new EpubImportError(`EPUB 条目名越出归档根：${raw}`)
+      if (out.length === 0) rejectBook(`EPUB 条目名越出归档根：${raw}`)
       out.pop()
       continue
     }
     out.push(segment)
   }
   // 归一后什么都剩不下（名字是 `.`、`./`、`//` 这类）：yauzl 也不拦（它只拒 `..` 段），本层独占
-  if (out.length === 0) throw new EpubImportError(`EPUB 条目名归一后为空：${JSON.stringify(raw)}`)
+  if (out.length === 0) rejectBook(`EPUB 条目名归一后为空：${JSON.stringify(raw)}`)
   return out.join('/')
 }
 
-/** 非本层的异常（库/流/系统）也要披上本层的类并点名条目：否则调用方只能靠文案猜分类 */
+/** 非本层的异常（库/流/系统）也要披上本层的类并点名条目：否则调用方只能靠文案猜分类。
+ *  这是本子树唯一对基类做 `instanceof` 的地方——它判的是「已经披过名没有」，不是失败的主语归谁。 */
 function wrapError(cause: unknown, what: string): EpubImportError {
   if (cause instanceof EpubImportError) return cause
-  return new EpubImportError(`${what}：${cause instanceof Error ? cause.message : String(cause)}`)
+  return bookError(`${what}：${cause instanceof Error ? cause.message : String(cause)}`)
 }

@@ -7,16 +7,21 @@
  * 三条口径在这里被钉住：
  * ① 章数按 spine 主序列，补充文档可打开但不计章（脚注/附录）；
  * ② 只解析**可达**的补充文档（导航或书内链接指到的），未使用的 manifest 条目一律不要求受支持；
- * ③ 远程/损坏/被加密的资源、失效锚点、重复锚点、不支持的可见图形都让导入失败并点名；被移除的活动内容
- *    只记告警；正文内联 SVG 是这一条的唯一例外（剥离 + 告警，只有它是文档唯一内容时才失败）。
+ * ③ 半径按主语落（`ADR-0061`、`ADR-0063`）：整本拒只留给容器入口与包文档读不出、主序列被剪到空、
+ *    声明了封面却读不出、写不出产物；一份文档读不出（空白页、DOM 超预算、
+ *    整页 SVG 落不下那张图）→ 留空页 + 点名的痕，一条声明或一处引用解不开 → 剪那一条 / 取消可点击性，
+ *    一张图读不出 → 该处不留。被剥除的活动内容与降级（重复锚点取文档序第一个、导航目标随剥离降级、
+ *    目标锚点从未存在时按该条降级）只记痕。
  */
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import type { ChapterContent, ContentNode, NavigationItem, ReadingTarget } from '../../src/shared/wire.js'
+import type { ChapterContent, ContentNode, LocalImportWarning, NavigationItem, ReadingTarget } from '../../src/shared/wire.js'
 import type { EpubLimits } from '../../src/services/epub/archive.js'
 import { EpubImportError } from '../../src/services/epub/errors.js'
 import { importEpub, type EpubImportData } from '../../src/services/epub/import.js'
+import { FINDING_RADII, warningListOf } from '../../src/services/epub/findings.js'
+import { chapterContentToText } from '../../src/services/chapter-content.js'
 import { makeEpubFixture } from '../fixtures/epub.js'
 import { makeTempDir } from '../temp-dir.js'
 import { must, pick } from '../support/fixture.js'
@@ -38,6 +43,11 @@ async function importRejection(name: string, limits?: Partial<EpubLimits>): Prom
     return e as Error
   }
   throw new Error(`预期拒绝，实际成功——坏书冒充可读是本仓的最高罪（样本：${name}）`)
+}
+
+/** 导入落盘的是事实清单（半径、处数与例子都在里面）；断言按生产同一条投影取给用户看的那一份 */
+function warningsOf(data: EpubImportData): LocalImportWarning[] {
+  return warningListOf(data.findings)
 }
 
 function expectEpubError(e: Error, pattern: RegExp): void {
@@ -227,7 +237,7 @@ describe('epub3-rich：主序列计章、补充文档可打开但不计章', () 
 
   it('好书上没有告警（告警不许在好书上刷存在感）', async () => {
     const { book } = await importOf('epub3-rich')
-    expect(book.warnings).toEqual([])
+    expect(warningsOf(book)).toEqual([])
   })
 
   it('输出目录只含规范化文档与已验证资源，文件名只由 opaque ID 生成', async () => {
@@ -294,7 +304,7 @@ describe('可达性与补充文档', () => {
     expect(book.chapters).toHaveLength(1)
     expect(Object.values(book.documents).map((d) => d.path)).toEqual(['OEBPS/ch1.xhtml'])
     // 没有目录 → 包层已记合成导航的告警（与「不解析孤立补充文档」无关）
-    expect(book.warnings.map((w) => w.code)).toEqual(['epub-navigation-synthesized'])
+    expect(warningsOf(book).map((w) => w.code)).toEqual(['epub-navigation-synthesized'])
   })
 
   it('未使用的 manifest 资源不要求受支持：垃圾字节的未用图片 / 未用音频都不拒整本', async () => {
@@ -449,72 +459,27 @@ describe('SVG：独立插图重建、包装封面解析成栅格', () => {
 })
 
 describe('安全面：拒绝要有精确错误', () => {
-  it('正文远程图片：失败并点名这张图与出处文档', async () => {
-    const e = await importRejection('epub3-remote-image')
-    expectEpubError(e, /example\.invalid/)
-    expectEpubError(e, /OEBPS\/ch1\.xhtml/)
-  })
-
-  it('被引用的图片损坏：失败并点名资源', async () => {
-    const e = await importRejection('epub3-broken-image')
-    expectEpubError(e, /OEBPS\/images\/fig\.png/)
-    expectEpubError(e, /损坏|IEND/)
-  })
-
-  it('声明的封面损坏：失败并点名封面资源（不造一个有效封面 URL）', async () => {
+  it('声明的封面损坏：失败、点名封面资源，并把损坏原因写进这句报错（导入失败时用户看不到告警面）', async () => {
     const e = await importRejection('epub3-broken-cover')
     expectEpubError(e, /OEBPS\/images\/cover\.png/)
+    expectEpubError(e, /损坏|截断/)
+    expect(must(e, '封面失败的错误').message).not.toMatch(/导入告警/)
   })
 
-  it('重复锚点：失败并点名文档', async () => {
-    const e = await importRejection('epub3-dup-anchor')
-    expectEpubError(e, /重复/)
-    expectEpubError(e, /OEBPS\/ch1\.xhtml/)
-  })
-
-  it('失效锚点（导航指向不存在的锚点）：失败并点名锚点', async () => {
-    const e = await importRejection('epub3-missing-anchor')
-    expectEpubError(e, /gone/)
-    expectEpubError(e, /OEBPS\/ch1\.xhtml/)
-  })
-
-  it('失效链接（正文链到归档里没有的文档）：失败并点名目标', async () => {
-    const e = await importRejection('epub3-missing-target')
-    expectEpubError(e, /gone\.xhtml/)
-    expectEpubError(e, /OEBPS\/ch1\.xhtml/)
-  })
-
-  it('正文内联 SVG 是文档唯一内容：失败并点名文档与原因（剥离后没有别的正文）', async () => {
+  it('正文内联 SVG 是文档唯一内容：先按文档级留痕，整本只剩这一页时才轮到整本判据', async () => {
     const e = await importRejection('epub3-inline-svg-only')
-    expectEpubError(e, /OEBPS\/ch1\.xhtml/)
-    expectEpubError(e, /唯一/)
-    expectEpubError(e, /svg/i)
+    expectEpubError(e, /没有任何可读的一页/)
+    expectEpubError(e, /1 份/)
   })
 
-  it('SVG 里的 foreignObject：失败并点名资源（内嵌 HTML 的可见图形不支持）', async () => {
-    const e = await importRejection('epub3-svg-foreign-object')
-    expectEpubError(e, /foreignObject/)
-    expectEpubError(e, /OEBPS\/images\/fig\.svg/)
+  it('被引用的图片像素超预算：读不出这张图属资源级，见「资源读不出：该处不留并点名」', async () => {
+    const { book } = await importOf('epub3-broken-image', { imagePixels: 5 })
+    expect(droppedOf(book).join('\n')).toMatch(/OEBPS\/images\/fig\.png/)
   })
 
-  it('SVG 里的 use 外链：失败并点名资源（绝不发请求）', async () => {
-    const e = await importRejection('epub3-svg-external-use')
-    expectEpubError(e, /use/)
-    expectEpubError(e, /OEBPS\/images\/fig\.svg/)
-  })
-
-  it('SVG 引用未登记的渐变：失败并点名资源（不改写冒充成功）', async () => {
-    const e = await importRejection('epub3-svg-missing-gradient')
-    expectEpubError(e, /missing/)
-    expectEpubError(e, /OEBPS\/images\/fig\.svg/)
-  })
-
-  it('被引用的图片在 encryption.xml 里：失败并点名「被加密」，不是「损坏」', async () => {
-    const e = await importRejection('epub3-encrypted-image')
-    expectEpubError(e, /OEBPS\/images\/fig\.png/)
-    expectEpubError(e, /加密/)
-    // 原因必须精确：字节是被混淆的，按字节报错会把读者引去换图（那是白费力气）
-    expect(e.message).not.toMatch(/损坏/)
+  it('归档层读不出条目：仍按整本失败（半径不降到一份资源——条目连读都读不出是容器级事实）', async () => {
+    const e = await importRejection('epub3-rich', { entryBytes: 1 })
+    expectEpubError(e, /实际解压超过上限/)
   })
 
   it('写入失败（输出目录不可用）：报本子树的异常类，且不泄露主机绝对路径', async () => {
@@ -533,35 +498,39 @@ describe('安全面：拒绝要有精确错误', () => {
     expect(must(caught, '捕获到的错误').message).not.toContain(dir)   // 主机布局不进用户可见文案
   })
 
-  it('超深正文：默认深度预算即报错，且是本子树的异常类（不是爆栈）', async () => {
-    const e = await importRejection('epub3-doc-too-deep')
-    expectEpubError(e, /OEBPS\/ch1\.xhtml/)
-    expectEpubError(e, /深度/)
-    expect(e.constructor.name).toBe('EpubImportError')
+  it('超深正文：主语是这一页——留空页、章号不动、痕点名深度预算（不是整本拒，也不是爆栈）', async () => {
+    const { book, dir } = await importOf('epub3-doc-too-deep')
+    const doc = must(Object.values(book.documents).find((d) => d.path === 'OEBPS/ch1.xhtml'), '超深的那一份文档')
+    expect(book.chapters).toHaveLength(2)
+    expect(doc.index).toBe(1)                                     // 章号照占，不往前挪
+    expect(nodesOf(await readDocument(dir, book, doc.id))).toEqual([])
+    const blank = warningsOf(book).filter((w) => w.code === 'epub-empty-document')
+    expect(blank).toHaveLength(1)
+    expect(pick(blank, 0).resource).toBe('OEBPS/ch1.xhtml')
+    expect(pick(blank, 0).message).toMatch(/深度/)
   })
 
-  it('超宽正文：默认预算读得出，节点预算缩到 200 后报错并点名这份文档', async () => {
+  it('超宽正文：默认预算读得出；节点预算缩到 200 后同样只落空页并点名这份文档', async () => {
     const ok = await importOf('epub3-doc-too-wide')
-    expect(ok.book.chapters).toHaveLength(1)
-    const e = await importRejection('epub3-doc-too-wide', { xmlNodes: 200 })
-    expectEpubError(e, /OEBPS\/ch1\.xhtml/)
-    expectEpubError(e, /节点/)
+    expect(ok.book.chapters).toHaveLength(2)
+    expect(warningsOf(ok.book).filter((w) => w.code === 'epub-empty-document')).toEqual([])
+    const { book } = await importOf('epub3-doc-too-wide', { xmlNodes: 200 })
+    expect(book.chapters).toHaveLength(2)                         // 半径降到主语：这一章还在序列里
+    const blank = warningsOf(book).filter((w) => w.code === 'epub-empty-document')
+    expect(blank).toHaveLength(1)
+    expect(pick(blank, 0).resource).toBe('OEBPS/ch1.xhtml')
+    expect(pick(blank, 0).message).toMatch(/节点/)
   })
 
-  it('被引用的图片像素超预算：失败并点名资源（缩预算，不必造真大图）', async () => {
-    const e = await importRejection('epub3-rich', { imagePixels: 5 })
-    expectEpubError(e, /OEBPS\/cover\.png/)
-    expectEpubError(e, /像素/)
-  })
 })
 
 describe('安全面：安全去除项要有告警，不默默失去内容', () => {
   it('脚本/内嵌框/对象/表单/样式/事件属性一律剥除，正文文字保留', async () => {
     const { book, dir } = await importOf('epub3-active-content')
     expect(book.chapters).toHaveLength(1)
-    expect(book.warnings.map((w) => w.code).sort())
+    expect(warningsOf(book).map((w) => w.code).sort())
       .toEqual(['epub-active-attribute', 'epub-css-attribute', 'epub-external-link', 'epub-link-not-followable', 'epub-removed-active-content'])
-    for (const w of book.warnings) expect(w.resource).toBe('OEBPS/ch1.xhtml')
+    for (const w of warningsOf(book)) expect(w.resource).toBe('OEBPS/ch1.xhtml')
     const nodes = nodesOf(await readDocument(dir, book, pick(book.chapters, 0).documentId))
     expect(shape(nodes)).toEqual([
       { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: ['点击这里'] },
@@ -574,7 +543,7 @@ describe('安全面：安全去除项要有告警，不默默失去内容', () =
 
   it('告警合并同类同文：脚本/样式这一类的处数写进 message，不刷一屏', async () => {
     const { book } = await importOf('epub3-active-content')
-    const removed = book.warnings.find((w) => w.code === 'epub-removed-active-content')
+    const removed = warningsOf(book).find((w) => w.code === 'epub-removed-active-content')
     expect(removed?.message).toMatch(/处/)
     expect(removed?.message).toMatch(/script/)
   })
@@ -582,7 +551,7 @@ describe('安全面：安全去除项要有告警，不默默失去内容', () =
   it('正文内联 SVG：整本照读，装饰图形剥离并留告警（点名文档与处数）', async () => {
     const { book, dir } = await importOf('epub3-inline-svg')
     expect(book.chapters).toHaveLength(1)
-    const svgWarn = book.warnings.filter((w) => w.code === 'epub-removed-inline-svg')
+    const svgWarn = warningsOf(book).filter((w) => w.code === 'epub-removed-inline-svg')
     expect(svgWarn).toHaveLength(1)
     expect(pick(svgWarn, 0).resource).toBe('OEBPS/ch1.xhtml')
     expect(pick(svgWarn, 0).message).toMatch(/svg/)
@@ -615,24 +584,37 @@ describe('整页 SVG 图形页：按其内唯一一张书内图降级成单图�
     expect(img.resourceId).toBe(book.coverResourceId)
     expect(Object.keys(book.resources)).toHaveLength(1)
     // 降级要看得见；而「移除了内联 SVG」那条不再成立——图形没被丢掉，是按图读进来了
-    const codes = book.warnings.map((w) => w.code)
+    const codes = warningsOf(book).map((w) => w.code)
     expect(codes).toContain('epub-svg-image-page')
     expect(codes).not.toContain('epub-removed-inline-svg')
-    const warn = must(book.warnings.find((w) => w.code === 'epub-svg-image-page'), 'book.warnings 里 find 命中的那一项')
+    const warn = must(warningsOf(book).find((w) => w.code === 'epub-svg-image-page'), 'warningsOf(book) 里 find 命中的那一项')
     expect(warn.resource).toBe('OEBPS/wrap0000.xhtml')
     expect(warn.message).toMatch(/图/)
   })
 
-  it('那张图指向书外：整本仍被拒，且点名是「图在书外」（新判据不新增失败面）', async () => {
-    const e = await importRejection('epub3-svg-cover-page-remote')
-    expectEpubError(e, /OEBPS\/wrap0000\.xhtml/)
-    expectEpubError(e, /书外/)
+  it('那张图指向书外：这一页按空页留、点名原因，别的章节照读（不整本拒）', async () => {
+    const { book, dir } = await importOf('epub3-svg-cover-page-remote')
+    const cover = must(Object.values(book.documents).find((d) => d.path === 'OEBPS/wrap0000.xhtml'), '封面页文档')
+    expect(nodesOf(await readDocument(dir, book, cover.id))).toEqual([])
+    expect(book.chapters).toHaveLength(2)
+    const blank = warningsOf(book).filter((w) => w.code === 'epub-empty-document')
+    expect(pick(blank, 0).resource).toBe('OEBPS/wrap0000.xhtml')
+    expect(pick(blank, 0).message).toMatch(/书外/)
   })
 
-  it('SVG 里除那张图还有矢量形状：不是「只包一张图」，仍按原口径拒绝', async () => {
-    const e = await importRejection('epub3-svg-cover-page-not-sole')
-    expectEpubError(e, /OEBPS\/wrap0000\.xhtml/)
-    expectEpubError(e, /唯一/)
+  it('那张图的引用解不开：说「解不开」而不是「指向书外」，这一页同样按空页留', async () => {
+    const { book } = await importOf('epub3-svg-cover-page-escaping')
+    const blank = warningsOf(book).filter((w) => w.code === 'epub-empty-document')
+    expect(pick(blank, 0).message).toMatch(/解不开/)
+    expect(pick(blank, 0).message).not.toMatch(/书外/)
+  })
+
+  it('SVG 里除那张图还有矢量形状：不是「只包一张图」，这一页按空页留并说清原因', async () => {
+    const { book } = await importOf('epub3-svg-cover-page-not-sole')
+    const blank = warningsOf(book).filter((w) => w.code === 'epub-empty-document')
+    expect(pick(blank, 0).resource).toBe('OEBPS/wrap0000.xhtml')
+    expect(pick(blank, 0).message).toMatch(/唯一/)
+    expect(book.chapters).toHaveLength(2)
   })
 
   it('封面页容器带的锚点随图落到树上：目录指向它不是悬空锚点', async () => {
@@ -666,9 +648,50 @@ describe('整页 SVG 图形页：按其内唯一一张书内图降级成单图�
     expect(shape(nodes)).toEqual([
       { tag: 'p', start: null, value: null, rowSpan: null, colSpan: null, children: ['正文与花饰'] },
     ])
-    const codes = book.warnings.map((w) => w.code)
+    const codes = warningsOf(book).map((w) => w.code)
     expect(codes).toContain('epub-removed-inline-svg')
     expect(codes).not.toContain('epub-svg-image-page')
+  })
+})
+
+describe('目标锚点从未存在：按该条降级，整本照读', () => {
+  it('失效锚点（导航指向不存在的锚点）：整本照读，条目落该页开头并留痕', async () => {
+    const { book } = await importOf('epub3-missing-anchor')
+    expect(book.chapters.length).toBe(1)
+    expect(book.items[0]?.target).toMatchObject({ kind: 'chapter', index: 0, anchorId: null })
+    const hit = book.findings.find((f) => f.code === 'epub-degraded-anchor')
+    expect(hit, '失效锚点必须留下一条痕').toBeDefined()
+    expect(hit?.scope).toBe('item')
+    expect(hit?.resource).toBe('OEBPS/ch1.xhtml')
+    expect(hit?.action).toMatch(/不存在/)
+    expect(hit?.details.join('')).toMatch(/#gone/)
+  })
+
+  it('失效锚点（正文链接指向不存在的锚点）：整本照读，该处取消可点击性且文字不丢', async () => {
+    const { book, dir } = await importOf('epub3-link-missing-anchor')
+    const ch1 = await readDocument(dir, book, pick(book.chapters, 0).documentId)
+    const text = JSON.stringify(nodesOf(ch1))
+    expect(text).toContain('去哪儿')          // 文字照留
+    expect(text).not.toContain('"link"')      // 可点击性取消
+    const hit = book.findings.find((f) => f.code === 'epub-degraded-anchor')
+    expect(hit?.scope).toBe('element')
+    expect(hit?.resource).toBe('OEBPS/ch1.xhtml')
+    expect(hit?.details.join('')).toMatch(/#gone/)
+  })
+
+  it('拼错的名字与被剥掉的锚点分开记：同一痕码，动作句说「不存在」而不是「随剥离消失」', async () => {
+    // 这份文档里同样有被剥离的内联 SVG（其中确实有个 id="ornament"），但链接指的是拼错的名字：
+    // 「从未存在」与「被我们剥掉」是两件事——码相同（程序分流不变），动作句必须分得清是哪一种
+    const { book, dir } = await importOf('epub3-inline-svg-bad-anchor')
+    expect(book.chapters).toHaveLength(1)
+    const nodes = nodesOf(await readDocument(dir, book, pick(book.chapters, 0).documentId))
+    expect(JSON.stringify(nodes)).toContain('这张图')       // 文字照留
+    expect(JSON.stringify(nodes)).not.toContain('"link"')   // 可点击性取消
+    const hit = book.findings.filter((f) => f.code === 'epub-degraded-anchor')
+    expect(hit).toHaveLength(1)
+    expect(pick(hit, 0).action).toMatch(/不存在/)
+    expect(pick(hit, 0).action).not.toMatch(/剥离/)
+    expect(pick(hit, 0).details.join('')).toMatch(/#ornamnet/)
   })
 })
 
@@ -676,7 +699,7 @@ describe('目标锚点随被剥离内容消失：降级 + 告警，不拒整本'
   /** 降级告警按动作分两条（导航降级 / 内链降级），同码但动作不同——同码同资源同动作才合并 */
   async function degradedWarnings(name: string): Promise<{ nav: string[]; link: string[] }> {
     const { book } = await importOf(name)
-    const hit = book.warnings.filter((w) => w.code === 'epub-degraded-anchor')
+    const hit = warningsOf(book).filter((w) => w.code === 'epub-degraded-anchor')
     return {
       nav: hit.filter((w) => /降级到该文档开头/.test(w.message)).map((w) => `${w.resource}\u0000${w.message}`),
       link: hit.filter((w) => /降级成纯文本/.test(w.message)).map((w) => `${w.resource}\u0000${w.message}`),
@@ -715,13 +738,421 @@ describe('目标锚点随被剥离内容消失：降级 + 告警，不拒整本'
     expect(link[0]).toContain('OEBPS/ch1.xhtml')
     expect(link[0]).toContain('#ornament')
   })
+})
 
-  it('锚点从未存在（拼写错）：仍然整本拒收——降级只认「被剥离内容里确实有过这个锚点」', async () => {
-    // 这份文档里同样有被剥离的内联 SVG（其中确实有个 id），但链接指的是拼错的名字：
-    // 从没存在过的目标仍是「我们读不懂」，不许被降级路径吞掉（宁炸不猜）
-    const e = await importRejection('epub3-inline-svg-bad-anchor')
-    expectEpubError(e, /ornamnet/)
-    expectEpubError(e, /不存在/)
-    expectEpubError(e, /OEBPS\/ch1\.xhtml/)
+describe('文档级锚点（真书封面页把 id 挂在 body 上）：等价于文档开头，既不降级也不拒整本', () => {
+  it('目录叶与正文内链都指 body 上的 id：目标文档在、anchorId 为 null、链接仍可点', async () => {
+    const { book, dir } = await importOf('epub3-body-anchor')
+    const inner = must(Object.values(book.documents).find((d) => d.path === 'OEBPS/text/part0009.xhtml'), '内页文档')
+    const cover = must(Object.values(book.documents).find((d) => d.path === 'OEBPS/ch1.xhtml'), '封面文档')
+    expect(inner.index).toBe(1)
+    // 目录叶：锚点语义就是「这一页的开头」，wire 里已经是 anchorId = null 的一等表达
+    expect(pick(book.items, 0).target).toEqual({ kind: 'chapter', index: inner.index, anchorId: null })
+    // 正文内链：链接**还在**（不是降级成纯文本），落点同样是文档开头
+    const links = nodesOf(await readDocument(dir, book, cover.id)).flatMap(function collect(n: ContentNode): ContentNode[] {
+      if (n.kind === 'element') return n.children.flatMap(collect)
+      if (n.kind === 'link') return [n, ...n.children.flatMap(collect)]
+      return []
+    }).filter((n): n is Extract<ContentNode, { kind: 'link' }> => n.kind === 'link')
+    expect(links.map((l) => l.target)).toEqual([{ kind: 'chapter', index: inner.index, anchorId: null }])
+    // 语义等价，不是降级：不该产生一条降级告警
+    expect(warningsOf(book).filter((w) => w.code === 'epub-degraded-anchor')).toEqual([])
+  })
+})
+
+describe('同一份文档里撞名的锚点：文档序第一个赢并留痕，不整本拒', () => {
+  it('目录指到撞名的 id：落在第一个承载它的节点，另一处照读，另有一条 trace', async () => {
+    const { book, dir } = await importOf('epub3-dup-anchor')
+    const ch1 = must(Object.values(book.documents).find((d) => d.path === 'OEBPS/ch1.xhtml'), 'ch1 文档')
+    const nodes = nodesOf(await readDocument(dir, book, ch1.id))
+    const first = pick(nodes, 0)
+    expect(first.kind).toBe('element')
+    const firstId = (first as Extract<ContentNode, { kind: 'element' }>).id
+    // 两份同名段落里绑定期认文档序第一个（树上承载它的是哪一个，是有确定答案的事实）
+    expect(pick(book.items, 0).target).toEqual({ kind: 'chapter', index: ch1.index, anchorId: firstId })
+    // 另一处不是被丢掉的：它照样作为正文读出来
+    expect(nodes).toHaveLength(2)
+    const dup = warningsOf(book).filter((w) => w.code === 'epub-duplicate-anchor')
+    expect(dup).toHaveLength(1)
+    expect(pick(dup, 0).resource).toBe('OEBPS/ch1.xhtml')
+    expect(pick(dup, 0).message).toMatch(/a/)
+  })
+})
+
+/** 资源级失败的后果：整本照读、该处不留、告警点名这张资源与精确原因（码给程序分流，message 给人看） */
+function droppedOf(book: EpubImportData): string[] {
+  return warningsOf(book).filter((w) => w.code === 'epub-image-dropped').map((w) => w.message)
+}
+
+describe('资源读不出：该处不留并点名，不再整本拒收', () => {
+  it('正文引用书外图片：这张图不留、告警点名它与出处，整本照读', async () => {
+    const { book } = await importOf('epub3-remote-image')
+    expect(book.chapters.length).toBeGreaterThan(0)
+    const dropped = warningsOf(book).filter((w) => w.code === 'epub-image-dropped')
+    expect(dropped).toHaveLength(1)
+    expect(pick(dropped, 0).resource).toMatch(/example\.invalid/)
+    expect(pick(dropped, 0).message).toMatch(/OEBPS\/ch1\.xhtml/)
+  })
+
+  it('损坏图片：不留 + 点名资源与「截断/损坏」这个原因', async () => {
+    const { book } = await importOf('epub3-broken-image')
+    const dropped = droppedOf(book).join('\n')
+    expect(dropped).toMatch(/OEBPS\/images\/fig\.png/)
+    expect(dropped).toMatch(/损坏|IEND/)
+  })
+
+  it('SVG 里的 foreignObject：不留 + 点名资源与元素', async () => {
+    const { book } = await importOf('epub3-svg-foreign-object')
+    const dropped = droppedOf(book).join('\n')
+    expect(dropped).toMatch(/foreignObject/)
+    expect(dropped).toMatch(/OEBPS\/images\/fig\.svg/)
+  })
+
+  it('SVG 里的 use 外链：不留 + 点名资源（绝不发请求）', async () => {
+    const { book } = await importOf('epub3-svg-external-use')
+    const dropped = droppedOf(book).join('\n')
+    expect(dropped).toMatch(/use/)
+    expect(dropped).toMatch(/OEBPS\/images\/fig\.svg/)
+  })
+
+  it('SVG 引用未登记的渐变：不留 + 点名资源（不改写冒充成功）', async () => {
+    const { book } = await importOf('epub3-svg-missing-gradient')
+    const dropped = droppedOf(book).join('\n')
+    expect(dropped).toMatch(/missing/)
+    expect(dropped).toMatch(/OEBPS\/images\/fig\.svg/)
+  })
+
+  it('被加密的图片：不留，原因点名「被加密」而不是「损坏」', async () => {
+    const { book } = await importOf('epub3-encrypted-image')
+    const dropped = droppedOf(book).join('\n')
+    expect(dropped).toMatch(/OEBPS\/images\/fig\.png/)
+    expect(dropped).toMatch(/加密/)
+    // 字节是被混淆的，按字节报错会把读者引去换图（那是白费力气）
+    expect(dropped).not.toMatch(/损坏/)
+  })
+
+  it('坏图带着目录引用的锚点：锚点照旧落在树上真实存在的节点，alt 文字读得出', async () => {
+    const { book, dir } = await importOf('epub3-broken-inline-image')
+    const ch1 = must(Object.values(book.documents).find((d) => d.path === 'OEBPS/ch1.xhtml'), 'ch1 文档')
+    const nodes = nodesOf(await readDocument(dir, book, ch1.id))
+    const leaf = pick(book.items, 0)
+    const anchorId = (must(leaf.target, '目录叶的目标') as Extract<ReadingTarget, { kind: 'chapter' }>).anchorId
+    // 图没了，但位置还在：绑定期不许指向树上不存在的 ID
+    expect(anchorId).not.toBeNull()
+    expect(collectIds(nodes)).toContain(anchorId as string)
+    // 这张图的说明文字照读（内容不静默消失）
+    expect(JSON.stringify(nodes)).toContain('插图说明')
+    expect(droppedOf(book).join('\n')).toMatch(/OEBPS\/images\/fig\.png/)
+  })
+})
+
+describe('文档级半径：一份文档读不出正文，不牵动整本书', () => {
+  it('只有全角空格的版权页：照样进阅读序列、章号不动、读出来是空白页、告警点名它', async () => {
+    const { book, dir } = await importOf('epub3-blank-copyright-page')
+    const cr = must(Object.values(book.documents).find((d) => d.path === 'OEBPS/copyright.xhtml'), '版权页文档')
+    expect(book.chapters).toHaveLength(2)
+    expect(cr.index).toBe(1)                       // 章号没有被「跳过」动过
+    expect(pick(book.chapters, 1).documentId).toBe(cr.id)
+    const nodes = nodesOf(await readDocument(dir, book, cr.id))
+    // 空白是可见性判据，不是空树：结构照留（锚点才有落点），文字面仍为空
+    expect(chapterContentToText({ kind: 'rich', documentId: cr.id, nodes })).toBe('')
+    const blank = warningsOf(book).filter((w) => w.code === 'epub-empty-document')
+    expect(blank).toHaveLength(1)
+    expect(pick(blank, 0).resource).toBe('OEBPS/copyright.xhtml')
+  })
+
+  it('空页保留结构树：扫描期铸出的锚点仍有落点，目录指过去不会绑到不存在的节点', async () => {
+    const { book, dir } = await importOf('epub3-blank-with-anchor')
+    const blank = must(Object.values(book.documents).find((d) => d.path === 'OEBPS/blank.xhtml'), '空页文档')
+    expect(book.chapters).toHaveLength(2)
+    const target = must(pick(book.items, 0).target, '目录叶目标') as Extract<ReadingTarget, { kind: 'chapter' }>
+    expect(target.index).toBe(1)
+    const anchorId = must(target.anchorId, '空页锚点 ID')
+    const nodes = nodesOf(await readDocument(dir, book, blank.id))
+    // 目录绑的那个锚点 ID 必须在树上真的存在——空页丢树等于把目标绑到不存在的节点
+    expect(collectIds(nodes).has(anchorId)).toBe(true)
+    expect(chapterContentToText({ kind: 'rich', documentId: blank.id, nodes })).toBe('')   // 仍是空白页
+    expect(warningsOf(book).filter((w) => w.code === 'epub-empty-document').map((w) => w.resource))
+      .toEqual(['OEBPS/blank.xhtml'])
+  })
+
+  it('整本每一份都读不出字：这时才轮到整本失败，读数说「没有任何可读的一页」', async () => {
+    const e = await importRejection('epub3-all-blank')
+    expectEpubError(e, /没有任何可读的一页/)
+    expectEpubError(e, /2 份/)
+  })
+
+  it('整本判据的原因只从主序列里取：导航可达的坏附录不替空白正文背锅', async () => {
+    const e = await importRejection('epub3-all-blank-with-bad-supplement')
+    expectEpubError(e, /没有任何可读的一页/)
+    expect(e.message).toContain('OEBPS/ch1.xhtml')
+    expect(e.message).not.toContain('OEBPS/appendix.xhtml')
+  })
+
+  it('整本每一份都解不开：原因带得出第一份与具体原因，书内位置只说一遍', async () => {
+    const e = await importRejection('epub3-all-bad')
+    expectEpubError(e, /没有任何可读的一页/)
+    expect(e.message).toMatch(/实体/)
+    // 扫描期那条动作句本身已带位置：判据再前缀一次资源名就会把同一份文档说两遍
+    expect(e.message.match(/OEBPS\/bad1\.xhtml/g)).toHaveLength(1)
+  })
+
+  it('纯插图文档读得出（图算内容）：不被空页判据误伤', async () => {
+    const { book } = await importOf('epub3-image-only')
+    expect(warningsOf(book).filter((w) => w.code === 'epub-empty-document')).toEqual([])
+  })
+
+  it('目录与正文内链指进一份读不出的文档的锚点：落该页开头，不把「没读出来」说成「锚点不存在」', async () => {
+    const { book, dir } = await importOf('epub3-nav-into-unreadable')
+    expect(book.chapters).toHaveLength(2)
+    expect(pick(book.items, 1).target).toEqual({ kind: 'chapter', index: 1, anchorId: null })
+    // 正文内链同理：目标文档在，链接仍可点，只是落点退到页首（那一页本来就是空白）
+    const ch1 = must(Object.values(book.documents).find((d) => d.path === 'OEBPS/ch1.xhtml'), 'ch1 文档')
+    const links = nodesOf(await readDocument(dir, book, ch1.id)).flatMap(function collect(n: ContentNode): ContentNode[] {
+      if (n.kind === 'element') return n.children.flatMap(collect)
+      if (n.kind === 'link') return [n, ...n.children.flatMap(collect)]
+      return []
+    }).filter((n): n is Extract<ContentNode, { kind: 'link' }> => n.kind === 'link')
+    expect(links.map((l) => l.target)).toEqual([{ kind: 'chapter', index: 1, anchorId: null }])
+    // 「这一页为什么读不出」仍然有一条痕，不会因为落点退化就静默
+    expect(warningsOf(book).filter((w) => w.code === 'epub-empty-document').map((w) => w.resource))
+      .toEqual(['OEBPS/deep.xhtml'])
+  })
+})
+
+describe('逐文档声明的半径：一份文档排不动 / 要脚本，不牵动整本书', () => {
+  it('只有封面声明固定版式：整本照读，封面按流式读并留痕，章号不动', async () => {
+    const { book } = await importOf('epub3-itemref-fxl-cover')
+    expect(book.chapters).toHaveLength(2)
+    const hit = warningsOf(book).filter((w) => w.code === 'epub-fixed-layout-document')
+    expect(pick(hit, 0).resource).toBe('OEBPS/coverpage.xhtml')
+    // 痕说的是「版式可能失真」，不是「读不出」：这一页照样有正文
+    expect(hit[0]?.message).toMatch(/失真/)
+    expect(warningsOf(book).filter((w) => w.code === 'epub-empty-document')).toEqual([])
+  })
+
+  it('只有一份文档声明 scripted：那一页落空页，同书另一章照读', async () => {
+    const { book, dir } = await importOf('epub3-itemref-scripted-cover')
+    const fx = must(Object.values(book.documents).find((d) => d.path === 'OEBPS/interact.xhtml'), '脚本页文档')
+    expect(book.chapters).toHaveLength(2)
+    expect(nodesOf(await readDocument(dir, book, fx.id))).toEqual([])
+    expect(warningsOf(book).filter((w) => w.code === 'epub-scripted-document').map((w) => w.resource))
+      .toEqual(['OEBPS/interact.xhtml'])
+  })
+
+  it('整本书只有一份 scripted 文档：这时才轮到整本判据（没有任何可读的一页）', async () => {
+    const e = await importRejection('epub3-scripted')
+    expectEpubError(e, /没有任何可读的一页/)
+    // 原因不能只剩一句泛话：整本判据按 document/fatal 取第一条，scripted 的事实要带得出来
+    expect(e.message).toContain('OEBPS/ch1.xhtml')
+    expect(e.message).toMatch(/scripted/)
+  })
+})
+
+describe('条目级半径：一条声明读不出，剪那一条并压缩阅读序列，不牵动整本书', () => {
+  it('spine 有一条指向归档里不存在的文档：其余照读、章号连续无洞、被剪的那条点名', async () => {
+    const { book, dir } = await importOf('epub3-spine-missing-entry')
+    expect(book.chapters.map((c) => c.index)).toEqual([0, 1])           // 没有洞：0 与 1 连着
+    expect(pick(book.chapters, 1).label).toBe('第三章')                  // 压缩后第三条就是第 1 章
+    const gone = Object.values(book.documents).find((d) => d.path === 'OEBPS/gone.xhtml')
+    expect(gone).toBeUndefined()
+    const pruned = warningsOf(book).filter((w) => w.code === 'epub-item-pruned')
+    expect(pruned.map((w) => w.resource)).toContain('OEBPS/gone.xhtml')
+    // 章号即数组下标：读第 1 章拿到的必须是第三章那份文档（防止下标与字段分叉）
+    const second = await readDocument(dir, book, pick(book.chapters, 1).documentId)
+    expect(shape(nodesOf(second))[0]).toEqual({ tag: 'h1', start: null, value: null, rowSpan: null, colSpan: null, children: ['第三章'] })
+  })
+
+  it('目录里有一条指向读不出的文档：只剪那一条，它的兄弟与父级照留', async () => {
+    const { book } = await importOf('epub3-nav-dead-item')
+    const group = pick(book.items, 0)
+    expect(group.label).toBe('第一卷')
+    expect(group.children.map((c) => c.label)).toEqual(['第一章'])
+  })
+
+  it('正文链接指向归档里没有的文档：那条链接降级成文字并留痕，整本照读', async () => {
+    const { book, dir } = await importOf('epub3-missing-target')
+    const ch1 = must(Object.values(book.documents).find((d) => d.path === 'OEBPS/ch1.xhtml'), 'ch1 文档')
+    const nodes = nodesOf(await readDocument(dir, book, ch1.id))
+    expect(JSON.stringify(nodes)).toContain('去哪儿')            // 文字一个字不丢
+    expect(JSON.stringify(nodes)).not.toContain('"link"')        // 只是不再可点
+    expect(warningsOf(book).map((w) => w.code)).toContain('epub-item-pruned')
+  })
+
+  it('正文链接指向 manifest 有、归档没有的文档：同一条引用级半径，整本照读', async () => {
+    const { book, dir } = await importOf('epub3-link-missing-entry')
+    const ch1 = must(Object.values(book.documents).find((d) => d.path === 'OEBPS/ch1.xhtml'), 'ch1 文档')
+    const nodes = nodesOf(await readDocument(dir, book, ch1.id))
+    expect(JSON.stringify(nodes)).toContain('去哪儿')
+    expect(JSON.stringify(nodes)).not.toContain('"link"')
+    const pruned = warningsOf(book).filter((w) => w.code === 'epub-item-pruned')
+    expect(pruned.map((w) => w.resource)).toContain('OEBPS/gone.xhtml')
+    expect(pick(pruned, 0).message).toMatch(/归档里没有/)
+  })
+
+  it('正文图片指向 manifest 有、归档没有的资源：那一处不留图，整本照读', async () => {
+    const { book, dir } = await importOf('epub3-image-missing-entry')
+    const ch1 = must(Object.values(book.documents).find((d) => d.path === 'OEBPS/ch1.xhtml'), 'ch1 文档')
+    const nodes = nodesOf(await readDocument(dir, book, ch1.id))
+    expect(JSON.stringify(nodes)).toContain('甲')
+    expect(JSON.stringify(nodes)).not.toContain('"image"')
+    expect(warningsOf(book).map((w) => w.code)).toContain('epub-image-dropped')
+  })
+})
+
+describe('章号不变量：剪掉的那一条不留洞，index 永远等于阅读数组下标', () => {
+  for (const name of ['epub3-spine-missing-entry', 'epub3-spine-non-xhtml'] as const) {
+    it(`${name}：章号连续，且目录/链接指向的 index 读回来就是那份文档`, async () => {
+      const { book, dir } = await importOf(name)
+      expect(book.chapters.map((c) => c.index)).toEqual([0, 1])
+      expect(book.chapters.every((c, i) => c.index === i)).toBe(true)
+      // 被剪的那一条不占号：第三条文档必须坐在 index 1 上
+      const third = must(Object.values(book.documents).find((d) => d.path === 'OEBPS/ch3.xhtml'), '第三章文档')
+      expect(pick(book.chapters, 1).documentId).toBe(third.id)
+      const nodes = nodesOf(await readDocument(dir, book, pick(book.chapters, 1).documentId))
+      expect(shape(nodes)[0]).toEqual({ tag: 'h1', start: null, value: null, rowSpan: null, colSpan: null, children: ['第三章'] })
+      expect(warningsOf(book).filter((w) => w.code === 'epub-item-pruned')).toHaveLength(1)
+    })
+  }
+})
+
+describe('一条引用/一份文档坏掉，不牵动整本书（安全面不放宽）', () => {
+  it('正文链接越出书根：文字照留、这一处不再可点、痕点名出处，整本照读', async () => {
+    const { book, dir } = await importOf('epub3-link-escaping')
+    const ch1 = must(Object.values(book.documents).find((d) => d.path === 'OEBPS/ch1.xhtml'), 'ch1 文档')
+    const nodes = nodesOf(await readDocument(dir, book, ch1.id))
+    expect(JSON.stringify(nodes)).toContain('逃出去的字')
+    expect(JSON.stringify(nodes)).not.toContain('"link"')
+    const pruned = warningsOf(book).filter((w) => w.code === 'epub-item-pruned')
+    expect(pruned).toHaveLength(1)
+    expect(pick(pruned, 0).resource).toBe('OEBPS/ch1.xhtml')
+    expect(pick(pruned, 0).message).toMatch(/越出书根/)
+  })
+
+  it('一份内容文档不合法：那一页落空页并带原因，同书其余章节照读（我们仍不解析坏的那份）', async () => {
+    const { book, dir } = await importOf('epub3-one-bad-document')
+    expect(book.chapters.map((c) => c.index)).toEqual([0, 1, 2])
+    const bad = must(Object.values(book.documents).find((d) => d.path === 'OEBPS/bad.xhtml'), '坏页文档')
+    expect(nodesOf(await readDocument(dir, book, bad.id))).toEqual([])
+    const blank = warningsOf(book).filter((w) => w.code === 'epub-empty-document')
+    expect(pick(blank, 0).resource).toBe('OEBPS/bad.xhtml')
+    expect(pick(blank, 0).message).toMatch(/实体/)
+    // 其余两页一个字不少
+    const third = nodesOf(await readDocument(dir, book, pick(book.chapters, 2).documentId))
+    expect(JSON.stringify(third)).toContain('第三章')
+  })
+})
+
+describe('spine 判据只有一处：包层已接纳的声明不被编排层重判', () => {
+  it('同一路径被两个 manifest id 声明：按 idref 接纳的章节照读，路径索引的后写覆盖不得再剪一次', async () => {
+    const { book, dir } = await importOf('epub3-manifest-dup-path')
+    expect(book.chapters.map((c) => c.index)).toEqual([0])
+    const nodes = nodesOf(await readDocument(dir, book, pick(book.chapters, 0).documentId))
+    expect(JSON.stringify(nodes)).toContain('第一章')
+    // 包层没剪这一条，编排层也不许补剪：整本书的剪除痕应为空
+    expect(warningsOf(book).filter((w) => w.code === 'epub-item-pruned')).toEqual([])
+  })
+})
+
+/**
+ * 半径表与后果焊在一起：每个半径键都用一份真实样本走一遍导入，断言
+ * ① 产物里那条事实的 scope/severity 与表一致；② 表声明的后果真的落在生成物上。
+ * 只改表不改执行、或只改执行不改表，都会在这里红——表不再只是注释。
+ */
+describe('半径表与后果：每个半径键都有可观察的落法', () => {
+  interface RadiusCase {
+    readonly radius: keyof typeof FINDING_RADII
+    readonly fixture: string
+    readonly code: string
+    readonly check: (book: EpubImportData, dir: string) => void | Promise<void>
+  }
+  const cases: readonly RadiusCase[] = [
+    {
+      radius: 'blankDocument', fixture: 'epub3-blank-copyright-page', code: 'epub-empty-document',
+      check: async (book, dir) => {
+        expect(book.chapters).toHaveLength(2)                         // 留空页：章号不动
+        const blank = must(Object.values(book.documents).find((d) => d.path === 'OEBPS/copyright.xhtml'), '空白页文档')
+        expect(blank.index).toBe(1)
+        const nodes = nodesOf(await readDocument(dir, book, blank.id))
+        expect(chapterContentToText({ kind: 'rich', documentId: blank.id, nodes })).toBe('')
+      },
+    },
+    {
+      radius: 'documentDegraded', fixture: 'epub3-itemref-fxl-cover', code: 'epub-fixed-layout-document',
+      check: async (book, dir) => {
+        const page = must(Object.values(book.documents).find((d) => d.path === 'OEBPS/coverpage.xhtml'), '固定版式页')
+        expect(nodesOf(await readDocument(dir, book, page.id)).length).toBeGreaterThan(0)   // 照读，只是版式可能失真
+      },
+    },
+    {
+      radius: 'itemPruned', fixture: 'epub3-spine-missing-entry', code: 'epub-item-pruned',
+      check: (book) => {
+        expect(book.chapters.map((c) => c.index)).toEqual([0, 1])     // 剪那一条：序列压缩不留洞
+        expect(Object.values(book.documents).some((d) => d.path === 'OEBPS/gone.xhtml')).toBe(false)
+      },
+    },
+    {
+      radius: 'itemNoted', fixture: 'epub-spine-linear-variant', code: 'epub-spine-linear-variant',
+      check: async (book, dir) => {
+        expect(book.chapters).toHaveLength(1)                         // 照读，不剪
+        const nodes = nodesOf(await readDocument(dir, book, pick(book.chapters, 0).documentId))
+        expect(JSON.stringify(nodes)).toContain('第一章')
+      },
+    },
+    {
+      radius: 'itemDegraded', fixture: 'epub3-missing-anchor', code: 'epub-degraded-anchor',
+      check: (book) => {
+        const leaf = pick(book.items, 0)                              // 导航条目降级到该页开头
+        expect((must(leaf.target, '目录叶目标') as Extract<ReadingTarget, { kind: 'chapter' }>).anchorId).toBeNull()
+        expect(book.chapters).toHaveLength(1)                         // 整本照读
+      },
+    },
+    {
+      radius: 'bookVariant', fixture: 'zip-baseline', code: 'epub-navigation-synthesized',
+      check: (book) => {
+        expect(book.chapters).toHaveLength(1)                         // 整本照读
+        expect(book.items.length).toBeGreaterThan(0)                  // 按 spine 合成平面目录
+      },
+    },
+    {
+      radius: 'elementDropped', fixture: 'epub3-broken-image', code: 'epub-image-dropped',
+      check: async (book, dir) => {
+        const nodes = JSON.stringify(nodesOf(await readDocument(dir, book, pick(book.chapters, 0).documentId)))
+        expect(nodes).toContain('坏图')                               // alt 文字照留
+        expect(nodes).not.toContain('"image"')                        // 该处不留图
+      },
+    },
+    {
+      radius: 'elementRemoved', fixture: 'epub3-inline-svg', code: 'epub-removed-inline-svg',
+      check: async (book, dir) => {
+        const nodes = JSON.stringify(nodesOf(await readDocument(dir, book, pick(book.chapters, 0).documentId)))
+        expect(nodes).toContain('图：')                               // 内容照读
+        expect(nodes).not.toContain('svg')                            // 这一处表达不全
+      },
+    },
+    {
+      radius: 'elementNoted', fixture: 'epub3-dup-anchor', code: 'epub-duplicate-anchor',
+      check: async (book, dir) => {
+        const nodes = JSON.stringify(nodesOf(await readDocument(dir, book, pick(book.chapters, 0).documentId)))
+        expect(nodes).toContain('甲')                                 // 两处都照读
+        expect(nodes).toContain('又一个甲')
+        const leaf = pick(book.items, 0)                              // 承载者取文档序第一个
+        expect((must(leaf.target, '目录叶目标') as Extract<ReadingTarget, { kind: 'chapter' }>).anchorId).not.toBeNull()
+      },
+    },
+  ]
+  for (const c of cases) {
+    it(`${c.radius}（${FINDING_RADII[c.radius].scope}/${FINDING_RADII[c.radius].severity}）：表声明的后果落在产物上`, async () => {
+      const { book, dir } = await importOf(c.fixture)
+      const hit = book.findings.find((f) => f.code === c.code)
+      expect(hit, `样本 ${c.fixture} 没有发出 ${c.code}`).toBeDefined()
+      expect(hit?.scope).toBe(FINDING_RADII[c.radius].scope)
+      expect(hit?.severity).toBe(FINDING_RADII[c.radius].severity)
+      await c.check(book, dir)
+    })
+  }
+
+  it('半径表的每一格都有样本：加一格不补样本即红（「每个半径键都有可观察的落法」不是自称）', () => {
+    expect(cases.map((c) => c.radius).sort()).toEqual((Object.keys(FINDING_RADII) as Array<keyof typeof FINDING_RADII>).sort())
   })
 })

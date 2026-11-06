@@ -6,12 +6,13 @@ import iconv from 'iconv-lite'
 import { chapterContentToText } from '../../src/services/chapter-content.js'
 import { EpubImportError } from '../../src/services/epub/errors.js'
 import type { EpubChapterRef, EpubDocumentRef, EpubResourceRef } from '../../src/services/epub/import.js'
+import type { FindingEntry } from '../../src/services/epub/findings.js'
 import {
   LocalArtifactNotFoundError, LocalBooks, LocalFileTooLargeError, LocalImportError, decodeLocalText, isLocalBookKey, splitChapters,
 } from '../../src/services/localbooks.js'
 import { IMAGE_SAMPLES, makeEpubFixture } from '../fixtures/epub.js'
 import { makeTempDir } from '../temp-dir.js'
-import { pick } from '../support/fixture.js'
+import { must, pick } from '../support/fixture.js'
 
 /** 落盘顶层元数据在测试侧的读面：形状主人是 `localbooks.ts` 的 `LocalEpubMeta`（未导出），
  *  这里只声明断言真正碰到的那几格，多一个字段都不放开。 */
@@ -25,7 +26,9 @@ interface PublishedEpubMeta {
   documents: Record<string, EpubDocumentRef>
   resources: Record<string, EpubResourceRef>
   navigation: Array<{ label: string; target: unknown }>
-  warnings: unknown[]
+  /** 落盘的是事实清单；`warnings` 是同一份事实的投影（新书也写，供旧版本读面降级时显示） */
+  findings?: FindingEntry[]
+  warnings?: Array<{ code: string }>
 }
 
 describe('decodeLocalText', () => {
@@ -103,6 +106,18 @@ describe('LocalBooks', () => {
     expect(toc.map((c) => c.name)).toEqual(['正文', '第1章 起', '第2章 续'])
     expect(await lb.getChapter(r.bookKey, 1)).toBe('内容一')
     expect(await lb.getChapter(r.bookKey, 2)).toBe('内容二')
+  })
+
+  it('文件名兜底标题剥末级扩展名（TXT 与 EPUB 同一条收口）', async () => {
+    const { lb } = await mk()
+    const md = await lb.import(Buffer.from('第1章 起\n正文', 'utf8'), 'note.md')
+    expect(md.title).toBe('note')
+    const dotted = await lb.import(Buffer.from('第1章 起\n正文', 'utf8'), '三体.第二部.txt')
+    expect(dotted.title).toBe('三体.第二部')
+    // EPUB 侧同一条收口：OPF 没有书名时，兜底名也只能剥掉末级扩展名
+    const epub = await lb.import(makeEpubFixture('epub3-no-title'), '三体.第二部.epub')
+    expect(epub.format).toBe('epub')
+    expect(epub.title).toBe('三体.第二部')
   })
 
   it('meta 在书级缓存：章节读取不再重解析；删书后缓存失效', async () => {
@@ -352,7 +367,18 @@ describe('EPUB 发布、重启读取与资源读口', () => {
     // 资源：共享插图与封面是同一份（按书内路径去重），字节数就是落盘字节数
     expect(meta.resources).toEqual({ r0: { id: 'r0', file: 'resources/r0.png', mediaType: 'image/png', bytes: IMAGE_SAMPLES.png.length, width: 2, height: 3 } })
     expect(meta.navigation[0]).toMatchObject({ label: '第一卷', target: null })
+    expect(meta.findings).toEqual([])
+    // 新书同时落一份投影给旧版本读面；读面仍以 findings 为准（同一份事实，不是第二本账）
     expect(meta.warnings).toEqual([])
+  })
+
+  it('降级书的元数据同时带 findings 与 warnings 投影：旧版本读面降级时仍有导入说明', async () => {
+    const { lb, dir } = await mk()
+    const r = await lb.import(makeEpubFixture('epub3-inline-svg-anchor'), '降级.epub')
+    const id = r.bookKey.slice('local:'.length)
+    const meta = JSON.parse(await fs.readFile(path.join(dir, 'local', `${id}.json`), 'utf8')) as PublishedEpubMeta
+    expect(meta.findings?.map((f) => f.code)).toContain('epub-degraded-anchor')
+    expect(meta.warnings?.map((w) => w.code)).toContain('epub-degraded-anchor')
   })
 
   it('重启读取：图文正文/导航树/补充文档/资源流都从落盘产物读出，且图文与文字共用同一内容', async () => {
@@ -428,6 +454,34 @@ describe('EPUB 发布、重启读取与资源读口', () => {
     const again = await LocalBooks.create(dir)
     expect(await again.getImportWarnings(r.bookKey)).toEqual(r.warnings)
   })
+
+  it('旧书元数据只有投影那一版：读面照旧给痕，不静默变成「没有告警」', async () => {
+    const { lb, dir } = await mk()
+    const legacyId = '33333333-3333-4333-8333-333333333333'
+    await fs.mkdir(path.join(dir, 'local', legacyId), { recursive: true })
+    await fs.writeFile(path.join(dir, 'local', `${legacyId}.json`), JSON.stringify({
+      schemaVersion: 2, format: 'epub', title: '旧书', author: null, originalName: 'old.epub', importedAt: 1,
+      chapters: [], documents: {}, resources: {}, navigation: [],
+      // 落盘形状改成事实之前的那一版：直接把拼好的句子存了下来
+      warnings: [{ code: 'epub-degraded-anchor', resource: 'OEBPS/ch1.xhtml', message: '导航目标锚点随被剥离的内容一起消失，已降级到该文档开头：OEBPS/ch1.xhtml#gone' }],
+    }))
+    const got = await lb.getImportWarnings(`local:${legacyId}`)
+    expect(got).toHaveLength(1)
+    expect(pick(got, 0).code).toBe('epub-degraded-anchor')
+  })
+
+  it('新书落盘的是拆开的事实清单：半径与处数在盘上，重看走同一份投影（动作句取自导入那一刻）', async () => {
+    const { lb, dir } = await mk()
+    const r = await lb.import(makeEpubFixture('epub3-inline-svg-anchor'), '降级.epub')
+    const id = r.bookKey.slice('local:'.length)
+    const meta = JSON.parse(await fs.readFile(path.join(dir, 'local', `${id}.json`), 'utf8')) as PublishedEpubMeta
+    const degraded = must((meta.findings ?? []).find((f) => f.code === 'epub-degraded-anchor'), '落盘的降级事实')
+    expect(degraded.scope).toBe('item')            // 半径在盘上，只是不外泄上 wire
+    expect(degraded.severity).toBe('degraded')
+    expect(degraded.count).toBeGreaterThan(0)
+    const again = await LocalBooks.create(dir)
+    expect(await again.getImportWarnings(r.bookKey)).toEqual(r.warnings)
+  })
 })
 
 /**
@@ -479,5 +533,87 @@ describe('删一本正在被读的书（资源句柄 × 落盘收尾顺序）', 
     res.stream.destroy()
     await lb.remove(r.bookKey)
     expect(await fs.readdir(path.join(dir, 'local'))).toEqual([])
+  })
+})
+
+describe('本地文件的终点判据：坏字节不许冒充可读文本', () => {
+  const mk = async (): Promise<LocalBooks> => {
+    const dir = await makeTempDir('novel-lb-gate-')
+    return LocalBooks.create(dir)
+  }
+
+  it('文件头被清零的坏归档：解码里有空字符即拒，点名原因，不再报「1 章导入成功」', async () => {
+    const lb = await mk()
+    // 名字刻意不声明 .epub：声明名规则在解码之前就先答「内容不是 ZIP」，这条钉的是解码终点的断言
+    const buf = Buffer.concat([Buffer.alloc(32), Buffer.from([0x14, 0x22, 0x45, 0x66]), Buffer.alloc(2048)])
+    const err = await lb.import(buf, 'spider-8.bin').catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(LocalImportError)
+    expect((err as Error).message).toMatch(/空字符/)
+    expect((err as Error).message).not.toMatch(/成功/)
+  })
+
+  it('文件头被清零的 EPUB（64 个 0x00 + 正常 ZIP 字节）：按声明名拒收，不落成 1 章乱码', async () => {
+    const lb = await mk()
+    // 形状取自真实样本：前 64 字节全零，后面仍是正常归档；名字声明 .epub。
+    // 入口的「声明是 EPUB 而内容没有 ZIP 本地头」先答，不能让它落进 TXT 链。
+    const buf = Buffer.concat([Buffer.alloc(64), makeEpubFixture('epub2-basic')])
+    await expect(lb.import(buf, 'spider-8.epub')).rejects.toThrow(/声明是 EPUB/)
+  })
+
+  it('整本只剩空白的 TXT：拒——「1 章正文」是冒充成功，不是读数', async () => {
+    const lb = await mk()
+    await expect(lb.import(Buffer.from('   \n\t  \n　  ', 'utf8'), 'blank.txt'))
+      .rejects.toThrow(/没有可读的内容|空白/)
+  })
+
+  it('GBK 短篇带 ESC/BEL 之类控制字符但没有 NUL：照旧导入成功', async () => {
+    // ADR-0014 的防回归钉：被否的是「对一切非 UTF-8 字节判拒」的全量启发式，
+    // 现网真有这种导出 TXT——拒掉它比偶尔一本乱码书更坏
+    const lb = await mk()
+    const gbk = Buffer.concat([iconv.encode('第1章 起\n内容一\x1b\x07内容二', 'gbk')])
+    const r = await lb.import(gbk, 'legacy.txt')
+    expect(r.format).toBe('txt')
+    expect(r.chapterCount).toBe(1)
+    expect(r.encoding).toBe('gbk')
+  })
+
+  it('%PDF- 与 BOOKMOBI 具名魔数：明确拒收并点名是哪一种容器（不再落成一本乱码书）', async () => {
+    const lb = await mk()
+    const pdf = Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.from('%\xe2\xe3\xcf\xd3\n'), Buffer.alloc(512)])
+    await expect(lb.import(pdf, 'scan.pdf')).rejects.toThrow(/PDF/)
+    // 具名魔数在声明名之前判：同一份 PDF 声明成 .epub，报的仍是 PDF 而不是「声明是 EPUB」
+    await expect(lb.import(pdf, 'scan.epub')).rejects.toThrow(/PDF/)
+    // 内容赢：名字写成 .txt 也不许把纯文本型 PDF 当 TXT 吞掉
+    await expect(lb.import(pdf, 'scan.txt')).rejects.toThrow(/PDF/)
+    const pdb = Buffer.alloc(168)
+    pdb.write('BOOKMOBI', 60, 'ascii')
+    pdb.write('Some Title\u0000\u0000'.slice(0, 32), 0, 'latin1')
+    await expect(lb.import(pdb, 'mobi-book.mobi')).rejects.toThrow(/MOBI/)
+  })
+
+  it('UMD 容器头：明确拒收并点名 UMD（不再落成一本乱码书）', async () => {
+    const lb = await mk()
+    const umd = Buffer.concat([Buffer.from([0x89, 0x9b, 0x9a, 0xde]), Buffer.from('UMD 样本正文')])
+    await expect(lb.import(umd, 'book.umd')).rejects.toThrow(/UMD/)
+  })
+
+  it('声明是 EPUB 而内容不是 ZIP：拒收并指路改回 .txt；内容与声明不符不得静默入架', async () => {
+    const lb = await mk()
+    const html = Buffer.from('<html><body><p>登录已过期</p></body></html>', 'utf8')
+    await expect(lb.import(html, 'x.epub')).rejects.toThrow(/声明是 EPUB/)
+    await expect(lb.import(html, 'x.EPUB')).rejects.toThrow(/改回 \.txt/)
+  })
+
+  it('真 EPUB 命名成 .txt：内容赢，仍按 EPUB 入架', async () => {
+    const lb = await mk()
+    const r = await lb.import(makeEpubFixture('epub2-basic'), 'renamed.txt')
+    expect(r.format).toBe('epub')
+  })
+
+  it('ZIP 签名的真 EPUB 仍走 EPUB 路径（分流判据一字不动）', async () => {
+    const lb = await mk()
+    const r = await lb.import(makeEpubFixture('epub3-rich'), 'good.epub')
+    expect(r.format).toBe('epub')
+    expect(r.chapterCount).toBeGreaterThan(0)
   })
 })

@@ -74,8 +74,18 @@ describe('本地书路由', () => {
     expect(tooBig.status).toBe(413)
     const body = await errorOf(tooBig)
     // 本套件的上限是 1KB（亚 MiB）：文案必须说 KB，不能四舍五入成「0MB」
-    expect(body.message).toBe('文件超过 1KB 上限')
+    expect(body.message).toMatch(/^文件超过 1KB 上限/)
     expect(body.message).not.toContain('0MB')
+    // 超限是配置边界，不是坏文件：报错要把可调的那一项交到用户手上（键名与设置页称呼都要在）
+    expect(body.message).toContain('localImportMaxBytes')
+    expect(body.message).toContain('本地文件导入上限')
+    // 读数：超限是在请求体还在上传时答的，客户端拿到的是可解析的 413 信封而不是断连
+    expect(body.code).toBe('PayloadTooLarge')
+  })
+  it('声明 .epub 而内容非 ZIP → 400 且原样透出原因', async () => {
+    const r = await importTxt('<html><body>nope</body></html>', 'fake.epub')
+    expect(r.status).toBe(400)
+    expect((await errorOf(r)).message).toMatch(/声明是 EPUB/)
   })
   it('DELETE /local → 删文件 + 书架条目消失', async () => {
     const book = await valueOf<LocalImportResponse>(await importTxt(TXT, 'd.txt'))

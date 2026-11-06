@@ -101,11 +101,16 @@ $env:DSH_EPUB_BROWSER='1'; pnpm vitest run tests/browser/epub-reader.test.ts
 $env:DSH_EPUB_BROWSER='1'; pnpm vitest run tests/browser/city-sheet-layout.test.tsx
 # 插件页「运行参数」的行几何：量单位后缀是否真在框内、数字框是否被限宽、窄档折不折得干净
 $env:DSH_EPUB_BROWSER='1'; pnpm vitest run tests/browser/config-page-layout.test.tsx
+
+# EPUB 真语料审计（离线，读本机目录）：逐本 importEpub → 按结局与痕码分桶，报告落 .superpowers/epub-corpus/
+# 语料目录 = $env:DSH_EPUB_CORPUS_DIR（缺省 `$DSH_HOME/novel/corpus/`）；**语料不入库**，默认门不依赖任何下载
+$env:DSH_EPUB_CORPUS='1'; pnpm vitest run tests/services/epub-corpus-audit.test.ts
 ```
 
 - **采集三条实践口径**：出站与生产同口径（走 `resolveProxyUrl`：config > 环境变量 > 系统代理 > 直连，缺这条会把反爬壳页采成「正文为空」）；manifest 的键是**请求 URL**而非重定向后的落地地址（搜索类源常「POST 出去、302 落到结果页」）；站点会抖，**别删已采好的 fixture**，重采会覆盖、删除只会让你重新赌一次站点脸色。落盘的是生产解码链读到的文本（`decodeBody`：声明 charset → content-type → `<meta>` 嗅探），GBK 页才存成真中文。
 - **脱敏是门禁**：`tests/replay/sanitize.ts` 在写盘前扫 cookie / token / password / authorization / apiKey 与 `Authorization: Bearer …` 形态（判据住该文件头注），`tests/replay/sanitize.test.ts` 钉住它。自动脱敏**是兜底不是证明**，入库前仍要人工过目。
 - **`DSH_EPUB_BROWSER` 允许带按应有口径写的「诚实红」**：已知缺陷的读数不削成绿，缺陷与读数登记在该测试文件自己的注释里；修好时按那条记录一起撤下。
+- **`DSH_EPUB_CORPUS` 是审计报告，不是通过率门**：唯一断言是审计自洽（每本都得出结局、被拒的每本都带得出原因骨架）；通过率、痕码分布、被拒原因分桶靠人判，红即工具坏。**它不证明**出版物写得规范，也不证明现网可得的 EPUB 总体质量——分母永远是那个目录里的文件。语料的合法来路：公版书（Project Gutenberg / archive.org 的公版条目）、外部反馈者**裁到最小**的样本（只落本机语料目录，不入库、不重分发），以及用 Calibre 把公版书自转出来的同族写法；要把某个真实形状钉进**默认门**，做法是把它提炼进 `tests/fixtures/epub.ts` 的合成表（真字节不入库）。
 
 **解析面普查（离线，读本地书源库）**——「legado 能解析的书源本插件也能解析」这条目标的进度读数口：把现库**每一条规则串**过 `parseRule`、把**每一个脚本里的 `java.*` 调用**与沙箱实际挂载面对账，输出「本仓拒绝的语法族」「脚本在调而桥没挂的方法」两张清单，并断言**未在册的新形态 = 0**；同时印一张**需求读数表**（登记册那些「N 源带值」的读数，矩阵行 `demand` 绑定的键由这一条命令重算，判据印在数字旁边——同一个键常有两种数法）。
 

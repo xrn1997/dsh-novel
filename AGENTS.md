@@ -33,6 +33,7 @@ DeepSeek Harness（DSH）的「小说」插件：导入 legado 书源 → 聚合
 - **wire 单点**：路由名、值形状与写路由的 body 形状（构造器 + 读口）只住 `src/shared/wire.ts`，Node 半与浏览器半消费同一份（`src/client/views/types.ts` 只是再导出桶）。
 - **书目字段集**：加 / 改书架元数据字段 = 改 `shared/wire.ts` 的 `SHELF_META` + `pickShelfMeta`；工具面投影的覆盖由 `tools/shelf-item.ts` 的编译期断言逼你选投影或排除，别在各处写逐字段 `typeof` 筛键的抄本。
 - **宁炸不猜**：认不出的规则语法在**解析期**抛 `UnsupportedRuleError`，带段级定位；空结果冒充失败是本仓定的最高罪。判「不适用」而不写理由，等于把裁决写成遗忘：理由写进矩阵那一行的 `note`。
+- **失败半径等于判据的主语**：一份文档 / 一条声明 / 一处资源读不出，后果只能作用在那一格（留空页、剪那一条、该处不留），**每格都留痕**；半径与后果的判据只住一张表（`services/epub/findings.ts` 的 `FINDING_RADII`）：`item` 级剪除由 `services/epub/package.ts` 的 `parseSpine` / `pruneDeadTargets` 执行，其余后果由 `services/epub/import.ts` 执行；痕按名字发、调用点填不了。整本拒收只留给书级事实（容器与包文档读不出、主序列一份可读的都没有、声明了封面却读不出等，清单见 `ADR-0061`），且只经 `services/epub/errors.ts` 的 `rejectBook` / `bookError` 两个具名出口出来；名册按文件记这两个出口符号的处数、只减不增，净增一处整本拒收要写 ADR（`ADR-0061` 判据、`ADR-0063` 携带机制；门 `tests/services/epub-failure-radius.test.ts`）。
 - **取值规约**：取位失败 → Miss、解析到空集合 → 空 List，两种值绝不折叠；唯一实现 `src/engine/select.ts` 的 `reducePicked`。
 - **纯度门**：`src/client/**` 的运行时 import 只能来自平台模块表；`src/shared/wire.ts` 保持零运行时依赖（它被 inline 进 client bundle）。构建成败由 `tsdown.config.ts` 的 `dsh-novel-bundle-purity` 把住，改平台模块表要对着宿主发布物重读，别凭记忆。
 - **兼容性事实单源**：宿主兼容窗口与真机名单的事实源是 `package.json`；README 与徽章是投影，文档门校验。

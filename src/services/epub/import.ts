@@ -1,17 +1,20 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { Element } from 'domhandler'
-import type { ChapterContent, ContentNode, LocalImportWarning, NavigationItem, ReadingTarget } from '../../shared/wire.js'
+import type { ChapterContent, ContentNode, NavigationItem, ReadingTarget } from '../../shared/wire.js'
 import { DEFAULT_EPUB_LIMITS, openEpubArchive, type EpubArchive, type EpubLimits } from './archive.js'
-import { containerNode, convertXhtml, documentTitle, scanXhtml, svgOnlyPageReason, type SvgOnlyPage } from './documents.js'
-import { EpubWarningLog } from './warnings.js'
-import { EpubImportError } from './errors.js'
 import {
-  epubBaseName, readEpubPackage, resolveEpubHref,
+  containerNode, convertXhtml, documentTitle, scanXhtml,
+  EMPTY_SVG_ONLY_ACTION, WARN_EMPTY_DOC, type ConvertedXhtml, type SvgOnlyPage, type XhtmlScan,
+} from './documents.js'
+import { FindingLog, WARN_ITEM_PRUNED, type FindingEntry } from './findings.js'
+import { EpubDocumentError, EpubHrefError, EpubResourceError, rejectBook } from './errors.js'
+import {
+  epubBaseName, readEpubPackage, resolveEpubHref, XHTML_MEDIA_TYPE,
   type EpubHref, type EpubManifestItem, type EpubNavItem,
 } from './package.js'
 import { soleRasterHref, SVG_MEDIA_TYPE, validateImage } from './resources.js'
-import { decodeEpubXml, parseXml, xmlBudget, type XmlLimits } from './xml.js'
+import { decodeEpubXml, parseXml, xmlBudget, type XmlBudget, type XmlLimits } from './xml.js'
 
 /**
  * 导入编排：把一份 EPUB 字节变成「只有规范化文档与已验证资源」的指定目录 + 一份索引（`EpubImportData`）。
@@ -33,34 +36,43 @@ import { decodeEpubXml, parseXml, xmlBudget, type XmlLimits } from './xml.js'
  *
  * ① **章按 spine 主序列**，补充文档（脚注/附录）可打开但不计章；只有**可达**的补充文档才解析
  *    （导航或书内链接指到的），未使用的 manifest 条目不要求受支持。
- * ② **失效目标一律失败**：导航/正文链接指到的文档与锚点必须真的存在（坏目标不冒充成功），
- *    重复锚点在扫描期就报错，远程图片与损坏/超预算/**被加密**（原因必须点名加密，不许按混淆字节
- *    说成「损坏」）的图片让导入失败并点名资源。
- *    **唯一例外**：锚点存在过、却随**被剥离的内容**一起不在树上了（口径见 `documents.ts` 头注③④）
- *    ——那是**我们自己**剥掉了承载它的图形，不是「没有目标」，所以走降级 + 告警
- *    （`epub-degraded-anchor`）：**导航目标**降级成「该文档 + 无片段」（跳到文档开头），
- *    **正文内链**降级成纯文本。两者告警都点名文档与锚点。拼写错、指向从未存在的 id 仍拒收：
- *    降级只认「被剥离的内容里确实有过这个名字」。
- * ③ **被剥除的活动内容只记告警**（丢了什么看得见），**可见图形不支持则报错**——两者不是一回事。
- *    例外是正文内联 SVG：剥离 + 告警，只有它是该文档唯一内容时才报错（理由见 `documents.ts` 头注③）。
+ * ② **后果按半径表导出**（唯一主人在 `findings.ts` 的 `FINDING_RADII`，本层只执行不重述）：
+ *    一份文档读不出→留空页，一条声明或引用读不出→剪那一条，一处元素读不出→该处不留，
+ *    每格都留痕。**整本拒只有一条路**：`services/epub/errors.ts` 的 `rejectBook`，它留给容器入口与包文档读不出、
+ *    主序列被剪到空、声明了封面却读不出这类书级事实（裁决见 `ADR-0061`）。
+ *    锚点找不到——随被剥离的内容一起消失、或从未存在过——不是坏书，是**那一条引用**降级：
+ *    导航目标降到「该文档 + 无片段」、正文内链降级成纯文本，各留一条 `epub-degraded-anchor`，
+ *    动作句分开写，好让用户分清是我们剥掉了承载它的内容还是书本身指错了名字；
+ *    body 上的文档级锚点等价于「无片段」，不降级也不告警。
+ * ③ **被剥除的活动内容只记痕**（丢了什么看得见）；**一处可见图形读不出也只是那一处不留**
+ *    （坏图、不支持的格式、被加密、指向书外——痕点名这张图与原因），整页只有内联 SVG 又落不下
+ *    时那一页是空的（理由见 `documents.ts` 头注③）。同一份文档在扫描期、转换期或资源期读不出，
+ *    落法都一样：章号不动、目录照有名、痕点名为什么读不出（半径由主语定，不由哪一步被 try 包住定）。
  */
-
-/** 认得的正文媒体类型（唯一一项）：spine 或链接指向别的类型即「不是可读正文」 */
-const XHTML_MEDIA_TYPE = 'application/xhtml+xml'
 
 /** 不可跟随 scheme：这些 href 不是「外站链接」而是活动/本机资源引用，同样只留文字 */
 const UNFOLLOWABLE_SCHEMES: ReadonlySet<string> = new Set(['javascript', 'vbscript', 'data', 'file', 'about', 'chrome', 'blob'])
 
 const WARN_UNFOLLOWABLE = 'epub-link-not-followable'
 const WARN_EXTERNAL_LINK = 'epub-external-link'
-/** 目标锚点随被剥离的内容一起消失（我们自己剥的）：导航降级到文档开头、内链降级成纯文本 */
+/** 目标锚点不可达（随被剥离的内容一起消失，或从未存在过）：导航降级到文档开头、内链降级成纯文本 */
 const WARN_DEGRADED_ANCHOR = 'epub-degraded-anchor'
+/** 同一份文档里同名锚点出现多处：承载者取文档序第一个，另一处照旧读得出——只留痕，不拒书 */
+const WARN_DUP_ANCHOR = 'epub-duplicate-anchor'
+/** 一张资源图读不出来：那一处不留（alt 文字与锚点位置照留），告警点名这张资源与精确原因 */
+const WARN_IMAGE_DROPPED = 'epub-image-dropped'
 /** 整页只有一棵内联 SVG 的图形页（EPUB3 推荐的封面写法）：按其内唯一一张书内图导成一图章节 */
 const WARN_SVG_IMAGE_PAGE = 'epub-svg-image-page'
 
-/** 降级告警的两种动作文案（同码不同动作 → 各自成条：导航降级与内链降级是两件不同的事） */
+/**
+ * 降级告警的四种动作文案：同码不同动作各成一条（导航降级与内链降级是两件不同的事）。
+ * 两对之间的分寸：「随被剥离的内容一起消失」说的是我们自己剥掉了承载它的内容，「在文档里不存在」
+ * 说的是书的目录或链接本身指错了名字——同一条痕码，用户要靠这句话分清是哪一种。
+ */
 const DEGRADED_NAV = '导航目标锚点随被剥离的内容（内联 SVG 等）一起消失，已降级到该文档开头'
 const DEGRADED_LINK = '正文链接的目标锚点随被剥离的内容（内联 SVG 等）一起消失，已降级成纯文本'
+const MISSING_NAV = '导航目标锚点在文档里不存在，已落到该文档开头'
+const MISSING_LINK = '正文链接的目标锚点在文档里不存在，已降级成纯文本'
 
 /** 主序列阅读单元：`index` 就是章号（补充文档不在这个表里） */
 export interface EpubChapterRef {
@@ -74,7 +86,7 @@ export interface EpubChapterRef {
 export interface EpubDocumentRef {
   readonly id: string
   readonly file: string
-  /** 在主序列里的章号；补充文档为 null */
+  /** 在阅读序列里的章号（被剪的条目不占号，读不出正文的页照旧占号）；补充文档为 null */
   readonly index: number | null
   readonly label: string
   /** 文档在原书里的逻辑名（书内位置，离书即无意义）：排障与告警点名用，不是磁盘路径 */
@@ -106,7 +118,11 @@ export interface EpubImportData {
   readonly resources: Readonly<Record<string, EpubResourceRef>>
   /** 封面资源 ID；无封面是 null（无封面不是失败） */
   readonly coverResourceId: string | null
-  readonly warnings: readonly LocalImportWarning[]
+  /**
+   * 导入过程记下的**事实**清单（半径、处数与例子都在里面）：给谁看、说什么语言由读面投影
+   * （`services/epub/findings.ts` 的 `warningListOf`），不在这里定死——落盘的是事实，投影随时可以重做。
+   */
+  readonly findings: readonly FindingEntry[]
 }
 
 /** 导入期唯一 ID 铸造器：四个命名空间各一条序列（`d`文档 / `n`节点 / `a`锚点 / `r`资源） */
@@ -133,6 +149,15 @@ interface ScannedDocument {
   readonly anchors: ReadonlyMap<string, string>
   /** 随被剥离的子树（内联 SVG、活动内容）一起消失的锚点名：目标绑定期据此降级（口径见头注②） */
   readonly strippedAnchors: ReadonlySet<string>
+  /** 挂在 body 上的 id：等价于「该文档 + 无片段」，绑定期不降级也不告警（见 `XhtmlScan`） */
+  readonly documentAnchor: string | null
+  /** 同名锚点撞在多处的那些名字：只用来留痕（承载者是文档序第一个） */
+  readonly duplicates: readonly string[]
+  /**
+   * 这一份文档的正文读不读得出（解码 / 结构 / DOM 预算，或包层声明它排不动）。
+   * `false` 时锚点表是无从建立的：绑定期不许把「我们没读出来」当成「这个名字不存在」（见 `lookupAnchor`）。
+   */
+  readonly readable: boolean
   readonly links: readonly string[]
   readonly images: readonly string[]
 }
@@ -163,51 +188,129 @@ async function orchestrate(archive: EpubArchive, outputDir: string, limits: Part
   const domLimits: XmlLimits = { depth: budget.xmlDepth, nodes: budget.xmlNodes }
   const pkg = await readEpubPackage(archive, limits)
   const ids = new IdMinter()
-  const warnings = new EpubWarningLog()
-  // 包层的告警先入池（同码同文合并的第二处入口：包层的告警已经是成句文案，原样带过）
-  for (const w of pkg.warnings) warnings.add(w.code, w.resource, w.message)
+  const warnings = new FindingLog()
+  /** 低层交回的事实清单入池：处数照加、例子各留前三（本层是唯一持有可变账本的地方） */
+  const merge = (list: readonly FindingEntry[]): void => {
+    for (const entry of list) warnings.addEntry(entry)
+  }
+  // 包层交出的事实先入池（它自带半径，编排层不重述包层的码）
+  merge(pkg.findings)
 
+  /** 一份正文文档的预算：`what` 就是它的书内逻辑名，主语声明成 content —— 这一份读不出归这一页 */
+  const contentBudget = (docPath: string): XmlBudget => xmlBudget(docPath, domLimits, 'content')
+
+  /**
+   * 读一份**内容文档**：解码、静态闸门、解析与 DOM 预算全按预算声明的主语失败（`EpubDocumentError`），
+   * 所以扫描期与转换期撞上的读不出是同一格后果，不需要在这一层再换个类重披。
+   * 归档层连字节都取不出仍抛书级——那是容器级事实（`archive.ts` 的口径）。
+   */
+  const readXhtml = async (docPath: string, docBudget: XmlBudget): Promise<Element> =>
+    parseXml(decodeEpubXml(await archive.read(docPath, budget.xmlBytes), docBudget), docBudget)
+
+  // 同一路径被两个 id 声明时，路径索引只认**先声明**的那一条：spine 的接纳按 idref 各自判
+  // （`package.ts` 的 `parseSpine`），后写覆盖会让同一份文件在读面换一种媒体类型——判据的第二份抄本。
   const manifestByPath = new Map<string, EpubManifestItem>()
-  for (const item of pkg.manifest.values()) manifestByPath.set(item.path, item)
+  for (const item of pkg.manifest.values()) if (!manifestByPath.has(item.path)) manifestByPath.set(item.path, item)
+  // manifest 写得出路径不等于归档里真有这份文件：缺条目是包层就判得出的事实，
+  // 不能拖到 archive.read 才变成整本拒——spine 与目录已先剪，正文链接也要落在同一条半径上
+  const archiveNames = new Set(archive.entries.map((entry) => entry.name))
 
   // ── 第一遍：文档集合、锚点映射、链接与图片清点 ──────────────────────────────
   const docs = new Map<string, ScannedDocument>()
   const queue: string[] = []
-  const enqueue = async (docPath: string, index: number | null, context: string): Promise<void> => {
-    if (docs.has(docPath)) return
-    const item = manifestByPath.get(docPath)
-    if (item === undefined) throw new EpubImportError(`${context}指向 manifest 里没有的文档：${docPath}`)
-    // media-type 的比对只需相等判定：包层在读 manifest 时已归一小写并去掉参数（唯一实现在 package.ts）
-    if (item.mediaType !== XHTML_MEDIA_TYPE) {
-      throw new EpubImportError(`${context}指向的不是 XHTML 文档（media-type=${item.mediaType}）：${docPath}`)
-    }
-    const root = await readXhtml(archive, docPath, budget, domLimits)
-    const budgetOfDoc = xmlBudget(docPath, domLimits)
-    const scan = scanXhtml(root, budgetOfDoc, () => ids.anchor())
+  /** 收一份读不出的文档（空页）：锚点表无从建立，供绑定期区分「没这个锚点」与「这份没读出来」 */
+  const enqueueBlank = (docPath: string, index: number | null): true => {
     docs.set(docPath, {
-      id: ids.document(), path: docPath, index,
-      label: documentTitle(root, budgetOfDoc) ?? epubBaseName(docPath),
-      anchors: scan.anchors, strippedAnchors: scan.strippedAnchors, links: scan.links, images: scan.images,
+      id: ids.document(), path: docPath, index, label: epubBaseName(docPath), readable: false,
+      anchors: new Map(), strippedAnchors: new Set(), documentAnchor: null, duplicates: [], links: [], images: [],
     })
+    queue.push(docPath)
+    return true
+  }
+
+  /**
+   * 把一份**已确定可以收**的文档收进阅读面：读数、建锚点表、入队。
+   *
+   * 这里**不判断**「这条引用能不能落到一份可读的 XHTML 文档上」——那个判断归引用方：
+   * 主序列已由包层 `parseSpine` 判过（缺 idref / 不在 manifest / 归档里没有 / 非 XHTML 都在那里剪），
+   * 导航与正文链接走下面的 `enqueue`，由它们各自按引用级半径处理。收不出正文的页照样进阅读序列。
+   */
+  const collect = async (docPath: string, index: number | null): Promise<void> => {
+    if (docs.has(docPath)) return
+    // 包层声明「这一份读不出」（scripted：读端不执行书内脚本）：痕已由包层记过，这里连解析都不做。
+    // 解析它不是「多读一点」——它会把一份读不出的页的锚点表建起来，绑定期就会把名字绑到树上不存在的节点
+    if (pkg.unreadableSpineDocs.has(docPath)) { enqueueBlank(docPath, index); return }
+    let root: Element
+    let scan: XhtmlScan
+    let title: string | null
+    const budgetOfDoc = contentBudget(docPath)
+    try {
+      root = await readXhtml(docPath, budgetOfDoc)
+      title = documentTitle(root, budgetOfDoc)
+      scan = scanXhtml(root, budgetOfDoc, () => ids.anchor())
+    } catch (e) {
+      // 这一份解不开（声明与内容不符、不是良构 XML、超 DOM 预算）：它是一页读不出的正文，
+      // 不是一本书读不出——照留章号与目录名，落空页，并把原因点名（安全面不变：我们仍不解析它）
+      if (!(e instanceof EpubDocumentError)) throw e
+      warnings.add('blankDocument', WARN_EMPTY_DOC, docPath, e.message)
+      enqueueBlank(docPath, index)
+      return
+    }
+    docs.set(docPath, {
+      id: ids.document(), path: docPath, index, readable: true,
+      label: title ?? epubBaseName(docPath),
+      anchors: scan.anchors, strippedAnchors: scan.strippedAnchors, documentAnchor: scan.documentAnchor,
+      duplicates: scan.duplicates, links: scan.links, images: scan.images,
+    })
+    // 撞名留痕在编排层：扫描只交事实（哪些名字撞过），后果（记什么、报多重）在这里定
+    for (const dupName of scan.duplicates) {
+      warnings.add('elementNoted', WARN_DUP_ANCHOR, docPath, '文档里有同名锚点，绑定取文档序第一个（另一处照样作为正文读出来）', dupName)
+    }
     queue.push(docPath)
   }
 
-  // 主序列（spine 的 linear 项）按顺序拿章号：文档 ID 的铸造顺序就是阅读顺序
-  for (const [index, docPath] of pkg.spine.entries()) await enqueue(docPath, index, 'OPF 主序列')
-  // 导航指到的文档也算可达（目录要能跳到它，比如附录）；它可能本身就不在 spine 里
-  for (const href of navTargets(pkg.navigation)) await enqueue(href.path, null, `导航目标（${href.path}）`)
+  /**
+   * 能不能把这条**引用**指到的文档收进阅读面：收进来返回 `true`。
+   *
+   * 指不到一份可读的 XHTML 文档时返回 `false` 而不抛错——**这条引用坏在哪一层，由引用方按自己的
+   * 半径负责**（导航剪那一条、正文内链取消可点击性），这里只回答「收不收得下」。调用点各自留痕，
+   * 所以这里不记 Finding（记了就会与调用点重复）。主序列不走这里：包层已经判过，`collect` 直接收。
+   */
+  const enqueue = async (docPath: string, index: number | null): Promise<boolean> => {
+    if (docs.has(docPath)) return true
+    const item = manifestByPath.get(docPath)
+    if (item === undefined || item.mediaType !== XHTML_MEDIA_TYPE) return false
+    // manifest 声明在、归档里没有这一条：这是「这一条引用指不到文档」，不是容器读失败，
+    // 由引用方按自己的半径剪那一条（目录/正文链接各自留痕），不拖到 archive.read 变成整本拒
+    if (!archiveNames.has(docPath)) return false
+    await collect(docPath, index)
+    return true
+  }
+
+  // 主序列（spine 的 linear 项）按顺序拿章号：文档 ID 的铸造顺序就是阅读顺序。
+  // 包层交出的 `pkg.spine` 是**已接纳**的声明（剪除与压缩已由 `parseSpine` 做完），这里只收不重判；
+  // 收不出正文的页照样占号，所以章号数的是阅读单元，不是 itemref 在原文件里的位置。
+  let unit = 0
+  for (const docPath of pkg.spine) {
+    await collect(docPath, unit)
+    unit += 1
+  }
+  // 导航指到的文档也算可达（目录要能跳到它，比如附录）；它可能本身就不在 spine 里。
+  // 收不进来不在这里留痕：绑定期会剪那一条目录并点名（一处一件事）
+  for (const href of navTargets(pkg.navigation)) await enqueue(href.path, null)
   // 正文链接的传递闭包（活队列：新收的文档也要继续顺链走），已访问集合自然终止环路。
   // `for…of` 与按下标读同一份活队列等价（数组迭代器每步重读长度），故循环中新入队的文档照样会被走到。
   for (const docPath of queue) {
     const doc = docs.get(docPath)
-    // 活队列的每一项都由 enqueue 先写进 docs 再入队：取不到即内部一致性被破坏，按本层既有错误点名
-    if (doc === undefined) throw new EpubImportError(`正文链接活队列里的 ${docPath} 不在文档表里（内部一致性被破坏）`)
+    // 活队列的每一项都由 enqueue 先写进 docs 再入队：取不到即我们自己的账对不上，
+    // 而 400 会把服务端 bug 说成「你的书坏了」——**显式选 500**（同 `localbooks.ts` 的 readDocument）
+    if (doc === undefined) throw new Error(`正文链接活队列里的 ${docPath} 不在文档表里（内部一致性被破坏）`)
     for (const link of doc.links) {
       const cls = classifyHref(link, doc.path)
       if (cls.kind !== 'internal') continue
       const target = manifestByPath.get(cls.href.path)
       if (target === undefined || target.mediaType !== XHTML_MEDIA_TYPE) continue   // 绑定期再按语境拒绝/降级
-      await enqueue(cls.href.path, null, `${doc.path} 的书内链接`)
+      await enqueue(cls.href.path, null)
     }
   }
 
@@ -215,16 +318,46 @@ async function orchestrate(archive: EpubArchive, outputDir: string, limits: Part
   const byPath = new Map<string, RegisteredResource>()
   const resources: Record<string, EpubResourceRef> = {}
 
-  const register = async (srcPath: string, context: string, requireSize: boolean): Promise<RegisteredResource> => {
+  /**
+   * 登记结果：失败也把**说得出原因的那句话**交回调用方。
+   *
+   * 为什么不是 `null`：资源的半径不同——正文插图失败只去掉那一处（痕已记），而封面失败是整本拒，
+   * 那句给用户的报错必须带上真正的原因，不能指向一个导入已经失败、用户根本看不到的告警面。
+   */
+  type Registration =
+    | { readonly ok: true; readonly resource: RegisteredResource }
+    | { readonly ok: false; readonly reason: string }
+
+  /**
+   * 登记一份资源。**资源级**失败（`EpubResourceError`：格式不支持、容器损坏、超像素、被加密、
+   * 指向的不是资源……）在这里收口：留一条点名这张资源的痕，把原因交回调用方（它决定这一处怎么落）。
+   * 容器级失败（字节连读都读不出、写不出产物）仍按原样上抛——那是整本书的事实，不是一张图的事实。
+   */
+  const register = async (srcPath: string, context: string, requireSize: boolean, noteFailure = true): Promise<Registration> => {
+    try {
+      return await registerOnce(srcPath, context, requireSize, noteFailure)
+    } catch (e) {
+      if (!(e instanceof EpubResourceError)) throw e
+      // 封面那一路传 `false`：它的失败会立刻变成整本拒，痕不会出现在任何用户读得到的告警面上，
+      // 原因直接进 `rejectBook` 的报错句——在这里再记一笔是死写入。
+      if (noteFailure) warnings.add('elementDropped', WARN_IMAGE_DROPPED, srcPath, e.message)
+      return { ok: false, reason: e.message }
+    }
+  }
+
+  const registerOnce = async (srcPath: string, context: string, requireSize: boolean, noteFailure: boolean): Promise<Registration> => {
     const hit = byPath.get(srcPath)
-    if (hit !== undefined) return hit
+    if (hit !== undefined) return { ok: true, resource: hit }
     const item = manifestByPath.get(srcPath)
-    if (item === undefined) throw new EpubImportError(`${context}引用的资源不在 manifest 里：${srcPath}`)
+    if (item === undefined) throw new EpubResourceError(`${context}引用的资源不在 manifest 里：${srcPath}`)
     const what = `${srcPath}（${context}）`
+    // manifest 有、归档无：这是「这一条引用指不到资源」，不是容器读失败——与 spine / 目录 / 正文链接
+    // 的存在性半径一致。封面那一路会把这条失败再升成书级（它声明了封面）
+    if (!archiveNames.has(srcPath)) throw new EpubResourceError(`${what}：归档里没有这一条（这一处读不出）`)
     // 被加密的资源在读字节/验格式**之前**拒绝：字节是混淆过的，按字节报错会把原因说成「图片损坏」，
     // 读者据此去换图是白费力气（真正的原因是本插件不提供解密）
     if (pkg.encryptedPaths.has(srcPath)) {
-      throw new EpubImportError(`${what}：资源被加密（本插件不提供解密，正文里用到的它读不出）`)
+      throw new EpubResourceError(`${what}：资源被加密（本插件不提供解密，正文里用到的它读不出）`)
     }
     // SVG 是 XML 文档（要解析成树），按 **XML 类别**的字节上限读——与 container/OPF/NCX/正文同一档；
     // 光栅图只做魔数与容器核对、不进解析器，按条目上限读。用 `entryBytes` 一把抓会让 SVG 默认能到
@@ -232,20 +365,22 @@ async function orchestrate(archive: EpubArchive, outputDir: string, limits: Part
     // manifest 读入时已归一（`package.ts` 的 `normalizeMediaType`），这里只需相等判定。
     const cap = item.mediaType === SVG_MEDIA_TYPE ? budget.xmlBytes : budget.entryBytes
     const raw = await archive.read(srcPath, cap)
-    const facts = validateImage(raw, {
+    const { facts, findings: imageFindings } = validateImage(raw, {
       what, path: srcPath, declaredMediaType: item.mediaType,
-      imagePixels: budget.imagePixels, domLimits, warnings,
+      imagePixels: budget.imagePixels, domLimits,
     })
+    // 资源层把 SVG 里剥掉的活动内容按同一张半径表交回（elementRemoved），这里只入池不重述
+    merge(imageFindings)
     if (facts.kind === 'wrapper') {
       // 单图包装：要的是它包着的那张栅格（同书内引用），按那份资源登记；包装本身不落盘
       const inner = manifestByPath.get(facts.path)
       if (inner !== undefined && inner.mediaType === SVG_MEDIA_TYPE) {
-        throw new EpubImportError(`${what}：SVG 包装指向的还是 SVG（包装只允许包一张栅格图）`)
+        throw new EpubResourceError(`${what}：SVG 包装指向的还是 SVG（包装只允许包一张栅格图）`)
       }
-      return register(facts.path, context, requireSize)
+      return register(facts.path, context, requireSize, noteFailure)
     }
     if (requireSize && (facts.width === null || facts.height === null)) {
-      throw new EpubImportError(`${what}：SVG 缺少可用的宽高（width/height/viewBox 都没有），插图的占位尺寸无从确定`)
+      throw new EpubResourceError(`${what}：SVG 缺少可用的宽高（width/height/viewBox 都没有），插图的占位尺寸无从确定`)
     }
     // 落盘的是**验证后的产物**：光栅原样，SVG 是重建后的静态文本——`bytes` 必须记落盘字节数，
     // 不是原条目大小（重建后的 SVG 与源文件常常不一样长，资源端点的 Content-Length 要跟它对得上）
@@ -259,123 +394,204 @@ async function orchestrate(archive: EpubArchive, outputDir: string, limits: Part
     const registered: RegisteredResource = { ref, width: facts.width, height: facts.height }
     byPath.set(srcPath, registered)
     resources[id] = ref
-    return registered
+    return { ok: true, resource: registered }
   }
 
-  // 图片绑定：键是「出处文档 + 原始 src」，因为同一个 src 在不同目录下解释结果不同（`../` 的基准是文档）
-  const imageBindings = new Map<string, { resourceId: string; width: number; height: number }>()
+  // 图片绑定：键是「出处文档 + 原始 src」，因为同一个 src 在不同目录下解释结果不同（`../` 的基准是文档）。
+  // 值是**三态**：绑定成功 / 这张图已经读不出并留痕（'failed'）/ 从未在扫描期清点到（内部一致性被破坏）。
+  // 后两态不许折叠成一个：把「我们已经丢了这一处」读成「清点漏了」会把真缺陷报成 500，反之会把 500 藏成告警。
+  type ImageOutcome = { readonly resourceId: string; readonly width: number; readonly height: number } | 'failed'
+  const imageOutcomes = new Map<string, ImageOutcome>()
   for (const doc of docs.values()) {
     for (const src of doc.images) {
+      const key = imageKey(doc.path, src)
       const cls = classifyHref(src, doc.path)
       if (cls.kind !== 'internal') {
-        // 正文用的远程/不可用图片：导入失败并点名这张图——整页插图静默消失是最坏的结果
-        throw new EpubImportError(`${doc.path}：正文引用了书外图片（本插件只加载书内资源）：${src}`)
+        // 正文用的书外图片：这一处表达不出来（本插件只加载书内资源）——该处不留，但要点名这张图与出处
+        warnings.add('elementDropped', WARN_IMAGE_DROPPED, src,
+          cls.kind === 'unresolvable'
+            ? `${doc.path}：正文图片的引用解不开（这一处不留，文字与锚点位置照留）：${cls.reason}`
+            : `${doc.path}：正文引用了书外图片（本插件只加载书内资源）`)
+        imageOutcomes.set(key, 'failed')
+        continue
       }
-      const registered = await register(cls.href.path, `引用处 ${doc.path}`, true)
+      const registration = await register(cls.href.path, `引用处 ${doc.path}`, true)
+      if (!registration.ok) { imageOutcomes.set(key, 'failed'); continue }
+      const registered = registration.resource
       if (registered.width === null || registered.height === null) {
-        throw new EpubImportError(`${cls.href.path}：图片宽高未知（插图的占位尺寸无从确定）`)
+        warnings.add('elementDropped', WARN_IMAGE_DROPPED, cls.href.path, `${cls.href.path}：图片宽高未知（插图的占位尺寸无从确定）`)
+        imageOutcomes.set(key, 'failed')
+        continue
       }
-      imageBindings.set(imageKey(doc.path, src), { resourceId: registered.ref.id, width: registered.width, height: registered.height })
+      imageOutcomes.set(key, { resourceId: registered.ref.id, width: registered.width, height: registered.height })
     }
   }
 
   // ── 目标绑定（导航与正文链接共用同一套判定）──────────────────────────────
-  /** 锚点查询的三种结果：命中（含「本来就没有片段」）/ 随被剥离内容消失（降级）/ 抛错（从未存在） */
-  type AnchorLookup = { readonly kind: 'anchor'; readonly anchorId: string | null } | { readonly kind: 'stripped' }
+  /** 锚点查询的四种结果：命中（含「本来就没有片段」）/ 随被剥离内容消失（降级）/ 落到该页开头（文档级锚点，或这份文档没读出来）/ 从未存在（同样按该条降级） */
+  type AnchorLookup = { readonly kind: 'anchor'; readonly anchorId: string | null } | { readonly kind: 'stripped' } | { readonly kind: 'document' } | { readonly kind: 'degraded' }
 
-  const docOf = (href: EpubHref, context: string): ScannedDocument => {
-    const doc = docs.get(href.path)
-    if (doc === undefined) throw new EpubImportError(`${context}：目标不是可读的 XHTML 文档：${href.path}`)
-    return doc
-  }
+  /** 目标文档在不在阅读面：`null` = 这一条引用落不到可读的文档上（半径由引用方决定，不在这儿抛错） */
+  const docOf = (href: EpubHref): ScannedDocument | null => docs.get(href.path) ?? null
 
   const targetOf = (doc: ScannedDocument, anchorId: string | null): ReadingTarget => (doc.index === null
     ? { kind: 'supplement', documentId: doc.id, anchorId }
     : { kind: 'chapter', index: doc.index, anchorId })
 
   /**
-   * 查锚点：先查树上那张表，再查「被剥离的锚点」名单。
+   * 查锚点：先查树上那张表，再查「被剥离的锚点」名单，再查文档级锚点（body 上的 id），最后才答「从未存在」。
    *
-   * 两边都不在才是坏书（拼写错、指向不存在的 id）：读不懂这个目标就不猜。**在名单里** = 锚点确实
-   * 存在过、是我们自己剥掉了承载它的图形——由调用方降级 + 告警，不在这里抛错（口径见头注②）。
+   * 「从未存在」的主语是**这一条引用**，不是这本书：返回 `degraded`，由调用方按自己的半径降级
+   * （目录落该页开头、正文内链降级成纯文本）并留痕，整本照读（口径见头注②）。
+   * **例外是这一份文档根本没读出来**：它的锚点表是空集，而我们拿不到「源里有没有这个名字」的事实——
+   * 把「我们没读出来」说成「这个名字不存在」等于给读者报一条源里没有的结论。落点回到这一页的开头
+   * （与文档级锚点同形），那一页读不出的原因另有一条痕点名，这里不再多记一条。
    */
-  const lookupAnchor = (doc: ScannedDocument, fragment: string, context: string): AnchorLookup => {
+  const lookupAnchor = (doc: ScannedDocument, fragment: string): AnchorLookup => {
     const anchorId = doc.anchors.get(fragment)
     if (anchorId !== undefined) return { kind: 'anchor', anchorId }
     if (doc.strippedAnchors.has(fragment)) return { kind: 'stripped' }
-    throw new EpubImportError(`${context}：目标锚点在文档里不存在：#${fragment}（${doc.path}）`)
+    if (doc.documentAnchor === fragment) return { kind: 'document' }
+    if (!doc.readable) return { kind: 'document' }
+    return { kind: 'degraded' }
   }
 
-  /** 导航目标：锚点随被剥离内容消失时降级成「该文档 + 无片段」（跳到该文档开头），导航仍然可用 */
-  const bindTarget = (href: EpubHref, context: string): ReadingTarget => {
-    const doc = docOf(href, context)
+  /**
+   * 导航目标：目标落不到阅读面（不在归档 / 不在 manifest / 不是 XHTML）→ `null`（这一条目录由调用方剪掉
+   * 并留痕）；锚点缺失（随剥离消失，或从未存在）→ 降级成「该文档 + 无片段」（跳到文档开头），导航仍然可用。
+   * 目标文档在、但它的正文读不出（空页）时锚点无从查，同样落到该页开头、但不记降级（见 `lookupAnchor`）。
+   */
+  const bindTarget = (href: EpubHref, context: string): ReadingTarget | null => {
+    const doc = docOf(href)
+    if (doc === null) return null
     if (href.fragment === null) return targetOf(doc, null)
-    const lookup = lookupAnchor(doc, href.fragment, context)
+    const lookup = lookupAnchor(doc, href.fragment)
     if (lookup.kind === 'anchor') return targetOf(doc, lookup.anchorId)
-    warnings.add(WARN_DEGRADED_ANCHOR, doc.path, DEGRADED_NAV, `${doc.path}#${href.fragment}（${context}）`)
+    // 文档级锚点指的就是这一页的开头：与「无片段」等价，不是降级，所以不记告警
+    if (lookup.kind === 'document') return targetOf(doc, null)
+    if (lookup.kind === 'degraded') {
+      warnings.add('itemDegraded', WARN_DEGRADED_ANCHOR, doc.path, MISSING_NAV, `${doc.path}#${href.fragment}（${context}）`)
+      return targetOf(doc, null)
+    }
+    warnings.add('itemDegraded', WARN_DEGRADED_ANCHOR, doc.path, DEGRADED_NAV, `${doc.path}#${href.fragment}（${context}）`)
     return targetOf(doc, null)
   }
 
   /**
    * 正文链接：书内且可读 → 目标；外站/活动 scheme/不可读目标 → null（保留文字并记告警）。
-   * 目标锚点随被剥离内容消失也走这条降级路（返回 null ⇒ 该处只剩子内容，不再有 link 节点）。
+   * 锚点缺失（随剥离消失，或从未存在）也走这条降级路（返回 null ⇒ 该处只剩子内容，不再有 link 节点）。
    */
   const bindLink = (href: string, from: string): ReadingTarget | null => {
     const cls = classifyHref(href, from)
+    if (cls.kind === 'unresolvable') {
+      // 引用解不开（越出书根、含 NUL、反斜杠、坏百分号…）：主语是这一处，不是这本书
+      warnings.add('elementDropped', WARN_ITEM_PRUNED, from, `这一处链接的引用解不开，已取消可点击性（文字照留）：${cls.reason}`, shortLabel(href))
+      return null
+    }
     if (cls.kind === 'unfollowable') {
-      warnings.add(WARN_UNFOLLOWABLE, from, '移除了不可跟随的链接（只保留文字）', cls.label)
+      warnings.add('elementRemoved', WARN_UNFOLLOWABLE, from, '移除了不可跟随的链接（只保留文字）', cls.label)
       return null
     }
     if (cls.kind === 'external') {
-      warnings.add(WARN_EXTERNAL_LINK, from, '取消了书外链接的可点击性（只保留文字）', shortLabel(href))
+      warnings.add('elementRemoved', WARN_EXTERNAL_LINK, from, '取消了书外链接的可点击性（只保留文字）', shortLabel(href))
       return null
     }
     if (!docs.has(cls.href.path)) {
+      // 书内链接落不到阅读面（不在 manifest、不是 XHTML、或 manifest 有而归档里没有）：
+      // 取消这一条的可点击性，文字一个字不丢——主语是「这一条引用」，不是「这本书」
+      // （半径表把它登记在 `itemPruned` 那条）
       const item = manifestByPath.get(cls.href.path)
-      if (item === undefined) {
-        throw new EpubImportError(`${from}：书内链接指向归档里不存在的文档：${cls.href.path}`)
-      }
-      warnings.add(WARN_EXTERNAL_LINK, from, '取消了指向书内不可读资源的链接（只保留文字）', `${cls.href.path}（${item.mediaType}）`)
+      const why = item === undefined
+        ? '不在 manifest 里'
+        : item.mediaType !== XHTML_MEDIA_TYPE
+          ? `不是可读的 XHTML 文档（media-type=${item.mediaType}）`
+          : '在 manifest 里、归档里没有这一条'
+      warnings.add('itemPruned', WARN_ITEM_PRUNED, cls.href.path,
+        `${from}：正文链接指向的文档${why}，这一处已取消可点击性（文字照留）`)
       return null
     }
-    const doc = docOf(cls.href, from)
+    const doc = docOf(cls.href)
+    if (doc === null) return null   // 上面已按 `docs.has` 分流，这里只收类型
     if (cls.href.fragment === null) return targetOf(doc, null)
-    const lookup = lookupAnchor(doc, cls.href.fragment, from)
+    const lookup = lookupAnchor(doc, cls.href.fragment)
     if (lookup.kind === 'anchor') return targetOf(doc, lookup.anchorId)
+    // 文档级锚点=这一页开头：链接照旧可点，不是降级、不记告警
+    if (lookup.kind === 'document') return targetOf(doc, null)
+    if (lookup.kind === 'degraded') {
+      warnings.add('elementRemoved', WARN_DEGRADED_ANCHOR, from, MISSING_LINK, `${cls.href.path}#${cls.href.fragment}`)
+      return null
+    }
     // 告警的 resource 是**出处文档**（同其它链接类告警），message 点名目标文档与锚点
-    warnings.add(WARN_DEGRADED_ANCHOR, from, DEGRADED_LINK, `${cls.href.path}#${cls.href.fragment}`)
+    warnings.add('elementRemoved', WARN_DEGRADED_ANCHOR, from, DEGRADED_LINK, `${cls.href.path}#${cls.href.fragment}`)
     return null
   }
 
-  const bindNav = (list: readonly EpubNavItem[], from: string): NavigationItem[] => list.map((item) => ({
-    id: ids.node(),
-    label: item.label,
-    // 分组标题（没有目标）照留：它是目录的层级，不是内容
-    target: item.target === null ? null : bindTarget(item.target, `${from}（${item.label}）`),
-    children: bindNav(item.children, from),
-  }))
+  /**
+   * 目录绑定：一条条目指到读不出的文档 → **剪那一条**，它的子条目上提（父级分组与兄弟照留），
+   * 并留一条痕点名被剪的标签与目标。整棵树都指不到东西就是空目录——那也不是坏书。
+   */
+  const bindNav = (list: readonly EpubNavItem[], from: string): NavigationItem[] => {
+    const out: NavigationItem[] = []
+    for (const item of list) {
+      const children = bindNav(item.children, from)   // 先绑子树：剪父级时它得能上提
+      if (item.target === null) {
+        // 分组标题（没有目标）照留：它是目录的层级，不是内容
+        out.push({ id: ids.node(), label: item.label, target: null, children })
+        continue
+      }
+      const target = bindTarget(item.target, `${from}（${item.label}）`)
+      if (target === null) {
+        warnings.add('itemPruned', WARN_ITEM_PRUNED, item.target.path,
+          `目录条目指向读不出的文档，这一条被剪（子条目已上提；来源 ${from}）`, item.label)
+        out.push(...children)
+        continue
+      }
+      out.push({ id: ids.node(), label: item.label, target, children })
+    }
+    return out
+  }
   const items = bindNav(pkg.navigation, '导航')
 
   // ── 第二遍：逐份转换、绑目标、落盘、释放 ──────────────────────────────────
   /**
    * 整页只有一棵内联 SVG 的图形页（EPUB3 推荐的封面写法，真书反例见 `documents.ts` 注③）：
    * SVG 里恰好只剩一张 `<image>` 且它指向**书内可加载**的资源时，这一页按那张图导成单图章节，
-   * 并留一条降级说明；两种落不下的情形仍按原口径拒整本——
-   * 「不是一张图」与「那张图在书外」是两件事，各说各的话（宁可精确，不含糊成一句泛拒）。
+   * 并留一条降级说明；落不下的情形各说各的话（「不是一张图」与「那张图落不到书内资源上」是两件事），
+   * 但都不再拒整本——这一页按空页留，痕点名原因。
    * 判据的这一半必须问资源与归档，文档层答不了，所以裁决在这一层。
    */
-  const svgImagePageNodes = async (page: SvgOnlyPage, docPath: string): Promise<ContentNode[]> => {
+  const svgImagePageNodes = async (page: SvgOnlyPage, docPath: string): Promise<ContentNode[] | null> => {
     const href = soleRasterHref(page.element)
-    if (href === null) throw new EpubImportError(svgOnlyPageReason(docPath))
+    if (href === null) {
+      // 不是「只包一张书内图」的矢量页：本插件不渲染矢量，这一页落不下任何东西
+      warnings.add('blankDocument', WARN_EMPTY_DOC, docPath, EMPTY_SVG_ONLY_ACTION)
+      return null
+    }
     const cls = classifyHref(href, docPath)
     if (cls.kind !== 'internal') {
-      throw new EpubImportError(`${docPath}：整页 SVG 里那张图指向书外（本插件只加载书内资源）：${href}`)
+      // 解不开的引用与书外资源都不是「加载得到但读坏了」：各说各的原因，这一页落不下
+      const why = cls.kind === 'unresolvable'
+        ? `那张图的引用解不开：${cls.reason}`
+        : cls.kind === 'unfollowable'
+          ? '那张图用了不可跟随的引用（本插件只加载书内资源）'
+          : `那张图指向书外：${href}`
+      warnings.add('blankDocument', WARN_EMPTY_DOC, docPath, `${EMPTY_SVG_ONLY_ACTION}（${why}）`)
+      return null
     }
-    const registered = await register(cls.href.path, `SVG 图形页 ${docPath}`, true)
+    const registration = await register(cls.href.path, `SVG 图形页 ${docPath}`, true)
+    // register 已经点名那张资源；这一页除了它什么都没有，所以按空页落（不整本拒）。
+    // 原因在这里重述一遍而不是写「见上一条」：整本只剩这一页时书会被拒，用户看不到导入说明，
+    // 那句指路就落空了
+    if (!registration.ok) {
+      warnings.add('blankDocument', WARN_EMPTY_DOC, docPath, `${EMPTY_SVG_ONLY_ACTION}（那张图读不出：${registration.reason}）`)
+      return null
+    }
+    const registered = registration.resource
     if (registered.width === null || registered.height === null) {
-      throw new EpubImportError(`${cls.href.path}：图片宽高未知（插图的占位尺寸无从确定）`)
+      warnings.add('blankDocument', WARN_EMPTY_DOC, docPath, `${EMPTY_SVG_ONLY_ACTION}（那张图宽高未知）`)
+      return null
     }
-    warnings.add(WARN_SVG_IMAGE_PAGE, docPath,
+    warnings.add('documentDegraded', WARN_SVG_IMAGE_PAGE, docPath,
       '整页内联 SVG 按其内唯一的一张书内图片导入（本插件不渲染矢量图形，这一页按图读）', cls.href.path)
     const image: ContentNode = {
       kind: 'image', id: ids.node(), resourceId: registered.ref.id, alt: '',
@@ -389,26 +605,78 @@ async function orchestrate(archive: EpubArchive, outputDir: string, limits: Part
   }
 
   const documents: Record<string, EpubDocumentRef> = {}
+  /** 读不出正文的主序列文档：一份一份照留（章号不动、目录照有名），整本判据在循环外 */
+  const blankSpine = new Set<string>()
+  let spineDocs = 0
   for (const doc of docs.values()) {
-    const root = await readXhtml(archive, doc.path, budget, domLimits)
-    const converted = convertXhtml(root, {
-      budget: xmlBudget(doc.path, domLimits),
+    const convertOpts = {
+      budget: contentBudget(doc.path),
       anchors: doc.anchors,
       resolveLink: (href: string) => bindLink(href, doc.path),
-      resolveImage: (src, alt) => {
+      resolveImage: (src: string, alt: string) => {
         void alt
-        const hit = imageBindings.get(imageKey(doc.path, src.trim()))
-        if (hit === undefined) throw new EpubImportError(`${doc.path}：图片 ${src} 没有在扫描期清点到（内部一致性被破坏）`)
-        return hit
+        const hit = imageOutcomes.get(imageKey(doc.path, src.trim()))
+        // 清点漏了一项是我们的账坏了，不是读者的书坏了：500（同上一处，也同 `localbooks.ts` 的 readDocument）
+        if (hit === undefined) throw new Error(`${doc.path}：图片 ${src} 没有在扫描期清点到（内部一致性被破坏）`)
+        // 'failed' = 这张图读不出、已经留过痕：文档层据此把**这一处**去掉（alt 文字与锚点位置另算）
+        return hit === 'failed' ? null : hit
       },
       nextNodeId: () => ids.node(),
-      warnings,
-    })
-    const nodes = converted.svgOnly === null ? converted.nodes : await svgImagePageNodes(converted.svgOnly, doc.path)
+    }
+    // 转换期也可能撞出文档级的读不出（这份文档的 DOM 超预算、结构走不完）：与扫描期同格落法——
+    // 留空页并点名原因。半径由那份预算的主语决定，不由哪一步被 try 包住决定。
+    let converted: ConvertedXhtml | null = null
+    // `readable: false` 的页不再尝试转换（痕已由包层或扫描期记过）：执行那份内容不是本插件会做的事，
+    // 但这一页在书里的位置是真的
+    if (doc.readable) {
+      try {
+        converted = convertXhtml(await readXhtml(doc.path, convertOpts.budget), convertOpts)
+      } catch (e) {
+        if (!(e instanceof EpubDocumentError)) throw e
+        warnings.add('blankDocument', WARN_EMPTY_DOC, doc.path, e.message)
+      }
+    }
+    if (converted !== null) merge(converted.findings)
+    let nodes: ContentNode[] = converted === null ? [] : converted.nodes
+    if (converted !== null && converted.svgOnly !== null) {
+      const page = await svgImagePageNodes(converted.svgOnly, doc.path)
+      // 落不下：这一页按空页留（原因已由 svgImagePageNodes 或资源层点名），不整本拒
+      if (page === null) nodes = []
+      else nodes = page
+    }
+    if (converted === null || !converted.readable || nodes.length === 0) {
+      // 补充文档读不出正文也照样落盘：它不计章，只可能在被指到时读出空白页——
+      // 从文档表里抹掉它是「条目级剪除」那套机制的活（见名册在册待裁），这里不提前半做。
+      // 空页的判定是 `converted.readable`：空白是可见性判据，不是树是否为空——扫描期铸出的锚点
+      // 随结构树一起留下，目录与内链指过去仍有落点。「树为空」那一条只剩「整页内联 SVG 落不下
+      // 那张图」的情形：那一页交的是空树，路径外的锚点没有落点（与 svgOnly 成功路径同口径，
+      // 阅读面退到章首）。
+      if (doc.index !== null) blankSpine.add(doc.path)
+    }
+    if (doc.index !== null) spineDocs += 1
     const content: ChapterContent = { kind: 'rich', documentId: doc.id, nodes }
     const file = `documents/${doc.id}.json`
     await writeInto(outputDir, file, Buffer.from(JSON.stringify(content), 'utf8'))
     documents[doc.id] = { id: doc.id, file, index: doc.index, label: doc.label, path: doc.path }
+  }
+
+  // 整本判据：个别文档读不出是文档级的事，**每一份**都读不出才是这本书的事
+  // （「全部回退等于整体失效」，与引擎侧那条边界同源）。读数带上第一条具体原因——
+  // 一本书被判死时，用户与排障的人要看得见「坏在哪份文档、为什么坏」，而不是一句泛话。
+  // 原因只从**被判空的那几份主序列文档**里取：补充文档（导航可达的附录）读不出虽也留痕，
+  // 却不是主序列没有可读页的原因，拿它点名会把读者引到不相干的一份上
+  if (spineDocs > 0 && blankSpine.size === spineDocs) {
+    // 不认具体码：空白、scripted、DOM 预算都是「这一份主序列文档读不出」这同一格，
+    // 按半径（document + fatal）取第一条，别让新来的原因码从这句报错里静默消失。
+    const firstReason = warnings.entries().find((f) => f.scope === 'document' && f.severity === 'fatal'
+      && f.resource !== null && blankSpine.has(f.resource))
+    // 扫描期那条动作句本身已带书内位置（异常消息由预算的 `what` 起头）：再前缀一遍资源名会把路径说两遍
+    const detail = firstReason === undefined || firstReason.resource === null
+      ? ''
+      : firstReason.action.includes(firstReason.resource)
+        ? `：${firstReason.action}`
+        : `：${firstReason.resource} ${firstReason.action}`
+    rejectBook(`EPUB 主序列里没有任何可读的一页（${spineDocs} 份文档全为空白或不可读）${detail}`)
   }
 
   // ── 封面：EPUB3 的 cover-image 优先，其次 EPUB2 的 meta name="cover"；无封面不是失败 ─────
@@ -416,7 +684,13 @@ async function orchestrate(archive: EpubArchive, outputDir: string, limits: Part
   const coverCandidate = pkg.coverCandidates[0]
   const coverResourceId = coverCandidate === undefined
     ? null
-    : (await register(coverCandidate.path, 'EPUB 封面声明', false)).ref.id
+    : await (async () => {
+      const registration = await register(coverCandidate.path, 'EPUB 封面声明', false, false)
+      // 封面是**书级**事实：书架卡片、导入回执都按「这本书有封面」行事，声明了却读不出不能只留痕。
+      // 原因必须写进这句报错：导入失败时书架不会出现这本书，用户看不到那份导入告警
+      if (!registration.ok) rejectBook(`EPUB 声明的封面（${coverCandidate.path}）读不出：${registration.reason}`)
+      return registration.resource.ref.id
+    })()
 
   const chapters: EpubChapterRef[] = [...docs.values()]
     .filter((d): d is ScannedDocument & { index: number } => d.index !== null)
@@ -425,23 +699,11 @@ async function orchestrate(archive: EpubArchive, outputDir: string, limits: Part
 
   return {
     title: pkg.title, author: pkg.author, chapters, items,
-    documents, resources, coverResourceId, warnings: warnings.list(),
+    documents, resources, coverResourceId, findings: warnings.entries(),
   }
 }
 
 // ── 走文档树的小工具（标题与正文各读一次文档，DOM 用完即弃）───────────────────────
-
-async function readXhtml(archive: EpubArchive, docPath: string, budget: EpubLimits, domLimits: XmlLimits): Promise<Element> {
-  const bytes = await archive.read(docPath, budget.xmlBytes)
-  let text: string
-  try {
-    text = decodeEpubXml(bytes)
-  } catch (e) {
-    if (e instanceof EpubImportError) throw new EpubImportError(`${docPath}：${e.message}`)
-    throw e
-  }
-  return parseXml(text, xmlBudget(docPath, domLimits))
-}
 
 /** 图片绑定的键：同一个 src 在不同文档里解释结果不同（`../` 的基准是文档目录），所以按文档分键 */
 function imageKey(docPath: string, src: string): string {
@@ -449,14 +711,17 @@ function imageKey(docPath: string, src: string): string {
 }
 
 /**
- * 原始 href 的三分类——**不可跟随**（活动/本机 scheme、空 href）与**书外**（外站）不是一回事：
+ * 原始 href 的四分类——**不可跟随**（活动/本机 scheme、空 href）与**书外**（外站）不是一回事：
  * 前者是「这条链接本来就不该被点开」，后者是「内容在书外的某个站点上」，告警文案要分开说。
- * 书内相对引用交给 `resolveEpubHref`：它解析不了（越出书根、NUL、反斜杠、坏百分号）是**坏书**，抛错。
+ * 书内相对引用交给 `resolveEpubHref`；它解不开（越出书根、NUL、反斜杠、坏百分号）时抛的是
+ * `EpubHrefError`（「这一条引用解不开」，不是书级异常）——一条引用解不开说的是**这一处**，
+ * 交回 `unresolvable` 由引用方按半径落（正文链接取消可点击性、插图该处不留），原因原样带出去。
  */
 type HrefClass =
   | { readonly kind: 'internal'; readonly href: EpubHref }
   | { readonly kind: 'external' }
   | { readonly kind: 'unfollowable'; readonly label: string }
+  | { readonly kind: 'unresolvable'; readonly reason: string }
 
 function classifyHref(href: string, from: string): HrefClass {
   const trimmed = href.trim()
@@ -465,12 +730,16 @@ function classifyHref(href: string, from: string): HrefClass {
   const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):/.exec(trimmed)
   if (scheme !== null) {
     const name = scheme[1]
-    // 认不出 scheme 名即读不懂这条链接：按坏书点名拒收（本层既有失败通道），不当外站链接猜
-    if (name === undefined) throw new EpubImportError(`${from}：认不出链接的 scheme（段 ${shortLabel(trimmed)}）`)
+    if (name === undefined) return { kind: 'unresolvable', reason: `认不出链接的 scheme（段 ${shortLabel(trimmed)}）` }
     const lowered = name.toLowerCase()
     return UNFOLLOWABLE_SCHEMES.has(lowered) ? { kind: 'unfollowable', label: `${lowered}:` } : { kind: 'external' }
   }
-  return { kind: 'internal', href: resolveEpubHref(from, trimmed) }
+  try {
+    return { kind: 'internal', href: resolveEpubHref(from, trimmed) }
+  } catch (e) {
+    if (e instanceof EpubHrefError) return { kind: 'unresolvable', reason: e.message }
+    throw e
+  }
 }
 
 /** 告警细节里的短标签：整条 href 可能很长，截断（细节只是给人看的例子） */
@@ -503,6 +772,6 @@ async function writeInto(outputDir: string, relPath: string, data: Buffer): Prom
     await fs.writeFile(target, data)
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code
-    throw new EpubImportError(`写不出导入产物 ${relPath}（${code ?? '写盘失败'}）：请检查输出目录是否可写`)
+    rejectBook(`写不出导入产物 ${relPath}（${code ?? '写盘失败'}）：请检查输出目录是否可写`)
   }
 }

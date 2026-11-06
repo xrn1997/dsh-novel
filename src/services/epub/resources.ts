@@ -1,9 +1,8 @@
 import type { Element } from 'domhandler'
 import { imageSize } from 'image-size'
-import type { EpubWarningLog } from './warnings.js'
-import { WARN_ACTIVE_ATTR, WARN_CSS_ATTR, WARN_REMOVED } from './warnings.js'
+import { FindingLog, WARN_ACTIVE_ATTR, WARN_CSS_ATTR, WARN_REMOVED, type FindingEntry } from './findings.js'
 import { crc32Unsigned } from './archive.js'
-import { EpubImportError } from './errors.js'
+import { EpubHrefError, EpubResourceError } from './errors.js'
 import { normalizeMediaType, resolveEpubHref } from './package.js'
 import {
   attrOf, decodeEpubXml, isCdataNode, isElement, isTextNode, localName, parseXml, textOf, xmlBudget,
@@ -91,19 +90,23 @@ export interface ImageValidationOptions {
   readonly declaredMediaType: string
   readonly imagePixels: number
   readonly domLimits: XmlLimits
-  /** 告警出口：SVG 里被剥除的活动内容/属性按同一条合并口径进这里 */
-  readonly warnings: EpubWarningLog
+}
+
+/** 验证结果：事实 + 本层记下的痕（重建 SVG 时剥掉的活动内容那几笔；半径已按 `FINDING_RADII` 定好） */
+export interface ValidatedImage {
+  readonly facts: ImageFacts
+  readonly findings: readonly FindingEntry[]
 }
 
 /** 按声明选路：SVG 走重建/包装识别，其余走光栅验证（声明类型本身也要在受支持之列） */
-export function validateImage(bytes: Buffer, opts: ImageValidationOptions): ImageFacts {
+export function validateImage(bytes: Buffer, opts: ImageValidationOptions): ValidatedImage {
   const declared = normalizeMediaType(opts.declaredMediaType)
   if (declared === SVG_MEDIA_TYPE) return classifySvg(bytes, opts)
   const family = DECLARED_TYPES.get(declared)
   if (family === undefined) {
-    throw new EpubImportError(`不支持的图片类型（${opts.declaredMediaType}）：${opts.what}`)
+    throw new EpubResourceError(`不支持的图片类型（${opts.declaredMediaType}）：${opts.what}`)
   }
-  return validateRaster(bytes, { what: opts.what, family, imagePixels: opts.imagePixels })
+  return { facts: validateRaster(bytes, { what: opts.what, family, imagePixels: opts.imagePixels }), findings: [] }
 }
 
 /** 光栅图：魔数/MIME 一致 + 容器完整 + 像素在预算内，最后把 EXIF 旋转折进显示宽高 */
@@ -115,18 +118,18 @@ export function validateRaster(bytes: Buffer, opts: {
   const size = sniff(bytes, opts.what)
   const sniffed = size.type === undefined ? undefined : SNIFFED_TYPES.get(size.type)
   if (sniffed === undefined) {
-    throw new EpubImportError(`不支持的图片格式（${size.type ?? '认不出'}）：${opts.what}`)
+    throw new EpubResourceError(`不支持的图片格式（${size.type ?? '认不出'}）：${opts.what}`)
   }
   if (sniffed !== opts.family) {
-    throw new EpubImportError(`图片声明为 ${opts.family}，实际内容是 ${sniffed}：${opts.what}`)
+    throw new EpubResourceError(`图片声明为 ${opts.family}，实际内容是 ${sniffed}：${opts.what}`)
   }
   const width = positiveDimension(size.width)
   const height = positiveDimension(size.height)
   if (width === null || height === null) {
-    throw new EpubImportError(`图片尺寸读不出（文件头不给宽高）：${opts.what}`)
+    throw new EpubResourceError(`图片尺寸读不出（文件头不给宽高）：${opts.what}`)
   }
   if (width * height > opts.imagePixels) {
-    throw new EpubImportError(`图片像素超过上限 ${opts.imagePixels}（${width}×${height}）：${opts.what}`)
+    throw new EpubResourceError(`图片像素超过上限 ${opts.imagePixels}（${width}×${height}）：${opts.what}`)
   }
   verifyContainer(bytes, opts.family, opts.what)
   // EXIF 的 5–8 是「带 90° 倍数旋转」的那四种：显示宽高交换；1/缺省保持原样
@@ -144,7 +147,7 @@ function sniff(bytes: Buffer, what: string): { width?: number; height?: number; 
   try {
     return imageSize(bytes)
   } catch (e) {
-    throw new EpubImportError(`${what}：读不出图片格式（容器损坏，或不是受支持的图片：${e instanceof Error ? e.message : String(e)}）`)
+    throw new EpubResourceError(`${what}：读不出图片格式（容器损坏，或不是受支持的图片：${e instanceof Error ? e.message : String(e)}）`)
   }
 }
 
@@ -174,34 +177,34 @@ function verifyContainer(bytes: Buffer, family: RasterFamily, what: string): voi
 
 function verifyPng(bytes: Buffer, what: string): void {
   if (bytes.length < PNG_SIGNATURE.length || !bytes.subarray(0, 8).equals(PNG_SIGNATURE)) {
-    throw new EpubImportError(`PNG 数据损坏（签名不对）：${what}`)
+    throw new EpubResourceError(`PNG 数据损坏（签名不对）：${what}`)
   }
   let p = 8
   while (p + 12 <= bytes.length) {
     const length = bytes.readUInt32BE(p)
     const end = p + 12 + length
-    if (end > bytes.length) throw new EpubImportError(`PNG 数据损坏（chunk 长度越界）：${what}`)
+    if (end > bytes.length) throw new EpubResourceError(`PNG 数据损坏（chunk 长度越界）：${what}`)
     const type = bytes.toString('latin1', p + 4, p + 8)
     const expected = bytes.readUInt32BE(p + 8 + length)
     const actual = crc32Unsigned(bytes.subarray(p + 4, p + 8 + length)) >>> 0
-    if (expected !== actual) throw new EpubImportError(`PNG 数据损坏（chunk ${type} 的 CRC 对不上）：${what}`)
+    if (expected !== actual) throw new EpubResourceError(`PNG 数据损坏（chunk ${type} 的 CRC 对不上）：${what}`)
     if (type === 'IEND') return
     p = end
   }
-  throw new EpubImportError(`PNG 数据损坏（缺 IEND，文件被截断）：${what}`)
+  throw new EpubResourceError(`PNG 数据损坏（缺 IEND，文件被截断）：${what}`)
 }
 
-/** 按字节偏移取一个字节。越界在这里是**真实输入状态**（截断/损坏的图），走本层的 `EpubImportError`
+/** 按字节偏移取一个字节。越界在这里是**真实输入状态**（截断/损坏的图），走本层的 `EpubResourceError`
  *  而不是补一个 0——把截断读成合法字节正是「坏数据冒充可读」。 */
 function byteAt(bytes: Buffer, at: number, what: string): number {
   const v = bytes[at]
-  if (v === undefined) throw new EpubImportError(`图片数据在偏移 ${at} 处被截断：${what}`)
+  if (v === undefined) throw new EpubResourceError(`图片数据在偏移 ${at} 处被截断：${what}`)
   return v
 }
 
 function verifyJpeg(bytes: Buffer, what: string): void {
   if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) {
-    throw new EpubImportError(`JPEG 数据损坏（没有 SOI）：${what}`)
+    throw new EpubResourceError(`JPEG 数据损坏（没有 SOI）：${what}`)
   }
   let p = 2
   while (p + 1 < bytes.length) {
@@ -213,10 +216,10 @@ function verifyJpeg(bytes: Buffer, what: string): void {
     if (marker === 0xda) return verifyJpegScan(bytes, p, what)      // SOS：之后是熵编码数据，找 EOI
     if (p + 4 > bytes.length) break
     const length = bytes.readUInt16BE(p + 2)
-    if (length < 2) throw new EpubImportError(`JPEG 数据损坏（段长非法）：${what}`)
+    if (length < 2) throw new EpubResourceError(`JPEG 数据损坏（段长非法）：${what}`)
     p += 2 + length
   }
-  throw new EpubImportError(`JPEG 数据损坏（没有 EOI，文件被截断）：${what}`)
+  throw new EpubResourceError(`JPEG 数据损坏（没有 EOI，文件被截断）：${what}`)
 }
 
 /** 熵编码段里 `0xFF` 后跟非填充字节才是标记；`FFD9` 是 EOI（`FF00`/`FFD0-D7` 是数据） */
@@ -227,25 +230,25 @@ function verifyJpegScan(bytes: Buffer, from: number, what: string): void {
     if (next === 0xff || next === 0x00 || (next >= 0xd0 && next <= 0xd7)) continue
     if (next === 0xd9) return
   }
-  throw new EpubImportError(`JPEG 数据损坏（没有 EOI，文件被截断）：${what}`)
+  throw new EpubResourceError(`JPEG 数据损坏（没有 EOI，文件被截断）：${what}`)
 }
 
 function verifyGif(bytes: Buffer, what: string): void {
   if (bytes.length < 14 || !/^GIF8[79]a$/.test(bytes.toString('latin1', 0, 6))) {
-    throw new EpubImportError(`GIF 数据损坏（文件头不对）：${what}`)
+    throw new EpubResourceError(`GIF 数据损坏（文件头不对）：${what}`)
   }
   if (bytes[bytes.length - 1] !== 0x3b) {
-    throw new EpubImportError(`GIF 数据损坏（缺 trailer 0x3B，文件被截断）：${what}`)
+    throw new EpubResourceError(`GIF 数据损坏（缺 trailer 0x3B，文件被截断）：${what}`)
   }
 }
 
 function verifyWebp(bytes: Buffer, what: string): void {
   if (bytes.length < 12 || bytes.toString('latin1', 0, 4) !== 'RIFF' || bytes.toString('latin1', 8, 12) !== 'WEBP') {
-    throw new EpubImportError(`WebP 数据损坏（RIFF/WEBP 文件头不对）：${what}`)
+    throw new EpubResourceError(`WebP 数据损坏（RIFF/WEBP 文件头不对）：${what}`)
   }
   const declared = bytes.readUInt32LE(4) + 8
   if (declared !== bytes.length) {
-    throw new EpubImportError(`WebP 数据损坏（RIFF 声明长度 ${declared}，实际 ${bytes.length}）：${what}`)
+    throw new EpubResourceError(`WebP 数据损坏（RIFF 声明长度 ${declared}，实际 ${bytes.length}）：${what}`)
   }
 }
 
@@ -304,41 +307,45 @@ const SVG_NS = 'http://www.w3.org/2000/svg'
  * 独立 SVG：只包一张书内栅格就当包装交回那张栅格（调用方按光栅验证它），
  * 否则按白名单重建为一份静态 SVG。
  */
-function classifySvg(bytes: Buffer, opts: ImageValidationOptions): SvgFacts | SvgWrapperFacts {
-  const budget = xmlBudget(`SVG 图片 ${opts.what}`, opts.domLimits)
-  const root = parseSvg(bytes, opts, budget)
+function classifySvg(bytes: Buffer, opts: ImageValidationOptions): ValidatedImage {
+  const budget = xmlBudget(`SVG 图片 ${opts.what}`, opts.domLimits, 'resource')
+  const root = parseSvg(bytes, budget)
   const wrapper = soleRasterHref(root)
-  if (wrapper !== null) return { kind: 'wrapper', path: wrapperPath(wrapper, opts) }
-  const builder = new SvgBuilder(opts.what, budget, opts.warnings)
+  if (wrapper !== null) return { facts: { kind: 'wrapper', path: wrapperPath(wrapper, opts) }, findings: [] }
+  const warnings = new FindingLog()
+  const builder = new SvgBuilder(opts.what, budget, warnings)
   const content = builder.emit(root)
-  return { kind: 'svg', mediaType: SVG_MEDIA_TYPE, ext: 'svg', content, width: builder.width, height: builder.height }
+  return {
+    facts: { kind: 'svg', mediaType: SVG_MEDIA_TYPE, ext: 'svg', content, width: builder.width, height: builder.height },
+    findings: warnings.entries(),
+  }
 }
 
-function parseSvg(bytes: Buffer, opts: ImageValidationOptions, budget: XmlBudget): Element {
-  let text: string
-  try {
-    text = decodeEpubXml(bytes)
-  } catch (e) {
-    if (e instanceof EpubImportError) throw new EpubImportError(`${opts.what}：${e.message}`)
-    throw e
-  }
-  const root = parseXml(text, budget)
+/**
+ * 读并解析一份 SVG 资源。解码、静态闸门与预算失败**不再由本层换个类重披**：那份预算声明的主语
+ * 就是 resource，`xml.ts` 直接按这张资源的半径说话（重披一层就要 `instanceof` 基类，而基类会把
+ * 已经收窄的失败一起吃掉——那是把「这一张图」放大成「这本书」的入口）。
+ */
+function parseSvg(bytes: Buffer, budget: XmlBudget): Element {
+  const root = parseXml(decodeEpubXml(bytes, budget), budget)
   if (localName(root.name) !== 'svg') {
-    throw new EpubImportError(`${opts.what}：声明为 SVG 的资源根元素不是 svg（是 ${root.name}）`)
+    throw new EpubResourceError(`${budget.what}：声明为 SVG 的资源根元素不是 svg（是 ${root.name}）`)
   }
   return root
 }
 
 /** 包装里的 href 按 SVG 自身目录解析（与正文链接同一套归档内寻址）：解析不了即报错，绝不发请求 */
 function wrapperPath(href: string, opts: ImageValidationOptions): string {
+  let target: string
   try {
-    const resolved = resolveEpubHref(opts.path, href)
-    if (resolved.path === opts.path) throw new EpubImportError('指向自己（那不是一张图）')
-    return resolved.path
+    target = resolveEpubHref(opts.path, href).path
   } catch (e) {
-    if (e instanceof EpubImportError) throw new EpubImportError(`${opts.what}：SVG 包装里的图片引用不可用（${e.message}）`)
+    // 只接「这一条引用解不开」：它说的是包装里那一个 href，主语是这张资源
+    if (e instanceof EpubHrefError) throw new EpubResourceError(`${opts.what}：SVG 包装里的图片引用不可用（${e.message}）`)
     throw e
   }
+  if (target === opts.path) throw new EpubResourceError(`${opts.what}：SVG 包装里的图片指向自己（那不是一张图）`)
+  return target
 }
 
 /**
@@ -379,12 +386,12 @@ class SvgBuilder {
   private nextId = 0
   private readonly what: string
   private readonly budget: XmlBudget
-  private readonly warnings: EpubWarningLog
+  private readonly warnings: FindingLog
 
   width: number | null = null
   height: number | null = null
 
-  constructor(what: string, budget: XmlBudget, warnings: EpubWarningLog) {
+  constructor(what: string, budget: XmlBudget, warnings: FindingLog) {
     this.what = what
     this.budget = budget
     this.warnings = warnings
@@ -415,12 +422,12 @@ class SvgBuilder {
   private element(el: Element, root: boolean): string {
     const name = localName(el.name)
     if (SVG_ACTIVE_ELEMENTS.has(name)) {
-      this.warnings.add(WARN_REMOVED, this.what, '移除了 SVG 里的活动内容（不执行书内脚本，不加载书内样式）', `<${name}>`)
+      this.warnings.add('elementRemoved', WARN_REMOVED, this.what, '移除了 SVG 里的活动内容（不执行书内脚本，不加载书内样式）', `<${name}>`)
       return ''
     }
     if (SVG_METADATA_ELEMENTS.has(name)) return ''
     if (!SVG_ELEMENTS.has(name)) {
-      throw new EpubImportError(`${this.what}：SVG 里有本插件不支持的可见元素 <${name}>（不支持的图形不删掉冒充成功）`)
+      throw new EpubResourceError(`${this.what}：SVG 里有本插件不支持的可见元素 <${name}>（不支持的图形不删掉冒充成功）`)
     }
     if (root) {
       const viewBox = attrOf(el, 'viewBox')
@@ -442,11 +449,11 @@ class SvgBuilder {
     const parts: string[] = []
     for (const [attr, value] of Object.entries(el.attribs)) {
       if (attr === 'style') {
-        this.warnings.add(WARN_CSS_ATTR, this.what, '移除了 SVG 里的 style 属性（本插件不加载书内样式）', `<${name}>`)
+        this.warnings.add('elementRemoved', WARN_CSS_ATTR, this.what, '移除了 SVG 里的 style 属性（本插件不加载书内样式）', `<${name}>`)
         continue
       }
       if (/^on/i.test(attr)) {
-        this.warnings.add(WARN_ACTIVE_ATTR, this.what, '移除了 SVG 里的事件属性（不执行书内脚本）', attr.toLowerCase())
+        this.warnings.add('elementRemoved', WARN_ACTIVE_ATTR, this.what, '移除了 SVG 里的事件属性（不执行书内脚本）', attr.toLowerCase())
         continue
       }
       if (attr === 'id') {
@@ -461,7 +468,7 @@ class SvgBuilder {
       // （钉子：`tests/services/epub-resources.test.ts` 的渐变继承那一组）。
       // 不可支持的引用照本层口径点名报错（与 url(...)/白名单外元素同一条）。
       if (localName(attr) === 'href') {
-        throw new EpubImportError(
+        throw new EpubResourceError(
           `${this.what}：SVG 的 <${name}> 用了 ${attr} 引用（本插件不支持渐变继承与外部引用，不静默丢掉）`,
         )
       }
@@ -470,13 +477,13 @@ class SvgBuilder {
         // 只有 fill/stroke 支持同文件渐变引用；别的 url(...)（filter/mask/clip-path/marker-*）都是
         // 「引用了本插件没有的能力」——报错点名属性，不删掉那块图形冒充成功
         if (attr !== 'fill' && attr !== 'stroke') {
-          throw new EpubImportError(`${this.what}：SVG 的 <${name}> 属性 ${attr} 用了 url(...) 引用（本插件只支持 fill/stroke 指向同文件渐变）`)
+          throw new EpubResourceError(`${this.what}：SVG 的 <${name}> 属性 ${attr} 用了 url(...) 引用（本插件只支持 fill/stroke 指向同文件渐变）`)
         }
         parts.push(`${attr}="${escapeAttr(this.rewriteUrl(value, name, attr))}"`)
         continue
       }
       if (!SVG_ATTRS.has(attr)) {
-        throw new EpubImportError(`${this.what}：SVG 的 <${name}> 用了本插件不支持的属性 ${attr}（可能改变可见外观，不静默丢掉）`)
+        throw new EpubResourceError(`${this.what}：SVG 的 <${name}> 用了本插件不支持的属性 ${attr}（可能改变可见外观，不静默丢掉）`)
       }
       parts.push(`${attr}="${escapeAttr(value)}"`)
     }
@@ -491,10 +498,10 @@ class SvgBuilder {
     const id = m === null ? undefined : m[1]
     // 切不出 url(#id) 与「整值不是同文件引用」是同一件事：都按不支持点名拒收，不补一个空 id
     if (id === undefined) {
-      throw new EpubImportError(`${this.what}：SVG 的 <${element}> 属性 ${attr} 不是可支持的同文件引用：${value}`)
+      throw new EpubResourceError(`${this.what}：SVG 的 <${element}> 属性 ${attr} 不是可支持的同文件引用：${value}`)
     }
     if (!this.gradientIds.has(id)) {
-      throw new EpubImportError(`${this.what}：SVG 引用了本文件里没有登记的渐变 #${id}（不支持的引用不改成别的）`)
+      throw new EpubResourceError(`${this.what}：SVG 引用了本文件里没有登记的渐变 #${id}（不支持的引用不改成别的）`)
     }
     return `url(#${this.safeId(id)})`
   }

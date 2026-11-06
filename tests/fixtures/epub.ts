@@ -703,6 +703,108 @@ const FIXTURES: Record<string, () => Buffer> = {
       + '</body></html>'],
   ])),
 
+  /**
+   * 真书的封面页写法：承载锚点的 `id` 挂在 `<body>` 上，目录与正文内链都指它。
+   * body 不进图文树，所以这个锚点在树上**没有**对应节点——但它在源里确实存在，
+   * 报成「目标锚点在文档里不存在」就是说谎：这一条会被按错误的理由降级，还多一条说源里没有它的痕。
+   */
+  'epub3-body-anchor': () => zipOf(pkgEntries(opfOf({
+    title: '封面锚点样本',
+    manifest: itemXml('ch1', 'ch1.xhtml')
+      + itemXml('inner', 'text/part0009.xhtml')
+      + itemXml('nav', 'nav.xhtml', { attrs: ' properties="nav"' }),
+    spine: itemrefXml('ch1') + itemrefXml('inner'),
+  }), [
+    ['OEBPS/ch1.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n' + XHTML_DOCTYPE
+      + '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>封面</title></head>'
+      + '<body><h1>封面</h1><p><a href="text/part0009.xhtml#8IL20-d699">到内页</a></p></body></html>'],
+    ['OEBPS/text/part0009.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n' + XHTML_DOCTYPE
+      + '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>内页</title></head>'
+      + '<body id="8IL20-d699"><h1>内页</h1><p>这一页的锚点挂在 body 上</p></body></html>'],
+    ['OEBPS/nav.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n'
+      + '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>目录</title></head><body>'
+      + '<nav epub:type="toc"><ol><li><a href="text/part0009.xhtml#8IL20-d699">内页</a></li></ol></nav></body></html>'],
+  ])),
+
+  /**
+   * 版权页/声明页：body 里只有全角空格（U+3000），是标准出版物的一部分。
+   * 「这一页读不出字」是一份文档的事实，不是整本书的事实——它照样进阅读序列（章号不动），
+   * 读出来是空白页，并在导入告警里点名。
+   */
+  'epub3-blank-copyright-page': () => zipOf(pkgEntries(opfOf({
+    title: '空白版权页样本',
+    manifest: itemXml('ch1', 'ch1.xhtml') + itemXml('cr', 'copyright.xhtml'),
+    spine: itemrefXml('ch1') + itemrefXml('cr'),
+  }), [
+    ['OEBPS/copyright.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n' + XHTML_DOCTYPE
+      + '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>版权声明</title></head>'
+      + '<body><h3>\u3000</h3><p>\u3000</p></body></html>'],
+  ])),
+
+  /**
+   * 读不出正文的空页里仍挂着锚点：结构树照留，扫描期铸出的锚点 ID 在树上仍有落点。
+   * 空页若把树清空，目录与内链指过去只会绑到一个不存在的节点（阅读面静默退到章首）。
+   */
+  'epub3-blank-with-anchor': () => zipOf(pkgEntries(opfOf({
+    title: '空页带锚点样本',
+    manifest: itemXml('ch1', 'ch1.xhtml') + itemXml('blank', 'blank.xhtml')
+      + itemXml('nav', 'nav.xhtml', { attrs: ' properties="nav"' }),
+    spine: itemrefXml('ch1') + itemrefXml('blank'),
+  }), [
+    ['OEBPS/blank.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n' + XHTML_DOCTYPE
+      + '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>空页</title></head>'
+      + '<body><p id="keep"><script>alert(1)</script></p></body></html>'],
+    ['OEBPS/nav.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n'
+      + '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>目录</title></head><body>'
+      + '<nav epub:type="toc"><ol><li><a href="blank.xhtml#keep">空页里的锚点</a></li></ol></nav></body></html>'],
+  ])),
+
+  /** 整本书每一页都读不出字：这时才轮到整本失败——读数说「没有任何可读的一页」 */
+  'epub3-all-blank': () => zipOf(pkgEntries(opfOf({
+    title: '全本空白样本',
+    manifest: itemXml('ch1', 'ch1.xhtml') + itemXml('ch2', 'ch2.xhtml'),
+    spine: itemrefXml('ch1') + itemrefXml('ch2'),
+  }), [
+    ['OEBPS/ch1.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n' + XHTML_DOCTYPE
+      + '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>一</title></head><body><p>\u3000</p></body></html>'],
+    ['OEBPS/ch2.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n' + XHTML_DOCTYPE
+      + '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>二</title></head><body><script>alert(1)</script></body></html>'],
+  ])),
+
+  /**
+   * 主序列只有一页空白，另有一份导航可达、解不开的附录：两份都留痕，但整本判据的原因
+   * 只能从**主序列**里取——补充文档不是「主序列没有可读页」的原因。
+   */
+  'epub3-all-blank-with-bad-supplement': () => zipOf(pkgEntries(opfOf({
+    title: '全本空白加坏附录',
+    manifest: itemXml('ch1', 'ch1.xhtml') + itemXml('app', 'appendix.xhtml')
+      + itemXml('nav', 'nav.xhtml', { attrs: ' properties="nav"' }),
+    spine: itemrefXml('ch1'),
+  }), [
+    ['OEBPS/ch1.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n' + XHTML_DOCTYPE
+      + '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>一</title></head><body><p>\u3000</p></body></html>'],
+    ['OEBPS/appendix.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n<html xmlns="http://www.w3.org/1999/xhtml">'
+      + '<head><title>附录</title></head><body><p>引用了没有声明的实体 &badname;</p></body></html>'],
+    ['OEBPS/nav.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n'
+      + '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>目录</title></head><body>'
+      + '<nav epub:type="toc"><ol><li><a href="ch1.xhtml">正文</a></li><li><a href="appendix.xhtml">附录</a></li></ol></nav></body></html>'],
+  ])),
+
+  /**
+   * 整本书每一份都**解不开**（不是空白，是解析期就拒）：这时整本判据的原因要带得出第一份与原因，
+   * 且书内位置只说一遍（扫描期那条动作句本身已带位置）。
+   */
+  'epub3-all-bad': () => zipOf(pkgEntries(opfOf({
+    title: '全本坏文档样本',
+    manifest: itemXml('bad1', 'bad1.xhtml') + itemXml('bad2', 'bad2.xhtml'),
+    spine: itemrefXml('bad1') + itemrefXml('bad2'),
+  }), [
+    ['OEBPS/bad1.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n<html xmlns="http://www.w3.org/1999/xhtml">'
+      + '<head><title>坏页一</title></head><body><p>未声明的实体 &badname;</p></body></html>'],
+    ['OEBPS/bad2.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n<html xmlns="http://www.w3.org/1999/xhtml">'
+      + '<head><title>坏页二</title></head><body><p>另一处未声明的实体 &alsobad;</p></body></html>'],
+  ])),
+
   /** toc 导航在，但里面连列表都没有：只容忍 ul 变体，空壳仍是坏目录 */
   'epub3-nav-no-list': () => zipOf(pkgEntries(opfOf({
     title: '空目录样本',
@@ -752,6 +854,12 @@ const FIXTURES: Record<string, () => Buffer> = {
     + '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title><![CDATA[书 &nbsp; 名]]></dc:title></metadata>'
     + '<manifest>' + itemXml('ch1', 'ch1.xhtml') + '</manifest><spine>' + itemrefXml('ch1') + '</spine></package>')),
 
+  /** OPF 里没有 `<dc:title>`（`opfOf` 在 `spec.title` 缺席时整条不写）：书名只能由上传文件名兜底，
+   *  而兜底名与 TXT 侧同一条收口——钉的就是这条收口在 EPUB 路径上也真的生效 */
+  'epub3-no-title': () => zipOf(pkgEntries(opfOf({
+    manifest: itemXml('ch1', 'ch1.xhtml'), spine: itemrefXml('ch1'),
+  }))),
+
   // ── 包层失败/警告样本 ──────────────────────────────────────────────
 
   /** 整份归档没有 mimetype 条目（EPUB 身份按它判定，不是靠后缀） */
@@ -799,7 +907,7 @@ const FIXTURES: Record<string, () => Buffer> = {
     title: '缺 idref 样本', manifest: itemXml('ch1', 'ch1.xhtml'), spine: itemrefXml('nope'),
   }))),
 
-  /** 同一 idref 在 spine 里出现两次：重复即拒（否则同一资源的锚点目标有歧义） */
+  /** 同一 idref 在 spine 里出现两次：第一处照读，后出现的一条被剪并留痕（锚点目标只留一个位置） */
   'epub-spine-duplicate-idref': () => zipOf(pkgEntries(opfOf({
     title: '重复 idref 样本', manifest: itemXml('ch1', 'ch1.xhtml'), spine: itemrefXml('ch1') + itemrefXml('ch1'),
   }))),
@@ -821,7 +929,7 @@ const FIXTURES: Record<string, () => Buffer> = {
     manifest: itemXml('ch1', 'ch1.xhtml'), spine: itemrefXml('ch1'),
   }))),
 
-  /** 主序列文档被包声明为 scripted：脚本正文拒绝（读端不执行书内脚本） */
+  /** 主序列文档被包声明为 scripted：这一页读不出（读端不执行书内脚本）——全本只剩它时才由整本判据拒收 */
   'epub3-scripted': () => zipOf(pkgEntries(opfOf({
     title: '脚本样本', manifest: itemXml('ch1', 'ch1.xhtml', { attrs: ' properties="scripted"' }), spine: itemrefXml('ch1'),
   }))),
@@ -897,14 +1005,14 @@ const FIXTURES: Record<string, () => Buffer> = {
     ['OEBPS/ch1.xhtml', xhtmlOf('第一章', CH1_BODY)],
   ]),
 
-  /** spine 指向的 manifest 项落到不存在的归档条目上：悬空阅读单元必须报错，不许留个读不出的章节 */
+  /** spine 指向的 manifest 项落到不存在的归档条目上：这一条声明被剪并留痕，其余阅读单元照读 */
   'epub-spine-missing-entry': () => zipOf(pkgEntries(opfOf({
     title: '悬空 spine 样本',
     manifest: itemXml('ch1', 'ch1.xhtml') + itemXml('ghost', 'ghost.xhtml'),
     spine: itemrefXml('ch1') + itemrefXml('ghost'),
   }))),
 
-  /** 两个 manifest id 指向**同一个 href**，spine 里各出现一次：idref 不同而路径相同，歧义与重复 idref 一样 */
+  /** 两个 manifest id 指向**同一个 href**，spine 里各出现一次：与重复 idref 一样只留第一处并留痕 */
   'epub-spine-duplicate-path': () => zipOf(pkgEntries(opfOf({
     title: '同路径双 id 样本',
     manifest: itemXml('ch1', 'ch1.xhtml') + itemXml('ch1-alias', 'ch1.xhtml'),
@@ -917,6 +1025,27 @@ const FIXTURES: Record<string, () => Buffer> = {
     manifest: itemXml('ch1', 'ch1.xhtml'),
     spine: itemrefXml('ch1', ' properties="rendition:layout-pre-paginated"'),
   }))),
+
+  /**
+   * 真书常见形态：**只有封面那一份**声明 pre-paginated（出版工具给整页封面写的标记），
+   * 正文其余都是流式。逐文档声明说的是「这一份排不动」，不是「这本书读不了」。
+   */
+  'epub3-itemref-fxl-cover': () => zipOf(pkgEntries(opfOf({
+    title: '封面声明固定版式',
+    manifest: itemXml('cover', 'coverpage.xhtml') + itemXml('ch1', 'ch1.xhtml'),
+    spine: itemrefXml('cover', ' properties="rendition:layout-pre-paginated"') + itemrefXml('ch1'),
+  }), [
+    ['OEBPS/coverpage.xhtml', xhtmlOf('封面', '<h1>书名</h1><p>作者</p>')],
+  ])),
+
+  /** 逐文档 scripted：这一份要靠脚本才动得了（读端不执行），落空页；同书另一份照读 */
+  'epub3-itemref-scripted-cover': () => zipOf(pkgEntries(opfOf({
+    title: '单文档脚本声明',
+    manifest: itemXml('fx', 'interact.xhtml', { attrs: ' properties="scripted"' }) + itemXml('ch1', 'ch1.xhtml'),
+    spine: itemrefXml('fx') + itemrefXml('ch1'),
+  }), [
+    ['OEBPS/interact.xhtml', xhtmlOf('互动页', '<h1>这一页要跑脚本</h1><p>脚本内容</p>')],
+  ])),
 
   // ── 正文层样本（图文规范化、资源与导入编排；Task 4）────────────────────
 
@@ -1091,14 +1220,15 @@ const FIXTURES: Record<string, () => Buffer> = {
 
   /**
    * 正文用内联 SVG 且旁边还有真正文：按「剥离 + 告警」处理（可见图形的例外口径），正文文字与图片保留。
-   * 只有内联 SVG 是该文档唯一内容时才报错——那是空章节冒充成功（见 epub3-inline-svg-only）。
+   * 只有内联 SVG 是该文档唯一内容时这一页读不出（见 epub3-inline-svg-only）——空章节冒充成功仍不许。
    */
   'epub3-inline-svg': () => zipOf(pkgEntries(opfOf({
     title: '内联矢量样本', manifest: itemXml('ch1', 'ch1.xhtml'), spine: itemrefXml('ch1'),
   }), [['OEBPS/ch1.xhtml', xhtmlOf('第一章',
     '<p>图：<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4"/></svg></p>')]])),
 
-  /** 内联 SVG 是这份文档的**唯一**内容（连文字都没有）：剥离后什么都不剩，按空章节拒绝并点名原因 */
+  /** 内联 SVG 是这份文档的**唯一**内容（连文字都没有）：剥离后什么都不剩，判这一页读不出并点名原因；
+   *  全本只剩这一页时才由整本判据拒收（见「没有任何可读的一页」） */
   'epub3-inline-svg-only': () => zipOf(pkgEntries(opfOf({
     title: '纯内联矢量样本', manifest: itemXml('ch1', 'ch1.xhtml'), spine: itemrefXml('ch1'),
   }), [['OEBPS/ch1.xhtml', xhtmlOf('第一章',
@@ -1124,7 +1254,7 @@ const FIXTURES: Record<string, () => Buffer> = {
     ['OEBPS/images/cover.png', TINY_PNG],
   ]),
 
-  /** 封面页那张 `<image>` 指向**书外**：不是「我们读不懂形状」而是资源在站外——整本仍按原口径拒绝 */
+  /** 封面页那张 `<image>` 指向**书外**：本插件不加载书外资源，这一页按空页留并点名原因（别的章节照读） */
   'epub3-svg-cover-page-remote': () => zipOf([
     ['META-INF/container.xml', CONTAINER_OPF],
     ['OEBPS/content.opf', opfOf({
@@ -1133,6 +1263,18 @@ const FIXTURES: Record<string, () => Buffer> = {
       spine: itemrefXml('coverpage') + itemrefXml('ch1'),
     })],
     ['OEBPS/wrap0000.xhtml', xhtmlOf('封面', SVG_COVER_PAGE_BODY.replace('images/cover.png', 'https://example.invalid/cover.png'))],
+    ['OEBPS/ch1.xhtml', xhtmlOf('第一章', CH1_BODY)],
+  ]),
+
+  /** 封面页那张 `<image>` 的引用**解不开**（越出书根）：与「指向书外」分开说，这一页按空页留 */
+  'epub3-svg-cover-page-escaping': () => zipOf([
+    ['META-INF/container.xml', CONTAINER_OPF],
+    ['OEBPS/content.opf', opfOf({
+      title: '封面页越界样本',
+      manifest: itemXml('coverpage', 'wrap0000.xhtml', { attrs: ' properties="svg"' }) + itemXml('ch1', 'ch1.xhtml'),
+      spine: itemrefXml('coverpage') + itemrefXml('ch1'),
+    })],
+    ['OEBPS/wrap0000.xhtml', xhtmlOf('封面', SVG_COVER_PAGE_BODY.replace('images/cover.png', '../../../../cover.png'))],
     ['OEBPS/ch1.xhtml', xhtmlOf('第一章', CH1_BODY)],
   ]),
 
@@ -1170,7 +1312,7 @@ const FIXTURES: Record<string, () => Buffer> = {
   /**
    * 目标锚点落在**内联 SVG 内部**（nav 一叶 + 正文一内链都指 `#ornament`，另有一叶指真锚点 `#top`
    * 当对照）。这份书必须能读：锚点确实在源文档里，是本插件自己剥掉了承载它的图形——所以导航降级到
-   * 文档开头、内链降级成纯文本，各留告警；按「锚点不存在」处理会让一层花饰拒掉整本（要钉的回归）。
+   * 文档开头、内链降级成纯文本，各留告警；把它读成「锚点不存在」会把我们自己的剥离记成书里的错（要钉的回归）。
    */
   'epub3-inline-svg-anchor': () => zipOf([
     ['META-INF/container.xml', CONTAINER_OPF],
@@ -1190,9 +1332,10 @@ const FIXTURES: Record<string, () => Buffer> = {
   ]),
 
   /**
-   * 反例守护：同一份文档里，被剥离的内联 SVG 里确实有 `id="ornament"`，但链接指向的是拼错的
-   * `#ornamnet`——**从未存在**的锚点仍然是坏书，不许被「这份文档有被剥离的锚点」这条降级路径吞掉。
-   * 与上一个样本只差锚点名字，用来把「降级」的边界钉在「我们剥掉的那个锚点」上。
+   * 对照守护：同一份文档里，被剥离的内联 SVG 里确实有 `id="ornament"`，但链接指向的是拼错的
+   * `#ornamnet`——**从未存在**的锚点与「被我们剥掉的」是两件事：前者也按该条降级，但动作句说的是
+   * 「在文档里不存在」，用户才分得清是我们剥掉了承载它的内容还是书本身指错了名字。
+   * 与上一个样本只差锚点名字，用来把两句话钉开。
    */
   'epub3-inline-svg-bad-anchor': () => zipOf(pkgEntries(opfOf({
     title: '错锚点样本', manifest: itemXml('ch1', 'ch1.xhtml'), spine: itemrefXml('ch1'),
@@ -1201,28 +1344,170 @@ const FIXTURES: Record<string, () => Buffer> = {
     + '<p>图：<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect id="ornament" width="4" height="4"/></svg></p>'
     + '<p>看<a href="#ornamnet">这张图</a></p>')]])),
 
-  /** 同一份文档里两个元素共用一个 id：锚点目标有歧义，报错不猜 */
+  /**
+   * 同一份文档里同一个 id 出现两处（真实书里撞名不少，出版工具重排章节时常复用模板 id）。
+   * 撞名不是歧义：树上承载它的是**文档序第一个**，第二个照样作为正文读出来，撞名这件事留一条痕。
+   * nav 那一条指的就是这个撞名的名字，用来验绑定落到哪一节。
+   */
   'epub3-dup-anchor': () => zipOf(pkgEntries(opfOf({
-    title: '重复锚点样本', manifest: itemXml('ch1', 'ch1.xhtml'), spine: itemrefXml('ch1'),
-  }), [['OEBPS/ch1.xhtml', xhtmlOf('第一章', '<p id="a">甲</p><p id="a">又一个甲</p>')]])),
+    title: '重复锚点样本',
+    manifest: itemXml('ch1', 'ch1.xhtml') + itemXml('nav', 'nav.xhtml', { attrs: ' properties="nav"' }),
+    spine: itemrefXml('ch1'),
+  }), [
+    ['OEBPS/ch1.xhtml', xhtmlOf('第一章', '<p id="a">甲</p><p id="a">又一个甲</p>')],
+    ['OEBPS/nav.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n'
+      + '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>目录</title></head><body>'
+      + '<nav epub:type="toc"><ol><li><a href="ch1.xhtml#a">撞名的目录叶</a></li></ol></nav></body></html>'],
+  ])),
 
-  /** 导航指向文档里不存在的锚点：坏目标必须报错（与「目标文档不存在」同一口径） */
+  /** 指向不存在的锚点：条目落该页开头并留痕，整本照读 */
   'epub3-missing-anchor': () => oneChapterWithNav([['OEBPS/nav.xhtml',
     '<?xml version="1.0" encoding="UTF-8"?>\n'
     + '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>目录</title></head><body>'
     + '<nav epub:type="toc"><ol><li><a href="ch1.xhtml#gone">消失的锚点</a></li></ol></nav></body></html>']]),
 
-  /** 正文链接指向归档里不存在的文档：失效链接报错，不静默降级成纯文字 */
+  /** 正文链接指向同一文档里不存在的锚点：该处取消可点击性、文字照留，整本照读（与目录条目同一条半径） */
+  'epub3-link-missing-anchor': () => zipOf(pkgEntries(opfOf({
+    title: '失效正文锚点样本', manifest: itemXml('ch1', 'ch1.xhtml'), spine: itemrefXml('ch1'),
+  }), [['OEBPS/ch1.xhtml', xhtmlOf('第一章', '<p id="a">甲<a href="ch1.xhtml#gone">去哪儿</a></p>')]])),
+
+  /** 正文链接指向 manifest 里没有的文档：这一处取消可点击性并留痕（文字一个字不丢），整本照读 */
   'epub3-missing-target': () => zipOf(pkgEntries(opfOf({
     title: '失效链接样本', manifest: itemXml('ch1', 'ch1.xhtml'), spine: itemrefXml('ch1'),
   }), [['OEBPS/ch1.xhtml', xhtmlOf('第一章', '<p id="a">甲<a href="gone.xhtml#x">去哪儿</a></p>')]])),
 
-  /** 正文用远程图片（书外资源）：导入失败并点名这张图，不许静默消失 */
+  /** 正文链接指向 manifest 里有、归档里没有的文档：同一条引用级半径，整本照读 */
+  'epub3-link-missing-entry': () => zipOf(pkgEntries(opfOf({
+    title: '失效链接样本（清单有、归档无）',
+    manifest: itemXml('ch1', 'ch1.xhtml') + itemXml('gone', 'gone.xhtml'),
+    spine: itemrefXml('ch1'),
+  }), [['OEBPS/ch1.xhtml', xhtmlOf('第一章', '<p id="a">甲<a href="gone.xhtml#x">去哪儿</a></p>')]])),
+
+  /** 正文图片指向 manifest 里有、归档里没有的资源：那一处不留图，整本照读 */
+  'epub3-image-missing-entry': () => zipOf(pkgEntries(opfOf({
+    title: '失效图片样本（清单有、归档无）',
+    manifest: itemXml('ch1', 'ch1.xhtml') + itemXml('pic', 'pic.png', { type: 'image/png' }),
+    spine: itemrefXml('ch1'),
+  }), [['OEBPS/ch1.xhtml', xhtmlOf('第一章', '<p id="a">甲<img src="pic.png" alt="缺图"/></p>')]])),
+
+  /**
+   * spine 里有一条 itemref 指向**归档里不存在**的文档（真书常见于漏打包、路径写错）。
+   * 这一条进不了阅读序列并留痕，其余章节照读、章号连续无洞——一条声明读不出不是整本书读不出。
+   */
+  'epub3-spine-missing-entry': () => zipOf(pkgEntries(opfOf({
+    title: '断链 spine 样本',
+    manifest: itemXml('ch1', 'ch1.xhtml') + itemXml('lost', 'gone.xhtml') + itemXml('ch3', 'ch3.xhtml'),
+    spine: itemrefXml('ch1') + itemrefXml('lost') + itemrefXml('ch3'),
+  }), [
+    ['OEBPS/ch3.xhtml', xhtmlOf('第三章', '<h1>第三章</h1><p id="c">丙</p>')],
+  ])),
+
+  /** spine 有一条指向**非 XHTML** 的 manifest 项（`text/html` 这类真实写法）：那一条进不了阅读序列，
+   *  但章号不许因此留洞——「第几章」必须始终等于阅读数组的下标，否则目录点的与读到的是两章。 */
+  'epub3-spine-non-xhtml': () => zipOf(pkgEntries(opfOf({
+    title: '非 XHTML spine 项样本',
+    manifest: itemXml('ch1', 'ch1.xhtml')
+      + itemXml('side', 'side.html', { type: 'text/html' })
+      + itemXml('ch3', 'ch3.xhtml'),
+    spine: itemrefXml('ch1') + itemrefXml('side') + itemrefXml('ch3'),
+  }), [
+    // 文件**在场**（不是悬空条目）：这一条要在「media-type 不是 XHTML」这一步被挡下，才测到那一步
+    ['OEBPS/side.html', '<?xml version="1.0" encoding="UTF-8"?>\n'
+      + '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>附件</title></head><body><p>不是 xhtml 声明</p></body></html>'],
+    ['OEBPS/ch3.xhtml', xhtmlOf('第三章', '<h1>第三章</h1><p id="c">丙</p>')],
+  ])),
+
+  /**
+   * 同一路径被两个 manifest id 声明、媒体类型不同：spine 的接纳按 idref 判（先声明的 XHTML 那一条），
+   * 编排层不许按路径索引的后写覆盖再判一次——否则这一章会在包层接纳后被静默剪掉。
+   */
+  'epub3-manifest-dup-path': () => zipOf(pkgEntries(opfOf({
+    title: '同路径双声明样本',
+    manifest: itemXml('ch1', 'ch1.xhtml') + itemXml('ch1-html', 'ch1.xhtml', { type: 'text/html' }),
+    spine: itemrefXml('ch1'),
+  }))),
+
+  /** 正文里有一条越出书根的链接（`../../../etc/passwd`）：这一处取消可点击性并留痕，不牵动整本书 */
+  'epub3-link-escaping': () => zipOf(pkgEntries(opfOf({
+    title: '越界链接样本', manifest: itemXml('ch1', 'ch1.xhtml'), spine: itemrefXml('ch1'),
+  }), [['OEBPS/ch1.xhtml', xhtmlOf('第一章', '<p id="a">甲<a href="../../../etc/passwd">逃出去的字</a></p>')]])),
+
+  /**
+   * 目录与正文内链都指进一份**读不出**的文档（超深正文）的锚点：那一份文档的锚点表无从建立，
+   * 所以不许把「我们没读出来」说成「这个锚点不存在」——落点是该页开头，整本照读。
+   */
+  'epub3-nav-into-unreadable': () => zipOf(pkgEntries(opfOf({
+    title: '指进空页的目录样本',
+    manifest: itemXml('ch1', 'ch1.xhtml')
+      + itemXml('deep', 'deep.xhtml')
+      + itemXml('nav', 'nav.xhtml', { attrs: ' properties="nav"' }),
+    spine: itemrefXml('ch1') + itemrefXml('deep'),
+  }), [
+    ['OEBPS/ch1.xhtml', xhtmlOf('第一章', '<p>甲<a href="deep.xhtml#far">去深处</a></p>')],
+    ['OEBPS/deep.xhtml', xhtmlOf('深处', nestedDivs(200, '很深'))],
+    ['OEBPS/nav.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n'
+      + '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>目录</title></head><body>'
+      + '<nav epub:type="toc"><ol><li><a href="ch1.xhtml">第一章</a></li><li><a href="deep.xhtml#far">深处</a></li></ol></nav></body></html>'],
+  ])),
+
+  /** `linear` 写歪（规范只有 yes/no）：按缺省 yes 读这一条，只把声明形态记一笔，不剪也不拒 */
+  'epub-spine-linear-variant': () => zipOf(pkgEntries(opfOf({
+    title: 'linear 变体样本', manifest: itemXml('ch1', 'ch1.xhtml'), spine: itemrefXml('ch1', ' linear="maybe"'),
+  }))),
+
+  /**
+   * 一份内容文档不合法（未声明的实体）：解不开的是**这一页**——它落空页并带原因，
+   * 同书另一页照读。安全面不放宽：我们仍然不解析它。
+   */
+  'epub3-one-bad-document': () => zipOf(pkgEntries(opfOf({
+    title: '单份坏文档样本',
+    manifest: itemXml('ch1', 'ch1.xhtml') + itemXml('bad', 'bad.xhtml') + itemXml('ch3', 'ch3.xhtml'),
+    spine: itemrefXml('ch1') + itemrefXml('bad') + itemrefXml('ch3'),
+  }), [
+    ['OEBPS/bad.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n<html xmlns="http://www.w3.org/1999/xhtml">'
+      + '<head><title>坏页</title></head><body><p>引用了没有声明的实体 &badname;</p></body></html>'],
+    ['OEBPS/ch3.xhtml', xhtmlOf('第三章', '<h1>第三章</h1><p id="c">丙</p>')],
+  ])),
+
+  /** 目录里有一条指向读不出的文档：只剪这一条（子条目上提），书与其余目录照用 */
+  'epub3-nav-dead-item': () => zipOf(pkgEntries(opfOf({
+    title: '目录断链样本',
+    manifest: itemXml('ch1', 'ch1.xhtml')
+      + itemXml('lost', 'gone.xhtml')
+      + itemXml('nav', 'nav.xhtml', { attrs: ' properties="nav"' }),
+    spine: itemrefXml('ch1'),
+  }), [
+    ['OEBPS/nav.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n'
+      + '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>目录</title></head><body>'
+      + '<nav epub:type="toc"><ol>'
+      + '<li><span>第一卷</span><ol><li><a href="gone.xhtml">读不出的那条</a></li><li><a href="ch1.xhtml#a">第一章</a></li></ol></li>'
+      + '</ol></nav></body></html>'],
+  ])),
+
+  /** 正文用远程图片（书外资源）：这一处不留图并点名，整本照读 */
   'epub3-remote-image': () => zipOf(pkgEntries(opfOf({
     title: '远程图片样本', manifest: itemXml('ch1', 'ch1.xhtml'), spine: itemrefXml('ch1'),
   }), [['OEBPS/ch1.xhtml', xhtmlOf('第一章', '<p id="a">甲<img src="https://example.invalid/x.png" alt="远程图"/></p>')]])),
 
-  /** 被引用的图片字节损坏（缺 IEND）：导入失败并点名资源 */
+  /**
+   * 坏图**且带着被目录引用的锚点**：这张图读不出来，该处不留，但锚点必须有落点——
+   * 它换成一个空的容器节点承接，位置还在（指向它的目录条目不能绑到树上不存在的 ID）。
+   */
+  'epub3-broken-inline-image': () => zipOf(pkgEntries(opfOf({
+    title: '带锚点的坏图样本',
+    manifest: itemXml('ch1', 'ch1.xhtml')
+      + itemXml('fig', 'images/fig.png', { type: 'image/png' })
+      + itemXml('nav', 'nav.xhtml', { attrs: ' properties="nav"' }),
+    spine: itemrefXml('ch1'),
+  }), [
+    ['OEBPS/ch1.xhtml', xhtmlOf('第一章', '<p id="a">甲</p><p><img id="p1" src="images/fig.png" alt="插图说明"/></p>')],
+    ['OEBPS/images/fig.png', TRUNCATED_PNG],
+    ['OEBPS/nav.xhtml', '<?xml version="1.0" encoding="UTF-8"?>\n'
+      + '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>目录</title></head><body>'
+      + '<nav epub:type="toc"><ol><li><a href="ch1.xhtml#p1">插图那一处</a></li></ol></nav></body></html>'],
+  ])),
+
+  /** 被引用的图片字节损坏（缺 IEND）：这一处不留图并点名资源与原因，整本照读 */
   'epub3-broken-image': () => zipOf(pkgEntries(opfOf({
     title: '损坏图片样本',
     manifest: itemXml('ch1', 'ch1.xhtml') + itemXml('fig', 'images/fig.png', { type: 'image/png' }),
@@ -1285,21 +1570,38 @@ const FIXTURES: Record<string, () => Buffer> = {
       + '<p id="b">正文保留</p>')],
   ]),
 
-  /** 超深正文（200 层 div）：默认深度预算 128 就要报错——没有预算的递归走法会吃穿调用栈 */
+  /**
+   * 超深正文（200 层 div）：默认深度预算 128 就要判这一份读不出——没有预算的递归走法会吃穿调用栈。
+   * 另配一章正常正文：半径是「这一页留空」，整本不许被一页拖死（全空的样本见 `epub3-all-blank`）。
+   */
   'epub3-doc-too-deep': () => zipOf(pkgEntries(opfOf({
-    title: '超深正文样本', manifest: itemXml('ch1', 'ch1.xhtml'), spine: itemrefXml('ch1'),
-  }), [['OEBPS/ch1.xhtml', xhtmlOf('第一章', nestedDivs(200, '很深'))]])),
+    title: '超深正文样本',
+    manifest: itemXml('ch0', 'ch0.xhtml') + itemXml('ch1', 'ch1.xhtml'),
+    spine: itemrefXml('ch0') + itemrefXml('ch1'),
+  }), [
+    ['OEBPS/ch0.xhtml', xhtmlOf('序章', '<p>读得出的序章</p>')],
+    ['OEBPS/ch1.xhtml', xhtmlOf('第一章', nestedDivs(200, '很深'))],
+  ])),
 
-  /** 超宽正文（300 个行内元素）：默认预算下读得出，节点预算缩到 200 后必须报错并点名这份文档 */
+  /**
+   * 超宽正文（300 个行内元素）：默认预算下读得出，节点预算缩到 200 后这份读不出。
+   * 同样另配一章正常正文：主语是一份文档，落法是留空页加一条点名的痕，不是整本拒。
+   */
   'epub3-doc-too-wide': () => zipOf(pkgEntries(opfOf({
-    title: '超宽正文样本', manifest: itemXml('ch1', 'ch1.xhtml'), spine: itemrefXml('ch1'),
-  }), [['OEBPS/ch1.xhtml', xhtmlOf('第一章', '<p id="a">' + '<i>字</i>'.repeat(300) + '</p>')]])),
+    title: '超宽正文样本',
+    manifest: itemXml('ch0', 'ch0.xhtml') + itemXml('ch1', 'ch1.xhtml'),
+    spine: itemrefXml('ch0') + itemrefXml('ch1'),
+  }), [
+    ['OEBPS/ch0.xhtml', xhtmlOf('序章', '<p>读得出的序章</p>')],
+    ['OEBPS/ch1.xhtml', xhtmlOf('第一章', '<p id="a">' + '<i>字</i>'.repeat(300) + '</p>')],
+  ])),
 
   /**
    * EPUB2 旧式命名锚点：NCX 的四个目标分别指向 `<a name="legacy">`（只有 name）、
    * `<a name="both" id="both">`（name 与 id 双写，HTML4 时代的推荐写法，同一个落点）与
    * `<a id="alpha" name="beta">`（一个元素上两个**不同**的名字，指向同一个落点）。
-   * 只认 `id` 的实现会把其中三条目录目标当成「锚点不存在」而拒整本。
+   * 只认 `id` 的实现会把其中三条目录目标当成「锚点不存在」而降级到该页开头（条目仍然可用，但落点错、
+   * 动作句也说错了方向）。
    */
   'epub2-named-anchor': () => zipOf([
     ['META-INF/container.xml', CONTAINER_OPF],

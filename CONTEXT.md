@@ -281,6 +281,31 @@ _Avoid_: 入架按钮、书城加架（那是两个入口，动作只有这一�
 _唯一实现_: `src/services/localbooks.ts`（身份、分流、提交、读取、删除）+ `src/services/epub/`（解析与规范化——不认识书架与 HTTP）
 _Avoid_: 本地 TXT（口径覆盖两种格式，书架卡片因此只说「本地」，真格式由导入回执的 `format` 交代）、上传文件
 
+**文档级锚点（document-level anchor）**:
+声明在 `<body>` 上的那个 `id`——源里确实存在这个锚点，而图文树没有 body 这个节点，所以它在树上的落点就是**该页开头**，与「无片段」等价：既不降级、也不告警、更不是坏书。
+_唯一实现_: `services/epub/documents.ts` 的 `scanXhtml` / `XhtmlScan.documentAnchor`（绑定在 `services/epub/import.ts` 的 `lookupAnchor`）
+_Avoid_: 失效锚点（那是指向从未存在过的名字，按条降级、整本照读）、根锚点、页面锚点（那是元素级 id）
+
+**阅读单元（reading unit）**:
+留在阅读序列里的那一份主序列文档的书内位置——章号是「第几个留下的单元」，不是 `itemref` 在原文件里的序号：一条声明被剪，后面各条往前挪，不留洞；读不出正文的页照旧占号（它是一页空白，不是被剪）。
+_唯一实现_: `services/epub/import.ts` 的 `EpubChapterRef`（编号点在主序列入队那一处）；剪哪一条由 `services/epub/package.ts` 的 `parseSpine` 决定，编排层只按剩下的顺序编号、不再重判
+_Avoid_: spine 项、章节序号（spine 的原始声明与阅读序列不是一回事，见 `docs/architecture.md` §4）
+
+**留空页（blank document）**:
+一份主序列文档读不出任何正文时的落法：**照旧进阅读序列、照旧占章号、目录照旧有名，读出来是空白页**，另留一条点名的痕。**空白是可见性判据，不是空树**：转换出的结构照旧留在正文里（可能只有空容器或空白文本），扫描期铸出的锚点 ID 因此仍有落点——清空树会让指向这一页的目录与内链绑到不存在的节点。它与「被剪条目」是两种事实，不折叠。读不出的来源不止解码一种：声明就排不动（scripted）、解出来不是良构 XML、DOM 超出深度/节点预算、剥完什么都不剩——**主语都是这一份文档，落法就同一种**（半径由那份文档的预算声明，不由哪一步被接住决定）。
+_唯一实现_: 半径 `services/epub/findings.ts` 的 `FINDING_RADII.blankDocument`；给不出正文的事实由 `services/epub/xml.ts` 的 `fail`（解码、闸门、解析、预算四条路共用的唯一失败出口）与 `services/epub/documents.ts` 的 `convertXhtml`（`readable` 那一格）交回，落盘在 `services/epub/import.ts` 的主序列循环
+_Avoid_: 空章节冒充成功（判据仍然不许：没有正文就是一页空白，不是「有内容」）、跳过（跳过意味着章号会挪，那是剪除那条路）
+
+**被剪条目（pruned entry）**:
+一条声明读不出它指的东西——spine 条目指不到文档、目录条目指向读不出的文档、正文链接指向不存在的文件——只丢**那一条**并留痕：阅读序列往前挪、目录的子条目上提、正文链接取消可点击性但文字一个字不丢。
+_唯一实现_: 共享码 `services/epub/findings.ts` 的 `WARN_ITEM_PRUNED` 与半径 `FINDING_RADII.itemPruned`；三处后果分别在 `services/epub/package.ts` 的 `parseSpine` / `pruneDeadTargets` 与 `services/epub/import.ts` 的 `bindNav` / `bindLink`
+_Avoid_: 降级（降级是「内容还在、表达不全」，见半径规则 `ADR-0061`）、失效链接（那是过去式：它现在就是被剪条目的一种）
+
+**半径表（failure-radius table）**:
+「这条事实有多大、坏到什么程度、编排层因此落哪一格后果」的唯一主人：发出方只交**名字**（`blankDocument` / `itemPruned` / `elementDropped`…），半径与后果由表决定——所以「整本书读不出」这一格在表里**不存在**，那条路只能走书级出口。落盘的是拆开的事实清单（半径、码、资源、动作句、处数与例子）：合并与句式在读面现算，**动作句仍是导入时的原文**——投影不是事实，两者别当同一件事。
+_唯一实现_: `services/epub/findings.ts` 的 `FINDING_RADII` / `FindingLog`（`add` 按名字发、`addEntry` 并低层清单、`warningListOf` 出投影）；书级出口同住 `services/epub/errors.ts` 的 `rejectBook` / `bookError`（整本拒只有一条路，名册 `tests/services/epub-failure-radius.test.ts` 按这两个符号的调用点处数钉住）
+_Avoid_: 告警表、warn 名单（码是稳定标识，半径与后果才是这张表管的东西）、把 `scope`/`severity` 当调用点自己填的参数（那是这版之前分叉的源头）
+
 **后台任务（background job）**:
 跑在服务端的耗时任务，四种 kind：`novel-import` / `novel-probe`（写，共用一槽）与 `novel-search` / `novel-explore`（读，另开一槽）。身份与生命周期登记给宿主 `ctx.jobs`；业务计数与明细归本仓持有者。**停止（cancel）不是失败也不是放弃**。
 _唯一实现_: `services/import-job.ts` / `services/probe.ts` / `services/search-job.ts` / `services/explore-job.ts`；**与宿主登记之间那段机械**（`ctx.jobs` 注册、协作式取消记账、终态结算、过程行拉取、「变了」信号）唯一住在 `services/job-holder.ts` 的 `HostTie` / `ChangeSignal`

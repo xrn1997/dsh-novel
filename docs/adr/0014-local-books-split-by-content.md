@@ -10,6 +10,6 @@ Status: accepted
 
 **第二处裁决：本地发布与书架落盘之间没有跨文件事务**，也不建启动扫描器、不用自动删除掩盖。强杀恰在「元数据写完、书架落盘前」会留一份完整但未入架的副本——这是**已接受的窗口**。被否决：「扫 `local/` 里没有对应书架条目的 uuid 就删」，它会把「用户手动清过书架但想留文件」「多进程同时写同一数据根」一起误杀。运维口径：副本不会自己消失、也不会被自动复用（uuid 每次新铸），要清就人工清 `local/`。
 
-在册待裁：PDF / MOBI / UMD 三种媒介怎么落表（排期接 / 判不适用 / 判不适用 + **具名魔数**的最小拒收）——注意具名魔数与上面第 ② 条不冲突，被否决的是**全量**启发式。
+在册待裁已落定：PDF / MOBI / UMD 三种媒介都按「判不适用 + **具名魔数**的最小拒收」落表——注意具名魔数与上面第 ② 条不冲突，被否决的是**全量**启发式；裁决、声明名规则与残留面见 `ADR-0065`。
 
-锚点：`src/services/localbooks.ts`（`isZipMagic` / `decodeLocalText` / `BOOK_KEY_RE`）；`src/services/epub/errors.ts`；`tests/services/localbooks.test.ts`；矩阵行 `j-local-book`、`j-local-book-epub`、`j-local-book-other-formats`。
+锚点：`src/services/localbooks.ts`（`hasZipMagic` / `decodeLocalText` / `BOOK_KEY_RE`）；`src/services/epub/errors.ts`；`tests/services/localbooks.test.ts`；矩阵行 `j-local-book`、`j-local-book-epub`、`j-local-book-other-formats`。

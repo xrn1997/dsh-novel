@@ -60,7 +60,7 @@
 - 回溯阅读不因裁章失效：视口顶接近已载窗口顶（`BACKFILL_SCREENS` 屏以内）时 `checkBackfill` 补上一章，走的是同一个单在途槽。补载只在真实视口读数到过一次之后判断；存档恢复（含章内比例 0）在双帧落位完成前由 `restoring` 一闸挡住预取、位置提交与补载（此前的 `scrollTop` 还是进入前的旧值）——比例 0 也落位到存档章顶，否则回溯补载的前插会把视口带进上一章；前插补偿按「原来第一章的新旧起点差」算（章间外边距计入），阅读位置不随补载漂移。补载还要求实测章高 > 0、不越过 `pruneToViewport` 的裁章下界（否则新章落地即被裁掉、触发同一章重取），且每个视口 episode 的自动补载次数有硬上界（`BACKFILL_MAX_CHAPTERS`，跳章与跨章换位重置）。
 - 滚动补偿**归会话，不归浏览器**：`overflow-anchor: none` 盖住阅读器整棵子树（`styles/reader.ts`），因为滚动容器是祖先 `.novel-main`、而该属性不继承——只写正文容器挡不住章块自己当选锚点。浏览器再自动锚一次就是双重补偿，所以裁掉视口上方的章、往窗口顶前插一章这两件事都由 `pendingScrollFixes` 记账，在 `afterRender`（DOM 已提交）按参考章新旧起点差补 `scrollTop`（参考章量不到时分别退回高度和 / 新章块高）；导航跳章清空这笔账，落位归 `settleJump`。子树里自带头尾的内嵌浮层（目录抽屉、注释面板）因此也不带原生锚定——它们靠自己的开合，不靠内容位移补偿。
 - 进度：`ReaderSession` 的 `commit` 四个来源——恢复不写、跳转与跨章立落、滚动防抖——统一落到 `saveProgress`。
-- 浮层住 `reader-surfaces.ts` 的 `ReaderSurface`：偏好 / 目录 / 导出 / 补充正文 / 导入注释，**至多一角**；`openSurface` / `closeAll` 管开合，只有偏好与导出带遮罩，Esc 归属由 `escOwner` 判（模态优先）。
+- 浮层住 `reader-surfaces.ts` 的 `ReaderSurface`：偏好 / 目录 / 导出 / 补充正文 / 导入注释，**至多一角**；`openSurface` / `closeAll` 管开合，只有偏好与导出带遮罩，Esc 归属由 `escOwner` 判（模态优先）。导入注释列的是服务端持久化的每一条痕：哪一页读不出正文（它仍在目录里，点开是空白页）、哪一条目录被剪、哪一处图片没带进来；每条只说「哪一格、丢了什么、多少处」——半径与严重度留在服务端不外泄（`LocalImportWarning` 只有 `code` / `resource` / `message`），面板也不补发请求。
 - 离开一问：`reader-scene.ts` 的 `ReaderScene` 只在书不在架（`onShelf === 'off'`）时问「加入书架」；入架成功才离开，失败只落内联错误、留在阅读器。
 
 ## 4. 浮层与危险动作

@@ -321,7 +321,9 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } 
     const name = requireQuery(url, PARAMS.name)
     const max = service.localImportMaxBytes
     // 流读与上限判据归 readCappedBody（与 JSON 信封体同一份实现），本处只给措辞
-    const bytes = await readCappedBody(req, max, (m) => `文件超过 ${formatByteLimit(m)} 上限`)
+    // 超限是配置边界，不是坏文件：报错要把可调的那一项交到用户手上
+    const bytes = await readCappedBody(req, max,
+      (m) => `文件超过 ${formatByteLimit(m)} 上限：可在插件设置的「本地文件导入上限」（localImportMaxBytes）调大`)
     // 分流（TXT/EPUB 按内容）、发布与自动上架全归门面；回执就是 wire 的 LocalImportResponse
     writeOk(res, await service.localImport(bytes, name))
   },

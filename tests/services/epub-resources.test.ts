@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { LocalImportWarning } from '../../src/shared/wire.js'
-import { EpubWarningLog } from '../../src/services/epub/warnings.js'
+import { warningListOf } from '../../src/services/epub/findings.js'
 import { EpubImportError } from '../../src/services/epub/errors.js'
 import { validateImage, type ImageFacts } from '../../src/services/epub/resources.js'
 import { IMAGE_SAMPLES } from '../fixtures/epub.js'
@@ -19,18 +19,16 @@ import { must, pick } from '../support/fixture.js'
 
 const LIMITS = { depth: 128, nodes: 200_000 }
 
-/** 跑一次校验并收下告警（告警走日志，不回灌进 facts——facts 只该有类型/尺寸那几项） */
+/** 跑一次校验并收下告警（本层交回事实清单，给用户看的那份由 `warningListOf` 现算——facts 只该有类型/尺寸那几项） */
 function run(bytes: Buffer, declaredMediaType: string, opts: { what?: string; path?: string; imagePixels?: number } = {}): { facts: ImageFacts; warnings: LocalImportWarning[] } {
-  const log = new EpubWarningLog()
-  const facts = validateImage(bytes, {
+  const result = validateImage(bytes, {
     what: opts.what ?? 'images/fig.bin（引用处 OEBPS/ch1.xhtml）',
     path: opts.path ?? 'images/fig.bin',
     declaredMediaType,
     imagePixels: opts.imagePixels ?? 40_000_000,
     domLimits: LIMITS,
-    warnings: log,
   })
-  return { facts, warnings: log.list() }
+  return { facts: result.facts, warnings: warningListOf(result.findings) }
 }
 
 /** 只要 facts 的那一类用例（宽度/类型/扩展名） */
@@ -48,7 +46,9 @@ function rejection(bytes: Buffer, declaredMediaType: string, opts: { imagePixels
 }
 
 function expectEpubError(e: Error, pattern: RegExp): void {
-  expect(e.name).toBe('EpubImportError')
+  // 资源级失败是本类（半径写在类型上：编排层只接住这一类，其余照原样上抛），
+  // 但仍属 EPUB 导入家族——服务层的分类表按基类映射，不因为降级而换类目
+  expect(e.name).toBe('EpubResourceError')
   expect(e).toBeInstanceOf(EpubImportError)
   expect(e.message).toMatch(pattern)
 }
