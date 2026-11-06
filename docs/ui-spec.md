@@ -74,5 +74,5 @@
 
 - 挂点：宿主插件详情页的 `plugins.bundle.config` 槽位（按 bundle 包名寻址的 keyed 子槽位），由 `src/client/config-page.tsx` 的 `registerConfigPage` 注册。
 - 卡片按四组排：搜索 / 阅读 / 存储 / 网络（`GROUPS`）。只渲染运行时可活更的字段（volatile）——启动期字段（如 `dataDir`）不出现在这里。
-- 每行：是否已覆盖的标记与单项重置（`resetField`）、预设 chip、宿主回读值、非法值内联报错。保存 / 只读 / 不可用 / 失败四态归宿主 `SettingsForm`，卡片不自造。
+- 每行：是否已覆盖的标记与单项重置（`resetField`）、预设 chip、人话回读（字节 / 时长换算）、非法值内联报错。前置态（加载中 / 插件未加载 / 设置面读取失败）与写入态（只读 / 保存中 / 保存失败）都由本页自绘，页脚下方是「保存 / 放弃修改」条；值与写协议走宿主设置面（`ctx.remote.settings` 的 `describe` / `mutate`），草稿与保存态自持。
 - 保存即写活配置，下一次读数生效，不重载插件；volatile 更新事件只在 Node 端留痕。

@@ -7,8 +7,8 @@ import { fakeCtx, fakeHost } from './fake-host.js'
 
 /**
  * 客户端注册面：小说 = **全局面板**，不是对话区 tab。
- * 座位形状以本仓的镜像声明为准（平台模块表住 `tsdown.config.ts`，宿主表单原语的窄镜像住
- * `src/client/host-ui.d.ts`）：`sidebar.panellist` 每条 entry 是侧栏一行（注册 `{ id, order?, label? }`，
+ * 座位形状以本仓的镜像声明为准（平台模块表住 `tsdown.config.ts`，宿主契约的窄镜像住
+ * `src/client/index.tsx`）：`sidebar.panellist` 每条 entry 是侧栏一行（注册 `{ id, order?, label? }`，
  * 占用者只收 owner props `{ size, active }`）；`main` 是同 id 选中后按 `{ key }` 渲染的占用者。
  * 选中的 id 在 main 侧必须有对应条目，缺一条整块面板就开不出来 ⇒ 两个座位必须同批注册
  * （apply 内同步完成）。

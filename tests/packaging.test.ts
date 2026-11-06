@@ -94,8 +94,8 @@ describe('包形态声明', () => {
     // locale 是唯一的在册条目：文案字典靠 ctx.get('locale') 读宿主语言服务。这条边只保证包
     // 按序到达；服务本身由 locale 包的 immediately 在正常组合里先提供——apply 时读一次，
     // 晚到/缺席退回内置中文（ADR-0038），不炸。
-    // 其余到达依赖（如 ui-primitives）仍不声明——require 集合里没有它，声明即过度声明，
-    // 激活期会与别的解析失败聚合成 AggregateError。
+    // client bundle 的 require 集合只有宿主静态模块表里的 react 两条（ADR-0067）：配置页走
+    // `ctx.remote.settings`，不引任何宿主 client 包，因此没有其它到达依赖可声明。
     expect(stringsAt(pkg, 'dsh', 'client', 'inject')).toEqual(['@deepseek-ai/dsh-client-locale'])
     // 「对话区 tab 已撤 / 单一归属」由 tests/client/panel-registration.test.tsx 钉（座位集合），
     // 本文件不重复那条读数，只钉包声明面。

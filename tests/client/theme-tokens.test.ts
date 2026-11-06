@@ -11,6 +11,8 @@ import { must } from '../support/fixture.js'
  * 不报错、只静默落回硬编码 fallback，深浅两态都不跟随宿主（深色模式会因此失效）。
  * 本词表是宿主 token 名的冻结快照，家就在这个文件里（不依赖宿主安装路径）；宿主契约改名时
  * 随发布物更新本词表——那是契约变了的信号。光/暗两套同名，故一份名单够用。
+ * 收录口径是宿主**主题样式表**里的真名；宿主检查器给出的 token 目录是公开子集，不能当全集用
+ * （拿子集当分母会把真 token 全判成违规），所以词表比那份目录宽是正常的。
  */
 const HOST_TOKENS = new Set<string>([
   "--dsw-alias-bg-base", "--dsw-alias-bg-layer-1", "--dsw-alias-bg-layer-2",

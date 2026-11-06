@@ -129,7 +129,7 @@ function readField<T>(value: Field<T> | null | undefined): T | undefined {
 }
 
 /** `.volatile()` 是能力位而非必需项：宿主 schema 不提供它时字段退化为普通值，插件仍能加载；
- *  配置页的可编辑性由 configForms 能力闸另判。 */
+ *  配置页的可编辑性由宿主设置面（`remote.settings`）能力闸另判。 */
 function maybeVolatile<T extends object>(schema: T): T {
   const method = (schema as T & { volatile?: () => unknown }).volatile
   return typeof method === 'function' ? (method.call(schema) as T) : schema

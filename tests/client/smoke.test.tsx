@@ -127,18 +127,16 @@ describe('NovelView smoke（renderToString 不炸——数据获取在 effect，
     expect(html).not.toContain('data-chapter=')
     expect(html).not.toContain('data-novel-sentinel')
   })
-  it('小说视图收掉宿主常驻 composer（AI 输入框）——只藏默认层，接管层（提问/审批）仍在', () => {
-    // 直接断言样式串本身：renderToString 会把文本节点里的 " 转义成 &quot;，选择器断言走原串更可靠
-    expect(NOVEL_CSS).toContain('[data-conversation-scroll]:has([data-novel-root]) [data-chain-overlay-fallback="conversation.composer"]')
-    expect(NOVEL_CSS).toContain('display: none !important')  // 盖 inline display:contents；不整座藏（否则吞掉提问/审批接管）
-    expect(NOVEL_CSS).not.toContain('[data-composer-seat] { display: none')
+  it('样式层不碰宿主 DOM：composer 与列宽把手都不由本插件藏（面板与 Conversation 互斥）', () => {
+    // 直接断言样式串本身：renderToString 会把文本节点里的 " 转义成 &quot;，选择器断言走原串更可靠。
+    // 宿主私有属性一个都不许出现——宿主改名时它不报错、只静默失效（守卫见 tests/client/host-dom-guard.test.ts）。
+    for (const hostOwned of ['data-conversation-scroll', 'data-chain-overlay-fallback', 'data-width-handle', 'data-composer-seat']) {
+      expect(NOVEL_CSS).not.toContain(hostOwned)
+    }
+    // 作用域仍在自己的两棵树：token 层与 reset 都钉在 .novel-root / [data-novel-scope] 上
+    expect(NOVEL_CSS).toContain('.novel-root, [data-novel-scope]')
     routeStore.set({ route: { name: 'reader', sourceId: 's', bookKey: 'k', title: 'T' } })
     expect(renderToString(createElement(NovelView))).toContain('data-novel-style')   // 样式层确实随视图注入
-  })
-  it('小说视图收掉配套的列宽拖拽把手（data-width-handle，调 AI 输入框宽度那条）——兄弟选择器，不误伤对话视图', () => {
-    expect(NOVEL_CSS).toContain('[data-conversation-scroll]:has([data-novel-root]) ~ [data-width-handle]')
-    expect(NOVEL_CSS).toContain('~ [data-width-handle] { display: none; }')   // 兄弟（~）而非后代：chat 视图的把手照旧
-    expect(NOVEL_CSS).not.toContain(']) [data-width-handle]')             // 不是后代选择器：chat 视图的把手照旧可见可拖
   })
   it('没有独立的 tab 栏（导航只有顶部三 tab）', () => {
     routeStore.set({ route: { name: 'shelf' } })

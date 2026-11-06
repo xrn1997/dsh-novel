@@ -2,7 +2,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { Browser } from 'playwright'
-import { NovelConfigCardView } from '../../src/client/config-page.js'
+import { NovelConfigPageView } from '../../src/client/config-page.js'
+import { zhTranslate } from '../../src/client/copy/index.js'
 import { must, pick } from '../support/fixture.js'
 import { launchBrowser } from './epub-host.js'
 
@@ -13,18 +14,16 @@ import { launchBrowser } from './epub-host.js'
  * 两句话在 jsdom 里都只是**字符串在场**——它量不到后缀有没有真的压在数字上、框有没有
  * 被 200px 轨限住。而那两条正是这次重做的全部主张。
  *
- * markup 由 `renderToStaticMarkup(NovelConfigCardView)` 出，CSS 是发布用的那一份
- * （组件自带 `<NovelStyles/>`，不在这里手抄样式）。**宿主壳不在这台的可及范围**：
- * `SettingsForm` 走的是 vitest alias 指到的替身，所以本门只量本仓画的行，不替宿主的
- * 保存条说话。不起服务、不读站点。
+ * markup 由 `renderToStaticMarkup(NovelConfigPageView)` 出，CSS 是发布用的那一份
+ * （组件自带 `<NovelStyles/>`，不在这里手抄样式）。页面壳（含保存条）也由本仓自绘，
+ * 所以本门量的是整页几何。不起服务、不读站点。
  */
 
 const ENABLED = process.env.DSH_EPUB_BROWSER === '1'
 
 const ok = { text: '5', overridden: false, invalid: false }
 /** 截图里那一屏的真值：209715200 与 52428800 是出厂缺省，正是要被读成人话的那两个数。 */
-const state = {
-  available: true, writable: true, dirty: false, invalid: false, saving: false, failed: false,
+const fields = {
   searchTimeoutMs: { text: '15000', overridden: false, invalid: false },
   searchParallel: ok,
   jsTimeoutMs: { text: '15000', overridden: false, invalid: false },
@@ -33,7 +32,7 @@ const state = {
   localImportMaxBytes: { text: '52428800', overridden: true, invalid: false },
   proxyUrl: { text: 'http://127.0.0.1:7897', overridden: false, invalid: false },
 }
-const actions = { save: () => {}, discard: () => {}, edit: () => {}, resetField: () => {} }
+const actions = { onEdit: () => {}, onReset: () => {}, onSave: () => {}, onDiscard: () => {} }
 
 interface Rect { left: number; right: number; top: number; width: number; height: number }
 interface RowRead {
@@ -80,7 +79,16 @@ describe.skipIf(!ENABLED)('浏览器几何：插件页「运行参数」自绘�
   /** 在给定容器宽度下量一次：配置页的退档按 `.novel-cfg` 自身宽度判定，所以限宽即限档。 */
   async function measure(px: number): Promise<Read> {
     const markup = renderToStaticMarkup(
-      <NovelConfigCardView state={state} actions={actions} />,
+      <NovelConfigPageView
+        t={zhTranslate}
+        writable
+        fields={fields}
+        dirty={false}
+        invalid={false}
+        saving={false}
+        failure={null}
+        {...actions}
+      />,
     )
     const page = await (await browser.newContext({ viewport: { width: 1400, height: 900 } })).newPage()
     await page.setContent(

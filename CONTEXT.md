@@ -473,8 +473,8 @@ _Avoid_: 设置（宿主设置页是另一处）、热更新（宿主 HMR 是另
 
 **插件页配置页（plugin config page）**:
 挂在宿主「插件」页 `plugins.bundle.config` 槽上的「运行参数」表单，按 bundle 包名 `@xrn1997/dsh-novel` 注册。
-壳（保存 / 只读 / 不可用 / 失败四条语义）归宿主 `SettingsForm`，**每一行的几何归本仓**——宿主字段原语只吃 label 与 hint 两个字符串，装不下「单位落在框内」与「裸字节数要读成人话」。
-_唯一实现_: `client/config-page.tsx` 的 `registerConfigPage` / `NovelConfigCard`（接线）与 `NovelConfigCardView`（行）
+值与写协议走宿主设置面 `ctx.remote.settings`（`describe` / `mutate`，宿主编目的设置服务的客户端面）；壳（保存 / 只读 / 不可用 / 失败四条语义）与**每一行的几何都归本仓**——行要装下「单位落在框内」与「裸字节数要读成人话」，故本页自绘呈现与草稿，只把值域裁决留给宿主。
+_唯一实现_: `client/config-page.tsx` 的 `registerConfigPage` / `NovelConfigCard`（接线）与 `NovelConfigPageView`（呈现）
 _Avoid_: 设置页、设置面板（那是宿主设置的分区）
 
 **活值读数（value source）**:

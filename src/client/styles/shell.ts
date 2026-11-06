@@ -1,5 +1,5 @@
-/** 宿主壳块（`NOVEL_CSS` 的第 2 块）：五分支共用的 overflow 链、宿主 composer 收口、
- *  顶部 tab 与全局状态条浮层，以及控制器层强制暗的 `.novel-dark` token 重钉
+/** 宿主壳块（`NOVEL_CSS` 的第 2 块）：五分支共用的 overflow 链、与宿主 DOM 的边界（只作用自己的
+ *  两棵树）、顶部 tab 与全局状态条浮层，以及控制器层强制暗的 `.novel-dark` token 重钉
  *  （暗层字面量只此一处：自定义属性在声明处算完即继承，派生色不重钉就跟不上暗层）。 */
 export const SHELL_CSS = `
 /* ── 布局与宿主壳收口（与配色无关，别在改主题时弄丢）──────────────────────
@@ -11,17 +11,12 @@ export const SHELL_CSS = `
    进度落盘/预取/回跳一并死）。 */
 .novel-root { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 .novel-main { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-/* 「小说」视图在场时收掉宿主常驻 composer（AI 输入框）：它是会话壳的固定座位，view 环切换不卸载
-   它，切到小说 tab 后仍贴在底部压在正文上；宿主没有「本视图不需要输入框」的钩子，故本样式层用
-   :has 判在场性（data-novel-root 进 DOM 才命中，切回「对话」即时恢复）。
-   只藏「默认 composer」那一层（上面属性选择器指认的包裹层）而不是整个 [data-composer-seat]
-   ——那一层带行内 display:contents 的声明、必须 !important 才压得住；而同座位上审批/提问等
-   接管组件是它的**兄弟节点**，照样渲染：小说 tab 里 agent 提问与
-   审批提示不会被吞掉（整座 display:none 会吞掉，用户在等待中看不到提问 → 卡死）。 */
-[data-conversation-scroll]:has([data-novel-root]) [data-chain-overlay-fallback="conversation.composer"] { display: none !important; }
-/* 配套控件：会话列宽拖拽把手（40px 透明 col-resize 条，调 AI 输入框宽度）。输入框收掉后它没对象
-   可调，留着只剩一条会在正文上冒光标的假控件。用兄弟选择器而非后代：对话视图里的同名把手不受影响。 */
-[data-conversation-scroll]:has([data-novel-root]) ~ [data-width-handle] { display: none; }
+/* 这里**故意没有**「藏宿主 composer / 列宽把手」的规则：main 是 keyed 槽，宿主按选中面板的 id
+   只渲染一个占用者（entryKey 命中谁就渲染谁），切到小说面板时整个 Conversation 卸载，composer
+   与把手随之消失——结构上不存在「composer 压在正文上」。老规则用宿主的会话滚动容器属性做
+   :has(...) 判在场，只在「小说作为 conversation.view 渲染」时才有意义，换成 main
+   面板后已是死代码：它不报错、也不会随宿主改属性名变红，只会让下一个读者以为面板要跟宿主 DOM
+   打架。**作用域只到 .novel-root 与 [data-novel-scope] 两棵树**，宿主 DOM 一律不碰。 */
 /* 「控制器层跟随深色」：勾上即把本层局部 token 钉成暗底值（正文纸张色不受影响）。
    宿主没有「强制暗层」的现成 token，故这一处允许字面量——它表达的是用户显式选择，不是主题推导。
    novel-dark 挂在阅读器控制器条根，整个控制器层（条 / Aa 面板 / 导出面板 / 抽屉）同底。

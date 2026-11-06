@@ -1,44 +1,70 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { useSyncExternalStore } from 'react'
-import {
-  SettingsForm,
-  SettingsFormModel,
-  settingsNumberField,
-  settingsTextField,
-  type SettingsFieldState,
-  type SettingsFormActions,
-  type SettingsFormState,
-} from '@deepseek-ai/dsh-client-ui-primitives'
+import { useEffect, useState, type ReactNode } from 'react'
 import type { VolatileConfigFieldName } from '../config.js'
 import {
-  CopyProvider, useCopy, zhTranslate, type CopyKey, type Translate,
+  CopyProvider,
+  useCopy,
+  zhTranslate,
+  type CopyKey,
+  type Translate,
 } from './copy/index.js'
-/** 分区表住 `config-groups.ts`：纯数据模块，Node 侧测试要拿它与字段表、文案字典交叉校验。 */
 import { GROUPS } from './config-groups.js'
 import { NovelStyles } from './styles.js'
 
 /**
- * 插件页的「运行参数」表单：宿主 `plugins.bundle.config` 槽按包名找占用者，`configForms`
- * 服务（key = Loader 行 id）提供 volatile 配置的读写面——保存只改宿主持有的活配置，下一次读数
- * 即生效，不重启插件（服务侧经 `resolveConfig` 的 getter 消费同一份值）。
+ * 插件页的「运行参数」表单：宿主 `plugins.bundle.config` 槽按包名找占用者，值走宿主设置面
+ * （`ctx.remote.settings` 的 `describe` / `mutate`，宿主 `settingsController` 的编目契约）。
  *
- * 职责边界：壳归宿主、行归本仓。`SettingsForm` 继续独占只读 / 不可用 / 保存失败三条语义，
- * 以及「离开页面即丢弃草稿」的时机；七个字段**每一行的几何**由本文件画。这不是嫌宿主原语丑——
- * 宿主壳面的粒度放不下「单位落在框内」「209715200 要
- * 读得出 200 MB」「给九位数一个不用手敲的入口」这三件事，行几何只能本仓自绘。行自绘之后
- * 那三条没了背书，故由 `tests/client/config-page.test.tsx` 逐条钉住。
+ * 为什么不是宿主表单原语：宿主页面校验清单不许页面/面板 import 任何宿主 client 包；本仓的
+ * 跨插件协作一律走 cordis 服务（见 `ADR-0067`）。原语只是这层服务之上的表单状态包装，所以本页
+ * 自己持有草稿、脏标记与保存态，写协议仍归宿主。
  *
- * 值与值域仍以 schema 为唯一主人：本页不出现缺省值与 min/max 的数字（「已覆盖」标记 +
- * 宿主模型的 `resetField` 动作就是回出厂值的路，不需要页面再抄一份出厂值）。预设档是**入口**
- * 不是缺省：它们是给人点的整数 MB，不与 schema 的 `.default()` 构成同一事实。
+ * 本页只拥有：字段清单（哪个字段、叫什么、单位与人话换算）与呈现。**值域归 schema**：
+ * 本地只判「是不是非负整数」这类类型错；上下界、代理形状由宿主在写入时裁决，拒绝即原样显示
+ * 宿主给的失败原因，草稿保留。
  *
- * 存活性：宿主没有 `configForms` 服务时 `registerConfigPage` 静默返回，侧栏 / 面板 /
- * 状态层完全不受影响——配置页是可选能力，不是加载前提。
+ * 职责边界：宿主壳（标题、可用/只读、保存中/失败）由本页自绘；`dataDir` 等非活值不进表单
+ * （改它等价于重启，见 `ADR-0035`）。宿主没有设置面（`remote.settings` 缺席）时不注册这一页，
+ * 侧栏 / 面板 / 状态层完全不受影响。
  */
 
+/** 与宿主设置面同一条 wire 语义的窄镜像（`ADR-0020`）：只声明本页用到的成员。 */
+type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
+
+interface SettingsNamespaceView {
+  ns: string
+  value: JsonValue
+  user?: JsonValue
+  revision: number
+}
+
+interface SettingsDescribeValue {
+  writable: boolean
+  namespaces: SettingsNamespaceView[]
+}
+
+type SettingsPathOp =
+  | { op: 'set'; path: string[]; value: JsonValue }
+  | { op: 'unset'; path: string[] }
+
+type RemoteResult<T> = { ok: true; value: T } | { ok: false; error: { message: string; code?: string } }
+
+interface RemoteSettingsLike {
+  describe(): Promise<RemoteResult<SettingsDescribeValue>>
+  mutate(ns: string, ops: readonly SettingsPathOp[], expectedRevision?: number): Promise<RemoteResult<SettingsNamespaceView>>
+}
+
+interface RemoteLike {
+  settings?: RemoteSettingsLike
+}
+
+interface SlotsLike {
+  inject(name: string, fn: () => () => void): () => void
+  register(options: Record<string, unknown>, component: unknown): () => void
+}
+
 /** 两个标识分属两条宿主契约，别合并：
- *  · `ENTRY_ID` 是 Loader 行 id（`cordis.patch.yml` 的 `id`），也是 settings 命名空间与
- *    `configForms.get` / `whileServed` 的键——宿主按它找我们的配置；
+ *  · `ENTRY_ID` 是 Loader 行 id（`cordis.patch.yml` 的 `id`），也是设置面命名空间的键；
  *  · `BUNDLE_NAME` 是 npm 包名，`plugins.bundle.config` 槽按它把表单挂到 bundle 详情页。 */
 const ENTRY_ID = 'dsh-novel'
 const BUNDLE_NAME = '@xrn1997/dsh-novel'
@@ -114,12 +140,12 @@ const FIELDS: Record<FieldName, FieldSpec> = {
   },
 }
 
-/** 字段状态与壳层状态都直接取宿主声明的窄镜像（`host-ui.d.ts`）：不可用 / 只读 / 保存失败的
- *  文案与禁用态由宿主的 `SettingsForm` 按这些键驱动，本仓不再抄一份同形类型。 */
-type FieldState = SettingsFieldState
-
-/** 页面读数面 = 宿主壳层状态 + 每个可编辑字段的宿主字段状态（键由 `FieldName` 钉，不再逐格抄名）。 */
-type NovelConfigState = SettingsFormState & Record<FieldName, FieldState>
+/** 字段状态：当前文本、是否与宿主存的值不同、是否类型非法。 */
+interface FieldState {
+  text: string
+  overridden: boolean
+  invalid: boolean
+}
 
 /** 一位小数足够分辨档位，多一位就是假精度；整数不带小数点（200 MB 不写成 200.0 MB）。 */
 function scale(n: number): string {
@@ -150,10 +176,44 @@ function humanMs(n: number, t: Translate): string | null {
 /** 空框与非法值都没有可回读的数——宁缺毋滥：把 `abc` 换算成 `NaN MB` 或把空框换算成
  *  `0 B`，都是拿一个编出来的数盖住真正该被看见的状态。 */
 function readbackOf(spec: FieldSpec, text: string, t: Translate): string | null {
-  if (spec.kind === 'text' || spec.kind === 'count' || text.trim() === '') return null
-  const n = Number(text)
-  if (!Number.isFinite(n)) return null
-  return spec.kind === 'bytes' ? humanBytes(n) : humanMs(n, t)
+  if (spec.kind === 'text' || spec.kind === 'count') return null
+  const parsed = parseField(spec, text)
+  if (!parsed.ok || parsed.op.op !== 'set' || typeof parsed.op.value !== 'number') return null
+  return spec.kind === 'bytes' ? humanBytes(parsed.op.value) : humanMs(parsed.op.value, t)
+}
+
+function isRecord(value: JsonValue | undefined): value is { [key: string]: JsonValue } {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** 宿主值 → 框内文本。数字原样；字符串原样；缺席（未设置）给空串。 */
+function textOf(value: JsonValue | undefined): string {
+  if (typeof value === 'number') return String(value)
+  if (typeof value === 'string') return value
+  return ''
+}
+
+type Parsed =
+  | { ok: true; op: SettingsPathOp }
+  | { ok: false }
+
+/**
+ * 文本框 → 写入操作。**只判类型错**（数字位必须是非负整数；文本位首尾空白归一，内部空白拒绝），
+ * 值域由宿主在 `mutate` 时按 schema 裁决——本页不抄 schema 的上下界与代理正则，拒绝时原样显示
+ * 宿主的理由。文本位清空 = `unset`（回出厂值），而不是写一个空串盖掉用户层。
+ */
+function parseField(spec: FieldSpec, text: string): Parsed {
+  const trimmed = text.trim()
+  if (spec.kind === 'text') {
+    if (trimmed === '') return { ok: true, op: { op: 'unset', path: [spec.name] } }
+    // 代理位只挡「连形状都不像」的输入（含空白）；完整形状归 schema，宿主拒绝时如实显示。
+    if (/\s/.test(trimmed)) return { ok: false }
+    return { ok: true, op: { op: 'set', path: [spec.name], value: trimmed } }
+  }
+  if (!/^\d+$/.test(trimmed)) return { ok: false }
+  const n = Number(trimmed)
+  if (!Number.isSafeInteger(n)) return { ok: false }
+  return { ok: true, op: { op: 'set', path: [spec.name], value: n } }
 }
 
 function ConfigRow({ spec, field, disabled, onEdit, onReset }: {
@@ -189,9 +249,8 @@ function ConfigRow({ spec, field, disabled, onEdit, onReset }: {
       <div className="novel-cfg-side">
         <span className="novel-cfg-box">
           {/* 数值位**不用** type=number：浏览器会把认不出的输入静默清成空串，用户看不到自己
-              敲错了什么。「认不认得出」归宿主模型（settingsNumberField 的 parse）；值域
-              （min / step）仍由 schema 在保存时把关——本页不重判。文本框 + inputMode
-              让草稿原样可见。 */}
+              敲错了什么。「认不认得出」归本页的 parseField；值域（min / step）仍由 schema 在
+              保存时把关——本页不重判。文本框 + inputMode 让草稿原样可见。 */}
           <input
             id={id}
             className="novel-input novel-cfg-input"
@@ -233,27 +292,238 @@ function ConfigRow({ spec, field, disabled, onEdit, onReset }: {
   )
 }
 
-/** 纯呈现组件（导出以便测试直渲）：表单状态与动作都由调用方给，不碰宿主服务。 */
-export function NovelConfigCardView({ state, actions }: { state: NovelConfigState; actions: SettingsFormActions }) {
-  // 宿主此刻渲染的文案面：不可用 / 只读 / 保存被拒由模型状态驱动，措辞跟着当前语言。
-  const t = useCopy()
-  const labels = {
-    unavailable: t('config.unavailable'),
-    readOnly: t('config.readOnly'),
-    saveFailed: t('config.saveFailed'),
-    save: t('config.save'),
-    saving: t('config.saving'),
+/** 页面读数面：`loading` 与 `unavailable` 是两种不同的「还没好」，不折叠成一个布尔。 */
+type PageState =
+  | { status: 'loading' }
+  | { status: 'unavailable'; reason?: string }
+  | {
+    status: 'ready'
+    writable: boolean
+    revision: number
+    value: Record<string, JsonValue>
+    user: Record<string, JsonValue>
   }
-  const disabled = !state.writable || state.saving
+
+function readyState(view: SettingsNamespaceView, writable: boolean): PageState {
+  return {
+    status: 'ready',
+    writable,
+    revision: view.revision,
+    value: isRecord(view.value) ? view.value : {},
+    user: isRecord(view.user) ? view.user : {},
+  }
+}
+
+function Unavailable({ reason }: { reason?: string | undefined }) {
+  const t = useCopy()
   return (
     <section data-novel-scope className="novel-cfg">
-      {/* 本页不在 NovelView 树下，拿不到它注入的样式层：与 SettingsSection 单飞同一口径，自带。 */}
       <NovelStyles />
-      <div className="novel-cfg-title">
-        <h3>{t('config.title')}</h3>
-        <p>{t('config.subtitle')}</p>
-      </div>
-      <SettingsForm labels={labels} state={state} onSave={actions.save} onDiscard={actions.discard}>
+      {/* 有 reason = 设置面读失败；没有 = 条目不在 describe 的名单里（插件未加载）。 */}
+      <p className="novel-cfg-note" role="status">{t(reason === undefined ? 'config.unavailable' : 'config.loadFailed')}</p>
+      {reason === undefined ? null : <p className="novel-cfg-note novel-cfg-mono">{reason}</p>}
+    </section>
+  )
+}
+
+/**
+ * 表单本体。所有写操作都走宿主设置面：
+ *  · 保存 = 一次 `mutate`（脏字段合成一条原子写，带读到的 revision）；
+ *  · 恢复默认 = 单字段 `unset`（撤的是用户层覆盖，不是把出厂值抄回去）。
+ * 宿主拒绝（值域/冲突/未挂载）时返回 `{ ok: false }`，页面保留草稿并显示它给的理由。
+ */
+function NovelConfigCardBody({ remote }: { remote: RemoteSettingsLike }): ReactNode {
+  const t = useCopy()
+  const [page, setPage] = useState<PageState>({ status: 'loading' })
+  const [drafts, setDrafts] = useState<Partial<Record<FieldName, string>>>({})
+  const [saving, setSaving] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setPage({ status: 'loading' })
+    setFailure(null)
+    const unavailable = (error: unknown): void => {
+      if (cancelled) return
+      setPage({ status: 'unavailable', reason: error instanceof Error ? error.message : String(error) })
+    }
+    try {
+      void remote.describe().then((result) => {
+        if (cancelled) return
+        if (!result.ok) {
+          setPage({ status: 'unavailable', reason: result.error.message })
+          return
+        }
+        const view = result.value.namespaces.find((candidate) => candidate.ns === ENTRY_ID)
+        if (view === undefined) {
+          setPage({ status: 'unavailable' })
+          return
+        }
+        setPage(readyState(view, result.value.writable))
+        setDrafts({})
+      }).catch(unavailable)
+    } catch (error) {
+      unavailable(error)
+    }
+    return () => { cancelled = true }
+  }, [remote])
+
+  if (page.status === 'loading') {
+    return (
+      <section data-novel-scope className="novel-cfg">
+        <NovelStyles />
+        <p className="novel-cfg-note" role="status">{t('common.loading')}</p>
+      </section>
+    )
+  }
+  if (page.status === 'unavailable') return <Unavailable reason={page.reason} />
+
+  const disabled = !page.writable || saving
+  const textOfField = (name: FieldName): string => drafts[name] ?? textOf(page.value[name])
+  const parsedOf = (name: FieldName): Parsed => parseField(FIELDS[name], textOfField(name))
+  const invalidOf = (name: FieldName): boolean => !parsedOf(name).ok
+  const dirtyOf = (name: FieldName): boolean => drafts[name] !== undefined && textOfField(name) !== textOf(page.value[name])
+  const overriddenOf = (name: FieldName): boolean => Object.hasOwn(page.user, name) || dirtyOf(name)
+  const names = Object.keys(FIELDS) as FieldName[]
+  const dirty = names.some(dirtyOf)
+  // 只拦「这一笔草稿本身非法」：宿主交回的值若不合本页语法，不该连带锁死别的字段的保存。
+  const invalid = names.some((name) => dirtyOf(name) && invalidOf(name))
+
+  const edit = (name: FieldName, text: string): void => {
+    setDrafts((current) => ({ ...current, [name]: text }))
+    setFailure(null)
+  }
+
+  const applyView = (view: SettingsNamespaceView): void => {
+    setPage(readyState(view, page.writable))
+    setDrafts({})
+  }
+
+  const dropDraft = (name: FieldName): void => {
+    setDrafts((current) => {
+      const next = { ...current }
+      Reflect.deleteProperty(next, name)
+      return next
+    })
+  }
+
+  /** 冲突后重读修订号但不碰草稿：用户刚敲的值仍在，下一笔写带新修订号即可继续。 */
+  const refresh = async (): Promise<void> => {
+    try {
+      const result = await remote.describe()
+      if (!result.ok) return
+      const view = result.value.namespaces.find((candidate) => candidate.ns === ENTRY_ID)
+      if (view !== undefined) setPage(readyState(view, result.value.writable))
+    } catch {
+      // 刷新也失败时保留原失败提示；旧修订号会让下一次写继续报冲突，不会静默覆盖。
+    }
+  }
+
+  const fail = async (error: { message: string; code?: string }): Promise<void> => {
+    setFailure(error.message)
+    if (error.code === 'settings/conflict') await refresh()
+  }
+
+  const save = async (): Promise<void> => {
+    if (disabled || !dirty || invalid) return
+    const ops: SettingsPathOp[] = []
+    for (const name of names) {
+      if (!dirtyOf(name)) continue
+      const parsed = parsedOf(name)
+      if (parsed.ok) ops.push(parsed.op)
+    }
+    if (ops.length === 0) return
+    setSaving(true)
+    setFailure(null)
+    try {
+      const result = await remote.mutate(ENTRY_ID, ops, page.revision)
+      if (!result.ok) { await fail(result.error); return }
+      applyView(result.value)
+    } catch (error: unknown) {
+      setFailure(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const resetField = async (name: FieldName): Promise<void> => {
+    if (disabled) return
+    setFailure(null)
+    // 没有用户层覆盖：这一下只是撤本地草稿，不触远程。
+    if (!Object.hasOwn(page.user, name)) {
+      if (drafts[name] !== undefined) dropDraft(name)
+      return
+    }
+    setSaving(true)
+    try {
+      const result = await remote.mutate(ENTRY_ID, [{ op: 'unset', path: [name] }], page.revision)
+      // 草稿只在 unset 成功后丢：失败时用户刚敲的值仍在（与保存失败同一口径）。
+      if (!result.ok) { await fail(result.error); return }
+      setPage(readyState(result.value, page.writable))
+      dropDraft(name)
+    } catch (error: unknown) {
+      setFailure(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const discard = (): void => {
+    setDrafts({})
+    setFailure(null)
+  }
+
+  const fields = Object.fromEntries(names.map((name) => [name, {
+    text: textOfField(name),
+    overridden: overriddenOf(name),
+    invalid: invalidOf(name),
+  }])) as Record<FieldName, FieldState>
+  return (
+    <NovelConfigPageView
+      t={t}
+      writable={page.writable}
+      fields={fields}
+      dirty={dirty}
+      invalid={invalid}
+      saving={saving}
+      failure={failure}
+      onEdit={edit}
+      onReset={(name) => { void resetField(name) }}
+      onSave={() => { void save() }}
+      onDiscard={discard}
+    />
+  )
+}
+
+export interface ConfigPageViewProps {
+  t: Translate
+  writable: boolean
+  fields: Record<FieldName, FieldState>
+  dirty: boolean
+  invalid: boolean
+  saving: boolean
+  failure: string | null
+  onEdit: (name: FieldName, text: string) => void
+  onReset: (name: FieldName) => void
+  onSave: () => void
+  onDiscard: () => void
+}
+
+/** 纯呈现层（导出以便几何门静态渲染）：状态与动作都由调用方给，不碰宿主服务。 */
+export function NovelConfigPageView({
+  t, writable, fields, dirty, invalid, saving, failure, onEdit, onReset, onSave, onDiscard,
+}: ConfigPageViewProps): ReactNode {
+  const disabled = !writable || saving
+  return (
+    <CopyProvider value={t}>
+      <section data-novel-scope className="novel-cfg">
+        {/* 本页不在 NovelView 树下，拿不到它注入的样式层：与 SettingsSection 单飞同一口径，自带。 */}
+        <NovelStyles />
+        <div className="novel-cfg-title">
+          <h3>{t('config.title')}</h3>
+          <p>{t('config.subtitle')}</p>
+        </div>
+        {writable ? null : <p className="novel-cfg-note">{t('config.readOnly')}</p>}
         <div className="novel-cfg-groups">
           {GROUPS.map((group) => (
             <section key={group.titleKey} className="novel-cfg-group">
@@ -262,78 +532,46 @@ export function NovelConfigCardView({ state, actions }: { state: NovelConfigStat
                 <ConfigRow
                   key={name}
                   spec={FIELDS[name]}
-                  field={state[name]}
+                  field={fields[name]}
                   disabled={disabled}
-                  onEdit={(text) => actions.edit(name, text)}
-                  onReset={() => actions.resetField(name)}
+                  onEdit={(text) => onEdit(name, text)}
+                  onReset={() => onReset(name)}
                 />
               ))}
             </section>
           ))}
         </div>
-      </SettingsForm>
-      <p className="novel-cfg-foot">
-        {t('config.footer.before')}<code>dataDir</code>{t('config.footer.between')}<code>cordis.patch.yml</code>{t('config.footer.after')}
-      </p>
-    </section>
+        <p className="novel-cfg-foot">
+          {t('config.footer.before')}<code>dataDir</code>{t('config.footer.between')}<code>cordis.patch.yml</code>{t('config.footer.after')}
+        </p>
+        {failure === null ? null : <p className="novel-cfg-note" role="alert">{t('config.saveFailed')}<span className="novel-cfg-mono">{failure}</span></p>}
+        <div className="novel-cfg-bar">
+          <button type="button" className="novel-btn primary" disabled={disabled || !dirty || invalid} onClick={onSave}>
+            {saving ? t('config.saving') : t('config.save')}
+          </button>
+          <button type="button" className="novel-btn" disabled={disabled || !dirty} onClick={onDiscard}>
+            {t('config.discard')}
+          </button>
+        </div>
+      </section>
+    </CopyProvider>
   )
 }
 
-interface ConfigFormsLike {
-  get(entryId: string): unknown
-  whileServed(namespaces: string[], register: (served: Set<string>) => () => void): () => void
-}
-
-interface SlotsLike {
-  inject(name: string, fn: () => () => void): () => void
-  register(options: Record<string, unknown>, component: unknown): () => void
+/** 槽位入口：`t` 与远程设置面由注册时的 `inject` 递进来（两者都缺席时页面只报不可用）。 */
+export function NovelConfigCard({ t = zhTranslate, remote }: { t?: Translate; remote?: RemoteSettingsLike }): ReactNode {
+  if (remote === undefined) return <CopyProvider value={t}><Unavailable /></CopyProvider>
+  return <CopyProvider value={t}><NovelConfigCardBody remote={remote} /></CopyProvider>
 }
 
 /** `t` 由浏览器半入口给；缺省 zhTranslate 让测试直渲与未接 locale 的宿主保持中文。 */
 export function registerConfigPage(ctx: Context, t: Translate = zhTranslate): void {
-  const host = ctx as unknown as { configForms?: ConfigFormsLike; slots: SlotsLike }
-  const forms = host.configForms
-  if (forms === undefined || typeof forms.get !== 'function' || typeof forms.whileServed !== 'function') return
-  // 原语缺席只在宿主跨代混装时发生：宁可少一页配置，也不能让 apply 炸掉整个客户端。
-  // 守卫必须覆盖页面消费的每一个原语——包括字段工厂：它们的调用会把「缺导出」从渲染期
-  // 提前到模块求值期，那正是整棵客户端树陪葬的形态。
-  if (
-    typeof SettingsForm !== 'function' ||
-    typeof SettingsFormModel !== 'function' ||
-    typeof settingsNumberField !== 'function' ||
-    typeof settingsTextField !== 'function'
-  ) return
-
-  // 字段声明与宿主的写协议同源：名字只有一份——`FIELDS` 的键（类型由配置缝的活值字段钉死，
-  // 加一格漏一行就编译不过）。建在这里而不是模块顶层：字段工厂是宿主运行时能力，确认在场之前不得触碰。
-  const names = Object.keys(FIELDS) as FieldName[]
-  const fields = names.map((name) => (FIELDS[name].kind === 'text' ? settingsTextField(name) : settingsNumberField(name)))
-
-  const model = new SettingsFormModel(forms.get(ENTRY_ID), fields)
-  // `Object.fromEntries` 只给出索引签名，故这里断言回读数面：键集与 NovelConfigState 的一致性由
-  // `FIELDS: Record<FieldName, FieldSpec>` 把住（少一行 FIELDS 就编译不过），不是手工保证
-  const store = model.bind((): NovelConfigState => ({
-    ...model.shell(),
-    ...Object.fromEntries(names.map((name) => [name, model.field(name)])),
-  } as NovelConfigState))
-  const actions = model.actions()
-  // 页面只认「快照 + 订阅」这一份契约（useSyncExternalStore），不依赖宿主槽位未公开的 hooks 约定。
-  const subscribe = (listener: () => void) => store.subscribe(listener)
-  const getSnapshot = () => store.getSnapshot()
-
-  function NovelConfigCard({ t = zhTranslate }: { t?: Translate }) {
-    const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-    return <CopyProvider value={t}><NovelConfigCardView state={state} actions={actions} /></CopyProvider>
-  }
-
-  ctx.effect(() => () => model.dispose(), 'dsh-novel: config form')
-  // `whileServed` 在插件本体未加载 / 被停用时撤下占用者——配置页只对活着的插件露面。
-  ctx.effect(
-    () => forms.whileServed([ENTRY_ID], () => host.slots.inject('plugins.bundle.config', () => host.slots.register({
-      name: 'plugins.bundle.config',
-      key: BUNDLE_NAME,
-      inject: () => ({ t }),
-    }, NovelConfigCard))),
-    'dsh-novel: config page',
-  )
+  const host = ctx as unknown as { remote?: RemoteLike; slots: SlotsLike }
+  const remote = host.remote?.settings
+  if (remote === undefined || typeof remote.describe !== 'function' || typeof remote.mutate !== 'function') return
+  ctx.effect(() => host.slots.inject('plugins.bundle.config', () => host.slots.register({
+    name: 'plugins.bundle.config',
+    key: BUNDLE_NAME,
+    inject: () => ({ t, remote }),
+  }, NovelConfigCard)), 'dsh-novel: config page')
 }

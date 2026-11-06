@@ -3,21 +3,17 @@ import { defineConfig } from 'tsdown'
 
 /** 平台模块表（镜像宿主 web shell 的 `staticModules()`：它把这些 specifier 种进冻结浏览器模块表，
  *  client bundle 一律留给注入的 require，不得 inline）。
- *  **收录判据是「我们声明兼容的每一代宿主都答得上」（交集），不是把见过的清单并起来**：
- *  - 跨代都在的：`react` / `react/jsx-runtime` / `react-dom` / `react-dom/client`、
- *    `@deepseek-ai/cordis`、`@deepseek-ai/dsh-client-store` / `-ui-slots` / `-ui-primitives`。
- *  - 裸 `cordis` 不收：本插件对 cordis 从头到尾只有 type-only import（编译期已擦除），运行时也不需要它，
- *    列进允许表 = 允许一次「构建通过、浏览器 require 落空」——允许表必须比运行时表**窄**，
- *    宽出来的每一条都是纯度门的豁免。
- *  - `@deepseek-ai/dsh-client-ui-dockkit` 不收：本插件不用它，且并非每一代兼容宿主都答得上它，
- *    收了就等于拿只有部分宿主答得上的项给全表放行。
+ *  **收录判据是「我们声明兼容的每一代宿主都答得上」（交集）**，且**只收产物真的 require 到的**：
+ *  - `react` / `react/jsx-runtime`：视图与 JSX 运行时，跨代都在。
+ *  - **宿主 client 包一条都不收**：配置页的值与写协议走 `ctx.remote.settings`（编目契约
+ *    `settingsController` 的 `describe` / `mutate`），页面/面板零宿主包 import（页面校验清单，
+ *    `ADR-0067`）。原语只当它是「服务之上的表单模型」，本页自己持有草稿与保存态。
+ *  - 也不收 `react-dom` / `react-dom/client` / `@deepseek-ai/cordis` / `@deepseek-ai/dsh-client-store`
+ *    / `@deepseek-ai/dsh-client-ui-slots` / `@deepseek-ai/dsh-client-ui-primitives`：产物一条都没
+ *    require（store 自持见 `ADR-0055`；cordis 全为 type-only import，编译期已擦除）。
  *  这个方向错了，纯度门就从守卫变成共犯：它证明的从来不是「宿主表长这样」，而是「我们只 require 这些」。 */
 const PLATFORM_MODULES = [
-  'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client',
-  '@deepseek-ai/cordis',
-  '@deepseek-ai/dsh-client-store',
-  '@deepseek-ai/dsh-client-ui-slots',
-  '@deepseek-ai/dsh-client-ui-primitives',
+  'react', 'react/jsx-runtime',
 ]
 const isRequested = (s: string): boolean => PLATFORM_MODULES.includes(s)
 const NODE_BUILTINS = new Set([...builtinModules, ...builtinModules.map((id) => `node:${id}`)])

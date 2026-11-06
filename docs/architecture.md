@@ -73,6 +73,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 ## 3. 浏览器半：槽位贡献与可丢弃投影
 
 - 注册处只有一处：`src/client/index.tsx`——`sidebar.panellist` 的面板行、`main` 同 id 同 key 的中央面板、`shell.overlay` 的全局状态层。**槽位只挂官方已声明的**；不注册 `conversation.view` 与 `settings.section`（运行参数走插件详情页的配置卡）。
+- **宿主 DOM 不碰**：样式的作用域只有 `.novel-root` 与 `[data-novel-scope]` 两棵树，不按宿主私有的 `data-*` 属性去藏或改宿主布局；面板与 Conversation 的互斥由 `main` 的 keyed 语义保证（宿主只渲染一个 key），不靠选择器。门是 `tests/client/host-dom-guard.test.ts`。
 - **浏览器半不读运行时配置、也不需要 API base**：同源根相对 fetch，前缀由 wire 单点持有。宿主平台模块表冻结了可用的运行时 import，`src/shared/wire.ts` 因此保持零运行时依赖（裁决见 `ADR-0021`）。
 - **可丢弃投影**：书架读取面与落架账住 `src/client/panel-shelf.ts` 的 `panelShelf`（`NovelView` 卸载时清空），搜索轮次是 `src/client/search-job.ts` 的挂载期状态（卸载即丢、重挂载从服务端重拉），任务快照住 `src/client/jobs.ts` 的模块级 store（由常驻状态层持有）；三者都以 Node 半为真相。
 - **模块级现场跨卸载存活**：现场语义住各自模块，脚手架（订阅骨架、latest-wins）只住 `store.ts`；具体有哪些现场见 `docs/ui-spec.md` §1。

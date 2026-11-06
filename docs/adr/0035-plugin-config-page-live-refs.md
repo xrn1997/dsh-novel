@@ -10,8 +10,8 @@ dsh-novel 的运行参数（字段清单的家是 `src/config.ts` 的 `Config`�
 - **行页而不是 bundle 页**：行页多点一次「配置」，本 bundle 只有一个行，bundle 页内嵌更直接。
 - **把 `dataDir` 也标 volatile**：Loader 会接受新值，但服务不会重建落盘根——制造「保存了但不生效」的静默失败。
 - **代理清空后重新探测系统代理**：热更路径要再读一次注册表，且系统代理可能在会话中变化；本设计固定为启动时 fallback，表单 hint 明说。
-- **把 `configForms` 当硬依赖注册**：不采——根 `inject` 不动，用 `ctx.inject(['configForms'], ...)` 可选注册；配置页挂点是可选的，宿主未提供该面时插件照常激活，只是不见配置页（兼容窗口的事实源是 `package.json`）。
+- **把设置面当硬依赖注册**：不采——根 `inject` 不动，用 `ctx.inject(['remote', 'remote.settings'], ...)` 可选注册；配置页挂点是可选的，宿主未提供该面时插件照常激活，只是不见配置页（兼容窗口的事实源是 `package.json`）。
 
 **代价**：`resolveConfig` 多了「已解析 ref 不重跑 schema」的分支；服务层从构造时抄值改成每次读 getter；`proxyUrl` 变更要替换并关闭 undici dispatcher；未提供配置页面的宿主只是不见配置页，插件照常服务。`dataDir` 仍只能改文件 + 重启。
 
-锚点：`src/config.ts` 的 `Config` / `resolveConfig` / `ResolvedConfig`；`src/services/reading.ts` 的 `staticLiveConfig` 与 `ReadingService.localImportMaxBytes`；`src/services/fetcher.ts` 的 `createFetcher`（dispatcher 缓存）；`src/client/config-page.tsx` 的 `registerConfigPage` / `NovelConfigCard`；`src/client/index.tsx` 的可选 `ctx.inject(['configForms'], ...)`；钉子 `tests/config.test.ts`、`tests/services/live-config.test.ts`、`tests/client/config-page.test.tsx`、`tests/packaging-build.test.ts`。
+锚点：`src/config.ts` 的 `Config` / `resolveConfig` / `ResolvedConfig`；`src/services/reading.ts` 的 `staticLiveConfig` 与 `ReadingService.localImportMaxBytes`；`src/services/fetcher.ts` 的 `createFetcher`（dispatcher 缓存）；`src/client/config-page.tsx` 的 `registerConfigPage` / `NovelConfigCard`；`src/client/index.tsx` 的可选 `ctx.inject(['remote', 'remote.settings'], ...)`；钉子 `tests/config.test.ts`、`tests/services/live-config.test.ts`、`tests/client/config-page.test.tsx`、`tests/packaging-build.test.ts`；写协议见 `ADR-0067`。

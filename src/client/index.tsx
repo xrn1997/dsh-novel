@@ -112,8 +112,8 @@ export function apply(ctx: Context): void {
       StatusOverlay,
     )
   }), 'dsh-novel: shell overlay status layer')
-  // 可选能力：宿主没有 configForms 服务时回调不执行，侧栏/面板完全不受影响。
-  ctx.inject(['configForms'], (child) => registerConfigPage(child, t))
+  // 可选能力：宿主没有设置面（remote.settings）时回调不执行，侧栏/面板完全不受影响。
+  ctx.inject(['remote', 'remote.settings'], (child) => registerConfigPage(child, t))
 }
 
 export { NovelStatusOverlay, NovelView }

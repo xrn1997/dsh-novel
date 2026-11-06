@@ -158,7 +158,7 @@ npm 与 GitHub Release 是两条渠道，靠同一个 tag 对齐；发版后核�
 
 安装许可由 `package.json` 的 `peerDependencies` 决定，实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本（两层的关系见 `README.md` 与 `ADR-0020`）。两层由 `tests/packaging.test.ts` 同时看住：编译期 devDependency 必须被 peer 区间放行，且必须出现在实测声明里。
 
-宿主发新版分两种：**线内**（当前 peer 区间内的 rc / patch，上下界现查 `package.json`）不要求本插件跟版；要声称实测兼容时，升级编译所依、重读新宿主的浏览器模块表（宿主前端的 `staticModules()`）并对齐 `PLATFORM_MODULES`、真机确认后加实测条目。**跨线**（跨过一条线）必须先真机验，再把 peer 上界开到下一条线。编译所依被 peer 放行且出现在实测声明里由 `tests/packaging.test.ts` 钉住；模块表与实测条目靠真机与人工核对。
+宿主发新版分两种：**线内**（当前 peer 区间内的 rc / patch，上下界现查 `package.json`）不要求本插件跟版；要声称实测兼容时，升级编译所依、重读新宿主的浏览器模块表（宿主前端的 `staticModules()`）并对齐 `PLATFORM_MODULES`、真机确认后加实测条目。**跨线**（跨过一条线）必须先真机验，再把 peer 上界开到下一条线。编译所依被 peer 放行且出现在实测声明里由 `tests/packaging.test.ts` 钉住；模块表与实测条目靠真机与人工核对。平台模块表只剩 `react` 两条：客户端页面/面板不得 import 任何宿主 client 包（页面校验清单，`ADR-0067`），换代时复核的是模块表本身与设置面（`remote.settings`）是否还在。
 
 宿主依赖包的**发布冷却闸**（pnpm 的 `minimumReleaseAge`：刚发布的版本暂不许进 lockfile）对 `@deepseek-ai/dsh-*` 整 scope 放行，写死在 `pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude`——所以 bump 宿主不必再动一份逐代手写的放行名单（理由与被否决的做法见 `ADR-0026`）。
 
