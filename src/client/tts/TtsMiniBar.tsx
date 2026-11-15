@@ -326,8 +326,7 @@ export function TtsMiniBar({ focusPanel, withStyles = true }: TtsMiniBarProps): 
    *  `flush` 只管贴边形态（收哪一条边框、哪两侧改直角），`side` 只管设置弹层往哪边开。
    *  两者在贴边时同向，块悬在屏内时必须分家——按 `side` 收边框等于在一条悬空的边上留敞口。 */
   const layout = miniBarLayout(bar, viewport, form)
-  // 翻转判据吃**实测**内容高（量不到回退常量）：`docs/ui-spec.md` §3.6 承诺的是
-  // 「内容实测高与 60vh 取小」，固定档在六行卡与一行卡之间都会算错方向。
+  // 翻转判据吃**实测**内容高（量不到回退常量）：内容高与 60vh 取小，固定档在六行卡与一行卡之间都会算错方向。
   const flip = miniBarPopoverFlip(bar, viewport, form, settingsHeight ?? undefined)
 
   /** 回阅读器：读**调用那一刻**的会话读数（渲染快照可能已落后一段），记现场再切路由。 */
@@ -363,7 +362,7 @@ export function TtsMiniBar({ focusPanel, withStyles = true }: TtsMiniBarProps): 
   const expand = (): void => { setMiniBarCollapsed(false) }
 
   const beginDrag = (event: ReactPointerEvent<HTMLElement>): void => {
-    // 指定拖面（`data-drag="1"`：两个身份钮、正文区）才起手；嵌在拖面里的真控件（如「看全文」）不算。
+    // 指定拖面（`data-drag="1"`：两个形态的身份钮、展开态正文区）才起手；嵌在拖面里的真控件（如「看全文」）不算。
     // 胶囊容器与面板不再整块接 pointerdown——「点哪都能拖」就是从那里来的。
     const target = event.target as HTMLElement
     const handle = target.closest<HTMLElement>('[data-drag="1"]')

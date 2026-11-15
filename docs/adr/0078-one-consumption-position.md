@@ -38,6 +38,6 @@ Status: accepted
 
 ## 承接
 
-`ADR-0070` 被本篇整体取代，但它关于听书范围的其余条款继续成立：四类引擎源（内置 / 浏览器直出 / 宿主语音服务 / legado HttpTTS 订阅）、订阅作为对象数据落 `tts-engines.json`、播放能力清单（预取、暖缓存、按书记忆参数、暂停 / 跳段 / 跳章、定时、跨界面迷你条）、模板 `speakVoice` 绑定、不做按角色分音色、不做宿主后台任务、不做交互式登录、不做清缓存入口。这些条款的 why 仍回查 `ADR-0070`。
+`ADR-0070` 的位置轨那一条被本篇取代，但它关于听书范围的其余条款继续成立：四类引擎源（内置 / 浏览器直出 / 宿主语音服务 / legado HttpTTS 订阅）、订阅作为对象数据落 `tts-engines.json`、播放能力清单（预取、暖缓存、按书记忆参数、暂停 / 跳段 / 跳章、定时、跨界面迷你条）、模板 `speakVoice` 绑定、不做按角色分音色、不做宿主后台任务、不做交互式登录、不做清缓存入口。这些条款的 why 仍回查 `ADR-0070`；跟读高亮另一条由 `ADR-0076` 落地。
 
 锚点：`src/client/tts/listen-session.ts` 的 `ListenSession.writePosition` / `ListenPlatform.saveProgress`；`src/client/tts/player.ts` 的 `saveProgress` 平台实现；`src/client/views/ReaderView.tsx` 的 `onListenPill`；`src/client/shelf-view-model.ts` 的 `shelfCardMeta`；`src/client/panel-shelf.ts` 的 `patchPanelShelfProgress`；`src/shared/wire.ts` 的 `ShelfProgress` / `ListenState`；`src/services/shelf.ts` 的 `Shelf.updateProgress` / `Shelf.updateListen`；`tests/client/tts-session.test.ts` 的位置落盘用例；`tests/client/tts-player.test.ts` 的双笔落盘用例；`tests/client/tts-bar.test.tsx` 的 pill 起播用例；`tests/client/tts-mini.test.tsx` 的书架进度用例；`docs/ui-spec.md` §3.6；`ADR-0070`、`ADR-0071`、`ADR-0075`。

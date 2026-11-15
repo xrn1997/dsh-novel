@@ -62,24 +62,21 @@
 
 ### 听书：从阅读位置起播，跨界面续听
 
-阅读器顶条点「听书」即开始朗读：起播跟随你此刻看到的那一段，听书存档只提供音色 / 语速 / 音量与段级续听现场；正文里选中一段还可以「从本段听」，设置面板里也能直接选起播章。阅读器内的听书条可切上一段 / 下一段、暂停，拖**章内进度滑杆**跳到任意段，调语速与定时（关 / 15 / 30 / 60 分 / 本章结束）；设置面板里换引擎、音色与音量。正在念的那一段会在正文里换一种字色、段首点一枚小三角（只标记当前段，不做逐字填色，也不加底色；字色跟着纸张色自动调整，深浅纸上都认得出），高亮只标记不滚动——按「定位到正在念的段」才把视野带过去；听书按自己的落盘节拍写回共用的阅读进度。离开阅读器后，浮在屏幕上的听书胶囊继续带着这本书：胶囊上只有进度环、书名、段号和一条章内进度细线；点一下展开成能读整段的边栏——当前段一次上屏（装不下的那一截挂「看全文」，一键回阅读器并定位到本段），运输行是回阅读器 / 上一段 / 播放暂停 / 下一段 / 停止，底行是语速、段号、章内进度条与定时倒计时。展开后宽高可以拖边调整（设置里也有小 / 中 / 大三档与复位）；可以拖到屏幕任意位置，靠近边缘松手会自动贴边（位置与尺寸都留在本机），没有半隐或只露一半的收起态，阅读器开着另一本书时它也照常在场。听书与阅读共用一条进度：听到哪，书架与下次开书就恢复到哪；书架卡片只显示这一条进度，正在播放的那一本标「正在听」；音色、语速与音量仍按书记住。
+阅读器顶条点「听书」即从此刻看到的那一段起播；正文里选中一段可「从本段听」，设置面板里也能直接选起播章。阅读器内的听书条负责上一段 / 下一段、播放暂停、章内段滑杆、语速与定时；设置面板换引擎、音色、音量与起播章。正在念的段在正文里换字色、段首点一枚小三角——只标记不滚动，要跟过去按条上的「定位到正在念的段」。
 
 ![阅读器听书：底部听书条、章内进度滑杆与跟读高亮](docs/screenshots/screenshot-06.png)
 
 *阅读器听书：条上是上一段 / 暂停 / 下一段、章内段滑杆、语速与定时；正在念的段换字色并在段首点一枚小三角（示例正文）。*
 
+离开阅读器后，浮在屏幕上的听书胶囊继续带着这本书：点开是能读整段的边栏，可暂停、跳段、拖章内进度、调语速与定时，或回阅读器；胶囊可拖到任意位置、靠近边缘松手自动贴边，展开后宽高可调，位置与尺寸留在本机。
+
 ![书架听书：正在听徽标与浮窗边栏](docs/screenshots/screenshot-07.png)
 
 *书架听书：卡片显示共用的消费进度，「正在听」标播放层此刻在放的那一本；浮窗边栏可暂停、跳段、拖章内进度、调语速与定时或回阅读器（示意数据）。*
 
-引擎源分四类：
+听书与阅读共用一条进度：听到哪，书架与下次开书就恢复到哪；书架卡片只显示这一条进度，正在播放的那一本标「正在听」。音色、语速与音量按书记住。
 
-- **内置朗读**：开箱即用的中文合成引擎，无需配置；语速按端点能收的 7 个整数档映射。它的公开合成口不读音色参数，所以它**没有音色可选**——界面不会给它摆这一行；要换音色请用浏览器本地语音，或导入自带 `voices` 音色表的订阅引擎（那张表随导出 / 导入往返不丢）。它走的是非官方公开端点、只合成中文（请求里的语种写死为中文，换成英文正文不会换语音）；上游不可用时会如实报错，换源即可继续听。
-- **浏览器本地语音**：用当前设备的系统语音直接出声，不走网络合成，也没有缓存与预取；设备没有可用语音时明确报错。
-- **订阅引擎**：导入 legado HttpTTS 订阅（粘贴 JSON 或从 URL 拉取），作为额外的合成源；导入回执按条点名坏条，坏条只剪自己。
-- **宿主朗读服务**：宿主装有语音合成服务插件（社区包 `dsh-xiaomi-tts`）时自动出现在引擎清单里；没装时选引擎的清单不列这一行，引擎管理区仍合成一条灰显「未检测到」行。本插件只按社区包发布的服务契约取字节，不依赖它随包安装。
-
-引擎订阅与登录态都只留在本机：数据根下的 `tts-engines.json` 存订阅，登录态那一组（cookies / headers / loginInfo）只写不读——引擎列表只显示「已配置 / 未配置」，导出也不带它。订阅自带的 `header` 字段属于订阅内容，列表与导出都原样带着它：把密钥写进 `header` 的订阅，导出的那份 JSON 里就有那把密钥。登录态在引擎编辑表单里手工录入，不提供交互式登录流程。
+引擎源分四类：**内置朗读**开箱即用、只合成中文、没有音色可选；**浏览器本地语音**用设备系统语音直接出声，不走网络合成；**订阅引擎**导入 legado HttpTTS 订阅（粘贴 JSON 或从 URL 拉取），导入回执按条点名坏条，坏条只剪自己；**宿主朗读服务**只在宿主装有语音合成服务插件（社区包 `dsh-xiaomi-tts`）时列出。订阅与登录态只留本机：`tts-engines.json` 存订阅，登录态只写不读、导出不带；订阅自带的 `header` 原样保留——若把密钥写进 `header`，导出的 JSON 里就有那把密钥。
 
 ### 本地书、AI 与界面
 
@@ -111,7 +108,7 @@ dsh plugin --profile <profile> add @xrn1997/dsh-novel
 dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 ```
 
-**宿主兼容声明分两层**：安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`；peer 区间按宿主线开口，下界是 0.1.7-rc.1——更早的 0.1 宿主没有任务输出拉源（`JobSpec.output`），装进去任务过程行会静默丢失，所以安装闸直接拒绝；线内 rc / patch 不跟版，跨线才重验。实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本：**DSH 0.1.7-rc.1、0.1.7-rc.2、0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2、0.2.1-rc.3、0.2.1-rc.5、0.2.2-rc.1、0.2.2-rc.3**（这一行是给人看的记录，文档门会核对它与 `package.json` 一致；安装许可与实测名单两层的关系见 `ADR-0020`）。宿主发版、peer 区间与浏览器模块表的维护流程，以及发布冷却闸，见 [docs/development.md](docs/development.md#宿主兼容与实测名单)。
+**宿主兼容声明分两层**：安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`。实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本：**DSH 0.1.7-rc.1、0.1.7-rc.2、0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2、0.2.1-rc.3、0.2.1-rc.5、0.2.2-rc.1、0.2.2-rc.3**（这一行是给人看的记录，文档门会核对它与 `package.json` 一致；安装许可与实测名单两层的关系见 `ADR-0020`）。宿主发版与 peer 区间的维护流程、发布冷却闸见 [docs/development.md](docs/development.md#宿主兼容与实测名单)。
 
 ## 首次使用
 
@@ -139,7 +136,7 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 
 ![插件页的运行参数：顶部筛选与分区下拉、两列配对的行、框内回读与预设下拉、底部常驻保存条](docs/screenshots/screenshot-05.png)
 
-*运行参数：一张卡、一条列表——工具条在上（筛选框 + 分区下拉 + 仅看已改 + 改动计数），保存条贴底常驻；每行一条框，单位与人话回读都在框内，预设收在框内下拉，说明挂在标签后的问号上（悬浮才浮出，不撑行高）。*
+*运行参数：一张卡、一条列表，保存条贴底常驻；每行一条框，单位与人话回读都在框内。*
 
 | 键 | 缺省 | 说明 |
 | --- | --- | --- |
@@ -154,28 +151,28 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 | `ttsDefaultEngine` | `builtin:baidu` | 默认朗读引擎标识：内置 `builtin:baidu`、浏览器直出 `browser:local`，或订阅引擎的 id；按书选择的引擎优先于它 |
 | `ttsDefaultRate` | `1` | 第一次听一本书时的语速（0.5–3）；在播放器里改过之后按书记住，这一档只兜底 |
 | `ttsDefaultVolume` | `0.8` | 第一次听一本书时的音量（0–1）；同上 |
-| `ttsCacheMaxBytes` | `134217728`（128MB） | 合成音频缓存上限（字节）；低于 1 MiB 会被拒绝——一段音频就可能超过上限，刚合成的段会立刻被淘汰 |
+| `ttsCacheMaxBytes` | `134217728`（128MB） | 合成音频缓存上限（字节）；低于 1 MiB 会被拒绝——单段音频就可能超过上限。真遇到时本轮临时超限，刚合成的段不被淘汰，下一轮才按 mtime 清 |
 | `ttsPrefetchParagraphs` | `10` | 播放到本章末尾时提前合成的下一章开头段数；`0` = 不预取下一章，预取失败只影响那一段 |
 | `apiAllowHosts` | 不追加 | `/novel-api` 同源 fence 的本机 Host 名单追加项，如 `['dsh.local']`；只有用自定义域名（hosts / 内部 DNS）打开宿主面板时才需要。每项只比主机名，端口只做形状校验、不参与匹配（`dsh.local:8080` 也放行 `dsh.local:9999`）。改它需重启；填进去的每个名字都是把 DNS rebinding 防线在那个域名上让掉，只填自己控制的 |
 
-除 `dataDir` 与 `apiAllowHosts` 外，其余 12 项还可在宿主的「插件」页 → `@xrn1997/dsh-novel` 详情里的「运行参数」中编辑（需宿主支持插件配置页）；保存后立即生效，不需要重启插件。宿主没有插件配置页时，配置仍写在 profile 的 `cordis.patch.yml`。`dataDir` 与 `apiAllowHosts` 始终需改该文件并重启。
+除 `dataDir` 与 `apiAllowHosts` 外，其余 12 项在宿主的「插件」页 → `@xrn1997/dsh-novel` 详情里的「运行参数」中编辑，保存即生效，不重启插件。这一页依赖宿主的设置面（`ctx.remote.settings` 的 `describe` / `mutate`）；设置面缺席时页面不出现，配置仍写 profile 的 `cordis.patch.yml`。`dataDir` 与 `apiAllowHosts` 始终改该文件并重启。
 
-整数项按整数校验；语速与音量按一位小数档校验（语速 0.5–3、音量 0–1）；`proxyUrl` 只接受 `direct`、空串或 http(s) 地址（裸 `host:port` 按 `http://` 补全）；`apiAllowHosts` 每项只接受 `host` 或 `host:port`（不带 scheme、路径与空白），且必须是 URL 解析不改写的主机名写法——`2130706433` 这类会被改写成 IP 的别名在 fence 侧等于无效，加载期直接拒绝、不留静默空转。非法值（含 `NaN` / `Infinity`）在插件加载期报错；在插件页保存时被同样拒绝，页面保留草稿供修改。显式 `null` 按未设置处理、取缺省。
+整数项按整数校验；语速与音量按一位小数档校验（语速 0.5–3、音量 0–1）；`proxyUrl` 只接受 `direct`、空串或 http(s) 地址（裸 `host:port` 按 `http://` 补全）；`apiAllowHosts` 每项只接受 `host` 或 `host:port`，且必须是 URL 解析不改写的主机名。非法值（含 `NaN` / `Infinity`）在插件加载期报错，在配置页保存时同样被拒、页面保留草稿。显式 `null` 按未设置处理、取缺省。
 
 ## HTTP API
 
-所有路由以 `/novel-api` 为前缀（信任判据四步：请求来自本机 loopback → `Host` 在本机名单内（`localhost` / `127.0.0.1` / `[::1]`，自己的别名走 `apiAllowHosts`）→ Origin 在场必须同源 → Referer 在场必须同源；Origin / Referer 缺席放行，那是给本机工具与 curl 的承诺。被 Host 名单挡住时 403 点名是哪个 Host、并指路 `apiAllowHosts`）。这层判据也意味着**远程访问宿主时插件 API 不可用**：从另一台机器打开面板，浏览器半的请求会拿到 403（面板按请求失败提示），这是「只服务本机」的既定边界，不是可配置项。JSON 响应使用统一信封 `{ ok, value | error }`，错误附带 `code` 与可选的规则段级定位；`GET /export`、两条 SSE 流、`GET /local/resource` 与 `GET /tts/audio` 是流式 / 二进制响应，不套信封。共 43 条路由（35 静态 + 8 参数操作，计数由 `tests/shared/wire-builders.test.ts` 钉死）。**路由身份（method + path）与值形状的代码真相在 `src/shared/wire.ts`**——Node 半与浏览器半共用同一份定义，契约测试逐条把守。
+所有路由以 `/novel-api` 为前缀。信任判据四步：请求来自本机 loopback → `Host` 在本机名单内（`localhost` / `127.0.0.1` / `[::1]`，自己的别名走 `apiAllowHosts`）→ Origin 在场必须同源 → Referer 在场必须同源；Origin / Referer 缺席放行，那是给本机工具与 curl 的承诺。被 Host 名单挡住时 403 点名是哪个 Host、并指路 `apiAllowHosts`。这层判据也意味着**远程访问宿主时插件 API 不可用**：从另一台机器打开面板，浏览器半的请求会拿到 403（面板按请求失败提示），这是「只服务本机」的既定边界，不是可配置项。JSON 响应使用统一信封 `{ ok, value | error }`，错误附带 `code` 与可选的规则段级定位；`GET /export`、两条 SSE 流、`GET /local/resource` 与 `GET /tts/audio` 是流式 / 二进制响应，不套信封。路由身份（method + path）与值形状的代码真相在 `src/shared/wire.ts`——Node 半与浏览器半共用同一份定义，契约测试逐条把守。
 
 | 面 | 路由 |
 | --- | --- |
 | 健康检查 | `GET /novel-api` |
 | 书源 | `GET /sources`、`POST /sources/import`（后台任务，body `{files:[{name,text}]}`，上限 32MB）、`GET /sources/job-status`、`POST /sources/batch-probe`、`POST /sources/batch-enabled`、`POST /sources/batch-delete`、`POST /sources/:id/probe`、`POST /sources/:id/enabled`、`POST /sources/:id/auth`、`DELETE /sources/:id` |
-| 搜索与阅读 | `GET /search`（一次性收齐本轮各源命中；每源只取搜索首页，后台任务另按每源 50 条截断）、`GET /search/plan`（本次参搜源集——参与集的唯一主人在服务端）、`POST /search/job`、`GET /search/job-status?since=N`（按游标读增量）、`GET /search/job-stream?since=N`（同一份快照的 SSE 推送，首帧即 baseline）、`POST /search/job-cancel`（停止本轮：不再往下搜，已搜出的命中一律保留）、`GET /book`、`GET /toc`、`GET /navigation`（线性 `chapters` + 展示树 `items`）、`GET /chapter`（`{kind:'text'}` 或图文树 `{kind:'rich'}`；`?refresh=1` 绕过缓存） |
-| 书城发现面 | `GET /explore/kinds`（**按源**给出各源自己声明的**分类标题**清单，零网络请求，入口地址不外泄：原生方言的 `ruleFind` 与 legado 的 `exploreUrl` 都认，后者接**声明式两档**（`标题::URL` 多行 / JSON 条目数组）；脚本形态（`@js:` / `<js>`）的发现入口不执行，那类书源在书城没有分类）、`POST /explore/list`（body `{sourceId, kind}`：一轮 = 点名一个源 + 它自己声明的一类，回 `{jobId}`）、`POST /explore/list/more`（续这一轮的第 page+1 页，**同一轮不换 jobId**；没得续（已到底 / 触页数上限 / 一批在途）→ 409）、`GET /explore/list/job-status`（整轮全量快照，无游标）、`GET /explore/list/job-stream`（同一份快照的 SSE 推送，首帧可能是「还没提交过」的空档） |
-| 书架 | `GET /shelf`（条目附 `sourceName` 来源投影，按最近阅读排序）、`PUT /shelf/:key`（带 `title` 加书 / 带 `progress` 存进度 / 带 `listen` 存听书位置 / 带 `patch` 改元数据）、`DELETE /shelf/:key`、`POST /shelf/batch-delete`（本地书连带删副本，未知键静默跳过） |
-| 听书 | `GET /tts/sources`（此刻可用的引擎源清单）、`POST /tts/synthesize`（一段正文 → 音频缓存回执）、`GET /tts/audio?key=…`（音频字节）、`GET /tts/engines`（订阅引擎公共投影，不含登录态 auth）、`POST /tts/engines/import`（粘贴 JSON 或从 URL 导入订阅）、`PUT /tts/engines/:id`、`DELETE /tts/engines/:id` |
-| 导出 | `GET /export`（流式 TXT，`from`/`to` 选段（1 基含端，缺席 = 全本），响应头 `X-Novel-Total-Chapters`（本次范围章数）/ `X-Novel-Range`（`from-to`）；倒置范围 422 `BadRange`，连接断开即停止抓取） |
-| 本地书 | `POST /local/import?name=…`、`DELETE /local?id=…`（连带删整份副本）、`GET /local/document?id=&documentId=`（脚注 / 附录）、`GET /local/resource?id=&resourceId=`（插图与封面，只认不透明资源 ID）、`GET /local/warnings?id=`（持久化的导入说明） |
+| 搜索与阅读 | `GET /search`、`GET /search/plan`、`POST /search/job`、`GET /search/job-status?since=N`、`GET /search/job-stream?since=N`（SSE，首帧即 baseline）、`POST /search/job-cancel`（保留已搜出的命中）、`GET /book`、`GET /toc`、`GET /navigation`、`GET /chapter`（`?refresh=1` 绕过缓存） |
+| 书城发现面 | `GET /explore/kinds`（按源列分类标题，零网络请求）、`POST /explore/list`（body `{sourceId, kind}`）、`POST /explore/list/more`（续同一轮）、`GET /explore/list/job-status`（全量快照）、`GET /explore/list/job-stream`（SSE） |
+| 书架 | `GET /shelf`、`PUT /shelf/:key`（`title` / `progress` / `listen` / `patch`）、`DELETE /shelf/:key`、`POST /shelf/batch-delete`（本地书连带删副本） |
+| 听书 | `GET /tts/sources`、`POST /tts/synthesize`、`GET /tts/audio?key=…`、`GET /tts/engines`、`POST /tts/engines/import`、`PUT /tts/engines/:id`、`DELETE /tts/engines/:id` |
+| 导出 | `GET /export`（流式 TXT，`from`/`to` 为 1 基含端区间，缺席 = 全本；响应头 `X-Novel-Total-Chapters` / `X-Novel-Range`；倒置范围 422，连接断开即停止抓取） |
+| 本地书 | `POST /local/import?name=…`、`DELETE /local?id=…`、`GET /local/document?id=&documentId=`、`GET /local/resource?id=&resourceId=`、`GET /local/warnings?id=` |
 
 ## 数据存储
 
@@ -186,6 +183,7 @@ $DSH_HOME/novel/
 ├── sources.json   # 书源清单（含登录态，仅存本机、不会外传）
 ├── shelf.json     # 书架、阅读进度与听书位置
 ├── tts-engines.json # 朗读引擎订阅（登录态 auth 仅存本机、导出剥除；订阅自带 header 原样保留）
+├── source-state.json # 脚本可见的按源状态（cookie 垫片 / 变量 / 单串槽 / cache 垫片）
 ├── cache/         # 目录 / 正文缓存（按 mtime 最旧的近似 LRU；默认上限 200MB）
 │   └── tts/       # 合成音频缓存（按 mtime 最旧的近似 LRU；默认上限 128MB）
 └── local/         # 本地书：TXT 是 <uuid>.txt + <uuid>.json（章节偏移表）
@@ -202,26 +200,26 @@ $DSH_HOME/novel/
 | EPUB 2 / 3（流式排版） | 阅读顺序按 **spine 主序列**计章；原书目录树（EPUB3 nav / EPUB2 NCX，含章内锚点与命名锚点）；封面；正文插图（JPEG/PNG/GIF/WebP 与受限静态 SVG）；基本格式（段落、标题、粗斜体、列表、引用、分隔线、基本表格、上下标、预格式文本）；脚注与附录（补充文档面板，可跟随可返回） | **不加载出版方 CSS 与字体**（排版归本插件阅读设置）；**固定版式**、需 DRM 解密的正文、脚本驱动的交互与音视频不宣称支持（明确拒绝或告警）；正文内联 `<svg>` 装饰图形剥离并记说明（整页是一棵只包一张书内图的 SVG 时按那张图读那一章）；远程图片不加载（那一处不留图并留痕） |
 
 - **按内容分流、不互相兜底**：文件头是 ZIP 就按 EPUB 解析，失败**不会**回退成 TXT——否则一份加密压缩包会以「一本乱码书」入架；不是 ZIP 的字节才走 TXT 解码链。文件名词尾是 `.epub` 而内容不是 ZIP 的，明确拒收并指路改回 `.txt`。
-- **TXT 链的兜底不等于来者不拒**：认得出的具名容器头（`%PDF-`、`BOOKMOBI`、UMD 的 `89 9B 9A DE`）在入口就拒并点名；解码之后还要求这本文件**真的是文本**（含空字符、或整本只有空白的文件会被拒，而不是切成「一章空白」入架）。带控制字符的 GBK / UTF-8 文本照旧能读——判据不是「看起来像二进制就拒」。
+- **TXT 链的兜底不等于来者不拒**：认得出的具名容器头（`%PDF-`、`BOOKMOBI`、UMD 的 `89 9B 9A DE`）在入口就拒并点名；解码之后还要求这本文件**真的是文本**：含 NUL（U+0000）或整本只有空白的文件会被拒，而不是切成「一章空白」入架；其余控制字符照旧能读——判据不是「看起来像二进制就拒」。
 - **文字输出只有文字**：图片只在 EPUB 阅读器里显示；TXT 导出与取正文的 `dshnovel_read` 把插图投影成 `[图片：替代文字]` 占位。本轮不提供 EPUB / 图片导出。
 - **有损导入的交代是持久的**：`GET /local/warnings` 可回看（导入时在书架就地显示，进书后在阅读器「导入说明」重看），不静默丢内容；带持久说明的导入不自动跳进阅读器。
 - **导入失败说具体原因**：包级固定版式 / 加密条目 / 是 ZIP 魔数但读不成归档（缺 `mimetype`、条目越界或重名、CRC 对不上、截断）/ 超限 / 具名容器头（PDF、MOBI、UMD）/ 文件名声明 `.epub` 而内容不是 ZIP / 解出来不是可读文本，都由服务端逐条点名，不折叠成「导入失败」一句泛话。
-- **一处读不出，后果只落在那一处**：一份文档读不出正文（空白版权页、只有装饰图形的页面、结构畸形到 DOM 超预算的页面）→ 那一页照样在目录里，点开是空白页并留一条说明；一条目录条目或一处引用指不到可读的文档 → 只剪那一条；锚点找不到 → 目录落该页开头、正文链接取消可点击性（文字照留），两种情况各留一条说明；一张插图读不出 → 那一处不留图（有替代文字就留文字）。每一处缺失都在「导入说明」里点得名。整本拒收只留给书级事实：容器 / 包文档读不出、主序列一份可读的都没有、声明了封面却读不出等（清单见 `ADR-0061`）。
+- **一处读不出，后果只落在那一处**：一份文档读不出正文 → 那一页照样在目录里，点开是空白页并留说明；一条目录条目或一处引用指不到可读文档 → 只剪那一条；锚点找不到 → 目录落该页开头、正文链接取消可点击性（文字照留）；一张插图读不出 → 该处不留图（有替代文字就留文字）。每一处缺失都在「导入说明」里点得名。整本拒收只留给书级事实（容器 / 包文档读不出、主序列一份可读的都没有、声明了封面却读不出等，清单见 `ADR-0061`）。
 
 ## 兼容哪些书源
 
-兼容 legado 书源的**声明式子集**：取值链 / 组合符（`||`、`&&`、`%%`）/ `##` 替换 / AllInOne（单段整页正则） / JSONPath（含 `.*` 属性通配，页面是 JSON 文本时对内容按需解析）/ XPath 子集 / `@put` / `@get` / `@js` 沙箱（脚本完成值语义 + 顶层 `return`/`await` 回落；`eval`/`Function` 在 vm 内可用）/ `jsLib` 源级函数库 / `searchUrl` 的 `@js`/`<js>` 形态 / 对象形态方言（**含 `ruleBookInfo.init` 详情上下文初始化**）/ `url,{json}` POST 请求（选项随书 URL 与章节 URL 全程保留）/ 相对 URL / 隐式 CSS 选择器 / `!` 排除语法，以及 `@js` 宿主垫片（`java.log` / `getElement` / `setContent` / `cookie` / `source.getVariable` 等）。请求状态面还包括真实 cookie jar（`Set-Cookie` 自动落库/回带）、`loginCheckJs`、源级 `concurrentRate` 限速、`webView`/`webJs` 真浏览器抓取与源变量/cache 落盘。缺省请求带浏览器 UA。
+兼容 legado 书源的**声明式子集**：取值链 / 组合符（`||`、`&&`、`%%`）/ `##` 替换 / AllInOne（单段整页正则）/ JSONPath（含 `.*` 属性通配）/ XPath 子集 / `@put` / `@get` / `@js` 沙箱（脚本完成值语义 + 顶层 `return`/`await` 回落；`eval`/`Function` 在 vm 内可用）/ `jsLib` 源级函数库 / `searchUrl` 的 `@js`/`<js>` 形态 / 对象形态方言（**含 `ruleBookInfo.init` 详情上下文初始化**）/ `url,{json}` POST 请求 / 相对 URL / 隐式 CSS 选择器 / `!` 排除语法，以及 `@js` 宿主垫片（`java.log` / `getElement` / `setContent` / `cookie` / `source.getVariable` 等）。请求状态面还包括真实 cookie jar、`loginCheckJs`、源级 `concurrentRate` 限速、`webView`/`webJs` 真浏览器抓取与源变量 / cache 落盘。缺省请求带浏览器 UA。
 
-URL 模板语义按 legado 书源格式对齐：`url,{json}` 选项的逗号两侧允许空白；模板内 `{{...}}` 按 JS 求值（`{{java.encodeURI(key)}}`、`{{page*2}}`、源级 `jsLib` 定义的全局如 `{{host}}`），变量占位 `{{key}}`/`{{page}}` 保持与这份输入格式一致的 URL 编码口径；URL 里的 js 块可出现在任意位置（`<js>…</js>` 闭区间、`@js:` 吃到串尾、块间字面文本按 `@result` 拼接）；`charset` 同时用于**请求体编码**与响应解码（GBK 站点才搜得到）；`&&` 跳过空 / Miss 分支后按序合并，`%%` 在取值用途跳过空 / Miss、列表用途按首支驱动（首支为空则整条为空）。
+URL 模板、`charset` 双用途与 `&&` / `%%` 的合并语义按 legado 书源格式对齐；逐条写法与合并口径见 `tests/legado-coverage/matrix.ts` 与 `CONTEXT.md`。
 
-遇到不认识的语法，本插件选择**报错而不是猜测**——错误定位到出错的规则段，而不是产出错误结果。语法合法但跑得炸的正则（嵌套量词遇上不匹配的长输入）同一条路：每条用户正则都有一条随工作量放宽的时间死线，到点只废掉那一条规则并点名它，不会让一条坏正则把宿主的主线程钉住。`webView`/`webJs` 走本机已装的 Edge/Chrome；没有可用浏览器、或书源依赖这份格式里需要移动端宿主能力（专有 API / 加密侧能力）的那类规则时，会明确报告不支持。
+遇到不认识的语法，本插件选择**报错而不是猜测**——错误定位到出错的规则段，而不是产出错误结果。语法合法但跑得炸的正则（嵌套量词遇上不匹配的长输入）同一条路：每条用户正则都有一条随工作量放宽的时间死线，到点只废掉那一条规则并点名它。`webView`/`webJs` 走本机已装的 Edge/Chrome；没有可用浏览器、或书源依赖这份格式里需要移动端宿主能力的那类规则时，会明确报告不支持。
 
-**「做到哪一步」有机器口径**：`tests/legado-coverage/matrix.ts` 一行一条 legado 语义，每行归入 实现 / 环境不适用 / 待拍板 三态之一：implemented 行带实现符号与钉住用例，not-applicable 行写裁决理由，open 行带 `2026-MM-DD` 复核戳。兼容判据默认随 `pnpm test` 跑（见 [docs/development.md 的「兼容判据与桥面自证」](docs/development.md#兼容判据与桥面自证)）。想查某个字段支不支持：在矩阵里按 `id` 或能力名搜那一行即可。
+**「做到哪一步」有机器口径**：`tests/legado-coverage/matrix.ts` 一行一条 legado 语义，归入 实现 / 环境不适用 / 待拍板 三态之一；implemented 行带实现符号与钉住用例，not-applicable 行写裁决理由，open 行带复核戳。判据默认随 `pnpm test` 跑，说明见 [docs/development.md 的「兼容判据与桥面自证」](docs/development.md#兼容判据与桥面自证)。想查某个字段支不支持：在矩阵里按 `id` 或能力名搜那一行即可。
 
 ## 常见问题
 
 **搜索结果全是「网络错误」，或正文显示为空白？**
-多半是代理问题。DSH 的 Node 进程用 undici 发请求，**不会读取系统代理设置**；对代理才可达的站点，直连会被重定向或重置。解决：在配置里显式设 `proxyUrl`（如常见本地代理端口 `'http://127.0.0.1:7897'`）。缺省的自动探测顺序为：环境变量 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` → Windows 系统代理 → 直连。
+多半是代理问题。DSH 的 Node 进程用 undici 发请求，**不会读取系统代理设置**；对代理才可达的站点，直连会被重定向或重置。在配置里显式设 `proxyUrl`（如常见本地代理端口 `'http://127.0.0.1:7897'`）；缺省探测顺序与代理链路细节见 `docs/development.md` 的「已知的环境坑」。
 
 **某条书源报「不支持 xx」？**
 本插件只实现 legado 规则的声明式子集（见上节），对无法仿真或不认识的语法会明确报错并定位到规则段，而不会静默给出错误结果。可以尝试换用不依赖该类移动端宿主能力（专有 API / 加密侧能力）的同类书源。
@@ -233,36 +231,26 @@ URL 模板语义按 legado 书源格式对齐：`url,{json}` 选项的逗号两�
 那条写法语法合法，但遇上不匹配的长输入会指数级回溯。插件给它一条随页面大小放宽的时间死线，到点只废掉**这一条规则**并点名它，而不是让整台宿主卡住——所以症状是「这一源这一段报错」，不是「读不了」。解决：改源里那条正则（去掉嵌套量词），或换一家源。
 
 **面板满屏报「非受信来源」403？**
-`/novel-api` 的同源 fence 只认本机 Host（`localhost` / `127.0.0.1` / `[::1]`），这是 DNS rebinding 的防线：攻击者把自家域名的 A 记录指到 `127.0.0.1` 时，「远端是本机」与「Origin 与 Host 同源」会同时成立。若你用自己的域名、hosts 别名，或用反向代理改写了 Host 打开宿主面板，把那个名字加进配置 `apiAllowHosts` 并重启插件；403 的正文会点名是哪个 Host 被拒。要清楚代价：填进去的每个名字，都是在那个域名上把这道防线让掉——只填自己控制的。
+`/novel-api` 的同源 fence 只认本机 Host（`localhost` / `127.0.0.1` / `[::1]`），这是 DNS rebinding 的防线。若你用自己的域名、hosts 别名，或用反向代理改写了 Host 打开宿主面板，把那个名字加进配置 `apiAllowHosts` 并重启插件；403 的正文会点名是哪个 Host 被拒。代价是：填进去的每个名字，都是在那个域名上把这道防线让掉——只填自己控制的。
 
 **安装后侧栏没有出现「小说」入口？**
 先重启宿主。若从源码目录安装，确认已先 `pnpm build` 生成 `lib/`（构建产物缺失会让整个插件树拒绝挂载，宿主直接启动失败而非静默降级），详见 [docs/development.md 的「本地源码调试」](docs/development.md#本地源码调试)；GitHub Release 的 tarball 自带 `lib/`，不必构建。装进了没有 `slots` / `layout` 界面 bundle 的 profile，则本就只有工具面、没有侧栏入口。
 
 ## 开发
 
-```powershell
-git clone <仓库地址>   # GitHub 或 GitCode 镜像均可
-cd dsh-novel
-pnpm install
-pnpm build        # 构建 lib/（Node 半 + 浏览器半 + lib/types 声明）；改动源码后、重启宿主前必须执行
-pnpm dev          # = tsdown --watch，日常开发建议挂着
-```
-
-本地源码调试、构建产物与热更新、宿主兼容、发版与真机验证、全部测试门控见 [docs/development.md](docs/development.md)；模块形状与语义归属见 [docs/architecture.md](docs/architecture.md)。
+从源码构建：`pnpm install && pnpm build`（改动源码后、重启宿主前必须重新构建）；日常开发可挂 `pnpm dev`，它只出 `lib/*.js`，要类型声明另跑一次 build。本地调试、构建产物与热更新、门控、真机验证、发版与宿主兼容见 [docs/development.md](docs/development.md)；模块形状与语义归属见 [docs/architecture.md](docs/architecture.md)。
 
 ## 文档
 
-本仓按「一个事实只有一个家」分工：用户面事实在本文件；agent 的常读规则在 `AGENTS.md`；文档分层、放置与生命周期在 `docs/AGENTS.md`；构建与全部门控在 `docs/development.md`；提交与发版边界在 `CONTRIBUTING.md`；决策在 `docs/adr/`（索引见 `docs/adr/README.md`）；发布历史在 `CHANGELOG.md`。
-
-兼容裁决与真机读数住 `tests/legado-coverage/matrix.ts` 的行 `note`；局部口径的为什么住实现它的代码注释。迭代过程文档不入库，写在本机 `.superpowers/`。完整文档分层见 `docs/AGENTS.md`；全部门控与判据见 `docs/development.md`。
+用户面事实在本文件；agent 常读规则在 `AGENTS.md`；文档分层、放置与生命周期在 [docs/AGENTS.md](docs/AGENTS.md)；构建与全部门控在 [docs/development.md](docs/development.md)；提交与发版边界在 [CONTRIBUTING.md](CONTRIBUTING.md)；决策在 [docs/adr/](docs/adr/README.md)；发布历史在 [CHANGELOG.md](CHANGELOG.md)。兼容裁决与真机读数住 `tests/legado-coverage/matrix.ts` 的行 `note`；局部口径的为什么住实现它的代码注释。
 
 ## 贡献
 
-欢迎 Issue 与 PR。提交信息、PR 与发版边界见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。提交改动前请确保 `pnpm test` 与 `pnpm typecheck` 通过，且**两条命令的退出码都亲眼看过**；完整的真链路门控见 [docs/development.md 的「门（自动）」](docs/development.md#门自动)，真宿主冒烟见同一份文档的「真机验证」。若扩展了书源语法，请优先补充对应的回放测试 fixture（脱敏判据见 `tests/replay/sanitize.ts`），并把新形态在 `tests/legado-coverage/matrix.ts` 里落到正确的那一态。提交即表示你同意以 [Apache-2.0](LICENSE) 协议授权你的贡献。
+欢迎 Issue 与 PR。提交信息、PR 约定与提交前检查见 [CONTRIBUTING.md](CONTRIBUTING.md)；提交改动前至少跑 `pnpm test`、`pnpm typecheck` 与 `pnpm lint`，并确认退出码。若扩展了书源语法，请补充对应的回放测试 fixture（脱敏判据见 `tests/replay/sanitize.ts`），并把新形态在 `tests/legado-coverage/matrix.ts` 里落到正确的那一态。提交即表示你同意以 [Apache-2.0](LICENSE) 协议授权你的贡献。
 
 ## 致谢
 
-书源兼容语义的开发阶段对读，参考了 legado 及其续作 [legado-with-MD3](https://github.com/HapeLee/legado-with-MD3)。对读结论落在代码、测试与覆盖矩阵里；仓内不保留任何外部实现的冻结快照，**运行与 CI 都不依赖外部 checkout**。这段来历只住本文件：仓内的文档与注释只对本项目和当前代码负责，不指认外部项目的名字、代码路径、版本或现状（判据见 [`docs/AGENTS.md`](docs/AGENTS.md) §3）。
+书源兼容语义的开发阶段对读，参考了 legado 及其续作 [legado-with-MD3](https://github.com/HapeLee/legado-with-MD3)。对读结论落在代码、测试与覆盖矩阵里；仓内不保留任何外部实现的冻结快照，运行与 CI 都不依赖外部 checkout。这段来历只住本文件。
 
 本地导入的 UMD 容器头判据参考了公开的逆向解析资料（如[这份 UMD 格式解析](https://zhuanlan.zhihu.com/p/572973436)）。该格式没有公开的官方规范，多份彼此独立的资料对「文件前四字节固定为 `89 9B 9A DE`」一致；判据以测试钉住，出处只住本文件。
 

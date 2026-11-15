@@ -31,4 +31,4 @@ Status: accepted
 
 多一件要维护的呈现事实：三角的尺寸、锚定与「notes 场景收掉」都得有测试钉住（jsdom 钉 CSS 契约，几何门钉真渲染）。窄栏极限下（栏宽小于内边距时）三角可能压住首行缩进那一格——段首两格本无内容起点，观感代价接近零。
 
-锚点：`src/client/styles/reader.ts` 的 `.novel-tts-live` / `.novel-tts-live::before`；`src/client/views/ChapterBody.tsx` 的 `listenParagraph` / `liveLine` / `livePid`；`src/client/util.ts` 的 `paperLiveInk`（判据不变）；`tests/client/tts-seek.test.tsx` 的「跟读标记 = 换字色 + 段首小三角」；`tests/browser/tts-layout.test.tsx` 的跟读高亮几何条；`docs/ui-spec.md` §3.6；`ADR-0071`。
+锚点：`src/client/styles/reader.ts` 的 `.novel-tts-live` / `.novel-tts-live::before`；`src/client/views/ChapterBody.tsx` 的 `listenParagraph` / `liveLine` / `liveNode`；`src/client/util.ts` 的 `paperLiveInk`（判据不变）；`tests/client/tts-seek.test.tsx` 的「跟读标记 = 换字色 + 段首小三角」；`tests/browser/tts-layout.test.tsx` 的跟读高亮几何条；`docs/ui-spec.md` §3.6；`ADR-0071`。

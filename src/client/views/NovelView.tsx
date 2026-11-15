@@ -17,7 +17,7 @@ import { ShelfView } from './ShelfView.js'
  *  书源管理 = 宿主设置「小说」区块整体（单一归属：
  *  轮询单实例、现场 store 单份）。书城 = 分类浏览（左栏点名一个源、再点它自己声明的分类，右区是
  *  该源这一类的书单；跨源视野只在书籍详情浮层里手动发起，见 CityView 与 `ADR-0028`）。
- *  reader/search 是 tab 之下的沉浸内容流（各有自己的返回导航），顶部 tab 不随行。
+ *  reader/search 是 tab 之下的沉浸内容流：顶部 tab 不随行，返回固定落书架。
  *  布局钉死：根 = flex 列；视图区（flex:1 + overflowY:auto）——不要给视图区写 height:100%，
  *  那会被挤出视口。 */
 

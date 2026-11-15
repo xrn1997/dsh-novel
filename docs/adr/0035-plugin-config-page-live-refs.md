@@ -2,7 +2,7 @@
 
 Status: accepted
 
-dsh-novel 的运行参数（字段清单的家是 `src/config.ts` 的 `Config`）放进宿主「插件」页的 `plugins.bundle.config` 槽：schema 标 `.volatile()`，Loader 解析后把字段变成稳定 ref；`resolveConfig` 返回只读 getter，服务在每次操作时读当前值。保存由宿主 settings/configEditor 写回 profile patch，不重启插件。`dataDir` 不进表单：它决定全部落盘根，改它必须重建 registry/shelf/cache/local，等价于重启。
+dsh-novel 的运行参数（字段清单的家是 `src/config.ts` 的 `Config`）放进宿主「插件」页的 `plugins.bundle.config` 槽：schema 标 `.volatile()`，Loader 解析后把字段变成稳定 ref；`resolveConfig` 返回只读 getter，服务在每次操作时读当前值。保存走宿主设置面 `ctx.remote.settings` 的 `describe` / `mutate`（`ADR-0067`），不重启插件。`dataDir` 不进表单：它决定全部落盘根，改它必须重建 registry/shelf/cache/local，等价于重启。
 
 被否决的做法：
 

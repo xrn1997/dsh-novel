@@ -19,28 +19,19 @@
 | 贡献指南 | `CONTRIBUTING.md` | 提交信息、PR/Issue 约定、提交前门、发版边界 | 构建细节、架构理由 | 是（流程） |
 | 发布历史 | `CHANGELOG.md` | 每个已发布版本的用户可见变化与升级注意 | 版本判据、逐提交明细 | 是（发布记录） |
 | 决策记录 | `docs/adr/` | 一个决定的 why、边界、被否方案、后果 | 当前架构复述、计划、验收清单 | 是（why） |
-| Agent 技能配置 | `docs/agents/*` | issue、标签、领域文档的 agent 约定 | 本仓事实源 | 否 |
+| Agent 技能配置 | `docs/agents/*` | issue、标签、领域文档的 agent 约定 | 本仓产品事实源 | 否（技能约定） |
 | 读数 | `tests/legado-coverage/matrix.ts` 的行 `note` 与代码注释 | 可复核的读数与局部口径 | 散文论证、用户可见事实、取证过程与时间线（见本文 §3 第 14 条） | 是（读数） |
 | 真链路审计脚本 | `scripts/` | 被 `docs/development.md` 门章节点名的真链路审计命令（如 `tts-live.mjs`） | 过程采样、一次性脚本（留本机） | 否（命令口径住 `docs/development.md`） |
 | 活跃工单 | GitHub Issues | 进行中的任务与验收 | 长期事实、裁决 | 否 |
 | 过程工件 | 本机 `.superpowers/`、`.task-scratch/`、`.worktrees/` | 任务简报、报告、审查草稿、一次性采样脚本、隔离工作区 | 入库、作为事实源 | 否 |
-| 生成快照 | `.qoder/repowiki/` | 工具生成的知识快照 | 手改、架构判断依据 | 否 |
 
 本仓不另写跨半契约规格：契约的唯一主人是 `src/shared/wire.ts`，另写一份规格会造第二份契约。界面的现行状态与层级住 `docs/ui-spec.md`，不写进 architecture。
 
 ## 2. 放置判据
 
-- 每次会话看不到就会做错 → `AGENTS.md`。
-- 用户装、用、数据在哪 → `README.md`。
-- 词义与它的唯一实现 → `CONTEXT.md`。
-- 当前结构、归属、不变量 → `docs/architecture.md`。
-- 界面现在长什么样 → `docs/ui-spec.md`。
-- 怎么构建、怎么验、怎么发版 → `docs/development.md`。
-- 怎么提交、PR/Issue 约定、发版边界 → `CONTRIBUTING.md`。
-- 每个版本改了什么、升级注意什么 → `CHANGELOG.md`。
-- 为什么这么定、否掉了什么 → `docs/adr/`。
-- 真机读数 → 读数的家（见本文 §1）；局部口径的为什么 → 实现它的代码注释。
-- 真链路审计门的命令脚本 → `scripts/`（前提是 `docs/development.md` 的门章节点名它）；其余脚本算过程采样，留本机。
+- 每次会话看不到就会做错 → `AGENTS.md`；用户装、用、数据在哪 → `README.md`；词义与唯一实现 → `CONTEXT.md`；当前结构与归属 → `docs/architecture.md`；界面现行状态 → `docs/ui-spec.md`。
+- 怎么构建、怎么验、怎么发版、环境坑 → `docs/development.md`；提交、PR/Issue 与发版边界 → `CONTRIBUTING.md`；每个版本改了什么 → `CHANGELOG.md`；为什么这么定 → `docs/adr/`。
+- 真机读数 → 读数的家（见本文 §1）；局部口径的为什么 → 实现它的代码注释；真链路审计门的命令脚本 → `scripts/`（前提是 `docs/development.md` 的门章节点名它）。
 - 进行中的计划、调研、评审 → GitHub Issues 或本机 `.superpowers/`；完成后把长期成立的部分提炼进 ADR、architecture 或 ui-spec，其余不落库。
 - 拿不准时按「读者在什么场景会打开它」选层。
 
@@ -49,13 +40,13 @@
 1. 当前事实源只写现在时；历史、变更过程、旧方案只进 ADR、CHANGELOG、git 或本机过程文档。
 2. 一个事实只有一个家；`docs/architecture.md` §4 是语义归属的唯一清单，别处只链接。
 3. 代码与测试是最终真相；文档与代码冲突时改文档，并顺手改回现状。
-4. 引用仓内路径用相对路径；点名的路径必须真实存在，`pnpm test` 的文档门会扫。
+4. 引用仓内路径用相对路径；`src/`、`tests/`、`docs/`、`locale/` 前缀的路径与反引号里的裸相对路径必须真实存在，`pnpm test` 的文档门扫这几族。
 5. 不写行号（`file.ext:123` 形态会随任何一次编辑漂移）；要指实现就指符号锚。
 6. 不抄会腐烂的读数与计数；需要证据就指测试、代码或读数的家（见本文 §1）。
 7. 注释与文档承担为什么、口径、裁决、证据，不承担代码细节；自测问题：这句删掉，读者丢的是「为什么」还是「怎么做」？只丢后者就删或升高度。
 8. 词汇优先：新概念先进 `CONTEXT.md` 并点名 `_唯一实现_`，再写代码；符号能否现查得到由 `tests/context-terms.test.ts` 把守。
 9. ADR 的写作、状态与取代规则住 `docs/adr/ADR-FORMAT.md`；一篇 ADR 只回答一个决定。
-10. `.qoder/repowiki/` 是生成快照，不手改、不作架构判断依据，也不把它的结论抄进手写文档；它的基线位置与重生成坑见 `docs/development.md` 的「已知的环境坑」。
+10. Qoder 等工具生成的快照只在本机、不进版本控制，也不作架构判断依据；不把它的结论抄进手写文档。
 11. 根 `AGENTS.md` 预算 ≤ 8,000 字符；超限按「搬迁 → 压缩 → 提额并说明」处理，提额必须在提交信息里写理由。
 12. 过程工件默认不进仓库：仓库不设 plans/specs/archive；进行中的计划住 GitHub Issues 或本机 `.superpowers/`，完成后提炼或不落库。
 13. 引用外部文档原文不得改写；自家表述可直接改，引用只能在其之外另加读法说明，否则等于伪造出处。
@@ -64,13 +55,14 @@
 ## 4. 生命周期
 
 - **ADR**：编号只追加、不复用；每篇紧跟标题写 `Status: accepted` 或 `Status: superseded by NNNN`；每篇在 `docs/adr/README.md` 恰好出现一次；正文只写当前真相，日期留在 git；整篇翻案新写一篇并标旧篇，事实漂移就地改。
-- **当前事实源**（`README.md`、`CONTEXT.md`、`docs/architecture.md`、`docs/ui-spec.md`、`docs/development.md`）：语义、界面、词汇或操作变化时同批更新；不写历史。像素、断点、文案键的唯一定义在 `src/client/` 与 `tests/client/`。
-- **README**：用户可见事实变化时更新；兼容性窗口与真机名单的事实源是 `package.json`，README 与徽章是投影，文档门校验。
+- **当前事实源**（`AGENTS.md`、`README.md`、`CONTEXT.md`、`docs/architecture.md`、`docs/ui-spec.md`、`docs/development.md`）：语义、界面、词汇、操作或常驻规则变化时同批更新；不写历史。像素、断点、文案键的唯一定义在 `src/client/` 与 `tests/client/`。
+- **AGENTS.md**：门清单、硬约束或先读表变化时同批更新；它是入口不是手册，预算由文档门核。
+- **README**：用户可见事实变化时更新；宿主 peer 区间与真机名单的事实源是 `package.json`，README 与徽章是投影，名单与徽章由文档门核对，peer 区间由 `tests/packaging.test.ts` 把。
 - **详情页短文档**（`docs/DETAIL.md`、`docs/DETAIL.zh.md`，每语言一份）：宿主插件详情页按 `locale` 的 `meta.detail` 点名渲染它，不点名就回退整篇 README；文档与它的插图都要由 `package.json` 的 `files` 精确点名，判据住 `tests/packaging.test.ts`。README 的用户可见事实变化时同批看一眼插图与说明文字是否还成立。
 - **CONTRIBUTING**：提交信息、PR/Issue 约定、提交前门或发版边界变化时同批更新；构建步骤仍住 `docs/development.md`。
 - **CHANGELOG**：只在发版时追加已发布版本；每个版本用四个固定小节——新增 / 变更 / 修复 / 升级注意，没有内容的小节省略；写用户可见变化与升级注意，未发布改动不预写；历史版本按当时体例保留，不回溯改写（已废称呼与不可回查的批次号按文档门清理）；逐提交明细留 git。
 - **过程工件**：只住本机；任务完成时把长期成立的结论提炼进 ADR、`docs/architecture.md` 或 `docs/ui-spec.md`，其余随工作区消失。需要保留历史理由时写 ADR。
-- **生成快照**：整棵树重新生成，不逐文件修；与代码冲突时以代码为准。
+- **生成快照**：只在本机、不进版本控制；整棵树重新生成，不逐文件修；与代码冲突时以代码为准，也不作为架构判断依据。
 - **文档门**：`pnpm test` 内的三件套——`tests/docs-liveness.test.ts`（全部手写文档与代码注释的引用形态、职责边界与 ADR 形状）、`tests/context-terms.test.ts`（`CONTEXT.md` 点名的符号）与 `tests/comment-altitude.test.ts`（注释高度）；每段的具体判据见 `docs/development.md` 的「门（自动）」。命令即 `pnpm test`。
 
 ## 5. 评审清单
@@ -78,13 +70,8 @@
 文档改动提交前自查：
 
 - 这条事实的家是否唯一？别处是否还有旧副本？
-- 当前事实源里是否混进了历史、计划或「已改为」的口吻？
-- 改动的路径、相对链接/锚点、ADR 编号、`§N` 指路是否都还活着？（`pnpm test` 的文档门）
-- ADR 的 `Status`、索引、`锚点：` 是否齐全？
-- 发版前是否在 `CHANGELOG.md` 写清这一版的变化与升级注意？
-- 根 `AGENTS.md` 是否仍在预算内？
-- 过程工件是否留在本机、没有入库？
-- 生成的 `.qoder/repowiki/` 是否没有被手改？
-- `CONTEXT.md` 新增或改动的 `_唯一实现_` 符号是否现查得到？
-- `docs/ui-spec.md` 是否只写现行状态，没有混进历史与像素读数？
+- 当前事实源里是否混进了历史、计划或「已改为」的口吻？路径、相对链接/锚点、ADR 编号与 `§N` 指路是否都还活着？（`pnpm test` 的文档门）
+- ADR 的 `Status`、索引与 `锚点：` 是否齐全？发版前 `CHANGELOG.md` 是否写清了这一版的变化与升级注意？
+- 根 `AGENTS.md` 是否仍在预算内？过程工件与生成快照是否留在本机、没有入库？
+- `CONTEXT.md` 新增或改动的符号是否现查得到？`docs/ui-spec.md` 是否只写现行状态，没有混进历史与像素读数？
 - 文档与注释里是否还有外部项目的名字、代码路径、版本或现状判断，以及排成时间线的日期？（本文 §3 第 14 条）

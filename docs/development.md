@@ -9,8 +9,8 @@ git clone <仓库地址>   # GitHub 或 GitCode 镜像均可
 cd dsh-novel
 pnpm install
 pnpm build        # 构建 lib/（Node 半 + 浏览器半）+ lib/types/（tsc 声明）；改动源码后、重启宿主前必须执行
-pnpm dev          # = tsdown --watch，日常开发建议挂着；它只出 lib/*.js，且开跑即清 lib/——
-                  # 要 lib/types/（声明）就在它之后或之前补一次 pnpm build
+pnpm dev          # = tsdown --watch，日常开发建议挂着；它只出 lib/*.js，开跑即清 lib/（含 lib/types）——
+                  # 要类型声明就在 dev 起来之后另跑一次 pnpm build
 ```
 
 **`lib/` 是构建产物且不入库**，任何从源码目录链进 profile 的安装方式都不会替你构建它——先 `pnpm build`，否则整个插件树拒绝挂载（`plugin tree failed to load` + `ERR_MODULE_NOT_FOUND`）。
@@ -45,7 +45,7 @@ pnpm lint          # 类型感知 ESLint：显式 any、any 扩散（no-unsafe-*
 
 ### 编译器档位与 lint 归属
 
-`tsconfig.json` 在 `strict` 之上开着 `noUncheckedIndexedAccess`、`exactOptionalPropertyTypes`、`erasableSyntaxOnly`、`noFallthroughCasesInSwitch`、`noImplicitOverride`；判据与弃选项住 `ADR-0053`。三条纪律单列：
+`tsconfig.json` 在 `strict` 之上开着 `noUncheckedIndexedAccess`、`exactOptionalPropertyTypes`、`erasableSyntaxOnly`、`noFallthroughCasesInSwitch`、`noImplicitOverride`、`verbatimModuleSyntax`、`noUnusedLocals`、`noUnusedParameters`；判据与弃选项住 `ADR-0053`。三条纪律单列：
 
 - **取值不折叠**：引擎取值链的空态不折叠——取位失败 → Miss、解析到空集合 → 空 List，两者是两种值，不许用 `?? []` / `?? ''` 之类的缺省把它们折成同一种结局（取值规约见 `CONTEXT.md`）；服务层对合法缺省的 `??` 收口不在禁令内。测试夹具的位置取位走 `tests/support/fixture.ts` 的 `pick` / `last`，需要断言存在性的查找走 `must`，越界即抛「夹具缺第几项、共几项」，不改成 `?.`。
 - **`no-unnecessary-condition` 的命中分两类**：真死代码删；「本地窄镜像钉死 ≠ 运行时必有」与「TS 看不见闭包写入」的判空**保留**，并在注释里写清为什么（注释只写为什么，不抄表达式）。
@@ -55,9 +55,15 @@ lint 与 tsc 的分工：`tsc` 管类型形状与可赋值性，**`any` 归 ESLi
 
 > **跑门取退出码，别看管道说了什么**：`pnpm test | tail` 之后退出码是管道工具的，红会被吃掉。先把输出灌进文件、再单独打印退出码，汇报里把**退出码连同计数**一起抄；**跑门与提交必须是两条命令**。
 
-**文档门是三件套**：`tests/docs-liveness.test.ts` 扫 `AGENTS.md` / `CONTEXT.md` / `README.md` / `CONTRIBUTING.md` / `CHANGELOG.md`、`docs/**` 与 `src/**`、`tests/**` 的正文与注释，钉住点名的 `src/`、`tests/`、`docs/`、`locale/` 路径真实存在、已废的文档称呼不再出现、`§N` 与中文小节名指路活着、相对链接与锚点指得到东西、ADR 编号连续且标题 / `Status` / `锚点：` 齐全、索引双向完整且没有重复行、README 截图三方一致、README 的窗口 / 真机名单 / 徽章从 `package.json` 投影、主人清单 / 界面规格 / 文档标准各只有一份、根 `AGENTS.md` 预算；`tests/context-terms.test.ts` 查 `CONTEXT.md` 点名的符号在生产代码里现查得到；`tests/comment-altitude.test.ts` 查注释不抄代码表达式。路径若有意保留历史名走 `ALLOWED` 白名单，加一条要写清为什么；死名没有豁免。文档门自己从语料里排除：它的正文必须引用已废称呼，扫自己必然自红；这是唯一的自排除。
+**文档门是三件套**：
 
-**CI 的分工**：GitHub Actions（`.github/workflows/ci.yml`）在 push / PR 上跑 `pnpm gates`（清单住 `package.json`；pnpm 版本住 `packageManager`，Node 版本在两条工作流里各写一次）。发版由 `.github/workflows/release.yml` 承接，tag push 与手动干跑的分工见「发版流程」第 5 步。真链路门（下面的 `DSH_*` 系列）不进 CI：它们需要真实站点、真浏览器或本机宿主，仍按本机命令手动跑；CI 绿不代表站点可用性或安装链路通过——发版工作流的绿只证明门与资产上传成功，装不装得进由 `DSH_INSTALL_CHECK` 量。
+- `tests/docs-liveness.test.ts` 扫 `AGENTS.md` / `CONTEXT.md` / `README.md` / `CONTRIBUTING.md` / `CHANGELOG.md`、`docs/**` 与 `src/**`、`tests/**` 的正文与注释，钉住：点名的 `src/`、`tests/`、`docs/`、`locale/` 路径真实存在；已废的文档称呼不再出现；`§N` 与中文小节名指路活着；相对链接与锚点指得到东西；ADR 编号连续且标题 / `Status` / `锚点：` 齐全、索引双向完整且无重复行；README 截图三方一致；README 的实测名单 / 徽章从 `package.json` 投影；主人清单 / 界面规格 / 文档标准各只有一份；根 `AGENTS.md` 预算。
+- `tests/context-terms.test.ts`：查 `CONTEXT.md` 点名的符号在生产代码里现查得到，且每个词条都点名锚点。
+- `tests/comment-altitude.test.ts`：查注释不抄代码表达式。
+
+路径若有意保留历史名走 `ALLOWED` 白名单，加一条要写清为什么；死名没有豁免。文档门自己从语料里排除：它的正文必须引用已废称呼，扫自己必然自红；这是唯一的自排除。
+
+**CI 的分工**：GitHub Actions（`.github/workflows/ci.yml`）在 push / PR 上跑 `pnpm gates`（清单住 `package.json`；pnpm 版本住 `packageManager`，Node 版本在两条工作流里各写一次）。发版由 `.github/workflows/release.yml` 承接，tag push 与手动干跑的分工见「发版流程」第 5 步。真链路门（下面的 `DSH_*` 系列）不进 CI：它们需要真实站点、真浏览器、本机宿主或本机数据（书源库 / 语料目录），仍按本机命令手动跑；CI 绿不代表站点可用性或安装链路通过——发版工作流的绿只证明门与资产上传成功，装不装得进由 `DSH_INSTALL_CHECK` 量。
 
 ### 真链路门控（默认跳过、需显式打开）
 
@@ -72,21 +78,24 @@ $env:DSH_REPROBE='1'; pnpm vitest run tests/reprobe.test.ts
 # 它是**报告**：分桶读数靠人判，代码不设通过率断言，只断言每个注册源都进了审计
 # 改动正则求值面（`engine/regex-guard.ts` 的死线、AllInOne / `##` / CSS 属性过滤 / `bookUrlPattern` 嗅探的口径）必跑这一条：
 # 死线对「大而合法」页面的误伤只在真页面上显形，离线门全绿证不了它
-$env:DSH_CONTENT_AUDIT='1'; pnpm vitest run tests/content-audit.test.ts
-$env:DSH_AUDIT_KEYWORDS='小说,完本,的'   # 旋钮（都可省）：关键词表 / 并发 / 每本抽哪几章 / 只审某些源
+# 旋钮（都可省）：关键词表 / 并发 / 每本抽哪几章 / 只审某些源
+$env:DSH_AUDIT_KEYWORDS='小说,完本,的'
 $env:DSH_AUDIT_WORKERS='5'
 $env:DSH_AUDIT_CHAPTERS='0,2,5,mid'
 $env:DSH_AUDIT_ONLY='源名子串1,源名子串2'
+$env:DSH_CONTENT_AUDIT='1'; pnpm vitest run tests/content-audit.test.ts
 
 # 搜索相关性分档 + 按书归并真机审计：全量源聚合搜索 → kept/suspect 分桶读数、按书本数与家数分布、三组待判样例（联网，分钟量级）
 # 它是**报告**：不设通过率断言（分母随源增删与站点脸色漂），唯一断言是判据自洽（分档不丢条）；读数供裁「去虚字放行」偏离与那把归并键的焊错面
-$env:DSH_SEARCH_FILTER_AUDIT='1'; pnpm vitest run tests/search-relevance-audit.test.ts
 $env:DSH_SEARCH_AUDIT_KEYWORD='冰魔女的契约'   # 旋钮（可省）：审计关键词
+$env:DSH_SEARCH_FILTER_AUDIT='1'; pnpm vitest run tests/search-relevance-audit.test.ts
 
 # 真采集：把真实站点抓成 compat fixture（联网；关键词须与回放同批，缺省「书」）
 $env:COMPAT_CAPTURE='1'; $env:COMPAT_KEYWORD='书'
 pnpm vitest run --config vitest.compat.config.ts tests/replay/capture.test.ts
 # 采完离线复算：pnpm test:compat —— 落盘的必须是脱敏后的产物（见下）
+# 脱敏规则演进后重洗已入库 fixture（原地重写、幂等）：
+$env:COMPAT_RESANITIZE='1'; pnpm vitest run --config vitest.compat.config.ts tests/replay/resanitize.test.ts
 
 # 真安装链路：dsh plugin add → profile bundles 挂载 + lib/client.js / cordis.patch.yml 就位
 # 两格：源码目录（pnpm 的 link 语义）/ `pnpm pack` 的 tarball（GitHub Release 资产形态）
@@ -99,6 +108,7 @@ $env:DSH_WEBVIEW='1'; pnpm vitest run tests/services/webview.test.ts
 # 真浏览器门（离线，开关名 DSH_BROWSER_GATE；旧名 DSH_EPUB_BROWSER 仍认）：
 #   EPUB 图文阅读的真图片解码 / 真排版位置 / 真下载字节
 # 本地随机端口起真服务、驱动构建产物 lib/client.js，只用**已安装的** Edge/Chrome，从不下载
+# 指定浏览器可执行文件（可选）：$env:DSH_BROWSER_EXECUTABLE='C:\path\to\chrome.exe'
 $env:DSH_BROWSER_GATE='1'; pnpm vitest run tests/browser/epub-reader.test.ts
 # 同一枚闸下的几何门：不起服务、不读站点——把浮层的真 DOM 灌进浏览器量 rect（jsdom 量不到排版）
 $env:DSH_BROWSER_GATE='1'; pnpm vitest run tests/browser/city-sheet-layout.test.tsx
@@ -187,4 +197,5 @@ npm 与 GitHub Release 是两条渠道，靠同一个 tag 对齐；发版后核�
 - **运行时数据不在仓库**：书源 / 书架 / 缓存 / 本地书住 `$DSH_HOME/novel/`（缺省 `~/.dsh/novel/`；`dataDir` 可改）。
 - **`tests/replay/report.md` 是跑门产物**：`pnpm test:compat` 每次覆盖写，已 gitignore；它的分母是 `tests/replay/fixtures/` 下的 fixture，**不是站点可用率**。
 - **冒烟启动宿主时日志里那行带 token 的 URL 是活的凭据**：别留在日志或会话输出里，测完删文件。
-- **`.qoder/repowiki` 是生成的知识库快照**：基线 commit 只记在 `.qoder/repowiki/knowledge/zh/_index.yaml` 里（要对照就现查那份，篇数与 hash 都不在这里抄——抄一次就多一个会腐烂的镜像）。仓内**没有**再生成它的路径（只能在 Qoder 里重跑），所以它永远可能落后于代码；它不是事实源，判断口径见 `docs/AGENTS.md`。
+- **缺前端测试依赖会假红**：`jsdom` / `@testing-library/react` 没装全时，前端测试文件报 `Cannot find module`；先 `pnpm install`。
+- **`.qoder/repowiki` 是生成的知识库快照**：整棵只在本机、不进版本控制，仓内没有再生成它的路径（只能在 Qoder 里重跑），所以它永远可能落后于代码；它不是事实源，判断口径见 `docs/AGENTS.md`。

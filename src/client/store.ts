@@ -49,7 +49,7 @@ export function useStoreValue<T extends object, V extends string | number | bool
 // ── 路由（view 内路由，无 URL 路由）─────────────────────────────
 // 五成员：书架/书城/书源管理是小说视图内**并列 tab**——选择即切换下方内容；
 // 书源管理 = 宿主设置「小说」区块整体（单一归属）。
-// reader/search 是 tab 之下的沉浸内容流，各有自己的返回导航，顶部 tab 不随行。
+// reader/search 是 tab 之下的沉浸内容流：顶部 tab 不随行，返回固定落书架。
 export type ViewRoute =
   | { name: 'shelf' }
   | { name: 'city' }

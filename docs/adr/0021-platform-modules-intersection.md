@@ -15,4 +15,4 @@ Status: accepted
 
 待裁（属改进不属决策）：本仓不自带宿主每代 `staticModules()` 名单的采集面，因此「重读新表」这一件事无法机器判——可选做法是给宿主模块表做一份按代次冻结的清单；但兼容判据不再架外部快照（`ADR-0054`），这份清单只能作开发期现查，不进默认门。
 
-锚点：`tsdown.config.ts`（`PLATFORM_MODULES` 头注 = 判据的家、`dsh-novel-bundle-purity`、三段式 banner 的 id 必须等于包名）；`tests/packaging-build.test.ts` 的「client 半纯度：require 白名单外零泄漏」；`src/shared/wire.ts` 文件头；`docs/development.md`「宿主兼容与实测名单」。
+锚点：`tsdown.config.ts`（`PLATFORM_MODULES` 头注 = 判据的家、`dsh-novel-bundle-purity`、三段式 banner 的 id 必须等于包名）；`tests/packaging-build.test.ts` 的「client 半纯度：require 集合恰为约定两条」；`src/shared/wire.ts` 文件头；`docs/development.md`「宿主兼容与实测名单」。
