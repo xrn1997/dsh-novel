@@ -290,7 +290,14 @@ async function audit(host, engineId, dataDir) {
         console.log('UNUSABLE: 合成回执缺音频键')
         return 1
       }
-      console.log(`RECEIPT: key=${key}`)
+      // 回执里那一格「播放端还要补的倍率」也读出来：真链路脚本的职责就是把协议面念一遍，
+      // 不在这里报，补速这条新契约就只有单测覆盖、没有一次真字节的声音
+      const playbackRate = receipt?.value?.playbackRate
+      if (typeof playbackRate !== 'number' || !Number.isFinite(playbackRate) || playbackRate <= 0) {
+        console.log('UNUSABLE: 合成回执缺播放补速（playbackRate）')
+        return 1
+      }
+      console.log(`RECEIPT: key=${key} playbackRate=${String(playbackRate)}`)
       const audioUrl = `${base}${API_PREFIX}/tts/audio?key=${encodeURIComponent(key)}`
       const audio = await readAudio(audioUrl)
       console.log(`AUDIO: HTTP ${audio.status} content-type=${String(audio.contentType)} bytes=${String(audio.bytes.length)}`)

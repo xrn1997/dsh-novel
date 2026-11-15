@@ -114,7 +114,7 @@ function readerDeps(
         if (gate !== undefined) await gate
         return { kind: 'text', text: textOf(indexOf(path)) } satisfies ChapterContent
       }
-      if (path === ROUTES.ttsSources.path) return ttsSources
+      if (path === ROUTES.ttsSources.path) return { sources: ttsSources, hostSpeech: { state: 'absent' } }
       return shelf
     }),
     ...over,

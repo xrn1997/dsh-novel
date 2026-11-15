@@ -70,8 +70,8 @@ importers:
         specifier: 3.4.0
         version: 3.4.0
       dsh-xiaomi-tts:
-        specifier: ^5.2.1
-        version: 5.2.1(fceda8da820e6d8d736d6380b0803cf9)
+        specifier: ^5.5.0
+        version: 5.5.0(fceda8da820e6d8d736d6380b0803cf9)
       eslint:
         specifier: ^10.13.0
         version: 10.13.0(supports-color@7.2.0)
@@ -1306,8 +1306,8 @@ packages:
   domutils@3.2.2:
     resolution: {integrity: sha512-6kZKyUajlDuqlHKVX1w7gyslj9MPIXzIFiz/rGu35uC1wMi+kMhQwGhl4lt9unC9Vb9INnY9Z3/ZA3+FhASLaw==}
 
-  dsh-xiaomi-tts@5.2.1:
-    resolution: {integrity: sha512-I9Z5l/WScOf1b7aXpaHp/GcjeTIeh0lfEi61nhy1NXxoHQs2TVGapapWA7t8PLR0AI/Z8LpR8fE6tHsuS9kHOA==}
+  dsh-xiaomi-tts@5.5.0:
+    resolution: {integrity: sha512-aYz5kR3JVfblXOcPb9Dhaqfs7Nu54K7MlBhgwAD3sOzHgkXYIPGgilpMxHHuu4Bw57PkQypgCJzkDnqwtOr1WA==}
     engines: {dsh: '>=0.2.2-0 <0.3.0-0', node: '>=24.9.0'}
     peerDependencies:
       '@deepseek-ai/cordis': ~4.1.0
@@ -1334,7 +1334,7 @@ packages:
       '@deepseek-ai/dsh-settings': '>=0.2.2-0 <0.3.0-0'
       '@deepseek-ai/dsh-tools': '>=0.2.2-0 <0.3.0-0'
       '@deepseek-ai/schemastery': ~3.19.0
-      react: ^19.3.0
+      react: ^18.2.0
     peerDependenciesMeta:
       '@deepseek-ai/cordis':
         optional: true
@@ -3205,7 +3205,7 @@ snapshots:
       domelementtype: 2.3.0
       domhandler: 5.0.3
 
-  dsh-xiaomi-tts@5.2.1(fceda8da820e6d8d736d6380b0803cf9):
+  dsh-xiaomi-tts@5.5.0(fceda8da820e6d8d736d6380b0803cf9):
     dependencies:
       motion: 14.10.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       react-icons: 5.7.0(react@18.3.1)

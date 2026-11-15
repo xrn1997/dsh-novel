@@ -48,8 +48,11 @@ const TABLE: Array<[unknown, ErrorCategory, number, string, string]> = [
   // 注册表降级也落 503，但消息带原因（两个主语：部件缺席 vs 订阅那一格坏，半径各归各）
   [new TtsEnginesDegradedError('数据文件损坏（tts-engines.json）'), 'unavailable', 503, 'Unavailable', 'Error'],
   [new JobRunningError(RUNNING_JOB), 'job-running', 409, 'JobRunning', 'Error'],
-  // 段合成三分档：同一个类按 code 落三个类目——引擎缺席 400，上游/坏响应 502（code 原样上 wire）
+  // 段合成四档：同一个类按 code 落四个类目——引擎缺席 400、引擎未就绪 503，
+  // 上游/坏响应 502（code 原样上 wire）。未就绪单列一档：它不是「参数写错了」，
+  // 是「对方还没配好」，重试同一发不会好，换源或去配才对。
   [new TtsSynthesisError('TTS_ENGINE_MISSING', '朗读引擎不存在: x'), 'tts-engine-missing', 400, 'TTS_ENGINE_MISSING', 'Error'],
+  [new TtsSynthesisError('TTS_ENGINE_UNAVAILABLE', '宿主朗读服务未就绪（api-key-not-configured）'), 'tts-engine-unavailable', 503, 'TTS_ENGINE_UNAVAILABLE', 'Error'],
   [new TtsSynthesisError('TTS_UPSTREAM', '朗读引擎请求失败'), 'tts-upstream', 502, 'TTS_UPSTREAM', 'Error'],
   [new TtsSynthesisError('TTS_BAD_RESPONSE', '音频响应非法'), 'tts-bad-response', 502, 'TTS_BAD_RESPONSE', 'Error'],
   // EPUB 导入失败并入既有 local-import 类目（不新增类目）：解析失败与 TXT 导入失败同一出口
@@ -86,7 +89,8 @@ describe('错误分类学表（classify → 双投影）', () => {
     const all = {
       'rule-eval': true, 'rule-missing': true, fetch: true, 'not-found': true, 'bad-request': true,
       'local-import': true, 'local-too-large': true, unavailable: true, 'job-running': true,
-      'tts-engine-missing': true, 'tts-upstream': true, 'tts-bad-response': true, other: true,
+      'tts-engine-missing': true, 'tts-engine-unavailable': true,
+      'tts-upstream': true, 'tts-bad-response': true, other: true,
     } satisfies Record<ErrorCategory, true>
     expect([...covered].sort()).toEqual(Object.keys(all).sort())
   })

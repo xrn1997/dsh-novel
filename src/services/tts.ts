@@ -1,15 +1,16 @@
 import { BROWSER_TTS_ENGINE_ID, CORDIS_TTS_ENGINE_ID, TTS_DEFAULTS, TTS_RESERVED_ID_PREFIX } from '../shared/wire.js'
-import type { SynthesisReceipt, SynthesisRequest, TtsSourceInfo, TtsVoice } from '../shared/wire.js'
+import type { SynthesisReceipt, SynthesisRequest, TtsSourceInfo, TtsSourcesView, TtsVoice } from '../shared/wire.js'
 import type { FetchedPage, Fetcher } from './fetcher.js'
 import { TtsSynthesisError, redactOutboundError } from './errors.js'
 import { fetchInitOf } from './request.js'
 import type { RequestPlan } from './request.js'
 import { TtsAudioCache, ttsCacheKey } from './tts-cache.js'
 import type { AudioResource } from './tts-cache.js'
+import { abortReasonOf } from './tts-cancel.js'
 import type { TtsEngineRegistry } from './tts-engines.js'
 import { log } from './log.js'
 import { cordisCacheIdentity } from './tts-cordis.js'
-import { assertAudioContentType, planTtsRequest } from './tts-request.js'
+import { assertAudioContentType, planTtsRequest, ruleCarriesSpeechRate } from './tts-request.js'
 import type { HttpTtsEngine } from './types.js'
 import { readValue, type ValueSource } from './value-source.js'
 
@@ -60,12 +61,27 @@ export const BUILTIN_TTS_ENGINES: readonly HttpTtsEngine[] = [
 export interface NormalizedSpeechSynthesis {
   /** 源声明的音色表；缺席 = 该源没有音色列表（UI 不渲染音色行） */
   voices?: TtsVoice[]
+  /** 此刻能不能合成（服务方对自己配置的本地校验读数）：为假时这一源不进清单，
+   *  合成按 `TTS_ENGINE_UNAVAILABLE` 具名失败——不拿一次注定失败的上游请求当报错。 */
+  ready: boolean
+  /** 未就绪的原因码（服务方原话）；`ready` 为真或读数缺席时不带 */
+  unavailableReason?: string
+  /** `opts.signal` = 调用方的取消位：适配器把它与本支的死线汇成一条交给服务，取消即终止上游。 */
   synthesize(req: {
     text: string
     voice?: string
     rate?: number
-  }): Promise<{ data: Buffer; contentType?: string }>
+  }, opts?: { signal?: AbortSignal }): Promise<{ data: Buffer; contentType?: string; appliedRate: number }>
 }
+
+/**
+ * 宿主语音服务的一次读数：**缺席**（服务不在场）与**在场但读不出**是两件事——前者是没装，
+ * 后者是装了却读不出它自己的状态，修法完全不同（`ADR-0083`）。后者按未就绪处理，不冒充缺席。
+ */
+type SpeechReadout =
+  | { kind: 'absent' }
+  | { kind: 'unreadable' }
+  | { kind: 'service'; service: NormalizedSpeechSynthesis }
 
 /**
  * 单段合成响应的字节上限（8 MiB）。**这个数是唯一主人**：合成链只在这里定「多大的响应算引擎失常」。
@@ -95,8 +111,10 @@ export interface TtsServiceDeps {
 export interface TtsSynthesisPlan {
   /** 缓存键的「实际请求」那一位（材料与产生它的请求在同侧产出） */
   identity: string
-  /** 未命中才执行：出音频字节与 mediaType；失败照合成面的错误语义抛（不吞、不降级） */
-  produce(): Promise<{ bytes: Buffer; mediaType: string }>
+  /** 未命中才执行：出音频字节、mediaType 与 `appliedRate`（这份字节里引擎自己应用了多少语速，
+   *  1 = 原速）；失败照合成面的错误语义抛（不吞、不降级）。
+   *  `signal` 原样下传给那一支出站的请求 / 服务调用：调用方不要了，就不该有人替它把整段念完。 */
+  produce(signal: AbortSignal | undefined): Promise<{ bytes: Buffer; mediaType: string; appliedRate: number }>
 }
 
 /** 一次合成要去的源：HTTP 模板（连到哪份引擎）或 cordis 服务。键材料不在这层手拼——
@@ -118,6 +136,15 @@ function messageOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
+/**
+ * 播放端还要补的倍率 = 用户要的 ÷ 这份字节里引擎真做的那档。乘回去必须等于用户要的（按千分位
+ * 收浮点尾巴）。判据是**字节的应用量**，不是「第一次请求时的能力」：同一段字节被不同倍率重放时
+ * （模板不消费语速，键与 rate 无关），补速必须跟着这次的请求走，否则第二次播放就慢了。
+ */
+function residualOf(requested: number, applied: number): number {
+  return Math.round((requested / applied) * 1000) / 1000
+}
+
 export class TtsService {
   private readonly deps: TtsServiceDeps
 
@@ -128,19 +155,27 @@ export class TtsService {
   /**
    * 合成一段：targetOf → 造计划 → 查缓存 → 命中即回执（不执行 produce）；未命中 produce
    * 出字节再入缓存。失败只抛给调用方——单段失败只影响那一段，本层不吞、不返回空音频。
+   * `opts.signal` 是调用方的取消位：每一跳之前先问一次（已取消就一个请求都不发），
+   * 并下传给 produce——播放层跳段 / 停止、浏览器断连都靠它把在途合成掐掉。
    */
-  async synthesize(p: SynthesisRequest): Promise<SynthesisReceipt> {
+  async synthesize(p: SynthesisRequest, opts?: { signal?: AbortSignal }): Promise<SynthesisReceipt> {
+    const signal = opts?.signal
+    if (signal !== undefined && signal.aborted) throw abortReasonOf(signal)
     const target = this.targetOf(p.engineId)
     const plan = target.kind === 'cordis'
       ? this.planCordis(p)
       : await this.planHttp(target.engine, p)
     const key = ttsCacheKey({ engineId: p.engineId, request: plan.identity, text: p.text })
-    // 命中只需知道「这条字节可读」：回执不带 mediaType（类型事实归音频读口的侧车），
-    // 所以查 `has` 而不是打开再销毁一条流。
-    if (await this.deps.cache.has(key)) return { key }
-    const audio = await plan.produce()
-    await this.deps.cache.put(key, audio.bytes, audio.mediaType)
-    return { key }
+    // 命中只读侧车（`appliedRate` 是这份字节的事实）：打不开流，也不拿「引擎此刻能做什么」重算。
+    const cached = await this.deps.cache.meta(key)
+    // 补速按**这次请求**算，不按第一次写进侧车的那一格：模板不消费语速时键与 rate 无关，同一份
+    // 字节会被不同倍率重放——差额跟着请求走才对得上耳朵，滑杆才不会一调就撒谎。
+    if (cached !== null) return { key, playbackRate: residualOf(p.rate, cached.appliedRate) }
+    // 查缓存的窗口里被取消：磁盘上的字节是既定事实，但没必要再为一段没人听的内容发一次合成
+    if (signal !== undefined && signal.aborted) throw abortReasonOf(signal)
+    const audio = await plan.produce(signal)
+    await this.deps.cache.put(key, audio.bytes, audio.mediaType, audio.appliedRate)
+    return { key, playbackRate: residualOf(p.rate, audio.appliedRate) }
   }
 
   /** 音频读口（路由层凭合成回执的 key 取字节）；未知/非法 key → null（404，不是空音频）。 */
@@ -149,12 +184,14 @@ export class TtsService {
   }
 
   /**
-   * 引擎源清单：内置（开箱即用，不落注册表）→ 浏览器直出兜底 → 注册表里的每条订阅
-   * → cordis（**仅当 getter 此刻返回服务**，并透传它的音色表）。
-   * 顺序 = 展示顺序：兜底排在内置之后、订阅之前，cordis 作为可选增强排最后。
+   * 引擎源清单 + 宿主服务健康：**同一次读数算出来**，不分两次问（两次快照之间引擎换了
+   * 口径，清单与健康就会各说一套）。清单那一半的次序是：内置（开箱即用，不落注册表）
+   * → 浏览器直出兜底 → 注册表里的每条订阅 → cordis（仅当 getter 此刻返回服务**且服务自报就绪**）。
    * 展示名只有订阅源自带（引擎实体的 `name`）；插件自有源不带名，由客户端按 kind/id 取词。
+   * 不可用的 cordis 不进清单——清单的承诺是「列出的都在此刻可用」；它为什么不在，
+   * 由 `hostSpeech` 那一格说（缺席与未就绪是两件事，修法不同）。
    */
-  sources(): TtsSourceInfo[] {
+  sourcesView(): TtsSourcesView {
     const listed: TtsSourceInfo[] = [
       ...BUILTIN_TTS_ENGINES.map((e) => sourceInfo(e.id, 'builtin', e.voices)),
       sourceInfo(BROWSER_TTS_ENGINE_ID, 'browser'),
@@ -163,24 +200,41 @@ export class TtsService {
         name: e.name,
       })),
     ]
-    const service = this.speechService()
-    if (service !== undefined) {
-      listed.push({
-        ...sourceInfo(CORDIS_TTS_ENGINE_ID, 'cordis'),
-        ...(service.voices === undefined ? {} : { voices: service.voices }),
-      })
+    const readout = this.speechReadout()
+    if (readout.kind === 'absent') return { sources: listed, hostSpeech: { state: 'absent' } }
+    // 在场但读不出：不是「没装」，按未就绪报（没有原因码——服务连自己的状态都没交出来）。
+    if (readout.kind === 'unreadable') return { sources: listed, hostSpeech: { state: 'not-ready' } }
+    const service = readout.service
+    if (!service.ready) {
+      const reason = service.unavailableReason
+      return {
+        sources: listed,
+        hostSpeech: { state: 'not-ready', ...(reason === undefined ? {} : { reason }) },
+      }
     }
-    return listed
+    listed.push({
+      ...sourceInfo(CORDIS_TTS_ENGINE_ID, 'cordis'),
+      ...(service.voices === undefined ? {} : { voices: service.voices }),
+    })
+    return { sources: listed, hostSpeech: { state: 'ready' } }
   }
 
-  /** 宿主语音服务的可选读数：服务中途卸装是约定，读数本身抛错也只算这一源不可用——
-   *  不能让一个可选服务的 capabilities 失败把内置 / 浏览器源的清单一起打成 500。 */
-  private speechService(): NormalizedSpeechSynthesis | undefined {
+  /** 清单那一半（合成面的分流与测试都只看行）。 */
+  sources(): TtsSourceInfo[] {
+    return this.sourcesView().sources
+  }
+
+  /** 宿主语音服务的可选读数。服务中途卸装是约定；读数本身抛错也只算**这一源**不可用——
+   *  不能让一个可选服务的 capabilities 失败把内置 / 浏览器源的清单一起打成 500。
+   *  但「读不出」不等于「不在场」：服务对象在场、它的状态读不出来时按未就绪报（`ADR-0083`），
+   *  让用户去检查配置，而不是把一次重装插件当成修法。 */
+  private speechReadout(): SpeechReadout {
     try {
-      return this.deps.speechSynthesis()
+      const service = this.deps.speechSynthesis()
+      return service === undefined ? { kind: 'absent' } : { kind: 'service', service }
     } catch (e) {
-      log.warn('宿主朗读服务读数失败，本次按缺席处理：', e)
-      return undefined
+      log.warn('宿主朗读服务读数失败，本次按未就绪处理：', e)
+      return { kind: 'unreadable' }
     }
   }
 
@@ -214,9 +268,16 @@ export class TtsService {
       { text: p.text, rate: p.rate, ...(p.voice === undefined ? {} : { voice: p.voice }) },
       { fetcher: this.deps.fetcher, jsTimeoutMs: readValue(this.deps.jsTimeoutMs) },
     )
+    // 语速归谁：规则里写了 `speakSpeed` 就是引擎自己念的（内置口是 1–7 档，订阅模板各说各的），
+    // 这份字节记作「引擎应用了请求的那一档」；没写就是原速的一段，记 1 并把整段倍率交给播放端
+    // ——否则滑杆就是个假控件。
+    const appliedRate = ruleCarriesSpeechRate(engine) ? p.rate : 1
     return {
       identity: JSON.stringify([plan.method, plan.url, plan.body ?? null]),
-      produce: () => this.fetchHttp(engine, plan),
+      produce: async (signal) => ({
+        ...(await this.fetchHttp(engine, plan, signal)),
+        appliedRate,
+      }),
     }
   }
 
@@ -225,13 +286,13 @@ export class TtsService {
   private planCordis(p: SynthesisRequest): TtsSynthesisPlan {
     return {
       identity: cordisCacheIdentity(p),
-      produce: () => this.synthesizeCordis(p),
+      produce: (signal) => this.synthesizeCordis(p, signal),
     }
   }
 
   /** HTTP 支出站：计划已求值，这里只发请求并校验「响应必须是音频」。 */
   private async fetchHttp(
-    engine: HttpTtsEngine, plan: RequestPlan,
+    engine: HttpTtsEngine, plan: RequestPlan, signal: AbortSignal | undefined,
   ): Promise<{ bytes: Buffer; mediaType: string }> {
     let page: FetchedPage
     try {
@@ -239,9 +300,13 @@ export class TtsService {
       page = await this.deps.fetcher.fetchPage(plan.url, {
         ...fetchInitOf(plan),
         maxBytes: TTS_AUDIO_MAX_BYTES,
+        ...(signal === undefined ? {} : { signal }),
       })
     } catch (e) {
       if (e instanceof TtsSynthesisError) throw e
+      // 取消不是上游失败：抓取层在取消时抛的就是 `signal.reason`，按同一份类型纪律交回——连败
+      // 计数与错误信封都不该把一次作废当成「引擎坏了」的证据。
+      if (signal !== undefined && signal.aborted) throw abortReasonOf(signal)
       // 请求失败属「上游」那一档：原始异常类型不外泄给路由面，原话带上——
       // 用户要看得到「HTTP 500」「请求超时」「响应超过大小上限」这类可行动的原因。
       // 地址除外：模板能把登录态求值进 URL（凭据只写不读，错误信封与日志都不是新的读口），
@@ -258,23 +323,48 @@ export class TtsService {
   }
 
   /** cordis 支：getter 每次重查（中途卸装 → 本次缺席）；服务返回字节 + 可选 contentType，
-   *  与 HTTP 响应过同一条「必须是音频」的判据，因此共用同一份缓存。 */
-  private async synthesizeCordis(p: SynthesisRequest): Promise<{ bytes: Buffer; mediaType: string }> {
-    const service = this.speechService()
-    if (service === undefined) {
+   *  与 HTTP 响应过同一条「必须是音频」的判据，因此共用同一份缓存。取消位交给适配器的
+   *  `guardSynthesis`（它与本支死线汇成一条信号），这一层只分流、不另造一条取消径。 */
+  private async synthesizeCordis(
+    p: SynthesisRequest, signal: AbortSignal | undefined,
+  ): Promise<{ bytes: Buffer; mediaType: string; appliedRate: number }> {
+    const readout = this.speechReadout()
+    if (readout.kind === 'absent') {
       throw new TtsSynthesisError('TTS_ENGINE_MISSING', `朗读服务缺席：${CORDIS_TTS_ENGINE_ID}`)
     }
-    let result: { data: Buffer; contentType?: string }
+    if (readout.kind === 'unreadable') {
+      // 在场读不出：不是「没这个引擎」（400），是此刻不可用（503）——与未就绪同一档，
+      // 且不拿一次注定失败的上游请求当报错（服务在，但连自己的状态都交不出来）。
+      throw new TtsSynthesisError(
+        'TTS_ENGINE_UNAVAILABLE', '宿主朗读服务读数失败，暂时不可用：到该插件里检查配置')
+    }
+    const service = readout.service
+    if (!service.ready) {
+      // 服务自报还没配好（缺密钥、音色不齐…）：先把原因码上屏，再谈合成——拿一次注定失败的
+      // 上游请求当报错，既花钱也说不清是谁的问题。原因码原样带（服务方的稳定码，不是本仓编的）。
+      const reason = service.unavailableReason
+      throw new TtsSynthesisError('TTS_ENGINE_UNAVAILABLE',
+        `宿主朗读服务未就绪${reason === undefined ? '' : `（${reason}）`}：到该插件里配好供应商再来`)
+    }
+    let result: { data: Buffer; contentType?: string; appliedRate: number }
     try {
       result = await service.synthesize({
         text: p.text,
         ...(p.voice === undefined ? {} : { voice: p.voice }),
         rate: p.rate,
-      })
+      }, { ...(signal === undefined ? {} : { signal }) })
     } catch (e) {
+      // 取消不是上游失败（`ADR-0082` 决定 5）：调用方已经不要这一发了，理由原样交回。包成
+      // TTS_UPSTREAM 会把一次作废记成引擎连败的证据——与 HTTP 支同一个出口、同一条纪律。
+      if (signal !== undefined && signal.aborted) throw abortReasonOf(signal)
       if (e instanceof TtsSynthesisError) throw e
       throw new TtsSynthesisError('TTS_UPSTREAM', `朗读服务合成失败：${messageOf(e)}`)
     }
-    return { bytes: result.data, mediaType: assertAudioContentType(result.data, result.contentType ?? '') }
+    return {
+      bytes: result.data,
+      mediaType: assertAudioContentType(result.data, result.contentType ?? ''),
+      // 适配器报「服务端真发出去的那一档」（没发 voiceRate = 原速 1）：差额由合成面按请求算
+      appliedRate: result.appliedRate,
+    }
   }
 }

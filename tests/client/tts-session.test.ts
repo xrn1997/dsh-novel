@@ -160,8 +160,12 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     saves: { bookKey: string; listen: ListenState }[]
     progressSaves: { bookKey: string; chapterIndex: number; offsetRatio: number }[]
     synthCalls: SynthesisRequest[]
+    /** 每一发合成请求拿到的取消位（按文本索引）：播放层取不取消，看这里。 */
+    synthSignals: Map<string, AbortSignal | undefined>
     fixture: { names: string[]; texts: string[][] }
     failSynth: (text: string) => void
+    /** 某引擎的回执报多少补速（会话只搬运，不自己算）。 */
+    setSynthPlaybackRate: (engineId: string, rate: number) => void
     /** 挂起某段的合成请求，返回放行函数（模拟合成在途的窗口）。 */
     holdSynth: (text: string) => () => void
     /** 挂起某章的正文拉取，返回放行函数（模拟章正文在途的窗口）。 */
@@ -185,6 +189,8 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     const saves: Harness['saves'] = []
     const progressSaves: Harness['progressSaves'] = []
     const synthCalls: SynthesisRequest[] = []
+    const synthSignals = new Map<string, AbortSignal | undefined>()
+    const synthRates = new Map<string, number>()
     const failing = new Set<string>()
     const holds = new Map<string, Promise<void>>()
     const fetchHolds = new Map<number, Promise<void>>()
@@ -203,12 +209,18 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
       saveProgress: async (bookKey, chapterIndex, offsetRatio) => {
         progressSaves.push({ bookKey, chapterIndex, offsetRatio })
       },
-      synthesize: async (req) => {
+      synthesize: async (req, opts) => {
         synthCalls.push(req)
+        synthSignals.set(req.text, opts?.signal)
         const hold = holds.get(req.text)
         if (hold !== undefined) await hold
         if (failing.has(req.text)) throw new Error('synth 说这一段不成')
-        return { key: `k:${req.engineId}:${req.rate}:${req.voice ?? ''}:${req.text}`, mediaType: 'audio/mpeg' }
+        return {
+          key: `k:${req.engineId}:${req.rate}:${req.voice ?? ''}:${req.text}`,
+          mediaType: 'audio/mpeg',
+          // 回执报的是「服务端做到哪、播放端补多少」，与请求里的 rate 是两个数：这里按引擎给
+          playbackRate: synthRates.get(req.engineId) ?? 1,
+        }
       },
       outputs,
       awaitDirectVoices: async () => {
@@ -224,7 +236,8 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     }
     return {
       session: new ListenSession(platform),
-      clock, speech, bytes, outputs, saves, progressSaves, synthCalls, fixture,
+      clock, speech, bytes, outputs, saves, progressSaves, synthCalls, synthSignals, fixture,
+      setSynthPlaybackRate: (engineId, rate) => { synthRates.set(engineId, rate) },
       failSynth: (text) => { failing.add(text) },
       holdSynth: (text) => {
         let release = (): void => { throw new Error('合成闸未就绪') }
@@ -255,6 +268,112 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
   async function microtasks(count = 30): Promise<void> {
     for (let i = 0; i < count; i += 1) await Promise.resolve()
   }
+
+  it('停止即取消在途合成：那一发拿到取消位，作废不记成段失败', async () => {
+    const h = makeHarness()
+    const release = h.holdSynth('第一段。')
+    const started = start(h)
+    await microtasks()
+    const signal = must(h.synthSignals.get('第一段。'), '会话要把取消位递到合成面')
+    expect(signal.aborted).toBe(false)
+
+    h.session.stopListening()
+    expect(signal.aborted, '停止要让在途那一发作废').toBe(true)
+
+    release()
+    await started
+    expect(h.session.state.get()).toMatchObject({
+      active: false, consecutiveFailures: 0, failedParagraphs: [],
+    })
+  })
+
+  it('暂停不在取消位之列：在途合成不被掐掉（续播要接的正是它）', async () => {
+    const h = makeHarness()
+    const release = h.holdSynth('第一段。')
+    const started = start(h)
+    await microtasks()
+    const signal = must(h.synthSignals.get('第一段。'), '首段合成在途')
+    expect(signal.aborted).toBe(false)
+
+    h.session.pauseListening()
+    expect(signal.aborted, '暂停只是先不听，不该把已经发出的合成作废').toBe(false)
+
+    release()
+    await started
+    await microtasks()
+  })
+
+  it('跳段只作废当前段那一发：同章预取不受牵连，跳回去仍命中暖好的回执', async () => {
+    const h = makeHarness()
+    h.fixture.texts[0] = ['p0。', 'p1。', 'p2。', 'p3。']
+    await start(h)                                // p0 起播，顺带暖 p1 / p2
+    await microtasks()
+    const prefetched = ['p1。', 'p2。'].map((text) => must(h.synthSignals.get(text), `${text} 的预取`))
+    expect(prefetched.every((s) => !s.aborted)).toBe(true)
+
+    const release = h.holdSynth('p3。')
+    h.session.seekParagraph(3)                    // p3 在预取窗外，合成在途
+    await microtasks()
+    const inFlight = must(h.synthSignals.get('p3。'), 'p3 那一发')
+    expect(inFlight.aborted).toBe(false)
+
+    h.session.seekParagraph(2)                    // 再跳走：没人听的是 p3 这一发
+    expect(inFlight.aborted, '跳段要把这一发停在上游').toBe(true)
+    expect(prefetched.every((s) => !s.aborted), '同章预取不该被跳段连坐').toBe(true)
+
+    await microtasks()
+    expect(h.synthCalls.filter((c) => c.text === 'p2。'), '跳回已暖好的段不该重新合成').toHaveLength(1)
+    expect(last(h.bytes.starts).seg.key, '用的是预取时存下的回执').toContain('p2。')
+
+    release()
+    await microtasks()
+  })
+
+  it('换语速取消旧参数那一发，按新参数重取的那只取消位是活的', async () => {
+    const h = makeHarness()
+    const release = h.holdSynth('第一段。')
+    const started = start(h)
+    await microtasks()
+    const stale = must(h.synthSignals.get('第一段。'), '首段合成在途')
+
+    h.session.setListenRate(1.5)
+    expect(stale.aborted, '旧参数那一发不再有人等').toBe(true)
+
+    release()
+    await started
+    h.clock.advance(PARAMS_RESTART_DEBOUNCE_MS)
+    await microtasks()
+    const fresh = must(h.synthSignals.get('第一段。'), '按新参数重取')
+    expect(fresh).not.toBe(stale)
+    expect(fresh.aborted).toBe(false)
+    expect(must(h.synthCalls.at(-1), '最后一发合成').rate).toBe(1.5)
+  })
+
+  it('跳章取消上一章的在途预取：迟到的字节不为没人听的章继续合成', async () => {
+    const h = makeHarness()
+    const releaseAhead = h.holdSynth('第二段。')     // 起播后的同章预取挂在这一段上
+    await start(h)
+    await microtasks()
+    const ahead = must(h.synthSignals.get('第二段。'), '预取应已发出')
+    expect(ahead.aborted).toBe(false)
+
+    await h.session.jumpToChapter(1)
+    await microtasks()
+    expect(ahead.aborted, '换章即作废上一章的预取').toBe(true)
+    releaseAhead()
+  })
+
+  it('回执报的补速原样交给出声层：语速归谁由服务端说了算，会话不自己算', async () => {
+    const h = makeHarness()
+    h.setSynthPlaybackRate('builtin:baidu', 1.5)
+    await start(h)
+    expect(must(h.bytes.starts[0], '首段出声').seg.playbackRate).toBe(1.5)
+
+    // 推进下一段：同一引擎的补速跟着走（漏一次就等于那段悄悄回到 1.0x）
+    must(h.bytes.starts[0], '首段').handlers.done()
+    await microtasks()
+    expect(must(h.bytes.starts[1], '第二段').seg.playbackRate).toBe(1.5)
+  })
 
   it('起播推进到下一段；位置落盘走平台注入的防抖，推轮子即落、不等墙钟', async () => {
     const h = makeHarness()

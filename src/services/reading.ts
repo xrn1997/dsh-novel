@@ -57,7 +57,7 @@ import { parseCookieString } from '../shared/cookies.js'
 import type {
   BookDetail, BookNavigation, ChapterContent, ExploreSources, ExploreSnapshot, TtsEngineImportReceipt, TtsEngineRemoveReceipt, ListenState, LocalImportResponse, LocalImportWarning,
   SearchGroup, SearchHit, SearchPlan, SearchJobSnapshot, ChapterEntry, ShelfBook, ShelfEntry, ShelfMetaPatch, SourcePublic,
-  SynthesisReceipt, SynthesisRequest, TtsEngineInput, TtsEnginePublic, TtsSourceInfo,
+  SynthesisReceipt, SynthesisRequest, TtsEngineInput, TtsEnginePublic, TtsSourcesView,
 } from '../shared/wire.js'
 /** 聚合搜索并发缺省：**这个数的唯一主人**——缺省装配处 `src/config.ts` 的 schema `.default()`
  *  与本文件 `from()` 回退都引这里，别处不再写字面量。js 沙箱预算缺省的家在
@@ -856,17 +856,18 @@ export class ReadingService {
 
   // ── 听书 ─────────────────────────────────────────────────────────────
 
-  /** 引擎源清单（播放器的引擎选择面）：内置 / 浏览器直出 / 注册表订阅 / cordis 仅在场。
+  /** 引擎源清单 + 宿主朗读服务健康（播放器的引擎选择面与管理面同读这一份）：
    *  行形状是 `TtsSourceInfo`——插件自有源不投展示名（标签归客户端文案单点）。 */
-  ttsSources(): TtsSourceInfo[] {
-    return this.requireTts().service.sources()
+  ttsSourcesView(): TtsSourcesView {
+    return this.requireTts().service.sourcesView()
   }
 
   /** 段合成：缓存命中即回执；未命中按引擎分流，单段失败只抛给调用方（不吞、不给空音频）。
+   *  `opts.signal` = 调用方的取消位，原样下传给那一发上游请求 / 服务调用。
    *  值域门住门面（同 `shelfSaveProgress`）：HTTP 读口只判「形状对不对」，工具/直装面绕得过；
    *  而这里判的是业务事实——「一段」= 一个播放单元（`PLAY_UNIT_MAX`，按 code point），
    *  语速必须落在播放层实际可选的档里（越界值会被播放层夹取，但存档/直装面不该靠夹取兜底）。 */
-  async ttsSynthesize(p: SynthesisRequest): Promise<SynthesisReceipt> {
+  async ttsSynthesize(p: SynthesisRequest, opts?: { signal?: AbortSignal }): Promise<SynthesisReceipt> {
     if (!Number.isFinite(p.rate) || p.rate < TTS_RATE.min || p.rate > TTS_RATE.max) {
       throw new InvalidRequestError(`朗读语速需为 ${TTS_RATE.min}–${TTS_RATE.max} 之间的有限数`)
     }
@@ -876,7 +877,7 @@ export class ReadingService {
     if (Array.from(p.text).length > PLAY_UNIT_MAX) {
       throw new InvalidRequestError(`朗读文本超过单段上限 ${PLAY_UNIT_MAX} 字（播放单元按段切分）`)
     }
-    return this.requireTts().service.synthesize(p)
+    return this.requireTts().service.synthesize(p, opts)
   }
 
   /** 音频读口：未知/非法 key → null（路由在发头前落 404，不是空音频） */

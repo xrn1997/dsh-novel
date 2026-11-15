@@ -205,7 +205,8 @@ const prodListenPlatform: ListenPlatform = {
     await apiSend(paramOps.shelfPut.at(bookKey), bodies.shelfProgress(chapterIndex, offsetRatio))
     patchPanelShelfProgress(bookKey, chapterIndex, offsetRatio)
   },
-  synthesize: (req) => apiSend<SynthesisReceipt>(ROUTES.ttsSynthesize, bodies.ttsSynthesize(req)),
+  synthesize: (req, opts) => apiSend<SynthesisReceipt>(
+    ROUTES.ttsSynthesize, bodies.ttsSynthesize(req), opts?.signal),
   get outputs(): ListenPlatform['outputs'] {
     // 惰性构造：两只适配器的构造面都不碰全局，第一次真正出声（或复位缝被调）才落生
     outputs ??= { bytes: new BytesOutput(audioFace), direct: new DirectOutput(directFace, after) }

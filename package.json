@@ -115,7 +115,7 @@
     "@types/react-dom": "^18.3.7",
     "@types/semver": "^7.5.0",
     "@types/yauzl": "3.4.0",
-    "dsh-xiaomi-tts": "^5.2.1",
+    "dsh-xiaomi-tts": "^5.5.0",
     "eslint": "^10.13.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "fflate": "0.8.3",

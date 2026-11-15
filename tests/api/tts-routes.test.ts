@@ -1,13 +1,14 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import iconv from 'iconv-lite'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { ReadingService } from '../../src/services/reading.js'
 import { setLogSink } from '../../src/services/log.js'
 import { bodies, NOVEL_API_PREFIX, paramOps, ROUTES, ttsAudioUrl } from '../../src/shared/wire.js'
 import { PLAY_UNIT_MAX } from '../../src/shared/chapter-text.js'
-import type { TtsEngineImportReceipt, SynthesisReceipt, TtsEnginePublic, TtsSourceInfo } from '../../src/shared/wire.js'
+import type { TtsEngineImportReceipt, SynthesisReceipt, TtsEnginePublic, TtsSourcesView } from '../../src/shared/wire.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
+import { must } from '../support/fixture.js'
 import { errorOf, requestUrl, startServer, valueOf } from './helpers.js'
 
 /**
@@ -22,6 +23,8 @@ const GBK_SUBSCRIPTION_URL = 'https://engines.example/gbk.json'
 const FAIL_URL = 'https://engines.example/fail'
 const JSON_URL = 'https://engines.example/json'
 const AUDIO_URL = 'https://tts.example/speak'
+/** 慢引擎：只在中止时才落定（真实上游的合成可以跑到几十秒，这里不陪跑） */
+const HANG_URL = 'https://tts.example/hang'
 /** 模板会把登录态求值进查询串：上游收到的地址里带凭据，失败原话也就会带 */
 const TOKEN_URL = 'https://tts.example/token'
 
@@ -41,6 +44,17 @@ beforeAll(async () => {
     fetchImpl: async (input, init) => {
       const url = requestUrl(input)
       calls.push({ url, init })
+      if (url === HANG_URL) {
+        // 与真 undici 同一条纪律：认取消位，中止时按取消理由落定（不认就测不到「上游停下」）
+        const signal = init?.signal
+        return new Promise<Response>((_, reject) => {
+          if (signal === undefined || signal === null) return
+          signal.addEventListener('abort', () => {
+            const reason: unknown = signal.reason
+            reject(reason instanceof Error ? reason : new Error(String(reason)))
+          }, { once: true })
+        })
+      }
       if (url.startsWith(BAIDU_TTS) || url === AUDIO_URL) return pageOf(WAV, 'audio/mpeg')
       if (url === FAIL_URL || url.startsWith(TOKEN_URL)) return pageOf('upstream exploded', 'text/plain', 500)
       if (url === JSON_URL) return pageOf('{"error":"quota"}', 'application/json')
@@ -64,16 +78,17 @@ afterAll(async () => { await svc.flush(); await close() })
 /** /novel-api 下的绝对地址（路径构造器不含前缀——前缀归 wire 单点） */
 const at = (path: string): string => `${base}${NOVEL_API_PREFIX}/${path}`
 
-async function send(path: string, method: string, body?: unknown): Promise<Response> {
+async function send(path: string, method: string, body?: unknown, signal?: AbortSignal): Promise<Response> {
   return fetch(at(path), {
     method,
+    ...(signal === undefined ? {} : { signal }),
     ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   })
 }
 
 describe('听书源清单与合成', () => {
   it('GET tts/sources → 内置与浏览器直出恒在场（开箱即用的两行）', async () => {
-    const list = await valueOf<TtsSourceInfo[]>(await fetch(at(ROUTES.ttsSources.path)))
+    const list = (await valueOf<TtsSourcesView>(await fetch(at(ROUTES.ttsSources.path)))).sources
     expect(list.map((s) => s.id)).toEqual(['builtin:baidu', 'browser:local'])
     // 插件自有源不投展示名（名字归客户端文案单点）
     expect(list.some((s) => s.name !== undefined)).toBe(false)
@@ -143,7 +158,7 @@ describe('引擎订阅 CRUD', () => {
     const row = list.find((e) => e.id === 'http:alpha')
     expect(row).toMatchObject({ name: '订阅一', url: AUDIO_URL, hasAuth: false })
     // 源清单里也出现（kind 是订阅引擎的展示分类，名字是订阅数据本身）
-    const sources = await valueOf<TtsSourceInfo[]>(await fetch(at(ROUTES.ttsSources.path)))
+    const sources = (await valueOf<TtsSourcesView>(await fetch(at(ROUTES.ttsSources.path)))).sources
     expect(sources.find((s) => s.id === 'http:alpha')).toMatchObject({ kind: 'http', name: '订阅一' })
   })
 
@@ -261,6 +276,31 @@ describe('TtsSynthesisError → HTTP（不泄漏堆栈）', () => {
     expect(err.message).not.toContain('    at ')
   })
 
+  it('客户端断连 → 中止在途合成：上游那一发拿到取消，断连的响应不写错误信封', async () => {
+    const put = await send(paramOps.ttsEnginePut.path('http:hang'), 'PUT',
+      bodies.ttsEnginePut({ name: '慢引擎', url: HANG_URL }))
+    expect(put.ok, '引擎登记本身要成功，否则这条测不到东西').toBe(true)
+    const client = new AbortController()
+    const res = send(ROUTES.ttsSynthesize.path, 'POST',
+      bodies.ttsSynthesize({ engineId: 'http:hang', text: '没人等的一段', rate: 1 }), client.signal)
+    void res.catch(() => undefined)                 // 客户端自己取消：这条拒绝没人消费
+    await vi.waitFor(() => {
+      expect(calls.some((c) => c.url === HANG_URL), '上游请求应已发出').toBe(true)
+    })
+
+    client.abort()
+    await expect(res).rejects.toThrowError()
+    const upstream = must(calls.find((c) => c.url === HANG_URL), '上游那一发')
+    expect(upstream.init?.signal, '取消位要跟着出站请求下传').toBeInstanceOf(AbortSignal)
+    // 服务端收到断连要跑一拍（'close' 是 socket 事件，不比客户端的 reject 早）
+    await vi.waitFor(() => {
+      expect(upstream.init?.signal?.aborted, '浏览器走了，上游也要停下').toBe(true)
+    })
+    // 再跑一拍让服务端那侧的收尾落定：往已断开的响应写信封会抛 WriteAfterEnd，
+    // 那条未处理拒绝会被 vitest 当场抓住——跑到这里没红，就是这一发安静地作废了
+    await new Promise((resolve) => { setTimeout(resolve, 20) })
+  })
+
   it('上游非 2xx → 502 TTS_UPSTREAM', async () => {
     await send(paramOps.ttsEnginePut.path('http:fail'), 'PUT',
       bodies.ttsEnginePut({ name: '失败引擎', url: FAIL_URL }))
@@ -340,7 +380,7 @@ describe('tts-engines.json 损坏 → 只降订阅那一格，不拖垮插件树
       expect((await fetch(at2(ROUTES.shelf.path))).status).toBe(200)
 
       // 源清单 200：只列不依赖订阅数据的行（内置 + 浏览器直出），订阅行缺席而不是整片 503
-      const sources = await valueOf<TtsSourceInfo[]>(await fetch(at2(ROUTES.ttsSources.path)))
+      const sources = (await valueOf<TtsSourcesView>(await fetch(at2(ROUTES.ttsSources.path)))).sources
       expect(sources.map((s) => s.id)).toEqual(['builtin:baidu', 'browser:local'])
 
       // 内置合成可用：回执信封照发，上游真被打了一发

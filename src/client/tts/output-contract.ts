@@ -18,8 +18,10 @@ export interface OutputHandlers {
   progress?: (position: number, duration: number) => void
 }
 
-/** 字节型起一段：缓存键 + 音量；`resume` = 原地续播（不重置播放头，暂停续上就靠它）。 */
-export interface BytesSegment { key: string; volume: number; resume: boolean }
+/** 字节型起一段：缓存键 + 音量 + **播放倍率**（回执报的那一格：引擎没做到的那一截由这里补）；
+ *  `resume` = 原地续播（不重置播放头，暂停续上就靠它）。倍率随段走：换段与续播都要重设，
+ *  留在元素上的旧值会让下一段悄悄用上一段的速度念。 */
+export interface BytesSegment { key: string; volume: number; playbackRate: number; resume: boolean }
 
 /** 直出型起一段：文本与语音参数（音色 id 是引擎自己的取值，不跨引擎互通）。 */
 export interface DirectSegment { text: string; voice: string | null; rate: number; volume: number }

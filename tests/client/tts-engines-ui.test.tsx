@@ -6,7 +6,7 @@ import {
   BROWSER_TTS_ENGINE_ID, CORDIS_TTS_ENGINE_ID, TTS_DEFAULTS, bodies, paramOps, ROUTES,
 } from '../../src/shared/wire.js'
 import type {
-  TtsEngineImportReceipt, RouteTarget, TtsEngineInput, TtsEnginePublic, TtsSourceInfo, WriteMethod,
+  HostSpeechHealth, TtsEngineImportReceipt, RouteTarget, TtsEngineInput, TtsEnginePublic, TtsSourceInfo, WriteMethod,
 } from '../../src/shared/wire.js'
 import { apiGet, apiSend } from '../../src/client/api.js'
 import { apply } from '../../src/client/index.js'
@@ -53,6 +53,7 @@ function httpSource(engine: TtsEnginePublic): TtsSourceInfo {
 }
 
 let sources: TtsSourceInfo[]
+let hostSpeech: HostSpeechHealth
 let engines: TtsEnginePublic[]
 let receipt: TtsEngineImportReceipt
 let listFailure: Error | null
@@ -62,12 +63,14 @@ beforeEach(() => {
   listFailure = null
   const edge = httpEngine()
   sources = [builtin, browser, httpSource(edge)]
+  // 缺省：这台宿主没装语音服务（源清单里那行缺席，管理面合成一条「未检测到」）
+  hostSpeech = { state: 'absent' }
   engines = [edge]
   receipt = { added: 1, updated: 0, failed: [] }
 
   vi.mocked(apiGet).mockImplementation(async (path: string) => {
     if (listFailure !== null) throw listFailure
-    if (path === ROUTES.ttsSources.path) return sources
+    if (path === ROUTES.ttsSources.path) return { sources, hostSpeech }
     if (path === ROUTES.ttsEngines.path) return engines
     throw new Error(`unexpected GET ${path}`)
   })
@@ -156,6 +159,18 @@ describe('引擎清单', () => {
     expect(rows).toHaveLength(1)
     expect(pick(rows, 0).textContent).toContain('可用')
     expect(pick(rows, 0).className).not.toContain('dim')
+  })
+
+  it('装了但没配好：灰行说「未就绪」并带上服务方的原因码，不冒充「未检测到」', async () => {
+    hostSpeech = { state: 'not-ready', reason: 'api-key-not-configured' }
+    const { container } = await renderManager()
+    const row = must(
+      container.querySelector<HTMLElement>('[data-novel-tts-engine-kind="cordis"]'), '宿主服务那一行')
+    // 「没装」与「装了没配」修法不同：一句笼统的「未检测到」会让人去重装插件
+    expect(row.textContent).toContain('未就绪')
+    expect(row.textContent).toContain('api-key-not-configured')
+    expect(row.textContent).not.toContain('未检测到')
+    expect(row.className).toContain('dim')
   })
 
   it('清单读失败（503）显示不可用提示，不渲染空列表', async () => {

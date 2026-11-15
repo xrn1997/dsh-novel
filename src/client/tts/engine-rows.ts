@@ -1,21 +1,25 @@
 import {
   BROWSER_TTS_ENGINE_ID, CORDIS_TTS_ENGINE_ID, TTS_RESERVED_ID_PREFIX,
 } from '../../shared/wire.js'
-import type { TtsEnginePublic, TtsSourceInfo } from '../../shared/wire.js'
+import type { HostSpeechHealth, TtsEnginePublic, TtsSourceInfo } from '../../shared/wire.js'
 import type { Translate } from '../copy/index.js'
 
-/** 合成行的 id：只用于列表键与测试锚，不落到任何写路由（那行没有编辑/删除钮）。 */
-export const CORDIS_ABSENT_ID = 'cordis:absent'
+/** 合成行的 id：只用于列表键与测试锚，不落到任何写路由（那行没有编辑/删除钮）。
+ *  「未安装」与「未就绪」共用这一行——两者都是「这一源此刻不能出声」，区别写在文案里。 */
+export const CORDIS_UNAVAILABLE_ID = 'cordis:unavailable'
 
 /** 列表行 = 源清单的一行 + （仅 http）注册表投影。`engine` 缺席的内置/浏览器/cordis 行不可写。
- *  `available` 是**客户端**的呈现位：清单只列此刻可用的源，所以清单行一律 true；唯一 false
- *  是本文件给「宿主朗读服务未安装」补的那一行本地说明（它不在清单里，不是禁用态）。 */
+ *  `available` 是**客户端**的呈现位：清单只列此刻可用的源，所以清单行一律 true；false 的两种来路
+ *  都由本文件合成（订阅行漏报、宿主服务不可用），它们不在清单里，不是清单造出的禁用态。
+ *  `host` 只挂在宿主服务那一枚合成行上：缺席与未就绪是两件事（一个要装插件，一个要去配密钥），
+ *  健康读数原样带过来，文案按它分叉——`reason` 是服务方的稳定原因码，原样上屏不翻译。 */
 export interface EngineRow {
   id: string
   kind: TtsSourceInfo['kind']
   available: boolean
   name?: string
   engine?: TtsEnginePublic
+  host?: HostSpeechHealth
 }
 
 /** 清单的**就绪读数**：最后一次读成功的源行 + 订阅投影。失败不在这里——它与这份读数分开存：
@@ -27,11 +31,16 @@ export interface ListState {
 }
 
 /**
- * 源清单 + 订阅投影 → 列表行。以源清单为骨架：订阅行按 id 补到对应 http 源上；
+ * 源清单 + 订阅投影 + 宿主服务健康 → 列表行。以源清单为骨架：订阅行按 id 补到对应 http 源上；
  * 源清单漏报、但注册表确有的订阅（投影里有、源清单没有）按 http 行补在尾部——
- * 能编辑的资产不能因为清单漏报而在管理面隐身。cordis 缺席时合成最后一行灰显。
+ * 能编辑的资产不能因为清单漏报而在管理面隐身。cordis 不在清单时合成最后一行灰显，
+ * 文案按健康读数分叉（未安装 / 未就绪＋原因码）。
  */
-export function rowsOf(sources: readonly TtsSourceInfo[], engines: readonly TtsEnginePublic[]): EngineRow[] {
+export function rowsOf(
+  sources: readonly TtsSourceInfo[],
+  engines: readonly TtsEnginePublic[],
+  hostSpeech: HostSpeechHealth,
+): EngineRow[] {
   const byId = new Map(engines.map((engine) => [engine.id, engine] as const))
   const rows = sources.map((source): EngineRow => {
     // 只有注册表（http）源吃订阅投影：内置 / 浏览器 / cordis 的身份归服务端，不挂写入口。
@@ -52,7 +61,7 @@ export function rowsOf(sources: readonly TtsSourceInfo[], engines: readonly TtsE
     rows.push({ id: engine.id, kind: 'http', available: false, engine })
   }
   if (!rows.some((row) => row.kind === 'cordis')) {
-    rows.push({ id: CORDIS_ABSENT_ID, kind: 'cordis', available: false })
+    rows.push({ id: CORDIS_UNAVAILABLE_ID, kind: 'cordis', available: false, host: hostSpeech })
   }
   return rows
 }
@@ -92,6 +101,14 @@ export function labelOf(t: Translate, row: EngineRow): string {
   return sourceLabel(t, { kind: row.kind, id: row.id, ...(name === undefined ? {} : { name }) })
 }
 
+/** 行首状态徽标的唯一判据：可用 / 未检测到 / 未就绪。「装了没配」与「没装」不折叠成同一句
+ *  ——两者的修法不同，徽标是用户最先看到的那一格。 */
+export function statusLabelOf(t: Translate, row: EngineRow): string {
+  if (row.available) return t('tts.engines.status.available')
+  if (row.host?.state === 'not-ready') return t('tts.engines.status.notReady')
+  return t('tts.engines.status.unavailable')
+}
+
 /** 凭据状态位（永不读值）：无记录 / 未配置 / 已配置。TTS 没有登录面，不存在「已过期」这一档。 */
 export function authLabelOf(t: Translate, engine: TtsEnginePublic | undefined): string {
   if (engine === undefined) return t('tts.engines.auth.unknown')
@@ -104,7 +121,14 @@ export function descOf(t: Translate, row: EngineRow): string {
     case 'builtin': return t('tts.engines.desc.builtin')
     case 'browser': return t('tts.engines.desc.browser')
     case 'cordis':
-      return row.available ? t('tts.engines.desc.cordis') : t('tts.engines.desc.cordisAbsent')
+      // 三分：在场可用 / 未安装 / 装了但没配好（后者带服务方的原因码，那格数据不译）
+      if (row.available) return t('tts.engines.desc.cordis')
+      if (row.host?.state === 'not-ready') {
+        return row.host.reason === undefined
+          ? t('tts.engines.desc.cordisNotReady')
+          : t('tts.engines.desc.cordisNotReadyReason', { reason: row.host.reason })
+      }
+      return t('tts.engines.desc.cordisAbsent')
     case 'http':
       return t('tts.engines.desc.http', { id: row.id, auth: authLabelOf(t, row.engine) })
   }

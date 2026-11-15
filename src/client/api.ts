@@ -78,11 +78,12 @@ function unwrap(body: unknown, status: number): unknown {
   throw new ApiClientError(err?.code ?? 'Unknown', status, err?.message ?? `HTTP ${status}`, err?.segment)
 }
 
-async function request<T>(path: string, method: string, body?: unknown): Promise<T> {
+async function request<T>(path: string, method: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   let res: Response
   try {
     res = await fetch(PREFIX + path, {
       method,
+      ...(signal === undefined ? {} : { signal }),
       // 无体请求不建 headers/body 键：RequestInit 是随请求发出去的载荷，「缺席」才是它的空态
       ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
     })
@@ -93,8 +94,8 @@ async function request<T>(path: string, method: string, body?: unknown): Promise
 }
 
 export function apiGet<T>(path: string): Promise<T> { return request<T>(path, 'GET') }
-export function apiSend<T>(target: RouteTarget<WriteMethod>, body?: unknown): Promise<T> {
-  return request<T>(target.path, target.method, body)
+export function apiSend<T>(target: RouteTarget<WriteMethod>, body?: unknown, signal?: AbortSignal): Promise<T> {
+  return request<T>(target.path, target.method, body, signal)
 }
 
 /** 原始字节上传（本地书导入 TXT / EPUB，UI）：octet-stream body，响应仍走信封 */

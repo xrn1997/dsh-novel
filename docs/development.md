@@ -129,7 +129,7 @@ node scripts/tts-live.mjs
 node scripts/tts-live.mjs --engine http:<id> --data-dir <dataDir>   # 订阅引擎需数据根里有 tts-engines.json
 ```
 
-- **`scripts/tts-live.mjs` 只验服务端合成链**：它驱动构建产物的 `/novel-api`，证明「取文本 → 上游合成 → 音频读口」这条链在真实网络下可用；浏览器直出（系统语音）没有字节可审计，遇到它如实报「未测」。退出码 1 是外部链路失败，不放宽断言；它不进 CI、不进默认门，也不证明任何订阅引擎在别人机器上的可用性。`--help` 打印用法后以 0 正常退出，但那不是审计结果——0 只有在合成回执与音频字节两段都成立时才是「可用」。**它强制直连**（`proxyUrl` 钉 `'direct'`，输出 `PROXY: direct (forced)`）：代理环境视为**未覆盖**，代理链路可用性不在本脚本读数里。路由迟迟不注册时，失败退出前会附上宿主替身收集到的 `HOST error` / `HOST warn` 行——先看那几行，别只读「等待路由超时」这一句。
+- **`scripts/tts-live.mjs` 只验服务端合成链**：它驱动构建产物的 `/novel-api`，证明「取文本 → 上游合成 → 音频读口」这条链在真实网络下可用；浏览器直出（系统语音）没有字节可审计，遇到它如实报「未测」。退出码 1 是外部链路失败，不放宽断言；它不进 CI、不进默认门，也不证明任何订阅引擎在别人机器上的可用性。`--help` 打印用法后以 0 正常退出，但那不是审计结果——0 只在这三格都成立时才是「可用」：合成回执成功信封、回执带**播放补速**（`playbackRate`，`ADR-0081`）、音频读口给回非空 `audio/*` 字节。**它强制直连**（`proxyUrl` 钉 `'direct'`，输出 `PROXY: direct (forced)`）：代理环境视为**未覆盖**，代理链路可用性不在本脚本读数里。路由迟迟不注册时，失败退出前会附上宿主替身收集到的 `HOST error` / `HOST warn` 行——先看那几行，别只读「等待路由超时」这一句。
 - **采集三条实践口径**：出站与生产同口径（走 `resolveProxyUrl`：config > 环境变量 > 系统代理 > 直连，缺这条会把反爬壳页采成「正文为空」）；manifest 的键是**请求 URL**而非重定向后的落地地址（搜索类源常「POST 出去、302 落到结果页」）；站点会抖，**别删已采好的 fixture**，重采会覆盖、删除只会让你重新赌一次站点脸色。落盘的是生产解码链读到的文本（`decodeBody`：声明 charset → content-type → `<meta>` 嗅探），GBK 页才存成真中文。
 - **脱敏是门禁**：`tests/replay/sanitize.ts` 在写盘前扫 cookie / token / password / authorization / apiKey 与 `Authorization: Bearer …` 形态（判据住该文件头注），`tests/replay/sanitize.test.ts` 钉住它。自动脱敏**是兜底不是证明**，入库前仍要人工过目。
 - **`DSH_BROWSER_GATE`（旧名 `DSH_EPUB_BROWSER` 仍认）允许带按应有口径写的「诚实红」**：已知缺陷的读数不削成绿，缺陷与读数登记在该测试文件自己的注释里；修好时按那条记录一起撤下。这门最早只为 EPUB 阅读器而设，现在同一把闸也量配置页 / 浮层 / 听书面的几何——名字按「真浏览器门」取，不按某个页面取。

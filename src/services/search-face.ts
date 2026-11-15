@@ -168,6 +168,7 @@ const PROBE_CODE_OF: Record<ErrorCategory, string> = {
   unavailable: 'Error',
   'job-running': 'Error',
   'tts-engine-missing': 'Error',
+  'tts-engine-unavailable': 'Error',
   'tts-upstream': 'Error',
   'tts-bad-response': 'Error',
   other: 'Error',

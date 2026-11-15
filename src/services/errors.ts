@@ -132,12 +132,14 @@ export class LocalNotMountedError extends Error {
   }
 }
 
-/** 段合成失败的三种终局：code 即 wire 错误码，与 HTTP 状态一一分档——
- *  引擎缺席是调用方的选择问题（400），上游失败与坏响应是网关问题（502）。
+/** 段合成失败的四种终局：code 即 wire 错误码，与 HTTP 状态一一分档——
+ *  引擎缺席是调用方的选择问题（400），上游失败与坏响应是网关问题（502）；
+ *  引擎此刻不可用（服务自报没配好）是它自己的配置问题（503，配好就回来）。
  *  类住在分类学单点（而不是 `tts-request.ts`）：`api/wire` 的 classify 投影要用它，
  *  而 tts-request → fetcher → errors 的值边会让「类住 tts-request」变成值环。
  *  消费方（`tts-request.ts` / `tts.ts` 与测试）一律从这一处 import，本仓不开第二条 import 路径。 */
-export type TtsSynthesisErrorCode = 'TTS_ENGINE_MISSING' | 'TTS_UPSTREAM' | 'TTS_BAD_RESPONSE'
+export type TtsSynthesisErrorCode =
+  | 'TTS_ENGINE_MISSING' | 'TTS_ENGINE_UNAVAILABLE' | 'TTS_UPSTREAM' | 'TTS_BAD_RESPONSE'
 
 export class TtsSynthesisError extends Error {
   readonly code: TtsSynthesisErrorCode
@@ -187,13 +189,14 @@ export type ErrorCategory =
   | 'rule-eval' | 'rule-missing' | 'fetch' | 'not-found'
   | 'bad-request'
   | 'local-import' | 'local-too-large' | 'unavailable' | 'job-running'
-  | 'tts-engine-missing' | 'tts-upstream' | 'tts-bad-response'
+  | 'tts-engine-missing' | 'tts-engine-unavailable' | 'tts-upstream' | 'tts-bad-response'
   | 'other'
 
 /** 段合成 code → 类目。表即穷尽闸：`TtsSynthesisErrorCode` 加一档而不在这里登记 → tsc 红，
  *  不会静默落进 `other`（那段合成失败会从 502 变成 500）。 */
 const TTS_CATEGORY_OF: Record<TtsSynthesisErrorCode, ErrorCategory> = {
   TTS_ENGINE_MISSING: 'tts-engine-missing',
+  TTS_ENGINE_UNAVAILABLE: 'tts-engine-unavailable',
   TTS_UPSTREAM: 'tts-upstream',
   TTS_BAD_RESPONSE: 'tts-bad-response',
 }

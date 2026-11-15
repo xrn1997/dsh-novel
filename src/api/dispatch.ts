@@ -349,13 +349,34 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } 
   },
   // ── 听书面（引擎源 / 段合成 / 音频读口 / 引擎订阅）──────────────────────
   ttsSources: ({ res, service }) => {
-    // 引擎源清单（内置 / 浏览器直出 / 注册表订阅 / cordis 仅在场）；展示名只属于订阅数据
-    writeOk(res, service.ttsSources())
+    // 引擎源清单 + 宿主服务健康（内置 / 浏览器直出 / 注册表订阅 / cordis 仅在场且就绪）；
+    // 展示名只属于订阅数据，「这一行为什么不在」由 hostSpeech 那一格回答
+    writeOk(res, service.ttsSourcesView())
   },
   ttsSynthesize: async ({ req, res, service }) => {
-    // 段合成：回执带缓存键（字节另走 ttsAudio）；失败经 classify 落 400/502，不泄漏堆栈
+    // 段合成：回执带缓存键（字节另走 ttsAudio）；失败经 classify 落 400/502/503，不泄漏堆栈
     const body = await readJsonBody<Record<string, unknown> | null>(req, null)
-    writeOk(res, await service.ttsSynthesize(readBodies.ttsSynthesize(body)))
+    const p = readBodies.ttsSynthesize(body)
+    // 断连即取消：跳段 / 停止 / 关页都不该让上游把一段没人听的内容念完并计费（同导出那一行）。
+    // 监听挂上后**立刻补查已断连**：读 body 的 await 期间客户端可能已走，'close' 不会再来
+    // （与 `pipeBinary` 的同一条纪律）。
+    const ctrl = new AbortController()
+    const gone = (): void => { ctrl.abort() }
+    res.on('close', gone)
+    if (res.destroyed) ctrl.abort()
+    try {
+      const receipt = await service.ttsSynthesize(p, { signal: ctrl.signal })
+      // 回执落地与写响应之间还有一个窗口：这期间客户端可能已经走了，往已关闭的响应写会抛
+      // WriteAfterEnd。断连那一发没有读者——不写就是了，也不进错误径（作废不是故障）。
+      if (ctrl.signal.aborted) return
+      writeOk(res, receipt)
+    } catch (e) {
+      // 调用方已经走了：这条响应没有读者，错误信封无处可写（作废不是故障，也不进日志）
+      if (ctrl.signal.aborted) return
+      throw e
+    } finally {
+      res.off('close', gone)
+    }
   },
   ttsEngines: ({ res, service }) => {
     // 引擎订阅清单（公共投影已剥凭据）——导出 JSON 由 client 用这份数据自组，没有后端导出路由

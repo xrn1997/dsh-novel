@@ -133,6 +133,14 @@ function evalSourceOf(engine: HttpTtsEngine, headers: Record<string, string>): E
   }
 }
 
+/** 这条朗读规则**是否把语速带进请求**：legado 的 `speakSpeed` 绑定只在规则文本里出现才算被
+ *  消费——求值时 `speakSpeed` 恒有值，但模板不引用它，发出去的就是原速的一段。
+ *  合成面据此决定语速归谁：被消费 → 字节里已掺（播放端补 1）；没被消费 → 整段倍率归播放端。
+ *  判据是规则文本而不是「比两次求值结果」：JS 段可能有出站副作用，重求值不是免费的。 */
+export function ruleCarriesSpeechRate(engine: HttpTtsEngine): boolean {
+  return engine.url.includes('speakSpeed')
+}
+
 /** 一段 `{{expr}}` 的沙箱求值。绑定用函数参数而不是沙箱全局：`speakText`/`speakSpeed`/
  *  `speakVoice` 是朗读面专属输入，`EvalContext.vars` 刻意不投影成全局（script-surface 的
  *  excluded 清单），也不该为一个消费面加宽桥参数名册。

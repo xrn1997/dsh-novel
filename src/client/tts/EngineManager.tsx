@@ -1,13 +1,13 @@
 import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 import { ROUTES, paramOps } from '../../shared/wire.js'
-import type { TtsEnginePublic, TtsEngineRemoveReceipt, TtsSourceInfo } from '../../shared/wire.js'
+import type { TtsEnginePublic, TtsEngineRemoveReceipt, TtsSourcesView } from '../../shared/wire.js'
 import { apiGet, apiSend, describeError } from '../api.js'
 import { plural, useCopy } from '../copy/index.js'
 import { Dialog } from '../views/dialog.js'
 import { EngineEditDialog } from './EngineEditDialog.js'
 import { useEngineImportExport } from './EngineImportExport.js'
-import { descOf, labelOf, rowsOf } from './engine-rows.js'
+import { descOf, labelOf, rowsOf, statusLabelOf } from './engine-rows.js'
 import type { ListState } from './engine-rows.js'
 
 /**
@@ -28,8 +28,9 @@ import type { ListState } from './engine-rows.js'
  * ④ **只读部署**：本页所属的部署只读时，订阅写口（编辑 / 删除 / 导入）一律禁用；清单与导出
  *   是读面，照常可用。订阅是插件数据，写它仍属这台部署的写口，不在这里开口子。
  *
- * cordis 源只在宿主服务在场时进 `sources()`；服务缺席时这里合成一条灰显「未检测到」，
- * 让「装插件才出现」这件事有一格可见的位置，而不是整行消失。
+ * cordis 源只在宿主服务在场**且就绪**时进清单；不在时这里合成一条灰显行，文案按健康读数分叉
+ * （未安装 / 未就绪＋服务方给的原因码），让「装插件才出现」与「装了还没配好」各有一格可见的说法，
+ * 而不是整行消失。
  */
 
 /** 通知行的存活时长：回执挂在列表上方，一条「已删除」不该陪到下一次操作。 */
@@ -55,12 +56,12 @@ export function EngineManager({ writable }: { writable: boolean }): ReactNode {
     // 重读是背景动作：已就绪的清单原样留着，不闪回加载态；失败只换错误，不清旧读数。
     setFailure(null)
     void Promise.all([
-      apiGet<TtsSourceInfo[]>(ROUTES.ttsSources.path),
+      apiGet<TtsSourcesView>(ROUTES.ttsSources.path),
       apiGet<TtsEnginePublic[]>(ROUTES.ttsEngines.path),
     ]).then(
       ([sourceList, engineList]) => {
         if (!alive) return
-        setState({ rows: rowsOf(sourceList, engineList), engines: engineList })
+        setState({ rows: rowsOf(sourceList.sources, engineList, sourceList.hostSpeech), engines: engineList })
       },
       (error: unknown) => {
         if (!alive) return
@@ -170,7 +171,7 @@ export function EngineManager({ writable }: { writable: boolean }): ReactNode {
                     <div className="novel-tts-engine-desc">{descOf(t, row)}</div>
                   </div>
                   <span className={row.available ? 'novel-tts-engine-badge ok' : 'novel-tts-engine-badge'}>
-                    {row.available ? t('tts.engines.status.available') : t('tts.engines.status.unavailable')}
+                    {statusLabelOf(t, row)}
                   </span>
                   {engine === undefined ? null : (
                     <span className="novel-tts-engine-acts">

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { buffer } from 'node:stream/consumers'
@@ -106,7 +106,7 @@ describe('TtsService 合成与缓存', () => {
     expect(await buffer(res.stream)).toEqual(WAV)
   })
 
-  it('语速进缓存键：换 rate 是另一段请求（百度口只收 1–7 整数档）', async () => {
+  it('百度口：换 rate 是另一段请求（spd 是键材料，只收 1–7 整数档）', async () => {
     const mock = mockFetcher(() => pageOf(WAV, 'audio/mpeg'))
     const { svc } = await setup({ fetcher: mock.fetcher })
     const normal = await svc.synthesize({ engineId: 'builtin:baidu', text: '你好，世界', rate: 1 })
@@ -199,9 +199,10 @@ describe('TtsService 合成与缓存', () => {
   it('cordis identity 随 voice / rate 变：键材料就是发给服务的那份参数', async () => {
     const speechCalls: Array<{ text: string; voice?: string; rate?: number }> = []
     const speech: NormalizedSpeechSynthesis = {
+      ready: true,
       async synthesize(req) {
         speechCalls.push(req)
-        return { data: Buffer.from([9, 9]), contentType: 'audio/mpeg' }
+        return { data: Buffer.from([9, 9]), contentType: 'audio/mpeg', appliedRate: 1 }
       },
     }
     const { svc } = await setup({
@@ -330,6 +331,123 @@ describe('TtsService 合成与缓存', () => {
     await expect(fs.readdir(path.join(dir, 'cache', 'tts'))).rejects.toThrow()
   })
 
+  it('取消位下传到抓取层：已取消的调用一个出站请求都不发，在途取消不冒充上游失败', async () => {
+    const reason = new Error('这一段不要了')
+    let seenSignal: AbortSignal | undefined
+    const calls: string[] = []
+    const fetcher: Fetcher = {
+      // 与真实抓取层同一条纪律：认取消位，中止时抛 signal.reason（不是 FetchError、不是超时）
+      fetchPage: (url, init) => {
+        calls.push(url)
+        seenSignal = init?.signal
+        const signal = init?.signal
+        return new Promise<never>((_, reject) => {
+          if (signal === undefined) return
+          signal.addEventListener('abort', () => {
+            const reason: unknown = signal.reason
+            reject(reason instanceof Error ? reason : new Error(String(reason)))
+          }, { once: true })
+        })
+      },
+    }
+    const { svc } = await setup({ fetcher })
+
+    const caller = new AbortController()
+    const pending = svc.synthesize(
+      { engineId: 'builtin:baidu', text: '在途的一段', rate: 1 }, { signal: caller.signal })
+    // 求值有 await（模板链），等那一发真出去再判取消位
+    await vi.waitFor(() => { expect(seenSignal, '请求应已发出').toBeDefined() })
+    expect(seenSignal?.aborted, '发出时还不该中止').toBe(false)
+    caller.abort(reason)
+    expect(seenSignal?.aborted, '取消要落到那一发请求的取消位上').toBe(true)
+    // 一次作废不是上游失败：错误信封与连败计数都不该收到它当证据
+    await expect(pending).rejects.toBe(reason)
+
+    // 出发前就废了：一个请求都不发（合成有副作用，取消了还发等于说谎）
+    const done = new AbortController()
+    done.abort(reason)
+    await expect(svc.synthesize(
+      { engineId: 'builtin:baidu', text: '不会发生的合成', rate: 1 }, { signal: done.signal })).rejects.toBe(reason)
+    expect(calls, '已取消的调用不该发出站请求').toHaveLength(1)
+  })
+
+  it('取消理由的类型纪律：非 Error 的 reason 也包成 Error，原话不丢，且不算上游失败', async () => {
+    const mock = mockFetcher(() => pageOf(WAV, 'audio/mpeg'))
+    const { svc } = await setup({ fetcher: mock.fetcher })
+
+    // 规范允许 abort(reason) 收任何值：上层只认 Error，出口这一层负责收口
+    const before = new AbortController()
+    before.abort('用户按了停止')
+    let err: unknown = null
+    try {
+      await svc.synthesize({ engineId: 'builtin:baidu', text: '出发前就废了', rate: 1 }, { signal: before.signal })
+    } catch (e) {
+      err = e
+    }
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message, '原话不丢').toBe('用户按了停止')
+    expect(err, '取消不包成 TTS_UPSTREAM').not.toBeInstanceOf(TtsSynthesisError)
+    expect(mock.calls, '已取消的调用一个请求都不发').toHaveLength(0)
+  })
+
+  it('cordis 支的取消同样是作废：抛调用方给的理由，不借服务自己的错误、也不包成上游失败', async () => {
+    let seen: AbortSignal | undefined
+    const speech: NormalizedSpeechSynthesis = {
+      ready: true,
+      synthesize: (_req, opts) => {
+        seen = opts?.signal
+        const signal = opts?.signal
+        return new Promise((_resolve, reject) => {
+          // 服务那一侧被取消时也拒绝了：这一段文本不该被借用
+          signal?.addEventListener('abort', () => reject(new Error('服务侧的说法')), { once: true })
+        })
+      },
+    }
+    const { svc } = await setup({
+      fetcher: mockFetcher(() => pageOf(WAV, 'audio/wav')).fetcher,
+      speechSynthesis: () => speech,
+    })
+    const reason = new Error('这一段不要了')
+    const caller = new AbortController()
+    const pending = svc.synthesize(
+      { engineId: 'cordis:speechSynthesis', text: '在途的一段', rate: 1 }, { signal: caller.signal })
+    await vi.waitFor(() => { expect(seen, '请求应已交给服务').toBeDefined() })
+    caller.abort(reason)
+    await expect(pending).rejects.toBe(reason)
+  })
+
+  it('回执报告播放端要补的倍率：模板消费 speakSpeed → 1；不消费 → 整段语速归播放端', async () => {
+    const mock = mockFetcher(() => pageOf(WAV, 'audio/mpeg'))
+    const { engines, svc } = await setup({ fetcher: mock.fetcher })
+    // 内置百度口：模板里写着 spd={{…speakSpeed…}}，语速是引擎念的
+    const builtin = await svc.synthesize({ engineId: 'builtin:baidu', text: '引擎自己念快', rate: 1.7 })
+    expect(builtin.playbackRate, '字节里已掺了语速，播放端不许再乘一遍').toBe(1)
+
+    // 订阅引擎不写 speakSpeed：这一发请求里根本没有语速这件事，倍率只能由播放端补
+    engines.put('http:flat', { name: '不吃语速', url: 'http://x.test/say?text={{speakText}}', contentType: 'audio/mpeg' })
+    const flat = await svc.synthesize({ engineId: 'http:flat', text: '没人念快', rate: 1.7 })
+    expect(flat.playbackRate).toBeCloseTo(1.7)
+    expect(flat.key).not.toBe(builtin.key)
+  })
+
+  it('同一份字节跨倍率重放：补速按这次的请求算，不按第一次写下的那一格（ADR-0081 的不变式）', async () => {
+    const mock = mockFetcher(() => pageOf(WAV, 'audio/mpeg'))
+    const { engines, svc } = await setup({ fetcher: mock.fetcher })
+    engines.put('http:flat', { name: '不吃语速', url: 'http://x.test/say?text={{speakText}}', contentType: 'audio/mpeg' })
+
+    const slow = await svc.synthesize({ engineId: 'http:flat', text: '重放的一段', rate: 1 })
+    const fast = await svc.synthesize({ engineId: 'http:flat', text: '重放的一段', rate: 2.4 })
+    // 模板不消费语速：请求没变，键也就没变——同一份字节要按新倍率重新算差额
+    expect(fast.key).toBe(slow.key)
+    expect(slow.playbackRate).toBe(1)
+    expect(fast.playbackRate, '拖了滑杆就得按新倍率补，命中的旧回执不许冒充').toBeCloseTo(2.4)
+    expect(mock.calls, '换倍率不重新合成：滑杆从「重合成一章」变成「立即生效」').toHaveLength(1)
+
+    const back = await svc.synthesize({ engineId: 'http:flat', text: '重放的一段', rate: 1 })
+    expect(back.playbackRate, '回到原速就是 1，不是残留的 2.4').toBe(1)
+    expect(mock.calls).toHaveLength(1)
+  })
+
   it('openAudio：未知/非法键 → null', async () => {
     const { svc } = await setup({ fetcher: mockFetcher(() => pageOf(WAV, 'audio/wav')).fetcher })
     expect(await svc.openAudio('f'.repeat(32))).toBeNull()
@@ -357,10 +475,11 @@ describe('TtsService sources()', () => {
   it('cordis 源：在场时列出音色表并走 getter 合成；卸装后除名、未缓存段缺席', async () => {
     const speechCalls: Array<{ text: string; voice?: string; rate?: number }> = []
     const speech: NormalizedSpeechSynthesis = {
+      ready: true,
       voices: [{ id: 'v1', name: '音色一' }],
       async synthesize(req) {
         speechCalls.push(req)
-        return { data: Buffer.from([9, 9]), contentType: 'audio/mpeg' }
+        return { data: Buffer.from([9, 9]), contentType: 'audio/mpeg', appliedRate: 1 }
       },
     }
     let current: NormalizedSpeechSynthesis | undefined = speech

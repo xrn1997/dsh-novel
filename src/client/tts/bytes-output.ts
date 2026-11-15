@@ -23,6 +23,11 @@ import type { BytesListenOutput, BytesSegment, OutputHandlers } from './output-c
 export interface AudioSlot {
   src: string
   volume: number
+  /** 播放倍率（回执那一格的落地处）。倍率改变播放时长，`currentTime` / `duration` 仍是
+   *  **音频内**秒数——段进度读数据此不受影响（它答「这一段念到第几秒」，不答墙钟）。
+   *  音高不随倍率漂移是平台的缺省行为（`preservesPitch` 缺省为真），本仓不去动它，
+   *  也不把它收进镜像：没人读它，收了就是假控件的温床。 */
+  playbackRate: number
   preload: string
   currentTime: number
   readonly duration: number
@@ -67,6 +72,7 @@ export class BytesOutput implements BytesListenOutput {
       // 原地续播：不重设 src、不把播放头拨回 0，暂停前听到哪儿就从哪儿接上
       const element = this.ensure(this.active)
       element.volume = seg.volume
+      element.playbackRate = seg.playbackRate
       this.bind(element, this.active, handlers)
       this.play(element, handlers)
       return
@@ -87,6 +93,7 @@ export class BytesOutput implements BytesListenOutput {
     }
     element.currentTime = 0
     element.volume = seg.volume
+    element.playbackRate = seg.playbackRate
     this.bind(element, slot, handlers)
     this.play(element, handlers)
   }

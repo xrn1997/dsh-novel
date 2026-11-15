@@ -203,6 +203,7 @@ const STATUS_OF: Record<ErrorCategory, { status: number; code: string }> = {
   // 「换个引擎」还是「稍后再试」的判据。播放层**不**看它：单段失败在那一层一律走同一条失败径
   // （跳过并留痕，`client/tts/listen-session.ts`），错误码只到 HTTP 面为止。
   'tts-engine-missing': { status: 400, code: 'TTS_ENGINE_MISSING' },
+  'tts-engine-unavailable': { status: 503, code: 'TTS_ENGINE_UNAVAILABLE' },
   'tts-upstream': { status: 502, code: 'TTS_UPSTREAM' },
   'tts-bad-response': { status: 502, code: 'TTS_BAD_RESPONSE' },
   other: { status: 500, code: 'InternalError' },

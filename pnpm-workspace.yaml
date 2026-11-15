@@ -7,3 +7,4 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/cordis@4.1.0'
   - '@deepseek-ai/cosmokit@1.9.0'
   - '@deepseek-ai/schemastery@3.19.0'
+  - dsh-xiaomi-tts@5.5.0

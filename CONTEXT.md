@@ -414,9 +414,19 @@ _唯一实现_: `shared/wire.ts` 的 `ListenState`（形状）；写路径 `serv
 _Avoid_: 阅读进度（共用消费位置 `ShelfProgress`，不住这里）、播放队列（会话内的瞬时状态，不落盘）
 
 **引擎源（engine source）**:
-听书可选的出声来源：内置（恰一条、开箱即用，没有音色表——端点不读音色参数）、浏览器直出兜底、注册表里的每条订阅、宿主语音服务（服务在场才列出）。顺序即展示顺序；插件自有源不带展示名（名字归客户端文案按 kind 取词），订阅源的名字是订阅数据本身。
-_唯一实现_: `services/tts-engines.ts` 的 `TtsEngineRegistry`（订阅引擎的落盘与增删改查）；源清单的归一与次序 `services/tts.ts` 的 `TtsService.sources`
-_Avoid_: 书源（那是抓取与解析的来源）、模型（朗读引擎不是 AI 模型）
+听书可选的出声来源：内置（恰一条、开箱即用，没有音色表——端点不读音色参数）、浏览器直出兜底、注册表里的每条订阅、宿主语音服务（服务在场**且自报就绪**才列出）。顺序即展示顺序；插件自有源不带展示名（名字归客户端文案按 kind 取词），订阅源的名字是订阅数据本身。清单只列此刻可用的源；「宿主服务为什么不在」不由清单回答，见**宿主服务健康**。
+_唯一实现_: `services/tts-engines.ts` 的 `TtsEngineRegistry`（订阅引擎的落盘与增删改查）；源清单的归一与次序 `services/tts.ts` 的 `TtsService.sourcesView`
+_Avoid_: 书源（那是抓取与解析的来源）、模型（朗读引擎不是 AI 模型）、把健康读数塞进源清单行（清单行是跨半契约，理由归 `ADR-0083`）
+
+**宿主服务健康（host speech health）**:
+宿主朗读服务此刻的三态读数：`absent`（服务不在场）/ `not-ready`（在场但不可用，带服务方的稳定原因码，如 `api-key-not-configured`；读数本身抛错时按未就绪报、不带原因码）/ `ready`。它与源清单同出一次能力读数——两次快照之间引擎换了口径，清单与健康就会各说一套。管理面据此把「没装」与「装了没配」摆成两句不同的话；选择面不读它（选了也合成不出的选项不该出现在下拉里）。
+_唯一实现_: 形状 `shared/wire.ts` 的 `HostSpeechHealth` / `TtsSourcesView`；读数 `services/tts-cordis.ts` 的 `readinessOf` 与 `services/tts.ts` 的 `TtsService.sourcesView` / `speechReadout`
+_Avoid_: 源清单（只列可用源，不答为什么不在）、失败（未就绪是配置事实，不是一次合成失败）、客户端自己编原因码字典（原因码是服务方原话）
+
+**播放补速（playback rate）**:
+拿到一段字节后播放端还要乘的语速倍率（1 = 引擎已按用户要的语速念过）。用户滑杆上的倍率是**请求**，字节里掺了多少由引擎能力决定：规则写了 `speakSpeed` 的 HTTP 源与发了 `voiceRate` 的服务源算「已应用」，差额归播放端；不认语速参数的源一概补全额。侧车随字节定版的是**引擎应用的那一档**（`appliedRate`），补速按这次请求现算（请求 ÷ 应用量）：同一份字节被不同倍率重放时差额跟着请求走，滑杆才不会一调就撒谎。
+_唯一实现_: 回执 `shared/wire.ts` 的 `SynthesisReceipt.playbackRate`；补速算式 `services/tts.ts` 的 `residualOf`；应用量由 HTTP 支（判据 `services/tts-request.ts` 的 `ruleCarriesSpeechRate`）与 cordis 适配器（`services/tts-cordis.ts` 的 `voiceRateOf`）各自产出；落地 `client/tts/output-contract.ts` 的 `BytesSegment.playbackRate` → `client/tts/bytes-output.ts` 的 `AudioSlot.playbackRate`；随字节定版 `services/tts-cache.ts` 的 `AudioMeta.appliedRate` / `TtsAudioCache.meta`
+_Avoid_: 语速读数（上屏写的仍是用户要的倍率，不拆成「引擎多少 + 补多少」）、段进度（那是音频内秒数，不受倍率影响）、把倍率塞进缓存键（语速决定念多快，不是另一段内容）
 
 **音色绑定（speakVoice）**:
 HttpTTS 模板求值的第三个绑定（前两个是 `speakText` / `speakSpeed`）：本段音色 id，缺省空串；`{{speakVoice}}` 可作纯占位，也可在 JS 表达式里读。内置引擎不消费它（端点不读音色参数、也没有音色表）；订阅模板写了它才生效。音色 id 是引擎自己的取值、不跨引擎互通：换引擎时播放层清空本书记住的旧 id（回该源缺省），显式换源也不把存档里的旧 id 带过去。音色表来自订阅数据（导入携带）或源能力（宿主语音服务 / 平台）。

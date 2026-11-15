@@ -103,7 +103,7 @@ function readerDeps(): FakeReaderDeps {
         return { chapters, items: planarNavigation(chapters) }
       }
       if (path.startsWith('chapter')) return contentOf(indexOf(path))
-      if (path === ROUTES.ttsSources.path) return []
+      if (path === ROUTES.ttsSources.path) return { sources: [], hostSpeech: { state: 'absent' } }
       return shelf
     }),
   })
@@ -161,7 +161,7 @@ beforeEach(() => {
     }
     if (path.startsWith('chapter')) return contentOf(indexOf(path))
     if (path === ROUTES.shelf.path) return shelf
-    if (path === ROUTES.ttsSources.path) return []
+    if (path === ROUTES.ttsSources.path) return { sources: [], hostSpeech: { state: 'absent' } }
     throw new Error(`unexpected GET ${path}`)
   })
   vi.mocked(apiSend).mockImplementation(async (target: RouteTarget<WriteMethod>, body?: unknown) => {

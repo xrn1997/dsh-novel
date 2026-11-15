@@ -498,9 +498,29 @@ export interface SynthesisRequest {
 }
 
 /** 合成回执：音频已落缓存，浏览器拿 `key` 去音频读口取字节。响应类型的事实来源是音频
- *  读口按缓存侧车报出的 content-type——回执不重复一份没有读者的副本。 */
+ *  读口按缓存侧车报出的 content-type——回执不重复一份没有读者的副本。
+ *  `playbackRate` = **拿到这段字节后，播放端还要乘的语速倍率**（1 = 引擎已按用户要的语速念过）。
+ *  它是这条链唯一的诚实读数：用户滑杆上的倍率是「请求」，字节里掺了多少由引擎的能力决定——
+ *  服务端念不到的那一截必须由播放端补，否则屏上写着 1.5x、耳朵里是 1.0x。
+ *  值随字节一起进缓存侧车：命中路径不许拿「此刻的引擎能力」重算（引擎换了口径，旧字节仍是旧那份）。 */
 export interface SynthesisReceipt {
   key: string
+  playbackRate: number
+}
+
+/** 宿主朗读服务此刻的健康读数——专为「这一行为什么不在清单里」而设：源清单只列可用源，
+ *  缺席与不可用因此在清单里是同一个空，而管理面要把两者分开摆（未安装 / 未就绪是两件事，
+ *  修法完全不同）。`reason` 是服务方给的稳定原因码，原样带过不翻译也不编造。 */
+export type HostSpeechHealth =
+  | { state: 'absent' }
+  | { state: 'not-ready'; reason?: string }
+  | { state: 'ready' }
+
+/** 源清单那一条路由的完整值：清单 + 宿主服务健康。同一份能力读数算出来，不分两次问——
+ *  两次快照之间引擎换了口径，清单与健康就会各说一套。 */
+export interface TtsSourcesView {
+  sources: TtsSourceInfo[]
+  hostSpeech: HostSpeechHealth
 }
 
 /** 引擎源清单的一行（`TtsService.sources` 产出）。清单只列**此刻可用**的源：不可用/缺席

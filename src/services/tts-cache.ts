@@ -39,8 +39,17 @@ export interface AudioResource {
   stream: Readable
 }
 
+/** 条目的元读面（不碰字节）：`mediaType` 之外还报出**这份字节里引擎自己应用了多少语速**
+ *  （1 = 原速）。回执按「用户要的 ÷ 这一格」算补速：它是字节的属性，不是某次请求的属性——
+ *  同一份字节被不同倍率重放时，这一格必须还是当初写下的那个数。 */
+export interface AudioMeta {
+  mediaType: string
+  appliedRate: number
+}
+
 /**
- * 段音频缓存（数据根下 `cache/tts`）：`<key>.bin` 存字节，`<key>.json` 侧车存 `mediaType`。
+ * 段音频缓存（数据根下 `cache/tts`）：`<key>.bin` 存字节，`<key>.json` 侧车存 `mediaType` 与
+ * 随字节定版的 `appliedRate`（引擎自己应用的那档语速）。
  * 侧车是**提交标记**：先写字节再写侧车，缺侧车/坏侧车的字节按 miss 读——缓存是派生数据，
  * 坏条目读作 miss（与 PageCache 的坏字节裁决同口径），下一次 put 原地重写。
  *
@@ -70,22 +79,34 @@ export class TtsAudioCache {
    *  0 字节是「比没有更坏」的那种条目：它会让命中路径一直回执一条永远发不出声的段，
    *  而音频缓存没有清缓存入口（`ADR-0068`）——按 miss 读，下一次 put 原地自愈。 */
   async has(key: string): Promise<boolean> {
-    if (!KEY_PATTERN.test(key)) return false
+    return (await this.meta(key)) !== null
+  }
+
+  /** 元读面（合成回执走这一条）：侧车可读且字节非零才回话；坏条目读作 miss（理由同 `has`）。 */
+  async meta(key: string): Promise<AudioMeta | null> {
+    if (!KEY_PATTERN.test(key)) return null
     const { bin, sidecar } = this.pathsOf(key)
-    if (await this.readMediaType(sidecar) === null) return false
+    const meta = await this.readSidecar(sidecar)
+    if (meta === null) return null
     try {
       const stat = await fs.stat(bin)
-      return stat.isFile() && stat.size > 0
+      return stat.isFile() && stat.size > 0 ? meta : null
     } catch {
-      return false
+      return null
     }
   }
 
-  /** 写入一段音频。先字节后侧车：侧车落地才算这条缓存生效（崩溃不留「半条可读音频」）。 */
-  async put(key: string, bytes: Buffer, mediaType: string): Promise<void> {
+  /** 写入一段音频。先字节后侧车：侧车落地才算这条缓存生效（崩溃不留「半条可读音频」）。
+   *  `appliedRate` 随字节一起定版：它是「这份字节里引擎真做了多少语速」的读数，引擎之后换了
+   *  口径也改不动已经落盘的这一段。非法值直接拒收（不是猜一档）：那说明产字节的那支算法坏了，
+   *  写进去只会让命中路径拿一个没人能解释的差额去放音。 */
+  async put(key: string, bytes: Buffer, mediaType: string, appliedRate: number): Promise<void> {
     if (!KEY_PATTERN.test(key)) throw new Error(`音频缓存键非法：${key}`)
+    if (!Number.isFinite(appliedRate) || appliedRate <= 0) {
+      throw new Error(`音频缓存的应用语速非法：${String(appliedRate)}`)
+    }
     const { bin, sidecar } = this.pathsOf(key)
-    const sidecarText = JSON.stringify({ mediaType })
+    const sidecarText = JSON.stringify({ mediaType, appliedRate } satisfies AudioMeta)
     // 先登记保留、再落盘：落盘窗口里若正好有一轮 prune 在扫，这两个文件也不能被删——
     // 回执已经发出去了，淘汰它等于让音频读口对同一个键回 404。
     const release = this.ledger.reserve([bin, sidecar])
@@ -106,8 +127,8 @@ export class TtsAudioCache {
   async open(key: string): Promise<AudioResource | null> {
     if (!KEY_PATTERN.test(key)) return null
     const { bin, sidecar } = this.pathsOf(key)
-    const mediaType = await this.readMediaType(sidecar)
-    if (mediaType === null) return null
+    const meta = await this.readSidecar(sidecar)
+    if (meta === null) return null
     let handle: FileHandle | null = null
     try {
       handle = await fs.open(bin, 'r')
@@ -118,7 +139,7 @@ export class TtsAudioCache {
         return null
       }
       // 成功路径不关句柄：流的所有权随返回值交给调用方
-      return { mediaType, bytes: size, stream: handle.createReadStream() }
+      return { mediaType: meta.mediaType, bytes: size, stream: handle.createReadStream() }
     } catch {
       await handle?.close().catch(() => undefined)
       return null
@@ -130,8 +151,11 @@ export class TtsAudioCache {
     await this.ledger.prune()
   }
 
-  /** 侧车 → mediaType；缺文件/坏 JSON/错形状一律 null（坏条目读作 miss，不是失败）。 */
-  private async readMediaType(file: string): Promise<string | null> {
+  /** 侧车 → 元读面。缺文件/坏 JSON/错形状一律 null（坏条目读作 miss，不是失败）。
+   *  `appliedRate` 缺席（本批之前写下的侧车）或坏值也读作 miss：那一代没有记录「引擎真做了多少」
+   *  这一格，拿 1 或请求倍率去猜，会在曾应用服务端语速的源上双重加速、在没应用的源上凭空补速。
+   *  判「不知道」而不是猜一档——重合成一次是唯一不撒谎的选项（派生数据，下一次 put 原地自愈）。 */
+  private async readSidecar(file: string): Promise<AudioMeta | null> {
     let raw: string
     try {
       raw = await fs.readFile(file, 'utf8')
@@ -145,8 +169,12 @@ export class TtsAudioCache {
       return null
     }
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
-    const mediaType = (value as Record<string, unknown>).mediaType
-    return typeof mediaType === 'string' && mediaType.trim() !== '' ? mediaType : null
+    const entry = value as Record<string, unknown>
+    const mediaType = entry.mediaType
+    if (typeof mediaType !== 'string' || mediaType.trim() === '') return null
+    const appliedRate = entry.appliedRate
+    if (typeof appliedRate !== 'number' || !Number.isFinite(appliedRate) || appliedRate <= 0) return null
+    return { mediaType, appliedRate }
   }
 
   /** 键 → 两枚文件。键已过 `KEY_PATTERN`，不含路径分隔符。 */

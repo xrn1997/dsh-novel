@@ -205,7 +205,9 @@ export interface ListenPlatform {
   /** 共用的消费位置：章 + 章内比例，写 `ShelfBook.progress`。与 `saveListen` 同一个落盘节拍，
    *  两笔各自尽力而为——一笔失败不该把另一笔拖住。 */
   saveProgress(bookKey: string, chapterIndex: number, offsetRatio: number): Promise<void>
-  synthesize(req: SynthesisRequest): Promise<SynthesisReceipt>
+  /** opts.signal = 这一发合成所属的取消位：跳段只落当前段那一只（同章预取照跑），
+   *  停止 / 换书 / 换参数把整趟的（含预取）一起落下去。 */
+  synthesize(req: SynthesisRequest, opts?: { signal?: AbortSignal }): Promise<SynthesisReceipt>
   outputs: { bytes: BytesListenOutput; direct: DirectListenOutput }
   /** 直出型的源级闸门：**等平台把语音表交出来**再判（Chromium 首读常为空、真表随
    *  `voiceschanged` 迟到）。返回 false = 这台设备此刻确实没有可用的浏览器语音。
@@ -221,7 +223,7 @@ export interface ListenPlatform {
 
 // ── 会话状态机 ───────────────────────────────────────────────────────────────
 
-interface ReceiptEntry { paramsKey: string; key: string }
+interface ReceiptEntry { paramsKey: string; key: string; playbackRate: number }
 
 type TimerState = { kind: 'at'; at: number; cancel: () => void } | { kind: 'chapter' }
 
@@ -248,6 +250,12 @@ interface PlayerRun {
   /** 直出型：是否已把一段 utterance 交给浏览器且尚未撤回（onstart 之前也算——它已进平台队列，
    *  参数/引擎变更必须把它撤掉重开，否则旧声音会与新设置一起存在） */
   directActive: boolean
+  /** 本趟在途请求共用的取消位：作废时整只换掉（一只 signal 落定就回不来），新请求拿新的一半。
+   *  预取链挂在**这一只**上：换参数 / 换章 / 停止都该把整章的暖缓存一起作废。 */
+  abort: AbortController
+  /** 当前段自己的取消位：跳段 / 章内滑杆只作废「没人再听的那一发」，同章预取不受牵连。
+   *  换参数 / 换章 / 停止走 `cancelInFlight`，两只一起换（见那里的注释）。 */
+  segAbort: AbortController
   /** 字节型：当前段合成请求的 playSeq 身份（无在途请求 = null）。参数变更时据此判断
    *  「加载中的这一段也要按新参数重取」——只认 `loading` 会把章正文加载误当成合成在途。 */
   synthToken: number | null
@@ -384,6 +392,8 @@ export class ListenSession {
       timer: null,
       directActive: false,
       synthToken: null,
+      abort: new AbortController(),
+      segAbort: new AbortController(),
     }
     this.current = run
     this.state.set({
@@ -425,6 +435,7 @@ export class ListenSession {
     if (run !== null) {
       run.playSeq += 1
       this.clearRunTimer(run)
+      this.cancelInFlight(run)
     }
     this.current = null
     this.direct.stop()
@@ -476,12 +487,18 @@ export class ListenSession {
       return
     }
     const cached = run.receipts.get(st.paragraphIndex)
-    const key = cached !== undefined && cached.paramsKey === this.paramsKeyOf(st) ? cached.key : null
-    if (key !== null && this.bytes.holds(key)) {
+    const entry = cached !== undefined && cached.paramsKey === this.paramsKeyOf(st) ? cached : null
+    if (entry !== null && this.bytes.holds(entry.key)) {
       this.state.set({ loading: false })
       try {
         this.bytes.start(
-          { key, volume: clampNumber(st.volume, TTS_VOLUME.min, TTS_VOLUME.max, TTS_DEFAULTS.volume), resume: true },
+          {
+            key: entry.key,
+            volume: clampNumber(st.volume, TTS_VOLUME.min, TTS_VOLUME.max, TTS_DEFAULTS.volume),
+            // 续播的是同一段字节：补速取回执那一格，不取此刻的语速滑杆（引擎换了口径也照旧）
+            playbackRate: entry.playbackRate,
+            resume: true,
+          },
           this.bytesHandlers(run, run.playSeq),
         )
       } catch {
@@ -526,6 +543,8 @@ export class ListenSession {
     if (run === null || !st.active || st.chapterLoading || st.paragraphCount === 0) return
     const target = clampIndex(index, st.paragraphCount - 1)
     if (target === st.paragraphIndex) return
+    // 跳走之后没人再听的那一发要停在上游（`ADR-0082`）：只掐当前段那一发，同章预取仍归整趟 run。
+    this.cancelCurrentSegment(run)
     run.playSeq += 1
     this.state.set({ paragraphIndex: target, paragraphText: run.units[target] ?? '' })
     this.schedulePositionSave()
@@ -563,6 +582,9 @@ export class ListenSession {
     const loadToken = ++run.loadSeq
     run.playSeq += 1
     const resumeToken = run.playSeq
+    // 换章的决定一落下，在途的合成（本章剩余段的预取）就已经没人要了：当场掐掉，别等正文到货。
+    // 正在放的那一段字节不受影响——字节型的旧音频由起播时换槽接替。
+    this.cancelInFlight(run)
     // 直出型立刻闭嘴：章正文还在路上，旧 utterance 不该继续念上一章（字节型的旧音频
     // 由起播时换槽接替，这里不动它的既有口径）。
     run.directActive = false
@@ -687,16 +709,20 @@ export class ListenSession {
       this.state.set({ playing: false })
     }
     run.synthToken = token
+    const signal = run.segAbort.signal
     try {
       // 回执只在「这一发仍是当前播放」时落 receipts：合成在途时用户可能已跳章，旧章段号写进
       // 新章的 receipts 会让同号段命中旧字节、念错章（与预取同一道守卫，主播放径此前漏了）。
-      const receipt = await this.receiptFor(run, index, text, () => this.current === run && token === run.playSeq)
+      const receipt = await this.receiptFor(run, index, text, signal,
+        () => this.current === run && token === run.playSeq)
       if (this.current !== run || token !== run.playSeq) return
       this.bytes.start(
         {
           key: receipt.key,
           // 音量在守卫后活读：合成在途的窗口里音量条还能动，入口快照会把用户刚拖到的值盖回去
           volume: clampNumber(this.state.get().volume, TTS_VOLUME.min, TTS_VOLUME.max, TTS_DEFAULTS.volume),
+          // 补速随回执走：引擎做到哪儿，播放端就只补剩下那一截
+          playbackRate: receipt.playbackRate,
           resume: false,
         },
         this.bytesHandlers(run, token),
@@ -706,6 +732,9 @@ export class ListenSession {
       this.state.set({ loading: false })
       this.prefetchAround(run)
     } catch {
+      // 自撤不是这一段的失败：换参数的重取走防抖，那一发被掐掉时 `playSeq` 还没抬，
+      // 让它落到 `segmentFailed` 会把「用户拖了一下滑杆」记成引擎连败，攒够了还暂停播放。
+      if (signal.aborted) return
       if (this.current !== run || token !== run.playSeq) return
       this.segmentFailed(run)
     } finally {
@@ -854,7 +883,8 @@ export class ListenSession {
     if (text === undefined) return
     run.prefetched.add(index)
     const stillHere = this.stillHereGuard(run)
-    void this.receiptFor(run, index, text, stillHere).then((receipt) => {
+    const signal = run.abort.signal
+    void this.receiptFor(run, index, text, signal, stillHere).then((receipt) => {
       // 切到直出后在途的字节预取到此为止：直出不出字节，别再建 / 下载一个用不上的 Audio。
       if (!stillHere() || this.state.get().mode === 'direct') return
       if (index === this.state.get().paragraphIndex + 1) this.bytes.preload(receipt.key)
@@ -870,19 +900,23 @@ export class ListenSession {
     if (count <= 0 || target >= run.chapters.length || run.nextPrefetched.has(target)) return
     run.nextPrefetched.add(target)
     const stillHere = this.stillHereGuard(run)
+    const signal = run.abort.signal
+    // 取消位是**异步**变的（用户随时按停止）：用函数读而不是直接读字段——直接在循环里读
+    // `signal.aborted`，TS 会按第一次守卫的结论把它窄化成「恒假」，第二道守卫就成了死代码。
+    const cancelled = (): boolean => signal.aborted
     void (async (): Promise<void> => {
       const units = await this.platform.fetchUnits(run.sourceId, run.bookKey, target)
       // 切直出不该把这一章记成「已预取」：切回字节后它还要重来一次暖缓存。
-      if (!stillHere() || this.state.get().mode === 'direct') {
+      if (!stillHere() || this.state.get().mode === 'direct' || cancelled()) {
         run.nextPrefetched.delete(target)
         return
       }
       for (const text of units.slice(0, count)) {
-        if (!stillHere() || this.state.get().mode === 'direct') {
+        if (!stillHere() || this.state.get().mode === 'direct' || cancelled()) {
           run.nextPrefetched.delete(target)
           return
         }
-        await this.platform.synthesize(this.synthesisRequest(text)).catch(() => undefined)
+        await this.platform.synthesize(this.synthesisRequest(text), { signal }).catch(() => undefined)
       }
     })().catch(() => undefined)
   }
@@ -941,6 +975,8 @@ export class ListenSession {
       run.receipts.clear()
       run.prefetched.clear()
       this.bytes.dropPreload()
+      // 旧参数的那几发（含预取）再也不会被这一趟用上：掐掉，别让它继续花上游的合成
+      this.cancelInFlight(run)
     }
     this.schedulePositionSave()
     if (run === null || !this.shouldRestart(run)) return
@@ -1194,6 +1230,7 @@ export class ListenSession {
     if (run !== null) {
       run.playSeq += 1
       this.clearRunTimer(run)
+      this.cancelInFlight(run)
     }
     this.current = null
     this.direct.release()
@@ -1211,6 +1248,25 @@ export class ListenSession {
     return JSON.stringify([st.engineId, st.voice, st.rate])
   }
 
+  /** 作废本趟在途的合成请求，并换上一只新的取消位。
+   *  只在「这些请求的结果再也不会被这一趟用到」时按：停止 / 复位、换参数（旧参数的字节作废）、
+   *  换章（上一章的预取作废）。**暂停不在其列**——续播要接的正是那一发，掐掉它等于把
+   *  「暂停一下」变成「整段重合成」。整趟作废连同当前段那一只一起换（跳段只走
+   *  `cancelCurrentSegment`，预取不受牵连）。 */
+  private cancelInFlight(run: PlayerRun): void {
+    run.abort.abort()
+    run.abort = new AbortController()
+    run.segAbort.abort()
+    run.segAbort = new AbortController()
+  }
+
+  /** 作废当前段那一发（跳段 / 章内滑杆）：没人再听的是**这一段**，同章预取暖的是接下来还要放的
+   *  段，不能连坐。换到新的段后主播放径拿新的一半，旧的那一发作废在上游。 */
+  private cancelCurrentSegment(run: PlayerRun): void {
+    run.segAbort.abort()
+    run.segAbort = new AbortController()
+  }
+
   private synthesisRequest(text: string): SynthesisRequest {
     const st = this.state.get()
     return {
@@ -1221,15 +1277,19 @@ export class ListenSession {
     }
   }
 
+  /** 取一段的回执（主播放径与预取共用）。`signal` 是调用方出发时那一只（主播放径给当前段的
+   *  `segAbort`、预取给整趟的 `abort`；都不是字段的当前值——中途换参数已经换成新的了），
+   *  它随请求下传，作废时那一发跟着停。 */
   private async receiptFor(
-    run: PlayerRun, index: number, text: string, stillValid: () => boolean = () => true,
+    run: PlayerRun, index: number, text: string, signal: AbortSignal,
+    stillValid: () => boolean = () => true,
   ): Promise<ReceiptEntry> {
     const st = this.state.get()
     const paramsKey = this.paramsKeyOf(st)
     const cached = run.receipts.get(index)
     if (cached !== undefined && cached.paramsKey === paramsKey) return cached
-    const receipt = await this.platform.synthesize(this.synthesisRequest(text))
-    const entry: ReceiptEntry = { paramsKey, key: receipt.key }
+    const receipt = await this.platform.synthesize(this.synthesisRequest(text), { signal })
+    const entry: ReceiptEntry = { paramsKey, key: receipt.key, playbackRate: receipt.playbackRate }
     // 预取是 fire-and-forget：请求在途时用户可能已跳章，旧章的段号不能写进新章的
     // receipts（同号段会被当成新章的回执直接起播）。
     if (stillValid()) run.receipts.set(index, entry)

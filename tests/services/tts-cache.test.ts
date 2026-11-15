@@ -67,7 +67,7 @@ describe('TtsAudioCache', () => {
     expect(await cache.open(KEY_A)).toBeNull()
 
     const bytes = Buffer.from([0x49, 0x44, 0x33, 0x00, 0xff])
-    await cache.put(KEY_A, bytes, 'audio/mpeg')
+    await cache.put(KEY_A, bytes, 'audio/mpeg', 1)
 
     expect(await cache.has(KEY_A)).toBe(true)
     const res = must(await cache.open(KEY_A), '缓存条目')
@@ -76,13 +76,35 @@ describe('TtsAudioCache', () => {
     expect(await buffer(res.stream)).toEqual(bytes)
 
     const sidecar: unknown = JSON.parse(await fs.readFile(path.join(dir, `${KEY_A}.json`), 'utf8'))
-    expect(sidecar).toEqual({ mediaType: 'audio/mpeg' })
+    expect(sidecar).toEqual({ mediaType: 'audio/mpeg', appliedRate: 1 })
+  })
+
+  it('应用语速随条目定版：缺这一格或坏值一律读作 miss（不知道就不猜）', async () => {
+    const dir = await tmp()
+    const cache = new TtsAudioCache(dir, 10_000)
+    await cache.put(KEY_A, Buffer.from([1, 2, 3]), 'audio/mpeg', 1.5)
+    expect(await cache.meta(KEY_A)).toEqual({ mediaType: 'audio/mpeg', appliedRate: 1.5 })
+    const sidecar = path.join(dir, `${KEY_A}.json`)
+
+    // 本批之前写下的侧车没有这一格：「引擎真做了多少」没有记录，拿 1 或请求倍率去猜都会放错速
+    await fs.writeFile(sidecar, '{"mediaType":"audio/mpeg"}', 'utf8')
+    expect(await cache.meta(KEY_A), '缺这一格读作 miss，不冒充原速').toBeNull()
+
+    // 坏值同理：不冒充一档语速
+    await fs.writeFile(sidecar, '{"mediaType":"audio/mpeg","appliedRate":0}', 'utf8')
+    expect(await cache.meta(KEY_A)).toBeNull()
+
+    expect(await cache.meta(KEY_B), '没写过的键是 miss，不是 1 倍率的空条目').toBeNull()
+
+    // 写入面也拒收：这格坏了是产字节那支的算法问题，不能让它落盘去骗命中路径
+    await expect(cache.put(KEY_B, Buffer.from([1]), 'audio/mpeg', 0)).rejects.toThrow(/应用语速/)
+    await expect(cache.put(KEY_B, Buffer.from([1]), 'audio/mpeg', Number.NaN)).rejects.toThrow(/应用语速/)
   })
 
   it('缺侧车 / 坏侧车 / 只有字节 → miss（缓存是派生数据，坏条目读作 miss 不抛）', async () => {
     const dir = await tmp()
     const cache = new TtsAudioCache(dir, 10_000)
-    await cache.put(KEY_A, Buffer.from([1, 2, 3]), 'audio/wav')
+    await cache.put(KEY_A, Buffer.from([1, 2, 3]), 'audio/wav', 1)
     const sidecar = path.join(dir, `${KEY_A}.json`)
 
     await fs.rm(sidecar)
@@ -109,19 +131,19 @@ describe('TtsAudioCache', () => {
       expect(await cache.has(bad), bad).toBe(false)
       expect(await cache.open(bad), bad).toBeNull()
     }
-    await expect(cache.put('../shelf', Buffer.from([1]), 'audio/wav')).rejects.toThrow(/缓存键/)
+    await expect(cache.put('../shelf', Buffer.from([1]), 'audio/wav', 1)).rejects.toThrow(/缓存键/)
   })
 
   it('0 字节 bin 按 miss：不冒充可读缓存，下一次 put 原地自愈', async () => {
     const dir = await tmp()
     const cache = new TtsAudioCache(dir, 10_000)
     // 0 字节只能从外部来（合成链在入缓存前就挡掉空音频）：读到它就等于回执一条永远不出声的段
-    await cache.put(KEY_A, Buffer.alloc(0), 'audio/wav')
+    await cache.put(KEY_A, Buffer.alloc(0), 'audio/wav', 1)
     expect(await cache.has(KEY_A), '空字节不是一条完整条目').toBe(false)
     expect(await cache.open(KEY_A)).toBeNull()
 
     // 按 miss 读之后能自愈：同键再 put 一次就是一条完整条目
-    await cache.put(KEY_A, Buffer.from([1, 2]), 'audio/wav')
+    await cache.put(KEY_A, Buffer.from([1, 2]), 'audio/wav', 1)
     expect(await cache.has(KEY_A)).toBe(true)
     const res = must(await cache.open(KEY_A), '自愈后的音频')
     expect(await buffer(res.stream)).toEqual(Buffer.from([1, 2]))
@@ -131,11 +153,11 @@ describe('TtsAudioCache', () => {
     let max = 10_000
     const dir = await tmp()
     const cache = new TtsAudioCache(dir, () => max)
-    await cache.put(KEY_A, Buffer.alloc(100, 1), 'audio/wav')
+    await cache.put(KEY_A, Buffer.alloc(100, 1), 'audio/wav', 1)
     const old = new Date(Date.now() - 10_000)
     await fs.utimes(path.join(dir, `${KEY_A}.bin`), old, old)
     await fs.utimes(path.join(dir, `${KEY_A}.json`), old, old)
-    await cache.put(KEY_B, Buffer.alloc(100, 2), 'audio/wav')
+    await cache.put(KEY_B, Buffer.alloc(100, 2), 'audio/wav', 1)
 
     await cache.prune()
     expect(await cache.has(KEY_A)).toBe(true)
@@ -151,13 +173,13 @@ describe('TtsAudioCache', () => {
   it('写入即触发 prune：增量记账超上限不等下次显式 prune', async () => {
     const dir = await tmp()
     const cache = new TtsAudioCache(dir, 150)
-    await cache.put(KEY_A, Buffer.alloc(100, 1), 'audio/wav')
+    await cache.put(KEY_A, Buffer.alloc(100, 1), 'audio/wav', 1)
     expect(await cache.has(KEY_A)).toBe(true)
     // mtime 用 utimes 显式拉开确定值（写入间隔在快盘上可能落在同一毫秒）
     const old = new Date(Date.now() - 10_000)
     await fs.utimes(path.join(dir, `${KEY_A}.bin`), old, old)
     await fs.utimes(path.join(dir, `${KEY_A}.json`), old, old)
-    await cache.put(KEY_B, Buffer.alloc(100, 2), 'audio/wav')
+    await cache.put(KEY_B, Buffer.alloc(100, 2), 'audio/wav', 1)
     expect(await cache.has(KEY_B)).toBe(true)
     expect(await cache.has(KEY_A)).toBe(false)
   })
@@ -165,8 +187,8 @@ describe('TtsAudioCache', () => {
   it('单段就超上限：刚写入的那一条不被本轮淘汰（回执不能指向 404）', async () => {
     const dir = await tmp()
     const cache = new TtsAudioCache(dir, 150)
-    await cache.put(KEY_A, Buffer.alloc(100, 1), 'audio/wav')
-    await cache.put(KEY_B, Buffer.alloc(200, 2), 'audio/wav')
+    await cache.put(KEY_A, Buffer.alloc(100, 1), 'audio/wav', 1)
+    await cache.put(KEY_B, Buffer.alloc(200, 2), 'audio/wav', 1)
     // 上限小于这一段：删光旧的仍守不住，那就临时超着——把刚发出去的回执删掉是更坏的失败
     expect(await cache.has(KEY_B), '刚写入的段必须还在').toBe(true)
     expect(await cache.has(KEY_A)).toBe(false)
@@ -185,7 +207,7 @@ describe('TtsAudioCache', () => {
     const cache = new TtsAudioCache(dir, 50)      // 上限比旧文件小、比新条目更小
     const gate = gateNextReaddir()
     // 本实例的第一笔写：字节与侧车都落盘之后，建索引的那一发 readdir 停在闸上——保留集仍握着
-    const writing = cache.put(KEY_B, Buffer.alloc(150, 2), 'audio/wav')
+    const writing = cache.put(KEY_B, Buffer.alloc(150, 2), 'audio/wav', 1)
     await vi.waitFor(() => expect(gate.scans()).toBe(1))
     // 这一轮扫描看得见刚写入的两枚文件：没有预约保留，bin 会被当成最旧的淘汰对象删掉
     await cache.prune()
@@ -200,7 +222,7 @@ describe('TtsAudioCache', () => {
     const cache = new TtsAudioCache(dir, 300)
     // 容量纪律住 SizeLedger；写路径是 put → SizeLedger.afterWrite → SizeLedger.prune
     const prune = vi.spyOn(SizeLedger.prototype, 'prune')
-    for (let i = 0; i < 5; i++) await cache.put(KEY_A, Buffer.alloc(100, 1), 'audio/wav')
+    for (let i = 0; i < 5; i++) await cache.put(KEY_A, Buffer.alloc(100, 1), 'audio/wav', 1)
     // 账本读数是判据本身：重复计入会把同一键的 100 字节记成 500，超上限后每写必全扫
     expect(prune, '覆盖写把旧字节重复计入').not.toHaveBeenCalled()
     expect(cache.totalBytes).toBeLessThanOrEqual(300)
@@ -210,7 +232,7 @@ describe('TtsAudioCache', () => {
   it('外部删文件后：读口按实扫给 miss，prune 从磁盘重建账本，下次 put 重写', async () => {
     const dir = await tmp()
     const cache = new TtsAudioCache(dir, 10_000)
-    await cache.put(KEY_A, Buffer.alloc(300, 7), 'audio/wav')
+    await cache.put(KEY_A, Buffer.alloc(300, 7), 'audio/wav', 1)
     expect(cache.totalBytes).toBeGreaterThanOrEqual(325)
 
     await fs.rm(path.join(dir, `${KEY_A}.bin`))
@@ -221,7 +243,7 @@ describe('TtsAudioCache', () => {
     await cache.prune()
     expect(cache.totalBytes).toBe(0)
 
-    await cache.put(KEY_A, Buffer.from([7]), 'audio/ogg')
+    await cache.put(KEY_A, Buffer.from([7]), 'audio/ogg', 1)
     const res = must(await cache.open(KEY_A), '重建后的缓存条目')
     expect(res.mediaType).toBe('audio/ogg')
     expect(await buffer(res.stream)).toEqual(Buffer.from([7]))

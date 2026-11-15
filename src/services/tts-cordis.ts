@@ -2,6 +2,7 @@ import type { SpeechCapabilities, SpeechSynthesisService } from 'dsh-xiaomi-tts/
 import { CORDIS_TTS_ENGINE_ID } from '../shared/wire.js'
 import type { TtsVoice } from '../shared/wire.js'
 import { TtsSynthesisError } from './errors.js'
+import { abortReasonOf } from './tts-cancel.js'
 import type { NormalizedSpeechSynthesis } from './tts.js'
 
 /**
@@ -21,7 +22,9 @@ import type { NormalizedSpeechSynthesis } from './tts.js'
  * - `rate` → `voiceRate`：**只发当前有效供应商所选模型声明支持的那一档**——能力位为 false
  *   或读不出 provider / 模型时整字段缺席（不发 1 冒充）；支持时按宿主契约夹到 0.5–2。
  *   插件自己的语速域（`shared/wire.ts` 的 `TTS_RATE`，0.5–3）是播放层的事，两者不是一把尺；
- * - `format` 不传：服务按自身配置给 WAV 或 MP3，音频字节与 contentType 原样带回。
+ * - `format` 不传：服务按自身配置给 WAV 或 MP3，音频字节与 contentType 原样带回；
+ * - `signal` 每次现造一只（见 `guardSynthesis`）：调用方的取消位与本地死线汇成一条，服务那一侧
+ *   据此终止上游请求——取消不只在本地「不等了」。
  */
 
 /**
@@ -41,38 +44,82 @@ const HOST_VOICE_RATE = { min: 0.5, max: 2 } as const
  */
 export const CORDIS_SYNTHESIS_TIMEOUT_MS = 15_000
 
-/** 给一次服务合成套上死线：`synthesize` 的 Promise 不保证落定（宿主服务卡住 / 服务内部的等待
- *  链断在半路）。到点按上游失败拒绝；任一方向落定时清掉定时器——超时之后的迟到结果不再有人消费。 */
-function withSynthesisDeadline<T>(work: Promise<T>): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
+/** 一次服务合成的守卫：调用方的取消位与本支自己的死线**汇成一只信号**递给服务。
+ *  两条腿都必须落到服务那一侧——只拒本地 Promise 等于「我们不等了」，而上游照样把整段念完
+ *  并计费（宿主契约把 `signal` 写成了宿主插件的取消入口，用的就是这一处）。
+ *  拒绝理由的归属：调用方取消 → 交回它的 `reason`（那不是一个上游失败，是一次作废，理由的类型
+ *  纪律由 `abortReasonOf` 收口）；死线到点 → `TTS_UPSTREAM` 带毫秒数；服务自己的拒绝 → 是 Error
+ *  就借它的原话，不是 Error 也包成 Error（Promise 拒绝理由的类型纪律与上层「原话借来看」同一口径）。 */
+async function guardSynthesis<T>(caller: AbortSignal | undefined, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  // 已取消的调用一个字节都不发：合成有副作用（上游计费），取消了还发等于说谎
+  if (caller !== undefined && caller.aborted) throw abortReasonOf(caller)
+  const ctrl = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let abortByCaller: (() => void) | undefined
+  // 取消这条腿不依赖服务配合：认 signal 的服务自己终止上游；不认的也不能把我们吊到死线为止。
+  const cancelled = new Promise<never>((_, reject) => {
+    if (caller === undefined) return
+    abortByCaller = (): void => {
+      ctrl.abort(caller.reason)
+      reject(abortReasonOf(caller))
+    }
+    caller.addEventListener('abort', abortByCaller, { once: true })
+  })
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      ctrl.abort()
       reject(new TtsSynthesisError(
         'TTS_UPSTREAM', `宿主朗读服务合成超时（${CORDIS_SYNTHESIS_TIMEOUT_MS}ms）`))
     }, CORDIS_SYNTHESIS_TIMEOUT_MS)
-    work.then(
-      (value) => { clearTimeout(timer); resolve(value) },
-      // 非 Error 的拒绝值（宿主服务交出的任意值）也包成 Error：Promise 拒绝理由的类型纪律
-      // 与上层「原话借来看」同一口径，文案不丢、类型不泄
-      (error: unknown) => {
-        clearTimeout(timer)
-        reject(error instanceof Error ? error : new Error(String(error)))
-      },
-    )
   })
+  try {
+    const work = run(ctrl.signal)
+    // 死线或取消之后服务那一发仍可能迟到拒绝：这一份 promise 已经没人等了，给它一条静默的出路
+    work.catch(() => undefined)
+    return await Promise.race([work, cancelled, deadline])
+  } catch (e) {
+    if (caller?.aborted === true) throw abortReasonOf(caller)
+    throw e instanceof Error ? e : new Error(String(e))
+  } finally {
+    // 三条腿都在 settle 时收干净：留下的监听器会让下一次取消拒绝一条已经没人等的 promise
+    if (timer !== undefined) clearTimeout(timer)
+    if (caller !== undefined && abortByCaller !== undefined) caller.removeEventListener('abort', abortByCaller)
+  }
+}
+
+/** **有效供应商**的唯一解读者：外部接管优先，回落到保存的内置配置（宿主契约里
+ *  `currentProvider()` 才是「这次合成会交给谁」，`capabilities().provider` 只是保存值）。
+ *  音色表、语速能力位、就绪态三格全部按它取——三处各读各的会让界面摆出发不出去的音色。
+ *  方法是可选的（旧宿主没有），缺席才信 `capabilities().provider`。 */
+function effectiveProviderId(svc: SpeechSynthesisService, caps: SpeechCapabilities): string {
+  return svc.currentProvider?.() ?? caps.provider
 }
 
 /**
- * capabilities 的哪一格是「音色表」：**当前有效供应商所选模型**的 voices。
+ * capabilities 的哪一格是「音色表」：**有效供应商所选模型**的 voices。
  * 不 flatten 全体供应商：`synthesize` 不显式给 provider/model 时服务用的正是这份选择，
  * 列别的模型的音色会让用户选到发不出去的 id。所选模型不在清单里（如浏览器本地兜底）
  * 就照实没有音色表——缺席不是空表，UI 不渲染音色行。
  */
-function voicesOf(caps: SpeechCapabilities): TtsVoice[] {
-  const provider = caps.providers.find((p) => p.id === caps.provider)
+function voicesOf(svc: SpeechSynthesisService, caps: SpeechCapabilities): TtsVoice[] {
+  const provider = caps.providers.find((p) => p.id === effectiveProviderId(svc, caps))
   if (provider === undefined) return []
   const model = provider.models.find((m) => m.id === provider.selectedModel)
   if (model === undefined) return []
   return model.voices.map((v) => ({ id: v.id, name: v.name }))
+}
+
+/** 这一源**此刻能不能合成**：读有效供应商那一格的 `ready`（宿主的本地校验读数——密钥格式、
+ *  音色齐不齐，不等于上游账户与额度已验证）。读不出那一格按不可用处理：源清单承诺
+ * 「列出的都在此刻可用」，缺读不是可用。原因码原样带（宿主给什么报什么，本仓不编码）。 */
+function readinessOf(
+  svc: SpeechSynthesisService, caps: SpeechCapabilities,
+): { ready: boolean; unavailableReason?: string } {
+  const provider = caps.providers.find((p) => p.id === effectiveProviderId(svc, caps))
+  if (provider === undefined) return { ready: false }
+  return provider.ready
+    ? { ready: true }
+    : { ready: false, ...(provider.unavailableReason === undefined ? {} : { unavailableReason: provider.unavailableReason }) }
 }
 
 /**
@@ -85,7 +132,7 @@ function voicesOf(caps: SpeechCapabilities): TtsVoice[] {
  * （open-api.md 的外部提供方段落），发过去只会让整条合成请求 400。
  */
 function voiceRateSupported(svc: SpeechSynthesisService, caps: SpeechCapabilities): boolean {
-  const providerId = svc.currentProvider?.() ?? caps.provider
+  const providerId = effectiveProviderId(svc, caps)
   if (providerId.startsWith('external:')) return false
   const provider = caps.providers.find((p) => p.id === providerId)
   if (provider === undefined) return false
@@ -124,22 +171,32 @@ export function cordisCacheIdentity(req: { voice?: string; rate: number }): stri
 
 /** 服务 → 归一形状。`voices` 在归一化时读一次 `capabilities()`（本地读数，不发上游请求）；
  *  服务对象本身不被缓存——组合根的 getter 每次调用重查并重新调用本函数。
- *  合成带上限（`CORDIS_SYNTHESIS_TIMEOUT_MS`）：这条支没有出站请求，耐心只能自己定。 */
+ *  每一发都带取消位（`guardSynthesis`）：这条支没有出站请求，耐心与中止都只能自己给。
+ *  `appliedRate` 报的是**这次真发出去的那档**（没发 `voiceRate` = 原速 1）；补速的算术归合成面
+ *  （用户要的 ÷ 这一格），本文件不替它算——两个支各自只产「我做了什么」这一份事实。 */
 export function normalizeSpeechSynthesis(svc: SpeechSynthesisService): NormalizedSpeechSynthesis {
-  const voices = voicesOf(svc.capabilities())
+  const caps = svc.capabilities()
+  const voices = voicesOf(svc, caps)
+  const readiness = readinessOf(svc, caps)
   return {
+    ...readiness,
     ...(voices.length === 0 ? {} : { voices }),
-    async synthesize(req) {
+    async synthesize(req, opts) {
       // 能力位每次现读：服务可能在播放中途切供应商 / 被外部接管，读数只是本地快照、不发上游
       // 请求（与组合根 getter 每次重查同一条纪律）；不缓存服务对象，这一份读数同样不缓存。
-      const caps = svc.capabilities()
-      const voiceRate = voiceRateOf(svc, caps, req.rate)
-      const audio = await withSynthesisDeadline(svc.synthesize({
+      const live = svc.capabilities()
+      const voiceRate = voiceRateOf(svc, live, req.rate)
+      const audio = await guardSynthesis(opts?.signal, (signal) => svc.synthesize({
         text: req.text,
         ...(req.voice === undefined ? {} : { voice: req.voice }),
         ...(voiceRate === undefined ? {} : { voiceRate }),
+        signal,
       }))
-      return { data: audio.data, contentType: audio.contentType }
+      return {
+        data: audio.data,
+        contentType: audio.contentType,
+        appliedRate: voiceRate ?? 1,
+      }
     },
   }
 }
