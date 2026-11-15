@@ -172,8 +172,8 @@ $env:DSH_PARSE_CENSUS='1'; pnpm vitest run tests/engine/parse-census.test.ts
 1. **一条门**：`pnpm gates`（typecheck / lint / test / test:pack / test:compat，组成住 `package.json`），退出码看过。发版与 CI 跑的是同一条门；别在这里改挑子集，那会让发版门比检查门更宽。
 2. **写发布记录**：在 `CHANGELOG.md` 追加这一版（新增 / 变更 / 修复 / 升级注意）；未发布改动不预写，历史版本不回溯改写（已废称呼与不可回查的批次号按文档门清理），逐提交明细留 git。
 3. **版本前移**：`package.json` 的 `version` 提一笔 `chore: 发版 x.y.z`；提交并 push。
-4. **`npm publish`**：`prepack` 会跑 `build`；`files` 是**精确清单**——构建每新多出一个要发布的产物，就要同时加进 `files`。先发 npm 再推 tag：npm 失败时不会留下一个只有 GitHub 侧到位的版本。
-5. **GitHub Release 资产（自动）**：给第 3 步的提交打 annotated tag `Vx.y.z` 并 push，触发 `.github/workflows/release.yml`——先校验 tag = `V` + `package.json` 版本，再跑 `pnpm gates` → `pnpm pack` → 断言 tarball 里的挂载产物齐全（清单住 workflow）→ 挂到 Release。每个 Release 两份资产：版本名 `xrn1997-dsh-novel-<版本>.tgz` 与稳定别名 `dsh-novel.tgz`；tag 带 `-` 的按 prerelease 处理（新建时直接标，已存在时补标），不抢 `latest`；Release 已存在时资产覆盖。`workflow_dispatch` 只干跑：跑门 + 打包 + 传 workflow artifact，不建 Release。
+4. **GitHub Release 资产（自动）**：给第 3 步的提交打 annotated tag `Vx.y.z` 并 push，触发 `.github/workflows/release.yml`——先校验 tag = `V` + `package.json` 版本，再跑 `pnpm gates` → `pnpm pack` → 断言 tarball 里的挂载产物齐全（清单住 workflow）→ 挂到 Release。每个 Release 两份资产：版本名 `xrn1997-dsh-novel-<版本>.tgz` 与稳定别名 `dsh-novel.tgz`；tag 带 `-` 的按 prerelease 处理（新建时直接标，已存在时补标），不抢 `latest`；Release 已存在时资产覆盖。`workflow_dispatch` 只干跑：跑门 + 打包 + 传 workflow artifact，不建 Release。**tag 排在 npm 之前**：GitHub 侧删了能重来，npm 同版本覆不回去——不可逆的一步放最后，CI 在同一提交上绿了才执行它。
+5. **`npm publish`**：`prepack` 会跑 `build`；`files` 是**精确清单**——构建每新多出一个要发布的产物，就要同时加进 `files`。
 6. **README 徽章与实测名单**：徽章读 npm `latest` 清单，工作树改了不会变——发版后现查 npm `latest`，别把某次读数写死；实测名单按当次真机代次更新。
 
 npm 与 GitHub Release 是两条渠道，靠同一个 tag 对齐；发版后核对两边都在位。
