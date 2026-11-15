@@ -27,6 +27,7 @@ import { envelopeOf, errorOf, startServer } from './helpers.js'
 const PARAM_SAMPLES: Record<ParamRouteName, string> = {
   sourceProbe: 'uuid-1', sourceEnabled: 'uuid-2', sourceAuth: 'uuid-3',
   sourceDelete: 'uuid-4', shelfPut: 'k-1', shelfDelete: 'k-2',
+  ttsEnginePut: 'uuid-5', ttsEngineDelete: 'uuid-6',
 }
 
 describe('matchRoute 单元', () => {
@@ -38,7 +39,7 @@ describe('matchRoute 单元', () => {
     }
   })
 
-  it('② 6 条参数路由各一实例 → param-hit 且 params 保真（id/key 原值，不解码）', () => {
+  it('② 8 条参数路由各一实例 → param-hit 且 params 保真（id/key 原值，不解码）', () => {
     const cases: Array<{ route: ParamRouteName; method: string; segs: string[]; params: string[] }> = [
       { route: 'sourceProbe', method: 'POST', segs: ['sources', 'uuid-1', 'probe'], params: ['uuid-1'] },
       { route: 'sourceEnabled', method: 'POST', segs: ['sources', 'uuid-2', 'enabled'], params: ['uuid-2'] },
@@ -46,6 +47,8 @@ describe('matchRoute 单元', () => {
       { route: 'sourceDelete', method: 'DELETE', segs: ['sources', 'uuid-4'], params: ['uuid-4'] },
       { route: 'shelfPut', method: 'PUT', segs: ['shelf', 'book%3Akey'], params: ['book%3Akey'] },
       { route: 'shelfDelete', method: 'DELETE', segs: ['shelf', 'other%2Fkey'], params: ['other%2Fkey'] },
+      { route: 'ttsEnginePut', method: 'PUT', segs: ['tts', 'engines', 'http%3Auuid-5'], params: ['http%3Auuid-5'] },
+      { route: 'ttsEngineDelete', method: 'DELETE', segs: ['tts', 'engines', 'http%3Auuid-6'], params: ['http%3Auuid-6'] },
     ]
     for (const c of cases) {
       const m = matchRoute(c.method, c.segs)
@@ -261,7 +264,7 @@ describe('负对照', () => {
     expect((await errorOf(d)).code).toBe('BadRequest')
   })
 
-  it('local part 缺席（from() 不传 local）→ 503 Unavailable（判据归门面动词）', async () => {
+  it('local / tts part 缺席（from() 不传对应部件）→ 503 Unavailable（判据归门面动词）', async () => {
     const dir = await makeTempDir('novel-routes-nolocal-')
     const jar = new CookieJar()
     const bare = trackService(await ReadingService.from({
@@ -273,15 +276,26 @@ describe('负对照', () => {
     }))
     const { base: b2, close: c2 } = await startServer(bare)
     try {
-      for (const [route, method] of [
-        [`${ROUTES.localImport.path}?name=a.txt`, 'POST'], [`${ROUTES.local.path}?id=x`, 'DELETE'],
-        [`${ROUTES.localDocument.path}?id=x&documentId=d0`, 'GET'],
-        [`${ROUTES.localResource.path}?id=x&resourceId=r0`, 'GET'],
-        [`${ROUTES.localWarnings.path}?id=x`, 'GET'],
+      for (const [route, method, body] of [
+        [`${ROUTES.localImport.path}?name=a.txt`, 'POST', undefined],
+        [`${ROUTES.local.path}?id=x`, 'DELETE', undefined],
+        [`${ROUTES.localDocument.path}?id=x&documentId=d0`, 'GET', undefined],
+        [`${ROUTES.localResource.path}?id=x&resourceId=r0`, 'GET', undefined],
+        [`${ROUTES.localWarnings.path}?id=x`, 'GET', undefined],
+        [ROUTES.ttsSources.path, 'GET', undefined],
+        [ROUTES.ttsEngines.path, 'GET', undefined],
+        [ROUTES.ttsSynthesize.path, 'POST', { engineId: 'builtin:baidu', text: 'x', rate: 1 }],
+        [ROUTES.ttsEnginesImport.path, 'POST', { url: 'https://e.example/list.json' }],
+        [`${ROUTES.ttsAudio.path}?key=${'0'.repeat(32)}`, 'GET', undefined],
+        [paramOps.ttsEnginePut.path('http:x'), 'PUT', { name: 'n', url: 'https://e/x' }],
+        [paramOps.ttsEngineDelete.path('http:x'), 'DELETE', undefined],
       ] as const) {
-        const r = await fetch(`${b2}${NOVEL_API_PREFIX}/${route}`, { method })
+        const r = await fetch(`${b2}${NOVEL_API_PREFIX}/${route}`, {
+          method,
+          ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+        })
         expect(r.status, route).toBe(503)
-        expect((await errorOf(r)).code).toBe('Unavailable')
+        expect((await errorOf(r)).code, route).toBe('Unavailable')
       }
     } finally {
       await c2()

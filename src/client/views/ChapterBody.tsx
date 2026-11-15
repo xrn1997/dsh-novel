@@ -1,7 +1,9 @@
 import type { CSSProperties, ReactNode } from 'react'
-import { Fragment, createElement, useState } from 'react'
+import { Fragment, createElement, useMemo, useState } from 'react'
+import { chapterContentLines, playUnitStarts, playUnitStartsByNode } from '../../shared/chapter-text.js'
 import { resourceUrl } from '../../shared/wire.js'
 import { useCopy } from '../copy/index.js'
+import { paragraphSlotOf } from '../tts/reading-position.js'
 import type { ChapterContent, ContentNode, ContentTag, LinkRole, ReadingTarget } from './types.js'
 
 /**
@@ -38,6 +40,11 @@ interface Ctx {
   documentId: string
   onNavigate: (target: ReadingTarget, role: LinkRole) => void
   inLink: boolean
+  /** 富文本块节点的起始段号（`playUnitStartsByNode` 从共享行清单挑行）；文字章不用这张表。 */
+  pids: ReadonlyMap<string, number>
+  /** 跟读高亮命中的**块身份**（null = 本章不在听 / 没命中）：不可朗读块与它后面第一块可能共享
+   *  起段号，按段号值比会一次点亮多块；命中判据与文字章共用「取最后一个 ≤ 段号的格」。 */
+  liveNode: string | null
 }
 
 /** `<button>` 允许直接容纳的白名单标签（短语级）。集合外的都是流级元素：XHTML 的 `<a>` 允许它们
@@ -107,24 +114,29 @@ function ElementNode({ node, ctx }: {
 }): ReactNode {
   // 只认自有键：原型链上的名字（'constructor' 这类）不是白名单标签，取到非元素名会打崩渲染
   const known: string | undefined = Object.hasOwn(TAG_OF, node.tag) ? TAG_OF[node.tag] : undefined
-  const children = node.children.map((child, i) => renderNode(child, i, ctx))
   if (known === undefined) {
     // 认不出的标签不发明元素：保留子内容（宁可少一层容器，不可多一个白名单外的标签）
-    return <Fragment>{children}</Fragment>
+    return <Fragment>{node.children.map((child, i) => renderNode(child, i, ctx))}</Fragment>
   }
   // 链接（`<button>`）里的块级子节点降级成 span——非法嵌套不是「浏览器会帮我们收拾」：
   // 它会重排 DOM，节点位置与 `data-novel-node` 的落点就不再由渲染决定。
   const downgrade = ctx.inLink && !PHRASING_TAGS.has(node.tag)
+  // 段号只给**起行**的块元素（判据在共享行清单里）；降级成 span 的块不再是块，不带段号
+  const paragraph = downgrade ? undefined : ctx.pids.get(node.id)
+  const live = paragraph !== undefined && ctx.liveNode !== null && node.id === ctx.liveNode
+  const children = node.children.map((child, i) => renderNode(child, i, ctx))
   const tag = downgrade ? 'span' : known
   const cell = !downgrade && (node.tag === 'td' || node.tag === 'th')
   const attrs: {
-    id: string; 'data-novel-node': string; className?: string
+    id: string; 'data-novel-node': string; className?: string; 'data-pidx'?: string
     rowSpan?: number; colSpan?: number; start?: number; value?: number
   } = {
     id: domNodeId(ctx, node.id),
     'data-novel-node': node.id,
   }
+  if (paragraph !== undefined) attrs['data-pidx'] = String(paragraph)
   if (downgrade) attrs.className = 'novel-ref-part'
+  else if (live) attrs.className = 'novel-tts-live'
   if (cell && node.rowSpan !== null) attrs.rowSpan = node.rowSpan
   if (cell && node.colSpan !== null) attrs.colSpan = node.colSpan
   if (!downgrade && node.tag === 'ol' && node.start !== null) attrs.start = node.start
@@ -174,21 +186,74 @@ function Figure({ node, ctx }: {
   )
 }
 
+const NO_PARAGRAPH_IDS: ReadonlyMap<string, number> = new Map()
+
 /**
  * 章节正文：`kind:'text'` 逐行成段（切分与现阅读器一字不差——换模型不换读感）；
  * `kind:'rich'` 走上面的白名单映射。两形态都由来源显式决定，不做猜测。
+ *
+ * 起行的正文块带 `data-pidx`（0 基段号，= 该块起始行之前的播放单元数）：阅读探针与「从本段听」
+ * 都按它把 DOM 几何换成听书位置。文字章逐行折算；图文章按 `shared/chapter-text` 的行清单折算——
+ * 两种形态的段号都与播放层 `splitParagraphs(chapterContentToText(content))` 同一口径。
+ * 选区与「从本段听」浮钮**不在本组件**：它们属于阅读器一份（`views/listen-from-selection.ts`），
+ * 本组件只往 DOM 上写段号与章身份，连续滚动下不再每章各挂一套 document 监听。
+ * `listenParagraph` 给定时（本书本章正在听）把命中的正文块标成跟读高亮：只标记、不滚动——
+ * 自动跟随滚动会经阅读会话的滚动防抖改写阅读进度，与播放层自己的落盘节拍互相覆盖（`ADR-0071`）。
  */
-export function ChapterBody({ content, bookKey, onNavigate }: {
+export function ChapterBody({ content, bookKey, onNavigate, paragraphBase = 0, listenParagraph = null }: {
   content: ChapterContent
   bookKey: string
   /** 内部跳转：目标 + 链接角色（normal | noteref | backlink）。去哪儿由上层决定 */
   onNavigate: (target: ReadingTarget, role: LinkRole) => void
+  /** 本章首行之前的播放单元数（被呈现层剥掉的重复章名）；只有文字章用得上。
+   *  不补这个偏移，播放层读的原样正文比屏上多出前缀，「从本段听」与探针起播会系统性早一段。 */
+  paragraphBase?: number
+  /** 正在念的播放单元号（null = 本章不在听）；高亮命中判据归 `paragraphSlotOf` */
+  listenParagraph?: number | null
 }): ReactNode {
-  const ctx: Ctx = { bookKey, documentId: content.kind === 'rich' ? content.documentId : '', onNavigate, inLink: false }
+  const lineOffsets = useMemo(
+    () => content.kind === 'text'
+      ? playUnitStarts(content.text.split('\n').map((text) => ({ text })))
+        .map((start) => start + paragraphBase)
+      : null,
+    [content, paragraphBase],
+  )
+  const richIds = useMemo(
+    () => content.kind === 'rich' ? playUnitStartsByNode(chapterContentLines(content)) : null,
+    [content],
+  )
+  /** 图文章的块序：`playUnitStartsByNode` 的条目按起段号排序（并列保持行清单里的先后）。
+   *  为什么要块序而不只留起段号：不可朗读块（分隔符 / 纯标点行）与它后面第一块同起段号，
+   *  高亮若按段号值比，一次点亮两块、画两枚三角（文字章逐行比的是格子下标，没有这个形态）。 */
+  const richBlocks = useMemo(() => {
+    if (richIds === null) return null
+    const blocks = [...richIds.entries()].sort(([, a], [, b]) => a - b)
+    return { starts: blocks.map(([, start]) => start), ids: blocks.map(([id]) => id) }
+  }, [richIds])
+  const liveLine = listenParagraph === null || lineOffsets === null
+    ? -1
+    : paragraphSlotOf(lineOffsets, listenParagraph)
+  const liveNode = listenParagraph === null || richBlocks === null
+    ? null
+    : richBlocks.ids[paragraphSlotOf(richBlocks.starts, listenParagraph)] ?? null
+
+  const ctx: Ctx = {
+    bookKey,
+    documentId: content.kind === 'rich' ? content.documentId : '',
+    onNavigate,
+    inLink: false,
+    pids: richIds ?? NO_PARAGRAPH_IDS,
+    liveNode,
+  }
   return (
     <div className="novel-body">
       {content.kind === 'text'
-        ? content.text.split('\n').map((para, i) => <p key={i}>{para}</p>)
+        ? content.text.split('\n').map((para, i) => (
+          <p key={i} data-pidx={lineOffsets?.[i] ?? paragraphBase + i}
+            className={i === liveLine ? 'novel-tts-live' : undefined}>
+            {para}
+          </p>
+        ))
         : content.nodes.map((node, i) => renderNode(node, i, ctx))}
     </div>
   )

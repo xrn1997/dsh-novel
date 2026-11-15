@@ -61,6 +61,11 @@ export interface VisibleNode { index: number; nodeId: string; offsetWithinNode: 
  *  只有「回到链接来源」会带上非零偏移（让返回落在同一个节点内的同一处，而不是节点顶）。 */
 export interface JumpTarget { index: number; anchorId: string | null; offsetWithinNode: number }
 
+/** 开书恢复目标：章号 + 章内比例。两个来源共用同一形状——存档 progress（默认）与「回阅读器」的
+ *  听书重定位（调用方在 `open` 第三参交进来）。后者**只走恢复**（站定不写），绝不走会提交阅读
+ *  进度的 `requestJump`/`settleJump`：一次定位不该被记成一次阅读。 */
+export interface ReaderRestoreTarget { chapterIndex: number; offsetRatio: number }
+
 /** DOM 测量口（`client/reader-geometry.ts` 实现；会话只读不碰 DOM） */
 export interface ReaderPort {
   measureAnchors(): ChapterAnchor[]
@@ -198,8 +203,10 @@ export class ReaderSession {
   get onShelf(): 'unknown' | 'on' | 'off' { return this.onShelfNow }
   subscribe = (cb: () => void): (() => void) => this.store.subscribe(cb)
 
-  /** 进入一本书：目录 → 存档恢复；无存档/书架拉不到 → 从头 */
-  async open(sourceId: string, bookKey: string): Promise<void> {
+  /** 进入一本书：目录 → 存档恢复；无存档/书架拉不到 → 从头。
+   *  `relocation` = 「回阅读器」的一次性听书重定位（可选）：有它就用它替代存档 progress 当恢复
+   *  目标——恢复路径（cause `restore`）只站定不写，不会把一次定位记成阅读动作。越界章夹回目录范围。 */
+  async open(sourceId: string, bookKey: string, relocation: ReaderRestoreTarget | null = null): Promise<void> {
     const gen = ++this.generation                       // 换书/重开：上一代的一切在途续作自此作废
     this.cancelPendingFrame()                           // 上一代的挂起视口帧同样作废
     this.lastVisibleBeforePrefs = null                  // 上一本的采点不带到这一本（旧快照只会量成 null 或误跳）
@@ -242,6 +249,17 @@ export class ReaderSession {
       let restoreIndex = 0
       let restoreRatio = 0
       let restore = false
+      // 「回阅读器」的听书重定位**优先于**存档 progress：两者都是开书恢复目标，区别只在来源。
+      // 它和存档恢复同一个出口（`commit('restore')` 站定不写），不另开跳章路径。章号夹回目录
+      // 范围（听会话较长、目录变短的旧现场不把阅读器推进空白）。
+      if (relocation !== null && toc.length > 0) {
+        const at = Number.isFinite(relocation.chapterIndex) ? Math.trunc(relocation.chapterIndex) : 0
+        restoreIndex = Math.min(Math.max(0, at), toc.length - 1)
+        restoreRatio = Number.isFinite(relocation.offsetRatio)
+          ? Math.min(1, Math.max(0, relocation.offsetRatio))
+          : 0
+        restore = true
+      }
       try {
         const shelf = await this.deps.fetchShelf()
         if (gen !== this.generation) return
@@ -254,7 +272,7 @@ export class ReaderSession {
           // 存档章越出目录（换源/目录变短/缓存重建）→ clamp 到最后一章，不许落成空白阅读器；
           // 负下标（手改过的落盘元数据）同样夹回第 0 章。**空目录没有可恢复的目标**：夹不到任何
           // 章时 `load` 会直接返回、双帧落位永不发生，而那正是下面 `restoring` 闸的前提。
-          if (hasProgress(mine.progress) && toc.length > 0) {
+          if (!restore && hasProgress(mine.progress) && toc.length > 0) {
             restoreIndex = Math.min(Math.max(0, mine.progress.chapterIndex), toc.length - 1)
             restoreRatio = mine.progress.offsetRatio
             restore = true

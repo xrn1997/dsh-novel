@@ -182,10 +182,10 @@ describe('工具 schema 契约（execute 输出 ≡ 声明 schema；schema ≡ w
 
     // ── dshnovel_shelf ≡ ShelfBook 投影（`shared/wire.ts` 的 ShelfBook；coverUrl/intro/totalChapters 刻意不投影——超集会被拒）──
     // 两层都钉住：投影表 ⊆ `SHELF_META`（写面孔径，表里改键名/加键这里跟着动）
-    // ＋ `投影表 ∪ 排除表 ≡ keyof ShelfBook`（编译期类型钉，见文件头 ②）
+    // ＋ `投影表 ∪ 排除表 ≡ keyof ShelfBook`（编译期类型钉，见文件头 ②；排除表还兜住 listen 这类系统状态）
     const shelfMeta = new Set(Object.keys(SHELF_META))
     const shelfItem = new Set<string>(Object.keys(SHELF_ITEM_FIELDS))
-    expect(shelfItem, '工具投影表必须与「SHELF_META 减去刻意不投影的三项」逐键相等')
+    expect(shelfItem, '工具投影表必须与「SHELF_META 减去刻意不投影的元数据项」逐键相等')
       .toEqual(new Set([...[...shelfMeta].filter((k) => !(SHELF_ITEM_EXCLUDED as readonly string[]).includes(k)), 'bookKey', 'progress', 'addedAt']))
     expect(propsOf(schemaOf(s, 'dshnovel_shelf'), 'books', '[]')).toEqual(shelfItem)
     expect(propsOf(schemaOf(s, 'dshnovel_shelf'), 'books', '[]', 'progress'))

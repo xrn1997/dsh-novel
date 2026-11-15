@@ -3,16 +3,19 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { chapterContentToText, splitParagraphs } from '../../src/shared/chapter-text.js'
+import { readingPositionAt } from '../../src/client/tts/reading-position.js'
 import { ChapterBody } from '../../src/client/views/ChapterBody.js'
+import { chapterBodyProjection } from '../../src/client/views/ReaderView.js'
 import type { ChapterContent, ContentNode, ContentTag, ReadingTarget } from '../../src/client/views/types.js'
-import { pick } from '../support/fixture.js'
+import { pick, must } from '../support/fixture.js'
 
 /**
  * 图文正文渲染器（ChapterBody）的结构钉子。
  *
  * jsdom 没有排版引擎：本文件能证明的只有**结构**（白名单映射、属性面、跳转载荷、失败占位在场）。
  * 「图片预留宽高比不收缩」「表格在栏内横向滚动」「图片不撑破栏宽」这三条尺寸行为只断言到
- * 「值/类在场」这一层，真实读数留 `DSH_EPUB_BROWSER` 那条浏览器门（`tests/browser/`）——不在这里谎报量过布局。
+ * 「值/类在场」这一层，真实读数留 `DSH_BROWSER_GATE` 那条浏览器门（`tests/browser/`）——不在这里谎报量过布局。
  */
 
 const bookKey = 'local:b1'
@@ -54,6 +57,47 @@ describe('文字面（kind:text）', () => {
     expect(container.querySelector('img')).toBeNull()
     expect(container.querySelector('script')).toBeNull()
     expect(container.textContent).toBe(raw)
+  })
+})
+
+describe('剥重复章名后的段号（ReaderView 投影 + ChapterBody 偏移）', () => {
+  // 章名在阅读器里由 h2 单独渲染，正文首行那句重复的章名在送渲染前就剥掉；但播放层念的是
+  // **原样正文**（含被剥的那一行），屏上段号必须补回它占掉的播放单元数，否则「从本段听」
+  // 与探针起播系统性早一段。投影住 `ReaderView` 的 `chapterBodyProjection`，偏移由
+  // `ChapterBody` 的 `paragraphBase` 逐行加上——两半在这里一次测到。
+  it('首行 = 章名 + 三段正文：段号从 1 起，被剥的 0 号单元不点亮，命中第二行', () => {
+    const body = chapterBodyProjection({ kind: 'text', text: '第一章\n正文一\n正文二\n正文三' }, '第一章')
+    expect(body.content).toEqual({ kind: 'text', text: '正文一\n正文二\n正文三' })
+    expect(body.paragraphBase, '章名那一行占掉 1 个播放单元').toBe(1)
+    const view = render(
+      <ChapterBody content={body.content} bookKey={bookKey} onNavigate={() => {}}
+        paragraphBase={body.paragraphBase} listenParagraph={0} />,
+    )
+    expect([...view.container.querySelectorAll('p')].map((p) => p.getAttribute('data-pidx')))
+      .toEqual(['1', '2', '3'])
+    // 0 号单元是只存在于播放层里的章名行：屏上没有对应块，高亮不许落在任何一行上
+    expect(view.container.querySelector('.novel-tts-live'), '0 号段没有可命中的块').toBeNull()
+    view.rerender(
+      <ChapterBody content={body.content} bookKey={bookKey} onNavigate={() => {}}
+        paragraphBase={body.paragraphBase} listenParagraph={1} />,
+    )
+    const live = view.container.querySelectorAll('.novel-tts-live')
+    expect(live).toHaveLength(1)
+    expect(live[0]?.textContent).toBe('正文一')
+  })
+
+  it('首行夹空行 + 章名：剥掉的行数含空行，基数按播放单元算（空行占 0 格）', () => {
+    const body = chapterBodyProjection({ kind: 'text', text: '\n第一章\n正文一\n正文二' }, '第一章')
+    // 被剥掉的是两行（空行 + 章名），但空行不产播放单元：基数只能是 1。按「剥掉几行」算成 2
+    // 就是这条用例要挡的病——屏上段号会整体后移，播放层念完章名后第一段永远没有高亮。
+    expect(body.content).toEqual({ kind: 'text', text: '正文一\n正文二' })
+    expect(body.paragraphBase).toBe(1)
+    const { container } = render(
+      <ChapterBody content={body.content} bookKey={bookKey} onNavigate={() => {}}
+        paragraphBase={body.paragraphBase} listenParagraph={1} />,
+    )
+    expect([...container.querySelectorAll('p')].map((p) => p.getAttribute('data-pidx'))).toEqual(['1', '2'])
+    expect(container.querySelector('.novel-tts-live')?.textContent).toBe('正文一')
   })
 })
 
@@ -160,13 +204,26 @@ describe('图文面（kind:rich）：白名单 React 映射', () => {
 })
 
 describe('元素属性面（明确赋值，不展开外部对象）', () => {
-  it('元素只带 id 与 data-novel-node 两个属性', () => {
+  it('元素只带明确列出的属性：id、锚点钩子与段号（起行的块有段号，行内元素没有）', () => {
     const { container } = render(
-      <ChapterBody content={doc([element('n1', 'p', [text('段')])])} bookKey={bookKey} onNavigate={() => {}} />,
+      <ChapterBody
+        content={doc([
+          element('n1', 'p', [text('段'), element('s1', 'strong', [text('粗')])]),
+          element('n2', 'h2', [text('标题')]),
+        ])}
+        bookKey={bookKey}
+        onNavigate={() => {}}
+      />,
     )
     const p = container.querySelector('p')
-    expect([...(p?.getAttributeNames() ?? [])].sort()).toEqual(['data-novel-node', 'id'])
+    expect([...(p?.getAttributeNames() ?? [])].sort()).toEqual(['data-novel-node', 'data-pidx', 'id'])
     expect(p?.getAttribute('data-novel-node')).toBe('n1')
+    expect(p?.getAttribute('data-pidx')).toBe('0')
+    // 标题也是起始一行的块：播放单元把它算在第 0 段，段号必须照同一份行清单给
+    const heading = container.querySelector('h2')
+    expect(heading?.getAttribute('data-pidx')).toBe('1')
+    // 行内元素不参与段号（它不起始新行）
+    expect(container.querySelector('strong')?.getAttribute('data-pidx')).toBeNull()
   })
 
   it('DOM id = 书身份 + 文档 ID + 节点 ID（宿主 DOM 的 id 命名空间不与裸锚点相撞）', () => {
@@ -185,6 +242,105 @@ describe('元素属性面（明确赋值，不展开外部对象）', () => {
       <ChapterBody content={doc([element('a1', 'p', [text('段')])])} bookKey={'https://s.com/b/1 x'} onNavigate={() => {}} />,
     )
     expect(container.querySelector('p')?.id ?? '').not.toMatch(/\s/)
+  })
+})
+
+describe('段号与播放单元同一口径（富文本行清单）', () => {
+  /** 典型 EPUB 章首：h1 标题 + 两段 + 列表。播放单元 = `splitParagraphs(chapterContentToText)`
+   *  逐行切，标题占第 0 段——`p` 的段号必须从 1 起，不能按 `p` 在正文树里的文档顺序从 0 数。 */
+  const richChapter = (): ChapterContent => doc([
+    element('h1', 'h1', [text('第一章 标题')]),
+    element('p1', 'p', [text('第一段。')]),
+    element('p2', 'p', [text('第二段。')]),
+    element('ul1', 'ul', [element('li1', 'li', [text('列表一。')]), element('li2', 'li', [text('列表二。')])]),
+  ])
+
+  const rect = (top: number, height: number): DOMRect => ({
+    top, bottom: top + height, height, left: 0, right: 0, width: 0, x: 0, y: top,
+    toJSON: () => ({}),
+  })
+
+  it('标题、段落与列表项各带自己的起行段号（标题 0、第一个 p 1）', () => {
+    const { container } = render(<ChapterBody content={richChapter()} bookKey={bookKey} onNavigate={() => {}} />)
+    const pid = (id: string): string | null =>
+      must(container.querySelector<HTMLElement>(`[data-novel-node="${id}"]`), id).getAttribute('data-pidx')
+    expect(pid('h1')).toBe('0')
+    expect(pid('p1')).toBe('1')
+    expect(pid('p2')).toBe('2')
+    expect(pid('li1')).toBe('3')
+    expect(pid('li2')).toBe('4')
+  })
+
+  it('探针几何返回的段号，正是播放层为这一段播放的单元序号', () => {
+    const content = richChapter()
+    const { container } = render(<ChapterBody content={content} bookKey={bookKey} onNavigate={() => {}} />)
+    const block = must(container.querySelector<HTMLElement>('.novel-body'), 'chapter block')
+    const first = must(container.querySelector<HTMLElement>('[data-novel-node="p1"]'), 'p1')
+    const second = must(container.querySelector<HTMLElement>('[data-novel-node="p2"]'), 'p2')
+    vi.spyOn(block, 'getBoundingClientRect').mockReturnValue(rect(-100, 2000))
+    // 探针按所有带段号的起行块量（不只 p）：标题与列表项也要有真几何，
+    // 否则 jsdom 的默认 0 会被当成「视口顶已越过」。
+    vi.spyOn(must(container.querySelector<HTMLElement>('[data-novel-node="h1"]'), 'h1'), 'getBoundingClientRect')
+      .mockReturnValue(rect(-120, 20))
+    vi.spyOn(first, 'getBoundingClientRect').mockReturnValue(rect(-40, 20))
+    vi.spyOn(second, 'getBoundingClientRect').mockReturnValue(rect(40, 20))
+    vi.spyOn(must(container.querySelector<HTMLElement>('[data-novel-node="li1"]'), 'li1'), 'getBoundingClientRect')
+      .mockReturnValue(rect(80, 20))
+    vi.spyOn(must(container.querySelector<HTMLElement>('[data-novel-node="li2"]'), 'li2'), 'getBoundingClientRect')
+      .mockReturnValue(rect(120, 20))
+
+    const at = readingPositionAt([block], 0)
+    expect(at).toEqual({ chapterIndex: 0, paragraphIndex: 1 })
+    // 播放层对同一章切的单元：1 号单元正是第一个 p 的原文（标题占了 0）
+    expect(splitParagraphs(chapterContentToText(content))[at?.paragraphIndex ?? -1]).toBe('第一段。')
+  })
+
+  it('探针也认非 p 的起行块：视口停在列表项上时落它的段号，不跳过列表', () => {
+    const content = richChapter()
+    const { container } = render(<ChapterBody content={content} bookKey={bookKey} onNavigate={() => {}} />)
+    const block = must(container.querySelector<HTMLElement>('.novel-body'), 'chapter block')
+    vi.spyOn(block, 'getBoundingClientRect').mockReturnValue(rect(-200, 3000))
+    const rectOf = (id: string): HTMLElement =>
+      must(container.querySelector<HTMLElement>(`[data-novel-node="${id}"]`), id)
+    vi.spyOn(rectOf('h1'), 'getBoundingClientRect').mockReturnValue(rect(-120, 20))
+    vi.spyOn(rectOf('p1'), 'getBoundingClientRect').mockReturnValue(rect(-100, 20))
+    vi.spyOn(rectOf('p2'), 'getBoundingClientRect').mockReturnValue(rect(-60, 20))
+    vi.spyOn(rectOf('li1'), 'getBoundingClientRect').mockReturnValue(rect(40, 20))
+    vi.spyOn(rectOf('li2'), 'getBoundingClientRect').mockReturnValue(rect(80, 20))
+
+    const at = readingPositionAt([block], 60)
+    expect(at).toEqual({ chapterIndex: 0, paragraphIndex: 3 })
+    expect(splitParagraphs(chapterContentToText(content))[at?.paragraphIndex ?? -1]).toBe('列表一。')
+  })
+
+  it('跟读标记落在命中的块上：换字色 + 段首三角同一元素，别处零残留', () => {
+    // 类在场是结构钉子；三角画没画、动不动布局归 styles 契约与浏览器几何门（ADR-0076）
+    const { container } = render(
+      <ChapterBody content={richChapter()} bookKey={bookKey} onNavigate={() => {}} listenParagraph={2} />,
+    )
+    const marked = container.querySelectorAll('.novel-tts-live')
+    expect(marked).toHaveLength(1)
+    expect(marked[0]?.getAttribute('data-novel-node'), '标记落在 2 号单元 p2 上').toBe('p2')
+  })
+
+  it('不可朗读块与其后第一块共享起段号：只点亮真正起念的那一块（一枚三角，不是两枚）', () => {
+    // 「* * *」是纯符号行（不送引擎），播放单元数不变，于是它与后面第一段同起段号 1。
+    // 高亮按段号**值**比会一次点亮两块、画两枚三角；命中判据必须与文字章一样按格序取一块。
+    const content = doc([
+      element('p1', 'p', [text('第一段。')]),
+      element('sep', 'p', [text('* * *')]),
+      element('p2', 'p', [text('第二段。')]),
+    ])
+    const { container } = render(
+      <ChapterBody content={content} bookKey={bookKey} onNavigate={() => {}} listenParagraph={1} />,
+    )
+    const pid = (id: string): string | null =>
+      must(container.querySelector<HTMLElement>(`[data-novel-node="${id}"]`), id).getAttribute('data-pidx')
+    expect(pid('sep'), '夹具前提：不可朗读块与下一块同起段号').toBe('1')
+    expect(pid('p2')).toBe('1')
+    const live = container.querySelectorAll('.novel-tts-live')
+    expect(live, '段号 1 只归第二段').toHaveLength(1)
+    expect(live[0]?.getAttribute('data-novel-node')).toBe('p2')
   })
 })
 

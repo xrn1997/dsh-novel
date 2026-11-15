@@ -3,7 +3,7 @@ import { ProxyAgent } from 'undici'
 import { encodingKnown } from './encoding.js'
 import { DecodeError, FetchError } from './errors.js'
 import { normalizeProxyUrl, parseProxyUrl, redactProxyUrl } from './proxy.js'
-import type { NovelSource } from './types.js'
+import type { NormalizedRules, SourceAuth } from './types.js'
 import { readValue, type ValueSource } from './value-source.js'
 import type { CookieJar } from './cookies.js'
 import type { SourceSession } from '../engine/index.js'
@@ -68,6 +68,9 @@ export interface FetchInit {
   /** 调用方的取消信号（工具/作业的协作式取消）。中止时**不**当超时归类：抛出 signal.reason，
    *  让上层把「用户取消」与「站点慢」分成两件事（宿主工具面据此判 ABORTED）。 */
   signal?: AbortSignal
+  /** 响应体上限（字节）：超过即取消流并抛 FetchError。缺省不设限（正文页大小由站点决定）；
+   *  订阅 / 清单这类「应当很小」的读口显式给上限，避免一个超大响应把进程内存吃满。 */
+  maxBytes?: number
 }
 
 export interface Fetcher {
@@ -119,6 +122,16 @@ export function splitUserAgent(headers: Record<string, string>): { headers: Reco
 }
 
 /**
+ * 出站头合并的输入面：只看「规则头 / 凭据头 / 凭据 cookie」这三样。
+ * 书源之外（朗读引擎 HttpTTS）也走同一条合并口径——它给不出整个 NovelSource，
+ * 但给得出这三格；参数收窄在这里，合并实现仍只有 headerOf 一份。
+ */
+export interface HeaderSource {
+  rules: Pick<NormalizedRules, 'header'>
+  auth?: SourceAuth
+}
+
+/**
  * 本源**实际发出去**的 User-Agent：源静态头 / auth 头覆盖 → 缺省 UA 打底。
  * **大小写不敏感**（HTTP 头名本就不敏感）：`user-agent` 与 `User-Agent` 是同一条头，
  * 只按原样查键会让声明了小写形态的源被误报成缺省 UA。
@@ -126,26 +139,33 @@ export function splitUserAgent(headers: Record<string, string>): { headers: Reco
  * 「浏览器默认 UA」的语义；见矩阵 `h-java-webview-ua`）。同步取值，不含 `@js:` 动态头——那是 fetch 时才算的，
  * 脚本要的通常是"给我一个能用的 UA"，不是"给我一个和下一个请求逐字节一致的头"。
  */
-export function effectiveUserAgent(source: Pick<NovelSource, 'rules' | 'auth'>): string {
+export function effectiveUserAgent(source: HeaderSource): string {
   const { userAgent } = splitUserAgent(headerOf(source))
   return userAgent ?? DEFAULT_HEADERS['User-Agent'] ?? ''
 }
 
 /**
- * 出站头合并单点：缺省头打底，调用方声明同名头时**按大小写不敏感的同一性覆盖**。
- * 裸 `{...DEFAULT_HEADERS, ...init}` 会让 `user-agent` 与缺省 `User-Agent` 并存，undici 把重名
- * 合成一条 `"默认, 源"` 的畸形头（钉子：`tests/services/fetcher.test.ts` 的「两键并存会合成畸形头」那组），
- * 源声明的 UA / Accept 就此失效——比覆盖更坏。同表内的重名（如 auth 声明的 `cookie`）同样归并。
+ * 同名头按**大小写不敏感**的同一性覆盖：`over` 的每个键落位前先摘掉 `base` 里的同义键。
+ * 裸 `{...base, ...over}` 会让 `user-agent` 与缺省 `User-Agent` 并存，undici 把重名
+ * 合成一条 `"默认, 源"` 的畸形头——比覆盖更坏。本函数是这条判据的唯一实现
+ * （缺省头合并与朗读引擎「静态头打底、计划头覆盖」两处共用）。
  */
-function mergeHeaders(init?: Record<string, string>): Record<string, string> {
-  // 逐条重排而不是删键：同义键（大小写不同）连键名一起摘掉，源声明的拼写随后落位——
-  // 与「表内重名归并成一条」同一条判据，只是不在原地做删除
-  let entries: Array<[string, string]> = Object.entries(DEFAULT_HEADERS)
-  for (const [k, v] of Object.entries(init ?? {})) {
+export function overlayHeaders(
+  base: Record<string, string>, over: Record<string, string>,
+): Record<string, string> {
+  // 逐条重排而不是删键：同义键（大小写不同）连键名一起摘掉，后者的拼写随后落位
+  let entries: Array<[string, string]> = Object.entries(base)
+  for (const [k, v] of Object.entries(over)) {
     const same = k.toLowerCase()
     entries = [...entries.filter(([key]) => key.toLowerCase() !== same), [k, v]]
   }
   return Object.fromEntries(entries)
+}
+
+/** 缺省头打底 + 调用方同名头覆盖（覆盖判据住 overlayHeaders 一份）。
+ * 钉子：`tests/services/fetcher.test.ts` 的「两键并存会合成畸形头」那组。 */
+function mergeHeaders(init?: Record<string, string>): Record<string, string> {
+  return overlayHeaders(DEFAULT_HEADERS, init ?? {})
 }
 
 /**
@@ -250,7 +270,7 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
           const finalUrl = res.url || url
           api.cookieJar?.absorb(finalUrl, setCookie)
           return {
-            raw: Buffer.from(await res.arrayBuffer()),
+            raw: await readBodyLimited(res, finalUrl, init?.maxBytes),
             finalUrl,
             contentType,
             charset,
@@ -287,6 +307,34 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
     },
   }
   return api
+}
+
+/** 有上限地读响应体：声明了 content-length 且超限就先取消流；没有声明则边读边计，
+ *  越限即取消并抛 FetchError（响应体所有权归本函数，调用方只拿 Buffer）。
+ *  超限是**本地判据**、不是上游回答的失败：错误不带 status——带上就会落进「拿到响应但状态码
+ *  不成功」那条重试判据，同一份超大响应被重打一遍（重试只该作用在 HTTP 非 2xx 上）。 */
+async function readBodyLimited(res: Response, url: string, maxBytes: number | undefined): Promise<Buffer> {
+  if (maxBytes === undefined) return Buffer.from(await res.arrayBuffer())
+  const declared = res.headers.get('content-length')
+  if (declared !== null && Number(declared) > maxBytes) {
+    await res.body?.cancel().catch(() => undefined)
+    throw new FetchError(`响应超过大小上限 ${maxBytes} 字节: ${url}`, { url })
+  }
+  if (res.body === null) return Buffer.alloc(0)
+  const reader = res.body.getReader()
+  const chunks: Buffer[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined)
+      throw new FetchError(`响应超过大小上限 ${maxBytes} 字节: ${url}`, { url })
+    }
+    chunks.push(Buffer.from(value))
+  }
+  return Buffer.concat(chunks)
 }
 
 /**
@@ -351,7 +399,7 @@ function stripBom(buf: Buffer): Buffer {
  * 出站请求头合并：源静态 rules.header 打底 → 非 expired 的 auth.headers 覆盖同名
  * → Cookie 段合并（静态 Cookie 按段收集去重，auth.cookies 名占优、在后）。
  */
-export function headerOf(source: Pick<NovelSource, 'rules' | 'auth'>): Record<string, string> {
+export function headerOf(source: HeaderSource): Record<string, string> {
   const out: Record<string, string> = { ...source.rules.header }
   const auth = source.auth !== undefined && !source.auth.expired ? source.auth : undefined
   if (auth?.headers !== undefined) {

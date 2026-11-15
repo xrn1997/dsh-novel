@@ -6,12 +6,15 @@ import { plural, useCopy } from '../copy/index.js'
 import { prodShelfDeps } from '../deps.js'
 import type { ShelfDeps } from '../deps.js'
 import { loadPanelShelf, panelShelf, removePanelShelfBooks, setPanelShelfFilter, setPanelShelfKeyword } from '../panel-shelf.js'
-import { navigate, useStore } from '../store.js'
+import { navigate, useStore, useStoreValue } from '../store.js'
+import { ttsPlayer } from '../tts/player.js'
 import type { LocalImportResponse, ShelfEntry } from './types.js'
 import { coverFallbackChar, EmptyState, ProgressBar, SearchIcon, WarningList } from './bits.js'
 import { Dialog } from './dialog.js'
 import { deleteBookCopy, deleteBooksCopy } from '../shelf-delete.js'
-import { filterShelfBooks, localImportLabel, localImportNote, SHELF_FILTERS, shelfCardMeta, shelfSourceTag } from '../shelf-view-model.js'
+import {
+  filterShelfBooks, localImportLabel, localImportNote, SHELF_FILTERS, shelfCardMeta, shelfSourceTag,
+} from '../shelf-view-model.js'
 import { coverTintClass, sourceTintClass } from '../util.js'
 
 /** 本地书保留源 id 归 wire 契约（`LOCAL_SOURCE_ID`）：不要手抄 '__local__'——
@@ -43,6 +46,8 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
   // 书架读取面、筛选/关键字与落架账都住面板期投影（`panel-shelf`）：切 tab / 进阅读器再回来，
   // 筛选与已落架的账不被卸载洗掉；真相仍在服务端，挂载时重取。
   const { books, error: loadError, keyword, filter } = useStore(panelShelf)
+  /** 「正在听」只投影播放层的一格原语：整店订阅会让每段推进（段号、当前句）都把整张网格重渲染。 */
+  const playingBookKey = useStoreValue(ttsPlayer, (s) => (s.playing ? s.bookKey : null))
   const [imgFailed, setImgFailed] = useState<Record<string, boolean>>({})
   // 本地书导入（TXT / EPUB 按内容分流，服务端说了算）：隐藏 file input + 上传后直进阅读器
   const [importError, setImportError] = useState<string | null>(null)
@@ -307,6 +312,10 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
                   const failed = imgFailed[b.bookKey] === true
                   const meta = shelfCardMeta(b, t)
                   const srcTag = shelfSourceTag(b, t)
+                  // 书架只有一条消费位置（progress）：听书落盘会同步写回它，卡片不另摆一条听书进度；
+                  // 「正在听」只标播放层**此刻在放**的那一本（书名旁的品牌色徽标）——暂停即不再
+                  // 声称「正在听」（会话仍在，迷你条还在，只是这一格的状态字不撒谎）。
+                  const nowPlaying = playingBookKey === b.bookKey
                   const picked = selected.includes(b.bookKey)
                   return (
                     <div key={b.bookKey} className={`novel-cell${selectMode ? ' sel' : ''}${picked ? ' on' : ''}`}>
@@ -342,7 +351,10 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
                             </span>
                           )}
                         </span>
-                        <span className="novel-card-title">{b.title}</span>
+                        <span className="novel-card-head">
+                          <span className="novel-card-title">{b.title}</span>
+                          {nowPlaying ? <span className="novel-card-now">{t('tts.shelf.nowPlaying')}</span> : null}
+                        </span>
                         <span className="novel-card-meta">{meta.text}</span>
                         {meta.pct === null ? null : <ProgressBar pct={meta.pct} />}
                       </button>

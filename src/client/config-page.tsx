@@ -1,8 +1,9 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import type { VolatileConfigFieldName } from '../config.js'
 import {
   CopyProvider,
+  plural,
   useCopy,
   zhTranslate,
   type CopyKey,
@@ -10,6 +11,10 @@ import {
 } from './copy/index.js'
 import { GROUPS } from './config-groups.js'
 import { NovelStyles } from './styles.js'
+import { pushError } from './transient.js'
+import { EngineManager } from './tts/EngineManager.js'
+import { setTtsDefaults } from './tts/player.js'
+import type { TtsDefaults } from './tts/player.js'
 
 /**
  * 插件页的「运行参数」表单：宿主 `plugins.bundle.config` 槽按包名找占用者，值走宿主设置面
@@ -20,8 +25,8 @@ import { NovelStyles } from './styles.js'
  * 自己持有草稿、脏标记与保存态，写协议仍归宿主。
  *
  * 本页只拥有：字段清单（哪个字段、叫什么、单位与人话换算）与呈现。**值域归 schema**：
- * 本地只判「是不是非负整数」这类类型错；上下界、代理形状由宿主在写入时裁决，拒绝即原样显示
- * 宿主给的失败原因，草稿保留。
+ * 本地只判「是不是合法数字」这类类型错（整数位非负整数、小数位非负小数）；上下界、代理形状由
+ * 宿主在写入时裁决，拒绝即原样显示宿主给的失败原因，草稿保留。
  *
  * 职责边界：宿主壳（标题、可用/只读、保存中/失败）由本页自绘；`dataDir` 等非活值不进表单
  * （改它等价于重启，见 `ADR-0035`）。宿主没有设置面（`remote.settings` 缺席）时不注册这一页，
@@ -31,23 +36,23 @@ import { NovelStyles } from './styles.js'
 /** 与宿主设置面同一条 wire 语义的窄镜像（`ADR-0020`）：只声明本页用到的成员。 */
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
-interface SettingsNamespaceView {
+export interface SettingsNamespaceView {
   ns: string
   value: JsonValue
   user?: JsonValue
   revision: number
 }
 
-interface SettingsDescribeValue {
+export interface SettingsDescribeValue {
   writable: boolean
   namespaces: SettingsNamespaceView[]
 }
 
-type SettingsPathOp =
+export type SettingsPathOp =
   | { op: 'set'; path: string[]; value: JsonValue }
   | { op: 'unset'; path: string[] }
 
-type RemoteResult<T> = { ok: true; value: T } | { ok: false; error: { message: string; code?: string } }
+export type RemoteResult<T> = { ok: true; value: T } | { ok: false; error: { message: string; code?: string } }
 
 interface RemoteSettingsLike {
   describe(): Promise<RemoteResult<SettingsDescribeValue>>
@@ -66,15 +71,44 @@ interface SlotsLike {
 /** 两个标识分属两条宿主契约，别合并：
  *  · `ENTRY_ID` 是 Loader 行 id（`cordis.patch.yml` 的 `id`），也是设置面命名空间的键；
  *  · `BUNDLE_NAME` 是 npm 包名，`plugins.bundle.config` 槽按它把表单挂到 bundle 详情页。 */
-const ENTRY_ID = 'dsh-novel'
+export const ENTRY_ID = 'dsh-novel'
 const BUNDLE_NAME = '@xrn1997/dsh-novel'
+
+/** 听书缺省在设置面里的名字表：值由配置缝的类型逼出来——`ttsDefaultEngine` 之类改名时这里编译不过，
+ *  而不是让接入层静默读出一格 undefined（读不出就退回 wire 缺省，等于用户的设置被悄悄丢掉）。 */
+const TTS_DEFAULT_KEYS = {
+  engineId: 'ttsDefaultEngine',
+  rate: 'ttsDefaultRate',
+  volume: 'ttsDefaultVolume',
+  prefetchParagraphs: 'ttsPrefetchParagraphs',
+} as const satisfies Record<keyof TtsDefaults, VolatileConfigFieldName>
+
+/**
+ * 设置面交回的**有效值**（用户覆盖叠加 schema 缺省）→ 播放层的回退链输入。
+ * 只认类型对的那几格：缺席、null、空白引擎 id、非有限数都不写进结果，由播放层保持 wire 的
+ * `TTS_DEFAULTS`——猜一个值等于把「读不出」冒充成「读到了」。
+ */
+export function ttsDefaultsFromSettings(value: Record<string, unknown>): Partial<TtsDefaults> {
+  const out: Partial<TtsDefaults> = {}
+  const engine = value[TTS_DEFAULT_KEYS.engineId]
+  if (typeof engine === 'string' && engine.trim() !== '') out.engineId = engine
+  const rate = value[TTS_DEFAULT_KEYS.rate]
+  if (typeof rate === 'number' && Number.isFinite(rate)) out.rate = rate
+  const volume = value[TTS_DEFAULT_KEYS.volume]
+  if (typeof volume === 'number' && Number.isFinite(volume)) out.volume = volume
+  const prefetch = value[TTS_DEFAULT_KEYS.prefetchParagraphs]
+  if (typeof prefetch === 'number' && Number.isInteger(prefetch) && prefetch >= 0) {
+    out.prefetchParagraphs = prefetch
+  }
+  return out
+}
 
 /** 可编辑字段的名字表由配置缝给（type-only import，运行时擦除、不过纯度门）：这里只写读者要看的
  *  文案键与单位，名字与值域不归本文件管——`FIELDS` 是 `Record<FieldName, …>`，少一行就编译不过。 */
 type FieldName = VolatileConfigFieldName
 
-/** 换算口径决定这一行长什么样，故与字段清单同处一表。 */
-type Kind = 'ms' | 'bytes' | 'count' | 'text'
+/** 换算口径决定这一行长什么样，故与字段清单同处一表。`number` = 非负小数位（语速 / 音量）。 */
+type Kind = 'ms' | 'bytes' | 'count' | 'number' | 'text'
 
 interface FieldSpec {
   name: FieldName
@@ -138,13 +172,47 @@ const FIELDS: Record<FieldName, FieldSpec> = {
     placeholderKey: 'config.field.proxyUrl.placeholder',
     invalidKey: 'config.field.proxyUrl.invalid',
   },
+  ttsDefaultEngine: {
+    name: 'ttsDefaultEngine', labelKey: 'config.field.ttsDefaultEngine.label', kind: 'text',
+    meaningKey: 'config.field.ttsDefaultEngine.meaning',
+    invalidKey: 'config.field.ttsDefaultEngine.invalid',
+  },
+  ttsDefaultRate: {
+    name: 'ttsDefaultRate', labelKey: 'config.field.ttsDefaultRate.label', kind: 'number',
+    meaningKey: 'config.field.ttsDefaultRate.meaning',
+    presets: [{ label: '0.8', value: 0.8 }, { label: '1.0', value: 1 }, { label: '1.2', value: 1.2 },
+      { label: '1.5', value: 1.5 }, { label: '2.0', value: 2 }],
+    invalidKey: 'config.invalid.number',
+  },
+  ttsDefaultVolume: {
+    name: 'ttsDefaultVolume', labelKey: 'config.field.ttsDefaultVolume.label', kind: 'number',
+    meaningKey: 'config.field.ttsDefaultVolume.meaning',
+    presets: [{ label: '0.6', value: 0.6 }, { label: '0.8', value: 0.8 }, { label: '1.0', value: 1 }],
+    invalidKey: 'config.invalid.number',
+  },
+  ttsCacheMaxBytes: {
+    name: 'ttsCacheMaxBytes', labelKey: 'config.field.ttsCacheMaxBytes.label', kind: 'bytes',
+    unitKey: 'config.unit.bytes', unitOneKey: 'config.unit.bytes.one',
+    meaningKey: 'config.field.ttsCacheMaxBytes.meaning',
+    presets: [{ label: '64 MB', value: 64 * MB }, { label: '128 MB', value: 128 * MB },
+      { label: '256 MB', value: 256 * MB }, { label: '512 MB', value: 512 * MB }],
+    invalidKey: 'config.invalid.number',
+  },
+  ttsPrefetchParagraphs: {
+    name: 'ttsPrefetchParagraphs', labelKey: 'config.field.ttsPrefetchParagraphs.label', kind: 'count',
+    unitKey: 'config.unit.paragraphs', unitOneKey: 'config.unit.paragraphs.one',
+    meaningKey: 'config.field.ttsPrefetchParagraphs.meaning',
+    invalidKey: 'config.invalid.number',
+  },
 }
 
-/** 字段状态：当前文本、是否与宿主存的值不同、是否类型非法。 */
+/** 字段状态：当前文本、是否与宿主存的值不同（草稿脏）、是否被用户层覆盖、是否类型非法。 */
 interface FieldState {
   text: string
   overridden: boolean
   invalid: boolean
+  /** 有未保存的草稿（与「已覆盖」不同：那是盘上的状态，这是这一屏的草稿）。 */
+  dirty: boolean
 }
 
 /** 一位小数足够分辨档位，多一位就是假精度；整数不带小数点（200 MB 不写成 200.0 MB）。 */
@@ -179,6 +247,7 @@ function readbackOf(spec: FieldSpec, text: string, t: Translate): string | null 
   if (spec.kind === 'text' || spec.kind === 'count') return null
   const parsed = parseField(spec, text)
   if (!parsed.ok || parsed.op.op !== 'set' || typeof parsed.op.value !== 'number') return null
+  if (spec.kind === 'number') return scale(parsed.op.value)
   return spec.kind === 'bytes' ? humanBytes(parsed.op.value) : humanMs(parsed.op.value, t)
 }
 
@@ -198,9 +267,10 @@ type Parsed =
   | { ok: false }
 
 /**
- * 文本框 → 写入操作。**只判类型错**（数字位必须是非负整数；文本位首尾空白归一，内部空白拒绝），
- * 值域由宿主在 `mutate` 时按 schema 裁决——本页不抄 schema 的上下界与代理正则，拒绝时原样显示
- * 宿主的理由。文本位清空 = `unset`（回出厂值），而不是写一个空串盖掉用户层。
+ * 文本框 → 写入操作。**只判类型错**（整数位必须是非负安全整数；小数位必须是非负有限小数；
+ * 文本位首尾空白归一，内部空白拒绝），值域由宿主在 `mutate` 时按 schema 裁决——本页不抄
+ * schema 的上下界与代理正则，拒绝时原样显示宿主的理由。文本位清空 = `unset`（回出厂值），
+ * 而不是写一个空串盖掉用户层；数字位与其他数值位一致，空框按类型错止住保存。
  */
 function parseField(spec: FieldSpec, text: string): Parsed {
   const trimmed = text.trim()
@@ -210,84 +280,143 @@ function parseField(spec: FieldSpec, text: string): Parsed {
     if (/\s/.test(trimmed)) return { ok: false }
     return { ok: true, op: { op: 'set', path: [spec.name], value: trimmed } }
   }
+  if (spec.kind === 'number') {
+    // 只认十进制小数：`1e3` / `.5` / `1.` / 负数都不算这一页的数字。有限性由语法保证，
+    // 再判一次是防未来把语法放宽时静默放进 NaN/Infinity。
+    if (!/^\d+(?:\.\d+)?$/.test(trimmed)) return { ok: false }
+    const n = Number.parseFloat(trimmed)
+    if (!Number.isFinite(n) || n < 0) return { ok: false }
+    return { ok: true, op: { op: 'set', path: [spec.name], value: n } }
+  }
   if (!/^\d+$/.test(trimmed)) return { ok: false }
   const n = Number(trimmed)
   if (!Number.isSafeInteger(n)) return { ok: false }
   return { ok: true, op: { op: 'set', path: [spec.name], value: n } }
 }
 
-function ConfigRow({ spec, field, disabled, onEdit, onReset }: {
+/**
+ * 一个字段：`标签 | 输入框（值 + 框内后缀）`，说明与「恢复默认」按需展开。
+ *
+ * 框内后缀三态：单位（灰，`字节`）、人话回读（蓝，`≈ 15 秒`）、预设下拉（回读值 + 箭头）。
+ * 预设**不铺一排 chip**：chip 占一整行高度、预设一多就换行，而这一页要的是密度；收进框内下拉后
+ * 一行只有 30px，且「当前生效值」与「可选档位」是同一个入口。值仍是原始数（字节 / 倍），
+ * 下拉只负责填值。
+ */
+function ConfigRow({ spec, field, disabled, span = false, onEdit, onReset }: {
   spec: FieldSpec
   field: FieldState
   disabled: boolean
+  /** 这一行独占两列（该分组可见字段是奇数时，最后一个用它补位，不留半格空位）。 */
+  span?: boolean
   onEdit: (text: string) => void
   onReset: () => void
 }) {
-  // 每行跟着当前语言换文案：取词在行内，随父级重渲。
   const t = useCopy()
+  const [open, setOpen] = useState(false)
+  const rowRef = useRef<HTMLDivElement | null>(null)
   const id = `novel-config-${spec.name}`
   const read = readbackOf(spec, field.text, t)
   const numeric = spec.kind !== 'text'
   const current = numeric && field.text.trim() !== '' ? Number(field.text) : NaN
   const unitKey = current === 1 && spec.unitOneKey !== undefined ? spec.unitOneKey : spec.unitKey
+  const presets = spec.presets
+  // 浮层要有统一的出口：点别处 / Esc 都收起来，而不是只能再点一次按钮。
+  useEffect(() => {
+    if (!open) return
+    const onDown = (event: MouseEvent): void => {
+      if (rowRef.current !== null && !rowRef.current.contains(event.target as Node)) setOpen(false)
+    }
+    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
   return (
-    <div className="novel-cfg-row">
-      <div>
-        <span className="novel-cfg-head">
-          <label htmlFor={id}>{t(spec.labelKey)}</label>
-          {field.overridden ? (
-            <>
-              <span className="novel-cfg-tag">{t('config.overridden')}</span>
-              <button type="button" className="novel-cfg-reset" onClick={onReset} disabled={disabled}>
-                {t('config.reset')}
-              </button>
-            </>
-          ) : null}
+    <div className={span ? "novel-cfg-row span2" : "novel-cfg-row"} data-novel-cfg-row={spec.name} ref={rowRef}>
+      <div className="novel-cfg-label">
+        <label className="novel-cfg-label-text" htmlFor={id}>{t(spec.labelKey)}</label>
+        {/* 说明挂在问号上：悬浮 / 聚焦才浮出来。挂在行下方会撑开行高，把整页往下推一节。 */}
+        <span className="novel-cfg-tipwrap">
+          <button type="button" className="novel-cfg-q" aria-label={t('config.help')}
+            aria-describedby={`${id}-meaning`}>?</button>
+          <span className="novel-cfg-bubble" role="tooltip" id={`${id}-meaning`}>{t(spec.meaningKey)}</span>
         </span>
-        <p className="novel-cfg-meaning" id={`${id}-meaning`}>{t(spec.meaningKey)}</p>
-      </div>
-      <div className="novel-cfg-side">
-        <span className="novel-cfg-box">
-          {/* 数值位**不用** type=number：浏览器会把认不出的输入静默清成空串，用户看不到自己
-              敲错了什么。「认不认得出」归本页的 parseField；值域（min / step）仍由 schema 在
-              保存时把关——本页不重判。文本框 + inputMode 让草稿原样可见。 */}
-          <input
-            id={id}
-            className="novel-input novel-cfg-input"
-            type="text"
-            inputMode={numeric ? 'numeric' : undefined}
-            value={field.text}
-            placeholder={spec.placeholderKey === undefined ? undefined : t(spec.placeholderKey)}
-            disabled={disabled}
-            aria-invalid={field.invalid ? 'true' : undefined}
-            // 单位与报错都是这一格的含义：读屏用户听不到框内的后缀，也不该只靠 aria-invalid 猜原因。
-            aria-describedby={[`${id}-meaning`, unitKey === undefined ? null : `${id}-unit`, field.invalid ? `${id}-err` : null]
-              .filter(Boolean).join(' ')}
-            onChange={(event) => onEdit(event.target.value)}
-          />
-          {unitKey === undefined
-            ? null
-            : <span className="novel-cfg-unit" id={`${id}-unit`} data-novel-cfg-unit={spec.name}>{t(unitKey)}</span>}
-        </span>
-        {read ? <span className="novel-cfg-read" data-novel-cfg-read={spec.name}>{read}</span> : null}
-        {spec.presets ? (
-          <span className="novel-chips">
-            {spec.presets.map((preset) => (
-              <button
-                key={preset.label}
-                type="button"
-                className={`novel-chip novel-cfg-preset${current === preset.value ? ' on' : ''}`}
-                aria-pressed={current === preset.value}
-                disabled={disabled}
-                onClick={() => onEdit(String(preset.value))}
-              >
-                {preset.label}
-              </button>
-            ))}
-          </span>
+        {field.overridden ? (
+          <span className="novel-cfg-od" role="img" data-novel-cfg-overridden={spec.name}
+            title={t('config.overridden')} aria-label={t('config.overridden')} />
         ) : null}
-        {field.invalid ? <p className="novel-cfg-err" id={`${id}-err`}>{t(spec.invalidKey)}</p> : null}
+        {field.dirty ? <span className="novel-cfg-dot" role="img" title={t('config.dirty')} aria-label={t('config.dirty')} /> : null}
+        {field.overridden ? (
+          <button type="button" className="novel-cfg-reset" onClick={onReset} disabled={disabled}
+            title={t('config.reset')} aria-label={t('config.reset')}>↺</button>
+        ) : null}
       </div>
+      <div className="novel-cfg-field">
+        {/* 数值位**不用** type=number：浏览器会把认不出的输入静默清成空串，用户看不到自己
+            敲错了什么。「认不认得出」归本页的 parseField；值域（min / step）仍由 schema 在
+            保存时把关——本页不重判。文本框 + inputMode 让草稿原样可见。 */}
+        <input
+          id={id}
+          className="novel-cfg-input"
+          type="text"
+          // 小数位用 decimal：numeric 键盘在移动端不给小数点，0.8 这类值会没法敲。
+          inputMode={numeric ? (spec.kind === 'number' ? 'decimal' : 'numeric') : undefined}
+          value={field.text}
+          placeholder={spec.placeholderKey === undefined ? undefined : t(spec.placeholderKey)}
+          disabled={disabled}
+          aria-invalid={field.invalid ? 'true' : undefined}
+          // 单位、回读与报错都是这一格的含义：读屏用户看不到框内后缀，也不该只靠 aria-invalid 猜原因。
+          aria-describedby={[`${id}-meaning`, unitKey === undefined ? null : `${id}-unit`, field.invalid ? `${id}-err` : null]
+            .filter(Boolean).join(' ')}
+          onChange={(event) => onEdit(event.target.value)}
+        />
+        {unitKey === undefined
+          ? null
+          : <span className="novel-cfg-unit" id={`${id}-unit`} data-novel-cfg-unit={spec.name}>{t(unitKey)}</span>}
+        {presets === undefined ? (
+          read === null ? null : (
+            <span className="novel-cfg-hint">
+              <span aria-hidden="true">≈ </span>
+              <span className="novel-cfg-read" data-novel-cfg-read={spec.name}>{read}</span>
+            </span>
+          )
+        ) : (
+          <>
+            <button
+              type="button" className="novel-cfg-preset" disabled={disabled}
+              aria-haspopup="menu" aria-expanded={open}
+              aria-label={t('config.preset.aria', { value: read ?? t('config.preset.label') })}
+              onClick={() => { setOpen((value) => !value) }}
+            >
+              <span className="novel-cfg-read" data-novel-cfg-read={read === null ? undefined : spec.name}>
+                {read ?? t('config.preset.label')}
+              </span>
+              <span className="novel-cfg-caret" aria-hidden="true">▾</span>
+            </button>
+            {open ? (
+              <div className="novel-cfg-menu novel-cfg-menu-preset" role="menu">
+                {presets.map((preset) => (
+                  <button
+                    key={preset.label} type="button" role="menuitem"
+                    className={`novel-cfg-menu-item${current === preset.value ? ' on' : ''}`}
+                    onClick={() => { onEdit(String(preset.value)); setOpen(false) }}
+                  >
+                    <span>{preset.label}</span>
+                    {current === preset.value ? <span className="novel-cfg-check" aria-hidden="true">✓</span> : null}
+                  </button>
+                ))}
+                <div className="novel-cfg-menu-note">
+                  {t('config.preset.custom')}<span>{t('config.preset.customHint')}</span>
+                </div>
+              </div>
+            ) : null}
+          </>
+        )}
+      </div>
+      {field.invalid ? <p className="novel-cfg-err" id={`${id}-err`}>{t(spec.invalidKey)}</p> : null}
     </div>
   )
 }
@@ -367,6 +496,32 @@ function NovelConfigCardBody({ remote }: { remote: RemoteSettingsLike }): ReactN
     }
     return () => { cancelled = true }
   }, [remote])
+
+  /** 读到的有效值（用户层叠加 schema 缺省）同步推进播放层的回退链。宿主设置面没有变更订阅：
+   *  只靠接入时那一发，配置页改完的听书缺省要等面板重载才生效；这里让保存 / 恢复默认后的
+   *  读回也走同一份映射，下一次起播与预取当场用上新值。 */
+  useEffect(() => {
+    if (page.status !== 'ready') return
+    setTtsDefaults(ttsDefaultsFromSettings(page.value))
+  }, [page])
+
+  // 脏草稿跟着这一屏走：宿主把这一页卸载掉（切走插件详情页）时，未保存的修改没有任何出口，
+  // 静默丢掉等于让用户以为改了。卸载那一发进全局瞬态层（本仓唯一的错误出口），并且只报
+  // 「丢了几项」——文案不让这一页再造第二个错误家。脏数每帧记进 ref，卸载时才读得到最新值。
+  const dirtyCountRef = useRef(0)
+  const copyRef = useRef(t)
+  useEffect(() => { copyRef.current = t }, [t])
+  useEffect(() => {
+    if (page.status !== 'ready') { dirtyCountRef.current = 0; return }
+    const stored = page.value
+    dirtyCountRef.current = Object.keys(drafts).filter(
+      (name) => drafts[name as FieldName] !== textOf(stored[name]),
+    ).length
+  })
+  useEffect(() => () => {
+    const lost = dirtyCountRef.current
+    if (lost > 0) pushError(copyRef.current('config.droppedOnLeave', { n: lost }))
+  }, [])
 
   if (page.status === 'loading') {
     return (
@@ -477,6 +632,7 @@ function NovelConfigCardBody({ remote }: { remote: RemoteSettingsLike }): ReactN
     text: textOfField(name),
     overridden: overriddenOf(name),
     invalid: invalidOf(name),
+    dirty: dirtyOf(name),
   }])) as Record<FieldName, FieldState>
   return (
     <NovelConfigPageView
@@ -491,6 +647,7 @@ function NovelConfigCardBody({ remote }: { remote: RemoteSettingsLike }): ReactN
       onReset={(name) => { void resetField(name) }}
       onSave={() => { void save() }}
       onDiscard={discard}
+      engineManager={<EngineManager writable={page.writable} />}
     />
   )
 }
@@ -507,13 +664,155 @@ export interface ConfigPageViewProps {
   onReset: (name: FieldName) => void
   onSave: () => void
   onDiscard: () => void
+  /** 听书组的对象数据管理区（引擎清单）。静态渲染（几何门）不传：那一层不取数。 */
+  engineManager?: ReactNode
 }
 
-/** 纯呈现层（导出以便几何门静态渲染）：状态与动作都由调用方给，不碰宿主服务。 */
+/** 纯呈现层（导出以便几何门静态渲染）：状态与动作都由调用方给，不碰宿主服务。
+ *
+ * 版式：一张卡、一条列表。工具条（筛选 + 分区下拉 + 仅看已改 + 改动计数）常驻顶部，保存条
+ * **sticky 贴卡片底边**——一个保存钮不再意味着「必须滚回列表底部」。字段两列配对，每行只有一条
+ * 30px 的框（值 + 框内单位/回读/预设下拉），说明在聚焦、已覆盖或非法时展开。
+ *
+ * 筛选与分区是同一个面的两个入口：分区分组粗筛，搜索词按名称/说明细筛；搜索框打字后它的下拉
+ * 变成**命中的配置项**（带所属分区与当前值），回车直接跳到并聚焦那一行——配置项继续增长时，
+ * 这是唯一还找得到东西的方式。
+ */
 export function NovelConfigPageView({
   t, writable, fields, dirty, invalid, saving, failure, onEdit, onReset, onSave, onDiscard,
+  engineManager,
 }: ConfigPageViewProps): ReactNode {
   const disabled = !writable || saving
+  const [query, setQuery] = useState('')
+  const [section, setSection] = useState<'all' | CopyKey>('all')
+  const [onlyChanged, setOnlyChanged] = useState(false)
+  const [secOpen, setSecOpen] = useState(false)
+  const [resultsOpen, setResultsOpen] = useState(false)
+  const [activeResult, setActiveResult] = useState(0)
+  const [collapsed, setCollapsed] = useState<ReadonlySet<CopyKey>>(() => new Set())
+  const [managerOpen, setManagerOpen] = useState(false)
+  const filterRef = useRef<HTMLInputElement | null>(null)
+  const filterBoxRef = useRef<HTMLDivElement | null>(null)
+  const cardRef = useRef<HTMLDivElement | null>(null)
+  const resultsId = useId()
+  const names = Object.keys(FIELDS) as FieldName[]
+  const q = query.trim().toLowerCase()
+  const labelOf = (name: FieldName): string => t(FIELDS[name].labelKey)
+  const groupOf = (name: FieldName): (typeof GROUPS)[number] | undefined =>
+    GROUPS.find((candidate) => candidate.names.includes(name))
+  const sectionLabelOf = (name: FieldName): string => {
+    const group = groupOf(name)
+    return group === undefined ? '' : t(group.titleKey)
+  }
+  // 匹配面三处：显示名、说明，以及字段键本身（`ttsDefaultRate` 这类）——占位符承诺「名称」，
+  // 而使用者手里最容易拿到的恰恰是键名（配置表 / 日志 / 文档里写的都是它）。
+  const matchOf = (name: FieldName): boolean => q === ''
+    || name.toLowerCase().includes(q)
+    || labelOf(name).toLowerCase().includes(q)
+    || t(FIELDS[name].meaningKey).toLowerCase().includes(q)
+  const visibleOf = (name: FieldName): boolean =>
+    (section === 'all' || groupOf(name)?.titleKey === section)
+    && matchOf(name)
+    && (!onlyChanged || fields[name].dirty)
+  const results = q === '' ? [] : names.filter(visibleOf)
+  /** 键盘高亮那一项（越界时回落到第一项）：combobox 的 aria-activedescendant 指向它。 */
+  const activeName = results[activeResult] ?? results[0]
+  const activeResultId = activeName === undefined ? undefined : `${resultsId}-opt-${results.indexOf(activeName)}`
+  const changed = names.filter((name) => fields[name].dirty).length
+  const anyVisible = names.some(visibleOf)
+
+  const jumpTo = (name: FieldName): void => {
+    // 跳过去之前先松开会藏住它的筛选（只看已改 / 分区）：目标已经在结果里，说明它过搜索这一关。
+    setOnlyChanged(false)
+    setSection('all')
+    setResultsOpen(false)
+    const target = document.getElementById(`novel-config-${name}`)
+    if (target === null) return
+    target.scrollIntoView({ block: 'center' })
+    target.focus({ preventScroll: true })
+  }
+
+  // 筛选区的两枚浮层要有统一的出口：点别处收起来（Esc 走下面那条全局监听）。
+  useEffect(() => {
+    if (!secOpen && !resultsOpen) return
+    const onDown = (event: MouseEvent): void => {
+      if (filterBoxRef.current !== null && !filterBoxRef.current.contains(event.target as Node)) {
+        setSecOpen(false)
+        setResultsOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => { document.removeEventListener('mousedown', onDown) }
+  }, [secOpen, resultsOpen])
+
+  // 快捷键：⌘/Ctrl+K 聚焦筛选、⌘/Ctrl+S 保存、Esc 收浮层（输入法打开时 Esc 归输入法）。
+  //  · K 是宿主也会用的全局命令（命令面板一类）：焦点不在本卡时一律不接管，否则等于替宿主
+  //    改写同名键的语义。落在卡内任何位置（含筛选框自己）才把焦点交回筛选框。
+  //  · S 先 preventDefault 再判条件：只在真保存时拦，浏览器「另存网页」就会在只读 / 非法 /
+  //    无改动这三档里弹出来——那也是用户没要的意外。
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      const meta = event.metaKey || event.ctrlKey
+      const active = document.activeElement
+      const inCard = cardRef.current !== null && active instanceof HTMLElement
+        && cardRef.current.contains(active)
+      if (meta && event.key.toLowerCase() === 'k') {
+        if (!inCard) return
+        event.preventDefault()
+        filterRef.current?.focus()
+        return
+      }
+      if (meta && event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        if (disabled || !dirty || invalid) return
+        onSave()
+        return
+      }
+      if (event.key === 'Escape') {
+        setSecOpen(false)
+        setResultsOpen(false)
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('keydown', onKey) }
+  }, [disabled, dirty, invalid, onSave])
+
+  const onFilterKey = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === 'ArrowDown' && results.length > 0) {
+      event.preventDefault()
+      setResultsOpen(true)
+      setActiveResult((index) => Math.min(index + 1, results.length - 1))
+      return
+    }
+    if (event.key === 'ArrowUp' && results.length > 0) {
+      event.preventDefault()
+      setResultsOpen(true)
+      setActiveResult((index) => Math.max(index - 1, 0))
+      return
+    }
+    if (event.key === 'Enter') {
+      const target = results[activeResult] ?? results[0]
+      if (target !== undefined) {
+        event.preventDefault()
+        jumpTo(target)
+      }
+      return
+    }
+    if (event.key === 'Escape') {
+      setResultsOpen(false)
+      setSecOpen(false)
+    }
+  }
+
+  const toggleGroup = (key: CopyKey): void => {
+    setCollapsed((current) => {
+      const next = new Set(current)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
   return (
     <CopyProvider value={t}>
       <section data-novel-scope className="novel-cfg">
@@ -524,34 +823,160 @@ export function NovelConfigPageView({
           <p>{t('config.subtitle')}</p>
         </div>
         {writable ? null : <p className="novel-cfg-note">{t('config.readOnly')}</p>}
-        <div className="novel-cfg-groups">
-          {GROUPS.map((group) => (
-            <section key={group.titleKey} className="novel-cfg-group">
-              <h4>{t(group.titleKey)}</h4>
-              {group.names.map((name) => (
-                <ConfigRow
-                  key={name}
-                  spec={FIELDS[name]}
-                  field={fields[name]}
-                  disabled={disabled}
-                  onEdit={(text) => onEdit(name, text)}
-                  onReset={() => onReset(name)}
-                />
-              ))}
-            </section>
-          ))}
-        </div>
-        <p className="novel-cfg-foot">
-          {t('config.footer.before')}<code>dataDir</code>{t('config.footer.between')}<code>cordis.patch.yml</code>{t('config.footer.after')}
-        </p>
-        {failure === null ? null : <p className="novel-cfg-note" role="alert">{t('config.saveFailed')}<span className="novel-cfg-mono">{failure}</span></p>}
-        <div className="novel-cfg-bar">
-          <button type="button" className="novel-btn primary" disabled={disabled || !dirty || invalid} onClick={onSave}>
-            {saving ? t('config.saving') : t('config.save')}
-          </button>
-          <button type="button" className="novel-btn" disabled={disabled || !dirty} onClick={onDiscard}>
-            {t('config.discard')}
-          </button>
+        <div className="novel-cfg-card" ref={cardRef}>
+          <div className="novel-cfg-toolbar">
+            <div className="novel-cfg-filter" ref={filterBoxRef}>
+              <span className="novel-cfg-search" aria-hidden="true">⌕</span>
+              <input
+                ref={filterRef}
+                className="novel-cfg-searchinput"
+                value={query}
+                placeholder={t('config.filter.placeholder')}
+                // 标准 combobox 三件套：输入框是组合框本体，弹出层是 listbox，
+                // 键盘高亮靠 aria-activedescendant 而不是把 DOM 焦点搬进选项。
+                role="combobox"
+                aria-expanded={resultsOpen && q !== ''}
+                aria-controls={resultsId}
+                aria-autocomplete="list"
+                {...(resultsOpen && q !== '' && activeResultId !== undefined
+                  ? { 'aria-activedescendant': activeResultId }
+                  : {})}
+                aria-label={t('config.filter.placeholder')}
+                onChange={(event) => {
+                  setQuery(event.target.value)
+                  setResultsOpen(true)
+                  setSecOpen(false)
+                  setActiveResult(0)
+                }}
+                onFocus={() => { setResultsOpen(query.trim() !== '') }}
+                onKeyDown={onFilterKey}
+              />
+              {query === '' ? <kbd className="novel-cfg-kbd">{t('config.filter.shortcut')}</kbd> : (
+                <button type="button" className="novel-cfg-clear" aria-label={t('config.filter.clear')}
+                  onClick={() => { setQuery(''); setResultsOpen(false) }}>×</button>
+              )}
+              <button
+                type="button" className="novel-cfg-section" disabled={disabled}
+                aria-haspopup="menu" aria-expanded={secOpen} aria-label={t('config.filter.sections')}
+                onClick={() => { setSecOpen((value) => !value); setResultsOpen(false) }}
+              >
+                {section === 'all' ? t('config.filter.all') : t(section)}
+                <span className="novel-cfg-caret" aria-hidden="true">▾</span>
+              </button>
+              {secOpen ? (
+                <div className="novel-cfg-menu novel-cfg-menu-section" role="menu">
+                  {[{ key: 'all' as const, label: t('config.filter.all'), count: names.length },
+                    ...GROUPS.map((group) => ({ key: group.titleKey, label: t(group.titleKey), count: group.names.length }))]
+                    .map((item) => (
+                      <button
+                        key={item.key} type="button" role="menuitem"
+                        className={`novel-cfg-menu-item${section === item.key ? ' on' : ''}`}
+                        onClick={() => { setSection(item.key); setSecOpen(false) }}
+                      >
+                        <span>{item.label}</span>
+                        <span className="novel-cfg-menu-count">{item.count}</span>
+                      </button>
+                    ))}
+                </div>
+              ) : null}
+              {resultsOpen && q !== '' ? (
+                <div className="novel-cfg-menu novel-cfg-menu-results" role="listbox" id={resultsId}
+                  aria-label={t('config.filter.placeholder')}>
+                  {results.length === 0
+                    ? <div className="novel-cfg-menu-note">{t('config.filter.noMatch')}</div>
+                    : results.map((name, index) => (
+                      <button
+                        key={name} type="button" role="option" aria-selected={index === activeResult}
+                        id={`${resultsId}-opt-${index}`}
+                        className={`novel-cfg-menu-item${index === activeResult ? ' on' : ''}`}
+                        onMouseDown={(event) => { event.preventDefault() }}
+                        onClick={() => { jumpTo(name) }}
+                      >
+                        <span className="novel-cfg-menu-label">{labelOf(name)}</span>
+                        <span className="novel-cfg-menu-count">{sectionLabelOf(name)}</span>
+                        <span className="novel-cfg-menu-value">{fields[name].text}</span>
+                      </button>
+                    ))}
+                  <div className="novel-cfg-menu-note">
+                    {t('config.filter.jump')}
+                    <span>{plural(t, results.length, 'config.filter.hits.one', 'config.filter.hits.other')}</span>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            <button type="button" className={`novel-cfg-only${onlyChanged ? ' on' : ''}`}
+              aria-pressed={onlyChanged} onClick={() => { setOnlyChanged((value) => !value) }}>
+              {t('config.filter.onlyChanged')}
+            </button>
+            <span className={`novel-cfg-changed${changed > 0 ? ' on' : ''}`}>
+              {changed > 0
+                ? plural(t, changed, 'config.filter.changed.one', 'config.filter.changed.other')
+                : t('config.filter.noChanges')}
+            </span>
+          </div>
+          <div className="novel-cfg-list">
+            {GROUPS.map((group) => {
+              const shown = group.names.filter(visibleOf)
+              if (shown.length === 0) return null
+              // 筛选期间一律展开：收起的组里藏着命中的行，等于把搜索结果又藏起来。
+              const isCollapsed = q === '' && !onlyChanged && collapsed.has(group.titleKey)
+              return (
+                <section key={group.titleKey} className="novel-cfg-group" data-novel-cfg-group={group.titleKey}>
+                  <button type="button" className="novel-cfg-grouphead" aria-expanded={!isCollapsed}
+                    onClick={() => { toggleGroup(group.titleKey) }}>
+                    <span className="novel-cfg-chev" aria-hidden="true">{isCollapsed ? '▸' : '▾'}</span>
+                    <span className="novel-cfg-groupname">{t(group.titleKey)}</span>
+                  </button>
+                  {isCollapsed ? null : (
+                    <div className="novel-cfg-cols">
+                      {shown.map((name, index) => (
+                        <ConfigRow
+                          key={name}
+                          spec={FIELDS[name]}
+                          field={fields[name]}
+                          disabled={disabled}
+                          onEdit={(text) => onEdit(name, text)}
+                          onReset={() => onReset(name)}
+                          span={shown.length % 2 === 1 && index === shown.length - 1}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {/* 听书段多一块对象数据管理区：默认收成一行，展开才取数（引擎清单是网络读面）。 */}
+                  {group.wide === true && !isCollapsed && engineManager !== undefined ? (
+                    <div className="novel-cfg-manager">
+                      <button type="button" className="novel-cfg-grouphead novel-cfg-managerhead"
+                        aria-expanded={managerOpen} onClick={() => { setManagerOpen((value) => !value) }}>
+                        <span className="novel-cfg-chev" aria-hidden="true">{managerOpen ? '▾' : '▸'}</span>
+                        <span className="novel-cfg-groupname">{t('config.engines')}</span>
+                      </button>
+                      {managerOpen ? engineManager : null}
+                    </div>
+                  ) : null}
+                </section>
+              )
+            })}
+            {anyVisible ? null : <p className="novel-cfg-note novel-cfg-empty">{t('config.filter.noMatch')}</p>}
+          </div>
+          <p className="novel-cfg-foot">
+            {t('config.footer.before')}<code>dataDir</code>{t('config.footer.between')}<code>cordis.patch.yml</code>{t('config.footer.after')}
+          </p>
+          {failure === null ? null : <p className="novel-cfg-note" role="alert">{t('config.saveFailed')}<span className="novel-cfg-mono">{failure}</span></p>}
+          <div className="novel-cfg-savebar">
+            <span className={`novel-cfg-savedirty${changed > 0 ? ' on' : ''}`}>
+              {changed > 0
+                ? plural(t, changed, 'config.filter.changed.one', 'config.filter.changed.other')
+                : t('config.filter.noChanges')}
+            </span>
+            <span className="novel-cfg-grow" />
+            <kbd className="novel-cfg-kbd">{t('config.shortcut.save')}</kbd>
+            <button type="button" className="novel-btn primary" disabled={disabled || !dirty || invalid} onClick={onSave}>
+              {saving ? t('config.saving') : t('config.save')}
+            </button>
+            <button type="button" className="novel-btn" disabled={disabled || !dirty} onClick={onDiscard}>
+              {t('config.discard')}
+            </button>
+          </div>
         </div>
       </section>
     </CopyProvider>

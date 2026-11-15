@@ -252,7 +252,7 @@ describe('布局单位与视口约束（阅读器不能被正文高度绑架）'
 describe('焦点与指针无关可达（键盘/触屏与指针同等可达）', () => {
   it('交互件各有 :focus-visible 规则', () => {
     const focusRules = [...NOVEL_CSS.matchAll(/[^{}]*:focus-visible[^{]*\{[^}]*\}/g)].map((m) => m[0]).join('\n')
-    for (const sel of ['.novel-card', '.novel-chip', '.novel-drawer-item', '.novel-input', '.novel-rdr-ctl', '.novel-seg button', '.novel-tabs button', '.novel-menu button', '.novel-switch']) {
+    for (const sel of ['.novel-card', '.novel-chip', '.novel-drawer-item', '.novel-input', '.novel-rdr-ctl', '.novel-seg button', '.novel-tabs button', '.novel-menu button', '.novel-switch', '.novel-tts-ictl', '.novel-tts-chip', '.novel-tts-ringplay']) {
       expect(focusRules, `缺 ${sel} 的焦点环`).toContain(sel)
     }
   })
@@ -293,6 +293,22 @@ describe('呈现层的单点（两处抄同一串东西必漂移）', () => {
       expect(viewSource(view), `${view} 里又出现一份告警清单的 JSX——改一条口径必漏另一处`).not.toContain('novel-warn-list')
     }
     expect(viewSource('bits.tsx')).toContain('novel-warn-list')
+  })
+
+  /** 浮窗展开态的「贴边形态」由贴边读数发落，不由呈现方向发落（ADR-0073 放开自由落位后的分工）：
+   *  `.novel-tts-mini-panel` 的缺省必须是完整的一块（四条边都有描边），收边框只许发生在
+   *  `[data-flush='left'|'right']` 之下。规则一旦挂回 `[data-side=…]`，块悬在屏内时就会在一条
+   *  悬空的边上留敞口——几何门量的是缺省贴右落位，量不到这一眼可见的破口。 */
+  it('浮窗贴边形态挂在 data-flush 上，展开态缺省是完整的一块', () => {
+    const panel = ruleBody('.novel-tts-mini-panel')
+    expect(panel, '缺省就得有完整描边（贴边形态另由 data-flush 收）').toMatch(/border:\s*1px solid/)
+    expect(panel.replace(/\s/g, ''), '缺省态不许预先收掉某一条边').not.toMatch(/border-(left|right):0/)
+    for (const side of ['left', 'right'] as const) {
+      const docked = ruleBody(`.novel-tts-mini-dock[data-flush='${side}'] .novel-tts-mini-panel`)
+      expect(docked, `贴${side}缘该收掉靠屏幕那一条边框`).toMatch(new RegExp(`border-${side}:\\s*0`))
+    }
+    expect(strip(NOVEL_CSS), '贴边形态不再由 data-side 代答：side 只管设置弹层往哪边开')
+      .not.toMatch(/\.novel-tts-mini-dock\[data-side='[a-z]+'\]\s+\.novel-tts-mini-panel/)
   })
 })
 

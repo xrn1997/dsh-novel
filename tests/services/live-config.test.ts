@@ -26,6 +26,30 @@ describe('ReadingService 活配置', () => {
     svc.dispose()
     await svc.flush()
   })
+
+  it('ttsCacheMaxBytes 是活值：写入按当前上限淘汰最旧的，翻大后新条目留存', async () => {
+    const dir = await makeTempDir('novel-live-')
+    // 一段音频 = 6 字节 + 26 字节侧车 = 32 字节：40 的上限装得下一条、装不下两条
+    const ttsCacheMaxBytes = ref(40)
+    const svc = trackService(await ReadingService.create({
+      dir,
+      config: resolveConfig({ ttsCacheMaxBytes }),
+      fetchImpl: (async () => new Response(new Uint8Array([0x52, 0x49, 0x46, 0x46, 0x00, 0x01]),
+        { headers: { 'content-type': 'audio/mpeg' } })),
+    }))
+    const first = await svc.ttsSynthesize({ engineId: 'builtin:baidu', text: '第一段', rate: 1 })
+    const second = await svc.ttsSynthesize({ engineId: 'builtin:baidu', text: '第二段', rate: 1 })
+    // 超上限时先淘汰最旧的那条；刚写入、回执已经发出去的那条本轮不动（`ADR-0068`）
+    expect(await svc.ttsOpenAudio(first.key), '旧段被当前上限淘汰').toBeNull()
+    const kept = must(await svc.ttsOpenAudio(second.key), '刚写入段的读口')
+    kept.stream.destroy()
+    flip(ttsCacheMaxBytes, 1024 * 1024)
+    const third = await svc.ttsSynthesize({ engineId: 'builtin:baidu', text: '第三段', rate: 1 })
+    const hit = must(await svc.ttsOpenAudio(third.key), '翻大上限后的第三段缓存')
+    hit.stream.destroy()
+    svc.dispose()
+    await svc.flush()
+  })
 })
 
 /** 活 ref 的写口（Loader 侧就是按这个 symbol 写回当前值） */

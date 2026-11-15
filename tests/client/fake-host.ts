@@ -100,7 +100,7 @@ export function fakeHost(options: { remoteSettings?: FakeRemoteSettings } = {}):
  * 不重演 schema 校验——值域由宿主裁决，页面只负责显示它给的理由。
  */
 export function fakeRemoteSettings(options: FakeRemoteSettingsOptions = {}): FakeRemoteSettings {
-  // 宿主交回的 `value` 是**解析后的值**（schema 缺省 → 宿主基准 → 用户层）：七个字段都有值，
+  // 宿主交回的 `value` 是**解析后的值**（schema 缺省 → 宿主基准 → 用户层）：每个字段都有值，
   // 否则页面会按「空框」判非法。替身照这条语义给一份出厂值，测试只覆盖它关心的字段。
   const factoryDefaults: Record<string, unknown> = {
     searchTimeoutMs: 15000,
@@ -110,6 +110,11 @@ export function fakeRemoteSettings(options: FakeRemoteSettingsOptions = {}): Fak
     cacheMaxBytes: 209715200,
     localImportMaxBytes: 52428800,
     proxyUrl: '',
+    ttsDefaultEngine: 'builtin:baidu',
+    ttsDefaultRate: 1,
+    ttsDefaultVolume: 0.8,
+    ttsCacheMaxBytes: 134217728,
+    ttsPrefetchParagraphs: 10,
   }
   const defaults: Record<string, unknown> = { ...factoryDefaults, ...(options.defaults ?? {}) }
   const value: Record<string, unknown> = { ...defaults, ...(options.value ?? {}) }

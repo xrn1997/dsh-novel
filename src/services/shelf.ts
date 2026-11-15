@@ -1,6 +1,6 @@
 import path from 'node:path'
 import type { ShelfBook } from './types.js'
-import { SHELF_META, type ShelfMetaField, type ShelfMetaPatch } from '../shared/wire.js'
+import { SHELF_META, type ListenState, type ShelfMetaField, type ShelfMetaPatch } from '../shared/wire.js'
 import { createDebouncedWriter, readJson } from './storage.js'
 
 /** 加书入参（书架只存元数据 + 进度，正文/目录归缓存）：`bookKey`（地址）认架位、源与书名是必填元数据，
@@ -109,6 +109,18 @@ export class Shelf {
     if (!book) return
     this.edit(() => {
       book.progress = { chapterIndex, offsetRatio, updatedAt: Date.now() }
+    })
+  }
+
+  /** 存听书位置并防抖落盘；不在架 → null（不静默造书）。
+   *  与 `updateProgress` 同一份 edit + 防抖写机制，但**不碰 `book.progress`**：本动词只写听书
+   *  细节轨；共用的消费位置由播放层在同一节拍里经 `updateProgress` 另写一笔。 */
+  updateListen(bookKey: string, p: ListenState): ShelfBook | null {
+    const book = this.get(bookKey)
+    if (book === undefined) return null
+    return this.edit(() => {
+      book.listen = { ...p }
+      return book
     })
   }
 

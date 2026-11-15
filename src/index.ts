@@ -8,6 +8,7 @@ import { log, setLogSink } from './services/log.js'
 import { readSystemProxy, redactProxyUrl, resolveProxyUrl } from './services/proxy.js'
 import { ReadingService } from './services/reading.js'
 import { novelDir } from './services/storage.js'
+import { normalizeSpeechSynthesis } from './services/tts-cordis.js'
 import { NOVEL_API_PREFIX } from './shared/wire.js'
 import { registerTools } from './tools/tools.js'
 
@@ -211,6 +212,16 @@ export function apply(ctx: Context, config?: NovelConfig): void {
       // 任务生命周期交宿主注册表（身份 `<kind>-<短 id>` 由注册表生成 / running→终态 / 取消入口）；
       // 本插件的 JobState 仍是计数与明细的唯一载体，单任务槽互斥也不变。
       jobHost: c.jobs,
+      // 听书面的 cordis 服务读数：`ctx.get` **每次用到时重查**（社区服务是可选依赖，可能中途
+      // 卸装——缺席即源清单除名、未缓存段按 TTS_ENGINE_MISSING 失败）。适配器把社区契约翻成
+      // 插件归一形状，其类型只经 type-only import 进（运行时零依赖）。合成服务与引擎注册表由
+      // create 用同一个 fetcher 装配（proxyUrl / UA / cookie jar 缝只此一条），这里只递外部读数。
+      tts: {
+        speechSynthesis: () => {
+          const service = ctx.get('speechSynthesis')
+          return service ? normalizeSpeechSynthesis(service) : undefined
+        },
+      },
     })
     return { service }
   })().catch((e: unknown) => {

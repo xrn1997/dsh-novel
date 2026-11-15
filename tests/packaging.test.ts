@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import path from 'node:path'
 import * as semver from 'semver'
 import { NOVEL_GLYPH_PATH, NOVEL_GLYPH_VIEWBOX } from '../src/client/novel-glyph.js'
+import { must } from './support/fixture.js'
 
 /**
  * `package.json` / locale 文件的读数面：`JSON.parse` 交出来的是 unknown，这里按路径逐段取。
@@ -121,9 +123,14 @@ describe('包形态声明', () => {
     // devDep 编译于比声称兼容的宿主更老的类型面 = 假绿
     expect(cmpVer(verTuple(dev), newest)).toBeGreaterThanOrEqual(0)
   })
-  it('files 含 lib 与 cordis.patch.yml', () => {
-    expect(stringsAt(pkg, 'files')).toContain('lib')
-    expect(stringsAt(pkg, 'files')).toContain('cordis.patch.yml')
+  it('files 含挂载产物与包级文档', () => {
+    const files = stringsAt(pkg, 'files')
+    expect(files).toContain('lib')
+    expect(files).toContain('cordis.patch.yml')
+    // 用户入口与许可随包发：删掉它们不会有别的门变红（README 不在包内不影响本仓测试），
+    // 但装好的包里没有 README / LICENSE 就是发布事故。判据只钉「在清单里」，不钉内容。
+    expect(files).toContain('README.md')
+    expect(files).toContain('LICENSE')
   })
   it('展示元信息：icon 与 locale meta 随包导出（宿主未激活也读，缺失即落包名与默认插画）', () => {
     expect(at(pkg, 'icon')).toBe('./icon.svg')
@@ -141,6 +148,54 @@ describe('包形态声明', () => {
       expect(textAt(meta, 'title').trim().length).toBeGreaterThan(0)
       expect(typeof meta.description).toBe('string')
       expect(textAt(meta, 'description').trim().length).toBeGreaterThan(0)
+    }
+  })
+  // 宿主插件详情页渲染的长介绍是各语言 locale `meta.detail` 点名的短文档；不声明就回退整篇 README
+  // （太长，而且 README 的截图不在包内，详情页只剩破图）。声明了却形状不对 / 文件缺失 / 没进包，
+  // 宿主按 invalid 报错且**不回退 README**——所以每个语言钉四条：声明在场、形状合规、文件在场、
+  // 进发布清单，外加文档里每张本地插图也进发布清单。
+  it('详情页短文档：每语言 meta.detail 点名、随包发布、插图也在清单里', () => {
+    const files = stringsAt(pkg, 'files')
+    for (const lang of ['zh', 'en']) {
+      const detail = textAt(recordAt(jsonOf(`locale/${lang}.json`), 'meta'), 'detail')
+      // 包根相对、`/` 分隔、不带盘符与空白；宿主还挡掉 `.` / `..` 段
+      expect(detail, `${lang} 的 meta.detail 不是包根相对、/ 分隔的 .md 路径`)
+        .toMatch(/^[^/\s:\\]+(?:\/[^/\s:\\]+)*\.md$/)
+      expect(detail.split('/').every((seg) => seg !== '.' && seg !== '..'),
+        `${lang} 的 meta.detail 含 . 或 .. 段`).toBe(true)
+      // 宿主的插件文档规范只认住在子目录里的详情文档：根级文档的邻居图片不会随包发布。
+      // 宿主那条发布校验只扫它自己的 packages/，所以这条判据由本门自持。
+      expect(detail.split('/').length, `${lang} 的详情文档必须住在子目录`).toBeGreaterThan(1)
+      expect(existsSync(detail), `${lang} 的 meta.detail 指向不存在的文件`).toBe(true)
+      expect(files, `${lang} 的详情文档不进发布清单，装好的包读不到`).toContain(detail)
+
+      const markdown = readFileSync(detail, 'utf8')
+      // 短文档只有插图行：散文的家是 README，这里抄一份就是第二份事实源（分层表见 docs/AGENTS.md）
+      expect(markdown.trim(), `${lang} 的详情文档只许写插图行，散文住 README`)
+        .toMatch(/^(?:!\[[^\]]*\]\([^)\s]+\)\s*)+$/)
+      const images = [...markdown.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)]
+        .map((match) => must(match[1], '插图目标'))
+      expect(images.length, `${lang} 的详情文档没有插图，详情页就只剩一段文字`).toBeGreaterThan(0)
+      for (const image of images) {
+        expect(image, `${lang} 的详情文档引了远程图片`).not.toMatch(/^(?:https?:|data:)/)
+        const path = `${detail.slice(0, detail.lastIndexOf('/') + 1)}${image}`
+        expect(files, `${lang} 的插图 ${path} 不进发布清单，详情页就是一张破图`).toContain(path)
+        expect(existsSync(path), `${lang} 的插图 ${path} 本地就没有`).toBe(true)
+      }
+    }
+  })
+  // 详情插图按**图片**读（宿主给响应挂 CSP sandbox，不解析内容），所以必须自包含：不引外部资源、
+  // 不带脚本与事件处理器。形状钉 640×300：详情页给图片的位置就这么多，超尺寸只会被缩放。
+  it('详情插图自包含、640×300、深浅两档各一套配色', () => {
+    for (const path of ['docs/preview.svg', 'docs/preview.zh.svg']) {
+      const svg = readFileSync(path, 'utf8')
+      expect(svg).toContain('width="640"')
+      expect(svg).toContain('height="300"')
+      expect(svg).toContain('viewBox="0 0 640 300"')
+      expect(svg, `${path} 带脚本或事件处理器`).not.toMatch(/<script|\son[a-z]+="/)
+      expect(svg, `${path} 引了外部资源`).not.toMatch(/href="https?:|<image|xlink:/)
+      expect(svg, `${path} 没有深色档`).toContain('prefers-color-scheme: dark')
+      expect(Buffer.byteLength(svg)).toBeLessThanOrEqual(1024 * 1024)
     }
   })
   it('图标字形与侧栏组件同一份 pathData（静态资源不能 import 单点，测试对齐）', () => {
@@ -179,5 +234,29 @@ describe('包形态声明', () => {
     expect(patch).toContain('id: dsh-novel')
     expect(patch).toContain("name: '@xrn1997/dsh-novel'")
     expect(patch.match(/- insert:/g)).toHaveLength(1)   // 双挂载 = 整树 boot 失败（调研 §风险 5）
+  })
+})
+
+describe('依赖边界：宿主语音服务的类型只借不依赖', () => {
+  /** 递归列出 src 下的 TS 源文件（不引 glob 依赖，门自身保持零新依赖） */
+  function sourceFiles(dir: string): string[] {
+    const out: string[] = []
+    for (const ent of readdirSync(dir, { withFileTypes: true })) {
+      const file = path.join(dir, ent.name)
+      if (ent.isDirectory()) out.push(...sourceFiles(file))
+      else if (file.endsWith('.ts') || file.endsWith('.tsx')) out.push(file)
+    }
+    return out
+  }
+
+  it('`dsh-xiaomi-tts` 只以 type-only import/re-export 出现，且留在 devDependencies', () => {
+    // 社区服务包只借类型：运行时 import 会让构建产物依赖一个没进 dependencies 的包。
+    const valueImport = /(?:^|\n)\s*(?:import|export)\s+(?!type\b)[^\n]*?from\s+['"]dsh-xiaomi-tts(?:\/[^'"]*)?['"]|import\s*\(\s*['"]dsh-xiaomi-tts/
+    const offenders = sourceFiles('src').filter((file) => valueImport.test(readFileSync(file, 'utf8')))
+    expect(offenders, '以下源文件把 dsh-xiaomi-tts 当运行时依赖引入了').toEqual([])
+    const deps = at(pkg, 'dependencies')
+    expect(isRecord(deps) ? deps['dsh-xiaomi-tts'] : undefined).toBeUndefined()
+    const dev = recordAt(pkg, 'devDependencies')
+    expect(typeof dev['dsh-xiaomi-tts']).toBe('string')
   })
 })

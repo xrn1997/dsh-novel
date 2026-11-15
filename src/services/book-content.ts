@@ -1,6 +1,6 @@
+import { chapterContentToText, normalizeChapterText } from '../shared/chapter-text.js'
 import { LOCAL_SOURCE_ID, planarNavigation } from '../shared/wire.js'
 import type { BookNavigation, ChapterContent, ChapterEntry } from '../shared/wire.js'
-import { chapterContentToText, normalizeChapterText } from './chapter-content.js'
 import { ChapterNotFoundError, LocalNotMountedError } from './errors.js'
 
 /**
@@ -97,7 +97,7 @@ export class BookContent {
   }
 }
 
-/** text 过行规约；rich 原样（结构映射由 chapter-content 的投影负责）。幂等，重复过手无害。 */
+/** text 过行规约；rich 原样（结构映射由 shared/chapter-text 的投影负责）。幂等，重复过手无害。 */
 function normalizeText(content: ChapterContent): ChapterContent {
   return content.kind === 'text' ? { kind: 'text', text: normalizeChapterText(content.text) } : content
 }

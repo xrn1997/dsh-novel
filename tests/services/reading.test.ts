@@ -6,8 +6,9 @@ import { ReadingService } from '../../src/services/reading.js'
 import type { SourceSession } from '../../src/engine/index.js'
 import { detailContextOf } from '../../src/services/bridge.js'
 import type { SubRuleEval } from '../../src/services/bridge.js'
-import { chapterContentToText } from '../../src/services/chapter-content.js'
+import { chapterContentToText } from '../../src/shared/chapter-text.js'
 import { LOCAL_SOURCE_ID, LocalArtifactNotFoundError, LocalBooks } from '../../src/services/localbooks.js'
+import type { ListenState } from '../../src/shared/wire.js'
 import { IMAGE_SAMPLES, makeEpubFixture } from '../fixtures/epub.js'
 import { settleSearchJob } from '../explore-settle.js'
 import { makeTempDir, trackService } from '../temp-dir.js'
@@ -16,7 +17,7 @@ import { CookieJar } from '../../src/services/cookies.js'
 import { PageCache } from '../../src/services/cache.js'
 import { Shelf } from '../../src/services/shelf.js'
 import { SourceRegistry } from '../../src/services/sources.js'
-import { ChapterNotFoundError, SourceNotFoundError } from '../../src/services/errors.js'
+import { ChapterNotFoundError, InvalidRequestError, SourceNotFoundError } from '../../src/services/errors.js'
 import { must, pick } from '../support/fixture.js'
 import { requestUrlOf } from '../support/fetch-input.js'
 
@@ -1184,6 +1185,43 @@ describe('门面直测（invariant 与 loginPlan 在门面上直接可测，不�
     expect(saved?.progress).toMatchObject({ chapterIndex: 2, offsetRatio: 0.25 })
   })
 
+  it('shelfSaveListen：不在架 → null（不静默造书）；在架 → 落 listen、progress 不动（共用位置由另一笔写）', async () => {
+    const svc = await mk()
+    const p = { chapterIndex: 1, paragraphIndex: 3, engineId: 'e1', voice: 'v1', rate: 1.25, volume: 0.7 }
+    expect(svc.shelfSaveListen('nope', p)).toBe(null)
+    svc.shelfAdd('k1', { sourceId: 's', title: 'T' })
+    svc.shelfSaveProgress('k1', 4, 0.4)
+    const saved = must(svc.shelfSaveListen('k1', p), '在架书的 shelfSaveListen 返回值')
+    expect(saved.listen).toMatchObject(p)
+    expect(saved.progress).toMatchObject({ chapterIndex: 4, offsetRatio: 0.4 })
+  })
+
+  it('shelfSaveListen 值域门：index 非负整数 / rate∈[0.5,3] / volume∈[0,1] / 引擎与音色 string|null，否则 InvalidRequestError', async () => {
+    const svc = await mk()
+    const ok: ListenState = {
+      chapterIndex: 0, paragraphIndex: 0, engineId: null, voice: null, rate: 1, volume: 1,
+    }
+    // 越界值越过类型面构造（wire 读口只判类型，值域判据在这里）：坏值一律在查架位之前就炸
+    const bad = (p: Record<string, unknown>): ListenState => p as unknown as ListenState
+    for (const p of [
+      { ...ok, chapterIndex: -1 },
+      { ...ok, chapterIndex: 1.5 },
+      { ...ok, paragraphIndex: -1 },
+      { ...ok, paragraphIndex: 2.5 },
+      { ...ok, rate: 0 },
+      { ...ok, rate: 3.5 },
+      { ...ok, volume: 1.5 },
+      { ...ok, volume: -0.1 },
+      { ...ok, engineId: 42 },
+      // 空白引擎 id 落盘 = 下一次起播必吃 TTS_ENGINE_MISSING，与配置面的 `^\S+$` 同一把尺
+      { ...ok, engineId: '' },
+      { ...ok, engineId: '  ' },
+      { ...ok, voice: 42 },
+    ]) {
+      expect(() => svc.shelfSaveListen('k-bad', bad(p)), JSON.stringify(p)).toThrow(InvalidRequestError)
+    }
+  })
+
   it('removeBooks：批量删书沿用「本地书连带删副本」invariant，未知键静默跳过', async () => {
     const svc = await mk()
     const local = await svc.localImport(Buffer.from('第1章 A\n内容', 'utf8'), 'x.txt')
@@ -1436,5 +1474,31 @@ describe('后台搜索任务：增量出口只此一处（不许出现第二个�
     expect(snap.phase).toBe('done')
     expect((await svc.search('斗罗')).map((g) => g.sourceName).sort())
       .toEqual(snap.added.map((g) => g.sourceName).sort())
+  })
+})
+
+describe('听书订阅导入（URL 支）：失败原话不回显订阅地址', () => {
+  it('上游 500：FetchError 只留状态事实，签名 token 不进消息也不进 url 字段', async () => {
+    const dir = await makeTempDir('novel-rd-tts-sub-')
+    const token = 'SECRET-SIGNED-TOKEN-3b7e'
+    const url = `https://sub.example/list.json?sign=${token}`
+    const svc = trackService(await ReadingService.create({
+      dir,
+      fetchImpl: async () => new Response('', { status: 500 }),
+    }))
+    let caught: unknown
+    try {
+      await svc.ttsEngineImportFromUrl(url)
+    } catch (e) {
+      caught = e
+    }
+    // 类目照旧（FetchError → 502）：脱敏只换文案与地址，不改分类学
+    expect(caught).toBeInstanceOf(Error)
+    const err = caught as Error
+    expect(err.name).toBe('FetchError')
+    expect(err.message, '可行动的状态事实照留').toContain('500')
+    expect(err.message, '错误信封不是签名地址的新读口').not.toContain(token)
+    // 错误对象常被整个交给 logger：url 字段同样脱敏
+    expect(JSON.stringify(err)).not.toContain(token)
   })
 })

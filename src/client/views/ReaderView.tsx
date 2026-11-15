@@ -1,6 +1,7 @@
 import type { CSSProperties, MutableRefObject, ReactNode } from 'react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { LOCAL_SOURCE_ID, bodies, paramOps, queries } from '../../shared/wire.js'
+import { playUnitStarts, splitParagraphs } from '../../shared/chapter-text.js'
 import { describeError } from '../api.js'
 import { plural, useCopy } from '../copy/index.js'
 import { prodReaderDeps } from '../deps.js'
@@ -8,19 +9,26 @@ import { markPanelShelfLanded, readPanelShelf } from '../panel-shelf.js'
 import type { ReaderDeps } from '../deps.js'
 import { applyPreset, createExportRun, draftOf, IDLE_EXPORT, validRangeOf } from '../export-run.js'
 import type { ExportDraft, ExportRunState, RangeParse } from '../export-run.js'
-import { navigate, prefsStore, setPref, useStore } from '../store.js'
+import { navigate, prefsStore, setPref, useStore, useStoreValue } from '../store.js'
 import { FONT_STEPS, LINE_HEIGHTS, MEASURES, PAPER_PRESETS } from '../prefs-ui.js'
 import { ReaderScene } from '../reader-scene.js'
 import { ReaderSession } from '../reader-session.js'
-import type { ReaderPort } from '../reader-session.js'
+import type { ReaderPort, ReaderRestoreTarget } from '../reader-session.js'
 import { nextChapterIndex } from '../reader-load.js'
 import { createReaderGeometry } from '../reader-geometry.js'
-import { findScrollport } from '../scrollport.js'
+import { findScrollport, portViewTop } from '../scrollport.js'
 import { addShelfSeat } from '../shelf-action.js'
-import { paperInk, centerInScroller, stripLeadingTitle } from '../util.js'
+import { pauseListening, resumeListening, startListening, takeReaderRelocation, ttsPlayer } from '../tts/player.js'
+import { readingPositionAt, readingProbeNow, listenParagraphElement, setReadingProbe } from '../tts/reading-position.js'
+import { enterReader } from '../tts/reader-presence.js'
+import { TtsBar } from '../tts/TtsBar.js'
+import { isPlayBusy } from '../tts/mini-parts.js'
+import { ttsErrorMessage } from '../tts/tts-error.js'
+import { paperInk, paperLiveInk, centerInScroller, stripLeadingTitle } from '../util.js'
 import { ErrorBanner, WarningList } from './bits.js'
 import { ChapterBody } from './ChapterBody.js'
-import { Dialog } from './dialog.js'
+import { useListenFromSelection } from './listen-from-selection.js'
+import { claimKeyLayer, Dialog } from './dialog.js'
 import { ReaderNavigation } from './ReaderNavigation.js'
 import { ReaderNotes } from './ReaderNotes.js'
 import type { BookNavigation, ChapterContent, LinkRole, LocalImportWarning, ReadingTarget } from './types.js'
@@ -220,8 +228,34 @@ export function ImportNotesPanel({ warnings, onClose }: {
   )
 }
 
+/** 正文投影（ChapterShell 的正文只经这一处剥与折算）：剥掉与章名重复的首行，并给出被剥掉的
+ *  行占掉的播放单元数（`paragraphBase`）。
+ *
+ *  为什么不能只看「剥掉几行」：播放单元逐行切、空行与纯标点行占 0 格，被剥的空白行因此不产生
+ *  偏移；基数是「剥后第一行」的起段号，播放层读原样正文、屏上少了这些行，不补偏移「从本段听」
+ *  与探针起播会系统性早一段。图文章不剥（`stripLeadingTitle`），基数为 0；整章只剩章名时基数
+ *  落到整篇占掉的单元数。
+ *
+ *  导出只给测试直接驱动：整页 ReaderView 的挂载成本会掩盖这条纯算式，而它错了的表现是
+ *  「从本段听」整体偏移一段，肉眼归因不到这一段加法。 */
+export function chapterBodyProjection(content: ChapterContent, chapterName: string): {
+  content: ChapterContent
+  paragraphBase: number
+} {
+  const stripped = stripLeadingTitle(content, chapterName)
+  if (stripped === content || content.kind !== 'text' || stripped.kind !== 'text') {
+    return { content: stripped, paragraphBase: 0 }
+  }
+  const lines = content.text.split('\n').map((text) => ({ text }))
+  const removed = lines.length - stripped.text.split('\n').length
+  const starts = playUnitStarts(lines)
+  // 越界（整段剥完）落全量单元数：累加到头就是整篇占掉的单元数
+  return { content: stripped, paragraphBase: starts[removed] ?? splitParagraphs(content.text).length }
+}
+
 /** 已载章块：memo 以 (content, name, bookKey, onNavigate) 为界——父视图的 loading/currentChapter
- *  变化不再重渲染全部历史章节；stripLeadingTitle 也只随本章内容/章名重算。 */
+ *  变化不再重渲染全部历史章节；stripLeadingTitle 也只随本章内容/章名重算。
+ *  章身份写在 `data-chapter` 上：选区起播由阅读器**一处**监听按它归属（`listen-from-selection`）。 */
 const ChapterShell = memo(function ChapterShell(props: {
   index: number
   content: ChapterContent
@@ -229,15 +263,22 @@ const ChapterShell = memo(function ChapterShell(props: {
   bookKey: string
   onNavigate: (target: ReadingTarget, role: LinkRole) => void
   chapterRefs: MutableRefObject<Array<HTMLDivElement | null>>
+  listenParagraph: number | null
 }): ReactNode {
-  const { index, content, name, bookKey, onNavigate, chapterRefs } = props
-  const body = useMemo(() => stripLeadingTitle(content, name), [content, name])
+  const { index, content, name, bookKey, onNavigate, chapterRefs, listenParagraph } = props
+  const body = useMemo(() => chapterBodyProjection(content, name), [content, name])
   return (
     <div ref={(el) => { chapterRefs.current[index] = el }} data-chapter={index}>
       {/* h2 不是 h3：阅读器这一屏没有更高的标题占位，从 h3 起等于给读屏一份断了头的大纲 */}
       <h2 className="novel-rdr-mark">{name}</h2>
       {/* 正文两种形态都在 ChapterBody；送渲染前剥一次重复章名——只这一处剥 */}
-      <ChapterBody content={body} bookKey={bookKey} onNavigate={onNavigate} />
+      <ChapterBody
+        content={body.content}
+        bookKey={bookKey}
+        onNavigate={onNavigate}
+        paragraphBase={body.paragraphBase}
+        listenParagraph={listenParagraph}
+      />
     </div>
   )
 })
@@ -262,10 +303,26 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
 }): ReactNode {
   const t = useCopy()
   const prefs = useStore(prefsStore)
+  /** 听书会话的读数按原语窄订阅：整店订阅会让每段推进 / 每档音量都重渲整个阅读器顶层；
+   *  章节块本身已由 `ChapterShell` 的 memo 挡住，这里只把顶层需要的几格取出来。
+   *  `listenActive` = 本书是否就是正在听的会话：听书条的挂载条件，也是「从阅读位置起播」的闸门
+   *  ——探针量的永远是当前打开的书，只有这时它才与播放层的书是同一本。 */
+  const listenActive = useStoreValue(ttsPlayer, (s) => s.active && s.bookKey === bookKey)
+  /** 「可暂停」= 在放 ∨ 起播在途（`isPlayBusy`，与条上 / 浮窗同一算式）：只认 `playing` 会让
+   *  合成 / 章正文在途时按 pill 没反应。暂停后 resume 的守卫在会话里，这里只决定按哪一下。 */
+  const listenBusy = useStoreValue(ttsPlayer, (s) => s.active && s.bookKey === bookKey && isPlayBusy(s))
+  const listenChapter = useStoreValue(ttsPlayer, (s) => (s.active ? s.chapterIndex : -1))
+  const listenParagraphIndex = useStoreValue(ttsPlayer, (s) => (s.active ? s.paragraphIndex : -1))
   const bodyRef = useRef<HTMLDivElement | null>(null)                  // 正文层：锚点测量基准
   const sentinelRef = useRef<HTMLDivElement | null>(null)              // 未载边界哨兵：进预取区 → 加载下一章
   const portRef = useRef<HTMLElement | null>(null)                     // 真实滚动容器缓存（内容变化时刷新）
   const chapterRefs = useRef<Array<HTMLDivElement | null>>([])
+  /** 「回阅读器」取走的重定位现场（按书记）：模块级现场是**一次性的**，但本 mount 的 effect
+   *  可能连跑两趟（StrictMode 的 mount → cleanup → mount），第一趟取走的现场必须留给第二趟，
+   *  否则开发期双挂载会把听书位置丢掉、退回存档 progress。换书不复用（键变了就重新取）。 */
+  const relocationRef = useRef<{ sourceId: string; bookKey: string; target: ReaderRestoreTarget | null } | null>(null)
+  /** 「定位到正在念的段」在目标章还没载入时留下的落点：章一到货就居中，别停在章首。 */
+  const pendingLocateRef = useRef<{ chapterIndex: number } | null>(null)
 
   /** DOM 测量口：会话只读不碰 DOM——几何语义全在 `reader-geometry`，视图只交 ref 读数。 */
   const readerPort = useMemo<ReaderPort>(() => createReaderGeometry({
@@ -313,6 +370,69 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   const st = useSyncExternalStore(session.subscribe, () => session.state, () => session.state)
   const { toc, navigation, chapters, loadingIdx, error, currentChapter, returnDepth } = st
 
+  /** 听书起播的唯一入口：位置由调用方给（pill 的实时探针、选区各有各的来源），
+   *  引擎/音色/语速/音量一律不传——回退链归播放层（本书 listen 存档 → 活动缺省）。
+   *  位置来源恒为 `position`：视图不透传 `resume`——`archive` 档是会话侧留给「显式从存档续听」
+   *  的入口（`ADR-0078`），眼下没有界面调用点，视图这层转一道只会多一个永远取缺省值的死参数。 */
+  const startListeningAt = useCallback((chapterIndex: number, paragraphIndex: number): void => {
+    void startListening({ sourceId, bookKey, title, chapterIndex, paragraphIndex, resume: 'position' })
+      .catch((cause: unknown) => { deps.pushError(ttsErrorMessage(t, cause)) })
+  }, [sourceId, bookKey, title, deps, t])
+  const onListenFrom = useCallback((chapterIndex: number, paragraphIndex: number): void => {
+    startListeningAt(chapterIndex, paragraphIndex)
+  }, [startListeningAt])
+  /** 选区起播的落点：document 监听只有**阅读器一份**（3 条，不随已载章数长），按段号 + 章身份
+   *  归属；选中即出浮钮，点了才起播。 */
+  const listenFrom = useListenFromSelection(bodyRef)
+  /** 顶条 pill：没有会话时起播——位置取**阅读器此刻看得见的那一段**（实时探针），量不到才退
+   *  当前章首段；本书正在听时就是继续/暂停——再按一次不该把位置重置回去。
+   *  听书存档只提供音色/语速/音量与段级续听现场，不决定起播位置：读者看到第 N 章时按听书，
+   *  不该被一份更早的听书存档拽回前面。 */
+  const onListenPill = (): void => {
+    if (listenActive) {
+      if (listenBusy) pauseListening()
+      else resumeListening()
+      return
+    }
+    const probe = readingProbeNow()
+    let at: { chapterIndex: number; paragraphIndex: number } | null = null
+    if (probe !== null) {
+      try { at = probe() } catch { at = null }
+    }
+    startListeningAt(at?.chapterIndex ?? currentChapter, at?.paragraphIndex ?? 0)
+  }
+  /** 阅读探针：挂载注册、卸载注销。闭包只持 ref，量的是**调用那一刻**的 DOM（缓存读数会让
+   *  「从阅读位置起播」用上一次打开书时的位置）。 */
+  useEffect(() => {
+    setReadingProbe(() => readingPositionAt(chapterRefs.current, portViewTop(portRef.current)))
+    return () => setReadingProbe(null)
+  }, [])
+
+  /** 「定位到正在念的段」：显式的一次滚动（用户按了才滚），只滚阅读滚动容器自己。
+   *  跟读高亮本身不滚动——自动跟随会经会话的滚动防抖改写阅读进度（`ADR-0071`）；
+   *  这一颗钮是用户主动导航，与点目录同性质，落进度是它自己的语义。 */
+  const locateListen = useCallback((): void => {
+    const live = ttsPlayer.get()
+    if (!live.active || live.bookKey !== bookKey) return
+    const block = chapterRefs.current[live.chapterIndex]
+    // 该章不在已载窗口（听书跑得比阅读器快是常态）：显式导航到那一章。与点目录同性质，
+    // 落进度是这次用户导航自己的语义；章到货后的居中由渲染后拍点消费这次延迟定位。
+    if (block === null || block === undefined) {
+      pendingLocateRef.current = { chapterIndex: live.chapterIndex }
+      session.requestJump(sourceId, live.chapterIndex, null)
+      return
+    }
+    const port = portRef.current
+    if (port === null) return
+    centerInScroller(port, listenParagraphElement(block, live.paragraphIndex) ?? block)
+  }, [bookKey, session, sourceId])
+
+  /** 阅读器子树在场信号：迷你条的可见性判据（挂载记一笔、卸载撤一笔）。不看路由——
+   *  宿主切走面板时路由仍停在 `reader`，而面板子树已被卸载（`ADR-0022`），那正是迷你条
+   *  必须回到常驻层的场合。effect 随 bookKey 重跑（撤旧书键、记新书键），子树本身不重挂：
+   *  在场信号按书键对齐，换书时迷你条的接管判据跟着走，而不是整棵子树重挂抖动。 */
+  useEffect(() => enterReader(bookKey), [bookKey])
+
   /** 角落浮层、注释面板载荷、Esc 归属、离开一问与入架写入归 `client/reader-scene.ts`：
    *  这几条律互相咬合（谁先退场、谁消费返回项、写完能不能被打断），证明它们不该靠整页渲染。
    *  视图只持它的投影与命令，外加一份导出范围草稿——缺省/档位/校验归 `export-run` 的
@@ -348,11 +468,14 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   // 浮层共用一条 Esc：归属读场景的 `escOwner` 投影（模态在场时它是 'modal'，这条监听不装——
   // Esc 只归 `views/dialog.tsx` 的模态契约，收回那一问走场景的 `dismissAsk`）。`escOwner` 必须在
   // 依赖里，否则模态上场时这条监听撤不下来（一次 Esc 会既关模态又收浮层）。判据仍住 `reader-surfaces`。
+  // 装监听时认领一层键盘现场（层序住址在 `views/dialog.tsx` 的 `claimKeyLayer`）：全局听书浮窗的
+  // 设置卡是同场另一层，一次 Esc 只该收最上面那一层。
   useEffect(() => {
     if (sceneState.escOwner !== 'surface') return
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') scene.handleEsc() }
+    const layer = claimKeyLayer()
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape' && layer.isTop()) scene.handleEsc() }
     document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
+    return () => { document.removeEventListener('keydown', onKey); layer.release() }
   }, [scene, sceneState.escOwner])
   /** 目录高亮：只在抽屉开着时取（一次 DOM 测量，不在滚动路径上）；只在**跨章**与换书时重算
    *  （`currentChapter` 变才醒）——同章内滚动是每帧的量，不值得为一条 aria-current 按帧唤醒。 */
@@ -401,20 +524,51 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   }, [deps, sourceId, bookKey])
   const hasImportNotes = importNotes !== null && importNotes.length > 0
 
-  // 进入：开会话（目录→恢复→懒加载）；卸载：关会话（清防抖定时器）
+  // 进入：开会话（目录→恢复→懒加载）；卸载：关会话（清防抖定时器）。
+  // 「回阅读器」的一次性重定位在这里**按书键**取走（消费即摘，别人的现场不动）：它替代存档
+  // progress 当恢复目标，走同一条不写进度的恢复路径；第二次开书自然回存档。
   useEffect(() => {
     chapterRefs.current = []
     refreshPort()
-    void session.open(sourceId, bookKey)
+    const held = relocationRef.current
+    const target = held !== null && held.sourceId === sourceId && held.bookKey === bookKey
+      ? held.target
+      : takeReaderRelocation(sourceId, bookKey)
+    relocationRef.current = { sourceId, bookKey, target }
+    void session.open(sourceId, bookKey, target)
     return () => session.dispose()
   }, [session, sourceId, bookKey, refreshPort])
 
-  // 已载表 / 待跳目标变化：刷新滚动容器后交会话一个渲染后拍点——锚点、落位、预取的次序归会话
+  // 已载表 / 待跳目标变化：刷新滚动容器后交会话一个渲染后拍点——锚点、落位、预取的次序归会话。
+  // 「定位到正在念的段」等章到货的那一半在**同一拍**里消费：先让会话的 `settleJump` 落位，
+  // 再居中命中段。拆成两条 effect 就等于用声明序承载语义——`settleJump` 会把刚居中的视口
+  // 拉回章首（目标是章块顶），而它在 DOM 上报后总是晚跑一步。
   useEffect(() => {
     refreshPort()
     session.afterRender(sourceId)
+    const pending = pendingLocateRef.current
+    if (pending === null) return
+    const live = ttsPlayer.get()
+    // 听书停下 / 换了书 / 自己推进到别的章：挂起的那次定位作废，别在无关的章上抢视口
+    if (!live.active || live.bookKey !== bookKey || live.chapterIndex !== pending.chapterIndex) {
+      pendingLocateRef.current = null
+      return
+    }
+    // 用户点完定位又自己去目录 / 内链跳了别的章：这次延迟定位已被更晚的导航取代，
+    // 目标章后到货也不许把视口从用户所在章抢走（ADR-0071：定位只服务最后一次显式动作）。
+    if (session.state.currentChapter !== pending.chapterIndex) {
+      pendingLocateRef.current = null
+      return
+    }
+    const block = chapterRefs.current[pending.chapterIndex]
+    if (block === null || block === undefined) return   // 正文还在途：这次定位继续挂着，下次拍点再消费
+    pendingLocateRef.current = null
+    const port = portRef.current
+    if (port === null) return                            // 没有可滚容器：这次定位无处可落，只此一次
+    centerInScroller(port, listenParagraphElement(block, live.paragraphIndex) ?? block)
+    // listenChapter 进依赖只为让「听书已换章」立即可作废；落位与瞄准的次序语义不靠 effect 顺序
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chapters, st.pendingJump])
+  }, [chapters, st.pendingJump, listenChapter])
 
   // 视口事件的监听安装：capture 阶段收「任意容器」的 scroll（scroll 不冒泡，但捕获阶段会经过
   // document——滚动容器（.novel-main 或更外层）的滚动因此都收得到）。合帧、布局标记合并与帧调度
@@ -448,9 +602,16 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   }, [prefs.fontSize, prefs.lineHeight, prefs.measure, session])
 
   const shownError = error ?? exportState.error
-  /** 纸与墨：条底、条上控件、进度槽全由这两个值槽派生（规则住样式层，行内只给值）。
-   *  写在 .novel-rdr 根上而非 .novel-rdr-main 上——条是 main 的兄弟，写在 main 里条够不着。 */
-  const paper = { '--novel-paper': prefs.paperColor, '--novel-paper-ink': paperInk(prefs.paperColor) } as CSSProperties
+  /** 纸与墨：条底、条上控件、进度槽、跟读高亮全由这几个值槽派生（规则住样式层，行内只给值）。
+   *  跟读字色由纸色现算（暖赭带里离墨最远又够读的一档），跟着纸色一起换。
+   *  写在 .novel-rdr 根上而非 .novel-rdr-main 上——条是 main 的兄弟，写在 main 里条够不着。
+   *  `paperLiveInk` 在候选色里逐档量对比度：听书每推进一段都会重渲本组件，按纸色 memo，
+   *  只在用户换纸色时重算一次。 */
+  const paper = useMemo(() => ({
+    '--novel-paper': prefs.paperColor,
+    '--novel-paper-ink': paperInk(prefs.paperColor),
+    '--novel-live-ink': paperLiveInk(prefs.paperColor),
+  } as CSSProperties), [prefs.paperColor])
   return (
     <div data-novel-view="reader" className="novel-rdr" style={paper}>
       {/* 偏好/导出面板遮罩：挂 reader 根容器盖满整个阅读区——只盖工具栏条时点正文关不掉面板；
@@ -545,6 +706,20 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
             title={toc === null ? t('reader.contents') : t('reader.contentsWithCount', { n: toc.length })}>
             {t('reader.contents')}
           </button>
+          {/* 听书 pill：起播入口（位置取阅读探针，量不到才退当前章首段）与本书播放中的暂停/继续。
+              选中态才用 brand（条上其余控件维持纸墨派生）。 */}
+          <button
+            className={listenActive ? 'novel-rdr-ctl novel-tts-on' : 'novel-rdr-ctl'}
+            aria-pressed={listenActive} aria-label={t('tts.listen')} title={t('tts.listen')}
+            onClick={onListenPill}
+          >
+            <svg aria-hidden="true" viewBox="0 0 16 16">
+              <path d="M3 9a5 5 0 0 1 10 0" />
+              <rect x="2" y="9" width="2.6" height="4.6" rx="1.3" />
+              <rect x="11.4" y="9" width="2.6" height="4.6" rx="1.3" />
+            </svg>
+            {t('tts.listen')}
+          </button>
           {sceneState.surface === 'prefs' && <PrefsPanel />}
         </div>
         {/* 章进度：跨章才动（会话只在 chapterIndex 变化时写 currentChapter）。章内百分比刻意不做——
@@ -603,6 +778,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
                 bookKey={bookKey}
                 onNavigate={onBodyNavigate}
                 chapterRefs={chapterRefs}
+                listenParagraph={listenActive && listenChapter === i ? listenParagraphIndex : null}
               />
             ))}
           {toc !== null && (
@@ -644,6 +820,30 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
           />
         )}
       </div>
+      {/* 「从本段听」浮钮：选区归属由阅读器一处判定（监听住 listen-from-selection.ts）。
+          按下时不撤选区：撤了选区，按钮还来不及响应点击就失去「从哪一段听」的上下文。 */}
+      {listenFrom.at !== null && (
+        <button
+          type="button"
+          className="novel-tts-from-here"
+          style={{ left: listenFrom.at.x, top: listenFrom.at.y }}
+          onMouseDown={(event) => { event.preventDefault() }}
+          onClick={() => {
+            const at = listenFrom.at
+            listenFrom.clear()
+            if (at !== null) onListenFrom(at.chapterIndex, at.paragraphIndex)
+          }}
+        >
+          {t('tts.startAt')}
+        </button>
+      )}
+      {/* 听书条：**只在本会话是这本书时挂载**——它也是「从阅读位置起播」的闸门（探针量的永远
+          是当前打开的书，只有这时它才与播放层的书是同一本）。播放会话跨阅读器常驻，条本身
+          随「本书是否正在听」来去。 */}
+      {listenActive && (
+        <TtsBar darkController={prefs.darkController} apiGet={deps.apiGet} pushError={deps.pushError}
+          onLocate={locateListen} />
+      )}
     </div>
   )
 }

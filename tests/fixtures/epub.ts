@@ -250,7 +250,7 @@ const PNG_INVALID_IHDR = (() => {
 })()
 
 /** 1×1 GIF89a：**帧数据与扩展尾巴都不存在**，从扩展中段截断后直接补 trailer 0x3B（头与尾都对）。
- *  本仓 GIF 核对只认魔数与末字节，会当可读资源放行；真解码归浏览器验收门（`DSH_EPUB_BROWSER`）——
+ *  本仓 GIF 核对只认魔数与末字节，会当可读资源放行；真解码归浏览器验收门（`DSH_BROWSER_GATE`）——
  *  那一门 2026-09 实测（无头 Edge）**拒绝**这一份，如实报加载失败且不塌预留框。钉的就是这个差异：
  *  结构过关 ≠ 能渲染。 */
 const GIF_DATA_LOST = Buffer.concat([TINY_GIF.subarray(0, 32), Buffer.from([0x3b])])

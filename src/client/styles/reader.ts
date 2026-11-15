@@ -20,8 +20,8 @@ export const READER_CSS = `
 .novel-rdr-bar {
   display: flex; gap: var(--novel-sp-2); align-items: center; min-height: 40px;
   padding: var(--novel-sp-1) var(--novel-sp-4);
-  background: color-mix(in srgb, var(--novel-paper-ink) 6%, var(--novel-paper));
-  border-bottom: 1px solid color-mix(in srgb, var(--novel-paper-ink) 12%, transparent);
+  background: var(--novel-bar-bg);
+  border-bottom: 1px solid var(--novel-bar-line);
   color: var(--novel-paper-ink);
 }
 /* 「控制器层跟随深色」在条上仍是完整的一档：勾上即整条让回宿主暗底，纸色派生那一套整体作废。
@@ -257,4 +257,24 @@ export const READER_CSS = `
 }
 .novel-import-who { min-width: 0; display: flex; flex-direction: column; gap: var(--novel-sp-0); }
 .novel-import-acts { display: flex; justify-content: flex-end; gap: var(--novel-sp-3); }
+/* ── 跟读高亮（正在被念的那一段）───────────────────────────────────────── */
+/* 换字色 + 段首一枚小三角（ADR-0076）。不铺底色、不画段内进度线：跟读的粒度是段，段内没有
+   逐字时间戳，画进度就是假精度（ADR-0071 的被否方案）；这两种标记都不给假读数。
+   为什么光换色不够：纯字色的可辨度只有色彩差一条腿——白纸上暖赭只是「稍暗一点的棕」，
+   深纸上正文浅灰白配更亮的赭也只像淡了一档；对比度门量的是「读得清」，量不出「认得出」。
+   字形标记不靠色彩差说话，任何纸色下都一眼读得出「就是这一行」。
+   颜色与纸墨同源（--novel-live-ink），三角走 currentColor 跟着换色一起走。
+   几何：::before 绝对定位浮在段框外沿（left: -1em），命中块自己设 position: relative——
+   相对定位不改流式几何（盒的位置尺寸都不变），高亮进出仍不动布局、不触发滚动补偿、
+   阅读位置不漂（ADR-0071）；自动跟随本身仍不做。窄栏时三角落进正文列内边距（sp-5 ≈ 1em）；
+   正文 p 有 text-indent: 2em，段首两格本就没有内容起点，压不到字。 */
+.novel-tts-live { position: relative; color: var(--novel-live-ink); }
+.novel-tts-live::before {
+  content: ''; position: absolute; left: -1em; top: .38em;
+  width: 0; height: 0; border-top: .4em solid transparent; border-bottom: .4em solid transparent;
+  border-left: .5em solid currentColor; pointer-events: none;
+}
+/* 注释面板复用 ChapterBody 但不带听书语义（那里永不出现命中块）：同族浮层里 overflow: hidden
+   会把出沿的三角裁成半截——显式收掉这条 ::before，不留半标记。 */
+.novel-notes .novel-tts-live::before { display: none; }
 `

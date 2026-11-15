@@ -15,7 +15,7 @@ import {
 import { warningListOf } from '../../src/services/epub/findings.js'
 import { EpubDocumentError } from '../../src/services/epub/errors.js'
 import { descendants, parseXml, xmlBudget } from '../../src/services/epub/xml.js'
-import { chapterContentToText } from '../../src/services/chapter-content.js'
+import { chapterContentToText } from '../../src/shared/chapter-text.js'
 import { pick } from '../support/fixture.js'
 
 const LIMITS = { depth: 128, nodes: 200_000 }

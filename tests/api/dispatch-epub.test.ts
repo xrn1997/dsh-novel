@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs'
 import { Readable } from 'node:stream'
 import path from 'node:path'
 import { ReadingService } from '../../src/services/reading.js'
-import { chapterContentToText } from '../../src/services/chapter-content.js'
+import { chapterContentToText } from '../../src/shared/chapter-text.js'
 import type {
   ApiEnvelope, BookNavigation, ChapterContent, ChapterEntry, LocalImportResponse, LocalImportWarning, ShelfEntry,
 } from '../../src/shared/wire.js'

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeChapterText } from '../../src/services/chapter-content.js'
+import { normalizeChapterText } from '../../src/shared/chapter-text.js'
 
 /**
- * `normalizeChapterText` 的三条口径（`chapter-content.ts` 的注释同此）：它塑造的是**每一章**的文字
+ * `normalizeChapterText` 的三条口径（`shared/chapter-text.ts` 的注释同此）：它塑造的是**每一章**的文字
  * 输出（正文/导出/工具三面同源），所以必须直接钉住，不能只靠 `getChapter` 间接走到。
  */
 describe('normalizeChapterText（逐行 trim → 去首尾空行 → 相邻空行折叠一个）', () => {

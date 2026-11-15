@@ -52,7 +52,7 @@ describe('BookContent', () => {
     expect(await bc.chapterContent('src', 'https://a/1', 0)).toEqual({ kind: 'text', text: '甲\n\n乙' })
   })
 
-  it('本地 rich 原样通过（结构映射归 chapter-content 的投影）', async () => {
+  it('本地 rich 原样通过（结构映射归 chapter-text 的投影）', async () => {
     const rich: ChapterContent = { kind: 'rich', documentId: 'd0', nodes: [{ kind: 'text', text: ' 甲 ' }] }
     const { local, online } = fakes({ localContent: rich })
     const bc = new BookContent({ local, online })
@@ -107,7 +107,7 @@ describe('BookContent.readChapter（toc 一次 + 章名 + 正文文字面）', (
     expect(await bc.readChapter(LOCAL_SOURCE_ID, 'local:x', 0)).toEqual({ name: '本地一', text: '甲\n\n乙' })
   })
 
-  it('本地 rich 正文：章名取自本地目录，正文走同一份文字投影（结构映射归 chapter-content）', async () => {
+  it('本地 rich 正文：章名取自本地目录，正文走同一份文字投影（结构映射归 chapter-text）', async () => {
     const rich: ChapterContent = { kind: 'rich', documentId: 'd0', nodes: [{ kind: 'text', text: ' 甲 ' }] }
     const { local, online } = fakes({ localContent: rich })
     const bc = new BookContent({ local, online })

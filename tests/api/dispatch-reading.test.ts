@@ -110,12 +110,12 @@ describe('reading/shelf 面', () => {
     expect((await valueOf<{ removed: boolean }>(del)).removed).toBe(true)
     expect(await valueOf<ShelfEntry[]>(await fetch(`${base}/novel-api/shelf`))).toHaveLength(0)
   })
-  it('shelf PUT 无 title 且无 progress → 400（文案逐字点名三种出路）；书不在架 → 400', async () => {
+  it('shelf PUT 无 title 且无 progress/listen → 400（文案逐字点名四条出路）；书不在架 → 400', async () => {
     const empty = await fetch(`${base}/novel-api/shelf/${encodeURIComponent('k')}`, { method: 'PUT', body: '{}' })
     expect(empty.status).toBe(400)
     const error = await errorOf(empty)
-    // 全文等值：这句是用户可见文案（PARAMS/BODY 常量展开后的成品），只钉片段时另两条出路改错字仍全绿
-    expect(error.message).toBe('body 需带 title（加书）/ patch（打补丁）/ progress:{chapterIndex,offsetRatio}（更新进度）')
+    // 全文等值：这句是用户可见文案（PARAMS/BODY 常量展开后的成品），只钉片段时另几条出路改错字仍全绿
+    expect(error.message).toBe('body 需带 title（加书）/ patch（打补丁）/ progress:{chapterIndex,offsetRatio}（更新进度）/ listen:{chapterIndex,paragraphIndex,engineId,voice,rate,volume}（存听书位置）')
     expect((await fetch(`${base}/novel-api/shelf/${encodeURIComponent('k2')}`, {
       method: 'PUT', body: JSON.stringify({ progress: { chapterIndex: 1, offsetRatio: 0 } }),
     })).status).toBe(400)
@@ -159,6 +159,78 @@ describe('reading/shelf 面', () => {
       })
       expect(r.status, p).toBe(400)
     }
+  })
+  it('shelf PUT listen：落听书位置并回显，progress 一字不动（listen 写口只管细节轨）', async () => {
+    const key = encodeURIComponent(`${BASE}/book/1/listen`)
+    await fetch(`${base}/novel-api/shelf/${key}`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sourceId: 's1', title: '听书书' }),
+    })
+    await fetch(`${base}/novel-api/shelf/${key}`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ progress: { chapterIndex: 2, offsetRatio: 0.25 } }),
+    })
+    const listen = { chapterIndex: 1, paragraphIndex: 3, engineId: 'builtin', voice: null, rate: 1.25, volume: 0.7 }
+    const r = await fetch(`${base}/novel-api/shelf/${key}`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      // 显式夹带 updatedAt：契约里没有这个键，读口不认它
+      body: JSON.stringify({ listen: { ...listen, updatedAt: 123 } }),
+    })
+    const saved = await valueOf<ShelfBook>(r)
+    expect(saved.listen).toEqual(listen)
+    expect(saved.progress).toMatchObject({ chapterIndex: 2, offsetRatio: 0.25 })
+    // 读面同一条记录：listen 在架位上，progress 仍是阅读那条轨
+    const shelf = await valueOf<ShelfEntry[]>(await fetch(`${base}/novel-api/shelf`))
+    const row = must(shelf.find((b) => b.bookKey === `${BASE}/book/1/listen`), '架位上的听书书')
+    expect(row.listen).toMatchObject(listen)
+    expect(row.progress).toMatchObject({ chapterIndex: 2, offsetRatio: 0.25 })
+  })
+  it('shelf PUT 同时带 progress 与 listen：只落 progress，listen 不动（分派次序 progress → listen）', async () => {
+    const key = encodeURIComponent(`${BASE}/book/1/both`)
+    await fetch(`${base}/novel-api/shelf/${key}`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sourceId: 's1', title: '两轨书' }),
+    })
+    const listen = { chapterIndex: 3, paragraphIndex: 1, engineId: 'builtin', voice: null, rate: 1.1, volume: 0.5 }
+    await fetch(`${base}/novel-api/shelf/${key}`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ listen }),
+    })
+
+    const both = { chapterIndex: 5, paragraphIndex: 9, engineId: 'browser:local', voice: null, rate: 2, volume: 1 }
+    const r = await fetch(`${base}/novel-api/shelf/${key}`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ progress: { chapterIndex: 7, offsetRatio: 0.5 }, listen: both }),
+    })
+    const saved = await valueOf<ShelfBook>(r)
+    expect(saved.progress).toMatchObject({ chapterIndex: 7, offsetRatio: 0.5 })
+    // 四形态的优先级（title 非空 → patch → progress → listen）是传输关注点：同场时后面的形态不落
+    expect(saved.listen).toEqual(listen)
+  })
+  it('shelf PUT listen 值域/形状：index 负数、rate/volume 越界、可空位类型错 → 400；不在架 → 400', async () => {
+    const key = encodeURIComponent(`${BASE}/book/1/listen-dom`)
+    await fetch(`${base}/novel-api/shelf/${key}`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sourceId: 's1', title: 'T' }),
+    })
+    for (const l of [
+      '{"chapterIndex":0,"paragraphIndex":-1,"engineId":null,"voice":null,"rate":1,"volume":1}',
+      '{"chapterIndex":0,"paragraphIndex":0,"engineId":null,"voice":null,"rate":0,"volume":1}',
+      '{"chapterIndex":0,"paragraphIndex":0,"engineId":null,"voice":null,"rate":1,"volume":1.5}',
+      // 形状不完整（可空位缺席，wire 口径是 null 而不是缺键）：读口交空事实，不猜成 null
+      '{"chapterIndex":0,"paragraphIndex":0,"voice":null,"rate":1,"volume":1}',
+      '{"chapterIndex":0,"paragraphIndex":0,"engineId":42,"voice":null,"rate":1,"volume":1}',
+    ]) {
+      const r = await fetch(`${base}/novel-api/shelf/${key}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' }, body: `{"listen":${l}}`,
+      })
+      expect(r.status, l).toBe(400)
+    }
+    const missing = await fetch(`${base}/novel-api/shelf/${encodeURIComponent(`${BASE}/book/1/listen-missing`)}`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ listen: { chapterIndex: 0, paragraphIndex: 0, engineId: null, voice: null, rate: 1, volume: 1 } }),
+    })
+    expect(missing.status).toBe(400)
   })
   it('shelf PUT 识别 totalChapters', async () => {
     const src = await valueOf<SourcePublic[]>(await fetch(`${base}/novel-api/sources`))

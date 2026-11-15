@@ -96,16 +96,17 @@ async function renameWithRetry(tmp: string, file: string): Promise<void> {
   }
 }
 
-/** 临时文件 + rename 原子写（低层、纯文本）；自动建父目录。序列化归调用方。
+/** 临时文件 + rename 原子写（低层；文本与字节共用一条写链）；自动建父目录。序列化归调用方。
  *  入队先于任何 await（含 mkdir）：否则「谁先排进链」由 mkdir 完成顺序决定，
  *  最后调用的那次不保证最后落盘——注释承诺的「最终落盘的是最后一次写的数据」就不成立。 */
-export async function writeFileAtomic(file: string, data: string): Promise<void> {
+async function writeAtomic(file: string, data: string | Uint8Array): Promise<void> {
   const prev = renameChains.get(file) ?? Promise.resolve()
   // 链值 = 上一次写的结果（吞掉其错误——排队者只关心「轮到我」，不被前者的失败带崩）
   const run = prev.catch(() => undefined).then(async () => {
     await fs.mkdir(path.dirname(file), { recursive: true })
     const tmp = tempPathOf(file)
-    await fs.writeFile(tmp, data, 'utf8')
+    if (typeof data === 'string') await fs.writeFile(tmp, data, 'utf8')
+    else await fs.writeFile(tmp, data)
     await renameWithRetry(tmp, file)
   })
   const tail = run.catch(() => undefined)
@@ -115,6 +116,17 @@ export async function writeFileAtomic(file: string, data: string): Promise<void>
   } finally {
     if (renameChains.get(file) === tail) renameChains.delete(file) // 自己是链尾才清（有后继排队则留给后继）
   }
+}
+
+/** 文本原子写 */
+export async function writeFileAtomic(file: string, data: string): Promise<void> {
+  await writeAtomic(file, data)
+}
+
+/** 字节原子写（音频缓存这类二进制产物）：与文本写共用同一条文件链，
+ *  同一路径的并发写仍按调用顺序落盘，不因为「一个是文本一个是字节」分成两套排队。 */
+export async function writeFileAtomicBytes(file: string, data: Uint8Array): Promise<void> {
+  await writeAtomic(file, data)
 }
 
 /** 临时文件 + rename 原子写（JSON）；与 writeFileAtomic 同一低层路径 */

@@ -73,6 +73,34 @@ export class DecodeError extends Error {
   }
 }
 
+/** 失败原话里的地址替身：保留「这里原来有一个地址」这一事实，不回显地址本身。 */
+const REDACTED_URL = '（地址已省略）'
+
+/** 把地址从一句话里摘掉：只摘这一串字面（失败原话里嵌的就是请求时用的那个串）。 */
+function withoutUrl(message: string, url: string): string {
+  return url === '' ? message : message.split(url).join(REDACTED_URL)
+}
+
+/**
+ * 出站失败的脱敏副本：`FetchError` / `DecodeError` 的文案与 `url` 字段都内嵌了这次请求的地址，
+ * 而地址可能带凭据——朗读模板能把登录态求值进 URL（`services/tts-request.ts` 的
+ * `SEALED_SEGMENT` 是同一判据的另一半），订阅地址也可能带签名 token。错误信封与日志都不是
+ * 新的读口：只摘地址，换回同类错误（类目、HTTP 状态、charset 照留），两个 projection 不用改。
+ * 其余异常原样交回——它们不是出站失败的锅，地址也无从摘起。
+ */
+export function redactOutboundError(e: unknown, url: string): unknown {
+  if (e instanceof FetchError) {
+    return new FetchError(withoutUrl(e.message, url), {
+      url: REDACTED_URL,
+      ...(e.status === undefined ? {} : { status: e.status }),
+    })
+  }
+  if (e instanceof DecodeError) {
+    return new DecodeError(withoutUrl(e.message, url), { url: REDACTED_URL, charset: e.charset })
+  }
+  return e
+}
+
 /** 调用方给的参数本身不成立（API 层映射 400 BadRequest）——**值域**判据，不是 body 形状判据：
  *  形状（缺字段、类型不对、JSON 不合法）归路由自检的 `ApiError`，值域（非空、非负整数、比例在
  *  [0,1]）归本类。两者分开是因为值域要护的是**每一个调用方**：门面动词被 HTTP 面与 agent 工具面
@@ -104,19 +132,71 @@ export class LocalNotMountedError extends Error {
   }
 }
 
+/** 段合成失败的三种终局：code 即 wire 错误码，与 HTTP 状态一一分档——
+ *  引擎缺席是调用方的选择问题（400），上游失败与坏响应是网关问题（502）。
+ *  类住在分类学单点（而不是 `tts-request.ts`）：`api/wire` 的 classify 投影要用它，
+ *  而 tts-request → fetcher → errors 的值边会让「类住 tts-request」变成值环。
+ *  消费方（`tts-request.ts` / `tts.ts` 与测试）一律从这一处 import，本仓不开第二条 import 路径。 */
+export type TtsSynthesisErrorCode = 'TTS_ENGINE_MISSING' | 'TTS_UPSTREAM' | 'TTS_BAD_RESPONSE'
+
+export class TtsSynthesisError extends Error {
+  readonly code: TtsSynthesisErrorCode
+
+  constructor(code: TtsSynthesisErrorCode, message: string) {
+    super(message)
+    this.name = new.target.name
+    this.code = code
+  }
+}
+
+/** 听书服务未挂载（API 层映射 503 Unavailable）：与本地书同一档。到场形态只有一种——
+ *  直装缝 `ReadingService.from` 不带听书部件（装配选择，不是坏格）。注册表损坏是另一条
+ *  半径：部件在场、订阅那一格坏，见 `TtsEnginesDegradedError`。 */
+export class TtsNotMountedError extends Error {
+  constructor() {
+    super('听书服务未挂载')
+    this.name = new.target.name
+  }
+}
+
+/** 朗读引擎订阅注册表降级（API 层映射 503 Unavailable，消息带原因）：`tts-engines.json` 读不出
+ *  （损坏等）时订阅那一格整体不可用——源清单照常（内置 / 浏览器直出 / 宿主服务不读它）、
+ *  段合成与缓存读照常，只有五个订阅动词抛它。与 `TtsNotMountedError` 分开是两个主语：
+ *  那是部件根本没装配（缺席），这是部件在场、订阅数据坏（降级）——半径各归各的判据。
+ *  类住在分类学单点：`api/wire` 的 classify 投影要用它。 */
+export class TtsEnginesDegradedError extends Error {
+  /** 降级原因（注册表加载失败的原话）：报错即说清坏在哪，不给一句无名的 503 */
+  readonly reason: string
+  constructor(reason: string) {
+    super(`朗读引擎订阅注册表不可用：${reason}`)
+    this.name = new.target.name
+    this.reason = reason
+  }
+}
+
 // ── 错误分类学单点 ────────────────────────────────────────────────────────
 // 「类 → 类目」的知识只在这里编码一次；HTTP 状态映射（api/wire.errorStatusOf）与
 // 探针错误码（search-face.searchErrorCodeOf）是它的小投影。同一分类学只在
 // 这里定义；两个 destination 各写一份会让加一个错误类要动两个模块加一份自觉。
 
-/** 错误类目：规则求值 / 缺规则 / 网络抓取 / 资源缺席 / 本地导入两态 / 本地未挂载 / 任务互斥 / 其他。
+/** 错误类目：规则求值 / 缺规则 / 网络抓取 / 资源缺席 / 本地导入两态 / 未挂载与降级（本地书、
+ *  听书面）/ 任务互斥 / 段合成三分档（引擎缺席 / 上游失败 / 坏响应）/ 其他。
  *  错误类自己不带 HTTP status（`LocalImportError`、`JobRunningError` 都一样）——
  *  错误→HTTP 的 egress 只剩 classify 一处，路由侧不写逐类 catch。 */
 export type ErrorCategory =
   | 'rule-eval' | 'rule-missing' | 'fetch' | 'not-found'
   | 'bad-request'
   | 'local-import' | 'local-too-large' | 'unavailable' | 'job-running'
+  | 'tts-engine-missing' | 'tts-upstream' | 'tts-bad-response'
   | 'other'
+
+/** 段合成 code → 类目。表即穷尽闸：`TtsSynthesisErrorCode` 加一档而不在这里登记 → tsc 红，
+ *  不会静默落进 `other`（那段合成失败会从 502 变成 500）。 */
+const TTS_CATEGORY_OF: Record<TtsSynthesisErrorCode, ErrorCategory> = {
+  TTS_ENGINE_MISSING: 'tts-engine-missing',
+  TTS_UPSTREAM: 'tts-upstream',
+  TTS_BAD_RESPONSE: 'tts-bad-response',
+}
 
 /** 分类单点：异常 → 类目。分类权在类型上，不在文案上（改错别字不改类目）。 */
 export function classify(e: unknown): ErrorCategory {
@@ -132,7 +212,9 @@ export function classify(e: unknown): ErrorCategory {
   if (e instanceof InvalidRequestError) return 'bad-request'
   if (e instanceof LocalImportError || e instanceof EpubImportError) return 'local-import'
   if (e instanceof LocalFileTooLargeError) return 'local-too-large'
-  if (e instanceof LocalNotMountedError) return 'unavailable'
+  if (e instanceof LocalNotMountedError || e instanceof TtsNotMountedError || e instanceof TtsEnginesDegradedError) return 'unavailable'
   if (e instanceof JobRunningError) return 'job-running'
+  // 段合成三分档：状态码随 code 分（引擎缺席 400 / 上游 502），不是「一个类一条边」
+  if (e instanceof TtsSynthesisError) return TTS_CATEGORY_OF[e.code]
   return 'other'
 }

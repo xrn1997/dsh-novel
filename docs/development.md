@@ -34,12 +34,14 @@ pnpm build        # 必须在源码目录手动跑一次，缺这步宿主起不
 pnpm gates         # 一次跑完 typecheck / lint / test / test:pack / test:compat；CI 与发版工作流共用
 pnpm test          # 常规集（引擎 / 服务 / API / 工具 / 入口 / 前端逻辑与 smoke / 兼容判据与桥面自证 / 文档门）
 pnpm test:compat   # 兼容性回放（tests/replay/fixtures → 离线复算；报告写 tests/replay/report.md，产物不入库）
-pnpm test:pack     # 构建 + 产物自检
+pnpm test:pack     # 先 build，再跑构建产物自检（不打包、不读 tarball）
 pnpm typecheck     # tsc --noEmit —— 必须与 pnpm test 同批跑
 pnpm lint          # 类型感知 ESLint：显式 any、any 扩散（no-unsafe-*）、悬浮 Promise、非空断言 + react-hooks 两条；不引格式类规则
 ```
 
 `test:compat` 里的 compat 指**离线 fixture 回归**（`tests/replay/`），与 legado 覆盖矩阵是两条线：前者证明规则引擎在固定样本上可复算，后者证明格式语义有归属。
+
+`test:pack` 只跑 `tests/packaging-build.test.ts` 的**构建产物自检**（`lib/` 的形状、client bundle 的模块纯度）——它不执行 `pnpm pack`、也不读 tarball；发布清单与 tarball 内容的证明在 Release workflow 的断言与 `DSH_INSTALL_CHECK`（见「真机验证」），别把这一条读成打包门。
 
 ### 编译器档位与 lint 归属
 
@@ -94,22 +96,33 @@ $env:DSH_INSTALL_CHECK='1'; pnpm vitest run tests/packaging-install.test.ts
 # 默认集合里该用例是 skip；矩阵 b-opt-webview 的实现证据就是这一枚（不开闸只证明夹具）
 $env:DSH_WEBVIEW='1'; pnpm vitest run tests/services/webview.test.ts
 
-# 真浏览器门（离线）：EPUB 图文阅读的真图片解码 / 真排版位置 / 真下载字节
+# 真浏览器门（离线，开关名 DSH_BROWSER_GATE；旧名 DSH_EPUB_BROWSER 仍认）：
+#   EPUB 图文阅读的真图片解码 / 真排版位置 / 真下载字节
 # 本地随机端口起真服务、驱动构建产物 lib/client.js，只用**已安装的** Edge/Chrome，从不下载
-$env:DSH_EPUB_BROWSER='1'; pnpm vitest run tests/browser/epub-reader.test.ts
+$env:DSH_BROWSER_GATE='1'; pnpm vitest run tests/browser/epub-reader.test.ts
 # 同一枚闸下的几何门：不起服务、不读站点——把浮层的真 DOM 灌进浏览器量 rect（jsdom 量不到排版）
-$env:DSH_EPUB_BROWSER='1'; pnpm vitest run tests/browser/city-sheet-layout.test.tsx
+$env:DSH_BROWSER_GATE='1'; pnpm vitest run tests/browser/city-sheet-layout.test.tsx
 # 插件页「运行参数」的行几何：量单位后缀是否真在框内、数字框是否被限宽、窄档折不折得干净
-$env:DSH_EPUB_BROWSER='1'; pnpm vitest run tests/browser/config-page-layout.test.tsx
+$env:DSH_BROWSER_GATE='1'; pnpm vitest run tests/browser/config-page-layout.test.tsx
+# 听书面几何：展开态缺省尺寸下行不叠、最小档动作钮仍可点中且 resize 带不压控件、尺寸由现场驱动并夹在档位范围内、收起胶囊完整可见、左右缘贴合、自由落位按中心坐标落块、听书条只剩章内一条滑杆、跟读高亮换字色 + 段首三角且不改布局、浮层底跟宿主 token
+# 读数与断言住 tests/browser/tts-layout.test.tsx；尺寸档与夹取常量住 src/client/tts/mini-bar-state.ts 的 DEFAULT_MINI_BAR_SIZE / MIN_MINI_BAR_SIZE / MAX_MINI_BAR_SIZE / CAPSULE_SIZE，这里不抄读数
+$env:DSH_BROWSER_GATE='1'; pnpm vitest run tests/browser/tts-layout.test.tsx
 
 # EPUB 真语料审计（离线，读本机目录）：逐本 importEpub → 按结局与痕码分桶，报告落 .superpowers/epub-corpus/
 # 语料目录 = $env:DSH_EPUB_CORPUS_DIR（缺省 `$DSH_HOME/novel/corpus/`）；**语料不入库**，默认门不依赖任何下载
 $env:DSH_EPUB_CORPUS='1'; pnpm vitest run tests/services/epub-corpus-audit.test.ts
+
+# 听书真链路审计（先 `pnpm build`；联网）：把构建产物接成 `/novel-api`，走一遍合成 → 音频读口
+# 脚本强制直连（`proxyUrl: 'direct'`，输出 `PROXY: direct (forced)`）：代理环境视为未覆盖
+# 退出码 0 可用 / 1 不可用 / 2 未测或没跑成（缺构建产物、参数不成立、直出型没有字节、订阅引擎不在数据根里）
+node scripts/tts-live.mjs
+node scripts/tts-live.mjs --engine http:<id> --data-dir <dataDir>   # 订阅引擎需数据根里有 tts-engines.json
 ```
 
+- **`scripts/tts-live.mjs` 只验服务端合成链**：它驱动构建产物的 `/novel-api`，证明「取文本 → 上游合成 → 音频读口」这条链在真实网络下可用；浏览器直出（系统语音）没有字节可审计，遇到它如实报「未测」。退出码 1 是外部链路失败，不放宽断言；它不进 CI、不进默认门，也不证明任何订阅引擎在别人机器上的可用性。`--help` 打印用法后以 0 正常退出，但那不是审计结果——0 只有在合成回执与音频字节两段都成立时才是「可用」。**它强制直连**（`proxyUrl` 钉 `'direct'`，输出 `PROXY: direct (forced)`）：代理环境视为**未覆盖**，代理链路可用性不在本脚本读数里。路由迟迟不注册时，失败退出前会附上宿主替身收集到的 `HOST error` / `HOST warn` 行——先看那几行，别只读「等待路由超时」这一句。
 - **采集三条实践口径**：出站与生产同口径（走 `resolveProxyUrl`：config > 环境变量 > 系统代理 > 直连，缺这条会把反爬壳页采成「正文为空」）；manifest 的键是**请求 URL**而非重定向后的落地地址（搜索类源常「POST 出去、302 落到结果页」）；站点会抖，**别删已采好的 fixture**，重采会覆盖、删除只会让你重新赌一次站点脸色。落盘的是生产解码链读到的文本（`decodeBody`：声明 charset → content-type → `<meta>` 嗅探），GBK 页才存成真中文。
 - **脱敏是门禁**：`tests/replay/sanitize.ts` 在写盘前扫 cookie / token / password / authorization / apiKey 与 `Authorization: Bearer …` 形态（判据住该文件头注），`tests/replay/sanitize.test.ts` 钉住它。自动脱敏**是兜底不是证明**，入库前仍要人工过目。
-- **`DSH_EPUB_BROWSER` 允许带按应有口径写的「诚实红」**：已知缺陷的读数不削成绿，缺陷与读数登记在该测试文件自己的注释里；修好时按那条记录一起撤下。
+- **`DSH_BROWSER_GATE`（旧名 `DSH_EPUB_BROWSER` 仍认）允许带按应有口径写的「诚实红」**：已知缺陷的读数不削成绿，缺陷与读数登记在该测试文件自己的注释里；修好时按那条记录一起撤下。这门最早只为 EPUB 阅读器而设，现在同一把闸也量配置页 / 浮层 / 听书面的几何——名字按「真浏览器门」取，不按某个页面取。
 - **`DSH_EPUB_CORPUS` 是审计报告，不是通过率门**：唯一断言是审计自洽（每本都得出结局、被拒的每本都带得出原因骨架）；通过率、痕码分布、被拒原因分桶靠人判，红即工具坏。**它不证明**出版物写得规范，也不证明现网可得的 EPUB 总体质量——分母永远是那个目录里的文件。语料的合法来路：公版书（Project Gutenberg / archive.org 的公版条目）、外部反馈者**裁到最小**的样本（只落本机语料目录，不入库、不重分发），以及用 Calibre 把公版书自转出来的同族写法；要把某个真实形状钉进**默认门**，做法是把它提炼进 `tests/fixtures/epub.ts` 的合成表（真字节不入库）。
 
 **解析面普查（离线，读本地书源库）**——「legado 能解析的书源本插件也能解析」这条目标的进度读数口：把现库**每一条规则串**过 `parseRule`、把**每一个脚本里的 `java.*` 调用**与沙箱实际挂载面对账，输出「本仓拒绝的语法族」「脚本在调而桥没挂的方法」两张清单，并断言**未在册的新形态 = 0**；同时印一张**需求读数表**（登记册那些「N 源带值」的读数，矩阵行 `demand` 绑定的键由这一条命令重算，判据印在数字旁边——同一个键常有两种数法）。
@@ -140,8 +153,9 @@ $env:DSH_PARSE_CENSUS='1'; pnpm vitest run tests/engine/parse-census.test.ts
 1. **前置**：先 `pnpm build`。宿主 profile 必须**可由 CLI 写**——保留名 `desktop` 归宿主应用独占，普通 CLI 会拒写该保留名；写不了就改用 CLI 自建的一次性 profile（`dsh plugin --profile <名> add <本地路径>` 初始化它，再把 `@deepseek-ai/dsh-web-app` 加进 `dsh.profile.bundles`），它组出同一棵树。
 2. **装载与挂载**：`dsh plugin --profile <名> add link:<本仓目录>`（本包没有 `prepare`：`github:` 直装不会自动构建、缺 `lib/` 会被宿主拒挂——冒烟对象是上一步构建出的本仓产物，源码装一律先构建再 link，见「构建与日常开发」）→ `dsh --profile <名> --dump-config` 的组合树里出现本插件 → 起 `dsh --profile <名>`，看组合树里没有 `plugin tree failed to load`。Release 资产那一格（`add <tarball>`）由同一道门的第二格量；真实 Release 下载地址的安装同样要手工过第 2–3 步。
 3. **工具面与一条真路径**：六个 `dshnovel_` 工具各真调一次；再走一条真实业务：搜 → 详情 → 目录 → 正文并翻一页（顺带覆盖出站代理与解码链）。
+4. **听书面**：在同一台真宿主上听一次——阅读器顶条起播（内置口或浏览器本地语音）→ 暂停 / 继续 / 跳段 / 拖章内滑杆 → 改语速与定时 → 离开阅读器后浮窗仍在并续听 → 重开这本书按共用进度续上。宿主装了语音合成服务插件时，引擎清单里应出现「宿主朗读服务」；没有装就不列这一行。这条手工项覆盖的是**出声与宿主槽位**：服务端合成链另有 `scripts/tts-live.mjs`（见「门（自动）」），几何另由 `DSH_BROWSER_GATE` 那枚浏览器门量。
 
-**它证明什么**：当前宿主版本上「装得进、挂得上、工具面活着、业务链路走得通一次」。**它不证明**：任何站点的正文可读率（那是 `DSH_CONTENT_AUDIT` 的分桶报告，报告不等于通过率）、浏览器里的渲染与图片解码（那是 `DSH_EPUB_BROWSER`），也不证明其它宿主版本——每次 bump 编译所依（把新宿主加进实测名单）都要重跑这三步，并如实更新 `package.json` 的实测名单与 README 投影。
+**它证明什么**：当前宿主版本上「装得进、挂得上、工具面活着、业务链路走得通一次」。**它不证明**：任何站点的正文可读率（那是 `DSH_CONTENT_AUDIT` 的分桶报告，报告不等于通过率）、浏览器里的渲染与图片解码（那是 `DSH_BROWSER_GATE`）、听书在真宿主里出得了声（那是上面第 4 步的手工读数），也不证明其它宿主版本——每次 bump 编译所依（把新宿主加进实测名单）都要重跑这四步，并如实更新 `package.json` 的实测名单与 README 投影。
 
 ## 发版流程
 

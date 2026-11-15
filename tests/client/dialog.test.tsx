@@ -2,7 +2,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { ReactNode } from 'react'
-import { Dialog } from '../../src/client/views/dialog.js'
+import { useRef } from 'react'
+import { Dialog, useDialogContract } from '../../src/client/views/dialog.js'
 
 /**
  * 模态契约的行为钉子（契约的语义与口径见 `src/client/views/dialog.tsx` 与 `CONTEXT.md` 的
@@ -55,6 +56,33 @@ describe('入场焦点与 Tab 圈', () => {
   it('入场焦点落面板内第一颗未禁用钮', () => {
     render(threeButtons(() => undefined))
     expect(screen.getByText('取消') === document.activeElement).toBe(true)
+  })
+
+  it('带 data-dialog-initial 的元素优先拿入场焦点（表单模态该落第一个输入框，不是「取消」）', () => {
+    // 反例当场就在面板里：动作行第一颗是「取消」。焦点落在它上面时，用户填完第一格按回车
+    // 就等于点了取消——EngineEditDialog 丢过整张表单，所以显式初始位优先于回退规则。
+    render(
+      <Dialog title="编辑引擎" onClose={() => undefined}
+        actions={<><button>取消</button><button>保存</button></>}>
+        <label htmlFor="engine-name">名称</label>
+        <input id="engine-name" data-dialog-initial defaultValue="引擎一" />
+      </Dialog>,
+    )
+    expect(document.activeElement).toBe(document.getElementById('engine-name'))
+    expect(document.activeElement).not.toBe(screen.getByText('取消'))
+  })
+
+  it('没有初始位标记时回退到第一颗未禁用钮——不是「第一个可聚焦件」', () => {
+    // 回退档必须仍是钮：表单里的 textarea 排在动作行之前，但它不是这条规则的入口
+    render(
+      <Dialog title="粘贴导入" onClose={() => undefined} actions={<>
+        <button disabled>禁用那颗</button>
+        <button>关闭</button>
+      </>}>
+        <textarea aria-label="粘贴" />
+      </Dialog>,
+    )
+    expect(document.activeElement).toBe(screen.getByText('关闭'))
   })
 
   it('末位 Tab 回到首位、首位 Shift+Tab 回到末位（不许走到遮罩背后）', () => {
@@ -208,5 +236,52 @@ describe('抽屉档（书籍详情浮层的几何）', () => {
     expect(document.querySelector('.novel-modal-actions')).toBeNull()   // 抽屉档不吃 actions：关闭钮长在标题行右侧
     fireEvent.click(screen.getByRole('button', { name: '关闭' }))
     expect(close).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('层序：一次 Esc 只收最上面那一层', () => {
+  /** 无遮罩的契约卡（听书设置卡那一族）：与模态同场时两层各挂一条 document 监听 */
+  function Card({ onClose, label }: { onClose: () => void; label: string }): ReactNode {
+    const panelRef = useRef<HTMLDivElement | null>(null)
+    useDialogContract({ panelRef, onClose })
+    return (
+      <div ref={panelRef} role="dialog" aria-label={label}>
+        <button>{`${label}-甲`}</button>
+        <button>{`${label}-乙`}</button>
+      </div>
+    )
+  }
+
+  it('模态在下、卡在上：Esc 只关掉卡，模态仍在场等下一次 Esc', () => {
+    const modal = vi.fn()
+    const card = vi.fn()
+    render(
+      <>
+        <Dialog title="删这本书？" onClose={modal} actions={<button>取消</button>} />
+        <Card onClose={card} label="听书设置" />
+      </>,
+    )
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(card, '最上面那层先吃').toHaveBeenCalledTimes(1)
+    expect(modal, '底下那层不该被顺手关掉').not.toHaveBeenCalled()
+
+    // 卡收回后模态才成为最上层
+    cleanup()
+    render(<Dialog title="删这本书？" onClose={modal} actions={<button>取消</button>} />)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(modal).toHaveBeenCalledTimes(1)
+  })
+
+  it('Tab 圈也只归最上层：底下那层不许把焦点从卡里拽回去', () => {
+    render(
+      <>
+        <Dialog title="删这本书？" onClose={vi.fn()} actions={<button>取消</button>} />
+        <Card onClose={vi.fn()} label="听书设置" />
+      </>,
+    )
+    const last = screen.getByRole('button', { name: '听书设置-乙' })
+    last.focus()
+    fireEvent.keyDown(last, { key: 'Tab' })
+    expect(document.activeElement?.textContent, 'Tab 回环留在最上层的面板里').toBe('听书设置-甲')
   })
 })

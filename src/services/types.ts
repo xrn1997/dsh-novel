@@ -1,7 +1,7 @@
 /** 书源状态与内容形态：定义在 wire 契约（src/shared/wire.ts）——持久化与对外返回共用一份。
  *  此处 re-export 保持既有 import 路径可用。 */
 export type { SourceStatus, SourceContentKind, ShelfBook, ShelfProgress } from '../shared/wire.js'
-import type { SourceStatus, SourceContentKind } from '../shared/wire.js'
+import type { SourceStatus, SourceContentKind, TtsVoice } from '../shared/wire.js'
 
 /** 登录态挂载点（服务层只做数据位；loginUrl JS 执行与 cookie 录入归 HTTP 面 / UI） */
 export interface SourceAuth {
@@ -92,6 +92,24 @@ export interface NovelSource {
   raw: unknown; rules: NormalizedRules; auth?: SourceAuth
   status: SourceStatus; statusDetail?: string
   importedAt: number; lastProbedAt?: number
+}
+
+/** 朗读引擎（legado HttpTTS 订阅条目）：`tts-engines.json` 的落盘形状。
+ *  字段集照 legado httpTTS；缺省字段不建键（「源没这条信息」≠ 空串）。
+ *  `auth` 只落盘：对外投影是 wire 的 `TtsEnginePublic`（剥 auth，只给 hasAuth 一个布尔位——
+ *  听书没有登录面，不投 authExpired），写入口是可编辑子集 wire 的 `TtsEngineInput`（不含 id / lastUpdateTime）。 */
+export interface HttpTtsEngine {
+  id: string
+  name: string
+  url: string
+  contentType?: string
+  header?: string
+  jsLib?: string
+  /** 源声明的音色表：订阅条携带（导入 / put 可整组替换），内置源没有（端点不读音色参数）；
+   *  `toPublic` 原样投影，不算凭据。 */
+  voices?: TtsVoice[]
+  auth?: SourceAuth
+  lastUpdateTime?: number
 }
 
 /** 书架条目：ShelfBook 定义在 wire 契约（src/shared/wire.ts），上方 re-export。

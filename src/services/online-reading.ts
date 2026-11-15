@@ -4,7 +4,7 @@ import { detailContextOf, firstValue, itemContextsOf, staticTocUrl, tocUrlFromCo
 import type { Page, SubRuleEval } from './bridge.js'
 import type { PageCache } from './cache.js'
 import { contentSlot, rulesEpoch } from './cache-epoch.js'
-import { normalizeChapterText } from './chapter-content.js'
+import { normalizeChapterText } from '../shared/chapter-text.js'
 import { contentToText } from './content.js'
 import { ChapterNotFoundError, RuleMissingError, SourceNotFoundError } from './errors.js'
 import { lruGet, lruSet } from './lru.js'

@@ -198,6 +198,13 @@ const STATUS_OF: Record<ErrorCategory, { status: number; code: string }> = {
   'local-too-large': { status: 413, code: 'PayloadTooLarge' },
   unavailable: { status: 503, code: 'Unavailable' },
   'job-running': { status: 409, code: 'JobRunning' },
+  // 段合成三分档：引擎缺席是调用方的选择（400），上游失败/坏响应是网关问题（502）。
+  // code 原样带上 TTS_*（不是类名），给读这两档调用方（真链路脚本、curl、将来的诊断面）一个
+  // 「换个引擎」还是「稍后再试」的判据。播放层**不**看它：单段失败在那一层一律走同一条失败径
+  // （跳过并留痕，`client/tts/listen-session.ts`），错误码只到 HTTP 面为止。
+  'tts-engine-missing': { status: 400, code: 'TTS_ENGINE_MISSING' },
+  'tts-upstream': { status: 502, code: 'TTS_UPSTREAM' },
+  'tts-bad-response': { status: 502, code: 'TTS_BAD_RESPONSE' },
   other: { status: 500, code: 'InternalError' },
 }
 

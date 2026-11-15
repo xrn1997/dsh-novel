@@ -11,6 +11,24 @@ export const SHELL_CSS = `
    进度落盘/预取/回跳一并死）。 */
 .novel-root { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 .novel-main { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+/* 滚动面的滚动条跟宿主滚动条语义（轨 / thumb / hover 三 token）：浏览器默认灰条是光暗两态里
+   唯一不跟主题的一块。实测 scrollbar-width 不向子元素继承（根上 thin、滚动容器自己仍 auto），
+   故显式盖到两棵树的每个后代；webkit 伪元素用后代选择器盖到每个滚动面。
+   选择器带作用域前缀，不与任何单类规则撞名（ui-system 按名取规则块）。宿主 DOM 一律不碰。 */
+.novel-root, .novel-root *, [data-novel-scope], [data-novel-scope] * {
+  scrollbar-width: thin;
+  scrollbar-color: var(--novel-scrollbar) var(--novel-scrollbar-track);
+}
+.novel-root ::-webkit-scrollbar, [data-novel-scope] ::-webkit-scrollbar { width: 8px; height: 8px; }
+.novel-root ::-webkit-scrollbar-track, [data-novel-scope] ::-webkit-scrollbar-track {
+  background: var(--novel-scrollbar-track);
+}
+.novel-root ::-webkit-scrollbar-thumb, [data-novel-scope] ::-webkit-scrollbar-thumb {
+  background: var(--novel-scrollbar); border-radius: 999px;
+}
+.novel-root ::-webkit-scrollbar-thumb:hover, [data-novel-scope] ::-webkit-scrollbar-thumb:hover {
+  background: var(--novel-scrollbar-hover);
+}
 /* 这里**故意没有**「藏宿主 composer / 列宽把手」的规则：main 是 keyed 槽，宿主按选中面板的 id
    只渲染一个占用者（entryKey 命中谁就渲染谁），切到小说面板时整个 Conversation 卸载，composer
    与把手随之消失——结构上不存在「composer 压在正文上」。老规则用宿主的会话滚动容器属性做

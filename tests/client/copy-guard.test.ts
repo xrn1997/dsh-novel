@@ -39,6 +39,7 @@ const FILE_ALLOW = new Map<string, string>([
   ['styles/overlays.ts', 'CSS 模板串里的中文全是注释，模板本身不上屏'],
   ['styles/city.ts', 'CSS 模板串里的中文全是注释，模板本身不上屏'],
   ['styles/config-page.ts', 'CSS 模板串里的中文全是注释，模板本身不上屏'],
+  ['styles/tts.ts', 'CSS 模板串里的中文全是注释，模板本身不上屏'],
 ])
 
 /** 逐字面量白名单：只放行具体某个非文案字形或内部错误模板。 */

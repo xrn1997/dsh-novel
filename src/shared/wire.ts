@@ -288,7 +288,21 @@ export interface BookDetail {
  *  interface 无隐式 index signature 会在这里炸——别改回 interface。 */
 export type ShelfProgress = { chapterIndex: number; offsetRatio: number; updatedAt: number }
 
-/** 书架条目：元数据 + 阅读进度 */
+/** 按书听书位置（`ShelfBook.listen` 的值）：听书自己的细节轨——段号 + 播放参数。
+ *  **章 + 章内比例**的共用位置住 `progress`：播放层在同一个落盘节拍里写两笔，书架卡片、
+ *  最近阅读排序与开书恢复都只认 `progress`；`listen` 只服务听书的精确续听与按书记住的参数。
+ *  `engineId` / `voice` 为 null = 这本书没显式选过，回退到全局缺省。
+ *  type 别名而非 interface：理由同 `ShelfProgress`（schema 推断需要隐式 index signature）。 */
+export type ListenState = {
+  chapterIndex: number
+  paragraphIndex: number
+  engineId: string | null
+  voice: string | null
+  rate: number
+  volume: number
+}
+
+/** 书架条目：元数据 + 阅读进度 + 按书听书位置 */
 export interface ShelfBook {
   sourceId: string
   bookKey: string
@@ -302,6 +316,8 @@ export interface ShelfBook {
   /** 全书章数（可选——旧数据无此字段；首页进度条用） */
   totalChapters?: number
   progress: ShelfProgress
+  /** 听书位置（可选——从未听过这本书）。系统状态字段，不是书目元数据：不进 `SHELF_META`。 */
+  listen?: ListenState
   addedAt: number
 }
 
@@ -350,6 +366,157 @@ export function pickShelfMeta(raw: Record<string, unknown>): ShelfMetaPatch {
     else if (kind === 'number' && typeof v === 'number' && Number.isFinite(v)) out[k] = v
   }
   return out
+}
+
+// ── 听书面（朗读引擎订阅注册表；落盘 tts-engines.json）──────────────────────
+
+/** 音色表的一行：`id` 是发得出去的音色身份（换引擎不通用），`name` 是上屏的显示名。
+ *  订阅条携带、源能力带入；界面只认这条形状，别处不再各写一份 `{ id, name }`。 */
+export interface TtsVoice {
+  id: string
+  name: string
+}
+
+/** 朗读引擎对外投影（`TtsEngineRegistry.list` 产出）：**绝不含 auth**——凭据只落盘，
+ *  不出现在对外返回值，只给 `hasAuth` 一个布尔位（这一半与 `SourcePublic` 同口径）。
+ *  `header` / `jsLib` 等文本位与书源相反、原样外发：它们是订阅本体的内容，编辑表单与导出
+ *  都要回读（`SourcePublic` 那边只给 hasHeader 布尔位）。因此把密钥写在 `header` 里的订阅，
+ *  投影与导出都带着它——本机读口，不是新的外泄面，但确实不是「剥凭据」。
+ *  实体 `HttpTtsEngine`（落盘形状，含 auth）住 services/types.ts；两向相等由
+ *  `services/tts-engines.ts` 的编译期断言钉住（wire 不能 type-import services，layering 门）。 */
+export interface TtsEnginePublic {
+  id: string
+  name: string
+  url: string
+  contentType?: string
+  /** 静态请求头（legado HttpTTS 的 `header` 字段）：订阅内容的一部分，随投影外发 */
+  header?: string
+  jsLib?: string
+  /** 源声明的音色表（订阅数据或源能力带入；内置没有——端点不读音色参数）：
+   *  在场 = 该源有可选音色列表，缺席 = 界面不渲染音色行。 */
+  voices?: TtsVoice[]
+  /** 最近一次变更时刻：由注册表在 put / 导入时盖章，不来自 wire */
+  lastUpdateTime?: number
+  hasAuth: boolean
+}
+
+/** 朗读引擎的写入口（put 的可编辑字段集）：id 不在其中——它是身份 / 路径参数，
+ *  导入条自带的那一格由注册表收口（见 `TtsEngineRegistry.importJson`）。
+ *  `auth` 是**只写凭据槽**（= SourceAuth 的 cookies/headers/loginInfo 三键）：投影永远读不回来。
+ *  三态：缺席 = 保留盘上凭据（改元数据不该抹掉登录态）；非空 = 覆盖；显式空凭据（空 cookies
+ *  且 headers / loginInfo 缺席或为空）= 删掉 auth。落位判据住 `services/tts-engines.ts` 的 `authOf`。 */
+export interface TtsEngineInput {
+  name: string
+  url: string
+  contentType?: string
+  header?: string
+  jsLib?: string
+  auth?: { cookies: Record<string, string>; headers?: Record<string, string>; loginInfo?: Record<string, string> }
+  /** 音色表是**订阅数据**：导入条携带、put 可整组替换。缺席 = 保留盘上那份（改名不该抹掉源声明的
+   *  音色），显式数组（含空数组）= 整组替换 / 清掉——与 `auth` 的「缺席=保留」同族，
+   *  区别于可编辑文本位的「整体替换」。 */
+  voices?: TtsVoice[]
+}
+
+/** 朗读引擎可编辑的纯文本位：只收合成链**真的会读**的三格（contentType 参与响应判定，
+ *  header / jsLib 参与请求求值）。legado HttpTTS 的其余字段（loginUrl / loginUi /
+ *  loginCheckJs / concurrentRate / enabledCookieJar）本仓没有对应能力，不导入、不落盘、
+ *  不摆不会生效的控件——「源没这条信息」比假开关诚实。 */
+export const TTS_ENGINE_TEXT_FIELDS = [
+  'contentType',
+  'header',
+  'jsLib',
+] as const
+export type TtsEngineTextField = (typeof TTS_ENGINE_TEXT_FIELDS)[number]
+
+/** 引擎导入回执：added / updated 按 id 是否已在表里分；failed 是**逐条剪除**的留痕——
+ *  index 是被剪条在导入 JSON 数组里的下标（单对象导入即 0），message 带段级定位。
+ *  坏条只剪自己，其余照进（失败半径 = 该条）。 */
+export interface TtsEngineImportReceipt {
+  added: number
+  updated: number
+  failed: { index: number; message: string }[]
+}
+
+/** 删引擎回执：未知 id 静默 `removed:false`（与删源同口径，不把「没有这条」报成错误）。
+ *  值形状住 wire：门面与浏览器半不各写一份 `{ removed: boolean }` 的手抄本。 */
+export interface TtsEngineRemoveReceipt {
+  removed: boolean
+}
+
+// ── 听书面（段合成与引擎源清单）──────────────────────────────────────────
+// 一段正文 → 音频字节的合成请求/回执，与引擎源清单的行形状：路由面与浏览器播放层共用。
+// 全部是类型（零运行时依赖）——wire 被 inline 进 client bundle。
+
+/** 听书全局缺省的**唯一字面量主人**（跨半共享）：Node 半的配置表与 served 读数、浏览器半的
+ *  播放层回退链都引这里。配置面只覆盖用户改过的值，播放器在「无显式、无本书存档」时落到这份
+ *  缺省；两半各写一份 `'builtin:baidu'` 之类的字面量，改缺省就会只改到一边（见 `tests/config.test.ts`
+ *  与 `tests/client/tts-player.test.ts` 的缺省对齐）。缓存容量缺省不在此列：它属于音频缓存，
+ *  主人是 Node 半的 `tts-cache.ts`（浏览器半不直接持有容量）。 */
+export const TTS_DEFAULTS = {
+  engineId: 'builtin:baidu',
+  rate: 1,
+  volume: 0.8,
+  prefetchParagraphs: 10,
+} as const
+
+/** 听书语速 / 音量的值域：`min`/`max` 由配置 schema、门面值域闸、播放层夹取与界面滑杆共读
+ *  （两半各写一份 `[0.5, 3]` 就会在某一处改口径时静默漂移）。`step` 只服务**界面滑杆**的落点：
+ *  配置页那两个文本位按「一位小数」档校验（0.1），不消费滑杆步长——两档别混成一份口径。 */
+export const TTS_RATE = { min: 0.5, max: 3, step: 0.1 } as const
+export const TTS_VOLUME = { min: 0, max: 1, step: 0.05 } as const
+
+/** 浏览器直出源的**身份字面量主人**（跨半共享）：它不产字节、不经合成服务，Node 半只把这一行
+ *  列进源清单，浏览器半据它切直出分支。身份是契约值，两半不各写一份字面量。 */
+export const BROWSER_TTS_ENGINE_ID = 'browser:local'
+
+/** 宿主语音服务源的**身份字面量主人**（跨半共享）：它不是注册表引擎，id 由合成面钉死。 */
+export const CORDIS_TTS_ENGINE_ID = 'cordis:speechSynthesis'
+
+/**
+ * 朗读源的保留 id：`builtin:` 前缀（内置表）+ 上面两枚。合成面按这些身份分流，注册表只是
+ * 订阅资产的住处——收下同名 id 就会在源清单里多出一行「此刻可用、每次合成必
+ * `TTS_ENGINE_MISSING`」的幽灵源（清单承诺「列出的源都在此刻可用」），内置同名 id 还会让同一行
+ * 出现两次。判据只住这一处：写入口（`put`）、导入（逐条剪除）与落盘读口共用它，浏览器半不再抄一份。
+ */
+export const TTS_RESERVED_ID_PREFIX = 'builtin:'
+
+export function isReservedTtsEngineId(id: string): boolean {
+  return id.startsWith(TTS_RESERVED_ID_PREFIX)
+    || id === CORDIS_TTS_ENGINE_ID
+    || id === BROWSER_TTS_ENGINE_ID
+}
+
+/** 一段合成的请求：`text` 是一个播放单元（切分归 shared/chapter-text 的 splitParagraphs），
+ *  `rate` 是播放语速倍率；`voice` 缺省 = 该源不用音色（不是「用默认音色」这一档的替身——
+ *  缺省音色由源自己决定，wire 不编一个音色 id）。 */
+export interface SynthesisRequest {
+  engineId: string
+  text: string
+  rate: number
+  voice?: string
+}
+
+/** 合成回执：音频已落缓存，浏览器拿 `key` 去音频读口取字节。响应类型的事实来源是音频
+ *  读口按缓存侧车报出的 content-type——回执不重复一份没有读者的副本。 */
+export interface SynthesisReceipt {
+  key: string
+}
+
+/** 引擎源清单的一行（`TtsService.sources` 产出）。清单只列**此刻可用**的源：不可用/缺席
+ *  的源不出现在清单里，而不是灰着造禁用态（客户端给「宿主服务未安装」补的那一行是本地
+ *  展示，不属于本契约）。
+ *  `name` 只属于订阅数据：`kind: 'http'`（注册表订阅引擎）带订阅自己的名字，它是权威展示名；
+ *  内置 / cordis / 浏览器是插件自有源，服务端不投展示名（`name` 缺席），浏览器半按 `kind` / `id`
+ *  从客户端文案单点取词——插件写的标签不落服务端，否则英文 locale 会露出中文。
+ *  `voices` 缺席 = 该源没有音色列表（UI 不渲染音色行）。源清单只在有表时带这一格：生产侧没有
+ *  「有能力但零音色」的来路（注册表把空表与缺席同义折叠），空数组不是这份契约的第二档。
+ *  源的能力限制由客户端文案按 `kind` 取词（如直出型没有缓存与预取），服务端不投自由文本说明。 */
+export interface TtsSourceInfo {
+  id: string
+  name?: string
+  kind: 'builtin' | 'http' | 'cordis' | 'browser'
+  voices?: TtsVoice[]
 }
 
 // ── 本地图文面（EPUB 导入；身份锚在保留源 id LOCAL_SOURCE_ID）──────────────────────
@@ -510,6 +677,11 @@ export const SEG = {
   document: 'document',
   resource: 'resource',
   warnings: 'warnings',
+  /** 听书面：源清单 / 段合成 / 引擎订阅（导入与按 id 的写口）/ 音频读口 */
+  tts: 'tts',
+  synthesize: 'synthesize',
+  engines: 'engines',
+  audio: 'audio',
 } as const
 
 /** HTTP 方法：路由身份的第二条腿。与 path 同源，别再散到 dispatch 与客户端调用点两处。 */
@@ -583,6 +755,20 @@ export const ROUTES = {
   localResource: route('GET', SEG.local, SEG.resource),
   /** 导入说明（告警）：`id=bookKey`——按需查看，不随每次取章重复携带 */
   localWarnings: route('GET', SEG.local, SEG.warnings),
+  // ── 听书面 ──────────────────────────────────────────────────────────
+  /** 引擎源清单（内置 / 浏览器直出 / 注册表订阅 / cordis 仅在场）：播放器的引擎选择面。
+   *  行形状是 `TtsSourceInfo`（`services/tts.ts` 的 `sources()`），不是引擎实体的投影。 */
+  ttsSources: route('GET', SEG.tts, SEG.sources),
+  /** 段合成：回执带缓存键（`SynthesisReceipt`），字节另走 ttsAudio 读口 */
+  ttsSynthesize: route('POST', SEG.tts, SEG.synthesize),
+  /** 引擎订阅清单（管理面）：公共投影已剥凭据——导出 JSON 由 client 用这份数据自组，
+   *  **不设后端导出路由**（导出是呈现动作，不是新事实）。 */
+  ttsEngines: route('GET', SEG.tts, SEG.engines),
+  /** 引擎订阅导入：body 恰带 `json` 或 `url` 之一（url 支经组合根同一 fetcher 拉取） */
+  ttsEnginesImport: route('POST', SEG.tts, SEG.engines, SEG.import),
+  /** 音频读口：query 键 `key`（照 localResource 的 query 先例——key 是 32 位 hex，不走路径段）。
+   *  未知/过期 key 在发头前 404，不是空音频。 */
+  ttsAudio: route('GET', SEG.tts, SEG.audio),
 } as const
 
 /** 参数操作：方法与路径构造同住一行。`at(...)` 把两者绑成一个目标，客户端写口不再手写方法。
@@ -601,6 +787,11 @@ function paramOp<M extends WriteMethod, A extends unknown[]>(
 
 const shelfKeyPath = (bookKey: string): string => `${ROUTES.shelf.path}/${encodeURIComponent(bookKey)}`
 
+/** 引擎 id 含 `:`（`http:<uuid>`），进路径段必须编码——与 `shelfKeyPath` 同口径。
+ *  静态 `tts/engines/import` 先于本模式匹配（`matchRoute` 判据③），故导入不会被读成「改/删一条引擎」。 */
+const ttsEnginePath = (id: string): string =>
+  `${ROUTES.ttsEngines.path}/${encodeURIComponent(id)}`
+
 export const paramOps = {
   sourceProbe: paramOp('POST', (id: string) => `${ROUTES.sources.path}/${id}/${SEG.probe}`),
   sourceEnabled: paramOp('POST', (id: string) => `${ROUTES.sources.path}/${id}/${SEG.enabled}`),
@@ -608,6 +799,9 @@ export const paramOps = {
   sourceDelete: paramOp('DELETE', (id: string) => `${ROUTES.sources.path}/${id}`),
   shelfPut: paramOp('PUT', shelfKeyPath),
   shelfDelete: paramOp('DELETE', shelfKeyPath),
+  /** 朗读引擎的新增/更新（PUT，id 是身份）与删除（未知 id 静默 removed:false） */
+  ttsEnginePut: paramOp('PUT', ttsEnginePath),
+  ttsEngineDelete: paramOp('DELETE', ttsEnginePath),
 } as const
 
 // ── query 参数名与构造器 ───────────────────────────────────────────────
@@ -637,6 +831,8 @@ export const PARAMS = {
   resourceId: 'resourceId',
   /** 分类名（发现面：左栏选中项，精确同名匹配） */
   kind: 'kind',
+  /** 合成音频读口的缓存键（合成回执的 `key`；32 位 hex，照本地读口用 query 不走路径段） */
+  key: 'key',
 } as const
 
 /** query 序列化：编码 + 去 undefined/null（null = 键缺席，与 wire 可空口径一致） */
@@ -690,6 +886,9 @@ export const queries = {
     `${ROUTES.localResource.path}?${encodeQuery({ [PARAMS.id]: p.id, [PARAMS.resourceId]: p.resourceId })}`,
   localWarnings: (p: { id: string }): string =>
     `${ROUTES.localWarnings.path}?${encodeQuery({ [PARAMS.id]: p.id })}`,
+  /** 合成音频读口：`key` 是合成回执里那枚缓存键（不透明串，编码后当查询参数） */
+  ttsAudio: (p: { key: string }): string =>
+    `${ROUTES.ttsAudio.path}?${encodeQuery({ [PARAMS.key]: p.key })}`,
 } as const
 
 /**
@@ -702,16 +901,31 @@ export function resourceUrl(bookKey: string, resourceId: string): string {
   return `${NOVEL_API_PREFIX}/${queries.localResource({ id: bookKey, resourceId })}`
 }
 
+/**
+ * 合成音频的**唯一 URL 构造器**：`/novel-api` 前缀 + 音频读口的路径与 query（与 `resourceUrl`
+ * 同形——一个给 `<img src>`、一个给 `audio.src`，两半都不手拼前缀）。`key` 是合成回执里的不透明
+ * 缓存键，经 `encodeQuery` 编码后当查询参数：拼不出第二个参数、也换不来协议（与本地资源同一安全面）。
+ */
+export function ttsAudioUrl(key: string): string {
+  return `${NOVEL_API_PREFIX}/${queries.ttsAudio({ key })}`
+}
+
 // ── 写路由的 body：字段名、构造器、读口同源 ────────────────────────────
 // 所有写路由的键名都必须有主人：若浏览器半手写、Node 半逐一手读，改名不会有什么变红——
 // 「wire 单点」这条硬约束承诺的正是 body 构造器与读口成对。两者同住这里，因为答的是同一件事
 // （「这个 body 该长什么样」），分家就会立刻生成两份抄本。
 // 本文件被 inline 进 client bundle，故以下全部零运行时依赖（纯函数 + 本地错误类）。
 
+/** 引擎文本位的 body 键名（值 = 键名本身）：与 `TTS_ENGINE_TEXT_FIELDS` 同源，不另抄七行。 */
+const TTS_ENGINE_TEXT_BODY = Object.fromEntries(
+  TTS_ENGINE_TEXT_FIELDS.map((field) => [field, field] as const),
+) as { readonly [K in TtsEngineTextField]: K }
+
 /** body 字段名（只列 query 那侧没有的词）。与 `PARAMS` 撞上的业务名词（`keyword` / `sourceIds` /
  *  `sourceId` / `kind` / `name` / `title`）**沿用 `PARAMS`**，不在这里再造第二个字面量：body 与
  *  query 是两条轴，同一个业务名词在两轴上同名是语义一致，不是巧合。 */
 export const BODY = {
+  ...TTS_ENGINE_TEXT_BODY,
   files: 'files',
   text: 'text',
   ids: 'ids',
@@ -721,11 +935,25 @@ export const BODY = {
   progress: 'progress',
   chapterIndex: 'chapterIndex',
   offsetRatio: 'offsetRatio',
+  /** 听书细节轨（`ShelfBook.listen` 的写口）：段号 + 播放参数；章 + 比例的共用位置不在这里 */
+  listen: 'listen',
+  paragraphIndex: 'paragraphIndex',
+  engineId: 'engineId',
+  voice: 'voice',
+  rate: 'rate',
+  volume: 'volume',
   runLogin: 'runLogin',
   loginAction: 'loginAction',
   cookies: 'cookies',
   headers: 'headers',
   loginInfo: 'loginInfo',
+  /** 引擎订阅导入的两条来路（恰一）：粘贴的 JSON 文本 / 拉取订阅的 URL。
+   *  URL 这一位沿用 `PARAMS.url`（同一业务名词不造第二个字面量）。 */
+  json: 'json',
+  /** 引擎音色表（订阅数据）：put 可整组替换，缺席 = 保留盘上那份 */
+  voices: 'voices',
+  /** 只写凭据槽（`TtsEngineInput.auth` = cookies/headers/loginInfo 三键）：投影永远读不回来 */
+  auth: 'auth',
 } as const
 
 /** body 形状不符（缺字段、类型错、空数组）。消息文本就是给终端用户看的那句 400 说明——
@@ -752,6 +980,15 @@ function readRequiredText(body: Record<string, unknown> | null, field: string): 
   const t = typeof v === 'string' ? v.trim() : ''
   if (t === '') bodyBad(`缺 body 字段 ${field}`)
   return t
+}
+
+/** 可选串位：缺席原样缺席（不补空串——wire 可空口径里「没有这一项」不是 `''`）；
+ *  在场但不是串 → 400 点名。返回原值不 trim（读口只判形状，规整归消费方）。 */
+function readOptionalText(body: Record<string, unknown> | null, field: string): string | undefined {
+  const v = body?.[field]
+  if (v === undefined) return undefined
+  if (typeof v !== 'string') bodyBad(`body.${field} 需为 string`)
+  return v
 }
 
 /** 一条导入文件：`name` = 上传文件的名字（粘贴那一路给一个标签），坏文件由导入任务在 `fileErrors`
@@ -800,11 +1037,67 @@ export const bodies = {
   /** ② progress 形态=更新进度（值域门与「不在架 400」都归门面动词，这里只管形状） */
   shelfProgress: (chapterIndex: number, offsetRatio: number): Record<string, unknown> =>
     ({ [BODY.progress]: { [BODY.chapterIndex]: chapterIndex, [BODY.offsetRatio]: offsetRatio } }),
-  /** ③ patch 形态=对在架书打补丁：字段缺省/null 一律不出现在 body（缺席键保值——ReaderView 回写
+  /** ③ listen 形态=存听书位置（单对象入参：六个字段同属一条位置记录，摊成位置参数只会让
+   *  调用点在两处各排一遍序）。值域门与「不在架 400」都归门面动词 `shelfSaveListen`；
+   *  构造器只写契约里的六个键。 */
+  shelfListen: (p: ListenState): Record<string, unknown> =>
+    ({ [BODY.listen]: {
+      [BODY.chapterIndex]: p.chapterIndex,
+      [BODY.paragraphIndex]: p.paragraphIndex,
+      [BODY.engineId]: p.engineId,
+      [BODY.voice]: p.voice,
+      [BODY.rate]: p.rate,
+      [BODY.volume]: p.volume,
+    } }),
+  /** ④ patch 形态=对在架书打补丁：字段缺省/null 一律不出现在 body（缺席键保值——ReaderView 回写
    *  totalChapters 只发一个字段，不必再重发 sourceId+title）。取舍同走 `pickShelfMeta` 单点 */
   shelfPatch: (p: ShelfMetaPatch): Record<string, unknown> =>
     ({ [BODY.patch]: pickShelfMeta(p) }),
+  /** ⑤ 段合成（听书面）：一段正文 + 引擎/音色/语速。`voice` 缺席 = 该源不用音色
+   *  （不编一个「默认音色」的替身；缺省音色由源自己决定） */
+  ttsSynthesize: (p: SynthesisRequest): Record<string, unknown> => ({
+    [BODY.engineId]: p.engineId,
+    [BODY.text]: p.text,
+    [BODY.rate]: p.rate,
+    ...(p.voice === undefined ? {} : { [BODY.voice]: p.voice }),
+  }),
+  /** ⑥ 引擎订阅导入：两条来路（粘贴 JSON / 拉取 URL）恰写一位；「恰一」的裁决归读口，
+   *  构造器只落位在场的那一位（两参对象是调用点唯一形状，摊成位置参数只会让调用点自行约定顺序） */
+  ttsEnginesImport: (p: { json?: string; url?: string }): Record<string, unknown> => ({
+    ...(p.json === undefined ? {} : { [BODY.json]: p.json }),
+    ...(p.url === undefined ? {} : { [PARAMS.url]: p.url }),
+  }),
+  /** ⑦ 引擎新增/更新（`PUT tts/engines/:id` 的 body）：可编辑字段集原样落位。id 不在 body 里
+   *  （它是身份/路径参数）；`lastUpdateTime` / hasAuth 这类注册表盖章的位也不进写口；
+   *  `auth` 是只写凭据槽——投影永远读不回来。三个文本位按 `TTS_ENGINE_TEXT_FIELDS` 派生
+   *  （表加字段 = 构造器自动带上，没有手抄本可漏）；`voices` 在场才带。 */
+  ttsEnginePut: (p: TtsEngineInput): Record<string, unknown> => ({
+    [PARAMS.name]: p.name,
+    [PARAMS.url]: p.url,
+    ...Object.fromEntries(
+      TTS_ENGINE_TEXT_FIELDS
+        .filter((field) => p[field] !== undefined)
+        .map((field) => [BODY[field], p[field]] as const),
+    ),
+    ...(p.voices === undefined ? {} : { [BODY.voices]: p.voices }),
+    ...(p.auth === undefined ? {} : { [BODY.auth]: {
+      [BODY.cookies]: p.auth.cookies,
+      ...(p.auth.headers === undefined ? {} : { [BODY.headers]: p.auth.headers }),
+      ...(p.auth.loginInfo === undefined ? {} : { [BODY.loginInfo]: p.auth.loginInfo }),
+    } }),
+  }),
 } as const
+
+/** 编译期绑定：表里每位都必须是 `TtsEngineInput` 的键——加表而写入口（构造器的入参）没接 =
+ *  tsc 红（派生处的 `p[field]` 踩同一道缝；断言把它写成显式契约，换掉派生也还在）。 */
+type Assert<T extends true> = T
+export type _PutTextFieldsBindInput = Assert<TtsEngineTextField extends keyof TtsEngineInput ? true : false>
+
+/** 反向：可编辑位只有表里这三格（身份 `name`/`url`、只写凭据 `auth`、音色表 `voices` 各归各）。
+ *  给写入口加一个非文本可编辑位而构造器/读口没接，写入会静默丢字段且编译期无声——这一向堵住它。 */
+export type _PutTextFieldsCoverInput = Assert<
+  Exclude<keyof TtsEngineInput, 'name' | 'url' | 'auth' | 'voices'> extends TtsEngineTextField ? true : false
+>
 
 /** 对象位（cookie/header 表）：非对象、null、数组一律不算在场。
  *  值必须是字符串：混进对象/数字会原样进 SourceAuth，最后被 fetch 的 WebIDL 强转成
@@ -817,17 +1110,36 @@ function readRecordField(body: Record<string, unknown>, field: string): Record<s
   return v as Record<string, string>
 }
 
-/** `PUT shelf/:key` body 的**字段事实**（不裁决形态）：三个构造器（三形态）产出的东西都能拆成
- *  这三个事实位，读口只做字段集类型判别。
+/** 音色表的形状判据（**单点**：引擎写口 body 与订阅导入条共用，别处不再各抄一份）：
+ *  数组且逐项 `{ id, name }` 两格非空串才在场；形状不符 = **该键缺席**（不猜——认不出的表按
+ *  「源没这条信息」处理，坏表整键不带）；空数组是合法值 = 整组清掉，照收。
+ *  在场时逐项**只投影 `id` / `name` 两格**：订阅数据可能带 legado 的额外键（如 `lang`），
+ *  原样落盘会让持久化形状长出本仓不消费的字段，配置卡与导出也跟着回显它们。
+ *  **PUT 写口另加一道**：`readBodies.ttsEnginePut` 对「在场但形状不符」落 400——它面对的是用户
+ *  刚提交的数据，静默丢键会让人以为存上了；导入面对外部数据，才按条剪除。两把尺各有主语。 */
+export function readTtsVoices(value: unknown): TtsVoice[] | undefined {
+  if (value === undefined) return undefined
+  const itemOk = (x: unknown): boolean =>
+    typeof x === 'object' && x !== null && !Array.isArray(x)
+    && typeof (x as { id?: unknown }).id === 'string' && (x as { id: string }).id.trim() !== ''
+    && typeof (x as { name?: unknown }).name === 'string' && (x as { name: string }).name.trim() !== ''
+  if (!Array.isArray(value) || !value.every(itemOk)) return undefined
+  return (value as TtsVoice[]).map((voice) => ({ id: voice.id, name: voice.name }))
+}
+
+/** `PUT shelf/:key` body 的**字段事实**（不裁决形态）：四个构造器（四形态）产出的东西都能拆成
+ *  这四个事实位，读口只做字段集类型判别。
  *  - `meta` = 顶层认得出的书目元数据（title 可以是空串——空标题是事实，不是缺席）；
  *  - `patch` = body.patch 是对象才非 null；
- *  - `progress` = 两个键都是 number 才非 null（值域归门面动词）。
- *  三形态的优先级（title 非空 → patch → progress）与「皆无 → 400」是派发，归
+ *  - `progress` = 两个键都是 number 才非 null（值域归门面动词）；
+ *  - `listen` = 六个键类型对才非 null（可空位必须是在场的 `string | null`，值域归门面动词）。
+ *  四形态的优先级（title 非空 → patch → progress → listen）与「皆无 → 400」是派发，归
  *  `src/api/dispatch.ts` 的 shelfPut 臂（传输关注点，见 `ADR-0036`）。 */
 export interface ShelfPutFields {
   meta: ShelfMetaPatch
   patch: ShelfMetaPatch | null
   progress: { chapterIndex: number; offsetRatio: number } | null
+  listen: ListenState | null
 }
 
 export const readBodies = {
@@ -898,20 +1210,104 @@ export const readBodies = {
       ...(loginInfo === undefined ? {} : { loginInfo }),
     }
   },
-  /** 书架 PUT 的**字段事实**读口：只做字段集类型判别（meta / patch 形状 / progress 两键都是数），
-   *  不裁决形态——「非空 title 才算加书、三形态皆无 → 400」是分派，归 `api/dispatch.ts` 的 shelfPut 臂。
-   *  全空 body 回空事实（不是抛错）：读口交事实，传输层决定报什么。 */
+  /** 书架 PUT 的**字段事实**读口：只做字段集类型判别（meta / patch 形状 / progress 两键都是数 /
+   *  listen 六键类型对），不裁决形态——「非空 title 才算加书、四形态皆无 → 400」是分派，
+   *  归 `api/dispatch.ts` 的 shelfPut 臂。全空 body 回空事实（不是抛错）：读口交事实，传输层决定报什么。 */
   shelfPut: (body: Record<string, unknown> | null): ShelfPutFields => {
     const b = body ?? {}
     const patch = b[BODY.patch]
     const progress = b[BODY.progress]
     const p = progress !== null && typeof progress === 'object' ? progress as Record<string, unknown> : null
+    const listen = b[BODY.listen]
+    const l = listen !== null && typeof listen === 'object' ? listen as Record<string, unknown> : null
+    // 可空位（引擎 / 音色）必须是在场的 `string | null`：wire 可空口径里 null 是在场的值，
+    // 缺键不是 null——形状不完整回 null 事实，由 dispatch 落成 400，不替调用方猜一个 null。
+    const nullableText = (v: unknown): v is string | null => v === null || typeof v === 'string'
     return {
       meta: pickShelfMeta(b),
       patch: patch !== null && typeof patch === 'object' ? pickShelfMeta(patch as Record<string, unknown>) : null,
       progress: p !== null && typeof p[BODY.chapterIndex] === 'number' && typeof p[BODY.offsetRatio] === 'number'
         ? { chapterIndex: p[BODY.chapterIndex] as number, offsetRatio: p[BODY.offsetRatio] as number }
         : null,
+      listen: l !== null
+        && typeof l[BODY.chapterIndex] === 'number'
+        && typeof l[BODY.paragraphIndex] === 'number'
+        && typeof l[BODY.rate] === 'number'
+        && typeof l[BODY.volume] === 'number'
+        && nullableText(l[BODY.engineId])
+        && nullableText(l[BODY.voice])
+        ? {
+            chapterIndex: l[BODY.chapterIndex] as number,
+            paragraphIndex: l[BODY.paragraphIndex] as number,
+            engineId: l[BODY.engineId] as string | null,
+            voice: l[BODY.voice] as string | null,
+            rate: l[BODY.rate] as number,
+            volume: l[BODY.volume] as number,
+          }
+        : null,
+    }
+  },
+  /** 段合成：三必填位（engineId/text/rate）+ 可选音色。`rate` 只过「有限数」——范围是播放侧
+   *  与引擎的事（值域门长在这条读口上只护 HTTP 面，工具/播放层仍可绕过）。 */
+  ttsSynthesize: (body: Record<string, unknown> | null): SynthesisRequest => {
+    const engineId = readRequiredText(body, BODY.engineId)
+    const text = readRequiredText(body, BODY.text)
+    const rate = body?.[BODY.rate]
+    if (typeof rate !== 'number' || !Number.isFinite(rate)) bodyBad(`body.${BODY.rate} 需为有限 number`)
+    const voice = readOptionalText(body, BODY.voice)
+    return { engineId, text, rate, ...(voice === undefined ? {} : { voice }) }
+  },
+  /** 引擎订阅导入：恰带一条来路。两条都给是「调用方没说清要哪份」，一条都没有是无事可做——
+   *  两种都不替它挑一个（URL 支必须是 http(s)：file:/data: 不是订阅）。 */
+  ttsEnginesImport: (body: Record<string, unknown> | null): { json: string } | { url: string } => {
+    const json = readOptionalText(body, BODY.json)
+    const url = readOptionalText(body, PARAMS.url)
+    if ((json === undefined) === (url === undefined)) bodyBad(`body 需恰带 ${BODY.json} 或 ${PARAMS.url} 之一`)
+    if (json !== undefined) {
+      if (json.trim() === '') bodyBad(`body.${BODY.json} 需为非空 string`)
+      return { json }
+    }
+    if (url === undefined || !/^https?:\/\//i.test(url.trim())) bodyBad(`body.${PARAMS.url} 需为 http(s) 地址`)
+    return { url }
+  },
+  /** 引擎新增/更新的 body：name/url 必填非空（注册表在值域上还会再判一次——它护工具面直装），
+   *  其余可编辑位只判类型；`auth` 三键与登录面同一把尺（cookies 必须有，headers/loginInfo 可选）；
+   *  `voices` 形状不符 = 该键缺席（与导入条同宽严，不替调用方猜一个表）。 */
+  ttsEnginePut: (body: Record<string, unknown> | null): TtsEngineInput => {
+    const b = body ?? {}
+    const name = readOptionalText(b, PARAMS.name)
+    if (name === undefined || name.trim() === '') bodyBad(`缺 body 字段 ${PARAMS.name}`)
+    const url = readOptionalText(b, PARAMS.url)
+    if (url === undefined || url.trim() === '') bodyBad(`缺 body 字段 ${PARAMS.url}`)
+    const authRaw = b[BODY.auth]
+    let auth: TtsEngineInput['auth']
+    if (authRaw !== undefined) {
+      if (typeof authRaw !== 'object' || authRaw === null || Array.isArray(authRaw)) {
+        bodyBad(`body.${BODY.auth} 需为 { ${BODY.cookies}: Record<string,string> }`)
+      }
+      const a = authRaw as Record<string, unknown>
+      const cookies = readRecordField(a, BODY.cookies)
+      if (cookies === undefined) bodyBad(`body.${BODY.auth}.${BODY.cookies} 需为 Record<string,string>`)
+      const headers = readRecordField(a, BODY.headers)
+      const loginInfo = readRecordField(a, BODY.loginInfo)
+      auth = { cookies, ...(headers === undefined ? {} : { headers }), ...(loginInfo === undefined ? {} : { loginInfo }) }
+    }
+    const textFields: Partial<Record<TtsEngineTextField, string>> = {}
+    for (const field of TTS_ENGINE_TEXT_FIELDS) {
+      const value = readOptionalText(b, BODY[field])
+      if (value !== undefined) textFields[field] = value
+    }
+    const voicesRaw = b[BODY.voices]
+    const voices = readTtsVoices(voicesRaw)
+    // 在场但认不出 = 用户这次提交的表是坏的：写口不许静默丢（导入面才按「坏表整键不带」剪）。
+    if (voicesRaw !== undefined && voices === undefined) {
+      bodyBad(`body.${BODY.voices} 需为 [{ id: string, name: string }]（两格都非空）`)
+    }
+    return {
+      name, url,
+      ...textFields,
+      ...(voices === undefined ? {} : { voices }),
+      ...(auth === undefined ? {} : { auth }),
     }
   },
 } as const

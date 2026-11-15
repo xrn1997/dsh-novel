@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { classify } from '../../src/services/errors.js'
 import type { ErrorCategory } from '../../src/services/errors.js'
-import { ChapterNotFoundError, DecodeError, FetchError, InvalidRequestError, LocalNotMountedError, RuleMissingError, SourceNotFoundError } from '../../src/services/errors.js'
+import { ChapterNotFoundError, DecodeError, FetchError, InvalidRequestError, LocalNotMountedError, RuleMissingError, SourceNotFoundError, TtsEnginesDegradedError, TtsNotMountedError, TtsSynthesisError } from '../../src/services/errors.js'
 import { JsSandboxError, RuleEvalError, UnsupportedRuleError } from '../../src/engine/index.js'
 import { LocalArtifactNotFoundError, LocalFileTooLargeError, LocalImportError } from '../../src/services/localbooks.js'
 import { EpubImportError } from '../../src/services/epub/errors.js'
@@ -43,7 +43,15 @@ const TABLE: Array<[unknown, ErrorCategory, number, string, string]> = [
   [new LocalImportError('文件为空'), 'local-import', 400, 'BadRequest', 'Error'],
   [new LocalFileTooLargeError('文件超限'), 'local-too-large', 413, 'PayloadTooLarge', 'Error'],
   [new LocalNotMountedError(), 'unavailable', 503, 'Unavailable', 'Error'],
+  // 听书服务与本地书同一档：直装缝不带部件时 503，不影响阅读面
+  [new TtsNotMountedError(), 'unavailable', 503, 'Unavailable', 'Error'],
+  // 注册表降级也落 503，但消息带原因（两个主语：部件缺席 vs 订阅那一格坏，半径各归各）
+  [new TtsEnginesDegradedError('数据文件损坏（tts-engines.json）'), 'unavailable', 503, 'Unavailable', 'Error'],
   [new JobRunningError(RUNNING_JOB), 'job-running', 409, 'JobRunning', 'Error'],
+  // 段合成三分档：同一个类按 code 落三个类目——引擎缺席 400，上游/坏响应 502（code 原样上 wire）
+  [new TtsSynthesisError('TTS_ENGINE_MISSING', '朗读引擎不存在: x'), 'tts-engine-missing', 400, 'TTS_ENGINE_MISSING', 'Error'],
+  [new TtsSynthesisError('TTS_UPSTREAM', '朗读引擎请求失败'), 'tts-upstream', 502, 'TTS_UPSTREAM', 'Error'],
+  [new TtsSynthesisError('TTS_BAD_RESPONSE', '音频响应非法'), 'tts-bad-response', 502, 'TTS_BAD_RESPONSE', 'Error'],
   // EPUB 导入失败并入既有 local-import 类目（不新增类目）：解析失败与 TXT 导入失败同一出口
   [new EpubImportError('EPUB 归档缺 mimetype 条目'), 'local-import', 400, 'BadRequest', 'Error'],
   // 本地产物缺席（书/文档/资源查不到）归既有 not-found 类目 → 404：与 ChapterNotFoundError 同一读数
@@ -77,7 +85,8 @@ describe('错误分类学表（classify → 双投影）', () => {
     // （手写字面量数组漏项时照绿：新类目加了它还是 9 项、用例照绿）
     const all = {
       'rule-eval': true, 'rule-missing': true, fetch: true, 'not-found': true, 'bad-request': true,
-      'local-import': true, 'local-too-large': true, unavailable: true, 'job-running': true, other: true,
+      'local-import': true, 'local-too-large': true, unavailable: true, 'job-running': true,
+      'tts-engine-missing': true, 'tts-upstream': true, 'tts-bad-response': true, other: true,
     } satisfies Record<ErrorCategory, true>
     expect([...covered].sort()).toEqual(Object.keys(all).sort())
   })

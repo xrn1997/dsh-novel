@@ -1,6 +1,6 @@
 /** 本仓的客户端本地 store 只要 get/set(patch)/subscribe 三原语与稳定通知时机，
  *  通知时机由 tests/client 的行为网钉住；自己持表而不是接宿主的 store 引擎，裁决见 `ADR-0055`。 */
-import { useSyncExternalStore } from 'react'
+import { useCallback, useRef, useSyncExternalStore } from 'react'
 import { ls } from './util.js'
 
 /** 轻量 store（useSyncExternalStore 驱动）：只承担**跨卸载要活下来**的现场——视图内路由、偏好、
@@ -27,6 +27,23 @@ export function createStore<T extends object>(initial: T): Store<T> {
 export function useStore<T extends object>(store: Store<T>): T {
   // 第三参 = getServerSnapshot：renderToString（smoke/SSR）必需，缺了直接抛
   return useSyncExternalStore(store.subscribe, store.get, store.get)
+}
+
+/**
+ * 窄订阅：只把一格原语投影出来（裁决同 `ADR-0055`——仍是那三原语，这里只加一层读法）。
+ * 高频写的 store（播放层每段都动）整店订阅会把无关子树一起拖进重渲染；选择器只认原语，
+ * 因为 `useSyncExternalStore` 按引用比快照——每次新建对象或数组就是自旋。
+ */
+export function useStoreValue<T extends object, V extends string | number | boolean | null>(
+  store: Store<T>,
+  select: (state: T) => V,
+): V {
+  // 选择器每次渲染都是新闭包：用 ref 跟进最新闭包、用 useCallback 稳定 getSnapshot 身份，
+  // 否则 useSyncExternalStore 每次渲染都会退订重订一次。
+  const selectRef = useRef(select)
+  selectRef.current = select
+  const read = useCallback(() => selectRef.current(store.get()), [store])
+  return useSyncExternalStore(store.subscribe, read, read)
 }
 
 // ── 路由（view 内路由，无 URL 路由）─────────────────────────────

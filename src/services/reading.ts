@@ -5,14 +5,15 @@ import type { ResolvedConfig, VolatileConfigFieldName } from '../config.js'
 import { detailFieldsOf, detailReadOf, firstValue, hitFieldsOf } from './bridge.js'
 import { DEFAULT_CACHE_MAX_BYTES, PageCache } from './cache.js'
 import { exploreEpoch } from './cache-epoch.js'
-import { chapterContentToText } from './chapter-content.js'
-import { InvalidRequestError, LocalNotMountedError, SourceNotFoundError } from './errors.js'
-import { createFetcher, DEFAULT_TIMEOUT_MS, type FetcherOptions } from './fetcher.js'
+import { chapterContentToText, PLAY_UNIT_MAX } from '../shared/chapter-text.js'
+import { InvalidRequestError, LocalNotMountedError, SourceNotFoundError, TtsEnginesDegradedError, TtsNotMountedError, redactOutboundError } from './errors.js'
+import { createFetcher, decodeBody, DEFAULT_TIMEOUT_MS, type FetcherOptions } from './fetcher.js'
 import { CookieJar } from './cookies.js'
 import { BookContent } from './book-content.js'
 import { WebViewRuntime } from './webview.js'
 import { createFileSourceSession } from './source-session.js'
-import type { Fetcher } from './fetcher.js'
+import type { FetchedPage, Fetcher } from './fetcher.js'
+import { log } from './log.js'
 import { KindCache } from './explore-cache.js'
 import { ExploreJobs } from './explore-job.js'
 import { deriveExploreSources, fetchExploreGroup } from './explore.js'
@@ -27,7 +28,7 @@ import type { LocalResource } from './localbooks.js'
 import type { NormalizeIssue } from './normalize.js'
 import { OnlineReading } from './online-reading.js'
 import { exploreParticipates, participates } from './participation.js'
-import { writeFileAtomic } from './storage.js'
+import { CorruptJsonError, writeFileAtomic } from './storage.js'
 import { applyProbeResult, probeSource } from './probe.js'
 import type { ProbeResult } from './probe.js'
 import { fetchSearchPage, searchErrorCodeOf } from './search-face.js'
@@ -37,6 +38,12 @@ import { createSourceEval, DEFAULT_JS_BUDGET_MS } from './source-eval.js'
 import { createSourceRequest, fetchSourceText } from './source-request.js'
 import type { SourceRequest } from './source-request.js'
 import { loginUiOf, SourceRegistry } from './sources.js'
+import { TTS_DEFAULTS, TTS_RATE, TTS_VOLUME } from '../shared/wire.js'
+import { DEFAULT_TTS_CACHE_MAX_BYTES, TtsAudioCache } from './tts-cache.js'
+import type { AudioResource } from './tts-cache.js'
+import { TtsEngineRegistry } from './tts-engines.js'
+import { TtsService } from './tts.js'
+import type { NormalizedSpeechSynthesis } from './tts.js'
 import type { NovelSource, SourceAuth } from './types.js'
 import type { ValueSource } from './value-source.js'
 
@@ -48,8 +55,9 @@ export type { SearchHit, SearchGroup, ChapterEntry, BookDetail, SearchJobSnapsho
 export type { LocalResource } from './localbooks.js'
 import { parseCookieString } from '../shared/cookies.js'
 import type {
-  BookDetail, BookNavigation, ChapterContent, ExploreSources, ExploreSnapshot, LocalImportResponse, LocalImportWarning,
+  BookDetail, BookNavigation, ChapterContent, ExploreSources, ExploreSnapshot, TtsEngineImportReceipt, TtsEngineRemoveReceipt, ListenState, LocalImportResponse, LocalImportWarning,
   SearchGroup, SearchHit, SearchPlan, SearchJobSnapshot, ChapterEntry, ShelfBook, ShelfEntry, ShelfMetaPatch, SourcePublic,
+  SynthesisReceipt, SynthesisRequest, TtsEngineInput, TtsEnginePublic, TtsSourceInfo,
 } from '../shared/wire.js'
 /** 聚合搜索并发缺省：**这个数的唯一主人**——缺省装配处 `src/config.ts` 的 schema `.default()`
  *  与本文件 `from()` 回退都引这里，别处不再写字面量。js 沙箱预算缺省的家在
@@ -76,6 +84,30 @@ export interface ReadingServiceOptions {
   proxyUrl?: ValueSource<string | null>
   /** 宿主 `ctx.jobs` 窄面：任务身份与生命周期交它（见 job-holder.ts 的 JobHost），缺省不登记 */
   jobHost?: JobHost
+  /** 听书面的外部读数：cordis `speechSynthesis` 服务的活 getter（**每次用到时重查**——服务可能
+   *  动态卸装）。缺省 = 恒缺席，cordis 源不出现在源清单里；Task 7 由组合根接真 getter。 */
+  tts?: { speechSynthesis?: () => NormalizedSpeechSynthesis | undefined }
+}
+
+/** 订阅文本的大小上限（5 MiB）：订阅是「应当很小」的读口，超大响应按失败处理而不是吃满内存。 */
+const TTS_SUBSCRIPTION_MAX_BYTES = 5 * 1024 * 1024
+
+/** 降级原因的上屏版：损坏的错误信封里带数据根的绝对路径，503 文案不该把它抄给浏览器——
+ *  只留文件名与「损坏」这条事实，原文件已备份的事实由日志与 `.bak` 各自承担。 */
+function degradedTtsEnginesReason(e: unknown): string {
+  if (e instanceof CorruptJsonError) {
+    return `朗读引擎注册表损坏（${path.basename(e.file)}），已拒绝按空结果继续并备份原文件`
+  }
+  return e instanceof Error ? e.message : String(e)
+}
+
+/** 听书面的装配产物：合成服务与引擎注册表成对交付（注册表的 flush/CRUD 归门面，合成服务只读它）。
+ *  `create` 用同一个出站 fetcher 构造两者——proxyUrl / UA / cookie jar 缝只此一条。
+ *  注册表读不出时仍是这对部件，只是注册表带 `degradedReason`（空表 + 原因）：降级只关订阅那一格，
+ *  不让整个 `TtsParts` 缺席。 */
+export interface TtsParts {
+  service: TtsService
+  engines: TtsEngineRegistry
 }
 export interface ImportOutcome {
   sourceId: string | null; name: string; ok: boolean
@@ -139,42 +171,56 @@ function requireParallelStep(n: number): number {
   return n
 }
 
-/** 直装缝实际服务的字段名：配置缝的活值键里再筛出数值位（proxyUrl 是文本位，不进这套读数面）。 */
-type VolatileNumberFieldName = {
-  [K in VolatileConfigFieldName]: NonNullable<ResolvedConfig[K]> extends number ? K : never
+/** 直装缝实际服务的字段名：活值键里**必有缺省**的那些（proxyUrl 是可选文本位——代理读数归
+ *  fetcher 自己的复用/关闭语义，不在这套读数面上）。`satisfies` 让每个名字都必须仍是带缺省的活值位。 */
+type ServedFieldName = {
+  [K in VolatileConfigFieldName]: undefined extends ResolvedConfig[K] ? never : K
 }[VolatileConfigFieldName]
 
-/** 服务的六格：行序即读数面的键序。`satisfies` 让每个名字都必须仍是活值数值位。 */
+/** 每格的值类型从 ResolvedConfig 派生（不另写一份映射）：文本位 / 小数值不会被写成同一个宽 number。 */
+type ServedValue<K extends ServedFieldName> = NonNullable<ResolvedConfig[K]>
+type ServedParts = Partial<{ [K in ServedFieldName]: ServedValue<K> }>
+
+/** 服务的读数面：行序即键序。活值里带缺省的字段全在这里——直装缝交出来的 ResolvedConfig
+ *  形状不许有一格是 undefined（听书面缺的值会让合成 / 缓存读到假上限）。 */
 const SERVED = [
   'searchTimeoutMs', 'searchParallel', 'jsTimeoutMs',
   'cacheMaxBytes', 'exportDelayMs', 'localImportMaxBytes',
-] as const satisfies readonly VolatileNumberFieldName[]
+  'ttsDefaultEngine', 'ttsDefaultRate', 'ttsDefaultVolume',
+  'ttsCacheMaxBytes', 'ttsPrefetchParagraphs',
+] as const satisfies readonly ServedFieldName[]
 
 /** 每格的缺省：一律引消费模块的常量，本文件不长出第二个字面量主人。 */
-const SERVED_DEFAULTS: Record<VolatileNumberFieldName, number> = {
+const SERVED_DEFAULTS: { readonly [K in ServedFieldName]: ServedValue<K> } = {
   searchTimeoutMs: DEFAULT_TIMEOUT_MS,
   searchParallel: DEFAULT_SEARCH_PARALLEL,
   jsTimeoutMs: DEFAULT_JS_BUDGET_MS,
   cacheMaxBytes: DEFAULT_CACHE_MAX_BYTES,
   exportDelayMs: DEFAULT_EXPORT_DELAY_MS,
   localImportMaxBytes: DEFAULT_MAX_IMPORT_BYTES,
+  ttsDefaultEngine: TTS_DEFAULTS.engineId,
+  ttsDefaultRate: TTS_DEFAULTS.rate,
+  ttsDefaultVolume: TTS_DEFAULTS.volume,
+  ttsCacheMaxBytes: DEFAULT_TTS_CACHE_MAX_BYTES,
+  ttsPrefetchParagraphs: TTS_DEFAULTS.prefetchParagraphs,
 }
 
 /** 漏服务一格就在这里变成编译错：`SERVED` 少一个名字，下面这个断言类型就不再是真值那一支，
  *  值也赋不过去（编译错的文案里直接点名漏掉的那个字段）。 */
-type UnservedName = Exclude<VolatileNumberFieldName, (typeof SERVED)[number]>
+type UnservedName = Exclude<ServedFieldName, (typeof SERVED)[number]>
 type ServedCoversAll = [UnservedName] extends [never] ? true : UnservedName
 const servedCoversAll: ServedCoversAll = true
 void servedCoversAll
 
 /** 服务的直装缝：把逐字段值装成 ResolvedConfig 形状。不能调 resolveConfig——config.ts 已 import
  *  本文件的 DEFAULT_*，反向运行期依赖会成环；ResolvedConfig 只做 type-only import。
- *  `exportDelayMs` 不是服务的旋钮（HTTP 导出面自己读组合根给的值），这里给缺省只为满足读数面的形状；
+ *  `exportDelayMs` 不是服务的旋钮（HTTP 导出面自己读组合根给的值），听书四格也由浏览器半读
+ *  有效值；这里给缺省只为满足读数面的形状。
  *  proxyUrl / dataDir / apiAllowHosts 不在这里出现——它们是可选格，代理读数归 fetcher 自己的复用/关闭语义
  *  （由 createFetcherWith 单独传入），数据目录归组合根，fence 的别名名单归 HTTP 门面（api/dispatch）。
  *  导出只为缺省对齐钉子（`tests/services/defaults.test.ts` 逐格对 `resolveConfig(undefined)`）；
  *  生产路径只经 `create()` / `from()`。 */
-export function staticLiveConfig(parts: Partial<Record<VolatileNumberFieldName, number>>): ResolvedConfig {
+export function staticLiveConfig(parts: ServedParts): ResolvedConfig {
   const out: Record<string, unknown> = {}
   for (const name of SERVED) {
     Object.defineProperty(out, name, { enumerable: true, get: () => parts[name] ?? SERVED_DEFAULTS[name] })
@@ -210,6 +256,10 @@ export class ReadingService {
   private readonly exploreCache: KindCache
   private readonly local: LocalBooks | null
   private readonly webview: WebViewRuntime
+  /** 听书面部件（合成服务 + 引擎注册表）：`from()` 直装缝可缺席（缺席 = 全部听书动词 503）；
+   *  `create()` 恒给——注册表损坏时换降级注册表（空表 + 原因），只降订阅那一格，
+   *  不再让整个部件缺席。缺席 ≠ 降级，两条半径各有各的闸。 */
+  private readonly tts: TtsParts | null
 
   private constructor(
     live: ResolvedConfig,
@@ -224,6 +274,7 @@ export class ReadingService {
     exploreCache: KindCache,
     local: LocalBooks | null,
     webview: WebViewRuntime,
+    tts: TtsParts | null,
   ) {
     this.live = live
     this.registry = registry
@@ -237,6 +288,7 @@ export class ReadingService {
     this.exploreCache = exploreCache
     this.local = local
     this.webview = webview
+    this.tts = tts
   }
 
   /** 本地书导入上限（传输层流式计数与本地书 domain 上限同一读数口——每次读活配置当前值） */
@@ -261,16 +313,44 @@ export class ReadingService {
     const cookieJar = new CookieJar()
     const deviceId = await readDeviceId(opts.dir)
     const sourceSession = createFileSourceSession(opts.dir)
+    // HTTP cookie 按域/路径共享一张表；脚本侧 source cookie 仍按源隔离。
+    // 运行期字段（deviceId / sourceSession）随构造进 fetcher——门面不再往注入物上写回。
+    const fetcher = createFetcherWith(opts.fetchImpl, opts.proxyUrl, cookieJar, { deviceId, sourceSession })
+    // 听书面：引擎注册表从数据根加载（`tts-engines.json`，缺文件 = 空表），合成服务与本门面
+    // **共用同一个出站 fetcher**——proxyUrl / UA / cookie jar 缝只此一条。段音频缓存在这里装配
+    // （与 `PageCache` 同伴：目录与容量上限是组合根的事实，不进合成服务的依赖面）；上限读活配置
+    // （`ttsCacheMaxBytes`）：配置页改过后下一次写入 / 淘汰即按新值，常量只是 schema 缺省的主人。
+    // js 预算与搜索/探针同一耐心源。注册表是订阅数据、不是听书面的全部：读不出时换**降级注册表**
+    // （空表 + 原因）而不是让整个部件缺席——内置引擎 / 浏览器直出 / 已缓存音频都不读它，跟着停摆
+    // 等于把半径划到判据之外（失败半径 = 判据的主语，见 ADR-0077）；订阅动词按 degradedReason 抛
+    // TtsEnginesDegradedError（503 带原因），阅读 / 书架 / 搜索 / 工具照常挂载。readJson 已把
+    // 损坏文件备份为 `.bak` 并留过一条 error；这里再记一条点明**后果**，绝不静默吞。
+    let engines: TtsEngineRegistry
+    try {
+      engines = await TtsEngineRegistry.load(opts.dir)
+    } catch (e) {
+      log.error('朗读引擎注册表加载失败（只降订阅那一格：订阅动词 503 带原因，内置 / 直出 / 缓存照常）：', e)
+      engines = TtsEngineRegistry.degraded(opts.dir, degradedTtsEnginesReason(e))
+    }
+    const tts: TtsParts = {
+      engines,
+      service: new TtsService({
+        cache: new TtsAudioCache(path.join(opts.dir, 'cache', 'tts'), () => live.ttsCacheMaxBytes),
+        engines,
+        fetcher,
+        jsTimeoutMs: () => live.jsTimeoutMs,
+        speechSynthesis: opts.tts?.speechSynthesis ?? (() => undefined),
+      }),
+    }
     const service = await ReadingService.from({
-      // HTTP cookie 按域/路径共享一张表；脚本侧 source cookie 仍按源隔离。
-      // 运行期字段（deviceId / sourceSession）随构造进 fetcher——门面不再往注入物上写回。
-      fetcher: createFetcherWith(opts.fetchImpl, opts.proxyUrl, cookieJar, { deviceId, sourceSession }),
+      fetcher,
       cookieJar,
       registry: await SourceRegistry.load(opts.dir),
       shelf: await Shelf.load(opts.dir),
       cache: new PageCache(opts.dir, () => live.cacheMaxBytes),
       local: await LocalBooks.create(opts.dir, { maxImportBytes: () => live.localImportMaxBytes }),
       config: live,
+      tts,
       // 可选项按需建键：显式 `undefined` 与「没有这个键」在装配面上是两件事（后者才落回缺省）
       ...(opts.jobHost === undefined ? {} : { jobHost: opts.jobHost }),
       ...(opts.tocMaxPages === undefined ? {} : { tocMaxPages: opts.tocMaxPages }),
@@ -313,6 +393,10 @@ export class ReadingService {
     proxyUrl?: ValueSource<string | null>
     /** HTTP/浏览器共享 cookie jar（必填；fetcher 带 jar 时必须是同一实例） */
     cookieJar: CookieJar
+    /** 听书面部件（`create` 构造；测试可直装）。缺席或 null = 听书相关动词落 503 Unavailable——
+     *  与本地书同一档：听书缺席不影响阅读面，路由仍认得路径。这是**直装缝的缺席**（部件根本
+     *  没装配）；注册表损坏的降级由 `create` 换降级注册表处理，不落到这里（缺席 ≠ 降级）。 */
+    tts?: TtsParts | null
   }): Promise<ReadingService> {
     const live = parts.config ?? staticLiveConfig(parts)
     // 装配期先过一遍：组合根直装的非法值要在启动时就炸，不留到第一次搜索才挂起
@@ -354,6 +438,7 @@ export class ReadingService {
       new KindCache(),
       parts.local ?? null,
       webview,
+      parts.tts ?? null,
     )
   }
 
@@ -626,6 +711,25 @@ export class ReadingService {
     return this.shelf.get(bookKey) ?? null
   }
 
+  /** 存听书位置（listen 形态）：不在架 → null（路由映射 400）；返回更新后的条目。
+   *  值域门在这里（同 shelfSaveProgress）：播放层随时会写，Infinity / 越界档位一旦落盘
+   *  就是下一次起播会照单全收的坏存档。
+   *  **本动词只写 listen 细节轨**：共用的消费位置（章 + 比例）由播放层在同一落盘节拍里经
+   *  `shelfSaveProgress` 另写一笔——两笔各走各的值域门，不在这里合成一个混合 body。 */
+  shelfSaveListen(bookKey: string, p: ListenState): ShelfBook | null {
+    if (!Number.isInteger(p.chapterIndex) || p.chapterIndex < 0
+      || !Number.isInteger(p.paragraphIndex) || p.paragraphIndex < 0
+      || !Number.isFinite(p.rate) || p.rate < TTS_RATE.min || p.rate > TTS_RATE.max
+      || !Number.isFinite(p.volume) || p.volume < TTS_VOLUME.min || p.volume > TTS_VOLUME.max
+      || (p.engineId !== null && (typeof p.engineId !== 'string' || p.engineId.trim() === ''))
+      || (p.voice !== null && typeof p.voice !== 'string')) {
+      throw new InvalidRequestError(
+        'listen.chapterIndex/paragraphIndex 需为非负整数、rate 需在语速档内、volume 需在音量档内（有限数）、engineId 需为非空白 string|null、voice 需为 string|null',
+      )
+    }
+    return this.shelf.updateListen(bookKey, p)
+  }
+
   /** 删本地副本：只对真在架的本地键做（`localEvenIfOffShelf` 只给 `removeLocalBook`——
    *  它点名的是磁盘上的本地书，即使不在架也要清副本），返回实际删掉的副本数。
    *  单删、批删与本地删共用这一处顺序与判据：文件删失败即抛出，调用方保留架位可重试。 */
@@ -748,6 +852,98 @@ export class ReadingService {
   private requireLocal(): LocalBooks {
     if (this.local === null) throw new LocalNotMountedError()
     return this.local
+  }
+
+  // ── 听书 ─────────────────────────────────────────────────────────────
+
+  /** 引擎源清单（播放器的引擎选择面）：内置 / 浏览器直出 / 注册表订阅 / cordis 仅在场。
+   *  行形状是 `TtsSourceInfo`——插件自有源不投展示名（标签归客户端文案单点）。 */
+  ttsSources(): TtsSourceInfo[] {
+    return this.requireTts().service.sources()
+  }
+
+  /** 段合成：缓存命中即回执；未命中按引擎分流，单段失败只抛给调用方（不吞、不给空音频）。
+   *  值域门住门面（同 `shelfSaveProgress`）：HTTP 读口只判「形状对不对」，工具/直装面绕得过；
+   *  而这里判的是业务事实——「一段」= 一个播放单元（`PLAY_UNIT_MAX`，按 code point），
+   *  语速必须落在播放层实际可选的档里（越界值会被播放层夹取，但存档/直装面不该靠夹取兜底）。 */
+  async ttsSynthesize(p: SynthesisRequest): Promise<SynthesisReceipt> {
+    if (!Number.isFinite(p.rate) || p.rate < TTS_RATE.min || p.rate > TTS_RATE.max) {
+      throw new InvalidRequestError(`朗读语速需为 ${TTS_RATE.min}–${TTS_RATE.max} 之间的有限数`)
+    }
+    if (p.text.trim() === '') throw new InvalidRequestError('朗读文本不能为空')
+    // 与切分侧同一把尺（`shared/chapter-text.ts` 的 `PLAY_UNIT_MAX` 用 `Array.from` 按 code point
+    // 计）：两处若一处按 UTF-16 长度、一处按 code point 数，同一段会在边界上一边过一边不过。
+    if (Array.from(p.text).length > PLAY_UNIT_MAX) {
+      throw new InvalidRequestError(`朗读文本超过单段上限 ${PLAY_UNIT_MAX} 字（播放单元按段切分）`)
+    }
+    return this.requireTts().service.synthesize(p)
+  }
+
+  /** 音频读口：未知/非法 key → null（路由在发头前落 404，不是空音频） */
+  async ttsOpenAudio(key: string): Promise<AudioResource | null> {
+    return this.requireTts().service.openAudio(key)
+  }
+
+  /** 引擎订阅清单（管理面）：公共投影已剥凭据——导出 JSON 由 client 用这份数据自组 */
+  ttsEngineList(): TtsEnginePublic[] {
+    return this.requireEngines().list()
+  }
+
+  /** 引擎订阅导入（粘贴的 JSON 文本）：坏条逐条剪除、回执留痕（失败半径 = 该条） */
+  ttsEngineImport(json: string): TtsEngineImportReceipt {
+    return this.requireEngines().importJson(json)
+  }
+
+  /** 引擎订阅导入（URL 支）：经**同一个出站 fetcher** 拉订阅文本再走同一份解析。
+   *  解码走 `decodeBody`（声明 charset → content-type → 嗅探），不硬解 UTF-8：GBK 编码的订阅
+   *  硬解会带着乱码的引擎名与 URL「导入成功」，比报错更难发现。
+   *  请求失败是 FetchError（路由经 classify 落 502）；响应不是 JSON 由 importJson 落 400。
+   *  先过闸再发请求：缺席与降级都不该先打一发网络才说 503。
+   *  失败原话里内嵌的地址先经 `redactOutboundError` 摘掉：订阅地址常带签名 token，错误信封
+   *  与日志都不是新的读口（与合成链同一条判据）。 */
+  async ttsEngineImportFromUrl(url: string): Promise<TtsEngineImportReceipt> {
+    const engines = this.requireEngines()
+    let page: FetchedPage
+    try {
+      page = await this.fetcher.fetchPage(url, { maxBytes: TTS_SUBSCRIPTION_MAX_BYTES })
+    } catch (e) {
+      throw redactOutboundError(e, url)
+    }
+    let text: string
+    try {
+      text = decodeBody(page)
+    } catch (e) {
+      // 解码失败原话嵌的是**落地地址**（重定向后的那一跳），同样可能带订阅 token
+      throw redactOutboundError(e, page.finalUrl)
+    }
+    return engines.importJson(text)
+  }
+
+  /** 引擎新增/更新（PUT tts/engines/:id）：id 是身份；值域（非空 name/url）由注册表再判一次 */
+  ttsEnginePut(id: string, input: TtsEngineInput): TtsEnginePublic {
+    return this.requireEngines().put(id, input)
+  }
+
+  /** 删引擎：未知 id 静默 `removed:false`（与删源同口径，不把「没有这条」报成错误） */
+  ttsEngineRemove(id: string): TtsEngineRemoveReceipt {
+    return { removed: this.requireEngines().remove(id) }
+  }
+
+  /** 听书面**缺席**（直装缝 `from` 不带部件）的落点与本地书同档：503 Unavailable，不影响阅读面。
+   *  缺席 ≠ 降级：部件在场而注册表坏是另一条半径，由 `requireEngines` 按降级态判，这里不认那件事。 */
+  private requireTts(): TtsParts {
+    if (this.tts === null) throw new TtsNotMountedError()
+    return this.tts
+  }
+
+  /** 订阅动词的闸：判据只有注册表的 `degradedReason` 一处，门面不另写第二份「坏没坏」。
+   *  降级时五个订阅动词抛具名错误（classify → 503，消息带原因）；源清单 / 段合成 / 音频读口
+   *  不过这道闸——它们不读订阅数据。 */
+  private requireEngines(): TtsEngineRegistry {
+    const { engines } = this.requireTts()
+    const reason = engines.degradedReason
+    if (reason !== undefined) throw new TtsEnginesDegradedError(reason)
+    return engines
   }
 
   // ── 搜索 ─────────────────────────────────────────────────────────────
@@ -1067,10 +1263,15 @@ export class ReadingService {
     }
   }
 
-  /** 收尾落盘：书架（防抖进度）+ 注册表（合并写）+ 源状态（求值边界外的脏标记）一并等齐 */
+  /** 收尾落盘：书架（防抖进度）+ 注册表（合并写）+ 听书引擎注册表（防抖合并写）+ 源状态
+   *  （求值边界外的脏标记）一并等齐 */
   async flush(): Promise<void> {
     this.fetcher.sourceSession?.flush?.()
-    await Promise.all([this.shelf.flush(), this.registry.flush()])
+    await Promise.all([
+      this.shelf.flush(),
+      this.registry.flush(),
+      ...(this.tts === null ? [] : [this.tts.engines.flush()]),
+    ])
   }
 
   // ── 内部 ─────────────────────────────────────────────────────────────

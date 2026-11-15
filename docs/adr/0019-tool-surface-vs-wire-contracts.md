@@ -14,4 +14,4 @@ Status: accepted
 
 在册待裁：`getDetail`、本地书管理、批探针**没有对应工具**（本地书与批探针定位在 UI 面）——已批默认「不补、维持现状」；将来要补就按同一纪律从 wire 派生，不手抄第三份。
 
-锚点：`src/tools/tools.ts`；`src/tools/project.ts`；`src/services/reading.ts`；`tests/tools/schema-contract.test.ts`；`src/shared/wire.ts` 的 `ChapterContent`；`src/services/chapter-content.ts`。
+锚点：`src/tools/tools.ts`；`src/tools/project.ts`；`src/services/reading.ts`；`tests/tools/schema-contract.test.ts`；`src/shared/wire.ts` 的 `ChapterContent`；`src/shared/chapter-text.ts`。

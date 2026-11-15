@@ -113,6 +113,20 @@ export function setPanelShelfKeyword(keyword: string): void {
   panelShelf.set({ keyword })
 }
 
+/** 进度写成功后的面板期回写：书架的消费位置现在由听书与阅读共用，播放层在听书时也要让
+ *  当前存活的面板投影看到新位置（否则停在书架页听书，卡片要等重挂载才追上）。
+ *  服务端仍是真相；这只改可丢弃投影，书不在列表里或列表还没取过就什么都不做。 */
+export function patchPanelShelfProgress(bookKey: string, chapterIndex: number, offsetRatio: number): void {
+  const { books } = panelShelf.get()
+  if (books === null) return
+  const index = books.findIndex((b) => b.bookKey === bookKey)
+  const book = books[index]
+  if (book === undefined) return
+  const next = [...books]
+  next[index] = { ...book, progress: { chapterIndex, offsetRatio, updatedAt: Date.now() } }
+  panelShelf.set({ books: next })
+}
+
 /** 落架成功：记进面板期账本（按地址去重；幂等 PUT 的语义是「这一发成功过」），并作废
  *  起始更早的在途读面——否则加架前的快照落地会把这本书仍判成「不在架」。只有真新增那一发
  *  才抬代际：同一地址第二次记入时，早于第一次记入的那些读面已经被作废过一轮了。 */

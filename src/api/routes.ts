@@ -32,6 +32,7 @@ export const PARAM_PATTERN_PATHS: Record<ParamRouteName, string> = {
   sourceProbe: 'sources/:id/probe', sourceEnabled: 'sources/:id/enabled',
   sourceAuth: 'sources/:id/auth', sourceDelete: 'sources/:id',
   shelfPut: 'shelf/:key', shelfDelete: 'shelf/:key',
+  ttsEnginePut: 'tts/engines/:id', ttsEngineDelete: 'tts/engines/:id',
 }
 
 /** 静态路由没有参数位，命中的 params 恒为空（共享一份，不逐次新建） */

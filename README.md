@@ -3,9 +3,9 @@
 [![CI](https://github.com/xrn1997/dsh-novel/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/xrn1997/dsh-novel/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@xrn1997/dsh-novel.svg)](https://www.npmjs.com/package/@xrn1997/dsh-novel)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Tested with DSH 0.1.7-rc.1 … 0.2.2-rc.1](https://img.shields.io/badge/DSH-0.1.7--rc.1%20%E2%80%A6%200.2.2--rc.1-brightgreen)](#安装)
+[![Tested with DSH 0.1.7-rc.1 … 0.2.2-rc.3](https://img.shields.io/badge/DSH-0.1.7--rc.1%20%E2%80%A6%200.2.2--rc.3-brightgreen)](#安装)
 
-**在 DeepSeek Harness（DSH）里读网络小说。** 导入 [legado](https://github.com/gedoor/legado) 书源，聚合搜索或按分类逛书城，把书加入书架，连续滚动阅读。它还有本地 TXT / EPUB、中英界面和六个 `dshnovel_` AI 助手工具——找书、读章、管源都可以在对话里完成。
+**在 DeepSeek Harness（DSH）里读网络小说。** 导入 [legado](https://github.com/gedoor/legado) 书源，聚合搜索或按分类逛书城，把书加入书架，连续滚动阅读，也能让它念给你听。它还有本地 TXT / EPUB、中英界面和六个 `dshnovel_` AI 助手工具——找书、读章、管源都可以在对话里完成。
 
 ![书城：左栏按源列出分类，右侧是按源声明的分类书目网格](docs/screenshots/screenshot-01.png)
 
@@ -58,7 +58,28 @@
 
 ![阅读器：示例正文、连续滚动与顶部工具栏](docs/screenshots/screenshot-04.png)
 
-*阅读器：连续滚动、自动预取与排版设置（示例正文）。*
+*阅读器：连续滚动、自动预取与顶部工具栏；顶条「听书」可直接开始朗读（示例正文）。*
+
+### 听书：从阅读位置起播，跨界面续听
+
+阅读器顶条点「听书」即开始朗读：起播跟随你此刻看到的那一段，听书存档只提供音色 / 语速 / 音量与段级续听现场；正文里选中一段还可以「从本段听」，设置面板里也能直接选起播章。阅读器内的听书条可切上一段 / 下一段、暂停，拖**章内进度滑杆**跳到任意段，调语速与定时（关 / 15 / 30 / 60 分 / 本章结束）；设置面板里换引擎、音色与音量。正在念的那一段会在正文里换一种字色、段首点一枚小三角（只标记当前段，不做逐字填色，也不加底色；字色跟着纸张色自动调整，深浅纸上都认得出），高亮只标记不滚动——按「定位到正在念的段」才把视野带过去；听书按自己的落盘节拍写回共用的阅读进度。离开阅读器后，浮在屏幕上的听书胶囊继续带着这本书：胶囊上只有进度环、书名、段号和一条章内进度细线；点一下展开成能读整段的边栏——当前段一次上屏（装不下的那一截挂「看全文」，一键回阅读器并定位到本段），运输行是回阅读器 / 上一段 / 播放暂停 / 下一段 / 停止，底行是语速、段号、章内进度条与定时倒计时。展开后宽高可以拖边调整（设置里也有小 / 中 / 大三档与复位）；可以拖到屏幕任意位置，靠近边缘松手会自动贴边（位置与尺寸都留在本机），没有半隐或只露一半的收起态，阅读器开着另一本书时它也照常在场。听书与阅读共用一条进度：听到哪，书架与下次开书就恢复到哪；书架卡片只显示这一条进度，正在播放的那一本标「正在听」；音色、语速与音量仍按书记住。
+
+![阅读器听书：底部听书条、章内进度滑杆与跟读高亮](docs/screenshots/screenshot-06.png)
+
+*阅读器听书：条上是上一段 / 暂停 / 下一段、章内段滑杆、语速与定时；正在念的段换字色并在段首点一枚小三角（示例正文）。*
+
+![书架听书：正在听徽标与浮窗边栏](docs/screenshots/screenshot-07.png)
+
+*书架听书：卡片显示共用的消费进度，「正在听」标播放层此刻在放的那一本；浮窗边栏可暂停、跳段、拖章内进度、调语速与定时或回阅读器（示意数据）。*
+
+引擎源分四类：
+
+- **内置朗读**：开箱即用的中文合成引擎，无需配置；语速按端点能收的 7 个整数档映射。它的公开合成口不读音色参数，所以它**没有音色可选**——界面不会给它摆这一行；要换音色请用浏览器本地语音，或导入自带 `voices` 音色表的订阅引擎（那张表随导出 / 导入往返不丢）。它走的是非官方公开端点、只合成中文（请求里的语种写死为中文，换成英文正文不会换语音）；上游不可用时会如实报错，换源即可继续听。
+- **浏览器本地语音**：用当前设备的系统语音直接出声，不走网络合成，也没有缓存与预取；设备没有可用语音时明确报错。
+- **订阅引擎**：导入 legado HttpTTS 订阅（粘贴 JSON 或从 URL 拉取），作为额外的合成源；导入回执按条点名坏条，坏条只剪自己。
+- **宿主朗读服务**：宿主装有语音合成服务插件（社区包 `dsh-xiaomi-tts`）时自动出现在引擎清单里；没装时选引擎的清单不列这一行，引擎管理区仍合成一条灰显「未检测到」行。本插件只按社区包发布的服务契约取字节，不依赖它随包安装。
+
+引擎订阅与登录态都只留在本机：数据根下的 `tts-engines.json` 存订阅，登录态那一组（cookies / headers / loginInfo）只写不读——引擎列表只显示「已配置 / 未配置」，导出也不带它。订阅自带的 `header` 字段属于订阅内容，列表与导出都原样带着它：把密钥写进 `header` 的订阅，导出的那份 JSON 里就有那把密钥。登录态在引擎编辑表单里手工录入，不提供交互式登录流程。
 
 ### 本地书、AI 与界面
 
@@ -90,7 +111,7 @@ dsh plugin --profile <profile> add @xrn1997/dsh-novel
 dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 ```
 
-**宿主兼容声明分两层**：安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`；peer 区间按宿主线开口，下界是 0.1.7-rc.1——更早的 0.1 宿主没有任务输出拉源（`JobSpec.output`），装进去任务过程行会静默丢失，所以安装闸直接拒绝；线内 rc / patch 不跟版，跨线才重验。实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本：**DSH 0.1.7-rc.1、0.1.7-rc.2、0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2、0.2.1-rc.3、0.2.1-rc.5、0.2.2-rc.1**（这一行是给人看的记录，文档门会核对它与 `package.json` 一致；安装许可与实测名单两层的关系见 `ADR-0020`）。宿主发版、peer 区间与浏览器模块表的维护流程，以及发布冷却闸，见 [docs/development.md](docs/development.md#宿主兼容与实测名单)。
+**宿主兼容声明分两层**：安装许可由 `package.json` 的 `peerDependencies` 决定——宿主 `dsh plugin add` 会拿运行中的宿主版本逐个比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即 `installation rejected`；peer 区间按宿主线开口，下界是 0.1.7-rc.1——更早的 0.1 宿主没有任务输出拉源（`JobSpec.output`），装进去任务过程行会静默丢失，所以安装闸直接拒绝；线内 rc / patch 不跟版，跨线才重验。实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本：**DSH 0.1.7-rc.1、0.1.7-rc.2、0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2、0.2.1-rc.3、0.2.1-rc.5、0.2.2-rc.1、0.2.2-rc.3**（这一行是给人看的记录，文档门会核对它与 `package.json` 一致；安装许可与实测名单两层的关系见 `ADR-0020`）。宿主发版、peer 区间与浏览器模块表的维护流程，以及发布冷却闸，见 [docs/development.md](docs/development.md#宿主兼容与实测名单)。
 
 ## 首次使用
 
@@ -116,9 +137,9 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 
 插件配置位于 profile 的 `cordis.patch.yml` 里该插件行的 `config` 字段（schemastery 校验，全部可选）：
 
-![插件页的运行参数：搜索、阅读与导出、存储上限、网络](docs/screenshots/screenshot-05.png)
+![插件页的运行参数：顶部筛选与分区下拉、两列配对的行、框内回读与预设下拉、底部常驻保存条](docs/screenshots/screenshot-05.png)
 
-*运行参数：搜索、阅读与导出、存储上限、网络四组，保存即生效。*
+*运行参数：一张卡、一条列表——工具条在上（筛选框 + 分区下拉 + 仅看已改 + 改动计数），保存条贴底常驻；每行一条框，单位与人话回读都在框内，预设收在框内下拉，说明挂在标签后的问号上（悬浮才浮出，不撑行高）。*
 
 | 键 | 缺省 | 说明 |
 | --- | --- | --- |
@@ -130,15 +151,20 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 | `exportDelayMs` | `300` | 范围导出的章节间抓取间隔（毫秒，串行限速） |
 | `localImportMaxBytes` | `52428800`（50MB） | 本地文件导入大小上限（字节，TXT / EPUB 共用） |
 | `proxyUrl` | 启动时自动探测 | 出站代理，见[常见问题](#常见问题)；`'direct'` 强制直连，或显式指定如 `'http://127.0.0.1:7897'` |
+| `ttsDefaultEngine` | `builtin:baidu` | 默认朗读引擎标识：内置 `builtin:baidu`、浏览器直出 `browser:local`，或订阅引擎的 id；按书选择的引擎优先于它 |
+| `ttsDefaultRate` | `1` | 第一次听一本书时的语速（0.5–3）；在播放器里改过之后按书记住，这一档只兜底 |
+| `ttsDefaultVolume` | `0.8` | 第一次听一本书时的音量（0–1）；同上 |
+| `ttsCacheMaxBytes` | `134217728`（128MB） | 合成音频缓存上限（字节）；低于 1 MiB 会被拒绝——一段音频就可能超过上限，刚合成的段会立刻被淘汰 |
+| `ttsPrefetchParagraphs` | `10` | 播放到本章末尾时提前合成的下一章开头段数；`0` = 不预取下一章，预取失败只影响那一段 |
 | `apiAllowHosts` | 不追加 | `/novel-api` 同源 fence 的本机 Host 名单追加项，如 `['dsh.local']`；只有用自定义域名（hosts / 内部 DNS）打开宿主面板时才需要。每项只比主机名，端口只做形状校验、不参与匹配（`dsh.local:8080` 也放行 `dsh.local:9999`）。改它需重启；填进去的每个名字都是把 DNS rebinding 防线在那个域名上让掉，只填自己控制的 |
 
-除 `dataDir` 与 `apiAllowHosts` 外，其余 7 项还可在宿主的「插件」页 → `@xrn1997/dsh-novel` 详情里的「运行参数」中编辑（需宿主支持插件配置页）；保存后立即生效，不需要重启插件。宿主没有插件配置页时，配置仍写在 profile 的 `cordis.patch.yml`。`dataDir` 与 `apiAllowHosts` 始终需改该文件并重启。
+除 `dataDir` 与 `apiAllowHosts` 外，其余 12 项还可在宿主的「插件」页 → `@xrn1997/dsh-novel` 详情里的「运行参数」中编辑（需宿主支持插件配置页）；保存后立即生效，不需要重启插件。宿主没有插件配置页时，配置仍写在 profile 的 `cordis.patch.yml`。`dataDir` 与 `apiAllowHosts` 始终需改该文件并重启。
 
-数值项按整数校验；`proxyUrl` 只接受 `direct`、空串或 http(s) 地址（裸 `host:port` 按 `http://` 补全）；`apiAllowHosts` 每项只接受 `host` 或 `host:port`（不带 scheme、路径与空白），且必须是 URL 解析不改写的主机名写法——`2130706433` 这类会被改写成 IP 的别名在 fence 侧等于无效，加载期直接拒绝、不留静默空转。非法值（含 `NaN` / `Infinity`）在插件加载期报错；在插件页保存时被同样拒绝，页面保留草稿供修改。显式 `null` 按未设置处理、取缺省。
+整数项按整数校验；语速与音量按一位小数档校验（语速 0.5–3、音量 0–1）；`proxyUrl` 只接受 `direct`、空串或 http(s) 地址（裸 `host:port` 按 `http://` 补全）；`apiAllowHosts` 每项只接受 `host` 或 `host:port`（不带 scheme、路径与空白），且必须是 URL 解析不改写的主机名写法——`2130706433` 这类会被改写成 IP 的别名在 fence 侧等于无效，加载期直接拒绝、不留静默空转。非法值（含 `NaN` / `Infinity`）在插件加载期报错；在插件页保存时被同样拒绝，页面保留草稿供修改。显式 `null` 按未设置处理、取缺省。
 
 ## HTTP API
 
-所有路由以 `/novel-api` 为前缀（信任判据四步：请求来自本机 loopback → `Host` 在本机名单内（`localhost` / `127.0.0.1` / `[::1]`，自己的别名走 `apiAllowHosts`）→ Origin 在场必须同源 → Referer 在场必须同源；Origin / Referer 缺席放行，那是给本机工具与 curl 的承诺。被 Host 名单挡住时 403 点名是哪个 Host、并指路 `apiAllowHosts`）。这层判据也意味着**远程访问宿主时插件 API 不可用**：从另一台机器打开面板，浏览器半的请求会拿到 403（面板按请求失败提示），这是「只服务本机」的既定边界，不是可配置项。JSON 响应使用统一信封 `{ ok, value | error }`，错误附带 `code` 与可选的规则段级定位；`GET /export`、两条 SSE 流与 `GET /local/resource` 是流式 / 二进制响应，不套信封。共 36 条路由（30 静态 + 6 参数操作，计数由 `tests/shared/wire-builders.test.ts` 钉死）。**路由身份（method + path）与值形状的代码真相在 `src/shared/wire.ts`**——Node 半与浏览器半共用同一份定义，契约测试逐条把守。
+所有路由以 `/novel-api` 为前缀（信任判据四步：请求来自本机 loopback → `Host` 在本机名单内（`localhost` / `127.0.0.1` / `[::1]`，自己的别名走 `apiAllowHosts`）→ Origin 在场必须同源 → Referer 在场必须同源；Origin / Referer 缺席放行，那是给本机工具与 curl 的承诺。被 Host 名单挡住时 403 点名是哪个 Host、并指路 `apiAllowHosts`）。这层判据也意味着**远程访问宿主时插件 API 不可用**：从另一台机器打开面板，浏览器半的请求会拿到 403（面板按请求失败提示），这是「只服务本机」的既定边界，不是可配置项。JSON 响应使用统一信封 `{ ok, value | error }`，错误附带 `code` 与可选的规则段级定位；`GET /export`、两条 SSE 流、`GET /local/resource` 与 `GET /tts/audio` 是流式 / 二进制响应，不套信封。共 43 条路由（35 静态 + 8 参数操作，计数由 `tests/shared/wire-builders.test.ts` 钉死）。**路由身份（method + path）与值形状的代码真相在 `src/shared/wire.ts`**——Node 半与浏览器半共用同一份定义，契约测试逐条把守。
 
 | 面 | 路由 |
 | --- | --- |
@@ -146,7 +172,8 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 | 书源 | `GET /sources`、`POST /sources/import`（后台任务，body `{files:[{name,text}]}`，上限 32MB）、`GET /sources/job-status`、`POST /sources/batch-probe`、`POST /sources/batch-enabled`、`POST /sources/batch-delete`、`POST /sources/:id/probe`、`POST /sources/:id/enabled`、`POST /sources/:id/auth`、`DELETE /sources/:id` |
 | 搜索与阅读 | `GET /search`（一次性收齐本轮各源命中；每源只取搜索首页，后台任务另按每源 50 条截断）、`GET /search/plan`（本次参搜源集——参与集的唯一主人在服务端）、`POST /search/job`、`GET /search/job-status?since=N`（按游标读增量）、`GET /search/job-stream?since=N`（同一份快照的 SSE 推送，首帧即 baseline）、`POST /search/job-cancel`（停止本轮：不再往下搜，已搜出的命中一律保留）、`GET /book`、`GET /toc`、`GET /navigation`（线性 `chapters` + 展示树 `items`）、`GET /chapter`（`{kind:'text'}` 或图文树 `{kind:'rich'}`；`?refresh=1` 绕过缓存） |
 | 书城发现面 | `GET /explore/kinds`（**按源**给出各源自己声明的**分类标题**清单，零网络请求，入口地址不外泄：原生方言的 `ruleFind` 与 legado 的 `exploreUrl` 都认，后者接**声明式两档**（`标题::URL` 多行 / JSON 条目数组）；脚本形态（`@js:` / `<js>`）的发现入口不执行，那类书源在书城没有分类）、`POST /explore/list`（body `{sourceId, kind}`：一轮 = 点名一个源 + 它自己声明的一类，回 `{jobId}`）、`POST /explore/list/more`（续这一轮的第 page+1 页，**同一轮不换 jobId**；没得续（已到底 / 触页数上限 / 一批在途）→ 409）、`GET /explore/list/job-status`（整轮全量快照，无游标）、`GET /explore/list/job-stream`（同一份快照的 SSE 推送，首帧可能是「还没提交过」的空档） |
-| 书架 | `GET /shelf`（条目附 `sourceName` 来源投影，按最近阅读排序）、`PUT /shelf/:key`（带 `title` 加书 / 带 `progress` 存进度 / 带 `patch` 改元数据）、`DELETE /shelf/:key`、`POST /shelf/batch-delete`（本地书连带删副本，未知键静默跳过） |
+| 书架 | `GET /shelf`（条目附 `sourceName` 来源投影，按最近阅读排序）、`PUT /shelf/:key`（带 `title` 加书 / 带 `progress` 存进度 / 带 `listen` 存听书位置 / 带 `patch` 改元数据）、`DELETE /shelf/:key`、`POST /shelf/batch-delete`（本地书连带删副本，未知键静默跳过） |
+| 听书 | `GET /tts/sources`（此刻可用的引擎源清单）、`POST /tts/synthesize`（一段正文 → 音频缓存回执）、`GET /tts/audio?key=…`（音频字节）、`GET /tts/engines`（订阅引擎公共投影，不含登录态 auth）、`POST /tts/engines/import`（粘贴 JSON 或从 URL 导入订阅）、`PUT /tts/engines/:id`、`DELETE /tts/engines/:id` |
 | 导出 | `GET /export`（流式 TXT，`from`/`to` 选段（1 基含端，缺席 = 全本），响应头 `X-Novel-Total-Chapters`（本次范围章数）/ `X-Novel-Range`（`from-to`）；倒置范围 422 `BadRange`，连接断开即停止抓取） |
 | 本地书 | `POST /local/import?name=…`、`DELETE /local?id=…`（连带删整份副本）、`GET /local/document?id=&documentId=`（脚注 / 附录）、`GET /local/resource?id=&resourceId=`（插图与封面，只认不透明资源 ID）、`GET /local/warnings?id=`（持久化的导入说明） |
 
@@ -157,8 +184,10 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 ```
 $DSH_HOME/novel/
 ├── sources.json   # 书源清单（含登录态，仅存本机、不会外传）
-├── shelf.json     # 书架与阅读进度
+├── shelf.json     # 书架、阅读进度与听书位置
+├── tts-engines.json # 朗读引擎订阅（登录态 auth 仅存本机、导出剥除；订阅自带 header 原样保留）
 ├── cache/         # 目录 / 正文缓存（按 mtime 最旧的近似 LRU；默认上限 200MB）
+│   └── tts/       # 合成音频缓存（按 mtime 最旧的近似 LRU；默认上限 128MB）
 └── local/         # 本地书：TXT 是 <uuid>.txt + <uuid>.json（章节偏移表）
                    # EPUB 是 <uuid>/ 目录（原文 + 派生文档 + 资源）+ <uuid>.json
 ```

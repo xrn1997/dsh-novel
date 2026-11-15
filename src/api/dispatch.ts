@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { Readable } from 'node:stream'
 import type { ReadingService } from '../services/reading.js'
 import { DEFAULT_EXPORT_DELAY_MS } from '../services/export.js'
 import { SVG_MEDIA_TYPE } from '../services/epub/resources.js'
@@ -115,8 +116,9 @@ type HandlerCtx = {
   params: readonly string[]
 }
 
-/** 30 条静态路由的穷尽分发表：键集由 `RouteName` 逼，漏接/多接都是 tsc 红；
- *  臂体是原路由分支的原样搬移（传输机械一字未动）。臂体可回值也可回 Promise——分派点一律
+/** 35 条静态路由的穷尽分发表：键集由 `RouteName` 逼，漏接/多接都是 tsc 红；
+ *  臂体是原路由分支的搬移，传输机械已逐条下沉（二进制读口共用 `pipeBinary`，两条作业观察流
+ *  共用 `openJobStream`），臂体只留分流与错误落点。臂体可回值也可回 Promise——分派点一律
  *  `await`，故不需要为「回 Promise」硬加 async（真异步的臂体自己就是 async）。 */
 const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } = {
   health: ({ res }) => {
@@ -338,32 +340,43 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } 
     const resourceId = requireQuery(url, PARAMS.resourceId)
     // 资源读口只认不透明 ID（查资源表 → 打开文件）：查不到/文件不在都在**发头之前**抛（404）
     const resource = await service.getLocalResource(id, resourceId)
-    res.writeHead(200, resourceHeaders(resource.mediaType, resource.bytes))
-    const { stream } = resource
-    // 断连即销毁本条流、流上出错即断连（头已发补不了错误信封，但错误必须留痕，不能吞成静默
-    // 断连）。监听挂上后**立刻补查已断连**：上面 await（查资源表 + 打开文件）期间客户端可能
-    // 已断开、'close' 不会再来，而这条流源自 FileHandle——没人销毁会挂到 GC，Node 把
-    // 「GC 期关闭 FileHandle」当未捕获错误抛（表现为测试收尾时红）。
-    res.on('close', () => stream.destroy())
-    if (res.destroyed) stream.destroy()
-    stream.on('error', (e: unknown) => {
-      log.error(`本地资源流出错（${resourceId}，响应头已发，只能断连）:`, e)
-      res.destroy()
-    })
-    res.on('error', (e: unknown) => {
-      log.error(`本地资源响应出错（${resourceId}）:`, e)
-      stream.destroy()
-    })
-    stream.pipe(res)
+    pipeBinary(res, resource, `本地资源（${resourceId}）`)
   },
   localWarnings: async ({ res, service, url }) => {
     // 导入说明按需查看（不随每次取章重复携带）
     const id = requireQuery(url, PARAMS.id)
     writeOk(res, await service.getLocalImportWarnings(id))
   },
+  // ── 听书面（引擎源 / 段合成 / 音频读口 / 引擎订阅）──────────────────────
+  ttsSources: ({ res, service }) => {
+    // 引擎源清单（内置 / 浏览器直出 / 注册表订阅 / cordis 仅在场）；展示名只属于订阅数据
+    writeOk(res, service.ttsSources())
+  },
+  ttsSynthesize: async ({ req, res, service }) => {
+    // 段合成：回执带缓存键（字节另走 ttsAudio）；失败经 classify 落 400/502，不泄漏堆栈
+    const body = await readJsonBody<Record<string, unknown> | null>(req, null)
+    writeOk(res, await service.ttsSynthesize(readBodies.ttsSynthesize(body)))
+  },
+  ttsEngines: ({ res, service }) => {
+    // 引擎订阅清单（公共投影已剥凭据）——导出 JSON 由 client 用这份数据自组，没有后端导出路由
+    writeOk(res, service.ttsEngineList())
+  },
+  ttsEnginesImport: async ({ req, res, service }) => {
+    // 两条来路恰一（形状判据住 readBodies）；URL 支经门面同一个出站 fetcher 拉取
+    const body = await readJsonBody<Record<string, unknown> | null>(req, null)
+    const want = readBodies.ttsEnginesImport(body)
+    writeOk(res, 'json' in want ? service.ttsEngineImport(want.json) : await service.ttsEngineImportFromUrl(want.url))
+  },
+  ttsAudio: async ({ res, service, url }) => {
+    const key = requireQuery(url, PARAMS.key)
+    // 未知/非法 key 在**发头之前**落 404（不是空音频，也不是二进制头）
+    const audio = await service.ttsOpenAudio(key)
+    if (audio === null) throw new ApiError('音频不存在或已过期', 404, 'NotFound')
+    pipeBinary(res, audio, `合成音频（${key}）`)
+  },
 }
 
-/** 6 条参数路由的穷尽分发表（键集由 `ParamRouteName` 逼）：`params` 里是 `:` 段的原值。 */
+/** 8 条参数路由的穷尽分发表（键集由 `ParamRouteName` 逼）：`params` 里是 `:` 段的原值。 */
 const PARAM_HANDLERS: { [K in ParamRouteName]: (ctx: HandlerCtx) => void | Promise<void> } = {
   sourceProbe: async ({ res, service, params }) => {
     writeOk(res, await service.probe(paramOf(params)))
@@ -390,6 +403,15 @@ const PARAM_HANDLERS: { [K in ParamRouteName]: (ctx: HandlerCtx) => void | Promi
   shelfDelete: async ({ res, service, params }) => {
     // 本地书连带删文件（防孤儿 invariant）归门面 removeBook——路由只剩键解码与信封
     writeOk(res, await service.removeBook(decodeSegKey(paramOf(params))))
+  },
+  ttsEnginePut: async ({ req, res, service, params }) => {
+    // 引擎 id 含 `:`：构造器编码成段，这里解码（非法百分号 → 400，不归 500）
+    const id = decodeSegKey(paramOf(params))
+    const body = await readJsonBody<Record<string, unknown> | null>(req, null)
+    writeOk(res, service.ttsEnginePut(id, readBodies.ttsEnginePut(body)))
+  },
+  ttsEngineDelete: ({ res, service, params }) => {
+    writeOk(res, service.ttsEngineRemove(decodeSegKey(paramOf(params))))
   },
 }
 
@@ -436,15 +458,19 @@ function paramOf(params: readonly string[]): string {
 }
 
 /**
- * 本地资源响应头（安全口径单点）：MIME 用导入期的**验证结果**、禁嗅探、同源 CORP、私有缓存。
- * 独立 SVG 额外附强 CSP：书内 SVG 是重建过的静态文本，仍按「不可信文档」对待——一旦作为文档被
- * 直接打开，默认全部禁掉（`sandbox` 连带禁脚本/表单/插件），不给它任何同源能力。
- * 不在这里拼路径、不设 content-disposition：资源口只服务 `<img>`，不提供原文下载。
+ * 二进制资源的响应头（安全口径单点）：MIME 用已验证的**事实**（本地资源的导入期验证、
+ * 合成音频的缓存侧车）、禁嗅探、同源 CORP、私有缓存。本地资源的独立 SVG 额外附强 CSP：
+ * 书内 SVG 是重建过的静态文本，仍按「不可信文档」对待——一旦作为文档被直接打开，默认全部禁掉
+ * （`sandbox` 连带禁脚本/表单/插件），不给它任何同源能力。
+ * `accept-ranges: none` 把「不支持分段」写成明话：两个读口都按整份回（`<audio>` 发 `Range`
+ * 也只是拿全量），不声明的话浏览器会一直试探。将来要给音频补 Range，改的是这一处与读流器。
+ * 不在这里拼路径、不设 content-disposition：两个读口都只服务 `<img>` / `<audio>`，不提供原文下载。
  */
 function resourceHeaders(mediaType: string, bytes: number): Record<string, string> {
   return {
     'content-type': mediaType,
     'content-length': String(bytes),
+    'accept-ranges': 'none',
     'x-content-type-options': 'nosniff',
     'cross-origin-resource-policy': 'same-origin',
     'cache-control': 'private, max-age=3600',
@@ -452,16 +478,42 @@ function resourceHeaders(mediaType: string, bytes: number): Record<string, strin
   }
 }
 
+/** 二进制资源的传输机械（本地资源与合成音频共用）：调用方已拿到资源并在**发头之前**抛过 404，
+ *  这里写头、挂断连/出错监听、补查已断连、导流。
+ *  断连即销毁本条流、流上出错即断连（头已发补不了错误信封，但错误必须留痕，不能吞成静默断连）。
+ *  监听挂上后**立刻补查已断连**：上面 await（查资源表 + 打开文件 / 打开缓存条目）期间客户端可能
+ *  已断开、'close' 不会再来，而这条流源自 FileHandle——没人销毁会挂到 GC，Node 把
+ *  「GC 期关闭 FileHandle」当未捕获错误抛（表现为测试收尾时红）。 */
+function pipeBinary(
+  res: ServerResponse,
+  resource: { mediaType: string; bytes: number; stream: Readable },
+  label: string,
+): void {
+  res.writeHead(200, resourceHeaders(resource.mediaType, resource.bytes))
+  const { stream } = resource
+  res.on('close', () => stream.destroy())
+  if (res.destroyed) stream.destroy()
+  stream.on('error', (e: unknown) => {
+    log.error(`${label}流出错（响应头已发，只能断连）:`, e)
+    res.destroy()
+  })
+  res.on('error', (e: unknown) => {
+    log.error(`${label}响应出错:`, e)
+    stream.destroy()
+  })
+  stream.pipe(res)
+}
+
 /** PUT /shelf/:key：body 的字段集类型判别住 wire 的 `readBodies.shelfPut`；**形态分派**
- *  （含 title 非空才加书、三形态皆无 → 400）住本臂——「调用方要的是哪个动作」是传输关注点
+ *  （含 title 非空才加书、四形态皆无 → 400）住本臂——「调用方要的是哪个动作」是传输关注点
  *  （`ADR-0036` 第①条）。合并语义 null/undefined 保值单点住在 `Shelf`。 */
 async function shelfPut(
   service: ReadingService, bookKey: string, req: IncomingMessage, res: ServerResponse,
 ): Promise<void> {
   const body = await readJsonBody<Record<string, unknown> | null>(req, null)
   if (body === null || typeof body !== 'object') throw new ApiError('body 需为 JSON 对象', 400, 'BadRequest')
-  // 读口只交事实；值域门（能不能进架、进度取值范围）归门面动词：同一条判断要同时护 HTTP 面与
-  // agent 工具面。三形态按 title → patch → progress 的顺位分派。
+  // 读口只交事实；值域门（能不能进架、进度/听书位置取值范围）归门面动词：同一条判断要同时护
+  // HTTP 面与 agent 工具面。四形态按 title → patch → progress → listen 的顺位分派。
   const fields = readBodies.shelfPut(body)
   const title = fields.meta.title
   if (typeof title === 'string' && title !== '') {
@@ -480,7 +532,13 @@ async function shelfPut(
     writeOk(res, saved)
     return
   }
-  throw new ApiError(`body 需带 ${PARAMS.title}（加书）/ ${BODY.patch}（打补丁）/ ${BODY.progress}:{${BODY.chapterIndex},${BODY.offsetRatio}}（更新进度）`, 400, 'BadRequest')
+  if (fields.listen !== null) {
+    const saved = service.shelfSaveListen(bookKey, fields.listen)
+    if (saved === null) throw new ApiError(NOT_ON_SHELF, 400, 'BadRequest')
+    writeOk(res, saved)
+    return
+  }
+  throw new ApiError(`body 需带 ${PARAMS.title}（加书）/ ${BODY.patch}（打补丁）/ ${BODY.progress}:{${BODY.chapterIndex},${BODY.offsetRatio}}（更新进度）/ ${BODY.listen}:{${BODY.chapterIndex},${BODY.paragraphIndex},${BODY.engineId},${BODY.voice},${BODY.rate},${BODY.volume}}（存听书位置）`, 400, 'BadRequest')
 }
 
 /** auth 路由：run-login 交门面深动词 `login` 后只做 outcome→HTTP 翻译（loginUrl 形态判别在门内，

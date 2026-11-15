@@ -2,13 +2,13 @@
 
 Status: accepted
 
-**第一条（模态契约）**：带遮罩那一层浮层的行为——Esc 退出、入场焦点落面板内**第一颗未禁用钮**、Tab 圈在面板内、关闭后焦点还给触发件、遮罩点空退出、`role=dialog` / `aria-modal` 的标记——住 `client/views/dialog.tsx` 的 `Dialog` 一处。五处浮层（书架删书、源删书、阅读器入架一问、导入弹层、书籍详情浮层）只交标题、内容、动作行与归还对象。
+**第一条（模态契约）**：带遮罩那一层浮层的行为——Esc 退出、入场焦点落面板内带 `data-dialog-initial` 的元素（未标时才是**第一颗未禁用钮**）、Tab 圈在面板内、关闭后焦点还给触发件、遮罩点空退出、`role=dialog` / `aria-modal` 的标记——住 `client/views/dialog.tsx` 的 `Dialog` 一处。带遮罩的各处浮层只交标题、内容、动作行与归还对象。键盘与焦点那一半由同文件的 `useDialogContract` 导出，无遮罩的听书设置卡复用同一份；遮罩与 `aria-modal` 仍只属于模态档。
 
-为什么现在必须收：这五条口径此前被手写五遍，**已经漂成两种行为**——三处有完整 Tab 圈，导入弹层与详情浮层没有，而详情浮层的注释还写着「沿用同一条焦点口径」。同一仓里长两套焦点语言，「打开浮层后键盘在哪儿」就成了要分情况背的东西；每加一处浮层就是再抄一次运气。
+为什么现在必须收：这套口径此前每加一处浮层就被手抄一遍，**已经漂成两种行为**——有三处带完整 Tab 圈，导入弹层与详情浮层没有，而详情浮层的注释还写着「沿用同一条焦点口径」。同一仓里长两套焦点语言，「打开浮层后键盘在哪儿」就成了要分情况背的东西；每加一处浮层就是再抄一次运气。
 
 三条落地的判据：
 
-- **入场焦点只有一条规则**（面板内第一颗未禁用钮，按 DOM 序），不给 `initialFocus` 这类旋钮。四处现状都由这一条自然给齐：删除确认落「取消」、入架一问落「先不加入」、详情浮层落标题行那颗「关闭」；导入弹层在缺省态落动作行那颗「关闭」（更早的「导入粘贴内容」在无有效 JSON 时是禁用的），有完成回执时落回执里的第一颗可操作钮（「查看明细」/「去验证」）。**Tab 圈另认面板内全部可聚焦件**（拖放区是 `role=button` 的 div、粘贴框是 textarea）：入场焦点只认钮，Tab 序若也只认钮，导入弹层的主入口就被关在键盘之外。加一格 `initialFocus` 旋钮，就等于把「哪颗是安全的那一颗」从实现处还给每个调用方。
+- **入场焦点只有一条规则**：面板内带 `data-dialog-initial` 的元素优先，否则落**第一颗未禁用钮**（按 DOM 序），不给 `initialFocus` 这类旋钮。标记只声明「从哪一格起手」，落焦时机、重获与还焦仍归契约——表单型面板要改的第一格是输入件，而第一颗钮是动作行那颗「取消」，落上去把光标从用户要改的地方挪开；契约猜不出哪颗钮是「安全的那一颗」，加一格 `initialFocus` 旋钮又等于把这个问题还给每个调用方。其余现状都由这一条自然给齐：删除确认落「取消」、入架一问落「先不加入」、详情浮层落标题行那颗「关闭」；导入弹层缺省态落动作行那颗「关闭」（更早的「导入粘贴内容」在无有效 JSON 时是禁用的），有完成回执时落回执里的第一颗可操作钮（「查看明细」/「去验证」）。**Tab 圈另认面板内全部可聚焦件**（拖放区是 `role=button` 的 div、粘贴框是 textarea）：入场焦点只认钮，Tab 序若也只认钮，导入弹层的主入口就被关在键盘之外。
 - **无障碍名默认取可见标题**（`aria-labelledby` 指向面板内那一行）。把同一句话再抄进 `aria-label` 就是给同一读数第二个主人（同口径见搜索结果页书行那条「不写 aria-label」）；只有名字确实要与可见标题不同（详情浮层带「书籍详情：」前缀）才用 `label` 那一格。
 - **在途禁退不在契约里判**：`onClose` 由调用方自己决定收不收（阅读器那一问在写入期间忽略 Esc 与遮罩）。契约自持一份 `busy` 就会和调用方的按钮禁用态各长一份真相。
 - 焦点 effect **挂载作用域**（空依赖 + `onClose` 走 ref）是契约的内部纪律，不是各调用方的义务——这条曾被两处真缺陷教过：依赖里带闭包，任务轮询每秒重渲染就把焦点劫回第一颗、归还对象被重捕获成模态内按钮。
@@ -17,16 +17,16 @@ Status: accepted
 
 为什么互斥而不是各记各的开合：这些面同住右上角且各自成 absolute 层，两面上场时**底下那面看得见点不动**（命中测试打到上面那块）。此前互斥散在四个 opener 的 `setX(false)` 抄写里，抄写一漏就叠。
 
-**同场 Esc 的归属**：模态在场时模态先吃 Esc，阅读浮层的 surface 监听在模态在场时不安装；模态关闭后若浮层仍在场，下一次 Esc 按 `reader-surfaces.closeAll` 的语义收场。两家划分不变。
+**同场 Esc 的归属**：一次 Esc 只该收**最上面那一层**——底下那层被顺手关掉等于替用户丢现场。层序住 `client/views/dialog.tsx` 的 `claimKeyLayer`：认领顺序就是打开顺序，谁在顶上谁吃 Esc 与 Tab 圈，两家人（模态契约、阅读浮层的 surface 监听）都到这一处认领，判据本身仍不回 `reader-surfaces`。模态在场时模态先吃，阅读浮层的 surface 监听在模态在场时不安装；模态关闭后若浮层仍在场，下一次 Esc 按 `reader-surfaces.closeAll` 的语义收场。全局听书浮窗的设置卡是无遮罩的另一层，它与阅读器内浮层同场时（读 A 本、听 B 本）按同一条仲裁，不再各挂各的监听。两家划分不变。
 
-**一处行为变更如实记在此**：若 `Aa` 不收目录抽屉，「Aa 上场 + 遮罩出现」时抽屉仍在场却被遮罩压住——底下那面看得见点不动，正是上面那条互斥要挡的形状，所以收成单角后 `Aa` 也收目录。这条改动的验收面是浏览器半的键盘与遮挡门，`DSH_EPUB_BROWSER` 那类门只量渲染几何、不覆盖它。
+**一处行为变更如实记在此**：若 `Aa` 不收目录抽屉，「Aa 上场 + 遮罩出现」时抽屉仍在场却被遮罩压住——底下那面看得见点不动，正是上面那条互斥要挡的形状，所以收成单角后 `Aa` 也收目录。这条改动的验收面是浏览器半的键盘与遮挡门，`DSH_BROWSER_GATE` 那类门只量渲染几何、不覆盖它。
 
 被否决的做法：
 
-- **保持各视图自持 effect**：五份手写已经漂出两种行为，且下一次新增浮层还会继续复制。
+- **保持各视图自持 effect**：各视图手写各自的版本已经漂出两种行为，且下一次新增浮层还会继续复制。
 - **把 `Dialog` 塞进 `client/views/bits.tsx`**：`bits` 是六视图共用的**呈现小件**（徽标、进度段、空态、告警清单），没有行为契约；模态契约带焦点与键盘接管，混进去会让 `bits` 同时是抽屉和主人。
 - **抽屉与模态合成一套标记**：几何不同族（`.novel-modal` / `.novel-modal.wide` / `.novel-city-drawer` + `.novel-city-scrim`），主人是样式层；`variant` 只选标记档，既不接管内部排版也不动行几何——两档的标题行/动作行仍用各自类名（`.novel-modal-title` / `.novel-modal-actions` / `.novel-city-drawer-head`）。
 - **阅读浮层做成 reducer/状态机框架**：判据只有「哪一角在场 + 退场怎么表态」两问，一个纯函数族就够；引框架会把视图改成派发点，而真正的 bug（互斥漏抄、Esc 分叉）在判据住址，不在调度形式。
 - **借会话持有浮层在场**：会话深且只拥有阅读时序（`ADR-0022`）；「此刻哪个面板开着」不是位置真相，塞进去会让会话的 interface 长出只有视图用的格。
 
-锚点：`src/client/views/dialog.tsx`（`Dialog` / `FOCUSABLE`）；`src/client/reader-surfaces.ts`（`openSurface` / `closeAll` / `dismissSurface` / `maskFor` / `escOwner` / `SupplementExit`）；`src/client/reader-session.ts` 的 `closeSupplement`（消费返回项那一侧的主人）；`tests/client/dialog.test.tsx`、`tests/client/reader-surfaces.test.ts`、`tests/client/views-wiring.test.tsx` 的「导入弹层焦点不被壳层重渲染劫持」与「入架一问」两条。
+锚点：`src/client/views/dialog.tsx`（`Dialog` / `useDialogContract` / `claimKeyLayer` / `FOCUSABLE`）；`src/client/tts/TtsSettings.tsx` 的 `TtsSettingsPanel`；`src/client/reader-surfaces.ts`（`openSurface` / `closeAll` / `dismissSurface` / `maskFor` / `escOwner` / `SupplementExit`）；`src/client/reader-session.ts` 的 `closeSupplement`（消费返回项那一侧的主人）；`tests/client/dialog.test.tsx` 的「层序：一次 Esc 只收最上面那一层」、`tests/client/reader-surfaces.test.ts`、`tests/client/tts-bar.test.tsx` 的「设置面板走共享浮层契约」、`tests/client/views-wiring.test.tsx` 的「导入弹层焦点不被壳层重渲染劫持」与「入架一问」两条。

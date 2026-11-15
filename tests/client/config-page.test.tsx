@@ -1,9 +1,17 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createElement } from 'react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+// 每条用例都要挂载整页配置页（含引擎清单），单次 3 秒上下是常态；全量并行跑时会挤过默认的
+// 5 秒上限，于是整份文件统一放宽，免得随机红。
+const SLOW_PAGE = 15_000
 import { apply } from '../../src/client/index.js'
+import { ttsDefaultsFromSettings } from '../../src/client/config-page.js'
 import { enTranslate } from '../../src/client/copy/index.js'
+import { resetTtsPlayer, ttsPlayer } from '../../src/client/tts/player.js'
+import { resetTransient, transientEntries } from '../../src/client/transient.js'
+import { BROWSER_TTS_ENGINE_ID, TTS_DEFAULTS } from '../../src/shared/wire.js'
 import type { Registration } from './fake-host.js'
 import { fakeCtx, fakeHost, fakeRemoteSettings, type FakeRemoteSettings } from './fake-host.js'
 import { must } from '../support/fixture.js'
@@ -22,7 +30,10 @@ import { must } from '../support/fixture.js'
  * 就是为了让它一眼读得出来。
  */
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  resetTransient()
+})
 
 /** 取某字段的人话回读 / 单位后缀：按字段名锚，不按文本锚——预设档 chip 与回读会写同一串字。 */
 function readback(container: HTMLElement, name: string) {
@@ -30,6 +41,16 @@ function readback(container: HTMLElement, name: string) {
 }
 function unit(container: HTMLElement, name: string) {
   return container.querySelector(`[data-novel-cfg-unit="${name}"]`)?.textContent ?? null
+}
+/** 「已覆盖」现在是标签旁的空心点（不占标签宽度），按字段名锚。 */
+function overridden(container: HTMLElement, name: string): boolean {
+  return container.querySelector(`[data-novel-cfg-overridden="${name}"]`) !== null
+}
+/** 预设收在框内下拉里：先点这一格的预设钮，再点人话档位。 */
+function pickPreset(view: { container: HTMLElement }, name: string, option: string): void {
+  const row = must(view.container.querySelector<HTMLElement>(`[data-novel-cfg-row="${name}"]`), `字段行 ${name}`)
+  fireEvent.click(within(row).getByRole('button', { name: /选择预设/ }))
+  fireEvent.click(within(row).getByRole('menuitem', { name: option }))
 }
 
 function registration(h: ReturnType<typeof fakeHost>): Registration {
@@ -51,7 +72,7 @@ async function mountConfigPage(
   return { h, reg, view, settings }
 }
 
-describe('插件页配置页', () => {
+describe('插件页配置页', { timeout: SLOW_PAGE }, () => {
   it('无 remote.settings：不注册 plugins.bundle.config，其他座位不变', () => {
     const h = fakeHost()
     apply(fakeCtx(h) as never)
@@ -60,13 +81,14 @@ describe('插件页配置页', () => {
     expect(h.registrations.some((r) => r.name === 'sidebar.panellist')).toBe(true)
   })
 
-  it('有设置面：注册 bundle.config，key 是包名，七个字段 + dataDir 说明', async () => {
+  it('有设置面：注册 bundle.config，key 是包名，十二个字段 + dataDir 说明', async () => {
     const { reg } = await mountConfigPage(fakeRemoteSettings({ value: { searchParallel: 5, proxyUrl: '' } }))
     expect(reg.options.key).toBe('@xrn1997/dsh-novel')
     expect(screen.getByText(/dataDir/)).toBeTruthy()
     for (const label of [
       '单源搜索超时', '搜索并发源数', 'JS 沙箱预算',
       '磁盘缓存上限', '导出章间节流', '本地文件导入上限', '出站代理',
+      '默认朗读引擎', '默认语速', '默认音量', '朗读音频缓存上限', '朗读预取段数',
     ]) {
       expect(screen.getByLabelText(label), label).toBeTruthy()
     }
@@ -75,16 +97,17 @@ describe('插件页配置页', () => {
   it('读的是本插件的条目：describe 被调用，写入带同一个条目 id', async () => {
     const settings = fakeRemoteSettings({ value: { searchParallel: 5 } })
     await mountConfigPage(settings)
-    expect(settings.describeCalls).toBe(1)
+    // 两发：播放层的听书缺省快照（apply 时读一次）+ 页面自己的编目
+    expect(settings.describeCalls).toBe(2)
     fireEvent.change(screen.getByLabelText('搜索并发源数'), { target: { value: '8' } })
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
     await waitFor(() => expect(settings.mutateCalls).toHaveLength(1))
     expect(settings.mutateCalls[0]?.ns).toBe('dsh-novel')
   })
 
-  it('四个分区各自有题：字段按区归类，不等权排成一条纵列', async () => {
+  it('五个分区各自有题：字段按区归类，不等权排成一条纵列', async () => {
     await mountConfigPage()
-    for (const title of ['搜索', '阅读与导出', '存储上限', '网络']) {
+    for (const title of ['搜索', '阅读与导出', '存储上限', '网络', '听书']) {
       expect(screen.getByText(title), title).toBeTruthy()
     }
   })
@@ -117,7 +140,7 @@ describe('插件页配置页', () => {
 
   it('点预设档写入整字节数，省掉手敲九位', async () => {
     const { view, settings } = await mountConfigPage(fakeRemoteSettings({ value: { cacheMaxBytes: 209715200 } }))
-    fireEvent.click(view.getByRole('button', { name: '500 MB' }))
+    pickPreset(view, 'cacheMaxBytes', '500 MB')
     expect(screen.getByLabelText<HTMLInputElement>('磁盘缓存上限').value).toBe('524288000')
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
     await waitFor(() => expect(settings.mutateCalls).toHaveLength(1))
@@ -129,22 +152,22 @@ describe('插件页配置页', () => {
 
   it('改动过的字段标出「已覆盖」', async () => {
     const { view } = await mountConfigPage(fakeRemoteSettings({ value: { searchParallel: 5 } }))
-    expect(view.queryByText('已覆盖')).toBeNull()
+    expect(overridden(view.container, 'searchParallel')).toBe(false)
     fireEvent.change(screen.getByLabelText('搜索并发源数'), { target: { value: '8' } })
-    expect(screen.getByText('已覆盖')).toBeTruthy()
+    expect(overridden(view.container, 'searchParallel')).toBe(true)
   })
 
   it('已覆盖的字段一键恢复默认：发 unset，不把缺省值抄回去', async () => {
     const { view, settings } = await mountConfigPage(fakeRemoteSettings({
       value: { searchParallel: 5 }, defaults: { searchParallel: 3 }, user: { searchParallel: 5 },
     }))
-    expect(view.getByText('已覆盖')).toBeTruthy()
+    expect(overridden(view.container, 'searchParallel')).toBe(true)
     fireEvent.click(view.getByRole('button', { name: '恢复默认' }))
     await waitFor(() => expect(settings.mutateCalls).toHaveLength(1))
     // 恢复默认走 unset 而非「把缺省值抄回去」：出厂值的主人始终是 schema，不是这一页。
     expect(settings.mutateCalls[0]?.ops).toEqual([{ op: 'unset', path: ['searchParallel'] }])
     await waitFor(() => expect(screen.getByLabelText<HTMLInputElement>('搜索并发源数').value).toBe('3'))
-    expect(screen.queryByText('已覆盖')).toBeNull()
+    expect(overridden(view.container, 'searchParallel')).toBe(false)
   })
 
   it('编辑并保存：mutate 收到 set 操作，成功后输入框回读新值', async () => {
@@ -225,7 +248,7 @@ describe('插件页配置页', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
     await screen.findByText(/revision changed/)
     expect(screen.getByLabelText<HTMLInputElement>('搜索并发源数').value).toBe('8')
-    await waitFor(() => expect(settings.describeCalls).toBe(2))
+    await waitFor(() => expect(settings.describeCalls).toBe(3))
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
     await waitFor(() => expect(settings.mutateCalls).toHaveLength(3))
     expect(settings.mutateCalls[1]?.revision).toBe(0)
@@ -279,7 +302,7 @@ describe('插件页配置页', () => {
   })
 })
 
-describe('配置页的非法值呈现', () => {
+describe('配置页的非法值呈现', { timeout: SLOW_PAGE }, () => {
   it('非法字段就地报原文、标 aria-invalid，且不因非法而丢草稿', async () => {
     const { settings } = await mountConfigPage(fakeRemoteSettings({
       value: { cacheMaxBytes: 209715200, proxyUrl: 'http://127.0.0.1:7897' },
@@ -308,7 +331,59 @@ describe('配置页的非法值呈现', () => {
   })
 })
 
-describe('英文渲染：配置页', () => {
+describe('配置页的小数位（语速 / 音量）', { timeout: SLOW_PAGE }, () => {
+  it('0.8 合法：保存写 number，不写字符串', async () => {
+    const { settings } = await mountConfigPage(fakeRemoteSettings({ value: { ttsDefaultRate: 1 } }))
+    const input = screen.getByLabelText<HTMLInputElement>('默认语速')
+    fireEvent.change(input, { target: { value: '0.8' } })
+    expect(input.getAttribute('aria-invalid')).toBeNull()
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '保存' }).disabled).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(settings.mutateCalls).toHaveLength(1))
+    expect(settings.mutateCalls[0]?.ops).toEqual([{ op: 'set', path: ['ttsDefaultRate'], value: 0.8 }])
+  })
+
+  it('abc / 负数 / 多个小数点都拒绝：原地报错、草稿保留、保存不可点', async () => {
+    const { settings } = await mountConfigPage(fakeRemoteSettings({ value: { ttsDefaultVolume: 0.8 } }))
+    const input = screen.getByLabelText<HTMLInputElement>('默认音量')
+    for (const bad of ['abc', '-0.5', '1.2.3']) {
+      fireEvent.change(input, { target: { value: bad } })
+      expect(input.getAttribute('aria-invalid'), bad).toBe('true')
+      expect(input.value, bad).toBe(bad)
+    }
+    expect(screen.getByText('请填数字')).toBeTruthy()
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '保存' }).disabled).toBe(true)
+    expect(settings.mutateCalls).toHaveLength(0)
+  })
+
+  it('小数位回读走一位小数：1.2 显示 1.2，整数不带小数点', async () => {
+    const { view } = await mountConfigPage(fakeRemoteSettings({
+      value: { ttsDefaultRate: 1.2, ttsDefaultVolume: 1 },
+    }))
+    expect(readback(view.container, 'ttsDefaultRate')).toBe('1.2')
+    expect(readback(view.container, 'ttsDefaultVolume')).toBe('1')
+  })
+
+  it('语速预设档写小数倍率', async () => {
+    const { view, settings } = await mountConfigPage(fakeRemoteSettings({ value: { ttsDefaultRate: 1 } }))
+    pickPreset(view, 'ttsDefaultRate', '1.2')
+    expect(screen.getByLabelText<HTMLInputElement>('默认语速').value).toBe('1.2')
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(settings.mutateCalls).toHaveLength(1))
+    expect(settings.mutateCalls[0]?.ops).toEqual([{ op: 'set', path: ['ttsDefaultRate'], value: 1.2 }])
+  })
+
+  it('朗读缓存上限的预设档也写整字节数', async () => {
+    const { view, settings } = await mountConfigPage(fakeRemoteSettings({ value: { ttsCacheMaxBytes: 134217728 } }))
+    pickPreset(view, 'ttsCacheMaxBytes', '256 MB')
+    expect(screen.getByLabelText<HTMLInputElement>('朗读音频缓存上限').value).toBe('268435456')
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(settings.mutateCalls).toHaveLength(1))
+    expect(settings.mutateCalls[0]?.ops).toEqual([{ op: 'set', path: ['ttsCacheMaxBytes'], value: 268435456 }])
+  })
+})
+
+describe('英文渲染：配置页', { timeout: SLOW_PAGE }, () => {
   it('英文：标题、字段、分区与代理说明', async () => {
     await mountConfigPage(fakeRemoteSettings({ value: { searchParallel: 5 } }), enTranslate)
     expect(screen.getByLabelText('Search timeout')).toBeTruthy()
@@ -324,5 +399,214 @@ describe('英文渲染：配置页', () => {
     cleanup()
     const zh = await mountConfigPage(fakeRemoteSettings({ value: { searchParallel: 1, cacheMaxBytes: 1 } }))
     expect(unit(zh.view.container, 'searchParallel')).toBe('个源')
+  })
+})
+
+describe('接入层读听书缺省', { timeout: SLOW_PAGE }, () => {
+  /** 只走接线这一发：`apply` 注入 `remote.settings` ⇒ describe 一次 ⇒ 播放层回退链换值。 */
+  async function applyWithSettings(settings: FakeRemoteSettings): Promise<ReturnType<typeof fakeHost>> {
+    resetTtsPlayer()
+    const h = fakeHost({ remoteSettings: settings })
+    apply(fakeCtx(h) as never)
+    await waitFor(() => expect(settings.describeCalls, '接入层没读过设置面').toBeGreaterThan(0))
+    return h
+  }
+
+  it('设置面交回的听书缺省推进播放层：引擎 / 语速 / 音量与出声分支跟着换', async () => {
+    await applyWithSettings(fakeRemoteSettings({
+      value: { ttsDefaultEngine: BROWSER_TTS_ENGINE_ID, ttsDefaultRate: 1.4, ttsDefaultVolume: 0.3 },
+    }))
+    expect(ttsPlayer.get()).toMatchObject({
+      engineId: BROWSER_TTS_ENGINE_ID, rate: 1.4, volume: 0.3, mode: 'direct',
+    })
+  })
+
+  it('读失败：播放层保持 wire 缺省，其余座位照常注册', async () => {
+    const h = await applyWithSettings(fakeRemoteSettings({ describeFailure: '设置面读不出' }))
+    expect(ttsPlayer.get()).toMatchObject({
+      engineId: TTS_DEFAULTS.engineId, rate: TTS_DEFAULTS.rate, volume: TTS_DEFAULTS.volume,
+    })
+    expect(h.registrations.some((r) => r.name === 'main')).toBe(true)
+  })
+
+  it('配置页保存后的有效值也推进播放层：下一次起播不必等面板重载', async () => {
+    resetTtsPlayer()
+    await mountConfigPage(fakeRemoteSettings({ value: { ttsDefaultRate: 1.6 } }))
+    expect(ttsPlayer.get().rate, '页面读到的有效值先落一次').toBe(1.6)
+    fireEvent.change(screen.getByLabelText('默认语速'), { target: { value: '2' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    // 保存回包带新的有效值：播放层当场拿到，不靠接入时那一发快照
+    await waitFor(() => expect(ttsPlayer.get().rate).toBe(2), { timeout: 5_000 })
+  })
+})
+
+describe('设置面读数 → 听书缺省的映射', () => {
+  it('四格都读得出：名字与播放层的字段一一对上', () => {
+    expect(ttsDefaultsFromSettings({
+      ttsDefaultEngine: 'http:mine', ttsDefaultRate: 1.4, ttsDefaultVolume: 0.3, ttsPrefetchParagraphs: 4,
+    })).toEqual({ engineId: 'http:mine', rate: 1.4, volume: 0.3, prefetchParagraphs: 4 })
+  })
+
+  it('读不出的那一格不写：空白引擎 id、非有限数、负预取、类型错、缺席都算没读到', () => {
+    expect(ttsDefaultsFromSettings({})).toEqual({})
+    expect(ttsDefaultsFromSettings({
+      ttsDefaultEngine: '   ', ttsDefaultRate: Number.NaN, ttsDefaultVolume: 'loud', ttsPrefetchParagraphs: -1,
+    })).toEqual({})
+    expect(ttsDefaultsFromSettings({
+      ttsDefaultEngine: null, ttsDefaultRate: 2, ttsDefaultVolume: null, ttsPrefetchParagraphs: 2.5,
+    })).toEqual({ rate: 2 })
+  })
+})
+
+/** 字段行锚：按字段名读筛选后的行集合，比按文案断言稳（同一句话别处也可能出现）。 */
+function rowNames(container: HTMLElement): string[] {
+  return [...container.querySelectorAll<HTMLElement>('[data-novel-cfg-row]')]
+    .map((row) => row.getAttribute('data-novel-cfg-row') ?? '')
+}
+
+describe('配置页的筛选 / 分区 / 折叠', { timeout: SLOW_PAGE }, () => {
+  it('搜索按名称与字段键命中：只剩命中行，其它分区整组消失', async () => {
+    const { view } = await mountConfigPage()
+    const box = screen.getByRole('combobox')
+    fireEvent.change(box, { target: { value: '预取' } })
+    expect(rowNames(view.container)).toEqual(['ttsPrefetchParagraphs'])
+    // 空组整组消失：留一个空标题等于告诉用户「这一区什么都没有」
+    expect(view.container.querySelectorAll('[data-novel-cfg-group]')).toHaveLength(1)
+    expect(screen.queryByText('存储上限')).toBeNull()
+
+    // 键名也进匹配面：配置表 / 日志里拿到的是键名，不是显示名
+    fireEvent.change(box, { target: { value: 'ttsDefaultRate' } })
+    expect(rowNames(view.container)).toEqual(['ttsDefaultRate'])
+  })
+
+  it('仅看已改：只留脏字段，再点一次复原', async () => {
+    const { view } = await mountConfigPage()
+    fireEvent.change(screen.getByLabelText('搜索并发源数'), { target: { value: '8' } })
+    const only = screen.getByRole('button', { name: '仅看已改' })
+    fireEvent.click(only)
+    expect(rowNames(view.container)).toEqual(['searchParallel'])
+    expect(only.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(only)
+    expect(only.getAttribute('aria-pressed')).toBe('false')
+    expect(rowNames(view.container)).toContain('cacheMaxBytes')
+  })
+
+  it('分区下拉选「网络」：只剩 proxyUrl 一行', async () => {
+    const { view } = await mountConfigPage()
+    fireEvent.click(screen.getByRole('button', { name: '按分区筛选' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /网络/ }))
+    expect(rowNames(view.container)).toEqual(['proxyUrl'])
+  })
+
+  it('回车跳到命中行：聚焦那一格，并撤下分区与仅看已改', async () => {
+    // jsdom 没实现 scrollIntoView：显式 stub，别让「跳转」在无事发生的环境里蒙混过关
+    const scroll = vi.fn()
+    Object.defineProperty(window.HTMLElement.prototype, 'scrollIntoView', {
+      value: scroll, configurable: true,
+    })
+    const { view } = await mountConfigPage()
+    fireEvent.change(screen.getByLabelText('单源搜索超时'), { target: { value: '20000' } })
+    fireEvent.click(screen.getByRole('button', { name: '仅看已改' }))
+    // 分区切到目标所属的组：跳转后要复位成「全部」，否则下一次跳转还会被旧分区挡住
+    const sectionButton = screen.getByRole('button', { name: '按分区筛选' })
+    fireEvent.click(sectionButton)
+    fireEvent.click(screen.getByRole('menuitem', { name: /搜索/ }))
+    const box = screen.getByRole('combobox')
+    fireEvent.change(box, { target: { value: '单源' } })
+
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => expect(document.activeElement?.id).toBe('novel-config-searchTimeoutMs'))
+    expect(scroll).toHaveBeenCalled()
+    // 筛选与分区都复位了：仅看已改撤下、分区回到全部
+    expect(screen.getByRole('button', { name: '仅看已改' }).getAttribute('aria-pressed')).toBe('false')
+    expect(sectionButton.textContent).toContain('全部')
+    // 清掉搜索词：此刻没有任何筛选，全部字段行应当都在（复位不是只改了按钮上的字）
+    fireEvent.click(screen.getByRole('button', { name: '清除筛选' }))
+    await waitFor(() => expect(rowNames(view.container)).toHaveLength(12))
+  })
+
+  it('折叠一组：字段行消失、aria-expanded 转 false；搜索期间强制展开', async () => {
+    const { view } = await mountConfigPage()
+    const group = must(
+      view.container.querySelector<HTMLElement>('[data-novel-cfg-group="config.group.search"]'),
+      '搜索组',
+    )
+    const head = within(group).getByRole('button', { name: '搜索' })
+    expect(head.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(head)
+    expect(head.getAttribute('aria-expanded')).toBe('false')
+    expect(within(view.container).queryByLabelText('单源搜索超时')).toBeNull()
+    // 筛选期间一律展开：收起的组里藏着命中行等于把结果又藏起来
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '单源' } })
+    expect(screen.getByLabelText('单源搜索超时')).toBeTruthy()
+  })
+})
+
+describe('配置页的快捷键与离开提示', { timeout: SLOW_PAGE }, () => {
+  it('搜索框是标准 combobox：展开态、受控弹出层与键盘高亮项都有标记', async () => {
+    await mountConfigPage()
+    const box = screen.getByRole('combobox')
+    expect(box.getAttribute('aria-expanded')).toBe('false')
+    const listId = box.getAttribute('aria-controls')
+    expect(listId).toBeTruthy()
+    fireEvent.change(box, { target: { value: '语速' } })
+    expect(box.getAttribute('aria-expanded')).toBe('true')
+    const list = screen.getByRole('listbox')
+    expect(list.id).toBe(listId)
+    const active = box.getAttribute('aria-activedescendant')
+    expect(active).toBeTruthy()
+    expect(screen.getByRole('option', { name: /默认语速/ }).id).toBe(active)
+  })
+
+  it('⌘/Ctrl+K：焦点在卡内才接管，卡外不抢宿主的同名命令', async () => {
+    await mountConfigPage()
+    const outside = document.createElement('button')
+    outside.textContent = 'host'
+    document.body.appendChild(outside)
+    outside.focus()
+    // 卡外：默认行为没被拦、焦点没被抢
+    expect(fireEvent.keyDown(document, { key: 'k', ctrlKey: true })).toBe(true)
+    expect(document.activeElement).toBe(outside)
+    outside.remove()
+
+    screen.getByLabelText('搜索并发源数').focus()
+    expect(fireEvent.keyDown(document, { key: 'k', ctrlKey: true })).toBe(false)
+    expect(document.activeElement).toBe(screen.getByRole('combobox'))
+  })
+
+  it('⌘/Ctrl+S：条件不满足也先拦浏览器默认，只有合法且脏才真保存', async () => {
+    const { settings } = await mountConfigPage()
+    // 非法草稿：保存不可点，但「另存网页」也不该弹出来
+    fireEvent.change(screen.getByLabelText('搜索并发源数'), { target: { value: 'abc' } })
+    expect(fireEvent.keyDown(document, { key: 's', ctrlKey: true })).toBe(false)
+    expect(settings.mutateCalls).toHaveLength(0)
+
+    fireEvent.change(screen.getByLabelText('搜索并发源数'), { target: { value: '9' } })
+    expect(fireEvent.keyDown(document, { key: 's', ctrlKey: true })).toBe(false)
+    await waitFor(() => expect(settings.mutateCalls).toHaveLength(1))
+    expect(settings.mutateCalls[0]?.ops).toEqual([{ op: 'set', path: ['searchParallel'], value: 9 }])
+  })
+
+  it('只读部署的 ⌘/Ctrl+S 同样先拦默认，且一笔都不写', async () => {
+    const { settings } = await mountConfigPage(fakeRemoteSettings({ writable: false }))
+    expect(fireEvent.keyDown(document, { key: 's', ctrlKey: true })).toBe(false)
+    expect(settings.mutateCalls).toHaveLength(0)
+  })
+
+  it('带脏字段离开页面：瞬态层留一条「丢了几项」，静默丢弃不再发生', async () => {
+    const { view } = await mountConfigPage()
+    fireEvent.change(screen.getByLabelText('搜索并发源数'), { target: { value: '8' } })
+    view.unmount()
+    const entries = transientEntries()
+    expect(entries).toHaveLength(1)
+    expect(entries[0]?.kind).toBe('error')
+    expect(entries[0]?.label).toContain('1 项未保存的修改')
+    expect(entries[0]?.label).toContain('丢弃')
+  })
+
+  it('没有脏字段离开：不留痕', async () => {
+    const { view } = await mountConfigPage()
+    view.unmount()
+    expect(transientEntries()).toHaveLength(0)
   })
 })

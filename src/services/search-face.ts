@@ -163,10 +163,13 @@ const PROBE_CODE_OF: Record<ErrorCategory, string> = {
   fetch: '',                          // e.name（FetchError/DecodeError）
   'not-found': 'Error',               // 搜索面不会抛缺席错——出现即意外，兜底如实
   'bad-request': 'Error',             // 值域错是写口的事（搜索面只读）——出现即意外，兜底如实
-  'local-import': 'Error',            // 以下四类目只属于本地书面/任务面，搜索面不见——兜底如实
+  'local-import': 'Error',            // 以下类目只属于本地书面/任务面/听书面，搜索面不见——兜底如实
   'local-too-large': 'Error',
   unavailable: 'Error',
   'job-running': 'Error',
+  'tts-engine-missing': 'Error',
+  'tts-upstream': 'Error',
+  'tts-bad-response': 'Error',
   other: 'Error',
 }
 

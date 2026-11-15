@@ -35,4 +35,13 @@ describe('volatile 字段的文案与分区交叉校验', () => {
     expect(new Set(grouped).size, `同一字段出现在多个分区：${grouped.join(', ')}`).toBe(grouped.length)
     expect([...grouped].sort()).toEqual([...VOLATILE_NAMES].sort())
   })
+
+  it('末组是听书组：题键指向新文案键，五个听书字段按序落在这里', () => {
+    const last = must(GROUPS[GROUPS.length - 1], 'GROUPS 末组')
+    expect(last.titleKey).toBe('config.group.tts')
+    expect([...last.names]).toEqual([
+      'ttsDefaultEngine', 'ttsDefaultRate', 'ttsDefaultVolume', 'ttsCacheMaxBytes', 'ttsPrefetchParagraphs',
+    ])
+    expect((SETTINGS_ZH as Record<string, string>)[last.titleKey]).toBe('听书')
+  })
 })

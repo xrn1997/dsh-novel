@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bodies, BODY, encodeQuery, LOCAL_SOURCE_ID, PARAMS, paramOps, pickShelfMeta, planarNavigation, queries, readBodies, ROUTES, SHELF_META } from '../../src/shared/wire.js'
+import { bodies, BODY, encodeQuery, LOCAL_SOURCE_ID, PARAMS, paramOps, pickShelfMeta, planarNavigation, queries, readBodies, ROUTES, SHELF_META, ttsAudioUrl } from '../../src/shared/wire.js'
 import type { ShelfBook, ShelfMetaField } from '../../src/shared/wire.js'
 import { LOCAL_SOURCE_ID as NODE_LOCAL_SOURCE_ID } from '../../src/services/localbooks.js'
 
@@ -62,6 +62,11 @@ const ROUTE_IDENTITIES = {
   localDocument: { method: 'GET', path: 'local/document' },
   localResource: { method: 'GET', path: 'local/resource' },
   localWarnings: { method: 'GET', path: 'local/warnings' },
+  ttsSources: { method: 'GET', path: 'tts/sources' },
+  ttsSynthesize: { method: 'POST', path: 'tts/synthesize' },
+  ttsEngines: { method: 'GET', path: 'tts/engines' },
+  ttsEnginesImport: { method: 'POST', path: 'tts/engines/import' },
+  ttsAudio: { method: 'GET', path: 'tts/audio' },
 } as const
 
 const PARAM_IDENTITIES = {
@@ -71,12 +76,15 @@ const PARAM_IDENTITIES = {
   sourceDelete: { method: 'DELETE', key: 'x', path: 'sources/x' },
   shelfPut: { method: 'PUT', key: 'local:x', path: 'shelf/local%3Ax' },
   shelfDelete: { method: 'DELETE', key: 'local:x', path: 'shelf/local%3Ax' },
+  // 引擎 id 含 `:`（http:<uuid>）：与 shelf 同一条「进路径段必须编码」口径
+  ttsEnginePut: { method: 'PUT', key: 'http:x', path: 'tts/engines/http%3Ax' },
+  ttsEngineDelete: { method: 'DELETE', key: 'http:x', path: 'tts/engines/http%3Ax' },
 } as const
 
 describe('路由表计数钉死（总数只有一个家，别处不许手写）', () => {
-  it('静态路由 30 条、参数操作 6 条', () => {
-    expect(Object.keys(ROUTES)).toHaveLength(30)
-    expect(Object.keys(paramOps)).toHaveLength(6)
+  it('静态路由 35 条、参数操作 8 条', () => {
+    expect(Object.keys(ROUTES)).toHaveLength(35)
+    expect(Object.keys(paramOps)).toHaveLength(8)
   })
 
   it('每个静态路由的 method/path 与字面快照逐条一致', () => {
@@ -121,6 +129,14 @@ describe('路由表计数钉死（总数只有一个家，别处不许手写）'
     expect(ROUTES.localDocument).toEqual({ method: 'GET', path: 'local/document', segs: ['local', 'document'] })
     expect(ROUTES.localResource).toEqual({ method: 'GET', path: 'local/resource', segs: ['local', 'resource'] })
     expect(ROUTES.localWarnings).toEqual({ method: 'GET', path: 'local/warnings', segs: ['local', 'warnings'] })
+  })
+  it('听书面：path 与 segs 同源；音频读口走 query 键 key（照 localResource 先例，不用路径段）', () => {
+    expect(ROUTES.ttsSources).toEqual({ method: 'GET', path: 'tts/sources', segs: ['tts', 'sources'] })
+    expect(ROUTES.ttsSynthesize).toEqual({ method: 'POST', path: 'tts/synthesize', segs: ['tts', 'synthesize'] })
+    expect(ROUTES.ttsEngines).toEqual({ method: 'GET', path: 'tts/engines', segs: ['tts', 'engines'] })
+    expect(ROUTES.ttsEnginesImport).toEqual({ method: 'POST', path: 'tts/engines/import', segs: ['tts', 'engines', 'import'] })
+    expect(ROUTES.ttsAudio).toEqual({ method: 'GET', path: 'tts/audio', segs: ['tts', 'audio'] })
+    expect(PARAMS.key).toBe('key')
   })
 })
 
@@ -171,6 +187,12 @@ describe('queries（路径 + query 构造）', () => {
     expect(queries.localResource({ id: 'local:x', resourceId: 'r0' })).toBe('local/resource?id=local%3Ax&resourceId=r0')
     expect(queries.localWarnings({ id: 'local:x' })).toBe('local/warnings?id=local%3Ax')
   })
+  it('ttsAudio：query 键归 PARAMS；ttsAudioUrl 与 resourceUrl 同形（前缀 + query 构造器）', () => {
+    expect(queries.ttsAudio({ key: 'abc' })).toBe('tts/audio?key=abc')
+    expect(queries.ttsAudio({ key: 'a b/c' })).toBe(`tts/audio?${PARAMS.key}=${encodeURIComponent('a b/c')}`)
+    expect(ttsAudioUrl('abc')).toBe('/novel-api/tts/audio?key=abc')
+    expect(ttsAudioUrl('../shelf')).toBe(`/novel-api/tts/audio?key=${encodeURIComponent('../shelf')}`)
+  })
 })
 
 describe('planarNavigation（线性目录 → 平面树，唯一实现）', () => {
@@ -184,17 +206,22 @@ describe('planarNavigation（线性目录 → 平面树，唯一实现）', () =
 })
 
 describe('SHELF_META 字段集（书目元数据的唯一主人）', () => {
-  it('字段集与 wire 形状同源：表里每个键都是 ShelfBook 元数据键（bookKey/进度/时间戳除外）', () => {
-    // 表 = 元数据写口可写的键全集；bookKey 是身份、progress/addedAt 是系统字段，不属于元数据写口
+  it('字段集与 wire 形状同源：表里每个键都是 ShelfBook 元数据键（bookKey/进度/听书/时间戳除外）', () => {
+    // 表 = 元数据写口可写的键全集；bookKey 是身份、progress/listen/addedAt 是系统字段，不属于元数据写口
     expect(Object.keys(SHELF_META).sort()).toEqual(
       ['author', 'coverUrl', 'intro', 'kind', 'lastChapterName', 'sourceId', 'title', 'totalChapters', 'wordCount'],
     )
   })
 
+  it('listen 不是书目元数据：听书位置是书架记录字段（照 progress 先例），不进 SHELF_META', () => {
+    expect(Object.keys(SHELF_META)).not.toContain('listen')
+  })
+
   // 反向绑定（书 → 表）：TableMisses = ShelfBook 有而 SHELF_META 漏掉的键。
   // 现表与书相等时它是 never（映射类型空腹即 {}）；一旦书加了书目字段而表没加，
   // 下面这条类型要求该键存在且值为 never——`missing` 缺键即本行 typecheck 红。
-  type BookMetaKeys = Exclude<keyof ShelfBook, 'bookKey' | 'progress' | 'addedAt'>
+  // listen 与 progress 同为书架记录里的**系统状态**（按书听书位置），不是书目元数据。
+  type BookMetaKeys = Exclude<keyof ShelfBook, 'bookKey' | 'progress' | 'listen' | 'addedAt'>
   type TableMisses = Exclude<BookMetaKeys, ShelfMetaField>
   it('反向绑定：ShelfBook 加书目字段而表漏加 → 本行 typecheck 红', () => {
     const missing: { [K in TableMisses]: never } = {}
@@ -220,7 +247,7 @@ describe('pickShelfMeta（任意 JSON body → 合法元数据字段；类型判
   })
 })
 
-describe('书架 PUT 三形态（body 形状纪律）', () => {
+describe('书架 PUT 四形态（body 形状纪律）', () => {
   it('shelfAdd：null/undefined 字段一律缺键（{...existing,...input} 下 :undefined 会抹掉已有元数据）', () => {
     // 显式 undefined 是客户端从可选字段直拼 meta 时会出现、而 `ShelfMetaPatch` 类型面不收的运行期值：
     // 造值只走带名的 EXPLICIT_UNDEFINED，其余字段照旧过类型检查；要钉的是运行期「缺键」这条性质
@@ -251,29 +278,45 @@ describe('书架 PUT 三形态（body 形状纪律）', () => {
   it('progress：只带 progress 两字段（形状判据，值域门归门面）', () => {
     expect(bodies.shelfProgress(3, 0.42)).toEqual({ progress: { chapterIndex: 3, offsetRatio: 0.42 } })
   })
+  it('listen：单对象入参 → { listen: 六字段 }', () => {
+    const p = { chapterIndex: 2, paragraphIndex: 5, engineId: 'edge', voice: null, rate: 1.5, volume: 0.8 }
+    expect(bodies.shelfListen(p)).toEqual({ listen: p })
+    expect(readBodies.shelfPut(bodies.shelfListen(p))).toEqual({
+      meta: {}, patch: null, progress: null, listen: p,
+    })
+  })
   it('patch：缺省/null 字段不出现在 body（与 Shelf.update 保值语义双保险；ReaderView 回写单字段形态）', () => {
     expect(bodies.shelfPatch({ totalChapters: 300 })).toEqual({ patch: { totalChapters: 300 } })
     // 造值走带名的 EXPLICIT_UNDEFINED，其余字段照旧过类型检查
     expect(bodies.shelfPatch({ author: null, coverUrl: EXPLICIT_UNDEFINED, title: 'T' })).toEqual({ patch: { title: 'T' } })
   })
-  it('三形态各自 round-trip：构造器产的东西拆成字段事实（meta / patch / progress）', () => {
+  it('四形态各自 round-trip：构造器产的东西拆成字段事实（meta / patch / progress / listen）', () => {
     expect(readBodies.shelfPut(bodies.shelfAdd('s', { title: '斗罗' })))
-      .toEqual({ meta: { sourceId: 's', title: '斗罗' }, patch: null, progress: null })
+      .toEqual({ meta: { sourceId: 's', title: '斗罗' }, patch: null, progress: null, listen: null })
     expect(readBodies.shelfPut(bodies.shelfProgress(3, 0.42)))
-      .toEqual({ meta: {}, patch: null, progress: { chapterIndex: 3, offsetRatio: 0.42 } })
+      .toEqual({ meta: {}, patch: null, progress: { chapterIndex: 3, offsetRatio: 0.42 }, listen: null })
     expect(readBodies.shelfPut(bodies.shelfPatch({ totalChapters: 300 })))
-      .toEqual({ meta: {}, patch: { totalChapters: 300 }, progress: null })
+      .toEqual({ meta: {}, patch: { totalChapters: 300 }, progress: null, listen: null })
   })
-  it('三形态皆无 → 空事实（读口不再裁决形态；那句 400 归 dispatch 的 shelfPut 臂）', () => {
-    expect(readBodies.shelfPut({})).toEqual({ meta: {}, patch: null, progress: null })
+  it('四形态皆无 → 空事实（读口不再裁决形态；那句 400 归 dispatch 的 shelfPut 臂）', () => {
+    expect(readBodies.shelfPut({})).toEqual({ meta: {}, patch: null, progress: null, listen: null })
   })
   it('title 与 patch 同场 → 两个事实并存（title 非空才加书的优先级归 dispatch）', () => {
     expect(readBodies.shelfPut({ title: 'T', patch: { kind: '玄幻' } }))
-      .toEqual({ meta: { title: 'T' }, patch: { kind: '玄幻' }, progress: null })
+      .toEqual({ meta: { title: 'T' }, patch: { kind: '玄幻' }, progress: null, listen: null })
   })
   it('progress 只判形状：Infinity 照样收成 progress 事实，值域门留给门面', () => {
     expect(readBodies.shelfPut({ progress: { chapterIndex: Infinity, offsetRatio: 0.5 } }))
-      .toEqual({ meta: {}, patch: null, progress: { chapterIndex: Infinity, offsetRatio: 0.5 } })
+      .toEqual({ meta: {}, patch: null, progress: { chapterIndex: Infinity, offsetRatio: 0.5 }, listen: null })
+  })
+  it('listen 只判形状：可空位必须是 string|null、六键齐全；值域门留给门面', () => {
+    const full = { chapterIndex: 0, paragraphIndex: 0, engineId: null, voice: null, rate: 1, volume: 1 }
+    expect(readBodies.shelfPut({ listen: full }).listen).toEqual(full)
+    // 缺可空键（wire 口径：null 是在场的值，缺席不是 null）
+    expect(readBodies.shelfPut({ listen: { chapterIndex: 0, paragraphIndex: 0, voice: null, rate: 1, volume: 1 } }).listen).toBeNull()
+    expect(readBodies.shelfPut({ listen: { ...full, engineId: 42 } }).listen).toBeNull()
+    // 形状只判类型：Infinity 照样收成事实，值域门（有限 / 区间）留给门面
+    expect(readBodies.shelfPut({ listen: { ...full, rate: Infinity } }).listen).toMatchObject({ rate: Infinity })
   })
 })
 
@@ -290,9 +333,9 @@ describe('漂移守卫', () => {
 })
 
 describe('写路由 body：构造器与读口同源（wire 单点承诺的另一半）', () => {
-  it('body 构造器计数钉死：14 个构造器对 9 条 shape（书架三形态共一条判别读口），加路由必须加一对', () => {
-    expect(Object.keys(bodies)).toHaveLength(14)
-    expect(Object.keys(readBodies)).toHaveLength(9)
+  it('body 构造器计数钉死：18 个构造器对 12 条 shape（书架四形态共一条判别读口），加路由必须加一对', () => {
+    expect(Object.keys(bodies)).toHaveLength(18)
+    expect(Object.keys(readBodies)).toHaveLength(12)
   })
 
   it('每条 shape 都能 round-trip：构造器产的东西，读口原样收回来', () => {
@@ -315,6 +358,50 @@ describe('写路由 body：构造器与读口同源（wire 单点承诺的另一
       .toEqual({ mode: 'cookies', cookies, headers: { 'user-agent': 'x' } })
   })
 
+  it('听书 body 逐条 round-trip：合成请求 / 订阅导入两条来路 / 引擎可编辑字段集', () => {
+    const synth = { engineId: 'builtin:baidu', text: '你好', rate: 1.25, voice: 'v1' }
+    expect(readBodies.ttsSynthesize(bodies.ttsSynthesize(synth))).toEqual(synth)
+    const noVoice = { engineId: 'builtin:baidu', text: '你好', rate: 1 }
+    expect(readBodies.ttsSynthesize(bodies.ttsSynthesize(noVoice))).toEqual(noVoice)
+
+    expect(readBodies.ttsEnginesImport(bodies.ttsEnginesImport({ json: '[]' }))).toEqual({ json: '[]' })
+    const url = 'https://e.example/list.json'
+    expect(readBodies.ttsEnginesImport(bodies.ttsEnginesImport({ url }))).toEqual({ url })
+
+    const input = {
+      name: '订阅', url: 'https://tts.example/x', contentType: 'audio/mpeg', header: '{"a":"b"}',
+      jsLib: 'js',
+      auth: { cookies: { sid: '1' }, headers: { 'user-agent': 'ua' }, loginInfo: { u: 'a' } },
+    }
+    expect(readBodies.ttsEnginePut(bodies.ttsEnginePut(input))).toEqual(input)
+    expect(readBodies.ttsEnginePut(bodies.ttsEnginePut({ name: 'n', url: 'u' }))).toEqual({ name: 'n', url: 'u' })
+  })
+
+  it('引擎 put 的 voices：往返不丢（空数组也往返）；缺席 = body 不带这个键', () => {
+    const withVoices = { name: 'n', url: 'u', voices: [{ id: 'v1', name: '音色一' }] }
+    expect(readBodies.ttsEnginePut(bodies.ttsEnginePut(withVoices))).toEqual(withVoices)
+    const cleared = { name: 'n', url: 'u', voices: [] as { id: string; name: string }[] }
+    expect(readBodies.ttsEnginePut(bodies.ttsEnginePut(cleared))).toEqual(cleared)
+    // 缺席是契约的一半：构造器不带键，读口也不补一个空数组出来
+    expect(Object.hasOwn(bodies.ttsEnginePut({ name: 'n', url: 'u' }), BODY.voices)).toBe(false)
+  })
+
+  it('引擎 put 的 voices 形状判别：在场但认不出 → 400（写口不静默丢；导入条才按条剪）', () => {
+    const base = { name: 'n', url: 'u' }
+    const bad: unknown[] = [
+      'x', [1], { id: 'v1', name: 'n' },                 // 非数组 / 元素非对象
+      [{ id: 'v1' }], [{ name: '只有名字' }],             // 缺一格
+      [{ id: 'v1', name: ' ' }], [{ id: ' ', name: 'n' }], // 空白串不算在场
+      [{ id: 'v1', name: 'ok' }, { id: 'v2' }],           // 一项坏 = 整表坏（逐项全对才算）
+    ]
+    for (const voices of bad) {
+      expect(() => readBodies.ttsEnginePut({ ...base, voices }), JSON.stringify(voices))
+        .toThrow(/voices/)
+    }
+    // 空数组是合法值（put 的整组替换语义 = 清掉音色表），不是「形状不符」
+    expect(readBodies.ttsEnginePut({ ...base, voices: [] })).toEqual({ ...base, voices: [] })
+  })
+
   it('键名只有一处字面量：构造器写的键就是读口认的键（改名不会两边各自漂移）', () => {
     expect(bodies.ids(['x'])).toHaveProperty(BODY.ids)
     expect(bodies.keys(['x'])).toHaveProperty(BODY.keys)
@@ -322,6 +409,8 @@ describe('写路由 body：构造器与读口同源（wire 单点承诺的另一
     expect(bodies.runLogin()).toHaveProperty(BODY.runLogin)
     expect(bodies.loginAction('x')).toHaveProperty(BODY.loginAction)
     expect(bodies.authCookies({})).toHaveProperty(BODY.cookies)
+    expect(bodies.shelfListen({ chapterIndex: 0, paragraphIndex: 0, engineId: null, voice: null, rate: 1, volume: 1 }))
+      .toHaveProperty(BODY.listen)
     // 与 query 同名的业务键沿用 PARAMS——同一个业务名词不许有第二个字面量
     expect(bodies.searchJob('k')).toHaveProperty(PARAMS.keyword)
     expect(Object.hasOwn(bodies.searchJob('k', ['s']), PARAMS.sourceIds)).toBe(true)
@@ -345,5 +434,18 @@ describe('写路由 body：构造器与读口同源（wire 单点承诺的另一
     // 认不出的 headers 不许静默丢掉：整字段被忽略等于拿半份配置冒充录入了
     expect(() => readBodies.auth({ cookies: {}, headers: 'x' })).toThrow(/headers/)
     expect(() => readBodies.auth({ loginAction: '   ' })).toThrow(/loginAction/)
+    // 听书三 shape：必填位点名、typo 类型拒收、订阅来路恰一
+    expect(() => readBodies.ttsSynthesize({ text: 'x', rate: 1 })).toThrow(BODY.engineId)
+    expect(() => readBodies.ttsSynthesize({ engineId: 'e', rate: 1 })).toThrow(BODY.text)
+    expect(() => readBodies.ttsSynthesize({ engineId: 'e', text: 'x', rate: '1' })).toThrow(BODY.rate)
+    expect(() => readBodies.ttsSynthesize({ engineId: 'e', text: 'x', rate: 1, voice: 2 })).toThrow(BODY.voice)
+    expect(() => readBodies.ttsEnginesImport({})).toThrow(/恰/)
+    expect(() => readBodies.ttsEnginesImport({ json: '[]', url: 'https://e' })).toThrow(/恰/)
+    expect(() => readBodies.ttsEnginesImport({ url: 'file:///etc/passwd' })).toThrow(/http/)
+    expect(() => readBodies.ttsEnginePut({ name: 'n' })).toThrow(PARAMS.url)
+    expect(() => readBodies.ttsEnginePut({ name: 'n', url: 'u', enabledCookieJar: true })).not.toThrow()
+    expect(readBodies.ttsEnginePut({ name: 'n', url: 'u', enabledCookieJar: true })).toEqual({ name: 'n', url: 'u' })
+    expect(() => readBodies.ttsEnginePut({ name: 'n', url: 'u', auth: { headers: {} } })).toThrow(/cookies/)
+    expect(() => readBodies.ttsEnginePut(null)).toThrow(PARAMS.name)
   })
 })

@@ -75,6 +75,12 @@ export function topAlignIfClipped(scroller: Element, head: Element, tail: Elemen
   scroller.scrollTop += at.top - box.top
 }
 
+/** 秒 → `m:ss` 读数（听书定时的剩余读数）：分不补零、秒两位；非有限 / 负值按 0 读，不上屏 NaN。 */
+export function formatClock(seconds: number): string {
+  const total = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
+}
+
 /** 防抖：ms 窗口内合并调用只留最后一次；flush 立即触发挂起调用；cancel 丢弃 */
 export function debounce<A extends unknown[]>(
   fn: (...args: A) => void, ms: number,
@@ -114,21 +120,137 @@ export const ls: Pick<Storage, 'getItem' | 'setItem'> = {
   },
 }
 
+/* ── 由纸算色（正文层）────────────────────────────────────────────────────
+   正文层的纸与墨都是用户可选的，颜色必须从纸色现算，不能钉死一个 hex：
+   `paperInk` 定正文墨色，`paperLiveInk` 定跟读高亮色。两者共用下面这套最小颜色度量
+   （WCAG 相对亮度 / 对比度，sRGB→Lab 色差），不引依赖——这一层要能零成本跑在浏览器里。 */
+
+type Triple = readonly [number, number, number]
+
+/** 正文墨色的两个端点（与 `paperInk` 的两端字色是同一份值） */
+const DARK_INK: Triple = [0x22, 0x22, 0x22]
+const LIGHT_INK: Triple = [0xe8, 0xe8, 0xea]
+/** 缺省米黄纸：非 hex 输入按它算跟读色 */
+const DEFAULT_PAPER: Triple = [0xf7, 0xf3, 0xe8]
+
+/** hex（3 / 6 位，大小写与首尾空白容错）→ RGB；非 hex / 非法长度 → null */
+function rgbOf(paper: string): Triple | null {
+  const hex = paper.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)
+  if (hex === null) return null
+  const digits = hex[1]
+  // 交替分支里有一支必然参与：捕获组缺席只可能是正则与这里对不上了，走同一条「非 hex」退路
+  if (digits === undefined) return null
+  const full = digits.length === 3 ? digits.split('').map((c) => c + c).join('') : digits
+  const channel = (offset: number): number => parseInt(full.slice(offset, offset + 2), 16)
+  return [channel(0), channel(2), channel(4)]
+}
+
+/** sRGB 通道 → 线性光（0..1） */
+function linear(v: number): number {
+  const c = v / 255
+  return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+}
+
+/** WCAG 相对亮度（Rec.709 权重） */
+function luminanceOf(rgb: Triple): number {
+  return 0.2126 * linear(rgb[0]) + 0.7152 * linear(rgb[1]) + 0.0722 * linear(rgb[2])
+}
+
+/** WCAG 对比度（1:1 ~ 21:1） */
+function contrastOf(a: number, b: number): number {
+  const [hi, lo] = a > b ? [a, b] : [b, a]
+  return (hi + 0.05) / (lo + 0.05)
+}
+
+/** HSL → RGB（H 0..360、S/L 0..1；S=0 时是灰阶） */
+function hslToRgb(hue: number, sat: number, light: number): Triple {
+  const c = (1 - Math.abs(2 * light - 1)) * sat
+  const sector = (hue % 360) / 60
+  const x = c * (1 - Math.abs((sector % 2) - 1))
+  const [r, g, b] = sector < 1 ? [c, x, 0]
+    : sector < 2 ? [x, c, 0]
+      : sector < 3 ? [0, c, x]
+        : sector < 4 ? [0, x, c]
+          : sector < 5 ? [x, 0, c]
+            : [c, 0, x]
+  const m = light - c / 2
+  const to = (v: number): number => Math.round((v + m) * 255)
+  return [to(r), to(g), to(b)]
+}
+
+/** sRGB → CIE Lab（D65）：色差要按感知量算，直接比 RGB 会把「换色」判成没换 */
+function labOf(rgb: Triple): Triple {
+  const r = linear(rgb[0])
+  const g = linear(rgb[1])
+  const b = linear(rgb[2])
+  const x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047
+  const y = 0.2126 * r + 0.7152 * g + 0.0722 * b
+  const z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883
+  const f = (t: number): number => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116)
+  const fx = f(x)
+  const fy = f(y)
+  const fz = f(z)
+  return [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)]
+}
+
+/** CIE76 色差（够用：这里只比「同一种暖赭带里哪一档离墨色更远」） */
+function deltaE76(a: Triple, b: Triple): number {
+  const la = labOf(a)
+  const lb = labOf(b)
+  return Math.hypot(la[0] - lb[0], la[1] - lb[1], la[2] - lb[2])
+}
+
+/** RGB → `#rrggbb` */
+function rgbHex(rgb: Triple): string {
+  return `#${rgb.map((v) => v.toString(16).padStart(2, '0')).join('')}`
+}
+
 /** 正文层字色：纸张色由 prefs 固定（正文层永不接宿主 token，防回归——皮肤 token 是
  *  半透明玻璃值），故字色必须**由纸张色算**：写死深色字在自选深色纸上等于隐形。按感知亮度
  * （WCAG 线性化 + Rec.709 权重，阈值 0.35）择一，深浅两纸两端都够对比。
   *  纯函数：无 React、无 IO——可直接单测。 */
 export function paperInk(paper: string): string {
-  const hex = paper.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)
-  if (hex === null) return '#222'                       // 非 hex（color input 也可能给 rgb()）：退回原行为
-  const digits = hex[1]
-  // 交替分支里有一支必然参与：捕获组缺席只可能是正则与这里对不上了，走同一条「非 hex」退路
-  if (digits === undefined) return '#222'
-  const h = digits.length === 3 ? digits.split('').map((c) => c + c).join('') : digits
-  const channel = (offset: number): number => parseInt(h.slice(offset, offset + 2), 16) / 255
-  const lin = (v: number): number => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
-  const L = 0.2126 * lin(channel(0)) + 0.7152 * lin(channel(2)) + 0.0722 * lin(channel(4))
-  return L > 0.35 ? '#222' : '#e8e8ea'
+  const rgb = rgbOf(paper)
+  if (rgb === null) return '#222'                       // 非 hex（color input 也可能给 rgb()）：退回原行为
+  return luminanceOf(rgb) > 0.35 ? '#222' : '#e8e8ea'
+}
+
+/** 跟读高亮的暖赭带（色相 / 饱和度）与可读下限：色相与正文墨色同属一页纸，不借宿主 brand */
+const LIVE_HUE = 25
+const LIVE_SAT = 0.45
+const LIVE_MIN_CONTRAST = 5.5
+
+/** 跟读高亮的字色：暖赭带里离正文墨色最远、又与纸面仍然够读的一档。
+ *
+ *  为什么不能钉死一个 hex：纸色由用户自选，同一个暖赭在米黄纸上是清楚的暖褐，换到深红或
+ *  灰纸上就可能跟正文糊成一片。这里把「够读」写成可量的下限——与纸面的对比度至少
+ *  `LIVE_MIN_CONTRAST`，且不低于正文自己的对比度（正文本来就弱的纸上，高亮至少不比正文更差）；
+ *  在这个下限之上挑与正文墨色色差最大的一档：纸亮时往深墨一侧走、纸暗时往浅墨一侧走，
+ *  亮度差始终拉开。候选只在正文墨色的同一侧（亮纸不把这一段的字反成浅色），整页仍是同一套纸墨。
+ *
+ *  纯函数：无 React、无 IO——单测直接把纸色喂进来量对比度与色差。 */
+export function paperLiveInk(paper: string): string {
+  const rgb = rgbOf(paper) ?? DEFAULT_PAPER
+  const paperY = luminanceOf(rgb)
+  const inkDark = paperY > 0.35
+  const ink = inkDark ? DARK_INK : LIGHT_INK
+  const floor = Math.min(LIVE_MIN_CONTRAST, contrastOf(luminanceOf(ink), paperY))
+  let best: Triple | null = null
+  let bestDiff = -1
+  for (let i = 0; i <= 100; i += 1) {
+    const candidate = hslToRgb(LIVE_HUE, LIVE_SAT, i / 100)
+    const candidateY = luminanceOf(candidate)
+    // 与正文同一侧（亮纸的墨在浅纸下面，暗纸的墨在深纸上面）：这一段的字不反色
+    if (inkDark ? candidateY >= paperY : candidateY <= paperY) continue
+    if (contrastOf(candidateY, paperY) + 1e-9 < floor) continue
+    const diff = deltaE76(candidate, ink)
+    if (diff > bestDiff) {
+      best = candidate
+      bestDiff = diff
+    }
+  }
+  // 亮纸的深端 / 暗纸的浅端必然过下限，这里的兜底只是给类型收口
+  return rgbHex(best ?? (inkDark ? [0, 0, 0] : [255, 255, 255]))
 }
 
 /**

@@ -1,5 +1,5 @@
 import { RuleEvalError } from '../engine/index.js'
-import { isPlaceholderExpr } from '../engine/index.js'
+import { isPlaceholderExpr, scanTemplateSegments } from '../engine/index.js'
 import type { JsOutcome } from '../engine/js-sandbox.js'
 import type { Fetcher } from './fetcher.js'
 import { createSourceEval, DEFAULT_JS_BUDGET_MS } from './source-eval.js'
@@ -22,24 +22,18 @@ export async function preEvaluateUrlJs(
 ): Promise<string> {
   if (!template.includes('{{') || !template.includes('}}')) return template
   const vars = { key, page }
-  const re = /\{\{([^{}]*)\}\}/g
-  // parts：字符串片段与待求值表达式交错存放（字符串直通、表达式异步求值后回填）
+  // parts：字符串片段与待求值表达式交错存放（字符串直通、表达式异步求值后回填）。
+  // 段扫描归 engine/template 的单点，这里只做取舍：**只有真正的变量占位不动**（原样保留，
+  // 交给后续 interpolateUrl 保持既有编码口径），其余每段 `{{…}}` 无例外地过沙箱。
   const parts: Array<{ kind: 'text'; text: string } | { kind: 'js'; expr: string }> = []
-  let last = 0
-  let m: RegExpExecArray | null
-  while ((m = re.exec(template)) !== null) {
-    if (m.index > last) parts.push({ kind: 'text', text: template.slice(last, m.index) })
-    // 表达式正文按 `{{` / `}}` 两端从原串切出（等价于第一个捕获组，但不经过「可能越界的索引」）
-    const expr = template.slice(m.index + 2, m.index + m[0].length - 2)
-    if (isPlaceholderExpr(expr, vars)) {
-      // 纯变量占位原样保留，交给后续 interpolateUrl（保持既有编码口径）
-      parts.push({ kind: 'text', text: m[0] })
+  for (const seg of scanTemplateSegments(template)) {
+    if (seg.kind === 'text') { parts.push(seg); continue }
+    if (isPlaceholderExpr(seg.expr, vars)) {
+      parts.push({ kind: 'text', text: seg.raw })
     } else {
-      parts.push({ kind: 'js', expr })
+      parts.push({ kind: 'js', expr: seg.expr })
     }
-    last = m.index + m[0].length
   }
-  if (last < template.length) parts.push({ kind: 'text', text: template.slice(last) })
   if (!parts.some((p) => p.kind === 'js')) return template
   let out = ''
   for (const part of parts) {

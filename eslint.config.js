@@ -4,6 +4,17 @@ import tseslint from 'typescript-eslint'
 import reactHooks from 'eslint-plugin-react-hooks'
 
 /**
+ * `globals` 包用布尔值编码只读 / 可写（`false` = 只读）；flat config 只认字符串档位，
+ * 布尔 `false` 会被当成 `off`（于是 `no-undef` 把 Node 全局全报成未定义）。这里统一翻译。
+ */
+const flatGlobals = (set) => Object.fromEntries(
+  Object.entries(set).map(([name, access]) => [
+    name,
+    access === true || access === 'writable' ? 'writable' : 'readonly',
+  ]),
+)
+
+/**
  * 本仓的机器门。
  *
  * 分工：`tsc` 管类型形状与可赋值性（`noUncheckedIndexedAccess`、`exactOptionalPropertyTypes`、
@@ -56,8 +67,16 @@ export default tseslint.config(
   {
     // 一次性脚本与配置入口不进产物、不承载运行时不变量；开着类型感知只会让 lint 自己的
     // 配置文件把整条命令跑崩（它不在 tsconfig 内）。必须排在最后：flat config 后者覆盖前者。
-    files: ['**/*.js', '**/*.mjs', 'tsdown.config.ts', 'vitest.config.ts', 'vitest.*.config.ts'],
+    // `scripts/**` 是 Node 脚本（`node:http` / `fetch` / `process`），globals 按 Node 声明——
+    // 不声明时 js recommended 的 `no-undef` 会把每个宿主全局都当成拼错的变量。
+    // 预设自带的 `languageOptions`（关类型感知用的 parserOptions）要显式并进来：它整块替换，
+    // 不是深合并。
     ...tseslint.configs.disableTypeChecked,
+    files: ['**/*.js', '**/*.mjs', 'tsdown.config.ts', 'vitest.config.ts', 'vitest.*.config.ts'],
+    languageOptions: {
+      ...tseslint.configs.disableTypeChecked.languageOptions,
+      globals: flatGlobals(globals.node),
+    },
   },
 
   {

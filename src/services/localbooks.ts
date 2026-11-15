@@ -7,7 +7,7 @@ import { LOCAL_SOURCE_ID, planarNavigation, resourceUrl } from '../shared/wire.j
 import type {
   BookNavigation, ChapterContent, ChapterEntry, LocalImportWarning, NavigationItem, ShelfBook,
 } from '../shared/wire.js'
-import { chapterContentToText } from './chapter-content.js'
+import { chapterContentToText } from '../shared/chapter-text.js'
 import { importEpub } from './epub/import.js'
 import type { EpubChapterRef, EpubDocumentRef, EpubImportData, EpubResourceRef } from './epub/import.js'
 import { warningListOf } from './epub/findings.js'
@@ -366,7 +366,7 @@ export class LocalBooks {
     return this.readDocument(bookKey, meta, chapter.documentId)
   }
 
-  /** 章节正文（**文字面**）：图文面的文字投影——唯一实现在 chapter-content.chapterContentToText，
+  /** 章节正文（**文字面**）：图文面的文字投影——唯一实现在 shared/chapter-text 的 chapterContentToText，
    *  这里不写第二份投影（同一本书的导出、AI 工具与阅读器必须读到同一段文字） */
   async getChapter(bookKey: string, index: number): Promise<string> {
     return chapterContentToText(await this.getChapterContent(bookKey, index))

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  ensurePanelShelf, loadPanelShelf, markPanelShelfLanded, panelShelf, readPanelShelf,
+  ensurePanelShelf, loadPanelShelf, markPanelShelfLanded, panelShelf, patchPanelShelfProgress, readPanelShelf,
   removePanelShelfBooks, resetPanelShelf, setPanelShelfFilter, setPanelShelfKeyword,
 } from '../../src/client/panel-shelf.js'
 import type { ShelfEntry } from '../../src/shared/wire.js'
@@ -29,6 +29,22 @@ describe('panelShelf（面板期书架投影）', () => {
     expect(panelShelf.get().books).toEqual([])
     expect(panelShelf.get().error).toBe('Error: x')
     expect(panelShelf.get().landed.has('u1')).toBe(true)
+  })
+
+  it('patchPanelShelfProgress：听书落盘后当前面板投影跟着走；不在列表里或还没取过书架就不动', async () => {
+    patchPanelShelfProgress('k1', 2, 0.5)          // 还没取过书架：no-op
+    expect(panelShelf.get().books).toBeNull()
+
+    await loadPanelShelf(deps(async () => [entry('k1'), entry('k2')]))
+    patchPanelShelfProgress('k1', 2, 0.5)
+    const patched = panelShelf.get().books?.find((b) => b.bookKey === 'k1')
+    expect(patched?.progress).toMatchObject({ chapterIndex: 2, offsetRatio: 0.5 })
+    expect(patched?.progress.updatedAt).toBeGreaterThan(1)
+    expect(panelShelf.get().books?.find((b) => b.bookKey === 'k2')?.progress.chapterIndex).toBe(0)
+    expect([...panelShelf.get().landed]).toEqual(['k1', 'k2'])
+
+    patchPanelShelfProgress('missing', 3, 0)       // 不在列表里：no-op
+    expect(panelShelf.get().books?.map((b) => b.bookKey)).toEqual(['k1', 'k2'])
   })
 
   it('筛选与关键字跨挂载保留', () => {

@@ -41,6 +41,30 @@ describe('Shelf', () => {
     await s.flush()
     expect(must((await Shelf.load(dir)).get('k'), '读到的那一条').progress).toMatchObject({ chapterIndex: 3, offsetRatio: 0.9 })
   })
+  it('updateListen：落盘重读一致；progress 一字不动（听书细节轨不碰共用位置）', async () => {
+    const { s, dir } = await tmpShelf()
+    s.add({ sourceId: 's1', bookKey: 'k', title: 't' })
+    s.updateProgress('k', 4, 0.4)
+    const p = { chapterIndex: 2, paragraphIndex: 5, engineId: 'e1', voice: null, rate: 1.25, volume: 0.6 }
+    const saved = must(s.updateListen('k', p), 'updateListen 的在架返回值')
+    expect(must(saved.listen, 'saved.listen')).toEqual(p)
+    expect(saved.progress).toMatchObject({ chapterIndex: 4, offsetRatio: 0.4 })
+    await s.flush()
+    const reloaded = must((await Shelf.load(dir)).get('k'), '重载后的那一条')
+    expect(reloaded.listen).toEqual(p)
+    expect(reloaded.progress).toMatchObject({ chapterIndex: 4, offsetRatio: 0.4 })
+  })
+  it('updateListen 连续调用防抖合并为最后一次；不在架 → null（不静默造书）', async () => {
+    const { s, dir } = await tmpShelf()
+    const p = { chapterIndex: 0, paragraphIndex: 0, engineId: null, voice: null, rate: 1, volume: 1 }
+    expect(s.updateListen('nope', p)).toBeNull()
+    expect(s.list()).toHaveLength(0)
+    s.add({ sourceId: 's1', bookKey: 'k', title: 't' })
+    s.updateListen('k', { ...p, paragraphIndex: 1 })
+    s.updateListen('k', { ...p, paragraphIndex: 2 })
+    await s.flush()
+    expect(must((await Shelf.load(dir)).get('k'), '重载后的那一条').listen).toMatchObject({ paragraphIndex: 2 })
+  })
   it('totalChapters：add 携带 → 落架；再 add 不带 → 保留（合并语义）', async () => {
     const { s } = await tmpShelf()
     s.add({ sourceId: 'u', bookKey: 'k1', title: 'T', totalChapters: 100 })

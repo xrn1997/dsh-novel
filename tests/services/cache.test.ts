@@ -2,11 +2,27 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { PageCache, safeKey } from '../../src/services/cache.js'
+import { FULL_SCAN_EVERY, SizeLedger } from '../../src/services/size-ledger.js'
 import { makeTempDir } from '../temp-dir.js'
 
 async function tmp(): Promise<string> { return makeTempDir('novel-cache-') }
 
 afterEach(() => { vi.restoreAllMocks() })
+
+/** 让下一发 readdir 在**读目录之前**挂住：扫描停在那里时把写入放进来，好让新文件落在本轮候选里。
+ *  与 `size-ledger.test.ts` 的闸同形（那里在读完之后挂，用于验证扫描窗口的并发写）。 */
+function gateNextReaddir(): { scans: () => number, release: () => void } {
+  let release = (): void => { throw new Error('扫描没停在 readdir 上') }
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  const realReaddir = fs.readdir
+  const spy = vi.spyOn(fs, 'readdir')
+  let gated = false
+  spy.mockImplementation((async (d: string, o?: unknown) => {
+    if (!gated) { gated = true; await gate }
+    return (realReaddir as (p: string, opts?: unknown) => Promise<string[]>)(d, o)
+  }) as typeof fs.readdir)
+  return { scans: () => spy.mock.calls.length, release: () => { release() } }
+}
 
 describe('PageCache', () => {
   // epoch/slot 对 PageCache 是不透明串（有效性算式归 cache-epoch.ts）——测试传字面量即可
@@ -66,15 +82,20 @@ describe('PageCache', () => {
   it('未超上限的连续写入不触发全量 prune', async () => {
     const c = new PageCache(await tmp(), 10_000)
     await c.setContent('s', 'k', 0, 'e', 'x')
-    const prune = vi.spyOn(PageCache.prototype, 'prune')
+    // 容量纪律住 SizeLedger；写路径是 PageCache.write → SizeLedger.afterWrite → SizeLedger.prune，
+    // 所以钉的必须是 SizeLedger.prototype.prune（钉 PageCache.prototype.prune 永远等不到这次调用）
+    const prune = vi.spyOn(SizeLedger.prototype, 'prune')
     for (let i = 1; i <= 5; i++) await c.setContent('s', 'k', i, 'e', 'x'.repeat(10))
     expect(prune).not.toHaveBeenCalled()
   })
   it('覆盖同一槽位不把旧字节重复计入总量', async () => {
     const c = new PageCache(await tmp(), 1000)
-    const prune = vi.spyOn(PageCache.prototype, 'prune')
+    const prune = vi.spyOn(SizeLedger.prototype, 'prune')
     for (let i = 0; i < 20; i++) await c.setContent('s', 'k', 0, 'e', 'x'.repeat(100))
-    expect(prune).not.toHaveBeenCalled()
+    // 增量记账若按「整笔字节累加」而不是「新字节减旧字节」，同一键的 100 字节会被记成 2000，
+    // 超上限后每笔写都触发全量 prune——这条红
+    expect(prune, '覆盖写把旧字节重复计入，账目超限后每写必全扫').not.toHaveBeenCalled()
+    expect(c.totalBytes).toBeLessThanOrEqual(1000)
   })
   it('未超上限时也按间隔实扫，外部新增的超限文件会被发现并淘汰', async () => {
     const dir = await tmp()
@@ -83,17 +104,21 @@ describe('PageCache', () => {
     const ext = path.join(dir, 'cache', 'content', 'ext-0-e.txt')
     await fs.writeFile(ext, 'y'.repeat(200))
     // 估算只认得本实例写入的 33 字节；外部文件要等下一次全量对账才会被计入。
-    for (let i = 1; i <= 32; i++) await c.setContent('s', 'k', i, 'e', 'z')
+    // 间隔从实现引（不抄字面量）：改档位时这条副本不会跟着变，用例名就撒谎了。
+    for (let i = 1; i <= FULL_SCAN_EVERY; i++) await c.setContent('s', 'k', i, 'e', 'z')
     await expect(fs.access(ext)).rejects.toThrow()
   })
   it('超过上限的写入仍触发一次全量 prune', async () => {
     const c = new PageCache(await tmp(), 100)
-    const prune = vi.spyOn(PageCache.prototype, 'prune')
+    // 容量纪律住 SizeLedger；PageCache.prune 只是对外的同一条入口。
+    const prune = vi.spyOn(SizeLedger.prototype, 'prune')
     await c.setContent('s', 'k', 0, 'e', 'x'.repeat(60))
     expect(prune).not.toHaveBeenCalled()
     await c.setContent('s', 'k', 1, 'e', 'x'.repeat(60))
     expect(prune).toHaveBeenCalledTimes(1)
   })
+  // 120 个文件让实扫跨多个 tick，好让下面这笔写落在扫描期间。串行落盘在并行 worker 下会排队，
+  // 缺省 5s 在忙机器上会假红（这条验的是「对账不抹掉并发写」，不是速度）：给它更宽的死线。
   it('全量对账与写入交叠时，不把并发那笔写从账上抹掉', async () => {
     const c = new PageCache(await tmp(), 10_000_000)
     // 120 个文件让实扫跨多个 tick，好让下面这笔写落在扫描期间
@@ -102,8 +127,29 @@ describe('PageCache', () => {
     const fullScan = c.prune()
     await Promise.all([racing, fullScan])
     // 整份替换快照会让这 400 字节从索引里消失，下一次覆盖同一路径时按全新字节重计
-    const total = (c as unknown as { totalBytes: number }).totalBytes
-    expect(total).toBeGreaterThanOrEqual(520)
+    expect(c.totalBytes).toBeGreaterThanOrEqual(520)
+  }, 20_000)
+  it('写入前预约保留：落盘窗口里的一轮扫描不删刚写入的那一条（回执不能指向 miss）', async () => {
+    const dir = await tmp()
+    const contentDir = path.join(dir, 'cache', 'content')
+    await fs.mkdir(contentDir, { recursive: true })
+    // 外部旧文件：不在本实例账上，但实扫看得见；mtime 更旧，先被淘汰
+    const external = path.join(contentDir, 'ext-old.txt')
+    await fs.writeFile(external, 'o'.repeat(100))
+    const oldT = new Date(Date.now() - 10_000)
+    await fs.utimes(external, oldT, oldT)
+
+    const c = new PageCache(dir, 50)                      // 上限比旧文件小、比新条目更小
+    const gate = gateNextReaddir()
+    // 本实例的第一笔写：落盘之后 while 建索引的那一发 readdir 停在闸上——保留集仍握着
+    const writing = c.setContent('s', 'k', 0, 'e', 'y'.repeat(150))
+    await vi.waitFor(() => expect(gate.scans()).toBe(1))
+    // 这一轮扫描看得见刚写入的文件（已落盘）：没有预约保留它就会被当成最旧的淘汰对象删掉
+    await c.prune()
+    expect(await c.getContent('s', 'k', 0, 'e'), '预约保留的刚写入条目仍在').toBe('y'.repeat(150))
+    gate.release()
+    await writing
+    expect(await c.getContent('s', 'k', 0, 'e'), '写完之后的读口仍拿得到字节').toBe('y'.repeat(150))
   })
 })
 

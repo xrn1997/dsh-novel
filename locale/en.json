@@ -1,6 +1,7 @@
 {
   "meta": {
     "title": "Novel",
-    "description": "Read web novels in DeepSeek Harness (DSH): import legado book sources, search across them, keep a bookshelf, and read with continuous scrolling, with six AI assistant tools for search and reading."
+    "description": "Read web novels in DeepSeek Harness (DSH): import legado book sources, search across them, keep a bookshelf, read with continuous scrolling, and have it read aloud to you, with six AI assistant tools for search and reading.",
+    "detail": "docs/DETAIL.md"
   }
 }

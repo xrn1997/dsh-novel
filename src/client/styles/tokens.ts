@@ -21,7 +21,7 @@
  *  z 序与本层 `--novel-z-*` 同表——`CTRL_Z` 是控制器层的 JS 侧主人（`reader-ctrl-z.test.ts` 钉），
  *  相对次序由 `ui-system.test.tsx` 钉死。
  *
- *  本块必须排在拼装次序最前：后面的九个块都引用这里定义的变量（拼装点见 ../styles.tsx）。 */
+ *  本块必须排在拼装次序最前：后面的十个块都引用这里定义的变量（拼装点见 ../styles.tsx）。 */
 export const TOKENS_CSS = `
 .novel-root, [data-novel-scope] {
   /* 层级：底(页面) → 层1(容器/工具栏) → 层2(面板/浮层/抽屉) → 层3(输入件)。宿主层板只到 layer-3。 */
@@ -51,6 +51,13 @@ export const TOKENS_CSS = `
   --novel-brand-line: color-mix(in srgb, var(--novel-brand) 27%, transparent);  /* 运行卡 / 选中条描边 */
   --novel-brand-strong: var(--dsw-alias-label-primary-bluish, #79a8ff);         /* 亮蓝强调字 */
   --novel-skeleton: var(--dsw-alias-bg-skeleton, #ffffff14);
+  /* 浮层底：迷你条读宿主**浮动钮**语义（与宿主自己的浮动按钮同底同源），不是面板层板——
+     层板是「嵌在页面里的容器」的底，浮层是「浮在内容上」的底，两者在宿主光暗两态都不同值。 */
+  --novel-float: var(--dsw-alias-button-floating-fill, #2b2b2e);
+  /* 滚动条三件套（轨 / thumb / hover）：插件自己的滚动面跟宿主滚动条语义，不留浏览器默认灰条 */
+  --novel-scrollbar-track: var(--dsw-alias-scrollbar-bg-l1, #ffffff0f);
+  --novel-scrollbar: var(--dsw-alias-scrollbar-bg-l2, #ffffff2e);
+  --novel-scrollbar-hover: var(--dsw-alias-scrollbar-hover-l2, #ffffff47);
   /* 模态遮罩：宿主语义层真名 bg-mask-1（词表在 theme-tokens 守卫内）——视觉规则只读本局部变量 */
   --novel-mask: var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, .45));
   /* 状态：成功/错误/警告 + 其弱底（错误底用宿主 interactive-*-danger 而非自调 alpha） */
@@ -84,11 +91,26 @@ export const TOKENS_CSS = `
      守卫会把「行内写、样式读」的这一路判成未定义引用。 */
   --novel-pct: 0;
   --novel-measure: 36em;
+  /* 听书浮窗展开态尺寸（ADR-0080）：由 miniBarLayout 行内写入解析后的呈现尺寸，样式层只读变量。 */
+  --novel-tts-panel-w: 320px;
+  --novel-tts-panel-h: 200px;
+  /* 收起态胶囊尺寸：同样由 miniBarLayout 从 CAPSULE_SIZE 行内写入（两形态尺寸来源对称）；
+     这里的缺省只为「值槽必须在词表里在册」的自足守卫。 */
+  --novel-tts-capsule-w: 208px;
+  --novel-tts-capsule-h: 44px;
   /* --novel-paper / --novel-paper-ink：正文那一层的纸与墨（prefs.paperColor 与 paperInk 的结果，
      由 ReaderView 行内写入）。**控制器条由它们派生**——「条底与纸底不同源即缺陷」的判据
      住 .novel-rdr-bar 的注释那头。缺省值 = 默认纸米黄与其对应墨色。 */
   --novel-paper: #f7f3e8;
   --novel-paper-ink: #222;
+  /* 控制器条底 / 描边：纸往墨压一档（6% / 12%）。阅读器顶条与听书条读**同一份派生式**——
+     两处各写一遍 color-mix，改档位时必有一条落下，接缝就成了可量的缺陷。 */
+  --novel-bar-bg: color-mix(in srgb, var(--novel-paper-ink) 6%, var(--novel-paper));
+  --novel-bar-line: color-mix(in srgb, var(--novel-paper-ink) 12%, transparent);
+  /* 跟读高亮（正在被念的那一段）的字色：ReaderView 由纸色现算（util.ts 的 paperLiveInk）
+     写进阅读区根上；这里的缺省值 = 默认米黄纸上的那一档。命中段换这一档字色并在段首画一枚
+     currentColor 小三角，不铺底色也不画进度线；宿主 brand 不进正文层（ADR-0076）。 */
+  --novel-live-ink: #855532;
   /* 插图预留宽高比（ChapterBody 由 wire 的可信 width/height 行内写入，规则读本值）：
      值槽在此在册是 token 自足守卫的硬要求——「行内写、样式读」的这一路也必须词表里有名。 */
   --novel-fig-ratio: 4 / 3;

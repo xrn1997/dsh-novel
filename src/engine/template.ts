@@ -6,18 +6,48 @@ import { splitVarExpr } from './grammar.js'
  *  共用此式（放引擎侧是因为 js-protocol 不能 import services；两处各抄一份会漂移）。 */
 export const URL_OPTION_SPLIT = /\s*,\s*(?=\{)/
 
+/** `{{…}}` 段扫描（**单点**）：模板拆成字面文本与 `{{expr}}` 段——`expr` 是花括号内的原文
+ *  （按 `{{` / `}}` 两端从原串切出，等价于捕获组但不经过「可能越界的索引」），`raw` 是整段
+ *  匹配串（含花括号；判「原样保留」的段要回它）。interpolateUrl 的逐段插值、搜索面
+ *  `preEvaluateUrlJs` 与朗读面模板预求值共用这一份拆分，不各扫一份 `\{\{([^{}]*)\}\}`。 */
+export type TemplateSegment =
+  | { kind: 'text'; text: string }
+  | { kind: 'expr'; expr: string; raw: string }
+
+export function scanTemplateSegments(template: string): TemplateSegment[] {
+  const re = /\{\{([^{}]*)\}\}/g
+  const segments: TemplateSegment[] = []
+  let last = 0
+  let m: RegExpExecArray | null
+  while ((m = re.exec(template)) !== null) {
+    if (m.index > last) segments.push({ kind: 'text', text: template.slice(last, m.index) })
+    segments.push({ kind: 'expr', expr: template.slice(m.index + 2, m.index + m[0].length - 2), raw: m[0] })
+    last = m.index + m[0].length
+  }
+  if (last < template.length) segments.push({ kind: 'text', text: template.slice(last) })
+  return segments
+}
+
 export function interpolateUrl(
   template: string,
   vars: Record<string, string | number>,
 ): string {
-  return template.replace(/\{\{([^{}]*)\}\}/g, (whole, inner: string) => {
+  let out = ''
+  for (const seg of scanTemplateSegments(template)) {
+    if (seg.kind === 'text') {
+      out += seg.text
+      continue
+    }
     // 词法拆分归 grammar.splitVarExpr 单点（模板侧与搜索面共用同一份，不各写一个 || 拆分）
-    const { name, fallback } = splitVarExpr(inner)
+    const { name, fallback } = splitVarExpr(seg.expr)
     // 不是占位形态（JS 表达式 / 取不到的标识符）→ 本函数不动它：搜索面已按 JS 求值过
-    if (!isPlaceholder(name, fallback, vars)) return whole
-    if (Object.hasOwn(vars, name)) return encodeURIComponent(String(vars[name]))
-    return fallback ?? whole
-  })
+    if (!isPlaceholder(name, fallback, vars)) {
+      out += seg.raw
+      continue
+    }
+    out += Object.hasOwn(vars, name) ? encodeURIComponent(String(vars[name])) : (fallback ?? seg.raw)
+  }
+  return out
 }
 
 /** `{{内部}}` 是不是「变量占位」（词法是标识符，且**在 vars 里**或带 `||` 兜底）——

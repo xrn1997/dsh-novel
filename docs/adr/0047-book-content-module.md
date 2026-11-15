@@ -7,7 +7,7 @@ Status: accepted
 ## 决定
 
 - `BookContent` 收 `LocalBooks` / `OnlineReading` 两个适配器：目录、导航、正文按来源分流只在这一处；`toc` / `navigation` / `chapterContent` / `readChapter` 不再各自判 `__local__`。
-- 正文 `text` 出口统一过 `chapter-content.ts` 的 `normalizeChapterText`：本地 TXT 与在线正文同一份行规约，幂等；EPUB 的 rich 树原样通过，不解释结构。`chapterContentToText` 的 text 分支调用同一函数，不另立第二份算式。
+- 正文 `text` 出口统一过 `shared/chapter-text.ts` 的 `normalizeChapterText`：本地 TXT 与在线正文同一份行规约，幂等；EPUB 的 rich 树原样通过，不解释结构。`chapterContentToText` 的 text 分支调用同一函数，不另立第二份算式。
 - 在线阅读的缓存、目录在途去重、翻页、subContent 与空正文策略仍归 `OnlineReading`；本地包内解析仍归 `LocalBooks`；缓存有效性仍归 `cache-epoch`。门面保留搜索、发现、书架、导入、登录、详情等跨面动词。
 
 ## 边界
@@ -19,6 +19,6 @@ Status: accepted
 
 - 把本地书也塞进 `OnlineReading`：在线那条只认识 HTTP 与文件缓存，本地适配器会扩大它的 interface。
 - 保留门面三处分流、只把文字规约抽出来：新读动词又会各判一次来源，分流仍有两个主人。
-- 把行规约抄成两份实现（门面一份、书内容读面一份）：两处会漂移；唯一实现住 `chapter-content.ts`，两个应用点都只调用它。
+- 把行规约抄成两份实现（门面一份、书内容读面一份）：两处会漂移；唯一实现住 `shared/chapter-text.ts`，两个应用点都只调用它。
 
-锚点：`src/services/book-content.ts` 的 `BookContent`；`src/services/chapter-content.ts` 的 `normalizeChapterText` / `chapterContentToText`；`src/services/reading.ts` 的 `getToc` / `getNavigation` / `getChapterContent` / `readChapter`；`tests/services/book-content.test.ts`；`tests/services/chapter-content.test.ts`；`ADR-0043`。
+锚点：`src/services/book-content.ts` 的 `BookContent`；`src/shared/chapter-text.ts` 的 `normalizeChapterText` / `chapterContentToText`；`src/services/reading.ts` 的 `getToc` / `getNavigation` / `getChapterContent` / `readChapter`；`tests/services/book-content.test.ts`；`tests/shared/chapter-text.test.ts`；`ADR-0043`。

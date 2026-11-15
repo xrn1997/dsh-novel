@@ -469,3 +469,68 @@ describe('调用方取消（FetchInit.signal）', () => {
     await expect(pending).rejects.toThrow('用户取消')
   })
 })
+
+describe('maxBytes option', () => {
+  it('声明长度超限：取消流并抛 FetchError（不把超大响应读进内存）', async () => {
+    const f = createFetcher({
+      fetchImpl: fakeFetch(() => ({ body: 'x'.repeat(100), headers: { 'content-length': '100' } })),
+    })
+    await expect(f.fetchPage('https://a.test/x', { maxBytes: 10 })).rejects.toThrow(/大小上限/)
+  })
+
+  it('未声明长度：边读边计，越限即取消并抛 FetchError', async () => {
+    const f = createFetcher({
+      fetchImpl: async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(60))
+          controller.enqueue(new Uint8Array(60))
+          controller.close()
+        },
+      }), { status: 200 }),
+    })
+    await expect(f.fetchPage('https://a.test/x', { maxBytes: 100 })).rejects.toThrow(/大小上限/)
+  })
+
+  it('上限内正常返回全部字节；不传上限仍走原路径', async () => {
+    const f = createFetcher({ fetchImpl: fakeFetch(() => ({ body: 'x'.repeat(10) })) })
+    expect((await f.fetchPage('https://a.test/x', { maxBytes: 10 })).raw).toHaveLength(10)
+    expect((await f.fetchPage('https://a.test/x')).raw).toHaveLength(10)
+  })
+
+  it('超大小上限是本地判据：不带 status，重试判据不会把同一份超大响应重打一遍', async () => {
+    // 声明 content-length 的分支
+    let declaredCalls = 0
+    const declared = createFetcher({
+      fetchImpl: fakeFetch(() => {
+        declaredCalls++
+        return { body: 'x'.repeat(100), headers: { 'content-length': '100' } }
+      }),
+    })
+    const declaredErr = await declared.fetchPage('https://a.test/x', { maxBytes: 10, retry: 2 })
+      .then(() => null, (e: unknown) => e)
+    expect(declaredErr, '超限必须抛错').toBeInstanceOf(FetchError)
+    // 拿到的是 200 响应：带上 status 会落进「拿到响应但状态码不成功」那条重试判据
+    expect((declaredErr as FetchError).status, '本地判据不带 HTTP status').toBeUndefined()
+    expect(declaredCalls, '不是 HTTP 非 2xx，不该重试').toBe(1)
+
+    // 未声明长度、边读边计的分支：同一个错误形状（同一处判据，两行都不带 status）
+    let streamedCalls = 0
+    const streamed = createFetcher({
+      fetchImpl: async () => {
+        streamedCalls++
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array(60))
+            controller.enqueue(new Uint8Array(60))
+            controller.close()
+          },
+        }), { status: 200 })
+      },
+    })
+    const streamedErr = await streamed.fetchPage('https://a.test/x', { maxBytes: 100, retry: 2 })
+      .then(() => null, (e: unknown) => e)
+    expect(streamedErr).toBeInstanceOf(FetchError)
+    expect((streamedErr as FetchError).status).toBeUndefined()
+    expect(streamedCalls).toBe(1)
+  })
+})

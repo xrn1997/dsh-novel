@@ -6,6 +6,8 @@ import { DEFAULT_TIMEOUT_MS } from '../src/services/fetcher.js'
 import { DEFAULT_MAX_IMPORT_BYTES } from '../src/services/localbooks.js'
 import { DEFAULT_SEARCH_PARALLEL } from '../src/services/reading.js'
 import { DEFAULT_JS_BUDGET_MS } from '../src/services/source-eval.js'
+import { DEFAULT_TTS_CACHE_MAX_BYTES } from '../src/services/tts-cache.js'
+import { TTS_DEFAULTS } from '../src/shared/wire.js'
 
 /** 宿主 Loader 写活值的符号口（唯一名字来源是 `src/config.ts`；测试只做「写一次、读一次」） */
 const VOLATILE_WRITE: unique symbol = Symbol.for('cosmokit.volatile.write')
@@ -72,7 +74,24 @@ describe('配置收缝', () => {
       localImportMaxBytes: DEFAULT_MAX_IMPORT_BYTES,
     })
   })
-  it('volatile 字段的消费桶恰为现状地图（service-live 五格 / composition-root 两格）', () => {
+  it('听书五字段缺省各自引单点常量（引擎 / 语速 / 音量 / 音频缓存上限 / 预取段数）', () => {
+    expect(resolveConfig(undefined)).toMatchObject({
+      ttsDefaultEngine: TTS_DEFAULTS.engineId,
+      ttsDefaultRate: TTS_DEFAULTS.rate,
+      ttsDefaultVolume: TTS_DEFAULTS.volume,
+      ttsCacheMaxBytes: DEFAULT_TTS_CACHE_MAX_BYTES,
+      ttsPrefetchParagraphs: TTS_DEFAULTS.prefetchParagraphs,
+    })
+  })
+  it('听书五字段全是 volatile ref（配置页可热改）', () => {
+    const cfg = Config(undefined)
+    expect(volatileOf(cfg, 'ttsDefaultEngine')).toBe(TTS_DEFAULTS.engineId)
+    expect(volatileOf(cfg, 'ttsDefaultRate')).toBe(TTS_DEFAULTS.rate)
+    expect(volatileOf(cfg, 'ttsDefaultVolume')).toBe(TTS_DEFAULTS.volume)
+    expect(volatileOf(cfg, 'ttsCacheMaxBytes')).toBe(DEFAULT_TTS_CACHE_MAX_BYTES)
+    expect(volatileOf(cfg, 'ttsPrefetchParagraphs')).toBe(TTS_DEFAULTS.prefetchParagraphs)
+  })
+  it('volatile 字段的消费桶恰为现状地图（service-live 十格 / composition-root 两格）', () => {
     expect(VOLATILE_CONSUMERS).toEqual({
       searchTimeoutMs: 'service-live',
       searchParallel: 'service-live',
@@ -81,6 +100,11 @@ describe('配置收缝', () => {
       localImportMaxBytes: 'service-live',
       exportDelayMs: 'composition-root',
       proxyUrl: 'composition-root',
+      ttsDefaultEngine: 'service-live',
+      ttsDefaultRate: 'service-live',
+      ttsDefaultVolume: 'service-live',
+      ttsCacheMaxBytes: 'service-live',
+      ttsPrefetchParagraphs: 'service-live',
     })
   })
   it('值域非法在加载期响亮失败，不静默夹紧（searchParallel ≤ 0 批循环 i+=0 会永久挂起）', () => {
@@ -97,6 +121,7 @@ describe('配置收缝', () => {
     const keys = [
       'searchTimeoutMs', 'searchParallel', 'jsTimeoutMs',
       'cacheMaxBytes', 'exportDelayMs', 'localImportMaxBytes',
+      'ttsDefaultRate', 'ttsDefaultVolume', 'ttsCacheMaxBytes', 'ttsPrefetchParagraphs',
     ] as const
     for (const key of keys) {
       for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
@@ -114,6 +139,27 @@ describe('配置收缝', () => {
   it('值域正边界：0 是合法缺省（cacheMaxBytes / exportDelayMs 允许 0）', () => {
     expect(resolveConfig({ cacheMaxBytes: 0 }).cacheMaxBytes).toBe(0)
     expect(resolveConfig({ exportDelayMs: 0 }).exportDelayMs).toBe(0)
+  })
+  it('听书数值位值域：语速 [0.5,3]、音量 [0,1]、音频缓存 ≥ 1 MiB、预取段数 ≥ 0', () => {
+    expect(resolveConfig({ ttsDefaultRate: 0.8 }).ttsDefaultRate).toBe(0.8)
+    expect(resolveConfig({ ttsDefaultRate: 3 }).ttsDefaultRate).toBe(3)
+    expect(resolveConfig({ ttsDefaultVolume: 1 }).ttsDefaultVolume).toBe(1)
+    expect(resolveConfig({ ttsCacheMaxBytes: 1024 * 1024 }).ttsCacheMaxBytes).toBe(1024 * 1024)
+    expect(resolveConfig({ ttsPrefetchParagraphs: 0 }).ttsPrefetchParagraphs).toBe(0)
+    expect(() => resolveConfig({ ttsDefaultRate: 0.4 })).toThrow(/配置非法/)
+    expect(() => resolveConfig({ ttsDefaultRate: 3.5 })).toThrow(/配置非法/)
+    expect(() => resolveConfig({ ttsDefaultVolume: -0.1 })).toThrow(/配置非法/)
+    expect(() => resolveConfig({ ttsDefaultVolume: 1.1 })).toThrow(/配置非法/)
+    // 下界刻意高过「一段音频」：真遇到单段就超上限，淘汰会跳过刚写入的那一条
+    // （`SizeLedger` 的保留集，`ADR-0068`）——宁可这一轮临时超上限，也不让刚发出的合成回执指向 404
+    expect(() => resolveConfig({ ttsCacheMaxBytes: 1024 * 1024 - 1 })).toThrow(/配置非法/)
+    expect(() => resolveConfig({ ttsPrefetchParagraphs: -1 })).toThrow(/配置非法/)
+    expect(() => resolveConfig({ ttsDefaultEngine: '' })).toThrow(/配置非法/)
+    // 配置页的报错文案承诺「引擎标识不能含空白」：含空白的值落盘后只会变成一次听不出的
+    // TTS_ENGINE_MISSING，那是把打字错转嫁成用户看不懂的失败
+    expect(() => resolveConfig({ ttsDefaultEngine: 'builtin: baidu' })).toThrow(/配置非法/)
+    expect(() => resolveConfig({ ttsDefaultEngine: ' ' })).toThrow(/配置非法/)
+    expect(resolveConfig({ ttsDefaultEngine: 'http:my-engine' }).ttsDefaultEngine).toBe('http:my-engine')
   })
   it('类型错在加载期响亮（schema 只认类型不猜）', () => {
     expect(() => resolveConfig({ dataDir: 1 } as never)).toThrow(/配置非法/)

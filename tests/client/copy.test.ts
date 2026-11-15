@@ -10,6 +10,7 @@ import { SEARCH_ZH } from '../../src/client/copy/search.js'
 import { READER_ZH } from '../../src/client/copy/reader.js'
 import { SOURCES_ZH } from '../../src/client/copy/sources.js'
 import { SETTINGS_ZH } from '../../src/client/copy/settings.js'
+import { TTS_ZH } from '../../src/client/copy/tts.js'
 
 type Dicts = { zh: Record<string, string>; en: Record<string, string> }
 
@@ -44,8 +45,11 @@ describe('文案字典', () => {
     expect(enTranslate('common.cancel')).toBe('Cancel')
   })
 
-  it('合成没有重复键（八个域键数之和等于 ZH 键数）', () => {
-    const modules = [COMMON_ZH, NAVIGATION_ZH, SHELF_ZH, CITY_ZH, SEARCH_ZH, READER_ZH, SOURCES_ZH, SETTINGS_ZH]
+  it('合成没有重复键（九个域键数之和等于 ZH 键数）', () => {
+    const modules = [
+      COMMON_ZH, NAVIGATION_ZH, SHELF_ZH, CITY_ZH, SEARCH_ZH,
+      READER_ZH, SOURCES_ZH, SETTINGS_ZH, TTS_ZH,
+    ]
     const total = modules.reduce((sum, dict) => sum + Object.keys(dict).length, 0)
     expect(Object.keys(ZH).length).toBe(total)
   })

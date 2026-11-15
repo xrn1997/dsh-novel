@@ -3,8 +3,12 @@ import { SHELF_META } from '../shared/wire.js'
 
 /** 工具面书架条目的投影形状：字段、JSON schema 与 picker 同住这张表。
  *  `SHELF_META` 仍是书目元数据字段集的唯一主人；这里只声明「工具这一面投影哪些键」，
- *  刻意不投影的三项由 `SHELF_ITEM_EXCLUDED` 点名。加一个 SHELF_META 字段时，
- *  要么进这张表、要么进排除表，下面的编译期断言会逼你选一个。 */
+ *  刻意不投影的键由 `SHELF_ITEM_EXCLUDED` 点名。`ShelfBook` 的**每一个**键——无论书目元数据
+ *  还是系统状态（`bookKey` / `progress` / `addedAt` / `listen`）——要么进这张表、要么进排除表：
+ *  这条两向断言的家是 `tests/tools/schema-contract.test.ts` 的 `_ShelfWire`（编译期相等），
+ *  本文件下面那条只管元数据那一族。
+ *  `listen`（按书听书位置）是**播放态**细节轨：工具面的书架只给「读到哪」（`progress`），
+ *  不带播放态（段号 / 引擎 / 音色 / 语速），故只占排除表。 */
 type ShelfItemFieldSpec = {
   type: 'string' | 'integer' | 'number' | 'object'
   required?: true
@@ -13,7 +17,7 @@ type ShelfItemFieldSpec = {
   properties?: Record<string, ShelfItemFieldSpec>
 }
 
-export const SHELF_ITEM_EXCLUDED = ['coverUrl', 'intro', 'totalChapters'] as const
+export const SHELF_ITEM_EXCLUDED = ['coverUrl', 'intro', 'totalChapters', 'listen'] as const
 
 export const SHELF_ITEM_FIELDS = {
   sourceId: { type: 'string', required: true, description: '源 id' },
@@ -43,6 +47,9 @@ export function pickShelfItem(b: ShelfBook): ShelfItem {
   return Object.fromEntries(SHELF_ITEM_KEYS.map((k) => [k, b[k]])) as ShelfItem
 }
 
+/** 元数据那一族的覆盖闸：`SHELF_META` 里除投影 / 排除之外的键不许存在。
+ *  系统状态字段（`bookKey` / `progress` / `addedAt` / `listen`）不经过元数据表，
+ *  它们的全量覆盖由 `tests/tools/schema-contract.test.ts` 的 `_ShelfWire` 两向钉。 */
 type MissingShelfMeta = Exclude<
   keyof typeof SHELF_META,
   ShelfItemField | (typeof SHELF_ITEM_EXCLUDED)[number]

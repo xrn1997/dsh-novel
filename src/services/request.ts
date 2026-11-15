@@ -61,8 +61,10 @@ export function parseUrlOption(template: string): { urlPart: string; option: Req
 
 /** 选项 JSON：宽松引号解析归 `normalize.parseObjectJson` 单点（头与 URL 选项共用同一份——
  *  严格 JSON 优先，失败回退单引号交换，`{'a':'b'}` → `{"a":"b"}`）。 */
-/** 本插件实现的 URL 选项键集（书源格式的键集更大：retry/type/js/bodyJs/dnsIp/serverID/webJs/origin…） */
-const KNOWN_OPTION_KEYS = ['method', 'body', 'charset', 'headers', 'retry', 'webView', 'webJs']
+/** 本插件实现的 URL 选项键集（书源格式的键集更大：retry/type/js/bodyJs/dnsIp/serverID/webJs/origin…）。
+ *  导出给严格消费面（朗读引擎请求求值）判「链认不出的键」——书源面按「留痕后忽略」处理，
+ *  朗读面不能：method/body 被静默丢掉就是发错请求。 */
+export const KNOWN_OPTION_KEYS: readonly string[] = ['method', 'body', 'charset', 'headers', 'retry', 'webView', 'webJs']
 
 function parseOptionJson(text: string): RequestOption | undefined {
   const obj = parseObjectJson(text)

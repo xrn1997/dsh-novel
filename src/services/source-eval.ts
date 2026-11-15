@@ -14,7 +14,7 @@ import { firstValue } from './bridge.js'
 import type { SubRuleEval } from './bridge.js'
 import { log } from './log.js'
 import type { ShelfBook } from '../shared/wire.js'
-import type { NovelSource } from './types.js'
+import type { NormalizedRules, SourceAuth } from './types.js'
 
 /**
  * 源求值缝：一条书源上的**一次脚本/规则求值**只有这一处装配——能力位（fetch 族 / 浏览器 /
@@ -107,12 +107,23 @@ function rawStringField(raw: unknown, field: string): string {
   return typeof v === 'string' ? v : ''
 }
 
+/** `engineContextOf` / `resolveHeaders` 实际读取的源字段。书源之外（朗读引擎 HttpTTS 的
+ *  URL 规则）给不出整个 `NovelSource`，但给得出这一份最小面；把它写成结构类型而不是
+ *  伪造成 NovelSource：求值缝要什么、适配方给什么，两边由 tsc 对齐（多给不拦，少给编译错）。 */
+export interface EvalSource {
+  baseUrl: string
+  name: string
+  raw: unknown
+  rules: Pick<NormalizedRules, 'jsLib' | 'header' | 'headerRule'>
+  auth?: SourceAuth
+}
+
 /** 源级求值上下文组装单点：「引擎上下文该有哪些字段」的唯一实现——
  *  fetch（守门 + auth 头合并）/ source / vars / jsLib 全在此拼装；面（facet）只决定
  *  html/json/baseUrl 的取值（不要多处各拼一份：漏字段只在特定路径炸——新面接入 = 传参数，
  *  不是再手拼一份）。 */
 export function engineContextOf(
-  fetcher: Fetcher, source: NovelSource,
+  fetcher: Fetcher, source: EvalSource,
   opts: {
     baseUrl: string; html?: string; json?: unknown; vars?: Record<string, string>
     /** AllInOne 行的 `$n` 绑定用（只有「按整页正则列出的条目」链路带；见 engine/types.ts 的 EvalContext.regexRow） */
@@ -240,7 +251,7 @@ export function engineContextOf(
  * 否则头规则里一次 java.ajax 就会重新求值头规则。
  */
 export async function resolveHeaders(
-  fetcher: Fetcher, source: NovelSource, opts?: { jsTimeoutMs?: number | undefined },
+  fetcher: Fetcher, source: EvalSource, opts?: { jsTimeoutMs?: number | undefined },
 ): Promise<Record<string, string>> {
   const rule = source.rules.headerRule
   const staticHeaders = headerOf(source)
@@ -283,7 +294,7 @@ export async function resolveHeaders(
  *  `jsTimeoutMs` **必填**：装配缝漏传曾静默落回引擎缺省（2s 金丝雀），现在漏交就是编译错；
  *  services 侧缺省回落的唯一主人是本文件的 `DEFAULT_JS_BUDGET_MS`。 */
 export function createSourceEval(
-  fetcher: Fetcher, source: NovelSource, opts: { jsTimeoutMs: number },
+  fetcher: Fetcher, source: EvalSource, opts: { jsTimeoutMs: number },
 ): SourceEval {
   const defaultBudget = opts.jsTimeoutMs
   /** 引擎上下文单点：`book` 从调用方的 SourceEvalBookContext 塑形，其余原样透传。 */

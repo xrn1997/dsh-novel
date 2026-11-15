@@ -11,7 +11,7 @@ type(scope): 描述
 - `type`：`feat` / `fix` / `refactor` / `docs` / `test` / `chore` / `build` / `perf`；没有合适的类型就先看最近的历史，别硬套。
 - `scope` 可省；跨模块时按逗号并列（如 `shared,client`）。
 - 描述用中文、尽量动词前置、不写句号；一个提交只做一类改动，正文讲为什么。
-- 过程计划、审查草稿、采样脚本不入库；留在本机 `.superpowers/`，见 `.gitignore`。
+- 过程计划、审查草稿、一次性采样脚本不入库；留在本机 `.superpowers/`，见 `.gitignore`。真链路审计门脚本不算采样脚本：它住 `scripts/`，由 `docs/development.md` 的门章节点名（分层见 `docs/AGENTS.md`）。
 
 ## Issue 与 PR
 

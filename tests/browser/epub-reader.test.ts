@@ -1,5 +1,5 @@
 /**
- * 浏览器验收门（`DSH_EPUB_BROWSER=1` 打开；默认整门跳过，`pnpm test` 不跑它）。量 jsdom 量不出的
+ * 浏览器验收门（`DSH_BROWSER_GATE=1` 打开，旧名 `DSH_EPUB_BROWSER` 仍认；默认整门跳过，`pnpm test` 不跑它）。量 jsdom 量不出的
  * 那几件事：真图片解码、真排版下的位置稳定、真滚动容器、真下载文件。底座是 `tests/browser/epub-host.ts`
  * （真服务 + 真 `lib/client.js` + 已装浏览器）——门开着时**缺浏览器 / 缺 lib / 缺 fixture 一律红**。
  *
@@ -13,12 +13,13 @@ import iconv from 'iconv-lite'
 import type { BookNavigation, ChapterContent, ContentNode, ShelfEntry } from '../../src/shared/wire.js'
 import { LOCAL_SOURCE_ID, queries } from '../../src/shared/wire.js'
 import { must, pick } from '../support/fixture.js'
+import { BROWSER_GATE_ENABLED } from '../support/browser-gate.js'
 import {
   apiJson, installOnlineSource, launchBrowser, openPage, seedShelf, settle, startEpubHost, uploadBytes, uploadFixture,
   withTimeout, ONLINE_BOOK, ONLINE_CHAPTERS, type EpubHost, type PageSession,
 } from './epub-host.js'
 
-const ENABLED = process.env.DSH_EPUB_BROWSER === '1'
+const ENABLED = BROWSER_GATE_ENABLED
 
 /**
  * React **开发版**告警不算应用错误（development UMD 构建引入），但**不许当背景噪音吞掉**：本门按
@@ -62,8 +63,9 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
   let browser: Browser
 
   beforeAll(async () => { browser = await launchBrowser() }, 90_000)
-  // `beforeAll` 抛错时 `afterAll` 仍会跑；此处不再二次抛错掩盖首个失败
-  afterAll(async () => { await browser.close() })
+  // `beforeAll` 抛错时 `afterAll` 仍会跑；此处不再二次抛错掩盖首个失败。
+  // 时限同 `beforeAll`：四门并行时冷启动的 Chromium 收尾可超过缺省 10s 钩子时限。
+  afterAll(async () => { await browser.close() }, 90_000)
 
   /**
    * 一例 = 一台真服务 + 一个临时数据根 + 一页（独立 context ⇒ localStorage 干净）。
@@ -76,8 +78,9 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
     const host = await startEpubHost()
     const s = await openPage(host, browser, opts.viewport)
     try {
-      expect(await s.slots(), '壳应注册出侧栏行 / main 面板 / 常驻状态层三个槽位').toEqual([
-        'sidebar.panellist:@xrn1997/dsh-novel.panel', 'main:@xrn1997/dsh-novel.panel', 'shell.overlay:@xrn1997/dsh-novel.status',
+      expect(await s.slots(), '壳应注册出侧栏行 / main 面板 / 常驻状态层 / 听书迷你条四个槽位').toEqual([
+        'sidebar.panellist:@xrn1997/dsh-novel.panel', 'main:@xrn1997/dsh-novel.panel',
+        'shell.overlay:@xrn1997/dsh-novel.status', 'shell.overlay:@xrn1997/dsh-novel.tts-mini',
       ])
       await fn(s, host)
       expect(appErrors(s), '控制台与 pageerror 不应有应用自己的错误').toEqual([])

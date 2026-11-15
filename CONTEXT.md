@@ -99,7 +99,7 @@ _唯一实现_: `client/views/CityBookSheet.tsx`（跨源那一次复用搜索�
 _Avoid_: 选源（这一层不做这个动作，源已定）、详情面板（「面板」在本仓指宿主里那个全局面板，这层只是它内部的一层覆盖；也别与规则求值的那个**详情面**混为一谈——那是一条取值链路，不是一层界面）
 
 **模态契约（dialog）**:
-带遮罩那一层浮层的行为口径：Esc 退出、入场焦点落面板内第一颗未禁用钮、Tab 圈认面板内全部可聚焦件（拖放区 / 文本框也算）、关闭后焦点还给触发件、`role=dialog` 与 `aria-modal` 的标记与遮罩点空退出——五处浮层共用这一份，调用方只交标题、内容、动作行与归还对象（被否决的做法见 `ADR-0037`）。
+带遮罩那一层浮层的行为口径：Esc 退出、入场焦点落面板内第一颗未禁用钮、Tab 圈认面板内全部可聚焦件（拖放区 / 文本框也算）、关闭后焦点还给触发件、`role=dialog` 与 `aria-modal` 的标记与遮罩点空退出——带遮罩的各处浮层共用这一份，调用方只交标题、内容、动作行与归还对象（被否决的做法见 `ADR-0037`）。无遮罩但吃键盘的卡（阅读器内的听书设置卡）只复用其中的键盘与焦点那一半（`useDialogContract`），遮罩与标记归它自己的几何档。
 _唯一实现_: `client/views/dialog.tsx` 的 `Dialog`
 _Avoid_: 弹窗工具、焦点 hook（说「模态契约」）；也别与**阅读浮层**混称——那是阅读器里不带遮罩的角落面板，只管「此刻哪一面在场」
 
@@ -346,6 +346,11 @@ _Avoid_: 锚点（那是测量的静态位置，`client/reader-geometry.ts`）�
 _唯一实现_: `client/reader-surfaces.ts`（`openSurface` / `closeAll` / `dismissSurface` / `maskFor` / `escOwner`）
 _Avoid_: 浮层状态管理（阅读场景里的 `surface` 只是它的投影）、在各 opener 里逐处抄「先关别人」；也别与**模态契约**混称——带遮罩的入架一问走 `client/views/dialog.tsx`
 
+**键盘层序（key layer）**:
+同场两层都要吃 Esc 时谁先吃：认领顺序 = 打开顺序，只有最上层执行 Esc 与 Tab 圈——底下那层被顺手关掉等于替用户丢现场。带遮罩的模态、无遮罩的浮层卡片与阅读浮层的 surface 监听都到这一处认领；「哪个面在场、退场怎么表态」仍归阅读浮层自己判。
+_唯一实现_: `client/views/dialog.tsx` 的 `claimKeyLayer`（`useDialogContract` 内部认领，`ReaderView` 的 surface 监听同源认领）
+_Avoid_: 焦点归属（入场焦点与关后还焦按各自挂载时机走，不参与层序仲裁）、模态契约（那是那六件事的口径，见「模态契约（dialog）」）
+
 **阅读场景（reader scene）**:
 阅读器里互相咬合的交互现场：当场面、注释面板的目标与**返回项句柄**、Esc 归属、离开时那一句入架询问与它的写入回执。视图只渲染它的投影并接线，阅读时序不在这里。`mask` / `escOwner` 两枚投影是纯判据的落点，`handleEsc` 也读投影。
 _唯一实现_: `client/reader-scene.ts` 的 `ReaderScene`（`toggle` / `openNote` / `close` / `handleEsc` / `dismissAsk` / `openTarget` / `bodyLink` / `panelLink` / `exitToShelf` / `joinAndBack`）
@@ -356,10 +361,15 @@ _Avoid_: 阅读器状态（时序归 `client/reader-session.ts`）、至多一�
 _唯一实现_: `services/pagination.ts` 的 `followPages`（`stoppedBy` 五态）；串章启发式 `services/chapter-page.ts` 的 `isSameChapterPage`
 _Avoid_: 翻页循环、重复过滤（判据是「本页零新增」与「URL 已见」，不是「出现重复就停」）
 
+**消费位置（consumption position）**:
+「这本书的消费位置」= 落盘的共用游标：章 + 章内比例（`{chapterIndex, offsetRatio}`），即书架记录里的 `ShelfProgress`。阅读与听书共写它：阅读会话的滚动 / 导航与播放层的位置落盘节拍是仅有的两个写者；书架卡片、最近阅读排序与开书恢复都读它。同一本书两个写者同时活跃时以最后一次显式动作为准（服务端 last-write-wins）。它不等同于**阅读位置**：后者是阅读器眼下看见的位置，只在提交时换算成消费位置写盘。
+_唯一实现_: `shared/wire.ts` 的 `ShelfProgress`（形状）+ `client/reader-session.ts` 的 `commit`（阅读侧写入）+ `client/tts/listen-session.ts` 的 `writePosition`（听书侧段号 → 比例）+ `client/progress.ts`（位置 ⇄ 像素）+ `shared/reading-position.ts` 的 `hasProgress`（读口谓词）
+_Avoid_: 听书进度（不存在第二条位置轨；`listen` 只是听书细节）、进度（要区分「元数据」与「消费位置」）、scrollTop（像素是测量值，不是位置本身）
+
 **阅读位置（reading position）**:
-「这本书读到哪儿」= 章 + 章内比例（`{chapterIndex, offsetRatio}`）。在会话里是状态：`position` 是唯一真相，滚动测量 / 目录选中 / 存档恢复都只是修正它；落盘由单点 `commit(cause)` 判定。服务端 last-write-wins，前提是「只有一个读者」。
-_唯一实现_: `client/reader-session.ts`（状态）+ `client/progress.ts`（位置 ⇄ 像素）+ `shared/wire.ts` 的 `ShelfProgress` + `shared/reading-position.ts` 的 `hasProgress`
-_Avoid_: 进度（要区分「元数据」与「阅读位置」）、scrollTop（像素是测量值，不是位置本身）
+阅读器此刻看得见的位置：会话内存里的章 + 章内比例，以及从 DOM 几何量出的探针读数（章 + 段号）。它是**实时读数，不是落盘游标**：阅读会话的滚动 / 导航 / 存档恢复只修正它，提交时按 cause 决定写不写消费位置；听书起播从它换算起播段，换算不写盘。两者关系：阅读位置答「眼下在哪」，消费位置答「这本书的游标在哪」；读与听共用后者，所以继续听或继续读都落在同一条游标上。
+_唯一实现_: `client/reader-session.ts` 的 `position`（会话内唯一真相）与 `commit`（提交为消费位置）+ `client/tts/reading-position.ts` 的 `ReadingProbe` / `readingPositionAt` / `setReadingProbe`（DOM 探针）与 `estimateParagraphIndex`（换算出起播段）+ `client/views/ReaderView.tsx` 的 `setReadingProbe`（探针注入点）
+_Avoid_: 消费位置（那是落盘游标，不是眼下读数）、视口位置（混称；视口只是位置的呈现窗口）、听书段号（那是听书细节轨的位置表示）
 
 **阅读器几何（reader geometry）**:
 `ReaderPort` 的纯几何实现：从滚动容器、章块与哨兵读出锚点、视口偏移、目标偏移与当前节点；两套坐标系（内容原点 / 视口顶）只在这里换算。视图只交 ref 读数，会话只读 port。
@@ -373,12 +383,12 @@ _Avoid_: 阅读服务（`ReadingService` 是门面，不是管线）、抓取（
 
 **书内容读面（book content read surface）**:
 目录、导航与正文的本地/在线分流与文字规约：本地书与在线书是两个适配器，读动词（`toc` / `navigation` / `chapterContent` / `readChapter`）不再各自判 `__local__`，正文 text 出口统一过行规约；来源展示判据（如 `sourceNameOf`）仍按本地源常量判来源身份。
-_唯一实现_: `services/book-content.ts` 的 `BookContent`（适配器 `LocalBooks` / `OnlineReading`）；正文文字规约 `services/chapter-content.ts` 的 `normalizeChapterText`
+_唯一实现_: `services/book-content.ts` 的 `BookContent`（适配器 `LocalBooks` / `OnlineReading`）；正文文字规约 `shared/chapter-text.ts` 的 `normalizeChapterText`
 _Avoid_: 阅读服务（`ReadingService` 是门面）、在线阅读（那是 `OnlineReading` 的管线）
 
 **正文文字规约（chapter text normalization）**:
 纯文本正文的行规约：逐行 trim、去首尾空行、相邻空行折叠一个；只动空白与换行，不解释尖括号与实体。在线正文与本地 TXT 共用，幂等。
-_唯一实现_: `services/chapter-content.ts` 的 `normalizeChapterText`（`chapterContentToText` 的 text 分支过它）
+_唯一实现_: `shared/chapter-text.ts` 的 `normalizeChapterText`（`chapterContentToText` 的 text 分支过它）
 _Avoid_: 正文清理（太泛）、HTML 转文本（后者是 `contentToText` / `chapterContentToText` 的结构映射）
 
 **缓存代际（epoch）**:
@@ -390,6 +400,58 @@ _Avoid_: 版本号（是规则指纹不是自增版本）、缓存键
 正文缓存文件名的有效性段 = 代际 + 章名：代际管「规则变了」，章名管「站点侧目录变了」。刻意**不含章节 url**（带时效 token 的站点每次刷目录都换 url）。
 _唯一实现_: `services/cache-epoch.ts` 的 `contentSlot`（消费点 `services/online-reading.ts` 的 `chapterText`）
 _Avoid_: 正文键、章节 id
+
+### 听书
+
+**播放单元（play unit）**:
+听书一次交给合成服务（或一次交给平台开口）的最小正文单位：由正文投影按 `\n` 切段、逐段 trim，滤掉空段与纯空白 / 标点 / 符号段；超过上限（`PLAY_UNIT_MAX`，按 code point 计）的段再按全角句读二次切开，分隔符留在前一片末尾。切分只动边界不动字，`join` 回来等于原段。屏上「第 N 段」与这批单元的对位（起段号）由同住一处的投影给出：`playUnitStarts`（逐行累计）与 `playUnitStartsByNode`（图文章按起行块收），行清单出 `chapterContentLines`。
+_唯一实现_: `shared/chapter-text.ts` 的 `splitParagraphs` / `PLAY_UNIT_MAX`；起段号 `playUnitStarts` / `playUnitStartsByNode`
+_Avoid_: 段落（那是屏幕上按块渲染的一段正文）、句子（一个播放单元可含多句）、在视图里逐行数单元（那是本词条的抄本）
+
+**听书位置（listening position）**:
+按书记住的听书细节：段号、引擎标识、音色、语速、音量。它服务听书的精确续听与播放参数记忆；**章 + 章内比例**的共用消费位置住 `progress`，播放层在同一个落盘节拍里两笔都写。
+_唯一实现_: `shared/wire.ts` 的 `ListenState`（形状）；写路径 `services/reading.ts` 的 `shelfSaveListen`（值域）→ `services/shelf.ts` 的 `Shelf.updateListen`
+_Avoid_: 阅读进度（共用消费位置 `ShelfProgress`，不住这里）、播放队列（会话内的瞬时状态，不落盘）
+
+**引擎源（engine source）**:
+听书可选的出声来源：内置（恰一条、开箱即用，没有音色表——端点不读音色参数）、浏览器直出兜底、注册表里的每条订阅、宿主语音服务（服务在场才列出）。顺序即展示顺序；插件自有源不带展示名（名字归客户端文案按 kind 取词），订阅源的名字是订阅数据本身。
+_唯一实现_: `services/tts-engines.ts` 的 `TtsEngineRegistry`（订阅引擎的落盘与增删改查）；源清单的归一与次序 `services/tts.ts` 的 `TtsService.sources`
+_Avoid_: 书源（那是抓取与解析的来源）、模型（朗读引擎不是 AI 模型）
+
+**音色绑定（speakVoice）**:
+HttpTTS 模板求值的第三个绑定（前两个是 `speakText` / `speakSpeed`）：本段音色 id，缺省空串；`{{speakVoice}}` 可作纯占位，也可在 JS 表达式里读。内置引擎不消费它（端点不读音色参数、也没有音色表）；订阅模板写了它才生效。音色 id 是引擎自己的取值、不跨引擎互通：换引擎时播放层清空本书记住的旧 id（回该源缺省），显式换源也不把存档里的旧 id 带过去。音色表来自订阅数据（导入携带）或源能力（宿主语音服务 / 平台）。
+_唯一实现_: `services/tts-request.ts` 的 `planTtsRequest`（绑定与模板求值）
+_Avoid_: 音色表（`voices` 是源声明的可选列表，不是这一段请求的绑定）
+
+**段音频缓存键（audio cache key）**:
+按「引擎标识 + **实际请求** + 文本」算出的 md5。HTTP 源的实际请求是求值后的 `method` / `url` / `body`；宿主语音服务是服务身份 + 音色 + 语速。请求没变就复用——同一语速档内的两个速率、模板不消费的音色变更都不重新合成。实际请求（identity）由各支合成计划（HTTP / cordis adapter）在知道请求内容的地方产出，headers 不入键。
+_唯一实现_: `services/tts-cache.ts` 的 `ttsCacheKey`（键算式）；identity 材料由各支合成计划 `TtsSynthesisPlan` 给——HTTP 支在 `services/tts.ts` 的 `planHttp` 求值后产出，cordis 支在 `services/tts-cordis.ts` 的 `cordisCacheIdentity`（与 rate→voiceRate 映射同侧）
+_Avoid_: 原始参数键（模板不消费的参数不该进键）
+
+**直出型 / 字节型（direct-output / byte playback）**:
+播放层的两条出声分支。直出型 = 浏览器本地语音（`BROWSER_TTS_ENGINE_ID`）：逐段 `SpeechSynthesisUtterance` 交给平台开口，无合成请求、无预取、无缓存；字节型 = 其余引擎：先 POST 合成拿缓存键，再按音频读口出声，带同章预取与磁盘缓存。两种共用同一个状态机、同一份听书位置与同一条失败径。
+_唯一实现_: `client/tts/listen-session.ts` 的 `modeOf` 分流与 `ListenOutput` 的 `BytesOutput` / `DirectOutput` 两个出声适配器（`BROWSER_TTS_ENGINE_ID` 的字面量主人在 `shared/wire.ts`）
+_Avoid_: 在线 / 离线（两条分支都在线）、流式 / 非流式（差别是「有没有字节」，不是传输形态）
+
+**段进度（segment progress）**:
+当前播放单元已出声的秒数与总秒数：字节型由活 Audio 槽的计时推进（预载槽的读数不投），直出型没有计时介质、恒为零（视图据此不画假进度：浮窗进度环退化为静态轨道）。它是瞬时现场——暂停续播原地接上、换段归零、不落盘；落盘的听书位置仍是段粒度。独立一只 store，高频读数不进主 store。
+_唯一实现_: `client/tts/listen-session.ts` 的段进度 store（`ListenSession` 的 `progress`；视图经 `client/tts/player.ts` 的 `ttsProgress` 再导出）
+_Avoid_: 听书位置（段粒度、按书落盘）、章进度（跨章读数，归阅读会话顶条）
+
+**听书读数（listen readout）**:
+上屏读数的唯一换算处：段读数（1 基 n/total，空章不摆 0/0）、定时读数（档位与倒计时同一份答案，倒计时的时刻由调用方注入、本处不读墙钟）、章内进度算式（段号 + 段内比例 → 连续 value 与占比，听书条的段粒度滑杆与浮窗的连续填充吃同一个 value）、语速读数与当前句取值——听书条、迷你条胶囊、展开边栏与设置面四个表面只取成品，不各自重算。
+_唯一实现_: `client/tts/listen-readout.ts`
+_Avoid_: 段进度（那是计时现场 `ttsProgress`）、听书位置（落盘轨 `ListenState`）、在各表面手写换算（那是抄本）
+
+**跟读高亮（listen-along highlight）**:
+听书时正文里正在被念的那一段的就地标记：命中块换文字色（`paperLiveInk` 按纸色现算的暖赭：暖赭带里离正文墨色最远、与纸面仍够读的一档），并在段首框外画一枚 currentColor 小三角——纯换色在部分纸色下认不出，字形标记不靠色彩差说话；不铺底色、不加竖条、不画段内进度线（`ADR-0076`）。命中判据 = 最后一个 ≤ 段号的起段号（文字章逐行、图文章按块，与「从本段听」同口径）。只标记、不滚动——自动跟随滚动会经阅读会话的滚动防抖改写视口位置，与播放层的落盘节拍互相覆盖；把视野带过去是听书条上「定位到正在念的段」那颗显式按钮。
+_唯一实现_: `client/views/ChapterBody.tsx` 的 `listenParagraph`（命中判据 `client/tts/reading-position.ts` 的 `paragraphSlotOf` / `listenParagraphElement`）
+_Avoid_: 自动跟随滚动（`ADR-0071` 否掉）、把高亮当成位置写入口（位置写入归播放层的位置落盘节拍）
+
+**听书迷你条（listening mini bar）**:
+宿主 `shell.overlay` 常驻层上的两个完整听书浮窗形态：缺省是身份胶囊（进度环 + 书名 + 段号 + 一条章内进度细线，不给半截句子），展开是能读整段的边栏（顶行身份钮 = 点收起 / 拖移动、正文区整段、运输行五颗 ≥32、底行读数与章内进度条）。位置自由落位：现场记块中心与展开态宽高，拖动两轴跟手，松手时离视口边够近（≤ 24px）的边才贴齐，其余停在原地；展开态尺寸可拖左 / 右 / 下三条边与右下角调整，现场只记意图、呈现时夹取不回写（`ADR-0080`）。落位样式与 `side` / `flush` 两个派生由布局读数 `miniBarLayout` 一次给全，缺省轴解析（`miniBarCenterOf`：横向贴右缘、纵向居中）是唯一住址——样式层不给缺省定位；没有 idle 半隐、没有同一胶囊藏一半的抽屉。与阅读器内就地听书条共读同一份会话与同一份设置行清单；在场判据 = 会话在 ∧ 阅读器在场书键集合里没有会话本书（读另一本时照常在场）。
+_唯一实现_: `client/tts/TtsMiniBar.tsx` 的 `TtsMiniBar`；展开面 `client/tts/TtsMiniPanel.tsx` 的 `TtsMiniPanel`；现场 `client/tts/mini-bar-state.ts` 的 `miniBarStore` / `setMiniBarCenter` / `snapMiniBarToEdge` / `resolvedMiniBarSize` / `frameFromDrag`，布局读数与缺省轴解析同住 `client/tts/mini-bar-state.ts` 的 `miniBarLayout` / `miniBarCenterOf`；共享设置行 `client/tts/TtsSettings.tsx` 的 `TtsSettingsRows`
+_Avoid_: 阅读器听书条（就地版本 `TtsBar`，只在本书 = 会话本书时挂载）、状态泳道（同层另一枚条目，任务读数归它）、半隐/抽屉形态（被否方案住 `ADR-0073`）
 
 ### 客户端文案
 
@@ -467,7 +529,7 @@ _唯一实现_: `config.ts` 的 `CONFIG_FIELDS`（一个字段一行：名字 ×
 _Avoid_: DEFAULTS / assertConfig 抄本、在装配处再写一份缺省字面量
 
 **运行参数（活配置，runtime config）**:
-可在插件页编辑、保存后立即生效的七项配置；`dataDir` 不在其中（启动期读一次）。
+可在插件页编辑、保存后立即生效的十二项配置；`dataDir` 不在其中（启动期读一次）。
 _唯一实现_: `config.ts` 的 `CONFIG_FIELDS` 里标了 `volatile` 的那几行（类型面即 `VolatileConfigFieldName`——配置页的名字表由它派生）与 `resolveConfig` 的 getter
 _Avoid_: 设置（宿主设置页是另一处）、热更新（宿主 HMR 是另一件事）
 

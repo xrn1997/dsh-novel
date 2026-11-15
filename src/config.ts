@@ -6,6 +6,8 @@ import { DEFAULT_TIMEOUT_MS } from './services/fetcher.js'
 import { DEFAULT_MAX_IMPORT_BYTES } from './services/localbooks.js'
 import { DEFAULT_SEARCH_PARALLEL } from './services/reading.js'
 import { DEFAULT_JS_BUDGET_MS } from './services/source-eval.js'
+import { DEFAULT_TTS_CACHE_MAX_BYTES } from './services/tts-cache.js'
+import { TTS_DEFAULTS, TTS_RATE, TTS_VOLUME } from './shared/wire.js'
 
 /**
  * 配置字段表（唯一主人）：一个字段一行，名字 × 缺省 × 值域（schema 同时声明类型）× 是否活值全在这一行上。
@@ -39,6 +41,22 @@ export const CONFIG_FIELDS = {
   localImportMaxBytes: numberField(DEFAULT_MAX_IMPORT_BYTES, 1),
   /** 出站代理：'direct' = 强制直连；显式地址 = 用它；缺省 = 环境变量 → Windows 系统代理 → 直连 */
   proxyUrl: proxyField(),
+  /** 听书全局缺省：播放层的回退链是「显式 > 本书听书存档 > 这里」，全部 live——保存后下一次
+   *  起播 / 预取即生效。引擎标识是订阅数据的身份（内置 `builtin:*`、浏览器直出、注册表 id），
+   *  不是引擎对象本身：对象与凭据住数据根注册表，不进宿主设置层。
+   *  形状闸收空白：配置页的报错文案承诺的就是这一条，而含空白的值一旦落盘，播放层只会拿到
+   *  一个认不出的引擎 id（`TTS_ENGINE_MISSING`）——那是把用户的打字错转嫁成一次听不出的失败。 */
+  ttsDefaultEngine: volatileTextField(TTS_DEFAULTS.engineId, /^\S+$/),
+  /** 语速按一位小数档（与配置页回读同一把尺）；范围取播放侧归一档 [0.5, 3]。 */
+  ttsDefaultRate: decimalField(TTS_DEFAULTS.rate, TTS_RATE.min, TTS_RATE.max),
+  /** 音量 [0, 1]，同样一位小数档。 */
+  ttsDefaultVolume: decimalField(TTS_DEFAULTS.volume, TTS_VOLUME.min, TTS_VOLUME.max),
+  /** 段音频缓存上限。下界刻意高过「一段音频」的常见体积；真遇到单段就超上限时，淘汰跳过刚写入
+   *  的那一条（`services/size-ledger.ts` 的保留集）——宁可这一轮临时超上限，也不让刚发出的合成
+   *  回执指向一个 404。 */
+  ttsCacheMaxBytes: numberField(DEFAULT_TTS_CACHE_MAX_BYTES, 1024 * 1024),
+  /** 进入本章末尾时提前合成的下一章段数；0 = 不预取下一章（同章后 2 段不归这个开关）。 */
+  ttsPrefetchParagraphs: numberField(TTS_DEFAULTS.prefetchParagraphs, 0),
   /** `/novel-api` 同源 fence 的本机名单追加项：只有用自定义域名（hosts / 内部 DNS）打开宿主面板
    *  时才需要填。刻意不做成活值（同 `dataDir`）：它是一条安全边界，热改等于「运行中随时把
    *  rebinding 防线让掉一个名字」，改它等价于重启。 */
@@ -51,6 +69,27 @@ function numberField(defaultValue: number, min: number) {
   return {
     default: defaultValue, volatile: true as const,
     schema: () => Schema.number().default(defaultValue).min(min).step(1),
+  }
+}
+
+/** 小数值（语速 / 音量）：上下界 + 一位小数档。`.step(0.1)` 与整数位的 `.step(1)` 同职——
+ *  钉住档位并挡掉 NaN；一位小数与配置页的回读（`scale`）同一把尺，回读不会比存下的值更粗。 */
+function decimalField(defaultValue: number, min: number, max: number) {
+  return {
+    default: defaultValue, volatile: true as const,
+    schema: () => Schema.number().default(defaultValue).min(min).max(max).step(0.1),
+  }
+}
+
+/** 文本缺省位（活值）：值域钉非空，`pattern` 给需要形状闸的那一格——引擎标识的有效性归引擎
+ *  清单，本表不抄一份身份表，但「含空白」是配置页的报错文案已经承诺要挡的那一类。 */
+function volatileTextField(defaultValue: string, pattern?: RegExp) {
+  return {
+    default: defaultValue, volatile: true as const,
+    schema: () => {
+      const base = Schema.string().default(defaultValue).min(1)
+      return pattern === undefined ? base : base.pattern(pattern)
+    },
   }
 }
 
@@ -94,7 +133,12 @@ export type VolatileConfigFieldName = { [K in ConfigFieldName]: ConfigTable[K]['
 
 /** volatile 字段的消费桶：service-live = 服务/部件每次用时读活值；composition-root = 只由组合根
  *  读并接线。键集由 `VolatileConfigFieldName` 钉死——新增 volatile 字段忘归桶是编译错，
- *  归错桶是 `tests/config.test.ts` 红；归桶义务从「读代码才知道」变成「编译器问你要」。 */
+ *  归错桶是 `tests/config.test.ts` 红；归桶义务从「读代码才知道」变成「编译器问你要」。
+ *
+ *  听书四格（引擎 / 语速 / 音量 / 预取段数）标 service-live，读者在**浏览器半**：Node 半没有
+ *  它们的消费点，真正取值的是播放层经宿主设置面快照推进来的那一份（`client/config-page.tsx` 的
+ *  缺省读数 → `client/tts/player.ts` 的 `setTtsDefaults`）。`ttsCacheMaxBytes` 是例外：段音频
+ *  缓存的容量账在 Node 半，合成服务每次 prune 现读它。桶值按「谁读这一格」记，不按代码住哪个半。 */
 export const VOLATILE_CONSUMERS: Record<VolatileConfigFieldName, 'service-live' | 'composition-root'> = {
   searchTimeoutMs: 'service-live',
   searchParallel: 'service-live',
@@ -103,6 +147,11 @@ export const VOLATILE_CONSUMERS: Record<VolatileConfigFieldName, 'service-live' 
   localImportMaxBytes: 'service-live',
   exportDelayMs: 'composition-root',
   proxyUrl: 'composition-root',
+  ttsDefaultEngine: 'service-live',
+  ttsDefaultRate: 'service-live',
+  ttsDefaultVolume: 'service-live',
+  ttsCacheMaxBytes: 'service-live',
+  ttsPrefetchParagraphs: 'service-live',
 }
 
 /** 用户写的原始配置（插件页 / profile / `cordis.patch.yml` 三处同源）：字段全部可选。 */

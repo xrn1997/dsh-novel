@@ -1,5 +1,5 @@
 /**
- * 书籍详情浮层的几何门（`DSH_EPUB_BROWSER=1` 打开；默认整门跳过，`pnpm test` 不跑它）。
+ * 书籍详情浮层的几何门（`DSH_BROWSER_GATE=1` 打开，旧名 `DSH_EPUB_BROWSER` 仍认；默认整门跳过，`pnpm test` 不跑它）。
  * jsdom 量不到排版，而这条 bug 只在真排版下现形：本源那一行放不下时，被挤走的是**两颗动作钮**
  * （挤出浮层就是点不到）与**源名**（挤没就是这一行不知道自己是谁）。故读数取真浏览器的 rect。
  *
@@ -13,9 +13,10 @@ import type { ExploreBook } from '../../src/shared/wire.js'
 import { CityBookSheet } from '../../src/client/views/CityBookSheet.js'
 import { NOVEL_CSS } from '../../src/client/styles.js'
 import { makeCoreDeps } from '../client/fake-deps.js'
+import { BROWSER_GATE_ENABLED } from '../support/browser-gate.js'
 import { launchBrowser } from './epub-host.js'
 
-const ENABLED = process.env.DSH_EPUB_BROWSER === '1'
+const ENABLED = BROWSER_GATE_ENABLED
 
 /** 一条真实形状：章名带打赏尾巴，长到会顶满一行 */
 const book: ExploreBook = {
@@ -62,7 +63,8 @@ describe.skipIf(!ENABLED)('浏览器几何：书籍详情浮层的本源那一�
   let browser: Browser
 
   beforeAll(async () => { browser = await launchBrowser() }, 90_000)
-  afterAll(async () => { await browser.close() })
+  // 四道浏览器门并行时，冷启动的 Chromium 收尾可超过缺省 10s 钩子时限：只延这一颗，判据不动
+  afterAll(async () => { await browser.close() }, 90_000)
 
   async function measure(b: ExploreBook): Promise<RowRects> {
     const markup = renderToStaticMarkup(
