@@ -58,7 +58,7 @@ describe('ReaderScene', () => {
     expect(scene.state.surface).toBe('supplement')
     expect(scene.state.note?.target).toBe(target)
     scene.close()
-    expect(session.closeSupplement).toHaveBeenCalledWith('s1', entry)
+    expect(session.closeSupplement).toHaveBeenCalledWith(entry)
     expect(scene.state.surface).toBeNull()
     expect(scene.state.note).toBeNull()
   })
@@ -183,7 +183,7 @@ describe('ReaderScene', () => {
     const { scene, session } = makeScene()
     scene.openNote(target, entry)
     scene.handleEsc()
-    expect(session.closeSupplement).toHaveBeenCalledWith('s1', entry)
+    expect(session.closeSupplement).toHaveBeenCalledWith(entry)
     expect(scene.state.surface).toBeNull()
   })
 
@@ -231,7 +231,7 @@ describe('ReaderScene', () => {
     const { scene, session } = makeScene()
     const chapter: ReadingTarget = { kind: 'chapter', index: 2, anchorId: 'a1' }
     scene.openTarget(chapter)
-    expect(session.requestJump).toHaveBeenCalledWith('s1', 2, 'a1')
+    expect(session.requestJump).toHaveBeenCalledWith(2, 'a1')
     expect(scene.state.surface).toBeNull()
 
     scene.openTarget(target)
@@ -243,7 +243,7 @@ describe('ReaderScene', () => {
   it('body links capture the return handle; panel links drop the surface without consuming it', () => {
     const { scene, session } = makeScene()
     scene.bodyLink(target, 'noteref')
-    expect(session.followLink).toHaveBeenCalledWith('s1', target, 'noteref')
+    expect(session.followLink).toHaveBeenCalledWith(target, 'noteref')
     expect(scene.state.note?.entry).toBe(entry)
 
     const chapter: ReadingTarget = { kind: 'chapter', index: 1, anchorId: null }
@@ -251,7 +251,7 @@ describe('ReaderScene', () => {
     expect(scene.state.surface).toBeNull()
     expect(scene.state.note).toBeNull()
     expect(session.closeSupplement, '返回项归这次跟随，面板不许再消费一次').not.toHaveBeenCalled()
-    expect(session.followLink).toHaveBeenLastCalledWith('s1', chapter, 'backlink')
+    expect(session.followLink).toHaveBeenLastCalledWith(chapter, 'backlink')
   })
 
   it('notifies subscribers until they unsubscribe', () => {

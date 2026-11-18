@@ -12,6 +12,7 @@ import type { Browser } from 'playwright'
 import iconv from 'iconv-lite'
 import type { BookNavigation, ChapterContent, ContentNode, ShelfEntry } from '../../src/shared/wire.js'
 import { LOCAL_SOURCE_ID, queries } from '../../src/shared/wire.js'
+import { crossedIndex } from '../../src/client/viewport-top.js'
 import { must, pick } from '../support/fixture.js'
 import { BROWSER_GATE_ENABLED } from '../support/browser-gate.js'
 import {
@@ -106,39 +107,56 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
   const chapterOf = (host: EpubHost, key: string, index: number): Promise<ChapterContent> =>
     apiJson<ChapterContent>(host, `/novel-api/${queries.chapter({ sourceId: LOCAL_SOURCE_ID, url: key, index })}`)
 
+  /** 真浏览器里的亚像素容差：量具的事，不是判据的一部分（判据的边界是精确的 `<=`）。 */
+  const SUBPIXEL = 0.5
+
   /**
-   * 视口顶所在的章与节点（视口顶 = .novel-main 的 rect.top）。两条口径都**照产品判据**
-   * （`ReaderView.currentNodeOf`）：视口顶已越过的最靠下那个；都没越过 → 文档顺序第一个。
-   * 亚像素按 0.5px 容差算「已在顶」。
+   * 视口顶所在的章与节点（视口顶 = .novel-main 的 rect.top）。**判据吃产品同一份**
+   * （`client/viewport-top.ts` 的 `crossedIndex`，也就是 `reader-geometry.currentNodeOf` 用的那条）：
+   * 视口顶已越过的最靠后那个；都没越过 → 文档顺序第一个；跳过空洞。本门只从真 DOM 收起点读数，
+   * 不再手抄第四份——上一版注释点名的符号（`ReaderView.currentNodeOf`）早已搬进 geometry。
    */
-  const probe = (s: PageSession) => s.page.evaluate(() => {
-    const main = document.querySelector('[data-novel-main]') as HTMLElement
-    const viewTop = main.getBoundingClientRect().top
-    const blocks = [...document.querySelectorAll('[data-chapter]')]
-    const visible = blocks.filter((b) => b.getBoundingClientRect().top - viewTop <= 0.5)
-    const chapterEl = visible[visible.length - 1] ?? blocks[0] ?? null
-    let best: { id: string; top: number } | null = null
-    let first: { id: string; top: number } | null = null
-    for (const el of document.querySelectorAll('[data-chapter] [data-novel-node]')) {
-      const top = el.getBoundingClientRect().top - viewTop
-      const cand = { id: el.getAttribute('data-novel-node') as string, top }
-      if (first === null) first = cand
-      if (top <= 0.5 && (best === null || top > best.top)) best = cand
-    }
-    const hit = best ?? first
+  const probe = async (s: PageSession): Promise<{
+    chapter: string | null; node: string | null; offset: number | null; scrollTop: number
+  }> => {
+    const raw = await s.page.evaluate(() => {
+      const main = document.querySelector('[data-novel-main]') as HTMLElement
+      // 视口顶 = **看得见的正文顶**：顶条是 sticky 覆盖层，盖住内容最上面约 40px，
+      // 读数的口径与阅读会话的 `topInset` 相同（见 docs/ui-spec.md §3.5）。
+      const bar = document.querySelector<HTMLElement>('.novel-rdr-bar')
+      const viewTop = main.getBoundingClientRect().top + (bar === null ? 0 : bar.getBoundingClientRect().height)
+      return {
+        blocks: [...document.querySelectorAll('[data-chapter]')].map((b) => ({
+          chapter: b.getAttribute('data-chapter'),
+          top: b.getBoundingClientRect().top - viewTop,
+        })),
+        nodes: [...document.querySelectorAll('[data-chapter] [data-novel-node]')].map((el) => ({
+          id: el.getAttribute('data-novel-node') as string,
+          top: el.getBoundingClientRect().top - viewTop,
+        })),
+        scrollTop: Math.round(main.scrollTop),
+      }
+    })
+    const chapterAt = crossedIndex(raw.blocks, (b) => b.top - SUBPIXEL)
+    const nodeAt = crossedIndex(raw.nodes, (n) => n.top - SUBPIXEL)
+    const hit = nodeAt === -1 ? undefined : raw.nodes[nodeAt]
     return {
-      chapter: chapterEl?.getAttribute('data-chapter') ?? null,
+      chapter: chapterAt === -1 ? null : (raw.blocks[chapterAt]?.chapter ?? null),
       node: hit?.id ?? null,
       offset: hit?.top ?? null,
-      scrollTop: Math.round(main.scrollTop),
+      scrollTop: raw.scrollTop,
     }
-  })
+  }
 
   /** 某个节点相对视口顶的偏移（锚点落位、重排前后比它） */
+  /** 节点相对**看得见的正文顶**（顶条下沿）的偏移：0 = 停在顶条下沿，负数 = 在条后的遮挡带里。
+   *  与阅读会话的 `topInset` 同一口径——按裸 `[data-novel-main]` 顶量会把顶条盖住的那 40px 当成可见。 */
   const offsetOf = (s: PageSession, nodeId: string): Promise<number | null> => s.page.evaluate((id) => {
     const main = document.querySelector('[data-novel-main]') as HTMLElement
+    const bar = document.querySelector<HTMLElement>('.novel-rdr-bar')
+    const viewTop = main.getBoundingClientRect().top + (bar === null ? 0 : bar.getBoundingClientRect().height)
     const el = document.querySelector(`[data-chapter] [data-novel-node="${id}"]`)
-    return el === null ? null : el.getBoundingClientRect().top - main.getBoundingClientRect().top
+    return el === null ? null : el.getBoundingClientRect().top - viewTop
   }, nodeId)
 
   /** 指定节点**之后**第一个正文节点的 id。图片位置读数必须量它：图**之前**的节点在「框塌陷 /
@@ -157,10 +175,12 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
   const blockBox = (s: PageSession, index: number): Promise<{ top: number; height: number } | null> =>
     s.page.evaluate((i) => {
       const main = document.querySelector('[data-novel-main]') as HTMLElement
+      const bar = document.querySelector<HTMLElement>('.novel-rdr-bar')
+      const viewTop = main.getBoundingClientRect().top + (bar === null ? 0 : bar.getBoundingClientRect().height)
       const el = document.querySelector(`[data-chapter="${i}"]`)
       if (el === null) return null
       const r = el.getBoundingClientRect()
-      return { top: r.top - main.getBoundingClientRect().top, height: r.height }
+      return { top: r.top - viewTop, height: r.height }
     }, index)
 
   /** 已载章的章号（升序；正文渲染顺序 = 书的顺序，pruneToViewport 保证连续无洞） */
@@ -300,7 +320,7 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       // 同章第一个锚点：甲 → a1 落在视口顶
       await clickLeaf(s, '甲')
       await settle(1_000)
-      expect(Math.abs((await offsetOf(s, anchorOf('甲'))) ?? 99), '甲（ch1#a）应停在视口顶 ±4px').toBeLessThanOrEqual(4)
+      expect(Math.abs((await offsetOf(s, anchorOf('甲'))) ?? 99), '甲（ch1#a）应停在顶条下沿（可见正文顶）±4px').toBeLessThanOrEqual(4)
       // 同章第二个锚点：乙 → a2（不是复制出的另一章）
       await openDrawer(s)
       await clickLeaf(s, '乙')
@@ -374,7 +394,7 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       await s.page.waitForSelector('[role="dialog"][aria-label="注释"]', { state: 'detached', timeout: 8_000 })
       await settle(1_000)
       expect((await probe(s)).chapter).toBe('0')
-      expect(Math.abs((await offsetOf(s, noteref.id)) ?? 99), 'backlink 落到正文引用锚点（视口顶 ±4px）').toBeLessThanOrEqual(4)
+      expect(Math.abs((await offsetOf(s, noteref.id)) ?? 99), 'backlink 落到正文引用锚点（顶条下沿 ±4px）').toBeLessThanOrEqual(4)
       expect(await s.page.$('button[title="回到跟随链接前的位置"]'), 'backlink 消费掉那条采点后不应再有返回入口').toBeNull()
     })
   }, 180_000)

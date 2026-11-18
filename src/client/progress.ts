@@ -6,6 +6,8 @@
  * 于是两者互逆。两侧不要各用一套跨度：存侧借「到下一章的距离」（尾章没有 next → 比例恒 0，
  * 而尾章正是用户正在读的那一章），取侧借「内容剩余高度」——同一个比例会算出不同像素。
  */
+import { crossedIndex } from './viewport-top.js'
+
 export interface ChapterAnchor { index: number; start: number; height: number }
 
 /** 章内比例：`scrollTop` 在锚点 [start, start+height] 内的占比（夹在 0..1；高度没量到 → 0）。
@@ -15,20 +17,15 @@ export function ratioWithin(a: ChapterAnchor, scrollTop: number): number {
   return a.height > 0 ? Math.min(1, Math.max(0, (scrollTop - a.start) / a.height)) : 0
 }
 
-/** 定位当前章与章内比例：取起点不晚于滚动位的最大锚点；比例 = 章内已滚过的高度占比 */
+/** 定位当前章与章内比例：锚点按内容坐标升序，**当前项判据吃 `viewport-top` 的那一份**
+ *  （取最后一条已越过滚动位的；一条都没越过 → 第一张锚点）；比例 = 章内已滚过的高度占比。
+ *  这条数据路刻意只读锚点缓存、不做每帧 rect 读取——判据共用，数据流不合并。 */
 export function locateChapter(anchors: ChapterAnchor[], scrollTop: number): { chapterIndex: number; offsetRatio: number } {
-  const [head] = anchors
+  const at = crossedIndex(anchors, (a) => a.start - scrollTop)
   // 没有锚点 = 还没量到任何章：章号与比例都留在基线 0（不是"取位失败"，这里就没有取位这回事）
-  if (head === undefined) return { chapterIndex: 0, offsetRatio: 0 }
-  let idx = head.index
-  for (const a of anchors) {
-    if (a.start <= scrollTop) idx = a.index
-    else break
-  }
-  const a = anchors.find((x) => x.index === idx)
-  // 与空表同一出口（还没量到任何章）：找不到就不编一个比例，章号与比例都留在基线 0
+  const a = at === -1 ? undefined : anchors[at]
   if (a === undefined) return { chapterIndex: 0, offsetRatio: 0 }
-  return { chapterIndex: idx, offsetRatio: ratioWithin(a, scrollTop) }
+  return { chapterIndex: a.index, offsetRatio: ratioWithin(a, scrollTop) }
 }
 
 /** 恢复定位反函数：章 + 比例 → scrollTop（夹在可滚动范围内，不许越过内容底）。

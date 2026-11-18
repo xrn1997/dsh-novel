@@ -4,12 +4,17 @@ import { zhTranslate, type CopyKey, type Translate } from './copy/index.js'
 import { createStore, useStore } from './store.js'
 import { bodies, ROUTES } from '../shared/wire.js'
 import type { JobIssue, JobState } from './views/types.js'
+import { createJobChannel } from './job-channel.js'
 import { STATUS_POLL_MS } from './util.js'
 
 /**
  * 后台任务面：导入/批量验证跑在服务端，客户端只是提交者与观察者——
  * 关设置、切换界面、刷新页面都不影响任务；常驻状态层（`shell.overlay`）单实例轮询，
  * 结果写进本模块的任务镜像，视图环内的消费者只读镜像（`useJobSurface`）。
+ *
+ * 轮询仪式（挂载即读、读完排下一拍、卸载连 timer 一起撤）住 `client/job-channel.ts` 的纯轮询
+ * 那一路；本模块只交取数与镜像写入。任务面这一条**没有身份、没有终态即停**：状态镜像永远接着
+ * 看，读面抖动只如实置 `stale`，不把「这一拍没读到」当成任务结束了。
  */
 
 export async function startImportJob(files: Array<{ name: string; text: string }>): Promise<{ jobId: string }> {
@@ -100,6 +105,7 @@ export function resetJobSurface(): void {
 
 /** 唯一轮询驱动：挂载即拉 + `STATUS_POLL_MS` 节拍 + `refreshJob()` 立刻重拉；结果写 `jobSurface`。
  *  抖动时保留旧值但如实置 `stale`（不静默停在最后一帧）。卸载即停（不许孤儿轮询）。
+ *  任务状态镜像这一条没有推送可用、没有身份判据，故读面失败返回「继续看」而不是收手。
  *  取数走注入 deps（useLatest ref 进 effect）：deps 若是每 render 新字面量，直接进
  *  依赖数组会每帧重启轮询，故 effect 只认 tick。 */
 export function useJobPolling(deps: JobStatusDeps = prodJobStatusDeps): void {
@@ -107,21 +113,24 @@ export function useJobPolling(deps: JobStatusDeps = prodJobStatusDeps): void {
   const depsRef = useRef(deps)
   depsRef.current = deps
   useEffect(() => {
-    let alive = true
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const loop = async (): Promise<void> => {
-      try {
-        const j = await depsRef.current.fetchJobStatus()
-        if (j !== null && j.kind === 'import') lastImportJob = j   // 顺带喂缓存（probe 任务不覆盖）
-        if (alive) jobSurface.set({ job: j, stale: false })
-      } catch {
-        if (alive) jobSurface.set({ ...jobSurface.get(), stale: true })
-      }
-      if (!alive) return
-      timer = setTimeout(() => { void loop() }, STATUS_POLL_MS)
-    }
-    void loop()
-    return () => { alive = false; if (timer !== null) clearTimeout(timer) }
+    const channel = createJobChannel<JobState | null, null>(
+      {
+        read: async () => depsRef.current.fetchJobStatus(),          // 读面：注入 deps 的取数
+        apply: (_round, job) => {
+          if (job !== null && job.kind === 'import') lastImportJob = job   // 顺带喂缓存（probe 任务不覆盖）
+          jobSurface.set({ job, stale: false })
+          return true                          // 状态镜像永远接着看：这一条没有「终态即停」这一维
+        },
+        sameRound: () => true,                 // 没有身份：每一拍读到的都是「此刻的服务端」
+        onReadError: () => {
+          jobSurface.set({ ...jobSurface.get(), stale: true })
+          return true                          // 抖动继续：任务面要显示「连接异常，重试中」，不是就此停摆
+        },
+      },
+      STATUS_POLL_MS,
+    )
+    channel.start(null)
+    return () => { channel.stop() }
   }, [n])
 }
 

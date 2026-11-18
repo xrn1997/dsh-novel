@@ -4,12 +4,13 @@ import type { ExploreBook, ExploreSnapshot } from '../shared/wire.js'
 import { ApiClientError, describeError } from './api.js'
 import { zhTranslate } from './copy/index.js'
 import type { Translate } from './copy/index.js'
+import { createJobChannel } from './job-channel.js'
 import { JOB_POLL_MS } from './util.js'
 import type { JobWatchDeps } from './deps.js'
 
 /**
  * 浏览器半的「分类浏览轮次」接线：**一轮 = 一个源的一个分类**（`ADR-0028` 的浏览轴）——
- * 提交一轮 → 盯住它（SSE 优先、快照轮询兜底）→ **整体替换**视图态。
+ * 提交一轮 → 盯住它 → **整体替换**视图态。
  *
  * 与 `search-job.ts` 的关键差别：那边的读面是**游标增量**（`added`/`next`，客户端累积），
  * 这边的读面是**全量快照**——续页改写的不只是条目清单，还有 `page` 与 `hasMore` 这些**整轮**读数，
@@ -19,20 +20,11 @@ import type { JobWatchDeps } from './deps.js'
  * **身份闸在这里是「无条件整帧换掉」，不是一段比对**：`search-job.ts` 必须验 `job.id`，因为它的
  * 累积器握着一份只对自己有效的游标；本模块没有任何可留的东西——轮到谁就以谁的整帧为准，服务端
  * 换了轮（别的观察者提交）时新帧自然全覆盖，正是要的「跟随最近一轮」。所以这里不留轮次身份的
- * 副本：那份副本无人读，只会随代码漂成一句谎。
+ * 副本：那份副本无人读，只会随代码漂成一句谎。落到通道接口上就是恒真的身份判据（`sameRound`）。
  *
- * 轮询是地基、SSE 是加速器（官方口径：通知不 replay，可靠恢复必须有显式 query），
- * 任一时刻只有一条通道在推进（两条同时在飞会把「谁是最新」搞乱）。撤通道必须**连在途那一发的
- * 所有权一起撤**：`clearTimeout` 只拦还没起飞的、abort 只断流不断回包，两者都撤不回已经飞出去的
- * 那次读——那份迟到帧要靠 `stopChannels` 的代际认出自己该被丢掉，否则它会拿旧轮整帧盖掉刚落地
- * 的新轮（与下面 `submitted` 那枚闸挡的是同一件事，区别只在它管得到恢复读、管不到在途的轮询）。
- *
- * **与 `search-job.ts` 那段同形的通道机械（`armPoll`/`poll`/`watch`）刻意不抽公共壳**，只有节奏
- * 那一格抽了（`util.ts` 的 `JOB_POLL_MS`，同一个数写两份必然只改到一份）。不抽的理由是两边的
- * **收手语义不是一种参数的两个值**：这边靠通道代际把在途那一发判废，那边靠累积器身份，且身份
- * 不符时它不是丢帧而是 `rebaseline`——断流、从 `since=0` 重读新轮基线、再重开观察。把那条恢复
- * 塞进一个只有它用的注入位，壳就只剩转发；而把这边的 `stopChannels`（连 timer 一起撤）套到那边，
- * 改的是搜索面撤通道的语义，那不是这份改动该有的授权。
+ * 通道仪式（timer、SSE 优先 + 快照轮询兜底、任一时刻只一条通道、撤通道连 timer 带代际）住
+ * `client/job-channel.ts`；本模块只交三件策略：整帧替换的 `apply`、恒真的身份判据、读失败后的
+ * 收手（读不到还转圈只会刷屏）。
  *
  * **续页不是新轮**：`loadMore` 只把同一轮再打一页（服务端不换轮、不换 id），所以上面那套「零累积、
  * 整帧替换」一行都不用改——新一页的书随下一帧进来，客户端不持有任何要跟着翻页对齐的东西。
@@ -95,40 +87,21 @@ export const toRound = (job: ExploreSnapshot): ExploreRound => ({
 export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): ExploreJobView {
   const alive = useRef(true)
   /** 通道是否还活着：**每次现读**。卸载时翻面的那次写入落在 await 之后——编译器看不见闭包里的写入，
-   *  同一个流程里的第二次读会被当成常量收窄；这道守卫是运行时防线，读法必须留在调用边界上。 */
+   *  同一个流程里的第二次读会被当成常量收窄；这道守卫是运行时防线，读法必须留在调用边界上。
+   *  通道内部的在途读由通道代际作废，这里只守本模块自己的异步段（提交 / 续页 / 挂载恢复）。 */
   const aliveNow = (): boolean => alive.current
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const stream = useRef<AbortController | null>(null)
   /** 「本页已经提交过」闸：POST 的回包说了算（它是新一轮的出生证明）。挂载恢复读到的是**上一轮**
    *  的快照，它要是后到，就会把新轮刚落下的空帧盖成旧轮的书单——`search-job.ts` 的对应闸是
    *  「累积器已被新一轮替换」（那边握着一份游标，有身份可比），这里没有任何可留的东西，故只用一枚
    *  布尔：提交落地即关闸，恢复读此后一律让位。 */
   const submitted = useRef(false)
-  /** 通道代际：每撤一次通道加一。在途那一发撤不回，所以迟到帧靠它认出自己已经没有所有权
-   *  （判据是「通道还在不在」，不是「轮次是谁」——本模块不留轮次身份的副本）。 */
-  const gen = useRef(0)
   const [round, setRound] = useState<ExploreRound | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [restored, setRestored] = useState(false)
 
-  const stopChannels = useCallback((): void => {
-    gen.current += 1
-    if (timer.current !== null) { clearTimeout(timer.current); timer.current = null }
-    stream.current?.abort(); stream.current = null
-  }, [])
-
-  /** 轮询那一发经 ref 取：`armPoll` 与 `poll` 互为引用（一个排下一个），只有 ref 能让两者
-   *  同时保持稳定身份——`submit`/`loadMore` 的 useCallback 依赖它们（视图 effect 不再逐渲染重跑）。 */
-  const pollRef = useRef<() => Promise<void>>(async () => {})
-  const armPoll = useCallback((): void => {
-    if (timer.current !== null) clearTimeout(timer.current)
-    timer.current = setTimeout(() => { void pollRef.current() }, deps.jobPollMs ?? JOB_POLL_MS)
-  }, [deps])
-
   /** 一帧落地：整体替换 + 判「还要不要继续看」。服务端连一轮都没有 = 没有可显示的结果，如实说 */
-  const apply = useCallback((job: ExploreSnapshot | null): boolean => {
+  const apply = (job: ExploreSnapshot | null): boolean => {
     if (job === null) {
-      stopChannels()
       setError(t('city.job.unavailable'))
       setRound(null)
       return false
@@ -137,55 +110,34 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
     setError(job.phase === 'running' || job.cancelled ? null : job.error ?? null)
     setRound(toRound(job))
     return job.phase === 'running'
-  }, [stopChannels, t])
+  }
 
-  const poll = useCallback(async (): Promise<void> => {
-    const g = gen.current
-    if (!aliveNow()) return
-    let job: ExploreSnapshot | null
-    try {
-      // 读面缺 `job` 键与「`job` 为 null」是同一件事（没有一轮）——边界输入不该把渲染打崩
-      job = (await deps.apiGet<{ job: ExploreSnapshot | null }>(ROUTES.exploreListStatus.path)).job ?? null
-    } catch (e) {
-      // 代际已换 = 这一发属于一条已被撤掉的通道：连那句「读取失败」都不许报，
-      // 否则旧通道的断线会把新轮的一帧好结果刷成红条
-      if (!aliveNow() || gen.current !== g) return
-      setError(t('city.job.readFailed', { detail: describeError(e, t) }))
-      setRound((r) => (r === null ? null : { ...r, running: false }))
-      return
-    }
-    if (!aliveNow() || gen.current !== g) return
-    if (apply(job) && aliveNow()) armPoll()
-  }, [deps, t, apply, armPoll])
-  useEffect(() => { pollRef.current = poll }, [poll])
+  /** 状态读面：通道的地基读与挂载恢复是同一发请求，URL 与空值口径只此一处。 */
+  const readStatus = async (): Promise<ExploreSnapshot | null> =>
+    (await deps.apiGet<{ job: ExploreSnapshot | null }>(ROUTES.exploreListStatus.path)).job ?? null
 
-  /** 盯住这一轮：先开 SSE；断开 / 连不上 / 提前结束而本轮未终态 → 回落轮询。
-   *  进门先 `stopChannels` 接管通道：旧流与它可能已经排好的下一发轮询一起撤——只 abort 流不清 timer，
-   *  续页与新提交就会留下一条 SSE 加一条轮询并行推进（口径见文件头「任一时刻只有一条通道」）。 */
-  const watch = useCallback((): void => {
-    stopChannels()
-    const g = gen.current
-    const ctrl = new AbortController()
-    stream.current = ctrl
-    void (async (): Promise<void> => {
-      let running = true
-      /** 这一轮的结局由帧回调写回：编译器看不见闭包里的赋值，故经函数读，别让它当成常量 */
-      const stillRunning = (): boolean => running
-      try {
-        await deps.apiEventStream(ROUTES.exploreListStream.path, (data): void => {
-          if (!aliveNow() || gen.current !== g) return
-          let job: ExploreSnapshot | null
-          try {
-            job = (JSON.parse(data) as { job: ExploreSnapshot | null }).job
-          } catch { return }                       // 坏帧不致命：下一帧或轮询兜底
-          running = apply(job)
-          if (!running) ctrl.abort()               // 终态：自己关流，不留着占连接
-        }, ctrl.signal)
-      } catch { /* 连不上或断线：一律回落轮询，不单独报错（只有轮询失败才真的报错） */ }
-      if (!aliveNow() || gen.current !== g) return   // 这条流已被更新的通道顶掉：残影不许再排一轮轮询
-      if (stillRunning()) armPoll()
-    })()
-  }, [deps, apply, armPoll, stopChannels])
+  /** 通道：timer / SSE 回落 / 撤通道 / 代际归 `job-channel.ts`；本模块只交三件策略——全量快照读面
+   *  （无游标）、整帧替换的 `apply`、恒真的身份判据（没有可丢的东西，见文件头）与读失败收手。
+   *  spec 锚定首次渲染的闭包（与挂载恢复同口径）：运行中的一轮不随重渲染换代。锚的是机械身份
+   *  不是语言——`t` 每次调用现读当前 locale，切语言后新生成的文案跟新语言；存量串冻在生成时语言
+   *  （政策见 `copy/index.tsx`）。 */
+  const [channel] = useState(() => createJobChannel<ExploreSnapshot, null>(
+    {
+      read: async () => readStatus(),
+      subscribe: (_round, onFrame, signal) => deps.apiEventStream(ROUTES.exploreListStream.path, onFrame, signal),
+      apply: (_round, job) => apply(job),
+      sameRound: () => true,
+      onReadError: (_round, e) => {
+        setError(t('city.job.readFailed', { detail: describeError(e, t) }))
+        setRound((r) => (r === null ? null : { ...r, running: false }))
+        return false
+      },
+    },
+    deps.jobPollMs ?? JOB_POLL_MS,
+  ))
+
+  /** 盯住这一轮：通道接管（旧流与它可能已经排好的下一发轮询一起撤），本轮从推送重开。 */
+  const watch = useCallback((): void => { channel.start(null) }, [channel])
 
   const submit = useCallback((sourceId: string, kind: string): void => {
     const s = sourceId.trim()
@@ -246,7 +198,7 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
     void (async () => {
       let job: ExploreSnapshot | null
       try {
-        job = (await deps.apiGet<{ job: ExploreSnapshot | null }>(ROUTES.exploreListStatus.path)).job ?? null
+        job = await readStatus()
       } catch {
         // 首屏读不到就是没有：静默（真去看时会再报错）。但闸要落下——不落，调用方会一直等着
         // 「那一轮在不在」的答案，点了没反应比读到空更糟
@@ -259,7 +211,7 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
     })()
     return () => {
       alive.current = false                       // 只停「看」，服务端那轮继续跑
-      stopChannels()
+      channel.stop()
     }
   }, [])                                          // eslint-disable-line react-hooks/exhaustive-deps
 

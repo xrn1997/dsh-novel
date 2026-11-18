@@ -103,6 +103,8 @@ function makeSession(opts?: {
   debounceMs?: number
   /** 视口帧调度（缺省不传 = 会话的立即执行缺省，与既有内联 deps 同口径） */
   viewport?: ReaderViewportFeed
+  /** 顶条遮挡高度（缺省不传 = 0，与无顶条的挂载同口径） */
+  topInset?: () => number
 }): FakeHarness {
   const port = fakePort()
   const fetched: number[] = []
@@ -125,6 +127,7 @@ function makeSession(opts?: {
     // 缺省不建这个键：`ReaderSessionDeps.viewport` 是「缺席走缺省」的契约（`?? IMMEDIATE_VIEWPORT_FEED`），
     // 不拿显式 undefined 冒充缺席。
     ...(opts?.viewport === undefined ? {} : { viewport: opts.viewport }),
+    ...(opts?.topInset === undefined ? {} : { topInset: opts.topInset }),
   }
   return { session: new ReaderSession(deps, port, opts?.debounceMs ?? 20), port, fetched, saves, totals }
 }
@@ -177,6 +180,39 @@ describe('ReaderSession.open（目录 → 存档恢复 → 载后定位）', () 
     expect(h.port.top).toBe(3000)
   })
 
+  it('恢复落位让出顶条：段首落在条下方，读数按同一个「看得见的顶」算（不漂）', async () => {
+    // 听书写的 progress 是「正在念的那段的段首」；裸 scrollTop 落位会把它正好藏进 40px 顶条里，
+    // 用户要上划才看得见。恢复与读数吃同一个 topInset：落位减掉，读数再加上，比例不变。
+    const h = makeSession({
+      shelf: [shelfBook({ chapterIndex: 2, offsetRatio: 0.5, updatedAt: 0 })],
+      topInset: () => 40,
+    })
+    h.port.anchors = [
+      { index: 0, start: 0, height: 1000 },
+      { index: 1, start: 1000, height: 1000 },
+      { index: 2, start: 2000, height: 2000 },
+    ]
+    h.port.scrollH = 5000; h.port.height = 1000
+    await h.session.open('src', 'https://s.com/book/1')
+    // anchorTop = 2000 + 0.5×2000 = 3000；减 40 = 2960（段首那行落在条下沿）
+    expect(h.port.top).toBe(2960)
+    // 落位后的视口读数按 2960 + 40 = 3000 再算：仍是 0.5，不产生第二笔写（否则每进一次漂一条条高）
+    h.session.feedViewport()
+    expect(h.saves).toEqual([])
+  })
+
+  it('目录跳章落位也让出顶条：目标停在条下方（与恢复同一条口径）', async () => {
+    const h = makeSession({ topInset: () => 40 })
+    await h.session.open('src', 'https://s.com/book/1')
+    h.port.top = 0
+    h.session.requestJump(2)
+    await new Promise((r) => setTimeout(r, 0))     // 拉完
+    h.port.chapterOff = 300                        // 章块在视口下 300px
+    h.session.afterRender()
+    expect(h.port.top).toBe(260)                   // 300 − 40：章首不藏在条后
+    expect(h.session.pendingJump).toBeNull()
+  })
+
   it('存档恢复比例 0：落位前旧视口不触发补载，落位对齐存档章顶', async () => {
     const port = fakePort()
     port.anchors = [{ index: 2, start: 2000, height: 2000 }]
@@ -194,12 +230,12 @@ describe('ReaderSession.open（目录 → 存档恢复 → 载后定位）', () 
     }, port)
     await session.open('src', 'https://s.com/book/1')
     expect(fetched).toEqual([2])
-    session.handleViewportChange('src')                    // 落位前的旧视口（top 仍是进入前的 0）
+    session.feedViewport()                    // 落位前的旧视口（top 仍是进入前的 0）
     await new Promise((r) => setTimeout(r, 0))
     expect(fetched, '比例 0 的恢复也要等落位：旧视口不是补载证据').toEqual([2])
     while (frames.length > 0) must(frames.shift(), '待跑的双帧')()            // 跑完双帧：落位
     expect(port.top, '比例 0 落位到存档章顶').toBe(2000)
-    session.handleViewportChange('src')                    // 落位后的真实视口才开始判断补载
+    session.feedViewport()                    // 落位后的真实视口才开始判断补载
     await new Promise((r) => setTimeout(r, 0))
     expect(fetched).toContain(1)
   })
@@ -221,12 +257,12 @@ describe('ReaderSession.open（目录 → 存档恢复 → 载后定位）', () 
     }, port)
     await session.open('src', 'https://s.com/book/1')
     expect(fetched).toEqual([2])
-    session.handleViewportChange('src')                    // 落位前的旧视口（top 仍是进入前的 0）
+    session.feedViewport()                    // 落位前的旧视口（top 仍是进入前的 0）
     await new Promise((r) => setTimeout(r, 0))
     expect(fetched, '恢复落位前的旧视口不是补载证据').toEqual([2])
     while (frames.length > 0) must(frames.shift(), '待跑的双帧')()            // 跑完双帧：落位
     expect(port.top).toBe(3000)
-    session.handleViewportChange('src')                    // 落位后的真实视口才开始判断补载
+    session.feedViewport()                    // 落位后的真实视口才开始判断补载
     await new Promise((r) => setTimeout(r, 0))
     expect(fetched).toContain(1)
   })
@@ -249,7 +285,7 @@ describe('ReaderSession.open（目录 → 存档恢复 → 载后定位）', () 
     await session.open('src', 'https://s.com/book/1')
     expect(fetched, '空目录没有任何章可载').toEqual([])
     expect(session.state.currentChapter, '位置停在 0，不是越界夹出来的 -1').toBe(0)
-    session.handleViewportChange('src', { layoutChanged: true })
+    session.feedViewport(true)
     expect(measures, '视口读数照常处理（读被吞 = 会话已失聪）').toBe(1)
   })
 
@@ -291,7 +327,7 @@ describe('ReaderSession.open（目录 → 存档恢复 → 载后定位）', () 
       if (primed || session.state.toc === null) return
       primed = true
       port.sentinel = 0                              // 哨兵在视口顶 = 预取区内
-      session.afterRender('src')
+      session.afterRender()
     })
     await new Promise((r) => setTimeout(r, 0))        // 目录发布 + 预取该发生的都发生了
     expect(fetched).toEqual([])                       // 回归：存档未落定不得预取
@@ -349,9 +385,9 @@ describe('ReaderSession.load（单在途槽）', () => {
     await h.session.open('src', 'https://s.com/book/1')
     h.fetched.length = 0
     await Promise.all([
-      h.session.load('src', 1),
-      h.session.load('src', 1),
-      h.session.load('src', 2),        // 在途被占：这次直接短路
+      h.session.load(1),
+      h.session.load(1),
+      h.session.load(2),        // 在途被占：这次直接短路
     ])
     expect(h.fetched).toEqual([1])
     expect(h.session.state.chapters[1]).toEqual(text(1))
@@ -361,9 +397,9 @@ describe('ReaderSession.load（单在途槽）', () => {
     const h = makeSession({ failChapter: 1 })
     await h.session.open('src', 'https://s.com/book/1')
     h.fetched.length = 0
-    await h.session.load('src', 1)
+    await h.session.load(1)
     expect(h.session.state.error?.message).toContain('第 1 章拉取失败')
-    await h.session.load('src', 1)
+    await h.session.load(1)
     expect(h.fetched).toEqual([1, 1])       // 槽已释放：请求确实又发出去了
   })
 })
@@ -375,11 +411,11 @@ describe('ReaderSession 进度落盘策略', () => {
     h.port.anchors = [{ index: 0, start: 0, height: 1000 }, { index: 1, start: 1000, height: 1000 }, { index: 2, start: 2000, height: 1000 }]
 
     h.port.top = 1200                              // 进入第 1 章
-    h.session.handleViewportChange('src')
+    h.session.feedViewport()
     expect(h.saves).toEqual([[1, 0.2]])            // 立即存
 
     h.port.top = 1500                              // 同章内滚动
-    h.session.handleViewportChange('src')
+    h.session.feedViewport()
     expect(h.saves).toHaveLength(1)                // 防抖：还没落
 
     await new Promise((r) => setTimeout(r, 40))    // 防抖窗口过
@@ -393,15 +429,15 @@ describe('ReaderSession 进度落盘策略', () => {
     await h.session.open('src', 'https://s.com/book/1')
     h.port.anchors = [{ index: 0, start: 0, height: 1000 }, { index: 1, start: 1000, height: 1000 }, { index: 2, start: 2000, height: 1000 }, { index: 3, start: 3000, height: 1000 }]
     h.port.top = 1500
-    h.session.handleViewportChange('src')            // 跨到第 1 章：强制存
+    h.session.feedViewport()            // 跨到第 1 章：强制存
     expect(h.saves).toEqual([[1, 0.5]])
 
     h.port.top = 1600
-    h.session.handleViewportChange('src')            // 同章滚动：挂防抖
+    h.session.feedViewport()            // 同章滚动：挂防抖
     expect(h.saves).toHaveLength(1)
 
     h.port.top = 2500
-    h.session.handleViewportChange('src')            // 目录到第 2 章：跨章强制存
+    h.session.feedViewport()            // 目录到第 2 章：跨章强制存
     expect(h.saves).toEqual([[1, 0.5], [2, 0.5]])
 
     await new Promise((r) => setTimeout(r, 80))      // 防抖窗口过：旧值不该再落一次
@@ -413,9 +449,9 @@ describe('ReaderSession 进度落盘策略', () => {
     await h.session.open('src', 'https://s.com/book/1')
     h.port.anchors = [{ index: 0, start: 0, height: 1000 }, { index: 1, start: 1000, height: 1000 }, { index: 2, start: 2000, height: 1000 }]
     h.port.top = 1200
-    h.session.handleViewportChange('src')           // 切章：强制存
+    h.session.feedViewport()           // 切章：强制存
     h.port.top = 1500
-    h.session.handleViewportChange('src')           // 同章滚动：挂防抖
+    h.session.feedViewport()           // 同章滚动：挂防抖
     expect(h.saves).toEqual([[1, 0.2]])             // 5s 未到，确实还没落
     h.session.dispose()
     expect(h.saves).toEqual([[1, 0.2], [1, 0.5]])   // 退出即落盘：dispose 必须 flush，cancel 会丢这一笔
@@ -434,12 +470,12 @@ describe('ReaderSession 进度落盘策略', () => {
     await h.session.open('src', 'https://s.com/book/1')
     h.port.anchors = [{ index: 0, start: 0, height: 3000 }]
     h.port.top = 1200
-    h.session.handleViewportChange('src')
+    h.session.feedViewport()
     expect(measure).toHaveBeenCalledTimes(1)
     h.port.top = 1500
-    h.session.handleViewportChange('src')
+    h.session.feedViewport()
     expect(measure).toHaveBeenCalledTimes(1)
-    h.session.handleViewportChange('src', { layoutChanged: true })
+    h.session.feedViewport(true)
     expect(measure).toHaveBeenCalledTimes(2)
     h.session.dispose()
   })
@@ -449,14 +485,14 @@ describe('ReaderSession 进度落盘策略', () => {
     await h.session.open('src', 'https://s.com/book/1')
     h.port.anchors = [{ index: 0, start: 0, height: 1000 }]
     h.port.top = 10
-    h.session.handleViewportChange('src')         // 首次：已载表还没量过
+    h.session.feedViewport()         // 首次：已载表还没量过
     const measure = vi.spyOn(h.port, 'measureAnchors')
     h.port.anchors = [
       { index: 0, start: 0, height: 1000 },
       { index: 1, start: 1000, height: 1000 },
     ]
-    await h.session.load('src', 1)                // 新章载入 → 已载表换版本
-    h.session.handleViewportChange('src')         // 纯滚动：过期来自载入，不是滚动
+    await h.session.load(1)                // 新章载入 → 已载表换版本
+    h.session.feedViewport()         // 纯滚动：过期来自载入，不是滚动
     expect(measure).toHaveBeenCalledTimes(1)
     h.session.dispose()
   })
@@ -464,14 +500,14 @@ describe('ReaderSession 进度落盘策略', () => {
   it('提交之前来的那帧滚动，不吃掉渲染后拍点的重测', async () => {
     const h = makeSession({ debounceMs: 5000 })
     await h.session.open('src', 'https://s.com/book/1')
-    h.session.afterRender('src')
+    h.session.afterRender()
     const measure = vi.spyOn(h.port, 'measureAnchors')
-    await h.session.load('src', 1)                // 到货：store 已写新表，React 还没提交
-    h.session.handleViewportChange('src')         // 这一帧量到的是还没有新章块的 DOM
+    await h.session.load(1)                // 到货：store 已写新表，React 还没提交
+    h.session.feedViewport()         // 这一帧量到的是还没有新章块的 DOM
     expect(measure).toHaveBeenCalledTimes(1)
-    h.session.afterRender('src')                  // 提交后的拍点必须再量一次，否则锚点停在旧表
+    h.session.afterRender()                  // 提交后的拍点必须再量一次，否则锚点停在旧表
     expect(measure).toHaveBeenCalledTimes(2)
-    h.session.handleViewportChange('src')         // 之后纯滚动只读缓存
+    h.session.feedViewport()         // 之后纯滚动只读缓存
     expect(measure).toHaveBeenCalledTimes(2)
     h.session.dispose()
   })
@@ -483,14 +519,14 @@ describe('ReaderSession 预取与目录直达', () => {
     await h.session.open('src', 'https://s.com/book/1')
     h.fetched.length = 0
     h.port.sentinel = 500                          // 视口高 1000 → 预取区内
-    h.session.afterRender('src')
+    h.session.afterRender()
     await new Promise((r) => setTimeout(r, 0))
     expect(h.fetched).toEqual([1])
 
     // 全载完后不拉
-    await h.session.load('src', 2)
+    await h.session.load(2)
     h.fetched.length = 0
-    h.session.afterRender('src')
+    h.session.afterRender()
     await new Promise((r) => setTimeout(r, 0))
     expect(h.fetched).toEqual([])
   })
@@ -502,12 +538,12 @@ describe('ReaderSession 预取与目录直达', () => {
     h.port.anchors = [{ index: 0, start: 0, height: 1000 }, { index: 1, start: 1000, height: 1000 }]
     h.port.chapterOff = 0
     h.port.sentinel = 0
-    h.session.requestJump('src', 1)
+    h.session.requestJump(1)
     await new Promise((r) => setTimeout(r, 0))
     h.fetched.length = 0
-    h.session.afterRender('src')
+    h.session.afterRender()
     await new Promise((r) => setTimeout(r, 0))
-    expect(h.session.state.pendingJump).toBeNull()
+    expect(h.session.pendingJump).toBeNull()
     expect(h.fetched).toEqual([2])     // 落位在第 1 章后，预取目标是第 2 章
   })
 
@@ -515,15 +551,46 @@ describe('ReaderSession 预取与目录直达', () => {
     const h = makeSession()
     await h.session.open('src', 'https://s.com/book/1')
     h.port.top = 0
-    h.session.requestJump('src', 2)
-    expect(h.session.state.pendingJump).toMatchObject({ index: 2, anchorId: null })
+    h.session.requestJump(2)
+    expect(h.session.pendingJump).toMatchObject({ index: 2, anchorId: null })
     await new Promise((r) => setTimeout(r, 0))     // 拉完
     expect(h.session.state.chapters[2]).toEqual(text(2))
 
     h.port.chapterOff = 300                        // 章块已在视口下 300px
-    h.session.afterRender('src')
+    h.session.afterRender()
     expect(h.port.top).toBe(300)
-    expect(h.session.state.pendingJump).toBeNull()
+    expect(h.session.pendingJump).toBeNull()
+  })
+
+  it('提交信号 domRevision：章节窗口换版与置待定位目标各 +1，清目标不推进', async () => {
+    // 绑定的「这一帧要不要测量」只认这一格：漏推进 = 静默漏拍，多推进 = 白测量。
+    // 三处写入：open（换书重建窗口）、publishChapters（章节窗口换版）与 setPendingJump（置目标）。
+    const h = makeSession()
+    await h.session.open('src', 'https://s.com/book/1')
+    const opened = h.session.state.domRevision
+    expect(opened, 'open 自身换版一次，目录发布与首章落地各再换版一次').toBe(3)
+
+    h.port.anchors = [{ index: 0, start: 0, height: 1000 }]
+    h.session.requestJump(1)                       // 置待定位目标 → +1
+    expect(h.session.state.domRevision).toBe(opened + 1)
+    await new Promise((r) => setTimeout(r, 0))     // 目标章到货 → publishChapters → +1
+    const loaded = h.session.state.domRevision
+    expect(loaded, '章节窗口换版要再推进一次').toBe(opened + 2)
+
+    h.port.chapterOff = 0
+    h.session.afterRender()                        // settleJump 清目标：测量自己的产物，不许再推进
+    expect(h.session.pendingJump).toBeNull()
+    expect(h.session.state.domRevision, '清目标不推进 DOM 版本').toBe(loaded)
+  })
+
+  it('重开复用同一实例：上一本挂起的待定位目标不带到下一本', async () => {
+    const h = makeSession()
+    await h.session.open('src', 'https://s.com/book/1')
+    h.session.requestJump(2)                       // 第 3 章未载：目标挂起
+    expect(h.session.pendingJump).toMatchObject({ index: 2 })
+
+    await h.session.open('src', 'https://s.com/book/2')   // 同一实例换书重开
+    expect(h.session.pendingJump, '旧书的落位目标不许留到新书').toBeNull()
   })
 
   it('目录直达：选中的章立刻落盘（章还在途、视口没动就切走，回来必须还在那一章）', async () => {
@@ -533,7 +600,7 @@ describe('ReaderSession 预取与目录直达', () => {
     const h = makeSession({ debounceMs: 5000 })      // 窗口拉长：证明这一笔不是防抖顺带落的
     await h.session.open('src', 'https://s.com/book/1')
     expect(h.saves).toEqual([])
-    h.session.requestJump('src', 2)                  // 目录选第 3 章（未载 → 在途）
+    h.session.requestJump(2)                  // 目录选第 3 章（未载 → 在途）
     expect(h.saves).toEqual([[2, 0]])                // 回归：导航意图必须当场落一笔
     await new Promise((r) => setTimeout(r, 0))       // 章到货
     h.session.dispose()                              // 用户此刻切走
@@ -543,10 +610,10 @@ describe('ReaderSession 预取与目录直达', () => {
   it('afterRender：章未渲染（targetOffset 给 null）不动、不清——下轮再试', async () => {
     const h = makeSession()
     await h.session.open('src', 'https://s.com/book/1')
-    h.session.requestJump('src', 2)
+    h.session.requestJump(2)
     h.port.chapterOff = null
-    h.session.afterRender('src')
-    expect(h.session.state.pendingJump).toMatchObject({ index: 2 })
+    h.session.afterRender()
+    expect(h.session.pendingJump).toMatchObject({ index: 2 })
     expect(h.port.top).toBe(0)
   })
 
@@ -563,9 +630,9 @@ describe('ReaderSession 预取与目录直达', () => {
     }, port, 5)
     await session.open('src', 'b')
     await new Promise((r) => setTimeout(r, 0))
-    session.requestJump('src', 50)
+    session.requestJump(50)
     await new Promise((r) => setTimeout(r, 0))
-    session.requestJump('src', 10)
+    session.requestJump(10)
     await new Promise((r) => setTimeout(r, 0))
     const loaded = session.state.chapters.map((c, i) => (c === null ? null : i)).filter((x) => x !== null)
     expect(loaded).toEqual([10])                 // 回归：已载集只留视口所在的连续区间
@@ -580,20 +647,20 @@ describe('ReaderSession 预取与目录直达', () => {
     await h.session.open('src', 'https://s.com/book/1')
     h.port.anchors = [{ index: 0, start: 0, height: 1000 }]     // 只有旧章在 DOM（新章在途）
     h.port.top = 100
-    h.session.requestJump('src', 2)
-    expect(h.session.state.pendingJump).toMatchObject({ index: 2 })
-    h.session.handleViewportChange('src')
+    h.session.requestJump(2)
+    expect(h.session.pendingJump).toMatchObject({ index: 2 })
+    h.session.feedViewport()
     expect(h.session.state.currentChapter).toBe(2)              // 回归：视口读数不得推翻在途导航命令
-    expect(h.session.state.pendingJump).toMatchObject({ index: 2 })
+    expect(h.session.pendingJump).toMatchObject({ index: 2 })
   })
 
    it('在途窗口内目录直达：在途收工后补拉目标章（点击不静默消失）', async () => {
     const h = makeSession()
     await h.session.open('src', 'https://s.com/book/1')
     h.fetched.length = 0
-    const inflight = h.session.load('src', 1)   // 占住在途槽
-    h.session.requestJump('src', 2)             // 在途被占 → load 短路，只置 pendingJump
-    expect(h.session.state.pendingJump).toMatchObject({ index: 2 })
+    const inflight = h.session.load(1)   // 占住在途槽
+    h.session.requestJump(2)             // 在途被占 → load 短路，只置 pendingJump
+    expect(h.session.pendingJump).toMatchObject({ index: 2 })
     expect(h.fetched).toEqual([1])
     await inflight
     await new Promise((r) => setTimeout(r, 0))  // settlePendingLoad 补拉
@@ -621,7 +688,7 @@ describe('ReaderSession 预取与目录直达', () => {
       await session.open('src', 'https://s.com/book/1')
       port.anchors = [{ index: 0, start: 0, height: 3000 }]
       port.top = 1500
-      session.handleViewportChange('src')          // 同章滚动 → scroll 原因 → 走防抖
+      session.feedViewport()          // 同章滚动 → scroll 原因 → 走防抖
       expect(saves).toEqual([])                    // 连续量不当场落
       vi.advanceTimersByTime(1999)
       expect(saves).toEqual([])
@@ -642,7 +709,7 @@ describe('ReaderSession 跳章失败（位置回退 + 不自动重试）', () =>
     h.port.anchors = [{ index: 0, start: 0, height: 3000 }]
     h.port.top = 0
     h.fetched.length = 0
-    h.session.requestJump('src', 2)
+    h.session.requestJump(2)
     await new Promise((r) => setTimeout(r, 0))
     expect(h.fetched).toEqual([2])
     expect(h.session.state.error?.message).toContain('第 2 章拉取失败')
@@ -653,15 +720,15 @@ describe('ReaderSession 跳章失败（位置回退 + 不自动重试）', () =>
   it('失败章不被预取自动重试（等用户点重试，与 settlePendingLoad 同一条纪律）', async () => {
     const h = makeSession({ failChapter: 2 })
     await h.session.open('src', 'https://s.com/book/1')
-    await h.session.load('src', 1)                       // 视口章之后只剩第 2 章这个空洞
+    await h.session.load(1)                       // 视口章之后只剩第 2 章这个空洞
     h.port.anchors = [{ index: 0, start: 0, height: 3000 }]
     h.port.top = 0
     h.port.sentinel = 0                                  // 哨兵进预取区
     h.fetched.length = 0
-    h.session.requestJump('src', 2)
+    h.session.requestJump(2)
     await new Promise((r) => setTimeout(r, 0))
     expect(h.fetched).toEqual([2])
-    h.session.afterRender('src')
+    h.session.afterRender()
     await new Promise((r) => setTimeout(r, 0))
     expect(h.fetched).toEqual([2])                       // 回归：失败章等用户重试，预取不得自拉
   })
@@ -680,7 +747,7 @@ describe('ReaderSession 错误清除与重试', () => {
       fetchShelf: async () => [], saveProgress: () => {}, saveTotalChapters: () => {}, afterFrames: (cb) => cb(),
     }, port)
     await session.open('src', 'b')
-    await session.load('src', 1)
+    await session.load(1)
     expect(session.state.error?.message).toContain('抖一下')
     session.retry()
     await new Promise((r) => setTimeout(r, 0))
@@ -731,8 +798,8 @@ describe('ReaderSession 锚点跳转（待定位目标 = 章号 + 锚点 + 节�
     h.port.targetOffs.set('a1', 400)
     h.port.targetOffs.set('a2', 800)
 
-    h.session.requestJump('src', 0, 'a1')
-    h.session.afterRender('src')
+    h.session.requestJump(0, 'a1')
+    h.session.afterRender()
     expect(h.port.top).toBe(400)                          // 锚点落在视口顶（不是章首 0）
     expect(h.saves).toHaveLength(2)                       // 意图即时落 + 落位后真实比例
     expect(h.saves[0]).toEqual([0, 0])
@@ -740,8 +807,8 @@ describe('ReaderSession 锚点跳转（待定位目标 = 章号 + 锚点 + 节�
     expect(pick(h.saves, 1)[1]).toBeCloseTo(400 / 3000)   // 不钉裸浮点字面量（同文件邻近用例都是 toBeCloseTo）
 
     h.port.targetOffs.set('a2', 800)                      // a2 在绝对 1200（此刻视口在 400）
-    h.session.requestJump('src', 0, 'a2')
-    h.session.afterRender('src')
+    h.session.requestJump(0, 'a2')
+    h.session.afterRender()
     expect(h.port.top).toBe(1200)
     expect(h.saves[2]).toEqual([0, 0])
     expect(pick(h.saves, 3)[0]).toBe(0)
@@ -753,9 +820,9 @@ describe('ReaderSession 锚点跳转（待定位目标 = 章号 + 锚点 + 节�
     await h.session.open('src', 'https://s.com/book/1')
     h.port.anchors = [{ index: 0, start: 0, height: 1000 }, { index: 1, start: 1000, height: 1000 }]
     h.port.chapterOff = 1200                              // 目标章块在视口下 1200px
-    h.session.requestJump('src', 1)
+    h.session.requestJump(1)
     expect(h.saves).toEqual([[1, 0]])                     // 选中即落盘（章号意图）
-    h.session.afterRender('src')
+    h.session.afterRender()
     expect(h.port.top).toBe(1200)
     expect(h.saves[1]).toEqual([1, 0.2])                  // (1200 - 1000) / 1000：落位后的真实比例
   })
@@ -763,10 +830,10 @@ describe('ReaderSession 锚点跳转（待定位目标 = 章号 + 锚点 + 节�
   it('锚点目标不在 DOM（未挂载/被裁）→ 不落位、不清，等下一轮', async () => {
     const h = makeSession()
     await h.session.open('src', 'https://s.com/book/1')
-    h.session.requestJump('src', 0, 'a9')                 // 该锚点没登记 = 节点不在 DOM
-    h.session.afterRender('src')
+    h.session.requestJump(0, 'a9')                 // 该锚点没登记 = 节点不在 DOM
+    h.session.afterRender()
     expect(h.port.tops).toEqual([])                       // 一次都没量到，就不许动视口
-    expect(h.session.state.pendingJump).toMatchObject({ index: 0, anchorId: 'a9' })
+    expect(h.session.pendingJump).toMatchObject({ index: 0, anchorId: 'a9' })
   })
 
   it('章块已挂载而锚点找不到（悬空/损坏的元数据）→ 退回章首并提交真实比例，不许让进度停摆', async () => {
@@ -777,16 +844,16 @@ describe('ReaderSession 锚点跳转（待定位目标 = 章号 + 锚点 + 节�
     await h.session.open('src', 'https://s.com/book/1')
     h.port.anchors = [{ index: 0, start: 0, height: 3000 }]
     h.port.chapterOff = 500                               // 章块在视口下 500px：章首量得到
-    h.session.requestJump('src', 0, 'a9')                 // 章已载、锚点不存在
-    h.session.afterRender('src')
+    h.session.requestJump(0, 'a9')                 // 章已载、锚点不存在
+    h.session.afterRender()
     expect(h.port.top).toBe(500)                          // 回归：悬空锚点必须退回章首，不许永久挂住
-    expect(h.session.state.pendingJump).toBeNull()
+    expect(h.session.pendingJump).toBeNull()
     expect(h.saves).toHaveLength(2)                       // 章号意图 + 章首的真实比例
     expect(pick(h.saves, 1)[0]).toBe(0)
     expect(pick(h.saves, 1)[1]).toBeCloseTo(500 / 3000)
 
     h.port.top = 900                                      // 挂住解除后，滚动读数照常落盘
-    h.session.handleViewportChange('src')
+    h.session.feedViewport()
     await new Promise((r) => setTimeout(r, 40))           // 防抖窗口（makeSession 缺省 20ms）
     expect(pick(last(h.saves), 0)).toBe(0)
     expect(pick(last(h.saves), 1)).toBeCloseTo(0.3)
@@ -797,22 +864,22 @@ describe('ReaderSession 锚点跳转（待定位目标 = 章号 + 锚点 + 节�
     const h = makeSession()
     await h.session.open('src', 'https://s.com/book/1')
     h.port.chapterOff = 700                               // 假 port 量得到——但这一章根本还没载
-    h.session.requestJump('src', 2, 'a9')
-    h.session.afterRender('src')
+    h.session.requestJump(2, 'a9')
+    h.session.afterRender()
     expect(h.port.tops).toEqual([])                       // 不许落位
-    expect(h.session.state.pendingJump).toMatchObject({ index: 2, anchorId: 'a9' })
+    expect(h.session.pendingJump).toMatchObject({ index: 2, anchorId: 'a9' })
   })
 
   it('越界章号：不写存档、不置待定位目标（越界下标会写出不存在的章号并永久挂住）', async () => {
     const h = makeSession({ debounceMs: 5000 })
     await h.session.open('src', 'https://s.com/book/1')
-    h.session.requestJump('src', 9)                       // 目录只有 3 章
-    h.session.requestJump('src', -1)
-    expect(h.session.state.pendingJump).toBeNull()
+    h.session.requestJump(9)                       // 目录只有 3 章
+    h.session.requestJump(-1)
+    expect(h.session.pendingJump).toBeNull()
     expect(h.saves).toEqual([])                           // 回归：越界章号不得写进存档
     expect(h.session.state.currentChapter).toBe(0)
     expect(h.session.state.chapters).toEqual([text(0), null, null])
-    h.session.afterRender('src')
+    h.session.afterRender()
     expect(h.port.tops).toEqual([])
   })
 
@@ -833,18 +900,18 @@ describe('ReaderSession 锚点跳转（待定位目标 = 章号 + 锚点 + 节�
     }, port, 5)
     await session.open('src', 'b')
     port.anchors = [{ index: 0, start: 0, height: 1000 }]
-    session.requestJump('src', 2, 'a9')
+    session.requestJump(2, 'a9')
     expect(port.tops).toEqual([])
-    session.handleViewportChange('src')                   // 旧位置的读数
+    session.feedViewport()                   // 旧位置的读数
     expect(session.state.currentChapter).toBe(2)          // 回归：视口读数不得改回未更新位置
-    expect(session.state.pendingJump).toMatchObject({ index: 2, anchorId: 'a9' })
+    expect(session.pendingJump).toMatchObject({ index: 2, anchorId: 'a9' })
 
     port.targetOffs.set('a9', 250)
     d.resolve(text(2))                                    // 目标到货
     await new Promise((r) => setTimeout(r, 0))
-    session.afterRender('src')
+    session.afterRender()
     expect(port.top).toBe(250)
-    expect(session.state.pendingJump).toBeNull()
+    expect(session.pendingJump).toBeNull()
   })
 
   it('目标晚到但用户已点另一个目标：先到的那个一次都不许落位', async () => {
@@ -870,23 +937,23 @@ describe('ReaderSession 锚点跳转（待定位目标 = 章号 + 锚点 + 节�
     port.targetOffs.set('a1', 100)                        // 第一个目标登记着（若被落位就一定看得见）
     port.targetOffs.set('a2', 250)
 
-    session.requestJump('src', 1, 'a1')                   // 在途
-    session.requestJump('src', 2, 'a2')                   // 用户改了主意：在途被占 → 只置目标
-    expect(session.state.pendingJump).toMatchObject({ index: 2, anchorId: 'a2' })
+    session.requestJump(1, 'a1')                   // 在途
+    session.requestJump(2, 'a2')                   // 用户改了主意：在途被占 → 只置目标
+    expect(session.pendingJump).toMatchObject({ index: 2, anchorId: 'a2' })
 
     d1.resolve(text(1))                                   // 第一个目标晚到
     await new Promise((r) => setTimeout(r, 0))
     port.targetOffs.delete('a2')                          // 第 3 章还没挂载：锚点量不到
-    session.afterRender('src')
+    session.afterRender()
     expect(port.tops).toEqual([])                         // 迟到的是「上一个目标」：不许落位
-    expect(session.state.pendingJump).toMatchObject({ index: 2 })
+    expect(session.pendingJump).toMatchObject({ index: 2 })
 
     d2.resolve(text(2))
     await new Promise((r) => setTimeout(r, 0))
     port.targetOffs.set('a2', 250)                        // 目标挂载了
-    session.afterRender('src')
+    session.afterRender()
     expect(port.top).toBe(250)                            // 只认最后点的那个目标
-    expect(session.state.pendingJump).toBeNull()
+    expect(session.pendingJump).toBeNull()
   })
 
   it('跳转失败：位置退回真实视口，待定位目标（含锚点）一并撤销', async () => {
@@ -906,11 +973,11 @@ describe('ReaderSession 锚点跳转（待定位目标 = 章号 + 锚点 + 节�
     await session.open('src', 'b')
     port.anchors = [{ index: 0, start: 0, height: 3000 }]
     port.top = 0
-    session.requestJump('src', 3, 'a9')
+    session.requestJump(3, 'a9')
     await new Promise((r) => setTimeout(r, 0))
     expect(saves).toEqual([[3, 0], [0, 0]])               // 意图落盘 → 失败后纠正回真实视口
     expect(session.state.currentChapter).toBe(0)
-    expect(session.state.pendingJump).toBeNull()
+    expect(session.pendingJump).toBeNull()
     expect(session.state.error?.message).toContain('第 3 章拉取失败')
   })
 })
@@ -984,7 +1051,7 @@ describe('ReaderSession 代际（卸载/换书后的迟到续作）', () => {
     releaseShelf()
     await opening
     fetched.length = 0
-    void session.load('src', 1)
+    void session.load(1)
     await new Promise((r) => setTimeout(r, 0))
     expect(fetched).toEqual([1])                         // 回归：dispose 后不得让 RESTORE_SLOT 一直占槽
   })
@@ -1012,7 +1079,7 @@ describe('连续阅读的已载窗口上限（裁章补偿 + 回溯补载）', (
       session.state.chapters.forEach((c, i) => { if (c !== null) mounted.push(i) })
       const base = mounted[0] ?? 0
       port.anchors = mounted.map((i) => ({ index: i, start: (i - base) * (chapterHeight + gap), height: chapterHeight }))
-      session.afterRender('src')
+      session.afterRender()
     }
     return { port, session, fetched, render }
   }
@@ -1022,11 +1089,11 @@ describe('连续阅读的已载窗口上限（裁章补偿 + 回溯补载）', (
     await session.open('src', 'https://s.com/book/1')
     render()
     for (let i = 1; i <= 20; i++) {
-      await session.load('src', i)
+      await session.load(i)
       render()
       const a = must(port.anchors.find((x) => x.index === i), `第 ${i} 章的锚点`)
       port.top = a.start + 300
-      session.handleViewportChange('src')
+      session.feedViewport()
       render()
     }
     const kept = session.state.chapters.flatMap((c, i) => (c === null ? [] : [i]))
@@ -1040,12 +1107,12 @@ describe('连续阅读的已载窗口上限（裁章补偿 + 回溯补载）', (
     await session.open('src', 'https://s.com/book/1')
     fetched.length = 0                                               // 只数这一轮补载
     render()
-    session.requestJump('src', 30)
+    session.requestJump(30)
     await new Promise((r) => setTimeout(r, 0))
     port.chapterOff = 0
     render()
     for (let i = 0; i < 40; i++) {
-      session.handleViewportChange('src')
+      session.feedViewport()
       await new Promise((r) => setTimeout(r, 0))
       render()
     }
@@ -1060,13 +1127,13 @@ describe('连续阅读的已载窗口上限（裁章补偿 + 回溯补载）', (
     await session.open('src', 'https://s.com/book/1')
     fetched.length = 0                                               // 只数这一轮补载
     render()
-    session.requestJump('src', 10)
+    session.requestJump(10)
     await new Promise((r) => setTimeout(r, 0))
     port.chapterOff = 0
     render()
     port.top = 0
     for (let i = 0; i < 10; i++) {
-      session.handleViewportChange('src')
+      session.feedViewport()
       await new Promise((r) => setTimeout(r, 0))
       render()
     }
@@ -1077,13 +1144,13 @@ describe('连续阅读的已载窗口上限（裁章补偿 + 回溯补载）', (
     const { port, session, fetched, render } = makeLongSession(3000, 120)   // 章高 3 屏 → 一次补载即够缓冲
     await session.open('src', 'https://s.com/book/1')
     render()
-    session.requestJump('src', 10)
+    session.requestJump(10)
     await new Promise((r) => setTimeout(r, 0))
     port.chapterOff = 0
     render()                                               // settleJump 落位（targetOffset 读 chapterOff）
     const a10 = must(port.anchors.find((x) => x.index === 10), '第 10 章的锚点')
     port.top = a10.start + 100
-    session.handleViewportChange('src')                    // 靠近窗口顶 → 触发补载第 9 章
+    session.feedViewport()                    // 靠近窗口顶 → 触发补载第 9 章
     await new Promise((r) => setTimeout(r, 0))
     expect(session.state.chapters[9]).not.toBeNull()
     expect(fetched).toContain(9)
@@ -1101,8 +1168,8 @@ describe('连续阅读的已载窗口上限（裁章补偿 + 回溯补载）', (
     const h = makeLongSession(1000)
     await h.session.open('src', 'https://s.com/book/1')
     h.render()
-    h.session.handleViewportChange('src')        // 真实视口读过一次（回溯判据的前提；视口在第 0 章首不补载）
-    h.session.requestJump('src', 30)             // 跳章 = 新 episode：额度 16 起算
+    h.session.feedViewport()        // 真实视口读过一次（回溯判据的前提；视口在第 0 章首不补载）
+    h.session.requestJump(30)             // 跳章 = 新 episode：额度 16 起算
     await new Promise((r) => setTimeout(r, 0))   // 第 30 章到货
     h.port.chapterOff = 0                        // settleJump 落位读数
     const lie: ChapterAnchor[] = [{ index: 25, start: 0, height: 1000 }]
@@ -1111,7 +1178,7 @@ describe('连续阅读的已载窗口上限（裁章补偿 + 回溯补载）', (
       ...h,
       storm: async (): Promise<void> => {
         h.port.anchors = lie
-        h.session.afterRender('src')
+        h.session.afterRender()
         await new Promise((r) => setTimeout(r, 0))
       },
     }
@@ -1131,7 +1198,7 @@ describe('连续阅读的已载窗口上限（裁章补偿 + 回溯补载）', (
     const { storm, session, fetched } = await makeStorm()
     for (let i = 0; i < 16; i++) await storm()
     expect(fetched).toHaveLength(16)
-    session.requestJump('src', 30)               // 跳章（跳回同一章也一样）= 新 episode，额度复位
+    session.requestJump(30)               // 跳章（跳回同一章也一样）= 新 episode，额度复位
     await storm()
     expect(fetched, '额度随跳章复位：同一发补载重新可用').toHaveLength(17)
   })
@@ -1140,13 +1207,13 @@ describe('连续阅读的已载窗口上限（裁章补偿 + 回溯补载）', (
     const h = makeSession()
     await h.session.open('src', 'https://s.com/book/1')
     h.port.anchors = [{ index: 0, start: 0, height: 1000 }]
-    h.session.afterRender('src')                           // 首轮渲染：锚点表对应已载 [0]
-    h.session.handleViewportChange('src')                  // 视口读过一次（回溯判据的前提）
-    await h.session.load('src', 1)                         // 已载表换成 [0,1]；视图 afterRender 尚未跑
+    h.session.afterRender()                           // 首轮渲染：锚点表对应已载 [0]
+    h.session.feedViewport()                  // 视口读过一次（回溯判据的前提）
+    await h.session.load(1)                         // 已载表换成 [0,1]；视图 afterRender 尚未跑
     // 模拟 React 已把第 1 章提交进 DOM，而滚动事件先于 afterRender 到达
     h.port.anchors = [{ index: 0, start: 0, height: 1000 }, { index: 1, start: 1000, height: 1000 }]
     h.port.top = 1300
-    h.session.handleViewportChange('src')
+    h.session.feedViewport()
     expect(h.session.state.currentChapter, '旧锚点表会把视口读成第 0 章尾').toBe(1)
     expect(h.saves.at(-1)).toEqual([1, 0.3])
   })
@@ -1319,7 +1386,7 @@ describe('ReaderSession 排版前采点与复位', () => {
     const h = makeSession()
     await h.session.open('src', 'https://s.com/book/1')
     h.port.anchors = [{ index: 0, start: 0, height: 3000 }]
-    h.session.afterRender('src')                           // 对齐 anchorsFrom === chaptersNow
+    h.session.afterRender()                           // 对齐 anchorsFrom === chaptersNow
     h.port.top = 100
     h.port.node = { index: 0, nodeId: 'p1', offsetWithinNode: 40 }
     h.port.targetOffs.set('p1', 250)

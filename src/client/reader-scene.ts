@@ -83,7 +83,7 @@ export class ReaderScene {
   /** 收场（Esc 与面板「关闭」钮同一条路）：内链打开的回到引用处——位置提交与返回栈都归会话 */
   close(): void {
     const { note } = this.state
-    if (note !== null) this.deps.session.closeSupplement(this.deps.sourceId, note.entry)
+    if (note !== null) this.deps.session.closeSupplement(note.entry)
     this.applySurface(closeAll(this.state.surface))
   }
 
@@ -105,7 +105,7 @@ export class ReaderScene {
    *  **目录点击是纯导航**（不押返回项）——只有正文内链才建立「返回原处」。 */
   openTarget(target: ReadingTarget): void {
     if (target.kind === 'chapter') {
-      this.deps.session.requestJump(this.deps.sourceId, target.index, target.anchorId)
+      this.deps.session.requestJump(target.index, target.anchorId)
       return
     }
     this.openNote(target, null)                          // 目录进来：没有引用处可回
@@ -114,7 +114,7 @@ export class ReaderScene {
   /** 正文内链：先由会话采点/消费返回项，再按目标分流。角色必须带过去——`backlink` 本身就是
    *  「回正文」，会话据此不压新栈；采点返回的那条随面板记下，关闭时只说「消费我打开面板时压的那条」。 */
   bodyLink(target: ReadingTarget, role: LinkRole): void {
-    const entry = this.deps.session.followLink(this.deps.sourceId, target, role)
+    const entry = this.deps.session.followLink(target, role)
     if (target.kind === 'supplement') this.openNote(target, entry)
   }
 
@@ -122,7 +122,7 @@ export class ReaderScene {
    *  的 `hide` 那一档）——返回项归这次跟随，会话自己采与消费，面板不许再消费一次。 */
   panelLink(target: ReadingTarget, role: LinkRole): void {
     this.applySurface(dismissSurface())
-    this.deps.session.followLink(this.deps.sourceId, target, role)
+    this.deps.session.followLink(target, role)
   }
 
   /** 离开阅读器回书架：这本书**不在架上**时先问一句要不要加入。在架与「问不到」都不问——

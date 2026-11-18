@@ -4,6 +4,7 @@ import type { SearchGroup, SearchJobSnapshot } from '../shared/wire.js'
 import { describeError } from './api.js'
 import { zhTranslate } from './copy/index.js'
 import type { Translate } from './copy/index.js'
+import { createJobChannel } from './job-channel.js'
 import { JOB_POLL_MS } from './util.js'
 import type { JobWatchDeps } from './deps.js'
 
@@ -13,23 +14,22 @@ const COALESCE_AFTER_GROUPS = 16
 const COALESCE_MS = 150
 
 /**
- * 浏览器半的「聚合搜索后台任务」接线：提交一轮 → 盯住它（SSE 推送优先，快照轮询兜底）→
- * 按游标累积增量分组。
+ * 浏览器半的「聚合搜索后台任务」接线：提交一轮 → 盯住它 → 按游标累积增量分组。
  *
  * 为什么不在这里跑批：中央呈现座位一次只渲染一个面板，切走即卸载组件——循环与结果握在
  * `useState` 里就两头丢（结果清零 + 站点白挨剩余请求）。
  * 批循环与结果持有都在 Node 半（`services/search-job.ts`），本模块只读：卸载只是停止「看」，
  * 重挂载从 `since=0` 重拉一遍就全回来了。
  *
- * 两条投递通道（官方口径：通知不 replay，可靠恢复必须有 baseline / cursor / 显式 query）：
- * - **快照轮询是地基**：`GET search/job-status?since=`，断开、连不上、无推送时全靠它；
- * - **SSE 是加速器**：`GET search/job-stream`，帧体就是同一份 `{ job }` 快照，合并代码只有一份。
- * 任一时刻只有一条通道在推进游标——两条同时在飞会把同一批命中累加两遍。
+ * **通道仪式不在这里**：timer、SSE 优先 + 快照轮询兜底、任一时刻只一条通道、撤通道连 timer 带
+ * 代际，都住 `client/job-channel.ts`。本模块只交这条轮次的语义——累积器（游标 `since` 与已收
+ * 分组）、身份判据（`job.id` 与本轮 id）、换轮恢复（`rebaseline`）、大轮次的 UI 合并。
  *
  * **轮次身份与游标不可分开**：
- * 服务端读面是单槽 + 数字游标，旧游标读回来的快照是**新轮按旧游标切的片**。回包先验
- * `job.id === acc.id`，不一致即换轮：丢旧累积、`since=0` 重读新轮基线、重开观察。裁决：
- * 旧观察者**跟随最近一轮**（服务端只保留一轮，跟随是唯一能收敛的语义）。
+ * 服务端读面是单槽 + 数字游标，旧游标读回来的快照是**新轮按旧游标切的片**。回包先过身份判据
+ * （`sameRound`：`job.id` 必须等于本轮 id），不一致即换轮：丢旧累积、`since=0` 重读新轮基线、
+ * 重开观察（`regain` 交回新 token，撤旧流与防迟到帧归通道）。裁决：旧观察者**跟随最近一轮**
+ * （服务端只保留一轮，跟随是唯一能收敛的语义）。
  */
 
 /** 本轮视图态（由服务端快照 + 本地累积得出；`running` 就是 UI 的「还在跑吗」判据） */
@@ -79,13 +79,12 @@ export function useSearchJob(
   },
 ): SearchJobView {
   const acc = useRef<Acc | null>(null)
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const publishTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingPublish = useRef<{ a: Acc; running: boolean } | null>(null)
-  const stream = useRef<AbortController | null>(null)
   const alive = useRef(true)
   /** 通道是否还活着：**每次现读**。卸载时翻面的那次写入落在 await 之后——编译器看不见闭包里的写入，
-   *  同一个流程里的第二次读会被当成常量收窄；这道守卫是运行时防线，读法必须留在调用边界上。 */
+   *  同一个流程里的第二次读会被当成常量收窄；这道守卫是运行时防线，读法必须留在调用边界上。
+   *  通道内部的在途读由通道代际作废，这里只守本模块自己的异步段（提交 / 挂载恢复 / 撤轮）。 */
   const aliveNow = (): boolean => alive.current
   /** 起跑序号：只有最后一次 `submit` 的回包能 `begin`/报错。只挡调用方的认领不够——
    *  前一次提交的迟到回包若照样 `begin`，观察者会被倒回旧轮，下一次快照身份闸才发现。 */
@@ -125,18 +124,13 @@ export function useSearchJob(
     }
   }
 
-  /** 快照 → 累积 → 视图态。推送帧与轮询回包共用，返回「本轮是否还在跑」。
-   *  身份闸：回调落地时本轮身份已变（服务端读面换了轮——别的观察者提交了新一轮），
-   *  这份快照是**新轮按本观察者旧游标切的片**——增量对新轮无意义，走换轮收尾，不许合并。 */
+  /** 快照 → 累积 → 视图态。走到这里的一定是本轮的回包（身份判据在通道那侧先过了一遍），
+   *  返回「本轮是否还在跑」。`null` = 服务端连一轮也没有：如实说，不伪装成空结果。 */
   const apply = (a: Acc, job: SearchJobSnapshot | null): boolean => {
     if (job === null) {
       setError(t('search.job.unavailable'))
       publish(a, false)
       return false
-    }
-    if (job.id !== a.id) {
-      void rebaseline(a)
-      return false                              // 旧轮到此为止：不再为它排轮询/续帧
     }
     a.keyword = job.keyword
     a.total = job.total
@@ -150,88 +144,73 @@ export function useSearchJob(
     return running
   }
 
-  /** 换轮收尾（身份切换 + 基线恢复 + 重新观察，一个职责一处裁决）：
-   *  从 `since=0` 显式重读服务端当前槽的完整基线，整体替换累积器。快照自带身份，
-   *  读回来的基线自洽（若重读间隙又换了一轮，下一次帧/轮询的身份闸会再次触发，同样收敛）。 */
-  const rebaseline = async (stale: Acc): Promise<void> => {
-    stream.current?.abort()                       // 旧连接属旧轮：先断，防它的迟到帧再进来
-    stream.current = null
+  /** 换上新一轮累积器并立刻上屏：`begin` 与 `rebaseline` 共用这一处写入次序。 */
+  const installRound = (a: Acc, running: boolean): void => {
+    acc.current = a
+    setError(null)
+    publish(a, running, true)
+  }
+
+  /** 换轮收尾（身份判据揭穿旧游标之后的唯一裁决）：从 `since=0` 显式重读服务端当前槽的完整
+   *  基线，整体替换累积器，并把新轮 token 交回通道让它重开观察。快照自带身份，读回来的基线
+   *  自洽（若重读间隙又换了一轮，下一次身份判据会再次触发，同样收敛）。
+   *  返回 `null` = 收手：已卸载 / 本页提交已落地（POST 说了算）/ 服务端连新一轮也没了 / 新轮已终态。 */
+  const rebaseline = async (stale: Acc): Promise<Acc | null> => {
     let job: SearchJobSnapshot | null
     try {
       job = (await deps.apiGet<{ job: SearchJobSnapshot | null }>(queries.searchJobStatus(0))).job
     } catch (e) {
-      if (acc.current !== stale || !aliveNow()) return
+      if (acc.current !== stale || !aliveNow()) return null
       setError(t('search.job.readFailed', { detail: describeError(e, t) }))
       publish(stale, false)
-      return
+      return null
     }
-    if (!aliveNow() || acc.current !== stale) return   // 已卸载，或本页提交已落地（POST 说了算）
+    if (!aliveNow() || acc.current !== stale) return null
     if (job === null) {                                    // 服务端连新一轮也没了：如实说，不伪装
       setError(t('search.job.unavailable'))
       publish(stale, false)
-      return
+      return null
     }
-    begin({ id: job.id, keyword: job.keyword, total: job.total, cancelled: job.cancelled,
-      since: job.next, groups: [...job.added] }, job.phase === 'running')
+    const next: Acc = { id: job.id, keyword: job.keyword, total: job.total, cancelled: job.cancelled,
+      since: job.next, groups: [...job.added] }
+    const running = job.phase === 'running'
+    installRound(next, running)
     if (job.error !== undefined) setError(job.error)      // 终态轮次的失败原因（若新轮已终态）
+    return running ? next : null                          // 已终态：结果已落，不必再开观察
   }
 
-  const armPoll = (): void => {
-    if (timer.current !== null) clearTimeout(timer.current)
-    timer.current = setTimeout(() => { void poll() }, deps.jobPollMs ?? JOB_POLL_MS)
-  }
-
-  /** 地基通道：读一次快照。读不到就收手（读不到还转圈只会刷屏）。 */
-  const poll = async (): Promise<void> => {
-    const a = acc.current
-    if (a === null || !aliveNow()) return
-    let job: SearchJobSnapshot | null
-    try {
-      job = (await deps.apiGet<{ job: SearchJobSnapshot | null }>(queries.searchJobStatus(a.since))).job
-    } catch (e) {
-      if (acc.current !== a || !aliveNow()) return
-      setError(t('search.job.readFailed', { detail: describeError(e, t) }))
-      publish(a, false)
-      return
-    }
-    if (acc.current !== a || !aliveNow()) return   // 陈旧回包：已被新一轮替换或已卸载
-    if (apply(a, job) && acc.current === a && aliveNow()) armPoll()
-  }
-
-  /** 盯住这一轮：先开 SSE；断开 / 连不上 / 提前结束而本轮未终态 → 回落轮询。 */
-  const watch = (a: Acc): void => {
-    const ctrl = new AbortController()
-    stream.current?.abort()
-    stream.current = ctrl
-    void (async (): Promise<void> => {
-      let running = true
-      /** 这一轮的结局由帧回调写回：编译器看不见闭包里的赋值，故经函数读，别让它当成常量 */
-      const stillRunning = (): boolean => running
-      try {
-        await deps.apiEventStream(queries.searchJobStream(a.since), (data): void => {
-          if (acc.current !== a || !aliveNow()) return
-          let job: SearchJobSnapshot | null
-          try {
-            job = (JSON.parse(data) as { job: SearchJobSnapshot | null }).job
-          } catch { return }                           // 坏帧不致命：下一帧或轮询兜底
-          running = apply(a, job)
-          if (!running) ctrl.abort()                   // 终态：自己关流，不留着占连接
-        }, ctrl.signal)
-      } catch { /* 连不上或断线：一律走下面的回落，不单独报错（轮询失败才会真的报错） */ }
-      if (acc.current !== a || !aliveNow()) return
-      if (stillRunning()) armPoll()
-    })()
-  }
+  /** 通道：timer / SSE 回落 / 撤通道 / 代际归 `job-channel.ts`；本模块只交四件业务面——
+   *  带游标的读面与订阅、身份判据、换轮恢复、读失败收手。spec 锚定首次渲染的闭包（与挂载恢复
+   *  同口径）：运行中的一轮不随重渲染换代，与既有观察通道行为一致。锚的是机械身份不是语言——
+   *  `t` 每次调用现读当前 locale，切语言后新生成的文案跟新语言；存量串冻在生成时语言
+   *  （政策见 `copy/index.tsx`）。 */
+  const [channel] = useState(() => createJobChannel<SearchJobSnapshot, Acc>(
+    {
+      read: async (a) => (await deps.apiGet<{ job: SearchJobSnapshot | null }>(queries.searchJobStatus(a.since))).job,
+      subscribe: (a, onFrame, signal) => deps.apiEventStream(queries.searchJobStream(a.since), onFrame, signal),
+      apply: (a, job) => apply(a, job),
+      sameRound: (a, job) => job.id === a.id,
+      regain: (a) => rebaseline(a),
+      onReadError: (a, e) => {                          // 读不到就收手（读不到还转圈只会刷屏）
+        if (acc.current !== a || !aliveNow()) return false
+        setError(t('search.job.readFailed', { detail: describeError(e, t) }))
+        publish(a, false)
+        return false
+      },
+    },
+    deps.jobPollMs ?? JOB_POLL_MS,
+  ))
 
   /** 起跑一轮的读取（提交成功后、挂载恢复时同一条路）。
    *  `running=false` 用于恢复一个已终态的轮次：结果就在手上，不必再开一条流。
    *  `watch=false` 只落快照、不开观察通道（浮层：它不展示恢复来的轮次）。 */
   const begin = (a: Acc, running = true, watchRun = running): void => {
-    acc.current = a
-    if (timer.current !== null) { clearTimeout(timer.current); timer.current = null }
-    setError(null)
-    publish(a, running, true)
-    if (watchRun) watch(a)
+    installRound(a, running)
+    if (watchRun) {
+      channel.start(a)
+    } else {
+      channel.stop()
+    }
   }
 
   const submit = (keyword: string): Promise<string | null> => {
@@ -268,13 +247,10 @@ export function useSearchJob(
     })()
     return () => {
       alive.current = false                            // 只停「看」，服务端那轮继续跑
-      if (timer.current !== null) clearTimeout(timer.current)
-      timer.current = null
+      channel.stop()
       if (publishTimer.current !== null) clearTimeout(publishTimer.current)
       publishTimer.current = null
       pendingPublish.current = null
-      stream.current?.abort()
-      stream.current = null
     }
   }, [])                                              // eslint-disable-line react-hooks/exhaustive-deps
 

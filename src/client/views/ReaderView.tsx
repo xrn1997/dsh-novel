@@ -13,16 +13,15 @@ import { navigate, prefsStore, setPref, useStore, useStoreValue } from '../store
 import { FONT_STEPS, LINE_HEIGHTS, MEASURES, PAPER_PRESETS } from '../prefs-ui.js'
 import { ReaderScene } from '../reader-scene.js'
 import { ReaderSession } from '../reader-session.js'
-import type { ReaderPort, ReaderRestoreTarget } from '../reader-session.js'
+import type { ReaderRestoreTarget } from '../reader-session.js'
+import { createReaderBinding } from '../reader-binding.js'
 import { nextChapterIndex } from '../reader-load.js'
-import { createReaderGeometry } from '../reader-geometry.js'
-import { findScrollport, portViewTop } from '../scrollport.js'
 import { addShelfSeat } from '../shelf-action.js'
 import { pauseListening, resumeListening, startListening, takeReaderRelocation, ttsPlayer } from '../tts/player.js'
-import { readingPositionAt, readingProbeNow, listenParagraphElement, setReadingProbe } from '../tts/reading-position.js'
+import { readingProbeNow, listenParagraphElement } from '../tts/reading-position.js'
 import { enterReader } from '../tts/reader-presence.js'
 import { TtsBar } from '../tts/TtsBar.js'
-import { isPlayBusy } from '../tts/mini-parts.js'
+import { isPlayBusy } from '../tts/listen-readout.js'
 import { ttsErrorMessage } from '../tts/tts-error.js'
 import { paperInk, paperLiveInk, centerInScroller, stripLeadingTitle } from '../util.js'
 import { ErrorBanner, WarningList } from './bits.js'
@@ -284,11 +283,13 @@ const ChapterShell = memo(function ChapterShell(props: {
 })
 
 /**
- * 阅读器：连续滚动流（章章首尾相接）。两块状态各有主人——阅读时序归「阅读会话」
- * （reader-session.ts），浮层/注释载荷/Esc/离开一问/入架写入归「阅读场景」（reader-scene.ts）；
- * 本视图只做三件事：渲染这两份状态、把 DOM 测量实现成 ReaderPort、把 scroll/resize 喂给会话。
- * 滚动容器由 findScrollport 向上探测（现即 .novel-main 自己），滚动、进度、回跳一律按探测
- * 结果算；只渲染已载章节，预取自限。
+ * 阅读器：连续滚动流（章章首尾相接）。三块各有主人——阅读时序归「阅读会话」
+ * （reader-session.ts），浮层/注释载荷/Esc/离开一问/入架写入归「阅读场景」（reader-scene.ts），
+ * DOM 侧（渲染后拍点的触发判据、帧泵、滚动容器刷新、scroll/resize/ResizeObserver 装摘、
+ * 阅读探针、拍点后回调）归「阅读器 DOM 绑定」（reader-binding.ts）。
+ * 本视图只做三件事：渲染这三份状态、交出元素来源（refs）、摆纯 UI 策略；每次渲染后只调
+ * 一个**无条件的门**（`binding.rendered`），不再自己枚举「哪些状态变化要拍点」的依赖数组。
+ * 只渲染已载章节，预取自限。
  *
  * 图文（EPUB）三个组件只做呈现、只**接线**：正文 ChapterBody、目录树 ReaderNavigation、
  * 脚注/附录 ReaderNotes——去哪一章哪个锚点、进度何时落盘仍是会话的事，浮层开合与返回句柄
@@ -315,7 +316,6 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   const listenParagraphIndex = useStoreValue(ttsPlayer, (s) => (s.active ? s.paragraphIndex : -1))
   const bodyRef = useRef<HTMLDivElement | null>(null)                  // 正文层：锚点测量基准
   const sentinelRef = useRef<HTMLDivElement | null>(null)              // 未载边界哨兵：进预取区 → 加载下一章
-  const portRef = useRef<HTMLElement | null>(null)                     // 真实滚动容器缓存（内容变化时刷新）
   const chapterRefs = useRef<Array<HTMLDivElement | null>>([])
   /** 「回阅读器」取走的重定位现场（按书记）：模块级现场是**一次性的**，但本 mount 的 effect
    *  可能连跑两趟（StrictMode 的 mount → cleanup → mount），第一趟取走的现场必须留给第二趟，
@@ -323,16 +323,21 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   const relocationRef = useRef<{ sourceId: string; bookKey: string; target: ReaderRestoreTarget | null } | null>(null)
   /** 「定位到正在念的段」在目标章还没载入时留下的落点：章一到货就居中，别停在章首。 */
   const pendingLocateRef = useRef<{ chapterIndex: number } | null>(null)
+  /** 顶条（sticky）：它的高度就是滚动视口顶的固定遮挡。阅读位置（恢复 / 跳转 / 读数 / 探针）
+   *  一律按「条下方第一行」算——按裸 scrollTop 算，听书恢复的段首会正好藏在条后。 */
+  const barRef = useRef<HTMLDivElement | null>(null)
+  const topInset = useCallback((): number => barRef.current?.getBoundingClientRect().height ?? 0, [])
 
-  /** DOM 测量口：会话只读不碰 DOM——几何语义全在 `reader-geometry`，视图只交 ref 读数。 */
-  const readerPort = useMemo<ReaderPort>(() => createReaderGeometry({
-    port: () => portRef.current,
-    sentinel: () => sentinelRef.current,
-    chapters: () => chapterRefs.current,
-  }), [])
-
-  /** 刷新滚动容器缓存（内容变化/视口变化时） */
-  const refreshPort = useCallback((): void => { portRef.current = findScrollport(bodyRef.current) }, [])
+  /** 阅读器的 DOM 侧绑定：拍点触发判据、帧泵、端口刷新、监听装摘、探针与拍点后回调的次序
+   *  全归它（`client/reader-binding.ts`）。视图只交元素来源，不再枚举依赖数组。 */
+  const binding = useMemo(() => createReaderBinding({
+    source: {
+      body: () => bodyRef.current,
+      sentinel: () => sentinelRef.current,
+      chapters: () => chapterRefs.current,
+    },
+    topInset,
+  }), [topInset])
 
   /** 会话依赖束：网络 + 帧调度（rAF 双帧 = 等布局落定再测量；视口喂入的合帧状态机住会话，
    *  帧调度与滚动容器重取经 `viewport` 注入）；网络走注入 deps。
@@ -356,15 +361,13 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
         bodies.shelfPatch({ totalChapters: total })).catch(() => undefined)
     },
     afterFrames: (cb) => { requestAnimationFrame(() => requestAnimationFrame(cb)) },
-    // 视口喂入的帧调度缝：视图只给 rAF 与滚动容器重取，合帧/布局标记合并/帧取消都归会话
-    viewport: {
-      scheduleFrame: (cb) => requestAnimationFrame(cb),
-      cancelFrame: (h) => cancelAnimationFrame(h),
-      refreshPort,
-    },
+    // 顶条遮挡：位置读数与恢复落位吃同一个值（见 ReaderSessionDeps.topInset）
+    topInset,
+    // 视口喂入的帧调度缝由绑定给（合帧/布局标记合并/帧取消仍归会话；rAF 与端口刷新住绑定）
+    viewport: binding.viewport,
     // bookKey 必须留在这格：saveProgress 与 saveTotalChapters 两枚闭包捕的就是它，摘掉会让进度
     // 一路写给第一本书的地址。sourceId 与 title 不在本工厂里被读——换源走下面那条 open() 的 effect。
-  }, readerPort, deps.saveDebounceMs, t), [readerPort, deps, bookKey, t, refreshPort])
+  }, binding.port, deps.saveDebounceMs, t), [binding, deps, bookKey, t, topInset])
 
   // 第三参 = getServerSnapshot：renderToString（smoke/SSR）必需，缺了直接抛
   const st = useSyncExternalStore(session.subscribe, () => session.state, () => session.state)
@@ -401,13 +404,6 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     }
     startListeningAt(at?.chapterIndex ?? currentChapter, at?.paragraphIndex ?? 0)
   }
-  /** 阅读探针：挂载注册、卸载注销。闭包只持 ref，量的是**调用那一刻**的 DOM（缓存读数会让
-   *  「从阅读位置起播」用上一次打开书时的位置）。 */
-  useEffect(() => {
-    setReadingProbe(() => readingPositionAt(chapterRefs.current, portViewTop(portRef.current)))
-    return () => setReadingProbe(null)
-  }, [])
-
   /** 「定位到正在念的段」：显式的一次滚动（用户按了才滚），只滚阅读滚动容器自己。
    *  跟读高亮本身不滚动——自动跟随会经会话的滚动防抖改写阅读进度（`ADR-0071`）；
    *  这一颗钮是用户主动导航，与点目录同性质，落进度是它自己的语义。 */
@@ -419,13 +415,13 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     // 落进度是这次用户导航自己的语义；章到货后的居中由渲染后拍点消费这次延迟定位。
     if (block === null || block === undefined) {
       pendingLocateRef.current = { chapterIndex: live.chapterIndex }
-      session.requestJump(sourceId, live.chapterIndex, null)
+      session.requestJump(live.chapterIndex, null)
       return
     }
-    const port = portRef.current
+    const port = binding.scrollport()
     if (port === null) return
     centerInScroller(port, listenParagraphElement(block, live.paragraphIndex) ?? block)
-  }, [bookKey, session, sourceId])
+  }, [binding, bookKey, session])
 
   /** 阅读器子树在场信号：迷你条的可见性判据（挂载记一笔、卸载撤一笔）。不看路由——
    *  宿主切走面板时路由仍停在 `reader`，而面板子树已被卸载（`ADR-0022`），那正是迷你条
@@ -477,12 +473,17 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     document.addEventListener('keydown', onKey)
     return () => { document.removeEventListener('keydown', onKey); layer.release() }
   }, [scene, sceneState.escOwner])
-  /** 目录高亮：只在抽屉开着时取（一次 DOM 测量，不在滚动路径上）；只在**跨章**与换书时重算
-   *  （`currentChapter` 变才醒）——同章内滚动是每帧的量，不值得为一条 aria-current 按帧唤醒。 */
-  useEffect(() => {
+  /** 目录高亮取一次读数（一次 DOM 测量，不在滚动路径上）：只在抽屉开着时调。
+   *  调用点有两处——抽屉/目录/跨章变化时直接调；**章块逐章到货**时由拍点后回调调（见下面的
+   *  `afterBeat`）：它必须排在绑定测量与 `settleJump` 落位之后，否则量到的是落位前的几何。
+   *  同章内滚动只是每帧的量，它改的是滚动位置不是这份 DOM，不值得为一条 aria-current 按帧唤醒。 */
+  const recomputeNavActive = useCallback((): void => {
     if (sceneState.surface !== 'toc') return
     setNavActive(session.activeNavId())
-  }, [sceneState.surface, currentChapter, navigation, session])
+  }, [sceneState.surface, session])
+  useEffect(() => {
+    recomputeNavActive()
+  }, [recomputeNavActive, currentChapter, navigation])
   /** 打开抽屉即把当前项摆到视野中间——**只滚抽屉自己**，不借 `scrollIntoView`（它连可滚祖先一起
    *  滚，会改写主阅读位置）。口径与被否决方案见 util.ts 的 `centerInScroller`。 */
   useEffect(() => {
@@ -529,7 +530,6 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   // progress 当恢复目标，走同一条不写进度的恢复路径；第二次开书自然回存档。
   useEffect(() => {
     chapterRefs.current = []
-    refreshPort()
     const held = relocationRef.current
     const target = held !== null && held.sourceId === sourceId && held.bookKey === bookKey
       ? held.target
@@ -537,15 +537,19 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     relocationRef.current = { sourceId, bookKey, target }
     void session.open(sourceId, bookKey, target)
     return () => session.dispose()
-  }, [session, sourceId, bookKey, refreshPort])
+  }, [session, sourceId, bookKey])
 
-  // 已载表 / 待跳目标变化：刷新滚动容器后交会话一个渲染后拍点——锚点、落位、预取的次序归会话。
-  // 「定位到正在念的段」等章到货的那一半在**同一拍**里消费：先让会话的 `settleJump` 落位，
-  // 再居中命中段。拆成两条 effect 就等于用声明序承载语义——`settleJump` 会把刚居中的视口
-  // 拉回章首（目标是章块顶），而它在 DOM 上报后总是晚跑一步。
+  /** DOM 侧接线：装监听、注册探针、首帧喂视口、挂载即拍第一帧；卸载全摘。
+   *  装摘归绑定（`client/reader-binding.ts`），视图不再自己按 ref 拼 scroll/resize/ResizeObserver。 */
   useEffect(() => {
-    refreshPort()
-    session.afterRender(sourceId)
+    binding.mount(session)
+    return () => { binding.unmount() }
+  }, [binding, session])
+
+  /** 「定位到正在念的段」在目标章到货后的那一半：作为**拍点后回调**交给绑定——它在会话的
+   *  `afterRender`（含 `settleJump` 落位）之后、同一次测量里跑。次序不靠两条 effect 的声明序：
+   *  settleJump 会把视口拉回章块顶，先居中再落位等于白中。 */
+  const consumePendingLocate = (): void => {
     const pending = pendingLocateRef.current
     if (pending === null) return
     const live = ttsPlayer.get()
@@ -563,36 +567,23 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     const block = chapterRefs.current[pending.chapterIndex]
     if (block === null || block === undefined) return   // 正文还在途：这次定位继续挂着，下次拍点再消费
     pendingLocateRef.current = null
-    const port = portRef.current
+    const port = binding.scrollport()
     if (port === null) return                            // 没有可滚容器：这次定位无处可落，只此一次
     centerInScroller(port, listenParagraphElement(block, live.paragraphIndex) ?? block)
-    // listenChapter 进依赖只为让「听书已换章」立即可作废；落位与瞄准的次序语义不靠 effect 顺序
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chapters, st.pendingJump, listenChapter])
+  }
 
-  // 视口事件的监听安装：capture 阶段收「任意容器」的 scroll（scroll 不冒泡，但捕获阶段会经过
-  // document——滚动容器（.novel-main 或更外层）的滚动因此都收得到）。合帧、布局标记合并与帧调度
-  // 归会话的 `feedViewport`；这里只装监听、换源时重装并再补一次初始喂入（sourceId 是重装版本键，
-  // 与 open() 的换书键同一把），挂起帧由 `session.dispose()` 取消。
+  /** 拍点后回调：次序契约只有一条——它在绑定测量（含 `afterRender` 的落位）之后跑。
+   *  两个消费者共用它：延迟定位居中，与目录高亮重算（章块到货后 DOM 才可测）。 */
+  const afterBeat = (): void => {
+    consumePendingLocate()
+    recomputeNavActive()
+  }
+  /** 每次渲染后的**唯一一道门**（无条件调用，没有依赖数组可忘）：这一帧要不要测量由绑定按会话的
+   *  DOM 版本裁——「只改了 currentChapter」这类不影响布局的渲染自然不拍，新加一条影响布局的来源
+   *  也不用回来改视图。 */
   useEffect(() => {
-    const onScroll = (): void => session.feedViewport(false)
-    const onResize = (): void => session.feedViewport(true)
-    document.addEventListener('scroll', onScroll, { capture: true, passive: true })
-    window.addEventListener('resize', onResize)
-    // 内容高度变化不经过 window resize；观察到就按「布局变了」并入会话的同一条合帧
-    const el = bodyRef.current
-    let ro: ResizeObserver | null = null
-    if (el !== null && typeof ResizeObserver !== 'undefined') {
-      ro = new ResizeObserver(() => { session.feedViewport(true) })
-      ro.observe(el)
-    }
-    session.feedViewport()
-    return () => {
-      document.removeEventListener('scroll', onScroll, { capture: true })
-      window.removeEventListener('resize', onResize)
-      ro?.disconnect()
-    }
-  }, [session, sourceId])
+    binding.rendered(st.domRevision, afterBeat)
+  })
 
   /** 字号/行距/栏宽变化 → 排版复位：触发仍归视图（只有提交后的 effect 知道新排版已落定），
    *  采点时刻（`setPref` 同步栈）、复位算式与 miss/重采分支归会话的 `applyTypesetRelocation`。
@@ -625,7 +616,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
           布局与配色归 .novel-rdr-bar（条底由 --novel-paper 派生；darkController 那一档在
           .novel-rdr-bar.novel-dark 里让回宿主暗底），行内只留 sticky 定位与 z（CTRL_Z 常量，
           ctrl-z 守卫断言）。图标一律 aria-hidden：它们是装饰，可访问名由文案给。 */}
-      <div className={prefs.darkController ? 'novel-dark novel-rdr-bar' : 'novel-rdr-bar'}
+      <div ref={barRef} className={prefs.darkController ? 'novel-dark novel-rdr-bar' : 'novel-rdr-bar'}
         style={{ position: 'sticky', top: 0, zIndex: CTRL_Z.toolbar }}>
         <button className="novel-rdr-ctl" onClick={() => { scene.exitToShelf() }}>
           <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M10 3 5 8l5 5" /></svg>{t('reader.shelf')}
@@ -633,7 +624,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
         {/* 正文内链的返回入口：**一次返回一条**（重复跟随链接才有多层）。栈在会话里、只活在窗口内；
             没押返回项时不渲染——不给一个点了没反应的按钮。位置在「书架」之后，左侧主次分明。 */}
         {returnDepth > 0 && (
-          <button className="novel-rdr-ctl" onClick={() => session.goBack(sourceId)}
+          <button className="novel-rdr-ctl" onClick={() => session.goBack()}
             title={t('reader.backToOriginTitle')}>{t('reader.backToOrigin')}</button>
         )}
         <span className="novel-rdr-sep" aria-hidden="true" />

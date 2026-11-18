@@ -4,6 +4,7 @@ import {
   contentOriginTop, portScrollHeight, portScrollTop, portViewHeight, portViewTop, setPortScrollTop,
 } from './scrollport.js'
 import { findNovelNode, novelNodes, NOVEL_NODE_ATTR } from './util.js'
+import { clampTopInset, crossedIndex } from './viewport-top.js'
 
 /**
  * 阅读器几何：把 DOM 测量实现成一个 `ReaderPort`，视图只提供最小元素源。
@@ -22,6 +23,10 @@ export interface ReaderGeometrySource {
   sentinel(): HTMLElement | null
   /** 已渲染章块（按章号；缺席 = 该章还没渲染） */
   chapters(): ReadonlyArray<HTMLElement | null>
+  /** 视口顶的固定遮挡高度（阅读器顶条，px）：`currentNode` 按**看得见的顶**取节点。
+   *  缺省 0（无顶条 / 测试）。注意它只影响「视口顶是哪个节点」这一问：`targetOffset`
+   *  给的是相对视口顶的屏幕偏移，让位由会话统一做（两处各减一次就等于减两次）。 */
+  topInset?(): number
 }
 
 export function createReaderGeometry(source: ReaderGeometrySource): ReaderPort {
@@ -74,26 +79,27 @@ export function createReaderGeometry(source: ReaderGeometrySource): ReaderPort {
         return target === undefined ? null : target.getBoundingClientRect().top - viewTop
       })
     },
-    currentNode: () => currentNodeOf(source.chapters(), portViewTop(source.port())),
+    currentNode: () => currentNodeOf(
+      source.chapters(), portViewTop(source.port()) + clampTopInset(source.topInset?.()),
+    ),
   }
 }
 
-/** 视口顶所在的正文节点：取「视口顶已越过」的节点里最靠下的那个（视口顶就在它内部或它之后）；
- *  一个都没越过（视口还在第一个节点之上）→ 取文档顺序里第一个。没有可定位节点（文字章）→ null。 */
+/** 视口顶所在的正文节点：判据吃 `client/viewport-top.ts` 的 `crossedIndex`（与进度锚点、
+ *  听书探针同一条规则：最后一条已越过视口顶的 / 无命中回落文档序第一个 / 跳过空洞），
+ *  本函数只负责把**节点矩形**这条数据路喂进去。没有可定位节点（文字章）→ null。 */
 export function currentNodeOf(
   blocks: ReadonlyArray<HTMLElement | null>, viewTop: number,
 ): VisibleNode | null {
-  let best: { index: number; nodeId: string; top: number } | undefined
-  let first: { index: number; nodeId: string; top: number } | undefined
+  const nodes: Array<{ index: number; nodeId: string; top: number }> = []
   blocks.forEach((block, index) => {
     for (const el of novelNodes(block)) {
       const nodeId = el.getAttribute('data-novel-node')
       if (nodeId === null) continue
-      const cand = { index, nodeId, top: el.getBoundingClientRect().top - viewTop }
-      if (first === undefined) first = cand
-      if (cand.top <= 0 && (best === undefined || cand.top > best.top)) best = cand
+      nodes.push({ index, nodeId, top: el.getBoundingClientRect().top - viewTop })
     }
   })
-  const hit = best ?? first
+  const at = crossedIndex(nodes, (cand) => cand.top)
+  const hit = at === -1 ? undefined : nodes[at]
   return hit === undefined ? null : { index: hit.index, nodeId: hit.nodeId, offsetWithinNode: -hit.top }
 }

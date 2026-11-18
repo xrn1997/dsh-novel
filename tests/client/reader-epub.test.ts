@@ -185,10 +185,10 @@ describe('目录高亮：当前章内最近的已登记导航锚点', () => {
     const h = makeHarness()
     await h.session.open('local:b1', 'local:b1')
     h.port.targetOffs.set('a1', -10)                       // 第 1 章的锚点还在表里（旧章被裁前）
-    h.session.requestJump('local:b1', 1)                   // 视口落到第 2 章
+    h.session.requestJump(1)                   // 视口落到第 2 章
     await tick()
     h.port.chapterOff = -500
-    h.session.afterRender('local:b1')
+    h.session.afterRender()
     expect(h.session.activeNavId()).toBe('n3')             // 第 2 章自己的章首条目（不是第 1 章的 n1）
   })
 })
@@ -200,22 +200,22 @@ describe('正文内链的返回栈（窗口内状态，绝不落盘）', () => {
     h.port.anchors = [{ index: 0, start: 0, height: 2000 }]
     h.port.node = { index: 0, nodeId: 'p7', offsetWithinNode: 64 }   // 视口顶在 p7 内 64px 处
 
-    h.session.followLink('local:b1', { kind: 'chapter', index: 2, anchorId: null }, 'normal')
+    h.session.followLink({ kind: 'chapter', index: 2, anchorId: null }, 'normal')
     expect(h.session.state.returnDepth).toBe(1)
-    expect(h.session.state.pendingJump).toMatchObject({ index: 2, anchorId: null })
+    expect(h.session.pendingJump).toMatchObject({ index: 2, anchorId: null })
     h.port.chapterOff = 500
     await tick()                                                     // 第 3 章到货（窗口随之裁到视口章）
-    h.session.afterRender('local:b1')
+    h.session.afterRender()
     expect(h.port.top).toBe(500)
     expect(h.session.state.chapters[0]).toBeNull()                   // 与视口章不相邻：来源章被裁掉
 
-    h.session.goBack('local:b1')
+    h.session.goBack()
     expect(h.session.state.returnDepth).toBe(0)
-    expect(h.session.state.pendingJump).toMatchObject({ index: 0, anchorId: 'p7', offsetWithinNode: 64 })
+    expect(h.session.pendingJump).toMatchObject({ index: 0, anchorId: 'p7', offsetWithinNode: 64 })
     await tick()                                                     // 同一单在途加载路径补回来源章
     expect(h.session.state.chapters[0]).toEqual(rich0)
     h.port.targetOffs.set('p7', 300)                                 // 节点此刻在视口下 300px
-    h.session.afterRender('local:b1')
+    h.session.afterRender()
     expect(h.port.top).toBe(500 + 300 + 64)                          // 回到「节点顶在视口顶上方 64px」
     expect(pick(last(h.saves), 0)).toBe(0)                              // 位置提交仍归会话
     expect(pick(last(h.saves), 1)).toBeCloseTo((500 + 300 + 64) / 2000)
@@ -225,13 +225,13 @@ describe('正文内链的返回栈（窗口内状态，绝不落盘）', () => {
     const h = makeHarness()
     await h.session.open('local:b1', 'local:b1')
     h.port.node = { index: 0, nodeId: 'p7', offsetWithinNode: 0 }
-    h.session.followLink('local:b1', { kind: 'chapter', index: 1, anchorId: null }, 'normal')
+    h.session.followLink({ kind: 'chapter', index: 1, anchorId: null }, 'normal')
     expect(h.session.state.returnDepth).toBe(1)
 
     h.port.node = { index: 1, nodeId: 'q1', offsetWithinNode: 8 }
-    h.session.followLink('local:b1', { kind: 'chapter', index: 0, anchorId: 'a1' }, 'backlink')
+    h.session.followLink({ kind: 'chapter', index: 0, anchorId: 'a1' }, 'backlink')
     expect(h.session.state.returnDepth).toBe(0)                      // 回归：返回动作不得再压一条
-    expect(h.session.state.pendingJump).toMatchObject({ index: 0, anchorId: 'a1' })
+    expect(h.session.pendingJump).toMatchObject({ index: 0, anchorId: 'a1' })
   })
 
   it('越界目标：不采点、不导航、不落盘（followLink 返回 null，返回栈原样）', async () => {
@@ -239,10 +239,10 @@ describe('正文内链的返回栈（窗口内状态，绝不落盘）', () => {
     const h = makeHarness()
     await h.session.open('local:b1', 'local:b1')
     h.port.node = { index: 0, nodeId: 'p7', offsetWithinNode: 64 }
-    const entry = h.session.followLink('local:b1', { kind: 'chapter', index: 9, anchorId: null }, 'normal')
+    const entry = h.session.followLink({ kind: 'chapter', index: 9, anchorId: null }, 'normal')
     expect(entry).toBeNull()
     expect(h.session.state.returnDepth).toBe(0)
-    expect(h.session.state.pendingJump).toBeNull()
+    expect(h.session.pendingJump).toBeNull()
     expect(h.saves).toEqual([])
     expect(h.port.tops).toEqual([])
   })
@@ -250,10 +250,10 @@ describe('正文内链的返回栈（窗口内状态，绝不落盘）', () => {
   it('无返回项可弹时 goBack 是空操作（不造幽灵落位、不写进度）', async () => {
     const h = makeHarness()
     await h.session.open('local:b1', 'local:b1')
-    h.session.goBack('local:b1')
+    h.session.goBack()
     expect(h.port.tops).toEqual([])
     expect(h.saves).toEqual([])
-    expect(h.session.state.pendingJump).toBeNull()
+    expect(h.session.pendingJump).toBeNull()
   })
 
   it('面板里再点主序列链接：同一处不重复压返回项（返回栈不因同一次落点长两层）', async () => {
@@ -262,10 +262,10 @@ describe('正文内链的返回栈（窗口内状态，绝不落盘）', () => {
     const h = makeHarness()
     await h.session.open('local:b1', 'local:b1')
     h.port.node = { index: 0, nodeId: 'p7', offsetWithinNode: 64 }
-    h.session.followLink('local:b1', { kind: 'supplement', documentId: 'd9', anchorId: 'f1' }, 'noteref')
+    h.session.followLink({ kind: 'supplement', documentId: 'd9', anchorId: 'f1' }, 'noteref')
     expect(h.session.state.returnDepth).toBe(1)
 
-    h.session.followLink('local:b1', { kind: 'chapter', index: 1, anchorId: null }, 'normal')   // 面板里点到主序列
+    h.session.followLink({ kind: 'chapter', index: 1, anchorId: null }, 'normal')   // 面板里点到主序列
     expect(h.session.state.returnDepth).toBe(1)                       // 回归：同一处只许一条（第二份抄本多一步返回）
   })
 
@@ -277,23 +277,23 @@ describe('正文内链的返回栈（窗口内状态，绝不落盘）', () => {
     await h.session.open('local:b1', 'local:b1')
     h.port.anchors = [{ index: 0, start: 0, height: 2000 }]
     h.port.node = { index: 0, nodeId: 'p7', offsetWithinNode: 64 }
-    h.session.followLink('local:b1', { kind: 'chapter', index: 2, anchorId: null }, 'normal')     // ① 押下 E1
+    h.session.followLink({ kind: 'chapter', index: 2, anchorId: null }, 'normal')     // ① 押下 E1
     await tick()                                                     // 第 3 章到货
     expect(h.session.state.returnDepth).toBe(1)
 
     h.port.node = { index: 2, nodeId: 's1', offsetWithinNode: 12 }
-    const entry = h.session.followLink('local:b1', { kind: 'supplement', documentId: 'd9', anchorId: 'f1' }, 'noteref')
+    const entry = h.session.followLink({ kind: 'supplement', documentId: 'd9', anchorId: 'f1' }, 'noteref')
     expect(h.session.state.returnDepth).toBe(2)                      // ② 面板打开时压入 E2
 
-    h.session.goBack('local:b1')                                     // ③ 工具栏返回：消费 E2（面板还开着）
+    h.session.goBack()                                     // ③ 工具栏返回：消费 E2（面板还开着）
     expect(h.session.state.returnDepth).toBe(1)
     h.port.targetOffs.set('s1', 100)
-    h.session.afterRender('local:b1')                              // 落回引用节点，落位收口
-    expect(h.session.state.pendingJump).toBeNull()
+    h.session.afterRender()                              // 落回引用节点，落位收口
+    expect(h.session.pendingJump).toBeNull()
 
     const saves = [...h.saves]
-    h.session.closeSupplement('local:b1', entry)                     // ④ 关面板：栈顶已是 E1（别人的原处）
-    expect(h.session.state.pendingJump).toBeNull()                   // 回归：关面板不得跳到别章
+    h.session.closeSupplement(entry)                     // ④ 关面板：栈顶已是 E1（别人的原处）
+    expect(h.session.pendingJump).toBeNull()                   // 回归：关面板不得跳到别章
     expect(h.saves).toEqual(saves)                                   // 回归：关面板不得写存档
     expect(h.session.state.returnDepth).toBe(1)
   })
@@ -304,16 +304,16 @@ describe('补充文档（脚注/附录）不碰主阅读进度', () => {
     const h = makeHarness()
     await h.session.open('local:b1', 'local:b1')
     h.port.node = { index: 0, nodeId: 'p7', offsetWithinNode: 64 }
-    const entry = h.session.followLink('local:b1', { kind: 'supplement', documentId: 'd9', anchorId: 'f1' }, 'noteref')
-    expect(h.session.state.pendingJump).toBeNull()           // 面板是浮层：主序列位置一动不动
+    const entry = h.session.followLink({ kind: 'supplement', documentId: 'd9', anchorId: 'f1' }, 'noteref')
+    expect(h.session.pendingJump).toBeNull()           // 面板是浮层：主序列位置一动不动
     expect(h.port.tops).toEqual([])
     expect(h.saves).toEqual([])
     expect(h.session.state.returnDepth).toBe(1)              // 引用处已采点（关闭面板即回这里）
 
-    h.session.closeSupplement('local:b1', entry)             // 关闭面板 = 回引用处（栈顶仍是那一条 → 消费它）
+    h.session.closeSupplement(entry)             // 关闭面板 = 回引用处（栈顶仍是那一条 → 消费它）
     expect(h.session.state.returnDepth).toBe(0)
     h.port.targetOffs.set('p7', 300)
-    h.session.afterRender('local:b1')
+    h.session.afterRender()
     expect(h.port.top).toBe(300 + 64)                        // 落回「节点顶在视口顶上方 64px」
   })
 
@@ -321,11 +321,11 @@ describe('补充文档（脚注/附录）不碰主阅读进度', () => {
     const h = makeHarness()
     await h.session.open('local:b1', 'local:b1')
     h.port.node = { index: 0, nodeId: 'p7', offsetWithinNode: 64 }
-    h.session.followLink('local:b1', { kind: 'chapter', index: 1, anchorId: null }, 'normal')   // 先垫一条别人的原处
+    h.session.followLink({ kind: 'chapter', index: 1, anchorId: null }, 'normal')   // 先垫一条别人的原处
     await tick()
     expect(h.session.state.returnDepth).toBe(1)
-    h.session.closeSupplement('local:b1', null)              // 目录路径：视图没有「开面板时压入的那条」
+    h.session.closeSupplement(null)              // 目录路径：视图没有「开面板时压入的那条」
     expect(h.session.state.returnDepth).toBe(1)
-    expect(h.session.state.pendingJump).toMatchObject({ index: 1, anchorId: null })   // 第 0 条的原处还在
+    expect(h.session.pendingJump).toMatchObject({ index: 1, anchorId: null })   // 第 0 条的原处还在
   })
 })
