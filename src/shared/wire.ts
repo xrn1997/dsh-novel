@@ -1054,11 +1054,13 @@ export const bodies = {
     const picked = pickShelfMeta({ ...meta, sourceId }) as Record<string, string | number>
     return { ...picked, sourceId, title: meta.title }
   },
-  /** ② progress 形态=更新进度（值域门与「不在架 400」都归门面动词，这里只管形状） */
+  /** ② progress 形态=更新进度（值域门归门面动词、缺席抛 `BookNotOnShelfError`；400 与文案
+   *  归 `api/dispatch.ts` 的 `shelfUpdate`，这里只管形状） */
   shelfProgress: (chapterIndex: number, offsetRatio: number): Record<string, unknown> =>
     ({ [BODY.progress]: { [BODY.chapterIndex]: chapterIndex, [BODY.offsetRatio]: offsetRatio } }),
   /** ③ listen 形态=存听书位置（单对象入参：六个字段同属一条位置记录，摊成位置参数只会让
-   *  调用点在两处各排一遍序）。值域门与「不在架 400」都归门面动词 `shelfSaveListen`；
+   *  调用点在两处各排一遍序）。值域门归门面动词 `shelfSaveListen`（缺席抛
+   *  `BookNotOnShelfError`），400 与文案归 `api/dispatch.ts` 的 `shelfUpdate`；
    *  构造器只写契约里的六个键。 */
   shelfListen: (p: ListenState): Record<string, unknown> =>
     ({ [BODY.listen]: {

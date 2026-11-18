@@ -201,19 +201,23 @@ describe('probeSource（search 面）', () => {
 })
 
 describe('applyProbeResult（verdict → status 单点）', () => {
-  it('applyProbeResult 是 verdict → status 的唯一写口', async () => {
+  it('applyProbeResult 是 verdict → status 的唯一写口，并交回 outcome', async () => {
     const dir = await makeTempDir('novel-probe-status-')
     const registry = await SourceRegistry.load(dir)
     await registry.edit((tx) => tx.add(normalizeSource({
       bookSourceName: 'S', bookSourceUrl: 'https://s.com', ruleContent: '@css:#c@text',
     })))
     const s = pick(registry.list(), 0)
-    await applyProbeResult(registry, s.id, {
+    const broken = await applyProbeResult(registry, s.id, {
       ok: false, itemCount: 0, firstTitle: null, probedAt: 7,
       error: { code: 'RuleEvalError', message: 'bad' },
     })
     expect(registry.get(s.id)).toMatchObject({ status: 'broken', statusDetail: 'bad', lastProbedAt: 7 })
-    await applyProbeResult(registry, s.id, { ok: true, itemCount: 1, firstTitle: 'x', probedAt: 8 })
+    // outcome 里的 status 就是写回源的那一个判定：调用方读它即可，不必再自己算 r.ok ? …
+    expect(broken.status).toBe('broken')
+    expect(broken.result.ok).toBe(false)
+    const verified = await applyProbeResult(registry, s.id, { ok: true, itemCount: 1, firstTitle: 'x', probedAt: 8 })
     expect(registry.get(s.id)).toMatchObject({ status: 'verified', lastProbedAt: 8 })
+    expect(verified).toEqual({ status: 'verified', result: { ok: true, itemCount: 1, firstTitle: 'x', probedAt: 8 } })
   })
 })

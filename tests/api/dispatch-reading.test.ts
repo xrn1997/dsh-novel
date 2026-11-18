@@ -303,6 +303,25 @@ describe('reading/shelf 面', () => {
     })
     expect(r.status).toBe(400)
   })
+  // 缺席语义单点（W7）：三种更新形态对不在架的书都由门面抛 `BookNotOnShelfError`，路由的
+  // `shelfUpdate` 只把这一个事实翻成 400 + 同一句可行动文案——文案与判空都不再有三份。
+  it('三种更新形态对不在架的书翻成同一个 400（状态码翻译单点，文案逐字一条）', async () => {
+    const key = encodeURIComponent(`${BASE}/book/1/absence`)
+    const bodies = [
+      { patch: { totalChapters: 1 } },
+      { progress: { chapterIndex: 0, offsetRatio: 0 } },
+      { listen: { chapterIndex: 0, paragraphIndex: 0, engineId: null, voice: null, rate: 1, volume: 1 } },
+    ]
+    for (const body of bodies) {
+      const r = await fetch(`${base}/novel-api/shelf/${key}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      })
+      expect(r.status, JSON.stringify(body)).toBe(400)
+      const e = await errorOf(r)
+      expect(e.code, JSON.stringify(body)).toBe('BadRequest')
+      expect(e.message, JSON.stringify(body)).toBe('书不在架上，先带 title 调用加入')
+    }
+  })
   it('GET /book 缺参 → 400；未知 sourceId → 404', async () => {
     expect((await fetch(`${base}/novel-api/book?url=x`)).status).toBe(400)
     const r = await fetch(`${base}/novel-api/book?sourceId=nope&url=${encodeURIComponent(`${BASE}/book/1/`)}`)

@@ -31,7 +31,9 @@ function applyPatch(book: ShelfBook, patch: BookPatch): void {
  * 书架：shelf.json 常驻内存镜像，写盘走防抖合并（进度高频更新只落最后一次）。
  * 两种元数据写口各司其职：add = 不在架才插入（已有书 = patch 语义）；
  * update = 对在架书打补丁（缺席键保值）——merge 规则住在本 module，调用方不再各自筛键。
- * updateProgress 对不在架的书静默不写。
+ * 三个就地更新动词（update / updateProgress / updateListen）对不在架的书都返回 null：**缺席在
+ * 本动词意味着什么**由调用方决定（门面 `services/reading.ts` 把更新路径的缺席翻成 `BookNotOnShelfError`），
+ * 本 module 只交事实、不替调用方选后果。
  * 所有写动词只经私有 `edit(recipe)` 排一次写：变更与排写不可分，没有变更的早退在进配方口前完成。
  *
  * **架位凭 `bookKey` 单键认**（词条见 CONTEXT 的「架位」；在线书的值就是那条命中行的 URL 原文，
@@ -103,12 +105,15 @@ export class Shelf {
     })
   }
 
-  /** 更新阅读进度并防抖落盘；bookKey 不在架 → 静默不写（进度只跟已加书走） */
-  updateProgress(bookKey: string, chapterIndex: number, offsetRatio: number): void {
+  /** 更新阅读进度并防抖落盘；返回更新后的条目，不在架 → null（不静默造书）。
+   *  与 `update` / `updateListen` 同一结果形状：存在性判断只在本 module 做一次，
+   *  调用方（门面）不再预检 `get` 再调用——也就不用为同一判断写第二份抄本。 */
+  updateProgress(bookKey: string, chapterIndex: number, offsetRatio: number): ShelfBook | null {
     const book = this.get(bookKey)
-    if (!book) return
-    this.edit(() => {
+    if (!book) return null
+    return this.edit(() => {
       book.progress = { chapterIndex, offsetRatio, updatedAt: Date.now() }
+      return book
     })
   }
 
@@ -130,8 +135,8 @@ export class Shelf {
   }
 
   /** 批量移除（书架多选删除的写口）：一趟扫描裁掉全部命中项，**返回被删条目**（调用方取条数当回执）；
-   *  未知键静默跳过、重复键幂等，有命中才 schedule 一次落盘。本地书副本的连删不在这一层——门面在移除
-   *  **之前**按「真在架的键」删副本（`services/reading.ts` 的 `removeShelfAndLocal` / `removeBooks`）。 */
+   *  未知键静默跳过、重复键幂等，有命中才 schedule 一次落盘。本地书副本的连删不在这一层——「先副本、
+   *  失败则架位保留」的顺序归 `services/local-lifecycle.ts` 的删书动词，书架只被最后那一步调用。 */
   removeMany(bookKeys: readonly string[]): ShelfBook[] {
     const want = new Set(bookKeys)
     if (want.size === 0) return []

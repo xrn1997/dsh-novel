@@ -130,7 +130,7 @@ export async function runCase(c: CompatCase): Promise<CaseResult> {
       if (outcome === undefined) throw new Error('导入没有回执（importSource 返回空数组）')
       if (!outcome.ok) throw new Error(`规范化失败：${outcome.missing.map((m) => m.field).join(',')}`)
       const sourceId = must(outcome.sourceId, '导入回执没有 sourceId')
-      const probe = await svc.probe(sourceId)
+      const probe = (await svc.probe(sourceId)).result
       if (!probe.ok) {
         throw new Error(`探针失败：${probe.error?.code ?? '?'} ${probe.error?.message ?? ''}`)
       }

@@ -12,6 +12,8 @@ Status: accepted
 
 **契约升级是配套升级**：跨半形状改动（正文统一成 `ChapterContent`、新增导航面）不做新旧双形态自动猜测——让客户端按形状猜语义等于把契约交给运行时；Node 半与浏览器半必须**同批上线**（Node 重启后浏览器要刷新，不能只热更 client）。同理 `rich` 不另存一份纯文本字段：第二份字段一旦落盘就会与树分叉，同一本书的导出、AI 工具与阅读器会读到不同正文。
 
+**写动词的缺席语义**：同一个「按 key 点的目标不存在」按动词各表其果——更新动词（打补丁 / 写进度 / 存听书位置）把缺席表达成错误目录里的 `BookNotOnShelfError`（`classify` → 400），删除动词继续回布尔/计数（幂等成功）。400 的可行动文案仍住 `api/dispatch.ts`（`shelfUpdate` 只把这一类翻成 400 与那句文案），工具面不再自造第二句；探针的 verdict→status 只在 `applyProbeResult` 交出的 `ProbeOutcome` 里算一次。同一条口径贯穿整个工具面：删除类 action 对不存在的目标回「没删到」的布尔/计数，不抛错；`src/tools/render.ts` 的 `renderSourceRemove` 按 `removed` 分开措辞（删到了 / 本来就不在），`enable` / `disable` 这类更新路径的 action 仍走具名错误径。
+
 在册待裁：`getDetail`、本地书管理、批探针**没有对应工具**（本地书与批探针定位在 UI 面）——已批默认「不补、维持现状」；将来要补就按同一纪律从 wire 派生，不手抄第三份。
 
-锚点：`src/tools/tools.ts`；`src/tools/project.ts`；`src/services/reading.ts`；`tests/tools/schema-contract.test.ts`；`src/shared/wire.ts` 的 `ChapterContent`；`src/shared/chapter-text.ts`。
+锚点：`src/tools/tools.ts`；`src/tools/project.ts`；`src/services/reading.ts`；`tests/tools/schema-contract.test.ts`；`src/shared/wire.ts` 的 `ChapterContent`；`src/shared/chapter-text.ts`；`src/services/errors.ts` 的 `BookNotOnShelfError`；`src/services/probe.ts` 的 `ProbeOutcome`；`src/api/dispatch.ts` 的 `shelfUpdate`；`tests/tools/probe-projection.test.ts`。

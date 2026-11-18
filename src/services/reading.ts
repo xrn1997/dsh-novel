@@ -6,7 +6,7 @@ import { detailFieldsOf, detailReadOf, firstValue, hitFieldsOf } from './bridge.
 import { DEFAULT_CACHE_MAX_BYTES, PageCache } from './cache.js'
 import { exploreEpoch } from './cache-epoch.js'
 import { chapterContentToText, PLAY_UNIT_MAX } from '../shared/chapter-text.js'
-import { InvalidRequestError, LocalNotMountedError, SourceNotFoundError, TtsEnginesDegradedError, TtsNotMountedError, redactOutboundError } from './errors.js'
+import { BookNotOnShelfError, InvalidRequestError, SourceNotFoundError, TtsEnginesDegradedError, TtsNotMountedError, redactOutboundError } from './errors.js'
 import { createFetcher, decodeBody, DEFAULT_TIMEOUT_MS, type FetcherOptions } from './fetcher.js'
 import { CookieJar } from './cookies.js'
 import { BookContent } from './book-content.js'
@@ -23,14 +23,15 @@ import { SearchJobs } from './search-job.js'
 import type { JobHost } from './job-holder.js'
 import type { ImportFile, JobState } from './import-job.js'
 import { SourceIntake } from './intake.js'
-import { DEFAULT_MAX_IMPORT_BYTES, isLocalBookKey, LOCAL_SOURCE_ID, LocalBooks } from './localbooks.js'
+import { DEFAULT_MAX_IMPORT_BYTES, LOCAL_SOURCE_ID, LocalBooks } from './localbooks.js'
 import type { LocalResource } from './localbooks.js'
+import { LocalLifecycle } from './local-lifecycle.js'
 import type { NormalizeIssue } from './normalize.js'
 import { OnlineReading } from './online-reading.js'
 import { exploreParticipates, participates } from './participation.js'
 import { CorruptJsonError, writeFileAtomic } from './storage.js'
 import { applyProbeResult, probeSource } from './probe.js'
-import type { ProbeResult } from './probe.js'
+import type { ProbeOutcome, ProbeResult } from './probe.js'
 import { fetchSearchPage, searchErrorCodeOf } from './search-face.js'
 import type { SearchFaceResult } from './search-face.js'
 import { Shelf } from './shelf.js'
@@ -254,7 +255,8 @@ export class ReadingService {
   private readonly exploreJobs: ExploreJobs
   /** 逐源分类快照：**一份实例**服务全部轮次与全部调用方，否则「重复进同一分类」永远打站点 */
   private readonly exploreCache: KindCache
-  private readonly local: LocalBooks | null
+  /** 本地书生命周期（副本 ⇄ 架位的联合不变量）：门面构造期持有，外部三面拿不到 */
+  private readonly localBooks: LocalLifecycle
   private readonly webview: WebViewRuntime
   /** 听书面部件（合成服务 + 引擎注册表）：`from()` 直装缝可缺席（缺席 = 全部听书动词 503）；
    *  `create()` 恒给——注册表损坏时换降级注册表（空表 + 原因），只降订阅那一格，
@@ -272,7 +274,7 @@ export class ReadingService {
     searchJobs: SearchJobs,
     exploreJobs: ExploreJobs,
     exploreCache: KindCache,
-    local: LocalBooks | null,
+    localBooks: LocalLifecycle,
     webview: WebViewRuntime,
     tts: TtsParts | null,
   ) {
@@ -286,7 +288,7 @@ export class ReadingService {
     this.searchJobs = searchJobs
     this.exploreJobs = exploreJobs
     this.exploreCache = exploreCache
-    this.local = local
+    this.localBooks = localBooks
     this.webview = webview
     this.tts = tts
   }
@@ -304,7 +306,8 @@ export class ReadingService {
   /**
    * 生产快捷方式：建目录 + 从磁盘装配部件，再交 from() 总装。
    * 业务类不再被迫知道目录与加载细节——组合根与业务自此可分（server 侧）。
-   * 本地书面：LocalBooks 也在此装配——「删书不留孤儿文件」invariant 归门面。
+   * 本地书面：LocalBooks 也在此装配——「副本 ⇄ 架位」的联合不变量归本地书生命周期
+   * （`services/local-lifecycle.ts` 由 `from` 在构造期持有）。
    */
   static async create(opts: ReadingServiceOptions): Promise<ReadingService> {
     // 主动建数据目录：保证存在 + 快速失败（dir 指向文件时 mkdir 抛错——ready 拒绝，入口层零注册）
@@ -357,14 +360,15 @@ export class ReadingService {
       ...(opts.contentMaxPages === undefined ? {} : { contentMaxPages: opts.contentMaxPages }),
       ...(opts.proxyUrl === undefined ? {} : { proxyUrl: opts.proxyUrl }),
     })
-    await service.backfillLocalChapterCounts()
+    await service.localBooks.backfillChapterCounts()
     return service
   }
 
   /**
    * 组合根注入面：接受已建好的部件（registry/shelf/cache/fetcher/local）直接总装——
    * 测试可换内存 registry adapter / 确定性 fetcher，而不必每次 mkdtemp + importOne。
-   * **启动补数不在这里**：本地书 `totalChapters` 的旧条目补数归 `create` 的启动一轮；走 `from` 的注入方没有这轮补数。
+   * **启动补数不在这里**：本地书 `totalChapters` 的旧条目补数归 `create` 的启动一轮（调本地书生命周期的
+   * `backfillChapterCounts`）；走 `from` 的注入方没有这轮补数。
    * **只读注入物**：jar 必须是构造方给 fetcher 的同一实例（不一致当场炸，门面不挑一张、
    * 不补写回）；deviceId / sourceSession 这类运行期字段也只由构造方带进 fetcher。
    * 后台任务面在此接线：导入/批量验证的探针口径与 search/probe 同一
@@ -436,7 +440,7 @@ export class ReadingService {
       new SearchJobs(parts.jobHost === undefined ? {} : { host: parts.jobHost }),
       new ExploreJobs(parts.jobHost === undefined ? {} : { host: parts.jobHost }),
       new KindCache(),
-      parts.local ?? null,
+      new LocalLifecycle({ copies: parts.local ?? null, shelf: parts.shelf }),
       webview,
       parts.tts ?? null,
     )
@@ -489,8 +493,10 @@ export class ReadingService {
 
   /** 探针已有源（API/tools 的 probe 路由/工具用）：与 importOne 的探针段同口径。
    *  超时与 js 预算必须与搜索同耐心（`searchTimeoutMs`/`jsTimeoutMs` 两个单点）——漏传会让
-   *  同一源在导入期与门面两处探针拿回两个 verdict。 */
-  async probe(id: string, opts?: { signal?: AbortSignal }): Promise<ProbeResult> {
+   *  同一源在导入期与门面两处探针拿回两个 verdict。
+   *  交 `ProbeOutcome`（wire 读数 + 已写回的 status）：verdict→status 的判定在门内只算一次，
+   *  HTTP 面只写 `result`、工具面只投影 `status`。 */
+  async probe(id: string, opts?: { signal?: AbortSignal }): Promise<ProbeOutcome> {
     const s = this.requireSource(id)
     const r = await probeSource(s, this.sourceRequest, {
       timeoutMs: this.live.searchTimeoutMs, jsTimeoutMs: this.live.jsTimeoutMs, ...(opts?.signal === undefined ? {} : { signal: opts.signal }),
@@ -498,8 +504,7 @@ export class ReadingService {
     // 取消不该把「跑了一半的探针」写成源的终态：那一半是被我们掐掉的，不是站点给的结论。
     // probeSource 的 catch 已先查取消并抛出；这里再查一次，保证写终态前信号仍然有效。
     opts?.signal?.throwIfAborted()
-    await applyProbeResult(this.registry, id, r)
-    return r
+    return await applyProbeResult(this.registry, id, r)
   }
 
   // ── 写侧动词：变更知识归门面，HTTP 面不再手写 edit 配方 ────────────────────
@@ -525,7 +530,9 @@ export class ReadingService {
     })
   }
 
-  /** 删单源；不存在 → false。源级状态按脚本侧键（baseUrl）清理，不是 registry id。 */
+  /** 删单源；不存在 → false。**缺席在本动词是幂等成功**：要删的东西已经不在，结果就是「没有它」，
+   *  不抛错（与更新路径把缺席翻成错误的径相对——每个动词自己拥有缺席的含义）。
+   *  源级状态按脚本侧键（baseUrl）清理，不是 registry id。 */
   async removeSource(id: string): Promise<boolean> {
     const key = this.registry.get(id)?.baseUrl
     const removed = await this.registry.edit((tx) => tx.remove(id))
@@ -693,30 +700,37 @@ export class ReadingService {
     return this.shelf.add({ ...meta, bookKey, sourceId, title: meta.title })
   }
 
-  /** 打补丁（patch 形态）：不在架 → null（路由映射 400——不静默造书） */
-  shelfPatch(bookKey: string, patch: ShelfMetaPatch): ShelfBook | null {
-    return this.shelf.update(bookKey, patch)
+  /** 打补丁（patch 形态）：返回更新后的条目；书架里没有这本书 → 抛 `BookNotOnShelfError`
+   *  （缺席在本动词是错误，口径同 `shelfSaveProgress`；不静默造书）。 */
+  shelfPatch(bookKey: string, patch: ShelfMetaPatch): ShelfBook {
+    const patched = this.shelf.update(bookKey, patch)
+    if (patched === null) throw new BookNotOnShelfError(bookKey)
+    return patched
   }
 
-  /** 存进度（progress 形态）：不在架 → null（路由映射 400）；返回更新后的条目。
+  /** 存进度（progress 形态）：返回更新后的条目；书架里没有这本书 → 抛 `BookNotOnShelfError`
+   *  （缺席在本动词是错误——HTTP 面由 `api/dispatch.ts` 翻成 400 与那句可行动文案，措辞不住
+   *  服务层；工具面原样上抛，不另造第二句）。
    *  值域门在这里（同 shelfAdd）：Infinity 会被 `JSON.stringify` 落盘成 null 静默损坏，
-   *  只护 HTTP 面护不住工具面。 */
-  shelfSaveProgress(bookKey: string, chapterIndex: number, offsetRatio: number): ShelfBook | null {
+   *  只护 HTTP 面护不住工具面。
+   *  存在性判断只住 `Shelf.updateProgress` 的返回值：本动词不再预检 `get`、也不在写后重读一次。 */
+  shelfSaveProgress(bookKey: string, chapterIndex: number, offsetRatio: number): ShelfBook {
     if (!Number.isInteger(chapterIndex) || chapterIndex < 0
       || !Number.isFinite(offsetRatio) || offsetRatio < 0 || offsetRatio > 1) {
       throw new InvalidRequestError('progress.chapterIndex 需为非负整数、offsetRatio 需为 [0,1] 有限数')
     }
-    if (this.shelf.get(bookKey) === undefined) return null
-    this.shelf.updateProgress(bookKey, chapterIndex, offsetRatio)
-    return this.shelf.get(bookKey) ?? null
+    const saved = this.shelf.updateProgress(bookKey, chapterIndex, offsetRatio)
+    if (saved === null) throw new BookNotOnShelfError(bookKey)
+    return saved
   }
 
-  /** 存听书位置（listen 形态）：不在架 → null（路由映射 400）；返回更新后的条目。
+  /** 存听书位置（listen 形态）：返回更新后的条目；书架里没有这本书 → 抛 `BookNotOnShelfError`
+   *  （缺席在本动词是错误，口径同 `shelfSaveProgress`）。
    *  值域门在这里（同 shelfSaveProgress）：播放层随时会写，Infinity / 越界档位一旦落盘
    *  就是下一次起播会照单全收的坏存档。
    *  **本动词只写 listen 细节轨**：共用的消费位置（章 + 比例）由播放层在同一落盘节拍里经
    *  `shelfSaveProgress` 另写一笔——两笔各走各的值域门，不在这里合成一个混合 body。 */
-  shelfSaveListen(bookKey: string, p: ListenState): ShelfBook | null {
+  shelfSaveListen(bookKey: string, p: ListenState): ShelfBook {
     if (!Number.isInteger(p.chapterIndex) || p.chapterIndex < 0
       || !Number.isInteger(p.paragraphIndex) || p.paragraphIndex < 0
       || !Number.isFinite(p.rate) || p.rate < TTS_RATE.min || p.rate > TTS_RATE.max
@@ -727,42 +741,21 @@ export class ReadingService {
         'listen.chapterIndex/paragraphIndex 需为非负整数、rate 需在语速档内、volume 需在音量档内（有限数）、engineId 需为非空白 string|null、voice 需为 string|null',
       )
     }
-    return this.shelf.updateListen(bookKey, p)
+    const saved = this.shelf.updateListen(bookKey, p)
+    if (saved === null) throw new BookNotOnShelfError(bookKey)
+    return saved
   }
 
-  /** 删本地副本：只对真在架的本地键做（`localEvenIfOffShelf` 只给 `removeLocalBook`——
-   *  它点名的是磁盘上的本地书，即使不在架也要清副本），返回实际删掉的副本数。
-   *  单删、批删与本地删共用这一处顺序与判据：文件删失败即抛出，调用方保留架位可重试。 */
-  private async removeLocalCopies(keys: Iterable<string>, localEvenIfOffShelf: boolean): Promise<number> {
-    if (this.local === null) return 0
-    let removed = 0
-    for (const key of new Set(keys)) {
-      if (!isLocalBookKey(key)) continue
-      if (!localEvenIfOffShelf && this.shelf.get(key) === undefined) continue
-      if (await this.local.remove(key)) removed += 1
-    }
-    return removed
-  }
-
-  /** 删一本：先删本地副本，再移架位（单删、本地删与批删三条入口共用同一顺序）。
-   *  文件删失败时架位保留，用户可重试；反过来会留下没有架位的磁盘孤儿。 */
-  private async removeShelfAndLocal(bookKey: string, localEvenIfOffShelf: boolean): Promise<boolean> {
-    const localRemoved = await this.removeLocalCopies([bookKey], localEvenIfOffShelf) > 0
-    const shelfRemoved = this.shelf.remove(bookKey)
-    return shelfRemoved || localRemoved
-  }
-
-  /** 删书：本地书连带删文件（防孤儿 invariant 归门面；副本先删，失败则架位保留可重试） */
+  /** 删书：本地书副本的连删与「先副本、后架位」的顺序归本地书生命周期（`services/local-lifecycle.ts`），
+   *  门面只委托——三条删入口共用同一条顺序，不在这里各自记得复用 */
   async removeBook(bookKey: string): Promise<{ removed: boolean }> {
-    return { removed: await this.removeShelfAndLocal(bookKey, false) }
+    return this.localBooks.removeBook(bookKey)
   }
 
-  /** 批量删书（书架多选）：与单删共用 `removeLocalCopies`——本地书副本连删**只对真在架的键**做
-   *  （幽灵键不该去动磁盘），且副本先删：删失败即抛出、架位整批保留可重试，反过来会留下
-   *  没有架位的磁盘孤儿。未知键静默跳过、重复键幂等，返回实际删除数（与批路由同口径）。 */
+  /** 批量删书（书架多选）：与单删同一条顺序（副本先删、失败则整批架位保留可重试），
+   *  未知键静默跳过、重复键幂等，返回实际删除数（与批路由同口径） */
   async removeBooks(bookKeys: readonly string[]): Promise<{ removed: number }> {
-    await this.removeLocalCopies(bookKeys, false)
-    return { removed: this.shelf.removeMany(bookKeys).length }
+    return this.localBooks.removeBooks(bookKeys)
   }
 
   // ── 任务动词 ──
@@ -784,74 +777,30 @@ export class ReadingService {
 
   // ── 本地书动词 ──
 
-  /** 本地导入（TXT / EPUB 按**内容**分流）+ 自动上架，返回 wire 的 `LocalImportResponse`
-   *  （dispatch 直接回显，不再逐字段拼装）。书目字段走既有 SHELF_META 字段集：作者/封面来自
-   *  导入结果，总章数统一由 `chapterCount` 投影；本地格式不新增可 patch 字段。 */
+  /** 本地导入（TXT / EPUB 按**内容**分流）+ 自动上架：导入即落架与入架失败的回收归本地书生命周期，
+   *  门面只委托并回显 wire 的 `LocalImportResponse`（书目字段走既有 SHELF_META 字段集） */
   async localImport(bytes: Buffer, name: string): Promise<LocalImportResponse> {
-    const imported = await this.requireLocal().import(bytes, name)
-    let book: ShelfBook
-    try {
-      book = this.shelf.add({
-        sourceId: LOCAL_SOURCE_ID, bookKey: imported.bookKey, title: imported.title,
-        ...imported.book, totalChapters: imported.chapterCount,
-      })
-    } catch (e) {
-      // 发布已成功、入架却失败：不回滚就会留一份「长得像书但没人认识」的副本（EPUB 是一整棵目录）
-      await this.requireLocal().remove(imported.bookKey)
-      throw e
-    }
-    return {
-      ...book,
-      chapterCount: imported.chapterCount,
-      format: imported.format,
-      encoding: imported.encoding,
-      warnings: imported.warnings,
-    }
-  }
-
-  /**
-   * 既有本地书条目的补数（启动时一次）：更早的版本导入时没把章数投影进 `totalChapters`，
-   * 而本地 meta 里一直算得出来——补一次，比让用户逐本打开（打开时才由客户端回写）省事。
-   * 读不到 meta（副本已删 / 元数据坏了）就跳过：补数不是校验，不替书架判那份副本还在不在。
-   */
-  private async backfillLocalChapterCounts(): Promise<void> {
-    if (this.local === null) return
-    const missing = this.shelf.list().filter((b) => b.sourceId === LOCAL_SOURCE_ID && typeof b.totalChapters !== 'number')
-    const local = this.local
-    // 读并行（meta 读口无共享写——损坏时只备份自己的文件；自带在途去重），落账串行——shelf 的写路径按条排队，不并发落盘。
-    // 并发度即缺字段条目数：补数只在启动跑这一轮，不设闸
-    const pairs = await Promise.all(
-      missing.map(async (b) => ({ book: b, count: await local.chapterCount(b.bookKey).catch(() => null) })),
-    )
-    for (const { book, count } of pairs) {
-      if (count !== null) this.shelf.update(book.bookKey, { totalChapters: count })
-    }
+    return this.localBooks.importBook(bytes, name)
   }
 
   /** 补充文档（脚注/附录）图文正文：本地 EPUB 专有（「文档」这一层只有它有） */
   getLocalSupplement(bookKey: string, documentId: string): Promise<ChapterContent> {
-    return this.requireLocal().getSupplement(bookKey, documentId)
+    return this.localBooks.getSupplement(bookKey, documentId)
   }
 
   /** 本地资源读口（流/MIME/字节数；磁盘路径不出服务层） */
   getLocalResource(bookKey: string, resourceId: string): Promise<LocalResource> {
-    return this.requireLocal().getResource(bookKey, resourceId)
+    return this.localBooks.getResource(bookKey, resourceId)
   }
 
   /** 本地导入告警（阅读器按需重看导入说明）：非 EPUB 恒空数组 */
   getLocalImportWarnings(bookKey: string): Promise<LocalImportWarning[]> {
-    return this.requireLocal().getImportWarnings(bookKey)
+    return this.localBooks.getImportWarnings(bookKey)
   }
 
   /** 删本地书：文件 + 书架条目一并删（任一命中即 removed；与单删同一条「先副本、后架位」顺序） */
   async removeLocalBook(id: string): Promise<{ removed: boolean }> {
-    this.requireLocal()
-    return { removed: await this.removeShelfAndLocal(id, true) }
-  }
-
-  private requireLocal(): LocalBooks {
-    if (this.local === null) throw new LocalNotMountedError()
-    return this.local
+    return this.localBooks.removeLocalBook(id)
   }
 
   // ── 听书 ─────────────────────────────────────────────────────────────

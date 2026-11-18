@@ -95,6 +95,8 @@ describe('renderSource（列表 / 探针 / 启停 / 删除）', () => {
     expect(renderSourceToggle({ enabled: true, sourceId: 's1' })).toBe('已启用源 s1')
     expect(renderSourceToggle({ enabled: false, sourceId: 's1' })).toBe('已停用源 s1')
     expect(renderSourceRemove({ sourceId: 's1', removed: true })).toBe('已删除源 s1（removed=true）')
+    // 幂等成功不是「已删除」：源本来就不在时要说清没删到东西，别让上屏读数撒谎
+    expect(renderSourceRemove({ sourceId: 'ghost', removed: false })).toBe('源 ghost 不在清单里（removed=false）')
   })
   it('规范值缺块时炸，不打印 undefined', () => {
     expect(() => renderSourceList({})).toThrow(/缺少 sources/)

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import * as normalizeModule from '../../src/services/normalize.js'
-import { normalizeSource, rawExploreEnabled, rawExploreFields, rehydrateStoredSource } from '../../src/services/normalize.js'
+import {
+  flattenDialect, normalizeSource, rawExploreEnabled, rawExploreFields, rehydrateStoredSource,
+} from '../../src/services/normalize.js'
 import type { NormalizeIssue } from '../../src/services/normalize.js'
+import { RULE_FIELD_SPECS, SPECIAL } from '../../src/services/rule-fields.js'
+import type { ExplicitPlacementField, RuleFieldSpec } from '../../src/services/rule-fields.js'
 import { must, pick } from '../support/fixture.js'
 
 const realSource = {
@@ -77,7 +81,7 @@ describe('warning 口径', () => {
   })
 })
 
-// 嵌套对象方言：五个规则字段是对象不是字符串。
+// 嵌套对象方言：规则容器是对象不是字符串（容器集合由规则字段表投影，见下面「新容器」那条）。
 // 子字段拍平到模型；搜索上下文（ruleSearch）与详情上下文（ruleBookInfo）分别落位——
 // 同一源的两套规则可以完全不同，混用会把详情面拼成搜索面的垃圾标题，故两侧绝不互相污染。
 const objectSource = {
@@ -225,7 +229,7 @@ describe('规则容器的字符串化形态', () => {
     expect(must(r.source, 'r 归一化后的 source').rules.ruleBookName).toBe('a@text')
     expect(must(r.source, 'r 归一化后的 source').rules.ruleAuthor).toBe('span@text')
   })
-  it('字符串化的 ruleToc / ruleBookInfo 同样生效（五块共用一条口径）', () => {
+  it('字符串化的 ruleToc / ruleBookInfo 同样生效（所有规则容器共用一条解析口径）', () => {
     const rules = must(normalizeSource(strung({
       ruleToc: JSON.stringify({ chapterList: '#chs a', chapterName: 'a@text', chapterUrl: 'a@href' }),
       ruleBookInfo: JSON.stringify({ init: '$.data.bookInfo', name: '$.name' }),
@@ -270,6 +274,52 @@ describe('规则容器的字符串化形态', () => {
     const r = normalizeSource(strung({ ruleSearch: '[1,2]' }))
     expect(must(r.source, 'r 归一化后的 source').rules.ruleBookList).toBeNull()
     expect(r.warnings.filter((w) => w.field === 'ruleSearch')).toEqual([])
+  })
+})
+
+// 规则容器集合归表的投影：容器名不再是展平处的一份字面量清单，否则表接受的新行会对着
+// 「映射里有、解析清单里没有」的容器 continue，字段静默读成 null（不告警、不编译错、测试也不红）。
+describe('规则容器集合 = 字段表投影（新容器不被静默跳过）', () => {
+  it('合成一行「新容器下的字段」能端到端展平：容器解析与子字段映射同从表行派生', () => {
+    // 表里没有 ruleSynth 这个容器：合成一行 = 「表加一行」的同形输入（新容器 → 子字段 → 模型键）。
+    const syntheticRow: RuleFieldSpec = {
+      model: 'loginUrl', legadoObject: 'ruleSynth', legadoKey: 'loginUrl', rehydrate: 'none',
+    }
+    const raw = { ruleSynth: { loginUrl: 'https://synth.test/login' } }
+    // 反证：这一行不在表里时该模型位根本读不到（raw 顶层的 ruleSynth 不会平铺成 loginUrl），
+    // 所以下面那条「落了」只可能来自「容器解析 + 映射」这条派生链，而不是平铺直通。
+    expect(flattenDialect(raw, []).loginUrl).toBeUndefined()
+    const view = flattenDialect(raw, [], [...RULE_FIELD_SPECS, syntheticRow])
+    expect(view.loginUrl).toBe('https://synth.test/login')
+  })
+})
+
+describe('非平铺行的落位（表的 placement 列投影）', () => {
+  /** 每行的落位输入：键集是表派生的（缺一行、多一行都 `tsc` 红）；运行时再与 `SPECIAL` 对一次数，
+   *  单跑 vitest（不跑 tsc）也抓得住。值是该行落位分支认得的**最小 raw**——header 两形态共用同一个
+   *  raw 键（同一 raw.header 二选一），故两行各给一种形态。 */
+  const PLACEMENT_INPUTS: Record<ExplicitPlacementField, Record<string, unknown>> = {
+    searchUrl: { searchUrl: '/s?q={{key}}' },
+    exploreUrl: { exploreUrl: '玄幻::/xh' },
+    header: { header: { 'User-Agent': 'UA' } },
+    headerRule: { header: '@js:({})' },
+    jsLib: { jsLib: 'var lib = 1' },
+    ruleChapterIsVip: { ruleChapterIsVip: 'tag.i@text' },
+    ruleChapterIsVolume: { ruleChapterIsVolume: 'tag.i@text' },
+    ruleChapterIsPay: { ruleChapterIsPay: 'tag.i@text' },
+    ruleChapterUpdateTime: { ruleChapterUpdateTime: 'tag.i@text' },
+  }
+
+  it('每个非平铺行都确有落位：按表遍历逐行喂 raw，模型位非 null', () => {
+    // 遍历名单来自表（`SPECIAL` 是 placement 列的投影），不手抄第二份名单。
+    expect(Object.keys(PLACEMENT_INPUTS).sort()).toEqual([...SPECIAL].sort())
+    for (const model of SPECIAL) {
+      const r = normalizeSource({
+        bookSourceName: 'A', bookSourceUrl: 'https://a', ruleContent: 'x', ...PLACEMENT_INPUTS[model],
+      })
+      expect(r.ok, `${model} 的落位输入应当能导入`).toBe(true)
+      expect(must(r.source, `${model} 归一化后的 source`).rules[model], `${model} 登记为非平铺却没有落位`).not.toBeNull()
+    }
   })
 })
 

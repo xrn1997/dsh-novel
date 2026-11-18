@@ -10,6 +10,7 @@ import type { FindingEntry } from '../../src/services/epub/findings.js'
 import {
   LocalArtifactNotFoundError, LocalBooks, LocalFileTooLargeError, LocalImportError, decodeLocalText, isLocalBookKey, splitChapters,
 } from '../../src/services/localbooks.js'
+import { LocalMetaFormatError, LocalMetaVersionError } from '../../src/services/local-meta.js'
 import { IMAGE_SAMPLES, makeEpubFixture } from '../fixtures/epub.js'
 import { makeTempDir } from '../temp-dir.js'
 import { must, pick } from '../support/fixture.js'
@@ -481,6 +482,55 @@ describe('EPUB 发布、重启读取与资源读口', () => {
     expect(degraded.count).toBeGreaterThan(0)
     const again = await LocalBooks.create(dir)
     expect(await again.getImportWarnings(r.bookKey)).toEqual(r.warnings)
+  })
+
+  it('旧 meta 缺 findings（新读面字段）+ 新代码：读时按旧 warnings 投影归一，不回写磁盘', async () => {
+    const { lb, dir } = await mk()
+    const r = await lb.import(makeEpubFixture('epub3-inline-svg-anchor'), '降级.epub')
+    const tocBefore = await lb.getToc(r.bookKey)
+    const id = r.bookKey.slice('local:'.length)
+    const metaFile = path.join(dir, 'local', `${id}.json`)
+    // 旧版本的落盘形状：只有拼好的句子，没有拆开的事实清单
+    const stored = JSON.parse(await fs.readFile(metaFile, 'utf8')) as Record<string, unknown>
+    delete stored.findings
+    await fs.writeFile(metaFile, JSON.stringify(stored), 'utf8')
+    const before = await fs.readFile(metaFile, 'utf8')
+
+    // 新代码读旧书：目录照读，告警从旧投影归一出来——不是静默变成「没有痕」，也不是 undefined
+    const again = await LocalBooks.create(dir)
+    expect(await again.getToc(r.bookKey)).toEqual(tocBefore)
+    expect(await again.getImportWarnings(r.bookKey)).toEqual(r.warnings)
+    // **回填策略是读侧归一，不回写**：归一结果只进内存形状；盘上那份保持旧版本写下的形状，
+    // 将来要迁移得显式做一次（回写要整份重写，而这一项只影响读面）
+    expect(await fs.readFile(metaFile, 'utf8')).toBe(before)
+  })
+
+  it('不认识的 schemaVersion / format：具名拒绝，不静默落进 TXT 分支', async () => {
+    const { lb, dir } = await mk()
+    const writeMeta = async (id: string, meta: unknown): Promise<void> => {
+      await fs.mkdir(path.join(dir, 'local', id), { recursive: true })
+      await fs.writeFile(path.join(dir, 'local', `${id}.json`), JSON.stringify(meta), 'utf8')
+    }
+    const base = {
+      format: 'epub', title: '未来书', author: null, originalName: 'future.epub', importedAt: 1,
+      chapters: [], documents: {}, resources: {}, navigation: [],
+    }
+    // 未来版本：磁盘上有、本版本不认识——静默当 TXT 会拿偏移表读文档索引（存量书全部打不开）
+    const future = '44444444-4444-4444-8444-444444444444'
+    await writeMeta(future, { ...base, schemaVersion: 3 })
+    const futureErr: unknown = await lb.getToc(`local:${future}`).catch((e: unknown) => e)
+    expect(futureErr).toBeInstanceOf(LocalMetaVersionError)
+    expect((futureErr as Error).message).toMatch(/版本不认识.*3/s)
+
+    // 版本认识、format 不认识：同一类拒绝（不猜它是哪种格式）
+    const wrongFormat = '55555555-5555-4555-8555-555555555555'
+    await writeMeta(wrongFormat, { ...base, schemaVersion: 2, format: 'mobi' })
+    await expect(lb.getToc(`local:${wrongFormat}`)).rejects.toBeInstanceOf(LocalMetaVersionError)
+
+    // 有 format 却缺版本号：可能是丢了版本号的新形状，同样不许按 TXT 读
+    const noVersion = '66666666-6666-4666-8666-666666666666'
+    await writeMeta(noVersion, base)
+    await expect(lb.getToc(`local:${noVersion}`)).rejects.toBeInstanceOf(LocalMetaFormatError)
   })
 })
 

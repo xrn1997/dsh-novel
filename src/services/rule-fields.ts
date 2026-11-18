@@ -2,9 +2,12 @@ import type { NormalizedRules } from './types.js'
 
 /**
  * 规则字段集：一个模型键一行；通用容器字段写明它在两方言里的路径，外加 Native 隐式终端标记、
- * 存量收敛的覆盖模式，以及两列行级登记（同一事实的另一键、发现面整套启用的闸）。导入循环、
- * 两方言通用展平、隐式终端清单、发现面两方言子字段名、条目装配的字段位与存量收敛的档位 / 段序
- * 都从这张表派生——字段的事实只写一次（裁决与被否方案见 `ADR-0044`）。
+ * 存量收敛的覆盖模式、落位方式（平铺循环 / 具名分支），以及两列行级登记（同一事实的另一键、
+ * 发现面整套启用的闸）。导入循环、两方言通用展平、**展平前要解析的规则容器集合**、隐式终端清单、
+ * 发现面两方言子字段名、条目装配的字段位与存量收敛的档位 / 段序都从这张表派生——字段的事实只写一次
+ * （裁决与被否方案见 `ADR-0044`）。容器集合为什么必须从表派生：它以前是 `normalize` 展平处的五个
+ * 名字字面量，表接受一个新容器的行之后，展平对那个容器查不到映射、直接 `continue` —— 字段静默读成
+ * null，不告警、不编译错、测试也不红。
  * 为什么必须守住这一处：这类字段一旦散在几份名单里，漏掉任一处都只表现为「某个字段死活是 null」，
  * 从哪条日志里都查不到原因。发现面条目字段是边界——`ruleExplore` 与 Native `ruleFind` 的整套
  * 落位与展平实现仍住 normalize 的显式分支，条目装配侧的整套切换住 `bridge.hitRuleOf`；表为它们
@@ -12,8 +15,8 @@ import type { NormalizedRules } from './types.js'
  * 发现面行上。
  *
  * 边界：`ruleExploreKinds` 是数组不是字符串，不在这张表里（落位住 normalize 的显式分支）；表里
- * 的特殊字段（`searchUrl` / `exploreUrl` 源级声明、header 两形态、jsLib、章节 flag）各有自己的
- * 落位分支，由 `RULE_FIELDS` 过滤掉，不进平铺循环。字段**怎么收口**（首项/整块/布尔折叠）仍由
+ * 落位方式为 `explicit` 的行（`searchUrl` / `exploreUrl` 源级声明、header 两形态、jsLib、章节 flag）
+ * 各有自己的落位分支，由 `SPECIAL` 投影出来、不进平铺循环。字段**怎么收口**（首项/整块/布尔折叠）仍由
  * 各自的调用点与 `bridge` 的投影函数决定——那是行为，不是登记事实，表里不抄第二份。
  */
 
@@ -53,6 +56,10 @@ export interface RuleFieldSpec {
   pairWith?: keyof NormalizedRules
   /** 本行即发现面整套启用的闸（`ruleExploreList` 唯一）：判据只看它是否非空串。 */
   wholeSetGate?: true
+  /** 落位方式：不登记 = 平铺循环（平铺方言的键与模型键同名，导入时逐键读 `str`，见 `RULE_FIELDS`）；
+   *  `explicit` = 不进平铺循环，由 `normalize` 的具名分支落位。特形落位的**实现**仍住 `normalize`
+   *  （`ADR-0044` 的边界不动），这里只登记「它是特例」这一事实——`SPECIAL` 就是本列的投影。 */
+  placement?: 'explicit'
   rehydrate: RehydrateMode
 }
 
@@ -85,14 +92,14 @@ export const RULE_FIELD_SPECS = [
   { model: 'ruleDetailKind', legadoObject: 'ruleBookInfo', legadoKey: 'kind', nativeObject: 'ruleBookInfo', nativeKey: 'kind', nativeImplicitText: true, pairWith: 'ruleKind', rehydrate: 'missing' },
   { model: 'ruleDetailWordCount', legadoObject: 'ruleBookInfo', legadoKey: 'wordCount', nativeObject: 'ruleBookInfo', nativeKey: 'wordCount', nativeImplicitText: true, pairWith: 'ruleWordCount', rehydrate: 'missing' },
 
-  // ── 目录面（ruleToc 容器；章节 flag 是特殊字段，见 RULE_FIELDS 的过滤）───
+  // ── 目录面（ruleToc 容器；章节 flag 各有具名落位分支，故行上登记 placement）───
   { model: 'ruleChapterList', legadoObject: 'ruleToc', legadoKey: 'chapterList', nativeObject: 'ruleToc', nativeKey: 'list', rehydrate: 'none' },
   { model: 'ruleChapterName', legadoObject: 'ruleToc', legadoKey: 'chapterName', nativeObject: 'ruleToc', nativeKey: 'name', nativeImplicitText: true, rehydrate: 'none' },
   { model: 'ruleChapterUrl', legadoObject: 'ruleToc', legadoKey: 'chapterUrl', nativeObject: 'ruleToc', nativeKey: 'url', rehydrate: 'none' },
-  { model: 'ruleChapterIsVip', legadoObject: 'ruleToc', legadoKey: 'isVip', rehydrate: 'none' },
-  { model: 'ruleChapterIsVolume', legadoObject: 'ruleToc', legadoKey: 'isVolume', rehydrate: 'none' },
-  { model: 'ruleChapterIsPay', legadoObject: 'ruleToc', legadoKey: 'isPay', rehydrate: 'none' },
-  { model: 'ruleChapterUpdateTime', legadoObject: 'ruleToc', legadoKey: 'updateTime', rehydrate: 'none' },
+  { model: 'ruleChapterIsVip', legadoObject: 'ruleToc', legadoKey: 'isVip', placement: 'explicit', rehydrate: 'none' },
+  { model: 'ruleChapterIsVolume', legadoObject: 'ruleToc', legadoKey: 'isVolume', placement: 'explicit', rehydrate: 'none' },
+  { model: 'ruleChapterIsPay', legadoObject: 'ruleToc', legadoKey: 'isPay', placement: 'explicit', rehydrate: 'none' },
+  { model: 'ruleChapterUpdateTime', legadoObject: 'ruleToc', legadoKey: 'updateTime', placement: 'explicit', rehydrate: 'none' },
   { model: 'nextTocUrl', legadoObject: 'ruleToc', legadoKey: 'nextTocUrl', nativeObject: 'ruleToc', nativeKey: 'nextPage', rehydrate: 'none' },
 
   // ── 正文面（ruleContent 容器）──────────────────────────────────────
@@ -120,36 +127,53 @@ export const RULE_FIELD_SPECS = [
 
   // ── 源级字段（不在任何规则容器里）──────────────────────────────────
   { model: 'bookUrlPattern', rehydrate: 'always' },
-  { model: 'header', rehydrate: 'conditional', pairWith: 'headerRule' },
+  { model: 'header', placement: 'explicit', rehydrate: 'conditional', pairWith: 'headerRule' },
   // 动态头与静态头同源（同一 raw 键的两形态），模型键分开落位
-  { model: 'headerRule', rehydrate: 'always' },
-  { model: 'searchUrl', rehydrate: 'none' },
-  { model: 'exploreUrl', rehydrate: 'none' },
+  { model: 'headerRule', placement: 'explicit', rehydrate: 'always' },
+  { model: 'searchUrl', placement: 'explicit', rehydrate: 'none' },
+  { model: 'exploreUrl', placement: 'explicit', rehydrate: 'none' },
   { model: 'loginUrl', rehydrate: 'none' },
-  { model: 'jsLib', rehydrate: 'none' },
+  { model: 'jsLib', placement: 'explicit', rehydrate: 'none' },
 ] as const satisfies readonly RuleFieldSpec[]
 
-/** 不进平铺循环的字段：各有自己的解析/落位分支（见 `normalizeSource`）。
- *  章节 flag 留在显式块里——它们不是取值字段，而是逐章按 `isTrue` 折布尔的规则，落位与那条
- *  下游口径（`online-reading.isTrueRuleValue`）放在一起读。 */
-const SPECIAL: ReadonlySet<keyof NormalizedRules> = new Set([
-  'searchUrl', 'exploreUrl', 'header', 'headerRule', 'jsLib',
-  'ruleChapterIsVip', 'ruleChapterIsVolume', 'ruleChapterIsPay', 'ruleChapterUpdateTime',
-])
-
-/** 平铺循环的字段名单：平铺方言的展平视图键与模型键同名，导入时逐键读 `str`，缺省落 null。 */
-export const RULE_FIELDS: readonly (keyof NormalizedRules)[] = RULE_FIELD_SPECS
-  .filter((s) => !SPECIAL.has(s.model))
+type ExplicitPlacementSpec =
+  Extract<(typeof RULE_FIELD_SPECS)[number], { placement: 'explicit' }>
+/** 非平铺行的模型键（表的 `placement` 列投影）：每一行在 `normalizeSource` 里都有具名落位分支。
+ *  以前这份名单是手抄集合，与手写落位块没有可红的联动——加一行非平铺字段而忘了登记，字段静默恒
+ *  null，编译与测试都不响。现在两半各有主：登记之后漏写落位实现，由
+ *  `tests/services/normalize.test.ts` 的 `PLACEMENT_INPUTS`（键集取 `ExplicitPlacementField`）与
+ *  端到端落位用例把住，名单的期望值在 `tests/services/rule-fields.test.ts` 里独立写死；**「该标
+ *  未标」仍靠评审**——`SPECIAL` 由 `placement` 派生，抓不到自己的缺席，一个新字段漏标这列会静默
+ *  走平铺循环。章节 flag 在那块里另有读法（逐章按 `isTrue` 折布尔，见 `online-reading`）。 */
+export type ExplicitPlacementField = ExplicitPlacementSpec['model']
+export const SPECIAL: readonly ExplicitPlacementField[] = RULE_FIELD_SPECS
+  .filter((s): s is ExplicitPlacementSpec => 'placement' in s)
   .map((s) => s.model)
 
-/** 对象方言的「容器 → 子字段 → 模型键」表；同一行既供展平，也供存量重推取容器与子字段名。
- *  两方言映射都由同一张表派生——加字段只写一行，不存在「映射改了、展平没改」的分叉。 */
+/** 平铺循环的字段名单：平铺方言的展平视图键与模型键同名，导入时逐键读 `str`，缺省落 null。
+ *  与 `SPECIAL` 互为补集——「进不进平铺循环」只有落位一列这一处事实。 */
+export const RULE_FIELDS: readonly (keyof NormalizedRules)[] = RULE_FIELD_SPECS
+  .filter((s) => !('placement' in s))
+  .map((s) => s.model)
+
+/** 表覆盖面的分布门：`NormalizedRules` 的每个键都得在表里占一行（平铺循环或具名落位），唯一例外是
+ *  `ruleExploreKinds`（分类入口数组，落位住 `normalize` 的显式分支，见文件头「边界」）。加一个模型
+ *  字段却忘了登记表时，`blankRules` 与读面都能编译、字段却恒 null——那一步被下面这条断言挡在
+ *  `tsc`；钉子 `tests/services/rule-fields.test.ts` 只把这个类型再取一次名，证明门还接得上。 */
+type CoveredModel = (typeof RULE_FIELD_SPECS)[number]['model']
+type TableExcludedRules = 'ruleExploreKinds'
+type UncoveredRules = Exclude<keyof NormalizedRules, CoveredModel | TableExcludedRules>
+type Assert<T extends true> = T
+export type _EveryRuleFieldInTable = Assert<UncoveredRules extends never ? true : false>
+
+/** 表行 → 「容器 → 子字段 → 模型键」映射的私有派生口（两方言各取自己那两列）。 */
 function groupedBy(
+  rows: readonly RuleFieldSpec[],
   objectOf: (spec: RuleFieldSpec) => string | undefined,
   keyOf: (spec: RuleFieldSpec) => string | undefined,
 ): Record<string, Record<string, string>> {
   const out: Record<string, Record<string, string>> = {}
-  for (const spec of RULE_FIELD_SPECS) {
+  for (const spec of rows) {
     const object = objectOf(spec)
     const key = keyOf(spec)
     if (object === undefined || key === undefined) continue
@@ -159,11 +183,31 @@ function groupedBy(
   return out
 }
 
-export const DIALECT_MAP: Record<string, Record<string, string>> =
-  groupedBy((s) => s.legadoObject, (s) => s.legadoKey)
+/** legado 通用方言映射的派生口：展平入口按**传入的表行集**现派生（生产默认表 = `DIALECT_MAP`），
+ *  所以它也能吃一张合成的表行集——钉子因此能证明「表加一行 ⇒ 新容器自动进映射」，
+ *  旧实现里容器名是展平处的五名字面量，表加了行也不生效。 */
+export function dialectMapOf(rows: readonly RuleFieldSpec[]): Record<string, Record<string, string>> {
+  return groupedBy(rows, (s) => s.legadoObject, (s) => s.legadoKey)
+}
+
+/** 对象方言的「容器 → 子字段 → 模型键」表；同一行既供展平，也供存量重推取容器与子字段名。
+ *  两方言映射都由同一张表派生——加字段只写一行，不存在「映射改了、展平没改」的分叉。 */
+export const DIALECT_MAP: Record<string, Record<string, string>> = dialectMapOf(RULE_FIELD_SPECS)
 
 export const NATIVE_MAP: Record<string, Record<string, string>> =
-  groupedBy((s) => s.nativeObject, (s) => s.nativeKey)
+  groupedBy(RULE_FIELD_SPECS, (s) => s.nativeObject, (s) => s.nativeKey)
+
+/** `ADR-0044` 边界里的唯一具名特例：发现面容器 `ruleExplore`。那族行没有方言路径列（子字段名由
+ *  配对目标反推），所以它不在 `DIALECT_MAP` 里；但它是 legado 的规则容器，展平前的容器解析必须
+ *  包含它。特例单独声明一行，不再混进通用容器的字面量——「哪些是特例」只住这里。 */
+export const EXPLORE_CONTAINER = 'ruleExplore'
+
+/** 方言映射 → 展平前要解析的规则容器全集：四个通用容器就是映射的键（表投影），外加发现面这一个
+ *  具名特例。映射与容器清单同源，「表加一个新容器」不会只剩前者、后者静默读成 null。
+ *  展平入口（`normalize.flattenDialect`）按传入的映射现取；导出它，钉子才能对读这份投影本身。 */
+export function legadoContainersOf(map: Readonly<Record<string, unknown>>): readonly string[] {
+  return [...Object.keys(map), EXPLORE_CONTAINER]
+}
 
 /** Native 裸选择器要补隐式 `@text` 的字段：list/URL 位不在列（它们要节点集或属性）。 */
 export const NATIVE_TEXT_FIELDS: readonly string[] = RULE_FIELD_SPECS
@@ -184,7 +228,7 @@ export const VACANT_RULE_FIELDS: readonly RuleFieldsOf<'vacant'>[] = RULE_FIELD_
   .filter((s): s is VacantFieldSpec => s.rehydrate === 'vacant')
   .map((s) => s.model)
 
-// ── 派生读口：全部由上面这批行与三列推出，不另立名单 ──────────────────────
+// ── 派生读口：全部由上面这批行与行上的登记列推出，不另立名单 ────────────────
 
 /** 按模型键取表行：配对目标必须查得到，查不到即表坏了——模块加载期就炸，不留到某次发现面
  *  请求才表现为「字段死活是 null」。 */

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import type { ToolOutputDefinition } from '@deepseek-ai/dsh-tools'
 import { ReadingService } from '../../src/services/reading.js'
+import { BookNotOnShelfError } from '../../src/services/errors.js'
 import type { ChapterEntry, MergedBook, ShelfBook } from '../../src/shared/wire.js'
 import { SEARCH_BOOKS_CAP } from '../../src/shared/wire.js'
 import { buildTools, registerTools } from '../../src/tools/tools.js'
@@ -306,6 +307,14 @@ describe('agent 工具六件套', () => {
     const b = must(must(shelf.books, 'shelf 回执的 books').find((x) => x.title === 'T3'), '书架里的 T3')
     expect(b.progress).toMatchObject({ chapterIndex: 0, offsetRatio: 0 })
   })
+  it('dshnovel_shelf save_progress：书不在架 → 上抛门面 BookNotOnShelfError（工具面不自造第二句文案）', async () => {
+    const s = await svc()
+    // 此前这条分支没有用例，且工具面自造了「dshnovel_shelf 书架里没有这本书…」；缺席语义并入
+    // 错误目录后，唯一诊断句来自 `services/errors.ts` 的类，工具面只把错误原样交还 harness。
+    const args = { action: 'save_progress', bookKey: 'https://s.com/book/404/', chapterIndex: 0, offsetRatio: 0 }
+    await expect(run(s, 'dshnovel_shelf', args)).rejects.toThrow(BookNotOnShelfError)
+    await expect(run(s, 'dshnovel_shelf', args)).rejects.toThrow(/书架里没有这本书: https:\/\/s\.com\/book\/404\//)
+  })
   it('dshnovel_source：list/probe/enable/disable/remove 走通', async () => {
     const s = await svc()
     const id = sourceId
@@ -332,6 +341,14 @@ describe('agent 工具六件套', () => {
     const s = await svc()
     await expect(run(s, 'dshnovel_source', { action: 'enable', sourceId: 'nope' }))
       .rejects.toThrow(/源不存在/)
+  })
+  it('dshnovel_source remove：未知源 → removed:false（幂等成功，工具面不自造错误）', async () => {
+    const s = await svc()
+    // 删除路径的缺席是幂等成功：门面回 false 就是权威回执。此前这条分支由工具面自造
+    // 「dshnovel_source 源不存在…」（无覆盖）；现在工具面只投影布尔，不再造第二句文案。
+    const out = await run<SourceOut>(s, 'dshnovel_source', { action: 'remove', sourceId: 'nope' })
+    expect(out).toMatchObject({ action: 'remove', sourceId: 'nope', removed: false })
+    expect(hasUndefined(out)).toBe(false)   // lossless JSON：removed 是 false，不是缺席
   })
   it('dshnovel_source：id 类 action 缺 sourceId 时抛清楚的错', async () => {
     const s = await svc()
@@ -382,7 +399,7 @@ describe('agent 工具六件套', () => {
     })
     expect(outcome.ok).toBe(true)
     // 导入不探针——显式探一次验证 Native 分页语义：首页裁掉 /{{page}} 页码段
-    const probe = await s.probe(must(outcome.sourceId, 'importOne 受理的 sourceId'))
+    const { result: probe } = await s.probe(must(outcome.sourceId, 'importOne 受理的 sourceId'))
     expect(probe.ok).toBe(true)
   })
 })

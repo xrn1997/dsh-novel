@@ -41,6 +41,13 @@ describe('Shelf', () => {
     await s.flush()
     expect(must((await Shelf.load(dir)).get('k'), '读到的那一条').progress).toMatchObject({ chapterIndex: 3, offsetRatio: 0.9 })
   })
+  it('updateProgress 返回更新后的条目；不在架 → null（结果形状让门面删掉预检）', async () => {
+    const { s } = await tmpShelf()
+    expect(s.updateProgress('nope', 1, 0)).toBeNull()
+    s.add({ sourceId: 's1', bookKey: 'k', title: 't' })
+    const saved = must(s.updateProgress('k', 2, 0.25), '在架书的 updateProgress 返回值')
+    expect(saved.progress).toMatchObject({ chapterIndex: 2, offsetRatio: 0.25 })
+  })
   it('updateListen：落盘重读一致；progress 一字不动（听书细节轨不碰共用位置）', async () => {
     const { s, dir } = await tmpShelf()
     s.add({ sourceId: 's1', bookKey: 'k', title: 't' })

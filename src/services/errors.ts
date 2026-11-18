@@ -113,6 +113,20 @@ export class InvalidRequestError extends Error {
   }
 }
 
+/** 书不在架上（API 层映射 400 BadRequest）：**更新路径**的缺席语义——按 bookKey 打补丁 / 写进度 /
+ *  存听书位置都要求书已在架（入架是另一个动词），缺席时调用方要补的那一步是「先加书」。
+ *  类住在分类学单点，`classify` 投影成 bad-request；HTTP 那句可行动文案仍归 `api/dispatch.ts`
+ *  （服务层不带路由措辞，工具面原样上抛本类的诊断句）。删除路径的缺席是幂等成功（布尔/计数），
+ *  不是本类——同一个「按 key 点的目标不存在」，两个动词两种后果，各自表达。 */
+export class BookNotOnShelfError extends Error {
+  readonly bookKey: string
+  constructor(bookKey: string) {
+    super(`书架里没有这本书: ${bookKey}`)
+    this.name = new.target.name
+    this.bookKey = bookKey
+  }
+}
+
 /** 运行中重复提交任务：路由层映射 409 JobRunning（services 不 import api 层）。
  *  类住在错误分类学单点（`classify` 在本文件），任务模块只抛它；不要反向 import
  *  （`errors` → `import-job`），那会与探针状态单点合成值环。 */
@@ -212,7 +226,7 @@ export function classify(e: unknown): ErrorCategory {
   // 判定放在 local-import 之前：**更窄的判据先问**——将来若给本地异常改继承关系，
   // 顺序错了会把 404 读成 400 而无人察觉
   if (e instanceof LocalArtifactNotFoundError) return 'not-found'
-  if (e instanceof InvalidRequestError) return 'bad-request'
+  if (e instanceof InvalidRequestError || e instanceof BookNotOnShelfError) return 'bad-request'
   if (e instanceof LocalImportError || e instanceof EpubImportError) return 'local-import'
   if (e instanceof LocalFileTooLargeError) return 'local-too-large'
   if (e instanceof LocalNotMountedError || e instanceof TtsNotMountedError || e instanceof TtsEnginesDegradedError) return 'unavailable'

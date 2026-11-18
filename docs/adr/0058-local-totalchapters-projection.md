@@ -10,7 +10,7 @@ Status: accepted
 
 ## 决定
 
-1. `LocalBookMeta` 不携带 `totalChapters`；门面 `localImport` 从 `chapterCount` 统一投影进书架字段。
+1. `LocalBookMeta` 不携带 `totalChapters`；本地书生命周期的 `importBook` 从 `chapterCount` 统一投影进书架字段，门面 `localImport` 只委托。
 2. 启动时对缺字段的既有条目补一次：已有值不覆盖；读不到 meta 的条目跳过。
 3. 补数走书架的常规写路径落盘，不是内存里的临时投影——界面读的是落盘那份，只改内存等于下次启动再补一遍。
 4. 补数不是校验：meta 读不到（副本已删 / 元数据损坏）就跳过，不替书架判那份副本还在不在；两种失败折成「跳过」是这条口径的一部分。
@@ -27,4 +27,4 @@ Status: accepted
 - `chapterCount` 的唯一来源是本地 meta 的 `chapters` 线性序列；展示树的嵌套条目不是章序列，不参与计数。
 - 补数只在启动跑一轮，且只对缺字段的条目发生；已是数字的值永远不覆盖。
 
-锚点：`src/services/reading.ts` 的 `localImport` / `backfillLocalChapterCounts`；`src/services/localbooks.ts` 的 `chapterCount` / `LocalBookMeta`；`tests/services/reading.test.ts` 的「TXT 回执」与「既有条目缺 totalChapters」用例；`tests/services/localbooks.test.ts` 的导入回执用例。
+锚点：`src/services/local-lifecycle.ts` 的 `importBook` / `backfillChapterCounts`（门面 `services/reading.ts` 的 `localImport` 只委托，组合根在 `create` 里调补数）；`src/services/localbooks.ts` 的 `chapterCount` / `LocalBookMeta`；`tests/services/reading.test.ts` 的「TXT 回执」与「既有条目缺 totalChapters」用例；`tests/services/localbooks.test.ts` 的导入回执用例。

@@ -64,7 +64,7 @@ describe.skipIf(process.env.COMPAT_CAPTURE !== '1')('compat 采集', () => {
       expect(outcome.ok, `${caseName}: 导入规范化失败——${outcome.missing.map((m) => m.field).join(',')}`).toBe(true)
       // 导入不探针——采集口径与回放一致：导入后显式探一次
       const sourceId = must(outcome.sourceId, `${caseName}: 导入回执没有 sourceId`)
-      const probe = await svc.probe(sourceId)
+      const probe = (await svc.probe(sourceId)).result
       expect(probe.ok, `${caseName}: 探针失败——${probe.error?.message}`).toBe(true)
       const groups = await svc.search(KEYWORD)
       const hit = groups.flatMap((g) => g.hits).find((h) => h.url !== null)

@@ -32,7 +32,7 @@ describe.skipIf(process.env.DSH_REPROBE !== '1')('真机重探（全量 probe �
         try {
           const out = await svc.importOne(item.raw)
           // 导入不探针——重探统计口径：导入后显式探一次
-          const probe = out.sourceId === null ? null : await svc.probe(out.sourceId)
+          const probe = out.sourceId === null ? null : (await svc.probe(out.sourceId)).result
           if (probe?.ok === true) verified++
           else {
             const code = probe?.error?.code ?? (out.ok ? '(无探针)' : '导入失败')

@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Readable } from 'node:stream'
 import type { ReadingService } from '../services/reading.js'
 import { DEFAULT_EXPORT_DELAY_MS } from '../services/export.js'
+import { BookNotOnShelfError } from '../services/errors.js'
 import { SVG_MEDIA_TYPE } from '../services/epub/resources.js'
 import { log } from '../services/log.js'
 import { formatByteLimit } from '../services/size.js'
@@ -13,8 +14,20 @@ import { BodyShapeError } from '../shared/wire.js'
 import { matchRoute } from './routes.js'
 import type { ParamRouteName, RouteName } from './routes.js'
 
-/** 「书不在架上」文案单点（shelfPut 两形态共用这一句） */
+/** 「书不在架上」文案单点（shelfPut 的更新形态共用这一句） */
 const NOT_ON_SHELF = '书不在架上，先带 title 调用加入'
+
+/** 书架更新动词（patch / progress / listen）的缺席翻译：存在性是门面的事实（`services/reading.ts`
+ *  抛 `BookNotOnShelfError`），本层只把「不在架」翻成 HTTP 的 400 与那句可行动文案——
+ *  文案仍住路由，服务层不带 HTTP 措辞；三种更新形态共用这一处，别在分支里各写一遍判空。 */
+function shelfUpdate<T>(apply: () => T): T {
+  try {
+    return apply()
+  } catch (e) {
+    if (e instanceof BookNotOnShelfError) throw new ApiError(NOT_ON_SHELF, 400, 'BadRequest')
+    throw e
+  }
+}
 
 /** SSE 响应头单点（搜索面与发现面两条流共用）。`x-accel-buffering` 那句为什么只写过一份：
  *  攒帧的代价是「即时」变成「整批迟到」，而这条性质对两条流同等成立，抄第二遍时最容易丢的就是它。 */
@@ -400,7 +413,8 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } 
 /** 8 条参数路由的穷尽分发表（键集由 `ParamRouteName` 逼）：`params` 里是 `:` 段的原值。 */
 const PARAM_HANDLERS: { [K in ParamRouteName]: (ctx: HandlerCtx) => void | Promise<void> } = {
   sourceProbe: async ({ res, service, params }) => {
-    writeOk(res, await service.probe(paramOf(params)))
+    // 门面交 outcome（wire 读数 + 已写回的 status）：HTTP 面只写 result，状态不重复推导/透出
+    writeOk(res, (await service.probe(paramOf(params))).result)
   },
   sourceEnabled: async ({ req, res, service, params }) => {
     // 单源启停：停用 = 不参与聚合搜索，试跑/验证不受影响
@@ -527,7 +541,9 @@ function pipeBinary(
 
 /** PUT /shelf/:key：body 的字段集类型判别住 wire 的 `readBodies.shelfPut`；**形态分派**
  *  （含 title 非空才加书、四形态皆无 → 400）住本臂——「调用方要的是哪个动作」是传输关注点
- *  （`ADR-0036` 第①条）。合并语义 null/undefined 保值单点住在 `Shelf`。 */
+ *  （`ADR-0036` 第①条）。合并语义 null/undefined 保值单点住在 `Shelf`。
+ *  更新形态的缺席判据不在这层：三种更新动词各自抛出 `BookNotOnShelfError`（缺席在更新动词里
+ *  是错误），三个分支共用 `shelfUpdate` 把这一事实翻成 400 与那句文案——不预检、不判空。 */
 async function shelfPut(
   service: ReadingService, bookKey: string, req: IncomingMessage, res: ServerResponse,
 ): Promise<void> {
@@ -542,21 +558,18 @@ async function shelfPut(
     return
   }
   if (fields.patch !== null) {
-    const patched = service.shelfPatch(bookKey, fields.patch)
-    if (patched === null) throw new ApiError(NOT_ON_SHELF, 400, 'BadRequest')
-    writeOk(res, patched)
+    const { patch } = fields
+    writeOk(res, shelfUpdate(() => service.shelfPatch(bookKey, patch)))
     return
   }
   if (fields.progress !== null) {
-    const saved = service.shelfSaveProgress(bookKey, fields.progress.chapterIndex, fields.progress.offsetRatio)
-    if (saved === null) throw new ApiError(NOT_ON_SHELF, 400, 'BadRequest')
-    writeOk(res, saved)
+    const { progress } = fields
+    writeOk(res, shelfUpdate(() => service.shelfSaveProgress(bookKey, progress.chapterIndex, progress.offsetRatio)))
     return
   }
   if (fields.listen !== null) {
-    const saved = service.shelfSaveListen(bookKey, fields.listen)
-    if (saved === null) throw new ApiError(NOT_ON_SHELF, 400, 'BadRequest')
-    writeOk(res, saved)
+    const { listen } = fields
+    writeOk(res, shelfUpdate(() => service.shelfSaveListen(bookKey, listen)))
     return
   }
   throw new ApiError(`body 需带 ${PARAMS.title}（加书）/ ${BODY.patch}（打补丁）/ ${BODY.progress}:{${BODY.chapterIndex},${BODY.offsetRatio}}（更新进度）/ ${BODY.listen}:{${BODY.chapterIndex},${BODY.paragraphIndex},${BODY.engineId},${BODY.voice},${BODY.rate},${BODY.volume}}（存听书位置）`, 400, 'BadRequest')

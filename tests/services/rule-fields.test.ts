@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
-  DIALECT_MAP, EXPLORE_FALLBACK_FIELDS, EXPLORE_GATE_SUBS, EXPLORE_LEGADO_SUBS, EXPLORE_NATIVE_SUBS,
-  NATIVE_MAP, NATIVE_TEXT_FIELDS, PAIR_OF, REHYDRATE_PHASE, REHYDRATE_PHASES,
-  RULE_FIELDS, RULE_FIELD_SPECS, VACANT_RULE_FIELDS, WHOLE_SET_FIELD, wholeSetEnabled,
+  DIALECT_MAP, EXPLORE_CONTAINER, EXPLORE_FALLBACK_FIELDS, EXPLORE_GATE_SUBS, EXPLORE_LEGADO_SUBS,
+  EXPLORE_NATIVE_SUBS, NATIVE_MAP, NATIVE_TEXT_FIELDS, PAIR_OF, REHYDRATE_PHASE, REHYDRATE_PHASES,
+  RULE_FIELDS, RULE_FIELD_SPECS, SPECIAL, VACANT_RULE_FIELDS, WHOLE_SET_FIELD, legadoContainersOf,
+  wholeSetEnabled,
 } from '../../src/services/rule-fields.js'
-import type { RuleFieldsOf } from '../../src/services/rule-fields.js'
+import type { ExplicitPlacementField, RuleFieldsOf, _EveryRuleFieldInTable } from '../../src/services/rule-fields.js'
 import { rawExploreFields } from '../../src/services/normalize.js'
 import type { NormalizedRules } from '../../src/services/types.js'
 import { must } from '../support/fixture.js'
@@ -19,6 +20,13 @@ describe('rule-field table', () => {
     expect(seen.size).toBe(RULE_FIELD_SPECS.length)
     expect(RULE_FIELDS).toContain('ruleBookName')
     expect(RULE_FIELDS).not.toContain('searchUrl')
+  })
+
+  it('表覆盖 NormalizedRules 的每个键（`ruleExploreKinds` 是唯一具名边界）', () => {
+    // 编译期门：下面这行能编过，说明没有模型字段落在表外（判据住 `rule-fields.ts` 的
+    // `_EveryRuleFieldInTable`；加字段忘了登记表时那一行先红）。
+    const covered: _EveryRuleFieldInTable = true
+    expect(covered).toBe(true)
   })
 
   it('derives the legado and Native maps from the same rows', () => {
@@ -152,5 +160,28 @@ describe('rule-field table: 配对 / 整套闸 / 段序三列', () => {
   it('rawExploreFields 的键集恰为 vacant 档 + 分类入口数组（派生真的被读口消费）', () => {
     const got = must(rawExploreFields({ bookSourceName: 'A', bookSourceUrl: 'https://a', ruleContent: 'x' }), 'rawExploreFields 的读口')
     expect(Object.keys(got).sort()).toEqual([...VACANT_RULE_FIELDS, 'ruleExploreKinds'].sort())
+  })
+})
+
+describe('rule-field table: 落位列与容器投影', () => {
+  it('落位列：SPECIAL 是 `placement: explicit` 行的投影，与 RULE_FIELDS 互为补集', () => {
+    // 期望值独立写死（派生即同义反复）：新增 / 移除非平铺行必须同时改这里与那一行的 placement 列。
+    const pinned: Record<ExplicitPlacementField, true> = {
+      searchUrl: true, exploreUrl: true, header: true, headerRule: true, jsLib: true,
+      ruleChapterIsVip: true, ruleChapterIsVolume: true, ruleChapterIsPay: true, ruleChapterUpdateTime: true,
+    }
+    expect([...SPECIAL].sort()).toEqual(Object.keys(pinned).sort())
+    // 两栏是补集：每一行不是平铺就是非平铺——两边都不在的行（忘记登记落位）= 导入后静默恒 null。
+    expect(RULE_FIELDS.length + SPECIAL.length).toBe(RULE_FIELD_SPECS.length)
+    for (const model of SPECIAL) expect(RULE_FIELDS, `${model} 同时进了平铺循环`).not.toContain(model)
+  })
+
+  it('容器集合是表的投影：四个通用容器 = DIALECT_MAP 的键，ruleExplore 是唯一具名特例', () => {
+    // 四个通用容器与映射由同一批行派生；期望值独立写死，DIALECT_MAP 少键 / 多键都当场红。
+    expect(Object.keys(DIALECT_MAP)).toEqual(['ruleSearch', 'ruleBookInfo', 'ruleToc', 'ruleContent'])
+    expect(EXPLORE_CONTAINER).toBe('ruleExplore')
+    // 容器全集 = 映射键 + 那一个具名特例（次序 = 表行序，特例垫底）。
+    // 旧实现里这份名单是展平处的五名字面量：表加一行新容器，映射有、解析清单没有 → 字段静默 null。
+    expect([...legadoContainersOf(DIALECT_MAP)]).toEqual(['ruleSearch', 'ruleBookInfo', 'ruleToc', 'ruleContent', 'ruleExplore'])
   })
 })

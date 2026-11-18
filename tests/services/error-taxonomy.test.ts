@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { classify } from '../../src/services/errors.js'
 import type { ErrorCategory } from '../../src/services/errors.js'
-import { ChapterNotFoundError, DecodeError, FetchError, InvalidRequestError, LocalNotMountedError, RuleMissingError, SourceNotFoundError, TtsEnginesDegradedError, TtsNotMountedError, TtsSynthesisError } from '../../src/services/errors.js'
+import { BookNotOnShelfError, ChapterNotFoundError, DecodeError, FetchError, InvalidRequestError, LocalNotMountedError, RuleMissingError, SourceNotFoundError, TtsEnginesDegradedError, TtsNotMountedError, TtsSynthesisError } from '../../src/services/errors.js'
 import { JsSandboxError, RuleEvalError, UnsupportedRuleError } from '../../src/engine/index.js'
 import { LocalArtifactNotFoundError, LocalFileTooLargeError, LocalImportError } from '../../src/services/localbooks.js'
 import { EpubImportError } from '../../src/services/epub/errors.js'
@@ -38,6 +38,9 @@ const TABLE: Array<[unknown, ErrorCategory, number, string, string]> = [
   [new ChapterNotFoundError(9, 42), 'not-found', 404, 'NotFound', 'Error'],
   // 值域错（非空 / 非负整数 / 比例在 [0,1]）：门住门面动词，两个调用面（HTTP、agent 工具）共用
   [new InvalidRequestError('加书需带非空 sourceId'), 'bad-request', 400, 'BadRequest', 'Error'],
+  // 更新路径的「书不在架」（W7）：缺席在本动词是错误，走同一类目 → 400；删除路径的缺席是幂等
+  // 成功（布尔/计数），不进这张表——同一个「按 key 点的目标不存在」按动词各表其果。
+  [new BookNotOnShelfError('https://a.com/book/1'), 'bad-request', 400, 'BadRequest', 'Error'],
   // 三类目各在自己的类上：LocalImportError / JobRunningError / LocalNotMountedError，
   // status 一律由本表给出，路由不再特判包装
   [new LocalImportError('文件为空'), 'local-import', 400, 'BadRequest', 'Error'],

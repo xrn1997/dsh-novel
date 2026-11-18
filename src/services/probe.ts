@@ -83,9 +83,23 @@ function fail(code: ProbeErrorCode, message: string, itemCount: number): ProbeRe
   return { ok: false, itemCount, firstTitle: null, error: { code, message }, probedAt: Date.now() }
 }
 
-/** verdict → status 的唯一写口：单点探针与批量探针共用 */
-export async function applyProbeResult(registry: SourceRegistry, id: string, r: ProbeResult): Promise<void> {
-  await registry.edit((tx) => tx.setStatus(id, r.ok ? 'verified' : 'broken', r.error?.message, r.probedAt))
+/** 探针结局：`result` 是 wire 面读数（HTTP 响应体原样），`status` 是这次 verdict 写回的源状态。
+ *  `ok → verified / broken` 只在 `applyProbeResult` 里算一次；两个投影面只翻译/投影这个 outcome
+ *  （HTTP 面写 `result`，工具面投影 `status`），谁也不再抄第二份算式。 */
+export interface ProbeOutcome {
+  result: ProbeResult
+  status: 'verified' | 'broken'
+}
+
+/** verdict → status 的唯一写口：单点探针与批量探针共用。
+ *  交出 outcome（而不是 void）：verdict→status 的判定只在这里发生一次，调用方读 `status`
+ *  即可，不必把 `r.ok ? 'verified' : 'broken'` 再写一遍。 */
+export async function applyProbeResult(
+  registry: SourceRegistry, id: string, r: ProbeResult,
+): Promise<ProbeOutcome> {
+  const status = r.ok ? 'verified' : 'broken'
+  await registry.edit((tx) => tx.setStatus(id, status, r.error?.message, r.probedAt))
+  return { result: r, status }
 }
 
 function messageOf(e: unknown): string {

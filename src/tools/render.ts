@@ -151,7 +151,10 @@ export function renderSourceRemove(v: SourceRemoveRenderValue): string {
   if (v.sourceId === undefined || typeof v.removed !== 'boolean') {
     throw new Error('dshnovel_source remove 回执缺少 sourceId/removed')
   }
-  return `已删除源 ${v.sourceId}（removed=${String(v.removed)}）`
+  // 删除是幂等的：源本来就不在时 `removed` 为 false，措辞得说清「没删到东西」而不是「已删除」。
+  return v.removed
+    ? `已删除源 ${v.sourceId}（removed=true）`
+    : `源 ${v.sourceId} 不在清单里（removed=false）`
 }
 
 export interface ImportOutcomeRender {

@@ -17,7 +17,7 @@ import { CookieJar } from '../../src/services/cookies.js'
 import { PageCache } from '../../src/services/cache.js'
 import { Shelf } from '../../src/services/shelf.js'
 import { SourceRegistry } from '../../src/services/sources.js'
-import { ChapterNotFoundError, InvalidRequestError, SourceNotFoundError } from '../../src/services/errors.js'
+import { BookNotOnShelfError, ChapterNotFoundError, InvalidRequestError, SourceNotFoundError } from '../../src/services/errors.js'
 import { must, pick } from '../support/fixture.js'
 import { requestUrlOf } from '../support/fetch-input.js'
 
@@ -877,10 +877,10 @@ describe('js 沙箱预算走配置出口（jsTimeoutMs）', () => {
       searchUrl: `@js: var t = Date.now(); while (Date.now() - t < 800) {}; 'https://js.example.com/s?q=' + key`,
     })
     const src = must(registry.list().find((s) => s.name === 'JS源'), 'registry.list() 里 find 命中的那一项')
-    const r = await svc.probe(src.id)
-    expect(r.ok).toBe(false)
-    expect(r.error?.code).toBe('JsSandboxError')
-    expect(r.error?.message).toMatch(/脚本超时（>300ms）/)
+    const { result } = await svc.probe(src.id)
+    expect(result.ok).toBe(false)
+    expect(result.error?.code).toBe('JsSandboxError')
+    expect(result.error?.message).toMatch(/脚本超时（>300ms）/)
   })
 })
 
@@ -1140,10 +1140,10 @@ describe('门面 probe 与搜索同耐心', () => {
     }))
     const out = await svc.importOne({ ...rawSource })
     const t0 = Date.now()
-    const r = await svc.probe(must(out.sourceId, 'out 的 sourceId'))
+    const { result } = await svc.probe(must(out.sourceId, 'out 的 sourceId'))
     expect(Date.now() - t0).toBeLessThan(1500)
-    expect(r.ok).toBe(false)
-    expect(r.error?.code).toBe('FetchError')
+    expect(result.ok).toBe(false)
+    expect(result.error?.code).toBe('FetchError')
   })
 })
 
@@ -1177,23 +1177,41 @@ describe('门面直测（invariant 与 loginPlan 在门面上直接可测，不�
     expect((await svc.removeLocalBook(book.bookKey)).removed).toBe(false)
   })
 
-  it('shelfSaveProgress：不在架 → null（不静默造书）；在架 → 返回更新后条目', async () => {
+  // 形状改写（W7 缺席语义，理由）：此前不在架 → null，由路由翻 400、工具面另造一句文案。
+  // 缺席语义归动词后，门面抛错误目录里的 `BookNotOnShelfError`（classify → bad-request/400），
+  // 两个投影面只翻译/投影这个结果——同一判断只剩 `Shelf.updateProgress` 一处。
+  it('shelfSaveProgress：不在架 → 抛 BookNotOnShelfError（不静默造书）；在架 → 返回更新后条目', async () => {
     const svc = await mk()
-    expect(svc.shelfSaveProgress('nope', 1, 0.5)).toBe(null)
+    expect(() => svc.shelfSaveProgress('nope', 1, 0.5)).toThrow(BookNotOnShelfError)
+    expect(() => svc.shelfSaveProgress('nope', 1, 0.5)).toThrow(/书架里没有这本书: nope/)
+    expect(svc.shelfList()).toHaveLength(0)   // 缺席不静默造书
     svc.shelfAdd('k1', { sourceId: 's', title: 'T' })
     const saved = svc.shelfSaveProgress('k1', 2, 0.25)
-    expect(saved?.progress).toMatchObject({ chapterIndex: 2, offsetRatio: 0.25 })
+    expect(saved.progress).toMatchObject({ chapterIndex: 2, offsetRatio: 0.25 })
   })
 
-  it('shelfSaveListen：不在架 → null（不静默造书）；在架 → 落 listen、progress 不动（共用位置由另一笔写）', async () => {
+  // 形状改写（同 shelfSaveProgress）：不在架不再回 null（那让路由与工具面各自判空、各自造文案），
+  // 由门面抛 `BookNotOnShelfError`；值域门仍先于存在性（坏值在查架位之前就炸）。
+  it('shelfSaveListen：不在架 → 抛 BookNotOnShelfError（不静默造书）；在架 → 落 listen、progress 不动', async () => {
     const svc = await mk()
     const p = { chapterIndex: 1, paragraphIndex: 3, engineId: 'e1', voice: 'v1', rate: 1.25, volume: 0.7 }
-    expect(svc.shelfSaveListen('nope', p)).toBe(null)
+    expect(() => svc.shelfSaveListen('nope', p)).toThrow(BookNotOnShelfError)
+    expect(() => svc.shelfSaveListen('nope', p)).toThrow(/书架里没有这本书: nope/)
+    expect(svc.shelfList()).toHaveLength(0)   // 缺席不静默造书
     svc.shelfAdd('k1', { sourceId: 's', title: 'T' })
     svc.shelfSaveProgress('k1', 4, 0.4)
-    const saved = must(svc.shelfSaveListen('k1', p), '在架书的 shelfSaveListen 返回值')
+    const saved = svc.shelfSaveListen('k1', p)
     expect(saved.listen).toMatchObject(p)
     expect(saved.progress).toMatchObject({ chapterIndex: 4, offsetRatio: 0.4 })
+  })
+
+  // patch 形态的结果形状与 listen/progress 对齐：同一句「缺席在本动词是错误」只在动词上表达一次。
+  it('shelfPatch：不在架 → 抛 BookNotOnShelfError；在架 → 返回更新后条目（其余元数据全保）', async () => {
+    const svc = await mk()
+    expect(() => svc.shelfPatch('nope', { totalChapters: 1 })).toThrow(BookNotOnShelfError)
+    svc.shelfAdd('k1', { sourceId: 's', title: 'T', author: 'A' })
+    const patched = svc.shelfPatch('k1', { totalChapters: 12 })
+    expect(patched).toMatchObject({ title: 'T', author: 'A', totalChapters: 12 })
   })
 
   it('shelfSaveListen 值域门：index 非负整数 / rate∈[0.5,3] / volume∈[0,1] / 引擎与音色 string|null，否则 InvalidRequestError', async () => {
@@ -1380,29 +1398,6 @@ describe('本地 EPUB 门面：导入回执、图文读取、导航与资源', (
       .toEqual([b.bookKey.slice(6), `${b.bookKey.slice(6)}.json`])
     expect(await svc.removeBooks([b.bookKey, 'nope'])).toEqual({ removed: 1 })
     expect(await fsPromises.readdir(path.join(dir, 'local'))).toEqual([])
-  })
-
-  it('本地副本删失败：架位保留可重试（单删与批删共用「先副本、后架位」这一条顺序）', async () => {
-    const { svc } = await mk()
-    const a = await svc.localImport(makeEpubFixture('epub3-rich'), 'a.epub')
-    const b = await svc.localImport(makeEpubFixture('epub2-basic'), 'b.epub')
-    const realRm = fsPromises.rm
-    // 只拦「本地书目录」那一次 rm：`.json` / `.txt` / staging 与 shelf.json 的落盘都不匹配这条形状
-    const spy = vi.spyOn(fsPromises, 'rm').mockImplementation(async (p, o) => {
-      if (/[\\/]local[\\/][0-9a-f-]{36}$/.test(String(p))) throw new Error('模拟副本删失败')
-      return realRm(p, o)
-    })
-    try {
-      // 反过来（先移架位再删副本）就是没有架位的磁盘孤儿：这里三条入口都必须把架位留住
-      await expect(svc.removeBook(a.bookKey)).rejects.toThrow(/副本删失败/)
-      expect(svc.shelfList().some((x) => x.bookKey === a.bookKey)).toBe(true)
-      await expect(svc.removeBooks([b.bookKey])).rejects.toThrow(/副本删失败/)
-      expect(svc.shelfList().some((x) => x.bookKey === b.bookKey)).toBe(true)
-      await expect(svc.removeLocalBook(a.bookKey)).rejects.toThrow(/副本删失败/)
-      expect(svc.shelfList().some((x) => x.bookKey === a.bookKey)).toBe(true)
-    } finally {
-      spy.mockRestore()
-    }
   })
 
   it('提交标记写失败：本次 UUID 落盘物回收、不造书架条目、既有书照读', async () => {

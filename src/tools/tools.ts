@@ -329,12 +329,11 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
       needs: ['bookKey', 'chapterIndex', 'offsetRatio'],
       execute: (args: ShelfArgs, exec) => {
         checkAbort(exec)
-        // 不在架 → null：镜像 HTTP 面 400，不静默造书（reading.shelfSaveProgress 口径）
-        const updated = service.shelfSaveProgress(
+        // 缺席在本动词是错误：门面抛出目录里的 `BookNotOnShelfError`，本层原样上抛——
+        // 不为同一事实另造一句工具面文案（`project` 只负责可空→缺席的投影）。
+        const book: ShelfItem = project(pickShelfItem(service.shelfSaveProgress(
           needArg(args.bookKey, 'bookKey'), needArg(args.chapterIndex, 'chapterIndex'), needArg(args.offsetRatio, 'offsetRatio'),
-        )
-        if (updated === null) throw new Error(`dshnovel_shelf 书架里没有这本书：${args.bookKey}`)
-        const book: ShelfItem = project(pickShelfItem(updated))
+        )))
         return { action: 'save_progress' as const, book }
       },
       render: (v) => renderShelfBook('save_progress', v),
@@ -451,9 +450,10 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
         const sourceId = needArg(args.sourceId, 'sourceId')
         // 探针是一串真实站点请求（命中 0 条还会换关键词重试）：取消要能中止在途 HTTP 请求，
         // 并且不再换下一个词（webView 导航没有取消面，见 source-request.ts 的 ReadFetchOptions）
-        const r = await service.probe(sourceId, { ...(exec.signal === undefined ? {} : { signal: exec.signal }) })
+        // outcome 里已带着门面写回源的 status（verdict→status 的唯一判定），本层只投影这个值。
+        const { result: r, status } = await service.probe(sourceId, { ...(exec.signal === undefined ? {} : { signal: exec.signal }) })
         return project({
-          action: 'probe', sourceId, status: r.ok ? 'verified' : 'broken',
+          action: 'probe', sourceId, status,
           ok: r.ok, itemCount: r.itemCount, probedAt: r.probedAt,
           firstTitle: r.firstTitle ?? undefined, error: r.error,
         })
@@ -478,8 +478,9 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
       execute: async (args: SourceArgs, exec) => {
         checkAbort(exec)
         const sourceId = needArg(args.sourceId, 'sourceId')
+        // 删除路径的缺席是幂等成功：门面回 false 就是权威回执，本层只投影布尔——
+        // 同一个「源不存在」不在工具面另造一句错（enable/disable 那个动词走的才是错误径）。
         const removed = await service.removeSource(sourceId)
-        if (!removed) throw new Error(`dshnovel_source 源不存在：${sourceId}`)
         return { action: 'remove' as const, sourceId, removed }
       },
       render: (v) => renderSourceRemove(v),

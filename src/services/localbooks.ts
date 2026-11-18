@@ -5,13 +5,14 @@ import path from 'node:path'
 import type { Readable } from 'node:stream'
 import { LOCAL_SOURCE_ID, planarNavigation, resourceUrl } from '../shared/wire.js'
 import type {
-  BookNavigation, ChapterContent, ChapterEntry, LocalImportWarning, NavigationItem, ShelfBook,
+  BookNavigation, ChapterContent, ChapterEntry, LocalImportWarning, ShelfBook,
 } from '../shared/wire.js'
 import { chapterContentToText } from '../shared/chapter-text.js'
 import { importEpub } from './epub/import.js'
-import type { EpubChapterRef, EpubDocumentRef, EpubImportData, EpubResourceRef } from './epub/import.js'
+import type { EpubImportData } from './epub/import.js'
 import { warningListOf } from './epub/findings.js'
-import type { FindingEntry } from './epub/findings.js'
+import { decodeLocalMeta, isEpubMeta, LOCAL_META_SCHEMA_VERSION } from './local-meta.js'
+import type { ChapterSpan, LocalEpubMeta, LocalMeta, LocalTextMeta, StoredEpubMetaV2, StoredTextMeta } from './local-meta.js'
 import { lruGet, lruSet } from './lru.js'
 import { formatByteLimit } from './size.js'
 import { readJson, writeJsonAtomic, isAtomicTemp, backupPathOf } from './storage.js'
@@ -21,8 +22,8 @@ import { readValue, type ValueSource } from './value-source.js'
  *  （services/types.ts、reading.ts 已在做），故此处不另写声明——re-export 保留既有 import 路径。 */
 export { LOCAL_SOURCE_ID }
 
-/** 章节偏移表项：字符偏移区间 [start, end)，name 为标题行原文（或兜底「正文」） */
-export interface ChapterSpan { name: string; start: number; end: number }
+/** 章节偏移表项（形状住在 `local-meta.ts` 的存储/读 codec）：re-export 保留既有 import 路径。 */
+export type { ChapterSpan } from './local-meta.js'
 
 /** bookKey 形态 `local:<uuid>`；严格 uuid 校验兼防路径穿越 */
 export const BOOK_KEY_RE = /^local:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/
@@ -103,70 +104,6 @@ export class LocalArtifactNotFoundError extends Error {
     super(message)
     this.name = new.target.name
   }
-}
-
-/** TXT 元数据（**既有形态**）：没有 schemaVersion——顶层元数据缺席它就是 TXT，旧书零迁移 */
-interface LocalTextMeta {
-  title: string
-  originalName: string
-  importedAt: number
-  encoding: string
-  chapters: ChapterSpan[]
-  length: number
-}
-
-/**
- * EPUB 元数据：`schemaVersion: 2` 既是**提交标记**（顶层元数据写完才算发布完成），也是格式判据。
- *
- * 章序列/文档表/资源表直接复用导入层的索引类型：形状主人是 `services/epub/import.ts`，
- * 这里不再抄一份字段表（抄一份的下场是导入端加字段、读端不知道）。`title` / `author` 是**导入时
- * 读出的书目原件**；它们的**书架投影**与其它书目字段一样走 `SHELF_META` 落 shelf.json，
- * 本地格式不新增可 patch 字段；总章数同理由门面从 `chapterCount` 投影，不在这里另存一份。
- */
-interface LocalEpubMeta {
-  schemaVersion: 2
-  format: 'epub'
-  title: string
-  author: string | null
-  originalName: string
-  importedAt: number
-  /** 阅读序列（index 即章号）；章数只认它 */
-  chapters: EpubChapterRef[]
-  documents: Record<string, EpubDocumentRef>
-  resources: Record<string, EpubResourceRef>
-  /** 展示用目录树（原生 nav/NCX；wire 形状） */
-  navigation: NavigationItem[]
-  /**
-   * 导入过程的事实清单（半径、动作句、处数与例子）：**拆开落盘**——合并、处数前缀与例子列表由读面
-   * 按当下的 `warningListOf` 现算。动作句本身仍是导入时写下的那句（带着那一次的数值与原文），
-   * 改它的措辞不会回写旧书。
-   */
-  findings?: FindingEntry[]
-  /**
-   * 兼容形状：把事实拼成中文句子后落盘的那一版。新书**同时**写一份投影，好让旧版本的读面在
-   * 降级时仍能显示导入说明；读面优先 `findings`（见 `warningsOf`），旧书没有 `findings` 时用它。
-   */
-  warnings?: LocalImportWarning[]
-}
-
-/**
- * 元数据 → 给用户看的告警：两种落盘形状各说各的话，收在这一处。
- *
- * 为什么不做一次性迁移：这一项只在「导入说明」里重看，从不参与读取、导出或 AI 工具的判断；
- * 回写旧书元数据要把整份 `LocalEpubMeta` 再写一遍，代价比它换到的东西大得多。旧书读出的是
- * 当年那句话；新书把合并、处数与例子按当下口径重排（动作句同样是导入时写下的）——两者都不会
- * 静默变成「没有痕」。新书同时写一份 `warnings` 投影只为旧版本读面降级时还能显示，读面仍以
- * `findings` 为准（同一份事实的投影，不是第二份账）。
- */
-function warningsOf(meta: LocalEpubMeta): LocalImportWarning[] {
-  if (meta.findings !== undefined) return warningListOf(meta.findings)
-  return meta.warnings ?? []
-}
-
-type LocalMeta = LocalTextMeta | LocalEpubMeta
-
-function isEpubMeta(meta: LocalMeta): meta is LocalEpubMeta {
-  return (meta as { schemaVersion?: unknown }).schemaVersion === 2 && (meta as { format?: unknown }).format === 'epub'
 }
 
 /** 导入结果里可进书架的书目字段（字段名与 wire 的 ShelfBook 同源，不另立字段表）。
@@ -286,7 +223,7 @@ export class LocalBooks {
     assertReadableDecodedText(text)
     const chapters = splitChapters(text)
     const id = randomUUID()
-    const meta: LocalTextMeta = {
+    const meta: StoredTextMeta = {
       title: titleFromName(name), originalName: name,
       importedAt: Date.now(), encoding, chapters, length: text.length,
     }
@@ -378,10 +315,10 @@ export class LocalBooks {
     return this.readDocument(bookKey, meta, documentId)
   }
 
-  /** 导入告警（导入说明可重看）：非 EPUB 恒空数组；EPUB 按落盘的事实清单现算投影 */
+  /** 导入告警（导入说明可重看）：非 EPUB 恒空数组；EPUB 读 codec 已在解码时归一成一列 */
   async getImportWarnings(bookKey: string): Promise<LocalImportWarning[]> {
     const meta = await this.metaOf(bookKey)
-    return isEpubMeta(meta) ? warningsOf(meta) : []
+    return isEpubMeta(meta) ? meta.warnings : []
   }
 
   /**
@@ -487,8 +424,10 @@ export class LocalBooks {
     if (inflight !== undefined) return inflight
     const epoch = this.metaEpoch
     const p = (async (): Promise<LocalMeta> => {
-      const meta = await readJson<LocalMeta | null>(this.fileOf(this.idOf(bookKey), 'json'), null)
-      if (meta === null) throw new LocalArtifactNotFoundError(`本地书不存在: ${bookKey}`)
+      const raw = await readJson<unknown>(this.fileOf(this.idOf(bookKey), 'json'), null)
+      if (raw === null) throw new LocalArtifactNotFoundError(`本地书不存在: ${bookKey}`)
+      // 唯一的 meta 读口：磁盘形状 → 当前内存形状（版本判别与旧形状归一都在 codec 里）
+      const meta = decodeLocalMeta(raw, bookKey)
       if (this.metaEpoch === epoch) lruSet(this.metaCache, bookKey, meta, MAX_CACHED_BOOKS)
       return meta
     })()
@@ -564,10 +503,11 @@ function titleFromName(name: string): string {
   return titleOf(name.replace(/\.[^./\\]+$/, ''))
 }
 
-/** 导入索引 → 持久化元数据：索引里的字段原样落盘（形状主人是导入层），只补书身份与时间戳 */
-function metaOfImport(data: EpubImportData, name: string): LocalEpubMeta {
+/** 导入索引 → 持久化元数据：只补书身份与时间戳，元素形状原样落盘（形状主人是导入层）。
+ *  返回类型即**存储形状**的声明点（`local-meta.ts` 的 `StoredEpubMetaV2`），写入处不再借读面类型。 */
+function metaOfImport(data: EpubImportData, name: string): StoredEpubMetaV2 {
   return {
-    schemaVersion: 2,
+    schemaVersion: LOCAL_META_SCHEMA_VERSION,
     format: 'epub',
     title: data.title ?? titleFromName(name),
     author: data.author,

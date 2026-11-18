@@ -1,10 +1,11 @@
 import { appendTail, withImplicitText } from '../engine/grammar.js'
 import { parseExploreKinds, usableKind } from './explore-url.js'
 import {
-  DIALECT_MAP, EXPLORE_GATE_SUBS, EXPLORE_LEGADO_SUBS, EXPLORE_NATIVE_SUBS, NATIVE_MAP, NATIVE_TEXT_FIELDS,
-  REHYDRATE_PHASES, RULE_FIELD_SPECS, RULE_FIELDS, VACANT_RULE_FIELDS, wholeSetEnabled,
+  EXPLORE_GATE_SUBS, EXPLORE_LEGADO_SUBS, EXPLORE_NATIVE_SUBS, NATIVE_MAP, NATIVE_TEXT_FIELDS,
+  REHYDRATE_PHASES, RULE_FIELD_SPECS, RULE_FIELDS, VACANT_RULE_FIELDS, dialectMapOf, legadoContainersOf,
+  wholeSetEnabled,
 } from './rule-fields.js'
-import type { RehydrateMode, RuleFieldsOf } from './rule-fields.js'
+import type { RehydrateMode, RuleFieldsOf, RuleFieldSpec } from './rule-fields.js'
 import type { NormalizedRules, NovelSource, SourceContentKind } from './types.js'
 
 export interface NormalizeIssue { field: string; message: string }
@@ -77,7 +78,7 @@ export function normalizeSource(raw: unknown): NormalizeResult {
   rules.ruleExploreKinds = Array.isArray(r.ruleExploreKinds)
     ? (r.ruleExploreKinds as Array<{ title: string; url: string }>)
     : []
-  // 表里的特殊字段不进平铺循环，各留一块落位：
+  // 表里落位方式为 `explicit` 的行（`SPECIAL` 投影）不进平铺循环，各留一块落位：
   // exploreUrl 是发现入口的声明串（解析归 flattenDialect 与 `explore-url.ts`），不是取值规则；
   // jsLib 是源级脚本库，只存在于平铺 raw；章节 flag 是逐章折布尔的规则，落位与那条下游口径
   // （`online-reading.isTrueRuleValue`）放在一起读。其余规则字段（含详情面与目录列表）都由
@@ -364,10 +365,17 @@ function ruleContainer(v: unknown): Container {
   return { unreadable: t.slice(0, 60) }
 }
 
-/** 一次导入里每块容器只解析一遍（DIALECT_MAP / replaceRegex / ruleExplore 三处都要看它） */
-function ruleContainers(raw: Record<string, unknown>, warnings: NormalizeIssue[]): Record<string, Record<string, unknown> | undefined> {
+/** 一次导入里每块容器只解析一遍（方言映射 / replaceRegex / ruleExplore 三处都要看它）。
+ *  `containers` 是规则字段表的投影（四个通用容器 = 方言映射的键 + `ruleExplore` 这一个具名特例，
+ *  见 `rule-fields.legadoContainersOf`）——这里不再点名字面量：表加一个新容器的行，容器解析自动
+ *  跟着多一块，不会出现「映射认它、解析不认它」的静默半截。 */
+function ruleContainers(
+  raw: Record<string, unknown>,
+  warnings: NormalizeIssue[],
+  containers: readonly string[],
+): Record<string, Record<string, unknown> | undefined> {
   const out: Record<string, Record<string, unknown> | undefined> = {}
-  for (const field of ['ruleSearch', 'ruleExplore', 'ruleBookInfo', 'ruleToc', 'ruleContent']) {
+  for (const field of containers) {
     const c = ruleContainer(raw[field])
     if ('obj' in c) out[field] = c.obj
     else {
@@ -390,23 +398,33 @@ function isArrayOfKinds(v: unknown): boolean {
 }
 
 /**
- * 对象方言展平：五个规则字段（ruleSearch/ruleExplore/ruleBookInfo/ruleToc/ruleContent）
- * 为对象时（**或为字符串化的 JSON**，见 ruleContainer），把已映射子字段填进合并视图的目标位
+ * 对象方言展平：规则容器（表的投影——四个通用容器 + `ruleExplore` 具名特例）为对象时
+ * （**或为字符串化的 JSON**，见 ruleContainer），把已映射子字段填进合并视图的目标位
  * （平铺字段已占的位不覆盖——平铺优先）。
  * 未映射且非空的子字段如实聚合 warning（宁吵不瞒），`ruleExplore` 里没被消费的子字段也并进
  * 这一处点名——同一类留痕全仓只开一条。
  * ruleContent.replaceRegex 追加 `##regex##` 净化尾（语义：匹配替换为空串）。
+ *
+ * `fieldSpecs` 默认取生产字段表；模块内所有调用点（`normalizeSource` 与两个存量重推读口）都不传。
+ * 导出它只为钉子：给它一张**合成的表行集**就能证明「表加一行 ⇒ 新容器下的字段也展平」——
+ * 旧实现里容器名是这里的一份五名字面量，表加了行，展平对那个容器取不到对象、直接 `continue` 静默读成 null。
  */
-function flattenDialect(raw: Record<string, unknown>, warnings: NormalizeIssue[]): Record<string, unknown> {
+export function flattenDialect(
+  raw: Record<string, unknown>,
+  warnings: NormalizeIssue[],
+  fieldSpecs: readonly RuleFieldSpec[] = RULE_FIELD_SPECS,
+): Record<string, unknown> {
   const out: Record<string, unknown> = { ...raw }
-  const containers = ruleContainers(raw, warnings)
+  // 容器集合与子字段映射同从这批表行派生：映射的键就是通用容器，外加 ruleExplore 具名特例
+  const dialectMap = dialectMapOf(fieldSpecs)
+  const containers = ruleContainers(raw, warnings, legadoContainersOf(dialectMap))
   const setIfVacant = (field: string, value: unknown): void => {
     const cur = out[field]
     const occupied = typeof cur === 'string' && cur.length > 0
     if (!occupied && typeof value === 'string' && value.length > 0) out[field] = value
   }
   const unsupported: string[] = []
-  for (const [objField, mapping] of Object.entries(DIALECT_MAP)) {
+  for (const [objField, mapping] of Object.entries(dialectMap)) {
     const obj = containers[objField]
     // 字符串形态的容器值住在这一键上——它是容器原文不是平铺规则，不清掉会挡住 setIfVacant、
     // 甚至把整段 JSON 当规则串用下去；读不出的坏串同清（那才是「坏 JSON 冒充规则串」，
