@@ -26,7 +26,7 @@ _唯一实现_: `services/normalize.ts`
 _Avoid_: 格式、模板
 
 **规则字段表（rule-field table）**:
-书源规则字段的登记处：一个模型键一行，写明两方言的容器与子字段路径（发现面条目字段没有路径列）、Native 隐式终端标记、存量收敛的覆盖模式，以及行级登记（`pairWith` 配对、发现面整套启用的 `wholeSetGate`）。导入循环、方言映射、配对索引、发现面字段与指纹、存量段序都从它派生；测试侧名单刻意独立写死。发现面条目字段（`ruleExplore*`）的整套落位与展平仍是 `normalize` 的显式分支，条目装配侧的整套切换归 `bridge.hitRuleOf`。
+书源规则字段的登记处：一个模型键一行，写明两方言的容器与子字段路径（发现面条目字段没有路径列）、Native 隐式终端标记、存量收敛的覆盖模式、落位方式（平铺循环 / 具名分支），以及行级登记（`pairWith` 配对、发现面整套启用的 `wholeSetGate`）。导入循环、方言映射、**展平前要解析的规则容器集合**、配对索引、发现面字段与指纹、存量段序都从它派生；测试侧名单刻意独立写死。发现面条目字段（`ruleExplore*`）的整套落位与展平仍是 `normalize` 的显式分支，条目装配侧的整套切换归 `bridge.hitRuleOf`。
 _唯一实现_: `services/rule-fields.ts` 的 `RULE_FIELD_SPECS`（裁决见 `ADR-0044`）
 _Avoid_: 字段清单（它只是这张表的投影）、规则映射（映射只是表的一列）
 
@@ -252,14 +252,19 @@ _唯一实现_: `src/client/source-inbox.ts`（派生；列表头状态带的 �
 _Avoid_: 舰队快照（黑话）、状态总览 chips（读数与过滤混杂）
 
 **换轮（round switch）**:
-搜索观察者发现读面身份已变（快照 `job.id` ≠ 观察中的轮次 id）时的唯一裁决：旧累积整体丢弃、`since=0` 重读新轮基线、旧连接 abort、按新轮重建观察。
-_唯一实现_: `src/client/search-job.ts` 的 `apply` 身份闸 + `rebaseline`
+搜索观察者发现读面身份已变（快照 `job.id` ≠ 观察中的轮次 id）时的唯一裁决：旧累积整体丢弃、`since=0` 重读新轮基线、旧连接 abort、按新轮重建观察。身份判据的内容与重建累积器归搜索面；「撤通道 → 问策略 → 按新轮重开」的编排归任务观察通道。
+_唯一实现_: `src/client/search-job.ts` 的 `sameRound` 身份判据 + `rebaseline`；编排 `src/client/job-channel.ts` 的 `regain`
 _Avoid_: 重连（重连是同一轮的通道恢复；换轮是身份变了）、重置
 
 **整帧替换（full-frame replace）**:
-发现面观察者的换轮裁决：读面是全量快照且**不设累积器**，故不比轮次身份——轮到谁就以谁的整帧为准，服务端换了轮（别的观察者提交）时新帧自然全覆盖，即「跟随最近一轮」。
+发现面观察者的换轮裁决：读面是全量快照且**不设累积器**，故不比轮次身份——轮到谁就以谁的整帧为准，服务端换了轮（别的观察者提交）时新帧自然全覆盖，即「跟随最近一轮」。恒真身份判据在调用点显式声明，不是通道的缺省。
 _唯一实现_: `src/client/explore-job.ts` 的 `apply`
 _Avoid_: 换轮（那是搜索面的说法：那边握着一份只对自己有效的游标，必须验身份、丢累积、从基线重读；这里没有可丢的东西）
+
+**任务观察通道（job channel）**:
+浏览器半盯住一条服务端后台任务的通道仪式：timer 所有权、SSE 优先 + 快照轮询兜底、任一时刻只一条通道、撤通道连 timer 一起、代际作废在途帧。它**不**统一快照形状、累积器、整帧替换、身份与恢复策略的内容、节拍与文案——那些是调用方交的回调（与 Node 半 `services/job-holder.ts` 同一条分界：只统一仪式，不统一槽政策）。
+_唯一实现_: `src/client/job-channel.ts` 的 `createJobChannel`（消费点：`client/search-job.ts` / `client/explore-job.ts` / `client/jobs.ts`）
+_Avoid_: 任务运行器（那是 Node 半的持有者与槽政策）、轮询器（只说了地基那一半）
 
 **bookKey**:
 书籍身份：详情页 URL，**可带 `,{option}` 请求选项后缀**（URL 即请求规格）；本地书为 `local:<uuid>`。
@@ -278,8 +283,13 @@ _Avoid_: 入架按钮、书城加架（那是两个入口，动作只有这一�
 
 **本地书（local book）**:
 从本地文件导入的书，**TXT 与 EPUB 2/3 两支**：入口先认具名容器头（PDF / MOBI / UMD）与「名字声明 `.epub` 而内容不是 ZIP」的字节并拒收，之后按**内容**分流（ZIP 魔数走 EPUB 路径，其余走 TXT 解码链），两条互不兜底；源身份固定 `__local__`，与在线书源正交。
-_唯一实现_: `src/services/localbooks.ts`（身份、分流、提交、读取、删除）+ `src/services/epub/`（解析与规范化——不认识书架与 HTTP）
+_唯一实现_: `src/services/localbooks.ts`（身份、分流、发布、副本读写与删除）+ `src/services/local-meta.ts`（落盘元数据的存储形状与版本化读 codec）+ `src/services/local-lifecycle.ts`（副本 ⇄ 架位的联合生命周期，见「本地书生命周期」）+ `src/services/epub/`（解析与规范化——不认识书架与 HTTP）
 _Avoid_: 本地 TXT（口径覆盖两种格式，书架卡片因此只说「本地」，真格式由导入回执的 `format` 交代）、上传文件
+
+**本地书生命周期（local book lifecycle）**:
+一本本地书 = **磁盘副本 + 一个架位**，两者之间没有跨文件事务（`ADR-0014`）：导入即落架、入架失败回收本次副本；三条删入口共用「先删副本、失败则架位保留可重试」；启动补章数只补缺字段的旧条目、读不到副本就跳过（`ADR-0058`）。副本发布归 `LocalBooks`、架位归 `Shelf`，合起来的次序与补偿只在这里。
+_唯一实现_: `src/services/local-lifecycle.ts` 的 `LocalLifecycle`（两个 adapter：`LocalBooks` / `Shelf`）
+_Avoid_: 本地书（那是格式与身份的口径）、本地书缓存（那是读取面的进程内表）
 
 **文档级锚点（document-level anchor）**:
 声明在 `<body>` 上的那个 `id`——源里确实存在这个锚点，而图文树没有 body 这个节点，所以它在树上的落点就是**该页开头**，与「无片段」等价：既不降级、也不告警、更不是坏书。
@@ -327,7 +337,7 @@ _唯一实现_: `client/city-selection.ts` 的 `useCitySelection` / `rememberedC
 _Avoid_: 选中状态（太泛）；也别与「书城进入判据」混称——判据产出动作，这里只持有选中态。
 
 **阅读会话（reader session）**:
-「目录 → 存档恢复 → 逐章懒加载 → 预取 → 进度落盘」的时序持有者；DOM 测量经 `ReaderPort` 注入，视图只渲染与接线。同一时刻只允许一章在途（`inflight`），滚动风暴与目录直达只记意图（`pendingJump`），刚失败过的同一章不自动重试。视图把 scroll / resize / ResizeObserver 事件喂给 `feedViewport`（合帧住会话，`scheduleFrame` / `cancelFrame` / `refreshPort` 经注入），排版前采点与排版复位（`applyTypesetRelocation`）也在这里。
+「目录 → 存档恢复 → 逐章懒加载 → 预取 → 进度落盘」的时序持有者；DOM 测量经 `ReaderPort` 注入，视图只渲染与接线。同一时刻只允许一章在途（`inflight`），滚动风暴与目录直达只记意图（`pendingJump`，它是会话私有的落位目标、不进渲染态），刚失败过的同一章不自动重试。重测触发看会话的 `state.domRevision`（章节窗口换版与置待定位目标各 +1），滚动 / resize / ResizeObserver 事件拨给 `feedViewport`（合帧住会话，帧调度与端口刷新经注入），排版前采点与排版复位（`applyTypesetRelocation`）也在这里。
 _唯一实现_: `client/reader-session.ts`
 _Avoid_: 阅读器状态管理（视图里的 state 只是它的投影）；也别与**阅读场景**混称——那个词指浮层、注释载荷、Esc 归属与入架一问的交互现场
 
@@ -368,13 +378,23 @@ _Avoid_: 听书进度（不存在第二条位置轨；`listen` 只是听书细�
 
 **阅读位置（reading position）**:
 阅读器此刻看得见的位置：会话内存里的章 + 章内比例，以及从 DOM 几何量出的探针读数（章 + 段号）。它是**实时读数，不是落盘游标**：滚动 / 导航 / 存档恢复只修正它，提交时按 cause 决定写不写消费位置；听书起播从它换算起播段，换算不写盘。阅读位置答「眼下在哪」，消费位置答「这本书的游标在哪」；读与听共用后者。
-_唯一实现_: `client/reader-session.ts` 的 `position`（会话内唯一真相）与 `commit`（提交为消费位置）+ `client/tts/reading-position.ts` 的 `ReadingProbe` / `readingPositionAt` / `setReadingProbe`（DOM 探针）与 `estimateParagraphIndex`（换算出起播段）+ `client/views/ReaderView.tsx` 的 `setReadingProbe`（探针注入点）
+_唯一实现_: `client/reader-session.ts` 的 `position`（会话内唯一真相）与 `commit`（提交为消费位置）+ `client/tts/reading-position.ts` 的 `ReadingProbe` / `readingPositionAt` / `setReadingProbe`（DOM 探针，判据 `crossedIndex`）与 `estimateParagraphIndex`（换算出起播段）+ `client/reader-binding.ts` 的探针注册（挂载注册、卸载注销）
 _Avoid_: 消费位置（那是落盘游标，不是眼下读数）、视口位置（混称；视口只是位置的呈现窗口）、听书段号（那是听书细节轨的位置表示）
 
 **阅读器几何（reader geometry）**:
 `ReaderPort` 的纯几何实现：从滚动容器、章块与哨兵读出锚点、视口偏移、目标偏移与当前节点；两套坐标系（内容原点 / 视口顶）只在这里换算。视图只交 ref 读数，会话只读 port。
-_唯一实现_: `client/reader-geometry.ts` 的 `createReaderGeometry` / `currentNodeOf`（底层坐标换算 `client/scrollport.ts`）
+_唯一实现_: `client/reader-geometry.ts` 的 `createReaderGeometry` / `currentNodeOf`（底层坐标换算 `client/scrollport.ts`）；「视口顶落在哪一项」的判据不在这里，见**视口顶判据**
 _Avoid_: 阅读时序（`client/reader-session.ts`）、滚动容器探测（`client/scrollport.ts` 的 `findScrollport`）
+
+**视口顶判据（viewport-top）**:
+给定一组按文档序非降排列的起点与「视口顶」读数，判当前项：取**最后一条已越过视口顶**的起点（边界 `<=`）；一条都没越过 → 文档序第一个非空项；没有可判项 → `-1`；空洞（未渲染的章 / 缺席下标）跳过。阅读侧三条数据路（锚点缓存 / 节点矩形 / `[data-pidx]` 块矩形）各自采集读数，判据只有这一份。
+_唯一实现_: `client/viewport-top.ts` 的 `crossedIndex`
+_Avoid_: 当前节点 / 当前章（那是三条数据路的产物，不是判据）
+
+**顶条遮挡（top inset）**:
+sticky 顶条盖住视口最上那一条的实测高；「看得见的顶」= 端口顶（或滚动位）加这份夹成非负的遮挡。存、取、落位、导航高亮与「从阅读位置起播」探针共吃同一个口径——只让落位不让读数，每进一次阅读器位置就多漂一条条高。
+_唯一实现_: `client/viewport-top.ts` 的 `clampTopInset`（读数来源 `client/views/ReaderView.tsx` 的 `topInset`，每次现量）
+_Avoid_: 视口顶判据（那回答读数怎么落项，这回答读数本身）、顶条样式与高度常量
 
 **在线阅读（online reading）**:
 一条在线书的目录与正文取值管线：目录读数先走一层进程内缓存（键含代际，refresh 绕过读；写回有序——晚到的旧目录不许盖掉刚刷新的那份），其后是磁盘缓存优先、目录在途去重（身份含代际与 refresh）、翻页跟进、缓存写回，连同 tocUrl 解析、subContent 追加与空正文异常；全目录的规范化地址集随目录缓存一份，供串章闸放行当前章。**在途去重与进程内缓存都只服务目录**（单章在途由阅读会话保证，正文不另立全局表；缓存里的目录与地址集是共享值，消费方不得原地改）。**本地书不走这条线**——本地/在线分流与文字规约归书内容读面，门面只委托；搜索/发现/书架/导入/详情仍归门面（裁决见 `ADR-0047`）。
@@ -439,9 +459,9 @@ _唯一实现_: `services/tts-cache.ts` 的 `ttsCacheKey`（键算式）；ident
 _Avoid_: 原始参数键（模板不消费的参数不该进键）
 
 **直出型 / 字节型（direct-output / byte playback）**:
-播放层的两条出声分支。直出型 = 浏览器本地语音（`BROWSER_TTS_ENGINE_ID`）：逐段交给平台开口，无合成请求、无预取、无缓存；字节型 = 其余引擎：先 POST 合成拿缓存键，再按音频读口出声，带同章预取与磁盘缓存。两种共用同一个状态机、同一份听书位置与同一条失败径。
-_唯一实现_: `client/tts/listen-session.ts` 的 `modeOf` 分流与 `ListenOutput`；两个出声适配器 `client/tts/bytes-output.ts` 的 `BytesOutput` / `client/tts/direct-output.ts` 的 `DirectOutput`（`BROWSER_TTS_ENGINE_ID` 的字面量主人在 `shared/wire.ts`）
-_Avoid_: 在线 / 离线（两条分支都在线）、流式 / 非流式（差别是「有没有字节」，不是传输形态）
+播放层的两条出声分支。直出型 = 浏览器本地语音（`BROWSER_TTS_ENGINE_ID`）：逐段交给平台开口，无合成请求、无预取、无缓存；字节型 = 其余引擎：先 POST 合成拿缓存键，再按音频读口出声，带同章预取与磁盘缓存。两种共用同一个状态机、同一份听书位置与同一条失败径；**每条分支自己的策略**（准备一段、能力声明、静音另一条）、生命周期与起播资格住分支实现，状态机不按模式分叉。静音另一条的时序 = 新分支**出声那一刻**（字节型等合成回执落地）：换槽接替、绝不叠音，合成等待里旧声音继续、不给死腔；起播失败由失败径当场收口——读数写「不在放」就不许还有声音。
+_唯一实现_: 分流 `client/tts/listen-session.ts` 的 `modeOf` 与 `ListenOutput`；分支契约 `client/tts/output-contract.ts` 的 `PlaybackBranch` / `ListenBranches` 与两条实现 `client/tts/playback-branches.ts` 的 `BytesBranch` / `DirectBranch`；介质适配器 `client/tts/bytes-output.ts` 的 `BytesOutput` / `client/tts/direct-output.ts` 的 `DirectOutput`（`BROWSER_TTS_ENGINE_ID` 的字面量主人在 `shared/wire.ts`）
+_Avoid_: 在线 / 离线（两条分支都在线）、流式 / 非流式（差别是「有没有字节」，不是传输形态）、把分支判据散回状态机
 
 **段进度（segment progress）**:
 当前播放单元已出声的秒数与总秒数：字节型由活 Audio 槽的计时推进（预载槽的读数不投），直出型没有计时介质、恒为零（视图据此不画假进度：浮窗进度环退化为静态轨道）。它是瞬时现场——暂停续播原地接上、换段归零、不落盘；落盘的听书位置仍是段粒度。独立一只 store，高频读数不进主 store。
@@ -449,9 +469,9 @@ _唯一实现_: `client/tts/listen-session.ts` 的段进度 store（`ListenSessi
 _Avoid_: 听书位置（段粒度、按书落盘）、章进度（跨章读数，归阅读会话顶条）
 
 **听书读数（listen readout）**:
-上屏读数的唯一换算处：段读数（1 基 n/total，空章不摆 0/0）、定时读数（档位与倒计时同一份答案，倒计时的时刻由调用方注入、本处不读墙钟）、章内进度算式（段号 + 段内比例 → 连续 value 与占比，听书条的段粒度滑杆与浮窗的连续填充吃同一个 value）、语速读数与当前句取值——听书条、迷你条胶囊、展开边栏与设置面四个表面只取成品，不各自重算。
-_唯一实现_: `client/tts/listen-readout.ts`
-_Avoid_: 段进度（那是计时现场 `ttsProgress`）、听书位置（落盘轨 `ListenState`）、在各表面手写换算（那是抄本）
+上屏读数的唯一换算处：段读数（1 基 n/total，空章不摆 0/0）、定时读数（档位与倒计时同一份答案，倒计时的时刻由调用方注入、本处不读墙钟）、章内进度算式（段号 + 段内比例 → 连续 value 与占比，听书条的段粒度滑杆与浮窗的连续填充吃同一个 value）、语速读数与当前句取值，以及**整块上屏投影**（此刻按下去是暂停 / 连败停因 / 有没有段读数 / 段内进度是不是真读数 / 当前引擎露哪张音色表）——听书条、迷你条胶囊、展开边栏、设置面与阅读器只取成品，不各自比较计数与阈值、不各自判空章。连败停因是播放层独知的成品事实（会话状态里的 `halt`），阈值比较不下放给表面。
+_唯一实现_: `client/tts/listen-readout.ts` 的 `listenFaceOf`（`ListenFace`）/ `isPlayBusy` / 各读数函数；停因由 `client/tts/listen-session.ts` 的 `halt` 发布
+_Avoid_: 段进度（那是计时现场 `ttsProgress`）、听书位置（落盘轨 `ListenState`）、在各表面手写换算或比较阈值（那是抄本）
 
 **跟读高亮（listen-along highlight）**:
 听书时正文里正在被念的那一段的就地标记：命中块换文字色（`paperLiveInk` 按纸色现算），并在段首框外画一枚 currentColor 小三角——纯换色在部分纸色下认不出，字形标记不靠色彩差说话；不铺底色、不加竖条、不画段内进度线（`ADR-0076`）。命中判据 = 最后一个 ≤ 段号的起段号，与「从本段听」同口径。只标记、不滚动；把视野带过去是听书条上的显式按钮（`ADR-0071`）。
