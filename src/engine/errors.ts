@@ -43,7 +43,7 @@ export class JsSandboxError extends EngineError {
  * 它是**求值边界上的中继错误**：每个消费点必须就地把它转译——引擎侧转成带定位的 `RuleEvalError`，
  * 服务侧转成留痕降级——不许让它带着无定位的形状进 `api/wire.ts` 的状态映射。服务面要认它就从
  * `engine/errors.js` 直取（消费点：`services/search-face.ts`），`isEngineError` 不认它。
- * 漏转的它由进程级未处理 rejection 防线兜住：`engine/js-sandbox.ts` 的 `unhandledGuardHandler`
+ * 漏转的它由进程级未处理 rejection 防线兜住：`engine/rejection-guard.ts` 的 `unhandledGuardHandler`
  * 直取本类、按「插件内部错误」升档——不许顶着「沙箱脚本产生」的标签混进 warn 档。
  */
 export class RegexDeadlineError extends Error {

@@ -190,7 +190,7 @@ export const JAVA_PROTOCOL = [
       throw new JsSandboxError('java.ajax 参数为空（脚本传进 null/undefined）', { ...d.loc, facet: d.facet, script: d.code })
     }
     // 如实失败：ajax 这里不挂任何 rejection 防线——主线程在发起宿主调用前抛哨兵（evalJs 换
-    // worker 重跑）、worker 同步返回，两条路都不产生悬空 Promise；进程级 ensureUnhandledGuard
+    // worker 重跑）、worker 同步返回，两条路都不产生悬空 Promise；进程级 `engine/rejection-guard.ts` 的 `acquireRejectionGuard`
     // 是常驻最后防线，管的是脚本自建的异步工作。见 js-sandbox 的 BOOTSTRAP 注释。
     return fetchFn(textOf(url)).then((r) => r.body)
   }, 'async', {

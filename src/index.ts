@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { createApiHandler } from './api/dispatch.js'
 import { resolveConfig, type NovelConfig } from './config.js'
-import { ensureUnhandledGuard } from './engine/js-sandbox.js'
+import { acquireRejectionGuard } from './engine/rejection-guard.js'
 import type { JobHost } from './services/job-holder.js'
 import { log, setLogSink } from './services/log.js'
 import { readSystemProxy, redactProxyUrl, resolveProxyUrl } from './services/proxy.js'
@@ -169,12 +169,13 @@ export function apply(ctx: Context, config?: NovelConfig): void {
   // 其 rejection 会悬空冒到进程顶层。Node 默认把这类 unhandled rejection 当致命 → 整个宿主进程死
   // （用户看到「请求失败 403/404」fatal），尤其在导入书源时（探针逐源跑 @js）。java.ajax 走同步
   // 语义、调用点不产 rejection（口径见 engine/js-sandbox.ts 的哨兵），但脚本自建的 Promise 照样会，
-  // 这条防线仍然必需。挂上后常驻至插件 dispose：只在跑脚本那一段挂、收尾就摘，迟到的 rejection 照样漏。
+  // 这条防线仍然必需（判据与边界见 rejection-guard.ts / ADR-0059）。挂上后常驻至插件 dispose：
+  // 只在跑脚本那一段挂、收尾就摘，迟到的 rejection 照样漏。
   // sink 从这里递进去：真 sink 到场即顶替引擎的 console 兜底（ADR-0059），所以挂上之后防线的
   // 留痕就走日志缝。抢在第一次跑脚本之前挂仍然对——早于这一步的 rejection 只能先落 console 兜底。
   // 只拦沙箱 realm 的 promise；非沙箱来源如实记 error 并交回宿主（见 ADR-0059）。
   ctx.effect(() => {
-    const detach = ensureUnhandledGuard({ warn: (...a) => log.warn(...a), error: (...a) => log.error(...a) })
+    const detach = acquireRejectionGuard({ warn: (...a) => log.warn(...a), error: (...a) => log.error(...a) })
     return () => { detach() }
   }, 'dsh-novel: unhandledRejection guard')
 

@@ -17,4 +17,4 @@ legado 脚本会自建 fire-and-forget 的异步工作，其 rejection 在 `eval
 
 **代价**：宿主侧未处理 rejection 会恢复致命（与没装本插件时一致）——这正是意图：这个决定不该由插件替宿主做。插件自己的引擎错误类例外：它们只记 error、不致命化，代价是「自己的 bug」与「外来的错误」被分成两档处置。宿主若显式以 `--unhandled-rejections` 选 `warn` / `none` 启动（等号与空格两种写法都算），防线尊重它、只留日志；argv 里的显式模式优先于 `NODE_OPTIONS`。`strict` 由 Node 自己崩（监听器不会被调用，也不该指望这条防线出声）。
 
-锚点：`src/engine/js-sandbox.ts` 的 `SANDBOX_REALM_MARK` / `ensureUnhandledGuard` / `restoreDefault` / `BOOTSTRAP`；组合根 `src/index.ts` 的 guard effect；钉子 `tests/engine/unhandled-guard.test.ts`（含真实沙箱悬空 rejection 的集成用例）；`ADR-0004`（沙箱边界）；`ADR-0034`（日志两条腿与 sink 注入）。
+锚点：`src/engine/rejection-guard.ts` 的 `SANDBOX_REALM_MARK` / `acquireRejectionGuard` / `hostWantsFatalRejections`（`restoreDefault` 与 `unhandledGuardHandler` 是私有实现）；`src/engine/js-sandbox.ts` 的 `BOOTSTRAP`（realm 标打在 vm realm 的 `Promise.prototype` 上）与求值入口的一次 acquire；组合根 `src/index.ts` 的 guard effect（直接 import 守卫 module）；钉子 `tests/engine/unhandled-guard.test.ts`（直接 import 守卫，另含 4 条真实沙箱集成用例）；`ADR-0004`（沙箱边界）；`ADR-0034`（日志两条腿与 sink 注入）。

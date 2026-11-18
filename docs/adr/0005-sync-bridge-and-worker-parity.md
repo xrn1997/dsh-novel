@@ -12,4 +12,4 @@ Status: accepted
 
 **接受的残余**：脚本里不含那三个字面量的间接形态（解构 `const {ajax} = java`、`with (java)`）仍可能撞哨兵，后果是第一次 ajax 之前的非幂等写入被执行两遍；网络请求不受影响。将来的正确修法是先做 worker 池再一律走 worker，把重跑整条路删掉。
 
-锚点：`src/engine/js-protocol.ts` 的 `SYNC_AJAX_SENTINEL` 与 `SYNC_WORKER_RE`（抛侧的几段桥壳由同文件的 `asyncBridgeSource` 生成、插进 BOOTSTRAP；路由谓词由表内 async 行的 `routePattern` 拼出）；`src/engine/js-sandbox.ts` 的 `needsSyncBridge` / `runInContextVm` / `WORKER_SRC`；`tests/engine/js-bindings.test.ts`；`tests/engine/js-protocol.test.ts` 的 async 行闸；矩阵行 `h-java-ajax-sync`、`a-js-script-form`、`h-rhino-vs-vm`。
+锚点：`src/engine/js-protocol.ts` 的 `SYNC_AJAX_SENTINEL` 与 `SYNC_WORKER_RE`（抛侧的几段桥壳由同文件的 `asyncBridgeSource` 生成、插进 BOOTSTRAP；路由谓词由表内 async 行的 `routePattern` 拼出）；`src/engine/js-sandbox.ts` 的 `needsSyncBridge` / `runInContextVm` / `WORKER_SRC`，以及 BOOTSTRAP 的拼装（内联引导 + `asyncBridgeSource` + `host-surface-elem.ts` / `host-surface-pkg.ts` 的 wrapper 片段，加载时拼一次；worker 仍经 workerData 拿同一份成品串）；`tests/engine/js-bindings.test.ts`；`tests/engine/js-protocol.test.ts` 的 async 行闸；矩阵行 `h-java-ajax-sync`、`a-js-script-form`、`h-rhino-vs-vm`。

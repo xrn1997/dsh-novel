@@ -10,4 +10,4 @@ Status: accepted
 
 **例外要一起知道**：纯 UI 副作用（`toast` / `copyText` / `startBrowser` / `open`）是明确的 no-op——没有 UI 可动是事实，报「需要安卓宿主」反而把无副作用的空操作说成失败；「不许静默 no-op」管的是**取值与解密类**能力。同理，真实文件系统不开：脚本读文件只能走 `downloadFile` 换来的不透明令牌（书源脚本可读任意本地路径 = 数据外泄面）。
 
-锚点：`src/engine/js-sandbox.ts` 的 `BOOTSTRAP` 与桩名单；`src/engine/js-protocol.ts` 的 `readTxtFile` 注；`tests/engine/js-sandbox.test.ts` 的「代码生成允许」与「宿主帧逃逸通道已锁」；矩阵行 `h-sandbox-escape-defense`、`h-js-lib-eval`、`h-rhino-javaimporter-scope`、`h-packages-url-connection`、`h-file-extra-apis`。
+锚点：`src/engine/js-sandbox.ts` 的 `BOOTSTRAP` 与桩名单（引导闭包、入口锁死与简单全局）；两条影子宿主面的 wrapper 源片段 `src/engine/host-surface-elem.ts` 的 `elemWrapperSource` 与 `src/engine/host-surface-pkg.ts` 的 `pkgWrapperSource`（加载时拼进同一份 BOOTSTRAP，见该文件头注）；`src/engine/js-protocol.ts` 的 `readTxtFile` 注；`tests/engine/js-sandbox.test.ts` 的「代码生成允许」与「宿主帧逃逸通道已锁」；矩阵行 `h-sandbox-escape-defense`、`h-js-lib-eval`、`h-rhino-javaimporter-scope`、`h-packages-url-connection`、`h-file-extra-apis`。
