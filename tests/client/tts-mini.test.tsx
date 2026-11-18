@@ -842,16 +842,49 @@ describe('两态浮窗：收起胶囊 / 展开边栏（ADR-0073）', () => {
 
   /** 弹层方向是**读数**不是快照：开层那一刻量一次，之后拖头行 / 方向键挪块 / 缩窗口都留着旧方向，
    *  夹取只管浮窗本体，弹层就被视口裁掉半截。 */
-  it('设置弹层方向跟着现场走：块挪上挪下，data-flip 当场改口', async () => {
+  it('设置弹层方向跟着现场走：块挪上挪下，data-flip 当场改口，余量跟着换', async () => {
     const bar = await listening()
     const view = { width: window.innerWidth, height: window.innerHeight }
+    const room = (): string => bar.style.getPropertyValue('--novel-tts-popover-room')
     fireEvent.click(screen.getByRole('button', { name: '听书设置' }))
-    await act(async () => { setMiniBarCenter(864, 700, DEFAULT_MINI_BAR_SIZE, view) })   // 块压到底部：上方地方够
+    await act(async () => { setMiniBarCenter(864, 600, DEFAULT_MINI_BAR_SIZE, view) })   // 中下：上方地方够
     expect(bar.getAttribute('data-flip')).toBe('false')
+    expect(room(), '上方展开：余量 = 块顶 − 间距 − 视口留白').toBe('486px')
     await act(async () => { setMiniBarCenter(864, 100, DEFAULT_MINI_BAR_SIZE, view) })   // 块顶到上沿：翻到下方
     expect(bar.getAttribute('data-flip')).toBe('true')
+    expect(room(), '下方展开：余量 = 视口高 − 块底 − 间距 − 视口留白').toBe('554px')
     await act(async () => { setMiniBarCenter(864, 500, DEFAULT_MINI_BAR_SIZE, view) })   // 回到中下：上方又够了
     expect(bar.getAttribute('data-flip')).toBe('false')
+    expect(room(), '回到上方：余量重新按上方算').toBe('386px')
+  })
+
+  it('音色行不闪：重开设置时旧清单留着，等新清单回来再替换（失败才清空）', async () => {
+    let calls = 0
+    vi.mocked(apiGet).mockImplementation(async (path: string) => {
+      if (path.startsWith('navigation')) {
+        const chapters = chapterEntries()
+        return { chapters, items: planarNavigation(chapters) }
+      }
+      if (path.startsWith('chapter')) return { kind: 'text', text: textOf(indexOf(path)) } satisfies ChapterContent
+      if (path === ROUTES.shelf.path) return shelf
+      if (path === ROUTES.ttsSources.path) {
+        calls += 1
+        if (calls === 1) {
+          return {
+            sources: [{ id: 'builtin:baidu', kind: 'builtin', voices: [{ id: 'v1', name: '嗓音一' }] }],
+            hostSpeech: { state: 'absent' },
+          }
+        }
+        return await new Promise<never>(() => {})   // 重取挂在途中：这一帧必须还拿旧清单顶着
+      }
+      throw new Error(`unexpected GET ${path}`)
+    })
+    await listening()
+    fireEvent.click(screen.getByRole('button', { name: '听书设置' }))
+    await waitFor(() => expect(screen.getByLabelText('音色')).not.toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: '听书设置' }))   // 收起
+    fireEvent.click(screen.getByRole('button', { name: '听书设置' }))   // 重开：不清空旧清单 → 音色行不消失
+    expect(screen.getByLabelText('音色'), '重开时旧清单还在，音色行不闪').not.toBeNull()
   })
 
   it('设置面板与阅读器条对齐：语速 / 定时 / 起播章在浮窗上也能调', async () => {
@@ -927,8 +960,10 @@ describe('两态浮窗：收起胶囊 / 展开边栏（ADR-0073）', () => {
   it('连败到阈值且暂停：边栏给 role=status 一行，胶囊用 title / data-failed 给同一读数', async () => {
     const bar = await listening()
     await act(async () => {
+      // 停因是播放层公布的成品事实：表面只读 `halt`，不拿计数器与阈值对比
       ttsPlayer.set({
         ...ttsPlayer.get(), playing: false, consecutiveFailures: TTS_MAX_CONSECUTIVE_FAILURES,
+        halt: { reason: 'consecutive-failures', failures: TTS_MAX_CONSECUTIVE_FAILURES },
       })
     })
     const status = screen.getByRole('status')
@@ -943,7 +978,7 @@ describe('两态浮窗：收起胶囊 / 展开边栏（ADR-0073）', () => {
 
     // 真开口（计数清零 + 在放）后提示自然消失
     await act(async () => {
-      ttsPlayer.set({ ...ttsPlayer.get(), playing: true, consecutiveFailures: 0 })
+      ttsPlayer.set({ ...ttsPlayer.get(), playing: true, consecutiveFailures: 0, halt: null })
     })
     expect(bar.getAttribute('data-failed')).toBe('false')
     expect(screen.queryByRole('status')).toBeNull()
@@ -953,7 +988,7 @@ describe('两态浮窗：收起胶囊 / 展开边栏（ADR-0073）', () => {
     act(() => {
       ttsPlayer.set({
         ...ttsPlayer.get(), active: true, bookKey: 'k1', sourceId: 's1', title: '书一',
-        chapterIndex: 0, chapterName: '第一章', paragraphCount: 3, paragraphIndex: 0,
+        chapterIndex: 0, chapterNames: ['第一章'], paragraphCount: 3, paragraphIndex: 0,
         engineId: TTS_DEFAULTS.engineId, mode: 'bytes',
       })
     })

@@ -5,6 +5,7 @@
  * 只有阅读器组件的 DOM 量得出来。阅读器挂载时注册探针、卸载时注销，播放层在「从阅读位置起播」
  * 那一刻现取——不缓存读数，缓存会让按钮用的是上一次打开书时的位置。
  */
+import { crossedIndex } from '../viewport-top.js'
 
 /** 阅读器提供的实时位置：章号 + 章内段号（0 基）。返 null = 此刻量不到（正文未渲染等）。 */
 export type ReadingPosition = { chapterIndex: number; paragraphIndex: number }
@@ -38,31 +39,24 @@ export function readingProbeNow(): ReadingProbe | null {
 export function readingPositionAt(
   blocks: readonly (Element | null)[], viewTop: number,
 ): ReadingPosition | null {
-  let chosen = -1
-  let first = -1
-  for (let index = 0; index < blocks.length; index++) {
-    const block = blocks[index]
-    if (block === null || block === undefined) continue
-    if (first === -1) first = index
-    if (block.getBoundingClientRect().top <= viewTop) chosen = index
-  }
-  const chapterIndex = chosen === -1 ? first : chosen
+  // 章与段吃同一条判据（`client/viewport-top.ts` 的 `crossedIndex`）：本函数只负责把
+  // 「块矩形」这条数据路喂进去，边界口径不再各写一遍。
+  const chapterIndex = crossedIndex(blocks, (block) => block.getBoundingClientRect().top - viewTop)
   if (chapterIndex === -1) return null
   const block = blocks[chapterIndex]
-  if (block === null || block === undefined) return null
+  if (block === null || block === undefined) return null   // crossedIndex 越过洞后落到的必是元素
 
-  let paragraphIndex = 0
-  let paragraphFound = false
+  // `data-pidx` 只认整数：坏值（NaN / 空串 / 小数）若混进候选，起段号的比较会整体失准，
+  // 宁可当这块没有落点，也不猜（与 `listenParagraphElement` 同一条取值纪律）。
+  const marked: Array<{ pid: number; top: number }> = []
   for (const p of block.querySelectorAll('[data-pidx]')) {
     const raw = p.getAttribute('data-pidx')
     const value = raw === null ? Number.NaN : Number(raw)
     if (!Number.isInteger(value)) continue
-    if (!paragraphFound) {
-      paragraphIndex = value
-      paragraphFound = true
-    }
-    if (p.getBoundingClientRect().top <= viewTop) paragraphIndex = value
+    marked.push({ pid: value, top: p.getBoundingClientRect().top - viewTop })
   }
+  const at = crossedIndex(marked, (item) => item.top)
+  const paragraphIndex = at === -1 ? 0 : (marked[at]?.pid ?? 0)
   return { chapterIndex, paragraphIndex }
 }
 

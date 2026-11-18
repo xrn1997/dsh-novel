@@ -14,6 +14,7 @@ Status: accepted
 - **拖动两轴跟手**：每一帧按指针位移落位并夹在视口内，拖动中不做任何吸附——吸附发生在松手那一刻，行为可预测、可钉测试。
 - **松手近边吸附**：横轴取左右两侧 gap 较小者，≤ 24px 就贴齐那条边；纵轴同理且两轴独立，因此能落在边角。两侧都不够近就停在原地。
 - **`side` 降级为派生值**：不再是现场字段，而是按 `cx` 与视口宽算出的呈现方向，只派生设置弹层往哪边开（左缘镜像）；贴边形态不归它——收掉靠屏幕那一条边框、把那两侧改成直角，归块边缘与视口边算出的 `data-flush`（`deriveMiniBarFlush`）管，块悬在屏内时它是 `none`。视口变化时两个派生随宽度重算。
+- **设置弹层纵向落位上方优先、下方真更大才翻**：水平朝向归 `side` 之外，上下这一问由现场余量现算——上方放不下不算翻的理由，**下方得真的更有地方才翻**（只写「上方放不下就翻下方」会在块贴近底部时翻进一条更窄、甚至为负的缝里；上方 500、下方 0，翻下去等于把卡片藏起来），两侧一样大留在上方。选定侧的可用余量与方向同批交出，弹层高度收到那一侧余量、卡内滚动，不探出视口。判据跟着现场重算而不是开层那一刻定一次——弹层开着仍可拖头行挪块、缩窗口。
 - **贴着的边在视口变化后继续贴**：上一帧 gap 为 0 的边贴到新视口对应边，自由位置只夹不漂——拉大窗口时贴右缘的浮窗不该悬在半空。
 - **尺寸可量则量、量不到用常量**：展开态内容变化会改高度，拿常量算贴底会留一条缝；量不到实际几何（无 DOM 宿主）时回常量，行为网仍可跑。
 - **键盘四向移动**：方向键上下左右各移一档（Shift 三档），Home 回缺省位置；不再有「左右方向键换边」这个独立动作——走到另一侧即换边，或拖过去松手。
@@ -37,4 +38,4 @@ Status: accepted
 - **只放开横向的半自由补丁**：保留 `side + anchorY`，另加一个自由横向坐标。位置语义于是同时有两个主人（贴边与自由），圆角镜像、弹层方向、夹取都要伺候两套，迟早再打架。
 - **保持贴边不动**：位置被规则吃掉，用户没有任何办法把浮窗停在正文中间或自己习惯的角落——这正是要修的那件事。
 
-锚点：`src/client/tts/mini-bar-state.ts` 的 `parseMiniBarState` / `deriveMiniBarSide` / `deriveMiniBarFlush` / `miniBarPopoverFlip` / `resolveFormSize` / `setMiniBarCenter` / `snapMiniBarToEdge` / `clampMiniBarIntoViewport` / `followFlushEdgesOnResize` / `miniBarLayout`；`src/client/tts/TtsMiniBar.tsx` 的 `TtsMiniBar`；`src/client/styles/tts.ts` 的 `.novel-tts-mini-dock`；`tests/client/tts-mini-state.test.ts`；`tests/client/tts-mini.test.tsx`；`tests/browser/tts-layout.test.tsx`；`docs/ui-spec.md` §3.6；`ADR-0072`。
+锚点：`src/client/tts/mini-bar-state.ts` 的 `parseMiniBarState` / `deriveMiniBarSide` / `deriveMiniBarFlush` / `miniBarPopoverFlip` / `miniBarPopoverRoom` / `resolveFormSize` / `setMiniBarCenter` / `snapMiniBarToEdge` / `clampMiniBarIntoViewport` / `followFlushEdgesOnResize` / `miniBarLayout`；`src/client/tts/TtsMiniBar.tsx` 的 `TtsMiniBar`；`src/client/styles/tts.ts` 的 `.novel-tts-mini-dock`；`tests/client/tts-mini-state.test.ts`；`tests/client/tts-mini.test.tsx`；`tests/browser/tts-layout.test.tsx`；`docs/ui-spec.md` §3.6；`ADR-0072`。

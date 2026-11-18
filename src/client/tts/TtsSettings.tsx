@@ -10,7 +10,7 @@ import {
 import { pushError } from '../transient.js'
 import { useDialogContract } from '../views/dialog.js'
 import { sourceLabel, engineLabelOf } from './engine-rows.js'
-import { rateLabel } from './listen-readout.js'
+import { listenFaceOf, rateLabel } from './listen-readout.js'
 import { ttsErrorMessage } from './tts-error.js'
 import {
   directVoicesStore, jumpToChapter, setListenEngine, setListenRate, setListenTimer, setListenVoice,
@@ -84,9 +84,12 @@ export function TtsSettingsRows({ sources, surface }: {
   const t = useCopy()
   const st = useStore(ttsPlayer)
   const mini = useStore(miniBarStore)
+  // 音色行看哪张表是上屏投影的一部分（直出型 = 平台表，字节型 = 引擎源声明），
+  // 组件不再自己拿 mode 判。
+  const face = listenFaceOf(st)
 
   const platformVoices: VoiceRow[] = useDirectVoices()
-  const voices: VoiceRow[] | null = st.mode === 'direct'
+  const voices: VoiceRow[] | null = face.voiceTable === 'platform'
     ? (platformVoices.length > 0 ? platformVoices : null)
     : (sources?.find((source) => source.id === st.engineId)?.voices ?? null)
   const voiceValue = voices?.some((voice) => voice.id === st.voice) === true ? st.voice ?? '' : ''

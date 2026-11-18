@@ -188,7 +188,7 @@ describe.skipIf(!ENABLED)('浏览器几何：听书条 / 迷你条 / 跟读高�
   beforeAll(async () => {
     ttsPlayer.set({
       active: true, bookKey: 'k1', sourceId: 's1', title: '样本书',
-      chapterIndex: 1, chapterName: '第二章', paragraphCount: 4, paragraphIndex: 1,
+      chapterIndex: 1, paragraphCount: 4, paragraphIndex: 1,
       paragraphText: '第二段正文，正在被念的那一段。', playing: true,
       engineId: 'builtin:baidu', mode: 'bytes', chapterNames: ['第一章', '第二章'],
     })

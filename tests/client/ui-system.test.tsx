@@ -94,6 +94,22 @@ describe('token 层自足守卫（引用未定义的本层 token 即红）', () 
     expect(bad, `引用了本层不存在的 token（background 等简写会整条落 unset，即静默无底）：\n${bad.join('\n')}`).toEqual([])
   })
 
+  it('条底 / 条描边派生钉在条自己身上：钉在根上就跟不上行内纸色（var() 在声明处求值）', () => {
+    const root = /\.novel-root\s*,\s*\[data-novel-scope\]\s*\{([^}]*)\}/.exec(strip(NOVEL_CSS))
+    const rootBody = must(root?.[1] ?? '', 'token 根规则体')
+    expect(rootBody, '条底派生不能钉在根上（根上的 --novel-paper 是缺省米黄，会替整棵子树把纸色算死）')
+      .not.toContain('--novel-bar-bg')
+    for (const sel of ['.novel-rdr-bar', '.novel-tts-bar']) {
+      expect(ruleBody(sel), `${sel} 自己要有 --novel-bar-bg：声明与消费同元素，求值点才跟着纸走`).toContain('--novel-bar-bg')
+      expect(ruleBody(sel), `${sel} 自己要有 --novel-bar-line`).toContain('--novel-bar-line')
+    }
+  })
+
+  it('设置弹层高度收进值槽：max-height 取 60vh 与现量余量的小者', () => {
+    expect(ruleBody('.novel-tts-panel')).toMatch(/max-height:\s*min\(60vh,\s*var\(--novel-tts-popover-room\)\)/)
+    expect(NOVEL_CSS).toMatch(/--novel-tts-popover-room:\s*60vh/)
+  })
+
   it('负断言：守卫自身别空转——假 token 引用必须被抓出来', () => {
     const defined = new Set<string>()
     for (const m of NOVEL_CSS.matchAll(/(--novel-[\w-]+)\s*:/g)) defined.add(must(m[1], '正则捕获组 1（--novel-* 定义名）'))

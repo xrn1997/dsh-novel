@@ -98,15 +98,15 @@ export const TOKENS_CSS = `
      这里的缺省只为「值槽必须在词表里在册」的自足守卫。 */
   --novel-tts-capsule-w: 208px;
   --novel-tts-capsule-h: 44px;
+  /* 设置弹层 max-height 的上界（px）：由 miniBarPopoverRoom 按「选中那一侧的余量」算出来，
+     视图行内写在浮窗 dock 根上。这里的 60vh 是缺省：阅读器条那份设置卡没有 dock 几何可量，
+     仍按视口比例收；浮窗体自带现量值槽。 */
+  --novel-tts-popover-room: 60vh;
   /* --novel-paper / --novel-paper-ink：正文那一层的纸与墨（prefs.paperColor 与 paperInk 的结果，
      由 ReaderView 行内写入）。**控制器条由它们派生**——「条底与纸底不同源即缺陷」的判据
      住 .novel-rdr-bar 的注释那头。缺省值 = 默认纸米黄与其对应墨色。 */
   --novel-paper: #f7f3e8;
   --novel-paper-ink: #222;
-  /* 控制器条底 / 描边：纸往墨压一档（6% / 12%）。阅读器顶条与听书条读**同一份派生式**——
-     两处各写一遍 color-mix，改档位时必有一条落下，接缝就成了可量的缺陷。 */
-  --novel-bar-bg: color-mix(in srgb, var(--novel-paper-ink) 6%, var(--novel-paper));
-  --novel-bar-line: color-mix(in srgb, var(--novel-paper-ink) 12%, transparent);
   /* 跟读高亮（正在被念的那一段）的字色：ReaderView 由纸色现算（util.ts 的 paperLiveInk）
      写进阅读区根上；这里的缺省值 = 默认米黄纸上的那一档。命中段换这一档字色并在段首画一枚
      currentColor 小三角，不铺底色也不画进度线；宿主 brand 不进正文层（ADR-0076）。 */
@@ -123,5 +123,16 @@ export const TOKENS_CSS = `
   --novel-cover-3: #4d3a3a;
   --novel-cover-4: #443a4d;
   color: var(--novel-text);
+}
+/* 控制器条底 / 描边：纸往墨压一档（6% / 12%）。阅读器顶条与听书条读**同一份派生式**——
+   两处各写一遍 color-mix，改档位时必有一条落下，接缝就成了可量的缺陷。
+   这支派生式**必须钉在条元素自己身上**，不能钉在 .novel-root：自定义属性里的 var() 在
+   **声明处**求值，根上的 --novel-paper 是缺省米黄，会替整棵子树把结果算死；ReaderView 行内
+   改纸色只改得动 --novel-paper 自己，改不动已经继承下去的 --novel-bar-bg（深纸上就是米黄条
+   配浅字，条底与纸底不同源）。声明与消费落在同一个元素上，求值点才跟着纸走——听书条单飞
+   渲染时没有 .novel-rdr 祖先，也由这条规则自己算一份。 */
+.novel-rdr-bar, .novel-tts-bar {
+  --novel-bar-bg: color-mix(in srgb, var(--novel-paper-ink) 6%, var(--novel-paper));
+  --novel-bar-line: color-mix(in srgb, var(--novel-paper-ink) 12%, transparent);
 }
 `

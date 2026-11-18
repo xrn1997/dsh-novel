@@ -12,6 +12,7 @@ import type { AudioFace } from './bytes-output.js'
 import { DirectOutput } from './direct-output.js'
 import type { DirectSpeechFace } from './direct-output.js'
 import { ListenSession } from './listen-session.js'
+import { createListenBranches } from './playback-branches.js'
 import type {
   ListenPlatform, StartListeningInput, TtsDefaults,
 } from './listen-session.js'
@@ -177,7 +178,7 @@ function watchPageHide(cb: () => void): () => void {
   return () => { window.removeEventListener('pagehide', cb) }
 }
 
-let outputs: ListenPlatform['outputs'] | null = null
+let branches: ListenPlatform['branches'] | null = null
 
 const prodListenPlatform: ListenPlatform = {
   fetchChapters: async (sourceId, bookKey) => {
@@ -207,12 +208,16 @@ const prodListenPlatform: ListenPlatform = {
   },
   synthesize: (req, opts) => apiSend<SynthesisReceipt>(
     ROUTES.ttsSynthesize, bodies.ttsSynthesize(req), opts?.signal),
-  get outputs(): ListenPlatform['outputs'] {
-    // 惰性构造：两只适配器的构造面都不碰全局，第一次真正出声（或复位缝被调）才落生
-    outputs ??= { bytes: new BytesOutput(audioFace), direct: new DirectOutput(directFace, after) }
-    return outputs
+  get branches(): ListenPlatform['branches'] {
+    // 会话构造时就要读一次当前分支的能力初值，故首次访问时组装一次并复用。组装本身不碰全局
+    //（适配器构造不读 DOM / 平台），平台语音表等能力到分支的 `ready()` 才问。
+    // 两条分支在这里接线（静音另一条分支是分支自己的事，组合只给它们互相的把手）。
+    branches ??= createListenBranches(
+      { bytes: new BytesOutput(audioFace), direct: new DirectOutput(directFace, after) },
+      () => awaitDirectVoices(),
+    )
+    return branches
   },
-  awaitDirectVoices: () => awaitDirectVoices(),
   now: () => Date.now(),
   after,
   watchPageHide,

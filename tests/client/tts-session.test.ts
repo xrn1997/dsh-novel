@@ -7,8 +7,9 @@ import {
 import type { Debounced, ListenPlatform } from '../../src/client/tts/listen-session.js'
 import { setReadingProbe } from '../../src/client/tts/reading-position.js'
 import type {
-  BytesListenOutput, BytesSegment, DirectListenOutput, OutputHandlers,
+  BranchHost, BranchStartOutcome, ListenBranches, OutputHandlers, PlaybackBranch, SegmentJob,
 } from '../../src/client/tts/output-contract.js'
+import { DirectBranch } from '../../src/client/tts/playback-branches.js'
 import { DirectOutput } from '../../src/client/tts/direct-output.js'
 import type { DirectSpeechFace, PlatformUtterance } from '../../src/client/tts/direct-output.js'
 import { last, must } from '../support/fixture.js'
@@ -78,43 +79,72 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     return wrapped
   }
 
-  /** 字节型假输出：只记账，出声与否由用例拨弄回调。缺省 `start` 立刻回报真开口（等价于
-   *  `onplaying` 落地）；`failOnStart` = 每次都把「这一段没成」回报给会话（演音频 404 / 拒绝）。 */
-  class FakeBytesOutput implements BytesListenOutput {
-    starts: { seg: BytesSegment; handlers: OutputHandlers }[] = []
+  /** 字节型假分支：只记账，出声时机由用例拨弄回调。缺省 `start` 立刻回报真开口并结束准备期
+   *  （等价于 `onplaying` 落地）；`failOnStart` = 介质异步回报「这一段没成」（演音频 404 / 拒绝）。
+   *  准备策略（求回执）照真分支：回执归会话，分支只消费——这正是 `ADR-0081` / `ADR-0082` 的锚点。 */
+  class FakeBytesBranch implements PlaybackBranch {
+    readonly capabilities = {
+      segmentProgress: true,
+      prefetch: true,
+      receiptResume: true,
+      selfHeal: true,
+      voiceTable: 'engine' as const,
+    }
+
+    /** `volume` = 分支在起播那一刻从 `BranchHost.voice()` **活读**到的音量（真分支把它交给介质；
+     *  会话「合成在途改音量、出声用新值」这条口径靠它钉，不靠读会话自己的 state）。 */
+    starts: { job: SegmentJob; receipt: { key: string; playbackRate: number } | null; handlers: OutputHandlers; volume: number }[] = []
     preloaded: string | null = null
-    heldKey: string | null = null
     pauseCount = 0
     stopCount = 0
     releaseCount = 0
     invalidateCount = 0
+    dropPreloadCount = 0
     volumes: number[] = []
     failOnStart = false
 
-    start(seg: BytesSegment, handlers: OutputHandlers): void {
-      this.starts.push({ seg, handlers })
-      this.heldKey = seg.key
-      if (this.failOnStart) handlers.fail()
-      else handlers.start?.()
+    ready(): true { return true }
+
+    async start(job: SegmentJob, handlers: OutputHandlers, host: BranchHost): Promise<BranchStartOutcome> {
+      // 字节型的准备：先求回执（缓存与代际归会话）；取消不是失败（ADR-0082 决定 5）。
+      let receipt: { key: string; playbackRate: number } | null
+      try {
+        receipt = await host.receipt(job)
+      } catch {
+        return job.signal.aborted ? 'cancelled' : 'failed'
+      }
+      if (receipt === null) return 'cancelled'
+      this.starts.push({ job, receipt, handlers, volume: host.voice().volume })
+      if (this.failOnStart) {
+        // 介质没开口：异步到达，与真适配器的 play 拒绝同形
+        queueMicrotask(() => { handlers.fail() })
+        return 'started'
+      }
+      handlers.prepared?.()
+      handlers.start?.()
+      return 'started'
     }
 
-    pause(): void { this.pauseCount += 1 }
-    stop(): void { this.stopCount += 1; this.heldKey = null }
-    release(): void { this.releaseCount += 1; this.heldKey = null }
-    setVolume(volume: number): void { this.volumes.push(volume) }
-    preload(key: string): void { this.preloaded = key }
-    dropPreload(): void { this.preloaded = null }
-    holds(key: string): boolean { return this.heldKey === key }
-    invalidate(): void { this.invalidateCount += 1; this.heldKey = null; this.preloaded = null }
-  }
+    /** 本假分支没有介质槽：续播一律交回会话重新起播。 */
+    resume(): boolean { return false }
 
-  /** 直出型假输出（不用真适配器的用例里占位）。 */
-  class FakeDirectOutput implements DirectListenOutput {
-    start(): void { /* 占位 */ }
-    pause(): void { /* 占位 */ }
-    stop(): void { /* 占位 */ }
-    release(): void { /* 占位 */ }
-    setVolume(): void { /* 占位 */ }
+    yieldForLoad(): void { /* 字节型旧音频继续放 */ }
+
+    pause(): void { this.pauseCount += 1 }
+
+    stop(): void { this.stopCount += 1 }
+
+    release(): void { this.releaseCount += 1 }
+
+    setVolume(volume: number): void { this.volumes.push(volume) }
+
+    invalidate(): void { this.invalidateCount += 1 }
+
+    preload(key: string): void { this.preloaded = key }
+
+    dropPreload(): void { this.dropPreloadCount += 1; this.preloaded = null }
+
+    held(): boolean { return false }
   }
 
   /** 假 speech 面：喂给真 `DirectOutput`——开口后一个事件都不回，演被平台整支吞掉的开口。 */
@@ -155,8 +185,9 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     session: ListenSession
     clock: FakeClock
     speech: FakeSpeech
-    bytes: FakeBytesOutput
-    outputs: ListenPlatform['outputs']
+    bytes: FakeBytesBranch
+    /** 两条分支的组：用例可替换其中一条（真直出分支换假语音面等）。 */
+    branches: { bytes: PlaybackBranch; direct: PlaybackBranch }
     saves: { bookKey: string; listen: ListenState }[]
     progressSaves: { bookKey: string; chapterIndex: number; offsetRatio: number }[]
     synthCalls: SynthesisRequest[]
@@ -180,8 +211,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     const clock = new FakeClock()
     const after = (ms: number, cb: () => void): (() => void) => clock.after(ms, cb)
     const speech = makeFakeSpeech()
-    const bytes = new FakeBytesOutput()
-    const outputs: ListenPlatform['outputs'] = { bytes, direct: new FakeDirectOutput() }
+    const bytes = new FakeBytesBranch()
     const fixture = {
       names: ['第一章', '第二章'],
       texts: [['第一段。', '第二段。', '第三段。'], ['第二章第一段。']],
@@ -196,6 +226,27 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     const fetchHolds = new Map<number, Promise<void>>()
     const fetchFailures = new Set<number>()
     let voiceHold: Promise<boolean> | null = null
+    /** 源级闸门的平台读数：直出分支的 `ready()` 直接问它（真适配器的 `awaitDirectVoices` 等价物）。 */
+    const awaitVoices = async (): Promise<boolean> => {
+      const held = voiceHold
+      voiceHold = null
+      if (held !== null) return held
+      return speech.face.voices().length > 0
+    }
+    const branches: Harness['branches'] = {
+      bytes,
+      direct: new DirectBranch(new DirectOutput(speech.face, (ms, cb) => clock.after(ms, cb)), {
+        awaitVoices,
+        peer: () => branches.bytes,
+      }),
+    }
+    const listenBranches: ListenBranches = {
+      branch: (mode) => (mode === 'direct' ? branches.direct : branches.bytes),
+      held: () => branches.direct.held() || branches.bytes.held(),
+      pauseAll: () => { branches.bytes.pause(); branches.direct.pause() },
+      stopAll: () => { branches.direct.stop(); branches.bytes.stop() },
+      releaseAll: () => { branches.direct.release(); branches.bytes.release() },
+    }
     const platform: ListenPlatform = {
       fetchChapters: async () => fixture.names.map((name, i) => ({ name, url: `u${i}` })),
       fetchUnits: async (_sourceId, _bookKey, index) => {
@@ -222,13 +273,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
           playbackRate: synthRates.get(req.engineId) ?? 1,
         }
       },
-      outputs,
-      awaitDirectVoices: async () => {
-        const held = voiceHold
-        voiceHold = null
-        if (held !== null) return held
-        return speech.face.voices().length > 0
-      },
+      branches: listenBranches,
       now: () => clock.now,
       after,
       watchPageHide: () => () => { /* 假平台不挂宿主事件 */ },
@@ -236,7 +281,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     }
     return {
       session: new ListenSession(platform),
-      clock, speech, bytes, outputs, saves, progressSaves, synthCalls, synthSignals, fixture,
+      clock, speech, bytes, branches, saves, progressSaves, synthCalls, synthSignals, fixture,
       setSynthPlaybackRate: (engineId, rate) => { synthRates.set(engineId, rate) },
       failSynth: (text) => { failing.add(text) },
       holdSynth: (text) => {
@@ -283,7 +328,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     release()
     await started
     expect(h.session.state.get()).toMatchObject({
-      active: false, consecutiveFailures: 0, failedParagraphs: [],
+      active: false, consecutiveFailures: 0, halt: null,
     })
   })
 
@@ -323,7 +368,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
 
     await microtasks()
     expect(h.synthCalls.filter((c) => c.text === 'p2。'), '跳回已暖好的段不该重新合成').toHaveLength(1)
-    expect(last(h.bytes.starts).seg.key, '用的是预取时存下的回执').toContain('p2。')
+    expect(last(h.bytes.starts).receipt?.key, '用的是预取时存下的回执').toContain('p2。')
 
     release()
     await microtasks()
@@ -367,19 +412,19 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     const h = makeHarness()
     h.setSynthPlaybackRate('builtin:baidu', 1.5)
     await start(h)
-    expect(must(h.bytes.starts[0], '首段出声').seg.playbackRate).toBe(1.5)
+    expect(must(h.bytes.starts[0], '首段出声').receipt?.playbackRate).toBe(1.5)
 
     // 推进下一段：同一引擎的补速跟着走（漏一次就等于那段悄悄回到 1.0x）
     must(h.bytes.starts[0], '首段').handlers.done()
     await microtasks()
-    expect(must(h.bytes.starts[1], '第二段').seg.playbackRate).toBe(1.5)
+    expect(must(h.bytes.starts[1], '第二段').receipt?.playbackRate).toBe(1.5)
   })
 
   it('起播推进到下一段；位置落盘走平台注入的防抖，推轮子即落、不等墙钟', async () => {
     const h = makeHarness()
     await start(h)
     expect(h.session.state.get()).toMatchObject({
-      active: true, chapterIndex: 0, chapterName: '第一章',
+      active: true, chapterIndex: 0, chapterNames: ['第一章', '第二章'],
       paragraphIndex: 0, paragraphText: '第一段。', playing: true, mode: 'bytes',
     })
     expect(must(h.synthCalls[0], '首段合成').text).toBe('第一段。')
@@ -418,7 +463,9 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
       expect(h.session.state.get().consecutiveFailures).toBe(TTS_MAX_CONSECUTIVE_FAILURES)
     })
     const st = h.session.state.get()
-    expect(st.failedParagraphs).toEqual([0, 1, 2, 3, 4])
+    expect(st.halt, '到线暂停要公布停因与次数').toEqual({
+      reason: 'consecutive-failures', failures: TTS_MAX_CONSECUTIVE_FAILURES,
+    })
     expect(st.paragraphIndex, '到线停在最后一段，不再往下跳').toBe(4)
     expect(st.playing).toBe(false)
     expect(h.bytes.starts, '一次都没出声').toHaveLength(0)
@@ -427,7 +474,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
   it('参数变更作废旧回执：当前段按新引擎重新合成、按新键起播', async () => {
     const h = makeHarness()
     await start(h)
-    const oldKey = must(h.bytes.starts[0], '首段').seg.key
+    const oldKey = must(h.bytes.starts[0], '首段').receipt?.key
     expect(h.synthCalls.filter((c) => c.text === '第一段。').map((c) => c.engineId))
       .toEqual([TTS_DEFAULTS.engineId])
 
@@ -436,7 +483,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     expect(h.synthCalls.filter((c) => c.text === '第一段。').map((c) => c.engineId))
       .toEqual([TTS_DEFAULTS.engineId, 'http:other'])
     const replay = last(h.bytes.starts)
-    expect(replay.seg.key, '旧键作废，新引擎的新键才起播').not.toBe(oldKey)
+    expect(replay.receipt?.key, '旧键作废，新引擎的新键才起播').not.toBe(oldKey)
     expect(h.session.state.get()).toMatchObject({ engineId: 'http:other', mode: 'bytes', playing: true })
   })
 
@@ -453,8 +500,37 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     await starting
     await microtasks()
     const seg = must(h.bytes.starts[0], '首段')
-    expect(seg.seg.volume, '起播音量在守卫后活读：入口快照会把刚拖到的值盖回去').toBe(0.42)
-    expect(h.session.state.get().volume).toBe(0.42)
+    expect(seg.handlers, '首段已交给分支').toBeDefined()
+    expect(seg.volume, '出声那一发拿的是合成在途改后的新音量，不是入口快照').toBe(0.42)
+  })
+
+  it('暂停收口两条介质：切引擎窗口里旧介质还在响时，按暂停不能只掐新分支', async () => {
+    const h = makeHarness()
+    await start(h)
+    const bytesPause = vi.spyOn(h.branches.bytes, 'pause')
+    const directPause = vi.spyOn(h.branches.direct, 'pause')
+    h.session.pauseListening()
+    // 直出切字节时旧 utterance 要等合成回执落地才被对侧静音；这期间按暂停必须两条都收口，
+    // 否则屏幕说暂停、旧声音还在念（回归：只暂停当前分支）
+    expect(directPause, '另一条介质也要暂停').toHaveBeenCalled()
+    expect(bytesPause, '当前介质当然要暂停').toHaveBeenCalled()
+  })
+
+  it('失败收口：切引擎后合成落空，旧介质不许替失败的段继续响（读数说停就不许再响）', async () => {
+    const h = makeHarness()
+    await h.session.startListening({
+      sourceId: 's1', bookKey: 'b1', title: '书一', chapterIndex: 0, paragraphIndex: 0,
+      engineId: BROWSER_TTS_ENGINE_ID,
+    })
+    expect(h.branches.direct.held(), '直出型旧 utterance 进了平台队列').toBe(true)
+
+    h.failSynth('第一段。')
+    h.holdSynth('第二段。')                       // 重试那一发挂起：连败计数不被「真开口清零」抹掉
+    await h.session.setListenEngine('e-bytes')      // 切字节引擎：按新参数重取当前段，合成落空
+    await microtasks()
+
+    expect(h.session.state.get().consecutiveFailures, '落空记一格连败').toBe(1)
+    expect(h.branches.direct.held(), '失败收口：读数写「不在放」，旧 utterance 不许继续念').toBe(false)
   })
 
   it('定时到点暂停：档位与到点时刻读平台时钟，推轮子即收口', async () => {
@@ -473,7 +549,6 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
 
   it('直出型开口无事件：兜底到点问平台，答「没在念」即走失败径留痕推进', async () => {
     const h = makeHarness()
-    h.outputs.direct = new DirectOutput(h.speech.face, (ms, cb) => h.clock.after(ms, cb))
     await h.session.startListening({
       sourceId: 's1', bookKey: 'b1', title: '书一', chapterIndex: 0, paragraphIndex: 0,
       engineId: BROWSER_TTS_ENGINE_ID,
@@ -484,14 +559,14 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
 
     h.clock.advance(2000)
     const st = h.session.state.get()
-    expect(st.failedParagraphs, '被吞的那一段要留痕').toEqual([0])
+    expect(st.halt, '一次失败不到阈值：不公布停因').toBeNull()
     expect(st.paragraphIndex, '留痕后推进').toBe(1)
     expect(st.consecutiveFailures).toBe(1)
     expect(st.playing).toBe(false)
 
     // 迟到的开口事件撞在旧发上：不推进也不二次留痕
     must(h.speech.handlers[0], '首段的事件面').onEnd()
-    expect(h.session.state.get()).toMatchObject({ paragraphIndex: 1, failedParagraphs: [0] })
+    expect(h.session.state.get()).toMatchObject({ paragraphIndex: 1, halt: null })
   })
 
   it('直出源起播先等平台语音表：等不到才报 TTS_NO_VOICES，等待里有表就起播', async () => {
@@ -519,7 +594,9 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
       expect(h.session.state.get().consecutiveFailures).toBe(TTS_MAX_CONSECUTIVE_FAILURES)
     })
     const st = h.session.state.get()
-    expect(st.failedParagraphs, '五段各记一次失败').toEqual([0, 1, 2, 3, 4])
+    expect(st.halt, '到线暂停要公布停因与次数').toEqual({
+      reason: 'consecutive-failures', failures: TTS_MAX_CONSECUTIVE_FAILURES,
+    })
     expect(st.paragraphIndex, '到线停在第五段，不再往下跳').toBe(4)
     expect(st.playing).toBe(false)
     expect(st.active, '是暂停不是停止：控制面还在').toBe(true)
@@ -579,14 +656,14 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     void h.session.jumpToChapter(1)                  // 跳第二章：清 receipts、起播 B0
     await microtasks()
     expect(h.session.state.get()).toMatchObject({ chapterIndex: 1, paragraphIndex: 0 })
-    expect(last(h.bytes.starts).seg.key).toContain('B0。')
+    expect(last(h.bytes.starts).receipt?.key).toContain('B0。')
 
     release()                                   // 旧章 index3 的合成迟到落地
     await microtasks()
 
     h.session.seekParagraph(3)                  // 第二章 index3 应合成 B3，不命中旧章回执
     await microtasks()
-    expect(last(h.bytes.starts).seg.key, '旧章回执不得污染新章同号段').toContain('B3。')
+    expect(last(h.bytes.starts).receipt?.key, '旧章回执不得污染新章同号段').toContain('B3。')
   })
 
   it('字节型换段即归零段进度：合成在途也不把上一段比例投到新段', async () => {
@@ -606,7 +683,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     await microtasks()
   })
 
-  it('合成在途照跳、章正文在途不接：`loading` 与 `chapterLoading` 是两件事', async () => {
+  it('合成在途照跳、章正文在途不接：`loading` 与章正文在途是两回事', async () => {
     const h = makeHarness()
     h.fixture.texts[0] = ['p0。', 'p1。', 'p2。', 'p3。']
     await start(h)
@@ -614,7 +691,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     h.session.seekParagraph(3)
     await microtasks()
     expect(h.session.state.get()).toMatchObject({
-      paragraphIndex: 3, loading: true, chapterLoading: false,
+      paragraphIndex: 3, loading: true,
     })
 
     // 合成在途窗口里再跳一次照跳：playSeq 会把在途那一发作废，不该按了没反应
@@ -626,7 +703,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     const releaseFetch = h.holdFetch(1)
     const jumping = h.session.jumpToChapter(1)
     await microtasks()
-    expect(h.session.state.get().chapterLoading, '章正文在途').toBe(true)
+    expect(h.session.state.get().loading, '章正文在途：读数是 loading').toBe(true)
     h.session.seekParagraph(0)
     await h.session.skipParagraph(1)
     expect(h.session.state.get().paragraphIndex, '章正文在途不接跳段').toBe(2)
@@ -634,7 +711,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     releaseFetch()
     await jumping
     await microtasks()
-    expect(h.session.state.get()).toMatchObject({ chapterIndex: 1, chapterLoading: false })
+    expect(h.session.state.get()).toMatchObject({ chapterIndex: 1, loading: false })
     releaseSynth()
     await microtasks()
   })
@@ -665,10 +742,10 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     const release = h.holdFetch(1)                  // 挂起第二章正文
     const jumping = h.session.jumpToChapter(1)
     await microtasks()
-    expect(h.session.state.get()).toMatchObject({ chapterIndex: 0, chapterLoading: true })
+    expect(h.session.state.get()).toMatchObject({ chapterIndex: 0, loading: true })
 
     h.session.pauseListening()                      // 载入在途按暂停
-    expect(h.session.state.get()).toMatchObject({ playing: false, loading: false, chapterLoading: true })
+    expect(h.session.state.get()).toMatchObject({ playing: false, loading: false })
     const startsBefore = h.bytes.starts.length
     const writesBefore = h.progressSaves.length
 
@@ -682,21 +759,21 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     await microtasks()
     // 载入落地时 playSeq 已因暂停抬过：停在新章段首，不自动起播
     expect(h.session.state.get()).toMatchObject({
-      chapterIndex: 1, paragraphIndex: 0, playing: false, loading: false, chapterLoading: false,
+      chapterIndex: 1, paragraphIndex: 0, playing: false, loading: false,
     })
     // 暂停期间不自动起播新章：只数「出声」——下一章的预取（暖缓存）不受暂停影响，不算播放
-    expect(h.bytes.starts.every((s) => !s.seg.key.includes('第二章第一段。')), '暂停期间不自动起播新章').toBe(true)
+    expect(h.bytes.starts.every((s) => !s.receipt?.key.includes('第二章第一段。')), '暂停期间不自动起播新章').toBe(true)
 
     h.session.resumeListening()                     // 载入收口之后这一次才有效
     await microtasks()
-    expect(last(h.bytes.starts).seg.key).toContain('第二章第一段。')
+    expect(last(h.bytes.starts).receipt?.key).toContain('第二章第一段。')
     expect(h.session.state.get()).toMatchObject({ chapterIndex: 1, playing: true })
   })
 
   it('换起播点先取数后停旧会话：正文拉不到时旧会话照常放着', async () => {
     const h = makeHarness()
     await start(h)
-    const oldKey = last(h.bytes.starts).seg.key
+    const oldKey = last(h.bytes.starts).receipt?.key
     const oldStarts = h.bytes.starts.length
     h.failFetch(1)
 
@@ -708,7 +785,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
       active: true, chapterIndex: 0, playing: true,
     })
     expect(h.bytes.starts.length, '没有多起一段').toBe(oldStarts)
-    expect(last(h.bytes.starts).seg.key).toBe(oldKey)
+    expect(last(h.bytes.starts).receipt?.key).toBe(oldKey)
   })
 
   it('语速滑杆逐档只重取最后一发：状态即时，重合成等防抖窗', async () => {

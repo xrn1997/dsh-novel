@@ -3,8 +3,12 @@
  *
  * 为什么单独成模块：同一份会话状态（播放层的 `ttsPlayer` + 段进度 `ttsProgress`）被阅读器
  * 听书条、迷你条胶囊、展开边栏与设置面四个表面各自解释——段号 1 基换算写过四遍、定时两面
- * 各说各话（条显档位、浮窗显倒计时）、章内进度两套公式。换算只住这里，表面只取成品；
- * 表面要改读数形状时改这里，不许在表面重算。
+ * 各说各话（条显档位、浮窗显倒计时）、章内进度两套公式、连败阈值被 import 三次。换算与
+ * 成品判断只住这里，表面只取成品；表面要改读数形状时改这里，不许在表面重算。
+ *
+ * `listenFaceOf` 是**整块上屏投影**：能否暂停、连败停的可见读数、有没有段 / 真实进度、当前
+ * 引擎该露哪张音色表。它只吃播放层已经公布的成品事实（`halt` / `segmentProgress` /
+ * `voiceTable`），不拿计数器与阈值对比、不拿模式猜——阈值判据在播放层一处。
  *
  * 零 React、零 store 读取、不读墙钟：倒计时的时刻由调用方注入 `now`，测试换一个时刻就能钉住
  * 读数怎么走，不用等真秒。状态以**结构子集**入参（见 `ListenReadoutState`）——刻意不 import
@@ -14,6 +18,7 @@
 
 import type { Translate } from '../copy/index.js'
 import { formatClock } from '../util.js'
+import type { VoiceTable } from './output-contract.js'
 
 /** 读数吃的会话状态面：字段与 `TtsPlayerState` 逐一同构的子集，调用点直接递整份 store 状态。
  *  播放层改字段时这里的可赋值性当场红——子集视图不是抄本，是那张状态表的一个切面。 */
@@ -24,6 +29,47 @@ export interface ListenReadoutState {
   rate: number
   timerChoice: number | 'chapter' | null
   timerEndAt: number | null
+  playing: boolean
+  loading: boolean
+  /** 会话停在上屏的原因（播放层独知的成品事实）：表面只读这一格，不比较计数与阈值。 */
+  halt: { reason: 'consecutive-failures'; failures: number } | null
+  /** 当前分支有没有段内计时介质：false = 段进度恒零，画静态轨道。 */
+  segmentProgress: boolean
+  /** 当前引擎该露哪张音色表。 */
+  voiceTable: VoiceTable
+}
+
+/** 「此刻按下去是暂停」的唯一判据：**在放 ∨ 准备中**（合成 / 等开口）。缺了 loading 这一支，
+ *  屏幕上的环在加载里可暂停、Space 快捷键却当它没在放而去调 resume（被 loading 挡回），
+ *  同一条意图在键盘与指针上分叉。播放环、条按钮、键盘与阅读器 pill 共用这一个函数。 */
+export function isPlayBusy(st: ListenReadoutState): boolean {
+  return st.playing || st.loading
+}
+
+/** 整块上屏投影：四个表面（听书条 / 迷你条胶囊 / 展开边栏 / 设置面）与阅读器只读它，
+ *  不在各自的渲染里重算「连败到线」「空章」「音色表看哪边」。 */
+export interface ListenFace {
+  /** 此刻按下去是暂停（在放 ∨ 准备中）。 */
+  busy: boolean
+  /** 连败到阈值而停的可见读数（连续失败次数）；null = 没因连败停，提示行不渲染。 */
+  failedHint: number | null
+  /** 有没有段读数（空章抑制）：false = 本章没有可朗读单元，段号 / 徽标 / 进度条都不摆。 */
+  hasSegments: boolean
+  /** 段内进度是不是真实读数（直出型没有计时介质 → 浮窗进度环画静态轨道）。 */
+  hasProgress: boolean
+  /** 当前引擎该露哪张音色表：`platform` = 浏览器语音表，`engine` = 引擎源声明的音色表。 */
+  voiceTable: VoiceTable
+}
+
+/** 上屏投影的唯一实现。停因带次数（文案的另一半由 `copy/tts.ts` 的 `tts.failedHint` 拼）。 */
+export function listenFaceOf(st: ListenReadoutState): ListenFace {
+  return {
+    busy: isPlayBusy(st),
+    failedHint: st.halt === null ? null : st.halt.failures,
+    hasSegments: st.paragraphCount > 0,
+    hasProgress: st.segmentProgress,
+    voiceTable: st.voiceTable,
+  }
 }
 
 /** 段进度现场（`ttsProgress` 的形状）：当前播放单元已出声的秒数与总秒数。 */

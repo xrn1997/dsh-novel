@@ -309,7 +309,7 @@ describe('直出型引擎：起播与 utterance 映射', () => {
       await vi.advanceTimersByTimeAsync(2000)
       const st = ttsPlayer.get()
       // 会话没有停在「这一句永远没开口」上：留痕、推进，读数也不再假装在放
-      expect(st.failedParagraphs, '被吞的那一段要留痕').toEqual([0])
+      expect(st.halt, '一次失败不到阈值：不公布停因').toBeNull()
       expect(st.paragraphIndex, '失败的那一段留痕后推进').toBe(1)
       expect(st.playing).toBe(false)
       expect(st.consecutiveFailures).toBe(1)
@@ -325,7 +325,7 @@ describe('直出型引擎：起播与 utterance 映射', () => {
       synth.speaking = true
       await vi.advanceTimersByTimeAsync(2000)
       expect(ttsPlayer.get().loading).toBe(true)
-      expect(ttsPlayer.get().failedParagraphs).toEqual([])
+      expect(ttsPlayer.get().halt).toBeNull()
       synth.speaking = false
       lastUtterance().onstart?.()
       expect(ttsPlayer.get().playing).toBe(true)
@@ -376,13 +376,13 @@ describe('直出型引擎：起播与 utterance 映射', () => {
 })
 
 describe('直出型引擎：失败半径与结构化错误', () => {
-  it('utterance.onerror 走同一失败径：记 failedParagraphs、跳过该段；下一段开口清零连败', async () => {
+  it('utterance.onerror 走同一失败径：跳过该段；下一段开口清零连败', async () => {
     await startDirect()
     speakNow()
     lastUtterance().onerror?.({ error: 'synthesis-failed' })
     await microtasks()
     expect(ttsPlayer.get()).toMatchObject({
-      failedParagraphs: [0], paragraphIndex: 1, consecutiveFailures: 1, playing: false,
+      halt: null, paragraphIndex: 1, consecutiveFailures: 1, playing: false,
     })
     expect(lastUtterance().text).toBe('第二段。')
     speakNow()
@@ -401,7 +401,9 @@ describe('直出型引擎：失败半径与结构化错误', () => {
     }
     const st = ttsPlayer.get()
     expect(st.consecutiveFailures).toBe(TTS_MAX_CONSECUTIVE_FAILURES)
-    expect(st.failedParagraphs).toEqual([0, 1, 2, 3, 4])
+    expect(st.halt, '到线暂停要公布停因与次数').toEqual({
+      reason: 'consecutive-failures', failures: TTS_MAX_CONSECUTIVE_FAILURES,
+    })
     expect(st.paragraphIndex).toBe(4)
     expect(st.playing).toBe(false)
     expect(FakeUtterance.instances).toHaveLength(TTS_MAX_CONSECUTIVE_FAILURES)
@@ -417,7 +419,7 @@ describe('直出型引擎：失败半径与结构化错误', () => {
       lastUtterance().onerror?.({ error: reason })
       await microtasks()
       expect(ttsPlayer.get()).toMatchObject({
-        failedParagraphs: [0], paragraphIndex: 1, consecutiveFailures: 1, playing: false,
+        halt: null, paragraphIndex: 1, consecutiveFailures: 1, playing: false,
       })
       expect(lastUtterance().text).toBe('第二段。')
       expect(synth.speak).toHaveBeenCalledTimes(2)
@@ -439,7 +441,7 @@ describe('直出型引擎：失败半径与结构化错误', () => {
     speakNow()
     pauseListening()
     expect(ttsPlayer.get()).toMatchObject({
-      failedParagraphs: [], consecutiveFailures: 0, paragraphIndex: 0,
+      halt: null, consecutiveFailures: 0, paragraphIndex: 0,
     })
     resumeListening()
     await microtasks()
@@ -447,7 +449,7 @@ describe('直出型引擎：失败半径与结构化错误', () => {
     void skipParagraph(1)
     await microtasks()
     expect(ttsPlayer.get()).toMatchObject({
-      paragraphIndex: 1, failedParagraphs: [], consecutiveFailures: 0,
+      paragraphIndex: 1, halt: null, consecutiveFailures: 0,
     })
     expect(lastUtterance().text).toBe('第二段。')
   })
@@ -620,7 +622,7 @@ describe('直出型引擎：字节↔直出切换', () => {
     const st = ttsPlayer.get()
     expect(st.mode).toBe('direct')
     expect(st.paragraphIndex).toBe(0)
-    expect(st.failedParagraphs).toEqual([])
+    expect(st.halt).toBeNull()
     expect(st.consecutiveFailures).toBe(0)
     expect(playingAudio()).toBeNull()
     expect(lastUtterance().text).toBe('唯一段。')
@@ -640,7 +642,7 @@ describe('直出型引擎：字节↔直出切换', () => {
     expect(st.mode).toBe('bytes')
     expect(st.engineId).toBe(TTS_DEFAULTS.engineId)
     expect(st.paragraphIndex).toBe(0)
-    expect(st.failedParagraphs).toEqual([])
+    expect(st.halt).toBeNull()
     expect(st.consecutiveFailures).toBe(0)
     expect(synth.cancel).toHaveBeenCalled()
     expect(synthCalls().map((c) => c.text)).toEqual(['唯一段。'])

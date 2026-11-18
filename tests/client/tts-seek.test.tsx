@@ -233,6 +233,8 @@ describe('播放层 seek：章内段滑杆', () => {
   })
 
   it('seekParagraph 越界夹紧；同段不重合成；章正文在途不接、本段合成在途照跳', async () => {
+    // 第二章给到 6 段：后面要取一个预取窗（后 2 段）外的落点，让合成请求真悬在闸上
+    chapterTexts[1] = ['第二章一。', '第二章二。', '第二章三。', '第二章四。', '第二章五。', '第二章六。']
     await act(async () => {
       await startListening({ sourceId: 's1', bookKey: 'k1', title: '书一', chapterIndex: 0, paragraphIndex: 0 })
     })
@@ -242,15 +244,42 @@ describe('播放层 seek：章内段滑杆', () => {
     await act(async () => { seekParagraph(99) })
     expect(ttsPlayer.get().paragraphIndex).toBe(2)
 
-    // 章正文在途：段域还是上一章的读数，落点不接
-    act(() => { ttsPlayer.set({ chapterLoading: true }) })
+    // 章正文在途（真窗口：把第二章正文的读取悬住）：段域还是上一章的读数，落点不接
+    const realGet = vi.mocked(apiGet).getMockImplementation()
+    if (realGet === undefined) throw new Error('apiGet 缺实现')
+    let releaseChapter = (): void => { throw new Error('章正文闸未就绪') }
+    const chapterGate = new Promise<void>((resolve) => { releaseChapter = resolve })
+    vi.mocked(apiGet).mockImplementation(async (path: string) => {
+      if (path.startsWith('chapter') && indexOf(path) === 1) await chapterGate
+      return realGet(path)
+    })
+    const jumping = jumpToChapter(1)
+    await act(async () => { await Promise.resolve() })
+    expect(ttsPlayer.get().loading, '章正文在途').toBe(true)
     await act(async () => { seekParagraph(0) })
-    expect(ttsPlayer.get().paragraphIndex).toBe(2)
+    expect(ttsPlayer.get().paragraphIndex, '章正文在途不接滑杆落点').toBe(2)
+    releaseChapter()
+    await act(async () => { await jumping })
+    expect(ttsPlayer.get().chapterIndex).toBe(1)
 
-    // 本段合成在途（loading=true，chapterLoading=false）：照跳——playSeq 会作废在途那一发
-    act(() => { ttsPlayer.set({ chapterLoading: false, loading: true }) })
+    // 本段合成在途（loading=true，且不是章正文在途）：照跳——playSeq 会作废在途那一发。
+    // 落点取预取窗外的段（只暖后 2 段），合成请求才真的悬在闸上而不是命中回执。
+    const realSend = vi.mocked(apiSend).getMockImplementation()
+    if (realSend === undefined) throw new Error('apiSend 缺实现')
+    let releaseSynth = (): void => { throw new Error('合成闸未就绪') }
+    const synthGate = new Promise<void>((resolve) => { releaseSynth = resolve })
+    vi.mocked(apiSend).mockImplementation(async (target, body) => {
+      if (target.path === ROUTES.ttsSynthesize.path) await synthGate
+      return realSend(target, body)
+    })
+    await act(async () => { seekParagraph(5) })
+    expect(ttsPlayer.get().loading, '本段合成在途').toBe(true)
     await act(async () => { seekParagraph(0) })
-    expect(ttsPlayer.get().paragraphIndex).toBe(0)
+    expect(ttsPlayer.get().paragraphIndex, '本段合成在途照跳').toBe(0)
+    releaseSynth()
+    await act(async () => { await Promise.resolve() })
+    vi.mocked(apiGet).mockImplementation(realGet)
+    vi.mocked(apiSend).mockImplementation(realSend)
   })
 
   it('段进度只认活槽：timeupdate / metadata 投读数，预载槽的不投', async () => {
@@ -405,7 +434,7 @@ describe('听书条与迷你条的进度面', () => {
       ttsPlayer.set({
         ...ttsPlayer.get(),
         active: true, bookKey: 'k1', sourceId: 's1', title: '书一',
-        chapterIndex: 0, chapterName: '第一章', paragraphCount: 3, paragraphIndex: 2,
+        chapterIndex: 0, chapterNames: ['第一章', '第二章', '第三章'], paragraphCount: 3, paragraphIndex: 2,
         paragraphText: '第三段。', playing: true, mode: 'bytes',
       })
     })
@@ -431,9 +460,10 @@ describe('听书条与迷你条的进度面', () => {
       ttsPlayer.set({
         ...ttsPlayer.get(),
         active: true, bookKey: 'k1', sourceId: 's1', title: '书一',
-        chapterIndex: 0, chapterName: '第一章', paragraphCount: 3, paragraphIndex: 1,
+        chapterIndex: 0, chapterNames: ['第一章', '第二章', '第三章'], paragraphCount: 3, paragraphIndex: 1,
         paragraphText: '第二段。', playing: false, mode: 'bytes',
         consecutiveFailures: TTS_MAX_CONSECUTIVE_FAILURES,
+        halt: { reason: 'consecutive-failures', failures: TTS_MAX_CONSECUTIVE_FAILURES },
       })
     })
     render(createElement(TtsBar, {
@@ -443,8 +473,10 @@ describe('听书条与迷你条的进度面', () => {
     expect(status.textContent).toContain('连续 5 段播放失败，已暂停')
     expect(status.textContent, '错误码翻人话，不裸露 TTS_*').not.toContain('TTS_')
 
-    // 未到线不报
-    act(() => { ttsPlayer.set({ ...ttsPlayer.get(), consecutiveFailures: TTS_MAX_CONSECUTIVE_FAILURES - 1 }) })
+    // 未到线不报（没有停因就没有这一行）
+    act(() => {
+      ttsPlayer.set({ ...ttsPlayer.get(), consecutiveFailures: TTS_MAX_CONSECUTIVE_FAILURES - 1, halt: null })
+    })
     expect(screen.queryByRole('status')).toBeNull()
 
     // 真开口（计数清零 + 在放）后提示自然消失

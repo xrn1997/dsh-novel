@@ -2,16 +2,16 @@ import type { ReactNode } from 'react'
 import { useState } from 'react'
 import { useCopy } from '../copy/index.js'
 import { useStore } from '../store.js'
-import { chapterProgressOf, lineOf, rateLabel, segmentLabel } from './listen-readout.js'
+import {
+  chapterProgressOf, lineOf, listenFaceOf, rateLabel, segmentLabel,
+} from './listen-readout.js'
 import type { TtsPlayerState } from './player.js'
 import { useTimerReadout } from './use-timer-readout.js'
 import {
-  TTS_MAX_CONSECUTIVE_FAILURES,
   pauseListening, playFromReadingPosition, resumeListening, seekParagraph,
   skipChapter, skipParagraph, stopListening, ttsPlayer, ttsProgress,
 } from './player.js'
 import { TtsSettingsNote, TtsSettingsPanel, TtsSettingsRows } from './TtsSettings.js'
-import { isPlayBusy } from './mini-parts.js'
 import { ttsErrorMessage } from './tts-error.js'
 import { useTtsSources } from './use-tts-sources.js'
 
@@ -41,9 +41,9 @@ export interface TtsBarProps {
 export function TtsBar({ darkController, apiGet, pushError, onLocate }: TtsBarProps): ReactNode {
   const t = useCopy()
   const st = useStore(ttsPlayer)
-  // 「可暂停」判据与浮窗播放环共用 `isPlayBusy`（在放 ∨ 起播在途）：只认 playing 会让 loading
-  // 那段按下去没反应。算式只有一处，本组件不内联第二份。
-  const busy = isPlayBusy(st)
+  // 整块上屏投影（能否暂停 / 连败停的读数 / 空章抑制）：判据全住 `listen-readout.ts`，
+  // 这里不拿计数器对比阈值、也不自己查空章。
+  const face = listenFaceOf(st)
   const [panelOpen, setPanelOpen] = useState(false)
   const sources = useTtsSources(panelOpen, apiGet, pushError)
 
@@ -52,10 +52,6 @@ export function TtsBar({ darkController, apiGet, pushError, onLocate }: TtsBarPr
   const timer = useTimerReadout(st, t)
 
   if (!st.active) return null
-
-  // 连败到阈值且没在放 = 会话已经从「跳过这一段」收口成暂停：这行是唯一的可见解释。
-  // 判据与阈值只从播放层取，组件不自己数也不自己定线；真开口 / 重开后计数清零，这行自然消失。
-  const failed = st.consecutiveFailures >= TTS_MAX_CONSECUTIVE_FAILURES && !st.playing
 
   const report = (error: unknown): void => { pushError(ttsErrorMessage(t, error)) }
   const run = (pending: Promise<void>): void => { void pending.catch(report) }
@@ -80,10 +76,10 @@ export function TtsBar({ darkController, apiGet, pushError, onLocate }: TtsBarPr
           onClick={() => { run(skipParagraph(-1)) }}>
           <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M10 3 5 8l5 5" /></svg>
         </button>
-        <button className="novel-tts-play" aria-label={busy ? t('tts.pause') : t('tts.play')}
-          title={busy ? t('tts.pause') : t('tts.play')}
-          onClick={() => { if (busy) pauseListening(); else resumeListening() }}>
-          {busy
+        <button className="novel-tts-play" aria-label={face.busy ? t('tts.pause') : t('tts.play')}
+          title={face.busy ? t('tts.pause') : t('tts.play')}
+          onClick={() => { if (face.busy) pauseListening(); else resumeListening() }}>
+          {face.busy
             ? <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M5.5 3.5v9M10.5 3.5v9" /></svg>
             : <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M5 3l8 5-8 5z" /></svg>}
         </button>
@@ -127,15 +123,15 @@ export function TtsBar({ darkController, apiGet, pushError, onLocate }: TtsBarPr
           <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" /></svg>
         </button>
       </div>
-      {/* 连败暂停的可见读数：`role=status` 让读屏在不抢焦点的情况下播报；真开口后计数清零，
+      {/* 连败暂停的可见读数：`role=status` 让读屏在不抢焦点的情况下播报；真开口后停因清零，
           这一行随状态消失。文案走 `copy/tts.ts`，组件不持数字以外的字。 */}
-      {failed
-        ? <div className="novel-tts-fail" role="status">{t('tts.failedHint', { n: st.consecutiveFailures })}</div>
+      {face.failedHint !== null
+        ? <div className="novel-tts-fail" role="status">{t('tts.failedHint', { n: face.failedHint })}</div>
         : null}
       {/* 章内进度滑杆：整行宽、拖到任意段即起播（段粒度 = 听书位置的落盘粒度）。
           value 与浮窗填充同出 `chapterProgressOf` 的连续 value，这里取整到段——
           同一个读数的两种控件形态（条是段粒度滑杆、浮窗是连续填充）。空章不渲染。 */}
-      <ChapterSeekRow st={st} />
+      <ChapterSeekRow st={st} hasSegments={face.hasSegments} />
     </div>
   )
 }
@@ -145,11 +141,11 @@ export function TtsBar({ darkController, apiGet, pushError, onLocate }: TtsBarPr
  * 整条听书条（连同展开的设置卡与它的章名列表）都会跟着重渲；`chapterProgressOf` 的算式
  * 仍只住 `listen-readout.ts`，这里只取成品。
  */
-function ChapterSeekRow({ st }: { st: TtsPlayerState }): ReactNode {
+function ChapterSeekRow({ st, hasSegments }: { st: TtsPlayerState; hasSegments: boolean }): ReactNode {
   const t = useCopy()
   const progress = useStore(ttsProgress)
+  if (!hasSegments) return null
   const chapter = chapterProgressOf(st, progress, t)
-  if (st.paragraphCount === 0) return null
   // 连续 value 在末段念到段尾时会到 `count`，而滑杆的 domain 是 0..count-1：不夹这一下，
   // 受控值就超出 max（原生控件会静默夹取，读屏与表单状态却记着越界值）。
   const value = Math.min(chapter.count - 1, Math.max(0, Math.floor(chapter.value)))

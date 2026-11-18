@@ -1,16 +1,11 @@
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import { useCopy } from '../copy/index.js'
 import { useStore } from '../store.js'
-import { chapterProgressOf } from './listen-readout.js'
+import { chapterProgressOf, listenFaceOf } from './listen-readout.js'
 import { pauseListening, resumeListening, seekParagraph, ttsPlayer, ttsProgress } from './player.js'
-import type { TtsPlayerState } from './player.js'
 
-/** 「此刻按下去是暂停」的唯一判据：**在放 ∨ 起播在途**。缺了 loading 这一支，
- *  屏幕上的环在 loading 里可暂停、Space 快捷键却当它没在放而去调 resume（被 loading 挡回），
- *  同一条意图在键盘与指针上分叉。两处共用这一个函数，不各写一份算式。 */
-export function isPlayBusy(st: TtsPlayerState): boolean {
-  return st.playing || st.loading
-}
+/** 图标与小件的**呈现层**：判据（能否暂停 / 空章抑制 / 段内进度是否真实）全部住
+ *  `listen-readout.ts` 的 `listenFaceOf`，这里只按成品摆形状。 */
 
 /** 浮窗两个形态共用的小件与图标：胶囊只带环，边栏再带定时读数与章内进度条。
  *  图标本身是装饰，可见语义由按钮的 aria-label / title 从 `copy/tts.ts` 取词。 */
@@ -42,9 +37,10 @@ export function RingPlay(): ReactNode {
   const t = useCopy()
   const st = useStore(ttsPlayer)
   const progress = useStore(ttsProgress)
+  const face = listenFaceOf(st)
   const circumference = 2 * Math.PI * 21
   const { ratio } = chapterProgressOf(st, progress, t)
-  const busy = isPlayBusy(st)
+  const busy = face.busy
   const label = busy ? t('tts.pause') : t('tts.play')
   return (
     <button
@@ -61,7 +57,7 @@ export function RingPlay(): ReactNode {
       <svg className="novel-tts-ring" viewBox="0 0 48 48" aria-hidden="true">
         <circle className="novel-tts-ring-track" cx="24" cy="24" r="21" />
         <circle
-          className={progress.duration > 0 ? 'novel-tts-ring-val' : 'novel-tts-ring-val direct'}
+          className={face.hasProgress ? 'novel-tts-ring-val' : 'novel-tts-ring-val direct'}
           cx="24" cy="24" r="21"
           strokeDasharray={circumference.toFixed(1)}
           strokeDashoffset={(circumference * (1 - ratio)).toFixed(1)}
@@ -96,7 +92,7 @@ export function ChapterSeek(): ReactNode {
   const t = useCopy()
   const st = useStore(ttsPlayer)
   const progress = useStore(ttsProgress)
-  if (st.paragraphCount === 0) return null
+  if (!listenFaceOf(st).hasSegments) return null
   const { count, value, pct, readout } = chapterProgressOf(st, progress, t)
   const fill = (pct * 100).toFixed(1)
 

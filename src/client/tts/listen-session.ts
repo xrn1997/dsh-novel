@@ -4,7 +4,10 @@ import type {
 } from '../../shared/wire.js'
 import type { ReaderRestoreTarget } from '../reader-session.js'
 import { createStore } from '../store.js'
-import type { BytesListenOutput, DirectListenOutput, OutputHandlers } from './output-contract.js'
+import type { Store } from '../store.js'
+import type {
+  BranchCapabilities, BranchHost, BranchMode, ListenBranches, OutputHandlers, PlaybackBranch,
+} from './output-contract.js'
 import { estimateParagraphIndex, paragraphRatio, readingProbeNow } from './reading-position.js'
 
 /**
@@ -23,19 +26,17 @@ import { estimateParagraphIndex, paragraphRatio, readingProbeNow } from './readi
  *
  * 播放单元 = 章正文投影切出的段（`platform.fetchUnits` 给的就是切好的单元）：切段只动边界
  * 不动字，与导出 / AI 读数同一份正文投影。两种模式共用同一个状态机、同一份位置落盘与同一条
- * 失败径，差别只在「这一段怎么出声」，分流判据（`modeOf`）留在会话侧：
- * - 字节型：`synthesize` 拿缓存键 → `audio.src = ttsAudioUrl(key)`；出声层自带两槽
- *   （当前 + 预载下一段），预取 = fire-and-forget 合成请求（暖服务端缓存）。
- * - 直出型（浏览器本地语音）：逐段 utterance 交给平台开口，无合成请求、无预取、无缓存；
- *   出声层自带 utterance 生命周期与开口兜底，`onstart` 才把段记成在放，`onend` 推进，
- *   平台侧中断（活 token 的 `interrupted` / `canceled`）与合成失败同半径。
+ * 失败径；**「这一段怎么出声」的策略住两条分支自己的实现**（`playback-branches.ts` 的
+ * `BytesBranch` / `DirectBranch`）：准备这一段（字节型求合成回执、交两槽介质；直出型过音色闸、
+ * 交 utterance）、能提供什么（段内计时 / 预取 / 回执续播 / 介质自愈）、静音另一条分支、重来的许可。
+ * 会话只按 `modeOf` 分流取分支，不再在状态机的多个方法里查模式。
  *
- * 失败半径 = 那一段：单段合成失败或 utterance 报错只跳过并记进 `failedParagraphs`，连续
- * `TTS_MAX_CONSECUTIVE_FAILURES` 段失败才暂停；任何**真开口**的段都把连败计数清零（起播只是
- * 发起加载，404 / 解码失败 / 自动播放被拒都发生在之后，清零不能提前到那一步）。连败是**整个会话**
- * 的读数，换章不清零（章正文拉取成功不等于出声成功）：否则死引擎每到章界就从零数起，
- * 会一章一章走到书末才停。引擎中途缺席（cordis 服务被卸载 → `TTS_ENGINE_MISSING`）与上游错误
- * 走同一条失败径——播放层不认识错误码，只认识「这一次没成」。
+ * 失败半径 = 那一段：单段合成失败或 utterance 报错只跳过，连续
+ * `TTS_MAX_CONSECUTIVE_FAILURES` 段失败才暂停并公布停因（`halt`）；任何**真开口**的段都把连败
+ * 计数清零（起播只是发起加载，404 / 解码失败 / 自动播放被拒都发生在之后，清零不能提前到那一步）。
+ * 连败是**整个会话**的读数，换章不清零（章正文拉取成功不等于出声成功）：否则死引擎每到章界就
+ * 从零数起，会一章一章走到书末才停。引擎中途缺席（cordis 服务被卸载 → `TTS_ENGINE_MISSING`）
+ * 与上游错误走同一条失败径——播放层不认识错误码，只认识「这一次没成」。
  *
  * 本会话不持可见文案：状态是给视图读的结构化读数，错误不上屏（要说话的地方归 `client/copy`）。
  * 起播的正常数据面失败抛 `TtsPlayerError`，调用方按 `code` 取词典，`message` 不是人话。
@@ -86,13 +87,21 @@ const PREFETCH_AHEAD = 2
 /** 距章尾不足这么多段 = 「进入末 3 段」，开始预取下一章开头。 */
 const PREFETCH_LAST_PARAGRAPHS = 3
 
+/** 会话停在上屏的**原因**（播放层独知的成品事实）：表面读它，不拿计数与阈值对比。
+ *  阈值判据只在播放层（`segmentFailed`）一处，次数随停因一起公布——上屏只需要「为什么停 +
+ *  连续几段」，不需要自己再与阈值比一遍。 */
+export interface ListenHalt {
+  reason: 'consecutive-failures'
+  /** 触发停的那一刻的连败次数（上屏读数用）。 */
+  failures: number
+}
+
 export interface TtsPlayerState {
   active: boolean
   bookKey: string | null
   sourceId: string | null
   title: string
   chapterIndex: number
-  chapterName: string
   paragraphCount: number
   paragraphIndex: number
   /** 当前播放单元的原文：视图的「段读数 + 预览」直接读它。播放层是切分（`splitParagraphs`）
@@ -109,14 +118,18 @@ export interface TtsPlayerState {
    *  （`ADR-0072`），档位若只活在组件里，回来就是一张说「关闭」的假脸。 */
   timerChoice: number | 'chapter' | null
   mode: 'bytes' | 'direct'
+  /** 这段出声**在准备中**（合成在途 / 等平台开口）：与 `playing` 分开是为了让「按下去是暂停」
+   *  判据（`playing ∨ loading`）在加载窗口里也成立。字节型的 loading 到「已交给介质」为止，
+   *  直出型到平台真开口为止——两套生命周期的差别住各自分支，不在这里按模式分。 */
   loading: boolean
-  /** 章正文（段域）载入在途：此刻 `paragraphIndex` / `paragraphCount` 还是**上一章**的读数，
-   *  跳段与滑杆落点照它走会念错章，故这两条导航在载入窗口里不接。与 `loading` 分开：
-   *  `loading` 还包含「本段合成在途」，那种窗口里跳段是安全的（`playSeq` 会作废在途那一发）——
-   *  把两者混成一个标志，逐段合成期间的按钮就成了按了没反应。 */
-  chapterLoading: boolean
-  failedParagraphs: number[]
+  /** 会话为什么停在上屏：null = 没因失败停（用户暂停 / 定时到点 / 播完都不算）。
+   *  控制面据此给「连续 N 段播放失败，已暂停」那行读数；真开口后清零，这一格自然回 null。 */
+  halt: ListenHalt | null
   consecutiveFailures: number
+  /** 当前分支有没有段内计时介质：false = 段进度（`progress`）恒零，浮窗进度环画静态轨道。 */
+  segmentProgress: boolean
+  /** 当前引擎该露哪张音色表：平台表（直出型）或引擎源声明（字节型）。 */
+  voiceTable: 'platform' | 'engine'
   /** 本会话的章名清单（起播章选择面的选项）；随会话建立一次，章间推进不改它。 */
   chapterNames: string[]
 }
@@ -132,14 +145,13 @@ function modeOf(engineId: string): 'bytes' | 'direct' {
   return engineId === BROWSER_TTS_ENGINE_ID ? 'direct' : 'bytes'
 }
 
-function initialState(): TtsPlayerState {
+function initialState(capabilities: BranchCapabilities): TtsPlayerState {
   return {
     active: false,
     bookKey: null,
     sourceId: null,
     title: '',
     chapterIndex: 0,
-    chapterName: '',
     paragraphCount: 0,
     paragraphIndex: 0,
     paragraphText: '',
@@ -152,9 +164,10 @@ function initialState(): TtsPlayerState {
     timerChoice: null,
     mode: modeOf(TTS_DEFAULTS.engineId),
     loading: false,
-    chapterLoading: false,
-    failedParagraphs: [],
+    halt: null,
     consecutiveFailures: 0,
+    segmentProgress: capabilities.segmentProgress,
+    voiceTable: capabilities.voiceTable,
     chapterNames: [],
   }
 }
@@ -208,11 +221,9 @@ export interface ListenPlatform {
   /** opts.signal = 这一发合成所属的取消位：跳段只落当前段那一只（同章预取照跑），
    *  停止 / 换书 / 换参数把整趟的（含预取）一起落下去。 */
   synthesize(req: SynthesisRequest, opts?: { signal?: AbortSignal }): Promise<SynthesisReceipt>
-  outputs: { bytes: BytesListenOutput; direct: DirectListenOutput }
-  /** 直出型的源级闸门：**等平台把语音表交出来**再判（Chromium 首读常为空、真表随
-   *  `voiceschanged` 迟到）。返回 false = 这台设备此刻确实没有可用的浏览器语音。
-   *  平台缝收的是一个 Promise 而不是同步读数：拿首读判死正是「设备没有语音」误报的来源。 */
-  awaitDirectVoices(): Promise<boolean>
+  /** 两条出声分支（策略面）：会话只问分支怎么起这一段 / 能提供什么 / 谁该闭嘴，
+   *  不直接摸 Audio 与 Speech。生产面在 `player.ts` 组装（适配器 + 浏览器平台面）。 */
+  branches: ListenBranches
   now(): number
   /** 排一个延时，返回取消。定时、开口兜底都走它——会话里不出现裸 `setTimeout`。 */
   after(ms: number, cb: () => void): () => void
@@ -247,9 +258,6 @@ interface PlayerRun {
   /** 播放代际：pause/参数变更/跳段都会抬它，迟到的合成结果据此丢弃 */
   playSeq: number
   timer: TimerState | null
-  /** 直出型：是否已把一段 utterance 交给浏览器且尚未撤回（onstart 之前也算——它已进平台队列，
-   *  参数/引擎变更必须把它撤掉重开，否则旧声音会与新设置一起存在） */
-  directActive: boolean
   /** 本趟在途请求共用的取消位：作废时整只换掉（一只 signal 落定就回不来），新请求拿新的一半。
    *  预取链挂在**这一只**上：换参数 / 换章 / 停止都该把整章的暖缓存一起作废。 */
   abort: AbortController
@@ -281,9 +289,9 @@ interface PendingRelocation {
  */
 export class ListenSession {
   /** 上屏读数的主 store：视图经 `player.ts` 的 `ttsPlayer` 订阅。 */
-  readonly state = createStore<TtsPlayerState>(initialState())
+  readonly state: Store<TtsPlayerState>
   /** 段进度独立一只 store（高频 timeupdate 不进主 store，见 `TtsProgressState` 注释）。 */
-  readonly progress = createStore<TtsProgressState>({ position: 0, duration: 0 })
+  readonly progress: Store<TtsProgressState>
 
   private readonly platform: ListenPlatform
   private current: PlayerRun | null = null
@@ -295,15 +303,29 @@ export class ListenSession {
   private readonly paramsRestart: Debounced<[]>
   private defaults: TtsDefaults = { ...TTS_DEFAULTS }
   private pendingRelocation: PendingRelocation | null = null
+  /** 章正文（段域）载入在途：`paragraphIndex` / `paragraphCount` 还是**上一章**的读数，
+   *  跳段与滑杆落点照它走会念错章。它是协调事实（不是渲染读数），所以不进 store：视图只看得见
+   *  它推出来的 `loading` / 守卫结果。与 `loading` 分开：本段合成在途时跳段是安全的。 */
+  private chapterLoading = false
 
   constructor(platform: ListenPlatform) {
     this.platform = platform
+    const branch = platform.branches.branch(modeOf(TTS_DEFAULTS.engineId))
+    this.state = createStore<TtsPlayerState>(initialState(branch.capabilities))
+    this.progress = createStore<TtsProgressState>({ position: 0, duration: 0 })
     this.positionSave = platform.debounce(() => { void this.writePosition() }, POSITION_SAVE_DEBOUNCE_MS)
     this.paramsRestart = platform.debounce(() => { this.restartForParams() }, PARAMS_RESTART_DEBOUNCE_MS)
   }
 
-  private get bytes(): BytesListenOutput { return this.platform.outputs.bytes }
-  private get direct(): DirectListenOutput { return this.platform.outputs.direct }
+  /** 当前模式那条分支的策略实现（唯一一次模式分流：状态机只负责说「现在走哪条」）。 */
+  private branchOf(mode: BranchMode): PlaybackBranch {
+    return this.platform.branches.branch(mode)
+  }
+
+  /** 当前分支的能力声明（上屏读数与状态机都读它，不拿模式猜）。 */
+  private capabilitiesOf(mode: BranchMode): BranchCapabilities {
+    return this.branchOf(mode).capabilities
+  }
 
   // ── 起播 / 换书 ─────────────────────────────────────────────────────────────
 
@@ -362,16 +384,17 @@ export class ListenSession {
     const rate = p.rate ?? stored?.rate ?? this.defaults.rate
     const volume = p.volume ?? stored?.volume ?? this.defaults.volume
     const mode = modeOf(engineId)
-    // 直出型：先等平台把语音表交出来（首读常是空表），等不到才报「设备没有语音」。
+    const branch = this.branchOf(mode)
+    // 源级闸门（直出型等平台把语音表交出来；字节型同步可过）：等不到才报「设备没有语音」。
     // 这一步在停旧会话之前：等不到时旧会话照常放着，不拿一次设备探测把正在放的声音停掉。
-    if (mode === 'direct') {
-      const voicesReady = await this.platform.awaitDirectVoices()
+    const gate = branch.ready()
+    if (gate !== true) {
+      const voicesReady = await gate
       // 等待窗口里有更新的起播 / 停止：这一发已经作废，既不许拿设备事实去抛假错误
       // （`TTS_NO_VOICES` 会把「换书成功」演成失败），也不许把新会话停掉。
       if (gen !== this.runSeq) return
       if (!voicesReady) throw new TtsPlayerError('TTS_NO_VOICES')
     }
-    const chapter = chapters[chapterIndex]
     // 数据到手才停旧会话：stop 会 flush 旧书位置并抬 `runSeq`，此后没有可被打断的 await。
     // 失败（目录/正文拉不到）在上面就抛了，旧会话原样继续放着。
     if (this.state.get().active) this.stopListening()
@@ -390,19 +413,18 @@ export class ListenSession {
       loadSeq: 0,
       playSeq: 0,
       timer: null,
-      directActive: false,
       synthToken: null,
       abort: new AbortController(),
       segAbort: new AbortController(),
     }
     this.current = run
+    this.chapterLoading = false
     this.state.set({
       active: true,
       bookKey: p.bookKey,
       sourceId: p.sourceId,
       title: p.title,
       chapterIndex,
-      chapterName: chapter?.name ?? '',
       paragraphCount: units.length,
       paragraphIndex,
       paragraphText: units[paragraphIndex] ?? '',
@@ -415,8 +437,10 @@ export class ListenSession {
       timerChoice: null,
       mode,
       loading: units.length > 0,
-      failedParagraphs: [],
+      halt: null,
       consecutiveFailures: 0,
+      segmentProgress: branch.capabilities.segmentProgress,
+      voiceTable: branch.capabilities.voiceTable,
       chapterNames: chapters.map((chapter_) => chapter_.name),
     })
     this.schedulePositionSave()
@@ -438,16 +462,17 @@ export class ListenSession {
       this.cancelInFlight(run)
     }
     this.current = null
-    this.direct.stop()
-    this.bytes.stop()
+    this.chapterLoading = false
+    this.platform.branches.stopAll()
     this.progress.set({ position: 0, duration: 0 })
+    const mode = modeOf(st.engineId)
     this.state.set({
-      ...initialState(),
+      ...initialState(this.capabilitiesOf(mode)),
       engineId: st.engineId,
       voice: st.voice,
       rate: st.rate,
       volume: st.volume,
-      mode: modeOf(st.engineId),
+      mode,
     })
   }
 
@@ -458,13 +483,12 @@ export class ListenSession {
     const run = this.current
     if (run !== null) {
       run.playSeq += 1
-      // 直出型不用平台的 pause()：它把队列表在句中途，而本层的播放单位是整段，续播会从
-      // 半句接上、与 `paragraphIndex` 对不上。撤掉队列、resume 从本段开头重开口，位置语义
-      // 只剩段号，读数才不撒谎。
-      run.directActive = false
-      this.direct.pause()
+      // 暂停这条动作住分支：字节型停元素保留现场，直出型撤平台队列（它把队列表在句中途，
+      // 而本层的播放单位是整段，续播会从半句接上、与 `paragraphIndex` 对不上）。
+      // 收口到**两条**分支：切引擎的窗口里旧介质可能还在响，只暂停当前分支会留下「屏幕说暂停、
+      // 旧声音还在念」。
+      this.platform.branches.pauseAll()
     }
-    this.bytes.pause()
     // 立刻让「暂停」可见（`loading` 一并落下）：章正文在途时 `resume` 由 `chapterLoading`
     // 那道守卫挡住，不会拿旧章的段域续播；载入落地时 `stillCurrent` 已为假，停在新章段首
     // 等下一次 resume。两件事各由各的标志守，不靠把 `loading` 留浓来兼职。
@@ -473,38 +497,39 @@ export class ListenSession {
     this.positionSave.flush()
   }
 
-  /** 继续：当前段音频还在就原地续播；直出型从本章本段重开口；否则重新取一次当前段。
-   *  `loading` 期间不接——章正文在途时段域还是上一章的读数，照它起播会把旧章念出声；
+  /** 继续：有回执续播能力的分支先试原地续上同一段字节；其余（或回执不在）重新起播当前段。
+   *  `loading` 期间不接——准备期里段域/介质现场还没定，照它续播会把旧现场接回来；
    *  本段合成在途时本就由会话自己在落地后起播，不必再收一次 resume。
-   *  `chapterLoading` 与 `loading` 是两件事（见 `TtsPlayerState`）：暂停把它留下的那半边也挡住。 */
+   *  `chapterLoading` 与 `loading` 是两件事：章正文在途连「当前段」都还是上一章的。 */
   resumeListening(): void {
     const st = this.state.get()
     const run = this.current
-    if (!st.active || run === null || st.playing || st.loading || st.chapterLoading) return
+    if (!st.active || run === null || st.playing || st.loading || this.chapterLoading) return
     this.ensurePagehide()
-    if (st.mode === 'direct') {
-      void this.playCurrent(run)
-      return
-    }
-    const cached = run.receipts.get(st.paragraphIndex)
-    const entry = cached !== undefined && cached.paramsKey === this.paramsKeyOf(st) ? cached : null
-    if (entry !== null && this.bytes.holds(entry.key)) {
-      this.state.set({ loading: false })
-      try {
-        this.bytes.start(
-          {
-            key: entry.key,
-            volume: clampNumber(st.volume, TTS_VOLUME.min, TTS_VOLUME.max, TTS_DEFAULTS.volume),
-            // 续播的是同一段字节：补速取回执那一格，不取此刻的语速滑杆（引擎换了口径也照旧）
-            playbackRate: entry.playbackRate,
-            resume: true,
-          },
-          this.bytesHandlers(run, run.playSeq),
-        )
-      } catch {
-        this.segmentFailed(run)
+    const branch = this.branchOf(st.mode)
+    if (branch.capabilities.receiptResume) {
+      const cached = run.receipts.get(st.paragraphIndex)
+      const entry = cached !== undefined && cached.paramsKey === this.paramsKeyOf(st) ? cached : null
+      if (entry !== null) {
+        try {
+          const resumed = branch.resume(
+            {
+              key: entry.key,
+              volume: clampNumber(st.volume, TTS_VOLUME.min, TTS_VOLUME.max, TTS_DEFAULTS.volume),
+              // 续播的是同一段字节：补速取回执那一格，不取此刻的语速滑杆（引擎换了口径也照旧）
+              playbackRate: entry.playbackRate,
+            },
+            this.segmentHandlers(run, run.playSeq),
+          )
+          if (resumed) {
+            this.state.set({ loading: false })
+            return
+          }
+        } catch {
+          this.segmentFailed(run)
+          return
+        }
       }
-      return
     }
     void this.playCurrent(run)
   }
@@ -519,7 +544,7 @@ export class ListenSession {
   async skipParagraph(delta: 1 | -1): Promise<void> {
     const run = this.current
     const st = this.state.get()
-    if (run === null || !st.active || st.chapterLoading) return
+    if (run === null || !st.active || this.chapterLoading) return
     if (st.paragraphCount === 0) {
       await this.skipChapter(delta)
       return
@@ -540,7 +565,7 @@ export class ListenSession {
   seekParagraph(index: number): void {
     const run = this.current
     const st = this.state.get()
-    if (run === null || !st.active || st.chapterLoading || st.paragraphCount === 0) return
+    if (run === null || !st.active || this.chapterLoading || st.paragraphCount === 0) return
     const target = clampIndex(index, st.paragraphCount - 1)
     if (target === st.paragraphIndex) return
     // 跳走之后没人再听的那一发要停在上游（`ADR-0082`）：只掐当前段那一发，同章预取仍归整趟 run。
@@ -585,11 +610,11 @@ export class ListenSession {
     // 换章的决定一落下，在途的合成（本章剩余段的预取）就已经没人要了：当场掐掉，别等正文到货。
     // 正在放的那一段字节不受影响——字节型的旧音频由起播时换槽接替。
     this.cancelInFlight(run)
-    // 直出型立刻闭嘴：章正文还在路上，旧 utterance 不该继续念上一章（字节型的旧音频
-    // 由起播时换槽接替，这里不动它的既有口径）。
-    run.directActive = false
-    this.direct.pause()
-    this.state.set({ loading: true, chapterLoading: true, playing: false })
+    // 旧声音让不让位是分支自己的事：直出型当场撤队（旧 utterance 不该继续念上一章），
+    // 字节型的旧音频由起播时换槽接替（载入期间继续放，用户不会在一次跳章的等待里听见静音）。
+    this.branchOf(this.state.get().mode).yieldForLoad()
+    this.chapterLoading = true
+    this.state.set({ loading: true, playing: false })
     try {
       const units = await this.platform.fetchUnits(run.sourceId, run.bookKey, target)
       if (this.current !== run || loadToken !== run.loadSeq) return 'superseded'
@@ -597,19 +622,17 @@ export class ListenSession {
       run.receipts.clear()
       run.retried.clear()
       run.prefetched.clear()
-      this.bytes.dropPreload()
+      this.branchOf(this.state.get().mode).dropPreload()
       const index = paragraph === 'last' && units.length > 0 ? units.length - 1 : 0
-      // failedParagraphs 按章归零，连败计数不动：章正文拉得到不等于合成能成，死引擎的失败串
+      // 逐段失败的留痕随章归零，连败计数不动：章正文拉得到不等于合成能成，死引擎的失败串
       // 必须跨章累计到阈值才暂停，否则它会一章一章地空走到书末。
+      this.chapterLoading = false
       this.state.set({
         chapterIndex: target,
-        chapterName: run.chapters[target]?.name ?? '',
         paragraphCount: units.length,
         paragraphIndex: index,
         paragraphText: units[index] ?? '',
-        failedParagraphs: [],
         loading: false,
-        chapterLoading: false,
       })
       this.schedulePositionSave()
       // 载入期间用户按了暂停 / 跳段（playSeq 被抬过）就不再自动起播——新章停在段首等 resume。
@@ -625,10 +648,11 @@ export class ListenSession {
       // 与成功路径同一道闸：在途那一发已被更新的导航作废（用户又跳了章）就别翻掉新章的 loading，
       // 也别让 finishChapter 把这次陈旧失败当成「自动推进到头」而暂停掉用户的手动导航。
       if (this.current !== run || loadToken !== run.loadSeq) return 'superseded'
-      // 字节型旧音频必须当场闭嘴：`playSeq` 已抬，旧槽的 ended / timeupdate 全部作废，
-      // 留着它只会变成「界面说暂停、耳朵里还在念上一章」；直出型已在入口 pause 过。
-      this.bytes.pause()
-      this.state.set({ loading: false, chapterLoading: false, playing: false })
+      // 旧音频必须当场闭嘴：`playSeq` 已抬，旧槽的 ended / timeupdate 全部作废，
+      // 留着它只会变成「界面说暂停、耳朵里还在念上一章」；直出型已在入口让位过。
+      this.branchOf(this.state.get().mode).pause()
+      this.chapterLoading = false
+      this.state.set({ loading: false, playing: false })
       // 手动导航的失败要有人告诉用户：自动推进由 finishChapter 收口成暂停，用户按下的
       // 跳章 / 起播章则把原因交回调用方（界面翻人话），不留在按了没反应。
       if (cause === 'manual') throw new TtsPlayerError('TTS_CHAPTER_LOAD')
@@ -676,7 +700,7 @@ export class ListenSession {
     if (this.current === run) this.pauseListening()
   }
 
-  // ── 播放一段（按模式：合成 → 缓存键 / utterance 直出）───────────────────────
+  // ── 播放一段（准备与出声都经分支：合成 → 缓存键 / utterance 直出）──────────────
 
   private async playCurrent(run: PlayerRun): Promise<void> {
     // 这一发本身就是「按当前参数起播」：把还在排队的同义重取取消，免得它两拍后打断新段。
@@ -686,55 +710,50 @@ export class ListenSession {
     const index = st.paragraphIndex
     const text = run.units[index]
     if (text === undefined) {
+      // 空段死路同一条判据：读数写「不在放」之前先把声音收掉，别让旧介质替一个没有的段继续响。
+      this.platform.branches.pauseAll()
       this.state.set({ loading: false, playing: false })
       return
     }
+    const branch = this.branchOf(st.mode)
     this.state.set({ loading: true, paragraphText: text })
     this.schedulePositionSave()
     // 换段即归零（直出 / 字节同口径）：字节型合成在途的窗口里也不能把上一段的段内比例投到
     // 新段上——读数只认活槽计时，段一换旧比例就作废，不等合成落地才清。
     this.progress.set({ position: 0, duration: 0 })
-    if (st.mode === 'direct') {
-      try {
-        this.playDirect(run, token, index, text)
-      } catch {
-        if (this.current === run && token === run.playSeq) this.segmentFailed(run)
-      }
-      return
-    }
-    if (run.directActive) {
-      // 刚从直出切回字节：先撤掉在播 utterance；音频接上之前 playing 不装真。
-      run.directActive = false
-      this.direct.pause()
-      this.state.set({ playing: false })
-    }
+    // 参数变更要按「本段合成在途」判，不能只看 `loading`（章正文载入也写这一格）。
     run.synthToken = token
-    const signal = run.segAbort.signal
+    const handlers = this.segmentHandlers(run, token)
+    const host: BranchHost = {
+      // 回执只在「这一发仍是当前播放」时交回：合成在途时用户可能已跳章，旧章段号写进新章
+      // 的 receipts 会让同号段命中旧字节、念错章（与预取同一道守卫）。
+      receipt: async (job) => {
+        const entry = await this.receiptFor(run, job.index, job.text, job.signal,
+          () => this.current === run && token === run.playSeq)
+        return this.current === run && token === run.playSeq
+          ? { key: entry.key, playbackRate: entry.playbackRate }
+          : null
+      },
+      // 音量在准备之后活读：合成在途的窗口里音量条还能动，入口快照会把用户刚拖到的值盖回去
+      voice: () => {
+        const s = this.state.get()
+        return {
+          voice: s.voice,
+          rate: s.rate,
+          volume: clampNumber(s.volume, TTS_VOLUME.min, TTS_VOLUME.max, TTS_DEFAULTS.volume),
+        }
+      },
+    }
     try {
-      // 回执只在「这一发仍是当前播放」时落 receipts：合成在途时用户可能已跳章，旧章段号写进
-      // 新章的 receipts 会让同号段命中旧字节、念错章（与预取同一道守卫，主播放径此前漏了）。
-      const receipt = await this.receiptFor(run, index, text, signal,
-        () => this.current === run && token === run.playSeq)
-      if (this.current !== run || token !== run.playSeq) return
-      this.bytes.start(
-        {
-          key: receipt.key,
-          // 音量在守卫后活读：合成在途的窗口里音量条还能动，入口快照会把用户刚拖到的值盖回去
-          volume: clampNumber(this.state.get().volume, TTS_VOLUME.min, TTS_VOLUME.max, TTS_DEFAULTS.volume),
-          // 补速随回执走：引擎做到哪儿，播放端就只补剩下那一截
-          playbackRate: receipt.playbackRate,
-          resume: false,
-        },
-        this.bytesHandlers(run, token),
-      )
-      // `playing` 不在这里装真、连败也不在这里清：`start` 只是把加载交出去，404 / 解码失败 /
-      // 自动播放被拒都发生在这之后。真开口（活槽 onplaying / play 承诺落地）回来时才记段。
-      this.state.set({ loading: false })
-      this.prefetchAround(run)
+      const outcome = await branch.start({ index, text, signal: run.segAbort.signal }, handlers, host)
+      if (outcome === 'failed') {
+        if (this.current === run && token === run.playSeq) this.segmentFailed(run)
+        return
+      }
+      // `cancelled` = 这一发已被更新的动作作废（跳章 / 换参数 / 停止）：静默收口，不记账。
+      if (outcome !== 'started' || this.current !== run || token !== run.playSeq) return
+      if (branch.capabilities.prefetch) this.prefetchAround(run)
     } catch {
-      // 自撤不是这一段的失败：换参数的重取走防抖，那一发被掐掉时 `playSeq` 还没抬，
-      // 让它落到 `segmentFailed` 会把「用户拖了一下滑杆」记成引擎连败，攒够了还暂停播放。
-      if (signal.aborted) return
       if (this.current !== run || token !== run.playSeq) return
       this.segmentFailed(run)
     } finally {
@@ -743,60 +762,47 @@ export class ListenSession {
     }
   }
 
-  /**
-   * 直出型起一段：撤掉在播的两种介质（切引擎时另一半可能还在响），把本段交给平台开口。
-   * `onstart` 才把这一段记成在放（真开口才算数，连败也在这一刻清零）；`onend` 推进；
-   * 失败回调走与字节型同一条 token 守卫的失败径——包括平台侧的 `interrupted` / `canceled`。
-   * 这里**不再读语音表**：源级闸门（`awaitDirectVoices`）在起播与换源时已经等过，这个函数
-   * 每段都跑一次同步快照只会在平台短暂给空表时把一段正常的声音判死（空表 ≠ 不能开口）。
-   */
-  private playDirect(run: PlayerRun, token: number, index: number, text: string): void {
-    const st = this.state.get()
-    this.bytes.pause()
-    run.directActive = false
-    this.direct.pause()
-    this.state.set({ playing: false })
-    this.direct.start(
-      {
-        text,
-        voice: st.voice,
-        rate: st.rate,
-        volume: clampNumber(st.volume, TTS_VOLUME.min, TTS_VOLUME.max, TTS_DEFAULTS.volume),
-      },
-      this.directHandlers(run, token, index),
-    )
-    if (this.current === run && token === run.playSeq) run.directActive = true
-  }
-
-  /** 字节型的出声回调：与直出型同一套 token 守卫——跳段 / 换参数时旧槽还会响一小会儿
-   *  （新段在合成），它的 ended / timeupdate 若不被拦下，会按**新**段号推进（跳到下一段，
-   *  把用户刚选的段吞掉）或把旧段的时间投到新段的读数上。暂停 / 续播会换发新的 handlers
-   *  并带上当前 token，所以守卫不会把「续播那一段」咽掉。 */
-  private bytesHandlers(run: PlayerRun, token: number): OutputHandlers {
+  /** 一段的出声回调：两条分支共用**同一套**事实语义，token 守卫在这里。
+   *  - `prepared`：准备期结束（字节型交给介质时调；直出型不调，等 `start`）；
+   *  - `start`：真开口 → 段记成在放、连败清零、停因消失；
+   *  - `done`：这一段播完就推进（不看 `playing`：有的平台会吞掉开口事件、直接回 onend，
+   *    按 `playing` 拦下会把会话永远挂在 loading 上）；
+   *  - `fail`：介质没成 → 分支能自愈就先自愈一次，否则走段失败。
+   *  跳段 / 换参数时旧介质还会响一小会儿，它的 ended / timeupdate 若不被拦下，会按**新**段号
+   *  推进或把旧段的时间投到新段的读数上。暂停 / 续播会换发新的 handlers 并带上当前 token。 */
+  private segmentHandlers(run: PlayerRun, token: number): OutputHandlers {
     const alive = (): boolean => this.current === run && token === run.playSeq
     return {
+      prepared: () => {
+        if (!alive()) return
+        this.state.set({ loading: false })
+      },
       start: () => {
         if (!alive()) return
-        // 真开口才算这一段在放：连败从这一刻清零（起播只是发起加载，不是成功）
-        this.state.set({ playing: true, loading: false, consecutiveFailures: 0 })
+        // 真开口才算这一段在放：连败从这一刻清零（起播只是发起加载，不是成功）。
+        this.state.set({ playing: true, loading: false, consecutiveFailures: 0, halt: null })
+        this.schedulePositionSave()
       },
       done: () => {
-        if (!alive() || !this.state.get().playing) return
+        if (!alive()) return
         this.advance(run)
       },
       fail: () => {
         if (!alive()) return
+        const branch = this.branchOf(this.state.get().mode)
         // 「回执已发出、字节还没取」之间缓存条目被 prune 掉是可能的（读口对坏/缺条目回 404）：
-        // 每段自愈一次——删掉旧回执、把两只槽的键与预载记录作废（同键不会重设 src，一个已
-        // errored 的元素再 play 只会再拒），重新合成再起一段。键按内容寻址，重合成不会漂；
+        // 能自愈的分支每段重来一次——删掉旧回执、把介质的出声现场作废（同键不会重设 src，
+        // 一个已 errored 的元素再 play 只会再拒），重新合成再起一段。键按内容寻址，重合成不会漂；
         // 第二次仍失败才落回「这一段跳过」的失败径，免得坏音频把同一段无限重来。
-        const failedAt = this.state.get().paragraphIndex
-        if (!run.retried.has(failedAt)) {
-          run.retried.add(failedAt)
-          run.receipts.delete(failedAt)
-          this.bytes.invalidate()
-          void this.playCurrent(run)
-          return
+        if (branch.capabilities.selfHeal) {
+          const failedAt = this.state.get().paragraphIndex
+          if (!run.retried.has(failedAt)) {
+            run.retried.add(failedAt)
+            run.receipts.delete(failedAt)
+            branch.invalidate()
+            void this.playCurrent(run)
+            return
+          }
         }
         this.segmentFailed(run)
       },
@@ -807,45 +813,25 @@ export class ListenSession {
     }
   }
 
-  /** 直出型的出声回调：全部带 token 守卫——自撤（暂停/跳段/换引擎/停止）都先抬 `playSeq`
-   *  再撤回，补发的事件已死在守卫上；能活到这里的中断是平台侧的，与合成失败同半径。 */
-  private directHandlers(run: PlayerRun, token: number, index: number): OutputHandlers {
-    const guarded = (): boolean => this.current === run && token === run.playSeq
-    return {
-      start: () => {
-        if (!guarded()) return
-        this.state.set({ paragraphIndex: index, playing: true, loading: false, consecutiveFailures: 0 })
-        this.schedulePositionSave()
-      },
-      done: () => {
-        if (!guarded()) return
-        run.directActive = false
-        // 本段念完了就推进，不看 `playing`：它只在 `onstart` 里装真，而有的平台会吞掉开口事件、
-        // 直接回 `onend`——按 `playing` 拦下会把会话永远挂在 `loading: true` 上，不推进也不留痕。
-        this.advance(run)
-      },
-      fail: () => {
-        if (!guarded()) return
-        run.directActive = false
-        this.segmentFailed(run)
-      },
-    }
-  }
-
-  /** 单段失败（合成失败 / 起播失败）：留痕、连败计数，未到线就跳过该段继续。 */
+  /** 单段失败（合成失败 / 起播失败 / 介质读坏）：连败计数，未到线就跳过该段继续；
+   *  到线则暂停并**公布停因**（`halt`）——阈值判据只此一处，上屏面不再拿计数对比阈值。 */
   private segmentFailed(run: PlayerRun): void {
     const st = this.state.get()
-    const failed = st.failedParagraphs.includes(st.paragraphIndex)
-      ? st.failedParagraphs
-      : [...st.failedParagraphs, st.paragraphIndex]
     const consecutive = st.consecutiveFailures + 1
+    const stopped = consecutive >= TTS_MAX_CONSECUTIVE_FAILURES
+    // 失败收口：这一段起播失败（合成落空 / 介质没开口）后读数写「不在放」，而切引擎窗口里旧介质
+    // 可能还在念——先让两条都闭嘴再记账，别留「屏幕说停、耳朵里还在念」（与 pauseListening 同判据）。
+    // 先抬 playSeq 再收口（与暂停、换章同一手法）：直出介质被 pause 会补发 canceled 事件，
+    // 抬过之后它落在旧发上作废，不许再进一次失败径。
+    run.playSeq += 1
+    this.platform.branches.pauseAll()
     this.state.set({
-      failedParagraphs: failed,
       consecutiveFailures: consecutive,
       playing: false,
       loading: false,
+      ...(stopped ? { halt: { reason: 'consecutive-failures' as const, failures: consecutive } } : {}),
     })
-    if (consecutive >= TTS_MAX_CONSECUTIVE_FAILURES) {
+    if (stopped) {
       this.pauseListening()
       return
     }
@@ -876,8 +862,9 @@ export class ListenSession {
   }
 
   private prefetchParagraph(run: PlayerRun, index: number): void {
-    // 模式已切直出：在途的预取链到此为止（直出不出字节，合成请求会拿浏览器引擎 id 打空）。
-    if (this.state.get().mode === 'direct') return
+    const branch = this.branchOf(this.state.get().mode)
+    // 分支没有预取面：在途的预取链到此为止（直出不出字节，合成请求会拿浏览器引擎 id 打空）。
+    if (!branch.capabilities.prefetch) return
     if (run.prefetched.has(index)) return
     const text = run.units[index]
     if (text === undefined) return
@@ -885,16 +872,16 @@ export class ListenSession {
     const stillHere = this.stillHereGuard(run)
     const signal = run.abort.signal
     void this.receiptFor(run, index, text, signal, stillHere).then((receipt) => {
-      // 切到直出后在途的字节预取到此为止：直出不出字节，别再建 / 下载一个用不上的 Audio。
-      if (!stillHere() || this.state.get().mode === 'direct') return
-      if (index === this.state.get().paragraphIndex + 1) this.bytes.preload(receipt.key)
+      // 切走分支后在途的字节预取到此为止：别再建 / 下载一个用不上的 Audio。
+      if (!stillHere() || !this.branchOf(this.state.get().mode).capabilities.prefetch) return
+      if (index === this.state.get().paragraphIndex + 1) branch.preload(receipt.key)
     }).catch(() => undefined)
   }
 
   /** 下一章开头 N 段：只发合成请求暖缓存（不取回执、不预载 Audio——跨章还要先载正文）。 */
   private prefetchNextChapter(run: PlayerRun): void {
-    // 模式已切直出：字节预取链到此为止（直出不出字节，合成请求会拿浏览器引擎 id 打空）。
-    if (this.state.get().mode === 'direct') return
+    // 分支没有预取面：字节预取链到此为止（直出不出字节，合成请求会拿浏览器引擎 id 打空）。
+    if (!this.branchOf(this.state.get().mode).capabilities.prefetch) return
     const count = this.defaults.prefetchParagraphs
     const target = this.state.get().chapterIndex + 1
     if (count <= 0 || target >= run.chapters.length || run.nextPrefetched.has(target)) return
@@ -906,13 +893,13 @@ export class ListenSession {
     const cancelled = (): boolean => signal.aborted
     void (async (): Promise<void> => {
       const units = await this.platform.fetchUnits(run.sourceId, run.bookKey, target)
-      // 切直出不该把这一章记成「已预取」：切回字节后它还要重来一次暖缓存。
-      if (!stillHere() || this.state.get().mode === 'direct' || cancelled()) {
+      // 切走分支不该把这一章记成「已预取」：切回字节后它还要重来一次暖缓存。
+      if (!stillHere() || !this.branchOf(this.state.get().mode).capabilities.prefetch || cancelled()) {
         run.nextPrefetched.delete(target)
         return
       }
       for (const text of units.slice(0, count)) {
-        if (!stillHere() || this.state.get().mode === 'direct' || cancelled()) {
+        if (!stillHere() || !this.branchOf(this.state.get().mode).capabilities.prefetch || cancelled()) {
           run.nextPrefetched.delete(target)
           return
         }
@@ -930,10 +917,11 @@ export class ListenSession {
   }
 
   setListenVolume(volume: number): void {
-    const next = clampNumber(volume, TTS_VOLUME.min, TTS_VOLUME.max, this.state.get().volume)
+    const st = this.state.get()
+    const next = clampNumber(volume, TTS_VOLUME.min, TTS_VOLUME.max, st.volume)
     this.state.set({ volume: next })
-    this.bytes.setVolume(next)
-    // 直出型没有可调的活介质：改动从下一段起生效（不为此重读本段）。
+    // 音量落到当前分支的活介质；直出型没有可调的活介质（改动从下一段起生效，分支自己消化）。
+    this.branchOf(st.mode).setVolume(next)
     this.schedulePositionSave()
   }
 
@@ -952,16 +940,22 @@ export class ListenSession {
    */
   async setListenEngine(engineId: string): Promise<void> {
     const st = this.state.get()
-    if (engineId !== st.engineId && modeOf(engineId) === 'direct'
-      && !(await this.platform.awaitDirectVoices())) {
-      throw new TtsPlayerError('TTS_NO_VOICES')
+    const mode = modeOf(engineId)
+    const branch = this.branchOf(mode)
+    if (engineId !== st.engineId) {
+      // 换到这条分支前的源级闸门（直出型等语音表；字节型同步可过）。等不到才按源级事实拒。
+      const gate = branch.ready()
+      if (gate !== true && !(await gate)) throw new TtsPlayerError('TTS_NO_VOICES')
     }
     // 等待窗口里会话可能已经变了（暂停 / 换了别的源 / 停下）：按**落地时**的现场收口。
     // 换了书则整笔作废：切源是「点给这本书的参数」，落到另一本的会话上就是凭一次等待改掉别人的源。
     const latest = this.state.get()
     if (latest.bookKey !== st.bookKey) return
     this.state.set({
-      engineId, mode: modeOf(engineId),
+      engineId,
+      mode,
+      segmentProgress: branch.capabilities.segmentProgress,
+      voiceTable: branch.capabilities.voiceTable,
       ...(latest.engineId === engineId ? {} : { voice: null }),
     })
     this.synthesisParamsChanged()
@@ -974,7 +968,7 @@ export class ListenSession {
     if (run !== null) {
       run.receipts.clear()
       run.prefetched.clear()
-      this.bytes.dropPreload()
+      this.branchOf(this.state.get().mode).dropPreload()
       // 旧参数的那几发（含预取）再也不会被这一趟用上：掐掉，别让它继续花上游的合成
       this.cancelInFlight(run)
     }
@@ -988,15 +982,15 @@ export class ListenSession {
     this.restartForParams()
   }
 
-  /** 「现在重取当前段」的判据：在放、直出队列里还有一段，或本段合成在途（`chapterLoading` 除外）。 */
+  /** 「现在重取当前段」的判据：在放、当前分支还占着介质，或本段合成在途（章正文在途除外）。 */
   private shouldRestart(run: PlayerRun): boolean {
     const st = this.state.get()
     // 直出型在 `onstart` 之前 playing 还是假，但 utterance 已进平台队列：只看 playing 会把
-    // 旧声音留在队列里，与刚改的引擎/参数并存。`directActive` 补上这一段。
+    // 旧声音留在队列里，与刚改的引擎/参数并存。`held()` 补上这一段（分支自己的现场）。
     // 字节型的合成请求在途时 playing 也还是假：`synthToken` 在且会话 loading 而**不是**章正文
     // 在途，说明这一段正在取音频，同样要按新参数重取（`chapterLoading` 是两者的分界）。
-    const synthInFlight = run.synthToken !== null && st.loading && !st.chapterLoading
-    return st.playing || run.directActive || synthInFlight
+    const synthInFlight = run.synthToken !== null && st.loading && !this.chapterLoading
+    return st.playing || this.platform.branches.held() || synthInFlight
   }
 
   /** 按新参数重取当前段：判据与 `playCurrent` 同一份现场，判决已过期（暂停/停止）就不动。 */
@@ -1056,11 +1050,15 @@ export class ListenSession {
     if (p.volume !== undefined) this.defaults.volume = p.volume
     if (p.prefetchParagraphs !== undefined) this.defaults.prefetchParagraphs = p.prefetchParagraphs
     if (!this.state.get().active) {
+      const mode = modeOf(this.defaults.engineId)
+      const capabilities = this.capabilitiesOf(mode)
       this.state.set({
         engineId: this.defaults.engineId,
         rate: this.defaults.rate,
         volume: this.defaults.volume,
-        mode: modeOf(this.defaults.engineId),
+        mode,
+        segmentProgress: capabilities.segmentProgress,
+        voiceTable: capabilities.voiceTable,
       })
     }
   }
@@ -1233,13 +1231,13 @@ export class ListenSession {
       this.cancelInFlight(run)
     }
     this.current = null
-    this.direct.release()
-    this.bytes.release()
+    this.chapterLoading = false
+    this.platform.branches.releaseAll()
     this.unwatchPageHide?.()
     this.unwatchPageHide = null
     this.defaults = { ...TTS_DEFAULTS }
     this.progress.set({ position: 0, duration: 0 })
-    this.state.set(initialState())
+    this.state.set(initialState(this.capabilitiesOf(modeOf(TTS_DEFAULTS.engineId))))
   }
 
   // ── 内部小件 ────────────────────────────────────────────────────────────────

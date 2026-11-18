@@ -3,11 +3,11 @@ import { useEffect, useRef, useState } from 'react'
 import type { TtsSourceInfo } from '../../shared/wire.js'
 import { useCopy } from '../copy/index.js'
 import { useStore } from '../store.js'
-import { lineOf, miniSegmentLabel, rateLabel } from './listen-readout.js'
+import { lineOf, listenFaceOf, miniSegmentLabel, rateLabel } from './listen-readout.js'
 import { ChapterSeek, MINI_ICON, RingPlay } from './mini-parts.js'
 import { useTimerReadout } from './use-timer-readout.js'
 import { pushError } from '../transient.js'
-import { TTS_MAX_CONSECUTIVE_FAILURES, skipParagraph, stopListening, ttsPlayer } from './player.js'
+import { skipParagraph, stopListening, ttsPlayer } from './player.js'
 import { ttsErrorMessage } from './tts-error.js'
 import { TtsSettingsNote, TtsSettingsPanel, TtsSettingsRows } from './TtsSettings.js'
 
@@ -39,17 +39,17 @@ export function TtsMiniPanel({
 }: TtsMiniPanelProps): ReactNode {
   const t = useCopy()
   const st = useStore(ttsPlayer)
+  const face = listenFaceOf(st)
   const line = lineOf(st)
   const timer = useTimerReadout(st, t)
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [truncated, setTruncated] = useState(false)
-  const failed = st.consecutiveFailures >= TTS_MAX_CONSECUTIVE_FAILURES && !st.playing
   const skip = (delta: 1 | -1): void => {
     void skipParagraph(delta).catch((error: unknown) => { pushError(ttsErrorMessage(t, error)) })
   }
   const sub = `${st.title} · ${t('tts.mini.chapter', { n: st.chapterIndex + 1 })}`
-  const showFoot = st.paragraphCount > 0 || st.rate !== 1 || timer.counting
+  const showFoot = face.hasSegments || st.rate !== 1 || timer.counting
 
   // 截断判据取实际几何（字数估算会撒谎）：换段、换尺寸都会重跑；没有 ResizeObserver 的宿主只量一次。
   useEffect(() => {
@@ -113,7 +113,7 @@ export function TtsMiniPanel({
       </div>
       <div
         ref={bodyRef}
-        className={st.paragraphCount === 0 ? 'novel-tts-mini-body empty' : 'novel-tts-mini-body'}
+        className={face.hasSegments ? 'novel-tts-mini-body' : 'novel-tts-mini-body empty'}
         data-drag="1"
         onPointerDown={onDragPointerDown}
       >
@@ -126,9 +126,9 @@ export function TtsMiniPanel({
           )
           : null}
       </div>
-      {/* 连败暂停的可见读数：与阅读器条同一条判据、同一份文案键；真开口后计数清零即消失。 */}
-      {failed
-        ? <div className="novel-tts-fail" role="status">{t('tts.failedHint', { n: st.consecutiveFailures })}</div>
+      {/* 连败暂停的可见读数：与阅读器条同一份投影、同一份文案键；真开口后停因清零即消失。 */}
+      {face.failedHint !== null
+        ? <div className="novel-tts-fail" role="status">{t('tts.failedHint', { n: face.failedHint })}</div>
         : null}
       <div className="novel-tts-mini-acts">
         <button
@@ -173,7 +173,7 @@ export function TtsMiniPanel({
         ? (
           <div className="novel-tts-mini-foot">
             {st.rate !== 1 ? <span className="novel-tts-ro">{rateLabel(st, t)}</span> : null}
-            {st.paragraphCount > 0 ? <span className="novel-tts-ro">{miniSegmentLabel(st, t)}</span> : null}
+            {face.hasSegments ? <span className="novel-tts-ro">{miniSegmentLabel(st, t)}</span> : null}
             <ChapterSeek />
             {timer.counting ? <span className="novel-tts-ro">{timer.label}</span> : null}
           </div>

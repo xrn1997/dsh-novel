@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   CAPSULE_SIZE, DEFAULT_MINI_BAR, DEFAULT_MINI_BAR_SIZE, clampMiniBarIntoViewport,
   deriveMiniBarFlush, deriveMiniBarSide, followFlushEdgesOnResize, frameFromDrag, miniBarCenterOf,
-  miniBarLayout, miniBarPopoverFlip, miniBarStore, parseMiniBarState, persistMiniBarState,
+  miniBarLayout, miniBarPopoverFlip, miniBarPopoverRoom, miniBarStore, parseMiniBarState, persistMiniBarState,
   resetMiniBarPosition, resetMiniBarSize, resolveFormSize, resolvedMiniBarSize, setMiniBarCenter,
   setMiniBarCollapsed, setMiniBarFrame, setMiniBarSize, snapMiniBarToEdge,
 } from '../../src/client/tts/mini-bar-state.js'
@@ -192,16 +192,19 @@ describe('布局读数：缺省轴解析、一次给全的落位样式、弹层�
       .toMatchObject({ side: 'right', flush: 'none' })
   })
 
-  it('miniBarPopoverFlip：上方留不下弹层实测档加间距就翻到下方（POPOVER_GAP 计入边界）', () => {
-    // 边界：展开态半高 100 → 中心 426 时弹层顶 320，扣 6px 正好压在 320 档上 → 不翻；再高一格才翻
+  it('miniBarPopoverFlip：上方放不下才翻下方，且下方得真的更有地方（POPOVER_GAP 计入边界）', () => {
+    // 边界：展开态半高 100 → 中心 426 时弹层顶 320，扣 6px 正好压在 320 档上 → 不翻
     expect(miniBarPopoverFlip({ cx: 864, cy: 426, w: null, h: null, collapsed: false }, VP, DEFAULT_MINI_BAR_SIZE)).toBe(false)
-    expect(miniBarPopoverFlip({ cx: 864, cy: 425, w: null, h: null, collapsed: false }, VP, DEFAULT_MINI_BAR_SIZE)).toBe(true)
-    // 缺省纵向（视口中心）在 VP 下上方放不下整张卡片 → 翻下方
-    expect(miniBarPopoverFlip(DEFAULT_MINI_BAR, VP, DEFAULT_MINI_BAR_SIZE)).toBe(true)
-    // 矮视口走 60vh 收紧档（500 高 → 300）：同一中心从「不翻」翻成「翻」
+    // 再高一格：上方只差 1px，而下方只剩 237——翻下去等于把卡片塞进更窄的一侧，留在上方
+    expect(miniBarPopoverFlip({ cx: 864, cy: 425, w: null, h: null, collapsed: false }, VP, DEFAULT_MINI_BAR_SIZE)).toBe(false)
+    // 缺省纵向（视口中心）两侧余量相等（各 278）：下方不更大就不翻——设置卡在条上方展开，
+// 卡片高度由上方余量收住（max-height 走 miniBarPopoverRoom），不再整块探出视口底部。
+    expect(miniBarPopoverFlip(DEFAULT_MINI_BAR, VP, DEFAULT_MINI_BAR_SIZE)).toBe(false)
+    // 矮视口走 60vh 收紧档（500 高 → 300）：同一中心上方够 300 → 不翻
     const low = { width: 1024, height: 500 }
     expect(miniBarPopoverFlip({ cx: 864, cy: 406, w: null, h: null, collapsed: false }, low, DEFAULT_MINI_BAR_SIZE)).toBe(false)
-    expect(miniBarPopoverFlip({ cx: 864, cy: 405, w: null, h: null, collapsed: false }, low, DEFAULT_MINI_BAR_SIZE)).toBe(true)
+    // 再高一格：下方余量已经是 0（块底压着视口），翻下去只会得到一条空缝 → 留在上方
+    expect(miniBarPopoverFlip({ cx: 864, cy: 405, w: null, h: null, collapsed: false }, low, DEFAULT_MINI_BAR_SIZE)).toBe(false)
   })
 
   it('miniBarPopoverFlip 吃内容实测高：矮卡不翻、固定回退档会误翻', () => {
@@ -210,8 +213,19 @@ describe('布局读数：缺省轴解析、一次给全的落位样式、弹层�
     // 实测 120：上方装得下 → 不翻（固定 320 档会翻，这正是「内容实测高与 60vh 取小」要修的）
     expect(miniBarPopoverFlip(state, VP, DEFAULT_MINI_BAR_SIZE, 120)).toBe(false)
     expect(miniBarPopoverFlip(state, VP, DEFAULT_MINI_BAR_SIZE), '量不到回退固定档，方向相反').toBe(true)
-    // 实测高于 60vh 时按 60vh 收紧（VP 768 → 460.8）；上方只有 194，两档都翻
+    // 实测高于 60vh 时按 60vh 收紧（VP 768 → 460.8）；上方只有 194，翻下方（余量 362 更大）
     expect(miniBarPopoverFlip(state, VP, DEFAULT_MINI_BAR_SIZE, 900)).toBe(true)
+  })
+
+  it('miniBarPopoverRoom：余量跟着方向走，是弹层 max-height 的上界（已扣视口留白 8px）', () => {
+    // 上方展开：余量 = 块顶 − 间距（700 − 100 − 6）
+    expect(miniBarPopoverRoom({ cx: 864, cy: 700, w: null, h: null, collapsed: false }, VP, DEFAULT_MINI_BAR_SIZE)).toBe(586)
+    // 翻到下方：余量 = 视口高 − 块底 − 间距（768 − 200 − 6）
+    expect(miniBarPopoverRoom({ cx: 864, cy: 100, w: null, h: null, collapsed: false }, VP, DEFAULT_MINI_BAR_SIZE)).toBe(554)
+    // 缺省居中：两侧相等，翻下方 → 取下方那一侧
+    expect(miniBarPopoverRoom(DEFAULT_MINI_BAR, VP, DEFAULT_MINI_BAR_SIZE)).toBe(270)
+    // 吃实测内容高：矮卡留在上方，余量仍是上方那一份（不是卡片高）
+    expect(miniBarPopoverRoom({ cx: 864, cy: 300, w: null, h: null, collapsed: false }, VP, DEFAULT_MINI_BAR_SIZE, 120)).toBe(186)
   })
 })
 describe('浮窗尺寸现场：意图与呈现分离', () => {

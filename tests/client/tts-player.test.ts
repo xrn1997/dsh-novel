@@ -238,7 +238,7 @@ describe('常驻播放层：起播与自动推进', () => {
     expect(st.sourceId).toBe('s1')
     expect(st.title).toBe('书一')
     expect(st.chapterIndex).toBe(0)
-    expect(st.chapterName).toBe('第一章')
+    expect(st.chapterNames[st.chapterIndex]).toBe('第一章')
     expect(st.paragraphCount).toBe(3)
     expect(st.paragraphIndex).toBe(0)
     expect(st.playing).toBe(true)
@@ -247,7 +247,7 @@ describe('常驻播放层：起播与自动推进', () => {
     expect(st.rate).toBe(TTS_DEFAULTS.rate)
     expect(st.volume).toBe(TTS_DEFAULTS.volume)
     expect(st.timerEndAt).toBeNull()
-    expect(st.failedParagraphs).toEqual([])
+    expect(st.halt, '正常起播不公布停因').toBeNull()
     expect(synthTexts()[0]).toBe('第一段。')
     expect(activeAudio().src).toBe(ttsAudioUrl(keyOf('第一段。')))
     expect(activeAudio().volume).toBe(TTS_DEFAULTS.volume)
@@ -352,7 +352,7 @@ describe('常驻播放层：存档越界与失败半径', () => {
     const st = ttsPlayer.get()
     expect(st.active).toBe(true)
     expect(st.chapterIndex).toBe(1)
-    expect(st.chapterName).toBe('第二章')
+    expect(st.chapterNames[st.chapterIndex]).toBe('第二章')
     expect(st.paragraphCount).toBe(2)
     expect(st.paragraphIndex).toBe(1)
     expect(st.playing).toBe(true)
@@ -365,12 +365,12 @@ describe('常驻播放层：存档越界与失败半径', () => {
     expect(st.paragraphIndex).toBe(0)
   })
 
-  it('单段合成失败：跳过该段、记 failedParagraphs；下一段成功即清零连败计数', async () => {
+  it('单段合成失败：跳过该段、不报停因；下一段成功即清零连败计数', async () => {
     synthFailures.set('第一段。', 'TTS_UPSTREAM')
     await start()
     await microtasks()
     const st = ttsPlayer.get()
-    expect(st.failedParagraphs).toEqual([0])
+    expect(st.halt, '单段失败不到阈值：不上报停因').toBeNull()
     expect(st.paragraphIndex).toBe(1)
     expect(st.playing).toBe(true)
     expect(st.consecutiveFailures).toBe(0)
@@ -403,7 +403,9 @@ describe('常驻播放层：存档越界与失败半径', () => {
     await vi.waitFor(() => expect(ttsPlayer.get().consecutiveFailures).toBe(TTS_MAX_CONSECUTIVE_FAILURES))
     const st = ttsPlayer.get()
     expect(st.playing).toBe(false)
-    expect(st.failedParagraphs).toEqual([0, 1, 2, 3, 4])
+    expect(st.halt, '到线暂停要公布停因与次数').toEqual({
+      reason: 'consecutive-failures', failures: TTS_MAX_CONSECUTIVE_FAILURES,
+    })
     expect(st.paragraphIndex).toBe(4)
   })
 
@@ -420,8 +422,10 @@ describe('常驻播放层：存档越界与失败半径', () => {
     expect(st.chapterIndex).toBe(1)
     expect(st.paragraphIndex).toBe(1)
     expect(st.playing).toBe(false)
-    // failedParagraphs 仍按章归零：只记本章失败的两段
-    expect(st.failedParagraphs).toEqual([0, 1])
+    // 停因随失败串一起公布：次数是整趟会话的连败（跨章不清零）
+    expect(st.halt).toEqual({
+      reason: 'consecutive-failures', failures: TTS_MAX_CONSECUTIVE_FAILURES,
+    })
     // 到线即停：第二章第 3 段没发合成请求，也没有第三趟章正文读取
     expect(synthTexts()).toEqual(['a0。', 'a1。', 'a2。', 'b0。', 'b1。'])
     const chapterReads = vi.mocked(apiGet).mock.calls
@@ -447,7 +451,7 @@ describe('常驻播放层：存档越界与失败半径', () => {
     activeAudio().fireError()
     await microtasks()
     let st = ttsPlayer.get()
-    expect(st.failedParagraphs, '第一次读不出不记失败：先重取一次').toEqual([])
+    expect(st.halt, '第一次读不出不记失败：先重取一次').toBeNull()
     expect(st.paragraphIndex, '仍在同一段').toBe(0)
     expect(st.playing, '重新起播').toBe(true)
     // 内容寻址：同段同参重合成仍是同一枚键，读口再取一次即可
@@ -456,13 +460,13 @@ describe('常驻播放层：存档越界与失败半径', () => {
     activeAudio().fireError()
     await microtasks()
     st = ttsPlayer.get()
-    expect(st.failedParagraphs, '第二次仍失败才留痕').toEqual([0])
+    expect(st.paragraphIndex, '第二次仍失败才跳过这一段').toBe(1)
     expect(st.paragraphIndex).toBe(1)
     expect(st.playing).toBe(true)
     // 同一段迟到的那条监听不再记第二次：token 已随推进抬升
     stale?.()
     await microtasks()
-    expect(ttsPlayer.get().failedParagraphs).toEqual([0])
+    expect(ttsPlayer.get().halt, '一次失败不到阈值，不公布停因').toBeNull()
   })
 
   it('瞬时 404：自愈重赋 src 才再起播（同键跳过重设就会对着 errored 元素再 play）', async () => {
@@ -473,7 +477,7 @@ describe('常驻播放层：存档越界与失败半径', () => {
     await microtasks()
 
     const st = ttsPlayer.get()
-    expect(st.failedParagraphs, '第一次读不出不记失败：先自愈').toEqual([])
+    expect(st.halt, '第一次读不出不记失败：先自愈').toBeNull()
     expect(st.playing, '重新赋 src 后起播成功').toBe(true)
     expect(activeAudio().src).toBe(key)
     // 内容寻址：同段同参数重合成仍是同一枚键；能再起播靠的是自愈前把槽键作废、重新赋 src
@@ -490,14 +494,14 @@ describe('常驻播放层：存档越界与失败半径', () => {
     expect(preloadSlot.src, '第二段已预载到另一只槽').toBe(bUrl)
     preloadSlot.fireError()
     await microtasks()
-    expect(ttsPlayer.get().failedParagraphs, '预载失败不是当前段的失败').toEqual([])
+    expect(ttsPlayer.get().halt, '预载失败不是当前段的失败').toBeNull()
     expect(ttsPlayer.get().paragraphIndex).toBe(0)
 
     activeAudio().fireEnded()                 // a0。播完 → 推进到 a1。
     await microtasks()
     const st = ttsPlayer.get()
     expect(st.paragraphIndex, '推进到第二段').toBe(1)
-    expect(st.failedParagraphs, '第二段照常起播，不静默跳过').toEqual([])
+    expect(st.halt, '第二段照常起播，不静默跳过').toBeNull()
     expect(st.playing).toBe(true)
     const assigned = FakeAudio.instances.flatMap((audio) => audio.srcSets)
       .filter((value) => value === bUrl)
@@ -516,7 +520,9 @@ describe('常驻播放层：存档越界与失败半径', () => {
         .toBe(TTS_MAX_CONSECUTIVE_FAILURES)
     })
     const st = ttsPlayer.get()
-    expect(st.failedParagraphs).toEqual([0, 1, 2, 3, 4])
+    expect(st.halt, '每段都失败：到线公布停因').toEqual({
+      reason: 'consecutive-failures', failures: TTS_MAX_CONSECUTIVE_FAILURES,
+    })
     expect(st.paragraphIndex, '到线停在第五段').toBe(4)
     expect(st.playing).toBe(false)
     expect(st.active, '是暂停不是停止').toBe(true)
@@ -532,7 +538,9 @@ describe('常驻播放层：存档越界与失败半径', () => {
     activeAudio().fireEnded()
     await microtasks()
     const st = ttsPlayer.get()
-    expect(st.failedParagraphs).toEqual([1])
+    expect(st.halt, '一次失败不到阈值：不公布停因').toBeNull()
+    // 跳过失败的那一段后下一段真开口：连败计数从那一刻清零（失联的那段只由「段号跳过」留痕）
+    expect(st.consecutiveFailures, '下一段真开口后连败清零').toBe(0)
     expect(st.playing).toBe(true)
     expect(st.paragraphIndex).toBe(2)
   })
@@ -636,7 +644,7 @@ describe('常驻播放层：跳章、回退链与从阅读位置起播', () => {
     await microtasks()
     const st = ttsPlayer.get()
     expect(st.chapterIndex).toBe(1)
-    expect(st.chapterName).toBe('第二章')
+    expect(st.chapterNames[st.chapterIndex]).toBe('第二章')
     expect(st.paragraphCount).toBe(2)
     expect(st.paragraphIndex).toBe(0)
     expect(st.playing).toBe(true)
@@ -861,7 +869,7 @@ describe('常驻播放层：跳章、回退链与从阅读位置起播', () => {
     await microtasks()
     expect(ttsPlayer.get().chapterIndex).toBe(1)
     expect(ttsPlayer.get().paragraphIndex).toBe(1)
-    expect(ttsPlayer.get().chapterName).toBe('第二章')
+    expect(ttsPlayer.get().chapterNames[ttsPlayer.get().chapterIndex]).toBe('第二章')
   })
 
   it('playFromReadingPosition：无 probe 用服务端书架进度 + 段比例换算', async () => {

@@ -183,27 +183,61 @@ export function miniBarLayout(state: MiniBarState, view: Viewport, size: Size): 
 
 /** 设置弹层内容高的回退档（六行设置 ≈ 320px）：量不到实测高（无布局宿主 / 弹层还没挂上）
  *  才用它。真判据是「内容实测高与 60vh 取小」——实测值由组件经 `ResizeObserver` 量出来传给
- *  `miniBarPopoverFlip`，这个常量只是没有几何可量时的降级。 */
+ *  `miniBarPopoverFlip` / `miniBarPopoverRoom`，这个常量只是没有几何可量时的降级。 */
 const POPOVER_CONTENT_MAX = 320
 
 /** 弹层与边栏之间的那条间距（样式层的 `--novel-sp-2`）：够不够地方要把它一起算。 */
 const POPOVER_GAP = 6
 
+/** 弹层与视口边之间的留白（样式层的 `--novel-sp-3`）：卡片收到现量余量时贴到屏幕上沿 / 下沿，
+ *  没有这条缝，裁切处读作「卡片坏了」；留一条缝才读作「卡片到边了，里面可滚」。 */
+const POPOVER_VIEWPORT_GAP = 8
+
 /**
- * 设置弹层往上（或往下）开：上方留不下「弹层占位 + 间距」就翻到下方。`contentHeight` 是
- * 组件实测的内容高（`null`/缺席 = 量不到，回退 `POPOVER_CONTENT_MAX`）；弹层自身有
- * `max-height: 60vh`，所以真占位是它和 60vh 里小的那一档。
- * 判据跟着现场走而不是开层那一刻算一次——弹层开着仍可拖头行、按方向键挪块、缩窗口，
- * 而视口夹取只管浮窗本体、不管它的次要浮层，快照会把弹层永远留在屏外。
+ * 弹层落位的唯一算式：往哪边开（`below`）与那一侧的可用余量（`room`）。
+ *
+ * 方向判据：上方优先（设置卡在条上方展开）；上方放不下才翻到下方；**下方得真的更有地方
+ * 才翻**——只写「上方放不下就翻下方」会在块贴近底部时翻进一条更窄、甚至为负的缝里
+ * （上方 500、下方 0，翻下去等于把卡片藏起来）。两侧一样大（缺省纵向居中）时留在上方。
+ *
+ * 余量也要一起给：只判方向不收高度，卡片会整块探出视口——浮层挂在 fixed 的 dock 上，页面
+ * 不滚，探出去的那几行既看不见也滚不到。`room` 就是弹层 `max-height` 的上界（值槽
+ * `--novel-tts-popover-room`，已扣掉与视口边的那条留白），放不下时卡片自己内部滚动。
+ *
+ * `contentHeight` 是组件实测的内容高（`null` / 缺席 = 量不到，回退 `POPOVER_CONTENT_MAX`）；
+ * 弹层自身还有 `max-height: 60vh`，所以真占位是它和 60vh 里小的那一档。判据跟着现场走而不是
+ * 开层那一刻算一次——弹层开着仍可拖头行、按方向键挪块、缩窗口，而视口夹取只管浮窗本体、
+ * 不管它的次要浮层，快照会把弹层永远留在屏外。
  */
+function popoverPlacement(
+  state: MiniBarState, view: Viewport, size: Size, contentHeight?: number,
+): { below: boolean; room: number } {
+  const center = miniBarCenterOf(state, size, view)
+  const above = Math.max(0, center.y - size.height / 2 - POPOVER_GAP)
+  const below = Math.max(0, view.height - center.y - size.height / 2 - POPOVER_GAP)
+  const measured = contentHeight !== undefined && Number.isFinite(contentHeight) && contentHeight > 0
+    ? contentHeight
+    : POPOVER_CONTENT_MAX
+  const needed = Math.min(measured, view.height * 0.6)
+  // 相等时留在上方：缺省纵向位置居中，两侧一样大，而设置卡是「在条上方展开」的那一档；
+  // 只有下方真的更大才值得翻过去（翻进更窄的一侧只会让卡片更矮、更该滚）。
+  const flip = needed > above && below > above
+  const band = flip ? below : above
+  return { below: flip, room: Math.max(0, band - POPOVER_VIEWPORT_GAP) }
+}
+
+/** 设置弹层往哪边开：`true` = 翻到下方（`data-flip`）。 */
 export function miniBarPopoverFlip(
   state: MiniBarState, view: Viewport, size: Size, contentHeight?: number,
 ): boolean {
-  const dockTop = miniBarCenterOf(state, size, view).y - size.height / 2
-  const occupied = contentHeight !== undefined && Number.isFinite(contentHeight) && contentHeight > 0
-    ? contentHeight
-    : POPOVER_CONTENT_MAX
-  return dockTop - POPOVER_GAP < Math.min(occupied, view.height * 0.6)
+  return popoverPlacement(state, view, size, contentHeight).below
+}
+
+/** 选中那一侧的可用余量（px，已扣间距）：设置弹层 `max-height` 的上界，由视图写进 dock 的值槽。 */
+export function miniBarPopoverRoom(
+  state: MiniBarState, view: Viewport, size: Size, contentHeight?: number,
+): number {
+  return popoverPlacement(state, view, size, contentHeight).room
 }
 
 function commit(next: MiniBarState, persist = true): void {

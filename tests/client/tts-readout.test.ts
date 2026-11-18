@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { zhTranslate } from '../../src/client/copy/index.js'
 import {
-  chapterProgressOf, lineOf, miniSegmentLabel, rateLabel, segmentLabel, timerReadout,
+  chapterProgressOf, isPlayBusy, lineOf, listenFaceOf, miniSegmentLabel, rateLabel, segmentLabel,
+  timerReadout,
 } from '../../src/client/tts/listen-readout.js'
 import type { TtsPlayerState } from '../../src/client/tts/player.js'
 import type { TtsProgressState } from '../../src/client/tts/player.js'
 
 /**
- * 听书上屏读数的纯函数钉子：换算只此一处，四个表面（听书条 / 迷你条 / 边栏 / 设置面）都取成品。
+ * 听书上屏读数的纯函数钉子：换算与成品判断只此一处，四个表面（听书条 / 迷你条 / 边栏 /
+ * 设置面）与阅读器 pill 都取成品。
  *
  * 输入是整份 `TtsPlayerState`（编译期证结构子集可吃全量状态），时刻一律注入 `now`——
  * 倒计时读数因此不等墙钟，同一状态换一个时刻就能钉住读数怎么走。
@@ -20,7 +22,6 @@ function state(patch: Partial<TtsPlayerState> = {}): TtsPlayerState {
     sourceId: 's1',
     title: '书一',
     chapterIndex: 0,
-    chapterName: '第一章',
     paragraphCount: 10,
     paragraphIndex: 0,
     paragraphText: '',
@@ -33,9 +34,10 @@ function state(patch: Partial<TtsPlayerState> = {}): TtsPlayerState {
     timerChoice: null,
     mode: 'bytes',
     loading: false,
-    chapterLoading: false,
-    failedParagraphs: [],
+    halt: null,
     consecutiveFailures: 0,
+    segmentProgress: true,
+    voiceTable: 'engine',
     chapterNames: ['第一章'],
     ...patch,
   }
@@ -123,6 +125,40 @@ describe('章内进度算式：条与浮窗共用同一 value', () => {
     expect(got.pct).toBe(0)
     expect(got.value).toBe(0)
     expect(got.readout).toBe('本章没有可朗读的段落')
+  })
+})
+
+describe('上屏投影：能否暂停 / 停因 / 空章抑制 / 音色面', () => {
+  it('能否暂停 = 在放 ∨ 准备中：loading 里按下去仍是「暂停」', () => {
+    expect(isPlayBusy(state({ playing: true })), '在放').toBe(true)
+    expect(isPlayBusy(state({ playing: false, loading: true })), '准备中').toBe(true)
+    expect(isPlayBusy(state({ playing: false, loading: false })), '既没在放也没在准备').toBe(false)
+    expect(listenFaceOf(state({ playing: false, loading: true })).busy).toBe(true)
+  })
+
+  it('停因：没有 halt 不摆提示；有 halt 时读数就是那次连败次数（阈值判据不在表面）', () => {
+    expect(listenFaceOf(state({ playing: false })).failedHint).toBeNull()
+    // 4 次（阈值 5 之下）也只是计数，不摆提示——本模块不比较计数与阈值
+    expect(listenFaceOf(state({ playing: false, consecutiveFailures: 4 })).failedHint).toBeNull()
+    expect(listenFaceOf(state({
+      playing: false,
+      halt: { reason: 'consecutive-failures', failures: 5 },
+    })).failedHint).toBe(5)
+  })
+
+  it('空章抑制：没有可朗读单元 → hasSegments 假（段号 / 进度条都不该摆）', () => {
+    expect(listenFaceOf(state({ paragraphCount: 3 })).hasSegments).toBe(true)
+    expect(listenFaceOf(state({ paragraphCount: 0, paragraphIndex: 0 })).hasSegments).toBe(false)
+  })
+
+  it('有没有真实段内进度：分支能力（字节型真读数 / 直出型恒零）原样上屏', () => {
+    expect(listenFaceOf(state({ segmentProgress: true })).hasProgress).toBe(true)
+    expect(listenFaceOf(state({ segmentProgress: false })).hasProgress).toBe(false)
+  })
+
+  it('音色面：看得懂「该露平台表还是引擎源表」这一格成品', () => {
+    expect(listenFaceOf(state({ voiceTable: 'platform' })).voiceTable).toBe('platform')
+    expect(listenFaceOf(state({ voiceTable: 'engine' })).voiceTable).toBe('engine')
   })
 })
 

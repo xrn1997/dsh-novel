@@ -1,5 +1,5 @@
 import type {
-  KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode,
+  CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode,
 } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiGet } from '../api.js'
@@ -7,18 +7,19 @@ import { useCopy } from '../copy/index.js'
 import { navigate, useStore } from '../store.js'
 import { NovelStyles } from '../styles.js'
 import { pushError } from '../transient.js'
-import { lineOf, miniSegmentLabel, segmentLabel } from './listen-readout.js'
+import {
+  isPlayBusy, lineOf, listenFaceOf, miniSegmentLabel, segmentLabel,
+} from './listen-readout.js'
 import {
   CAPSULE_SIZE, clampMiniBarIntoViewport, followFlushEdgesOnResize, frameFromDrag, miniBarCenterOf,
-  miniBarLayout, miniBarPopoverFlip, miniBarStore, persistMiniBarState, resetMiniBarPosition,
+  miniBarLayout, miniBarPopoverFlip, miniBarPopoverRoom, miniBarStore, persistMiniBarState, resetMiniBarPosition,
   resolveFormSize, resolvedMiniBarSize, setMiniBarCenter, setMiniBarCollapsed, setMiniBarFrame,
   snapMiniBarToEdge,
 } from './mini-bar-state.js'
 import type { MiniBarEdge, MiniBarFrame } from './mini-bar-state.js'
 import type { Size, Viewport } from './mini-bar-state.js'
-import { MiniProgressLine, RingPlay, isPlayBusy } from './mini-parts.js'
+import { MiniProgressLine, RingPlay } from './mini-parts.js'
 import {
-  TTS_MAX_CONSECUTIVE_FAILURES,
   pauseListening, requestReaderRelocation, resumeListening, skipParagraph, ttsPlayer,
 } from './player.js'
 import { readerPresence } from './reader-presence.js'
@@ -312,14 +313,16 @@ export function TtsMiniBar({ focusPanel, withStyles = true }: TtsMiniBarProps): 
   if (!st.active) return null
   if (hiddenByReader) return null
 
+  const face = listenFaceOf(st)
   const position = segmentLabel(st, t)
   // 空章不摆徽标（摆「0/0」或空章句都不是段号）；有段才给紧凑段号。
-  const badge = st.paragraphCount === 0 ? null : miniSegmentLabel(st, t)
+  const badge = face.hasSegments ? miniSegmentLabel(st, t) : null
   const line = lineOf(st)
   // 连败到阈值且没在放 = 会话已收口成暂停：展开态挂一行可见读数，收起态用 title / data-failed
   // 给同一读数（胶囊没有放正文的位置，但「为什么停了」不能只活在展开后才看得见的地方）。
-  const failed = st.consecutiveFailures >= TTS_MAX_CONSECUTIVE_FAILURES && !st.playing
-  const failedHint = failed ? t('tts.failedHint', { n: st.consecutiveFailures }) : ''
+  const failureCount = face.failedHint
+  const failed = failureCount !== null
+  const failedHint = failureCount === null ? '' : t('tts.failedHint', { n: failureCount })
   /** 宽度与高度由现场给（样式层读 `--novel-tts-panel-w/-h` 值槽），形态尺寸按呈现尺寸算。 */
   const form = bar.collapsed ? CAPSULE_SIZE : resolvedMiniBarSize(bar, viewport)
   /** 落位样式与两个派生读数一次给全（缺省轴在这里解析成像素，样式层不给缺省定位）：
@@ -328,6 +331,9 @@ export function TtsMiniBar({ focusPanel, withStyles = true }: TtsMiniBarProps): 
   const layout = miniBarLayout(bar, viewport, form)
   // 翻转判据吃**实测**内容高（量不到回退常量）：内容高与 60vh 取小，固定档在六行卡与一行卡之间都会算错方向。
   const flip = miniBarPopoverFlip(bar, viewport, form, settingsHeight ?? undefined)
+  /** 选中那一侧的余量：弹层 max-height 的上界（值槽写进 dock）。只判方向不收高度，卡片会
+   *  整块探出视口——浮层挂在 fixed 的 dock 上、页面不滚，探出去的那几行既看不见也滚不到。 */
+  const popoverRoom = miniBarPopoverRoom(bar, viewport, form, settingsHeight ?? undefined)
 
   /** 回阅读器：读**调用那一刻**的会话读数（渲染快照可能已落后一段），记现场再切路由。 */
   const backToReader = (): void => {
@@ -446,7 +452,7 @@ export function TtsMiniBar({ focusPanel, withStyles = true }: TtsMiniBarProps): 
       data-flip={flip}
       data-failed={failed ? 'true' : 'false'}
       className="novel-tts-mini-dock"
-      style={layout.style}
+      style={{ ...layout.style, '--novel-tts-popover-room': `${popoverRoom}px` } as CSSProperties}
       // 新一轮指针序列开始：上一次拖动若在浮窗外松手、没有补发 click 经过这里，
       // 脏标记会留到下一次点击并把那颗控件吞掉——按下即清零，只让同一次序列里的补发 click 生效。
       onPointerDownCapture={() => { movedRef.current = false }}

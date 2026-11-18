@@ -45,11 +45,15 @@ export const TTS_CSS = `
 /* 浮窗边栏同一判据：设置弹层开着，齿轮才亮 brand——开关要有回显 */
 .novel-tts-mini-dock .novel-tts-ictl.novel-tts-on { color: var(--novel-brand); }
 /* ── 设置面板（浮在条上方；与 Aa 面板同族卡片，不自造第二套浮层几何）──────── */
+/* max-height 收两档：60vh（视口比例，阅读器条那份卡没有 dock 几何）与现量余量
+   --novel-tts-popover-room（浮窗按选中那一侧算出来写在 dock 上：判方向不收高度，
+   卡片会整块探出 fixed 浮层、底部几行既看不见也滚不到）。两档取小就是「放不下时
+   卡内滚动、整块仍留在视口里」。 */
 .novel-tts-panel {
   position: absolute; right: var(--novel-sp-3); bottom: calc(100% + var(--novel-sp-2));
   z-index: var(--novel-z-panel);
   display: flex; flex-direction: column; gap: var(--novel-sp-4);
-  width: min(380px, calc(100vw - 48px)); max-height: 60vh; overflow-y: auto; overscroll-behavior: contain;
+  width: min(380px, calc(100vw - 48px)); max-height: min(60vh, var(--novel-tts-popover-room)); overflow-y: auto; overscroll-behavior: contain;
   /* 弹层自己可滚：外层浮窗是拖面（touch-action: none），这一层必须把触屏滚动还回来，
      否则设置卡在触屏上滑不动。 */
   touch-action: auto;
