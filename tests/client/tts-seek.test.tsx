@@ -313,6 +313,7 @@ describe('播放层 seek：章内段滑杆', () => {
     expect(ttsProgress.get()).toEqual({ position: 0, duration: 0 })
 
     vi.stubGlobal('speechSynthesis', new FakeSpeechSynthesis())
+    vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance)
     await act(async () => {
       await startListening({
         sourceId: 's1', bookKey: 'k1', title: '书一', chapterIndex: 0, paragraphIndex: 0,
@@ -416,6 +417,7 @@ describe('听书条与迷你条的进度面', () => {
     expect(screen.queryByLabelText('本段进度')).toBeNull()
 
     vi.stubGlobal('speechSynthesis', new FakeSpeechSynthesis())
+    vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance)
     await act(async () => {
       await startListening({
         sourceId: 's1', bookKey: 'k1', title: '书一', chapterIndex: 0, paragraphIndex: 0,
@@ -523,11 +525,16 @@ describe('跟读高亮：只标记不滚动（高亮不写位置）', () => {
 
     // 直出型没有计时介质，同样标记（标记不依赖任何进度读数）
     vi.stubGlobal('speechSynthesis', new FakeSpeechSynthesis())
+    vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance)
     await act(async () => {
       await startListening({
         sourceId: 's1', bookKey: 'k1', title: '书一', chapterIndex: 0, paragraphIndex: 0,
         engineId: 'browser:local',
       })
+    })
+    // 真开口（而不是造句失败后被失败径自动跳过）：跳段会带着高亮离开本章，读数不再可归因
+    expect(ttsPlayer.get(), '直出型应停在起播段且已开口').toMatchObject({
+      active: true, chapterIndex: 0, paragraphIndex: 0, playing: true,
     })
     expect(container.querySelector('.novel-tts-live')).not.toBeNull()
     const directLive = must(container.querySelector('.novel-tts-live'), '直出型命中段')
