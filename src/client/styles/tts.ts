@@ -366,13 +366,16 @@ export const TTS_CSS = `
   stroke-linecap: round; stroke-linejoin: round;
 }
 /* ── 书架「正在听」徽标（消费位置归 progress，这里只标播放态）──────────────── */
-/* 书名行 = 标题 + 「正在听」徽标；标题占满余宽、徽标不缩（长书名省略的是标题，不是徽标）。 */
-.novel-card-head { display: flex; align-items: center; gap: var(--novel-sp-2); min-width: 0; }
-.novel-card-head > .novel-card-title { flex: 1 1 auto; min-width: 0; }
+/* 徽标钉在**封面顶左**（出流的绝对层，角落分工与「多选态让位给勾选标记」归 shelf.ts 那处注释）：
+   它一旦回到书名行的文档流里，就按自己的宽度把长书名挤成省略号；回到封面底行里，又去挤源名——
+   「正在听」是状态字，两行文字都不该拿它换。底左那条槽位由来源 chip 与「本地」互斥共享，
+   徽标占顶左后两边都吃满整宽。 */
+.novel-card-head { display: block; }
 .novel-card-now {
-  flex: none; padding: 0 var(--novel-sp-2); border-radius: 999px;
+  position: absolute; top: var(--novel-sp-2); left: var(--novel-sp-2); z-index: 1;
+  padding: 0 var(--novel-sp-2); border-radius: 999px;
   font-size: var(--novel-fs-xs); color: var(--novel-brand-strong);
-  background: var(--novel-brand-tint); white-space: nowrap;
+  background: color-mix(in srgb, var(--novel-bg) 68%, transparent); white-space: nowrap;
 }
 /* ── 配置卡「引擎管理」（听书组内的对象数据管理区）────────────────────────── */
 /* 与上方标量行用一条细分割线断开：上面是「缺省值」，下面是「订阅资产」。 */

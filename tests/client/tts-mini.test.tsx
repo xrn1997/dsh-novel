@@ -1399,4 +1399,49 @@ describe('书架只有一条消费位置：进度行 + 「正在听」徽标', (
     await act(async () => { pauseListening() })
     await waitFor(() => expect(cardOf('书一').textContent).toContain('1/4 章 · 13%'))
   })
+
+  it('「正在听」不占书名行：徽标不在标题行里（长书名独占整行宽度）', async () => {
+    // 用户报的形状：徽标待在书名行里，把长书名挤成省略号。挤掉多少只有真排版量得出
+    // （读数与判据住 tests/browser/shelf-nowplaying-layout.test.tsx）；
+    // 这一枚默认门钉**机制**：徽标不出现在书名行这个文档流里，书名行就只装书名。
+    shelf = [shelfEntry({
+      bookKey: 'k1', title: '书一', totalChapters: 4,
+      progress: { chapterIndex: 1, offsetRatio: 0, updatedAt: 2 },
+    })]
+    await act(async () => {
+      await startListening({ sourceId: 's1', bookKey: 'k1', title: '书一', chapterIndex: 1, paragraphIndex: 0 })
+    })
+    const deps = makeCoreDeps({ apiGet: vi.fn(async () => shelf) })
+    render(createElement(ShelfView, { deps }))
+    await waitFor(() => expect(cardOf('书一').textContent).toContain('正在听'))
+
+    const card = cardOf('书一')
+    const badge = must(card.querySelector('.novel-card-now'), '「正在听」徽标')
+    const head = must(card.querySelector('.novel-card-head'), '书名行')
+    expect(head.contains(badge), '徽标不许待在书名行里——它一进去就吃掉整截书名').toBe(false)
+    expect(head.querySelectorAll('*'), '书名行里只有书名这一枚元素').toHaveLength(1)
+  })
+
+  it('多选态：顶左归勾选标记，「正在听」让位；退出多选态又回来', async () => {
+    // 徽标钉在封面顶左，与勾选标记同角——让位沿用既有角落政策（常态里「本地」也在这里让过勾选）。
+    // 让位不等于撒谎：在听哪一本仍由迷你条说，会话与进度都不动。
+    shelf = [shelfEntry({
+      bookKey: 'k1', title: '书一', totalChapters: 4,
+      progress: { chapterIndex: 1, offsetRatio: 0, updatedAt: 2 },
+    })]
+    await act(async () => {
+      await startListening({ sourceId: 's1', bookKey: 'k1', title: '书一', chapterIndex: 1, paragraphIndex: 0 })
+    })
+    const deps = makeCoreDeps({ apiGet: vi.fn(async () => shelf) })
+    render(createElement(ShelfView, { deps }))
+    await waitFor(() => expect(cardOf('书一').textContent).toContain('正在听'))
+
+    act(() => { fireEvent.click(screen.getByText('选择')) })
+    const cell = must(cardOf('书一').closest('.novel-cell'), '书一的格子')
+    expect(cell.querySelector('.novel-card-now'), '多选态里顶左让给勾选标记').toBeNull()
+    expect(cell.querySelector('.novel-check'), '勾选标记在场').not.toBeNull()
+
+    act(() => { fireEvent.click(screen.getByText('退出')) })
+    expect(cardOf('书一').textContent).toContain('正在听')
+  })
 })

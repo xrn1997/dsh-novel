@@ -62,8 +62,9 @@ export function shelfCardMeta(b: ShelfBook, t: Translate = zhTranslate): { text:
   }
 }
 
-/** 来源 chip 的展示口径（卡片封面左下那枚）：
- *   - 本地书 → null：本地身份已由封面「本地」与角标承担，同一事实不出第三个说法；
+/** 来源 chip 的展示口径（卡片封面底左槽位那一枚的在线侧）：
+ *   - 本地书 → null：出处身份归同一槽位的「本地」（角落分工见 `styles/shelf.ts` 注释），
+ *     同一事实不出第三个说法；
  *   - 源名可用 → 直出源名；
  *   - 服务端 join 不到（源已被删/从未存在，`sourceName === null`）→ 灰字「来源已删除」，
  *     `deleted` 供样式降调（宁如实说来源没了，也不拿空串或过期源名糊过去）。 */

@@ -161,21 +161,29 @@ export const SHELF_CSS = `
 .novel-cell:hover .novel-card-x, .novel-card-x:focus { opacity: 1; }
 .novel-card-x:hover { background: var(--novel-err); color: var(--novel-on-solid); }
 .novel-local-tag {
-  position: absolute; top: var(--novel-sp-2); left: var(--novel-sp-2); z-index: 1;
-  font-size: var(--novel-fs-xs); color: var(--novel-text-2);
+  flex: none; font-size: var(--novel-fs-xs); color: var(--novel-text-2);
   background: color-mix(in srgb, var(--novel-bg) 60%, transparent);
   border-radius: var(--novel-r-xs); padding: var(--novel-sp-0) var(--novel-sp-2);
 }
-/* ── 来源 chip + 多选态 ────────────────────────────────────────────
-   来源 chip 钉在封面**左下**：右上归删除 ✕、左上归本地角标，四个角各司其职。
+/* ── 封面角标与多选态 ───────────────────────────────────────────────
+   封面的角落各司其职：**顶左**归「此刻在干什么」（「正在听」徽标，见 styles/tts.ts；多选态让位给
+   勾选标记），**底左**归「这本是谁」（在线 = 来源 chip，本地 = 「本地」，由 shelfSourceTag 的判据
+   互斥、同住一个槽位），顶右归删除 ✕（hover 才显形），底右留空。
+   两条都是出流的绝对层：徽标一旦落进书名行或底行的文档流，就按自己的宽度挤走那一行的文字——
+   书名与源名都是要被读的东西，状态字不该拿它们换。
    色点按 sourceId 派生四档——复用无封面降级那四档 token（hex 仍不出本层），
    于是「同源同色、异源异色」在整架书上一眼可辨。源名超长省略（全名走 title 提示）。 */
 .novel-cover-box { position: relative; display: block; margin-bottom: var(--novel-sp-3); }
 .novel-cover-box > .novel-cover, .novel-cover-box > .novel-cover-fallback { margin-bottom: 0; }
+/* 底左那一层：不占封面高度，也不占下面任何一行文字的宽度。 */
+.novel-cover-foot {
+  position: absolute; left: var(--novel-sp-2); right: var(--novel-sp-2); bottom: var(--novel-sp-2); z-index: 1;
+  display: flex; align-items: center; gap: var(--novel-sp-2);
+}
 .novel-src-tag {
-  position: absolute; left: var(--novel-sp-2); bottom: var(--novel-sp-2); z-index: 1;
+  flex: 0 1 auto; min-width: 0;
   display: inline-flex; align-items: center; gap: var(--novel-sp-2);
-  max-width: calc(100% - var(--novel-sp-4));
+  max-width: 100%;
   font-size: var(--novel-fs-xs); color: var(--novel-text);
   background: color-mix(in srgb, var(--novel-bg) 68%, transparent);
   border-radius: var(--novel-r-xs); padding: var(--novel-sp-0) var(--novel-sp-2);
@@ -189,7 +197,8 @@ export const SHELF_CSS = `
 /* 源已被删（服务端 join 不到）：灰字 + 灰点，不冒充一个还活着的来源 */
 .novel-src-tag.gone { color: var(--novel-text-3); }
 .novel-src-tag.gone .novel-src-dot { background: var(--novel-text-3); opacity: .55; }
-/* 多选态：勾选标记占左上（本地角标让位），选中卡片描边走强调色 */
+/* 多选态：勾选标记占顶左（「正在听」徽标让位，见 tts.ts；「本地」已挪到底左，不再共享这一角），
+   选中卡片描边走强调色 */
 .novel-check {
   position: absolute; top: var(--novel-sp-2); left: var(--novel-sp-2); z-index: 1;
   width: 18px; height: 18px; border-radius: var(--novel-r-xs);

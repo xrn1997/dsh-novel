@@ -313,7 +313,7 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
                   const meta = shelfCardMeta(b, t)
                   const srcTag = shelfSourceTag(b, t)
                   // 书架只有一条消费位置（progress）：听书落盘会同步写回它，卡片不另摆一条听书进度；
-                  // 「正在听」只标播放层**此刻在放**的那一本（书名旁的品牌色徽标）——暂停即不再
+                  // 「正在听」只标播放层**此刻在放**的那一本（封面顶左的徽标）——暂停即不再
                   // 声称「正在听」（会话仍在，迷你条还在，只是这一格的状态字不撒谎）。
                   const nowPlaying = playingBookKey === b.bookKey
                   const picked = selected.includes(b.bookKey)
@@ -342,24 +342,36 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
                             : isLocal
                               ? <span className="novel-cover-fallback sm">{t('shelf.local')}</span>
                               : <span className={`novel-cover-fallback ${coverTintClass(b.title)}`}>{coverFallbackChar(b.title)}</span>}
-                          {/* 来源 chip：色点按 sourceId 派生四档（一眼分得出源不同）+ 源名（超长省略，
-                              title 给全名）。本地书不出（本地身份归封面「本地」与角标）。 */}
-                          {srcTag === null ? null : (
-                            <span className={`novel-src-tag${srcTag.deleted ? ' gone' : ''}`} title={srcTag.text}>
-                              <span className={`novel-src-dot ${sourceTintClass(b.sourceId)}`} />
-                              {srcTag.text}
-                            </span>
-                          )}
+                          {/* 封面顶左 = 「正在听」徽标（出流角标，不吃任何一行文字的宽度；待在书名行
+                              里会把长书名挤成省略号——读数与判据见
+                              tests/browser/shelf-nowplaying-layout.test.tsx）。多选态顶左归勾选标记，
+                              徽标让位（与「勾选占左上」的既有角落政策同一条判据；在听哪一本仍由迷你条说）。 */}
+                          {nowPlaying && !selectMode
+                            ? <span className="novel-card-now">{t('tts.shelf.nowPlaying')}</span>
+                            : null}
+                          {/* 封面底左 = 出处身份，**同一个槽位只住一条**：在线书是来源 chip（色点按
+                              sourceId 派生四档 + 源名，超长省略、title 给全名），本地书是「本地」——
+                              shelfSourceTag 对本地书返回 null（判据与 isLocal 同一条），两者互斥，
+                              这一层永远只装一条，不会互相挤。多选态不动这一角。 */}
+                          <span className="novel-cover-foot">
+                            {srcTag === null
+                              ? <span className="novel-local-tag">{t('shelf.local')}</span>
+                              : (
+                                <span className={`novel-src-tag${srcTag.deleted ? ' gone' : ''}`} title={srcTag.text}>
+                                  <span className={`novel-src-dot ${sourceTintClass(b.sourceId)}`} />
+                                  {srcTag.text}
+                                </span>
+                              )}
+                          </span>
                         </span>
                         <span className="novel-card-head">
                           <span className="novel-card-title">{b.title}</span>
-                          {nowPlaying ? <span className="novel-card-now">{t('tts.shelf.nowPlaying')}</span> : null}
                         </span>
                         <span className="novel-card-meta">{meta.text}</span>
                         {meta.pct === null ? null : <ProgressBar pct={meta.pct} />}
                       </button>
-                      {/* 多选态：本地角标把左上让给勾选标记；单本 ✕ 退场（同一职责不留第二个入口） */}
-                      {selectMode || !isLocal ? null : <span className="novel-local-tag">{t('shelf.local')}</span>}
+                      {/* 多选态：勾选标记占顶左（「正在听」徽标让位，见封面盒那一处）；单本 ✕ 退场
+                          （同一职责不留第二个入口）。「本地」不在这里——它是出处身份，归封面底左槽位。 */}
                       {!selectMode ? null : <span className="novel-check" aria-hidden="true">{picked ? '✓' : ''}</span>}
                       {!selectMode ? (
                         <button

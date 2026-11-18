@@ -143,7 +143,7 @@ describe('ShelfView 接线（deps seam 驱动）', () => {
   })
 
   /** 来源投影（服务端读取时 join 出 sourceName）：卡片显示源名；源被删 → 灰字「来源已删除」；
-   *  本地书不出 chip（本地身份已由封面「本地」与角标承担）。 */
+   *  本地书不出 chip（本地身份归封面底左槽位的「本地」，见下一颗）。 */
   it('来源 chip：显示源名；join 不到 → 「来源已删除」；本地书不出 chip', async () => {
     const deps = coreDeps({
       apiGet: vi.fn(async () => [
@@ -159,6 +159,36 @@ describe('ShelfView 接线（deps seam 驱动）', () => {
     const localCell = must([...document.querySelectorAll('.novel-cell')]
       .find((c) => c.textContent.includes('本地书')), '本地书那张卡片')
     expect(localCell.querySelector('.novel-src-tag')).toBeNull()
+  })
+
+  /** 封面底左槽位的机制钉（几何读数住 tests/browser/shelf-nowplaying-layout.test.tsx）：
+   *  在线 = 来源 chip、本地 = 「本地」，同住 `.novel-cover-foot` 一层、由 shelfSourceTag 判据互斥。
+   *  多选态只动顶左那一角（「正在听」让位给勾选标记），底左的出处身份照常在场——这条行为随
+   *  「本地」从顶左挪到底左而变（挪之前它给勾选让位），所以必须钉住，不能让几何门独跑。 */
+  it('「本地」与来源 chip 同住封面底左；多选态不撤出处身份', async () => {
+    const deps = coreDeps({
+      apiGet: vi.fn(async () => [
+        { ...book, bookKey: 'k1', title: '斗罗', sourceName: '笔趣阁' },
+        { ...book, bookKey: 'local:u1', title: '本地书', sourceId: '__local__', sourceName: null },
+      ]),
+    })
+    render(createElement(ShelfView, { deps }))
+    await waitFor(() => expect(screen.getByText('斗罗')).toBeTruthy())
+    const cellOf = (title: string): Element => must([...document.querySelectorAll('.novel-cell')]
+      .find((c) => c.textContent.includes(title)), `「${title}」那张卡片`)
+    expect(must(cellOf('本地书').querySelector('.novel-cover-foot .novel-local-tag'),
+      '本地书底左的「本地」').textContent).toBe('本地')
+    expect(must(cellOf('斗罗').querySelector('.novel-cover-foot .novel-src-tag'),
+      '在线书底左的来源 chip').textContent).toContain('笔趣阁')
+
+    act(() => { fireEvent.click(screen.getByText('选择')) })
+    expect(cellOf('本地书').querySelector('.novel-check'), '多选态：顶左归勾选标记').not.toBeNull()
+    expect(cellOf('本地书').querySelector('.novel-cover-foot .novel-local-tag'),
+      '多选态：底左出处身份不撤').not.toBeNull()
+
+    act(() => { fireEvent.click(screen.getByText('退出')) })
+    expect(cellOf('本地书').querySelector('.novel-cover-foot .novel-local-tag'),
+      '退出多选态：照常在场').not.toBeNull()
   })
 
   /** 本地 TXT 导入：上传是异步的，落地那一刻用户可能已经不在书架（切 tab / 去书源管理）。 */

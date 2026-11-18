@@ -117,6 +117,9 @@ $env:DSH_BROWSER_GATE='1'; pnpm vitest run tests/browser/config-page-layout.test
 # 听书面几何：展开态缺省尺寸下行不叠、最小档动作钮仍可点中且 resize 带不压控件、尺寸由现场驱动并夹在档位范围内、收起胶囊完整可见、左右缘贴合、自由落位按中心坐标落块、听书条只剩章内一条滑杆、跟读高亮换字色 + 段首三角且不改布局、浮层底跟宿主 token
 # 读数与断言住 tests/browser/tts-layout.test.tsx；尺寸档与夹取常量住 src/client/tts/mini-bar-state.ts 的 DEFAULT_MINI_BAR_SIZE / MIN_MINI_BAR_SIZE / MAX_MINI_BAR_SIZE / CAPSULE_SIZE，这里不抄读数
 $env:DSH_BROWSER_GATE='1'; pnpm vitest run tests/browser/tts-layout.test.tsx
+# 书架卡片几何：「正在听」徽标既不挤书名也不挤源名（同一本书挂徽标前 / 后，书名行与来源 chip 的可用宽度都不变）、徽标自己完整可见且不出卡、与底左角标（来源 chip / 「本地」）不叠
+# 读数与断言住 tests/browser/shelf-nowplaying-layout.test.tsx；机制侧与多选态让位的默认门钉子住 tests/client/tts-mini.test.tsx
+$env:DSH_BROWSER_GATE='1'; pnpm vitest run tests/browser/shelf-nowplaying-layout.test.tsx
 
 # EPUB 真语料审计（离线，读本机目录）：逐本 importEpub → 按结局与痕码分桶，报告落 .superpowers/epub-corpus/
 # 语料目录 = $env:DSH_EPUB_CORPUS_DIR（缺省 `$DSH_HOME/novel/corpus/`）；**语料不入库**，默认门不依赖任何下载
