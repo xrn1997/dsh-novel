@@ -10,7 +10,7 @@ import {
   awaitDirectVoices,
   DIRECT_VOICES_WAIT_MS,
   pauseListening,
-  resetTtsPlayer,
+  resetTtsPlayerForTests,
   resumeListening,
   setListenEngine,
   setListenTimer,
@@ -21,6 +21,7 @@ import {
   ttsPlayer,
 } from '../../src/client/tts/player.js'
 import type { StartListeningInput } from '../../src/client/tts/player.js'
+import { FakeAudio, FakeSpeechSynthesis, FakeUtterance, FakeVoice } from './tts-fakes.js'
 
 /**
  * 浏览器直出型分支的行为网：真播放层 + mock 掉 `/novel-api`、`Audio` 与 `speechSynthesis`。
@@ -34,77 +35,6 @@ vi.mock('../../src/client/api.js', () => ({
   apiGet: vi.fn(),
   apiSend: vi.fn(),
 }))
-
-class FakeAudio {
-  static instances: FakeAudio[] = []
-  src = ''
-  volume = 1
-  preload = ''
-  paused = true
-  currentTime = 0
-  onended: (() => void) | null = null
-  onplaying: (() => void) | null = null
-  constructor() { FakeAudio.instances.push(this) }
-  play = vi.fn(async () => { this.paused = false; this.onplaying?.() })
-  pause = vi.fn(() => { this.paused = true })
-  /** 停播时播放层会摘 src 松开缓冲（`removeAttribute` + `load` 那一对，不是赋空串） */
-  removeAttribute = vi.fn()
-  load = vi.fn()
-}
-
-class FakeVoice {
-  readonly voiceURI: string
-  readonly name: string
-  /** 真平台每支音色都带语区（`zh-CN` / `en-US` 这类）：音色行的可读性靠它，替身不演就量不到。 */
-  readonly lang: string
-  constructor(voiceURI: string, name: string, lang = 'zh-CN') {
-    this.voiceURI = voiceURI
-    this.name = name
-    this.lang = lang
-  }
-}
-
-class FakeUtterance {
-  static instances: FakeUtterance[] = []
-  readonly text: string
-  voice: FakeVoice | null = null
-  rate = 1
-  volume = 1
-  onstart: (() => void) | null = null
-  onend: (() => void) | null = null
-  onerror: ((event: { error: string }) => void) | null = null
-  constructor(text: string) {
-    this.text = text
-    FakeUtterance.instances.push(this)
-  }
-}
-
-class FakeSpeechSynthesis {
-  voices: FakeVoice[] = []
-  active: FakeUtterance | null = null
-  /** 真平台的自报读数：开口兜底问的就是这两个（慢 ≠ 没开口）。 */
-  speaking = false
-  pending = false
-  private readonly voicesChanged = new Set<() => void>()
-  getVoices = vi.fn((): FakeVoice[] => this.voices)
-  speak = vi.fn((utterance: FakeUtterance): void => { this.active = utterance; this.speaking = true })
-  cancel = vi.fn((): void => {
-    const active = this.active
-    this.active = null
-    this.speaking = false
-    active?.onerror?.({ error: 'canceled' })
-  })
-  addEventListener = vi.fn((type: string, listener: () => void): void => {
-    if (type === 'voiceschanged') this.voicesChanged.add(listener)
-  })
-  removeEventListener = vi.fn((type: string, listener: () => void): void => {
-    if (type === 'voiceschanged') this.voicesChanged.delete(listener)
-  })
-  /** 像真平台那样广播「语音表变了」：等待中的 `awaitDirectVoices` 靠这一发收口。 */
-  emitVoicesChanged(): void {
-    for (const listener of [...this.voicesChanged]) listener()
-  }
-}
 
 interface Fixture {
   names: string[]
@@ -192,10 +122,10 @@ function speakNow(): void {
 }
 
 beforeEach(() => {
-  resetTtsPlayer()
+  resetTtsPlayerForTests()
   resetPanelShelf()
-  FakeAudio.instances = []
-  FakeUtterance.instances = []
+  FakeAudio.reset()
+  FakeUtterance.reset()
   vi.stubGlobal('Audio', FakeAudio)
   synth = new FakeSpeechSynthesis()
   synth.voices = [new FakeVoice('v1', '甲声'), new FakeVoice('v2', '乙声')]

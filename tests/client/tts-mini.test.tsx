@@ -17,7 +17,7 @@ import { NOVEL_CSS } from '../../src/client/styles.js'
 import { ls } from '../../src/client/util.js'
 import {
   TTS_MAX_CONSECUTIVE_FAILURES,
-  pauseListening, requestReaderRelocation, resetTtsPlayer, setListenRate, setListenTimer, skipChapter,
+  pauseListening, requestReaderRelocation, resetTtsPlayerForTests, setListenRate, setListenTimer, skipChapter,
   startListening, takeReaderRelocation, ttsPlayer, ttsProgress,
 } from '../../src/client/tts/player.js'
 import { TtsMiniBar } from '../../src/client/tts/TtsMiniBar.js'
@@ -33,6 +33,7 @@ import { ShelfView } from '../../src/client/views/ShelfView.js'
 import { makeCoreDeps, makeReaderDeps } from './fake-deps.js'
 import type { FakeReaderDeps } from './fake-deps.js'
 import { fakeCtx, fakeHost } from './fake-host.js'
+import { FakeAudio, FakeSpeechSynthesis, FakeUtterance, FakeVoice } from './tts-fakes.js'
 import { must } from '../support/fixture.js'
 
 /**
@@ -58,23 +59,6 @@ vi.mock('../../src/client/api.js', () => ({
   apiEventStream: vi.fn(),
   describeError: (error: unknown): string => (error instanceof Error ? error.message : String(error)),
 }))
-
-class FakeAudio {
-  static instances: FakeAudio[] = []
-  src = ''
-  volume = 1
-  preload = ''
-  paused = true
-  currentTime = 0
-  onended: (() => void) | null = null
-  onplaying: (() => void) | null = null
-  constructor() { FakeAudio.instances.push(this) }
-  play = vi.fn(async () => { this.paused = false; this.onplaying?.() })
-  pause = vi.fn(() => { this.paused = true })
-  /** 停播时播放层会摘 src 松开缓冲（`removeAttribute` + `load` 那一对，不是赋空串） */
-  removeAttribute = vi.fn()
-  load = vi.fn()
-}
 
 let chapterNames: string[]
 let chapterTexts: string[][]
@@ -159,14 +143,14 @@ function fakePort(): FakePort {
 }
 
 beforeEach(() => {
-  resetTtsPlayer()
+  resetTtsPlayerForTests()
   resetPanelShelf()
   // 迷你条的位置与收起态是模块级现场：不留上一用例的落位
   resetMiniBarPosition()
   resetMiniBarSize()
   setMiniBarCollapsed(false)
   navigate({ name: 'shelf' })
-  FakeAudio.instances = []
+  FakeAudio.reset()
   vi.stubGlobal('Audio', FakeAudio)
   vi.clearAllMocks()
   // 三章 / 每章三段：段号换算（1 → 0.5）与恢复落位都取得到整读数
@@ -200,7 +184,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
-  resetTtsPlayer()
+  resetTtsPlayerForTests()
   navigate({ name: 'shelf' })
   vi.unstubAllGlobals()
 })
@@ -1173,11 +1157,10 @@ describe('两态浮窗：收起胶囊 / 展开边栏（ADR-0073）', () => {
 
   it('直出型：环退化为静态轨道，章内进度条仍在（章位置不依赖计时）', async () => {
     const bar = await listening()
-    vi.stubGlobal('speechSynthesis', {
-      getVoices: () => [{ voiceURI: 'v1', name: '嗓音一' }],
-      speak: (u: { onstart?: (() => void) | null }) => { u.onstart?.() },
-      cancel: () => {},
-    })
+    const speech = new FakeSpeechSynthesis({ autoStart: true })
+    speech.voices = [new FakeVoice('v1', '嗓音一')]
+    vi.stubGlobal('speechSynthesis', speech)
+    vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance)
     await act(async () => {
       await startListening({
         sourceId: 's1', bookKey: 'k1', title: '书一', chapterIndex: 0, paragraphIndex: 0,
@@ -1265,7 +1248,7 @@ describe('回阅读器：一次性重定位 + 恢复不写进度', () => {
     // 播放层自己也在写共用 progress（`ADR-0078`）：2s 防抖若在本用例的慢环境里落地，第二次开书
     // 会读到听书位置而不是存档位置——本用例要证的是「重定位现场只消费一次」，先把播放层现场与
     // 面板投影收掉，让第二次开书走「重新取服务端存档」（夹具里仍是第 0 章）。
-    act(() => { resetTtsPlayer(); resetPanelShelf() })
+    act(() => { resetTtsPlayerForTests(); resetPanelShelf() })
 
     // 现场已消费：同一本书再开一次回到存档 progress（第 0 章）
     unmount()

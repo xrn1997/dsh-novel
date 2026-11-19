@@ -278,7 +278,10 @@ export function takeReaderRelocation(sourceId: string, bookKey: string): ReaderR
   return session.takeReaderRelocation(sourceId, bookKey)
 }
 
+/** 插件生命周期终点（客户端热替换 / 停用 / 升级）：停声、放掉介质。
+ *  只由接线层（`src/client/index.tsx` 的 fiber 清理）调；视图卸载不是它——常驻边界见 `ADR-0072`。 */
+export function disposeTtsPlayer(): void { session.dispose() }
+
 /** 测试用的整份复位：作废在途会话、清定时与降级窗、回缺省值。
- *  生产路径**不**调它——`ADR-0072` 定的就是会话跨面板卸载存活，面板卸载不是一条复位时机；
- *  `pagehide` 监听与 Audio 槽因此各只在本页生命周期内建一次。 */
-export function resetTtsPlayer(): void { session.reset() }
+ *  生产路径**不**调它：生产只有 `disposeTtsPlayer` 一条终点（`ADR-0092`）。 */
+export function resetTtsPlayerForTests(): void { session.resetForTests() }

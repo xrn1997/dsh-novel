@@ -193,3 +193,22 @@ export function fakeCtx(h: FakeHost): unknown {
   }
   return ctx
 }
+
+/**
+ * 宿主拆 fiber 的可观察面：把 `ctx.effect` 注册的清理逐个收下，返回「跑完本 fiber 的全部清理」。
+ * 生命周期用例共用这一份——宿主会在卸载时跑完 effect 清理，用例要演的就是那一发；别在用例里
+ * 各写一套 effect seam（形状漂移没有编译信号，只会变成假红 / 假绿）。
+ */
+export function fiberCleanupOf(ctx: unknown): () => void {
+  const seam = ctx as { effect: (fn: () => unknown, label?: string) => unknown }
+  const disposers: Array<() => void> = []
+  const effect = seam.effect
+  seam.effect = (fn, label) => {
+    const out = effect(fn, label)
+    if (typeof out === 'function') disposers.push(out as () => void)
+    return out
+  }
+  return () => {
+    for (const dispose of disposers.splice(0)) dispose()
+  }
+}

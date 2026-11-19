@@ -8,7 +8,7 @@ import type {
 } from '../../src/shared/wire.js'
 import { apiGet, apiSend } from '../../src/client/api.js'
 import { panelShelf, resetPanelShelf } from '../../src/client/panel-shelf.js'
-import { resetTtsPlayer, seekParagraph, setListenRate, setListenTimer, startListening, ttsPlayer } from '../../src/client/tts/player.js'
+import { resetTtsPlayerForTests, seekParagraph, setListenRate, setListenTimer, startListening, ttsPlayer } from '../../src/client/tts/player.js'
 import { RATE_STEPS } from '../../src/client/tts/TtsBar.js'
 import { useDirectVoices } from '../../src/client/tts/TtsSettings.js'
 import { readingPositionAt, readingProbeNow, setReadingProbe } from '../../src/client/tts/reading-position.js'
@@ -16,6 +16,7 @@ import { ReaderView } from '../../src/client/views/ReaderView.js'
 import { makeReaderDeps } from './fake-deps.js'
 import type { DepsOverrides, FakeReaderDeps } from './fake-deps.js'
 import { must } from '../support/fixture.js'
+import { FakeAudio, FakeSpeechSynthesis, FakeUtterance, FakeVoice } from './tts-fakes.js'
 
 /**
  * 阅读器听书集成的行为网：真播放层（模块级 store/动作）+ 真 ReaderView/ChapterBody，
@@ -31,47 +32,6 @@ vi.mock('../../src/client/api.js', () => ({
   apiEventStream: vi.fn(),
   describeError: (error: unknown): string => (error instanceof Error ? error.message : String(error)),
 }))
-
-class FakeAudio {
-  static instances: FakeAudio[] = []
-  src = ''
-  volume = 1
-  preload = ''
-  paused = true
-  currentTime = 0
-  onended: (() => void) | null = null
-  constructor() { FakeAudio.instances.push(this) }
-  play = vi.fn(async () => { this.paused = false })
-  pause = vi.fn(() => { this.paused = true })
-  /** 停播时播放层会摘 src 松开缓冲（`removeAttribute` + `load` 那一对，不是赋空串） */
-  removeAttribute = vi.fn()
-  load = vi.fn()
-}
-
-class FakeUtterance {
-  readonly text: string
-  voice: unknown = null
-  rate = 1
-  volume = 1
-  onstart: (() => void) | null = null
-  onend: (() => void) | null = null
-  onerror: (() => void) | null = null
-  constructor(text: string) { this.text = text }
-}
-
-class FakeSpeechSynthesis {
-  voices: { voiceURI: string; name: string; lang?: string }[] = []
-  getVoices = vi.fn(() => this.voices)
-  speak = vi.fn()
-  cancel = vi.fn()
-  /** 平台事件面：Chrome 冷启动后真表随 `voiceschanged` 才到，替身要能把那一发演出来 */
-  private listeners: (() => void)[] = []
-  addEventListener = (_type: string, fn: () => void): void => { this.listeners.push(fn) }
-  removeEventListener = (_type: string, fn: () => void): void => {
-    this.listeners = this.listeners.filter((l) => l !== fn)
-  }
-  fireVoicesChanged(): void { for (const l of [...this.listeners]) l() }
-}
 
 const chapter = (name: string): ChapterEntry => ({ name, url: name })
 
@@ -165,10 +125,10 @@ function pinFirstParagraph(container: HTMLElement): void {
 }
 
 beforeEach(() => {
-  resetTtsPlayer()
+  resetTtsPlayerForTests()
   resetPanelShelf()
   setReadingProbe(null)
-  FakeAudio.instances = []
+  FakeAudio.reset()
   vi.stubGlobal('Audio', FakeAudio)
   vi.clearAllMocks()
   chapterNames = ['第一章', '第二章']
@@ -197,7 +157,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
-  resetTtsPlayer()
+  resetTtsPlayerForTests()
   setReadingProbe(null)
   vi.unstubAllGlobals()
 })
@@ -452,7 +412,7 @@ describe('设置面板', () => {
   it('直出模式音色行读 browserTtsVoices()', async () => {
     singleChapter()
     const synth = new FakeSpeechSynthesis()
-    synth.voices = [{ voiceURI: 'bv1', name: '本地女声', lang: 'zh-CN' }]
+    synth.voices = [new FakeVoice('bv1', '本地女声', 'zh-CN')]
     vi.stubGlobal('speechSynthesis', synth)
     vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance)
 
@@ -477,14 +437,14 @@ describe('设置面板', () => {
     const h = renderHook(() => useDirectVoices())
     expect(h.result.current, '冷启动空表').toEqual([])
 
-    synth.voices = [{ voiceURI: 'late', name: '迟到的嗓音' }]
-    act(() => { synth.fireVoicesChanged() })
-    expect(h.result.current).toEqual([{ id: 'late', name: '迟到的嗓音' }])
+    synth.voices = [new FakeVoice('late', '迟到的嗓音')]
+    act(() => { synth.emitVoicesChanged() })
+    expect(h.result.current).toEqual([{ id: 'late', name: '迟到的嗓音', lang: 'zh-CN' }])
     h.unmount()
     // 退订要真的退掉：卸载后再来一发不该把已走的订阅者叫回来
-    synth.voices = [{ voiceURI: 'later', name: '更晚的嗓音' }]
-    act(() => { synth.fireVoicesChanged() })
-    expect(h.result.current, '已卸载的订阅不复活').toEqual([{ id: 'late', name: '迟到的嗓音' }])
+    synth.voices = [new FakeVoice('later', '更晚的嗓音')]
+    act(() => { synth.emitVoicesChanged() })
+    expect(h.result.current, '已卸载的订阅不复活').toEqual([{ id: 'late', name: '迟到的嗓音', lang: 'zh-CN' }])
   })
 })
 

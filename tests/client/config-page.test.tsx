@@ -9,7 +9,7 @@ const SLOW_PAGE = 15_000
 import { apply } from '../../src/client/index.js'
 import { ttsDefaultsFromSettings } from '../../src/client/config-page.js'
 import { enTranslate } from '../../src/client/copy/index.js'
-import { resetTtsPlayer, ttsPlayer } from '../../src/client/tts/player.js'
+import { resetTtsPlayerForTests, ttsPlayer } from '../../src/client/tts/player.js'
 import { resetTransient, transientEntries } from '../../src/client/transient.js'
 import { BROWSER_TTS_ENGINE_ID, TTS_DEFAULTS } from '../../src/shared/wire.js'
 import type { Registration } from './fake-host.js'
@@ -405,7 +405,7 @@ describe('英文渲染：配置页', { timeout: SLOW_PAGE }, () => {
 describe('接入层读听书缺省', { timeout: SLOW_PAGE }, () => {
   /** 只走接线这一发：`apply` 注入 `remote.settings` ⇒ describe 一次 ⇒ 播放层回退链换值。 */
   async function applyWithSettings(settings: FakeRemoteSettings): Promise<ReturnType<typeof fakeHost>> {
-    resetTtsPlayer()
+    resetTtsPlayerForTests()
     const h = fakeHost({ remoteSettings: settings })
     apply(fakeCtx(h) as never)
     await waitFor(() => expect(settings.describeCalls, '接入层没读过设置面').toBeGreaterThan(0))
@@ -430,7 +430,7 @@ describe('接入层读听书缺省', { timeout: SLOW_PAGE }, () => {
   })
 
   it('配置页保存后的有效值也推进播放层：下一次起播不必等面板重载', async () => {
-    resetTtsPlayer()
+    resetTtsPlayerForTests()
     await mountConfigPage(fakeRemoteSettings({ value: { ttsDefaultRate: 1.6 } }))
     expect(ttsPlayer.get().rate, '页面读到的有效值先落一次').toBe(1.6)
     fireEvent.change(screen.getByLabelText('默认语速'), { target: { value: '2' } })

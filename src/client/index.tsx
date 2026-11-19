@@ -10,7 +10,7 @@ import {
 } from './copy/index.js'
 import { NOVEL_GLYPH_PATH, NOVEL_GLYPH_VIEWBOX } from './novel-glyph.js'
 import { TtsMiniBar } from './tts/TtsMiniBar.js'
-import { setTtsDefaults, watchDirectVoices } from './tts/player.js'
+import { disposeTtsPlayer, setTtsDefaults, watchDirectVoices } from './tts/player.js'
 import { NovelStatusOverlay } from './views/NovelStatusOverlay.js'
 import { NovelView } from './views/NovelView.js'
 
@@ -115,6 +115,12 @@ export function apply(ctx: Context): void {
   // 直出语音表由平台异步给出（Chromium 冷启动首读常为空，真表随 `voiceschanged` 迟到）：插件一挂上
   // 就触发首读并订阅，别等用户点开设置面或按下听书才第一次问——那一问会白等一次平台加载。
   ctx.effect(() => watchDirectVoices(), 'dsh-novel: direct voices')
+  // 播放层随插件收口（热替换 / 停用 / 升级）：宿主拆 fiber 时会跑完本 fiber 的 `ctx.effect`
+  // 清理（宿主契约），而模块图重建后旧模块里的播放单例与正在放的 Audio 不会自己消失——
+  // 模块图重建那一截本仓装不到宿主 UI 包、无法实测，按宿主发布物理解。不收口，旧会话
+  // 就是没有控制面的幽灵朗读（没人暂停得了，它会一章章念到书末），下一次起播还会与新的一路
+  // 叠音。视图卸载不走这里：常驻播放层跨面板卸载存活（`ADR-0072`）。
+  ctx.effect(() => () => { disposeTtsPlayer() }, 'dsh-novel: tts playback')
   // 全局面板双注册（同 id/key `NOVEL_PANEL_ID`，必须同批——官方契约：选中缺失的 main entry 会抛）
   ctx.effect(() => slots.inject('sidebar.panellist', () => slots.register(
     { name: 'sidebar.panellist', id: NOVEL_PANEL_ID, order: 20, label: () => t('nav.panel') },

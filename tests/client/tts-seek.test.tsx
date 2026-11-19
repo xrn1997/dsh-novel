@@ -12,7 +12,7 @@ import { DEFAULT_PREFS, prefsStore } from '../../src/client/store.js'
 import { paperLiveInk } from '../../src/client/util.js'
 import {
   TTS_MAX_CONSECUTIVE_FAILURES,
-  jumpToChapter, resetTtsPlayer, seekParagraph, startListening, ttsPlayer, ttsProgress,
+  jumpToChapter, resetTtsPlayerForTests, seekParagraph, startListening, ttsPlayer, ttsProgress,
 } from '../../src/client/tts/player.js'
 import { listenParagraphElement, paragraphSlotOf } from '../../src/client/tts/reading-position.js'
 import { TtsBar } from '../../src/client/tts/TtsBar.js'
@@ -22,6 +22,7 @@ import { ReaderView } from '../../src/client/views/ReaderView.js'
 import { makeReaderDeps } from './fake-deps.js'
 import type { FakeReaderDeps } from './fake-deps.js'
 import { must, pick } from '../support/fixture.js'
+import { FakeAudio, FakeSpeechSynthesis, FakeUtterance, FakeVoice } from './tts-fakes.js'
 
 /**
  * 听书进度面（seek / 段进度 / 跟读高亮 / 起播章）的行为网：真播放层 + 真 ReaderView/ChapterBody，
@@ -39,42 +40,11 @@ vi.mock('../../src/client/api.js', () => ({
   describeError: (error: unknown): string => (error instanceof Error ? error.message : String(error)),
 }))
 
-class FakeAudio {
-  static instances: FakeAudio[] = []
-  src = ''
-  volume = 1
-  preload = ''
-  paused = true
-  currentTime = 0
-  duration = 0
-  onended: (() => void) | null = null
-  onplaying: (() => void) | null = null
-  ontimeupdate: (() => void) | null = null
-  onloadedmetadata: (() => void) | null = null
-  constructor() { FakeAudio.instances.push(this) }
-  play = vi.fn(async () => { this.paused = false; this.onplaying?.() })
-  pause = vi.fn(() => { this.paused = true })
-  /** 停播时播放层会摘 src 松开缓冲（`removeAttribute` + `load` 那一对，不是赋空串） */
-  removeAttribute = vi.fn()
-  load = vi.fn()
-}
-
-class FakeUtterance {
-  readonly text: string
-  voice: unknown = null
-  rate = 1
-  volume = 1
-  onstart: (() => void) | null = null
-  onend: (() => void) | null = null
-  onerror: (() => void) | null = null
-  constructor(text: string) { this.text = text }
-}
-
-class FakeSpeechSynthesis {
-  voices: { voiceURI: string; name: string }[] = [{ voiceURI: 'v1', name: '嗓音一' }]
-  getVoices = vi.fn(() => this.voices)
-  speak = vi.fn((utterance: FakeUtterance) => { utterance.onstart?.() })
-  cancel = vi.fn()
+/** 直出分支的平台替身：语音表立刻可用、开口即补 `onstart`（真平台开口事件在这里的替身）。 */
+function directSpeech(): FakeSpeechSynthesis {
+  const speech = new FakeSpeechSynthesis({ autoStart: true })
+  speech.voices = [new FakeVoice('v1', '嗓音一')]
+  return speech
 }
 
 let chapterNames: string[]
@@ -141,9 +111,9 @@ function rect(top: number, height: number): DOMRect {
 }
 
 beforeEach(() => {
-  resetTtsPlayer()
+  resetTtsPlayerForTests()
   resetPanelShelf()
-  FakeAudio.instances = []
+  FakeAudio.reset()
   vi.stubGlobal('Audio', FakeAudio)
   vi.clearAllMocks()
   chapterNames = ['第一章', '第二章', '第三章']
@@ -176,7 +146,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
-  resetTtsPlayer()
+  resetTtsPlayerForTests()
   vi.unstubAllGlobals()
 })
 
@@ -312,7 +282,7 @@ describe('播放层 seek：章内段滑杆', () => {
     await act(async () => { seekParagraph(1) })
     expect(ttsProgress.get()).toEqual({ position: 0, duration: 0 })
 
-    vi.stubGlobal('speechSynthesis', new FakeSpeechSynthesis())
+    vi.stubGlobal('speechSynthesis', directSpeech())
     vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance)
     await act(async () => {
       await startListening({
@@ -416,7 +386,7 @@ describe('听书条与迷你条的进度面', () => {
     act(() => { active.duration = 8; active.onloadedmetadata?.() })
     expect(screen.queryByLabelText('本段进度')).toBeNull()
 
-    vi.stubGlobal('speechSynthesis', new FakeSpeechSynthesis())
+    vi.stubGlobal('speechSynthesis', directSpeech())
     vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance)
     await act(async () => {
       await startListening({
@@ -524,7 +494,7 @@ describe('跟读高亮：只标记不写位置', () => {
     expect(live.querySelectorAll('*'), '命中段内不塞进度节点（ADR-0076）').toHaveLength(0)
 
     // 直出型没有计时介质，同样标记（标记不依赖任何进度读数）
-    vi.stubGlobal('speechSynthesis', new FakeSpeechSynthesis())
+    vi.stubGlobal('speechSynthesis', directSpeech())
     vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance)
     await act(async () => {
       await startListening({

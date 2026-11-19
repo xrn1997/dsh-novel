@@ -476,6 +476,37 @@ export class ListenSession {
     })
   }
 
+  /**
+   * 插件生命周期终点（客户端热替换 / 停用 / 升级）：把这一趟的声音与介质一起收掉。
+   *
+   * 与 `stopListening` 的分别：那条是**用户**的停止，会话与模块都还在，下一拍还能起播；本方法
+   * 之后模块本身作废。常驻播放层跨**面板**卸载存活（`ADR-0072`），但不跨**插件**卸载——控制面
+   * （听书条 / 浮窗的槽位注册）随 fiber 撤走，留下的声音没人暂停得了；而宿主热替换会把模块图
+   * 重新 import 成**第二个**单例，旧会话还响着就是两路叠音。故收口不靠读数自证干净（读数说
+   * 「不在放」也照样放介质），位置先落盘再停声。
+   */
+  dispose(): void {
+    // `stopListening` 在「还没有活会话」时早退（起播取数 / 等语音表在途正是这一格），不抬代际；
+    // 先自己抬一次，迟到的 `startSession` 才会在每道 `gen !== runSeq` 上退场——否则数据回来后
+    // 它照常建 run、起播，卸载终点之后长出一路没人能停的声音（`ADR-0092`）。
+    this.runSeq += 1
+    // 停止里已 flush 位置并停声；先把这一笔冲出去，别让最后两秒的进度跟着模块一起作废
+    this.stopListening()
+    // 读数不是「介质已停」的证明：卸载是终点，两条分支的介质一律放掉
+    this.teardownOutputs()
+  }
+
+  /** 介质与宿主挂钩的整份收尾：两条分支连槽放掉、摘 `pagehide`、清两份防抖。
+   *  `dispose` 与测试复位（`resetForTests`）共用；位置与读数各由调用方处置——`dispose` 经
+   *  `stopListening` 先 flush，测试复位直接作废回缺省，两条终点的差别只在那一截。 */
+  private teardownOutputs(): void {
+    this.platform.branches.releaseAll()
+    this.unwatchPageHide?.()
+    this.unwatchPageHide = null
+    this.positionSave.cancel()
+    this.paramsRestart.cancel()
+  }
+
   /** 暂停：立即 flush 位置（不等防抖窗口），保留当前段现场供 resume 续上。 */
   pauseListening(): void {
     const st = this.state.get()
@@ -1217,12 +1248,10 @@ export class ListenSession {
   }
 
   /** 测试用的整份复位：作废在途会话、清定时与降级窗、回缺省值。
-   *  生产路径**不**调它——`ADR-0072` 定的就是会话跨面板卸载存活，面板卸载不是一条复位时机；
-   *  `pagehide` 监听与 Audio 槽因此各只在本页生命周期内建一次。 */
-  reset(): void {
+   *  生产路径**不**调它——面板卸载不是复位时机（`ADR-0072`：会话跨面板卸载存活），插件卸载走
+   *  `dispose`。 */
+  resetForTests(): void {
     this.runSeq += 1
-    this.positionSave.cancel()
-    this.paramsRestart.cancel()
     this.pendingRelocation = null
     const run = this.current
     if (run !== null) {
@@ -1232,9 +1261,7 @@ export class ListenSession {
     }
     this.current = null
     this.chapterLoading = false
-    this.platform.branches.releaseAll()
-    this.unwatchPageHide?.()
-    this.unwatchPageHide = null
+    this.teardownOutputs()
     this.defaults = { ...TTS_DEFAULTS }
     this.progress.set({ position: 0, duration: 0 })
     this.state.set(initialState(this.capabilitiesOf(modeOf(TTS_DEFAULTS.engineId))))

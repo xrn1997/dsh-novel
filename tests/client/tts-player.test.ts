@@ -8,7 +8,7 @@ import {
   TTS_MAX_CONSECUTIVE_FAILURES,
   pauseListening,
   playFromReadingPosition,
-  resetTtsPlayer,
+  resetTtsPlayerForTests,
   resumeListening,
   seekParagraph,
   setListenEngine,
@@ -24,6 +24,7 @@ import {
   ttsPlayer,
 } from '../../src/client/tts/player.js'
 import type { StartListeningInput } from '../../src/client/tts/player.js'
+import { FakeAudio } from './tts-fakes.js'
 import {
   estimateParagraphIndex,
   setReadingProbe,
@@ -39,49 +40,6 @@ vi.mock('../../src/client/api.js', () => ({
   apiGet: vi.fn(),
   apiSend: vi.fn(),
 }))
-
-class FakeAudio {
-  static instances: FakeAudio[] = []
-  private srcValue = ''
-  /** 赋过 src 的序列：预载 404 之后，下一次起播必须重新赋一次 `src`（同键不重设就会对着
-   *  一个 errored 元素再 play，浏览器只会再拒）。 */
-  srcSets: string[] = []
-  volume = 1
-  preload = ''
-  paused = true
-  currentTime = 0
-  /** `fireError` 之后介质进入错误态：不重新赋 src 的 `play()` 会拒绝（真浏览器同此）。 */
-  errored = false
-  onended: (() => void) | null = null
-  onerror: (() => void) | null = null
-  onplaying: (() => void) | null = null
-  constructor() { FakeAudio.instances.push(this) }
-  get src(): string { return this.srcValue }
-  set src(value: string) {
-    this.srcValue = value
-    this.srcSets.push(value)
-    this.errored = false
-  }
-  play = vi.fn(async () => {
-    if (audioFails || this.errored) throw new Error('media error')
-    this.paused = false
-    this.onplaying?.()
-  })
-  pause = vi.fn(() => { this.paused = true })
-  /** 停播时播放层会摘 src 松开缓冲（`removeAttribute` + `load` 那一对，不是赋空串） */
-  removeAttribute = vi.fn()
-  load = vi.fn()
-  fireEnded(): void {
-    this.paused = true
-    this.onended?.()
-  }
-
-  fireError(): void {
-    this.paused = true
-    this.errored = true
-    this.onerror?.()
-  }
-}
 
 /** 一份书内测试夹具：章名 + 每章正文段落（正文以 \n 拼成 ChapterContent.text） */
 interface Fixture {
@@ -99,8 +57,6 @@ let synthGate: Map<string, Promise<void>>
 let chapterFailures: Set<number>
 let synthCount: number
 let shelfReads: ShelfEntry[]
-/** 介质永远起不来（play 拒绝）：演「每一段音频都没开口」。 */
-let audioFails: boolean
 
 function must<T>(value: T | undefined | null, what: string): T {
   if (value === undefined || value === null) throw new Error(`missing ${what}`)
@@ -177,9 +133,9 @@ function shelfEntry(over: Partial<ShelfEntry> = {}): ShelfEntry {
 }
 
 beforeEach(() => {
-  resetTtsPlayer()
+  resetTtsPlayerForTests()
   setReadingProbe(null)
-  FakeAudio.instances = []
+  FakeAudio.reset()
   vi.stubGlobal('Audio', FakeAudio)
   vi.clearAllMocks()
   fixture = {
@@ -192,7 +148,6 @@ beforeEach(() => {
   chapterFailures = new Set()
   synthCount = 0
   shelfReads = []
-  audioFails = false
 
   vi.mocked(apiGet).mockImplementation(async (path: string) => {
     if (path.startsWith('navigation')) {
@@ -513,7 +468,7 @@ describe('常驻播放层：存档越界与失败半径', () => {
       names: ['第一章', '第二章'],
       texts: [['p0。', 'p1。', 'p2。', 'p3。', 'p4。', 'p5。'], ['n0。']],
     }
-    audioFails = true                       // 介质永远起不来：每次 play 都拒绝
+    FakeAudio.playFails = true               // 介质永远起不来：每次 play 都拒绝
     await expect(start()).resolves.toBeUndefined()
     await vi.waitFor(() => {
       expect(ttsPlayer.get().consecutiveFailures, '起播即清零的旧口径会让这里永远是 1')
@@ -732,7 +687,7 @@ describe('常驻播放层：跳章、回退链与从阅读位置起播', () => {
   })
 
   it('resume: archive 以服务端存档续听；读面失败如实抛，不退化成当前章 0 段', async () => {
-    resetTtsPlayer()
+    resetTtsPlayerForTests()
     shelfReads = [shelfEntry({
       listen: {
         chapterIndex: 1, paragraphIndex: 1, engineId: 'http:book', voice: 'vb',

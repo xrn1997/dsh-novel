@@ -18,9 +18,12 @@ import { last, must } from '../support/fixture.js'
  * 听书会话的实例行为网：`new ListenSession(假平台 + 假输出)` 驱动，**不 stub 任何全局、
  * 不 mock `api.js`**——平台缝就是这台会话与外界的全部接触面，环境自建在这里根本够不着。
  *
- * 钉五件事：起播推进到下一段（位置落盘走平台注入的防抖，推轮子不等墙钟）；单段失败留痕
+ * 钉七件事：起播推进到下一段（位置落盘走平台注入的防抖，推轮子不等墙钟）；单段失败留痕
  * 跳过、连败到线暂停；参数变更作废旧回执并按新参数重取当前段；定时到点暂停；直出型开口
- * 无事件走兜底失败径（这一例用真 `DirectOutput` + 假 speech 面，兜底定时同样走平台计时）。
+ * 无事件走兜底失败径（这一例用真 `DirectOutput` + 假 speech 面，兜底定时同样走平台计时）；
+ * 插件收口（`dispose`）无条件放介质（`ADR-0092`：放音 / 暂停 / 已停三种状态各恰好放一次）；
+ * 收口先 flush 最后一笔位置，并作废取数 / 等语音表在途的起播（`ADR-0092`：卸载终点之后
+ * 不许长出新会话）。
  */
 describe('ListenSession 实例：假平台 + 假输出', () => {
   /** 平台的手表：延时全走这盘轮子。测试推轮子走时间，不碰全局计时器、不等墙钟。 */
@@ -831,5 +834,88 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     } finally {
       setReadingProbe(null)
     }
+  })
+
+  it('插件收口无条件放介质：放音、暂停、用户已停三种状态各恰好放一次', async () => {
+    // 读数不是「介质已停」的证明（`ADR-0092`）：以为「stopListening 就够了」、把 `releaseAll`
+    // 从 `dispose` 里删掉的 refactor 必须在这里红。数两条分支的 `release`——放介质一步的全部
+    // 可观测面；「恰好一次」两个方向都钉：不许漏放，也不许收两次口。
+
+    // ① 放音中卸载：位置防抖窗里还有最后一笔，收口要先把这一笔冲出去
+    const playing = makeHarness()
+    await start(playing)
+    const playingSaves = playing.saves.length
+    const playingProgress = playing.progressSaves.length
+    const playingBytes = vi.spyOn(playing.branches.bytes, 'release')
+    const playingDirect = vi.spyOn(playing.branches.direct, 'release')
+    playing.session.dispose()
+    expect(playingBytes, '放音中收口：字节介质放掉').toHaveBeenCalledTimes(1)
+    expect(playingDirect, '放音中收口：直出介质放掉').toHaveBeenCalledTimes(1)
+    expect(playing.saves.length, '收口先 flush 最后一笔听书位置').toBe(playingSaves + 1)
+    expect(playing.saves.at(-1)).toMatchObject({
+      bookKey: 'b1', listen: { chapterIndex: 0, paragraphIndex: 0 },
+    })
+    expect(playing.progressSaves.length, '同一节拍也写共用消费位置').toBe(playingProgress + 1)
+    expect(playing.progressSaves.at(-1)).toEqual({
+      bookKey: 'b1', chapterIndex: 0, offsetRatio: 0,
+    })
+
+    // ② 暂停中卸载：读数已说「不在放」，介质照样要放（暂停中的 Audio 槽不留）
+    const paused = makeHarness()
+    await start(paused)
+    paused.session.pauseListening()
+    expect(paused.session.state.get().playing, '前置：读数已不在放').toBe(false)
+    const pausedBytes = vi.spyOn(paused.branches.bytes, 'release')
+    const pausedDirect = vi.spyOn(paused.branches.direct, 'release')
+    paused.session.dispose()
+    expect(pausedBytes, '暂停中收口：字节介质放掉').toHaveBeenCalledTimes(1)
+    expect(pausedDirect, '暂停中收口：直出介质放掉').toHaveBeenCalledTimes(1)
+
+    // ③ 用户已停再卸载：stopListening 在这条路上早退，放介质一步不能跟着免掉；
+    //    停止时已 flush 过位置，收口不许再补一笔重复写
+    const stopped = makeHarness()
+    await start(stopped)
+    stopped.session.stopListening()
+    expect(stopped.session.state.get().active, '前置：用户已停，会话已收').toBe(false)
+    const stoppedSaves = stopped.saves.length
+    const stoppedBytes = vi.spyOn(stopped.branches.bytes, 'release')
+    const stoppedDirect = vi.spyOn(stopped.branches.direct, 'release')
+    stopped.session.dispose()
+    expect(stoppedBytes, '已停后收口：字节介质放掉').toHaveBeenCalledTimes(1)
+    expect(stoppedDirect, '已停后收口：直出介质放掉').toHaveBeenCalledTimes(1)
+    expect(stopped.saves.length, '已 flush 过的位置不重复写').toBe(stoppedSaves)
+  })
+
+  it('卸载撞在起播取数窗口：数据回来只退场，不许再起播（ADR-0092）', async () => {
+    // `stopListening` 在「还没有活会话」时早退，取数在途正是这一格；收口必须自己抬代际，
+    // 否则数据回来后 `startSession` 照常建 run、起播——卸载终点之后长出没人能停的声音。
+    const h = makeHarness()
+    const release = h.holdFetch(0)
+    const started = start(h)
+    h.session.dispose()
+    release()
+    await started
+    await microtasks()
+
+    expect(h.session.state.get().active, '卸载终点之后不许长出新会话').toBe(false)
+    expect(h.bytes.starts, '也不许去起播').toHaveLength(0)
+    expect(h.synthCalls, '更不许替幽灵会话合成').toEqual([])
+    expect(h.bytes.releaseCount, '介质照样收口').toBe(1)
+  })
+
+  it('卸载撞在等语音表窗口：放行后也不许开口（ADR-0092）', async () => {
+    const h = makeHarness()
+    const release = h.holdVoices()
+    const started = h.session.startListening({
+      sourceId: 's1', bookKey: 'b1', title: '书一', chapterIndex: 0, paragraphIndex: 0,
+      engineId: BROWSER_TTS_ENGINE_ID,
+    })
+    h.session.dispose()
+    release(true)
+    await started
+    await microtasks()
+
+    expect(h.session.state.get().active, '卸载终点之后不许长出新会话').toBe(false)
+    expect(h.speech.utterances, '也不许把 utterance 交给平台').toHaveLength(0)
   })
 })
