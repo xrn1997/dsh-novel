@@ -55,6 +55,9 @@ export interface ReaderDomTarget {
 export interface ReaderViewportHandlers {
   scroll(): void
   layout(): void
+  /** 用户主动滚动意图（滚轮 / 触摸 / 滚动键 / 滚动条拖动）。程序写入 scrollTop 不经过这里——
+   *  跟读自动跟随要靠它区分「播放把视口带走」与「读者自己把视口带走」。 */
+  intent?(): void
 }
 
 /** DOM 侧平台缝（注入垫片）：测试给记录型实现，因此绑定的判据与次序不必起 jsdom */
@@ -81,7 +84,52 @@ export const PROD_HOST: ReaderBindingHost = {
     // 滚动容器（.novel-main 或更外层）的滚动因此都收得到。
     const onScroll = (): void => { handlers.scroll() }
     const onLayout = (): void => { handlers.layout() }
+    // 用户意图与 scroll 事件分开收：程序写入 scrollTop 也会发 scroll，单看 scroll 分不出是谁在滚。
+    // wheel / touch 只在正文层里算（条与面板上的操作不夺走跟随）；滚动键排除控件自己会消费的
+    // Space / Enter，其余滚动键照算；滚动条拖动在正文层之外，用 pointerdown 的 offsetX 越过
+    // clientWidth 判定。滚动容器**按事件时刻现找**：内容到货后真正在滚的容器可能换人，
+    // 挂载时抓一次会让滚动条这一路静默失效。
+    const intent = (): void => { handlers.intent?.() }
+    const insideBody = (target: EventTarget | null): boolean =>
+      body === null ? true : target instanceof Node && body.contains(target)
+    const onWheel = (event: WheelEvent): void => { if (insideBody(event.target)) intent() }
+    const onTouch = (event: TouchEvent): void => { if (insideBody(event.target)) intent() }
+    const SCROLL_KEYS = new Set(['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', ' ', 'Spacebar'])
+    /** 目标在一只**自己的滚动容器**里（设置卡 / 抽屉 / 正文里的代码块）：按键滚的是它，
+     *  不是阅读正文，不算读者接管。正文层自己的滚动容器与包住正文层的外层滚动容器都算阅读，
+     *  只有落在这两者之外的滚动面（浮层 / 段内代码块）才排除。 */
+    const insideNestedScroller = (target: HTMLElement | null): boolean => {
+      if (target === null) return false
+      const inner = findScrollport(target)
+      if (inner === null) return false
+      if (inner === findScrollport(body)) return false
+      return body === null || !inner.contains(body)
+    }
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.ctrlKey || event.metaKey || event.altKey) return
+      if (!SCROLL_KEYS.has(event.key)) return
+      const target = event.target instanceof HTMLElement ? event.target : null
+      if (target !== null && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
+        || target.tagName === 'SELECT' || target.isContentEditable)) return
+      // 按钮 / 链接只消费 Space 与 Enter；PageUp / PageDown 等仍会滚正文，不能因焦点停在
+      // 条上那颗钮就吞掉这次接管（键盘读者关完设置卡接着翻页正是常见路径）。
+      if (target !== null && (event.key === ' ' || event.key === 'Spacebar' || event.key === 'Enter')
+        && target.closest('button, a[href], [role="button"], [role="link"]') !== null) return
+      if (insideNestedScroller(target)) return
+      intent()
+    }
+    const onPointer = (event: PointerEvent): void => {
+      const port = findScrollport(body)
+      if (port === null || event.target !== port) return
+      if (typeof event.offsetX !== 'number' || event.offsetX < port.clientWidth) return
+      intent()
+    }
     document.addEventListener('scroll', onScroll, { capture: true, passive: true })
+    document.addEventListener('wheel', onWheel, { capture: true, passive: true })
+    document.addEventListener('touchstart', onTouch, { capture: true, passive: true })
+    document.addEventListener('touchmove', onTouch, { capture: true, passive: true })
+    document.addEventListener('keydown', onKey)
+    document.addEventListener('pointerdown', onPointer, { capture: true })
     window.addEventListener('resize', onLayout)
     // 内容高度变化不经过 window resize（插图到货 / 章块增删都改它）：观察到就按「布局变了」并入
     let ro: ResizeObserver | null = null
@@ -91,6 +139,11 @@ export const PROD_HOST: ReaderBindingHost = {
     }
     return () => {
       document.removeEventListener('scroll', onScroll, { capture: true })
+      document.removeEventListener('wheel', onWheel, { capture: true })
+      document.removeEventListener('touchstart', onTouch, { capture: true })
+      document.removeEventListener('touchmove', onTouch, { capture: true })
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('pointerdown', onPointer, { capture: true })
       window.removeEventListener('resize', onLayout)
       ro?.disconnect()
     }
@@ -107,6 +160,9 @@ export interface ReaderBindingOptions {
   /** 视口顶的固定遮挡高度（阅读器顶条，px）：阅读探针按**看得见的顶**取段——
    *  探针与阅读会话的位置口径必须是同一个（`ReaderSessionDeps.topInset`）。缺省 0。 */
   topInset?(): number
+  /** 用户主动滚动 / 导航意图（正文上的滚轮、触摸、滚动键、滚动条拖动）：跟读自动跟随据此让位。
+   *  程序写入 scrollTop 与听书条自身的控件操作不触发。 */
+  onUserIntent?(): void
 }
 
 export class ReaderBinding {
@@ -118,6 +174,7 @@ export class ReaderBinding {
   private readonly frames: ReaderFrameScheduler
   private readonly host: ReaderBindingHost
   private readonly topInset: () => number
+  private readonly onUserIntent: () => void
   private portEl: HTMLElement | null = null
   private target: ReaderDomTarget | null = null
   private mounted = false
@@ -134,6 +191,7 @@ export class ReaderBinding {
     this.frames = opts.frames ?? RAF_FRAMES
     this.host = opts.host ?? PROD_HOST
     this.topInset = () => opts.topInset?.() ?? 0
+    this.onUserIntent = () => { opts.onUserIntent?.() }
     this.port = createReaderGeometry({
       port: () => this.portEl,
       sentinel: () => this.source.sentinel(),
@@ -177,6 +235,7 @@ export class ReaderBinding {
     this.unlisten = this.host.listenViewport({
       scroll: () => { this.target?.feedViewport(false) },
       layout: () => { this.target?.feedViewport(true) },
+      intent: () => { this.onUserIntent() },
     }, this.source.body())
     // 探针量的是**调用那一刻**的 DOM：不缓存读数（缓存会让「从阅读位置起播」用上一次打开书时的位置）
     this.host.setProbe(() => readingPositionAt(

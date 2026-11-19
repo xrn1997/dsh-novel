@@ -1,18 +1,18 @@
 /** 听书块（`NOVEL_CSS` 的第 11 块）：阅读器内嵌听书条、设置面板、选区起播按钮、全局迷你条与
  *  书架「正在听」徽标。阅读器内那条的条底跟纸走（与 `.novel-rdr-bar` 同一条判据：纸往墨压一档，
- *  不读宿主 App 底色），面板与条上控件复用控制器层的 token 与 pill 形状；brand 只给选中态。
- *  全局迷你条与书架徽标不在阅读器里——它们读宿主语义 token（暗底浮层），**不跟纸走**。 */
+ *  不读宿主 App 底色），面板与条上控件复用控制器层的 token 与 pill 形状；选中态用跟读字色
+ *  （随纸色现算），brand 只在强制深色那一档回退。全局迷你条与书架徽标不在阅读器里——它们读
+ *  宿主语义 token（暗底浮层），**不跟纸走**。 */
 export const TTS_CSS = `
 /* ── 听书条（阅读器内嵌）────────────────────────────────────────────────── */
 /* 贴视口底：滚动容器在阅读器之外，sticky 让条在整段阅读里停在下沿，而不是随内容沉到底。
    z 只高于正文：控制器遮罩（10）与工具栏（12）都在它之上——遮罩在场时条让位给浮层。
-   条底与顶条同源（读 token 层的 --novel-bar-bg / --novel-bar-line），接缝才读作同一张纸。 */
+   条底与顶条同源（同一条 color-mix 直写，见 token 层），接缝才读作同一张纸。 */
 .novel-tts-bar {
   position: sticky; bottom: 0; z-index: 1;
   display: flex; align-items: center; flex-wrap: wrap; gap: var(--novel-sp-2);
   padding: var(--novel-sp-2) var(--novel-sp-4);
-  background: var(--novel-bar-bg);
-  border-top: 1px solid var(--novel-bar-line);
+  border-top: 1px solid color-mix(in srgb, var(--novel-paper-ink) 12%, transparent);
   color: var(--novel-paper-ink);
 }
 /* 控制器层强制深色：整条让回宿主暗底（与 .novel-rdr-bar.novel-dark 同一档） */
@@ -40,9 +40,13 @@ export const TTS_CSS = `
   font-size: var(--novel-fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .novel-tts-chips { display: flex; align-items: center; gap: var(--novel-sp-1); flex: none; }
-/* 选中态是条上唯一的 brand：pill 本身仍跟条的字色（纸墨），选中的那一下才借品牌色 */
-.novel-rdr-ctl.novel-tts-on { color: var(--novel-brand); opacity: 1; }
-/* 浮窗边栏同一判据：设置弹层开着，齿轮才亮 brand——开关要有回显 */
+/* 听书选中态 / 设置开关的回显色跟纸走：直接用跟读字色（ReaderView 由 paperLiveInk 现算），
+   不再借固定 brand——条底已经跟纸，深纸上 brand 蓝的对比度不可靠。强制深色那一档才让回
+   宿主 brand（.novel-dark 把它重钉成亮色）。 */
+.novel-rdr-ctl.novel-tts-on { color: var(--novel-live-ink); opacity: 1; }
+.novel-rdr-bar.novel-dark .novel-rdr-ctl.novel-tts-on,
+.novel-tts-bar.novel-dark .novel-rdr-ctl.novel-tts-on { color: var(--novel-brand); }
+/* 浮窗边栏同一判据：设置弹层开着，设置钮才亮 brand——开关要有回显 */
 .novel-tts-mini-dock .novel-tts-ictl.novel-tts-on { color: var(--novel-brand); }
 /* ── 设置面板（浮在条上方；与 Aa 面板同族卡片，不自造第二套浮层几何）──────── */
 /* max-height 收两档：60vh（视口比例，阅读器条那份卡没有 dock 几何）与现量余量
@@ -226,7 +230,7 @@ export const TTS_CSS = `
 .novel-tts-mini-dock[data-flush='left'] .novel-tts-mini-panel {
   border-radius: 0 14px 14px 0; border-left: 0;
 }
-/* 顶行 28：身份钮（点收起 / 拖移动）+ 齿轮，两颗兄弟按钮，不嵌套（ADR-0079） */
+/* 顶行 28：身份钮（点收起 / 拖移动）+ 设置钮，两颗兄弟按钮，不嵌套（ADR-0079） */
 .novel-tts-mini-head {
   display: flex; align-items: center; gap: 8px; min-width: 0; height: 28px; flex: none;
 }
@@ -263,7 +267,7 @@ export const TTS_CSS = `
 }
 
 
-/* 图标钮与手柄：边栏里是 32×32（顶行齿轮 sm 28）；运输行五件 ≥32、播放环 44 的命中档
+/* 图标钮与手柄：边栏里是 32×32（顶行设置钮 sm 28）；运输行五件 ≥32、播放环 44 的命中档
    归 ADR-0079，样式层不再自造一条「20px 下限」的抄本。 */
 .novel-tts-ictl {
   display: inline-flex; align-items: center; justify-content: center; flex: none;

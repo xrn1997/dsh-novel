@@ -401,7 +401,7 @@ describe('迷你条是浮窗：两个完整形态、可拖、可收起', () => {
     return bar
   }
 
-  it('展开态：顶行身份钮与齿轮是兄弟按钮，不嵌套；无手柄', async () => {
+  it('展开态：顶行身份钮与设置钮是兄弟按钮，不嵌套；无手柄', async () => {
     await renderExpanded()
     const collapse = screen.getByRole('button', { name: /收起迷你条/ })
     const gear = screen.getByRole('button', { name: '听书设置' })
@@ -414,7 +414,7 @@ describe('迷你条是浮窗：两个完整形态、可拖、可收起', () => {
     expect(collapse.getAttribute('aria-label')).toContain('第 2 章')
   })
 
-  it('齿轮不是拖面：从它起手拖动不改中心', async () => {
+  it('设置钮不是拖面：从它起手拖动不改中心', async () => {
     await renderExpanded()
     const gear = screen.getByRole('button', { name: '听书设置' })
     fireEvent.pointerDown(gear, { pointerId: 1, clientX: 900, clientY: 400 })
@@ -583,7 +583,7 @@ describe('迷你条是浮窗：两个完整形态、可拖、可收起', () => {
     expect(routeStore.get().route.name).toBe('reader')
   })
 
-  it('拖动在浮窗外松手后，下一次点齿轮不被旧拖动吞掉', async () => {
+  it('拖动在浮窗外松手后，下一次点设置钮不被旧拖动吞掉', async () => {
     await renderExpanded()
     const body = must(document.querySelector('.novel-tts-mini-body'), '正文区')
     fireEvent.pointerDown(body, { pointerId: 1, clientX: 900, clientY: 700 })
@@ -1054,7 +1054,7 @@ describe('两态浮窗：收起胶囊 / 展开边栏（ADR-0073）', () => {
     expect(screen.queryByRole('dialog', { name: '听书设置' })).toBeNull()
     expect(ttsPlayer.get().timerChoice, '关闭设置卡不该取消定时').toBe(30)
     expect(gear.getAttribute('aria-expanded')).toBe('false')
-    // Esc 与关后还焦照旧：再开一次，Esc 只收卡片，焦点回到触发它的齿轮
+    // Esc 与关后还焦照旧：再开一次，Esc 只收卡片，焦点回到触发它的设置钮
     fireEvent.click(gear)
     expect(screen.queryByRole('dialog', { name: '听书设置' })).not.toBeNull()
     fireEvent.keyDown(document, { key: 'Escape' })

@@ -28,8 +28,8 @@ import { must, pick } from '../support/fixture.js'
  * mock 掉 `/novel-api` 与 `Audio`。钉四件事：
  * ① 听书条只有章内滑杆这一条进度：拖到任意段即起播，段粒度落盘；
  * ② 段进度 store 只认活槽（预载槽的 metadata 不投），直出型恒无计时；
- * ③ 跟读高亮按段号命中正文块（文字章与图文章同一条判据），**只标记不滚动**——高亮不写任何位置；
- * ④ 起播章选择与「定位到正在念的段」接得上，定位是显式动作、不自动跟随。
+ * ③ 跟读高亮按段号命中正文块（文字章与图文章同一条判据），高亮只标记、不写位置；视口跟随另测；
+ * ④ 起播章选择与「定位到正在念的段」接得上，定位重新接上跟随；自动跟随 / 让位有独立用例。
  */
 vi.mock('../../src/client/api.js', () => ({
   apiGet: vi.fn(),
@@ -487,7 +487,7 @@ describe('听书条与迷你条的进度面', () => {
   })
 })
 
-describe('跟读高亮：只标记不滚动（高亮不写位置）', () => {
+describe('跟读高亮：只标记不写位置', () => {
   it('文字章：高亮跟着段号走，换章后旧章不留高亮', async () => {
     const deps = readerDeps()
     const { container } = renderReader(deps)
@@ -605,7 +605,7 @@ describe('跟读高亮：只标记不滚动（高亮不写位置）', () => {
     expect(live).toMatch(/position:\s*relative/)
   })
 
-  it('「定位到正在念的段」是显式动作：不点不滚，点了把滚动容器移到目标段', async () => {
+  it('「定位到正在念的段」是显式动作：目标在可视带内不滚，点了把滚动容器移到目标段', async () => {
     // jsdom 没有布局：造一个真的滚动容器（可滚样式 + 量出来的可视高 / 内容高），
     // 阅读器的 findScrollport 才会认它；否则 port 是 null，按钮按了也只是空转。
     const scrollport = document.createElement('div')
@@ -624,7 +624,7 @@ describe('跟读高亮：只标记不滚动（高亮不写位置）', () => {
       await startListening({ sourceId: 's1', bookKey: 'k1', title: '书一', chapterIndex: 0, paragraphIndex: 1 })
     })
 
-    // 「不点不滚」：高亮在场不等于视野会自己跟过去（ADR-0071 的只标记不滚动）。
+    // 目标在可视带内：跟随不制造无谓滚动（不点不滚）。
     expect(scrollport.scrollTop).toBe(0)
 
     // 目标章已在已载窗口内：按钮只滚阅读滚动容器自己，把正在念的那一段居中。
@@ -638,7 +638,51 @@ describe('跟读高亮：只标记不滚动（高亮不写位置）', () => {
     expect(scrollport.scrollTop).toBe(210)
 
     // jsdom 的程序化 scrollTop 写入不派发 scroll 事件，所以这里量不到随后的进度落盘。
-    // 与 ADR-0071 一致：定位是用户主动导航，落进度是它自己的语义——那份证据由 tts-bar 的
+    // 与 ADR-0091 一致：定位是用户主动导航，落进度是它自己的语义——那份证据由 tts-bar 的
     // 未载章用例（requestJump 当场写 progress）承担；本文件不断言「定位不写进度」。
+  })
+
+  it('跟读自动跟随：段离开可视带时滚过去；手动滚动 / 导航让位；定位重新接上', async () => {
+    const scrollport = document.createElement('div')
+    scrollport.style.overflowY = 'auto'
+    Object.defineProperty(scrollport, 'clientHeight', { value: 600, configurable: true })
+    Object.defineProperty(scrollport, 'scrollHeight', { value: 4000, configurable: true })
+    document.body.append(scrollport)
+    vi.spyOn(scrollport, 'getBoundingClientRect').mockReturnValue(rect(0, 600))
+
+    const deps = readerDeps()
+    const { container } = render(
+      createElement(ReaderView, { sourceId: 's1', bookKey: 'k1', title: '书一', deps }),
+      { container: scrollport },
+    )
+    await waitFor(() => expect(container.querySelector('[data-chapter="0"]')).not.toBeNull())
+    const p = (idx: number): HTMLElement =>
+      must(container.querySelector<HTMLElement>(`[data-chapter="0"] [data-pidx="${idx}"]`), `paragraph ${idx}`)
+    // 目标在看得见的正文带内：跟随一次都不滚。没有这条 stub 时 jsdom 的零几何会让断言白过。
+    const p0 = vi.spyOn(p(0), 'getBoundingClientRect').mockReturnValue(rect(100, 20))
+    vi.spyOn(p(1), 'getBoundingClientRect').mockReturnValue(rect(700, 20))
+    vi.spyOn(p(2), 'getBoundingClientRect').mockReturnValue(rect(900, 20))
+
+    await act(async () => {
+      await startListening({ sourceId: 's1', bookKey: 'k1', title: '书一', chapterIndex: 0, paragraphIndex: 0 })
+    })
+    expect(scrollport.scrollTop, '起始段已在带内：跟随不制造滚动').toBe(0)
+    // 段推进到视口下方：跟随把它居中（700 + 10 − 300）。
+    await act(async () => { seekParagraph(1) })
+    await waitFor(() => expect(scrollport.scrollTop).toBe(410))
+
+    // 读者在正文上滚动 = 接管视口：后续段推进不再拽回去。
+    fireEvent.wheel(p(1), { deltaY: 120 })
+    await act(async () => { seekParagraph(2) })
+    expect(scrollport.scrollTop, '手动滚动后跟读让位').toBe(410)
+
+    // 定位按钮重新接上跟随，并把这颗段居中（900 + 10 − 300；从 410 上再滚 610）。
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '定位到正在念的段' })) })
+    expect(scrollport.scrollTop).toBe(1020)
+
+    // 再推进一段：跟随已恢复，继续滚（1200 + 10 − 300；从 1020 上再滚 910）。
+    p0.mockReturnValue(rect(1200, 20))
+    await act(async () => { seekParagraph(0) })
+    await waitFor(() => expect(scrollport.scrollTop).toBe(1930))
   })
 })

@@ -80,6 +80,13 @@ export class ReaderScene {
       { note: { target, entry, seq: this.noteSeq } })
   }
 
+  /** 这次收场会不会真的返回引用处：视图据此决定跟读要不要让位。
+   *  面板打开后又点了工具栏返回时，栈顶已不是它，关闭只收浮层、不导航。 */
+  willReturnOnClose(): boolean {
+    const { note } = this.state
+    return note !== null && this.deps.session.returnTopIs(note.entry)
+  }
+
   /** 收场（Esc 与面板「关闭」钮同一条路）：内链打开的回到引用处——位置提交与返回栈都归会话 */
   close(): void {
     const { note } = this.state

@@ -20,8 +20,7 @@ export const READER_CSS = `
 .novel-rdr-bar {
   display: flex; gap: var(--novel-sp-2); align-items: center; min-height: 40px;
   padding: var(--novel-sp-1) var(--novel-sp-4);
-  background: var(--novel-bar-bg);
-  border-bottom: 1px solid var(--novel-bar-line);
+  border-bottom: 1px solid color-mix(in srgb, var(--novel-paper-ink) 12%, transparent);
   color: var(--novel-paper-ink);
 }
 /* 「控制器层跟随深色」在条上仍是完整的一档：勾上即整条让回宿主暗底，纸色派生那一套整体作废。
@@ -54,7 +53,8 @@ export const READER_CSS = `
 .novel-rdr-ctl:hover { background: color-mix(in srgb, currentColor 10%, transparent); opacity: 1; }
 .novel-rdr-ctl svg { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 /* 章进度：墨色凹槽（底槽 + 实心），不是压在纸上的第三条外来横带。brand 蓝在控制器层只留给
-   选中态（Aa 面板的 .on），条下沿这一道归纸。跨章才变——低频量，故不进每帧读数的滚动路径。
+   Aa 面板的 .on；听书 pill 的选中态改用随纸现算的跟读字色（见 tts 块）——条底跟纸，
+   选中色也得跟纸。条下沿这一道归纸。跨章才变——低频量，故不进每帧读数的滚动路径。
    实心走 ::after：轨道本体留着承载行内写入的 --novel-pct（浏览器台按它读「读到第几章」）。 */
 .novel-rdr-trail {
   position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
@@ -259,14 +259,14 @@ export const READER_CSS = `
 .novel-import-acts { display: flex; justify-content: flex-end; gap: var(--novel-sp-3); }
 /* ── 跟读高亮（正在被念的那一段）───────────────────────────────────────── */
 /* 换字色 + 段首一枚小三角（ADR-0076）。不铺底色、不画段内进度线：跟读的粒度是段，段内没有
-   逐字时间戳，画进度就是假精度（ADR-0071 的被否方案）；这两种标记都不给假读数。
+   逐字时间戳，画进度就是假精度（ADR-0076 的边界）；这两种标记都不给假读数。
    为什么光换色不够：纯字色的可辨度只有色彩差一条腿——白纸上暖赭只是「稍暗一点的棕」，
    深纸上正文浅灰白配更亮的赭也只像淡了一档；对比度门量的是「读得清」，量不出「认得出」。
    字形标记不靠色彩差说话，任何纸色下都一眼读得出「就是这一行」。
    颜色与纸墨同源（--novel-live-ink），三角走 currentColor 跟着换色一起走。
    几何：::before 绝对定位浮在段框外沿（left: -1em），命中块自己设 position: relative——
    相对定位不改流式几何（盒的位置尺寸都不变），高亮进出仍不动布局、不触发滚动补偿、
-   阅读位置不漂（ADR-0071）；自动跟随本身仍不做。窄栏时三角落进正文列内边距（sp-5 ≈ 1em）；
+   阅读位置不漂；自动跟随归视图（ADR-0091），高亮本身仍不改布局。窄栏时三角落进正文列内边距（sp-5 ≈ 1em）；
    正文 p 有 text-indent: 2em，段首两格本就没有内容起点，压不到字。 */
 .novel-tts-live { position: relative; color: var(--novel-live-ink); }
 .novel-tts-live::before {

@@ -94,14 +94,23 @@ describe('token 层自足守卫（引用未定义的本层 token 即红）', () 
     expect(bad, `引用了本层不存在的 token（background 等简写会整条落 unset，即静默无底）：\n${bad.join('\n')}`).toEqual([])
   })
 
-  it('条底 / 条描边派生钉在条自己身上：钉在根上就跟不上行内纸色（var() 在声明处求值）', () => {
-    const root = /\.novel-root\s*,\s*\[data-novel-scope\]\s*\{([^}]*)\}/.exec(strip(NOVEL_CSS))
-    const rootBody = must(root?.[1] ?? '', 'token 根规则体')
-    expect(rootBody, '条底派生不能钉在根上（根上的 --novel-paper 是缺省米黄，会替整棵子树把纸色算死）')
-      .not.toContain('--novel-bar-bg')
+  it('条底直接由行内纸色派生：不收进自定义属性（纸色变了条底要跟着变）', () => {
     for (const sel of ['.novel-rdr-bar', '.novel-tts-bar']) {
-      expect(ruleBody(sel), `${sel} 自己要有 --novel-bar-bg：声明与消费同元素，求值点才跟着纸走`).toContain('--novel-bar-bg')
-      expect(ruleBody(sel), `${sel} 自己要有 --novel-bar-line`).toContain('--novel-bar-line')
+      expect(ruleBody(sel), `${sel} 的条底要直写 color-mix`)
+        .toMatch(/background:\s*color-mix\(in srgb,\s*var\(--novel-paper-ink\)\s*6%,\s*var\(--novel-paper\)\)/)
+    }
+    expect(NOVEL_CSS, '条底派生不得经过自定义属性缓存').not.toMatch(/--novel-bar-(bg|line)\s*:/)
+  })
+
+  it('听书选中态跟纸色：读跟读字色，强制深色才让回宿主 brand', () => {
+    expect(ruleBody('.novel-rdr-ctl.novel-tts-on'), '听书 pill 的选中态要读随纸现算的跟读字色')
+      .toMatch(/color:\s*var\(--novel-live-ink\)/)
+    for (const sel of [
+      '.novel-rdr-bar.novel-dark .novel-rdr-ctl.novel-tts-on',
+      '.novel-tts-bar.novel-dark .novel-rdr-ctl.novel-tts-on',
+    ]) {
+      expect(ruleBody(sel), `${sel} 在强制深色时回退宿主 brand`)
+        .toMatch(/color:\s*var\(--novel-brand\)/)
     }
   })
 

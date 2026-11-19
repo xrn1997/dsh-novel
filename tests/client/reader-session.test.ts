@@ -547,6 +547,27 @@ describe('ReaderSession 预取与目录直达', () => {
     expect(h.fetched).toEqual([2])     // 落位在第 1 章后，预取目标是第 2 章
   })
 
+  it('cancelJump：清在途目标并按当前视口重记位置（接管不让未渲染章留档）', async () => {
+    const h = makeSession({ debounceMs: 5000 })
+    await h.session.open('src', 'https://s.com/book/1')
+    h.port.anchors = [{ index: 0, start: 0, height: 3000 }]
+    h.port.top = 0
+    h.fetched.length = 0
+    h.session.requestJump(2)
+    expect(h.session.pendingJump).toMatchObject({ index: 2 })
+    expect(h.saves, '跳章选中即落盘').toEqual([[2, 0]])
+
+    h.session.cancelJump()
+    expect(h.session.pendingJump).toBeNull()
+    expect(h.saves, '接管后位置回到当前视口，不留在没渲染过的章').toEqual([[2, 0], [0, 0]])
+
+    await new Promise((r) => setTimeout(r, 0))     // 目标章仍会到货
+    expect(h.fetched).toEqual([2])
+    h.port.chapterOff = 300
+    h.session.afterRender()
+    expect(h.port.top, '取消后不再落位').toBe(0)
+  })
+
   it('目录直达：未载先拉；渲染落地后定位并清 pendingJump', async () => {
     const h = makeSession()
     await h.session.open('src', 'https://s.com/book/1')

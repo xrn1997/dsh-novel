@@ -197,8 +197,8 @@ const NO_PARAGRAPH_IDS: ReadonlyMap<string, number> = new Map()
  * 两种形态的段号都与播放层 `splitParagraphs(chapterContentToText(content))` 同一口径。
  * 选区与「从本段听」浮钮**不在本组件**：它们属于阅读器一份（`views/listen-from-selection.ts`），
  * 本组件只往 DOM 上写段号与章身份，连续滚动下不再每章各挂一套 document 监听。
- * `listenParagraph` 给定时（本书本章正在听）把命中的正文块标成跟读高亮：只标记、不滚动——
- * 自动跟随滚动会经阅读会话的滚动防抖改写阅读进度，与播放层自己的落盘节拍互相覆盖（`ADR-0071`）。
+ * `listenParagraph` 给定时（本书本章正在听）把命中的正文块标成跟读高亮：只标记、不写位置；
+ * 视口跟随归阅读器（`ADR-0091`），高亮本身不滚也不改布局。
  */
 export function ChapterBody({ content, bookKey, onNavigate, paragraphBase = 0, listenParagraph = null }: {
   content: ChapterContent

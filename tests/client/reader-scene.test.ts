@@ -19,6 +19,7 @@ interface Harness {
     onShelf: 'on' | 'off' | 'unknown'
     followLink: ReturnType<typeof vi.fn>
     closeSupplement: ReturnType<typeof vi.fn>
+    returnTopIs: ReturnType<typeof vi.fn>
     requestJump: ReturnType<typeof vi.fn>
   }
   navigate: ReturnType<typeof vi.fn>
@@ -35,6 +36,7 @@ function makeScene(over: {
     onShelf: over.onShelf ?? 'off',
     followLink: vi.fn(() => entry),
     closeSupplement: vi.fn(),
+    returnTopIs: vi.fn((candidate: VisibleNode | null) => candidate === entry),
     requestJump: vi.fn(),
   }
   const navigate = vi.fn()
@@ -61,6 +63,16 @@ describe('ReaderScene', () => {
     expect(session.closeSupplement).toHaveBeenCalledWith(entry)
     expect(scene.state.surface).toBeNull()
     expect(scene.state.note).toBeNull()
+  })
+
+  it('willReturnOnClose：只有栈顶仍是打开面板时那条，关闭才真的返回', () => {
+    const { scene, session } = makeScene()
+    expect(scene.willReturnOnClose(), '没有注释面板：关闭不导航').toBe(false)
+    scene.openNote(target, entry)
+    expect(scene.willReturnOnClose()).toBe(true)
+    // 面板开着时用户先点了工具栏返回：栈顶已换成更早那条，关闭只收浮层。
+    session.returnTopIs.mockReturnValue(false)
+    expect(scene.willReturnOnClose()).toBe(false)
   })
 
   it('开面板是一笔写入：订阅者读不到「面已开场、载荷还是上一条」的中间态', () => {

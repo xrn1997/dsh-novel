@@ -98,19 +98,23 @@ export interface TimerReadout {
   counting: boolean
 }
 
+/** 定时档位的显示名：设置卡 chip、条上 aria-label 与 `timerReadout` 共用一份映射。
+ *  与倒计时读数分家——档位是「用户选了什么」，倒计时是「还剩多久」。 */
+export function timerChoiceLabel(choice: number | 'chapter' | null, t: Translate): string {
+  if (choice === null) return t('tts.timer.off')
+  if (choice === 'chapter') return t('tts.timer.chapter')
+  return t('tts.timer.minutes', { n: choice })
+}
+
 /** 定时读数：档位与倒计时同一份答案，两个表面（听书条 / 迷你条）共用。
  *  `now` 由调用方注入——本模块不读墙钟，倒计时的每秒节拍是各表面自己的呈现驱动。 */
 export function timerReadout(st: ListenReadoutState, t: Translate, now: number): TimerReadout {
   // 计时门：只有分钟档且落了到点时刻才走表。本章档没有到点时刻（它由章末事件收口），
   // 摆倒计时会造出一个不存在的剩余时间。
   const counting = st.timerChoice !== null && st.timerChoice !== 'chapter' && st.timerEndAt !== null
-  const label = st.timerChoice === null
-    ? t('tts.timer')
-    : st.timerChoice === 'chapter'
-      ? t('tts.timer.chapter')
-      : counting && st.timerEndAt !== null
-        ? formatClock(Math.max(0, (st.timerEndAt - now) / 1000))
-        : t('tts.timer.minutes', { n: st.timerChoice })
+  const label = counting && st.timerEndAt !== null
+    ? formatClock(Math.max(0, (st.timerEndAt - now) / 1000))
+    : st.timerChoice === null ? t('tts.timer') : timerChoiceLabel(st.timerChoice, t)
   return { label, counting }
 }
 

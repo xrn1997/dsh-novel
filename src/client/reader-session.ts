@@ -572,6 +572,19 @@ export class ReaderSession {
     this.jumpTo({ index, anchorId, offsetWithinNode: 0 })
   }
 
+  /** 撤销在途跳章（读者接管视口）：清 pending，并把消费位置按当前视口重记。
+   *  `requestJump` 是「选中即落盘」，已经按目标章写过一笔；不重记就会把读者留在一条
+   *  他没看见的章上。恢复落位前视口读数不可信，只清目标，位置交给恢复路径。 */
+  cancelJump(): void {
+    if (this.pendingJumpNow === null) return
+    this.pendingJumpNow = null
+    if (this.restoring) return
+    this.recalcAnchors()
+    if (this.anchorsNow.length === 0) return
+    const at = locateChapter(this.anchorsNow, this.contentTop())
+    this.commit('cross', at.chapterIndex, at.offsetRatio)
+  }
+
   /** 正文内链（链接节点）跳转：**先采返回位置，再导航**。
    *  - `backlink` 本身**就是**返回动作（「回正文」链接），消费掉栈里那条而不是再压一条——
    *    否则返回动作自己把返回栈撑长；
@@ -605,13 +618,18 @@ export class ReaderSession {
     this.jumpTo({ index: entry.index, anchorId: entry.nodeId, offsetWithinNode: entry.offsetWithinNode })
   }
 
+  /** 返回栈顶是否仍是这条：关闭补充文档前用它判断这次关闭会不会真的返回引用处
+   *  （视图据此决定要不要让跟读让位；不会导航的关闭不该顺手取消在途跳章）。 */
+  returnTopIs(entry: VisibleNode | null): boolean {
+    return entry !== null && this.returnStack[this.returnStack.length - 1] === entry
+  }
+
   /** 关闭补充文档面板：**只消费「开面板时压入的那一条」**——`entry` 就是 `followLink` 交给阅读场景的那个句柄。
    *  栈顶已不是它，说明期间用户又跟了别的链接（或自己按过工具栏返回）：那条记的是**别人的原处**，
    *  此时弹栈会把主序列送回用户没点过的地方，还会经 `commit('jump')` 写进存档。
    *  目录直接打开的补充文档（阅读场景没有句柄）→ 什么都不做，只关面板。 */
   closeSupplement(entry: VisibleNode | null): void {
-    if (entry === null) return
-    if (this.returnStack[this.returnStack.length - 1] !== entry) return
+    if (!this.returnTopIs(entry)) return
     this.goBack()
   }
 

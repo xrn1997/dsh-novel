@@ -9,13 +9,13 @@ import { useTimerReadout } from './use-timer-readout.js'
 import { pushError } from '../transient.js'
 import { skipParagraph, stopListening, ttsPlayer } from './player.js'
 import { ttsErrorMessage } from './tts-error.js'
-import { TtsSettingsNote, TtsSettingsPanel, TtsSettingsRows } from './TtsSettings.js'
+import { SETTINGS_ICON, TtsSettingsNote, TtsSettingsPanel, TtsSettingsRows } from './TtsSettings.js'
 
 /**
- * 展开形态：顶行身份钮 + 齿轮 / 正文区 / 运输行 / 底行读数（`ADR-0079` / `ADR-0080`）。
+ * 展开形态：顶行身份钮 + 设置钮 / 正文区 / 运输行 / 底行读数（`ADR-0079` / `ADR-0080`）。
  *
  * 身份钮同时是**移动拖面**与**收起钮**：位移 ≥ 8px 算拖动，否则算点击；正文区也是拖面但点击无动作
- * （避免误收起）。齿轮、正文里的「看全文」、章内进度条都是真控件，从它们起手不拖也不 resize。
+ * （避免误收起）。设置钮、正文里的「看全文」、章内进度条都是真控件，从它们起手不拖也不 resize。
  * 高度由现场值槽给（`--novel-tts-panel-h`），正文区吃掉剩余高度、装不下的那一截挂「看全文 →」；
  * 浮窗仍不滚动、不翻页（`ADR-0079` 的边界）。
  */
@@ -108,7 +108,7 @@ export function TtsMiniPanel({
           aria-expanded={settingsOpen}
           onClick={onToggleSettings}
         >
-          {MINI_ICON.gear}
+          {SETTINGS_ICON}
         </button>
       </div>
       <div

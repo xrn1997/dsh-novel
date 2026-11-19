@@ -10,7 +10,7 @@ import {
 import { pushError } from '../transient.js'
 import { useDialogContract } from '../views/dialog.js'
 import { sourceLabel, engineLabelOf } from './engine-rows.js'
-import { listenFaceOf, rateLabel } from './listen-readout.js'
+import { listenFaceOf, rateLabel, timerChoiceLabel } from './listen-readout.js'
 import { ttsErrorMessage } from './tts-error.js'
 import {
   directVoicesStore, jumpToChapter, setListenEngine, setListenRate, setListenTimer, setListenVoice,
@@ -28,6 +28,29 @@ export const RATE = TTS_RATE
 export const TIMER_MINUTES = [15, 30, 60] as const
 
 export type TimerChoice = (typeof TIMER_MINUTES)[number] | 'chapter' | null
+
+/** 条上步进与设置卡 chip 共用的档位顺序：关闭 → 15 → 30 → 60 → 本章结束。
+ *  两端相接，条上单击就是沿这一圈前进一档；设置卡里仍是直选。 */
+export const TIMER_SEQUENCE = [null, ...TIMER_MINUTES, 'chapter'] as const
+
+/** 定时档位单击循环：关闭 → 15 → 30 → 60 → 本章结束 → 关闭。档位只有这几格，
+ *  单钮循环让条上只留一颗钮；非预设分钟数先落到下一个更大的档，没有就落到本章结束。 */
+export function nextTimerChoice(choice: number | 'chapter' | null): TimerChoice {
+  const at = TIMER_SEQUENCE.findIndex((step) => step === choice)
+  if (at >= 0) return TIMER_SEQUENCE[(at + 1) % TIMER_SEQUENCE.length] ?? null
+  if (typeof choice !== 'number') return null
+  return TIMER_MINUTES.find((minutes) => minutes > choice) ?? 'chapter'
+}
+
+/** 设置入口的图示（阅读器条与浮窗共用）：两根滑杆加短竖杆钮——全图四根直线、零填实，
+ *  与播放 / 停止同一套线性语言。隐喻取「参数可调」而不取齿轮：圆心加放射线那版在 13–14px
+ *  下会被读成太阳 / 亮度，轮廓齿那版同尺寸下齿谷只剩约 1px、糊成一团；三根带实心圆钮的
+ *  滑杆又嫌吵，减到两根杆钮是这个尺寸下最干净、还说得清「可调」的形状。 */
+export const SETTINGS_ICON = (
+  <svg aria-hidden="true" viewBox="0 0 16 16">
+    <path d="M2.5 5.5h11M2.5 10.5h11M9 3.8v3.4M6 8.8v3.4" />
+  </svg>
+)
 
 /** 设置卡片：非模态（没有遮罩），但键盘与焦点走 `useDialogContract` 的同一份契约——
  *  Esc 关闭、入场焦点落第一颗控件、Tab 圈在卡片内、关闭后还焦到触发它的那颗钮。
@@ -158,21 +181,13 @@ export function TtsSettingsRows({ sources, surface }: {
       <div className="novel-tts-row">
         <span className="novel-tts-label">{t('tts.timer')}</span>
         <div className="novel-chips">
-          <button type="button" className={timerChoice === null ? 'novel-chip on' : 'novel-chip'}
-            aria-pressed={timerChoice === null} onClick={() => { setTimer(null) }}>
-            {t('tts.timer.off')}
-          </button>
-          {TIMER_MINUTES.map((minutes) => (
-            <button key={minutes} type="button"
-              className={timerChoice === minutes ? 'novel-chip on' : 'novel-chip'}
-              aria-pressed={timerChoice === minutes} onClick={() => { setTimer(minutes) }}>
-              {t('tts.timer.minutes', { n: minutes })}
+          {TIMER_SEQUENCE.map((choice) => (
+            <button key={choice === null ? 'off' : choice} type="button"
+              className={timerChoice === choice ? 'novel-chip on' : 'novel-chip'}
+              aria-pressed={timerChoice === choice} onClick={() => { setTimer(choice) }}>
+              {timerChoiceLabel(choice, t)}
             </button>
           ))}
-          <button type="button" className={timerChoice === 'chapter' ? 'novel-chip on' : 'novel-chip'}
-            aria-pressed={timerChoice === 'chapter'} onClick={() => { setTimer('chapter') }}>
-            {t('tts.timer.chapter')}
-          </button>
         </div>
       </div>
       <div className="novel-tts-row">

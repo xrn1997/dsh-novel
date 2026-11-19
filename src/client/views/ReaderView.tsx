@@ -23,7 +23,7 @@ import { enterReader } from '../tts/reader-presence.js'
 import { TtsBar } from '../tts/TtsBar.js'
 import { isPlayBusy } from '../tts/listen-readout.js'
 import { ttsErrorMessage } from '../tts/tts-error.js'
-import { paperInk, paperLiveInk, centerInScroller, stripLeadingTitle } from '../util.js'
+import { paperInk, paperLiveInk, centerInScroller, revealInScroller, stripLeadingTitle } from '../util.js'
 import { ErrorBanner, WarningList } from './bits.js'
 import { ChapterBody } from './ChapterBody.js'
 import { useListenFromSelection } from './listen-from-selection.js'
@@ -323,6 +323,23 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   const relocationRef = useRef<{ sourceId: string; bookKey: string; target: ReaderRestoreTarget | null } | null>(null)
   /** 「定位到正在念的段」在目标章还没载入时留下的落点：章一到货就居中，别停在章首。 */
   const pendingLocateRef = useRef<{ chapterIndex: number } | null>(null)
+  /** 跟读自动跟随是否还听播放的：用户手动滚动 / 目录 / 内链导航即让位；定位按钮重新接上。 */
+  const followRef = useRef(true)
+  /** 自动跟随已经为哪一章发过跳章：章未载时每个段都会走到同一分支，不能每段重发；
+   *  章到货 / 接管 / 重新定位时清掉，让下一次真的需要时还能再发。 */
+  const followJumpRef = useRef<number | null>(null)
+  /** `session` 在下面才建；接管动作要先于它挂到绑定上，所以取消在途跳章经这只 ref 转交。 */
+  const cancelPendingJumpRef = useRef<() => void>(() => {})
+  /** 听书条根：跟随的可视底界要扣掉它的高度（条贴视口底，目标段不许藏在它下面）。 */
+  const ttsBarRef = useRef<HTMLDivElement | null>(null)
+  /** 用户把视口带走：跟随即让位，挂起的自动定位与在途自动跳章一并作废
+   *  （最后一次显式动作是用户这一下）。 */
+  const takeOverReading = useCallback((): void => {
+    followRef.current = false
+    followJumpRef.current = null
+    pendingLocateRef.current = null
+    cancelPendingJumpRef.current()
+  }, [])
   /** 顶条（sticky）：它的高度就是滚动视口顶的固定遮挡。阅读位置（恢复 / 跳转 / 读数 / 探针）
    *  一律按「条下方第一行」算——按裸 scrollTop 算，听书恢复的段首会正好藏在条后。 */
   const barRef = useRef<HTMLDivElement | null>(null)
@@ -337,7 +354,9 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
       chapters: () => chapterRefs.current,
     },
     topInset,
-  }), [topInset])
+    // 正文上的滚轮 / 触摸 / 滚动键 / 滚动条拖动 = 读者接管视口；程序跟随的 scrollTop 不经过这里
+    onUserIntent: takeOverReading,
+  }), [topInset, takeOverReading])
 
   /** 会话依赖束：网络 + 帧调度（rAF 双帧 = 等布局落定再测量；视口喂入的合帧状态机住会话，
    *  帧调度与滚动容器重取经 `viewport` 注入）；网络走注入 deps。
@@ -368,6 +387,12 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     // bookKey 必须留在这格：saveProgress 与 saveTotalChapters 两枚闭包捕的就是它，摘掉会让进度
     // 一路写给第一本书的地址。sourceId 与 title 不在本工厂里被读——换源走下面那条 open() 的 effect。
   }, binding.port, deps.saveDebounceMs, t), [binding, deps, bookKey, t, topInset])
+
+  // 接管动作挂在绑定上，早于会话构造；这里把取消在途跳章接到当前会话上。
+  useEffect(() => {
+    cancelPendingJumpRef.current = () => { session.cancelJump() }
+    return () => { cancelPendingJumpRef.current = () => {} }
+  }, [session])
 
   // 第三参 = getServerSnapshot：renderToString（smoke/SSR）必需，缺了直接抛
   const st = useSyncExternalStore(session.subscribe, () => session.state, () => session.state)
@@ -404,24 +429,45 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     }
     startListeningAt(at?.chapterIndex ?? currentChapter, at?.paragraphIndex ?? 0)
   }
-  /** 「定位到正在念的段」：显式的一次滚动（用户按了才滚），只滚阅读滚动容器自己。
-   *  跟读高亮本身不滚动——自动跟随会经会话的滚动防抖改写阅读进度（`ADR-0071`）；
-   *  这一颗钮是用户主动导航，与点目录同性质，落进度是它自己的语义。 */
-  const locateListen = useCallback((): void => {
+  /** 听书条贴视口底：跟随时正文的可见底界要扣掉它，目标段不能藏在条后面。 */
+  const followBottomInset = useCallback((): number =>
+    ttsBarRef.current?.getBoundingClientRect().height ?? 0, [])
+  /** 把视口带到听书所在段：`force` = 用户按了定位（居中）；否则是播放推进后的自动跟随
+   *  （只在目标离开看得见的正文带时补一次）。目标章不在已载窗口时先挂起定位并显式跳章——
+   *  章到货后的居中由拍点后回调消费（与旧定位路径同一份）。 */
+  const scrollToListening = useCallback((force: boolean): void => {
     const live = ttsPlayer.get()
     if (!live.active || live.bookKey !== bookKey) return
     const block = chapterRefs.current[live.chapterIndex]
-    // 该章不在已载窗口（听书跑得比阅读器快是常态）：显式导航到那一章。与点目录同性质，
-    // 落进度是这次用户导航自己的语义；章到货后的居中由渲染后拍点消费这次延迟定位。
     if (block === null || block === undefined) {
       pendingLocateRef.current = { chapterIndex: live.chapterIndex }
+      // 同一章已经在途 / 已经发过：段推进每几秒一拍，不能每拍都重发一次导航（会重复落盘、
+      // 也会在加载失败时反复重试）。用户按定位是显式重试，先清掉“发过”的记录。
+      if (force) followJumpRef.current = null
+      if (session.pendingJump?.index === live.chapterIndex || followJumpRef.current === live.chapterIndex) return
+      if (session.state.toc === null) return
       session.requestJump(live.chapterIndex, null)
+      if (session.pendingJump?.index === live.chapterIndex) followJumpRef.current = live.chapterIndex
       return
     }
+    followJumpRef.current = null
     const port = binding.scrollport()
     if (port === null) return
-    centerInScroller(port, listenParagraphElement(block, live.paragraphIndex) ?? block)
-  }, [binding, bookKey, session])
+    const target = listenParagraphElement(block, live.paragraphIndex) ?? block
+    if (force) centerInScroller(port, target)
+    else revealInScroller(port, target, topInset(), followBottomInset())
+  }, [binding, bookKey, session, topInset, followBottomInset])
+  /** 「定位到正在念的段」：用户按了才滚，并重新接上自动跟随；只滚阅读滚动容器自己。 */
+  const locateListen = useCallback((): void => {
+    followRef.current = true
+    followJumpRef.current = null
+    scrollToListening(true)
+  }, [scrollToListening])
+  /** 听书会话开始 / 结束 / 换书：跟随回到默认开启（上手即跟，用户滚动后才让位）。 */
+  useEffect(() => {
+    followRef.current = true
+    followJumpRef.current = null
+  }, [listenActive, bookKey])
 
   /** 阅读器子树在场信号：迷你条的可见性判据（挂载记一笔、卸载撤一笔）。不看路由——
    *  宿主切走面板时路由仍停在 `reader`，而面板子树已被卸载（`ADR-0022`），那正是迷你条
@@ -447,14 +493,25 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     },
     pushOk: deps.pushOk, t,
   }), [session, sourceId, bookKey, title, deps, t])
-  /** 正文内链回调：scene 稳定，回调身份不能每次渲染都换（ChapterShell 的 memo 依赖它）。 */
+  /** 正文内链回调：scene 稳定，回调身份不能每次渲染都换（ChapterShell 的 memo 依赖它）。
+   *  读者点了内链 = 自己接管视口，跟读让位到下次定位。 */
   const onBodyNavigate = useCallback((target: ReadingTarget, role: LinkRole): void => {
+    takeOverReading()
     scene.bodyLink(target, role)
-  }, [scene])
+  }, [scene, takeOverReading])
   // 第三参 = getServerSnapshot：renderToString（smoke/SSR）必需，缺了直接抛
   const sceneState = useSyncExternalStore(scene.subscribe, () => scene.state, () => scene.state)
   /** 收场（Esc 与面板「关闭」钮同一条路）：内链打开的回到引用处——位置提交与返回栈仍归会话 */
   const closeCurrent = (): void => { scene.close() }
+  /** 「关闭即回引用处」也是一次显式导航：只有这次关闭真的会返回时才让位；目录直接打开的
+   *  补充文档没有返回项，关闭只是收浮层，不该把跟随关掉（也不该取消在途跳章）。 */
+  const takeOverOnReturn = useCallback((): void => {
+    if (sceneState.surface === 'supplement' && scene.willReturnOnClose()) takeOverReading()
+  }, [scene, sceneState.surface, takeOverReading])
+  const closeSurface = useCallback((): void => { takeOverOnReturn(); scene.close() },
+    [scene, takeOverOnReturn])
+  const dismissSurface = useCallback((): void => { takeOverOnReturn(); scene.handleEsc() },
+    [scene, takeOverOnReturn])
   /** 持久导入说明（本地书专属）与它的面板现场：null = 还没问到 / 这本书没有这份东西。
    *  入口只在**真有告警**时出现（正常无警告不新增干扰），面板只展示已取到的清单。 */
   const [importNotes, setImportNotes] = useState<LocalImportWarning[] | null>(null)
@@ -469,10 +526,10 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   useEffect(() => {
     if (sceneState.escOwner !== 'surface') return
     const layer = claimKeyLayer()
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape' && layer.isTop()) scene.handleEsc() }
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape' && layer.isTop()) dismissSurface() }
     document.addEventListener('keydown', onKey)
     return () => { document.removeEventListener('keydown', onKey); layer.release() }
-  }, [scene, sceneState.escOwner])
+  }, [dismissSurface, sceneState.escOwner])
   /** 目录高亮取一次读数（一次 DOM 测量，不在滚动路径上）：只在抽屉开着时调。
    *  调用点有两处——抽屉/目录/跨章变化时直接调；**章块逐章到货**时由拍点后回调调（见下面的
    *  `afterBeat`）：它必须排在绑定测量与 `settleJump` 落位之后，否则量到的是落位前的几何。
@@ -546,6 +603,14 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     return () => { binding.unmount() }
   }, [binding, session])
 
+  /** 播放推进（段 / 章变化）时自动跟随。`followRef` 是读者接管的闸门；手动滚动后它保持 false，
+   *  直到定位按钮或下一次听书会话把跟随重新打开。effect 必须排在绑定挂载之后：首帧跟随时
+   *  端口已刷新（回到阅读器且会话已在播的那一路不会因为 port 还是 null 而漏掉第一次跟随）。 */
+  useEffect(() => {
+    if (!listenActive || !followRef.current) return
+    scrollToListening(false)
+  }, [listenActive, listenChapter, listenParagraphIndex, scrollToListening])
+
   /** 「定位到正在念的段」在目标章到货后的那一半：作为**拍点后回调**交给绑定——它在会话的
    *  `afterRender`（含 `settleJump` 落位）之后、同一次测量里跑。次序不靠两条 effect 的声明序：
    *  settleJump 会把视口拉回章块顶，先居中再落位等于白中。 */
@@ -558,10 +623,13 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
       pendingLocateRef.current = null
       return
     }
-    // 用户点完定位又自己去目录 / 内链跳了别的章：这次延迟定位已被更晚的导航取代，
-    // 目标章后到货也不许把视口从用户所在章抢走（ADR-0071：定位只服务最后一次显式动作）。
+    // 用户点完定位 / 自动跟随挂起后又自己去目录 / 内链跳了别的章：这次延迟定位已被更晚的
+    // 用户导航取代（rollover 时 pending 也已被 takeOverReading 清空），目标章后到货也不许
+    // 把视口从用户所在章抢走。跳章还在途时继续等落位；还没发出（目录未到等）就下一拍再试。
     if (session.state.currentChapter !== pending.chapterIndex) {
+      if (session.pendingJump?.index === pending.chapterIndex) return
       pendingLocateRef.current = null
+      scrollToListening(false)
       return
     }
     const block = chapterRefs.current[pending.chapterIndex]
@@ -624,7 +692,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
         {/* 正文内链的返回入口：**一次返回一条**（重复跟随链接才有多层）。栈在会话里、只活在窗口内；
             没押返回项时不渲染——不给一个点了没反应的按钮。位置在「书架」之后，左侧主次分明。 */}
         {returnDepth > 0 && (
-          <button className="novel-rdr-ctl" onClick={() => session.goBack()}
+          <button className="novel-rdr-ctl" onClick={() => { takeOverReading(); session.goBack() }}
             title={t('reader.backToOriginTitle')}>{t('reader.backToOrigin')}</button>
         )}
         <span className="novel-rdr-sep" aria-hidden="true" />
@@ -790,7 +858,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
                 activeId={navActive}
                 // 目录点击是纯导航：先收抽屉（开抽屉那一步已收掉面板，这里不该有注释载荷可消费），
                 // 再由场景分流目标
-                onNavigate={(target) => { scene.close(); scene.openTarget(target) }}
+                onNavigate={(target) => { takeOverReading(); scene.close(); scene.openTarget(target) }}
               />
             </div>
           </div>
@@ -806,8 +874,8 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
             target={sceneState.note.target}
             requestSeq={sceneState.note.seq}
             deps={deps}
-            onNavigate={(target, role) => { scene.panelLink(target, role) }}
-            onClose={closeCurrent}
+            onNavigate={(target, role) => { takeOverReading(); scene.panelLink(target, role) }}
+            onClose={closeSurface}
           />
         )}
       </div>
@@ -833,7 +901,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
           随「本书是否正在听」来去。 */}
       {listenActive && (
         <TtsBar darkController={prefs.darkController} apiGet={deps.apiGet} pushError={deps.pushError}
-          onLocate={locateListen} />
+          onLocate={locateListen} rootRef={ttsBarRef} />
       )}
     </div>
   )

@@ -11,14 +11,14 @@ Status: accepted
 ## 决定
 
 - **换字色 + 段首一枚小三角**：`--novel-live-ink` 那一条腿原样保留（跟着纸色现算的判据不动）；新增 `.novel-tts-live::before` 实心三角，`border-left: solid currentColor` 跟着命中段的字色走，不引入第二个色源。三角浮在段框外沿（`left: -1em`），落进正文列内边距（sp-5 = 16px ≈ 1em）；正文 `text-indent: 2em`，段首两格没有内容起点，压不到字。
-- **几何约束照旧成立**：命中块自身设 `position: relative`（相对定位不改流式几何——盒的位置与尺寸都不变），伪元素绝对定位不进流；高亮进出仍不动布局、不触发滚动补偿、阅读位置不漂（`ADR-0071` 的不滚动判据继续成立）。浏览器几何门逐段比对开/关高亮的矩形，钉住这一条。
+- **几何约束照旧成立**：命中块自身设 `position: relative`（相对定位不改流式几何——盒的位置与尺寸都不变），伪元素绝对定位不进流；高亮进出仍不动布局、不触发滚动补偿、阅读位置不漂。视口跟随归 `ADR-0091`，不改变高亮几何；浏览器几何门逐段比对开/关高亮的矩形，钉住这一条。
 - **注释面板不留半标记**：`.novel-notes` 里显式收掉这条 `::before`——那里永不出现命中块，但同族浮层 `overflow: hidden` 会把出沿的三角裁成半截，不留这种形状。
 
 ## 边界
 
 - 不翻「只换字色」的另外两条：底色与段内进度线仍然不做（底色把正文读成提示卡；段内没有逐字时间戳，画进度是假精度）。
 - 不碰 `paperLiveInk` 的算法与下限：换色这一腿的可量判据（对比度、色差、同侧不反色）原样保留，本篇只加第二条腿，不移第一根的尺子。
-- 三角只做「哪一段」的二值标记，不做方向动画、不做段内位置——粒度仍是段（`ADR-0071`）。
+- 三角只做「哪一段」的二值标记，不做方向动画、不做段内位置——粒度仍是播放单元。
 
 ## 被否方案
 
@@ -31,4 +31,4 @@ Status: accepted
 
 多一件要维护的呈现事实：三角的尺寸、锚定与「notes 场景收掉」都得有测试钉住（jsdom 钉 CSS 契约，几何门钉真渲染）。窄栏极限下（栏宽小于内边距时）三角可能压住首行缩进那一格——段首两格本无内容起点，观感代价接近零。
 
-锚点：`src/client/styles/reader.ts` 的 `.novel-tts-live` / `.novel-tts-live::before`；`src/client/views/ChapterBody.tsx` 的 `listenParagraph` / `liveLine` / `liveNode`；`src/client/util.ts` 的 `paperLiveInk`（判据不变）；`tests/client/tts-seek.test.tsx` 的「跟读标记 = 换字色 + 段首小三角」；`tests/browser/tts-layout.test.tsx` 的跟读高亮几何条；`docs/ui-spec.md` §3.6；`ADR-0071`。
+锚点：`src/client/styles/reader.ts` 的 `.novel-tts-live` / `.novel-tts-live::before`；`src/client/views/ChapterBody.tsx` 的 `listenParagraph` / `liveLine` / `liveNode`；`src/client/util.ts` 的 `paperLiveInk`（判据不变）；`tests/client/tts-seek.test.tsx` 的「跟读标记 = 换字色 + 段首小三角」；`tests/browser/tts-layout.test.tsx` 的跟读高亮几何条；`docs/ui-spec.md` §3.6；`ADR-0091`。

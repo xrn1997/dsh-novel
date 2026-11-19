@@ -2,13 +2,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { createElement } from 'react'
-import { ROUTES, planarNavigation } from '../../src/shared/wire.js'
+import { ROUTES, TTS_RATE, planarNavigation } from '../../src/shared/wire.js'
 import type {
   ChapterContent, ChapterEntry, RouteTarget, ShelfEntry, TtsSourceInfo, WriteMethod,
 } from '../../src/shared/wire.js'
 import { apiGet, apiSend } from '../../src/client/api.js'
 import { panelShelf, resetPanelShelf } from '../../src/client/panel-shelf.js'
-import { resetTtsPlayer, seekParagraph, setListenTimer, startListening, ttsPlayer } from '../../src/client/tts/player.js'
+import { resetTtsPlayer, seekParagraph, setListenRate, setListenTimer, startListening, ttsPlayer } from '../../src/client/tts/player.js'
+import { RATE_STEPS } from '../../src/client/tts/TtsBar.js'
 import { useDirectVoices } from '../../src/client/tts/TtsSettings.js'
 import { readingPositionAt, readingProbeNow, setReadingProbe } from '../../src/client/tts/reading-position.js'
 import { ReaderView } from '../../src/client/views/ReaderView.js'
@@ -380,7 +381,7 @@ describe('设置面板', () => {
     fireEvent.click(screen.getByRole('button', { name: '听书设置' }))
 
     // 档位只存在 ttsPlayer 里；组件本地态会在重挂时归零，chip 就说谎成「没定」。
-    // 查询收进面板内：条上的定时读数钮与面板里的档位 chip 同名，全局查会撞。
+    // 查询收进面板内：条上的定时读数与面板里的档位 chip 会给出同一段文字，全局查会撞。
     expect(ttsPlayer.get().timerChoice).toBe('chapter')
     const panel = screen.getByRole('dialog', { name: '听书设置' })
     const chapterChip = [...panel.querySelectorAll('button')].find((b) => b.textContent === '本章结束')
@@ -484,6 +485,69 @@ describe('设置面板', () => {
     synth.voices = [{ voiceURI: 'later', name: '更晚的嗓音' }]
     act(() => { synth.fireVoicesChanged() })
     expect(h.result.current, '已卸载的订阅不复活').toEqual([{ id: 'late', name: '迟到的嗓音' }])
+  })
+})
+
+describe('条上直接控制：语速 / 定时单击循环', () => {
+  async function openListeningBar(): Promise<void> {
+    singleChapter()
+    const { container } = renderReader(readerDeps())
+    await waitFor(() => expect(container.querySelector('[data-chapter="0"]')).not.toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: '听书' }))
+    await waitFor(() => expect(ttsPlayer.get().playing).toBe(true))
+  }
+
+  it('语速按钮单击循环：1x → 1.25x → 1.5x → 1.75x；越过 3x 回 0.5x；不弹设置卡', async () => {
+    await openListeningBar()
+    const rate = screen.getByTitle('语速')
+    expect(ttsPlayer.get().rate).toBe(1)
+
+    fireEvent.click(rate)
+    expect(ttsPlayer.get().rate).toBe(1.25)
+    fireEvent.click(rate)
+    expect(ttsPlayer.get().rate).toBe(1.5)
+    fireEvent.click(rate)
+    expect(ttsPlayer.get().rate).toBe(1.75)
+    expect(screen.queryByRole('dialog', { name: '听书设置' }), '语速循环不打开设置卡').toBeNull()
+
+    act(() => { setListenRate(3) })
+    fireEvent.click(rate)
+    expect(ttsPlayer.get().rate, '上限回卷到最低档').toBe(0.5)
+    act(() => { setListenRate(1.13) })
+    fireEvent.click(rate)
+    expect(ttsPlayer.get().rate, '非档位值落到下一个更大的档').toBe(1.25)
+  })
+
+  it('定时按钮单击循环：关闭 → 15 → 30 → 60 → 本章结束 → 关闭；不弹设置卡', async () => {
+    await openListeningBar()
+    const timer = screen.getByTitle('定时')
+    expect(timer.getAttribute('aria-label'), '未设定时报档位，不重复名词').toBe('定时 关闭，点击切换下一档')
+
+    fireEvent.click(timer)
+    expect(ttsPlayer.get().timerChoice).toBe(15)
+    expect(screen.getByTitle('定时').textContent).toMatch(/^\d+:\d{2}$/)
+    expect(timer.getAttribute('aria-label'), '计时中仍报预设档位，不把倒计时当选项').toBe('定时 15 分，点击切换下一档')
+    fireEvent.click(timer)
+    expect(ttsPlayer.get().timerChoice).toBe(30)
+    fireEvent.click(timer)
+    expect(ttsPlayer.get().timerChoice).toBe(60)
+    fireEvent.click(timer)
+    expect(ttsPlayer.get().timerChoice).toBe('chapter')
+    expect(screen.getByTitle('定时').textContent).toBe('本章结束')
+    expect(timer.getAttribute('aria-label')).toBe('定时 本章结束，点击切换下一档')
+    fireEvent.click(timer)
+    expect(ttsPlayer.get().timerChoice, '本章结束再点回到关闭').toBeNull()
+    expect(screen.getByTitle('定时').textContent).toBe('定时')
+    expect(timer.getAttribute('aria-label')).toBe('定时 关闭，点击切换下一档')
+    expect(screen.queryByRole('dialog', { name: '听书设置' }), '定时循环不打开设置卡').toBeNull()
+  })
+
+  it('条上语速档位落在 TTS_RATE 定义域内且升序', () => {
+    const steps = [...RATE_STEPS]
+    expect(steps[0], '首档跟定义域下限').toBe(TTS_RATE.min)
+    expect(steps.at(-1), '末档跟定义域上限').toBe(TTS_RATE.max)
+    expect([...steps].sort((a, b) => a - b), '档位升序').toEqual(steps)
+    expect(steps.every((step) => step >= TTS_RATE.min && step <= TTS_RATE.max), '无一越界').toBe(true)
   })
 })
 

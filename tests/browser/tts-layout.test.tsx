@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { Browser } from 'playwright'
-import { NovelStyles } from '../../src/client/styles.js'
+import { NOVEL_CSS, NovelStyles } from '../../src/client/styles.js'
 import { ChapterBody } from '../../src/client/views/ChapterBody.js'
 import { TtsBar } from '../../src/client/tts/TtsBar.js'
 import { TtsMiniBar } from '../../src/client/tts/TtsMiniBar.js'
@@ -371,6 +371,45 @@ describe.skipIf(!ENABLED)('浏览器几何：听书条 / 迷你条 / 跟读高�
     expect(r.ranges, '条上只剩章内一条进度滑杆（ADR-0075）').toBe(1)
   })
 
+  it('条底与听书选中态跟行内纸色：深纸下同源，换纸后立即跟随', async () => {
+    const page = await (await browser.newContext({ viewport: { width: 900, height: 700 } })).newPage()
+    await page.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>${NOVEL_CSS}</style></head>
+      <body style="margin:0"><div class="novel-root"><div class="novel-rdr"
+        style="--novel-paper:#1e1e1e;--novel-paper-ink:#e8e8ea;--novel-live-ink:#e0a060">
+        <div class="novel-rdr-bar"><button id="listen-pill" class="novel-rdr-ctl novel-tts-on">听书</button>top</div>
+        <div class="novel-rdr-main"><div class="novel-tts-bar">tts</div></div>
+      </div></div></body></html>`)
+    const read = async (): Promise<{ bar: string; tts: string; paper: string; pill: string }> =>
+      page.evaluate(() => {
+        const of = (sel: string): string => getComputedStyle(document.querySelector(sel) as Element).backgroundColor
+        const colorOf = (sel: string): string => getComputedStyle(document.querySelector(sel) as Element).color
+        return {
+          bar: of('.novel-rdr-bar'), tts: of('.novel-tts-bar'), paper: of('.novel-rdr-main'),
+          pill: colorOf('#listen-pill'),
+        }
+      })
+    const dark = await read()
+    expect(dark.bar, '顶条由深纸派生，不落回缺省米黄').not.toBe(dark.paper)
+    expect(dark.tts, '听书条与顶条同源').toBe(dark.bar)
+    expect(dark.pill, '听书选中态读随纸现算的跟读字色').toBe('rgb(224, 160, 96)')
+    const cream = await page.evaluate(() => {
+      const root = document.querySelector('.novel-rdr') as HTMLElement
+      root.style.setProperty('--novel-paper', '#f7f3e8')
+      root.style.setProperty('--novel-paper-ink', '#222222')
+      root.style.setProperty('--novel-live-ink', '#855532')
+      const of = (sel: string): string => getComputedStyle(document.querySelector(sel) as Element).backgroundColor
+      const colorOf = (sel: string): string => getComputedStyle(document.querySelector(sel) as Element).color
+      return {
+        bar: of('.novel-rdr-bar'), tts: of('.novel-tts-bar'), paper: of('.novel-rdr-main'),
+        pill: colorOf('#listen-pill'),
+      }
+    })
+    expect(cream.bar, '换纸后条底立即跟着换').not.toBe(dark.bar)
+    expect(cream.bar).not.toBe(cream.paper)
+    expect(cream.pill, '换纸后听书选中态立即跟着换').toBe('rgb(133, 85, 50)')
+    await page.context().close()
+  })
+
   it('跟读高亮：换命中块字色 + 段首三角（无底色、无进度线），不改布局；滚动条走宿主档', async () => {
     const r = await measure()
     expect(r.liveColor, '命中段与素段的字色不同（ADR-0076）').not.toBe(r.plainColor)
@@ -379,7 +418,7 @@ describe.skipIf(!ENABLED)('浏览器几何：听书条 / 迷你条 / 跟读高�
     // 纯换色在「正文与高亮同侧且都够读」的纸上感知差太小——字形标记是第二条腿，必须真画出来
     expect(must(r.marker, '段首三角画出来了（::before absolute + 实心 border-left）').width, '三角有宽').toBeGreaterThan(0)
     expect(r.markerColor, '三角跟着 currentColor 走（与 --novel-live-ink 同源）').toBe(r.liveColor)
-    // 关掉高亮再量一遍：逐段几何必须一致——只换颜色 + 框外伪元素，不动盒模型（ADR-0071）
+    // 关掉高亮再量一遍：逐段几何必须一致——只换颜色 + 框外伪元素，不动盒模型（ADR-0076）
     const off = await measure(false)
     expect(r.paragraphs, '高亮进出不改布局').toEqual(off.paragraphs)
     expect(off.marker, '不在听的段没有三角').toBeNull()

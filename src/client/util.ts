@@ -59,6 +59,30 @@ export function centerInScroller(scroller: Element, target: Element | null): voi
 }
 
 /**
+ * 跟读自动跟随：目标已经在看得见的正文带里就**一次都不滚**；出了带才把它居中。
+ *
+ * 带 = 滚动容器减 `topInset`（顶条遮挡）与 `bottomInset`（听书条遮挡）。不沿用
+ * `centerInScroller` 的「每段都居中」——播放推进是段粒度，逐段重定心会让读者的视野
+ * 每隔几秒跳一次；只在当前段将要看不见时补一次，才读得下去。目标比带还高时仍露头
+ * （与 `centerInScroller` 同一取舍）。只滚给定容器，不借 `scrollIntoView`。
+ */
+export function revealInScroller(
+  scroller: Element, target: Element | null, topInset = 0, bottomInset = 0,
+): void {
+  if (target === null) return
+  const box = scroller.getBoundingClientRect()
+  const at = target.getBoundingClientRect()
+  const top = box.top + topInset
+  const bottom = box.bottom - bottomInset
+  if (at.top >= top && at.bottom <= bottom) return
+  const delta = at.height > bottom - top
+    ? at.top - top
+    : (at.top + at.height / 2) - (top + bottom) / 2
+  if (delta === 0) return
+  scroller.scrollTop += delta
+}
+
+/**
  * 源行**就地展开自己**时的落位：展开出来的那一串**装得下就一动不动**，装不下才把这一行抬到框顶。
  *
  * 为什么不复用 `centerInScroller`：居中那条策略在这里是错的——用户点的是列表里本来就在视野里的行，

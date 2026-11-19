@@ -1,19 +1,34 @@
-import type { ReactNode } from 'react'
+import type { ReactNode, Ref } from 'react'
 import { useState } from 'react'
 import { useCopy } from '../copy/index.js'
 import { useStore } from '../store.js'
+import { TTS_RATE } from '../../shared/wire.js'
 import {
-  chapterProgressOf, lineOf, listenFaceOf, rateLabel, segmentLabel,
+  chapterProgressOf, lineOf, listenFaceOf, rateLabel, segmentLabel, timerChoiceLabel,
 } from './listen-readout.js'
 import type { TtsPlayerState } from './player.js'
 import { useTimerReadout } from './use-timer-readout.js'
 import {
-  pauseListening, playFromReadingPosition, resumeListening, seekParagraph,
+  pauseListening, playFromReadingPosition, resumeListening, seekParagraph, setListenRate, setListenTimer,
   skipChapter, skipParagraph, stopListening, ttsPlayer, ttsProgress,
 } from './player.js'
-import { TtsSettingsNote, TtsSettingsPanel, TtsSettingsRows } from './TtsSettings.js'
+import {
+  SETTINGS_ICON, TtsSettingsNote, TtsSettingsPanel, TtsSettingsRows, nextTimerChoice,
+} from './TtsSettings.js'
 import { ttsErrorMessage } from './tts-error.js'
 import { useTtsSources } from './use-tts-sources.js'
+
+/** 条上语速单击循环的档位（设置卡滑杆仍可落到 0.1 的任意档）。升幂排列；当前值不在档位上时
+ *  先落到下一个更大的档，越过上限回最低档。两端读 `TTS_RATE` 的定义域，改值域时至少首尾跟着走；
+ *  `tests/client/tts-bar.test.tsx` 另钉整张档位表落在定义域内且升序。 */
+export const RATE_STEPS = [TTS_RATE.min, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, TTS_RATE.max] as const
+
+function cycleRate(rate: number): number {
+  for (const step of RATE_STEPS) {
+    if (step > rate) return step
+  }
+  return RATE_STEPS[0]
+}
 
 /**
  * 阅读器内嵌听书条：本书是正在听的会话时才由 ReaderView 挂载。
@@ -36,9 +51,11 @@ export interface TtsBarProps {
   pushError: (message: string) => void
   /** 「定位到正在念的段」：滚动归阅读器视图（它才持滚动容器与章块 ref），条只发意图 */
   onLocate: () => void
+  /** 条根 ref：跟读自动跟随要量它的高度，作为「正文看得见的底界」（条贴视口底，目标段不许藏它下面） */
+  rootRef?: Ref<HTMLDivElement>
 }
 
-export function TtsBar({ darkController, apiGet, pushError, onLocate }: TtsBarProps): ReactNode {
+export function TtsBar({ darkController, apiGet, pushError, onLocate, rootRef }: TtsBarProps): ReactNode {
   const t = useCopy()
   const st = useStore(ttsPlayer)
   // 整块上屏投影（能否暂停 / 连败停的读数 / 空章抑制）：判据全住 `listen-readout.ts`，
@@ -53,11 +70,14 @@ export function TtsBar({ darkController, apiGet, pushError, onLocate }: TtsBarPr
 
   if (!st.active) return null
 
+  const bumpRate = (): void => { setListenRate(cycleRate(ttsPlayer.get().rate)) }
+  const bumpTimer = (): void => { setListenTimer(nextTimerChoice(ttsPlayer.get().timerChoice)) }
+
   const report = (error: unknown): void => { pushError(ttsErrorMessage(t, error)) }
   const run = (pending: Promise<void>): void => { void pending.catch(report) }
 
   return (
-    <div className={darkController ? 'novel-dark novel-tts-bar' : 'novel-tts-bar'}>
+    <div ref={rootRef} className={darkController ? 'novel-dark novel-tts-bar' : 'novel-tts-bar'}>
       {panelOpen && (
         <TtsSettingsPanel label={t('tts.settings')} onClose={() => { setPanelOpen(false) }}>
           <TtsSettingsRows sources={sources} surface="bar" />
@@ -102,21 +122,20 @@ export function TtsBar({ darkController, apiGet, pushError, onLocate }: TtsBarPr
             <path d="M8 1.5v2.3M8 12.2v2.3M1.5 8h2.3M12.2 8h2.3" />
           </svg>
         </button>
-        <button className="novel-rdr-ctl" title={t('tts.rate')} aria-expanded={panelOpen}
-          onClick={() => { setPanelOpen((open) => !open) }}>
+        <button className="novel-rdr-ctl" title={t('tts.rate')}
+          aria-label={t('tts.rateCycle', { rate: rateLabel(st, t) })}
+          onClick={bumpRate}>
           {rateLabel(st, t)}
         </button>
-        <button className="novel-rdr-ctl" title={t('tts.timer')} aria-expanded={panelOpen}
-          onClick={() => { setPanelOpen((open) => !open) }}>
+        <button className="novel-rdr-ctl" title={t('tts.timer')}
+          aria-label={t('tts.timerCycle', { timer: timerChoiceLabel(st.timerChoice, t) })}
+          onClick={bumpTimer}>
           {timer.label}
         </button>
         <button className={panelOpen ? 'novel-rdr-ctl novel-tts-on' : 'novel-rdr-ctl'}
           aria-label={t('tts.settings')} title={t('tts.settings')} aria-expanded={panelOpen}
           onClick={() => { setPanelOpen((open) => !open) }}>
-          <svg aria-hidden="true" viewBox="0 0 16 16">
-            <circle cx="8" cy="8" r="2.2" />
-            <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4" />
-          </svg>
+          {SETTINGS_ICON}
         </button>
         <button className="novel-rdr-ctl" aria-label={t('tts.stop')} title={t('tts.stop')}
           onClick={stopListening}>

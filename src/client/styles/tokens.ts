@@ -109,7 +109,8 @@ export const TOKENS_CSS = `
   --novel-paper-ink: #222;
   /* 跟读高亮（正在被念的那一段）的字色：ReaderView 由纸色现算（util.ts 的 paperLiveInk）
      写进阅读区根上；这里的缺省值 = 默认米黄纸上的那一档。命中段换这一档字色并在段首画一枚
-     currentColor 小三角，不铺底色也不画进度线；宿主 brand 不进正文层（ADR-0076）。 */
+     currentColor 小三角，不铺底色也不画进度线；顶条听书 pill 的选中态也读这一档（条底跟纸，
+     选中色也得跟纸）。宿主 brand 不进正文层（ADR-0076）。 */
   --novel-live-ink: #855532;
   /* 插图预留宽高比（ChapterBody 由 wire 的可信 width/height 行内写入，规则读本值）：
      值槽在此在册是 token 自足守卫的硬要求——「行内写、样式读」的这一路也必须词表里有名。 */
@@ -124,15 +125,10 @@ export const TOKENS_CSS = `
   --novel-cover-4: #443a4d;
   color: var(--novel-text);
 }
-/* 控制器条底 / 描边：纸往墨压一档（6% / 12%）。阅读器顶条与听书条读**同一份派生式**——
-   两处各写一遍 color-mix，改档位时必有一条落下，接缝就成了可量的缺陷。
-   这支派生式**必须钉在条元素自己身上**，不能钉在 .novel-root：自定义属性里的 var() 在
-   **声明处**求值，根上的 --novel-paper 是缺省米黄，会替整棵子树把结果算死；ReaderView 行内
-   改纸色只改得动 --novel-paper 自己，改不动已经继承下去的 --novel-bar-bg（深纸上就是米黄条
-   配浅字，条底与纸底不同源）。声明与消费落在同一个元素上，求值点才跟着纸走——听书条单飞
-   渲染时没有 .novel-rdr 祖先，也由这条规则自己算一份。 */
+/* 控制器条底：纸往墨压一档（6%），阅读器顶条与听书条共用同一条规则。
+   **直接写在条元素的 background 上，不经过中间自定义属性**：纸色行内写在阅读区根上，
+   条底少一层派生缓存，换纸时与正文同一次重算。描边同理由各条自己直写（顶条底边 / 听书条顶边）。 */
 .novel-rdr-bar, .novel-tts-bar {
-  --novel-bar-bg: color-mix(in srgb, var(--novel-paper-ink) 6%, var(--novel-paper));
-  --novel-bar-line: color-mix(in srgb, var(--novel-paper-ink) 12%, transparent);
+  background: color-mix(in srgb, var(--novel-paper-ink) 6%, var(--novel-paper));
 }
 `

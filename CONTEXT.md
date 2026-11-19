@@ -474,9 +474,14 @@ _唯一实现_: `client/tts/listen-readout.ts` 的 `listenFaceOf`（`ListenFace`
 _Avoid_: 段进度（那是计时现场 `ttsProgress`）、听书位置（落盘轨 `ListenState`）、在各表面手写换算或比较阈值（那是抄本）
 
 **跟读高亮（listen-along highlight）**:
-听书时正文里正在被念的那一段的就地标记：命中块换文字色（`paperLiveInk` 按纸色现算），并在段首框外画一枚 currentColor 小三角——纯换色在部分纸色下认不出，字形标记不靠色彩差说话；不铺底色、不加竖条、不画段内进度线（`ADR-0076`）。命中判据 = 最后一个 ≤ 段号的起段号，与「从本段听」同口径。只标记、不滚动；把视野带过去是听书条上的显式按钮（`ADR-0071`）。
+听书时正文里正在被念的那一段的就地标记：命中块换文字色（`paperLiveInk` 按纸色现算），并在段首框外画一枚 currentColor 小三角——纯换色在部分纸色下认不出，字形标记不靠色彩差说话；不铺底色、不加竖条、不画段内进度线（`ADR-0076`）。命中判据 = 最后一个 ≤ 段号的起段号，与「从本段听」同口径。只标记、不写位置；视口跟随另见「跟读跟随」。
 _唯一实现_: `client/views/ChapterBody.tsx` 的 `listenParagraph`（命中判据 `client/tts/reading-position.ts` 的 `paragraphSlotOf` / `listenParagraphElement`）
-_Avoid_: 自动跟随滚动（`ADR-0071` 否掉）、把高亮当成位置写入口（位置写入归播放层的位置落盘节拍）
+_Avoid_: 把高亮当成位置写入口（位置写入归播放层的位置落盘节拍）、让高亮负责滚动（跟随归视图）
+
+**跟读跟随（listen-along follow）**:
+阅读器里听本书时，播放推进到新段 / 新章会把视口带到当前段：目标已在看得见的正文带（扣顶条与听书条高度）里就不动，离开才居中。读者手动滚动（滚轮 / 触摸 / 滚动键 / 滚动条拖动）或点目录 / 内链 / 返回原处后让位，按听书条的「定位到正在念的段」重新接上（`ADR-0091`）。
+_唯一实现_: `client/views/ReaderView.tsx` 的 `followRef` / `takeOverReading` / `scrollToListening` / `followBottomInset`；落位 `client/util.ts` 的 `revealInScroller`；用户意图装线 `client/reader-binding.ts` 的 `ReaderViewportHandlers.intent` / `ReaderBindingOptions.onUserIntent`；接管时撤销在途跳章 `client/reader-session.ts` 的 `cancelJump`
+_Avoid_: 无让位的自动跟随（读者滚动后仍被下一段拽回）、逐段无条件居中、新增「跟随」开关、把跟随写进高亮
 
 **听书迷你条（listening mini bar）**:
 宿主 `shell.overlay` 常驻层上的两个完整听书浮窗形态：缺省是身份胶囊（进度环 + 书名 + 段号 + 章内进度细线），展开是能读整段的边栏（身份钮、正文区、运输行、读数与章内进度条）。位置与尺寸自由：现场记块中心与展开态宽高，松手时离视口边够近的边才贴齐，尺寸呈现时夹取不回写（`ADR-0073` / `ADR-0080`）。落位样式与 `side` / `flush` 由 `miniBarLayout` 一次给全；没有半隐或抽屉形态。与阅读器内听书条共读同一份会话与设置行清单；在场判据 = 会话在 ∧ 阅读器在场书键集合里没有会话本书。

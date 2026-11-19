@@ -86,7 +86,7 @@ const fakeSource = (): ReaderElementSource => ({
   chapters: () => [],
 })
 
-function harness(): {
+function harness(onUserIntent?: () => void): {
   binding: ReturnType<typeof createReaderBinding>
   frames: ReturnType<typeof manualFrames>
   target: ReturnType<typeof fakeTarget>
@@ -97,7 +97,10 @@ function harness(): {
   const frames = manualFrames()
   const target = fakeTarget(trace)
   const host = fakeHost(trace)
-  const binding = createReaderBinding({ source: fakeSource(), frames: frames.scheduler, host: host.host })
+  const binding = createReaderBinding({
+    source: fakeSource(), frames: frames.scheduler, host: host.host,
+    ...(onUserIntent === undefined ? {} : { onUserIntent }),
+  })
   return { binding, frames, target, host, trace }
 }
 
@@ -203,6 +206,17 @@ describe('ReaderBinding：装摘、探针与视口事件', () => {
     handlers?.scroll()
     handlers?.layout()
     expect(h.target.feeds).toEqual([false, true])
+  })
+
+  it('用户滚动意图单独上报：不混进视口 feeds，卸载后不再上报', () => {
+    let intents = 0
+    const h = harness(() => { intents += 1 })
+    mountAndSettle(h)
+    h.host.handlers()?.intent?.()
+    expect(intents).toBe(1)
+    expect(h.target.feeds, '意图不是视口读数').toEqual([])
+    h.binding.unmount()
+    expect(h.host.handlers()).toBeNull()
   })
 
   it('卸载：摘监听、注销探针、取消挂起帧，此后的门不排帧', () => {
