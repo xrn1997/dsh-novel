@@ -66,10 +66,16 @@ export interface VisibleNode { index: number; nodeId: string; offsetWithinNode: 
  *  只有「回到链接来源」会带上非零偏移（让返回落在同一个节点内的同一处，而不是节点顶）。 */
 export interface JumpTarget { index: number; anchorId: string | null; offsetWithinNode: number }
 
-/** 开书恢复目标：章号 + 章内比例。两个来源共用同一形状——存档 progress（默认）与「回阅读器」的
- *  听书重定位（调用方在 `open` 第三参交进来）。后者**只走恢复**（站定不写），绝不走会提交阅读
- *  进度的 `requestJump`/`settleJump`：一次定位不该被记成一次阅读。 */
+/** 开书恢复目标：章号 + 章内比例。存档 progress（默认）与「回阅读器」的**章级站定**共用形状——
+ *  后者由调用方在 `open` 第三参交 `{ chapterIndex, offsetRatio: 0 }`，精确段再由 `reveal` 落位。
+ *  两者都只走恢复（站定不写），绝不走会提交阅读进度的 `requestJump`/`settleJump`：一次定位
+ *  不该被记成一次阅读（`ADR-0094`）。 */
 export interface ReaderRestoreTarget { chapterIndex: number; offsetRatio: number }
+
+/** 听书段 → 阅读器的精确落点：章号 + 播放单元号（0 基）。
+ *  与 `ReaderRestoreTarget` 的区别是**不经过比例**：段号是听书侧的真实粒度，
+ *  阅读器按 DOM 里的 `[data-pidx]` 找块，不再拿段数比例猜像素（`ADR-0094`）。 */
+export interface ReaderRevealTarget { index: number; paragraphIndex: number }
 
 /** DOM 测量口（`client/reader-geometry.ts` 实现；会话只读不碰 DOM） */
 export interface ReaderPort {
@@ -88,6 +94,21 @@ export interface ReaderPort {
   targetOffsets(index: number, anchorIds: ReadonlyArray<string | null>): Array<number | null>
   /** 视口顶所在正文节点；该章没有可定位节点（文字章）或量不到 → null */
   currentNode(): VisibleNode | null
+  /** 章内某个播放单元（`[data-pidx]` 块）相对视口顶的偏移与高度；块不在 DOM → null。
+   *  可选：只服务「按听书段精确落位」，纯文本测试端口可以不给（会话退回章首）。 */
+  targetOffsetOfParagraph?(index: number, paragraphIndex: number): { top: number; height: number } | null
+}
+
+/** 一次精确落位的现场：目标 + 落点策略。`write` 决定这一跳算不算一次阅读动作
+ *  （定位/跟随算，回阅读器只站定不算；见 `ADR-0078`）。 */
+/** `locate` = 显式定位 / 回阅读器 / 起播首拍：无条件顶对齐；`follow` = 跟读推进：
+ *  目标已是当前可见的最后一段且落在带的下半部时翻页，否则这一页里不动。 */
+export type RevealMode = 'locate' | 'follow'
+
+interface PendingReveal extends ReaderRevealTarget {
+  mode: RevealMode
+  write: boolean
+  bottomInset: number
 }
 
 export interface ReaderSessionState {
@@ -144,6 +165,12 @@ export class ReaderSession {
    *  渲染；视图也不读它（「这一帧要不要拍」看 `domRevision`）。留在类上是因为它是落位时序的
    *  私事，诊断与测试回查经只读 getter 拿。 */
   private pendingJumpNow: JumpTarget | null = null
+  /** 按听书段落位的待办：与 `pendingJumpNow` 分开——前者是「段号 → DOM 块」的精确落点，
+   *  后者是目录/内链的「章 + 节点锚点」导航。落位时先结导航，再结这一条。 */
+  private pendingReveal: PendingReveal | null = null
+  /** 程序化 reveal 写入 scrollTop 的同拍里，滚动事件可能同步到达：这一格挡住它，
+   *  由 reveal 自己按 target / 真实比例提交位置（异步滚动事件则由幽灵写闸兜住）。 */
+  private holdViewport = false
   /** 上次锚点测量所依据的**已载表引用**（`chaptersNow` 是 copy-on-write，换引用即换版本）。
    *  与当前表不同 = 载入或裁剪过、这张锚点表已过期；布局变化是另一条来路（`handleViewportChange`
    *  的显式标记）。用它而不是布尔脏标记：脏标记会被「提交之前来的那一帧滚动」消费掉，而滚动帧
@@ -231,8 +258,9 @@ export class ReaderSession {
   subscribe = (cb: () => void): (() => void) => this.store.subscribe(cb)
 
   /** 进入一本书：目录 → 存档恢复；无存档/书架拉不到 → 从头。
-   *  `relocation` = 「回阅读器」的一次性听书重定位（可选）：有它就用它替代存档 progress 当恢复
-   *  目标——恢复路径（cause `restore`）只站定不写，不会把一次定位记成阅读动作。越界章夹回目录范围。 */
+   *  `relocation` = 「回阅读器」的章级站定（可选）：有它就用它替代存档 progress 当恢复目标，
+   *  恢复路径（cause `restore`）只站定不写；精确段由随后的 `reveal` 落位（`ADR-0094`）。
+   *  越界章夹回目录范围。 */
   async open(sourceId: string, bookKey: string, relocation: ReaderRestoreTarget | null = null): Promise<void> {
     const gen = ++this.generation                       // 换书/重开：上一代的一切在途续作自此作废
     this.cancelPendingFrame()                           // 上一代的挂起视口帧同样作废
@@ -255,6 +283,8 @@ export class ReaderSession {
     // 待跳目标是上一本的现场：同一实例会被重开复用（换源 in-place 与开发期双挂载都会走这里），
     // 留着它会让新书一开场就被 pendingJump 早退掉视口读数，settleJump 还可能真跳到旧目标章
     this.pendingJumpNow = null
+    this.pendingReveal = null
+    this.holdViewport = false
     this.viewportSeen = false
     this.restoring = false
     this.backfillBudget = BACKFILL_MAX_CHAPTERS
@@ -369,6 +399,11 @@ export class ReaderSession {
             // 落位帧之后 scrollTop 才是真实视口：从这里开始才允许预取/位置/补载读它
             this.restoring = false
             this.viewportSeen = true
+            // 恢复落位是异步双帧：挂起的精确段落位要等这一帧之后才敢量，补一拍让绑定重测。
+            if (this.pendingReveal !== null) {
+              this.domRevision += 1
+              this.store.set({ domRevision: this.domRevision })
+            }
           })
         })
       }
@@ -381,6 +416,9 @@ export class ReaderSession {
       // ——不回退就是拿用户没见过的章当阅读位置。锚点为空（进入阶段第一章就失败）无可回退。
       const jump = this.pendingJumpNow
       if (jump !== null && jump.index === index) this.pendingJumpNow = null
+      // 段号落位与跳章同一条失败半径：目标章没载进来，这一发就不再等，别把 pendingReveal
+      // 留成挡住后续视口读数的死目标。
+      if (this.pendingReveal?.index === index) this.pendingReveal = null
       if (this.position.chapterIndex === index) {
         // 视口 = 「读者实际在哪儿」的证据（与 handleViewportChange 同一读取口径）
         this.recalcAnchors()
@@ -552,11 +590,13 @@ export class ReaderSession {
   private handleViewportChange(opts?: { layoutChanged?: boolean }): void {
     // 存档恢复落位前的读数属于「进入前的旧视口」：预取、位置提交与补载都不许据此做决定
     if (this.restoring) return
+    // 程序化 reveal 写入 scrollTop 的同拍里滚动事件可能同步到达：这一格由 reveal 自己收口
+    if (this.holdViewport) return
     this.checkPreload()
     if (opts?.layoutChanged === true || this.anchorsFrom !== this.chaptersNow) this.recalcAnchors()
     if (this.anchorsNow.length === 0) return               // 还没有可读的视口证据（首帧/正文未到）
     this.viewportSeen = true
-    if (this.pendingJumpNow !== null) return
+    if (this.pendingJumpNow !== null || this.pendingReveal !== null) return
     const { chapterIndex, offsetRatio } = locateChapter(this.anchorsNow, this.contentTop())
     const crossing = chapterIndex !== this.position.chapterIndex
     this.commit(crossing ? 'cross' : 'scroll', chapterIndex, offsetRatio)
@@ -572,12 +612,45 @@ export class ReaderSession {
     this.jumpTo({ index, anchorId, offsetWithinNode: 0 })
   }
 
+  /** 按听书段精确落位：目标章可未载，落位等 DOM 提交后由 `settleReveal` 收口（`ADR-0094`）。
+   *  `mode: 'locate'` = 显式定位 / 回阅读器 / 起播首拍：无条件顶对齐；
+   *  `mode: 'follow'` = 跟读推进：只在翻页时顶对齐，普通段不滚。
+   *  `write` = 这一跳算不算一次阅读动作（定位/跟随算，回阅读器只站定不算）。
+   *  **不经过段数比例**：段号直接映射到 `[data-pidx]` 块；找不到段落时退该章章首，
+   *  不让一次落位把 `pendingReveal` 永久挂住（那会挡住后续所有视口读数）。 */
+  reveal(target: ReaderRevealTarget, opts: { mode: RevealMode; write: boolean; bottomInset?: number }): void {
+    if (this.tocNow !== null && !this.inRange(target.index)) return
+    // 定位/跟随是比目录跳章更晚的显式动作：旧导航目标作废，避免两套落位互相拉扯。
+    this.pendingJumpNow = null
+    this.pendingReveal = {
+      ...target,
+      mode: opts.mode,
+      write: opts.write,
+      bottomInset: Math.max(0, opts.bottomInset ?? 0),
+    }
+    // 目标章已在 DOM 且没有待结的滚动补偿：当场量、当场落，定位按钮 / 跟随 effect 不必等一拍。
+    // 有补偿时先等 afterRender 把补偿结掉，否则补偿会把刚落位的视口再推开。
+    if (this.tocNow !== null && this.mounted(target.index) && this.pendingScrollFixes.length === 0) {
+      this.settleReveal()
+      return
+    }
+    // 显式定位/跟随先按「读到这一章」落一笔，按了就有可观测反应（与目录跳章同一条语义）；
+    // 精确段位等正文到货后再由 settleReveal 补。回阅读器（write:false）不走这一笔。
+    if (opts.write && this.tocNow !== null) this.commit('jump', target.index, 0)
+    // 章未载 / 目录未到：推一拍，等 open 或 load 把块提交进 DOM 后由 afterRender 收口。
+    this.domRevision += 1
+    this.store.set({ domRevision: this.domRevision })
+    if (this.tocNow !== null && this.inflight === null) void this.load(target.index)
+  }
+
   /** 撤销在途跳章（读者接管视口）：清 pending，并把消费位置按当前视口重记。
    *  `requestJump` 是「选中即落盘」，已经按目标章写过一笔；不重记就会把读者留在一条
    *  他没看见的章上。恢复落位前视口读数不可信，只清目标，位置交给恢复路径。 */
   cancelJump(): void {
-    if (this.pendingJumpNow === null) return
+    const hadJump = this.pendingJumpNow !== null
     this.pendingJumpNow = null
+    this.pendingReveal = null
+    if (!hadJump) return
     if (this.restoring) return
     this.recalcAnchors()
     if (this.anchorsNow.length === 0) return
@@ -676,6 +749,7 @@ export class ReaderSession {
     // 落成存档里一个不存在的章，同时 pendingJump 再也等不到挂载——那本书的进度从此停摆。
     if (!this.inRange(target.index)) return
     this.pendingScrollFixes = []                         // 导航落位归 settleJump，旧补偿作废
+    this.pendingReveal = null                            // 导航是更晚的显式动作：挂起的听书落位作废
     this.backfillBudget = BACKFILL_MAX_CHAPTERS          // 跳章 = 新 episode
     this.setPendingJump(target)
     this.commit('jump', target.index, 0)
@@ -715,6 +789,8 @@ export class ReaderSession {
     this.settleJump()
     this.recalcAnchors()
     this.applyScrollFixes()
+    // 精确段落位排在滚动补偿之后：它是这一拍最终的视口意图，补偿只负责不让前插/裁章跳屏。
+    this.settleReveal()
     if (this.restoring) return          // 落位帧之前 DOM 已提交但视口还没落：不预取、不补载
     this.checkPreload()
     this.checkBackfill()
@@ -733,6 +809,61 @@ export class ReaderSession {
     this.port.setScrollTop(this.port.scrollTop() + off + snap.offsetWithinNode - this.topInset)
     this.sampleVisibleBeforePrefsChange()            // 复位后重采：连调两次排版也各有正确锚
     this.handleViewportChange({ layoutChanged: true })
+  }
+
+  /** 听书段落的落位：目标章已挂载后，量 `[data-pidx]` 块的视口偏移并顶对齐到带顶。
+   *  与 `settleJump` 同一套「先挂载再测量」硬次序；差别只在目标是段号而不是节点锚点。
+   *  `write` 决定走 `jump`（落盘 + flush）还是 `restore`（只站定不写）：后者让「回阅读器」
+   *  保持 `ADR-0078` 的零进度写语义，同时仍把视口放到精确段。 */
+  private settleReveal(): void {
+    const target = this.pendingReveal
+    if (target === null) return
+    // 存档恢复的双帧落位尚未完成：此刻的 scrollTop 还是进入前的旧值，量了也会被恢复覆盖。
+    if (this.restoring) return
+    if (!this.mounted(target.index)) {
+      // 章还没提交进 DOM：能载就载，载不动就等下一拍；不在这里挂死。
+      if (this.tocNow !== null && this.inflight === null) void this.load(target.index)
+      return
+    }
+    const geometry = this.port.targetOffsetOfParagraph?.(target.index, target.paragraphIndex) ?? null
+    const top = geometry?.top ?? this.port.targetOffset(target.index, null)
+    if (top === null) {
+      // 章块挂载了却量不到落点（坏 DOM / 段落不在屏上）：放弃这一次，别让 pendingReveal
+      // 永久挡住后续视口读数（与 settleJump 的窄回退同一条理由）。
+      this.pendingReveal = null
+      return
+    }
+    const height = geometry?.height ?? 0
+    const viewH = this.port.viewHeight()
+    const bandTop = this.topInset
+    const bandBottom = Math.max(bandTop, viewH - target.bottomInset)
+    const fullyVisible = top >= bandTop && top + height <= bandBottom
+    if (target.mode === 'follow' && fullyVisible) {
+      // 跟读只在「目标成为当前可见的最后一段，且已经落到带的下半部」时翻页；否则这一页里
+      // 不动。翻页的落点仍是带顶（不居中）：视口顶 = 正在念的段，位置才有唯一读法。
+      const next = this.port.targetOffsetOfParagraph?.(target.index, target.paragraphIndex + 1) ?? null
+      const lastVisible = next === null || next.top >= bandBottom
+      const lowerHalf = top + height > bandTop + (bandBottom - bandTop) * 0.6
+      if (!lastVisible || !lowerHalf) {
+        this.pendingReveal = null
+        return
+      }
+    }
+    // 所有落位都对齐到带顶：显式定位 / 回阅读器 / 跟读翻页同一个落点。带顶已扣掉顶条
+    // （`bandTop = topInset`），目标不会被标题栏盖住。
+    const delta = top - bandTop
+    this.pendingReveal = null
+    // 同步滚动事件若在 setScrollTop 里到达，由 holdViewport 挡住；异步事件由幽灵写闸兜住。
+    this.holdViewport = true
+    try {
+      this.port.setScrollTop(this.port.scrollTop() + delta)
+    } finally {
+      this.holdViewport = false
+    }
+    this.recalcAnchors()
+    const anchor = this.anchorsNow.find((x) => x.index === target.index)
+    if (anchor === undefined) return
+    this.commit(target.write ? 'jump' : 'restore', target.index, ratioWithin(anchor, this.contentTop()))
   }
 
   /** pendingJump 的目标已渲染 → 按真实位置定位并清零；未落地则下轮再试。

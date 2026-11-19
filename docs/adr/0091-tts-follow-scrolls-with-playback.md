@@ -1,6 +1,6 @@
 # 跟读随播放推进带视口走，用户手动滚动即让位
 
-Status: accepted
+Status: superseded by 0096
 
 阅读器里听本书时，播放推进到新段 / 新章会把视口带到正在念的段；目标已在看得见的正文带里就不动，离开才居中。读者手动滚动（滚轮 / 触摸 / 滚动键 / 滚动条拖动）或点目录 / 内链后跟随让位，按听书条的「定位到正在念的段」重新接上。这翻掉 `ADR-0071` 的「只标记不滚动」。
 
@@ -41,4 +41,4 @@ Status: accepted
 - **平滑滚动动画**：连续推进时动画排队，且与阅读会话的滚动补偿 / 锚点冲突；直接写 `scrollTop` 与定位同一档。
 - **把跟随写进高亮**：高亮仍是纯标记，不写 `progress`、不写 `listen`；视口跟随归阅读器视图。
 
-锚点：`src/client/views/ReaderView.tsx` 的 `followRef` / `takeOverReading` / `scrollToListening` / `followBottomInset`；`src/client/reader-session.ts` 的 `cancelJump`；`src/client/util.ts` 的 `revealInScroller`；`src/client/reader-binding.ts` 的 `ReaderViewportHandlers.intent` / `ReaderBindingOptions.onUserIntent` / `PROD_HOST`；`src/client/tts/TtsBar.tsx` 的 `rootRef`；`tests/client/tts-seek.test.tsx`；`tests/client/reader-session.test.ts`；`tests/client/scroller-centering.test.ts`；`tests/client/reader-binding.test.ts`；`tests/client/reader-binding-host.test.ts`；`docs/ui-spec.md` §3.6；`ADR-0071`（被本篇取代）、`ADR-0076`、`ADR-0078`。
+锚点：`src/client/tts/follow-controller.ts` 的 `createFollowController` / `onPlayback` / `onLocate` / `onUserIntent` / `onRelocation`；`src/client/views/ReaderView.tsx` 的 `takeOverReading` / `locateListen` / `followBottomInset`；`src/client/reader-session.ts` 的 `reveal` / `settleReveal` / `cancelJump`；`src/client/reader-binding.ts` 的 `ReaderViewportHandlers.intent` / `ReaderBindingOptions.onUserIntent` / `PROD_HOST`；`src/client/tts/TtsBar.tsx` 的 `rootRef`；`tests/client/tts-seek.test.tsx`；`tests/client/reader-session.test.ts`；`tests/client/scroller-centering.test.ts`；`tests/client/reader-binding.test.ts`；`tests/client/reader-binding-host.test.ts`；`docs/ui-spec.md` §3.6；`ADR-0071`（被本篇取代）、`ADR-0076`、`ADR-0078`。

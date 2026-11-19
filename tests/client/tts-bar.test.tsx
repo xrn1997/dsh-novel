@@ -267,14 +267,12 @@ describe('设置面板', () => {
     fireEvent.change(slider, { target: { value: '1.5' } })
     expect(ttsPlayer.get().rate).toBe(1.5)
 
-    // pause 立即 flush 防抖中的位置（不拿墙钟等 2s 防抖窗）：listen 与 progress 各一笔
+    // pause 立即 flush 防抖中的位置（不拿墙钟等 2s 防抖窗）：listen 支的参数要带上新语速。
+    // 阅读器子树在场时 progress 归阅读会话（ADR-0093），本用例只钉 listen 这一笔。
     fireEvent.click(screen.getByRole('button', { name: '暂停' }))
     const puts = shelfPuts()
     const listen = must(puts.find((body) => 'listen' in body), 'listen body').listen as Record<string, unknown>
     expect(listen.rate).toBe(1.5)
-    expect(must(puts.find((body) => 'progress' in body), 'progress body').progress).toEqual({
-      chapterIndex: 0, offsetRatio: 0,
-    })
   })
 
   it('设置面板走共享浮层契约：入场焦点在面板内，Esc 关闭并还焦触发钮', async () => {
@@ -629,7 +627,7 @@ describe('定位到正在念的段', () => {
     expect(container.querySelector('[data-chapter="2"] .novel-tts-live')?.textContent).toBe('第三章第一段。')
   })
 
-  it('章到货后最终落位居中在命中段，而不是被「章首对齐」拉回去', async () => {
+  it('章到货后最终落位顶对齐在命中段，而不是被「章首对齐」拉回去', async () => {
     chapterNames = ['第一章', '第二章', '第三章']
     chapterTexts = [
       ['第一章第一段。'],
@@ -640,8 +638,8 @@ describe('定位到正在念的段', () => {
       sourceId: 's1', bookKey: 'k1', title: '书一', chapterIndex: 2, paragraphIndex: 1,
     })
     // 阅读器的真实滚动容器：可视高 600、内容高 2400。jsdom 没有排版引擎，替身要自己保一条
-    // 几何关系——章块的「内容坐标」固定，rect 随容器 scrollTop 平移。静态矩形下「先居中再
-    // 跳章」与「先跳章再居中」的两次加法可交换，量不出本次回归（最终都是章首高度 + 居中位移）。
+    // 几何关系——章块的「内容坐标」固定，rect 随容器 scrollTop 平移。静态矩形下「先落位再
+    // 跳章」与「先跳章再落位」的两次加法可交换，量不出本次回归（最终都是章首高度 + 顶对齐位移）。
     const scrollport = document.createElement('div')
     scrollport.style.overflowY = 'auto'
     Object.defineProperty(scrollport, 'clientHeight', { value: 600, configurable: true })
@@ -674,9 +672,9 @@ describe('定位到正在念的段', () => {
       fireEvent.click(screen.getByRole('button', { name: '定位到正在念的段' }))
       release()
       await waitFor(() => expect(container.querySelector('[data-chapter="2"]')).not.toBeNull())
-      // 命中段是第三章第二段：内容坐标 1500 + 100 + 1×100 = 1700、高 20，居中即
-      // 1700 + 20/2 - 600/2 = 1410。章首对齐那条路会给 1500——差的就是「先落位再居中」。
-      await waitFor(() => expect(scrollport.scrollTop).toBe(1410))
+      // 命中段是第三章第二段：内容坐标 1500 + 100 + 1×100 = 1700，高 20。顶对齐即
+      // 1700（落到带顶）。章首对齐那条路会给 1500——差的就是「先落位再顶对齐」。
+      await waitFor(() => expect(scrollport.scrollTop).toBe(1700))
     } finally {
       rectSpy.mockRestore()
       scrollport.remove()

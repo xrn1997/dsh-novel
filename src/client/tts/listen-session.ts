@@ -2,13 +2,14 @@ import { BROWSER_TTS_ENGINE_ID, TTS_DEFAULTS, TTS_RATE, TTS_VOLUME } from '../..
 import type {
   ChapterEntry, ListenState, ShelfEntry, SynthesisReceipt, SynthesisRequest,
 } from '../../shared/wire.js'
-import type { ReaderRestoreTarget } from '../reader-session.js'
+import type { ReaderRevealTarget } from '../reader-session.js'
 import { createStore } from '../store.js'
 import type { Store } from '../store.js'
 import type {
   BranchCapabilities, BranchHost, BranchMode, ListenBranches, OutputHandlers, PlaybackBranch,
 } from './output-contract.js'
-import { estimateParagraphIndex, paragraphRatio, readingProbeNow } from './reading-position.js'
+import { estimateParagraphIndex, paragraphRatio } from '../progress.js'
+import { readingProbeNow } from './reading-position.js'
 
 /**
  * 听书播放会话（字节型 + 浏览器直出型）：状态机与全部可变现场住这里，外界一律经
@@ -48,14 +49,12 @@ export const TTS_MAX_CONSECUTIVE_FAILURES = 5
 /** 起播失败码：码是契约，译文由调用方按 code 映射（本模块不持可见文案）。
  *  `TTS_NO_VOICES` = 直出源等过平台的语音表（Chromium 首读可能为空）之后仍没有可用音色
  *  （含平台没有语音能力），不假装能放；
- *  `TTS_NOT_ON_SHELF` = 没进架的书没有阅读进度可换算，「从阅读位置起播」要说清为什么没动；
  *  `TTS_CHAPTER_LOAD` = 用户点名的跳章 / 跳段跨章时章正文拉不到。它只从**手动导航**抛：
  *  自动推进的同一失败由 `finishChapter` 收口成暂停，用户按下的导航则要有人告诉他为什么没动。
  *  与「单段失败」不是一回事——那一段失败只影响那一段，章正文失败是整章没到手。 */
 export type TtsPlayerErrorCode =
   | 'TTS_CHAPTERS_EMPTY'
   | 'TTS_NO_VOICES'
-  | 'TTS_NOT_ON_SHELF'
   | 'TTS_CHAPTER_LOAD'
 
 /** 跳章的载入结局：`moved` 也含空章（章正文到货但没有可朗读段，由调用方按段落数决定下一步）。
@@ -176,9 +175,13 @@ export interface StartListeningInput {
   sourceId: string
   bookKey: string
   title: string
-  /** 起播位置；`resume: 'archive'` 时只是「本书没有存档」的兜底。 */
+  /** 显式起播章段（选区 / 调用方已解析的探针）；`resume: 'archive'` 时只是存档缺席的兜底。 */
   chapterIndex?: number
   paragraphIndex?: number
+  /** 没有显式章段 / 探针时的章兜底（阅读器当前章）；排在书架 progress 之前。 */
+  fallbackChapter?: number
+  /** 没有显式段号时，允许用本书书架 progress 的比例估算段号（只认同一章）。 */
+  fallbackToShelfParagraph?: boolean
   /**
    * 位置来源：`'archive'` = 本书有服务端 listen 存档就从存档章段续听（存档缺席/读不到才用
    * chapterIndex/paragraphIndex）；`'position'`（缺省）= 用传入位置。阅读器 pill 用 position 档：
@@ -189,6 +192,17 @@ export interface StartListeningInput {
   voice?: string | null
   rate?: number
   volume?: number
+}
+
+/** 「从阅读位置起播」的输入：位置来源链归会话，调用方只交书身份与可选兜底。 */
+export interface StartFromReadingPositionInput {
+  sourceId: string
+  bookKey: string
+  title: string
+  /** 阅读器当前章（probe 缺席且书架 progress 不同章时的兜底）。 */
+  fallbackChapter?: number
+  /** 显式目标（选区）：给了就不再读探针。 */
+  target?: { chapterIndex: number; paragraphIndex: number }
 }
 
 /** 回退链用的活动缺省：served 值经 `setTtsDefaults` 推进来，内容在 wire 的 `TTS_DEFAULTS`。
@@ -218,6 +232,9 @@ export interface ListenPlatform {
   /** 共用的消费位置：章 + 章内比例，写 `ShelfBook.progress`。与 `saveListen` 同一个落盘节拍，
    *  两笔各自尽力而为——一笔失败不该把另一笔拖住。 */
   saveProgress(bookKey: string, chapterIndex: number, offsetRatio: number): Promise<void>
+  /** 本书的阅读器子树是否在场：在场时 progress 归阅读会话（它按真实视口/精确段写），
+   *  播放层只写 listen。不在场时才由播放层补 progress——见 ADR-0093。 */
+  readerPresent?(bookKey: string): boolean
   /** opts.signal = 这一发合成所属的取消位：跳段只落当前段那一只（同章预取照跑），
    *  停止 / 换书 / 换参数把整趟的（含预取）一起落下去。 */
   synthesize(req: SynthesisRequest, opts?: { signal?: AbortSignal }): Promise<SynthesisReceipt>
@@ -269,17 +286,11 @@ interface PlayerRun {
   synthToken: number | null
 }
 
-interface StartSeed {
-  chapters: ChapterEntry[]
-  chapterIndex: number
-  units: string[]
-}
-
 /** 「回阅读器」的交接现场（一次性、按书键）：取走即空，两键不匹配既不消费也不应用。 */
 interface PendingRelocation {
   sourceId: string
   bookKey: string
-  target: ReaderRestoreTarget
+  target: ReaderRevealTarget
 }
 
 /**
@@ -339,40 +350,33 @@ export class ListenSession {
     await this.startSession(p)
   }
 
-  private async startSession(p: StartListeningInput, seed?: StartSeed): Promise<void> {
-    // 取数在停旧会话**之前**：旧会话继续放着，一次网络抖动不该把「按了按钮」放大成「声音全没」
-    // （`playFromReadingPosition` 早就是这个次序；这里是两条起播入口共用的底层，别再各排一套）。
+  private async startSession(p: StartListeningInput): Promise<void> {
+    // 取数在停旧会话**之前**：旧会话继续放着，一次网络抖动不该把「按了按钮」放大成「声音全没」。
+    // 只有这一条起播管线：显式章段 → 阅读器当前章 → 书架 progress → 0，不再有第二条 seed 入口。
     const gen = ++this.runSeq
     this.ensurePagehide()
 
-    let chapters: ChapterEntry[]
-    let chapterIndex: number
-    let units: string[]
-    let stored: ListenState | null = null
-    if (seed !== undefined) {
-      chapters = seed.chapters
-      chapterIndex = seed.chapterIndex
-      units = seed.units
-    } else {
-      const [nav, entry] = await Promise.all([
-        this.platform.fetchChapters(p.sourceId, p.bookKey),
-        this.platform.shelfEntryOf(p.bookKey),
-      ])
-      if (gen !== this.runSeq) return
-      chapters = nav
-      stored = entry?.listen ?? null
-      if (chapters.length === 0) throw new TtsPlayerError('TTS_CHAPTERS_EMPTY')
-      const archive = p.resume === 'archive' ? stored : null
-      chapterIndex = clampIndex(archive?.chapterIndex ?? p.chapterIndex ?? 0, chapters.length - 1)
-      units = await this.platform.fetchUnits(p.sourceId, p.bookKey, chapterIndex)
-      if (gen !== this.runSeq) return
-    }
+    const [chapters, entry] = await Promise.all([
+      this.platform.fetchChapters(p.sourceId, p.bookKey),
+      this.platform.shelfEntryOf(p.bookKey),
+    ])
+    if (gen !== this.runSeq) return
     if (chapters.length === 0) throw new TtsPlayerError('TTS_CHAPTERS_EMPTY')
-    chapterIndex = clampIndex(chapterIndex, chapters.length - 1)
+    const stored = entry?.listen ?? null
     const archive = p.resume === 'archive' ? stored : null
+    const chapterIndex = clampIndex(
+      archive?.chapterIndex ?? p.chapterIndex ?? p.fallbackChapter ?? entry?.progress.chapterIndex ?? 0,
+      chapters.length - 1,
+    )
+    const units = await this.platform.fetchUnits(p.sourceId, p.bookKey, chapterIndex)
+    if (gen !== this.runSeq) return
+    const shelfParagraph = p.fallbackToShelfParagraph === true
+      && entry !== null && entry.progress.chapterIndex === chapterIndex
+      ? estimateParagraphIndex(entry.progress.offsetRatio, units.length)
+      : 0
     const paragraphIndex = units.length === 0
       ? 0
-      : clampIndex(archive?.paragraphIndex ?? p.paragraphIndex ?? 0, units.length - 1)
+      : clampIndex(archive?.paragraphIndex ?? p.paragraphIndex ?? shelfParagraph, units.length - 1)
 
     const engineId = p.engineId ?? stored?.engineId ?? this.defaults.engineId
     // 音色 id 只对存它的那个引擎有效：显式换了引擎又没给音色时，不把存档里的旧 id 带过去。
@@ -1097,76 +1101,56 @@ export class ListenSession {
   // ── 从阅读位置起播 ──────────────────────────────────────────────────────────
 
   /**
-   * 在**当前这本书**的会话里换到阅读位置起播：阅读器探针在场且量得到就用它；
-   * 否则用书架投影的阅读进度按 `estimateParagraphIndex` 换成段号。
-   * 这里只读位置；会话自己的落盘节拍负责把新起播点写回共用的 progress。
+   * 在**当前这本书**的会话里换到阅读位置起播：位置解析与起播管线都归
+   * `startFromReadingPosition`；本方法只从会话 state 取书身份。
    */
   async playFromReadingPosition(): Promise<void> {
     const st = this.state.get()
-    if (!st.active || st.bookKey === null || st.sourceId === null) return
-    const bookKey = st.bookKey
-    const sourceId = st.sourceId
-    const timerChoice = st.timerChoice
-    const timerEndAt = st.timerEndAt
-    const base: StartListeningInput = {
-      sourceId,
-      bookKey,
-      title: st.title,
-      chapterIndex: st.chapterIndex,
-      paragraphIndex: st.paragraphIndex,
-      engineId: st.engineId,
-      voice: st.voice,
-      rate: st.rate,
-      volume: st.volume,
-    }
-    const probe = readingProbeNow()
-    let probeAt: { chapterIndex: number; paragraphIndex: number } | null = null
-    if (probe !== null) {
-      try { probeAt = probe() } catch { probeAt = null }
-    }
-    // 起播点两个来源：阅读器探针（此刻看得见的段），或书架上的阅读进度换算（探针缺席——阅读器
-    // 不在场或量不到）。换算只读位置，写回归本会话正常的落盘节拍。
-    type StartAt =
-      | { from: 'probe'; chapterIndex: number; paragraphIndex: number }
-      | { from: 'reading'; chapterIndex: number; offsetRatio: number }
-    let at: StartAt
-    if (probeAt !== null) {
-      at = { from: 'probe', ...probeAt }
-    } else {
-      const entry = await this.platform.shelfEntryOf(bookKey)
-      if (!this.stillOn(bookKey)) return
-      // 「没进架」与「目录为空」是事实，必须说话——静默 return 就成了「按了按钮界面一动不动」，
-      // 正是本仓最忌的空结果冒充做过事。
-      if (entry === null) throw new TtsPlayerError('TTS_NOT_ON_SHELF')
-      at = {
-        from: 'reading',
-        chapterIndex: entry.progress.chapterIndex,
-        offsetRatio: entry.progress.offsetRatio,
+    if (st.bookKey === null || st.sourceId === null) return
+    await this.startFromReadingPosition({
+      sourceId: st.sourceId, bookKey: st.bookKey, title: st.title,
+    })
+  }
+
+  /** 「从阅读位置起播」的唯一解析链：显式目标 → 实时探针 → 当前章 → 书架 progress。
+   *  解析出的章段交给 `startListening` 的同一条取数管线；不再有第二条 seed 路径。
+   *  起播沿用本书参数，起播后恢复原定时（换起播点不是重定一次时）。 */
+  async startFromReadingPosition(p: StartFromReadingPositionInput): Promise<void> {
+    const st = this.state.get()
+    const activeSame = st.active && st.bookKey === p.bookKey && st.sourceId === p.sourceId
+    const timerChoice = activeSame ? st.timerChoice : null
+    const timerEndAt = activeSame ? st.timerEndAt : null
+    let target = p.target ?? null
+    if (target === null) {
+      const probe = readingProbeNow()
+      if (probe !== null) {
+        try { target = probe() } catch { target = null }
       }
     }
-    // 目录与段落**先取到手再换会话**（`startSession` 的底层次序与此一致）：取不到时旧会话照常
-    // 放着，错误照抛——一次网络抖动不该放大成「按了按钮声音全没」。
-    const chapters = await this.platform.fetchChapters(sourceId, bookKey)
-    if (!this.stillOn(bookKey)) return
-    if (chapters.length === 0) throw new TtsPlayerError('TTS_CHAPTERS_EMPTY')
-    const chapterIndex = clampIndex(at.chapterIndex, chapters.length - 1)
-    const units = await this.platform.fetchUnits(sourceId, bookKey, chapterIndex)
-    if (!this.stillOn(bookKey)) return
-    const paragraphIndex = at.from === 'probe'
-      ? at.paragraphIndex
-      : estimateParagraphIndex(at.offsetRatio, units.length)
-    await this.startSession({ ...base, chapterIndex, paragraphIndex }, { chapters, chapterIndex, units })
-    // 起播在途被更晚的起播取代（或用户停了）：这一发不再有权复位别人的定时。
-    if (!this.stillOn(bookKey)) return
-    // 定时是会话级的现场，同一本书换起播点不该顺手抹掉它；分钟档要按**原到点时刻**复位，
-    // 否则「已听 5 分钟的 15 分钟定时」会重新充满（换起播点不是重定一次时）。
+    const base: StartListeningInput = {
+      sourceId: p.sourceId,
+      bookKey: p.bookKey,
+      title: p.title,
+      resume: 'position',
+      ...(activeSame
+        ? { engineId: st.engineId, voice: st.voice, rate: st.rate, volume: st.volume }
+        : {}),
+      ...(target !== null
+        ? { chapterIndex: target.chapterIndex, paragraphIndex: target.paragraphIndex }
+        : {
+            ...(activeSame ? { fallbackChapter: st.chapterIndex } : (p.fallbackChapter === undefined ? {} : { fallbackChapter: p.fallbackChapter })),
+            fallbackToShelfParagraph: true,
+          }),
+    }
+    await this.startListening(base)
+    if (!this.stillOn(p.bookKey)) return
     if (timerChoice !== null) {
       if (timerChoice === 'chapter' || timerEndAt === null) this.setListenTimer(timerChoice)
       else this.restoreTimerAt(timerChoice, timerEndAt)
     }
   }
 
-  /** 会话重建后的定时复位（`playFromReadingPosition` 专用）：只认到点时刻，不重算时长。 */
+  /** 会话重建后的定时复位（`startFromReadingPosition` 专用）：只认到点时刻，不重算时长。 */
   private restoreTimerAt(choice: number, endAt: number): void {
     const run = this.current
     if (run === null || !this.state.get().active) return
@@ -1187,8 +1171,10 @@ export class ListenSession {
    * 为什么不是跳章：`requestJump`/`settleJump` 会把「读到第 N 章」立即写进存档——那会把一次
    * 定位动作记成一次阅读；恢复路径（cause `restore`）只站定不写，正好避开这笔幽灵写。
    *
-   * 现场是**一次性的**，且**按书键**：取走即空，第二次开书回存档 progress；段号 → 比例用当前会话
-   * 该章的播放单元数（`paragraphCount`）两端对齐换算，只求落回那一段附近（段高不齐，不假装像素锚点）。
+   * 现场是**一次性的**，且**按书键**：取走即空，第二次开书回存档 progress。
+   *  target 直接是**章 + 段号**，不再换成段数比例（`ADR-0094`）：阅读器按 `[data-pidx]` 找块，
+   *  回阅读器因此能落在正在念的段，而不是落在「比例对应的像素」（比例换算只服务落盘，
+   *  不服务视觉落点；段高不等时两者本来就不是同一个数）。
    *
    * 为什么必须带 `{sourceId, bookKey}`：听书会跨书常驻，而阅读器只按「谁先打开」取现场。听书的
    * 那本若是迟迟没人开，下一本**别的**书开门就会落到别人的章段上（没写进度，但错页）。这里把交接
@@ -1201,15 +1187,12 @@ export class ListenSession {
     this.pendingRelocation = {
       sourceId,
       bookKey,
-      target: {
-        chapterIndex,
-        offsetRatio: paragraphRatio(paragraphIndex, this.state.get().paragraphCount),
-      },
+      target: { index: chapterIndex, paragraphIndex },
     }
   }
 
   /** 阅读器开书时按书键取走现场：两键都匹配才返回并清空；不匹配/没有现场返回 null（不消费）。 */
-  takeReaderRelocation(sourceId: string, bookKey: string): ReaderRestoreTarget | null {
+  takeReaderRelocation(sourceId: string, bookKey: string): ReaderRevealTarget | null {
     const pending = this.pendingRelocation
     if (pending === null || pending.sourceId !== sourceId || pending.bookKey !== bookKey) return null
     this.pendingRelocation = null
@@ -1229,15 +1212,26 @@ export class ListenSession {
     const st = this.state.get()
     if (!st.active || st.bookKey === null) return
     const offsetRatio = paragraphRatio(st.paragraphIndex, st.paragraphCount)
+    const listenSave = this.platform.saveListen(st.bookKey, {
+      chapterIndex: st.chapterIndex,
+      paragraphIndex: st.paragraphIndex,
+      engineId: st.engineId,
+      voice: st.voice,
+      rate: st.rate,
+      volume: st.volume,
+    }).catch(() => undefined)
+    // 阅读器子树在场 → progress 归阅读会话：它按真实视口 / 精确段写，播放层再用段数比例
+    // 写一遍只会与它抢同一个字段（两套公式，见 ADR-0093）。阅读器不在场才由播放层补。
+    let readerOwns = false
+    try {
+      readerOwns = this.platform.readerPresent?.(st.bookKey) === true
+    } catch { /* 在场读数失败按不在场处理：宁可多写一笔 progress，也不让听书落盘整条断掉 */ }
+    if (readerOwns) {
+      await listenSave
+      return
+    }
     await Promise.all([
-      this.platform.saveListen(st.bookKey, {
-        chapterIndex: st.chapterIndex,
-        paragraphIndex: st.paragraphIndex,
-        engineId: st.engineId,
-        voice: st.voice,
-        rate: st.rate,
-        volume: st.volume,
-      }).catch(() => undefined),
+      listenSave,
       this.platform.saveProgress(st.bookKey, st.chapterIndex, offsetRatio).catch(() => undefined),
     ])
   }

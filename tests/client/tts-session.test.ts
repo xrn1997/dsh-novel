@@ -208,6 +208,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     failFetch: (index: number) => void
     /** 挂起下一次「等平台语音表」，返回放行函数（模拟直出源起播在途的窗口）。 */
     holdVoices: () => (ready: boolean) => void
+    setReaderPresent: (present: boolean) => void
   }
 
   function makeHarness(): Harness {
@@ -229,6 +230,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     const fetchHolds = new Map<number, Promise<void>>()
     const fetchFailures = new Set<number>()
     let voiceHold: Promise<boolean> | null = null
+    let readerPresent = false
     /** 源级闸门的平台读数：直出分支的 `ready()` 直接问它（真适配器的 `awaitDirectVoices` 等价物）。 */
     const awaitVoices = async (): Promise<boolean> => {
       const held = voiceHold
@@ -263,6 +265,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
       saveProgress: async (bookKey, chapterIndex, offsetRatio) => {
         progressSaves.push({ bookKey, chapterIndex, offsetRatio })
       },
+      readerPresent: () => readerPresent,
       synthesize: async (req, opts) => {
         synthCalls.push(req)
         synthSignals.set(req.text, opts?.signal)
@@ -303,6 +306,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
         voiceHold = new Promise<boolean>((resolve) => { release = resolve })
         return release
       },
+      setReaderPresent: (present) => { readerPresent = present },
     }
   }
 
@@ -455,6 +459,26 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     h.session.pauseListening()
     expect(h.saves).toHaveLength(1)
     expect(h.progressSaves).toEqual([{ bookKey: 'b1', chapterIndex: 0, offsetRatio: 0 }])
+  })
+
+  it('阅读器子树在场：播放层只写 listen，progress 归阅读会话（ADR-0093）', async () => {
+    const h = makeHarness()
+    h.setReaderPresent(true)
+    await start(h)
+    h.clock.advance(2000)
+    expect(h.saves, 'listen 照常落盘').toHaveLength(1)
+    expect(h.progressSaves, 'progress 不由播放层写').toHaveLength(0)
+
+    h.session.setListenVolume(0.4)                    // 排一笔待落盘
+    h.session.pauseListening()                        // 暂停 flush 它
+    expect(h.saves.length, '暂停 flush 仍写 listen').toBe(2)
+    expect(h.progressSaves, '暂停 flush 也不越权写 progress').toHaveLength(0)
+
+    // 阅读器撤场：下一笔落盘由播放层补 progress，书架游标才跟得上。
+    h.setReaderPresent(false)
+    h.session.setListenVolume(0.6)
+    h.clock.advance(2000)
+    expect(h.progressSaves).toHaveLength(1)
   })
 
   it('单段失败留痕并跳过；连败到 TTS_MAX_CONSECUTIVE_FAILURES 即暂停', async () => {

@@ -1,9 +1,12 @@
 /**
- * 阅读位置 → 听书起播位置的换算，以及阅读器注入的**实时探针**。
+ * 阅读器注入的**实时阅读位置探针**：DOM 几何 → 章 + 段号。
  *
  * 为什么是模块级一格而不是参数：播放层是模块级的（阅读器卸载不停播），而「读者此刻在看哪里」
  * 只有阅读器组件的 DOM 量得出来。阅读器挂载时注册探针、卸载时注销，播放层在「从阅读位置起播」
  * 那一刻现取——不缓存读数，缓存会让按钮用的是上一次打开书时的位置。
+ *
+ * 换算不在这里：像素 / 段数口径与它们的互逆关系归 `client/progress.ts` 的章内位置 codec；
+ * 段号 ⇄ 屏上块的命中判据归 `client/reader-paragraph.ts`，本文件只再导出。
  */
 import { crossedIndex } from '../viewport-top.js'
 
@@ -61,61 +64,7 @@ export function readingPositionAt(
 }
 
 /**
- * 章内滚动比例 → 段下标（0 基）：把阅读存档的 `offsetRatio` 投到段序号上。
- * 口径：两端对齐（0 → 首段、1 → 末段），中间四舍五入到最近的段；越界与非有限值夹紧。
- * 段数 0（空章 / 全是不可朗读段）没有可起播的目标，回 0 交给上层 clamp。
- *
- * 为什么不是 `floor(ratio * count)`：ratio = 1 是存档里的合法末位（读到章末），
- * floor 会把它投到段数之外，播放层还得再夹一次；两端对齐让「从阅读位置起播」在章末
- * 恰好落在最后一段。
+ * 段号落在哪个「起段号」格：判据已归 `client/reader-paragraph.ts`（阅读器几何与高亮共用），
+ * 这里只再导出，调用点不必改。
  */
-export function estimateParagraphIndex(offsetRatio: number, paragraphCount: number): number {
-  if (paragraphCount <= 0) return 0
-  const ratio = Number.isFinite(offsetRatio) ? Math.min(1, Math.max(0, offsetRatio)) : 0
-  return Math.min(paragraphCount - 1, Math.round(ratio * (paragraphCount - 1)))
-}
-
-/**
- * 段下标 → 章内滚动比例：`estimateParagraphIndex` 的**反函数**（同一两端对齐口径，
- * 合法段号来回换算不漂）。「回阅读器」用它把听书段换成阅读会话的恢复目标形状
- * （恢复要吃的是「章 + 比例」，不是段锚点）；两个方向的判据住在同一处，别在调用点另写一份。
- */
-export function paragraphRatio(paragraphIndex: number, paragraphCount: number): number {
-  if (paragraphCount <= 1) return 0
-  const index = Number.isFinite(paragraphIndex) ? Math.trunc(paragraphIndex) : 0
-  return Math.min(paragraphCount - 1, Math.max(0, index)) / (paragraphCount - 1)
-}
-
-/**
- * 段号落在哪个「起段号」格：`starts` 升序（屏上各正文块的起始播放单元号），取最后一个
- * ≤ 段号的起点——一个块可占多个播放单元（超长段二次切分），段号在块区间内都归它。
- * 跟读高亮（ChapterBody）与「定位到正在念的段」（DOM 查找）共用这一条命中判据；
- * 段号在首块起点之前（被剥掉的章名占的单元）返回 -1 = 屏上没有对应块。
- */
-export function paragraphSlotOf(starts: readonly number[], paragraphIndex: number): number {
-  let slot = -1
-  for (let index = 0; index < starts.length; index += 1) {
-    const start = starts[index]
-    if (start === undefined || start > paragraphIndex) break
-    slot = index
-  }
-  return slot
-}
-
-/** 章块内按段号找正文块（「定位到正在念的段」的 DOM 落点）：起段号取自 `data-pidx`，
- *  命中判据与跟读高亮同一条（`paragraphSlotOf`）；量不到返回 null，调用方不动滚动。 */
-export function listenParagraphElement(block: Element, paragraphIndex: number): Element | null {
-  // `data-pidx` 只认整数：坏值（NaN / 空串 / 小数）若混进 `starts`，`paragraphSlotOf` 的
-  // 「起点大于段号就停」会永远不成立，于是落到别的块上——宁可当这块没有落点，也不猜。
-  const marked = [...block.querySelectorAll('[data-pidx]')]
-  const starts: number[] = []
-  const elements: Element[] = []
-  for (const element of marked) {
-    const value = Number(element.getAttribute('data-pidx'))
-    if (!Number.isInteger(value)) continue
-    starts.push(value)
-    elements.push(element)
-  }
-  const slot = paragraphSlotOf(starts, paragraphIndex)
-  return slot === -1 ? null : elements[slot] ?? null
-}
+export { paragraphSlotOf, listenParagraphElement } from '../reader-paragraph.js'

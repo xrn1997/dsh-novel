@@ -1,5 +1,6 @@
 import type { ChapterAnchor } from './progress.js'
 import type { ReaderPort, VisibleNode } from './reader-session.js'
+import { listenParagraphElement } from './reader-paragraph.js'
 import {
   contentOriginTop, portScrollHeight, portScrollTop, portViewHeight, portViewTop, setPortScrollTop,
 } from './scrollport.js'
@@ -82,6 +83,16 @@ export function createReaderGeometry(source: ReaderGeometrySource): ReaderPort {
     currentNode: () => currentNodeOf(
       source.chapters(), portViewTop(source.port()) + clampTopInset(source.topInset?.()),
     ),
+    /** 听书段 → 屏上块：段号命中判据归 `client/reader-paragraph.ts`，这里只把块的几何换成
+     *  相对视口顶的偏移（与 `targetOffset` 同一坐标系）。 */
+    targetOffsetOfParagraph: (index, paragraphIndex) => {
+      const block = source.chapters()[index]
+      if (block === null || block === undefined) return null
+      const target = listenParagraphElement(block, paragraphIndex)
+      if (target === null) return null
+      const rect = target.getBoundingClientRect()
+      return { top: rect.top - portViewTop(source.port()), height: rect.height }
+    },
   }
 }
 

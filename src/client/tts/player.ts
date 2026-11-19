@@ -13,10 +13,11 @@ import { DirectOutput } from './direct-output.js'
 import type { DirectSpeechFace } from './direct-output.js'
 import { ListenSession } from './listen-session.js'
 import { createListenBranches } from './playback-branches.js'
+import { readerPresence } from './reader-presence.js'
 import type {
-  ListenPlatform, StartListeningInput, TtsDefaults,
+  ListenPlatform, StartFromReadingPositionInput, StartListeningInput, TtsDefaults,
 } from './listen-session.js'
-import type { ReaderRestoreTarget } from '../reader-session.js'
+import type { ReaderRevealTarget } from '../reader-session.js'
 
 /**
  * 听书播放层的**生产外观**：平台真实现（api / 书架投影 / wire 构造器 / util 防抖 / 惰性
@@ -33,7 +34,8 @@ import type { ReaderRestoreTarget } from '../reader-session.js'
 
 export { TTS_MAX_CONSECUTIVE_FAILURES, TtsPlayerError } from './listen-session.js'
 export type {
-  TtsPlayerErrorCode, TtsPlayerState, TtsProgressState, StartListeningInput, TtsDefaults,
+  TtsPlayerErrorCode, TtsPlayerState, TtsProgressState, StartListeningInput,
+  StartFromReadingPositionInput, TtsDefaults,
 } from './listen-session.js'
 
 // ── 平台音色表（直出型的展示面）──────────────────────────────────────────────
@@ -206,6 +208,8 @@ const prodListenPlatform: ListenPlatform = {
     await apiSend(paramOps.shelfPut.at(bookKey), bodies.shelfProgress(chapterIndex, offsetRatio))
     patchPanelShelfProgress(bookKey, chapterIndex, offsetRatio)
   },
+  /** 本书的阅读器子树是否在场：在场时 progress 归阅读会话（ADR-0093），播放层只写 listen。 */
+  readerPresent: (bookKey) => readerPresence.get().bookKeys.includes(bookKey),
   synthesize: (req, opts) => apiSend<SynthesisReceipt>(
     ROUTES.ttsSynthesize, bodies.ttsSynthesize(req), opts?.signal),
   get branches(): ListenPlatform['branches'] {
@@ -268,13 +272,18 @@ export async function playFromReadingPosition(): Promise<void> {
   await session.playFromReadingPosition()
 }
 
+/** 「从阅读位置起播」的唯一入口：位置来源链归会话，视图只交书身份与可选兜底。 */
+export function startFromReadingPosition(p: StartFromReadingPositionInput): Promise<void> {
+  return session.startFromReadingPosition(p)
+}
+
 export function requestReaderRelocation(
   sourceId: string, bookKey: string, chapterIndex: number, paragraphIndex: number,
 ): void {
   session.requestReaderRelocation(sourceId, bookKey, chapterIndex, paragraphIndex)
 }
 
-export function takeReaderRelocation(sourceId: string, bookKey: string): ReaderRestoreTarget | null {
+export function takeReaderRelocation(sourceId: string, bookKey: string): ReaderRevealTarget | null {
   return session.takeReaderRelocation(sourceId, bookKey)
 }
 

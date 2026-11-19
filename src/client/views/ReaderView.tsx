@@ -13,17 +13,18 @@ import { navigate, prefsStore, setPref, useStore, useStoreValue } from '../store
 import { FONT_STEPS, LINE_HEIGHTS, MEASURES, PAPER_PRESETS } from '../prefs-ui.js'
 import { ReaderScene } from '../reader-scene.js'
 import { ReaderSession } from '../reader-session.js'
-import type { ReaderRestoreTarget } from '../reader-session.js'
+import type { ReaderRevealTarget } from '../reader-session.js'
 import { createReaderBinding } from '../reader-binding.js'
 import { nextChapterIndex } from '../reader-load.js'
 import { addShelfSeat } from '../shelf-action.js'
-import { pauseListening, resumeListening, startListening, takeReaderRelocation, ttsPlayer } from '../tts/player.js'
-import { readingProbeNow, listenParagraphElement } from '../tts/reading-position.js'
+import { pauseListening, resumeListening, startFromReadingPosition, takeReaderRelocation, ttsPlayer } from '../tts/player.js'
 import { enterReader } from '../tts/reader-presence.js'
+import { createFollowController } from '../tts/follow-controller.js'
+import type { FollowController } from '../tts/follow-controller.js'
 import { TtsBar } from '../tts/TtsBar.js'
 import { isPlayBusy } from '../tts/listen-readout.js'
 import { ttsErrorMessage } from '../tts/tts-error.js'
-import { paperInk, paperLiveInk, centerInScroller, revealInScroller, stripLeadingTitle } from '../util.js'
+import { paperInk, paperLiveInk, centerInScroller, stripLeadingTitle } from '../util.js'
 import { ErrorBanner, WarningList } from './bits.js'
 import { ChapterBody } from './ChapterBody.js'
 import { useListenFromSelection } from './listen-from-selection.js'
@@ -320,25 +321,16 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   /** 「回阅读器」取走的重定位现场（按书记）：模块级现场是**一次性的**，但本 mount 的 effect
    *  可能连跑两趟（StrictMode 的 mount → cleanup → mount），第一趟取走的现场必须留给第二趟，
    *  否则开发期双挂载会把听书位置丢掉、退回存档 progress。换书不复用（键变了就重新取）。 */
-  const relocationRef = useRef<{ sourceId: string; bookKey: string; target: ReaderRestoreTarget | null } | null>(null)
-  /** 「定位到正在念的段」在目标章还没载入时留下的落点：章一到货就居中，别停在章首。 */
-  const pendingLocateRef = useRef<{ chapterIndex: number } | null>(null)
-  /** 跟读自动跟随是否还听播放的：用户手动滚动 / 目录 / 内链导航即让位；定位按钮重新接上。 */
-  const followRef = useRef(true)
-  /** 自动跟随已经为哪一章发过跳章：章未载时每个段都会走到同一分支，不能每段重发；
-   *  章到货 / 接管 / 重新定位时清掉，让下一次真的需要时还能再发。 */
-  const followJumpRef = useRef<number | null>(null)
-  /** `session` 在下面才建；接管动作要先于它挂到绑定上，所以取消在途跳章经这只 ref 转交。 */
-  const cancelPendingJumpRef = useRef<() => void>(() => {})
+  const relocationRef = useRef<{ sourceId: string; bookKey: string; target: ReaderRevealTarget | null } | null>(null)
+  /** 跟读策略 module（零 React）：跟随开关、relocation 待办与 reveal 决策都住它。
+   *  绑定早于会话构造，接管动作经这只 ref 转交；挂载后由下面的 effect 接上。 */
+  const followControllerRef = useRef<FollowController | null>(null)
   /** 听书条根：跟随的可视底界要扣掉它的高度（条贴视口底，目标段不许藏在它下面）。 */
   const ttsBarRef = useRef<HTMLDivElement | null>(null)
-  /** 用户把视口带走：跟随即让位，挂起的自动定位与在途自动跳章一并作废
+  /** 用户把视口带走：跟随即让位，挂起的自动定位与在途落位一并作废
    *  （最后一次显式动作是用户这一下）。 */
   const takeOverReading = useCallback((): void => {
-    followRef.current = false
-    followJumpRef.current = null
-    pendingLocateRef.current = null
-    cancelPendingJumpRef.current()
+    followControllerRef.current?.onUserIntent()
   }, [])
   /** 顶条（sticky）：它的高度就是滚动视口顶的固定遮挡。阅读位置（恢复 / 跳转 / 读数 / 探针）
    *  一律按「条下方第一行」算——按裸 scrollTop 算，听书恢复的段首会正好藏在条后。 */
@@ -388,11 +380,16 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     // 一路写给第一本书的地址。sourceId 与 title 不在本工厂里被读——换源走下面那条 open() 的 effect。
   }, binding.port, deps.saveDebounceMs, t), [binding, deps, bookKey, t, topInset])
 
-  // 接管动作挂在绑定上，早于会话构造；这里把取消在途跳章接到当前会话上。
+  /** 跟读策略：落位与撤销都接到当前会话；视图只保留 refs 与呈现。 */
+  const follow = useMemo(() => createFollowController({
+    bookKey,
+    reveal: (target, opts) => { session.reveal(target, opts) },
+    cancel: () => { session.cancelJump() },
+  }), [bookKey, session])
   useEffect(() => {
-    cancelPendingJumpRef.current = () => { session.cancelJump() }
-    return () => { cancelPendingJumpRef.current = () => {} }
-  }, [session])
+    followControllerRef.current = follow
+    return () => { followControllerRef.current = null }
+  }, [follow])
 
   // 第三参 = getServerSnapshot：renderToString（smoke/SSR）必需，缺了直接抛
   const st = useSyncExternalStore(session.subscribe, () => session.state, () => session.state)
@@ -402,18 +399,20 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
    *  引擎/音色/语速/音量一律不传——回退链归播放层（本书 listen 存档 → 活动缺省）。
    *  位置来源恒为 `position`：视图不透传 `resume`——`archive` 档是会话侧留给「显式从存档续听」
    *  的入口（`ADR-0078`），眼下没有界面调用点，视图这层转一道只会多一个永远取缺省值的死参数。 */
-  const startListeningAt = useCallback((chapterIndex: number, paragraphIndex: number): void => {
-    void startListening({ sourceId, bookKey, title, chapterIndex, paragraphIndex, resume: 'position' })
-      .catch((cause: unknown) => { deps.pushError(ttsErrorMessage(t, cause)) })
-  }, [sourceId, bookKey, title, deps, t])
+  const startListeningAt = useCallback((target?: { chapterIndex: number; paragraphIndex: number }): void => {
+    void startFromReadingPosition({
+      sourceId, bookKey, title,
+      ...(target === undefined ? { fallbackChapter: currentChapter } : { target }),
+    }).catch((cause: unknown) => { deps.pushError(ttsErrorMessage(t, cause)) })
+  }, [sourceId, bookKey, title, currentChapter, deps, t])
   const onListenFrom = useCallback((chapterIndex: number, paragraphIndex: number): void => {
-    startListeningAt(chapterIndex, paragraphIndex)
+    startListeningAt({ chapterIndex, paragraphIndex })
   }, [startListeningAt])
   /** 选区起播的落点：document 监听只有**阅读器一份**（3 条，不随已载章数长），按段号 + 章身份
    *  归属；选中即出浮钮，点了才起播。 */
   const listenFrom = useListenFromSelection(bodyRef)
-  /** 顶条 pill：没有会话时起播——位置取**阅读器此刻看得见的那一段**（实时探针），量不到才退
-   *  当前章首段；本书正在听时就是继续/暂停——再按一次不该把位置重置回去。
+  /** 顶条 pill：没有会话时起播——位置来源链归播放层（探针 → 当前章 → 书架 progress），
+   *  视图只交当前章作兜底；本书正在听时就是继续/暂停——再按一次不该把位置重置回去。
    *  听书存档只提供音色/语速/音量与段级续听现场，不决定起播位置：读者看到第 N 章时按听书，
    *  不该被一份更早的听书存档拽回前面。 */
   const onListenPill = (): void => {
@@ -422,52 +421,26 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
       else resumeListening()
       return
     }
-    const probe = readingProbeNow()
-    let at: { chapterIndex: number; paragraphIndex: number } | null = null
-    if (probe !== null) {
-      try { at = probe() } catch { at = null }
-    }
-    startListeningAt(at?.chapterIndex ?? currentChapter, at?.paragraphIndex ?? 0)
+    startListeningAt()
   }
   /** 听书条贴视口底：跟随时正文的可见底界要扣掉它，目标段不能藏在条后面。 */
   const followBottomInset = useCallback((): number =>
     ttsBarRef.current?.getBoundingClientRect().height ?? 0, [])
-  /** 把视口带到听书所在段：`force` = 用户按了定位（居中）；否则是播放推进后的自动跟随
-   *  （只在目标离开看得见的正文带时补一次）。目标章不在已载窗口时先挂起定位并显式跳章——
-   *  章到货后的居中由拍点后回调消费（与旧定位路径同一份）。 */
-  const scrollToListening = useCallback((force: boolean): void => {
-    const live = ttsPlayer.get()
-    if (!live.active || live.bookKey !== bookKey) return
-    const block = chapterRefs.current[live.chapterIndex]
-    if (block === null || block === undefined) {
-      pendingLocateRef.current = { chapterIndex: live.chapterIndex }
-      // 同一章已经在途 / 已经发过：段推进每几秒一拍，不能每拍都重发一次导航（会重复落盘、
-      // 也会在加载失败时反复重试）。用户按定位是显式重试，先清掉“发过”的记录。
-      if (force) followJumpRef.current = null
-      if (session.pendingJump?.index === live.chapterIndex || followJumpRef.current === live.chapterIndex) return
-      if (session.state.toc === null) return
-      session.requestJump(live.chapterIndex, null)
-      if (session.pendingJump?.index === live.chapterIndex) followJumpRef.current = live.chapterIndex
-      return
-    }
-    followJumpRef.current = null
-    const port = binding.scrollport()
-    if (port === null) return
-    const target = listenParagraphElement(block, live.paragraphIndex) ?? block
-    if (force) centerInScroller(port, target)
-    else revealInScroller(port, target, topInset(), followBottomInset())
-  }, [binding, bookKey, session, topInset, followBottomInset])
   /** 「定位到正在念的段」：用户按了才滚，并重新接上自动跟随；只滚阅读滚动容器自己。 */
   const locateListen = useCallback((): void => {
-    followRef.current = true
-    followJumpRef.current = null
-    scrollToListening(true)
-  }, [scrollToListening])
-  /** 听书会话开始 / 结束 / 换书：跟随回到默认开启（上手即跟，用户滚动后才让位）。 */
+    const live = ttsPlayer.get()
+    follow.onLocate({
+      active: live.active,
+      bookKey: live.bookKey,
+      chapterIndex: live.chapterIndex,
+      paragraphIndex: live.paragraphIndex,
+    }, followBottomInset())
+  }, [follow, followBottomInset])
+  /** 听书会话开始 / 结束 / 换书：跟随回到默认开启（上手即跟，用户滚动后才让位）。
+   *  会话不在时清掉可能残留的重定位待办——它只服务「正在听的书回阅读器」。 */
   useEffect(() => {
-    followRef.current = true
-    followJumpRef.current = null
-  }, [listenActive, bookKey])
+    follow.onSessionChange(listenActive)
+  }, [follow, listenActive, bookKey])
 
   /** 阅读器子树在场信号：迷你条的可见性判据（挂载记一笔、卸载撤一笔）。不看路由——
    *  宿主切走面板时路由仍停在 `reader`，而面板子树已被卸载（`ADR-0022`），那正是迷你条
@@ -583,8 +556,8 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   const hasImportNotes = importNotes !== null && importNotes.length > 0
 
   // 进入：开会话（目录→恢复→懒加载）；卸载：关会话（清防抖定时器）。
-  // 「回阅读器」的一次性重定位在这里**按书键**取走（消费即摘，别人的现场不动）：它替代存档
-  // progress 当恢复目标，走同一条不写进度的恢复路径；第二次开书自然回存档。
+  // 「回阅读器」的一次性重定位在这里**按书键**取走（消费即摘，别人的现场不动）：
+  // 章号先按不写进度的恢复路径站定；精确段由随后的 `session.reveal` 落位（write:false）。
   useEffect(() => {
     chapterRefs.current = []
     const held = relocationRef.current
@@ -592,9 +565,11 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
       ? held.target
       : takeReaderRelocation(sourceId, bookKey)
     relocationRef.current = { sourceId, bookKey, target }
-    void session.open(sourceId, bookKey, target)
+    if (target !== null) follow.onRelocation(target)
+    void session.open(sourceId, bookKey,
+      target === null ? null : { chapterIndex: target.index, offsetRatio: 0 })
     return () => session.dispose()
-  }, [session, sourceId, bookKey])
+  }, [follow, session, sourceId, bookKey])
 
   /** DOM 侧接线：装监听、注册探针、首帧喂视口、挂载即拍第一帧；卸载全摘。
    *  装摘归绑定（`client/reader-binding.ts`），视图不再自己按 ref 拼 scroll/resize/ResizeObserver。 */
@@ -603,47 +578,22 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     return () => { binding.unmount() }
   }, [binding, session])
 
-  /** 播放推进（段 / 章变化）时自动跟随。`followRef` 是读者接管的闸门；手动滚动后它保持 false，
-   *  直到定位按钮或下一次听书会话把跟随重新打开。effect 必须排在绑定挂载之后：首帧跟随时
-   *  端口已刷新（回到阅读器且会话已在播的那一路不会因为 port 还是 null 而漏掉第一次跟随）。 */
+  /** 播放推进（段 / 章变化）时自动跟随。策略归 `follow-controller`：读者接管后它保持让位，
+   *  直到定位按钮或下一次听书会话重新接上。effect 必须排在绑定挂载之后：首帧跟随时端口已刷新
+   *  （回到阅读器且会话已在播的那一路不会因为 port 还是 null 而漏掉第一次跟随）。 */
   useEffect(() => {
-    if (!listenActive || !followRef.current) return
-    scrollToListening(false)
-  }, [listenActive, listenChapter, listenParagraphIndex, scrollToListening])
-
-  /** 「定位到正在念的段」在目标章到货后的那一半：作为**拍点后回调**交给绑定——它在会话的
-   *  `afterRender`（含 `settleJump` 落位）之后、同一次测量里跑。次序不靠两条 effect 的声明序：
-   *  settleJump 会把视口拉回章块顶，先居中再落位等于白中。 */
-  const consumePendingLocate = (): void => {
-    const pending = pendingLocateRef.current
-    if (pending === null) return
     const live = ttsPlayer.get()
-    // 听书停下 / 换了书 / 自己推进到别的章：挂起的那次定位作废，别在无关的章上抢视口
-    if (!live.active || live.bookKey !== bookKey || live.chapterIndex !== pending.chapterIndex) {
-      pendingLocateRef.current = null
-      return
-    }
-    // 用户点完定位 / 自动跟随挂起后又自己去目录 / 内链跳了别的章：这次延迟定位已被更晚的
-    // 用户导航取代（rollover 时 pending 也已被 takeOverReading 清空），目标章后到货也不许
-    // 把视口从用户所在章抢走。跳章还在途时继续等落位；还没发出（目录未到等）就下一拍再试。
-    if (session.state.currentChapter !== pending.chapterIndex) {
-      if (session.pendingJump?.index === pending.chapterIndex) return
-      pendingLocateRef.current = null
-      scrollToListening(false)
-      return
-    }
-    const block = chapterRefs.current[pending.chapterIndex]
-    if (block === null || block === undefined) return   // 正文还在途：这次定位继续挂着，下次拍点再消费
-    pendingLocateRef.current = null
-    const port = binding.scrollport()
-    if (port === null) return                            // 没有可滚容器：这次定位无处可落，只此一次
-    centerInScroller(port, listenParagraphElement(block, live.paragraphIndex) ?? block)
-  }
+    follow.onPlayback({
+      active: live.active,
+      bookKey: live.bookKey,
+      chapterIndex: live.chapterIndex,
+      paragraphIndex: live.paragraphIndex,
+    }, followBottomInset())
+  }, [follow, listenActive, listenChapter, listenParagraphIndex, followBottomInset])
 
-  /** 拍点后回调：次序契约只有一条——它在绑定测量（含 `afterRender` 的落位）之后跑。
-   *  两个消费者共用它：延迟定位居中，与目录高亮重算（章块到货后 DOM 才可测）。 */
+  /** 拍点后回调：目录高亮重算（章块到货后 DOM 才可测）。精确落位已归会话的 `afterRender`，
+   *  视图不再维护「章到货后居中」的第二份 pending 账。 */
   const afterBeat = (): void => {
-    consumePendingLocate()
     recomputeNavActive()
   }
   /** 每次渲染后的**唯一一道门**（无条件调用，没有依赖数组可忘）：这一帧要不要测量由绑定按会话的

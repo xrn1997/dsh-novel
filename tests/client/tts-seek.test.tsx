@@ -575,7 +575,7 @@ describe('跟读高亮：只标记不写位置', () => {
     expect(live).toMatch(/position:\s*relative/)
   })
 
-  it('「定位到正在念的段」是显式动作：目标在可视带内不滚，点了把滚动容器移到目标段', async () => {
+  it('「定位到正在念的段」是显式动作：点了把目标段顶到带顶', async () => {
     // jsdom 没有布局：造一个真的滚动容器（可滚样式 + 量出来的可视高 / 内容高），
     // 阅读器的 findScrollport 才会认它；否则 port 是 null，按钮按了也只是空转。
     const scrollport = document.createElement('div')
@@ -594,10 +594,10 @@ describe('跟读高亮：只标记不写位置', () => {
       await startListening({ sourceId: 's1', bookKey: 'k1', title: '书一', chapterIndex: 0, paragraphIndex: 1 })
     })
 
-    // 目标在可视带内：跟随不制造无谓滚动（不点不滚）。
+    // 起播时这里还没有真实段几何；定位点击后才量到目标。
     expect(scrollport.scrollTop).toBe(0)
 
-    // 目标章已在已载窗口内：按钮只滚阅读滚动容器自己，把正在念的那一段居中。
+    // 目标章已在已载窗口内：按钮只滚阅读滚动容器自己，把正在念的那一段顶到带顶。
     vi.spyOn(scrollport, 'getBoundingClientRect').mockReturnValue(rect(0, 600))
     const target = must(
       container.querySelector<HTMLElement>('[data-chapter="0"] [data-pidx="1"]'), '正在念的段',
@@ -605,14 +605,14 @@ describe('跟读高亮：只标记不写位置', () => {
     vi.spyOn(target, 'getBoundingClientRect').mockReturnValue(rect(500, 20))
     const locate = screen.getByRole('button', { name: '定位到正在念的段' })
     await act(async () => { fireEvent.click(locate) })
-    expect(scrollport.scrollTop).toBe(210)
+    expect(scrollport.scrollTop).toBe(500)
 
     // jsdom 的程序化 scrollTop 写入不派发 scroll 事件，所以这里量不到随后的进度落盘。
-    // 与 ADR-0091 一致：定位是用户主动导航，落进度是它自己的语义——那份证据由 tts-bar 的
+    // 与 ADR-0096 一致：定位是用户主动导航，落进度是它自己的语义——那份证据由 tts-bar 的
     // 未载章用例（requestJump 当场写 progress）承担；本文件不断言「定位不写进度」。
   })
 
-  it('跟读自动跟随：段离开可视带时滚过去；手动滚动 / 导航让位；定位重新接上', async () => {
+  it('跟读自动跟随：翻页到带顶；手动滚动让位；定位重新接上', async () => {
     const scrollport = document.createElement('div')
     scrollport.style.overflowY = 'auto'
     Object.defineProperty(scrollport, 'clientHeight', { value: 600, configurable: true })
@@ -628,31 +628,33 @@ describe('跟读高亮：只标记不写位置', () => {
     await waitFor(() => expect(container.querySelector('[data-chapter="0"]')).not.toBeNull())
     const p = (idx: number): HTMLElement =>
       must(container.querySelector<HTMLElement>(`[data-chapter="0"] [data-pidx="${idx}"]`), `paragraph ${idx}`)
-    // 目标在看得见的正文带内：跟随一次都不滚。没有这条 stub 时 jsdom 的零几何会让断言白过。
-    const p0 = vi.spyOn(p(0), 'getBoundingClientRect').mockReturnValue(rect(100, 20))
-    vi.spyOn(p(1), 'getBoundingClientRect').mockReturnValue(rect(700, 20))
-    vi.spyOn(p(2), 'getBoundingClientRect').mockReturnValue(rect(900, 20))
+    // 段矩形按内容坐标算，随 scrollTop 移动：落位后的读数才是真实视口几何。
+    const tops = [100, 700, 900]
+    for (const i of [0, 1, 2]) {
+      vi.spyOn(p(i), 'getBoundingClientRect').mockImplementation(() =>
+        rect((tops[i] ?? 0) - scrollport.scrollTop, 20))
+    }
 
     await act(async () => {
       await startListening({ sourceId: 's1', bookKey: 'k1', title: '书一', chapterIndex: 0, paragraphIndex: 0 })
     })
-    expect(scrollport.scrollTop, '起始段已在带内：跟随不制造滚动').toBe(0)
-    // 段推进到视口下方：跟随把它居中（700 + 10 − 300）。
+    expect(scrollport.scrollTop, '起播首拍顶对齐：当前段就是视口顶').toBe(100)
+    // 段推进到视口下方：跟读翻页，把它顶到带顶（内容坐标 700）。
     await act(async () => { seekParagraph(1) })
-    await waitFor(() => expect(scrollport.scrollTop).toBe(410))
+    await waitFor(() => expect(scrollport.scrollTop).toBe(700))
 
     // 读者在正文上滚动 = 接管视口：后续段推进不再拽回去。
     fireEvent.wheel(p(1), { deltaY: 120 })
     await act(async () => { seekParagraph(2) })
-    expect(scrollport.scrollTop, '手动滚动后跟读让位').toBe(410)
+    expect(scrollport.scrollTop, '手动滚动后跟读让位').toBe(700)
 
-    // 定位按钮重新接上跟随，并把这颗段居中（900 + 10 − 300；从 410 上再滚 610）。
+    // 定位按钮重新接上跟随，并把这颗段顶到带顶（内容坐标 900）。
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: '定位到正在念的段' })) })
-    expect(scrollport.scrollTop).toBe(1020)
+    expect(scrollport.scrollTop).toBe(900)
 
-    // 再推进一段：跟随已恢复，继续滚（1200 + 10 − 300；从 1020 上再滚 910）。
-    p0.mockReturnValue(rect(1200, 20))
+    // 回退到第 0 段：不是自然推进，按显式跳转处理——也顶到带顶（内容坐标 1200）。
+    tops[0] = 1200
     await act(async () => { seekParagraph(0) })
-    await waitFor(() => expect(scrollport.scrollTop).toBe(1930))
+    await waitFor(() => expect(scrollport.scrollTop).toBe(1200))
   })
 })

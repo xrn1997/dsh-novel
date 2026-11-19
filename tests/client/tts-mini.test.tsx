@@ -1217,7 +1217,7 @@ describe('回阅读器：一次性重定位 + 恢复不写进度', () => {
     expect(routeStore.get().route).toEqual({ name: 'reader', sourceId: 's1', bookKey: 'k1', title: '书一' })
     expect(focusPanel).toHaveBeenCalledTimes(1)
     // 现场已被迷你条记下并带上书键（阅读器开书时按书键取走）
-    expect(takeReaderRelocation('s1', 'k1')).toEqual({ chapterIndex: 1, offsetRatio: 0.5 })
+    expect(takeReaderRelocation('s1', 'k1')).toEqual({ index: 1, paragraphIndex: 1 })
   })
 
   it('阅读器以听书章段为恢复目标（不是存档 progress），恢复路径零 progress 写', async () => {
@@ -1263,7 +1263,7 @@ describe('回阅读器：一次性重定位 + 恢复不写进度', () => {
     // 别的书取不走、也不消费（现场留给它真正的主人）
     expect(takeReaderRelocation('s2', 'k2')).toBeNull()
     expect(takeReaderRelocation('s1', 'k2')).toBeNull()
-    expect(takeReaderRelocation('s1', 'k1')).toEqual({ chapterIndex: 1, offsetRatio: 0.5 })
+    expect(takeReaderRelocation('s1', 'k1')).toEqual({ index: 1, paragraphIndex: 1 })
     expect(takeReaderRelocation('s1', 'k1')).toBeNull()
   })
 
@@ -1318,11 +1318,74 @@ describe('回阅读器：一次性重定位 + 恢复不写进度', () => {
       saveTotalChapters: () => {},
       afterFrames: (cb) => cb(),
     }, port)
-    await session.open('s1', 'k1', takeReaderRelocation('s1', 'k1'))
+    await session.open('s1', 'k1', { chapterIndex: 1, offsetRatio: 0 })
     expect(fetched).toEqual([1])
-    // anchorTop: 章起点 2000 + 0.5 × 该章高度 2000
-    expect(port.top).toBe(3000)
+    // 重定位只按章站定（不写进度）；精确段由阅读器的 reveal 按 [data-pidx] 落位。
+    expect(port.top).toBe(2000)
     expect(saves).toEqual([])
+  })
+
+  it('回阅读器按段号精确顶对齐，不按比例落像素；这一跳不写 progress', async () => {
+    // 存档停在第 0 章 90%（如果按旧的比例恢复路，会落到第 0 章末）；听书在第 1 章第 1 段。
+    chapterNames = ['第一章', '第二章']
+    chapterTexts = [['第一章第一段。'], ['第二章第一段。', '第二章第二段。', '第二章第三段。']]
+    shelf = [shelfEntry({
+      totalChapters: 2,
+      progress: { chapterIndex: 0, offsetRatio: 0.9, updatedAt: 1 },
+    })]
+    await act(async () => {
+      await startListening({
+        sourceId: 's1', bookKey: 'k1', title: '书一', chapterIndex: 1, paragraphIndex: 1,
+      })
+    })
+    requestReaderRelocation('s1', 'k1', 1, 1)
+
+    // 真实滚动容器 + 固定内容坐标：章 0 顶 0、章 1 顶 800；段在章内 100 + 段号 × 100。
+    const scrollport = document.createElement('div')
+    scrollport.style.overflowY = 'auto'
+    Object.defineProperty(scrollport, 'clientHeight', { value: 600, configurable: true })
+    Object.defineProperty(scrollport, 'scrollHeight', { value: 2400, configurable: true })
+    document.body.append(scrollport)
+    const chapterTop = [0, 800]
+    const chapterHeight = [800, 800]
+    const rectSpy = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element): DOMRect {
+      if (this === scrollport) {
+        return { top: 0, bottom: 600, height: 600, left: 0, right: 0, width: 0, x: 0, y: 0, toJSON: () => ({}) }
+      }
+      const chapter = this.closest('[data-chapter]')
+      if (chapter === null) {
+        return { top: 0, bottom: 0, height: 0, left: 0, right: 0, width: 0, x: 0, y: 0, toJSON: () => ({}) }
+      }
+      const index = Number(chapter.getAttribute('data-chapter'))
+      const top = chapterTop[index] ?? 0
+      if (this === chapter) {
+        return {
+          top: top - scrollport.scrollTop, bottom: top - scrollport.scrollTop + (chapterHeight[index] ?? 0),
+          height: chapterHeight[index] ?? 0, left: 0, right: 0, width: 0, x: 0, y: 0, toJSON: () => ({}),
+        }
+      }
+      const pidx = this.getAttribute('data-pidx')
+      const paraTop = pidx === null ? top : top + 100 + Number(pidx) * 100
+      return {
+        top: paraTop - scrollport.scrollTop, bottom: paraTop - scrollport.scrollTop + 20,
+        height: 20, left: 0, right: 0, width: 0, x: 0, y: 0, toJSON: () => ({}),
+      }
+    })
+    try {
+      const deps = readerDeps()
+      const { container } = render(
+        createElement(ReaderView, { sourceId: 's1', bookKey: 'k1', title: '书一', deps }),
+        { container: scrollport },
+      )
+      await waitFor(() => expect(container.querySelector('[data-chapter="1"]')).not.toBeNull())
+      // 命中段内容坐标 800 + 100 + 1×100 = 1000，高 20；顶对齐 = 1000。
+      await waitFor(() => expect(scrollport.scrollTop).toBe(1000))
+      // 精确落位走 restore cause：回阅读器的这一跳不写 progress。
+      expect(progressBodies(deps.apiSend)).toEqual([])
+    } finally {
+      rectSpy.mockRestore()
+      scrollport.remove()
+    }
   })
 })
 

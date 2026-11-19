@@ -18,6 +18,7 @@ import {
   setListenVolume,
   setTtsDefaults,
   skipChapter,
+  startFromReadingPosition,
   skipParagraph,
   startListening,
   stopListening,
@@ -25,10 +26,8 @@ import {
 } from '../../src/client/tts/player.js'
 import type { StartListeningInput } from '../../src/client/tts/player.js'
 import { FakeAudio } from './tts-fakes.js'
-import {
-  estimateParagraphIndex,
-  setReadingProbe,
-} from '../../src/client/tts/reading-position.js'
+import { estimateParagraphIndex, paragraphRatio } from '../../src/client/progress.js'
+import { setReadingProbe } from '../../src/client/tts/reading-position.js'
 
 /**
  * 常驻播放层（字节型）的行为网：真模块 + mock 掉 `/novel-api` 与 `Audio` 构造器。
@@ -837,11 +836,30 @@ describe('常驻播放层：跳章、回退链与从阅读位置起播', () => {
     expect(ttsPlayer.get().paragraphIndex).toBe(1)
   })
 
-  it('playFromReadingPosition：没进架的书如实报错，不演「按了没反应」', async () => {
+  it('起播链：当前章优先于书架章；同章才借书架段比例', async () => {
+    await start({ chapterIndex: 1, paragraphIndex: 0 })
+    shelfReads = [shelfEntry({ progress: { chapterIndex: 0, offsetRatio: 0.5, updatedAt: 1 } })]
+    setReadingProbe(null)
+    await playFromReadingPosition()
+    await microtasks()
+    expect(ttsPlayer.get()).toMatchObject({ chapterIndex: 1, paragraphIndex: 0 })
+  })
+
+  it('起播链：没有会话时 fallbackChapter 先于书架章', async () => {
+    shelfReads = [shelfEntry({ progress: { chapterIndex: 0, offsetRatio: 0.5, updatedAt: 1 } })]
+    setReadingProbe(null)
+    await startFromReadingPosition({ sourceId: 's1', bookKey: 'b1', title: '书一', fallbackChapter: 1 })
+    await microtasks()
+    expect(ttsPlayer.get()).toMatchObject({ active: true, chapterIndex: 1, paragraphIndex: 0 })
+  })
+
+  it('playFromReadingPosition：没进架的书按当前章起播，不演「按了没反应」', async () => {
     await start({ paragraphIndex: 0 })
     shelfReads = []
     setReadingProbe(null)
-    await expect(playFromReadingPosition()).rejects.toThrow('TTS_NOT_ON_SHELF')
+    await playFromReadingPosition()
+    await microtasks()
+    expect(ttsPlayer.get()).toMatchObject({ active: true, chapterIndex: 0, paragraphIndex: 0 })
   })
 
   it('playFromReadingPosition：目录为空与 startSession 同一条码，不在这里静默退让', async () => {
@@ -919,7 +937,7 @@ describe('常驻播放层：跳章、回退链与从阅读位置起播', () => {
   })
 })
 
-describe('阅读位置换算', () => {
+describe('章内位置 codec：uniform adapter', () => {
   it('章内比例 → 段下标：两端对齐、越界夹紧、空段归 0', () => {
     expect(estimateParagraphIndex(0, 3)).toBe(0)
     expect(estimateParagraphIndex(1, 3)).toBe(2)
@@ -929,5 +947,17 @@ describe('阅读位置换算', () => {
     expect(estimateParagraphIndex(0.4, 1)).toBe(0)
     expect(estimateParagraphIndex(0.4, 0)).toBe(0)
     expect(estimateParagraphIndex(Number.NaN, 3)).toBe(0)
+  })
+
+  it('段下标 → 比例是 estimate 的反函数：合法段号来回不漂', () => {
+    expect(paragraphRatio(0, 3)).toBe(0)
+    expect(paragraphRatio(1, 3)).toBe(0.5)
+    expect(paragraphRatio(2, 3)).toBe(1)
+    expect(paragraphRatio(0, 0)).toBe(0)
+    for (let count = 1; count <= 10; count += 1) {
+      for (let index = 0; index < count; index += 1) {
+        expect(estimateParagraphIndex(paragraphRatio(index, count), count)).toBe(index)
+      }
+    }
   })
 })

@@ -37,6 +37,8 @@ function fakePort() {
     node: null as VisibleNode | null,
     /** currentNode 读取计数：排版前采点必须发生在 setPref 的同步栈里，退订后不读 */
     nodeReads: 0,
+    /** 章内段块（`index:paragraphIndex`）的相对视口顶偏移与高度；未登记 = 不在 DOM */
+    paragraphOffs: new Map<string, { top: number; height: number }>(),
     /** setScrollTop 的调用记录（证明「不许落位」的用例：一次都不许发生） */
     tops: [] as number[],
     measureAnchors: (): ChapterAnchor[] => port.anchors,
@@ -51,6 +53,8 @@ function fakePort() {
     targetOffsets: (index: number, anchorIds: ReadonlyArray<string | null>): Array<number | null> =>
       anchorIds.map((anchorId) => port.targetOffset(index, anchorId)),
     currentNode: (): VisibleNode | null => { port.nodeReads++; return port.node },
+    targetOffsetOfParagraph: (index: number, paragraphIndex: number) =>
+      port.paragraphOffs.get(`${index}:${paragraphIndex}`) ?? null,
   }
   return port
 }
@@ -1443,5 +1447,74 @@ describe('ReaderSession 排版前采点与复位', () => {
     setPref({ fontSize: 24 })
     expect(h.port.nodeReads, '一次 setPref 只读一次节点（双订阅会读两次）').toBe(reads + 1)
     h.session.dispose()
+  })
+})
+
+describe('ReaderSession.reveal（按听书段精确落位）', () => {
+  async function opened(topInset = 0) {
+    const h = topInset === 0 ? makeSession() : makeSession({ topInset: () => topInset })
+    await h.session.open('src', 'https://s.com/book/1')
+    h.port.anchors = [{ index: 0, start: 0, height: 1000 }]
+    return h
+  }
+  function place(h: Awaited<ReturnType<typeof opened>>, top: number, nextTop?: number): void {
+    h.port.paragraphOffs.set('0:1', { top, height: 20 })
+    if (nextTop !== undefined) h.port.paragraphOffs.set('0:2', { top: nextTop, height: 20 })
+  }
+
+  it('跟读：目标已在带内且不是最后一个可见段，不动', async () => {
+    const h = await opened()
+    place(h, 300, 400)
+    h.session.reveal({ index: 0, paragraphIndex: 1 }, { mode: 'follow', write: true, bottomInset: 100 })
+    expect(h.port.tops, '带 0..900 内、下方还有可见段：不制造滚动').toEqual([])
+    expect(h.saves).toEqual([])
+  })
+
+  it('跟读：目标成为最后一个可见段且落在带的下半部，顶对齐', async () => {
+    const h = await opened()
+    place(h, 600, 950)                                  // 下一段已在带外
+    h.session.reveal({ index: 0, paragraphIndex: 1 }, { mode: 'follow', write: true, bottomInset: 100 })
+    expect(h.port.top).toBe(600)                        // 600 落到带顶，不居中
+    expect(h.saves).toEqual([[0, 0.6]])
+  })
+
+  it('跟读：目标虽在下半部但下一段仍可见，先不动', async () => {
+    const h = await opened()
+    place(h, 600, 700)
+    h.session.reveal({ index: 0, paragraphIndex: 1 }, { mode: 'follow', write: true, bottomInset: 100 })
+    expect(h.port.tops).toEqual([])
+    expect(h.saves).toEqual([])
+  })
+
+  it('跟读：目标在带外，顶对齐（不是居中）', async () => {
+    const h = await opened()
+    place(h, 950)
+    h.session.reveal({ index: 0, paragraphIndex: 1 }, { mode: 'follow', write: true, bottomInset: 100 })
+    expect(h.port.top).toBe(950)
+    expect(h.saves).toEqual([[0, 0.95]])
+  })
+
+  it('显式定位：目标已经在带内也顶对齐', async () => {
+    const h = await opened()
+    place(h, 300, 400)
+    h.session.reveal({ index: 0, paragraphIndex: 1 }, { mode: 'locate', write: true, bottomInset: 100 })
+    expect(h.port.top).toBe(300)                        // 不是 -190（居中）
+    expect(h.saves).toEqual([[0, 0.3]])
+  })
+
+  it('顶条下的带顶：顶对齐扣掉 topInset，不把目标藏到标题栏后', async () => {
+    const h = await opened(40)
+    place(h, 300, 400)
+    h.session.reveal({ index: 0, paragraphIndex: 1 }, { mode: 'locate', write: true, bottomInset: 100 })
+    expect(h.port.top).toBe(260)                        // 300 - 40
+    expect(h.saves).toEqual([[0, 0.3]])
+  })
+
+  it('回阅读器 write:false：顶对齐到精确段但不写 progress', async () => {
+    const h = await opened()
+    place(h, 600)
+    h.session.reveal({ index: 0, paragraphIndex: 1 }, { mode: 'locate', write: false })
+    expect(h.port.top).toBe(600)
+    expect(h.saves).toEqual([])
   })
 })

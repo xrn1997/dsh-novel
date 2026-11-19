@@ -15,7 +15,6 @@ export function ttsErrorMessage(t: Translate, error: unknown): string {
     switch (error.code) {
       case 'TTS_CHAPTERS_EMPTY': return t('tts.error.chaptersEmpty')
       case 'TTS_NO_VOICES': return t('tts.error.noVoices')
-      case 'TTS_NOT_ON_SHELF': return t('tts.error.notOnShelf')
       case 'TTS_CHAPTER_LOAD': return t('tts.error.chapterLoad')
     }
   }

@@ -372,13 +372,13 @@ _唯一实现_: `services/pagination.ts` 的 `followPages`（`stoppedBy` 五态�
 _Avoid_: 翻页循环、重复过滤（判据是「本页零新增」与「URL 已见」，不是「出现重复就停」）
 
 **消费位置（consumption position）**:
-「这本书的消费位置」= 落盘的共用游标：章 + 章内比例（`{chapterIndex, offsetRatio}`），即书架记录里的 `ShelfProgress`。阅读与听书共写它：自动写者只有两个——阅读会话的滚动 / 导航与播放层的位置落盘节拍；工具面的 `save_progress` 与 HTTP 写口是显式写入口，不走自动节拍。书架卡片、最近阅读排序与开书恢复都读它。同一本书两个写者同时活跃时以最后一次显式动作为准（服务端 last-write-wins）。它不等同于**阅读位置**：后者是阅读器眼下看见的位置，只在提交时换算成消费位置写盘。
-_唯一实现_: `shared/wire.ts` 的 `ShelfProgress`（形状）+ `client/reader-session.ts` 的 `commit`（阅读侧写入）+ `client/tts/listen-session.ts` 的 `writePosition`（听书侧段号 → 比例）+ `client/progress.ts`（位置 ⇄ 像素）+ `shared/reading-position.ts` 的 `hasProgress`（读口谓词）
+「这本书的消费位置」= 落盘的共用游标：章 + 章内比例（`{chapterIndex, offsetRatio}`），即书架记录里的 `ShelfProgress`。阅读与听书共写它，但同一时刻只有一个自动所有者：**本书阅读器子树在场时归阅读会话**（它按真实视口 / 精确段写），播放层只写 `listen`；阅读器不在场时播放层才把段号换成比例补写 `progress`。工具面的 `save_progress` 与 HTTP 写口是显式写入口，不走自动节拍。书架卡片、最近阅读排序与开书恢复都读它。它不等同于**阅读位置**：后者是阅读器眼下看见的位置，只在提交时换算成消费位置写盘。
+_唯一实现_: `shared/wire.ts` 的 `ShelfProgress`（形状）+ `client/reader-session.ts` 的 `commit`（阅读侧写入）+ `client/tts/listen-session.ts` 的 `writePosition`（播放层：`readerPresent` 为假时才写 `progress`）+ `client/tts/reader-presence.ts` 的 `readerPresence`（在场书键）+ `client/progress.ts`（章内位置 codec：measured 的 `locateChapter` / `ratioWithin` / `anchorTop` 与 uniform 的 `paragraphRatio` / `estimateParagraphIndex`）+ `shared/reading-position.ts` 的 `hasProgress`（读口谓词）
 _Avoid_: 听书进度（不存在第二条位置轨；`listen` 只是听书细节）、进度（要区分「元数据」与「消费位置」）、scrollTop（像素是测量值，不是位置本身）
 
 **阅读位置（reading position）**:
-阅读器此刻看得见的位置：会话内存里的章 + 章内比例，以及从 DOM 几何量出的探针读数（章 + 段号）。它是**实时读数，不是落盘游标**：滚动 / 导航 / 存档恢复只修正它，提交时按 cause 决定写不写消费位置；听书起播从它换算起播段，换算不写盘。阅读位置答「眼下在哪」，消费位置答「这本书的游标在哪」；读与听共用后者。
-_唯一实现_: `client/reader-session.ts` 的 `position`（会话内唯一真相）与 `commit`（提交为消费位置）+ `client/tts/reading-position.ts` 的 `ReadingProbe` / `readingPositionAt` / `setReadingProbe`（DOM 探针，判据 `crossedIndex`）与 `estimateParagraphIndex`（换算出起播段）+ `client/reader-binding.ts` 的探针注册（挂载注册、卸载注销）
+阅读器此刻看得见的位置：会话内存里的章 + 章内比例，以及从 DOM 几何量出的探针读数（章 + 段号）。它是**实时读数，不是落盘游标**：滚动 / 导航 / 存档恢复只修正它，提交时按 cause 决定写不写消费位置；听书起播从它换算起播段，换算不写盘。阅读位置答「眼下在哪」，消费位置答「这本书的游标在哪」；读与听共用后者。精确段落的落位（回阅读器 / 定位 / 跟随）也读它，但走 `ReaderSession.reveal` 的段号 target，不经过比例；落点统一对齐到顶条下方的带顶，不居中（`ADR-0096`）。
+_唯一实现_: `client/reader-session.ts` 的 `position`（会话内唯一真相）、`commit`（提交为消费位置）与 `reveal` / `settleReveal`（按段号精确落位）+ `client/tts/reading-position.ts` 的 `ReadingProbe` / `readingPositionAt` / `setReadingProbe`（DOM 探针，判据 `crossedIndex`）+ `client/progress.ts` 的 `estimateParagraphIndex`（换算出起播段）+ `client/reader-paragraph.ts` 的 `paragraphSlotOf` / `listenParagraphElement`（段号 ⇄ 屏上块）+ `client/reader-binding.ts` 的探针注册（挂载注册、卸载注销）
 _Avoid_: 消费位置（那是落盘游标，不是眼下读数）、视口位置（混称；视口只是位置的呈现窗口）、听书段号（那是听书细节轨的位置表示）
 
 **阅读器几何（reader geometry）**:
@@ -429,9 +429,14 @@ _唯一实现_: `shared/chapter-text.ts` 的 `splitParagraphs` / `PLAY_UNIT_MAX`
 _Avoid_: 段落（屏幕上按块渲染的一段正文；代码标识符沿用 `paragraph*` 指播放单元）、句子（一个播放单元可含多句）、在视图里逐行数单元（那是本词条的抄本）
 
 **听书位置（listening position）**:
-按书记住的听书细节：段号、引擎标识、音色、语速、音量。它服务听书的精确续听与播放参数记忆；**章 + 章内比例**的共用消费位置住 `progress`，播放层在同一个落盘节拍里两笔都写。
+按书记住的听书细节：段号、引擎标识、音色、语速、音量。它服务听书的精确续听与播放参数记忆；**章 + 章内比例**的共用消费位置住 `progress`：阅读器在场时它归阅读会话，播放层在同一节拍里只写听书细节；阅读器不在场时播放层才两笔都写（`ADR-0093`）。
 _唯一实现_: `shared/wire.ts` 的 `ListenState`（形状）；写路径 `services/reading.ts` 的 `shelfSaveListen`（值域）→ `services/shelf.ts` 的 `Shelf.updateListen`
 _Avoid_: 阅读进度（共用消费位置 `ShelfProgress`，不住这里）、播放队列（会话内的瞬时状态，不落盘）
+
+**起播位置（start position）**:
+「从阅读位置起播」解析出的章 + 段号。来源链只有一条：显式 target（选区）→ 实时阅读探针 → 当前章（活动会话的章或阅读器给的兜底章）→ 书架 `progress`；书架比例只在同章时用于段号估算。解析结果交给同一条取数与起播管线，不再由调用方预取或另起 seed。
+_唯一实现_: `client/tts/listen-session.ts` 的 `startFromReadingPosition`（解析链）与 `startSession`（目录 / 书架 / 正文一次取数 + 起播）
+_Avoid_: 续听位置（`resume: 'archive'` 是其中一档，不是另一条位置轨）、起播点（口语）、从存档续听（没有界面入口）
 
 **引擎源（engine source）**:
 听书可选的出声来源：内置（恰一条、开箱即用，没有音色表——端点不读音色参数）、浏览器直出兜底、注册表里的每条订阅、宿主语音服务（服务在场**且自报就绪**才列出）。顺序即展示顺序；插件自有源不带展示名（名字归客户端文案按 kind 取词），订阅源的名字是订阅数据本身。清单只列此刻可用的源；「宿主服务为什么不在」不由清单回答，见**宿主服务健康**。
@@ -475,13 +480,13 @@ _Avoid_: 段进度（那是计时现场 `ttsProgress`）、听书位置（落盘
 
 **跟读高亮（listen-along highlight）**:
 听书时正文里正在被念的那一段的就地标记：命中块换文字色（`paperLiveInk` 按纸色现算），并在段首框外画一枚 currentColor 小三角——纯换色在部分纸色下认不出，字形标记不靠色彩差说话；不铺底色、不加竖条、不画段内进度线（`ADR-0076`）。命中判据 = 最后一个 ≤ 段号的起段号，与「从本段听」同口径。只标记、不写位置；视口跟随另见「跟读跟随」。
-_唯一实现_: `client/views/ChapterBody.tsx` 的 `listenParagraph`（命中判据 `client/tts/reading-position.ts` 的 `paragraphSlotOf` / `listenParagraphElement`）
-_Avoid_: 把高亮当成位置写入口（位置写入归播放层的位置落盘节拍）、让高亮负责滚动（跟随归视图）
+_唯一实现_: `client/views/ChapterBody.tsx` 的 `listenParagraph`（命中判据 `client/reader-paragraph.ts` 的 `paragraphSlotOf` / `listenParagraphElement`）
+_Avoid_: 把高亮当成位置写入口（位置写入归消费位置的当前所有者：阅读器在场归阅读会话，否则归播放层）、让高亮负责滚动（跟随归视图）
 
 **跟读跟随（listen-along follow）**:
-阅读器里听本书时，播放推进到新段 / 新章会把视口带到当前段：目标已在看得见的正文带（扣顶条与听书条高度）里就不动，离开才居中。读者手动滚动（滚轮 / 触摸 / 滚动键 / 滚动条拖动）或点目录 / 内链 / 返回原处后让位，按听书条的「定位到正在念的段」重新接上（`ADR-0091`）。
-_唯一实现_: `client/views/ReaderView.tsx` 的 `followRef` / `takeOverReading` / `scrollToListening` / `followBottomInset`；落位 `client/util.ts` 的 `revealInScroller`；用户意图装线 `client/reader-binding.ts` 的 `ReaderViewportHandlers.intent` / `ReaderBindingOptions.onUserIntent`；接管时撤销在途跳章 `client/reader-session.ts` 的 `cancelJump`
-_Avoid_: 无让位的自动跟随（读者滚动后仍被下一段拽回）、逐段无条件居中、新增「跟随」开关、把跟随写进高亮
+阅读器里听本书时，播放推进到新段 / 新章会把视口带到当前段：起播首拍、跨章、回退、拖动滑杆这类显式跳转一律把目标顶对齐到带顶；同一章的自然推进只在目标成为当前可见的最后一段、且落在带的下半部时翻页，普通段不动。读者手动滚动（滚轮 / 触摸 / 滚动键 / 滚动条拖动）或点目录 / 内链 / 返回原处后让位，按听书条的「定位到正在念的段」重新接上并顶对齐（`ADR-0096`）。带顶扣掉顶条高度，目标不会被标题栏盖住。
+_唯一实现_: `client/tts/follow-controller.ts` 的 `createFollowController` / `onPlayback` / `onLocate` / `onUserIntent` / `onRelocation`；视图接线 `client/views/ReaderView.tsx` 的 `takeOverReading` / `locateListen` / `followBottomInset`；落位 `client/reader-session.ts` 的 `reveal` / `settleReveal`（`ReaderPort.targetOffsetOfParagraph` 量段块）；用户意图装线 `client/reader-binding.ts` 的 `ReaderViewportHandlers.intent` / `ReaderBindingOptions.onUserIntent`；接管时撤销在途落位 `client/reader-session.ts` 的 `cancelJump`
+_Avoid_: 无让位的自动跟随（读者滚动后仍被下一段拽回）、逐段无条件滚动 / 居中、把目标放到屏幕中央、新增「跟随」开关、把跟随写进高亮
 
 **听书迷你条（listening mini bar）**:
 宿主 `shell.overlay` 常驻层上的两个完整听书浮窗形态：缺省是身份胶囊（进度环 + 书名 + 段号 + 章内进度细线），展开是能读整段的边栏（身份钮、正文区、运输行、读数与章内进度条）。位置与尺寸自由：现场记块中心与展开态宽高，松手时离视口边够近的边才贴齐，尺寸呈现时夹取不回写（`ADR-0073` / `ADR-0080`）。落位样式与 `side` / `flush` 由 `miniBarLayout` 一次给全；没有半隐或抽屉形态。与阅读器内听书条共读同一份会话与设置行清单；在场判据 = 会话在 ∧ 阅读器在场书键集合里没有会话本书。
