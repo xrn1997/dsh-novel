@@ -11,8 +11,8 @@ import {
   isPlayBusy, lineOf, listenFaceOf, miniSegmentLabel, segmentLabel,
 } from './listen-readout.js'
 import {
-  CAPSULE_SIZE, clampMiniBarIntoViewport, followFlushEdgesOnResize, frameFromDrag, miniBarCenterOf,
-  miniBarLayout, miniBarPopoverFlip, miniBarPopoverRoom, miniBarStore, persistMiniBarState, resetMiniBarPosition,
+  CAPSULE_SIZE, clampMiniBarIntoViewport, followFlushEdgesOnResize, frameFromDrag, MINI_BAR_EDGES,
+  miniBarCenterOf, miniBarLayout, miniBarPopoverFlip, miniBarPopoverRoom, miniBarStore, persistMiniBarState, resetMiniBarPosition,
   resolveFormSize, resolvedMiniBarSize, setMiniBarCenter, setMiniBarCollapsed, setMiniBarFrame,
   snapMiniBarToEdge,
 } from './mini-bar-state.js'
@@ -102,7 +102,8 @@ export function TtsMiniBar({ focusPanel, withStyles = true }: TtsMiniBarProps): 
   const resizeRef = useRef<ResizeSession | null>(null)
   const movedRef = useRef(false)
   const [dragging, setDragging] = useState(false)
-  const [resizing, setResizing] = useState(false)
+  /** 正在拖的那条 resize 边（null = 没在拖边）：光标契约要把整块压成那条边的 resize 指针 */
+  const [resizing, setResizing] = useState<MiniBarEdge | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   /** 设置弹层的内容实测高（`null` = 量不到 → 翻转判据回退常量）。 */
   const [settingsHeight, setSettingsHeight] = useState<number | null>(null)
@@ -146,7 +147,7 @@ export function TtsMiniBar({ focusPanel, withStyles = true }: TtsMiniBarProps): 
    * 对边锚定拽偏。
    */
   useEffect(() => {
-    if (resizing) return
+    if (resizing !== null) return
     const el = rootRef.current
     if (el === null || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(() => {
@@ -222,7 +223,7 @@ export function TtsMiniBar({ focusPanel, withStyles = true }: TtsMiniBarProps): 
    * `frameFromDrag` 算好，这里只负责跟手与落盘节拍；松手不吸附，只保留夹取后的尺寸与中心。
    */
   useEffect(() => {
-    if (!resizing) return
+    if (resizing === null) return
     const win = hostWindow()
     if (win === null) return
     const view = (): Viewport => ({ width: win.innerWidth, height: win.innerHeight })
@@ -231,7 +232,7 @@ export function TtsMiniBar({ focusPanel, withStyles = true }: TtsMiniBarProps): 
       if (session !== null && session.id !== event.pointerId) return
       if (session !== null) persistMiniBarState()
       resizeRef.current = null
-      setResizing(false)
+      setResizing(null)
     }
     const move = (event: PointerEvent): void => {
       const session = resizeRef.current
@@ -407,7 +408,7 @@ export function TtsMiniBar({ focusPanel, withStyles = true }: TtsMiniBarProps): 
       startY: event.clientY,
       start: { width: size.width, height: size.height, cx: center.x, cy: center.y },
     }
-    setResizing(true)
+    setResizing(edge)
   }
 
   /** 四向移动：缺省轴先解析成当前实际中心，再按方向与档位落位（Shift 走三档）。 */  const moveByKey = (event: ReactKeyboardEvent<HTMLElement>): void => {
@@ -448,7 +449,8 @@ export function TtsMiniBar({ focusPanel, withStyles = true }: TtsMiniBarProps): 
       data-side={layout.side}
       data-flush={layout.flush}
       data-dragging={dragging}
-      data-resizing={resizing}
+      data-resizing={resizing !== null}
+      data-resize-edge={resizing ?? undefined}
       data-flip={flip}
       data-failed={failed ? 'true' : 'false'}
       className="novel-tts-mini-dock"
@@ -511,7 +513,7 @@ export function TtsMiniBar({ focusPanel, withStyles = true }: TtsMiniBarProps): 
         ? null
         : (
           <>
-            {(['left', 'right', 'bottom', 'corner'] as const).map((edge) => (
+            {MINI_BAR_EDGES.map((edge) => (
               <span
                 key={edge}
                 className="novel-tts-mini-edge"

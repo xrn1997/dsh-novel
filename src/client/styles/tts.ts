@@ -141,7 +141,7 @@ export const TTS_CSS = `
   position: fixed;
   z-index: var(--novel-z-status); pointer-events: auto;
 }
-.novel-tts-mini-dock[data-dragging='true'] { cursor: grabbing; user-select: none; }
+.novel-tts-mini-dock[data-dragging='true'] { user-select: none; }
 /* resize 命中带（ADR-0080）：只给左 / 右 / 下三条边 + 右下角；顶边是移动 / 收起面，不做把手。
    带子画在面板 padding 圈里（左右 12 / 底 10 ≥ 8），任何尺寸下都不与控件重叠，贴边时也不会被屏幕裁掉。 */
 .novel-tts-mini-edge { position: absolute; z-index: var(--novel-z-panel); touch-action: none; }
@@ -158,6 +158,26 @@ export const TTS_CSS = `
   right: 1px; bottom: 1px; width: 14px; height: 14px; cursor: nwse-resize;
 }
 .novel-tts-mini-dock[data-resizing='true'] { user-select: none; }
+/* 拖动中整块都是抓手（grabbing）：cursor 是继承值，子元素显式声明过 cursor（拖面 hover 档
+   的 pointer / grab、颗颗按钮）会盖过根上的继承值——用户拖动全程看到的就是拖面自己的 hover
+   指针，所以根与全后代一起压。放在 resize 带之后有讲究：edge 带同为 (0,2,0)，靠后才压得过
+   它们的 ew/ns/nwse-resize（移动拖动中指针扫过那 8px 带子时不该冒出 resize 指针）。
+   悬停指针一律不动：点与拖要有区分（胶囊身份钮 hover = pointer，展开态拖面 hover = grab）。
+   排在本块之后的后代规则不得再显式声明 cursor——同 (0,2,0) 靠后者反过来赢走 grabbing；
+   悬停指针本就由各自 base 层规则携带（.novel-tts-mini-body 自带 grab），修饰档只补几何与颜色。 */
+.novel-tts-mini-dock[data-dragging='true'],
+.novel-tts-mini-dock[data-dragging='true'] * { cursor: grabbing; }
+/* 拖边中整块都是所拖那条边的 resize 指针：指针滑出 8px 命中带落到正文 / 按钮上时，
+   子元素的 hover 档（grab / pointer）不许顶上来——拖边没松手，手势仍是 resize。
+   data-resize-edge 记正在拖的那条边（读数归 TtsMiniBar 的 beginResize）。 */
+.novel-tts-mini-dock[data-resizing='true'][data-resize-edge='left'],
+.novel-tts-mini-dock[data-resizing='true'][data-resize-edge='right'],
+.novel-tts-mini-dock[data-resizing='true'][data-resize-edge='left'] *,
+.novel-tts-mini-dock[data-resizing='true'][data-resize-edge='right'] * { cursor: ew-resize; }
+.novel-tts-mini-dock[data-resizing='true'][data-resize-edge='bottom'],
+.novel-tts-mini-dock[data-resizing='true'][data-resize-edge='bottom'] * { cursor: ns-resize; }
+.novel-tts-mini-dock[data-resizing='true'][data-resize-edge='corner'],
+.novel-tts-mini-dock[data-resizing='true'][data-resize-edge='corner'] * { cursor: nwse-resize; }
 
 /* 收起态：完整身份条（ADR-0079）：环 + 书名与段号 + 底部一条章内进度细线。尺寸值槽由
    miniBarLayout 从 CAPSULE_SIZE 写入（--novel-tts-capsule-w/-h），样式层不写第二份。
@@ -255,7 +275,7 @@ export const TTS_CSS = `
   cursor: grab; touch-action: none;
 }
 .novel-tts-mini-body.empty {
-  display: grid; place-items: center; cursor: grab;
+  display: grid; place-items: center;
   font-size: var(--novel-fs-sm); color: var(--novel-text-2);
 }
 .novel-tts-mini-more {

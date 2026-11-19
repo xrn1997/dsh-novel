@@ -281,8 +281,10 @@ export function resetMiniBarSize(): void {
   setMiniBarSize(null, null)
 }
 
-/** 拖边可拖的四条边：顶边不做把手——顶行是移动 / 收起面（`ADR-0080`）。 */
-export type MiniBarEdge = 'left' | 'right' | 'bottom' | 'corner'
+/** 拖边可拖的四条边：顶边不做把手——顶行是移动 / 收起面（`ADR-0080`）。边名 union 由这份清单
+ *  推导，样式带的渲染、光标分叉与几何门读数都从这一份起手，不写第二份。 */
+export const MINI_BAR_EDGES = ['left', 'right', 'bottom', 'corner'] as const
+export type MiniBarEdge = (typeof MINI_BAR_EDGES)[number]
 
 /** 一次拖边会话的起手框：尺寸 + 中心，后续帧只在它上面加位移。 */
 export interface MiniBarFrame { width: number; height: number; cx: number; cy: number }

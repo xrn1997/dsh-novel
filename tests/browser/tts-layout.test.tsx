@@ -7,7 +7,7 @@ import { ChapterBody } from '../../src/client/views/ChapterBody.js'
 import { TtsBar } from '../../src/client/tts/TtsBar.js'
 import { TtsMiniBar } from '../../src/client/tts/TtsMiniBar.js'
 import { TtsSettingsPanel, TtsSettingsRows } from '../../src/client/tts/TtsSettings.js'
-import { miniBarStore } from '../../src/client/tts/mini-bar-state.js'
+import { MINI_BAR_EDGES, miniBarStore, type MiniBarEdge } from '../../src/client/tts/mini-bar-state.js'
 import { ttsPlayer, ttsProgress } from '../../src/client/tts/player.js'
 import { must } from '../support/fixture.js'
 import { BROWSER_GATE_ENABLED } from '../support/browser-gate.js'
@@ -53,7 +53,7 @@ interface Read {
   bar: Rect
   /** 听书条上的进度滑杆条数：只该有章内这一条（段内时间滑杆已退场） */
   ranges: number
-  chapterRange: Rect
+  chapterRange: Rect | null
   live: Rect | null
   liveBackground: string
   plainBackground: string
@@ -72,6 +72,27 @@ interface Read {
   } | null
   scrollerScrollbarWidth: string
   scrollerScrollbarColor: string
+  /** 计算样式里的 cursor：jsdom 量不到 CSS 层级算出的指针（子元素显式 cursor 会盖过根上的继承值） */
+  cursor: {
+    hover: Cursors
+    /** 手动把 `data-dragging='true'` 种到 dock 根再量：属性翻转本身归 jsdom 那批（tests/client/tts-mini.test.tsx），这里量样式层对它的反应 */
+    dragging: Cursors
+    /** 手动种 `data-resizing='true'` + `data-resize-edge` 逐边再量：拖边中指针滑出 8px 命中带落到中间区域时，仍须是所拖边的 resize 指针 */
+    resizing: Record<MiniBarEdge, Cursors>
+  }
+}
+
+interface Cursors {
+  /** 胶囊身份钮（点击展开 + 拖动面） */
+  expand: string
+  /** 展开态顶行身份钮（点收起 + 拖动面） */
+  id: string
+  /** 展开态正文区（拖动面） */
+  body: string
+  /** 播放环（纯控件，但拖动中指针会扫过它） */
+  ring: string
+  /** 设置钮（纯控件） */
+  settings: string
 }
 
 const probe = `(() => {
@@ -106,7 +127,10 @@ const probe = `(() => {
     ring: mini.querySelector('.novel-tts-ringplay') === null ? null : rect(mini.querySelector('.novel-tts-ringplay')),
     bar: rect(bar),
     ranges: bar.querySelectorAll('input[type="range"]').length,
-    chapterRange: rect(bar.querySelector('.novel-tts-chapter-seek input')),
+    // 无段时条上章内行不渲染（空正文拖面也走本探针量光标），这里必须容 null
+    chapterRange: bar.querySelector('.novel-tts-chapter-seek input') === null
+      ? null
+      : rect(bar.querySelector('.novel-tts-chapter-seek input')),
     live: live === null ? null : rect(live),
     liveBackground: live === null ? '' : getComputedStyle(live).backgroundColor,
     plainBackground: getComputedStyle(plain).backgroundColor,
@@ -136,6 +160,32 @@ const probe = `(() => {
     })(),
     scrollerScrollbarWidth: scrollerStyle.scrollbarWidth,
     scrollerScrollbarColor: scrollerStyle.scrollbarColor,
+    cursor: (() => {
+      const pick = (sel) => {
+        const el = mini.querySelector(sel)
+        return el === null ? '' : getComputedStyle(el).cursor
+      }
+      const read = () => ({
+        expand: pick('.novel-tts-mini-expand'),
+        id: pick('.novel-tts-mini-id'),
+        body: pick('.novel-tts-mini-body'),
+        ring: pick('.novel-tts-ringplay'),
+        settings: pick('.novel-tts-ictl'),
+      })
+      const hover = read()
+      mini.setAttribute('data-dragging', 'true')
+      const dragging = read()
+      mini.removeAttribute('data-dragging')
+      const resizing = {}
+      for (const edge of ${JSON.stringify(MINI_BAR_EDGES)}) {
+        mini.setAttribute('data-resizing', 'true')
+        mini.setAttribute('data-resize-edge', edge)
+        resizing[edge] = read()
+      }
+      mini.removeAttribute('data-resizing')
+      mini.removeAttribute('data-resize-edge')
+      return { hover, dragging, resizing }
+    })(),
   })
 })()`
 
@@ -322,6 +372,48 @@ describe.skipIf(!ENABLED)('浏览器几何：听书条 / 迷你条 / 跟读高�
     expect(title.left, '书名从进度环右侧起排').toBeGreaterThan(r.mini.left + 32)
   })
 
+  it('拖动中整块换抓手，悬停指针不动（点与拖要有区分）', async () => {
+    miniBarStore.set({ cx: null, cy: null, w: null, h: null, collapsed: true })
+    const cap = await measure()
+    miniBarStore.set({ cx: null, cy: null, w: null, h: null, collapsed: false })
+    // 光标契约的悬停档不动：胶囊身份钮是「点击展开」，悬停保持 pointer；播放环是纯控件
+    expect(cap.cursor.hover.expand, '胶囊身份钮悬停 = pointer（点击展开的提示）').toBe('pointer')
+    expect(cap.cursor.hover.ring, '播放环悬停 = pointer（纯控件）').toBe('pointer')
+    // 拖动中：拖面自己与指针扫过的控件都必须换抓手——根上的 cursor: grabbing 只是继承值，
+    // 子元素显式 cursor 会盖过它，不压到全后代就仍是 hover 档（本条就是用户报的那一眼）
+    expect(cap.cursor.dragging.expand, '拖动中胶囊拖面换抓手').toBe('grabbing')
+    expect(cap.cursor.dragging.ring, '拖动中指针扫过播放环也是抓手').toBe('grabbing')
+    const full = await measure()
+    expect(full.cursor.hover.id, '展开态身份钮悬停 = grab（既有契约）').toBe('grab')
+    expect(full.cursor.hover.body, '展开态正文区悬停 = grab（既有契约）').toBe('grab')
+    expect(full.cursor.dragging.id, '展开态拖动中身份钮换抓手').toBe('grabbing')
+    expect(full.cursor.dragging.body, '展开态拖动中正文区换抓手').toBe('grabbing')
+    expect(full.cursor.dragging.settings, '拖动中指针扫过设置钮也是抓手').toBe('grabbing')
+    // 空章正文区也是拖面（「拖动只在身份钮与正文区起手」）：`.empty` 修饰档若再声明 cursor，
+    // 同 (0,2,0) 靠后会反压 grabbing——这颗钉住该面在悬停与拖动两档都不走样
+    const prev = ttsPlayer.get()
+    ttsPlayer.set({ paragraphCount: 0, paragraphText: '' })
+    try {
+      const empty = await measure()
+      expect(empty.cursor.hover.body, '空正文拖面悬停 = grab（既有契约）').toBe('grab')
+      expect(empty.cursor.dragging.body, '空正文拖动中也换抓手').toBe('grabbing')
+    } finally {
+      ttsPlayer.set(prev)
+    }
+  })
+
+  it('拖边中整块跟随所拖边的 resize 指针（指针滑到中间区域也不变）', async () => {
+    const r = await measure()
+    // 用户报的那一眼：拖边没松手、指针滑出 8px 命中带落到中间区域（正文 / 按钮）上，
+    // 光标退回 hover 档的 grab——手势仍是 resize，整块必须保持所拖边的 resize 指针
+    expect(r.cursor.resizing.right.body, '拖右边中、指针在正文区 = ew-resize').toBe('ew-resize')
+    expect(r.cursor.resizing.right.ring, '拖右边中、指针扫过播放环 = ew-resize').toBe('ew-resize')
+    expect(r.cursor.resizing.right.settings, '拖右边中、指针扫过设置钮 = ew-resize').toBe('ew-resize')
+    expect(r.cursor.resizing.left.body, '拖左边中 = ew-resize').toBe('ew-resize')
+    expect(r.cursor.resizing.bottom.body, '拖下边中 = ns-resize').toBe('ns-resize')
+    expect(r.cursor.resizing.corner.body, '拖角中 = nwse-resize').toBe('nwse-resize')
+  })
+
   it('贴左缘：左缘贴合视口，整块在屏内', async () => {
     miniBarStore.set({ cx: 160, cy: null, w: null, h: null, collapsed: false })
     const r = await measure()
@@ -367,7 +459,7 @@ describe.skipIf(!ENABLED)('浏览器几何：听书条 / 迷你条 / 跟读高�
 
   it('听书条只留一条进度：章内滑杆吃满整行，本段滑杆不再渲染', async () => {
     const r = await measure()
-    expect(r.chapterRange.width, '章内滑杆独占整行').toBeGreaterThan(r.bar.width - 48)
+    expect(must(r.chapterRange, '章内滑杆').width, '章内滑杆独占整行').toBeGreaterThan(r.bar.width - 48)
     expect(r.ranges, '条上只剩章内一条进度滑杆（ADR-0075）').toBe(1)
   })
 

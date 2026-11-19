@@ -500,14 +500,19 @@ describe('迷你条是浮窗：两个完整形态、可拖、可收起', () => {
     it('拖右边 40px：宽 +40，左缘不动，松手落盘', async () => {
       // 清落盘现场：走 `ls` 那道 guard，不碰裸 `localStorage` 全局（本仓的 JS 宿主与测试环境里它都可能缺席）
       ls.setItem(KEY, '{}')
-      await free()
+      const bar = await free()
+      expect(bar.hasAttribute('data-resize-edge'), '起手前不挂边名').toBe(false)
       fireEvent.pointerDown(must(document.querySelector('[data-edge="right"]'), '右边带'), {
         pointerId: 1, clientX: 900, clientY: 400,
       })
       fireEvent.pointerMove(window, { pointerId: 1, buttons: 1, clientX: 940, clientY: 400 })
+      expect(bar.getAttribute('data-resizing'), '拖边中挂 resizing').toBe('true')
+      expect(bar.getAttribute('data-resize-edge'), '接线：正在拖的边进 data-resize-edge（光标契约按它分叉）').toBe('right')
       fireEvent.pointerUp(window, { pointerId: 1, clientX: 940, clientY: 400 })
       expect(miniBarStore.get().w).toBe(360)
       expect(must(miniBarStore.get().cx, '中心') - 180).toBeCloseTo(340, 5)
+      expect(bar.getAttribute('data-resizing'), '松手收场').toBe('false')
+      expect(bar.hasAttribute('data-resize-edge'), '不拖边时不挂边名').toBe(false)
       const saved = JSON.parse(ls.getItem(KEY) ?? '{}') as { w?: number }
       expect(saved.w).toBe(360)
     })
