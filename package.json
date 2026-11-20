@@ -73,7 +73,8 @@
         "0.2.1-rc.3": "compatible",
         "0.2.1-rc.5": "compatible",
         "0.2.2-rc.1": "compatible",
-        "0.2.2-rc.3": "compatible"
+        "0.2.2-rc.3": "compatible",
+        "0.2.2-rc.5": "compatible"
       }
     }
   },
@@ -105,7 +106,7 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.1.0",
-    "@deepseek-ai/dsh-tools": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.5",
     "@deepseek-ai/schemastery": "^3.19.0",
     "@eslint/js": "^10.0.1",
     "@testing-library/dom": "^10.4.2",
