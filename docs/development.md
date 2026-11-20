@@ -117,9 +117,15 @@ $env:DSH_BROWSER_GATE='1'; pnpm vitest run tests/browser/config-page-layout.test
 # 听书面几何：展开态缺省尺寸下行不叠、最小档动作钮仍可点中且 resize 带不压控件、尺寸由现场驱动并夹在档位范围内、收起胶囊完整可见、左右缘贴合、自由落位按中心坐标落块、听书条只剩章内一条滑杆、条底与听书选中态跟行内纸色（换纸后立即跟随）、跟读高亮换字色 + 段首三角且不改布局、浮层底跟宿主 token、拖动中整块光标换抓手且悬停指针不动、拖边中整块光标跟随所拖边的 resize 指针
 # 读数与断言住 tests/browser/tts-layout.test.tsx；尺寸档与夹取常量住 src/client/tts/mini-bar-state.ts 的 DEFAULT_MINI_BAR_SIZE / MIN_MINI_BAR_SIZE / MAX_MINI_BAR_SIZE / CAPSULE_SIZE，这里不抄读数
 $env:DSH_BROWSER_GATE='1'; pnpm vitest run tests/browser/tts-layout.test.tsx
+# 引擎编辑抽屉几何：编辑表单走 520px 表单档（不是 400px 确认框、也不是 680px 宽档）；长 URL / JSON 换行不被裁、动作行在视口内；高级与登录态默认收起且组内字段不渲染；窄档仍夹在视口里
+# 读数与断言住 tests/browser/tts-engine-edit-layout.test.tsx
+$env:DSH_BROWSER_GATE='1'; pnpm vitest run tests/browser/tts-engine-edit-layout.test.tsx
 # 书架卡片几何：「正在听」徽标既不挤书名也不挤源名（同一本书挂徽标前 / 后，书名行与来源 chip 的可用宽度都不变）、徽标自己完整可见且不出卡、与底左角标（来源 chip / 「本地」）不叠
 # 读数与断言住 tests/browser/shelf-nowplaying-layout.test.tsx；机制侧与多选态让位的默认门钉子住 tests/client/tts-mini.test.tsx
 $env:DSH_BROWSER_GATE='1'; pnpm vitest run tests/browser/shelf-nowplaying-layout.test.tsx
+# 源列表尾三轨几何：操作 / 启停按右缘、AI 列按中心（表头文字与方形勾都居中），表头/表体逐列对齐，宽档与窄档同判
+# 读数与断言住 tests/browser/source-list-layout.test.tsx；轨宽定宽的口径与默认门钉子住 src/client/styles/controls.ts 的 .novel-tr.src 与 tests/client/ui-system.test.tsx
+$env:DSH_BROWSER_GATE='1'; pnpm vitest run tests/browser/source-list-layout.test.tsx
 
 # EPUB 真语料审计（离线，读本机目录）：逐本 importEpub → 按结局与痕码分桶，报告落 .superpowers/epub-corpus/
 # 语料目录 = $env:DSH_EPUB_CORPUS_DIR（缺省 `$DSH_HOME/novel/corpus/`）；**语料不入库**，默认门不依赖任何下载
@@ -166,7 +172,7 @@ $env:DSH_PARSE_CENSUS='1'; pnpm vitest run tests/engine/parse-census.test.ts
 1. **前置**：先 `pnpm build`。宿主 profile 必须**可由 CLI 写**——保留名 `desktop` 归宿主应用独占，普通 CLI 会拒写该保留名；写不了就改用 CLI 自建的一次性 profile（`dsh plugin --profile <名> add <本地路径>` 初始化它，再把 `@deepseek-ai/dsh-web-app` 加进 `dsh.profile.bundles`），它组出同一棵树。
 2. **装载与挂载**：`dsh plugin --profile <名> add link:<本仓目录>`（本包没有 `prepare`：`github:` 直装不会自动构建、缺 `lib/` 会被宿主拒挂——冒烟对象是上一步构建出的本仓产物，源码装一律先构建再 link，见「构建与日常开发」）→ `dsh --profile <名> --dump-config` 的组合树里出现本插件 → 起 `dsh --profile <名>`，看组合树里没有 `plugin tree failed to load`。Release 资产那一格（`add <tarball>`）由同一道门的第二格量；真实 Release 下载地址的安装同样要手工过第 2–3 步。
 3. **工具面与一条真路径**：六个 `dshnovel_` 工具各真调一次；再走一条真实业务：搜 → 详情 → 目录 → 正文并翻一页（顺带覆盖出站代理与解码链）。
-4. **听书面**：在同一台真宿主上听一次——阅读器顶条起播（内置口或浏览器本地语音）→ 暂停 / 继续 / 跳段 / 拖章内滑杆 → 改语速与定时 → 离开阅读器后浮窗仍在并续听 → 重开这本书按共用进度续上。宿主装了语音合成服务插件时，引擎清单里应出现「宿主朗读服务」；没有装就不列这一行。这条手工项覆盖的是**出声与宿主槽位**：服务端合成链另有 `scripts/tts-live.mjs`（见「门（自动）」），几何另由 `DSH_BROWSER_GATE` 那枚浏览器门量。
+4. **听书面**：在同一台真宿主上听一次——阅读器顶条起播（内置口或浏览器本地语音）→ 暂停 / 继续 / 跳段 / 拖章内滑杆 → 改语速与定时 → 离开阅读器后浮窗仍在并续听 → 重开这本书按共用进度续上。宿主装了语音合成服务插件时，引擎清单里应多出它提供的那一行；没有装就不列这一行。这条手工项覆盖的是**出声与宿主槽位**：服务端合成链另有 `scripts/tts-live.mjs`（见「门（自动）」），几何另由 `DSH_BROWSER_GATE` 那枚浏览器门量。
 
 **它证明什么**：当前宿主版本上「装得进、挂得上、工具面活着、业务链路走得通一次」。**它不证明**：任何站点的正文可读率（那是 `DSH_CONTENT_AUDIT` 的分桶报告，报告不等于通过率）、浏览器里的渲染与图片解码（那是 `DSH_BROWSER_GATE`）、听书在真宿主里出得了声（那是上面第 4 步的手工读数），也不证明其它宿主版本——每次 bump 编译所依（把新宿主加进实测名单）都要重跑这四步，并如实更新 `package.json` 的实测名单与 README 投影。
 

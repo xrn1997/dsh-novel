@@ -446,11 +446,39 @@ export const TTS_CSS = `
   background: var(--novel-layer-2); font-size: var(--novel-fs-sm);
 }
 .novel-tts-receipt.has-failed { border-left-color: var(--novel-warn); }
-.novel-tts-edit-form { display: flex; flex-direction: column; gap: var(--novel-sp-2); max-height: 60vh; overflow-y: auto; }
+.novel-tts-edit-form {
+  display: flex; flex-direction: column; gap: var(--novel-sp-2);
+  max-height: 60vh; overflow-y: auto;
+  /* 展开组时滚动条会出现：预留槽位（不挤动布局）并留一点右缘呼吸，输入框不贴滚动条 */
+  scrollbar-gutter: stable; padding-right: var(--novel-sp-2);
+}
 .novel-tts-edit-field { display: flex; flex-direction: column; gap: 2px; }
 .novel-tts-edit-field > label { font-size: var(--novel-fs-xs); color: var(--novel-text-3); }
 .novel-tts-edit-section {
   margin-top: var(--novel-sp-2); font-size: var(--novel-fs-sm);
   font-weight: 600; color: var(--novel-text-2);
 }
+.novel-tts-edit-group {
+  display: flex; flex-direction: column; gap: var(--novel-sp-2);
+  border-top: 1px solid var(--novel-border-faint); padding-top: var(--novel-sp-2);
+}
+.novel-tts-edit-group-toggle {
+  display: flex; align-items: center; gap: var(--novel-sp-2); width: 100%;
+  border: none; padding: 0; background: none; font: inherit; text-align: left; cursor: pointer;
+  font-size: var(--novel-fs-sm); font-weight: 600; color: var(--novel-text-2);
+}
+.novel-tts-edit-group-toggle:hover { color: var(--novel-text); }
+.novel-tts-edit-group-toggle:focus-visible {
+  outline: 2px solid var(--novel-brand); outline-offset: 2px; border-radius: var(--novel-r-sm);
+}
+.novel-tts-edit-chevron {
+  width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor;
+  stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round;
+  transition: transform var(--novel-dur) var(--novel-ease);
+}
+.novel-tts-edit-group-toggle[aria-expanded="true"] .novel-tts-edit-chevron { transform: rotate(90deg); }
+.novel-tts-edit-status {
+  margin-left: auto; font-size: var(--novel-fs-xs); font-weight: 400; color: var(--novel-text-3);
+}
+.novel-tts-edit-group-body { display: flex; flex-direction: column; gap: var(--novel-sp-2); }
 `

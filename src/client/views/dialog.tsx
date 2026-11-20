@@ -37,8 +37,9 @@ export interface DialogProps {
   children?: ReactNode
   /** 模态档底部的动作行；抽屉档的动作长在标题行右侧，不吃这一格 */
   actions?: ReactNode
-  /** 几何档位：外观与结构归样式层，这里只选哪一档标记 */
-  variant?: 'modal' | 'wide' | 'drawer'
+  /** 几何档位：外观与结构归样式层，这里只选哪一档标记。
+   *  `modal` 确认框（400px）/ `form` 表单（520px）/ `wide` 大信息层（680px）/ `drawer` 侧抽屉。 */
+  variant?: 'modal' | 'form' | 'wide' | 'drawer'
   /** 关闭后焦点还给谁；不传即挂载时那个焦点位 */
   opener?: HTMLElement | null
 }
@@ -163,7 +164,9 @@ export function Dialog({ title, label, onClose, children, actions, variant = 'mo
   }
   return (
     <div className="novel-modal-mask" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div ref={panelRef} className={variant === 'wide' ? 'novel-modal wide' : 'novel-modal'} role="dialog" aria-modal="true"
+      <div ref={panelRef}
+        className={variant === 'wide' ? 'novel-modal wide' : variant === 'form' ? 'novel-modal form' : 'novel-modal'}
+        role="dialog" aria-modal="true"
         {...(label === undefined ? { 'aria-labelledby': titleId } : { 'aria-label': label })}>
         <div className="novel-modal-title" id={titleId}>{title}</div>
         {children}

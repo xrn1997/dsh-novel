@@ -17,7 +17,9 @@ export const OVERLAYS_CSS = `
   animation: novel-rise var(--novel-dur) var(--novel-ease);
 }
 .novel-modal-title { font-size: var(--novel-fs-base); font-weight: 600; line-height: 1.5; }
-/* 导入弹层等信息量更大的模态用宽档（删除确认保持 400px 紧凑档） */
+/* 信息量分档：删除确认保持 400px 紧凑档；表单类（引擎编辑）用 520px 中档——字段比确认框
+   需要更多行宽，但铺满 680px 会把输入框拉得过长、也贴到滚动条上；导入弹层这类大文本面用宽档。 */
+.novel-modal.form { width: min(520px, calc(100vw - 48px)); }
 .novel-modal.wide { width: min(680px, calc(100vw - 48px)); }
 .novel-modal-body { font-size: var(--novel-fs-md); color: var(--novel-text-2); line-height: 1.6; }
 .novel-modal-warn { font-size: var(--novel-fs-sm); color: var(--novel-warn); line-height: 1.6; }

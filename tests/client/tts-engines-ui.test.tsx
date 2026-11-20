@@ -52,6 +52,14 @@ function httpSource(engine: TtsEnginePublic): TtsSourceInfo {
   return { id: engine.id, name: engine.name, kind: 'http' }
 }
 
+/** 没有订阅高级位（内容类型 / 静态请求头 / JS 库）的引擎：用来钉「高级组默认收起」。 */
+function httpEngineWithoutAdvanced(over: Partial<TtsEnginePublic> = {}): TtsEnginePublic {
+  const base = httpEngine(over)
+  delete base.contentType
+  delete base.header
+  return base
+}
+
 let sources: TtsSourceInfo[]
 let hostSpeech: HostSpeechHealth
 let engines: TtsEnginePublic[]
@@ -98,6 +106,12 @@ function rowOf(container: HTMLElement, id: string): HTMLElement {
   return must(container.querySelector<HTMLElement>(`[data-novel-tts-engine="${id}"]`), `引擎行 ${id}`)
 }
 
+/** 编辑抽屉把高级位与登录态收进默认折叠的组：要碰这两组的字段先点开组标题（幂等）。 */
+function openEditGroup(dialog: HTMLElement, name: RegExp): void {
+  const toggle = within(dialog).getByRole('button', { name })
+  if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle)
+}
+
 describe('引擎清单', () => {
   it('四源都列出；cordis 缺席合成灰行「未检测到」；凭据只上状态不上值', async () => {
     // 服务端投影本身不带凭据；这里故意塞运行时脏数据，证明列表不读、不外显任何凭据值。
@@ -115,7 +129,7 @@ describe('引擎清单', () => {
       .toEqual(['builtin', 'browser', 'http', 'cordis'])
 
     const cordis = pick(rows, 3)
-    expect(cordis.textContent).toContain('宿主朗读服务')
+    expect(cordis.textContent).toContain('dsh-xiaomi-tts')
     expect(cordis.textContent).toContain('未检测到')
     expect(cordis.className).toContain('dim')
 
@@ -137,6 +151,7 @@ describe('引擎清单', () => {
     // 编辑表单的凭据位恒从空开始：投影读不回来，也绝不把脏数据回填上屏。
     fireEvent.click(within(http).getByRole('button', { name: '编辑' }))
     const dialog = await screen.findByRole('dialog')
+    openEditGroup(dialog, /登录态（凭据）/)
     expect(within(dialog).getByLabelText<HTMLTextAreaElement>('Cookies（JSON 对象）').value).toBe('')
     expect(dialog.textContent).not.toContain('session-secret')
   })
@@ -193,7 +208,7 @@ describe('引擎 id 的显示身份（清单未到 / 现值不在清单这一档
 
     expect(engineLabelOf(zhTranslate, TTS_DEFAULTS.engineId)).toBe('内置朗读')
     expect(engineLabelOf(zhTranslate, BROWSER_TTS_ENGINE_ID)).toBe('浏览器本地语音')
-    expect(engineLabelOf(zhTranslate, CORDIS_TTS_ENGINE_ID)).toBe('宿主朗读服务')
+    expect(engineLabelOf(zhTranslate, CORDIS_TTS_ENGINE_ID)).toBe('dsh-xiaomi-tts')
     // 订阅 id 是数据：清单外认不出身份时才把它当名字（与清单行的回落同一条）
     expect(engineLabelOf(zhTranslate, 'http:edge')).toBe('http:edge')
   })
@@ -294,6 +309,7 @@ describe('编辑与删除', () => {
     const name = within(dialog).getByLabelText<HTMLInputElement>('名称')
     expect(name.value).toBe('微软 Edge 大声朗读')
     fireEvent.change(name, { target: { value: '改名后的引擎' } })
+    openEditGroup(dialog, /登录态（凭据）/)
     fireEvent.change(within(dialog).getByLabelText('Cookies（JSON 对象）'), {
       target: { value: '{"sid":"abc"}' },
     })
@@ -315,6 +331,68 @@ describe('编辑与删除', () => {
     expect(await within(container).findByText('改名后的引擎')).toBeTruthy()
   })
 
+  it('编辑抽屉走表单档并分区：常用两格在首屏，高级与登录态默认收起、点开才出现', async () => {
+    // 没有订阅自带内容的引擎：高级组无值，默认收起
+    engines = [httpEngineWithoutAdvanced()]
+    sources = [builtin, browser, httpSource(must(engines[0], '刚换上的订阅引擎'))]
+    const { container } = await renderManager()
+    fireEvent.click(within(rowOf(container, 'http:edge')).getByRole('button', { name: '编辑' }))
+    const dialog = await screen.findByRole('dialog')
+
+    // 数据表单走 520px 表单档（400px 确认框装不下长地址与 JSON / 代码，680px 宽档又太长）
+    expect(dialog.className, '引擎编辑是 form 档模态').toContain('form')
+    expect(dialog.className, '不是宽档').not.toContain('wide')
+    expect(within(dialog).getByLabelText('名称')).toBeTruthy()
+    expect(within(dialog).getByLabelText('接口地址')).toBeTruthy()
+
+    const advanced = within(dialog).getByRole('button', { name: /高级选项/ })
+    expect(advanced.getAttribute('aria-expanded')).toBe('false')
+    expect(advanced.textContent).toContain('未设置')
+    expect(within(dialog).queryByLabelText('JS 库'), '收起时组内字段不渲染').toBeNull()
+
+    openEditGroup(dialog, /高级选项/)
+    expect(advanced.getAttribute('aria-expanded')).toBe('true')
+    expect(within(dialog).getByLabelText('JS 库')).toBeTruthy()
+    expect(within(dialog).getByText(/留空 = 不校验响应类型/)).toBeTruthy()
+
+    const auth = within(dialog).getByRole('button', { name: /登录态（凭据）/ })
+    expect(auth.getAttribute('aria-expanded'), '登录态默认收起').toBe('false')
+    expect(auth.textContent, '状态位在组标题上，不展开也知道有没有').toContain('已配置登录态')
+    expect(within(dialog).queryByLabelText('Cookies（JSON 对象）')).toBeNull()
+  })
+
+  it('高级组有订阅自带的值时组标题报已填项数（默认仍收起）', async () => {
+    // 缺省 httpEngine 带 contentType 与 header 两格
+    const { container } = await renderManager()
+    fireEvent.click(within(rowOf(container, 'http:edge')).getByRole('button', { name: '编辑' }))
+    const dialog = await screen.findByRole('dialog')
+
+    const advanced = within(dialog).getByRole('button', { name: /高级选项/ })
+    expect(advanced.textContent).toContain('已填 2 项')
+    expect(advanced.getAttribute('aria-expanded'), '默认收起，有值只报数').toBe('false')
+    expect(within(dialog).queryByLabelText('静态请求头')).toBeNull()
+    openEditGroup(dialog, /高级选项/)
+    expect(within(dialog).getByLabelText<HTMLInputElement>('静态请求头').value).toBe('X-Static: 1')
+  })
+
+  it('接口地址走多行 textarea：legado 规则里的换行编辑保存不吞', async () => {
+    const url = 'https://tts.example/audio,{\n  "method": "POST",\n  "body": "text={{speakText}}"\n}'
+    const edge = httpEngineWithoutAdvanced({ url })
+    engines = [edge]
+    sources = [builtin, browser, httpSource(edge)]
+    const { container } = await renderManager()
+    fireEvent.click(within(rowOf(container, 'http:edge')).getByRole('button', { name: '编辑' }))
+    const dialog = await screen.findByRole('dialog')
+
+    const urlField = within(dialog).getByLabelText<HTMLTextAreaElement>('接口地址')
+    expect(urlField.tagName, '接口地址是多行 textarea').toBe('TEXTAREA')
+    expect(urlField.value).toBe(url)
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(apiSend).toHaveBeenCalledWith(
+      paramOps.ttsEnginePut.at('http:edge'), bodies.ttsEnginePut({ name: edge.name, url })))
+  })
+
   it('jsLib / header 走多行 textarea：编辑保存不吞换行（单行 input 会把多行代码压成一行）', async () => {
     const jsLib = 'function f() {\n  // 注释\n  return 1\n}'
     const header = '{\n  "X-Static": "1"\n}'
@@ -325,6 +403,7 @@ describe('编辑与删除', () => {
     fireEvent.click(within(rowOf(container, 'http:edge')).getByRole('button', { name: '编辑' }))
     const dialog = await screen.findByRole('dialog')
 
+    openEditGroup(dialog, /高级选项/)
     const jsLibField = within(dialog).getByLabelText<HTMLTextAreaElement>('JS 库')
     expect(jsLibField.tagName, 'jsLib 是多行 textarea，不是单行 input').toBe('TEXTAREA')
     expect(jsLibField.value, '多行代码的换行原样回读').toBe(jsLib)
@@ -344,6 +423,7 @@ describe('编辑与删除', () => {
     const { container } = await renderManager()
     fireEvent.click(within(rowOf(container, 'http:edge')).getByRole('button', { name: '编辑' }))
     const dialog = await screen.findByRole('dialog')
+    openEditGroup(dialog, /登录态（凭据）/)
     fireEvent.change(within(dialog).getByLabelText('Cookies（JSON 对象）'), { target: { value: 'not json' } })
     fireEvent.click(within(dialog).getByRole('button', { name: '保存' }))
     expect(await within(dialog).findByText(/登录态字段需为 JSON 对象/)).toBeTruthy()
@@ -494,6 +574,7 @@ describe('登录态的清除', () => {
     const { container } = await renderManager()
     fireEvent.click(within(rowOf(container, 'http:edge')).getByRole('button', { name: '编辑' }))
     const dialog = await screen.findByRole('dialog')
+    openEditGroup(dialog, /登录态（凭据）/)
     const clear = within(dialog).getByLabelText<HTMLInputElement>('清除已保存的登录态')
     expect(clear.checked).toBe(false)
     // 文案要点名会丢什么：cookies / 请求头 / 登录信息

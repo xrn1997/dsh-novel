@@ -5,19 +5,20 @@ import type {
   TtsEngineInput, TtsEnginePublic, TtsEngineTextField,
 } from '../../shared/wire.js'
 import { apiSend, describeError } from '../api.js'
-import { useCopy } from '../copy/index.js'
+import { plural, useCopy } from '../copy/index.js'
 import type { CopyKey } from '../copy/index.js'
 import { Dialog } from '../views/dialog.js'
 
-/** 文本位的标签与呈现：字段集合来自 wire 的 `TTS_ENGINE_TEXT_FIELDS`（只含合成链会读的三格），
- *  这份 Record 只补「叫什么、单行还是多行」；漏一个字段编译不过。
+/** 文本位的标签、说明与呈现：字段集合来自 wire 的 `TTS_ENGINE_TEXT_FIELDS`（只含合成链会读的三格），
+ *  这份 Record 只补「叫什么、说明什么、单行还是多行」；漏一个字段编译不过。
  *  `jsLib` 是代码（`//` 注释按行生效）、`header` 是 JSON 头表：单行 input 的值净化会吞掉换行，
  *  编辑后保存就把多行代码压成一行（注释吃掉其余代码），故这两格走多行 textarea；contentType 是单值 MIME，单行即可。
- *  legado 的登录 / 限速 / cookie jar 字段本仓不支持，故不摆编辑框——假控件比没有这个能力更坏。 */
-const EDIT_FIELD: Record<TtsEngineTextField, { labelKey: CopyKey; multiline?: boolean }> = {
-  contentType: { labelKey: 'tts.engines.edit.contentType' },
-  header: { labelKey: 'tts.engines.edit.header', multiline: true },
-  jsLib: { labelKey: 'tts.engines.edit.jsLib', multiline: true },
+ *  legado 的登录 / 限速 / cookie jar 字段本仓不支持，故不摆编辑框——假控件比没有这个能力更坏。
+ *  说明（hintKey）也住这里：三格的用途与「留空是什么语义」由字段自己说，不散在视图里。 */
+const EDIT_FIELD: Record<TtsEngineTextField, { labelKey: CopyKey; hintKey: CopyKey; multiline?: boolean }> = {
+  contentType: { labelKey: 'tts.engines.edit.contentType', hintKey: 'tts.engines.edit.contentTypeHint' },
+  header: { labelKey: 'tts.engines.edit.header', hintKey: 'tts.engines.edit.headerHint', multiline: true },
+  jsLib: { labelKey: 'tts.engines.edit.jsLib', hintKey: 'tts.engines.edit.jsLibHint', multiline: true },
 }
 
 /** 凭据文本框 → 对象位：空 = 保留（省略），非对象 / 非字符串值 = 表单报错，不发写口。 */
@@ -51,8 +52,14 @@ function textOrUndefined(value: string): string | undefined {
  * 编辑抽屉：只服务 http 订阅引擎。可编辑字段集 = `TtsEngineInput` 的非凭据位 + 三个凭据位；
  * 凭据位留空 = 不交 `auth`（注册表保留盘上登录态），填写才整组覆盖。
  *
- * 盘上已有登录态时另给一条「清除」：投影读不回凭据，不摆这个入口就等于「登录态只能换不能删」。
- * 勾上后提交 `auth: { cookies: {} }`（空凭据 = 删 auth 那一条由服务端认），本次填写的凭据不生效。
+ * 结构按「常用 / 高级 / 登录态」分三组：接口地址走多行 textarea（legado 规则常带
+ *  换行与超长选项串，单行 input 会把换行吞掉）；内容类型 / 静态请求头 / JS 库收进默认折叠的高级组，
+ *  组标题报「已填 N 项」；凭据三格收进默认折叠的登录态组，只在组标题上摆「已配置 / 未配置」状态位。
+ *  表单本体只有一个滚动容器，动作行固定在抽屉底部，展开任何一组都不会把保存钮挤出去。
+ *
+ * 盘上已有登录态时组内另给一条「清除」：投影读不回凭据，不摆这个入口就等于「登录态只能换不能删」。
+ * 勾上后提交 `auth: { cookies: {} }`（空凭据 = 删 auth 那一条由服务端认），本次填写的凭据不生效；
+ * 组收起时状态位改报「保存后清除」，别让一次删除意图跟着折叠一起隐身。
  *
  * 保存失败留在表单里显示服务端理由，不关模态。
  */
@@ -76,8 +83,13 @@ export function EngineEditDialog({ engine, onClose, onSaved }: {
   const [loginInfo, setLoginInfo] = useState('')
   /** 清除盘上登录态：不是「填一组新凭据」，而是一次显式的删除意图。 */
   const [clearAuth, setClearAuth] = useState(false)
+  /** 两组都默认收起：常用两格之外的一切不占首屏；组标题上的「已填 N 项」保证有值不被藏掉。 */
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [authOpen, setAuthOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
+  /** 高级组已填几格：组收起时也让「有没有内容」可见（订阅导入就带值的条目不该被折叠藏掉）。 */
+  const advancedCount = TTS_ENGINE_TEXT_FIELDS.filter((field) => textValues[field] !== '').length
 
   const fieldId = (nameOfField: string): string => `${base}-${nameOfField}`
   const setTextField = (field: TtsEngineTextField, value: string): void => {
@@ -148,14 +160,17 @@ export function EngineEditDialog({ engine, onClose, onSaved }: {
   }
 
   const textField = (id: string, label: string, value: string, onChange: (next: string) => void,
-    options: { multiline?: boolean; disabled?: boolean; initial?: boolean } = {}): ReactNode => (
+    options: {
+      multiline?: boolean; disabled?: boolean; initial?: boolean; hint?: string
+    } = {}): ReactNode => (
     // key 用调用点给的字段名（name / url / 三个文本位 / 三个凭据位各一）：这些行由
     // `TTS_ENGINE_TEXT_FIELDS.map` 批量产出，没有 key 就是每次重渲都整列重建（React 当场告警）。
     <div key={id} className="novel-tts-edit-field">
       <label htmlFor={fieldId(id)}>{label}</label>
       {options.multiline === true ? (
         <textarea
-          id={fieldId(id)} className="novel-textarea" rows={3} disabled={options.disabled === true}
+          id={fieldId(id)} className="novel-textarea" rows={3}
+          disabled={options.disabled === true}
           value={value} onChange={(event) => { onChange(event.target.value) }}
         />
       ) : (
@@ -166,11 +181,32 @@ export function EngineEditDialog({ engine, onClose, onSaved }: {
           value={value} onChange={(event) => { onChange(event.target.value) }}
         />
       )}
+      {options.hint === undefined ? null : <p className="novel-tts-note">{options.hint}</p>}
     </div>
+  )
+
+  /** 组标题（折叠开关）：chevron 是装饰字形，组名与状态都由文案单点给词。
+   *  `bodyId` 是组体那枚 id 的认领口：组体只在展开时渲染，`aria-controls` 也只在
+   *  展开时引用它——收起后不留悬空引用，id 不是死装饰。 */
+  const groupToggle = (label: string, bodyId: string, open: boolean, onToggle: () => void,
+    status: string): ReactNode => (
+    <button
+      type="button" className="novel-tts-edit-group-toggle"
+      aria-expanded={open}
+      aria-controls={open ? bodyId : undefined}
+      onClick={onToggle}
+    >
+      <svg className="novel-tts-edit-chevron" aria-hidden="true" viewBox="0 0 16 16">
+        <path d="M6 4l4 4-4 4" />
+      </svg>
+      <span>{label}</span>
+      <span className="novel-tts-edit-status">{status}</span>
+    </button>
   )
 
   return (
     <Dialog
+      variant="form"
       title={t('tts.engines.edit.title', { name: engine.name })}
       onClose={() => { if (!saving) onClose() }}
       actions={<>
@@ -183,36 +219,62 @@ export function EngineEditDialog({ engine, onClose, onSaved }: {
       </>}
     >
       <div className="novel-tts-edit-form">
+        <div className="novel-tts-edit-section">{t('tts.engines.edit.basic')}</div>
         {textField('name', t('tts.engines.edit.name'), name, setName, { initial: true })}
-        {textField('url', t('tts.engines.edit.url'), url, setUrl)}
-        {TTS_ENGINE_TEXT_FIELDS.map((field) => textField(
-          field,
-          t(EDIT_FIELD[field].labelKey),
-          textValues[field],
-          (next) => { setTextField(field, next) },
-          { multiline: EDIT_FIELD[field].multiline === true },
-        ))}
-        <div className="novel-tts-edit-section">{t('tts.engines.edit.credentials')}</div>
-        <p className="novel-tts-note">{t('tts.engines.edit.credentialsNote')}</p>
-        {textField('cookies', t('tts.engines.edit.cookies'), cookies, setCookies,
-          { multiline: true, disabled: clearAuth })}
-        {textField('headers', t('tts.engines.edit.headers'), headers, setHeaders,
-          { multiline: true, disabled: clearAuth })}
-        {textField('loginInfo', t('tts.engines.edit.loginInfo'), loginInfo, setLoginInfo,
-          { multiline: true, disabled: clearAuth })}
-        {engine.hasAuth ? (
-          <div className="novel-tts-edit-field">
-            <label htmlFor={fieldId('clearAuth')}>
-              <input
-                id={fieldId('clearAuth')} type="checkbox" checked={clearAuth}
-                disabled={saving}
-                onChange={(event) => { setClearAuth(event.target.checked) }}
-              />
-              {t('tts.engines.edit.clearAuth')}
-            </label>
-            <p className="novel-tts-note">{t('tts.engines.edit.clearAuthNote')}</p>
-          </div>
-        ) : null}
+        {textField('url', t('tts.engines.edit.url'), url, setUrl, {
+          multiline: true, hint: t('tts.engines.edit.urlHint'),
+        })}
+
+        <div className="novel-tts-edit-group" data-novel-tts-edit-group="advanced">
+          {groupToggle(t('tts.engines.edit.advanced'), fieldId('advanced-body'), advancedOpen,
+            () => { setAdvancedOpen((open) => !open) },
+            advancedCount === 0
+              ? t('tts.engines.edit.advancedEmpty')
+              : plural(t, advancedCount, 'tts.engines.edit.advancedCount.one', 'tts.engines.edit.advancedCount.other', { n: advancedCount }))}
+          {advancedOpen ? (
+            <div className="novel-tts-edit-group-body" id={fieldId('advanced-body')}>
+              {TTS_ENGINE_TEXT_FIELDS.map((field) => textField(
+                field,
+                t(EDIT_FIELD[field].labelKey),
+                textValues[field],
+                (next) => { setTextField(field, next) },
+                { multiline: EDIT_FIELD[field].multiline === true, hint: t(EDIT_FIELD[field].hintKey) },
+              ))}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="novel-tts-edit-group" data-novel-tts-edit-group="auth">
+          {groupToggle(t('tts.engines.edit.credentials'), fieldId('auth-body'), authOpen,
+            () => { setAuthOpen((open) => !open) },
+            clearAuth
+              ? t('tts.engines.edit.clearAuthPending')
+              : t(engine.hasAuth ? 'tts.engines.auth.configured' : 'tts.engines.auth.none'))}
+          {authOpen ? (
+            <div className="novel-tts-edit-group-body" id={fieldId('auth-body')}>
+              <p className="novel-tts-note">{t('tts.engines.edit.credentialsNote')}</p>
+              {textField('cookies', t('tts.engines.edit.cookies'), cookies, setCookies,
+                { multiline: true, disabled: clearAuth })}
+              {textField('headers', t('tts.engines.edit.headers'), headers, setHeaders,
+                { multiline: true, disabled: clearAuth })}
+              {textField('loginInfo', t('tts.engines.edit.loginInfo'), loginInfo, setLoginInfo,
+                { multiline: true, disabled: clearAuth })}
+              {engine.hasAuth ? (
+                <div className="novel-tts-edit-field">
+                  <label htmlFor={fieldId('clearAuth')}>
+                    <input
+                      id={fieldId('clearAuth')} type="checkbox" checked={clearAuth}
+                      disabled={saving}
+                      onChange={(event) => { setClearAuth(event.target.checked) }}
+                    />
+                    {t('tts.engines.edit.clearAuth')}
+                  </label>
+                  <p className="novel-tts-note">{t('tts.engines.edit.clearAuthNote')}</p>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
         {failure === null ? null : <p className="novel-err novel-note-sm" role="alert">{failure}</p>}
       </div>
     </Dialog>
