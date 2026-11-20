@@ -10,6 +10,14 @@ export function participates(s: NovelSource): boolean {
   return s.enabled && s.type === 'text'
 }
 
+/** 「谁参搜 AI 工具面」：参搜 ∧ 用户显式标记为 AI 搜索源。
+ *  界面聚合搜索与发现面仍只读 `participates`——AI 搜索源是**工具面**的收窄，
+ *  不是第二个启停轴（停用对两种搜索同时生效）。缺键读 false：存量由 `SourceRegistry.load`
+ *  收敛成 false，本谓词不猜「没标 = 都搜」。 */
+export function aiParticipates(s: NovelSource): boolean {
+  return participates(s) && s.aiSearch === true
+}
+
 /** 「谁进城」：参搜 ∧ 声明了分类入口 ∧ 书源自己没把发现关掉（三条）。
  *  没有分类入口的源在书城**完全隐形**（不占位、不装死）——它照样能搜索与进书架。
  *  开关从 `normalize.rawExploreEnabled` 那道读口拿，不在谓词里再摸一次 `raw`：raw → 模型位的

@@ -88,6 +88,10 @@ export interface NormalizedRules {
 /** 规范化后的书源全量（含 raw 原文与 auth——只落盘，不进对外返回值） */
 export interface NovelSource {
   id: string; name: string; baseUrl: string; enabled: boolean; groups: string[]
+  /** 是否参与 AI 搜索工具的聚合搜索（与 `enabled` 正交：启停管界面搜索，本格管工具面）。
+   *  用户偏好而非书源格式字段：导入缺省 false，重导入保留原值；存量缺键由 load 收敛为 false。
+   *  类型上可选是承认「盘上旧条目还没过 load 迁移」这一态——读侧一律按 `=== true`，写侧恒写布尔。 */
+  aiSearch?: boolean
   type: SourceContentKind
   raw: unknown; rules: NormalizedRules; auth?: SourceAuth
   status: SourceStatus; statusDetail?: string

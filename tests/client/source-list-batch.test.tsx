@@ -25,7 +25,7 @@ import { must, pick } from '../support/fixture.js'
  */
 
 const src = (over: Partial<SourcePublic> & { id: string }): SourcePublic => ({
-  name: over.id, baseUrl: `https://${over.id}.com`, enabled: true, groups: [],
+  name: over.id, baseUrl: `https://${over.id}.com`, enabled: true, aiSearch: false, groups: [],
   type: 'text', status: 'verified', importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false, hasLoginUrl: false,
   ...over,
 })
@@ -97,6 +97,25 @@ describe('选中动作条：启用/停用/验证所选（写口载荷 + 成功�
       ROUTES.sourcesBatchEnabled, { ids: ['s3'], enabled: false }))
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
     expect(document.querySelector('[data-novel-selbar]')).not.toBeNull()
+  })
+
+  it('加入 / 移出 AI 搜索：POST batch-ai-search {ids, aiSearch} → 重取源列表 + 反馈报服务端计数', async () => {
+    const deps = makeDeps({ apiSend: vi.fn(async () => ({ updated: 2 })) })
+    render(view(deps))
+    selectRows(['源一', '源二'])
+    fireEvent.click(screen.getByText('加入 AI 搜索'))
+    await waitFor(() => expect(deps.apiSend).toHaveBeenCalledWith(
+      ROUTES.sourcesBatchAiSearch, { ids: ['s1', 's2'], aiSearch: true }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
+    expect(deps.pushOk).toHaveBeenCalledWith('已开启 2 个源的 AI 搜索')   // 计数是「找到并写入数」（幂等重写也计），措辞不许写成「已加入 n 个」
+    expect(document.querySelector('[data-novel-selbar]')).not.toBeNull()   // 留在编辑态且勾选保留
+
+    fireEvent.click(screen.getByText('移出 AI 搜索'))
+    await waitFor(() => expect(deps.apiSend).toHaveBeenCalledWith(
+      ROUTES.sourcesBatchAiSearch, { ids: ['s1', 's2'], aiSearch: false }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2))
+    expect(deps.pushOk).toHaveBeenCalledWith('已关闭 2 个源的 AI 搜索')
+    expect(deps.pushError).not.toHaveBeenCalled()
   })
 
   it('验证所选：startBatchProbeJob(选中 ids) 经注入 deps 提交；成功催任务读面（不重取源列表）', async () => {

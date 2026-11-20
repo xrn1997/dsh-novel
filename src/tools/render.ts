@@ -20,18 +20,24 @@ export interface SearchRenderValue {
   }>
   failed: Array<{ sourceName: string; code: string }>
   searched: number
+  eligible: number
   answered: number
   filtered: number
   truncated?: string
 }
 
-/** 搜索结果：摘要行恒在；缺作者整键缺席（不印幽灵）；截断省略号按**行数**判。 */
+/** 搜索结果：摘要行恒在；缺作者整键缺席（不印幽灵）；截断省略号按**行数**判。
+ *  `eligible` 单独一行：AI 搜索源是用户配置的集合，0 与「搜了但没找到」必须一眼分得开。 */
 export function renderSearch(v: SearchRenderValue): string {
   const lines = v.books.map((b) => `《${b.title}》${b.author === undefined ? '' : ` / ${b.author}`} · ${b.sourceCount} 家源：${
     b.sources.slice(0, 3).map((s) => `${s.sourceName}(${s.url ?? '无地址'})`).join('；')}${b.sources.length > 3 ? '…' : ''}`)
   const fails = v.failed.map((f) => `${f.sourceName}：${f.code}`).join('；')
   return `${v.books.length} 本（跑了 ${v.searched} 家、答话 ${v.answered} 家、滤去 ${v.filtered} 条不相关）：${
     lines.length === 0 ? '' : `\n${lines.join('\n')}`}`
+    + `\nAI 搜索候选 ${v.eligible} 家（本轮跑了 ${v.searched} 家）`
+    + (v.eligible === 0
+      ? '\n本轮没有可搜的 AI 搜索源：请到「书源管理」把要用的源标记为 AI 搜索（缺省搜全部已标记的源；sourceIds 只能收窄这个集合）。'
+      : '')
     + (v.failed.length === 0 ? '' : `\n${v.failed.length} 家未答话：${fails}`)
     + (v.truncated === undefined ? '' : `\n${v.truncated}`)
 }
@@ -108,6 +114,7 @@ export interface SourceRenderItem {
   name: string
   baseUrl: string
   enabled: boolean
+  aiSearch: boolean
   type: string
   status: string
   statusDetail?: string
@@ -121,13 +128,15 @@ export interface SourceProbeRenderValue {
   error?: { code: string; message: string }
 }
 export interface SourceToggleRenderValue { enabled?: boolean; sourceId?: string }
+export interface SourceAiToggleRenderValue { aiSearch?: boolean; sourceId?: string }
 export interface SourceRemoveRenderValue { sourceId?: string; removed?: boolean }
 
 export function renderSourceList(v: SourceListRenderValue): string {
   const sources = v.sources
   if (sources === undefined) throw new Error('dshnovel_source list 回执缺少 sources')
   const on = sources.filter((s) => s.enabled).length
-  return `共 ${sources.length} 个源（启用 ${on}）：${sources.slice(0, 10).map((s) => `${s.name}（${s.status}${s.enabled ? '' : '，已停用'}）`).join('；')}${sources.length > 10 ? '…（截断，规范值含全部）' : ''}`
+  const ai = sources.filter((s) => s.aiSearch).length
+  return `共 ${sources.length} 个源（启用 ${on}，AI 搜索 ${ai}）：${sources.slice(0, 10).map((s) => `${s.name}（${s.status}${s.enabled ? '' : '，已停用'}${s.aiSearch ? '' : '，非 AI 搜索'}）`).join('；')}${sources.length > 10 ? '…（截断，规范值含全部）' : ''}`
 }
 
 export function renderSourceProbe(v: SourceProbeRenderValue): string {
@@ -145,6 +154,13 @@ export function renderSourceToggle(v: SourceToggleRenderValue): string {
     throw new Error('dshnovel_source enable/disable 回执缺少 enabled/sourceId')
   }
   return `已${v.enabled ? '启用' : '停用'}源 ${v.sourceId}`
+}
+
+export function renderSourceAiToggle(v: SourceAiToggleRenderValue): string {
+  if (typeof v.aiSearch !== 'boolean' || v.sourceId === undefined) {
+    throw new Error('dshnovel_source ai-enable/ai-disable 回执缺少 aiSearch/sourceId')
+  }
+  return `已把源 ${v.sourceId} ${v.aiSearch ? '加入' : '移出'} AI 搜索`
 }
 
 export function renderSourceRemove(v: SourceRemoveRenderValue): string {

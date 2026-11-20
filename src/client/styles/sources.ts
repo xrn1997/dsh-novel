@@ -66,6 +66,10 @@ export const SOURCES_CSS = `
 .novel-source-query { max-width: 200px; }
 .novel-cell-end { display: flex; justify-content: flex-end; }
 .novel-cell-right { text-align: right; }
+/* AI 列：表头文字与行内方形勾都居中（与右侧启停开关的右对齐刻意不同——
+   集合成员是「勾不勾」，不是「开不开」，列心对齐比右缘对齐更像集合） */
+.novel-ai-head { text-align: center; white-space: nowrap; }
+.novel-ai-cell { display: flex; align-items: center; justify-content: center; }
 .novel-cell-groups {
   display: flex; flex-wrap: wrap; gap: var(--novel-sp-2); align-items: center; min-width: 0; overflow: hidden;
 }

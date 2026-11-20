@@ -1493,11 +1493,11 @@ describe('SearchView 接线：聚合搜索走后台任务（提交一次 + 游�
 
 describe('SettingsSection 整壳接线（调度台 IA：待办箱 + 弹层闭环；SettingsDeps 注入）', () => {
   const unverifiedSrc: SourcePublic = {
-    id: 'u1', name: '未验源', baseUrl: 'https://u.com', enabled: true, groups: [],
+    id: 'u1', name: '未验源', baseUrl: 'https://u.com', enabled: true, aiSearch: false, groups: [],
     type: 'text', status: 'unverified', importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false, hasLoginUrl: false,
   }
   const brokenSrc: SourcePublic = {
-    id: 'b1', name: '坏源甲', baseUrl: 'https://b.com', enabled: true, groups: [],
+    id: 'b1', name: '坏源甲', baseUrl: 'https://b.com', enabled: true, aiSearch: false, groups: [],
     type: 'text', status: 'broken', importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false, hasLoginUrl: false,
   }
   const doneImportJob: JobState = {

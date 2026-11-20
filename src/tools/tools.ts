@@ -6,7 +6,7 @@ import { summarizeRound } from '../shared/round-summary.js'
 import { project } from './project.js'
 import {
   renderImport, renderRead, renderSearch, renderShelfBook, renderShelfList, renderShelfRemove,
-  renderSourceList, renderSourceProbe, renderSourceRemove, renderSourceToggle, renderToc,
+  renderSourceAiToggle, renderSourceList, renderSourceProbe, renderSourceRemove, renderSourceToggle, renderToc,
   TOC_CHAPTERS_CAP, TOC_RENDER_CAP,
 } from './render.js'
 import { pickShelfItem, SHELF_ITEM_FIELDS } from './shelf-item.js'
@@ -94,16 +94,17 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
 
   const searchBooks = defineTool({
     name: 'dshnovel_search',
-    description: '在已启用的文本书源里聚合搜索并按书分组（同一书名+作者在多家源上收成一本，`sources[]` 逐家给详情页地址与 `sourceId`；本插件当前仅支持小说文本面）。'
+    description: '只搜用户标记为「AI 搜索」的已启用文本书源（标记在书源管理里；它与启停正交——停用的源照旧不参与），并按书分组（同一书名+作者在多家源上收成一本，`sources[]` 逐家给详情页地址与 `sourceId`；本插件当前仅支持小说文本面）。'
       + '返回书名／作者／分类含关键词（或书名含其空格分段）的行，判为不相关的行数在 `filtered` 里如实报数。'
       + '返回结果里的 `url` 是详情页地址，可作为其他 dshnovel 工具的 bookKey，调用时要一起带上该行自己的 `sourceId`。'
+      + '`eligible` 是本轮 AI 搜索候选源数；为 0 时说明本轮没有可搜候选（用户还没标记 AI 搜索源，或点名的都不在已标记集合内），应提示去书源管理勾选，不要转述成「没找到」。'
       + '未答话的书源在 `failed` 里逐家点名；`books` 为空时先看 `searched`/`answered`/`filtered`——「没人答话」与「答话了但全不相关」是两回事，别转述成「没找到」。',
     parameters: {
       keyword: { type: 'string', required: true, description: '书名/作者关键词' },
       sourceIds: {
         type: 'array',
         items: { type: 'string' },
-        description: '限定源 id 列表（缺省搜全部启用的文本源）',
+        description: '限定源 id 列表（只能收窄 AI 搜索源集合；缺省搜全部已标记的 AI 搜索源；空数组＝一家都不搜，不是「不限定」）',
       },
     },
     output: {
@@ -148,6 +149,7 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
             },
           },
           searched: { type: 'integer', required: true, description: '本轮实际跑了的源数' },
+          eligible: { type: 'integer', required: true, description: '本轮 AI 搜索候选源数（已启用 + 文本 + 已标记 AI；给 sourceIds 时为收窄后的数）' },
           answered: { type: 'integer', required: true, description: '干净答话（无 error）的源数' },
           filtered: { type: 'integer', required: true, description: '因被判不相关而移出默认返回的行数' },
           truncated: { type: 'string', description: '本轮本数超过返回上限时的如实说明（缺席=没截断）' },
@@ -156,7 +158,7 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
       render: (_args, v) => text(renderSearch(v)),
     },
     execute: async (args: { keyword: string; sourceIds?: string[] }, exec) => {
-      const round = await service.search(args.keyword, {
+      const { eligible, groups: round } = await service.searchForAi(args.keyword, {
         ...(args.sourceIds === undefined ? {} : { sourceIds: args.sourceIds }),
         // 取消贯通到 HTTP 抓取层：在途请求随之中止、未开打的源不再发（webView 导航没有取消面，
         // 见 source-request.ts 的 ReadFetchOptions）。停止语义归 ReadingService.searchProgressive。
@@ -182,7 +184,7 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
           sources: Array<{ sourceId: string; sourceName: string; title: string; author?: string; url?: string }>
         }>
         failed: Array<{ sourceId: string; sourceName: string; code: string; message: string }>
-        searched: number; answered: number; filtered: number; truncated?: string
+        searched: number; eligible: number; answered: number; filtered: number; truncated?: string
       } = project({
         books: books.map((b) => ({
           title: b.title, author: b.author, relevance: b.relevance, sourceCount: b.sourceCount,
@@ -190,6 +192,7 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
         })),
         failed: failedSources(round),
         searched: counts.searched,
+        eligible,
         answered: counts.answered,
         filtered,
         truncated: truncationNotice(total, books.length),
@@ -376,7 +379,7 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
   })
 
   interface SourceArgs {
-    action: 'list' | 'probe' | 'enable' | 'disable' | 'remove'
+    action: 'list' | 'probe' | 'enable' | 'disable' | 'ai-enable' | 'ai-disable' | 'remove'
     sourceId?: string
   }
   type SourceAction = SourceArgs['action']
@@ -394,14 +397,16 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
             name: { type: 'string', required: true, description: '源名' },
             baseUrl: { type: 'string', required: true, description: '源站地址' },
             enabled: { type: 'boolean', required: true, description: '是否启用（参与搜索）' },
+            aiSearch: { type: 'boolean', required: true, description: '是否参与 AI 搜索工具（与启用正交）' },
             type: { type: 'string', required: true, description: '内容形态（text=文本）' },
             status: { type: 'string', required: true, description: 'verified/broken/unverified' },
             statusDetail: { type: 'string', description: 'broken 原因（含段级定位）' },
           },
         },
       },
-      sourceId: { type: 'string', description: '目标源 id（probe/enable/disable/remove 回显）' },
+      sourceId: { type: 'string', description: '目标源 id（probe/enable/disable/ai-enable/ai-disable/remove 回显）' },
       enabled: { type: 'boolean', description: '启停后的状态（仅 enable/disable）' },
+      aiSearch: { type: 'boolean', description: 'AI 搜索标记后的状态（仅 ai-enable/ai-disable）' },
       removed: { type: 'boolean', description: '是否真的删除了（仅 remove）' },
       status: { type: 'string', description: '探针后状态 verified/broken（仅 probe）' },
       ok: { type: 'boolean', description: '探针是否跑通（仅 probe）' },
@@ -426,17 +431,24 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
     await service.setEnabled(sourceId, enabled)
     return { action: enabled ? 'enable' as const : 'disable' as const, sourceId, enabled }
   }
-  /** 书源管理：同样一 action 一行；enable/disable 共用 `toggleSource`。 */
+  /** ai-enable/ai-disable 的共用执行体：与启停同一存在性语义，只改 AI 搜索标记。 */
+  const toggleAiSearch = (aiSearch: boolean) => async (args: SourceArgs, exec: ToolExec) => {
+    checkAbort(exec)
+    const sourceId = needArg(args.sourceId, 'sourceId')
+    await service.setAiSearch(sourceId, aiSearch)
+    return { action: aiSearch ? 'ai-enable' as const : 'ai-disable' as const, sourceId, aiSearch }
+  }
+  /** 书源管理：同样一 action 一行；enable/disable 共用 `toggleSource`，ai-enable/ai-disable 共用 `toggleAiSearch`。 */
   const sourceRows = {
     list: {
       doc: '列出全部源（只读）',
       needs: [],
       execute: () => {
         const sources: Array<{
-          sourceId: string; name: string; baseUrl: string; enabled: boolean
+          sourceId: string; name: string; baseUrl: string; enabled: boolean; aiSearch: boolean
           type: string; status: string; statusDetail?: string
         }> = project(service.listPublicSources().map((s) => ({
-          sourceId: s.id, name: s.name, baseUrl: s.baseUrl, enabled: s.enabled,
+          sourceId: s.id, name: s.name, baseUrl: s.baseUrl, enabled: s.enabled, aiSearch: s.aiSearch,
           type: s.type, status: s.status, statusDetail: s.statusDetail,
         })))
         return { action: 'list' as const, sources }
@@ -471,6 +483,18 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
       needs: ['sourceId'],
       execute: toggleSource(false),
       render: (v) => renderSourceToggle(v),
+    },
+    'ai-enable': {
+      doc: '把单源加入 AI 搜索，需 sourceId',
+      needs: ['sourceId'],
+      execute: toggleAiSearch(true),
+      render: (v) => renderSourceAiToggle(v),
+    },
+    'ai-disable': {
+      doc: '把单源移出 AI 搜索，需 sourceId',
+      needs: ['sourceId'],
+      execute: toggleAiSearch(false),
+      render: (v) => renderSourceAiToggle(v),
     },
     remove: {
       doc: '删除单源，需 sourceId',

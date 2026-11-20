@@ -23,6 +23,7 @@ export interface SourceEdit {
   removeAll(ids: string[]): number
   setStatus(id: string, status: SourceStatus, detail?: string, probedAt?: number): boolean
   setEnabled(id: string, enabled: boolean): boolean
+  setAiSearch(id: string, aiSearch: boolean): boolean
   setAuth(id: string, auth: SourceAuth | undefined): boolean
 }
 
@@ -94,6 +95,7 @@ export class SourceRegistry {
       removeAll: (ids) => this.removeAll(ids),
       setStatus: (id, s, d, p) => this.setStatus(id, s, d, p),
       setEnabled: (id, e) => this.setEnabled(id, e),
+      setAiSearch: (id, e) => this.setAiSearch(id, e),
       setAuth: (id, a) => this.setAuth(id, a),
     }
   }
@@ -185,6 +187,7 @@ export class SourceRegistry {
       baseUrl: s.baseUrl,
       enabled: s.enabled,
       groups: s.groups,
+      aiSearch: s.aiSearch === true,
       type: s.type,
       status: s.status,
       // 对外投影是会过 JSON 的载荷：这两格按需建键，不给 wire 类型补 `| undefined`
@@ -202,13 +205,15 @@ export class SourceRegistry {
 
   // ── 实现细节（tx 句柄绑定；不对外）────────────────────────────────────
 
-  /** 只准收 ok:true 的 normalize 产物；id=uuid，status='unverified' */
+  /** 只准收 ok:true 的 normalize 产物；id=uuid，status='unverified'。
+   *  `aiSearch` 是用户偏好，新入库缺省关闭——不是书源格式字段，不从 normalize 产物里取。 */
   private add(result: NormalizeResult): NovelSource {
     if (!result.ok || !result.source) throw new Error('add 只收 ok 的 normalize 产物')
     const src: NovelSource = {
       id: randomUUID(),
       status: 'unverified',
       importedAt: Date.now(),
+      aiSearch: false,
       ...result.source,
     }
     this.sources.push(src)
@@ -216,12 +221,16 @@ export class SourceRegistry {
   }
 
   /** 去重替换：原位 splice 保列表序，复用旧 id（书架/引用不断）；
-   *  status 复位 unverified（新规则需重验），importedAt 更新为现在。只准收 ok 的 normalize 产物（与 add 同口径） */
+   *  status 复位 unverified（新规则需重验），importedAt 更新为现在。只准收 ok 的 normalize 产物（与 add 同口径）。
+   *  `aiSearch` 是用户偏好，跨重导入保留旧值——替换规则不等于撤销用户对 AI 搜索的选择。 */
   private replace(id: string, result: NormalizeResult): NovelSource {
     if (!result.ok || !result.source) throw new Error('replace 只收 ok 的 normalize 产物')
     const i = this.sources.findIndex((s) => s.id === id)
     if (i < 0) throw new Error(`replace: 源不存在 ${id}`)
-    const src: NovelSource = { id, status: 'unverified', importedAt: Date.now(), ...result.source }
+    const prev = this.sources[i]
+    const src: NovelSource = {
+      id, status: 'unverified', importedAt: Date.now(), aiSearch: prev?.aiSearch ?? false, ...result.source,
+    }
     this.sources[i] = src
     return src
   }
@@ -263,6 +272,14 @@ export class SourceRegistry {
     const s = this.get(id)
     if (!s) return false
     s.enabled = enabled
+    return true
+  }
+
+  /** AI 搜索标记：与启停正交，只收窄 AI 工具面的参与集。返回是否找到 */
+  private setAiSearch(id: string, aiSearch: boolean): boolean {
+    const s = this.get(id)
+    if (!s) return false
+    s.aiSearch = aiSearch
     return true
   }
 

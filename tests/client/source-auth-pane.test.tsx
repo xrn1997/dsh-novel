@@ -10,7 +10,7 @@ import { must } from '../support/fixture.js'
 
 /** loginUi 的 text/password/button 渲染与提交（@js 生成与 webView 行仍按矩阵 b-login-ui 记 open）。 */
 const authSrc: SourcePublic = {
-  id: 's1', name: '源A', baseUrl: 'https://a.com', enabled: true, groups: ['小说'],
+  id: 's1', name: '源A', baseUrl: 'https://a.com', enabled: true, aiSearch: false, groups: ['小说'],
   type: 'text', status: 'verified', importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false, hasLoginUrl: false,
   loginUi: [
     { name: 'user', type: 'text', default: 'u' },

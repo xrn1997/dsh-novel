@@ -5,7 +5,7 @@ import type { SourcePublic } from '../../src/client/views/types.js'
 import { pick } from '../support/fixture.js'
 
 const src = (over: Partial<SourcePublic> & { id: string }): SourcePublic => ({
-  name: over.id, baseUrl: `https://${over.id}.com`, enabled: true, groups: [],
+  name: over.id, baseUrl: `https://${over.id}.com`, enabled: true, aiSearch: false, groups: [],
   type: 'text', status: 'verified', importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false, hasLoginUrl: false,
   ...over,
 })

@@ -12,7 +12,7 @@ import type { SourcePublic } from '../../src/client/views/types.js'
  */
 
 const src = (over: Partial<SourcePublic> & { id: string }): SourcePublic => ({
-  name: over.id, baseUrl: `https://${over.id}.com`, enabled: true, groups: [],
+  name: over.id, baseUrl: `https://${over.id}.com`, enabled: true, aiSearch: false, groups: [],
   type: 'text', status: 'verified', importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false, hasLoginUrl: false,
   ...over,
 })
@@ -21,9 +21,9 @@ const src = (over: Partial<SourcePublic> & { id: string }): SourcePublic => ({
 const ui0: SourceListUi = { query: '', statusFilter: 'all', groupFilter: '', selection: [], editMode: false }
 const ui = (over: Partial<SourceListUi>): SourceListUi => ({ ...ui0, ...over })
 
-// 五源覆盖三个状态 × 启停两态 × 带/不带登录态 × 带图标/无图标分组
+// 五源覆盖三个状态 × 启停两态 × 带/不带登录态 × 带图标/无图标分组 × AI 搜索标记
 const ALL: SourcePublic[] = [
-  src({ id: 'a', status: 'verified', groups: ['快速 ⚡', '小说'], hasAuth: true }),
+  src({ id: 'a', status: 'verified', groups: ['快速 ⚡', '小说'], hasAuth: true, aiSearch: true }),
   src({ id: 'b', status: 'broken', groups: ['快速 ⚡'] }),
   src({ id: 'c', status: 'unverified', groups: ['小说'] }),
   src({ id: 'd', status: 'verified', enabled: false, groups: [] }),
@@ -117,18 +117,20 @@ describe('deriveSourceListView：登录态计数（删除确认模态的点名�
 /** 列表头**状态带**：读数的唯一住址——卡可被忽略，读数不能跟着消失。
  *  启用/停用是 enabled 维、未验证/坏源是 status 维，两个正交维并列显示，不做合计约束。 */
 describe('deriveSourceListView：stats（状态带计数）', () => {
-  it('五个读数为真：共 5 · 已启用 3 · 已停用 2 · 未验证 1 · 坏源 2', () => {
-    expect(deriveSourceListView(ALL, ui0, 100).stats).toEqual({ total: 5, enabled: 3, disabled: 2, unverified: 1, broken: 2 })
+  it('六个读数为真：共 5 · 已启用 3 · 已停用 2 · AI 搜索 1 · 未验证 1 · 坏源 2', () => {
+    expect(deriveSourceListView(ALL, ui0, 100).stats).toEqual({ total: 5, enabled: 3, disabled: 2, ai: 1, unverified: 1, broken: 2 })
   })
 
   it('算**全库**不算过滤结果：状态/分组/文本过滤都不改状态带（它是资产总读数，「当前过滤」另有其位）', () => {
     for (const over of [{ statusFilter: 'broken' as const }, { groupFilter: '小说' }, { query: 'a' }]) {
-      expect(deriveSourceListView(ALL, ui(over), 100).stats).toEqual({ total: 5, enabled: 3, disabled: 2, unverified: 1, broken: 2 })
+      expect(deriveSourceListView(ALL, ui(over), 100).stats).toEqual({ total: 5, enabled: 3, disabled: 2, ai: 1, unverified: 1, broken: 2 })
     }
   })
 
-  it('停用 ≠ 免验：停用的坏源/未验证照样计入（与待办集合同一口径）', () => {
+  it('停用 ≠ 免验：停用的坏源/未验证照样计入（与待办集合同一口径）；AI 标记也不随启停清空', () => {
     const onlyOff = [src({ id: 'z', status: 'broken', enabled: false }), src({ id: 'w', status: 'unverified', enabled: false })]
-    expect(deriveSourceListView(onlyOff, ui0, 100).stats).toEqual({ total: 2, enabled: 0, disabled: 2, unverified: 1, broken: 1 })
+    expect(deriveSourceListView(onlyOff, ui0, 100).stats).toEqual({ total: 2, enabled: 0, disabled: 2, ai: 0, unverified: 1, broken: 1 })
+    const offAi = [src({ id: 'x', enabled: false, aiSearch: true })]
+    expect(deriveSourceListView(offAi, ui0, 100).stats).toEqual({ total: 1, enabled: 0, disabled: 1, ai: 1, unverified: 0, broken: 0 })
   })
 })

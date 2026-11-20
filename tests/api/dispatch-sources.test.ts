@@ -163,6 +163,24 @@ describe('sources 面（后台任务版）', () => {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ nope: 1 }),
     })).status).toBe(400)
   })
+  it('POST /sources/:id/ai-search：置位翻转 + GET 可见；未知 id 404；非法 body 400', async () => {
+    const list = await valueOf<SourcePublic[]>(await fetch(`${base}/novel-api/sources`))
+    const id = pick(list, 0).id
+    expect(pick(list, 0).aiSearch).toBe(false)                       // 导入缺省不加入 AI 搜索
+    const r = await fetch(`${base}/novel-api/sources/${id}/ai-search`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ aiSearch: true }),
+    })
+    expect(r.status).toBe(200)
+    expect(await valueOf<{ aiSearch: boolean }>(r)).toEqual({ aiSearch: true })
+    const after = await valueOf<SourcePublic[]>(await fetch(`${base}/novel-api/sources`))
+    expect(must(after.find((s) => s.id === id), 'AI 标记后的源').aiSearch).toBe(true)
+    expect((await fetch(`${base}/novel-api/sources/fake-uuid/ai-search`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ aiSearch: true }),
+    })).status).toBe(404)
+    expect((await fetch(`${base}/novel-api/sources/${id}/ai-search`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: true }),
+    })).status).toBe(400)
+  })
   it('POST /sources/:id/enabled：未知 id → 404 NotFound（存在性判据归门面，路由不再自带第二份）', async () => {
     const r = await fetch(`${base}/novel-api/sources/nope-does-not-exist/enabled`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: true }),
@@ -191,6 +209,29 @@ describe('sources 面（后台任务版）', () => {
     })).status).toBe(400)
     expect((await fetch(`${base}/novel-api/sources/batch-enabled`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids, enabled: 'yes' }),
+    })).status).toBe(400)
+  })
+  it('POST /sources/batch-ai-search：批量标记 + 未知跳过 + 重复幂等 + 空/非法 400', async () => {
+    const seed = await importAndDone([{ name: 'ba.json', text: JSON.stringify([
+      { ...rawSource, bookSourceName: 'BA1', bookSourceUrl: 'https://ba1.com' },
+      { ...rawSource, bookSourceName: 'BA2', bookSourceUrl: 'https://ba2.com' },
+    ]) }])
+    expect(seed.counts.ok).toBe(2)
+    const list = await valueOf<SourcePublic[]>(await fetch(`${base}/novel-api/sources`))
+    const ids = list.filter((s) => s.name.startsWith('BA')).map((s) => s.id)
+    const r = await fetch(`${base}/novel-api/sources/batch-ai-search`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ids: [...ids, 'fake-uuid', pick(ids, 0)], aiSearch: true }),
+    })
+    expect(r.status).toBe(200)
+    expect((await valueOf<{ updated: number }>(r)).updated).toBe(2)
+    const after = await valueOf<SourcePublic[]>(await fetch(`${base}/novel-api/sources`))
+    expect(after.filter((s) => s.name.startsWith('BA')).every((s) => s.aiSearch)).toBe(true)
+    expect((await fetch(`${base}/novel-api/sources/batch-ai-search`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids: [], aiSearch: true }),
+    })).status).toBe(400)
+    expect((await fetch(`${base}/novel-api/sources/batch-ai-search`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids, aiSearch: 'yes' }),
     })).status).toBe(400)
   })
   it('大包（>1MB，真实 legado 多源导出量级）→ 200 不 413', async () => {

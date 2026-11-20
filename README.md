@@ -40,9 +40,9 @@
 
 ![书源管理：待办收件箱、源列表与状态读数](docs/screenshots/screenshot-02.png)
 
-*书源管理：待办置顶坏源 / 未验证源，过滤、启停、试跑和批量操作都在这一页（书源名称、地址与数量已脱敏）。*
+*书源管理：待办置顶坏源 / 未验证源，过滤、启停、AI 搜索标记、试跑和批量操作都在这一页（书源名称、地址与数量已脱敏）。*
 
-拖入 / 多选 / 粘贴 legado 书源 JSON，导入在后台跑，按地址自动去重。新源先标「未验证」，「待办」把坏源和未验证源置顶，一键验证或批量重验；平时可过滤、启停、试跑、录入 cookie 或执行 `loginUrl` 脚本。
+拖入 / 多选 / 粘贴 legado 书源 JSON，导入在后台跑，按地址自动去重。新源先标「未验证」，「待办」把坏源和未验证源置顶，一键验证或批量重验；平时可过滤、启停、标记 AI 搜索源、试跑、录入 cookie 或执行 `loginUrl` 脚本。
 
 ### 找书：聚合搜索 + 按源逛书城
 
@@ -114,18 +114,19 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 
 1. **导入书源**：「小说」→「书源管理」tab → 选择 `.json` 文件（可多选，选中即开始导入）或粘贴 legado 书源 JSON。导入是服务端后台任务，关页面不打断；同址自动去重（已有可用源则跳过，坏源 / 未验证源被新条替换）。
 2. **批量验证**：导入不逐条探针（新源状态为「未验证」）——顶部**待办收件箱**把坏源 / 未验证置顶成任务卡，「一键验证」「批量重验」即点即跑；任意集合（过滤 + 编辑态勾选 +「验证所选」）同样可发起，后台并发 5 路限流。
-3. **找书读**：「书架」tab 顶部搜书名 / 作者 → 点封面进阅读器。不在书架上的书离开时会先问是否加入，加入后进度自动记住。想按分类逛就走「书城」tab：先在左栏点一个源，再点它自己声明的那几类。手上已有文件就走书架末位的**导入本地书籍**（TXT / EPUB）。
-4. **让 AI 助手干活**：对话里直接说「帮我找一本《XX》读第三章」「看看 XX 书源为什么坏了」。
+3. **选择 AI 搜索源**：AI 工具不会自动搜全部启用源——在书源管理的「AI」列逐源标记，或在编辑态勾选后点「加入 AI 搜索」；状态下拉选「AI 搜索源」可复核这批源。新导入与升级前的存量源默认**不**参与 AI 搜索（重导入保留已标记），界面搜索不受影响、仍按启停走。
+4. **找书读**：「书架」tab 顶部搜书名 / 作者 → 点封面进阅读器。不在书架上的书离开时会先问是否加入，加入后进度自动记住。想按分类逛就走「书城」tab：先在左栏点一个源，再点它自己声明的那几类。手上已有文件就走书架末位的**导入本地书籍**（TXT / EPUB）。
+5. **让 AI 助手干活**：对话里直接说「帮我找一本《XX》读第三章」「看看 XX 书源为什么坏了」。
 
 ## AI 助手工具
 
 | 工具 | 用途 |
 | --- | --- |
-| `dshnovel_search` | 在已启用的**文本**书源中聚合搜索（当前仅支持小说文本面），与界面同判据、同视图：按书返回——同一（书名，作者）多家归并成一本、逐源各留一行，`failed` 逐家点名未答话的源，`searched`/`answered`/`filtered` 自报本轮账目；返回的 `url` 就是其他工具的 `bookKey`，调 `read` / `toc` 时还要带上该行的 `sourceId` |
+| `dshnovel_search` | 在用户标记为 **AI 搜索**的已启用文本书源中聚合搜索（当前仅支持小说文本面），除参与集外与界面同判据、同视图：按书返回——同一（书名，作者）多家归并成一本、逐源各留一行，`failed` 逐家点名未答话的源，`searched`/`answered`/`filtered` 自报本轮账目；`eligible` 回报本轮 AI 候选源数（为 0 说明还没标记，去书源管理勾选）。同一标记之外的启用源不会被 AI 工具查询。返回的 `url` 就是其他工具的 `bookKey`，调 `read` / `toc` 时还要带上该行的 `sourceId` |
 | `dshnovel_read` | 取某本书第 N 章（0 起）的正文纯文本（含章名）；章序从 `dshnovel_toc` 查。图文书同样只给文字：插图落成 `[图片：替代文字]` 占位（无替代文字则 `[图片]`） |
 | `dshnovel_toc` | 取书籍目录：逐章返回章名与 0 起 `chapterIndex`（章名→下标的唯一映射处）与章节 URL；目录超 1000 章时规范值只含前 1000 章，`total` 仍为全书章数、`chapterIndex` 仍可读任意章 |
 | `dshnovel_shelf` | 书架与阅读进度：`list` / `add` / `save_progress` / `remove` |
-| `dshnovel_source` | 书源管理：`list` / `probe`（真实搜索请求 + 失败定位）/ `enable`·`disable` / `remove` |
+| `dshnovel_source` | 书源管理：`list` / `probe`（真实搜索请求 + 失败定位）/ `enable`·`disable` / `ai-enable`·`ai-disable`（加入 / 移出 AI 搜索）/ `remove` |
 | `dshnovel_import_source` | 导入 legado 书源 JSON 文本（内容可为对象或数组）；只做规范化 + 落盘不探针，逐条结果在 `outcomes[]`（含 `ok` / `missing` / `dupSkipped`） |
 
 六个工具与 UI、探针共用同一个 service 层，不存在第二套实现。工具名全部锁 `dshnovel_` 前缀——宿主对工具重名直接抛错，插件专属前缀是与生态其他插件的硬边界（名字集合由 `tests/tools/tools.test.ts` 钉住）。
@@ -166,7 +167,7 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 | 面 | 路由 |
 | --- | --- |
 | 健康检查 | `GET /novel-api` |
-| 书源 | `GET /sources`、`POST /sources/import`（后台任务，body `{files:[{name,text}]}`，上限 32MB）、`GET /sources/job-status`、`POST /sources/batch-probe`、`POST /sources/batch-enabled`、`POST /sources/batch-delete`、`POST /sources/:id/probe`、`POST /sources/:id/enabled`、`POST /sources/:id/auth`、`DELETE /sources/:id` |
+| 书源 | `GET /sources`、`POST /sources/import`（后台任务，body `{files:[{name,text}]}`，上限 32MB）、`GET /sources/job-status`、`POST /sources/batch-probe`、`POST /sources/batch-enabled`、`POST /sources/batch-ai-search`、`POST /sources/batch-delete`、`POST /sources/:id/probe`、`POST /sources/:id/enabled`、`POST /sources/:id/ai-search`、`POST /sources/:id/auth`、`DELETE /sources/:id` |
 | 搜索与阅读 | `GET /search`、`GET /search/plan`、`POST /search/job`、`GET /search/job-status?since=N`、`GET /search/job-stream?since=N`（SSE，首帧即 baseline）、`POST /search/job-cancel`（保留已搜出的命中）、`GET /book`、`GET /toc`、`GET /navigation`、`GET /chapter`（`?refresh=1` 绕过缓存） |
 | 书城发现面 | `GET /explore/kinds`（按源列分类标题，零网络请求）、`POST /explore/list`（body `{sourceId, kind}`）、`POST /explore/list/more`（续同一轮）、`GET /explore/list/job-status`（全量快照）、`GET /explore/list/job-stream`（SSE） |
 | 书架 | `GET /shelf`、`PUT /shelf/:key`（`title` / `progress` / `listen` / `patch`）、`DELETE /shelf/:key`、`POST /shelf/batch-delete`（本地书连带删副本） |

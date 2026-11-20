@@ -38,6 +38,7 @@ interface SearchOut {
   books: MergedBook[]
   failed: Array<{ sourceId: string; sourceName: string; code: string; message: string }>
   searched: number
+  eligible: number
   answered: number
   filtered: number
   truncated?: string
@@ -55,12 +56,13 @@ interface ImportOutcome {
 }
 interface ImportOut { outcomes: ImportOutcome[] }
 interface ShelfOut { action: string; books?: ShelfBook[]; book?: ShelfBook; removed?: boolean }
-interface SourceRow { sourceId: string; name: string; baseUrl: string; enabled: boolean; type: string; status: string }
+interface SourceRow { sourceId: string; name: string; baseUrl: string; enabled: boolean; aiSearch: boolean; type: string; status: string }
 interface SourceOut {
   action: string
   sources?: SourceRow[]
   sourceId?: string
   enabled?: boolean
+  aiSearch?: boolean
   removed?: boolean
   status?: string
   ok?: boolean
@@ -94,6 +96,7 @@ async function svc(): Promise<ReadingService> {
   }))
   sourceId = must((await s.importOne(rawSource)).sourceId, 'importOne 受理的 sourceId')
   await s.probe(sourceId)   // 导入不探针——搜索用例要 verified 态，显式探一次
+  await s.setAiSearch(sourceId, true)   // AI 工具只搜已标记源：夹具显式标记，不靠导入缺省
   return s
 }
 const run = async <T>(s: ReadingService, name: string, args: unknown): Promise<T> => {
@@ -128,13 +131,45 @@ describe('agent 工具六件套', () => {
     expect(JSON.stringify(v)).not.toContain('raw')     // 凭据/原文红线
     // 覆盖面三读数：跑了几家、几家干净答话、几条因不相关被移出默认视野——
     // 「没人答话」与「答了但全不相关」是两个可区分的事实，空 books 不许冒充「没找到」。
-    expect({ searched: v.searched, answered: v.answered, filtered: v.filtered }).toEqual({ searched: 1, answered: 1, filtered: 1 })
+    expect({ searched: v.searched, eligible: v.eligible, answered: v.answered, filtered: v.filtered }).toEqual({ searched: 1, eligible: 1, answered: 1, filtered: 1 })
     expect('truncated' in v).toBe(false)               // 缺席=没截断：上限读数不许常驻
     // 工具面真实输出整键缺席（project() 自身的形状纪律由 tests/tools/project.test.ts 钉住）——
     // 这里是唯一证明 execute 真走了 project() 而非绕过的地方；hasUndefined 只管值不许是 undefined，管不到键。
     expect('author' in pick(v.books, 1)).toBe(false)
     expect('author' in pick(pick(v.books, 1).sources, 0)).toBe(false)
     expect(hasUndefined(v)).toBe(false)
+  })
+  it('dshnovel_search：只搜 AI 标记源——未标记的启用源一发请求都不发，eligible=0 时给配置指引', async () => {
+    let calls = 0
+    const dir = await makeTempDir('novel-ai-pool-')
+    const s = trackService(await ReadingService.create({
+      dir,
+      fetchImpl: async () => {
+        calls += 1
+        return new Response(SEARCH_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } })
+      },
+    }))
+    const id = must((await s.importOne(rawSource)).sourceId, 'importOne 受理的 sourceId')
+    // 导入缺省 aiSearch=false：源已启用，但 AI 工具不该碰它
+    const none = await run<SearchOut>(s, 'dshnovel_search', { keyword: '斗罗' })
+    expect(none).toMatchObject({ books: [], searched: 0, eligible: 0 })
+    expect(calls, '未标记 AI 搜索的源不该发请求').toBe(0)
+    const say = renderOf(s, 'dshnovel_search', { keyword: '斗罗' }, none)
+    expect(say).toContain('本轮没有可搜的 AI 搜索源')
+    // 标记后只跑这一家；显式 sourceIds 也只能在 AI 集合内收窄
+    await s.setAiSearch(id, true)
+    const marked = await run<SearchOut>(s, 'dshnovel_search', { keyword: '斗罗' })
+    expect(marked).toMatchObject({ searched: 1, eligible: 1 })
+    const narrowed = await run<SearchOut>(s, 'dshnovel_search', { keyword: '斗罗', sourceIds: [id] })
+    expect(narrowed).toMatchObject({ searched: 1, eligible: 1 })
+    const stranger = await run<SearchOut>(s, 'dshnovel_search', { keyword: '斗罗', sourceIds: ['not-an-ai-source'] })
+    expect(stranger).toMatchObject({ books: [], searched: 0, eligible: 0 })
+    const emptyHint = renderOf(s, 'dshnovel_search', { keyword: '斗罗', sourceIds: ['not-an-ai-source'] }, stranger)
+    expect(emptyHint).toContain('sourceIds 只能收窄这个集合')
+    // 显式空数组＝点名零家的收窄请求（ADR-0097 决定 3）：零请求零候选，不落回「搜全部已标记」
+    const empty = await run<SearchOut>(s, 'dshnovel_search', { keyword: '斗罗', sourceIds: [] })
+    expect(empty).toMatchObject({ books: [], searched: 0, eligible: 0 })
+    expect(calls, '显式空数组不该落回全量（marked/narrowed 各发过一次，此后不增）').toBe(2)
   })
   it('dshnovel_search：books 为空时分得开「没人答话」「答了但全不相关」「答了但 0 条」（三读数 + failed 逐家点名）', async () => {
     const dir = await makeTempDir('novel-disclose-')
@@ -159,11 +194,12 @@ describe('agent 工具六件套', () => {
     await s.importOne({ ...rawSource, bookSourceName: 'A', bookSourceUrl: 'https://a.com', searchUrl: 'https://a.com/searchA?q={{key}}' })
     const idB = must((await s.importOne({ ...rawSource, bookSourceName: 'B', bookSourceUrl: 'https://b.com', searchUrl: 'https://b.com/searchB?q={{key}}' })).sourceId, 'importOne 受理的 sourceId')
     await s.importOne({ ...rawSource, bookSourceName: 'C', bookSourceUrl: 'https://c.com', searchUrl: 'https://c.com/searchC?q={{key}}' })
+    for (const src of s.searchPlan().sourceIds) await s.setAiSearch(src, true)
     const v = await run<SearchOut>(s, 'dshnovel_search', { keyword: '斗罗' })
     expect(v.books).toEqual([])
     // 界面上这一轮是「相关 0 · 共 1」外加折叠；工具面没有折叠，只能靠读数分开几回事——
     // C 家计入 answered 却不给 filtered 添一笔
-    expect({ searched: v.searched, answered: v.answered, filtered: v.filtered }).toEqual({ searched: 3, answered: 2, filtered: 1 })
+    expect({ searched: v.searched, eligible: v.eligible, answered: v.answered, filtered: v.filtered }).toEqual({ searched: 3, eligible: 3, answered: 2, filtered: 1 })
     expect(v.failed).toEqual([expect.objectContaining({ sourceId: idB, sourceName: 'B' })])
     expect(typeof pick(v.failed, 0).code).toBe('string')
     expect(hasUndefined(v)).toBe(false)
@@ -183,7 +219,8 @@ describe('agent 工具六件套', () => {
       fetchImpl: async () => new Response(`<html><body>${many}</body></html>`,
         { headers: { 'content-type': 'text/html; charset=utf-8' } }),
     }))
-    await s.importOne(rawSource)
+    const id = must((await s.importOne(rawSource)).sourceId, 'importOne 受理的 sourceId')
+    await s.setAiSearch(id, true)
     const v = await run<SearchOut>(s, 'dshnovel_search', { keyword: '斗罗' })
     expect(v.books.length).toBe(SEARCH_BOOKS_CAP)
     // 两个数各指各的：共几本说全量、只返回前几本说返回量——调换了模型就会以为没丢东西
@@ -212,7 +249,7 @@ describe('agent 工具六件套', () => {
         { sourceId: 'y', sourceName: 'Y', title: '甲', url: 'https://y/2' },
       ] }],
       failed: [{ sourceId: 'z', sourceName: 'Z', code: 'Timeout', message: '等超时' }],
-      searched: 3, answered: 2, filtered: 5, truncated: '本轮共 9 本，只返回前 8 本',
+      searched: 3, eligible: 3, answered: 2, filtered: 5, truncated: '本轮共 9 本，只返回前 8 本',
     })
     expect(wide).toContain('《甲》 · 2 家源：X(https://x/1)；X(无地址)；Y(https://y/1)…')
     expect(wide).toContain('1 本（跑了 3 家、答话 2 家、滤去 5 条不相关）')
@@ -315,11 +352,11 @@ describe('agent 工具六件套', () => {
     await expect(run(s, 'dshnovel_shelf', args)).rejects.toThrow(BookNotOnShelfError)
     await expect(run(s, 'dshnovel_shelf', args)).rejects.toThrow(/书架里没有这本书: https:\/\/s\.com\/book\/404\//)
   })
-  it('dshnovel_source：list/probe/enable/disable/remove 走通', async () => {
+  it('dshnovel_source：list/probe/enable/disable/ai-enable/ai-disable/remove 走通', async () => {
     const s = await svc()
     const id = sourceId
     const list = await run<SourceOut>(s, 'dshnovel_source', { action: 'list' })
-    expect(pick(must(list.sources, 'source 回执的 sources'), 0)).toMatchObject({ sourceId: id, name: 'S', enabled: true, status: 'verified' })
+    expect(pick(must(list.sources, 'source 回执的 sources'), 0)).toMatchObject({ sourceId: id, name: 'S', enabled: true, aiSearch: true, status: 'verified' })
     expect(hasUndefined(list)).toBe(false)
     // 探针成功：error 键不存在而非 error:undefined（同款 lossless 雷）
     // itemCount 是**搜索面解析到的条数**，与相关性视野无关（探针答的是「这一家能不能搜出东西」，
@@ -328,6 +365,11 @@ describe('agent 工具六件套', () => {
     expect(p).toMatchObject({ action: 'probe', sourceId: id, ok: true, itemCount: 3 })
     expect('error' in p).toBe(false)
     expect(hasUndefined(p)).toBe(false)
+    const aiOff = await run<SourceOut>(s, 'dshnovel_source', { action: 'ai-disable', sourceId: id })
+    expect(aiOff).toMatchObject({ action: 'ai-disable', sourceId: id, aiSearch: false })
+    expect(pick(must((await run<SourceOut>(s, 'dshnovel_source', { action: 'list' })).sources, 'source 回执的 sources'), 0).aiSearch).toBe(false)
+    const aiOn = await run<SourceOut>(s, 'dshnovel_source', { action: 'ai-enable', sourceId: id })
+    expect(aiOn).toMatchObject({ action: 'ai-enable', sourceId: id, aiSearch: true })
     const off = await run<SourceOut>(s, 'dshnovel_source', { action: 'disable', sourceId: id })
     expect(off).toMatchObject({ action: 'disable', sourceId: id, enabled: false })
     const on = await run<SourceOut>(s, 'dshnovel_source', { action: 'enable', sourceId: id })

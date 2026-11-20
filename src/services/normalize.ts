@@ -855,5 +855,7 @@ export function rehydrateStoredSource(s: NovelSource): boolean {
     const cleanName = stripLeadingIcons(s.name)
     if (cleanName !== s.name) { s.name = cleanName; mark() }
   }
+  // AI 搜索标记是用户偏好而非书源格式字段：存量缺键 / 非布尔一律按「未选中」收敛（缺省关闭）。
+  if (typeof s.aiSearch !== 'boolean') { s.aiSearch = false; mark() }
   return changed
 }

@@ -42,7 +42,7 @@ describe('validateSourceJson', () => {
 /** 源列表过滤：名称/地址/分组子串命中，大小写不敏感——源多到要滚动时，过滤得能快速定位 */
 describe('filterSources', () => {
   const src = (name: string, baseUrl: string, groups: string[] = []): SourcePublic => ({
-    id: name, name, baseUrl, enabled: true, groups, type: 'text', status: 'unverified',
+    id: name, name, baseUrl, enabled: true, aiSearch: false, groups, type: 'text', status: 'unverified',
     importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false, hasLoginUrl: false,
   })
   const list = [src('笔趣阁', 'https://m.biqu.com', ['热门']), src('SiS文学', 'https://b.sis.la', ['特殊'])]
@@ -61,10 +61,10 @@ describe('filterSources', () => {
   })
 })
 
-/** 状态过滤：chips 五维单选过滤，与文本过滤交集语义 */
+/** 状态过滤：chips 六维单选过滤（含 AI 搜索维），与文本过滤交集语义 */
 describe('filterByStatus', () => {
   const src = (name: string, over: Partial<SourcePublic> = {}): SourcePublic => ({
-    id: name, name, baseUrl: `https://${name}.com`, enabled: true, groups: [], type: 'text', status: 'unverified',
+    id: name, name, baseUrl: `https://${name}.com`, enabled: true, aiSearch: false, groups: [], type: 'text', status: 'unverified',
     importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false, hasLoginUrl: false, ...over,
   })
   const list = [
@@ -72,17 +72,21 @@ describe('filterByStatus', () => {
     src('b', { status: 'broken' }),
     src('c'),                                              // unverified
     src('d', { status: 'verified', enabled: false }),      // 已停用（维度是 enabled 布尔）
+    src('e', { aiSearch: true }),                          // AI 搜索源（与状态/启停正交）
   ]
   it('all → 原样全量', () => {
-    expect(filterByStatus(list, 'all')).toHaveLength(4)
+    expect(filterByStatus(list, 'all')).toHaveLength(5)
   })
   it('verified/broken/unverified 按状态过滤', () => {
     expect(filterByStatus(list, 'verified').map((s) => s.id)).toEqual(['a', 'd'])
     expect(filterByStatus(list, 'broken').map((s) => s.id)).toEqual(['b'])
-    expect(filterByStatus(list, 'unverified').map((s) => s.id)).toEqual(['c'])
+    expect(filterByStatus(list, 'unverified').map((s) => s.id)).toEqual(['c', 'e'])
   })
   it('disabled 按 enabled 布尔过滤（非 status）', () => {
     expect(filterByStatus(list, 'disabled').map((s) => s.id)).toEqual(['d'])
+  })
+  it('ai 按 AI 搜索标记过滤（与状态/启停正交）', () => {
+    expect(filterByStatus(list, 'ai').map((s) => s.id)).toEqual(['e'])
   })
   it('与 filterSources 交集：先状态后文本', () => {
     const byStatus = filterByStatus(list, 'verified')
@@ -93,7 +97,7 @@ describe('filterByStatus', () => {
 /** 分组过滤：''=全部、精确匹配分组名；与状态/文本过滤叠加（交集） */
 describe('filterByGroup', () => {
   const src = (name: string, groups: string[]): SourcePublic => ({
-    id: name, name, baseUrl: `https://${name}.com`, enabled: true, groups, type: 'text', status: 'unverified',
+    id: name, name, baseUrl: `https://${name}.com`, enabled: true, aiSearch: false, groups, type: 'text', status: 'unverified',
     importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false, hasLoginUrl: false,
   })
   const list = [src('a', ['热门']), src('b', ['热门', '本地']), src('c', [])]

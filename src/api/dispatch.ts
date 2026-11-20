@@ -162,6 +162,12 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } 
     const updated = await service.setEnabledMany(ids, enabled)
     writeOk(res, { updated })
   },
+  sourcesBatchAiSearch: async ({ req, res, service }) => {
+    const body = await readJsonBody<Record<string, unknown> | null>(req, null)
+    const { ids, aiSearch } = readBodies.batchAiSearch(body)
+    const updated = await service.setAiSearchMany(ids, aiSearch)
+    writeOk(res, { updated })
+  },
   sourcesBatchDelete: async ({ req, res, service }) => {
     // 批量删除：门面动词（一次 edit 合并落盘），替代逐删逐写的 N 次全量重写
     const body = await readJsonBody<Record<string, unknown> | null>(req, null)
@@ -424,6 +430,13 @@ const PARAM_HANDLERS: { [K in ParamRouteName]: (ctx: HandlerCtx) => void | Promi
     // 路由层不自带第二份判据。
     await service.setEnabled(paramOf(params), enabled)
     writeOk(res, { enabled })
+  },
+  sourceAiSearch: async ({ req, res, service, params }) => {
+    // 单源 AI 搜索标记：只影响 AI 工具面的参与集（界面搜索仍看启停）
+    const body = await readJsonBody<Record<string, unknown> | null>(req, null)
+    const aiSearch = readBodies.aiSearch(body)
+    await service.setAiSearch(paramOf(params), aiSearch)
+    writeOk(res, { aiSearch })
   },
   sourceAuth: async ({ req, res, service, params }) => {
     await authRoute(service, paramOf(params), req, res)

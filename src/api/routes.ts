@@ -30,6 +30,7 @@ export type Match =
  *  `pathForMessage` 因此不会与「匹配认什么」各说各的。 */
 export const PARAM_PATTERN_PATHS: Record<ParamRouteName, string> = {
   sourceProbe: 'sources/:id/probe', sourceEnabled: 'sources/:id/enabled',
+  sourceAiSearch: 'sources/:id/ai-search',
   sourceAuth: 'sources/:id/auth', sourceDelete: 'sources/:id',
   shelfPut: 'shelf/:key', shelfDelete: 'shelf/:key',
   ttsEnginePut: 'tts/engines/:id', ttsEngineDelete: 'tts/engines/:id',

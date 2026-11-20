@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { exploreParticipates, participates } from '../../src/services/participation.js'
+import { aiParticipates, exploreParticipates, participates } from '../../src/services/participation.js'
 import type { NovelSource } from '../../src/services/types.js'
 
 const src = (over: Partial<NovelSource> = {}): NovelSource => ({
@@ -13,6 +13,15 @@ describe('参与集谓词', () => {
     expect(participates(src())).toBe(true)
     expect(participates(src({ enabled: false }))).toBe(false)
     expect(participates(src({ type: 'audio' }))).toBe(false)
+  })
+
+  it('AI 搜索面：参搜 ∧ 用户标记（缺键按未标记；界面搜索不受影响）', () => {
+    expect(aiParticipates(src())).toBe(false)                    // 导入缺省 false
+    expect(aiParticipates(src({ aiSearch: true }))).toBe(true)
+    expect(aiParticipates(src({ aiSearch: true, enabled: false }))).toBe(false)
+    expect(aiParticipates(src({ aiSearch: true, type: 'audio' }))).toBe(false)
+    // AI 标记只收窄工具面：同一源仍是普通聚合搜索的参与者
+    expect(participates(src({ aiSearch: false }))).toBe(true)
   })
 
   it('发现面：再要求声明了分类入口', () => {

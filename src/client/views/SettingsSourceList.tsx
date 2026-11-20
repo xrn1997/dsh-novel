@@ -19,14 +19,14 @@ import type { JobState, SourcePublic } from './types.js'
 
 /**
  * 源列表（书源管理 tab 的资产清单）：
- * 列表头（标题 + **状态带**（全库读数唯一住址，窄列退化见样式层）+ 文本/状态/分组过滤 +
- * 编辑切换 + ＋导入书源）+ 编辑态批量条 + 六列表格 + 前端分页。
+ * 列表头（标题 + **状态带**（全库读数唯一住址，窄列退化见样式层）+ 文本/状态与 AI/分组过滤 +
+ * 编辑切换 + ＋导入书源）+ 编辑态批量条 + 七列表格 + 前端分页。
  *
  * 交互口径：状态下拉只过滤不总览（读数归状态带）；删除走**统一模态二次确认**
  * （点名后果 + Esc/遮罩零写口 + 焦点闭环 + 在途防重 + ids 点击时快照；失败即收模态、错误进全局
  * 条——与书架「失败留在框内」是刻意差异：删源失败必须停在模态里等人处置，不能像搜索失败那样
- * 留在结果框里被忽略）；行内动作浏览态常驻
- * （验证/重验按状态 + 试跑 +「⋯」菜单），启停唯一入口 = 最右开关，「验证全部未验证」上移待办箱。
+ * 留在结果框里被忽略）；启停与 AI 搜索勾选常驻右侧，其余行内动作（验证/重验、试跑、登录态、
+ * 删除）全部收进「⋯」菜单。
  *
  * 现场（query/过滤/勾选/编辑态）在模块级 sourceListUi store（试跑下钻/重开不丢）；派生计算归
  * source-list-view.ts 纯函数；任务经 props 注入。
@@ -44,14 +44,16 @@ export function rowAnchorOf(id: string): string {
  *  `startSourceVerification`，这里只多要那一格提交口，不整束照抄 `SettingsDeps`——任务读面
  *  由常驻状态层持有，本层连 `fetchJobStatus` 都不该声明）。壳层收到的整束结构上满足这一份。 */
 type SourceListDeps = RowActionDeps & Pick<SettingsDeps, 'startBatchProbeJob'>
-/** 状态下拉：五维单选（'disabled' 维是 enabled 布尔，与 status 正交——口径归 source-list.ts）。
- *  不带计数：全库读数唯一住址是列表头**状态带**（`source-list-view.ts` 的 `stats`），下拉只过滤。 */
+/** 状态下拉：六维单选（'disabled' 维是 enabled 布尔、'ai' 维是 AI 搜索标记，两者与 status 正交——
+ *  口径归 source-list.ts）。不带计数：全库读数唯一住址是列表头**状态带**（`source-list-view.ts`
+ *  的 `stats`），下拉只过滤。 */
 const STATUS_OPTIONS: Array<{ key: StatusFilter; labelKey: CopyKey }> = [
   { key: 'all', labelKey: 'sources.filter.all' },
   { key: 'verified', labelKey: 'sources.filter.available' },
   { key: 'unverified', labelKey: 'sources.filter.unverified' },
   { key: 'broken', labelKey: 'sources.filter.broken' },
   { key: 'disabled', labelKey: 'sources.filter.disabled' },
+  { key: 'ai', labelKey: 'sources.filter.ai' },
 ]
 
 export function SourceList({ sources, job, onChanged, onProbe, onImport, loadError = null, deps = prodDeps }: {
@@ -106,6 +108,16 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
       onChanged()
     })
   }
+  /** 批量 AI 搜索标记：与批量启停同一条回执口径；ids 点击时快照，成功重取源列表并留在编辑态。 */
+  const batchAiSearch = (aiSearch: boolean): void => {
+    const ids = [...ui.selection]
+    submit(() => deps.apiSend<{ updated: number }>(ROUTES.sourcesBatchAiSearch, bodies.batchAiSearch(ids, aiSearch)), (r) => {
+      deps.pushOk(aiSearch
+        ? plural(t, r.updated, 'sources.batch.aiEnabled.one', 'sources.batch.aiEnabled.other')
+        : plural(t, r.updated, 'sources.batch.aiDisabled.one', 'sources.batch.aiDisabled.other'))
+      onChanged()
+    })
+  }
   const confirmDelete = (): void => {
     if (pending === null || delBusy) return          // 在途防重：双击「确认删除」会双 POST，在途即挡
     const ids = pending.ids                          // 点击时快照，不随列表变化重算
@@ -139,6 +151,18 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
       return false
     })
   }
+  /** 行内 AI 搜索勾选：与启停同一条失败口径；只改 AI 工具面的参与集，不碰启停与界面搜索。 */
+  const toggleAiSearch = (s: SourcePublic, next: boolean): Promise<boolean> => {
+    return deps.apiSend(paramOps.sourceAiSearch.at(s.id), bodies.aiSearch(next)).then(() => {
+      onChanged()
+      return true
+    }, (e: unknown) => {
+      deps.pushError(
+        t('sources.ai.failedNamed', { name: s.name, detail: describeError(e, t) }), rowAnchorOf(s.id))
+      onChanged()
+      return false
+    })
+  }
   return (
     <div data-novel-source-list className="novel-group">
       <div className="novel-list-head">
@@ -152,6 +176,7 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
             <span>{plural(t, stats.total, 'sources.stats.total.one', 'sources.stats.total.other')}</span>
             <span>{t('sources.stats.enabled', { n: stats.enabled })}</span>
             <span className="slim">{t('sources.stats.disabled', { n: stats.disabled })}</span>
+            <span className="slim">{t('sources.stats.ai', { n: stats.ai })}</span>
             <span className={stats.unverified > 0 ? 'slim warn' : 'slim'}>{t('sources.stats.unverified', { n: stats.unverified })}</span>
             <span className={stats.broken > 0 ? 'slim err' : 'slim'}>{t('sources.stats.broken', { n: stats.broken })}</span>
             {filtered.length === stats.total ? null : <span>{t('sources.stats.filtered', { n: filtered.length })}</span>}
@@ -212,6 +237,12 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
             </button>
             <button className="novel-btn sm" disabled={probing} onClick={() => batchEnabled(false)}>
               {t('sources.batch.disable')}
+            </button>
+            <button className="novel-btn sm" disabled={probing} onClick={() => batchAiSearch(true)}>
+              {t('sources.batch.aiEnable')}
+            </button>
+            <button className="novel-btn sm" disabled={probing} onClick={() => batchAiSearch(false)}>
+              {t('sources.batch.aiDisable')}
             </button>
             <button className="novel-btn sm primary" disabled={probing}
               onClick={() => void startSourceVerification(ui.selection, deps, t)}>
@@ -277,11 +308,13 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
                 </span>
                 <span className="col-url">{t('sources.col.url')}</span>
                 <span className="novel-cell-end">{t('sources.col.actions')}</span>
+                <span className="novel-ai-head" title={t('sources.col.aiTitle')}>{t('sources.col.ai')}</span>
                 <span className="novel-cell-right">{t('sources.col.enabled')}</span>
               </div>
               {shown.map((s) => (
                 <SourceRow key={s.id} source={s} editMode={ui.editMode} selected={selection.has(s.id)}
                   probing={probing} onChanged={onChanged} onProbe={onProbe} onToggleEnabled={toggleEnabled}
+                  onToggleAiSearch={toggleAiSearch}
                   onDelete={(src, opener) => setPending({ ids: [src.id], title: t('sources.delete.confirm.named', { name: src.name }), opener })}
                   deps={deps} />
               ))}
@@ -298,23 +331,23 @@ export function SourceList({ sources, job, onChanged, onProbe, onImport, loadErr
   )
 }
 
-/** 「⋯」菜单的固定项数（登录态… / 试跑 trace / 删除）——**加减菜单项改这里**。
+/** 「⋯」菜单的固定项数（验证/重验、试跑、登录态…、删除）——**加减菜单项改这里**。
  *  空间预算按它推导（见下），测试钉「渲染出的 menuitem 数 = 此数」（source-list-batch 的项数守卫）：
  *  加一项而没改这个数会当场红，不会让翻转预算静默过期、末行菜单再被滚动口裁掉。 */
-export const MENU_ITEM_COUNT = 3
+export const MENU_ITEM_COUNT = 4
 
 /** 行：「⋯」菜单向下展开所需的最小可用高度 = 项数 × 单项行高（40px）+ 盒体余量 40px，
  *  空间预算按项数推导（项数钉子见 `source-list-batch` 的项数守卫）。判据是「下方够不够」而非
  *  「是不是最后一行」——够不够只跟剩余空间有关，行在不在末尾只是最常见的那种不够。 */
 const MENU_SPACE_MIN = MENU_ITEM_COUNT * 40 + 40
 
-/** 行：状态/分组/地址常驻；操作列按状态给当下要用的动作（验证/重验按状态出现 + 试跑；
- *  无「启用」文字钮——启停唯一入口 = 最右开关）+「⋯」溢出菜单（登录态/试跑 trace/删除
- *  ——低频动作收纳）；编辑态加复选框；启停开关右对齐常驻（高频决策不进编辑态）。 */
-function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe, onToggleEnabled, onDelete, deps = prodDeps }: {
+/** 行：状态/分组/地址常驻；低配动作全部收进「⋯」溢出菜单（验证/重验、试跑、登录态、删除），
+ *  右侧常驻 AI 搜索勾选（方形火花勾）+ 启停开关。编辑态加复选框。 */
+function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe, onToggleEnabled, onToggleAiSearch, onDelete, deps = prodDeps }: {
   source: SourcePublic; editMode: boolean; selected: boolean; probing: boolean
   onChanged: () => void; onProbe: (id: string) => void
   onToggleEnabled: (s: SourcePublic, next: boolean) => Promise<boolean>
+  onToggleAiSearch: (s: SourcePublic, next: boolean) => Promise<boolean>
   onDelete: (s: SourcePublic, opener: HTMLElement | null) => void
   deps?: SourceListDeps
 }): ReactNode {
@@ -358,17 +391,33 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
   // 「ok = 服务端已应用」是本仓契约，故同值 reload 无需清（清了会在落地前闪回旧态）。
   useEffect(() => { setOptimistic(null) }, [s.enabled])
   const [savingN, setSavingN] = useState(0)             // 在途请求数：「保存中」装饰的精确生命周期
+  // AI 搜索标记与启停同一套乐观时序：两格各自让位，互不顶住对方的值。
+  const [aiOptimistic, setAiOptimistic] = useState<boolean | null>(null)
+  useEffect(() => { setAiOptimistic(null) }, [s.aiSearch])
+  const [savingAiN, setSavingAiN] = useState(0)
   const rowAnchor = rowAnchorOf(s.id)
   // 失败标记来自全局瞬态层（sticky 到条目被 dismiss）：行留红边，错误条目「定位 →」跳到这里
   const failed = useTransientFlag((e) => e.kind === 'error' && e.anchor === rowAnchor)
   const enabled = optimistic ?? s.enabled
+  const aiSearch = aiOptimistic ?? s.aiSearch
+  /** 已标记但源停用：勾保留，整格灰化；仍可预标记（启用后生效），不另加感叹号/圆点。 */
+  const aiInactive = aiSearch && !enabled
   const saving = savingN > 0
+  const savingAi = savingAiN > 0
   const toggle = (next: boolean): void => {
     setOptimistic(next)
     setSavingN((n) => n + 1)
     void onToggleEnabled(s, next).then((ok) => {
       setSavingN((n) => n - 1)
       if (!ok) setOptimistic(null)                    // 失败即刻回滚（乐观态无人清零会让开关永久停在错态）
+    })
+  }
+  const toggleAi = (next: boolean): void => {
+    setAiOptimistic(next)
+    setSavingAiN((n) => n + 1)
+    void onToggleAiSearch(s, next).then((ok) => {
+      setSavingAiN((n) => n - 1)
+      if (!ok) setAiOptimistic(null)
     })
   }
   /** 行内「验证/重验」：与待办箱、批量条同一条领域动作——本入口只表达「验证这一源」，提交后的
@@ -400,29 +449,42 @@ function SourceRow({ source: s, editMode, selected, probing, onChanged, onProbe,
           {s.hasAuth && <span> · {s.authExpired ? t('sources.row.authExpired') : t('sources.row.loggedIn')}</span>}
         </span>
         <span className="novel-actions">
-          {/* 操作列：浏览态常驻（试跑是排查主路径）；异常态多一个状态动作钮（验证/重验）。
-              **不渲染「启用」文字钮**：启停唯一入口 = 最右开关——重复入口会让列宽随状态漂移、
-              右缘按钮组不对齐。列轨道定宽右锚在 styles/controls.ts 的 `.novel-tr.src`。
-              批量任务在途时禁验证类动作（防重复提交），试跑不受影响（独立请求）。
-              验证钮**不看 enabled**：停用 ≠ 免验——挂 `!enabled` 门会造成
-              「批量能验、单点不能验」，与待办箱入口自相矛盾。 */}
-          {s.status === 'unverified'
-            ? <button className="novel-btn sm" disabled={probing} onClick={verifyThis}>{t('sources.row.verify')}</button>
-            : s.status === 'broken'
-              ? <button className="novel-btn sm" disabled={probing} onClick={verifyThis}>{t('sources.row.reverify')}</button>
-              : null}
-          <button className="novel-btn sm" onClick={() => onProbe(s.id)}>{t('sources.row.probe')}</button>
+          {/* 低配动作全收进「⋯」：验证/重验、试跑、登录态、删除。菜单项数固定（MENU_ITEM_COUNT），
+              翻转预算与 UI 目录都按它推；验证在批量任务在途时禁用（防重复提交），试跑不受影响。 */}
           <button className="novel-btn sm" aria-label={t('sources.row.more', { name: s.name })} aria-haspopup="menu" ref={menuRef}
             onClick={(e) => { e.stopPropagation(); toggleMenu() }}>⋯</button>
           {menuOpen && (
             <div className={menuUp ? 'novel-menu up' : 'novel-menu'} role="menu">
-              <button role="menuitem" onClick={() => { setMenuOpen(false); setAuthOpen(!authOpen) }}>{t('sources.menu.auth')}</button>
+              <button role="menuitem" disabled={probing} onClick={() => { setMenuOpen(false); verifyThis() }}>
+                {s.status === 'unverified' ? t('sources.row.verify') : t('sources.row.reverify')}
+              </button>
               <button role="menuitem" onClick={() => { setMenuOpen(false); onProbe(s.id) }}>{t('sources.menu.trace')}</button>
+              <button role="menuitem" onClick={() => { setMenuOpen(false); setAuthOpen(!authOpen) }}>{t('sources.menu.auth')}</button>
               <button role="menuitem" className="danger" onClick={() => { setMenuOpen(false); onDelete(s, menuRef.current) }}>
                 {s.hasAuth ? t('sources.menu.deleteAuth') : t('sources.menu.delete')}
               </button>
             </div>
           )}
+        </span>
+        {/* AI 搜索勾选：与启停正交，只影响 AI 工具面的参与集。方形勾 + 火花与右侧圆形开关
+            不同形、不同列；停用源仍可预标记（启用后才生效），勾保留但整格灰化、不加额外标记。 */}
+        <span className="novel-ai-cell">
+          <label className={`novel-ai-check${aiInactive ? ' inactive' : ''}`} title={savingAi
+            ? t('sources.toggle.saving')
+            : aiInactive ? t('sources.row.aiOnInactiveTitle')
+              : aiSearch ? t('sources.row.aiOnTitle') : t('sources.row.aiOffTitle')}
+            data-novel-ai-toggle data-busy={savingAi}>
+            <span className="novel-ai-box">
+              <input type="checkbox" className="novel-ai-input" checked={aiSearch} disabled={savingAi}
+                onChange={(e) => toggleAi(e.target.checked)}
+                aria-label={aiInactive
+                  ? `${t('sources.row.aiOnInactive')} ${s.name}`
+                  : `${aiSearch ? t('sources.row.aiOn') : t('sources.row.aiOff')} ${s.name}`} />
+              <svg className="novel-ai-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M12 2c.4 5.7 3.9 9.2 9.6 9.6-5.7.4-9.2 3.9-9.6 9.6-.4-5.7-3.9-9.2-9.6-9.6C8.1 11.2 11.6 7.7 12 2Z" />
+              </svg>
+            </span>
+          </label>
         </span>
         {/* 启停开关：右对齐常驻（两态都渲染——启停是高频决策，不进编辑模式）。
             外观与位移归 .novel-switch（状态靠 aria-checked 选样式），行内只剩 data-busy。 */}

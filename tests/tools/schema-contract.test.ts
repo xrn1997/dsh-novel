@@ -83,6 +83,7 @@ async function svc(): Promise<ReadingService> {
   }))
   sourceId = must((await s.importOne(rawSource)).sourceId, '导入回执没有 sourceId')
   await s.probe(sourceId)
+  await s.setAiSearch(sourceId, true)
   return s
 }
 
@@ -125,6 +126,8 @@ describe('工具 schema 契约（execute 输出 ≡ 声明 schema；schema ≡ w
       ['dshnovel_source', { action: 'probe', sourceId }],
       ['dshnovel_source', { action: 'disable', sourceId }],
       ['dshnovel_source', { action: 'enable', sourceId }],
+      ['dshnovel_source', { action: 'ai-disable', sourceId }],
+      ['dshnovel_source', { action: 'ai-enable', sourceId }],
       ['dshnovel_shelf', { action: 'list' }],
       ['dshnovel_shelf', { action: 'add', bookKey: 'https://s.com/book/9/', title: 'X', sourceId }],
       ['dshnovel_shelf', { action: 'save_progress', bookKey: 'https://s.com/book/9/', chapterIndex: 1, offsetRatio: 0.25 }],
@@ -144,9 +147,9 @@ describe('工具 schema 契约（execute 输出 ≡ 声明 schema；schema ≡ w
     // ── dshnovel_search ≡ MergedBook/MergedSource（`shared/wire.ts` 的作品视图两个 interface）──
     // 清单住在 BOOK_FIELDS/BOOK_SOURCE_FIELDS：运行时比 schema、编译期比 wire 类型（见文件头 ②）
     expect(propsOf(search))
-      .toEqual(new Set(['books', 'failed', 'searched', 'answered', 'filtered', 'truncated']))
+      .toEqual(new Set(['books', 'failed', 'searched', 'eligible', 'answered', 'filtered', 'truncated']))
     // 三读数是覆盖面回执，必须声明为必填——少一个 required，工具少报数就没人拦
-    expect(requiredOf(search)).toEqual(['answered', 'books', 'failed', 'filtered', 'searched'])
+    expect(requiredOf(search)).toEqual(['answered', 'books', 'eligible', 'failed', 'filtered', 'searched'])
     expect(propsOf(search, 'books', '[]'))
       .toEqual(new Set(BOOK_FIELDS))
     expect(propsOf(search, 'books', '[]', 'sources', '[]'))
@@ -176,9 +179,9 @@ describe('工具 schema 契约（execute 输出 ≡ 声明 schema；schema ≡ w
 
     // ── dshnovel_source：action 分支共用一份出参 schema（action/回执字段 + probe 分支的 ProbeResult 投影）──
     expect(propsOf(schemaOf(s, 'dshnovel_source')))
-      .toEqual(new Set(['action', 'sources', 'sourceId', 'enabled', 'removed', 'status', 'ok', 'itemCount', 'firstTitle', 'error', 'probedAt']))
+      .toEqual(new Set(['action', 'sources', 'sourceId', 'enabled', 'aiSearch', 'removed', 'status', 'ok', 'itemCount', 'firstTitle', 'error', 'probedAt']))
     expect(propsOf(schemaOf(s, 'dshnovel_source'), 'sources', '[]'))
-      .toEqual(new Set(['sourceId', 'name', 'baseUrl', 'enabled', 'type', 'status', 'statusDetail']))
+      .toEqual(new Set(['sourceId', 'name', 'baseUrl', 'enabled', 'aiSearch', 'type', 'status', 'statusDetail']))
 
     // ── dshnovel_shelf ≡ ShelfBook 投影（`shared/wire.ts` 的 ShelfBook；coverUrl/intro/totalChapters 刻意不投影——超集会被拒）──
     // 两层都钉住：投影表 ⊆ `SHELF_META`（写面孔径，表里改键名/加键这里跟着动）

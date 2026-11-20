@@ -25,9 +25,9 @@ import { envelopeOf, errorOf, startServer } from './helpers.js'
 
 /** 参数路由代表值（原始值——百分号编码归构造器）：烟雾、405 扫描与 ⑧ 模式对照共用一份。 */
 const PARAM_SAMPLES: Record<ParamRouteName, string> = {
-  sourceProbe: 'uuid-1', sourceEnabled: 'uuid-2', sourceAuth: 'uuid-3',
-  sourceDelete: 'uuid-4', shelfPut: 'k-1', shelfDelete: 'k-2',
-  ttsEnginePut: 'uuid-5', ttsEngineDelete: 'uuid-6',
+  sourceProbe: 'uuid-1', sourceEnabled: 'uuid-2', sourceAiSearch: 'uuid-3', sourceAuth: 'uuid-4',
+  sourceDelete: 'uuid-5', shelfPut: 'k-1', shelfDelete: 'k-2',
+  ttsEnginePut: 'uuid-6', ttsEngineDelete: 'uuid-7',
 }
 
 describe('matchRoute 单元', () => {
@@ -39,16 +39,17 @@ describe('matchRoute 单元', () => {
     }
   })
 
-  it('② 8 条参数路由各一实例 → param-hit 且 params 保真（id/key 原值，不解码）', () => {
+  it('② 9 条参数路由各一实例 → param-hit 且 params 保真（id/key 原值，不解码）', () => {
     const cases: Array<{ route: ParamRouteName; method: string; segs: string[]; params: string[] }> = [
       { route: 'sourceProbe', method: 'POST', segs: ['sources', 'uuid-1', 'probe'], params: ['uuid-1'] },
       { route: 'sourceEnabled', method: 'POST', segs: ['sources', 'uuid-2', 'enabled'], params: ['uuid-2'] },
-      { route: 'sourceAuth', method: 'POST', segs: ['sources', 'uuid-3', 'auth'], params: ['uuid-3'] },
-      { route: 'sourceDelete', method: 'DELETE', segs: ['sources', 'uuid-4'], params: ['uuid-4'] },
+      { route: 'sourceAiSearch', method: 'POST', segs: ['sources', 'uuid-3', 'ai-search'], params: ['uuid-3'] },
+      { route: 'sourceAuth', method: 'POST', segs: ['sources', 'uuid-4', 'auth'], params: ['uuid-4'] },
+      { route: 'sourceDelete', method: 'DELETE', segs: ['sources', 'uuid-5'], params: ['uuid-5'] },
       { route: 'shelfPut', method: 'PUT', segs: ['shelf', 'book%3Akey'], params: ['book%3Akey'] },
       { route: 'shelfDelete', method: 'DELETE', segs: ['shelf', 'other%2Fkey'], params: ['other%2Fkey'] },
-      { route: 'ttsEnginePut', method: 'PUT', segs: ['tts', 'engines', 'http%3Auuid-5'], params: ['http%3Auuid-5'] },
-      { route: 'ttsEngineDelete', method: 'DELETE', segs: ['tts', 'engines', 'http%3Auuid-6'], params: ['http%3Auuid-6'] },
+      { route: 'ttsEnginePut', method: 'PUT', segs: ['tts', 'engines', 'http%3Auuid-6'], params: ['http%3Auuid-6'] },
+      { route: 'ttsEngineDelete', method: 'DELETE', segs: ['tts', 'engines', 'http%3Auuid-7'], params: ['http%3Auuid-7'] },
     ]
     for (const c of cases) {
       const m = matchRoute(c.method, c.segs)

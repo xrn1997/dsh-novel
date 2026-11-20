@@ -106,6 +106,17 @@ describe('ReadingService', () => {
       expect(must(registry.get(a.id), 'registry 里查到的那一条').enabled).toBe(true)
       await expect(svc.setEnabled('nope', true)).rejects.toBeInstanceOf(SourceNotFoundError)
     })
+    it('setAiSearch / setAiSearchMany：导入缺省 false；单改与批改同启停语义（未知 id 抛 / 批改跳过）', async () => {
+      const { svc, registry } = await makeService(() => null)
+      const a = pick(registry.list(), 0)
+      const b = must((await svc.importOne({ ...rawSource, bookSourceName: 'B', bookSourceUrl: 'https://b-ai.com' })).sourceId, '导入回执的 sourceId')
+      expect(must(registry.get(a.id), 'registry 里查到的那一条').aiSearch).toBe(false)   // 导入不因旧默认「全搜」而标记
+      await expect(svc.setAiSearch(a.id, true)).resolves.toBeUndefined()
+      expect(must(registry.get(a.id), 'registry 里查到的那一条').aiSearch).toBe(true)
+      expect(await svc.setAiSearchMany([a.id, b, b, 'nope'], false)).toBe(2)
+      expect(must(registry.get(a.id), 'registry 里查到的那一条').aiSearch).toBe(false)
+      await expect(svc.setAiSearch('nope', true)).rejects.toBeInstanceOf(SourceNotFoundError)
+    })
     it('removeSource / removeSources：单删与批删；不存在 → false/0', async () => {
       const { svc, registry } = await makeService(() => null)
       const a = pick(registry.list(), 0)
@@ -189,6 +200,37 @@ describe('ReadingService', () => {
     expect(svc.searchPlan().sourceIds).toEqual([a.id])
     const groups = await svc.search('斗罗')
     expect(groups.map((g) => g.sourceId)).toEqual([a.id])
+  })
+
+  it('searchForAi：只问 AI 标记 ∧ 启用 ∧ 文本；sourceIds 只收窄；空集合零请求', async () => {
+    let calls = 0
+    const { svc, registry } = await makeService((u) => {
+      if (!u.includes('/search')) return null
+      calls += 1
+      return SEARCH_HTML('斗罗')
+    })
+    const a = pick(registry.list(), 0)
+    const b = must((await svc.importOne({
+      ...rawSource, bookSourceName: 'B', bookSourceUrl: 'https://b-ai.com', searchUrl: 'https://b-ai.com/search?q={{key}}',
+    })).sourceId, '导入回执的 sourceId')
+    // 导入缺省不标记：AI 工具零候选、零请求——不许落回「搜全部启用源」
+    expect(await svc.searchForAi('斗罗')).toEqual({ eligible: 0, groups: [] })
+    expect(calls).toBe(0)
+    await svc.setAiSearch(a.id, true)
+    const one = await svc.searchForAi('斗罗')
+    expect(one.eligible).toBe(1)
+    expect(one.groups.map((g) => g.sourceId)).toEqual([a.id])
+    expect(calls).toBe(1)
+    // 显式点名只在 AI 集合内收窄：b 未标记 → 候选 0
+    expect(await svc.searchForAi('斗罗', { sourceIds: [b] })).toEqual({ eligible: 0, groups: [] })
+    expect(calls).toBe(1)
+    // 显式空数组是「点名零家」的收窄请求（ADR-0097 决定 3）：零请求，不落回搜全部已标记
+    expect(await svc.searchForAi('斗罗', { sourceIds: [] })).toEqual({ eligible: 0, groups: [] })
+    expect(calls).toBe(1)
+    // 停用把已标记的源也移出候选
+    await svc.setEnabled(a.id, false)
+    expect(await svc.searchForAi('斗罗')).toEqual({ eligible: 0, groups: [] })
+    expect(calls).toBe(1)
   })
   })
 

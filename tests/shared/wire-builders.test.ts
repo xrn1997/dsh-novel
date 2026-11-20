@@ -38,6 +38,7 @@ const ROUTE_IDENTITIES = {
   sourcesJobStatus: { method: 'GET', path: 'sources/job-status' },
   sourcesBatchProbe: { method: 'POST', path: 'sources/batch-probe' },
   sourcesBatchEnabled: { method: 'POST', path: 'sources/batch-enabled' },
+  sourcesBatchAiSearch: { method: 'POST', path: 'sources/batch-ai-search' },
   sourcesBatchDelete: { method: 'POST', path: 'sources/batch-delete' },
   search: { method: 'GET', path: 'search' },
   searchPlan: { method: 'GET', path: 'search/plan' },
@@ -72,6 +73,7 @@ const ROUTE_IDENTITIES = {
 const PARAM_IDENTITIES = {
   sourceProbe: { method: 'POST', key: 'x', path: 'sources/x/probe' },
   sourceEnabled: { method: 'POST', key: 'x', path: 'sources/x/enabled' },
+  sourceAiSearch: { method: 'POST', key: 'x', path: 'sources/x/ai-search' },
   sourceAuth: { method: 'POST', key: 'x', path: 'sources/x/auth' },
   sourceDelete: { method: 'DELETE', key: 'x', path: 'sources/x' },
   shelfPut: { method: 'PUT', key: 'local:x', path: 'shelf/local%3Ax' },
@@ -82,9 +84,9 @@ const PARAM_IDENTITIES = {
 } as const
 
 describe('路由表计数钉死（总数只有一个家，别处不许手写）', () => {
-  it('静态路由 35 条、参数操作 8 条', () => {
-    expect(Object.keys(ROUTES)).toHaveLength(35)
-    expect(Object.keys(paramOps)).toHaveLength(8)
+  it('静态路由 36 条、参数操作 9 条', () => {
+    expect(Object.keys(ROUTES)).toHaveLength(36)
+    expect(Object.keys(paramOps)).toHaveLength(9)
   })
 
   it('每个静态路由的 method/path 与字面快照逐条一致', () => {
@@ -333,9 +335,9 @@ describe('漂移守卫', () => {
 })
 
 describe('写路由 body：构造器与读口同源（wire 单点承诺的另一半）', () => {
-  it('body 构造器计数钉死：18 个构造器对 12 条 shape（书架四形态共一条判别读口），加路由必须加一对', () => {
-    expect(Object.keys(bodies)).toHaveLength(18)
-    expect(Object.keys(readBodies)).toHaveLength(12)
+  it('body 构造器计数钉死：20 个构造器对 14 条 shape（书架四形态共一条判别读口），加路由必须加一对', () => {
+    expect(Object.keys(bodies)).toHaveLength(20)
+    expect(Object.keys(readBodies)).toHaveLength(14)
   })
 
   it('每条 shape 都能 round-trip：构造器产的东西，读口原样收回来', () => {
@@ -346,7 +348,9 @@ describe('写路由 body：构造器与读口同源（wire 单点承诺的另一
     expect(readBodies.ids(bodies.ids(ids))).toEqual(ids)
     expect(readBodies.keys(bodies.keys(['local:1']))).toEqual(['local:1'])
     expect(readBodies.enabled(bodies.enabled(false))).toBe(false)
+    expect(readBodies.aiSearch(bodies.aiSearch(true))).toBe(true)
     expect(readBodies.batchEnabled(bodies.batchEnabled(ids, true))).toEqual({ ids, enabled: true })
+    expect(readBodies.batchAiSearch(bodies.batchAiSearch(ids, false))).toEqual({ ids, aiSearch: false })
     expect(readBodies.searchJob(bodies.searchJob('三体'))).toEqual({ keyword: '三体' })
     expect(readBodies.searchJob(bodies.searchJob('三体', ids))).toEqual({ keyword: '三体', sourceIds: ids })
     expect(readBodies.exploreList(bodies.exploreList('s1', '玄幻'))).toEqual({ sourceId: 's1', kind: '玄幻' })

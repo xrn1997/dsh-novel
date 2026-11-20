@@ -56,6 +56,8 @@ const renderValues: Record<string, Record<string, Record<string, unknown>>> = {
     probe: { action: 'probe', ok: true, itemCount: 0 },
     enable: { action: 'enable', sourceId: 's', enabled: true },
     disable: { action: 'disable', sourceId: 's', enabled: false },
+    'ai-enable': { action: 'ai-enable', sourceId: 's', aiSearch: true },
+    'ai-disable': { action: 'ai-disable', sourceId: 's', aiSearch: false },
     remove: { action: 'remove', sourceId: 's', removed: true },
   },
 }
@@ -63,7 +65,7 @@ const renderValues: Record<string, Record<string, Record<string, unknown>>> = {
 describe('工具声明：action 行是唯一清单', () => {
   it('书架与书源的 enum 与行集一致', () => {
     expect(actionsOf('dshnovel_shelf')).toEqual(['list', 'add', 'save_progress', 'remove'])
-    expect(actionsOf('dshnovel_source')).toEqual(['list', 'probe', 'enable', 'disable', 'remove'])
+    expect(actionsOf('dshnovel_source')).toEqual(['list', 'probe', 'enable', 'disable', 'ai-enable', 'ai-disable', 'remove'])
   })
 
   it('每个 action 都有 render，且不落「未知 action」兜底', () => {
@@ -85,7 +87,7 @@ describe('工具声明：action 行是唯一清单', () => {
     expect(shelf.sourceId?.description).toBe('源 id（仅 add 必填）')
     expect(shelf.chapterIndex?.description).toBe('读到的章序 0 起（仅 save_progress 必填）')
     const source = must(paramsOf(toolNamed('dshnovel_source')).properties, 'dshnovel_source 参数表')
-    expect(source.sourceId?.description).toBe('源 id（probe/enable/disable/remove 必填；list 不用）')
+    expect(source.sourceId?.description).toBe('源 id（probe/enable/disable/ai-enable/ai-disable/remove 必填；list 不用）')
   })
 
   it('缺参错误点名的键都在参数表里有声明', async () => {

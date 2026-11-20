@@ -46,6 +46,8 @@ export interface SourcePublic {
   name: string
   baseUrl: string
   enabled: boolean
+  /** 是否参与 AI 搜索工具的聚合搜索；与 `enabled` 正交（停用 ⇔ 两种搜索都不参与） */
+  aiSearch: boolean
   groups: string[]
   /** 内容形态（legado bookSourceType）：非文本源在本插件属异常 */
   type: SourceContentKind
@@ -669,10 +671,13 @@ export const SEG = {
   jobStatus: 'job-status',
   batchProbe: 'batch-probe',
   batchEnabled: 'batch-enabled',
+  /** AI 搜索属主的批量写口（与启停批量分开：两件事各有自己的 body 字段与回执） */
+  batchAiSearch: 'batch-ai-search',
   batchDelete: 'batch-delete',
   probe: 'probe',
   auth: 'auth',
   enabled: 'enabled',
+  aiSearch: 'ai-search',
   search: 'search',
   plan: 'plan',
   job: 'job',
@@ -733,6 +738,8 @@ export const ROUTES = {
   sourcesJobStatus: route('GET', SEG.sources, SEG.jobStatus),
   sourcesBatchProbe: route('POST', SEG.sources, SEG.batchProbe),
   sourcesBatchEnabled: route('POST', SEG.sources, SEG.batchEnabled),
+  /** AI 搜索属主的批量写口：`{ ids, aiSearch }` */
+  sourcesBatchAiSearch: route('POST', SEG.sources, SEG.batchAiSearch),
   sourcesBatchDelete: route('POST', SEG.sources, SEG.batchDelete),
   search: route('GET', SEG.search),
   /** 搜索参与计划：本次聚合搜索的真实参与者 ids——参与集的唯一主人在服务端，
@@ -815,6 +822,7 @@ const ttsEnginePath = (id: string): string =>
 export const paramOps = {
   sourceProbe: paramOp('POST', (id: string) => `${ROUTES.sources.path}/${id}/${SEG.probe}`),
   sourceEnabled: paramOp('POST', (id: string) => `${ROUTES.sources.path}/${id}/${SEG.enabled}`),
+  sourceAiSearch: paramOp('POST', (id: string) => `${ROUTES.sources.path}/${id}/${SEG.aiSearch}`),
   sourceAuth: paramOp('POST', (id: string) => `${ROUTES.sources.path}/${id}/${SEG.auth}`),
   sourceDelete: paramOp('DELETE', (id: string) => `${ROUTES.sources.path}/${id}`),
   shelfPut: paramOp('PUT', shelfKeyPath),
@@ -951,6 +959,7 @@ export const BODY = {
   ids: 'ids',
   keys: 'keys',
   enabled: 'enabled',
+  aiSearch: 'aiSearch',
   patch: 'patch',
   progress: 'progress',
   chapterIndex: 'chapterIndex',
@@ -1024,8 +1033,11 @@ export const bodies = {
   ids: (ids: string[]): Record<string, unknown> => ({ [BODY.ids]: ids }),
   keys: (keys: string[]): Record<string, unknown> => ({ [BODY.keys]: keys }),
   enabled: (enabled: boolean): Record<string, unknown> => ({ [BODY.enabled]: enabled }),
+  aiSearch: (aiSearch: boolean): Record<string, unknown> => ({ [BODY.aiSearch]: aiSearch }),
   batchEnabled: (ids: string[], enabled: boolean): Record<string, unknown> =>
     ({ [BODY.ids]: ids, [BODY.enabled]: enabled }),
+  batchAiSearch: (ids: string[], aiSearch: boolean): Record<string, unknown> =>
+    ({ [BODY.ids]: ids, [BODY.aiSearch]: aiSearch }),
   searchJob: (keyword: string, sourceIds?: string[]): Record<string, unknown> =>
     ({ [PARAMS.keyword]: keyword, ...(sourceIds === undefined ? {} : { [PARAMS.sourceIds]: sourceIds }) }),
   exploreList: (sourceId: string, kind: string): Record<string, unknown> =>
@@ -1186,12 +1198,25 @@ export const readBodies = {
     if (typeof v !== 'boolean') bodyBad(`body 需为 { ${BODY.enabled}: boolean }`)
     return v
   },
+  /** 单源 AI 搜索标记 */
+  aiSearch: (body: Record<string, unknown> | null): boolean => {
+    const v = body?.[BODY.aiSearch]
+    if (typeof v !== 'boolean') bodyBad(`body 需为 { ${BODY.aiSearch}: boolean }`)
+    return v
+  },
   /** 批量启停：键集 + 目标状态 */
   batchEnabled: (body: Record<string, unknown> | null): { ids: string[]; enabled: boolean } => {
     const ids = readIdList(body, BODY.ids)
     const enabled = body?.[BODY.enabled]
     if (typeof enabled !== 'boolean') bodyBad(`body 需为非空 { ${BODY.ids}: string[], ${BODY.enabled}: boolean }`)
     return { ids, enabled }
+  },
+  /** 批量 AI 搜索标记：键集 + 目标状态 */
+  batchAiSearch: (body: Record<string, unknown> | null): { ids: string[]; aiSearch: boolean } => {
+    const ids = readIdList(body, BODY.ids)
+    const aiSearch = body?.[BODY.aiSearch]
+    if (typeof aiSearch !== 'boolean') bodyBad(`body 需为非空 { ${BODY.ids}: string[], ${BODY.aiSearch}: boolean }`)
+    return { ids, aiSearch }
   },
   /** 聚合搜索提交：关键词必填，点名源可选（空数组按「没点名」走全参与集，不是「搜零家」） */
   searchJob: (body: Record<string, unknown> | null): { keyword: string; sourceIds?: string[] } => {

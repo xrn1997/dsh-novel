@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   renderImport, renderRead, renderSearch, renderShelfBook, renderShelfList, renderShelfRemove,
-  renderSourceList, renderSourceProbe, renderSourceRemove, renderSourceToggle, renderToc,
+  renderSourceAiToggle, renderSourceList, renderSourceProbe, renderSourceRemove, renderSourceToggle, renderToc,
   TOC_RENDER_CAP,
 } from '../../src/tools/render.js'
 import type { ShelfItem } from '../../src/tools/shelf-item.js'
@@ -19,10 +19,11 @@ describe('renderSearch（工具面搜索文案）', () => {
         { title: '斗罗外传', sourceCount: 1, sources: [{ sourceName: 'A', url: 'https://a/2' }] },
       ],
       failed: [{ sourceName: 'C', code: 'FetchError' }],
-      searched: 3, answered: 2, filtered: 1,
+      searched: 3, eligible: 5, answered: 2, filtered: 1,
       truncated: '本轮共 9 本，只返回前 2 本',
     })
     expect(text).toContain('2 本（跑了 3 家、答话 2 家、滤去 1 条不相关）')
+    expect(text).toContain('AI 搜索候选 5 家（本轮跑了 3 家）')
     expect(text).toContain('《斗罗》 / 唐家 · 2 家源')
     expect(text).toContain('《斗罗外传》 · 1 家源')
     expect(text).not.toContain('undefined')
@@ -30,15 +31,17 @@ describe('renderSearch（工具面搜索文案）', () => {
     expect(text).toContain('本轮共 9 本，只返回前 2 本')
   })
 
-  it('空结果只留摘要行；一家超 3 行按行数省略', () => {
-    const empty = renderSearch({ books: [], failed: [], searched: 0, answered: 0, filtered: 0 })
-    expect(empty).toBe('0 本（跑了 0 家、答话 0 家、滤去 0 条不相关）：')
+  it('空结果只留摘要行；AI 源为 0 时给出配置指引；一家超 3 行按行数省略', () => {
+    const empty = renderSearch({ books: [], failed: [], searched: 0, eligible: 0, answered: 0, filtered: 0 })
+    expect(empty).toContain('0 本（跑了 0 家、答话 0 家、滤去 0 条不相关）：')
+    expect(empty).toContain('AI 搜索候选 0 家（本轮跑了 0 家）')
+    expect(empty).toContain('本轮没有可搜的 AI 搜索源')
     const wide = renderSearch({
       books: [{
         title: '甲', sourceCount: 1,
         sources: ['A', 'B', 'C', 'D'].map((n) => ({ sourceName: n, url: `https://${n}/1` })),
       }],
-      failed: [], searched: 1, answered: 1, filtered: 0,
+      failed: [], searched: 1, eligible: 1, answered: 1, filtered: 0,
     })
     expect(wide).toContain('A(https://A/1)；B(https://B/1)；C(https://C/1)…')
   })
@@ -79,13 +82,13 @@ describe('renderShelf（列表 / 单本 / 移除）', () => {
   })
 })
 
-describe('renderSource（列表 / 探针 / 启停 / 删除）', () => {
+describe('renderSource（列表 / 探针 / 启停 / AI 搜索标记 / 删除）', () => {
   const sources = [
-    { sourceId: 's1', name: 'A', baseUrl: 'https://a', enabled: true, type: 'text', status: 'verified' },
-    { sourceId: 's2', name: 'B', baseUrl: 'https://b', enabled: false, type: 'text', status: 'broken', statusDetail: 'x' },
+    { sourceId: 's1', name: 'A', baseUrl: 'https://a', enabled: true, aiSearch: true, type: 'text', status: 'verified' },
+    { sourceId: 's2', name: 'B', baseUrl: 'https://b', enabled: false, aiSearch: false, type: 'text', status: 'broken', statusDetail: 'x' },
   ]
-  it('列表报启用数与逐源状态', () => {
-    expect(renderSourceList({ sources })).toBe('共 2 个源（启用 1）：A（verified）；B（broken，已停用）')
+  it('列表报启用数、AI 搜索数与逐源状态', () => {
+    expect(renderSourceList({ sources })).toBe('共 2 个源（启用 1，AI 搜索 1）：A（verified）；B（broken，已停用，非 AI 搜索）')
   })
   it('探针成功/失败', () => {
     expect(renderSourceProbe({ ok: true, itemCount: 3, firstTitle: '斗罗' })).toBe('源可用：命中 3 条，首条「斗罗」')
@@ -97,6 +100,11 @@ describe('renderSource（列表 / 探针 / 启停 / 删除）', () => {
     expect(renderSourceRemove({ sourceId: 's1', removed: true })).toBe('已删除源 s1（removed=true）')
     // 幂等成功不是「已删除」：源本来就不在时要说清没删到东西，别让上屏读数撒谎
     expect(renderSourceRemove({ sourceId: 'ghost', removed: false })).toBe('源 ghost 不在清单里（removed=false）')
+  })
+  it('AI 搜索标记：加入 / 移出', () => {
+    expect(renderSourceAiToggle({ aiSearch: true, sourceId: 's1' })).toBe('已把源 s1 加入 AI 搜索')
+    expect(renderSourceAiToggle({ aiSearch: false, sourceId: 's1' })).toBe('已把源 s1 移出 AI 搜索')
+    expect(() => renderSourceAiToggle({ sourceId: 's1' })).toThrow(/缺少 aiSearch/)
   })
   it('规范值缺块时炸，不打印 undefined', () => {
     expect(() => renderSourceList({})).toThrow(/缺少 sources/)

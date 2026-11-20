@@ -29,6 +29,30 @@ describe('SourceRegistry', () => {
     expect(must(reg2.get(src.id), 'reg2 里查到的那一条').raw).toEqual(raw)
     expect(must(reg2.get(src.id), 'reg2 里查到的那一条').rules.searchUrl).toBeNull()
   })
+  it('aiSearch：导入缺省 false；replace 保留用户选择；setAiSearch 单改', async () => {
+    const dir = await tmp()
+    const reg = await SourceRegistry.load(dir)
+    const src = await reg.edit((tx) => tx.add(normalizeSource(raw)))
+    expect(src.aiSearch).toBe(false)                                  // 新源不默认加入 AI 搜索
+    expect(await reg.edit((tx) => tx.setAiSearch(src.id, true))).toBe(true)
+    expect(must(reg.get(src.id), 'reg 里查到的那一条').aiSearch).toBe(true)
+    // 同址重导入走 replace：规则换了，用户对 AI 搜索的选择不跟着重置
+    await reg.edit((tx) => tx.replace(src.id, normalizeSource({ ...raw, bookSourceName: 'A2' })))
+    expect(must(reg.get(src.id), 'replace 后的那一条').aiSearch).toBe(true)
+    expect(await reg.edit((tx) => tx.setAiSearch('nope', true))).toBe(false)
+  })
+  it('aiSearch：存量缺键在 load 时收敛为 false 并落盘', async () => {
+    const dir = await tmp()
+    const stored = {
+      ...must(normalizeSource(raw).source, '归一化结果里的 source'),
+      id: 's-ai', status: 'unverified' as const, importedAt: 0,
+    }
+    delete (stored as { aiSearch?: boolean }).aiSearch
+    await fs.writeFile(path.join(dir, 'sources.json'), JSON.stringify([stored]), 'utf8')
+    const reg = await SourceRegistry.load(dir)
+    expect(must(reg.get('s-ai'), 'reg 里查到的那一条').aiSearch).toBe(false)
+    expect(JSON.parse(await fs.readFile(path.join(dir, 'sources.json'), 'utf8'))).toMatchObject([{ aiSearch: false }])
+  })
   it('load 的存量收敛写回磁盘：首次 load 后文件已是新形状，二次 load 无改动', async () => {
     const dir = await tmp()
     const sourceRaw = {
@@ -139,7 +163,7 @@ describe('SourceRegistry', () => {
     expect(pub).not.toHaveProperty('raw')
     expect(pub).not.toHaveProperty('auth')
     expect(pub).not.toHaveProperty('rules')
-    expect(pub).toMatchObject({ hasHeader: true, hasAuth: true, authExpired: true, hasLoginUrl: false })
+    expect(pub).toMatchObject({ hasHeader: true, hasAuth: true, authExpired: true, hasLoginUrl: false, aiSearch: false })
   })
   it('toPublic 投影 loginUi 的 text/password/button 行（button 只给 name/type，不交 action 脚本）', async () => {
     const dir = await tmp()

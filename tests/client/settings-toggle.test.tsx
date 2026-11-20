@@ -8,6 +8,7 @@ import type { FakeSettingsDeps, DepsOverrides } from './fake-deps.js'
 import { resetSourceListUi, UNGROUPED } from '../../src/client/source-list.js'
 import { pushError, pushOk, resetTransient, transientEntries } from '../../src/client/transient.js'
 import type { SourcePublic } from '../../src/client/views/types.js'
+import { bodies, paramOps } from '../../src/shared/wire.js'
 import { pick } from '../support/fixture.js'
 
 /**
@@ -18,7 +19,7 @@ import { pick } from '../support/fixture.js'
  */
 
 const src: SourcePublic = {
-  id: 's1', name: '源A', baseUrl: 'https://a.com', enabled: true, groups: ['小说'],
+  id: 's1', name: '源A', baseUrl: 'https://a.com', enabled: true, aiSearch: false, groups: ['小说'],
   type: 'text', status: 'verified', importedAt: 0, hasHeader: false, hasAuth: false, authExpired: false, hasLoginUrl: false,
 }
 
@@ -130,6 +131,65 @@ describe('SourceList 启停开关接线（deps seam 驱动）', () => {
   })
 })
 
+describe('SourceList AI 搜索勾选接线（与启停正交：只改工具面参与集）', () => {
+  /** 行内 AI 控制是原生 checkbox；aria-label 随勾选/停用态换，名字仍是唯一入口。
+   *  默认视图里 checkbox 只有这一枚（编辑态的「选择」复选框只在编辑模式出现）。 */
+  const aiCheck = (name: string): HTMLInputElement => screen.getByRole<HTMLInputElement>('checkbox', { name })
+
+  it('点击即乐观翻转，请求带 aiSearch；成功静默', async () => {
+    let resolveSend: (v: unknown) => void = () => { /* replaced below */ }
+    const deps = makeDeps({ apiSend: vi.fn(() => new Promise((res) => { resolveSend = res })), ...realTransient() })
+    render(view(deps))
+    const off = aiCheck('加入 AI 搜索 源A')
+    expect(off.checked).toBe(false)
+    fireEvent.click(off)
+    // 乐观翻转：请求未回已换成「移出」语义
+    expect(aiCheck('移出 AI 搜索 源A').checked).toBe(true)
+    expect(deps.apiSend).toHaveBeenCalledWith(paramOps.sourceAiSearch.at('s1'), bodies.aiSearch(true))
+    resolveSend({})
+    await waitFor(() => expect(deps.pushError).not.toHaveBeenCalled())
+    expect(aiCheck('移出 AI 搜索 源A').checked).toBe(true)
+    expect(transientEntries()).toEqual([])                // 成功静默：勾翻转本身即反馈
+  })
+
+  it('失败：即刻回滚 + error 泳道挂行锚点', async () => {
+    const deps = makeDeps({
+      apiSend: vi.fn(() => Promise.reject(new Error('boom'))),
+      ...realTransient(),
+    })
+    render(view(deps))
+    fireEvent.click(aiCheck('加入 AI 搜索 源A'))
+    await waitFor(() => expect(deps.pushError).toHaveBeenCalledTimes(1))
+    expect(aiCheck('加入 AI 搜索 源A').checked).toBe(false)
+    const [label, anchor] = pick(deps.pushError.mock.calls, 0) as [message: string, anchor: string]
+    expect(label).toContain('AI 搜索标记失败')
+    expect(label).toContain('boom')
+    expect(anchor).toBe('[data-novel-source-row="s1"]')
+  })
+
+  it('未标记 + 停用：勾仍可点，但停用源的勾不冒充「已加入」', () => {
+    const off: SourcePublic = { ...src, enabled: false }
+    render(<SourceList sources={[off]} job={null} onChanged={() => {}} onProbe={() => {}} onImport={() => {}} deps={makeDeps()} />)
+    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false')
+    expect(aiCheck('加入 AI 搜索 源A').checked).toBe(false)
+  })
+
+  it('停用 + 已标记：勾保留、整格灰化（inactive），仍可预标记；点击请求 aiSearch:false', async () => {
+    const deps = makeDeps({ apiSend: vi.fn(() => Promise.resolve({})) })
+    const offMarked: SourcePublic = { ...src, enabled: false, aiSearch: true }
+    render(<SourceList sources={[offMarked]} job={null} onChanged={() => {}} onProbe={() => {}} onImport={() => {}} deps={deps} />)
+    const check = aiCheck('移出 AI 搜索（源已停用） 源A')
+    expect(check.checked).toBe(true)
+    const label = check.closest('label')
+    expect(label?.className).toContain('inactive')
+    expect(label?.getAttribute('title')).toContain('标记会保留')
+    fireEvent.click(check)
+    expect(aiCheck('加入 AI 搜索 源A').checked).toBe(false)
+    await waitFor(() => expect(deps.apiSend).toHaveBeenCalledWith(
+      paramOps.sourceAiSearch.at('s1'), bodies.aiSearch(false)))
+  })
+})
+
 /** 停用 ≠ 免验（用户裁定）：停用只摘掉「参与聚合搜索」这一件事——行内验证入口
  *  按状态出，不随 enabled 消失，否则停用源点不动单源验证，却照样出现在待办收件箱的
  *  批量重验 id 集里，两个入口口径打架。 */
@@ -143,10 +203,16 @@ describe('SourceList 行内验证入口与启停正交（编排收进 jobs.ts �
     return { node, deps, onChanged }
   }
 
-  it('停用 + 未验证 → 仍出「验证」钮，点击只验这一源；提交成功不就地重取源列表', async () => {
+  /** 行内动作已收进「⋯」：验证/重验、试跑、登录态、删除都从菜单进 */
+  const openRowMenu = (name = '源A'): void => {
+    fireEvent.click(screen.getByLabelText(`更多动作 ${name}`))
+  }
+
+  it('停用 + 未验证 → 菜单仍有「验证」，点击只验这一源；提交成功不就地重取源列表', async () => {
     const { node, deps, onChanged } = panel({ enabled: false, status: 'unverified' })
     render(node)
-    fireEvent.click(screen.getByText('验证'))
+    openRowMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: '验证' }))
     await waitFor(() => expect(deps.startBatchProbeJob).toHaveBeenCalledWith(['s1']))
     // 验证起任务 → 读任务：命中任务的出口是 refreshJob，不走 onChanged（后者属改源的口径，
     // 与待办/批量入口一致）；提交成功后「催任务读面」这条钉在 jobs-verify.test.ts
@@ -159,21 +225,24 @@ describe('SourceList 行内验证入口与启停正交（编排收进 jobs.ts �
     const { node, deps } = panel({ status: 'unverified' },
       { startBatchProbeJob: vi.fn(async () => { throw new Error('boom') }) })
     render(node)
-    fireEvent.click(screen.getByText('验证'))
+    openRowMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: '验证' }))
     await waitFor(() => expect(deps.pushError).toHaveBeenCalledTimes(1))
     expect(String(pick(pick(deps.pushError.mock.calls, 0), 0))).toContain('启动验证失败')
     expect(String(pick(pick(deps.pushError.mock.calls, 0), 0))).toContain('boom')
   })
 
-  it('停用 + 坏源 → 仍出「重验」钮（异常还在，停用不是免验理由）', () => {
+  it('停用 + 坏源 → 菜单仍有「重验」（异常还在，停用不是免验理由）', () => {
     render(panel({ enabled: false, status: 'broken' }).node)
-    expect(screen.getByText('重验')).toBeTruthy()
+    openRowMenu()
+    expect(screen.getByRole('menuitem', { name: '重验' })).toBeTruthy()
   })
 
-  it('已验证的停用源不出验证/重验（钮随状态出，与启停无关）', () => {
+  it('已验证源仍有「重验」菜单项（重验不是异常态专属；单源复查不必走批量）', () => {
     render(panel({ enabled: false, status: 'verified' }).node)
-    expect(screen.queryByText('验证')).toBeNull()
-    expect(screen.queryByText('重验')).toBeNull()
+    openRowMenu()
+    expect(screen.getByRole('menuitem', { name: '重验' })).toBeTruthy()
+    expect(screen.queryByRole('menuitem', { name: '验证' })).toBeNull()
   })
 })
 

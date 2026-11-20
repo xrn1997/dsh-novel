@@ -12,14 +12,15 @@ export function filterSources(sources: SourcePublic[], query: string): SourcePub
     || s.groups.some((g) => g.toLowerCase().includes(q)))
 }
 
-/** 状态下拉过滤：五维单选，与文本过滤交集（先 filterByStatus 再 filterSources）。
+/** 状态下拉过滤：六维单选，与文本过滤交集（先 filterByStatus 再 filterSources）。
  *  读数归列表头**状态带**（`source-list-view.ts` 的 `stats`），下拉不带计数。
- *  'disabled' 维度是 enabled 布尔而非 status——停用与坏源是两个正交维度。 */
-export type StatusFilter = 'all' | 'verified' | 'broken' | 'unverified' | 'disabled'
+ *  'disabled' 维度是 enabled 布尔、'ai' 维度是 AI 搜索标记——两者与 status 正交。 */
+export type StatusFilter = 'all' | 'verified' | 'broken' | 'unverified' | 'disabled' | 'ai'
 
 export function filterByStatus(sources: SourcePublic[], filter: StatusFilter): SourcePublic[] {
   if (filter === 'all') return sources
   if (filter === 'disabled') return sources.filter((s) => !s.enabled)
+  if (filter === 'ai') return sources.filter((s) => s.aiSearch)
   return sources.filter((s) => s.status === filter)
 }
 

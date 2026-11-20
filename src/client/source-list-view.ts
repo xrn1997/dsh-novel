@@ -19,11 +19,12 @@ import type { SourcePublic } from './views/types.js'
  *   算这两维计数，不再 filter 第二遍。
  */
 
-/** 列表头状态带的五个读数：`enabled/disabled` 是 enabled 维，`unverified/broken` 是 status 维
- *  （两者正交，故不做「合计 = total」这种假约束）。口径：算全库、不看过滤，且**停用源照样
- *  计入**未验证/坏源（停用 ≠ 免验）——这两维**直接读 `source-inbox.ts` 的集合**，
- *  与待办合同一口径、由构造相等。0 也要显示（「坏源 0」本身就是结论，且数字位忽隐忽现会让这条带子一直抖）。 */
-export interface SourceStats { total: number; enabled: number; disabled: number; unverified: number; broken: number }
+/** 列表头状态带的六个读数：`enabled/disabled` 是 enabled 维，`ai` 是 AI 搜索标记维，
+ *  `unverified/broken` 是 status 维（三者正交，故不做「合计 = total」这种假约束）。口径：算全库、
+ *  不看过滤，且**停用源照样计入**未验证/坏源与 AI 搜索（停用 ≠ 免验，AI 标记也不随启停清空）——
+ *  这两维**直接读 `source-inbox.ts` 的集合**，与待办合同一口径、由构造相等。0 也要显示
+ *  （「坏源 0」本身就是结论，且数字位忽隐忽现会让这条带子一直抖）。 */
+export interface SourceStats { total: number; enabled: number; disabled: number; ai: number; unverified: number; broken: number }
 
 /** 派生结果：视图渲染所需的全部纯计算值 */
 export interface SourceListViewModel {
@@ -59,10 +60,11 @@ export function deriveSourceListView(all: SourcePublic[], ui: SourceListUi, limi
   // 状态带：`enabled/disabled` 一趟算齐；`unverified/broken` **直接读待办派生**（同一份判据、
   // 同一份集合，两张读数由构造相等——不要在这里再 filter 一遍，那只能靠测试维持两边相等）
   const inbox = sourceInbox(all)
-  const stats: SourceStats = { total: all.length, enabled: 0, disabled: 0, unverified: inbox.unverified.length, broken: inbox.broken.length }
+  const stats: SourceStats = { total: all.length, enabled: 0, disabled: 0, ai: 0, unverified: inbox.unverified.length, broken: inbox.broken.length }
   for (const s of all) {
     if (s.enabled) stats.enabled += 1
     else stats.disabled += 1
+    if (s.aiSearch) stats.ai += 1
   }
   const legend: string[] = []
   for (const g of groupCounts.keys()) {

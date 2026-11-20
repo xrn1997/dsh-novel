@@ -47,19 +47,25 @@ function clientSources(): Array<{ file: string; text: string }> {
   return out
 }
 
-/** 取出某条规则声明块内的文本：`/\.-?类名\s*\{([^}]*)\}/` */
+/** 取出某条规则声明块内的文本：`/\.-?类名\s*\{([^}]*)\}/`（同名多条规则时取第一条） */
 function ruleBody(selector: string): string {
-  // 逐条规则取体，**逗号选择器组里的每一条都算命中**——同一份几何给两块浮层共用是惯用写法，
-  // 守卫不该逼着把它抄成两条（抄两份才会漂移，且本仓的纪律是「唯一实现」）。
-  // 先剥注释再切：样式注释里写着 `style={{background}}` 这类带花括号的字面量，不剥就把规则切断。
+  return ruleBodies(selector)[0] ?? ''
+}
+
+/** 同一选择器的**全部**规则体（宽档 + 容器查询里的窄档各算一条）。
+ *  逐条规则取体，**逗号选择器组里的每一条都算命中**——同一份几何给两块浮层共用是惯用写法，
+ *  守卫不该逼着把它抄成两条（抄两份才会漂移，且本仓的纪律是「唯一实现」）。
+ *  先剥注释再切：样式注释里写着 `style={{background}}` 这类带花括号的字面量，不剥就把规则切断。 */
+function ruleBodies(selector: string): string[] {
   const wanted = selector.trim()
   const re = /([^{}]+)\{([^{}]*)\}/g
   const css = strip(NOVEL_CSS)
+  const out: string[] = []
   for (let m = re.exec(css); m !== null; m = re.exec(css)) {
     const selectorGroup = must(m[1], '正则捕获组 1（选择器组）')
-    if (selectorGroup.split(',').some((s) => s.trim() === wanted)) return must(m[2], '正则捕获组 2（规则体）')
+    if (selectorGroup.split(',').some((s) => s.trim() === wanted)) out.push(must(m[2], '正则捕获组 2（规则体）'))
   }
-  return ''
+  return out
 }
 
 /** 剥掉注释再扫：守卫管的是**声明**，不是文档。本文件与 styles/ 各块的注释里
@@ -225,8 +231,16 @@ describe('布局单位与视口约束（阅读器不能被正文高度绑架）'
       .toMatch(/\[data-novel-scope\][^{]*\{[^}]*box-sizing:\s*border-box/)
   })
 
-  it('源列表操作列定宽右锚：.novel-tr.src 第5轨 148px（auto 轨会让右缘按钮组随状态漂移）', () => {
-    expect(ruleBody('.novel-tr.src'), '操作列轨道必须定宽（148px）').toMatch(/148px/)
+  it('源列表尾三轨（操作/AI/启停）定宽：表头是文字、表体是控件，auto 轨会让两者右缘错位', () => {
+    // 每个 .novel-tr 是独立 grid、auto 轨各按各的内容算宽——行内动作收进「⋯」后行与行之间
+    // 内容恒定，只保住「行间」不漂移；表头文字（中英表头取较宽者）与行内控件宽度天然不同，
+    // 表头对齐只能靠内容无关的定宽轨。宽档与窄档同判据，真排版读数见 tests/browser 的源列表几何门。
+    const bodies = ruleBodies('.novel-tr.src')
+    expect(bodies, '.novel-tr.src 该有宽档 + 窄档两条规则体').toHaveLength(2)
+    for (const body of bodies) {
+      expect(body, `尾三轨必须定宽（px）：${body}`).toMatch(/grid-template-columns:[^;]*\d+px\s+\d+px\s+\d+px/)
+      expect(body, `尾三轨不许回到 auto：${body}`).not.toMatch(/auto/)
+    }
   })
 
   it('状态带：容器查询退化在位（窄列掉 .slim 留「共 N · 已启用 M」），但整条带子不许被隐藏', () => {
@@ -250,6 +264,7 @@ describe('布局单位与视口约束（阅读器不能被正文高度绑架）'
     expect(ruleBody('.novel-menu.up'), '向下放不下时朝上开：`.up` 必须锚底（top 让位）——长列表滚到滚动口底那档')
       .toMatch(/bottom:\s*calc\(100% - 6px\)/)
     expect(ruleBody('.novel-modal.wide'), '导入弹层用宽档（删除确认保持 400px 紧凑档）').toMatch(/width:\s*min\(680px/)
+    expect(ruleBody('.novel-modal.form'), '引擎编辑用 520px 表单档：比确认框宽、比宽档窄').toMatch(/width:\s*min\(520px/)
   })
 
   it('源列表表格不许自己裁：圆角落首/末行，不靠 .novel-table 的 overflow:hidden', () => {
@@ -277,7 +292,7 @@ describe('布局单位与视口约束（阅读器不能被正文高度绑架）'
 describe('焦点与指针无关可达（键盘/触屏与指针同等可达）', () => {
   it('交互件各有 :focus-visible 规则', () => {
     const focusRules = [...NOVEL_CSS.matchAll(/[^{}]*:focus-visible[^{]*\{[^}]*\}/g)].map((m) => m[0]).join('\n')
-    for (const sel of ['.novel-card', '.novel-chip', '.novel-drawer-item', '.novel-input', '.novel-rdr-ctl', '.novel-seg button', '.novel-tabs button', '.novel-menu button', '.novel-switch', '.novel-tts-ictl', '.novel-tts-chip', '.novel-tts-ringplay']) {
+    for (const sel of ['.novel-card', '.novel-chip', '.novel-drawer-item', '.novel-input', '.novel-rdr-ctl', '.novel-seg button', '.novel-tabs button', '.novel-menu button', '.novel-switch', '.novel-ai-input', '.novel-tts-ictl', '.novel-tts-chip', '.novel-tts-ringplay']) {
       expect(focusRules, `缺 ${sel} 的焦点环`).toContain(sel)
     }
   })

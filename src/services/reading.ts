@@ -28,7 +28,7 @@ import type { LocalResource } from './localbooks.js'
 import { LocalLifecycle } from './local-lifecycle.js'
 import type { NormalizeIssue } from './normalize.js'
 import { OnlineReading } from './online-reading.js'
-import { exploreParticipates, participates } from './participation.js'
+import { exploreParticipates, participates, aiParticipates } from './participation.js'
 import { CorruptJsonError, writeFileAtomic } from './storage.js'
 import { applyProbeResult, probeSource } from './probe.js'
 import type { ProbeOutcome, ProbeResult } from './probe.js'
@@ -521,11 +521,28 @@ export class ReadingService {
     if (!found) throw new SourceNotFoundError(id)
   }
 
-  /** 启停批量：未知 id 静默跳过、重复 id 幂等；返回实际变更数（一次 edit 一次合并落盘） */
+  /** 启停批量：未知 id 静默跳过、重复 id 幂等；返回找到并写入的条数（已在目标态的幂等重写
+   *  也计数——不是「实际变更数」，回执措辞按这个口径写）；一次 edit 一次合并落盘 */
   async setEnabledMany(ids: string[], enabled: boolean): Promise<number> {
     return this.registry.edit((tx) => {
       let n = 0
       for (const id of new Set(ids)) if (tx.setEnabled(id, enabled)) n++
+      return n
+    })
+  }
+
+  /** 单源 AI 搜索标记：与启停同一条存在性语义（未知 id 抛 SourceNotFoundError） */
+  async setAiSearch(id: string, aiSearch: boolean): Promise<void> {
+    const found = await this.registry.edit((tx) => tx.setAiSearch(id, aiSearch))
+    if (!found) throw new SourceNotFoundError(id)
+  }
+
+  /** 批量 AI 搜索标记：未知 id 静默跳过、重复 id 幂等；返回找到并写入的条数
+   *  （已在目标态的幂等重写也计数——不是「实际变更数」，与 setEnabledMany 同一口径） */
+  async setAiSearchMany(ids: string[], aiSearch: boolean): Promise<number> {
+    return this.registry.edit((tx) => {
+      let n = 0
+      for (const id of new Set(ids)) if (tx.setAiSearch(id, aiSearch)) n++
       return n
     })
   }
@@ -942,6 +959,29 @@ export class ReadingService {
    *  搜索后台化的正确动作是给上面那份加消费方，不是再写第二个循环。 */
   search(keyword: string, opts?: { sourceIds?: string[]; signal?: AbortSignal }): Promise<SearchGroup[]> {
     return this.searchProgressive(keyword, opts)
+  }
+
+  /** AI 工具面的聚合搜索：只问 `aiParticipates` 的源（已启用 ∧ 文本 ∧ 用户标记 AI 搜索）。
+   *  `sourceIds` 只在这个集合内**收窄**——未标记的源不会被点名绕过。
+   *  空集合（显式 `sourceIds: []` 也算）不发任何请求，也不交给 `searchProgressive`：后者把
+   *  空 sourceIds 读作「未限定」（那是 UI 面的约定，见 `searchProgressive` 的注释），在这里
+   *  落回全量会把「用户没选 AI 源」改写成「搜了所有源」——`ADR-0097` 决定 3 裁的就是这一条。
+   *  `eligible` 是本轮候选源数（给 sourceIds 时是收窄后的数）；`groups` 与普通搜索同形，
+   *  `searched`/`failed` 等轮级读数由调用方从 groups 汇总，不在此另算一份。 */
+  async searchForAi(
+    keyword: string, opts?: { sourceIds?: string[]; signal?: AbortSignal },
+  ): Promise<{ eligible: number; groups: SearchGroup[] }> {
+    opts?.signal?.throwIfAborted()
+    const plan = this.registry.list().filter((s) => aiParticipates(s)).map((s) => s.id)
+    const want = opts?.sourceIds
+    // 空数组不折「没点名」：want 传了就是一次收窄请求，收窄到空就是零请求（eligible 0）
+    const ids = want === undefined ? plan : plan.filter((id) => want.includes(id))
+    if (ids.length === 0) return { eligible: 0, groups: [] }
+    const groups = await this.searchProgressive(keyword, {
+      sourceIds: ids,
+      ...(opts?.signal === undefined ? {} : { signal: opts.signal }),
+    })
+    return { eligible: ids.length, groups }
   }
 
   /** 搜索参与计划：**参与者 id 清单**这条投影的唯一主人——客户端分批/进度按此走，

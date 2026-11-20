@@ -9,7 +9,7 @@ export const CONTROLS_CSS = `
 .novel-seg button:focus-visible, .novel-tabs button:focus-visible, .novel-menu button:focus-visible,
 .novel-card:focus-visible, .novel-row-main:focus-visible,
 .novel-city-source:focus-visible, .novel-city-kind:focus-visible, .novel-city-card:focus-visible,
-.novel-drawer-item:focus-visible, .novel-switch:focus-visible, .novel-searchbox:focus-within,
+.novel-drawer-item:focus-visible, .novel-switch:focus-visible, .novel-ai-input:focus-visible, .novel-searchbox:focus-within,
 .novel-ref:focus-visible {
   outline: 2px solid var(--novel-ring); outline-offset: 2px;
 }
@@ -80,17 +80,17 @@ export const CONTROLS_CSS = `
 .novel-tr:first-child { border-top: none; }
 .novel-tr:hover { background: var(--novel-hover); }
 .novel-tr.head { background: var(--novel-skeleton); font-size: var(--novel-fs-sm); color: var(--novel-text-2); }
-/* 源列表六列：列宽唯一住址（表头与每一行共用；不要另写一份字面量）。
-   操作列（第5轨）**定宽 + 右对齐**：内容随状态增减（异常态多一个
-   验证/重验钮），auto 轨让各行内容宽不一 → 右缘按钮组漂移；
-   定宽后「试跑/⋯」右缘全表锚定，状态动作钮向左生长。启停唯一入口 = 最右开关，
-   行内不再渲染重复的「启用」文字钮。 */
-.novel-tr.src { grid-template-columns: minmax(120px, 1.3fr) 68px minmax(0, 1fr) minmax(0, 1.6fr) 148px auto; }
+/* 源列表七列：列宽唯一住址（表头与每一行共用；不要另写一份字面量）。
+   尾三轨（操作/AI/启停）定宽：行内动作收进「⋯」后各行内容虽已恒定，但表头是文字、
+   表体是控件，每个 .novel-tr 又是独立 grid——auto 轨各按各的内容算宽，表头与表体
+   就会错位。操作与启停右对齐；AI 列是方形勾，表头与勾都居中（74px 按「AI 搜索」
+   四字与 26px 勾留余量）。对齐读数由 tests/browser 的源列表几何门把守。 */
+.novel-tr.src { grid-template-columns: minmax(120px, 1.3fr) 68px minmax(0, 1fr) minmax(0, 1.6fr) 42px 74px 44px; }
 .novel-tr.one { grid-template-columns: 1fr; }
 /* 窄表收列：地址是「认得出这源」的次要线索，名称/状态/分组/操作才是要害——
-   隐藏列与列轨数必须同时改（少一格配六轨 = 整行错位） */
+   隐藏列与列轨数必须同时改（少一格配七轨 = 整行错位） */
 @container (max-width: 620px) {
-  .novel-tr.src { grid-template-columns: minmax(120px, 1.4fr) 68px minmax(0, 1fr) 120px auto; }
+  .novel-tr.src { grid-template-columns: minmax(120px, 1.4fr) 68px minmax(0, 1fr) 42px 74px 44px; }
   .novel-tr.src > .col-url { display: none; }
 }
 /* 行级失败锚点（全局状态条的行内装饰层，transient.ts）：文案归条，行内只留红左边标记——
@@ -120,4 +120,30 @@ export const CONTROLS_CSS = `
 }
 .novel-switch[aria-checked="true"] > i { transform: translateX(13px); background: var(--novel-on-solid); }
 .novel-switch[data-busy="true"] { opacity: .55; cursor: wait; }
+/* AI 搜索勾选（方形火花勾）：与右侧启停开关同场但不同形——勾 = 集合成员（加入 AI
+   搜索集），开关 = 当前状态（源可不可用）。停用但仍标记时勾保留、整格灰化，不用品牌
+   色、不加感叹号/圆点；停用由行本身与灰勾表达，预标记仍可用（启用后生效）。 */
+.novel-ai-check { position: relative; display: inline-grid; place-items: center; width: 26px; height: 26px; cursor: pointer; }
+.novel-ai-box { position: relative; display: block; width: 16px; height: 16px; }
+.novel-ai-input {
+  appearance: none; -webkit-appearance: none; display: block; margin: 0;
+  width: 16px; height: 16px; border-radius: 4px; cursor: pointer;
+  border: 1.5px solid var(--novel-border-strong); background: transparent;
+  transition: background var(--novel-dur) var(--novel-ease), border-color var(--novel-dur) var(--novel-ease);
+}
+.novel-ai-check:hover .novel-ai-input:not(:checked) { border-color: var(--novel-brand); background: var(--novel-brand-soft); }
+.novel-ai-input:checked { background: var(--novel-brand); border-color: var(--novel-brand); }
+.novel-ai-check:hover .novel-ai-input:checked { filter: brightness(1.1); }
+.novel-ai-check.inactive .novel-ai-input { background: var(--novel-skeleton); border-color: var(--novel-border-strong); }
+.novel-ai-check.inactive:hover .novel-ai-input { border-color: var(--novel-brand); background: var(--novel-skeleton); filter: none; }
+.novel-ai-mark {
+  position: absolute; inset: 0; margin: auto; width: 10px; height: 10px;
+  color: var(--novel-on-solid); opacity: 0; transform: scale(.55); pointer-events: none;
+  transition: opacity var(--novel-dur) var(--novel-ease), transform var(--novel-dur) var(--novel-ease);
+}
+.novel-ai-mark path { fill: currentColor; }
+.novel-ai-input:checked + .novel-ai-mark { opacity: 1; transform: scale(1); }
+.novel-ai-check.inactive .novel-ai-mark { color: var(--novel-text-3); }
+.novel-ai-input:disabled { cursor: wait; }
+.novel-ai-check[data-busy="true"] { opacity: .55; cursor: wait; }
 `

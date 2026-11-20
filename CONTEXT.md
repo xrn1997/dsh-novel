@@ -50,7 +50,7 @@ _Avoid_: 规则格式
 
 **搜索面（search face）**:
 「书源搜索规则 + 关键词」到「命中条目 + 首条书名」的完整请求语义；聚合搜索与探针共用同一份。参与集判据：**启用 ∧ 文本源**。
-_唯一实现_: `services/search-face.ts`；「谁参与」的判据同住 `services/participation.ts`——搜索面 `participates`（启用 ∧ 文本源），发现面 `exploreParticipates`（其上再要求声明了分类入口、且书源自己没把发现关掉）
+_唯一实现_: `services/search-face.ts`；「谁参与」的判据同住 `services/participation.ts`——搜索面 `participates`（启用 ∧ 文本源），发现面 `exploreParticipates`（其上再要求声明了分类入口、且书源自己没把发现关掉），AI 工具面 `aiParticipates`（再要求源上已标记「AI 搜索」，见 `ADR-0097`）
 _Avoid_: 搜索服务
 
 **发现面（explore face / 书城）**:
@@ -89,8 +89,8 @@ _唯一实现_: `client/panel-shelf.ts` 的 `panelShelf` / `loadPanelShelf` / `e
 _Avoid_: 书架真相（那是 `services/shelf.ts` 的 `Shelf`）、搜索轮次（`client/search-job.ts` 的观察通道）
 
 **工具面披露三件套（searched / answered / filtered）**:
-`dshnovel_search` 对「这一轮为什么给出这些」自报的三条计数：本轮跑了多少家、多少家干净答话（答了零条也算答话）、多少行因被判不相关移出默认返回。界面上同一事实由逐源轴与折叠区承接，工具面没有折叠，用数字承接——「没人答话」与「答话了但全不相关」不许折成同一种结局。
-_唯一实现_: `tools/tools.ts` 的 `dshnovel_search` 的 execute（三条计数的算式在 `shared/round-summary.ts` 的 `summarizeRound`；逐家点名的 `failed` 与超限那句 `truncated` 是 `tools/search-value.ts` 的 `failedSources` / `truncationNotice`；裁决与必然后果见 `ADR-0033`）
+`dshnovel_search` 对「这一轮为什么给出这些」自报的三条计数：本轮跑了多少家、多少家干净答话（答了零条也算答话）、多少行因被判不相关移出默认返回。界面上同一事实由逐源轴与折叠区承接，工具面没有折叠，用数字承接——「没人答话」与「答话了但全不相关」不许折成同一种结局。另有第四个数 `eligible`（本轮 AI 候选源数）回答「为什么只搜了这些家」；为 0 时 render 给出去书源管理标记的行动指引（`ADR-0097`）。
+_唯一实现_: `tools/tools.ts` 的 `dshnovel_search` 的 execute（三条计数的算式在 `shared/round-summary.ts` 的 `summarizeRound`；`eligible` 来自 `services/reading.ts` 的 `searchForAi`；逐家点名的 `failed` 与超限那句 `truncated` 是 `tools/search-value.ts` 的 `failedSources` / `truncationNotice`，0 候选指引是 `tools/render.ts` 的 `renderSearch`；裁决与必然后果见 `ADR-0033` / `ADR-0097`）
 _Avoid_: 有命中的源数（answered 数的是「答话」，不是「有命中」——答了空页的源也计答话）
 
 **书籍详情浮层（book sheet）**:
@@ -242,9 +242,14 @@ _唯一实现_: `services/intake.ts` 的 `SourceIntake`
 _Avoid_: URL 去重
 
 **启停（enable / disable）**:
-停用的书源不参与聚合搜索；探针与试跑不受影响。停用 ≠ 删除，也 ≠ 免验。
+停用的书源不参与聚合搜索；探针与试跑不受影响。停用 ≠ 删除，也 ≠ 免验。停用对界面搜索与 AI 工具搜索同时生效；「哪些源给 AI 用」是另一维标记，见「AI 搜索源」。
 _唯一实现_: `services/sources.ts` 的 `setEnabled`
 _Avoid_: 删除、隐藏
+
+**AI 搜索源（AI search source）**:
+书源上的用户偏好标记，与启停正交：AI 工具面的聚合搜索只问「启用 + 文本 + 已标记」的源；界面搜索与发现面不吃这一位。导入缺省关闭、重导入保留、存量缺键收敛为关闭——导入一个包不等于把整包交给 AI。工具面的显式 `sourceIds` 只能在已标记集合内收窄，空集合零请求并回报候选数。
+_唯一实现_: `services/sources.ts` 的注册表（`setAiSearch`、`SourcePublic.aiSearch`）；参与集判据 `services/participation.ts` 的 `aiParticipates`；工具面 `services/reading.ts` 的 `searchForAi`（裁决见 `ADR-0097`）
+_Avoid_: AI 启用、AI 开关（它是 AI 搜索范围的标记，不是第二个启停轴）
 
 **书源待办（source inbox）**:
 书源管理 tab 的首屏任务面：全库源清单派生出「坏源 / 未验证」两集合，反常置顶成任务卡，任务收尾自动消解。只看状态、不看启停；加载失败不渲染待办（不拿未知当「全部良好」）。

@@ -32,7 +32,7 @@ const runningProbe: JobState = { ...runningImport, id: 'prb1', kind: 'batch-prob
 
 /** 一条已验源的公开形：源列表非空才够得着行内「试跑」入口（试跑子视图自己没有任务卡） */
 const probeRowSource: SourcePublic = {
-  id: 'src1', name: '示例源', baseUrl: 'https://example.com/', enabled: true,
+  id: 'src1', name: '示例源', baseUrl: 'https://example.com/', enabled: true, aiSearch: false,
   groups: [], type: 'text', status: 'verified', importedAt: 0,
   hasHeader: false, hasAuth: false, authExpired: false, hasLoginUrl: false,
 }
@@ -194,7 +194,8 @@ describe('任务卡去现场（消费半：喂现场 → 消费意图 → 滚动
     try {
       render(<NovelStatusOverlay deps={deps} focusPanel={() => {}} />)
       const section = render(<SettingsSection deps={deps} />)
-      fireEvent.click(await screen.findByText('试跑'))
+      fireEvent.click(await screen.findByLabelText('更多动作 示例源'))
+      fireEvent.click(screen.getByRole('menuitem', { name: '试跑 trace' }))
       expect(await screen.findByText('← 返回源列表'), '没进试跑子视图').toBeTruthy()
 
       act(() => requestJobOpen('probe'))
