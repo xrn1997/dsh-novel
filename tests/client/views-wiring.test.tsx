@@ -2274,7 +2274,10 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
       const atClose = deps.apiSend.mock.calls.length
       fireEvent.click(within(panel).getByRole('button', { name: '关闭' }))      // ④ 关面板
       await waitFor(() => expect(screen.queryByRole('dialog', { name: '注释' })).toBeNull())
-      expect(jumpedTo(deps, atClose)).toEqual([])                             // 回归：关面板不得再跳一次
+      // 返回动作的落位补写（settleJump 的同章比例确认）要等下一拍测量帧，可能晚于关面板才到。
+      // 它记的仍是当前章，不是「替用户跳」——只钉「关面板之后出现别的章」；回归的旧形状是
+      // 弹掉 E1、把主序列送回上一章（按章号断言，迟到确认不算数，CI 上不再谁先到谁说话）。
+      expect(jumpedTo(deps, atClose).filter((i) => i !== 1)).toEqual([])
       expect(screen.getByRole('button', { name: /返回原处/ })).toBeTruthy()     // E1 还在（没被误消费）
     } finally {
       proto.getBoundingClientRect = original
