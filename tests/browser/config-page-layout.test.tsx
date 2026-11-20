@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { Browser } from 'playwright'
-import { NovelConfigPageView } from '../../src/client/config-page.js'
+import { NovelConfigPageView, watchSavebarPin } from '../../src/client/config-page.js'
 import { zhTranslate } from '../../src/client/copy/index.js'
 import { must, pick } from '../support/fixture.js'
 import { BROWSER_GATE_ENABLED } from '../support/browser-gate.js'
@@ -131,6 +131,60 @@ describe.skipIf(!ENABLED)('浏览器几何：插件页「运行参数」的行�
   const row = (r: Read, name: string): RowRead => must(r.rows.find((x) => x.name === name), `行「${name}」`)
   /** 输入框左缘的取值集合：两列配对时应当恰好两个（每列一个）。 */
   const fieldLefts = (r: Read): number[] => [...new Set(r.rows.map((x) => Math.round(x.field.left)))].sort((a, b) => a - b)
+
+  /**
+   * 保存条吸底的位置：宿主的插件详情页把页面底部留白做成滚动容器的 `padding-bottom`（48px），
+   * 卡片在里面滚。这一格量「吸住时条贴着谁」：滚动区内容盒底边（Chromium 系引擎按内容盒算，
+   * 条下还会露出列表尾部）还是可视底边（`watchSavebarPin` 补掉内边距之后）。
+   *
+   * `watchSavebarPin` 的装配由组件自己的 effect 做；这里静态渲染拿不到 effect，于是把这个函数
+   * 原样注入页面，量的仍是发布用的那一份判据与样式。先滚到「卡片底边还在视口下方 100px」的
+   * 吸住现场，再注入函数，前后各读一次缝。
+   */
+  async function measurePinnedSavebar(): Promise<{ before: number; after: number; stickyBottom: string }> {
+    const markup = renderToStaticMarkup(
+      <NovelConfigPageView
+        t={zhTranslate}
+        writable
+        fields={fields}
+        dirty={false}
+        invalid={false}
+        saving={false}
+        failure={null}
+        {...actions}
+      />,
+    )
+    const page = await (await browser.newContext({ viewport: { width: 1400, height: 900 } })).newPage()
+    await page.setContent(
+      '<!doctype html><html><head><meta charset="utf-8"><style>'
+      + 'html, body { height: 100%; margin: 0 }'
+      // 宿主插件详情页滚动区的形状：整页滚动，底部 48px 内边距
+      + '.host-scroll { height: 100%; overflow-y: auto; box-sizing: border-box; padding: 0 48px 48px }'
+      + '.before { height: 900px } .after { height: 600px }'
+      + `</style></head><body><div class="host-scroll"><div class="before"></div>${markup}`
+      + '<div class="after"></div></div></body></html>',
+    )
+    await page.evaluate(`(() => { const host = document.querySelector('.host-scroll')
+      const card = document.querySelector('.novel-cfg-card')
+      host.scrollTop = card.getBoundingClientRect().bottom + host.scrollTop - host.getBoundingClientRect().bottom - 100 })()`)
+    const read = `(() => { const host = document.querySelector('.host-scroll')
+      const bar = document.querySelector('.novel-cfg-savebar')
+      return { gap: host.getBoundingClientRect().bottom - bar.getBoundingClientRect().bottom,
+        stickyBottom: getComputedStyle(bar).bottom } })()`
+    const before = await page.evaluate<{ gap: number }>(read)
+    await page.evaluate(`(${watchSavebarPin.toString()})`
+      + `(document.querySelector('.novel-cfg-savebar'), document.querySelector('.novel-cfg-card'))`)
+    const after = await page.evaluate<{ gap: number; stickyBottom: string }>(read)
+    await page.context().close()
+    return { before: before.gap, after: after.gap, stickyBottom: after.stickyBottom }
+  }
+
+  it('保存条吸住时贴住可视底边：宿主页的底部内边距不留在条下', async () => {
+    const r = await measurePinnedSavebar()
+    expect(r.before, '现场应先是「吸住、但条离底边还差一条内边距」').toBeCloseTo(48, 1)
+    expect(r.after, '补掉内边距后条应贴住可视底边').toBeLessThanOrEqual(0.5)
+    expect(r.stickyBottom, '补的量写在 --novel-cfg-pin 上').toBe('-48px')
+  })
 
   it('宽档：一条框装下值 + 单位 + 回读，两列配对且说明默认收起', async () => {
     const r = await measure(1000)

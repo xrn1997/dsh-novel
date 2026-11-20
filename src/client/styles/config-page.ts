@@ -172,9 +172,11 @@ export const CONFIG_PAGE_CSS = `
 /* 听书段的对象数据管理区：默认收成一行（引擎清单是网络读面，展开才读到）。 */
 .novel-cfg-manager { display: flex; flex-direction: column; }
 .novel-cfg-managerhead { margin-top: var(--novel-sp-3); }
-/* 保存条：贴卡片底边常驻，带改动计数与快捷键。 */
+/* 保存条：贴卡片底边常驻，带改动计数与快捷键。吸附位置要落在滚动区的**可视底边**：
+   --novel-cfg-pin 由 watchSavebarPin 在第一次吸住时写入（宿主页把底部留白做在滚动容器的
+   padding 里，Chromium 系引擎的 sticky 以内容盒为界，不补就会停在内边距之上、条下露出列表尾部）。 */
 .novel-cfg-savebar {
-  position: sticky; bottom: 0; display: flex; align-items: center; gap: var(--novel-sp-2);
+  position: sticky; bottom: var(--novel-cfg-pin, 0px); display: flex; align-items: center; gap: var(--novel-sp-2);
   padding: var(--novel-sp-3) var(--novel-sp-5);
   border-top: 1px solid var(--novel-border-faint); background: var(--novel-layer-2);
   border-radius: 0 0 var(--novel-r-md) var(--novel-r-md);

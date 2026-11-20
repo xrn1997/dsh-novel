@@ -75,6 +75,8 @@ export const TOKENS_CSS = `
   /* 焦点环：走 brand（宿主主色）+ 2px 外偏移——不要借 label-secondary 与正文同色系，
      在密集列表里几乎找不着环；primary 钮上另换 --novel-text（brand 压 brand 等于没有）。 */
   --novel-ring: var(--novel-brand);
+  /* 配置页保存条吸附偏移：JS 吸住时按宿主滚动区底留白写成负值；缺省 0 = 普通 sticky */
+  --novel-cfg-pin: 0px;
   /* ── 标度：间距 / 字阶 / 圆角 / 阴影 / 层级 / 动效 ── */
   --novel-sp-0: 2px; --novel-sp-1: 4px; --novel-sp-2: 6px; --novel-sp-3: 8px;
   --novel-sp-4: 12px; --novel-sp-5: 16px; --novel-sp-6: 24px; --novel-sp-7: 32px;

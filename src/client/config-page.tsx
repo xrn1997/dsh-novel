@@ -668,6 +668,57 @@ export interface ConfigPageViewProps {
   engineManager?: ReactNode
 }
 
+/** 保存条吸底时，把宿主滚动区底部的那段留白补进吸附位移（返回清理函数）。
+ *
+ *  插件详情页的滚动区把页面底部留白做成 `padding-bottom`。Chromium 系
+ *  引擎的 sticky 以**内容盒**为界：`bottom: 0` 吸住后保存条停在留白之上，条底下还会露出列表尾部——
+ *  看起来像没贴底。这里在它第一次吸住时量出那条缝（条底边到滚动区可视底边的距离，最多量到
+ *  底部内边距），以负 bottom 写回 `--novel-cfg-pin`，吸附位置就落到真正的可视底边。按规范以
+ *  padding box 吸附的浏览器缝是 0，不写——同一条判据在两种引擎下各得其所。量一次就结算：
+ *  滚动容器的内边距不随滚动变。
+ *
+ *  「吸住」的判据是条被上移：保存条是卡片最后一个子元素，流内底边就是卡片内容盒底边；
+ *  rect 底边高于它才算吸住。只在吸住时量，卡片末尾的静止态不会被误补。
+ *
+ *  注：几何门把这个函数单独注入页面量吸附位置，所以它必须自足（只用 DOM API，不引本模块的
+ *  其它助手）。 */
+export function watchSavebarPin(bar: HTMLElement, card: HTMLElement): () => void {
+  let scroller: HTMLElement | null = null
+  for (let p = bar.parentElement; p !== null; p = p.parentElement) {
+    const overflowY = getComputedStyle(p).overflowY
+    if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') {
+      scroller = p
+      break
+    }
+  }
+  if (scroller === null) return () => {}
+  const port = scroller
+
+  let settled = false
+  const settle = (): void => {
+    settled = true
+    port.removeEventListener('scroll', measure)
+  }
+  const measure = (): void => {
+    if (settled) return
+    const barRect = bar.getBoundingClientRect()
+    const cardStyle = getComputedStyle(card)
+    const cardContentBottom = card.getBoundingClientRect().bottom
+      - (parseFloat(cardStyle.paddingBottom) || 0)
+      - (parseFloat(cardStyle.borderBottomWidth) || 0)
+    if (barRect.bottom >= cardContentBottom - 1) return // 还躺在卡片末尾，没吸住
+    const portStyle = getComputedStyle(port)
+    const visibleBottom = port.getBoundingClientRect().bottom - (parseFloat(portStyle.borderBottomWidth) || 0)
+    const gap = Math.max(0, visibleBottom - barRect.bottom)
+    const inset = Math.min(gap, parseFloat(portStyle.paddingBottom) || 0)
+    if (inset > 0) bar.style.setProperty('--novel-cfg-pin', `${-inset}px`)
+    settle()
+  }
+  port.addEventListener('scroll', measure, { passive: true })
+  measure()
+  return () => { port.removeEventListener('scroll', measure) }
+}
+
 /** 纯呈现层（导出以便几何门静态渲染）：状态与动作都由调用方给，不碰宿主服务。
  *
  * 版式：一张卡、一条列表。工具条（筛选 + 分区下拉 + 仅看已改 + 改动计数）常驻顶部，保存条
@@ -694,6 +745,7 @@ export function NovelConfigPageView({
   const filterRef = useRef<HTMLInputElement | null>(null)
   const filterBoxRef = useRef<HTMLDivElement | null>(null)
   const cardRef = useRef<HTMLDivElement | null>(null)
+  const savebarRef = useRef<HTMLDivElement | null>(null)
   const resultsId = useId()
   const names = Object.keys(FIELDS) as FieldName[]
   const q = query.trim().toLowerCase()
@@ -776,6 +828,14 @@ export function NovelConfigPageView({
     document.addEventListener('keydown', onKey)
     return () => { document.removeEventListener('keydown', onKey) }
   }, [disabled, dirty, invalid, onSave])
+
+  // 保存条吸住时补掉宿主滚动区的底部留白（吸到真正的可视底边；判据与量法见 watchSavebarPin）。
+  useEffect(() => {
+    const bar = savebarRef.current
+    const card = cardRef.current
+    if (bar === null || card === null) return
+    return watchSavebarPin(bar, card)
+  }, [])
 
   const onFilterKey = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
     if (event.key === 'ArrowDown' && results.length > 0) {
@@ -962,7 +1022,7 @@ export function NovelConfigPageView({
             {t('config.footer.before')}<code>dataDir</code>{t('config.footer.between')}<code>cordis.patch.yml</code>{t('config.footer.after')}
           </p>
           {failure === null ? null : <p className="novel-cfg-note" role="alert">{t('config.saveFailed')}<span className="novel-cfg-mono">{failure}</span></p>}
-          <div className="novel-cfg-savebar">
+          <div className="novel-cfg-savebar" ref={savebarRef}>
             <span className={`novel-cfg-savedirty${changed > 0 ? ' on' : ''}`}>
               {changed > 0
                 ? plural(t, changed, 'config.filter.changed.one', 'config.filter.changed.other')

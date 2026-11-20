@@ -112,7 +112,8 @@ $env:DSH_WEBVIEW='1'; pnpm vitest run tests/services/webview.test.ts
 $env:DSH_BROWSER_GATE='1'; pnpm vitest run tests/browser/epub-reader.test.ts
 # 同一枚闸下的几何门：不起服务、不读站点——把浮层的真 DOM 灌进浏览器量 rect（jsdom 量不到排版）
 $env:DSH_BROWSER_GATE='1'; pnpm vitest run tests/browser/city-sheet-layout.test.tsx
-# 插件页「运行参数」的行几何：量单位后缀是否真在框内、数字框是否被限宽、窄档折不折得干净
+# 插件页「运行参数」的行几何与保存条吸底：量单位后缀是否真在框内、数字框是否被限宽、窄档折不折得干净；保存条吸住时贴住滚动区可视底边（宿主底部内边距不留在条下）
+# 读数与断言住 tests/browser/config-page-layout.test.tsx；吸底量法（watchSavebarPin）与 jsdom 钉子住 src/client/config-page.tsx 的 watchSavebarPin 与 tests/client/config-page-pin.test.ts
 $env:DSH_BROWSER_GATE='1'; pnpm vitest run tests/browser/config-page-layout.test.tsx
 # 听书面几何：展开态缺省尺寸下行不叠、最小档动作钮仍可点中且 resize 带不压控件、尺寸由现场驱动并夹在档位范围内、收起胶囊完整可见、左右缘贴合、自由落位按中心坐标落块、听书条只剩章内一条滑杆、条底与听书选中态跟行内纸色（换纸后立即跟随）、跟读高亮换字色 + 段首三角且不改布局、浮层底跟宿主 token、拖动中整块光标换抓手且悬停指针不动、拖边中整块光标跟随所拖边的 resize 指针
 # 读数与断言住 tests/browser/tts-layout.test.tsx；尺寸档与夹取常量住 src/client/tts/mini-bar-state.ts 的 DEFAULT_MINI_BAR_SIZE / MIN_MINI_BAR_SIZE / MAX_MINI_BAR_SIZE / CAPSULE_SIZE，这里不抄读数
