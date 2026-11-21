@@ -37,11 +37,18 @@ describe('条目装配面不跨缝取 EngineValue（G2 收窄边界）', () => {
     expect(hits, `${rel} 仍在装配面接住 EngineValue 或自己转发投影：改走 bridge 的读口`).toEqual([])
   })
 
-  it('正控：搜索面与发现面的列表求值走合成读口 listContextsOf', () => {
-    // 删掉调用也能过上一组（禁词一条不剩），所以正控与禁词是同一枚钉子的两面
-    for (const rel of ['src/services/search-face.ts', 'src/services/explore-face.ts']) {
-      expect(codeOf(rel), `${rel} 没有走 listContextsOf：列表求值与条目派生被拆回了两处`).toMatch(/(?<![A-Za-z])listContextsOf\(/)
-    }
+  it('正控：列表求值只有一处——两面都走读页模块，listContextsOf 只住读页模块', () => {
+    // 删掉调用也能过上一组（禁词一条不剩），所以正控与禁词是同一枚钉子的两面。
+    // 搜索面取**两步口**（嗅探判要抢在列表求值之前，合体口的固定顺序不合用——见 search-face
+    // 的注），发现面取合体口；两步与合体的列表求值都收在读页模块的 `evalListRule` 里。
+    expect(codeOf('src/services/search-face.ts'), 'search-face 没有走读页模块的两步口：列表求值被拆回了第二处')
+      .toMatch(/(?<![A-Za-z])fetchListPage\(/)
+    expect(codeOf('src/services/search-face.ts'), 'search-face 只抓取不求值：列表规则丢了')
+      .toMatch(/(?<![A-Za-z])evalListRule\(/)
+    expect(codeOf('src/services/explore-face.ts'), 'explore-face 没有走读页模块：列表求值被拆回了第二处')
+      .toMatch(/(?<![A-Za-z])readListPage\(/)
+    expect(codeOf('src/services/list-page.ts'), '读页模块没有走 listContextsOf：列表求值搬丢了')
+      .toMatch(/(?<![A-Za-z])listContextsOf\(/)
   })
 
   it('正控：探针的书名读取走 fieldOf 读口（用途定档在门内）', () => {

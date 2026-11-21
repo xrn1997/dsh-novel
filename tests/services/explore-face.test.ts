@@ -4,7 +4,7 @@ import { normalizeSource } from '../../src/services/normalize.js'
 import { fetchKindPage } from '../../src/services/explore-face.js'
 import { fakeSourceRequest } from './fake-source-request.js'
 import type { NovelSource } from '../../src/services/types.js'
-import { must, pick } from '../support/fixture.js'
+import { html, must, pick } from '../support/fixture.js'
 import { requestUrlOf } from '../support/fetch-input.js'
 
 const LIST_HTML = '<html><body><div class="item"><h3><a href="/book/1">剑起长安</a></h3>' +
@@ -42,7 +42,6 @@ function legadoSource(over: Record<string, unknown> = {}): NovelSource {
   if (!n.ok) throw new Error(`桩源应能规范化：${JSON.stringify(n.missing)}`)
   return { id: 'l', status: 'unverified', importedAt: 0, ...must(n.source, 'n 归一化后的 source') }
 }
-const html = (text: string): Response => new Response(text, { headers: { 'content-type': 'text/html; charset=utf-8' } })
 
 /** 规则缺失的结果形态（不对称匹配器只比 message 的片段）。`expect.stringContaining` 的返回是 any，
  *  落进有类型的期望对象前先收成 unknown：匹配器是运行期值，不是被断言的那个字符串。 */

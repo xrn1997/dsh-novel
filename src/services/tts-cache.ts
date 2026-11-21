@@ -7,21 +7,15 @@ import { SizeLedger } from './size-ledger.js'
 import { writeFileAtomic, writeFileAtomicBytes } from './storage.js'
 import type { ValueSource } from './value-source.js'
 
-/** 段音频缓存的缺省上限（128 MiB，照 legado 流式模式的 LRU 口径）。**这个数是唯一主人**：
- *  配置表的缓存容量缺省引它，别在配置表里再写一遍字面量。 */
+/** 段音频缓存的缺省上限（128 MiB，照 legado 流式模式的 LRU 口径）。**这个数是唯一主人**：配置表的缺省引它，别处不再写字面量。 */
 export const DEFAULT_TTS_CACHE_MAX_BYTES = 128 * 1024 * 1024
 
-/** 键的合法形状（`ttsCacheKey` 的 md5 hex）。音频读口的 key 来自 HTTP query，
- *  非法串不许拼进磁盘路径——`has` / `open` 把它们读作 miss，`put` 直接拒收。 */
+/** 键的合法形状（md5 hex）。音频读口的 key 来自 HTTP query，非法串不许拼进磁盘路径——`has` / `open` 读作 miss，`put` 拒收。 */
 const KEY_PATTERN = /^[0-9a-f]{32}$/
 
 /**
- * 段音频的缓存键：引擎标识 + **实际请求** + 文本。
- *
- * `request` 由调用方给：HTTP 源是求值后的 method/url/body，cordis 源是服务身份 + 音色 + 语速。
- * 键跟实际请求走而不是跟原始参数走——同一 spd 档内的两个语速、或模板不消费的音色，请求没变就
- * 该复用；反过来，模板里带随机数的引擎本来就不该跨请求命中。用 JSON 数组编码而不是裸拼接：
- * 字段之间没有分隔符歧义。
+ * 段音频的缓存键：引擎标识 + **实际请求** + 文本。`request` 由调用方给：HTTP 是求值后的 method/url/body，cordis 是服务身份 + 音色 + 语速。
+ * 键跟实际请求走而不是原始参数——同一 spd 档内的两个语速、或模板不消费的音色，请求没变就该复用；模板带随机数的引擎本来就不该跨请求命中。
  */
 export function ttsCacheKey(p: {
   engineId: string
@@ -39,27 +33,18 @@ export interface AudioResource {
   stream: Readable
 }
 
-/** 条目的元读面（不碰字节）：`mediaType` 之外还报出**这份字节里引擎自己应用了多少语速**
- *  （1 = 原速）。回执按「用户要的 ÷ 这一格」算补速：它是字节的属性，不是某次请求的属性——
- *  同一份字节被不同倍率重放时，这一格必须还是当初写下的那个数。 */
+/** 条目的元读面（不碰字节）：除 `mediaType` 还报**这份字节里引擎自己应用了多少语速**（1 = 原速）。回执按「用户要的 ÷ 这一格」算补速：
+ *  它是字节的属性，同一份字节被不同倍率重放时这一格必须还是当初写下的那个数。 */
 export interface AudioMeta {
   mediaType: string
   appliedRate: number
 }
 
 /**
- * 段音频缓存（数据根下 `cache/tts`）：`<key>.bin` 存字节，`<key>.json` 侧车存 `mediaType` 与
- * 随字节定版的 `appliedRate`（引擎自己应用的那档语速）。
- * 侧车是**提交标记**：先写字节再写侧车，缺侧车/坏侧车的字节按 miss 读——缓存是派生数据，
- * 坏条目读作 miss（与 PageCache 的坏字节裁决同口径），下一次 put 原地重写。
- *
- * 容量账与 `PageCache` 共用 `SizeLedger`：容量与目录各自独立（音频缓存不挤占页面缓存的上限），
- * 但「写增量记账 / 定期实扫 / 按 mtime 最旧先删」的纪律只有一份。上限是活值：配置页改过后，
- * 下一次 prune 就按新值淘汰。淘汰按**文件**粒度：极端情况下可能只删掉条目的一半；留下的孤儿
- * 由读口按 miss 处理，等下一次按 mtime 轮到它时再清掉——不会冒充一条可读缓存。
- *
- * 与 PageCache 一样，读不刷新 mtime：长期只读的热条目不会被读操作续命，可能先于旧代际被淘汰
- * （如实记，不假装读操作能挤掉冷数据）。
+ * 段音频缓存（数据根下 `cache/tts`）：`<key>.bin` 存字节，`<key>.json` 侧车存 `mediaType` 与随字节定版的 `appliedRate`。侧车是**提交标记**：
+ * 先写字节再写侧车，缺侧车/坏侧车的字节按 miss 读——缓存是派生数据，坏条目读作 miss，下一次 put 原地重写。
+ * 容量账与 `PageCache` 共用 `SizeLedger`：容量与目录各自独立，但「写增量记账 / 定期实扫 / 按 mtime 最旧先删」的纪律只有一份。上限是活值，
+ * 淘汰按**文件**粒度：可能只删掉条目的一半，孤儿由读口按 miss 处理。与 PageCache 一样读不刷新 mtime：长期只读的热条目可能先于旧代际被淘汰。
  */
 export class TtsAudioCache {
   private readonly dir: string
@@ -75,8 +60,7 @@ export class TtsAudioCache {
     return this.ledger.totalBytes
   }
 
-  /** 条目是否完整（非零字节 + 可解析的侧车）。坏侧车/缺字节/0 字节一律 false，不抛。
-   *  0 字节是「比没有更坏」的那种条目：它会让命中路径一直回执一条永远发不出声的段，
+  /** 条目是否完整（非零字节 + 可解析侧车），坏条目一律 false、不抛。0 字节是「比没有更坏」：命中路径会一直回执一条永远发不出声的段，
    *  而音频缓存没有清缓存入口（`ADR-0068`）——按 miss 读，下一次 put 原地自愈。 */
   async has(key: string): Promise<boolean> {
     return (await this.meta(key)) !== null
@@ -96,10 +80,8 @@ export class TtsAudioCache {
     }
   }
 
-  /** 写入一段音频。先字节后侧车：侧车落地才算这条缓存生效（崩溃不留「半条可读音频」）。
-   *  `appliedRate` 随字节一起定版：它是「这份字节里引擎真做了多少语速」的读数，引擎之后换了
-   *  口径也改不动已经落盘的这一段。非法值直接拒收（不是猜一档）：那说明产字节的那支算法坏了，
-   *  写进去只会让命中路径拿一个没人能解释的差额去放音。 */
+  /** 写入一段音频。先字节后侧车：侧车落地才算这条缓存生效。`appliedRate` 随字节定版（引擎之后换口径也改不动已落盘这段）；非法值
+   *  直接拒收——说明产字节的那支算法坏了，写进去只会让命中路径拿一个没人能解释的差额去放音。 */
   async put(key: string, bytes: Buffer, mediaType: string, appliedRate: number): Promise<void> {
     if (!KEY_PATTERN.test(key)) throw new Error(`音频缓存键非法：${key}`)
     if (!Number.isFinite(appliedRate) || appliedRate <= 0) {
@@ -107,8 +89,7 @@ export class TtsAudioCache {
     }
     const { bin, sidecar } = this.pathsOf(key)
     const sidecarText = JSON.stringify({ mediaType, appliedRate } satisfies AudioMeta)
-    // 先登记保留、再落盘：落盘窗口里若正好有一轮 prune 在扫，这两个文件也不能被删——
-    // 回执已经发出去了，淘汰它等于让音频读口对同一个键回 404。
+    // 先登记保留、再落盘：落盘窗口里若正好有一轮 prune 在扫，这两个文件也不能被删——回执已经发出去了。
     const release = this.ledger.reserve([bin, sidecar])
     try {
       await writeFileAtomicBytes(bin, bytes)
@@ -122,8 +103,7 @@ export class TtsAudioCache {
     }
   }
 
-  /** 打开一条缓存；缺字节/0 字节/坏侧车/非法键 → null。打开与取大小收在同一个 try（先开句柄再
-   *  stat）：先 stat 再开会有「stat 到了、开之前被删」的窗口，句柄还可能在错误路径上泄漏。 */
+  /** 打开一条缓存；缺字节/0 字节/坏侧车/非法键 → null。打开与取大小收在同一个 try（先 stat 再开会有窗口，句柄还可能在错误路径上泄漏）。 */
   async open(key: string): Promise<AudioResource | null> {
     if (!KEY_PATTERN.test(key)) return null
     const { bin, sidecar } = this.pathsOf(key)
@@ -151,10 +131,8 @@ export class TtsAudioCache {
     await this.ledger.prune()
   }
 
-  /** 侧车 → 元读面。缺文件/坏 JSON/错形状一律 null（坏条目读作 miss，不是失败）。
-   *  `appliedRate` 缺席（本批之前写下的侧车）或坏值也读作 miss：那一代没有记录「引擎真做了多少」
-   *  这一格，拿 1 或请求倍率去猜，会在曾应用服务端语速的源上双重加速、在没应用的源上凭空补速。
-   *  判「不知道」而不是猜一档——重合成一次是唯一不撒谎的选项（派生数据，下一次 put 原地自愈）。 */
+  /** 侧车 → 元读面。缺文件/坏 JSON/错形状一律 null（坏条目读作 miss）。`appliedRate` 缺席或坏值也读作 miss：拿 1 或请求倍率去猜，
+   *  会在曾应用服务端语速的源上双重加速、在没应用的源上凭空补速——判「不知道」而不是猜一档（下一次 put 原地自愈）。 */
   private async readSidecar(file: string): Promise<AudioMeta | null> {
     let raw: string
     try {

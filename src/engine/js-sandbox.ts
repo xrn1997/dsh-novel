@@ -15,26 +15,24 @@ import { scriptGlobals, scriptGlobalOf, scriptInitOf, scriptKeyOf } from './scri
 /** JavaBridge 协议的唯一登记点在 js-protocol.ts 的 JAVA_PROTOCOL 表；此处只 re-export 类型。 */
 export type { JavaBridge } from './js-protocol.js'
 
-/** 沙箱宿主注入面。桥始终由 evalJs 内部按协议表构造；不要在这里加 `java` 覆盖点——
- *  那会造出没有生产者的假 seam。 */
+/** 沙箱宿主注入面。桥恒由 evalJs 按协议表构造；不要在此加 `java` 覆盖点（会造出没有生产者的假 seam）。 */
 export interface JsHost {
-  /** 上一段结果序列化（Value.text / List.items.join('\n') / 页面原文） */
+  /** 上一段结果的序列化串（Value.text / List.items.join('\n') / 页面原文） */
   result: string
-  /** 上一段结果的值形态（nodes/page 时沙箱把 result 包成元素包装对象——`result.attr()` 等形态） */
+  /** nodes/page：沙箱把 result 包成元素包装对象（`result.attr()` 等形态） */
   resultKind?: string
-  /** 以宿主响应对象绑定 result（loginCheckJs 用：脚本读 result.url()/code()/body()）。 */
+  /** 以宿主响应对象绑定 result（loginCheckJs：脚本读 result.url()/code()/body()） */
   resultHost?: import('./host-object.js').ResponseHost
-  /** 以宿主 Map 绑定 result（登录按钮动作：脚本读 result.get(...)；与 resultHost 互斥）。 */
+  /** 以宿主 Map 绑定 result（登录按钮动作读 result.get(...)；与 resultHost 互斥） */
   resultMap?: Record<string, string>
-  /** 上一段结果所在的**路径**（列表取元素 / 取值取字符串）：list → 节点结果绑成元素**集合**
-   *  （`forEach`/`length`/下标），value → 仍是字符串对象 */
+  /** 上一段结果所在的路径：list → 元素集合（forEach/length/下标），value → 仍是字符串对象 */
   resultCtx?: 'list' | 'value'
   baseUrl: string
   source: string
-  /** searchUrl @js 形态：搜索关键词与页码（沙箱全局变量 key/page） */
+  /** searchUrl @js 形态的沙箱全局变量 key/page */
   key?: string
   page?: number
-  /** 源静态 header 的 JSON 串（输入脚本有 `JSON.parse(source.header)` 的形态） */
+  /** 源静态 header 的 JSON 串（输入脚本有 `JSON.parse(source.header)` 形态） */
   header?: string
   console?: { log: (...a: unknown[]) => void; error: (...a: unknown[]) => void }
 }
@@ -43,36 +41,26 @@ export interface JsHost {
 const DEFAULT_SCRIPT_FORM = true
 
 export interface EvalJsOptions {
-  /** 脚本完成值语义：代码作为脚本执行，最后一个表达式的值即结果；
-   *  顶层 return/await 触发 SyntaxError 时自动回落函数体（async IIFE）形态。 */
+  /** 脚本完成值语义：最后表达式的值即结果；顶层 return/await 编译失败时回落函数体形态 */
   scriptForm?: boolean
-  /** 脚本可见的源会话状态（cookie 垫片/源变量）——缺省进程级实例（跨调用存活）；
-   *  测试注入 createSourceSession() 隔离实例，跨源污染类用例第一次可写。 */
+  /** 脚本可见的源会话；缺省进程级实例（跨调用存活），测试注入 createSourceSession() 隔离 */
   session?: SourceSession
 }
 
 /**
- * runScript：沙箱对**服务层与测试**的那一扇门（引擎内部仍走 `evalJs`——它是 generator 交出去的
- * 入参形状，见 `JsCall`）。
- * 能力面直接就是 `EvalContext`：这里过去逐字段抄了一份清单（`fetchPost` / `userAgent` /
- * `regexRow` / `book` / `chapter` 都不在那份清单上），于是同一段脚本从这扇门进就会
- * 「`java.post` 抛 ctx.fetchPost 缺失」——而清单与真面之间没有任何闸，加一个注入字段就自动少抄一个。
- * 现在唯一入口收 `EvalContext` 的全部能力位，调用方按名字给，`host` 位与沙箱专属位单列。
+ * runScript：沙箱对**服务层与测试**的那一扇门（引擎内部走 `evalJs`，入参形状见 `JsCall`）。
+ * 能力面就是 `EvalContext` 的全部位——不要在这里抄第二份清单：漏一格会让 `java.post` 抛 fetchPost 缺失。
  */
 export interface RunScriptOptions extends EvalContext {
   code: string
-  /** 上一段结果序列化（host.result）；缺省 ''（脚本起步无上游） */
   result?: string
-  /** 沙箱全局变量（searchUrl @js 形态用 key/page；header 为源静态头 JSON 串） */
   key?: string
   page?: number
   header?: string
   loc: SegmentLoc
   facet: Facet
-  /** 缺省 true：完成值即结果 */
   scriptForm?: boolean
   evaluateRef?: EvaluateRef
-  /** 脚本可见的源会话（cookie 垫片/源变量）：缺省进程级实例；测试注入 createSourceSession() */
   session?: SourceSession
   /** loginCheckJs 的响应对象绑定（与规则链的 result 字符串互斥） */
   resultHost?: import('./host-object.js').ResponseHost
@@ -81,9 +69,7 @@ export interface RunScriptOptions extends EvalContext {
 }
 
 export function runScript(o: RunScriptOptions): Promise<JsOutcome> {
-  // 能力位原样透传：这里只剥出 host/驱动专属的那几格，其余就是 EvalContext（不再逐字段挑一遍）。
-  // host 的 `resultKind` / `resultCtx` / `console` 不归这扇门——它们只在规则链上跑时由求值层
-  // 构造（`JsCall`），服务层与测试的入口没有「上一段结果」这条链。
+  // 能力位原样透传，只剥出 host/驱动专属格；`resultKind`/`resultCtx`/`console` 只由规则链的求值层构造。
   const { code, result, key, page, header, loc, facet, scriptForm, evaluateRef, session, resultHost, resultMap, ...ctx } = o
   const host: JsHost = {
     result: result ?? '',
@@ -107,14 +93,12 @@ export interface JsOutcome {
   logs: string[]
 }
 
-/** 规则递归求值回调（避免与求值层循环依赖，由求值层注入真实现）。
- *  收 `SubRule`（文本 + 已定用途）与 data（子规则的 html 上下文）；用途不再作为第三参外传——
- *  桥方法要强制列表时由 `subRuleOf` 的 `forceUsage` 在构造期定，入口没有机会把用途配错。
- *  baseUrl 由外层 EvalContext 经 `{...ctx, html}` 继承。 */
+/** 规则递归求值回调（由求值层注入，避免循环依赖）。用途不作第三参外传——要强制列表时由
+ *  `subRuleOf` 的 `forceUsage` 在构造期定；baseUrl 由外层 EvalContext 经 `{...ctx, html}` 继承。 */
 export type EvaluateRef = (sub: SubRule, data: unknown) => EngineValue
 
-/** 求值层 → 沙箱的**唯一调用描述符**：链上的 js 段与 runScript 都交这一份。
- *  字段按名传递；不要改回位置元组——加一格就要同时改两处 yield 与 driveSync 的下标。 */
+/** 求值层 → 沙箱的唯一调用描述符。字段按名传递；不要改回位置元组——加一格要同时改两处 yield 与
+ *  driveSync 的下标。 */
 export interface JsCall {
   code: string
   host: JsHost
@@ -125,28 +109,22 @@ export interface JsCall {
   opts?: EvalJsOptions
 }
 
-/** 超时哨兵。作为 Promise 的 rejection 原因出门（`prefer-promise-reject-errors` 要求 Error 实例），
- *  两处判定都按**同一性**比较、从不读它的文案——不要改成按 message 认（文案是给人看的，不是判据）。 */
+/** 超时哨兵。必须作为 Promise rejection 的原因出门（`prefer-promise-reject-errors` 要 Error），两处判定按
+ *  **同一性**比较、从不读文案——不要改成按 message 认。 */
 const TIMEOUT = new Error('js-sandbox-timeout')
 
-/** worker 那条 race 的宽限（消费点两处：外层 race 的加项与下方 RPC 死线的派生加项）：`vm` 的
- *  timeout 杀的是 worker 内的同步死循环，这一条管「await 一个永不 settle 的 promise」。它必须
- *  **晚于**调用方预算到，否则跑满预算的脚本会被自己判死；额外的那一截是给「主线程替 worker 服务
- *  一发宿主调用」的往返留的余量——主线程自己那条 race 没有这趟往返，因此用整额预算，不加宽限
- *  （见 `evalJs` 里的 race）。这个宽限必须独立命名并只在这里定义；不要在 race 的参数式里写裸数字，
- *  否则没人看得出它的归属。 */
+/** worker 那条 race 的宽限：`vm` 的 timeout 管不住「await 一个永不 settle 的 promise」，这一条管。必须**晚于**
+ *  调用方预算到，否则跑满预算的脚本会被自己判死；多出的那截留给「主线程替 worker 服务宿主调用」的往返。
+ *  主线程那条 race 没有这趟往返，用整额预算。只在这里定义，不要在 race 参数式里写裸数字。 */
 const ASYNC_GRACE_MS = 5_000
 
-/** worker 侧单次宿主往返死线的 **terminate 落地余量**：外层 race（预算 + `ASYNC_GRACE_MS`）到期即
- *  terminate worker，worker 侧死线必须**严格晚于**它才不产生第二错源——两个计时器同时响时，
- *  先落地的报错会替真正的超时背锅。所以 worker 侧死线不再独立定数，由调用方预算派生（组装在
- *  `evalJsInWorker` 的 workerData，键 `rpcDeadlineMs` = 预算 + `ASYNC_GRACE_MS` + 本余量）。 */
+/** worker 侧宿主往返死线的 terminate 落地余量：死线必须**严格晚于**外层 race
+ *  （预算 + `ASYNC_GRACE_MS`），否则两个计时器同时响会产生第二错源。死线由调用方预算派生，
+ *  组装在 `evalJsInWorker` 的 workerData（键 `rpcDeadlineMs`）。 */
 const WORKER_RPC_MARGIN_MS = 5_000
 
-/** 简单脚本全局由可见性清单派生（book/chapter/source 有自定义物化，不在其中）。 */
 const SIMPLE_GLOBALS = scriptGlobals().map((g) => `  g.${g.name} = d.${g.key}`).join('\n')
 
-/** 物化字段的 init 键与全局名也从清单取：BOOTSTRAP 不再手抄第二份 `d.book` / `g.source`。 */
 const BOOK_KEY = scriptKeyOf('book')
 const CHAPTER_KEY = scriptKeyOf('chapter')
 const SOURCE_KEY = scriptKeyOf('source')
@@ -159,16 +137,13 @@ const SOURCE_GLOBAL = scriptGlobalOf('source')
 /**
  * 沙箱引导脚本（在 vm 上下文内执行一次）。
  *
- * `book` / `chapter` 的全局只在这里物化一次：本串之外再补一句裸赋值会把 `mkHostObj` 给它们装上的
- * 宿主方法面覆盖成普通对象（`tests/engine/js-sandbox.test.ts` 的「book/chapter 保留宿主方法面」钉住）。
+ * `book` / `chapter` 的全局只在这里物化一次：在本串之外补一句裸赋值会把 `mkHostObj` 给它们装的宿主方法面
+ * 覆盖成普通对象（`tests/engine/js-sandbox.test.ts` 钉住）。
  *
- * 逃逸防御核心：宿主绝不把函数/对象直接交给用户代码——唯一入口 `__host_call__` 被本闭包捕获后
- * 即从全局锁死；暴露给用户的 `java`/`console` 全是 vm realm 包装函数，参数与返回值 JSON 双向序列化，
- * 宿主错误只取 `.message` 后以 vm realm Error 重抛。故用户代码沿 `.constructor` 或错误对象都够不到
- * 宿主 realm；vm realm 内 codeGeneration:{strings:true} 允许 eval / Function，但入口仍锁死。
- * **宿主帧通道已单独关掉**：V8 会把 CallSite 交给 `Error.prepareStackTrace`，worker 的 CJS 宿主帧
- * 可经它的 `getThis()`/`getFunction()` 取到 `require`；本闭包必须把该属性锁死。
- * vm 仍是纵深防御层，不是 OS 级安全沙箱（见 `ADR-0004`）。
+ * 逃逸防御：宿主绝不把函数/对象直接交给用户代码——唯一入口 `__host_call__` 被本闭包捕获后即从全局锁死；
+ * `java`/`console` 全是 vm realm 包装函数，双向 JSON 序列化，宿主错误只取 `.message` 后以本 realm 的 Error
+ * 重抛，故沿 `.constructor` 或错误对象都够不到宿主 realm。V8 会把 CallSite 交给 `Error.prepareStackTrace`，
+ * worker 的 CJS 宿主帧可经 `getThis()` 取到 `require`，故该属性必须锁死。vm 不是 OS 级安全沙箱（`ADR-0004`）。
  */
 const BOOTSTRAP = `;(function (g) {
   'use strict'
@@ -486,27 +461,18 @@ ${SIMPLE_GLOBALS}
 })(globalThis)`
 
 /**
- * 在 node:vm 受限上下文中执行用户 JS 片段（`js:` 前缀段 / `<js>…</js>` 内联段两种形态；
- * 链尾没有 `(…)` 切法，见 parse.ts 的 `parseBranch`）。
- *
- * - 上下文 codeGeneration:{strings:true,wasm:false}：eval / Function 在 vm 内可用，
- *   但宿主入口 `__host_call__` 已锁死、宿主帧通道（Error.prepareStackTrace）已锁；vm 是纵深防御层，
- *   不是 OS 沙箱（见矩阵 h-sandbox-escape-defense）。
- * - wrapper 为 async IIFE：顶层 `await` 可用；单次 `vm.runInContext` 同时覆盖编译与同步段
- *   （vm timeout 杀死 while(true){} 这类同步死循环），异步总时长由外层 Promise.race 硬超时约束
- *   （timer 已 unref，不拖住事件循环）。
- * - 返回值映射：string→Value；array→List（元素 String()）；null/undefined/''→Miss；对象→JSON.stringify 的 Value。
- * - `console.log/error` 收集进返回的 logs（join(' ')），不外泄打印。
- * - `java.ajax` 语义唯一（同步返回 body）：主线程撞哨兵即换 worker 重跑同一段（见下方
- *   「java.ajax 同步桥」一节）；正则只决定性能，不决定语义。
- * - 求值结束统一 flush 源状态：同一段脚本内的多次 set 合并为一次写入；落盘失败不打断求值，
- *   由实现方记日志并留到下一次。
+ * 在 node:vm 受限上下文中执行用户 JS 片段（`js:` 前缀段 / `<js>…</js>` 内联段；切法见 parse.ts 的 `parseBranch`）。
+ * - codeGeneration:{strings:true,wasm:false}：eval / Function 在 vm 内可用，但宿主入口 `__host_call__` 与宿主帧
+ *   通道已锁；vm 是纵深防御层（矩阵 h-sandbox-escape-defense）。
+ * - wrapper 为 async IIFE：顶层 `await` 可用；vm timeout 杀同步死循环，异步总时长由外层 Promise.race 硬超时约束。
+ * - 返回值映射：string→Value；array→List；null/undefined/''→Miss；对象→JSON.stringify 的 Value。
+ * - `console.log/error` 收进 logs；`java.ajax` 语义唯一（同步返回 body，主线程撞哨兵即换 worker）。
+ * - 结束统一 flush 源状态：同一段脚本内的多次 set 合并为一次写入；落盘失败不打断求值。
  */
 export async function evalJs(call: JsCall): Promise<JsOutcome> {
   try {
     return await evalJsCore(call)
   } finally {
-    // runScript 把会话放在 opts.session；规则链把会话放在 ctx.session——与 evalJsCore 同一优先级
     ;(call.opts?.session ?? call.ctx.session)?.flush?.()
   }
 }
@@ -515,13 +481,10 @@ async function evalJsCore(call: JsCall): Promise<JsOutcome> {
   const { code, host, ctx, loc, facet, evaluateRef, opts } = call
   const logs: string[] = []
   const timeout = Math.max(1, ctx.jsTimeoutMs ?? DEFAULT_JS_TIMEOUT_MS)
-  // 兜底挂防线：组合根（插件 apply）已挂真 sink 时这是空操作（真 sink 顶替兜底，免得同一条
-  // rejection 在 stderr 出两遍、也免得兜底那份订阅让监听器熬过插件卸载）；离线直用引擎时由它保底。
+  // 兜底挂防线：组合根已挂真 sink 时为空操作；离线直用引擎时由它保底。
   acquireRejectionGuard()
   const session = opts?.session ?? ctx.session ?? processSession
-  // 变量读链的 source 层（四级读链的最外级）：与 source.get/put 同一张按源隔离的表。用 peek
-  // （非建档）而不是 sourceVars()——后者一调就建表，会改掉「从未设置」的语义；惰性取值还顺带
-  // 覆盖「同一次调用里先 source.put 再 java.get」的形态。
+  // 变量读链的 source 层用 peek（非建档）而不是 sourceVars()——后者一调就建表，会改掉「从未设置」的语义。
   if (ctx.sourceVar === undefined) {
     const varKey = ctx.source ?? ctx.baseUrl ?? ''
     ctx.sourceVar = (k: string): string | undefined => session.peekSourceVars(varKey)?.get(k)
@@ -538,21 +501,18 @@ async function evalJsCore(call: JsCall): Promise<JsOutcome> {
     contentBase: null,
   }
   const hostCall = makeHostCall(deps, logs, host.console)
-  // java.ajax 同步语义路由：命中 SYNC_WORKER_RE 即整段进 worker（SAB RPC 同步阻塞拿 body），
-  // 无 ajax 的脚本仍走主线程 vm（零开销）。**正则只是性能启发，不是语义开关**——认不出的等价写法
-  // 会先白跑主线程、再由哨兵兜回 worker（见 needsSyncBridge），语义一致。总口径见下方「同步桥」一节。
+  // java.ajax 同步语义路由：命中 SYNC_WORKER_RE 即整段进 worker（SAB RPC 同步阻塞拿 body），无 ajax 的
+  // 脚本走主线程 vm。**正则只是性能启发，不是语义开关**——认不出的等价写法由哨兵兜回 worker，语义一致。
   const jsLibCode = await resolveJsLib(ctx.jsLib, ctx, loc, facet)
   const useWorker = SYNC_WORKER_RE.test(jsLibCode + '\n' + code)
-  // JSON 页的 `result` 绑定：整页/条目上下文是合法 JSON 时按**解析后的对象**绑定——
-  // `result.chapterTitle`、`result.data.list` 这类字段访问形态全靠它；若绑成原文字符串，
-  // 字段会全 undefined，目录脚本产空。
+  // JSON 页/条目：上下文是合法 JSON 时按**解析后的对象**绑定 result——`result.data.list` 这类字段访问全靠它。
   const pageRaw = host.result
   const trimmedResult = pageRaw.trim()
   const resultJson = host.resultKind === 'page'
     && ((trimmedResult.startsWith('{') && trimmedResult.endsWith('}')) || (trimmedResult.startsWith('[') && trimmedResult.endsWith(']')))
     ? pageRaw : ''
-  // init 按 syncAjax 参数化：worker 重跑（哨兵路线）必须拿 syncAjax:true 的那一份，
-  // 复用主线程的 init 会让 worker 里的 ajax 包装再抛一次哨兵。
+  // init 按 syncAjax 参数化：哨兵路线让 worker 重跑时必须拿 syncAjax:true 那一份，复用主线程的 init 会让
+  // worker 里的 ajax 包装再抛一次哨兵。
   const initOf = (syncAjax: boolean): string => JSON.stringify({
     ...scriptInitOf(ctx),
     result: pageRaw, resultKind: host.resultKind ?? '', resultJson,
@@ -565,8 +525,7 @@ async function evalJsCore(call: JsCall): Promise<JsOutcome> {
     mounts: SANDBOX_MOUNTS,
   })
   const init = initOf(useWorker)
-  // wrapped（函数体形态）文本在这里一次构造，主线程与 worker 共用同一份（worker 走 workerData）：
-  // 在 WORKER_SRC 里再拼一遍等于养第二份，两处转义口径不同（worker 字符串里要写 `\\n`），改一处漏一处。
+  // wrapped 文本在这里一次构造，主线程与 worker 共用：在 WORKER_SRC 里再拼一遍等于养第二份。
   const wrapped = wrappedFormOf(code)
   if (useWorker) {
     return evalJsInWorker({
@@ -574,13 +533,12 @@ async function evalJsCore(call: JsCall): Promise<JsOutcome> {
       scriptForm: opts?.scriptForm ?? DEFAULT_SCRIPT_FORM, call: hostCall, logs, loc, facet,
     })
   }
-  // 主线程整段包一层哨兵捕获：四个可能冒出哨兵的位置（BOOTSTRAP init / jsLib / 同步执行 /
-  // await 到的完成值——`await` 形态下哨兵是 rejection）都要能兜住，故包在最外层而不是逐处判定。
+  // 整段包一层哨兵捕获：BOOTSTRAP init / jsLib / 同步执行 / await 到的完成值四处都可能冒哨兵。
   try {
     let started: unknown
     try {
-      // 求值序列（createContext → bootstrap → jsLib → started）收在共享体里：worker 经 toString()
-      // 注入同一份——两份实现 = 两套语义，改一处漏一处。错误按段打标（phase/timedOut），映射在这层。
+      // 求值序列（createContext → bootstrap → jsLib → started）收在共享体里，worker 经 toString() 注入同一份
+      // ——两份实现 = 两套语义。
       started = runInContextVm(vm, {
         hostCall,
         bootstrap: BOOTSTRAP,
@@ -602,9 +560,8 @@ async function evalJsCore(call: JsCall): Promise<JsOutcome> {
       const ret = await Promise.race([
         started,
         new Promise<never>((_, reject) => {
-          // 主线程这条 race 用的是**整额预算**、不加宽限：这里的 await 全在本 realm 里推进，
-          // 没有「等主线程替 worker 服务一发宿主调用」那种额外往返。worker 那条才加
-          // `ASYNC_GRACE_MS`（见 `evalJsInWorker`），两处的差是 realm 结构决定的，不是漂移。
+          // 主线程这条 race 用**整额预算**、不加宽限：await 全在本 realm 推进，没有「等主线程替 worker 服务宿主
+          // 调用」那趟往返；worker 那条才加 `ASYNC_GRACE_MS`。
           timer = setTimeout(() => reject(TIMEOUT), timeout)
           timer.unref()
         }),
@@ -616,12 +573,11 @@ async function evalJsCore(call: JsCall): Promise<JsOutcome> {
       throw jsErr(e, code, loc, facet, prefixOfPhase(undefined))
     } finally {
       if (timer) clearTimeout(timer)
-      // unhandledRejection 防线常驻（不再此处摘除）——见 rejection-guard.ts 的 acquireRejectionGuard
+      // unhandledRejection 防线常驻，不在此摘除（见 rejection-guard.ts）
     }
   } catch (e) {
     if (!needsSyncBridge(e)) throw e
-    // 别名写法调 ajax（java["ajax"] / 解构 / 动态键）：主线程给不出同步语义，
-    // 换 worker 重跑同一段。已产生的日志丢弃——否则同一段脚本的 console.log 会出现两遍。
+    // 别名写法调 ajax（java["ajax"] / 解构 / 动态键）：主线程给不出同步语义，换 worker 重跑；日志已产生的丢弃。
     logs.length = 0
     return evalJsInWorker({
       bootstrap: BOOTSTRAP, init: initOf(true), code, wrapped, jsLib: jsLibCode, timeout,
@@ -630,24 +586,13 @@ async function evalJsCore(call: JsCall): Promise<JsOutcome> {
   }
 }
 
-/** A-a 共享求值体：createContext → bootstrap → jsLib → started（脚本/函数体两形态）。
- *  主线程直调；worker 经 `toString()` 注入（`new Worker(src, {eval:true})` 字符串交付）——
- *  两份实现 = 两套语义，改一处漏一处，所以收成这一份。**闭包自由是硬约束**：引用任何模块级
- *  符号（wrappedFormOf / jsErr / …）在 worker 里就是 ReferenceError，由
- *  `runInContextVm 与 sanitizeForPost 闭包自由` 钉子守住。vm 由入参传入（主线程传 node:vm
- *  命名空间，worker 传 `require('node:vm')`）。
- *  **export 明写为测试缝**（测试钉 `toString()` 自含；语义由主线程/worker 两条路的往返用例间接覆盖），
- *  不为生产导出面加宽。
- *
- *  错误约定：bootstrap / jsLib / compile 三段 catch 给错误对象挂 `phase` 与 `timedOut`
- *  （`/Script execution timed out/i` 判——worker 边界只过得来 message/stack 与自挂属性），
- *  然后 rethrow **原错误**；异步完成值抛错不打标（两路本来就同为「脚本执行抛错」）。
- *  前缀映射住主线程侧（`prefixOfPhase`，两处调用点共读一份），共享体只负责打标。
- *  返回 `started`（可能是 promise 或值，不 await——异步段由调用方的 race 约束）。
- *
- *  **非严格模式（钉死）**：书源脚本按 sloppy 语义执行，`next = []` 这类未声明赋值就是写全局，
- *  输入脚本有靠这一语义工作的形态（现量读数住在矩阵行 `h-rhino-vs-vm` 的 note）。逃逸防御不靠严格模式：
- *  vm realm 隔离 + 宿主入口锁死才是边界（eval 允许，但不跨 realm），见 BOOTSTRAP 顶注。 */
+/** A-a 共享求值体：createContext → bootstrap → jsLib → started（脚本/函数体两形态）。主线程直调；worker 经
+ *  `toString()` 注入——两份实现 = 两套语义，故只留一份。**闭包自由是硬约束**：引用任何模块级符号
+ *  （wrappedFormOf / jsErr / …）在 worker 里就是 ReferenceError（有钉子守住）。**export 明写为测试缝**。
+ *  错误约定：bootstrap / jsLib / compile 三段 catch 挂 `phase` 与 `timedOut` 后 rethrow **原错误**；异步完成
+ *  值抛错不打标。前缀映射住主线程侧（`prefixOfPhase`）。返回 `started` 不 await。
+ *  **非严格模式（钉死）**：书源脚本按 sloppy 语义执行，`next = []` 这类未声明赋值就是写全局（读数住矩阵行
+ *  `h-rhino-vs-vm`）。逃逸防御不靠严格模式，边界是 vm realm 隔离 + 宿主入口锁死。 */
 export function runInContextVm(
   vmMod: typeof vm,
   deps: {
@@ -685,9 +630,8 @@ export function runInContextVm(
     throw tag(e, 'bootstrap')
   }
 
-  // jsLib（源级全局函数库）：先于用户代码在同一上下文执行——函数定义落全局，用户 @js 里直接
-  // 调用。它本身不是求值目标：抛错如实上报（jsLib 坏了整源的 js 都不可信）。用**已解析**的库
-  // 文本（URL 字典在 evalJs 顶部下载拼好）——两条路必须同一份，否则同一源在两路少一层库。
+  // jsLib（源级全局函数库）：先于用户代码在同一上下文执行，函数定义落全局供用户 @js 直调。抛错如实上报
+  // （jsLib 坏了整源的 js 都不可信）；两条路必须用同一份**已解析**文本。
   if (deps.jsLib.trim() !== '') {
     try {
       vmMod.runInContext(deps.jsLib, context, { timeout: deps.timeout })
@@ -696,17 +640,14 @@ export function runInContextVm(
     }
   }
 
-  // key/page/result/baseUrl/source/src/book/chapter 已由 bootstrap 注入为全局——wrapper 不再声明
-  // 同名参数（输入脚本有 `let page = java.get("page")` 的重声明形态，参数位会撞 Identifier already declared）。
-  // wrapped 文本在 evalJs 顶部构造一次（主线程与 worker 共用同一份，worker 经 workerData 拿成品串）。
+  // key/page/result/baseUrl/source/src/book/chapter 已由 bootstrap 注入为全局——wrapper 不再声明同名参数
+  // （`let page = java.get("page")` 的重声明会撞 Identifier already declared）。
   let started: unknown
   try {
     if (deps.scriptForm) {
-      // 脚本形态：完成值即结果；**编译期** SyntaxError（顶层 return/await）回落函数体形态。
-      // 判别必须在编译期（new Script 只编译不执行）：按执行后的异常类名判会把运行时 SyntaxError
-      // （JSON.parse 坏串等）误当顶层 return 回落，表达式脚本恒 Miss（比报错更坏，见
-      // json-parse-object-idempotent 钉子）。跨 realm `instanceof SyntaxError` 不成立，
-      // 按 constructor.name 判定。
+      // 脚本形态：完成值即结果；**编译期** SyntaxError（顶层 return/await）回落函数体形态。判别必须在编译期
+      // （new Script 只编译不执行）：按运行时异常类名判会把运行时 SyntaxError 误当顶层 return，表达式脚本
+      // 恒 Miss。跨 realm `instanceof SyntaxError` 不成立，按 constructor.name 判定。
       let asScript = true
       try {
         new vmMod.Script(deps.code)
@@ -724,41 +665,29 @@ export function runInContextVm(
   return started
 }
 
-/** 函数体形态（wrapped）文本：把用户代码包进 async IIFE，`return` 有处可去。
- *  主线程与 worker 共用这一份构造（worker 经 workerData 拿成品串，见 evalJs）。 */
+/** 函数体形态（wrapped）文本：把用户代码包进 async IIFE，`return` 有处可去。主线程与 worker 共用。 */
 function wrappedFormOf(code: string): string {
   return `;(async function (result, baseUrl, source, java, cookie, console) {\n${code}\n}).apply(undefined, [__d__.result, __d__.baseUrl, __src__, java, cookie, console])`
 }
 
 // ── java.ajax 同步桥（worker + SharedArrayBuffer RPC）────────────────────
 //
-// `java.ajax` 的语义是同步返回响应 body；Node 主线程 vm 无法阻塞 await——语义由**桥**给
-// （worker 同步返回 / 主线程抛哨兵），不由正则给。两条路：① SYNC_WORKER_RE 认出可能的 ajax 形态
-// → evalJs 直接把整段路由进 worker（性能启发，省一趟白跑）；② 认不出的等价写法在主线程撞哨兵 →
-// evalJs 捕获后换 worker 重跑同一段（见 needsSyncBridge，请求没发出去，不多打站点）。
-// worker 里的 __host_call__ 把 (name, argsJson) 写进请求 SAB 后 Atomics.wait 阻塞，主线程经
-// message 唤醒后用同一个 `call` 异步服务（fetch / 引擎递归 / console / 元素桥），响应回写 + notify。
-// 逃逸防御不变：同一份 BOOTSTRAP + 宿主入口锁死 + Error.prepareStackTrace 已锁（eval 允许；vm 是
-// 纵深防御层，不是 OS 沙箱），SAB 上只有 JSON 字符串。超时双闸：
-// worker 内 vm timeout 杀同步死循环，主线程 Promise.race（timeout + 5s）后 terminate。
-// worker 代码以字符串交付（tsdown 打包后无独立文件可解析），BOOTSTRAP/init/code/wrapped 全走
-// workerData，不产生第二份引导抄本；求值序列本体由 runInContextVm 共享——worker 经 toString()
-// 注入同一份（见 WORKER_SRC 顶）。
+// `java.ajax` 的语义是同步返回响应 body；Node 主线程 vm 无法阻塞 await，语义由桥给（worker 同步返回 /
+// 主线程抛哨兵），不由正则给。两条路：① SYNC_WORKER_RE 认出 ajax 形态 → 直接路由进 worker；
+// ② 认不出的等价写法撞哨兵 → 换 worker 重跑（请求没发出去，不多打站点）。worker 里 __host_call__ 把
+// (name, argsJson) 写进请求 SAB 后 Atomics.wait 阻塞，主线程经 message 唤醒后异步服务，响应回写 + notify；
+// SAB 上只有 JSON 字符串。超时双闸：worker 内 vm timeout 杀同步死循环，主线程 race 后 terminate。
+// worker 代码以字符串交付（打包后无独立文件可解析），BOOTSTRAP/init/code/wrapped 全走 workerData。
 
-// 路由谓词住协议表（js-protocol 的 `SYNC_WORKER_RE`，由全局松散支 + 各 async 行的
-// routePattern 拼出）——此处只消费，不养第二份手写正则（口径与被否方案见 ADR-0005）。
+// 路由谓词住协议表（js-protocol 的 `SYNC_WORKER_RE`）——此处只消费，不养第二份手写正则（见 ADR-0005）。
 const SAB_REQ_BYTES = 4 * 1024 * 1024
 const SAB_RESP_BYTES = 16 * 1024 * 1024
 
-/** 完成值过界前的清洗（worker 回传 ret 前那一步的唯一实现）：null/undefined→null、
- *  String 对象→String 原文、function→String、object→JSON 兜底 String(v)。
- *  **闭包自由**——与 runInContextVm 同款经 toString() 注入 worker（见 WORKER_SRC）：
- *  引用模块级符号在 worker 里就是 ReferenceError，由闭包自由钉子守住。
- *  **export 明写为测试缝**（测试钉 `toString()` 自含；语义由主线程/worker 两条路的往返用例间接覆盖），
- *  不为生产导出面加宽。 */
+/** 完成值过界前的清洗（唯一实现）：null/undefined→null、String 对象→原文、function→String、object→JSON 兜底。
+ *  **闭包自由**——与 runInContextVm 同款经 toString() 注入 worker。 */
 export function sanitizeForPost(v: unknown): unknown {
-  // 原值留一份 unknown 形的 alias：下面的分支把 v 收窄成对象之后，兜底串化仍要按**过线原值**口径走
-  // （循环引用 / 含 BigInt 的对象过不去 JSON，回退脚本侧 String(v)），不是把对象读成可读串。
+  // 原值留一份 unknown 形 alias：下面把 v 收窄成对象后，兜底串化仍按**过线原值**口径走（循环引用 / 含
+  // BigInt 的对象过不去 JSON，回退 String(original)）。
   const original: unknown = v
   if (v === null || v === undefined) return null
   const t = Object.prototype.toString.call(v)
@@ -848,8 +777,7 @@ async function evalJsInWorker(a: WorkerRunArgs): Promise<JsOutcome> {
     workerData: {
       bootstrap: a.bootstrap, init: a.init, code: a.code, wrapped: a.wrapped, jsLib: a.jsLib,
       timeout: a.timeout, scriptForm: a.scriptForm,
-      // worker 侧宿主往返死线：必须严格晚于外层 race（timeout + ASYNC_GRACE_MS）才不产生第二错源，
-      // 差额就是 WORKER_RPC_MARGIN_MS（terminate 落地余量）
+      // worker 侧死线必须严格晚于外层 race（timeout + ASYNC_GRACE_MS）才不产生第二错源
       rpcDeadlineMs: a.timeout + ASYNC_GRACE_MS + WORKER_RPC_MARGIN_MS,
       reqSab, respSab, reqFlagSab, respFlagSab,
     },
@@ -857,9 +785,8 @@ async function evalJsInWorker(a: WorkerRunArgs): Promise<JsOutcome> {
   const serviceRpc = async (): Promise<void> => {
     let out: string
     try {
-      // 帧解析也在 try 内：畸形长度或非 JSON 帧必须以 {__error} 回包让 worker 从 Atomics.wait
-      // 醒来，不能落在 `void serviceRpc()` 上变成 unhandled rejection——那样 worker 一直挂到
-      // 外层 race（timeout + `ASYNC_GRACE_MS`）才被 terminate，用户看到的是整段 js 卡死。
+      // 帧解析也在 try 内：畸形帧必须以 {__error} 回包让 worker 从 Atomics.wait 醒来——否则会变成
+      // unhandled rejection，worker 挂到外层 race 才被 terminate。
       const len = new DataView(reqSab).getInt32(0, true)
       const [name, argsJson] = JSON.parse(new TextDecoder().decode(new Uint8Array(reqSab).subarray(4, 4 + len))) as [string, string]
       const r = await a.call(name, argsJson)
@@ -885,21 +812,18 @@ async function evalJsInWorker(a: WorkerRunArgs): Promise<JsOutcome> {
         clearTimeout(timer)
         resolve(m)
       })
-      // worker 边界不做 Error 归一：脚本 realm 里 `throw` 的任何值都原样进这个事件。
-      // 过界前先走 `jsErr` 这唯一转换口——它从原对象取 message 与栈里的行号，就地包一层
-      // 新 Error 只会把脚本自己的那一行洗成宿主帧；下游 catch 认 JsSandboxError 原样抛。
+      // worker 边界不做 Error 归一：脚本 realm 里 `throw` 的任何值都原样进这个事件。过界前走 `jsErr` 唯一转换口
+      // ——就地包新 Error 会把脚本自己的那一行洗成宿主帧。
       worker.on('error', (e: unknown) => { clearTimeout(timer); reject(jsErr(e, a.code, a.loc, a.facet, prefixOfPhase(undefined))) })
       worker.on('exit', (code) => { clearTimeout(timer); reject(new Error(`js worker 提前退出（code ${code}）`)) })
     })
     if (!result.ok) {
       // 超时：优先共享体打的 timedOut 标（bootstrap/jsLib/compile 三段同步超时），无标再按
-      // message 正则兜底（`ERR_SCRIPT_EXECUTION_TIMEOUT` 的 code 留在对端 realm，只有 message
-      // 过得来）——同一条件在主线程与 worker 两条路上必须报同一种错「脚本超时（>Nms）」。
+      // message 正则兜底（超时 code 留在对端 realm，只有 message 过得来）。两路必须报同一种错。
       if (result.timedOut ?? /Script execution timed out/i.test(result.message ?? '')) {
         throw jsTimeoutErr(a.timeout, a.code, a.loc, a.facet)
       }
-      // 前缀按共享体的 phase 标从同一张表选（prefixOfPhase，与主线程 catch 共读）——
-      // 无标（异步完成值抛错）落「脚本执行抛错」，两路同口径。
+      // 前缀按共享体的 phase 标从同一张表选——无标（异步完成值抛错）落「脚本执行抛错」。
       throw jsErr({ message: result.message, stack: result.stack }, a.code, a.loc, a.facet, prefixOfPhase(result.phase))
     }
     return { value: toEngineValue(result.ret), logs: a.logs }
@@ -924,9 +848,8 @@ function toEngineValue(ret: unknown): EngineValue {
   return { kind: 'value', text: textOf(ret) }
 }
 
-/** js 数组产物的元素字符串化：字符串原样；元素包装对象（String 对象/带 html 字段）取原文/inner html；
- *  其余对象 JSON.stringify（与 jsonpath 元素口径一致——`java.getElements(...)` 产物经链尾
- *  序列化后，后继 `$.x` 规则能对条目 JSON 求值） */
+/** js 数组产物的元素字符串化：字符串原样；带 html 字段的元素取 inner html；其余对象
+ *  JSON.stringify（与 jsonpath 元素口径一致，后继 `$.x` 规则能对条目 JSON 求值） */
 function serializeJsElement(x: unknown): string {
   if (typeof x === 'string') return x
   if (Object.prototype.toString.call(x) === '[object String]') return textOf(x)
@@ -938,22 +861,20 @@ function serializeJsElement(x: unknown): string {
   return textOf(x)
 }
 
-/** 协议响应恒为 JSON 串：`JSON.stringify` 的类型面声明返回 string，但 undefined / function / symbol
- *  实参在运行期返回 undefined（类型面在这一处撒谎）。桥必须回一条脚本能 JSON.parse 的串，故兜底 'null'。 */
+/** 协议响应恒为 JSON 串：`JSON.stringify` 类型面声明返回 string，但 undefined / function / symbol 实参运行期
+ *  返回 undefined——桥必须回一条脚本能 JSON.parse 的串，故兜底 'null'。 */
 function jsonText(v: unknown): string {
   const text: unknown = JSON.stringify(v)
   return typeof text === 'string' ? text : 'null'
 }
 
-/** 引导层载荷（`__elem.*` / `__pkg.*` 的实参）：BOOTSTRAP 恒送 JSON 对象；非对象是接线自伤，
- *  按空载荷走——与「直接取字段」的可观测结果同（字段全 undefined）。 */
+/** 引导层载荷（`__elem.*` / `__pkg.*` 的实参）：BOOTSTRAP 恒送 JSON 对象，非对象按空载荷走。 */
 function wireRecord(v: unknown): Record<string, unknown> {
   return v !== null && typeof v === 'object' ? (v as Record<string, unknown>) : {}
 }
 
-/** 宿主侧唯一入口：与沙箱引导层约定 (name, argsJson) → JSON 字符串（ajax 为 Promise<string>）。
- *  方法分派查协议表（js-protocol.invokeJavaMethod），无逐案 switch；console.* 是引导层日志
- *  通道、不属 java 协议，在此特判（收集进 logs，可选透传宿主 console）。 */
+/** 宿主侧唯一入口：与引导层约定 (name, argsJson) → JSON 字符串（ajax 为 Promise<string>）。方法分派查
+ *  协议表，无逐案 switch；console.* 是日志通道、不属 java 协议，在此特判。 */
 function makeHostCall(
   deps: BridgeDeps,
   logs: string[],
@@ -968,14 +889,14 @@ function makeHostCall(
       else hostConsole?.error(...arr)
       return 'null'
     }
-    // 元素包装对象的宿主侧求值（__elem.*）：cheerio 在宿主 realm 求值，返回纯 JSON——
-    // 不进协议表（它不是 java.* 面，是沙箱包装对象的内部桥），与 console.* 同为特判通道
+    // 元素包装对象的宿主侧求值（__elem.*）：cheerio 在宿主 realm 求值，返回纯 JSON。不进协议表——它是
+    // 沙箱包装对象的内部桥、不是 java.* 面，与 console.* 同为特判通道
     if (name.startsWith('__elem.')) {
       const payload: unknown = JSON.parse(argsJson)
       return jsonText(elemHostOp(name.slice('__elem.'.length), wireRecord(payload)))
     }
-    // Packages.* 的宿主重活（__pkg.*）：PNG 解码 / AES-CBC / HMAC / 字节→串——同 __elem 纪律，
-    // 不进协议表（它是 Packages 包路径面，不是 java.* 方法），返回纯 JSON
+    // Packages.* 的宿主重活（__pkg.*）：PNG 解码 / AES-CBC / HMAC / 字节→串——它是 Packages 包路径面、
+    // 不是 java.* 方法，故不进协议表，返回纯 JSON
     if (name.startsWith('__pkg.')) {
       const payload: unknown = JSON.parse(argsJson)
       return jsonText(pkgHostOp(name.slice('__pkg.'.length), wireRecord(payload), deps.ctx))
@@ -984,24 +905,19 @@ function makeHostCall(
     const args: unknown[] = Array.isArray(parsed) ? parsed : [parsed]
     const out = invokeJavaMethod(deps, name, args)
     if (out instanceof Promise) return out.then(jsonText)
-    // undefined（java.get 未命中 / void 方法）由 jsonText 兜底成 'null'：桥恒回脚本能 JSON.parse 的串
     return jsonText(out)
   }
 }
 
-/** cookie 垫片存储：按源隔离的脚本键值表（输入脚本有 cookie.removeCookie(url) 后再 ajax 的形态）。
- *  它**不是**请求层的 CookieJar——域/路径/过期匹配归 `services/cookies.ts`，两者不是一张表。
- *  存储本体归 SourceSession：这里只是进程级缺省实例的后仓。 */
+/** cookie 垫片存储：按源隔离的脚本键值表。它**不是**请求层的 CookieJar——域/路径/过期匹配归
+ *  `services/cookies.ts`。存储本体归 SourceSession，这里只是进程级缺省实例的后仓。 */
 const COOKIE_JARS = new Map<string, Map<string, string>>()
 
-/** 源级状态的四张进程级表（本仓按源建档）：COOKIE_JARS（cookie 垫片）、SOURCE_VARS（source.put/get
- *  的键值表）、SOURCE_STRINGS（source.setVariable/getVariable 的单串槽）、CACHE_STORES（cache 垫片）。
- *  四者必须分开——把串槽与键值表塞进同一张 Map 会让 setVariable 顺手 clear() 整表（见 SourceSession 注释）。
- *  这组是**进程内缺省实现**；生产组合根注入 `services/source-session.ts` 的 `FileSourceSession`
- *  （source-state.json，跨重启；矩阵 `h-source-variable-persistence`）。 */
+/** 源级状态的四张进程级表：COOKIE_JARS、SOURCE_VARS（source.put/get）、SOURCE_STRINGS（setVariable 的单串槽）、
+ *  CACHE_STORES（cache 垫片）。四者必须分开——合并会让 setVariable 顺手 clear() 整表。生产组合根注入
+ *  `services/source-session.ts` 的 `FileSourceSession`（矩阵 `h-source-variable-persistence`）。 */
 const SOURCE_VARS = new Map<string, Map<string, string>>()
 
-/** 进程级三张表（生产）：按源建档、跨调用/跨服务实例存活 */
 const SOURCE_STRINGS = new Map<string, string>()
 const CACHE_STORES = new Map<string, Map<string, string>>()
 
@@ -1014,7 +930,7 @@ function keyedStore(get: () => Map<string, Map<string, string>>): (sourceKey: st
   }
 }
 
-/** 三张表的会话装配（进程级与隔离实例只差在取哪一组 Map） */
+/** 表的会话装配（进程级与隔离实例只差在取哪一组 Map） */
 function sessionOf(
   jars: Map<string, Map<string, string>>,
   vars: Map<string, Map<string, string>>,
@@ -1035,10 +951,10 @@ function sessionOf(
   }
 }
 
-/** 进程级缺省会话（生产）：按源建档、跨调用/跨服务实例存活 */
+/** 进程级缺省会话（生产） */
 export const processSession: SourceSession = sessionOf(COOKIE_JARS, SOURCE_VARS, SOURCE_STRINGS, CACHE_STORES)
 
-/** 全新隔离会话（测试）：与进程级实例、与其他隔离实例互不可见——跨源污染用例的入口 */
+/** 全新隔离会话（测试）：与进程级实例、与其他隔离实例互不可见 */
 export function createSourceSession(): SourceSession {
   return sessionOf(
     new Map<string, Map<string, string>>(), new Map<string, Map<string, string>>(),
@@ -1047,20 +963,16 @@ export function createSourceSession(): SourceSession {
 }
 
 function jsErr(e: unknown, code: string, loc: SegmentLoc, facet: Facet, prefix: string): JsSandboxError {
-  // e 的形参是 unknown（脚本可 `throw { message, stack }`，worker 边界回来的也是这个形状）
   const msg = messageOf(e)
   const frame = e !== null && typeof e === 'object' ? (e as { stack?: unknown }).stack : undefined
   const line = parseLineFromStack(typeof frame === 'string' ? frame : '')
-  // 行号缺席就整键不建（`errors.ts` 的 loc 侧按「有没有这个键」决定消息里带不带「第 N 行」，
-  // 而 `line ?` 对 undefined 与缺席同判——不建键比塞一个 undefined 更贴近「无行号」这件事）
+  // 行号缺席就整键不建（errors.ts 按「有没有这个键」决定消息里带不带「第 N 行」；`line ?` 对 undefined
+  // 与缺席同判）
   return new JsSandboxError(`${prefix}：${msg}`, { ...loc, facet, script: code, ...(line === undefined ? {} : { line }) })
 }
 
-/** 共享体错误标 → 错误前缀（**主线程 catch 与 evalJsInWorker 两处调用点共读这一份**——
- *  映射抄成两份就会两路漂：worker 把 phase 随 message 带出边界后，这里按同一张表选前缀。
- *  无标（异步完成值抛错）→ 脚本执行抛错，两路本来就同此口径。前缀串里只有「脚本超时」进
- *  `tests/content-audit-classify.ts` 的 `CODE_ANCHORS`（按字面存活校验）；编译前缀只在该文件的
- *  `RUNTIME_ANCHORS` 里刻意认运行时措辞，其余前缀不是锚点——改文案前先看清落哪一栏。 */
+/** 共享体错误标 → 错误前缀（两处共读一份）。只有「脚本超时」进 `tests/content-audit-classify.ts` 的
+ *  `CODE_ANCHORS`。 */
 function prefixOfPhase(phase: string | undefined): string {
   if (phase === 'bootstrap') return '沙箱初始化失败'
   if (phase === 'jsLib') return 'jsLib 执行失败'
@@ -1076,32 +988,30 @@ function isVmTimeout(e: unknown): boolean {
   return (e as NodeJS.ErrnoException | undefined)?.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT'
 }
 
-/** 主线程那臂的哨兵值住 js-protocol（抛它的那几段由 `asyncBridgeSource` 生成），这里只认它。
- *  内层 catch 会把它包成 JsSandboxError，但 jsErr 是 `${prefix}：${msg}` 拼接，原文仍在 message 里，
- *  故按子串判定即可。 */
+/** 主线程那臂的哨兵值住 js-protocol（抛它的那几段由 `asyncBridgeSource` 生成），这里只认它。内层 catch
+ *  会把它包成 JsSandboxError，但 jsErr 是 `${prefix}：${msg}` 拼接、原文仍在 message 里，故按子串判定。 */
 function needsSyncBridge(e: unknown): boolean {
   const message = e !== null && typeof e === 'object' ? (e as { message?: unknown }).message : undefined
   return textOf(message ?? '').includes(SYNC_AJAX_SENTINEL)
 }
 
 function parseLineFromStack(stack: string): number | undefined {
-  // wrapper 首行偏移 1：从 <anonymous>:N:M 提取 N（vm 脚本名 evalmachine.<anonymous>）
+  // wrapper 首行偏移 1：从 <anonymous>:N:M 提取 N
   const withCol = stack.match(/<anonymous>:(\d+):\d+/)
   if (withCol) return Math.max(1, Number(withCol[1]) - 1)
-  // 语法错误栈无列号形态（evalmachine.<anonymous>:N）
   const noCol = stack.match(/<anonymous>:(\d+)\b/)
   if (noCol) return Math.max(1, Number(noCol[1]) - 1)
-  // 无行号信息 → undefined。不要兜底成 1：那会**谎报「第 1 行」**；errors 侧 `loc.line ?` 据此省略行号。
+  // 无行号信息 → undefined。不要兜底成 1：那会**谎报「第 1 行」**（errors 侧 `loc.line ?` 据此省略）。
   return undefined
 }
 
 // ── jsLib 两形态（裸文本 / URL 字典）───────────────────────────────
-// 裸 JS 文本，或 `{"名字":"https://…/x.js"}` URL 字典（下载后按 URL 原文缓存）。解析发生在 evalJs
-// 顶部——SYNC_WORKER_RE 因此能看到下载后的库代码，库里含 java.ajax 的源才会被正确送进 worker。
+// 裸 JS 文本，或 `{"名字":"https://…/x.js"}` URL 字典（下载后按 URL 原文缓存）。解析发生在 evalJs 顶部
+// ——SYNC_WORKER_RE 因此能看到下载后的库代码，库含 java.ajax 的源才会被送进 worker。
 const JSLIB_URL_CACHE_MAX = 32
 const jsLibUrlCache = new Map<string, string>()
 
-/** 值是 URL 字典才返回清单；否则 null（裸 JS 文本里出现 `{` 开头对象字面量的形态不当字典解析） */
+/** 值是 URL 字典才返回清单；否则 null（裸 JS 文本里 `{` 开头的对象字面量不当字典解析） */
 function jsLibUrlDict(jsLib: string): string[] | null {
   if (!jsLib.trim().startsWith('{')) return null
   let obj: unknown
@@ -1128,8 +1038,7 @@ async function resolveJsLib(
       try {
         body = (await ctx.fetch(url)).body
       } catch (e) {
-        // 下载失败如实抛（错误文案「下载jsLib-<url>失败」）：少一层库会让后面的脚本
-        // 报「xxx is not a function」，把库缺失伪装成脚本错误
+        // 下载失败如实抛：少一层库会让后面的脚本报「xxx is not a function」，把库缺失伪装成脚本错误
         throw new JsSandboxError(`jsLib 下载失败：${url}（${e instanceof Error ? e.message : String(e)}）`, { ...loc, facet, script: jsLib.slice(0, 200) })
       }
       if (jsLibUrlCache.size >= JSLIB_URL_CACHE_MAX) jsLibUrlCache.delete(jsLibUrlCache.keys().next().value as string)

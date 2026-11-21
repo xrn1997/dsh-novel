@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { ReaderSession } from '../../src/client/reader-session.js'
-import type { ReaderSessionDeps, VisibleNode } from '../../src/client/reader-session.js'
-import type { ChapterAnchor } from '../../src/client/progress.js'
+import type { ReaderSessionDeps } from '../../src/client/reader-session.js'
 import type { ChapterContent, ChapterEntry, NavigationItem } from '../../src/client/views/types.js'
+import { fakePort } from './reader-fakes.js'
+import { tick } from '../support/async.js'
 import { last, pick } from '../support/fixture.js'
 
 /**
@@ -51,30 +52,6 @@ const nav: NavigationItem[] = [
   },
 ]
 
-/** 可编程假 port（与 reader-session.test 同款，只留本文件要用的旋钮） */
-function fakePort() {
-  const port = {
-    anchors: [] as ChapterAnchor[],
-    top: 0,
-    chapterOff: null as number | null,
-    targetOffs: new Map<string, number>(),
-    node: null as VisibleNode | null,
-    tops: [] as number[],
-    measureAnchors: (): ChapterAnchor[] => port.anchors,
-    scrollTop: (): number => port.top,
-    setScrollTop: (px: number): void => { port.top = px; port.tops.push(px) },
-    viewHeight: (): number => 1000,
-    scrollHeight: (): number => 5000,
-    sentinelOffset: (): number | null => null,
-    targetOffset: (_i: number, anchorId: string | null): number | null =>
-      (anchorId === null ? port.chapterOff : (port.targetOffs.get(anchorId) ?? null)),
-    targetOffsets: (i: number, anchorIds: ReadonlyArray<string | null>): Array<number | null> =>
-      anchorIds.map((anchorId) => port.targetOffset(i, anchorId)),
-    currentNode: (): VisibleNode | null => port.node,
-  }
-  return port
-}
-
 function makeHarness(opts?: { navigation?: NavigationItem[] }): {
   session: ReaderSession
   port: ReturnType<typeof fakePort>
@@ -97,8 +74,6 @@ function makeHarness(opts?: { navigation?: NavigationItem[] }): {
   }
   return { session: new ReaderSession(deps, port, 5), port, fetched, saves }
 }
-
-const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 
 describe('图文载荷（rich 树进已载表，节点 ID 就是锚点查表键）', () => {
   it('rich 章原样进已载表（会话不转文本、不拆节点）', async () => {

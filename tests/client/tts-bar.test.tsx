@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { createElement } from 'react'
-import { ROUTES, TTS_RATE, planarNavigation } from '../../src/shared/wire.js'
+import { ROUTES, TTS_RATE } from '../../src/shared/wire.js'
 import type {
   ChapterContent, ChapterEntry, RouteTarget, ShelfEntry, TtsSourceInfo, WriteMethod,
 } from '../../src/shared/wire.js'
@@ -15,6 +15,7 @@ import { readingPositionAt, readingProbeNow, setReadingProbe } from '../../src/c
 import { ReaderView } from '../../src/client/views/ReaderView.js'
 import { makeReaderDeps } from './fake-deps.js'
 import type { DepsOverrides, FakeReaderDeps } from './fake-deps.js'
+import { readerRouteGet, readerRouteGetMock } from './reader-fakes.js'
 import { must } from '../support/fixture.js'
 import { FakeAudio, FakeSpeechSynthesis, FakeUtterance, FakeVoice } from './tts-fakes.js'
 
@@ -40,11 +41,6 @@ let chapterTexts: string[][]
 let shelf: ShelfEntry[]
 let ttsSources: TtsSourceInfo[]
 
-function indexOf(path: string): number {
-  const m = /[?&]index=(\d+)/.exec(path)
-  return m === null ? 0 : Number(m[1])
-}
-
 function textOf(index: number): string {
   return must(chapterTexts[index], `chapter text ${index}`).join('\n')
 }
@@ -65,18 +61,15 @@ function readerDeps(
   chapterGates: ReadonlyMap<number, Promise<void>> = new Map(),
 ): FakeReaderDeps {
   return makeReaderDeps({
-    apiGet: vi.fn(async (path: string) => {
-      if (path.startsWith('navigation')) {
-        const chapters = chapterNames.map((name) => chapter(name))
-        return { chapters, items: planarNavigation(chapters) }
-      }
-      if (path.startsWith('chapter')) {
-        const gate = chapterGates.get(indexOf(path))
+    apiGet: readerRouteGetMock({
+      chapters: () => chapterNames.map((name) => chapter(name)),
+      chapter: async (index) => {
+        const gate = chapterGates.get(index)
         if (gate !== undefined) await gate
-        return { kind: 'text', text: textOf(indexOf(path)) } satisfies ChapterContent
-      }
-      if (path === ROUTES.ttsSources.path) return { sources: ttsSources, hostSpeech: { state: 'absent' } }
-      return shelf
+        return { kind: 'text', text: textOf(index) } satisfies ChapterContent
+      },
+      ttsSources: () => ({ sources: ttsSources, hostSpeech: { state: 'absent' } }),
+      shelf: () => shelf,
     }),
     ...over,
   })
@@ -136,14 +129,13 @@ beforeEach(() => {
   shelf = []
   ttsSources = [{ id: 'builtin:baidu', kind: 'builtin' }]
 
-  vi.mocked(apiGet).mockImplementation(async (path: string) => {
-    if (path.startsWith('navigation')) {
-      return { chapters: chapterNames.map((name) => chapter(name)), items: [] }
-    }
-    if (path.startsWith('chapter')) return { kind: 'text', text: textOf(indexOf(path)) }
-    if (path === ROUTES.shelf.path) return shelf
-    throw new Error(`unexpected GET ${path}`)
-  })
+  vi.mocked(apiGet).mockImplementation(readerRouteGet({
+    chapters: () => chapterNames.map((name) => chapter(name)),
+    chapter: (index) => ({ kind: 'text', text: textOf(index) }),
+    navigation: () => [],
+    shelf: () => shelf,
+    strict: true,
+  }))
   vi.mocked(apiSend).mockImplementation(async (target: RouteTarget<WriteMethod>, body?: unknown) => {
     if (target.path === ROUTES.ttsSynthesize.path) {
       const record = (body ?? {}) as { text?: unknown }

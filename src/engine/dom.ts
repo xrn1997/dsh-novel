@@ -3,7 +3,6 @@ import type { Cheerio } from 'cheerio'
 import { isTag, isText } from 'domhandler'
 import type { AnyNode } from 'domhandler'
 
-/** cheerio.load 薄封装，供 select / css 段共用 */
 export function loadHtml(html: string): cheerio.CheerioAPI {
   return cheerio.load(html)
 }
@@ -14,13 +13,10 @@ export function cleanText(s: string): string {
 }
 
 /**
- * 节点子树原始文本（cheerio `.text()` 口径：含脚本/样式文本、不含注释）——判定用的文本只这一份。
- * 与 `nodeText` 的分工按用途分：这一份喂 `:contains` 与 XPath 谓词（判定要看元素的全部文字，
- * 换行与实体规约反而会把比对拆岔），那一份喂正文产出（块级边界落成 \n，阅读器据此分段）。
- *
- * 不做子树文本缓存：引擎这一层零内部状态（口径见 `docs/architecture.md` §2），而缓存要在每个
- * 遍历到的后代上留一份子树文本——深嵌套页面的驻留量随嵌套深度乘全文长度，命中却只在同一节点
- * 被重复判定时才有。
+ * 节点子树原始文本（cheerio `.text()` 口径：含脚本/样式文本、不含注释）——**判定用**的文本只这一份：喂
+ * `:contains` 与 XPath 谓词（换行与实体规约会把比对拆岔）。正文产出走 `nodeText`（块级边界落成 \n）。
+ * 不做子树文本缓存：引擎零内部状态（`docs/architecture.md` §2），而缓存要在每个遍历到的后代上留一份子树
+ * 文本——驻留量随嵌套深度乘全文长度，命中却只在同一节点被重复判定时才有。
  */
 export function rawTextOf(node: AnyNode): string {
   if (isText(node)) return node.data
@@ -31,29 +27,24 @@ export function rawTextOf(node: AnyNode): string {
   return out
 }
 
-/** 元素属性读取：非元素节点没有 `attribs`（`as Element` 只是取口的形状声称，文本节点上运行时是空的）。 */
+/** 元素属性读取：非元素节点没有 `attribs`（`as Element` 只是取口的形状声称）。 */
 export function attribOf(node: AnyNode, name: string): string | undefined {
   return isTag(node) ? node.attribs[name] : undefined
 }
 
-/** 元素标签名（非元素节点 → undefined，由调用点按「不匹配」处理）。 */
 export function tagNameOf(node: AnyNode): string | undefined {
   return isTag(node) ? node.name : undefined
 }
 
-/** 判定「上游结果是节点集」（Cheerio 集有 length 与 text()；普通 Value 对象没有） */
 export function isNodeValue(v: unknown): v is Cheerio<AnyNode> {
   return typeof v === 'object' && v !== null && 'length' in v && typeof (v as { text?: unknown }).text === 'function'
 }
 
 // ── 块级感知的纯文本（本插件的正文契约：按 \n 分段）─────────────────────
 //
-// 为什么不是 cheerio 的 .text()：它把整棵子树拼成一整行（`<p>a</p><p>b</p>` → `ab`），
-// 阅读器/导出按 \n 分段就只剩一个巨型段落。本插件不丢字（信息量与「整块一行」一致），
-// 只是把块级边界落成换行（可读性）。
-// 另见 services/content.ts：@html 规则收回来的是 HTML 片段，同一套口径转纯文本。
+// 为什么不是 cheerio 的 .text()：它把整棵子树拼成一整行（`<p>a</p><p>b</p>` → `ab`），阅读器/导出按 \n 分段
+// 就只剩一个巨型段落。本插件不丢字，只把块级边界落成换行。
 
-/** 块级元素：边界即换行（浏览器渲染语义） */
 const BLOCK_TAGS = new Set([
   'p', 'div', 'li', 'ul', 'ol', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
   'blockquote', 'section', 'article', 'aside', 'header', 'footer', 'nav', 'main',
@@ -61,20 +52,17 @@ const BLOCK_TAGS = new Set([
   'dl', 'dt', 'dd', 'pre', 'hr', 'form', 'fieldset', 'address',
 ])
 
-/** 行内元素：只留文本（单独列出用于「像不像 HTML」判定） */
 const INLINE_TAGS = ['br', 'span', 'a', 'em', 'strong', 'b', 'i', 'u', 's', 'font', 'img', 'sub', 'sup', 'small', 'code', 'mark', 'wbr']
 
-/** 非正文元素：整棵子树丢弃（脚本/样式/表单控件/文档头） */
 const SKIP_TAGS = new Set([
   'script', 'style', 'noscript', 'template', 'iframe', 'svg', 'canvas', 'audio', 'video',
   'head', 'title', 'meta', 'link', 'base', 'input', 'button', 'select', 'textarea', 'option',
 ])
 
 /**
- * 节点子树 → 纯文本：块级边界换行、行内标签只留文本、实体解码、逐行收敛空白（空行不留）。
- * 直接吃 domhandler 节点（cheerio 的活节点，不重新解析）。
- * `keepImages`（正文面专用：仅 img 保留，其余标签只留文本）：
- * `<img src>`（缺 src 取 data-src）输出为独立行的图片地址——漫画/图片章节不再整章零命中。
+ * 节点子树 → 纯文本：块级边界换行、行内标签只留文本、实体解码、逐行收敛空白（空行不留）。直接吃 domhandler
+ * 节点。`keepImages`（正文面专用）：`<img src>`（缺 src 取 data-src）输出为独立行的图片地址——漫画/图片章节
+ * 不再整章零命中。
  */
 export function nodeText(node: AnyNode, opts?: { keepImages?: boolean }): string {
   const keepImages = opts?.keepImages === true
@@ -98,20 +86,19 @@ export function nodeText(node: AnyNode, opts?: { keepImages?: boolean }): string
     const tag = el.name.toLowerCase()
     if (tag === 'img') {
       if (keepImages) {
-        // img 取址三形态：src / data-src|src / 任意 data-*——
-        // 懒加载漫画图存在只有 data-original/data-echo/data-page-image-url、src 空着的形态
+        // img 取址三形态：src / data-src / 任意 data-*——懒加载漫画图存在 src 空着、只有
+        // data-original 之类的形态
         const a = el.attribs
         const src = a.src ?? a['data-src'] ?? a['data-original'] ?? a['data-echo']
           ?? a['data-url'] ?? a['data-page-image-url'] ?? firstDataAttr(a)
         if (src.trim() !== '') { flush(); lines.push(src.trim()) }
       }
-      return // 空元素：无子树
+      return
     }
     if (tag === 'noscript' && keepImages) {
-      // 懒加载站点把真实 <img> 藏在 <noscript> 里（无 JS 客户端兜底）——SKIP_TAGS 会整棵丢弃，
-      // 正文面 keepImages 口径下要取回它。但 domhandler 把 noscript 内容按 **raw text** 解析
-      // （noscript.children 只有一个 text 节点、find('img') 为 0），直接下钻等于把字面
-      // `<img src="…">` 当正文吐给读者——所以把那层文本再当 HTML 解析一次再走同一套行规约。
+      // 懒加载站点把真实 <img> 藏在 <noscript> 里（SKIP_TAGS 会整棵丢弃，正文面要取回）。domhandler 把
+      // noscript 内容按 **raw text** 解析（children 只有一个 text 节点），直接下钻等于把字面
+      // `<img src="…">` 当正文吐给读者——故把那层文本再当 HTML 解析一次再走同一套行规约。
       const raw = el.children.map((c) => (isText(c) ? c.data : '')).join('')
       if (raw.trim() === '') return
       flush()
@@ -123,18 +110,18 @@ export function nodeText(node: AnyNode, opts?: { keepImages?: boolean }): string
     if (SKIP_TAGS.has(tag)) return
     const block = BLOCK_TAGS.has(tag)
     if (block || tag === 'br') flush()                       // 换行点：先收上一行
-    if (tag === 'br') return                                 // 空元素：无子树
+    if (tag === 'br') return
     for (const child of el.children) visit(child)
-    if (block) flush()                                       // 块级终点：收本块
+    if (block) flush()
   }
   visit(node)
   flush()
   return lines.join('\n')
 }
 
-/** 「这是一段 HTML 标记」判据：白名单标签名 + **真正的属性语法**（`<p>` / `</p>` / `<br/>` / `<p class="x">`）。
- *  属性段按 ASCII 属性名/值文法收，故 `<b 不是标签>` 这类正文里的尖括号内容不算标签——
- *  判错的方向选保守：漏判只是标签原样显示（源里本就少见），误判会吃掉正文文字。 */
+/** 「这是一段 HTML 标记」判据：白名单标签名 + **真正的属性语法**。属性段按 ASCII 属性名/值文法收，
+ *  故 `<b 不是标签>` 这类正文里的尖括号内容不算标签——判错的方向选保守：漏判只是标签原样显示，
+ *  误判会吃掉正文文字。 */
 const ATTR = String.raw`(?:\s+[a-zA-Z_:][-\w:.]*(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>]+))?)*`
 const TAG_NAME = `(?:${[...BLOCK_TAGS, ...INLINE_TAGS].join('|')})`
 const HTML_TAG_RE = new RegExp(`</?${TAG_NAME}${ATTR}\\s*/?>`, 'i')
@@ -144,7 +131,6 @@ export function looksLikeHtml(s: string): boolean {
   return HTML_TAG_RE.test(s)
 }
 
-/** 任意 data-* 属性兜底（取第一个非空值） */
 function firstDataAttr(attribs: Record<string, string>): string {
   for (const [k, v] of Object.entries(attribs)) {
     if (k.startsWith('data-') && v.trim() !== '') return v

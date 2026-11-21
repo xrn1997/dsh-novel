@@ -1,26 +1,19 @@
 /**
- * Packages 影子宿主面（`__pkg.*`）：`Packages.*` 包路径仿真里需要宿主能力的重活
- * （PNG 解码 / AES-CBC / HMAC / 字节按 charset 解码 / HTTP cookie jar 读写）。
- *
- * 为什么单独成 module：与元素面同款——op 名若分散在 BOOTSTRAP 串与宿主 switch 里，就没有名册。
- * op 名册、宿主实现与沙箱侧 wrapper 源片段同住这里；轻活（流/数组/包装/包路径代理）仍在
- * vm realm 的 wrapper 片段里，界线见 `ADR-0004`。
- *
- * 接口只有「op 名 + JSON → JSON」；外部依赖窄成一格 `httpCookies`（登录面脚本读请求层同一张 jar），
- * 不把整个 `BridgeDeps` 带进来。字节载荷 = number[]（0-255），返回同样纯 JSON。
+ * Packages 影子宿主面（`__pkg.*`）：`Packages.*` 包路径仿真里需要宿主能力的重活（PNG 解码 / AES-CBC / HMAC /
+ * 字节按 charset 解码 / HTTP cookie jar）。op 名册、宿主实现与沙箱侧 wrapper 片段同住这里；轻活仍在 vm realm
+ * 的 wrapper 片段里（界线见 `ADR-0004`）。接口只有「op 名 + JSON → JSON」；外部依赖窄成一格 `httpCookies`。
  */
 import crypto from 'node:crypto'
 import type { EvalContext } from './types.js'
 import { decodePngToArgb, javaDecode, textOf } from './js-utils.js'
 
-/** op 名册：**唯一来源**。宿主分派按它收窄（漏分支 = 编译错），沙箱侧 wrapper 片段里的
- *  op 字面量由测试与它逐一对表（`tests/engine/host-surface-pkg.test.ts`）。 */
+/** op 名册：**唯一来源**。宿主分派按它收窄（漏分支 = 编译错），沙箱侧 wrapper 片段里的 op 字面量由测试
+ *  与它逐一对表（`tests/engine/host-surface-pkg.test.ts`）。 */
 export const PKG_OPS = ['png', 'aes', 'hmac', 'b2s', 'cookieGet', 'cookieSet', 'cookieRemoveSession'] as const
 export type PkgOp = (typeof PKG_OPS)[number]
 
 const PKG_OP_SET: ReadonlySet<string> = new Set(PKG_OPS)
 
-/** 线上来的 op 名先过名册（认得才收窄）；认不出一律点名，不落到 `switch` 的兜底当未知分支。 */
 function pkgOpOf(op: string): PkgOp {
   if (PKG_OP_SET.has(op)) return op as PkgOp
   throw new Error(`未知 Packages 桥操作：${op}`)
@@ -29,13 +22,12 @@ function pkgOpOf(op: string): PkgOp {
 /** 包面唯一的外部依赖：请求层 cookie jar（域/路径感知那张；缺席 = 该源未接线）。 */
 export type PkgHostDeps = Pick<EvalContext, 'httpCookies'>
 
-/** PNG 像素上限（400 万）：策略值住宿主这层，解码器只提供闸口——**在 IHDR 处判**而不是解完再判，
- *  否则挡不住它守的那次分配（膨胀 + `height × rowBytes` 的图像缓冲 + 逐像素 ARGB 数组）。 */
+/** PNG 像素上限（400 万）：策略值住宿主这层，**在 IHDR 处判**而不是解完再判，否则挡不住它守的那次分配。 */
 const MAX_PNG_PIXELS = 4_000_000
 
-/** `__pkg.*` 宿主实现（Packages.* 的重活）：入参/出参纯 JSON（字节 = number[]，0-255）。
- *  png → decodePngToArgb（node:zlib）；aes → AES-CBC 解密（DECRYPT 单向——v1 只做正文解密）；
- *  hmac → HmacSHA*；b2s → 字节按 charset 解码。未知操作与非法输入一律抛错（宁炸不猜）。 */
+/** `__pkg.*` 宿主实现：入参/出参纯 JSON（字节 = number[]，0-255）。png → decodePngToArgb；aes →
+ *  AES-CBC 解密（v1 只做正文解密）；hmac → HmacSHA*；b2s → 字节按 charset 解码。未知操作与非法输入
+ *  一律抛错（宁炸不猜）。 */
 export function pkgHostOp(op: string, payload: Record<string, unknown>, deps: PkgHostDeps): unknown {
   const known = pkgOpOf(op)
   const toBytes = (v: unknown): Uint8Array => {
@@ -93,18 +85,10 @@ export function pkgHostOp(op: string, payload: Record<string, unknown>, deps: Pk
   }
 }
 
-/** 沙箱侧 wrapper 源片段：插进同一个 BOOTSTRAP 模板串，定义 Packages 包路径仿真（`pkgCall` /
- *  轻活包装 / 惰性未挂路径代理 / `JavaImporter` 作用域）。
- *
- *  插入位置与次序：**后于** `host-surface-elem.ts` 的片段（`mkElem` 由它供出），**先于** 引导层
- *  末尾的 `g.java` 挂载段。生成文本被当**文本**插值进模板串，故不得含反引号或美元花括号（钉子：
- *  `tests/engine/host-surface-pkg.test.ts`）。
- *
- *  片段可以自由引用的标识符只限 BOOTSTRAP 作用域供出的名字：`g`（全局对象）、`call`（唯一跨界
- *  入口）、`callHost`（错误换 realm）、`ser`（JSON 序列化）、`msg`（错误取消息）、`materialize`
- *  （响应描述符物化）、`mkElem`（元素包装，来自 elem 片段）、`sync`（同步桥包装），以及
- *  `js-protocol.asyncBridgeSource()` 生成的同步桥壳（本片段用到的 `urlConn` 就是其一）。
- *  多引一个名字就是脚本运行期 ReferenceError。 */
+/** 沙箱侧 wrapper 源片段：插进同一个 BOOTSTRAP 模板串，定义 Packages 包路径仿真（`pkgCall` / 轻活包装 /
+ *  惰性未挂路径代理 / `JavaImporter` 作用域）。插入位置：**后于** elem 片段（`mkElem` 由它供出），**先于**
+ *  引导层末尾的 `g.java` 挂载段。生成文本被当**文本**插值，故不得含反引号或美元花括号。片段只可引用
+ *  BOOTSTRAP 作用域供出的 `g`/`call`/`callHost`/`ser`/`msg`/`materialize`/`mkElem`/`sync` 与异步桥壳。 */
 export function pkgWrapperSource(): string {
   return `
   // ── Packages.*（书源脚本里的 Java 包路径仿真）─────────────────────

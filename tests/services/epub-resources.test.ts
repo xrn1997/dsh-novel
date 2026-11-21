@@ -12,10 +12,10 @@
 import { describe, expect, it } from 'vitest'
 import type { LocalImportWarning } from '../../src/shared/wire.js'
 import { warningListOf } from '../../src/services/epub/findings.js'
-import { EpubImportError } from '../../src/services/epub/errors.js'
 import { validateImage, type ImageFacts } from '../../src/services/epub/resources.js'
 import { IMAGE_SAMPLES } from '../fixtures/epub.js'
 import { must, pick } from '../support/fixture.js'
+import { expectEpubResourceError as expectEpubError } from './epub-fakes.js'
 
 const LIMITS = { depth: 128, nodes: 200_000 }
 
@@ -43,14 +43,6 @@ function rejection(bytes: Buffer, declaredMediaType: string, opts: { imagePixels
     return e as Error
   }
   throw new Error(`预期拒绝，实际成功——坏图冒充可读是本仓的最高罪（声明 ${declaredMediaType}）`)
-}
-
-function expectEpubError(e: Error, pattern: RegExp): void {
-  // 资源级失败是本类（半径写在类型上：编排层只接住这一类，其余照原样上抛），
-  // 但仍属 EPUB 导入家族——服务层的分类表按基类映射，不因为降级而换类目
-  expect(e.name).toBe('EpubResourceError')
-  expect(e).toBeInstanceOf(EpubImportError)
-  expect(e.message).toMatch(pattern)
 }
 
 const SVG = (body: string): Buffer => Buffer.from(

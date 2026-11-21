@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { promises as fsPromises } from 'node:fs'
 import path from 'node:path'
 import type { Readable } from 'node:stream'
+import { resolveConfig } from '../../src/config.js'
 import { ReadingService } from '../../src/services/reading.js'
 import type { SourceSession } from '../../src/engine/index.js'
 import { detailContextOf } from '../../src/services/bridge.js'
@@ -325,7 +326,7 @@ describe('ReadingService', () => {
     const ctrl = new AbortController()
     const svc = trackService(await ReadingService.create({
       dir: await makeTempDir('novel-rd-'),
-      searchParallel: 1,
+      config: resolveConfig({ searchParallel: 1 }),
       fetchImpl: async () => {
         calls += 1
         if (calls === 1) ctrl.abort(new Error('用户停止'))
@@ -869,7 +870,7 @@ describe('js 沙箱预算走配置出口（jsTimeoutMs）', () => {
         }),
       }),
       cookieJar: jar,
-      ...(opts.jsTimeoutMs === undefined ? {} : { jsTimeoutMs: opts.jsTimeoutMs }),
+      config: resolveConfig(opts.jsTimeoutMs === undefined ? {} : { jsTimeoutMs: opts.jsTimeoutMs }),
     }))
     await svc.importOne({
       bookSourceName: 'JS源', bookSourceUrl: 'https://js.example.com',
@@ -1177,7 +1178,7 @@ describe('门面 probe 与搜索同耐心', () => {
   it('probe 认 searchTimeoutMs：挂起抓取在限时内回 FetchError，不落回 fetcher 固定 15s', async () => {
     const svc = trackService(await ReadingService.create({
       dir: await makeTempDir('novel-rd-'),
-      searchTimeoutMs: 50,
+      config: resolveConfig({ searchTimeoutMs: 50 }),
       fetchImpl: (() => new Promise<Response>(() => { /* 永不返回 */ })),
     }))
     const out = await svc.importOne({ ...rawSource })

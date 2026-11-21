@@ -20,13 +20,8 @@ import type { NovelSource } from './types.js'
 import type { ChapterEntry } from '../shared/wire.js'
 
 /**
- * 在线阅读：一条在线书的**目录**与**正文**取值管线（缓存优先 → 目录在途去重 → 翻页跟进 → 缓存写回）。
- * 缓存键、在途身份、代际、翻页闸、subContent 与空正文策略只住这一处；本地/在线分流归
- * `book-content` 的 `BookContent`，门面只委托——
- * 为的是这几条语义不必拼齐整部门面部件就能被测到（裁决见 `ADR-0047`）。
- *
- * 刻意**不含**本地书：本地书不认识 HTTP 与在线缓存，塞进来会扩大 interface。
- * 缓存有效性判据仍由 `cache-epoch` 给，本模块只消费。
+ * 在线阅读：一条在线书的**目录**与**正文**取值管线（缓存优先 → 目录在途去重 → 翻页跟进 → 缓存写回）。缓存键、在途身份、
+ * 代际、翻页闸、subContent 与空正文策略只住这一处；本地/在线分流归 `book-content`（`ADR-0047`），本模块刻意**不含**本地书。
  */
 
 /** 一次在线阅读的部件注入面：源查找、书架镜像、文件缓存、出站请求与源求值各交一格。 */
@@ -40,16 +35,13 @@ export interface OnlineReadingParts {
   contentMaxPages: number
 }
 
-/** 目录在途请求的身份：同源同书还不够，代际与 refresh 也必须各占一条。
- *  只按源+书归并，后到的强制刷新会并入先到的普通读取、拿回它没打算要的旧结果；
- *  代际并入身份则让换规则后的读单独起飞——`toc` 起飞前取一次 `rulesEpoch`，在途写回按
- *  起飞时的代际落盘（`getTocInner`），旧在途与新读各走各的键，不需要取消通道。 */
+/** 目录在途请求的身份：同源同书还不够，代际与 refresh 也必须各占一条——只按源+书归并，后到的强制刷新会并入先到的普通读取、
+ *  拿回旧结果；代际并入身份让换规则后的读单独起飞，旧在途与新读各走各的键，不需要取消通道。 */
 function tocReadKey(sourceId: string, bookUrl: string, epoch: string, refresh: boolean): string {
   return JSON.stringify([sourceId, bookUrl, epoch, refresh])
 }
 
-/** 目录内存条目：规范化地址集合与目录同生共死，章节正文读取直接复用。
- *  两份值都是**共享**的（同一数组/集合交给每个读者），消费方不得原地改——要改先复制。 */
+/** 目录内存条目：规范化地址集合与目录同生共死。两份值都是**共享**的，消费方不得原地改——要改先复制。 */
 interface TocMemo {
   chapters: ChapterEntry[]
   /** 全目录的 `canonUrl` 结果：串章闸的 stopUrls，避免每章重规范化整本目录。 */
@@ -59,8 +51,7 @@ interface TocMemo {
 /** 目录内存缓存上限：读面一次只读一本，留几本给换书/返回；超出按最久未用淘汰。 */
 const TOC_MEMO_LIMIT = 8
 
-/** 追加地址进日志前脱敏：定位需要 origin + path，query / fragment 里的签名、过期 token 不该
- *  跟着进宿主持久日志。解析不出就截断——留痕宁短勿泄。 */
+/** 追加地址进日志前脱敏：定位需要 origin + path，query / fragment 里的签名、过期 token 不该进宿主持久日志；解析不出就截断。 */
 function redactSubUrl(raw: string): string {
   try {
     const url = new URL(raw)
@@ -70,8 +61,7 @@ function redactSubUrl(raw: string): string {
   }
 }
 
-/** 脱敏错误消息里自带的地址：`FetchError` 的措辞就是 `请求失败 503: <url>` / `请求超时 …: <url>`，
- *  只脱敏单独打印的那条链接不够——消息里的原串照样会把 query 凭证带进日志。 */
+/** 脱敏错误消息里自带的地址：`FetchError` 的措辞就带 `<url>`，只脱敏单独打印的链接不够。 */
 function redactUrlsIn(text: string): string {
   return text.replace(/https?:\/\/[^\s"'<>）)]+/gi, (url) => redactSubUrl(url))
 }
@@ -79,8 +69,7 @@ function redactUrlsIn(text: string): string {
 export class OnlineReading {
   private readonly tocInflight = new Map<string, Promise<TocMemo>>()
   private readonly tocMemo = new Map<string, TocMemo>()
-  /** refresh 写回即 +1：普通读只在自己起飞后没有 refresh 写回时才允许覆盖内存目录——
-   *  在途普通读可能读的是刷新前的盘，晚到的旧结果不能把刚刷新的那一份盖回去。 */
+  /** refresh 写回即 +1：普通读只在自己起飞后没有 refresh 写回时才允许覆盖内存目录——晚到的旧结果不能把刚刷新的那一份盖回去。 */
   private memoWriteSeq = 0
   private readonly parts: OnlineReadingParts
 
@@ -88,9 +77,8 @@ export class OnlineReading {
     this.parts = parts
   }
 
-  /** 目录：进程内缓存优先（refresh 绕过）+ 磁盘缓存/in-flight 去重（身份见 `tocReadKey`）+ 翻页闸跟进。
-   *  `async` 只为把源查找的抛错收成 rejection：HTTP 面与工具面都按 promise 消费，
-   *  同步 throw 会漏出契约。在途登记在返回前同步完成——同身份的并发读仍能 join 到同一发。 */
+  /** 目录：进程内缓存优先（refresh 绕过）+ 磁盘缓存/in-flight 去重（身份见 `tocReadKey`）+ 翻页闸跟进。`async` 只为把源查找的
+   *  抛错收成 rejection；在途登记在返回前同步完成——同身份的并发读仍能 join 到同一发。 */
   async toc(sourceId: string, bookUrl: string, opts?: { refresh?: boolean }): Promise<ChapterEntry[]> {
     return (await this.tocMemoOf(sourceId, bookUrl, opts)).chapters
   }
@@ -100,8 +88,7 @@ export class OnlineReading {
     sourceId: string, bookUrl: string, opts?: { refresh?: boolean },
   ): Promise<TocMemo> {
     const s = this.requireSource(sourceId)
-    // 代际在起飞前算一次，读与写共用同一个值：在途请求写的就是它起飞时的代际，
-    // 换规则后的读永远看不见（这就是「旧在途写回」不需要取消通道的原因）
+    // 代际在起飞前算一次，读与写共用同一个值：在途请求写的就是它起飞时的代际，换规则后的读永远看不见。
     const epoch = rulesEpoch(s.rules, s.baseUrl, 'toc')
     const memoKey = tocReadKey(sourceId, bookUrl, epoch, false)
     if (opts?.refresh !== true) {
@@ -118,8 +105,7 @@ export class OnlineReading {
           chapters,
           canonicalUrls: new Set(chapters.map((c) => canonUrl(c.url))),
         }
-        // refresh 的结果也写回非 refresh 槽：下一次普通读取看到的是刚刷新的目录。
-        // 普通读只有起飞后没发生过 refresh 写回才写：并发时宁少存一次，也不让旧目录盖回新目录。
+        // refresh 的结果也写回非 refresh 槽：普通读只有起飞后没发生过 refresh 写回才写——并发时宁少存一次，也不让旧目录盖回新目录。
         if (opts?.refresh === true) {
           lruSet(this.tocMemo, memoKey, memo, TOC_MEMO_LIMIT)
           this.memoWriteSeq += 1
@@ -133,27 +119,23 @@ export class OnlineReading {
     return p
   }
 
-  /** 章节正文（**文字面**）：缓存优先（refresh 跳过）；目录缺章报错；多页串接；
-   *  **首屏**的 Miss 与零命中抛 RuleEvalError 不吞（续页取空按到底收手，见 `chapterText` 的 extract 口径）。
-   *  本地书不走这里。 */
+  /** 章节正文（**文字面**）：缓存优先（refresh 跳过）；目录缺章报错；多页串接；**首屏**的 Miss 与零命中抛 RuleEvalError
+   *  不吞（续页取空按到底收手）。本地书不走这里。 */
   async chapterText(sourceId: string, bookKey: string, chIndex: number, opts?: { refresh?: boolean }): Promise<string> {
     const s = this.requireSource(sourceId)
     const epoch = rulesEpoch(s.rules, s.baseUrl, 'content')
-    // 目录上移到缓存读取之前：正文槽位含章名（挡章序位移串配，见 cache-epoch.contentSlot，
-    // 矩阵行 `g-cache-slot-chapter-name`）。代价如实记：热正文缓存不再能单独服务一章——
-    // 目录缺失时会真发一次目录抓取（章名只存在于目录里，这是必然代价不是疏忽）。
+    // 目录上移到缓存读取之前：正文槽位含章名（挡章序位移串配，矩阵 `g-cache-slot-chapter-name`）。代价如实记：热正文缓存不再能
+    // 单独服务一章——目录缺失时会真发一次目录抓取（章名只存在于目录里，这是必然代价）。
     const tocMemo = await this.tocMemoOf(sourceId, bookKey)
     const toc = tocMemo.chapters
-    // 双边守卫合并在取位处：负数与越上界同样取不到（只拦上界会让负数绕过 →
-    // 取位失败按 404 那一类交回，不造默认章）；HTTP 面有 /^\d+$/ 而工具面无下限，守卫必须盖住两面入口。
+    // 双边守卫合并在取位处：负数与越上界同样取不到，取位失败按 404 那一类交回；HTTP 面有 /^\d+$/ 而工具面无下限，守卫须盖住两面。
     const target = toc[chIndex]
     if (target === undefined) throw new ChapterNotFoundError(chIndex, toc.length)
     const slot = contentSlot(epoch, target.name)
     if (opts?.refresh !== true) {
       const cached = await this.parts.cache.getContent(sourceId, bookKey, chIndex, slot)
       if (cached !== null) {
-        // 代际只覆盖规则、不覆盖代码版本：升级后仍会读到旧提取代码写下的条目（如 @html 源的
-        // 带标签正文）——出边界再收一次口（contentToText 幂等），旧条目照样无害。
+        // 代际只覆盖规则、不覆盖代码版本：升级后仍会读到旧提取代码写下的条目——出边界再收一次口（contentToText 幂等）。
         const text = contentToText(cached)
         // 空正文一律当未命中：0 字节缓存会永远吐空（不要静默写入），借此失效重取
         if (text.trim() !== '') return text
@@ -164,9 +146,8 @@ export class OnlineReading {
       // 正文规则缺失不得降级 `?? ''`
       throw new RuleMissingError('content', 'ruleContent', `源「${s.name}」缺正文规则 ruleContent`)
     }
-    // 变量注入：`book`（bookUrl/name…——规则里存在拿 book.bookUrl 做字符串替换的写法，
-    // 这一面必须有值；按面注入的字段清单见矩阵行 `h-book-mirror-fields`）
-    // 与 `chapter`（title/index/url——正文脚本 `chapter.title` 广泛使用）
+    // 变量注入：`book`（规则里存在拿 book.bookUrl 做字符串替换的写法）与 `chapter`（title/index/url——正文脚本广泛使用）；
+    // 按面注入的字段清单见矩阵行 `h-book-mirror-fields`。
     const shelfBook = this.parts.shelf.get(bookKey)
     const subEval = this.parts.sourceEvalFor(s)
       .subEval({
@@ -177,10 +158,8 @@ export class OnlineReading {
           updateTime: target.updateTime ?? '',
         },
       })
-    // 「空正文必炸」管的是**首屏**：跟进链上的续页取不出正文，只说明这一章到此为止，
-    // 不许把已经拼好的首屏一起判死（这一形状是最后一章的「下一章」链接指向书详情页，
-    // 那页没有正文容器；若整章抛错，前两页的正文会一并丢掉）。
-    // 首屏那一半一字未放宽：空正文仍然抛、仍然不写缓存（矩阵行 `g-content-empty-exception`）。
+    // 「空正文必炸」管的是**首屏**：跟进链上的续页取不出正文只说明这一章到此为止，不许把已拼好的首屏一起判死（最后一章的
+    // 「下一章」常指向书详情页，那页没有正文容器）。首屏那一半一字未放宽：空正文仍然抛、仍然不写缓存（矩阵 `g-content-empty-exception`）。
     // 续页交空数组即可——`followPages` 的 zero-new 闸本就负责停跟进。
     const subContentRule = s.rules.ruleContentSubContent ?? null
     let pageSeq = 0
@@ -199,12 +178,10 @@ export class OnlineReading {
         }
         return []
       }
-      // 正文契约是纯文本：@html 类规则收回的是 HTML 片段（否则一串 <p> 原样打给读者）——
-      // 先转纯文本再走行规约（矩阵行 `g-html-to-text`）
+      // 正文契约是纯文本：@html 类规则收回的是 HTML 片段——先转纯文本再走行规约（矩阵 `g-html-to-text`）。
       const plain = normalizeChapterText(contentToText(text))
       if (plain.trim() === '') {
-        // 零命中不得静默：把空正文当正常结果写进缓存会让整章 0 字节，用户只见「不出正文」。
-        // 报错带规则与落点（请求地址 + 实际落地地址，两者不同即被跳转走了）——矩阵行 `g-content-empty-exception`。
+        // 零命中不得静默：把空正文当正常结果写进缓存会让整章 0 字节。报错带规则与落点（请求地址 + 实际落地地址）。
         if (!firstPage) return []
         const landed = page.requestedUrl === undefined || page.requestedUrl === page.url
           ? page.url
@@ -225,17 +202,14 @@ export class OnlineReading {
       'content',
       subEval,
       {
-        // 串章闸：候选「下一页」== 目录里其他章节 URL → 到底。
-        // 目录知识是正判据——路径启发式会把 `?id=..&cid=..&page=2` 这类非页码键分页误判成串章
-        // （「一章只解析出一页」的根因之一）；启发式仅在无目录知识时兜底（见 pagination.ts）。
-        // 规范化集合随目录缓存一次，当前章用 except 放行——不每章复制整表。
+        // 串章闸：候选「下一页」== 目录里其他章节 URL → 到底。目录知识是正判据——路径启发式会把 `?cid=..&page=2` 这类
+        // 非页码键分页误判成串章；启发式仅在无目录知识时兜底（见 pagination.ts）。规范化集合随目录缓存一次，当前章用 except 放行。
         stopUrls: tocMemo.canonicalUrls,
         stopUrlExcept: canonUrl(target.url),
       },
     )
     let text = result.items.join('\n')
-    // subContent 在**拼页之后**求值（用的是循环结束那一刻的末页上下文），
-    // 以 http 开头时先把那页取回来当子正文。它是追加物，链接坏了不许把整章判死（规则求值本身的错仍然抛）。
+    // subContent 在**拼页之后**求值（用循环结束那一刻的末页上下文），以 http 开头时先把那页取回来当子正文；链接坏了不许把整章判死。
     let subFetchFailed = false
     if (subContentRule !== null && lastPage.page !== null) {
       const sub = firstValue(
@@ -244,10 +218,8 @@ export class OnlineReading {
       )
       if (sub !== null && sub.trim() !== '') {
         const raw = sub.trim()
-        // 「取回失败」与「取回后为空」是两种值，不许折叠（取值规约同 `ADR-0002` 那一族）：
-        // 空 = 这源此刻确实没有追加段，落缓存没问题；失败 = 我们不知道，一次瞬时 503 若跟着落盘，
-        // 「缺追加段的残章」就钉在这个槽位上直到代际更替才自愈——那是拿合法形状冒充完整正文。
-        // 因此失败这一次照读、留痕点名是哪一章哪条链接，但**不落缓存**，下一次重取。
+        // 「取回失败」与「取回后为空」是两种值，不许折叠（同 `ADR-0002` 那一族）：空 = 这源此刻确实没有追加段，落缓存没问题；
+        // 失败 = 我们不知道——一次瞬时 503 若跟着落盘，「缺追加段的残章」就钉在这个槽位上。因此失败照读、留痕，但**不落缓存**。
         let body = raw
         if (/^https?:\/\//i.test(raw)) {
           try {
@@ -273,18 +245,16 @@ export class OnlineReading {
       const cached = await this.parts.cache.getToc(s.id, bookUrl, epoch)
       if (cached !== null) return cached
     }
-    // 目录三规则任一缺失不得降级 `?? ''`——空串规则返回整页文本，宁炸不猜
-    // 列表选择器：ruleChapterList（对象方言）；平铺方言缺它时回退 ruleBookList（平铺口径：
-    // 搜索/目录共用列表规则，两方言列表不同——矩阵行 `d-book-list-fallback`）
+    // 目录三规则任一缺失不得降级 `?? ''`——空串规则返回整页文本。列表选择器：对象方言取 ruleChapterList，平铺方言缺它时回退
+    // ruleBookList（矩阵行 `d-book-list-fallback`）。
     const { ruleChapterName, ruleChapterUrl } = s.rules
     const listRule = s.rules.ruleChapterList ?? s.rules.ruleBookList
     if (listRule === null || ruleChapterName === null || ruleChapterUrl === null) {
       throw new RuleMissingError('toc', 'ruleChapterList/ruleBookList',
         `源「${s.name}」缺目录规则（ruleChapterList/ruleBookList 之一 + ruleChapterName/ruleChapterUrl）——无法构建目录`)
     }
-    // `book` 变量：目录规则常见 `book.bookUrl`（章地址由它替换出来）与 `book.origin`
-    // （ruleTocUrl 用 `{{book.origin}}` 拼目录页——源站点域名即注册表 baseUrl；按面注入的
-    // 字段清单见矩阵行 `h-book-mirror-fields`）
+    // `book` 变量：目录规则常见 `book.bookUrl`（章地址由它替换出来）与 `book.origin`（ruleTocUrl 用 `{{book.origin}}` 拼目录页）；
+    // 按面注入的字段清单见矩阵行 `h-book-mirror-fields`。
     const tocShelfBook = this.parts.shelf.get(bookUrl)
     const subEval = this.parts.sourceEvalFor(s)
       .subEval({
@@ -312,10 +282,8 @@ export class OnlineReading {
         const updateTime = updateTimeRule === null
           ? undefined
           : firstValue(await subEval(updateTimeRule, ctx, 'toc', 'value'), 'toc') ?? undefined
-        // 章节 URL 常带 `,{"webView":true}` 等选项后缀（嗅探语义）——**保留后缀落库**，
-        // 抓取时由 fetchPage → assembleRequest 解释（矩阵行 `b-url-option-on-chapter-url`）；
-        // URL 取不到时回退目录页地址——不整条丢弃（「url null → 跳过」会把整站目录清成 0 章，
-        // 矩阵行 `f-toc-url-fallback`）
+        // 章节 URL 常带 `,{"webView":true}` 等选项后缀——**保留后缀落库**，抓取时由 fetchPage → assembleRequest 解释（矩阵
+        // `b-url-option-on-chapter-url`）；URL 取不到时回退目录页地址（`url null → 跳过` 会把整站目录清成 0 章，矩阵 `f-toc-url-fallback`）。
         const missing = href === null || href.trim() === ''
         const url = href !== null && href.trim() !== '' ? absUrlKeepOption(href, page.url) : page.url
         if (name !== null && url !== null) {
@@ -329,8 +297,7 @@ export class OnlineReading {
           })
         }
       }
-      // 逐章回退只服务「个别条目缺链接」；**每一条都回退** = ruleChapterUrl 整体失效，
-      // 静默产出指向目录页自身的 toc 是拿合法形状冒充成功（宁炸不猜）。
+      // 逐章回退只服务「个别条目缺链接」；**每一条都回退** = ruleChapterUrl 整体失效，静默产出指向目录页自身的 toc 是拿合法形状冒充成功。
       if (out.length > 0 && fellBack === out.length) {
         throw new RuleEvalError(
           `目录 URL 规则未取到任何章节地址（段 ruleChapterUrl: ${ruleChapterUrl}；${out.length} 条全部回退目录页 ${page.url}）`,
@@ -354,10 +321,7 @@ export class OnlineReading {
     return chapters
   }
 
-  /**
-   * next 规则短路：null → 单页提取（无翻页发现能力，直接 end）；
-   * 非 null → 走翻页闸 followPages。followPages 收到的 nextRule 永远非空。
-   */
+  /** 短路：next 规则 null → 单页提取（无翻页发现能力，直接 end）；非 null → 走翻页闸 followPages（收到的 nextRule 永远非空）。 */
   private async followOrSingle<T>(
     startUrl: string,
     fetchPage: (url: string) => Promise<Page>,
@@ -382,9 +346,7 @@ export class OnlineReading {
     return s
   }
 
-  /** 抓取一页：URL 可带 `,{option}` 选项后缀（章节/下一页/目录 URL 的嗅探语义）——
-   *  选项语义走 assembleRequest 单点，charset 声明进解码链（优先级最高）；
-   *  `webView`/`webJs` 选项走真浏览器（`b-opt-webview`），浏览器 cookie 回灌 HTTP jar。 */
+  /** 抓取一页：URL 可带 `,{option}` 选项后缀——选项语义走 assembleRequest 单点，charset 声明进解码链；`webView`/`webJs` 选项走真浏览器，浏览器 cookie 回灌 HTTP jar。 */
   private async fetchPage(s: NovelSource, url: string): Promise<Page> {
     const plan = assembleRequest(url, {}, s.baseUrl)
     return this.parts.request.fetchPage(s, plan)
@@ -394,12 +356,9 @@ export class OnlineReading {
 
 // ── 模块级纯函数（逐条口径写在各条头上）─────────────────────────────
 
-/** tocUrl 解析（钉死）：null→bookUrl **全串**（回退即「目录在本书地址上」——抓取仍按选项发请求）；
- *  纯静态 URL → 字面绝对化，不抓详情页；其余（带 `{{$.…}}` 插值段的 URL 模板与一切规则形态）
- *  → 按**详情上下文**过规则引擎求值（init 换根后嵌套字段才有解；按空 vars 插值会留下残地址
- *  → 0 章）。本函数只剩「什么时候需要详情页」这一件事：短路判据与上下文求值分别住
- *  `bridge.staticTocUrl` / `bridge.tocUrlFromContext`（`detailReadOf` 共用同一份）。
- *  求值走调用方的 subEval（完整上下文单点——jsLib/vars/fetch/source 全可见）。 */
+/** tocUrl 解析（钉死）：null→bookUrl **全串**（抓取仍按选项发请求）；纯静态 URL → 字面绝对化，不抓详情页；其余（插值模板与规则
+ *  形态）→ 按**详情上下文**过引擎（init 换根后嵌套字段才有解；按空 vars 插值会留下残地址 → 0 章）。短路判据与上下文求值分别住
+ *  `bridge.staticTocUrl` / `bridge.tocUrlFromContext`；求值走调用方的 subEval。 */
 export async function tocUrlOf(
   ruleTocUrl: string | null, ruleDetailInit: string | null,
   bookUrl: string, detailHtml: () => Promise<string | null>, subEval: SubRuleEval,

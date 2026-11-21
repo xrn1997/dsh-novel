@@ -1,8 +1,7 @@
 import { evaluate } from '../engine/index.js'
 import type { EngineValue, Facet, SourceSession } from '../engine/index.js'
 import type { SegmentLoc } from '../engine/types.js'
-// runScript 深引（服务半唯一入口）：header 规则求值走沙箱完成值语义；引擎 barrel
-// 刻意不收 runScript（公开面只有 evaluate）——服务半要跑脚本一律经本文件的 SourceEval。
+// runScript 深引（服务半唯一入口）：header 规则求值走沙箱完成值语义；引擎 barrel 刻意不收 runScript——服务半跑脚本一律经本文件的 SourceEval。
 import { runScript } from '../engine/js-sandbox.js'
 import type { ResponseHost } from '../engine/host-object.js'
 import { engineFetch, engineFetchConn, engineFetchGet, engineFetchHead, engineFetchPost, engineFetchRaw } from './engine-fetch.js'
@@ -17,19 +16,13 @@ import type { ShelfBook } from '../shared/wire.js'
 import type { NormalizedRules, SourceAuth } from './types.js'
 
 /**
- * 源求值缝：一条书源上的**一次脚本/规则求值**只有这一处装配——能力位（fetch 族 / 浏览器 /
- * cookie / device / 源实体字段）、动态头求值、非递归与回退、脚本可见的 `book` 镜像；调用方只交
- * 规则与本次上下文（`chapter` 也由调用方构造后原样透传）。同一段脚本从哪个面进来都看到同一份能力面，
- * 接入新面 = 传参数，不是再手拼一份（裁决见 `ADR-0042`）。
- *
- * 消费面：搜索面 / 发现面 / 阅读门面（详情、登录）/ 在线阅读管线（目录、正文）/ 搜索模板 /
- *  源请求缝的头求值。调用方交规则与本次上下文（html / json / baseUrl / vars / book / chapter），
- *  面（facet）只决定错误定位，不改能力面；逐面 `book` 给哪些身份字段仍归调用方。
+ * 源求值缝：一条书源上的**一次脚本/规则求值**只有这一处装配——能力位（fetch 族 / 浏览器 / cookie / device / 源实体字段）、
+ * 动态头求值、非递归与回退、脚本可见的 `book` 镜像；调用方只交规则与本次上下文（`chapter` 也由调用方构造后透传）。同一段脚本
+ * 从哪个面进来都看到同一份能力面，接入新面 = 传参数（`ADR-0042`）。面（facet）只决定错误定位，不改能力面。
  */
 
-/** 脚本可见 `book` 的**身份部分**：按面给的书籍身份 + 调用方手里的书架那条。
- *  逐面字段集的差异刻意保留在调用方（搜索面 info 形态只给身份两项，目录/正文面再补
- *  `tocUrl` 与书架字段）——收成全集会改变脚本可见字段，是行为变化不是重构。 */
+/** 脚本可见 `book` 的**身份部分**：按面给的书籍身份 + 调用方手里的书架那条。逐面字段集的差异刻意保留在调用方——收成全集
+ *  会改变脚本可见字段，是行为变化不是重构。 */
 export interface SourceEvalBookContext {
   bookUrl: string
   origin: string
@@ -37,18 +30,13 @@ export interface SourceEvalBookContext {
   shelfBook?: ShelfBook
 }
 
-/** js 沙箱预算缺省（15s）：**服务侧缺省的唯一主人**——`config.ts` 的 schema `.default()`、
- *  阅读服务的 live 回退与装配缝漏传的回落都引这里，别处不再写字面量。住在求值缝里：它是预算的
- *  最低消费点，装配缝（搜索面 / 发现面 / 模板 / 登录检查）都在阅读服务下方，回落若反向引
- *  阅读服务就成值环（`tests/layering.test.ts` 的值环闸）。引擎直连那个同值缺省
- *  （`engine/types.ts` 的 `DEFAULT_JS_TIMEOUT_MS`）是另一个名字一个事实，同值由
- *  `tests/services/defaults.test.ts` 的对齐钉子守——引擎不许反向引这里（依赖方向红线）。 */
+/** js 沙箱预算缺省（15s）：**服务侧缺省的唯一主人**——`config.ts` 的 schema `.default()`、阅读服务的 live 回退与装配缝漏传
+ *  的回落都引这里。住在求值缝里：它是预算的最低消费点，反向引阅读服务会成值环（`tests/layering.test.ts`）。引擎直连那个同值
+ *  缺省是另一个名字一个事实，同值由 `defaults.test.ts` 的对齐钉子守（引擎不许反向引这里）。 */
 export const DEFAULT_JS_BUDGET_MS = 15_000
 
-/** 脚本可见的 `book` 镜像（脚本侧的 `book` 语义就是书架上那本书）。三项身份由本仓按面给
- *  （`bookUrl`/`origin`/目录面的 `tocUrl`），其余字段取**书架那条**（`title` 映射成脚本读的 `name`）；
- *  书架没有的字段不注入（读到 undefined 与「未设置」同形，不编值）。
- *  逐面实读与缺口：矩阵行 `h-book-mirror-fields`。 */
+/** 脚本可见的 `book` 镜像（脚本侧 `book` 语义就是书架上那本书）。三项身份由本仓按面给，其余字段取**书架那条**（`title` 映射成
+ *  `name`）；书架没有的字段不注入（读到 undefined 与「未设置」同形，不编值）。逐面实读与缺口：矩阵 `h-book-mirror-fields`。 */
 export function bookMirrorOf(ctx: SourceEvalBookContext): Record<string, unknown> {
   const s = ctx.shelfBook
   return {
@@ -65,9 +53,8 @@ export function bookMirrorOf(ctx: SourceEvalBookContext): Record<string, unknown
   }
 }
 
-/** 一条源上的求值面：subEval（条目片段）/ evaluate（单条规则）/ runScript（服务半脚本入口）/ headers（请求头）。
- *  `createSourceEval` 的闭包持有 fetcher、源与 js 预算；每格的可选字段只在调用方有时才透传
- *  （缺席与空值两种值不折叠）。预算**只由构造时给**：配置页热改对下一次构造生效，调用方不逐次带预算。 */
+/** 一条源上的求值面：subEval / evaluate / runScript / headers。`createSourceEval` 的闭包持有 fetcher、源与 js 预算；预算
+ *  **只由构造时给**——配置页热改对下一次构造生效，调用方不逐次带预算。 */
 export interface SourceEval {
   subEval(opts?: {
     vars?: Record<string, string>
@@ -100,16 +87,14 @@ export interface SourceEval {
   headers(): Promise<Record<string, string>>
 }
 
-/** 源 raw 里的字符串字段（缺 / 非串 → 空串）。本仓对源实体字段一律**按 raw 现读**、不落副本：
- *  脚本可见的 `source` 要的是导入时那份原文（改名 / 重推迁移都只动 raw 之外的投影）。 */
+/** 源 raw 里的字符串字段（缺/非串 → 空串）。源实体字段一律**按 raw 现读**、不落副本——脚本可见的 `source` 要的是导入时那份原文。 */
 function rawStringField(raw: unknown, field: string): string {
   const v = raw === null || typeof raw !== 'object' ? undefined : (raw as Record<string, unknown>)[field]
   return typeof v === 'string' ? v : ''
 }
 
-/** `engineContextOf` / `resolveHeaders` 实际读取的源字段。书源之外（朗读引擎 HttpTTS 的
- *  URL 规则）给不出整个 `NovelSource`，但给得出这一份最小面；把它写成结构类型而不是
- *  伪造成 NovelSource：求值缝要什么、适配方给什么，两边由 tsc 对齐（多给不拦，少给编译错）。 */
+/** `engineContextOf` / `resolveHeaders` 实际读取的源字段。书源之外（朗读引擎）给不出整个 `NovelSource`，但给得出这一份最小面；
+ *  写成结构类型而不是伪造成 NovelSource：求值缝要什么、适配方给什么，两边由 tsc 对齐。 */
 export interface EvalSource {
   baseUrl: string
   name: string
@@ -118,10 +103,8 @@ export interface EvalSource {
   auth?: SourceAuth
 }
 
-/** 源级求值上下文组装单点：「引擎上下文该有哪些字段」的唯一实现——
- *  fetch（守门 + auth 头合并）/ source / vars / jsLib 全在此拼装；面（facet）只决定
- *  html/json/baseUrl 的取值（不要多处各拼一份：漏字段只在特定路径炸——新面接入 = 传参数，
- *  不是再手拼一份）。 */
+/** 源级求值上下文组装单点：「引擎上下文该有哪些字段」的唯一实现——fetch（守门 + auth 头合并）/ source / vars / jsLib 全在此拼装；
+ *  面只决定 html/json/baseUrl 的取值。新面接入 = 传参数，不是再手拼一份。 */
 export function engineContextOf(
   fetcher: Fetcher, source: EvalSource,
   opts: {
@@ -134,8 +117,7 @@ export function engineContextOf(
     chapter?: Record<string, unknown>
     /** js 沙箱预算透传（EvalContext.jsTimeoutMs；缺省时引擎回退 DEFAULT_JS_TIMEOUT_MS） */
     jsTimeoutMs?: number
-    /** 出站口的头来源：省略 = 动态头惰性 provider（默认）；给定 = 静态表（头规则脚本自身用，
-     *  不递归回头规则）。六个出站口共用这一份装配，不再由调用方逐个覆盖。 */
+    /** 出站口的头来源：省略 = 动态头惰性 provider（默认）；给定 = 静态表（头规则脚本自身用，不递归）。六个出站口共用这一份装配。 */
     headers?: HeadersInput
     /** 登录面投影（source.getLoginInfoMap / getLoginHeader）：源 auth 或表单录入供出，缺省空。 */
     loginInfo?: Record<string, string>
@@ -181,8 +163,7 @@ export function engineContextOf(
     baseUrl: opts.baseUrl,
     source: source.baseUrl,
     ...(opts.vars === undefined ? {} : { vars: opts.vars }),
-    // 头走这里一份装配：省略 headers 入参 = 惰性 provider（`@js` 动态头每请求现算，头规则在请求期
-    // 求值、不缓存）；头规则脚本自身由 resolveHeaders 传静态表进来，六个出站口共用它。
+    // 头走这里一份装配：省略 headers = 惰性 provider（动态头每请求现算）；头规则脚本自身由 resolveHeaders 传静态表进来。
     fetch: engineFetch(fetcher, headers),
     fetchRaw: engineFetchRaw(fetcher, headers),
     // java.post 的出站口：与 ajax/connect 同一个守门 fetcher（不开第二出口），差别只有 POST + 脚本头
@@ -195,8 +176,7 @@ export function engineContextOf(
     fetchConn: engineFetchConn(fetcher, headers),
     // java.getWebViewUA 的口径：本仓真发出去的那条 UA（同步取，与 fetch 同一套静态头解析）
     userAgent: () => effectiveUserAgent(source),
-    // 脚本可见的源实体字段：**按 raw 现读**，只投影脚本真读到的（脚本里的 source 是一面很大的
-    // 书源实体，本仓按现库需求逐字段接线——现量见矩阵行 `h-source-entity-fields`）。
+    // 脚本可见的源实体字段：**按 raw 现读**，只投影脚本真读到的（现量见矩阵行 `h-source-entity-fields`）。
     sourceName: source.name,
     sourceComment: rawStringField(source.raw, 'bookSourceComment'),
     ...(source.rules.jsLib === null ? {} : { jsLib: source.rules.jsLib }),
@@ -228,8 +208,7 @@ export function engineContextOf(
     ...(cookieJar === undefined ? {} : {
       httpCookies: {
         headerFor: (url: string) => cookieJar.headerFor(url),
-        // CookieManager/CookieStore.setCookie 收的是 **cookie 串**（`getCookie` 的原样回写，
-        // 常见 `a=1; b=2`），不是 Set-Cookie 头；整串塞给 absorb 会把第二个键当成属性丢掉。
+        // CookieManager/CookieStore.setCookie 收的是 **cookie 串**（`a=1; b=2`），不是 Set-Cookie 头；整串塞给 absorb 会把第二个键当属性丢掉。
         setCookie: (url: string, raw: string) => {
           const pairs = raw.split(';').map((s) => s.trim()).filter((s) => s !== '')
             .filter((s) => !/^(?:path|domain|expires|max-age|secure|httponly|samesite)\s*=/i.test(s))
@@ -242,22 +221,16 @@ export function engineContextOf(
 }
 
 /**
- * 请求头解析（源级动态头口径）：静态 header 直答；`headerRule`
- * （`@js:`/`<js>` 动态头）经沙箱求值得到 JSON 头表，再叠 auth/cookie（与静态形态同序：auth 在后占优）。
- *
- * 失败语义是「warn 后回退静态头」：规则求值抛错、产物不是合法 JSON 对象，都只降级不取消请求
- * （动态头缺失 = 站点按无 device 鉴权处理，下游自然报错——不吞请求也不炸整条链，回退后照常发出去）。
- * **不递归**：规则脚本自身的 fetch 用静态头（provider 不进场），
- * 否则头规则里一次 java.ajax 就会重新求值头规则。
+ * 请求头解析（源级动态头口径）：静态 header 直答；`headerRule` 经沙箱求值得到 JSON 头表，再叠 auth/cookie（auth 在后占优）。
+ * 失败语义是「warn 后回退静态头」：规则抛错、产物不是合法 JSON 对象都只降级不取消请求（动态头缺失 = 站点按无 device 鉴权处理，
+ * 下游自然报错）。**不递归**：规则脚本自身的 fetch 用静态头，否则头规则里一次 java.ajax 就会重新求值头规则。
  */
 export async function resolveHeaders(
   fetcher: Fetcher, source: EvalSource, opts?: { jsTimeoutMs?: number | undefined },
 ): Promise<Record<string, string>> {
   const rule = source.rules.headerRule
   const staticHeaders = headerOf(source)
-  // 判据与剥前缀是同一把尺（`normalize.jsHeaderCodeOf`）：若这一侧另写一遍剥法，
-  // 放宽判据时剥法没跟就会落成「判了规则但求值必炸」的假支持。非规则值（含缺席与空白）
-  // 按静态头直答，warn 回退仍只属于求值那一段。
+  // 判据与剥前缀是同一把尺（`normalize.jsHeaderCodeOf`）：这一侧另写剥法，放宽判据时剥法没跟就会落成「判了规则但求值必炸」的假支持。
   const code = jsHeaderCodeOf(rule)
   if (rule === null || code === null) return staticHeaders
   try {
@@ -268,16 +241,14 @@ export async function resolveHeaders(
         headers: staticHeaders,
         ...(opts?.jsTimeoutMs === undefined ? {} : { jsTimeoutMs: opts.jsTimeoutMs }),
       }),
-      // 头规则脚本的六个出站口用静态头打底（不递归）；「不递归」现在是 engineContextOf 的一个入参，
-      // 不要退回六个键的手抄覆盖：手抄会把 deviceId 漏在 headerRule 外面，且能力位闸看不见它。
+      // 头规则脚本的六个出站口用静态头打底（不递归）；「不递归」现在是 engineContextOf 的一个入参，不要退回六个键的手抄覆盖。
       loc: { segmentIndex: 0, segmentRaw: rule },
       facet: 'rule',
       scriptForm: true,
     })
     const text = firstValue(outcome.value, 'rule')
     if (text === null || text === '') throw new Error('动态头规则产物为空')
-    // 与静态头共用同一宽松度（严格 JSON → 单引号交换）与同一键值筛（stringTableOf）——
-    // 「哪些头条目活着」的口径只住 normalize 一处
+    // 与静态头共用同一宽松度（严格 JSON → 单引号交换）与同一键值筛（stringTableOf）——「哪些头条目活着」的口径只住 normalize 一处。
     const parsed = parseObjectJson(text)
     if (parsed === undefined) throw new Error('动态头规则产物不是对象 JSON')
     return { ...stringTableOf(parsed), ...staticHeaders }
@@ -288,11 +259,8 @@ export async function resolveHeaders(
   }
 }
 
-/** 源求值缝的构造器：闭包持有 fetcher / 源 / js 预算，调用方只交每次求值的上下文。
- *  预算只由构造时给——配置页热改只影响新构造的那份，调用方（源请求缝、在线阅读管线）
- *  每次出站都重新构造，故读到的是当次值。
- *  `jsTimeoutMs` **必填**：装配缝漏传曾静默落回引擎缺省（2s 金丝雀），现在漏交就是编译错；
- *  services 侧缺省回落的唯一主人是本文件的 `DEFAULT_JS_BUDGET_MS`。 */
+/** 源求值缝的构造器：闭包持有 fetcher / 源 / js 预算，调用方只交每次求值的上下文。预算只由构造时给——每次出站都重新构造，故读到
+ *  的是当次值。`jsTimeoutMs` **必填**：装配缝漏传曾静默落回引擎缺省，现在漏交就是编译错；服务侧缺省回落的唯一主人是 `DEFAULT_JS_BUDGET_MS`。 */
 export function createSourceEval(
   fetcher: Fetcher, source: EvalSource, opts: { jsTimeoutMs: number },
 ): SourceEval {

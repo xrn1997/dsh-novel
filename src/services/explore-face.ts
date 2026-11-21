@@ -1,7 +1,6 @@
-import { hitFieldsOf, hitRuleOf, listContextsOf } from './bridge.js'
+import { hitRuleOf, hitsOfContexts } from './bridge.js'
 import { isNativeSource } from './normalize.js'
-import { buildSearchRequest } from './request.js'
-import { createSourceEval, DEFAULT_JS_BUDGET_MS } from './source-eval.js'
+import { readListPage } from './list-page.js'
 import type { SourceRequest } from './source-request.js'
 import type { SearchHit } from '../shared/wire.js'
 import type { NovelSource } from './types.js'
@@ -54,27 +53,19 @@ export async function fetchKindPage(
     ].filter((x): x is string => x !== null)
     return { ok: false, code: 'RuleMissing', message: `发现规则缺失：缺 ${missing.join('、')}` }
   }
-  // 预算无条件交（构造器必填）：调用方没给就落服务缺省
-  const subEval = createSourceEval(request.fetcherFor(source), source,
-    { jsTimeoutMs: jsTimeoutMs ?? DEFAULT_JS_BUDGET_MS }).subEval()
   // 裁页跟着「本次用的是哪份模板」走，不跟着方言走：源级模板带的就是原生分页语义（首页不裁的代价见
   // `request.assembleRequest`）；分类自带地址那一份怎么翻页是源自己写死的，替它裁等于改它的语义。
   // 变量恒给 kind 与 page 两个：模板里没写的占位不参与替换（判据见 `engine/template.isPlaceholder`），
   // 多带一个用不到的变量在黑盒上没有签名，故不为它另立用例。
-  const plan = buildSearchRequest(template, { kind: kindUrl, page }, source.baseUrl,
-    { trimFirstPage: sourceTemplate !== null })
-  const { text, landedUrl } = await request.fetchText(source, plan,
-    timeoutMs === undefined ? undefined : { timeoutMs })
   // 列表规则缺失（发现面整套覆盖里 list 恒非空，故只可能来自回落那一侧）：空规则求值即空列表，
   // 是「这个分类没条目」不是「规则没了」——与搜索面同一条口径，不折叠成失败。
-  const list = hitRuleOf(source, 'explore', 'ruleBookList')
-  if (list === null) return { ok: true, hits: [] }
+  const read = await readListPage(source, request, {
+    template, vars: { kind: kindUrl, page }, trimFirstPage: sourceTemplate !== null,
+    listRule: hitRuleOf(source, 'explore', 'ruleBookList'),
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(jsTimeoutMs === undefined ? {} : { jsTimeoutMs }),
+  })
   // 求值与相对链接基准 = 落地地址（浏览器语义，与搜索/目录/正文面同口径）
-  const contexts = await listContextsOf(subEval, list, { html: text, baseUrl: landedUrl }, 'search')
-  const hits: SearchHit[] = []
-  for (const ctx of contexts) {
-    const hit = await hitFieldsOf(source, 'explore', subEval, ctx, landedUrl)
-    if (hit !== null) hits.push(hit)
-  }
+  const hits = await hitsOfContexts(source, 'explore', read.subEval, read.contexts, read.landedUrl)
   return { ok: true, hits }
 }

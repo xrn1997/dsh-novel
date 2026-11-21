@@ -25,6 +25,7 @@ import { chapterContentToText } from '../../src/shared/chapter-text.js'
 import { makeEpubFixture } from '../fixtures/epub.js'
 import { makeTempDir } from '../temp-dir.js'
 import { must, pick } from '../support/fixture.js'
+import { expectEpubError } from './epub-fakes.js'
 
 async function importOf(name: string, limits?: Partial<EpubLimits>): Promise<{ book: EpubImportData; dir: string }> {
   const dir = await makeTempDir('novel-epub-')
@@ -48,12 +49,6 @@ async function importRejection(name: string, limits?: Partial<EpubLimits>): Prom
 /** 导入落盘的是事实清单（半径、处数与例子都在里面）；断言按生产同一条投影取给用户看的那一份 */
 function warningsOf(data: EpubImportData): LocalImportWarning[] {
   return warningListOf(data.findings)
-}
-
-function expectEpubError(e: Error, pattern: RegExp): void {
-  expect(e.name).toBe('EpubImportError')
-  expect(e).toBeInstanceOf(EpubImportError)
-  expect(e.message).toMatch(pattern)
 }
 
 /** 读回落盘的文档 JSON（内容值断言都建立在它上面，只断言「文件存在」等于没断言） */

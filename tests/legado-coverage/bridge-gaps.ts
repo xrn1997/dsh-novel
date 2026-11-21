@@ -29,6 +29,8 @@ export const KNOWN_BRIDGE_GAPS: readonly BridgeGap[] = [
   { name: 'startBrowserDp', row: 'h-tts-and-search-bridges', why: 'App 浏览器动作，headless 无面' },
   { name: 'showBrowser', row: 'h-tts-and-search-bridges', why: 'App 浏览器动作，headless 无面' },
   { name: 'openVideoPlayer', row: 'h-tts-and-search-bridges', why: 'App 播放器面，headless 无面' },
+  { name: 'reLoginView', row: 'h-tts-and-search-bridges', why: 'App 登录态刷新视图，headless 无面；七猫小说 1 源（2026-11-21）' },
+  { name: 'openBook', row: 'h-tts-and-search-bridges', why: 'App 开书动作，只出现在 webView 返回 HTML 的 onclick 串里（不是脚本直调）；七猫小说 1 源（2026-11-21）' },
   { name: 'webview', row: 'h-host-ext-methods', why: 'WebView 渲染扩展，本仓只读文本、不猜形状' },
   { name: 'getStrResponse', row: 'h-host-ext-methods', why: '形状未知的宿主扩展调用，不猜返回结构' },
   { name: 'deviceID', row: 'h-host-ext-methods', why: '设备标识扩展，无对应面' },

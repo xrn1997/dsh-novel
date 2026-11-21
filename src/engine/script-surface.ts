@@ -3,16 +3,13 @@ import type { EvalContext } from './types.js'
 /**
  * 脚本可见性清单：`EvalContext` 的每个字段都必须在下面有一行归属。
  *
- * 为什么要有这张表：脚本能看到什么必须同时对齐三处消费面——`EvalContext` 的字段、`initOf` 的
- * JSON 键、BOOTSTRAP 的 `g.*` 全局名；任何一处漏投影都不会报错，只是脚本读到 undefined 后走默认分支。
- * 表用 `Record<keyof EvalContext, …>` 声明，漏一个字段 tsc 当场报；运行期再抽 key 断言，挡住表退化。
+ * 为什么要这张表：脚本能看到什么必须同时对齐三处消费面——`EvalContext` 字段、`initOf` 的 JSON 键、
+ * BOOTSTRAP 的 `g.*` 全局名；任何一处漏投影都不会报错，只是脚本读到 undefined 后走默认分支。
+ * 表用 `Record<keyof EvalContext, …>` 声明，漏一个字段 tsc 当场报。
  *
- * 两档归属：
- * - `visible`：进 init，按 `key` 落 JSON 键；有 `global` 的由 BOOTSTRAP 物化。
- * - `excluded`：宿主能力或求值层内部数据，脚本不直接看见（经 `java.*` 桥或沙箱派生）。
- *
- * `materialize` 标「全局不是简单赋值」：book/chapter 要补方法面，source 是 `__src__` 的别名；
- * 它们仍在这张表里登记，但不能由 `scriptGlobals()` 生成一行 `g.x = d.x`。
+ * 两档：`visible` 进 init、按 `key` 落 JSON 键（有 `global` 的由 BOOTSTRAP 物化）；`excluded` 是宿主能力
+ * 或求值层内部数据，脚本不直接看见（经 `java.*` 桥或沙箱派生）。`materialize` 标「全局不是简单赋值」——
+ * book/chapter 要补方法面、source 是 `__src__` 的别名，故不能由 `scriptGlobals()` 生成一行 `g.x = d.x`。
  */
 export type ScriptFieldSpec =
   | { readonly init: 'excluded'; readonly why: string }
@@ -25,9 +22,8 @@ export type ScriptFieldSpec =
     readonly materialize?: true
   }
 
-/** 页原文：html 优先；纯 JSON 页给序列化文本（与 host.result 的首段口径同源）。
- *  `json` 可能是解析后的对象（JSONPath 求值链）——`String(obj)` 会得到 `[object Object]`，
- *  脚本里的 `JSON.parse(src)` 随即失败；串原样，对象走 JSON.stringify。 */
+/** 页原文：html 优先；纯 JSON 页给序列化文本（与 host.result 的首段口径同源）。`json` 可能是解析后的
+ *  对象——`String(obj)` 会得到 `[object Object]`，脚本里的 `JSON.parse(src)` 随即失败。 */
 const srcOf = (ctx: EvalContext): string => {
   if (ctx.html !== undefined) return ctx.html
   if (ctx.json === undefined) return ''
@@ -79,22 +75,22 @@ export const SCRIPT_FIELDS: Readonly<Record<keyof EvalContext, ScriptFieldSpec>>
   regexRow: { init: 'excluded', why: '解析期数据：AllInOne 行在 parseRule 之前绑定，不进脚本 init' },
 }
 
-/** 可见字段的 init 键：BOOTSTRAP 的复杂物化也从这张表取键，不再手写第二份 `d.book` 名单。 */
+/** 可见字段的 init 键：BOOTSTRAP 的复杂物化也从这张表取键。 */
 export function scriptKeyOf(field: keyof EvalContext): string {
   const spec = SCRIPT_FIELDS[field]
   if (spec.init !== 'visible') throw new Error(`脚本字段 ${field} 没有 init 键`)
   return spec.key
 }
 
-/** 物化字段的脚本全局名（book / chapter / source）；BOOTSTRAP 物化时用。 */
+/** 物化字段的脚本全局名（book / chapter / source）。 */
 export function scriptGlobalOf(field: keyof EvalContext): string {
   const spec = SCRIPT_FIELDS[field]
   if (spec.init !== 'visible' || spec.global === undefined) throw new Error(`脚本字段 ${field} 没有全局名`)
   return spec.global
 }
 
-/** 普通脚本全局：BOOTSTRAP 只读这张派生表，不再手写第二份全局名单。
- *  book/chapter/source 有自定义物化，登记在 SCRIPT_FIELDS 但不在此列。 */
+/** 普通脚本全局：BOOTSTRAP 只读这张派生表。book/chapter/source 有自定义物化，登记在 SCRIPT_FIELDS
+ *  但不在此列。 */
 export function scriptGlobals(): Array<{ name: string; key: string }> {
   const out: Array<{ name: string; key: string }> = []
   for (const spec of Object.values(SCRIPT_FIELDS)) {
@@ -105,7 +101,6 @@ export function scriptGlobals(): Array<{ name: string; key: string }> {
   return out
 }
 
-/** 按清单生成 init 的普通字段；result / mounts 等求值期字段由 js-sandbox 另行拼装。 */
 export function scriptInitOf(ctx: EvalContext): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const spec of Object.values(SCRIPT_FIELDS)) {

@@ -1,18 +1,12 @@
 /**
- * AllInOne 行 → 字段规则文本的 `$n` 绑定（矩阵行 `a-allinone-group-zero` 的核心：
- * 整页正则的行组取值拼回字段规则）。
- *
- * 书源在 AllInOne（整页正则）模式下列出条目后，**同一条目的字段规则是行模板**：
- * 目录规则 `chapterName = $2$3`、`chapterUrl = https://…/$1` 里的 `$n` 取当前行的第 n 组，
- * `$0` 取整段匹配（行的第 0 位即整段，见 `allinone.ts`）。喂进来的已经只是**支文本**
- * （`parseTails` 先剥掉 `##` 尾、`parseBranch` 再判模板），故这里不做尾部分区。
- *
+ * AllInOne 行 → 字段规则文本的 `$n` 绑定（矩阵行 `a-allinone-group-zero` 的核心：整页正则的行组取值
+ * 拼回字段规则）。字段规则是行模板：`chapterName = $2$3`、`$0` = 整段匹配（见 `allinone.ts`）。喂进来
+ * 的已经只是**支文本**（`parseTails` 先剥 `##` 尾、`parseBranch` 再判模板），故这里不做尾部分区。
  * 越界组落空串：行短于引用组号时给 `''`——缺组按空串贡献、不炸整条链。
  */
 
-/** 组号 token：`$\d{1,2}`（组号宽度 1..2 位；对读见矩阵行 `a-allinone-group-zero`）——
- *  「支文本是不是行模板」的判定（parse.ts 的 parseBranch）与这里的绑定是同一份文法的两面，
- *  宽窄必须一致：只改一面会让 `$n` 要么没被当模板、要么绑不上，故形态只住这里。 */
+/** 组号 token：`$\d{1,2}`——「支文本是不是行模板」的判定（parse.ts 的 parseBranch）与这里的绑定是同一份
+ *  文法的两面，宽窄必须一致：只改一面会让 `$n` 要么没被当模板、要么绑不上，故形态只住这里。 */
 export const GROUP_TOKEN = /\$(\d{1,2})/
 
 /** 绑定用的全局版（`String.replace` 要 `g`；从 GROUP_TOKEN 派生，不另写一份形态） */

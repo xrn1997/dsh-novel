@@ -1,6 +1,6 @@
 # 兼容分母不再冻结外部快照：默认门自证，格式覆盖走实时普查
 
-Status: accepted
+Status: superseded by 0099
 
 兼容判据曾把外部实现的规则实体字段表与 Java 宿主方法名集冻结成一份仓内快照，作为两门默认测试的分母。该快照的来源、分组与覆盖范围都来自外部实现：它只覆盖七个规则实体类，不是一份独立的 legado 书源格式规范；所有权判据又只要求字段名在矩阵文本里出现。继续保留它，等于在仓内继续把外部实现当兼容权威。决定：**退役该快照与 `upstream-fields` / `host-methods` 两门**。
 
@@ -12,4 +12,4 @@ Status: accepted
 
 **被否方案**：把快照换成另一份手工维护的格式清单——清单一消失又会静默转 skip，且仍是第二份抄本；把两门改成对 `src/services/rule-fields.ts` 的自证——只证明「已知解析面有主」，发现不了格式里还没进视野的键，容易让人误以为门还在守格式完备性。真正的发现走现库普查。
 
-锚点：`tests/legado-coverage/{status-evidence,inventory-coverage,bridge-surface,demand-keys}.test.ts`；`tests/legado-coverage/{bridge-gaps,demand-keys,matrix-source}.ts`；`tests/engine/parse-census.test.ts`；`tests/legado-coverage/matrix.ts`；`src/services/rule-fields.ts`；`src/engine/js-protocol.ts`；`tests/replay/{harness,record}.ts`；`docs/development.md`「门（自动）」；`AGENTS.md`「必须过的门」。
+锚点：`tests/legado-coverage/{status-evidence,bridge-surface}.test.ts`；`tests/legado-coverage/{bridge-gaps,demand-keys,matrix-source}.ts`；`tests/engine/parse-census.test.ts`；`tests/legado-coverage/matrix.ts`；`src/services/rule-fields.ts`；`src/engine/js-protocol.ts`；`tests/replay/{harness,record}.ts`；`docs/development.md`「门（自动）」；`AGENTS.md`「必须过的门」。

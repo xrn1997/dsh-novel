@@ -7,24 +7,20 @@ import { attribOf, cleanText, rawTextOf, tagNameOf } from './dom.js'
 
 type XPathSegment = Extract<Segment, { kind: 'xpath' }>
 
-/** 节点类型码。domhandler 的 `ElementType` 是**字符串枚举**（运行时取值就是 `'tag'` / `'text'` 这些
- *  字面量），这里取到的正是它在 wire 上的字符串形态；统一在字符串面上比较，是因为枚举成员与字面量
- *  直接比会被 no-unsafe-enum-comparison 判成跨枚举比较。注意它与 `isTag` 不等价：`isTag` 还认
- *  script/style，而 `'tag'` 只认纯元素——本求值器按后者（`//script` 不当元素步命中）。 */
+/** 节点类型码。domhandler 的 `ElementType` 是**字符串枚举**（运行时取值就是 `'tag'` / `'text'`），统一在
+ *  字符串面上比较（枚举成员与字面量直接比会被 no-unsafe-enum-comparison 判成跨枚举比较）。注意它与
+ *  `isTag` 不等价：`isTag` 还认 script/style，而 `'tag'` 只认纯元素（`//script` 不当元素步命中）。 */
 const nodeType = (n: AnyNode): string => n.type
 
 /**
- * XPath 子集求值器（哪几处边界是裁决、为什么不给现量读数，见矩阵行 `a-xpath-subset`）：
- * - 路径：`//` 与 `.//`（上下文内后代——条目作用域语义）/ `/`（子步）；
- * - 节点测试：元素名 / `*` / `text()` / `@attr`（仅限末段——中段属性步宁炸不猜）；
- * - 轴：child（默认）/ parent（`..`）/ following-sibling / preceding-sibling；其他轴（ancestor 等）不支持。
- *   `preceding-sibling` 为逆向轴，位置谓词按逆文档序编号（XPath 1.0 §2.4）：`[1]`=最近前序兄弟。
- * - 谓词：位置数字、`@attr='v'`、`text()='v'`、`contains(...)`、`starts-with(...)`、`not(...)`、
- *   `position()` 比较、子元素存在（`[dd[a]]`）、相对路径存在性（`[.//a]`、`[a/@href]`
- *   ——XPath 的节点集谓词，非空即真）、`and`/`or` 组合；
- * - 函数白名单外（count/sum 等）→ UnsupportedRuleError。
- * 实现：直接在 domhandler 节点树上求值（cheerio 底层 DOM）——HTML→XML 重解析会错位。
- * 近似说明：谓词里的 text() 用元素 textContent（拼接后代文本）——近似已登记在矩阵行 `a-xpath-subset`。
+ * XPath 子集求值器（边界裁决见矩阵行 `a-xpath-subset`）：
+ * - 路径：`//` 与 `.//`（上下文内后代——条目作用域语义）/ `/`（子步）；节点测试：元素名 / `*` / `text()` /
+ *   `@attr`（仅限末段——中段属性步宁炸不猜）；
+ * - 轴：child（默认）/ parent（`..`）/ following-sibling / preceding-sibling；`preceding-sibling` 为逆向轴，
+ *   位置谓词按逆文档序编号（XPath 1.0 §2.4）：`[1]`=最近前序兄弟；
+ * - 谓词：位置数字、`@attr='v'`、`text()='v'`、`contains` / `starts-with` / `not`、`position()` 比较、
+ *   子元素存在、相对路径存在性（节点集谓词，非空即真）、`and`/`or`；白名单外函数 → UnsupportedRuleError。
+ * 直接在 domhandler 节点树上求值（HTML→XML 重解析会错位）。近似：谓词里的 text() 用元素 textContent。
  */
 export function evalXPath(
   seg: XPathSegment,
@@ -121,8 +117,8 @@ function parseXPath(path: string): Step[] {
   })
 }
 
-/** 按 / 与 // 切步骤（括号深度感知——谓词内的 / 不切）。
- *  返回的 axis 是「该步前方分隔符」的轴（首步占位 child，由 parseXPath 覆盖）。 */
+/** 按 / 与 // 切步骤（括号深度感知——谓词内的 / 不切）。返回的 axis 是「该步前方分隔符」的轴
+ *  （首步占位 child，由 parseXPath 覆盖）。 */
 function splitBySteps(s: string): Array<{ text: string; axis: Axis }> {
   // 每条结果带的是「该步**前方分隔符**」的轴：首步没有分隔符，占位 child（由 parseXPath 覆盖）
   const out: Array<{ text: string; axis: Axis }> = []
@@ -151,7 +147,7 @@ function splitBySteps(s: string): Array<{ text: string; axis: Axis }> {
 const AXIS_NAMES: Record<string, Axis> = { 'following-sibling': 'fwd', 'preceding-sibling': 'bwd' }
 
 function parseStep(token: string, axis: Axis): Step {
-  // 谓词提取（尾部 [..] 链，括号配平切）
+
   const preds: Predicate[] = []
   let body = token
   while (body.endsWith(']')) {
@@ -184,7 +180,7 @@ function parseStep(token: string, axis: Axis): Step {
     effAxis = mapped
     test = test.slice(dbl + 2)
   }
-  // 属性步仅限末段由 evalXPath 事后检查（解析层不区分末段——调用链上下文未知）
+
   return { axis: effAxis, test: parseTest(test, token), preds }
 }
 
@@ -212,7 +208,7 @@ function parsePredicate(content: string): Predicate {
   const c = content.trim()
   if (c === '') throw new Error('空谓词')
   if (c.startsWith('not(') && c.endsWith(')')) return { kind: 'not', inner: parsePredicate(c.slice(4, -1)) }
-  // position()/last() 比较
+
   const pos = /^position\(\)\s*(=|>=|<=|>|<)\s*(last\(\)|\d+)$/.exec(c)
   if (pos) {
     const op = pos[1]
@@ -235,7 +231,7 @@ function parsePredicate(content: string): Predicate {
   }
   if (c === 'last()') return { kind: 'pos', op: '=', rhs: 'last' }
   if (/^\d+$/.test(c)) return { kind: 'pos', op: '=', rhs: Number(c) }
-  // contains / starts-with
+
   const fn = /^(contains|starts-with)\s*\((.+)\)$/.exec(c)
   if (fn) {
     const fnName = fn[1]
@@ -254,7 +250,7 @@ function parsePredicate(content: string): Predicate {
     if (target.startsWith('@')) return { kind: 'fn', fn: fnName, target: { attr: target.slice(1) }, lit }
     throw new UnsupportedRuleError(`XPath 函数目标不支持: ${target}（仅 text()/@attr）`, { facet: 'rule', segmentIndex: -1, segmentRaw: content })
   }
-  // @attr='v' / @attr（存在）
+
   const attrEq = /^@([\w.-]+)\s*=\s*(.+)$/.exec(c)
   if (attrEq) {
     const attr = attrEq[1]
@@ -264,7 +260,7 @@ function parsePredicate(content: string): Predicate {
     return { kind: 'attrEq', attr, lit: parseLiteral(litRaw.trim()) }
   }
   if (/^@[\w.-]+$/.test(c)) return { kind: 'attrExists', attr: c.slice(1) }
-  // text()='v' / text()（存在）
+
   const textEq = /^text\(\)\s*=\s*(.+)$/.exec(c)
   if (textEq) {
     const litRaw = textEq[1]
@@ -272,11 +268,11 @@ function parsePredicate(content: string): Predicate {
     return { kind: 'textEq', lit: parseLiteral(litRaw.trim()) }
   }
   if (c === 'text()') return { kind: 'textExists' }
-  // 子元素存在（[dd[a]]）
+
   if (/^[A-Za-z_][\w.-]*$/.test(c)) return { kind: 'elemExists', name: c }
   // 相对路径存在性谓词（XPath 1.0 的节点集谓词：**非空即真**，输入里有 `li[.//a]` 形态）。属性步按
-  // 属性节点存在性判（testNode 的 attr 分支就是「该元素有这个属性」），故 [a/@href] 同样成立。
-  // `//` 起步在谓词里是**文档根**绝对轴，本求值器手里只有上下文节点，不猜成后代——如实抛。
+  // 属性节点存在性判，故 [a/@href] 同样成立。`//` 起步在谓词里是**文档根**绝对轴，本求值器手里只有
+  // 上下文节点，不猜成后代——如实抛。
   if (c.startsWith('//')) {
     throw new UnsupportedRuleError(`谓词路径起步不支持: ${content}（谓词内 // 要从文档根取，本求值器只在上下文节点内走轴）`, {
       facet: 'rule', segmentIndex: -1, segmentRaw: content,
@@ -285,7 +281,7 @@ function parsePredicate(content: string): Predicate {
   if (c.startsWith('.//') || c.startsWith('./') || (/^[A-Za-z_@*]/.test(c) && c.includes('/'))) {
     return { kind: 'pathExists', steps: parseXPath(c.startsWith('./') ? c.slice(1) : c) }
   }
-  // 白名单外函数（count/sum 等）→ 宁炸不猜
+
   if (/^[A-Za-z-]+\s*\(/.test(c)) {
     const open = c.indexOf('(')
     // 上一条模式保证括号在场，切出的前半段就是认不出的那个函数名
@@ -301,7 +297,7 @@ function parseLiteral(s: string): string {
   throw new Error(`字面量必须带引号: ${s}`)
 }
 
-/** 顶层切分（引号与括号深度感知——函数参数/嵌套谓词内的分隔不切）；单段原样返回 */
+/** 顶层切分（引号与括号深度感知）；单段原样返回 */
 function splitTop(s: string, sep: string): string[] {
   const out: string[] = []
   let depth = 0
@@ -360,9 +356,8 @@ function axisPool(ctx: AnyNode, axis: Axis): AnyNode[] {
       if (parent === null) return []
       const sibs = nodeChildren(parent)
       const i = sibs.indexOf(ctx)
-      // preceding-sibling 是**逆向轴**：XPath 1.0 §2.4 规定其位置按逆文档序编号——
-      // 池按逆文档序（最近的在前），谓词位置才与规范一致（`[1]`=最近者，`[last()]`=最远者）。
-      // 不要按文档序切片或编号：`[1]`/`[last()]` 会双双与规范相反。
+      // preceding-sibling 是**逆向轴**：XPath 1.0 §2.4 规定其位置按逆文档序编号——池按逆文档序（最近的
+      // 在前），谓词位置才与规范一致（`[1]`=最近者，`[last()]`=最远者）。不要按文档序切片或编号。
       return i === -1 ? [] : sibs.slice(0, i).reverse()
     }
   }
@@ -406,10 +401,9 @@ function stepForward(candidates: AnyNode[], step: Step): AnyNode[] {
   return next
 }
 
-/** 谓词内相对路径的命中集（existence 判据 = 非空）。
- *  属性步特判：XPath 的 `a/@href` 选的是 a **自己的**属性节点，不是「a 的子节点里测试 href」
- *  ——属性不在子节点链上。故属性步按「当前集合中该属性存在者」过滤，不沿轴移动。
- *  （主链上的属性步由 evalXPath 的末段提取分支处理，同一口径。） */
+/** 谓词内相对路径的命中集（existence 判据 = 非空）。属性步特判：`a/@href` 选的是 a **自己的**属性节点，
+ *  不是「a 的子节点里测试 href」——属性不在子节点链上，故属性步按「当前集合中该属性存在者」过滤，
+ *  不沿轴移动（主链上的属性步由 evalXPath 的末段提取分支处理，同一口径）。 */
 function pathHits(ctx: AnyNode, steps: Step[]): AnyNode[] {
   let cur: AnyNode[] = [ctx]
   for (const step of steps) {
@@ -421,8 +415,7 @@ function pathHits(ctx: AnyNode, steps: Step[]): AnyNode[] {
   return cur
 }
 
-/** 谓词内 text() 口径：元素 textContent（拼接后代文本 trim）——近似已文档化（真实样本全落此口径）。
- *  子树文本与 `:contains` 同一份实现（`dom.ts` 的 `rawTextOf`），不再另起一棵遍历。 */
+/** 谓词内 text() 口径：元素 textContent（拼接后代文本 trim）——近似已文档化，与 `:contains` 同一份实现。 */
 function predText(n: AnyNode): string {
   return cleanText(rawTextOf(n))
 }

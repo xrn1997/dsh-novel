@@ -11,14 +11,10 @@ import { createStore, prefsStore } from './store.js'
 import type { BookNavigation, ChapterContent, ChapterEntry, LinkRole, NavigationItem, ReadingTarget, ShelfBook } from './views/types.js'
 
 /**
- * 阅读会话：「目录 → 存档恢复 → 逐章加载 → 预取 → 进度落盘」的**时序唯一持有者**，
- * 经 interface 可测。
- *
- * 为什么不留在视图：真 bug（在途被占、两帧未落定、切章强制存 vs 防抖、陈旧闭包）全住在
- * 命令式协调里，抽纯函数只把复杂度挪走、无 seam 可测。DOM 测量经 ReaderPort 注入
- * （视图实现，测试给假 port）；锚点数学复用已测的 progress，不造第二份。
- * 图文（EPUB）未新增第二条加载循环：载荷换成 `ChapterContent`（会话只搬不拆）、目标换成
- * 「章号 + 锚点 + 节点内偏移」，仍走同一在途槽与 settleJump 落位次序。
+ * 阅读会话：「目录 → 存档恢复 → 逐章加载 → 预取 → 进度落盘」的**时序唯一持有者**，经 interface 可测。
+ * DOM 测量经 ReaderPort 注入（视图实现，测试给假 port）；锚点数学复用已测的 progress。
+ * 图文（EPUB）不新增加载循环：载荷换成 `ChapterContent`、目标换成「章号 + 锚点 + 节点内偏移」，
+ * 仍走同一在途槽与 settleJump 落位次序。
  */
 
 /** 依赖束：网络面（测试注入假实现）+ 帧调度（视图 = rAF 双帧，测试 = 同步执行） */
@@ -33,16 +29,14 @@ export interface ReaderSessionDeps {
   saveTotalChapters(total: number): void
   /** 布局落定后的回调调度 */
   afterFrames(cb: () => void): void
-  /** 滚动视口顶被**固定遮挡**的高度（阅读器顶条，px）：「阅读位置」按视口顶下方第一行算，
-   *  不是按被顶条盖住的那一行算。量不到（顶条未渲染 / 测试 / 别的挂载点）= 0，与旧口径一致。
-   *  存与取必须用同一个值：只给恢复加偏移、不给读数加，每进一次阅读器就多漂一条顶条的高度。 */
+  /** 滚动视口顶被**固定遮挡**的高度（阅读器顶条，px）：「阅读位置」按视口顶下方第一行算。
+   *  存与取必须用同一值：只给恢复加偏移、不给读数加，每进一次阅读器就多漂一条顶条的高度。 */
   topInset?(): number
   /** 视口喂入的帧调度（缺省 = 立即执行，既有内联 deps 一字不用改）；视图注入 rAF，测试注入手动泵 */
   viewport?: ReaderViewportFeed
 }
 
-/** 视口喂入的帧调度缝：绑定 = rAF + 重取滚动容器（`findScrollport`）；测试 = 手动泵；
- *  缺省 = 同步执行回调——阅读时序的零 DOM 单测与「绑定装监听」的分工都靠这条缝。 */
+/** 视口喂入的帧调度缝：绑定 = rAF + 重取滚动容器（`findScrollport`）；测试 = 手动泵；缺省 = 同步执行。 */
 export interface ReaderViewportFeed {
   scheduleFrame(cb: () => void): number
   cancelFrame(handle: number): void
@@ -56,25 +50,20 @@ const IMMEDIATE_VIEWPORT_FEED: ReaderViewportFeed = {
   refreshPort: () => {},
 }
 
-/** 当前位置锚：视口顶所在的正文节点（章 + 节点 + 节点内偏移）。
- *  **两处消费者是同一个问题**——「视口顶现在落在哪个节点上」：正文链接跳走前的返回采点、
- *  排版（字号/行距/栏宽）变化后的视口复位。只活在窗口内，绝不落盘。 */
+/** 当前位置锚：视口顶所在的正文节点（章 + 节点 + 节点内偏移）。正文链接返回采点与排版复位
+ *  共用它；只活在窗口内，绝不落盘。 */
 export interface VisibleNode { index: number; nodeId: string; offsetWithinNode: number }
 
-/** 待定位目标：章号 + 可空章内锚点 + 锚点内像素偏移。
- *  章首直达（目录点击）恒 `{index, anchorId, offsetWithinNode: 0}`——原路径一字未改；
- *  只有「回到链接来源」会带上非零偏移（让返回落在同一个节点内的同一处，而不是节点顶）。 */
+/** 待定位目标：章号 + 可空章内锚点 + 锚点内像素偏移。章首直达恒 offsetWithinNode: 0，
+ *  只有「回到链接来源」带非零偏移（落在同一节点内的同一处，而不是节点顶）。 */
 export interface JumpTarget { index: number; anchorId: string | null; offsetWithinNode: number }
 
-/** 开书恢复目标：章号 + 章内比例。存档 progress（默认）与「回阅读器」的**章级站定**共用形状——
- *  后者由调用方在 `open` 第三参交 `{ chapterIndex, offsetRatio: 0 }`，精确段再由 `reveal` 落位。
- *  两者都只走恢复（站定不写），绝不走会提交阅读进度的 `requestJump`/`settleJump`：一次定位
- *  不该被记成一次阅读（`ADR-0094`）。 */
+/** 开书恢复目标：章号 + 章内比例。存档 progress 与「回阅读器」的章级站定共用形状，
+ *  两者都只走恢复（站定不写），不记成一次阅读（`ADR-0094`）。 */
 export interface ReaderRestoreTarget { chapterIndex: number; offsetRatio: number }
 
-/** 听书段 → 阅读器的精确落点：章号 + 播放单元号（0 基）。
- *  与 `ReaderRestoreTarget` 的区别是**不经过比例**：段号是听书侧的真实粒度，
- *  阅读器按 DOM 里的 `[data-pidx]` 找块，不再拿段数比例猜像素（`ADR-0094`）。 */
+/** 听书段 → 阅读器的精确落点：章号 + 播放单元号（0 基）。不经过比例——阅读器按 DOM 里的
+ *  `[data-pidx]` 找块，不拿段数比例猜像素（`ADR-0094`）。 */
 export interface ReaderRevealTarget { index: number; paragraphIndex: number }
 
 /** DOM 测量口（`client/reader-geometry.ts` 实现；会话只读不碰 DOM） */
@@ -86,23 +75,21 @@ export interface ReaderPort {
   scrollHeight(): number
   /** 哨兵相对视口顶部的偏移；哨兵不在 DOM → null（不预取） */
   sentinelOffset(): number | null
-  /** 目标（章 + 可空锚点）相对视口顶部的偏移；`anchorId` 为 null = 该章块顶。
+  /** 目标（章 + 可空锚点）相对视口顶的偏移；`anchorId` 为 null = 该章块顶。
    *  目标节点不在 DOM → null（不落位、不清待定位目标，等下一轮）。 */
   targetOffset(index: number, anchorId: string | null): number | null
   /** 一批目标的偏移：一次建章内节点索引服务全部导航候选（逐个 `targetOffset` 会对同一棵子树
-   *  重复扫描）。逐锚点读数与 `targetOffset` 一致；找不到的一律给 null。 */
+   *  重复扫描）；找不到的一律给 null。 */
   targetOffsets(index: number, anchorIds: ReadonlyArray<string | null>): Array<number | null>
   /** 视口顶所在正文节点；该章没有可定位节点（文字章）或量不到 → null */
   currentNode(): VisibleNode | null
   /** 章内某个播放单元（`[data-pidx]` 块）相对视口顶的偏移与高度；块不在 DOM → null。
-   *  可选：只服务「按听书段精确落位」，纯文本测试端口可以不给（会话退回章首）。 */
+   *  可选：纯文本测试端口可以不给（会话退回章首）。 */
   targetOffsetOfParagraph?(index: number, paragraphIndex: number): { top: number; height: number } | null
 }
 
-/** 一次精确落位的现场：目标 + 落点策略。`write` 决定这一跳算不算一次阅读动作
- *  （定位/跟随算，回阅读器只站定不算；见 `ADR-0078`）。 */
-/** `locate` = 显式定位 / 回阅读器 / 起播首拍：无条件顶对齐；`follow` = 跟读推进：
- *  目标已是当前可见的最后一段且落在带的下半部时翻页，否则这一页里不动。 */
+/** 一次精确落位的现场：目标 + 落点策略。`write` 决定这一跳算不算阅读动作（`ADR-0078`）；
+ *  `locate` 无条件顶对齐，`follow` 只在目标成为可见最后一段且落在下半部时翻页。 */
 export type RevealMode = 'locate' | 'follow'
 
 interface PendingReveal extends ReaderRevealTarget {
@@ -119,12 +106,10 @@ export interface ReaderSessionState {
   chapters: Array<ChapterContent | null>
   loadingIdx: number | null
   error: { code?: string; message?: string } | null
-  /** DOM 同步版本：会改变布局或需要重新落位的事情各 +1（章节窗口换版、置待定位目标）。
-   *  **视图不解释它**——阅读器的 DOM 绑定只比较「这一帧的版本与上次量过的是否同一个」，
-   *  新加一条影响布局的来源时改的是会话这一处，不是视图的依赖数组。 */
+  /** DOM 同步版本：会改变布局或需要重新落位的事情各 +1。**视图不解释它**，只比较「这一帧的
+   *  版本与上次量过的是否同一个」；新加影响布局的来源时改会话这一处，不是视图的依赖数组。 */
   domRevision: number
-  /** 当前视口所在章（0 基）。**只在跨章时写**——同章滚动继续走防抖落盘，不唤醒渲染；
-   *  消费者是工具栏章进度细线与目录抽屉的「当前章」高亮，都是低频呈现。 */
+  /** 当前视口所在章（0 基）。**只在跨章时写**（同章滚动不唤醒渲染）；消费者是章进度细线与目录高亮。 */
   currentChapter: number
   /** 正文链接的返回栈深度（> 0 = 视图给「返回原处」入口）。窗口内状态，不落盘。 */
   returnDepth: number
@@ -132,19 +117,17 @@ export interface ReaderSessionState {
 
 type DebouncedSave = ((chapterIndex: number, offsetRatio: number) => void) & { cancel(): void; flush(): void }
 
-/** 恢复位预约：目录已发布但存档章还没问回来时，预取会先抢走在途槽（哨兵此时在视口顶 →
- *  目标 = 第 0 章），open() 的恢复 load 半路静默返回——整条恢复丢失、退出再进回到第一章。
+/** 恢复位预约：目录已发布但存档章还没问回来时，预取会先抢走在途槽、整条恢复丢失。
  *  所以目录一发布就占槽到存档章落定（打点见 `load()` 的 early-return）。 */
 const RESTORE_SLOT = -1
 
-/** 连续阅读保留在视口之前的已载章数：跳远端仍由「视口所在连续区间」收口；连续前读按这个窗口裁，
- *  否则已载集只增不减（DOM/锚点测量随会话线性变贵）。向上滚到窗口顶时 `checkBackfill` 补回上一章，
- *  回溯阅读不失效。 */
+/** 连续阅读保留在视口之前的已载章数（向前读按这个窗口裁，否则已载集只增不减）；
+ *  向上滚到窗口顶时 `checkBackfill` 补回上一章，回溯阅读不失效。 */
 const KEEP_BEHIND = 6
 /** 视口顶距已载窗口顶不足这么多屏 → 补载上一章（与预取的屏数量级相同）。 */
 const BACKFILL_SCREENS = 2
 /** 一次「视口 episode」（`open` / 跳章 / 跨章换位）内自动补载的硬上界：距离判据依赖高度测量，
- *  测量失真的那一天不能靠它兜底。正常回溯由用户滚动跨章重置额度，几步就够用。 */
+ *  测量失真时不能靠它兜底。 */
 const BACKFILL_MAX_CHAPTERS = 16
 
 export class ReaderSession {
@@ -156,75 +139,61 @@ export class ReaderSession {
   private tocNow: ChapterEntry[] | null = null
   private navigationNow: NavigationItem[] | null = null
   private chaptersNow: Array<ChapterContent | null> = []
-  /** 已载章号集合：prune 只遍历已载项，不扫整本目录长度的数组。 */
   private readonly mountedSet = new Set<number>()
   private anchorsNow: ChapterAnchor[] = []
-  /** DOM 同步版本计数器（state 里那枚是它的投影）：章节窗口换版与置待定位目标各 +1。 */
   private domRevision = 0
-  /** 待定位目标：渲染落地后由 `settleJump` 定位并清零。**不是渲染态**——不进 store、不触发
-   *  渲染；视图也不读它（「这一帧要不要拍」看 `domRevision`）。留在类上是因为它是落位时序的
-   *  私事，诊断与测试回查经只读 getter 拿。 */
+  /** 待定位目标：渲染落地后由 `settleJump` 定位并清零。**不是渲染态**——不进 store、不触发渲染；
+   *  视图只看 `domRevision`，诊断与测试经只读 getter 回查。 */
   private pendingJumpNow: JumpTarget | null = null
-  /** 按听书段落位的待办：与 `pendingJumpNow` 分开——前者是「段号 → DOM 块」的精确落点，
-   *  后者是目录/内链的「章 + 节点锚点」导航。落位时先结导航，再结这一条。 */
+  /** 按听书段落位的待办：与 `pendingJumpNow`（目录/内链的章 + 节点锚点）分开，落位时先结导航、再结这条。 */
   private pendingReveal: PendingReveal | null = null
-  /** 程序化 reveal 写入 scrollTop 的同拍里，滚动事件可能同步到达：这一格挡住它，
-   *  由 reveal 自己按 target / 真实比例提交位置（异步滚动事件则由幽灵写闸兜住）。 */
+  /** 程序化 reveal 写入 scrollTop 的同拍里滚动事件可能同步到达：这一格挡住它，
+   *  由 reveal 自己提交位置（异步滚动事件则由幽灵写闸兜住）。 */
   private holdViewport = false
-  /** 上次锚点测量所依据的**已载表引用**（`chaptersNow` 是 copy-on-write，换引用即换版本）。
-   *  与当前表不同 = 载入或裁剪过、这张锚点表已过期；布局变化是另一条来路（`handleViewportChange`
-   *  的显式标记）。用它而不是布尔脏标记：脏标记会被「提交之前来的那一帧滚动」消费掉，而滚动帧
-   *  读到的是还没提交新章块的 DOM。 */
+  /** 上次锚点测量所依据的**已载表引用**（`chaptersNow` 是 copy-on-write）。与当前表不同 =
+   *  载入或裁剪过、锚点表已过期。不用布尔脏标记：它会被「提交之前来的那一帧滚动」消费掉，
+   *  而那一帧读到的是还没提交新章块的 DOM。 */
   private anchorsFrom: Array<ChapterContent | null> | null = null
   private inflight: number | null = null
-  /** 阅读位置：**唯一真相**（章 + 章内比例）。滚动测量 / 目录选中 / 存档恢复都只是「修正」它，
-   *  落盘策略只由 `commit` 判定——读数若只是每次滚动现算的一次性输出，每条时序路径就会各自
-   *  决定何时落盘，缺陷全出在这一族。 */
+  /** 阅读位置：**唯一真相**（章 + 章内比例）；落盘时机只由 `commit` 判定——
+   *  否则每条时序路径会各自决定何时落盘。 */
   private position = { chapterIndex: 0, offsetRatio: 0 }
   private bookKey = ''
   private sourceId = ''
-  /** 最近一次失败的章下标（null = 目录/进入阶段失败）——retry 用 */
   private failedIndex: number | null = null
   /** 正文链接的返回栈（窗口内状态；每次导航前采点，返回时弹一条）。**绝不落盘**。 */
   private returnStack: VisibleNode[] = []
-  /** 会话代际：`open`（换书/重开）与 `dispose`（退出阅读器）各自 +1。异步续作（迟到的正文、
-   *  双帧回调）只服务它出发时的那一代——不符即作废，不落位不落盘。**只补在异步续作上**：
-   *  既有的在途槽次序、RESTORE_SLOT 预约与防抖 flush 语义一字未动。 */
+  /** 会话代际：`open`（换书/重开）与 `dispose` 各自 +1。异步续作（迟到的正文、双帧回调）
+   *  只服务它出发时的那一代——不符即作废，不落位不落盘。 */
   private generation = 0
-  /** 这本书此刻**在不在书架上**（`'unknown'` = 书架没拉到，不假装知道）。
-   *  读数来自 `open` 里那次已有的书架查询：为存档恢复查过一次，再为「要不要问入架」查第二次
-   *  就是给同一个问题立第二个主人。阅读场景据此在离开阅读器时问一次——不在架的书，进度 PUT 会被
-   *  服务端判 `NOT_ON_SHELF`，这一屏读到哪儿就此静默消失。 */
+  /** 这本书此刻**在不在书架上**（`'unknown'` = 书架没拉到）。读数来自 `open` 里那次已有的
+   *  书架查询；不在架的书进度 PUT 会被判 `NOT_ON_SHELF`，这一屏读到哪儿就此静默消失。 */
   private onShelfNow: 'unknown' | 'on' | 'off' = 'unknown'
   /** 渲染后要结的滚动补偿：DOM 提交前量不到新布局（前插一章的高度、裁掉一段后的落点），
-   *  统一在 `afterRender` 里按实测值补 scrollTop。跳章会清空——落位由 settleJump 自己负责。
-   *  裁章与前插都记**参考章的新旧起点差**：块高不含章间外边距，只按高度补会让视口漂；
-   *  量不到参考章时才退回高度和（裁章）或新章块高（前插）。 */
+   *  统一在 `afterRender` 按实测值补 scrollTop；跳章会清空（落位归 settleJump）。
+   *  裁章与前插都记**参考章的新旧起点差**（块高不含章间外边距），量不到才退回高度和 / 块高。 */
   private pendingScrollFixes: Array<
     | { kind: 'drop'; px: number; keep: { index: number; start: number } | null }
     | { kind: 'prepend'; index: number; keep: { index: number; start: number } | null }
   > = []
   /** 视口读数至少来过一次（`open` 复位）。回溯补载只认真实视口：存档恢复的双帧落位之前，
-   *  scrollTop 还是进入前的旧值（常见为 0），据此补载上一章是拿错证据做的决定。 */
+   *  scrollTop 还是进入前的旧值。 */
   private viewportSeen = false
   /** 存档恢复的双帧落位尚未完成（`open` 置真、落位帧清）。这期间视口读数是进入前的旧值：
    *  预取、位置提交与回溯补载一律不许据此做决定。 */
   private restoring = false
-  /** 视口顶的固定遮挡高度（顶条）：见 `ReaderSessionDeps.topInset`。每次现量——视图那边是
-   *  ref 读高，条高随排版/宿主缩放变，缓存一份会在改变时静默用旧值。非负夹取的判据住
-   *  `client/viewport-top.ts` 的 `clampTopInset`，这里不抄第二份（`ADR-0089`）。 */
+  /** 视口顶的固定遮挡高度（顶条）：见 `ReaderSessionDeps.topInset`。每次现量（条高随排版变），
+   *  非负夹取的判据住 `client/viewport-top.ts` 的 `clampTopInset`（`ADR-0089`）。 */
   private get topInset(): number {
     return clampTopInset(this.deps.topInset?.())
   }
-  /** 「读者看见的内容顶」在内容坐标里的位置：滚动位 + 顶条遮挡。阅读位置（存、取、落位）
-   *  一律按它算——按裸 `scrollTop` 算会把顶条盖住的那一行当成读数。 */
+  /** 「读者看见的内容顶」在内容坐标里的位置：滚动位 + 顶条遮挡。阅读位置（存、取、落位）一律按它算。 */
   private contentTop(): number {
     return this.port.scrollTop() + this.topInset
   }
-  /** 本次视口 episode 剩余的自动补载次数（跨章/跳章/换书重置）。 */
   private backfillBudget = BACKFILL_MAX_CHAPTERS
-  /** 挂起中的视口帧：令牌 + 句柄。**令牌**让同步执行的调度器也不出错——帧体在
-   *  `scheduleFrame` 返回之前就跑完时，事后写回的是令牌的句柄，不会复活已完成的帧位。 */
+  /** 挂起中的视口帧：令牌 + 句柄。**令牌**让同步执行的调度器也不出错——帧体在 `scheduleFrame`
+   *  返回前就跑完时，事后写回的是令牌的句柄，不会复活已完成的帧位。 */
   private frame: { handle: number } | null = null
   /** 挂起帧是否要按「布局变了」处理：scroll / resize / ResizeObserver 多来源按或合并。 */
   private pendingLayout = false
@@ -238,7 +207,6 @@ export class ReaderSession {
   /** 错误快照的语言：生成时定（与 job store 同一条已知限制）。视图传当前 t，测试缺省 zh。 */
   private readonly t: Translate
 
-  /** `saveDebounceMs` 是滚动防抖窗口（缺省 2s；测试收紧） */
   constructor(deps: ReaderSessionDeps, port: ReaderPort, saveDebounceMs = 2000, t: Translate = zhTranslate) {
     this.deps = deps
     this.port = port
@@ -250,23 +218,19 @@ export class ReaderSession {
   }
 
   get state(): ReaderSessionState { return this.store.get() }
-  /** 待定位目标（**不是渲染态**：不参与渲染、不触发重渲染；只给诊断与测试回查落位时序）。
-   *  视图不读它——渲染后的测量触发只看 `state.domRevision`。 */
+  /** 待定位目标（**不是渲染态**：只给诊断与测试回查落位时序）；视图不读它，看 `state.domRevision`。 */
   get pendingJump(): JumpTarget | null { return this.pendingJumpNow }
-  /** 在架读数（阅读场景据此决定离开时要不要问一句） */
   get onShelf(): 'unknown' | 'on' | 'off' { return this.onShelfNow }
   subscribe = (cb: () => void): (() => void) => this.store.subscribe(cb)
 
-  /** 进入一本书：目录 → 存档恢复；无存档/书架拉不到 → 从头。
-   *  `relocation` = 「回阅读器」的章级站定（可选）：有它就用它替代存档 progress 当恢复目标，
-   *  恢复路径（cause `restore`）只站定不写；精确段由随后的 `reveal` 落位（`ADR-0094`）。
-   *  越界章夹回目录范围。 */
+  /** 进入一本书：目录 → 存档恢复；无存档/书架拉不到 → 从头。`relocation` = 「回阅读器」的
+   *  章级站定（可选）：替代存档 progress 当恢复目标，恢复路径只站定不写，精确段由随后的
+   *  `reveal` 落位（`ADR-0094`）。越界章夹回目录范围。 */
   async open(sourceId: string, bookKey: string, relocation: ReaderRestoreTarget | null = null): Promise<void> {
     const gen = ++this.generation                       // 换书/重开：上一代的一切在途续作自此作废
     this.cancelPendingFrame()                           // 上一代的挂起视口帧同样作废
     this.lastVisibleBeforePrefs = null                  // 上一本的采点不带到这一本（旧快照只会量成 null 或误跳）
-    // 采点订阅挂在同步头部：它只对 `setPref` 的同步栈负责，与目录是否到货无关——正文未渲染时
-    // 采到的空快照在复位时是 no-op，不会误跳；重开幂等（守卫只订一次）。
+    // 采点订阅挂在同步头部：它只对 `setPref` 的同步栈负责，与目录是否到货无关；重开幂等（守卫只订一次）。
     this.subscribePrefs()
     this.sourceId = sourceId
     this.bookKey = bookKey
@@ -280,8 +244,7 @@ export class ReaderSession {
     this.failedIndex = null
     this.returnStack = []
     this.pendingScrollFixes = []
-    // 待跳目标是上一本的现场：同一实例会被重开复用（换源 in-place 与开发期双挂载都会走这里），
-    // 留着它会让新书一开场就被 pendingJump 早退掉视口读数，settleJump 还可能真跳到旧目标章
+    // 待跳目标是上一本的现场：重开复用同一实例时留着它，会早退视口读数或真跳到旧目标章
     this.pendingJumpNow = null
     this.pendingReveal = null
     this.holdViewport = false
@@ -309,9 +272,8 @@ export class ReaderSession {
       let restoreIndex = 0
       let restoreRatio = 0
       let restore = false
-      // 「回阅读器」的听书重定位**优先于**存档 progress：两者都是开书恢复目标，区别只在来源。
-      // 它和存档恢复同一个出口（`commit('restore')` 站定不写），不另开跳章路径。章号夹回目录
-      // 范围（听会话较长、目录变短的旧现场不把阅读器推进空白）。
+      // 「回阅读器」的听书重定位**优先于**存档 progress，同一个出口（commit('restore') 站定不写），
+      // 不另开跳章路径；章号夹回目录范围。
       if (relocation !== null && toc.length > 0) {
         const at = Number.isFinite(relocation.chapterIndex) ? Math.trunc(relocation.chapterIndex) : 0
         restoreIndex = Math.min(Math.max(0, at), toc.length - 1)
@@ -328,10 +290,8 @@ export class ReaderSession {
         this.onShelfNow = mine === undefined ? 'off' : 'on'
         if (mine !== undefined) {
           if (typeof mine.totalChapters !== 'number') this.deps.saveTotalChapters(toc.length)
-          // 「有没有存档」判据单点归 `shared/reading-position.ts` 的 `hasProgress`（第 0 章的章内位置也算进度）；
-          // 存档章越出目录（换源/目录变短/缓存重建）→ clamp 到最后一章，不许落成空白阅读器；
-          // 负下标（手改过的落盘元数据）同样夹回第 0 章。**空目录没有可恢复的目标**：夹不到任何
-          // 章时 `load` 会直接返回、双帧落位永不发生，而那正是下面 `restoring` 闸的前提。
+          // 存档判据单点归 `shared/reading-position.ts` 的 `hasProgress`；越界/负下标夹回目录范围，
+          // **空目录没有可恢复目标**——夹不到章时 `load` 直接返回，而那是下面 `restoring` 闸的前提。
           if (!restore && hasProgress(mine.progress) && toc.length > 0) {
             restoreIndex = Math.min(Math.max(0, mine.progress.chapterIndex), toc.length - 1)
             restoreRatio = mine.progress.offsetRatio
@@ -342,10 +302,9 @@ export class ReaderSession {
       if (gen !== this.generation) return
       this.inflight = null
       this.commit('restore', restoreIndex, restoreRatio)      // 站定：位置 = 存档值，不写回
-      // 有存档 → 载入后走双帧落位（含比例 0：不落位到存档章顶的话，回溯补载的前插会让视口
-      // 落进上一章）；落位完成前视口读数是进入前的旧值（见 `restoring`）。
-      // 闸跟着「这一趟真会载入」走：目标载不动时 `load` 直接返回、双帧永不发生，闸要是照落，
-      // 此后每次视口读数都在 `handleViewportChange` 顶部被吞（预取/位置提交/补载全停）。
+      // 有存档 → 载入后走双帧落位（含比例 0：不落位的话，回溯补载的前插会让视口落进上一章）；
+      // 落位完成前视口读数是进入前的旧值。闸跟着「这一趟真会载入」走：目标载不动时双帧永不发生，
+      // 闸要是照落，此后每次视口读数都在 handleViewportChange 顶部被吞。
       this.restoring = restore && this.inRange(restoreIndex)
       await this.load(restoreIndex, restoreRatio, restore ? { restore: true } : undefined)
     } catch (e) {
@@ -354,8 +313,7 @@ export class ReaderSession {
     }
   }
 
-  /** 加载某章（单在途槽：同章并发/滚动风暴去重）；`opts.restore` = 双帧后按锚点定位
-   *  （含 ratio 0：把存档章顶对齐视口，否则回溯补载的前插会让视口落进上一章）。
+  /** 加载某章（单在途槽：同章并发/滚动风暴去重）；`opts.restore` = 双帧后按锚点定位。
    *  `keepViewport` = 前插（回溯补载）：新章加在已载窗口**上方**，渲染后按实测位移下移滚动位。 */
   async load(
     index: number, restoreRatio = 0, opts?: { keepViewport?: boolean; restore?: boolean },
@@ -393,8 +351,7 @@ export class ReaderSession {
             if (gen !== this.generation) return
             const at = anchorTop(this.anchorsNow, index, restoreRatio,
               this.port.scrollHeight(), this.port.viewHeight())
-            // 让出顶条：恢复点落在**看得见**的顶，而不是被顶条盖住的那一行。听书写的 progress
-            // 是「正在念的那段的段首」，按裸 scrollTop 落位正好把它藏到条后（用户要上划才看得见）。
+            // 让出顶条：恢复点落在**看得见**的顶，而不是被顶条盖住的那一行（听书写的 progress 是段首）。
             this.port.setScrollTop(Math.max(0, at - this.topInset))
             // 落位帧之后 scrollTop 才是真实视口：从这里开始才允许预取/位置/补载读它
             this.restoring = false
@@ -412,12 +369,10 @@ export class ReaderSession {
       // 恢复章拉取失败：落位不会发生，别把会话钉在「等待落位」里
       if (opts?.restore === true) this.restoring = false
       this.failedIndex = index
-      // 跳章失败 → 撤销意图：commit('jump') 已把「读到第 N 章」写进存档，而第 N 章从未渲染过
-      // ——不回退就是拿用户没见过的章当阅读位置。锚点为空（进入阶段第一章就失败）无可回退。
+      // 跳章失败 → 撤销意图：commit('jump') 已把「读到第 N 章」写进存档，而第 N 章从未渲染——不回退就是拿没见过的章当位置。
       const jump = this.pendingJumpNow
       if (jump !== null && jump.index === index) this.pendingJumpNow = null
-      // 段号落位与跳章同一条失败半径：目标章没载进来，这一发就不再等，别把 pendingReveal
-      // 留成挡住后续视口读数的死目标。
+      // 段号落位与跳章同一失败半径：目标章没载进来，这一发就不再等（别留成挡住视口读数的死目标）。
       if (this.pendingReveal?.index === index) this.pendingReveal = null
       if (this.position.chapterIndex === index) {
         // 视口 = 「读者实际在哪儿」的证据（与 handleViewportChange 同一读取口径）
@@ -433,18 +388,15 @@ export class ReaderSession {
         this.inflight = null
         this.store.set({ loadingIdx: null })
         this.settlePendingLoad()
-        // 恢复那一趟的 finally 不补载：落位由双帧负责（测试里的 afterFrames 可能同步落定，
-        // 届时 `restoring` 已清，不能把「恢复完成」误读成「视口已稳定」）。
-        // 成功那趟换了已载表、DOM 还没提交，补载交给 afterRender；这里只兜表没变的失败那趟
-        // （在途被预取占掉时错过的回溯补载）。
+        // 恢复那一趟的 finally 不补载：落位由双帧负责（测试里 afterFrames 可能同步落定）。
+        // 成功那趟换了已载表、DOM 还没提交，补载交给 afterRender；这里只兜表没变的失败那趟。
         if (opts?.restore !== true) this.checkBackfill()
       }
     }
   }
 
-   /** 在途槽释放后补拉「请求跳转时被在途挡下」的章（竞态）：requestJump 置 pendingJump 再试
-   *  load，当时 inflight 非空则 load 立刻 return；正向流水到尾部后 chapters 不再变，
-   *  settleJump 永不满足 → 该次点击无声消失、pendingJump 永挂。此处补一次。 */
+  /** 在途槽释放后补拉「请求跳转时被在途挡下」的章：requestJump 置 pendingJump 再试 load 时被挡，
+   *  正向流水到尾部后 settleJump 永不满足 → 该次点击无声消失。此处补一次。 */
   private settlePendingLoad(): void {
     const jump = this.pendingJumpNow
     if (jump === null) return
@@ -460,30 +412,26 @@ export class ReaderSession {
     void this.open(this.sourceId, this.bookKey)
   }
 
-  /** 未载边界哨兵进预取区 → 加载下一章（单一在途；读尽/边界未到 → 不动）。
-   *  目标 = **视口所在章之后**第一个未载章（不是最大已载章 +1，见 reader-load 头注）。 */
+  /** 未载边界哨兵进预取区 → 加载下一章（单一在途；目标 = **视口所在章之后**第一个未载章，见 reader-load 头注）。 */
   private checkPreload(): void {
     const sentinel = this.port.sentinelOffset()
     if (sentinel === null) return
     const target = nextLoadTarget(sentinel, this.port.viewHeight(), {
       chapters: this.chaptersNow, loading: this.inflight, from: this.position.chapterIndex,
     })
-    // 刚失败的同一章不自动重试（与 settlePendingLoad 同一条纪律）：漏了这句，失败章会随每次
-    // 视口变化被重新预取，成了静默重试环
+    // 刚失败的同一章不自动重试（与 settlePendingLoad 同一条纪律）：否则失败章会随每次视口变化被静默重试
     if (target !== null && target !== this.failedIndex) void this.load(target)
   }
 
-  /** 视口接近已载窗口**顶** → 补载上一章（裁掉远章之后的回溯路径；没有它，连续前读裁掉的历史
-   *  就再也滚不回去）。单在途；正文已在载或刚失败过（等用户重试）则不动。 */
+  /** 视口接近已载窗口**顶** → 补载上一章（裁章后的回溯路径）；单在途，正文已在载或刚失败过则不动。 */
   private checkBackfill(): void {
     if (this.restoring) return                                  // 恢复落位前的旧视口：不是证据
     if (!this.viewportSeen) return                              // 视口还没读过：不做回溯判断
     if (this.inflight !== null) return
     if (this.pendingJumpNow !== null) return                     // 在途导航优先，不给视口补章
     if (this.backfillBudget <= 0) return                         // 本 episode 额度用尽
-    // 锚点表只认「量它的那一版已载表」。表已换 = 新章块还没进 DOM（load 的 finally 与 commit
-    // 里的 prune 都可能在提交前走到这里）：此刻重测只会把旧布局记成新表的锚点，而这份
-    // 「已对齐」的假读数会让下一帧滚动跳过重测。等 afterRender 量过 DOM 再判断。
+    // 锚点表只认「量它的那一版已载表」。表已换 = 新章块还没进 DOM：此刻重测会把旧布局记成新表的
+    // 锚点，下一帧滚动就会跳过重测。等 afterRender 量过 DOM 再判断。
     if (this.anchorsFrom !== this.chaptersNow) return
     const first = this.anchorsNow[0]
     if (first === undefined || first.index === 0) return
@@ -491,19 +439,16 @@ export class ReaderSession {
     if (first.height <= 0) return
     const prev = first.index - 1
     if (this.mounted(prev) || prev === this.failedIndex) return
-    // 不越过裁章下界：更早的章加载后会被 `pruneToViewport` 当场裁掉，再触发同一章的重取。
-    // 要再往前读，得由用户滚进窗口顶章、让 position 跟着上移，下界自然放开。
+    // 不越过裁章下界：更早的章加载后会被 `pruneToViewport` 当场裁掉，要再往前读得由用户滚到窗口顶章。
     if (prev < this.position.chapterIndex - KEEP_BEHIND) return
     if (this.port.scrollTop() - first.start > this.port.viewHeight() * BACKFILL_SCREENS) return
     this.backfillBudget -= 1
     void this.load(prev, 0, { keepViewport: true })
   }
 
-  /** 已载集裁到「视口章所属的连续区间」，并在连续区间内按 `KEEP_BEHIND` 裁掉远在视口之前的章：
-   *  前者防跳远端再回来时缺章串读（渲染顺序不等于书的顺序），后者防连续阅读时 DOM 只增不减。
-   *  只在视口章已载时裁：它在途时裁会把用户手上的正文清空。
-   *  裁掉的是视口**上方**的章 → 内容整体上移，滚动位按参考章（视口章）的新旧起点差在
-   *  afterRender 里回补——起点差把章间外边距算进去；量不到参考章时退回高度和。
+  /** 已载集裁到「视口章所属的连续区间」，并在区间内按 `KEEP_BEHIND` 裁掉远章：前者防跳远端
+   *  再回来时缺章串读，后者防连续阅读时 DOM 只增不减；只在视口章已载时裁。
+   *  裁掉视口**上方**的章 → 内容整体上移，afterRender 按参考章的新旧起点差回补滚动位；
    *  跳章（pendingJump 在场）不补——落位由 settleJump 重测目标，补了会叠加。 */
   private pruneToViewport(): void {
     const at = this.position.chapterIndex
@@ -536,18 +481,13 @@ export class ReaderSession {
     this.publishChapters(next)
   }
 
-  /** 位置修正的**唯一入口**：cause 决定落盘时机，与「视口是否动过」解耦。
-   *  - `restore`：来自存档 → 只是站定，不写回（写回去是幽灵写）
-   *  - `jump`   ：目录选中 = 导航事件 → 立即落（章已定，章内比例等视口落定后修正）
-   *  - `cross`  ：视口跨章 = 导航事件 → 立即落
-   *  - `scroll` ：同章滚动 = 连续量 → 防抖落
-   *  两个分支同走一条防抖队列：挂起位里永远只剩最新一次读数，迟到的旧值无处可存。 */
+  /** 位置修正的**唯一入口**：cause 决定落盘时机——`restore` 站定不写；`jump` / `cross` 是导航
+   *  事件，立即落；`scroll` 是同章连续量，防抖落。两个分支同走一条防抖队列：
+   *  挂起位里永远只剩最新一次读数，迟到的旧值无处可存。 */
   private commit(cause: 'restore' | 'jump' | 'cross' | 'scroll', chapterIndex: number, offsetRatio: number): void {
-    // 幽灵写闸（与 `restore` 的「站定不写」同一条口径）：读数与**当前位置完全相同**时这一笔
-    // 没有新信息，落盘只是把同一个数写回去——挂载期的第一次视口读数正是这一形态（位置刚从
-    // 存档站定，读数再算一遍还是同一个值）。不闸住它，「浮层开合不写进度」这类断言就要跟
-    // 挂起的冗余写抢时间。只闸 `scroll`：`jump`/`cross` 是导航事件，「选中即落盘」不因值恰好
-    // 相同而放弃。
+    // 幽灵写闸（与 `restore` 的「站定不写」同一条口径）：读数与当前位置完全相同时这一笔没有新信息，
+    // 挂载期的第一次视口读数正是这一形态。只闸 `scroll`：`jump`/`cross` 是导航事件，
+    // 「选中即落盘」不因值恰好相同而放弃。
     if (cause === 'scroll' && chapterIndex === this.position.chapterIndex && offsetRatio === this.position.offsetRatio) {
       return
     }
@@ -560,8 +500,7 @@ export class ReaderSession {
     this.save(chapterIndex, offsetRatio)
     if (cause !== 'scroll') this.save.flush()
   }
-  /** 视口喂入的唯一入口（绑定的 scroll / resize / ResizeObserver 监听器都调它）：同一静默期的
-   *  事件合成一帧，`layoutChanged` 按**或**合并——两类来源各排一次会重复采点、重复落一笔进度。
+  /** 视口喂入的唯一入口：同一静默期的事件合成一帧，`layoutChanged` 按**或**合并；
    *  帧体先重取滚动容器再让会话读视口：内容变化后旧缓存量到的是上一版布局。 */
   feedViewport(layoutChanged = false): void {
     this.pendingLayout = this.pendingLayout || layoutChanged
@@ -582,11 +521,9 @@ export class ReaderSession {
     return this.deps.viewport ?? IMMEDIATE_VIEWPORT_FEED
   }
 
-  /** 视口变化：预取 + 位置修正（跨章是导航事件，同章滚动是连续量）。
-   *  纯滚动只读锚点缓存（锚点是绝对位置，滚动不改变它）；`layoutChanged` 或已载表换了版本才重测。
-   *  目录跳章在途期间**不采信读数**：视口还是旧位置，采信等于用旧证据推翻用户刚下的导航
-   *  命令（跳章后正文未到时读数会把位置改回原章）。落地由 `settleJump` 收口（它清
-   *  pendingJump），之后的读数才是新位置的证据。 */
+  /** 视口变化：预取 + 位置修正（跨章是导航事件，同章滚动是连续量）。纯滚动只读锚点缓存；
+   *  `layoutChanged` 或已载表换了版本才重测。目录跳章在途期间**不采信读数**：视口还是旧位置，
+   *  采信等于用旧证据推翻用户刚下的导航命令；落地由 `settleJump` 收口。 */
   private handleViewportChange(opts?: { layoutChanged?: boolean }): void {
     // 存档恢复落位前的读数属于「进入前的旧视口」：预取、位置提交与补载都不许据此做决定
     if (this.restoring) return
@@ -605,17 +542,14 @@ export class ReaderSession {
   }
 
   /** 导航直达（目录点击 / 注释面板转交的主序列目标）：目标章未载则加载（落地后由 settleJump 定位）。
-   *  **选中即落盘**：「读到哪一章」是导航事件，不押在「视口真的动过」上——章在途时用户切走、
-   *  视口没动，只靠 handleViewportChange 意图就会静默丢失。
+   *  **选中即落盘**：章在途时用户切走、视口没动，只靠 handleViewportChange 意图就会静默丢失。
    *  `anchorId` 非空 = 跳到该章文档内的那个锚点（EPUB 目录：同一 XHTML 的多个条目跳不同锚点）。 */
   requestJump(index: number, anchorId: string | null = null): void {
     this.jumpTo({ index, anchorId, offsetWithinNode: 0 })
   }
 
   /** 按听书段精确落位：目标章可未载，落位等 DOM 提交后由 `settleReveal` 收口（`ADR-0094`）。
-   *  `mode: 'locate'` = 显式定位 / 回阅读器 / 起播首拍：无条件顶对齐；
-   *  `mode: 'follow'` = 跟读推进：只在翻页时顶对齐，普通段不滚。
-   *  `write` = 这一跳算不算一次阅读动作（定位/跟随算，回阅读器只站定不算）。
+   *  `locate` 无条件顶对齐；`follow` 只在翻页时顶对齐。`write` = 这一跳算不算一次阅读动作。
    *  **不经过段数比例**：段号直接映射到 `[data-pidx]` 块；找不到段落时退该章章首，
    *  不让一次落位把 `pendingReveal` 永久挂住（那会挡住后续所有视口读数）。 */
   reveal(target: ReaderRevealTarget, opts: { mode: RevealMode; write: boolean; bottomInset?: number }): void {
@@ -628,14 +562,12 @@ export class ReaderSession {
       write: opts.write,
       bottomInset: Math.max(0, opts.bottomInset ?? 0),
     }
-    // 目标章已在 DOM 且没有待结的滚动补偿：当场量、当场落，定位按钮 / 跟随 effect 不必等一拍。
-    // 有补偿时先等 afterRender 把补偿结掉，否则补偿会把刚落位的视口再推开。
+    // 目标章已在 DOM 且无待结补偿：当场量、当场落；有补偿时先等 afterRender，否则补偿会把落位推开。
     if (this.tocNow !== null && this.mounted(target.index) && this.pendingScrollFixes.length === 0) {
       this.settleReveal()
       return
     }
-    // 显式定位/跟随先按「读到这一章」落一笔，按了就有可观测反应（与目录跳章同一条语义）；
-    // 精确段位等正文到货后再由 settleReveal 补。回阅读器（write:false）不走这一笔。
+    // 显式定位/跟随先按「读到这一章」落一笔，按了就有可观测反应；精确段位等正文到货后补（write:false 不走）。
     if (opts.write && this.tocNow !== null) this.commit('jump', target.index, 0)
     // 章未载 / 目录未到：推一拍，等 open 或 load 把块提交进 DOM 后由 afterRender 收口。
     this.domRevision += 1
@@ -643,9 +575,8 @@ export class ReaderSession {
     if (this.tocNow !== null && this.inflight === null) void this.load(target.index)
   }
 
-  /** 撤销在途跳章（读者接管视口）：清 pending，并把消费位置按当前视口重记。
-   *  `requestJump` 是「选中即落盘」，已经按目标章写过一笔；不重记就会把读者留在一条
-   *  他没看见的章上。恢复落位前视口读数不可信，只清目标，位置交给恢复路径。 */
+  /** 撤销在途跳章（读者接管视口）：清 pending，并按当前视口重记消费位置。
+   *  `requestJump` 已按目标章写过一笔，不重记会把读者留在一条他没看见的章上。 */
   cancelJump(): void {
     const hadJump = this.pendingJumpNow !== null
     this.pendingJumpNow = null
@@ -658,13 +589,10 @@ export class ReaderSession {
     this.commit('cross', at.chapterIndex, at.offsetRatio)
   }
 
-  /** 正文内链（链接节点）跳转：**先采返回位置，再导航**。
-   *  - `backlink` 本身**就是**返回动作（「回正文」链接），消费掉栈里那条而不是再压一条——
-   *    否则返回动作自己把返回栈撑长；
-   *  - 其余角色先采点压栈（视图据此给「返回原处」入口）。脚注也采点：面板是浮层、主阅读位置
-   *    不动，但面板里还能再点到主序列，没有这条采点那次跳转就没有「原处」可回。
-   *  返回这条采点（没采到 / backlink / 越界目标 → null）当句柄：关闭面板只消费打开时压的那条
-   *  （见 `closeSupplement`）；落点由阅读场景决定（补充文档开面板、主序列走跳章）。 */
+  /** 正文内链跳转：**先采返回位置，再导航**。
+   *  - `backlink` 本身就是返回动作，消费栈里那条而不是再压一条；
+   *  - 其余角色先采点压栈（脚注也采点：面板里还能再点到主序列）。
+   *  返回这条采点当句柄（null = 没采到/backlink/越界），关闭面板只消费打开时压的那条。 */
   followLink(target: ReadingTarget, role: LinkRole): VisibleNode | null {
     if (target.kind === 'chapter' && !this.inRange(target.index)) return null   // 越界目标：不采点、不导航
     let entry: VisibleNode | null = null
@@ -681,9 +609,8 @@ export class ReaderSession {
     return entry
   }
 
-  /** 返回原处（工具栏「返回」/ 关闭注释面板的兜底入口）：弹一条返回项，经**同一单在途加载路径**落位。
-   *  来源章若已被裁掉（跳远端后只保留视口章）→ 与目录跳章同一条补载逻辑重新取回；
-   *  落位与位置提交仍归 settleJump（它等目标挂载后才动）。 */
+  /** 返回原处（工具栏「返回」/ 关闭注释面板的兜底入口）：弹一条返回项，经**同一单在途加载路径**
+   *  落位；来源章若已被裁掉，与目录跳章同一条补载逻辑重新取回。 */
   goBack(): void {
     const entry = this.returnStack.pop()
     if (entry === undefined) return
@@ -691,25 +618,22 @@ export class ReaderSession {
     this.jumpTo({ index: entry.index, anchorId: entry.nodeId, offsetWithinNode: entry.offsetWithinNode })
   }
 
-  /** 返回栈顶是否仍是这条：关闭补充文档前用它判断这次关闭会不会真的返回引用处
-   *  （视图据此决定要不要让跟读让位；不会导航的关闭不该顺手取消在途跳章）。 */
+  /** 返回栈顶是否仍是这条：关闭补充文档前判断这次关闭会不会真返回引用处（不会导航的关闭不取消在途跳章）。 */
   returnTopIs(entry: VisibleNode | null): boolean {
     return entry !== null && this.returnStack[this.returnStack.length - 1] === entry
   }
 
-  /** 关闭补充文档面板：**只消费「开面板时压入的那一条」**——`entry` 就是 `followLink` 交给阅读场景的那个句柄。
-   *  栈顶已不是它，说明期间用户又跟了别的链接（或自己按过工具栏返回）：那条记的是**别人的原处**，
-   *  此时弹栈会把主序列送回用户没点过的地方，还会经 `commit('jump')` 写进存档。
-   *  目录直接打开的补充文档（阅读场景没有句柄）→ 什么都不做，只关面板。 */
+  /** 关闭补充文档面板：**只消费「开面板时压入的那一条」**（`entry` 是 `followLink` 交出的句柄）。
+   *  栈顶已不是它，说明期间用户又跟了别的链接：弹栈会把主序列送回用户没点过的地方，还会写进存档。
+   *  目录直接打开的补充文档（没有句柄）→ 只关面板。 */
   closeSupplement(entry: VisibleNode | null): void {
     if (!this.returnTopIs(entry)) return
     this.goBack()
   }
 
-  /** 目录抽屉的当前项：**当前章内最近的已登记导航锚点**（视口顶已越过里最靠下的那个，章首
-   *  算第一个）；一个都没越过 → 取**文档序最近的下方锚点**（最小正偏移；取导航列表第一条会在
-   *  nav 把靠后节排前面时打错高亮）。并列按导航顺序取第一条（至多一条 aria-current）；
-   *  量不到任何目标（章在途/文字章无节点）→ null，视图不打标。 */
+  /** 目录抽屉的当前项：**当前章内最近的已登记导航锚点**（视口顶已越过的最靠下者，章首算第一个）；
+   *  一个都没越过 → 取文档序最近的下方锚点（取导航列表第一条会在 nav 乱序时打错高亮）。
+   *  并列按导航顺序取第一条；量不到任何目标（章在途/文字章无节点）→ null，视图不打标。 */
   activeNavId(): string | null {
     const items = this.navigationNow
     if (items === null) return null
@@ -729,8 +653,7 @@ export class ReaderSession {
     let below: { id: string; off: number } | null = null
     // 越过判据吃「看得见的顶」：目标在顶条遮挡带里（0 < off ≤ inset）还不算滚过去
     const inset = this.topInset
-    // `targetOffsets` 与 candidates 同批、等长（同一组锚点一次 map 出来）：逐个配对读，
-    // 拿不到偏移 (null/缺席) 一律不是候选——两者都表示「这个目标不在 DOM」
+    // `targetOffsets` 与 candidates 同批等长：拿不到偏移 (null/缺席) 一律不是候选（目标不在 DOM）。
     for (const [i, candidate] of candidates.entries()) {
       const off = offsets[i]
       if (off === null || off === undefined) continue
@@ -745,8 +668,7 @@ export class ReaderSession {
   }
 
   private jumpTo(target: JumpTarget): void {
-    // 越界目标（导航树带来的坏下标 / 陈旧的目标）什么都不做：写进去等于当下就把「读到第 N 章」
-    // 落成存档里一个不存在的章，同时 pendingJump 再也等不到挂载——那本书的进度从此停摆。
+    // 越界目标什么都不做：写进去等于把「读到第 N 章」落成不存在的章，pendingJump 也再也等不到挂载。
     if (!this.inRange(target.index)) return
     this.pendingScrollFixes = []                         // 导航落位归 settleJump，旧补偿作废
     this.pendingReveal = null                            // 导航是更晚的显式动作：挂起的听书落位作废
@@ -764,9 +686,8 @@ export class ReaderSession {
     return toc !== null && index >= 0 && index < toc.length
   }
 
-  /** 压一条返回项：与栈顶**同一处**的快照不重复压——脚注引用开面板与面板里再点主序列链接
-   *  问的是同一个视口位置（视口没动过），压两份只让工具栏多一次「返回原处」（点它回到原地）。
-   *  返回这个位置当前那条（新压的或已压的）：调用方（阅读场景）拿它当「关闭面板要消费哪条」的句柄。 */
+  /** 压一条返回项：与栈顶**同一处**的快照不重复压（视口没动过，压两份只让工具栏多一次「返回原处」）。
+   *  返回这个位置当前那条，调用方拿它当「关闭面板要消费哪条」的句柄。 */
   private pushReturn(snapshot: VisibleNode): VisibleNode {
     const top = this.returnStack[this.returnStack.length - 1]
     if (top !== undefined && top.index === snapshot.index && top.nodeId === snapshot.nodeId
@@ -780,11 +701,9 @@ export class ReaderSession {
     if (this.store.get().returnDepth !== depth) this.store.set({ returnDepth: depth })
   }
 
-  /** 渲染后拍点（唯一入口：阅读器的 DOM 绑定在测量帧里调它）。
-   *  次序固定在这里：落位（内部在滚动后自刷锚点）→ 重测锚点 → 结算滚动补偿 → 预取/回溯补载。
-   *  这一趟的重测无条件：它是唯一知道「新章块已经提交进 DOM」的时刻——滚动帧里那次可能量在
-   *  提交之前（那一刻 DOM 还没有这一章），不能替它免掉。调用方不再认识这些内部阶段，
-   *  也不再自己枚举触发条件（「这一帧要不要拍」的判据看 `state.domRevision`）。 */
+  /** 渲染后拍点（唯一入口：阅读器的 DOM 绑定在测量帧里调它）。次序固定：落位 → 重测锚点 →
+   *  结算滚动补偿 → 预取/回溯补载。这一趟的重测无条件：它是唯一知道「新章块已提交进 DOM」的时刻，
+   *  滚动帧里那次可能量在提交之前。视图只看 `state.domRevision` 决定这一帧要不要拍。 */
   afterRender(): void {
     this.settleJump()
     this.recalcAnchors()
@@ -796,11 +715,9 @@ export class ReaderSession {
     this.checkBackfill()
   }
 
-  /** 排版复位：视图排版 effect（三个 prefs 量变化后）的唯一入口，触发仍归视图。
-   *  把「变化前视口顶所在节点」拉回同一视口相对位置；目标量不到 → 不落位、**快照不清**
-   *  （miss 发生在新排版量得到之前，清掉等于让这一轮排版再也找不回锚）。
-   *  不等图片下载、也不轮询图片：插图框已按可信宽高预留（ChapterBody），排版后量到的偏移
-   *  就是可信的。位置提交仍归会话：复位后喂一次视口读数，由会话按真实读数修正比例（此处不写进度）。 */
+  /** 排版复位：视图排版 effect 的唯一入口。把「变化前视口顶所在节点」拉回同一相对位置；
+   *  目标量不到 → 不落位、**快照不清**（清掉等于让这一轮排版再也找不回锚）。插图框已按可信
+   *  宽高预留，量到的偏移就是可信的；位置提交仍归会话（复位后喂一次视口读数）。 */
   applyTypesetRelocation(): void {
     const snap = this.lastVisibleBeforePrefs
     if (snap === null) return
@@ -811,10 +728,9 @@ export class ReaderSession {
     this.handleViewportChange({ layoutChanged: true })
   }
 
-  /** 听书段落的落位：目标章已挂载后，量 `[data-pidx]` 块的视口偏移并顶对齐到带顶。
-   *  与 `settleJump` 同一套「先挂载再测量」硬次序；差别只在目标是段号而不是节点锚点。
-   *  `write` 决定走 `jump`（落盘 + flush）还是 `restore`（只站定不写）：后者让「回阅读器」
-   *  保持 `ADR-0078` 的零进度写语义，同时仍把视口放到精确段。 */
+  /** 听书段落的落位：目标章挂载后量 `[data-pidx]` 块的视口偏移并顶对齐；与 `settleJump` 同一套
+   *  「先挂载再测量」硬次序。`write` 决定走 `jump`（落盘 + flush）还是 `restore`（只站定不写），
+   *  后者让「回阅读器」保持 `ADR-0078` 的零进度写语义。 */
   private settleReveal(): void {
     const target = this.pendingReveal
     if (target === null) return
@@ -828,8 +744,7 @@ export class ReaderSession {
     const geometry = this.port.targetOffsetOfParagraph?.(target.index, target.paragraphIndex) ?? null
     const top = geometry?.top ?? this.port.targetOffset(target.index, null)
     if (top === null) {
-      // 章块挂载了却量不到落点（坏 DOM / 段落不在屏上）：放弃这一次，别让 pendingReveal
-      // 永久挡住后续视口读数（与 settleJump 的窄回退同一条理由）。
+      // 章块挂载了却量不到落点：放弃这一次，别让 pendingReveal 永久挡住后续视口读数。
       this.pendingReveal = null
       return
     }
@@ -849,8 +764,7 @@ export class ReaderSession {
         return
       }
     }
-    // 所有落位都对齐到带顶：显式定位 / 回阅读器 / 跟读翻页同一个落点。带顶已扣掉顶条
-    // （`bandTop = topInset`），目标不会被标题栏盖住。
+    // 所有落位都对齐到带顶（带顶已扣掉顶条）；跟读翻页也落在带顶——视口顶 = 正在念的段，位置才有唯一读法。
     const delta = top - bandTop
     this.pendingReveal = null
     // 同步滚动事件若在 setScrollTop 里到达，由 holdViewport 挡住；异步事件由幽灵写闸兜住。
@@ -866,12 +780,10 @@ export class ReaderSession {
     this.commit(target.write ? 'jump' : 'restore', target.index, ratioWithin(anchor, this.contentTop()))
   }
 
-  /** pendingJump 的目标已渲染 → 按真实位置定位并清零；未落地则下轮再试。
-   *  **先挂载再测量**是硬次序：章块与锚点节点不在 DOM 时无可测量。
+  /** pendingJump 的目标已渲染 → 按真实位置定位并清零。**先挂载再测量**是硬次序。
    *  定位后补一笔**真实比例**（章号意图 requestJump 已落盘，这里补「落位后读到章内哪儿」）。
-   *  **窄回退**：章块已挂载而锚点量不到（悬空锚点 / 手改过的落盘元数据）退回该章章首——挂住
-   *  的代价不是「这次没跳成」，而是 `handleViewportChange` 被 pendingJump 整条早退：滚动不再
-   *  落盘、进度静默停摆，比「损坏元数据落到章首」坏得多。正文确实没挂载（在途）才继续挂住。 */
+   *  **窄回退**：章块已挂载而锚点量不到（悬空锚点 / 手改元数据）退回该章章首——挂住的代价是
+   *  `handleViewportChange` 被 pendingJump 整条早退，滚动不再落盘。正文确实没挂载（在途）才继续挂住。 */
   private settleJump(): void {
     const jump = this.pendingJumpNow
     if (jump === null) return
@@ -891,47 +803,42 @@ export class ReaderSession {
     this.commit('jump', jump.index, ratioWithin(a, this.contentTop()))
   }
 
-  /** 已载表发布：换引用即换版本，同一次通知里推进 DOM 版本（阅读器的 DOM 绑定按它判断
-   *  「这一帧要不要拍」）。`patch` 与已载表同一笔写——目录/错误与窗口版本不该分成两次通知。 */
+  /** 已载表发布：换引用即换版本，同一次通知里推进 DOM 版本（视图按它判断「这一帧要不要拍」）。 */
   private publishChapters(chapters: Array<ChapterContent | null>, patch: Partial<ReaderSessionState> = {}): void {
     this.chaptersNow = chapters
     this.domRevision += 1
     this.store.set({ chapters, domRevision: this.domRevision, ...patch })
   }
 
-  /** 置待定位目标：目标可能已经在 DOM 里（同章锚点跳转），落位没有别人能替 → 推进 DOM 版本
-   *  请求一拍。**清目标不推进**（`settleJump` 里直接置空）：那是测量自己的产物，不该再叫一拍。 */
+  /** 置待定位目标：目标可能已在 DOM（同章锚点跳转），推进 DOM 版本请求一拍。
+   *  **清目标不推进**（`settleJump` 里直接置空）：那是测量自己的产物，不该再叫一拍。 */
   private setPendingJump(target: JumpTarget): void {
     this.pendingJumpNow = target
     this.domRevision += 1
     this.store.set({ domRevision: this.domRevision })
   }
 
-  /** 该章正文是否已挂载（`mountedSet` 是 `chaptersNow` 非空项的索引，随载入/裁剪同步维护；
-   *  DOM 侧无从判断，会话只看这张索引） */
+  /** 该章正文是否已挂载（`mountedSet` 随载入/裁剪同步维护；会话只看这张索引）。 */
   private mounted(index: number): boolean {
     return this.mountedSet.has(index)
   }
 
-  /** 锚点刷新（存档恢复、布局变化、渲染后拍点与失败定位共用；视图不再直接调）。
-   *  同时记下这次测量吃的是哪一份已载表——比较引用就够了，`chaptersNow` 每次改动都换数组。 */
+  /** 锚点刷新（存档恢复、布局变化、渲染后拍点与失败定位共用）；同时记下这次测量吃的是哪份已载表。 */
   private recalcAnchors(): void {
     this.anchorsNow = this.port.measureAnchors()
     this.anchorsFrom = this.chaptersNow
   }
 
-  /** 参考章的新旧起点差：裁章与前插共享同一条判据。块高不含章间外边距，只按高度补会让
-   *  视口漂；测量不到参考章时返回 null，调用方走各自的回退。 */
+  /** 参考章的新旧起点差（裁章与前插共享）；块高不含章间外边距，量不到参考章时返回 null，调用方走回退。 */
   private anchorDelta(keep: { index: number; start: number } | null): number | null {
     if (keep === null) return null
     const after = this.anchorsNow.find((x) => x.index === keep.index)
     return after === undefined ? null : after.start - keep.start
   }
 
-  /** 渲染后结算滚动补偿：裁掉视口上方的章 → 按参考章起点差下移；前插一章 → 按原来第一章的
-   *  新旧起点差上移（两者的目的都是让读者眼前的正文原地不动）。只改滚动位、不碰位置真相——
-   *  下一次视口读数照常修正。补偿在 DOM 提交之后做：裁章/前插都把内容整体挪位，提交前量不到
-   *  新布局。参考章量不到时：裁章退回高度和，前插退回新章块高。 */
+  /** 渲染后结算滚动补偿：裁章 → 按参考章起点差下移；前插 → 按原来第一章的新旧起点差上移。
+   *  只改滚动位、不碰位置真相，下一次视口读数照常修正；必须在 DOM 提交之后做。
+   *  参考章量不到时：裁章退回高度和，前插退回新章块高。 */
   private applyScrollFixes(): void {
     const fixes = this.pendingScrollFixes
     if (fixes.length === 0) return
@@ -951,14 +858,12 @@ export class ReaderSession {
     }
   }
 
-  /** 采点：prefsStore 的订阅者在 `setPref` 的同步调用栈里执行——那一刻 React 还没重渲染、
-   *  DOM 还是旧排版，这是唯一拿得到「变化前位置」的时刻（任何 effect 都在新排版落定之后才跑）。 */
+  /** 采点：在 `setPref` 的同步调用栈里执行——那一刻 React 还没重渲染、DOM 还是旧排版，是唯一拿得到「变化前位置」的时刻。 */
   private sampleVisibleBeforePrefsChange(): void {
     this.lastVisibleBeforePrefs = this.port.currentNode()
   }
 
-  /** prefs 采点订阅（`open` 挂、`dispose` 摘）：StrictMode 双挂载与同实例重开都只许订一次——
-   *  采样本身幂等，但叠订阅会让一次 `setPref` 读两遍节点。 */
+  /** prefs 采点订阅（`open` 挂、`dispose` 摘）：StrictMode 双挂载与同实例重开都只许订一次。 */
   private subscribePrefs(): void {
     if (this.prefsUnsub !== null) return
     this.prefsUnsub = prefsStore.subscribe(() => { this.sampleVisibleBeforePrefsChange() })
@@ -973,10 +878,9 @@ export class ReaderSession {
     this.viewportFeed.cancelFrame(handle)
   }
 
-  /** 退出阅读器：先作废在途续作（代际 +1），再把防抖窗口里的进度补落盘——flush 不 cancel，
-   *  cancel 会静默丢最后一段章内偏移，而 fetch 卸载后照样完成，没有「来不及存」的结构理由。
-   *  在途槽一并复位：本代到此为止。**同一实例还会被下一次 open 复用**（同址换源时视图的会话
-   *  memo 不重建，cleanup 的 dispose 之后紧接着 open 新源），留着旧槽会让那次加载被无声挡下。 */
+  /** 退出阅读器：先作废在途续作（代际 +1），再把防抖窗口里的进度 flush 落盘（flush 不 cancel，
+   *  cancel 会静默丢最后一段章内偏移）。在途槽一并复位：**同一实例还会被下一次 open 复用**，
+   *  留着旧槽会让那次加载被无声挡下。 */
   dispose(): void {
     this.generation++
     this.cancelPendingFrame()

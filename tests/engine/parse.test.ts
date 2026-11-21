@@ -162,6 +162,7 @@ describe('⑥ 段识别', () => {
       expect((e as UnsupportedRuleError).segmentIndex).toBe(1)
       expect((e as UnsupportedRuleError).segmentRaw).toBe('frobnicate$.thing')
       expect((e as UnsupportedRuleError).facet).toBe('toc')
+      expect((e as UnsupportedRuleError).message).toContain('frobnicate$.thing')  // 消息嵌段原文（定位可回查）
     }
   })
   it('白名单外的段在**解析期**定性：构成选择器的即 css 段，构不成的仍当场抛（都不留到 eval 才炸）', () => {

@@ -1,13 +1,11 @@
 /**
- * 跟读策略：播放推进是否带视口、读者何时接管、定位何时重新接上，以及「回阅读器」的一次性
- * 段落 target 要不要先消费。**零 React / 零 DOM / 零 store 读取**——调用方交当前播放现场与
- * 注入了 reveal / cancel 的依赖，策略本身可以在一张假表上单测。
- *
- * 为什么从 `ReaderView` 搬出来：跟随 / 让位 / 重接原本散在四个 ref、几段 effect 与一个拍点
- * 回调里，次序契约只活在注释；视图只能挂整页 jsdom 才验得了策略。这里只保留「什么时候
- * reveal、用哪个 target、要不要写位置」三件事，视图退回 refs 与呈现。
+ * 跟读策略：播放推进是否带视口、读者何时接管、定位何时重新接上，以及「回阅读器」的一次性段落 target
+ * 要不要先消费。**零 React / 零 DOM / 零 store 读取**——调用方交播放现场与 reveal / cancel 依赖，
+ * 策略可在一张假表上单测。从视图搬出来：原先散在四个 ref、几段 effect 与一个拍点回调里，
+ * 次序契约只活在注释；这里只保留「什么时候 reveal、用哪个 target、要不要写位置」三件事。
  */
 import type { ReaderRevealTarget } from '../reader-session.js'
+import { listenScopeOf } from './listen-scope.js'
 
 /** 策略需要的播放现场：只认会话在、书对不对、当前章段；不读 store，也不认 TTS 类型。 */
 export interface FollowLive {
@@ -52,7 +50,7 @@ export function createFollowController(deps: FollowControllerDeps): FollowContro
   /** 最近一次落位过的段：同一段不重复落；`null` = 下一次落位算起播/定位的显式顶对齐。 */
   let placed: ReaderRevealTarget | null = null
 
-  const usable = (live: FollowLive): boolean => live.active && live.bookKey === deps.bookKey
+  const usable = (live: FollowLive): boolean => listenScopeOf(live, deps.bookKey).showing
   const same = (a: ReaderRevealTarget, b: ReaderRevealTarget): boolean =>
     a.index === b.index && a.paragraphIndex === b.paragraphIndex
 
@@ -75,8 +73,8 @@ export function createFollowController(deps: FollowControllerDeps): FollowContro
       }
       const target = { index: live.chapterIndex, paragraphIndex: live.paragraphIndex }
       if (placed !== null && same(placed, target)) return
-      // 只有「同一章里的下一段」是自然播放推进，交给跟读翻页策略；起播首拍、跨章、回退、
-      // 拖动滑杆这类跳转一律显式顶对齐——用户要知道自己跳到了哪一句。
+      // 只有「同一章里的下一段」是自然播放推进，交给跟读翻页策略；起播首拍、跨章、回退、拖动滑杆
+      // 这类跳转一律显式顶对齐——用户要知道自己跳到了哪一句。
       const sequential = placed !== null && placed.index === target.index
         && target.paragraphIndex === placed.paragraphIndex + 1
       placed = target

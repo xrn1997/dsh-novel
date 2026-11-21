@@ -1,5 +1,5 @@
 /** 书源管理 / 导入 / 后台任务 / 状态条文案的唯一住址。键前缀 `sources.` / `import.` / `job.` / `status.`；
- *  zh 逐字照录现有屏上文案（测试钉子在 source-list-batch / import-pane / run-card / views-wiring），
+ *  zh 逐字照录现有屏上文案（测试钉子在 source-list-batch / import-pane / run-card / wiring-settings），
  *  en 只镜像同一批键；需要单复数的数量句一律走 `plural`，中文两侧同文、英文按 one/other 变单复数。 */
 export const SOURCES_ZH = {
   'job.kind.import': '导入',

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { JobRunningError } from './errors.js'
 import { SourceIntake } from './intake.js'
-import { HostTie } from './job-holder.js'
+import { HostTie, settleTerminal } from './job-holder.js'
 import type { JobHost, JobOutcome } from './job-holder.js'
 import { applyProbeResult } from './probe.js'
 import type { ProbeResult } from './probe.js'
@@ -9,10 +9,8 @@ import type { SourceRegistry } from './sources.js'
 import type { NovelSource } from './types.js'
 
 /**
- * 书源后台任务：导入/批量验证跑在服务端进程内，单任务槽——
- * 运行中互斥、结束后结果保留（关设置/刷新页面后 UI 重挂载即可恢复展示）。
- * 任务态只在内存：DSH 重启即丢，但源已按批落盘不丢数据——导入幂等可重跑，不做任务持久化（YAGNI）。
- * 与宿主之间那段登记机械不住这里（住 `job-holder.ts`）；这里只拥有**导入与批量验证的计数与明细**。
+ * 书源后台任务：导入/批量验证跑在服务端进程内，单任务槽——运行中互斥、结束后结果保留。任务态只在内存：DSH 重启即丢，但源已按批
+ * 落盘不丢数据——导入幂等可重跑，不做任务持久化。与宿主之间那段登记机械住 `job-holder.ts`；这里只拥有导入与批量验证的计数与明细。
  */
 /** JobState/JobIssue 定义在 wire 契约（src/shared/wire.ts）；此处 re-export 保持 import 路径可用 */
 export type { JobState, JobIssue } from '../shared/wire.js'
@@ -29,14 +27,12 @@ export { dedupKey } from './intake.js'
 
 const ISSUE_CAP = 200
 
-/** JSON.parse 的产物按数组读。`Array.isArray` 在 lib 里只把它收窄成 `any[]`，直接往下传等于
- *  让 any 渗进条目清单——这里换成 `unknown[]` 的类型谓词，边界判形只做一次。 */
+/** JSON.parse 的产物按数组读：`Array.isArray` 只收窄成 `any[]`，这里换成 `unknown[]` 的类型谓词，边界判形只做一次。 */
 function isUnknownArray(v: unknown): v is unknown[] {
   return Array.isArray(v)
 }
 const PROBE_CONCURRENCY = 5
-// 落盘粒度归注册表（edit 合并写，调度归 createDebouncedWriter 的阈值强制落盘 + 尾沿防抖）——
-// 任务运行器不认识 persist 节流常量，阈值只住注册表那一处
+// 落盘粒度归注册表（edit 合并写，调度归 createDebouncedWriter 的阈值强制落盘 + 尾沿防抖）——任务运行器不认识 persist 节流常量。
 
 export class SourceJobs {
   private current: JobState | null = null
@@ -82,13 +78,9 @@ export class SourceJobs {
 
   private now(): number { return this.deps.now?.() ?? Date.now() }
 
-  /** 收尾的三处写口（done / fail / cancel）集中在这里，宿主登记的那条一并结算——
-   *  漏掉一处就是「UI 显示已结束而宿主还挂着 running」。 */
+  /** 收尾的三处写口（done / fail / cancel）集中在这里：终态与宿主结算都经 `job-holder` 的 `settleTerminal`。 */
   private settle(state: JobState, status: JobOutcome['status'], detail: string, error?: string): void {
-    state.phase = status === 'completed' ? 'done' : 'failed'
-    if (error !== undefined) state.error = error
-    state.finishedAt = this.now()
-    this.ties.get(state)?.settle({ status, ...(detail === '' ? {} : { detail }) })
+    settleTerminal(state, this.ties.get(state), { status, detail, error }, this.now())
   }
 
   private fail(state: JobState, error: string): void {
@@ -98,9 +90,8 @@ export class SourceJobs {
   /** 宿主是否已请求收手（协作式：在途网络请求不打断，只拦下一条）。 */
   private cancelled(state: JobState): boolean { return this.ties.get(state)?.requested === true }
 
-  /** 取消落地点：已入库/已验证的结果一律保留（导入幂等、验证是逐条写回的），
-   *  只等齐落盘后收工。wire 的 `phase` 不设 'killed'——两个终态对本插件的 UI 判据
-   *  （`phase !== 'running'`）没有区别，加一态要动 wire + 三处 UI 判据，收益为零。 */
+  /** 取消落地点：已入库/已验证的结果一律保留，只等齐落盘后收工。wire 的 `phase` 不设 'killed'——两个终态对本插件的 UI 判据没有区别，
+   *  加一态要动 wire + 三处 UI 判据，收益为零。 */
   private cancelledOut(state: JobState): Promise<void> {
     const reason = this.ties.get(state)?.reason ?? '已取消'
     return this.deps.registry.flush().then(() => {
@@ -117,8 +108,7 @@ export class SourceJobs {
       issues: [], fileErrors: [], startedAt: this.now(),
     }
     this.current = state
-    // 宿主登记：身份/生命周期归 ctx.jobs（`<kind>-<短 id>` 由注册表生成、running→终态、按 owner 栅栏），
-    // 本插件的 JobState 继续是计数与明细的唯一载体。kind 用 novel-* 前缀与 bash/subagent 分namespace。
+    // 宿主登记：身份/生命周期归 ctx.jobs，本插件的 JobState 继续是计数与明细的唯一载体。kind 用 novel-* 前缀与 bash/subagent 分 namespace。
     // 协作式取消只需记账（取下一条前查 `cancelled`），故不给 onCancel 落点。
     const tie = HostTie.open(this.deps.host, {
       kind: kind === 'import' ? 'novel-import' : 'novel-probe',
@@ -128,9 +118,7 @@ export class SourceJobs {
     return state
   }
 
-  /** 过程行落进宿主那条任务的尾缓冲（缺席即没有挂点，不写）。
-   *  覆盖每单元收尾、文件级解析失败与预筛无效 id；行文只用既有任务词汇（源名、状态词、
-   *  `error.code`），口径归各调用处，不复述 issues 明细。 */
+  /** 过程行落进宿主那条任务的尾缓冲（缺席即没有挂点，不写）；行文只用既有任务词汇（源名、状态词、`error.code`），不复述 issues 明细。 */
   private note(state: JobState, line: string): void {
     this.ties.get(state)?.note(line)
   }
@@ -140,10 +128,8 @@ export class SourceJobs {
   }
 
   /**
-   * 导入：逐文件 parse（坏文件记 fileErrors 继续）→ 逐条交 SourceIntake 入库
-   * （normalize / 批内留首条 / 按址去重 / replace 清脏——入库规则唯一实现在 intake.ts，
-   * 本方法只把 IntakeDecision 映射成任务词汇：counts 与 issues）。
-   * 逐条落库（注册表内部合并落盘）；**导入不探针**——验证归批量验证任务；任务末 flush 等齐落盘。
+   * 导入：逐文件 parse（坏文件记 fileErrors 继续）→ 逐条交 SourceIntake 入库（入库规则唯一实现在 intake.ts，本方法只把 IntakeDecision
+   * 映射成任务词汇：counts 与 issues）。逐条落库；**导入不探针**——验证归批量验证任务；任务末 flush 等齐落盘。
    */
   private async runImport(state: JobState, files: ImportFile[]): Promise<void> {
     const items: unknown[] = []
@@ -189,9 +175,8 @@ export class SourceJobs {
   }
 
   /**
-   * 批量验证：有效 id 并发 5 路探针（限流敬畏——对齐 searchParallel 口径）。
-   * 单条失败即结果（broken/异常记 counts）不中断。落盘粒度归注册表（阈值强制落盘 + 尾沿防抖，
-   * 调度见 storage.createDebouncedWriter），任务运行器这里没有「每 N 条 persist」的常量。
+   * 批量验证：有效 id 并发 5 路探针（对齐 searchParallel 口径）。单条失败即结果（broken/异常记 counts）不中断。落盘粒度归注册表（阈值强制
+   * 落盘 + 尾沿防抖），任务运行器这里没有「每 N 条 persist」的常量。
    */
   private async runBatchProbe(state: JobState, ids: string[]): Promise<void> {
     const valid: string[] = []
@@ -208,12 +193,9 @@ export class SourceJobs {
         if (this.cancelled(state)) return                 // 协作式收手：取下一条前查一次
         const i = cursor++
         const id = valid[i]
-        // 取不到即游标已过表尾（与 `i >= valid.length` 同一条出口），不把 undefined 喂给下游。
-        // 这行同时是类型面的窄化：`noUncheckedIndexedAccess` 下 `valid[i]` 是 `string | undefined`，
-        // 删掉它不会更干净，只会在下一行的 `registry.get(id)` 上撞红 tsc。
+        // 取不到即游标已过表尾（与 `i >= valid.length` 同一条出口），不把 undefined 喂给下游；这行同时是 noUncheckedIndexedAccess 下的类型窄化。
         if (id === undefined) return
-        // 重查：任务运行期间源可能被删——取不到就点名跳过，不产生 TypeError 垃圾失败
-        // （不重查会让 undefined 喂给探针 → 抛 TypeError 冒充正常失败）
+        // 重查：任务运行期间源可能被删——取不到就点名跳过，不产生 TypeError 垃圾失败。
         const s = this.deps.registry.get(id)
         if (s === undefined) {
           this.issue(state, 'failed', id, '源不存在（运行中被删除，已跳过）')
@@ -221,9 +203,8 @@ export class SourceJobs {
           state.done++
           continue
         }
-        // 站点判据先记账，再写回状态：`applyProbeResult` 会把落盘失败如实抛（ADR-0011 / ADR-0013），
-        // 把它折进「这一家 broken」就是把磁盘侧事实记进站点判据分母（ADR-0011 的写盘失败边界）；
-        // 这里把失败移交给注册表（retainWriteFailure），收尾 flush 会如实抛，只补一条任务读数。
+        // 站点判据先记账，再写回状态：`applyProbeResult` 会把落盘失败如实抛（`ADR-0011` / `ADR-0013`），折进「这一家 broken」就是把磁盘侧事实记进
+        // 站点判据分母。这里把失败移交注册表（retainWriteFailure），收尾 flush 会如实抛，只补一条任务读数。
         try {
           const r = await this.deps.probe(s)
           if (r.ok) { state.counts.ok++; this.note(state, `${s.name}：verified`) }
@@ -257,8 +238,7 @@ function stripBom(text: string): string {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
 }
 
-/** 错误码读数（`code` 不在场就说不在场，不猜成某个具体码）：探针的 broken 标注与状态落盘失败
- *  的标注共用这一份，两处各写一遍筛键迟早分叉。 */
+/** 错误码读数（`code` 不在场就说不在场，不猜）：探针的 broken 标注与状态落盘失败的标注共用这一份。 */
 function errCode(e: unknown): string {
   const raw = e instanceof Error ? (e as unknown as { code?: unknown }).code : undefined
   return typeof raw === 'string' ? raw : 'Error'

@@ -13,20 +13,17 @@ import { useStore } from '../store.js'
 import { NovelStyles } from '../styles.js'
 import { focusRunCard } from '../run-card.js'
 import { ImportPane } from './SettingsImportPane.js'
-import { ProbeRunCard, SourceList } from './SettingsSourceList.js'
+import { ProbeRunCard } from './ProbeRunCard.js'
+import { SourceList } from './SettingsSourceList.js'
 import { ErrorBanner, StatusBadge } from './bits.js'
 import { Dialog } from './dialog.js'
 import type { JobState, ProbeResult, SourcePublic } from './types.js'
 
 /**
- * 书源管理 tab 壳：**待办收件箱 + 任务槽 + 源列表 + 导入弹层**——
- * 按「用户带什么任务来」组织：① 待办反常置顶（坏源/未验证成任务卡）② 源列表（朴素资产表）
- * ③ 导入收纳为弹层，完成事项回流待办。删除统一走模态二次确认。
- *
- * 组件职责边界：本文件只做接线与现场——sources 每次挂载经 api 拉取、组件内 useState（业务数据
- * 不进 store）；任务轮询单实例**不在本视图**（`useJobPolling` 住 `NovelStatusOverlay`，本区只读
- * `jobSurface` 镜像）；deps 整壳注入向下透传。派生逻辑归纯函数：待办 → source-inbox.ts，
- * 列表 → source-list-view.ts。
+ * 书源管理 tab 壳：**待办收件箱 + 任务槽 + 源列表 + 导入弹层**——按「用户带什么任务来」组织。
+ * 组件职责边界：本文件只做接线与现场——sources 每次挂载经 api 拉取、组件内 useState；任务轮询
+ * 单实例**不在本视图**（`useJobPolling` 住 `NovelStatusOverlay`，本区只读 `jobSurface` 镜像）。
+ * 派生逻辑归纯函数：待办 → `source-inbox.ts`，列表 → `source-list-view.ts`。
  */
 export function SettingsSection({ deps = prodDeps, withStyles = true }: {
   /** 注入的 deps seam（缺省走生产实现） */
@@ -40,29 +37,23 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
   const [sources, setSources] = useState<SourcePublic[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [importOpen, setImportOpen] = useState(false)
-  // 失败不许伪装成空列表/空架（宁炸不猜的呈现半场）：网络失败 → 显式错误，
-  // 待办收件箱随之不渲染（不拿未知当「✓ 全部源状态良好」）
+  // 失败不许伪装成空列表/空架：网络失败 → 显式错误，待办收件箱随之不渲染（不拿未知当「全部良好」）。
   const reload = useCallback((): void => {
     void deps.apiGet<SourcePublic[]>(ROUTES.sources.path).then((list) => {
       setSources(list)
       setLoadError(null)
-      // 忽略记录随源清单变化作废——这一步跟着**清单落地的这一处**，不另开 effect：清单只有这一个
-      // 写入点，作废就挂在它后面，读代码的人不会漏。留着一条遮不住任何东西的记录，会在
-      // 「删光这批再导入同一批 id」时把提示再次吞掉——那是一次用户没做过的「已看过」（判据在
-      // `source-inbox-ui.ts`）。**取数失败那一支不作废**：加载失败是「不知道」，不是「这批没了」，
-      // 拿它清掉用户的忽略现场就是把未知当结论。
+      // 忽略记录随源清单变化作废（挂在这一处写入点后面，不另开 effect）。**取数失败那一支不作废**：
+      // 加载失败是「不知道」，不是「这批没了」，拿它清掉用户的忽略现场就是把未知当结论。
       pruneInboxMuted(sourceInbox(list))
     }, (e: unknown) => {
       setSources([])
       setLoadError(describeError(e, t))
     })
   }, [deps, t])
-  // t 由 apply() 建一次（`client/index.tsx`），deps 走缺省的模块常量 prodDeps——两者身份挂载期不变，
-  // 故 [reload] 只在挂载跑一次。**注入 deps 的调用方别给内联对象**：
-  // 那会让 reload 每轮父渲染换身份，sources 跟着重拉一轮。
+  // t 与 deps 身份挂载期不变，故 [reload] 只在挂载跑一次。**注入 deps 的调用方别给内联对象**——
+  // 那会让 reload 每轮换身份，sources 跟着重拉一轮。
   useEffect(() => { reload() }, [reload])
-  // 任务现场只读常驻状态层的镜像（轮询单实例住 `NovelStatusOverlay`，不在本视图内）：
-  // 切走 tab 轮询照跑、回到本区读数即刻是最新的。refresh = 让驱动立刻重拉一次。
+  // 任务现场只读常驻状态层的镜像：切走 tab 轮询照跑，回到本区即刻最新；refresh 让驱动立刻重拉一次。
   const { job } = useJobSurface()
   // 任务收尾 → 刷新源列表（按 job.id 记账一次，不重复 reload）——待办读数随任务结果自动收敛
   const [reloadedJob, setReloadedJob] = useState<string | null>(null)
@@ -72,11 +63,8 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
       reload()
     }
   }, [job, reloadedJob, reload])
-  /** 常驻状态层点击 → 跨子树意图：本区在场就消费（开弹层 / 回列表并滚到任务卡）。
-   *  消费即清空，所以同一意图不重放；试跑子视图也先退回列表——直接在试跑页里点「点此查看」
-   *  会找不到卡片（原因见 `run-card.ts` 文件头），必须「带回现场」。
-   *  去现场分两拍：这一拍只落意图（切回列表 / 推进 `focusTick`），滚动留给提交后的 effect——
-   *  卡片由任务镜像渲染，正常同一提交已在树上；若那一刻还没登记，effect 再等一个宏任务补一次。 */
+  /** 常驻状态层点击 → 跨子树意图：本区在场就消费（开弹层 / 回列表并滚到任务卡），消费即清空。
+   *  试跑子视图也先退回列表；去现场分两拍：这一拍只落意图，滚动留给提交后的 effect。 */
   const [focusTick, setFocusTick] = useState(0)
   const openRequest = useJobOpenRequest()
   useEffect(() => {
@@ -84,15 +72,13 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
     setSub({ name: 'list' })
     if (openRequest === 'import') setImportOpen(true)
     else {
-      // 「看任务卡」与导入弹层互斥：弹层开着时卡片被遮罩挡在下面，焦点滚过去也看不见
-      // （口径：去现场 = 用户眼前真的出现那张卡）。关掉弹层再推进确认拍。
+      // 「看任务卡」与导入弹层互斥：弹层开着时卡片被遮罩挡在下面，关掉弹层再推进确认拍。
       setImportOpen(false)
       setFocusTick((n) => n + 1)
     }
     takeJobOpen()
   }, [openRequest])
-  // 卡片挂载后的去现场：tick 只在消费「看任务卡」意图时前进，初值 0 不动——
-  // 本区单纯挂载/重渲染不抢滚动位置。
+  // 卡片挂载后的去现场：tick 只在消费「看任务卡」意图时前进；补一次后不再追（不把一次性意图做成轮询）。
   useEffect(() => {
     if (focusTick === 0) return
     if (focusRunCard('probe')) return
@@ -101,13 +87,11 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
     return () => clearTimeout(timer)
   }, [focusTick])
 
-  // 待办集合唯一派生口在 source-inbox.ts：一次派生同时喂待办区与导入弹层的「去验证」，
-  // 视图不另抄一份按状态筛（同一份源清单也不在同一轮渲染里筛两遍）
+  // 待办集合唯一派生口在 `source-inbox.ts`：一次派生同时喂待办区与导入弹层的「去验证」。
   const inbox = sources === null ? null : sourceInbox(sources)
   const unverifiedIds = inbox === null ? [] : inboxIds(inbox, 'unverified')
-  /** 待办处置动作（批量重验/一键验证/导入后「去验证」）的统一提交口：ids 点击时快照；
-   *  提交后的编排归 `jobs.ts` 的 `startSourceVerification`（三个验证入口同一条路）——
-   *  不要用 `() => undefined` 吞掉 rejection：「去验证」会点了没反应，还留 unhandled。 */
+  /** 待办处置动作的统一提交口：ids 点击时快照；提交后的编排归 `jobs.ts` 的 `startSourceVerification`。
+   *  不要用 `() => undefined` 吞掉 rejection——「去验证」会点了没反应。 */
   const verifyIds = (ids: string[]): void => {
     void startSourceVerification(ids, deps, t)
   }
@@ -150,7 +134,7 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
           焦点闭环与 Esc 归 `views/dialog.tsx`（宽档几何 = `.novel-modal.wide`，主人仍是样式层）。
           入场焦点按契约落面板内第一颗未禁用钮：缺省态是动作行「关闭」（更早的「导入粘贴内容」
           在无有效 JSON 时禁用），有完成回执时是回执里的「查看明细」。
-          回归钉在 views-wiring「导入弹层焦点不被壳层重渲染劫持」。 */}
+          回归钉在 wiring-settings「导入弹层焦点不被壳层重渲染劫持」。 */}
       {importOpen && (
         <Dialog title={t('import.title')} variant="wide" onClose={() => { setImportOpen(false) }}
           actions={<button className="novel-btn sm" onClick={() => { setImportOpen(false) }}>{t('common.close')}</button>}>
@@ -168,15 +152,10 @@ export function SettingsSection({ deps = prodDeps, withStyles = true }: {
   )
 }
 
-/** 待办收件箱：坏源/未验证两张任务卡——它是**提示**，不是台账。
- *  ① 卡标题**不印计数**：读数唯一住址是列表头状态带（`source-list-view.ts` 的 `stats`），卡可
- *    忽略后读数不能跟着提示消失。② 每卡「✕ 忽略」按成员签名记账，成员集一变提示自动复现
- *    （签名口径在 `source-inbox.ts`）；忽略的卡折成「已忽略 N 张 · 重新显示」，不留黑洞。
- *  ③ **零待办整块不渲染**（全健康 / 全部被忽略 / 0 源）：「查过了且没事」由状态带的
- *    `未验证 0 · 坏源 0` 承担，0 源引导归列表自己的空态（不抄第二份）。
- *  不变的口径：加载中 / 加载失败**不渲染**（不拿未知当「全部良好」，宁炸不猜）；每卡只留处置
- *  动作，逐源排查在列表行内「试跑」（待办是任务摘要，不放重复入口，用户裁定）。
- *  `inbox` 由壳层一次派生后传下来（同一份源清单不在一轮渲染里筛两遍，弹层的「去验证」读同一份）。 */
+/** 待办收件箱：坏源/未验证两张任务卡——它是**提示**，不是台账。卡标题不印计数（读数唯一住址是
+ * 列表头状态带）；每卡「✕ 忽略」按成员签名记账，成员集一变提示自动复现，忽略的卡折成「已忽略 N 张」。
+ * **零待办整块不渲染**；加载中 / 加载失败也不渲染（不拿未知当「全部良好」）。每卡只留处置动作，
+ * 逐源排查在列表行内「试跑」。`inbox` 由壳层一次派生后传下来。 */
 function InboxSection({ inbox, loadError, job, onVerify }: {
   inbox: SourceInbox | null; loadError: string | null; job: JobState | null
   onVerify: (ids: string[]) => void
@@ -186,9 +165,7 @@ function InboxSection({ inbox, loadError, job, onVerify }: {
   if (inbox === null || loadError !== null) return null
   const { shown, hidden } = visibleInboxCards(inboxCards(inbox), muted)
   if (shown.length === 0 && hidden.length === 0) return null
-  // 在途禁用面 = 任何任务（不限 probe kind）：服务端**单任务槽**——import-job.begin 运行中
-  // 抛 JobRunningError，import 在途时提交探针同样无处可去（被否决的方案：按 kind 收窄——
-  // 那只会把一个必然失败的请求放行到点击之后，判据是服务端契约不是任务种类）。
+  // 在途禁用面 = 任何任务：服务端**单任务槽**，import 在途时提交探针同样无处可去。
   const probing = job?.phase === 'running'
   return (
     <div data-novel-inbox className="novel-inbox">
@@ -227,8 +204,7 @@ function InboxSection({ inbox, loadError, job, onVerify }: {
   )
 }
 
-/** 两类待办的卡面文案：表驱动——两分支各写一份 JSX 是近逐字双胞胎，改一处即漂移。
- *  文字只存键（`copy/sources.ts` 的 `sources.inbox.*`），图标与色档是数据。 */
+/** 两类待办的卡面文案：表驱动——两分支各写一份 JSX 是近逐字双胞胎。文字只存键，图标与色档是数据。 */
 const TODO_CARD: Record<InboxKind, { icon: string; labelKey: CopyKey; tone: 'err' | 'warn'; actionKey: CopyKey; hintKey: CopyKey; muteTitleKey: CopyKey }> = {
   broken: {
     icon: '✗', labelKey: 'sources.filter.broken', tone: 'err', actionKey: 'sources.inbox.broken.action',
@@ -242,11 +218,8 @@ const TODO_CARD: Record<InboxKind, { icon: string; labelKey: CopyKey; tone: 'err
 
 // ── 试跑器（单源排查下钻）：段级 trace 结果卡 ────────────────────────────
 
-/**
- * 试跑器：deps 注入（与兄弟 panes 同款 seam）。
- * 失败必须显式呈现：`apiSend(...).then(setResult)` 若没有 rejection handler，
- * 请求失败会永久停在「探针执行中…」并留下 unhandled rejection。
- */
+/** 试跑器：deps 注入。失败必须显式呈现——`apiSend(...).then(setResult)` 没有 rejection handler 会
+ *  永久停在「探针执行中…」并留下 unhandled rejection。 */
 export function ProbePane({ sourceId, onBack, deps = prodDeps }: {
   /** 试跑只发一次探针请求：读面与任务面都由壳层管，这里不吃整束 */
   sourceId: string; onBack: () => void; deps?: Pick<ClientCoreDeps, 'apiSend'>

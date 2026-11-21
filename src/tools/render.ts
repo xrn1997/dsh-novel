@@ -1,14 +1,8 @@
 import type { ShelfItem } from './shelf-item.js'
 
 /**
- * 工具面的**纯文本投影**：规范值 → 模型读到的那一段文案。
- *
- * 为什么单独立家：render 是工具的 interface（模型只读这一份）；若六个 render 都内联在
- * `tools.ts` 的 `defineTool` 里，只有 search 有断言——其余五个的文案改动没有测试能拦住。
- * 纯函数可以直接喂规范值，不用起服务层；各工具定义只负责把 `text()` 包上。
- *
- * 规范值缺块即炸，不编「书目缺失」式回执：缺键投影归 `tools/project.ts`，render 只投影
- * 已声明的规范值。
+ * 工具面的纯文本投影：规范值 → 模型读到的那段文案。单独立家是因为 render 是工具的 interface；
+ * 纯函数可直接喂规范值，六个工具定义只负责把 `text()` 包上。缺块即炸，缺键投影归 `tools/project.ts`。
  */
 
 export interface SearchRenderValue {
@@ -26,8 +20,7 @@ export interface SearchRenderValue {
   truncated?: string
 }
 
-/** 搜索结果：摘要行恒在；缺作者整键缺席（不印幽灵）；截断省略号按**行数**判。
- *  `eligible` 单独一行：AI 搜索源是用户配置的集合，0 与「搜了但没找到」必须一眼分得开。 */
+/** 摘要行恒在；缺作者整键缺席；截断按行数判。`eligible` 单独一行：0 与「搜了但没找到」必须一眼分得开。 */
 export function renderSearch(v: SearchRenderValue): string {
   const lines = v.books.map((b) => `《${b.title}》${b.author === undefined ? '' : ` / ${b.author}`} · ${b.sourceCount} 家源：${
     b.sources.slice(0, 3).map((s) => `${s.sourceName}(${s.url ?? '无地址'})`).join('；')}${b.sources.length > 3 ? '…' : ''}`)
@@ -60,17 +53,14 @@ export interface TocRenderValue {
   chapters: Array<{ chapterIndex: number; name: string }>
 }
 
-/** 目录规范值的章数上限：千章目录的 JSON 可达数百 KB，整份喂进 AI 上下文会挤掉正文。
- *  超限后 `total` 仍是全书章数、`chapterIndex` 仍可直接读任意章，只是超限部分的章名不在
- *  规范值里——render 如实报「只含前 N 章」，不假装目录被取全了。 */
+/** 目录规范值的章数上限：千章目录的 JSON 可达数百 KB，整份喂进上下文会挤掉正文。
+ *  超限后 `total` 仍是全书章数、`chapterIndex` 仍可读任意章；render 如实报只含前 N 章。 */
 export const TOC_CHAPTERS_CAP = 1000
 
-/** 工具面**只印这么多章**：与 `TOC_CHAPTERS_CAP`（规范值上限）是两个事实——那是喂给 render
- *  的值的上限，这是模型读到的文案的篇幅。文案里「只显示前 N 章」与 `renderToc` 的 slice 必须
- *  同源于这一枚，别各写一份字面量（两处一旦分头漂，描述就在教模型读一份它读不到的东西）。 */
+/** 工具面只印这么多章：与规范值上限 `TOC_CHAPTERS_CAP` 是两个事实——文案与 `renderToc` 的 slice 同源于这一枚。 */
 export const TOC_RENDER_CAP = 10
 
-/** 目录：只印前 `TOC_RENDER_CAP` 章；规范值超 TOC_CHAPTERS_CAP 时说明只含前 N 章。 */
+/** 目录：只印前 `TOC_RENDER_CAP` 章；规范值超上限时说明只含前 N 章。 */
 export function renderToc(v: TocRenderValue): string {
   const shown = v.chapters.slice(0, TOC_RENDER_CAP).map((c) => `[${c.chapterIndex}] ${c.name}`).join('\n')
   const omitted = v.total > v.chapters.length

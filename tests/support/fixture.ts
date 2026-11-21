@@ -26,3 +26,9 @@ export function pick<T>(items: readonly T[], index: number): NonNullable<T> {
 export function last<T>(items: readonly T[]): NonNullable<T> {
   return must(items.at(-1), `末项（共 ${items.length} 项）`)
 }
+
+/** 一条 `text/html; charset=utf-8` 的合成响应：几个服务面套件都拿它喂替身 fetch，
+ *  内容各自造、信封形状只有这一份。 */
+export function html(text: string): Response {
+  return new Response(text, { headers: { 'content-type': 'text/html; charset=utf-8' } })
+}

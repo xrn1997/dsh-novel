@@ -9,7 +9,7 @@ import { pick } from '../support/fixture.js'
  * 三个验证入口的提交后编排一旦散落调用者（有的催任务读面、有的重拉源列表，维护者必须
  * 记住何时用哪种；失败文案两份抄本一改即漂），就由 `startSourceVerification` 收拢「提交 → 成功
  * 催读面 / 失败一处反馈」，入口只表达「验证哪些源」；终态的源列表刷新归 `reloadedJob` 记账
- * （另钉在 views-wiring）。
+ * （另钉在 `tests/client/wiring-settings.test.tsx`）。
  */
 
 describe('startSourceVerification：验证提交的编排单点', () => {

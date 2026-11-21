@@ -17,9 +17,7 @@ import type { ParamRouteName, RouteName } from './routes.js'
 /** 「书不在架上」文案单点（shelfPut 的更新形态共用这一句） */
 const NOT_ON_SHELF = '书不在架上，先带 title 调用加入'
 
-/** 书架更新动词（patch / progress / listen）的缺席翻译：存在性是门面的事实（`services/reading.ts`
- *  抛 `BookNotOnShelfError`），本层只把「不在架」翻成 HTTP 的 400 与那句可行动文案——
- *  文案仍住路由，服务层不带 HTTP 措辞；三种更新形态共用这一处，别在分支里各写一遍判空。 */
+/** 书不在架（`BookNotOnShelfError`）→ 400 与可行动文案；三种更新形态共用，服务层不带 HTTP 措辞。 */
 function shelfUpdate<T>(apply: () => T): T {
   try {
     return apply()
@@ -29,8 +27,7 @@ function shelfUpdate<T>(apply: () => T): T {
   }
 }
 
-/** SSE 响应头单点（搜索面与发现面两条流共用）。`x-accel-buffering` 那句为什么只写过一份：
- *  攒帧的代价是「即时」变成「整批迟到」，而这条性质对两条流同等成立，抄第二遍时最容易丢的就是它。 */
+/** SSE 响应头单点（搜索与发现两条流共用）；`x-accel-buffering` 的「攒帧 = 整批迟到」对两条流同等成立。 */
 const SSE_HEADERS = {
   'content-type': 'text/event-stream; charset=utf-8',
   'cache-control': 'no-cache',
@@ -38,12 +35,9 @@ const SSE_HEADERS = {
   'x-accel-buffering': 'no',
 }
 
-/** 一条作业观察流的机械，搜索面与发现面共用（头那一份住 `SSE_HEADERS`）：写头 → 每次「变了」补一帧
- *  → 帧到了终态就自己退订并关流 → 关页/断连也退订。
- *  「取哪一份快照、它到没到终态」交给 `frame`：游标推进这种只有某一面试得到的副作用留在调用方自己的
- *  闭包里，机械不认识 job 的形状——两面各自的口径（搜索带游标、发现整帧替换）因此各说各的，不并进来。
- *  不抽这一处的话，「终态必须自己关流」与「断连必须退订」两条纪律各写一遍，漏改任一条都只表现为
- *  某一条流占着连接不放——那种缺陷从代码上看不出来。 */
+/** 作业观察流机械（搜索与发现共用）：写头 → 变化补帧 → 终态自动退订关流 → 断连退订。
+ *  取哪份快照、到没到终态交给 `frame`（游标等副作用留调用方）；两条纪律各写一遍就会漏改，表现为连接不放。
+ */
 function openJobStream(res: ServerResponse, subscribe: (notify: () => void) => () => void,
   frame: () => { job: unknown; done: boolean },
 ): void {
@@ -53,8 +47,7 @@ function openJobStream(res: ServerResponse, subscribe: (notify: () => void) => (
     if (res.writableEnded || res.destroyed) return
     const f = frame()
     res.write(`data: ${JSON.stringify({ job: f.job })}\n\n`)
-    // `?.` 承重：`off` 要到下一行才赋值，而 `subscribe(pump)` 可能在返回退订函数之前
-    // 就同步调一次 `pump`——那一帧里 `off` 还没有值。
+    // `?.` 承重：`subscribe(pump)` 可能在返回退订函数前同步调一次 pump，那时 `off` 还没赋值。
     if (f.done) { off?.(); res.end() }
   }
   off = subscribe(pump)
@@ -62,22 +55,18 @@ function openJobStream(res: ServerResponse, subscribe: (notify: () => void) => (
   pump()                                            // 首帧（可能是 `{job:null}`：还没提交过，流继续等）
 }
 
-/** 路由级可调参数。
- * 本地书面归门面：LocalBooks 部件与导入上限都在 ReadingService，
- * 此处只剩传输层关注点（导出节流）。`exportDelayMs` 收 getter 形态：配置页热改后
- * 下一次导出即用新值，但**一次导出只读一次**——导出中途换节奏会让同一份文件前后快慢不一。 */
+/** 路由级可调参数。本地书面归门面，此处只剩传输关注点。`exportDelayMs` 收 getter：热改后下一次导出生效，
+ *  但一次导出只读一次——中途换节奏会让同一份文件前后快慢不一。 */
 export interface ApiHandlerOptions {
   exportDelayMs?: ValueSource<number>
-  /** 同源 fence 的本机名单追加项（配置 `apiAllowHosts`）。启动期读一次就定：它是一条安全边界，
-   *  不做热更——「运行中随时让掉一个名字」的口子比它要防的东西更危险。 */
+  /** 同源 fence 的本机名单追加项（`apiAllowHosts`）：启动期读一次就定，不做热更——运行中让掉一个名字的口子更危险。 */
   allowHosts?: readonly string[]
 }
 
 /** 403 回显 Host 的长度上限：拒绝理由给别人看，不该被一个超长头撑成整屏。 */
 const HOST_ECHO_MAX = 120
 
-/** 403 要说得可行动：只写「非受信来源」的人分不清自己是网络位置不对还是 Host 不对，
- *  而后者是他自己能配的（判据本身住 `api/wire.ts` 的 `fenceDenialOf`，这里只翻措辞）。 */
+/** 403 要可行动：说清是网络位置还是 Host 不对（判据住 `api/wire.ts` 的 `fenceDenialOf`，这里只翻措辞）。 */
 function fenceDenialMessage(denial: FenceDenial, host: string | undefined): string {
   if (denial === 'remote') return '非受信来源：请求不是从本机 loopback 发来的'
   if (denial === 'host') {
@@ -90,12 +79,9 @@ function fenceDenialMessage(denial: FenceDenial, host: string | undefined): stri
   return '非受信来源：Origin / Referer 与本服务不同源'
 }
 
-/**
- * `/novel-api` 前缀路由的内部分发（一条 prefix 路由 + 此处理器）。
- * 不依赖 Cordis——纯构造器，测试用真 http.Server 承载（tests/api/helpers.ts）。
- */
+/** `/novel-api` 前缀路由的内部分发；纯构造器，不依赖 Cordis（测试用真 http.Server 承载）。 */
 export function createApiHandler(service: ReadingService, opts: ApiHandlerOptions = {}) {
-  // 名单是静态配置：构造期归一一次，逐请求只查表（`fenceDenialOf` 仍是唯一判据）
+  // 名单静态配置：构造期归一一次，逐请求查表（`fenceDenialOf` 仍是唯一判据）
   const allowHosts = fenceAllowlist(opts.allowHosts)
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     try {
@@ -111,15 +97,13 @@ export function createApiHandler(service: ReadingService, opts: ApiHandlerOption
       const segs = rest.split('/').filter(Boolean)
       await route(service, opts, req.method ?? 'GET', segs, url, req, res)
     } catch (e) {
-      // body 形状判据住在 wire 契约（两半共读那一份），落成状态码是传输关注点——在这里翻一次，
-      // 不在每个读口各写一遍 try/catch
+      // body 形状判据住 wire 契约，落状态码是传输关注点——在这里翻一次，不在每个读口写 try/catch
       writeError(res, e instanceof BodyShapeError ? new ApiError(e.message, 400, 'BadRequest') : e)
     }
   }
 }
 
-/** 一条 handler 的入参：匹配器给的 `params` 是路径里 `:` 段的原值（百分号未解码），
- *  解码归各自 handler（见 shelfPut 两形态）。 */
+/** handler 入参：`params` 是 `:` 段原值（百分号未解码），解码归各 handler。 */
 type HandlerCtx = {
   service: ReadingService
   opts: ApiHandlerOptions
@@ -129,13 +113,10 @@ type HandlerCtx = {
   params: readonly string[]
 }
 
-/** 35 条静态路由的穷尽分发表：键集由 `RouteName` 逼，漏接/多接都是 tsc 红；
- *  臂体是原路由分支的搬移，传输机械已逐条下沉（二进制读口共用 `pipeBinary`，两条作业观察流
- *  共用 `openJobStream`），臂体只留分流与错误落点。臂体可回值也可回 Promise——分派点一律
- *  `await`，故不需要为「回 Promise」硬加 async（真异步的臂体自己就是 async）。 */
+/** 35 条静态路由的穷尽分发表：漏接/多接 tsc 红；传输机械已下沉（`pipeBinary` / `openJobStream`），
+ *  臂体只留分流与错误落点。臂体可回 Promise，分派点一律 await。 */
 const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } = {
   health: ({ res }) => {
-    // 健康检查（GET /novel-api）
     writeOk(res, { name: 'dsh-novel', apiVersion: 1 })
   },
   sources: ({ res, service }) => {
@@ -175,8 +156,7 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } 
     writeOk(res, { removed })
   },
   search: async ({ url, res, service }) => {
-    // 「关键词去空白后非空才算在场」这一把尺在两条入口上是同一把：body 那侧住 `readBodies.searchJob`，
-    // query 这侧走 requireQuery（它同时是「缺 query 参数 X」这句措辞的唯一家）
+    // 「关键词去空白后非空」两条入口同一把尺：body 侧 `readBodies.searchJob`，query 侧 `requireQuery`（措辞唯一家）。
     const keyword = requireQuery(url, PARAMS.keyword)
     const ids = url.searchParams.get(PARAMS.sourceIds)?.split(',').filter(Boolean)
     writeOk(res, await service.search(keyword, ids === undefined ? undefined : { sourceIds: ids }))
@@ -197,13 +177,11 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } 
     writeOk(res, service.cancelSearchJob())
   },
   searchJobStream: ({ url, res, service }) => {
-    // 进度推送的加速器（SSE）：首帧 = 带 `since` 的同一份快照（baseline），此后每次状态变化补一帧，
-    // 终态即关流。断线重连 = 重起一条并带已收到的游标——「推送不 replay、显式 query 才是真相」这
-    // 条口径由推送与轮询两通道共用同一游标兑现（since 语义与游标兜底由 tests/api/dispatch-reading.test.ts 钉住），
-    // 客户端的合并代码因此只有一份。
+    // SSE 加速器：首帧 = 带 `since` 的基线快照，此后每次状态变化补一帧，终态关流；断线重连带已收到的游标重起。
+    // 推送不 replay、显式 query 才是真相（since 语义与兜底由 dispatch-reading 测试钉住），客户端合并代码只有一份。
     const raw = Number(url.searchParams.get(PARAMS.since) ?? '0')
     let cursor = Number.isInteger(raw) && raw > 0 ? raw : 0
-    // 游标只在这一面推进（发现面没有游标这回事）：它是 `frame` 闭包里的私有状态，机械不认识
+    // 游标只在这一面推进：它是 `frame` 闭包私有状态，机械不认识。
     openJobStream(res, (notify) => service.subscribeSearchJob(notify), () => {
       const job = service.searchJobSnapshot(cursor)
       if (job !== null) cursor = job.next
@@ -216,34 +194,29 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } 
   },
   // ── 书城发现面（按源列出的分类入口：清单 / 分类书单）──────────────────
   exploreKinds: ({ res, service }) => {
-    // 清单是本地派生（按源列出各自声明的分类入口标题，主人 `services/explore.ts` 的
-    // `deriveExploreSources`），零网络请求——参与集判据归门面。
-    // **只出标题、不出入口地址**：两方言的地址语义不同，那份差异不外泄到跨半契约（`ExploreSources`）
+    // 清单本地派生（主人 `services/explore.ts` 的 `deriveExploreSources`），零网络请求。
+    // 只出标题、不出入口地址：两方言地址语义不同，不外泄到跨半契约。
     writeOk(res, service.exploreSources())
   },
   exploreList: async ({ req, res, service }) => {
-    // 分类轮次复用搜索那套「提交 + 快照 + SSE」的读面形状：提交即由 Node 半跑完并持有整轮。
-    // **浏览轴是「先点名一个源、逛它自己的分类」**（`ADR-0028`）：两个点名都进 body，
-    // 缺任何一个都是路由自检的 body 形状判据（400 BadRequest 点名缺哪个）；点了个不存在的源
-    // 则由门面的值域判据抛错，经同一份映射落成同一个状态码——路由不复制那份判据。
+    // 分类轮次复用搜索的「提交 + 快照 + SSE」读面。浏览轴是「先点名一个源、逛它自己的分类」（`ADR-0028`）：
+    // 缺 body 字段 = 400，源不存在由门面判据抛错。
     const body = await readJsonBody<Record<string, unknown> | null>(req, null)
     const { sourceId, kind } = readBodies.exploreList(body)
     writeOk(res, service.startExploreJob(sourceId, kind))
   },
   exploreListMore: ({ res, service }) => {
-    // 续页：同一轮再要一页。门面说「没得发」就是**没有更多**——回 409 而不是静默成功，
-    // 客户端据此把按钮收掉；假装又加载了一轮是拿假事实喂 UI。
+    // 续页：同一轮再要一页。门面说没得发就是没有更多——409 而不是静默成功，客户端据此收按钮。
     const r = service.loadMoreExploreJob()
     if (r === null) throw new ApiError('没有更多了', 409, 'Conflict')
     writeOk(res, r)
   },
   exploreListStatus: ({ res, service }) => {
-    // 全量快照（跨页累积住在服务端持有者，整帧替换才读得出「这一轮到此刻」——见 ExploreSnapshot）
+    // 全量快照（跨页累积住服务端，整帧替换才读得出「这一轮到此刻」）
     writeOk(res, { job: service.exploreJobSnapshot() })
   },
   exploreListStream: ({ res, service }) => {
-    // 与 search 流同一份形状：每帧都是同一份快照，终态即关流。但**这一条流的订阅者不认帧的 id**：
-    // 发现面整帧替换（CONTEXT「整帧替换」、`client/explore-job.ts` 的 `apply`），search 面才按 id 验身份。
+    // 与 search 流同形：每帧同一份快照，终态关流；但发现面整帧替换、不认帧的 id，search 面才按 id 验身份。
     openJobStream(res, (notify) => service.subscribeExploreJob(notify), () => {
       const job = service.exploreJobSnapshot()
       return { job, done: job !== null && job.phase !== 'running' }
@@ -277,8 +250,7 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } 
     writeOk(res, service.shelfList())
   },
   shelfBatchDelete: async ({ req, res, service }) => {
-    // 书架批量删除（多选）：一趟删一批。本地书副本连删的 invariant 归门面 removeBooks——
-    // 与单删 removeBook 同一条，路由只做 body 校验与信封。bookKey 走 JSON body，不必编码。
+    // 书架批量删除：一趟删一批；本地书副本 invariant 归门面 `removeBooks`，路由只做 body 校验与信封。
     const body = await readJsonBody<Record<string, unknown> | null>(req, null)
     writeOk(res, await service.removeBooks(readBodies.keys(body)))
   },
@@ -302,8 +274,7 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } 
       : readValue(opts.exportDelayMs)
     const ctrl = new AbortController()
     res.on('close', () => ctrl.abort())                    // 浏览器关页/取消 → 停止后续章节
-    // 区间判据（全本缺省 / 越界裁剪 / 倒置）与「目录为空」全归门面 exportRange；本层只翻 outcome
-    // 并做传输机械——toc 抓取失败也由它在写头前抛出，错误信封因此仍走正常错误路径（502）
+    // 区间判据与「目录为空」归门面 `exportRange`；本层只翻 outcome 并做传输机械（toc 失败也在写头前抛，走 502 信封）。
     const out = await service.exportRange(sourceId, bookUrl, from, to, { title, delayMs, signal: ctrl.signal })
     if (out.kind === 'empty-toc') throw new ApiError('目录为空，无内容可导出', 422, 'EmptyToc')
     if (out.kind === 'bad-range') throw new ApiError(`导出范围非法：from(${out.from}) > to(${out.to})`, 422, 'BadRange')
@@ -334,22 +305,20 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } 
   },
   // ── 本地书（TXT / EPUB）面 ────────────────────────────────────────────
   local: async ({ res, service, url }) => {
-    // 注：id 在 query（DELETE /novel-api/local?id=…，测试钉死），不是路径段——路径段里出现 'id' 不匹配任何表项
+    // id 在 query（测试钉死），不是路径段——路径段里出现 'id' 不匹配任何表项
     const id = requireQuery(url, PARAMS.id)
     writeOk(res, await service.removeLocalBook(id))
   },
   localImport: async ({ req, res, service, url }) => {
     const name = requireQuery(url, PARAMS.name)
     const max = service.localImportMaxBytes
-    // 流读与上限判据归 readCappedBody（与 JSON 信封体同一份实现），本处只给措辞
-    // 超限是配置边界，不是坏文件：报错要把可调的那一项交到用户手上
+    // 流读与上限归 `readCappedBody`；超限是配置边界，报错要点名可调项。
     const bytes = await readCappedBody(req, max,
       (m) => `文件超过 ${formatByteLimit(m)} 上限：可在插件设置的「本地文件导入上限」（localImportMaxBytes）调大`)
     // 分流（TXT/EPUB 按内容）、发布与自动上架全归门面；回执就是 wire 的 LocalImportResponse
     writeOk(res, await service.localImport(bytes, name))
   },
   localDocument: async ({ res, service, url }) => {
-    // 补充文档（脚注/附录）的图文正文：`id=bookKey` + `documentId`
     const id = requireQuery(url, PARAMS.id)
     const documentId = requireQuery(url, PARAMS.documentId)
     writeOk(res, await service.getLocalSupplement(id, documentId))
@@ -368,29 +337,25 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } 
   },
   // ── 听书面（引擎源 / 段合成 / 音频读口 / 引擎订阅）──────────────────────
   ttsSources: ({ res, service }) => {
-    // 引擎源清单 + 宿主服务健康（内置 / 浏览器直出 / 注册表订阅 / cordis 仅在场且就绪）；
-    // 展示名只属于订阅数据，「这一行为什么不在」由 hostSpeech 那一格回答
+    // 引擎源清单 + 宿主服务健康；展示名只属于订阅数据，「为什么不在」由 hostSpeech 回答。
     writeOk(res, service.ttsSourcesView())
   },
   ttsSynthesize: async ({ req, res, service }) => {
     // 段合成：回执带缓存键（字节另走 ttsAudio）；失败经 classify 落 400/502/503，不泄漏堆栈
     const body = await readJsonBody<Record<string, unknown> | null>(req, null)
     const p = readBodies.ttsSynthesize(body)
-    // 断连即取消：跳段 / 停止 / 关页都不该让上游把一段没人听的内容念完并计费（同导出那一行）。
-    // 监听挂上后**立刻补查已断连**：读 body 的 await 期间客户端可能已走，'close' 不会再来
-    // （与 `pipeBinary` 的同一条纪律）。
+    // 断连即取消（跳段/停止/关页都不该让上游念完计费）；监听挂上后立刻补查已断连——读 body 期间可能已走（同 `pipeBinary`）。
     const ctrl = new AbortController()
     const gone = (): void => { ctrl.abort() }
     res.on('close', gone)
     if (res.destroyed) ctrl.abort()
     try {
       const receipt = await service.ttsSynthesize(p, { signal: ctrl.signal })
-      // 回执落地与写响应之间还有一个窗口：这期间客户端可能已经走了，往已关闭的响应写会抛
-      // WriteAfterEnd。断连那一发没有读者——不写就是了，也不进错误径（作废不是故障）。
+      // 回执与写响应之间还有窗口：客户端可能已走，写已关闭响应会抛 WriteAfterEnd；断连那发不用写，也不进错误径。
       if (ctrl.signal.aborted) return
       writeOk(res, receipt)
     } catch (e) {
-      // 调用方已经走了：这条响应没有读者，错误信封无处可写（作废不是故障，也不进日志）
+      // 调用方已走：没有读者，错误信封无处可写（作废不是故障）
       if (ctrl.signal.aborted) return
       throw e
     } finally {
@@ -426,8 +391,7 @@ const PARAM_HANDLERS: { [K in ParamRouteName]: (ctx: HandlerCtx) => void | Promi
     // 单源启停：停用 = 不参与聚合搜索，试跑/验证不受影响
     const body = await readJsonBody<Record<string, unknown> | null>(req, null)
     const enabled = readBodies.enabled(body)
-    // 未知 id 由门面抛 SourceNotFoundError；classify 的表把它投影成 404 NotFound，
-    // 路由层不自带第二份判据。
+    // 未知 id 由门面抛 SourceNotFoundError，经 classify 投影成 404；路由不自带第二份判据。
     await service.setEnabled(paramOf(params), enabled)
     writeOk(res, { enabled })
   },
@@ -463,8 +427,7 @@ const PARAM_HANDLERS: { [K in ParamRouteName]: (ctx: HandlerCtx) => void | Promi
   },
 }
 
-/** 匹配 → 查表：fence 之后只做三件事——问匹配器（机械住 `routes.ts`）、查分发表、调 handler。
- *  405/404 的信封落点也在这里（状态码是传输关注点，matcher 只回结论）。 */
+/** 匹配 → 查表：问匹配器（`routes.ts`）、查分发表、调 handler；405/404 信封落点也在这里。 */
 async function route(
   service: ReadingService, opts: ApiHandlerOptions, method: string, segs: string[], url: URL,
   req: IncomingMessage, res: ServerResponse,
@@ -488,17 +451,14 @@ function requireSourceUrl(url: URL): { sourceId: string; url: string } {
   return { sourceId, url: bookUrl }
 }
 
-/** 必填 query 参数的唯一尺与唯一措辞处：trim 后非空才算在场，缺席点名缺哪一个。
- *  多参数路由按参数序逐条调用：报出来的仍是第一个缺的那个（顺序即入参序，与一次取齐同一次序）。 */
+/** 必填 query 的唯一尺与措辞：trim 后非空才算在场，缺席点名缺哪一个。 */
 function requireQuery(url: URL, name: string): string {
   const v = url.searchParams.get(name)?.trim() ?? ''
   if (v === '') throw new ApiError(`缺 query 参数 ${name}`, 400, 'BadRequest')
   return v
 }
 
-/** 参数路由的 `:` 段取值：`PARAM_PATTERN_PATHS` 逐条只有一个 `:` 段，匹配器又按段数判等才给
- *  param-hit，故首项在构造上必在界内。这层判空是让编译器跟上那条表内证明；它真落空意味着匹配器
- *  契约已破，落点与「路径没被认出」同属 404 家族。 */
+/** `:` 段取值：表内每模式只有一个 `:` 段、匹配器按段数判等，首项必在界内；判空只让编译器跟上，落空 = 匹配器契约已破（404 家族）。 */
 function paramOf(params: readonly string[]): string {
   const [only] = params
   if (only === undefined) throw new ApiError('路径参数缺失', 404, 'NotFound')
@@ -506,13 +466,10 @@ function paramOf(params: readonly string[]): string {
 }
 
 /**
- * 二进制资源的响应头（安全口径单点）：MIME 用已验证的**事实**（本地资源的导入期验证、
- * 合成音频的缓存侧车）、禁嗅探、同源 CORP、私有缓存。本地资源的独立 SVG 额外附强 CSP：
- * 书内 SVG 是重建过的静态文本，仍按「不可信文档」对待——一旦作为文档被直接打开，默认全部禁掉
- * （`sandbox` 连带禁脚本/表单/插件），不给它任何同源能力。
- * `accept-ranges: none` 把「不支持分段」写成明话：两个读口都按整份回（`<audio>` 发 `Range`
- * 也只是拿全量），不声明的话浏览器会一直试探。将来要给音频补 Range，改的是这一处与读流器。
- * 不在这里拼路径、不设 content-disposition：两个读口都只服务 `<img>` / `<audio>`，不提供原文下载。
+ * 二进制响应头（安全口径单点）：MIME 用已验证事实、禁嗅探、同源 CORP、私有缓存。本地 SVG 额外附强 CSP：
+ * 书内 SVG 按不可信文档对待，`sandbox` 连带禁脚本/表单/插件。
+ * `accept-ranges: none` 把「不支持分段」写成明话；将来补 Range 改这一处与读流器。
+ * 不拼路径、不设 content-disposition：两个读口只服务 `<img>` / `<audio>`，不提供原文下载。
  */
 function resourceHeaders(mediaType: string, bytes: number): Record<string, string> {
   return {
@@ -526,12 +483,9 @@ function resourceHeaders(mediaType: string, bytes: number): Record<string, strin
   }
 }
 
-/** 二进制资源的传输机械（本地资源与合成音频共用）：调用方已拿到资源并在**发头之前**抛过 404，
- *  这里写头、挂断连/出错监听、补查已断连、导流。
- *  断连即销毁本条流、流上出错即断连（头已发补不了错误信封，但错误必须留痕，不能吞成静默断连）。
- *  监听挂上后**立刻补查已断连**：上面 await（查资源表 + 打开文件 / 打开缓存条目）期间客户端可能
- *  已断开、'close' 不会再来，而这条流源自 FileHandle——没人销毁会挂到 GC，Node 把
- *  「GC 期关闭 FileHandle」当未捕获错误抛（表现为测试收尾时红）。 */
+/** 二进制传输机械（本地资源与合成音频共用）：调用方已拿到资源并在发头前抛过 404。断连即销毁流，
+ *  流出错即断连（头已发补不了信封，但错误必须留痕）。挂监听后立刻补查断连：await 期间客户端可能已走，
+ *  FileHandle 没人销毁会挂到 GC，Node 当未捕获错误抛。 */
 function pipeBinary(
   res: ServerResponse,
   resource: { mediaType: string; bytes: number; stream: Readable },
@@ -552,18 +506,15 @@ function pipeBinary(
   stream.pipe(res)
 }
 
-/** PUT /shelf/:key：body 的字段集类型判别住 wire 的 `readBodies.shelfPut`；**形态分派**
- *  （含 title 非空才加书、四形态皆无 → 400）住本臂——「调用方要的是哪个动作」是传输关注点
- *  （`ADR-0036` 第①条）。合并语义 null/undefined 保值单点住在 `Shelf`。
- *  更新形态的缺席判据不在这层：三种更新动词各自抛出 `BookNotOnShelfError`（缺席在更新动词里
- *  是错误），三个分支共用 `shelfUpdate` 把这一事实翻成 400 与那句文案——不预检、不判空。 */
+/** PUT /shelf/:key：字段集判别住 `readBodies.shelfPut`，形态分派（title 非空才加书、四形态皆无 → 400）是本臂的
+ *  传输关注点（`ADR-0036`）。更新动词缺席各自抛 `BookNotOnShelfError`，三个分支共用 `shelfUpdate` 翻成 400；不预检。
+ */
 async function shelfPut(
   service: ReadingService, bookKey: string, req: IncomingMessage, res: ServerResponse,
 ): Promise<void> {
   const body = await readJsonBody<Record<string, unknown> | null>(req, null)
   if (body === null || typeof body !== 'object') throw new ApiError('body 需为 JSON 对象', 400, 'BadRequest')
-  // 读口只交事实；值域门（能不能进架、进度/听书位置取值范围）归门面动词：同一条判断要同时护
-  // HTTP 面与 agent 工具面。四形态按 title → patch → progress → listen 的顺位分派。
+  // 读口只交事实；值域门归门面（同时护 HTTP 面与工具面）。四形态按 title → patch → progress → listen 分派。
   const fields = readBodies.shelfPut(body)
   const title = fields.meta.title
   if (typeof title === 'string' && title !== '') {
@@ -588,11 +539,9 @@ async function shelfPut(
   throw new ApiError(`body 需带 ${PARAMS.title}（加书）/ ${BODY.patch}（打补丁）/ ${BODY.progress}:{${BODY.chapterIndex},${BODY.offsetRatio}}（更新进度）/ ${BODY.listen}:{${BODY.chapterIndex},${BODY.paragraphIndex},${BODY.engineId},${BODY.voice},${BODY.rate},${BODY.volume}}（存听书位置）`, 400, 'BadRequest')
 }
 
-/** auth 路由：run-login 交门面深动词 `login` 后只做 outcome→HTTP 翻译（loginUrl 形态判别在门内，
- *  dispatch 不读 rules.loginUrl）；loginAction 按按钮名跑动作；否则 cookie / loginInfo 录入。
- *  不再预检存在性（ADR-0036 既定边界）：body 形状分派先于存在性——未知源 + 垃圾 body 报 400，
- *  形状过了 readBodies.auth 才轮到门内 requireSource 的 404。body 读取（含 1 MB 上限）同样先于
- *  存在性：未知源 + 超大 body 报 413，与 404→400 是同一条优先级翻转。 */
+/** auth 路由：run-login 交门面 `login` 后只翻 outcome（loginUrl 判别在门内）；loginAction 按按钮名跑动作；
+ *  否则 cookie / loginInfo 录入。body 形状分派先于存在性（未知源 + 垃圾 body 报 400），body 读取也先于存在性
+ *  （未知源 + 超大 body 报 413）。 */
 async function authRoute(service: ReadingService, id: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
   const body = await readJsonBody<Record<string, unknown> | null>(req, null)
   const want = readBodies.auth(body)
@@ -626,36 +575,24 @@ async function authRoute(service: ReadingService, id: string, req: IncomingMessa
   writeOk(res, { auth: true })
 }
 
-/** 「方法不允许」405 的唯一措辞处：路径认得、方法不对（匹配器的 method-mismatch 出口）。
- *  路径拼上 `NOVEL_API_PREFIX`：调用方拿到的是可直接照改的完整路径——health 的表内 path 是空串，
- *  拼出来正好是 `/novel-api` 自己（前缀不带尾斜杠，非空路径要自己补分隔）。 */
+/** 405 唯一措辞：路径认得、方法不对。路径拼上前缀，调用方拿到可直接照改的完整路径
+ *  （health 的空 path 拼出 `/novel-api` 自己）。 */
 function methodMismatchError(method: string, expected: string, path: string): ApiError {
   const at = path === '' ? NOVEL_API_PREFIX : `${NOVEL_API_PREFIX}/${path}`
   return new ApiError(`方法不允许: ${method}（${at} 需 ${expected}）`, 405, 'MethodNotAllowed')
 }
 
-/** 「未知路由」404 的唯一措辞处：匹配器没认出的路径都由这一句承接。
- *  `tests/api/routes.test.ts` 的**落点判据**就是这句前缀（`startsWith('未知路由')`）——
- *  措辞在这句之外再写一份，漏改的那份会让「路由没接住」被读成「测试找不到证据」。 */
+/** 404 唯一措辞：匹配器没认出的路径都由这句承接；`tests/api/routes.test.ts` 以「未知路由」前缀为落点判据，别处不再写。 */
 function unknownRoute(method: string, segs: string[]): ApiError {
   return new ApiError(`未知路由: ${method} ${NOVEL_API_PREFIX}/${segs.join('/')}`, 404, 'NotFound')
 }
 
-/** 任务互斥（409）与本地书面（400/413/503）的错误→HTTP 投影全在分类表
- *  口径两分法（见 api/wire）：domain 错误走 classify+STATUS_OF；
- *  路由自检错误走 ApiError（自带 status）。本文件不 inline writeJson 硬编状态码。 */
+/** 错误 → HTTP 投影全在分类表（两分法见 api/wire）：domain 走 classify + STATUS_OF，路由自检走 ApiError；
+ *  本文件不 inline writeJson 硬编状态码。 */
 
-/** 这三处「看着像业务判据」的东西，各自的归属是定过的，别当违规清理：
- *  ① `shelfPut` / `authRoute` 按 body 形状分派到哪个门面动词——这一层仍住路由：它们由
- *    `PARAM_HANDLERS` 里 shelfPut / sourceAuth 两个 handler 接进来，分派本身是「调用方要的是
- *    哪个动作」，传输关注点；**值域**判据（能不能进架、进度取值范围、登录脚本的形态与执行）全在
- *    门面（`ADR-0019` 那条同一件事；run-login 的判别与执行收在门面 `login()` 的 outcome 里，
- *    本层只翻状态码与文案）。body 的*字段集与形态*判据不在这里重复：它住 `shared/wire.ts` 的
- *    `readBodies`；本层只留一道传输闸——非 JSON 对象 body（含空 body）在交给读口前即 400。
- *    存在性判据同归门面（门内 requireSource 抛 SourceNotFoundError）——故形状分派先于存在性：
- *    未知源 + 垃圾 body 报 400（`ADR-0036` 既定边界）。
- *  ② 导出区间的裁剪与两条 422 不在这层：主人是门面 `services/reading.ts` 的 `exportRange`
- *    （`ADR-0052`）——缺省全本、越界裁剪与裁剪后倒置是同一件事的三面，判据属于导出动作；
- *    本层只留参数**形态**校验（parseEdge 的 400）、写头与流式机械。`services/export.ts` 的头注
- *    记的是它「拿到越界区间即抛」的前置校验，防的是绕过门面的未来调用方，不是第二份策略。
- *  ③ 流式面（导出 / 两条观察流）自己写响应头：它们不套 JSON 信封，是信封的两个有意豁免者。 */
+/**
+ * 三处「像业务判据」的归属是定过的，别当违规清理：
+ * ① shelfPut / authRoute 按 body 形状分派动词：分派是传输关注点；值域与存在性全在门面（`ADR-0019` / `ADR-0036`）。
+ * ② 导出区间裁剪与两条 422 归门面 `exportRange`（`ADR-0052`）；本层只留参数形态校验与流式机械。
+ * ③ 流式面（导出 / 两条观察流）自己写响应头：不套 JSON 信封，是信封的两个有意豁免者。
+ */

@@ -10,7 +10,6 @@ import type {
 import { apiGet, apiSend } from '../../src/client/api.js'
 import { apply } from '../../src/client/index.js'
 import { resetPanelShelf } from '../../src/client/panel-shelf.js'
-import type { ReaderPort } from '../../src/client/reader-session.js'
 import { ReaderSession } from '../../src/client/reader-session.js'
 import { navigate, routeStore } from '../../src/client/store.js'
 import { NOVEL_CSS } from '../../src/client/styles.js'
@@ -32,6 +31,7 @@ import { Dialog } from '../../src/client/views/dialog.js'
 import { ShelfView } from '../../src/client/views/ShelfView.js'
 import { makeCoreDeps, makeReaderDeps } from './fake-deps.js'
 import type { FakeReaderDeps } from './fake-deps.js'
+import { FakeResizeObserver, fakePort, readerRouteGet, readerRouteGetMock } from './reader-fakes.js'
 import { fakeCtx, fakeHost } from './fake-host.js'
 import { FakeAudio, FakeSpeechSynthesis, FakeUtterance, FakeVoice } from './tts-fakes.js'
 import { must } from '../support/fixture.js'
@@ -86,14 +86,11 @@ function shelfEntry(over: Partial<ShelfEntry> = {}): ShelfEntry {
 
 function readerDeps(over: Partial<FakeReaderDeps> = {}): FakeReaderDeps {
   return makeReaderDeps({
-    apiGet: vi.fn(async (path: string) => {
-      if (path.startsWith('navigation')) {
-        const chapters = chapterEntries()
-        return { chapters, items: planarNavigation(chapters) }
-      }
-      if (path.startsWith('chapter')) return { kind: 'text', text: textOf(indexOf(path)) } satisfies ChapterContent
-      if (path === ROUTES.ttsSources.path) return { sources: [], hostSpeech: { state: 'absent' } }
-      return shelf
+    apiGet: readerRouteGetMock({
+      chapters: chapterEntries,
+      chapter: (index) => ({ kind: 'text', text: textOf(index) } satisfies ChapterContent),
+      ttsSources: () => ({ sources: [], hostSpeech: { state: 'absent' } }),
+      shelf: () => shelf,
     }),
     ...over,
   })
@@ -118,29 +115,7 @@ function cardOf(title: string): HTMLElement {
   return must(card, `书架卡片「${title}」`)
 }
 
-interface FakePort extends ReaderPort {
-  anchors: Array<{ index: number; start: number; height: number }>
-  top: number
-  height: number
-  scrollH: number
-}
-
-/** 会话级假几何（与 reader-session.test 同形但只留本文件用到的读数） */
-function fakePort(): FakePort {
-  const port: FakePort = {
-    anchors: [], top: 0, height: 1000, scrollH: 5000,
-    measureAnchors: () => port.anchors,
-    scrollTop: () => port.top,
-    setScrollTop: (px: number) => { port.top = px },
-    viewHeight: () => port.height,
-    scrollHeight: () => port.scrollH,
-    sentinelOffset: () => null,
-    targetOffset: () => null,
-    targetOffsets: (_index, anchorIds) => anchorIds.map(() => null),
-    currentNode: () => null,
-  }
-  return port
-}
+/* 会话级假几何与读面分流收在 `./reader-fakes.js`（与 reader-session / tts-bar 同一套读数） */
 
 beforeEach(() => {
   resetTtsPlayerForTests()
@@ -161,16 +136,13 @@ beforeEach(() => {
     ['第三章第一段。', '第三章第二段。', '第三章第三段。'],
   ]
   shelf = []
-  vi.mocked(apiGet).mockImplementation(async (path: string) => {
-    if (path.startsWith('navigation')) {
-      const chapters = chapterEntries()
-      return { chapters, items: planarNavigation(chapters) }
-    }
-    if (path.startsWith('chapter')) return { kind: 'text', text: textOf(indexOf(path)) }
-    if (path === ROUTES.shelf.path) return shelf
-    if (path === ROUTES.ttsSources.path) return { sources: [], hostSpeech: { state: 'absent' } }
-    throw new Error(`unexpected GET ${path}`)
-  })
+  vi.mocked(apiGet).mockImplementation(readerRouteGet({
+    chapters: chapterEntries,
+    chapter: (index) => ({ kind: 'text', text: textOf(index) }),
+    ttsSources: () => ({ sources: [], hostSpeech: { state: 'absent' } }),
+    shelf: () => shelf,
+    strict: true,
+  }))
   vi.mocked(apiSend).mockImplementation(async (target: RouteTarget<WriteMethod>, body?: unknown) => {
     if (target.path === ROUTES.ttsSynthesize.path) {
       const record = (body ?? {}) as { text?: unknown }
@@ -692,15 +664,6 @@ describe('迷你条是浮窗：两个完整形态、可拖、可收起', () => {
   })
 
   it('边栏高度随内容变化（120↔140）后重新夹回屏内：不溢出也不留缝', async () => {
-    class FakeResizeObserver {
-      static fire: (() => void) | null = null
-      constructor(cb: ResizeObserverCallback) {
-        FakeResizeObserver.fire = () => { cb([], this) }
-      }
-      observe(): void {}
-      unobserve(): void {}
-      disconnect(): void {}
-    }
     vi.stubGlobal('ResizeObserver', FakeResizeObserver)
     try {
       expect(typeof globalThis.ResizeObserver, 'stub 已装到 globalThis').toBe('function')

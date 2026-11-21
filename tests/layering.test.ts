@@ -15,7 +15,7 @@ import { must } from './support/fixture.js'
  *
  * 为什么不用 dependency-cruiser：它的 engines 是 ^22 / ^24 / >=26，本机 node 25 直接拒跑
  * ——装上来跑不起来的闸不算闸。这里只取本仓真正需要的那一小截（静态 import 的方向、值环、
- * wire 的运行时依赖），与 copy-guard / comment-altitude 同用 ts 的 AST，不引新依赖。
+ * wire 的运行时依赖），与 copy-guard 同用 ts 的 AST，不引新依赖。
  *
  * 射程：静态 import 与所有 `export ... from`。动态 import 本门看不见方向，故单独管：不许指仓内，
  * 且出现新动态 import 必须登记进 `DYNAMIC_IMPORTS_OK`（现存唯一一处只够 `node:worker_threads`

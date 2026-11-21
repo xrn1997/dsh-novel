@@ -10,11 +10,9 @@ import type { CopyKey } from '../copy/index.js'
 import { Dialog } from '../views/dialog.js'
 
 /** 文本位的标签、说明与呈现：字段集合来自 wire 的 `TTS_ENGINE_TEXT_FIELDS`（只含合成链会读的三格），
- *  这份 Record 只补「叫什么、说明什么、单行还是多行」；漏一个字段编译不过。
- *  `jsLib` 是代码（`//` 注释按行生效）、`header` 是 JSON 头表：单行 input 的值净化会吞掉换行，
- *  编辑后保存就把多行代码压成一行（注释吃掉其余代码），故这两格走多行 textarea；contentType 是单值 MIME，单行即可。
- *  legado 的登录 / 限速 / cookie jar 字段本仓不支持，故不摆编辑框——假控件比没有这个能力更坏。
- *  说明（hintKey）也住这里：三格的用途与「留空是什么语义」由字段自己说，不散在视图里。 */
+ *  这份 Record 只补「叫什么、说明什么、单行还是多行」；漏一个字段编译不过。`jsLib` 是代码、
+ *  `header` 是 JSON 头表：单行 input 的值净化会吞掉换行，故这两格走多行 textarea。
+ *  legado 的登录 / 限速 / cookie jar 字段本仓不支持，不摆编辑框——假控件比没有这个能力更坏。 */
 const EDIT_FIELD: Record<TtsEngineTextField, { labelKey: CopyKey; hintKey: CopyKey; multiline?: boolean }> = {
   contentType: { labelKey: 'tts.engines.edit.contentType', hintKey: 'tts.engines.edit.contentTypeHint' },
   header: { labelKey: 'tts.engines.edit.header', hintKey: 'tts.engines.edit.headerHint', multiline: true },
@@ -52,16 +50,12 @@ function textOrUndefined(value: string): string | undefined {
  * 编辑抽屉：只服务 http 订阅引擎。可编辑字段集 = `TtsEngineInput` 的非凭据位 + 三个凭据位；
  * 凭据位留空 = 不交 `auth`（注册表保留盘上登录态），填写才整组覆盖。
  *
- * 结构按「常用 / 高级 / 登录态」分三组：接口地址走多行 textarea（legado 规则常带
- *  换行与超长选项串，单行 input 会把换行吞掉）；内容类型 / 静态请求头 / JS 库收进默认折叠的高级组，
- *  组标题报「已填 N 项」；凭据三格收进默认折叠的登录态组，只在组标题上摆「已配置 / 未配置」状态位。
- *  表单本体只有一个滚动容器，动作行固定在抽屉底部，展开任何一组都不会把保存钮挤出去。
+ * 结构按「常用 / 高级 / 登录态」分三组：接口地址走多行 textarea（legado 规则常带换行）；
+ * 高级组（内容类型 / 静态请求头 / JS 库）与凭据三格默认收起，组标题报已填 N 项 / 状态位。
+ * 表单本体只有一个滚动容器，动作行固定在抽屉底部。
  *
- * 盘上已有登录态时组内另给一条「清除」：投影读不回凭据，不摆这个入口就等于「登录态只能换不能删」。
- * 勾上后提交 `auth: { cookies: {} }`（空凭据 = 删 auth 那一条由服务端认），本次填写的凭据不生效；
- * 组收起时状态位改报「保存后清除」，别让一次删除意图跟着折叠一起隐身。
- *
- * 保存失败留在表单里显示服务端理由，不关模态。
+ * 盘上已有登录态时组内另给「清除」：不摆就等于「登录态只能换不能删」；勾上后提交空凭据，
+ * 组收起时状态位改报「保存后清除」。保存失败留在表单里显示服务端理由，不关模态。
  */
 export function EngineEditDialog({ engine, onClose, onSaved }: {
   engine: TtsEnginePublic
@@ -163,8 +157,7 @@ export function EngineEditDialog({ engine, onClose, onSaved }: {
     options: {
       multiline?: boolean; disabled?: boolean; initial?: boolean; hint?: string
     } = {}): ReactNode => (
-    // key 用调用点给的字段名（name / url / 三个文本位 / 三个凭据位各一）：这些行由
-    // `TTS_ENGINE_TEXT_FIELDS.map` 批量产出，没有 key 就是每次重渲都整列重建（React 当场告警）。
+    // key 用调用点给的字段名：这些行由 `TTS_ENGINE_TEXT_FIELDS.map` 批量产出，没有 key 就是每次重渲整列重建。
     <div key={id} className="novel-tts-edit-field">
       <label htmlFor={fieldId(id)}>{label}</label>
       {options.multiline === true ? (
@@ -185,9 +178,8 @@ export function EngineEditDialog({ engine, onClose, onSaved }: {
     </div>
   )
 
-  /** 组标题（折叠开关）：chevron 是装饰字形，组名与状态都由文案单点给词。
-   *  `bodyId` 是组体那枚 id 的认领口：组体只在展开时渲染，`aria-controls` 也只在
-   *  展开时引用它——收起后不留悬空引用，id 不是死装饰。 */
+  /** 组标题（折叠开关）。`bodyId` 是组体 id 的认领口：组体只在展开时渲染，`aria-controls` 也只在
+   *  展开时引用它——收起后不留悬空引用。 */
   const groupToggle = (label: string, bodyId: string, open: boolean, onToggle: () => void,
     status: string): ReactNode => (
     <button

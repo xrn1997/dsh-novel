@@ -9,6 +9,7 @@ import { ReaderNotes } from '../../src/client/views/ReaderNotes.js'
 import type { SupplementTarget } from '../../src/client/views/types.js'
 import type { ChapterContent, ContentNode } from '../../src/client/views/types.js'
 import { makeReaderDeps } from './fake-deps.js'
+import { deferred, tick } from '../support/async.js'
 import { pick } from '../support/fixture.js'
 import { rect, stubLayout } from './scroll-stub.js'
 
@@ -31,15 +32,6 @@ const para = (id: string, t: string): ContentNode => ({
 })
 const linkTo = (id: string, target: SupplementTarget, label: string): ContentNode =>
   ({ kind: 'link', id, target: { ...target }, role: 'noteref', children: [text(label)] })
-
-interface Deferred<T> { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void }
-function deferred<T>(): Deferred<T> {
-  let resolve!: (v: T) => void
-  let reject!: (e: unknown) => void
-  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej })
-  return { promise, resolve, reject }
-}
-const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 
 const t1: SupplementTarget = { kind: 'supplement', documentId: 'd1', anchorId: null }
 

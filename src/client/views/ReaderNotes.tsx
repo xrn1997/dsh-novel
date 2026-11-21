@@ -11,19 +11,13 @@ import { ErrorBanner } from './bits.js'
 import type { ChapterContent, LinkRole, ReadingTarget, SupplementTarget } from './types.js'
 
 /**
- * 补充文档面板（脚注 / 附录）：只读 `localDocument`，只认 supplement 目标。
- * 面板自带浮层几何与 role=dialog（见 styles 的 .novel-notes）：外层只负责挂载、互斥与 Esc 关闭，
- * 关闭一律经 `onClose`——面板不自裁，也不猜自己是第几层浮层。
+ * 补充文档面板（脚注 / 附录）：只读 `localDocument`，只认 supplement 目标。面板自带浮层几何与
+ * role=dialog；外层负责挂载、互斥与 Esc 关闭，关闭一律经 `onClose`——面板不自裁、不猜自己是第几层。
  *
- * 边界与两把锁：
- *  - **不碰主阅读进度**：这里没有一处 apiSend。关闭只通知外层（`onClose`）；遇到主序列目标
- *    转交 `onNavigate`，由会话去跳章——面板自己跳就等于绕过会话的在途槽与返回栈。
- *  - **内部栈**：补充→补充在面板里继续跟（栈深度 > 1 才有「返回」）。主序列内的脚注不走这里。
- *    外层每次重新指向都由 `requestSeq` 表达，栈按它重置（只比目标值会漏掉「同一条被再点一次」）。
- *  - `seq`（请求代号）：后点的脚注先返回时，先发出的请求一律不许覆盖新内容；
- *  - `alive`（在场闸）：卸载后到达的响应什么都不做——成功直接丢弃（React 的 setState 在
- *    卸载后本就静默，这条钉的是「不做任何外部动作」），失败转瞬态层（本仓口径：两个半场都不许静默，
- *    与 ShelfView 的异步导入同款）。
+ * 边界与两把锁：**不碰主阅读进度**（这里没有一处 apiSend；主序列目标转交 `onNavigate`，由会话跳章）；
+ * **内部栈**（补充→补充继续跟，深度 > 1 才有「返回」；外层重新指向由 `requestSeq` 表达，栈按它重置）；
+ * `seq` 让后点的脚注先返回时旧请求不覆盖新内容；`alive` 让卸载后到达的响应什么都不做——
+ * 成功直接丢弃、失败转瞬态层（两个半场都不许静默）。
  */
 
 type NotesState =
@@ -31,8 +25,7 @@ type NotesState =
   | { phase: 'ready'; content: ChapterContent }
   | { phase: 'error'; error: { code?: string; message: string } }
 
-/** 失败载荷进 ErrorBanner：ApiClientError 的 code 带着（有 code 就显 code），其他异常按普通错误。
- *  客户端网络错误按当前语言出话，服务端错误原文透传（判据归 `describeError`）。 */
+/** 失败载荷进 ErrorBanner：ApiClientError 的 code 带着；客户端网络错误按当前语言出话，服务端错误原文透传。 */
 function asErrorLike(e: unknown, t: Translate = zhTranslate): { code?: string; message: string } {
   const message = describeError(e, t)
   if (e instanceof Error) {
@@ -42,8 +35,7 @@ function asErrorLike(e: unknown, t: Translate = zhTranslate): { code?: string; m
   return { message }
 }
 
-/** 注释面板的依赖面：读一份文档 + 失败上报。它不写进度、不观察任务，也就不该为了拿这两样
- *  而声明整个阅读区束（宽束由 `ReaderView` 持有，传下来时自然投影成这一份）。 */
+/** 注释面板的依赖面：读一份文档 + 失败上报。不写进度、不观察任务，故不声明整个阅读区束。 */
 type NotesDeps = Pick<ClientCoreDeps, 'apiGet' | 'pushError'>
 
 export function ReaderNotes({ bookKey, target, requestSeq, deps, onNavigate, onClose }: {
@@ -53,9 +45,8 @@ export function ReaderNotes({ bookKey, target, requestSeq, deps, onNavigate, onC
   /** 外层「重新指向」的次数（每次打开都 +1）：面板按它重置内部栈，见下方 effect */
   requestSeq: number
   deps: NotesDeps
-  /** 面板里点到主序列目标：交外层导航（面板不自己跳、不写进度）。
-   *  `role` 必须透传：外层要按它决定这条跳转是「从正文链接出发」（押返回项）还是
-   *  「返回链接本身」（消费掉返回项）——面板丢掉的正是这个判据。 */
+  /** 面板里点到主序列目标：交外层导航（面板不自己跳、不写进度）。`role` 必须透传——外层要按它决定
+   *  这条跳转是「从正文链接出发」（押返回项）还是「返回链接本身」（消费掉返回项）。 */
   onNavigate: (target: ReadingTarget, role: LinkRole) => void
   onClose: () => void
 }): ReactNode {
@@ -75,9 +66,8 @@ export function ReaderNotes({ bookKey, target, requestSeq, deps, onNavigate, onC
     return () => { alive.current = false }
   }, [])
 
-  // 外层重新指向（换了引用、或又把读者送回同一条脚注）：栈重置为新目标，不续上一次的浏览历史。
-  // 判据是**打开意图的序号**而不是目标值——同一个脚注被点第二次时目标值一模一样，而期间用户
-  // 可能已在面板里跟到别的文档（只比目标值会漏掉重置）。序号一变就重置。
+  // 外层重新指向：栈重置为新目标。判据是**打开意图的序号**而不是目标值——同一个脚注被点第二次时
+  // 目标值一模一样，而期间用户可能已在面板里跟到别的文档（只比目标值会漏掉重置）。
   useEffect(() => {
     setStack([target])
   }, [requestSeq, target])
@@ -99,8 +89,7 @@ export function ReaderNotes({ bookKey, target, requestSeq, deps, onNavigate, onC
     )
   }, [deps, bookKey, docId, nonce, t])
 
-  // 落位：只滚面板自己的身体（`centerInScroller` 的口径与理由见 util.ts——借
-  // scrollIntoView 会连主滚动一起拉走）。无锚点的新文档回到顶部，免得停在上一条内容的中段。
+  // 落位：只滚面板自己的身体（借 scrollIntoView 会连主滚动一起拉走）；无锚点的新文档回到顶部。
   useEffect(() => {
     if (state.phase !== 'ready') return
     const root = bodyRef.current

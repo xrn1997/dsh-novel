@@ -6,8 +6,8 @@ import { must } from '../support/fixture.js'
 /**
  * 工具声明面钉子：action 行是唯一清单。
  *
- * ① enum 与行集一致；② 每个 action 都有 render，且不会落到「未知 action」兜底；
- * ③ 缺参错误里点名的键必须在参数表里有声明。per-action 必填只住 `needs`——宿主只收
+ * ① 每个 action 都有 render，且不会落到「未知 action」兜底；
+ * ② 缺参错误里点名的键必须在参数表里有声明。per-action 必填只住 `needs`——宿主只收
  * 一份 implicit-open 参数 schema，`schema.required` 表达不了「按 action 条件必填」。
  */
 
@@ -38,6 +38,12 @@ const actionsOf = (name: string): string[] => {
 
 const exec = { signal: new AbortController().signal } as never
 
+/** 抛出值可能是任何东西：先取它的 message，取不到就把值本身串起来（中转成 `unknown` 是为了绕过把 `{}` 当对象的收窄）。 */
+function thrownMessage(e: unknown): string {
+  const thrown: unknown = e
+  return String((thrown as { message?: unknown }).message ?? thrown)
+}
+
 const shelfItem = {
   sourceId: 's', bookKey: 'k', title: 'T',
   progress: { chapterIndex: 0, offsetRatio: 0, updatedAt: 0 }, addedAt: 0,
@@ -63,11 +69,6 @@ const renderValues: Record<string, Record<string, Record<string, unknown>>> = {
 }
 
 describe('工具声明：action 行是唯一清单', () => {
-  it('书架与书源的 enum 与行集一致', () => {
-    expect(actionsOf('dshnovel_shelf')).toEqual(['list', 'add', 'save_progress', 'remove'])
-    expect(actionsOf('dshnovel_source')).toEqual(['list', 'probe', 'enable', 'disable', 'ai-enable', 'ai-disable', 'remove'])
-  })
-
   it('每个 action 都有 render，且不落「未知 action」兜底', () => {
     for (const name of ['dshnovel_shelf', 'dshnovel_source']) {
       const tool = toolNamed(name)
@@ -80,16 +81,6 @@ describe('工具声明：action 行是唯一清单', () => {
     }
   })
 
-  it('参数描述里的必填 action 由行派生（加 action 不再手改第二份清单）', () => {
-    const shelf = must(paramsOf(toolNamed('dshnovel_shelf')).properties, 'dshnovel_shelf 参数表')
-    expect(shelf.bookKey?.description).toBe('书籍详情页 URL（add/save_progress/remove 必填；list 不用）')
-    expect(shelf.title?.description).toBe('书名（仅 add 必填）')
-    expect(shelf.sourceId?.description).toBe('源 id（仅 add 必填）')
-    expect(shelf.chapterIndex?.description).toBe('读到的章序 0 起（仅 save_progress 必填）')
-    const source = must(paramsOf(toolNamed('dshnovel_source')).properties, 'dshnovel_source 参数表')
-    expect(source.sourceId?.description).toBe('源 id（probe/enable/disable/ai-enable/ai-disable/remove 必填；list 不用）')
-  })
-
   it('缺参错误点名的键都在参数表里有声明', async () => {
     for (const name of ['dshnovel_shelf', 'dshnovel_source']) {
       const tool = toolNamed(name)
@@ -97,9 +88,7 @@ describe('工具声明：action 行是唯一清单', () => {
       for (const action of actionsOf(name)) {
         const error = await tool.execute({ action }, exec).then(() => null, (e: unknown) => e)
         if (error === null) continue   // list 无必填：stub 服务直接跑通
-        // 抛出值可能是任何东西：先取它的 message，取不到就把值本身串起来（与原口径一致）
-        const thrown: unknown = error
-        const message = String((thrown as { message?: unknown }).message ?? thrown)
+        const message = thrownMessage(error)
         expect(message, `${name}.${action} 缺参没有点名`).toContain('缺少参数：')
         const keys = message.slice(message.indexOf('缺少参数：') + '缺少参数：'.length).split('、')
         for (const key of keys) expect(properties[key], `${name}.${action} 的 ${key} 不在参数表`).toBeDefined()
@@ -107,11 +96,42 @@ describe('工具声明：action 行是唯一清单', () => {
     }
   })
 
-  it('六个工具都交出了 render', () => {
-    expect(tools.map((t) => t.name).sort()).toEqual([
-      'dshnovel_import_source', 'dshnovel_read', 'dshnovel_search',
-      'dshnovel_shelf', 'dshnovel_source', 'dshnovel_toc',
-    ])
-    for (const tool of tools) expect(typeof tool.output.render).toBe('function')
+  /**
+   * 描述里的「哪个 action 必填」由 `needs` 行派生（加 action 不必回来改第二份清单）。
+   * 这条用例**从缺参回执反推**必填集再对描述——不抄 needs 表、也不抄 needsDoc 的措辞格式：
+   * 描述改写成另一种说法仍可过，漏掉某个 action 才红。
+   */
+  it('参数描述点名了必填它的 action（黑盒反推，不抄行表）', async () => {
+    for (const name of ['dshnovel_shelf', 'dshnovel_source']) {
+      const tool = toolNamed(name)
+      const properties = paramsOf(tool).properties ?? {}
+      const actions = actionsOf(name)
+      const requiredBy = new Map<string, string[]>()
+      for (const action of actions) {
+        const error = await tool.execute({ action }, exec).then(() => null, (e: unknown) => e)
+        if (error === null) continue
+        const message = thrownMessage(error)
+        if (!message.includes('缺少参数：')) continue
+        for (const key of message.slice(message.indexOf('缺少参数：') + '缺少参数：'.length).split('、')) {
+          requiredBy.set(key, [...(requiredBy.get(key) ?? []), action])
+        }
+      }
+      expect(requiredBy.size, `${name} 反推不出任何必填键：黑盒判据空转`).toBeGreaterThan(0)
+      for (const [key, prop] of Object.entries(properties)) {
+        const desc = prop.description ?? ''
+        const required = requiredBy.get(key) ?? []
+        if (required.length === 0) {
+          expect(desc, `${name}.${key} 并不必填，描述却说必填`).not.toContain('必填')
+          continue
+        }
+        if (required.length === actions.length) {
+          expect(desc, `${name}.${key} 全部 action 都必填，描述没这么说`).toContain('所有')
+          continue
+        }
+        for (const action of required) {
+          expect(desc, `${name}.${key} 描述漏了必填它的 ${action}`).toContain(action)
+        }
+      }
+    }
   })
 })

@@ -1,28 +1,18 @@
 import { randomUUID } from 'node:crypto'
 import { SEARCH_HITS_CAP_PER_SOURCE, SEARCH_JOB_RETENTION_MS } from '../shared/wire.js'
 import type { SearchGroup, SearchJobSnapshot } from '../shared/wire.js'
-import { ChangeSignal, HostTie } from './job-holder.js'
+import { ChangeSignal, expiredAfter, HostTie, settleTerminal } from './job-holder.js'
 import type { JobHost, JobOutcome } from './job-holder.js'
 
 /**
- * 聚合搜索的后台任务：整轮结果由 **Node 半持有**，读面给游标增量。
- *
- * 为什么要它：宿主 `conversation.view` 是「一次只渲染一个」的座位——切 tab 即卸载；
- * 若把搜索的在途循环放在浏览器半组件里，结果会随卸载清零、重挂载整轮重打。
- * 持有者在 Node 半，「离开界面」就与「任务是否完成」脱钩。
- *
- * 与写任务（`SourceJobs` 的导入 / 批量验证）**分槽**：搜索是读、那两个是写，让搜索挡住导入
- * 等于惩罚探索动作。代价如实记录：宿主侧可同时存在两条 novel 任务（并发配额归宿主管，本仓只用到两条），
- * UI 的「任何任务在途即禁用」判据只管写任务。
- *
- * 生命周期同样登记给 `ctx.jobs`（kind `novel-search`）——身份、终态、取消入口与写任务同口径；
- * 本模块持有「结果集 + 游标」；过程行尾缓冲挂在登记给宿主的那根线上（`job-holder.ts` 的 `HostTie`，
- * 宿主按自己的字节游标从 `output` 拉源读，`job_output` 因此看得到进度行）。
- * 宿主任务面板的展示面装不下整轮结果——结果与明细仍只在这里。
+ * 聚合搜索的后台任务：整轮结果由 **Node 半持有**，读面给游标增量。为什么要它：宿主 `conversation.view` 一次只渲染一个，切 tab 即卸载；
+ * 在途循环放在浏览器半会随卸载清零、重挂载整轮重打——持有者在 Node 半，「离开界面」就与「任务是否完成」脱钩。
+ * 与写任务（导入 / 批量验证）**分槽**：搜索是读、那两个是写，让搜索挡住导入等于惩罚探索动作。代价如实记录：宿主侧可同时存在两条
+ * novel 任务，UI 的「任何任务在途即禁用」只管写任务。生命周期同样登记给 `ctx.jobs`（kind `novel-search`）；本模块持有「结果集 + 游标」，
+ * 过程行尾缓冲挂在登记给宿主的那根线上（`HostTie`）。宿主任务面板装不下整轮结果——结果与明细仍只在这里。
  */
 
-/** 运行器契约：门面（`ReadingService`）把 `searchProgressive` 包进来——持有者不认识门面。
- *  返回值一律是 `unknown`：整轮结果由持有者经 `emit` 收，运行器自己返回什么都不相干。 */
+/** 运行器契约：门面把 `searchProgressive` 包进来——持有者不认识门面。返回值一律 `unknown`：整轮结果经 `emit` 收。 */
 export type SearchJobRun = (
   emit: (group: SearchGroup) => void,
   /** 协作式取消：运行器每取一个条目查一次；在途请求不撤回（已经打出去就不浪费第二次机会） */
@@ -56,10 +46,8 @@ function capHits(group: SearchGroup): SearchGroup {
 export class SearchJobs {
   private current: Held | null = null
 
-  /** 「本轮状态变了」信号（机械住 `job-holder.ts` 的 `ChangeSignal`）：SSE 路由订阅它、
-   *  自己带游标取增量。
-   *  **只发信号不发数据**：游标属于每一条连接，不属于持有者——所以多个观察者、不同游标，
-   *  共用同一份持有物而不互相踩。 */
+  /** 「本轮状态变了」信号（机械住 `ChangeSignal`）：SSE 路由订阅它、自己带游标取增量。**只发信号不发数据**：游标属于每条连接，不属于
+   *  持有者——多个观察者、不同游标，共用同一份持有物而不互相踩。 */
   readonly signal = new ChangeSignal()
 
   private readonly deps: {
@@ -78,8 +66,7 @@ export class SearchJobs {
     this.deps = deps
   }
 
-  /** 提交一轮搜索。**只留最近一轮**：新提交即替换上一轮——上一轮若在跑则被协作式收手，
-   *  读面立刻指向新一轮（旧结果不再可读，避免两真相同时在场）。 */
+  /** 提交一轮搜索。**只留最近一轮**：新提交即替换上一轮（在跑的协作式收手），读面立刻指向新一轮，避免两真相同时在场。 */
   start(keyword: string, total: number, run: SearchJobRun): { jobId: string } {
     const prev = this.current
     if (prev !== null && prev.phase === 'running') {
@@ -98,13 +85,9 @@ export class SearchJobs {
     }
     this.current = held
     this.signal.notify()                              // 新一轮开场：旧观察者据此把结果清零换轮
-    // 同步起跑：`run` 交出的 emit 必须在本函数返回前就在位，否则调用方紧接着 emit 的第一组会丢
-    //（被否的写法：`void Promise.resolve().then(() => run(...))`——它把 emit 推后一个微任务，
-    //  同步消费 emit 的一方什么都收不到）。
-    // 每源答话留一行过程行进尾缓冲（没登记宿主即 `tie` 为 null，不写）：行文把「结果条数」与
-    // 「源状态」分成两轴——status 是源的验证态、不是本轮结果；条数用 cap 后实际进快照的数，
-    // 截断时附原始数（上限见 SEARCH_HITS_CAP_PER_SOURCE）。单源失败点名 `error.code`；
-    // 与整轮结果（读面 snapshot）分工照 ADR-0018 不变。
+    // 同步起跑：`run` 交出的 emit 必须在本函数返回前就在位，否则调用方紧接着 emit 的第一组会丢（被否的写法：`Promise.resolve().then(() => run(...))`）。
+    // 每源答话留一行过程行进尾缓冲（没登记宿主即 `tie` 为 null）：行文把「结果条数」与「源状态」分成两轴——status 是源的验证态、不是
+    // 本轮结果；条数用 cap 后实际进快照的数，截断时附原始数。单源失败点名 `error.code`；与 snapshot 分工照 ADR-0018 不变。
     const emit = (group: SearchGroup): void => {
       const capped = capHits(group)
       held.groups.push(capped)
@@ -132,15 +115,12 @@ export class SearchJobs {
   }
 
   /**
-   * 读面快照：`since` 之后的增量 + 下一次该带的游标。
-   * 两种读作「无任务」（null）的情况要分清：从未提交过；以及**结束后过了保留期**——
-   * 后者绝不返回一个空 `groups`，那会把「结果已过期」伪装成「搜了没命中」。
+   * 读面快照：`since` 之后的增量 + 下一次该带的游标。null 的两种读法要分清：从未提交过；结束后过了保留期——后者绝不返回空 `groups`。
    */
   snapshot(since = 0): SearchJobSnapshot | null {
     const h = this.current
     if (h === null) return null
-    if (h.phase !== 'running' && h.finishedAt !== undefined
-      && this.now() - h.finishedAt > SEARCH_JOB_RETENTION_MS) return null
+    if (expiredAfter(h, SEARCH_JOB_RETENTION_MS, this.now())) return null
     const start = Math.max(0, Math.min(since, h.groups.length))
     return {
       id: h.id, keyword: h.keyword, phase: h.phase, cancelled: h.cancelled,
@@ -152,9 +132,8 @@ export class SearchJobs {
     }
   }
 
-  /** 取消当前这轮（宿主 cancel 与 UI 的「取消搜索」都走这条）。返回：是否真有个在跑的轮次。
-   *  刻意**立即结算终态**而不等运行器收手：搜索是读，没有半途写脏的顾虑，读方要的是
-   *  「这一轮到此为止」的确定答复；终态后在途请求不再收货。 */
+  /** 取消当前这轮（宿主 cancel 与 UI 的「取消搜索」都走这条）。返回是否真有个在跑的轮次。刻意**立即结算终态**而不等运行器收手：
+   *  搜索是读，读方要的是确定答复；终态后在途请求不再收货。 */
   cancel(reason?: string): boolean {
     const h = this.current
     if (h === null || h.phase !== 'running') return false
@@ -166,7 +145,7 @@ export class SearchJobs {
 
   private now(): number { return this.deps.now?.() ?? Date.now() }
 
-  /** 终态单点：phase / finishedAt / error 与宿主结算同处写，缺一处就是「UI 说结束了而宿主还挂着 running」 */
+  /** 终态单点：宿主结算与信号都经 `job-holder` 的 `settleTerminal`（三个持有者同一份）。 */
   private end(
     h: Held,
     status: JobOutcome['status'],
@@ -174,10 +153,6 @@ export class SearchJobs {
     error?: string,
   ): void {
     if (h.phase !== 'running') return
-    h.phase = status === 'completed' ? 'done' : 'failed'
-    if (error !== undefined) h.error = error
-    h.finishedAt = this.now()
-    h.tie?.settle({ status, ...(detail === undefined || detail === '' ? {} : { detail }) })
-    this.signal.notify()                                      // 终态也要发：SSE 据此收尾并关流
+    settleTerminal(h, h.tie, { status, detail, error }, this.now(), () => this.signal.notify())
   }
 }

@@ -63,7 +63,7 @@
 - **CHANGELOG**：只在发版时追加已发布版本；每个版本用四个固定小节——新增 / 变更 / 修复 / 升级注意，没有内容的小节省略；写用户可见变化与升级注意，未发布改动不预写；历史版本按当时体例保留，不回溯改写（已废称呼与不可回查的批次号按文档门清理）；逐提交明细留 git。
 - **过程工件**：只住本机；任务完成时把长期成立的结论提炼进 ADR、`docs/architecture.md` 或 `docs/ui-spec.md`，其余随工作区消失。需要保留历史理由时写 ADR。
 - **生成快照**：只在本机、不进版本控制；整棵树重新生成，不逐文件修；与代码冲突时以代码为准，也不作为架构判断依据。
-- **文档门**：`pnpm test` 内的三件套——`tests/docs-liveness.test.ts`（全部手写文档与代码注释的引用形态、职责边界与 ADR 形状）、`tests/context-terms.test.ts`（`CONTEXT.md` 点名的符号）与 `tests/comment-altitude.test.ts`（注释高度）；每段的具体判据见 `docs/development.md` 的「门（自动）」。命令即 `pnpm test`。
+- **文档门**：`pnpm test` 内的两件套——`tests/docs-liveness.test.ts`（全部手写文档与代码注释的引用形态、职责边界与 ADR 形状）与 `tests/context-terms.test.ts`（`CONTEXT.md` 点名的符号）；每段的具体判据见 `docs/development.md` 的「门（自动）」。命令即 `pnpm test`。
 
 ## 5. 评审清单
 

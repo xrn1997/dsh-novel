@@ -4,25 +4,11 @@ import path from 'node:path'
 import { PageCache, safeKey } from '../../src/services/cache.js'
 import { FULL_SCAN_EVERY, SizeLedger } from '../../src/services/size-ledger.js'
 import { makeTempDir } from '../temp-dir.js'
+import { gateNextReaddir } from '../support/fs-gate.js'
 
 async function tmp(): Promise<string> { return makeTempDir('novel-cache-') }
 
 afterEach(() => { vi.restoreAllMocks() })
-
-/** 让下一发 readdir 在**读目录之前**挂住：扫描停在那里时把写入放进来，好让新文件落在本轮候选里。
- *  与 `size-ledger.test.ts` 的闸同形（那里在读完之后挂，用于验证扫描窗口的并发写）。 */
-function gateNextReaddir(): { scans: () => number, release: () => void } {
-  let release = (): void => { throw new Error('扫描没停在 readdir 上') }
-  const gate = new Promise<void>((resolve) => { release = resolve })
-  const realReaddir = fs.readdir
-  const spy = vi.spyOn(fs, 'readdir')
-  let gated = false
-  spy.mockImplementation((async (d: string, o?: unknown) => {
-    if (!gated) { gated = true; await gate }
-    return (realReaddir as (p: string, opts?: unknown) => Promise<string[]>)(d, o)
-  }) as typeof fs.readdir)
-  return { scans: () => spy.mock.calls.length, release: () => { release() } }
-}
 
 describe('PageCache', () => {
   // epoch/slot 对 PageCache 是不透明串（有效性算式归 cache-epoch.ts）——测试传字面量即可

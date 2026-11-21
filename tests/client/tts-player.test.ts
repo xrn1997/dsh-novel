@@ -26,6 +26,7 @@ import {
 } from '../../src/client/tts/player.js'
 import type { StartListeningInput } from '../../src/client/tts/player.js'
 import { FakeAudio } from './tts-fakes.js'
+import { readerRouteGet } from './reader-fakes.js'
 import { estimateParagraphIndex, paragraphRatio } from '../../src/client/progress.js'
 import { setReadingProbe } from '../../src/client/tts/reading-position.js'
 
@@ -148,21 +149,16 @@ beforeEach(() => {
   synthCount = 0
   shelfReads = []
 
-  vi.mocked(apiGet).mockImplementation(async (path: string) => {
-    if (path.startsWith('navigation')) {
-      return {
-        chapters: fixture.names.map((name, i) => ({ name, url: `u${i}` })),
-        items: [],
-      }
-    }
-    if (path.startsWith('chapter')) {
-      const index = indexOfPath(path)
+  vi.mocked(apiGet).mockImplementation(readerRouteGet({
+    chapters: () => fixture.names.map((name, i) => ({ name, url: `u${i}` })),
+    chapter: (index) => {
       if (chapterFailures.has(index)) throw Object.assign(new Error('章节取不到'), { code: 'NetworkError' })
       return { kind: 'text', text: must(fixture.texts[index], `chapter ${index}`).join('\n') }
-    }
-    if (path === ROUTES.shelf.path) return shelfReads
-    throw new Error(`unexpected GET ${path}`)
-  })
+    },
+    navigation: () => [],
+    shelf: () => shelfReads,
+    strict: true,
+  }))
   vi.mocked(apiSend).mockImplementation(async (target: RouteTarget<WriteMethod>, body?: unknown) => {
     if (target.path === ROUTES.ttsSynthesize.path) {
       const text = textOf(body)

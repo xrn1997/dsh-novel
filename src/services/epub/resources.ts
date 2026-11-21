@@ -10,22 +10,17 @@ import {
 } from './xml.js'
 
 /**
- * 资源层：图片**类型/尺寸验证**与**受限 SVG 重建**。本层不认识书架、不写盘、不发请求——
- * 它只回答「这些字节能不能当作一张图交给浏览器、交给它的显示宽高是多少」。
+ * 资源层：图片**类型/尺寸验证**与**受限 SVG 重建**。本层不认识书架、不写盘、不发请求——只回答「这些字节能不能当一张图
+ * 交给浏览器、显示宽高是多少」。
  *
- * 四条口径（改这一层先读它们）：
- *
- * ① **不信声明，也不只读文件头**。manifest 声明的 MIME 必须与魔数一致（`image/jpg` 这种常见别名按
- *    `image/jpeg` 归一）；读图库给出的宽高只是起点——容器结构还要完整（PNG 逐 chunk 核 CRC 到 IEND、
- *    JPEG 走到 EOI、GIF 看 trailer、WebP 核 RIFF 长度）。**「读得出宽高」不等于浏览器解得开**：
- *    截断的图在文件头里照样有尺寸，按它放行就等于把坏图当可读资源交出去。
- * ② **显示宽高要把 EXIF 旋转折进去**（Orientation 5–8 交换宽高）。交出去的宽高是阅读器首帧占位用的，
- *    折错了不是「显示旋转」，而是图一加载完就跳版。
- * ③ **可见图形宁报错不删掉**。独立 SVG 只按白名单重建；白名单外的可见元素（`foreignObject`/`use`/
- *    嵌套 `image`/`pattern`…）报错点名资源，而不是删掉这一块冒充成功（图形看起来还在，其实少了）。
- *    活动内容（`script`/`style` 元素、事件属性、`style` 属性）剥除并留告警——那不是「内容」。
- * ④ **SVG 单图包装解析成它包的那张栅格**。封面常见写法是一层 `<svg>` 里只放一个缩放过的 `<image>`：
- *    那不是矢量图，把它当独立 SVG 交给浏览器会多一层壳，还可能被其中的外链拖去请求书外资源。
+ * ① **不信声明，也不只读文件头**：manifest 声明的 MIME 必须与魔数一致（`image/jpg` 按 `image/jpeg` 归一）；读图库给的
+ *   宽高只是起点——容器结构还要完整（PNG 逐 chunk 核 CRC、JPEG 走到 EOI、GIF 看 trailer、WebP 核 RIFF 长度）。
+ *   **「读得出宽高」不等于浏览器解得开**：截断的图在文件头里照样有尺寸。
+ * ② **显示宽高要把 EXIF 旋转折进去**（Orientation 5–8 交换宽高）——交出去的是阅读器首帧占位用的，折错了不是「显示旋转」
+ *   而是图一加载完就跳版。
+ * ③ **可见图形宁报错不删掉**：独立 SVG 只按白名单重建，白名单外的可见元素报错点名资源；活动内容剥除并留告警。
+ * ④ **SVG 单图包装解析成它包的那张栅格**：一层 `<svg>` 里只放一个 `<image>` 不是矢量图，当独立 SVG 会多一层壳，
+ *   还可能被其中的外链拖去请求书外资源。
  */
 
 type RasterFamily = 'jpeg' | 'png' | 'gif' | 'webp'
@@ -160,12 +155,8 @@ function positiveDimension(value: number | undefined): number | null {
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
-/**
- * 按格式核对容器结构：PNG 逐 chunk 核 CRC、JPEG 走到 EOI、GIF 看 trailer、WebP 核 RIFF 长度。
- *
- * 这不是像素解码（真解码归浏览器验收门），而是**结构完整性**：截断/损坏的字节在文件头里读得出尺寸，
- * 却是浏览器解不开的图——按「读得出宽高」放行就等于把坏图当可读资源交出去。
- */
+/** 按格式核对容器结构。这不是像素解码（真解码归浏览器验收门），而是**结构完整性**：截断/损坏的字节在文件头里
+ *  读得出尺寸，却是浏览器解不开的图——按「读得出宽高」放行等于把坏图当可读资源交出去。 */
 function verifyContainer(bytes: Buffer, family: RasterFamily, what: string): void {
   switch (family) {
     case 'png': return verifyPng(bytes, what)
@@ -194,8 +185,7 @@ function verifyPng(bytes: Buffer, what: string): void {
   throw new EpubResourceError(`PNG 数据损坏（缺 IEND，文件被截断）：${what}`)
 }
 
-/** 按字节偏移取一个字节。越界在这里是**真实输入状态**（截断/损坏的图），走本层的 `EpubResourceError`
- *  而不是补一个 0——把截断读成合法字节正是「坏数据冒充可读」。 */
+/** 按字节偏移取一个字节。越界在这里是**真实输入状态**（截断/损坏的图），走本层的 `EpubResourceError` 而不是补 0。 */
 function byteAt(bytes: Buffer, at: number, what: string): number {
   const v = bytes[at]
   if (v === undefined) throw new EpubResourceError(`图片数据在偏移 ${at} 处被截断：${what}`)
@@ -273,10 +263,9 @@ const SVG_GRADIENT_ELEMENTS: ReadonlySet<string> = new Set(['linearGradient', 'r
 const SVG_GROUP_CONTAINERS: ReadonlySet<string> = new Set(['g'])
 
 /**
- * 包装识别时整个跳过的**非渲染**容器：`defs` 里的东西（渐变/图案/裁剪路径…）只是「登记在那里备引用」，
- * 一律不直接渲染。把它们当成可见节点，`<svg><defs><linearGradient/></defs><image/></svg>` 这种
- * 常见封面包装就会被误判成「不止一张图」而按独立 SVG 重建、再因 `image` 不在白名单里拒整本。
- * 渐变登记走 `registerGradients`，它扫全树（含 defs），不受这里跳过的影响。
+ * 包装识别时整个跳过的**非渲染**容器：`defs` 里的东西只是「登记在那里备引用」，一律不直接渲染。把它们当成可见节点，
+ * `<svg><defs><linearGradient/></defs><image/></svg>` 这种常见封面包装会被误判成「不止一张图」→ 按独立 SVG 重建 → 因
+ * `image` 不在白名单里拒整本。渐变登记走 `registerGradients`，它扫全树（含 defs）。
  */
 const SVG_NON_RENDERING: ReadonlySet<string> = new Set(['defs'])
 
@@ -293,20 +282,15 @@ const SVG_ATTRS: ReadonlySet<string> = new Set([
   'word-spacing', 'dominant-baseline', 'dx', 'dy',
 ])
 
-/** 属性值里出现 url 引用：必须整值就是一个 `url(#id)`，且指向同文件已登记的渐变。
- *  CSS 的 `url()` 函数名**大小写不敏感**（`URL(#g)` 与 `url(#g)` 等价），所以匹配也必须不敏感：
- *  漏掉大写写法就会把该值当普通属性原样保留，而渐变定义那边已改写成安全 ID——引用成了死链，
- *  图形静默消失。 */
+/** 属性值里出现 url 引用：必须整值就是一个 `url(#id)`，且指向同文件已登记的渐变。CSS 的 `url()` 函数名**大小写不敏感**，
+ *  匹配也必须不敏感：漏掉大写会把该值当普通属性保留，而渐变定义已改写成安全 ID——引用成死链，图形静默消失。 */
 const URL_REF = /url\(/i
 const URL_REF_ONLY = /^url\(\s*['"]?#([^)'"\s]+)['"]?\s*\)$/i
 
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
 
-/**
- * 独立 SVG：只包一张书内栅格就当包装交回那张栅格（调用方按光栅验证它），
- * 否则按白名单重建为一份静态 SVG。
- */
+/** 独立 SVG：只包一张书内栅格就当包装交回那张栅格（调用方按光栅验证它），否则按白名单重建为一份静态 SVG。 */
 function classifySvg(bytes: Buffer, opts: ImageValidationOptions): ValidatedImage {
   const budget = xmlBudget(`SVG 图片 ${opts.what}`, opts.domLimits, 'resource')
   const root = parseSvg(bytes, budget)
@@ -321,11 +305,8 @@ function classifySvg(bytes: Buffer, opts: ImageValidationOptions): ValidatedImag
   }
 }
 
-/**
- * 读并解析一份 SVG 资源。解码、静态闸门与预算失败**不再由本层换个类重披**：那份预算声明的主语
- * 就是 resource，`xml.ts` 直接按这张资源的半径说话（重披一层就要 `instanceof` 基类，而基类会把
- * 已经收窄的失败一起吃掉——那是把「这一张图」放大成「这本书」的入口）。
- */
+/** 读并解析一份 SVG 资源。解码、静态闸门与预算失败**不再由本层换个类重披**：预算声明的主语就是 resource，`xml.ts`
+ *  直接按这张资源的半径说话（重披要 `instanceof` 基类，而基类会把已收窄的失败一起吃掉——把「这一张图」放大成「这本书」）。 */
 function parseSvg(bytes: Buffer, budget: XmlBudget): Element {
   const root = parseXml(decodeEpubXml(bytes, budget), budget)
   if (localName(root.name) !== 'svg') {
@@ -349,11 +330,9 @@ function wrapperPath(href: string, opts: ImageValidationOptions): string {
 }
 
 /**
- * 是不是「只包一张栅格」的包装：除元数据与被动容器外，整棵图里只剩一个 `<image>`。
- * 返回它的 href；不是包装则 null——此时按独立 SVG 重建，而 `image` 不在白名单里会如实报不支持。
- *
- * 两个消费者共用这一份判据（不许有第二份抄本）：`classifySvg` 判**独立 SVG 资源**是不是单图包装，
- * `import.ts` 判**正文里整页的内联 SVG** 是不是「一页只有一张书内图」的封面/图形页。
+ * 是不是「只包一张栅格」的包装：除元数据与被动容器外，整棵图里只剩一个 `<image>`。返回它的 href；不是包装则 null——此时按独立
+ * SVG 重建，而 `image` 不在白名单里会如实报不支持。两个消费者共用这一份判据（不许抄第二份）：`classifySvg` 判独立 SVG 资源，
+ * `import.ts` 判正文里整页的内联 SVG。
  */
 export function soleRasterHref(root: Element): string | null {
   const visible: Element[] = []
@@ -462,11 +441,8 @@ class SvgBuilder {
       }
       // 命名空间声明与编辑器/元数据属性（含 `:` 的、`data-*`、`class`）：不是可见内容，丢掉
       if (attr.startsWith('xmlns') || attr.startsWith('data-') || attr === 'class') continue
-      // 带命名空间前缀的 href（`xlink:href`）不是元数据：在渐变上是**继承**（引用另一处渐变的 stop），
-      // 在别处是外部引用——两者都改变可见外观。静默丢掉会让图形少一块却报成功：
-      // `<linearGradient xlink:href="#base"/>` 被剥成空渐变、矩形失去填充且不留任何告警
-      // （钉子：`tests/services/epub-resources.test.ts` 的渐变继承那一组）。
-      // 不可支持的引用照本层口径点名报错（与 url(...)/白名单外元素同一条）。
+      // 带命名空间前缀的 href（`xlink:href`）不是元数据：在渐变上是**继承**、在别处是外部引用——两者都改变可见外观。静默
+      // 丢掉会让图形少一块却报成功（`<linearGradient xlink:href="#base"/>` 被剥成空渐变）。钉子见 epub-resources.test.ts。
       if (localName(attr) === 'href') {
         throw new EpubResourceError(
           `${this.what}：SVG 的 <${name}> 用了 ${attr} 引用（本插件不支持渐变继承与外部引用，不静默丢掉）`,
@@ -474,8 +450,7 @@ class SvgBuilder {
       }
       if (attr.includes(':')) continue
       if (URL_REF.test(value)) {
-        // 只有 fill/stroke 支持同文件渐变引用；别的 url(...)（filter/mask/clip-path/marker-*）都是
-        // 「引用了本插件没有的能力」——报错点名属性，不删掉那块图形冒充成功
+        // 只有 fill/stroke 支持同文件渐变引用；别的 url(...) 都是「引用了本插件没有的能力」——报错点名属性，不删掉那块图形冒充成功
         if (attr !== 'fill' && attr !== 'stroke') {
           throw new EpubResourceError(`${this.what}：SVG 的 <${name}> 属性 ${attr} 用了 url(...) 引用（本插件只支持 fill/stroke 指向同文件渐变）`)
         }

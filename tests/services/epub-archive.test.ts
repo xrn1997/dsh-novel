@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_EPUB_LIMITS, openEpubArchive, type EpubArchive, type EpubLimits } from '../../src/services/epub/archive.js'
-import { EpubImportError } from '../../src/services/epub/errors.js'
 import { makeEpubFixture } from '../fixtures/epub.js'
 import { pick } from '../support/fixture.js'
+import { expectEpubError } from './epub-fakes.js'
 
 /** 收下被拒绝的异常：断言要同时看「哪个类」与「点名了谁」，所以要拿到 error 本体。
  *  万一没拒（坏归档冒充可读是本仓的最高罪），把已经开出来的归档关掉再炸：测试自己也不许把句柄
@@ -28,13 +28,6 @@ async function readRejection(archive: EpubArchive, name: string, maxBytes?: numb
   }
   archive.close()
   throw new Error(`预期拒绝，实际成功——坏归档冒充可读是本仓的最高罪（条目：${name}）`)
-}
-
-/** 断言异常是 EPUB 导入错，且报错点名了出问题的条目/资源 */
-function expectEpubError(e: Error, pattern: RegExp): void {
-  expect(e.name).toBe('EpubImportError')
-  expect(e).toBeInstanceOf(EpubImportError)
-  expect(e.message).toMatch(pattern)
 }
 
 describe('zip-baseline：正常样本读得回来', () => {

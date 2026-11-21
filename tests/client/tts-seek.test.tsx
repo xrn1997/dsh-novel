@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createElement } from 'react'
-import { ROUTES, planarNavigation } from '../../src/shared/wire.js'
+import { ROUTES } from '../../src/shared/wire.js'
 import type {
   ChapterContent, ChapterEntry, ContentNode, RouteTarget, ShelfEntry, WriteMethod,
 } from '../../src/shared/wire.js'
@@ -21,6 +21,7 @@ import { NOVEL_CSS } from '../../src/client/styles.js'
 import { ReaderView } from '../../src/client/views/ReaderView.js'
 import { makeReaderDeps } from './fake-deps.js'
 import type { FakeReaderDeps } from './fake-deps.js'
+import { readerRouteGet, readerRouteGetMock } from './reader-fakes.js'
 import { must, pick } from '../support/fixture.js'
 import { FakeAudio, FakeSpeechSynthesis, FakeUtterance, FakeVoice } from './tts-fakes.js'
 
@@ -67,14 +68,11 @@ function contentOf(index: number): ChapterContent {
 
 function readerDeps(): FakeReaderDeps {
   return makeReaderDeps({
-    apiGet: vi.fn(async (path: string) => {
-      if (path.startsWith('navigation')) {
-        const chapters = chapterEntries()
-        return { chapters, items: planarNavigation(chapters) }
-      }
-      if (path.startsWith('chapter')) return contentOf(indexOf(path))
-      if (path === ROUTES.ttsSources.path) return { sources: [], hostSpeech: { state: 'absent' } }
-      return shelf
+    apiGet: readerRouteGetMock({
+      chapters: chapterEntries,
+      chapter: contentOf,
+      ttsSources: () => ({ sources: [], hostSpeech: { state: 'absent' } }),
+      shelf: () => shelf,
     }),
   })
 }
@@ -124,16 +122,13 @@ beforeEach(() => {
   ]
   richChapters = new Map()
   shelf = []
-  vi.mocked(apiGet).mockImplementation(async (path: string) => {
-    if (path.startsWith('navigation')) {
-      const chapters = chapterEntries()
-      return { chapters, items: planarNavigation(chapters) }
-    }
-    if (path.startsWith('chapter')) return contentOf(indexOf(path))
-    if (path === ROUTES.shelf.path) return shelf
-    if (path === ROUTES.ttsSources.path) return { sources: [], hostSpeech: { state: 'absent' } }
-    throw new Error(`unexpected GET ${path}`)
-  })
+  vi.mocked(apiGet).mockImplementation(readerRouteGet({
+    chapters: chapterEntries,
+    chapter: contentOf,
+    ttsSources: () => ({ sources: [], hostSpeech: { state: 'absent' } }),
+    shelf: () => shelf,
+    strict: true,
+  }))
   vi.mocked(apiSend).mockImplementation(async (target: RouteTarget<WriteMethod>, body?: unknown) => {
     if (target.path === ROUTES.ttsSynthesize.path) {
       const text = ((body ?? {}) as { text?: string }).text ?? ''

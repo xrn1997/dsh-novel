@@ -8,14 +8,9 @@ import { findNovelNode, novelNodes, NOVEL_NODE_ATTR } from './util.js'
 import { clampTopInset, crossedIndex } from './viewport-top.js'
 
 /**
- * 阅读器几何：把 DOM 测量实现成一个 `ReaderPort`，视图只提供最小元素源。
- *
- * 为什么从视图里搬出来：这套测量有两套坐标系（滚动内容原点 / 滚动视口顶）与一条
- * 「章块 + 哨兵 + 节点」的读取顺序；放在视图闭包里时，唯一能证它的方式是整页渲染并改写
- * `Element.prototype.getBoundingClientRect` / `window.scrollTo`——量到的是几何，不是接线，
- * 而它一旦错，症状是进度静默错位。现在几何可以在假元素上直接测，视图只剩 ref 接线。
- *
- * 会话侧的 `ReaderPort` 契约不变（`client/reader-session.ts`）；本模块只实现它。
+ * 阅读器几何：把 DOM 测量实现成一个 `ReaderPort`，视图只提供最小元素源。从视图搬出来是因为这套测量
+ * 有两套坐标系与一条读取顺序；放在视图闭包里时唯一能证它的方式是整页渲染并改写原型方法，
+ * 而它一旦错，症状是进度静默错位。几何因此可在假元素上直接测，视图只剩 ref 接线。
  */
 export interface ReaderGeometrySource {
   /** 真实滚动容器（`findScrollport` 的产物）；null = 文档自身在滚 */
@@ -24,18 +19,16 @@ export interface ReaderGeometrySource {
   sentinel(): HTMLElement | null
   /** 已渲染章块（按章号；缺席 = 该章还没渲染） */
   chapters(): ReadonlyArray<HTMLElement | null>
-  /** 视口顶的固定遮挡高度（阅读器顶条，px）：`currentNode` 按**看得见的顶**取节点。
-   *  缺省 0（无顶条 / 测试）。注意它只影响「视口顶是哪个节点」这一问：`targetOffset`
-   *  给的是相对视口顶的屏幕偏移，让位由会话统一做（两处各减一次就等于减两次）。 */
+  /** 视口顶的固定遮挡高度：`currentNode` 按**看得见的顶**取节点。缺省 0。注意它只影响「视口顶是哪个
+   *  节点」：`targetOffset` 给的是相对视口顶的屏幕偏移，让位由会话统一做（两处各减一次就减两次）。 */
   topInset?(): number
 }
 
 export function createReaderGeometry(source: ReaderGeometrySource): ReaderPort {
   return {
     measureAnchors: () => {
-      // 锚点 = 章块相对「滚动内容原点」的偏移 + 该章渲染高度（跨度的唯一来源：存与取
-      // 都用它，两个方向才互逆）。不能用 offsetTop：宿主的滚动容器在阅读器之外，
-      // 两套坐标系混用会让 locateChapter 恒判第 0 章（进度不落地）。
+      // 锚点 = 章块相对「滚动内容原点」的偏移 + 该章渲染高度（跨度唯一来源，两向才互逆）。
+      // 不能用 offsetTop：宿主的滚动容器在阅读器之外，两套坐标系混用会让 locateChapter 恒判第 0 章。
       const origin = contentOriginTop(source.port())
       const list: ChapterAnchor[] = []
       const blocks = source.chapters()
@@ -57,8 +50,7 @@ export function createReaderGeometry(source: ReaderGeometrySource): ReaderPort {
       if (sentinel === null) return null
       return sentinel.getBoundingClientRect().top - portViewTop(source.port())
     },
-    /** 目标 = 章块顶（anchorId null）或章内那个锚点节点；两者相对**滚动视口顶**。
-     *  章块/节点不在 DOM → null（会话据此不落位、等下一轮）。 */
+    /** 目标相对**滚动视口顶**；章块/节点不在 DOM → null（会话据此不落位、等下一轮）。 */
     targetOffset: (index, anchorId) => {
       const block = source.chapters()[index]
       if (block === null || block === undefined) return null
@@ -83,8 +75,7 @@ export function createReaderGeometry(source: ReaderGeometrySource): ReaderPort {
     currentNode: () => currentNodeOf(
       source.chapters(), portViewTop(source.port()) + clampTopInset(source.topInset?.()),
     ),
-    /** 听书段 → 屏上块：段号命中判据归 `client/reader-paragraph.ts`，这里只把块的几何换成
-     *  相对视口顶的偏移（与 `targetOffset` 同一坐标系）。 */
+    /** 听书段 → 屏上块：段号命中判据归 `client/reader-paragraph.ts`，这里只把块几何换成相对视口顶的偏移。 */
     targetOffsetOfParagraph: (index, paragraphIndex) => {
       const block = source.chapters()[index]
       if (block === null || block === undefined) return null
@@ -96,9 +87,8 @@ export function createReaderGeometry(source: ReaderGeometrySource): ReaderPort {
   }
 }
 
-/** 视口顶所在的正文节点：判据吃 `client/viewport-top.ts` 的 `crossedIndex`（与进度锚点、
- *  听书探针同一条规则：最后一条已越过视口顶的 / 无命中回落文档序第一个 / 跳过空洞），
- *  本函数只负责把**节点矩形**这条数据路喂进去。没有可定位节点（文字章）→ null。 */
+/** 视口顶所在的正文节点：判据吃 `client/viewport-top.ts` 的 `crossedIndex`（与进度锚点、听书探针同一条
+ *  规则）；本函数只负责把**节点矩形**这条数据路喂进去。文字章 → null。 */
 export function currentNodeOf(
   blocks: ReadonlyArray<HTMLElement | null>, viewTop: number,
 ): VisibleNode | null {

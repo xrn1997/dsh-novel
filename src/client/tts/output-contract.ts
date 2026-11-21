@@ -1,14 +1,10 @@
 /**
  * 两条出声分支与会话之间的**输出契约**：介质面（起一段、停、释放、音量，字节型另有预载面）
- * 加**分支策略面**（这条分支能提供什么、怎么准备一段、怎么静音另一条分支、何时可续 / 可让位）。
+ * 加**分支策略面**（能提供什么、怎么准备一段、怎么静音另一条、何时可续 / 可让位）。
  *
- * 为什么策略也住这张契约：介质之后的两条分支不是只有 API 不同——起播前要做什么（字节型求合成、
- * 直出型等音色表）、能提供什么（段内计时 / 预取 / 回执续播）、换介质时谁闭嘴，都是同一条分支
- * 自己的事。把这些判据留在状态机里，加第三条声道就要改状态机的多处方法，而「哪些步骤是分支
- * 差异」只活在注释里。
- *
- * 实现住 `bytes-output.ts` / `direct-output.ts`（介质）与 `playback-branches.ts`（策略）；
- * 本文件只有类型，零运行时依赖——两条分支的实现与消费方都引这一份，不在各自文件里抄第二份。
+ * 为什么策略也住契约：起播前要做什么、能提供什么、换介质时谁闭嘴，都是分支自己的事；
+ * 留在状态机里，加第三条声道就要改状态机多处方法，而「哪些步骤是分支差异」只活在注释里。
+ * 实现住 `bytes-output.ts` / `direct-output.ts` 与 `playback-branches.ts`；本文件只有类型。
  */
 
 import type { SynthesisReceipt } from '../../shared/wire.js'
@@ -29,7 +25,6 @@ export interface BranchCapabilities {
   receiptResume: boolean
   /** 介质读坏时能自愈一次（音频缓存条目被 prune）：分支清掉出声现场，会话重新取回执。 */
   selfHeal: boolean
-  /** 当前引擎该露哪张音色表：平台表（直出型）或引擎源声明（字节型）。 */
   voiceTable: VoiceTable
 }
 
@@ -73,7 +68,6 @@ export interface OutputHandlers {
   done: () => void
   /** 这一段没成（起播被拦、平台报错、开口兜底落空）：留痕跳过。 */
   fail: () => void
-  /** 字节型计时读数（活槽才投）。 */
   progress?: (position: number, duration: number) => void
 }
 
@@ -85,23 +79,20 @@ export interface BytesSegment { key: string; volume: number; playbackRate: numbe
 /** 直出型起一段：文本与语音参数（音色 id 是引擎自己的取值，不跨引擎互通）。 */
 export interface DirectSegment { text: string; voice: string | null; rate: number; volume: number }
 
-/** 两条出声分支共用的会话面：起一段、停、释放、音量——介质需要的就这几件，
- *  Audio / Speech 的其余 API 不进这张表（它们是出声层与平台之间的事）。 */
+/** 两条分支共用的会话面：起一段、停、释放、音量——Audio / Speech 的其余 API 不进这张表。 */
 export interface ListenOutput<S> {
   start(seg: S, handlers: OutputHandlers): void
   /** 停当前段但保留现场（字节型暂停可原地续，直出型撤掉平台队列）。 */
   pause(): void
   /** 停并松开介质（字节型摘掉缓冲，直出型同 pause + 撤开口兜底）。 */
   stop(): void
-  /** 整份释放（字节型连槽一起丢，供复位缝用）。 */
   release(): void
   /** 音量落到活介质。 */
   setVolume(volume: number): void
 }
 
-/** 字节型在共用面上多四件：预载接槽、预载作废、活槽验键（预取与原地续播要问它），
- *  以及**失效重来**——缓存条目被 prune / 读口瞬时 404 后，旧槽按同一个键不会重设 `src`，
- *  一个已经 errored 的元素再 `play()` 只会再拒；自愈前必须先把槽键与预载记录清掉。 */
+/** 字节型在共用面上多四件：预载接槽、预载作废、活槽验键，以及**失效重来**——缓存条目被 prune
+ *  后旧槽按同一个键不会重设 `src`，已经 errored 的元素再 `play()` 只会再拒。 */
 export interface BytesListenOutput extends ListenOutput<BytesSegment> {
   preload(key: string): void
   dropPreload(): void
@@ -112,17 +103,13 @@ export interface BytesListenOutput extends ListenOutput<BytesSegment> {
 export type DirectListenOutput = ListenOutput<DirectSegment>
 
 /**
- * 一条出声分支：介质之外，这条分支的**起播策略**也住实现里。会话只问它四件事——
- * 准备这一段（`start`）、能提供什么（`capabilities`）、静音另一条分支（`start` / `yieldForLoad` 内部）、
- * 重来的许可（`resume` / `held`）。
- *
- * 硬边界：分支**不**推进状态机、不落盘、不读会话 store；它只把介质事件翻成
- * `OutputHandlers`（真开口 / 播完 / 没成 / 计时），代际守卫仍由会话的回调负责。
+ * 一条出声分支：介质之外，这条分支的**起播策略**也住实现里。会话只问四件事——准备这一段
+ * （`start`）、能提供什么（`capabilities`）、静音另一条分支、重来的许可（`resume` / `held`）。
+ * 硬边界：分支**不**推进状态机、不落盘、不读会话 store；它只把介质事件翻成 `OutputHandlers`。
  */
 export interface PlaybackBranch {
   readonly capabilities: BranchCapabilities
-  /** 源级闸门：true = 立刻可用；Promise = 要等平台交能力（直出型等语音表），
-   *  解出 false = 这台设备此刻不能用这条分支（会话按源级事实报错，不留给逐段尝试）。 */
+  /** 源级闸门：true = 立刻可用；Promise = 要等平台交能力（直出型等语音表），解出 false = 此刻不可用。 */
   ready(): true | Promise<boolean>
   /** 起一段：自己静音另一条分支、过音色、求合成、交介质。准备期没成用结局回报；介质失败走 `handlers.fail`。 */
   start(
@@ -150,19 +137,13 @@ export interface PlaybackBranch {
   held(): boolean
 }
 
-/** 两条分支的组：会话按模式取当前分支；「一起停 / 一起释放」是这一层的知识
- *  （两条介质都在它后面，状态机不需要知道另一边存在）。 */
+/** 两条分支的组：会话按模式取当前分支；「一起停 / 一起释放」是这一层的知识。 */
 export interface ListenBranches {
   branch(mode: BranchMode): PlaybackBranch
-  /** 任一条分支是否还占着介质：换模式 / 换参数时「旧声音还挂着」要按新参数重取，
-   *  判据不能只看新分支（切走之后旧分支可能还念着半段）。 */
+  /** 任一条分支是否还占着介质：判据不能只看新分支（切走后旧分支可能还念着半段）。 */
   held(): boolean
-  /** 会话暂停：两条介质一起暂停。只暂停「当前分支」会漏掉另一条还在响的那一格——
-   *  切引擎时旧介质不会立刻停（直出切字节要先等合成回执才静音对侧），此时按暂停只掐新分支
-   *  就成了「屏幕说暂停、旧声音还在念」。 */
+  /** 会话暂停：两条介质一起暂停。只暂停当前分支会漏掉切引擎窗口里还在响的旧介质。 */
   pauseAll(): void
-  /** 会话停止：两条介质一起停（哪条在响由分支自己静音另一条分支保证，但两条都要松开）。 */
   stopAll(): void
-  /** 整份复位：两条介质连槽一起丢。 */
   releaseAll(): void
 }

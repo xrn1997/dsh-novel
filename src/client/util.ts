@@ -1,25 +1,16 @@
-/**
- * client 中立小工具：debounce 与 localStorage guard 不属于「阅读进度」也不属于「轻量 store」，
- * 单独住这里，避免找它们要靠 grep。
- */
+/** client 中立小工具（debounce、localStorage guard 等）：不归阅读进度，也不归轻量 store。 */
+import { playUnitStarts, splitParagraphs } from '../shared/chapter-text.js'
 import type { ChapterContent } from '../shared/wire.js'
 
-/** 盯服务端在跑的作业时，回落轮询的节奏（搜索面与发现面两条观察通道共用这一个数）。
- *  为什么只此一份：600ms 是「边抓边出」的观感与「不把 `/novel-api` 打成刷屏」之间的同一档取舍，
- *  两条通道各自写一遍，改档时必然只改到其中一条——那时两面的新鲜度读数开始互相矛盾，
- *  而从界面上看不出是谁的节奏漂了。
- *  可注入：观察通道缺省用它，测试要给 `JobWatchDeps.jobPollMs` 换一档，免得干等墙钟。 */
+/** 盯服务端在跑作业时的回落轮询节奏（搜索面与发现面共用）：600ms 是「边抓边出」观感与
+ *  不刷屏 `/novel-api` 的同一档取舍；测试可经 `JobWatchDeps.jobPollMs` 换档。 */
 export const JOB_POLL_MS = 600
 
-/** 常驻状态层盯**写任务**（导入 / 批量验证）的节拍。与上面那个数**不是一种参数的两个值**：
- *  观察通道量的是「书一条条出来」的即时感，状态层量的是一条整批写任务的进度，界面只读「在跑 /
- *  跑完」两态。这个节拍必须落进常量，不要在字面量里写裸数字：改名与调档需要一个家。 */
+/** 常驻状态层盯写任务的节拍：量的是整批写任务进度，界面只读「在跑 / 跑完」。 */
 export const STATUS_POLL_MS = 1000
 
-/** 正文节点的 DOM 钩子（`ChapterBody` 渲染时写在每个可定位节点上）。
- *  查找一律**遍历属性比较**，绝不把节点 ID 拼进选择器：wire 的 ID 是不透明串，
- *  拼一次就等于给未净化的书内字符串开了一条进 DOM 查询的路。三处消费（章内定位 / 注释面板落位 /
- *  视口顶采点）共用下面两个函数，免得同一个钩子名与同一条纪律各写一份。 */
+/** 正文节点的 DOM 钩子（`ChapterBody` 写在每个可定位节点上）。查找一律**遍历属性比较**，
+ *  绝不把节点 ID 拼进选择器：wire 的 ID 是不透明串，拼一次就是一条进 DOM 查询的路。 */
 export const NOVEL_NODE_ATTR = 'data-novel-node'
 
 /** root 内所有已登记节点（文档顺序）；root 缺席（未挂载）→ 空表 */
@@ -38,15 +29,9 @@ export function findNovelNode(root: Element | null | undefined, nodeId: string |
 }
 
 /**
- * 在**给定这一个**滚动容器里把目标摆进视野——居中落位只此一个实现（抽屉、注释面板共用）：
- * 装得下就居中，装不下（目标比容器还高）就**顶对齐**。
- *
- * 为什么不用 `scrollIntoView`：那个 API 会一路向上把**每个可滚祖先**都滚到位，「打开一个只读
- * 浮层」于是改写了主阅读位置、还顺带落一笔进度。位移按两份视口盒现算，容器没有滚动范围时浏览器自己夹住；
- * 增量恰为 0 时一次写入都不发（不为「已经在中间」制造一轮 scroll 事件）。
- *
- * 顶对齐不是边角：脚注的锚点常常是一个**装着好几段的容器**，居中它等于把开头推到视口上方——
- * 内容比视口长时，「从哪儿开始读」只有顶对齐答得对。
+ * 在**给定这一个**滚动容器里把目标摆进视野（抽屉、注释面板共用）：装得下居中，装不下顶对齐。
+ * 为什么不用 `scrollIntoView`：它会一路滚每个可滚祖先，「打开只读浮层」于是改写主阅读位置；
+ * 顶对齐不是边角：脚注锚点常是装着好几段的容器，内容比视口长时只有顶对齐答得对。
  */
 export function centerInScroller(scroller: Element, target: Element | null): void {
   if (target === null) return
@@ -59,13 +44,9 @@ export function centerInScroller(scroller: Element, target: Element | null): voi
 }
 
 /**
- * 源行**就地展开自己**时的落位：展开出来的那一串**装得下就一动不动**，装不下才把这一行抬到框顶。
- *
- * 为什么不复用 `centerInScroller`：居中那条策略在这里是错的——用户点的是列表里本来就在视野里的行，
- * 居中会把那一行往下推（点完看见整列跳一格），而他真正要看的是**行下面刚长出来的那一串**。本条只补
- * 一个位移：让行首对齐框首，孩子在框内从头排；已经在顶部就一次写入都不发。
- *
- * 同 `centerInScroller` 的口径：只滚**给定这一个**容器，绝不借 `scrollIntoView`（它连可滚祖先一起滚）。
+ * 源行**就地展开自己**的落位：展开的那串装得下就一动不动，装不下才把这一行抬到框顶。
+ * 不复用 `centerInScroller`：用户点的是本来就在视野里的行，居中会把那一行往下推（看见整列跳一格），
+ * 而他真正要看的是行下面刚长出来的那串。只滚给定容器，绝不借 `scrollIntoView`。
  */
 export function topAlignIfClipped(scroller: Element, head: Element, tail: Element | null): void {
   const box = scroller.getBoundingClientRect()
@@ -107,8 +88,7 @@ export function debounce<A extends unknown[]>(
 
 /** localStorage guard：renderToString/无 DOM 环境退内存 Map（不许炸）——prefs 等持久位共用 */
 const memory = new Map<string, string>()
-/** lib.dom 把 localStorage 声明成必然存在，可无 DOM 的宿主里它就是缺席的——按本地窄镜像取一格，
- *  别让 lib 的声明替运行时作保（这是防线，不是冗余判空）。 */
+/** lib.dom 把 localStorage 声明成必然存在，无 DOM 宿主里它缺席——这是防线，不是冗余判空。 */
 const hostWindow: { localStorage?: Storage } = globalThis
 export const ls: Pick<Storage, 'getItem' | 'setItem'> = {
   getItem: (k) => {
@@ -121,9 +101,7 @@ export const ls: Pick<Storage, 'getItem' | 'setItem'> = {
 }
 
 /* ── 由纸算色（正文层）────────────────────────────────────────────────────
-   正文层的纸与墨都是用户可选的，颜色必须从纸色现算，不能钉死一个 hex：
-   `paperInk` 定正文墨色，`paperLiveInk` 定跟读高亮色。两者共用下面这套最小颜色度量
-   （WCAG 相对亮度 / 对比度，sRGB→Lab 色差），不引依赖——这一层要能零成本跑在浏览器里。 */
+   正文纸与墨都是用户可选，颜色必须从纸色现算：`paperInk` 定墨色，`paperLiveInk` 定跟读高亮色。 */
 
 type Triple = readonly [number, number, number]
 
@@ -138,7 +116,6 @@ function rgbOf(paper: string): Triple | null {
   const hex = paper.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)
   if (hex === null) return null
   const digits = hex[1]
-  // 交替分支里有一支必然参与：捕获组缺席只可能是正则与这里对不上了，走同一条「非 hex」退路
   if (digits === undefined) return null
   const full = digits.length === 3 ? digits.split('').map((c) => c + c).join('') : digits
   const channel = (offset: number): number => parseInt(full.slice(offset, offset + 2), 16)
@@ -205,10 +182,8 @@ function rgbHex(rgb: Triple): string {
   return `#${rgb.map((v) => v.toString(16).padStart(2, '0')).join('')}`
 }
 
-/** 正文层字色：纸张色由 prefs 固定（正文层永不接宿主 token，防回归——皮肤 token 是
- *  半透明玻璃值），故字色必须**由纸张色算**：写死深色字在自选深色纸上等于隐形。按感知亮度
- * （WCAG 线性化 + Rec.709 权重，阈值 0.35）择一，深浅两纸两端都够对比。
-  *  纯函数：无 React、无 IO——可直接单测。 */
+/** 正文层字色：纸张色由 prefs 固定（正文层永不接宿主 token），字色必须**由纸张色算**——写死深色字
+ *  在自选深色纸上等于隐形。按感知亮度（WCAG + Rec.709，阈值 0.35）择一，纯函数可直测。 */
 export function paperInk(paper: string): string {
   const rgb = rgbOf(paper)
   if (rgb === null) return '#222'                       // 非 hex（color input 也可能给 rgb()）：退回原行为
@@ -220,15 +195,11 @@ const LIVE_HUE = 25
 const LIVE_SAT = 0.45
 const LIVE_MIN_CONTRAST = 5.5
 
-/** 跟读高亮的字色：暖赭带里离正文墨色最远、又与纸面仍然够读的一档。
+/** 跟读高亮的字色：暖赭带里离正文墨色最远、又与纸面仍够读的一档。
  *
- *  为什么不能钉死一个 hex：纸色由用户自选，同一个暖赭在米黄纸上是清楚的暖褐，换到深红或
- *  灰纸上就可能跟正文糊成一片。这里把「够读」写成可量的下限——与纸面的对比度至少
- *  `LIVE_MIN_CONTRAST`，且不低于正文自己的对比度（正文本来就弱的纸上，高亮至少不比正文更差）；
- *  在这个下限之上挑与正文墨色色差最大的一档：纸亮时往深墨一侧走、纸暗时往浅墨一侧走，
- *  亮度差始终拉开。候选只在正文墨色的同一侧（亮纸不把这一段的字反成浅色），整页仍是同一套纸墨。
- *
- *  纯函数：无 React、无 IO——单测直接把纸色喂进来量对比度与色差。 */
+ *  为什么不能钉死 hex：纸色自选，同一个暖赭在米黄纸上清楚，换深红或灰纸就可能糊成一片。
+ *  下限写成可量：对比度至少 `LIVE_MIN_CONTRAST`，且不低于正文自己的对比度；在此之上挑与墨色
+ *  色差最大的一档，候选只在正文墨色的同一侧（不反色）。纯函数，单测直接喂纸色量。 */
 export function paperLiveInk(paper: string): string {
   const rgb = rgbOf(paper) ?? DEFAULT_PAPER
   const paperY = luminanceOf(rgb)
@@ -254,21 +225,13 @@ export function paperLiveInk(paper: string): string {
 }
 
 /**
- * 剥掉正文开头那行重复的章名：h2 已经渲染 `toc[i].name`，而本项目输入的书源里存在
- * 正文首行**就是同一句章名**的形状（钉子见 `tests/client/chapter-title.test.ts`）——
- * 屏幕上连着两行同样的字，一行居中粗体一行左对齐，读起来像渲染坏了。
+ * 剥掉正文开头那行重复的章名：h2 已渲染章名，而书源里存在正文首行就是同一句章名的形状
+ * （钉子见 `tests/client/chapter-title.test.ts`）——屏幕上两行同样的字像渲染坏了。
  *
- * 三条口径，缺一即错：
- *  ① **相等才丢**。归一化只去空白（`\s` 含全角空格），不做包含、不做前缀、不做大小写折叠——
- *     「第1章 雪地遇袭（完整版）」不是章名，认不出就留。宁可不修，不可误删正文；
- *  ② **只作用在呈现层**。导出与 AI 工具读的是 `chapterContentToText` 的投影，那份必须仍是原样
- *     正文——修的是这一屏的观感，不是这本书的内容（改内容归规则引擎与 `applyReplaces`）；
- *  ③ **章名之前的空白行一起走**。空白行不是内容，留着它等于在章顶挂一个空段。
- *
- * **图文章（rich）一律不动**，哪怕首节点正是同一句章名：那是导入期建出来的**带 id 的可寻址元素**，
- * 原生目录完全可能把某条 navPoint 指到它身上。剥掉它 = 让一个导航锚点凭空消失，落位从此静默
- * 差一整段的高度——本仓认定的最高罪是静默，不是多一行重复字。文字章没有这个问题：一行文本
- * 没有身份，也没有任何东西能指向它。
+ * 三条口径：① **相等才丢**（归一化只去空白，不做包含/前缀/大小写折叠，宁可不修不可误删）；
+ * ② **只作用在呈现层**（导出与 AI 读 `chapterContentToText`，内容归规则引擎）；
+ * ③ **章名之前的空白行一起走**。**图文章一律不动**：首节点是带 id 的可寻址元素，
+ * 剥掉等于让导航锚点消失，落位差一整段——静默是本仓最高罪。
  */
 export function stripLeadingTitle(content: ChapterContent, chapterName: string): ChapterContent {
   if (content.kind !== 'text') return content
@@ -287,24 +250,41 @@ export function stripLeadingTitle(content: ChapterContent, chapterName: string):
   return { kind: 'text', text: lines.slice(i + 1).join('\n') }
 }
 
-/** 字符串 → 四档档位（1..4）：按 codePoint 求和取模——同一输入恒同档、可复现。
- *  封面色块与来源色点共用同一份四档色板，派生机制也必须同一份（否则两处会各自漂移）。 */
+/** 正文投影（正文只经这一处剥与折算）：剥掉与章名重复的首行，并给出被剥掉的行占掉的播放单元数。
+ *
+ *  为什么不能只看「剥掉几行」：播放单元逐行切、空行与纯标点行占 0 格，基数是「剥后第一行」的
+ *  起段号；不补偏移，「从本段听」与探针起播会系统性早一段。图文章不剥，基数为 0。
+ *  导出只给测试直接驱动：整页挂载成本会掩盖这条纯算式，而它错了表现为整体偏移一段。 */
+export function chapterBodyProjection(content: ChapterContent, chapterName: string): {
+  content: ChapterContent
+  paragraphBase: number
+} {
+  const stripped = stripLeadingTitle(content, chapterName)
+  if (stripped === content || content.kind !== 'text' || stripped.kind !== 'text') {
+    return { content: stripped, paragraphBase: 0 }
+  }
+  const lines = content.text.split('\n').map((text) => ({ text }))
+  const removed = lines.length - stripped.text.split('\n').length
+  const starts = playUnitStarts(lines)
+  // 越界（整段剥完）落全量单元数：累加到头就是整篇占掉的单元数
+  return { content: stripped, paragraphBase: starts[removed] ?? splitParagraphs(content.text).length }
+}
+
+/** 字符串 → 四档档位（1..4）：按 codePoint 求和取模——同输入恒同档、可复现。 */
 function tintTier(text: string): 1 | 2 | 3 | 4 {
   let sum = 0
   for (const ch of text.trim()) sum = (sum + (ch.codePointAt(0) ?? 0)) % 4
   return (sum + 1) as 1 | 2 | 3 | 4
 }
 
-/** 无封面降级的首字色块档位（token 层 --novel-cover-1..4 的类名映射；hex 不出 token 层，
- *  theme-tokens 守卫口径）。按首字符 codePoint 求和派生——同书恒同色、可复现；
- *  空标题回 t1（与 coverFallbackChar 的「书」同防）。 */
+/** 无封面降级的首字色块档位（token 层 --novel-cover-1..4 的类名映射；hex 不出 token 层）。
+ *  同书恒同色、可复现；空标题回 t1。 */
 export function coverTintClass(title: string): 'novel-cover-t1' | 'novel-cover-t2' | 'novel-cover-t3' | 'novel-cover-t4' {
   return `novel-cover-t${tintTier(title)}`
 }
 
-/** 来源色点的档位（书架卡片「来源 chip」的色点）：按 **sourceId** 派生——同一书源在整架书上是同一个颜色，
- *  一屏之内一眼分得出来源不同。类名刻意不复用 cover 的（色点是点、封面是块，同一张卡上两块颜色可以不同），
- *  但档位色仍是同四档 token（hex 不出 token 层）。空 id 回 t1。 */
+/** 来源色点的档位：按 **sourceId** 派生——同一书源在整架书上同色。类名不复用 cover 的
+ *  （色点是点、封面是块），档位色仍是同四档 token；空 id 回 t1。 */
 export function sourceTintClass(sourceId: string): 'novel-src-t1' | 'novel-src-t2' | 'novel-src-t3' | 'novel-src-t4' {
   return `novel-src-t${tintTier(sourceId)}`
 }

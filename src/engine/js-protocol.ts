@@ -1,11 +1,6 @@
 /**
- * JavaBridge 协议表：**唯一登记点**。每行 = 方法名 · sync/async · 沙箱挂载点 · 宿主实现（inline 闭包）。
- * 类型面、BOOTSTRAP 名单、宿主分派与 worker 路由谓词全部从表派生：
- * JavaBridge 类型用 mapped type 推导（不存在第二份手写 interface）、SANDBOX_MOUNTS 供引导脚本挂载、
- * invokeJavaMethod 按名查行分派、SYNC_WORKER_RE 由全局松散支与各 async 行的 routePattern 拼出。
- * 加一个 **sync** 方法 = 本表加一行；加一个 **async** 方法 = 一行 +
- * 一个 `bridge` 判别（壳形态 / 挂载名 / 路由探针 / 路由分支——桥壳源码与 `g.java` 挂载由表生成）。
- * 纪律：本文件不进 engine barrel——仅由 js-sandbox 内部引用。
+ * JavaBridge 协议表：**唯一登记点**。每行 = 方法名 · sync/async · 沙箱挂载点 · 宿主实现。类型面、BOOTSTRAP 名单、
+ * 宿主分派与 worker 路由谓词全部从表派生（sync = 一行；async = 一行 + `bridge`）。本文件不进 engine barrel。
  */
 import crypto from 'node:crypto'
 import type { EngineValue, EvalContext, Facet, SegmentLoc } from './types.js'
@@ -44,14 +39,13 @@ import {
   uriEncode,
 } from './js-utils.js'
 
-/** 协议实现的全部闭包依赖——每次求值构造一个（原 makeJavaBridge 的参数与可变态收进一个对象） */
+/** 协议实现的全部闭包依赖——每次求值构造一个 */
 export interface BridgeDeps {
   ctx: EvalContext
-  /** 用户脚本原文（错误定位用） */
   code: string
   loc: SegmentLoc
   facet: Facet
-  /** 上一段结果序列化（host.result）——getString* 的默认基内容 */
+  /** 上一段结果序列化——getString* 的默认基内容 */
   result: string
   session: SourceSession
   /** cookie/源变量的按源隔离键（source 优先，缺则 baseUrl，再缺为空串） */
@@ -61,33 +55,29 @@ export interface BridgeDeps {
   contentBase: string | null
 }
 
-/** 沙箱侧挂载点：java 对象（属性名=方法名）/ cookie·source·cache 对象（as 为脚本可见属性名） */
+/** 沙箱侧挂载点 */
 type Mount =
   | { readonly obj: 'java' }
   | { readonly obj: 'cookie'; readonly as: string }
   | { readonly obj: 'source'; readonly as: string }
   | { readonly obj: 'cache'; readonly as: string }
 
-/** 表行 make 的返回签名约束（仅约束形状；具体参数类型逐行精确声明，供 JavaBridge 推导） */
+/** 表行 make 的返回签名约束（具体参数类型逐行精确声明，供 JavaBridge 推导） */
 type HostFn = (...args: never[]) => unknown
 
-/** 异步行在沙箱侧的同步桥壳形态（`asyncBridgeSource` 按它生成 BOOTSTRAP 内那段源码）：
- *  · `body`：数据面就是 body 串（ajax / downloadFile）；
- *  · `response`：数据面是 `__host:'response'` 描述符，需 `materialize` 包成响应方法壳；
- *  · `raw`：数据面本身即脚本要的形状（webView / urlConn）；
- *  · `connect`：额外包 `raw()/url()` 同值的连接壳。 */
+/** 异步行在沙箱侧的同步桥壳形态（`asyncBridgeSource` 按它生成源码）：`body` 数据面是 body 串；`response`
+ *  需 `materialize` 包成响应方法壳；`raw` 数据面即脚本要的形状；`connect` 额外包 `raw()/url()` 同值的壳。 */
 export type BridgeShape = 'body' | 'response' | 'raw' | 'connect'
 
-/** 仅 async 行必填：沙箱侧怎么挂、怎么被路由认出。 */
 export interface AsyncBridgeSpec {
   shim: BridgeShape
   /** 直接挂在 `g.java` 上的属性名；null = 只经别的入口到达（`java.get` 双参 / `URL.openConnection`） */
   mountAs: string | null
-  /** 证明该行的可达写法会被 `SYNC_WORKER_RE` 认出的脚本片段（测试逐行钉住；漏列即红——
-   *  认不出时主线程抛哨兵，脚本自己的 try/catch 会把它吞成 undefined）。 */
+  /** 证明该行可达写法会被 `SYNC_WORKER_RE` 认出的脚本片段（测试逐行钉住；认不出时主线程抛哨兵，脚本自己的
+   *  try/catch 会把它吞成 undefined）。 */
   routeProbe: string
-  /** 本行在 `SYNC_WORKER_RE` 里的那一支（松散正则原文，由组装处拼进谓词）：必须作为**正则**
-   *  认得出本行的 routeProbe（测试逐行钉——挂空即该行写法退化成主线程撞哨兵单点兜底）。 */
+  /** 本行在 `SYNC_WORKER_RE` 里的那一支（松散正则原文）：必须作为**正则**认得出本行的 routeProbe
+   *  （挂空即该行写法退化成主线程撞哨兵单点兜底）。 */
   routePattern: string
 }
 
@@ -95,7 +85,6 @@ interface JavaMethod<N extends string, F extends HostFn> {
   readonly name: N
   /** sync（缺省）：宿主同步返回；async：返回 Promise（沙箱侧由 `bridge` 生成同步桥） */
   readonly mode?: 'async'
-  /** 仅 async 行必填：沙箱侧同步桥的壳形态、直接挂载名、路由探针 */
   readonly bridge?: AsyncBridgeSpec
   readonly mount: Mount
   /** 宿主实现工厂：闭包捕获 deps；返回的函数即桥方法（内部自带 String()/Number() 防御转换） */
@@ -118,10 +107,8 @@ function method<N extends string, F extends HostFn>(
   }
 }
 
-/** java.getString* 的递归求值（evaluateRef 未注入 → 宁炸不猜）。求值体（文本 + 已定用途）由
- *  调用点经 `subRuleOf` 构造——「恒列表」的桥方法（getElements/getElement）交 `forceUsage`，
- *  其余按规则本身判。`content` 是**显式基内容**：给了就以它为基（优先于上一段结果），
- *  null/undefined 回落到本仓的 contentBase ?? result（java.setContent 那条路）。 */
+/** java.getString* 的递归求值（evaluateRef 未注入 → 宁炸不猜）。`content` 是**显式基内容**（优先于上一段
+ *  结果），null/undefined 回落到 contentBase ?? result。 */
 function evalRule(d: BridgeDeps, sub: SubRule, content?: unknown): EngineValue {
   if (!d.evaluateRef) {
     throw new JsSandboxError(`java 递归求值需要引擎接线（evaluateRef 未注入，规则: ${JSON.stringify(sub.rule)}）`, {
@@ -134,17 +121,12 @@ function evalRule(d: BridgeDeps, sub: SubRule, content?: unknown): EngineValue {
   return d.evaluateRef(sub, base)
 }
 
-/** getString / getStringList 共用的子规则求值入口：串化 + 用途判据一处收口（两个桥方法只差
- *  结果侧的串化/绝对化，求值这一段不许各写一份——用途判据一改这里只动一处）。 */
 function evalSubRule(d: BridgeDeps, rule: unknown, content?: unknown): EngineValue {
   return evalRule(d, subRuleOf(textOf(rule), d.facet), content)
 }
 
-/** getString / getStringList 的实参分派：**三个重载形态**的位置语义不同（按实参类型分派）。
- *  · `getString(rule)` —— 缺省：反转义做、不做绝对化；
- *  · `getString(rule, unescape)` —— 第二参布尔就是「要不要再做一次 HTML 反转义」；
- *  · `getString(rule, content, isUrl)` —— 第二参是基内容、第三参才是 isUrl。
- *  三个形态靠实参类型分派；不要把第二参的布尔一律当 isUrl——二参形态里它是 unescape。 */
+/** getString / getStringList 的实参分派：`(rule)` 缺省反转义、不绝对化；`(rule, unescape)` 第二参布尔是
+ *  「再做一次 HTML 反转义」；`(rule, content, isUrl)` 第二参是基内容、第三参才是 isUrl。 */
 function parseGetStringArgs(arg2?: unknown, arg3?: unknown): { content?: unknown; isUrl: boolean; unescape: boolean } {
   if (typeof arg2 === 'boolean') return { content: undefined, isUrl: false, unescape: arg2 }
   return { content: arg2, isUrl: arg3 === true, unescape: true }
@@ -168,13 +150,9 @@ const sourceVars = (d: BridgeDeps): Map<string, string> => d.session.sourceVars(
 const sourceCache = (d: BridgeDeps): Map<string, string> => d.session.cacheStore(d.sourceKey)
 
 /**
- * JavaBridge 协议表：**唯一登记点**。行序即文档序（网络 / 变量 / 递归求值 / 工具 / 垫片分组）。
- * 添加方法只改此处一行（含实现）——类型面/BOOTSTRAP 名单/宿主分派全部派生跟随。
- *
- * 过线实参的字符串化：协议行的形参类型（`string` / `string | null` …）是**脚本契约的窄镜像**，
- * 运行时拿到的是引导层 JSON.parse 的原值——`invokeJavaMethod` 按 `unknown[]` 调下来，脚本常把上一段
- * 的值（JSONPath 的单元素数组、数字）直接递进来。所以每一步 String() 都是运行时防线而不是空转换；
- * 写法收口到 `textOf`（形参 `unknown` 即声明真相）。
+ * JavaBridge 协议表：行序即文档序（网络 / 变量 / 递归求值 / 工具 / 垫片分组）。过线实参的字符串化：
+ * 协议行的形参类型是**脚本契约的窄镜像**，运行时拿到的是引导层 JSON.parse 的原值——脚本常把上一段的值
+ * （JSONPath 单元素数组、数字）直接递进来，故每一步 String() 都是运行时防线；写法收口到 `textOf`。
  */
 export const JAVA_PROTOCOL = [
   // ── 网络 ────────────────────────────────────────────────────────────
@@ -183,15 +161,14 @@ export const JAVA_PROTOCOL = [
     if (!fetchFn) {
       throw new JsSandboxError('该源未提供网络能力（ctx.fetch 缺失）', { ...d.loc, facet: d.facet, script: d.code })
     }
-    // 参数规约按 String 形参强制转换：`java.ajax(result)` 传进来的常是上一段的值——JSONPath 给
-    // 单元素数组时按 toString 拼成那条 URL；直接把原值交给请求组装层会在 template.replace 处抛
-    // 「is not a function」。null/undefined 不猜成 "null" 去打站点，点名参数缺失。
+    // 参数按 String 形参强制转换：`java.ajax(result)` 传进来的常是上一段的值——JSONPath 给单元素数组时按
+    // toString 拼成 URL；直接把原值交给请求组装层会在 template.replace 处抛「is not a function」。
+    // null/undefined 不猜成 "null" 去打站点，点名参数缺失。
     if (url === null || url === undefined) {
       throw new JsSandboxError('java.ajax 参数为空（脚本传进 null/undefined）', { ...d.loc, facet: d.facet, script: d.code })
     }
-    // 如实失败：ajax 这里不挂任何 rejection 防线——主线程在发起宿主调用前抛哨兵（evalJs 换
-    // worker 重跑）、worker 同步返回，两条路都不产生悬空 Promise；进程级 `engine/rejection-guard.ts` 的 `acquireRejectionGuard`
-    // 是常驻最后防线，管的是脚本自建的异步工作。见 js-sandbox 的 BOOTSTRAP 注释。
+    // 如实失败：ajax 不挂任何 rejection 防线——主线程在发起宿主调用前抛哨兵、worker 同步返回，两条路
+    // 都不产生悬空 Promise；`acquireRejectionGuard` 是常驻最后防线，管的是脚本自建的异步工作。
     return fetchFn(textOf(url)).then((r) => r.body)
   }, 'async', {
     shim: 'body',
@@ -199,10 +176,9 @@ export const JAVA_PROTOCOL = [
     routeProbe: 'java.ajax("https://m.example.com")',
     routePattern: String.raw`\.ajax\s*\(`,
   }),
-  // java.connect：返回带结果对象的响应，与 ajax 只差一层壳。三点刻意取舍：
-  // ① header JSON 经 parseHeaderArg 叠到源级头之后（与 post 同口径）；callTimeout 走进程级超时；
-  // ② 不把异常塞进 body——错误文本冒充正文是最高罪（见矩阵 `h-java-connect`）；
-  // ③ `url` 给落地地址（重定向后末次请求），`raw().request().url()` 与 `.url` 同源同值。
+  // java.connect：返回带结果对象的响应，与 ajax 只差一层壳。header JSON 经 parseHeaderArg 叠到源级头之后
+  // （与 post 同口径）；不把异常塞进 body——错误文本冒充正文是最高罪（矩阵 `h-java-connect`）。
+  // `url` 给落地地址（重定向后末次请求）。
   method('connect', { obj: 'java' }, (d) => async (url: unknown, header?: unknown): Promise<{ url: string; body: string }> => {
     const fetchFn = d.ctx.fetch
     if (!fetchFn) {
@@ -221,8 +197,7 @@ export const JAVA_PROTOCOL = [
     routePattern: String.raw`java\s*\.\s*connect\s*\(`,
   }),
   // java.post：脚本以 POST 发请求、拿响应对象（`res.body()` / `res.cookies()`）。宿主侧返回数据面，
-  // `.body()` 那层壳在 BOOTSTRAP 里包（跨 worker 只走 JSON）。headers 照收并叠到源级头之上
-  // （同名后者覆盖）；`timeout` 一类实参走进程级超时，忽略之。
+  // `.body()` 那层壳在 BOOTSTRAP 里包（跨 worker 只走 JSON）。headers 叠到源级头之上（同名后者覆盖）。
   method('post', { obj: 'java' }, (d) => async (
     url: unknown, body?: unknown, headersArg?: unknown,
   ): Promise<ResponseHost> => {
@@ -242,8 +217,8 @@ export const JAVA_PROTOCOL = [
     routeProbe: 'java.post("https://m.example.com", "a=1")',
     routePattern: String.raw`java\s*\.\s*post\s*\(`,
   }),
-  // java.get 的 HTTP 重载：脚本侧 `Connection.Response` 的返回值形状。
-  // 单参变量 getter 仍走下面的 get 行；BOOTSTRAP 按实参个数分派（显式 undefined 仍是双参 HTTP）。
+  // java.get 的 HTTP 重载：返回 `Connection.Response` 形状。单参变量 getter 走下面的 get 行，
+  // BOOTSTRAP 按**实参个数**分派（显式 undefined 仍是双参 HTTP）。
   method('getHttp', { obj: 'java' }, (d) => async (
     url: unknown, headersArg?: unknown,
   ): Promise<ResponseHost> => {
@@ -262,8 +237,8 @@ export const JAVA_PROTOCOL = [
     routeProbe: 'java.get("https://m.example.com", {})',
     routePattern: String.raw`java\s*\.\s*get\s*\([^)]*,`,
   }),
-  // java.net.URL.openConnection 的宿主口：跟重定向、可 GET/POST，返回原始字节。
-  // 安全重开裁决：走 ctx.fetchConn（同一守门 fetcher），不给脚本开裸 socket。
+  // java.net.URL.openConnection 的宿主口：跟重定向、可 GET/POST，返回原始字节。走 ctx.fetchConn（同一
+  // 守门 fetcher），不给脚本开裸 socket。
   method('urlConn', { obj: 'java' }, (d) => async (
     req: unknown,
   ): Promise<{ url: string; statusCode: number; headers: Record<string, string>; cookies: Record<string, string>; bytes: number[] }> => {
@@ -282,16 +257,15 @@ export const JAVA_PROTOCOL = [
     routeProbe: 'new java.net.URL("https://m.example.com").openConnection()',
     routePattern: String.raw`openConnection\s*\(`,
   }),
-  // java.getWebViewUA：本仓的 WebView 只服务 webView 源；普通请求走 HTTP 客户端，故这里给的是
-  // 我们实际发出去的那条 UA（不是浏览器/WebView 内核 UA，属近似；矩阵 `h-java-webview-ua` 记差）。
-  // ctx.userAgent 未接线时点名抛错，绝不编一个串冒充。
+  // java.getWebViewUA：本仓的 WebView 只服务 webView 源，普通请求走 HTTP 客户端，故这里给的是我们实际
+  // 发出去的那条 UA（不是浏览器内核 UA，属近似；矩阵 `h-java-webview-ua` 记差）。未接线时点名抛错。
   method('getWebViewUA', { obj: 'java' }, (d) => (): string => {
     if (!d.ctx.userAgent) {
       throw new JsSandboxError('java.getWebViewUA 取不到出站 UA（ctx.userAgent 未接线）', { ...d.loc, facet: d.facet, script: d.code })
     }
     return d.ctx.userAgent()
   }),
-  // 输入脚本里有拿 `getUserAgent() === getWebViewUA()` 探测特性集差异的形态；本仓两个方法同源，
+  // 输入脚本有拿 `getUserAgent() === getWebViewUA()` 探测特性集差异的形态；本仓两个方法同源，
   // 返回同一个值，这类探测恒落「相等」一侧。
   method('getUserAgent', { obj: 'java' }, (d) => (): string => {
     if (!d.ctx.userAgent) {
@@ -316,10 +290,8 @@ export const JAVA_PROTOCOL = [
     // 别名 webViewGetSource 由挂载清单登记（表里没有这个脚本拼写），其写法随本行路由
     routePattern: String.raw`java\s*\.\s*(?:webView|webViewGetSource)\s*\(`,
   }),
-  // java.head(url, headers[, timeout])：HEAD 请求、**不跟重定向**——脚本要的正是跳转目标自身的
-  // 响应头，跟了跳转就拿不到 Location。
-  // 数据面 = { url, statusCode, headers }；`.headers()` 方法壳在 BOOTSTRAP 里包（同 post，跨桥只走
-  // JSON）。脚本用它读 `res.headers()["location"]` 取图片直链。
+  // java.head(url, headers[, timeout])：HEAD 请求、**不跟重定向**——脚本要的正是跳转目标自身的响应头，
+  // 跟了就拿不到 Location。数据面 = { url, statusCode, headers }。
   method('head', { obj: 'java' }, (d) => async (
     url: unknown, headersArg?: unknown,
   ): Promise<ResponseHost> => {
@@ -352,11 +324,10 @@ export const JAVA_PROTOCOL = [
   method('getString', { obj: 'java' }, (d) => (rule: unknown, arg2?: unknown, isUrlArg?: unknown): string => {
     const { content, isUrl, unescape } = parseGetStringArgs(arg2, isUrlArg)
     let s = engineValueToString(evalSubRule(d, rule, content))
-    // 次序：先 unescapeHtml4（缺省 true、且只在含 '&' 时做），再按 isUrl 决定返回形态
+    // 次序：先 unescapeHtml4（缺省 true、只在含 '&' 时做），再按 isUrl 决定返回形态
     if (unescape) s = unescapeHtml4(s)
     if (isUrl) {
-      // isUrl **不发请求**：空白回退 baseUrl，否则按落地地址（重定向后末次请求的 URL）绝对化
-      // （本仓 base 取 EvalContext.baseUrl，差异记在矩阵 h-abs-urls）
+      // isUrl **不发请求**：空白回退 baseUrl，否则按 base 绝对化（差异记在矩阵 h-abs-urls）
       return s.trim() === '' ? d.ctx.baseUrl ?? '' : absolutizeUrl(d.ctx.baseUrl, s)
     }
     return s
@@ -378,7 +349,7 @@ export const JAVA_PROTOCOL = [
       return v.nodes.toArray().map((_, i) => ({ html: v.nodes.eq(i).toString(), text: v.nodes.eq(i).text() }))
     }
     // 非节点集产物（jsonpath/js 的 value/list）按条目如实映射——JSON 数据求值时
-    // （`java.getElements('$.data[*].comicList[*]')`）条目文本即 html 上下文
+    // （`java.getElements('$.data[*]')`）条目文本即 html 上下文
     if (v.kind === 'list') return v.items.map((it) => ({ html: it, text: it }))
     if (v.kind === 'value') return [{ html: v.text, text: v.text }]
     return []
@@ -390,7 +361,6 @@ export const JAVA_PROTOCOL = [
     if (v.kind !== 'nodes') {
       const items = v.kind === 'list' ? v.items : v.kind === 'value' ? [v.text] : []
       const first = items.at(0)
-      // 空集与「首项取不到」同一落点：都没有可给的元素（取首项，取不到即 null）
       return first === undefined ? null : { html: first, text: first }
     }
     if (v.nodes.length === 0) return null
@@ -413,8 +383,7 @@ export const JAVA_PROTOCOL = [
     digestHex(textOf(data), textOf(algorithm))),
   method('digestBase64Str', { obj: 'java' }, () => (data: string, algorithm: string): string =>
     digestBase64(textOf(data), textOf(algorithm))),
-  // 名字大写 H 是**原样保留的畸形名**（`HMacHex` / `HMacBase64`）——脚本里怎么写就得怎么
-  // callable，改名等于把这条 API 弄没
+  // 名字大写 H 是**原样保留的畸形名**（`HMacHex` / `HMacBase64`）——脚本里怎么写就得怎么 callable
   method('HMacHex', { obj: 'java' }, () => (data: string, algorithm: string, key: string): string =>
     hMacHex(textOf(data), textOf(algorithm), textOf(key))),
   method('HMacBase64', { obj: 'java' }, () => (data: string, algorithm: string, key: string): string =>
@@ -424,14 +393,13 @@ export const JAVA_PROTOCOL = [
   method('encodeURI', { obj: 'java' }, () => (s: string): string => uriEncode(textOf(s))),
   method('hexDecodeToString', { obj: 'java' }, () => (hex: string): string => hexDecodeToString(textOf(hex))),
   method('hexEncodeToString', { obj: 'java' }, () => (utf8: string): string => hexEncodeToString(textOf(utf8))),
-  // ── AES 解密桥（输入脚本的正文解密形态
-  //    `java.aesBase64DecodeToString(data, key, transformation, iv)`——key/iv 为 utf8 字符串，
-  //    PKCS5Padding ≡ PKCS7，Node crypto 原生支持）──
+  // ── AES 解密桥（输入脚本的正文解密形态 `java.aesBase64DecodeToString(data, key, transformation, iv)`
+  //    ——key/iv 为 utf8 串，PKCS5Padding ≡ PKCS7，Node crypto 原生支持）──
   method('aesBase64DecodeToString', { obj: 'java' }, (d) =>
     (data: string, key: string, transformation?: string, iv?: string): string =>
       aesDecryptB64(textOf(data), textOf(key), textOf(transformation ?? 'AES/CBC/PKCS5Padding'), textOf(iv ?? ''), d)),
   // `createSymmetricCrypto(...).decrypt(data)` 的宿主口：返回**字节**（number[]），脚本常再接
-  // `java.bytesToStr(decrypted)`（decrypt 返字节数组；见 js-sandbox 的链式壳）。
+  // `java.bytesToStr(decrypted)`。
   method('aesDecryptToBytes', { obj: 'java' }, (d) =>
     (data: string, key: string, transformation?: string, iv?: string): number[] =>
       Array.from(aesDecryptB64Buffer(textOf(data), textOf(key), textOf(transformation ?? 'AES/CBC/PKCS5Padding'), textOf(iv ?? ''), d))),
@@ -444,14 +412,14 @@ export const JAVA_PROTOCOL = [
   method('cookieRemove', { obj: 'cookie', as: 'removeCookie' }, (d) => (name: string): void => {
     jar(d).delete(textOf(name))
   }),
-  // cookie.replaceCookie(url, cookieString)：契约是「把新 cookie 串并进该 url 已有表」。
-  // 本仓垫片是按源键值表（无域分区），故实现为新串逐对覆盖——url 不进判据。
+  // cookie.replaceCookie(url, cookieString)：契约是「把新 cookie 串并进该 url 已有表」；本仓垫片按源键值表
+  // （无域分区），实现为新串逐对覆盖——url 不进判据。
   method('cookieReplace', { obj: 'cookie', as: 'replaceCookie' }, (d) => (_url: string, raw: string): void => {
     const j = jar(d)
     for (const [k, v] of Object.entries(parseCookieString(textOf(raw)))) j.set(k, v)
   }),
   // java.getCookie(tag[, key])：契约是按 url-tag 读整张 cookie 表；本仓 jar 按**源**隔离（name→value），
-  // tag 不进判据——无 key 时取整表拼 cookie 串（近似，矩阵 `h-java-getcookie` 记差）。
+  // tag 不进判据——无 key 时取整表拼串（近似，矩阵 `h-java-getcookie` 记差）。
   method('getCookie', { obj: 'java' }, (d) => (_tag: string, key?: unknown): string => {
     const j = jar(d)
     if (key !== undefined && key !== null && textOf(key) !== '') return j.get(textOf(key)) ?? ''
@@ -460,7 +428,7 @@ export const JAVA_PROTOCOL = [
     return parts.join('; ')
   }),
   // ── 源级状态（挂 source.getVariable/setVariable/get/put 与 cache.*）─────
-  // 口径是**三处独立存储**：单串槽 / 键值表 / 缓存表，按源建档、互不串味；不要合并成一张 Map，
+  // 口径是**三处独立存储**：单串槽 / 键值表 / 缓存表，按源建档、互不串味。不要合并成一张 Map，
   // 否则 setVariable 会清掉键值表或缓存（见 SourceSession 注释）。
   method('sourceGetVariable', { obj: 'source', as: 'getVariable' }, (d) => (): string =>
     d.session.sourceString(d.sourceKey)),
@@ -474,8 +442,7 @@ export const JAVA_PROTOCOL = [
     sourceVars(d).set(textOf(key), v)
     return v          // put 返回写入的值（脚本有 `var x = source.put(k,v)` 的连写形态）
   }),
-  // ── cache 垫片（最小仿真：按源隔离的进程内键值表；输入脚本有搜索面写、
-  //    目录面读的跨面形态，表必须跨面存活）──
+  // ── cache 垫片（最小仿真：按源隔离的进程内键值表；搜索面写、目录面读的跨面形态要求它跨面存活）──
   method('cacheGet', { obj: 'cache', as: 'get' }, (d) => (key: string): string | null =>
     sourceCache(d).get(textOf(key)) ?? null),
   method('cachePut', { obj: 'cache', as: 'put' }, (d) => (key: string, value: unknown): void => {
@@ -485,8 +452,7 @@ export const JAVA_PROTOCOL = [
     sourceCache(d).delete(textOf(key))
   }),
   // ── cache 内存三别名（putMemory/getFromMemory/deleteMemory）──
-  // 内存/磁盘分层在本仓不存在：cache 垫片就是进程内键值表，三个别名与 get/put/delete 同存储；
-  // 它们只为输入脚本的调用名而存在，不要按「另一层缓存」实现。
+  // 内存/磁盘分层在本仓不存在：三个别名与 get/put/delete 同存储，只为输入脚本的调用名而存在。
   method('cachePutMemory', { obj: 'cache', as: 'putMemory' }, (d) => (key: string, value: unknown): void => {
     sourceCache(d).set(textOf(key), value === null || value === undefined ? '' : textOf(value))
   }),
@@ -496,11 +462,10 @@ export const JAVA_PROTOCOL = [
     sourceCache(d).delete(textOf(key))
   }),
   // ── 纯工具（续）────────────────────────────────────────────────────
-  // randomUUID：小写带连字符的 UUID（crypto.randomUUID()）——
-  // 输入脚本有 `@js` 动态请求头里用它生成 device id 的形态
+  // randomUUID：小写带连字符（crypto.randomUUID），输入脚本用它生成 device id
   method('randomUUID', { obj: 'java' }, () => (): string => crypto.randomUUID()),
   // ── 字节组（strToBytes / hex·base64 ToByteArray）─────────────────────
-  // 脚本侧字节统一用 number[]（0-255）承载：JSON 可序列化（跨 SAB RPC 安全）、`& 0xff` 语义不变。
+  // 脚本侧字节统一用 number[]（0-255）：JSON 可序列化（跨 SAB RPC 安全）、`& 0xff` 语义不变。
   method('strToBytes', { obj: 'java' }, () => (s: string, charset?: string): number[] =>
     Array.from(javaEncode(textOf(s), charset ?? 'UTF-8'))),
   method('hexDecodeToByteArray', { obj: 'java' }, () => (hex: string): number[] => {
@@ -513,8 +478,7 @@ export const JAVA_PROTOCOL = [
   }),
   method('base64DecodeToByteArray', { obj: 'java' }, () => (b64: string): number[] =>
     Array.from(Buffer.from(textOf(b64), 'base64'))),
-  // bytesToStr：与 strToBytes 互逆（输入脚本有 AES 解密链 `java.bytesToStr(crypto.decrypt(x))`——
-  // 走加密目录接口取章节 URL 的那类形态）。默认 charset = UTF-8（按 UTF-8 解字节）。
+  // bytesToStr：与 strToBytes 互逆（输入脚本有 AES 解密链 `java.bytesToStr(crypto.decrypt(x))`），默认 UTF-8。
   method('bytesToStr', { obj: 'java' }, () => (bytes: unknown, charset?: unknown): string => {
     if (!Array.isArray(bytes) && !(bytes instanceof Uint8Array)) {
       throw new JsSandboxError(`bytesToStr 参数不是字节数组（${typeof bytes}）`, { facet: 'rule', segmentIndex: -1, segmentRaw: textOf(bytes).slice(0, 64), script: '' })
@@ -524,18 +488,16 @@ export const JAVA_PROTOCOL = [
     return javaDecode(buf, cs)
   }),
   // ── 文件下载（downloadFile / readTxtFile）───────────────────────────
-  // **进程内暂存**（非真实磁盘）：downloadFile 取字节存表、readTxtFile 取表解码——
-  // 刻意**不暴露真实文件系统**（书源脚本可读任意本地路径 = 数据外泄面）；
-  // 路径形态 `/dsh-cache/<md5>.<ext>` 对脚本是不透明令牌（只被传回 readTxtFile）。
-  // downloadFile 需要网络 → async 行：主线程抛哨兵换 worker 同步桥（与 java.ajax 同款）。
+  // **进程内暂存**（非真实磁盘）：刻意**不暴露真实文件系统**（书源脚本可读任意本地路径 = 数据外泄面）。
+  // 路径 `/dsh-cache/<md5>.<ext>` 对脚本是不透明令牌（只被传回 readTxtFile）。downloadFile 需要网络 →
+  // async 行：主线程抛哨兵换 worker 同步桥（与 java.ajax 同款）。
   method('downloadFile', { obj: 'java' }, (d) => async (url: string): Promise<string> => {
     const raw = d.ctx.fetchRaw
     if (!raw) {
       throw new JsSandboxError('该源未提供二进制抓取能力（ctx.fetchRaw 缺失）', { ...d.loc, facet: d.facet, script: d.code })
     }
     const u = textOf(url)
-    // 选项后缀 `,{…}` 不参与文件名推断——分界式与 services/request.ts 同源（engine/template.ts
-    // 的 URL_OPTION_SPLIT；此处只剥不解释，抓取本身由 engineFetchRaw 经 assembleRequest 解释）
+    // 选项后缀 `,{…}` 不参与文件名推断——分界式与 services/request.ts 同源（此处只剥不解释）
     const cut = URL_OPTION_SPLIT.exec(u)
     const clean = (cut === null ? u : u.slice(0, cut.index)).trimEnd()
     // 路径段（split 恒有首段）里推扩展名；取不到段或没有扩展名都落到既有的 `.bin` 缺省
@@ -560,7 +522,7 @@ export const JAVA_PROTOCOL = [
   }),
 ] as const
 
-/** downloadFile 暂存表（进程级）：条数与单文件上限的算式住 `stores.ts` 的 `createFileStore`。 */
+/** 临时文件暂存表的条数与单文件上限算式住 `stores.ts` 的 `createFileStore`。 */
 const fileStore = createFileStore({ entries: 64, bytes: 64 * 1024 * 1024 })
 
 function storeFile(path: string, bytes: Uint8Array): void {
@@ -575,7 +537,7 @@ function storeFile(path: string, bytes: Uint8Array): void {
 }
 
 /** AES 解密（base64 密文 → utf8 明文）：transformation 形如 `AES/CBC/PKCS5Padding`；
- *  模式不识别 / 密钥或 IV 长度不合法 → 宁炸（JsSandboxError 带定位，不返回假明文） */
+ *  模式不识别 / 密钥或 IV 长度不合法 → 宁炸（不返回假明文） */
 function aesDecryptB64(data: string, key: string, transformation: string, iv: string, d: BridgeDeps): string {
   return aesDecryptB64Buffer(data, key, transformation, iv, d).toString('utf8')
 }
@@ -611,15 +573,13 @@ function aesDecryptB64Buffer(data: string, key: string, transformation: string, 
 
 type AnyJavaMethod = (typeof JAVA_PROTOCOL)[number]
 
-/** JavaBridge 接口**从表推导**（名称→精确函数签名）——不存在第二份手写 interface */
 export type JavaBridge = { [E in AnyJavaMethod as E['name']]: ReturnType<E['make']> }
 
 const PROTOCOL_INDEX = new Map<string, AnyJavaMethod>()
 for (const row of JAVA_PROTOCOL) PROTOCOL_INDEX.set(row.name, row)
 
-/** 沙箱引导用挂载清单（从表派生）：引导脚本按此挂 sync 包装，不再手写名单 */
+/** 沙箱引导用挂载清单（从表派生） */
 export const SANDBOX_MOUNTS = {
-  /** java 对象上的同步方法名（async 行不走 `sync()` 转发，见 javaAsyncMounts） */
   javaSync: JAVA_PROTOCOL.flatMap((r) => (r.mount.obj === 'java' && r.mode !== 'async' ? [r.name] : [])),
   /** java 对象上的异步方法：{ name: 宿主调用名, target: 脚本属性名 }（由 `asyncMountSource` 生成挂载行）。
    *  别名（webViewGetSource）只能在此登记——表里只有宿主方法名，没有这个脚本拼写。 */
@@ -630,45 +590,39 @@ export const SANDBOX_MOUNTS = {
   ],
   /** cookie 对象：{ name: 宿主调用名, key: 脚本属性名 } */
   cookie: JAVA_PROTOCOL.flatMap((r) => (r.mount.obj === 'cookie' ? [{ name: r.name, key: r.mount.as }] : [])),
-  /** source 对象（__src__）：{ name: 宿主调用名, key: 脚本属性名 } */
+  /** source 对象（__src__） */
   source: JAVA_PROTOCOL.flatMap((r) => (r.mount.obj === 'source' ? [{ name: r.name, key: r.mount.as }] : [])),
-  /** cache 对象（最小仿真的按源进程内键值表）：{ name: 宿主调用名, key: 脚本属性名 } */
+  /** cache 对象 */
   cache: JAVA_PROTOCOL.flatMap((r) => (r.mount.obj === 'cache' ? [{ name: r.name, key: r.mount.as }] : [])),
 }
 
 /**
- * 宿主分派（表查，无逐案 switch）：返回 JSON 可序列化的值；async 行返回 Promise。
- * 参数为引导层 JSON.parse 出的原始数组——实现内部自行防御转换，分派处不逐案转型。
+ * 宿主分派（表查，无逐案 switch）：返回 JSON 可序列化的值；async 行返回 Promise。参数为引导层 JSON.parse
+ * 出的原始数组——实现内部自行防御转换。
  */
 export function invokeJavaMethod(d: BridgeDeps, name: string, rawArgs: readonly unknown[]): unknown {
   const row = PROTOCOL_INDEX.get(name)
   if (row === undefined) {
     throw new JsSandboxError(`未知 java 方法: ${name}`, { facet: 'rule', segmentIndex: -1, segmentRaw: name, script: name })
   }
-  // 受控的唯一收窄点：表行 make 的精确签名服务类型面推导；宿主分派处按 JSON 原始参数调用。
   const fn = row.make(d) as (...args: unknown[]) => unknown
   return fn(...rawArgs)
 }
 
-/** 主线程那一臂抛的哨兵：`asyncBridgeSource` 把它写进每个 async 桥，路由侧（js-sandbox 的
- *  `needsSyncBridge`）按同一个值换 worker 重跑。**抛与认只许一个主人**——值抄成第二份时，
- *  改一头另一头跟不上，认不出哨兵等于脚本直接拿到一条错误而不是换道重跑（口径见 `ADR-0005`）。 */
+/** 主线程那一臂抛的哨兵：`asyncBridgeSource` 把它写进每个 async 桥，路由侧（`needsSyncBridge`）按同一个值
+ *  换 worker 重跑。**抛与认只许一个主人**——值抄成第二份时认不出哨兵（口径见 `ADR-0005`）。 */
 export const SYNC_AJAX_SENTINEL = '__dsh_sync_ajax_required__'
 
-/** 异步行的沙箱侧同步桥源码——插进 `js-sandbox.ts` 的 `BOOTSTRAP` 模板串。生成逻辑住这，
- *  js-sandbox 不得手抄桥段：加一行 async 方法只该动表，手抄会让「挂载」与「路由」两处失去闸。
- *  输出被当**文本**插进模板串，故不得含反引号或 `${`。
- *
- *  生成文本的自由标识符**只许**这四个，且全部由 BOOTSTRAP 的作用域供出：`d.syncAjax`（worker /
- *  主线程分支开关）、`invoke`（序列化 + 宿主调用）、`msg`（错误取消息）、`materialize`（响应描述符
- *  物化）。生成器自己闭包里多引一个名字，插进模板串后是脚本运行期的 ReferenceError，不是编译错。 */
+/** 异步行的沙箱侧同步桥源码——插进 `js-sandbox.ts` 的 `BOOTSTRAP` 模板串，js-sandbox 不得手抄桥段。
+ *  输出被当**文本**插值进模板串，故不得含反引号或 `${`。生成文本的自由标识符**只许**四个、且全由 BOOTSTRAP
+ *  作用域供出：`d.syncAjax`、`invoke`、`msg`、`materialize`；多引一个是脚本运行期 ReferenceError。 */
 export function asyncBridgeSource(): string {
   const THROW = `throw new Error(${JSON.stringify(SYNC_AJAX_SENTINEL)})`
   return JAVA_PROTOCOL.flatMap((r) => {
     if (r.mode !== 'async' || r.bridge === undefined) return []
     const call = `invoke(${JSON.stringify(r.name)}, [].slice.call(arguments))`
-    // 主线程分支一律在**发起宿主调用之前**抛哨兵：evalJs 捕获后换 worker 重跑同一段，请求没
-    // 发出去、不多打站点。不要在这里返回 Promise——ajax 的同步语义会静默变成异步。
+    // 主线程分支一律在**发起宿主调用之前**抛哨兵：evalJs 捕获后换 worker 重跑，请求没发出去、不多打站点。
+    // 不要在这里返回 Promise——ajax 的同步语义会静默变成异步。
     const head = `  const ${r.name} = d.syncAjax ? function () {`
     const tail = `  } : function () { ${THROW} }`
     switch (r.bridge.shim) {
@@ -676,19 +630,17 @@ export function asyncBridgeSource(): string {
       case 'body':
         return [`${head}\n    const r = ${call}\n    try { return JSON.parse(r) } catch (e) { throw new Error(msg(e)) }\n${tail}`]
       // post / head（及经双参 `java.get` 到达的 getHttp）：宿主给 `__host:'response'` 描述符，
-      // materialize 统一包成 statusCode/header/headers/body/cookies 方法壳。
+      // materialize 统一包成方法壳。
       case 'response':
         return [`${head}\n    let r\n    try { r = JSON.parse(${call}) } catch (e) { throw new Error(msg(e)) }\n    return materialize(r)\n${tail}`]
       // webView / urlConn：数据面本身就是脚本要的形状，不包壳。
       case 'raw':
         return [`${head}\n    let r\n    try { r = JSON.parse(${call}) } catch (e) { throw new Error(msg(e)) }\n    return r\n${tail}`]
-      // connect：`raw()` 与 `url()` 是**同一值**（跟随重定向后的末次请求地址）——raw 壳直接
-      // 复用数据面的 url，不额外跨桥带字段；`connect(so).raw().request().url()` 取的就是落地地址。
+      // connect：`raw()` 与 `url()` 是**同一值**（重定向后的末次请求地址）——raw 壳直接复用数据面的 url。
       case 'connect':
         return [`${head}\n    const raw = ${call}\n    let r\n    try { r = JSON.parse(raw) } catch (e) { throw new Error(msg(e)) }\n    return {\n      url: r.url,\n      body: r.body,\n      raw: function () {\n        return { request: function () { return { url: function () { return r.url } } } }\n      },\n    }\n${tail}`]
       default: {
-        // 表里新增 `BridgeShape` 成员而生成器没跟上时，编译期就红；运行时再兜一次，
-        // 免得漏产一行桥壳（脚本拿到 undefined）被当成「这个方法本来就不支持」。
+        // 表里新增 `BridgeShape` 成员而生成器没跟上时，编译期就红；运行时再兜一次，免得漏产一行桥壳。
         const _never: never = r.bridge.shim
         throw new Error(`未处理的 async 桥形态：${String(_never)}`)
       }
@@ -696,33 +648,30 @@ export function asyncBridgeSource(): string {
   }).join('\n')
 }
 
-/** `g.java = { … }` 里的异步挂载行（源码文本，BOOTSTRAP 内插值）。必须是源码而非运行时循环：
- *  那些 `const <name>` 在引导闭包里，不是 `g` 的属性。 */
+/** `g.java = { … }` 里的异步挂载行（源码文本，BOOTSTRAP 内插值）：那些 `const <name>` 在引导闭包里，
+ *  不是 `g` 的属性，故必须是源码而非运行时循环。 */
 export function asyncMountSource(): string {
   return SANDBOX_MOUNTS.javaAsyncMounts.map((m) => `    ${m.target}: ${m.name},`).join('\n')
 }
 
-/** 逐行的路由探针：`SYNC_WORKER_RE` 必须认出每一种可达写法（测试消费；认不出即空结果冒充失败）。 */
 export function asyncRouteProbes(): { name: string; probe: string }[] {
   return JAVA_PROTOCOL.flatMap((r) =>
     r.mode === 'async' && r.bridge !== undefined ? [{ name: r.name, probe: r.bridge.routeProbe }] : [])
 }
 
-/** 路由谓词的全局松散支：认「对 java 的任意下标访问」。动态键写法（`java["ajax"]` 这类）不在
- *  任何表行的可达写法里，只能宽认；它是无主启发，故留在表外。 */
+/** 路由谓词的全局松散支：认「对 java 的任意下标访问」。动态键写法（`java["ajax"]` 这类）不在任何
+ *  表行的可达写法里，只能宽认；它是无主启发，故留在表外。 */
 const GLOBAL_LOOSE = String.raw`java\s*\[`
 
-/** worker 路由谓词（evalJs 的 `useWorker` 判据）：全局松散支 + 表内 async 行的 routePattern
- *  拼出，**没有第二份手写正则**（另存一份就是路由与表行静默分叉的口）。**只影响性能与稳健性，不影响语义**：语义由哨兵桥给，认不出的等价写法先白跑
- *  主线程、撞哨兵后换 worker 重跑（needsSyncBridge），两路同一口径（ADR-0005）。宽拼写
- *  （任何对象的 `.ajax(` / `.downloadFile(` 调用）随各自的表行登记——那是那一行的可达写法家族，
- *  不是无主启发。仍漏的只有真正间接形态（解构、with，以及首个实参里带右括号的双参 get）。
+/** worker 路由谓词（evalJs 的 `useWorker` 判据）：全局松散支 + 表内 async 行的 routePattern 拼出，
+ *  **没有第二份手写正则**（另存一份就是路由与表行静默分叉的口）。**只影响性能与稳健性，不影响语义**：
+ *  认不出的等价写法先白跑主线程、撞哨兵后换 worker 重跑。宽拼写随各自的表行登记——那是那一行的可达
+ *  写法家族，不是无主启发；仍漏的只有真正间接形态（解构、with，以及首个实参里带右括号的双参 get）。
  *  逐行可达写法由 routeProbe 钉、逐行分支由 routePattern 钉（tests/engine/js-protocol.test.ts）。 */
 export const SYNC_WORKER_RE = new RegExp(
   [GLOBAL_LOOSE, ...JAVA_PROTOCOL.flatMap((r) =>
     (r.mode === 'async' && r.bridge !== undefined ? [r.bridge.routePattern] : []))]
-    // 每支自成一组：routePattern 日后带顶层 `|` 也只在自家支内择一，不会与相邻支拼成一棵
-    // 新的选择树（对现表是等价变换——派生钉按 `(?:…)` 包裹后的形态断言）。
+    // 每支自成一组：routePattern 日后带顶层 `|` 也只在自家支内择一，不会与相邻支拼成新的选择树。
     .map((branch) => `(?:${branch})`)
     .join('|'),
 )

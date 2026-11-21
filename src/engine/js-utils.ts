@@ -1,6 +1,5 @@
 /**
- * 沙箱宿主纯工具：无 vm、无 EvalContext、无会话状态，直接可测
- * （tests/engine/js-utils.test.ts）。
+ * 沙箱宿主纯工具：无 vm、无 EvalContext、无会话状态，直接可测（tests/engine/js-utils.test.ts）。
  * 纪律：本文件不进 engine barrel——仅由 js-protocol/js-sandbox 内部引用。
  */
 import crypto from 'node:crypto'
@@ -8,21 +7,18 @@ import zlib from 'node:zlib'
 import iconv from 'iconv-lite'
 import type { EngineValue } from './types.js'
 
-/** md5 → 32 位小写十六进制 */
 export function md5Hex(s: string): string {
   return crypto.createHash('md5').update(s, 'utf8').digest('hex')
 }
 
-/** java.md5Encode16 语义：32 位 md5 取中 16 位（slice(8, 24)） */
 export function md5Hex16(s: string): string {
   return md5Hex(s).slice(8, 24)
 }
 
 /**
- * 摘要算法名 → node 摘要名。书源脚本按这套命名族传参（`MD5` / `SHA-256` / `HmacSHA512`
- * 这一族），node 的名字族不一样；名字对不上就点名抛错——**认不出就抛，绝不静默退成 md5**。
- * 刻意用显式表而不是 `crypto.getHashNames()`：后者在部分运行时里不存在（本仓实测 vitest 的
- * node realm 就没有该方法），拿它当白名单会让整桥在加载期炸。
+ * 摘要算法名 → node 摘要名。书源脚本按 JCA 命名族传参（`MD5` / `SHA-256` / `HmacSHA512`），node 的族不同；
+ * 名字对不上就点名抛错——**认不出就抛，绝不静默退成 md5**。刻意用显式表而不是 `crypto.getHashNames()`：
+ * 后者在部分运行时不存在（实测 vitest 的 node realm 就没有），拿它当白名单会让整桥在加载期炸。
  */
 const JCA_TO_NODE_HASH: Record<string, string> = {
   md5: 'md5',
@@ -31,8 +27,7 @@ const JCA_TO_NODE_HASH: Record<string, string> = {
   ripemd160: 'ripemd160',
 }
 
-/** `stripHmac` 为 HMAC 族而设：脚本传 `HmacSHA256`，node 的 `createHmac` 要的是摘要名 `sha256`
- *  （HMAC 族的算法名只承担「用哪个摘要」，`Hmac` 前缀是冗余的）。 */
+/** `stripHmac` 为 HMAC 族而设：脚本传 `HmacSHA256`，node 的 `createHmac` 要的是摘要名 `sha256`。 */
 export function jcaHashName(algorithm: string, stripHmac = false): string {
   const raw = algorithm
   const base = stripHmac ? raw.replace(/^hmac[-_]?/i, '') : raw
@@ -44,7 +39,6 @@ export function jcaHashName(algorithm: string, stripHmac = false): string {
   return hit
 }
 
-/** java.digestHex(data, algorithm)：**data 在前、算法在后**，data 按 UTF-8 取字节 */
 export function digestHex(data: string, algorithm: string): string {
   return crypto.createHash(jcaHashName(algorithm)).update(data, 'utf8').digest('hex')
 }
@@ -54,24 +48,20 @@ export function digestBase64(data: string, algorithm: string): string {
   return crypto.createHash(jcaHashName(algorithm)).update(data, 'utf8').digest('base64')
 }
 
-/** java.HMacHex(data, algorithm, key)：key 与 data 都按 UTF-8 取字节 */
 export function hMacHex(data: string, algorithm: string, key: string): string {
   return crypto.createHmac(jcaHashName(algorithm, true), Buffer.from(key, 'utf8'))
     .update(data, 'utf8').digest('hex')
 }
 
-/** java.HMacBase64(data, algorithm, key)：输出 base64（取字节口径同 HMacHex） */
 export function hMacBase64(data: string, algorithm: string, key: string): string {
   return crypto.createHmac(jcaHashName(algorithm, true), Buffer.from(key, 'utf8'))
     .update(data, 'utf8').digest('base64')
 }
 
-/** base64 编码（UTF-8 字节） */
 export function base64Encode(s: string): string {
   return Buffer.from(s, 'utf8').toString('base64')
 }
 
-/** base64 解码（→ UTF-8 字符串） */
 export function base64Decode(s: string): string {
   return Buffer.from(s, 'base64').toString('utf8')
 }
@@ -81,7 +71,6 @@ export function base64EncodeBytes(bytes: number[]): string {
   return Buffer.from(bytes.map((b) => b & 0xff)).toString('base64')
 }
 
-/** java.encodeURI 垫片：语义 = encodeURIComponent（中文/空格/斜杠全部转义） */
 export function uriEncode(s: string): string {
   return encodeURIComponent(s)
 }
@@ -93,17 +82,15 @@ export function hexDecodeToString(hex: string): string {
   return Buffer.from(clean, 'hex').toString('utf8')
 }
 
-/** UTF-8 字符串 → 十六进制串（`java.hexEncodeToString` 宿主实现；产出**小写**，与站点侧的期望一致）。 */
+/** java.hexEncodeToString 宿主实现：产出**小写**。 */
 export function hexEncodeToString(utf8: string): string {
   return Buffer.from(utf8, 'utf8').toString('hex')
 }
 
 /**
  * HTML 实体反转义（**白名单近似**，不是全表）：数字引用（`&#n;` / `&#xhh;`）+ HTML4 常用命名集。
- * **未知实体原样留**——与本页 `engine/dom` 的实体口径同一条纪律（不猜），差集只是「原样留」，
- * 不是解错。
- * 用途：`java.getString` 的 unescape 开关（该开关缺省 true，在已解码的取值上**再解一次**，
- * 专治 JSON API 源把 `<p>&amp;lt;</p>` 这类二次转义文本当内容返回的站点）。
+ * **未知实体原样留**——与 `engine/dom` 的实体口径同一条纪律（不猜）。用途：`java.getString` 的
+ * unescape 开关（缺省 true，在已解码的取值上**再解一次**，专治 JSON API 源返回二次转义文本的站点）。
  */
 const NAMED_ENTITIES: Record<string, string> = {
   quot: '"', amp: '&', apos: "'", lt: '<', gt: '>', nbsp: '\u00a0', iexcl: '¡', cent: '¢',
@@ -141,8 +128,7 @@ export function unescapeHtml4(s: string): string {
       return Number.isNaN(code) || !Number.isFinite(code) ? m : safeFromCodePoint(code, m)
     }
     const hit = NAMED_ENTITIES[body]
-    // 解不了的实体一律**原样留**（不替换、不清洗）；
-    // 无分号尾的形态（`&nbsp` 后不跟 ;）同样不解——本表按带分号才认，口径一致。
+    // 解不了的实体一律**原样留**；无分号尾的形态（`&nbsp` 后不跟 ;）同样不解——本表按带分号才认。
     return hit === undefined ? m : hit
   })
 }
@@ -158,14 +144,10 @@ function safeFromCodePoint(code: number, fallback: string): string {
 }
 
 /**
- * 相对地址绝对化（五条口径）：
- *  ① base 空 → 返回 trim 后的相对串（**不猜**成任何站点）；
- *  ② base 先剥 `,` 之后的请求选项（`substringBefore(",")`——base 常带选项串尾，不剥会被解析进路径）；
- *  ③ 相对串已是绝对地址 / data URI → 原样；
- *  ④ `javascript` 开头 → 空串（口径是返回空串，不是原样透出）；
- *  ⑤ 其余按 base 解析，解析失败回退 trim 原串。
- * 桥侧用它承接 `getString(..., isUrl=true)`：base 传 EvalContext.baseUrl（本仓的重定向落地地址不在
- * 这一步的上下文里，此处以规则求值的 base 为最近似，差异记在矩阵 `h-abs-urls`）。
+ * 相对地址绝对化（五条口径）：① base 空 → 返回 trim 后的相对串（**不猜**成任何站点）；② base 先剥 `,` 之后
+ * 的请求选项；③ 已是绝对地址 / data URI → 原样；④ `javascript` 开头 → 空串；⑤ 其余按 base 解析，失败回退
+ * trim 原串。桥侧承接 `getString(..., isUrl=true)`：base 传 EvalContext.baseUrl（重定向落地地址不在这一步
+ * 的上下文里，以规则求值的 base 为最近似，差异记在矩阵 `h-abs-urls`）。
  */
 export function absolutizeUrl(base: string | null | undefined, relative: string): string {
   const rel = relative.trim()
@@ -193,25 +175,22 @@ export function fmtTime(ts: number | string, utc: boolean): string {
   return `${y}/${p2(mo + 1)}/${p2(da)} ${p2(h)}:${p2(mi)}`
 }
 
-/** 形状不可知的值 → 单串（`String(v)` 的**唯一实现**）：只用于**过线原值**——引导层 JSON.parse 出来的
- *  脚本实参、脚本返回值、宿主响应载荷这类「声明的形状不可信」的地方。对象走到这里得到 JS 默认串化
- *  （`[object Object]`，与脚本侧 `String(v)` 同口径）；要可读内容请各自判形（如 `engineValueToString`）。
- *  与 `no-base-to-string` 的分界：那条规则管的是「已知可能为对象却直接串化」，这里的入参类型是 unknown，
- *  串化是**兜底口径**而不是对象读数。 */
+/** 形状不可知的值 → 单串（`String(v)` 的**唯一实现**）：只用于**过线原值**（引导层 JSON.parse 出来的脚本
+ *  实参、脚本返回值、宿主响应载荷）。对象走到这里得到 JS 默认串化（`[object Object]`，与脚本侧同口径）。
+ *  与 `no-base-to-string` 的分界：那条管「已知可能为对象却直接串化」，这里入参是 unknown，串化是兜底口径。 */
 export function textOf(v: unknown): string {
   return String(v)
 }
 
-/** 抛错值 → 文案（`err.message` 有就用它，否则按脚本侧口径串化原值）。脚本可以
- *  `throw { message, stack }`，worker 边界回来的也是这个形状——故不假定它是 Error 实例。 */
+/** 抛错值 → 文案（`err.message` 有就用它，否则按脚本侧口径串化原值）——脚本可 `throw { message, stack }`，
+ *  worker 边界回来的也是这个形状，故不假定它是 Error 实例。 */
 export function messageOf(e: unknown): string {
   const message = e !== null && typeof e === 'object' ? (e as { message?: unknown }).message : undefined
   return message === undefined || message === null ? textOf(e) : textOf(message)
 }
 
-/** EngineValue → 单串（**唯一实现**；nodes 两种宿主口径由参数显式区分，只有一份实现）。
- *  nodesMode：'inner' = `html()`（java.getString 口径，默认）；'outer' = `toString()`（@js host.result 口径）。
- *  其余分支：list 换行拼接、matches 行内 tab、miss → ''。 */
+/** EngineValue → 单串（**唯一实现**；nodes 两种宿主口径由参数显式区分）。nodesMode：'inner' = `html()`
+ *  （java.getString 口径，默认）；'outer' = `toString()`（@js host.result 口径）。 */
 export function engineValueToString(v: EngineValue, nodesMode: 'inner' | 'outer' = 'inner'): string {
   switch (v.kind) {
     case 'value':
@@ -246,18 +225,15 @@ export function engineValueToStrings(v: EngineValue): string[] {
 }
 
 /**
- * PNG → ARGB 像素数组（`Packages.android.graphics.BitmapFactory.decodeStream` 宿主实现）。
- * 本仓不引外部位图解码库，改以 node:zlib 解 IDAT + 逐行去滤波自实现——
- * 支持位深 1/2/4/8/16（16 取高字节）、颜色类型 0/2/3/4/6、tRNS 透明、非隔行。
- * 隔行（Adam7）/未知滤波/数据不足 → 抛错（宁炸不猜：给错位像素比报错坏得多）。
+ * PNG → ARGB 像素数组（`Packages.android.graphics.BitmapFactory.decodeStream` 宿主实现）。不引外部位图解码
+ * 库，以 node:zlib 解 IDAT + 逐行去滤波自实现——位深 1/2/4/8/16、颜色类型 0/2/3/4/6、tRNS 透明、非隔行。
+ * 隔行（Adam7）/未知滤波/数据不足 → 抛错（给错位像素比报错坏得多）。
  *
- *  `maxPixels`：像素数上限，**在 IHDR 处判**（尺寸读出来即定，膨胀 + 逐行去滤波才是重活——
- *  等整图解完再判等于没挡，见 `js-sandbox.ts` 的 `__pkg.png`）。缺省不设上限：策略值归调用方。
+ * `maxPixels`：像素数上限，**在 IHDR 处判**（尺寸读出即定；膨胀 + 逐行去滤波才是重活）。缺省不设上限。
  */
 export function decodePngToArgb(bytes: Uint8Array, maxPixels?: number): { width: number; height: number; pixels: number[] } {
   const fail = (msg: string): never => { throw new Error(`PNG 解码失败：${msg}`) }
-  // 逐字节读口：越界在这里是**真实输入状态**（chunk 截断 / 尺寸与数据不符），走本函数已有的抛错通道；
-  // 内部缓冲（img）同样经它——那里的越界是解码器自伤，也不折叠成 0（那会把坏数据冒充成合法数据）。
+  // 逐字节读口：越界在这里是**真实输入状态**（chunk 截断 / 尺寸与数据不符），走本函数已有的抛错通道。
   const byte = (src: Uint8Array, at: number, what: string): number =>
     src[at] ?? fail(`${what} 越界（偏移 ${at}，长度 ${src.length}）`)
   const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
@@ -270,7 +246,6 @@ export function decodePngToArgb(bytes: Uint8Array, maxPixels?: number): { width:
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
   while (pos + 8 <= bytes.length) {
     const len = dv.getUint32(pos)
-    // 循环条件已让头 8 字节整体可读：类型名的四个字节必在界内
     const type = String.fromCharCode(
       byte(bytes, pos + 4, 'chunk 类型'), byte(bytes, pos + 5, 'chunk 类型'),
       byte(bytes, pos + 6, 'chunk 类型'), byte(bytes, pos + 7, 'chunk 类型'),
@@ -387,8 +362,8 @@ function paeth(a: number, b: number, c: number): number {
   return pa <= pb && pa <= pc ? a : (pb <= pc ? b : c)
 }
 
-/** charset 名归一（legado 书源脚本传 `ISO8859_1` 这类别名）：剥分隔符小写后查表，
- *  未命中回传原名交给 iconv 判定（encodingExists 不成立 → 调用方如实报错，不猜编码）。 */
+/** charset 名归一（legado 书源脚本传 `ISO8859_1` 这类别名）：剥分隔符小写后查表，未命中回传原名交给
+ *  iconv 判定（encodingExists 不成立 → 调用方如实报错，不猜编码）。 */
 export function normalizeCharset(raw: string): string {
   const s = raw.trim().replace(/[-_\s]/g, '').toLowerCase()
   if (s === '' || s === 'utf8' || s === 'utf8bom') return 'utf8'
@@ -415,9 +390,8 @@ export function javaDecode(bytes: Uint8Array, charset: string): string {
 }
 
 // ── 中文数字（chineseNumToInt / toNumChapter 共用的一条算法）────────────────────────────
-// 中文数字口径钉在这条算法上，本仓不自写一个「更聪明」的实现：`一千一` 按它算出 1100
-// （末位数字跟在「千」后按「补一位」处理 = 1×1000/10，而 `一千二百` 是 1200）——换一套算法会
-// 静默改掉输入脚本的排序与标题规整结果，这里要交付的是格式口径而不是数学正确。两个样例都钉在 `tests/engine/js-utils.test.ts`。
+// 口径钉在这条算法上：`一千一` 按它算出 1100（末位跟在「千」后按「补一位」处理），`一千二百` 是 1200——
+// 换一套算法会静默改掉输入脚本的排序与标题规整结果，这里交付的是格式口径而不是数学正确。
 const CHN_MAP: Record<string, number> = {}
 for (const [i, ch] of Array.from('零一二三四五六七八九十').entries()) CHN_MAP[ch] = i
 for (const [i, ch] of Array.from('〇壹贰叁肆伍陆柒捌玖拾').entries()) CHN_MAP[ch] = i
@@ -431,7 +405,6 @@ export function chineseNumToInt(chNum: string): number {
   let billion = 0
   for (let i = 0; i < cn.length; i++) {
     const ch = cn[i]
-    // 字符串摊开是密数组、循环条件钉住 i 在界内 ⇒ ch 必在；取不到按本函数的失败口径给 -1（不猜数字）
     if (ch === undefined) return -1
     const num = CHN_MAP[ch]
     if (num === undefined) return -1
@@ -448,8 +421,7 @@ export function chineseNumToInt(chNum: string): number {
       result += num * tmp
       tmp = 0
     } else {
-      // 上一位的数值（`一千一` 要按「补一位」读成 1100）：i >= 2 时 i-1 必在界内，
-      // 且它已在上一轮过了 CHN_MAP 那关——两处判空只为让编译器跟上这条界内证明。
+      // 上一位的数值（`一千一` 要按「补一位」读成 1100）：i >= 2 时 i-1 必在界内且已过 CHN_MAP 那关。
       const prevCh = cn[i - 1]
       const prev = prevCh === undefined ? 0 : (CHN_MAP[prevCh] ?? 0)
       tmp = (i >= 2 && i === cn.length - 1 && prev > 10) ? (num * prev) / 10 : tmp * 10 + num
@@ -472,7 +444,6 @@ export function toNumChapter(s: string): string {
   const head = m[1]
   const body = m[2]
   const tail = m[3]
-  // 正则三组都是必选段，命中即齐全；取不到按「认不出这个形态」原样返回（不猜段位）
   if (head === undefined || body === undefined || tail === undefined) return s
   return `${head}${stringToInt(body)}${tail}`
 }

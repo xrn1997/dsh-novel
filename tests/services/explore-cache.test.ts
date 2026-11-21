@@ -6,7 +6,7 @@ import { fetchExploreGroup } from '../../src/services/explore.js'
 import { fakeSourceRequest } from './fake-source-request.js'
 import type { NovelSource } from '../../src/services/types.js'
 import type { SearchGroup } from '../../src/shared/wire.js'
-import { must } from '../support/fixture.js'
+import { html, must } from '../support/fixture.js'
 import { requestUrlOf } from '../support/fetch-input.js'
 
 const group = (id: string): SearchGroup => ({ sourceId: id, sourceName: id, status: 'verified', hits: [] })
@@ -67,7 +67,6 @@ function source(over: Record<string, unknown> = {}): NovelSource {
 }
 const LIST_HTML = '<html><body><div class="item"><h3><a href="/book/1">剑起长安</a></h3>' +
   '<p><a href="/zuozhe/a">青衫客</a></p></div></body></html>'
-const html = (text: string): Response => new Response(text, { headers: { 'content-type': 'text/html; charset=utf-8' } })
 
 /** 单源执行体的缺省组合：无缓存、代际恒 7 —— 单条用例只改自己关心的那一件。
  *  代际在这里就是常量：执行体只收**调用方算好的**代际值，不认识规则形状，所以这一层不必替

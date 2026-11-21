@@ -2,19 +2,6 @@
 
 Status: accepted
 
-legado 的 `exploreUrl`（一个源「有哪些分类」的声明）接**声明式两档**：`标题::URL` 多行（条目分隔是 `(&&|\n)+`，两种可混用可连续；每条按 `::` 切后只取前两段）与 JSON 条目数组（每项 `title` + `url`）。**脚本档（`@js:` / `<js>`）后置**：解析器如实返回空并把形态交回调用方，导入侧点名「该源在书城无分类入口」，而不是静默当成「这源没有分类」。
+legado 的 `exploreUrl` 接**声明式两档**：`标题::URL` 多行（条目分隔是 `(&&|\n)+`，每条按 `::` 切后只取前两段）与 JSON 条目数组（每项 `title` + `url`）。**脚本档（`@js:` / `<js>`）后置**：解析器如实返回空并把形态交回调用方，导入侧点名「该源在书城无分类入口」，不静默当成「这源没有分类」。条目规则 `ruleExplore` 沿用与原生 `ruleFind` 同一套覆盖口径：判据只看列表规则一条，缺席就**整套**改用通用搜索规则，在场就整套用它——不逐字段回落。两方言落位后是同一个形状，差别只在地址语义：原生地址是填进源级模板 `{{kind}}` 的值，legado 地址本身就是那一类的完整模板；「用哪份模板」「首页裁不裁页码」跟着模板主人走。被否决：三形态一次做完（脚本档要先裁「什么时候重算分类」，而本仓缓存口径是指纹入文件名、不设清缓存出口）；只做原生不动 legado；`ruleExplore` 逐字段回落；认 `{标题: URL}` 对象形态。**代价**：分类词表是各站自造词的并集，不造同义词表、不按声明源数设门槛；词表规模由按源浏览 + 词表筛选框承担。**重开条件**（脚本档）：出现一条真要靠脚本才拿得到分类的常用源，并且「什么时候重算分类、由谁触发」先单独裁下来。
 
-条目规则 `ruleExplore` **沿用与原生 `ruleFind` 同一套覆盖口径**：判据只看列表规则一条，它缺席就**整套**改用通用搜索规则，在场就整套用它——**不逐字段回落**。两方言落位后是同一个形状（模型里的分类入口键），差别只在地址语义：原生的地址是填进源级模板的值，legado 的地址本身就是那一类的完整模板，所以「用哪份模板」「首页裁不裁页码」都跟着模板主人走，不跟着方言名走。
-
-被否决的做法：
-
-- **三形态一次做完（含脚本档）**：脚本档不是「多写一个分支」，它要先定「什么时候重算分类」——把脚本产出的分类列表放进缓存并留一个显式 clear 口是另一种口径，而本仓的缓存口径是**指纹入文件名、刻意不设清缓存出口**（`ADR-0012`）。那是一条该单独裁的口径，不该被这次改动顺手带过；没定它就先跑脚本，等于每次开书城都重跑一遍源作者的脚本。
-- **只做原生、不动 legado**：书城会对整个 legado 生态永久隐形——而矩阵里那一行从来记的是**欠账**不是裁决，把欠账读成裁决就是这次要改的东西。
-- **`ruleExplore` 逐字段回落**：半套（列表用发现面的、书名用搜索面的）会把「这一轮的条目出自两套规则」藏进结果里，谁也没从书名长什么样察觉的可能；整套切换的歪法至多是「整页取不到条目」，看得见。
-- **认 `{标题: URL}` 对象形态**：该形态不在本仓规则字段表的登记里。猜结构就是发明数据——本仓的口径是认不出就点名（`unknown` 一档），不是照最像的形状编一份。
-
-**代价**：接入后分类词表是各站自造词的并集，「奇幻」与「玄幻」是不是同一类没人替用户判（本仓不造同义词表）；也不按「被多少源声明」设门槛——阈值等于把某一次导入的形状焊成规则。词表规模由**按源浏览 + 词表筛选框**承担（浏览轴见 `ADR-0028`；本仓不造跨源分类并集）。
-
-**重开条件**（脚本档）：出现一条真要靠脚本才拿得到分类的常用源，并且「什么时候重算分类、由谁触发」先单独裁下来——那时接的是求值，口径已经有了。
-
-锚点：`src/services/explore-url.ts` 的 `parseExploreKinds` 与 `exploreKindsFormOf`；`src/services/normalize.ts` 的 `flattenDialect` 与 `rawExploreFields`；`src/services/bridge.ts` 的 `hitRuleOf`（整套回落的单点）与 `src/services/explore-face.ts` 的 `fetchKindPage`（「用哪份模板」「首页裁不裁页码」的判据主人，本篇那句跟着模板主人走就落在这里）；`src/services/participation.ts` 的 `exploreParticipates`；矩阵行 `c-explore-url`、`d-explore-three-forms`、`d-explore-fallback-search-rule`、`h-source-refresh-explore`。
+锚点：`src/services/explore-url.ts` 的 `parseExploreKinds` / `exploreKindsFormOf`；`src/services/normalize.ts` 的 `flattenDialect` / `rawExploreFields`；`src/services/bridge.ts` 的 `hitRuleOf`；`src/services/explore-face.ts` 的 `fetchKindPage`；`src/services/participation.ts` 的 `exploreParticipates`；矩阵行 `c-explore-url`、`d-explore-three-forms`、`d-explore-fallback-search-rule`、`h-source-refresh-explore`。

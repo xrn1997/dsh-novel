@@ -26,7 +26,7 @@ export type FakeSettingsDeps = SettingsDeps & {
   startBatchProbeJob: Mock
 }
 
-/** 阅读区束的可断言形态（views-wiring 的 ReaderView 套件用） */
+/** 阅读区束的可断言形态（`wiring-reader` 的 ReaderView 套件用） */
 export type FakeReaderDeps = ReaderDeps & {
   apiGet: Mock
   apiSend: Mock

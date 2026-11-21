@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PROD_HOST } from '../../src/client/reader-binding.js'
+import { FakeResizeObserver } from './reader-fakes.js'
 
 /**
  * 生产 DOM 平台缝的接线（`PROD_HOST`）：视口来源（scroll / resize / 内容尺寸变化）各归其位，
@@ -9,20 +10,12 @@ import { PROD_HOST } from '../../src/client/reader-binding.js'
  * 把 capture 去掉、把 ResizeObserver 的观察点删掉、把意图判据退回只看交互控件，别处不会红，这里会。
  */
 
-/** 假 ResizeObserver：记观察点、留回调；`disconnect` 之后的触发不再回调（与真实现同口径）。 */
+/** 假 ResizeObserver 的接线：读观察点、手动触发；卸载后的触发由假体自己吞掉。 */
 function fakeResizeObserver(): { observed: Element[]; trigger: () => void } {
-  const observed: Element[] = []
-  let notify: () => void = () => {}
-  let alive = true
-  class FakeResizeObserver {
-    constructor(cb: () => void) { notify = cb }
-    observe(target: Element): void { observed.push(target) }
-    disconnect(): void { alive = false }
-  }
   vi.stubGlobal('ResizeObserver', FakeResizeObserver)
   return {
-    observed,
-    trigger: () => { if (alive) notify() },
+    get observed() { return FakeResizeObserver.latest?.observed ?? [] },
+    trigger: () => { FakeResizeObserver.fire?.() },
   }
 }
 

@@ -4,14 +4,9 @@ import type { ShelfFilterKey } from './shelf-view-model.js'
 import { createStore } from './store.js'
 
 /**
- * 面板期书架投影：书架读取面、落架账与筛选/关键字在**面板存活期**共用一份。
- *
- * 为什么升格成模块级 store（裁决见 `ADR-0046`）：书架读取面、阅读器与搜索落架账必须共用一份；
- * 若 ShelfView 每次挂载整取、ReaderSession 为答一个 `onShelf` 布尔再整取、落架账只活组件挂载期，
- * 三个读者会各取一份、各丢一份——切去阅读器再回来，行上又写「＋ 加书架」，而书其实已在架上。
- *
- * 真相仍在服务端：`load` 每次挂载重取；加架由调用方并入落架账、删除由调用方对账。
- * 本模块不预读、不缓存正文/目录，面板卸载即丢。搜索轮次与任务快照不在这里（仍归各自的观察通道）。
+ * 面板期书架投影：书架读取面、落架账与筛选/关键字在**面板存活期**共用一份（`ADR-0046`）。
+ * 若三个读者各取一份、各丢一份，切去阅读器再回来，行上又写「＋ 加书架」，而书其实已在架上。
+ * 真相仍在服务端：`load` 每次挂载重取；本模块不预读、不缓存正文/目录，面板卸载即丢。
  */
 export interface PanelShelfState {
   /** `null` = 还没取过（骨架）；失败时是 `[]` + `error`，不拿空架冒充加载中 */
@@ -37,14 +32,11 @@ export interface PanelShelfDeps {
 }
 
 let inflight: Promise<PanelShelfRead> | null = null
-/** 投影代际：卸载、删除对账与新记入的加架都递增，起始更早的在途响应按它丢弃——
- *  卸载后旧请求不许回写新投影，删前/加前快照也不许把书架读数打回去。 */
+/** 投影代际：卸载、删除对账与新记入的加架都递增；起始更早的在途响应按它丢弃。 */
 let generation = 0
 
-/** 一发读取的落点。`ok` = 这一发**胜出代际**且读面成功；`failed` = 胜出但读面失败（投影已写成
- *  `[] + error`）；`stale` = 被代际作废，它读到的那一屏不是用户现在看的这一屏。
- *  调用方要区分「读面成功」与「这一发还算数吗」：只读 `panelShelf.get()` 会拿到**别人的**成功——
- *  作废的那发提前 resolve 时，投影里仍是上一发留下的读数。 */
+/** 一发读取的落点。`ok` = 胜出代际且读面成功；`failed` = 胜出但读面失败；`stale` = 被代际作废。
+ *  调用方要区分「读面成功」与「这一发还算数吗」——只读 `panelShelf.get()` 会拿到别人的成功。 */
 export type PanelShelfRead = 'ok' | 'failed' | 'stale'
 
 /** 作废旧读：三者都改变书架读取面；新的一发由下一次挂载 / `ensurePanelShelf` / `loadPanelShelf` 再起。 */
@@ -53,9 +45,8 @@ function invalidateReads(): void {
   inflight = null
 }
 
-/** 取一次书架（并发调用并到同一发）。成功后以服务端列表为基线，与既有落架账取并集
- *  （写成功过、服务端列表短暂滞后也不丢账）；删除由 `removePanelShelfBooks` 对账。
- *  落点是**这一发**的（`PanelShelfRead`），不是投影里此刻的读数——作废的那发也会 resolve。 */
+/** 取一次书架（并发调用并到同一发）。成功后以服务端列表为基线，与既有落架账取并集（写成功过、
+ *  列表短暂滞后也不丢账）。落点是**这一发**的（`PanelShelfRead`），不是投影里此刻的读数。 */
 export function loadPanelShelf(deps: PanelShelfDeps): Promise<PanelShelfRead> {
   if (inflight !== null) return inflight
   const gen = generation
@@ -79,11 +70,8 @@ export function loadPanelShelf(deps: PanelShelfDeps): Promise<PanelShelfRead> {
   return inflight
 }
 
-/** 书架还没取过、上次读面失败，或指定书不在已有列表里才取（阅读器问在架读数时用）。
- *  不传 `bookKey` 时只问「这一面板读过书架吗」——搜索结果页要的是整份落架基线，不是某一本书。
- *  已有投影覆盖所需且没有在途刷新就不付第二发。**在途那一发必须先等**：阅读器还要从
- *  同一份列表恢复进度，直接答缓存会读到上一次写回之前的旧位置。等完之后仍缺当前书或上次
- *  读面失败，再重取一次——列表可能停在最近一次加架之前，不能把「还没刷到」答成「不在架」。 */
+/** 书架还没取过、上次失败，或指定书不在列表里才取。不传 `bookKey` 时只问「这一面板读过书架吗」。
+ *  **在途那一发必须先等**：阅读器要从同一份列表恢复进度，直接答缓存会读到旧位置。 */
 export async function ensurePanelShelf(deps: PanelShelfDeps, bookKey?: string): Promise<void> {
   if (inflight !== null) await inflight
   const { books, error } = panelShelf.get()
@@ -93,9 +81,8 @@ export async function ensurePanelShelf(deps: PanelShelfDeps, bookKey?: string): 
   await loadPanelShelf(deps)
 }
 
-/** 阅读器视角的在架读数：读面失败照实 reject（问不到 ≠ 不在架），成功给当前书架列表。
- *  投影若在读面期间被卸载重置（`books` 回到 null），同样 reject——空架是「确实没有」，
- *  不是「还没问到」。视图不再自己重述这条不变量。 */
+/** 阅读器视角的在架读数：读面失败照实 reject（问不到 ≠ 不在架）；投影在读面期间被重置同样 reject。
+ *  视图不再自己重述这条不变量。 */
 export async function readPanelShelf(deps: PanelShelfDeps, bookKey: string): Promise<ShelfEntry[]> {
   await ensurePanelShelf(deps, bookKey)
   const { books, error } = panelShelf.get()
@@ -113,9 +100,7 @@ export function setPanelShelfKeyword(keyword: string): void {
   panelShelf.set({ keyword })
 }
 
-/** 进度写成功后的面板期回写：书架的消费位置现在由听书与阅读共用，播放层在听书时也要让
- *  当前存活的面板投影看到新位置（否则停在书架页听书，卡片要等重挂载才追上）。
- *  服务端仍是真相；这只改可丢弃投影，书不在列表里或列表还没取过就什么都不做。 */
+/** 进度写成功后的面板期回写：让当前存活的面板投影看到新位置。服务端仍是真相；这只改可丢弃投影。 */
 export function patchPanelShelfProgress(bookKey: string, chapterIndex: number, offsetRatio: number): void {
   const { books } = panelShelf.get()
   if (books === null) return
@@ -127,9 +112,7 @@ export function patchPanelShelfProgress(bookKey: string, chapterIndex: number, o
   panelShelf.set({ books: next })
 }
 
-/** 落架成功：记进面板期账本（按地址去重；幂等 PUT 的语义是「这一发成功过」），并作废
- *  起始更早的在途读面——否则加架前的快照落地会把这本书仍判成「不在架」。只有真新增那一发
- *  才抬代际：同一地址第二次记入时，早于第一次记入的那些读面已经被作废过一轮了。 */
+/** 落架成功：记进面板期账本（按地址去重），并作废起始更早的在途读面。只有真新增那一发才抬代际。 */
 export function markPanelShelfLanded(urls: Iterable<string>): void {
   const current = panelShelf.get().landed
   const next = new Set(current)
@@ -142,9 +125,7 @@ export function markPanelShelfLanded(urls: Iterable<string>): void {
   panelShelf.set({ landed: next })
 }
 
-/** 删除成功后对账：架位与落架账一起移除（否则删掉再加的书会被旧账误标成「已在架」）。
- *  起始早于这次删除的在途读面带的是删前快照，落地会把书带回来——按代际整发作废，
- *  需要时由下一次挂载 / `ensurePanelShelf` 重取。 */
+/** 删除成功后对账：架位与落架账一起移除；起始早于这次删除的在途读面按代际整发作废。 */
 export function removePanelShelfBooks(bookKeys: Iterable<string>): void {
   const keys = new Set(bookKeys)
   if (keys.size === 0) return

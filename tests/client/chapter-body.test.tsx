@@ -6,7 +6,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { chapterContentToText, splitParagraphs } from '../../src/shared/chapter-text.js'
 import { readingPositionAt } from '../../src/client/tts/reading-position.js'
 import { ChapterBody } from '../../src/client/views/ChapterBody.js'
-import { chapterBodyProjection } from '../../src/client/views/ReaderView.js'
+import { chapterBodyProjection } from '../../src/client/util.js'
 import type { ChapterContent, ContentNode, ContentTag, ReadingTarget } from '../../src/client/views/types.js'
 import { pick, must } from '../support/fixture.js'
 
@@ -60,10 +60,10 @@ describe('文字面（kind:text）', () => {
   })
 })
 
-describe('剥重复章名后的段号（ReaderView 投影 + ChapterBody 偏移）', () => {
+describe('剥重复章名后的段号（正文投影 + ChapterBody 偏移）', () => {
   // 章名在阅读器里由 h2 单独渲染，正文首行那句重复的章名在送渲染前就剥掉；但播放层念的是
   // **原样正文**（含被剥的那一行），屏上段号必须补回它占掉的播放单元数，否则「从本段听」
-  // 与探针起播系统性早一段。投影住 `ReaderView` 的 `chapterBodyProjection`，偏移由
+  // 与探针起播系统性早一段。投影住 `client/util.ts` 的 `chapterBodyProjection`，偏移由
   // `ChapterBody` 的 `paragraphBase` 逐行加上——两半在这里一次测到。
   it('首行 = 章名 + 三段正文：段号从 1 起，被剥的 0 号单元不点亮，命中第二行', () => {
     const body = chapterBodyProjection({ kind: 'text', text: '第一章\n正文一\n正文二\n正文三' }, '第一章')

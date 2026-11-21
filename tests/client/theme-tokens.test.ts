@@ -1,10 +1,8 @@
-import { readFileSync, readdirSync } from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { withoutComments } from '../without-comments.js'
 import { NOVEL_CSS } from '../../src/client/styles.js'
 import { must } from '../support/fixture.js'
+import { clientSources } from '../support/source-scan.js'
 
 /**
  * 宿主设计 token 词表守卫（防「引用了宿主根本不存在的 token」这类静默失败）：不存在的别名
@@ -72,21 +70,6 @@ const HOST_TOKENS = new Set<string>([
   "--dsw-static-red-900",
 ])
 
-const clientDir = fileURLToPath(new URL('../../src/client/', import.meta.url))
-
-function clientSources(): Array<{ file: string; text: string }> {
-  const out: Array<{ file: string; text: string }> = []
-  const walk = (dir: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const p = path.join(dir, entry.name)
-      if (entry.isDirectory()) walk(p)
-      else if (/\.tsx?$/.test(entry.name)) out.push({ file: path.relative(clientDir, p).split(path.sep).join('/'), text: readFileSync(p, 'utf8') })
-    }
-  }
-  walk(clientDir)
-  return out
-}
-
 describe('宿主 token 词表守卫（--dsw-* 必须是宿主真名）', () => {
   const sources = clientSources()
 
@@ -105,13 +88,15 @@ describe('宿主 token 词表守卫（--dsw-* 必须是宿主真名）', () => {
     expect(bad, `引用了宿主不存在的 token（会静默落回 fallback）：\n${bad.join('\n')}`).toEqual([])
   })
 
-  it('NOVEL_CSS 里引用的 --dsw-* 都在宿主词表内', () => {
-    const bad: string[] = []
-    for (const m of NOVEL_CSS.matchAll(/var\(\s*(--dsw-[\w-]+)/g)) {
-      const token = must(m[1], '正则捕获组 1（--dsw-* token 名）')
-      if (!HOST_TOKENS.has(token)) bad.push(token)
-    }
-    expect(bad).toEqual([])
+  it('token 名必须是字面量：`--dsw-${…}` 这类拼接引用扫不到，一并禁掉', () => {
+    // 字面量是这一门唯一能核的形态（运行时拼出来的名字既对不上词表，源码侧也看不出是哪个 token）；
+    // 禁掉拼接式引用，比留一条核不到的缝更诚实。
+    const bad = sources
+      .filter(({ text }) => /--dsw-\$\{/.test(withoutComments(text)))
+      .map(({ file }) => file)
+    expect(bad, `token 名不许动态拼接（本门只认字面量）：\n${bad.join('\n')}`).toEqual([])
+    // 正控：判据对样例有效——否则「扫不到」可能只是正则写坏了
+    expect(/--dsw-\$\{/.test('var(--dsw-${kind})')).toBe(true)
   })
 
   it('词表自身没有「仅单态存在」的假 token（border-l / bg-layer-4 是反例样本）', () => {

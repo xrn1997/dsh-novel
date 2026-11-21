@@ -1,5 +1,5 @@
 /** 阅读器 / 目录 / 注释 / 导出 / 入架一问文案的唯一住址。键前缀 `reader.`。
- *  zh 逐字照录屏上现有文案（测试钉子在 reader-* / views-wiring / chapter-body / ui-system），
+ *  zh 逐字照录屏上现有文案（测试钉子在 reader-* / wiring-reader / chapter-body / ui-system），
  *  en 只镜像同一批键。书内正文、图片替代文字与导入告警原文是书的数据，不进这里。
  *  阅读偏好档位名（`prefs.*`）与配置页同住 settings.ts。 */
 export const READER_ZH = {

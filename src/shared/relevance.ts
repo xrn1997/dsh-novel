@@ -1,20 +1,13 @@
 import type { Relevance, SearchHit } from './wire.js'
 
 /**
- * 相关性判据：一条命中与本轮关键词的关系。唯一实现，三个消费点各调一次（搜索结果页、
- * 书籍详情浮层那次跨源搜索、AI 工具面 `dshnovel_search`）——判据若在两半各写一份，
- * 用户看到的「相关」与模型看到的「相关」就会分叉（同 `participation.participates` 的手法：
- * 一条谓词，多个 adapter 消费）。
+ * 相关性判据：一条命中与本轮关键词的关系。唯一实现，搜索结果页、详情浮层跨源搜索与 AI 工具面各调一次——
+ * 两半各写一份，「相关」就会分叉。家必须在 `shared/`：浏览器半够不到 `services/**`，wire 只声明形状。
  *
- * 家必须在 `src/shared/`：浏览器半现下只 import `shared/wire.js`，`services/**` 不在它的可达面里，
- * 而这份判据 Node 半与浏览器半都要用。`wire.ts` 只声明形状，算法住这里，wire 的零运行时依赖不破。
- *
- * 判据不是本仓发明的新语义：忽略大小写的 contains，本仓只在此之上分三档。
- * 同一判据的对照读数与本仓两条偏离及其理由，都住矩阵行 `d-search-relevance` 的 note（那一行是唯一主人），这里不复述。
+ * 判据即忽略大小写的 contains，本仓只在其上分三档；对照读数与两条偏离住矩阵行 `d-search-relevance`，不复述。
  */
 
-/** 参与比较的全部「装饰」字符：空白、成对的书名号类括号、中英标点。写宽一档（含全部非字母数字）
- *  会把「冰魔女契约」这种少字形态判成不等——那是另一条放行链，此处不预设。 */
+/** 参与比较的装饰字符：空白、书名号类成对括号、中英标点；写宽会把少字形态判成不等。 */
 const DECORATION = /[\s《》〈〉「」『』【】[\]()（）｛｝·、,，.。:：;；!！?？\-—–_~*'"“”‘’/\\|+]/g
 
 /** 三档的序读数：排序面读这一份，别处不许再写第二份 */
@@ -48,9 +41,8 @@ export type MarkedHit = { hit: SearchHit; relevance: Relevance }
 export type KeptHit = MarkedHit & { relevance: 'exact' | 'contains' }
 export interface RelevancePartition { kept: KeptHit[]; suspect: MarkedHit[] }
 
-/** 一趟命中分成「默认视野」与「折叠区」：`suspect` 只换位置不删；空关键词＝没有这一维（全归 kept）——
- *  空串是任何串的子串，让空串参与比较会把整轮悄悄判成「全命中」。
- *  「为什么折叠而不丢弃」的裁决只住 `ADR-0032`，这里不复述。 */
+/** 一趟命中分成默认视野与折叠区：suspect 只换位置不删；空关键词＝没有这一维——
+ *  空串是任何串的子串，参与比较会把整轮判成全命中（折叠而非丢弃的裁决住 `ADR-0032`）。 */
 export function partitionByRelevance(keyword: string, hits: readonly SearchHit[]): RelevancePartition {
   const marked = hits.map((h) => ({ hit: h, relevance: relevanceOf(keyword, h) }))
   const kept = marked.filter((m): m is KeptHit => m.relevance !== 'suspect')

@@ -19,20 +19,12 @@ import { navigate, routeStore, useStore } from '../store.js'
 import { EmptyState, ProgressBar, SearchIcon, searchPct, StatusBadge } from './bits.js'
 import type { MergedBook, SearchHit } from './types.js'
 
-/** 搜索：提交一轮**后台任务**（Node 半跑完并持有整轮结果）+ 按游标轮询增量渲染 +
- *  默认按书一行、逐源那一档降级成页尾折叠（失败源折叠仍在它里面）。
- *  为什么两条轴都要在：整库逐源铺开是翻不完的滚动路径，而「源好坏各自可见」是这条链路的排查轴——
- *  降级不是删除，删掉它就是把排查轴换成猜测轴。
- *  呈现口径不变：进度一条线 + 灰字、组头=源名+状态徽标+灰字计数、命中行 hover 行式、
- *  失败源收一行 details。测试钉子：placeholder「书名 / 作者」、form aria-label「搜索书籍」
- *  （getByRole('form') 依赖）、空态两分支文案原文。
- *  在途循环归 `client/search-job.ts`：本组件不持有批请求，只 `POST search/job` + 读
- *  `search/job-status`。宿主一次只渲染一个视图，切 tab 即卸载；循环若留在这里，结果会随组件
- *  清零、整轮重打。切走只是没人看，切回来从 `since=0` 重拉一遍即可恢复
- *  （本轮真实参搜数、已完成数、命中分组全在快照里）。
- *  陈旧回调防线在 `search-job`：轮次身份就是服务端 jobId，迟到的上一轮响应在那里按身份丢弃。
- *  轮级派生的住址也不在本文件：收口计数住 `shared/round-summary.ts`，两条轴的行身份与逐源回读
- *  住 `search-view-model.ts`。 */
+/** 搜索：提交一轮**后台任务** + 按游标轮询增量渲染 + 默认按书一行、逐源那一档降级成页尾折叠。
+ *  两条轴都要在：整库逐源铺开翻不完，而「源好坏各自可见」是这条链路的排查轴——降级不是删除。
+ *  在途循环归 `client/search-job.ts`：本组件不持有批请求，切 tab 卸载不丢整轮。
+ *  陈旧回调防线在 `search-job`（轮次身份 = jobId）；轮级派生住 `shared/round-summary.ts`，
+ *  两条轴的行身份与逐源回读住 `search-view-model.ts`。测试钉子：placeholder「书名 / 作者」、
+ *  form aria-label「搜索书籍」、空态两分支文案。 */
 
 export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): ReactNode {
   const t = useCopy()
@@ -40,32 +32,25 @@ export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): 
   const initialKeyword = route.name === 'search' ? route.keyword ?? '' : ''
   const [keyword, setKeyword] = useState(initialKeyword)
   const { round, error, submit, cancel } = useSearchJob(deps, t)
-  /** mount 提交的一次性闸：ref 防 StrictMode 同实例二次 effect；防重挂载的防线不在这里，
-   *  在下面提交后立刻把 route.keyword 摘掉。 */
+  /** mount 提交的一次性闸：ref 防 StrictMode 同实例二次 effect。 */
   const consumed = useRef<string | null>(null)
   useEffect(() => {
     if (initialKeyword === '' || consumed.current === initialKeyword) return
     consumed.current = initialKeyword
     void submit(initialKeyword)
-    // route.keyword 只消费一次，提交即摘除：routeStore 是跨卸载存活的现场（store.ts），
-    // 不摘的话「退出小说界面再进（route 还带着关键词重新挂载）」与「从书架新鲜跳入」在
-    // 挂载时不可分——重挂载会无条件重新提交，而服务端搜索读面是单槽（services/search-job.ts
-    // 的 start：新提交即替换，旧轮在跑则被杀），整轮从头重搜。摘除后重挂载
-    // 只剩 search-job.ts 的「挂载即恢复」一条路：读 since=0 快照、零提交。
+    // route.keyword 只消费一次，提交即摘除：routeStore 跨卸载存活，不摘的话重挂载会重新提交，
+    // 而服务端搜索读面是单槽（新提交即替换、旧轮被杀）。摘除后重挂载只剩 search-job 的「挂载即恢复」。
     navigate({ name: 'search' })
   }, [])   // eslint-disable-line react-hooks/exhaustive-deps
-  /** 恢复轮次时回填搜索框（每挂载至多一次、只在框为空时）：重挂载 route 已无关键词，
-   *  恢复出的结果若配一个空输入框，看起来像没搜过；不抢用户正在输入的内容。 */
+  /** 恢复轮次时回填搜索框（每挂载至多一次、只在框为空时）：结果配一个空输入框会像没搜过。 */
   const filled = useRef(false)
   useEffect(() => {
     if (round === null || filled.current || keyword !== '') return
     filled.current = true
     setKeyword(round.keyword)
   }, [round])   // eslint-disable-line react-hooks/exhaustive-deps
-  /** 落架基线：投影随面板卸载清空，而 `routeStore` 跨卸载存活（`client/store.ts`）——面板重开
-   *  直接落在搜索结果页时，投影里还没有服务端书架列表，已在架的书会重新写成「＋ 加书架」，
-   *  「都加架」还会把已在架的架位再 PUT 一遍并报成「已加 N 个」（裁决见 `ADR-0046`）。
-   *  只为基线、不为某一本书，故不带 bookKey；投影读过就不再付第二发。 */
+  /** 落架基线：投影随面板卸载清空，而 routeStore 跨卸载存活——面板重开时已在架的书会重写成
+   *  「＋ 加书架」，故先读一次服务端书架（`ADR-0046`）；只为基线，不带 bookKey。 */
   useEffect(() => {
     void ensurePanelShelf({
       apiGet: deps.apiGet,
@@ -75,15 +60,13 @@ export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): 
 
   const running = round !== null && round.running
   const progress = round !== null && round.running ? { done: round.done, total: round.total } : null
-  /** 一轮的现场：memo 身份 = (轮次 id, 关键词, 组数)——组按源只 emit 一次、本轮只增不减，
-   *  三者不变现场就不变；换轮必换 id，不存在「同 id 少了几组还被当没变」的形状
-   *  （累积器由 `client/search-job.ts` 单点持有）。派生本身在 `search-view-model.deriveRound`。 */
+  /** 一轮的现场：memo 身份 = (轮次 id, 关键词, 组数)——组只增不减，三者不变现场就不变；
+   *  累积器由 `client/search-job.ts` 单点持有，派生在 `search-view-model.deriveRound`。 */
   const view = useMemo<RoundView | null>(() => (round === null ? null : deriveRound(round)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [round?.id, round?.keyword, round?.groups.length])
-  /** 落架账（哪些架位落过）住 `panel-shelf.ts`；加架排队（哪一本在途、两条入口）住
-   *  `search-landing.ts`。写口仍是 `addShelfSeat`，视图只把它包成 `addSeat` 注入，
-   *  并保留回执的措辞与通道。 */
+  /** 落架账住 `panel-shelf.ts`，加架排队住 `search-landing.ts`；写口仍是 `addShelfSeat`，
+   *  视图只把它包成 `addSeat` 注入并保留回执措辞。 */
   const landing = useSearchLanding({ addSeat: (input) => addShelfSeat(input, deps) })
   const summary = view !== null && !running ? view.summary : null
   // 空参与集与「搜了没命中」是两件事：前者 total=0（源全停用/未导入），后者有源但零分组
@@ -98,15 +81,7 @@ export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): 
     : summary === null || summary.searched === 0 || view === null
       ? null
       : <>
-          {/* 视野收过一条时收口必须两个数并报：只报 hits 与默认视野对不上号。
-              三个读数各数各的——家=搜过的组数、条=逐源命中（一行一条，一家可能给两条）、
-              本=归并后的书目（收口里「本」只许出现在并书读数上）；「并成 N 本」在按书成了
-              默认视图后必须报，否则一轮并掉多少无人知道（工具面恒报 N 本，两边不许不对称）。
-              单位律的唯一住址是 CONTEXT 的「作品视图（按书）」词条，这里只落字不复述判据。
-              语法不在视图里拼：整句模板与子句键住 `copy/search.ts`，按模板组装成段的唯一实现是
-              `copy/search-summary.ts` 的 `searchSummarySegments`；这里只把数字交给它。emphasis 段
-              （搜过/命中/并成/未响应的数字）渲染成 b，其余段是纯文本节点（包 span 会让 getByText
-              命中子元素，整句的父容器反而查不到）。 */}
+          {/* 视野收过一条时收口必须两个数并报：只报 hits 与默认视野对不上号。 */}
           {searchSummarySegments(t, {
             searched: summary.searched,
             hits: summary.hits,
@@ -148,8 +123,7 @@ export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): 
           {live === null && !running ? null : (
             <div className="novel-prog-text">
               <span>{live}</span>
-              {/* 停止 = 不再往下搜，**已搜出来的全部留下**（服务端只进终态、不清结果）；
-                  钮只在跑着时出现，收口行不留「再点一下」的死钮 */}
+              {/* 停止 = 不再往下搜，**已搜出来的全部留下**（服务端只进终态、不清结果）。 */}
               {running ? <button type="button" className="novel-btn sm" onClick={cancel}>{t('search.cancel')}</button> : null}
             </div>
           )}
@@ -162,9 +136,7 @@ export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): 
             ? <EmptyState title={t('search.empty.noSources.title')} hint={t('search.empty.noSources.hint')} />
             : <EmptyState title={t('search.empty.noHits.title')} hint={t('search.empty.noHits.hint')} />
         )}
-        {/* 按书在前：一本一行。整轮都被判 suspect 时这一档是空的（归并只收 kept），
-            空视图不接管说话权——账由下面那一档与收口行报（收口的「并成 0 本」也在报这笔账），
-            读起来不是「没有结果」。 */}
+        {/* 按书在前：一本一行；整轮都被判 suspect 时这一档是空的。 */}
         {view !== null && renderBooks(view.bookViews, view.merged.total, deps, landing, t)}
         {/* 逐源那一档不删、降级到页尾折叠：各家给了几条、哪一家未响应，仍是排查轴 */}
         {view !== null && view.parts.length !== 0 && (
@@ -178,13 +150,9 @@ export function SearchView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): 
   )
 }
 
-/** 命中行：行内双动作——主按钮 = 加架并直接阅读；「＋ 加书架」只加架。
- * 结构：容器 .novel-row + 主钮 .novel-row-main + 兄弟动作钮（**不嵌套**）。
- * apiSend 经 deps 透传（行内接线同样可被测试驱动）。
- * 入架态由调用方给的 `landing` 给（账住在行之上：这一行会随展开区收起而卸载，自己记的账
- * 活不过一次折叠；同一架位也可能从「都加架」进来，两处各记一份就会互相看不见）。
- * url 守卫：`null` 渲染不可点行（wire 给这一格的就是 `string | null`）；空串 `''` **产不出来**（命中行的 `url` 只出自服务端
- * 搜索链，空输入在那里就已落 `null`），于是「无身份」在浏览器半只有一种形状可认。 */
+/** 命中行：行内双动作——主按钮 = 加架并直接阅读；「＋ 加书架」只加架。结构：容器 .novel-row +
+ *  主钮 .novel-row-main + 兄弟动作钮（**不嵌套**）。入架态由 `landing` 给（账在行之上，行会随折叠
+ *  卸载）。url 为 null 渲染不可点行（空串产不出来）。 */
 function HitRow({ sourceId, hit, deps, landing }: {
   sourceId: string; hit: SearchHit; deps: RowActionDeps; landing: SearchLanding
 }): ReactNode {
@@ -200,18 +168,14 @@ function HitRow({ sourceId, hit, deps, landing }: {
     )
   }
   const url = hit.url
-  /** 单行加架：落架记账归 `landing`，失败上报留在行上（这一发的措辞属于视图），两种结局都交回
-   *  调用方（点行阅读要据此照走导航）。失败不静默：这是用户明确点出来的写操作，吞掉它等于让
-   *  「＋ 加书架」看似没反应。 */
+  /** 单行加架：落架记账归 `landing`，失败上报留在行上；两种结局都交回调用方。失败不静默。 */
   const add = async (): Promise<ShelfAddOutcome> => {
     const outcome = await landing.add({ sourceId, hit })
     if (!outcome.ok) deps.pushError(t('search.shelf.addFailed', { detail: describeError(outcome.error, t) }))
     return outcome
   }
-  /** 点行直接阅读：先加架（进度保存依赖书架条目）再进阅读器。导航是**两种结局**的收尾：
-   *  加架失败的回执已由 `add` 报过；而 `add` 自己虽不抛（`addShelfSeat` 把成败收成返回值），
-   *  它的记账/上报回调可能抛——拒绝分支不接住，导航就被一条回调挡在门外，rejection 还会逃成
-   *  无人处理的一发。 */
+  /** 点行直接阅读：先加架（进度保存依赖书架条目）再进阅读器。导航是两种结局的收尾——
+   *  `add` 不抛，它的记账/上报回调可能抛；不接住，导航就被一条回调挡在门外。 */
   const read = (): void => {
     const goRead = (): void => { navigate({ name: 'reader', sourceId, bookKey: url, title: hit.title }) }
     void add().then(goRead, goRead)
@@ -222,8 +186,7 @@ function HitRow({ sourceId, hit, deps, landing }: {
         <span className="novel-hit-title">{hit.title}</span>
         <span className="novel-hit-sub">{sub}</span>
       </button>
-      {/* 兄弟入口没有后续动作：回执回调自己抛错时这一发只许就地咽掉（add 的失败已上报过），
-          不要裸 `void add()`，那会漏成无人处理的 rejection。 */}
+      {/* 兄弟入口没有后续动作：回执回调抛错时就地咽掉（add 的失败已上报过）。 */}
       <button className="novel-btn sm" disabled={landing.isLanded(hit)} onClick={() => { void add().catch(() => undefined) }}>
         {landing.isLanded(hit) ? t('search.shelf.added') : t('search.shelf.add')}
       </button>
@@ -231,16 +194,10 @@ function HitRow({ sourceId, hit, deps, landing }: {
   )
 }
 
-/** 按源那一档（如今是页尾折叠里的内容）：逐源分组，默认视野只摆 kept（判据与档序的唯一住址在
- *  `shared/relevance`，这里只消费页面顶层算好的那一份分区），suspect 收进组内一行折叠——
- *  「一条都没被判掉」与「判掉了但还在」是两件事，后者写成前者就等于空结果冒充失败；
- *  折叠区里的行保留全部动作（HitRow 一字不动），判为疑似不夺走「读这本 / ＋架」。
- *  计数两个数都给、单位是**条**不是本（这一档数的是这一家给出的行，律见 CONTEXT 的「作品视图（按书）」）：
- *  只报相关数会让人以为这一家就给了这么多条。
- *  行与行 key 由轮级派生预计算（`search-view-model.ts` 的 `GroupView`，算式住 `rowKeys`）：档序会挪位，
- *  纯下标 key 在重排时把一行的本地入架态串到别的书上。
- *  失败组也留在 `groupViews` 里，由本函数按 `error` 挪进失败折叠——派生不替视图决定摆哪一档；
- *  失败源折叠的呈现口径（点名 code / message / statusDetail）原样保留，仅容器换简约版类。 */
+/** 按源那一档（页尾折叠内容）：逐源分组，默认视野只摆 kept（判据与档序在 `shared/relevance`），
+ *  suspect 收进组内折叠——「判掉了但还在」不是「一条都没判掉」。计数两个数都给、单位是**条**。
+ *  行 key 由轮级派生预计算（`search-view-model` 的 `GroupView`），纯下标 key 会在重排时串行态。
+ *  失败组也留在 `groupViews` 里，由本函数按 `error` 挪进失败折叠。 */
 function renderGroups(groupViews: GroupView[], deps: RowActionDeps, landing: SearchLanding, t: Translate): ReactNode {
   const hits = groupViews.filter((gv) => gv.partition.group.error === undefined)
   const failed = groupViews.filter((gv) => gv.partition.group.error !== undefined)
@@ -302,16 +259,10 @@ function renderGroups(groupViews: GroupView[], deps: RowActionDeps, landing: Sea
   )
 }
 
-/** 按书默认视图：一本一行；逐源那一档不删、降级到页尾折叠（见 `renderGroups`）。
- *  现场是页面顶层 memo 化的那一份（`RoundView.bookViews`）：逐源行、行 key 与架位全集都已随轮级派生
- *  算齐——这一档不在渲染路径里重算自己那趟，SSE 帧与击键才不会各付一遍整轮归并。
- *  空视图**不接管说话权**：整轮都被判 suspect 时归并给出 0 本，这里就一物不摆——
- *  「这一轮到底有没有结果」由空态分支按分组判，账目由按源那一档与收口行报（含收口的「并成 0 本」），
- *  把「判掉了」写成「没有结果」就是空结果冒充失败（本仓定的最高罪）。
- *  两条轴的数天生不等，且不许掰平：这一档数的是**本**（归并后的书目），按源那一档与收口行数的是
- *  **条**（逐源命中，一行一条）——差额正是每一行那个「N 家源」吃进去的东西。
- *  超限那一行报出全量本数（`total`）：只列前 SEARCH_BOOKS_CAP 而不说本轮共几本，
- *  就是把「还有更多」读成「到此为止」。 */
+/** 按书默认视图：一本一行；逐源那一档不删、降级到页尾折叠（见 `renderGroups`）。现场是页面
+ *  顶层 memo 的那一份（`RoundView.bookViews`），渲染路径不重算。空视图**不接管说话权**：整轮
+ *  都被判 suspect 时这里一物不摆；两条轴的数天生不等（这档数**本**，按源档数**条**）。
+ *  超限那行报出全量本数（`total`）——只列前 SEARCH_BOOKS_CAP 会把「还有更多」读成「到此为止」。 */
 function renderBooks(bookViews: BookView[], total: number, deps: RowActionDeps, landing: SearchLanding, t: Translate): ReactNode {
   if (bookViews.length === 0) return null
   return (
@@ -324,38 +275,26 @@ function renderBooks(bookViews: BookView[], total: number, deps: RowActionDeps, 
   )
 }
 
-/** 按书视图的一行：行头主钮（书名 + 「N 家源」读数 + 尾巴上的「展开 N 条」）+ 兄弟「都加架」，
- *  展开区是这一行的第二块。
- *  为什么不用 `<details>`：它收起时不渲染非 summary 子元素——动作钮只能作为兄弟占掉行宽，
- *  展开区就少一条宽度，而整本逐源行还得先渲染进 DOM 再藏起来（默认视图上限 `SEARCH_BOOKS_CAP` 本）。
- *  换成主钮 + `aria-expanded`：展开区整幅铺开、收起时一物不摆，两颗钮在无障碍树里平级、
- *  名字互不污染（钮塞进 summary 的那条路，名字里会多出「都加架」要盖）。
- *  行形状沿用命中行那条口径（容器 + 主钮 + 兄弟动作钮，钮里不套钮），不给这一轴新造第三种。
- *  刻意不给「读这本」：本仓没有能判源好坏的读数（探针 verified 只证搜索面），书行替用户选一家
- *  就是把猜测写进界面——动作全在展开后的逐源行里（同一裁决见 `shared/merge-by-book.ts`）。
- *  无障碍名走内容拼接（不写 aria-label）：行上可见的就是「书名 + 作者 · N 家源 + 展开 N 条」，
- *  再抄一份进 aria-label 就是给同一批读数第二个主人——改了可见字忘了改名字即分叉。
- *  尾巴的字随状态翻（展开↔收起），可见标签因此恒含在名字里；箭头是同一状态的第二个读数。 */
+/** 按书视图的一行：行头主钮（书名 + 「N 家源」 + 「展开 N 条」）+ 兄弟「都加架」，展开区是第二块。
+ *  不用 `<details>`：它收起时不渲染非 summary 子元素，动作钮只能占行宽，展开区还得先渲染再藏。
+ *  改为主钮 + `aria-expanded`；行形状沿用命中行口径（容器 + 主钮 + 兄弟动作钮，钮里不套钮）。
+ *  刻意不给「读这本」：本仓没有能判源好坏的读数，书行替用户选一家就是把猜测写进界面。
+ *  无障碍名走内容拼接（不写 aria-label），改可见字时名字跟着变，不立第二个主人。 */
 function BookRow({ book, rows, keys, seats, deps, landing }: {
   book: MergedBook; rows: RowRef[]; keys: string[]; seats: Set<string>; deps: RowActionDeps
   landing: SearchLanding
 }): ReactNode {
   const t = useCopy()
   const [open, setOpen] = useState(false)
-  // 这一本的架位全集与「全落过了」的读数：钮的三态由后者决定，不另立一份 state
-  // （架位全集由轮级派生给，`BookView.seats`；在途读数逐本记在 `landing.adding`）
+  // 这一本的架位全集与「全落过了」的读数：钮的三态由后者决定（架位由轮级派生给）。
   const allLanded = seats.size > 0 && [...seats].every((id) => landing.landed.has(id))
   const adding = landing.adding.has(bookRowKey(book))
-  /** 只发**有地址**且**这一轮还没落过架**的行：无 url 的命中在行上本就不给动作（进不了架也
-   *  进不了阅读器），替它发一发空架位 PUT 就是写进一条没有书面的架位，还要报「已加」；已落过的
-   *  那条（多半是用户先单加过一条）再发一遍，就是把同一件事写成两次。选行、排队与在途读数住
-   *  `search-landing`，三笔回执账（新落架 / 仍缺 / 无地址）的算式住 `search-view-model.addAllReceipt`；
-   *  这里只接线与选通道：加成的报成功，没加成的报失败，没发出去的单独点名（没试过不是失败）。 */
+  /** 只发**有地址**且**这一轮还没落过架**的行：无 url 的不给动作，已落过的不重复写。选行、排队与
+   *  在途读数住 `search-landing`，三笔回执账住 `search-view-model.addAllReceipt`；这里只接线与选通道。 */
   const addAll = (): void => {
     void (async () => {
       const receipt = await landing.addAll(bookRowKey(book), rows)
-      // 零加成不许走成功通道：整行没有地址与全部 PUT 失败读出来都是 0，「已加 0 个架位：X」等于给
-      // 一次没发生的写入报喜。没加成的交代由下面两条错误回执各说各的。
+      // 零加成不许走成功通道：没发生的写入不报喜，没加成的交代由下面两条错误回执各说各的。
       if (receipt.newly.length > 0) {
         deps.pushOk(plural(t, receipt.newly.length, 'search.book.added.one', 'search.book.added.other', { n: receipt.newly.length, title: book.title }))
       }
@@ -375,8 +314,7 @@ function BookRow({ book, rows, keys, seats, deps, landing }: {
         onClick={() => { setOpen(v => !v) }}
       >
         <strong title={book.title}>{book.title}</strong>
-        {/* 「N 家源」读 sourceCount（去重后的源），不是行数：读行数会把一家撞两种写法的源报成两家。
-            作者与家数是两段独立读数而非一条拼好的串：作者那一段会省略号，捆在一起就把家数也吃掉。 */}
+        {/* 「N 家源」读 sourceCount（去重后的源），不是行数。 */}
         <span className="novel-muted novel-book-author" title={book.author ?? undefined}>
           {shortAuthor(book.author ?? t('search.book.unknownAuthor'), t)}
         </span>

@@ -4,24 +4,17 @@ import { UnsupportedRuleError } from './errors.js'
 /**
  * JSONPath 子集（口径：自实现，禁 npm 依赖）。
  *
- * 支持：`$`、`.name`、`..name`（递归下降，按文档序收集）、`[n]`（下标，**负数从尾数**）、
- * `[a:b]`（半开切片 [a,b)，负数从尾数）、`[*]`（全部）、`[]`（与 `[*]` 同义）、
- * 以及输入里的冗余点形态 `.[*]`（`[` 前允许一个 `.`）。
+ * 支持：`$`、`.name`、`..name`（递归下降，按文档序收集）、`[n]`（下标，**负数从尾数**）、`[a:b]`（半开切片
+ * [a,b)）、`[*]`（全部）、`[]`（同 `[*]`）、冗余点形态 `.[*]`。拒绝过滤器 `[?(…)]`、脚本 `[(…)]`、`@`/`&`
+ * 特殊符号与任何不匹配上述语法的内容（宁炸不猜 → UnsupportedRuleError，段级定位）。
  *
- * 明确拒绝（宁炸不猜 → UnsupportedRuleError，段级定位）：
- * 过滤器 `[?(…)]`、脚本 `[(…)]`、`@`/`&` 特殊符号、以及任何不匹配上述语法的内容。
- *
- * 结果映射（取值规约：**取位失败 → Miss；解析到空集合 → 空 List**）：
- * - 路径零命中 / 解析到 null/undefined / 下标越界 / 切片裁空 → Miss；
- * - 空数组、键存在且值为 `[]`（空集合已解析）→ List{items:[]}（合法空，区别于 Miss）；
- * - 非空数组 → List；直接标量（string/number/bool）→ Value。
- * 元素转字符串：字符串原样；对象/数组 JSON.stringify；number/bool → String()。
+ * 结果映射（**取位失败 → Miss；解析到空集合 → 空 List**）：零命中 / null / 下标越界 / 切片裁空 → Miss；
+ * 键存在且值为 `[]` → `List{items:[]}`；非空数组 → List；直接标量 → Value。元素转字符串：字符串原样；
+ * 对象/数组 JSON.stringify；number/bool → String()。
  */
 
-/** `Json:`/裸路径归一：JSONPath 从根起算，无 `$` 视为根相对路径补 `$.`
- *  （`data[*]` → `$.data[*]`，`.data[*]` → `$.data[*]`——前导点只补 `$`，补成 `$..data[*]`
- *  会把根相对路径变成递归下降）；`@` 开头保持原样，由 tokenizer 如实拒绝。
- *  接受裸路径是本仓有意的放宽口径——严格形态要求路径从 `$` 起算，这里补根后照常求值。 */
+/** `json:`/裸路径归一：JSONPath 从根起算，无 `$` 视为根相对路径补 `$.`（`.data[*]` 只补 `$`——补成
+ *  `$..data[*]` 会把根相对路径变成递归下降）；`@` 开头保持原样，由 tokenizer 如实拒绝。 */
 export function normalizeJsonPath(path: string): string {
   const p = path.trim()
   if (p.startsWith('$') || p.startsWith('@')) return p
@@ -42,7 +35,6 @@ function reject(path: string, loc: SegmentLoc, facet: Facet, reason: string): ne
   throw new UnsupportedRuleError(`JSONPath 子集不支持该语法：${reason}（路径: ${JSON.stringify(path)}）`, { ...loc, facet })
 }
 
-/** 手写 tokenizer：逐字符扫描，认不出的一律拒绝 */
 function tokenize(path: string, loc: SegmentLoc, facet: Facet): Token[] {
   if (path === '') reject(path, loc, facet, '空路径')
   if (path[0] === '@') reject(path, loc, facet, '@ 特殊符号')
@@ -57,7 +49,6 @@ function tokenize(path: string, loc: SegmentLoc, facet: Facet): Token[] {
         // `..name` 递归下降（名字必填；`..*` 不在子集内）
         i += 2
         const start = i
-        // charAt 在界外给空串（正则不命中）：与循环条件同一个界，选它就不必为「i 可能越界」再造分支
         while (i < path.length && NAME_CHAR.test(path.charAt(i))) i++
         if (i === start) reject(path, loc, facet, `递归下降缺少属性名（位置 ${start}）`)
         tokens.push({ kind: 'descend', name: path.slice(start, i) })
@@ -90,7 +81,7 @@ function tokenize(path: string, loc: SegmentLoc, facet: Facet): Token[] {
         const a = sides[0]
         const b = sides[1]
         // 上面那条模式只接受「恰好一个冒号、两侧各自为空或整数」，拆不出两段只可能是模式被改坏——
-        // 走本函数已有的「下标内容不合法」通道（宁炸不猜），不给开区间补造端点。
+        // 走本函数已有的「下标内容不合法」通道，不给开区间补造端点。
         if (a === undefined || b === undefined) reject(path, loc, facet, `下标内容不合法：${JSON.stringify(inner)}`)
         tokens.push({ kind: 'slice', from: a === '' ? null : Number(a), to: b === '' ? null : Number(b) })
         continue
@@ -108,7 +99,6 @@ function isObjectLike(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null
 }
 
-/** 递归下降：文档序（先 key 命中、再深入各值），命中值非 null 才收集 */
 function descend(node: unknown, name: string, out: unknown[]): void {
   if (Array.isArray(node)) {
     for (const el of node) descend(el, name, out)
@@ -121,7 +111,6 @@ function descend(node: unknown, name: string, out: unknown[]): void {
   }
 }
 
-/** 单段作用于当前值列表；解析到 null/undefined 的分支直接丢弃（最终体现为 Miss） */
 function applyToken(cur: unknown[], tok: Token): unknown[] {
   const out: unknown[] = []
   for (const v of cur) {
@@ -170,7 +159,6 @@ function applyToken(cur: unknown[], tok: Token): unknown[] {
   return out
 }
 
-/** 元素钉死规则：字符串原样；对象/数组 JSON.stringify；number/bool → String() */
 function stringifyElement(v: unknown): string {
   if (typeof v === 'string') return v
   if (typeof v === 'number' || typeof v === 'boolean') return String(v)
@@ -184,20 +172,15 @@ function toValue(v: unknown): EngineValue {
   return { kind: 'value', text: stringifyElement(v) }
 }
 
-/**
- * 求值一条 JSONPath 子集路径：
- * `$` 起始，逐 token 走 `EvalContext.json` 值。
- * 零命中 / 取到 null / 下标越界 / 切片裁空 → Miss；空数组（键存在且值为 []）→ List{[]}；
- * 非空数组 → List；直接标量 → Value。
- */
+/** 求值一条 JSONPath 子集路径：`$` 起始，逐 token 走数据。空态口径见文件头。 */
 export function evalJsonPath(path: string, data: unknown, loc: SegmentLoc, facet: Facet): EngineValue {
   const tokens = tokenize(normalizeJsonPath(path), loc, facet)
   let cur: unknown[] = [data]
   for (const tok of tokens) {
     const prev = cur
     cur = applyToken(cur, tok)
-    // 取位失败 → Miss；解析到空集合 → 空 List（取值规约，与 select.reducePicked 同口径）：
-    // 切片裁空是「取位失败」→ Miss；通配 [*] 打在空数组上是「解析到空集合」→ 空 List。
+    // 取位失败 → Miss；解析到空集合 → 空 List（与 select.reducePicked 同口径）：切片裁空是「取位失败」，
+    // 通配 [*] 打在空数组上是「解析到空集合」。
     if (cur.length === 0 && prev.some(Array.isArray)) {
       if (tok.kind === 'slice') return { kind: 'miss', detail: `JSONPath 切片裁空：${path}` }
       if (tok.kind === 'wildcard') return { kind: 'list', items: [] }

@@ -129,7 +129,7 @@ describe('选中动作条：启用/停用/验证所选（写口载荷 + 成功�
     await waitFor(() => expect(deps.startBatchProbeJob).toHaveBeenCalledWith(['s1', 's3']))
     // 与启停的分工不变：验证起的是后台任务 → 催任务读面（编排收进 jobs.ts 领域
     // 动作的缺省 refresh）；源列表要等任务收尾才变（收尾 reload 归 SettingsSection 的
-    // reloadedJob 记账，另行钉在 views-wiring）。读数即刻重拉 = 轮询取数 +1（不等 1s 拍）。
+    // reloadedJob 记账，另行钉在 `tests/client/wiring-settings.test.tsx`）。读数即刻重拉 = 轮询取数 +1（不等 1s 拍）。
     await waitFor(() => expect(fetchJobStatus).toHaveBeenCalledTimes(2))
     expect(onChanged).not.toHaveBeenCalled()
   })

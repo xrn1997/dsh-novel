@@ -1,46 +1,22 @@
 import type { ChapterContent, ContentNode } from './wire.js'
 
 /**
- * 正文投影与播放单元切分：文字面在 Node 半与浏览器半之间的**唯一口径**。
+ * 正文投影与播放单元切分：文字面在 Node 半与浏览器半之间的唯一口径（导出、AI 工具、阅读器与播放层共用）。
+ * 播放层按 `splitParagraphs` 切单元，屏上段号是这批单元的对位面（`playUnitStarts` / `playUnitStartsByNode`）。
+ * 零运行时依赖（只 type-only import `./wire.js`）；本文件 inline 进 client bundle，纯度门管这一条。
  *
- * 为什么必须唯一：文字面（getChapter 的返回、TXT 导出、六个 AI 工具、阅读器与播放层）是同一批
- * 内容的多个出口——各写一份投影，同一本书的导出、AI 读到的正文与听书念出的字就会分叉。
+ * 两个分支：① `text` 行内逐字通过，只做空白行规约（`normalizeChapterText`，幂等），不解释尖括号、
+ * 不解实体——再解释一次会吃掉小说里合法的标签字样；② `rich` 只遍历本树，不追链接目标（会绕圈重复整本），
+ * 不输出资源/节点 ID 与任何存储路径。
  *
- * 家为什么在 `shared/`：这份口径两半都要用（Node 半导出/AI/工具面，浏览器半阅读器/播放层），
- * 而 `services/**` 不在浏览器半的可达面里。播放层还要按 `splitParagraphs` 把文字切成播放单元，
- * 切分只吃文本、与投影同一份「段」的判据，所以同住这里；屏上段号是这批单元的**对位面**
- * （`playUnitStarts` / `playUnitStartsByNode`），对位错了的形态是高亮与起播整体偏移，也归这里。
- * 本模块**零运行时依赖**（只 type-only
- * import `./wire.js`）：它被 inline 进 client bundle，纯度门（`tsdown.config.ts`）管着这一条。
+ * 结构映射（正文契约按 `\n` 分段）：块级元素各自落一行，行内只留文字；表格行以 `\n` 分隔、单元格以制表符
+ * 分列；`<br>` 落成换行；分隔线不发明字符但同样收行（`a<hr/>b` → `a\nb`）；图片输出 `[图片：替代文字]`
+ * 或 `[图片]`；pre 子树逐字保留。块级元素出现在行内上下文时仍按块自己的投影取值（钉子见
+ * `tests/shared/chapter-text.test.ts` 的「链接里套 pre」）。
  *
- * 两个分支的口径：
- * ① `text` **行内逐字通过**：只过一条空白行规约（`normalizeChapterText`，幂等），不解释尖括号、
- *    不把 `&amp;` 解成实体——再解释一次会把小说里合法的标签字样吃掉。本地 TXT 与在线正文都走这一条；
- * ② `rich` **只遍历本树**：不追链接目标（脚注/目录互指会绕着圈把整本书重复输出），
- *    不输出资源 ID、节点 ID 与任何存储路径（wire 与 AI 输出都不该出现本地存储标识）。
- *
- * 结构映射（本仓的正文契约：按 `\n` 分段）：
- * - 块级元素（见 BLOCK_TAGS）各自落一行，行内元素只留文字；
- * - 表格行以 `\n` 分隔、同一行的单元格以制表符分隔（列关系在纯文本里只能这样保）；
- * - `<br>`（break）在块内落成换行；分隔线（rule）**不发明字符**，但它与块级元素一样是边界：
- *   `a<hr/>b` 收行成 `a\nb`，不把两侧文本静默并成一段；
- * - 图片输出 `[图片：替代文字]`，无替代文字输出 `[图片]`；
- * - 预格式文本（pre）子树逐字保留（内部空白与换行原样）；
- * - **块级元素出现在行内上下文**（链接/行内元素的内容里——XHTML5 的 `<a>` 是透明内容模型，
- *   块级子节点是合法书写）时，它仍然按**块自己的投影**取值：pre 逐字、表格行制表符分列。
- *   这条不是可选优化：把子树当行内片段摊平会让这两种结构静默失真（`甲\t乙` 塌成 `甲乙`、pre 的
- *   缩进换行被折成一行，钉子见 `tests/shared/chapter-text.test.ts` 的「链接里套 pre」那组），
- *   而导出与 AI 读到的正文正是这条投影的输出。
- *
- * **rich 分支的行规约（源码空白折成单空格、逐行 trim、丢弃空行）由投影自己承担**：
- * rich 文字不经过 `normalizeChapterText`，而它逐行 trim
- * 会把 pre 的缩进一起丢；反过来投影里不做规约也不行——EPUB 的排版 XHTML（`<p>\n  正文\n</p>`）
- * 会把缩进与首空行原样带进文字面。故非 pre 内容收口、pre 子树整棵绕过。
- *
- * **空白折叠**那条的边界是「源码排版」与「硬断行」：源码里的换行/制表符/连续空格是排版不是断行
- * （按源码换行断句会与浏览器渲染不一致），只有 `<br>`（break）与块级边界（含行内上下文里的块级
- * 子节点）这些**渲染上的硬断行**才断行；pre 子树两样都不做。折叠口径（含 NBSP 与全角空格）见
- * SOURCE_WS。
+ * rich 分支的行规约（源码空白折单空格、逐行 trim、丢空行）由投影自己承担：rich 不过 `normalizeChapterText`，
+ * 而逐行 trim 会丢 pre 缩进；投影里不规约又会把排版 XHTML 的缩进带进文字面。故非 pre 收口、pre 整棵绕过。
+ * 折叠边界是「源码排版 vs 硬断行」：只有 `<br>` 与块级边界才断行；pre 两样都不做。口径见 `SOURCE_WS`。
  */
 
 /** 块级元素：边界即换行（浏览器渲染语义）。b/i 与结构容器在导入期已规范为 strong/em/div */
@@ -52,27 +28,18 @@ const BLOCK_TAGS: ReadonlySet<string> = new Set([
 /** 单元格：表格行内的列边界（见 rowLines） */
 const CELL_TAGS: ReadonlySet<string> = new Set(['td', 'th'])
 
-/** 源码里的**可折叠**空白：HTML 渲染把连续空白折成一个空格，文字面照渲染走（头注「空白折叠」）。
- *  `\s` 本身就含 NBSP 与全角空格。对标的引擎口径是 `src/engine/dom.ts` 的 `nodeText`（`htmlToText`
- *  那一条出口）——同文件里还有第二条：`cleanText` 只折全角空格与 ASCII 空白，**不**折 NBSP，
- *  别拿它当参照（引擎内部本来就有两条，引哪条要点名）。 */
+/** 源码的可折叠空白：HTML 渲染把连续空白折成一个空格；`\s` 含 NBSP 与全角空格。对照口径是
+ *  `src/engine/dom.ts` 的 `nodeText`，不是 `cleanText`（后者不折 NBSP）。 */
 const SOURCE_WS = /\s+/g
 
-/**
- * 一条已定形的行（行内无换行——`\n` 是行边界，已在遍历里切走）+ 起始它的块节点 id
- * （`null` = 行从行内内容、硬断行或分隔线开始）。
- *
- * 为什么行要带块身份：播放单元是**逐行**切的，屏上的段落却是**逐块**渲染的。只有同一趟遍历
- * 同时产出「这一行的文本」与「这一行由哪个块起头」，两边的序号才不会各排一套——正文文字面、
- * 播放单元与阅读器的段号因此永远是同一份清单的三个投影。
- */
+/** 一条已定形的行（行内无换行）+ 起始块节点 id（null = 行内内容/硬断行/分隔线起头）。
+ *  行携带块身份，才能让文字面、播放单元与段号共用同一份清单。 */
 export interface ChapterContentLine {
   readonly text: string
   readonly nodeId: string | null
 }
 
-/** 正文 → 行清单（`chapterContentToText` 与阅读器段号的共同来源）。
- *  text 分支按行规约后的行给，行没有块身份；rich 分支见 `flowLines`。 */
+/** 正文 → 行清单（文字面与阅读器段号的共同来源）；text 分支无块身份。 */
 export function chapterContentLines(content: ChapterContent): ChapterContentLine[] {
   if (content.kind === 'text') {
     const text = normalizeChapterText(content.text)
@@ -87,9 +54,7 @@ export function chapterContentToText(content: ChapterContent): string {
   return flowLines(content.nodes, false).map((line) => line.text).join('\n')
 }
 
-/** 正文文字的行规约（逐行 trim → 去首尾空行 → 相邻空行折叠一个）。
- *  online 正文与本地 TXT 的文字面共用这一份；对已规约文本幂等（导出/TXT 链路会重复过手）。
- *  **只动空白与换行**：尖括号、实体串、行内空白原样保留。 */
+/** 正文文字的行规约：逐行 trim → 去首尾空行 → 相邻空行折叠一个；对已规约文本幂等，只动空白与换行。 */
 export function normalizeChapterText(raw: string): string {
   const lines = raw.split('\n').map((l) => l.trim())
   while (lines.length > 0 && lines[0] === '') lines.shift()
@@ -102,10 +67,7 @@ export function normalizeChapterText(raw: string): string {
   return out.join('\n')
 }
 
-/** 行规约：行内空白折成单空格、逐行去首尾空白、丢弃空行（头注「行规约」）。只在非 pre 的行上调用。
- *  折叠在这里收第二次是必要的，不是重复劳动：源码空白按节点折（`SOURCE_WS`），相邻两个节点各带
- *  一段空白时折完会留下两个空格（`say<em> hi </em> there`），跨节点的连续空白只有拼行后才看得出。
- *  也因此它对已折过的输入是幂等的。 */
+/** 行规约：行内空白折单空格、逐行 trim、丢空行，只在非 pre 行调用。跨节点的连续空白只有拼行后才看得出，故折第二次是必要的。 */
 function collapseLines(block: string): string {
   return block
     .split('\n')
@@ -114,33 +76,24 @@ function collapseLines(block: string): string {
     .join('\n')
 }
 
-/**
- * 行内上下文产出的一段：`soft` 是要并入当前行的可折叠文本；`block` 是**已定形的块行清单**
- * （pre 的逐字内容、表格行、块级子树的投影），它必须自成一行/一列。
- *
- * 为什么要分两种而不是把一切都拼成字符串：`\t`（表格列分界）与 pre 的缩进都在 `SOURCE_WS` 里，
- * 折一次就没了。块行在它自己的投影里已经定形，再进外层行的规约就是把列关系与逐字空白吃掉。
- * 块行以清单而不是字符串传递，是为了让嵌套块的起始行身份（`nodeId`）穿出这一层。
- */
+/** 行内上下文的一段：`soft` 并入当前行的可折叠文本；`block` 是已定形的块行清单（pre 逐字、表格行、块级子树）。
+ *  块行须以清单传递，否则列关系与逐字空白会被外层规约吃掉。 */
 type Segment =
   | { kind: 'soft'; text: string }
   | { kind: 'block'; lines: ChapterContentLine[] }
 
-/** 块级节点 → 块行清单：表格行以制表符分列，其余按自己的子树走块序列
- *  （pre 子树内一律逐字，块级边界照样断行）。行内上下文与块序列共用这一处判据。 */
+/** 块级节点 → 块行清单：表格行制表符分列，其余按子树块序列；行内上下文与块序列共用这一处判据。 */
 function blockSegment(node: Extract<ContentNode, { kind: 'element' }>, verbatim: boolean): Segment {
   const lines = node.tag === 'tr'
     ? rowLines(node, verbatim)
     : flowLines(node.children, verbatim || node.tag === 'pre')
-  // 块投影的第一行「始于」这个块；该行已被更内层块认领时不动——嵌套块共用一行时，
-  // 段号归内层（DOM 里真正承载锚点与段号的是内层元素）
+  // 块投影的首行「始于」这个块；更内层块已认领时不动——嵌套共用一行时段号归内层（真正承载锚点的元素）。
   const first = lines[0]
   if (first !== undefined && first.nodeId === null) lines[0] = { text: first.text, nodeId: node.id }
   return { kind: 'block', lines }
 }
 
-/** 行上下文（块序列）→ 行清单：行内内容拼成一行，块级元素各自成行。
- *  `verbatim`（在 pre 子树内）为真时不做行规约，空白与换行逐字带出。 */
+/** 块序列 → 行清单：行内内容拼成一行，块级元素各自成行；pre 子树内 `verbatim` 不做行规约。 */
 function flowLines(nodes: readonly ContentNode[], verbatim: boolean): ChapterContentLine[] {
   const lines: ChapterContentLine[] = []
   let inline = ''
@@ -159,7 +112,6 @@ function flowLines(nodes: readonly ContentNode[], verbatim: boolean): ChapterCon
     if (seg.lines.some((line) => line.text.trim() !== '')) lines.push(...seg.lines)
   }
   for (const node of nodes) {
-    // 分隔线不产生字符，但收行：块级边界不能把两侧文本静默并成一段（头注「结构映射」）
     if (node.kind === 'rule') {
       flush()
       continue
@@ -174,13 +126,8 @@ function flowLines(nodes: readonly ContentNode[], verbatim: boolean): ChapterCon
   return lines
 }
 
-/**
- * 单个行内节点 → 片段序列：叶子（文本 / 图片 / 换行）落成软文本，链接与行内元素**继续下钻**
- * 自己的子树——下钻的是片段序列而不是字符串，所以子树里的块级节点仍按块取值（见 `Segment`）。
- *
- * 片段不是行，自身不做行规约（行首尾空白由外层行统一处理）——在片段上 trim 会吃掉渲染上真实
- * 存在的空格（`说<em> 话 </em>吧` → `说话吧`），与把两段文本静默并起来是同一类事。
- */
+/** 行内节点 → 片段序列：叶子落软文本，链接与行内元素继续下钻，故子树里的块级节点仍按块取值。
+ *  片段自身不 trim（行首尾空白归外层），否则会吃掉渲染上真实存在的空格。 */
 function inlineSegments(node: ContentNode, verbatim: boolean): Segment[] {
   // 分隔线在行内同样是**边界**（`a<hr/>b` 收行成 `a\nb`），空块行只收行、不发明字符
   if (node.kind === 'rule') return [{ kind: 'block', lines: [] }]
@@ -207,13 +154,8 @@ function inlineSegments(node: ContentNode, verbatim: boolean): Segment[] {
   return out
 }
 
-/** 表格行：单元格以制表符分界（同一行的列在纯文本里保持同行）。
- *  行内直接文本（非规范 XHTML，或源码排版缩进）不成列：纯空白丢弃，其余**整体并入末列**——
- *  它没有别的落点，静默丢弃等于丢正文；即使出现在首个单元格之前也归末列（不为它猜列序）。
- *
- *  制表符在**各单元格各自收口之后**才拼上，拼好的整行不再过行规约：`\t` 属于 `SOURCE_WS`，
- *  再折一次会把列分界吃成空格（列关系在纯文本里只有这一种表达）。调用方（flowLines）因此
- *  对 tr 的行清单直接入列，不套 collapseLines。 */
+/** 表格行：单元格以制表符分界；行内杂散文字（非规范 XHTML）纯空白丢弃、其余整体并入末列（不为它猜列序）。
+ *  制表符在各格收口后拼上，整行不再过行规约。 */
 function rowLines(row: Extract<ContentNode, { kind: 'element' }>, verbatim: boolean): ChapterContentLine[] {
   const cells: ChapterContentLine[][] = []
   let stray = ''
@@ -229,9 +171,8 @@ function rowLines(row: Extract<ContentNode, { kind: 'element' }>, verbatim: bool
   return joinCells(cells)
 }
 
-/** 单元格行清单 → 整行行清单：与 `cells.join('\t')` 同形——分隔符接在上一格的末行，
- *  下一格的首行并进同一行；格内换行仍断行。首格之前没有分隔符；空格子仍占一个分隔符
- *  （`['甲', ''].join('\t')` = `'甲\t'`）。合并行沿用前一格的起始块身份：行从那一格开始。 */
+/** 单元格行清单 → 整行清单：与 `cells.join('\t')` 同形——分隔符接上一格末行、下一格首行并入同一行；
+ *  空单元格仍占一个分隔符；合并行沿用前一格的起始块身份。 */
 function joinCells(cells: readonly ChapterContentLine[][]): ChapterContentLine[] {
   const out: ChapterContentLine[] = []
   const append = (sep: string, text: string, nodeId: string | null): void => {
@@ -249,8 +190,7 @@ function joinCells(cells: readonly ChapterContentLine[][]): ChapterContentLine[]
   return out
 }
 
-/** 片段序列 → 一段文本（块段两侧各留一个换行，好在行规约里断开）。只给**没有别的落点**的杂散
- *  内容用（表格行里单元格之外、或非规范 XHTML 的文字）；正常路径由 `flowLines` 逐行落位。 */
+/** 片段序列 → 一段文本（块两侧留换行）；只给没有别的落点的杂散内容用。 */
 function segmentsToText(segments: readonly Segment[]): string {
   let out = ''
   for (const seg of segments) {
@@ -261,23 +201,17 @@ function segmentsToText(segments: readonly Segment[]): string {
 
 // ── 播放单元切分（听书）──────────────────────────────────────────────────────
 
-/** 播放单元上限（**code point** 计）：引擎对单次朗读的文本有长度上限，整段甩过去会撞限。
- *  按 code point 而不是 UTF-16 码元：emoji 之类的代理对算一个字，切在码元中间会产出坏字符。 */
+/** 播放单元上限（code point 计）：按 UTF-16 码元切会把 emoji 代理对切坏。 */
 export const PLAY_UNIT_MAX = 300
 
-/** 句界：超长段在这些字符之后二次切开。分隔符留在前一片末尾——读出来是一句完整的停顿。
- *  只收全角句读：半角 `.` 在数字、缩写里太常见，当句界会把 3.14 读成两句。 */
+/** 句界：超长段在这些字符后二次切开，分隔符留在前片末尾；只收全角句读，半角 `.` 在数字/缩写里太常见。 */
 const SENTENCE_END: ReadonlySet<string> = new Set(['。', '！', '？', '；', '…'])
 
-/** 整段只有空白 / 控制 / 标点 / 分隔 / 符号：不是正文，不送引擎（legado notReadAloudRegex 口径）。
- *  这类段落在书里常是分隔线、装饰符或排版空行；送进去只会读出标点名字或制造一段静音。
- *  用字符类而非 `(?:\s|\p{C}|…)+` 交替：`\s` 与 `\p{Z}` 等成员重叠，交替在 `+` 下对「长串空白
- *  后接一个正文 char」的近匹配串指数回溯——这是内容可触发的卡死（一行就能冻住进程 / UI）。
- *  字符类是单次集合成员判定，线性扫完整段。 */
+/** 纯空白/标点/符号段不送引擎（legado notReadAloudRegex 口径）。用字符类而非 `\s|\p{C}|…` 交替：
+ *  成员重叠会把近匹配串逼成指数回溯——内容可触发的卡死。 */
 const NOT_READ_ALOUD = /^[\s\p{C}\p{P}\p{Z}\p{S}]+$/u
 
-/** 正文 → 播放单元：按 `\n` 切段、逐段 trim，滤掉空段与纯空白/标点/符号段；超 `PLAY_UNIT_MAX` 的段再切。
- *  返回顺序即播放顺序；切分只动边界不动字——每段切出的单元 `join('')` 等于该段 trim 后的原文。 */
+/** 正文 → 播放单元：按 `\n` 切段、trim、滤空与纯标点段，超限再切；顺序即播放顺序，切分只动边界不动字。 */
 export function splitParagraphs(text: string): string[] {
   const units: string[] = []
   for (const line of text.split('\n')) {
@@ -288,8 +222,7 @@ export function splitParagraphs(text: string): string[] {
   return units
 }
 
-/** 超长段 → 若干 ≤ PLAY_UNIT_MAX 的单元：优先在句界切、把完整句子拼满一个单元（单元数量尽量少）；
- *  单片本身超限（无句界，或一句就比上限长）时才按 code point 硬切。 */
+/** 超长段 → ≤ PLAY_UNIT_MAX 的单元：优先句界拼满整句，无句界或一句超限才按 code point 硬切。 */
 function splitLongParagraph(para: string): string[] {
   const cps = Array.from(para)
   if (cps.length <= PLAY_UNIT_MAX) return [para]
@@ -328,15 +261,9 @@ function sentencePieces(cps: readonly string[]): string[][] {
 }
 
 /**
- * 行清单 → 起段号：第 i 项 = 第 i 行之前已占的播放单元数（起点 0，项数等于行数）。
- *
- * 为什么住这里：屏上每行 / 每块的「第 N 段」（`data-pidx`、跟读高亮、「从本段听」、探针起播）
- * 与播放层念出的单元序号必须是同一把尺量出来的，尺就是 `splitParagraphs`——行内可读性与超长段
- * 二次切分的口径不再有第二份。计数只认行的文本、不认行的下标：空行与纯标点行占 0 格，行本身
- * 不产生单元时，它的起段号自然指向后面第一个可读单元。
- *
- * 消费点：`ChapterBody` 文字章的段号（另加被剥章名的 `paragraphBase`）与 `ReaderView`
- * 剥章名时取前缀占掉的单元数（取第「剥掉行数」项）。
+ * 行清单 → 起段号：第 i 项 = 第 i 行之前已占的播放单元数。尺就是 `splitParagraphs`，屏上段号
+ * （data-pidx、跟读高亮、从本段听、探针起播）与播放层单元序号共用它；空行与纯标点行占 0 格。
+ * 消费点：`ChapterBody` 文字章段号（另加剥章名前缀）与 `ReaderView` 取剥掉行数的前缀。
  */
 export function playUnitStarts(lines: readonly { text: string }[]): number[] {
   const starts: number[] = []
@@ -349,14 +276,8 @@ export function playUnitStarts(lines: readonly { text: string }[]): number[] {
 }
 
 /**
- * 行清单 → 块起段号：每个 `nodeId` **首次**出现那一行的起段号；块身份缺席的行不收
- * （行内内容、硬断行与分隔线起的行没有块身份）。
- *
- * 段号按**行**数，不按块在正文树里的文档顺序数：播放单元逐行切，而图文章的行清单里标题 /
- * 列表项 / 表格行各落一行，块序号与行序号只在全章都是 `p` 时碰巧相等。同一块占多行时只认起行
- * （首次出现）；块首不产生单元（空行 / 纯标点行）时，起段号指向它后面第一个可读单元。
- *
- * 起段号本身仍由 `playUnitStarts` 一份产出，这里只按块身份挑行。
+ * 行清单 → 块起段号：每个 `nodeId` 首次出现那一行的起段号；无块身份的行不收。段号按行数而非文档序，
+ * 同一块占多行时只认起行；起段号仍由 `playUnitStarts` 一份产出，这里只按块身份挑行。
  */
 export function playUnitStartsByNode(lines: readonly ChapterContentLine[]): Map<string, number> {
   const byNode = new Map<string, number>()

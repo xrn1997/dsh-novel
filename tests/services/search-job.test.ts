@@ -4,6 +4,7 @@ import type { SearchJobRun } from '../../src/services/search-job.js'
 import { SEARCH_HITS_CAP_PER_SOURCE, SEARCH_JOB_RETENTION_MS } from '../../src/shared/wire.js'
 import type { SearchGroup, SearchHit } from '../../src/shared/wire.js'
 import { DEFAULT_JOB_OUTPUT_BYTES } from '../../src/services/job-tail.js'
+import { tick } from '../support/async.js'
 import { must, pick } from '../support/fixture.js'
 import { jobHostDouble } from '../support/job-host.js'
 
@@ -31,8 +32,6 @@ function manualRun(): { run: SearchJobRun; emit: (g: SearchGroup) => void; finis
   return { run, emit: (g) => emit(g), finish: () => finish(), stopping: () => stop }
 }
 
-const tick = async (): Promise<void> => { await new Promise((r) => setTimeout(r, 5)) }
-
 describe('SearchJobs 读面快照', () => {
   it('running 中读增量：added/next 跟着游标走，游标超前只给空增量不报错', async () => {
     const m = manualRun()
@@ -49,7 +48,7 @@ describe('SearchJobs 读面快照', () => {
     expect(jobs.snapshot(99)?.added).toEqual([])                        // 超前游标：不抛，只给空增量
     expect(jobs.snapshot(99)?.next).toBe(2)
     m.finish()
-    await tick()
+    await tick(5)
     expect(jobs.snapshot(2)).toMatchObject({ phase: 'done', done: 2 })
     expect(typeof jobs.snapshot(0)?.finishedAt).toBe('number')
   })
@@ -60,7 +59,7 @@ describe('SearchJobs 读面快照', () => {
     jobs.start('x', 1, m.run)
     m.emit(group('big', SEARCH_HITS_CAP_PER_SOURCE + 30))
     m.finish()
-    await tick()
+    await tick(5)
     const snap = must(jobs.snapshot(0), '搜索轮次快照')
     expect(pick(snap.added, 0).hits).toHaveLength(SEARCH_HITS_CAP_PER_SOURCE)
     expect(snap.done).toBe(1)
@@ -70,7 +69,7 @@ describe('SearchJobs 读面快照', () => {
     let n = 0
     const jobs = new SearchJobs({ uuid: () => `sj${++n}` })
     jobs.start('旧', 1, async () => {})
-    await tick()
+    await tick(5)
     jobs.start('新', 1, async () => {})
     expect(jobs.snapshot(0)).toMatchObject({ keyword: '新', id: 'sj2' })
   })
@@ -79,7 +78,7 @@ describe('SearchJobs 读面快照', () => {
     let t = 1000
     const jobs = new SearchJobs({ now: () => t })
     jobs.start('x', 0, async () => {})
-    await tick()
+    await tick(5)
     expect(jobs.snapshot(0)?.phase).toBe('done')
     t += SEARCH_JOB_RETENTION_MS + 1
     expect(jobs.snapshot(0)).toBeNull()
@@ -97,7 +96,7 @@ describe('SearchJobs 读面快照', () => {
     expect(s?.phase).toBe('failed')
     expect(s?.error).toContain('用户停止了搜索')
     expect(s?.added.map((g) => g.sourceId)).toEqual(['a'])   // 停止 ≠ 放弃：已经搜出来的还在
-    await tick()
+    await tick(5)
     expect(h.settled).toEqual(['killed'])                     // 宿主侧口径不变
     expect(jobs.cancel()).toBe(false)                        // 再点一次是空操作，不是第二次终态
   })
@@ -111,7 +110,7 @@ describe('SearchJobs 读面快照', () => {
     expect(jobs.cancel('用户取消')).toBe(true)
     expect(shouldStop()).toBe(true)
     finish()
-    await tick()
+    await tick(5)
     expect(jobs.snapshot(0)).toMatchObject({ phase: 'failed' })
     expect(jobs.snapshot(0)?.error).toContain('已取消')
     expect(jobs.snapshot(0)?.error).toContain('用户取消')
@@ -130,12 +129,12 @@ describe('SearchJobs 登记给宿主 ctx.jobs（与写任务同一口径）', ()
     expect(jobs.snapshot()?.cancelled).toBe(false)           // 没停过就是 false：字段恒在，不靠缺键表达「否」
     m.emit(group('a', 1))
     m.finish()
-    await tick()
+    await tick(5)
     expect(h.settled).toEqual(['completed'])
     const never: SearchJobRun = () => new Promise<void>(() => {})      // 只能被取消收手
     jobs.start('斗罗2', 1, never)
     expect(jobs.cancel('换关键词了')).toBe(true)
-    await tick()
+    await tick(5)
     expect(h.settled).toEqual(['completed', 'killed'])
   })
 
@@ -187,7 +186,7 @@ describe('SearchJobs.subscribe（推送加速器的事件口）', () => {
     m.emit(group('b', 1))
     expect(seen).toEqual(['new', 0, 1, 2])
     m.finish()
-    await tick()
+    await tick(5)
     expect(seen).toEqual(['new', 0, 1, 2, 2])          // 终态那一次必须响：SSE 据此收尾关流
     off()
     jobs.start('斗罗2', 1, manualRun().run)

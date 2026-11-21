@@ -8,7 +8,6 @@
  *
  * 三条配套判据各管一段，别合并：
  * - `tests/context-terms.test.ts`：`CONTEXT.md` 点名的符号能不能现查得到；
- * - `tests/comment-altitude.test.ts`：代码注释是不是在抄代码；
  * - 本文件：**全部手写文档**的路径、引用形态、职责边界、ADR 形状，以及散文只对本项目负责。
  *
  * 两类例外要写明理由再进白名单：留在 ADR 里的「当时」坐标，与看着像路径其实不是路径的串。
@@ -39,6 +38,7 @@ const BACKTICK_REL = /`([A-Za-z0-9_-]+\/[A-Za-z0-9_./-]*\.(?:ts|tsx|js|mjs|cjs|j
 /** 看着像路径、其实不是路径，或故意保留的历史名。每条都要有理由。 */
 const ALLOWED: Record<string, string> = {
   'tests/replay/report.md': 'test:compat 的生成物，已 gitignore；跑门后才有',
+  'tests/comment-altitude.test.ts': '已被 ADR-0098 退役；保留在 ADR-0048 的取代前正文与锚点里',
 }
 /** 判据自身的负控夹具：这些文件在内存里搭合成依赖图，写的不是仓内路径。 */
 const SYNTHETIC = new Set([join(ROOT, 'tests', 'layering.test.ts')])

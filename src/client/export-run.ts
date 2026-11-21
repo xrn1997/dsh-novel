@@ -4,10 +4,8 @@ import { zhTranslate } from './copy/index.js'
 import type { CopyKey, Translate } from './copy/index.js'
 
 /**
- * 范围导出流编排（从 ReaderView 的 ExportPanel 收出）：start(范围) / cancel / 状态三态 + 卸载 abort。
- *
- * 为什么收出来：导出时序必须可单测。编排自持、依赖经参数注入：
- * 视图只接线（onProgress → setState、按钮 → start/cancel、卸载 → dispose），时序归本 module 单测。
+ * 范围导出流编排：start(范围) / cancel / 状态三态 + 卸载 abort。
+ * 为什么收出来：导出时序必须可单测；编排自持、依赖经参数注入，视图只接线。
  */
 
 /** 导出流依赖（ReaderDeps 的子面）：流式抓取 + 落盘 */
@@ -40,16 +38,15 @@ export interface ExportRange { from: number; to: number; total: number }
 /** 空闲态字面量（视图初始值与失败后的重试复位都用它） */
 export const IDLE_EXPORT: ExportRunState = { running: false, kb: 0, total: '', range: null, error: null }
 
-/** 落盘文件名：全本（或 1..total 全覆盖）= 书名.txt；部分 = 书名（第5-80章）.txt——
- *  部分导出不加后缀会让人把片段当全本存丢。后缀随当前语言（文件名同样是用户可见文案）。 */
+/** 落盘文件名：全本 = 书名.txt；部分 = 书名（第5-80章）.txt——不加后缀会让人把片段当全本存丢。
+ *  后缀随当前语言（文件名同样是用户可见文案）。 */
 function exportFileName(title: string, range: ExportRange | null, t: Translate = zhTranslate): string {
   if (range === null || (range.from <= 1 && range.to >= range.total)) return `${title}.txt`
   return `${title}${t('reader.export.fileRange', { from: range.from, to: range.to })}.txt`
 }
 
-/** 面板范围校验（纯函数，视图确认钮的唯一判据）：
- *  空串 / 非整数 / 倒置 / 越界 → 拒；total<1 = 目录未就绪，同样拒（不许在章数未知时开下）。
- *  理由回**文案键**而不是成句：翻译归视图的 `t`，校验本身保持纯函数。 */
+/** 面板范围校验（纯函数，确认钮的唯一判据）：空串 / 非整数 / 倒置 / 越界 → 拒；total<1 = 目录未就绪，
+ *  同样拒。理由回**文案键**而不是成句：翻译归视图的 `t`。 */
 export type RangeParse =
   | { ok: false; reason: CopyKey }
   | { ok: true; from: number; to: number }
@@ -65,11 +62,8 @@ export function parseRange(fromStr: string, toStr: string, total: number): Range
   return { ok: true, from, to }
 }
 
-/** 导出范围草稿：面板上那两个输入框的全部状态——**只有用户输入的两格**。
- *  缺省、档位算术、校验三件事只住这里；若 openExport 写缺省、onPreset 算档位、onConfirm 再校验，
- * 同一件事会散成四处，没有 locality。
- *  章数刻意不进草稿：它是视图的**活值**（当前目录长度），抄进草稿就会停在装配或开面板那一下的读数上
- *  （目录迟到 / 变化即失真）——调用方每次把当下章数传进来。 */
+/** 导出范围草稿：面板上那两个输入框的全部状态——**只有用户输入的两格**。缺省、档位算术、校验
+ *  三件事只住这里；章数刻意不进草稿（它是视图的活值，抄进来就会停在装配那一下的读数上）。 */
 export interface ExportDraft { from: string; to: string }
 
 /** 全本缺省（打开面板那一下） */
@@ -77,12 +71,9 @@ export function draftOf(total: number): ExportDraft {
   return { from: '1', to: String(total) }
 }
 
-/** 档位：all = 全本；rest = 当前章的下一章起。
- *  total 由调用方按当下目录现给（不进草稿）：目录在面板开着时才到齐，这一次传递就把草稿的旧读数冲正。
- *  rest 在最后一章时钳到 total——from 越过 to 会让确认钮凭空禁用，用户读不出为什么。
- *  不收草稿入参：两格全由 kind / currentChapter / total 决定，草稿在这里没有可贡献的值。收进来只为凑
- *  签名，就会逼出一个 `{ ...d, ... }` 的空底——结构上更宽的对象可赋值给 `ExportDraft`（如带 total 的），
- *  多余的格便经由那个空底原样流回 `setExpDraft`，正是「草稿不沾派生读数」这条要挡的。 */
+/** 档位：all = 全本；rest = 当前章的下一章起。total 由调用方按当下目录现给（不进草稿）；
+ *  rest 在最后一章时钳到 total——from 越过 to 会让确认钮凭空禁用。不收草稿入参：两格全由
+ *  kind / currentChapter / total 决定，收进来只为凑签名就会逼出空底。 */
 export function applyPreset(
   kind: 'all' | 'rest', currentChapter: number, total: number,
 ): ExportDraft {
@@ -91,8 +82,7 @@ export function applyPreset(
   return { from: String(from), to: String(total) }
 }
 
-/** 确认钮的唯一判据（视图只渲染 reason，不自己判；面板另有「共 N 章」与输入框 max 这类活读数，
- *  直接读 total，不归这里）；章数同样按调用方现给的活值 */
+/** 确认钮的唯一判据（视图只渲染 reason，不自己判）；章数按调用方现给的活值。 */
 export function validRangeOf(d: ExportDraft, total: number): RangeParse {
   return parseRange(d.from, d.to, total)
 }
@@ -102,8 +92,8 @@ function isAbort(e: unknown): boolean {
   return typeof e === 'object' && e !== null && 'name' in e && e.name === 'AbortError'
 }
 
-/** 错误类目投影：ApiClientError 带 code（导出失败可分类呈现）；普通 Error 只有 message，不伪造 code。
- *  客户端网络错误在这里就落成当前语言（快照的口径与 job 层一致：语言取生成时那一次）。 */
+/** 错误类目投影：ApiClientError 带 code；普通 Error 只有 message，不伪造 code。客户端网络错误在这里
+ *  就落成当前语言（与 job 层同口径：语言取生成时那一次）。 */
 function errorOf(e: unknown, t: Translate = zhTranslate): { code?: string; message: string } {
   const code = typeof e === 'object' && e !== null && 'code' in e && typeof e.code === 'string' ? e.code : undefined
   const message = describeError(e, t)

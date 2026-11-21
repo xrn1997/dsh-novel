@@ -3,30 +3,24 @@ import type { BytesListenOutput, BytesSegment, OutputHandlers } from './output-c
 
 /**
  * 字节型出声适配器：两槽预载 + 换槽起播的全部现场（槽、键、预载记录）都住这里。
- * 失败上报共用同一枚会话 token：起一段就重接一次 `onerror`，旧闭包攥着旧 token，
- * 迟到的事件死在会话的代际守卫上，不会把下一段再记一次失败。
+ * 失败上报共用同一枚会话 token：起一段就重接一次 `onerror`，旧闭包攥着旧 token，迟到事件死在代际守卫上。
  *
- * **真开口**是两条证据：活槽的 `playing` 事件，与 `play()` 承诺落地（规范里它同样表示播放已开始）。
- * 起一段只是把加载交出去——404、解码失败、自动播放被拒都发生在之后；会话的清连败与「在放」
- * 只能从这两条证据来。两条都到也无妨：会话侧的 start 只写读数，幂等。
+ * **真开口**是两条证据：活槽的 `playing` 事件与 `play()` 承诺落地。起一段只是把加载交出去——
+ * 404 / 解码失败 / 自动播放被拒都发生在之后。两条都到也无妨：会话侧 start 只写读数，幂等。
  *
- * 预载槽的 `error` 也要接：不接就只有「下一段起播时再撞一次」，而且旧键会让 `start` 以为
- * 槽里还是可用字节、跳过重设 `src`。预载失败即清掉该槽键与预载记录，下一段重新赋 `src`。
+ * 预载槽的 `error` 也要接：不接就只有「下一段起播时再撞一次」，而且旧键会让 `start` 以为槽里还是
+ * 可用字节、跳过重设 `src`。预载失败即清掉该槽键与预载记录。
  *
- * `AudioSlot` / `AudioFace` 是 Audio 的**窄镜像**：只收会话真正消费的那一面，不让 lib.dom 的
- * 宽声明替运行时作保。生产面（懒取全局、把原生元素交回来）住 `player.ts`。
+ * `AudioSlot` / `AudioFace` 是 Audio 的**窄镜像**；生产面（懒取全局）住 `player.ts`。
  */
 
-/** 一只出声槽（Audio 的窄镜像）：只收会话真正消费的那一面。五个事件属性刻意收成
- *  「不挑参数」的窄形状：真元素的处理器声明带事件参数、比这宽，不这样收，生产面就没法把
- *  原生元素原样交回来（本地窄镜像，同 `client/util.ts` 的 `ls`）。 */
+/** 一只出声槽（Audio 的窄镜像）：只收会话真正消费的那一面。五个事件属性收成「不挑参数」的窄形状，
+ *  否则生产面没法把原生元素原样交回来。 */
 export interface AudioSlot {
   src: string
   volume: number
-  /** 播放倍率（回执那一格的落地处）。倍率改变播放时长，`currentTime` / `duration` 仍是
-   *  **音频内**秒数——段进度读数据此不受影响（它答「这一段念到第几秒」，不答墙钟）。
-   *  音高不随倍率漂移是平台的缺省行为（`preservesPitch` 缺省为真），本仓不去动它，
-   *  也不把它收进镜像：没人读它，收了就是假控件的温床。 */
+  /** 播放倍率：倍率改变播放时长，但 `currentTime` / `duration` 仍是**音频内**秒数，段进度读数不受影响。
+   *  音高不随倍率漂移是平台缺省（`preservesPitch`），本仓不动它、也不收进镜像。 */
   playbackRate: number
   preload: string
   currentTime: number
@@ -81,8 +75,7 @@ export class BytesOutput implements BytesListenOutput {
     if (this.preloaded === seg.key && this.keys[otherSlot(this.active)] === seg.key) {
       slot = otherSlot(this.active)
     }
-    // 换槽起播前必须先让旧槽闭嘴：预载只给另一只接上 src，旧段仍在自己那只里念着，
-    // 用户按「下一段」听到的就是两句叠音。同槽路径靠重设 src 天然停掉旧段，换槽不会。
+    // 换槽起播前先让旧槽闭嘴：预载只给另一只接上 src，旧段仍在自己那只里念着——不静音就是两句叠音。
     if (slot !== this.active) this.slots[this.active]?.pause()
     this.active = slot
     this.preloaded = null
@@ -107,8 +100,7 @@ export class BytesOutput implements BytesListenOutput {
       const element = this.slots[slot]
       if (element !== null) {
         element.pause()
-        // 松开这一段的缓冲：`src` 还指着那枚音频 URL 时，浏览器会替页面留着已取到的字节。
-        // 摘 src 用 removeAttribute + load（把 src 赋成空串会被当成一次空 URL 加载并报错）。
+        // 松开这一段的缓冲：摘 src 用 removeAttribute + load（赋空串会被当成一次空 URL 加载并报错）。
         element.removeAttribute('src')
         element.load()
       }
@@ -125,9 +117,8 @@ export class BytesOutput implements BytesListenOutput {
     this.slots[1] = null
   }
 
-  /** 失效重来：清掉两只槽的键与预载记录，并把介质松开（`removeAttribute` + `load`，与 `stop`
-   *  同一对——只清键不松开，errored 元素仍是坏状态）。自愈路径在重取回执前调它：键按内容寻址
-   *  不会变，不清键 `start` 就会跳过重设 `src`，对着一个已报错的元素再 `play()` 只会再拒。 */
+  /** 失效重来：清掉两只槽的键与预载记录并把介质松开（只清键不松开，errored 元素仍是坏状态）。
+   *  键按内容寻址不会变，不清键 `start` 就会跳过重设 `src`，对着已报错的元素再 play 只会再拒。 */
   invalidate(): void {
     for (const slot of [0, 1] as const) {
       const element = this.slots[slot]
@@ -150,8 +141,7 @@ export class BytesOutput implements BytesListenOutput {
     const slot = otherSlot(this.active)
     const element = this.ensure(slot)
     if (this.keys[slot] !== key) {
-      // 预载失败不静默：清掉该槽的键与预载记录，下一段起播会重新赋 src，而不是对着一个
-      // 已经 errored 的元素调 play（那种元素不 load() 只会再拒）。
+      // 预载失败不静默：清掉该槽的键与预载记录，下一段起播会重新赋 src，而不是对着 errored 元素调 play。
       element.onerror = () => { this.forgetPreload(slot, key) }
       element.src = ttsAudioUrl(key)
       this.keys[slot] = key
@@ -193,17 +183,15 @@ export class BytesOutput implements BytesListenOutput {
     }
   }
 
-  /** 预载槽加载失败：清键与预载记录（不动活槽）。记录清掉后，推进到这一段时 `start` 会重新
-   *  赋 `src` 并走正常失败径，不会因为「键看着还在」而静默把一段坏字节播成无声。 */
+  /** 预载槽加载失败：清键与预载记录（不动活槽）——记录清掉后推进到这一段时 `start` 会重新赋 `src`。 */
   private forgetPreload(slot: Slot, key: string): void {
     if (slot === this.active) return
     if (this.keys[slot] === key) this.keys[slot] = null
     if (this.preloaded === key) this.preloaded = null
   }
 
-  /** 起播的两种失败都要落到失败径：`play()` 的同步抛出由调用方接，Promise 拒绝
-   *  （自动播放被拦等）走这里；与 `error` 事件（404 / 解码失败）共用同一枚会话 token。
-   *  承诺落地同样报「已开口」：规范里它表示播放已开始，是 `onplaying` 之外的第二条证据。 */
+  /** 起播的两种失败都要落到失败径：`play()` 的同步抛出由调用方接，Promise 拒绝走这里；与 `error`
+   *  事件共用同一枚会话 token。承诺落地同样报「已开口」——规范里它表示播放已开始。 */
   private play(element: AudioSlot, handlers: OutputHandlers): void {
     const played = element.play()
     void Promise.resolve(played).then(

@@ -2,20 +2,14 @@ import vm from 'node:vm'
 import { RegexDeadlineError } from './errors.js'
 
 /**
- * 用户正则的死线执行：合法而病态的模式（灾难性回溯）会把主线程钉死数秒到分钟级，殃及全部
- * `/novel-api` 请求。这里不为正则做静态黑名单——嵌套量词启发式会误杀正常源——改用 V8 的
- * 终止中断兜底：`vm` 的 timeout 会在 irregexp 的回溯循环里被检查，超时即抛（取舍的裁决见
- * `ADR-0050`）。
+ * 用户正则的死线执行：合法而病态的模式（灾难性回溯）会把主线程钉死数秒到分钟级，殃及全部 `/novel-api`
+ * 请求。不做静态黑名单（嵌套量词启发式会误杀正常源），改用 V8 的终止中断兜底：`vm` 的 timeout 会在
+ * irregexp 的回溯循环里被检查，超时即抛（裁决见 `ADR-0050`）。代价是每趟多一次 vm 脚本执行（十微秒级），
+ * 换来「最坏是一次规则错误」而不是「宿主事件循环假死」。
  *
- * 代价如实记：每趟求值多一次 vm 脚本执行（十微秒级）。换来的是「最坏是一次规则错误」，
- * 而不是「宿主事件循环假死」。批量口径（一次属性过滤一趟）住在 `guardedFilter`。
- *
- * **返回值跨 realm 的实情**（照实写，别当契约读反）：test / replace / OnlyOne 给出的是原生布尔与
- * 字符串；matchAll 与 filter 的数组在 vm realm 里构造，`instanceof Array` 对它不成立（`Array.isArray`
- * 成立），filter 数组里装的仍是宿主原物（按对象同一性可辨）。消费点因此不许用 realm 相关判据。
- *
- * **求值窗口内不回调宿主**：批量过滤的属性值先在宿主侧取齐再交给脚本，所以 timeout 只管正则本身
- * （宿主函数若被请进沙箱就不归它管了，那正是这里绕开的坑），也让下面那把重入闸成立。
+ * **返回值跨 realm**：test / replace / OnlyOne 给原生布尔与字符串；matchAll 与 filter 的数组在 vm realm 里
+ * 构造，`instanceof Array` 不成立（`Array.isArray` 成立）。**求值窗口内不回调宿主**：批量过滤的属性值先在
+ * 宿主侧取齐再交给脚本，timeout 只管正则本身，下面那把重入闸也因此成立。
  */
 
 /** 一次求值的基础预算：够正常规则跑完（毫秒级），又远低于用户可感知的卡顿。 */
@@ -28,10 +22,9 @@ export const REGEX_DEADLINE_MAX_MS = 1_200
 const MB = 1024 * 1024
 
 /**
- * 死线 = 基础预算 + **每满一 MB** 追加一档，封顶。工作量按 **UTF-16 码元**计（页面文本与属性串的
- * 天然尺度），不是字节——中文页一个码元一个字，按字节算会给它双倍预算。取整用「满」而不是「有」：
- * 一条几十字符的规则就该花基础预算，给不到一 MB 的东西加钱只是白送病态正则一段钉主线程的时间。
- * 判据只在这里一次：调用点不再各自解释「这趟预算为什么是这么多」。
+ * 死线 = 基础预算 + **每满一 MB** 追加一档，封顶。工作量按 **UTF-16 码元**计（页面文本与属性串的天然
+ * 尺度），不是字节。取整用「满」而不是「有」：不到一 MB 的规模只该花基础预算，白送病态正则钉主线程的
+ * 时间。判据只在这里一次，调用点不再各自解释「这趟预算为什么是这么多」。
  */
 export function deadlineFor(volume: number): number {
   const extra = Math.floor(Math.max(0, volume) / MB) * REGEX_DEADLINE_PER_MB_MS
@@ -41,10 +34,8 @@ export function deadlineFor(volume: number): number {
 const sandbox: Record<string, unknown> = {}
 const context = vm.createContext(sandbox)
 
-/** 脚本与口径一一对应；全部在同一个 context 里跑，避免每次重建上下文的开销。 */
 const testScript = new vm.Script('__re.test(__text)')
 const replaceScript = new vm.Script('__text.replace(__re, __repl)')
-// OnlyOne 口径：先取首个匹配、再在该匹配内替换（与 replace.ts 的注释同一口径）
 const onlyOneScript = new vm.Script(`(() => {
   const m = __re.exec(__text)
   return m === null ? '' : m[0].replace(__re, __repl)
@@ -59,14 +50,14 @@ const matchAllScript = new vm.Script(`(() => {
   }
   return rows
 })()`)
-// 批量属性过滤：一趟脚本服务整批条目（逐条一趟会把千元素列表变成千次脚本执行）。
-// 属性值由宿主在调用前取齐成 __values，脚本只看数据、不再回调宿主
+// 批量属性过滤：一趟脚本服务整批条目（逐条一趟会把千元素列表变成千次脚本执行）。属性值由宿主在
+// 调用前取齐成 __values，脚本只看数据、不再回调宿主
 const filterScript = new vm.Script(`(() => {
   const out = []
   for (let i = 0; i < __items.length; i++) {
     const value = __values[i]
-    // 每条独立求值：全局/粘滞正则的 lastIndex 不许跨条目推进——复用游标会把第二、四条读成
-    // 「不命中」的静默错值。逐条归零后，y 正则等价于逐条新建（锚在串首），g 正则等价于逐条 find。
+    // 每条独立求值：全局/粘滞正则的 lastIndex 不许跨条目推进——复用游标会把第二、四条读成「不命中」的静默
+    // 错值。逐条归零后，y 正则等价于逐条新建，g 正则等价于逐条 find。
     __re.lastIndex = 0
     if (value !== undefined && __re.test(value)) out.push(__items[i])
   }
@@ -74,8 +65,8 @@ const filterScript = new vm.Script(`(() => {
 })()`)
 
 /**
- * 在途闸。求值窗口里全是同步代码且不含宿主回调，交错本不可能；这把闸把「不可能」写成断言——
- * 将来谁把一次嵌套求值请进这个窗口，当场炸，而不是留下一份偶发错值让人回头查数据。
+ * 在途闸。求值窗口里全是同步代码且不含宿主回调，交错本不可能；这把闸把「不可能」写成断言——将来谁
+ * 把一次嵌套求值请进这个窗口，当场炸，而不是留下一份偶发错值让人回头查数据。
  */
 let inGuard = false
 
@@ -84,7 +75,6 @@ interface GuardedEval {
   re: RegExp
   /** 工作量（UTF-16 码元），决定这一趟的时间预算 */
   volume: number
-  /** 脚本读到的槽位；用完即删，不留在沙箱上 */
   slots: Record<string, unknown>
 }
 
@@ -101,8 +91,8 @@ function evaluateIn({ script, re, volume, slots }: GuardedEval): unknown {
   } catch (e) {
     // vm 的超时错误来自另一个 realm：不能靠 instanceof Error，认 code
     if ((e as { code?: unknown } | null)?.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT') {
-      // 炸掉的那趟把 lastIndex 停在中间：留着它，下一次同正则会从半截位置起步（读出来是错值而不是
-      // 错误）。求值已判死，归零比留半截诚实。非全局正则没有可写的 lastIndex，无所谓。
+      // 炸掉的那趟把 lastIndex 停在中间：留着它，下一次同正则会从半截位置起步（读出来是错值而不是错误）。
+      // 求值已判死，归零比留半截诚实。
       try { re.lastIndex = 0 } catch { /* 只读 RegExp 子类：归不掉也不该改判 */ }
       throw new RegexDeadlineError(re.source, deadlineMs)
     }
@@ -114,8 +104,7 @@ function evaluateIn({ script, re, volume, slots }: GuardedEval): unknown {
   }
 }
 
-/** 守卫脚本返回值判形：返回值来自另一个 realm（形状约束见文件顶注），按目标形状显式判，
- *  对不上就抛——这是「不认识的返回值」，不是可以断言掉的东西。 */
+/** 守卫脚本返回值判形：来自另一个 realm（约束见文件顶注），对不上就抛——这是「不认识的返回值」，不能断言掉。 */
 function shapeFail(what: string, v: unknown): never {
   throw new TypeError(`regex 守卫的脚本返回值不是 ${what}（实际 ${typeof v}）`)
 }
@@ -130,7 +119,7 @@ function stringOf(v: unknown): string {
   return v
 }
 
-/** matchAll 的行 = group 0 + 捕获组，每格都是串（脚本已把 undefined 折成 ''） */
+/** matchAll 的行 = group 0 + 捕获组，每格都是串 */
 function stringRowsOf(v: unknown): string[][] {
   if (!Array.isArray(v)) shapeFail('string[][]', v)
   const rows: unknown[] = v
@@ -141,30 +130,26 @@ function stringRowsOf(v: unknown): string[][] {
   })
 }
 
-/** `re.test(text)`；超时抛 `RegexDeadlineError` */
 export function guardedTest(re: RegExp, text: string): boolean {
   return boolOf(evaluateIn({ script: testScript, re, volume: text.length, slots: { __text: text } }))
 }
 
-/** 全局 `text.replace(re, replacement)`；超时抛 `RegexDeadlineError` */
 export function guardedReplace(re: RegExp, text: string, replacement: string): string {
   return stringOf(evaluateIn({
     script: replaceScript, re, volume: text.length, slots: { __text: text, __repl: replacement },
   }))
 }
 
-/** OnlyOne 口径（先 exec 再段内 replace）；超时抛 `RegexDeadlineError` */
 export function guardedOnlyOneReplace(re: RegExp, text: string, replacement: string): string {
   return stringOf(evaluateIn({
     script: onlyOneScript, re, volume: text.length, slots: { __text: text, __repl: replacement },
   }))
 }
 
-/** 整页全局扫描，返回每行的 group 数组；超时抛 `RegexDeadlineError`。
- *  入口断言钉在守卫、不留给调用点纪律：非全局正则的 `exec` 不推进游标，脚本的 `while` 会打满
- *  死线——那会把「用错了正则」误诊成「疑似灾难性回溯」（错诊比漏诊坏：照着错诊断去改模式，
- *  改的不是病因）。粘滞正则的 `exec` 同样推进游标，不进这条断言（原生 `matchAll` 只收全局，
- *  这里放宽到 g|y 是因为脚本循环就是按游标推进写的）。 */
+/** 整页全局扫描，返回每行的 group 数组；超时抛 `RegexDeadlineError`。入口断言钉在守卫、不留给调用点
+ *  纪律：非全局正则的 `exec` 不推进游标，脚本的 `while` 会打满死线——那会把「用错了正则」误诊成
+ *  「疑似灾难性回溯」（错诊比漏诊坏：照着错诊断去改模式，改的不是病因）。粘滞正则同样推进游标，
+ *  故放宽到 g|y。 */
 export function guardedMatchAll(re: RegExp, text: string): string[][] {
   if (!re.global && !re.sticky) {
     throw new TypeError('guardedMatchAll 只收全局（g）或粘滞（y）正则：非全局正则的 exec 不推进 lastIndex，会打满死线并被误诊成灾难性回溯')
@@ -175,12 +160,10 @@ export function guardedMatchAll(re: RegExp, text: string): string[][] {
 /**
  * 批量过滤：在一条死线内按 `re.test(attrOf(item))` 筛 item（CSS `[attr~=正则]` 用）。一批一次 vm
  * 往返；`attrOf` 在宿主侧、守卫窗口之外执行（一次取齐，正则只见数据）；超时抛 `RegexDeadlineError`。
- * 预算随整批属性值总长放宽——批大小本身不是病态信号，一条正则炸在批里才是。条目数因此不进
- * volume：逐条开销是常数，真正可能指数爆炸的是「某一条值 × 这条模式」。
+ * 预算随整批属性值总长放宽——批大小本身不是病态信号，一条正则炸在批里才是，故条目数不进 volume。
  *
- * **每条目独立**：脚本在每次 test 前把 `lastIndex` 归零，所以 `g` / `y` 正则不会跨条目吃匹配；
- * 成功交回时恢复调用前的 `lastIndex`（批量抽象不替调用方推进游标），超时那趟由守卫归零
- * （同 ADR-0050 的第 3 条）。
+ * **每条目独立**：脚本在每次 test 前把 `lastIndex` 归零，`g` / `y` 正则不会跨条目吃匹配；成功交回时
+ * 恢复调用前的 `lastIndex`（批量抽象不替调用方推进游标），超时那趟由守卫归零（同 ADR-0050 的第 3 条）。
  */
 export function guardedFilter<T>(
   items: readonly T[], re: RegExp, attrOf: (item: T) => string | undefined,
@@ -197,7 +180,6 @@ export function guardedFilter<T>(
   const kept = evaluateIn({ script: filterScript, re, volume, slots: { __items: items, __values: values } })
   re.lastIndex = savedLastIndex
   if (!Array.isArray(kept)) shapeFail('数组', kept)
-  // 脚本只把 __items 的原物推进结果（跨 realm 约定见文件顶注）；数组形状已验，原样交回。
-  // 不按值重建：值相等的不同条目（尤其原始值）会被折叠成同一份，取位结果就不再是「这些位置上的条目」。
+  // 脚本只把 __items 的原物推进结果（跨 realm 约定见文件顶注）。不按值重建：值相等的不同条目会被折叠。
   return kept as T[]
 }

@@ -120,7 +120,7 @@ describe('SettingsSection 让位（同一份任务只有一个轮询实例、一
 
 /** 宿主壳层最小模型（照宿主契约）：侧栏选中哪个 id，main keyed 槽就渲染哪个面板；
  *  shell.overlay 常驻不随选中卸载。面板本体用「现场标记」代位——路由 → 视图的呈现归
- *  views-wiring 的钉子，此处只裁一件事：用户被送到的现场在不在眼前。 */
+ *  接线套件（`wiring-*`）的钉子，此处只裁一件事：用户被送到的现场在不在眼前。 */
 function HostFrame({ panel, overlay }: { panel: Store<{ id: string }>; overlay: unknown }): ReactNode {
   const { id } = useStore(panel)
   const { route } = useStore(routeStore)

@@ -5,6 +5,8 @@ import type { ReaderSessionDeps, ReaderViewportFeed, VisibleNode } from '../../s
 import type { ChapterAnchor } from '../../src/client/progress.js'
 import { DEFAULT_PREFS, setPref } from '../../src/client/store.js'
 import type { ChapterContent, ChapterEntry, NavigationItem, ShelfBook } from '../../src/client/views/types.js'
+import { fakePort } from './reader-fakes.js'
+import { deferred } from '../support/async.js'
 import { last, must, pick } from '../support/fixture.js'
 
 /**
@@ -20,44 +22,6 @@ const toc: ChapterEntry[] = [
 
 /** 文字章正文（会话不关心形态：它只搬 ChapterContent） */
 const text = (i: number): ChapterContent => ({ kind: 'text', text: `正文${i}` })
-
-/** 可编程假 port：锚点/滚动/哨兵/目标测量全由测试摆布 */
-function fakePort() {
-  const port = {
-    anchors: [] as ChapterAnchor[],
-    top: 0,
-    height: 1000,
-    scrollH: 5000,
-    sentinel: null as number | null,
-    /** 章块顶相对视口顶的偏移（`targetOffset(index, null)` 的读数） */
-    chapterOff: null as number | null,
-    /** 锚点/节点 ID → 相对视口顶的偏移；未登记 = 该节点不在 DOM → null */
-    targetOffs: new Map<string, number>(),
-    /** 视口顶所在正文节点（返回栈采点与排版复位共用） */
-    node: null as VisibleNode | null,
-    /** currentNode 读取计数：排版前采点必须发生在 setPref 的同步栈里，退订后不读 */
-    nodeReads: 0,
-    /** 章内段块（`index:paragraphIndex`）的相对视口顶偏移与高度；未登记 = 不在 DOM */
-    paragraphOffs: new Map<string, { top: number; height: number }>(),
-    /** setScrollTop 的调用记录（证明「不许落位」的用例：一次都不许发生） */
-    tops: [] as number[],
-    measureAnchors: (): ChapterAnchor[] => port.anchors,
-    scrollTop: (): number => port.top,
-    setScrollTop: (px: number): void => { port.top = px; port.tops.push(px) },
-    viewHeight: (): number => port.height,
-    scrollHeight: (): number => port.scrollH,
-    sentinelOffset: (): number | null => port.sentinel,
-    targetOffset: (_index: number, anchorId: string | null): number | null =>
-      (anchorId === null ? port.chapterOff : (port.targetOffs.get(anchorId) ?? null)),
-    /** 批量口径 = 逐个读数（会话侧只钉「一批候选都拿到」，真实索引实现归 reader-geometry.test.ts） */
-    targetOffsets: (index: number, anchorIds: ReadonlyArray<string | null>): Array<number | null> =>
-      anchorIds.map((anchorId) => port.targetOffset(index, anchorId)),
-    currentNode: (): VisibleNode | null => { port.nodeReads++; return port.node },
-    targetOffsetOfParagraph: (index: number, paragraphIndex: number) =>
-      port.paragraphOffs.get(`${index}:${paragraphIndex}`) ?? null,
-  }
-  return port
-}
 
 /** 手动帧泵：`flush()` 按登记顺序跑掉挂起帧；`cancelled` 记 cancelFrame 收到的句柄 */
 function makeFramePump(): {
@@ -134,13 +98,6 @@ function makeSession(opts?: {
     ...(opts?.topInset === undefined ? {} : { topInset: opts.topInset }),
   }
   return { session: new ReaderSession(deps, port, opts?.debounceMs ?? 20), port, fetched, saves, totals }
-}
-
-/** 手动控制的正文 promise（「目标还在途」这类竞态用例要它） */
-function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
-  let resolve!: (v: T) => void
-  const promise = new Promise<T>((res) => { resolve = res })
-  return { promise, resolve }
 }
 
 const shelfBook = (progress: ShelfBook['progress'], totalChapters?: number): ShelfBook => ({

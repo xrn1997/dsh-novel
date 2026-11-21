@@ -3,18 +3,15 @@ import type { RelevancePartition } from './relevance.js'
 import type { SearchGroup } from './wire.js'
 
 /**
- * 一轮搜索的轮级分区与读数：每源组只跑一次相关性判据，收口面与归并面读同一份结果。
- * 为什么单立一个 module：三个消费点（搜索结果页、工具面、归并面）必须共用同一份分区；
- * 各跑一趟分区、客户端再自己数一遍收口数字，「哪份分区喂给谁」就会变成三处维护点。
- * 名字就是口径：`answered` 数答了话的组（缺 `error`，零条也算），`hits` / `kept` / `suspect`
- * 只汇总答话组；失败组留在 `parts` 里——逐源轴要逐家点名，归并面自己跳过（它给的不是书目）。
+ * 一轮搜索的轮级分区与读数：每源组只跑一次相关性判据，搜索结果页、工具面与归并面读同一份。
+ * 名字就是口径：`answered` 数答了话的组（缺 `error`，零条也算）；`hits` / `kept` / `suspect` 只汇总答话组。
+ * 失败组留在 `parts` 里供逐源轴点名，归并面自己跳过。
  */
 
 /** 一组命中与它的分区：归并面与收口读数共用同一份，不再各跑一次判据。 */
 export interface RoundPartition { group: SearchGroup; part: RelevancePartition }
 
-/** 一轮的原始计数。**名字就是口径**：answered = 答了话（error 缺席，零条也算），
- *  kept/suspect = 默认视野与折叠区，hits = 答话组的命中行数。 */
+/** 一轮的原始计数（口径同模块头）：answered / hits / kept / suspect。 */
 export interface RoundCounts {
   searched: number
   answered: number

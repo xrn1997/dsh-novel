@@ -2,20 +2,6 @@
 
 Status: accepted
 
-default 方言的 class / id / tag 三种选择步，与隐式及显式 CSS 步，命中集**含当前元素自己**（若它自己就匹配），并且自身排在它的全部后代之前；`child` / `children` 维持只取子节点。唯一实现是 `src/engine/select.ts` 的 `selectStepWithSelf`，四处步共用它。
+default 方言的 class / id / tag 三种选择步，与隐式及显式 CSS 步，命中集**含当前元素自己**（若它自己就匹配），并且自身排在它的全部后代之前；`child` / `children` 维持只取子节点。唯一实现是 `src/engine/select.ts` 的 `selectStepWithSelf`，四处步共用。**为什么**：兼容判据是「书源规则读得出的，我们也得读得出」；若收成纯后代语义，「类名和标签长在同一个元素上」的写法整条链读空——`<a class="page-link" href="…">` 配 `.page-link@a@href`，一条分页地址都取不到，症状不出在选择步上，而出在下游脚本把 `undefined` 拼成下一页地址、一次 404 把整本目录带走。**这件事必须现在裁**：这一族共用模板的书源形状需要一个判据层面的不变量——现库需求数不能判做不做（探测判据太粗会造假负），该不变量现由 `ADR-0099` 承接。被否决：在 URL 层或翻页层拦脏产物（给「不像地址的串」列一张列不全的清单）；判成「这族源写得 sloppy」；只补裸词那一支。**代价**：含自身改变取位顺序——`.0` / `[0]` 从「第一个后代」变成「自身」，靠后代语义才碰对的写法可能被挪到容器上；真机侧改前/改后逐源读数按 `DSH_REPROBE`、`DSH_CONTENT_AUDIT` 重取并写进矩阵行 `note`。
 
-**为什么这么定**：本仓的兼容判据是「书源规则读得出的，我们也得读得出」（见 `ADR-0003`）。上面四种步的命中集含当前元素自身、且自身先于全部后代——这条分叉的证据只登记在矩阵行 `a-default-step-self-inclusion` 的 `note`，读数不搬进散文。若收成纯后代语义（cheerio 那类 CSS 求值就是后代语义），「类名和标签长在同一个元素上」的写法整条链读空：`<a class="page-link" href="…">` 配 `.page-link@a@href`，一条分页地址都取不到。
-
-**为什么这件事必须现在裁**：读空的症状不出在选择步上，而出在下游——翻页规则后面那段脚本把 `undefined` 拼成下一页地址，一次 404 把**已经解析出来的整本目录一起带走**，症状既不指向链步也不指向脚本。这一族共用模板的书源形状，其逐源读数住矩阵行 `a-default-step-self-inclusion` 的 `note`。本篇同时立住一条判据层面的不变量：**现库需求数不能判做不做**——探测判据太粗会造出假负（判据写「相邻两步同 token」，真形却是「类名与标签是两个不同 token 落在同一元素上」）。这条不变量现由 `ADR-0054` 承接。
-
-被否决的做法：
-
-- **在 URL 层或翻页层把 `undefined` 这类脏产物拦掉**：症状住在下游，病根住在链步。拦脏值等于给「不像地址的串」列一张永远列不全的清单（那是替源猜），而且同一条分叉还会以别的症状再犯——这次是 404，下次是「目录少一章」这类不报错的错值。
-- **判成「这族源写得 sloppy」，不动引擎**：那段脚本确实没有空值守卫，但兼容判据不是写法优雅，是「按规则读得出」。把它记成源的锅，等于把这条分叉从「待裁」写成永久欠账。
-- **只补裸词那一支（CSS 步），不补 `tag` / `class` / `id`**：真分叉在四种步上。只补一处会让 `tag.a@href` 与裸词 `a@href` 两种写法对同一份页面给出不同结果——同一个语义两套口径，正是本仓不容许的第二份抄本。
-
-**代价**：含自身**改变取位顺序**。`.0` / `[0]` 的含义从「第一个后代」变成「自身」，所以现在靠后代语义才碰对的写法可能被挪到容器上。这不是零风险，因此随本篇一起：取位与「自身优先」由 `tests/engine/select.test.ts` 的「default 选择段含当前元素自身」和 `tests/engine/css.test.ts` 的「@css 链步含当前元素自身」钉死；真机侧改前/改后逐源读数按 `docs/development.md` 的 `DSH_REPROBE`、`DSH_CONTENT_AUDIT` 重取，量出来的回归如实写进矩阵行的 `note`，不藏进提交信息。
-
-本篇不推翻 `ADR-0003`（判「支持不支持」以规则的实际读法为基准）——它就是那条基准的一次落地。与 `ADR-0001`、`ADR-0002` 无冲突：链步空态仍按 `reducePicked` 判 Miss，本篇只改「空」的判据里候选集合该不该包含自身。
-
-锚点：`src/engine/select.ts` 的 `selectStepWithSelf`（命中集含自身的唯一实现）、`evalDefault` 的 class / id / tag 三支；`src/engine/css.ts` 的 `evalCss`；矩阵行 `a-default-step-self-inclusion`（这条分叉读数的家）、`a-class-multi-token-arg`（同族里「本仓更宽」的那一侧）。
+锚点：`src/engine/select.ts` 的 `selectStepWithSelf`、`evalDefault` 的 class / id / tag 三支；`src/engine/css.ts` 的 `evalCss`；`tests/engine/select.test.ts`、`tests/engine/css.test.ts`；矩阵行 `a-default-step-self-inclusion`、`a-class-multi-token-arg`。

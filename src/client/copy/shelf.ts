@@ -1,5 +1,5 @@
 /** 书架域文案：标题 / 搜索入口 / 筛选 / 多选 / 卡片元信息 / 导入回执 / 删除确认。键前缀 `shelf.`。
- *  zh 逐字照录屏上现有文案（测试钉子在 views-wiring / smoke / shelf-*），en 只镜像同一批键。 */
+ *  zh 逐字照录屏上现有文案（测试钉子在 wiring-shelf / smoke / shelf-*），en 只镜像同一批键。 */
 export const SHELF_ZH = {
   'shelf.title': '书架',
   'shelf.search.label': '搜索书籍',

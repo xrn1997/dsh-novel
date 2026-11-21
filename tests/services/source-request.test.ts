@@ -7,7 +7,7 @@ import { RateLimiter } from '../../src/services/rate-limit.js'
 import { assembleRequest } from '../../src/services/request.js'
 import { createSourceRequest } from '../../src/services/source-request.js'
 import type { NovelSource } from '../../src/services/types.js'
-import { must } from '../support/fixture.js'
+import { html, must } from '../support/fixture.js'
 import { requestUrlOf } from '../support/fetch-input.js'
 
 function src(over: Record<string, unknown> = {}): NovelSource {
@@ -22,9 +22,6 @@ function src(over: Record<string, unknown> = {}): NovelSource {
   if (!n.ok) throw new Error(`桩源应能规范化：${JSON.stringify(n.missing)}`)
   return { id: 'i', status: 'unverified', importedAt: 0, ...must(n.source, 'n 归一化后的 source') }
 }
-
-const html = (text: string): Response =>
-  new Response(text, { headers: { 'content-type': 'text/html; charset=utf-8' } })
 
 const webview = {
   fetch: vi.fn(async () => ({

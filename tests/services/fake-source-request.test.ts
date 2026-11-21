@@ -4,7 +4,7 @@ import { normalizeSource } from '../../src/services/normalize.js'
 import { assembleRequest } from '../../src/services/request.js'
 import type { NovelSource } from '../../src/services/types.js'
 import { fakeSourceRequest } from './fake-source-request.js'
-import { must } from '../support/fixture.js'
+import { html, must } from '../support/fixture.js'
 import { requestUrlOf } from '../support/fetch-input.js'
 
 /** 假件的两条口径钉：它由真缝 `createSourceRequest` 装配，故源静态头与 headerRule 都按真缝行为生效。
@@ -22,9 +22,6 @@ function src(over: Record<string, unknown> = {}): NovelSource {
   if (!n.ok) throw new Error(`桩源应能规范化：${JSON.stringify(n.missing)}`)
   return { id: 'i', status: 'unverified', importedAt: 0, ...must(n.source, 'n 归一化后的 source') }
 }
-
-const html = (text: string): Response =>
-  new Response(text, { headers: { 'content-type': 'text/html; charset=utf-8' } })
 
 describe('fakeSourceRequest（由 createSourceRequest 装配）', () => {
   it('源静态头并入请求（与真缝同口径）', async () => {

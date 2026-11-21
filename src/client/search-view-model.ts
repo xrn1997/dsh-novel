@@ -8,23 +8,18 @@ import type { Translate } from './copy/index.js'
 import type { ShelfAddOutcome } from './shelf-action.js'
 
 /**
- * 搜索结果页的**纯派生**层（与 `shelf-view-model` / `city-view-model` / `source-list-view` 同形：
- *  纯函数、不持 React 状态、零 DOM、零 IO）：一轮命中的现场 → 轮级读数（分区与计数住
- *  `shared/round-summary.ts`）、两条呈现轴的行身份与逐源回读。
+ * 搜索结果页的**纯派生**层（与 `shelf-view-model` / `city-view-model` 同形）：纯函数、零 DOM、零 IO。
+ * 一轮命中 → 轮级读数（分区与计数住 `shared/round-summary.ts`）、两条呈现轴的行身份与逐源回读。
  *
- * 为什么这一族在视图外：它们是纯派生，不能锁在 `SearchView` 的模块私有函数里、只能在整页 jsdom
- * 里间接触达；单位律（条／本／家三条读数绝不折叠）与「同址两行」这类判据最该被单独钉住。
- * 视图因此回到只做接线与渲染——口径的住址在本文件，判据的**为什么**仍住 `CONTEXT.md` 的
- * 「作品视图（按书）」与 `ADR-0032` / `ADR-0033`。
+ * 为什么在视图外：单位律（条／本／家绝不折叠）与「同址两行」这类判据最该被单独钉住；口径的**为什么**
+ * 仍住 `CONTEXT.md` 的「作品视图（按书）」与 `ADR-0032` / `ADR-0033`。
  */
 
-/** 一条逐源行的引用：哪个源上的哪条命中。行身份与 React key 从这一对算；
- *  架位不是这个键（口径住 `services/shelf.ts` 的 `Shelf`）。 */
+/** 一条逐源行的引用：哪个源上的哪条命中。行身份与 React key 从这一对算；架位不是这个键。 */
 export interface RowRef { sourceId: string; hit: SearchHit }
 
-/** 逐源组在一个轮次里的呈现现场：这一组的分区（组头读数与失败判定都读它）＋ 两档行与它们的 key。
- *  分档仍是**视图的**事：失败组照样在这里（`partition.group.error` 让视图把它挪进失败折叠），
- *  派生只把「一组里哪些行、各叫什么 key」一次算齐，不替视图决定摆哪一档。 */
+/** 逐源组在一个轮次里的呈现现场：这一组的分区 + 两档行与它们的 key。分档仍是**视图的**事
+ *  （失败组照样在这里，由视图挪进失败折叠）。 */
 export interface GroupView {
   partition: RoundPartition
   keptRows: RowRef[]
@@ -33,8 +28,7 @@ export interface GroupView {
   suspectKeys: string[]
 }
 
-/** 一本在按书视图里的呈现现场：归并来的书目 ＋ 逐源行、行 key 与架位全集。
- *  三者都从同一份 `rows` 派生，摊开区的行与「都加架」数的架位不会各算各的。 */
+/** 一本在按书视图里的呈现现场：归并来的书目 + 逐源行、行 key 与架位全集（同一份 `rows` 派生）。 */
 export interface BookView {
   book: MergedBook
   rows: RowRef[]
@@ -42,16 +36,10 @@ export interface BookView {
   seats: Set<string>
 }
 
-/** 一轮结果的现场：轮级分区与计数（`shared/round-summary.ts` 一趟给齐）、归并结果，
- *  以及两条呈现轴预计算好的行身份（`groupViews` / `bookViews`）。
- *  全部派生在轮次身份上，只有轮真变才重算。为什么要调用方 memo：SSE 每帧都发新的 round 对象
- *  （累积器只增不减、组按源只 emit 一次），打字也走同一棵重渲——不 memo 就是每帧每击键重付
- *  整轮派生。重算时各付几趟如实记：轮级分区与
- *  计数一趟、归并一趟（吃上面那份分区）、行元数据索引一趟（只为按书轴回读）、两条呈现轴的行身份
- *  各一趟。
- *  轮级只分区一次：收口行的「相关 x 条」、组头的「相关 x · 共 y」与归并取行读的是同一份分区，
- *  「两个数对不上」从源头堵死。行 key 与架位也收在这里：它们是同一份行对象的算式，散回渲染路径
- *  就会在每帧每击键重算，而渲染只该摆已经算好的东西。 */
+/** 一轮结果的现场：轮级分区与计数、归并结果、两条呈现轴预计算好的行身份。全部派生在轮次身份上；
+ *  调用方必须 memo（SSE 每帧发新的 round 对象，不 memo 就每帧每击键重付整轮派生）。
+ *  轮级只分区一次：收口行、组头与归并取行读同一份分区，两个数对不上从源头堵死。
+ *  行 key 与架位也收在这里：散回渲染路径就会每帧重算。 */
 export interface RoundView {
   parts: RoundPartition[]
   summary: RoundCounts
@@ -60,8 +48,7 @@ export interface RoundView {
   bookViews: BookView[]
 }
 
-/** 一轮的现场（轮级分区与计数 + 归并 + 两条呈现轴的行身份一次算齐）。
- *  memo 归调用方：本函数不认识轮次身份。 */
+/** 一轮的现场（轮级分区与计数 + 归并 + 两条呈现轴的行身份一次算齐）；memo 归调用方。 */
 export function deriveRound(round: { keyword: string; groups: SearchGroup[] }): RoundView {
   const { parts, counts } = summarizeRound(round.keyword, round.groups)
   const merged = mergePartitioned(parts)
@@ -78,18 +65,12 @@ export function deriveRound(round: { keyword: string; groups: SearchGroup[] }): 
   return { parts, summary: counts, merged, groupViews, bookViews }
 }
 
-/** 一行的身份：(源, 地址)。建索引那一侧、取用那一侧与逐源行的 React key 都读这一个算式，
- *  两处各写一遍就等于给「哪一行属于哪一本」两个主人。
- *  **架位不读它**（口径住 `services/shelf.ts` 的 `Shelf`，算式在 `shelfSeats` / `newlyLandedSeats` /
- *  `addAllReceipt`）；`rowId` 只服务行 key 与元数据回读。 */
+/** 一行的身份：(源, 地址)。建索引、取用与逐源行 key 都读这一个算式。**架位不读它**
+ *  （口径住 `services/shelf.ts` 的 `Shelf`）；`rowId` 只服务行 key 与元数据回读。 */
 export const rowId = (sourceId: string, url: string | null): string => JSON.stringify([sourceId, url])
 
-/** 逐源行的 React key：身份走 `rowId`，只在同一身份于本行里重复出现时垫位次。
- *  地址为什么必须在 key 里：换一轮搜同一本书，同一家、同一下标可能给了另一个地址——
- *  不含地址的 key 认不出这是新行，于是它顶用上一行的「已在书架」，看着已架而那一发从未存在。
- *  为什么垫的是同身份内的位次、不是整行列号：一家给同一地址两种写法是既有形状
- *  （`rowMeta` 的「同址两行」口径），列号既会让两行撞同一个 key，也会因旁行挪位
- *  把自己那行的入架态洗成未加。 */
+/** 逐源行的 React key：身份走 `rowId`，同一身份重复出现时垫同身份内位次。地址必须在 key 里
+ *  （换一轮搜同一本书可能同家同下标给另一个地址）；不垫整行列号——既会撞 key，也会因旁行挪位串入架态。 */
 export function rowKeys(rows: RowRef[]): string[] {
   const seen = new Map<string, number>()
   return rows.map((r) => {
@@ -100,8 +81,7 @@ export function rowKeys(rows: RowRef[]): string[] {
   })
 }
 
-/** (源, 地址) → 该条命中。同址两行取第一条的元数据：同一地址的封面本就是一份，
- *  而行上摆的名字仍按各自己那一条给。 */
+/** (源, 地址) → 该条命中。同址两行取第一条的元数据（同一地址的封面本就是一份）。 */
 export function rowMeta(groups: SearchGroup[]): Map<string, SearchHit> {
   const by = new Map<string, SearchHit>()
   for (const g of groups) {
@@ -113,25 +93,20 @@ export function rowMeta(groups: SearchGroup[]): Map<string, SearchHit> {
   return by
 }
 
-/** 按书行的 key：认那一本的名字对（书名, 作者），不认它排在第几。
- *  为什么：流式轮次里同档会按家数降序重排，位置 key 把展开态与入架态串到别的书上
- *  （用户展开的是甲，下一帧开着的成了乙）。归并键本就是规范化后的这对名字，两本不同的书
- *  不可能带同一对原样名字（规范化多对一，同原样必同键），因此无须再垫下标。 */
+/** 按书行的 key：认（书名, 作者），不认它排第几——流式轮次里同档会按家数重排，位置 key 会把
+ *  展开态与入架态串到别的书上。归并键本就是规范化后的这对名字，不同书不可能同键。 */
 export function bookRowKey(book: MergedBook): string {
   return JSON.stringify([book.title, book.author])
 }
 
-/** 一本的逐源行 = 归并给的行身份 ＋ 从本轮命中回读的元数据；顺序跟着归并的到达序。
- *  回读而非抄一份：封面／简介／最新章这些**书架要存的字段**仍住在命中本身，
- *  把它们焊进 `MergedSource` 就是给同一份元数据第二个主人（归并面只答「这一家把它叫作什么」）。 */
+/** 一本的逐源行 = 归并给的行身份 + 从本轮命中回读的元数据；回读而非抄一份——封面/简介/最新章
+ *  仍住在命中本身，焊进 `MergedSource` 就是给同一份元数据第二个主人。 */
 export function bookRows(book: MergedBook, meta: Map<string, SearchHit>): RowRef[] {
   return book.sources.map((s) => ({ sourceId: s.sourceId, hit: rowHit(s, meta.get(rowId(s.sourceId, s.url))) }))
 }
 
-/** 逐源行那张命中：名字一律用归并带来的那一份（两边的写法都要看得见），
- *  其余字段按 wire 的可空口径给——回读不到就是 null，不发明「缺键」这第三种形状。
- *  露在最上面那一行由首个到达的源定（取首条的裁决住在 `shared/merge-by-book.ts`），
- *  换一轮搜同一本书可能换个写法出现在书行上；逐源行各家写法都在，这里不抹平名字。 */
+/** 逐源行那张命中：名字一律用归并带来的那一份，其余字段按 wire 的可空口径给（回读不到就是 null）。
+ *  露在最上面那行由首个到达的源定（裁决住 `shared/merge-by-book.ts`）。 */
 function rowHit(s: MergedSource, meta: SearchHit | undefined): SearchHit {
   return {
     title: s.title, author: s.author, url: s.url,
@@ -140,20 +115,16 @@ function rowHit(s: MergedSource, meta: SearchHit | undefined): SearchHit {
   }
 }
 
-/** 行上的作者读数：逗号级名单只留前两位，其余由尾缀承担（`search.book.etAl`）。
- *  为什么收：本项目输入里存在 `author` 是一条长名单的形状（整张配音表塞进这一个字段），
- *  而这一段住在主钮的内容里、也就是它的
- *  无障碍名——不收，读屏每本念一遍名单，视觉上还把尾巴与「都加架」顶下两行。收的不是信息：
- *  全串在 `title` 与展开后的逐源行里原样都在（形状钉子见 `tests/client/search-view-model.test.ts`）。
- *  只在逗号处切：「萧炎：锦鲤 药老：北炎」那种空格分隔的角色表切不出「第二位」，整串交给 CSS 省略号。 */
+/** 行上的作者读数：逗号级名单只留前两位，其余由尾缀承担（`search.book.etAl`）。整张配音表塞进
+ *  `author` 的形状存在，而这段住在主钮的无障碍名里——不收，读屏每本念一遍名单。全串在 `title`
+ *  与展开后的逐源行里原样都在；只在逗号处切，空格分隔的角色表整串交给 CSS 省略号。 */
 export function shortAuthor(author: string, t: Translate = zhTranslate): string {
   const head = /^\s*[^,，、]+\s*[,，、]\s*[^,，、]+/.exec(author)
   if (head === null || !/[,，、]/.test(author.slice(head[0].length))) return author
   return t('search.book.etAl', { head: head[0].trimEnd() })
 }
 
-/** 一本的架位全集（有地址的那些）：「都加架」的三态与回执都数这个集合，不数行数——
- *  同址两行只落一个架位（口径住 `services/shelf.ts` 的 `Shelf`）。 */
+/** 一本的架位全集（有地址的那些）：「都加架」的三态与回执都数这个集合——同址两行只落一个架位。 */
 export function shelfSeats(rows: RowRef[]): Set<string> {
   return new Set(rows.flatMap((r) => (r.hit.url === null ? [] : [r.hit.url])))
 }
@@ -163,15 +134,11 @@ export function isSeatLanded(landed: ReadonlySet<string>, hit: SearchHit): boole
   return hit.url !== null && landed.has(hit.url)
 }
 
-/** 「都加架」里**这次新落架**的架位：逐条 PUT 的成功结局按地址去重后给回。
- *  按成功 PUT 计数会把一个架位报成「已加 2 个架位」（同址两行发两发幂等 PUT 也只落一个架位），
- *  虚报架上的账；没发出去的那几条没有结局，本来就不该记进回执。
- *  `addShelfSeat` 从不 reject，结局就是 `ShelfAddOutcome`——不为凑 `PromiseSettledResult`
- *  再造一层反译，那层反译只是把「成功/失败」换个名字写第二遍。 */
+/** 「都加架」里**这次新落架**的架位：逐条 PUT 的成功结局按地址去重后给回（按成功 PUT 计数会把
+ *  一个架位报成「已加 2 个」）。`addShelfSeat` 从不 reject，结局就是 `ShelfAddOutcome`。 */
 export function newlyLandedSeats(todo: RowRef[], outcomes: readonly ShelfAddOutcome[]): string[] {
   const seats = new Set<string>()
-  // 以 todo 为轴逐行读自己的结局（`Promise.all` 按 todo 逐条发，两表一一对应）：
-  // 没有结局的那几行本来就不该记进回执，与「失败的结局也不算落架」汇成同一条闸。
+  // 以 todo 为轴逐行读结局（`Promise.all` 按 todo 逐条发，两表一一对应）；没有结局与失败结局同一条闸。
   todo.forEach((row, i) => {
     const outcome = outcomes[i]
     const url = row.hit.url
@@ -181,13 +148,11 @@ export function newlyLandedSeats(todo: RowRef[], outcomes: readonly ShelfAddOutc
   return [...seats]
 }
 
-/** 「都加架」的回执：新落架 / 仍缺 / 无地址三笔账。三段各走各的通道——新落架才报成功，
- *  仍缺报失败，无地址点名（没试过不是失败）；零加成不许借成功通道报喜。
- *  `newly.length > 0` 的那道闸留在视图：它管的是措辞（零加成不说「已加 0 个架位」），不是算式。 */
+/** 「都加架」的回执：新落架 / 仍缺 / 无地址三笔账。新落架才报成功，仍缺报失败，无地址点名
+ *  （没试过不是失败）；零加成不许借成功通道报喜。 */
 export interface AddAllReceipt { newly: string[]; stillMissing: number; noAddress: number }
 
-/** 「都加架」的回执算式：原行全集、落架现场与逐条结局一次算齐，视图不再手算中间量。
- *  `stillMissing` 认的是架位（同址两行只算一个），`noAddress` 认的是行（没地址的那一行没法发 PUT）。 */
+/** 「都加架」的回执算式：`stillMissing` 认架位（同址两行只算一个），`noAddress` 认行（没法发 PUT）。 */
 export function addAllReceipt(input: {
   rows: RowRef[]; landed: ReadonlySet<string>; todo: RowRef[]; outcomes: readonly ShelfAddOutcome[]
 }): AddAllReceipt {

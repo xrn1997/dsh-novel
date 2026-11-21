@@ -1,23 +1,16 @@
 /**
- * 阅读器懒加载决策（纯函数，可单测）。
- *
- * 触发口径用「未载边界哨兵相对视口的 top」，**不用**容器 scrollTop/scrollHeight。理由两层：
- * ① 容器 scrollTop/scrollHeight 口径在阅读器自己的容器 `clientHeight == scrollHeight`（永不滚）
- * 时两个方向都失效，且占位块会把 scrollHeight 撑成整本书高——哨兵在任何 scrollport 下都成立；
- * ② 判据与「谁在滚」解耦（滚动容器身份不可依赖，判据只按探测结果算）。
- * 渲染只出**已载章节**（未载章节不进 DOM），未载边界由哨兵元素表达。
+ * 阅读器懒加载决策（纯函数，可单测）。触发口径用「未载边界哨兵相对视口的 top」，不用容器
+ * scrollTop/scrollHeight：那个口径在阅读器自己的容器 `clientHeight == scrollHeight` 时两向都失效，
+ * 且占位块会把 scrollHeight 撑成整本书高。判据由此与「谁在滚」解耦。渲染只出已载章节。
  */
 
 /** 预取余量（屏数）：边界进入「视口底 + N 屏」以内即加载下一章 */
 const PRELOAD_SCREENS = 2
 
 /**
- * 下一个要加载的章下标（前向窗口：**视口所在章之后**第一个未载章）。
- * 不用「最大已载下标 + 1」：那个口径下，跳到远端再往回跳，预取会指到远端已载章的后面——
- * 跳 50 再回 10，用户读到第 11 章末尾接上的是第 51 章（该形状由 `tests/client/reader-load.test.ts` 钉住）。
- * 视口章自己未载（刚跳过去、正文还在途）→ 就是它；读尽/空表 → -1。
- * @param chapters 已载正文数组（null/空洞 = 未载）
- * @param from 视口所在章下标（会话的阅读位置）
+ * 下一个要加载的章下标（前向窗口：**视口所在章之后**第一个未载章）。不用「最大已载下标 + 1」：
+ * 跳 50 再回 10，用户读到第 11 章末尾接上的是第 51 章（`tests/client/reader-load.test.ts` 钉住）。
+ * 视口章自己未载 → 就是它；读尽/空表 → -1。
  */
 export function nextChapterIndex(chapters: ReadonlyArray<unknown>, from: number): number {
   if (chapters.length === 0) return -1
@@ -31,13 +24,8 @@ export function nextChapterIndex(chapters: ReadonlyArray<unknown>, from: number)
 }
 
 /**
- * 应发起加载的章下标；不该加载 → null（无未载章 / 已有在途章 / 边界还没进预取区）。
- * `chapters` 的元素类型是 `unknown`：**懒加载只问「在不在」**，正文是纯文本串还是图文树与它无关
- * （EPUB 接入时这里若收窄成 `ChapterContent`，等于让加载算法认识载荷形态——那是第二份算法要长的样子）。
- * @param sentinelTop 未载边界哨兵相对视口顶的距离（已滚过头为负）
- * @param viewportHeight 视口高（滚动容器 clientHeight）
- * @param opts.chapters 已载正文数组  @param opts.loading 在途章下标（单在途槽；空闲传 null）
- * @param opts.from 视口所在章下标（预取只往前接它）
+ * 应发起加载的章下标；不该加载 → null（无未载章 / 已有在途章 / 边界还没进预取区）。`chapters` 的元素
+ * 类型是 `unknown`：**懒加载只问「在不在」**，收窄成 `ChapterContent` 等于让加载算法认识载荷形态。
  */
 export function nextLoadTarget(
   sentinelTop: number, viewportHeight: number,

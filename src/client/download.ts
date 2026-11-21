@@ -31,7 +31,10 @@ export async function streamExport(opts: {
     const env = await res.json().catch(() => null) as ApiEnvelope<never> | null
     throw new ApiClientError(env?.error?.code ?? 'Unknown', res.status, env?.error?.message ?? `HTTP ${res.status}`)
   }
-  const total = res.headers.get('x-novel-total-chapters')
+  // 头是本仓服务端写的（`dispatch` 的 `String(plan.totalInRange)`）：解析不成立就当缺席，读取面按
+  // 「只报字节」处理——代理改写或旧服务端不认这个头时，不该把脏串念成「共 N 章」。
+  const rawTotal = res.headers.get('x-novel-total-chapters')
+  const total = rawTotal !== null && /^\d+$/.test(rawTotal) ? rawTotal : null
   const reader = res.body.getReader()
   const parts: Uint8Array[] = []
   let bytes = 0

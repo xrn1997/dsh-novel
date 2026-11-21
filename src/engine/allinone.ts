@@ -5,25 +5,16 @@ import { guardedMatchAll } from './regex-guard.js'
 /**
  * AllInOne 整页正则（口径：二维不压平）。
  *
- * 语义钉死：
- * - 对整页文本全局扫描（自动补 `g`；已有 `g` 不重复加）。
- * - 每个匹配 → 一行 `rows`，行内是 **group 0（整段）+ 捕获组 1..n**；
- *   无捕获组 → 单元素行 `[fullMatch]`（整段即全部）；未参与的 `(x)?` 组落 `''`。
- * - 产物 `rows: string[][]` 永不压平——字段映射按组号由调用方做
- *   （`service`/工具层的条目取值走 `bridge.rowParts`：条目 = 组 1..n，
- *   group 0 只供字段规则的 `$n` 绑定用，见 `regex-row.ts`）。
- * - 零匹配 → `List{items:[]}`（AllInOne 整页扫不到的合法零条目，
- *   区别于段级 Miss）。
- * - 非法正则 → RuleEvalError（hits=0，段级定位，消息含坏 pattern）。
- * - `-` 反序前缀由 parse/evaluate 层处理，首 `:` 已由 parse 层剥掉，
- *   此处不参与。
- * - 零长度匹配强制 `lastIndex++` 前进，防死循环。
+ * - 对整页文本全局扫描（自动补 `g`）；每个匹配 → 一行 `rows`，行内是 **group 0 + 捕获组 1..n**；
+ *   无捕获组 → 单元素行 `[fullMatch]`；未参与的 `(x)?` 组落 `''`。
+ * - 产物 `rows: string[][]` 永不压平——字段映射按组号由调用方做（`service`/工具层走 `bridge.rowParts`：
+ *   条目 = 组 1..n，group 0 只供字段规则的 `$n` 绑定，见 `regex-row.ts`）。
+ * - 零匹配 → `List{items:[]}`（整页扫不到的合法零条目，区别于段级 Miss）。
+ * - 非法正则 → RuleEvalError（hits=0，段级定位）；零长度匹配强制 `lastIndex++` 前进防死循环。
+ * - `-` 反序前缀与首 `:` 由 parse/evaluate 层处理，此处不参与。
  */
-/**
- * 行内标志前缀（正则的行内标志写法 `(?s)` / `(?i)` / `(?si)`——JS 无行内标志语法）：
- * 出现在模式开头时剥掉并转成 JS flags（s=dotAll、i、m、u；其余字符不剥，编译期如实报错）。
- * 输入里会出现 `:(?s)(\d+)" class="…` 形态；直接交给 RegExp 会报 Invalid group，故前缀必须先剥掉再编译。
- */
+/** 行内标志前缀（`(?s)` / `(?i)`——JS 无行内标志语法）：出现在模式开头时剥掉并转成 JS flags（s=dotAll、
+ *  i、m、u；其余字符不剥，编译期如实报错）。直接交给 RegExp 会报 Invalid group。 */
 const INLINE_FLAG_RE = /^\(\?([imsu]+)\)/
 
 export function evalAllInOne(
@@ -37,7 +28,6 @@ export function evalAllInOne(
   const inline = INLINE_FLAG_RE.exec(pattern)
   if (inline !== null) {
     pattern = pattern.slice(inline[0].length)
-    // 组 1 是模式的必选段（`[imsu]+`），命中即非空——判空落在本函数已有的「正则形态坏」通道上
     const inlineFlags = inline[1]
     if (inlineFlags === undefined) {
       throw new RuleEvalError(`AllInOne 行内标志组缺失：${inline[0]}`, { ...loc, facet, hits: 0 })
@@ -54,8 +44,7 @@ export function evalAllInOne(
     )
   }
 
-  // 整页扫描走死线守卫：合法但病态的正则（灾难回溯）只许废掉这一条规则，
-  // 不许把主线程钉住（见 regex-guard 的取舍）；行口径以 guardedMatchAll 自身为准
+  // 整页扫描走死线守卫：合法但病态的正则只许废掉这一条规则，不许把主线程钉住（见 regex-guard）
   let rows: string[][]
   try {
     rows = guardedMatchAll(re, page)

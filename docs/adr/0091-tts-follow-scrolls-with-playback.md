@@ -2,43 +2,6 @@
 
 Status: superseded by 0096
 
-阅读器里听本书时，播放推进到新段 / 新章会把视口带到正在念的段；目标已在看得见的正文带里就不动，离开才居中。读者手动滚动（滚轮 / 触摸 / 滚动键 / 滚动条拖动）或点目录 / 内链后跟随让位，按听书条的「定位到正在念的段」重新接上。这翻掉 `ADR-0071` 的「只标记不滚动」。
+阅读器里听本书时，播放推进到新段 / 新章会把视口带到正在念的段；目标已在看得见的正文带里就不动，离开才居中。读者手动滚动（滚轮 / 触摸 / 滚动键 / 滚动条拖动）或点目录 / 内链后跟随让位，按听书条的「定位到正在念的段」重新接上。这翻掉 `ADR-0071` 的「只标记不滚动」。被否决：始终跟随、用户滚动后仍在下一段拽回；逐段无条件居中；新增「跟随听书」开关；平滑滚动动画；把跟随写进高亮。代价：跟随与播放各自触发一笔位置落盘，短时间内可能双写；视口每离开一次正文带就跳一次；让位后不会自己回来。
 
-## 背景
-
-`ADR-0071` 把「不制造第二个写者」放在首位：阅读会话把任何滚动（含程序写入的 `scrollTop`）经防抖落成 `progress`，自动跟随会让视口在听书推进时不断改写位置，与播放层的落盘节拍互相覆盖；于是高亮只做标记，定位缩成一次显式按钮。
-
-实际使用时，听书一路往下走、正文停在原处：读者每听几段就得手动追一次，阅读位置也不再自动跟上。`ADR-0078` 的共用位置落地后，两边写的是同一个消费位置，短暂两写最终收敛；跟随再叠一条「读者接管即让位」，冲突面就从「两个写者一直抢」缩到「跟随开启到读者接管」这一小段。
-
-## 决定
-
-- **跟随默认开**：本书是正在听的会话时，播放推进到新段 / 新章，视口跟着走。目标段已经在看得见的正文带（扣顶条与听书条高度）里就一次不滚；离开带才把它居中。目标章未载时先挂起定位并跳章，章到货后居中（复用定位路径）。
-- **读者接管即让位**：正文上的滚轮 / 触摸 / 滚动键 / 滚动条拖动，或目录 / 内链 / 返回原处这类显式导航，都会关掉跟随；之后段推进不再把视口拽回去。听书条自己的控件（上一段 / 下一段 / 滑杆 / 设置）不算阅读接管。
-- **定位按钮重新接上**：「定位到正在念的段」按了即重新开启跟随，并把当前段居中；它是重新同步的唯一入口，不新增开关。
-- **共享位置不翻案**：跟随触发的滚动与读者滚动走同一条阅读会话落盘；播放层的段粒度落盘仍按原节拍。两笔写的是同一个消费位置（`ADR-0078`），跟随不制造第二套位置。
-- **高亮几何不动**：跟读高亮仍只换字色 + 段首三角、不改盒模型（`ADR-0076`）；跟随是滚动容器的动作，不是高亮写位置。
-- **不做平滑动画**：段推进本身是跳变；动画会让连续推进的滚动排队，且与阅读会话的滚动补偿 / 锚点互相打架。直接写 `scrollTop`，与定位同一档。
-
-## 边界
-
-- 跟随只在阅读器里、且本书就是会话本书时存在；浮窗与离开阅读器的界面不跟随。回阅读器时按当前段接上。
-- 读者让位后不自动恢复，也没有超时；同一次听书会话内，定位按钮是唯一的重新接上入口。会话重新开始 / 换书按默认开重新计。
-- 听书条设置面板或其它浮层打开时，跟随仍可能在背后滚；面板自己的滚动不算读者接管。
-- 共享的仍是**落盘位置**，不是强制同步的视口：让位期间阅读器与听书段可以不同步。
-- 用户接管后，阅读器的滚动提交是后一次显式动作；未接管时播放推进是后一次动作。两笔落盘各走各的值域门，失败半径独立（`ADR-0078`）。
-
-## 代价
-
-- 跟随与播放各自触发一笔位置落盘，短时间内可能双写；两者指向同一段，下一笔收敛。
-- 视口每离开一次正文带就跳一次；不做动画是刻意取舍——高频推进时动画会排队，反而看不清读到哪。
-- 跟随被手动滚动关掉后不会自己回来；读者要知道「定位到正在念的段」就是重新接上。
-
-## 被否方案
-
-- **始终跟随、用户滚动后仍在下一段拽回**：读者已经明确接管视口，再拽回去就是夺走阅读控制；这正是旧案担心的那条缺陷。
-- **逐段无条件居中**：播放是段粒度，每几秒跳一次会把读者的视野不断重置；只在目标离开正文带时补一次才读得下去。
-- **新增「跟随听书」开关**：多一个表面，且默认关等于把越轨路径留给用户误开；默认开 + 手动滚动让位 + 定位重新接上，已经覆盖两种意图。
-- **平滑滚动动画**：连续推进时动画排队，且与阅读会话的滚动补偿 / 锚点冲突；直接写 `scrollTop` 与定位同一档。
-- **把跟随写进高亮**：高亮仍是纯标记，不写 `progress`、不写 `listen`；视口跟随归阅读器视图。
-
-锚点：`src/client/tts/follow-controller.ts` 的 `createFollowController` / `onPlayback` / `onLocate` / `onUserIntent` / `onRelocation`；`src/client/views/ReaderView.tsx` 的 `takeOverReading` / `locateListen` / `followBottomInset`；`src/client/reader-session.ts` 的 `reveal` / `settleReveal` / `cancelJump`；`src/client/reader-binding.ts` 的 `ReaderViewportHandlers.intent` / `ReaderBindingOptions.onUserIntent` / `PROD_HOST`；`src/client/tts/TtsBar.tsx` 的 `rootRef`；`tests/client/tts-seek.test.tsx`；`tests/client/reader-session.test.ts`；`tests/client/scroller-centering.test.ts`；`tests/client/reader-binding.test.ts`；`tests/client/reader-binding-host.test.ts`；`docs/ui-spec.md` §3.6；`ADR-0071`（被本篇取代）、`ADR-0076`、`ADR-0078`。
+锚点：`src/client/tts/follow-controller.ts` 的 `createFollowController` / `onPlayback` / `onLocate` / `onUserIntent` / `onRelocation`；`src/client/views/ReaderView.tsx` 的 `takeOverReading` / `locateListen` / `followBottomInset`；`src/client/reader-session.ts` 的 `reveal` / `settleReveal` / `cancelJump`；`src/client/reader-binding.ts` 的 `ReaderViewportHandlers.intent` / `ReaderBindingOptions.onUserIntent`；`tests/client/tts-seek.test.tsx`；`tests/client/reader-session.test.ts`；`docs/ui-spec.md` §3.6；`ADR-0071`（被本篇取代）、`ADR-0076`、`ADR-0078`、`ADR-0096`（被本篇承接）。

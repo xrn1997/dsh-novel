@@ -6,22 +6,13 @@ import { JOB_POLL_MS } from './util.js'
 
 /**
  * client 依赖 seam：束按**读者**切，不按方便切。
+ * 为什么收窄：视图硬 import 真实现时接线层的 bug 无法被测试驱动——interface 即测试面。一条用例要
+ * 构造的成员数就是固定成本：被逼提供用不上的面，成本付在每个用例上、收益落在零个用例上。
  *
- * 为什么收窄：视图硬 import 真实现时，接线层的 bug（乐观态不回滚、陈旧回调、误导性空态）无法被
- * 测试驱动——interface 即测试面。而一条测试要构造的成员数就是它的固定成本：若所有吃「核心束」的
- * 读者都被迫提供 `apiUpload`（只有书架读）与 `apiEventStream`（只有两条观察通道读），
- * 那两位的成本会付在每一个用例上，收益落在零个用例上。
- *
- * 分工：
- * - `ClientCoreDeps` = 三视图与浮层真正共用的那四件（两条 wire 口 + 瞬态上报两位）。
- * - `JobWatchDeps` = 观察一条后台任务所需的通道（`useSearchJob` / `useExploreJob` 只吃这个）。
- * - `JobViewDeps` = 把观察通道嵌进界面的读者（搜索结果页、书籍详情浮层、书城）。
- * - `ShelfDeps` = 需要原始字节上传的读者（书架）。
- * - `SettingsDeps` / `ReaderDeps` = 各自加面（任务面 / 导出流）。
- * - `RowActionDeps` = 行与行内浮层那一级：一发写请求 + 两句上报（壳层把宽束原样传下来即可）。
- *
- * `pushOk` 在核心束而非设置束：书架的本地上传是异步的，落地时用户可能已切走，那条成功必须有
- * 地方说（见 ShelfView 的 alive 闸）。
+ * 分工：`ClientCoreDeps` = 三视图与浮层共用的四件；`JobWatchDeps` = 观察一条后台任务的通道；
+ * `JobViewDeps` = 把观察通道嵌进界面的读者；`ShelfDeps` = 需要原始字节上传的读者；
+ * `SettingsDeps` / `ReaderDeps` = 各自加面；`RowActionDeps` = 行内动作（一发写请求 + 两句上报）。
+ * `pushOk` 在核心束而非设置束：书架的本地上传落地时用户可能已切走，那条成功必须有地方说。
  */
 export interface ClientCoreDeps {
   /** wire GET（信封解包） */
@@ -34,9 +25,8 @@ export interface ClientCoreDeps {
   pushOk: typeof pushOk
 }
 
-/** 观察一条在跑的后台任务所需的通道：读面 + 推送加速器 + 节奏。
- *  节奏是 seam 的一格而不是常量：节拍必须可注入，否则测试要驱动「等到下一拍」就得干等墙钟
- *  （一条用例 700ms 起）。缺省仍是 `JOB_POLL_MS`——生产接线零变化。 */
+/** 观察一条在跑的后台任务所需的通道：读面 + 推送加速器 + 节奏。节奏是 seam 的一格而非常量——
+ *  节拍必须可注入，否则测试要驱动「等到下一拍」就得干等墙钟。缺省仍是 `JOB_POLL_MS`。 */
 export interface JobWatchDeps {
   apiGet: typeof apiGet
   apiSend: typeof apiSend
@@ -56,9 +46,8 @@ export interface ShelfDeps extends ClientCoreDeps {
 /** 三视图的生产依赖：模块级真实现的打包——视图缺省即它，接线零变化 */
 export const prodCoreDeps: ClientCoreDeps = { apiGet, apiSend, pushError, pushOk }
 
-/** **行内动作**读者的依赖面：一发写请求 + 两句上报。行与浮层里的每一条都一样只管动作，
- *  既不读面、也不观察任务——`jobs.ts` 的 `JobStatusDeps` 是同一先例的更早一份。
- *  宽束仍由整壳读者（`SearchView` / `CityBookSheet` / `SourceList` 的壳层）持有并原样传下来。 */
+/** **行内动作**读者的依赖面：一发写请求 + 两句上报。行与浮层里的每一条都只管动作，既不读面、
+ *  也不观察任务；宽束仍由整壳读者持有并原样传下来。 */
 export type RowActionDeps = Pick<ClientCoreDeps, 'apiSend' | 'pushOk' | 'pushError'>
 
 /** 观察通道的生产依赖 */
@@ -90,14 +79,12 @@ export const prodDeps: SettingsDeps = {
   fetchJobStatus,
 }
 
-/** 阅读区依赖束：核心束超集 + 导出流（streamExport/saveBlob）。
- *  ReaderView 与 ShelfView/SearchView 同吃 ClientCoreDeps 的核心面；阅读区只加导出流两件。 */
+/** 阅读区依赖束：核心束超集 + 导出流（streamExport/saveBlob）；阅读区只加这两件。 */
 export interface ReaderDeps extends ClientCoreDeps {
   /** 流式导出（fetch 流读取 → Blob）与落盘下载；编排归 export-run.ts */
   streamExport: typeof streamExport
   saveBlob: typeof saveBlob
-  /** 进度防抖窗口（缺省 2s，见 ReaderSession 构造）——测试收紧，免得用例拿墙钟干等整个防抖窗
-   *  （观察通道的 `jobPollMs` 同一先例） */
+  /** 进度防抖窗口（缺省 2s）——测试收紧，免得用例拿墙钟干等整个防抖窗。 */
   saveDebounceMs?: number
 }
 

@@ -7,27 +7,16 @@ import type { ReadingPosition } from './tts/reading-position.js'
 import { readingPositionAt, setReadingProbe } from './tts/reading-position.js'
 
 /**
- * 阅读器的 DOM 侧绑定：「渲染后拍点」从视图搬出来后的唯一主人。
+ * 阅读器的 DOM 侧绑定：「渲染后拍点」从视图搬出来后的唯一主人。它拥有六件事：
+ * (a) **这一帧要不要测量**——视图每次渲染只调 `rendered`，拿会话的 DOM 版本与上次量过的比；
+ * (b) **帧泵**（生产 rAF、测试手动泵，同版多帧合并一次拍点）；(c) **测量前刷新 ReaderPort**；
+ * (d) **装摘视口事件**（scroll 捕获 / resize / ResizeObserver 并进 `feedViewport`）；
+ * (e) **阅读探针注册**；(f) **拍点后回调**（会话 afterRender 之后同一次测量里跑）。
  *
- * 它拥有六件事：
- * (a) **这一帧要不要测量**——视图每次渲染只调一个无条件的门（`rendered`），拿会话的 DOM 版本
- *     （`state.domRevision`）与上次量过的比；比较住这里，视图不再枚举依赖数组（少列一条影响
- *     布局的来源就静默漏拍的那类缺陷，从此没有第二处可犯）。
- * (b) **帧泵**：测量排在帧上（生产 rAF、测试手动泵）——同一版的多帧渲染合并成一次拍点。
- * (c) **测量前刷新 ReaderPort**：帧体先找/刷新滚动容器再让会话读视口（内容变化后旧缓存量到的
- *     是上一版布局）。
- * (d) **装摘视口事件**：scroll 捕获、resize、内容尺寸变化（ResizeObserver）都并进会话的
- *     `feedViewport`；装摘经 `host` 注入（测试不装真 DOM）。
- * (e) **阅读探针注册**：挂载时注册、卸载时注销；探针量的是调用那一刻的 DOM。
- * (f) **拍点后回调**：会话 `afterRender` 之后同一次测量里跑（「定位到正在念的段」这类消费者
- *     要的次序保证：会话的 settleJump 会把视口拉回章块顶，先居中再落位等于白中）。
- *
- * 不在这里的东西：时序语义（落位 → 重测 → 补偿 → 预取）归 `client/reader-session.ts`；几何
- * 语义归 `client/reader-geometry.ts`；标记结构与纯 UI 策略仍归 `ReaderView`。
+ * 不在这里：时序语义归 `client/reader-session.ts`，几何语义归 `client/reader-geometry.ts`。
  */
 
-/** 元素来源：视图只交 ref 读数，取的时刻由绑定定。
- *  真实滚动容器**不在这里**——它是绑定自己刷新出来的（测量前/视口帧前），几何口吃的是同一份。 */
+/** 元素来源：视图只交 ref 读数，取的时刻由绑定定；真实滚动容器是绑定自己刷新出来的。 */
 export interface ReaderElementSource {
   /** 正文层容器：向上找真实滚动容器的起点，也是 ResizeObserver 的观察点 */
   body(): HTMLElement | null
@@ -56,7 +45,7 @@ export interface ReaderViewportHandlers {
   scroll(): void
   layout(): void
   /** 用户主动滚动意图（滚轮 / 触摸 / 滚动键 / 滚动条拖动）。程序写入 scrollTop 不经过这里——
-   *  跟读自动跟随要靠它区分「播放把视口带走」与「读者自己把视口带走」。 */
+   *  跟读自动跟随靠它区分「播放把视口带走」与「读者自己把视口带走」。 */
   intent?(): void
 }
 
@@ -75,29 +64,23 @@ const RAF_FRAMES: ReaderFrameScheduler = {
   cancel: (handle) => cancelAnimationFrame(handle),
 }
 
-/** 生产 DOM 平台缝：真 document / window / ResizeObserver。导出只为让 jsdom 用例对读装摘的接线
- *  （判据本身用注入的假 host 测，不必起 DOM）。 */
+/** 生产 DOM 平台缝：真 document / window / ResizeObserver（导出只为让 jsdom 用例对读装摘接线）。 */
 export const PROD_HOST: ReaderBindingHost = {
   findPort: (body) => findScrollport(body),
   listenViewport: (handlers, body) => {
-    // capture 阶段收「任意容器」的 scroll（scroll 不冒泡，但捕获阶段会经过 document）——
-    // 滚动容器（.novel-main 或更外层）的滚动因此都收得到。
+    // capture 阶段收「任意容器」的 scroll（scroll 不冒泡，但捕获阶段会经过 document）。
     const onScroll = (): void => { handlers.scroll() }
     const onLayout = (): void => { handlers.layout() }
-    // 用户意图与 scroll 事件分开收：程序写入 scrollTop 也会发 scroll，单看 scroll 分不出是谁在滚。
-    // wheel / touch 只在正文层里算（条与面板上的操作不夺走跟随）；滚动键排除控件自己会消费的
-    // Space / Enter，其余滚动键照算；滚动条拖动在正文层之外，用 pointerdown 的 offsetX 越过
-    // clientWidth 判定。滚动容器**按事件时刻现找**：内容到货后真正在滚的容器可能换人，
-    // 挂载时抓一次会让滚动条这一路静默失效。
+    // 用户意图与 scroll 分开收（程序写入 scrollTop 也会发 scroll）。wheel / touch 只在正文层里算；
+    // 滚动键排除控件自己消费的 Space / Enter；滚动条拖动按事件时刻现找的容器判。
     const intent = (): void => { handlers.intent?.() }
     const insideBody = (target: EventTarget | null): boolean =>
       body === null ? true : target instanceof Node && body.contains(target)
     const onWheel = (event: WheelEvent): void => { if (insideBody(event.target)) intent() }
     const onTouch = (event: TouchEvent): void => { if (insideBody(event.target)) intent() }
     const SCROLL_KEYS = new Set(['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', ' ', 'Spacebar'])
-    /** 目标在一只**自己的滚动容器**里（设置卡 / 抽屉 / 正文里的代码块）：按键滚的是它，
-     *  不是阅读正文，不算读者接管。正文层自己的滚动容器与包住正文层的外层滚动容器都算阅读，
-     *  只有落在这两者之外的滚动面（浮层 / 段内代码块）才排除。 */
+    /** 目标在一只**自己的滚动容器**里（设置卡 / 抽屉 / 正文代码块）：按键滚的是它，不算读者接管；
+     *  正文层自己的与包住正文层的外层滚动容器都算阅读。 */
     const insideNestedScroller = (target: HTMLElement | null): boolean => {
       if (target === null) return false
       const inner = findScrollport(target)
@@ -111,8 +94,7 @@ export const PROD_HOST: ReaderBindingHost = {
       const target = event.target instanceof HTMLElement ? event.target : null
       if (target !== null && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
         || target.tagName === 'SELECT' || target.isContentEditable)) return
-      // 按钮 / 链接只消费 Space 与 Enter；PageUp / PageDown 等仍会滚正文，不能因焦点停在
-      // 条上那颗钮就吞掉这次接管（键盘读者关完设置卡接着翻页正是常见路径）。
+      // 按钮 / 链接只消费 Space 与 Enter；PageUp / PageDown 等仍会滚正文，不能因焦点停在钮上就吞掉接管。
       if (target !== null && (event.key === ' ' || event.key === 'Spacebar' || event.key === 'Enter')
         && target.closest('button, a[href], [role="button"], [role="link"]') !== null) return
       if (insideNestedScroller(target)) return
@@ -157,11 +139,10 @@ export interface ReaderBindingOptions {
   frames?: ReaderFrameScheduler
   /** DOM 平台缝（缺省真 document/window/ResizeObserver） */
   host?: ReaderBindingHost
-  /** 视口顶的固定遮挡高度（阅读器顶条，px）：阅读探针按**看得见的顶**取段——
-   *  探针与阅读会话的位置口径必须是同一个（`ReaderSessionDeps.topInset`）。缺省 0。 */
+  /** 视口顶的固定遮挡高度（阅读器顶条，px）：阅读探针按**看得见的顶**取段，与
+   *  `ReaderSessionDeps.topInset` 同一口径。缺省 0。 */
   topInset?(): number
-  /** 用户主动滚动 / 导航意图（正文上的滚轮、触摸、滚动键、滚动条拖动）：跟读自动跟随据此让位。
-   *  程序写入 scrollTop 与听书条自身的控件操作不触发。 */
+  /** 用户主动滚动 / 导航意图：跟读自动跟随据此让位；程序写入 scrollTop 与听书条控件不触发。 */
   onUserIntent?(): void
 }
 
@@ -210,14 +191,12 @@ export class ReaderBinding {
     return this.portEl
   }
 
-  /** 每次渲染后调用的**唯一一道门**：这一帧要不要测量由这里按 DOM 版本裁。
-   *  `after` 是拍点后回调（同一版的多帧渲染只留最新那次给的闭包）。
-   *  未挂载时只记版本、不排帧——挂载那一步自己会拍第一帧，视图不必关心两个 effect 谁先跑。 */
+  /** 每次渲染后调用的**唯一一道门**：这一帧要不要测量由这里按 DOM 版本裁。`after` 是拍点后回调
+   *  （同版多帧只留最新闭包）。未挂载时只记版本、不排帧——挂载那一步自己会拍第一帧。 */
   rendered(revision: number, after?: (() => void) | null): void {
     if (!this.mounted) { this.measuredRevision = revision; return }
     if (revision === this.measuredRevision) {
-      // 版本没变：这一帧不需要测量。但若已有一帧挂起，仍更新回调闭包——同版可能又渲染了几次，
-      // 拍点后回调要跑最新那次给的（否则用的是旧渲染捕获的 ref/状态）
+      // 版本没变：这一帧不需要测量，但挂起的帧要更新回调闭包（跑最新渲染捕获的 ref/状态）。
       if (this.measureFrame !== null) this.afterMeasure = after ?? null
       return
     }
@@ -242,9 +221,8 @@ export class ReaderBinding {
       this.source.chapters(), portViewTop(this.portEl) + clampTopInset(this.topInset()),
     ))
     target.feedViewport()                       // 首帧视口读数（与旧视图的初始喂入同一条）。
-                                                // 换源不重喂：监听常驻不过期，落位/锚点/预取/补载走 domRevision
-                                                // 拍点的 afterRender；只有同高换源且无滚动事件的窄边角要等下一次
-                                                // 视口事件才补上 handleViewportChange 的采点（有界、可接受）。
+                                                // 换源不重喂：监听常驻，落位/锚点/预取/补载走 domRevision 拍点；只有同高换源
+                                                // 且无滚动事件的窄边角要等下一次视口事件补采点（有界、可接受）。
     this.scheduleMeasure()
   }
 

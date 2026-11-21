@@ -3,19 +3,13 @@ import { RegexDeadlineError, RuleEvalError } from './errors.js'
 import { guardedOnlyOneReplace, guardedReplace } from './regex-guard.js'
 
 /**
- * `##` 替换求值（净化 + OnlyOne，语义钉死）：
- * - 净化（循环替换）：对 `Value.text` 与 `List.items` 逐项、按 `replaces` 顺序依次应用；
- * - `OnlyOne`（`###`）：**先取首个匹配、再在该匹配内替换**，
- *   无匹配 → 空串；非 OnlyOne：全局替换（补 `g`）。替换串 `$1` 等用 JS 原生语义
- *   （OnlyOne 下捕获组在截出的那段内解析）；
- * - 非法正则 → `RuleEvalError`（hits=0，段定位指向该替换步，消息含坏 pattern）；
- * - `replaces` 为空 → 原值透传；`miss` / `matches` → 原样透传（不做替换）；
- * - **空 pattern（含插值后为空）整步跳过**——替换步都门在「正则非空」上；
- * - 替换结果变空串的项**保留**（净化不删条目，「取到空」口径不适用在替换层）；
- * - `nodes` 在此层透传原样（求值链应先取值再替换）；
- * - **插值**：pattern / replacement 里的 `{{点路径}}`
- *   （如 `{{chapter.title}}`、`{{book.name}}`）先按 bindings 查表替换再编译正则——
- *   去章标题行依赖这条插值（`##…|{{chapter.title}}|…##` 形态）；查不到的保持原文字面（不猜）。
+ * `##` 替换求值（净化 + OnlyOne，语义钉死）：净化对 `Value.text` 与 `List.items` 逐项、按 `replaces`
+ * 顺序依次应用。`OnlyOne`（`###`）**先取首个匹配、再在该匹配内替换**，无匹配 → 空串；非 OnlyOne 全局
+ * 替换（补 `g`），替换串 `$1` 等用 JS 原生语义。非法正则 → `RuleEvalError`（hits=0，段定位指向该替换步）；
+ * `replaces` 为空 → 原值透传；`miss` / `matches` / `nodes` → 原样透传（求值链应先取值再替换）。
+ * **空 pattern（含插值后为空）整步跳过**；替换结果变空串的项**保留**（净化不删条目）。
+ * **插值**：pattern / replacement 里的 `{{点路径}}` 先按 bindings 查表替换再编译正则——去章标题行依赖
+ * 这条（`##…|{{chapter.title}}|…##`）；查不到的保持原文字面（不猜）。
  */
 export function applyReplaces(
   v: EngineValue,
@@ -32,18 +26,14 @@ export function applyReplaces(
   const compiled: { re: RegExp; replacement: string; index: number; raw: string }[] = []
   for (let i = 0; i < replaces.length; i++) {
     const step = replaces[i]
-    // 循环条件给到第 i 项 ⇒ step 必在界内；判空只为让编译器跟上（不补一条空替换步）
     if (step === undefined) continue
     const flags = onlyOne
       ? step.flags.replace('g', '')
       : step.flags + (step.flags.includes('g') ? '' : 'g')
     const pattern = interpolate(step.pattern, interp)
-    // 空正则整步跳过：替换步门在「正则非空」上（钉子见 tests/engine/replace.test.ts
-    // 的「空 pattern 整步跳过」）。JS 的空正则配 `g`
-    // 在每个字符位都匹配，无条件执行会让 replacement 被插进每一个字符之间——`class.font_max@html####本章未完.*##`
-    // 这类「第 2 段为空、第 3 段才是正则」的写法
-    // 因此会把整页灌成插串的超长文本并写进缓存（读数在矩阵行 `a-replace-tail`；
-    // 「只有一对 `##` + 第 4 段开关」是另一条分叉，仍待裁（`a-replace-tail-single-pair`）。
+    // 空正则整步跳过（钉子见 tests/engine/replace.test.ts）：JS 的空正则配 `g` 在每个字符位都匹配，
+// 无条件执行会把 replacement 插进每个字符之间，`class.font@html####本章未完.*##` 这类「第 2 段为空、
+// 第 3 段才是正则」的写法会把整页灌成插串的超长文本并写进缓存（读数在矩阵行 `a-replace-tail`）。
     if (pattern === '') continue
     const replacement = interpolate(step.replacement, interp)
     try {
@@ -62,8 +52,7 @@ export function applyReplaces(
     let out = text
     for (const { re, replacement, index, raw } of compiled) {
       try {
-        // 执行走死线守卫：合法但病态的正则（灾难回溯）只许把这一条替换判死，
-        // 不许把主线程钉住（见 regex-guard 的取舍）
+        // 执行走死线守卫：合法但病态的正则只许把这一条替换判死，不许把主线程钉住（见 regex-guard）
         out = onlyOne ? guardedOnlyOneReplace(re, out, replacement) : guardedReplace(re, out, replacement)
       } catch (e) {
         if (!(e instanceof RegexDeadlineError)) throw e
@@ -83,13 +72,11 @@ export function applyReplaces(
 }
 
 /** `{{点路径}}` 查表插值；bindings 缺席或**自有键**查不到 → 原文保留（不猜、不炸）。
- *  只认自有键：`interp[path]` 顺原型链会让 `{{toString}}` 回报函数源码
- *  （钉子 `tests/engine/replace.test.ts` 的 `describe('interp 查表只认自有键…')`）。 */
+ *  只认自有键：`interp[path]` 顺原型链会让 `{{toString}}` 回报函数源码（钉子用例）。 */
 function interpolate(s: string, interp?: Record<string, string>): string {
   if (interp === undefined || !s.includes('{{')) return s
   return s.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (m, path: string) => {
     const hit = Object.hasOwn(interp, path) ? interp[path] : undefined
-    // 自有键查不到值（只可能是键被并发删掉）与「查不到这个占位」同一落点：原文保留（不猜）
     return hit ?? m
   })
 }

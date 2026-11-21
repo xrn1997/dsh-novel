@@ -12,60 +12,42 @@ import { normalizeSpeechSynthesis } from './services/tts-cordis.js'
 import { NOVEL_API_PREFIX } from './shared/wire.js'
 import { registerTools } from './tools/tools.js'
 
-// 配置口径全部住在 config.js（类型 / schema / 缺省 / 值域一个缝）；入口只 re-export 门面符号，
-// 让 cordis 装载期继续从这里拿到导出的 `Config`（tests/packaging-build.test.ts 钉 dts 含 apply 与 Config）。
+// 配置口径全住 config.js；入口只 re-export 门面符号，cordis 装载期仍从这里取 `Config`（tests/packaging-build.test.ts 钉 dts）。
 export { Config, type NovelConfig, type ResolvedConfig } from './config.js'
 
-/** 结构镜像：webServer/tools/jobs 的 declare module 增强来自未安装的宿主包——
- * 本仓库不装 dsh-host-webserver（peer，运行时由宿主提供），类型面只镜像本插件用到的最小形状，
- * 完整签名以宿主发布物为准。
- * 注意不能 extends Context（dsh-tools 已对 tools 做了更宽的增强，交叉会冲突）——独立形状 + 强转。
- * `jobs` = 宿主后台任务注册表（ctx.jobs）：只镜像我们用到的两成员（`start` 与下面的 `attachController`）。
- * `start` 交出的 spec 形状由 services/job-holder.ts 的 `JobHostSpec` 唯一持有——宿主真名真形与
- * 输出拉源（`output`）的窄面镜像注释都在那里，本处不复述。
- * kind 是自由字符串，本仓给的取值一律非空、带 `novel-` 前缀，与宿主自带的任务命名隔开。 */
+/** 结构镜像：webServer / tools / jobs 的 module 增强来自未安装的宿主包（完整签名以宿主发布物为准）；
+ *  不能 extends Context——dsh-tools 已对 tools 做更宽增强，会冲突。`jobs` 只镜像 `start` 与 `attachController`；
+ *  `start` 的 spec 形状归 `services/job-holder.ts` 的 `JobHostSpec`。kind 一律非空、带 `novel-` 前缀。
+ */
 interface WebServerLike { register(route: { kind: 'prefix'; path: string; handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void> }): () => void }
 interface ToolsRuntimeLike { register(tool: unknown): () => void }
 interface JobsRuntimeLike extends JobHost {
-  /** 准入闸：`start` 拒绝「没有已挂载 controller 服务该 owner」的工作——本插件的 owner
-   *  只有我们自己挂的 controller，所以这一句必须由我们来挂。
-   *  从本插件（非 scoped 上下文）挂的 controller 进 global layer，对所有 owner 有效。 */
+  /** 准入闸：`start` 要求有已挂载 controller 服务该 owner；非 scoped 上下文挂的 controller 进 global layer，
+   *  对所有 owner 有效——所以这句必须由我们挂。 */
   attachController(name: string): () => void
 }
 interface NovelContext { webServer: WebServerLike; tools: ToolsRuntimeLike; jobs: JobsRuntimeLike }
 
 export const name = '@xrn1997/dsh-novel'
-/** 挂载前必须就绪的服务：webserver 路由、工具注册表、宿主任务注册表
- *  （宿主 base 补丁以 id `jobs` 注册 `@deepseek-ai/dsh-jobs-local`，与 webServer 同一档硬依赖，
- *  缺了就该响亮失败；名字集合由 `tests/index.test.ts` 钉住） */
+/** 挂载前必须就绪的服务；名字集合由 `tests/index.test.ts` 钉住（宿主 base 补丁以 `jobs` 注册任务注册表，
+ *  与 webServer 同档硬依赖）。 */
 export const inject = ['webServer', 'tools', 'jobs']
 
-/** 双重启用防御：bundles+插槽双启用时重复注册 /novel-api 会崩宿主进程。
- * 语义钉死「当前有一份实例已注册」——dispose 复位，配置热替换（unload→load）与 HMR 之后
- * 新实例照样能正常注册，不误拦。
- *
- * 只拦「注册」这件事，不接管配置：第二份实例的 config 不会生效（生效的是先注册的那一份）。
- * 所以这条留痕必须是 **error**——宿主缺省级别闸只放行 error/info，warn 进不了宿主日志面、
- * UI 也看不见；「改了配置却毫无效果」比崩溃难查得多。 */
+/** 双重启用防御：双启用时重复注册 /novel-api 会崩宿主进程。语义是「当前有一份实例已注册」——dispose 复位，
+ *  热替换与 HMR 后新实例仍能注册。只拦注册，不接管配置；第二份 config 不生效，所以留痕必须是 error
+ *  （宿主缺省闸只放行 error/info，warn 看不见）。 */
 let applied = false
 
-/** 缝送来的 args → 宿主 severity 方法能吃的形状（签名以宿主发布物为准）：
- *  每条级别方法是「printf 模板位打头（必填）+ 可选 rest」，整串变参展开接不进去；第二参不是
- *  meta 对象。模板位就取缝的第一条（前缀），其余按 rest 递；尾随的 Error 先成形为文本——宿主
- *  格式化器对对象一律 JSON 化，没成形的 Error 进 ring buffer 会塌成空壳，而本仓留痕几乎每条
- *  尾随一个 error。 */
+/** 缝送来的 args → 宿主 severity 方法的形状：模板位打头 + rest，第二参不是 meta 对象；尾随 Error 先成形为
+ *  文本（宿主格式化器对对象一律 JSON 化，Error 会塌成空壳）。 */
 function hostArgs(args: unknown[]): [unknown, ...unknown[]] {
   const [head, ...rest] = args
   const logArg = (v: unknown): unknown => (v instanceof Error ? (v.stack ?? v.message) : v)
   return [head, ...rest.map(logArg)]
 }
 
-/** `loader/volatile-update` 的载荷：宿主给顶层路径段数组（`string[][]`），
- *  且会捕获监听器抛出的错误、不中断配置保存。解析按 unknown 收窄并容忍字符串 / 嵌套段：
- *  载荷形状不在本仓的钉死范围，异形载荷仍可能到达——那上面只许留下可读痕迹，
- *  不许把纯观测升级成故障。
- *  数组段按段拼成可读路径；只有顶层单段的 `proxyUrl` 才重算代理。
- *  最外层兜底吞掉连字符串化都会抛的极端载荷（revoked Proxy、无原型对象…）。 */
+/** `loader/volatile-update` 载荷：宿主给顶层路径段数组，会捕获监听器错误、不中断配置保存。异形载荷只许
+ *  留可读痕迹，不许升级成故障；只有顶层单段 `proxyUrl` 才重算代理。最外层兜底吞掉连字符串化都会抛的极端载荷。 */
 function readVolatilePaths(payload: unknown): { text: string; proxyUrl: boolean } {
   try {
     const entries = Array.isArray(payload) ? payload : [payload]
@@ -88,41 +70,34 @@ function readVolatilePaths(payload: unknown): { text: string; proxyUrl: boolean 
 }
 
 /**
- * Cordis 插件入口：ReadingService 异步初始化，routes/tools 两 effect 等 ready 后注册。
- * ready 失败吞掉不炸整树（源数据损坏不值得整个 profile 起不来）——路由/工具不挂载，日志留痕。
+ * Cordis 插件入口：ReadingService 异步初始化，routes/tools 两 effect 等 ready 后注册；
+ * ready 失败不炸整树，路由/工具不挂载并留痕。
  */
 export function apply(ctx: Context, config?: NovelConfig): void {
   const resolved = resolveConfig(config)
   if (applied) {
-    // error 不是升级语气：这是配置错（同一插件被两个入口同时启用），且第二份 config 被丢弃。
-    // 措辞要点名后果与出口——只写「duplicate apply ignored」的话，用户不知道哪一份在生效。
+    // 这是配置错（同一插件被两个入口启用）且第二份 config 被丢弃；措辞点名后果与出口，否则用户不知道哪份生效。
     log.error('duplicate apply ignored：本插件已被另一份实例注册，本次不注册路由/工具且配置不生效（请停用重复的入口后重启宿主）')
     return
   }
   const c = ctx as unknown as NovelContext
 
-  // 运行时 adapter = console + ctx.logger 双腿复合：宿主的 ctx.logger 只进 ring buffer（要 stdout 得
-  // 另挂 console exporter 插件），且缺省级别闸只放行 error/info、吞掉 warn/debug——只走那条腿会让
-  // warn 级留痕进不了宿主面、又把本机 stdout 做暗。console 这条腿保本机可见性，不是冗余（info 腿走
-  // stdout、warn/error 腿走 stderr，三级一律直传原样参数——Error 原样进 stderr 才保住栈形；成形只在
-  // logger 腿，因为只有它要喂宿主的「format + rest」方法）。窄镜像（ADR-0020）只管没装的宿主包
-  // webServer / tools / jobs；ctx.logger 是已 type-import 的官方 Context 成员，直接吃，不再镜像一遍。
+  // 日志 = console + ctx.logger 双腿：ctx.logger 只进 ring buffer 且缺省闸吞 warn/debug，只走它会让 warn 进不了
+  // 宿主面、本机 stdout 也暗。console 腿保本机可见性；Error 原样进 stderr 才保住栈形，logger 腿才成形。
+  // 窄镜像（ADR-0020）只管没装的宿主包，ctx.logger 直接吃。
   const named = ctx.logger('dsh-novel')
   setLogSink({
     info: (...a) => { console.log(...a); named.info(...hostArgs(a)) },
     warn: (...a) => { console.warn(...a); named.warn(...hostArgs(a)) },
     error: (...a) => { console.error(...a); named.error(...hostArgs(a)) },
   })
-  // 模块级 sink 不能指向已卸载实例的 logger：卸载后晚到的留痕会把对象送进旧 ctx。
-  // 复位也归组合根这一处（sink 是模块级单点）。
+  // sink 是模块级单点：不能指向已卸载实例的 logger，复位也归组合根这一处。
   ctx.effect(() => () => { setLogSink(console) }, 'dsh-novel: log sink')
 
-  // volatile 热更只留痕、不重建：各消费方在用时读当前值（配置页改完即生效）；代理需重算一次，
-  // 因为 fallback（环境变量 / 系统代理）启动期只取一次，显式值热更会翻转「显式 > fallback」的结果。
-  // 代理日志必须过 redactProxyUrl：地址可能带 userinfo 密码。
+  // volatile 热更只留痕、不重建（消费方用时读当前值）；代理需重算一次，因为 fallback 启动期只取一次。
+  // 日志过 redactProxyUrl：地址可能带 userinfo 密码。
   let proxyFor: (() => string | null) | null = null
-  // 载荷照 unknown 收、解析归 readVolatilePaths：事件面的载荷形状不由本仓钉死，异形仍可能到达；
-  // 按窄镜像硬吃会把纯观测变成运行期 throw。
+  // 载荷照 unknown 收：事件面形状不由本仓钉死，按窄镜像硬吃会把观测变成运行期 throw。
   const events = ctx as unknown as {
     on(event: 'loader/volatile-update', listener: (payload: unknown) => void): () => boolean
   }
@@ -138,15 +113,11 @@ export function apply(ctx: Context, config?: NovelConfig): void {
     return () => { off() }
   }, 'dsh-novel: volatile config log')
 
-  // 守卫放到宿主成员同步调用（logger/sink、volatile 监听）都装好之后：宿主成员缺席时 apply 会
-  // 同步抛错；若先置 applied，抛错后没有 effect 可复位，后续重试会被 duplicate apply 挡死。
+  // 守卫放到宿主成员同步调用与 volatile 监听装好之后：apply 同步抛错时还没有 effect 可复位 applied，重试会被挡死。
   applied = true
 
-  /** 入口各注册共用的同一支时序舞——等 ready、被取消就收手、拆时调 disposer 并复位 applied——
-   *  收成一个私有闭包：让每个注册点各抄一份，同一条时序口径就会散成多处（locality）。
-   *  走不走这条缝只有一条分界：注册排在 ready 之后的才收进来；
-   *  flush 与 unhandledRejection 守卫刻意留在外面——它们靠「注册得早 ⇒ 拆得晚」的次序成立，
-   *  套上这层等 ready 的延迟就会让最后一笔写丢窗、让常驻防线迟到。 */
+  /** 各注册共用的时序：等 ready、取消就收手、拆时调 disposer 并复位 applied。只有排在 ready 之后的注册才收进来；
+   *  flush 与 rejection 守卫留在外面——它们靠「注册得早 ⇒ 拆得晚」的次序成立。 */
   const afterReady = (
     ready: Promise<{ service: ReadingService } | null>,
     attach: (r: { service: ReadingService }) => (() => void) | null,
@@ -154,8 +125,7 @@ export function apply(ctx: Context, config?: NovelConfig): void {
   ): void => {
     let dispose: (() => void) | null = null
     let cancelled = false
-    // 日志文案只吃去掉 `[dsh-novel] ` 前缀的短名：label 本身是 cordis 的诊断元数据（归它自己，不动），
-    // 而前缀由日志缝缀一次——两处都带满名会让一条留痕长出三重标识。
+    // 日志文案用去掉 `[dsh-novel] ` 前缀的短名：label 是 cordis 诊断元数据，前缀由日志缝缀一次。
     const logName = label.replace(/^dsh-novel: /, '')
     void ready.then((r) => {
       if (cancelled || r === null) return
@@ -165,34 +135,25 @@ export function apply(ctx: Context, config?: NovelConfig): void {
     ctx.effect(() => () => { cancelled = true; applied = false; dispose?.() }, label)
   }
 
-  // 沙箱 unhandledRejection 常驻防线：脚本在 vm realm 里**自建**又 fire-and-forget 的异步工作，
-  // 其 rejection 会悬空冒到进程顶层。Node 默认把这类 unhandled rejection 当致命 → 整个宿主进程死
-  // （用户看到「请求失败 403/404」fatal），尤其在导入书源时（探针逐源跑 @js）。java.ajax 走同步
-  // 语义、调用点不产 rejection（口径见 engine/js-sandbox.ts 的哨兵），但脚本自建的 Promise 照样会，
-  // 这条防线仍然必需（判据与边界见 rejection-guard.ts / ADR-0059）。挂上后常驻至插件 dispose：
-  // 只在跑脚本那一段挂、收尾就摘，迟到的 rejection 照样漏。
-  // sink 从这里递进去：真 sink 到场即顶替引擎的 console 兜底（ADR-0059），所以挂上之后防线的
-  // 留痕就走日志缝。抢在第一次跑脚本之前挂仍然对——早于这一步的 rejection 只能先落 console 兜底。
-  // 只拦沙箱 realm 的 promise；非沙箱来源如实记 error 并交回宿主（见 ADR-0059）。
+  // 沙箱 unhandledRejection 常驻防线：vm realm 里自建又 fire-and-forget 的 rejection 会冒到进程顶层，Node 默认致命。
+  // 探针逐源跑 @js 时尤其危险；java.ajax 走同步语义不产 rejection，但脚本自建 Promise 照样会。
+  // 挂上后常驻至 dispose（只挂跑脚本那段会漏掉迟到 rejection）；sink 由这里递入，留痕走日志缝。
+  // 边界见 `rejection-guard.ts` / `ADR-0059`。
   ctx.effect(() => {
     const detach = acquireRejectionGuard({ warn: (...a) => log.warn(...a), error: (...a) => log.error(...a) })
     return () => { detach() }
   }, 'dsh-novel: unhandledRejection guard')
 
-  // 宿主任务注册表的 controller：`start` 的准入闸要求「有已挂载 controller 服务该 owner」，
-  // 而本插件的 owner 只有自己这一份 controller 服务——不挂这一句我们的 start 会被拒
-  // （报 "background jobs unavailable…"）。
-  // 从本插件这种非 scoped 上下文挂载 → 进 global layer → 对所有 owner 有效（disposer 随 fiber 走）。
+  // 宿主任务注册表 controller：start 的准入闸要求有已挂载 controller 服务该 owner，不挂这句我们的 start 会被拒。
+  // 非 scoped 上下文 → global layer，对所有 owner 有效。
   ctx.effect(() => c.jobs.attachController('dsh-novel'), 'dsh-novel: job controller')
 
-  // ready 失败吞掉不炸整树（源数据损坏不值得整个 profile 起不来）——收敛为 null，日志留痕一次；
-  // 派生 then 链必须带 catch：不带就是往进程顶层丢一个 unhandled rejection。
-  // LocalBooks 初始化失败同样不炸树——与 ReadingService 同口径 catch 语义，合并进同一 catch。
+  // ready 失败收敛为 null、日志留痕，不炸整树；派生 then 链必须带 catch，否则往进程顶层丢 unhandled rejection。
+  // LocalBooks 初始化失败同样收进这条 catch。
   const ready = (async () => {
     const dir = resolved.dataDir ?? novelDir()
-    // 出站代理：Node 的 fetch（undici）不读系统代理，有代理才通的站点直连会被 302/重置
-    // （库里有命中这一形态的源）——fallback（环境变量 > Windows 系统代理）启动期只取一次，显式配置覆盖它；
-    // 完整优先级见 services/proxy.ts 的 resolveProxyUrl。
+    // undici 不读系统代理，有代理才通的站点直连会被重置；fallback（环境变量 > Windows 系统代理）启动期只取一次，
+    // 显式配置覆盖它。优先级见 `resolveProxyUrl`。
     const fallbackProxy = resolveProxyUrl({ env: process.env, systemProxy: await readSystemProxy() })
     const proxyUrl = (): string | null => {
       const explicit = resolved.proxyUrl?.trim()
@@ -201,8 +162,7 @@ export function apply(ctx: Context, config?: NovelConfig): void {
         : resolveProxyUrl({ configProxy: explicit, env: {}, systemProxy: null })
     }
     proxyFor = proxyUrl
-    // 启动提示走 info 而非 warn：一是它是信息不是异常，二是宿主缺省级别闸吞 warn、
-    // 只放行 error/info——想让这条真进得了宿主日志面就得走 info（本机经 console 腿走 stdout）。
+    // 走 info：这是信息不是异常，且宿主缺省闸只放行 error/info（本机经 console 腿走 stdout）。
     const initialProxy = proxyUrl()
     if (initialProxy !== null) log.info(`出站代理: ${redactProxyUrl(initialProxy)}`)
     const service = await ReadingService.create({
@@ -210,13 +170,10 @@ export function apply(ctx: Context, config?: NovelConfig): void {
       config: resolved,
       // 代理走独立的 proxyUrl 源而非 config.proxyUrl：只传 config 的直装调用方不该因此被接上网关。
       proxyUrl,
-      // 任务生命周期交宿主注册表（身份 `<kind>-<短 id>` 由注册表生成 / running→终态 / 取消入口）；
-      // 本插件的 JobState 仍是计数与明细的唯一载体，单任务槽互斥也不变。
+      // 任务生命周期交宿主注册表；本仓 JobState 仍是计数与明细的唯一载体，单任务槽互斥不变。
       jobHost: c.jobs,
-      // 听书面的 cordis 服务读数：`ctx.get` **每次用到时重查**（社区服务是可选依赖，可能中途
-      // 卸装——缺席即源清单除名、未缓存段按 TTS_ENGINE_MISSING 失败）。适配器把社区契约翻成
-      // 插件归一形状，其类型只经 type-only import 进（运行时零依赖）。合成服务与引擎注册表由
-      // create 用同一个 fetcher 装配（proxyUrl / UA / cookie jar 缝只此一条），这里只递外部读数。
+      // 听书面：`ctx.get` 每次用时重查（社区服务可选、可能中途卸装——缺席即除名 / TTS_ENGINE_MISSING）。
+      // 适配器类型只 type-only import（运行时零依赖）；合成服务与注册表由 create 用同一个 fetcher 装配。
       tts: {
         speechSynthesis: () => {
           const service = ctx.get('speechSynthesis')
@@ -230,11 +187,8 @@ export function apply(ctx: Context, config?: NovelConfig): void {
     return null
   })
 
-  // 卸载时把防抖写落地：书架与源注册表的落盘都带防抖窗口（窗口值的唯一主人是
-  // services/storage.ts 的 `PERSIST_WINDOW_MS`），宿主重启（SIGINT → fiber 卸载）会把
-  // 窗口里的最后一条写丢掉——「刚读到的位置」正好死在
-  // 窗口里（进度是高频写，退出那一刻往往就是最后一次）。注册得早 ⇒ 拆得晚。
-  // 同一处顺手关掉出站 dispatcher：代理连接池不该活过插件实例（Fetcher.dispose）。
+  // 卸载时把防抖写落地：宿主重启（SIGINT → fiber 卸载）会丢掉窗口里的最后一条写，而进度是高频写。
+  // 注册得早 ⇒ 拆得晚。顺手关掉出站 dispatcher（代理连接池不该活过插件实例）。
   ctx.effect(() => {
     let service: ReadingService | null = null
     void ready.then((r) => { service = r?.service ?? null })
@@ -249,9 +203,7 @@ export function apply(ctx: Context, config?: NovelConfig): void {
   afterReady(ready, (r) => {
     const handler = createApiHandler(r.service, {
       exportDelayMs: () => resolved.exportDelayMs,
-      // 本机别名名单走启动期快照（非活值）：fence 的判据在 api/wire.ts，这里只递「用户还追加了谁」。
-      // 没配就**不建这个键**（不是递一个 undefined）：选项包的缺席与空名单在语义上都是「没追加」，
-      // 但契约面只认缺席。
+      // 本机别名名单走启动期快照（非活值）；fence 判据在 api/wire.ts。没配就不建这个键——契约面只认缺席。
       ...(resolved.apiAllowHosts === undefined ? {} : { allowHosts: resolved.apiAllowHosts }),
     })
     return c.webServer.register({

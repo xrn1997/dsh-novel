@@ -1,0 +1,7 @@
+# 文档标准固定为一套：核心文件清单、界面规格与两件套文档门
+
+Status: accepted
+
+本篇取代 `ADR-0048`：核心文件清单、分层与 ADR 格式结论不变，文档门由三件套收成两件套。`ADR-0041` 的十份核心文件与单文件文档门不够用：界面状态与架构归属是两类问题；agent 约定需要落脚；文档门缺了最容易腐烂的几类检查。决定：① 核心文件固定为十一份 + 一层（`AGENTS.md`、`README.md`、`CONTEXT.md`、`docs/AGENTS.md`、`docs/architecture.md`、`docs/ui-spec.md`、`docs/development.md`、`CONTRIBUTING.md`、`CHANGELOG.md`、`docs/adr/README.md`、`docs/adr/ADR-FORMAT.md`，外加非事实源的 `docs/agents/*`）。② 规范正文只住两处：分层/放置/写作/生命周期住 `docs/AGENTS.md`，ADR 的标题、`Status`、锚点、互引与取代规则住 `ADR-FORMAT.md`；根 `AGENTS.md` 只留常驻规则。③ 界面规格独立成层：现行状态、布局、层级住 `docs/ui-spec.md`，像素、断点与文案键的唯一定义在 `src/client/` 与 `tests/client/`。④ agent 约定独立成层，不进事实源。⑤ `锚点：` 为可折行的一段，互引统一写 `ADR-NNNN`，不引仓外 ADR 编号。⑥ 文档门收成两件套（`tests/docs-liveness.test.ts` 与 `tests/context-terms.test.ts`），`pnpm test` 仍是默认门。注释高度守卫（`comment-altitude`）退役：它只能以词法近似判「注释抄代码表达式」，要自写小词法器绕开字符串 / 模板 / 正则字面量，误报与漏报都只能靠样品自测；「注释只写为什么」仍是 `docs/development.md` 与评审的纪律。被否决：保留词法近似门；把注释高度并进 `tests/docs-liveness.test.ts`（同一门里混两类判据，失败时先要分辨是哪一类）。⑦ `CHANGELOG.md` 四小节（新增 / 变更 / 修复 / 升级注意），历史版本不回溯改写。边界：不设 `specs/`，跨半契约唯一主人仍是 `src/shared/wire.ts`。被否决：继续十份文件 + 单文件文档门；界面规格并回 architecture；把标准抽成独立仓；保留两份格式变体；`CONTEXT.md` 继续靠评论把守。**后果**：本仓新增 `docs/ui-spec.md` 与 `docs/agents/*`；文档门的断言集合变大（新增已废称呼、中文小节名、职责边界、README 徽章投影与截图三方一致），代价是重复标题与旧称呼会被判红；ADR 互引一律写 `ADR-NNNN`，`锚点：` 是可折行段落；`ADR-0041` 的十份文件清单与「不设 `docs/agents/`」被取代；注释退化不再有机器门，只能靠评审。
+
+锚点：`docs/AGENTS.md`；`docs/adr/ADR-FORMAT.md`；`docs/ui-spec.md`；`docs/agents/domain.md`；`tests/docs-liveness.test.ts`；`tests/context-terms.test.ts`；`docs/development.md`；`AGENTS.md`；`ADR-0048`。

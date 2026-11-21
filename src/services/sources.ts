@@ -7,15 +7,13 @@ import { createDebouncedWriter, PERSIST_WINDOW_MS, readJson } from './storage.js
 import { log } from './log.js'
 
 /**
- * 书源对外视图：**绝不含 raw / rules / auth**——凭据与原文只落盘，不出现在服务层对外返回值。
- * hasHeader/hasAuth/authExpired 只给布尔状态位，UI 据此提示「已登录/已过期」。
- * 形状定义在 wire 契约（src/shared/wire.ts）；此处 re-export 保持 import 路径可用。
+ * 书源对外视图：**绝不含 raw / rules / auth**——凭据与原文只落盘，不出现在服务层对外返回值。hasHeader/hasAuth/authExpired 只给
+ * 布尔状态位；形状定义在 wire 契约，此处 re-export 保持 import 路径可用。
  */
 export type { SourcePublic } from '../shared/wire.js'
 import type { LoginUiField, LoginUiText, SourcePublic } from '../shared/wire.js'
 
-/** edit 的变更句柄：注册表的 mutator 只有这一套，外部拿不到单独的写方法。
- *  它们只在 edit 的 recipe 内可用——变更与落盘不可分。 */
+/** edit 的变更句柄：注册表的 mutator 只有这一套；它们只在 edit 的 recipe 内可用——变更与落盘不可分。 */
 export interface SourceEdit {
   add(result: NormalizeResult): NovelSource
   replace(id: string, result: NormalizeResult): NovelSource
@@ -27,20 +25,14 @@ export interface SourceEdit {
   setAuth(id: string, auth: SourceAuth | undefined): boolean
 }
 
-/** 合并落盘阈值：累计 N 次变更强制写一次（计数跨定时器/flush 写累计，阈值触发才复位）。
- *  粒度归注册表——任务运行器与调用方都不需要知道它存在，值也只有这一个主人。
- *  export 只为测试能按它把第 N 次变更对齐到阈值那一格；生产调用方一律不认识这个数。 */
+/** 合并落盘阈值：累计 N 次变更强制写一次（计数跨定时器/flush 写累计，阈值触发才复位）。export 只为测试按它对齐第 N 次变更。 */
 export const PERSIST_EVERY = 20
 
 /**
- * 书源注册表：加载 / 变更（edit 原子入口）/ 只读投影 / 合并落盘。
- * 落盘是内部事务，不是调用方的纪律——
- * interface 上没有 persist：「改完记得 persist」这类顺序约束根本表达不出来，也就不会忘。
+ * 书源注册表：加载 / 变更（edit 原子入口）/ 只读投影 / 合并落盘。落盘是内部事务，不是调用方的纪律——interface 上没有 persist。
  */
-/** loginUi 的可渲染子集：JSON 数组里的 text/password/button 行；`@js:` 生成形态与字面
- *  `webView` 行不投影，UI 回退 cookie 录入。button 只收有非空 action 的行（无动作按钮是死控件）。
- *  **内部行带 action**：服务端按同名行查脚本；`toPublic` 只投影 name/type，客户端不持脚本。
- *  `name` 同时是 loginInfo 的键与标签（书源格式里 `loginUi` 每行的 `name`）。 */
+/** loginUi 的可渲染子集：JSON 数组里的 text/password/button 行；`@js:` 生成形态与字面 `webView` 行不投影，UI 回退 cookie 录入。
+ *  button 只收有非空 action 的行。**内部行带 action**：服务端按同名行查脚本；`toPublic` 只投影 name/type。`name` 同时是 loginInfo 的键与标签。 */
 export interface LoginUiActionRow {
   name: string
   type: 'button'
@@ -100,9 +92,8 @@ export class SourceRegistry {
     }
   }
 
-  /** dir = novel 根；sources.json **缺失** → 空表（首启是常态）；**损坏** → CorruptJsonError 响亮失败
-   *  （绝不折叠成空表——那会让下一次 edit 覆盖整文件，本机库的源静默消失，见 storage.readJson）。
-   *  存量收敛的逐字段机械与覆盖策略住 `normalize.rehydrateStoredSource`；这里只触发一次并落盘。 */
+/** dir = novel 根；sources.json **缺失** → 空表（首启常态）；**损坏** → CorruptJsonError 响亮失败（绝不折叠成空表——下一次 edit 会覆盖整文件）。
+ * 存量收敛的逐字段机械住 `normalize.rehydrateStoredSource`；这里只触发一次并落盘。 */
   static async load(dir: string): Promise<SourceRegistry> {
     const sources = await readJson<NovelSource[]>(path.join(dir, 'sources.json'), [])
     let changed = false
@@ -117,13 +108,10 @@ export class SourceRegistry {
 
   // ── 变更面（唯一入口）────────────────────────────────────────────────
 
-  /** 原子变更：recipe 同步执行（事件循环下一次 edit 内的多步变更对外不可分割），
-   *  返回 recipe 的返回值；recipe 抛错 → edit reject（finally 语义：已同步发生的变更照常标脏，不静默丢）。
-   *  落盘由内部合并调度——累计 ≥PERSIST_EVERY 的那次 edit 会**等写落地**（旧「每 20 条 persist」同款），
-   *  否则 100ms 尾沿防抖后台合并；需要立即持久的收尾点用 flush()。 */
+  /** 原子变更：recipe 同步执行（事件循环下一次 edit 内的多步变更对外不可分割），返回 recipe 的值；recipe 抛错 → edit reject。落盘由内部
+   *  合并调度——累计 ≥PERSIST_EVERY 的那次 edit 会**等写落地**，否则 100ms 尾沿防抖；需要立即持久用 flush()。 */
   async edit<T>(recipe: (tx: SourceEdit) => T): Promise<T> {
-    // recipe 的结果先收在手里再落盘：写盘失败要看它是否已成立，但**不在 finally 里抛**
-    // （finally 抛会盖掉在途的 recipe 错误，也会替换掉那次 return）
+    // recipe 的结果先收在手里再落盘：写盘失败要看它是否已成立，但**不在 finally 里抛**（会盖掉 recipe 错误）。
     let result: { ok: true; value: T } | { ok: false; error: unknown }
     try {
       result = { ok: true, value: recipe(this.tx) }
@@ -134,9 +122,7 @@ export class SourceRegistry {
       // 阈值到点的那次返回写 promise（失败如实抛）；其余交给 writer 的尾沿防抖。
       await this.scheduleWrite()
     } catch (e) {
-      // recipe 已在抛错时，写失败没有交付路径：记进 writer 的失败账，收尾 flush 可见；
-      // recipe 的错误优先，不能被写失败盖掉。recipe 成功时写失败直接抛给调用方，
-      // 是否留给收尾 flush 由调用方用 retainWriteFailure 显式移交（不重复报同一个错）。
+      // recipe 已在抛错时，写失败没有交付路径：记进 writer 的失败账，收尾 flush 可见；recipe 的错误优先。recipe 成功时写失败直接抛。
       if (result.ok) throw e
       this.writer.retainFailure(this.file, e)
       log.error('recipe 抛错期间的落盘失败（保留 recipe 错误）:', e)
@@ -155,8 +141,7 @@ export class SourceRegistry {
     return this.writer.flush(this.file)
   }
 
-  /** 调用方接住了 `edit` 的落盘失败、但仍要让收尾 `flush` 看见时，把失败移交给 writer 的失败账；
-   *  同一文件下一次写成功即清账。批量探针用它把磁盘侧失败留在自己的道上（ADR-0011）。 */
+  /** 调用方接住了 `edit` 的落盘失败、但仍要让收尾 `flush` 看见时，把失败移交 writer 的失败账；同一文件下一次写成功即清账（批量探针用）。 */
   retainWriteFailure(error: unknown): void {
     this.writer.retainFailure(this.file, error)
   }
@@ -190,8 +175,7 @@ export class SourceRegistry {
       aiSearch: s.aiSearch === true,
       type: s.type,
       status: s.status,
-      // 对外投影是会过 JSON 的载荷：这两格按需建键，不给 wire 类型补 `| undefined`
-      // （口径与它的理由住 `src/shared/wire.ts` 头注与 `ADR-0053` 的被否方案）
+      // 对外投影是会过 JSON 的载荷：这两格按需建键，不给 wire 类型补 `| undefined`（口径见 wire.ts 头注与 `ADR-0053`）。
       ...(s.statusDetail === undefined ? {} : { statusDetail: s.statusDetail }),
       importedAt: s.importedAt,
       ...(s.lastProbedAt === undefined ? {} : { lastProbedAt: s.lastProbedAt }),
@@ -205,8 +189,7 @@ export class SourceRegistry {
 
   // ── 实现细节（tx 句柄绑定；不对外）────────────────────────────────────
 
-  /** 只准收 ok:true 的 normalize 产物；id=uuid，status='unverified'。
-   *  `aiSearch` 是用户偏好，新入库缺省关闭——不是书源格式字段，不从 normalize 产物里取。 */
+  /** 只准收 ok:true 的 normalize 产物；id=uuid，status='unverified'。`aiSearch` 是用户偏好，新入库缺省关闭——不从 normalize 产物取。 */
   private add(result: NormalizeResult): NovelSource {
     if (!result.ok || !result.source) throw new Error('add 只收 ok 的 normalize 产物')
     const src: NovelSource = {
@@ -220,9 +203,8 @@ export class SourceRegistry {
     return src
   }
 
-  /** 去重替换：原位 splice 保列表序，复用旧 id（书架/引用不断）；
-   *  status 复位 unverified（新规则需重验），importedAt 更新为现在。只准收 ok 的 normalize 产物（与 add 同口径）。
-   *  `aiSearch` 是用户偏好，跨重导入保留旧值——替换规则不等于撤销用户对 AI 搜索的选择。 */
+  /** 去重替换：原位 splice 保列表序，复用旧 id（书架/引用不断）；status 复位 unverified、importedAt 更新。`aiSearch` 跨重导入保留旧值——
+   *  替换规则不等于撤销用户对 AI 搜索的选择。 */
   private replace(id: string, result: NormalizeResult): NovelSource {
     if (!result.ok || !result.source) throw new Error('replace 只收 ok 的 normalize 产物')
     const i = this.sources.findIndex((s) => s.id === id)
@@ -242,8 +224,7 @@ export class SourceRegistry {
     return true
   }
 
-  /** 批量删除：返回实删数；未知 id 静默跳过、重复 id 幂等。
-   *  一次 removeAll + 一次合并落盘，替代逐删逐写的 N 次全量重写 sources.json */
+  /** 批量删除：返回实删数；未知 id 静默跳过、重复 id 幂等。一次 removeAll + 一次合并落盘，替代逐删逐写的 N 次全量重写。 */
   private removeAll(ids: string[]): number {
     const doomed = new Set(ids)
     const before = this.sources.length
@@ -254,8 +235,7 @@ export class SourceRegistry {
     return before - this.sources.length
   }
 
-  /** 更新探针状态；probedAt 缺省取当前时间。返回是否找到并更新。
-   * detail 缺省时清空旧 statusDetail——verified 不许残留上次 broken 的原因。 */
+  /** 更新探针状态；probedAt 缺省取当前时间。返回是否找到。detail 缺省时清空旧 statusDetail——verified 不许残留上次 broken 的原因。 */
   private setStatus(id: string, status: SourceStatus, detail?: string, probedAt?: number): boolean {
     const s = this.get(id)
     if (!s) return false
@@ -266,8 +246,7 @@ export class SourceRegistry {
     return true
   }
 
-  /** 启用/停用：停用 = 不参与聚合搜索（reading.search 面已过滤）；
-   *  试跑/验证不受影响。返回是否找到 */
+  /** 启用/停用：停用 = 不参与聚合搜索（试跑/验证不受影响）。返回是否找到。 */
   private setEnabled(id: string, enabled: boolean): boolean {
     const s = this.get(id)
     if (!s) return false

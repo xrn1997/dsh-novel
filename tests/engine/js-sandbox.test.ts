@@ -408,6 +408,7 @@ describe('@js 沙箱', () => {
       opts: { scriptForm: false },
     }).then(() => null, (e: unknown) => e)
     expect((err2 as JsSandboxError).line).toBe(2)
+    expect((err2 as Error).message).toContain('第2行')  // 消息嵌行号（定位可回查）
   })
 
   it('语法错误 → JsSandboxError（编译失败）', async () => {

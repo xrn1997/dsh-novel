@@ -13,23 +13,21 @@ import { pickShelfItem, SHELF_ITEM_FIELDS } from './shelf-item.js'
 import type { ShelfItem } from './shelf-item.js'
 import { failedSources, truncationNotice } from './search-value.js'
 
-/** defineTool 产物（registry-ready definition）；registerTools 的 ctxLike 结构镜像 Cordis ToolRuntime */
+/** defineTool 产物；registerTools 的 ctxLike 镜像 Cordis ToolRuntime。 */
 export type ToolDefinition = ReturnType<typeof defineTool>
 
 export interface ToolsCtxLike {
   tools: { register(t: ToolDefinition): () => void }
 }
 
-/** action 行是唯一清单：schema 的 enum 由行派生，这里按行的 `needs` 拦「action 对但参数没给」。
- *  缺参静默兜底会写出永远读不了的书 / 摸到不存在的源（宁炸不猜）。 */
+/** action 行是唯一清单：schema 的 enum 由行派生，按行声明的 `needs` 拦缺参；静默兜底会写出读不了的书（宁炸不猜）。 */
 const requireArgs = (action: string, present: object, needs: readonly string[]): void => {
   const values = present as Record<string, unknown>
   const missing = needs.filter((k) => values[k] === undefined || values[k] === null)
   if (missing.length > 0) throw new Error(`dshnovel_${action} 缺少参数：${missing.join('、')}`)
 }
 
-/** 必填实参取用：`requireArgs` 已按行声明的 `needs` 逐项验过（缺则抛），这里只把「刚验过」这件事
- *  写进类型面——取不到是不可能状态，仍按同一条错误通道炸，不静默把 undefined 递给服务层。 */
+/** 必填实参取用：`requireArgs` 已按 `needs` 验过，取不到是不可能状态，仍按同一错误通道炸。 */
 const needArg = <T>(value: T | undefined, name: string): T => {
   if (value === undefined) throw new Error(`缺少必填参数：${name}`)
   return value
@@ -160,8 +158,7 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
     execute: async (args: { keyword: string; sourceIds?: string[] }, exec) => {
       const { eligible, groups: round } = await service.searchForAi(args.keyword, {
         ...(args.sourceIds === undefined ? {} : { sourceIds: args.sourceIds }),
-        // 取消贯通到 HTTP 抓取层：在途请求随之中止、未开打的源不再发（webView 导航没有取消面，
-        // 见 source-request.ts 的 ReadFetchOptions）。停止语义归 ReadingService.searchProgressive。
+        // 取消贯通到抓取层（webView 导航没有取消面）；停止语义归 ReadingService.searchProgressive。
         signal: exec.signal,
       })
       // 与界面同一份轮级汇总与归并（`shared/round-summary.ts` 单点分区、`shared/merge-by-book.ts`
@@ -223,10 +220,8 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
       render: (_args, v) => text(renderRead(v)),
     },
     execute: async (args: { sourceId: string; bookKey: string; chapterIndex: number }, exec) => {
-      // 目录 + 正文 + 章名的编排归服务层（`ReadingService.readChapter` → `BookContent.readChapter`）：
-      // 章名与正文出自同一次目录读数，越界也在那条缝里按既有错误语义上抛——此处不做二次判。
-      // 取消只能查在请求前后：正文读取的 in-flight 是同书共享的（一个调用方取消不该掐掉
-      // 另一个读同一章的人），真正的深度取消要等共享缓存的取消语义，不在本轮范围。
+      // 目录 + 正文 + 章名的编排归服务层（`ReadingService.readChapter`）；越界也由那条缝按既有错误语义上抛。
+      // 取消只查在请求前后：正文读取的 in-flight 同书共享，不因一个调用方取消而掐掉另一个读者。
       checkAbort(exec)
       const { name, text } = await service.readChapter(args.sourceId, args.bookKey, args.chapterIndex)
       checkAbort(exec)
@@ -265,8 +260,7 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
       render: (_args, v) => text(renderToc(v)),
     },
     execute: async (args: { sourceId: string; bookKey: string; refresh?: boolean }, exec) => {
-      // 目录读取有同书共享的在途 memo（`OnlineReading.tocInflight`）：调用方取消只查前后，
-      // 不把 signal 塞进共享 promise（那会让一个人的取消连累另一个读者）。
+      // 目录读取有同书共享的 in-flight memo：取消只查前后，不把 signal 塞进共享 promise。
       checkAbort(exec)
       const toc = await service.getToc(args.sourceId, args.bookKey, args.refresh === true ? { refresh: true } : undefined)
       checkAbort(exec)
@@ -301,8 +295,7 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
     },
   } as const
   type ShelfOutput = InferValue<typeof shelfOutputSchema>
-  /** 书架：一 action 一行。action enum、工具描述与缺参检查都从这张表派生，
-   *  不再在 description / enum / requireArgs / execute / render 五处各列一遍。 */
+  /** 书架：一 action 一行；action enum、描述与缺参检查都从这张表派生，不在五处各列一遍。 */
   const shelfRows = {
     list: {
       doc: '列书与进度（只读，可单独用）',
@@ -332,8 +325,7 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
       needs: ['bookKey', 'chapterIndex', 'offsetRatio'],
       execute: (args: ShelfArgs, exec) => {
         checkAbort(exec)
-        // 缺席在本动词是错误：门面抛出目录里的 `BookNotOnShelfError`，本层原样上抛——
-        // 不为同一事实另造一句工具面文案（`project` 只负责可空→缺席的投影）。
+  // 缺席在本动词是错误：门面抛 `BookNotOnShelfError`，本层原样上抛，不另造工具面文案。
         const book: ShelfItem = project(pickShelfItem(service.shelfSaveProgress(
           needArg(args.bookKey, 'bookKey'), needArg(args.chapterIndex, 'chapterIndex'), needArg(args.offsetRatio, 'offsetRatio'),
         )))
@@ -423,8 +415,7 @@ export function buildTools(service: ReadingService): ToolDefinition[] {
     },
   } as const
   type SourceOutput = InferValue<typeof sourceOutputSchema>
-  /** enable/disable 的共用执行体：只差目标状态；存在性防线归门面（未知 id 抛
-   *  SourceNotFoundError），工具面不再预检。 */
+  /** enable/disable 的共用执行体：只差目标状态；存在性防线归门面，工具面不预检。 */
   const toggleSource = (enabled: boolean) => async (args: SourceArgs, exec: ToolExec) => {
     checkAbort(exec)
     const sourceId = needArg(args.sourceId, 'sourceId')

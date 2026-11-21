@@ -1,13 +1,13 @@
 import { promises as fs } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
-import type { ResolvedConfig, VolatileConfigFieldName } from '../config.js'
-import { detailFieldsOf, detailReadOf, firstValue, hitFieldsOf } from './bridge.js'
-import { DEFAULT_CACHE_MAX_BYTES, PageCache } from './cache.js'
+import { resolveConfig, type ResolvedConfig } from '../config.js'
+import { detailFieldsOf, detailReadOf, firstValue, hitsOfContexts } from './bridge.js'
+import { PageCache } from './cache.js'
 import { exploreEpoch } from './cache-epoch.js'
 import { chapterContentToText, PLAY_UNIT_MAX } from '../shared/chapter-text.js'
 import { BookNotOnShelfError, InvalidRequestError, SourceNotFoundError, TtsEnginesDegradedError, TtsNotMountedError, redactOutboundError } from './errors.js'
-import { createFetcher, decodeBody, DEFAULT_TIMEOUT_MS, type FetcherOptions } from './fetcher.js'
+import { createFetcher, decodeBody, type FetcherOptions } from './fetcher.js'
 import { CookieJar } from './cookies.js'
 import { BookContent } from './book-content.js'
 import { WebViewRuntime } from './webview.js'
@@ -17,13 +17,13 @@ import { log } from './log.js'
 import { KindCache } from './explore-cache.js'
 import { ExploreJobs } from './explore-job.js'
 import { deriveExploreSources, fetchExploreGroup } from './explore.js'
-import { DEFAULT_EXPORT_DELAY_MS, exportBook } from './export.js'
+import { exportBook } from './export.js'
 import { SourceJobs } from './import-job.js'
 import { SearchJobs } from './search-job.js'
 import type { JobHost } from './job-holder.js'
 import type { ImportFile, JobState } from './import-job.js'
 import { SourceIntake } from './intake.js'
-import { DEFAULT_MAX_IMPORT_BYTES, LOCAL_SOURCE_ID, LocalBooks } from './localbooks.js'
+import { LOCAL_SOURCE_ID, LocalBooks } from './localbooks.js'
 import type { LocalResource } from './localbooks.js'
 import { LocalLifecycle } from './local-lifecycle.js'
 import type { NormalizeIssue } from './normalize.js'
@@ -35,12 +35,12 @@ import type { ProbeOutcome, ProbeResult } from './probe.js'
 import { fetchSearchPage, searchErrorCodeOf } from './search-face.js'
 import type { SearchFaceResult } from './search-face.js'
 import { Shelf } from './shelf.js'
-import { createSourceEval, DEFAULT_JS_BUDGET_MS } from './source-eval.js'
+import { createSourceEval } from './source-eval.js'
 import { createSourceRequest, fetchSourceText } from './source-request.js'
 import type { SourceRequest } from './source-request.js'
 import { loginUiOf, SourceRegistry } from './sources.js'
-import { TTS_DEFAULTS, TTS_RATE, TTS_VOLUME } from '../shared/wire.js'
-import { DEFAULT_TTS_CACHE_MAX_BYTES, TtsAudioCache } from './tts-cache.js'
+import { searchGroupBaseOf, TTS_RATE, TTS_VOLUME } from '../shared/wire.js'
+import { TtsAudioCache } from './tts-cache.js'
 import type { AudioResource } from './tts-cache.js'
 import { TtsEngineRegistry } from './tts-engines.js'
 import { TtsService } from './tts.js'
@@ -49,8 +49,7 @@ import type { NovelSource, SourceAuth } from './types.js'
 import type { ValueSource } from './value-source.js'
 
 // ── 公开类型（冻结：HTTP 面 / 工具面 / UI 只准用这套）──────────────────
-// 值形状定义在 wire 契约（src/shared/wire.ts）——
-// 此处 re-export 保持既有 import 路径可用；改形状请去 shared，别在这里加第二份。
+// 值形状定义在 wire 契约（src/shared/wire.ts）；此处 re-export 保持既有 import 路径，改形状去 shared。
 export type { SearchHit, SearchGroup, ChapterEntry, BookDetail, SearchJobSnapshot, ExploreSources, ExploreSnapshot } from '../shared/wire.js'
 /** 本地资源读口（含流/MIME 的 Node 内部形状）：api 层从本模块取用，不去 localbooks 抄第二处 */
 export type { LocalResource } from './localbooks.js'
@@ -60,41 +59,26 @@ import type {
   SearchGroup, SearchHit, SearchPlan, SearchJobSnapshot, ChapterEntry, ShelfBook, ShelfEntry, ShelfMetaPatch, SourcePublic,
   SynthesisReceipt, SynthesisRequest, TtsEngineInput, TtsEnginePublic, TtsSourcesView,
 } from '../shared/wire.js'
-/** 聚合搜索并发缺省：**这个数的唯一主人**——缺省装配处 `src/config.ts` 的 schema `.default()`
- *  与本文件 `from()` 回退都引这里，别处不再写字面量。js 沙箱预算缺省的家在
- *  `services/source-eval.ts` 的 `DEFAULT_JS_BUDGET_MS`（为什么不住这里见那里的注释）。 */
-export const DEFAULT_SEARCH_PARALLEL = 5
 
 export interface ReadingServiceOptions {
   dir: string                       // novel 根目录（测试注入 mkdtemp）
-  /** 组合根交给服务的活配置读数面：给了就每次使用时读当前值（配置页热改即生效），
-   *  逐字段值只作直装缝的回退 */
+  /** 活配置读数面（production 由组合根给）：缺省走 `resolveConfig(undefined)`，直装缝不另造缺省表。 */
   config?: ResolvedConfig
   fetchImpl?: typeof globalThis.fetch
-  searchParallel?: number           // 默认 5
-  searchTimeoutMs?: number          // 默认 15000
-  /** js 沙箱预算（透传 EvalContext.jsTimeoutMs；缺省 15000——理由见 DEFAULT_JS_BUDGET_MS） */
-  jsTimeoutMs?: number
   tocMaxPages?: number              // 默认 200
   contentMaxPages?: number          // 默认 50
-  cacheMaxBytes?: number            // 默认 200MB
-  /** 本地文件导入上限（TXT / EPUB 共用：传输层流式计数与本地书 domain 上限同一配置值；默认 50MB） */
-  localImportMaxBytes?: number
-  /** 出站代理（见 proxy.ts：Node 的 fetch 不读系统代理）；null/缺省 = 直连。
-   *  getter 形态供配置页热改——服务原样交给 fetcher，读值时机归它。 */
+  /** 出站代理（Node 的 fetch 不读系统代理）；null/缺省 = 直连。getter 形态供配置页热改，读值时机归 fetcher。 */
   proxyUrl?: ValueSource<string | null>
   /** 宿主 `ctx.jobs` 窄面：任务身份与生命周期交它（见 job-holder.ts 的 JobHost），缺省不登记 */
   jobHost?: JobHost
-  /** 听书面的外部读数：cordis `speechSynthesis` 服务的活 getter（**每次用到时重查**——服务可能
-   *  动态卸装）。缺省 = 恒缺席，cordis 源不出现在源清单里；Task 7 由组合根接真 getter。 */
+  /** 听书面的外部读数：cordis `speechSynthesis` 的活 getter（每次用到时重查——服务可能动态卸装）。缺省 = 恒缺席。 */
   tts?: { speechSynthesis?: () => NormalizedSpeechSynthesis | undefined }
 }
 
 /** 订阅文本的大小上限（5 MiB）：订阅是「应当很小」的读口，超大响应按失败处理而不是吃满内存。 */
 const TTS_SUBSCRIPTION_MAX_BYTES = 5 * 1024 * 1024
 
-/** 降级原因的上屏版：损坏的错误信封里带数据根的绝对路径，503 文案不该把它抄给浏览器——
- *  只留文件名与「损坏」这条事实，原文件已备份的事实由日志与 `.bak` 各自承担。 */
+/** 降级原因的上屏版：错误信封里带数据根绝对路径，503 文案只留文件名与「损坏」；备份与日志各自留痕。 */
 function degradedTtsEnginesReason(e: unknown): string {
   if (e instanceof CorruptJsonError) {
     return `朗读引擎注册表损坏（${path.basename(e.file)}），已拒绝按空结果继续并备份原文件`
@@ -102,10 +86,9 @@ function degradedTtsEnginesReason(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-/** 听书面的装配产物：合成服务与引擎注册表成对交付（注册表的 flush/CRUD 归门面，合成服务只读它）。
+/** 听书面的装配产物：合成服务与引擎注册表成对交付（注册表的 flush/CRUD 归门面，合成服务只读）。
  *  `create` 用同一个出站 fetcher 构造两者——proxyUrl / UA / cookie jar 缝只此一条。
- *  注册表读不出时仍是这对部件，只是注册表带 `degradedReason`（空表 + 原因）：降级只关订阅那一格，
- *  不让整个 `TtsParts` 缺席。 */
+ *  注册表读不出时仍是这对部件，只是注册表带 `degradedReason`（空表 + 原因），只降订阅那一格。 */
 export interface TtsParts {
   service: TtsService
   engines: TtsEngineRegistry
@@ -119,23 +102,19 @@ export interface ImportOutcome {
   dupSkipped?: boolean
 }
 
-/** run-login 深动词的 outcome 判别联合：登录的两条失败结局是**值**不是异常——路由把它们
- *  翻译成 400 / 422（文案主人在路由层），门内执行不带 HTTP 语义。 */
+/** run-login 的 outcome 判别联合：两条失败结局是**值**不是异常——路由翻成 400 / 422，文案主人在路由层。 */
 export type LoginOutcome =
   | { kind: 'manual'; loginUrl: string }   // URL 形态：不执行沙箱，回传 UI 开新 tab + cookie 录入
   | { kind: 'authed' }                     // JS 形态且产出登录态（已落盘 setAuth + persist）
   | { kind: 'no-login-url' }               // 未声明 loginUrl（路由翻 400「该源未声明 loginUrl」）
   | { kind: 'empty-output' }               // 脚本未 return 或为空产出（路由翻 422 LoginFailed）
 
-/** runLogin 两条自卫 Error 的私有类型（未声明 loginUrl / URL 形态进沙箱）：login() 的前置判别
- *  已吸收它们，正常路径到不了；留着是防御私有面未来被误用。用类型而不是消息串认领——
- *  `login()` 精确包成 `no-login-url`，沙箱自身的失败（超时/脚本抛错）不在此列、照旧走 classify。 */
+/** runLogin 两条自卫 Error 的私有类型（未声明 loginUrl / URL 形态进沙箱）：前置判别已吸收，正常路径到不了。
+ *  用类型而不是消息串认领——`login()` 精确包成 `no-login-url`，沙箱自身的超时/脚本抛错不在此列。 */
 class LoginScriptAbsentError extends Error {}
 
-/** 一次导出的执行计划：区间两端（1 基含端）与段内章数由门面裁好，`stream` 是 `exportBook`
- *  组装的实际流。路由拿这三个数写响应头、再逐块搬流——头必须仍先于**首块**写出，
- *  故区间在拿到流之前就得定案（这也是它与 `exportBook` 分开的原因）。
- *  与 `ExportOutcome` 同住本文件的理由见 `exportRange`。 */
+/** 一次导出的执行计划：区间两端（1 基含端）与段内章数由门面裁好，`stream` 是 `exportBook` 组装的实际流。
+ *  路由拿这三个数写响应头、再逐块搬流——头必须仍先于**首块**写出，故区间在拿到流之前就得定案。 */
 export type ExportPlan = {
   from: number
   to: number
@@ -143,17 +122,15 @@ export type ExportPlan = {
   stream: AsyncGenerator<string>
 }
 
-/** 范围导出的 outcome 判别联合：两条失败结局是**值**不是异常——路由把它们翻成 422 EmptyToc /
- *  BadRange（文案主人在路由层），门内不带 HTTP 语义。`bad-range` 带的是**裁剪后**的两个数：
- *  路由的文案模板原样用它们，裁剪只在门内发生一次。 */
+/** 范围导出的 outcome 判别联合：两条失败结局是**值**不是异常——路由翻成 422 EmptyToc / BadRange。
+ *  `bad-range` 带**裁剪后**的两个数：路由文案模板原样用它们，裁剪只在门内发生一次。 */
 export type ExportOutcome =
   | { kind: 'empty-toc' }
   | { kind: 'bad-range'; from: number; to: number }
   | { kind: 'plan'; plan: ExportPlan }
 
 /** 一次点名解析出来的那一**条**分类入口：执行体要的三样（打哪个源、拿什么地址、按哪份代际存快照）。
- *  `pickEntry` 交出它、`runExplorePage` 收下它，两处各写一遍匿名形状就是让这条契约没有名字。
- *  不叫 `ExploreTarget`：那枚名字属于跨源编排那一层（一轮打多家），它随浏览轴一起撤了（`ADR-0028`）。 */
+ *  `pickEntry` 交出它、`runExplorePage` 收下它，两处各写一遍匿名形状就是让这条契约没有名字。 */
 interface ExploreEntry {
   source: NovelSource
   kindUrl: string
@@ -162,83 +139,22 @@ interface ExploreEntry {
 
 // ── 服务实现 ────────────────────────────────────────────────────────────
 
-/** `searchParallel` 的值域尺（唯一住址）：非正整数会让批循环 `i += n` 永不终止——挂死而非报错，
- *  所以一律炸。装配期挡不住配置页后来的改动，故读数口每轮再过一次；一轮只取一个值，两次读之间
- *  翻页会让 `i += n` 与 `slice(i, i + n)` 用不同步长，批次就会重叠或漏行。
- *  与表里 numberField 的 `.min(1).step(1)` 是同一判据的两道读数口：ref 快路径整份跳过 schema，
- *  故读数口每轮再过这一把。 */
+/** `searchParallel` 的值域尺（唯一住址）：非正整数会让批循环 `i += n` 永不终止，一律炸。
+ *  ref 快路径整份跳过 schema，故读数口每轮再过这一把；一轮只取一个值，避免 `i += n` 与
+ *  `slice(i, i + n)` 用不同步长导致批次重叠或漏行。 */
 function requireParallelStep(n: number): number {
   if (!Number.isInteger(n) || n < 1) throw new RangeError(`searchParallel 必须为正整数，收到 ${String(n)}`)
   return n
 }
 
-/** 直装缝实际服务的字段名：活值键里**必有缺省**的那些（proxyUrl 是可选文本位——代理读数归
- *  fetcher 自己的复用/关闭语义，不在这套读数面上）。`satisfies` 让每个名字都必须仍是带缺省的活值位。 */
-type ServedFieldName = {
-  [K in VolatileConfigFieldName]: undefined extends ResolvedConfig[K] ? never : K
-}[VolatileConfigFieldName]
-
-/** 每格的值类型从 ResolvedConfig 派生（不另写一份映射）：文本位 / 小数值不会被写成同一个宽 number。 */
-type ServedValue<K extends ServedFieldName> = NonNullable<ResolvedConfig[K]>
-type ServedParts = Partial<{ [K in ServedFieldName]: ServedValue<K> }>
-
-/** 服务的读数面：行序即键序。活值里带缺省的字段全在这里——直装缝交出来的 ResolvedConfig
- *  形状不许有一格是 undefined（听书面缺的值会让合成 / 缓存读到假上限）。 */
-const SERVED = [
-  'searchTimeoutMs', 'searchParallel', 'jsTimeoutMs',
-  'cacheMaxBytes', 'exportDelayMs', 'localImportMaxBytes',
-  'ttsDefaultEngine', 'ttsDefaultRate', 'ttsDefaultVolume',
-  'ttsCacheMaxBytes', 'ttsPrefetchParagraphs',
-] as const satisfies readonly ServedFieldName[]
-
-/** 每格的缺省：一律引消费模块的常量，本文件不长出第二个字面量主人。 */
-const SERVED_DEFAULTS: { readonly [K in ServedFieldName]: ServedValue<K> } = {
-  searchTimeoutMs: DEFAULT_TIMEOUT_MS,
-  searchParallel: DEFAULT_SEARCH_PARALLEL,
-  jsTimeoutMs: DEFAULT_JS_BUDGET_MS,
-  cacheMaxBytes: DEFAULT_CACHE_MAX_BYTES,
-  exportDelayMs: DEFAULT_EXPORT_DELAY_MS,
-  localImportMaxBytes: DEFAULT_MAX_IMPORT_BYTES,
-  ttsDefaultEngine: TTS_DEFAULTS.engineId,
-  ttsDefaultRate: TTS_DEFAULTS.rate,
-  ttsDefaultVolume: TTS_DEFAULTS.volume,
-  ttsCacheMaxBytes: DEFAULT_TTS_CACHE_MAX_BYTES,
-  ttsPrefetchParagraphs: TTS_DEFAULTS.prefetchParagraphs,
-}
-
-/** 漏服务一格就在这里变成编译错：`SERVED` 少一个名字，下面这个断言类型就不再是真值那一支，
- *  值也赋不过去（编译错的文案里直接点名漏掉的那个字段）。 */
-type UnservedName = Exclude<ServedFieldName, (typeof SERVED)[number]>
-type ServedCoversAll = [UnservedName] extends [never] ? true : UnservedName
-const servedCoversAll: ServedCoversAll = true
-void servedCoversAll
-
-/** 服务的直装缝：把逐字段值装成 ResolvedConfig 形状。不能调 resolveConfig——config.ts 已 import
- *  本文件的 DEFAULT_*，反向运行期依赖会成环；ResolvedConfig 只做 type-only import。
- *  `exportDelayMs` 不是服务的旋钮（HTTP 导出面自己读组合根给的值），听书四格也由浏览器半读
- *  有效值；这里给缺省只为满足读数面的形状。
- *  proxyUrl / dataDir / apiAllowHosts 不在这里出现——它们是可选格，代理读数归 fetcher 自己的复用/关闭语义
- *  （由 createFetcherWith 单独传入），数据目录归组合根，fence 的别名名单归 HTTP 门面（api/dispatch）。
- *  导出只为缺省对齐钉子（`tests/services/defaults.test.ts` 逐格对 `resolveConfig(undefined)`）；
- *  生产路径只经 `create()` / `from()`。 */
-export function staticLiveConfig(parts: ServedParts): ResolvedConfig {
-  const out: Record<string, unknown> = {}
-  for (const name of SERVED) {
-    Object.defineProperty(out, name, { enumerable: true, get: () => parts[name] ?? SERVED_DEFAULTS[name] })
-  }
-  return out as unknown as ResolvedConfig
-}
-
 /**
  * 阅读链路门面：HTTP API / agent 工具 / UI 三个面的**唯一**业务入口。
  * 规则求值全部经引擎；抓取全部经守门 fetcher；缓存/书架/注册表在其上编排。
- * 在线目录与正文的管线归 `OnlineReading`，本地/在线分流与正文文字规约归 `BookContent`
- * （本文件只委托跨面动词），
+ * 在线目录与正文的管线归 `OnlineReading`，本地/在线分流与正文文字规约归 `BookContent`（本文件只委托跨面动词）。
  * 搜索/发现/书架/导入/登录/详情仍住这里（边界见 `ADR-0047`）。
  */
 export class ReadingService {
-  /** 活配置读数面：所有可热改字段在使用时读当前值——装配期抄快照会让配置页的改动等到重启。
-   *  dataDir 不在其中（启动期定址）。 */
+  /** 活配置读数面：所有可热改字段在使用时读当前值——装配期抄快照会让配置页的改动等到重启；dataDir 启动期定址。 */
   private readonly live: ResolvedConfig
   private readonly registry: SourceRegistry
   private readonly shelf: Shelf
@@ -258,9 +174,8 @@ export class ReadingService {
   /** 本地书生命周期（副本 ⇄ 架位的联合不变量）：门面构造期持有，外部三面拿不到 */
   private readonly localBooks: LocalLifecycle
   private readonly webview: WebViewRuntime
-  /** 听书面部件（合成服务 + 引擎注册表）：`from()` 直装缝可缺席（缺席 = 全部听书动词 503）；
-   *  `create()` 恒给——注册表损坏时换降级注册表（空表 + 原因），只降订阅那一格，
-   *  不再让整个部件缺席。缺席 ≠ 降级，两条半径各有各的闸。 */
+  /** 听书面部件（合成服务 + 引擎注册表）：`from()` 直装缝可缺席（缺席 = 全部听书动词 503）；`create()` 恒给。
+   *  缺席 ≠ 降级，两条半径各有各的闸（见 `from` 的 `tts` 参数）。 */
   private readonly tts: TtsParts | null
 
   private constructor(
@@ -304,30 +219,21 @@ export class ReadingService {
   }
 
   /**
-   * 生产快捷方式：建目录 + 从磁盘装配部件，再交 from() 总装。
-   * 业务类不再被迫知道目录与加载细节——组合根与业务自此可分（server 侧）。
-   * 本地书面：LocalBooks 也在此装配——「副本 ⇄ 架位」的联合不变量归本地书生命周期
-   * （`services/local-lifecycle.ts` 由 `from` 在构造期持有）。
+   * 生产快捷方式：建目录 + 从磁盘装配部件，再交 from() 总装；本地书也在装配期持有（联合不变量归 local-lifecycle）。
    */
   static async create(opts: ReadingServiceOptions): Promise<ReadingService> {
     // 主动建数据目录：保证存在 + 快速失败（dir 指向文件时 mkdir 抛错——ready 拒绝，入口层零注册）
     await fs.mkdir(opts.dir, { recursive: true })
-    const live = opts.config ?? staticLiveConfig(opts)
+    const live = opts.config ?? resolveConfig(undefined)
     const cookieJar = new CookieJar()
     const deviceId = await readDeviceId(opts.dir)
     const sourceSession = createFileSourceSession(opts.dir)
-    // HTTP cookie 按域/路径共享一张表；脚本侧 source cookie 仍按源隔离。
-    // 运行期字段（deviceId / sourceSession）随构造进 fetcher——门面不再往注入物上写回。
+    // HTTP cookie 按域/路径共享一张表；脚本侧 source cookie 仍按源隔离。运行期字段随构造进 fetcher。
     const fetcher = createFetcherWith(opts.fetchImpl, opts.proxyUrl, cookieJar, { deviceId, sourceSession })
-    // 听书面：引擎注册表从数据根加载（`tts-engines.json`，缺文件 = 空表），合成服务与本门面
-    // **共用同一个出站 fetcher**——proxyUrl / UA / cookie jar 缝只此一条。段音频缓存在这里装配
-    // （与 `PageCache` 同伴：目录与容量上限是组合根的事实，不进合成服务的依赖面）；上限读活配置
-    // （`ttsCacheMaxBytes`）：配置页改过后下一次写入 / 淘汰即按新值，常量只是 schema 缺省的主人。
-    // js 预算与搜索/探针同一耐心源。注册表是订阅数据、不是听书面的全部：读不出时换**降级注册表**
-    // （空表 + 原因）而不是让整个部件缺席——内置引擎 / 浏览器直出 / 已缓存音频都不读它，跟着停摆
-    // 等于把半径划到判据之外（失败半径 = 判据的主语，见 ADR-0077）；订阅动词按 degradedReason 抛
-    // TtsEnginesDegradedError（503 带原因），阅读 / 书架 / 搜索 / 工具照常挂载。readJson 已把
-    // 损坏文件备份为 `.bak` 并留过一条 error；这里再记一条点明**后果**，绝不静默吞。
+    // 听书面：引擎注册表从数据根加载（`tts-engines.json`，缺文件 = 空表），与合成服务共用同一个出站
+    // fetcher。段音频缓存上限读活配置（`ttsCacheMaxBytes`）；js 预算与搜索/探针同一耐心源。
+    // 注册表读不出时换**降级注册表**（空表 + 原因），只关订阅那一格：内置引擎 / 浏览器直出 / 已缓存
+    // 音频都不读它（失败半径 = 判据的主语，`ADR-0077`）。readJson 已备份 `.bak` 并留过 error，这里记后果。
     let engines: TtsEngineRegistry
     try {
       engines = await TtsEngineRegistry.load(opts.dir)
@@ -365,17 +271,11 @@ export class ReadingService {
   }
 
   /**
-   * 组合根注入面：接受已建好的部件（registry/shelf/cache/fetcher/local）直接总装——
-   * 测试可换内存 registry adapter / 确定性 fetcher，而不必每次 mkdtemp + importOne。
-   * **启动补数不在这里**：本地书 `totalChapters` 的旧条目补数归 `create` 的启动一轮（调本地书生命周期的
-   * `backfillChapterCounts`）；走 `from` 的注入方没有这轮补数。
-   * **只读注入物**：jar 必须是构造方给 fetcher 的同一实例（不一致当场炸，门面不挑一张、
-   * 不补写回）；deviceId / sourceSession 这类运行期字段也只由构造方带进 fetcher。
-   * 后台任务面在此接线：导入/批量验证的探针口径与 search/probe 同一
-   * fetcher 出口；timeoutMs 同源（探针与搜索对同一站点用同一耐心值）。
-   * 部件（registry/shelf/jobs/local）总装后即 private——外部只经门面动词。
-   * 逐字段数值是直装缝：给了 `config` 就全按它读（逐字段值让位于活配置），
-   * 没有才把逐字段值装成一份静态读数——配置页的改动只走 `config` 那条路生效。
+   * 组合根注入面：接受已建好的部件直接总装——测试可换内存 registry adapter / 确定性 fetcher。
+   * **启动补数不在这里**：本地书 `totalChapters` 补数归 `create` 那一轮（`backfillChapterCounts`）。
+   * **只读注入物**：jar 必须是构造方给 fetcher 的同一实例（不一致当场炸）；后台任务面在此接线，
+   * 探针与搜索共用同一 fetcher 出口与 timeoutMs。部件总装后即 private，外部只经门面动词。
+   * 配置只有 `config` 一条：给了就每次用时读当前值，没给就按 `resolveConfig(undefined)` 的缺省。
    */
   // eslint-disable-next-line @typescript-eslint/require-await -- 装配全程同步；async 是契约：构造失败必须以 rejection 交付，不能同步抛。
   static async from(parts: {
@@ -386,39 +286,33 @@ export class ReadingService {
     local?: LocalBooks
     /** 宿主 `ctx.jobs` 的窄面（见 job-holder.ts 的 JobHost）；缺省即不登记，任务语义不变 */
     jobHost?: JobHost
+    /** 活配置读数面（production 由组合根给）：缺省走 `resolveConfig(undefined)` */
     config?: ResolvedConfig
-    localImportMaxBytes?: number
-    searchParallel?: number
     tocMaxPages?: number
     contentMaxPages?: number
-    searchTimeoutMs?: number
-    jsTimeoutMs?: number
     /** 真浏览器 WebView 的出站代理值源（与 fetcher 同口径） */
     proxyUrl?: ValueSource<string | null>
     /** HTTP/浏览器共享 cookie jar（必填；fetcher 带 jar 时必须是同一实例） */
     cookieJar: CookieJar
-    /** 听书面部件（`create` 构造；测试可直装）。缺席或 null = 听书相关动词落 503 Unavailable——
-     *  与本地书同一档：听书缺席不影响阅读面，路由仍认得路径。这是**直装缝的缺席**（部件根本
-     *  没装配）；注册表损坏的降级由 `create` 换降级注册表处理，不落到这里（缺席 ≠ 降级）。 */
+    /** 听书面部件（`create` 构造；测试可直装）。缺席或 null = 听书相关动词落 503 Unavailable（直装缝的
+     *  缺席）；注册表损坏的降级由 `create` 处理，不落到这里（缺席 ≠ 降级）。 */
     tts?: TtsParts | null
   }): Promise<ReadingService> {
-    const live = parts.config ?? staticLiveConfig(parts)
+    const live = parts.config ?? resolveConfig(undefined)
     // 装配期先过一遍：组合根直装的非法值要在启动时就炸，不留到第一次搜索才挂起
     requireParallelStep(live.searchParallel)
-    // 同一张 jar 要同时服务 HTTP（自动回带/落库）与脚本面（CookieManager/CookieStore）——
-    // 两处各持一张会让脚本读到的 cookie 与请求发出去的不是一份；装配只认调用方显式给的同一实例。
+    // 同一张 jar 要同时服务 HTTP 与脚本面——两处各持一张会让脚本读到的 cookie 与发出去的不是一份。
     if (parts.fetcher.cookieJar !== undefined && parts.fetcher.cookieJar !== parts.cookieJar) {
       throw new Error('fetcher.cookieJar 与 parts.cookieJar 不是同一张表——装配必须显式给同一实例')
     }
     const cookieJar = parts.cookieJar
     const webview = new WebViewRuntime(parts.proxyUrl === undefined ? {} : { proxyUrl: parts.proxyUrl })
-    // 与基础 fetcher **同一张 jar**：两处各持一张会让脚本读到的 cookie 与请求发出去的不是一份
+    // 与基础 fetcher 同一张 jar（见上）
     const sourceRequest = createSourceRequest({
       fetcher: parts.fetcher, webview, cookieJar, jsTimeoutMs: () => live.jsTimeoutMs,
     })
-    // 在线目录/正文管线：源查找、书架镜像、文件缓存与源求值都从组合根注入的部件现取；
-    // 页数上限是装配期读数（不是配置页字段，不受热改约束）；js 预算相反——`sourceEvalFor`
-    // 每建一次求值面都从 `live` 现读一次，热改对下一次求值即生效。
+    // 在线目录/正文管线：源查找、书架镜像、文件缓存与源求值都从注入部件现取；页数上限是装配期读数，
+    // js 预算则每建一次求值面从 `live` 现读，热改对下一次求值即生效。
     const online = new OnlineReading({
       sourceOf: (id) => parts.registry.get(id),
       shelf: parts.shelf,
@@ -468,8 +362,7 @@ export class ReadingService {
   }
 
   /** 单对象：交 SourceIntake 入库（normalize → 按址去重 → add/replace；与任务路径同一实现）。
-   *  **不探针**——验证归 jobs 批量验证任务（UI）或 probe 路由/工具（单点）；
-   *  status 恒 unverified，probe 字段恒 null。 */
+   *  **不探针**——验证归 jobs 批量验证任务或 probe 路由/工具；status 恒 unverified，probe 恒 null。 */
   async importOne(raw: unknown): Promise<ImportOutcome> {
     return this.projectIntake(new SourceIntake(this.registry), raw)
   }
@@ -492,10 +385,8 @@ export class ReadingService {
   }
 
   /** 探针已有源（API/tools 的 probe 路由/工具用）：与 importOne 的探针段同口径。
-   *  超时与 js 预算必须与搜索同耐心（`searchTimeoutMs`/`jsTimeoutMs` 两个单点）——漏传会让
-   *  同一源在导入期与门面两处探针拿回两个 verdict。
-   *  交 `ProbeOutcome`（wire 读数 + 已写回的 status）：verdict→status 的判定在门内只算一次，
-   *  HTTP 面只写 `result`、工具面只投影 `status`。 */
+   *  超时与 js 预算必须与搜索同源（`searchTimeoutMs`/`jsTimeoutMs`），否则同一源两处探针拿回两个 verdict。
+   *  交 `ProbeOutcome`：verdict→status 的判定在门内只算一次，HTTP 面只写 `result`、工具面只投影 `status`。 */
   async probe(id: string, opts?: { signal?: AbortSignal }): Promise<ProbeOutcome> {
     const s = this.requireSource(id)
     const r = await probeSource(s, this.sourceRequest, {
@@ -514,15 +405,14 @@ export class ReadingService {
     return this.registry.list().map((s) => this.registry.toPublic(s))
   }
 
-  /** 单源启停：未知 id → 抛 SourceNotFoundError（「源不存在」只在门面断言一次；
-   *  路由面由 classify 免费拿 404，工具面不再先做存在性预检——bool 回执的语义不自明）。 */
+  /** 单源启停：未知 id → 抛 SourceNotFoundError（路由面经 classify 拿 404，工具面不再预检）。 */
   async setEnabled(id: string, enabled: boolean): Promise<void> {
     const found = await this.registry.edit((tx) => tx.setEnabled(id, enabled))
     if (!found) throw new SourceNotFoundError(id)
   }
 
-  /** 启停批量：未知 id 静默跳过、重复 id 幂等；返回找到并写入的条数（已在目标态的幂等重写
-   *  也计数——不是「实际变更数」，回执措辞按这个口径写）；一次 edit 一次合并落盘 */
+  /** 启停批量：未知 id 静默跳过、重复 id 幂等；返回找到并写入的条数（含已在目标态的幂等重写——
+   *  不是「实际变更数」）；一次 edit 一次合并落盘。 */
   async setEnabledMany(ids: string[], enabled: boolean): Promise<number> {
     return this.registry.edit((tx) => {
       let n = 0
@@ -537,8 +427,7 @@ export class ReadingService {
     if (!found) throw new SourceNotFoundError(id)
   }
 
-  /** 批量 AI 搜索标记：未知 id 静默跳过、重复 id 幂等；返回找到并写入的条数
-   *  （已在目标态的幂等重写也计数——不是「实际变更数」，与 setEnabledMany 同一口径） */
+  /** 批量 AI 搜索标记：未知 id 静默跳过、重复 id 幂等；返回找到并写入的条数（同一口径见 setEnabledMany）。 */
   async setAiSearchMany(ids: string[], aiSearch: boolean): Promise<number> {
     return this.registry.edit((tx) => {
       let n = 0
@@ -547,8 +436,7 @@ export class ReadingService {
     })
   }
 
-  /** 删单源；不存在 → false。**缺席在本动词是幂等成功**：要删的东西已经不在，结果就是「没有它」，
-   *  不抛错（与更新路径把缺席翻成错误的径相对——每个动词自己拥有缺席的含义）。
+  /** 删单源；不存在 → false。**缺席在本动词是幂等成功**（与更新路径把缺席翻成错误相对）。
    *  源级状态按脚本侧键（baseUrl）清理，不是 registry id。 */
   async removeSource(id: string): Promise<boolean> {
     const key = this.registry.get(id)?.baseUrl
@@ -595,13 +483,9 @@ export class ReadingService {
   }
 
   /** loginUrl JS 形态：沙箱执行取 cookie 串 → 解析 k=v; → setAuth + persist。
-   *  空产出（脚本没 return 出 cookie，或只写 `cookie.setCookie` 垫片又不读回——那张垫片是按源键值表，
-   *  与 HTTP jar 不是一张；HTTP 响应的 `Set-Cookie` 现由 fetcher 自动落 jar，口径见矩阵 `b-cookie-jar`）
-   *  **不算登录**：
-   *  返回 null 且不写 auth（落空 auth 会把 hasAuth 点亮成「已登录」而零凭据）。
-   * URL 形态由调用侧分流（不在此处理——开新 tab + cookie 录入，不注入 WebView）。
-   * 门内构件（`login()` 的前置判别先于执行）：两条自卫 Error 走 `LoginScriptAbsentError`——
-   * 正常路径到不了，真到也不再是 500 潜伏通道（login() 把它包成 no-login-url）。 */
+   *  空产出（脚本没 return，或只写 `cookie.setCookie` 垫片又不读回）**不算登录**：返回 null 且不写 auth
+   *  （落空 auth 会把 hasAuth 点亮成「已登录」而零凭据）。URL 形态由调用侧分流。
+   *  两条自卫 Error 走 `LoginScriptAbsentError`，`login()` 把它包成 `no-login-url`。 */
   private async runLogin(id: string): Promise<SourceAuth | null> {
     const s = this.requireSource(id)
     const loginUrl = s.rules.loginUrl
@@ -610,8 +494,7 @@ export class ReadingService {
     // 与按钮动作共用同一条前缀剥离：`<js>…</js>` 不能再套一个 `@js:`（会变成语法错）
     const v = await createSourceEval(this.sourceRequest.fetcherFor(s), s, { jsTimeoutMs: this.live.jsTimeoutMs })
       .evaluate('@js:' + stripLoginPrefix(loginUrl), { baseUrl: s.baseUrl })
-    // 宽松 `k=v;` 串的解析规则跨半只有一份（`shared/cookies.ts`）：登录脚本产出的串与用户在
-    // 登录面板手工粘进去的串走同一条语法，两处各写一遍就是给这条语法两个主人。
+    // 宽松 `k=v;` 串的解析规则跨半只有一份（`shared/cookies.ts`），登录脚本与手工粘贴走同一语法。
     const cookies = parseCookieString(firstValue(v, 'rule') ?? '')
     if (Object.keys(cookies).length === 0) return null   // 空产出：不写登录态（如实 → UI 仍显示未登录）
     // loginInfo / headers 是表单与手工录入的伴生态：JS 登录只产出 cookie，不能把刚存的那两格抹掉
@@ -650,9 +533,8 @@ export class ReadingService {
     return { mode: 'script' }
   }
 
-  /** 登录计划（`login()` 的判别构件，降门内私有）：loginUrl 形态判别——URL 形态 → manual
-   *  （回传 UI 开新 tab），JS 形态 → js（交给 login() 沙箱执行 runLogin）；未声明 loginUrl → null。
-   *  dispatch 不再读 rules、也不再直调本构件（只认 login() 的 outcome）。 */
+  /** 登录计划（`login()` 的判别构件）：URL 形态 → manual（回传 UI 开新 tab），JS 形态 → js，未声明 → null。
+   *  dispatch 不读 rules、不直调本构件（只认 login() 的 outcome）。 */
   private loginPlan(id: string): { mode: 'manual'; loginUrl: string } | { mode: 'js' } | null {
     const s = this.requireSource(id)
     const loginUrl = s.rules.loginUrl
@@ -660,12 +542,9 @@ export class ReadingService {
     return /^https?:\/\//i.test(loginUrl) ? { mode: 'manual', loginUrl } : { mode: 'js' }
   }
 
-  /** run-login 深动词（auth 路由的 run-login 分支只做它的 outcome→HTTP 翻译）：门内串
-   *  requireSource（未知 id 抛 SourceNotFoundError——路由不再预检存在性，classify 投影成 404）
-   *  → loginPlan 形态判别 → JS 形态才执行 runLogin。两条失败结局是值不是异常：未声明 →
-   *  no-login-url（路由翻 400）、空产出 → empty-output（路由翻 422 LoginFailed）——runLogin
-   *  的两条自卫 Error 被前置判别吸收，残留也归进 outcome（500 潜伏通道消灭）；
-   *  manual 形态不碰沙箱（不执行也不写登录态）。 */
+  /** run-login 深动词（auth 路由只做它的 outcome→HTTP 翻译）：requireSource → loginPlan 判别 → JS 形态才
+   *  执行 runLogin。两条失败结局是值不是异常：未声明 → no-login-url（400）、空产出 → empty-output（422）。
+   *  manual 形态不碰沙箱。 */
   async login(id: string): Promise<LoginOutcome> {
     const plan = this.loginPlan(id)
     if (plan === null) return { kind: 'no-login-url' }
@@ -685,10 +564,8 @@ export class ReadingService {
   // ── 书架动词 ──
 
   /** 书架读取面：落盘条目 + **来源投影**（sourceName），按**最近阅读**排序。
-   *  排序键是进度自己的 `updatedAt`（每次存进度刷新；新书 = 加入时刻），
-   *  同刻按加入时间、再按 bookKey 定序，保证 API / 工具 / 书架三面读到的顺序一致。
-   *  源名在这里实时 join 注册表（与 SearchGroup.sourceName 同一口径）——落盘快照会在源改名 /
-   *  同址替换复用 id 后陈旧（intake 复用旧 id，见按址去重）。join 不到 = 源已被删 → null。 */
+   *  排序键是进度自己的 `updatedAt`（每次存进度刷新；新书 = 加入时刻），同刻按加入时间、再按 bookKey。
+   *  源名在这里实时 join 注册表——落盘快照会在源改名 / 同址替换复用 id 后陈旧；join 不到 = 源已删 → null。 */
   shelfList(): ShelfEntry[] {
     return this.shelf.list()
       .map((b) => ({ ...b, sourceName: this.sourceNameOf(b.sourceId) }))
@@ -706,8 +583,7 @@ export class ReadingService {
   }
 
   /** 加书（title 形态）：字段判别归 pickShelfMeta，此处只管「入架」语义。
-   *  title / sourceId 必填非空（静默兜底 `?? ''` 会造出写入 200、读取才炸的死书）；
-   *  值域门在这里而不是路由——HTTP 面与工具面共用本动词，门长在路由只护一半。 */
+   *  title / sourceId 必填非空；值域门在这里而不是路由——HTTP 面与工具面共用本动词，门长在路由只护一半。 */
   shelfAdd(bookKey: string, meta: ShelfMetaPatch & { title: string }): ShelfBook {
     const sourceId = meta.sourceId
     if (typeof sourceId !== 'string' || sourceId === '') {
@@ -717,8 +593,7 @@ export class ReadingService {
     return this.shelf.add({ ...meta, bookKey, sourceId, title: meta.title })
   }
 
-  /** 打补丁（patch 形态）：返回更新后的条目；书架里没有这本书 → 抛 `BookNotOnShelfError`
-   *  （缺席在本动词是错误，口径同 `shelfSaveProgress`；不静默造书）。 */
+  /** 打补丁（patch 形态）：返回更新后的条目；书架里没有这本书 → 抛 `BookNotOnShelfError`（不含静默造书）。 */
   shelfPatch(bookKey: string, patch: ShelfMetaPatch): ShelfBook {
     const patched = this.shelf.update(bookKey, patch)
     if (patched === null) throw new BookNotOnShelfError(bookKey)
@@ -726,11 +601,8 @@ export class ReadingService {
   }
 
   /** 存进度（progress 形态）：返回更新后的条目；书架里没有这本书 → 抛 `BookNotOnShelfError`
-   *  （缺席在本动词是错误——HTTP 面由 `api/dispatch.ts` 翻成 400 与那句可行动文案，措辞不住
-   *  服务层；工具面原样上抛，不另造第二句）。
-   *  值域门在这里（同 shelfAdd）：Infinity 会被 `JSON.stringify` 落盘成 null 静默损坏，
-   *  只护 HTTP 面护不住工具面。
-   *  存在性判断只住 `Shelf.updateProgress` 的返回值：本动词不再预检 `get`、也不在写后重读一次。 */
+   *  （HTTP 面翻成 400 与可行动文案，工具面原样上抛）。值域门在这里：Infinity 会被 `JSON.stringify`
+   *  落盘成 null 静默损坏。存在性判断只住 `Shelf.updateProgress` 的返回值，不预检、不在写后重读。 */
   shelfSaveProgress(bookKey: string, chapterIndex: number, offsetRatio: number): ShelfBook {
     if (!Number.isInteger(chapterIndex) || chapterIndex < 0
       || !Number.isFinite(offsetRatio) || offsetRatio < 0 || offsetRatio > 1) {
@@ -741,12 +613,9 @@ export class ReadingService {
     return saved
   }
 
-  /** 存听书位置（listen 形态）：返回更新后的条目；书架里没有这本书 → 抛 `BookNotOnShelfError`
-   *  （缺席在本动词是错误，口径同 `shelfSaveProgress`）。
-   *  值域门在这里（同 shelfSaveProgress）：播放层随时会写，Infinity / 越界档位一旦落盘
-   *  就是下一次起播会照单全收的坏存档。
-   *  **本动词只写 listen 细节轨**：共用的消费位置（章 + 比例）由播放层在同一落盘节拍里经
-   *  `shelfSaveProgress` 另写一笔——两笔各走各的值域门，不在这里合成一个混合 body。 */
+  /** 存听书位置（listen 形态）：缺席同 `shelfSaveProgress` 是错误。
+   *  值域门在这里：Infinity / 越界档位一旦落盘，下一次起播会照单全收。
+   *  **本动词只写 listen 细节轨**：共用的消费位置由播放层在同一落盘节拍里经 `shelfSaveProgress` 另写一笔。 */
   shelfSaveListen(bookKey: string, p: ListenState): ShelfBook {
     if (!Number.isInteger(p.chapterIndex) || p.chapterIndex < 0
       || !Number.isInteger(p.paragraphIndex) || p.paragraphIndex < 0
@@ -763,14 +632,12 @@ export class ReadingService {
     return saved
   }
 
-  /** 删书：本地书副本的连删与「先副本、后架位」的顺序归本地书生命周期（`services/local-lifecycle.ts`），
-   *  门面只委托——三条删入口共用同一条顺序，不在这里各自记得复用 */
+  /** 删书：副本连删与「先副本、后架位」的顺序归本地书生命周期，门面只委托——三条删入口共用同一条顺序。 */
   async removeBook(bookKey: string): Promise<{ removed: boolean }> {
     return this.localBooks.removeBook(bookKey)
   }
 
-  /** 批量删书（书架多选）：与单删同一条顺序（副本先删、失败则整批架位保留可重试），
-   *  未知键静默跳过、重复键幂等，返回实际删除数（与批路由同口径） */
+  /** 批量删书：与单删同一条顺序（副本先删、失败则整批架位保留可重试），未知键静默跳过、返回实际删除数。 */
   async removeBooks(bookKeys: readonly string[]): Promise<{ removed: number }> {
     return this.localBooks.removeBooks(bookKeys)
   }
@@ -795,7 +662,7 @@ export class ReadingService {
   // ── 本地书动词 ──
 
   /** 本地导入（TXT / EPUB 按**内容**分流）+ 自动上架：导入即落架与入架失败的回收归本地书生命周期，
-   *  门面只委托并回显 wire 的 `LocalImportResponse`（书目字段走既有 SHELF_META 字段集） */
+   *  门面只委托并回显 wire 的 `LocalImportResponse`。 */
   async localImport(bytes: Buffer, name: string): Promise<LocalImportResponse> {
     return this.localBooks.importBook(bytes, name)
   }
@@ -829,17 +696,14 @@ export class ReadingService {
   }
 
   /** 段合成：缓存命中即回执；未命中按引擎分流，单段失败只抛给调用方（不吞、不给空音频）。
-   *  `opts.signal` = 调用方的取消位，原样下传给那一发上游请求 / 服务调用。
-   *  值域门住门面（同 `shelfSaveProgress`）：HTTP 读口只判「形状对不对」，工具/直装面绕得过；
-   *  而这里判的是业务事实——「一段」= 一个播放单元（`PLAY_UNIT_MAX`，按 code point），
-   *  语速必须落在播放层实际可选的档里（越界值会被播放层夹取，但存档/直装面不该靠夹取兜底）。 */
+   *  `opts.signal` = 调用方的取消位，原样下传。值域门住门面：这里判的是业务事实——一段 = 一个播放
+   *  单元（`PLAY_UNIT_MAX`，按 code point），语速必须落在播放层实际可选的档里。 */
   async ttsSynthesize(p: SynthesisRequest, opts?: { signal?: AbortSignal }): Promise<SynthesisReceipt> {
     if (!Number.isFinite(p.rate) || p.rate < TTS_RATE.min || p.rate > TTS_RATE.max) {
       throw new InvalidRequestError(`朗读语速需为 ${TTS_RATE.min}–${TTS_RATE.max} 之间的有限数`)
     }
     if (p.text.trim() === '') throw new InvalidRequestError('朗读文本不能为空')
-    // 与切分侧同一把尺（`shared/chapter-text.ts` 的 `PLAY_UNIT_MAX` 用 `Array.from` 按 code point
-    // 计）：两处若一处按 UTF-16 长度、一处按 code point 数，同一段会在边界上一边过一边不过。
+    // 与切分侧同一把尺（`shared/chapter-text.ts` 的 `PLAY_UNIT_MAX` 按 code point 计），否则边界上一边过一边不过。
     if (Array.from(p.text).length > PLAY_UNIT_MAX) {
       throw new InvalidRequestError(`朗读文本超过单段上限 ${PLAY_UNIT_MAX} 字（播放单元按段切分）`)
     }
@@ -862,12 +726,9 @@ export class ReadingService {
   }
 
   /** 引擎订阅导入（URL 支）：经**同一个出站 fetcher** 拉订阅文本再走同一份解析。
-   *  解码走 `decodeBody`（声明 charset → content-type → 嗅探），不硬解 UTF-8：GBK 编码的订阅
-   *  硬解会带着乱码的引擎名与 URL「导入成功」，比报错更难发现。
-   *  请求失败是 FetchError（路由经 classify 落 502）；响应不是 JSON 由 importJson 落 400。
-   *  先过闸再发请求：缺席与降级都不该先打一发网络才说 503。
-   *  失败原话里内嵌的地址先经 `redactOutboundError` 摘掉：订阅地址常带签名 token，错误信封
-   *  与日志都不是新的读口（与合成链同一条判据）。 */
+   *  解码走 `decodeBody`，不硬解 UTF-8（GBK 订阅会带着乱码引擎名与 URL「导入成功」，比报错更难发现）。
+   *  先过闸再发请求；请求失败是 FetchError（502），响应不是 JSON 由 importJson 落 400。
+   *  失败原话里的订阅地址经 `redactOutboundError` 摘掉——签名 token 不该进错误信封与日志。 */
   async ttsEngineImportFromUrl(url: string): Promise<TtsEngineImportReceipt> {
     const engines = this.requireEngines()
     let page: FetchedPage
@@ -903,9 +764,8 @@ export class ReadingService {
     return this.tts
   }
 
-  /** 订阅动词的闸：判据只有注册表的 `degradedReason` 一处，门面不另写第二份「坏没坏」。
-   *  降级时五个订阅动词抛具名错误（classify → 503，消息带原因）；源清单 / 段合成 / 音频读口
-   *  不过这道闸——它们不读订阅数据。 */
+  /** 订阅动词的闸：判据只有注册表的 `degradedReason` 一处。降级时五个订阅动词抛具名错误（classify → 503）；
+   *  源清单 / 段合成 / 音频读口不过这道闸——它们不读订阅数据。 */
   private requireEngines(): TtsEngineRegistry {
     const { engines } = this.requireTts()
     const reason = engines.degradedReason
@@ -915,11 +775,8 @@ export class ReadingService {
 
   // ── 搜索 ─────────────────────────────────────────────────────────────
 
-  /** 聚合搜索的**唯一实现**。`onGroup` 是增量出口：单源求值完成即按完成序交付，
-   *  返回值仍按参搜源序——HTTP 面与工具面的既有形状一字不改，而后台任务/将来做任务的
-   *  那一路可以边跑边被看见（浏览器半不再自持分批循环，只消费这个增量）。
-   *  sourceIds 缺省**或空数组**都视为「未限定」= 搜全部启用源（不要把空数组当「搜零个源」，
-   *  零分组空结果会冒充成功）。 */
+  /** 聚合搜索的**唯一实现**。`onGroup` 是增量出口：单源求值完成即按完成序交付，返回值仍按参搜源序。
+   *  sourceIds 缺省**或空数组**都视为「未限定」= 搜全部启用源（零分组空结果会冒充成功）。 */
   private async searchProgressive(keyword: string, opts?: {
     sourceIds?: string[]
     onGroup?: (group: SearchGroup, index: number) => void
@@ -933,8 +790,7 @@ export class ReadingService {
     signal?.throwIfAborted()      // 已取消的调用一条源都不问
     const sources = this.registry.list().filter((s) =>
       participates(s) && (want === undefined || want.length === 0 || want.includes(s.id)))
-    // new Array 是**稀疏**的：元素要按完成序回填，中途停止就会留洞——类型照实写，别让
-    // 「每格都有值」的声称把洞藏起来（收尾那道 filter 谓词才是洞的唯一出口）
+    // new Array 是**稀疏**的：按完成序回填，中途停止会留洞——类型照实写，收尾 filter 才是洞的唯一出口
     const groups = new Array<SearchGroup | undefined>(sources.length)
     const step = requireParallelStep(this.live.searchParallel)
     for (let i = 0; i < sources.length; i += step) {
@@ -948,9 +804,7 @@ export class ReadingService {
         opts?.onGroup?.(group, index)
       }))
     }
-    // 停止时数组可能有洞（filter 天然跳过洞位）；未停止时无洞。
-    // 取消（signal）与「用户停 UI 搜索」（shouldStop）不同：后者保留已搜到的命中，
-    // 前者在工具面必须**抛**——把被掐掉的半轮当成完整结果返回，等于用空/半集冒充事实。
+    // 取消（signal）与「用户停 UI 搜索」（shouldStop）不同：后者保留已搜到的命中，前者在工具面必须**抛**。
     signal?.throwIfAborted()
     return groups.filter((g): g is SearchGroup => g !== undefined)
   }
@@ -961,13 +815,10 @@ export class ReadingService {
     return this.searchProgressive(keyword, opts)
   }
 
-  /** AI 工具面的聚合搜索：只问 `aiParticipates` 的源（已启用 ∧ 文本 ∧ 用户标记 AI 搜索）。
-   *  `sourceIds` 只在这个集合内**收窄**——未标记的源不会被点名绕过。
-   *  空集合（显式 `sourceIds: []` 也算）不发任何请求，也不交给 `searchProgressive`：后者把
-   *  空 sourceIds 读作「未限定」（那是 UI 面的约定，见 `searchProgressive` 的注释），在这里
-   *  落回全量会把「用户没选 AI 源」改写成「搜了所有源」——`ADR-0097` 决定 3 裁的就是这一条。
-   *  `eligible` 是本轮候选源数（给 sourceIds 时是收窄后的数）；`groups` 与普通搜索同形，
-   *  `searched`/`failed` 等轮级读数由调用方从 groups 汇总，不在此另算一份。 */
+  /** AI 工具面的聚合搜索：只问 `aiParticipates` 的源（已启用 ∧ 文本 ∧ 用户标记 AI 搜索），`sourceIds` 只
+   *  在这个集合内**收窄**。空集合（显式 `[]` 也算）不发请求、也不交给 `searchProgressive`——后者把空
+   *  sourceIds 读作「未限定」（UI 面约定），落回全量会把「用户没选 AI 源」改写成「搜了所有源」
+   *  （`ADR-0097` 决定 3）。`eligible` 是本轮候选源数；轮级读数由调用方从 groups 汇总。 */
   async searchForAi(
     keyword: string, opts?: { sourceIds?: string[]; signal?: AbortSignal },
   ): Promise<{ eligible: number; groups: SearchGroup[] }> {
@@ -984,16 +835,14 @@ export class ReadingService {
     return { eligible: ids.length, groups }
   }
 
-  /** 搜索参与计划：**参与者 id 清单**这条投影的唯一主人——客户端分批/进度按此走，
-   *  「哪些源参搜」不再在 wire 两侧各定义一份。
-   *  谓词不在本文件：「谁参搜」的**判据**单点是 `services/participation.ts` 的 `participates`。 */
+  /** 搜索参与计划：**参与者 id 清单**这条投影的唯一主人——客户端分批/进度按此走。
+   *  谓词不在本文件：「谁参搜」的判据单点是 `services/participation.ts` 的 `participates`。 */
   searchPlan(): SearchPlan {
     return { sourceIds: this.registry.list().filter((s) => participates(s)).map((s) => s.id) }
   }
 
-  /** 提交一轮**后台**搜索：参与集判定与 `total` 同源（都是 searchPlan 那一条启停 invariant），
-   *  运行体是**同一份** `searchProgressive`——批循环只此一处，这里只是换了个消费方。
-   *  结果由 `SearchJobs` 持有，所以切界面 / 切 tab 都不影响它跑完。 */
+  /** 提交一轮**后台**搜索：参与集判定与 `total` 同源；运行体是**同一份** `searchProgressive`，只是换个消费方。
+   *  结果由 `SearchJobs` 持有，切界面 / 切 tab 都不影响它跑完。 */
   startSearchJob(keyword: string, opts?: { sourceIds?: string[] }): { jobId: string } {
     const want = opts?.sourceIds
     const plan = this.searchPlan().sourceIds                 // 参与集单主人：启停 invariant 不在此抄第二份
@@ -1006,8 +855,8 @@ export class ReadingService {
       }))
   }
 
-  /** 停止本轮搜索：只停「还要去搜的源」，已搜出的命中留在读面（保留期照旧）。返回 false = 本轮早已收尾
-   *  （点了个空钮），不是错误；在途的最多 `searchParallel` 条不撤回，回来照旧计入。 */
+  /** 停止本轮搜索：只停「还要去搜的源」，已搜出的命中留在读面；在途的最多 `searchParallel` 条不撤回，回来照旧计入。
+   *  返回 false = 本轮早已收尾（不是错误）。 */
   cancelSearchJob(): { cancelled: boolean } { return { cancelled: this.searchJobs.cancel('用户停止了搜索') } }
 
   /** 搜索任务读面：`since` = 客户端已收到的组数（完成序游标）；null = 无任务或已过保留期 */
@@ -1019,39 +868,26 @@ export class ReadingService {
   // ── 分类浏览（书城）──────────────────────────────────────────────────
 
   /** 发现面的**按源**清单（本地派生，**零网络请求**）：书城左栏两级的同一份材料。
-   *  参与集判据与 `searchPlan` 同源——`exploreParticipates` 就是那条启停 invariant 再加一条
-   *  「声明了分类入口」，故清单与参搜集合不会各说一套。
-   *  派生本身归 `explore.ts` 的 `deriveExploreSources`（吃名册吐数组的纯函数）：本方法只往上套一层
-   *  wire 信封。两个名字各指一层，读调用点的人不必现场分辨问的是哪一层。 */
+   *  参与集判据与 `searchPlan` 同源（`exploreParticipates` = 启停 invariant + 声明了分类入口）。
+   *  派生本身归 `explore.ts` 的 `deriveExploreSources`（纯函数），本方法只套 wire 信封。 */
   exploreSources(): ExploreSources {
     return { sources: deriveExploreSources(this.registry.list()) }
   }
 
-  /** 提交一轮分类浏览：**一个源、一个类、从第 1 页起**。
-   *  点名不在可选集里的源（源不存在 / 没声明这一类 / 不进城）一律抛错而不是给一个空轮次——
-   *  空轮次会被读成「这一类没有书」，那是把「没点名成功」冒充成事实；用户主动点名的东西点不到，
-   *  就该响亮地告诉他点不到。抛 `InvalidRequestError` 而不是路由层的错误类：值域判据归门面
-   *  （架构硬约束「services 不 import api」），HTTP 面经 `errors.classify` 映射成与路由自检
-   *  同一份的 400 BadRequest 信封。
-   *  命中进程内快照即零请求（重复进同一类不打站点是那份快照存在的全部理由）。 */
+  /** 提交一轮分类浏览：**一个源、一个类、从第 1 页起**。点名不在可选集里的源一律抛错而不是给空轮次
+   *  （空轮次会被读成「这一类没有书」）。抛 `InvalidRequestError`：值域判据归门面，HTTP 面经
+   *  `errors.classify` 映射成 400。命中进程内快照即零请求。 */
   startExploreJob(sourceId: string, kind: string): { jobId: string } {
     const entry = this.pickEntry(sourceId, kind)
     if (entry === null) throw new InvalidRequestError(`该源没有可用的分类入口：${sourceId} · ${kind}`)
     return this.exploreJobs.start(sourceId, kind, (emit, _shouldStop, page) => this.runExplorePage(entry, page, emit))
   }
 
-  /** 续下一页（**同一轮**，不换 id）。要打第几页由持有者算（`ExploreJobRun` 的页码位），本层不再按
-   *  快照页号 +1：那个数是「已占到第几页」，失败的一页没占到，按它 +1 就等于把失败页消费掉、永不再打。
-   *  没得发就如实 null，不做无效请求——
-   *  路由据此回 409，客户端据此把「加载更多」收掉，而不是假装又加载了一轮。
-   *
-   *  判据只有 `hasMore` 一条：它已经是服务端「**此刻**能不能点」的唯一读数（在途那一段它自己就是
-   *  false），这里再判一次在途就是给同一条读数立第二个主人——两份判据迟早会一边说能、一边说不能。
-   *
-   *  **入口解析不出（源刚被删 / 那一类改了名）也按「没得发」走 null**，不跟 `startExploreJob` 共用
-   *  那条抛错：那边是用户主动点名一个点不到的东西，这边是**轮次还显示在界面上**、用户点的是这一轮的
-   *  下一页——「没得可加载」与「你点了个不存在的东西」是两件事，把前者报成后者等于拿注册表的变动
-   *  算成用户的操作失误，还顺手让一条红错误盖掉那一轮已经读得到的书单。轮次本身不受影响。 */
+  /** 续下一页（**同一轮**，不换 id）。页码由持有者算（`ExploreJobRun` 的页码位），本层不再按快照页号 +1：
+   *  失败的一页没占到，按它 +1 等于把失败页消费掉、永不再打。没得发就如实 null，路由回 409。
+   *  判据只有 `hasMore` 一条（在途时它自己就是 false），再判一次就是给同一条读数立第二个主人。
+   *  **入口解析不出（源刚被删 / 类改名）也按「没得发」走 null**，不跟 `startExploreJob` 共用抛错：
+   *  那是用户点名点不到，这里是轮次仍在界面上的下一页——拿注册表变动算用户操作失误，还会让红错误盖掉已有书单。 */
   loadMoreExploreJob(): { jobId: string } | null {
     const snap = this.exploreJobs.snapshot()
     if (snap === null || !snap.hasMore) return null
@@ -1060,18 +896,11 @@ export class ReadingService {
     return this.exploreJobs.advance(snap.kind, (emit, _shouldStop, page) => this.runExplorePage(entry, page, emit))
   }
 
-  /** 源与类都要现查：注册表是唯一的源清单，入口地址与代际在这里一次算好交给执行体。
-   *  「点不到」的三种情形（源不在清单 / 该源没声明这一类 / 该源不进城）**合成一条判据**：
-   *  参与判据仍归 `exploreParticipates` 一处，本函数不复制它的启停规则，只是把「拿不到入口」
-   *  与「这个源不该被点名」落成同一个读数。
-   *
-   *  拿不到就返回 null、**不在这里替调用方定后果**：同一个「点不到」在两个调用方那里是两种事实——
-   *  提交时点不到是用户点名失败（抛，落成 400），续页时点不到是没得可加载（null，落成 409）。
-   *  判据单点在这里，选哪种后果归那两个门面方法各自说清。
-   *
-   *  代际用 `exploreEpoch` 而非 `rulesEpoch`：后者按「一个字段变更作废哪些**引擎面**（目录/正文）的
-   *  文件缓存」归类，ruleExplore* 一族在那张表里全归 'none'——拿它当快照键，作者改了发现规则而
-   *  入口地址不动时，陈旧书目会一直撑到 TTL 结束。两份指纹同一个主人、各按自己的消费路径收字段。 */
+  /** 源与类都要现查：入口地址与代际在这里一次算好交给执行体。「点不到」的三种情形合成一条判据
+   *  （参与判据仍归 `exploreParticipates` 一处）。拿不到就返回 null、**不在此替调用方定后果**：
+   *  提交时点不到是用户点名失败（抛，落 400），续页时点不到是没得可加载（null，落 409）。
+   *  代际用 `exploreEpoch` 而非 `rulesEpoch`：后者把 ruleExplore* 一族全归 'none'，作者改了发现规则
+   *  而入口地址不动时，陈旧书目会一直撑到 TTL 结束。 */
   private pickEntry(sourceId: string, kind: string): ExploreEntry | null {
     const s = this.registry.list().find((x) => x.id === sourceId)
     const hit = s?.rules.ruleExploreKinds.find((k) => k.title === kind)
@@ -1079,9 +908,7 @@ export class ReadingService {
     return { source: s, kindUrl: hit.url, epoch: exploreEpoch(s.rules, s.baseUrl) }
   }
 
-  /** 一轮里的一页：交给执行体的东西全部现成（入口地址、代际、页码），本层不再推导。
-   *  运行器契约的第二个参数 `shouldStop`（协作式取消）在这里用不上——单源一次就完，
-   *  取消仍由持有者的代际点穴承担。 */
+  /** 一轮里的一页：交给执行体的东西全部现成；运行器契约的 `shouldStop` 在这里用不上——取消归持有者。 */
   private async runExplorePage(
     entry: ExploreEntry, page: number, emit: (g: SearchGroup) => void,
   ): Promise<void> {
@@ -1091,8 +918,7 @@ export class ReadingService {
     }))
   }
 
-  /** 分类轮次读面：**全量**快照（跨页累积住在服务端持有者，增量模型装不下——见 services/explore-job.ts）。
-   *  null = 从未提交过，或结束后过了保留期。 */
+  /** 分类轮次读面：**全量**快照（跨页累积住服务端持有者）；null = 从未提交过或已过保留期。 */
   exploreJobSnapshot(): ExploreSnapshot | null { return this.exploreJobs.snapshot() }
 
   /** 分类轮次的「变了」信号口（SSE 路由用它拉全量帧；信号不带数据）。返回退订口。 */
@@ -1100,11 +926,7 @@ export class ReadingService {
 
   private async searchOne(s: NovelSource, keyword: string, signal?: AbortSignal): Promise<SearchGroup> {
     // 源状态失败原因按需建键：SearchGroup 是跨半载荷，走 `src/shared/wire.ts` 的「缺席即不建键」口径
-    const base = {
-      sourceId: s.id, sourceName: s.name, status: s.status,
-      ...(s.statusDetail === undefined ? {} : { statusDetail: s.statusDetail }),
-      hits: [] as SearchHit[],
-    }
+    const base = searchGroupBaseOf(s)
     try {
       // 请求语义全走搜索面（search-face.ts，与探针同一实现）：模板解析/组装/超时/解码/列表求值
       const page = await fetchSearchPage(s, keyword, this.sourceRequest, {
@@ -1119,17 +941,7 @@ export class ReadingService {
         const hit = await this.infoHitOf(s, page)
         return { ...base, hits: hit === null ? [] : [hit] }
       }
-      const hits: SearchHit[] = []
-      // 求值与相对链接基准 = 落地地址（浏览器语义，与目录/正文面同口径——重定向站点不再错位）；
-      // 上下文由搜索面按条目产出（AllInOne 条目带行，字段规则的 `$n` 在引擎入口绑定）。
-      // ruleBookName 的非空保障在搜索面（缺规则整体 RuleMissing，不降级 `?? ''`——空串规则返回
-      // 整页文本会造垃圾标题）；这里不再补空串，门内缺书名规则是防御性抛错。
-      for (const ctx of page.contexts) {
-        // 规则来源档与槽序的单点在 bridge.hitFieldsOf（书名非空才算书目 / 裸奔项 / 坏规则只丢该字段）；
-        // 这里的 try/catch 才是「整组归错码」的主人
-        const hit = await hitFieldsOf(s, 'search', page.subEval, ctx, page.landedUrl)
-        if (hit !== null) hits.push(hit)
-      }
+      const hits = await hitsOfContexts(s, 'search', page.subEval, page.contexts, page.landedUrl)
       return { ...base, hits }
     } catch (e) {
       // 取消不是「这一源搜失败了」：不写进结果集——把被掐掉的一轮当成完整事实，比报错更坏
@@ -1138,9 +950,7 @@ export class ReadingService {
     }
   }
 
-  /** 搜索面 info 形态的一条书目：字段走 bridge.detailFieldsOf（与 getDetail 的字段段共用
-   *  bridge.detailFieldsFromContext，含 init 换根），求值基准是落地地址（重定向后按落地地址解析相对链接），
-   *  书地址用面算好的 bookUrl。
+  /** 搜索面 info 形态的一条书目：字段走 bridge.detailFieldsOf，求值基准是落地地址，书地址用面算好的 bookUrl。
    *  书名为空 → null：只有书名非空才收这一条，「0 命中」是**结果**不是失败。 */
   private async infoHitOf(
     s: NovelSource, page: Extract<SearchFaceResult, { ok: true; shape: 'info' }>,
@@ -1158,10 +968,8 @@ export class ReadingService {
 
   async getDetail(sourceId: string, url: string): Promise<BookDetail> {
     const s = this.requireSource(sourceId)
-    // `book` 变量：详情面规则常见 `book.bookUrl`/`book.origin` 引用（脚本/模板段），
-    // 且跨规则可见（`book`/`chapter` 绑定与 vars 表随求值上下文传递）——这里给这次 getDetail
-    // 一张共享 vars 表：init 的 `@put:{n:"[property$=book_name]@content"}` 写进去，
-    // 随后的 `@get:{n}` 字段规则与 tocUrl 模板才读得到（各次调用新建，不跨门面共享）。
+    // `book` 变量：详情面规则常见 `book.bookUrl`/`book.origin` 引用，且跨规则可见——给这次 getDetail
+    // 一张共享 vars 表，init 的 `@put` 写进去，随后的字段规则与 tocUrl 模板才读得到（不跨门面共享）。
     const shelfBook = this.shelf.get(url)
     const subEval = createSourceEval(this.sourceRequest.fetcherFor(s), s, { jsTimeoutMs: this.live.jsTimeoutMs })
       .subEval({
@@ -1169,9 +977,8 @@ export class ReadingService {
         book: { bookUrl: url, origin: s.baseUrl, ...(shelfBook === undefined ? {} : { shelfBook }) },
       })
     const html = await fetchSourceText(this.sourceRequest, s, url)
-    // 七字段与 tocUrl 共用**一次** init 求值：字段段是 bridge.detailFieldsFromContext（detailFieldsOf
-    // 与 detailReadOf 共用的那一份回落链与档位），整次读取的单点是 bridge.detailReadOf；搜索面
-    // info 形态与探针仍走 detailFieldsOf——那条路只要字段，不付 tocUrl 求值。
+    // 七字段与 tocUrl 共用**一次** init 求值：字段段是 bridge.detailFieldsFromContext，整次读取的单点是
+    // bridge.detailReadOf；搜索面 info 形态与探针仍走 detailFieldsOf——那条路不付 tocUrl 求值。
     const read = await detailReadOf(s, subEval, html, url)
     return { ...read.fields, tocUrl: read.tocUrl }
   }
@@ -1184,51 +991,38 @@ export class ReadingService {
   }
 
   /** 目录导航：`chapters` 是线性阅读序列（与 getToc 同一份），`items` 是展示用树。
-   *  本地书读持久化导航（EPUB 原生 nav/NCX；TXT 由线性序列派生），其他书按目录派生平面导航——
-   *  派生单点是 wire 的 `planarNavigation`（消费点 `services/book-content.ts`），门面只委托。 */
+   *  本地书读持久化导航，其他书按目录派生平面导航——派生单点是 wire 的 `planarNavigation`，门面只委托。 */
   async getNavigation(sourceId: string, bookUrl: string): Promise<BookNavigation> {
     return this.content.navigation(sourceId, bookUrl)
   }
 
   // ── 正文 ─────────────────────────────────────────────────────────────
 
-  /** 章节正文（**文字面**）：现有 AI 工具 / TXT 导出 / 阅读器的文字出口——经**唯一**投影
-   *  `chapterContentToText`（TXT 与在线文本同过一条行规约，幂等），不写第二份文字实现。 */
+  /** 章节正文（**文字面**）：经**唯一**投影 `chapterContentToText`（TXT 与在线文本同过一条行规约，幂等）。 */
   async getChapter(sourceId: string, bookKey: string, chIndex: number, opts?: { refresh?: boolean }): Promise<string> {
     return chapterContentToText(await this.getChapterContent(sourceId, bookKey, chIndex, opts))
   }
 
   /**
-   * 章节正文（**图文面**）：本地 EPUB 返回规范化图文树（按需读该章的文档 JSON），
-   * 本地 TXT 与在线书返回文字章。
-   *
-   * 本地/在线分流与正文文字规约归 `BookContent`（`services/book-content.ts`），门面只委托；
-   * dispatch 与工具面都不持 LOCAL 知识。文字面（`getChapter`）仍经唯一投影
-   * `chapterContentToText`——text 分支再过一次行规约，幂等。
+   * 章节正文（**图文面**）：本地 EPUB 返回规范化图文树（按需读该章文档 JSON），本地 TXT 与在线书返回文字章。
+   * 本地/在线分流与文字规约归 `BookContent`，门面只委托；文字面仍经唯一投影 `chapterContentToText`。
    */
   getChapterContent(sourceId: string, bookKey: string, chIndex: number, opts?: { refresh?: boolean }): Promise<ChapterContent> {
     return this.content.chapterContent(sourceId, bookKey, chIndex, opts)
   }
 
   /** 一章的**文字面读**（`dshnovel_read` 的深动词）：目录取一次，章名与正文成对交回。
-   *  「目录 → 正文 → 章名」的编排归 `BookContent.readChapter`——章名与正文出自同一次目录读数，
-   *  越界交回适配器各自的既有错误语义；门面只委托（`ADR-0047`），不在此复述任何判据。 */
+   *  「目录 → 正文 → 章名」的编排归 `BookContent.readChapter`；门面只委托（`ADR-0047`）。 */
   async readChapter(sourceId: string, bookKey: string, chapterIndex: number): Promise<{ name: string; text: string }> {
     return this.content.readChapter(sourceId, bookKey, chapterIndex)
   }
 
   // ── 导出 ─────────────────────────────────────────────────────────────
 
-  /** 范围导出的**深动词**：一次目录读数定案——空目录、裁剪后的区间、以及由 `exportBook`
-   *  组装的实际流。缺省全本、越界裁剪与裁剪后倒置是同一件事的三面：「[from, to] 是不是目录的
-   *  一段」；这条判据属于导出这个动作，不属于任何传输面（`ADR-0052`；`ADR-0036` 的导出条款
-   *  随此窄翻案，路由只留参数形态校验、写头与流式机械）。
-   *  两条失败结局交回值，路由翻成 422（文案主人在路由）——门内不写头、不碰状态码、不读配置：
-   *  标题、节流与中断信号都是调用方交来的值。
-   *  `exportBook` 的 deps 注入原样保留：它自己的越界即抛仍是前置校验，防的是绕过本门面的新
-   *  调用方，不是第二份裁剪策略。
-   *  `ExportPlan` / `ExportOutcome` 同住本文件：plan 只由本动词产出、只经 outcome 交出，没有
-   *  第二个产出点。 */
+  /** 范围导出的**深动词**：一次目录读数定案——空目录、裁剪后的区间、以及由 `exportBook` 组装的实际流。
+   *  缺省全本、越界裁剪与裁剪后倒置是同一判据（`ADR-0052`；`ADR-0036` 的导出条款随此窄翻案）。
+   *  两条失败结局交回值，路由翻成 422；门内不写头、不碰状态码、不读配置。
+   *  `exportBook` 自己的越界即抛仍是前置校验。`ExportPlan` / `ExportOutcome` 同住本文件：只由本动词产出。 */
   async exportRange(sourceId: string, bookUrl: string, from: number | null, to: number | null,
     opts: { title: string; delayMs: number; signal: AbortSignal },
   ): Promise<ExportOutcome> {

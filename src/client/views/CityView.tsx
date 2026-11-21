@@ -14,43 +14,28 @@ import { coverTintClass, topAlignIfClipped } from '../util.js'
 import { coverFallbackChar, EmptyState } from './bits.js'
 import { CityBookSheet } from './CityBookSheet.js'
 
-/** 在途骨架的**张数上界**。首屏第一眼不该是一片空白（源还在往回送时右侧空着，正是进入书城的
- *  第一眼），但也不能无界地铺——铺满一屏空卡等于把「还在等」画成「有这么多」。
- *  这是一枚上界，不是「列数 × 排数」的镜像：列数住在 `styles/city.ts` 的网格里（宽档 4 列、窄档 2 列），
- *  把那个数抄进 JS 就会在退档时撒谎（窄档下这 8 张是四排，仍是同一枚上界，只是不叫「两排」）。 */
+/** 在途骨架的**张数上界**：首屏第一眼不该空白，也不能无界地铺。这是上界、不是「列数 × 排数」
+ *  的镜像——列数住在 `styles/city.ts` 的网格里。 */
 const SKELETON_CARDS = 8
 
-/** 行身份：React key 与封面失败表的键**必须是同一个算式**。地址优先——服务端按地址去重，
- *  于是「同名同作者、地址不同」的两条是这一源真给出来的两行（不同版本的入口、或站点自己的重复），
- *  只按名字记会让它们撞成同一个 key：React 丢一行，一条坏封面还把另一条也降级成首字块。
- *  没地址的条目退到「名字对 + 行序」：一轮内累积只增不减，行序对已在场的行是稳定的。 */
+/** 行身份：React key 与封面失败表的键**必须是同一个算式**。地址优先（服务端按地址去重）；
+ *  没地址的条目退到「名字对 + 行序」，一轮内累积只增不减，行序对已在场的行是稳定的。 */
 const rowKey = (b: ExploreBook, i: number): string =>
   b.bookUrl !== null ? JSON.stringify([b.bookUrl]) : `${JSON.stringify([b.name, b.author ?? ''])}#${String(i)}`
 
-/** 头行副标题：`源名 · 分组`（分组缺席就不出现）。浏览轴收成按源后，右区头行报的是「这一屏逛的是
- *  哪个源」——源已在左栏第一层点名，这里只复述，不再摆跨源收录数（那是归并层的残影）。 */
+/** 头行副标题：`源名 · 分组`（分组缺席就不出现）。源已在左栏点名，这里只复述。 */
 const sourceSub = (s: ExploreSources['sources'][number]): string =>
   [s.name, s.groups[0] ?? ''].filter((x) => x !== '').join(' · ')
 
 /**
- * 书城 = 分类浏览（左栏一条**源列表**，只有选中的那个源就地展开自己的分类；只此一层深度，没有独立的分类墙落地页）。
+ * 书城 = 分类浏览（左栏一条**源列表**，只有选中的源就地展开自己的分类；只此一层深度）。
  *
- * 四条呈现口径：
- * ① **源在左栏第一层就点完名**——卡片不带任何跨源角标（单源下「这本书在几个源上」恒为 1，是个谎）。
- *    分类按**书源声明的原样顺序**列出，不排序、不合并、不带计数（计数在单源下恒等于 1）。
- *    源行只写名字 + 自己声明了几类，**分组不写**（理由见 `kindCountLabel` 头上那条）。
- * ② **分类长在它所属的源下面，不另起一列**：整栏因此没有第二个标题、第二条滚动条，也不用再写一遍
- *    「分类 · 某个源」——嵌套结构本身就是归属。代价是展开的源排在列表尾部时，刚长出来的那一串会掉到
- *    折叠线以下（点了却没看见等于没点），所以换源后要把那一行抬到框顶，见 `topAlignIfClipped`。
- * ③ **续页是本轮唯一需要用户按一下的东西**：显隐只认 `hasMore`、`disabled` 只认本地按下那一段——
- *    两个字段各管什么定义在 `client/explore-job.ts` 的 `ExploreRound` 与 `loadMore` 上，本视图照它渲染。
- * ④ **进入即加载，但只在该源+该分类没有轮次时**：源与分类的回落、以及「该不该提交」都收在
- *    `client/city-entry.ts` 的纯判据里——服务端持有这一轮就是它的家，回来看它跑完即可
- *    （见下面那条 effect）。
+ * 呈现口径：① **源在左栏第一层就点完名**——卡片不带跨源角标，分类按书源声明的原样顺序列出；
+ * ② **分类长在所属源下面**，不另起一列；展开的源在列表尾部时把那一行抬到框顶（`topAlignIfClipped`）；
+ * ③ **续页只认 `hasMore` 与本地按下那一段**（定义在 `explore-job.ts` 的 `ExploreRound`）；
+ * ④ **进入即加载，但只在该源+该分类没有轮次时**（判据在 `city-entry.ts` 的 `decideCityEntry`）。
  *
- * 轮次观察与读面的会话内现场各自有主人：轮次归 `useExploreJob`（全量快照），上次逛的源与分类归
- * `cityStore`（不落盘）。本视图只做装配与呈现：进入判据取 `city-entry`，呈现判据取
- * `city-view-model`，文案取 `copy/city.ts`。
+ * 轮次归 `useExploreJob`，上次逛的源/分类归 `cityStore`；本视图只装配与呈现。
  */
 export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): ReactNode {
   const t = useCopy()
@@ -76,8 +61,7 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
       let list: ExploreSources['sources']
       try {
         const body = await deps.apiGet<ExploreSources>(ROUTES.exploreKinds.path)
-        // 过线形状不靠类型声明作保（未提供该服务的宿主、或 HMR 错位窗口里这一格可能整个缺席）。缺清单按
-        // 「读不到」处置，与下面 catch 同一口径——落成空列表等于多摆一个假空态。
+        // 过线形状不靠类型声明作保：缺清单按「读不到」处置，与下面 catch 同一口径——落成空列表等于多摆个假空态。
         const raw: unknown = body.sources
         if (!Array.isArray(raw)) {
           setSourcesError(t('city.kindsReadFailed', { detail: t('city.kindsMalformed') }))
@@ -90,9 +74,8 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
         return
       }
       setSources(list)
-      // 记住的源失效（禁用/删掉）即回落到可选清单的第一项——回落同时把选中态改写到真实存在的源上，
-      // 不留一个指向不存在源的选中态；分类同理，记住的不在这一源声明的分类里就落它声明的第一个分类。
-      // 算式归 `city-entry.ts` 的 `resolveCitySelection`：自动那条路独立再算一次，两条路同一个回落。
+      // 记住的源失效即回落到可选清单第一项，同时把选中态改写到真实存在的源；分类同理。
+      // 算式归 `city-entry.ts` 的 `resolveCitySelection`。
       const chosen = resolveCitySelection(list, rememberedCitySelection())
       if (chosen === null) return                          // 没有可落的源+分类：不提交任何一轮
       select(chosen)                                       // 自动选中也记住（与手点同一条路）
@@ -100,11 +83,8 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
   }, [])   // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
-   * 进入即加载：**只在该源+该分类没有轮次时提交**。轮次住在服务端（`ExploreJob` 的槽），离开再回来
-   * 只该看它跑完——重提一次会把它杀掉，书单空闪一帧再从头抓，正是本条要守住的性质。
-   * 源/分类的回落、恢复读定没定、自动那条路走没走，三者一起收在 `city-entry.ts` 的
-   * `decideCityEntry` 里；本视图读 store 投影（`select` 只写 store），`isAsked` 守自动这条路的
-   * one-shot，`action` 只决定要不要提交（`follow` = 服务端那一轮就是它的家）。
+   * 进入即加载：**只在该源+该分类没有轮次时提交**。轮次住在服务端，重提会把它杀掉、书单空闪一帧。
+   * 回落与 one-shot 收在 `city-entry.ts` 的 `decideCityEntry`；`action` 只决定要不要提交。
    */
   useEffect(() => {
     const decision = decideCityEntry({
@@ -119,8 +99,7 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
     if (decision.action === 'submit') submit(decision.sourceId, decision.kind)
   }, [sources, restored, round, submit, select, isAsked])
 
-  /** 换轮即清空封面失败表：封面坏掉是**这一轮这张卡**的事实（同址换一轮那张图就好了），
-   *  上一轮的同名条目不该继承——不清就是「一次坏封面永久降级」。 */
+  // 换轮即清空封面失败表：封面坏掉是**这一轮这张卡**的事实，上一轮的同名条目不该继承。
   useEffect(() => { setImgFailed({}) }, [round?.id])
 
   /** 与手点同一条路：记住源+分类、写现场、立刻提交（不等恢复读，切源/切类必须马上有反应）。 */
@@ -138,12 +117,9 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
   const shownSources = sources === null ? [] : sources.filter((s) => s.name.includes(sourceQuery.trim()))
   const currentSource = sources === null ? null : sources.find((s) => s.id === sourceId) ?? null
   const shownKinds = currentSource === null ? [] : currentSource.kinds.filter((k) => k.includes(kindQuery.trim()))
-  /** 分类头与顺序说明的显示条件：**当前源在场且声明了这个分类**。选中态是 store 投影，记住的那一对在
-   *  解析结果落空时（没有可选源、源被删/禁用、分类入口读失败、这一源零分类）照样在场；头若只认分类，
-   *  就会在没有任何一轮可逛的内容上方悬着一个假头。 */
+  /** 分类头只在**当前源在场且声明了这个分类**时出现——只认分类会在没有可逛内容的上方悬一个假头。 */
   const headKind = currentSource !== null && kind !== null && currentSource.kinds.includes(kind) ? kind : null
-  /** 换源后把展开的那一行抬到框顶——只在展开出来的一串装不下时才动（策略与理由见 `topAlignIfClipped`）。
-   *  跟一次 `shownSources.length`：源清单后到时选中才落地，那一刻才是第一次真正展开。 */
+  /** 换源后把展开的那一行抬到框顶——只在装不下时才动（见 `topAlignIfClipped`）；跟 `shownSources.length`。 */
   useEffect(() => {
     if (railRef.current !== null && headRef.current !== null) {
       topAlignIfClipped(railRef.current, headRef.current, kidsRef.current)
@@ -247,8 +223,7 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
                           </button>
                         )
                       })}
-                      {/* 在途骨架卡：**只在本轮还在跑时**铺（轮次一终态就撤——活过轮次的骨架就是
-                          一句谎），且只补到那枚上界（不足就铺到 8 张，够了就一张不加） */}
+                      {/* 在途骨架卡：**只在本轮还在跑时**铺（轮次一终态就撤）。 */}
                       {round !== null && round.running
                         ? Array.from({ length: Math.max(0, SKELETON_CARDS - books.length) }, (_, i) => (
                           <div key={`sk-${i}`} className="novel-city-card novel-city-sk" aria-hidden="true">
@@ -264,10 +239,8 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
                   </div>
                 )
                 : <EmptyState title={empty.title} hint={empty.hint} />}
-              {/* 尾行按**有没有轮次**渲染，不是按文案空不空：单源的轮次只有页与本数可说，读数交给
-                  `roundReadout`（被停止 / 还在跑 / 本数读数，三条各说各的；抓失败那句归上面那条横幅）。按钮只在
-                  `hasMore` 时出现（服务端说没了就收掉，不留一个点了没反应的饼）；`disabled` 管的是
-                  **本地按下之后**那一段——服务端那一批在途时 `hasMore` 本已是 false，钮不在场 */}
+              {/* 尾行按**有没有轮次**渲染；`disabled` 只认**本地按下之后**那一段——服务端在途时
+                  `hasMore` 本已是 false。 */}
               {round === null ? null : (
                 <div className="novel-city-foot">
                   <span>{roundReadout(round, t)}</span>
@@ -281,8 +254,7 @@ export function CityView({ deps = prodJobViewDeps }: { deps?: JobViewDeps }): Re
             </>
           )}
         </section>
-        {/* 浮层的源身份来自**带来这本书的那一轮**（不是左栏此刻的选中态）：一本书属于哪个源，
-            答案就在产出它的轮次里；浮层的两个动作与跨源那一次都要用它。 */}
+        {/* 浮层的源身份来自**带来这本书的那一轮**，不是左栏此刻的选中态。 */}
         {picked === null || round === null ? null : (
           <CityBookSheet
             book={picked} sourceId={round.sourceId} sourceName={round.sourceName}

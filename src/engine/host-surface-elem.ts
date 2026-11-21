@@ -1,43 +1,35 @@
 /**
  * 元素影子宿主面（`__elem.*`）：沙箱元素包装对象（Element/Elements 最小仿真）的宿主侧求值。
- *
- * 为什么单独成 module：这条通道是 `JAVA_PROTOCOL` 之外的第二条宿主面——op 名若分散在 BOOTSTRAP
- * 串与宿主 switch 里，就没有名册、也没有直接单测。op 名册、宿主实现、片段解析缓存与沙箱侧
- * wrapper 源片段同住这里：加一个 op 只动这一个 module 与它的测试。
- *
- * 接口只有「op 名 + JSON → JSON」：`elemHostOp` 吃引导层 `JSON.parse` 后的载荷、回可 JSON
- * 序列化的值；沙箱语义（wrapper 在 vm realm、跨桥双向序列化、`__host_call__` 是唯一入口）
- * 仍归 `ADR-0004`，这里只是宿主那一半的家。
+ * 这条通道是 `JAVA_PROTOCOL` 之外的第二条宿主面——op 名册、宿主实现、片段解析缓存与沙箱侧 wrapper 源
+ * 片段同住这里：加一个 op 只动这一个 module 与它的测试（否则 op 名散在 BOOTSTRAP 串与宿主 switch 里，
+ * 既无名册也无直接单测）。接口只有「op 名 + JSON → JSON」；沙箱语义仍归 `ADR-0004`。
  */
 import { isTag } from 'domhandler'
 import type { Element } from 'domhandler'
 import { loadHtml, nodeText } from './dom.js'
 import { textOf } from './js-utils.js'
 
-/** op 名册：**唯一来源**。宿主分派按它收窄（漏分支 = 编译错），沙箱侧 wrapper 片段里的
- *  op 字面量由测试与它逐一对表（`tests/engine/host-surface-elem.test.ts`）——两边不许各写一份。 */
+/** op 名册：**唯一来源**。宿主分派按它收窄（漏分支 = 编译错），沙箱侧 wrapper 片段的 op 字面量由测试逐一对表。 */
 export const ELEM_OPS = ['attr', 'text', 'html', 'select', 'split', 'remove'] as const
 export type ElemOp = (typeof ELEM_OPS)[number]
 
 const ELEM_OP_SET: ReadonlySet<string> = new Set(ELEM_OPS)
 
-/** 线上来的 op 名先过名册（认得才收窄）；认不出一律点名，不落到 `switch` 的兜底当未知分支。 */
+/** 线上来的 op 名先过名册；认不出一律点名，不落到 `switch` 的兜底当未知分支。 */
 function elemOpOf(op: string): ElemOp {
   if (ELEM_OP_SET.has(op)) return op as ElemOp
   throw new Error(`未知元素桥操作：${op}`)
 }
 
-/** 引导层载荷：BOOTSTRAP 恒送 JSON 对象；字段都可能缺席，取用方各自按空值口径处理。 */
 export interface ElemPayload { html?: unknown; name?: unknown; rule?: unknown }
 
-/** 片段解析的**单条缓存**：一条 `els.get(i).text()` / `.attr(x).html()` 链会对
- *  同一段片段发起多次宿主操作，每次都重跑 `loadHtml` 等于把整段 HTML 全量解析 N 遍（片段大小
- *  由站点决定，且解析跑在主线程）。只做单条、不做 Map：键是攻击者可控的 HTML 串，留清单
- *  就是留内存增长口；RPC 同步进出，同一次调用内不存在交错。 */
+/** 片段解析的**单条缓存**：一条 `els.get(i).text()` / `.attr(x).html()` 链会对同一段片段发起多次宿主
+ *  操作，每次都重跑 `loadHtml` 等于把整段 HTML 全量解析 N 遍。只做单条、不做 Map：键是攻击者可控的
+ *  HTML 串，留清单就是留内存增长口；RPC 同步进出，同一次调用内不存在交错。 */
 let lastElemHtml = ''
 let lastElemApi: ReturnType<typeof loadHtml> | null = null
 
-/** __elem.* 宿主实现：入参 {html, name?/rule?}（js 段上游序列化/条目片段），出参纯 JSON */
+/** __elem.* 宿主实现：入参 {html, name?/rule?}，出参纯 JSON */
 export function elemHostOp(op: string, payload: ElemPayload): unknown {
   const known = elemOpOf(op)
   const html = typeof payload.html === 'string' ? payload.html : ''
@@ -103,23 +95,15 @@ export function elemHostOp(op: string, payload: ElemPayload): unknown {
       return isDoc ? $.html() : top.map((n) => $(n).toString()).join('')
     }
     default: {
-      // 名册与分派互为闭包：名册加一个 op 而这里没跟上，编译期就红（known 收窄不完）。
       const exhaustive: never = known
       throw new Error(`未知元素桥操作：${String(exhaustive)}`)
     }
   }
 }
 
-/** 沙箱侧 wrapper 源片段：插进 `js-sandbox.ts` 的 BOOTSTRAP 模板串，定义 `elemOps` / `wrapElems` /
- *  `mkElem` 三个引导层作用域常量，并把 `__mkElem__` / `__wrapElems__` 挂到全局供后续引导段使用。
- *
- *  插入位置与次序：**先于** `host-surface-pkg.ts` 的片段——pkg 片段的 `Jsoup.parse` 包装引用本片段
- *  定义的 `mkElem`（眼下是延迟闭包引用，次序仍写死，不把正确性交给「恰好在调用前定义」）。
- *  生成文本被当**文本**插值进模板串，故不得含反引号或美元花括号（钉子：
- *  `tests/engine/host-surface-elem.test.ts`）。
- *
- *  片段可以自由引用的标识符只有 BOOTSTRAP 作用域供出的这四个：`g`（全局对象）、`call`（唯一跨界
- *  入口）、`ser`（JSON 序列化）、`msg`（错误取消息）。多引一个名字就是脚本运行期 ReferenceError。 */
+/** 沙箱侧 wrapper 源片段：插进 `js-sandbox.ts` 的 BOOTSTRAP 模板串，定义 `elemOps` / `wrapElems` / `mkElem`
+ *  并把 `__mkElem__` / `__wrapElems__` 挂到全局。插入位置：**先于** pkg 片段（其 `Jsoup.parse` 引用 `mkElem`）。
+ *  生成文本被当**文本**插值，故不得含反引号或美元花括号；片段只可引用 BOOTSTRAP 作用域的 `g`/`call`/`ser`/`msg`。 */
 export function elemWrapperSource(): string {
   return `
   // ── 元素包装对象（脚本侧 Element/Elements 表面的最小仿真）──────────────────

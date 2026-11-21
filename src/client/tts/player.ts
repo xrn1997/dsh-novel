@@ -20,16 +20,12 @@ import type {
 import type { ReaderRevealTarget } from '../reader-session.js'
 
 /**
- * 听书播放层的**生产外观**：平台真实现（api / 书架投影 / wire 构造器 / util 防抖 / 惰性
- * 全局面）+ 一个 `ListenSession` 单例 + 视图认识的那组同名导出。状态机与出声适配器
- * 住 `client/tts/listen-session.ts`，本文件不持语义。
+ * 听书播放层的**生产外观**：平台真实现（api / 书架投影 / util 防抖 / 惰性全局面）+ 一个
+ * `ListenSession` 单例 + 视图认识的那组同名导出。状态机与出声适配器住 `listen-session.ts`。
  *
- * 为什么平台在这：会话只经 `ListenPlatform` 缝触达外界，缝的生产实现必须是**惰性**的——
- * `Audio` / `speechSynthesis` 在调用时取、api 在调用时发，不在模块初始化时捕获（测试在
- * 导入后才 stub 全局与 mock api，初始化时捕获会让行为网全红）。
- *
- * 位置单轨与常驻生命周期的口径在会话侧注释与 `ADR-0072` / `ADR-0078`：模块级单例跨面板
- * 卸载存活；阅读进度是阅读与听书共用的消费位置，听书落盘在同一节拍里写 progress 与 listen。
+ * 为什么平台在这：会话只经 `ListenPlatform` 缝触达外界，缝的生产实现必须**惰性**——`Audio` /
+ * `speechSynthesis` 在调用时取、api 在调用时发，模块初始化时捕获会让测试的行为网全红。
+ * 位置单轨与常驻生命周期见 `ADR-0072` / `ADR-0078`。
  */
 
 export { TTS_MAX_CONSECUTIVE_FAILURES, TtsPlayerError } from './listen-session.js'
@@ -62,19 +58,12 @@ function browserSpeechVoices(): SpeechSynthesisVoice[] {
   }
 }
 
-/**
- * 直出源「语音表准备好了吗」的等待预算。**这不是随便挑的耐心值**：Chromium 的
- * `getVoices()` 在冷启动时**首次常给空表**，真表随 `voiceschanged` 迟到（本机实测：首读 0，
- * 事件后 6 支）。拿首读判「设备没有语音」会把一次异步加载误报成设备事实，用户看到的正是
- * 「当前设备没有可用的浏览器语音」——而稍等一拍就有一整张表。
- */
+/** 直出源「语音表准备好了吗」的等待预算。Chromium 冷启动首读常给空表，真表随 `voiceschanged`
+ *  迟到；拿首读判「设备没有语音」会把异步加载误报成设备事实。 */
 export const DIRECT_VOICES_WAIT_MS = 1500
 
-/**
- * 等平台把语音表交出来：现在就有 → 立刻 true；否则订 `voiceschanged`，到点再读一次
- * （首读本身常是触发器；事件若在订阅前就发过，末尾的补读兜住）。
- * 返回 false = 这台设备**确实**没有可用的浏览器语音（或平台根本没有这个面）。
- */
+/** 等平台把语音表交出来：现在有 → 立刻 true；否则订 `voiceschanged`，到点再读一次。
+ *  返回 false = 这台设备**确实**没有可用的浏览器语音。 */
 export function awaitDirectVoices(): Promise<boolean> {
   const ready = (): boolean => browserSpeechVoices().length > 0
   if (ready()) return Promise.resolve(true)
@@ -99,16 +88,9 @@ export function awaitDirectVoices(): Promise<boolean> {
 }
 
 /**
- * 浏览器音色表的唯一映射：`id` 取 `voiceURI`（匹配也只认它；`name` 可重名）。直出分支的音色匹配与
- * 听书面的音色行共用这一份，别处不再各写一次投影。
- *
- * 两件事在这份投影里就定掉，留给界面的是「读得懂的一张表」：
- * - **按 `voiceURI` 去重**：`voiceOf` 按 id 取第一支，同 id 的第二行（同名多语区，或本地 /
- *   远端各给一份同 URI）在界面上选得中、实际永远命中第一支——看得见的选项和用得上的
- *   对象不能是两回事。
- * - **带上 `lang`**：平台表里几十支音色横跨多种语言，名字又常常是厂商昵称，只给名字等于让用户
- *   盲选——挑中一支英文音色念中文，出声就是用户口中的「这家的音色坏了」。语区是这一行的
- *   身份的一半，不是装饰。
+ * 浏览器音色表的唯一映射：`id` 取 `voiceURI`（匹配也只认它；`name` 可重名）。
+ * 按 `voiceURI` 去重：界面选得中的必须就是实际命中的那一支（同名多语区 / 本地远端同 URI）。
+ * 带上 `lang`：平台表横跨多种语言、名字常是厂商昵称，只给名字等于让用户盲选。
  */
 export function browserTtsVoices(): DirectVoice[] {
   const seen = new Set<string>()
@@ -121,15 +103,11 @@ export function browserTtsVoices(): DirectVoice[] {
   return out
 }
 
-/**
- * 平台音色表的现场（直出型）：平台冷启动时 `getVoices()` 可能给空表，真表随
- * `voiceschanged` 才到——只在渲染里同步量一次，音色那一行就会永远藏掉（空表 ≠ 没有这行）。
- * 读数住 store，事件到了刷新，视图订阅它。
- */
+/** 平台音色表的现场：冷启动时 `getVoices()` 可能给空表，真表随 `voiceschanged` 才到。
+ *  读数住 store，事件到了刷新，视图订阅它。 */
 export const directVoicesStore = createStore<{ list: DirectVoice[] }>({ list: [] })
 
-/** 平台事件面按本地窄镜像取：真 `SpeechSynthesis` 是 EventTarget，测试替身与缺席环境未必有，
- *  不让 lib.dom 的声明替运行时作保（同 `client/util.ts` 的 `ls`）。 */
+/** 平台事件面按本地窄镜像取：测试替身与缺席环境未必有 EventTarget，不让 lib.dom 替运行时作保。 */
 interface VoicesEvents {
   addEventListener?: (type: 'voiceschanged', listener: () => void) => void
   removeEventListener?: (type: 'voiceschanged', listener: () => void) => void
@@ -192,11 +170,9 @@ const prodListenPlatform: ListenPlatform = {
     return splitParagraphs(chapterContentToText(content))
   },
   /**
-   * 本书的书架读数：**每次向服务端取**（存档真相在服务端）。
-   * 为什么不复用面板投影（`panelShelf`）：它是面板挂载期的快照，听书写入只落服务端——
-   * 「听 → 停 → 再听」同一面板里再来一次时，投影里还是开工前那份（或缺 `listen`），
-   * 续听会退回本章 0 段。读失败也如实抛给调用方，不折成 `null`——那会把网络错误伪装成
-   * 「这本书不在架」，用户看到一句错误的诊断。
+   * 本书的书架读数：**每次向服务端取**（存档真相在服务端）。不复用面板投影：那是挂载期快照，
+   * 「听 → 停 → 再听」会退回本章 0 段。读失败如实抛，不折成 `null`——那会把网络错误伪装成
+   * 「这本书不在架」。
    */
   shelfEntryOf: async (bookKey) => {
     const list = await apiGet<ShelfEntry[]>(ROUTES.shelf.path)
@@ -213,9 +189,7 @@ const prodListenPlatform: ListenPlatform = {
   synthesize: (req, opts) => apiSend<SynthesisReceipt>(
     ROUTES.ttsSynthesize, bodies.ttsSynthesize(req), opts?.signal),
   get branches(): ListenPlatform['branches'] {
-    // 会话构造时就要读一次当前分支的能力初值，故首次访问时组装一次并复用。组装本身不碰全局
-    //（适配器构造不读 DOM / 平台），平台语音表等能力到分支的 `ready()` 才问。
-    // 两条分支在这里接线（静音另一条分支是分支自己的事，组合只给它们互相的把手）。
+    // 会话构造时要读当前分支的能力初值，故首次访问时组装一次并复用（适配器构造不碰全局）。
     branches ??= createListenBranches(
       { bytes: new BytesOutput(audioFace), direct: new DirectOutput(directFace, after) },
       () => awaitDirectVoices(),
@@ -287,10 +261,8 @@ export function takeReaderRelocation(sourceId: string, bookKey: string): ReaderR
   return session.takeReaderRelocation(sourceId, bookKey)
 }
 
-/** 插件生命周期终点（客户端热替换 / 停用 / 升级）：停声、放掉介质。
- *  只由接线层（`src/client/index.tsx` 的 fiber 清理）调；视图卸载不是它——常驻边界见 `ADR-0072`。 */
+/** 插件生命周期终点（热替换 / 停用 / 升级）：停声、放掉介质；只由接线层 fiber 清理调（`ADR-0072`）。 */
 export function disposeTtsPlayer(): void { session.dispose() }
 
-/** 测试用的整份复位：作废在途会话、清定时与降级窗、回缺省值。
- *  生产路径**不**调它：生产只有 `disposeTtsPlayer` 一条终点（`ADR-0092`）。 */
+/** 测试用整份复位；生产只有 `disposeTtsPlayer` 一条终点（`ADR-0092`）。 */
 export function resetTtsPlayerForTests(): void { session.resetForTests() }

@@ -4,17 +4,12 @@ import type {
 } from './output-contract.js'
 
 /**
- * 两条出声分支的**策略实现**：介质适配器（`bytes-output.ts` / `direct-output.ts`）之上的那一层，
- * 回答这条分支的四个问题——准备这一段（合成回执 / 音色参数 / 静音另一条分支）、能提供什么
- * （能力声明）、静音另一条分支（起播先让它闭嘴）、重来的许可（回执续播 / 介质在途判据）。
+ * 两条出声分支的**策略实现**：介质适配器之上的那一层，回答这条分支的四个问题——准备这一段
+ * （合成回执 / 音色参数 / 静音另一条分支）、能提供什么、静音另一条分支、重来的许可。
  *
- * 为什么单独成层而不是塞进会话：这些判据若散在状态机里，每条分支的差异都会长在调用序列中间，
- * 「哪些步骤是分支差异」只活在注释里；加第三条声道要改状态机的多处方法。搬到分支之后，
- * 新声道 = 一个分支实现 + 一处注册，状态机一行不动。
- *
- * 会话**不**被替代：单元状态机、连败暂停、定时、位置落盘、两只 AbortController 仍住
- * `listen-session.ts`；回执缓存与取消管路也留在那里（`ADR-0081` / `ADR-0082` 的锚点不搬），
- * 分支只经 `BranchHost.receipt` 消费会话算好的回执。分支不读 store、不写盘、不推进段号。
+ * 为什么单独成层：判据若散在状态机里，每条分支的差异都会长在调用序列中间；搬到分支之后，
+ * 新声道 = 一个分支实现 + 一处注册，状态机一行不动。会话不被替代：状态机、连败暂停、定时、
+ * 位置落盘、两只 AbortController 与回执缓存仍住 `listen-session.ts`；分支不读 store、不写盘。
  */
 
 const BYTES_CAPABILITIES: BranchCapabilities = {
@@ -141,8 +136,7 @@ export class DirectBranch implements PlaybackBranch {
     this.output.pause()
     this.active = false
     const { voice, rate, volume } = host.voice()
-    // 先登记「已交给平台」再开口：介质可能在 start 里同步回 fail（准备期被拦），
-    // 那一发 fail 已经把 active 置回 false——先置位后开口才不会把「已收口」覆盖成仍占着。
+    // 先登记「已交给平台」再开口：介质可能在 start 里同步回 fail，那一发 fail 已把 active 置回 false。
     this.active = true
     try {
       this.output.start(
@@ -196,9 +190,8 @@ export class DirectBranch implements PlaybackBranch {
   held(): boolean { return this.active }
 }
 
-/** 两条分支的组：按模式取当前分支 + 两条介质一起停 / 一起释放。
- *  「静音另一条分支」由各分支起播时自己做（`start` 里先 `peer().pause()`），组这一层只管
- *  「两条都不该再响」时的收口——会话不需要知道另一边存在。 */
+/** 两条分支的组：按模式取当前分支 + 两条介质一起停 / 一起释放。「静音另一条分支」由各分支起播时
+ *  自己做；组这一层只管「两条都不该再响」时的收口——会话不需要知道另一边存在。 */
 export function createListenBranches(
   outputs: { bytes: BytesListenOutput; direct: DirectListenOutput },
   awaitVoices: () => Promise<boolean>,

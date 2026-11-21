@@ -15,29 +15,23 @@ export interface FetchedPage {
   contentType: string | undefined
   /** 从 Content-Type 提取的 charset（无则 undefined） */
   charset: string | undefined
-  /** HTTP 状态码。守门 fetcher 缺省对非 2xx 抛 FetchError，所以在成功返回的页里它恒为 2xx/3xx；
-   *  `manual: true`（`java.head` 的重定向探测）例外——那时这一项就是要读的状态本身，可为任意码。
-   *  它存在的理由是 `java.post(...).statusCode()`（响应对象要能给出这一项，缺它就只能编一个）。 */
+  /** HTTP 状态码。缺省对非 2xx 抛 FetchError，所以成功页里恒 2xx/3xx；`manual: true`（java.head 探测）例外——那时这一项就是要读的状态。 */
   status: number
-  /** 响应 `Set-Cookie` 头原文数组（无则空数组）——`java.post(...).cookies()` 的数据源。
-   *  除脚本读取外，配置了 jar 时 fetchPage 已自动落库（见矩阵 `b-cookie-jar`）。 */
+  /** 响应 `Set-Cookie` 原文数组（无则空）——`java.post(...).cookies()` 的数据源；配置了 jar 时 fetchPage 已自动落库（矩阵 `b-cookie-jar`）。 */
   setCookie: string[]
   /** 响应头表（小写键名）——`java.head` 的 `.headers()` 数据源；手工构造的测试页可缺省。 */
   headers?: Record<string, string>
-  /** loginCheckJs 替换过正文：raw 是本仓按 UTF-8 重编码的，原始 charset 不再适用。
-   *  `decodeBody` 据此忽略调用方声明的 charset（登录脚本产出的是 JS 字符串，不是站点字节）。 */
+  /** loginCheckJs 替换过正文：raw 是本仓按 UTF-8 重编码的，原始 charset 不再适用（decodeBody 据此忽略声明的 charset）。 */
   replaced?: boolean
 }
 
 export interface FetcherOptions {
   fetchImpl?: typeof globalThis.fetch
   timeoutMs?: number
-  /** 出站代理（见 services/proxy.ts：Node 的 fetch 不读系统代理）；null / '' / direct = 直连。
-   *  可以是活 getter——每次请求前读当前值，配置页改了代理不必重建 fetcher。 */
+  /** 出站代理（Node 的 fetch 不读系统代理）；null/''/direct = 直连。可以是活 getter——每次请求前读当前值，配置页改了不必重建。 */
   proxyUrl?: ValueSource<string | null>
-  /** 域/路径感知的 cookie jar（一张表跨源共享，按域/路径粒度）：请求缺省带同一 host/path
-   *  的 cookie，响应 Set-Cookie 自动落库。显式 Cookie 头优先（源规则/auth 合并后的头照旧占优）。
-   *  jar 在构造时给；门面只读不再写回（见 reading.from）。 */
+  /** 域/路径感知的 cookie jar（一张表跨源共享）：请求缺省带同 host/path 的 cookie，响应 Set-Cookie 自动落库。显式 Cookie 头优先；
+   *  jar 在构造时给，门面只读不再写回（见 reading.from）。 */
   cookieJar?: CookieJar
   /** 宿主设备 ID（androidId 的稳定替代）；由构造方给，门面不再写回 */
   deviceId?: string
@@ -65,11 +59,9 @@ export interface FetchInit {
   webJs?: string
   /** 非 2xx 也返回页面（源请求缝给 loginCheck 看 403/503 正文；未替换时由该缝补抛） */
   allowError?: boolean
-  /** 调用方的取消信号（工具/作业的协作式取消）。中止时**不**当超时归类：抛出 signal.reason，
-   *  让上层把「用户取消」与「站点慢」分成两件事（宿主工具面据此判 ABORTED）。 */
+  /** 调用方的取消信号。中止时**不**当超时归类：抛出 signal.reason，让上层把「用户取消」与「站点慢」分开（宿主工具面据此判 ABORTED）。 */
   signal?: AbortSignal
-  /** 响应体上限（字节）：超过即取消流并抛 FetchError。缺省不设限（正文页大小由站点决定）；
-   *  订阅 / 清单这类「应当很小」的读口显式给上限，避免一个超大响应把进程内存吃满。 */
+  /** 响应体上限（字节）：超过即取消流并抛 FetchError。缺省不设限；订阅/清单这类「应当很小」的读口显式给上限。 */
   maxBytes?: number
 }
 
@@ -93,24 +85,21 @@ export interface Fetcher {
 type FetchImplInit = RequestInit & { dispatcher?: unknown }
 type FetchLike = (url: string, init?: FetchImplInit) => Promise<Response>
 
-/** 出站默认耐心。**本常量是缺省值的唯一主人**：缺省装配处 `src/config.ts` 的 schema `.default()`
- *  与 reading.from() 的回退都引它——多请求目录脚本一轮要连打数个请求，窄超时必炸，所以缺省给得宽。 */
+/** 出站默认耐心。**本常量是缺省值的唯一主人**：`src/config.ts` 的 schema `.default()` 与 `reading.from()` 的回退都引它——多请求目录脚本一轮连打数个请求，窄超时必炸。 */
 export const DEFAULT_TIMEOUT_MS = 15_000
 const CHARSET_RE = /charset=([^;\s"']+)/i
 /** 嗅探用：`<meta charset=…>`（HTML5）与 `<meta http-equiv content="…charset=…">`（遗留形态） */
 const META_CHARSET_RE = /<meta[^>]+charset\s*=\s*["']?([\w-]+)/i
 const META_CONTENT_CHARSET_RE = /<meta[^>]+content\s*=\s*["'][^"']*charset=([\w-]+)/i
 
-/** 缺省请求头：Node fetch 默认不带 User-Agent——站点 WAF 按 UA 过滤直接 403。
- *  带浏览器 UA 是常态；调用方显式声明的同名头永远优先。 */
+/** 缺省请求头：Node fetch 默认不带 User-Agent——站点 WAF 按 UA 过滤直接 403；调用方显式声明的同名头永远优先。 */
 const DEFAULT_HEADERS: Record<string, string> = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
   'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
 }
 
-/** User-Agent 归 context.userAgent：塞进 extraHTTPHeaders 会被浏览器默认 UA 覆盖/并存。
- *  请求头拆分归这一处——源请求缝与 WebView 都读同一份判据。 */
+/** User-Agent 归 context.userAgent：塞进 extraHTTPHeaders 会被浏览器默认 UA 覆盖/并存。请求头拆分归这一处——源请求缝与 WebView 读同一份判据。 */
 export function splitUserAgent(headers: Record<string, string>): { headers: Record<string, string>; userAgent?: string } {
   const out: Record<string, string> = {}
   let userAgent: string | undefined
@@ -121,23 +110,17 @@ export function splitUserAgent(headers: Record<string, string>): { headers: Reco
   return userAgent === undefined ? { headers: out } : { headers: out, userAgent }
 }
 
-/**
- * 出站头合并的输入面：只看「规则头 / 凭据头 / 凭据 cookie」这三样。
- * 书源之外（朗读引擎 HttpTTS）也走同一条合并口径——它给不出整个 NovelSource，
- * 但给得出这三格；参数收窄在这里，合并实现仍只有 headerOf 一份。
- */
+/** 出站头合并的输入面：只看「规则头 / 凭据头 / 凭据 cookie」这三样。书源之外（朗读引擎）也走同一条合并口径——它给不出整个
+ *  NovelSource，但给得出这三格；参数收窄在这里，合并实现仍只有 headerOf 一份。 */
 export interface HeaderSource {
   rules: Pick<NormalizedRules, 'header'>
   auth?: SourceAuth
 }
 
 /**
- * 本源**实际发出去**的 User-Agent：源静态头 / auth 头覆盖 → 缺省 UA 打底。
- * **大小写不敏感**（HTTP 头名本就不敏感）：`user-agent` 与 `User-Agent` 是同一条头，
- * 只按原样查键会让声明了小写形态的源被误报成缺省 UA。
- * 唯一消费者是 `java.getWebViewUA()` 的 ctx 接线（本仓以"我们真发的这条"承接
- * 「浏览器默认 UA」的语义；见矩阵 `h-java-webview-ua`）。同步取值，不含 `@js:` 动态头——那是 fetch 时才算的，
- * 脚本要的通常是"给我一个能用的 UA"，不是"给我一个和下一个请求逐字节一致的头"。
+ * 本源**实际发出去**的 User-Agent：源静态头 / auth 头覆盖 → 缺省 UA 打底。**大小写不敏感**（`user-agent` 与 `User-Agent`
+ * 是同一条头），只按原样查键会让声明小写形态的源被误报成缺省 UA。唯一消费者是 `java.getWebViewUA()` 的 ctx 接线
+ * （矩阵 `h-java-webview-ua`）。同步取值，不含 `@js:` 动态头——脚本要的是「给我一个能用的 UA」。
  */
 export function effectiveUserAgent(source: HeaderSource): string {
   const { userAgent } = splitUserAgent(headerOf(source))
@@ -145,9 +128,8 @@ export function effectiveUserAgent(source: HeaderSource): string {
 }
 
 /**
- * 同名头按**大小写不敏感**的同一性覆盖：`over` 的每个键落位前先摘掉 `base` 里的同义键。
- * 裸 `{...base, ...over}` 会让 `user-agent` 与缺省 `User-Agent` 并存，undici 把重名
- * 合成一条 `"默认, 源"` 的畸形头——比覆盖更坏。本函数是这条判据的唯一实现
+ * 同名头按**大小写不敏感**的同一性覆盖：`over` 的每个键落位前先摘掉 `base` 里的同义键。裸 `{...base, ...over}` 会让
+ * `user-agent` 与缺省 `User-Agent` 并存，undici 合成一条 `"默认, 源"` 的畸形头。本函数是这条判据的唯一实现
  * （缺省头合并与朗读引擎「静态头打底、计划头覆盖」两处共用）。
  */
 export function overlayHeaders(
@@ -162,24 +144,20 @@ export function overlayHeaders(
   return Object.fromEntries(entries)
 }
 
-/** 缺省头打底 + 调用方同名头覆盖（覆盖判据住 overlayHeaders 一份）。
- * 钉子：`tests/services/fetcher.test.ts` 的「两键并存会合成畸形头」那组。 */
+/** 缺省头打底 + 调用方同名头覆盖（覆盖判据住 overlayHeaders 一份）；钉子：fetcher.test.ts 的「两键并存会合成畸形头」那组。 */
 function mergeHeaders(init?: Record<string, string>): Record<string, string> {
   return overlayHeaders(DEFAULT_HEADERS, init ?? {})
 }
 
 /**
- * 守门抓取器：唯一出站口。超时/网络层失败/HTTP 非 2xx 分别类型化为 FetchError，
- * 绝不把未分类异常漏给上层。`allowError` 是源请求缝给 loginCheckJs 看错误页的窄例外：
- * 最终错误页由该缝在脚本未替换时补抛（manual 的 HEAD 探测另有放行语义）。
+ * 守门抓取器：唯一出站口。超时/网络层失败/HTTP 非 2xx 分别类型化为 FetchError，绝不把未分类异常漏给上层。
+ * `allowError` 是源请求缝给 loginCheckJs 看错误页的窄例外（manual 的 HEAD 探测另有放行语义）。
  */
 export function createFetcher(opts?: FetcherOptions): Fetcher {
   const fetchImpl = (opts?.fetchImpl ?? globalThis.fetch) as FetchLike
   const defaultTimeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  // 代理走 undici 的 ProxyAgent（dispatcher）：Node 的 fetch 不认系统代理，有代理才通的站点
-  // 直连会被站点 302/重置——「浏览器能开、插件打不开」的根因。
-  // 配置页可在运行中改 proxyUrl，所以每请求重读、**按 URL 复用**：同 URL 重建等于每次抓取
-  // 丢掉代理连接池；换 URL 必须关旧，否则旧代理的连接池常驻到进程退出。
+  // 代理走 undici 的 ProxyAgent（dispatcher）：Node 的 fetch 不认系统代理，有代理才通的站点直连会被 302/重置。
+  // 配置页可运行中改 proxyUrl，所以每请求重读、**按 URL 复用**（同 URL 重建等于每次抓取丢掉连接池；换 URL 必须关旧）。
   let lastProxy: string | null | undefined
   let dispatcher: ProxyAgent | undefined
   const currentDispatcher = (): ProxyAgent | undefined => {
@@ -187,8 +165,7 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
     if (next === lastProxy) return dispatcher
     const previous = dispatcher
     dispatcher = undefined
-    // 旧实例一关，缓存键必须同时作废：否则「A 通 → B 坏 → 换回 A」时，A 会被当成「未变化的当前值」，
-    // 请求拿到 undefined 的 dispatcher 静默走直连——代理恰是直连不通时的刚需，悄悄换路比炸更难查。
+    // 旧实例一关，缓存键必须同时作废：否则「A 通 → B 坏 → 换回 A」时 A 会被当成「未变化的当前值」，请求拿 undefined 的 dispatcher 静默走直连。
     lastProxy = undefined
     if (previous !== undefined) void previous.close().catch(() => undefined)
     if (next === null) {
@@ -198,8 +175,7 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
     try {
       dispatcher = new ProxyAgent(parseProxyUrl(next))
     } catch (e) {
-      // 坏地址成 FetchError 而不是裸 TypeError；回显整体先脱敏——userinfo 里的密码不许进日志
-      //（错误对象常被整个交给 logger，url 字段是同一回声面；内层文案也可能带着原始地址）。
+      // 坏地址成 FetchError 而不是裸 TypeError；回显整体先脱敏——userinfo 里的密码不许进日志（错误对象常被整个交给 logger）。
       const shown = redactProxyUrl(next)
       const detail = e instanceof Error ? e.message : String(e)
       throw new FetchError(`代理地址非法: ${shown}（${redactProxyUrl(detail)}）`, { url: shown })
@@ -209,8 +185,7 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
     return dispatcher
   }
 
-  // jar / deviceId / sourceSession 走**对象字段**而不是建厂闭包：脚本面与请求面必须读到同一实例
-  //（jar 还要求构造方与门面给的是同一张，见 reading.from）。
+  // jar / deviceId / sourceSession 走**对象字段**而不是建厂闭包：脚本面与请求面必须读到同一实例（jar 还要求构造方与门面给同一张）。
   const api: Fetcher = {
     ...(opts?.cookieJar === undefined ? {} : { cookieJar: opts.cookieJar }),
     ...(opts?.deviceId === undefined ? {} : { deviceId: opts.deviceId }),
@@ -251,13 +226,11 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
             }),
             timeout,
           ])
-          // 守门口径：缺省非 2xx 即 FetchError；manual（HEAD 探测——看的就是 3xx 的 Location）放行；
-          // noFollow（java.get）只放行 3xx，>=400 仍抛；allowError 把最终错误页
-          // 交给 loginCheckJs 先看正文，补抛由源请求缝在「脚本没替换」时做。
+          // 守门口径：缺省非 2xx 即 FetchError；manual（HEAD 探测看 3xx Location）放行；noFollow 只放行 3xx；allowError
+          // 把最终错误页交给 loginCheckJs 先看正文，补抛由源请求缝在「脚本没替换」时做。
           const failed = init?.manual === true ? false : init?.noFollow === true ? res.status >= 400 : !res.ok
           if (failed) {
-            // 失败响应体也要归还连接池：不消费不 cancel 时 undici 不回收 socket，
-            // 批量验源（每源 1–4 次失败请求）会瞬时攥住一串连接，只能等 GC 兜底。
+            // 失败响应体也要归还连接池：不消费不 cancel 时 undici 不回收 socket，批量验源会瞬时攥住一串连接。
             if (attempt < attempts) { await res.body?.cancel().catch(() => undefined); continue }
             if (init?.allowError !== true) {
               await res.body?.cancel().catch(() => undefined)
@@ -309,10 +282,8 @@ export function createFetcher(opts?: FetcherOptions): Fetcher {
   return api
 }
 
-/** 有上限地读响应体：声明了 content-length 且超限就先取消流；没有声明则边读边计，
- *  越限即取消并抛 FetchError（响应体所有权归本函数，调用方只拿 Buffer）。
- *  超限是**本地判据**、不是上游回答的失败：错误不带 status——带上就会落进「拿到响应但状态码
- *  不成功」那条重试判据，同一份超大响应被重打一遍（重试只该作用在 HTTP 非 2xx 上）。 */
+/** 有上限地读响应体：声明了 content-length 且超限就先取消流；否则边读边计。超限是**本地判据**、不是上游回答的失败：
+ *  错误不带 status——带上就会落进「拿到响应但状态码不成功」那条重试判据，同一份超大响应被重打一遍。 */
 async function readBodyLimited(res: Response, url: string, maxBytes: number | undefined): Promise<Buffer> {
   if (maxBytes === undefined) return Buffer.from(await res.arrayBuffer())
   const declared = res.headers.get('content-length')
@@ -338,15 +309,12 @@ async function readBodyLimited(res: Response, url: string, maxBytes: number | un
 }
 
 /**
- * Buffer 层显式解码链（禁默认 UTF-8 硬解）：
- * ⓪ 声明覆盖（searchUrl 选项 charset，优先级最高）→
- * ① Content-Type charset → ② 缺位且内容（去 BOM/前导空白后）是 HTML/XML 开头 → 前 1024 字节 latin1 嗅探 meta
- * → ③ 兜底 UTF-8。声明的 charset 解不出 → DecodeError（宁可报错，不拿乱码冒充正文）。
+ * Buffer 层显式解码链（禁默认 UTF-8 硬解）：⓪ 声明覆盖（searchUrl 选项 charset）→ ① Content-Type charset → ② 缺位且内容去
+ * BOM/前导空白后是 HTML/XML 开头 → 前 1024 字节 latin1 嗅探 meta → ③ 兜底 UTF-8。声明解不出 → DecodeError。
  */
 export function decodeBody(page: FetchedPage, declaredCharset?: string): string {
-  // 空串声明（`charset=` 空值这一形态）视为缺位，走后续嗅探链而不是必炸。
-  // 被 loginCheck 替换过的正文是按 UTF-8 重编码的，声明的 charset（如 GBK 源）对它不成立——
-  // 用声明值解会把替换正文解成乱码；此时按 page.charset（替换时置 utf-8）走。
+  // 空串声明视为缺位，走后续嗅探链。被 loginCheck 替换过的正文按 UTF-8 重编码，声明的 charset 对它不成立——
+  // 此时按 page.charset（替换时置 utf-8）走，否则会把替换正文解成乱码。
   const declared = page.replaced === true ? undefined : declaredCharset
   const cs = nonEmpty(declared) ?? nonEmpty(page.charset) ?? sniffCharset(page.raw)
   if (!encodingKnown(cs)) {
@@ -356,8 +324,7 @@ export function decodeBody(page: FetchedPage, declaredCharset?: string): string 
 }
 
 /**
- * 抓取 + 解码 + 落地地址的单点；调用方只学这一个入口；charset 为选项声明的解码优先级。
- * 超时只由 fetcher 自身收口；不要在这里再竞速一个**不 abort** 的定时器，否则两套超时并存、文案相同。
+ * 抓取 + 解码 + 落地地址的单点。超时只由 fetcher 自身收口；不要在这里再竞速一个**不 abort** 的定时器，否则两套超时并存。
  */
 export async function fetchTextPage(
   fetcher: Fetcher, url: string,
@@ -396,8 +363,7 @@ function stripBom(buf: Buffer): Buffer {
 }
 
 /**
- * 出站请求头合并：源静态 rules.header 打底 → 非 expired 的 auth.headers 覆盖同名
- * → Cookie 段合并（静态 Cookie 按段收集去重，auth.cookies 名占优、在后）。
+ * 出站请求头合并：源静态 rules.header 打底 → 非 expired 的 auth.headers 覆盖同名 → Cookie 段合并（静态 Cookie 按段收集去重，auth.cookies 名占优先）。
  */
 export function headerOf(source: HeaderSource): Record<string, string> {
   const out: Record<string, string> = { ...source.rules.header }

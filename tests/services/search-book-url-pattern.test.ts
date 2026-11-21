@@ -67,6 +67,16 @@ describe('fetchSearchPage 的 bookUrlPattern 判定', () => {
     expect(r.via).toBe('pattern')
     expect(r.body).toBe(DETAIL_BODY)
   })
+  it('「列表规则不参与」含错误路径：列表规则会炸也不许挡详情嗅探（嗅探判抢在列表求值之前）', async () => {
+    const f = createFetcher({ fetchImpl: async () => htmlPage(DETAIL_BODY) })
+    const r = await fetchSearchPage(src({
+      searchUrl: `${BASE}/book/123/`, bookUrlPattern: 'https://s\\.com/book/\\d+/',
+      ruleBookList: 'a||b&&c',  // 混用算符：解析期抛 UnsupportedRuleError——求值即炸
+    }), '书', fakeSourceRequest(f))
+    expect(r.ok && r.shape).toBe('info')
+    if (!r.ok || r.shape !== 'info') return
+    expect(r.via).toBe('pattern')
+  })
   it('部分命中不算命中（pattern 是整串匹配；缺尾锚不许当成详情页）', async () => {
     const f = createFetcher({ fetchImpl: async () => htmlPage(LIST_BODY) })
     const r = await fetchSearchPage(src({ bookUrlPattern: 'https://s\\.com/search' }), '书', fakeSourceRequest(f))

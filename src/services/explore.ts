@@ -3,7 +3,8 @@ import type { KindCache } from './explore-cache.js'
 import { exploreParticipates } from './participation.js'
 import { searchErrorCodeOf } from './search-face.js'
 import type { SourceRequest } from './source-request.js'
-import type { ExploreSources, SearchGroup, SearchHit } from '../shared/wire.js'
+import { searchGroupBaseOf } from '../shared/wire.js'
+import type { ExploreSources, SearchGroup } from '../shared/wire.js'
 import type { NovelSource } from './types.js'
 
 /**
@@ -54,11 +55,7 @@ export async function fetchExploreGroup(
 ): Promise<SearchGroup> {
   const now = cfg.now ?? Date.now
   // 源状态失败原因按需建键：SearchGroup 是跨半载荷，走 `src/shared/wire.ts` 的「缺席即不建键」口径
-  const base = {
-    sourceId: source.id, sourceName: source.name, status: source.status,
-    ...(source.statusDetail === undefined ? {} : { statusDetail: source.statusDetail }),
-    hits: [] as SearchHit[],
-  }
+  const base = searchGroupBaseOf(source)
   const page = cfg.page ?? 1
   const key = { sourceId: source.id, kind: kindUrl, epoch: cfg.epoch, page }
   const cached = cfg.cache?.get(key, now())

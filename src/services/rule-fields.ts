@@ -1,36 +1,23 @@
 import type { NormalizedRules } from './types.js'
 
 /**
- * 规则字段集：一个模型键一行；通用容器字段写明它在两方言里的路径，外加 Native 隐式终端标记、
- * 存量收敛的覆盖模式、落位方式（平铺循环 / 具名分支），以及两列行级登记（同一事实的另一键、
- * 发现面整套启用的闸）。导入循环、两方言通用展平、**展平前要解析的规则容器集合**、隐式终端清单、
- * 发现面两方言子字段名、条目装配的字段位与存量收敛的档位 / 段序都从这张表派生——字段的事实只写一次
- * （裁决与被否方案见 `ADR-0044`）。容器集合为什么必须从表派生：它以前是 `normalize` 展平处的五个
- * 名字字面量，表接受一个新容器的行之后，展平对那个容器查不到映射、直接 `continue` —— 字段静默读成
- * null，不告警、不编译错、测试也不红。
- * 为什么必须守住这一处：这类字段一旦散在几份名单里，漏掉任一处都只表现为「某个字段死活是 null」，
- * 从哪条日志里都查不到原因。发现面条目字段是边界——`ruleExplore` 与 Native `ruleFind` 的整套
- * 落位与展平实现仍住 normalize 的显式分支，条目装配侧的整套切换住 `bridge.hitRuleOf`；表为它们
- * 登记的是模型键、隐式终端、覆盖模式与配对目标，方言子字段名由配对目标的方言列反推，仍不登记在
- * 发现面行上。
- *
- * 边界：`ruleExploreKinds` 是数组不是字符串，不在这张表里（落位住 normalize 的显式分支）；表里
- * 落位方式为 `explicit` 的行（`searchUrl` / `exploreUrl` 源级声明、header 两形态、jsLib、章节 flag）
- * 各有自己的落位分支，由 `SPECIAL` 投影出来、不进平铺循环。字段**怎么收口**（首项/整块/布尔折叠）仍由
- * 各自的调用点与 `bridge` 的投影函数决定——那是行为，不是登记事实，表里不抄第二份。
+ * 规则字段集：一个模型键一行；通用容器字段写明它在两方言里的路径，外加 Native 隐式终端标记、存量收敛的覆盖模式、
+ * 落位方式（平铺循环 / 具名分支），以及两列行级登记（同一事实的另一键、发现面整套启用的闸）。导入循环、两方言
+ * 通用展平、展平前要解析的容器集合、隐式终端清单、发现面子字段名、条目装配字段位与存量收敛档位/段序都从这张表
+ * 派生——字段事实只写一次（`ADR-0044`）。容器集合必须从表派生：它以前是 normalize 展平处的字面量，表接受新容器
+ * 的行之后展平直接 `continue`，字段静默读成 null，不告警、不编译错、测试也不红。
+ * 为什么守住这一处：字段散在几份名单里，漏掉任一处都只表现为「某个字段死活是 null」。
+ * 边界：`ruleExploreKinds` 是数组不进表；`explicit` 行（searchUrl / exploreUrl / header / jsLib / 章节 flag）
+ * 各有落位分支，由 `SPECIAL` 投影、不进平铺循环；字段**怎么收口**由调用点与 bridge 决定，表里不抄第二份。
  */
 
-/** 存量收敛的覆盖模式，按**生产者数量**分档（不合并成一种「有值就写」）。
- *  - `always`：单一读口恒覆盖（导入与重推跑同一份 raw 解释，覆盖不会把对的改成错的）；
- *  - `vacant`：发现面那族，派生值只有一份来源，老库里的 null 与空数组不代表「读过且为空」；
- *  - `missing`：分类/字数那族，有两条读路且优先级不同（导入侧平铺优先、重推侧容器优先），只填缺席键；
- *  - `conditional`：静态头，只有「规则形态与头表都为空」这一种存量形状才补推；
- *  - `none`：入库时落位，存量不重推。 */
+/** 存量收敛的覆盖模式，按**生产者数量**分档：`always` 单一读口恒覆盖；`vacant` 发现面那族派生值只有一份来源；
+ *  `missing` 分类/字数那族有两条读路且优先级不同，只填缺席键；`conditional` 静态头只在「规则与头表都空」时补推；
+ *  `none` 入库时落位、存量不重推。 */
 export type RehydrateMode = 'always' | 'vacant' | 'missing' | 'conditional' | 'none'
 
-/** 存量收敛的段序（表级映射，不逐行登记）：段号是「谁必须排在谁之后」的事实——逐行重复段号
- *  就是 `rehydrateStoredSource` 的第二份段序抄本。间距留 10，将来插段不必重编。
- *  导出只为钉子（`rule-fields.test.ts` 逐格对段号）；生产段序走同文件的 `REHYDRATE_PHASES`。 */
+/** 存量收敛的段序（表级映射，不逐行登记）：段号是「谁必须排在谁之后」的事实——逐行重复就是第二份段序抄本。
+ *  间距留 10；导出只为钉子，生产段序走 `REHYDRATE_PHASES`。 */
 export const REHYDRATE_PHASE: Record<Exclude<RehydrateMode, 'none'>, number> = {
   always: 10, vacant: 20, conditional: 30, missing: 40,
 }
@@ -50,23 +37,20 @@ export interface RuleFieldSpec {
   nativeKey?: string
   /** Native 方言的裸选择器即「取文本」：展平后由 `grammar.withImplicitText` 补终端 */
   nativeImplicitText?: boolean
-  /** 同一事实的另一键：只登记在派生侧（header ↔ headerRule、详情面 / 发现面 → 通用搜索面），
-   *  不双向登记。发现面的两方言子字段名经本列反推（见 `EXPLORE_LEGADO_SUBS` / `EXPLORE_NATIVE_SUBS`），
-   *  所以发现面行仍不登记方言路径（`ADR-0044`）。 */
+/** 同一事实的另一键：只登记在派生侧（header ↔ headerRule、详情面/发现面 → 通用搜索面），不双向登记。发现面的方言
+ *  子字段名经本列反推（见 `EXPLORE_LEGADO_SUBS` / `EXPLORE_NATIVE_SUBS`），所以发现面行不登记方言路径（`ADR-0044`）。 */
   pairWith?: keyof NormalizedRules
   /** 本行即发现面整套启用的闸（`ruleExploreList` 唯一）：判据只看它是否非空串。 */
   wholeSetGate?: true
-  /** 落位方式：不登记 = 平铺循环（平铺方言的键与模型键同名，导入时逐键读 `str`，见 `RULE_FIELDS`）；
-   *  `explicit` = 不进平铺循环，由 `normalize` 的具名分支落位。特形落位的**实现**仍住 `normalize`
-   *  （`ADR-0044` 的边界不动），这里只登记「它是特例」这一事实——`SPECIAL` 就是本列的投影。 */
+/** 落位方式：不登记 = 平铺循环；`explicit` = 由 normalize 的具名分支落位（实现仍住 normalize，`ADR-0044` 边界不动），
+ *  这里只登记「它是特例」——`SPECIAL` 就是本列的投影。 */
   placement?: 'explicit'
   rehydrate: RehydrateMode
 }
 
 export const RULE_FIELD_SPECS = [
-  // 搜索上下文（ruleSearch）落搜索面字段，详情上下文（ruleBookInfo）落 ruleDetail*——两上下文的
-  // 规则不同，混用会把搜索条目规则套到详情页造垃圾标题；详情面的回落只在
-  // `bridge.detailFieldsFromContext` 一处。平铺方言的键与模型键同名，直通同一个展平视图。
+  // 搜索上下文（ruleSearch）落搜索面字段，详情上下文（ruleBookInfo）落 ruleDetail*——混用会把搜索条目规则套到
+  // 详情页造垃圾标题；详情面的回落只在 `bridge.detailFieldsFromContext` 一处。
   //
   // ── 搜索面（ruleSearch 容器）──────────────────────────────────────
   { model: 'ruleBookList', legadoObject: 'ruleSearch', legadoKey: 'bookList', nativeObject: 'ruleSearch', nativeKey: 'list', rehydrate: 'none' },
@@ -102,18 +86,15 @@ export const RULE_FIELD_SPECS = [
   { model: 'ruleChapterUpdateTime', legadoObject: 'ruleToc', legadoKey: 'updateTime', placement: 'explicit', rehydrate: 'none' },
   { model: 'nextTocUrl', legadoObject: 'ruleToc', legadoKey: 'nextTocUrl', nativeObject: 'ruleToc', nativeKey: 'nextPage', rehydrate: 'none' },
 
-  // ── 正文面（ruleContent 容器）──────────────────────────────────────
-  // ruleContent 的 Native 落位是显式分支（content + replaceRules[] 拼净化尾 + nextPage 改名），
-  // 故本行只登记 legado 路径与隐式终端标记：塞进 Native 映射会让 nextPage/image 被重复点名。
+  // ruleContent 的 Native 落位是显式分支（content + replaceRules[] 拼净化尾 + nextPage 改名），故本行只登记 legado
+  // 路径与隐式终端标记：塞进 Native 映射会让 nextPage/image 被重复点名。
   { model: 'ruleContent', legadoObject: 'ruleContent', legadoKey: 'content', nativeImplicitText: true, rehydrate: 'none' },
   // Native 的 `ruleContent.nextPage` 同住那条显式分支（与 replaceRules 在同一个容器里处理）
   { model: 'nextPageUrl', legadoObject: 'ruleContent', legadoKey: 'nextContentUrl', rehydrate: 'none' },
   { model: 'ruleContentSubContent', legadoObject: 'ruleContent', legadoKey: 'subContent', rehydrate: 'none' },
 
-  // ── 发现面（legado ruleExplore / Native ruleFind 同落这批模型键）─────────
-  // 这一族的来源不是两方言的通用容器映射（判据只看整套的 list 是否非空），故没有方言路径列；
-  // 配对目标给出「回落时读哪个通用搜索面键」与「方言子字段叫什么」，整套切换的落位仍住 normalize
-  // 的显式分支。`ruleExploreUrl` 是模板不是条目字段，故不配对。
+  // 这一族的来源不是两方言的通用容器映射（判据只看整套 list 非空），故没有方言路径列；配对目标给出「回落时读哪个
+  // 通用搜索面键」与「方言子字段叫什么」。`ruleExploreUrl` 是模板不是条目字段，故不配对。
   { model: 'ruleExploreUrl', rehydrate: 'vacant' },
   { model: 'ruleExploreList', pairWith: 'ruleBookList', wholeSetGate: true, rehydrate: 'vacant' },
   { model: 'ruleExploreName', pairWith: 'ruleBookName', nativeImplicitText: true, rehydrate: 'vacant' },
@@ -138,28 +119,21 @@ export const RULE_FIELD_SPECS = [
 
 type ExplicitPlacementSpec =
   Extract<(typeof RULE_FIELD_SPECS)[number], { placement: 'explicit' }>
-/** 非平铺行的模型键（表的 `placement` 列投影）：每一行在 `normalizeSource` 里都有具名落位分支。
- *  以前这份名单是手抄集合，与手写落位块没有可红的联动——加一行非平铺字段而忘了登记，字段静默恒
- *  null，编译与测试都不响。现在两半各有主：登记之后漏写落位实现，由
- *  `tests/services/normalize.test.ts` 的 `PLACEMENT_INPUTS`（键集取 `ExplicitPlacementField`）与
- *  端到端落位用例把住，名单的期望值在 `tests/services/rule-fields.test.ts` 里独立写死；**「该标
- *  未标」仍靠评审**——`SPECIAL` 由 `placement` 派生，抓不到自己的缺席，一个新字段漏标这列会静默
- *  走平铺循环。章节 flag 在那块里另有读法（逐章按 `isTrue` 折布尔，见 `online-reading`）。 */
+/** 非平铺行的模型键（表的 `placement` 列投影）：每行在 `normalizeSource` 里都有具名落位分支。以前这份名单是手抄
+ *  集合，加一行忘了登记就字段恒 null、编译与测试都不响；现在漏写落位实现由 `normalize.test.ts` 的 `PLACEMENT_INPUTS`
+ *  与端到端用例把住，名单期望值在 `rule-fields.test.ts` 独立写死。**「该标未标」仍靠评审**——`SPECIAL` 抓不到自己的缺席。 */
 export type ExplicitPlacementField = ExplicitPlacementSpec['model']
 export const SPECIAL: readonly ExplicitPlacementField[] = RULE_FIELD_SPECS
   .filter((s): s is ExplicitPlacementSpec => 'placement' in s)
   .map((s) => s.model)
 
-/** 平铺循环的字段名单：平铺方言的展平视图键与模型键同名，导入时逐键读 `str`，缺省落 null。
- *  与 `SPECIAL` 互为补集——「进不进平铺循环」只有落位一列这一处事实。 */
+/** 平铺循环的字段名单：平铺方言的键与模型键同名，导入时逐键读 `str`，缺省落 null；与 `SPECIAL` 互为补集。 */
 export const RULE_FIELDS: readonly (keyof NormalizedRules)[] = RULE_FIELD_SPECS
   .filter((s) => !('placement' in s))
   .map((s) => s.model)
 
-/** 表覆盖面的分布门：`NormalizedRules` 的每个键都得在表里占一行（平铺循环或具名落位），唯一例外是
- *  `ruleExploreKinds`（分类入口数组，落位住 `normalize` 的显式分支，见文件头「边界」）。加一个模型
- *  字段却忘了登记表时，`blankRules` 与读面都能编译、字段却恒 null——那一步被下面这条断言挡在
- *  `tsc`；钉子 `tests/services/rule-fields.test.ts` 只把这个类型再取一次名，证明门还接得上。 */
+/** 表覆盖面的分布门：`NormalizedRules` 的每个键都得在表里占一行（平铺循环或具名落位），唯一例外是 `ruleExploreKinds`。
+ *  加字段却忘了登记时，`blankRules` 与读面都能编译、字段却恒 null——那一步被下面这条断言挡在 `tsc`。 */
 type CoveredModel = (typeof RULE_FIELD_SPECS)[number]['model']
 type TableExcludedRules = 'ruleExploreKinds'
 type UncoveredRules = Exclude<keyof NormalizedRules, CoveredModel | TableExcludedRules>
@@ -183,28 +157,24 @@ function groupedBy(
   return out
 }
 
-/** legado 通用方言映射的派生口：展平入口按**传入的表行集**现派生（生产默认表 = `DIALECT_MAP`），
- *  所以它也能吃一张合成的表行集——钉子因此能证明「表加一行 ⇒ 新容器自动进映射」，
- *  旧实现里容器名是展平处的五名字面量，表加了行也不生效。 */
+/** legado 通用方言映射的派生口：展平入口按**传入的表行集**现派生（生产默认表 = `DIALECT_MAP`），所以它也能吃合成
+ *  的表行集——钉子因此能证明「表加一行 ⇒ 新容器自动进映射」。 */
 export function dialectMapOf(rows: readonly RuleFieldSpec[]): Record<string, Record<string, string>> {
   return groupedBy(rows, (s) => s.legadoObject, (s) => s.legadoKey)
 }
 
-/** 对象方言的「容器 → 子字段 → 模型键」表；同一行既供展平，也供存量重推取容器与子字段名。
- *  两方言映射都由同一张表派生——加字段只写一行，不存在「映射改了、展平没改」的分叉。 */
+/** 对象方言的「容器 → 子字段 → 模型键」表；同一行既供展平，也供存量重推取容器与子字段名——加字段只写一行。 */
 export const DIALECT_MAP: Record<string, Record<string, string>> = dialectMapOf(RULE_FIELD_SPECS)
 
 export const NATIVE_MAP: Record<string, Record<string, string>> =
   groupedBy(RULE_FIELD_SPECS, (s) => s.nativeObject, (s) => s.nativeKey)
 
-/** `ADR-0044` 边界里的唯一具名特例：发现面容器 `ruleExplore`。那族行没有方言路径列（子字段名由
- *  配对目标反推），所以它不在 `DIALECT_MAP` 里；但它是 legado 的规则容器，展平前的容器解析必须
- *  包含它。特例单独声明一行，不再混进通用容器的字面量——「哪些是特例」只住这里。 */
+/** `ADR-0044` 边界里的唯一具名特例：发现面容器 `ruleExplore`。那族行没有方言路径列，所以它不在 `DIALECT_MAP` 里；
+ *  但它是 legado 规则容器，展平前的容器解析必须包含它。「哪些是特例」只住这里。 */
 export const EXPLORE_CONTAINER = 'ruleExplore'
 
-/** 方言映射 → 展平前要解析的规则容器全集：四个通用容器就是映射的键（表投影），外加发现面这一个
- *  具名特例。映射与容器清单同源，「表加一个新容器」不会只剩前者、后者静默读成 null。
- *  展平入口（`normalize.flattenDialect`）按传入的映射现取；导出它，钉子才能对读这份投影本身。 */
+/** 方言映射 → 展平前要解析的规则容器全集：四个通用容器就是映射的键，外加 `ruleExplore` 这一个具名特例——映射与
+ *  容器清单同源。导出它，钉子才能对读这份投影本身。 */
 export function legadoContainersOf(map: Readonly<Record<string, unknown>>): readonly string[] {
   return [...Object.keys(map), EXPLORE_CONTAINER]
 }
@@ -214,15 +184,12 @@ export const NATIVE_TEXT_FIELDS: readonly string[] = RULE_FIELD_SPECS
   .filter((s) => 'nativeImplicitText' in s && s.nativeImplicitText)
   .map((s) => s.model)
 
-/** 某覆盖模式下的模型键。存量收敛的读口用它在**编译期**声明自己收哪一档：非本档的键写不进那个
- *  读口，本档某行被删或改档也会让老读口当场红。`always` / `conditional` 的读口是
- *  `Record<本类型, …>`——表加一行而读口没补，`tsc` 当场红；`vacant` / `missing` 由通用派生读口
- *  自动接住，`none` 不需要读口。 */
+/** 某覆盖模式下的模型键。存量收敛的读口用它在**编译期**声明收哪一档：非本档的键写不进那个读口，本档某行被删或改档
+ *  也会让老读口当场红（`always`/`conditional` 的读口是 `Record<本类型, …>`；`vacant`/`missing` 由通用读口接住）。 */
 export type RuleFieldsOf<M extends RehydrateMode> =
   Extract<(typeof RULE_FIELD_SPECS)[number], { rehydrate: M }>['model']
 
-/** `vacant` 档的模型键清单：窄化用表的行类型（`rehydrate` 是字面量，改档即换列），所以这里既没有
- *  第二份名单、也没有 `as`。消费侧拿到的就是本档的键集，不是整张 `NormalizedRules`。 */
+/** `vacant` 档的模型键清单：窄化用表的行类型（`rehydrate` 是字面量，改档即换列）——没有第二份名单、也没有 `as`。 */
 type VacantFieldSpec = Extract<(typeof RULE_FIELD_SPECS)[number], { rehydrate: 'vacant' }>
 export const VACANT_RULE_FIELDS: readonly RuleFieldsOf<'vacant'>[] = RULE_FIELD_SPECS
   .filter((s): s is VacantFieldSpec => s.rehydrate === 'vacant')
@@ -230,8 +197,7 @@ export const VACANT_RULE_FIELDS: readonly RuleFieldsOf<'vacant'>[] = RULE_FIELD_
 
 // ── 派生读口：全部由上面这批行与行上的登记列推出，不另立名单 ────────────────
 
-/** 按模型键取表行：配对目标必须查得到，查不到即表坏了——模块加载期就炸，不留到某次发现面
- *  请求才表现为「字段死活是 null」。 */
+/** 按模型键取表行：配对目标必须查得到，查不到即表坏了——模块加载期就炸，不留到某次请求才表现为「字段死活是 null」。 */
 function specOf(model: keyof NormalizedRules): RuleFieldSpec {
   const found = RULE_FIELD_SPECS.find((s) => s.model === model)
   if (found === undefined) {
@@ -261,8 +227,7 @@ const GATE: GateSpec = gateSpec()
 /** 发现面整套启用的判据所在字段（闸行的模型键）。 */
 export const WHOLE_SET_FIELD: keyof NormalizedRules = GATE.model
 
-/** 取某一行的方言子字段名：发现面的方言子字段名一律经配对目标的方言列反推（表不为发现面行
- *  登记方言路径）。缺列即表坏了——加载期炸。 */
+/** 取某一行的方言子字段名：发现面的方言子字段名一律经配对目标的方言列反推（表不为发现面行登记方言路径）；缺列即加载期炸。 */
 function dialectSubOf(spec: RuleFieldSpec, dialect: 'legado' | 'native'): string {
   const key = dialect === 'legado' ? spec.legadoKey : spec.nativeKey
   if (key === undefined) {
@@ -271,8 +236,7 @@ function dialectSubOf(spec: RuleFieldSpec, dialect: 'legado' | 'native'): string
   return key
 }
 
-/** 闸行配对目标的方言子字段名（legado `bookList` / Native `list`）：两方言的展平与
- *  `nativeExploreFields` 都读它，不再各写一个字面量。 */
+/** 闸行配对目标的方言子字段名（legado `bookList` / Native `list`）：两方言展平与 `nativeExploreFields` 都读它，不再各写字面量。 */
 const gateTarget = specOf(GATE.pairWith)
 export const EXPLORE_GATE_SUBS: { legado: string; native: string } = {
   legado: dialectSubOf(gateTarget, 'legado'),
@@ -300,13 +264,11 @@ function subMapOf(dialect: 'legado' | 'native'): Record<string, keyof Normalized
   return out
 }
 
-/** 发现面两方言的子字段名 → 模型键（九项，含闸行）：两方言的展平各循环自己那份，
- *  子字段名不再各抄一份。键顺序即表的行序。 */
+/** 发现面两方言的子字段名 → 模型键（九项，含闸行）：两方言的展平各循环自己那份，子字段名不再各抄一份；键顺序即表行序。 */
 export const EXPLORE_LEGADO_SUBS: Readonly<Record<string, keyof NormalizedRules>> = subMapOf('legado')
 export const EXPLORE_NATIVE_SUBS: Readonly<Record<string, keyof NormalizedRules>> = subMapOf('native')
 
-/** 发现面回落分支读的九个通用书目字段：配对目标的反向索引，按表行序——次序就是
- *  `exploreEpoch` 的入键次序，换个顺序等于换指纹。 */
+/** 发现面回落分支读的九个通用书目字段：配对目标的反向索引，按表行序——次序就是 `exploreEpoch` 的入键次序，换顺序等于换指纹。 */
 const EXPLORE_TARGETS: ReadonlySet<keyof NormalizedRules> = new Set(EXPLORE_PAIRS.map((p) => p.target.model))
 export const EXPLORE_FALLBACK_FIELDS: readonly (keyof NormalizedRules)[] = RULE_FIELD_SPECS
   .filter((s) => EXPLORE_TARGETS.has(s.model))
@@ -316,9 +278,8 @@ export const EXPLORE_FALLBACK_FIELDS: readonly (keyof NormalizedRules)[] = RULE_
 
 type SearchRow = Extract<(typeof RULE_FIELD_SPECS)[number], { legadoObject: 'ruleSearch' }>
 
-/** 逐条目装配的八个字段位：`ruleSearch` 容器里除列表（`ruleBookList`）与探针词
- *  （`probeKeyword`）之外的模型键。槽名即模型键——发现面的字段位经 `pairWith` 反推到同一批。
- *  导出只为钉子：生产的整套映射走 `EXPLORE_OF_GENERIC`（同由本清单派生）。 */
+/** 逐条目装配的八个字段位：`ruleSearch` 容器里除列表与探针词之外的模型键。槽名即模型键——发现面的字段位经 `pairWith`
+ *  反推到同一批。导出只为钉子：生产的整套映射走 `EXPLORE_OF_GENERIC`（同由本清单派生）。 */
 export type HitFieldModel = Exclude<SearchRow['model'], 'ruleBookList' | 'probeKeyword'>
 
 export const HIT_FIELD_MODELS: readonly HitFieldModel[] = RULE_FIELD_SPECS
@@ -327,9 +288,8 @@ export const HIT_FIELD_MODELS: readonly HitFieldModel[] = RULE_FIELD_SPECS
     s.model !== 'ruleBookList' && s.model !== 'probeKeyword')
   .map((s) => s.model)
 
-/** 通用搜索键 → 发现面键：发现面行的 `pairWith` 反向索引，键集恰为八个字段位 + `ruleBookList`。
- *  `hitRuleOf` 的整套切换只查这一处，不逐字段回落（`ADR-0027`）。九项一一对应，
- *  缺一项或撞一项都在模块加载期炸——不留到某次分类页请求才表现为「这一格死活是 null」。 */
+/** 通用搜索键 → 发现面键：发现面行 `pairWith` 的反向索引，键集恰为八个字段位 + `ruleBookList`。`hitRuleOf` 的整套切换
+ *  只查这一处，不逐字段回落（`ADR-0027`）；缺一项或撞一项都在模块加载期炸。 */
 const GENERIC_HIT: ReadonlyArray<HitFieldModel | 'ruleBookList'> = [...HIT_FIELD_MODELS, 'ruleBookList']
 const exploreOfGeneric: Partial<Record<HitFieldModel | 'ruleBookList', keyof NormalizedRules>> = {}
 for (const { model, target } of EXPLORE_PAIRS) {

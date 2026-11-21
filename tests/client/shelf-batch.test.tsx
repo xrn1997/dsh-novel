@@ -22,7 +22,7 @@ beforeEach(resetPanelShelf)
  * - 删除是**一次**批请求（POST shelf/batch-delete，keys 点击时快照），不是循环 DELETE；
  * - 「全选」= 当前筛选下可见的书，不是整架（筛选簇进多选态即让位，故筛选在入场时定格）；
  * - 失败留框内可就地重试（与书架单本删除一致），成功才清选择并退出多选态；
- * - 单本 ✕ 路径一字不动（views-wiring 的那批钉子继续管它）。
+ * - 单本 ✕ 路径一字不动（`wiring-shelf` 的那批钉子继续管它）。
  */
 
 const entry = (over: Partial<ShelfEntry> & { bookKey: string }): ShelfEntry => ({

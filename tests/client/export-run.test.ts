@@ -3,24 +3,13 @@ import { applyPreset, createExportRun, draftOf, parseRange, validRangeOf } from 
 import type { ExportRunDeps, ExportRunState } from '../../src/client/export-run.js'
 import { ApiClientError } from '../../src/client/api.js'
 import { enTranslate, zhTranslate } from '../../src/client/copy/index.js'
+import { deferred } from '../support/async.js'
 import { pick } from '../support/fixture.js'
 
 /**
  * 范围导出流编排：独立 module，不挂在 ReaderView 里——start/cancel/状态三态 + 卸载 abort
  * 全部由假 streamExport 驱动。改动这里要注意：视图只做接线，时序口径都归这一层。
  */
-
-interface Deferred {
-  promise: Promise<Blob>
-  resolve: (b: Blob) => void
-  reject: (e: unknown) => void
-}
-function defer(): Deferred {
-  let resolve: (b: Blob) => void = () => { /* replaced below */ }
-  let reject: (e: unknown) => void = () => { /* replaced below */ }
-  const promise = new Promise<Blob>((res, rej) => { resolve = res; reject = rej })
-  return { promise, resolve, reject }
-}
 
 /** 在途可观察的假导出流：挂 abort 监听（取消/卸载路径用），进度由用例按需回调 */
 function hangingStream(): { streamExport: ExportRunDeps['streamExport']; aborted: () => boolean } {
@@ -146,7 +135,7 @@ describe('createExportRun：成功 / 失败（错误类目投影）/ 取消 / �
   })
 
   it('在途重入忽略：运行中再 start 不开第二路流（同钮再点是取消，不是重入）', () => {
-    const d = defer()
+    const d = deferred<Blob>()
     const streamExport = vi.fn(() => d.promise)
     const { run } = setup({ streamExport, saveBlob: vi.fn() })
     run.start()
@@ -155,7 +144,7 @@ describe('createExportRun：成功 / 失败（错误类目投影）/ 取消 / �
   })
 
   it('进度回调丢 total：状态里 total 回退空串（标题不显示「共 N 章」）', async () => {
-    const d = defer()
+    const d = deferred<Blob>()
     const streamExport = vi.fn((opts: Parameters<ExportRunDeps['streamExport']>[0]) => {
       opts.onProgress(1024, null)
       return d.promise

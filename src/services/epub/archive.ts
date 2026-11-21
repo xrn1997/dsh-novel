@@ -7,19 +7,14 @@ import { bookError, EpubImportError, rejectBook } from './errors.js'
 type Crc32 = { readonly unsigned: (buffer: Buffer, partial?: number) => number }
 
 /**
- * buffer-crc32 的声明面与运行时面不一致（不是本仓偏好）：类型声明是 `export =`，运行时只导出
- * `default`——干净写法要么 typecheck 红（判「模块没有 default 导出」）、要么运行时拿不到东西。
- * 所以取 default、取不到退回 namespace：两条解析路径下 default 都指同一个函数对象。
- * 这里是本文件唯一为依赖包形状让路的地方。
+ * buffer-crc32 的声明面与运行时面不一致（不是本仓偏好）：类型声明是 `export =`，运行时只导出 `default`。取 default、取不到退回
+ * namespace：两条解析路径下 default 都指同一个函数对象。这里是本文件唯一为依赖包形状让路的地方。
  */
 const crc32 = ((rawBufferCrc32 as unknown as { default?: Crc32 }).default ?? rawBufferCrc32)
 
 /**
- * 增量 CRC32（`unsigned` 的取值口径：partial 传上一次的返回值）。
- *
- * 为什么要对外露这一行：正文层核 PNG chunk 的 CRC 也要算同一件事（「不信元数据」在归档层是
- * 条目 CRC，在图片层是 chunk CRC）。那一层再抄一份这种让路代码就会长出第二个让路点，
- * 所以让路只留在本文件，别的层从这里取。
+ * 增量 CRC32（`unsigned` 的取值口径：partial 传上一次的返回值）。对外露这一行：正文层核 PNG chunk 的 CRC 也要算同一件事——
+ * 那一层再抄一份这种让路代码就会长出第二个让路点，所以让路只留在本文件。
  */
 export function crc32Unsigned(buffer: Buffer, partial = 0): number {
   return crc32.unsigned(buffer, partial)
@@ -28,18 +23,13 @@ export function crc32Unsigned(buffer: Buffer, partial = 0): number {
 /**
  * EPUB 归档层的**安全边界**：把一份上传上来的 ZIP 变成一个「条目可信、读取受限」的句柄。
  *
- * 为什么自己写这一层，而不是拿现成解压器直接读：EPUB 是**不受信输入**——上传的是用户给的字节，
- * 里面的路径可以指向书外（zip-slip）、条目可以是符号链接/加密/异种压缩、压缩数据可以声称 1 KiB
- * 却解出 4 GiB（zip bomb）。这些不是「解析失败」，是安全边界，必须在**解压任何字节之前**判掉：
- * 只判用到的条目就等于允许恶意条目藏在书里蒙混过关。
+ * 为什么自己写这层：EPUB 是**不受信输入**——路径可指向书外（zip-slip）、条目可以是符号链接/加密/异种压缩、
+ * 压缩数据可声称 1 KiB 却解出 4 GiB（zip bomb）。这些不是「解析失败」而是安全边界，必须在**解压任何字节之前**
+ * 判掉：只判用到的条目等于允许恶意条目藏在书里蒙混过关。
  *
- * 三条口径（改动这一层时先读它们）：
- * ① **条目名/重名/加密/压缩方式全表预检**（扫中央目录时逐条判），合法条目才登记；**未用到的条目不解压**
- *    （预算也不是靠解压未用条目算出来的——那本身就是攻击面）；
- * ② **限量按实际字节数**：声明大小只作展示，所有预算都在流中按真实产出的字节累加，并另外累计 CRC32
- *    与中央目录比对——不信元数据是这一层的全部意义；
- * ③ **任何读取失败都关归档**：读失败意味着后面所有读取都建立在一份不可信的映射上，继续读没有意义；
- *    关闭是幂等的（调用方的 finally 里会再关一次）。
+ * ① **条目名/重名/加密/压缩方式全表预检**，合法条目才登记；**未用到的条目不解压**（预算也不靠解压未用条目算）。
+ * ② **限量按实际字节数**：声明大小只作展示，预算在流中按真实产出累加，并另计 CRC32 与中央目录比对。
+ * ③ **任何读取失败都关归档**（后续读取都建立在一份不可信的映射上）；关闭是幂等的。
  */
 
 /** 一条已通过安全门的 ZIP 条目（中央目录视角） */
@@ -51,15 +41,10 @@ export interface EpubArchiveEntry {
 }
 
 /**
- * EPUB 解析的资源上限（**唯一主人**）：新增一类预算就加进本对象，别在别的模块另立一份常量——
- * 分散的「安全上限」总会在某次改动里只改一半，而一半的预算等于没有预算。
- *
- * 归档层用得上的是前三项；XML 单文档的三项（字节、深度、结构节点数）由 XML 层（`xml.ts`，
- * 包层与正文层的文档解析共用它）消费，图片像素由正文层（`resources.ts`）消费——**一个对象一个主人**：
- * 各层都用这里同名的那一项，谁都不在自己模块里另立一份常量。
- *
- * 为什么「深度/节点数」是独立于字节的预算：字节上限管不住**结构炸弹**——约一万层嵌套（远低于
- * 8 MiB）就足以让无预算的递归走法吃穿调用栈抛 `RangeError`。
+ * EPUB 解析的资源上限（**唯一主人**）：新增一类预算就加进本对象，别在别的模块另立常量——分散的「安全上限」总会在
+ * 某次改动里只改一半，而一半的预算等于没有预算。归档层用前三项；XML 三项由 `xml.ts` 消费，图片像素由 `resources.ts`
+ * 消费——一个对象一个主人。为什么「深度/节点数」独立于字节：字节上限管不住**结构炸弹**——约一万层嵌套就足以让
+ * 无预算的递归吃穿调用栈抛 `RangeError`。
  */
 export interface EpubLimits {
   /** 中央目录条目数上限 */
@@ -89,24 +74,16 @@ export const DEFAULT_EPUB_LIMITS: EpubLimits = {
 }
 
 /**
- * 打开一份 EPUB 归档。条目名/重名/加密/压缩方式在**打开阶段**判完：抛出即没有句柄，
- * 调用方也就不可能从坏归档里读到任何东西。
- *
- * limits 是覆盖式的：测试按需缩小某一项预算（也不必为了测上限去造 32 MiB 真字节）。
- *
- * 为什么这里只转发一行：构造器私有（外部能自己拼 `byName`/`budget` 就等于绕过全部门禁），而私有
- * 构造器只有类自己能调，所以构造实装只能落在类上的静态工厂；入口名留在这里，调用方按层名找人即可。
+ * 打开一份 EPUB 归档。条目名/重名/加密/压缩方式在**打开阶段**判完：抛出即没有句柄，调用方不可能从坏归档里读到东西。
+ * limits 是覆盖式的（测试按需缩小预算）。入口名留在这里：构造器私有，构造实装只能落在类上的静态工厂。
  */
 export function openEpubArchive(bytes: Buffer, limits?: Partial<EpubLimits>): Promise<EpubArchive> {
   return EpubArchive.open(bytes, limits)
 }
 
 /**
- * 已通过安全门的归档句柄。**读一条、计量一条**：预算在这里按流中实际字节累加，
- * CRC 也在这里与中央目录比对——open 阶段判结构，read 阶段判内容。
- *
- * 构造器私有是这一层的一部分：句柄只能由静态工厂在扫完中央目录之后造出来，外部没法自己拼一份
- * 「名字 → 条目」的映射绕过上面的门（那会让整层形同虚设）。
+ * 已通过安全门的归档句柄。**读一条、计量一条**：预算按流中实际字节累加，CRC 与中央目录比对——open 判结构，read 判内容。
+ * 构造器私有是这一层的一部分：句柄只能由静态工厂扫完中央目录后造出，外部没法拼一份映射绕过门禁。
  */
 export class EpubArchive {
   /** 条目表（中央目录顺序）；调用方按逻辑名查找，拿不到 ZIP 路径 */
@@ -131,10 +108,8 @@ export class EpubArchive {
     return new Promise((resolve, reject) => {
       fromBuffer(
         bytes,
-        // strictFileNames：不让库把 `\` 悄悄折成 `/`——折了，反斜杠名字在 Windows 上就是另一棵目录树，
-        //   而 `OEBPS\ch1.xhtml` 还会与真的 `OEBPS/ch1.xhtml` 归一成同一个名字（歧义落进条目表）。
-        //   注意：无条件拒反斜杠/绝对路径/`..` 段的是 yauzl 的 validateFileName，与这个开关无关。
-        // validateEntrySizes：库的长度核对与我们在流中的 CRC 累计互补（库管长度、我们管内容）。
+        // strictFileNames：不让库把 `\` 悄悄折成 `/`——折了，反斜杠名字在 Windows 上就是另一棵目录树，还会与真的
+        // `OEBPS/ch1.xhtml` 归一成同一个名字。validateEntrySizes：库管长度、我们管流内 CRC，互补。
         { lazyEntries: true, strictFileNames: true, validateEntrySizes: true },
         (err, zip) => {
           if (err) {
@@ -186,10 +161,7 @@ export class EpubArchive {
   }
 
   /**
-   * 读一个条目的完整内容。
-   *
-   * maxBytes 是**本次读取**的类别上限（例如 XML/XHTML 比图片小得多），与单条目预算取小者：
-   * 单条目预算是归档层的硬上限，任何调用方都不能把它放宽。
+   * 读一个条目的完整内容。maxBytes 是**本次读取**的类别上限（例如 XML 比图片小得多），与单条目预算取小者——单条目预算是硬上限。
    */
   async read(name: string, maxBytes?: number): Promise<Buffer> {
     if (this.closed) rejectBook(`EPUB 归档已关闭，无法读取 ${name}`)
@@ -265,8 +237,7 @@ function checkEntryKind(entry: Entry, name: string): void {
   if (entry.compressionMethod !== 0 && entry.compressionMethod !== 8) {
     rejectBook(`EPUB 条目用了不支持的压缩方式 ${entry.compressionMethod}（只接受 store/deflate）：${name}`)
   }
-  // 只有 Unix 宿主（versionMadeBy 高字节 3）的外部属性才按 unix 模式位解释：同一段 bit 在 DOS
-  // 属性里是只读/隐藏等标志，混读会把普通文件误判成符号链接，而符号链接能把读取引到书外。
+  // 只有 Unix 宿主（versionMadeBy 高字节 3）的外部属性才按 unix 模式位解释：同一段 bit 在 DOS 属性里是只读/隐藏标志，混读会把普通文件误判成符号链接（它能把读取引到书外）。
   const mode = entry.externalFileAttributes >>> 16
   if ((entry.versionMadeBy >>> 8) === 3 && (mode & 0xf000) === 0xa000) {
     rejectBook(`EPUB 条目是符号链接（可能指向书外）：${name}`)
@@ -274,22 +245,15 @@ function checkEntryKind(entry: Entry, name: string): void {
 }
 
 /**
- * ZIP 条目名 → 书内逻辑名，或抛错。**这道门只管 ZIP 条目名，不管 EPUB href**：
- * 正文里的 `../Images/x.png` 是 href，按文档目录归一、只要不出书根就合法（那是 `resolveEpubHref`
- * 的事）；ZIP 条目名没有「相对某个文档」的语境，越出归档根就是攻击。两者不能互相套用规则：
- * 拿 href 的合法性去放行条目名，或者拿条目名的严格去拒绝 href，都是错的。
- *
- * 归一（`. 段` / 空段 / 栈内 `..`）是为了让「同一逻辑名的两种写法」显形——重名判定必须落在
- * 归一后的名字上，否则 `OEBPS/ch1.xhtml` 与 `OEBPS/./ch1.xhtml` 就是两条互不冲突的条目。
+ * ZIP 条目名 → 书内逻辑名，或抛错。**这道门只管 ZIP 条目名，不管 EPUB href**：`../Images/x.png` 是 href，按文档目录归一、
+ * 不出书根就合法（`resolveEpubHref` 的事）；条目名没有「相对某个文档」的语境，越出归档根就是攻击。两者规则不能互相套用。
+ * 归一（`. 段`/空段/栈内 `..`）是为了让「同一逻辑名的两种写法」显形——重名判定必须落在归一后的名字上。
  */
 function normalizeEntryPath(raw: string): string {
-  // NUL 会截断下游一切把名字当 C 字符串/路径段的地方。yauzl 的 validateFileName 不校验 NUL，
-  // 所以这条是**只有本层拦得住**的判据之一。
+  // NUL 会截断下游一切把名字当 C 字符串/路径段的地方。yauzl 的 validateFileName 不校验 NUL，这是**只有本层拦得住**的判据之一。
   if (raw.includes('\0')) rejectBook(`EPUB 条目名含 NUL：${JSON.stringify(raw)}`)
-  // 下面三条（反斜杠 / 绝对路径 / 盘符）与再下面的 `..`：这四种形态在**条目名**上其实由依赖先拦——
-  // yauzl 的 validateFileName 无条件拒含反斜杠、绝对路径与任一 `..` 段的名字，与 strictFileNames 无关。
-  // 本层保留同名判据是**纵深防御**（换依赖、或那道门被绕过时不至于裸奔），不是唯一防线；
-  // 只有本层拦得住的两类是本条 NUL 与末尾的「归一后为空」。
+  // 反斜杠 / 绝对路径 / 盘符 / `..` 四形态在条目名上其实由 yauzl 的 validateFileName 先拦；本层保留同名判据是**纵深防御**，
+  // 不是唯一防线——只有本层拦得住的是 NUL 与末尾「归一后为空」两类。
   if (raw.includes('\\')) rejectBook(`EPUB 条目名含反斜杠：${raw}`)
   if (raw.startsWith('/')) rejectBook(`EPUB 条目名是绝对路径：${raw}`)
   if (/^[A-Za-z]:/.test(raw)) rejectBook(`EPUB 条目名含盘符：${raw}`)
@@ -297,8 +261,7 @@ function normalizeEntryPath(raw: string): string {
   for (const segment of raw.split('/')) {
     if (segment === '' || segment === '.') continue
     if (segment === '..') {
-      // 条目名走不到这里（含 `..` 段的名字被 yauzl 先拒）；这条折叠分支活在查找侧：调用方给出的
-      // `OEBPS/sub/../ch1.xhtml` 折叠成 OEBPS/ch1.xhtml；栈里已经空了的 `..` 才是越界。
+      // 条目名走不到这里（含 `..` 段的名字被 yauzl 先拒）；这条折叠分支活在查找侧，栈里已经空了的 `..` 才是越界。
       if (out.length === 0) rejectBook(`EPUB 条目名越出归档根：${raw}`)
       out.pop()
       continue
@@ -310,8 +273,7 @@ function normalizeEntryPath(raw: string): string {
   return out.join('/')
 }
 
-/** 非本层的异常（库/流/系统）也要披上本层的类并点名条目：否则调用方只能靠文案猜分类。
- *  这是本子树唯一对基类做 `instanceof` 的地方——它判的是「已经披过名没有」，不是失败的主语归谁。 */
+/** 非本层的异常（库/流/系统）也要披上本层的类并点名条目；这是本子树唯一对基类做 `instanceof` 的地方——它判的是「披过名没有」，不是失败的主语归谁。 */
 function wrapError(cause: unknown, what: string): EpubImportError {
   if (cause instanceof EpubImportError) return cause
   return bookError(`${what}：${cause instanceof Error ? cause.message : String(cause)}`)

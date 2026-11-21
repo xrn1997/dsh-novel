@@ -1,13 +1,9 @@
-/** 听书块（`NOVEL_CSS` 的第 11 块）：阅读器内嵌听书条、设置面板、选区起播按钮、全局迷你条与
- *  书架「正在听」徽标。阅读器内那条的条底跟纸走（与 `.novel-rdr-bar` 同一条判据：纸往墨压一档，
- *  不读宿主 App 底色），面板与条上控件复用控制器层的 token 与 pill 形状；选中态用跟读字色
- *  （随纸色现算），brand 只在强制深色那一档回退。全局迷你条与书架徽标不在阅读器里——它们读
- *  宿主语义 token（暗底浮层），**不跟纸走**。 */
+/** 听书块（`NOVEL_CSS` 的第 11 块）：阅读器内嵌听书条、设置面板、选区起播按钮、全局迷你条与书架
+ *  「正在听」徽标。阅读器内那条跟纸走（面板与控件复用控制器层 token）；迷你条与书架徽标读宿主语义
+ *  token（暗底浮层），**不跟纸走**。 */
 export const TTS_CSS = `
 /* ── 听书条（阅读器内嵌）────────────────────────────────────────────────── */
-/* 贴视口底：滚动容器在阅读器之外，sticky 让条在整段阅读里停在下沿，而不是随内容沉到底。
-   z 只高于正文：控制器遮罩（10）与工具栏（12）都在它之上——遮罩在场时条让位给浮层。
-   条底与顶条同源（同一条 color-mix 直写，见 token 层），接缝才读作同一张纸。 */
+/* 贴视口底：滚动容器在阅读器之外，sticky 让条在整段阅读里停在下沿。 */
 .novel-tts-bar {
   position: sticky; bottom: 0; z-index: 1;
   display: flex; align-items: center; flex-wrap: wrap; gap: var(--novel-sp-2);
@@ -40,19 +36,14 @@ export const TTS_CSS = `
   font-size: var(--novel-fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .novel-tts-chips { display: flex; align-items: center; gap: var(--novel-sp-1); flex: none; }
-/* 听书选中态 / 设置开关的回显色跟纸走：直接用跟读字色（ReaderView 由 paperLiveInk 现算），
-   不再借固定 brand——条底已经跟纸，深纸上 brand 蓝的对比度不可靠。强制深色那一档才让回
-   宿主 brand（.novel-dark 把它重钉成亮色）。 */
+/* 听书选中态 / 设置开关的回显色跟纸走（跟读字色，ReaderView 现算）；brand 只在强制深色那一档回退。 */
 .novel-rdr-ctl.novel-tts-on { color: var(--novel-live-ink); opacity: 1; }
 .novel-rdr-bar.novel-dark .novel-rdr-ctl.novel-tts-on,
 .novel-tts-bar.novel-dark .novel-rdr-ctl.novel-tts-on { color: var(--novel-brand); }
 /* 浮窗边栏同一判据：设置弹层开着，设置钮才亮 brand——开关要有回显 */
 .novel-tts-mini-dock .novel-tts-ictl.novel-tts-on { color: var(--novel-brand); }
 /* ── 设置面板（浮在条上方；与 Aa 面板同族卡片，不自造第二套浮层几何）──────── */
-/* max-height 收两档：60vh（视口比例，阅读器条那份卡没有 dock 几何）与现量余量
-   --novel-tts-popover-room（浮窗按选中那一侧算出来写在 dock 上：判方向不收高度，
-   卡片会整块探出 fixed 浮层、底部几行既看不见也滚不到）。两档取小就是「放不下时
-   卡内滚动、整块仍留在视口里」。 */
+/* max-height 收两档：60vh 与现量余量（miniBarPopoverRoom）；后者是次要浮层的高度上界。 */
 .novel-tts-panel {
   position: absolute; right: var(--novel-sp-3); bottom: calc(100% + var(--novel-sp-2));
   z-index: var(--novel-z-panel);
@@ -101,21 +92,18 @@ export const TTS_CSS = `
 }
 .novel-tts-actions { flex-wrap: wrap; }
 .novel-tts-note { font-size: var(--novel-fs-xs); color: var(--novel-text-3); }
-/* 连败暂停的提示（两个表面同一句读数）：用错误色而不是次要色——它是「为什么停了」，
-   不是说明文字；条里独占一行（flex-basis 100%），浮窗里按普通行参与纵向排布。 */
+/* 连败暂停的提示（两个表面同一句读数）：用错误色——它是「为什么停了」，不是装饰。 */
 .novel-tts-fail { font-size: var(--novel-fs-xs); color: var(--novel-err); line-height: 1.5; }
 .novel-tts-bar > .novel-tts-fail { flex-basis: 100%; }
 .novel-tts-mini-panel > .novel-tts-fail { flex: none; }
 /* ── 听书进度（条上只有章内段滑杆，ADR-0075）───────────────────────────── */
-/* 章内段滑杆独占一整行（flex-basis 100% 换行）：拖到任意段即起播。
-   accent 跟条的字色（纸墨 / 强制暗时的宿主字色），不借 brand——条上 brand 只留给选中态。 */
+/* 章内段滑杆独占一整行（flex-basis 100% 换行）：拖到任意段即起播。 */
 .novel-tts-chapter-seek { flex-basis: 100%; display: flex; align-items: center; min-width: 0; }
 .novel-tts-chapter-seek .novel-tts-range {
   flex: 1 1 auto; min-width: 0; height: 12px; accent-color: currentColor; opacity: .8;
 }
 /* ── 选区起播（「从本段听」）────────────────────────────────────────────── */
-/* 浮在选区下方：反色是唯一能同时压住任意纸色与深浅控制器层的取法（纸墨互换），
-   定位（left/top）由组件按选区几何行内给。 */
+/* 浮在选区下方：反色是唯一能同时压住任意纸色与深浅控制器层的取法（纸墨互换）。 */
 .novel-tts-from-here {
   position: fixed; transform: translateX(-50%); z-index: var(--novel-z-panel);
   padding: var(--novel-sp-2) var(--novel-sp-4); border: none; border-radius: 999px;
@@ -123,20 +111,7 @@ export const TTS_CSS = `
   font: inherit; font-size: var(--novel-fs-sm); white-space: nowrap; cursor: pointer;
   box-shadow: var(--novel-shadow-2);
 }
-/* ── 全局听书浮窗（shell.overlay 常驻层；两个完整形态：胶囊 / 展开缺省 320×200 且可拖，
-   ADR-0073、ADR-0079、ADR-0080）──
-   内容层级与命中档归 ADR-0079：封面退场、书名只做身份；正文区吃剩余高度、整段可读，
-   运输行颗颗 ≥32、环 44。收起态自身完整
-   可读可播，展开态是另一块完整控制面；没有 idle 半隐，也没有同一颗胶囊藏一半的 hover 抽屉。
-   两个形态的尺寸都从 miniBarLayout 的值槽进样式层（--novel-tts-panel-w/-h 与
-    --novel-tts-capsule-w/-h），样式层不写第二份尺寸抄本。
-   位置自由落位：现场记块中心，拖动两轴跟手，松手时离视口边够近才贴齐；落位由行内 left/top +
-   translate 一次给全（缺省轴也在这里解析成像素，住 mini-bar-state 的 miniBarLayout），样式层
-   不给缺省定位。两个派生读数各管一件事：**data-side** 是按中心算出的
-   呈现方向，只管设置弹层往哪边开；**data-flush** 是真的贴上哪条竖边，只管贴边形态（收那一条边框、
-   那两侧改直角）。自由落位下两者会分家，用 side 代答 flush 就是给悬空的那条边留敞口。
-   宿主 chrome 层级：底读宿主**浮层**语义（button-floating-fill），不跟阅读器纸色
-   走。overlay 层默认 click-through，根节点自己收回 pointer-events。 */
+/* ── 全局听书浮窗（shell.overlay 常驻层；胶囊 / 展开两形态，尺寸走 miniBarLayout 值槽）──────── */
 .novel-tts-mini-dock {
   position: fixed;
   z-index: var(--novel-z-status); pointer-events: auto;
@@ -169,7 +144,7 @@ export const TTS_CSS = `
 .novel-tts-mini-dock[data-dragging='true'] * { cursor: grabbing; }
 /* 拖边中整块都是所拖那条边的 resize 指针：指针滑出 8px 命中带落到正文 / 按钮上时，
    子元素的 hover 档（grab / pointer）不许顶上来——拖边没松手，手势仍是 resize。
-   data-resize-edge 记正在拖的那条边（读数归 TtsMiniBar 的 beginResize）。 */
+   data-resize-edge 记正在拖的那条边（读数归 mini-bar-state 的指针会话）。 */
 .novel-tts-mini-dock[data-resizing='true'][data-resize-edge='left'],
 .novel-tts-mini-dock[data-resizing='true'][data-resize-edge='right'],
 .novel-tts-mini-dock[data-resizing='true'][data-resize-edge='left'] *,
@@ -179,9 +154,7 @@ export const TTS_CSS = `
 .novel-tts-mini-dock[data-resizing='true'][data-resize-edge='corner'],
 .novel-tts-mini-dock[data-resizing='true'][data-resize-edge='corner'] * { cursor: nwse-resize; }
 
-/* 收起态：完整身份条（ADR-0079）：环 + 书名与段号 + 底部一条章内进度细线。尺寸值槽由
-   miniBarLayout 从 CAPSULE_SIZE 写入（--novel-tts-capsule-w/-h），样式层不写第二份。
-   不给半截句子——那 18 字不是读数；完整的一块，不靠屏幕裁切。 */
+/* 收起态：完整身份条（ADR-0079）：环 + 书名与段号 + 底部一条章内进度细线；尺寸值槽由 miniBarLayout 给。 */
 .novel-tts-mini-capsule {
   position: relative;
   display: flex; align-items: center; gap: var(--novel-sp-2);
@@ -227,13 +200,7 @@ export const TTS_CSS = `
   display: block; height: 100%; border-radius: 99px; background: var(--novel-brand);
 }
 
-/* 展开态：缺省 320×200，可拖到 260–520 / 162–420（ADR-0080；尺寸走 miniBarLayout 的
-    --novel-tts-panel-w/-h 值槽）。**完整的一块**是缺省（四边描边、四角同圆）；只有真的贴上某条
-   屏幕边时才收掉靠屏幕那一条边框、把那两侧改成直角——那一条边由屏幕自己画。
-   贴边读数（data-flush，判据住 mini-bar-state 的 deriveMiniBarFlush）与呈现方向
-   （data-side，只管设置弹层往哪边开）是两件事：ADR-0073 放开自由落位之后，块可以停在正文中间，
-   这时按 side 收边框等于在一条悬空的边上留敞口——没描边、两个直角、阴影从缺口漏出去，
-   展开态整块读起来就是「样式坏了」。几何门量的是贴右缘的缺省落位，量不到这一眼可见的破口。 */
+/* 展开态：缺省 320×200，可拖到 260–520 / 162–420（ADR-0080；尺寸走 miniBarLayout 值槽）。 */
 .novel-tts-mini-panel {
   position: relative;
   display: flex; flex-direction: column; gap: 8px;
@@ -344,8 +311,7 @@ export const TTS_CSS = `
 }
 .novel-tts-chip:hover { border-color: var(--novel-border-strong); color: var(--novel-text); }
 .novel-tts-chip.on { border-color: var(--novel-brand); color: var(--novel-brand-strong); background: var(--novel-brand-tint); }
-/* 章内进度：浮窗唯一的进度条（ADR-0079 / ADR-0080）——读数按段号 + 段内比例推进，拖动即跳到目标段。
-   自绘轨道与拖点盖在原生 range 上；原生 range 只负责命中、拖动与键盘。 */
+/* 章内进度：浮窗唯一的进度条（ADR-0079 / ADR-0080）——拖动即跳到目标段。 */
 .novel-tts-mini-chapseek { position: relative; flex: none; display: flex; align-items: center; height: 24px; }
 .novel-tts-mini-chapseek-track {
   position: absolute; left: 0; right: 0; height: 5px; border-radius: 99px;
@@ -390,10 +356,7 @@ export const TTS_CSS = `
   stroke-linecap: round; stroke-linejoin: round;
 }
 /* ── 书架「正在听」徽标（消费位置归 progress，这里只标播放态）──────────────── */
-/* 徽标钉在**封面顶左**（出流的绝对层，角落分工与「多选态让位给勾选标记」归 shelf.ts 那处注释）：
-   它一旦回到书名行的文档流里，就按自己的宽度把长书名挤成省略号；回到封面底行里，又去挤源名——
-   「正在听」是状态字，两行文字都不该拿它换。底左那条槽位由来源 chip 与「本地」互斥共享，
-   徽标占顶左后两边都吃满整宽。 */
+/* 徽标钉在**封面顶左**（角落分工与「多选态让位给勾选标记」归 shelf.ts 那处注释）。 */
 .novel-card-head { display: block; }
 .novel-card-now {
   position: absolute; top: var(--novel-sp-2); left: var(--novel-sp-2); z-index: 1;
@@ -449,7 +412,7 @@ export const TTS_CSS = `
 .novel-tts-edit-form {
   display: flex; flex-direction: column; gap: var(--novel-sp-2);
   max-height: 60vh; overflow-y: auto;
-  /* 展开组时滚动条会出现：预留槽位（不挤动布局）并留一点右缘呼吸，输入框不贴滚动条 */
+  /* 展开组时滚动条会出现：预留槽位（不挤动布局）并留一点右缘呼吸。 */
   scrollbar-gutter: stable; padding-right: var(--novel-sp-2);
 }
 .novel-tts-edit-field { display: flex; flex-direction: column; gap: 2px; }

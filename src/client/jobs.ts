@@ -8,13 +8,10 @@ import { createJobChannel } from './job-channel.js'
 import { STATUS_POLL_MS } from './util.js'
 
 /**
- * 后台任务面：导入/批量验证跑在服务端，客户端只是提交者与观察者——
- * 关设置、切换界面、刷新页面都不影响任务；常驻状态层（`shell.overlay`）单实例轮询，
- * 结果写进本模块的任务镜像，视图环内的消费者只读镜像（`useJobSurface`）。
- *
- * 轮询仪式（挂载即读、读完排下一拍、卸载连 timer 一起撤）住 `client/job-channel.ts` 的纯轮询
- * 那一路；本模块只交取数与镜像写入。任务面这一条**没有身份、没有终态即停**：状态镜像永远接着
- * 看，读面抖动只如实置 `stale`，不把「这一拍没读到」当成任务结束了。
+ * 后台任务面：导入/批量验证跑在服务端，客户端只是提交者与观察者——关设置、切界面、刷新页面都不影响任务。
+ * 常驻状态层（`shell.overlay`）单实例轮询，结果写进本模块的任务镜像，视图环内的消费者只读镜像。
+ * 轮询仪式住 `client/job-channel.ts` 的纯轮询那一路；本模块只交取数与镜像写入。任务面这一条
+ * **没有身份、没有终态即停**：读面抖动只如实置 `stale`，不把「这一拍没读到」当成任务结束了。
  */
 
 export async function startImportJob(files: Array<{ name: string; text: string }>): Promise<{ jobId: string }> {
@@ -35,12 +32,9 @@ export interface VerifyDeps {
   refresh?: () => void
 }
 
-/** 书源验证的领域动作（验证编排收拢于此）。
- *  三个入口（待办箱 / 行内「验证/重验」/ 批量「验证所选」）只表达「验证哪些源」；提交后的编排
- *  收在这一处：成功 → 催任务读面（源列表刷新归任务终态，`SettingsSection` 按 job.id 记账一次）；
- *  失败 → 一处反馈（文案单点 `sources.verify.startFailed`；三处入口不要各持一份，否则一改即漂移）。
- *  ids 在此按点击时快照：调用方传进来的数组可能随后变异，POST 载荷不许跟着动。
- *  `t` 缺省 zhTranslate：三个入口都从 `useCopy()` 交当前 `t`，失败那句与入口同语言。 */
+/** 书源验证的领域动作：三个入口只表达「验证哪些源」，提交后的编排收在这一处——成功 → 催任务读面
+ *  （源列表刷新归任务终态）；失败 → 一处反馈（文案单点 `sources.verify.startFailed`）。
+ *  ids 按点击时快照：调用方传进来的数组可能随后变异，POST 载荷不许跟着动。 */
 export async function startSourceVerification(
   ids: string[], deps: VerifyDeps, t: Translate = zhTranslate,
 ): Promise<void> {
@@ -56,17 +50,12 @@ export async function fetchJobStatus(): Promise<JobState | null> {
   return (await apiGet<{ job: JobState | null }>(ROUTES.sourcesJobStatus.path)).job
 }
 
-/** 最近一次导入任务的模块级缓存：
- *  服务端单任务槽被 probe 任务覆盖后，导入汇总条仍要可看——轮询见到 import 任务即缓存。
- *  模块级：设置区卸载重挂载也不丢。 */
+/** 最近一次导入任务的模块级缓存：服务端单任务槽被 probe 覆盖后，导入汇总条仍要可看；设置区卸载也不丢。 */
 let lastImportJob: JobState | null = null
 export function getLastImportJob(): JobState | null { return lastImportJob }
 
-/** 轮询取数依赖（SettingsDeps.fetchJobStatus 的最小面，补完 seam）：
- *  生产缺省真实现；测试注入假取数 + 假时钟——轮询节拍第一次变得可测。
- *  本地声明而不引 deps.ts 的类型：避免 deps.ts(值) ↔ jobs.ts 的环。
- *  节拍不作为注入格：它的家只有 `STATUS_POLL_MS` 一个，注入一格却无人驱动，等于把 interface
- *  开得比需要宽（这批 seam 收窄的立意正是「成员数就是每条用例的固定成本」）。 */
+/** 轮询取数依赖：生产缺省真实现；测试注入假取数 + 假时钟——轮询节拍第一次变得可测。
+ *  本地声明而不引 deps.ts 的类型：避免值环。节拍不作为注入格：它的家只有 `STATUS_POLL_MS` 一个。 */
 export interface JobStatusDeps {
   fetchJobStatus: () => Promise<JobState | null>
 }
@@ -75,9 +64,8 @@ export interface JobStatusDeps {
 const prodJobStatusDeps: JobStatusDeps = { fetchJobStatus }
 
 // ── 任务现场的唯一镜像 ────────────────────────────────────────────────
-/** 为什么住模块 store 而不是 props/hook 局部 state：轮询单实例住在**面板之外**的常驻状态层
- *  （`shell.overlay`），与书源管理区不在同一分支，props 传不过去；轮询若住面板内则切走即停、
- *  读数即消失。口径与 transient / sourceListUi 同类：跨卸载要活的现场走模块级 store，测试有复位口。 */
+/** 为什么住模块 store：轮询单实例住在面板之外的常驻状态层，props 传不过去；轮询若住面板内则
+ *  切走即停。跨卸载要活的现场走模块级 store，测试有复位口。 */
 const jobSurface = createStore<{ job: JobState | null; stale: boolean }>({ job: null, stale: false })
 const jobTick = createStore<{ n: number }>({ n: 0 })
 const jobOpen = createStore<{ pending: OpenTarget }>({ pending: null })
@@ -104,10 +92,8 @@ export function resetJobSurface(): void {
 }
 
 /** 唯一轮询驱动：挂载即拉 + `STATUS_POLL_MS` 节拍 + `refreshJob()` 立刻重拉；结果写 `jobSurface`。
- *  抖动时保留旧值但如实置 `stale`（不静默停在最后一帧）。卸载即停（不许孤儿轮询）。
- *  任务状态镜像这一条没有推送可用、没有身份判据，故读面失败返回「继续看」而不是收手。
- *  取数走注入 deps（useLatest ref 进 effect）：deps 若是每 render 新字面量，直接进
- *  依赖数组会每帧重启轮询，故 effect 只认 tick。 */
+ *  抖动时保留旧值但如实置 `stale`。任务镜像没有推送、没有身份判据，故读面失败返回「继续看」。
+ *  取数走 useLatest ref：deps 若是每 render 新字面量，直接进依赖数组会每帧重启轮询。 */
 export function useJobPolling(deps: JobStatusDeps = prodJobStatusDeps): void {
   const { n } = useStore(jobTick)
   const depsRef = useRef(deps)
@@ -134,8 +120,7 @@ export function useJobPolling(deps: JobStatusDeps = prodJobStatusDeps): void {
   }, [n])
 }
 
-/** 标签缺省 zhTranslate：未接 locale 的调用方（测试直渲 / 宿主未提供 locale 服务）保持既有中文；
- *  有 t 就传——字典是真源，这里不再持有第二份中文。 */
+/** 标签缺省 zhTranslate：未接 locale 的调用方保持既有中文；有 t 就传——字典是真源。 */
 export function jobKindLabel(kind: JobState['kind'], t: Translate = zhTranslate): string {
   return kind === 'import' ? t('job.kind.import') : t('job.kind.probe')
 }

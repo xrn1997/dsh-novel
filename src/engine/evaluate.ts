@@ -29,7 +29,6 @@ export interface TraceStep {
   segmentKind: Segment['kind']
   /** 节点/条目数（Value 记 1、Miss 记 0）；js 段为 null */
   hits: number | null
-  /** 取值预览（截断 80 字符） */
   preview: string
   jsLogs?: string[]
   error?: { code: 'UnsupportedRuleError' | 'RuleEvalError' | 'JsSandboxError'; message: string }
@@ -45,10 +44,9 @@ export interface TraceResult {
 // ── 公开接口 ───────────────────────────────────────────────────────────
 
 /**
- * 总装求值：parse → 逐分支逐段求值 → 组合符合并 → 反序 → `##` 替换尾。
- * 收到 ParsedRule 时直通内部 runner，不重 parse。
- * 引擎语义：Miss 是值（透传/合并按组合符口径）；UnsupportedRuleError /
- * RuleEvalError / JsSandboxError 一律不吞，向上抛（trace 只由 evaluateWithTrace 收集）。
+ * 总装求值：parse → 逐分支逐段求值 → 组合符合并 → 反序 → `##` 替换尾。收到 ParsedRule 时直通 runner。
+ * 引擎语义：Miss 是值（透传/合并按组合符口径）；三类引擎错误一律不吞，向上抛（trace 只由
+ * evaluateWithTrace 收集）。
  */
 export async function evaluate(
   rule: ParsedRule | string,
@@ -106,9 +104,8 @@ interface Runtime {
   $(): CheerioAPI
   /** 整页文本（allinone / 独立净化用）：html 优先，否则 json 序列化文本 */
   pageText(): string
-  /** JSONPath 求值数据：ctx.json 优先；缺席且 html 是合法 JSON 时回退解析 html
-   *  （**内容判定 + 整体解析**：html 是合法 JSON 就整份当 JSON 解析，不放它空手而回——
-   *  搜索链路只传 html 不传 json，不回退的话所有 $. 规则对 JSON API 源恒 Miss） */
+  /** JSONPath 求值数据：ctx.json 优先；缺席且 html 是合法 JSON 时回退解析 html（搜索链路只传 html 不传
+   *  json，不回退的话所有 `$.` 规则对 JSON API 源恒 Miss） */
   jsonData(): unknown
   /** java.getString* 的递归求值回调（同步子规则接线口） */
   evaluateRef: EvaluateRef
@@ -132,9 +129,8 @@ function makeRuntime(ctx: EvalContext, facet: Facet, usage: RuleUsage): Runtime 
       }
       return jsonValue
     },
-    // 子规则对「给定数据」求值：data 作为子规则的 html 上下文（与 host.result 同源）。
-    // json 必须摘掉：外层是 JSON 页时，子规则拿到的若是 HTML 片段，留着 ctx.json 会让
-    // isJsonRule 把 `div.x` 这类选择器判成 JSONPath 而静默 Miss。
+    // 子规则对「给定数据」求值：data 作为子规则的 html 上下文（与 host.result 同源）。json 必须摘掉：
+    // 外层是 JSON 页时子规则拿到 HTML 片段，留着 ctx.json 会让 isJsonRule 把 `div.x` 判成 JSONPath 而静默 Miss。
     evaluateRef: (sub, data) => {
       const subCtx = { ...ctx, html: textOf(data ?? ''), json: undefined }
       return runParsedSync(
@@ -148,21 +144,18 @@ function makeRuntime(ctx: EvalContext, facet: Facet, usage: RuleUsage): Runtime 
 
 /** JSONPath 求值数据解析住在 variables.ts（resolveJsonData）——打破 evaluate ↔ variables 运行时环 */
 
-/** 独立净化形态（##a##b，branches 为空）：基值 = 整页原文（html 优先、否则 json 序列化文本），
- * 不经 DOM——JSON 页（无 html）以序列化文本为基值净化 */
+/** 独立净化形态（##a##b，branches 为空）：基值 = 整页原文，不经 DOM */
 function standaloneBase(rt: Runtime): EngineValue {
   return { kind: 'value', text: rt.pageText() }
 }
 
 // ── 链语义单点（双 runner 收拢）──────────────────────────────────────
 //
-// 一条取值链的执行语义只此一份，以 generator 表达：非 js 段同步推进，js 段 yield 出完整 evalJs
-// 入参给驱动器。两个驱动器只喂结果、零链知识：异步驱动（主路径）await 回喂；同步驱动
-// （java.getString* 的 evaluateRef 专用）遇第一次 yield 即「子规则内不支持 js 段」宁炸不猜。
-// 两个驱动器只喂结果，不得各自实现链语义；同步环路的覆盖由
-// tests/engine/evaluate-sync-loop.test.ts 钉住。
+// 一条取值链的执行语义只此一份，以 generator 表达：非 js 段同步推进，js 段 yield 出完整 evalJs 入参给驱动器。
+// 两个驱动器只喂结果、零链知识：异步驱动 await 回喂；同步驱动（evaluateRef 专用）遇第一次 yield 即
+// 「子规则内不支持 js 段」宁炸不猜。同步环路由 tests/engine/evaluate-sync-loop.test.ts 钉住。
 
-/** 驱动器回喂给 generator 的求值结局（取值 + 日志）；驱动器对段零知识。 */
+/** 驱动器回喂给 generator 的求值结局（取值 + 日志）。 */
 type JsOutcome = Awaited<ReturnType<typeof evalJs>>
 
 function* ruleGen(
@@ -186,8 +179,8 @@ function* branchGen(
   for (let i = 0; i < branch.segments.length; i++) {
     const seg = branch.segments[i]
     const segRaw = branch.raws[i]
-    // 建支不变量：raws 与 segments 一一对应（parse 的每条分支都成对 push），i 在 segments 界内即两者
-    // 都在界内。缺项只可能是 AST 形状坏了——按段级定位如实抛，不当成「这一段不存在」静默跳过去。
+    // 建支不变量：raws 与 segments 一一对应（parse 每条分支都成对 push）。缺项只可能是 AST 形状坏了——
+    // 按段级定位如实抛，不当成「这一段不存在」静默跳过。
     if (seg === undefined || segRaw === undefined) {
       throw new RuleEvalError('段表与段原文不同长', {
         facet: rt.facet, segmentIndex: offset + i, segmentRaw: '', hits: 0,
@@ -198,16 +191,14 @@ function* branchGen(
       checkChainStart(seg, i, loc, rt.facet)
       if (seg.kind === 'js') {
         const prev: EngineValue | null = cur // 首段（prev=null）时 host.result 取整页原文
-        // 驱动器经 gen.throw(e) 把 evalJs 失败投回此处——错误步与重抛走同一条 catch（单点）
-        // scriptForm:true（@js 段口径）：最后一个表达式的值即结果。不要改回 wrapped async IIFE——
-        // 无 return 的表达式会恒 undefined → Miss，`$.id@js:"…"+result` 这类形态会整批静默取空。
-        // **插值先重写规则文本本身，再按 mode 分发**，故 js 段代码里的 `{{…}}` 先按当前链上下文
-        // 插值（不插值就把字面花括号发上网打到 404；形态计数只能按真入口重算，故不写「N 源在用」）。
-        // 插值段 Miss → 整段 Miss，与模板字面段同一口径。
+        // 驱动器经 gen.throw(e) 把 evalJs 失败投回此处——错误步与重抛走同一条 catch（单点）。scriptForm:true
+        // （@js 段口径）：最后一个表达式的值即结果。不要改回 wrapped async IIFE——无 return 的表达式会恒
+        // undefined → Miss，`$.id@js:"…"+result` 这类形态会整批静默取空。插值先重写规则文本本身、再按
+        // mode 分发，故 js 段代码里的 `{{…}}` 先按当前链上下文插值（不插值就把字面花括号发上网打到 404）。
         let code = seg.code
         if (code.includes('{{')) {
-          // **只认双花括号**（口径住 literal.splitLiteral 的 doubleBraceOnly）：js 文本里的
-          // `${expr}` 是 JS 模板字面量，当 JSONPath 插值会整段 Miss；`@get:` 同理由脚本自己处理。
+          // **只认双花括号**（口径住 literal.splitLiteral 的 doubleBraceOnly）：js 文本里的 `${expr}` 是
+          // JS 模板字面量，当 JSONPath 插值会整段 Miss。
           const rewritten: EngineValue = yield* interpolateTemplate(code, cur, rt, loc, { doubleBraceOnly: true })
           if (rewritten.kind === 'miss') {
             cur = rewritten
@@ -216,20 +207,15 @@ function* branchGen(
           }
           code = engineValueToString(rewritten, 'inner')
         }
-        // js 文本的 `##` 尾：插值之后对 js 文本同样切 `##`——首段才是代码、其余是
-        // 「对结果做正则净化」的替换尾；首段为空则整块只当净化步（输入里有 `<js>##[…]</js>` 形态，
-        // 对应「首段非空才执行代码」那道门）。替换**不另写一份**：走 `replace.applyReplaces`，
-        // 与规则级 `##` 同一个家——miss/nodes 透传（绝不在这里把「没取到」折成空串）、List 逐项、
-        // 空 pattern 整步跳过、非法正则抛带段定位的 RuleEvalError。
-        // `onlyOne` 取「切出多于三段」：`##p##r##` 回的是**首个匹配段**的替换结果、
-        // 无匹配给空串，不是「原文里改第一处」。这条轴与规则级仍待裁的配对分叉同属
-        // `a-replace-tail-single-pair`，此处按上述口径实现，规则级那条不跟着动。
+        // js 文本的 `##` 尾：插值之后切 `##`——首段是代码、其余是「对结果做正则净化」的替换尾；首段为空则整块
+        // 只当净化步。替换**不另写一份**：走 `replace.applyReplaces`，与规则级 `##` 同一个家。`onlyOne` 取
+        // 「切出多于三段」：`##p##r##` 回首个匹配段的替换结果、无匹配给空串（见 `a-replace-tail-single-pair`）。
         const jsParts = code.split('##')
         const jsCode = jsParts.at(0)
         const jsTail = jsParts.length > 1 ? jsParts.slice(1) : null
         let out: EngineValue = cur ?? { kind: 'miss', detail: '空链值' }
         let jsLogs: string[] | undefined
-        // 首段取不到（split 恒有首段，这只可能是编译器保守）与首段为空同一落点：整块只当净化步
+        // 首段取不到与首段为空同一落点：整块只当净化步
         if (jsCode !== undefined && jsCode.trim() !== '') {
           const outcome: JsOutcome = yield {
             code: jsCode,
@@ -261,8 +247,8 @@ function* branchGen(
         continue
       }
       if (seg.kind === 'put') {
-        // @put 是副作用段：写 ctx.vars 后链值透传，不替换 cur。值按取值口径求值
-        // （put = put(key, getString(value))）：基内容 = 当前链值，未起链则是整页原文。
+        // @put 是副作用段：写 ctx.vars 后链值透传，不替换 cur。值按取值口径求值（基内容 = 当前链值，
+        // 未起链则是整页原文）。
         evalPut(seg.pairsRaw, rt.ctx, loc, rt.facet,
           (rule) => rt.evaluateRef(
             subRuleOf(rule, rt.facet),
@@ -272,16 +258,14 @@ function* branchGen(
         continue
       }
       if (seg.kind === 'literal') {
-        // 模板字面段：{{expr}} 插值（js 部分经驱动器求值）后整段产出 Value——链值被替换
-        // （字面段语义：插值结果即整段值，替换链值；`{{result}}` 引用当前链值）
+        // 模板字面段：{{expr}} 插值后整段产出 Value，替换链值（`{{result}}` 引用当前链值）
         cur = yield* interpolateTemplate(seg.raw, cur, rt, loc)
         if (collect) collect.push(stepOf(seg, loc, cur))
         continue
       }
       if (seg.kind === 'regexRow') {
-        // AllInOne 行模板段（矩阵 a-allinone-group-zero）：值 = 用当前行把 `$n` 绑好后的原文，
-        // **不求值**。没有行（非 AllInOne 条目 / 探针直接求这条规则）时给原文——绑定失败回退成
-        // 规则原文的落点如此，别在这里炸（这条规则本身在非行上下文里没有别的解释）。
+        // AllInOne 行模板段（矩阵 a-allinone-group-zero）：值 = 用当前行把 `$n` 绑好后的原文，**不求值**；没有行
+        // （非 AllInOne 条目 / 探针直接求这条规则）时给原文——别在这里炸。
         const row = rt.ctx.regexRow
         cur = { kind: 'value', text: row === undefined ? seg.raw : bindRegexRow(seg.raw, row) }
         if (collect) collect.push(stepOf(seg, loc, cur))
@@ -298,14 +282,9 @@ function* branchGen(
 }
 
 /**
- * 模板内嵌段插值（**字面段与 js 段代码文本共用这一份**）：把 `{{expr}}` 与 `{$.path}`
- * 换成字符串后拼回原文。
- *
- * 顺序是「先重写**规则文本本身**，再按 mode 分发」——因为重写的就是文本，所以对 `@js:` / `<js>`
- * 代码里的字符串字面量同样生效（输入脚本有靠它在 js 代码里拼 URL 的形态）。
- *
- * 任一插值段 Miss → 返回该 Miss（调用方整段失败）：把 Miss 折成空串会产出**语法合法的残 URL**
- * （`http://api/novel/{{$.id}}` → `http://api/novel/`），拿它发请求比报错更坏。
+ * 模板内嵌段插值（**字面段与 js 段代码文本共用这一份**）：把 `{{expr}}` 与 `{$.path}` 换成字符串后拼回原文。
+ * 顺序是「先重写**规则文本本身**，再按 mode 分发」——重写的就是文本，故对 `@js:` / `<js>` 代码里的字符串字面量
+ * 同样生效。任一插值段 Miss → 返回该 Miss：把 Miss 折成空串会产出**语法合法的残 URL**，拿它发请求比报错更坏。
  */
 function* interpolateTemplate(
   raw: string, cur: EngineValue | null, rt: Runtime, loc: SegmentLoc,
@@ -348,7 +327,7 @@ function* interpolateTemplate(
   return missPart ?? { kind: 'value', text: out }
 }
 
-/** 异步驱动：js 段 await evalJs 回喂；evalJs 失败经 gen.throw 投回 generator（错误步单点在内） */
+/** 异步驱动：js 段 await evalJs 回喂；evalJs 失败经 gen.throw 投回 generator。 */
 async function driveAsync(gen: Generator<JsCall, EngineValue, JsOutcome>): Promise<EngineValue> {
   let step = gen.next()
   while (!step.done) {
@@ -364,8 +343,7 @@ async function driveAsync(gen: Generator<JsCall, EngineValue, JsOutcome>): Promi
   return step.value
 }
 
-/** 同步驱动（evaluateRef 专用，入口 `runParsedSync`；异步侧孪生是 `runParsed` + `driveAsync`）：
- *  第一次 yield 即子规则含 js 段——宁炸不猜。链语义与异步侧同源，单点在 `ruleGen`。 */
+/** 同步驱动（evaluateRef 专用）：第一次 yield 即子规则含 js 段——宁炸不猜。链语义单点在 `ruleGen`。 */
 function driveSync(gen: Generator<JsCall, EngineValue, JsOutcome>, facet: Facet): EngineValue {
   const step = gen.next()
   if (!step.done) {
@@ -396,14 +374,12 @@ function runParsedSync(parsed: ParsedRule, ctx: EvalContext, facet: Facet): Engi
 
 function checkChainStart(seg: Segment, i: number, loc: SegmentLoc, facet: Facet): void {
   if (i === 0) return
-  // jsonpath 中链合法——「js 返回对象再取字段」形态 `<js>{...}</js>$.a.b` 必须走通：
-  // 中链 jsonpath 照常按 JSON 求值（不分发 mode 的快捷路径会让这类源整体失败）
+  // jsonpath 中链合法——「js 返回对象再取字段」形态 `<js>{...}</js>$.a.b` 必须走通
   if (seg.kind === 'allinone') {
     throw new UnsupportedRuleError('AllInOne 段必须是分支首位', { ...loc, facet })
   }
 }
 
-/** 链中段（不含 js/put/literal/regexRow——四者在 branchGen 内联处理） */
 type ChainSegment = Exclude<Segment, { kind: 'js' } | { kind: 'put' } | { kind: 'literal' } | { kind: 'regexRow' }>
 
 /** 非 js 段求值：选择段消费 nodes 链；Miss 穿透（选择/取值段对 Miss 上游原样透传） */
@@ -417,7 +393,7 @@ function evalNonJs(
   const $ = (): CheerioAPI => rt.$()
   switch (seg.kind) {
     case 'css': {
-      if (cur?.kind === 'miss') return cur // Miss 穿透：选择/取值段对 Miss 上游原样透传
+      if (cur?.kind === 'miss') return cur // Miss 穿透（原样透传，不折成空）
       return evalCss(seg, $(), requireNodes(cur, rt, loc), loc, rt.facet, cur === null)
     }
     case 'xpath': {
@@ -428,10 +404,8 @@ function evalNonJs(
     }
     case 'default': {
       if (cur?.kind === 'miss') return cur
-      // 链首未起链：**取值段**以文档根为上下文取一次。按 `$('*')`
-      // 全集会让每个祖先各出一份——同名文本会被重复多遍（章名一遍变数遍）。
-      // 选择段（class/tag/`text.串`）仍从全集往下选。
-      // 裸词终端在 JSON 条目上 = 属性读（见 jsonObjectOf）：`url` 与 `href`/`src` 两种形态
+      // 链首未起链：**取值段**以文档根为上下文取一次（按 `$('*')` 全集会让每个祖先各出一份、同名文本重复多遍）。
+      // 选择段仍从全集往下选。裸词终端在 JSON 条目上 = 属性读（见 jsonObjectOf）。
       const propName = seg.mode === 'attr' ? seg.arg
         : (seg.mode === 'href' || seg.mode === 'src') && seg.arg === null ? seg.mode
           : null
@@ -445,8 +419,7 @@ function evalNonJs(
     case 'jsonpath': {
       if (cur?.kind === 'miss') return cur
       if (cur === null) return evalJsonPath(seg.path, rt.jsonData(), loc, rt.facet)
-      // 中链 jsonpath：上游 Value → 按 JSON 解析后求值；
-      // List → 逐项求值合并（「js 返回对象数组再取字段」形态）；节点集/正则结果 → 宁炸
+      // 中链 jsonpath：上游 Value → 按 JSON 解析后求值；List → 逐项求值合并；节点集/正则结果 → 宁炸
       if (cur.kind === 'value') return evalJsonPath(seg.path, tryParseJson(cur.text), loc, rt.facet)
       if (cur.kind === 'list') {
         const items: string[] = []
@@ -454,7 +427,7 @@ function evalNonJs(
         for (const it of cur.items) {
           const v = evalJsonPath(seg.path, tryParseJson(it), loc, rt.facet)
           if (v.kind === 'miss') { misses++; continue }            // 取位失败 → 该条目不贡献
-          if (v.kind === 'list') { items.push(...v.items); continue } // 集合型 → 合并条目（空集合不贡献元素）
+          if (v.kind === 'list') { items.push(...v.items); continue } // 集合型 → 合并条目
           items.push(engineValueToString(v, 'inner'))               // 命中即收：'' 是值，不是取位失败
         }
         // 取值规约（与 jsonpath 链首、select.reducePicked 同口径）：Miss 与空 List 绝不折叠。
@@ -469,21 +442,18 @@ function evalNonJs(
     case 'allinone':
       return evalAllInOne(seg, rt.pageText(), loc, rt.facet)
     case 'getvar':
-      // @get 产出存储值（Value/Miss），合法替换链值
       return evalGetVar(seg.name, rt.ctx)
   }
 }
 
-/** 非 JSON 文本 → undefined（jsonpath 如实 Miss，不抛——与 resolveJsonData 的非法 JSON 口径一致） */
+/** 非 JSON 文本 → undefined（jsonpath 如实 Miss，不抛） */
 function tryParseJson(text: string): unknown {
   try { return JSON.parse(text) as unknown } catch { return undefined }
 }
 
-/** **裸词终端的 JSON 上下文**：当前内容本身是 JSON 对象时，裸词终端（`url`/`name`/…）按**属性读**
- *  而不是 DOM 属性——`ruleChapterUrl: url` 这类不带 `$.` 的写法靠这条（JSON 条目在本仓以原文串落在
- *  html，按 DOM 属性处理会恒 0 命中、逐章回退目录页，审计归因见矩阵行 `a-json-context-terminal`）。
- *  只在当前内容本身是合法 JSON 对象时改走 JSONPath；数组与 HTML 片段一律返回 undefined，
- *  因此 `img@_src` 这类 DOM 形态不受影响。 */
+/** **裸词终端的 JSON 上下文**：当前内容本身是 JSON 对象时，裸词终端（`url`/`name`/…）按**属性读**而不是
+ *  DOM 属性——`ruleChapterUrl: url` 这类不带 `$.` 的写法靠这条（按 DOM 属性处理会恒 0 命中、逐章回退
+ *  目录页，见矩阵行 `a-json-context-terminal`）。数组与 HTML 片段返回 undefined，故 `img@_src` 不受影响。 */
 function jsonObjectOf(cur: EngineValue | null, rt: Runtime): unknown {
   const text = cur === null ? rt.pageText() : cur.kind === 'value' ? cur.text : undefined
   if (text === undefined || !text.trimStart().startsWith('{')) return undefined
@@ -491,30 +461,27 @@ function jsonObjectOf(cur: EngineValue | null, rt: Runtime): unknown {
   return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : undefined
 }
 
-/** 模板字面段的 JSON 数据源：链上有值 → 优先按上游文本解析（toc 条目 JSON 形态）；否则整页口径 */
+/** 模板字面段的 JSON 数据源：链上有值 → 优先按上游文本解析；否则整页口径 */
 function literalJsonData(rt: Runtime, cur: EngineValue | null): unknown {
   if (cur?.kind === 'value') return tryParseJson(cur.text)
   if (cur?.kind === 'list') {
     const first = cur.items.at(0)
-    // 空 List 没有首项 → 落回整页口径（列表为空不是「首项为空串」，不补造一条）
     if (first !== undefined) return tryParseJson(first)
   }
   return rt.jsonData()
 }
 
-/** 模板字面段里 `{{规则}}` 的子求值上下文：上游 Value → 其文本作为 html 上下文（条目片段语义） */
 function literalSubCtx(rt: Runtime, cur: EngineValue | null): EvalContext {
   if (cur?.kind === 'value') return { ...rt.ctx, html: cur.text }
   return rt.ctx
 }
 
-/** 选择段上游解析：未起链 → 根节点集 $('*')；Miss → 原样穿透；
- *  Value（js 段产物/取值段产物）→ 按 HTML 解析为新上下文（**字符串当新文档继续选**：
- *  `<js>…</js>@css:.x` 中 js 返回的字符串被当作新文档继续选择）；其余 → RuleEvalError */
+/** 选择段上游解析：未起链 → 根节点集 $('*')；Value → 按 HTML 解析为新上下文（**字符串当新文档继续选**）；
+ *  Miss 由调用方提前短路（此分支仅兜底）；其余 → RuleEvalError */
 function requireNodes(cur: EngineValue | null, rt: Runtime, loc: SegmentLoc): Cheerio<AnyNode> {
   if (cur === null) return rt.$()('*')
   if (cur.kind === 'miss') {
-    // 上游 Miss 时由调用方（evalNonJs）提前短路，此分支仅兜底
+
     throw new RuleEvalError('上游结果是 Miss，无法继续选择', { ...loc, facet: rt.facet, hits: 0 })
   }
   if (cur.kind === 'value') {
@@ -538,20 +505,16 @@ function finalize(parsed: ParsedRule, values: EngineValue[], facet: Facet, rt: R
   // 取值用途的链终点串化**先于** ## 替换（替换作用于已转成字符串的结果）
   if (rt.usage === 'value' && value.kind === 'nodes') value = nodesAsString(value.nodes)
   if (parsed.replaces.length > 0) {
-    // `##` 尾的 `{{chapter.title}}` 类插值（替换规则串同样先插值再当正则——
-    // 去章标题行的替换尾就依赖这个次序）；绑定缺位保持原文字面
+    // `##` 尾的 `{{chapter.title}}` 类插值（替换规则串先插值再当正则——去章标题行依赖这个次序）
     value = applyReplaces(value, parsed.replaces, parsed.onlyOne, { facet }, interpBindings(rt))
   }
   return value
 }
 
 /**
- * 取值用途的链终点节点集 → 字符串（**取值出口从不因「剩节点集」而失败**）：
- * 逐元素 **outerHTML**、以换行拼接（元素转字符串 = outerHtml；cheerio 的
- * `selection.toString()` 是逐个 outerHTML **无分隔**拼接，值面上换行分隔更常见，
- * 故此处显式 join('\n')，不拿它兜底）。
- * 只在这一处发生：`nodes` 作为中间值仍是节点集（选择段接选择段照常），列表用途
- * （`ruleBookList`/`ruleChapterList`）也照旧交服务层逐条目求值。
+ * 取值用途的链终点节点集 → 字符串（**取值出口从不因「剩节点集」而失败**）：逐元素 **outerHTML**、
+ * 以换行拼接（cheerio 的 `selection.toString()` 是逐个 outerHTML **无分隔**拼接，值面上换行分隔更常见，
+ * 故显式 join('\n')）。只在这一处发生：`nodes` 作为中间值仍是节点集，列表用途照旧交服务层逐条目求值。
  */
 function nodesAsString(nodes: Cheerio<AnyNode>): EngineValue {
   const parts: string[] = []
@@ -580,11 +543,9 @@ function interpBindings(rt: Runtime): Record<string, string> {
 
 // ── trace 组装 ─────────────────────────────────────────────────────────
 
-/** js 宿主注入：host.result = 上一段结果的序列化；首个段 → 整页原文（与独立净化同口径）。
- *  resultKind 随行：nodes/page(html) 时沙箱把 result 包成元素包装对象（`result.attr()` 形态）。
- *  **列表用途下的 Miss 也报 nodes**：列表用途下 result 恒是节点集合，零命中只是**空集合**
- *  （`.toArray()`/`.size()` 照样在）；按原文字符串绑定会让脚本里共用 toc 模板的
- *  `result.toArray()` 炸成 JsSandboxError，把站点侧事实误记成引擎侧失败。取值路径不变（String 语义）。 */
+/** js 宿主注入：host.result = 上一段结果的序列化（首个段 → 整页原文）。**列表用途下的 Miss 也报 nodes**：
+ *  列表用途下 result 恒是节点集合，零命中只是空集合（`.toArray()` 照样在）；按原文字符串绑定会让脚本里
+ *  共用 toc 模板的 `result.toArray()` 炸成 JsSandboxError，把站点侧事实误记成引擎侧失败。 */
 function jsHostOf(prev: EngineValue | null, rt: Runtime): JsHost {
   const kind = prev === null ? 'page' : prev.kind
   return {
@@ -597,8 +558,8 @@ function jsHostOf(prev: EngineValue | null, rt: Runtime): JsHost {
 }
 
 function serialize(v: EngineValue): string {
-  // 序列化单点归 js-utils；@js host.result 的 nodes 口径 = outerHTML（'outer'）——
-  // 与 java.getString 的 innerHTML 口径由参数显式区分，不再各存一份实现。
+  // 序列化单点归 js-utils；@js host.result 的 nodes 口径 = outerHTML，与 java.getString 的 innerHTML 口径
+  // 由参数显式区分。
   return engineValueToString(v, 'outer')
 }
 
@@ -636,7 +597,6 @@ function stepOf(seg: Segment, loc: SegmentLoc, out: EngineValue, logs?: string[]
   return step
 }
 
-/** @put 步（副作用段）：链值透传——trace 显示透传态（pairs 原文见 segmentRaw） */
 function putStepOf(loc: SegmentLoc, cur: EngineValue | null): TraceStep {
   return {
     segmentIndex: loc.segmentIndex,

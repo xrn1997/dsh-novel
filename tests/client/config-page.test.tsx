@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // 每条用例都要挂载整页配置页（含引擎清单），单次 3 秒上下是常态；全量并行跑时会挤过默认的
 // 5 秒上限，于是整份文件统一放宽，免得随机红。
-const SLOW_PAGE = 15_000
+/** jsdom 排版下该页最重的交互实测 ~16s（回车跳转那条），超时留一倍余量——不是掩盖变慢。 */
+const SLOW_PAGE = 30_000
 import { apply } from '../../src/client/index.js'
 import { ttsDefaultsFromSettings } from '../../src/client/config-page.js'
 import { enTranslate } from '../../src/client/copy/index.js'

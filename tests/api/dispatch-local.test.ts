@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import iconv from 'iconv-lite'
+import { resolveConfig } from '../../src/config.js'
 import { ReadingService } from '../../src/services/reading.js'
 import { LocalBooks } from '../../src/services/localbooks.js'
 import type { ChapterContent, ChapterEntry, LocalImportResponse, LocalImportWarning, ShelfEntry } from '../../src/shared/wire.js'
@@ -11,7 +12,7 @@ let dataDir: string
 beforeAll(async () => {
   dataDir = await makeTempDir('novel-apil-')
   // 本地书面归门面：LocalBooks 在 create 内装配；1024 上限同时是流式传输上限
-  svc = trackService(await ReadingService.create({ dir: dataDir, localImportMaxBytes: 1024, fetchImpl: async () => new Response('', { status: 404 }) }))
+  svc = trackService(await ReadingService.create({ dir: dataDir, config: resolveConfig({ localImportMaxBytes: 1024 }), fetchImpl: async () => new Response('', { status: 404 }) }))
   local = await LocalBooks.create(dataDir, { maxImportBytes: 1024 })   // 仅断言用第二实例（防孤儿用例查文件已删）
   ;({ base, close } = await startServer(svc))
 })

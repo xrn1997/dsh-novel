@@ -18,9 +18,8 @@ import {
 import { ttsErrorMessage } from './tts-error.js'
 import { useTtsSources } from './use-tts-sources.js'
 
-/** 条上语速单击循环的档位（设置卡滑杆仍可落到 0.1 的任意档）。升幂排列；当前值不在档位上时
- *  先落到下一个更大的档，越过上限回最低档。两端读 `TTS_RATE` 的定义域，改值域时至少首尾跟着走；
- *  `tests/client/tts-bar.test.tsx` 另钉整张档位表落在定义域内且升序。 */
+/** 条上语速单击循环的档位（设置卡滑杆仍可落到 0.1 的任意档）：升幂排列；当前值不在档位上时先落到
+ *  下一个更大的档，越过上限回最低档。`tests/client/tts-bar.test.tsx` 钉整张表在定义域内且升序。 */
 export const RATE_STEPS = [TTS_RATE.min, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, TTS_RATE.max] as const
 
 function cycleRate(rate: number): number {
@@ -31,17 +30,12 @@ function cycleRate(rate: number): number {
 }
 
 /**
- * 阅读器内嵌听书条：本书是正在听的会话时才由 ReaderView 挂载。
+ * 阅读器内嵌听书条：本书是正在听的会话时才由 ReaderView 挂载。条底跟纸走；设置面板复用共享件
+ * （`TtsSettings.tsx`，与全局迷你条同一份行清单与浮层契约）。条上只管当前段与常用动作——
+ * 「从阅读位置起播」只在这里出现：它读的探针量的是当前打开的书，闸门由挂载条件给出。
  *
- * 条底跟纸走（`.novel-tts-bar` 的 `--novel-paper` 派生，与 `.novel-rdr-bar` 同一条判据），
- * 设置面板复用共享件（`TtsSettings.tsx`，与全局迷你条同一份行清单与浮层契约）。条上只管当前段
- * 与常用动作，引擎 / 音量 / 起播点这类低频设置收进面板——「从阅读位置起播」只在这里出现：它读的
- * 探针量的是**当前打开的书**，而本组件只在「本书 = 正在听的书」时挂载，闸门由挂载条件给出。
- *
- * 进度面只有一条：末行整宽的章内段滑杆。段内时间滑杆不再上条（`ADR-0075`）——听书的落盘与导航
- * 粒度本来就是段，第二条时间轴只让读者多分辨一次「哪条能拖」。
- *
- * 文案全走 `useCopy()`（字典在 `copy/tts.ts`）；播放失败码在这里翻成人话，裸码不上屏。
+ * 进度面只有一条：末行整宽的章内段滑杆（段内时间滑杆不上条，`ADR-0075`——落盘与导航粒度本来就是段）。
+ * 文案全走 `useCopy()`；播放失败码在这里翻成人话，裸码不上屏。
  */
 export interface TtsBarProps {
   darkController: boolean
@@ -58,14 +52,12 @@ export interface TtsBarProps {
 export function TtsBar({ darkController, apiGet, pushError, onLocate, rootRef }: TtsBarProps): ReactNode {
   const t = useCopy()
   const st = useStore(ttsPlayer)
-  // 整块上屏投影（能否暂停 / 连败停的读数 / 空章抑制）：判据全住 `listen-readout.ts`，
-  // 这里不拿计数器对比阈值、也不自己查空章。
+  // 整块上屏投影（能否暂停 / 连败停的读数 / 空章抑制）：判据全住 `listen-readout.ts`，这里不重算。
   const face = listenFaceOf(st)
   const [panelOpen, setPanelOpen] = useState(false)
   const sources = useTtsSources(panelOpen, apiGet, pushError)
 
-  // 定时读数的每秒节拍归 `useTimerReadout`（与浮窗定时 chip 同一份）：不挂表时读数只在会话
-  // 状态变化时挪一格——暂停中与直出型（没有计时介质）下就冻在旧读数上。
+  // 定时读数的每秒节拍归 `useTimerReadout`：不挂表时读数只在会话状态变化时挪一格。
   const timer = useTimerReadout(st, t)
 
   if (!st.active) return null
@@ -155,18 +147,14 @@ export function TtsBar({ darkController, apiGet, pushError, onLocate, rootRef }:
   )
 }
 
-/**
- * 章内段滑杆：**只让这一小块订阅段进度**。timeupdate 约每秒四发，若由 `TtsBar` 订阅，
- * 整条听书条（连同展开的设置卡与它的章名列表）都会跟着重渲；`chapterProgressOf` 的算式
- * 仍只住 `listen-readout.ts`，这里只取成品。
- */
+/** 章内段滑杆：**只让这一小块订阅段进度**——timeupdate 约每秒四发，由 TtsBar 订阅会让整条连同设置卡重渲。
+ *  `chapterProgressOf` 的算式仍只住 `listen-readout.ts`，这里只取成品。 */
 function ChapterSeekRow({ st, hasSegments }: { st: TtsPlayerState; hasSegments: boolean }): ReactNode {
   const t = useCopy()
   const progress = useStore(ttsProgress)
   if (!hasSegments) return null
   const chapter = chapterProgressOf(st, progress, t)
-  // 连续 value 在末段念到段尾时会到 `count`，而滑杆的 domain 是 0..count-1：不夹这一下，
-  // 受控值就超出 max（原生控件会静默夹取，读屏与表单状态却记着越界值）。
+  // 连续 value 在末段念到段尾时会到 `count`，而滑杆 domain 是 0..count-1：不夹这一下受控值就超出 max。
   const value = Math.min(chapter.count - 1, Math.max(0, Math.floor(chapter.value)))
   return (
     <div className="novel-tts-chapter-seek">

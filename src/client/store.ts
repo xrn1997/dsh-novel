@@ -1,14 +1,12 @@
-/** 本仓的客户端本地 store 只要 get/set(patch)/subscribe 三原语与稳定通知时机，
- *  通知时机由 tests/client 的行为网钉住；自己持表而不是接宿主的 store 引擎，裁决见 `ADR-0055`。 */
+/** 本仓的客户端本地 store 只要 get/set(patch)/subscribe 三原语与稳定通知时机，自己持表而不是接宿主的
+ *  store 引擎（`ADR-0055`）。 */
 import { useCallback, useRef, useSyncExternalStore } from 'react'
 import { ls } from './util.js'
 
-/** 轻量 store（useSyncExternalStore 驱动）：只承担**跨卸载要活下来**的现场——视图内路由、偏好、
- *  列表筛选与勾选、任务面镜像、瞬态队列。业务真相仍在服务端、每次挂载经 api 拉；唯一例外是书架的
- *  **读取面与落架账**升格成面板期投影（`client/panel-shelf.ts`，裁决见 `ADR-0046`）。 */
+/** 轻量 store：只承担**跨卸载要活下来**的现场——视图内路由、偏好、列表筛选与勾选、任务镜像、瞬态队列。
+ *  业务真相仍在服务端；唯一例外是书架的读取面与落架账升格成面板期投影（`panel-shelf.ts`，`ADR-0046`）。 */
 export interface Store<T> {
-  // 三格写成属性而非方法简写：它们是**可拆开传递**的裸函数（`useSyncExternalStore` 直接吃
-  // get/subscribe），方法简写会声明一个隐式 this，拆开传就等于丢掉了它——这里根本没有 this 可丢。
+  // 三格写成属性而非方法简写：它们是**可拆开传递**的裸函数，方法简写会带一个隐式 this。
   get: () => T
   set: (patch: Partial<T>) => void
   subscribe: (cb: () => void) => () => void
@@ -29,26 +27,20 @@ export function useStore<T extends object>(store: Store<T>): T {
   return useSyncExternalStore(store.subscribe, store.get, store.get)
 }
 
-/**
- * 窄订阅：只把一格原语投影出来（裁决同 `ADR-0055`——仍是那三原语，这里只加一层读法）。
- * 高频写的 store（播放层每段都动）整店订阅会把无关子树一起拖进重渲染；选择器只认原语，
- * 因为 `useSyncExternalStore` 按引用比快照——每次新建对象或数组就是自旋。
- */
+/** 窄订阅：只把一格原语投影出来（`ADR-0055`）。高频写的 store 整店订阅会拖无关子树一起重渲；选择器
+ *  只认原语——`useSyncExternalStore` 按引用比快照，每次新建对象或数组就是自旋。 */
 export function useStoreValue<T extends object, V extends string | number | boolean | null>(
   store: Store<T>,
   select: (state: T) => V,
 ): V {
-  // 选择器每次渲染都是新闭包：用 ref 跟进最新闭包、用 useCallback 稳定 getSnapshot 身份，
-  // 否则 useSyncExternalStore 每次渲染都会退订重订一次。
+  // 选择器每次渲染都是新闭包：用 ref 跟进最新闭包、用 useCallback 稳定 getSnapshot 身份，否则每次退订重订。
   const selectRef = useRef(select)
   selectRef.current = select
   const read = useCallback(() => selectRef.current(store.get()), [store])
   return useSyncExternalStore(store.subscribe, read, read)
 }
 
-// ── 路由（view 内路由，无 URL 路由）─────────────────────────────
-// 五成员：书架/书城/书源管理是小说视图内**并列 tab**——选择即切换下方内容；
-// 书源管理 = 宿主设置「小说」区块整体（单一归属）。
+// 五成员：书架/书城/书源管理是小说视图内**并列 tab**；书源管理 = 宿主设置「小说」区块整体。
 // reader/search 是 tab 之下的沉浸内容流：顶部 tab 不随行，返回固定落书架。
 export type ViewRoute =
   | { name: 'shelf' }
@@ -63,8 +55,7 @@ export function navigate(route: ViewRoute): void { routeStore.set({ route }) }
 // ── 阅读偏好（localStorage 持久；进度不进 prefs——进度归服务端 shelf）──────
 
 export interface Prefs { fontSize: number; lineHeight: number; measure: number; paperColor: string; darkController: boolean }
-/** measure = 正文列宽（em，随字号缩放）——宽窄档位的口径与设计意图住 prefs-ui.ts；
- *  它是「值槽」的实际值：行内只写 --novel-measure，规则住在样式层（同 --novel-pct 一路）。 */
+/** measure = 正文列宽（em，随字号缩放）：行内只写 --novel-measure，规则住样式层。 */
 export const DEFAULT_PREFS: Prefs = { fontSize: 18, lineHeight: 1.8, measure: 36, paperColor: '#f7f3e8', darkController: false }
 const PREFS_KEY = 'dsh-novel.prefs'
 
@@ -88,8 +79,6 @@ export function setPref(patch: Partial<Prefs>): void {
 
 // ── 书城现场（会话内；不落盘）────────────────────────────────────
 
-/** 书城的会话内现场：记住上次逛的源与分类（**不落盘**——它是交互现场，不是用户偏好；落盘会引入
- *  一份新的持久状态面，收益不抵成本）。空 = 还没选过，由视图回落可选源的第一项与其第一个分类。
- *  浏览轴收成按源后现场多了一根轴：源失效（禁用/删掉）时视图回落第一项并改写这里，不留指向
- *  不存在源的选中态。 */
+/** 书城的会话内现场：记住上次逛的源与分类（**不落盘**——交互现场不是用户偏好）。空 = 还没选过，
+ *  由视图回落第一项；源失效时视图回落第一项并改写这里，不留指向不存在源的选中态。 */
 export const cityStore = createStore<{ sourceId: string | null; kind: string | null }>({ sourceId: null, kind: null })

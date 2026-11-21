@@ -8,25 +8,20 @@ import {
 } from './xml.js'
 
 /**
- * EPUB 包层：把已过安全门的归档读成一份**可判定的书结构**——身份（mimetype）、OPF、
- * manifest、阅读顺序（spine）、目录目标（nav / NCX），外加「哪些读不出」这份事实：包级声明
- * （整本固定版式、正文加密）是书级拒绝，逐文档声明（这一份排不动 / 要靠脚本）只交回痕与路径。
- * 单份文档的解码、只读解析与带预算的 DOM 走法归 `xml.ts`（正文层也要用同一套门与预算）。
+ * EPUB 包层：把已过安全门的归档读成一份**可判定的书结构**——身份（mimetype）、OPF、manifest、阅读顺序
+ * （spine）、目录目标（nav / NCX），外加「哪些读不出」这份事实：包级声明（整本固定版式、正文加密）是书级
+ * 拒绝，逐文档声明（这一份排不动 / 要靠脚本）只交回痕与路径。单份文档的解析与带预算的 DOM 归 `xml.ts`。
  *
- * 三条口径（改动这一层先读它们）：
- *
- * ① **连续阅读顺序 ≠ 目录导航**。阅读单元只按 OPF spine 的 `linear` 主序列排（`spine`），
- *    ZIP 条目顺序、文件名、目录叶条数都不参与。目录是另一棵树（`navigation`）：一个叶条目点的是
- *    「文档 + 文档内锚点」，同一文档的多个锚点各自成条，不复制成多章。两者都不做一一对应的假设。
- * ② **缺目录可以降级，坏目录必须报错**。nav → spine 的 toc 指向的 NCX → 按 spine 造平面导航
- *    （这一步留持久告警）；但「声明了导航文档却读不出 toc」不是缺目录，是坏目录——报错，不静默改走别的路。
- *    toc 的列表标签写成 ul（规范要求 ol）按列表读并留变体告警：结构没有歧义，不算坏目录；连列表都没有才报错。
- * ③ **本层不产出跨半形状**。导航目标是原始路径 + 片段（`{ path, fragment }`），opaque 的 documentId /
- *    锚点绑定归正文层；本层也不读正文、不认识书架与 HTTP。这样「包结构」与「正文规范化」各自可单独测。
+ * ① **连续阅读顺序 ≠ 目录导航**：阅读单元只按 spine 的 `linear` 主序列排，ZIP 条目顺序、文件名、目录叶条数
+ *   都不参与；目录是另一棵树（一个叶条目点「文档 + 锚点」，不复制成多章）。两者都不做一一对应假设。
+ * ② **缺目录可以降级，坏目录必须报错**：nav → spine 的 toc 指向的 NCX → 按 spine 造平面导航（留持久告警）；
+ *   但「声明了导航文档却读不出 toc」是坏目录——报错，不静默改走别的路。toc 的列表写成 ul 按列表读并留变体
+ *   告警（结构没有歧义）；连列表都没有才报错。
+ * ③ **本层不产出跨半形状**：导航目标是原始路径 + 片段，opaque 的 documentId / 锚点绑定归正文层；本层不读正文、
+ *   不认识书架与 HTTP。
  */
 
-/** OCF 的 mimetype 条目取值：本层的身份判据（不导出——归档层按 ZIP 魔数分流，不认这串；
- *  把它挂成公开名字只会让人以为跨层有这个契约，实际消费者只有下面两处） */
+/** OCF 的 mimetype 条目取值：本层的身份判据（不导出——归档层按 ZIP 魔数分流，不认这串）。 */
 const EPUB_MIMETYPE_VALUE = 'application/epub+zip'
 
 const MIMETYPE_ENTRY = 'mimetype'
@@ -84,18 +79,11 @@ export interface EpubNavItem {
 export type EpubNavigationSource = 'nav' | 'ncx' | 'spine'
 
 /**
- * 一份读完的 EPUB 包结构。
- *
- * `spine` 是**主序列**（`spineItems` 里 linear 项的 path，按 spine 顺序）；`spineItems` 保留
- * 留下来的声明（含 linear="no" 的补充文档，指不到文档或不是 XHTML 的条目已被剪掉）——两个字段是
- * 「派生」与「保留下来的声明」的关系，不是两份真相。
- *
- * `encryptedPaths` 是内容加密清单（`encryption.xml` 的 CipherReference，按容器根解析成书内逻辑名）
- * 里的全部目标：spine 里的那些在本层直接拒整本，**其余带出去**——正文层真要用到某个被加密的图片时，
- * 报错原因必须是「被加密（本插件不解密）」，而不是按混淆后的字节说成「图片损坏」（那是误导读者去换图）。
- *
- * `findings` 是本层交出的事实清单（半径与严重度已标好，后果由编排层决定）；code 取值见上面的
- * `WARN_*` 常量（稳定标识，`resource` 一律是书内逻辑名）。
+ * 一份读完的 EPUB 包结构。`spine` 是**主序列**（`spineItems` 里 linear 项的 path），`spineItems` 保留下来
+ * 的声明（含 linear="no" 的补充文档，指不到文档或不是 XHTML 的已剪）——「派生」与「保留下来的声明」，不是两份真相。
+ * `encryptedPaths` 是内容加密清单里的全部目标：spine 里的在本层直接拒整本，**其余带出去**——正文层要用到被加密的
+ * 图片时，原因必须是「被加密（本插件不解密）」，而不是按混淆字节说成「图片损坏」。
+ * `findings` 是本层交出的事实清单（半径与严重度已标好，后果由编排层决定）；code 取值见 `WARN_*` 常量。
  */
 export interface EpubPackage {
   readonly title: string | null
@@ -114,11 +102,7 @@ export interface EpubPackage {
   readonly findings: readonly FindingEntry[]
 }
 
-/**
- * 读一份 EPUB 的包结构。书级失败都经 `rejectBook` 且点名书内位置，不泄露主机路径：
- * 结构类失败点名条目名 / OPF 里的 idref / 导航文档路径；**路径类失败（href 解析不了、目标不存在）
- * 一律带上出处的文档名**——只说「越出书根」无从知道该去翻哪一份文档。
- */
+/** 读一份 EPUB 的包结构。书级失败都经 `rejectBook` 且点名书内位置，不泄露主机路径；**路径类失败一律带出处文档名**——只说「越出书根」无从知道该翻哪一份。 */
 export async function readEpubPackage(archive: EpubArchive, limits: Partial<EpubLimits> = {}): Promise<EpubPackage> {
   // 本层用得上 XML 单文档的三项预算（归档四项归 openEpubArchive，图片像素归正文层）
   const xmlBytes = limits.xmlBytes ?? DEFAULT_EPUB_LIMITS.xmlBytes
@@ -145,8 +129,7 @@ export async function readEpubPackage(archive: EpubArchive, limits: Partial<Epub
   const opfBudget = xmlBudget(`OPF 包文档 ${opfPath}`, domLimits, 'package')
   const opf = parseOpf(await readXmlText(archive, opfPath, xmlBytes, opfBudget), opfPath, names, opfBudget, findings)
 
-  // ③ 内容加密：命中 spine 里任一文档即拒（正文读不出就算失败）；其余只留告警但目标集合要带出去
-  //    （理由见 `encryptedPaths` 字段注：报错原因必须是「被加密」而不是「字节坏了」）
+  // ③ 内容加密：命中 spine 里任一文档即拒；其余只留告警但目标集合要带出去（报错原因必须是「被加密」而不是「字节坏了」）
   const encryptedPaths = new Set<string>()
   if (names.has(ENCRYPTION_PATH)) {
     const spinePaths = new Set(opf.spineItems.map((s) => s.path))
@@ -177,13 +160,10 @@ export async function readEpubPackage(archive: EpubArchive, limits: Partial<Epub
 }
 
 /**
- * media-type 归一的**唯一实现**：小写 + 去掉参数（`; charset=utf-8`）。
- *
- * 为什么不能在比对处各写一份字面比较：RFC 2046 的 media type 不区分大小写、参数不改变资源种类，
- * 声明写全了的书（`Application/XHTML+XML`、`application/xhtml+xml; charset=utf-8`）按字面比对会
- * 被整本拒掉——那是把「书写者的写法」当成「书不可读」。归一发生在**读 manifest/容器的边界**
- * （`parseManifest`/`pickRootfile`），下游（正文层、资源层）拿到的就都是归一值，比对只需一次相等判定。
- * 代价：报错文案里显示的是归一值，不是 OPF 里的原样声明（种类判定不受影响）。
+ * media-type 归一的**唯一实现**：小写 + 去掉参数（`; charset=utf-8`）。为什么不能在比对处各写一份字面比较：
+ * RFC 2046 的 media type 不区分大小写、参数不改变资源种类，声明写全的书（`Application/XHTML+XML`）按字面
+ * 比对会被整本拒掉——那是把「书写者的写法」当成「书不可读」。归一发生在**读 manifest/容器的边界**，下游拿到
+ * 的就是归一值，比对只需一次相等判定。代价：报错文案显示归一值，不是 OPF 原样声明（种类判定不受影响）。
  */
 export function normalizeMediaType(declared: string): string {
   const semicolon = declared.indexOf(';')
@@ -200,15 +180,12 @@ function mediaTypeOf(el: Element): string | null {
 // ── 归档内的 href 解析 ────────────────────────────────────────────────────────────
 
 /**
- * 从书内某份文档的位置解释一个 href。**这是归档内寻址的唯一口**（manifest href、nav/NCX 目标、
- * encryption.xml 的 URI 都走它），因为「同一个文件」在不同写法下必须归一到同一个逻辑名。
- *
- * 与 ZIP 条目名闸门的分工：条目名没有「相对于谁」的语境，越出归档根就是攻击；href 有文档目录，
- * `../Images/x.png` 是合法引用，**只有逃出书根才拒**。两者规则不能互相套用。
- *
+ * 从书内某份文档的位置解释一个 href。**这是归档内寻址的唯一口**（manifest href、nav/NCX 目标、encryption.xml
+ * 的 URI 都走它）。
+ * 与 ZIP 条目名闸门的分工：条目名没有「相对于谁」的语境，越出归档根就是攻击；href 有文档目录，`../Images/x.png`
+ * 是合法引用，**只有逃出书根才拒**。两者规则不能互相套用。
  * 解析顺序按 URI 规则：先切 fragment 与查询串，再**解一次**百分号（`%2520` 解成字面 `%20`，不二次解码），
- * 最后按目录栈归一（`.` 丢掉，`..` 退一层）。不支持的 scheme、绝对路径、解码后的 NUL / 反斜杠都拒。
- * 每条失败都带 `fromPath`（解析基准就是那份文档）：报错指名出处，读者才有得可查。
+ * 最后按目录栈归一（`.` 丢掉，`..` 退一层）。不支持的 scheme、绝对路径、解码后的 NUL / 反斜杠都拒；失败带 `fromPath`。
  */
 export function resolveEpubHref(fromPath: string, href: string): EpubHref {
   const raw = href.trim()
@@ -239,21 +216,17 @@ export function resolveEpubHref(fromPath: string, href: string): EpubHref {
 }
 
 /**
- * 路径失败的点名一律带上**出处文档**（口径与预算的 `what` 一致）：基准为空时基准就是
- * 归档根，没有文档可点名——按归档根解析的两处（container.xml 的 rootfile、encryption.xml 的 URI）
- * 由调用方经 `rootRelativeHref` 补上自己那份文档名。
- *
- * 交出去的是 `EpubHrefError`（「这一条引用解不开」），不是书级异常：包层一条声明解不开与正文层一条
- * 链接解不开主语不同，两边各按各的半径接（见 `services/epub/errors.ts`）。
+ * 路径失败的点名一律带上**出处文档**（与预算的 `what` 同口径）：基准为空时基准就是归档根，按归档根解析的两处
+ * （container.xml 的 rootfile、encryption.xml 的 URI）由调用方经 `rootRelativeHref` 补上文档名。
+ * 交出去的是 `EpubHrefError`（引用级），不是书级异常：包层一条声明解不开与正文层一条链接解不开主语不同，各按各的半径接。
  */
 function hrefFail(fromPath: string, message: string): never {
   throw new EpubHrefError(fromPath === '' ? message : `${fromPath}：${message}`)
 }
 
 /**
- * 在**按归档根解析**的语境里解释 href（OCF 容器与加密清单的 URI 都是这种口径）：基准是归档根，
- * 而出处文档是调用方（container.xml / encryption.xml）——报错点名读者能去翻的那份文件。
- * 包文档自己指不到 OPF / 加密清单指不到东西是整本书读不出，按书级收口。
+ * 在**按归档根解析**的语境里解释 href（OCF 容器与加密清单的 URI）：基准是归档根，出处文档是调用方——报错点名读者
+ * 能去翻的那份文件。包文档指不到 OPF / 加密清单指不到东西是整本书读不出，按书级收口。
  */
 function rootRelativeHref(documentPath: string, href: string): string {
   try {
@@ -265,11 +238,9 @@ function rootRelativeHref(documentPath: string, href: string): string {
 }
 
 /**
- * 包层解释一条 href：解不开就是**这本书的结构声明**读不出，按书级收口。
- *
- * `resolveEpubHref` 交回的是引用级失败（主语是那条引用），而包层三条路（manifest 的 href、
- * nav/NCX 的条目目标）的主语是那条声明本身——在册待裁把这类失败暂留在书级（`ADR-0061` / `ADR-0063`）。
- * 这一处收口而不是让它往外逃，否则引用级异常会穿过门面变成 500，把读者的书说成服务端坏了。
+ * 包层解释一条 href：解不开就是**这本书的结构声明**读不出，按书级收口。`resolveEpubHref` 交回的是引用级失败
+ * （主语是那条引用），而包层三条路（manifest href、nav/NCX 条目目标）的主语是声明本身——在册待裁把这暂留书级
+ * （`ADR-0061`/`ADR-0063`）。这一处收口否则引用级异常会穿过门面变成 500，把读者的书说成服务端坏了。
  */
 function packageHref(fromPath: string, href: string): EpubHref {
   try {
@@ -319,8 +290,7 @@ function parseOpf(text: string, opfPath: string, names: ReadonlySet<string>, bud
   const spineItems = parseSpine(spineEl, manifest, names, opfPath, findings)
   const spine = spineItems.filter((s) => s.linear).map((s) => s.path)
   if (spine.length === 0) {
-    // 「根本没写」与「每一条都被剪」是两件事：后者要把第一条剪除原因带出去，
-    // 否则用户只看到一句「主序列为空」，排障得自己去猜是哪一条声明、坏在哪一层
+    // 「根本没写」与「每一条都被剪」是两件事：后者要把第一条剪除原因带出去，否则排障得自己猜坏在哪条声明
     const firstPrune = findings.entries().find((f) => f.code === WARN_ITEM_PRUNED)
     const detail = firstPrune === undefined ? '' : `；第一条被剪的原因：${firstPrune.action}`
     rejectBook(`OPF 的主序列为空（没有可用的 linear itemref：要么没写，要么每一条都指不到可读的 XHTML 文档${detail}）：${opfPath}`)
@@ -363,11 +333,9 @@ function parseManifest(root: Element, opfPath: string): Map<string, EpubManifest
 }
 
 /**
- * 阅读序列里读不出的那一条声明：剪掉这一条并留痕，不牵动整本书。
- *
- * 一条 `itemref` 坏掉（缺 idref、指不到 manifest、指到归档里没有的文件、同一资源出现两次）说的是
- * 「这一条声明」，不是「这本书没有阅读顺序」；只有**全部**被剪光才轮到整本判据（主序列为空那条）。
- * 剪完之后 `spine` 就是剩下的有序声明，章号由编排层按它的位置铸——只有一处算章号。
+ * 阅读序列里读不出的那一条声明：剪掉这一条并留痕，不牵动整本书。一条 `itemref` 坏掉（缺 idref、指不到 manifest、
+ * 指到归档里没有的文件、同一资源出现两次）说的是「这一条声明」，不是「这本书没有阅读顺序」——只有**全部**被剪光
+ * 才轮到整本判据。剪完之后 `spine` 就是剩下的有序声明，章号由编排层按位置铸。
  */
 function parseSpine(
   spineEl: Element,
@@ -388,8 +356,7 @@ function parseSpine(
     if (idref === null || idref.trim() === '') { prune(opfPath, 'OPF spine 有 itemref 缺 idref（这一条进不了阅读序列）'); continue }
     const item = manifest.get(idref)
     if (item === undefined) { prune(opfPath, `OPF spine 的 idref 不在 manifest 里，这一条进不了阅读序列：${idref}`); continue }
-    // 同一资源出现两次：本仓的阅读序列是「一章一个位置」，重复的那一条指不到唯一的落点，
-    // 剪掉后出现的那一条并留痕（第一处照读，不是猜哪个才算）
+    // 同一资源出现两次：阅读序列是「一章一个位置」，重复的那一条指不到唯一落点——剪掉后出现的并留痕（第一处照读）
     if (seenIdrefs.has(idref)) { prune(item.path, `OPF spine 里 idref 重复，后出现的一条被剪：${idref}`); continue }
     const previous = seenPaths.get(item.path)
     if (previous !== undefined) {
@@ -403,8 +370,7 @@ function parseSpine(
     seenIdrefs.add(idref)
     seenPaths.set(item.path, idref)
     const linear = attrOf(itemref, 'linear') ?? 'yes'
-    // 规范只有 yes/no：写歪的那个值说不出作者要什么，按缺省 yes 读（内容在归档里、读得出就别丢），
-    // 并把「这一条的声明形态不对」留痕
+    // 规范只有 yes/no：写歪的值说不出作者要什么，按缺省 yes 读（读得出就别丢），并留痕
     if (linear !== 'yes' && linear !== 'no') {
       findings.add('itemNoted', WARN_SPINE_LINEAR_VARIANT, item.path, `OPF spine 的 linear 取值不是 yes/no（按缺省 yes 读这一条）：${linear}（${idref}）`)
     }
@@ -420,11 +386,8 @@ function parseSpine(
 }
 
 /**
- * 包声明层面就能判定的「不支持」：固定版式与主序列脚本。
- *
- * 半径按**声明的主语**分：包级声明（整本书是固定版式）是书级事实，仍拒；逐文档声明只说
- * 「这一份排不动 / 要靠脚本才动得了」，交回痕与 `unreadableSpineDocs`，由编排层落空页。
- * 返回读不出的那些文档路径（事实），痕由 `findings` 记账。
+ * 包声明层面就能判定的「不支持」：固定版式与主序列脚本。半径按**声明的主语**分：包级声明（整本固定版式）是书级
+ * 事实，仍拒；逐文档声明只说「这一份排不动 / 要靠脚本」，交回痕与 `unreadableSpineDocs`，由编排层落空页。
  */
 function assertSupported(
   metadata: Element | null,
@@ -446,8 +409,7 @@ function assertSupported(
     }
   }
   for (const entry of spineItems) {
-    // 逐文档的固定版式声明（itemref properties，包级 meta 的另一种写法）只说「这一份排不动」：
-    // 按流式读它、留一条痕，不因此判整本书死刑（主语是一条声明，就不是整本书）
+    // 逐文档固定版式声明（itemref properties）只说「这一份排不动」：按流式读它、留痕，不判整本死刑
     if (entry.properties.includes('rendition:layout-pre-paginated')) {
       findings.add('documentDegraded', WARN_FIXED_LAYOUT_DOC, entry.path,
         '文档声明为固定版式（itemref properties="rendition:layout-pre-paginated"），已按流式读（这一页的版式可能失真）')
@@ -535,8 +497,7 @@ function parseNavDocument(
   const items = parseNavList(list, navPath, budget, variant)
   if (items.length === 0) rejectBook(`toc 导航里没有条目：${navPath}`)
   if (variant.unordered) {
-    // 规范要求 ol，但有些书用 ul（嵌套层也算）：结构语义没有歧义，按列表读并把「这是变体」记下来；
-    // 不因此改走合成目录，否则真实标题会被文件名盖掉。
+    // 规范要求 ol，部分书用 ul：结构语义没有歧义，按列表读并记下「这是变体」；不改走合成目录，否则真标题会被文件名盖掉。
     findings.add('itemNoted', WARN_NAV_UNORDERED, navPath, 'toc 导航使用 ul（规范要求 ol），已按列表读取', navPath)
   }
   return pruneDeadTargets(items, names, navPath, findings)
@@ -604,12 +565,9 @@ function parseNavPoint(point: Element, ncxPath: string, budget: XmlBudget): Epub
 }
 
 /**
- * 剪掉指向读不出的文档的目录条目：**只丢那一条**，它的子条目上提，父级分组与兄弟照留。
- *
- * 目录是展示树，少一条不影响这本书读不读得动；一条悬空目标就把整本书判死，是把「这一条声明」
- * 的动作主语写错了。全部条目都悬空则得到一棵空目录——仍然不是坏书（阅读序列另有判据）。
- * 声明本身就没有条目是另一件事（`parseNavDocument` / `parseNcx` 的判空分支，坏目录）：那一格的
- * 主语是导航文档的结构，这里是「有条目、只是目标指不到东西」，两格不折叠。
+ * 剪掉指向读不出的文档的目录条目：**只丢那一条**，子条目上提，父级分组与兄弟照留。目录是展示树，少一条不影响
+ * 这本书读不读得动；全部悬空则得到空目录——仍不是坏书（阅读序列另有判据）。声明本身没有条目是另一件事
+ * （parseNavDocument / parseNcx 的判空分支，坏目录）：主语是导航文档的结构，这里是有条目但目标指不到，两格不折叠。
  */
 function pruneDeadTargets(items: readonly EpubNavItem[], names: ReadonlySet<string>, navPath: string, findings: FindingLog): EpubNavItem[] {
   const out: EpubNavItem[] = []
@@ -626,10 +584,7 @@ function pruneDeadTargets(items: readonly EpubNavItem[], names: ReadonlySet<stri
   return out
 }
 
-/**
- * 文档基础名（不含扩展名）。没有更好的真实标题可依时用它（合成目录的条目名、无 title 文档的章名）：
- * 不编造也不留空。正文层也用它当章名兜底，所以是导出的命名规则（同一件事不许有两份实现）。
- */
+/** 文档基础名（不含扩展名）：没有更好的真实标题时用它（合成目录条目名、无 title 文档章名）——不编造也不留空。正文层也用它兜底，故导出。 */
 export function epubBaseName(path: string): string {
   const slash = path.lastIndexOf('/')
   const name = slash < 0 ? path : path.slice(slash + 1)
@@ -656,11 +611,7 @@ function parseEncryptionTargets(text: string, path: string, budget: XmlBudget): 
 
 // ── OCF 容器 ───────────────────────────────────────────────────────────────────
 
-/**
- * 容器 → OPF 路径。多个 rootfile（多 rendition）**不拼书**：按容器声明顺序取第一个
- * media-type 受支持的那个；第一个受支持的却指向不存在的文件也是失败（不跳去下一份，
- * 那是「猜用户想要哪一本」）。
- */
+/** 容器 → OPF 路径。多个 rootfile **不拼书**：按声明顺序取第一个 media-type 受支持的那个；第一个受支持的指向不存在文件也是失败（不跳下一份——那是「猜用户想要哪一本」）。 */
 function pickRootfile(text: string, containerPath: string, budget: XmlBudget, names: ReadonlySet<string>): string {
   const root = parseXml(text, budget)
   if (localName(root.name) !== 'container') rejectBook(`OCF 容器的根元素不是 container（是 ${root.name}）：${containerPath}`)
@@ -681,10 +632,7 @@ function pickRootfile(text: string, containerPath: string, budget: XmlBudget, na
 
 // ── XML 读取 ───────────────────────────────────────────────────────────────────
 
-/**
- * 读一份包文档的字节并解码：解码失败按预算的主语说话（包文档读不出＝整本拒），
- * 而预算的 `what` 已带着书内位置——单说「不是合法 UTF-8」无从知道是哪一份文档，这里不再另披一层。
- */
+/** 读一份包文档的字节并解码：解码失败按预算的主语说话（包文档读不出＝整本拒）；预算的 `what` 已带书内位置，不再另披一层。 */
 async function readXmlText(archive: EpubArchive, name: string, xmlBytes: number, budget: XmlBudget): Promise<string> {
   const bytes = await archive.read(name, xmlBytes)
   return decodeEpubXml(bytes, budget)

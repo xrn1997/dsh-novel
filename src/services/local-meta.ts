@@ -4,21 +4,12 @@ import { warningListOf } from './epub/findings.js'
 import type { EpubChapterRef, EpubDocumentRef, EpubResourceRef } from './epub/import.js'
 
 /**
- * 本地书顶层元数据（`local/<uuid>.json`）的**存储形状与版本化读 codec**。
+ * 本地书顶层元数据（`local/<uuid>.json`）的**存储形状与版本化读 codec**。为什么单独一层：这份文件跨版本读——升级后要能打开旧书，
+ * 格式演进要能拿旧形状做一次显式归一；「磁盘形状 → 当前内存形状」收在一处，加读面字段才有唯一落点。
  *
- * 为什么单独一层：这份文件是跨版本读的——应用升级后要能打开旧书，格式演进要能拿旧形状做一次
- * 显式归一。把「磁盘形状 → 当前内存形状」收在一处，加读面字段时才有唯一落点（在那之前，版本判别
- * 是一个严格等式、旧形状兼容散在读面里，抬版本会让全部存量 EPUB 落进 TXT 分支）。
- *
- * 两条口径：
- * ① **schemaVersion 缺席 = TXT**（旧书零迁移，见 `ADR-0014`）；`schemaVersion: 2` = EPUB，它同时是
- *   发布完成的**提交标记**。版本号或 format 认不出时给具名拒绝，**不猜**、也不落进另一条格式的读法。
- * ② **旧形状只读时归一，不回写磁盘**：归一结果只进内存形状；回写要把整份元数据重写一遍，而它只
- *   影响读面（写盘时机只有导入）。加一个读面字段时，在解码的归一分支给旧书默认值、并加一条
- *   「旧 meta + 新字段」用例——这就是本文件对格式演进的承诺。
- *
- * 章序列/文档表/资源表的**元素形状**仍 import 自 `services/epub/import.ts`：那不是第二张字段表，
- * 存储形状只声明书身份、时间戳与这些表的容器；元素里有什么由导入层说了算，导入端加字段读端不必跟。
+ * ① **schemaVersion 缺席 = TXT**（旧书零迁移，`ADR-0014`）；`schemaVersion: 2` = EPUB，它同时是发布完成的**提交标记**。版本号或
+ *   format 认不出时给具名拒绝，**不猜**。② **旧形状只读时归一，不回写磁盘**：归一结果只进内存形状；加读面字段时在解码的归一
+ *   分支给旧书默认值并加「旧 meta + 新字段」用例。章序列/文档表/资源表的**元素形状**仍 import 自 `epub/import.ts`。
  */
 
 /** 当前 EPUB 元数据版本：抬它之前先确认读 codec 认识新形状（或写了迁移），否则存量书会被具名拒绝。 */
@@ -38,8 +29,8 @@ export interface StoredTextMeta {
 }
 
 /**
- * EPUB 的存储形状（`schemaVersion: 2`）。写入处以它声明盘上的形状；`findings` / `warnings`
- * 两格是历史上不同的落盘方式（新书写事实清单并附一份旧读面投影，旧书只有投影），读时归一成一列。
+ * EPUB 的存储形状（`schemaVersion: 2`）。`findings` / `warnings` 两格是历史上不同的落盘方式（新书写事实清单并附旧读面投影，
+ * 旧书只有投影），读时归一成一列。
  */
 export interface StoredEpubMetaV2 {
   schemaVersion: typeof LOCAL_META_SCHEMA_VERSION
@@ -55,8 +46,7 @@ export interface StoredEpubMetaV2 {
   /** 展示用目录树（原生 nav/NCX；wire 形状） */
   navigation: NavigationItem[]
   /**
-   * 导入过程的事实清单（半径、动作句、处数与例子）：**拆开落盘**——合并、处数前缀与例子列表由读面
-   * 按当下的 `warningListOf` 现算。动作句本身仍是导入时写下的那句（带着那一次的数值与原文）。
+   * 导入过程的事实清单（半径、动作句、处数与例子）：**拆开落盘**——合并、处数前缀与例子列表由读面按当下的 `warningListOf` 现算。
    */
   findings?: FindingEntry[]
   /** 旧版本读面的降级投影：同一份事实拼成中文句子后的那一版；读面以 `findings` 为准（同一份事实的投影）。 */
@@ -83,8 +73,7 @@ export interface LocalEpubMeta {
 
 export type LocalMeta = LocalTextMeta | LocalEpubMeta
 
-/** 内存形状的格式判别（不是存储版本的判别——版本分流在解码里，且拒收认不出的写法）。
- *  归一后 EPUB 恒带 `format`、TXT 恒不带，所以读面只需认这一个值。 */
+/** 内存形状的格式判别（不是存储版本判别——版本分流在解码里）：归一后 EPUB 恒带 `format`、TXT 恒不带。 */
 export function isEpubMeta(meta: LocalMeta): meta is LocalEpubMeta {
   return (meta as { format?: unknown }).format === 'epub'
 }
@@ -106,10 +95,8 @@ export class LocalMetaFormatError extends Error {
 }
 
 /**
- * 磁盘元数据 → 当前内存形状（唯一读口，`LocalBooks` 的 meta 读取只走这里）。
- *
- * 版本分流只看原始形状、**先于**格式分流：认不出的版本必须当场具名拒绝，静默把它当 TXT
- * 就等于拿偏移表去读一份文档索引（存量书全部打不开，且报错离原因很远）。
+ * 磁盘元数据 → 当前内存形状（唯一读口）。版本分流只看原始形状、**先于**格式分流：认不出的版本必须当场具名拒绝，静默当 TXT 就
+ * 等于拿偏移表去读一份文档索引（存量书全部打不开，且报错离原因很远）。
  */
 export function decodeLocalMeta(raw: unknown, bookKey: string): LocalMeta {
   const stored = recordOf(raw)
@@ -132,8 +119,7 @@ export function decodeLocalMeta(raw: unknown, bookKey: string): LocalMeta {
 }
 
 /**
- * 旧 TXT 形状即当前内存形状：逐格验形只为把「读不了」提前到解码处说清，别让它变成
- * 后面某次 `.map` 上的 TypeError——两种都落 500，但后者看不出是哪个字段坏了。
+ * 旧 TXT 形状即当前内存形状：逐格验形只为把「读不了」提前到解码处说清，别让它变成后面某次 `.map` 上的 TypeError。
  * 有 `format` 却无版本号的形态不认识：它可能是丢了版本号的新形状，不能按偏移表读。
  */
 function textMetaOf(stored: Record<string, unknown>, bookKey: string): LocalTextMeta {
@@ -158,10 +144,8 @@ function textMetaOf(stored: Record<string, unknown>, bookKey: string): LocalText
 }
 
 /**
- * EPUB v2 → 内存形状。两处历史落盘形态在这里归一：
- * - 告警：有事实清单就按当下口径重排（`warningListOf`），没有就用旧读面写下的投影——
- *   两者都不会静默变成「没有痕」。投影不回写盘：读面已经拿到同一份事实，回写只多一次整份重写。
- * - 文档索引/序列/导航的形状归导入层，这里只验容器在不在（形状主人不在这层）。
+ * EPUB v2 → 内存形状。两处历史落盘形态在这里归一：告警有事实清单就按当下口径重排，没有就用旧读面写下的投影——两者都不会静默
+ * 变成「没有痕」。投影不回写盘。文档索引/序列/导航的形状归导入层，这里只验容器在不在。
  */
 function epubMetaOf(stored: Record<string, unknown>, bookKey: string): LocalEpubMeta {
   const author = stored.author

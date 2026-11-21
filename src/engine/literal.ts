@@ -1,17 +1,11 @@
 import { braceRegion } from './grammar.js'
 
 /**
- * 模板字面段的识别与切分——构词（normalize/服务层拼串）与
- * 解析（parse/evaluate 消费）共用同一份认知，唯一实现住这里。
+ * 模板字面段的识别与切分——构词（normalize/服务层拼串）与解析（parse/evaluate）共用同一份认知。
  *
- * 口径：规则串里出现 `{{expr}}` 时逐段插值——expr 以 `@`/`$.`/`$[`/`//` 开头按**规则递归求值**，
- * 否则按 **JS 表达式**求值（绑定 result/baseUrl/book/chapter/key/page…）；
- * 插值后整段不构成选择器 → 原样作为字面串产出。`{$.path}`（单括号）是 JSONPath 内嵌形态
- * （平衡括号切分）。
- *
- * 为什么单独成段：输入里有「URL 模板」型规则（`http://api/novel/{{$.novelId}}`、
- * `{{baseUrl}}catalog/` 等形态）——它们不是选择器也不是取值终端，若在解析期全抛
- * 「无法识别的段类型」就接不住这类规则。
+ * 口径：规则串里出现 `{{expr}}` 时逐段插值——expr 以 `@`/`$.`/`$[`/`//` 开头按**规则递归求值**，否则按
+ * **JS 表达式**求值；插值后整段不构成选择器 → 原样作为字面串产出。`{$.path}`（单括号）是 JSONPath 内嵌。
+ * 单独成段的原因：URL 模板型规则不是选择器也不是取值终端，解析期全抛「无法识别的段类型」就接不住。
  */
 
 export interface LiteralPart {
@@ -30,9 +24,8 @@ export function isLiteralForm(raw: string): boolean {
 
 /** `{{...}}` 平衡括号切分（引号内的花括号不计深） */
 export function splitLiteral(raw: string, opts?: { doubleBraceOnly?: boolean }): LiteralPart[] {
-  // doubleBraceOnly：js 段代码文本的插值口径——只认 `{{…}}`。JS 自己有模板字面量 `${expr}`，
-  // 把单括号 `{$…}` 当插值点会把脚本里的 `${$.id}` 撕成 JSONPath，导致整段 Miss、目录 0 章。
-  // js 段代码文本的插值统一只认双花括号，与本口径一致。
+  // doubleBraceOnly：js 段代码文本的插值口径——只认 `{{…}}`。JS 自己有模板字面量 `${expr}`，把单括号
+  // `{$…}` 当插值点会把脚本里的 `${$.id}` 撕成 JSONPath，导致整段 Miss、目录 0 章。
   const doubleOnly = opts?.doubleBraceOnly === true
   const parts: LiteralPart[] = []
   let buf = ''
@@ -52,15 +45,14 @@ export function splitLiteral(raw: string, opts?: { doubleBraceOnly?: boolean }):
       } else {
         const m = /^@get:([\w.-]+)/.exec(raw.slice(i))
         const captured = m?.[1]
-        // 组 1 是模式的必选段；未命中或取不到都与「这里不像 @get: 形态」同一落点：原文留存（不猜）
         if (m === null || captured === undefined) { buf += raw.charAt(i); i++; continue }
         name = captured; j = i + m[0].length
       }
       flushText(); parts.push({ kind: 'getvar', text: name }); i = j; continue
     }
     if (raw.startsWith('{{', i)) {
-      // 括号扫描归 grammar.braceRegion（与 parse 的段切分共用同一份认知）。若两处各写一份，
-      // 段切分先把区内的 `@` 当段界，`{{@@规则}}` 就永远进不到字面段，这里会错报「无法识别的段类型」。
+      // 括号扫描归 grammar.braceRegion（与 parse 的段切分共用同一份认知）：若两处各写一份，段切分先把区内的
+      // `@` 当段界，`{{@@规则}}` 就永远进不到字面段。
       const region = braceRegion(raw, i)
       if (region === null) { buf += raw.slice(i); i = raw.length; continue } // 未闭合：按字面（不猜）
       const expr = raw.slice(i + 2, region.contentEnd).trim()

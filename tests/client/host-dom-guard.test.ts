@@ -1,8 +1,6 @@
-import { readFileSync, readdirSync } from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { withoutComments } from '../without-comments.js'
+import { clientSources } from '../support/source-scan.js'
 
 /**
  * 宿主 DOM 边界守卫：client 源码里不许出现宿主私有的 `data-*` 选择器。
@@ -20,21 +18,6 @@ const HOST_OWNED_SELECTORS = [
   'data-width-handle',
   'data-composer-seat',
 ]
-
-const clientDir = fileURLToPath(new URL('../../src/client/', import.meta.url))
-
-function clientSources(): Array<{ file: string; text: string }> {
-  const out: Array<{ file: string; text: string }> = []
-  const walk = (dir: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const p = path.join(dir, entry.name)
-      if (entry.isDirectory()) walk(p)
-      else if (/\.tsx?$/.test(entry.name)) out.push({ file: path.relative(clientDir, p).split(path.sep).join('/'), text: readFileSync(p, 'utf8') })
-    }
-  }
-  walk(clientDir)
-  return out
-}
 
 /** 命中即「代码里引用了宿主私有属性」；注释不参与判定。 */
 function scanHostSelectors(text: string): string[] {

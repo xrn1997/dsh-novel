@@ -3,11 +3,7 @@ import type { JobState } from '../shared/wire.js'
 import { LocalArtifactNotFoundError, LocalFileTooLargeError, LocalImportError } from './localbooks.js'
 import { EpubImportError } from './epub/errors.js'
 
-/**
- * 书源不存在（API 层映射 404 NotFound）。
- * 不要用裸 Error + 中文前缀匹配来分类：分类权会活在文案作者手里，改错别字即改 HTTP 状态码；
- * 本类走 instanceof 作为唯一判据。
- */
+/** 书源不存在（API 层映射 404）。不要用裸 Error + 中文前缀匹配来分类：分类权会活在文案作者手里；本类走 instanceof 作唯一判据。 */
 export class SourceNotFoundError extends Error {
   readonly sourceId: string
   constructor(sourceId: string) {
@@ -29,11 +25,7 @@ export class ChapterNotFoundError extends Error {
   }
 }
 
-/**
- * 书源缺规则导致某一面无法执行（API 层映射 422，wire 错误码 'RuleMissing'——
- * 与搜索面/探针的 RuleMissing 结果形态同一词汇）。不要退回裸 Error：那会映射成 500，
- * 用户看到「服务器内部错误」而不是「这源缺规则」。
- */
+/** 书源缺规则导致某一面无法执行（API 层映射 422，wire 错误码 'RuleMissing'——与探针的 RuleMissing 同一词汇）。不要退回裸 Error：那会映射成 500。 */
 export class RuleMissingError extends Error {
   /** 缺的是哪一面的规则（facet 词汇：toc / content …） */
   readonly facet: string
@@ -81,13 +73,9 @@ function withoutUrl(message: string, url: string): string {
   return url === '' ? message : message.split(url).join(REDACTED_URL)
 }
 
-/**
- * 出站失败的脱敏副本：`FetchError` / `DecodeError` 的文案与 `url` 字段都内嵌了这次请求的地址，
- * 而地址可能带凭据——朗读模板能把登录态求值进 URL（`services/tts-request.ts` 的
- * `SEALED_SEGMENT` 是同一判据的另一半），订阅地址也可能带签名 token。错误信封与日志都不是
- * 新的读口：只摘地址，换回同类错误（类目、HTTP 状态、charset 照留），两个 projection 不用改。
- * 其余异常原样交回——它们不是出站失败的锅，地址也无从摘起。
- */
+/** 出站失败的脱敏副本：`FetchError` / `DecodeError` 的文案与 `url` 字段都内嵌这次请求的地址，而地址可能带凭据（朗读模板能把登录态
+ *  求值进 URL；订阅地址可能带签名 token）。错误信封与日志都不是新的读口：只摘地址，换回同类错误（类目、HTTP 状态、charset 照留）。
+ *  其余异常原样交回。 */
 export function redactOutboundError(e: unknown, url: string): unknown {
   if (e instanceof FetchError) {
     return new FetchError(withoutUrl(e.message, url), {
@@ -101,11 +89,8 @@ export function redactOutboundError(e: unknown, url: string): unknown {
   return e
 }
 
-/** 调用方给的参数本身不成立（API 层映射 400 BadRequest）——**值域**判据，不是 body 形状判据：
- *  形状（缺字段、类型不对、JSON 不合法）归路由自检的 `ApiError`，值域（非空、非负整数、比例在
- *  [0,1]）归本类。两者分开是因为值域要护的是**每一个调用方**：门面动词被 HTTP 面与 agent 工具面
- *  同时调用，门长在路由里等于只护了一半（工具面可直接写入 Infinity —— JSON.stringify 落盘成
- *  null 的静默数据损坏）。 */
+/** 调用方给的参数本身不成立（API 层映射 400）——**值域**判据，不是 body 形状判据（形状归路由自检的 `ApiError`）。两者分开是因为值域要护
+ *  每一个调用方：门面动词被 HTTP 面与工具面同时调用，门长在路由里只护一半（工具面可直接写入 Infinity → JSON.stringify 落盘成 null）。 */
 export class InvalidRequestError extends Error {
   constructor(message: string) {
     super(message)
@@ -113,11 +98,8 @@ export class InvalidRequestError extends Error {
   }
 }
 
-/** 书不在架上（API 层映射 400 BadRequest）：**更新路径**的缺席语义——按 bookKey 打补丁 / 写进度 /
- *  存听书位置都要求书已在架（入架是另一个动词），缺席时调用方要补的那一步是「先加书」。
- *  类住在分类学单点，`classify` 投影成 bad-request；HTTP 那句可行动文案仍归 `api/dispatch.ts`
- *  （服务层不带路由措辞，工具面原样上抛本类的诊断句）。删除路径的缺席是幂等成功（布尔/计数），
- *  不是本类——同一个「按 key 点的目标不存在」，两个动词两种后果，各自表达。 */
+/** 书不在架上（API 层映射 400）：**更新路径**的缺席语义——打补丁 / 写进度 / 存听书位置都要求书已在架。删除路径的缺席是幂等成功，不是本类：
+ *  同一个「按 key 点的目标不存在」，两个动词两种后果。HTTP 那句可行动文案归 `api/dispatch.ts`。 */
 export class BookNotOnShelfError extends Error {
   readonly bookKey: string
   constructor(bookKey: string) {
@@ -127,9 +109,7 @@ export class BookNotOnShelfError extends Error {
   }
 }
 
-/** 运行中重复提交任务：路由层映射 409 JobRunning（services 不 import api 层）。
- *  类住在错误分类学单点（`classify` 在本文件），任务模块只抛它；不要反向 import
- *  （`errors` → `import-job`），那会与探针状态单点合成值环。 */
+/** 运行中重复提交任务：路由层映射 409。类住在错误分类学单点；不要反向 import（errors → import-job 会与探针状态单点合成值环）。 */
 export class JobRunningError extends Error {
   constructor(running: JobState) {
     super(`已有任务在运行（${running.kind === 'import' ? '导入' : '验证'} ${running.done}/${running.total}）`)
@@ -137,8 +117,7 @@ export class JobRunningError extends Error {
   }
 }
 
-/** 本地书服务未挂载（API 层映射 503 Unavailable）——门面动词在 local part 缺席时抛出，
- *  路由层不再各自判 `opts.local === undefined`（判据归门面） */
+/** 本地书服务未挂载（API 层映射 503）——门面动词在 local part 缺席时抛出，路由层不再各自判 `opts.local === undefined`。 */
 export class LocalNotMountedError extends Error {
   constructor() {
     super('本地书服务未挂载')
@@ -146,12 +125,9 @@ export class LocalNotMountedError extends Error {
   }
 }
 
-/** 段合成失败的四种终局：code 即 wire 错误码，与 HTTP 状态一一分档——
- *  引擎缺席是调用方的选择问题（400），上游失败与坏响应是网关问题（502）；
- *  引擎此刻不可用（服务自报没配好）是它自己的配置问题（503，配好就回来）。
- *  类住在分类学单点（而不是 `tts-request.ts`）：`api/wire` 的 classify 投影要用它，
- *  而 tts-request → fetcher → errors 的值边会让「类住 tts-request」变成值环。
- *  消费方（`tts-request.ts` / `tts.ts` 与测试）一律从这一处 import，本仓不开第二条 import 路径。 */
+/** 段合成失败的四种终局：code 即 wire 错误码，与 HTTP 状态一一分档——引擎缺席是调用方的选择问题（400），上游失败与坏响应是网关问题
+ *  （502）；引擎此刻不可用（服务自报没配好）是它自己的配置问题（503）。类住在分类学单点（而不是 tts-request.ts）：`api/wire` 的 classify
+ *  投影要用它，而 tts-request → fetcher → errors 的值边会让「类住 tts-request」变成值环。 */
 export type TtsSynthesisErrorCode =
   | 'TTS_ENGINE_MISSING' | 'TTS_ENGINE_UNAVAILABLE' | 'TTS_UPSTREAM' | 'TTS_BAD_RESPONSE'
 
@@ -165,9 +141,7 @@ export class TtsSynthesisError extends Error {
   }
 }
 
-/** 听书服务未挂载（API 层映射 503 Unavailable）：与本地书同一档。到场形态只有一种——
- *  直装缝 `ReadingService.from` 不带听书部件（装配选择，不是坏格）。注册表损坏是另一条
- *  半径：部件在场、订阅那一格坏，见 `TtsEnginesDegradedError`。 */
+/** 听书服务未挂载（API 层映射 503）：与本地书同一档。到场形态只有一种——直装缝不带听书部件。注册表损坏是另一条半径（见 `TtsEnginesDegradedError`）。 */
 export class TtsNotMountedError extends Error {
   constructor() {
     super('听书服务未挂载')
@@ -175,11 +149,8 @@ export class TtsNotMountedError extends Error {
   }
 }
 
-/** 朗读引擎订阅注册表降级（API 层映射 503 Unavailable，消息带原因）：`tts-engines.json` 读不出
- *  （损坏等）时订阅那一格整体不可用——源清单照常（内置 / 浏览器直出 / 宿主服务不读它）、
- *  段合成与缓存读照常，只有五个订阅动词抛它。与 `TtsNotMountedError` 分开是两个主语：
- *  那是部件根本没装配（缺席），这是部件在场、订阅数据坏（降级）——半径各归各的判据。
- *  类住在分类学单点：`api/wire` 的 classify 投影要用它。 */
+/** 朗读引擎订阅注册表降级（API 层映射 503，消息带原因）：`tts-engines.json` 读不出时订阅那一格整体不可用——源清单照常、段合成与缓存读照常，
+ *  只有五个订阅动词抛它。与 `TtsNotMountedError` 分开是两个主语：那是部件根本没装配（缺席），这是部件在场、订阅数据坏（降级）。 */
 export class TtsEnginesDegradedError extends Error {
   /** 降级原因（注册表加载失败的原话）：报错即说清坏在哪，不给一句无名的 503 */
   readonly reason: string
@@ -191,14 +162,10 @@ export class TtsEnginesDegradedError extends Error {
 }
 
 // ── 错误分类学单点 ────────────────────────────────────────────────────────
-// 「类 → 类目」的知识只在这里编码一次；HTTP 状态映射（api/wire.errorStatusOf）与
-// 探针错误码（search-face.searchErrorCodeOf）是它的小投影。同一分类学只在
-// 这里定义；两个 destination 各写一份会让加一个错误类要动两个模块加一份自觉。
+// 「类 → 类目」的知识只在这里编码一次；HTTP 状态映射与探针错误码是它的小投影，各写一份会让加一个错误类要动两个模块。
 
-/** 错误类目：规则求值 / 缺规则 / 网络抓取 / 资源缺席 / 本地导入两态 / 未挂载与降级（本地书、
- *  听书面）/ 任务互斥 / 段合成三分档（引擎缺席 / 上游失败 / 坏响应）/ 其他。
- *  错误类自己不带 HTTP status（`LocalImportError`、`JobRunningError` 都一样）——
- *  错误→HTTP 的 egress 只剩 classify 一处，路由侧不写逐类 catch。 */
+/** 错误类目：规则求值 / 缺规则 / 网络抓取 / 资源缺席 / 本地导入两态 / 未挂载与降级 / 任务互斥 / 段合成三分档 / 其他。错误类自己不带
+ *  HTTP status——错误→HTTP 的 egress 只剩 classify 一处，路由侧不写逐类 catch。 */
 export type ErrorCategory =
   | 'rule-eval' | 'rule-missing' | 'fetch' | 'not-found'
   | 'bad-request'
@@ -206,8 +173,7 @@ export type ErrorCategory =
   | 'tts-engine-missing' | 'tts-engine-unavailable' | 'tts-upstream' | 'tts-bad-response'
   | 'other'
 
-/** 段合成 code → 类目。表即穷尽闸：`TtsSynthesisErrorCode` 加一档而不在这里登记 → tsc 红，
- *  不会静默落进 `other`（那段合成失败会从 502 变成 500）。 */
+/** 段合成 code → 类目。表即穷尽闸：`TtsSynthesisErrorCode` 加一档而不登记 → tsc 红，不会静默落进 `other`。 */
 const TTS_CATEGORY_OF: Record<TtsSynthesisErrorCode, ErrorCategory> = {
   TTS_ENGINE_MISSING: 'tts-engine-missing',
   TTS_ENGINE_UNAVAILABLE: 'tts-engine-unavailable',
@@ -222,9 +188,7 @@ export function classify(e: unknown): ErrorCategory {
   if (e instanceof RuleMissingError) return 'rule-missing'
   if (e instanceof FetchError || e instanceof DecodeError) return 'fetch'
   if (e instanceof SourceNotFoundError || e instanceof ChapterNotFoundError) return 'not-found'
-  // 本地产物缺席（书元数据/章号/文档/资源查不到）与「源不存在」「章不存在」同一读数：404。
-  // 判定放在 local-import 之前：**更窄的判据先问**——将来若给本地异常改继承关系，
-  // 顺序错了会把 404 读成 400 而无人察觉
+  // 本地产物缺席与「源不存在」「章不存在」同一读数：404。判定放在 local-import 之前：**更窄的判据先问**——顺序错了会把 404 读成 400。
   if (e instanceof LocalArtifactNotFoundError) return 'not-found'
   if (e instanceof InvalidRequestError || e instanceof BookNotOnShelfError) return 'bad-request'
   if (e instanceof LocalImportError || e instanceof EpubImportError) return 'local-import'

@@ -17,6 +17,7 @@ import { readEpubPackage, resolveEpubHref, type EpubHref, type EpubPackage } fro
 import { decodeEpubXml, parseXml, xmlBudget } from '../../src/services/epub/xml.js'
 import { makeEpubFixture } from '../fixtures/epub.js'
 import { pick } from '../support/fixture.js'
+import { expectEpubError } from './epub-fakes.js'
 
 /** 开归档 → 读包 → 交给断言；读完一律关归档（预期拒绝时也不许把句柄漏在半开状态） */
 async function withBook<T>(name: string, fn: (book: EpubPackage, archive: EpubArchive) => T, limits?: Partial<EpubLimits>): Promise<T> {
@@ -41,13 +42,6 @@ async function packageRejection(name: string, limits?: Partial<EpubLimits>): Pro
     archive.close()
   }
   throw new Error(`预期拒绝，实际成功——坏包冒充可读是本仓的最高罪（样本：${name}）`)
-}
-
-/** 断言异常是 EPUB 导入错，且报错点名了出问题的条目/资源/书内位置 */
-function expectEpubError(e: Error, pattern: RegExp): void {
-  expect(e.name).toBe('EpubImportError')
-  expect(e).toBeInstanceOf(EpubImportError)
-  expect(e.message).toMatch(pattern)
 }
 
 /** 导航目标就是「路径 + 可空片段」这一对原始值 */

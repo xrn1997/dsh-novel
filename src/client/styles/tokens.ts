@@ -1,27 +1,17 @@
 /** 视觉 token 层（`NOVEL_CSS` 的第 1 块）：配色契约、named 标度与 `--novel-*` 变量的缺省定义。
  *  暗层的重钉住 shell 块的 `.novel-dark`；样式规则只读这里的局部变量，不另造 token。
  *
- *  ── 配色契约（宿主 `@deepseek-ai/dsh-client-ui-theme` 的 alias 语义层）─────────────
- *  宿主把调色板与语义层都挂在 `body` / `body[data-ds-dark-theme]` 上，本插件**只需引用语义
- *  token**，光/暗自动跟随，不判深浅、不写死主题色。要防的静默失效有三形态：
- *    ① 引用**不存在的宿主 token**——CSS 不报错，
- *       只落到硬编码 fallback，光/暗都不跟随；本层消费的宿主名以 `tests/client/theme-tokens.test.ts`
- *       的词表守卫为家，别凭记忆造名；
- *    ② 写死白色叠层 / 状态色 hex = 钉死一套主题观感，光暗两头必有一头失衡；
- *    ③ 引用**本层自己不存在的 token**（如 `var(--novel-layer)`，层板只有 -1/-2/-3）——整条
- *       background 简写静默落 `unset`。守卫在 `tests/client/ui-system.test.tsx`：本层每个
- *       `var(--novel-*)` 引用都必须有定义。
- *  本层因此把用到的 token 先收进 `.novel-root, [data-novel-scope]` 一层局部变量：视觉规则
- *  只读局部变量，token→宿主、fallback→暗底老观感。双根覆盖与组件自带 `data-novel-scope` 的
- *  自足性**保留**：组件在哪棵树渲染都应成立（即便与主视图同树，规则也不依赖这一点）。
+ *  ── 配色契约（宿主语义层）────────────────────────────────────────────────
+ *  宿主把调色板与语义层挂在 body 上，本插件**只需引用语义 token**，光/暗自动跟随。三种静默失效要防：
+ *  ① 引用不存在的宿主 token（CSS 不报错，只落 fallback）；② 写死白色叠层 / 状态色 hex；
+ *  ③ 引用本层自己不存在的 token（整条 background 简写静默落 unset）。宿主名词表以
+ *  `tests/client/theme-tokens.test.ts` 为家，本层引用由 `tests/client/ui-system.test.tsx` 守。
+ *  用到的 token 先收进 `.novel-root, [data-novel-scope]` 一层局部变量：规则只读局部变量。
  *
- *  ── 标度（sp/fs/r/shadow/z/dur）───────────────────────────────────────────────
- *  间距、字阶、圆角、阴影、层级、动效各有一套 named 标度，视觉规则里不散写像素：散值的代价
- *  是同一层里 2/3/5/7/11/13/18/22px 混用时读者判断不出哪一档是意图。中文最小可读字阶 11px。
- *  z 序与本层 `--novel-z-*` 同表——`CTRL_Z` 是控制器层的 JS 侧主人（`reader-ctrl-z.test.ts` 钉），
- *  相对次序由 `ui-system.test.tsx` 钉死。
- *
- *  本块必须排在拼装次序最前：后面的十个块都引用这里定义的变量（拼装点见 ../styles.tsx）。 */
+ *  ── 标度（sp/fs/r/shadow/z/dur）──────────────────────────────────────────
+ *  间距、字阶、圆角、阴影、层级、动效各有一套 named 标度，视觉规则里不散写像素。z 序与 `CTRL_Z`
+ *  同表（JS 侧主人是 `reader-ctrl-z.test.ts`），相对次序由 `ui-system.test.tsx` 钉死。
+ *  本块必须排在拼装次序最前：后面的块都引用这里的变量。 */
 export const TOKENS_CSS = `
 .novel-root, [data-novel-scope] {
   /* 层级：底(页面) → 层1(容器/工具栏) → 层2(面板/浮层/抽屉) → 层3(输入件)。宿主层板只到 layer-3。 */
@@ -43,16 +33,13 @@ export const TOKENS_CSS = `
   --novel-brand: var(--dsw-alias-brand-primary, #2f6feb);
   --novel-primary-fill: var(--dsw-alias-button-primary-fill, #2f6feb);
   --novel-primary-hover: var(--dsw-alias-button-primary-hover, #3b7bf0);
-  /* brand 派生色：视图不要内联 #2f6feb14/1f/44 与 #79a8ff——brand 一换色即全部失联。
-     alpha 值按 --novel-brand 用 color-mix 派生（宿主换 brand / 主按钮换色自动跟随）；
-     strong 走宿主「亮蓝语义文字」alias（无派生对应），fallback 即原内联色。 */
+  /* brand 派生色：视图不要内联 #2f6feb14/1f/44 与 #79a8ff——brand 一换色即全部失联。 */
   --novel-brand-soft: color-mix(in srgb, var(--novel-brand) 8%, transparent);   /* 选中动作条底 */
   --novel-brand-tint: color-mix(in srgb, var(--novel-brand) 12%, transparent);  /* 选中 chip / 编辑态底 */
   --novel-brand-line: color-mix(in srgb, var(--novel-brand) 27%, transparent);  /* 运行卡 / 选中条描边 */
   --novel-brand-strong: var(--dsw-alias-label-primary-bluish, #79a8ff);         /* 亮蓝强调字 */
   --novel-skeleton: var(--dsw-alias-bg-skeleton, #ffffff14);
-  /* 浮层底：迷你条读宿主**浮动钮**语义（与宿主自己的浮动按钮同底同源），不是面板层板——
-     层板是「嵌在页面里的容器」的底，浮层是「浮在内容上」的底，两者在宿主光暗两态都不同值。 */
+  /* 浮层底：迷你条读宿主**浮动钮**语义（与宿主自己的浮动按钮同底同源），不是面板层板。 */
   --novel-float: var(--dsw-alias-button-floating-fill, #2b2b2e);
   /* 滚动条三件套（轨 / thumb / hover）：插件自己的滚动面跟宿主滚动条语义，不留浏览器默认灰条 */
   --novel-scrollbar-track: var(--dsw-alias-scrollbar-bg-l1, #ffffff0f);
@@ -87,10 +74,7 @@ export const TOKENS_CSS = `
   --novel-shadow-2: 0 6px 16px rgba(0, 0, 0, .16);     /* 卡片浮起 / 状态条浮层 */
   --novel-shadow-pop: 0 18px 48px rgba(0, 0, 0, .35);  /* 模态 */
   --novel-dur: .15s; --novel-ease: cubic-bezier(.2, 0, 0, 1);
-  /* 值槽（唯一由行内写入的动态量，规则都住本层）：
-     --novel-pct 进度推进（bits.ProgressBar / 章进度细线），--novel-measure 正文栏宽（prefs.measure，
-     随字号缩放的 em）。在此定义为缺省值——它们不是主题色，但必须在词表里在册，否则 token 自足
-     守卫会把「行内写、样式读」的这一路判成未定义引用。 */
+  /* 值槽（唯一由行内写入的动态量，规则都住本层）。 */
   --novel-pct: 0;
   --novel-measure: 36em;
   /* 听书浮窗展开态尺寸（ADR-0080）：由 miniBarLayout 行内写入解析后的呈现尺寸，样式层只读变量。 */
@@ -100,36 +84,26 @@ export const TOKENS_CSS = `
      这里的缺省只为「值槽必须在词表里在册」的自足守卫。 */
   --novel-tts-capsule-w: 208px;
   --novel-tts-capsule-h: 44px;
-  /* 设置弹层 max-height 的上界（px）：由 miniBarPopoverRoom 按「选中那一侧的余量」算出来，
-     视图行内写在浮窗 dock 根上。这里的 60vh 是缺省：阅读器条那份设置卡没有 dock 几何可量，
-     仍按视口比例收；浮窗体自带现量值槽。 */
+  /* 设置弹层 max-height 的上界（px）：由 miniBarPopoverRoom 按选中那一侧的余量算出。 */
   --novel-tts-popover-room: 60vh;
-  /* --novel-paper / --novel-paper-ink：正文那一层的纸与墨（prefs.paperColor 与 paperInk 的结果，
-     由 ReaderView 行内写入）。**控制器条由它们派生**——「条底与纸底不同源即缺陷」的判据
-     住 .novel-rdr-bar 的注释那头。缺省值 = 默认纸米黄与其对应墨色。 */
+  /* --novel-paper / --novel-paper-ink：正文那一层的纸与墨（prefs.paperColor 与 paperInk 的结果）。 */
   --novel-paper: #f7f3e8;
   --novel-paper-ink: #222;
-  /* 跟读高亮（正在被念的那一段）的字色：ReaderView 由纸色现算（util.ts 的 paperLiveInk）
-     写进阅读区根上；这里的缺省值 = 默认米黄纸上的那一档。命中段换这一档字色并在段首画一枚
-     currentColor 小三角，不铺底色也不画进度线；顶条听书 pill 的选中态也读这一档（条底跟纸，
-     选中色也得跟纸）。宿主 brand 不进正文层（ADR-0076）。 */
+  /* 跟读高亮的字色：ReaderView 由纸色现算（util.ts 的 paperLiveInk）。 */
   --novel-live-ink: #855532;
-  /* 插图预留宽高比（ChapterBody 由 wire 的可信 width/height 行内写入，规则读本值）：
+  /* 插图预留宽高比：ChapterBody 由 wire 的可信 width/height 行内写入，规则读本值；
      值槽在此在册是 token 自足守卫的硬要求——「行内写、样式读」的这一路也必须词表里有名。 */
   --novel-fig-ratio: 4 / 3;
   /* 浮层层级单表（控制器层三级由 CTRL_Z 同名钉住，防两处各写各的数） */
   --novel-z-status: 5; --novel-z-mask: 10; --novel-z-panel: 11; --novel-z-toolbar: 12; --novel-z-modal: 30;
-  /* 无封面降级的书名首字色块：低饱和四档（深浅两态都成立的中间调），
-     视图按 coverTintClass(title) 选类——hex 只住 token 层（theme-tokens 守卫口径） */
+  /* 无封面降级的书名首字色块：低饱和四档（深浅两态都成立的中间调）。 */
   --novel-cover-1: #3c4250;
   --novel-cover-2: #3d4a42;
   --novel-cover-3: #4d3a3a;
   --novel-cover-4: #443a4d;
   color: var(--novel-text);
 }
-/* 控制器条底：纸往墨压一档（6%），阅读器顶条与听书条共用同一条规则。
-   **直接写在条元素的 background 上，不经过中间自定义属性**：纸色行内写在阅读区根上，
-   条底少一层派生缓存，换纸时与正文同一次重算。描边同理由各条自己直写（顶条底边 / 听书条顶边）。 */
+/* 控制器条底：纸往墨压一档（6%），阅读器顶条与听书条共用；直接写在条元素的 background 上。 */
 .novel-rdr-bar, .novel-tts-bar {
   background: color-mix(in srgb, var(--novel-paper-ink) 6%, var(--novel-paper));
 }

@@ -1,9 +1,6 @@
 /**
- * cookie 串的宽松 `k=v; k=v` 解析：跨半唯一住址。两条来源共用这一条语法——Node 半的登录脚本
- * （`loginUrl` 的 JS 形态）产出的一段 cookie 串，与浏览器半登录面板里用户手工粘贴的那一段。
- * 两半各写一遍就是给同一条语法两个主人：改「怎么切第一个 `=`」时要改两处，漏一处就是一半悄悄换规则。
- *
- * 零运行时依赖（本文件会被整个 inline 进 client bundle，纯度门同样适用于它）。
+ * cookie 串 `k=v; k=v` 的宽松解析：跨半唯一住址（Node 登录脚本与浏览器登录面板共用这一条语法）。
+ * 两半各写一遍时，改「怎么切第一个 `=`」漏一处就是一半悄悄换规则。零运行时依赖（inline 进 client bundle）。
  */
 export function parseCookieString(raw: string): Record<string, string> {
   const cookies: Record<string, string> = {}

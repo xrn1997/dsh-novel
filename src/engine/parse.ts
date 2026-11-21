@@ -6,26 +6,14 @@ import { isLiteralForm } from './literal.js'
 import { normalizeJsonPath } from './jsonpath.js'
 
 /**
- * parseRule 词法流水线（纯词法：字符串 → ParsedRule AST，零 IO）。
- *
- * 切分次序（钉死）：
- *   ② 剥 ## 替换尾（含 OnlyOne ###）——只在受保护区**之外**切：`<js>…</js>` 块、`{{…}}` 区、
- *       `@put:{…}` 值区里的 `##` 是区内自己的规则文本（次序：先抽 js 块、先剥 @put、
- *       先做插值，替换尾只在剩下的文本上切；单点在 grammar.parseTails）
- *   ③ 剥链首 - 反序前缀
- *   ③b 列表用途剥链首 + 前缀（剥完照常走选择段；见 `grammar.ts` 的 `stripChainPrefixes`）
- *   ① AllInOne：剥完上面各步后仍以 : 开头 → 整链是一个 allinone 段
- *   ④ 分支切分（|| / && / %%，左到右，混用抛错）
- *   ⑤⑥ 段切分与识别（globalIndex 全规则连续编号，写进错误定位）——js 形态在这一段认
- *       （`js:` 前缀 / `<js>` 块）；链尾**没有** (jsCode) 切法，理由见 parseBranch 的说明。
- *       支文本在受保护区**之外**含 `{{…}}` / `@get:{…}` → **模板态**（这一步把解析
- *       模式翻一面）：文本段按字面、`@` 不切段，判据与后果都住 parseBranch
+ * parseRule 词法流水线（纯词法：字符串 → ParsedRule AST，零 IO）。切分次序（钉死）：② 剥 `##` 替换尾
+ * （含 OnlyOne `###`，只在受保护区之外切）→ ③ 剥链首 `-` 反序前缀（③b 列表用途的 `+` 链首）→ ① 剩余仍以
+ * `:` 开头即 AllInOne 整链 → ④ 分支切分（|| / && / %%，混用抛错）→ ⑤⑥ 段切分与识别（globalIndex 连续编号）。
+ * 支文本在受保护区之外含 `{{…}}` / `@get:{…}` → 翻成**模板态**（文本段按字面、`@` 不切段）。
  */
 
-// default 段白名单（选择段 + 取值段；白名单之外的串先过隐式 CSS 回落 `isImplicitCss`——
-// 裸词与「词.词」都构成选择器语法、交 css-select 求值，零命中即 Miss；
-// 只有无选择器特征的未知串（`nonsense:x`、`nonsense span`）才在解析期 UnsupportedRuleError，
-// 不留给 eval 兜底）
+// default 段白名单（选择段 + 取值段）；之外的串先过隐式 CSS 回落 isImplicitCss——只有无选择器特征的
+// 未知串（`nonsense:x`）才在解析期 UnsupportedRuleError，不留给 eval 兜底。
 const KNOWN_MODES = new Set([
   'text', 'textAll', 'ownText', 'html', 'all', 'href', 'src', 'content', 'textNodes',
   'class', 'id', 'tag', 'child', 'children',
@@ -37,8 +25,8 @@ const COMBINATOR_MAP: Record<CombToken, ParsedRule['combinator']> = {
   '||': 'first', '&&': 'and', '%%': 'zip',
 }
 
-/** 解析期共享状态：facet 用于错误面，counter 是全规则连续段号，usage 决定链尾未知词语义；
- *  template 标记当前分支是否模板态（受保护区**之外**含 `{{…}}`/`@get:{…}`）——模板态文本段按字面、`@` 不切段 */
+/** 解析期共享状态：facet 用于错误面，counter 是全规则连续段号，usage 决定链尾未知词语义，
+ *  template 标记当前分支是否模板态（受保护区之外含 `{{…}}`/`@get:{…}`）。 */
 interface ParseCtx { facet: Facet; counter: number; usage: RuleUsage; template: boolean }
 
 export function parseRule(
@@ -47,14 +35,14 @@ export function parseRule(
   usage: RuleUsage = 'list',
   mode?: 'json',
 ): ParsedRule {
-  // ② 剥 ## 替换尾（含 OnlyOne ###）——文法口 parseTails 单点（grammar.ts：构词与解析同属一处）
+  // ② 剥 ## 替换尾（含 OnlyOne ###）——文法口 parseTails 单点
   const { chain, replaces, onlyOne } = parseTails(rule)
 
-  // ③/③b 链首前缀（`-` 反序、list 用途的 `+` 列表入口）——剥除与形态两判同住 grammar.ts。
-  // `+` 不剥则落成 CSS/属性段 ⇒ 恒 Miss ⇒ 列表与目录一条都不出；只在 list 用途剥，不扩大豁免。
+  // ③/③b 链首前缀（`-` 反序、list 用途的 `+` 列表入口），剥除与形态两判同住 grammar.ts。`+` 不剥则落成
+  // CSS/属性段 ⇒ 恒 Miss ⇒ 列表与目录一条都不出；只在 list 用途剥，不扩大豁免。
   const { rest, reverse } = stripChainPrefixes(chain, usage)
 
-  // ① AllInOne：剥完替换尾与反序前缀后仍以 : 开头 → 整链一个 allinone 段
+  // ① 剥完替换尾与反序前缀后仍以 : 开头 → 整链一个 allinone 段
   if (rest.startsWith(':')) {
     const segment: Segment = { kind: 'allinone', pattern: rest.slice(1), flags: '' }
     return {
@@ -68,7 +56,7 @@ export function parseRule(
     return { branches: [], combinator: 'first', reverse, replaces, onlyOne, usage }
   }
 
-  // ④ 分支切分 + 混用检测（组合符切分跳过 JS 段与 `{{…}}` 模板区——其中的 ||/&&/%% 是代码/表达式，不是连接符）
+  // ④ 分支切分 + 混用检测（切分跳过 JS 段与 `{{…}}` 模板区——其中的 ||/&&/%% 是代码/表达式）
   const parts = splitTop(rest)
   const seen = new Set(parts.slice(1).map(p => p.comb))
   if (seen.size > 1) {
@@ -77,9 +65,8 @@ export function parseRule(
   const combinator: ParsedRule['combinator'] =
     seen.size === 1 ? COMBINATOR_MAP[[...seen][0] as CombToken] : 'first'
 
-  // ⑤⑥ 段切分与识别。**空白分支照吞掉**：分支切分不过滤空串，`A&&&&B` 产出 `["A","","B"]`，
-  // 而空规则取值是空列表，合并时自然不贡献——等价于丢分支，不是整条失败。全空（`&&`、纯空白）
-  // 与上面「剥空」分支同路：零分支，求值即空。
+  // ⑤⑥ 段切分与识别。**空白分支照吞掉**：切分不过滤空串，`A&&&&B` 产出 `["A","","B"]`，而空规则取值是
+  // 空列表、合并时自然不贡献——等价于丢分支。全空与「剥空」同路：零分支。
   const ctx: ParseCtx = { facet, counter: 0, usage, template: false }
   const branches = parts
     .map(p => (mode === 'json' ? parseJsonBranch(p.text) : parseBranch(p.text, ctx)))
@@ -87,9 +74,8 @@ export function parseRule(
   return { branches, combinator, reverse, replaces, onlyOne, usage }
 }
 
-/** JSON 模式分支：整支就是一条 JSONPath，不再按选择器/段语法切分。
- *  显式 `json:` 前缀在默认解析里已由 classifySegment 剥掉；这里再剥一次是为 `parseRule(...,'json')`
- *  的直接调用方（运行时路径进来的已是裸路径）。 */
+/** JSON 模式分支：整支就是一条 JSONPath，不再按选择器/段语法切分。显式 `json:` 前缀在默认解析里
+ *  已由 classifySegment 剥掉；这里再剥一次是为 `parseRule(...,'json')` 的直接调用方。 */
 function parseJsonBranch(text: string): Branch | null {
   const raw = text.trim().replace(/^@?json:/i, '')
   if (raw === '') return null
@@ -100,10 +86,8 @@ function parseJsonBranch(text: string): Branch | null {
 
 interface TopPart { text: string; comb: CombToken | null }
 
-/** 按 || / && / %% 从左到右切分（算符不嵌套；JS 段整体跳过——块内的算符是 JS 代码不是连接符；
- *  `{{…}}` 模板区同样整体跳过——区内的 `&&`/`||` 属于插值表达式，插值先于任何切分完成，
- *  故这些算符从不到达切分器；`@put:{…}` 值区同理——值里的算符是值内规则文本。
- *  三种区域的探测分别住在 grammar.ts（jsRegionEnd / braceRegion / putRegionEnd），此处只消费）。 */
+/** 按 || / && / %% 从左到右切分（算符不嵌套）。三种受保护区整体跳过，区内的算符是代码/表达式而
+ *  不是连接符：JS 段、`{{…}}` 模板区、`@put:{…}` 值区（探测住 grammar.ts，此处只消费）。 */
 function splitTop(s: string): TopPart[] {
   const parts: TopPart[] = []
   let start = 0
@@ -112,8 +96,8 @@ function splitTop(s: string): TopPart[] {
   while (i < s.length) {
     const jsEnd = jsRegionEnd(s, i)
     if (jsEnd !== null) { i = jsEnd; continue }
-    // `@put:{…}` 整体跳过：值里的 `||`/`&&` 是值内规则文本，不是连接符。
-    // splitTop 与 splitElements 必须都先认 putRegionEnd，否则 `@put:{l:"[a]@content||[b]@content"}` 会被撕开。
+    // `@put:{…}` 整体跳过：值里的算符是值内规则文本。splitTop 与 splitElements 都必须先认
+    // putRegionEnd，否则 `@put:{l:"[a]@content||[b]@content"}` 会被撕开。
     const putEnd = putRegionEnd(s, i)
     if (putEnd !== null) { i = putEnd; continue }
     const brace = braceRegion(s, i)
@@ -132,13 +116,10 @@ function splitTop(s: string): TopPart[] {
   return parts
 }
 
-/** 受保护区掩码：`<js>…</js>` 块、`{{…}}` 区、`@put:{…}` 值区各替换为等长空格。
- *  判「支文本里有没有 `$n`」「有没有插值标记」之前必须先把这三区**摘出去**（次序：
- *  先抽 js 块、先剥 @put、先做插值，见矩阵 `a-js-region-protected`），掩码就是这一步在本仓的实现形态：脚本里的 `'$1'` 是正则反向
- *  引用、`{{…##…##$1}}` 与 `@put:{…"##$1###"}` 里的 `$1` 属于**值内规则自己的替换尾**——三者都不该把
- *  整支判成行组模板，也不该把同支的文本段判成模板态。
- *  js 区用 `jsRegionEnd`（含 `@js:` 吃到串尾），比 `parseTails` 的只认块形态宽——那里的 `##` 已被
- *  规则级切掉、只剩块形态的会走到这里，两处判据各自对着自己的上游顺序。 */
+/** 受保护区掩码：`<js>…</js>` 块、`{{…}}` 区、`@put:{…}` 值区各替换为等长空格。判「支里有没有 `$n`」之前必须
+ *  先把这三区摘出去（矩阵 `a-js-region-protected`）：脚本里的 `'$1'` 是正则反向引用、值内规则自己的 `$1`
+ *  属于替换尾——都不该把整支判成行组模板。js 区用 `jsRegionEnd`（含 `@js:` 吃到串尾），比 `parseTails`
+ *  只认块形态宽——那里的 `##` 已被规则级切掉、只剩块形态的会走到这里，两处判据各自对着自己的上游顺序。 */
 function maskRegions(s: string): string {
   let out = ''
   let i = 0
@@ -149,41 +130,36 @@ function maskRegions(s: string): string {
     if (putEnd !== null) { out += ' '.repeat(putEnd - i); i = putEnd; continue }
     const brace = braceRegion(s, i)
     if (brace !== null) { out += ' '.repeat(brace.end - i); i = brace.end; continue }
-    out += s.charAt(i) // 循环条件已钉住 i 在界内；charAt 在界外给空串，与这里同一界
+    out += s.charAt(i)
     i++
   }
   return out
 }
 
-/** 模板态标记（匹配的两形：`@get:{…}` 与 `{{…}}`） */
+/** 模板态标记（`@get:{…}` 与 `{{…}}`） */
 const TEMPLATE_MARK = /@get:\{|{{/
 
 // ── ⑤⑥ 段切分与识别 ───────────────────────────────────────────────────
 
-/** 按 @ 切分分支段：单个 @ 是段边界；连续 @@ 是字面 @（@@ 显式声明形态——
- *  段内剥一个 @ 后按常规识别）。首个元素若是空串则跳过（链首 @ 的边界残留）。
- *  XPath 主导规则（//、.//、/、@XPath: 开头）：谓词里的 `[@id]` 与斜杠属性步 `/@href` 不是段边界
- *  （前者在括号深度内、后者原样留在 path 里），但**裸 @ 终端**（`//div[1]@html`、`//a@js:`）是
- *  下一级规则——切，切完回归普通模式。 */
+/** 按 @ 切分分支段：单个 @ 是段边界；连续 @@ 是字面 @；首个空串跳过。XPath 主导规则（//、.//、/、@XPath:）：
+ *  谓词里的 `[@id]` 与斜杠属性步 `/@href` 不是段边界，但**裸 @ 终端**（`//div[1]@html`）是下一级规则。 */
 const XPATH_HEAD = /^(@xpath:|\/\/|\.\/\/|\/)/i
 
 function splitElements(s: string, template = false): string[] {
   const out: string[] = []
   let cur = ''
-  // 括号/引号深度：XPath 主导链里 `[@id="x"]` 的 @ 是选择器的一部分，不是段界——
-  // 先把 `[...]`/`(...)` 平衡组整体拉出，@ 才在深度 0 处成为段界。
+  // 括号/引号深度：XPath 主导链里 `[@id="x"]` 的 @ 是选择器的一部分，不是段界——先把平衡组整体拉出，
+  // @ 才在深度 0 处成为段界。
   let depth = 0
   let quote = ''
   let xpathPending = XPATH_HEAD.test(s)
   let i = 0
   while (i < s.length) {
-    // JS 区域整体跳过：<js>…</js> 块内与 @js: 链尾段内的 @ 是 JS 代码，不是段界。
-    // `<js>` 可出现在任意位置（输入里有 `text<js>…</js>` 无 @ 直接衔接的形态）：
-    // 块起始即隐式段界——cur 先独立成段，块本身起新段；块结束若紧跟内容（非 @）同样断段。
+    // JS 区域整体跳过：<js>…</js> 块内与 @js: 链尾段内的 @ 是 JS 代码，不是段界。`<js>` 可出现在任意位置
+    // （`text<js>…</js>` 无 @ 直接衔接的形态）：块起始即隐式段界，块结束若紧跟内容（非 @）同样断段。
     const jsEnd = jsRegionEnd(s, i)
     if (jsEnd !== null) {
-      // 模板态下 `@` 是字面字符（不切段），行尾的 `@` 属于 js 标记（行尾 `@`
-      // 也吃进 js 起始）——剥掉再收；块后推送条件在模板态恒成立（没有 `@` 来收尾了）
+      // 模板态下 `@` 是字面字符（不切段），行尾的 `@` 属于 js 标记——剥掉再收；块后推送条件在模板态恒成立
       if (template && cur.endsWith('@')) cur = cur.slice(0, -1)
       if (cur !== '') out.push(cur)
       cur = s.slice(i, jsEnd)
@@ -197,7 +173,6 @@ function splitElements(s: string, template = false): string[] {
     // `@put:{…}` 整体是一段：体内 `@` 是值里的选择器/终端，不是段界（grammar.putRegionEnd）
     const putEnd = putRegionEnd(s, i)
     if (putEnd !== null) {
-      // 模板态同 js 块：行尾 `@` 属于标记、剥掉；块后推送条件恒成立
       if (template && cur.endsWith('@')) cur = cur.slice(0, -1)
       if (cur !== '') out.push(cur)
       cur = s.slice(i, putEnd)
@@ -208,8 +183,7 @@ function splitElements(s: string, template = false): string[] {
       }
       continue
     }
-    // `{{…}}` 模板区整体留在当前段：区内的 `@`（`{{@@h1@text}}` 这类形态）不是段界——
-    // 插值先于任何 `@` 切分。扫描与 literal 共用 grammar.braceRegion。
+    // `{{…}}` 模板区整体留在当前段：区内的 `@`（`{{@@h1@text}}`）不是段界——插值先于任何 `@` 切分。
     const brace = braceRegion(s, i)
     if (brace !== null) {
       cur += s.slice(i, brace.end)
@@ -220,8 +194,8 @@ function splitElements(s: string, template = false): string[] {
       // 模板态：`@` 是字面字符（插值先于一切切分；`@get:` 等插值点在字面段内部由 splitLiteral 认）
       if (template) { cur += s.charAt(i); i++; continue }
       if (s[i + 1] === '@') { cur += '@'; i += 2; continue }
-      // 吃掉两个 @：只进一位会让第二个 @ 变成段界，于是 `@@css:.x`（「`@@<rule>` 强制按
-      // Default 处理」形态）被切成 ['@', 'css:.x'] 两段，第一段认不出就抛错——链首形态必炸。
+      // 吃掉两个 @：只进一位会让第二个 @ 变成段界，于是 `@@css:.x`（「`@@<rule>` 强制按 Default 处理」形态）
+      // 被切成 ['@', 'css:.x'] 两段，第一段认不出就抛错——链首形态必炸。
       if (xpathPending && !(i > 0 && depth === 0 && quote === '' && s[i - 1] !== '/')) {
         cur += s.charAt(i) // 谓词 @class / 属性步 /@href：字面保留
         i++
@@ -232,7 +206,6 @@ function splitElements(s: string, template = false): string[] {
       xpathPending = false
       i++
     } else {
-      // 逐字符读用 charAt：循环条件已钉住 i 在界内，两者结果一致，且不必为「可能越界」再造分支
       const ch = s.charAt(i)
       if (quote !== '') { if (ch === quote) quote = '' }
       else if (ch === '"' || ch === "'") quote = ch
@@ -243,30 +216,21 @@ function splitElements(s: string, template = false): string[] {
     }
   }
   out.push(cur)
-  // 空白段丢掉：`</js>` 后残留的 `\n`、`@` 边界留下的空串都不该成为段——段内 trim 后为空的
-  // 一律不算段（列表切分同样滤掉空白），同一份认知。
   return out.filter((el) => el.trim() !== '')
 }
 
-/** 空白分支（切分不滤空串、但空规则取值即空列表）→ 返回 null，由调用方丢掉 */
 function parseBranch(text: string, ctx: ParseCtx): Branch | null {
-  // AllInOne 行模板（矩阵 a-allinone-group-zero）：支文本里出现 `$\d{1,2}` → 整支是行组引用模板，
-  // 值由求值层用当前行绑定。判在切段之前——`$2$3` 这种产物本来就不是合法段（$ 开头会当 JSONPath 抛错）。
-  // 受保护区豁免见 maskRegions。判定只看支文本形状、不看规则是否出自 AllInOne——误分类的后果是无行时
-  // 出原文而非炸（口径见 types.ts 的 regexRow 段注释与矩阵行）。
-  // 掩码只把区内字符换成空格、**不会造出标记**，所以两处判据都可以先用原文廉价测一遍、命中才掩：
-  // `parseRule` 无缓存、逐条目调用，而掩码是一次支文本的 O(n) 串构造——绝大多数分支既无 `$n` 也无
-  // 插值标记，到这里就够了（可证等价：掩码只消字符、不增标记）。
+  // AllInOne 行模板（矩阵 a-allinone-group-zero）：支文本里出现 `$\d{1,2}` → 整支是行组引用模板，值由求值层
+  // 用当前行绑定。判在切段之前；受保护区豁免见 maskRegions。判定只看支文本形状、不看规则是否出自 AllInOne。
+  // 掩码只把区内字符换成空格、**不会造出标记**，故可先用原文廉价测一遍、命中才掩（掩码是 O(n) 串构造）。
   const hasMark = GROUP_TOKEN.test(text) || TEMPLATE_MARK.test(text)
   const marked = hasMark ? maskRegions(text) : text
   if (hasMark && GROUP_TOKEN.test(marked)) {
     const raw = text.trim()
     return { segments: [{ kind: 'regexRow', raw }], raws: [text] }
   }
-  // 模板态（在此翻面：受保护区**之外**出现 `{{…}}` 或 `@get:{…}`）：文本段
-  // 按字面、`@` 不是段界——这条次序是先做插值再谈切分（`最近更新：@get:{time}` 的 `最近更新：` 是字面文本）。
-  // 只看掩码后：js 块先被摘出去，js 代码里的 `{{baseUrl}}` 从不触发这次翻转（`class.a@text@js:…{{…}}`
-  // 若按原文判，`@` 不切段会把 `class.a@text` 整串当 class 选择器参数、静默零命中）。
+  // 模板态（在此翻面）：受保护区**之外**出现 `{{…}}` 或 `@get:{…}` 时文本段按字面、`@` 不是段界
+  // ——先做插值再谈切分。只看掩码后：js 块里的 `{{baseUrl}}` 从不触发翻转。
   ctx.template = hasMark && TEMPLATE_MARK.test(marked)
   const els = splitElements(text, ctx.template)
   if (els.length === 0) return null
@@ -275,9 +239,8 @@ function parseBranch(text: string, ctx: ParseCtx): Branch | null {
   for (const [i, el] of els.entries()) {
     const isLast = i === els.length - 1
 
-    // 链尾没有「(jsCode) 表达式形态」这一切法——`/` 开头的整条就是 XPath（`/text()` 原样进
-    // XPath 求值），切分遇到 `(` 是整体跳过平衡组而不是切分点。不要按尾括号切尾：
-    // 把 `/text()` 切成 `/text`+`()` 后脚本编译会炸；这类形态只能按真入口重算，不复述计数。
+    // 链尾没有「(jsCode) 表达式形态」这一切法——`/` 开头整条就是 XPath（`/text()` 原样进求值），切分遇到
+    // `(` 是整体跳过平衡组而不是切分点；切成 `/text`+`()` 后脚本编译会炸。
     const seg = classifySegment(el, ctx, isLast)
     segments.push(seg)
     raws.push(el)
@@ -286,8 +249,8 @@ function parseBranch(text: string, ctx: ParseCtx): Branch | null {
   return { segments, raws }
 }
 
-/** `!` 排除语法切分（! 是排除，序号用 : 隔开，0 是第 1 个，-1 最后一个）。
- *  只对选择段（css/default）合法；js 段代码里的 `!0`（布尔取反）在前缀识别时已先行返回，不受影响。 */
+/** `!` 排除语法切分（! 是排除，序号用 : 隔开，0 是第 1 个，-1 最后一个）。只对选择段（css/default）
+ *  合法；js 段代码里的 `!0`（布尔取反）在前缀识别时已先行返回。 */
 const EXCLUDE_RE = /^(.+?)!(-?\d+(?::-?\d+)*)$/
 
 function splitExclude(el: string): { base: string; exclude: number[] | undefined } {
@@ -295,18 +258,15 @@ function splitExclude(el: string): { base: string; exclude: number[] | undefined
   if (m === null) return { base: el, exclude: undefined }
   const base = m[1]
   const indexText = m[2]
-  // 两组都是模式的必选段；取不到与「不匹配排除形态」同一落点：整串原样交回常规识别（不猜排除位）
   if (base === undefined || indexText === undefined) return { base: el, exclude: undefined }
   return { base, exclude: indexText.split(':').map(Number) }
 }
 
 function classifySegment(el: string, ctx: ParseCtx, isLast: boolean): Segment {
-  // 段内前后空白修剪（输入里有 `<js>…</js>\n$.[*]` 的段间换行——不 trim 的话 `.` 开头判定全失效）；
-  // raws 仍记原文（错误定位不丢原文形态）
+  /** 段内前后空白修剪（`<js>…</js>\n$.[*]` 的段间换行不 trim 会让 `.` 开头判定全失效）；raws 仍记原文 */
   let raw = el.trim()
   if (raw.startsWith('@')) raw = raw.slice(1) // @@ 显式声明形态：剥一个 @
 
-  // 特殊前缀大小写不敏感（输入里有 @CSS:/@JS: 大写形态）
   const low = raw.toLowerCase()
   if (low.startsWith('css:')) {
     const { base, exclude } = splitExclude(raw.slice(4))
@@ -315,15 +275,14 @@ function classifySegment(el: string, ctx: ParseCtx, isLast: boolean): Segment {
   if (low.startsWith('json:')) return { kind: 'jsonpath', path: normalizeJsonPath(raw.slice(5)) }
   if (raw.startsWith('$')) return { kind: 'jsonpath', path: raw }
   // XPath（形态判定单点 grammar.isXPathForm：`@xpath:`/`xpath:` 前缀，或 `//`/`.//`/`/` 开头且无
-  // 插值区）。`/` 开头但含插值区（`{{…}}` 或 `{$.…}`）→ 是 URL 模板不是 XPath：插值优先于前缀判定，
-  // 落到下方 isLiteralForm 成为字面段（若被 `/` 前缀抢先截走，会报「XPath 步骤不支持」）。
+  // 插值区）。`/` 开头但含插值区（`{{…}}` / `{$.…}`）→ 是 URL 模板不是 XPath：插值优先于前缀判定，
+  // 落到下方 isLiteralForm 成为字面段。
   if (isXPathForm(raw)) {
     return { kind: 'xpath', path: raw.replace(/^@?xpath:/i, '') }
   }
   if (low.startsWith('js:')) return { kind: 'js', code: raw.slice(3), form: 'at-js' }
   if (low.startsWith('put:')) return { kind: 'put', pairsRaw: raw.slice(4) }
   if (low.startsWith('get:')) {
-    // 花括号形态（`@get:\{[^}]+?\}` 这一壳）：详情面存在整条规则就是 `@get:{n}` 的形态
     const name = raw.slice(4).trim().replace(/^\{(.*)\}$/, '$1').trim()
     return { kind: 'getvar', name }
   }
@@ -340,7 +299,6 @@ function classifySegment(el: string, ctx: ParseCtx, isLast: boolean): Segment {
   return classifyDefault(base, exclude, el, ctx, isLast)
 }
 
-/** 常见 HTML 标签名（「元素.类」形态判定依据——首词是标签即 CSS 组合选择器） */
 const HTML_TAGS = new Set([
   'a', 'abbr', 'address', 'article', 'aside', 'audio', 'b', 'base', 'bdi', 'bdo', 'blockquote', 'body',
   'br', 'button', 'canvas', 'caption', 'cite', 'code', 'col', 'colgroup', 'data', 'datalist', 'dd',
@@ -354,13 +312,10 @@ const HTML_TAGS = new Set([
   'title', 'tr', 'track', 'u', 'ul', 'var', 'video', 'wbr',
 ])
 
-/** 隐式 CSS 判定：`#id`/`.class` 简写、裸 tag 词、tag+属性、tag.类 组合、tag+伪类/组合、
- *  纯属性选择器、后代/子代组合链——凡构成选择器语法的都交 css-select 求值，命中与否由文档决定；
- *  仍按宁炸不猜抛错的只剩与 default 方言真有歧义的 `nonsense:x`、`nonsense span`。 */
-/**
- * CSS 标识词（cheerio 接受非 ASCII 与自造 tag 名）与「词.词」链判定：
- * 每一段都是合法 CSS 标识符 ⇒ 整段可交给选择器求值。数字开头的段**不算**（那是位置索引形态）。
- */
+/** 隐式 CSS 判定：`#id`/`.class` 简写、裸 tag 词、tag+属性、tag.类、tag+伪类/组合、纯属性选择器、后代/子代
+ *  组合链——凡构成选择器语法的都交 css-select；仍按宁炸不猜抛错的只剩 `nonsense:x`、`nonsense span`。 */
+/** CSS 标识词（cheerio 接受非 ASCII 与自造 tag 名）与「词.词」链判定：每一段都是合法 CSS 标识符
+ *  ⇒ 整段可交给选择器求值。数字开头的段**不算**（那是位置索引形态）。 */
 const CSS_IDENT = /^[\p{L}_][\p{L}\p{N}_-]*$/u
 function isCssWordChain(name: string, sep: string): boolean {
   const parts = name.split(sep)
@@ -372,21 +327,20 @@ function isImplicitCss(name: string): boolean {
   if (/^[a-zA-Z][\w-]*(?:\[[^\]]*\])*$/.test(name)) return true
   // 纯属性选择器：[class="col-12 col-md-6"]（无前导标签）
   if (name.startsWith('[') && name.endsWith(']')) return true
-  // 选择器特征字符（`ul#ncp3_ul li`、`*[href*=book/chapter]`、`a[href*="_"]`、
-  // `li[style~=width:100%;]`）：含 #/[/>+=~ 等即按 CSS 交给 css-select 求值——
-  // 解析不了在求值层如实 RuleEvalError，不再在解析期误报「无法识别的段类型」
+  // 选择器特征字符（`ul#ncp3_ul li`、`*[href*=book/chapter]`、`li[style~=width:100%;]`）：含 #/[/>+=~ 等即
+  // 按 CSS 交给 css-select 求值——解析不了在求值层如实 RuleEvalError，不在解析期误报「无法识别的段类型」
   if (name.startsWith('*')) return true
   if (/[#[\]>+~=,]/.test(name)) return true
-  // tag.类 组合（li.chapter / a.list-group-item）：**兜底口径**——首词不必是合法 HTML 标签，
-  // 错字 tag 与中文 tag 也整段当 CSS 交给求值层，零命中就是 Miss（同一口径）。
+  // tag.类 组合（li.chapter / a.list-group-item）：**兜底口径**——首词不必是合法 HTML 标签，错字 tag 与
+  // 中文 tag 也整段当 CSS，零命中就是 Miss。
   if (isCssWordChain(name, '.')) return true
   const dotIdx = name.indexOf('.')
   if (dotIdx > 0) {
     const head = name.slice(0, dotIdx).toLowerCase()
     if (HTML_TAGS.has(head)) return true
   }
-  // tag+伪类/空白组合（a:contains(x) / li:first-child a）：同一基准——首词是合法标签名 → CSS；
-  // 非标签首词（nonsense:x）依旧拒绝。伪类求值失败由 css-select 在求值层如实报错。
+  // tag+伪类/空白组合（a:contains(x) / li:first-child a）：首词是合法标签名 → CSS；非标签首词
+  // （nonsense:x）依旧拒绝。伪类求值失败由 css-select 在求值层如实报错。
   if (/^[a-zA-Z][\w-]*[:\s>]/.test(name)) {
     const head = /^[a-zA-Z][\w-]*/.exec(name)?.[0].toLowerCase() ?? ''
     if (HTML_TAGS.has(head)) return true
@@ -404,19 +358,18 @@ function splitIndexSuffix(raw: string): { base: string; index: IndexSpec | null 
   return { base: raw, index: null }
 }
 
-/** 属性名形态（链尾未知提取指令 = HTML 属性名，如 onclick/value/_src；只在取值用途认，见 classifyDefault）。
- *  含 `.` 的「词.词」不在此列——由 `isCssWordChain` 兜底交 CSS（见 isImplicitCss 顶注）。 */
+// 属性名形态（链尾未知提取指令 = HTML 属性名，如 onclick/value/_src；只在取值用途认）。
+// 含 `.` 的「词.词」不在此列——由 `isCssWordChain` 兜底交 CSS。
 function isAttrName(name: string): boolean {
   return /^[@a-zA-Z_][-\w:]*$/.test(name)
 }
 
-/** 方括号索引形态（`[it,it,…]` / `[!it,…]`）：`li[-1:0]`、`tag.a[!0]`。
- *  内容只认整数 / `a:b[:c]` 区间 / 逗号 / `!`（含字母即不匹配——CSS 属性选择器不误伤）。
- *  v1 口径：单条目（闭区间 + step 自动，负数从尾数）与 `!` 整数排除收；**多条目收成并集**
- *  （去重、越界丢弃、最终按**插入序**取位，写序影响结果，见 `positionsFor` 的 multi 分支）。 */
+/** 方括号索引形态（`[it,it,…]` / `[!it,…]`）：`li[-1:0]`、`tag.a[!0]`。内容只认整数 / `a:b[:c]`
+ *  区间 / 逗号 / `!`（含字母即不匹配——CSS 属性选择器不误伤）。v1：单条目与 `!` 整数排除收；
+ *  **多条目收成并集**（去重、越界丢弃、最终按**插入序**取位，写序影响结果）。 */
 const BRACKET_RE = /^(.+?)\[(!?)([-\d:\s,]+)\]$/
 
-/** 单个方括号条目 → IndexSpec（认不出 → null，交回常规识别，与单条目同口径） */
+/** 单个方括号条目 → IndexSpec（认不出 → null，交回常规识别） */
 function parseBracketEntry(e: string): IndexSpec | null {
   if (/^-?\d+$/.test(e)) return { kind: 'index', value: Number(e) }
   const sm = /^(-?\d*):(-?\d*)(?::(-?\d+))?$/.exec(e)
@@ -435,7 +388,6 @@ function splitBracketSuffix(
   const base = m[1]
   const bang = m[2]
   const body = m[3]
-  // 三组都是模式的必选段；取不到与「不匹配方括号形态」同一落点：交回常规识别（不猜索引）
   if (base === undefined || bang === undefined || body === undefined) return null
   const entries = body.split(',').map((s) => s.trim()).filter((s) => s !== '')
   if (entries.length === 0) return null
@@ -448,7 +400,6 @@ function splitBracketSuffix(
     return { base, index: null, exclude: nums }
   }
   if (entries.length > 1) {
-    // 多条目并集（条目收进去重 Set，越界的静默丢弃，最终按插入序取位——写序影响结果）
     const specs: IndexSpec[] = []
     for (const e of entries) {
       const spec = parseBracketEntry(e)
@@ -458,7 +409,6 @@ function splitBracketSuffix(
     return { base, index: { kind: 'multi', entries: specs } }
   }
   const only = entries[0]
-  // 上面两判已送走空集与多项集 ⇒ 这里恰剩一项；取不到与「多条目里有认不出的」同一落点
   if (only === undefined) return null
   return { base, index: parseBracketEntry(only) }
 }
@@ -470,13 +420,11 @@ function classifyDefault(raw: string, exclude: number[] | undefined, el: string,
   const bracketExclude = bracket?.exclude
   const effExclude = exclude ?? bracketExclude
 
-  // 位置后缀：从最后一个 . 起，取第一个能解析为 IndexSpec 的后缀；
-  // 都不成立则整串是名称（class.note.clearfix → arg 'note.clearfix'，不许在第一个 . 截断）
+  // 位置后缀：从最后一个 . 起取第一个能解析为 IndexSpec 的后缀；都不成立则整串是名称
+  // （class.note.clearfix → arg 'note.clearfix'，不许在第一个 . 截断）
   const { base: rawName, index: dotIndex } = splitIndexSuffix(target)
-  // 尾点号剥离（句点分段口径）：`tag.li.!0:1:-1` 的 !排除 切走后 base 是 `tag.li.`——名字按 `.`
-  // 分成段后**逐段取用**，尾部空串自然丢弃；我们把 `li.` 整段当 arg 喂给 css-select 就炸
-  // 「Expected name, found .」。只剥**尾部**连续点号：中段点仍是
-  // 名称/选择器的一部分（class.note.clearfix 语义不动）。
+  // 尾点号剥离：!排除 切走后 base 是 `tag.li.`——名字按 `.` 分段后逐段取用，尾部空串自然丢弃；把 `li.`
+  // 整段喂给 css-select 会炸「Expected name, found .」。只剥**尾部**点号。
   const name = rawName.replace(/\.+$/, '')
   const index = bracket?.index ?? dotIndex
 
@@ -491,9 +439,8 @@ function classifyDefault(raw: string, exclude: number[] | undefined, el: string,
     return effExclude === undefined ? { kind: 'default', mode, arg, index } : { kind: 'default', mode, arg, index, exclude: effExclude }
   }
 
-  // 属性终端：**取值用途 + 链尾**的未知提取指令 = HTML 属性名，按该属性
-  // 取值（空值丢弃、去重在求值层）。若落进隐式 CSS 按标签选择器求值，会恒零命中 → 搜索能搜到但
-  // 书目 URL 全空。列表用途链尾未知词仍是选择器——列表入口只出元素、不取属性。
+  // 属性终端：**取值用途 + 链尾**的未知提取指令 = HTML 属性名（空值丢弃、去重在求值层）。若落进隐式
+  // CSS 按标签选择器求值会恒零命中——搜索能搜到但书目 URL 全空。列表用途链尾未知词仍是选择器。
   if (ctx.usage === 'value' && isLast && isAttrName(name)) {
     if (effExclude !== undefined && index !== null) {
       throw new UnsupportedRuleError('位置索引与 ! 排除语法不并存（两语法互斥）', { facet: ctx.facet, segmentIndex: ctx.counter, segmentRaw: el })
@@ -501,10 +448,9 @@ function classifyDefault(raw: string, exclude: number[] | undefined, el: string,
     return effExclude === undefined ? { kind: 'default', mode: 'attr', arg: name, index } : { kind: 'default', mode: 'attr', arg: name, index, exclude: effExclude }
   }
 
-  // 隐式 CSS 回落（简写形态：#page/.txt-list/li/a/div[itemscope] 都是选择器）。
-  // 位置后缀随 css 段带走（`a.0` = 选择 a 再取第 0 个，输入里常见）。
-  // 不要把后缀并进选择器：`a.0` 会被当成 class 选择 → 恒零命中 → 首条书名为空。
-  // 无索引时不带 index 字段（AST 精确形态，toEqual 口径）
+  // 隐式 CSS 回落（简写形态：#page/.txt-list/li/a/div[itemscope] 都是选择器）。位置后缀随 css 段带走
+  // （`a.0` = 选择 a 再取第 0 个）——不要把后缀并进选择器：`a.0` 会被当成 class 选择 → 恒零命中 →
+  // 首条书名为空。无索引时不带 index 字段（AST 精确形态，toEqual 口径）。
   if (isImplicitCss(name)) {
     if (effExclude !== undefined && index !== null) {
       throw new UnsupportedRuleError('位置索引与 ! 排除语法不并存（两语法互斥）', { facet: ctx.facet, segmentIndex: ctx.counter, segmentRaw: el })
@@ -515,20 +461,18 @@ function classifyDefault(raw: string, exclude: number[] | undefined, el: string,
     return seg
   }
 
-  // 模板态：白名单之外的段是**字面文本**——模板态下文本原样拼进结果
-  // （`最近更新：@get:{time}` 的 `最近更新：`、`书籍信息：\n编号：` 这类标签段），不做选择器求值
+  // 模板态：白名单之外的段是**字面文本**，原样拼进结果（`最近更新：@get:{time}` 的 `最近更新：`），
+  // 不做选择器求值
   if (ctx.template) return { kind: 'literal', raw: el.trim() }
-  // 纯索引段（`kind: "0"` 这类）**未实现**：裸索引＝根的子元素再取索引，但本仓的
-  // `children` 在根上下文上已与之分叉（见矩阵 `a-bare-index-segment`）——
-  // 不把这个映射接在一个可疑的基座上，先修 `children` 再放行。此处继续走解析期抛错（宁炸不猜）。
-  // 白名单之外、又不构成选择器形态（含空格/非法字符，如 'weird head.x'）→ 解析期抛（宁炸不猜）
+  // 纯索引段（`kind: "0"` 这类）**未实现**：裸索引＝根的子元素再取索引，但本仓的 `children` 在根上下文
+  // 上已与之分叉（见矩阵 `a-bare-index-segment`）——不把映射接在可疑基座上，先修 `children` 再放行。
+  // 白名单之外、又不构成选择器形态（含空格/非法字符）→ 解析期抛（宁炸不猜）
   throw new UnsupportedRuleError('无法识别的段类型（default 段白名单之外）', { facet: ctx.facet, segmentIndex: ctx.counter, segmentRaw: el })
 }
 
-/** 位置后缀解析：`all` | 整数（含负） | 冒号分隔的**索引列表**（`0:2` = 第0与第2个）
- *  位置后缀的集合口径：对 `.`/`:`/`!` 一律「取下一个数字进集合」，冒号不是区间运算符——
- *  不要把它读成半开切片：`.0:2` 会出 [0,1) = A、B，正确口径出 A、C；
- *  `-1:10:2` 这种合法写法也会整个被当选择器炸掉。 */
+/** 位置后缀解析：`all` | 整数（含负） | 冒号分隔的**索引列表**（`0:2` = 第0与第2个）。集合口径：
+ *  对 `.`/`:`/`!` 一律「取下一个数字进集合」，冒号不是区间运算符——不要读成半开切片（`.0:2` 正确
+ *  口径出 A、C；读成 [0,1) 出 A、B），那样 `-1:10:2` 这类合法写法也会被当选择器炸掉。 */
 function parseIndexSuffix(suffix: string): IndexSpec | null {
   if (suffix === 'all') return { kind: 'all' }
   if (/^-?\d+$/.test(suffix)) return { kind: 'index', value: Number(suffix) }
@@ -540,10 +484,9 @@ function parseIndexSuffix(suffix: string): IndexSpec | null {
 }
 
 /**
- * 这条规则是否**只设变量**（全链只有 `@put` 段，没有任何取值段）。
- * `@put:{…}` 在切分之前就被整体剥掉，剥完为空 ⇒ 取不到新根，于是「纯 @put 的 init」= 只设变量、
- * 不换根；当「零命中」报错就是拿合法形状冒充规则失效（现量与名单只登记在矩阵
- * `c-rule-book-info-init` 一处，注释不带数）。判据归引擎，服务层只消费结论。
+ * 这条规则是否**只设变量**（全链只有 `@put` 段，没有任何取值段）。`@put:{…}` 在切分之前就被整体
+ * 剥掉，剥完为空 ⇒ 取不到新根，于是「纯 @put 的 init」= 只设变量、不换根；当「零命中」报错就是拿
+ * 合法形状冒充规则失效（现量与名单只登记在矩阵 `c-rule-book-info-init`，注释不带数）。
  */
 export function isPutOnlyRule(rule: string, facet: Facet = 'rule'): boolean {
   const parsed = parseRule(rule, facet)

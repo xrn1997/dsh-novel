@@ -1,5 +1,5 @@
 /** 聚合搜索文案：起始 / 运行中 / 收口 / 两条呈现轴 / 加架回执 / 读面错误。键前缀 `search.`。
- *  zh 逐字照录屏上现有文案（测试钉子在 views-wiring / search-job / search-view-model），
+ *  zh 逐字照录屏上现有文案（测试钉子在 wiring-search / search-job / search-view-model），
  *  en 只镜像同一批键；数量句一律走 `plural`，中文两侧同文、英文按 one/other 变单复数。 */
 export const SEARCH_ZH = {
   'search.back': '‹ 书架',

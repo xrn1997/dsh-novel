@@ -18,8 +18,7 @@ import { formatByteLimit } from './size.js'
 import { readJson, writeJsonAtomic, isAtomicTemp, backupPathOf } from './storage.js'
 import { readValue, type ValueSource } from './value-source.js'
 
-/** 本地书的保留源 id：**单主人是 shared/wire.ts**（跨半契约常量）。服务半可直接 import shared
- *  （services/types.ts、reading.ts 已在做），故此处不另写声明——re-export 保留既有 import 路径。 */
+/** 本地书的保留源 id：**单主人是 shared/wire.ts**；此处 re-export 保留既有 import 路径。 */
 export { LOCAL_SOURCE_ID }
 
 /** 章节偏移表项（形状住在 `local-meta.ts` 的存储/读 codec）：re-export 保留既有 import 路径。 */
@@ -31,10 +30,8 @@ export function isLocalBookKey(bookKey: string): boolean {
   return BOOK_KEY_RE.test(bookKey)
 }
 
-/**
- * 本地文件解码链（不复用 fetcher.decodeBody——其兜底是 UTF-8，GBK 会乱码；
- * 本地文件也没有 Content-Type）：BOM 优先 → UTF-8 严格探测 → GBK 回退。
- */
+/** 本地文件解码链（不复用 fetcher.decodeBody——其兜底是 UTF-8，GBK 会乱码；本地文件也没有 Content-Type）：
+ *  BOM 优先 → UTF-8 严格探测 → GBK 回退。 */
 export function decodeLocalText(buf: Buffer): { text: string; encoding: string } {
   if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
     return { text: buf.subarray(3).toString('utf8'), encoding: 'utf-8-bom' }
@@ -79,8 +76,7 @@ export function splitChapters(text: string): ChapterSpan[] {
   return spans
 }
 
-/** 本地书导入失败（文件为空/解析不出章节等）——类目 local-import（错误体不再
- *  自带 HTTP status，映射归分类表 services/errors.classify + api/wire.STATUS_OF 唯一主人） */
+/** 本地书导入失败——类目 local-import（HTTP status 映射归 services/errors.classify + api/wire.STATUS_OF 唯一主人）。 */
 export class LocalImportError extends Error {
   constructor(message: string) {
     super(message)
@@ -96,9 +92,8 @@ export class LocalFileTooLargeError extends Error {
   }
 }
 
-/** 本地产物不存在（书元数据 / 章号 / 文档 / 资源查不到）——类目 not-found（HTTP 404）。
- *  与 LocalImportError 分列：导入失败是「这次的输入不成立」（400），而读一个不存在的东西是 404；
- *  两者混成一类会让「书被删了」显示成「本地导入失败」。 */
+/** 本地产物不存在（元数据 / 章号 / 文档 / 资源查不到）——类目 not-found（404）。与导入失败分列：
+ *  读一个不存在的东西不是「这次的输入不成立」。 */
 export class LocalArtifactNotFoundError extends Error {
   constructor(message: string) {
     super(message)
@@ -126,16 +121,14 @@ export interface LocalImportResult {
 export interface LocalResource {
   /** 导入期**验证结果**的 MIME（不是 manifest 声明） */
   readonly mediaType: string
-  /** **打开时 stat 出的真实字节数**（响应头用）：导入期记的落盘值只在元数据里，
-   *  文件被截断时它不是真相——按它发 content-length 会让客户端等一条永远不来的尾巴 */
+  /** **打开时 stat 出的真实字节数**（响应头用）：导入期记的落盘值只在元数据里，文件被截断时按它发 content-length 会让客户端等一条永远不来的尾巴 */
   readonly bytes: number
   /** 已成功打开的落盘资源流：打开失败即抛，响应头不会先发。调用方负责在断连/出错时销毁 */
   readonly stream: Readable
 }
 
-/** 本地导入上限（缺省 50MB）。**这个数是唯一主人**：传输层（`api/dispatch.ts` 读 `service.localImportMaxBytes`）、
- *  门面（`reading.ts` 的 create/from 回退）与缺省装配处 `src/config.ts` 的 schema `.default()` 全部走它——两侧同一值是有意的：
- *  流读时按它计数，解析层再按它判一次，两边不一致就会出现「读进来了却拒不解析」的错觉。 */
+/** 本地导入上限（缺省 50MB）。**这个数是唯一主人**：传输层、门面回退与 `src/config.ts` 的 schema `.default()` 全走它——
+ *  流读时按它计数，解析层再判一次，两边不一致会出现「读进来了却拒不解析」的错觉。 */
 export const DEFAULT_MAX_IMPORT_BYTES = 50 * 1024 * 1024
 
 /** 同时顾及几本本地书：正文全文与元数据两张表各按这个数收（读一本时另一本留着不至于重解）。 */
@@ -148,34 +141,25 @@ const STAGING_SUFFIX = '.importing'
 /**
  * 本地书库：TXT 与 EPUB 的**落盘身份**、发布提交协议、正文/导航/资源读取与删除。
  *
- * 三条口径（改这一层先读它们）：
- * ① **分流只看魔数**：文件头是 ZIP 本地头签名 `PK\x03\x04` 即走 EPUB 路径，此后归档层与包层的
- *    **任何**失败都照原样上抛（`EpubImportError` → 400），**不做 TXT 兜底**；不是 ZIP 魔数的才走
- *    既有 TXT 解码链（BOM → UTF-8 严格 → GBK 回退，一字不改）。理由与被否决方案
- *    （「先试着开归档、失败就当 TXT」）见 `hasZipMagic` 的注。
- *    分流之后不是一路放行：认得出的具名容器头（PDF / MOBI / UMD）在入口拒，文件名词尾声明是 EPUB
- *    而内容没有 ZIP 本地头的字节也在入口拒，TXT 链在解码终点还有一道「这是不是可读文本」的断言
- *    （`namedContainerMagicOf` / `assertReadableDecodedText`，理由见 `ADR-0065`）——被否的是
- *    **对一切非 UTF-8 字节判拒**那种全量启发式，不是这几条各自的判据。
- * ② **顶层元数据是提交标记**：EPUB 先在 `local/<uuid>.importing/` 建全部产物，一次 rename 到
- *    `local/<uuid>/`，再原子写 `local/<uuid>.json`，最后才由门面入架。本地目录与 shelf.json 之间
- *    **没有**跨文件事务，不假装有：强杀恰在「元数据写完、书架落盘前」会留一份完整但未入架的副本，
- *    本轮不建恢复扫描器（如实披露，不用自动删除掩盖）。
- * ③ **失败只碰本次 UUID 的路径**（staging / 已发布目录 / 元数据 / 同名 TXT 两件），绝不删 `local/`
- *    之外的东西、绝不碰别的书的文件。
+ * ① **分流只看魔数**：文件头是 ZIP 本地头签名 `PK\x03\x04` 即走 EPUB，此后归档层与包层的**任何**失败都照原样
+ *   上抛（`EpubImportError` → 400），**不做 TXT 兜底**；不是 ZIP 魔数才走既有 TXT 解码链（BOM → UTF-8 严格 → GBK）。
+ *   分流后仍有一道入口拒收：认得出的具名容器头（PDF / MOBI / UMD）、名字声明 EPUB 而内容无 ZIP 头、TXT 解出来
+ *   不是可读文本（`ADR-0065`）。被否的是「对一切非 UTF-8 字节判拒」的全量启发式，不是这几条判据。
+ * ② **顶层元数据是提交标记**：EPUB 先在 `local/<uuid>.importing/` 建全部产物，一次 rename 到 `local/<uuid>/`，
+ *   再原子写 `local/<uuid>.json`，最后由门面入架。本地目录与 shelf.json 之间**没有**跨文件事务，不假装有：
+ *   强杀恰在「元数据写完、书架落盘前」会留一份完整但未入架的副本（本轮不建恢复扫描器）。
+ * ③ **失败只碰本次 UUID 的路径**（staging / 已发布目录 / 元数据 / 同名 TXT 两件），绝不删 `local/` 之外的东西。
  *
  * 本层不认识 EPUB 的语法：解析与规范化全归 `services/epub/`，这里只做分流、落盘、读取与删除。
  */
 export class LocalBooks {
   private readonly localDir: string
-  /** 导入上限（活值）：每次 import 读一次快照——大小判定与报错文案必须是同一个值，
-   *  否则两个读数之间配置变了，用户看到的上限与实际拒绝的口径对不上。 */
+  /** 导入上限（活值）：每次 import 读一次快照——大小判定与报错文案必须是同一个值。 */
   private readonly maxImportBytes: ValueSource<number>
   /** bookKey → 解码全文；Map 迭代序 = LRU 序（get 时 delete+set 提升）。**只装 TXT**：
    *  EPUB 正文按文档按需读 JSON，不把整本塞进这个 LRU（那是两份缓存与两套失效口径）。 */
   private readonly textCache = new Map<string, string>()
-  /** bookKey → 元数据；章节/资源读取共用。TXT 的章节偏移表与 EPUB 的文档/资源表都在这里，
-   *  不缓存就得每章/每图重读重解析整份 meta。 */
+  /** bookKey → 元数据；章节/资源读取共用。TXT 的章节偏移表与 EPUB 的文档/资源表都在这里，不缓存就得每章/每图重读重解析。 */
   private readonly metaCache = new Map<string, LocalMeta>()
   private readonly metaInflight = new Map<string, Promise<LocalMeta>>()
   /** 删书代际：在途 meta 读取不得把已删书的旧表重新塞回缓存。全局递增——一本书被删就让所有
@@ -200,23 +184,20 @@ export class LocalBooks {
     if (buf.length > maxImportBytes) {
       throw new LocalFileTooLargeError(`文件超过 ${formatByteLimit(maxImportBytes)} 上限`)
     }
-    // 具名容器魔数在分流**之前**拒：TXT 链对任何字节都能给出结果（GBK 兜底不会失败、无标题就切一章），
-    // 让 PDF / MOBI / UMD 落进它就等于把一本读不出的书以 200 入架（口径①说的是不拿解析结果改道，
-    // 不是「剩下的字节都算文本」——见 ADR-0014 的在册待裁与 ADR-0065）
+    // 具名容器魔数在分流**之前**拒：TXT 链对任何字节都能给出结果（GBK 兜底 + 无标题单章），让 PDF/MOBI/UMD
+    // 落进去等于以 200 入架一本读不出的书。这是具名判据，不是「剩下的字节都算文本」（口径见 `ADR-0014` 的在册待裁与 `ADR-0065`）。
     const named = namedContainerMagicOf(buf)
     if (named !== null) throw new LocalImportError(`文件是 ${named} 容器，本插件的本地导入只支持 TXT 与 EPUB`)
     const isZip = hasZipMagic(buf)
-    // 文件名是「该按哪种容器去验、验不过报哪种错」的提示，不是改道的判据：`.txt` 命名的 ZIP 照旧走
-    // EPUB 路径（内容赢）。它只在名字声明了 EPUB、内容却连 ZIP 本地头都没有时生效，把「按 TXT 硬解成
-    // 一本单章书」这条假成功挡掉——只多拒、不静默收，所以名字这个客户端可写的东西仍不是证据。
+    // 文件名是「按哪种容器去验」的提示，不是改道判据：`.txt` 命名的 ZIP 照旧走 EPUB（内容赢）。只在名字声明了 EPUB、
+    // 内容却连 ZIP 头都没有时生效，把「按 TXT 硬解成单章书」挡掉——只多拒、不静默收。
     if (!isZip && /\.epub$/i.test(name)) {
       throw new LocalImportError('文件名声明是 EPUB（.epub），但内容不是 ZIP 容器（缺少 ZIP 本地头签名）：不按 TXT 导入；若文件本是纯文本，请改回 .txt；若本应是 EPUB，文件可能已损坏')
     }
     return isZip ? this.publishEpub(buf, name) : this.publishText(buf, name)
   }
 
-  /** TXT：布局与元数据形态与既有**完全一致**（`<uuid>.txt` + 无 schemaVersion 的 `<uuid>.json`）——
-   *  旧偏移表、旧进度、旧读取路径一字不改。 */
+  /** TXT：布局与元数据形态与既有**完全一致**（`<uuid>.txt` + 无 schemaVersion 的 `<uuid>.json`）——旧偏移表、旧进度、旧读取路径一字不改。 */
   private async publishText(buf: Buffer, name: string): Promise<LocalImportResult> {
     const { text, encoding } = decodeLocalText(buf)
     // 判据放在切章之前：切不开也要先把「这不是文本」说出口，别让整本二进制白切一遍再入架
@@ -240,11 +221,8 @@ export class LocalBooks {
     }
   }
 
-  /**
-   * EPUB 发布协议（口径②）：建 staging → 导入器只写 documents/ 与 resources/ → 原字节另存
-   * original.epub → rename 成最终目录 → 原子写顶层元数据（提交标记）→（门面入架）。
-   * 中途任何失败都回收本次 UUID 的全部落盘物（含刚发布出去的目录与原子写的临时残留）。
-   */
+  /** EPUB 发布协议（口径②）：建 staging → 导入器只写 documents/ 与 resources/ → 原字节另存 original.epub → rename →
+   *  原子写顶层元数据 →（门面入架）。中途任何失败都回收本次 UUID 的全部落盘物。 */
   private async publishEpub(buf: Buffer, name: string): Promise<LocalImportResult> {
     const id = randomUUID()
     const bookKey = `local:${id}`
@@ -278,8 +256,7 @@ export class LocalBooks {
     return this.tocOf(await this.metaOf(bookKey), bookKey)
   }
 
-  /** 章数：线性阅读序列的长度（TXT 偏移表 / EPUB 的阅读单元共用 `meta.chapters` 这一份）。
-   *  只要一个数时走这里——`getToc` 会顺带造出整套展示条目，补数不必付那份钱。 */
+  /** 章数：线性阅读序列的长度（TXT 偏移表 / EPUB 阅读单元共用 `meta.chapters`）；只要一个数时走这里，`getToc` 会顺带造整套展示条目。 */
   async chapterCount(bookKey: string): Promise<number> {
     return (await this.metaOf(bookKey)).chapters.length
   }
@@ -303,8 +280,7 @@ export class LocalBooks {
     return this.readDocument(bookKey, meta, chapter.documentId)
   }
 
-  /** 章节正文（**文字面**）：图文面的文字投影——唯一实现在 shared/chapter-text 的 chapterContentToText，
-   *  这里不写第二份投影（同一本书的导出、AI 工具与阅读器必须读到同一段文字） */
+  /** 章节正文（**文字面**）：图文面的文字投影——唯一实现是 shared/chapter-text 的 chapterContentToText，不写第二份。 */
   async getChapter(bookKey: string, index: number): Promise<string> {
     return chapterContentToText(await this.getChapterContent(bookKey, index))
   }
@@ -321,19 +297,14 @@ export class LocalBooks {
     return isEpubMeta(meta) ? meta.warnings : []
   }
 
-  /**
-   * 资源读口：**只认不透明 ID**——先在持久化的资源表里查（查不到 404 类错误），再按表里的相对名
-   * 打开文件；路径从不来自请求。打开成功后才返回流（响应头不会先发），字节数取**打开后 stat 的
-   * 真实 size**（元数据里那份是导入期记的，文件被截断时按它发 content-length 头体就不一致）。
-   */
+  /** 资源读口：**只认不透明 ID**——先在持久化资源表里查（查不到 404），再按表里的相对名打开文件；路径从不来自请求。
+   *  打开成功后才返回流（响应头不会先发），字节数取**打开后 stat 的真实 size**（截断时元数据那份不是真相）。 */
   async getResource(bookKey: string, resourceId: string): Promise<LocalResource> {
     const meta = await this.epubMetaOf(bookKey)
-    // 表是 JSON.parse 出的普通对象：必须只认**自有键**——`constructor`/`__proto__`/`toString` 会命中
-    // 继承成员，`ref.file` 取到 undefined → path.resolve 抛 TypeError → 500，而这里要的是 404
+    // 表是 JSON.parse 的普通对象：必须只认**自有键**——继承成员会让 `ref.file` 取到 undefined，`path.resolve` 抛 TypeError（500）而不是 404
     const ref = Object.hasOwn(meta.resources, resourceId) ? meta.resources[resourceId] : undefined
     if (ref === undefined) throw new LocalArtifactNotFoundError(`本地书没有这份资源: ${resourceId}`)
-    // open 与 stat 必须收在**同一个 try** 里：分开写时 stat 抛错既不关 fd（句柄泄漏），
-    // 又会绕过 ENOENT→404 的判定落到 classify 的 other。
+    // open 与 stat 必须收在**同一个 try**：分开写时 stat 抛错既不关 fd，又绕过 ENOENT→404 落到 classify 的 other
     let handle: Awaited<ReturnType<typeof fs.open>> | null = null
     try {
       handle = await fs.open(this.artifactPath(bookKey, ref.file), 'r')
@@ -346,14 +317,12 @@ export class LocalBooks {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
         throw new LocalArtifactNotFoundError(`本地资源文件缺失: ${resourceId}`)
       }
-      // 其余失败（打开成功后的 stat 失败即 I/O/产物损坏）原样上抛：文件是在的，404 会说谎
-      // 「没有这份资源」；这条读数与 `readDocument` 的损坏产物同族（500，原因原样透出）。
+      // 其余失败（打开成功后的 stat 失败即 I/O/产物损坏）原样上抛：文件是在的，404 会说谎「没有这份资源」。
       throw e
     }
   }
 
-  /** 删除：TXT 是两件文件、EPUB 是整棵目录 + 顶层元数据——**都走 discard 同一份清点**，
-   *  不会留下「只删了顶层 JSON、documents/resources 还在」的残骸。
+  /** 删除：TXT 两件文件、EPUB 整棵目录 + 顶层元数据——**都走 discard 同一份清点**，不会留下半份残骸。
    *  存在性只看元数据文件在不在（**不解析**）：损坏的元数据不该让恢复路径也炸。 */
   async remove(bookKey: string): Promise<boolean> {
     if (!isLocalBookKey(bookKey)) return false
@@ -381,9 +350,7 @@ export class LocalBooks {
     if (doc === undefined) throw new LocalArtifactNotFoundError(`本地书里没有这份文档: ${documentId}`)
     const content = JSON.parse(await fs.readFile(this.artifactPath(bookKey, doc.file), 'utf8')) as ChapterContent
     if (content.kind !== 'rich' || content.documentId !== doc.id) {
-      // **显式选 500**（不是让它当默认）：查不到文档是 404（`LocalArtifactNotFoundError`，读者问的是
-      // 一本书里没有的东西），而「元数据说这份产物在、读出来的内容却对不上号」是服务端自己的存储坏了——
-      // 报 404 会把自损伪装成「没这本书的这份文档」，用户与我们都无从下手（宁炸不猜）。
+      // **显式选 500**：查不到文档是 404，而「元数据说产物在、内容却对不上号」是服务端存储坏了——报 404 会把自损伪装成「没这份文档」
       throw new Error(`本地书产物损坏或错位: ${doc.file}`)
     }
     return content
@@ -443,10 +410,7 @@ export class LocalBooks {
     return meta
   }
 
-  /**
-   * 落盘产物的绝对路径：相对名只可能来自本仓写入的元数据，仍然夹紧在本书目录内——
-   * 元数据即使被改写也走不出 `local/<uuid>/`。
-   */
+  /** 落盘产物的绝对路径：相对名只可能来自本仓写入的元数据，仍然夹紧在本书目录内——元数据即使被改写也走不出 `local/<uuid>/`。 */
   private artifactPath(bookKey: string, relFile: string): string {
     const root = this.bookDirOf(this.idOf(bookKey))
     const abs = path.resolve(root, relFile)
@@ -456,16 +420,13 @@ export class LocalBooks {
     return abs
   }
 
-  /**
-   * 清掉本次 UUID 的**全部**落盘物：已发布目录、构建期目录、元数据与它的损坏备份、同名 TXT 两件，
-   * 以及原子写失败时留下的临时残留。路径全由 `local/` + uuid 拼出（前缀就是 uuid），绝不触碰别的书。
-   */
+  /** 清掉本次 UUID 的**全部**落盘物：已发布目录、构建期目录、元数据与损坏备份、同名 TXT 两件、原子写残留。
+   *  路径全由 `local/` + uuid 拼出，绝不触碰别的书。 */
   private async discard(id: string): Promise<void> {
     const entries = await fs.readdir(this.localDir).catch((): string[] => [])
     const json = this.fileOf(id, 'json')
     const txt = this.fileOf(id, 'txt')
-    // 残留与备份的**命名判据归 storage**（isAtomicTemp / backupPathOf）：不要在这里写死
-    // `.tmp` 与 `.bak` 去猜低层的名字，低层一改命名就会悄悄漏清（残留留在盘上没人知道）。
+    // 残留与备份的**命名判据归 storage**（isAtomicTemp / backupPathOf）：在这里写死 `.tmp`/`.bak` 去猜，低层一改命名就会悄悄漏清
     const temps = entries.filter((f) => isAtomicTemp(json, f) || isAtomicTemp(txt, f))
     await Promise.all([
       fs.rm(this.bookDirOf(id), { recursive: true, force: true }),
@@ -497,14 +458,12 @@ function titleOf(base: string): string {
   return base.replace(/[\\/:*?"<>|\r\n]/g, '_').trim() || '未命名'
 }
 
-/** 文件名 → 兜底书名：先剥末级扩展名（任意后缀，不认 `.txt` 一种），再交 `titleOf` 洗字符。
- *  TXT 与 EPUB 两条发布路径共用这一条——各剥各的会让同一份名字在两处得到两个标题。 */
+/** 文件名 → 兜底书名：先剥末级扩展名（任意后缀，不认 `.txt` 一种），再交 `titleOf` 洗字符；TXT 与 EPUB 两条发布路径共用。 */
 function titleFromName(name: string): string {
   return titleOf(name.replace(/\.[^./\\]+$/, ''))
 }
 
-/** 导入索引 → 持久化元数据：只补书身份与时间戳，元素形状原样落盘（形状主人是导入层）。
- *  返回类型即**存储形状**的声明点（`local-meta.ts` 的 `StoredEpubMetaV2`），写入处不再借读面类型。 */
+/** 导入索引 → 持久化元数据：只补书身份与时间戳，元素形状原样落盘（形状主人是导入层）；返回类型即**存储形状**的声明点。 */
 function metaOfImport(data: EpubImportData, name: string): StoredEpubMetaV2 {
   return {
     schemaVersion: LOCAL_META_SCHEMA_VERSION,
@@ -523,9 +482,8 @@ function metaOfImport(data: EpubImportData, name: string): StoredEpubMetaV2 {
   }
 }
 
-/** 导入索引 → 书架书目字段：**复用既有 SHELF_META 字段**（作者/封面），不新增本地格式字段；
- *  总章数由门面从 `chapterCount` 统一投影。封面 URL 走 `wire.resourceUrl`（唯一构造器，与客户端
- *  插图的 src 同一份）——两处各拼一次会在前缀或参数名改动时分叉成两个半场各说各话。 */
+/** 导入索引 → 书架书目字段：**复用既有 SHELF_META 字段**（作者/封面），不新增本地格式字段；总章数由门面从 `chapterCount` 投影。
+ *  封面 URL 走 `wire.resourceUrl`（唯一构造器，与客户端插图的 src 同一份）——各拼一次会在改动时分叉。 */
 function bookMetaOf(data: EpubImportData, bookKey: string): LocalBookMeta {
   return {
     ...(data.author === null ? {} : { author: data.author }),
@@ -538,29 +496,23 @@ function bookMetaOf(data: EpubImportData, bookKey: string): LocalBookMeta {
 /**
  * 分流的**唯一判据**（口径①）：ZIP 本地头签名 `PK\x03\x04`。
  *
- * 为什么只看文件头 4 字节、不看任何解析结果：把「打不开的 ZIP」也算成「不是 EPUB」就等于让归档层
- * 明令的安全拒绝（加密、zip-slip、超限……）与包层失败统统落回 TXT 链，而 TXT 链对任何字节都能
- * 给出结果（GBK 兜底 + 无标题单章）——一份加密 ZIP 会变成 200 的整本乱码。ZIP 就是 ZIP，
- * 是 EPUB 与否由 EPUB 路径自己判并对失败负责。
+ * 为什么只看文件头 4 字节：把「打不开的 ZIP」也算成「不是 EPUB」就等于让归档层的安全拒绝（加密、zip-slip、
+ * 超限……）与包层失败统统落回 TXT 链，而 TXT 链对任何字节都能给出结果——一份加密 ZIP 会变成 200 的整本乱码。
+ * ZIP 就是 ZIP，是 EPUB 与否由 EPUB 路径自己判。
  *
- * 另一面同样刻意：**不新增「对一切非 UTF-8 字节判拒」的全量启发式**——那会让现网本来能读的 TXT
- * （GBK 短篇、含控制字符的导出文件）变成拒收，比乱码更坏。判据是白名单式的：只有 ZIP 签名改道，
- * 其余字节一律走既有 TXT 解码链。白名单之外的三条**具名**判据不在此列（认得出这是别的容器、名字
- * 声明了 EPUB 而内容没有 ZIP 本地头、解出来根本不含文本，它们不是猜字节像不像文本）——判据各在
- * `namedContainerMagicOf`、`LocalBooks.import` 与 `assertReadableDecodedText`，口径与被否方案见 `ADR-0065`。
+ * 另一面同样刻意：**不新增「对一切非 UTF-8 字节判拒」的全量启发式**——那会让现网本可读的 TXT（GBK 短篇、
+ * 含控制字符的导出）变成拒收，比乱码更坏。判据白名单式：只有 ZIP 签名改道，其余走既有 TXT 解码链；
+ * 三条**具名**判据（别的容器、名字声明 EPUB、解出来不含文本）各在 `namedContainerMagicOf`、`import` 与
+ * `assertReadableDecodedText`，口径见 `ADR-0065`。
  */
 function hasZipMagic(buf: Buffer): boolean {
   return buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04
 }
 
 /**
- * 认得出的**具名**容器头：返回它的名字，认不出返回 `null`。
- *
- * 这不是「二进制即拒收」的启发式（那条被 ADR-0014 否掉，会误伤 GBK 短篇与含控制字符的导出 TXT）：
- * 判据是白名单的反面——只在这几个签名对得上时拒，其余字节照旧走解码链。三种容器各自在文件头有
- * 一串固定字节（UMD 的是偏移 0 起的 `89 9B 9A DE`；该格式没有公开的官方规范，签名由多份彼此独立的
- * 逆向解析资料一致给出，依据与残余风险见 `ADR-0065`），认出即点名是哪一种；认不出的容器只能靠解码
- * 终点那道断言兜底，那是本仓承认的残留面（见 `ADR-0065` 的边界）。
+ * 认得出的**具名**容器头：返回名字，认不出返回 `null`。这不是「二进制即拒收」的启发式：只在这几个签名对得上
+ * 时拒，其余字节照旧走解码链。三种容器各有固定文件头（UMD 是偏移 0 起的 `89 9B 9A DE`；该格式没有公开规范，
+ * 签名由多份独立逆向资料一致给出），认出即点名；认不出的容器靠解码终点断言兜底，那是本仓承认的残留面（`ADR-0065`）。
  */
 function namedContainerMagicOf(buf: Buffer): string | null {
   if (buf.length >= 5 && buf.subarray(0, 5).toString('latin1') === '%PDF-') return 'PDF'
@@ -572,13 +524,10 @@ function namedContainerMagicOf(buf: Buffer): string | null {
 }
 
 /**
- * 解码终点断言：**解出来不等于读得懂**。
- *
- * TXT 链的两处兜底（GBK 永不失败、无标题就切一章）意味着这条路上没有任何一步会说「不」——
- * 一份被清零的归档、一本纯空白的文件都会以「1 章导入成功」入架，那正是本仓定义的最高罪。
- * 解出来的字符串里出现 U+0000，说明字节不是本仓能按 UTF-8/GBK 读出的文本：被清零/截断的二进制，
- * 或无 BOM 的 UTF-16 一类未识别的编码（这条断言认的是「不是可读文本」，不是「一定是二进制」）；
- * 整本没有非空白字符则连「有内容」这件事都不成立。
+ * 解码终点断言：**解出来不等于读得懂**。TXT 链的两处兜底（GBK 永不失败、无标题就切一章）意味着这条路上没有
+ * 任何一步会说「不」——一份被清零的归档、一本纯空白文件都会以「1 章导入成功」入架，那是本仓的最高罪。
+ * 出现 U+0000 说明字节不是本仓能按 UTF-8/GBK 读出的文本（被清零/截断的二进制，或无 BOM 的 UTF-16）；
+ * 整本没有非空白字符则连「有内容」都不成立。
  */
 function assertReadableDecodedText(text: string): void {
   if (text.includes('\u0000')) {

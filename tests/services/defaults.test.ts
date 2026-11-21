@@ -1,14 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_JSON_BODY_MAX_BYTES } from '../../src/api/wire.js'
-import { resolveConfig } from '../../src/config.js'
+import { DEFAULT_SEARCH_PARALLEL } from '../../src/config.js'
 import { DEFAULT_CACHE_MAX_BYTES } from '../../src/services/cache.js'
 import { DEFAULT_EXPORT_DELAY_MS } from '../../src/services/export.js'
 import { DEFAULT_TIMEOUT_MS } from '../../src/services/fetcher.js'
 import { DEFAULT_MAX_IMPORT_BYTES } from '../../src/services/localbooks.js'
-import { DEFAULT_SEARCH_PARALLEL, staticLiveConfig } from '../../src/services/reading.js'
 import { DEFAULT_JS_BUDGET_MS } from '../../src/services/source-eval.js'
-import { DEFAULT_TTS_CACHE_MAX_BYTES } from '../../src/services/tts-cache.js'
 import { TTS_DEFAULTS } from '../../src/shared/wire.js'
 import { DEFAULT_JS_TIMEOUT_MS } from '../../src/engine/types.js'
 
@@ -39,30 +37,6 @@ describe('可调参数的缺省值单点化', () => {
 
   it('引擎缺省与配置缺省同值（单一缺省主人）', () => {
     expect(DEFAULT_JS_TIMEOUT_MS).toBe(DEFAULT_JS_BUDGET_MS)   // 15_000
-  })
-
-  it('staticLiveConfig 服务恰为十一格活值缺省，缺省逐格 === resolveConfig(undefined)', () => {
-    const served = staticLiveConfig({})
-    const names = [
-      'searchTimeoutMs', 'searchParallel', 'jsTimeoutMs',
-      'cacheMaxBytes', 'exportDelayMs', 'localImportMaxBytes',
-      'ttsDefaultEngine', 'ttsDefaultRate', 'ttsDefaultVolume',
-      'ttsCacheMaxBytes', 'ttsPrefetchParagraphs',
-    ] as const
-    expect(Object.keys(served).sort()).toEqual([...names].sort())
-    const resolved = resolveConfig(undefined)
-    for (const name of names) {
-      expect(served[name], name).toBe(resolved[name])
-    }
-  })
-
-  it('served 读数含听书五字段：缺省与消费模块常量同值', () => {
-    const served = staticLiveConfig({})
-    expect(served.ttsDefaultEngine).toBe(TTS_DEFAULTS.engineId)
-    expect(served.ttsDefaultRate).toBe(TTS_DEFAULTS.rate)
-    expect(served.ttsDefaultVolume).toBe(TTS_DEFAULTS.volume)
-    expect(served.ttsCacheMaxBytes).toBe(DEFAULT_TTS_CACHE_MAX_BYTES)
-    expect(served.ttsPrefetchParagraphs).toBe(TTS_DEFAULTS.prefetchParagraphs)
   })
 
   it('config.ts 的字段表缺省只引常量：枚举每个字段构造调用，逐个断言首参是导入常量', () => {

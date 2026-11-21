@@ -2,12 +2,8 @@ import type { SourcePublic } from './views/types.js'
 
 /**
  * 书源待办（source inbox）的纯派生：全库源清单 →「需要你处理的事」两集合 + 两集合 → 待办卡。
- * IA 口径：待办收件箱是书源管理 tab 的首屏——
- * 反常状态（坏源/未验证）置顶成任务卡，健康源退居列表；卡上是**成员名单 + 处置动作**
- * （批量重验/一键验证），**读数不印在卡上**（归列表头状态带，见 `source-list-view.ts` 的 `stats`）——
- * 卡是可以被忽略的提示，提示能关，读数不能跟着一起消失。逐源排查归列表行内「试跑」。
- *
- * 抽纯函数的理由与 source-list-view.ts 同：派生逻辑可单测，视图只做接线；
+ * 反常状态（坏源/未验证）置顶成任务卡，健康源退居列表；卡上是**成员名单 + 处置动作**，读数不印在
+ * 卡上（归列表头状态带）——卡可以被忽略，读数不能跟着消失。逐源排查归列表行内「试跑」。
  * 用户现场（哪张卡被忽略）不在此处，住 `source-inbox-ui.ts`。
  */
 
@@ -18,8 +14,7 @@ export interface SourceInbox {
   unverified: SourcePublic[]
 }
 
-/** 纯派生：零副作用。只看 `status`、不看 `enabled`——停用只摘掉「参与聚合搜索」这一件事，
- *  坏源/未验证的异常还在（停用 ≠ 免验）。 */
+/** 纯派生：只看 `status`、不看 `enabled`——停用只摘掉「参与聚合搜索」，坏源/未验证的异常还在。 */
 export function sourceInbox(sources: SourcePublic[]): SourceInbox {
   return {
     broken: sources.filter((s) => s.status === 'broken'),
@@ -32,10 +27,8 @@ export function inboxIds(inbox: SourceInbox, kind: 'broken' | 'unverified'): str
   return inbox[kind].map((s) => s.id)
 }
 
-// ── 待办卡与「忽略」──────────────────────────────────────────
-// 口径：待办是**提示**，不是工单分派。关掉一张卡 = 这批成员我不再需要
-// 被提醒；但成员集一变（新坏源 / 新导入未验证）提示就该回来——所以忽略按**成员签名**记账，
-// 而不是按「这个源永久静音」。读数也不住在卡上（卡标题不印计数），一律归列表头状态带。
+// 口径：待办是**提示**，不是工单分派。关掉一张卡 = 这批成员我不再需要被提醒；成员集一变提示就
+// 该回来——忽略按**成员签名**记账，而不是「这个源永久静音」。读数不住在卡上。
 
 export type InboxKind = 'broken' | 'unverified'
 
@@ -45,9 +38,7 @@ export interface InboxCard { kind: InboxKind; sources: SourcePublic[]; signature
 /** 忽略记录：kind → 点「忽略」那一刻该卡的成员签名；无键 = 未忽略 */
 export type InboxMuted = Partial<Record<InboxKind, string>>
 
-/** 成员签名：id 排序后拼接。排序是必要的——勾选顺序、服务端回包序都不该让同一批源长出
- *  两个签名（否则卡会无故从"已忽略"里复现）。空集 = 空串而非 undefined：判据要能区分
- *  「这一类现在没有成员」。 */
+/** 成员签名：id 排序后拼接——勾选顺序与服务端回包序都不该让同一批源长出两个签名；空集 = 空串。 */
 export function signatureOf(ids: string[]): string { return [...ids].sort().join('|') }
 
 /** 两类待办的当前签名（含空集）——忽略记录的存活判据 */

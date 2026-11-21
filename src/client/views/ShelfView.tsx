@@ -17,47 +17,34 @@ import {
 } from '../shelf-view-model.js'
 import { coverTintClass, sourceTintClass } from '../util.js'
 
-/** 本地书保留源 id 归 wire 契约（`LOCAL_SOURCE_ID`）：不要手抄 '__local__'——
- *  单主人在 src/shared/wire.ts；服务端 localbooks 只 re-export，client 也直接取 wire，
- *  字面量双份即漂移隐患。 */
+/** 本地书保留源 id 归 wire 契约（`LOCAL_SOURCE_ID`）：不要手抄 '__local__'，双份即漂移。 */
 
-/** 书架 tab 内容（IA：书架/书城/书源管理是 NovelView 顶部的并列 tab，用户拍板）：
- *  行1 内容标题 + 灰字计数；行2 搜索框单独一行且整簇居中（聚合搜索 = 找新书入口）；
- *  行3 筛选簇（有书才渲染）；网格末位常驻「导入本地书籍」引导卡（空书架以 .novel-grid.solo
- *  单卡兜底）。不做「搜一本书」引导卡——同一职责不留第二个入口。
- *  筛选与卡片元信息归 shelf-view-model（纯函数）；首字色块档位归 util.coverTintClass。
- *  承载元素口径：卡片与引导卡是真 <button>，删除钮是其**兄弟**而非后代（守卫
- *  tests/client/ui-system.test.tsx）；布局与配色归样式类，本文件零行内 style。
+/** 书架 tab 内容（与书城/书源管理并列）：行1 内容标题 + 灰字计数；行2 搜索框单独一行且整簇居中；
+ * 行3 筛选簇（有书才渲染）；网格末位常驻「导入本地书籍」引导卡（空书架以 .novel-grid.solo 兜底）。
+ * 不做「搜一本书」引导卡——同一职责不留第二个入口。筛选与卡片元信息归 shelf-view-model。
+ * 承载元素口径：卡片与引导卡是真 <button>，删除钮是其**兄弟**而非后代（守卫 ui-system）；零行内 style。
  *
- * 多选态（批量删除）：行3 的「选择」入态——筛选簇让位给批量条，卡片点击改为勾选、单本 ✕ 与
- *  导入引导卡退场。「全选」= 当前筛选可见的书（筛选在多选态定格，口径才有唯一答案）。选择态是
- *  **现场**（组件 state，不进 store）：切 tab 清零比残留旧勾选安全。批量走一次
- *  POST shelf/batch-delete（keys 点击时快照），不是循环 DELETE。
+ * 多选态（批量删除）：「选择」入态后筛选簇让位给批量条，卡片点击改为勾选。「全选」= 当前筛选可见的书
+ * （筛选在多选态定格）。选择态是**现场**（组件 state，不进 store）；批量走一次 POST shelf/batch-delete。
  *
- * 本地书导入（TXT / EPUB）：分流按**内容**在服务端做（ZIP 魔数），客户端不判格式；回执是 wire 的
- * `LocalImportResponse`，本视图**原样消费**。无告警照旧直接进阅读器；**有持久告警时不跳**，就地
- * 摆出回执——跳走等于把「这本书的有损事项」吞掉。成功/失败两半归 alive 闸与瞬态层。
- *
- * 测试钉子：搜索框 placeholder、删除 title、确认条与空态/错误文案的原文住在 `copy/shelf.ts`，
- * views-wiring + smoke 按这些键断言；改文案先改字典，别在这里另留一份。 */
+ * 本地书导入：分流按**内容**在服务端做（ZIP 魔数）；**有持久告警时不跳**，就地摆出回执——跳走等于
+ * 把有损事项吞掉。测试钉子文案住 `copy/shelf.ts`，改文案先改字典。
+ */
 
 export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): ReactNode {
   const t = useCopy()
-  // 书架读取面、筛选/关键字与落架账都住面板期投影（`panel-shelf`）：切 tab / 进阅读器再回来，
-  // 筛选与已落架的账不被卸载洗掉；真相仍在服务端，挂载时重取。
+  // 书架读取面、筛选/关键字与落架账都住面板期投影（`panel-shelf`）：切 tab 再回来不被卸载洗掉。
   const { books, error: loadError, keyword, filter } = useStore(panelShelf)
   /** 「正在听」只投影播放层的一格原语：整店订阅会让每段推进（段号、当前句）都把整张网格重渲染。 */
   const playingBookKey = useStoreValue(ttsPlayer, (s) => (s.playing ? s.bookKey : null))
   const [imgFailed, setImgFailed] = useState<Record<string, boolean>>({})
   // 本地书导入（TXT / EPUB 按内容分流，服务端说了算）：隐藏 file input + 上传后直进阅读器
   const [importError, setImportError] = useState<string | null>(null)
-  /** 导入回执现场（**只在有持久警告时**）：服务端回执原样持有，不复制成第二份形状。
-   *  有警告时不自动进阅读器——跳走就把「这本书带着降级/剥除事项」的交代吞了。 */
+  /** 导入回执现场（**只在有持久警告时**）：服务端回执原样持有；有警告时不自动进阅读器。 */
   const [imported, setImported] = useState<LocalImportResponse | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)   // 导入入口的触发方 = 网格引导卡/空架兜底卡
-  /** 本视图是否仍在场。`navigate` 是模块级 store 的动作、与组件存活无关，卸载后的 `.then` 里
-   *  照样会执行——不加闸，导入落地时用户已被切到别的 tab 却会被强行拽进阅读器。
-   *  两个半场都不许静默：在场走场景内提示，切走走瞬态层。 */
+  /** 本视图是否仍在场。`navigate` 是模块级 store 动作，卸载后的 `.then` 照样执行——不加闸，导入落地时
+   *  用户已被切走却会被拽进阅读器。在场走场景内提示，切走走瞬态层。 */
   const aliveRef = useRef(true)
   useEffect(() => {
     aliveRef.current = true
@@ -67,8 +54,7 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
   const [pendingDel, setPendingDel] = useState<{ books: ShelfEntry[]; batch: boolean } | null>(null)
   const [delError, setDelError] = useState<string | null>(null)
   const [delBusy, setDelBusy] = useState(false)
-  // 多选现场：selectMode + 已勾选的 bookKey（勾选序只是集合的存法；批请求的 targets 由 books
-  // 过滤得出 = 书架序，别指望它是点选顺序）
+  // 多选现场：selectMode + 已勾选的 bookKey（批请求的 targets 由 books 过滤得出 = 书架序）。
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
   const cancelDel = (): void => { setPendingDel(null); setDelError(null); setDelBusy(false) }
@@ -76,16 +62,14 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
   const toggleSelect = (bookKey: string): void => {
     setSelected((prev) => prev.includes(bookKey) ? prev.filter((k) => k !== bookKey) : [...prev, bookKey])
   }
-  /** 模态在场期间的键盘接管（Esc 取消 + Tab 圈在框内 + 关后还焦触发卡片 ✕）不在这层：
-   *  契约的唯一住址是 `views/dialog.tsx`，本层只交标题、内容与两颗钮。 */
-  /** 确认删除：**入口决定路径**——单本 ✕ 走 DELETE shelf/:key，多选「删除所选」走一次
-   *  POST shelf/batch-delete（哪怕只勾了 1 本：载荷与文案跟用户点的那个钮一致）。
-   *  成功才本地过滤 + 清勾选（失败半场卡片保留——乐观删除的回滚半场归接线测试钉死）。 */
+  /** 模态在场期间的键盘接管不在这层：契约唯一住址是 `views/dialog.tsx`，本层只交标题、内容与钮。 */
+  /** 确认删除：**入口决定路径**——单本 ✕ 走 DELETE shelf/:key，多选走一次 POST shelf/batch-delete。
+   *  成功才本地过滤 + 清勾选（失败半场卡片保留）。 */
   const confirmDelete = (): void => {
     if (pendingDel === null || delBusy) return
     const { books: targets, batch } = pendingDel
     const targetKeys = new Set(targets.map((b) => b.bookKey))
-    // 两个入口都保证至少一本（单本 ✕ 恒给 [b]，多选入口挡过空集）：这一支不可达，返回即不改现场
+    // 两个入口都保证至少一本（单本 ✕ 恒给 [b]，多选入口挡过空集）：这一支不可达。
     const [only] = targets
     if (only === undefined) return
     setDelBusy(true)
@@ -103,16 +87,13 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
       setDelBusy(false)
     })
   }
-  /** 取书架（挂载一次 + 有警告的导入留在本页后一次）：失败由投影落成 `[] + error`，
-   *  不许伪装成空架（网络失败写成空数组会渲染「书架空空」误导）。 */
+  /** 取书架：失败由投影落成 `[] + error`，不许伪装成空架（网络失败写成空数组会渲染「书架空空」）。 */
   const loadShelf = (): void => {
     void loadPanelShelf({
       apiGet: deps.apiGet,
       describeError: (e) => describeError(e, t),
     }).then((outcome) => {
-      // 读面成功才清封面失败表：一次瞬时失败不许在面板存活期内永久降级成首字块
-      //（书城换轮即清同一族）。`failed` 不清——旧表对应的仍是用户看得见的那批卡片；
-      // `stale` 也不清——那一发读的不是这一屏，判据必须取「这一发的落点」而不是投影里的旧读数。
+      // 读面成功才清封面失败表：一次瞬时失败不许在面板存活期内永久降级；`failed` / `stale` 不清——判据取这一发落点。
       if (outcome === 'ok') setImgFailed({})
     })
   }
@@ -153,9 +134,7 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
           <h1 className="novel-shelf-title">
             {t('shelf.title')}{books === null || books.length === 0 ? null : <span className="novel-shelf-count">{plural(t, books.length, 'count.books.one', 'count.books.other')}</span>}
           </h1>
-          {/* 行2：搜索框单独一行（聚合搜索 = 找新书入口，与书架筛选不是同一语义组）。
-              「搜索」钮与搜索页同款（type=submit + primary）：Enter 是隐藏交互，可见按钮才是
-              显式入口（用户提议；搜索页早有同款先例）。 */}
+          {/* 行2：搜索框单独一行（聚合搜索 = 找新书入口，与书架筛选不是同一语义组）。 */}
           <div className="novel-shelf-search">
             <form onSubmit={(e) => { e.preventDefault(); search() }} aria-label={t('shelf.search.label')}>
               <label className="novel-searchbox">
@@ -200,8 +179,7 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
               <span className="novel-shelf-sort">{t('shelf.sortNote')}</span>
             </div>
           )}
-          {/* 隐藏 file input（布局零参与）：触发方只有引导卡。accept 收 TXT 与 EPUB——分流按**内容**
-              （ZIP 魔数）在服务端做，这里只负责让选择器别把 .epub 藏起来 */}
+          {/* 隐藏 file input（布局零参与）：触发方只有引导卡。accept 收 TXT 与 EPUB——分流按**内容**。 */}
           <input ref={fileRef} type="file" accept=".txt,.epub" className="novel-file-hidden"
             onChange={(e) => {
               const f = e.target.files?.[0]
@@ -222,9 +200,8 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
                 }
                 navigate({ name: 'reader', sourceId: book.sourceId, bookKey: book.bookKey, title: book.title })
               }, (err: unknown) => {
-                // 导入失败的具体原因由服务端给（固定版式 / 加密条目 / 是 ZIP 魔数但读不成 EPUB 归档 /
-                // 超限），这里原样透出——换成「导入失败」一句泛话，用户与我们都无从下手；
-                // 非 ZIP 字节不走这条路（它照 TXT 解码链导入）
+                // 导入失败的具体原因由服务端给（固定版式 / 加密条目 / 读不成 EPUB / 超限），原样透出；
+                // 换成「导入失败」一句泛话，用户与我们都无从下手。非 ZIP 字节照 TXT 解码链导入。
                 const text = describeError(err, t)
                 if (aliveRef.current) setImportError(text)
                 else deps.pushError(t('shelf.notice.importFailed', { detail: text }))
@@ -233,10 +210,7 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
         </header>
         {/* 错误面：导入/加载两处场景内提示；删除错误在确认模态内就地呈现，不散落页面流 */}
         {importError === null ? null : <div className="novel-err novel-note-sm">{importError}</div>}
-        {/* 导入回执（只在有持久警告时）：书名/作者/封面直接用服务端回执（不是本地猜的），
-            格式取回执的 format 字段；警告逐条点名 code 与资源，读完可以「开始阅读」或「稍后再看」。
-            封面位与卡片同一条分支、共用同一份 `imgFailed`（键都是 `local:<uuid>` 这类 bookKey）：
-            资源文件被清掉时落「本地」占位而不是破图。 */}
+        {/* 导入回执（只在有持久警告时）：书名/作者/封面直接用服务端回执，不是本地猜的。 */}
         {imported === null ? null : (
           <div className="novel-import-note" role="status">
             <div className="novel-import-head">
@@ -261,10 +235,7 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
             </div>
           </div>
         )}
-        {/* 删除确认模态：遮罩 + 居中对话框 + 危险色确认钮；Esc/点遮罩取消，失败留在框内重试。
-            文案两形态同住 shelf-delete.ts（纯函数）：单本点名书名，批量点名本数并在含本地书时
-            点名副本连删。测试钉子：✕ 的 title「删除本书」、按钮文案「确认删除」、
-            失败文案「删除失败：…」、批量标题「删除选中的 N 本书？」。 */}
+        {/* 删除确认模态：遮罩 + 居中对话框 + 危险色确认钮；Esc/点遮罩取消，失败留在框内重试。 */}
         {pendingDel === null ? null : (() => {
           const [only] = pendingDel.books
           // 单本入口恒带 1 本：`only` 缺席这一支不可达，落到多选口径只为不造第四条渲染分支
@@ -312,16 +283,13 @@ export function ShelfView({ deps = prodShelfDeps }: { deps?: ShelfDeps }): React
                   const failed = imgFailed[b.bookKey] === true
                   const meta = shelfCardMeta(b, t)
                   const srcTag = shelfSourceTag(b, t)
-                  // 书架只有一条消费位置（progress）：听书落盘会同步写回它，卡片不另摆一条听书进度；
-                  // 「正在听」只标播放层**此刻在放**的那一本（封面顶左的徽标）——暂停即不再
-                  // 声称「正在听」（会话仍在，迷你条还在，只是这一格的状态字不撒谎）。
+                  // 书架只有一条消费位置（progress）：「正在听」只标播放层**此刻在放**的那一本，暂停即不再声称。
                   const nowPlaying = playingBookKey === b.bookKey
                   const picked = selected.includes(b.bookKey)
                   return (
                     <div key={b.bookKey} className={`novel-cell${selectMode ? ' sel' : ''}${picked ? ' on' : ''}`}>
                       <button className="novel-card"
-                        // 多选态里卡片就是勾选件（aria-pressed 如实）；常态是「阅读」入口。
-                        // 两种态下都是真 <button>——勾选标记是卡内装饰 span，不再嵌一个可交互控件。
+                        // 多选态里卡片就是勾选件（aria-pressed 如实）；两种态下都是真 <button>。
                         aria-label={selectMode
                           ? (picked
                             ? t('shelf.unpick', { title: b.title })

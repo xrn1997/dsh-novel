@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { readFileSync, readdirSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { createElement } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -13,6 +13,7 @@ import { routeStore } from '../../src/client/store.js'
 import { planarNavigation, ROUTES } from '../../src/shared/wire.js'
 import { makeCoreDeps, makeReaderDeps } from './fake-deps.js'
 import { must } from '../support/fixture.js'
+import { CLIENT_DIR, clientSources } from '../support/source-scan.js'
 import { rect, stubLayout } from './scroll-stub.js'
 
 beforeEach(resetPanelShelf)
@@ -29,23 +30,9 @@ beforeEach(resetPanelShelf)
  * 扫的就是这一层。
  */
 
-/** jsdom 环境下 import.meta.url 不是 file 协议（theme-tokens 跑在 node 环境才用得动 URL）——
- *  本文件的源码扫描按 cwd 定位（vitest 的工作目录恒为仓库根）。 */
-const clientDir = path.join(process.cwd(), 'src', 'client')
-const viewSource = (name: string): string => readFileSync(path.join(clientDir, 'views', name), 'utf8')
-
-function clientSources(): Array<{ file: string; text: string }> {
-  const out: Array<{ file: string; text: string }> = []
-  const walk = (dir: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const p = path.join(dir, entry.name)
-      if (entry.isDirectory()) walk(p)
-      else if (/\.tsx?$/.test(entry.name)) out.push({ file: path.relative(clientDir, p).split(path.sep).join('/'), text: readFileSync(p, 'utf8') })
-    }
-  }
-  walk(clientDir)
-  return out
-}
+/** 本文件的源码扫描与 `theme-tokens` / `host-dom-guard` 同一份实现（`tests/support/source-scan.ts`）；
+ *  视图单文件读取按同一个目录键拼路径。 */
+const viewSource = (name: string): string => readFileSync(path.join(CLIENT_DIR, 'views', name), 'utf8')
 
 /** 取出某条规则声明块内的文本：`/\.-?类名\s*\{([^}]*)\}/`（同名多条规则时取第一条） */
 function ruleBody(selector: string): string {
@@ -453,7 +440,7 @@ describe('键盘可达的承载元素（主操作不许只绑鼠标）', () => {
     const perSource = container.querySelector<HTMLElement>('[data-novel-per-source]')
     expect(perSource, '按源那一档没渲染').not.toBeNull()
     const perSourceEl = must(perSource, '按源那一档')
-    // 这一档默认收着（收起/展开由 views-wiring 的 DOM 事实钉住），读它里面的东西先展开：
+    // 这一档默认收着（收起/展开由 `wiring-search` 的 DOM 事实钉住），读它里面的东西先展开：
     // 不展开就取用，证的是 jsdom 能打进收起 details 这个巧合，不是界面
     fireEvent.click(must(perSourceEl.querySelector('summary'), '按源那一档的 summary'))
     const hit = within(perSourceEl).getByText('斗罗').closest('button')

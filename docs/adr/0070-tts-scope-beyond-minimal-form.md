@@ -2,21 +2,17 @@
 
 Status: accepted
 
-> 后续翻案：「不做跟读」一条已由 `ADR-0076`（跟读高亮）与 `ADR-0078`（阅读与听书共用一条消费位置）取代；其余条款仍有效。
+> 后续翻案：「不做跟读」一条已由 `ADR-0076`（跟读高亮）与 `ADR-0078`（阅读与听书共用一条消费位置；该篇现由 `ADR-0093` 承接）取代；其余条款仍有效。
 
-听书不按「一个内置引擎 + 一个自定义接入口」的最小形态落地，而是四类引擎源并存：内置、浏览器直出、宿主语音服务、legado HttpTTS 订阅；并带定时、全局迷你条、书架听至投影与模板音色绑定。跟读（播放位置回写阅读进度）默认关且本版不提供，不做按角色分音色。
-
-## 背景
-
-最小形态能出声，但听书与现有功能的关系不止「取文本 → 送引擎 → 播回来」：阅读器会被宿主切走、用户会跨书继续听、不同书的语速 / 音色习惯不同、设备可能没有网络。把这些都留给后续，会先落一个「一离开阅读器就断」的会话模型，再在它上面补常驻与位置双轨——那是一次比现在更贵的翻案。
+听书不按「一个内置引擎 + 一个自定义接入口」的最小形态落地，而是四类引擎源并存：内置、浏览器直出、宿主语音服务、legado HttpTTS 订阅；并带定时、全局迷你条、书架听至投影与模板音色绑定。跟读默认关且本版不提供，不做按角色分音色。背景：最小形态能出声，但听书与现有功能的关系不止「取文本 → 送引擎 → 播回来」——阅读器会被宿主切走、用户会跨书继续听、不同书的语速 / 音色习惯不同、设备可能没有网络；把这些留给后续，会先落一个「一离开阅读器就断」的会话模型，再在它上面补常驻与位置双轨。
 
 ## 决定
 
-- **四类源**：内置一条开箱即用；浏览器直出兜底（设备本地语音）；宿主语音服务在场才列出；legado HttpTTS 订阅作为可导入的额外合成源。
+- **四类源**：内置一条开箱即用；浏览器直出兜底；宿主语音服务在场才列出；legado HttpTTS 订阅作为可导入的额外合成源。
 - **订阅是对象数据**：落数据根的 `tts-engines.json`，凭据只写不读；导入回执按条点名坏条，坏条只剪自己。
 - **播放能力**：按段预取、同章与下一章暖缓存、语速 / 音色 / 音量按书记忆、暂停 / 跳段 / 跳章、定时、跨界面迷你条、书架「听至 / 正在听」投影。
-- **模板新增 `speakVoice` 绑定**：legado HttpTTS 只绑定 `speakText` / `speakSpeed`；本仓把音色也绑进模板求值，消费它的引擎（订阅 HttpTTS、宿主语音服务）据此换音色。不消费它的模板不受影响——内置百度口正是这一类：它的公开合成端点不读音色参数（判据与读数见 `src/services/tts.ts` 的 `BUILTIN_TTS_ENGINES` 注释），所以它不声明音色表，界面也不给它摆音色行。
-- **不做跟读**：播放位置回写阅读进度默认关，本版不提供开关；听书位置与阅读进度保持两条轨。
+- **模板新增 `speakVoice` 绑定**：消费它的引擎（订阅 HttpTTS、宿主语音服务）据此换音色；内置百度口的公开端点不读音色参数，所以它不声明音色表，界面也不摆音色行。
+- **不做跟读**：播放位置回写阅读进度默认关，本版不提供开关。
 - **不做按角色分音色**：正文没有角色标注，硬切会读串。
 
 ## 边界
@@ -27,9 +23,9 @@ Status: accepted
 
 ## 被否方案
 
-- **只做内置一条**：没有自定义接入口，设备离线或内置端点失效时整块功能不可用。
-- **先做最小形态、常驻与订阅后续补**：会话生命周期与位置双轨是地基；后补等于重写播放层。
-- **等社区插件兼容后再做**：兼容面（宿主语音服务、legado HttpTTS 订阅）已经内建；等外部插件定型会把功能可用性押在别人的发布节奏上。
-- **跟读默认开**：听书与看书会互相改位置，正是规格要求避免的冲突。
+- 只做内置一条：没有自定义接入口，设备离线或内置端点失效时整块功能不可用。
+- 先做最小形态、常驻与订阅后续补：会话生命周期与位置双轨是地基，后补等于重写播放层。
+- 等社区插件兼容后再做：兼容面已经内建，等外部插件定型会把可用性押在别人的发布节奏上。
+- 跟读默认开：听书与看书会互相改位置。
 
-锚点：`src/services/tts.ts` 的 `BUILTIN_TTS_ENGINES` / `TtsService.sources`；`src/services/tts-engines.ts` 的 `TtsEngineRegistry.importJson`；`src/services/tts-request.ts` 的 `planTtsRequest`（`speakVoice` 绑定）；`src/client/tts/player.ts` 的 `startListening` / `setListenTimer`；`src/client/tts/TtsMiniBar.tsx`；`src/client/shelf-view-model.ts` 的 `shelfCardMeta`；`tests/services/tts-engines.test.ts`；`tests/client/tts-mini.test.tsx`；`README.md` 的「听书」节；`ADR-0072`、`ADR-0069`、`ADR-0078`。
+锚点：`src/services/tts.ts` 的 `BUILTIN_TTS_ENGINES` / `TtsService.sources`；`src/services/tts-engines.ts` 的 `TtsEngineRegistry.importJson`；`src/services/tts-request.ts` 的 `planTtsRequest`；`src/client/tts/player.ts` 的 `startListening` / `setListenTimer`；`src/client/tts/TtsMiniBar.tsx`；`src/client/shelf-view-model.ts` 的 `shelfCardMeta`；`tests/services/tts-engines.test.ts`；`tests/client/tts-mini.test.tsx`；`README.md` 的「听书」节；`ADR-0069`、`ADR-0072`、`ADR-0078`。

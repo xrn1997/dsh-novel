@@ -3,6 +3,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FULL_SCAN_EVERY, SizeLedger } from '../../src/services/size-ledger.js'
 import { makeTempDir } from '../temp-dir.js'
+import { gateNextReaddir } from '../support/fs-gate.js'
 
 /**
  * 字节账的扫描节奏（`ADR-0068` 的那份共用纪律）：全扫只在「估算超限」或「写满间隔」时发生。
@@ -21,21 +22,6 @@ import { makeTempDir } from '../temp-dir.js'
 
 afterEach(() => { vi.restoreAllMocks() })
 
-/** 让下一发 readdir 挂住（其后的照常放行）：返回扫描次数读数与放行闸 */
-function gateNextReaddir(): { scans: () => number, release: () => void } {
-  let release = (): void => { throw new Error('扫描没停在 readdir 上') }
-  const gate = new Promise<void>((resolve) => { release = resolve })
-  const realReaddir = fs.readdir
-  const spy = vi.spyOn(fs, 'readdir')
-  let gated = false
-  spy.mockImplementation((async (d: string, o?: unknown) => {
-    const names = await (realReaddir as (p: string, opts?: unknown) => Promise<string[]>)(d, o)
-    if (!gated) { gated = true; await gate }      // 只有第一发扫描挂住
-    return names
-  }) as typeof fs.readdir)
-  return { scans: () => spy.mock.calls.length, release: () => { release() } }
-}
-
 describe('SizeLedger 的全扫间隔', () => {
   /** 建好索引、写到 31 笔（未触发全扫），再挂上 readdir 闸 */
   async function setup(): Promise<{ dir: string, ledger: SizeLedger, scans: () => number, release: () => void }> {
@@ -48,7 +34,7 @@ describe('SizeLedger 的全扫间隔', () => {
     }
     await put(0)                                 // 首写实扫建索引
     for (let i = 1; i < FULL_SCAN_EVERY - 1; i++) await put(i)   // 文件 0…30：31 笔写
-    return { dir, ledger, ...gateNextReaddir() }
+    return { dir, ledger, ...gateNextReaddir('after') }
   }
 
   it('扫描在途的写补回新账，计数照常清零：下一笔未超限的写不再全扫', async () => {
@@ -96,7 +82,7 @@ describe('SizeLedger 的全扫间隔', () => {
     await fs.writeFile(a, 'x'.repeat(100))
     await ledger.afterWrite([{ file: a, bytes: 100 }])          // 建索引：账 100
 
-    const gate = gateNextReaddir()
+    const gate = gateNextReaddir('after')
     await fs.writeFile(b, 'x'.repeat(60))
     const overCap = ledger.afterWrite([{ file: b, bytes: 60 }]) // 160 > 150 → 全扫 → 卡在 readdir
     await vi.waitFor(() => expect(gate.scans()).toBe(1))
@@ -124,7 +110,7 @@ describe('SizeLedger 的全扫间隔', () => {
     await fs.writeFile(a, 'x'.repeat(100))
     await ledger.afterWrite([{ file: a, bytes: 100 }])          // 建索引：账 100
 
-    const gate = gateNextReaddir()
+    const gate = gateNextReaddir('after')
     await fs.writeFile(b, 'x'.repeat(60))
     const first = ledger.afterWrite([{ file: b, bytes: 60 }])    // 160 > 150 → 全扫 → 卡在 readdir
     await vi.waitFor(() => expect(gate.scans()).toBe(1))

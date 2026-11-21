@@ -3,20 +3,16 @@ import { NOVEL_API_PREFIX } from '../shared/wire.js'
 import { zhTranslate } from './copy/index.js'
 import type { Translate } from './copy/index.js'
 
-/**
- * /novel-api 同源 fetch 封装。前缀与信封形状归 wire 契约（src/shared/wire.ts，双半唯一真相）。
+/** /novel-api 同源 fetch 封装。前缀与信封形状归 wire 契约（`src/shared/wire.ts`）。
  * 信封：{ ok:true, value } → value；{ ok:false, error } → ApiClientError；非 JSON/网络层 → NetworkError。
- *
- * 客户端自己编的网络错误带 `reason`：这是**翻译的唯一判据**——服务端错误没有它，原文透传
- * （`describeError`）。别用 code/status 猜来源：服务端也可能回 `NetworkError`。
- */
+ * 客户端自己编的网络错误带 `reason`：这是**翻译的唯一判据**——服务端错误没有它，原文透传。
+ * 别用 code/status 猜来源：服务端也可能回 `NetworkError`。 */
 export type NetworkReason = 'not-json' | 'request-failed' | 'stream-unavailable'
 
 export class ApiClientError extends Error {
   readonly code: string
   readonly status: number
-  /** 段级定位（服务端信封带出来的那个）。这两个字段是**内存里的错误对象**：不落盘、不进信封，
-   *  构造器按位置参数传，所以「显式给 undefined」是它们既有的用法，类型面照收。 */
+  /** 段级定位。这两个字段是**内存里的错误对象**：不落盘、不进信封；构造器按位置参数传。 */
   readonly segment?: { facet: string; segmentIndex: number; segmentRaw: string } | undefined
   readonly reason?: NetworkReason | undefined
   constructor(
@@ -35,8 +31,7 @@ export class ApiClientError extends Error {
   }
 }
 
-/** 错误展示文案的唯一入口：只翻客户端造的 `NetworkReason`，其余原文返回。
- *  默认 zh 让未接 locale 的调用方（测试 / 宿主未提供 locale 服务）保持现有中文。 */
+/** 错误展示文案的唯一入口：只翻客户端造的 `NetworkReason`，其余原文返回；缺省 zh 让未接 locale 的调用方保持中文。 */
 export function describeError(error: unknown, t: Translate = zhTranslate): string {
   if (error instanceof ApiClientError && error.reason !== undefined) {
     switch (error.reason) {
@@ -53,8 +48,7 @@ export function describeError(error: unknown, t: Translate = zhTranslate): strin
 
 const PREFIX = `${NOVEL_API_PREFIX}/`
 
-/** 客户端网络错误的唯一构造点：三处 fetch catch 共用，`reason` 固定 request-failed；
- *  message 保留原文供日志，`describeError` 按 reason 出当前语言。 */
+/** 客户端网络错误的唯一构造点：三处 fetch catch 共用，`reason` 固定 request-failed；`describeError` 按 reason 出话。 */
 export function networkErrorOf(e: unknown): ApiClientError {
   return new ApiClientError('NetworkError', 0, `网络请求失败: ${(e as Error).message}`, undefined, 'request-failed')
 }
@@ -68,9 +62,8 @@ async function jsonOf(res: Response): Promise<unknown> {
   }
 }
 
-/** 信封解析单点：ok → value；否则抛 ApiClientError。request/apiUpload 都必须走这一份。
- *  交回的是**未判形的负载**：信封只保证有 value 位，载荷形状归调用方那一侧的类型参数——
- *  把形状参数提到这里，等于让信封解析器替所有调用方作保。 */
+/** 信封解析单点：ok → value；否则抛 ApiClientError。交回的是**未判形的负载**——载荷形状归调用方那一侧，
+ *  把形状参数提到这里等于让信封解析器替所有调用方作保。 */
 function unwrap(body: unknown, status: number): unknown {
   const env = body as ApiEnvelope<unknown>
   if (env.ok) return env.value
@@ -110,13 +103,10 @@ export async function apiUpload<T>(pathWithQuery: string, body: Blob): Promise<T
 }
 
 /**
- * SSE 读流：起一条事件流，每帧把 `data:` 原文交给 `onFrame`；流正常结束 resolve、
- * 连不上 / 断线 / abort 则 reject（调用方据此回落到快照轮询）。
- *
- * 为什么不用 `EventSource`：它自带重连与 `Last-Event-ID`，等于把游标交给浏览器——
- * 而本仓的进度口径是「推送只是加速器，显式查询才是真相」（宿主契约：
- * 通知不 replay，必须提供 baseline / cursor / 显式 query）。游标握在客户端手里，
- * 两条通道才能共用同一份合并代码而不产生第二真相。
+ * SSE 读流：起一条事件流，每帧把 `data:` 原文交给 `onFrame`；流正常结束 resolve、连不上 / 断线 / abort
+ * 则 reject（调用方据此回落快照轮询）。不用 `EventSource`：它自带重连与 `Last-Event-ID`，等于把游标交给
+ * 浏览器；本仓口径是「推送只是加速器，显式查询才是真相」（通知不 replay）。游标握在客户端手里，
+ * 两条通道才能共用同一份合并代码。
  */
 export async function apiEventStream(
   pathWithQuery: string,

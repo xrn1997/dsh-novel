@@ -4,11 +4,8 @@ import { parseObjectJson, stringTableOf } from './normalize.js'
 import { log } from './log.js'
 import { absUrl, splitUrlOption } from './url.js'
 
-/** 书源 URL 模板的请求形态（格式钉死这三种）：
- *  ① 纯 URL：`/search?q={{key}}`（支持相对 URL——按 bookSourceUrl 解析）
- *  ② URL+选项：`url,{"method":"POST","body":"...","charset":"gbk","headers":"{...}","webView":true}`
- *  选项 JSON 允许单引号形态（宽容引号但不猜结构）；
- *  headers 可为 JSON 字符串（双重编码形态）。 */
+/** 书源 URL 模板的请求形态（三种）：① 纯 URL：`/search?q={{key}}`（支持相对 URL，按 bookSourceUrl 解析）；
+ *  ② URL+选项：`url,{"method":"POST",...}`（选项 JSON 允许单引号形态；headers 可为双重编码的 JSON 字符串）。 */
 export interface RequestOption {
   method?: string
   body?: string
@@ -22,11 +19,7 @@ export interface RequestOption {
   webJs?: string
 }
 
-/**
- * 请求计划：模板 + 变量 + baseUrl 的**唯一**可执行形态。
- * 选项语义（method 判定 / body 插值 / headers / POST 表单默认 urlencoded / charset）只在
- * assembleRequest 里解释一遍；不要在 buildSearchRequest 或 engineFetch 另写一份。
- */
+/** 请求计划：模板 + 变量 + baseUrl 的**唯一**可执行形态。选项语义只在 assembleRequest 解释一遍，别处不再写副本。 */
 export interface RequestPlan {
   url: string
   /** 三态：GET（缺省）/ POST（带 body）/ HEAD（只看响应头、不带 body） */
@@ -41,15 +34,12 @@ export interface RequestPlan {
   webJs?: string
 }
 
-/** `,{` 切分单点在 `engine/template.ts` 的 `URL_OPTION_SPLIT`（切分式与边界都记在那里）——
- *  本文件与 `engine/js-protocol.ts` 共用同一式，不再各抄一份。 */
-/** searchUrl → { URL 部分, 选项 }。不含 `,{` → 选项 undefined。 */
+/** searchUrl → { URL 部分, 选项 }（不含 `,{` → undefined）。切分单点在 `engine/template.ts` 的 `URL_OPTION_SPLIT`，本文件与 js-protocol 共用。 */
 export function parseUrlOption(template: string): { urlPart: string; option: RequestOption | undefined } {
   const m = URL_OPTION_SPLIT.exec(template)
   if (m === null) return { urlPart: template, option: undefined }
-  // 切分口径：`\s*,\s*(?=\{)` 命中即**无条件切分** URL——选项 JSON 是否合法只决定「拿没拿到
-  // 选项」，不决定「URL 干不干净」。不要把整串（含 `,{…}`）当 URL 发出，否则站点 404
-  // （弯引号等坏选项形态，矩阵行 `b-split-unconditional`）。
+  // 切分口径：`\s*,\s*(?=\{)` 命中即**无条件切分** URL——选项 JSON 是否合法只决定「拿没拿到选项」，不决定 URL 干不干净。
+  // 不要把整串（含 `,{…}`）当 URL 发出，否则站点 404（矩阵行 `b-split-unconditional`）。
   const urlPart = template.slice(0, m.index).trimEnd()
   const option = parseOptionJson(template.slice(m.index + m[0].length))
   if (option === undefined) {
@@ -59,18 +49,14 @@ export function parseUrlOption(template: string): { urlPart: string; option: Req
   return { urlPart, option }
 }
 
-/** 选项 JSON：宽松引号解析归 `normalize.parseObjectJson` 单点（头与 URL 选项共用同一份——
- *  严格 JSON 优先，失败回退单引号交换，`{'a':'b'}` → `{"a":"b"}`）。 */
-/** 本插件实现的 URL 选项键集（书源格式的键集更大：retry/type/js/bodyJs/dnsIp/serverID/webJs/origin…）。
- *  导出给严格消费面（朗读引擎请求求值）判「链认不出的键」——书源面按「留痕后忽略」处理，
- *  朗读面不能：method/body 被静默丢掉就是发错请求。 */
+/** 选项 JSON 的宽松引号解析归 `normalize.parseObjectJson` 单点。本插件实现的 URL 选项键集（书源格式更大）导出给严格消费面
+ *  （朗读引擎请求求值）判「链认不出的键」——书源面按「留痕后忽略」，朗读面不能：method/body 被静默丢掉就是发错请求。 */
 export const KNOWN_OPTION_KEYS: readonly string[] = ['method', 'body', 'charset', 'headers', 'retry', 'webView', 'webJs']
 
 function parseOptionJson(text: string): RequestOption | undefined {
   const obj = parseObjectJson(text)
   if (obj === undefined) return undefined
-  // 未知键留痕（宁吵不瞒——与「选项 JSON 非法」那条 warn 同一先例）：静默丢弃会让人以为选项
-  // 生效了。现量与键例见矩阵行 `b-opt-unknown-keys`。
+  // 未知键留痕（宁吵不瞒）：静默丢弃会让人以为选项生效了。现量与键例见矩阵行 `b-opt-unknown-keys`。
   const unknown = Object.keys(obj).filter((k) => !KNOWN_OPTION_KEYS.includes(k))
   if (unknown.length > 0) {
     log.warn(`URL 选项含本插件未实现的键，已忽略：${unknown.join('、')}`)
@@ -87,9 +73,7 @@ function parseOptionJson(text: string): RequestOption | undefined {
   return option
 }
 
-/** headers 两形态：对象直通；字符串（双重编码的 JSON）再宽松解析一次（同 `parseObjectJson`
- *  口径——单引号形态同样读得出）；非法 → undefined（不猜）。
- *  「哪些键活着」走 `normalize.stringTableOf` 单点。 */
+/** headers 两形态：对象直通；字符串（双重编码 JSON）再宽松解析一次；非法 → undefined（不猜）。「哪些键活着」走 `normalize.stringTableOf`。 */
 function parseHeaders(v: unknown): Record<string, string> | undefined {
   const obj = parseObjectJson(v)
   if (obj === undefined) return undefined
@@ -97,17 +81,10 @@ function parseHeaders(v: unknown): Record<string, string> | undefined {
 }
 
 /**
- * 表单体按声明 charset 转义：POST 的表单体（含 `{{key}}` 代入的关键词）按声明的 charset 逐段编码
- * （`option.charset` 在场即转义——当前**没有**「这份 body 是不是表单」的形状判别，默认
- * `urlencoded` 头还是在转义之后才补（`assembleRequest`）；「只在体非 JSON/XML 且未显式声明
- * Content-Type 才转义」是还没落地的意图，连同「逐字段编码」「`escape` 特例」两件事一起登记在
- * 矩阵 `b-opt-charset-form-fidelity`（本仓这条只是子集）。
- * JSON 体不是表单，转义它只会毁掉它——故那里要拍板的是补判别还是删这句）。
- * 为什么只重编码**非 ASCII**：本仓的体已过 interpolateUrl 的 UTF-8 转义，若对整串按 charset 重编码，
- * 会把 `%E4%B9%A6` 二次编码成 `%25E4%B9%A6`；故转义段先按 UTF-8 解码、直写字符直接用，再按 charset
- * 逐字节转义——同一关键词得到同一字节串，且不二次编码。
- * UTF-8 别名与 iconv 认不出的 charset 一律原样返回（认不出的由解码链的 DecodeError 点名，不在此猜）。
- * GBK 站发 UTF-8 关键词恒 0 命中——读数见矩阵行 `b-opt-charset`。
+ * 表单体按声明 charset 转义：`option.charset` 在场即转义（当前没有「这份 body 是不是表单」的形状判别；「只在体非 JSON/XML 且未显式
+ * 声明 Content-Type 才转义」是还没落地的意图，子集差异登记在矩阵 `b-opt-charset-form-fidelity`）。为什么只重编码**非 ASCII**：本仓的体
+ * 已过 interpolateUrl 的 UTF-8 转义，整串按 charset 重编码会把 `%E4%B9%A6` 二次编码成 `%25E4%B9%A6`；故转义段先按 UTF-8 解码、再按
+ * charset 逐字节转义。UTF-8 别名与 iconv 认不出的 charset 原样返回（由解码链的 DecodeError 点名）。
  */
 function encodeFormCharset(body: string, charset: string): string {
   if (!iconv.encodingExists(charset) || /^utf-?8$/i.test(charset.replace(/_/g, '-'))) return body
@@ -130,11 +107,9 @@ function decodePercentRun(run: string): string | null {
 }
 
 /**
- * 选项语义的唯一主人：模板 + 变量 + baseUrl（null = 不做绝对化，@js ajax 形态用）→ 请求计划。
- * method 判定 / body 插值 / POST 表单默认 urlencoded / headers / charset 全部只在这里解释一遍
- * （不要在别处再写一份同口径的副本）。相对 URL 按 baseUrl 解析（书源格式允许写相对地址；
- * 直接喂 fetch 会让相对 URL 全数打不到）。
- * trimFirstPage：Native 分页语义——模板以 `/{{page}}` 结尾时首页裁掉页码段（带 /1 站点直接 404）。
+ * 选项语义的唯一主人：模板 + 变量 + baseUrl（null = 不做绝对化，@js ajax 用）→ 请求计划。method 判定 / body 插值 / POST 表单
+ * 默认 urlencoded / headers / charset 全部只在这里解释一遍。相对 URL 按 baseUrl 解析。trimFirstPage：Native 分页语义——模板以
+ * `/{{page}}` 结尾时首页裁掉页码段（带 /1 站点直接 404）。
  */
 export function assembleRequest(
   template: string, vars: Record<string, string | number>, baseUrl: string | null,
@@ -145,21 +120,17 @@ export function assembleRequest(
     ? urlPart.slice(0, -'/{{page}}'.length)
     : urlPart
   const interpolated = interpolateUrl(effective, vars)
-  // 页码角列表 `<a,b,c>`：在 key/js 求值之后、选项切分之前替换。
-  // 本仓放在插值之后（同一位置），只对 URL 段生效——选项 JSON 含尖括号的形态现库无（矩阵行
-  // `b-page-angle-list`），差异不可观测。
+  // 页码角列表 `<a,b,c>`：在 key/js 求值之后、选项切分之前替换，只对 URL 段生效（矩阵行 `b-page-angle-list`）。
   const withPageList = expandPageAngleList(interpolated, typeof vars.page === 'number' ? vars.page : null)
   const url = baseUrl === null ? withPageList : (absUrl(withPageList, baseUrl) ?? withPageList)
-  // method 三态（POST/HEAD 各占一支、其余落 GET——判据与对读记录见矩阵行 `b-opt-method-head`）：
-  // HEAD 不能被并进「不是 POST 就 GET」那条路——声明 HEAD 的源会实际发 GET（降级当成了实现）。
+  // method 三态：POST/HEAD 各占一支、其余落 GET；HEAD 不能被并进「不是 POST 就 GET」那条路，否则声明 HEAD 的源会实际发 GET。
   const rawMethod = (option?.method ?? 'GET').toUpperCase()
   const method: RequestPlan['method'] = rawMethod === 'POST' ? 'POST' : rawMethod === 'HEAD' ? 'HEAD' : 'GET'
   const plan: RequestPlan = {
     url, method, headers: { ...(option?.headers ?? {}) }, webView: option?.webView === true,
     ...(option?.webJs === undefined ? {} : { webJs: option.webJs }),
   }
-  // HEAD 是「只看响应头」的方法，**不发 body**：声明了 body 也丢掉，
-  // 免得把表单体连同 urlencoded 头一起发出去，把一次元数据探测变成真的写请求。
+  // HEAD 是「只看响应头」的方法，**不发 body**：免得把表单体连同 urlencoded 头一起发出去，把元数据探测变成真的写请求。
   if (option?.body !== undefined && method !== 'HEAD') {
     const raw = interpolateUrl(option.body, vars)
     plan.body = option.charset === undefined ? raw : encodeFormCharset(raw, option.charset)
@@ -167,8 +138,7 @@ export function assembleRequest(
   if (option?.charset !== undefined) plan.charset = option.charset
   const retry = typeof option?.retry === 'number' ? option.retry : Number(option?.retry ?? 0)
   if (Number.isFinite(retry) && retry > 0) plan.retry = Math.floor(retry)
-  // POST 表单体默认 urlencoded（浏览器表单同款语义）：不补的话 Node fetch 发 text/plain，
-  // PHP 等表单端点 $_POST 解析不到字段（站点收空关键词返回空页）
+  // POST 表单体默认 urlencoded：不补的话 Node fetch 发 text/plain，PHP 等表单端点 $_POST 解析不到字段。
   if (plan.body !== undefined && !Object.keys(plan.headers).some((k) => k.toLowerCase() === 'content-type')) {
     plan.headers['Content-Type'] = 'application/x-www-form-urlencoded'
   }
@@ -176,10 +146,8 @@ export function assembleRequest(
 }
 
 /**
- * fetch init 姿态的单点（search-face / reading / bridge 都必须走这一份）：
- * GET **不带 method 键**（fetch 缺省即 GET）；POST 带 method 与插值后的 body；
- * HEAD 带 method 且**不带 body**（HEAD 是元数据探测，不该把体发出去）。
- * baseHeaders（如源级 headerOf）打底，计划 headers 覆盖同名。
+ * fetch init 姿态的单点（search-face / reading / bridge 都走这一份）：GET **不带 method 键**；POST 带 method 与插值后的 body；
+ * HEAD 带 method 且**不带 body**。baseHeaders 打底，计划 headers 覆盖同名。
  */
 export function fetchInitOf(
   plan: RequestPlan, baseHeaders?: Record<string, string>,
@@ -194,8 +162,7 @@ export function fetchInitOf(
     headers: { ...(baseHeaders ?? {}), ...plan.headers },
   }
   if (plan.retry !== undefined) init.retry = plan.retry
-  // loginCheckJs 读原页时用同一份声明 charset（否则 GBK 源在 URL 选项里声明、响应头没 charset 时，
-  // 脚本看到的是乱码，校验/替换判断全错）
+  // loginCheckJs 读原页时用同一份声明 charset（否则 GBK 源在 URL 选项里声明、响应头没 charset 时脚本看到乱码）。
   if (plan.charset !== undefined) init.declaredCharset = plan.charset
   if (plan.webView) init.webView = true
   if (plan.webJs !== undefined) init.webJs = plan.webJs
@@ -207,12 +174,10 @@ export function fetchInitOf(
   return init
 }
 
-/** URL 绝对化与选项后缀那一族的 re-export：实现住 url.ts（bridge 也要 absUrlKeepOption，
- *  url.ts 用来拆 request ↔ bridge 的环）。既有 import 路径保持可用。 */
+/** URL 绝对化与选项后缀那一族的 re-export：实现住 url.ts（url.ts 用来拆 request ↔ bridge 的环）；既有 import 路径保持可用。 */
 export { absUrlKeepOption, splitUrlOption, stripUrlOption } from './url.js'
 
-/** 比对口径（串章闸/防环）：剥选项后缀 → URL 归一化（new URL().href）；解析失败回原文。
- *  目录章地址与「下一页」候选都过这一层再比对——选项/编码差异不参与判等。 */
+/** 比对口径（串章闸/防环）：剥选项后缀 → URL 归一化；解析失败回原文——选项/编码差异不参与判等。 */
 export function canonUrl(u: string, base?: string): string {
   const { url } = splitUrlOption(u)
   try { return new URL(url, base).href } catch { return url }

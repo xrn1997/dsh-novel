@@ -4,36 +4,28 @@ import { DEFAULT_CACHE_MAX_BYTES } from './services/cache.js'
 import { DEFAULT_EXPORT_DELAY_MS } from './services/export.js'
 import { DEFAULT_TIMEOUT_MS } from './services/fetcher.js'
 import { DEFAULT_MAX_IMPORT_BYTES } from './services/localbooks.js'
-import { DEFAULT_SEARCH_PARALLEL } from './services/reading.js'
 import { DEFAULT_JS_BUDGET_MS } from './services/source-eval.js'
 import { DEFAULT_TTS_CACHE_MAX_BYTES } from './services/tts-cache.js'
 import { TTS_DEFAULTS, TTS_RATE, TTS_VOLUME } from './shared/wire.js'
 
 /**
- * 配置字段表（唯一主人）：一个字段一行，名字 × 缺省 × 值域（schema 同时声明类型）× 是否活值全在这一行上。
- * `NovelConfig` / `ResolvedConfig` / 输入形状 / schema / 读数面全部由它派生——加一个字段 = 加一行，
- * 而不是在各份清单上各抄一次（抄本迟早分叉，而分叉的表现是「改了 schema 忘了改读数面」）。
+ * 配置字段表（唯一主人）：一个字段一行，名字 × 缺省 × 值域 × 是否活值；`NovelConfig` / `ResolvedConfig` /
+ * schema / 读数面全部由它派生——加字段只加一行。
  *
- * 缺省值一律引各消费模块的常量：本表只给「怎么校验」，不长出第二个字面量主人（「每个缺省值
- * 只住一个主人」这条纪律不破；主人有几个会随配置面长，计数不进文档——现值看 defaults.test 钉的常量）。
- *
- * default 的填充语义是确定的（undefined / {} / 字段缺失都按 default 填）；
- * `.default({})` 只作 cordis 缺省 config 行（undefined 输入）的兜底。显式 `null` 也按「未设置」填
- * 缺省——这是 schemastery 的平台语义，本仓不另造一道 null 判据。
- * cordis 装载期会自己用导出的 `Config` 校验并填充 patch 行的 config，所以 resolveConfig 在生产路径上
- * 近似幂等——但它仍是本仓唯一被测试穿透的配置缝（官方 config 页「加载时校验、错则失败」与本仓
- * 「宁炸不猜」都挂在这一个 interface 上），这一步不可省。
- *
- * 导出 `CONFIG_FIELDS` 只为交叉校验（`tests/client/config-fields.test.ts` 把 volatile 行与客户端
- * 文案、配置页分区对读）：生产消费面仍是 `Config` / `resolveConfig`，别处不要按表名去筛键。
+ * 缺省值一律引消费模块常量，本表只给「怎么校验」，不长出第二个字面量主人。default 的填充语义是确定的：
+ * undefined / {} / 字段缺失 / 显式 null 都按 default 填（schemastery 平台语义，本仓不另造判据）。
+ * `resolveConfig` 在生产路径近似幂等（cordis 装载期已用 `Config` 校验），但仍是本仓唯一被测试穿透的配置缝。
+ * `CONFIG_FIELDS` 导出只为交叉校验（`tests/client/config-fields.test.ts`），生产消费面是 `Config` / `resolveConfig`。
  */
+/** 聚合搜索并发缺省：schema 与直装回退同读这一格。 */
+export const DEFAULT_SEARCH_PARALLEL = 5
+
 export const CONFIG_FIELDS = {
   /** 书架 / 缓存 / 本地书的落盘根。刻意不做成活值：运行期换根会让新旧数据分家，改它等价于重启。 */
   dataDir: textField(),
   searchTimeoutMs: numberField(DEFAULT_TIMEOUT_MS, 1),
-  /** js 沙箱预算（vm 同步闸与异步总时长共用，缺省值的主人是 `DEFAULT_JS_BUDGET_MS`）。
-   *  刻意宽于请求级缺省：库里有「一轮连打数个 java.ajax 再算签名」形态的目录脚本，
-   *  按请求级预算必炸——探针 verified 只证明搜索面。双闸形状见矩阵行 `h-timeout-double-gate`。 */
+  /** js 沙箱预算：vm 同步闸与异步总时长共用；刻意宽于请求级缺省（库里有连打多个 java.ajax 算签名的脚本）。
+   *  双闸见矩阵行 `h-timeout-double-gate`。 */
   jsTimeoutMs: numberField(DEFAULT_JS_BUDGET_MS, 1),
   searchParallel: numberField(DEFAULT_SEARCH_PARALLEL, 1),
   cacheMaxBytes: numberField(DEFAULT_CACHE_MAX_BYTES, 0),
@@ -41,30 +33,24 @@ export const CONFIG_FIELDS = {
   localImportMaxBytes: numberField(DEFAULT_MAX_IMPORT_BYTES, 1),
   /** 出站代理：'direct' = 强制直连；显式地址 = 用它；缺省 = 环境变量 → Windows 系统代理 → 直连 */
   proxyUrl: proxyField(),
-  /** 听书全局缺省：播放层的回退链是「显式 > 本书听书存档 > 这里」，全部 live——保存后下一次
-   *  起播 / 预取即生效。引擎标识是订阅数据的身份（内置 `builtin:*`、浏览器直出、注册表 id），
-   *  不是引擎对象本身：对象与凭据住数据根注册表，不进宿主设置层。
-   *  形状闸收空白：配置页的报错文案承诺的就是这一条，而含空白的值一旦落盘，播放层只会拿到
-   *  一个认不出的引擎 id（`TTS_ENGINE_MISSING`）——那是把用户的打字错转嫁成一次听不出的失败。 */
+  /** 听书全局缺省：回退链「显式 > 本书存档 > 这里」，全部 live。引擎标识是订阅数据身份，不是引擎对象
+   *  （对象与凭据住数据根）。形状闸收空白，否则落盘后只会换来一次 TTS_ENGINE_MISSING。 */
   ttsDefaultEngine: volatileTextField(TTS_DEFAULTS.engineId, /^\S+$/),
   /** 语速按一位小数档（与配置页回读同一把尺）；范围取播放侧归一档 [0.5, 3]。 */
   ttsDefaultRate: decimalField(TTS_DEFAULTS.rate, TTS_RATE.min, TTS_RATE.max),
   /** 音量 [0, 1]，同样一位小数档。 */
   ttsDefaultVolume: decimalField(TTS_DEFAULTS.volume, TTS_VOLUME.min, TTS_VOLUME.max),
-  /** 段音频缓存上限。下界刻意高过「一段音频」的常见体积；真遇到单段就超上限时，淘汰跳过刚写入
-   *  的那一条（`services/size-ledger.ts` 的保留集）——宁可这一轮临时超上限，也不让刚发出的合成
-   *  回执指向一个 404。 */
+  /** 段音频缓存上限。真遇到单段就超上限时，淘汰跳过刚写入的那条（`services/size-ledger.ts` 的保留集）——
+   *  宁可临时超限，也不让刚发出的合成回执指向 404。 */
   ttsCacheMaxBytes: numberField(DEFAULT_TTS_CACHE_MAX_BYTES, 1024 * 1024),
   /** 进入本章末尾时提前合成的下一章段数；0 = 不预取下一章（同章后 2 段不归这个开关）。 */
   ttsPrefetchParagraphs: numberField(TTS_DEFAULTS.prefetchParagraphs, 0),
-  /** `/novel-api` 同源 fence 的本机名单追加项：只有用自定义域名（hosts / 内部 DNS）打开宿主面板
-   *  时才需要填。刻意不做成活值（同 `dataDir`）：它是一条安全边界，热改等于「运行中随时把
-   *  rebinding 防线让掉一个名字」，改它等价于重启。 */
+  /** `/novel-api` 同源 fence 的本机名单追加项，只有自定义域名打开面板时才需要。刻意不做成活值（同 `dataDir`）：
+   *  热改等于运行中让掉一个名字。 */
   apiAllowHosts: hostListField(),
 } as const
 
-/** 数值位：整数 + 下界。数值位的单位都是整数（毫秒 / 字节 / 并发数），`.step(1)` 同时钉整数并
- *  挡掉 NaN/Infinity——`.min`/`.max` 对 NaN 的比较为假，挡不住（宁炸不猜）。 */
+/** 数值位：整数 + 下界。`.step(1)` 同时钉整数并挡掉 NaN/Infinity（`.min`/`.max` 对 NaN 比较为假）。 */
 function numberField(defaultValue: number, min: number) {
   return {
     default: defaultValue, volatile: true as const,
@@ -72,8 +58,7 @@ function numberField(defaultValue: number, min: number) {
   }
 }
 
-/** 小数值（语速 / 音量）：上下界 + 一位小数档。`.step(0.1)` 与整数位的 `.step(1)` 同职——
- *  钉住档位并挡掉 NaN；一位小数与配置页的回读（`scale`）同一把尺，回读不会比存下的值更粗。 */
+/** 小数值（语速 / 音量）：上下界 + 一位小数档；步长同整数位，钉档位并挡 NaN。 */
 function decimalField(defaultValue: number, min: number, max: number) {
   return {
     default: defaultValue, volatile: true as const,
@@ -81,8 +66,7 @@ function decimalField(defaultValue: number, min: number, max: number) {
   }
 }
 
-/** 文本缺省位（活值）：值域钉非空，`pattern` 给需要形状闸的那一格——引擎标识的有效性归引擎
- *  清单，本表不抄一份身份表，但「含空白」是配置页的报错文案已经承诺要挡的那一类。 */
+/** 文本缺省位（活值）：值域钉非空；`pattern` 给需要形状闸的格，本表不抄引擎身份表。 */
 function volatileTextField(defaultValue: string, pattern?: RegExp) {
   return {
     default: defaultValue, volatile: true as const,
@@ -101,8 +85,7 @@ function textField() {
   }
 }
 
-/** 代理地址位：形状闸只管空串 / direct / 可选 http(s) scheme + 无空格主机；完整解析在
- *  createFetcher 建 dispatcher 前由 parseProxyUrl 再做一次。 */
+/** 代理地址位：形状闸只管空串 / direct / http(s) + 无空格主机；完整解析在 `parseProxyUrl`。 */
 function proxyField() {
   return {
     default: undefined as string | undefined, volatile: true as const,
@@ -110,12 +93,9 @@ function proxyField() {
   }
 }
 
-/** 本机别名列表位（非活值、可缺席）：每项 `host` 或 `host:port`，不许带 scheme / 路径 / 空白，
- *  且必须是 URL 解析不改写的主机名写法（判据住 `api/wire.ts` 的 `hostNameOf`，与 fence 同一把尺；
- *  `2130706433` 这类形状闸放行、构造期却会被静默丢弃的写法由 `resolveConfig` 在加载期拒掉）。
- *  端口只用于形状校验、不参与匹配——名单比的是主机名，`dsh.local:8080` 也放行 `dsh.local:9999`。
- *  缺席 = 不追加任何名字。这里没有会漂移的数值主人——「名单本体」的唯一主人仍是
- *  `api/wire.ts` 的 `LOOPBACK_HOSTNAMES`，这一格只回答「用户还追加了谁」。 */
+/** 本机别名列表位（非活值、可缺席）：每项 `host` 或 `host:port`，不许 scheme / 路径 / 空白，且须是 URL
+ *  解析不改写的写法（`hostNameOf` 与 fence 同一把尺；会被静默丢弃的写法由 `resolveConfig` 加载期拒掉）。
+ *  端口只做形状校验、不参与匹配；缺席 = 不追加。 */
 function hostListField() {
   return {
     default: undefined as readonly string[] | undefined, volatile: false as const,
@@ -131,14 +111,9 @@ type MandatoryFieldKey = Exclude<ConfigFieldName, OptionalFieldKey>
 /** 标 `volatile` 的那些格才是配置页可编辑的运行参数：其余改了要重启，不进表单。 */
 export type VolatileConfigFieldName = { [K in ConfigFieldName]: ConfigTable[K]['volatile'] extends true ? K : never }[ConfigFieldName]
 
-/** volatile 字段的消费桶：service-live = 服务/部件每次用时读活值；composition-root = 只由组合根
- *  读并接线。键集由 `VolatileConfigFieldName` 钉死——新增 volatile 字段忘归桶是编译错，
- *  归错桶是 `tests/config.test.ts` 红；归桶义务从「读代码才知道」变成「编译器问你要」。
- *
- *  听书四格（引擎 / 语速 / 音量 / 预取段数）标 service-live，读者在**浏览器半**：Node 半没有
- *  它们的消费点，真正取值的是播放层经宿主设置面快照推进来的那一份（`client/config-page.tsx` 的
- *  缺省读数 → `client/tts/player.ts` 的 `setTtsDefaults`）。`ttsCacheMaxBytes` 是例外：段音频
- *  缓存的容量账在 Node 半，合成服务每次 prune 现读它。桶值按「谁读这一格」记，不按代码住哪个半。 */
+/** volatile 字段的消费桶：service-live = 每次用时读活值；composition-root = 只由组合根读并接线。
+ *  键集由 `VolatileConfigFieldName` 钉死——漏归桶编译错，归错桶测试红。听书四格读者在浏览器半
+ *  （播放层经宿主设置面取快照）；`ttsCacheMaxBytes` 是例外，容量账在 Node 半。 */
 export const VOLATILE_CONSUMERS: Record<VolatileConfigFieldName, 'service-live' | 'composition-root'> = {
   searchTimeoutMs: 'service-live',
   searchParallel: 'service-live',
@@ -177,8 +152,7 @@ function readField<T>(value: Field<T> | null | undefined): T | undefined {
   return isVolatileRef(value) ? value.get() : (value ?? undefined)
 }
 
-/** `.volatile()` 是能力位而非必需项：宿主 schema 不提供它时字段退化为普通值，插件仍能加载；
- *  配置页的可编辑性由宿主设置面（`remote.settings`）能力闸另判。 */
+/** `.volatile()` 是能力位：宿主 schema 不支持时字段退化为普通值，插件仍能加载。 */
 function maybeVolatile<T extends object>(schema: T): T {
   const method = (schema as T & { volatile?: () => unknown }).volatile
   return typeof method === 'function' ? (method.call(schema) as T) : schema
@@ -190,11 +164,8 @@ export const Config = Schema.object(
     [name, spec.volatile ? maybeVolatile(spec.schema()) : spec.schema()])),
 ).default({})
 
-/** 原始配置 → 合法配置的唯一缝：纯输入走 schema 校验；Loader 已解析的 ref 输入不重跑 schema
- *  （volatile ref 会被 `expected number but got [object Object]` 拒绝）。
- *  这条快路径是**整份**跳过：任一格是 ref，其余纯值也不再过值域——Loader 交出来的对象里，没标
- *  volatile 的那几格仍是纯值，值域由宿主写入时的校验负责。本仓对「值非法会挂死而不只是报错」的那一格
- *  （`searchParallel`）另有一把每轮重读的尺，见 `services/reading.ts` 的 `requireParallelStep`。 */
+/** 原始配置 → 合法配置的唯一缝：纯输入走 schema；Loader 已解析的 ref 输入整份跳过 schema（volatile ref 会被拒）。
+ *  `searchParallel` 另有每轮重读的尺，见 `services/reading.ts` 的 `requireParallelStep`。 */
 export function resolveConfig(raw?: NovelConfig | ConfigInput): ResolvedConfig {
   const input = raw as ConfigInput | undefined
   const names = Object.keys(CONFIG_FIELDS) as ConfigFieldName[]
@@ -209,10 +180,8 @@ export function resolveConfig(raw?: NovelConfig | ConfigInput): ResolvedConfig {
       throw new Error(`[dsh-novel] 配置非法（见 README 配置表）：${e instanceof Error ? e.message : String(e)}`, { cause: e })
     }
   }
-  // apiAllowHosts 还要过「URL 解析不改写」判据（唯一实现 = api/wire.ts 的 hostNameOf，fence 同一把尺）：
-  // `2130706433` 这类写法形状闸放行、`fenceAllowlist` 构造期却会静默丢弃——「配置合法却毫无效果」
-  // 比报错难查得多（README 承诺非法值加载期报错，这里就是那半步）。放在这里而不是 schema 里，
-  // 是为了同时盖住 ref 快路径（快路径整份跳过 schema，这格虽是纯值也不该漏检）。
+  // apiAllowHosts 还要过「URL 解析不改写」判据（`hostNameOf`，与 fence 同一把尺）：形状闸放行、构造期静默丢弃的写法在这里拒掉。
+  // 放这里而不是 schema，是为了同时盖住 ref 快路径（整份跳过 schema）。
   const allowHosts = readField(out.apiAllowHosts) ?? []
   for (const entry of allowHosts) {
     if (typeof entry !== 'string' || hostNameOf(entry) === null) {

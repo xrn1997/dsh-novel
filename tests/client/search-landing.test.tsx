@@ -12,7 +12,7 @@ import type { SearchHit } from '../../src/shared/wire.js'
  * 写口是注入的 `addSeat`（生产是 `addShelfSeat`），因此这里不起 DOM、不碰 HTTP，
  * 只钉状态与顺序：落成的架位进本轮账、整本只补没落过的行、零加成不报成功、在途读数逐本记。
  * 「账住在行之上、收起再展开不洗掉」与回执的措辞/通道都不在这一层——那要真的整页折叠才证得出，
- * 归 `tests/client/views-wiring.test.tsx`（「收起再展开：已在架的行仍显示已在书架」那一条）。
+ * 归 `tests/client/wiring-search.test.tsx`（「收起再展开：已在架的行仍显示已在书架」那一条）。
  */
 
 function hit(partial: Partial<SearchHit> & { title: string }): SearchHit {
@@ -41,7 +41,7 @@ describe('useSearchLanding', () => {
     let receipt: AddAllReceipt | undefined
     await act(async () => { receipt = await result.current.addAll('b1', rows) })
     expect(receipt).toEqual({ newly: ['u1'], stillMissing: 1, noAddress: 1 })
-    // 同址两行各发一发幂等 PUT（`views-wiring` 的「同一家同一地址」
+    // 同址两行各发一发幂等 PUT（`wiring-search` 的「同一家同一地址」
     // 与「两家源给同一个地址」两条各钉着两发）；`newly` 按架位去重，不数 PUT。
     expect(addSeat).toHaveBeenCalledTimes(3)
   })
