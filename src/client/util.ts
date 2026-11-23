@@ -1,6 +1,7 @@
 /** client 中立小工具（debounce、localStorage guard 等）：不归阅读进度，也不归轻量 store。 */
-import { playUnitStarts, splitParagraphs } from '../shared/chapter-text.js'
+import { chapterTitleOrFallback, playUnitStarts, splitParagraphs } from '../shared/chapter-text.js'
 import type { ChapterContent } from '../shared/wire.js'
+import type { Translate } from './copy/index.js'
 
 /** 盯服务端在跑作业时的回落轮询节奏（搜索面与发现面共用）：600ms 是「边抓边出」观感与
  *  不刷屏 `/novel-api` 的同一档取舍；测试可经 `JobWatchDeps.jobPollMs` 换档。 */
@@ -222,6 +223,15 @@ export function paperLiveInk(paper: string): string {
   }
   // 亮纸的深端 / 暗纸的浅端必然过下限，这里的兜底只是给类型收口
   return rgbHex(best ?? (inkDark ? [0, 0, 0] : [255, 255, 255]))
+}
+
+/** 客户端章节展示名：空串 / 纯空白统一回退到当前语言的「第 N 章」（共享判据住 `shared/chapter-text`）。 */
+export function displayChapterTitle(
+  name: string | null | undefined,
+  chapterIndex: number,
+  t: Translate,
+): string {
+  return chapterTitleOrFallback(name, chapterIndex, (n) => t('reader.chapterFallback', { n }))
 }
 
 /**

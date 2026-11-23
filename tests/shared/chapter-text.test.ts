@@ -3,6 +3,7 @@ import {
   PLAY_UNIT_MAX,
   chapterContentLines,
   chapterContentToText,
+  chapterTitleOrFallback,
   playUnitStarts,
   playUnitStartsByNode,
   splitParagraphs,
@@ -447,5 +448,20 @@ describe('playUnitStartsByNode（起段号按起行块归位）', () => {
       expect(byNode.get(line.nodeId)).toBe(starts[index])
     }
     expect([...byNode.values()]).toEqual([0, 1, 3])
+  })
+})
+
+describe('chapterTitleOrFallback（空章名兜底）', () => {
+  it('空串、纯空白与缺席一律回退到 1 基「第 N 章」，非空名去首尾空白保留', () => {
+    expect(chapterTitleOrFallback('', 0)).toBe('第 1 章')
+    expect(chapterTitleOrFallback('   \t\n ', 4)).toBe('第 5 章')
+    expect(chapterTitleOrFallback(null, 1)).toBe('第 2 章')
+    expect(chapterTitleOrFallback(undefined, 2)).toBe('第 3 章')
+    expect(chapterTitleOrFallback('  第一章 启程  ', 0)).toBe('第一章 启程')
+  })
+
+  it('自定义回退（浏览器半接多语言文案）收到 1 基章号', () => {
+    expect(chapterTitleOrFallback('', 0, (n) => `Chapter ${n}`)).toBe('Chapter 1')
+    expect(chapterTitleOrFallback('Prologue', 0, (n) => `Chapter ${n}`)).toBe('Prologue')
   })
 })

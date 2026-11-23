@@ -288,3 +288,27 @@ export function playUnitStartsByNode(lines: readonly ChapterContentLine[]): Map<
   })
   return byNode
 }
+
+function defaultChapterTitle(n: number): string {
+  return `第 ${n} 章`
+}
+
+/**
+ * 章节展示名（空串 / 纯空白回退到「第 N 章」，`chapterIndex` 为 0 基）。
+ *
+ * 为什么不能只用 `??`：书源 `ruleChapterName` 命中空节点或空 List 时产出的是 `""`（或纯空白），
+ * 缓存与 wire 里仍是合法字符串，`??` 拦不住它——目录抽屉按钮被压成 12px 空白条、顶条与章首
+ * 标题留白、TXT 导出印出 `《书名》· `。不在抓取期改写 `ChapterEntry.name`：既保住缓存槽位、
+ * 脚本变量 `chapter.title` 与多语言切换，也能直接救起已落盘的存量目录缓存与空标签本地书。
+ *
+ * `fallback` 缺省给中文「第 N 章」（Node 半的导出与工具 render 直用）；浏览器半经 `displayChapterTitle`
+ * 接入客户端文案单点 `reader.chapterFallback`。
+ */
+export function chapterTitleOrFallback(
+  name: string | null | undefined,
+  chapterIndex: number,
+  fallback: (n: number) => string = defaultChapterTitle,
+): string {
+  const trimmed = name?.trim() ?? ''
+  return trimmed !== '' ? trimmed : fallback(chapterIndex + 1)
+}
