@@ -43,7 +43,7 @@ export const CONFIG_FIELDS = {
   /** 段音频缓存上限。真遇到单段就超上限时，淘汰跳过刚写入的那条（`services/size-ledger.ts` 的保留集）——
    *  宁可临时超限，也不让刚发出的合成回执指向 404。 */
   ttsCacheMaxBytes: numberField(DEFAULT_TTS_CACHE_MAX_BYTES, 1024 * 1024),
-  /** 进入本章末尾时提前合成的下一章段数；0 = 不预取下一章（同章后 2 段不归这个开关）。 */
+  /** 进入本章末尾时提前合成的下一章段数；0 = 不预取下一章（同章自适应预取不归这个开关）。 */
   ttsPrefetchParagraphs: numberField(TTS_DEFAULTS.prefetchParagraphs, 0),
   /** `/novel-api` 同源 fence 的本机名单追加项，只有自定义域名打开面板时才需要。刻意不做成活值（同 `dataDir`）：
    *  热改等于运行中让掉一个名字。 */

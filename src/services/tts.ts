@@ -55,7 +55,8 @@ export interface NormalizedSpeechSynthesis {
   ready: boolean
   /** 未就绪的原因码（服务方原话）；`ready` 为真或读数缺席时不带 */
   unavailableReason?: string
-  /** `opts.signal` = 调用方的取消位：适配器把它与本支的死线汇成一条交给服务，取消即终止上游。 */
+  /** `opts.signal` = 调用方的取消位：先经合并槽转交（同键在途只发一发上游，最后一员退场才中止），
+   *  适配器再把这一发与自己的死线汇成一条交给服务，取消即终止上游。 */
   synthesize(req: {
     text: string
     voice?: string
@@ -93,8 +94,8 @@ export interface TtsServiceDeps {
 export interface TtsSynthesisPlan {
   /** 缓存键的「实际请求」那一位（材料与产生它的请求在同侧产出） */
   identity: string
-  /** 未命中才执行：出音频字节、mediaType 与 `appliedRate`（这份字节里引擎自己应用了多少语速，1 = 原速）。`signal`
-   *  原样下传：调用方不要了，就不该有人替它把整段念完。 */
+  /** 未命中才执行：出音频字节、mediaType 与 `appliedRate`（这份字节里引擎自己应用了多少语速，1 = 原速）。
+   *  `signal` = 合并槽的取消位：等待方全员退场才中止，不替没人听的段落把整段念完。 */
   produce(signal: AbortSignal | undefined): Promise<{ bytes: Buffer; mediaType: string; appliedRate: number }>
 }
 
@@ -118,16 +119,25 @@ function residualOf(requested: number, applied: number): number {
   return Math.round((requested / applied) * 1000) / 1000
 }
 
+/** 在途合成槽（按缓存键合并并发请求）：所有等待方共用一发 `produce`，各自按自己的请求语速算补速，
+ *  只有全部等待方都取消时才真正中止上游（单方取消只自己退场，`ADR-0082`）。 */
+interface InFlightSynthesis {
+  ctrl: AbortController
+  waiters: number
+  promise: Promise<{ key: string; appliedRate: number }>
+}
+
 export class TtsService {
   private readonly deps: TtsServiceDeps
+  private readonly inFlight = new Map<string, InFlightSynthesis>()
 
   constructor(deps: TtsServiceDeps) {
     this.deps = deps
   }
 
   /**
-   * 合成一段：targetOf → 造计划 → 查缓存 → 命中即回执；未命中 produce 出字节再入缓存。失败只抛给调用方。
-   * `opts.signal` 每一跳之前先问一次（已取消就一个请求都不发），并下传给 produce——跳段 / 停止 / 断连靠它掐掉在途合成。
+   * 合成一段：targetOf → 造计划 → 查缓存 → 命中即回执；未命中经 `coalescedProduce` 合并同键在途请求、出字节入缓存。失败只抛给调用方。
+   * `opts.signal` 每一跳之前先问一次（已取消就一个请求都不发），并经合并槽下传给 produce——跳段 / 停止 / 断连靠它掐掉没人等的在途合成。
    */
   async synthesize(p: SynthesisRequest, opts?: { signal?: AbortSignal }): Promise<SynthesisReceipt> {
     const signal = opts?.signal
@@ -143,9 +153,68 @@ export class TtsService {
     if (cached !== null) return { key, playbackRate: residualOf(p.rate, cached.appliedRate) }
     // 查缓存的窗口里被取消：磁盘上的字节是既定事实，但没必要再为一段没人听的内容发一次合成
     if (signal !== undefined && signal.aborted) throw abortReasonOf(signal)
-    const audio = await plan.produce(signal)
-    await this.deps.cache.put(key, audio.bytes, audio.mediaType, audio.appliedRate)
-    return { key, playbackRate: residualOf(p.rate, audio.appliedRate) }
+    const synthesized = await this.coalescedProduce(key, plan, signal)
+    return { key: synthesized.key, playbackRate: residualOf(p.rate, synthesized.appliedRate) }
+  }
+
+  /** 按缓存键合并同键在途合成（预取与主播放撞车时只发一发上游）；只有所有等待方都退场才真正 abort 上游。 */
+  private async coalescedProduce(
+    key: string, plan: TtsSynthesisPlan, signal: AbortSignal | undefined,
+  ): Promise<{ key: string; appliedRate: number }> {
+    let job = this.inFlight.get(key)
+    if (job === undefined || job.ctrl.signal.aborted) {
+      const ctrl = new AbortController()
+      const promise = (async (): Promise<{ key: string; appliedRate: number }> => {
+        const audio = await plan.produce(ctrl.signal)
+        await this.deps.cache.put(key, audio.bytes, audio.mediaType, audio.appliedRate)
+        return { key, appliedRate: audio.appliedRate }
+      })()
+      const created: InFlightSynthesis = { ctrl, waiters: 0, promise }
+      this.inFlight.set(key, created)
+      // 无人等的那一侧失败由等待方 race 各自接走：finally 会透传原拒绝，必须在末尾收口以免悬成未处理拒绝。
+      void promise.finally(() => {
+        if (this.inFlight.get(key) === created) this.inFlight.delete(key)
+      }).catch(() => undefined)
+      job = created
+    }
+    job.waiters += 1
+    let released = false
+    const release = (abortReason?: Error): void => {
+      if (released) return
+      released = true
+      job.waiters -= 1
+      if (job.waiters === 0) {
+        if (this.inFlight.get(key) === job) this.inFlight.delete(key)
+        if (abortReason !== undefined) job.ctrl.abort(abortReason)
+      }
+    }
+    if (signal === undefined) {
+      try {
+        return await job.promise
+      } finally {
+        release()
+      }
+    }
+    let onAbort: (() => void) | undefined
+    const cancelled = new Promise<never>((_, reject) => {
+      const abort = (): void => {
+        const reason = abortReasonOf(signal)
+        release(reason)
+        reject(reason)
+      }
+      if (signal.aborted) {
+        abort()
+        return
+      }
+      onAbort = abort
+      signal.addEventListener('abort', onAbort, { once: true })
+    })
+    try {
+      return await Promise.race([job.promise, cancelled])
+    } finally {
+      if (onAbort !== undefined) signal.removeEventListener('abort', onAbort)
+      release()
+    }
   }
 
   /** 音频读口（路由层凭合成回执的 key 取字节）；未知/非法 key → null（404，不是空音频）。 */

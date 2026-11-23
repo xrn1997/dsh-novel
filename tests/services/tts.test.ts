@@ -448,6 +448,96 @@ describe('TtsService 合成与缓存', () => {
     expect(mock.calls).toHaveLength(1)
   })
 
+  it('并发合成同键请求合并为一发上游请求，各自按请求语速算补速（ADR-0081）', async () => {
+    let calls = 0
+    let resolveFetch: (page: FetchedPage) => void = () => { throw new Error('fetch gate 未就绪') }
+    const fetcher: Fetcher = {
+      fetchPage: () => {
+        calls += 1
+        return new Promise<FetchedPage>((resolve) => { resolveFetch = resolve })
+      },
+    }
+    const { engines, svc } = await setup({ fetcher })
+    engines.put('http:flat', { name: '不吃语速', url: 'http://x.test/say?text={{speakText}}', contentType: 'audio/mpeg' })
+
+    const first = svc.synthesize({ engineId: 'http:flat', text: '并发表', rate: 1 })
+    const second = svc.synthesize({ engineId: 'http:flat', text: '并发表', rate: 2 })
+    await vi.waitFor(() => { expect(calls).toBe(1) })
+
+    resolveFetch(pageOf(WAV, 'audio/mpeg'))
+    const [r1, r2] = await Promise.all([first, second])
+    expect(r1.key).toBe(r2.key)
+    expect(r1.playbackRate).toBe(1)
+    expect(r2.playbackRate).toBeCloseTo(2)
+    expect(calls, '同键并发只走一发上游合成').toBe(1)
+  })
+
+  it('并发等待方之一取消只自己退场，上游合成继续服务另一等待方（ADR-0082）', async () => {
+    let seenSignal: AbortSignal | undefined
+    let resolveFetch: (page: FetchedPage) => void = () => { throw new Error('fetch gate 未就绪') }
+    const fetcher: Fetcher = {
+      fetchPage: (_url, init) => {
+        seenSignal = init?.signal
+        return new Promise<FetchedPage>((resolve) => { resolveFetch = resolve })
+      },
+    }
+    const { svc } = await setup({ fetcher })
+
+    const c1 = new AbortController()
+    const c2 = new AbortController()
+    const p1 = svc.synthesize({ engineId: 'builtin:baidu', text: '共享合成段', rate: 1 }, { signal: c1.signal })
+    const p2 = svc.synthesize({ engineId: 'builtin:baidu', text: '共享合成段', rate: 1 }, { signal: c2.signal })
+    await vi.waitFor(() => { expect(seenSignal).toBeDefined() })
+
+    const cancelReason = new Error('先走那一方不要了')
+    c1.abort(cancelReason)
+    await expect(p1).rejects.toBe(cancelReason)
+    expect(seenSignal?.aborted, '仍有活等待方，上游不许中止').toBe(false)
+
+    resolveFetch(pageOf(WAV, 'audio/mpeg'))
+    const receipt = await p2
+    expect(receipt.key).toMatch(/^[0-9a-f]{32}$/)
+  })
+
+  it('并发等待方全员退场时同步中止上游，后续请求重新发起', async () => {
+    const signals: Array<AbortSignal | undefined> = []
+    let releaseSecond: (page: FetchedPage) => void = () => { throw new Error('second gate 未就绪') }
+    const fetcher: Fetcher = {
+      fetchPage: (_url, init) => {
+        signals.push(init?.signal)
+        if (signals.length === 1) {
+          return new Promise<FetchedPage>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              reject(init.signal?.reason instanceof Error ? init.signal.reason : new Error('aborted'))
+            }, { once: true })
+          })
+        }
+        return new Promise<FetchedPage>((resolve) => { releaseSecond = resolve })
+      },
+    }
+    const { svc } = await setup({ fetcher })
+
+    const c1 = new AbortController()
+    const c2 = new AbortController()
+    const p1 = svc.synthesize({ engineId: 'builtin:baidu', text: '全员退场段', rate: 1 }, { signal: c1.signal })
+    const p2 = svc.synthesize({ engineId: 'builtin:baidu', text: '全员退场段', rate: 1 }, { signal: c2.signal })
+    await vi.waitFor(() => { expect(signals).toHaveLength(1) })
+
+    c1.abort(new Error('一号退场'))
+    await expect(p1).rejects.toThrow('一号退场')
+    expect(signals[0]?.aborted, '二号还在等，上游未中止').toBe(false)
+
+    const lastReason = new Error('二号也退场')
+    c2.abort(lastReason)
+    expect(signals[0]?.aborted, '全员退场同步中止上游').toBe(true)
+    await expect(p2).rejects.toBe(lastReason)
+
+    const fresh = svc.synthesize({ engineId: 'builtin:baidu', text: '全员退场段', rate: 1 })
+    await vi.waitFor(() => { expect(signals).toHaveLength(2) })
+    releaseSecond(pageOf(WAV, 'audio/mpeg'))
+    expect((await fresh).key).toMatch(/^[0-9a-f]{32}$/)
+  })
+
   it('openAudio：未知/非法键 → null', async () => {
     const { svc } = await setup({ fetcher: mockFetcher(() => pageOf(WAV, 'audio/wav')).fetcher })
     expect(await svc.openAudio('f'.repeat(32))).toBeNull()

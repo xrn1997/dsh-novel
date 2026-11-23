@@ -198,8 +198,8 @@ describe('播放层 seek：章内段滑杆', () => {
   })
 
   it('seekParagraph 越界夹紧；同段不重合成；章正文在途不接、本段合成在途照跳', async () => {
-    // 第二章给到 6 段：后面要取一个预取窗（后 2 段）外的落点，让合成请求真悬在闸上
-    chapterTexts[1] = ['第二章一。', '第二章二。', '第二章三。', '第二章四。', '第二章五。', '第二章六。']
+    // 第二章给到 12 段：既超出下一章预取（10 段），也超出同章预取窗（最多 4 段），让合成请求真悬在闸上
+    chapterTexts[1] = Array.from({ length: 12 }, (_, i) => `第二章第${i + 1}段。`)
     await act(async () => {
       await startListening({ sourceId: 's1', bookKey: 'k1', title: '书一', chapterIndex: 0, paragraphIndex: 0 })
     })
@@ -228,7 +228,7 @@ describe('播放层 seek：章内段滑杆', () => {
     expect(ttsPlayer.get().chapterIndex).toBe(1)
 
     // 本段合成在途（loading=true，且不是章正文在途）：照跳——playSeq 会作废在途那一发。
-    // 落点取预取窗外的段（只暖后 2 段），合成请求才真的悬在闸上而不是命中回执。
+    // 落点取预取窗外的段，合成请求才真的悬在闸上而不是命中回执。
     const realSend = vi.mocked(apiSend).getMockImplementation()
     if (realSend === undefined) throw new Error('apiSend 缺实现')
     let releaseSynth = (): void => { throw new Error('合成闸未就绪') }
@@ -237,7 +237,7 @@ describe('播放层 seek：章内段滑杆', () => {
       if (target.path === ROUTES.ttsSynthesize.path) await synthGate
       return realSend(target, body)
     })
-    await act(async () => { seekParagraph(5) })
+    await act(async () => { seekParagraph(11) })
     expect(ttsPlayer.get().loading, '本段合成在途').toBe(true)
     await act(async () => { seekParagraph(0) })
     expect(ttsPlayer.get().paragraphIndex, '本段合成在途照跳').toBe(0)

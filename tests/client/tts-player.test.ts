@@ -204,25 +204,26 @@ describe('常驻播放层：起播与自动推进', () => {
   })
 
   it('段播完自动 advance，并预取同章后 2 段（预取命中不重复合成）', async () => {
+    const prose = (prefix: string): string => `${prefix}这是一段长度超过四十字的常规小说正文内容用于验证同章预取窗口保持两段。`.repeat(2)
     fixture = {
       names: ['第一章', '第二章'],
       texts: [
-        ['p0。', 'p1。', 'p2。', 'p3。', 'p4。', 'p5。', 'p6。', 'p7。'],
-        ['n0。', 'n1。'],
+        [prose('p0'), prose('p1'), prose('p2'), prose('p3'), prose('p4'), prose('p5'), prose('p6'), prose('p7')],
+        [prose('n0'), prose('n1')],
       ],
     }
     await start()
     await microtasks()
-    expect(synthTexts().sort()).toEqual(['p0。', 'p1。', 'p2。'].sort())
+    expect(synthTexts().sort()).toEqual([prose('p0'), prose('p1'), prose('p2')].sort())
 
     activeAudio().fireEnded()
     await microtasks()
     const st = ttsPlayer.get()
     expect(st.paragraphIndex).toBe(1)
     expect(st.playing).toBe(true)
-    expect(synthTexts().filter((t) => t === 'p1。')).toHaveLength(1)
-    expect(synthTexts()).toContain('p3。')
-    expect(activeAudio().src).toBe(ttsAudioUrl(keyOf('p1。')))
+    expect(synthTexts().filter((t) => t === prose('p1'))).toHaveLength(1)
+    expect(synthTexts()).toContain(prose('p3'))
+    expect(activeAudio().src).toBe(ttsAudioUrl(keyOf(prose('p1'))))
   })
 
   it('进末 3 段时预取下一章前 N 段（N 读活动缺省快照）', async () => {
@@ -764,23 +765,23 @@ describe('常驻播放层：跳章、回退链与从阅读位置起播', () => {
   it('跳段后旧音频的 ended 不推进新段：合成在途时旧槽还在响，不能被它带着走', async () => {
     fixture = {
       names: ['第一章'],
-      texts: [['p0。', 'p1。', 'p2。', 'p3。', 'p4。']],
+      texts: [['p0。', 'p1。', 'p2。', 'p3。', 'p4。', 'p5。']],
     }
-    let release = (): void => { throw new Error('p3 gate 未就绪') }
-    synthGate.set('p3。', new Promise<void>((resolve) => { release = resolve }))
+    let release = (): void => { throw new Error('p5 gate 未就绪') }
+    synthGate.set('p5。', new Promise<void>((resolve) => { release = resolve }))
     await start({ paragraphIndex: 0 })
     await microtasks()
     const old = activeAudio()
-    seekParagraph(3)
+    seekParagraph(5)
     await microtasks()
-    expect(ttsPlayer.get().paragraphIndex).toBe(3)
+    expect(ttsPlayer.get().paragraphIndex).toBe(5)
     // 新段合成还没回来：旧音频仍在响，它的 ended 带的是旧播放代际
     old.fireEnded()
     await microtasks()
-    expect(ttsPlayer.get().paragraphIndex, '旧槽的 ended 不许把用户刚选的段跳过').toBe(3)
+    expect(ttsPlayer.get().paragraphIndex, '旧槽的 ended 不许把用户刚选的段跳过').toBe(5)
     release()
     await microtasks()
-    expect(ttsPlayer.get().paragraphIndex).toBe(3)
+    expect(ttsPlayer.get().paragraphIndex).toBe(5)
   })
 
   it('空章没有可朗读段：自动推进跨过它，播到下一可读章', async () => {

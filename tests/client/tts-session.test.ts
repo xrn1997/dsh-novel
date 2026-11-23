@@ -18,12 +18,14 @@ import { last, must } from '../support/fixture.js'
  * 听书会话的实例行为网：`new ListenSession(假平台 + 假输出)` 驱动，**不 stub 任何全局、
  * 不 mock `api.js`**——平台缝就是这台会话与外界的全部接触面，环境自建在这里根本够不着。
  *
- * 钉七件事：起播推进到下一段（位置落盘走平台注入的防抖，推轮子不等墙钟）；单段失败留痕
+ * 钉这些事：起播推进到下一段（位置落盘走平台注入的防抖，推轮子不等墙钟）；单段失败留痕
  * 跳过、连败到线暂停；参数变更作废旧回执并按新参数重取当前段；定时到点暂停；直出型开口
  * 无事件走兜底失败径（这一例用真 `DirectOutput` + 假 speech 面，兜底定时同样走平台计时）；
  * 插件收口（`dispose`）无条件放介质（`ADR-0092`：放音 / 暂停 / 已停三种状态各恰好放一次）；
  * 收口先 flush 最后一笔位置，并作废取数 / 等语音表在途的起播（`ADR-0092`：卸载终点之后
- * 不许长出新会话）。
+ * 不许长出新会话）；同段在途合成合流（跳段只退自己那一票，`ADR-0082`）；同章自适应预取
+ * 窗口与并发上限；出声槽预载不发起重复合成；跨章预取交接（正文 / 参数对不上就作废重取，
+ * `ADR-0102`）。
  */
 describe('ListenSession 实例：假平台 + 假输出', () => {
   /** 平台的手表：延时全走这盘轮子。测试推轮子走时间，不碰全局计时器、不等墙钟。 */
@@ -98,6 +100,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
      *  会话「合成在途改音量、出声用新值」这条口径靠它钉，不靠读会话自己的 state）。 */
     starts: { job: SegmentJob; receipt: { key: string; playbackRate: number } | null; handlers: OutputHandlers; volume: number }[] = []
     preloaded: string | null = null
+    preloads: string[] = []
     pauseCount = 0
     stopCount = 0
     releaseCount = 0
@@ -117,6 +120,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
         return job.signal.aborted ? 'cancelled' : 'failed'
       }
       if (receipt === null) return 'cancelled'
+      this.preloaded = null
       this.starts.push({ job, receipt, handlers, volume: host.voice().volume })
       if (this.failOnStart) {
         // 介质没开口：异步到达，与真适配器的 play 拒绝同形
@@ -143,7 +147,10 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
 
     invalidate(): void { this.invalidateCount += 1 }
 
-    preload(key: string): void { this.preloaded = key }
+    preload(key: string): void {
+      if (this.preloaded !== key) this.preloads.push(key)
+      this.preloaded = key
+    }
 
     dropPreload(): void { this.dropPreloadCount += 1; this.preloaded = null }
 
@@ -198,6 +205,8 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     synthSignals: Map<string, AbortSignal | undefined>
     fixture: { names: string[]; texts: string[][] }
     failSynth: (text: string) => void
+    /** 只让下一次针对该文本的合成失败，之后恢复成功（演瞬时网络抖动）。 */
+    failSynthOnce: (text: string) => void
     /** 某引擎的回执报多少补速（会话只搬运，不自己算）。 */
     setSynthPlaybackRate: (engineId: string, rate: number) => void
     /** 挂起某段的合成请求，返回放行函数（模拟合成在途的窗口）。 */
@@ -226,6 +235,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     const synthSignals = new Map<string, AbortSignal | undefined>()
     const synthRates = new Map<string, number>()
     const failing = new Set<string>()
+    const failOnce = new Set<string>()
     const holds = new Map<string, Promise<void>>()
     const fetchHolds = new Map<number, Promise<void>>()
     const fetchFailures = new Set<number>()
@@ -272,6 +282,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
         const hold = holds.get(req.text)
         if (hold !== undefined) await hold
         if (failing.has(req.text)) throw new Error('synth 说这一段不成')
+        if (failOnce.delete(req.text)) throw new Error('synth 瞬时失败一次')
         return {
           key: `k:${req.engineId}:${req.rate}:${req.voice ?? ''}:${req.text}`,
           mediaType: 'audio/mpeg',
@@ -290,6 +301,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
       clock, speech, bytes, branches, saves, progressSaves, synthCalls, synthSignals, fixture,
       setSynthPlaybackRate: (engineId, rate) => { synthRates.set(engineId, rate) },
       failSynth: (text) => { failing.add(text) },
+      failSynthOnce: (text) => { failOnce.add(text) },
       holdSynth: (text) => {
         let release = (): void => { throw new Error('合成闸未就绪') }
         holds.set(text, new Promise<void>((resolve) => { release = resolve }))
@@ -357,19 +369,19 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
 
   it('跳段只作废当前段那一发：同章预取不受牵连，跳回去仍命中暖好的回执', async () => {
     const h = makeHarness()
-    h.fixture.texts[0] = ['p0。', 'p1。', 'p2。', 'p3。']
-    await start(h)                                // p0 起播，顺带暖 p1 / p2
+    h.fixture.texts[0] = ['p0。', 'p1。', 'p2。', 'p3。', 'p4。', 'p5。']
+    await start(h)                                // p0 起播，顺带暖 p1..p4
     await microtasks()
     const prefetched = ['p1。', 'p2。'].map((text) => must(h.synthSignals.get(text), `${text} 的预取`))
     expect(prefetched.every((s) => !s.aborted)).toBe(true)
 
-    const release = h.holdSynth('p3。')
-    h.session.seekParagraph(3)                    // p3 在预取窗外，合成在途
+    const release = h.holdSynth('p5。')
+    h.session.seekParagraph(5)                    // p5 在同章最大预取窗外，合成在途
     await microtasks()
-    const inFlight = must(h.synthSignals.get('p3。'), 'p3 那一发')
+    const inFlight = must(h.synthSignals.get('p5。'), 'p5 那一发')
     expect(inFlight.aborted).toBe(false)
 
-    h.session.seekParagraph(2)                    // 再跳走：没人听的是 p3 这一发
+    h.session.seekParagraph(2)                    // 再跳走：没人听的是 p5 这一发
     expect(inFlight.aborted, '跳段要把这一发停在上游').toBe(true)
     expect(prefetched.every((s) => !s.aborted), '同章预取不该被跳段连坐').toBe(true)
 
@@ -672,39 +684,39 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
 
   it('跳章后旧章合成迟到：旧回执不写进新章，同号段不念错章', async () => {
     const h = makeHarness()
-    h.fixture.texts[0] = ['A0。', 'A1。', 'A2。', 'A3。', 'A4。']
-    h.fixture.texts[1] = ['B0。', 'B1。', 'B2。', 'B3。', 'B4。']
-    await start(h)                              // 第一章 A0 起播（预取只暖 A1/A2）
-    const release = h.holdSynth('A3。')          // 挂起第一章 index3 的合成（预取窗外）
-    h.session.seekParagraph(3)
+    h.fixture.texts[0] = ['A0。', 'A1。', 'A2。', 'A3。', 'A4。', 'A5。']
+    h.fixture.texts[1] = ['B0。', 'B1。', 'B2。', 'B3。', 'B4。', 'B5。']
+    await start(h)                              // 第一章 A0 起播
+    const release = h.holdSynth('A5。')          // 挂起第一章 index5 的合成（预取窗外）
+    h.session.seekParagraph(5)
     await microtasks()
-    expect(h.session.state.get().loading, '第一章 A3 合成在途').toBe(true)
+    expect(h.session.state.get().loading, '第一章 A5 合成在途').toBe(true)
 
     void h.session.jumpToChapter(1)                  // 跳第二章：清 receipts、起播 B0
     await microtasks()
     expect(h.session.state.get()).toMatchObject({ chapterIndex: 1, paragraphIndex: 0 })
     expect(last(h.bytes.starts).receipt?.key).toContain('B0。')
 
-    release()                                   // 旧章 index3 的合成迟到落地
+    release()                                   // 旧章 index5 的合成迟到落地
     await microtasks()
 
-    h.session.seekParagraph(3)                  // 第二章 index3 应合成 B3，不命中旧章回执
+    h.session.seekParagraph(5)                  // 第二章 index5 应合成 B5，不命中旧章回执
     await microtasks()
-    expect(last(h.bytes.starts).receipt?.key, '旧章回执不得污染新章同号段').toContain('B3。')
+    expect(last(h.bytes.starts).receipt?.key, '旧章回执不得污染新章同号段').toContain('B5。')
   })
 
   it('字节型换段即归零段进度：合成在途也不把上一段比例投到新段', async () => {
     const h = makeHarness()
-    h.fixture.texts[0] = ['p0。', 'p1。', 'p2。', 'p3。', 'p4。']
+    h.fixture.texts[0] = ['p0。', 'p1。', 'p2。', 'p3。', 'p4。', 'p5。']
     await start(h)
     const progress = must(h.bytes.starts[0], '首段').handlers.progress
     must(progress, '进度事件面')(3, 10)   // 首段已出声一会儿
     expect(h.session.progress.get()).toEqual({ position: 3, duration: 10 })
 
-    const release = h.holdSynth('p3。')          // p3 在预取窗外（只暖 p1/p2）
-    h.session.seekParagraph(3)                   // 跳到 p3，合成在途
+    const release = h.holdSynth('p5。')          // p5 在同章最大预取窗外
+    h.session.seekParagraph(5)                   // 跳到 p5，合成在途
     await microtasks()
-    expect(h.session.state.get()).toMatchObject({ paragraphIndex: 3, loading: true })
+    expect(h.session.state.get()).toMatchObject({ paragraphIndex: 5, loading: true })
     expect(h.session.progress.get(), '换段即归零，不等合成落地').toEqual({ position: 0, duration: 0 })
     release()
     await microtasks()
@@ -712,13 +724,13 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
 
   it('合成在途照跳、章正文在途不接：`loading` 与章正文在途是两回事', async () => {
     const h = makeHarness()
-    h.fixture.texts[0] = ['p0。', 'p1。', 'p2。', 'p3。']
+    h.fixture.texts[0] = ['p0。', 'p1。', 'p2。', 'p3。', 'p4。', 'p5。']
     await start(h)
-    const releaseSynth = h.holdSynth('p3。')     // p3 在预取窗外（只暖 p1/p2）
-    h.session.seekParagraph(3)
+    const releaseSynth = h.holdSynth('p5。')     // p5 在同章最大预取窗外
+    h.session.seekParagraph(5)
     await microtasks()
     expect(h.session.state.get()).toMatchObject({
-      paragraphIndex: 3, loading: true,
+      paragraphIndex: 5, loading: true,
     })
 
     // 合成在途窗口里再跳一次照跳：playSeq 会把在途那一发作废，不该按了没反应
@@ -941,5 +953,263 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
 
     expect(h.session.state.get().active, '卸载终点之后不许长出新会话').toBe(false)
     expect(h.speech.utterances, '也不许把 utterance 交给平台').toHaveLength(0)
+  })
+
+  it('慢网推进到在途预取段：主播放直接复用在途请求不重发，跳走只退本段等待不连坐预取', async () => {
+    const h = makeHarness()
+    h.fixture.texts[0] = ['p0。', 'p1。', 'p2。', 'p3。', 'p4。', 'p5。']
+    const releaseP1 = h.holdSynth('p1。')
+    await start(h)
+    await microtasks()
+    expect(h.synthCalls.filter((c) => c.text === 'p1。')).toHaveLength(1)
+    const p1Signal = must(h.synthSignals.get('p1。'), 'p1 预取取消位')
+
+    // p0 播完推进到 p1，此时 p1 预取仍在路上：主播放复用同一发，不发出第二次请求
+    must(h.bytes.starts[0], 'p0').handlers.done()
+    await microtasks()
+    expect(h.session.state.get()).toMatchObject({ paragraphIndex: 1, loading: true })
+    expect(h.synthCalls.filter((c) => c.text === 'p1。'), '不重复合成在途预取段').toHaveLength(1)
+
+    // 在等待 p1 时跳往 p5：只作废本次主播放等待，p1 的后台预取保持存活（ADR-0082）
+    const releaseP5 = h.holdSynth('p5。')
+    h.session.seekParagraph(5)
+    await microtasks()
+    expect(p1Signal.aborted, '跳段不连坐同章预取').toBe(false)
+
+    releaseP1()
+    await microtasks()
+    // 跳回 p1 直接命中暖好的回执
+    h.session.seekParagraph(1)
+    await microtasks()
+    expect(h.synthCalls.filter((c) => c.text === 'p1。')).toHaveLength(1)
+    expect(last(h.bytes.starts).receipt?.key).toContain('p1。')
+
+    releaseP5()
+    await microtasks()
+  })
+
+  it('合成在途暂停再续播：复用同一发在途合成，已落地回执也不重合成', async () => {
+    const h = makeHarness()
+    const releaseP0 = h.holdSynth('第一段。')
+    const started = start(h)
+    await microtasks()
+    expect(h.synthCalls.filter((c) => c.text === '第一段。')).toHaveLength(1)
+
+    // 暂停后立即续播：p0 仍在途，应直接合流，不重发第二发请求
+    h.session.pauseListening()
+    h.session.resumeListening()
+    await microtasks()
+    expect(h.synthCalls.filter((c) => c.text === '第一段。'), '续播合流在途请求').toHaveLength(1)
+
+    releaseP0()
+    await started
+    await microtasks()
+    expect(h.session.state.get().playing).toBe(true)
+    expect(last(h.bytes.starts).receipt?.key).toContain('第一段。')
+
+    // 若在暂停期间合成正好落地，再次续播同样直接命中已存回执
+    const h2 = makeHarness()
+    const release2 = h2.holdSynth('第一段。')
+    const started2 = start(h2)
+    await microtasks()
+    h2.session.pauseListening()
+    release2()
+    await started2
+    await microtasks()
+    h2.session.resumeListening()
+    await microtasks()
+    expect(h2.synthCalls.filter((c) => c.text === '第一段。'), '暂停期间落地的回执直接复用').toHaveLength(1)
+    expect(h2.session.state.get().playing).toBe(true)
+  })
+
+  it('连续推进每段都触发下段出声槽预载；主播放等回执时不抢槽覆盖待播段', async () => {
+    const h = makeHarness()
+    h.fixture.texts[0] = ['p0。', 'p1。', 'p2。', 'p3。']
+    h.session.setTtsDefaults({ prefetchParagraphs: 0 })
+    await start(h)
+    await microtasks()
+    expect(h.bytes.preloads).toEqual(['k:builtin:baidu:1::p1。'])
+
+    must(h.bytes.starts[0], 'p0').handlers.done()
+    await microtasks()
+    expect(h.bytes.preloads).toEqual([
+      'k:builtin:baidu:1::p1。',
+      'k:builtin:baidu:1::p2。',
+    ])
+
+    must(h.bytes.starts[1], 'p1').handlers.done()
+    await microtasks()
+    expect(h.bytes.preloads, 'p2 起每段都必须同步预载下一段').toEqual([
+      'k:builtin:baidu:1::p1。',
+      'k:builtin:baidu:1::p2。',
+      'k:builtin:baidu:1::p3。',
+    ])
+
+    // 验证 synthToken !== null 时不抢槽：p0 等待 p1 期间如果 p2 先落地，p2 不得在 p1 起播前覆盖预载槽
+    const h2 = makeHarness()
+    h2.fixture.texts[0] = ['p0。', 'p1。', 'p2。']
+    const releaseP1 = h2.holdSynth('p1。')
+    const releaseP2 = h2.holdSynth('p2。')
+    await start(h2)
+    await microtasks()
+    must(h2.bytes.starts[0], 'p0').handlers.done()
+    await microtasks()
+    // 此时 p1 仍在等待回执（synthToken !== null），先放行 p2
+    releaseP2()
+    await microtasks()
+    expect(h2.bytes.preloads, '主播放等回执期间不得覆盖待播预载槽').toEqual([])
+
+    releaseP1()
+    await microtasks()
+    expect(h2.bytes.preloads, 'p1 起播完成才预载 p2').toEqual(['k:builtin:baidu:1::p2。'])
+  })
+
+  it('跨章预取不自掐并完整交接：章末预载下章首段、在途第二段续跑、跳往他章才取消', async () => {
+    const h = makeHarness()
+    h.fixture.names = ['第一章', '第二章', '第三章']
+    h.fixture.texts = [['a0。', 'a1。'], ['b0。', 'b1。', 'b2。'], ['c0。']]
+    h.session.setTtsDefaults({ prefetchParagraphs: 2 })
+    const releaseB1 = h.holdSynth('b1。')
+    await start(h)
+    await microtasks()
+    // 仍在 a0（倒数第二段）：出声预载槽应先服务同章下一段 a1；同时下一章 b0 已暖好、b1 在途挂住
+    expect(h.bytes.preloaded).toBe('k:builtin:baidu:1::a1。')
+    expect(h.synthCalls.filter((c) => c.text === 'b0。')).toHaveLength(1)
+    const b1Signal = must(h.synthSignals.get('b1。'), 'b1 预取信号')
+    expect(b1Signal.aborted).toBe(false)
+
+    // 推进到 a1（末段）：此时立即把已暖好的下章首段 b0 挂入出声预载槽
+    must(h.bytes.starts[0], 'a0').handlers.done()
+    await microtasks()
+    expect(h.bytes.preloaded, '末段在播时即预载下章首段').toBe('k:builtin:baidu:1::b0。')
+    const dropsBeforeCross = h.bytes.dropPreloadCount
+    must(h.bytes.starts[1], 'a1').handlers.done()
+    await microtasks(40)
+
+    expect(h.session.state.get()).toMatchObject({ chapterIndex: 1, paragraphIndex: 0, playing: true })
+    expect(b1Signal.aborted, '自动跨入目标章时在途 b1 不许被掐').toBe(false)
+    expect(h.bytes.dropPreloadCount, '已预载的下章首段保留不作废').toBe(dropsBeforeCross)
+    expect(h.synthCalls.filter((c) => c.text === 'b0。'), 'b0 不重复合成').toHaveLength(1)
+
+    releaseB1()
+    await microtasks(40)
+    expect(h.synthCalls.filter((c) => c.text === 'b1。'), 'b1 不重复合成').toHaveLength(1)
+    expect(h.bytes.preloads.at(-1), 'b1 完成后立即预载进槽').toBe('k:builtin:baidu:1::b1。')
+
+    // 若跳往并非正在预取的目标章，则旧的 nextChapter 必须立即取消
+    const hJump = makeHarness()
+    hJump.fixture.names = ['第一章', '第二章', '第三章']
+    hJump.fixture.texts = [['a0。'], ['b0。', 'b1。'], ['c0。']]
+    hJump.session.setTtsDefaults({ prefetchParagraphs: 2 })
+    const releaseJumpB0 = hJump.holdSynth('b0。')
+    await start(hJump)
+    await microtasks()
+    const jumpB0Signal = must(hJump.synthSignals.get('b0。'), '第二章 b0 预取信号')
+    await hJump.session.jumpToChapter(2)
+    expect(jumpB0Signal.aborted, '跳到别的章时取消原下一章预取').toBe(true)
+    releaseJumpB0()
+  })
+
+  it('跨章交接要求正文一致：目标章正文变了就作废旧预取、按新正文重取', async () => {
+    const h = makeHarness()
+    h.fixture.names = ['第一章', '第二章']
+    h.fixture.texts = [['a0。', 'a1。'], ['b0。', 'b1。']]
+    h.session.setTtsDefaults({ prefetchParagraphs: 2 })
+    await start(h)
+    await microtasks(40)
+    const prefetchedB0 = must(h.synthSignals.get('b0。'), 'b0 预取信号')
+    expect(prefetchedB0.aborted).toBe(false)
+
+    // 预取落地后源侧正文变了：旧 receipts 属于旧正文，交接必须拒绝（`sameUnits` 是这条判据的唯一守卫）
+    h.fixture.texts[1] = ['B0新。', 'B1新。']
+    must(h.bytes.starts[0], 'a0').handlers.done()
+    await microtasks(40)
+    must(h.bytes.starts[1], 'a1').handlers.done()
+    await microtasks(40)
+
+    expect(h.session.state.get()).toMatchObject({ chapterIndex: 1, paragraphIndex: 0 })
+    expect(prefetchedB0.aborted, '正文对不上：旧预取当场作废').toBe(true)
+    expect(h.synthCalls.filter((c) => c.text === 'B0新。'), '按新正文重新合成').toHaveLength(1)
+    expect(h.synthCalls.filter((c) => c.text === 'b0。'), '旧正文只发过预取那一发').toHaveLength(1)
+    expect(h.bytes.starts.at(-1)?.receipt?.key, '起播用的是新正文的字节')
+      .toBe('k:builtin:baidu:1::B0新。')
+  })
+
+  it('下一章预取段数改成 0：已发起的下一章预取当场作废，不等到下一次换章', async () => {
+    const h = makeHarness()
+    h.fixture.names = ['第一章', '第二章']
+    h.fixture.texts = [['a0。', 'a1。'], ['b0。', 'b1。']]
+    h.session.setTtsDefaults({ prefetchParagraphs: 2 })
+    await start(h)
+    await microtasks(40)
+    const prefetchedB0 = must(h.synthSignals.get('b0。'), 'b0 预取信号')
+    expect(prefetchedB0.aborted).toBe(false)
+
+    h.session.setTtsDefaults({ prefetchParagraphs: 0 })
+    must(h.bytes.starts[0], 'a0').handlers.done()
+    await microtasks(40)
+    expect(prefetchedB0.aborted, '0 档：已发起的下一章预取当场作废').toBe(true)
+
+    must(h.bytes.starts[1], 'a1').handlers.done()
+    await microtasks(40)
+    expect(h.session.state.get()).toMatchObject({ chapterIndex: 1, paragraphIndex: 0 })
+    expect(h.synthCalls.filter((c) => c.text === 'b0。'), '跨章按需重新合成').toHaveLength(2)
+  })
+
+  it('预取偶发失败不锁死且不在同段自旋：停留期间不重试，推进到下一段补预取成功', async () => {
+    const h = makeHarness()
+    h.fixture.texts[0] = ['p0。', 'p1。', 'p2。', 'p3。']
+    h.session.setTtsDefaults({ prefetchParagraphs: 0 })
+    h.failSynthOnce('p2。')
+    await start(h)
+    await microtasks(40)
+
+    // p2 在 p0 期间失败一次，不应在 p0 期间死循环重发
+    expect(h.synthCalls.filter((c) => c.text === 'p2。')).toHaveLength(1)
+
+    // 推进到 p1：触发新一轮 pumpPrefetch，此时应补试 p2 并成功入槽
+    must(h.bytes.starts[0], 'p0').handlers.done()
+    await microtasks(40)
+    expect(h.synthCalls.filter((c) => c.text === 'p2。'), '推进后补试失败的预取段').toHaveLength(2)
+    expect(h.bytes.preloads.at(-1)).toBe('k:builtin:baidu:1::p2。')
+  })
+
+  it('同章自适应预取与并发上限：长段只预取 2 段，短对话延至 4 段且并发不超过 2', async () => {
+    const longText = (prefix: string): string => `${prefix}${'这是一段长度超过四十字的正常小说正文内容用于测试。'.repeat(2)}`
+    const hLong = makeHarness()
+    hLong.fixture.texts[0] = [longText('L0'), longText('L1'), longText('L2'), longText('L3'), longText('L4')]
+    hLong.session.setTtsDefaults({ prefetchParagraphs: 0 })
+    await start(hLong)
+    await microtasks(40)
+    expect(hLong.synthCalls.map((c) => c.text)).toEqual([
+      hLong.fixture.texts[0][0],
+      hLong.fixture.texts[0][1],
+      hLong.fixture.texts[0][2],
+    ])
+
+    const hShort = makeHarness()
+    hShort.fixture.texts[0] = ['p0', 'p1', 'p2', 'p3', 'p4', 'p5']
+    hShort.session.setTtsDefaults({ prefetchParagraphs: 0 })
+    const r1 = hShort.holdSynth('p1')
+    const r2 = hShort.holdSynth('p2')
+    const r3 = hShort.holdSynth('p3')
+    const r4 = hShort.holdSynth('p4')
+    await start(hShort)
+    await microtasks()
+    // 并发上限为 2：先只发起紧邻的 p1、p2，p3/p4 排队等待
+    expect(hShort.synthCalls.map((c) => c.text)).toEqual(['p0', 'p1', 'p2'])
+
+    r1()
+    await microtasks()
+    expect(hShort.synthCalls.map((c) => c.text), '空出一个槽位后按升序补发 p3').toEqual(['p0', 'p1', 'p2', 'p3'])
+
+    r2()
+    await microtasks()
+    expect(hShort.synthCalls.map((c) => c.text), '短句最多延至后 4 段（不含 p5）').toEqual(['p0', 'p1', 'p2', 'p3', 'p4'])
+
+    r3()
+    r4()
+    await microtasks()
+    expect(hShort.synthCalls.map((c) => c.text)).not.toContain('p5')
   })
 })

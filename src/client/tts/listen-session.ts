@@ -62,8 +62,17 @@ const POSITION_SAVE_DEBOUNCE_MS = 2000
  *  原生 range 逐档 change，逐档重合成会把一次拖动打成十几次上游请求。导出给测试引。 */
 export const PARAMS_RESTART_DEBOUNCE_MS = 250
 
-/** 同章预取窗口：当前段之后 2 段。 */
-const PREFETCH_AHEAD = 2
+/** 同章预取窗口基线：常规段落只预取后 2 段，兼顾省流与连贯。 */
+const PREFETCH_MIN_AHEAD = 2
+
+/** 短句对话连发时的同章预取硬上限。 */
+const PREFETCH_MAX_AHEAD = 4
+
+/** 同章自适应窗口的字数下限（按 code point 计）：前瞻攒够这么多字即止，避免长段多预合成。 */
+const PREFETCH_MIN_CHARS = 80
+
+/** 同章后台预取并发上限：按升序优先保住紧邻下一段，避免并发打满限流。 */
+const PREFETCH_CONCURRENCY = 2
 
 /** 距章尾不足这么多段 = 「进入末 3 段」，开始预取下一章开头。 */
 const PREFETCH_LAST_PARAGRAPHS = 3
@@ -217,6 +226,24 @@ export interface ListenPlatform {
 
 interface ReceiptEntry { paramsKey: string; key: string; playbackRate: number }
 
+interface InFlightReceipt {
+  paramsKey: string
+  scope: 'run' | 'segment'
+  signal: AbortSignal
+  promise: Promise<ReceiptEntry>
+}
+
+interface NextChapterPrefetch {
+  chapterIndex: number
+  paramsKey: string
+  abort: AbortController
+  units: string[] | null
+  receipts: Map<number, ReceiptEntry>
+  inFlight: Map<number, InFlightReceipt>
+  prefetched: Set<number>
+  handedOver: boolean
+}
+
 type TimerState = { kind: 'at'; at: number; cancel: () => void } | { kind: 'chapter' }
 
 /** 一次听书会话的瞬时现场：换书/停止即整体作废（store 里的读数是另一份，互不回写）。 */
@@ -227,17 +254,20 @@ interface PlayerRun {
   chapters: ChapterEntry[]
   units: string[]
   receipts: Map<number, ReceiptEntry>
+  inFlight: Map<number, InFlightReceipt>
   prefetched: Set<number>
+  /** 预取失败时的所在段号：停在同段期间不死循环重试，推进后才允许补一次。 */
+  prefetchFailedAt: Map<number, number>
   /** 已因「回执在、字节读不出」重合成过一次的段号（每段一次） */
   retried: Set<number>
-  nextPrefetched: Set<number>
+  nextChapter: NextChapterPrefetch | null
   /** 章节载入代际：迟到的正文只服务它出发时的那一趟 */
   loadSeq: number
   /** 播放代际：pause/参数变更/跳段都会抬它，迟到的合成结果据此丢弃 */
   playSeq: number
   timer: TimerState | null
-  /** 本趟在途请求共用的取消位：作废时整只换掉。预取链挂在**这一只**上，
-   *  换参数 / 换章 / 停止都该把整章的暖缓存一起作废。 */
+  /** 本趟在途请求共用的取消位：作废时整只换掉。同章预取挂在这只上；下一章预取另持 `nextChapter.abort`
+   *  ——进目标章时可整份交接，换章 / 换参数 / 停止仍经 `cancelInFlight` 把它一并作废（`ADR-0102`）。 */
   abort: AbortController
   /** 当前段自己的取消位：跳段 / 章内滑杆只作废「没人再听的那一发」，同章预取不受牵连。 */
   segAbort: AbortController
@@ -358,9 +388,11 @@ export class ListenSession {
       chapters,
       units,
       receipts: new Map(),
+      inFlight: new Map(),
       retried: new Set(),
       prefetched: new Set(),
-      nextPrefetched: new Set(),
+      prefetchFailedAt: new Map(),
+      nextChapter: null,
       loadSeq: 0,
       playSeq: 0,
       timer: null,
@@ -570,8 +602,9 @@ export class ListenSession {
     const loadToken = ++run.loadSeq
     run.playSeq += 1
     const resumeToken = run.playSeq
-    // 换章决定落下，在途合成（本章预取）当场掐掉；正在放的那一段字节不受影响，由起播换槽接替。
-    this.cancelInFlight(run)
+    // 换章决定落下，在途合成（本章预取）当场掐掉；目标正好是已在预取的下一章时先保住它，等正文对上再交接。
+    const keepNext = run.nextChapter !== null && run.nextChapter.chapterIndex === target
+    this.cancelInFlight(run, { keepNextChapter: keepNext })
     // 旧声音让不让位归分支：直出型当场撤队，字节型载入期间继续放（用户不会在等待里听见静音）。
     this.branchOf(this.state.get().mode).yieldForLoad()
     this.chapterLoading = true
@@ -579,12 +612,40 @@ export class ListenSession {
     try {
       const units = await this.platform.fetchUnits(run.sourceId, run.bookKey, target)
       if (this.current !== run || loadToken !== run.loadSeq) return 'superseded'
-      run.units = units
-      run.receipts.clear()
-      run.retried.clear()
-      run.prefetched.clear()
-      this.branchOf(this.state.get().mode).dropPreload()
+      const candidate = run.nextChapter
+      run.nextChapter = null
+      const paramsKey = this.paramsKeyOf(this.state.get())
+      const canHandover = candidate !== null
+        && candidate.chapterIndex === target
+        && candidate.paramsKey === paramsKey
+        && !candidate.abort.signal.aborted
+        && candidate.units !== null
+        && sameUnits(candidate.units, units)
       const index = paragraph === 'last' && units.length > 0 ? units.length - 1 : 0
+      if (canHandover) {
+        candidate.handedOver = true
+        run.abort = candidate.abort
+        run.units = units
+        run.receipts = candidate.receipts
+        run.inFlight = candidate.inFlight
+        run.prefetched = candidate.prefetched
+        run.prefetchFailedAt = new Map()
+        run.retried.clear()
+        const kept = run.receipts.get(index)
+        // 若章末已把目标段挂进预载槽就留着直接换槽；目标不是已就绪那一段时才作废预载槽。
+        if (kept === undefined || kept.paramsKey !== paramsKey) {
+          this.branchOf(this.state.get().mode).dropPreload()
+        }
+      } else {
+        candidate?.abort.abort()
+        run.units = units
+        run.receipts.clear()
+        run.inFlight.clear()
+        run.retried.clear()
+        run.prefetched.clear()
+        run.prefetchFailedAt.clear()
+        this.branchOf(this.state.get().mode).dropPreload()
+      }
       // 逐段失败留痕随章归零，连败计数不动：死引擎必须跨章累计到阈值才暂停，否则会空走到书末。
       this.chapterLoading = false
       this.state.set({
@@ -606,6 +667,7 @@ export class ListenSession {
     } catch {
       // 在途那一发已被更新的导航作废就别翻掉新章的 loading，也别把陈旧失败当成「自动推进到头」。
       if (this.current !== run || loadToken !== run.loadSeq) return 'superseded'
+      this.cancelNextChapter(run)
       // 旧音频必须当场闭嘴：`playSeq` 已抬，旧槽事件全部作废；直出型已在入口让位过。
       this.branchOf(this.state.get().mode).pause()
       this.chapterLoading = false
@@ -675,12 +737,14 @@ export class ListenSession {
     this.progress.set({ position: 0, duration: 0 })
     // 参数变更要按「本段合成在途」判，不能只看 `loading`（章正文载入也写这一格）。
     run.synthToken = token
+    const paramsKey = this.paramsKeyOf(st)
     const handlers = this.segmentHandlers(run, token)
     const host: BranchHost = {
-      // 回执只在「这一发仍是当前播放」时交回：旧章段号写进新章 receipts 会命中旧字节、念错章。
+      // 回执落盘看仍在同章同参（暂停期间落地也留着续播复用），交回介质才看 playSeq（旧发不得开口）。
       receipt: async (job) => {
-        const entry = await this.receiptFor(run, job.index, job.text, job.signal,
-          () => this.current === run && token === run.playSeq)
+        const entry = await this.receiptFor(
+          run, job.index, job.text, job.signal, 'segment', this.stillHereGuard(run, paramsKey),
+        )
         return this.current === run && token === run.playSeq
           ? { key: entry.key, playbackRate: entry.playbackRate }
           : null
@@ -703,6 +767,8 @@ export class ListenSession {
       }
       // `cancelled` = 这一发已被更新的动作作废（跳章 / 换参数 / 停止）：静默收口，不记账。
       if (outcome !== 'started' || this.current !== run || token !== run.playSeq) return
+      // 本段已交给介质并完成换槽：先清在途位，再同步下一段的预载槽。
+      if (run.synthToken === token) run.synthToken = null
       if (branch.capabilities.prefetch) this.prefetchAround(run)
     } catch {
       if (this.current !== run || token !== run.playSeq) return
@@ -744,6 +810,9 @@ export class ListenSession {
           if (!run.retried.has(failedAt)) {
             run.retried.add(failedAt)
             run.receipts.delete(failedAt)
+            run.prefetched.delete(failedAt)
+            run.inFlight.delete(failedAt)
+            run.prefetchFailedAt.delete(failedAt)
             branch.invalidate()
             void this.playCurrent(run)
             return
@@ -782,68 +851,227 @@ export class ListenSession {
 
   // ── 预取（fire-and-forget 暖缓存）───────────────────────────────────────────
 
-  /** 每次起播后预热同章后 2 段；进末 3 段再预热下一章开头 N 段（N 读活动缺省快照）。 */
+  /** 每次起播后同步下一段音频槽预载、推进同章自适应预取窗；进末 3 段再预热下一章开头 N 段。 */
   private prefetchAround(run: PlayerRun): void {
+    this.syncNextAudioPreload(run)
+    this.pumpPrefetch(run)
     const st = this.state.get()
-    for (let ahead = 1; ahead <= PREFETCH_AHEAD; ahead += 1) {
-      const index = st.paragraphIndex + ahead
-      if (index < st.paragraphCount) this.prefetchParagraph(run, index)
-    }
     if (st.paragraphIndex >= st.paragraphCount - PREFETCH_LAST_PARAGRAPHS) {
       this.prefetchNextChapter(run)
     }
   }
 
-  /** 预取在途守卫：run 换了、loadSeq 作废了、章挪了，在途结果一律丢弃（`stillHere` 的三份判据只在这造）。 */
-  private stillHereGuard(run: PlayerRun): () => boolean {
+  /** 预取在途守卫：run 换了、loadSeq 作废了、章挪了、参数变了，在途结果一律丢弃。参数位必填——
+   *  漏传等于放旧参数的回执进新参数的 `receipts`，那是念错音色的唯一入口。 */
+  private stillHereGuard(run: PlayerRun, paramsKey: string): () => boolean {
     const token = run.loadSeq
     const chapter = this.state.get().chapterIndex
     return (): boolean =>
-      this.current === run && run.loadSeq === token && this.state.get().chapterIndex === chapter
+      this.current === run
+      && run.loadSeq === token
+      && this.state.get().chapterIndex === chapter
+      && this.paramsKeyOf(this.state.get()) === paramsKey
   }
 
-  private prefetchParagraph(run: PlayerRun, index: number): void {
-    const branch = this.branchOf(this.state.get().mode)
+  private activePrefetchCount(run: PlayerRun): number {
+    let active = 0
+    for (const entry of run.inFlight.values()) {
+      if (entry.scope === 'run' && !entry.signal.aborted) active += 1
+    }
+    return active
+  }
+
+  /** 把「紧邻下一段」（同章下段，或章末时的下章首段）的已就绪回执挂入出声预载槽。 */
+  private syncNextAudioPreload(run: PlayerRun): void {
+    // 本段还在等回执换槽或章正文载入中时不碰预载槽，避免把即将启用的待播槽顶掉。
+    if (run.synthToken !== null || this.chapterLoading) return
+    const st = this.state.get()
+    if (st.paragraphCount === 0) return
+    const branch = this.branchOf(st.mode)
+    if (!branch.capabilities.prefetch) return
+    const paramsKey = this.paramsKeyOf(st)
+    if (st.paragraphIndex + 1 < st.paragraphCount) {
+      const next = run.receipts.get(st.paragraphIndex + 1)
+      if (next !== undefined && next.paramsKey === paramsKey) branch.preload(next.key)
+      return
+    }
+    const nextCh = run.nextChapter
+    if (
+      nextCh !== null
+      && nextCh.chapterIndex === st.chapterIndex + 1
+      && nextCh.paramsKey === paramsKey
+      && !nextCh.abort.signal.aborted
+    ) {
+      const first = nextCh.receipts.get(0)
+      if (first !== undefined && first.paramsKey === paramsKey) branch.preload(first.key)
+    }
+  }
+
+  /** 按升序填满同章预取并发槽：常规段看后 2 段，短句对话延至最多 4 段且受并发上限节制。 */
+  private pumpPrefetch(run: PlayerRun): void {
+    const st = this.state.get()
+    const branch = this.branchOf(st.mode)
     // 分支没有预取面：在途的预取链到此为止（直出不出字节，合成请求会拿浏览器引擎 id 打空）。
     if (!branch.capabilities.prefetch) return
-    if (run.prefetched.has(index)) return
-    const text = run.units[index]
-    if (text === undefined) return
+    const paramsKey = this.paramsKeyOf(st)
+    for (const index of prefetchTargets(run.units, st.paragraphIndex)) {
+      if (this.activePrefetchCount(run) >= PREFETCH_CONCURRENCY) break
+      const cached = run.receipts.get(index)
+      if (cached !== undefined && cached.paramsKey === paramsKey) continue
+      const existing = run.inFlight.get(index)
+      if (existing !== undefined && existing.paramsKey === paramsKey && !existing.signal.aborted) {
+        if (!run.prefetched.has(index)) {
+          run.prefetched.add(index)
+          this.watchPrefetch(run, index, existing.promise, this.stillHereGuard(run, paramsKey))
+        }
+        continue
+      }
+      if (run.prefetched.has(index)) continue
+      if (run.prefetchFailedAt.get(index) === st.paragraphIndex) continue
+      const text = run.units[index]
+      if (text === undefined) continue
+      this.startPrefetchParagraph(run, index, text, paramsKey)
+    }
+  }
+
+  private startPrefetchParagraph(
+    run: PlayerRun, index: number, text: string, paramsKey: string,
+  ): void {
     run.prefetched.add(index)
-    const stillHere = this.stillHereGuard(run)
+    const stillHere = this.stillHereGuard(run, paramsKey)
     const signal = run.abort.signal
-    void this.receiptFor(run, index, text, signal, stillHere).then((receipt) => {
-      // 切走分支后在途的字节预取到此为止：别再建 / 下载一个用不上的 Audio。
+    const promise = this.receiptFor(run, index, text, signal, 'run', stillHere)
+    this.watchPrefetch(run, index, promise, stillHere)
+  }
+
+  private watchPrefetch(
+    run: PlayerRun, index: number, promise: Promise<ReceiptEntry>, stillHere: () => boolean,
+  ): void {
+    void promise.then(
+      () => {
+        if (!stillHere() || !this.branchOf(this.state.get().mode).capabilities.prefetch) return
+        run.prefetchFailedAt.delete(index)
+        this.syncNextAudioPreload(run)
+      },
+      () => {
+        if (!stillHere()) return
+        run.prefetched.delete(index)
+        run.prefetchFailedAt.set(index, this.state.get().paragraphIndex)
+      },
+    ).finally(() => {
       if (!stillHere() || !this.branchOf(this.state.get().mode).capabilities.prefetch) return
-      if (index === this.state.get().paragraphIndex + 1) branch.preload(receipt.key)
+      this.pumpPrefetch(run)
     }).catch(() => undefined)
   }
 
-  /** 下一章开头 N 段：只发合成请求暖缓存（不取回执、不预载 Audio——跨章还要先载正文）。 */
+  /** 下一章开头 N 段：持独立取消位，跨入该章时把正文、已就绪回执与在途合成原样交接给新章。 */
   private prefetchNextChapter(run: PlayerRun): void {
     // 分支没有预取面：字节预取链到此为止（直出不出字节，合成请求会拿浏览器引擎 id 打空）。
-    if (!this.branchOf(this.state.get().mode).capabilities.prefetch) return
+    const st = this.state.get()
+    if (!this.branchOf(st.mode).capabilities.prefetch) return
     const count = this.defaults.prefetchParagraphs
-    const target = this.state.get().chapterIndex + 1
-    if (count <= 0 || target >= run.chapters.length || run.nextPrefetched.has(target)) return
-    run.nextPrefetched.add(target)
-    const stillHere = this.stillHereGuard(run)
-    const signal = run.abort.signal
-    // 取消位是**异步**变的：用函数读——直接在循环里读 `signal.aborted`，TS 会按第一次守卫把它窄化成恒假。
-    const cancelled = (): boolean => signal.aborted
+    // 0 = 不预取下一章：已经发起的那一份也要当场作废，配置改成 0 不该等下一次换章才生效。
+    if (count <= 0) {
+      this.cancelNextChapter(run)
+      return
+    }
+    const target = st.chapterIndex + 1
+    if (target >= run.chapters.length) return
+    const paramsKey = this.paramsKeyOf(st)
+    const active = run.nextChapter
+    // 旧档发出的预取按那一发走完（调小非 0 档不追回），档位在出发时读到什么就按什么。
+    if (
+      active !== null
+      && active.chapterIndex === target
+      && active.paramsKey === paramsKey
+      && !active.abort.signal.aborted
+    ) {
+      return
+    }
+    this.cancelNextChapter(run)
+    const nextCh: NextChapterPrefetch = {
+      chapterIndex: target,
+      paramsKey,
+      abort: new AbortController(),
+      units: null,
+      receipts: new Map(),
+      inFlight: new Map(),
+      prefetched: new Set(),
+      handedOver: false,
+    }
+    run.nextChapter = nextCh
+    // 交接位由 `moveChapter` 在异步边界外置位：用函数读，避免 TS 按首次守卫把 `handedOver` 窄化成恒假。
+    const isHandedOver = (): boolean => nextCh.handedOver
+    const stillOwning = (): boolean =>
+      this.current === run
+      && run.nextChapter === nextCh
+      && !isHandedOver()
+      && this.state.get().chapterIndex === target - 1
+      && this.paramsKeyOf(this.state.get()) === paramsKey
+      && !nextCh.abort.signal.aborted
+      && this.branchOf(this.state.get().mode).capabilities.prefetch
+    const stillHandedOver = (): boolean =>
+      this.current === run
+      && isHandedOver()
+      && this.state.get().chapterIndex === target
+      && this.paramsKeyOf(this.state.get()) === paramsKey
+      && !nextCh.abort.signal.aborted
+      && this.branchOf(this.state.get().mode).capabilities.prefetch
+    const stillLive = (): boolean => stillOwning() || stillHandedOver()
     void (async (): Promise<void> => {
-      const units = await this.platform.fetchUnits(run.sourceId, run.bookKey, target)
-      // 切走分支不该把这一章记成「已预取」：切回字节后它还要重来一次暖缓存。
-      if (!stillHere() || !this.branchOf(this.state.get().mode).capabilities.prefetch || cancelled()) {
-        run.nextPrefetched.delete(target)
+      let units: string[]
+      try {
+        units = await this.platform.fetchUnits(run.sourceId, run.bookKey, target)
+      } catch {
+        if (run.nextChapter === nextCh) run.nextChapter = null
         return
       }
-      for (const text of units.slice(0, count)) {
-        if (!stillHere() || !this.branchOf(this.state.get().mode).capabilities.prefetch || cancelled()) {
-          run.nextPrefetched.delete(target)
+      if (!stillOwning()) {
+        if (run.nextChapter === nextCh) run.nextChapter = null
+        return
+      }
+      nextCh.units = units
+      for (const [i, text] of units.slice(0, count).entries()) {
+        if (isHandedOver() || !stillOwning()) return
+        const signal = nextCh.abort.signal
+        nextCh.prefetched.add(i)
+        const inFlightEntry: InFlightReceipt = {
+          paramsKey,
+          scope: 'run',
+          signal,
+          promise: Promise.resolve({ paramsKey, key: '', playbackRate: 1 }),
+        }
+        const promise = this.platform.synthesize(this.synthesisRequest(text), { signal }).then(
+          (receipt) => {
+            if (nextCh.inFlight.get(i) === inFlightEntry) nextCh.inFlight.delete(i)
+            const entry: ReceiptEntry = { paramsKey, key: receipt.key, playbackRate: receipt.playbackRate }
+            if (stillLive()) {
+              nextCh.receipts.set(i, entry)
+              this.syncNextAudioPreload(run)
+            }
+            return entry
+          },
+          (err: unknown) => {
+            if (nextCh.inFlight.get(i) === inFlightEntry) nextCh.inFlight.delete(i)
+            if (stillLive()) {
+              nextCh.prefetched.delete(i)
+              if (isHandedOver()) run.prefetchFailedAt.set(i, this.state.get().paragraphIndex)
+            }
+            throw (err instanceof Error ? err : new Error(String(err)))
+          },
+        )
+        inFlightEntry.promise = promise
+        void promise.catch(() => undefined)
+        nextCh.inFlight.set(i, inFlightEntry)
+        await promise.catch(() => undefined)
+        if (isHandedOver()) {
+          // 跨入目标章后退出整章 N 段串行暖缓存，把后续按同章窗口节制预取交回 pumpPrefetch。
+          if (stillHandedOver()) {
+            this.syncNextAudioPreload(run)
+            this.pumpPrefetch(run)
+          }
           return
         }
-        await this.platform.synthesize(this.synthesisRequest(text), { signal }).catch(() => undefined)
       }
     })().catch(() => undefined)
   }
@@ -902,8 +1130,9 @@ export class ListenSession {
     if (run !== null) {
       run.receipts.clear()
       run.prefetched.clear()
+      run.prefetchFailedAt.clear()
       this.branchOf(this.state.get().mode).dropPreload()
-      // 旧参数的那几发（含预取）再也不会被这一趟用上：掐掉，别让它继续花上游的合成
+      // 旧参数的那几发（含预取与下一章预取）再也不会被这一趟用上：掐掉，别让它继续花上游的合成
       this.cancelInFlight(run)
     }
     this.schedulePositionSave()
@@ -1147,18 +1376,29 @@ export class ListenSession {
   }
 
   /** 作废本趟在途的合成请求并换新取消位：停止 / 复位、换参数、换章时按。**暂停不在其列**——
-   *  续播要接的正是那一发。跳段只走 `cancelCurrentSegment`，预取不受牵连。 */
-  private cancelInFlight(run: PlayerRun): void {
+   *  续播要接的正是那一发。跳段只走 `cancelCurrentSegment`，预取不受牵连；交接目标章时可保住 `nextChapter`。 */
+  private cancelInFlight(run: PlayerRun, opts?: { keepNextChapter?: boolean }): void {
     run.abort.abort()
     run.abort = new AbortController()
     run.segAbort.abort()
     run.segAbort = new AbortController()
+    run.inFlight.clear()
+    if (opts?.keepNextChapter !== true) this.cancelNextChapter(run)
+  }
+
+  private cancelNextChapter(run: PlayerRun): void {
+    if (run.nextChapter === null) return
+    run.nextChapter.abort.abort()
+    run.nextChapter = null
   }
 
   /** 作废当前段那一发（跳段 / 章内滑杆）：没人再听的是这一段，同章预取不能连坐。 */
   private cancelCurrentSegment(run: PlayerRun): void {
     run.segAbort.abort()
     run.segAbort = new AbortController()
+    for (const [index, entry] of run.inFlight) {
+      if (entry.scope === 'segment' || entry.signal.aborted) run.inFlight.delete(index)
+    }
   }
 
   private synthesisRequest(text: string): SynthesisRequest {
@@ -1171,21 +1411,90 @@ export class ListenSession {
     }
   }
 
-  /** 取一段的回执（主播放径与预取共用）；`signal` 是调用方出发时那一只（中途换参数已换新的）。 */
+  /** 取一段的回执（主播放径与预取共用）：同参在途请求复用同一发，各等待方只绑自己的取消位（`ADR-0082`）。 */
   private async receiptFor(
     run: PlayerRun, index: number, text: string, signal: AbortSignal,
-    stillValid: () => boolean = () => true,
+    scope: 'run' | 'segment', stillValid: () => boolean = () => true,
   ): Promise<ReceiptEntry> {
     const st = this.state.get()
     const paramsKey = this.paramsKeyOf(st)
     const cached = run.receipts.get(index)
     if (cached !== undefined && cached.paramsKey === paramsKey) return cached
-    const receipt = await this.platform.synthesize(this.synthesisRequest(text), { signal })
-    const entry: ReceiptEntry = { paramsKey, key: receipt.key, playbackRate: receipt.playbackRate }
-    // 预取 fire-and-forget：请求在途时可能已跳章，旧章段号不能写进新章 receipts。
-    if (stillValid()) run.receipts.set(index, entry)
-    return entry
+    const existing = run.inFlight.get(index)
+    if (existing !== undefined && existing.paramsKey === paramsKey && !existing.signal.aborted) {
+      const joined = await (existing.signal === signal ? existing.promise : raceAbort(existing.promise, signal))
+      if (stillValid()) run.receipts.set(index, joined)
+      return joined
+    }
+    const inFlightEntry: InFlightReceipt = {
+      paramsKey,
+      scope,
+      signal,
+      promise: Promise.resolve({ paramsKey, key: '', playbackRate: 1 }),
+    }
+    const promise = this.platform.synthesize(this.synthesisRequest(text), { signal }).then(
+      (receipt) => {
+        if (run.inFlight.get(index) === inFlightEntry) run.inFlight.delete(index)
+        const entry: ReceiptEntry = { paramsKey, key: receipt.key, playbackRate: receipt.playbackRate }
+        // 预取 fire-and-forget：请求在途时可能已跳章，旧章段号不能写进新章 receipts。
+        if (stillValid()) run.receipts.set(index, entry)
+        return entry
+      },
+      (err: unknown) => {
+        if (run.inFlight.get(index) === inFlightEntry) run.inFlight.delete(index)
+        throw (err instanceof Error ? err : new Error(String(err)))
+      },
+    )
+    inFlightEntry.promise = promise
+    void promise.catch(() => undefined)
+    run.inFlight.set(index, inFlightEntry)
+    return promise
   }
+}
+
+function abortErrorOf(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason
+  return reason instanceof Error ? reason : new Error(String(reason))
+}
+
+function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(abortErrorOf(signal))
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => { reject(abortErrorOf(signal)) }
+    signal.addEventListener('abort', onAbort, { once: true })
+    void promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (err: unknown) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(err instanceof Error ? err : new Error(String(err)))
+      },
+    )
+  })
+}
+
+function prefetchTargets(units: readonly string[], currentIndex: number): number[] {
+  const targets: number[] = []
+  let chars = 0
+  for (let ahead = 1; ahead <= PREFETCH_MAX_AHEAD; ahead += 1) {
+    const index = currentIndex + ahead
+    const text = units[index]
+    if (text === undefined) break
+    if (ahead > PREFETCH_MIN_AHEAD && chars >= PREFETCH_MIN_CHARS) break
+    targets.push(index)
+    chars += Array.from(text).length
+  }
+  return targets
+}
+
+function sameUnits(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
 }
 
 function clampIndex(value: number, max: number): number {
