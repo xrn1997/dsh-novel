@@ -295,12 +295,16 @@ export function BookStage(props: BookStageProps): ReactNode {
       spreadIndexRef.current = targetSpread
       setSpreadIndex(targetSpread)
       setMeasuredChapter(chapterIndex)
-      ratioRef.current = ratioForSpread(targetSpread, nextCount.totalSpreads)
+      const landedRatio = ratioForSpread(targetSpread, nextCount.totalSpreads)
+      ratioRef.current = landedRatio
       setLayoutVersion((v) => v + 1)
+      // 跨章落位（start/end）不是「打开/恢复」：会话若只按章号写过 offset 0，这里补上真实页位；
+      // 回翻落末页时尤其必要（requestJump 固定写 0，视觉已到末页但存档还在章首）。
+      if (land === 'start' || land === 'end') onReportRatio(landedRatio)
     }
     const raf = requestAnimationFrame(measureTrack)
     return () => { cancelAnimationFrame(raf) }
-  }, [content, chapterIndex, layout.columnWidth, layout.columnGap, layout.columnsPerSpread, layout.stride, pageHeight, fontSize, lineHeight])
+  }, [content, chapterIndex, layout.columnWidth, layout.columnGap, layout.columnsPerSpread, layout.stride, pageHeight, fontSize, lineHeight, onReportRatio])
 
   // 听书自动跟读：当播放段落在本章内推进或点击「定位」时，直接对齐真实高亮块并同步进度
   useEffect(() => {

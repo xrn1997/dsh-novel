@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PREFS, prefsStore, setPref } from '../../src/client/store.js'
 import { READER_CSS } from '../../src/client/styles/reader.js'
@@ -138,5 +138,54 @@ describe('BookStage interactions and animation modes', () => {
     const match = /\.novel-book-stage\s*\{([^}]*)\}/.exec(READER_CSS)
     expect(match?.[1]).toContain('z-index: 0')
     expect(match?.[1]).toContain('isolation: isolate')
+  })
+
+  it('跨章回翻落末页后补报末页比例：存档不能留在上一章章首', async () => {
+    // jsdom 没有排版：用 scrollWidth 假装多栏轨道足够长，让本章有多屏可翻。
+    const scrollWidth = vi.spyOn(Element.prototype, 'scrollWidth', 'get')
+      .mockImplementation(function (this: Element) {
+        return this.classList.contains('novel-book-track') ? 5000 : 0
+      })
+    try {
+      const onChangeChapter = vi.fn()
+      const onReportRatio = vi.fn()
+      const common = {
+        totalChapters: 3,
+        content: SAMPLE_CHAPTER,
+        loading: false,
+        bookKey: 'book-1',
+        fontSize: 18,
+        lineHeight: 1.8,
+        measure: 36,
+        animation: 'none' as const,
+        initialRatio: 0,
+        listenParagraph: null,
+        listenFollowing: false,
+        keyboardBlocked: false,
+        onNavigate: () => {},
+        onReportRatio,
+        onUserIntent: () => {},
+        chapterRefs: { current: [] as Array<HTMLDivElement | null> },
+        bodyRef: { current: null as HTMLDivElement | null },
+      }
+      const view = render(
+        <BookStage {...common} chapterIndex={1} chapterName="第二章" onChangeChapter={onChangeChapter} />,
+      )
+      await waitFor(() => expect(view.container.querySelector('.novel-book-track.is-settled')).not.toBeNull())
+
+      fireEvent.click(view.getByLabelText('上一页'))
+      expect(onChangeChapter).toHaveBeenCalledWith(0, 'end')
+      expect(onReportRatio).not.toHaveBeenCalled()       // 跨章请求本身还不能写比例
+
+      view.rerender(
+        <BookStage {...common} chapterIndex={0} chapterName="第一章" onChangeChapter={onChangeChapter} />,
+      )
+      await waitFor(() => expect(onReportRatio).toHaveBeenCalled())
+      const landed = onReportRatio.mock.calls.at(-1)?.[0] as number
+      expect(landed).toBeGreaterThan(0)                  // 末页不是章首
+      expect(landed).toBeLessThan(1)
+    } finally {
+      scrollWidth.mockRestore()
+    }
   })
 })

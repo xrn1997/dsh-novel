@@ -90,6 +90,14 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
 }): ReactNode {
   const t = useCopy()
   const prefs = useStore(prefsStore)
+  const isPaged = prefs.readingMode === 'page'
+  /** 回调里读模式但保持回调身份稳定：`takeOverReading` 进 binding 的依赖，身份一变就会重建
+   *  binding → 会话 → 重开书；模式切换只能走 ref。 */
+  const isPagedRef = useRef(isPaged)
+  isPagedRef.current = isPaged
+  /** 排版三量的指纹：模式切换也会让 effect 重跑，但模式切换不归 `applyTypesetRelocation`。 */
+  const typesetKey = `${prefs.fontSize}:${prefs.lineHeight}:${prefs.measure}`
+  const typesetKeyRef = useRef(typesetKey)
   /** 听书范围按原语窄订阅一次算完（`tts/use-listen-scope`）：整店订阅会让每段推进都重渲顶层。
    *  `showing` = 本书就是正在听的会话——听书条挂载条件，也是「从阅读位置起播」的闸门。 */
   const listen = useListenScope(bookKey)
@@ -111,10 +119,14 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   const pagedProbeParagraphRef = useRef<(() => number) | null>(null)
   /** 翻页模式下记录上一次听书章段，用于区分自然顺序推进（+1）与用户主动跳段/拖滑杆/切章。 */
   const lastPagedListenRef = useRef<{ chapterIndex: number; paragraphIndex: number } | null>(null)
-  /** 用户把视口带走：跟随即让位，挂起的自动定位与在途落位一并作废。 */
+  /** 上一帧是否翻页模式：从翻页切回滚动时，绑定首帧喂视口前先把页内比例摆成滚动位。 */
+  const wasPagedRef = useRef(isPaged)
+  /** 用户把视口带走：跟随即让位，挂起的自动定位与在途落位一并作废。
+   *  翻页模式的让位由 `pagedFollowYielded` 自己管；`follow.onUserIntent` 会走
+   *  `session.cancelJump()` 按滚动锚点重记位置，那里没有翻页视口可读。 */
   const takeOverReading = useCallback((): void => {
     setPagedFollowYielded(true)
-    followControllerRef.current?.onUserIntent()
+    if (!isPagedRef.current) followControllerRef.current?.onUserIntent()
   }, [])
   /** 顶条（sticky）：它的高度就是滚动视口顶的固定遮挡，阅读位置一律按「条下方第一行」算。 */
   const barRef = useRef<HTMLDivElement | null>(null)
@@ -201,7 +213,6 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   /** 听书条贴视口底：跟随时正文的可见底界要扣掉它，目标段不能藏在条后面。 */
   const followBottomInset = useCallback((): number =>
     ttsBarRef.current?.getBoundingClientRect().height ?? 0, [])
-  const isPaged = prefs.readingMode === 'page'
 
   /** 「定位到正在念的段」：用户按了才滚/翻，并重新接上自动跟随；翻页模式下若已跨章先切回播放章。 */
   const locateListen = useCallback((): void => {
@@ -325,6 +336,12 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   }, [deps, sourceId, bookKey])
   const hasImportNotes = importNotes !== null && importNotes.length > 0
 
+  // 模式开关先于开会话：翻页模式没有滚动视口，会话里的恢复/跳章/预取必须走无 pendingJump 的路径。
+  // effect 声明次序即执行次序（这个在下面 open 之前），首帧也不会让 open 走错模式。
+  useEffect(() => {
+    session.setPaged(isPaged)
+  }, [session, isPaged])
+
   // 进入：开会话；卸载：关会话。「回阅读器」的一次性重定位在这里**按书键**取走（消费即摘）：
   // 章号先按不写进度的恢复路径站定，精确段由随后的 `session.reveal` 落位（write:false）。
   useEffect(() => {
@@ -344,6 +361,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
    *  当前页段号探针（被「听书 / 从阅读位置起播」消费时同时恢复自动跟翻）。 */
   useEffect(() => {
     if (isPaged) {
+      wasPagedRef.current = true
       setReadingProbe(() => {
         setPagedFollowYielded(false)
         setPagedLocateTick((n) => n + 1)
@@ -354,6 +372,10 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
       })
       return () => { setReadingProbe(null) }
     }
+    // 切回滚动：滚动 DOM 刚提交，先把会话里的页内比例摆成 scrollTop，再让绑定喂首帧；
+    // 否则首帧会把「正文从章首开始」当成读者位置写回去。
+    if (wasPagedRef.current) session.scrollToSavedPosition()
+    wasPagedRef.current = false
     binding.mount(session)
     return () => { binding.unmount() }
   }, [binding, session, isPaged])
@@ -423,9 +445,13 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   /** 字号/行距/栏宽变化 → 排版复位：触发归视图（提交后的 effect 知道新排版落定），采点、复位算式
    *  与 miss/重采分支归会话的 `applyTypesetRelocation`。effect 只依赖三个排版量、不写 prefs。 */
   useEffect(() => {
-    if (isPaged) return
+    // 模式切换不是排版变化：翻页期间记下指纹但不走滚动复位；切回滚动的位置由
+    // `scrollToSavedPosition` 负责，避免两套落位互相拉扯。
+    if (isPaged) { typesetKeyRef.current = typesetKey; return }
+    if (typesetKeyRef.current === typesetKey) return
+    typesetKeyRef.current = typesetKey
     session.applyTypesetRelocation()
-  }, [isPaged, prefs.fontSize, prefs.lineHeight, prefs.measure, session])
+  }, [isPaged, typesetKey, session])
 
   const onPagedChangeChapter = useCallback((nextChapter: number): void => {
     session.requestJump(nextChapter)
