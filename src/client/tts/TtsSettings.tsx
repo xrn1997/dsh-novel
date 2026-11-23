@@ -113,11 +113,15 @@ export function TtsSettingsRows({ sources, surface }: {
   const engineOptions = sources ?? []
   // 全书章名一次铺成 option：元素数组按章名清单 memo，段间推进时 React 拿到同一批引用即可跳过协调。
   const chapterOptions = useMemo(
-    () => st.chapterNames.map((name, index) => (
-      <option key={index} value={index}>
-        {t('tts.mini.chapter', { n: index + 1 })} {name}
-      </option>
-    )),
+    () => st.chapterNames.map((name, index) => {
+      const prefix = t('tts.mini.chapter', { n: index + 1 })
+      const trimmed = name.trim()
+      return (
+        <option key={index} value={index}>
+          {trimmed === '' ? prefix : `${prefix} ${trimmed}`}
+        </option>
+      )
+    }),
     [st.chapterNames, t],
   )
 

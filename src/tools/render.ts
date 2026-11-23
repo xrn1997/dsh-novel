@@ -1,3 +1,4 @@
+import { chapterTitleOrFallback } from '../shared/chapter-text.js'
 import type { ShelfItem } from './shelf-item.js'
 
 /**
@@ -44,7 +45,8 @@ export interface ReadRenderValue {
 
 /** 正文：只印前 2000 字，规范值含全文。 */
 export function renderRead(v: ReadRenderValue): string {
-  return `《${v.bookKey}》第 ${v.chapterIndex} 章（${v.chapterName}）共 ${v.text.length} 字：\n${v.text.slice(0, 2000)}${v.text.length > 2000 ? '…（截断，规范值含全文）' : ''}`
+  const name = chapterTitleOrFallback(v.chapterName, v.chapterIndex)
+  return `《${v.bookKey}》第 ${v.chapterIndex} 章（${name}）共 ${v.text.length} 字：\n${v.text.slice(0, 2000)}${v.text.length > 2000 ? '…（截断，规范值含全文）' : ''}`
 }
 
 export interface TocRenderValue {
@@ -62,7 +64,9 @@ export const TOC_RENDER_CAP = 10
 
 /** 目录：只印前 `TOC_RENDER_CAP` 章；规范值超上限时说明只含前 N 章。 */
 export function renderToc(v: TocRenderValue): string {
-  const shown = v.chapters.slice(0, TOC_RENDER_CAP).map((c) => `[${c.chapterIndex}] ${c.name}`).join('\n')
+  const shown = v.chapters.slice(0, TOC_RENDER_CAP)
+    .map((c) => `[${c.chapterIndex}] ${chapterTitleOrFallback(c.name, c.chapterIndex)}`)
+    .join('\n')
   const omitted = v.total > v.chapters.length
     ? `\n…（截断，规范值只含前 ${v.chapters.length} 章，全书共 ${v.total} 章）`
     : v.total > TOC_RENDER_CAP ? '\n…（截断，规范值含全部）' : ''

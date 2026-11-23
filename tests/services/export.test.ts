@@ -104,4 +104,22 @@ describe('exportBook', () => {
     expect(calls).toEqual(['ch2'])
     expect(out).toContain('[导出中断于第 3 章《第三章 转》：403 疑似限流]')
   })
+
+  it('空章名导出：章头与中断标记都回退到「第 N 章」，不印空标题', async () => {
+    const blankToc: ChapterEntry[] = [
+      { name: '', url: 'u1' },
+      { name: '   ', url: 'u2' },
+    ]
+    const deps = {
+      getToc: async (): Promise<ChapterEntry[]> => blankToc,
+      getChapter: async (_s: string, _b: string, i: number): Promise<string> => {
+        if (i === 1) throw new Error('超时')
+        return '正文0'
+      },
+      sleep: async (): Promise<void> => {},
+    }
+    const out = await collect(exportBook(deps, 's', 'b', { title: '书', delayMs: 1, from: 1, to: 2 }))
+    expect(out).toContain('《书》· 第 1 章\n\n正文0')
+    expect(out).toContain('[导出中断于第 2 章《第 2 章》：超时]')
+  })
 })

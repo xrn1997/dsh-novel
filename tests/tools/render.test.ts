@@ -62,6 +62,19 @@ describe('renderRead / renderToc（截断口径）', () => {
     expect(text).not.toContain(`[${TOC_RENDER_CAP}] 第${TOC_RENDER_CAP}章`)
     expect(text).toContain('…（截断，规范值含全部）')
   })
+
+  it('空章名在工具面读出「第 N 章」，不留空括号或空行', () => {
+    expect(renderRead({ bookKey: 'k', chapterIndex: 0, chapterName: '', text: '甲' }))
+      .toBe('《k》第 0 章（第 1 章）共 1 字：\n甲')
+    expect(renderToc({
+      bookKey: 'k',
+      total: 2,
+      chapters: [
+        { chapterIndex: 0, name: '' },
+        { chapterIndex: 1, name: '   ' },
+      ],
+    })).toBe('《k》共 2 章：\n[0] 第 1 章\n[1] 第 2 章')
+  })
 })
 
 describe('renderShelf（列表 / 单本 / 移除）', () => {

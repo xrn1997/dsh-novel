@@ -45,6 +45,42 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
     expect(within(prefs).getByRole('button', { name: 'Cream' })).toBeTruthy()
   })
 
+  it('空章名目录：顶条、章首分隔标题与目录抽屉统一兜底到「第 N 章」（中英文同路）', async () => {
+    const blankToc: ChapterEntry[] = [
+      { name: '', url: 'https://x/c/1' },
+      { name: '   ', url: 'https://x/c/2' },
+    ]
+    const blankNav: NavigationItem[] = blankToc.map((c, i) => ({
+      id: `t${i}`, label: c.name, target: { kind: 'chapter', index: i, anchorId: null }, children: [],
+    }))
+    const makeBlankDeps = (): FakeReaderDeps => readerDeps({
+      apiGet: vi.fn(async (path: string) => {
+        if (path.includes('navigation')) return { chapters: blankToc, items: blankNav }
+        if (path.includes('chapter')) return { kind: 'text', text: '正文一段' }
+        return []
+      }),
+    })
+
+    const { container, unmount } = render(reader(makeBlankDeps()))
+    await waitFor(() => expect(container.querySelector('[data-chapter="0"]')).not.toBeNull())
+    expect(container.querySelector('.novel-rdr-chap')?.textContent).toBe('第 1 章')
+    expect(container.querySelector('h2.novel-rdr-mark')?.textContent).toBe('第 1 章')
+    fireEvent.click(screen.getByRole('button', { name: '目录' }))
+    const drawer = await screen.findByRole('dialog', { name: '目录' })
+    expect(within(drawer).getByRole('button', { name: '第 1 章' })).toBeTruthy()
+    expect(within(drawer).getByRole('button', { name: '第 2 章' })).toBeTruthy()
+    unmount()
+
+    const en = render(createElement(CopyProvider, { value: enTranslate, children: reader(makeBlankDeps()) }))
+    await waitFor(() => expect(en.container.querySelector('[data-chapter="0"]')).not.toBeNull())
+    expect(en.container.querySelector('.novel-rdr-chap')?.textContent).toBe('Chapter 1')
+    expect(en.container.querySelector('h2.novel-rdr-mark')?.textContent).toBe('Chapter 1')
+    fireEvent.click(screen.getByRole('button', { name: 'Contents' }))
+    const enDrawer = await screen.findByRole('dialog', { name: 'Contents' })
+    expect(within(enDrawer).getByRole('button', { name: 'Chapter 1' })).toBeTruthy()
+    expect(within(enDrawer).getByRole('button', { name: 'Chapter 2' })).toBeTruthy()
+  })
+
   it('阅读会话的网络取数走注入 deps（目录走 navigation 读面，不硬 import apiGet）', async () => {
     const deps = readerDeps()
     render(reader(deps))

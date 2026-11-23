@@ -23,7 +23,7 @@ import { setReadingProbe } from '../tts/reading-position.js'
 import { useListenScope } from '../tts/use-listen-scope.js'
 import { TtsBar } from '../tts/TtsBar.js'
 import { ttsErrorMessage } from '../tts/tts-error.js'
-import { chapterBodyProjection, paperInk, paperLiveInk, centerInScroller } from '../util.js'
+import { chapterBodyProjection, displayChapterTitle, paperInk, paperLiveInk, centerInScroller } from '../util.js'
 import { ErrorBanner } from './bits.js'
 import { BookStage } from './BookStage.js'
 import { ChapterBody } from './ChapterBody.js'
@@ -467,7 +467,9 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
         <div className="novel-rdr-title">
           {toc === null ? <span className="novel-rdr-chap">{t('reader.tocLoading')}</span> : (
             <>
-              <span className="novel-rdr-chap">{toc[currentChapter]?.name ?? ''}</span>
+              <span className="novel-rdr-chap">
+                {toc[currentChapter] === undefined ? '' : displayChapterTitle(toc[currentChapter].name, currentChapter, t)}
+              </span>
               <span className="novel-rdr-pos">{currentChapter + 1} / {toc.length}</span>
             </>
           )}
@@ -577,7 +579,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
           <BookStage
             chapterIndex={currentChapter}
             totalChapters={toc?.length ?? 0}
-            chapterName={toc?.[currentChapter]?.name ?? t('reader.chapterFallback', { n: currentChapter + 1 })}
+            chapterName={displayChapterTitle(toc?.[currentChapter]?.name, currentChapter, t)}
             content={currentChapterContent}
             loading={loadingIdx !== null || toc === null}
             bookKey={bookKey}
@@ -617,7 +619,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
                   key={i}
                   index={i}
                   content={content}
-                  name={toc?.[i]?.name ?? t('reader.chapterFallback', { n: i + 1 })}
+                  name={displayChapterTitle(toc?.[i]?.name, i, t)}
                   bookKey={bookKey}
                   onNavigate={onBodyNavigate}
                   chapterRefs={chapterRefs}
