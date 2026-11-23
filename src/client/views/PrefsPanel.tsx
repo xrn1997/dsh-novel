@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { useCopy } from '../copy/index.js'
-import { FONT_STEPS, LINE_HEIGHTS, MEASURES, PAPER_PRESETS } from '../prefs-ui.js'
+import { FONT_STEPS, LINE_HEIGHTS, MEASURES, PAGE_ANIMATIONS, PAPER_PRESETS, READING_MODES } from '../prefs-ui.js'
 import { prefsStore, setPref, useStore } from '../store.js'
 import { paperInk } from '../util.js'
 
@@ -67,6 +67,28 @@ export function PrefsPanel({ zIndex }: { zIndex: number }): ReactNode {
             value={prefs.paperColor} onChange={(e) => setPref({ paperColor: e.target.value })} />
         </div>
       </div>
+      <div>
+        <div className="novel-prefs-label">{t('reader.readingMode')}</div>
+        <div className="novel-chips">
+          {READING_MODES.map((mode) => (
+            <button key={mode.value} className={prefs.readingMode === mode.value ? 'novel-chip on' : 'novel-chip'}
+              aria-pressed={prefs.readingMode === mode.value}
+              onClick={() => setPref({ readingMode: mode.value })}>{t(mode.labelKey)}</button>
+          ))}
+        </div>
+      </div>
+      {prefs.readingMode === 'page' && (
+        <div>
+          <div className="novel-prefs-label">{t('reader.pageAnimation')}</div>
+          <div className="novel-chips">
+            {PAGE_ANIMATIONS.map((anim) => (
+              <button key={anim.value} className={prefs.pageAnimation === anim.value ? 'novel-chip on' : 'novel-chip'}
+                aria-pressed={prefs.pageAnimation === anim.value}
+                onClick={() => setPref({ pageAnimation: anim.value })}>{t(anim.labelKey)}</button>
+            ))}
+          </div>
+        </div>
+      )}
       <label>
         <input type="checkbox" checked={prefs.darkController} onChange={(e) => setPref({ darkController: e.target.checked })} />
         {t('reader.darkController')}

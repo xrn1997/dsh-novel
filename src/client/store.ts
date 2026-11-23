@@ -54,17 +54,49 @@ export function navigate(route: ViewRoute): void { routeStore.set({ route }) }
 
 // ── 阅读偏好（localStorage 持久；进度不进 prefs——进度归服务端 shelf）──────
 
-export interface Prefs { fontSize: number; lineHeight: number; measure: number; paperColor: string; darkController: boolean }
+export type ReadingMode = 'scroll' | 'page'
+export type PageAnimation = 'flip' | 'slide' | 'none'
+
+export interface Prefs {
+  fontSize: number
+  lineHeight: number
+  measure: number
+  paperColor: string
+  darkController: boolean
+  readingMode: ReadingMode
+  pageAnimation: PageAnimation
+}
 /** measure = 正文列宽（em，随字号缩放）：行内只写 --novel-measure，规则住样式层。 */
-export const DEFAULT_PREFS: Prefs = { fontSize: 18, lineHeight: 1.8, measure: 36, paperColor: '#f7f3e8', darkController: false }
+export const DEFAULT_PREFS: Prefs = {
+  fontSize: 18,
+  lineHeight: 1.8,
+  measure: 36,
+  paperColor: '#f7f3e8',
+  darkController: false,
+  readingMode: 'scroll',
+  pageAnimation: 'flip',
+}
 const PREFS_KEY = 'dsh-novel.prefs'
+
+function isReadingMode(v: unknown): v is ReadingMode {
+  return v === 'scroll' || v === 'page'
+}
+
+function isPageAnimation(v: unknown): v is PageAnimation {
+  return v === 'flip' || v === 'slide' || v === 'none'
+}
 
 function loadPrefs(): Prefs {
   try {
     const raw = ls.getItem(PREFS_KEY)
     if (raw === null) return DEFAULT_PREFS
     const parsed = JSON.parse(raw) as Partial<Prefs>
-    return { ...DEFAULT_PREFS, ...parsed }
+    return {
+      ...DEFAULT_PREFS,
+      ...parsed,
+      readingMode: isReadingMode(parsed.readingMode) ? parsed.readingMode : DEFAULT_PREFS.readingMode,
+      pageAnimation: isPageAnimation(parsed.pageAnimation) ? parsed.pageAnimation : DEFAULT_PREFS.pageAnimation,
+    }
   } catch {
     return DEFAULT_PREFS
   }

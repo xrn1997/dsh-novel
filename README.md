@@ -5,7 +5,7 @@
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Tested with DSH 0.1.7-rc.1 … 0.2.2-rc.5](https://img.shields.io/badge/DSH-0.1.7--rc.1%20%E2%80%A6%200.2.2--rc.5-brightgreen)](#安装)
 
-**在 DeepSeek Harness（DSH）里读网络小说。** 导入 [legado](https://github.com/gedoor/legado) 书源，聚合搜索或按分类逛书城，把书加入书架，连续滚动阅读，也能让它念给你听。它还有本地 TXT / EPUB、中英界面和六个 `dshnovel_` AI 助手工具——找书、读章、管源都可以在对话里完成。
+**在 DeepSeek Harness（DSH）里读网络小说。** 导入 [legado](https://github.com/gedoor/legado) 书源，聚合搜索或按分类逛书城，把书加入书架，连续滚动或翻页阅读，也能让它念给你听。它还有本地 TXT / EPUB、中英界面和六个 `dshnovel_` AI 助手工具——找书、读章、管源都可以在对话里完成。
 
 ![书城：左栏按源列出分类，右侧是按源声明的分类书目网格](docs/screenshots/screenshot-01.png)
 
@@ -44,9 +44,9 @@
 
 书架顶部一次搜索所有源：结果边搜边出、可停止，按（书名，作者）归并，相关结果优先，失败源逐家点名。书城则按每个源自己声明的分类浏览，点书可读、加架，或去其他源找同名书。
 
-### 书架与阅读：连续滚动，进度自动保存
+### 书架与阅读：连续滚动或翻页，进度自动保存
 
-书架按最近阅读排序，可按在读 / 未读 / 本地筛选，每本书标来源，支持批量删除。阅读器连续滚动、自动预取下一章，字号 / 行距 / 栏宽 / 纸张色可调，支持范围导出 TXT。
+书架按最近阅读排序，可按在读 / 未读 / 本地筛选，每本书标来源，支持批量删除。阅读器支持连续滚动与翻页阅读（宽屏双页、窄屏单页，Aa 面板可切换），自动预取下一章，字号 / 行距 / 栏宽 / 纸张色可调，支持范围导出 TXT。
 
 ![书架：最近阅读排序、筛选与本地导入入口（示意数据）](docs/screenshots/screenshot-03.png)
 

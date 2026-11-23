@@ -77,6 +77,7 @@ export const TOKENS_CSS = `
   /* 值槽（唯一由行内写入的动态量，规则都住本层）。 */
   --novel-pct: 0;
   --novel-measure: 36em;
+  --novel-book-page-h: 520px;
   /* 听书浮窗展开态尺寸（ADR-0080）：由 miniBarLayout 行内写入解析后的呈现尺寸，样式层只读变量。 */
   --novel-tts-panel-w: 320px;
   --novel-tts-panel-h: 200px;

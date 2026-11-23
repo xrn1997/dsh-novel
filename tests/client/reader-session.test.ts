@@ -1475,3 +1475,57 @@ describe('ReaderSession.reveal（按听书段精确落位）', () => {
     expect(h.saves).toEqual([])
   })
 })
+
+describe('ReaderSession 翻页模式（无滚动视口）', () => {
+  it('open 只落会话位置，不写滚动容器', async () => {
+    const h = makeSession({ shelf: [shelfBook({ chapterIndex: 1, offsetRatio: 0.6, updatedAt: 0 })] })
+    h.session.setPaged(true)
+    await h.session.open('src', 'https://s.com/book/1')
+    expect(h.session.currentPosition).toEqual({ chapterIndex: 1, offsetRatio: 0.6 })
+    expect(h.port.tops).toEqual([])
+    expect(h.fetched).toEqual([1])
+  })
+
+  it('requestJump 不挂 pendingJump：页内落位归 BookStage', async () => {
+    const h = makeSession()
+    h.session.setPaged(true)
+    await h.session.open('src', 'https://s.com/book/1')
+    h.session.requestJump(2)
+    expect(h.session.pendingJump).toBeNull()
+    expect(h.session.currentPosition).toEqual({ chapterIndex: 2, offsetRatio: 0 })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(h.fetched).toContain(2)
+  })
+
+  it('预取失败不写全局 error：用户还没翻到的那章不弹错误条', async () => {
+    const h = makeSession({ failChapter: 1 })
+    h.session.setPaged(true)
+    await h.session.open('src', 'https://s.com/book/1')
+    h.session.prefetchChapter(1)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(h.fetched).toContain(1)
+    expect(h.session.state.error).toBeNull()
+  })
+
+  it('切回滚动时按页内比例摆 scrollTop', async () => {
+    const h = makeSession({ shelf: [shelfBook({ chapterIndex: 1, offsetRatio: 0.5, updatedAt: 0 })] })
+    h.session.setPaged(true)
+    await h.session.open('src', 'https://s.com/book/1')
+    h.port.anchors = [
+      { index: 0, start: 0, height: 1000 },
+      { index: 1, start: 1000, height: 1000 },
+    ]
+    h.session.setPaged(false)
+    h.session.scrollToSavedPosition()
+    expect(h.port.top).toBe(1500)
+  })
+
+  it('同章 requestJump 不动页内进度：目录锚点不能把存档改回章首', async () => {
+    const h = makeSession({ shelf: [shelfBook({ chapterIndex: 0, offsetRatio: 0.6, updatedAt: 0 })] })
+    h.session.setPaged(true)
+    await h.session.open('src', 'https://s.com/book/1')
+    h.session.requestJump(0)
+    expect(h.session.currentPosition).toEqual({ chapterIndex: 0, offsetRatio: 0.6 })
+    expect(h.saves).toEqual([])
+  })
+})

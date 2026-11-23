@@ -95,6 +95,11 @@ export const SETTINGS_ZH = {
   'prefs.paper.white': '纯白',
   'prefs.paper.green': '淡绿',
   'prefs.paper.pink': '淡粉',
+  'prefs.readingMode.scroll': '上下滚动',
+  'prefs.readingMode.page': '翻页阅读',
+  'prefs.pageAnimation.flip': '拟真翻书',
+  'prefs.pageAnimation.slide': '顺滑平移',
+  'prefs.pageAnimation.none': '极速直切',
 } as const
 
 export const SETTINGS_EN: Record<keyof typeof SETTINGS_ZH, string> = {
@@ -182,4 +187,9 @@ export const SETTINGS_EN: Record<keyof typeof SETTINGS_ZH, string> = {
   'prefs.paper.white': 'White',
   'prefs.paper.green': 'Pale green',
   'prefs.paper.pink': 'Pale pink',
+  'prefs.readingMode.scroll': 'Scroll',
+  'prefs.readingMode.page': 'Book flip',
+  'prefs.pageAnimation.flip': 'Realistic flip',
+  'prefs.pageAnimation.slide': 'Smooth slide',
+  'prefs.pageAnimation.none': 'Instant',
 }

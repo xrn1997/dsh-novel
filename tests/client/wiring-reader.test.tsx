@@ -15,6 +15,7 @@ import { LOCAL_SOURCE_ID, ROUTES } from '../../src/shared/wire.js'
 import { must, pick } from '../support/fixture.js'
 import { makeReaderDeps } from './fake-deps.js'
 import type { DepsOverrides, FakeReaderDeps } from './fake-deps.js'
+import { readerRouteGetMock } from './reader-fakes.js'
 import { installWiringLifecycle, sentCalls } from './wiring-harness.js'
 
 /**
@@ -79,6 +80,40 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
     const enDrawer = await screen.findByRole('dialog', { name: 'Contents' })
     expect(within(enDrawer).getByRole('button', { name: 'Chapter 1' })).toBeTruthy()
     expect(within(enDrawer).getByRole('button', { name: 'Chapter 2' })).toBeTruthy()
+  })
+
+  it('翻页模式：舞台渲染、预取失败不弹错误条、切回滚动恢复正文列', async () => {
+    const chapters: ChapterEntry[] = [
+      { name: '第一章', url: 'u1' },
+      { name: '第二章', url: 'u2' },
+    ]
+    const deps = readerDeps({
+      apiGet: readerRouteGetMock({
+        chapters: () => chapters,
+        chapter: (i) => {
+          if (i === 1) throw new Error('预取失败')
+          return { kind: 'text', text: '第一章正文' }
+        },
+        shelf: () => [],
+      }),
+    })
+    setPref({ readingMode: 'page' })
+    try {
+      const { container } = render(reader(deps))
+      await waitFor(() => expect(container.querySelector('[data-novel-book-stage]')).not.toBeNull())
+      expect(container.querySelector('[data-novel-page-num]')?.textContent).toContain('第 1')
+      expect(container.querySelector('.novel-rdr-body')).toBeNull()
+
+      // 预取下一章失败：用户还没翻到那一章，错误条不许出现（静默预取）。
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+      expect(container.querySelector('[data-novel="error"]')).toBeNull()
+
+      act(() => { setPref({ readingMode: 'scroll' }) })
+      await waitFor(() => expect(container.querySelector('.novel-rdr-body')).not.toBeNull())
+      expect(container.querySelector('[data-novel-book-stage]')).toBeNull()
+    } finally {
+      setPref({ readingMode: 'scroll', pageAnimation: 'flip' })
+    }
   })
 
   it('阅读会话的网络取数走注入 deps（目录走 navigation 读面，不硬 import apiGet）', async () => {

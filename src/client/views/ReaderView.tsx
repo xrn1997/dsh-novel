@@ -19,11 +19,13 @@ import { pauseListening, resumeListening, startFromReadingPosition, takeReaderRe
 import { enterReader } from '../tts/reader-presence.js'
 import { createFollowController } from '../tts/follow-controller.js'
 import type { FollowController } from '../tts/follow-controller.js'
+import { setReadingProbe } from '../tts/reading-position.js'
 import { useListenScope } from '../tts/use-listen-scope.js'
 import { TtsBar } from '../tts/TtsBar.js'
 import { ttsErrorMessage } from '../tts/tts-error.js'
 import { chapterBodyProjection, displayChapterTitle, paperInk, paperLiveInk, centerInScroller } from '../util.js'
 import { ErrorBanner } from './bits.js'
+import { BookStage } from './BookStage.js'
 import { ChapterBody } from './ChapterBody.js'
 import { ExportPanel } from './ExportPanel.js'
 import { ImportNotesPanel } from './ImportNotesPanel.js'
@@ -88,6 +90,14 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
 }): ReactNode {
   const t = useCopy()
   const prefs = useStore(prefsStore)
+  const isPaged = prefs.readingMode === 'page'
+  /** 回调里读模式但保持回调身份稳定：`takeOverReading` 进 binding 的依赖，身份一变就会重建
+   *  binding → 会话 → 重开书；模式切换只能走 ref。 */
+  const isPagedRef = useRef(isPaged)
+  isPagedRef.current = isPaged
+  /** 排版三量的指纹：模式切换也会让 effect 重跑，但模式切换不归 `applyTypesetRelocation`。 */
+  const typesetKey = `${prefs.fontSize}:${prefs.lineHeight}:${prefs.measure}`
+  const typesetKeyRef = useRef(typesetKey)
   /** 听书范围按原语窄订阅一次算完（`tts/use-listen-scope`）：整店订阅会让每段推进都重渲顶层。
    *  `showing` = 本书就是正在听的会话——听书条挂载条件，也是「从阅读位置起播」的闸门。 */
   const listen = useListenScope(bookKey)
@@ -101,9 +111,22 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   const followControllerRef = useRef<FollowController | null>(null)
   /** 听书条根：跟随的可视底界要扣掉它的高度（条贴视口底，目标段不许藏在它下面）。 */
   const ttsBarRef = useRef<HTMLDivElement | null>(null)
-  /** 用户把视口带走：跟随即让位，挂起的自动定位与在途落位一并作废。 */
+  /** 翻页模式下是否处于「用户已接管」状态（与滚动模式的 followController 同口径：翻页让位、定位/新会话恢复）。 */
+  const [pagedFollowYielded, setPagedFollowYielded] = useState<boolean>(false)
+  /** 翻页模式下「定位到正在念的段」脉冲计数：即便当前已在跟随态，点击定位仍触发一次校准。 */
+  const [pagedLocateTick, setPagedLocateTick] = useState<number>(0)
+  /** 翻页模式阅读位置探针：取当前可见页左上角第一段号，避免从任意页点「听书」退回章首第 0 段。 */
+  const pagedProbeParagraphRef = useRef<(() => number) | null>(null)
+  /** 翻页模式下记录上一次听书章段，用于区分自然顺序推进（+1）与用户主动跳段/拖滑杆/切章。 */
+  const lastPagedListenRef = useRef<{ chapterIndex: number; paragraphIndex: number } | null>(null)
+  /** 上一帧是否翻页模式：从翻页切回滚动时，绑定首帧喂视口前先把页内比例摆成滚动位。 */
+  const wasPagedRef = useRef(isPaged)
+  /** 用户把视口带走：跟随即让位，挂起的自动定位与在途落位一并作废。
+   *  翻页模式的让位由 `pagedFollowYielded` 自己管；`follow.onUserIntent` 会走
+   *  `session.cancelJump()` 按滚动锚点重记位置，那里没有翻页视口可读。 */
   const takeOverReading = useCallback((): void => {
-    followControllerRef.current?.onUserIntent()
+    setPagedFollowYielded(true)
+    if (!isPagedRef.current) followControllerRef.current?.onUserIntent()
   }, [])
   /** 顶条（sticky）：它的高度就是滚动视口顶的固定遮挡，阅读位置一律按「条下方第一行」算。 */
   const barRef = useRef<HTMLDivElement | null>(null)
@@ -165,6 +188,8 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   /** 听书起播的唯一入口：位置由调用方给，引擎/音色/语速/音量一律不传（回退链归播放层）。
    *  位置来源恒为 `position`：`archive` 档是会话侧留给显式续听的入口（`ADR-0078`），视图不透传。 */
   const startListeningAt = useCallback((target?: { chapterIndex: number; paragraphIndex: number }): void => {
+    setPagedFollowYielded(false)
+    setPagedLocateTick((n) => n + 1)
     void startFromReadingPosition({
       sourceId, bookKey, title,
       ...(target === undefined ? { fallbackChapter: currentChapter } : { target }),
@@ -188,18 +213,28 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   /** 听书条贴视口底：跟随时正文的可见底界要扣掉它，目标段不能藏在条后面。 */
   const followBottomInset = useCallback((): number =>
     ttsBarRef.current?.getBoundingClientRect().height ?? 0, [])
-  /** 「定位到正在念的段」：用户按了才滚，并重新接上自动跟随；只滚阅读滚动容器自己。 */
+
+  /** 「定位到正在念的段」：用户按了才滚/翻，并重新接上自动跟随；翻页模式下若已跨章先切回播放章。 */
   const locateListen = useCallback((): void => {
+    setPagedFollowYielded(false)
+    setPagedLocateTick((n) => n + 1)
     const live = ttsPlayer.get()
+    if (isPaged) {
+      if (live.active && live.bookKey === bookKey && live.chapterIndex !== currentChapter) {
+        session.requestJump(live.chapterIndex)
+      }
+      return
+    }
     follow.onLocate({
       active: live.active,
       bookKey: live.bookKey,
       chapterIndex: live.chapterIndex,
       paragraphIndex: live.paragraphIndex,
     }, followBottomInset())
-  }, [follow, followBottomInset])
+  }, [isPaged, bookKey, currentChapter, session, follow, followBottomInset])
   /** 听书会话开始 / 结束 / 换书：跟随回到默认开启；会话不在时清掉残留的重定位待办。 */
   useEffect(() => {
+    setPagedFollowYielded(false)
     follow.onSessionChange(listen.showing)
   }, [follow, listen.showing, bookKey])
 
@@ -301,6 +336,12 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   }, [deps, sourceId, bookKey])
   const hasImportNotes = importNotes !== null && importNotes.length > 0
 
+  // 模式开关先于开会话：翻页模式没有滚动视口，会话里的恢复/跳章/预取必须走无 pendingJump 的路径。
+  // effect 声明次序即执行次序（这个在下面 open 之前），首帧也不会让 open 走错模式。
+  useEffect(() => {
+    session.setPaged(isPaged)
+  }, [session, isPaged])
+
   // 进入：开会话；卸载：关会话。「回阅读器」的一次性重定位在这里**按书键**取走（消费即摘）：
   // 章号先按不写进度的恢复路径站定，精确段由随后的 `session.reveal` 落位（write:false）。
   useEffect(() => {
@@ -316,15 +357,71 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     return () => session.dispose()
   }, [follow, session, sourceId, bookKey])
 
-  /** DOM 侧接线：装监听、注册探针、首帧喂视口、挂载即拍第一帧；卸载全摘（归 `client/reader-binding.ts`）。 */
+  /** DOM 侧接线：滚动模式下由 binding 接管监听、探针与帧拍点；翻页模式下由 BookStage 接管进度与
+   *  当前页段号探针（被「听书 / 从阅读位置起播」消费时同时恢复自动跟翻）。 */
   useEffect(() => {
+    if (isPaged) {
+      wasPagedRef.current = true
+      setReadingProbe(() => {
+        setPagedFollowYielded(false)
+        setPagedLocateTick((n) => n + 1)
+        return {
+          chapterIndex: session.currentPosition.chapterIndex,
+          paragraphIndex: pagedProbeParagraphRef.current?.() ?? 0,
+        }
+      })
+      return () => { setReadingProbe(null) }
+    }
+    // 切回滚动：滚动 DOM 刚提交，先把会话里的页内比例摆成 scrollTop，再让绑定喂首帧；
+    // 否则首帧会把「正文从章首开始」当成读者位置写回去。
+    if (wasPagedRef.current) session.scrollToSavedPosition()
+    wasPagedRef.current = false
     binding.mount(session)
     return () => { binding.unmount() }
-  }, [binding, session])
+  }, [binding, session, isPaged])
 
-  /** 播放推进时自动跟随。策略归 `follow-controller`：读者接管后它保持让位，直到定位按钮或下一次
-   *  听书会话重新接上。effect 必须排在绑定挂载之后（首帧跟随时端口已刷新）。 */
+  /** 翻页模式预取下一章：本章正文到位后静默拉取下一章，末页翻章无等待。 */
+  const currentChapterContent = chapters[currentChapter] ?? null
   useEffect(() => {
+    if (!isPaged || toc === null || currentChapterContent === null) return
+    if (currentChapter + 1 < toc.length) {
+      session.prefetchChapter(currentChapter + 1)
+    }
+  }, [isPaged, toc, currentChapter, currentChapterContent, session])
+
+  /** 翻页模式听书进度同步：
+   *  - 用户在听书条上主动拖滑杆、点上一段/上一章/下一章（非自然 +1 推进）时自动恢复跟随并校准；
+   *  - 跟随态下若听书章号与当前章不同（含已预取的下一章），立即切章并由 BookStage 对齐高亮段落。 */
+  useEffect(() => {
+    if (!isPaged || !listen.showing) {
+      lastPagedListenRef.current = null
+      return
+    }
+    const prev = lastPagedListenRef.current
+    lastPagedListenRef.current = { chapterIndex: listen.chapterIndex, paragraphIndex: listen.paragraphIndex }
+    const unchanged = prev !== null && prev.chapterIndex === listen.chapterIndex
+      && prev.paragraphIndex === listen.paragraphIndex
+    const naturalNextPara = prev !== null && prev.chapterIndex === listen.chapterIndex
+      && listen.paragraphIndex === prev.paragraphIndex + 1
+    const naturalNextChap = prev !== null && listen.chapterIndex === prev.chapterIndex + 1
+      && listen.paragraphIndex === 0
+    const explicitTtsSeek = prev !== null && !unchanged && !naturalNextPara && !naturalNextChap
+    const shouldFollow = !pagedFollowYielded || explicitTtsSeek
+    if (explicitTtsSeek) {
+      setPagedFollowYielded(false)
+      setPagedLocateTick((n) => n + 1)
+    }
+    if (!shouldFollow || toc === null) return
+    if (listen.chapterIndex < 0 || listen.chapterIndex >= toc.length) return
+    if (listen.chapterIndex !== currentChapter) {
+      session.requestJump(listen.chapterIndex)
+    }
+  }, [isPaged, listen.showing, listen.chapterIndex, listen.paragraphIndex, pagedFollowYielded, toc, currentChapter, session])
+
+  /** 播放推进时自动跟随。滚动模式由 follow-controller 驱动 session.reveal；翻页模式由上方跨章 effect +
+   *  BookStage 页内同步接管，避免在会话里留下挂起的纵向 pendingReveal。 */
+  useEffect(() => {
+    if (isPaged) return
     const live = ttsPlayer.get()
     follow.onPlayback({
       active: live.active,
@@ -332,7 +429,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
       chapterIndex: live.chapterIndex,
       paragraphIndex: live.paragraphIndex,
     }, followBottomInset())
-  }, [follow, listen.showing, listen.chapterIndex, listen.paragraphIndex, followBottomInset])
+  }, [isPaged, follow, listen.showing, listen.chapterIndex, listen.paragraphIndex, followBottomInset])
 
   /** 拍点后回调：目录高亮重算（章块到货后 DOM 才可测）；精确落位归会话的 `afterRender`，视图不另记账。 */
   const afterBeat = (): void => {
@@ -341,14 +438,28 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   /** 每次渲染后的**唯一一道门**（无条件调用）：这一帧要不要测量由绑定按会话的 DOM 版本裁，
    *  「只改了 currentChapter」这类渲染自然不拍，新加影响布局的来源也不用回来改视图。 */
   useEffect(() => {
+    if (isPaged) return
     binding.rendered(st.domRevision, afterBeat)
   })
 
   /** 字号/行距/栏宽变化 → 排版复位：触发归视图（提交后的 effect 知道新排版落定），采点、复位算式
    *  与 miss/重采分支归会话的 `applyTypesetRelocation`。effect 只依赖三个排版量、不写 prefs。 */
   useEffect(() => {
+    // 模式切换不是排版变化：翻页期间记下指纹但不走滚动复位；切回滚动的位置由
+    // `scrollToSavedPosition` 负责，避免两套落位互相拉扯。
+    if (isPaged) { typesetKeyRef.current = typesetKey; return }
+    if (typesetKeyRef.current === typesetKey) return
+    typesetKeyRef.current = typesetKey
     session.applyTypesetRelocation()
-  }, [prefs.fontSize, prefs.lineHeight, prefs.measure, session])
+  }, [isPaged, typesetKey, session])
+
+  const onPagedChangeChapter = useCallback((nextChapter: number): void => {
+    session.requestJump(nextChapter)
+  }, [session])
+
+  const onPagedReportRatio = useCallback((ratio: number): void => {
+    session.reportPosition(currentChapter, ratio, false)
+  }, [session, currentChapter])
 
   const shownError = error ?? exportState.error
   /** 纸与墨：条底、控件、进度槽、跟读高亮都由这几个值槽派生（规则住样式层，行内只给值）。
@@ -360,7 +471,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     '--novel-live-ink': paperLiveInk(prefs.paperColor),
   } as CSSProperties), [prefs.paperColor])
   return (
-    <div data-novel-view="reader" className="novel-rdr" style={paper}>
+    <div data-novel-view="reader" className={isPaged ? 'novel-rdr is-paged' : 'novel-rdr'} style={paper}>
       {/* 偏好/导出面板遮罩：挂 reader 根容器盖满阅读区；遮罩在不在场读阅读场景的 `mask` 投影。 */}
       {sceneState.mask && (
         <div data-novel-ctrl-mask onClick={closeCurrent}
@@ -488,41 +599,68 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
           {sceneState.joinError === null ? null : <div className="novel-err novel-note-sm">{t('reader.join.failed', { detail: sceneState.joinError })}</div>}
         </Dialog>
       )}
-      {/* 阅读区：纸铺满这一层；正文列 + 0 宽 sticky 抽屉槽同行。 */}
+      {/* 阅读区：纸铺满这一层；翻页模式走 BookStage，滚动模式走连续正文列；0 宽 sticky 抽屉槽同行。 */}
       <div className="novel-rdr-main">
-        {/* 正文层：字号/行距/栏宽由 prefs 行内固定——永不接宿主 token；字色走 --novel-paper-ink */}
-        <div
-          ref={bodyRef}
-          className="novel-rdr-body"
-          style={{
-            fontSize: prefs.fontSize, lineHeight: prefs.lineHeight,
-            '--novel-measure': `${prefs.measure}em`,
-          } as CSSProperties}
-        >
-          {toc === null && <div className="novel-rdr-loading">{t('reader.tocLoading')}</div>}
-          {/* 只渲染已载章节：未载章节不进 DOM——scrollHeight 才等于「已读内容高」，预取判据才成立 */}
-          {chapters.map((content, i) => content === null
-            ? null
-            : (
-              <ChapterShell
-                key={i}
-                index={i}
-                content={content}
-                name={displayChapterTitle(toc?.[i]?.name, i, t)}
-                bookKey={bookKey}
-                onNavigate={onBodyNavigate}
-                chapterRefs={chapterRefs}
-                listenParagraph={listen.chapterIndex === i ? listen.paragraphIndex : null}
-              />
-            ))}
-          {toc !== null && (
-            <div ref={sentinelRef} data-novel-sentinel className="novel-sentinel">
-              {loadingIdx !== null
-                ? t('common.loading')
-                : nextChapterIndex(chapters, currentChapter) === -1 ? t('reader.endOfBook') : '…'}
-            </div>
-          )}
-        </div>
+        {isPaged ? (
+          <BookStage
+            chapterIndex={currentChapter}
+            totalChapters={toc?.length ?? 0}
+            chapterName={displayChapterTitle(toc?.[currentChapter]?.name, currentChapter, t)}
+            content={currentChapterContent}
+            loading={loadingIdx !== null || toc === null}
+            bookKey={bookKey}
+            fontSize={prefs.fontSize}
+            lineHeight={prefs.lineHeight}
+            measure={prefs.measure}
+            animation={prefs.pageAnimation}
+            initialRatio={session.currentPosition.chapterIndex === currentChapter ? session.currentPosition.offsetRatio : 0}
+            listenParagraph={listen.chapterIndex === currentChapter ? listen.paragraphIndex : null}
+            listenFollowing={listen.showing && !pagedFollowYielded}
+            locateTick={pagedLocateTick}
+            keyboardBlocked={sceneState.surface !== null || sceneState.askShelf}
+            onNavigate={onBodyNavigate}
+            onChangeChapter={onPagedChangeChapter}
+            onReportRatio={onPagedReportRatio}
+            onUserIntent={takeOverReading}
+            chapterRefs={chapterRefs}
+            bodyRef={bodyRef}
+            probeParagraphRef={pagedProbeParagraphRef}
+          />
+        ) : (
+          /* 正文层：字号/行距/栏宽由 prefs 行内固定——永不接宿主 token；字色走 --novel-paper-ink */
+          <div
+            ref={bodyRef}
+            className="novel-rdr-body"
+            style={{
+              fontSize: prefs.fontSize, lineHeight: prefs.lineHeight,
+              '--novel-measure': `${prefs.measure}em`,
+            } as CSSProperties}
+          >
+            {toc === null && <div className="novel-rdr-loading">{t('reader.tocLoading')}</div>}
+            {/* 只渲染已载章节：未载章节不进 DOM——scrollHeight 才等于「已读内容高」，预取判据才成立 */}
+            {chapters.map((content, i) => content === null
+              ? null
+              : (
+                <ChapterShell
+                  key={i}
+                  index={i}
+                  content={content}
+                  name={displayChapterTitle(toc?.[i]?.name, i, t)}
+                  bookKey={bookKey}
+                  onNavigate={onBodyNavigate}
+                  chapterRefs={chapterRefs}
+                  listenParagraph={listen.chapterIndex === i ? listen.paragraphIndex : null}
+                />
+              ))}
+            {toc !== null && (
+              <div ref={sentinelRef} data-novel-sentinel className="novel-sentinel">
+                {loadingIdx !== null
+                  ? t('common.loading')
+                  : nextChapterIndex(chapters, currentChapter) === -1 ? t('reader.endOfBook') : '…'}
+              </div>
+            )}
+          </div>
+        )}
         {/* 抽屉：0 宽 sticky 槽 + absolute 本体（锚视口、不切走正文宽度）。 */}
         {sceneState.surface === 'toc' && (
           <div className="novel-drawer-slot">
