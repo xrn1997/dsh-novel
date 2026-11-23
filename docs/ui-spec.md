@@ -58,6 +58,7 @@
 ### 3.5 阅读器（`src/client/views/ReaderView.tsx`）
 
 - 连续滚动，只渲染已载章节。向后的预取判据住 `reader-load.ts` 的 `nextLoadTarget`（哨兵 + 两屏）；向前的保留深度是 `KEEP_BEHIND`，由 `pruneToViewport` 裁。视口顶接近窗口顶时 `checkBackfill` 补上一章，每个视口 episode 的补载次数有上界；窗口与补载的细节住 `client/reader-session.ts` 的头注。
+- **阅读方式**（Aa 面板，偏好持久化）：默认连续滚动；切到翻页后按舞台可用宽高与字号 / 行距用 CSS 多栏切页，可用宽 ≥ 860px 双页对开、窄屏单页。左右 30% 点击区翻页，中间 40% 留给选词、内链与注释；`←` / `→`、PageUp / PageDown、Space、滚轮与触摸横向滑动可翻，阅读浮层打开时键盘让出。末页后翻进下一章开头，首页前翻落上一章末页；跨章落位后按实际页位写进度，并静默预取下一章。三种动效（拟真翻书 / 顺滑平移 / 极速直切）尊重 `prefers-reduced-motion`；页脚给页码与上一页 / 下一页。章内锚点在翻页模式下不精确落位（同章保持当前页、跨章落章首），需要精确锚点用滚动模式。
 - 滚动补偿归会话：裁章与前插在 `pendingScrollFixes` 记账，`afterRender` 按参考章新旧起点差补 `scrollTop`；浏览器的原生锚定在阅读器子树整棵关掉（`styles/reader.ts`），否则会补两遍。
 - 进度：`ReaderSession` 的 `commit` 把恢复 / 跳转 / 滚动防抖统一落到 `saveProgress`；恢复不写，跳转与跨章立落。
 - 阅读位置按**顶条下方第一行**算：顶条是 sticky 覆盖层，贴住视口顶后盖住内容最上面约 40px。`ReaderView` 把顶条实测高作为 `topInset` 交给会话，存（`locateChapter` 吃 `scrollTop + inset`）与取（恢复 / 目录与内链跳转 / 排版复位 / 返回原处落位减掉 inset）用同一个值；阅读探针（「从阅读位置起播」）同一口径。只给恢复让位、不给读数让位，每进一次阅读器位置就多漂一条条高——听书恢复的段首正是被顶条挡住的那一行。
