@@ -1,10 +1,14 @@
 import { createStore } from '../store.js'
+import { clampTopInset } from '../viewport-top.js'
 import { ls } from '../util.js'
 
 /**
- * 浮窗现场（`ADR-0073`）：两个形态共享同一块位置，位置是**块中心坐标**（`cx`/`cy`，null = 缺省）。
- * 记中心而不记左上角，同一锚点切换形态时视觉中心不跳；`side` 按 `cx` 与视口宽派生。
- * 拖动两轴跟手，松手时离视口边 ≤ 24px 才贴齐；落在正文中间是允许的。
+ * 浮窗现场（`ADR-0100`，展开态尺寸 `ADR-0080`）：两个形态共享同一块位置，位置是**块中心坐标**
+ * （`cx`/`cy`，null = 缺省）。记中心而不记左上角，同一锚点切换形态时视觉中心不跳；`side` 按 `cx`
+ * 与视口宽派生。拖动两轴跟手，松手时离**可达区**边 ≤ 24px 才贴齐；落在正文中间是允许的。
+ *
+ * 可达区 = 视口减宿主窗控带（顶部那条固定遮挡，读数 `frameTopInsetOf`）：窗控带是**不可达区**
+ * ——浮窗整块（连拖面一起）不得越进带里，否则抓不出来。
  *
  * 落位几何判据住这里：`miniBarCenterOf` 是缺省轴解析的唯一住址，`miniBarLayout` 一次给全
  * 行内落位样式与 `side`/`flush`；视图只消费读数。
@@ -13,7 +17,10 @@ export type MiniBarSide = 'left' | 'right'
 
 export interface Size { width: number; height: number }
 
-export interface Viewport { width: number; height: number }
+/** 窗口读数：尺寸 + 顶上被宿主窗控带固定遮挡的高度（`chromeTopInset`，读数处已过 `clampTopInset`）。
+ *  夹取、吸附、缺省落位与尺寸上限都以「可达区」（视口减这条带）为界。
+ *  字段带 `chrome` 前缀：阅读器顶条的遮挡也叫 `topInset`，那是另一条带，别在这里读串。 */
+export interface Viewport { width: number; height: number; chromeTopInset: number }
 
 interface Center { x: number; y: number }
 
@@ -107,8 +114,9 @@ const FLUSH_EPS = 0.5
  */
 export function deriveMiniBarFlush(state: MiniBarState, size: Size, view: Viewport): MiniBarFlush {
   const cx = miniBarCenterOf(state, size, view).x
-  const leftGap = cx - size.width / 2
-  const rightGap = view.width - (cx + size.width / 2)
+  const { x } = reachableEdges(size, view)
+  const leftGap = cx - x.low
+  const rightGap = x.high - cx
   if (leftGap <= FLUSH_EPS && leftGap <= rightGap) return 'left'
   if (rightGap <= FLUSH_EPS) return 'right'
   return 'none'
@@ -142,7 +150,8 @@ interface MiniBarLayout {
 /**
  * 根节点的落位样式与派生读数，一次给全。缺省轴也在这里解析成像素：缺省的贴右缘与落过位的
  * `left` 是两套坐标系，解析后视图不分「有没有落过位」，样式层也不再需要缺省定位规则。
- * 基准是控制器持有的视口读数（`readViewport` 是 `window.innerWidth/innerHeight` 的唯一读处）。
+ * 基准是控制器持有的视口读数（`readViewport` 是 `window.innerWidth/innerHeight` 与窗控带遮挡的唯一读处，
+ * 缺省轴与可达段都在这里解析成像素）。
  */
 export function miniBarLayout(state: MiniBarState, view: Viewport, size: Size): MiniBarLayout {
   const center = miniBarCenterOf(state, size, view)
@@ -184,8 +193,10 @@ function popoverPlacement(
   state: MiniBarState, view: Viewport, size: Size, contentHeight?: number,
 ): { below: boolean; room: number } {
   const center = miniBarCenterOf(state, size, view)
-  const above = Math.max(0, center.y - size.height / 2 - POPOVER_GAP)
-  const below = Math.max(0, view.height - center.y - size.height / 2 - POPOVER_GAP)
+  const { y } = reachableEdges(size, view)
+  // 上方余量从安全顶（窗控带下沿）起算：带里那条不进余量，否则弹层开进带里照旧被吃掉。
+  const above = Math.max(0, center.y - y.low - POPOVER_GAP)
+  const below = Math.max(0, y.high - center.y - POPOVER_GAP)
   const measured = contentHeight !== undefined && Number.isFinite(contentHeight) && contentHeight > 0
     ? contentHeight
     : POPOVER_CONTENT_MAX
@@ -218,19 +229,18 @@ function commit(next: MiniBarState, persist = true): void {
   if (persist) ls.setItem(MINI_BAR_KEY, JSON.stringify(next))
 }
 
-/** 单轴呈现尺寸：先夹范围、再夹视口−边距；视口比下限还小就取下限（块可溢出，不崩）。 */
-function resolveAxis(value: number | null, fallback: number, min: number, max: number, extent: number): number {
-  const upper = Math.max(min, Math.min(max, extent - VIEWPORT_MARGIN))
+/** 单轴呈现尺寸：先夹范围、再夹可达区−边距；可达区比下限还小就取下限（块可溢出，不崩）。 */
+function resolveAxis(value: number | null, fallback: number, min: number, max: number, axis: ReachableAxis): number {
+  const upper = Math.max(min, Math.min(max, axis.extent - VIEWPORT_MARGIN))
   return Math.min(upper, Math.max(min, value ?? fallback))
 }
 
-/** 展开态的**呈现**尺寸：盘上记的是意图（可超范围），这里夹成实际可画的一版；不回写现场。 */
+/** 展开态的**呈现**尺寸：盘上记的是意图（可超范围），这里夹成实际可画的一版；不回写现场。
+ *  两轴都吃可达段的长度：窗控带那条不进尺寸上限。 */
 export function resolvedMiniBarSize(state: MiniBarState, view: Viewport): Size {
   return {
-    width: resolveAxis(state.w, DEFAULT_MINI_BAR_SIZE.width, MIN_MINI_BAR_SIZE.width, MAX_MINI_BAR_SIZE.width, view.width),
-    height: resolveAxis(
-      state.h, DEFAULT_MINI_BAR_SIZE.height, MIN_MINI_BAR_SIZE.height, MAX_MINI_BAR_SIZE.height, view.height,
-    ),
+    width: resolveAxis(state.w, DEFAULT_MINI_BAR_SIZE.width, MIN_MINI_BAR_SIZE.width, MAX_MINI_BAR_SIZE.width, axisX(view)),
+    height: resolveAxis(state.h, DEFAULT_MINI_BAR_SIZE.height, MIN_MINI_BAR_SIZE.height, MAX_MINI_BAR_SIZE.height, axisY(view)),
   }
 }
 
@@ -263,7 +273,7 @@ function clampSize(value: number, min: number, max: number): number {
 }
 
 /** 拖边一帧：**对边（对角）锚定**——拖右边时左缘不动，拖下边时顶缘不动，角上两轴同时；
- *  每轴夹进范围，最后把中心夹回视口。返回值即新框，不发动作。 */
+ *  每轴夹进范围，最后把中心夹回可达区。返回值即新框，不发动作。 */
 export function frameFromDrag(
   edge: MiniBarEdge, start: MiniBarFrame, dx: number, dy: number, view: Viewport,
 ): MiniBarFrame {
@@ -298,39 +308,60 @@ export function persistMiniBarState(): void {
   ls.setItem(MINI_BAR_KEY, JSON.stringify(miniBarStore.get()))
 }
 
-/** 单轴夹取：块整体留在视口内，贴边即端点（视口比块还小时贴住起点）。 */
-function clampAxis(value: number, extent: number, half: number): number {
-  const { low, high } = axisRange(extent, half)
+/**
+ * 可达轴：一条轴上「够得着」的那一段——起点（纵轴 = 安全顶，横轴 = 0）与长度。
+ * 顶界从这里发出去，调用点就不再各自记「这一轴要减窗控带」（`ADR-0100`）。
+ */
+interface ReachableAxis { start: number; extent: number }
+
+/** 中心在某一可达轴上的可落区间（整块留在可达区内，贴边即端点）：夹取、贴边读数、吸附与视口对账共用这一份算式。 */
+interface AxisEdges { low: number; high: number }
+
+/** 横轴可达段：窗控带只在顶上，横向就是整条视口宽。 */
+function axisX(view: Viewport): ReachableAxis {
+  return { start: 0, extent: view.width }
+}
+
+/** 纵轴可达段：视口高减窗控带，起点即安全顶。 */
+function axisY(view: Viewport): ReachableAxis {
+  return { start: view.chromeTopInset, extent: view.height - view.chromeTopInset }
+}
+
+/** 半宽换成中心的活动区间；纵轴的顶界是窗控带下沿（安全顶）。 */
+function axisRange(axis: ReachableAxis, half: number): AxisEdges {
+  const low = axis.start + half
+  return { low, high: Math.max(low, axis.start + axis.extent - half) }
+}
+
+/** 一块在两轴上的可落边界：夹取、贴边读数、吸附与视口对账都从这里取，不各自重算。 */
+function reachableEdges(size: Size, view: Viewport): { x: AxisEdges; y: AxisEdges } {
+  return { x: axisRange(axisX(view), size.width / 2), y: axisRange(axisY(view), size.height / 2) }
+}
+
+/** 单轴夹取：块整体留在可达区内，贴边即端点（可达区比块还小时贴住起点 = 让带优先）。 */
+function clampTo(value: number, { low, high }: AxisEdges): number {
   return Math.min(Math.max(value, low), high)
 }
 
-/** 中心在某一轴上的可落区间：整块留在视口内，贴边即端点。 */
-function axisRange(extent: number, half: number): { low: number; high: number } {
-  const low = half
-  return { low, high: Math.max(low, extent - half) }
-}
-
 /**
- * 缺省轴解析的唯一住址：横向缺省贴右缘，纵向缺省视口中心，落过位的轴原样给。
+ * 缺省轴解析的唯一住址：横向缺省贴右缘，纵向缺省**可达区**中心，落过位的轴原样给。
  * 拖动起手、键盘移动、吸附、夹取、落位样式与弹层翻转都从这里取实际中心。
  */
 export function miniBarCenterOf(state: MiniBarState, size: Size, view: Viewport): Center {
+  const x = axisX(view)
+  const y = axisY(view)
   return {
-    x: state.cx ?? view.width - size.width / 2,
-    y: state.cy ?? view.height / 2,
+    x: state.cx ?? x.start + x.extent - size.width / 2,
+    y: state.cy ?? y.start + y.extent / 2,
   }
 }
 
 function clampCenter(center: Center, size: Size, view: Viewport): Center {
-  const x = axisRange(view.width, size.width / 2)
-  const y = axisRange(view.height, size.height / 2)
-  return {
-    x: Math.min(Math.max(center.x, x.low), x.high),
-    y: Math.min(Math.max(center.y, y.low), y.high),
-  }
+  const { x, y } = reachableEdges(size, view)
+  return { x: clampTo(center.x, x), y: clampTo(center.y, y) }
 }
 
-/** 拖到哪里落哪里：双轴夹在视口内，拖动中的每一帧都走这里；persist=false 由调用方松手时落盘。 */
+/** 拖到哪里落哪里：双轴夹在可达区内，拖动中的每一帧都走这里；persist=false 由调用方松手时落盘。 */
 export function setMiniBarCenter(x: number, y: number, size: Size, view: Viewport, persist = true): void {
   if (!Number.isFinite(x) || !Number.isFinite(y)) return
   const center = clampCenter({ x, y }, size, view)
@@ -351,53 +382,56 @@ function commitCenter(center: Center, size: Size, view: Viewport, state: MiniBar
   })
 }
 
-/** 松手吸附：四边各自算 gap，≤ 24px 就贴齐那条边；两轴独立，所以能落在边角。 */
+/** 松手吸附：可达区四边各自算 gap，≤ 24px 就贴齐那条边；两轴独立，所以能落在边角。
+ *  端点与 gap 都从 `reachableEdges` 取：「贴顶」= 贴安全顶（窗控带下沿）而不是贴视口顶，
+ *  可达区比块还矮时端点也停在安全顶——吸附永远不许把浮窗送进不可达区（`ADR-0100`）。 */
 export function snapMiniBarToEdge(size: Size, view: Viewport): void {
   const state = miniBarStore.get()
   const center = miniBarCenterOf(state, size, view)
-  const halfW = size.width / 2
-  const halfH = size.height / 2
-  const leftGap = center.x - halfW
-  const rightGap = view.width - (center.x + halfW)
-  const topGap = center.y - halfH
-  const bottomGap = view.height - (center.y + halfH)
-  const x = leftGap <= SNAP && leftGap <= rightGap ? halfW
-    : rightGap <= SNAP ? view.width - halfW
+  const { x, y } = reachableEdges(size, view)
+  const leftGap = center.x - x.low
+  const rightGap = x.high - center.x
+  const topGap = center.y - y.low
+  const bottomGap = y.high - center.y
+  const nx = leftGap <= SNAP && leftGap <= rightGap ? x.low
+    : rightGap <= SNAP ? x.high
     : center.x
-  const y = topGap <= SNAP && topGap <= bottomGap ? halfH
-    : bottomGap <= SNAP ? view.height - halfH
+  const ny = topGap <= SNAP && topGap <= bottomGap ? y.low
+    : bottomGap <= SNAP ? y.high
     : center.y
-  commitCenter({ x, y }, size, view, state)
+  commitCenter({ x: nx, y: ny }, size, view, state)
 }
 
 /** 换形态后按新尺寸重夹：已落位的轴夹回界内，缺省轴保持缺省。 */
-export function clampMiniBarIntoViewport(size: Size, view: Viewport): void {
+export function clampMiniBarIntoReachableArea(size: Size, view: Viewport): void {
   const state = miniBarStore.get()
   commitCenter(miniBarCenterOf(state, size, view), size, view, state)
 }
 
-/** 视口变化：上一帧贴齐的边继续贴新视口，自由位置只夹不漂；缺省轴不参与（它本来就跟着视口走）。 */
+/** 视口变化（含窗控带读数变化 = 全屏切换）：上一帧贴齐的边继续贴新可达区，自由位置只夹不漂；
+ *  缺省轴不参与（它本来就跟着视口走）。 */
 export function followFlushEdgesOnResize(size: Size, prev: Viewport, view: Viewport): void {
   const state = miniBarStore.get()
   if (state.cx === null && state.cy === null) return
-  const halfW = size.width / 2
-  const halfH = size.height / 2
+  // 旧读数与当前读数各算一份边界：用旧边界判「上一帧贴着」，再贴到新边界。
+  const was = reachableEdges(size, prev)
+  const now = reachableEdges(size, view)
   // 贴边判据与 `deriveMiniBarFlush` 同一把尺（FLUSH_EPS）：亚像素缝不能靠 `=== 0` 判。
-  const flushLeft = state.cx !== null && Math.abs(state.cx - halfW) <= FLUSH_EPS
-  const flushRight = state.cx !== null && Math.abs(prev.width - (state.cx + halfW)) <= FLUSH_EPS
-  const flushTop = state.cy !== null && Math.abs(state.cy - halfH) <= FLUSH_EPS
-  const flushBottom = state.cy !== null && Math.abs(prev.height - (state.cy + halfH)) <= FLUSH_EPS
+  const flushLeft = state.cx !== null && Math.abs(state.cx - was.x.low) <= FLUSH_EPS
+  const flushRight = state.cx !== null && Math.abs(was.x.high - state.cx) <= FLUSH_EPS
+  const flushTop = state.cy !== null && Math.abs(state.cy - was.y.low) <= FLUSH_EPS
+  const flushBottom = state.cy !== null && Math.abs(was.y.high - state.cy) <= FLUSH_EPS
   const x = state.cx === null ? null
-    : flushLeft ? halfW
-    : flushRight ? view.width - halfW
+    : flushLeft ? now.x.low
+    : flushRight ? now.x.high
     : state.cx
   const y = state.cy === null ? null
-    : flushTop ? halfH
-    : flushBottom ? view.height - halfH
+    : flushTop ? now.y.low
+    : flushBottom ? now.y.high
     : state.cy
   commit({
-    cx: x === null ? null : clampAxis(x, view.width, halfW),
-    cy: y === null ? null : clampAxis(y, view.height, halfH),
+    cx: x === null ? null : clampTo(x, now.x),
+    cy: y === null ? null : clampTo(y, now.y),
     w: state.w,
     h: state.h,
     collapsed: state.collapsed,
@@ -421,10 +455,32 @@ function hostWindow(): Window | null {
   return host.window ?? null
 }
 
-/** `window.innerWidth` / `innerHeight` 的唯一读处：控制器构造时读一次，resize 时再读一次。 */
+/**
+ * 宿主窗控带（桌面壳的缩小 / 最大化 / 关闭栏，整条是窗口拖拽区）对视口顶的固定遮挡：
+ * 可达性口径——有 Windows 窗控栏且非全屏 = 栏高本身（安全顶就是带的下沿，不带视觉余量），
+ * 全屏（栏不占位）与没有这条栏（纯浏览器）= 0。栏高认不出也按 0：读数失败的半径只到这一格。
+ * `element` 缺席（无 DOM 宿主）同样回 0。
+ */
+export function frameTopInsetOf(element: HTMLElement | null): number {
+  if (element === null || !element.hasAttribute('data-windows-titlebar') || element.hasAttribute('data-fullscreen')) return 0
+  const height = Number.parseFloat(element.style.getPropertyValue('--dsh-windows-titlebar-height'))
+  return Number.isFinite(height) ? height : 0
+}
+
+/** `window.document` 按「可能缺席」读：无 DOM 宿主与两字段的窗口替身都没有它，缺席 = 无遮挡。 */
+function hostDocument(win: Window | null): Document | null {
+  const host: { document?: Document } | null = win
+  return host?.document ?? null
+}
+
+/** `window` 尺寸与窗控带遮挡的唯一读处：控制器构造、重连与 resize 各读一次。 */
 function readViewport(): Viewport {
   const win = hostWindow()
-  return { width: win?.innerWidth ?? 1024, height: win?.innerHeight ?? 768 }
+  return {
+    width: win?.innerWidth ?? 1024,
+    height: win?.innerHeight ?? 768,
+    chromeTopInset: clampTopInset(frameTopInsetOf(hostDocument(win)?.documentElement ?? null)),
+  }
 }
 
 /** 渲染快照：视口与指针会话的当前读数；只在变化时换引用，供 `useSyncExternalStore` 比身份。 */
@@ -508,6 +564,18 @@ export function createMiniBarController(): MiniBarController {
     return resolveFormSize(state.collapsed, rect, state, view)
   }
 
+  /** 重读窗口读数：真的变了才「贴边跟到新边界、自由位置只夹不漂」，没变就什么都不做。
+   *  窗口 resize 与重连（挂载 / 换形态）都走这里——窗控带晚于首渲出现时，不必等下一次 resize 才认。 */
+  const syncViewport = (): void => {
+    const next = readViewport()
+    if (next.width === viewport.width
+      && next.height === viewport.height
+      && next.chromeTopInset === viewport.chromeTopInset) return
+    followFlushEdgesOnResize(formSize(next), viewport, next)
+    viewport = next
+    publish()
+  }
+
   const attachPointer = (win: Window): void => {
     win.addEventListener('pointermove', onPointerMove)
     win.addEventListener('pointerup', onPointerUp)
@@ -535,7 +603,7 @@ export function createMiniBarController(): MiniBarController {
     } else {
       persistMiniBarState()
       // 拖边期间 ResizeObserver 让位：松手后按实际尺寸补一次对账，内容高度变了也不溢出。
-      clampMiniBarIntoViewport(formSize(viewport), viewport)
+      clampMiniBarIntoReachableArea(formSize(viewport), viewport)
     }
     publish()
   }
@@ -605,27 +673,22 @@ export function createMiniBarController(): MiniBarController {
     connect: () => {
       const win = hostWindow()
       if (win === null) return () => {}
-      const onResize = (): void => {
-        const next = readViewport()
-        // 上一帧贴齐的边继续贴新视口，自由位置只夹不漂。
-        followFlushEdgesOnResize(formSize(next), viewport, next)
-        viewport = next
-        publish()
-      }
-      win.addEventListener('resize', onResize)
+      // 挂载与换形态的重连先对一次窗口读数：窗控带若晚于首渲出现，重夹不该拿旧读数算。
+      syncViewport()
+      win.addEventListener('resize', syncViewport)
       // 观察对象是根节点：浮窗随会话出现 / 退场，根换了就要换观察者。
       if (root !== null && typeof ResizeObserver !== 'undefined') {
         observer = new ResizeObserver(() => {
           // 拖边期间尺寸的主人是那次指针会话：二次夹取会把对边锚定拽偏。
           if (session?.kind === 'resize') return
-          clampMiniBarIntoViewport(formSize(viewport), viewport)
+          clampMiniBarIntoReachableArea(formSize(viewport), viewport)
         })
         observer.observe(root)
       }
       // 会话可能跨过这条 effect 的重跑（活跃状态变了）：重新接上指针监听，别让拖到一半的手势失聪。
       if (session !== null) attachPointer(win)
       return () => {
-        win.removeEventListener('resize', onResize)
+        win.removeEventListener('resize', syncViewport)
         observer?.disconnect()
         observer = null
         detachPointer(win)
@@ -670,7 +733,7 @@ export function createMiniBarController(): MiniBarController {
 
     clearMoved: () => { moved = false },
     moved: () => moved,
-    reconcile: () => { clampMiniBarIntoViewport(formSize(viewport), viewport) },
+    reconcile: () => { clampMiniBarIntoReachableArea(formSize(viewport), viewport) },
     moveCenterBy: (dx, dy) => {
       const size = formSize(viewport)
       const center = miniBarCenterOf(miniBarStore.get(), size, viewport)

@@ -294,7 +294,10 @@ _唯一实现_: `client/reader-geometry.ts` 的 `createReaderGeometry` / `curren
 给定一组按文档序非降排列的起点与「视口顶」读数，判当前项：取**最后一条已越过视口顶**的起点（边界 `<=`）；一条都没越过 → 文档序第一个非空项；没有可判项 → `-1`；空洞跳过。阅读侧三条数据路各自采集读数，判据只有这一份。 _唯一实现_: `client/viewport-top.ts` 的 `crossedIndex`。 _Avoid_: 当前节点 / 当前章。
 
 **顶条遮挡（top inset）**:
-sticky 顶条盖住视口最上那一条的实测高；「看得见的顶」= 端口顶（或滚动位）加这份夹成非负的遮挡。存、取、落位、导航高亮与「从阅读位置起播」探针共吃同一个口径。 _唯一实现_: `client/viewport-top.ts` 的 `clampTopInset`（读数来源 `client/views/ReaderView.tsx` 的 `topInset`，每次现量）。 _Avoid_: 视口顶判据、顶条样式与高度常量。
+sticky 顶条盖住视口最上那一条的实测高；「看得见的顶」= 端口顶（或滚动位）加这份夹成非负的遮挡。存、取、落位、导航高亮与「从阅读位置起播」探针共吃同一个口径。 _唯一实现_: `client/viewport-top.ts` 的 `clampTopInset`（这把尺的两个进料口：阅读器顶条 = `client/views/ReaderView.tsx` 的 `topInset`，每次现量；宿主窗控带 = 见「窗控带与安全顶」，随窗口读数取）。 _Avoid_: 视口顶判据、顶条样式与高度常量。
+
+**窗控带与安全顶（window chrome / safe top）**:
+桌面壳画在 `shell.overlay` 之上的窗口控制栏（缩小 / 最大化 / 关闭，整条是窗口拖拽区）对视口顶的固定遮挡；带的下沿就是浮窗可达区的顶界「安全顶」（安全顶就是带的下沿、不带视觉余量；全屏与没有这条栏时为 0）。遮挡读数随窗口读数一起取，进判据线前过 `clampTopInset`。 _唯一实现_: `client/tts/mini-bar-state.ts` 的 `frameTopInsetOf`。 _Avoid_: 顶条遮挡（阅读器自己的 sticky 顶条）、视口边距、宿主 z 序。
 
 **在线阅读（online reading）**:
 一条在线书的目录与正文取值管线：目录读数先走一层进程内缓存（键含代际，refresh 绕过读；晚到的旧目录不许盖掉刚刷新的那份），其后是磁盘缓存优先、目录在途去重（身份含代际与 refresh）、翻页跟进、缓存写回，连同 tocUrl 解析、subContent 追加与空正文异常。**在途去重与进程内缓存都只服务目录**。**本地书不走这条线**（`ADR-0047`）。
@@ -368,7 +371,7 @@ _唯一实现_: `client/views/ChapterBody.tsx` 的 `listenParagraph`（命中判
 _唯一实现_: `client/tts/follow-controller.ts` 的 `createFollowController` / `onPlayback` / `onLocate` / `onUserIntent` / `onRelocation`；视图接线 `client/views/ReaderView.tsx` 的 `takeOverReading` / `locateListen` / `followBottomInset`；落位 `client/reader-session.ts` 的 `reveal` / `settleReveal`；用户意图装线 `client/reader-binding.ts`；接管时撤销在途落位 `client/reader-session.ts` 的 `cancelJump`。 _Avoid_: 无让位的自动跟随、逐段无条件滚动 / 居中、新增「跟随」开关、把跟随写进高亮。
 
 **听书迷你条（listening mini bar）**:
-宿主 `shell.overlay` 常驻层上的两个完整听书浮窗形态：缺省是身份胶囊（进度环 + 书名 + 段号 + 章内进度细线），展开是能读整段的边栏。位置与尺寸自由：现场记块中心与展开态宽高，松手时离视口边够近的边才贴齐，尺寸呈现时夹取不回写（`ADR-0073` / `ADR-0080`）。落位样式与 `side` / `flush` 由 `miniBarLayout` 一次给全；没有半隐或抽屉形态。在场判据 = 会话在 ∧ 阅读器在场书键集合里没有会话本书。
+宿主 `shell.overlay` 常驻层上的两个完整听书浮窗形态：缺省是身份胶囊（进度环 + 书名 + 段号 + 章内进度细线），展开是能读整段的边栏。位置与尺寸自由：现场记块中心与展开态宽高，松手时离可达区边够近的边才贴齐（可达区 = 视口减窗控带，见「窗控带与安全顶」），尺寸呈现时夹取不回写（`ADR-0100` / `ADR-0080`）。落位样式与 `side` / `flush` 由 `miniBarLayout` 一次给全；没有半隐或抽屉形态。在场判据 = 会话在 ∧ 阅读器在场书键集合里没有会话本书。
 _唯一实现_: `client/tts/TtsMiniBar.tsx` 的 `TtsMiniBar`；展开面 `client/tts/TtsMiniPanel.tsx` 的 `TtsMiniPanel`；现场 `client/tts/mini-bar-state.ts` 的 `miniBarStore` / `miniBarLayout` / `miniBarCenterOf` / `resolvedMiniBarSize` / `setMiniBarCenter` / `snapMiniBarToEdge` / `setMiniBarSize`；共享设置行 `client/tts/TtsSettings.tsx` 的 `TtsSettingsRows`。 _Avoid_: 阅读器听书条、状态泳道、半隐 / 抽屉形态。
 
 ### 客户端文案

@@ -1,6 +1,6 @@
 # 听书浮窗自由落位，松手时近边吸附
 
-Status: accepted
+Status: superseded by 0100
 
 听书浮窗的位置从「永远贴左右边缘」改成**自由落位**：现场记块中心坐标，拖动两轴跟手，松手时离视口边够近的那条边才贴齐，其余停在原地。两个完整形态、进度不撒谎与能力不丢是既有形态决定；形态与密度之后由 `ADR-0079` 改写、展开态尺寸由 `ADR-0080` 接管。本篇换掉的只是「自动贴边」这条位置规则。
 
@@ -38,4 +38,4 @@ Status: accepted
 - 只放开横向的半自由补丁：位置语义同时有两个主人，迟早再打架。
 - 保持贴边不动：位置被规则吃掉，正是要修的那件事。
 
-锚点：`src/client/tts/mini-bar-state.ts` 的 `parseMiniBarState` / `deriveMiniBarSide` / `deriveMiniBarFlush` / `miniBarPopoverFlip` / `miniBarPopoverRoom` / `resolveFormSize` / `setMiniBarCenter` / `snapMiniBarToEdge` / `clampMiniBarIntoViewport` / `followFlushEdgesOnResize` / `miniBarLayout`；`src/client/tts/TtsMiniBar.tsx`；`src/client/styles/tts.ts` 的 `.novel-tts-mini-dock`；`tests/client/tts-mini-state.test.ts`；`tests/client/tts-mini.test.tsx`；`tests/browser/tts-layout.test.tsx`；`docs/ui-spec.md` §3.6；`ADR-0072`。
+锚点：`src/client/tts/mini-bar-state.ts` 的 `parseMiniBarState` / `deriveMiniBarSide` / `deriveMiniBarFlush` / `miniBarPopoverFlip` / `miniBarPopoverRoom` / `resolveFormSize` / `setMiniBarCenter` / `snapMiniBarToEdge` / `clampMiniBarIntoReachableArea` / `followFlushEdgesOnResize` / `miniBarLayout`；`src/client/tts/TtsMiniBar.tsx`；`src/client/styles/tts.ts` 的 `.novel-tts-mini-dock`；`tests/client/tts-mini-state.test.ts`；`tests/client/tts-mini.test.tsx`；`tests/browser/tts-layout.test.tsx`；`docs/ui-spec.md` §3.6；`ADR-0072`。

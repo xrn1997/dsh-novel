@@ -8,7 +8,8 @@
  * 而跟读高亮不动」这类没有第二个读数的缺陷。视口顶读数先过 `clampTopInset`（`ADR-0089`）。
  */
 
-/** 顶条遮挡的非负夹取：遮挡读数的家是 `ReaderView` 的 `topInset`（每次现量）；进判据线前统一过这里，
+/** 顶条遮挡的非负夹取：遮挡读数有两处家——`ReaderView` 的 `topInset`（阅读器顶条，每次现量）与
+ *  `mini-bar-state` 的窗控带读数（宿主 chrome，随窗口读数取）；进判据线前统一过这里，
  *  缺席 = 0。消费点不许再各自夹一遍（`ADR-0089`）。 */
 export function clampTopInset(inset: number | undefined): number {
   return Math.max(0, inset ?? 0)

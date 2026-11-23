@@ -66,6 +66,32 @@ let shelf: ShelfEntry[]
 
 const chapterEntries = (): ChapterEntry[] => chapterNames.map((name) => ({ name, url: name }))
 
+/** 桌面版那一档的窗控带高：只有「窗控带当头」那几枚用例吃它，跑完必撤——留着会把后面用例的可达区撑矮。 */
+const CHROME_HEIGHT = 48
+
+/** 种上 / 撤掉宿主窗控带（`html[data-windows-titlebar]` + 内联 `--dsh-windows-titlebar-height`）。
+ *  先种再 render 才赶得上控制器构造那一次读数；要演「带晚于首渲出现」就渲染之后再种。 */
+function seedWindowsChrome(on: boolean): void {
+  const root = document.documentElement
+  if (!on) {
+    root.removeAttribute('data-windows-titlebar')
+    root.style.removeProperty('--dsh-windows-titlebar-height')
+    return
+  }
+  root.setAttribute('data-windows-titlebar', '')
+  root.style.setProperty('--dsh-windows-titlebar-height', `${CHROME_HEIGHT}px`)
+}
+
+/** 整段用例在带在场时跑，`finally` 撤干净，不给下一例留现场。 */
+async function withWindowsChrome(run: () => Promise<void>): Promise<void> {
+  seedWindowsChrome(true)
+  try {
+    await run()
+  } finally {
+    seedWindowsChrome(false)
+  }
+}
+
 function indexOf(path: string): number {
   const m = /[?&]index=(\d+)/.exec(path)
   return m === null ? 0 : Number(m[1])
@@ -631,7 +657,7 @@ describe('迷你条是浮窗：两个完整形态、可拖、可收起', () => {
   it('胶囊拖到左下角：两轴独立吸附（左 + 底），拖过不算点', async () => {
     setMiniBarCollapsed(true)
     const bar = await listening()
-    setMiniBarCenter(104, 384, CAPSULE_SIZE, { width: 1024, height: 768 })  // 起点：胶囊贴左缘
+    setMiniBarCenter(104, 384, CAPSULE_SIZE, { width: 1024, height: 768, chromeTopInset: 0 })  // 起点：胶囊贴左缘
     fireEvent.pointerDown(screen.getByRole('button', { name: /展开迷你条/ }), {
       pointerId: 1, clientX: 200, clientY: 400,
     })
@@ -643,6 +669,22 @@ describe('迷你条是浮窗：两个完整形态、可拖、可收起', () => {
     // 真机在 pointerup 后会补发一次 click（detail > 0）：被胶囊的捕获层吞掉，不是一次展开
     fireEvent.click(screen.getByRole('button', { name: /展开迷你条/ }), { detail: 1 })
     expect(miniBarStore.get().collapsed).toBe(true)
+  })
+
+  it('窗控带当头：拖到右上角松手后整块仍在带下（拖得出来）', async () => {
+    await withWindowsChrome(async () => {
+      setMiniBarCollapsed(true)
+      const bar = await listening()
+      fireEvent.pointerDown(screen.getByRole('button', { name: /展开迷你条/ }), {
+        pointerId: 1, clientX: 800, clientY: 400,
+      })
+      fireEvent.pointerMove(bar, { pointerId: 1, buttons: 1, clientX: 1000, clientY: 20 })
+      // 拖动帧就夹在可达区：松手吸附的端点与这里同值，只断言松手分不清「夹取」与「吸附」
+      expect(miniBarStore.get().cy, '拖动帧不越进带里').toBe(CHROME_HEIGHT + CAPSULE_SIZE.height / 2)
+      fireEvent.pointerUp(bar, { pointerId: 1, clientX: 1000, clientY: 20 })
+      // 顶边正落在安全顶上，不是「大概在其下」：落在带里就连拖面都摸不到
+      expect(miniBarStore.get().cy, '整块停在窗控带下沿之下').toBe(CHROME_HEIGHT + CAPSULE_SIZE.height / 2)
+    })
   })
 
   it('拖动后被吞掉的补发 click 落地清零：随后键盘激活能展开（不再被拖动历史挡住）', async () => {
@@ -738,9 +780,52 @@ describe('迷你条是浮窗：两个完整形态、可拖、可收起', () => {
     expect(bar.style.left).toBe(`${window.innerWidth - DEFAULT_MINI_BAR_SIZE.width / 2}px`)
     expect(bar.style.top).toBe(`${window.innerHeight / 2}px`)
   })
+
+  it('窗控带当头：键盘推到顶与 Home 复位都落在可达区（§1 / §7 键盘出口）', async () => {
+    await withWindowsChrome(async () => {
+      const bar = await listening()
+      const handle = screen.getByRole('button', { name: /收起迷你条/ })
+      for (let i = 0; i < 40; i++) fireEvent.keyDown(handle, { key: 'ArrowUp' })
+      // 键盘四向照旧走可达区夹取：推到不能再推时，顶边正好压在安全顶上
+      expect(miniBarStore.get().cy, '向上推到底 = 贴安全顶，不是贴视口顶')
+        .toBe(CHROME_HEIGHT + DEFAULT_MINI_BAR_SIZE.height / 2)
+      fireEvent.keyDown(handle, { key: 'Home' })
+      expect(miniBarStore.get()).toMatchObject({ cx: null, cy: null })
+      expect(bar.style.top, '缺省纵向落位 = 可达区中心')
+        .toBe(`${CHROME_HEIGHT + (window.innerHeight - CHROME_HEIGHT) / 2}px`)
+    })
+  })
+
+  it('落盘在带里的旧现场：挂载重夹当场捞回可达区（§6 卡死自愈的现场面）', async () => {
+    await withWindowsChrome(async () => {
+      // 上一轮（没有带 / 带更矮）留下的位置：块顶压在带里
+      miniBarStore.set({ cx: 512, cy: 22, w: null, h: null, collapsed: false })
+      const bar = await listening()
+      expect(miniBarStore.get().cy, '挂载重夹要把块心推到安全顶下')
+        .toBe(CHROME_HEIGHT + DEFAULT_MINI_BAR_SIZE.height / 2)
+      expect(bar.style.top).toBe(`${CHROME_HEIGHT + DEFAULT_MINI_BAR_SIZE.height / 2}px`)
+    })
+  })
+
+  it('窗控带晚于首渲出现：换形态那次重连重读窗口，不必等 resize（§6 另两处自愈面）', async () => {
+    const bar = await listening()   // 首渲时没有带：构造那一次读到 0
+    await act(async () => {
+      // 现场停在「带出现后」会被吃掉的顶位：胶囊半高 22，块顶正好压住视口顶
+      setMiniBarCenter(512, CAPSULE_SIZE.height / 2, CAPSULE_SIZE, { width: 1024, height: 768, chromeTopInset: 0 })
+    })
+    seedWindowsChrome(true)
+    try {
+      await act(async () => { setMiniBarCollapsed(true) })   // 换形态 = connect 重跑，重读窗口
+      expect(miniBarStore.get().cy, '重读后的顶界 = 安全顶')
+        .toBe(CHROME_HEIGHT + CAPSULE_SIZE.height / 2)
+      expect(bar.style.top).toBe(`${CHROME_HEIGHT + CAPSULE_SIZE.height / 2}px`)
+    } finally {
+      seedWindowsChrome(false)
+    }
+  })
 })
 
-describe('两态浮窗：收起胶囊 / 展开边栏（ADR-0073）', () => {
+describe('两态浮窗：收起胶囊 / 展开边栏（位置与形态规则现归 ADR-0100）', () => {
   async function listening(): Promise<HTMLElement> {
     render(createElement(TtsMiniBar, { focusPanel: vi.fn() }))
     await act(async () => {
@@ -749,11 +834,11 @@ describe('两态浮窗：收起胶囊 / 展开边栏（ADR-0073）', () => {
     return must(document.querySelector<HTMLElement>('[data-novel-tts-mini]'), '迷你条')
   }
 
-  /** 贴边形态跟着「真的贴上」走，不跟呈现方向走（ADR-0073 放开自由落位后的分工）：
+  /** 贴边形态跟着「真的贴上」走，不跟呈现方向走（ADR-0073 放开自由落位后的分工，现归 `ADR-0100`）：
    *  块悬在屏内时 dock 必须报 data-flush='none'，样式层才会在四条边上都画描边。 */
   it('data-flush：缺省贴右、吸附贴左、自由落位为 none（side 不能代答）', async () => {
     const bar = await listening()
-    const view = { width: window.innerWidth, height: window.innerHeight }
+    const view = { width: window.innerWidth, height: window.innerHeight, chromeTopInset: 0 }
     expect(bar.getAttribute('data-flush')).toBe('right')
     // 现场是模块级 store：直接推进去要过 act，否则订阅它的组件不会在这一行里重渲
     await act(async () => { setMiniBarCenter(864, 384, DEFAULT_MINI_BAR_SIZE, view) })
@@ -796,7 +881,7 @@ describe('两态浮窗：收起胶囊 / 展开边栏（ADR-0073）', () => {
    *  夹取只管浮窗本体，弹层就被视口裁掉半截。 */
   it('设置弹层方向跟着现场走：块挪上挪下，data-flip 当场改口，余量跟着换', async () => {
     const bar = await listening()
-    const view = { width: window.innerWidth, height: window.innerHeight }
+    const view = { width: window.innerWidth, height: window.innerHeight, chromeTopInset: 0 }
     const room = (): string => bar.style.getPropertyValue('--novel-tts-popover-room')
     fireEvent.click(screen.getByRole('button', { name: '听书设置' }))
     await act(async () => { setMiniBarCenter(864, 600, DEFAULT_MINI_BAR_SIZE, view) })   // 中下：上方地方够
@@ -890,7 +975,7 @@ describe('两态浮窗：收起胶囊 / 展开边栏（ADR-0073）', () => {
 
   it('设置弹层翻转吃内容实测高：矮卡上方装得下就不翻（固定档会误翻）', async () => {
     const bar = await listening()
-    const view = { width: window.innerWidth, height: window.innerHeight }
+    const view = { width: window.innerWidth, height: window.innerHeight, chromeTopInset: 0 }
     const descriptor = must(
       Object.getOwnPropertyDescriptor(Element.prototype, 'scrollHeight'), 'scrollHeight 访问器',
     )
