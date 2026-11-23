@@ -737,6 +737,9 @@ export class ReaderSession {
     if (this.paged) {
       // 翻页模式没有滚动视口，也没有 binding.rendered 去结算 pendingJump：不挂滚动落位，
       // 只写章号 + 载章；页内落位（起点/末页）由 BookStage 的 pendingLand 自己摆。
+      // 同章目标（目录里的章内锚点 / 重复点当前章）不动：BookStage 不会因同章重渲而翻页，
+      // 这里写 0 只会把正在看的页在存档里改成章首。
+      if (target.index === this.position.chapterIndex) return
       this.pendingJumpNow = null
       this.commit('jump', target.index, 0)
       if (!this.mounted(target.index)) void this.load(target.index)

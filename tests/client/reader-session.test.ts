@@ -1519,4 +1519,13 @@ describe('ReaderSession 翻页模式（无滚动视口）', () => {
     h.session.scrollToSavedPosition()
     expect(h.port.top).toBe(1500)
   })
+
+  it('同章 requestJump 不动页内进度：目录锚点不能把存档改回章首', async () => {
+    const h = makeSession({ shelf: [shelfBook({ chapterIndex: 0, offsetRatio: 0.6, updatedAt: 0 })] })
+    h.session.setPaged(true)
+    await h.session.open('src', 'https://s.com/book/1')
+    h.session.requestJump(0)
+    expect(h.session.currentPosition).toEqual({ chapterIndex: 0, offsetRatio: 0.6 })
+    expect(h.saves).toEqual([])
+  })
 })
