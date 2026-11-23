@@ -1,4 +1,7 @@
 import type { ReactNode } from 'react'
+import { useCopy } from '../copy/index.js'
+import type { Translate } from '../copy/index.js'
+import { displayChapterTitle } from '../util.js'
 import type { NavigationItem, ReadingTarget } from './types.js'
 
 /**
@@ -29,15 +32,17 @@ export function ReaderNavigation({ items, activeId, onNavigate }: {
   activeId: string | null
   onNavigate: (target: ReadingTarget) => void
 }): ReactNode {
+  const t = useCopy()
   if (items.length === 0) return null
   const current = firstActive(items, activeId)
-  return <NavList items={items} current={current} onNavigate={onNavigate} />
+  return <NavList items={items} current={current} onNavigate={onNavigate} t={t} />
 }
 
-function NavList({ items, current, onNavigate }: {
+function NavList({ items, current, onNavigate, t }: {
   items: NavigationItem[]
   current: NavigationItem | null
   onNavigate: (target: ReadingTarget) => void
+  t: Translate
 }): ReactNode {
   return (
     <ul className="novel-nav">
@@ -45,18 +50,24 @@ function NavList({ items, current, onNavigate }: {
           「至多一条 aria-current」要兜的形态——重复 React key 会静默丢条目/串身份。
           这份列表每次取数整份替换、条目自身无状态，下标是稳的。 */}
       {items.map((item, i) => (
-        <NavItem key={i} item={item} current={current} onNavigate={onNavigate} />
+        <NavItem key={i} item={item} current={current} onNavigate={onNavigate} t={t} />
       ))}
     </ul>
   )
 }
 
-function NavItem({ item, current, onNavigate }: {
+function NavItem({ item, current, onNavigate, t }: {
   item: NavigationItem
   current: NavigationItem | null
   onNavigate: (target: ReadingTarget) => void
+  t: Translate
 }): ReactNode {
   const target = item.target
+  const trimmed = item.label.trim()
+  // 章级叶项空标题统一回退到「第 N 章」：否则空串会把按钮压成 12px 空白条（白屏目录）。
+  const leafLabel = target !== null && target.kind === 'chapter'
+    ? displayChapterTitle(item.label, target.index, t)
+    : trimmed
   // 叶项复用抽屉既有按钮类：高亮、焦点环、省略号截断与目录同一个源
   const leaf = target === null ? null : (
     <button
@@ -65,14 +76,14 @@ function NavItem({ item, current, onNavigate }: {
       aria-current={item === current ? 'true' : undefined}
       onClick={() => onNavigate(target)}
     >
-      {item.label}
+      {leafLabel}
     </button>
   )
   return (
     <li>
-      {leaf ?? <div className="novel-nav-group">{item.label}</div>}
+      {leaf ?? (trimmed === '' ? null : <div className="novel-nav-group">{trimmed}</div>)}
       {item.children.length === 0 ? null : (
-        <NavList items={item.children} current={current} onNavigate={onNavigate} />
+        <NavList items={item.children} current={current} onNavigate={onNavigate} t={t} />
       )}
     </li>
   )

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { CopyProvider, enTranslate } from '../../src/client/copy/index.js'
 import { ReaderNavigation } from '../../src/client/views/ReaderNavigation.js'
 import type { NavigationItem } from '../../src/client/views/types.js'
 import { pick } from '../support/fixture.js'
@@ -94,5 +95,38 @@ describe('当前项（会话给 id，组件只打标）', () => {
     const marked = container.querySelectorAll('[aria-current="true"]')
     expect(marked).toHaveLength(1)
     expect(pick([...marked], 0).textContent).toBe('甲')
+  })
+})
+
+describe('空标题兜底（书源或本地目录产空串时目录仍可读可点）', () => {
+  const blankItems: NavigationItem[] = [
+    { id: 't0', label: '', target: { kind: 'chapter', index: 0, anchorId: null }, children: [] },
+    { id: 't1', label: '   ', target: { kind: 'chapter', index: 1, anchorId: null }, children: [] },
+    {
+      id: 'g0', label: '  ', target: null, children: [
+        { id: 't2', label: '', target: { kind: 'chapter', index: 2, anchorId: null }, children: [] },
+      ],
+    },
+  ]
+
+  it('章级叶项空串 / 纯空白回退到「第 N 章」，空分组头不留空白行但保留子项', () => {
+    const onNavigate = vi.fn()
+    const { container } = render(<ReaderNavigation items={blankItems} activeId="t1" onNavigate={onNavigate} />)
+    expect(screen.getByRole('button', { name: '第 1 章' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '第 2 章' }).getAttribute('aria-current')).toBe('true')
+    expect(screen.getByRole('button', { name: '第 3 章' })).toBeTruthy()
+    expect(container.querySelector('.novel-nav-group')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '第 3 章' }))
+    expect(onNavigate).toHaveBeenCalledWith({ kind: 'chapter', index: 2, anchorId: null })
+  })
+
+  it('英文环境回退到 Chapter N', () => {
+    render(
+      <CopyProvider value={enTranslate}>
+        <ReaderNavigation items={blankItems} activeId={null} onNavigate={() => {}} />
+      </CopyProvider>,
+    )
+    expect(screen.getByRole('button', { name: 'Chapter 1' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Chapter 2' })).toBeTruthy()
   })
 })
