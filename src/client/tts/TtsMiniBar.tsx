@@ -25,7 +25,7 @@ import { useTtsSources } from './use-tts-sources.js'
 import { keyLayerActive } from '../views/dialog.js'
 
 /**
- * 全局听书浮窗：宿主 `shell.overlay` 常驻层上的两个**完整**形态，位置自由落位（`ADR-0073`）。
+ * 全局听书浮窗：宿主 `shell.overlay` 常驻层上的两个**完整**形态，位置自由落位（`ADR-0100`）。
  * 缺省是贴边的 208×44 身份条（进度环 / 书名与段号），点击展开为整段边栏（缺省 320×200，
  * 宽高可拖，`ADR-0080`）。不做 idle 半隐、不做同一颗胶囊藏一半的 hover 抽屉；设置面与阅读器条
  * 共读 `TtsSettings.tsx` 同一份行清单。

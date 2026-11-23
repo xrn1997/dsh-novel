@@ -192,7 +192,8 @@ const probe = `(() => {
 /** 量几何的那一页（与 `measure` 的 context viewport 同尺）：静态 markup 在 Node 里渲染，
  *  没有活窗口可读，而浮窗的落位样式要按视口把缺省轴解析成像素——渲染时把这一页的视口给组件，
  *  量到的才是这一页上的真实落位（缺省贴右缘）。这里只补一个两字段的 window 形状，不是浏览器
- *  窗口替身：布局读数只读 innerWidth / innerHeight，量真排版仍靠后面的浏览器 context。 */
+ *  窗口替身：布局读数只读 innerWidth / innerHeight（窗控带遮挡从 window.document 读，替身没有
+ *  = 无遮挡），量真排版仍靠后面的浏览器 context。 */
 const PAGE_VIEW = { width: 1280, height: 800 }
 
 function markup(listening = true, view = PAGE_VIEW): string {

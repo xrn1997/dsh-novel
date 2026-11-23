@@ -2,16 +2,20 @@
 // 视口统一显式传参（VP = { width: 1024, height: 768 }），不依赖 jsdom 尺寸
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
-  CAPSULE_SIZE, DEFAULT_MINI_BAR, DEFAULT_MINI_BAR_SIZE, clampMiniBarIntoViewport,
-  deriveMiniBarFlush, deriveMiniBarSide, followFlushEdgesOnResize, frameFromDrag, miniBarCenterOf,
-  miniBarLayout, miniBarPopoverFlip, miniBarPopoverRoom, miniBarStore, parseMiniBarState, persistMiniBarState,
-  resetMiniBarPosition, resetMiniBarSize, resolveFormSize, resolvedMiniBarSize, setMiniBarCenter,
-  setMiniBarCollapsed, setMiniBarFrame, setMiniBarSize, snapMiniBarToEdge,
+  CAPSULE_SIZE, DEFAULT_MINI_BAR, DEFAULT_MINI_BAR_SIZE, clampMiniBarIntoReachableArea,
+  deriveMiniBarFlush, deriveMiniBarSide, followFlushEdgesOnResize, frameFromDrag, frameTopInsetOf,
+  miniBarCenterOf, miniBarLayout, miniBarPopoverFlip, miniBarPopoverRoom, miniBarStore, parseMiniBarState,
+  persistMiniBarState, resetMiniBarPosition, resetMiniBarSize, resolveFormSize, resolvedMiniBarSize,
+  setMiniBarCenter, setMiniBarCollapsed, setMiniBarFrame, setMiniBarSize, snapMiniBarToEdge,
 } from '../../src/client/tts/mini-bar-state.js'
-import type { MiniBarFrame } from '../../src/client/tts/mini-bar-state.js'
+import type { MiniBarFrame, Size } from '../../src/client/tts/mini-bar-state.js'
 import { ls } from '../../src/client/util.js'
 
-const VP = { width: 1024, height: 768 }
+const VP = { width: 1024, height: 768, chromeTopInset: 0 }
+
+/** 窗控带一档的视口读数（桌面版 DSH：栏高 48，安全顶就是带的下沿）：浮窗进了这条带连拖面都
+ *  摸不到，这是「不可达」不是「被挡住」——可达区的顶界就是带的下沿，不带视觉余量。 */
+const VP_CHROME = { width: 1024, height: 768, chromeTopInset: 48 }
 
 /** 落盘位与 `mini-bar-state` 同一枚键：读写都走 `ls` 那道 guard，不碰裸 `localStorage` 全局——
  *  本仓的 JS 宿主与测试环境里它都可能缺席。 */
@@ -35,7 +39,7 @@ describe('浮窗现场：中心坐标 + 派生边', () => {
       .toMatchObject({ cx: null, cy: null })
   })
 
-  /** 贴边读数（data-flush）与呈现方向（data-side）分家：ADR-0073 放开自由落位之后，
+  /** 贴边读数（data-flush）与呈现方向（data-side）分家：ADR-0073（现归 ADR-0100）放开自由落位之后，
    *  块停在右半屏的中间时 side 仍是 'right'，但它两侧都没碰上屏幕——样式层必须收到 'none'，
    *  否则展开态会在一条悬空的边上少一条边框、带两个直角（用户读作「样式坏了」）。 */
   it('flush 只认真贴上的那条竖边；缺省落位算贴右', () => {
@@ -68,13 +72,13 @@ describe('浮窗现场：中心坐标 + 派生边', () => {
 
   it('换形态重夹保住贴边：胶囊贴右缘 → 展开仍是贴右缘', () => {
     setMiniBarCenter(940, 384, CAPSULE_SIZE, VP)   // 胶囊贴右缘：1024-84
-    clampMiniBarIntoViewport(DEFAULT_MINI_BAR_SIZE, VP)
+    clampMiniBarIntoReachableArea(DEFAULT_MINI_BAR_SIZE, VP)
     expect(miniBarStore.get()).toMatchObject({ cx: 864, cy: 384 })
   })
 
   it('缺省值不被夹取写成坐标', () => {
     resetMiniBarPosition()
-    clampMiniBarIntoViewport(DEFAULT_MINI_BAR_SIZE, VP)
+    clampMiniBarIntoReachableArea(DEFAULT_MINI_BAR_SIZE, VP)
     expect(miniBarStore.get()).toEqual({ cx: null, cy: null, w: null, h: null, collapsed: false })
   })
 
@@ -95,10 +99,10 @@ describe('浮窗现场：中心坐标 + 派生边', () => {
 
   it('resize 跟住贴着的边：贴右缘 / 贴底缘继续贴，自由位置只夹不漂', () => {
     setMiniBarCenter(864, 668, DEFAULT_MINI_BAR_SIZE, VP)     // 贴右 + 贴底
-    followFlushEdgesOnResize(DEFAULT_MINI_BAR_SIZE, VP, { width: 1280, height: 800 })
+    followFlushEdgesOnResize(DEFAULT_MINI_BAR_SIZE, VP, { width: 1280, height: 800, chromeTopInset: 0 })
     expect(miniBarStore.get()).toMatchObject({ cx: 1120, cy: 700 })
     setMiniBarCenter(484, 354, DEFAULT_MINI_BAR_SIZE, VP)     // 自由位置
-    followFlushEdgesOnResize(DEFAULT_MINI_BAR_SIZE, VP, { width: 1280, height: 800 })
+    followFlushEdgesOnResize(DEFAULT_MINI_BAR_SIZE, VP, { width: 1280, height: 800, chromeTopInset: 0 })
     expect(miniBarStore.get()).toMatchObject({ cx: 484, cy: 354 })
   })
 
@@ -113,7 +117,7 @@ describe('浮窗现场：中心坐标 + 派生边', () => {
 
   it('resize 不把缺省轴钉成数字：只有横向落过位时，高度变化后纵向仍居中', () => {
     miniBarStore.set({ cx: 200, cy: null, w: null, h: null, collapsed: false })   // 旧现场 left + anchorY null 的形状
-    followFlushEdgesOnResize(DEFAULT_MINI_BAR_SIZE, VP, { width: 1024, height: 1080 })
+    followFlushEdgesOnResize(DEFAULT_MINI_BAR_SIZE, VP, { width: 1024, height: 1080, chromeTopInset: 0 })
     expect(miniBarStore.get(), '纵向缺省不该被写成旧视口中心 384').toMatchObject({ cx: 200, cy: null })
   })
 
@@ -201,7 +205,7 @@ describe('布局读数：缺省轴解析、一次给全的落位样式、弹层�
 // 卡片高度由上方余量收住（max-height 走 miniBarPopoverRoom），不再整块探出视口底部。
     expect(miniBarPopoverFlip(DEFAULT_MINI_BAR, VP, DEFAULT_MINI_BAR_SIZE)).toBe(false)
     // 矮视口走 60vh 收紧档（500 高 → 300）：同一中心上方够 300 → 不翻
-    const low = { width: 1024, height: 500 }
+    const low = { width: 1024, height: 500, chromeTopInset: 0 }
     expect(miniBarPopoverFlip({ cx: 864, cy: 406, w: null, h: null, collapsed: false }, low, DEFAULT_MINI_BAR_SIZE)).toBe(false)
     // 再高一格：下方余量已经是 0（块底压着视口），翻下去只会得到一条空缝 → 留在上方
     expect(miniBarPopoverFlip({ cx: 864, cy: 405, w: null, h: null, collapsed: false }, low, DEFAULT_MINI_BAR_SIZE)).toBe(false)
@@ -244,16 +248,16 @@ describe('浮窗尺寸现场：意图与呈现分离', () => {
   })
 
   it('视口小于下限：呈现尺寸取下限（块可溢出视口，不崩）', () => {
-    const small = { width: 200, height: 120 }
+    const small = { width: 200, height: 120, chromeTopInset: 0 }
     expect(resolvedMiniBarSize(DEFAULT_MINI_BAR, small)).toEqual({ width: 260, height: 162 })
     expect(resolvedMiniBarSize({ cx: null, cy: null, w: 480, h: 300, collapsed: false }, small))
       .toEqual({ width: 260, height: 162 })
   })
 
   it('视口夹取：视口 600×500 时 520×420 原样，视口 500×450 时宽夹到 484', () => {
-    expect(resolvedMiniBarSize({ cx: null, cy: null, w: 520, h: 420, collapsed: false }, { width: 600, height: 500 }))
+    expect(resolvedMiniBarSize({ cx: null, cy: null, w: 520, h: 420, collapsed: false }, { width: 600, height: 500, chromeTopInset: 0 }))
       .toEqual({ width: 520, height: 420 })
-    expect(resolvedMiniBarSize({ cx: null, cy: null, w: 520, h: 420, collapsed: false }, { width: 500, height: 450 }))
+    expect(resolvedMiniBarSize({ cx: null, cy: null, w: 520, h: 420, collapsed: false }, { width: 500, height: 450, chromeTopInset: 0 }))
       .toEqual({ width: 484, height: 420 })
   })
 
@@ -331,5 +335,86 @@ describe('拖边几何：对边锚定 + 范围夹取', () => {
     persistMiniBarState()
     const saved = JSON.parse(ls.getItem(MINI_BAR_KEY) ?? '{}') as { w?: number }
     expect(saved.w).toBe(360)
+  })
+})
+
+describe('浮窗可达区：宿主窗控带是不可达区', () => {
+  // 判据一律拿读数说话，不写魔数：断言里出现 48 的像素值必须能从 VP_CHROME 回查
+  const chromeTop = VP_CHROME.chromeTopInset
+  /** 块的顶边（中心 − 半高）：§1「整块不得越进带里」在纵轴上的可读形式。 */
+  const topEdgeOf = (cy: number | null, size: Size): number => (cy ?? 0) - size.height / 2
+
+  it('缺省纵向落位在可达区中心，不在视口中心（§1 缺省轴）', () => {
+    expect(miniBarCenterOf(DEFAULT_MINI_BAR, CAPSULE_SIZE, VP_CHROME).y)
+      .toBe(chromeTop + (VP_CHROME.height - chromeTop) / 2)
+    expect(miniBarCenterOf(DEFAULT_MINI_BAR, CAPSULE_SIZE, VP_CHROME).x)
+      .toBe(VP_CHROME.width - CAPSULE_SIZE.width / 2)   // 横轴没有带：照旧贴右缘
+  })
+
+  it('拖到右上角松手吸附：落角，顶边正好压在安全顶上', () => {
+    setMiniBarCenter(980, 24, CAPSULE_SIZE, VP_CHROME)
+    snapMiniBarToEdge(CAPSULE_SIZE, VP_CHROME)
+    expect(miniBarStore.get()).toMatchObject({
+      cx: VP_CHROME.width - CAPSULE_SIZE.width / 2,
+      cy: chromeTop + CAPSULE_SIZE.height / 2,
+    })
+  })
+
+  it('可达区比块还矮时吸附仍不越进带里（吸到贴不下的那条边也要让带）', () => {
+    // 1024×200 的窗口 + 48 的带：可达高 152 < 展开态 200，块必然溢出下缘，但顶边绝不能进带
+    const tight = { width: 1024, height: 200, chromeTopInset: chromeTop }
+    setMiniBarCenter(500, 148, DEFAULT_MINI_BAR_SIZE, tight)
+    snapMiniBarToEdge(DEFAULT_MINI_BAR_SIZE, tight)
+    expect(topEdgeOf(miniBarStore.get().cy, DEFAULT_MINI_BAR_SIZE), '吸附主动把块送进带里 = §1 违例')
+      .toBeGreaterThanOrEqual(chromeTop)
+  })
+
+  it('落在窗控带下的旧现场，重夹时捞回可达区（§6 卡死自愈）', () => {
+    setMiniBarCenter(980, 22, CAPSULE_SIZE, { width: 1024, height: 768, chromeTopInset: 0 })
+    clampMiniBarIntoReachableArea(CAPSULE_SIZE, VP_CHROME)
+    expect(topEdgeOf(miniBarStore.get().cy, CAPSULE_SIZE)).toBe(chromeTop)
+  })
+
+  it('自愈重夹不把缺省轴钉成坐标（带在场时同样成立）', () => {
+    resetMiniBarPosition()
+    resetMiniBarSize()
+    clampMiniBarIntoReachableArea(DEFAULT_MINI_BAR_SIZE, VP_CHROME)
+    expect(miniBarStore.get()).toEqual({ cx: null, cy: null, w: null, h: null, collapsed: false })
+  })
+
+  it('呈现高度吃安全顶：上限是可达高 − 视口边距', () => {
+    const state = { cx: null, cy: null, w: 9999, h: 9999, collapsed: false }
+    const view = { width: 1024, height: 300, chromeTopInset: chromeTop }
+    expect(resolvedMiniBarSize(state, view).height).toBe(view.height - chromeTop - 16)
+  })
+
+  it('设置弹层不开进窗控带：上方余量从安全顶起算', () => {
+    const state = { cx: 512, cy: chromeTop + 100, w: null, h: null, collapsed: false }   // 贴安全顶
+    expect(miniBarPopoverFlip(state, VP_CHROME, DEFAULT_MINI_BAR_SIZE, 50), '带里那条不算上方余量').toBe(true)
+    expect(miniBarPopoverRoom(state, VP_CHROME, DEFAULT_MINI_BAR_SIZE, 50))
+      .toBe(VP_CHROME.height - state.cy - DEFAULT_MINI_BAR_SIZE.height / 2 - 6 - 8)
+  })
+
+  it('贴安全顶的块在窗控带读数变化后跟到新安全顶（全屏切换）', () => {
+    setMiniBarCenter(500, 70, CAPSULE_SIZE, VP_CHROME)
+    snapMiniBarToEdge(CAPSULE_SIZE, VP_CHROME)
+    followFlushEdgesOnResize(CAPSULE_SIZE, VP_CHROME, { width: 1024, height: 768, chromeTopInset: 0 })
+    expect(miniBarStore.get().cy).toBe(CAPSULE_SIZE.height / 2)
+  })
+})
+
+describe('窗控带读数：可达性口径', () => {
+  it('无栏 = 0；有栏 = 栏高；全屏 = 0；栏高认不出 = 0', () => {
+    const root = document.createElement('div')
+    expect(frameTopInsetOf(null), '无 DOM 宿主回 0').toBe(0)
+    expect(frameTopInsetOf(root), '没有窗控栏（纯浏览器）= 0').toBe(0)
+    root.setAttribute('data-windows-titlebar', '')
+    root.style.setProperty('--dsh-windows-titlebar-height', '48px')
+    expect(frameTopInsetOf(root), '栏高 48：安全顶就是带的下沿').toBe(48)
+    root.setAttribute('data-fullscreen', '')
+    expect(frameTopInsetOf(root), '全屏：栏不占位 = 0').toBe(0)
+    root.removeAttribute('data-fullscreen')
+    root.style.removeProperty('--dsh-windows-titlebar-height')
+    expect(frameTopInsetOf(root), '栏高认不出：读数失败只到这一格 = 0').toBe(0)
   })
 })

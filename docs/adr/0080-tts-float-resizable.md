@@ -8,9 +8,9 @@ Status: accepted
 
 1. **可拖的边**：左、右、下三条边 + 右下角；顶边不做把手——顶行是移动 / 收起面，同一方向上两种拖意会打架。
 2. **命中带画在面板 padding 圈里**：任何尺寸下都不与控件重叠，贴边时也不会被屏幕裁掉；因此不需要「控件优先还是 resize 优先」的仲裁。具体宽度与角尺寸住 `mini-bar-state.ts` 的常量，不在本文抄读数。
-3. **对边 / 对角锚定**：拖右边时左缘不动，拖下边时顶缘不动；每轴夹进范围后把中心夹回视口。松手不做近边吸附——吸附只属于移动。
+3. **对边 / 对角锚定**：拖右边时左缘不动，拖下边时顶缘不动；每轴夹进范围后把中心夹回可达区（`ADR-0100`）。松手不做近边吸附——吸附只属于移动。
 4. **范围与最小高由骨架算出**：最小高 = 边框 + padding + 顶行 + 正文一行 + 运输行 + 底行 + gap 之和；最小宽要容得下运输行的控件。缺省尺寸同样住实现。
-5. **呈现尺寸独立于意图**：`resolvedMiniBarSize` 每轴夹到 `[min, min(max, 视口可用范围)]`，视口比下限还小就取下限；夹取**不回写**——缩窗口再拉大，用户的值原样回来。
+5. **呈现尺寸独立于意图**：`resolvedMiniBarSize` 每轴夹到 `[min, min(max, 可达区可用范围)]`，可达区比下限还小就取下限；夹取**不回写**——缩窗口再拉大，用户的值原样回来。
 6. **现场字段**：`w` / `h` 与 `cx` / `cy` 同语义（`number | null`）；解析认有限数，范围夹取只发生在呈现时。
 7. **拖边期间不落 localStorage**：与移动同一条节拍，松手 / 取消时统一 `persistMiniBarState()`。
 8. **三档与复位只投影给浮窗**：设置弹层里「小 / 中 / 大 / 复位大小」一行只在浮窗那份设置卡出现；`TtsSettings.tsx` 仍是唯一一份行清单，加的是 `surface` 投影。
@@ -27,6 +27,6 @@ Status: accepted
 
 - 尺寸是浮窗自己的现场，不进 wire、不进 `SHELF_META`，不跨端同步。
 - 顶边不是 resize 把手；键盘改尺寸只走设置弹层的三档（方向键仍负责移动）。
-- 位置（`cx` / `cy`）的裁决仍归 `ADR-0073`；本篇把「现场只有中心 + 收起态」扩展为「中心 + 收起态 + 宽高」。
+- 位置（`cx` / `cy`）的裁决仍归 `ADR-0100`；本篇把「现场只有中心 + 收起态」扩展为「中心 + 收起态 + 宽高」。
 
-锚点：`src/client/tts/mini-bar-state.ts` 的 `DEFAULT_MINI_BAR_SIZE` / `MIN_MINI_BAR_SIZE` / `MAX_MINI_BAR_SIZE` / `SIZE_PRESETS` / `resolvedMiniBarSize` / `frameFromDrag` / `setMiniBarFrame` / `setMiniBarSize` / `resetMiniBarSize`；`src/client/tts/TtsMiniBar.tsx` 的 `beginResize` 与 resize 命中带；`src/client/tts/TtsSettings.tsx` 的 `TtsSettingsRows`；`tests/client/tts-mini-state.test.ts`；`tests/client/tts-mini.test.tsx`；`tests/browser/tts-layout.test.tsx`；`docs/ui-spec.md` §3.6；`ADR-0073`、`ADR-0079`。
+锚点：`src/client/tts/mini-bar-state.ts` 的 `DEFAULT_MINI_BAR_SIZE` / `MIN_MINI_BAR_SIZE` / `MAX_MINI_BAR_SIZE` / `SIZE_PRESETS` / `resolvedMiniBarSize` / `frameFromDrag` / `setMiniBarFrame` / `setMiniBarSize` / `resetMiniBarSize`；`src/client/tts/TtsMiniBar.tsx` 的 `beginResize` 与 resize 命中带；`src/client/tts/TtsSettings.tsx` 的 `TtsSettingsRows`；`tests/client/tts-mini-state.test.ts`；`tests/client/tts-mini.test.tsx`；`tests/browser/tts-layout.test.tsx`；`docs/ui-spec.md` §3.6；`ADR-0100`、`ADR-0079`。
