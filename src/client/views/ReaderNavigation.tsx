@@ -35,14 +35,15 @@ export function ReaderNavigation({ items, activeId, onNavigate }: {
   const t = useCopy()
   if (items.length === 0) return null
   const current = firstActive(items, activeId)
-  return <NavList items={items} current={current} onNavigate={onNavigate} t={t} />
+  return <NavList items={items} current={current} onNavigate={onNavigate} t={t} inheritedLabel={null} />
 }
 
-function NavList({ items, current, onNavigate, t }: {
+function NavList({ items, current, onNavigate, t, inheritedLabel }: {
   items: NavigationItem[]
   current: NavigationItem | null
   onNavigate: (target: ReadingTarget) => void
   t: Translate
+  inheritedLabel: string | null
 }): ReactNode {
   return (
     <ul className="novel-nav">
@@ -50,24 +51,26 @@ function NavList({ items, current, onNavigate, t }: {
           「至多一条 aria-current」要兜的形态——重复 React key 会静默丢条目/串身份。
           这份列表每次取数整份替换、条目自身无状态，下标是稳的。 */}
       {items.map((item, i) => (
-        <NavItem key={i} item={item} current={current} onNavigate={onNavigate} t={t} />
+        <NavItem key={i} item={item} current={current} onNavigate={onNavigate} t={t} inheritedLabel={inheritedLabel} />
       ))}
     </ul>
   )
 }
 
-function NavItem({ item, current, onNavigate, t }: {
+function NavItem({ item, current, onNavigate, t, inheritedLabel }: {
   item: NavigationItem
   current: NavigationItem | null
   onNavigate: (target: ReadingTarget) => void
   t: Translate
+  inheritedLabel: string | null
 }): ReactNode {
   const target = item.target
   const trimmed = item.label.trim()
   // 章级叶项空标题统一回退到「第 N 章」：否则空串会把按钮压成 12px 空白条（白屏目录）。
+  // 补充文档叶项没有章号可回退：改用最近一层分组标题；顶层也没有时回退到「注释」，仍不渲染空白按钮。
   const leafLabel = target !== null && target.kind === 'chapter'
     ? displayChapterTitle(item.label, target.index, t)
-    : trimmed
+    : trimmed !== '' ? trimmed : inheritedLabel ?? t('reader.notes')
   // 叶项复用抽屉既有按钮类：高亮、焦点环、省略号截断与目录同一个源
   const leaf = target === null ? null : (
     <button
@@ -83,7 +86,13 @@ function NavItem({ item, current, onNavigate, t }: {
     <li>
       {leaf ?? (trimmed === '' ? null : <div className="novel-nav-group">{trimmed}</div>)}
       {item.children.length === 0 ? null : (
-        <NavList items={item.children} current={current} onNavigate={onNavigate} t={t} />
+        <NavList
+          items={item.children}
+          current={current}
+          onNavigate={onNavigate}
+          t={t}
+          inheritedLabel={trimmed !== '' ? trimmed : inheritedLabel}
+        />
       )}
     </li>
   )

@@ -43,10 +43,11 @@ export interface ReadRenderValue {
   text: string
 }
 
-/** 正文：只印前 2000 字，规范值含全文。 */
+/** 正文：只印前 2000 字，规范值含全文。章号用工具面的 0 基索引（与 `renderToc` 和入参一致），
+ *  后面的名字才是展示名——空名回退的「第 N 章」是 1 基显示名，不当索引读。 */
 export function renderRead(v: ReadRenderValue): string {
   const name = chapterTitleOrFallback(v.chapterName, v.chapterIndex)
-  return `《${v.bookKey}》第 ${v.chapterIndex} 章（${name}）共 ${v.text.length} 字：\n${v.text.slice(0, 2000)}${v.text.length > 2000 ? '…（截断，规范值含全文）' : ''}`
+  return `《${v.bookKey}》[${v.chapterIndex}] ${name} 共 ${v.text.length} 字：\n${v.text.slice(0, 2000)}${v.text.length > 2000 ? '…（截断，规范值含全文）' : ''}`
 }
 
 export interface TocRenderValue {

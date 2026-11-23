@@ -120,6 +120,36 @@ describe('空标题兜底（书源或本地目录产空串时目录仍可读可�
     expect(onNavigate).toHaveBeenCalledWith({ kind: 'chapter', index: 2, anchorId: null })
   })
 
+  it('补充文档叶项空标题回退到所属分组标题（不渲染空白按钮）', () => {
+    const withSupplement: NavigationItem[] = [
+      {
+        id: 'g0', label: '第一卷', target: null, children: [
+          {
+            id: 's0', label: '   ',
+            target: { kind: 'supplement', documentId: 'doc-1', anchorId: 'f1' }, children: [],
+          },
+        ],
+      },
+    ]
+    const onNavigate = vi.fn()
+    render(<ReaderNavigation items={withSupplement} activeId={null} onNavigate={onNavigate} />)
+    fireEvent.click(screen.getByRole('button', { name: '第一卷' }))
+    expect(onNavigate).toHaveBeenCalledWith({ kind: 'supplement', documentId: 'doc-1', anchorId: 'f1' })
+  })
+
+  it('顶层空标题补充文档叶项兜底到「注释」，不渲染空白按钮', () => {
+    const topSupplement: NavigationItem[] = [
+      {
+        id: 's1', label: '   ',
+        target: { kind: 'supplement', documentId: 'doc-2', anchorId: null }, children: [],
+      },
+    ]
+    const onNavigate = vi.fn()
+    render(<ReaderNavigation items={topSupplement} activeId={null} onNavigate={onNavigate} />)
+    fireEvent.click(screen.getByRole('button', { name: '注释' }))
+    expect(onNavigate).toHaveBeenCalledWith({ kind: 'supplement', documentId: 'doc-2', anchorId: null })
+  })
+
   it('英文环境回退到 Chapter N', () => {
     render(
       <CopyProvider value={enTranslate}>

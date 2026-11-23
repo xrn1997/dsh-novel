@@ -50,7 +50,7 @@ describe('renderSearch（工具面搜索文案）', () => {
 describe('renderRead / renderToc（截断口径）', () => {
   it('正文超 2000 字截断并标注规范值含全文', () => {
     const short = renderRead({ bookKey: 'k', chapterIndex: 0, chapterName: '一', text: '甲' })
-    expect(short).toBe('《k》第 0 章（一）共 1 字：\n甲')
+    expect(short).toBe('《k》[0] 一 共 1 字：\n甲')
     const long = renderRead({ bookKey: 'k', chapterIndex: 1, chapterName: '二', text: '甲'.repeat(2001) })
     expect(long).toContain('…（截断，规范值含全文）')
   })
@@ -65,7 +65,7 @@ describe('renderRead / renderToc（截断口径）', () => {
 
   it('空章名在工具面读出「第 N 章」，不留空括号或空行', () => {
     expect(renderRead({ bookKey: 'k', chapterIndex: 0, chapterName: '', text: '甲' }))
-      .toBe('《k》第 0 章（第 1 章）共 1 字：\n甲')
+      .toBe('《k》[0] 第 1 章 共 1 字：\n甲')
     expect(renderToc({
       bookKey: 'k',
       total: 2,
