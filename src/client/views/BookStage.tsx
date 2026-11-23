@@ -24,6 +24,7 @@ export interface BookStageProps {
   chapterName: string
   content: ChapterContent | null
   loading: boolean
+  tocReady?: boolean
   bookKey: string
   fontSize: number
   lineHeight: number
@@ -35,7 +36,7 @@ export interface BookStageProps {
   locateTick?: number
   keyboardBlocked: boolean
   onNavigate: (target: ReadingTarget, role: LinkRole) => void
-  onChangeChapter: (nextChapter: number, landAt: 'start' | 'end') => void
+  onChangeChapter: (nextChapter: number) => void
   onReportRatio: (ratio: number) => void
   onUserIntent: () => void
   chapterRefs: MutableRefObject<Array<HTMLDivElement | null>>
@@ -52,9 +53,10 @@ interface TurnMotion {
 
 const WHEEL_COOLDOWN_MS = 260
 const SWIPE_THRESHOLD_PX = 42
-const DEFAULT_STAGE_WIDTH = 980
+const DEFAULT_STAGE_WIDTH = 1000
 const DEFAULT_STAGE_HEIGHT = 620
-const STAGE_PAD_X = 112
+// 横向开销：stage padding(32) + cover padding/border(20) + 左右书口(30) + shell padding(48) = 130px，留 2px 余量
+const STAGE_PAD_X = 132
 const STAGE_PAD_Y = 116
 const FLIP_CLEANUP_MS = 620
 const SLIDE_CLEANUP_MS = 340
@@ -69,7 +71,7 @@ function insideEditableOrControl(target: EventTarget | null): boolean {
   if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable) {
     return true
   }
-  return target.closest('button, a[href], [role="button"], [role="link"]') !== null
+  return target.closest('button, a[href], [role="button"], [role="link"], [role="dialog"]') !== null
 }
 
 function prefersReducedMotion(): boolean {
@@ -133,7 +135,7 @@ function paragraphSpansInTrack(track: HTMLElement): ParagraphHorizontalSpan[] {
 export function BookStage(props: BookStageProps): ReactNode {
   const {
     chapterIndex, totalChapters, chapterName, content,
-    loading, bookKey, fontSize, lineHeight, measure, animation, initialRatio,
+    loading, tocReady = true, bookKey, fontSize, lineHeight, measure, animation, initialRatio,
     listenParagraph, listenFollowing, locateTick = 0, keyboardBlocked,
     onNavigate, onChangeChapter, onReportRatio, onUserIntent,
     chapterRefs, bodyRef, probeParagraphRef,
@@ -166,8 +168,7 @@ export function BookStage(props: BookStageProps): ReactNode {
   const lastWheelRef = useRef<number>(0)
   const touchStartRef = useRef<{ x: number; y: number } | null>(null)
   const ratioRef = useRef<number>(initialRatio)
-  const pendingLandRef = useRef<'start' | 'end' | 'ratio'>('ratio')
-  const prevChapterRef = useRef<number>(chapterIndex)
+  const pendingLandRef = useRef<{ chapter: number; at: 'start' | 'end' } | null>(null)
 
   const clearMotionTimer = useCallback((): void => {
     if (motionTimerRef.current !== null) {
@@ -195,6 +196,16 @@ export function BookStage(props: BookStageProps): ReactNode {
     setMotion((cur) => (cur !== null && cur.seq === seq ? null : cur))
   }, [clearMotionTimer])
 
+  /** 同章落页：动效、屏号、页位比例与上报走同一条次序；跨章落位另走 `pendingLand`。 */
+  const landOnSpread = useCallback((target: number, dir: 'next' | 'prev'): void => {
+    triggerMotion(dir)
+    spreadIndexRef.current = target
+    setSpreadIndex(target)
+    const ratio = ratioForSpread(target, pageCount.totalSpreads)
+    ratioRef.current = ratio
+    onReportRatio(ratio)
+  }, [triggerMotion, pageCount.totalSpreads, onReportRatio])
+
   useEffect(() => () => { clearMotionTimer() }, [clearMotionTimer])
 
   // 切换动画模式时立刻清掉挂起动效
@@ -203,13 +214,14 @@ export function BookStage(props: BookStageProps): ReactNode {
     setMotion(null)
   }, [animation, clearMotionTimer])
 
-  // 同步外部切换章节（目录跳转 / 听书跨章 / 按钮跨章）
-  if (prevChapterRef.current !== chapterIndex) {
-    prevChapterRef.current = chapterIndex
-    if (pendingLandRef.current === 'ratio') {
-      ratioRef.current = initialRatio
-    }
-  }
+  // 外部切章与冷开恢复（存档比例晚于挂载到达）：本章尚未测量时跟上 initialRatio。
+  // 已测量的章不再跟——那之后的比例变化是别处写的进度，不能把读者正在看的页挪走。
+  useEffect(() => {
+    const pending = pendingLandRef.current
+    if (pending !== null && pending.chapter === chapterIndex) return
+    if (measuredChapterRef.current === chapterIndex) return
+    ratioRef.current = initialRatio
+  }, [initialRatio, chapterIndex])
 
   // 监听舞台容器尺寸：自适应单/双页 + 窗口缩放重排
   useEffect(() => {
@@ -273,8 +285,11 @@ export function BookStage(props: BookStageProps): ReactNode {
         track.scrollWidth, layout.columnWidth, layout.columnGap, layout.columnsPerSpread,
       )
       setPageCount(nextCount)
-      const land = pendingLandRef.current
+      const pending = pendingLandRef.current
+      const land = pending !== null && pending.chapter === chapterIndex ? pending.at : 'ratio'
+      pendingLandRef.current = null
       let targetSpread: number
+      let alignedToListen = false
       if (land === 'end') {
         targetSpread = nextCount.totalSpreads - 1
       } else if (land === 'start') {
@@ -284,13 +299,13 @@ export function BookStage(props: BookStageProps): ReactNode {
         if (el !== null) {
           const leftInTrack = elementLeftForParagraph(el, track.getBoundingClientRect().left, listenRef.current.paragraph)
           targetSpread = spreadForElementLeft(leftInTrack, layout.stride, nextCount.totalSpreads)
+          alignedToListen = true
         } else {
           targetSpread = spreadForRatio(ratioRef.current, nextCount.totalSpreads)
         }
       } else {
         targetSpread = spreadForRatio(ratioRef.current, nextCount.totalSpreads)
       }
-      pendingLandRef.current = 'ratio'
       measuredChapterRef.current = chapterIndex
       spreadIndexRef.current = targetSpread
       setSpreadIndex(targetSpread)
@@ -298,9 +313,9 @@ export function BookStage(props: BookStageProps): ReactNode {
       const landedRatio = ratioForSpread(targetSpread, nextCount.totalSpreads)
       ratioRef.current = landedRatio
       setLayoutVersion((v) => v + 1)
-      // 跨章落位（start/end）不是「打开/恢复」：会话若只按章号写过 offset 0，这里补上真实页位；
+      // 跨章落位（start/end）或跨章听书定位（alignedToListen）：会话先写过 offset 0，这里补上真实页位；
       // 回翻落末页时尤其必要（requestJump 固定写 0，视觉已到末页但存档还在章首）。
-      if (land === 'start' || land === 'end') onReportRatio(landedRatio)
+      if (land === 'start' || land === 'end' || alignedToListen) onReportRatio(landedRatio)
     }
     const raf = requestAnimationFrame(measureTrack)
     return () => { cancelAnimationFrame(raf) }
@@ -318,16 +333,10 @@ export function BookStage(props: BookStageProps): ReactNode {
     const targetSpread = spreadForElementLeft(leftInTrack, layout.stride, pageCount.totalSpreads)
     const curSpread = spreadIndexRef.current
     if (targetSpread === curSpread) return
-    triggerMotion(targetSpread > curSpread ? 'next' : 'prev')
-    spreadIndexRef.current = targetSpread
-    setSpreadIndex(targetSpread)
-    const ratio = ratioForSpread(targetSpread, pageCount.totalSpreads)
-    ratioRef.current = ratio
-    onReportRatio(ratio)
+    landOnSpread(targetSpread, targetSpread > curSpread ? 'next' : 'prev')
   }, [
     listenFollowing, listenParagraph, content, chapterIndex,
-    layoutVersion, locateTick, layout.stride, pageCount.totalSpreads,
-    triggerMotion, onReportRatio,
+    layoutVersion, locateTick, layout.stride, pageCount.totalSpreads, landOnSpread,
   ])
 
   const canPrev = spreadIndex > 0 || chapterIndex > 0
@@ -335,42 +344,34 @@ export function BookStage(props: BookStageProps): ReactNode {
 
   const goNext = useCallback((): void => {
     onUserIntent()
-    if (spreadIndex + 1 < pageCount.totalSpreads) {
-      const next = spreadIndex + 1
-      triggerMotion('next')
-      spreadIndexRef.current = next
-      setSpreadIndex(next)
-      const ratio = ratioForSpread(next, pageCount.totalSpreads)
-      ratioRef.current = ratio
-      onReportRatio(ratio)
+    const cur = spreadIndexRef.current
+    if (cur + 1 < pageCount.totalSpreads) {
+      landOnSpread(cur + 1, 'next')
       return
     }
     if (totalChapters > 0 && chapterIndex + 1 < totalChapters) {
+      const nextChapter = chapterIndex + 1
       triggerMotion('next', true)
-      pendingLandRef.current = 'start'
+      pendingLandRef.current = { chapter: nextChapter, at: 'start' }
       ratioRef.current = 0
-      onChangeChapter(chapterIndex + 1, 'start')
+      onChangeChapter(nextChapter)
     }
-  }, [onUserIntent, spreadIndex, pageCount.totalSpreads, triggerMotion, onReportRatio, totalChapters, chapterIndex, onChangeChapter])
+  }, [onUserIntent, pageCount.totalSpreads, triggerMotion, landOnSpread, totalChapters, chapterIndex, onChangeChapter])
 
   const goPrev = useCallback((): void => {
     onUserIntent()
-    if (spreadIndex > 0) {
-      const prev = spreadIndex - 1
-      triggerMotion('prev')
-      spreadIndexRef.current = prev
-      setSpreadIndex(prev)
-      const ratio = ratioForSpread(prev, pageCount.totalSpreads)
-      ratioRef.current = ratio
-      onReportRatio(ratio)
+    const cur = spreadIndexRef.current
+    if (cur > 0) {
+      landOnSpread(cur - 1, 'prev')
       return
     }
     if (chapterIndex > 0) {
+      const prevChapter = chapterIndex - 1
       triggerMotion('prev', true)
-      pendingLandRef.current = 'end'
-      onChangeChapter(chapterIndex - 1, 'end')
+      pendingLandRef.current = { chapter: prevChapter, at: 'end' }
+      onChangeChapter(prevChapter)
     }
-  }, [onUserIntent, spreadIndex, pageCount.totalSpreads, triggerMotion, onReportRatio, chapterIndex, onChangeChapter])
+  }, [onUserIntent, triggerMotion, landOnSpread, chapterIndex, onChangeChapter])
 
   // 键盘翻页：← / PageUp 上一页，→ / PageDown / Space 下一页
   useEffect(() => {
@@ -428,13 +429,16 @@ export function BookStage(props: BookStageProps): ReactNode {
     else goPrev()
   }
 
-  const range = pageRangeOfSpread(spreadIndex, layout.columnsPerSpread, pageCount.totalColumns)
+  const trackSettled = measuredChapter === chapterIndex
+  const displaySpread = trackSettled ? spreadIndex : 0
+  const displayTotalColumns = trackSettled ? pageCount.totalColumns : 1
+  const range = pageRangeOfSpread(displaySpread, layout.columnsPerSpread, displayTotalColumns)
   const pageLabel = range.from === range.to
     ? t('reader.pageIndicator', { current: range.from, total: range.total })
     : t('reader.pageRangeIndicator', { from: range.from, to: range.to, total: range.total })
 
   const shellStyle: CSSProperties = {
-    width: layout.contentWidth + 56,
+    width: layout.contentWidth + 48,
     '--novel-book-page-h': `${pageHeight}px`,
   } as CSSProperties
 
@@ -446,10 +450,9 @@ export function BookStage(props: BookStageProps): ReactNode {
     columnCount: layout.columnsPerSpread,
     columnWidth: layout.columnWidth,
     columnGap: layout.columnGap,
-    transform: `translate3d(${-spreadIndex * layout.stride}px, 0, 0)`,
+    transform: `translate3d(${-displaySpread * layout.stride}px, 0, 0)`,
   }
 
-  const trackSettled = measuredChapter === chapterIndex
   const trackClass = [
     'novel-book-track',
     trackSettled ? 'is-settled' : '',
@@ -457,7 +460,7 @@ export function BookStage(props: BookStageProps): ReactNode {
     motion !== null && motion.kind === 'slide' && motion.crossChapter !== true ? 'is-sliding' : '',
   ].filter((c) => c !== '').join(' ')
 
-  const chapterClass = motion !== null && motion.kind === 'slide' && motion.crossChapter === true
+  const chapterClass = trackSettled && motion !== null && motion.kind === 'slide' && motion.crossChapter === true
     ? `novel-book-chapter is-slide-enter-${motion.dir}`
     : 'novel-book-chapter'
 
@@ -500,9 +503,11 @@ export function BookStage(props: BookStageProps): ReactNode {
             {/* 静态正文裁剪盒：仅裁剪静态多栏轨道，外层 viewport 保持 overflow:visible 避免切掉翻页顶底角 */}
             <div className="novel-book-track-clip" style={{ width: layout.contentWidth, height: pageHeight }}>
               {content === null ? (
-                <div className="novel-rdr-loading">
-                  {loading ? t('common.loading') : t('reader.tocLoading')}
-                </div>
+                !tocReady || loading ? (
+                  <div className="novel-rdr-loading">
+                    {!tocReady ? t('reader.tocLoading') : t('common.loading')}
+                  </div>
+                ) : null
               ) : (
                 <div
                   key={chapterIndex}

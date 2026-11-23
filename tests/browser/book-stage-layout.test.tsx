@@ -31,7 +31,10 @@ interface Read {
   layout: string | null
   stage: Rect
   cover: Rect
+  coverBox: { clientWidth: number; scrollWidth: number }
   shell: Rect
+  edgeLeft: Rect
+  edgeRight: Rect
   track: { clientWidth: number; scrollWidth: number; clientHeight: number; columnFill: string; columnCount: string }
   footer: Rect
   pageNum: string
@@ -49,7 +52,7 @@ function markup(): string {
       <NovelStyles />
       <div className="novel-rdr is-paged" style={{ height: '100%' }}>
         <div className="novel-rdr-main" style={{ display: 'flex' }}>
-          <div style={{ width: '980px', height: '620px', display: 'flex' }}>
+          <div style={{ width: '1000px', height: '620px', display: 'flex' }}>
             <BookStage
               chapterIndex={0}
               totalChapters={2}
@@ -87,6 +90,8 @@ const PROBE = `() => {
   const stage = document.querySelector('.novel-book-stage')
   const cover = document.querySelector('.novel-book-cover')
   const shell = document.querySelector('.novel-book-shell')
+  const edgeLeft = document.querySelector('.novel-book-edge-left')
+  const edgeRight = document.querySelector('.novel-book-edge-right')
   const track = document.querySelector('.novel-book-track')
   const footer = document.querySelector('.novel-book-footer')
   const cs = getComputedStyle(track)
@@ -94,7 +99,10 @@ const PROBE = `() => {
     layout: stage?.getAttribute('data-page-layout') ?? null,
     stage: rect(stage),
     cover: rect(cover),
+    coverBox: { clientWidth: cover.clientWidth, scrollWidth: cover.scrollWidth },
     shell: rect(shell),
+    edgeLeft: rect(edgeLeft),
+    edgeRight: rect(edgeRight),
     track: {
       clientWidth: track.clientWidth,
       scrollWidth: track.scrollWidth,
@@ -127,6 +135,10 @@ describe.skipIf(!ENABLED)('浏览器几何：翻页阅读舞台', () => {
     expect(read.footer.bottom).toBeLessThanOrEqual(read.stage.bottom + 1)   // 页脚没有被舞台裁掉
     expect(read.cover.width).toBeLessThanOrEqual(read.stage.width + 1)      // 书封没有横向越界
     expect(read.shell.width).toBeLessThanOrEqual(read.stage.width + 1)
+    expect(read.shell.right).toBeLessThanOrEqual(read.cover.right + 1)      // 书壳与左右书口不得溢出硬壳书封
+    expect(read.edgeRight.right).toBeLessThanOrEqual(read.cover.right + 1)
+    expect(read.edgeLeft.left).toBeGreaterThanOrEqual(read.cover.left - 1)
+    expect(read.coverBox.scrollWidth).toBeLessThanOrEqual(read.coverBox.clientWidth + 1)
     expect(read.pageNum).toContain('页')
   })
 })

@@ -757,3 +757,49 @@ describe('阅读探针', () => {
     holder.remove()
   })
 })
+
+describe('翻页模式与听书联动集成', () => {
+  it('翻页模式自动跟翻跨章、用户翻页让位、点击定位恢复跟随并对齐章、设置卡片打开时让出翻页键', async () => {
+    const { setPref } = await import('../../src/client/store.js')
+    chapterNames = ['第一章', '第二章', '第三章']
+    chapterTexts = [
+      ['第一章第一段。'],
+      ['第二章第一段。'],
+      ['第三章第一段。', '第三章第二段。'],
+    ]
+    await startListening({
+      sourceId: 's1', bookKey: 'k1', title: '书一', chapterIndex: 0, paragraphIndex: 0,
+    })
+    setPref({ readingMode: 'page' })
+    const deps = readerDeps()
+    try {
+      const { container } = render(createElement(ReaderView, { sourceId: 's1', bookKey: 'k1', title: '书一', deps }))
+      await waitFor(() => expect(container.querySelector('[data-chapter="0"]')).not.toBeNull())
+
+      // 1. 听书跳章到第 1 章：翻页模式自动跟翻到第 1 章
+      seekParagraph(0)
+      act(() => {
+        // 用 player 的 skipChapter 驱动跨章
+        void import('../../src/client/tts/player.js').then((m) => m.jumpToChapter(1))
+      })
+      await waitFor(() => expect(container.querySelector('[data-chapter="1"]')).not.toBeNull())
+
+      // 2. 打开听书设置卡后按 ArrowRight 不触发翻页（keyboardBlocked 生效）
+      fireEvent.click(screen.getByRole('button', { name: '听书设置' }))
+      expect(screen.getByRole('dialog', { name: '听书设置' })).toBeTruthy()
+      fireEvent.keyDown(document, { key: 'ArrowRight' })
+      expect(container.querySelector('[data-chapter="1"]')).not.toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: '关闭听书设置' }))
+
+      // 3. 用户主动点下一页跨到第 2 章 → 跟读让位，随后听书跳到第 0 章不会自动拉走用户
+      fireEvent.click(screen.getByLabelText('下一页'))
+      await waitFor(() => expect(container.querySelector('[data-chapter="2"]')).not.toBeNull())
+
+      // 4. 点「定位到正在念的段」恢复跟随并跳回当前听书章（第 1 章）
+      fireEvent.click(screen.getByRole('button', { name: '定位到正在念的段' }))
+      await waitFor(() => expect(container.querySelector('[data-chapter="1"]')).not.toBeNull())
+    } finally {
+      setPref({ readingMode: 'scroll', pageAnimation: 'flip' })
+    }
+  })
+})

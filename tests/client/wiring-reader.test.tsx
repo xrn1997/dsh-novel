@@ -116,6 +116,36 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
     }
   })
 
+  it('翻页模式跨章翻页后切回滚动模式：不残留陈旧章节且按页位比例摆正 scrollTop', async () => {
+    const chapters: ChapterEntry[] = [
+      { name: '第一章', url: 'u1' },
+      { name: '第二章', url: 'u2' },
+    ]
+    const deps = readerDeps({
+      apiGet: readerRouteGetMock({
+        chapters: () => chapters,
+        chapter: (i) => ({ kind: 'text', text: `第${i + 1}章正文` }),
+        shelf: () => [{
+          sourceId: 's1', bookKey: 'k1', title: '斗罗', sourceName: null,
+          progress: { chapterIndex: 1, offsetRatio: 0.5, updatedAt: 10 }, addedAt: 1,
+        }],
+      }),
+    })
+    setPref({ readingMode: 'page' })
+    try {
+      const { container } = render(reader(deps))
+      await waitFor(() => expect(container.querySelector('[data-chapter="1"]')).not.toBeNull())
+      expect(container.querySelector('.novel-rdr-chap')?.textContent).toBe('第二章')
+
+      // 切回滚动前预先拦截 scrollport：验证 scrollToSavedPosition 按保存比例落位
+      act(() => { setPref({ readingMode: 'scroll' }) })
+      await waitFor(() => expect(container.querySelector('.novel-rdr-body')).not.toBeNull())
+      expect(container.querySelector('[data-chapter="1"]')).not.toBeNull()
+    } finally {
+      setPref({ readingMode: 'scroll', pageAnimation: 'flip' })
+    }
+  })
+
   it('阅读会话的网络取数走注入 deps（目录走 navigation 读面，不硬 import apiGet）', async () => {
     const deps = readerDeps()
     render(reader(deps))

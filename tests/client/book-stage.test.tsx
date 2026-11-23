@@ -83,7 +83,7 @@ describe('BookStage interactions and animation modes', () => {
       // 单页章末点下一页 → 跨到下一章开头，并在拟真翻书模式下激活纯 CSS 轻盈翻页层与正文柔焦（零正文复制）
       fireEvent.click(view.getByLabelText('下一页'))
       expect(onUserIntent).toHaveBeenCalledTimes(1)
-      expect(onChangeChapter).toHaveBeenCalledWith(2, 'start')
+      expect(onChangeChapter).toHaveBeenCalledWith(2)
       const leaf = view.container.querySelector('.novel-book-leaf')
       expect(leaf).not.toBeNull()
       expect(view.container.querySelector('.novel-book-track.is-flipping')).not.toBeNull()
@@ -96,7 +96,7 @@ describe('BookStage interactions and animation modes', () => {
 
       // 键盘左键 → 跨回上一章末尾
       fireEvent.keyDown(document, { key: 'ArrowLeft' })
-      expect(onChangeChapter).toHaveBeenCalledWith(0, 'end')
+      expect(onChangeChapter).toHaveBeenCalledWith(0)
     } finally {
       vi.useRealTimers()
     }
@@ -174,7 +174,7 @@ describe('BookStage interactions and animation modes', () => {
       await waitFor(() => expect(view.container.querySelector('.novel-book-track.is-settled')).not.toBeNull())
 
       fireEvent.click(view.getByLabelText('上一页'))
-      expect(onChangeChapter).toHaveBeenCalledWith(0, 'end')
+      expect(onChangeChapter).toHaveBeenCalledWith(0)
       expect(onReportRatio).not.toHaveBeenCalled()       // 跨章请求本身还不能写比例
 
       view.rerender(
@@ -184,6 +184,248 @@ describe('BookStage interactions and animation modes', () => {
       const landed = onReportRatio.mock.calls.at(-1)?.[0] as number
       expect(landed).toBeGreaterThan(0)                  // 末页不是章首
       expect(landed).toBeLessThan(1)
+    } finally {
+      scrollWidth.mockRestore()
+    }
+  })
+
+  it('冷开恢复：正文到达时同一章的存档比例生效，不落回第一页', async () => {
+    // 会话 open 先取书架存档再载正文：舞台已按 initialRatio=0 挂载，比例随正文一起到而章号不变。
+    // ratioRef 需在未测量前随 initialRatio 同步，否则异步到达的存档比例会被挂载初值 0 盖掉。
+    const scrollWidth = vi.spyOn(Element.prototype, 'scrollWidth', 'get')
+      .mockImplementation(function (this: Element) {
+        return this.classList.contains('novel-book-track') ? 5000 : 0
+      })
+    try {
+      const common = {
+        chapterIndex: 0,
+        totalChapters: 2,
+        chapterName: '第一章',
+        loading: false,
+        bookKey: 'book-1',
+        fontSize: 18,
+        lineHeight: 1.8,
+        measure: 36,
+        animation: 'none' as const,
+        listenParagraph: null,
+        listenFollowing: false,
+        keyboardBlocked: false,
+        onNavigate: () => {},
+        onChangeChapter: () => {},
+        onReportRatio: () => {},
+        onUserIntent: () => {},
+        chapterRefs: { current: [] as Array<HTMLDivElement | null> },
+        bodyRef: { current: null as HTMLDivElement | null },
+      }
+      const view = render(<BookStage {...common} content={null} initialRatio={0} />)
+      view.rerender(<BookStage {...common} content={SAMPLE_CHAPTER} initialRatio={0.75} />)
+      await waitFor(() => expect(view.container.querySelector('.novel-book-track.is-settled')).not.toBeNull())
+
+      const num = view.container.querySelector('[data-novel-page-num]')?.textContent ?? ''
+      const match = /第 (\d+)(?:–\d+)? \/ (\d+) 页/.exec(num)
+      expect(match).not.toBeNull()
+      const from = Number(match?.[1])
+      const totalColumns = Number(match?.[2])
+      const totalSpreads = Math.ceil(totalColumns / 2)
+      expect(from).toBe(Math.floor(0.75 * totalSpreads) * 2 + 1)
+      expect(from).toBeGreaterThan(1)
+    } finally {
+      scrollWidth.mockRestore()
+    }
+  })
+
+  it('窄屏（舞台宽 < 860px 可用宽）自动切为单页布局', () => {
+    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.hasAttribute('data-novel-book-stage')) {
+        return { width: 700, height: 600, left: 0, right: 700, top: 0, bottom: 600, x: 0, y: 0, toJSON: () => ({}) }
+      }
+      return { width: 0, height: 0, left: 0, right: 0, top: 0, bottom: 0, x: 0, y: 0, toJSON: () => ({}) }
+    })
+    try {
+      const view = render(
+        <BookStage
+          chapterIndex={0}
+          totalChapters={2}
+          chapterName="第一章"
+          content={SAMPLE_CHAPTER}
+          loading={false}
+          bookKey="book-1"
+          fontSize={18}
+          lineHeight={1.8}
+          measure={36}
+          animation="none"
+          initialRatio={0}
+          listenParagraph={null}
+          listenFollowing={false}
+          keyboardBlocked={false}
+          onNavigate={() => {}}
+          onChangeChapter={() => {}}
+          onReportRatio={() => {}}
+          onUserIntent={() => {}}
+          chapterRefs={{ current: [] }}
+          bodyRef={{ current: null }}
+        />,
+      )
+      expect(view.container.querySelector('[data-novel-book-stage]')?.getAttribute('data-page-layout')).toBe('single')
+    } finally {
+      rectSpy.mockRestore()
+    }
+  })
+
+  it('跨章回翻未到货时跳往别章，残留的末页意图不污染新章落位', async () => {
+    const scrollWidth = vi.spyOn(Element.prototype, 'scrollWidth', 'get')
+      .mockImplementation(function (this: Element) {
+        return this.classList.contains('novel-book-track') ? 5000 : 0
+      })
+    try {
+      const onChangeChapter = vi.fn()
+      const common = {
+        totalChapters: 4,
+        loading: false,
+        bookKey: 'book-1',
+        fontSize: 18,
+        lineHeight: 1.8,
+        measure: 36,
+        animation: 'none' as const,
+        initialRatio: 0,
+        listenParagraph: null,
+        listenFollowing: false,
+        keyboardBlocked: false,
+        onNavigate: () => {},
+        onChangeChapter,
+        onReportRatio: () => {},
+        onUserIntent: () => {},
+        chapterRefs: { current: [] as Array<HTMLDivElement | null> },
+        bodyRef: { current: null as HTMLDivElement | null },
+      }
+      const view = render(<BookStage {...common} chapterIndex={1} chapterName="第二章" content={SAMPLE_CHAPTER} />)
+      await waitFor(() => expect(view.container.querySelector('.novel-book-track.is-settled')).not.toBeNull())
+
+      // 点上一页意图去第 0 章末页，但第 0 章加载失败未到达（content=null），随后外部跳去第 2 章
+      fireEvent.click(view.getByLabelText('上一页'))
+      expect(onChangeChapter).toHaveBeenCalledWith(0)
+      view.rerender(<BookStage {...common} chapterIndex={0} chapterName="第一章" content={null} />)
+      view.rerender(<BookStage {...common} chapterIndex={2} chapterName="第三章" content={SAMPLE_CHAPTER} />)
+
+      await waitFor(() => expect(view.container.querySelector('.novel-book-track.is-settled')).not.toBeNull())
+      const num = view.container.querySelector('[data-novel-page-num]')?.textContent ?? ''
+      expect(num).toContain('第 1')
+    } finally {
+      scrollWidth.mockRestore()
+    }
+  })
+
+  it('听书跟读跨章对齐到高亮段后，补报该页比例给会话', async () => {
+    const scrollWidth = vi.spyOn(Element.prototype, 'scrollWidth', 'get')
+      .mockImplementation(function (this: Element) {
+        return this.classList.contains('novel-book-track') ? 5000 : 0
+      })
+    const rectSpy = vi.spyOn(Element.prototype, 'getClientRects').mockImplementation(function (this: Element) {
+      if (this.classList.contains('novel-tts-live')) {
+        return [{ left: 2000, right: 2200, top: 0, bottom: 20, width: 200, height: 20, x: 2000, y: 0, toJSON: () => ({}) } as DOMRect] as unknown as DOMRectList
+      }
+      return [] as unknown as DOMRectList
+    })
+    try {
+      const onReportRatio = vi.fn()
+      const view = render(
+        <BookStage
+          chapterIndex={0}
+          totalChapters={2}
+          chapterName="第一章"
+          content={SAMPLE_CHAPTER}
+          loading={false}
+          bookKey="book-1"
+          fontSize={18}
+          lineHeight={1.8}
+          measure={36}
+          animation="none"
+          initialRatio={0}
+          listenParagraph={2}
+          listenFollowing={true}
+          keyboardBlocked={false}
+          onNavigate={() => {}}
+          onChangeChapter={() => {}}
+          onReportRatio={onReportRatio}
+          onUserIntent={() => {}}
+          chapterRefs={{ current: [] }}
+          bodyRef={{ current: null }}
+        />,
+      )
+      await waitFor(() => expect(onReportRatio).toHaveBeenCalled())
+      expect(onReportRatio.mock.calls.at(-1)?.[0]).toBeGreaterThan(0)
+      expect(view.container.querySelector('[data-novel-page-num]')?.textContent).not.toContain('第 1–')
+    } finally {
+      scrollWidth.mockRestore()
+      rectSpy.mockRestore()
+    }
+  })
+
+  it('目录已就绪但章正文失败（loading=false, content=null）时不显示「目录加载中…」', () => {
+    const view = render(
+      <BookStage
+        chapterIndex={0}
+        totalChapters={2}
+        chapterName="第一章"
+        content={null}
+        loading={false}
+        tocReady={true}
+        bookKey="book-1"
+        fontSize={18}
+        lineHeight={1.8}
+        measure={36}
+        animation="none"
+        initialRatio={0}
+        listenParagraph={null}
+        listenFollowing={false}
+        keyboardBlocked={false}
+        onNavigate={() => {}}
+        onChangeChapter={() => {}}
+        onReportRatio={() => {}}
+        onUserIntent={() => {}}
+        chapterRefs={{ current: [] }}
+        bodyRef={{ current: null }}
+      />,
+    )
+    expect(view.container.textContent).not.toContain('目录加载中')
+  })
+
+  it('同批连续两次键盘翻页依赖 spreadIndexRef 连续推进两屏', async () => {
+    const scrollWidth = vi.spyOn(Element.prototype, 'scrollWidth', 'get')
+      .mockImplementation(function (this: Element) {
+        return this.classList.contains('novel-book-track') ? 5000 : 0
+      })
+    try {
+      const view = render(
+        <BookStage
+          chapterIndex={0}
+          totalChapters={2}
+          chapterName="第一章"
+          content={SAMPLE_CHAPTER}
+          loading={false}
+          bookKey="book-1"
+          fontSize={18}
+          lineHeight={1.8}
+          measure={36}
+          animation="none"
+          initialRatio={0}
+          listenParagraph={null}
+          listenFollowing={false}
+          keyboardBlocked={false}
+          onNavigate={() => {}}
+          onChangeChapter={() => {}}
+          onReportRatio={() => {}}
+          onUserIntent={() => {}}
+          chapterRefs={{ current: [] }}
+          bodyRef={{ current: null }}
+        />,
+      )
+      await waitFor(() => expect(view.container.querySelector('.novel-book-track.is-settled')).not.toBeNull())
+      act(() => {
+        fireEvent.keyDown(document, { key: 'ArrowRight' })
+        fireEvent.keyDown(document, { key: 'ArrowRight' })
+      })
+      expect(view.container.querySelector('[data-novel-page-num]')?.textContent).toContain('第 5–6')
     } finally {
       scrollWidth.mockRestore()
     }

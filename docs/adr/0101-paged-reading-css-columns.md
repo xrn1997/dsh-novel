@@ -20,7 +20,8 @@ Status: accepted
 - 翻页模式只负责章级导航；章内锚点与段级返回不声称精确落位：同章目标保持当前页，跨章目标落章首。需要精确锚点时用滚动模式。
 - 不接固定版式、PDF、漫画或需脚本交互的页面；流式 EPUB 的图文正文可读，图片占位框不因加载完成收缩。
 - 滚动模式的锚点、回补、拍点与 `pendingJump` 结算不变；翻页模式不去改这些语义。
-- 听书播放层仍归播放层；翻页模式只消费段号/章号，不写播放状态。
+- `ADR-0084` 的「往回翻页不做」约束滚动会话的已载窗口与补载；翻页路径的上一章落末页走 `requestJump` 的单章跳转，不建双向滚动窗口，不构成对它的取代。
+- 听书播放层仍归播放层；翻页模式只消费段号/章号，不写播放状态。用户主动翻页按滚动模式的接管口径让跟随让位（点「定位」恢复）；播放自然推进仍自动翻页 / 切章。
 
 ## 被否方案
 
@@ -34,6 +35,6 @@ Status: accepted
 - 整章必须在 DOM 里完成多栏排版：长章首次进入的布局成本高于滚动模式；页数依赖实测，字体、字号、行距、窗口尺寸变化都会重排并按页内比例重新站定。
 - 翻页模式没有滚动锚点，章内锚点精度受限；这是接受的边界，精确锚点仍走滚动模式。
 - 进度口径增加一条「页位比例」：它复用 `progress.offsetRatio`，切模式时是近似换算，不是文本比例；两端各自重排时可能有半个屏的误差。
-- 新增的门：分页几何单测、`BookStage` 组件与真浏览器几何、ReaderView 翻页接线与跨章进度回归。
+- 守护落在分页几何单测、`BookStage` 组件与真浏览器几何、ReaderView 翻页接线与跨章进度回归上。
 
 锚点：`src/client/reader-pagination.ts` 的 `computeSpreadLayout` / `computePageCount` / `spreadForRatio` / `ratioForSpread` / `classifyClickZone` / `firstParagraphInSpread`；`src/client/views/BookStage.tsx`；`src/client/views/ReaderView.tsx` 的 `isPaged` / `takeOverReading`；`src/client/reader-session.ts` 的 `setPaged` / `reportPosition` / `prefetchChapter` / `scrollToSavedPosition`；`src/client/styles/reader.ts` 的 `.novel-book-stage` / `.novel-book-track`；`tests/client/reader-pagination.test.ts`；`tests/client/book-stage.test.tsx`；`tests/client/reader-session.test.ts`；`tests/client/wiring-reader.test.tsx`；`docs/ui-spec.md` §3.5。

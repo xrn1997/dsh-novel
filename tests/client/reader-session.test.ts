@@ -1528,4 +1528,39 @@ describe('ReaderSession 翻页模式（无滚动视口）', () => {
     expect(h.session.currentPosition).toEqual({ chapterIndex: 0, offsetRatio: 0.6 })
     expect(h.saves).toEqual([])
   })
+
+  it('翻页期裁掉前方章节不得攒滚动补偿，切回滚动后 afterRender 不得误偏 scrollTop', async () => {
+    const many: ChapterEntry[] = Array.from({ length: 10 }, (_, i) => ({ name: `第${i + 1}章`, url: `https://s.com/c/${i}` }))
+    const port = fakePort({ scrollH: 10_000 })
+    const session = new ReaderSession({
+      fetchNavigation: async () => ({ chapters: many, items: planarNavigation(many) }),
+      fetchChapter: async (_s, _b, i) => text(i),
+      fetchShelf: async () => [], saveProgress: () => {}, saveTotalChapters: () => {},
+      afterFrames: (cb) => cb(),
+    }, port, 5)
+    session.setPaged(true)
+    await session.open('src', 'b')
+    port.anchors = many.map((_, i) => ({ index: i, start: i * 1000, height: 1000 }))
+    // 跨过 KEEP_BEHIND（6）章：在翻页模式下触发 pruneToViewport 裁掉第 0、1 章
+    for (let idx = 1; idx <= 8; idx++) {
+      session.requestJump(idx)
+      await new Promise((r) => setTimeout(r, 0))
+    }
+    session.setPaged(false)
+    session.scrollToSavedPosition()
+    expect(port.top).toBe(8000)
+    session.afterRender()
+    expect(port.top).toBe(8000)
+  })
+
+  it('翻页模式载章失败只清在途槽，不拿旧滚动锚点重记位置', async () => {
+    const h = makeSession({ failChapter: 1 })
+    h.session.setPaged(true)
+    await h.session.open('src', 'https://s.com/book/1')
+    h.port.anchors = [{ index: 0, start: 0, height: 1000 }]
+    h.session.requestJump(1)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(h.session.currentPosition).toEqual({ chapterIndex: 1, offsetRatio: 0 })
+    expect(h.session.state.error).not.toBeNull()
+  })
 })

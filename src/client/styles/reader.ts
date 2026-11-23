@@ -493,8 +493,9 @@ export const READER_CSS = `
   margin: 0 0 var(--novel-sp-4); break-after: avoid;
 }
 .novel-book-track p { margin: .5em 0; text-indent: 2em; orphans: 2; widows: 2; }
-/* 翻页模式下左页紧贴裁剪盒左缘，把跟读小三角收进首行 2em 缩进里，左右两页都能完整看到高亮标记。 */
-.novel-book-track .novel-tts-live::before { left: .55em; }
+/* 翻页模式下左页紧贴裁剪盒左缘，把跟读小三角收进首行 2em 缩进里；无缩进块不画外挂三角避免压字或被裁剪盒切掉。 */
+.novel-book-track p.novel-tts-live::before { left: .55em; }
+.novel-book-track .novel-tts-live:not(p)::before { display: none; }
 .novel-book-track h1, .novel-book-track h2, .novel-book-track h3,
 .novel-book-track h4, .novel-book-track h5, .novel-book-track h6 { break-after: avoid; }
 .novel-book-track .novel-fig {

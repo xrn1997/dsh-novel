@@ -1,5 +1,5 @@
 import type { ReactNode, Ref } from 'react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useCopy } from '../copy/index.js'
 import { useStore } from '../store.js'
 import { TTS_RATE } from '../../shared/wire.js'
@@ -47,15 +47,22 @@ export interface TtsBarProps {
   onLocate: () => void
   /** 条根 ref：跟读自动跟随要量它的高度，作为「正文看得见的底界」（条贴视口底，目标段不许藏它下面） */
   rootRef?: Ref<HTMLDivElement>
+  /** 听书设置卡片开关变化通知：供阅读器在卡片打开时让出翻页快捷键 */
+  onPanelOpenChange?: (open: boolean) => void
 }
 
-export function TtsBar({ darkController, apiGet, pushError, onLocate, rootRef }: TtsBarProps): ReactNode {
+export function TtsBar({ darkController, apiGet, pushError, onLocate, rootRef, onPanelOpenChange }: TtsBarProps): ReactNode {
   const t = useCopy()
   const st = useStore(ttsPlayer)
   // 整块上屏投影（能否暂停 / 连败停的读数 / 空章抑制）：判据全住 `listen-readout.ts`，这里不重算。
   const face = listenFaceOf(st)
   const [panelOpen, setPanelOpen] = useState(false)
   const sources = useTtsSources(panelOpen, apiGet, pushError)
+
+  useEffect(() => {
+    onPanelOpenChange?.(panelOpen)
+    return () => { onPanelOpenChange?.(false) }
+  }, [panelOpen, onPanelOpenChange])
 
   // 定时读数的每秒节拍归 `useTimerReadout`：不挂表时读数只在会话状态变化时挪一格。
   const timer = useTimerReadout(st, t)

@@ -113,12 +113,16 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   const ttsBarRef = useRef<HTMLDivElement | null>(null)
   /** 翻页模式下是否处于「用户已接管」状态（与滚动模式的 followController 同口径：翻页让位、定位/新会话恢复）。 */
   const [pagedFollowYielded, setPagedFollowYielded] = useState<boolean>(false)
+  /** 听书条内设置弹层是否打开：打开时让出翻页快捷键。 */
+  const [ttsSettingsOpen, setTtsSettingsOpen] = useState<boolean>(false)
   /** 翻页模式下「定位到正在念的段」脉冲计数：即便当前已在跟随态，点击定位仍触发一次校准。 */
   const [pagedLocateTick, setPagedLocateTick] = useState<number>(0)
   /** 翻页模式阅读位置探针：取当前可见页左上角第一段号，避免从任意页点「听书」退回章首第 0 段。 */
   const pagedProbeParagraphRef = useRef<(() => number) | null>(null)
   /** 翻页模式下记录上一次听书章段，用于区分自然顺序推进（+1）与用户主动跳段/拖滑杆/切章。 */
   const lastPagedListenRef = useRef<{ chapterIndex: number; paragraphIndex: number } | null>(null)
+  /** 选区「从本段听」浮钮收起句柄：翻页模式靠 transform 切页不触发 scroll，翻页/跳章时一起收起。 */
+  const listenFromClearRef = useRef<(() => void) | null>(null)
   /** 上一帧是否翻页模式：从翻页切回滚动时，绑定首帧喂视口前先把页内比例摆成滚动位。 */
   const wasPagedRef = useRef(isPaged)
   /** 用户把视口带走：跟随即让位，挂起的自动定位与在途落位一并作废。
@@ -126,6 +130,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
    *  `session.cancelJump()` 按滚动锚点重记位置，那里没有翻页视口可读。 */
   const takeOverReading = useCallback((): void => {
     setPagedFollowYielded(true)
+    listenFromClearRef.current?.()
     if (!isPagedRef.current) followControllerRef.current?.onUserIntent()
   }, [])
   /** 顶条（sticky）：它的高度就是滚动视口顶的固定遮挡，阅读位置一律按「条下方第一行」算。 */
@@ -200,6 +205,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   }, [startListeningAt])
   /** 选区起播的落点：document 监听只有阅读器一份（3 条，不随已载章数长），按段号 + 章身份归属。 */
   const listenFrom = useListenFromSelection(bodyRef)
+  listenFromClearRef.current = listenFrom.clear
   /** 顶条 pill：没有会话时起播——位置来源链归播放层，视图只交当前章兜底；本书正在听时就是
    *  继续/暂停，再按一次不该把位置重置回去。 */
   const onListenPill = (): void => {
@@ -458,7 +464,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   }, [session])
 
   const onPagedReportRatio = useCallback((ratio: number): void => {
-    session.reportPosition(currentChapter, ratio, false)
+    session.reportPosition(currentChapter, ratio)
   }, [session, currentChapter])
 
   const shownError = error ?? exportState.error
@@ -607,7 +613,8 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
             totalChapters={toc?.length ?? 0}
             chapterName={displayChapterTitle(toc?.[currentChapter]?.name, currentChapter, t)}
             content={currentChapterContent}
-            loading={loadingIdx !== null || toc === null}
+            loading={loadingIdx !== null}
+            tocReady={toc !== null}
             bookKey={bookKey}
             fontSize={prefs.fontSize}
             lineHeight={prefs.lineHeight}
@@ -617,7 +624,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
             listenParagraph={listen.chapterIndex === currentChapter ? listen.paragraphIndex : null}
             listenFollowing={listen.showing && !pagedFollowYielded}
             locateTick={pagedLocateTick}
-            keyboardBlocked={sceneState.surface !== null || sceneState.askShelf}
+            keyboardBlocked={sceneState.surface !== null || sceneState.askShelf || (listen.showing && ttsSettingsOpen)}
             onNavigate={onBodyNavigate}
             onChangeChapter={onPagedChangeChapter}
             onReportRatio={onPagedReportRatio}
@@ -709,7 +716,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
       {/* 听书条：**只在本会话是这本书时挂载**——它也是「从阅读位置起播」的闸门。 */}
       {listen.showing && (
         <TtsBar darkController={prefs.darkController} apiGet={deps.apiGet} pushError={deps.pushError}
-          onLocate={locateListen} rootRef={ttsBarRef} />
+          onLocate={locateListen} rootRef={ttsBarRef} onPanelOpenChange={setTtsSettingsOpen} />
       )}
     </div>
   )

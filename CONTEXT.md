@@ -286,6 +286,12 @@ _唯一实现_: `shared/wire.ts` 的 `ShelfProgress`；`client/reader-session.ts
 阅读器此刻看得见的位置：会话内存里的章 + 章内比例，以及从 DOM 几何量出的探针读数（章 + 段号）。它是**实时读数，不是落盘游标**：滚动 / 导航 / 存档恢复只修正它，提交时按 cause 决定写不写消费位置；听书起播从它换算起播段，换算不写盘。精确段落落位也读它，但走 `ReaderSession.reveal` 的段号 target，落点统一对齐到顶条下方的带顶（`ADR-0096`）。
 _唯一实现_: `client/reader-session.ts` 的 `position` / `commit` / `reveal` / `settleReveal`；`client/tts/reading-position.ts` 的 `ReadingProbe` / `readingPositionAt` / `setReadingProbe`；`client/progress.ts` 的 `estimateParagraphIndex`；`client/reader-paragraph.ts` 的 `paragraphSlotOf` / `listenParagraphElement`。 _Avoid_: 消费位置、视口位置、听书段号。
 
+**翻页阅读（paged reading）**:
+阅读器的整章多栏切页模式：窄屏单页、宽屏双页，点击 / 键盘 / 滚轮 / 触摸翻页，跨章落位与按页位写进度（`ADR-0101`）。正文一次进多栏轨道、不复制 DOM；章内锚点不精确落位。 _唯一实现_: `client/reader-pagination.ts` 的 `computeSpreadLayout` / `computePageCount` / `spreadForRatio` / `ratioForSpread` / `classifyClickZone` / `firstParagraphInSpread`；舞台 `client/views/BookStage.tsx`；会话 `client/reader-session.ts` 的 `setPaged` / `reportPosition` / `prefetchChapter` / `scrollToSavedPosition`；视图 `client/views/ReaderView.tsx` 的 `isPaged` / `takeOverReading`。 _Avoid_: 分页器、PDF / 固定版式阅读（不接）。
+
+**页位比例（page-position ratio）**:
+翻页模式写进 `progress.offsetRatio` 的章内进度：当前屏在整章多栏轨道中的位置比例；与滚动模式共用同一个字段，但口径是页位而非文本比例，切模式时只做近似换算。 _唯一实现_: `client/reader-pagination.ts` 的 `ratioForSpread` / `spreadForRatio`；`client/views/ReaderView.tsx` 的 `onPagedReportRatio`。 _Avoid_: 阅读位置、文本进度；共用 `offsetRatio` 时要先说清是哪一种口径。
+
 **阅读器几何（reader geometry）**:
 `ReaderPort` 的纯几何实现：从滚动容器、章块与哨兵读出锚点、视口偏移、目标偏移与当前节点；两套坐标系（内容原点 / 视口顶）只在这里换算。视图只交 ref 读数，会话只读 port。
 _唯一实现_: `client/reader-geometry.ts` 的 `createReaderGeometry` / `currentNodeOf`（底层坐标换算 `client/scrollport.ts`）。 _Avoid_: 阅读时序、滚动容器探测。

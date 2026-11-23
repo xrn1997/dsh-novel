@@ -99,7 +99,7 @@ $env:DSH_WEBVIEW='1'; pnpm vitest run tests/services/webview.test.ts
 $env:DSH_BROWSER_GATE='1'; pnpm vitest run tests/browser/epub-reader.test.ts
 # 同一枚闸下的几何门（不起服务、不读站点），按文件跑：
 #   city-sheet-layout / config-page-layout / tts-layout / tts-engine-edit-layout /
-#   shelf-nowplaying-layout / source-list-layout（都在 tests/browser/ 下）
+#   shelf-nowplaying-layout / source-list-layout / book-stage-layout（都在 tests/browser/ 下）
 # 读数与断言住对应测试文件；jsdom 量不到排版，所以几何必须进真浏览器。
 $env:DSH_BROWSER_GATE='1'; pnpm vitest run tests/browser/<文件>.test.tsx
 

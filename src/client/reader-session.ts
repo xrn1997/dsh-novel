@@ -230,10 +230,10 @@ export class ReaderSession {
   subscribe = (cb: () => void): (() => void) => this.store.subscribe(cb)
 
   /** 翻页模式显式上报页内进度：走同一条 commit / 防抖落盘管道，不造第二套存档通道。 */
-  reportPosition(chapterIndex: number, offsetRatio: number, immediate = false): void {
+  reportPosition(chapterIndex: number, offsetRatio: number): void {
     if (!this.inRange(chapterIndex)) return
     const ratio = Number.isFinite(offsetRatio) ? Math.max(0, Math.min(0.999999, offsetRatio)) : 0
-    this.commit(immediate ? 'jump' : 'scroll', chapterIndex, ratio)
+    this.commit('scroll', chapterIndex, ratio)
   }
 
   /** 翻页模式静默预取相邻章：复用单在途槽与失败闸，不触发跳章也不改当前位置。 */
@@ -244,14 +244,14 @@ export class ReaderSession {
     void this.load(index, 0, { prefetch: true })
   }
 
-  /** 视图在模式切换时同步：翻页模式清掉滚动落位现场；切回滚动由 `scrollToSavedPosition` 接手。 */
+  /** 视图在模式切换时同步：切入翻页清掉滚动落位现场；切回滚动清掉翻页期可能残留的滚动补偿，由 `scrollToSavedPosition` 接手。 */
   setPaged(paged: boolean): void {
     if (this.paged === paged) return
     this.paged = paged
+    this.pendingScrollFixes = []
     if (!paged) return
     this.pendingJumpNow = null
     this.pendingReveal = null
-    this.pendingScrollFixes = []
     this.holdViewport = false
     this.restoring = false
   }
@@ -423,7 +423,8 @@ export class ReaderSession {
       if (jump !== null && jump.index === index) this.pendingJumpNow = null
       // 段号落位与跳章同一失败半径：目标章没载进来，这一发就不再等（别留成挡住视口读数的死目标）。
       if (this.pendingReveal?.index === index) this.pendingReveal = null
-      if (this.position.chapterIndex === index) {
+      // 翻页模式没有滚动视口，载章失败只清在途槽，不拿旧锚点重记位置（ADR-0101）
+      if (!this.paged && this.position.chapterIndex === index) {
         // 视口 = 「读者实际在哪儿」的证据（与 handleViewportChange 同一读取口径）
         this.recalcAnchors()
         if (this.anchorsNow.length > 0) {
@@ -512,7 +513,7 @@ export class ReaderSession {
     for (const i of this.mountedSet) if (i < keepLo || i > hi) dropped.push(i)
     if (dropped.length === 0) return
     const behind = dropped.filter((i) => i < at)
-    if (behind.length > 0 && this.pendingJumpNow === null) {
+    if (!this.paged && behind.length > 0 && this.pendingJumpNow === null) {
       const anchors = this.port.measureAnchors()
       const heights = new Map(anchors.map((a) => [a.index, a.height]))
       const px = behind.reduce((sum, i) => sum + (heights.get(i) ?? 0), 0)
@@ -605,14 +606,8 @@ export class ReaderSession {
   reveal(target: ReaderRevealTarget, opts: { mode: RevealMode; write: boolean; bottomInset?: number }): void {
     if (this.tocNow !== null && !this.inRange(target.index)) return
     if (this.paged) {
-      // 翻页模式的段落定位归 BookStage；这里只处理跨章（回到章首）。同章锚点/段级返回
-      // 暂按当前位置不动，不能拿章首覆盖读者正在看的页。
-      this.pendingJumpNow = null
-      this.pendingReveal = null
-      if (target.index === this.position.chapterIndex) return
-      if (opts.write) this.commit('jump', target.index, 0)
-      else this.commit('restore', target.index, 0)
-      if (!this.mounted(target.index)) void this.load(target.index)
+      // 翻页模式的段落定位归 BookStage；这里只处理跨章（回到章首）。
+      this.pagedJumpTo(target.index, opts.write)
       return
     }
     // 定位/跟随是比目录跳章更晚的显式动作：旧导航目标作废，避免两套落位互相拉扯。
@@ -728,6 +723,16 @@ export class ReaderSession {
     return best?.id ?? below?.id ?? null
   }
 
+  /** 翻页模式跳章：不挂 `pendingJump` / `pendingReveal`，也没有滚动补偿；同章目标不动，
+   *  否则写 0 会把读者正在看的页在存档里改成章首。 */
+  private pagedJumpTo(index: number, write: boolean): void {
+    this.pendingJumpNow = null
+    this.pendingReveal = null
+    if (index === this.position.chapterIndex) return
+    this.commit(write ? 'jump' : 'restore', index, 0)
+    if (!this.mounted(index)) void this.load(index)
+  }
+
   private jumpTo(target: JumpTarget): void {
     // 越界目标什么都不做：写进去等于把「读到第 N 章」落成不存在的章，pendingJump 也再也等不到挂载。
     if (!this.inRange(target.index)) return
@@ -735,14 +740,9 @@ export class ReaderSession {
     this.pendingReveal = null                            // 导航是更晚的显式动作：挂起的听书落位作废
     this.backfillBudget = BACKFILL_MAX_CHAPTERS          // 跳章 = 新 episode
     if (this.paged) {
-      // 翻页模式没有滚动视口，也没有 binding.rendered 去结算 pendingJump：不挂滚动落位，
-      // 只写章号 + 载章；页内落位（起点/末页）由 BookStage 的 pendingLand 自己摆。
-      // 同章目标（目录里的章内锚点 / 重复点当前章）不动：BookStage 不会因同章重渲而翻页，
-      // 这里写 0 只会把正在看的页在存档里改成章首。
-      if (target.index === this.position.chapterIndex) return
-      this.pendingJumpNow = null
-      this.commit('jump', target.index, 0)
-      if (!this.mounted(target.index)) void this.load(target.index)
+      // 翻页模式没有滚动视口，也没有 binding.rendered 去结算 pendingJump：只写章号 + 载章；
+      // 页内落位（起点/末页）由 BookStage 的 pendingLand 自己摆。
+      this.pagedJumpTo(target.index, true)
       return
     }
     this.setPendingJump(target)
