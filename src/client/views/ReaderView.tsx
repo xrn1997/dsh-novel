@@ -109,6 +109,8 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   const [pagedLocateTick, setPagedLocateTick] = useState<number>(0)
   /** 翻页模式阅读位置探针：取当前可见页左上角第一段号，避免从任意页点「听书」退回章首第 0 段。 */
   const pagedProbeParagraphRef = useRef<(() => number) | null>(null)
+  /** 翻页模式下记录上一次听书章段，用于区分自然顺序推进（+1）与用户主动跳段/拖滑杆/切章。 */
+  const lastPagedListenRef = useRef<{ chapterIndex: number; paragraphIndex: number } | null>(null)
   /** 用户把视口带走：跟随即让位，挂起的自动定位与在途落位一并作废。 */
   const takeOverReading = useCallback((): void => {
     setPagedFollowYielded(true)
@@ -174,6 +176,8 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   /** 听书起播的唯一入口：位置由调用方给，引擎/音色/语速/音量一律不传（回退链归播放层）。
    *  位置来源恒为 `position`：`archive` 档是会话侧留给显式续听的入口（`ADR-0078`），视图不透传。 */
   const startListeningAt = useCallback((target?: { chapterIndex: number; paragraphIndex: number }): void => {
+    setPagedFollowYielded(false)
+    setPagedLocateTick((n) => n + 1)
     void startFromReadingPosition({
       sourceId, bookKey, title,
       ...(target === undefined ? { fallbackChapter: currentChapter } : { target }),
@@ -337,13 +341,17 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   }, [follow, session, sourceId, bookKey])
 
   /** DOM 侧接线：滚动模式下由 binding 接管监听、探针与帧拍点；翻页模式下由 BookStage 接管进度与
-   *  当前页段号探针，避免纵向 scrollTop=0 覆盖翻页页内比例或「听书」退回章首第 0 段。 */
+   *  当前页段号探针（被「听书 / 从阅读位置起播」消费时同时恢复自动跟翻）。 */
   useEffect(() => {
     if (isPaged) {
-      setReadingProbe(() => ({
-        chapterIndex: session.currentPosition.chapterIndex,
-        paragraphIndex: pagedProbeParagraphRef.current?.() ?? 0,
-      }))
+      setReadingProbe(() => {
+        setPagedFollowYielded(false)
+        setPagedLocateTick((n) => n + 1)
+        return {
+          chapterIndex: session.currentPosition.chapterIndex,
+          paragraphIndex: pagedProbeParagraphRef.current?.() ?? 0,
+        }
+      })
       return () => { setReadingProbe(null) }
     }
     binding.mount(session)
@@ -359,15 +367,34 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     }
   }, [isPaged, toc, currentChapter, currentChapterContent, session])
 
-  /** 翻页模式听书跨章同步：播到下一章或拖到别章时自动切章（即便该章已被预取在内存里也能立刻切换），
-   *  切章后由 BookStage 测量排版并精准翻到正在朗读的段落所在页。 */
+  /** 翻页模式听书进度同步：
+   *  - 用户在听书条上主动拖滑杆、点上一段/上一章/下一章（非自然 +1 推进）时自动恢复跟随并校准；
+   *  - 跟随态下若听书章号与当前章不同（含已预取的下一章），立即切章并由 BookStage 对齐高亮段落。 */
   useEffect(() => {
-    if (!isPaged || !listen.showing || pagedFollowYielded || toc === null) return
+    if (!isPaged || !listen.showing) {
+      lastPagedListenRef.current = null
+      return
+    }
+    const prev = lastPagedListenRef.current
+    lastPagedListenRef.current = { chapterIndex: listen.chapterIndex, paragraphIndex: listen.paragraphIndex }
+    const unchanged = prev !== null && prev.chapterIndex === listen.chapterIndex
+      && prev.paragraphIndex === listen.paragraphIndex
+    const naturalNextPara = prev !== null && prev.chapterIndex === listen.chapterIndex
+      && listen.paragraphIndex === prev.paragraphIndex + 1
+    const naturalNextChap = prev !== null && listen.chapterIndex === prev.chapterIndex + 1
+      && listen.paragraphIndex === 0
+    const explicitTtsSeek = prev !== null && !unchanged && !naturalNextPara && !naturalNextChap
+    const shouldFollow = !pagedFollowYielded || explicitTtsSeek
+    if (explicitTtsSeek) {
+      setPagedFollowYielded(false)
+      setPagedLocateTick((n) => n + 1)
+    }
+    if (!shouldFollow || toc === null) return
     if (listen.chapterIndex < 0 || listen.chapterIndex >= toc.length) return
     if (listen.chapterIndex !== currentChapter) {
       session.requestJump(listen.chapterIndex)
     }
-  }, [isPaged, listen.showing, listen.chapterIndex, pagedFollowYielded, toc, currentChapter, session])
+  }, [isPaged, listen.showing, listen.chapterIndex, listen.paragraphIndex, pagedFollowYielded, toc, currentChapter, session])
 
   /** 播放推进时自动跟随。滚动模式由 follow-controller 驱动 session.reveal；翻页模式由上方跨章 effect +
    *  BookStage 页内同步接管，避免在会话里留下挂起的纵向 pendingReveal。 */

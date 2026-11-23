@@ -77,10 +77,24 @@ function prefersReducedMotion(): boolean {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches
 }
 
-function elementStartLeftInTrack(el: Element, trackLeft: number): number {
-  const rects = typeof el.getClientRects === 'function' ? el.getClientRects() : null
-  const rect = rects !== null && rects.length > 0 ? rects[0] : undefined
-  return (rect ?? el.getBoundingClientRect()).left - trackLeft
+function elementLeftForParagraph(el: Element, trackLeft: number, listenParagraph: number): number {
+  const rects = typeof el.getClientRects === 'function' ? Array.from(el.getClientRects()) : []
+  const valid = rects.filter((r) => r.width > 0 || r.height > 0)
+  if (valid.length === 0) return el.getBoundingClientRect().left - trackLeft
+  const first = valid[0]
+  const last = valid[valid.length - 1]
+  if (first === undefined || last === undefined) return el.getBoundingClientRect().left - trackLeft
+  // 超长段落若跨页且被二次切分为多个播放单元，念到后续单元时自动切到后半段所在页
+  const raw = el.getAttribute('data-pidx')
+  const startPid = raw === null ? Number.NaN : Number(raw)
+  if (Number.isInteger(startPid) && listenParagraph > startPid && last.left > first.left + 8) {
+    return last.left - trackLeft
+  }
+  return first.left - trackLeft
+}
+
+function findLiveParagraphElement(track: HTMLElement, listenParagraph: number): Element | null {
+  return track.querySelector('.novel-tts-live') ?? listenParagraphElement(track, listenParagraph)
 }
 
 function paragraphSpansInTrack(track: HTMLElement): ParagraphHorizontalSpan[] {
@@ -266,9 +280,9 @@ export function BookStage(props: BookStageProps): ReactNode {
       } else if (land === 'start') {
         targetSpread = 0
       } else if (listenRef.current.following && listenRef.current.paragraph !== null) {
-        const el = listenParagraphElement(track, listenRef.current.paragraph)
+        const el = findLiveParagraphElement(track, listenRef.current.paragraph)
         if (el !== null) {
-          const leftInTrack = elementStartLeftInTrack(el, track.getBoundingClientRect().left)
+          const leftInTrack = elementLeftForParagraph(el, track.getBoundingClientRect().left, listenRef.current.paragraph)
           targetSpread = spreadForElementLeft(leftInTrack, layout.stride, nextCount.totalSpreads)
         } else {
           targetSpread = spreadForRatio(ratioRef.current, nextCount.totalSpreads)
@@ -288,15 +302,15 @@ export function BookStage(props: BookStageProps): ReactNode {
     return () => { cancelAnimationFrame(raf) }
   }, [content, chapterIndex, layout.columnWidth, layout.columnGap, layout.columnsPerSpread, layout.stride, pageHeight, fontSize, lineHeight])
 
-  // 听书自动跟读：当播放段落在本章内推进或点击「定位」时，自动同步翻页并回写阅读进度
+  // 听书自动跟读：当播放段落在本章内推进或点击「定位」时，直接对齐真实高亮块并同步进度
   useEffect(() => {
     if (!listenFollowing || listenParagraph === null || content === null) return
     if (measuredChapterRef.current !== chapterIndex) return
     const track = trackRef.current
     if (track === null) return
-    const el = listenParagraphElement(track, listenParagraph)
+    const el = findLiveParagraphElement(track, listenParagraph)
     if (el === null) return
-    const leftInTrack = elementStartLeftInTrack(el, track.getBoundingClientRect().left)
+    const leftInTrack = elementLeftForParagraph(el, track.getBoundingClientRect().left, listenParagraph)
     const targetSpread = spreadForElementLeft(leftInTrack, layout.stride, pageCount.totalSpreads)
     const curSpread = spreadIndexRef.current
     if (targetSpread === curSpread) return
@@ -425,6 +439,7 @@ export function BookStage(props: BookStageProps): ReactNode {
     height: pageHeight,
     fontSize,
     lineHeight,
+    columnCount: layout.columnsPerSpread,
     columnWidth: layout.columnWidth,
     columnGap: layout.columnGap,
     transform: `translate3d(${-spreadIndex * layout.stride}px, 0, 0)`,
