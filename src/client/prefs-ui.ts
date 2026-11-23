@@ -1,8 +1,18 @@
 import type { CopyKey } from './copy/index.js'
+import type { PageAnimation, ReadingMode } from './store.js'
 
 /** 阅读偏好档位常量：ReaderView 控制器与 Aa 面板的档位单点 */
 export const FONT_STEPS = [12, 14, 16, 18, 20, 22, 24, 26, 28]
 export const LINE_HEIGHTS = [1.4, 1.6, 1.8, 2.0]
+export const READING_MODES: Array<{ value: ReadingMode; labelKey: CopyKey }> = [
+  { value: 'scroll', labelKey: 'prefs.readingMode.scroll' },
+  { value: 'page', labelKey: 'prefs.readingMode.page' },
+]
+export const PAGE_ANIMATIONS: Array<{ value: PageAnimation; labelKey: CopyKey }> = [
+  { value: 'flip', labelKey: 'prefs.pageAnimation.flip' },
+  { value: 'slide', labelKey: 'prefs.pageAnimation.slide' },
+  { value: 'none', labelKey: 'prefs.pageAnimation.none' },
+]
 /** 正文列宽档位（em），窄到宽四档：要「一屏装更多字」的用户往 44 走，
  *  觉得行太长往 28 走；默认取标准档 36em。 */
 export const MEASURES: Array<{ em: number; labelKey: CopyKey }> = [

@@ -221,7 +221,26 @@ export class ReaderSession {
   /** 待定位目标（**不是渲染态**：只给诊断与测试回查落位时序）；视图不读它，看 `state.domRevision`。 */
   get pendingJump(): JumpTarget | null { return this.pendingJumpNow }
   get onShelf(): 'unknown' | 'on' | 'off' { return this.onShelfNow }
+  /** 当前阅读位置快照（翻页模式切入 / 同步进度用；只读副本，不暴露内部可变对象）。 */
+  get currentPosition(): { chapterIndex: number; offsetRatio: number } {
+    return { chapterIndex: this.position.chapterIndex, offsetRatio: this.position.offsetRatio }
+  }
   subscribe = (cb: () => void): (() => void) => this.store.subscribe(cb)
+
+  /** 翻页模式显式上报页内进度：走同一条 commit / 防抖落盘管道，不造第二套存档通道。 */
+  reportPosition(chapterIndex: number, offsetRatio: number, immediate = false): void {
+    if (!this.inRange(chapterIndex)) return
+    const ratio = Number.isFinite(offsetRatio) ? Math.max(0, Math.min(0.999999, offsetRatio)) : 0
+    this.commit(immediate ? 'jump' : 'scroll', chapterIndex, ratio)
+  }
+
+  /** 翻页模式静默预取相邻章：复用单在途槽与失败闸，不触发跳章也不改当前位置。 */
+  prefetchChapter(index: number): void {
+    if (this.restoring) return
+    if (this.inflight !== null) return
+    if (!this.inRange(index) || this.mounted(index) || index === this.failedIndex) return
+    void this.load(index)
+  }
 
   /** 进入一本书：目录 → 存档恢复；无存档/书架拉不到 → 从头。`relocation` = 「回阅读器」的
    *  章级站定（可选）：替代存档 progress 当恢复目标，恢复路径只站定不写，精确段由随后的

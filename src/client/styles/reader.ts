@@ -217,4 +217,457 @@ export const READER_CSS = `
 }
 /* 注释面板复用 ChapterBody 但不带听书语义（那里永不出现命中块）。 */
 .novel-notes .novel-tts-live::before { display: none; }
+/* ── 翻页阅读模式：厚实体书舞台、自适应单/双页摊开与三种翻页动效 ──────────── */
+/* height: 100% 贴合 .novel-main 实测高度（不硬写 100vh，避免宿主顶栏存在时出现多余纵滚）。
+   .novel-book-stage 设 z-index: 0 + isolation: isolate，把书页/书脊/翻页层全部关进独立层叠上下文，
+   确保底部 .novel-tts-bar（z-index: 1）及其听书设置弹层、目录抽屉、注释面板、Aa/导出面板永远压在书页之上。 */
+.novel-rdr.is-paged { height: 100%; min-height: 100%; overflow: hidden; }
+.novel-rdr.is-paged .novel-rdr-main { flex: 1 1 0; min-height: 0; overflow: visible; align-items: stretch; }
+.novel-book-stage {
+  position: relative; z-index: 0; isolation: isolate;
+  flex: 1 1 auto; min-width: 0; min-height: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: var(--novel-sp-4) var(--novel-sp-5);
+  background: radial-gradient(
+    ellipse at 50% 42%,
+    color-mix(in srgb, var(--novel-paper-ink) 2%, var(--novel-paper)) 0%,
+    color-mix(in srgb, var(--novel-paper-ink) 6%, var(--novel-paper)) 100%
+  );
+  color: var(--novel-paper-ink); overflow: hidden;
+}
+/* 外层硬壳书封：浅暖布纹质感的精装封面边 + 通透柔和的桌面投影，不发黑发脏。 */
+.novel-book-cover {
+  position: relative; display: flex; align-items: stretch; max-width: 100%;
+  border-radius: 12px;
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--novel-paper) 86%, #8c765a) 0%,
+    color-mix(in srgb, var(--novel-paper) 78%, #735f47) 100%
+  );
+  border: 1px solid color-mix(in srgb, var(--novel-paper-ink) 12%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .45),
+    0 18px 42px color-mix(in srgb, var(--novel-paper-ink) 11%, transparent),
+    0 6px 16px color-mix(in srgb, var(--novel-paper-ink) 7%, transparent),
+    0 2px 4px color-mix(in srgb, var(--novel-paper-ink) 5%, transparent);
+}
+.novel-book-cover.is-spread { padding: 7px 9px 15px; }
+.novel-book-cover.is-single { padding: 7px 9px 15px 6px; }
+/* 双页精装封面中央书脊衬底：清淡雅致，不抢正文视觉。 */
+.novel-book-binding-back {
+  position: absolute; top: 0; bottom: 0; left: 50%; width: 38px;
+  transform: translateX(-50%); pointer-events: none; z-index: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--novel-paper-ink) 6%, transparent) 35%,
+    color-mix(in srgb, var(--novel-paper-ink) 12%, transparent) 50%,
+    color-mix(in srgb, var(--novel-paper-ink) 6%, transparent) 65%,
+    transparent 100%
+  );
+}
+/* 左右厚实叠页书口：左右完全对称（各 18px、内缩 3px），确保书壳中缝与封面中线严格重合。 */
+.novel-book-edge { flex: none; position: relative; z-index: 1; }
+.novel-book-cover.is-spread .novel-book-edge-left {
+  width: 18px; margin: 2px -3px -7px 0;
+  border-radius: 8px 0 0 10px / 14px 0 0 18px;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--novel-paper-ink) 5%, transparent) 0%,
+      transparent 10%,
+      transparent 88%,
+      color-mix(in srgb, var(--novel-paper-ink) 8%, transparent) 100%
+    ),
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--novel-paper-ink) 11%, transparent) 0%,
+      color-mix(in srgb, var(--novel-paper-ink) 3%, transparent) 38%,
+      transparent 78%,
+      color-mix(in srgb, var(--novel-paper-ink) 6%, transparent) 100%
+    ),
+    repeating-linear-gradient(
+      90deg,
+      var(--novel-paper) 0px,
+      var(--novel-paper) 1.5px,
+      color-mix(in srgb, var(--novel-paper-ink) 8%, var(--novel-paper)) 1.5px,
+      color-mix(in srgb, var(--novel-paper-ink) 8%, var(--novel-paper)) 2.5px
+    );
+  box-shadow:
+    inset 1px 0 2px color-mix(in srgb, var(--novel-paper-ink) 7%, transparent),
+    -1px 2px 5px color-mix(in srgb, var(--novel-paper-ink) 7%, transparent);
+}
+/* 单页模式左侧为柔和立体圆弧书脊。 */
+.novel-book-cover.is-single .novel-book-edge-left {
+  width: 15px; margin: 1px 0 -7px 0; border-radius: 7px 0 0 7px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--novel-paper) 74%, #7a654c) 0%,
+    color-mix(in srgb, var(--novel-paper) 86%, #8c765a) 38%,
+    color-mix(in srgb, var(--novel-paper) 90%, #fff) 54%,
+    color-mix(in srgb, var(--novel-paper) 80%, #7a654c) 86%,
+    color-mix(in srgb, var(--novel-paper) 86%, #7a654c) 100%
+  );
+  box-shadow: inset -1px 0 3px color-mix(in srgb, var(--novel-paper-ink) 10%, transparent);
+}
+.novel-book-edge-right {
+  width: 18px; margin: 2px 0 -7px -3px;
+  border-radius: 0 8px 10px 0 / 0 14px 18px 0;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--novel-paper-ink) 5%, transparent) 0%,
+      transparent 10%,
+      transparent 88%,
+      color-mix(in srgb, var(--novel-paper-ink) 8%, transparent) 100%
+    ),
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--novel-paper-ink) 6%, transparent) 0%,
+      transparent 24%,
+      color-mix(in srgb, var(--novel-paper-ink) 3%, transparent) 66%,
+      color-mix(in srgb, var(--novel-paper-ink) 11%, transparent) 100%
+    ),
+    repeating-linear-gradient(
+      90deg,
+      var(--novel-paper) 0px,
+      var(--novel-paper) 1.5px,
+      color-mix(in srgb, var(--novel-paper-ink) 8%, var(--novel-paper)) 1.5px,
+      color-mix(in srgb, var(--novel-paper-ink) 8%, var(--novel-paper)) 2.5px
+    );
+  box-shadow:
+    inset -1px 0 2px color-mix(in srgb, var(--novel-paper-ink) 7%, transparent),
+    1px 2px 5px color-mix(in srgb, var(--novel-paper-ink) 7%, transparent);
+}
+/* 底部厚实弯曲叠页切面：挂在 .novel-book-shell 内与 .novel-book-arch 共用同一坐标系与圆角曲线，
+   从下方恰好托出 8px 弯曲叠纸厚度，中缝零错位、零断层。 */
+.novel-book-edge-bottom {
+  position: absolute; bottom: -8px; height: 22px; pointer-events: none; z-index: 0;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--novel-paper-ink) 4%, transparent) 0%,
+      transparent 48%,
+      color-mix(in srgb, var(--novel-paper-ink) 10%, transparent) 100%
+    ),
+    repeating-linear-gradient(
+      180deg,
+      var(--novel-paper) 0px,
+      var(--novel-paper) 1.5px,
+      color-mix(in srgb, var(--novel-paper-ink) 8%, var(--novel-paper)) 1.5px,
+      color-mix(in srgb, var(--novel-paper-ink) 8%, var(--novel-paper)) 2.5px
+    );
+  box-shadow: 0 2px 5px color-mix(in srgb, var(--novel-paper-ink) 9%, transparent);
+}
+.novel-book-edge-bottom.is-left {
+  left: 0; width: 50%;
+  border-radius: 0 0 26px 10px / 0 0 9px 5px;
+}
+.novel-book-edge-bottom.is-right {
+  right: 0; width: 50%;
+  border-radius: 0 0 10px 26px / 0 0 5px 9px;
+}
+.novel-book-edge-bottom.is-single {
+  left: 0; right: 0;
+  border-radius: 0 0 10px 3px / 0 0 6px 3px;
+}
+/* 书页本体：双页外壳本身透明，由左右两片拱形书页底衬（.novel-book-arch）拼出干净通透的 M 型弯曲书页轮廓。 */
+.novel-book-shell {
+  position: relative; z-index: 2; display: flex; flex-direction: column; align-items: center;
+  padding: var(--novel-sp-5) var(--novel-sp-6) var(--novel-sp-3);
+  max-width: 100%;
+}
+.novel-book-shell.is-spread,
+.novel-book-shell.is-single {
+  background: transparent;
+}
+/* 左右两片弯曲拱起的实体书页底衬：与下方 .novel-book-edge-bottom 使用完全一致的 50% 宽与拱弧半径。 */
+.novel-book-arch {
+  position: absolute; top: 0; bottom: 0; width: 50%; pointer-events: none; z-index: 1;
+}
+.novel-book-arch-single {
+  left: 0; width: 100%;
+  border-radius: 3px 10px 10px 3px / 3px 6px 6px 3px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--novel-paper-ink) 7%, var(--novel-paper)) 0%,
+    color-mix(in srgb, var(--novel-paper-ink) 2%, var(--novel-paper)) 5%,
+    color-mix(in srgb, var(--novel-paper) 94%, #fff) 16%,
+    var(--novel-paper) 82%,
+    color-mix(in srgb, var(--novel-paper-ink) 3%, var(--novel-paper)) 95%,
+    color-mix(in srgb, var(--novel-paper-ink) 6%, var(--novel-paper)) 100%
+  );
+  box-shadow:
+    inset 2px 0 6px color-mix(in srgb, var(--novel-paper-ink) 5%, transparent),
+    0 1px 4px color-mix(in srgb, var(--novel-paper-ink) 8%, transparent);
+}
+.novel-book-arch-left {
+  left: 0;
+  border-radius: 10px 26px 26px 10px / 5px 9px 9px 5px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--novel-paper-ink) 5%, var(--novel-paper)) 0%,
+    color-mix(in srgb, var(--novel-paper-ink) 1.5%, var(--novel-paper)) 5%,
+    var(--novel-paper) 16%,
+    color-mix(in srgb, var(--novel-paper) 92%, #fff) 46%,
+    var(--novel-paper) 78%,
+    color-mix(in srgb, var(--novel-paper-ink) 3%, var(--novel-paper)) 91%,
+    color-mix(in srgb, var(--novel-paper-ink) 8%, var(--novel-paper)) 97.5%,
+    color-mix(in srgb, var(--novel-paper-ink) 13%, var(--novel-paper)) 100%
+  );
+  box-shadow:
+    inset 0 1px 2px rgba(255, 255, 255, .65),
+    inset 2px 0 4px color-mix(in srgb, var(--novel-paper-ink) 4%, transparent),
+    0 1px 3px color-mix(in srgb, var(--novel-paper-ink) 8%, transparent);
+}
+.novel-book-arch-right {
+  right: 0;
+  border-radius: 26px 10px 10px 26px / 9px 5px 5px 9px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--novel-paper-ink) 14%, var(--novel-paper)) 0%,
+    color-mix(in srgb, var(--novel-paper-ink) 7%, var(--novel-paper)) 3%,
+    color-mix(in srgb, var(--novel-paper-ink) 2.5%, var(--novel-paper)) 11%,
+    color-mix(in srgb, var(--novel-paper) 90%, #fff) 34%,
+    var(--novel-paper) 68%,
+    color-mix(in srgb, var(--novel-paper-ink) 1.5%, var(--novel-paper)) 94%,
+    color-mix(in srgb, var(--novel-paper-ink) 5%, var(--novel-paper)) 100%
+  );
+  box-shadow:
+    inset 0 1px 2px rgba(255, 255, 255, .65),
+    inset -2px 0 4px color-mix(in srgb, var(--novel-paper-ink) 4%, transparent),
+    0 1px 3px color-mix(in srgb, var(--novel-paper-ink) 8%, transparent);
+}
+/* 双页中央立体书脊沟槽：极细柔和的凹陷折痕线 + 轻盈两侧柔影，不再叠成一条黑炭带。 */
+.novel-book-spine {
+  position: absolute; top: 4px; bottom: 4px; left: 50%; width: 48px;
+  transform: translateX(-50%); pointer-events: none; z-index: 3;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--novel-paper-ink) 2%, transparent) 28%,
+    color-mix(in srgb, var(--novel-paper-ink) 6%, transparent) 46%,
+    color-mix(in srgb, var(--novel-paper-ink) 14%, transparent) 50%,
+    color-mix(in srgb, var(--novel-paper-ink) 7%, transparent) 54%,
+    color-mix(in srgb, var(--novel-paper-ink) 2%, transparent) 72%,
+    transparent 100%
+  );
+}
+/* 裁剪视口：外层 viewport 保持 overflow:visible，让 3D 翻页抬起的书页顶底角自然舒展不被割开；
+   静态多栏正文只由内层 .novel-book-track-clip 裁剪。 */
+.novel-book-viewport {
+  position: relative; z-index: 2; overflow: visible;
+}
+.novel-book-track-clip {
+  position: relative; overflow: hidden;
+}
+/* 多栏轨道：浏览器原生排版切页，不截断半行字；纯 CSS 轻盈柔焦过渡。
+   跨章首帧先静止就位（无 is-settled），只在同章稳定后开启水平位移过渡，防止跨章从末页倒滑回第 0 页。 */
+.novel-book-track {
+  column-fill: auto; box-sizing: border-box;
+  will-change: transform, filter; color: var(--novel-paper-ink);
+  transition: none;
+}
+.novel-book-stage[data-page-anim="slide"] .novel-book-track.is-settled {
+  transition: transform 320ms cubic-bezier(.22, 1, .36, 1);
+}
+.novel-book-stage[data-page-anim="slide"] .novel-book-track.is-sliding {
+  animation: novel-slide-motion-blur 320ms cubic-bezier(.22, 1, .36, 1);
+}
+.novel-book-stage[data-page-anim="slide"] .novel-book-chapter.is-slide-enter-next {
+  animation: novel-slide-enter-next 320ms cubic-bezier(.22, 1, .36, 1);
+}
+.novel-book-stage[data-page-anim="slide"] .novel-book-chapter.is-slide-enter-prev {
+  animation: novel-slide-enter-prev 320ms cubic-bezier(.22, 1, .36, 1);
+}
+.novel-book-stage[data-page-anim="flip"] .novel-book-track.is-flipping {
+  animation: novel-flip-text-soften 560ms cubic-bezier(.32, .08, .22, 1);
+}
+.novel-book-stage[data-page-anim="none"] .novel-book-track,
+.novel-book-stage[data-page-anim="flip"] .novel-book-track {
+  transition: none;
+}
+.novel-book-track h2.novel-rdr-mark {
+  display: flex; align-items: center; gap: var(--novel-sp-3);
+  font-size: .72em; font-weight: 400; letter-spacing: .06em; opacity: .55;
+  margin: 0 0 var(--novel-sp-4); break-after: avoid;
+}
+.novel-book-track p { margin: .5em 0; text-indent: 2em; orphans: 2; widows: 2; }
+.novel-book-track h1, .novel-book-track h2, .novel-book-track h3,
+.novel-book-track h4, .novel-book-track h5, .novel-book-track h6 { break-after: avoid; }
+.novel-book-track .novel-fig {
+  max-height: calc(var(--novel-book-page-h, 520px) - 3em);
+  break-inside: avoid;
+}
+/* ── 纯 CSS 轻盈拟真翻页层（零正文 DOM 复制）：柔焦半透纸页轻掠 + 柔和扫影 ─── */
+.novel-book-flip-stage {
+  position: absolute; inset: 0; z-index: 4; pointer-events: none;
+  background: transparent; overflow: visible;
+  perspective: 2000px; perspective-origin: 50% 46%;
+}
+/* 单层轻盈纸页：带 backdrop-filter 柔和虚化与曲面纸光渐变，微带 skewY 模拟柔软纸角掠过。 */
+.novel-book-leaf {
+  position: absolute; top: 0; bottom: 0; z-index: 3; pointer-events: none;
+  border-radius: 2px;
+  backdrop-filter: blur(2.5px); -webkit-backdrop-filter: blur(2.5px);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--novel-paper-ink) 7%, transparent) 0%,
+    color-mix(in srgb, var(--novel-paper) 72%, transparent) 16%,
+    color-mix(in srgb, var(--novel-paper) 82%, #fff) 50%,
+    color-mix(in srgb, var(--novel-paper) 68%, transparent) 84%,
+    color-mix(in srgb, var(--novel-paper-ink) 9%, transparent) 100%
+  );
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--novel-paper-ink) 11%, transparent);
+  will-change: transform, opacity;
+}
+.novel-book-leaf.is-spread.dir-next {
+  left: 50%; width: 50%; transform-origin: left center;
+  animation: novel-leaf-spread-next 560ms cubic-bezier(.32, .08, .22, 1) forwards;
+}
+.novel-book-leaf.is-spread.dir-prev {
+  left: 0; width: 50%; transform-origin: right center;
+  animation: novel-leaf-spread-prev 560ms cubic-bezier(.32, .08, .22, 1) forwards;
+}
+.novel-book-leaf.is-single.dir-next {
+  left: 0; width: 100%; transform-origin: left center;
+  animation: novel-leaf-single-next 520ms cubic-bezier(.32, .08, .22, 1) forwards;
+}
+.novel-book-leaf.is-single.dir-prev {
+  left: 0; width: 100%; transform-origin: left center;
+  animation: novel-leaf-single-prev 520ms cubic-bezier(.32, .08, .22, 1) forwards;
+}
+/* 底层轻柔扫影：克制清透不发黑。 */
+.novel-book-cast-shadow {
+  position: absolute; inset: 0; z-index: 2; pointer-events: none;
+}
+.novel-book-cast-shadow.is-spread.dir-next {
+  background: linear-gradient(
+    90deg,
+    transparent 18%,
+    color-mix(in srgb, var(--novel-paper-ink) 6%, transparent) 48%,
+    color-mix(in srgb, var(--novel-paper-ink) 10%, transparent) 54%,
+    transparent 82%
+  );
+  animation: novel-cast-spread-next 560ms cubic-bezier(.32, .08, .22, 1) forwards;
+}
+.novel-book-cast-shadow.is-spread.dir-prev {
+  background: linear-gradient(
+    90deg,
+    transparent 18%,
+    color-mix(in srgb, var(--novel-paper-ink) 10%, transparent) 46%,
+    color-mix(in srgb, var(--novel-paper-ink) 6%, transparent) 52%,
+    transparent 82%
+  );
+  animation: novel-cast-spread-prev 560ms cubic-bezier(.32, .08, .22, 1) forwards;
+}
+.novel-book-cast-shadow.is-single.dir-next {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--novel-paper-ink) 10%, transparent) 0%,
+    color-mix(in srgb, var(--novel-paper-ink) 4%, transparent) 42%,
+    transparent 74%
+  );
+  animation: novel-cast-single-next 520ms cubic-bezier(.32, .08, .22, 1) forwards;
+}
+.novel-book-cast-shadow.is-single.dir-prev {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--novel-paper-ink) 10%, transparent) 0%,
+    color-mix(in srgb, var(--novel-paper-ink) 4%, transparent) 42%,
+    transparent 74%
+  );
+  animation: novel-cast-single-prev 520ms cubic-bezier(.32, .08, .22, 1) forwards;
+}
+@keyframes novel-leaf-spread-next {
+  0% { transform: rotateY(0deg) skewY(0deg); opacity: 0; }
+  14% { transform: rotateY(-20deg) skewY(-1.8deg); opacity: .82; }
+  50% { transform: rotateY(-92deg) skewY(-2.4deg); opacity: .88; }
+  84% { transform: rotateY(-164deg) skewY(-1.2deg); opacity: .55; }
+  100% { transform: rotateY(-180deg) skewY(0deg); opacity: 0; }
+}
+@keyframes novel-leaf-spread-prev {
+  0% { transform: rotateY(0deg) skewY(0deg); opacity: 0; }
+  14% { transform: rotateY(20deg) skewY(1.8deg); opacity: .82; }
+  50% { transform: rotateY(92deg) skewY(2.4deg); opacity: .88; }
+  84% { transform: rotateY(164deg) skewY(1.2deg); opacity: .55; }
+  100% { transform: rotateY(180deg) skewY(0deg); opacity: 0; }
+}
+@keyframes novel-leaf-single-next {
+  0% { transform: rotateY(0deg) skewY(0deg); opacity: .12; }
+  18% { transform: rotateY(-22deg) skewY(-1.6deg); opacity: .82; }
+  60% { transform: rotateY(-88deg) skewY(-2.2deg); opacity: .68; }
+  100% { transform: rotateY(-132deg) skewY(0deg); opacity: 0; }
+}
+@keyframes novel-leaf-single-prev {
+  0% { transform: rotateY(-128deg) skewY(0deg); opacity: 0; }
+  35% { transform: rotateY(-68deg) skewY(-2deg); opacity: .78; }
+  82% { transform: rotateY(-14deg) skewY(-1deg); opacity: .48; }
+  100% { transform: rotateY(0deg) skewY(0deg); opacity: 0; }
+}
+/* 翻页与平移期间的正文轻盈柔焦：不复制任何 DOM，丝滑省电。 */
+@keyframes novel-flip-text-soften {
+  0% { filter: blur(0px); opacity: 1; }
+  32% { filter: blur(2.2px); opacity: .84; }
+  68% { filter: blur(1px); opacity: .94; }
+  100% { filter: blur(0px); opacity: 1; }
+}
+@keyframes novel-slide-motion-blur {
+  0% { filter: blur(0px); opacity: 1; }
+  35% { filter: blur(1.8px); opacity: .92; }
+  100% { filter: blur(0px); opacity: 1; }
+}
+/* 跨章顺滑入场：往下一章从右往左滑入，往上一章从左往右滑入，避免从末页倒滚回 0px。 */
+@keyframes novel-slide-enter-next {
+  0% { transform: translate3d(72px, 0, 0); filter: blur(2px); opacity: .55; }
+  100% { transform: translate3d(0, 0, 0); filter: blur(0px); opacity: 1; }
+}
+@keyframes novel-slide-enter-prev {
+  0% { transform: translate3d(-72px, 0, 0); filter: blur(2px); opacity: .55; }
+  100% { transform: translate3d(0, 0, 0); filter: blur(0px); opacity: 1; }
+}
+@keyframes novel-cast-spread-next {
+  0% { opacity: 0; transform: translateX(18%); }
+  48% { opacity: .9; transform: translateX(0%); }
+  100% { opacity: 0; transform: translateX(-22%); }
+}
+@keyframes novel-cast-spread-prev {
+  0% { opacity: 0; transform: translateX(-18%); }
+  48% { opacity: .9; transform: translateX(0%); }
+  100% { opacity: 0; transform: translateX(22%); }
+}
+@keyframes novel-cast-single-next {
+  0% { opacity: .85; transform: translateX(18%); }
+  55% { opacity: .55; transform: translateX(-8%); }
+  100% { opacity: 0; transform: translateX(-32%); }
+}
+@keyframes novel-cast-single-prev {
+  0% { opacity: 0; transform: translateX(-28%); }
+  45% { opacity: .75; transform: translateX(-4%); }
+  100% { opacity: 0; transform: translateX(14%); }
+}
+/* 底部页码与翻页控制条：去掉横穿书脊的硬分割线，让书脊自上而下自然贯通 */
+.novel-book-footer {
+  position: relative; z-index: 2;
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  gap: var(--novel-sp-3); margin-top: var(--novel-sp-2); padding-top: var(--novel-sp-1);
+  font-size: var(--novel-fs-xs); color: color-mix(in srgb, var(--novel-paper-ink) 62%, transparent);
+}
+.novel-book-page-num { font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+.novel-book-nav {
+  font: inherit; color: inherit; background: none; border: none; border-radius: 999px;
+  padding: 2px var(--novel-sp-3); cursor: pointer;
+  transition: background var(--novel-dur) var(--novel-ease), color var(--novel-dur) var(--novel-ease);
+}
+.novel-book-nav:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--novel-paper-ink) 9%, transparent);
+  color: var(--novel-paper-ink);
+}
+.novel-book-nav:disabled { opacity: .32; cursor: default; }
+@media (prefers-reduced-motion: reduce) {
+  .novel-book-stage[data-page-anim="slide"] .novel-book-track,
+  .novel-book-stage[data-page-anim="slide"] .novel-book-chapter,
+  .novel-book-stage[data-page-anim="flip"] .novel-book-track { transition: none; animation: none; }
+  .novel-book-flip-stage { display: none; }
+}
 `
