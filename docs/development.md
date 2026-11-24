@@ -155,7 +155,7 @@ $env:DSH_PARSE_CENSUS='1'; pnpm vitest run tests/engine/parse-census.test.ts
 1. **一条门**：`pnpm gates`，退出码看过。发版与 CI 跑的是同一条门；别在这里改挑子集。
 2. **写发布记录**：在 `CHANGELOG.md` 追加这一版（新增 / 变更 / 修复 / 升级注意）；未发布改动不预写，历史版本不回溯改写。
 3. **版本前移**：`package.json` 的 `version` 提一笔 `chore: 发版 x.y.z`；提交并 push。
-4. **GitHub Release 资产（自动）**：给第 3 步的提交打 annotated tag `Vx.y.z` 并 push，触发 `.github/workflows/release.yml`——先校验 tag = `V` + `package.json` 版本，再跑 `pnpm gates` → `pnpm pack` → 断言 tarball 里的挂载产物齐全 → 挂到 Release。每个 Release 两份资产：版本名 `xrn1997-dsh-novel-<版本>.tgz` 与稳定别名 `dsh-novel.tgz`；tag 带 `-` 的按 prerelease 处理，不抢 `latest`。`workflow_dispatch` 只干跑。**tag 排在 npm 之前**：不可逆的一步放最后。
+4. **GitHub Release 资产（自动）**：给第 3 步的提交打 annotated tag `Vx.y.z` 并 push，触发 `.github/workflows/release.yml`——先校验 tag = `V` + `package.json` 版本，再跑 `pnpm gates` → `pnpm pack` → 断言 tarball 里的挂载产物齐全 → 生成 Release 正文 → 挂到 Release。**Release 正文**由 `scripts/release-notes.mjs` 从 `CHANGELOG.md` 该版条目与 `package.json` 事实投影（`--notes-file`，不用 `--generate-notes` 的 PR / commit 列表；`CHANGELOG.md` 里没有该版条目或条目为空就发不出来），`workflow_dispatch` 干跑也把正文随 artifact 传回预览。每个 Release 两份资产：版本名 `xrn1997-dsh-novel-<版本>.tgz` 与稳定别名 `dsh-novel.tgz`；tag 带 `-` 的按 prerelease 处理，不抢 `latest`。**tag 排在 npm 之前**：不可逆的一步放最后。
 5. **`npm publish`**：`prepack` 会跑 `build`；`files` 是**精确清单**——构建每新多出一个要发布的产物，就要同时加进 `files`。
 6. **README 徽章与实测名单**：徽章读 npm `latest` 清单，发版后现查；实测名单按当次真机代次更新。
 

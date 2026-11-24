@@ -21,7 +21,7 @@
 | 决策记录 | `docs/adr/` | 一个决定的 why、边界、被否方案、后果 | 当前架构复述、计划、验收清单 | 是（why） |
 | Agent 技能配置 | `docs/agents/*` | issue、标签、领域文档的 agent 约定 | 本仓产品事实源 | 否（技能约定） |
 | 读数 | `tests/legado-coverage/matrix.ts` 的行 `note` 与代码注释 | 可复核的读数与局部口径 | 散文论证、用户可见事实、取证过程与时间线（见本文 §3 第 14 条） | 是（读数） |
-| 真链路审计脚本 | `scripts/` | 被 `docs/development.md` 门章节点名的真链路审计命令（如 `tts-live.mjs`） | 过程采样、一次性脚本（留本机） | 否（命令口径住 `docs/development.md`） |
+| 工程与审计脚本 | `scripts/` | 被 `docs/development.md` 点名的真链路审计与发版辅助脚本（如 `tts-live.mjs`、`release-notes.mjs`） | 过程采样、一次性脚本（留本机） | 否（命令与发布口径住 `docs/development.md`） |
 | 活跃工单 | GitHub Issues | 进行中的任务与验收 | 长期事实、裁决 | 否 |
 | 过程工件 | 本机 `.superpowers/`、`.task-scratch/`、`.worktrees/` | 任务简报、报告、审查草稿、一次性采样脚本、隔离工作区 | 入库、作为事实源 | 否 |
 
@@ -31,7 +31,7 @@
 
 - 每次会话看不到就会做错 → `AGENTS.md`；用户装、用、数据在哪 → `README.md`；词义与唯一实现 → `CONTEXT.md`；当前结构与归属 → `docs/architecture.md`；界面现行状态 → `docs/ui-spec.md`。
 - 怎么构建、怎么验、怎么发版、环境坑 → `docs/development.md`；提交、PR/Issue 与发版边界 → `CONTRIBUTING.md`；每个版本改了什么 → `CHANGELOG.md`；为什么这么定 → `docs/adr/`。
-- 真机读数 → 读数的家（见本文 §1）；局部口径的为什么 → 实现它的代码注释；真链路审计门的命令脚本 → `scripts/`（前提是 `docs/development.md` 的门章节点名它）。
+- 真机读数 → 读数的家（见本文 §1）；局部口径的为什么 → 实现它的代码注释；真链路审计与发版辅助脚本 → `scripts/`（前提是 `docs/development.md` 点名它）。
 - 进行中的计划、调研、评审 → GitHub Issues 或本机 `.superpowers/`；完成后把长期成立的部分提炼进 ADR、architecture 或 ui-spec，其余不落库。
 - 拿不准时按「读者在什么场景会打开它」选层。
 
