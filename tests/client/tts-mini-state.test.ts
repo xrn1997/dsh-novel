@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   CAPSULE_SIZE, DEFAULT_MINI_BAR, DEFAULT_MINI_BAR_SIZE, clampMiniBarIntoReachableArea,
+  createMiniBarController,
   deriveMiniBarFlush, deriveMiniBarSide, followFlushEdgesOnResize, frameFromDrag, frameTopInsetOf,
   miniBarCenterOf, miniBarLayout, miniBarPopoverFlip, miniBarPopoverRoom, miniBarStore, parseMiniBarState,
   persistMiniBarState, resetMiniBarPosition, resetMiniBarSize, resolveFormSize, resolvedMiniBarSize,
@@ -222,8 +223,8 @@ describe('布局读数：缺省轴解析、一次给全的落位样式、弹层�
   })
 
   it('miniBarPopoverRoom：余量跟着方向走，是弹层 max-height 的上界（已扣视口留白 8px）', () => {
-    // 上方展开：余量 = 块顶 − 间距（700 − 100 − 6）
-    expect(miniBarPopoverRoom({ cx: 864, cy: 700, w: null, h: null, collapsed: false }, VP, DEFAULT_MINI_BAR_SIZE)).toBe(586)
+    // 上方展开：块底贴到可达底（700 越界 → 夹到 668），余量 = 块顶 − 间距（568 − 6 − 视口留白 8）
+    expect(miniBarPopoverRoom({ cx: 864, cy: 700, w: null, h: null, collapsed: false }, VP, DEFAULT_MINI_BAR_SIZE)).toBe(554)
     // 翻到下方：余量 = 视口高 − 块底 − 间距（768 − 200 − 6）
     expect(miniBarPopoverRoom({ cx: 864, cy: 100, w: null, h: null, collapsed: false }, VP, DEFAULT_MINI_BAR_SIZE)).toBe(554)
     // 缺省居中：两侧相等，翻下方 → 取下方那一侧
@@ -416,5 +417,84 @@ describe('窗控带读数：可达性口径', () => {
     root.removeAttribute('data-fullscreen')
     root.style.removeProperty('--dsh-windows-titlebar-height')
     expect(frameTopInsetOf(root), '栏高认不出：读数失败只到这一格 = 0').toBe(0)
+  })
+
+  it('行内没有栏高时改读计算值（宿主把变量放进样式表）', () => {
+    const fake = {
+      hasAttribute: (name: string) => name === 'data-windows-titlebar',
+      style: { getPropertyValue: () => '' },
+      ownerDocument: {
+        defaultView: {
+          getComputedStyle: () => ({
+            getPropertyValue: (name: string) => (name === '--dsh-frame-chrome-top' ? '40px' : ''),
+          }),
+        },
+      },
+    }
+    expect(frameTopInsetOf(fake as unknown as HTMLElement)).toBe(40)
+  })
+
+  it('没有窗控栏标记时，即使计算值里有栏高也回 0（纯浏览器零回归）', () => {
+    const fake = {
+      hasAttribute: () => false,
+      style: { getPropertyValue: () => '' },
+      ownerDocument: {
+        defaultView: {
+          getComputedStyle: () => ({ getPropertyValue: () => '40px' }),
+        },
+      },
+    }
+    expect(frameTopInsetOf(fake as unknown as HTMLElement)).toBe(0)
+  })
+})
+
+describe('窗控带读数：落盘旧现场与晚出现的标记都要自愈', () => {
+  const chromeTop = VP_CHROME.chromeTopInset
+
+  it('读取（首帧布局）就把落进窗控带的旧坐标夹回可达区，不等 resize', () => {
+    const stale = { cx: 980, cy: 22, w: null, h: null, collapsed: true }
+    expect(miniBarCenterOf(stale, CAPSULE_SIZE, VP_CHROME)).toEqual({
+      x: VP_CHROME.width - CAPSULE_SIZE.width / 2,
+      y: chromeTop + CAPSULE_SIZE.height / 2,
+    })
+    expect(miniBarLayout(stale, VP_CHROME, CAPSULE_SIZE).style.top)
+      .toBe(`${chromeTop + CAPSULE_SIZE.height / 2}px`)
+  })
+
+  it('窗控带标记晚于首渲出现：根节点属性一变，控制器不等 resize 就更新安全顶', async () => {
+    document.documentElement.removeAttribute('data-windows-titlebar')
+    document.documentElement.removeAttribute('data-fullscreen')
+    document.documentElement.style.removeProperty('--dsh-windows-titlebar-height')
+    const controller = createMiniBarController()
+    const disconnect = controller.connect()
+    try {
+      expect(controller.snapshot().viewport.chromeTopInset).toBe(0)
+      document.documentElement.setAttribute('data-windows-titlebar', '')
+      document.documentElement.style.setProperty('--dsh-windows-titlebar-height', `${chromeTop}px`)
+      // 观察回调是微任务投递：一个宏任务界保证它排在断言之前，不拿固定毫秒当锚
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(controller.snapshot().viewport.chromeTopInset, '标记落位 = 重读安全顶').toBe(chromeTop)
+    } finally {
+      disconnect()
+      document.documentElement.removeAttribute('data-windows-titlebar')
+      document.documentElement.style.removeProperty('--dsh-windows-titlebar-height')
+    }
+  })
+
+  it('断开后观察器收线：标记再变不再重读，observe 与 cleanup 成对', async () => {
+    document.documentElement.removeAttribute('data-windows-titlebar')
+    document.documentElement.style.removeProperty('--dsh-windows-titlebar-height')
+    const controller = createMiniBarController()
+    const disconnect = controller.connect()
+    disconnect()
+    try {
+      document.documentElement.setAttribute('data-windows-titlebar', '')
+      document.documentElement.style.setProperty('--dsh-windows-titlebar-height', `${chromeTop}px`)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(controller.snapshot().viewport.chromeTopInset, '已断开的控制器不再订阅窗口读数').toBe(0)
+    } finally {
+      document.documentElement.removeAttribute('data-windows-titlebar')
+      document.documentElement.style.removeProperty('--dsh-windows-titlebar-height')
+    }
   })
 })

@@ -344,16 +344,19 @@ function clampTo(value: number, { low, high }: AxisEdges): number {
 }
 
 /**
- * 缺省轴解析的唯一住址：横向缺省贴右缘，纵向缺省**可达区**中心，落过位的轴原样给。
+ * 缺省轴解析的唯一住址：横向缺省贴右缘，纵向缺省**可达区**中心，落过位的轴也夹回可达区。
  * 拖动起手、键盘移动、吸附、夹取、落位样式与弹层翻转都从这里取实际中心。
+ *
+ * 读取即夹取：可达性是硬约束，不是只在写入时守一次的偏好——落盘里若存着落进宿主窗控带的旧现场，
+ * 首帧布局读到这里就会被捞回可达区，不必等一次 resize 或一次换形态（`ADR-0100`）。
  */
 export function miniBarCenterOf(state: MiniBarState, size: Size, view: Viewport): Center {
   const x = axisX(view)
   const y = axisY(view)
-  return {
+  return clampCenter({
     x: state.cx ?? x.start + x.extent - size.width / 2,
     y: state.cy ?? y.start + y.extent / 2,
-  }
+  }, size, view)
 }
 
 function clampCenter(center: Center, size: Size, view: Viewport): Center {
@@ -463,8 +466,18 @@ function hostWindow(): Window | null {
  */
 export function frameTopInsetOf(element: HTMLElement | null): number {
   if (element === null || !element.hasAttribute('data-windows-titlebar') || element.hasAttribute('data-fullscreen')) return 0
-  const height = Number.parseFloat(element.style.getPropertyValue('--dsh-windows-titlebar-height'))
-  return Number.isFinite(height) ? height : 0
+  // 栏高先读根节点的行内样式，命中即用；行内读不到再按计算值取同一族变量（`--dsh-frame-chrome-top` 优先）。
+  // 读不到仍按 0——读数失败的半径只到这一格，不猜一个栏高。
+  const inline = Number.parseFloat(element.style.getPropertyValue('--dsh-windows-titlebar-height'))
+  if (Number.isFinite(inline)) return clampTopInset(inline)
+  const computed = element.ownerDocument.defaultView?.getComputedStyle(element) ?? null
+  if (computed !== null) {
+    for (const name of ['--dsh-frame-chrome-top', '--dsh-windows-titlebar-height']) {
+      const value = Number.parseFloat(computed.getPropertyValue(name))
+      if (Number.isFinite(value)) return clampTopInset(value)
+    }
+  }
+  return 0
 }
 
 /** `window.document` 按「可能缺席」读：无 DOM 宿主与两字段的窗口替身都没有它，缺席 = 无遮挡。 */
@@ -473,7 +486,7 @@ function hostDocument(win: Window | null): Document | null {
   return host?.document ?? null
 }
 
-/** `window` 尺寸与窗控带遮挡的唯一读处：控制器构造、重连与 resize 各读一次。 */
+/** `window` 尺寸与窗控带遮挡的唯一读处：控制器构造、重连、resize 与根节点窗控带标记变化各读一次。 */
 function readViewport(): Viewport {
   const win = hostWindow()
   return {
@@ -543,6 +556,7 @@ export function createMiniBarController(): MiniBarController {
   let viewport = readViewport()
   let root: HTMLElement | null = null
   let observer: ResizeObserver | null = null
+  let chromeObserver: MutationObserver | null = null
   let session: PointerSession | null = null
   let moved = false
   const listeners = new Set<() => void>()
@@ -676,6 +690,21 @@ export function createMiniBarController(): MiniBarController {
       // 挂载与换形态的重连先对一次窗口读数：窗控带若晚于首渲出现，重夹不该拿旧读数算。
       syncViewport()
       win.addEventListener('resize', syncViewport)
+      // 窗控带标记的出现 / 消失不保证伴随 resize（桌面启动时序里标记常晚于首读落位）；
+      // 只在尺寸事件上等读数，安全顶就会永远停在 0，吸附会把浮窗亲手送进带里（`ADR-0100`）。
+      // 观察根节点的窗控带标记属性，标记一变就重读一次窗口读数。
+      const frameRoot = hostDocument(win)?.documentElement ?? null
+      if (frameRoot !== null && typeof MutationObserver !== 'undefined') {
+        chromeObserver = new MutationObserver((records) => {
+          if (records.some((record) => record.attributeName === 'data-windows-titlebar'
+            || record.attributeName === 'data-fullscreen'
+            || record.attributeName === 'style')) syncViewport()
+        })
+        chromeObserver.observe(frameRoot, {
+          attributes: true,
+          attributeFilter: ['data-windows-titlebar', 'data-fullscreen', 'style'],
+        })
+      }
       // 观察对象是根节点：浮窗随会话出现 / 退场，根换了就要换观察者。
       if (root !== null && typeof ResizeObserver !== 'undefined') {
         observer = new ResizeObserver(() => {
@@ -691,6 +720,8 @@ export function createMiniBarController(): MiniBarController {
         win.removeEventListener('resize', syncViewport)
         observer?.disconnect()
         observer = null
+        chromeObserver?.disconnect()
+        chromeObserver = null
         detachPointer(win)
       }
     },
