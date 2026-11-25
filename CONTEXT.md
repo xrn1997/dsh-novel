@@ -333,6 +333,10 @@ _唯一实现_: `shared/chapter-text.ts` 的 `splitParagraphs` / `PLAY_UNIT_MAX`
 按书记住的听书细节：段号、引擎标识、音色、语速、音量。它服务精确续听与播放参数记忆；**章 + 章内比例**的共用消费位置住 `progress`：阅读器在场时归阅读会话，播放层只写听书细节；不在场时两笔都写（`ADR-0093`）。
 _唯一实现_: `shared/wire.ts` 的 `ListenState`；写路径 `services/reading.ts` 的 `shelfSaveListen` → `services/shelf.ts` 的 `Shelf.updateListen`。 _Avoid_: 阅读进度、播放队列。
 
+**听书缺省（TTS defaults）**:
+回退链第三环的四格活动缺省（引擎标识 / 语速 / 音量 / 预取段数）的生效值。来源链一条、链序即优先级：宿主同步配置的 live ref > 设置面快照 > `shared/wire.ts` 的 `TTS_DEFAULTS`（终端地板、不是来源）；每格独立取链上第一个读得出的，读时求值——谁赢由链序声明，与到达 / 刷新顺序无关。判读（空白引擎 id、非有限数、非整数或负数预取 = 读不出）全仓一份；一格读不出只落那一格。live ref 逐格接管：某格不是合法 ref 就那一格缺席，出现型晚到下一读即见。
+_唯一实现_: `client/tts/tts-defaults.ts` 的 `createTtsDefaults`（判读 `READABLE` 同住）；宿主名字表与两个 adapter `client/tts/tts-defaults-host.ts`。 _Avoid_: 取值链（那是规则链）、缺省 merge、活动缺省袋、默认值。
+
 **起播位置（start position）**:
 「从阅读位置起播」解析出的章 + 段号。来源链只有一条：显式 target（选区）→ 实时阅读探针 → 当前章（活动会话的章或阅读器给的兜底章）→ 书架 `progress`；书架比例只在同章时用于段号估算。解析结果交给同一条取数与起播管线。
 _唯一实现_: `client/tts/listen-session.ts` 的 `startFromReadingPosition` 与 `startSession`。 _Avoid_: 续听位置、起播点、从存档续听。

@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { createApiHandler } from './api/dispatch.js'
+import { ApiError, writeError } from './api/wire.js'
 import { resolveConfig, type NovelConfig } from './config.js'
 import { acquireRejectionGuard } from './engine/rejection-guard.js'
 import type { JobHost } from './services/job-holder.js'
@@ -19,7 +20,24 @@ export { Config, type NovelConfig, type ResolvedConfig } from './config.js'
  *  不能 extends Context——dsh-tools 已对 tools 做更宽增强，会冲突。`jobs` 只镜像 `start` 与 `attachController`；
  *  `start` 的 spec 形状归 `services/job-holder.ts` 的 `JobHostSpec`。kind 一律非空、带 `novel-` 前缀。
  */
-interface WebServerLike { register(route: { kind: 'prefix'; path: string; handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void> }): () => void }
+/** 宿主准入面的窄镜像（`ADR-0020`）：`ctx.connection.admit` 把「这次请求带着谁的凭据」翻成对端身份。
+ *  两条宿主线都有这扇门；缺席只说明这套组合没挂准入面，不说明调用者可信。返回值按 `unknown` 收——
+ *  它是宿主的事，形状是 `PeerAdmission` 的两态（`{ peer }` / `{ rejection }`），由 `identityVerdict` 判。 */
+interface PeerLike {
+  readonly principal?: { readonly kind?: string | undefined } | undefined
+}
+interface ConnectionLike {
+  admit(request: { headers: IncomingMessage['headers'] }): unknown
+}
+/** 路由声明窄镜像：`auth` 只对懂它的宿主有意义（身份判据在本仓，见 `identityVerdict`），老宿主按未知键忽略。 */
+interface WebServerLike {
+  register(route: {
+    kind: 'prefix'
+    path: string
+    auth?: 'anonymous' | 'required'
+    handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>
+  }): () => void
+}
 interface ToolsRuntimeLike { register(tool: unknown): () => void }
 interface JobsRuntimeLike extends JobHost {
   /** 准入闸：`start` 要求有已挂载 controller 服务该 owner；非 scoped 上下文挂的 controller 进 global layer，
@@ -67,6 +85,47 @@ function readVolatilePaths(payload: unknown): { text: string; proxyUrl: boolean 
   } catch {
     return { text: '(不可读的变更路径)', proxyUrl: false }
   }
+}
+
+/** 身份门三态（`ADR-0103`）：`unavailable` 是故意不猜的第三态——准入面在却判不出来，宁可拒也不放行。 */
+type IdentityVerdict = 'allow' | 'deny' | 'unavailable'
+
+/**
+ * `/novel-api` 的身份判据：带凭据的请求只放行宿主 owner；没有凭据 / 凭据无效按本机调用放行，
+ * 来源判据仍归 `api/wire.ts` 的同源 fence（README 承诺的 curl 与健康检查由它兑现）。
+ * 准入面缺席（老宿主，或没挂 Connection 的自组组合）时只留 fence，不猜身份。
+ */
+function identityVerdict(connection: ConnectionLike | undefined, req: IncomingMessage): IdentityVerdict {
+  if (connection === undefined) return 'allow'
+  let raw: unknown
+  try {
+    raw = connection.admit(req)
+  } catch (error) {
+    // 判不出调用者就别当它是自己人：留痕并按 503 拒，不把准入面的故障降级成放行。
+    log.error('准入面校验失败，本次 /novel-api 请求已拒绝：', error)
+    return 'unavailable'
+  }
+  if (typeof raw === 'object' && raw !== null) {
+    const candidate = raw as { peer?: unknown; rejection?: unknown }
+    if (typeof candidate.peer === 'object' && candidate.peer !== null) {
+      const peer = candidate.peer as PeerLike
+      return peer.principal?.kind === 'owner' ? 'allow' : 'deny'
+    }
+    if (candidate.rejection !== undefined && candidate.rejection !== null) {
+      return 'allow'
+    }
+  }
+  log.error('准入面返回了未知形状，本次 /novel-api 请求已拒绝：', raw)
+  return 'unavailable'
+}
+
+/** 可选服务的每次用时重查（同听书引擎面）：`connection` 可能晚于本插件挂载，也可能中途卸装。 */
+function connectionOf(ctx: Context): ConnectionLike | undefined {
+  const read = (ctx as unknown as { get?: (name: string) => unknown }).get
+  if (typeof read !== 'function') return undefined
+  const service = read.call(ctx, 'connection')
+  if (typeof service !== 'object' || service === null) return undefined
+  return typeof (service as { admit?: unknown }).admit === 'function' ? service as ConnectionLike : undefined
 }
 
 /**
@@ -209,7 +268,20 @@ export function apply(ctx: Context, config?: NovelConfig): void {
     return c.webServer.register({
       kind: 'prefix',
       path: NOVEL_API_PREFIX,
-      handler: async (req: IncomingMessage, res: ServerResponse) => { await handler(req, res) },
+      // 显式 anonymous：身份判据住 identityVerdict，不让懂 auth 的宿主把「无凭据的本机调用」拦成 401——
+      // README 承诺的 curl 与健康检查在任何宿主线上都保持同一结果；来源判据仍归 createApiHandler 的 fence。
+      auth: 'anonymous',
+      handler: async (req: IncomingMessage, res: ServerResponse) => {
+        const verdict = identityVerdict(connectionOf(ctx), req)
+        if (verdict !== 'allow') {
+          res.setHeader('cache-control', 'no-store')
+          writeError(res, verdict === 'deny'
+            ? new ApiError('禁止访问 /novel-api：仅宿主拥有者可操作', 403, 'Forbidden')
+            : new ApiError('暂无法校验 /novel-api 调用者身份（宿主准入面不可用），本次请求已拒绝', 503, 'Unavailable'))
+          return
+        }
+        await handler(req, res)
+      },
     })
   }, 'dsh-novel: /novel-api routes')
 

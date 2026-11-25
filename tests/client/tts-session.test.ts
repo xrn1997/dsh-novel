@@ -4,7 +4,7 @@ import type { ListenState, SynthesisRequest } from '../../src/shared/wire.js'
 import {
   ListenSession, PARAMS_RESTART_DEBOUNCE_MS, TTS_MAX_CONSECUTIVE_FAILURES,
 } from '../../src/client/tts/listen-session.js'
-import type { Debounced, ListenPlatform } from '../../src/client/tts/listen-session.js'
+import type { Debounced, ListenPlatform, TtsDefaults } from '../../src/client/tts/listen-session.js'
 import { setReadingProbe } from '../../src/client/tts/reading-position.js'
 import type {
   BranchHost, BranchStartOutcome, ListenBranches, OutputHandlers, PlaybackBranch, SegmentJob,
@@ -218,6 +218,8 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     /** 挂起下一次「等平台语音表」，返回放行函数（模拟直出源起播在途的窗口）。 */
     holdVoices: () => (ready: boolean) => void
     setReaderPresent: (present: boolean) => void
+    /** 听书缺省喂值：合进平台 `defaults()` 读口的来源袋（读时求值，下一次取值即见）。 */
+    setTtsDefaults: (p: Partial<TtsDefaults>) => void
   }
 
   function makeHarness(): Harness {
@@ -241,6 +243,8 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     const fetchFailures = new Set<number>()
     let voiceHold: Promise<boolean> | null = null
     let readerPresent = false
+    /** 听书缺省来源袋：`defaults()` 每次现读（读时求值），袋里没有的格落 wire 缺省。 */
+    const ttsDefaults: Partial<TtsDefaults> = {}
     /** 源级闸门的平台读数：直出分支的 `ready()` 直接问它（真适配器的 `awaitDirectVoices` 等价物）。 */
     const awaitVoices = async (): Promise<boolean> => {
       const held = voiceHold
@@ -295,6 +299,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
       after,
       watchPageHide: () => () => { /* 假平台不挂宿主事件 */ },
       debounce: <A extends unknown[]>(fn: (...args: A) => void, ms: number): Debounced<A> => fakeDebounce(clock, fn, ms),
+      defaults: () => ({ ...TTS_DEFAULTS, ...ttsDefaults }),
     }
     return {
       session: new ListenSession(platform),
@@ -319,6 +324,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
         return release
       },
       setReaderPresent: (present) => { readerPresent = present },
+      setTtsDefaults: (p) => { Object.assign(ttsDefaults, p) },
     }
   }
 
@@ -1025,7 +1031,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
   it('连续推进每段都触发下段出声槽预载；主播放等回执时不抢槽覆盖待播段', async () => {
     const h = makeHarness()
     h.fixture.texts[0] = ['p0。', 'p1。', 'p2。', 'p3。']
-    h.session.setTtsDefaults({ prefetchParagraphs: 0 })
+    h.setTtsDefaults({ prefetchParagraphs: 0 })
     await start(h)
     await microtasks()
     expect(h.bytes.preloads).toEqual(['k:builtin:baidu:1::p1。'])
@@ -1068,7 +1074,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     const h = makeHarness()
     h.fixture.names = ['第一章', '第二章', '第三章']
     h.fixture.texts = [['a0。', 'a1。'], ['b0。', 'b1。', 'b2。'], ['c0。']]
-    h.session.setTtsDefaults({ prefetchParagraphs: 2 })
+    h.setTtsDefaults({ prefetchParagraphs: 2 })
     const releaseB1 = h.holdSynth('b1。')
     await start(h)
     await microtasks()
@@ -1100,7 +1106,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     const hJump = makeHarness()
     hJump.fixture.names = ['第一章', '第二章', '第三章']
     hJump.fixture.texts = [['a0。'], ['b0。', 'b1。'], ['c0。']]
-    hJump.session.setTtsDefaults({ prefetchParagraphs: 2 })
+    hJump.setTtsDefaults({ prefetchParagraphs: 2 })
     const releaseJumpB0 = hJump.holdSynth('b0。')
     await start(hJump)
     await microtasks()
@@ -1114,7 +1120,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     const h = makeHarness()
     h.fixture.names = ['第一章', '第二章']
     h.fixture.texts = [['a0。', 'a1。'], ['b0。', 'b1。']]
-    h.session.setTtsDefaults({ prefetchParagraphs: 2 })
+    h.setTtsDefaults({ prefetchParagraphs: 2 })
     await start(h)
     await microtasks(40)
     const prefetchedB0 = must(h.synthSignals.get('b0。'), 'b0 预取信号')
@@ -1139,13 +1145,13 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     const h = makeHarness()
     h.fixture.names = ['第一章', '第二章']
     h.fixture.texts = [['a0。', 'a1。'], ['b0。', 'b1。']]
-    h.session.setTtsDefaults({ prefetchParagraphs: 2 })
+    h.setTtsDefaults({ prefetchParagraphs: 2 })
     await start(h)
     await microtasks(40)
     const prefetchedB0 = must(h.synthSignals.get('b0。'), 'b0 预取信号')
     expect(prefetchedB0.aborted).toBe(false)
 
-    h.session.setTtsDefaults({ prefetchParagraphs: 0 })
+    h.setTtsDefaults({ prefetchParagraphs: 0 })
     must(h.bytes.starts[0], 'a0').handlers.done()
     await microtasks(40)
     expect(prefetchedB0.aborted, '0 档：已发起的下一章预取当场作废').toBe(true)
@@ -1159,7 +1165,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
   it('预取偶发失败不锁死且不在同段自旋：停留期间不重试，推进到下一段补预取成功', async () => {
     const h = makeHarness()
     h.fixture.texts[0] = ['p0。', 'p1。', 'p2。', 'p3。']
-    h.session.setTtsDefaults({ prefetchParagraphs: 0 })
+    h.setTtsDefaults({ prefetchParagraphs: 0 })
     h.failSynthOnce('p2。')
     await start(h)
     await microtasks(40)
@@ -1178,7 +1184,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
     const longText = (prefix: string): string => `${prefix}${'这是一段长度超过四十字的正常小说正文内容用于测试。'.repeat(2)}`
     const hLong = makeHarness()
     hLong.fixture.texts[0] = [longText('L0'), longText('L1'), longText('L2'), longText('L3'), longText('L4')]
-    hLong.session.setTtsDefaults({ prefetchParagraphs: 0 })
+    hLong.setTtsDefaults({ prefetchParagraphs: 0 })
     await start(hLong)
     await microtasks(40)
     expect(hLong.synthCalls.map((c) => c.text)).toEqual([
@@ -1189,7 +1195,7 @@ describe('ListenSession 实例：假平台 + 假输出', () => {
 
     const hShort = makeHarness()
     hShort.fixture.texts[0] = ['p0', 'p1', 'p2', 'p3', 'p4', 'p5']
-    hShort.session.setTtsDefaults({ prefetchParagraphs: 0 })
+    hShort.setTtsDefaults({ prefetchParagraphs: 0 })
     const r1 = hShort.holdSynth('p1')
     const r2 = hShort.holdSynth('p2')
     const r3 = hShort.holdSynth('p3')

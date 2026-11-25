@@ -10,6 +10,9 @@ import type {
 } from './output-contract.js'
 import { estimateParagraphIndex, paragraphRatio } from '../progress.js'
 import { readingProbeNow } from './reading-position.js'
+import type { TtsDefaults } from './tts-defaults.js'
+
+export type { TtsDefaults } from './tts-defaults.js'
 
 /**
  * 听书播放会话（字节型 + 浏览器直出型）：状态机与可变现场全在这里，外界只经 `ListenPlatform`
@@ -182,14 +185,6 @@ export interface StartFromReadingPositionInput {
   target?: { chapterIndex: number; paragraphIndex: number }
 }
 
-/** 回退链用的活动缺省：served 值经 `setTtsDefaults` 推进来，内容在 wire 的 `TTS_DEFAULTS`。 */
-export interface TtsDefaults {
-  engineId: string
-  rate: number
-  volume: number
-  prefetchParagraphs: number
-}
-
 // ── 平台缝（构造注入；会话代码不自建任何环境）────────────────────────────────
 
 /** 防抖件的形状（与 `client/util.ts` 的 `debounce` 一致）：生产平台直接用它，测试平台用
@@ -220,6 +215,9 @@ export interface ListenPlatform {
   /** 关页前 flush 位置，返回解除。没有宿主面时给一个空解除。 */
   watchPageHide(cb: () => void): () => void
   debounce<A extends unknown[]>(fn: (...args: A) => void, ms: number): Debounced<A>
+  /** 听书缺省生效值读口（读时求值）：链子住 `tts-defaults.ts`，会话只读不订阅——
+   *  谁赢由链子的来源顺序声明，会话不参与裁决。 */
+  defaults(): TtsDefaults
 }
 
 // ── 会话状态机 ───────────────────────────────────────────────────────────────
@@ -297,7 +295,6 @@ export class ListenSession {
   private readonly positionSave: Debounced<[]>
   /** 按新参数重取当前段的防抖（语速滑杆逐档触发时只发最后一发；暂停/停止/跳转都取消） */
   private readonly paramsRestart: Debounced<[]>
-  private defaults: TtsDefaults = { ...TTS_DEFAULTS }
   private pendingRelocation: PendingRelocation | null = null
   /** 章正文（段域）载入在途：`paragraphIndex` / `paragraphCount` 还是上一章的读数，跳段与滑杆照它走会念错章。
    *  它是协调事实（不是渲染读数），不进 store；与 `loading` 分开：本段合成在途时跳段是安全的。 */
@@ -358,15 +355,16 @@ export class ListenSession {
       ? 0
       : clampIndex(archive?.paragraphIndex ?? p.paragraphIndex ?? shelfParagraph, units.length - 1)
 
-    const engineId = p.engineId ?? stored?.engineId ?? this.defaults.engineId
+    const defaults = this.platform.defaults()
+    const engineId = p.engineId ?? stored?.engineId ?? defaults.engineId
     // 音色 id 只对存它的那个引擎有效：显式换了引擎又没给音色时，不把存档里的旧 id 带过去。
     const voice = p.voice !== undefined
       ? p.voice
       : (stored !== null && (p.engineId === undefined || p.engineId === stored.engineId)
           ? stored.voice ?? null
           : null)
-    const rate = p.rate ?? stored?.rate ?? this.defaults.rate
-    const volume = p.volume ?? stored?.volume ?? this.defaults.volume
+    const rate = p.rate ?? stored?.rate ?? defaults.rate
+    const volume = p.volume ?? stored?.volume ?? defaults.volume
     const mode = modeOf(engineId)
     const branch = this.branchOf(mode)
     // 源级闸门（直出型等语音表，字节型同步可过）：等不到才报「设备没有语音」；在停旧会话之前。
@@ -969,7 +967,7 @@ export class ListenSession {
     // 分支没有预取面：字节预取链到此为止（直出不出字节，合成请求会拿浏览器引擎 id 打空）。
     const st = this.state.get()
     if (!this.branchOf(st.mode).capabilities.prefetch) return
-    const count = this.defaults.prefetchParagraphs
+    const count = this.platform.defaults().prefetchParagraphs
     // 0 = 不预取下一章：已经发起的那一份也要当场作废，配置改成 0 不该等下一次换章才生效。
     if (count <= 0) {
       this.cancelNextChapter(run)
@@ -1203,24 +1201,20 @@ export class ListenSession {
     if (this.current === run) this.state.set({ timerEndAt: null, timerChoice: null })
   }
 
-  /** served 缺省（宿主设置面读到的有效值）推进来的地方；缺席时用 wire 的 `TTS_DEFAULTS`。 */
-  setTtsDefaults(p: Partial<TtsDefaults>): void {
-    if (p.engineId !== undefined) this.defaults.engineId = p.engineId
-    if (p.rate !== undefined) this.defaults.rate = p.rate
-    if (p.volume !== undefined) this.defaults.volume = p.volume
-    if (p.prefetchParagraphs !== undefined) this.defaults.prefetchParagraphs = p.prefetchParagraphs
-    if (!this.state.get().active) {
-      const mode = modeOf(this.defaults.engineId)
-      const capabilities = this.capabilitiesOf(mode)
-      this.state.set({
-        engineId: this.defaults.engineId,
-        rate: this.defaults.rate,
-        volume: this.defaults.volume,
-        mode,
-        segmentProgress: capabilities.segmentProgress,
-        voiceTable: capabilities.voiceTable,
-      })
-    }
+  /** 听书缺省生效值变化时的空闲投影（活跃时不打断播放）：engineId 变化换 mode 与能力面。
+   *  只管派生状态——取值与裁决归 `tts-defaults.ts` 的链子，这里不 merge、不持缺省袋。 */
+  applyIdleDefaults(d: TtsDefaults): void {
+    if (this.state.get().active) return
+    const mode = modeOf(d.engineId)
+    const capabilities = this.capabilitiesOf(mode)
+    this.state.set({
+      engineId: d.engineId,
+      rate: d.rate,
+      volume: d.volume,
+      mode,
+      segmentProgress: capabilities.segmentProgress,
+      voiceTable: capabilities.voiceTable,
+    })
   }
 
   // ── 从阅读位置起播 ──────────────────────────────────────────────────────────
@@ -1364,7 +1358,6 @@ export class ListenSession {
     this.current = null
     this.chapterLoading = false
     this.teardownOutputs()
-    this.defaults = { ...TTS_DEFAULTS }
     this.progress.set({ position: 0, duration: 0 })
     this.state.set(initialState(this.capabilitiesOf(modeOf(TTS_DEFAULTS.engineId))))
   }

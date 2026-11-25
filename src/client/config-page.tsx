@@ -1,6 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import type { VolatileConfigFieldName } from '../config.js'
 import { dirtyCountOf, useConfigDraft, type FieldState } from './config-draft.js'
 import { FIELDS, parseField, type FieldName, type FieldSpec } from './config-fields.js'
 import type { JsonValue, RemoteSettingsLike } from './config-settings.js'
@@ -15,8 +14,10 @@ import {
 import { GROUPS } from './config-groups.js'
 import { NovelStyles } from './styles.js'
 import { EngineManager } from './tts/EngineManager.js'
-import { setTtsDefaults } from './tts/player.js'
-import type { TtsDefaults } from './tts/player.js'
+
+/** 配置页读到生效值（初始 / 保存 / 恢复默认 / 冲突重读）时的回调：生效值由此跨 seam
+ *  （生产接设置面快照 adapter 的 `refresh`）。草稿不走这里——只有生效值过 seam。 */
+export type OnEffectiveValue = (value: Record<string, JsonValue>) => void
 
 
 /**
@@ -50,41 +51,6 @@ interface RemoteLike {
 interface SlotsLike {
   inject(name: string, fn: () => () => void): () => void
   register(options: Record<string, unknown>, component: unknown): () => void
-}
-
-/** 听书缺省在设置面里的名字表：值由配置缝的类型逼出来——`ttsDefaultEngine` 之类改名时这里编译不过，
- *  而不是让接入层静默读出一格 undefined（读不出就退回 wire 缺省，等于用户的设置被悄悄丢掉）。 */
-const TTS_DEFAULT_KEYS = {
-  engineId: 'ttsDefaultEngine',
-  rate: 'ttsDefaultRate',
-  volume: 'ttsDefaultVolume',
-  prefetchParagraphs: 'ttsPrefetchParagraphs',
-} as const satisfies Record<keyof TtsDefaults, VolatileConfigFieldName>
-
-/**
- * 设置面交回的**有效值**（用户覆盖叠加 schema 缺省）→ 播放层的回退链输入。
- * 只认类型对的那几格：缺席、null、空白引擎 id、非有限数都不写进结果，由播放层保持 wire 的
- * `TTS_DEFAULTS`——猜一个值等于把「读不出」冒充成「读到了」。
- */
-export function ttsDefaultsFromSettings(value: Record<string, unknown>): Partial<TtsDefaults> {
-  const out: Partial<TtsDefaults> = {}
-  const engine = value[TTS_DEFAULT_KEYS.engineId]
-  if (typeof engine === 'string' && engine.trim() !== '') out.engineId = engine
-  const rate = value[TTS_DEFAULT_KEYS.rate]
-  if (typeof rate === 'number' && Number.isFinite(rate)) out.rate = rate
-  const volume = value[TTS_DEFAULT_KEYS.volume]
-  if (typeof volume === 'number' && Number.isFinite(volume)) out.volume = volume
-  const prefetch = value[TTS_DEFAULT_KEYS.prefetchParagraphs]
-  if (typeof prefetch === 'number' && Number.isInteger(prefetch) && prefetch >= 0) {
-    out.prefetchParagraphs = prefetch
-  }
-  return out
-}
-
-/** 配置页每次读到有效值（初始 / 保存 / 恢复默认 / 冲突重读）都推进播放层：宿主设置面没有变更
- *  订阅，不推这一发，听书缺省就要等面板重载才生效。 */
-function pushEffectiveValues(value: Record<string, JsonValue>): void {
-  setTtsDefaults(ttsDefaultsFromSettings(value))
 }
 
 /** 一位小数足够分辨档位，多一位就是假精度；整数不带小数点（200 MB 不写成 200.0 MB）。 */
@@ -268,13 +234,15 @@ function Unavailable({ reason }: { reason?: string | undefined }) {
  *  · 恢复默认 = 单字段 `unset`（撤的是用户层覆盖，不是把出厂值抄回去）。
  * 宿主拒绝（值域/冲突/未挂载）时返回 `{ ok: false }`，页面保留草稿并显示它给的理由。
  */
-function NovelConfigCardBody({ remote }: { remote: RemoteSettingsLike }): ReactNode {
+function NovelConfigCardBody(
+  { remote, onEffectiveValue }: { remote: RemoteSettingsLike; onEffectiveValue: OnEffectiveValue },
+): ReactNode {
   const t = useCopy()
   const { state, edit, reset, save, discard } = useConfigDraft({
     ns: ENTRY_ID,
     remote,
     translate: t,
-    onEffectiveValue: pushEffectiveValues,
+    onEffectiveValue,
   })
 
   if (state.status === 'loading') {
@@ -563,20 +531,29 @@ export function NovelConfigPageView({
   )
 }
 
-/** 槽位入口：`t` 与远程设置面由注册时的 `inject` 递进来（两者都缺席时页面只报不可用）。 */
-export function NovelConfigCard({ t = zhTranslate, remote }: { t?: Translate; remote?: RemoteSettingsLike }): ReactNode {
-  if (remote === undefined) return <CopyProvider value={t}><Unavailable /></CopyProvider>
-  return <CopyProvider value={t}><NovelConfigCardBody remote={remote} /></CopyProvider>
+/** 槽位入口：`t`、远程设置面与生效值回调由注册时的 `inject` 递进来（`remote` 或 `onEffectiveValue` 缺席时页面报不可用）。 */
+export function NovelConfigCard(
+  { t = zhTranslate, remote, onEffectiveValue }: {
+    t?: Translate; remote?: RemoteSettingsLike; onEffectiveValue?: OnEffectiveValue
+  },
+): ReactNode {
+  if (remote === undefined || onEffectiveValue === undefined) {
+    return <CopyProvider value={t}><Unavailable /></CopyProvider>
+  }
+  return <CopyProvider value={t}><NovelConfigCardBody remote={remote} onEffectiveValue={onEffectiveValue} /></CopyProvider>
 }
 
-/** `t` 由浏览器半入口给；缺省 zhTranslate 让测试直渲与未接 locale 的宿主保持中文。 */
-export function registerConfigPage(ctx: Context, t: Translate = zhTranslate): void {
+/** `t` 由浏览器半入口给；缺省 zhTranslate 让测试直渲与未接 locale 的宿主保持中文。
+ *  `onEffectiveValue` 为必填回调（生产接设置面快照 adapter）；仅 `remote.settings` 缺席或无 `describe`/`mutate` 时按「不注册」处理。 */
+export function registerConfigPage(
+  ctx: Context, onEffectiveValue: OnEffectiveValue, t: Translate = zhTranslate,
+): void {
   const host = ctx as unknown as { remote?: RemoteLike; slots: SlotsLike }
   const remote = host.remote?.settings
   if (remote === undefined || typeof remote.describe !== 'function' || typeof remote.mutate !== 'function') return
   ctx.effect(() => host.slots.inject('plugins.bundle.config', () => host.slots.register({
     name: 'plugins.bundle.config',
     key: BUNDLE_NAME,
-    inject: () => ({ t, remote }),
+    inject: () => ({ t, remote, onEffectiveValue }),
   }, NovelConfigCard)), 'dsh-novel: config page')
 }

@@ -158,7 +158,7 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 
 ## HTTP API
 
-所有路由以 `/novel-api` 为前缀。信任判据四步：请求来自本机 loopback → `Host` 在本机名单内（`localhost` / `127.0.0.1` / `[::1]`，自己的别名走 `apiAllowHosts`）→ Origin 在场必须同源 → Referer 在场必须同源；Origin / Referer 缺席放行，那是给本机工具与 curl 的承诺。被 Host 名单挡住时 403 点名是哪个 Host、并指路 `apiAllowHosts`。这层判据也意味着**远程访问宿主时插件 API 不可用**：从另一台机器打开面板，浏览器半的请求会拿到 403（面板按请求失败提示），这是「只服务本机」的既定边界，不是可配置项。JSON 响应使用统一信封 `{ ok, value | error }`，错误附带 `code` 与可选的规则段级定位；`GET /export`、两条 SSE 流、`GET /local/resource` 与 `GET /tts/audio` 是流式 / 二进制响应，不套信封。路由身份（method + path）与值形状的代码真相在 `src/shared/wire.ts`——Node 半与浏览器半共用同一份定义，契约测试逐条把守。
+所有路由以 `/novel-api` 为前缀。信任判据四步：请求来自本机 loopback → `Host` 在本机名单内（`localhost` / `127.0.0.1` / `[::1]`，自己的别名走 `apiAllowHosts`）→ Origin 在场必须同源 → Referer 在场必须同源；Origin / Referer 缺席放行，那是给本机工具与 curl 的承诺。被 Host 名单挡住时 403 点名是哪个 Host、并指路 `apiAllowHosts`。这层判据也意味着**远程访问宿主时插件 API 不可用**：从另一台机器打开面板，浏览器半的请求会拿到 403（面板按请求失败提示），这是「只服务本机」的既定边界，不是可配置项。**身份门在来源判据之外**：请求带着宿主凭据时只放行 owner——他人共享的查看会话（非 owner）拿到 403；没有凭据的本机调用仍按上面四步放行，所以 curl 与健康检查的承诺不变；宿主没有可用的准入面时只留来源判据（`ADR-0103`）。JSON 响应使用统一信封 `{ ok, value | error }`，错误附带 `code` 与可选的规则段级定位；`GET /export`、两条 SSE 流、`GET /local/resource` 与 `GET /tts/audio` 是流式 / 二进制响应，不套信封。路由身份（method + path）与值形状的代码真相在 `src/shared/wire.ts`——Node 半与浏览器半共用同一份定义，契约测试逐条把守。
 
 | 面 | 路由 |
 | --- | --- |

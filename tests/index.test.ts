@@ -13,13 +13,24 @@ import { makeTempDir } from './temp-dir.js'
 
 /** 宿主面的窄镜像（只覆盖组合根取用的成员）：真形状由 cordis 的 `Context` 与三个 declare module
  *  增强持有，本仓不装那几个包——假面在**位置**上顶替它，成员形状在此声明一次。 */
-interface FakeRoute { kind: 'prefix'; path: string; handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void> }
+interface FakeRoute {
+  kind: 'prefix'
+  path: string
+  auth?: string | undefined
+  handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>
+}
+/** 宿主准入面（`ctx.connection.admit`）：返回值是本用例要摆的凭据身份，形状按 `PeerAdmission` 两态。
+ *  故意不写死成 peer：`rejection` 也是合法裁决，身份门必须两条都认。 */
+interface FakeConnection {
+  admit(request: { headers: IncomingMessage['headers']; url?: string }): unknown
+}
 interface FakeTool { name: string; execute(args: unknown, exec: never): Promise<unknown> }
 interface FakeLogger { info(...args: unknown[]): void; warn(...args: unknown[]): void; error(...args: unknown[]): void }
 interface FakeCtx {
   /** 缺成员的两条腿按可缺席建模：tests 里要故意拔掉它们验「响亮失败且不锁死 applied」 */
   logger?: ((name: string) => FakeLogger) | undefined
   on?: ((event: string, listener: (...args: unknown[]) => void) => () => boolean) | undefined
+  get?: ((name: string) => unknown) | undefined
   effect: (fn: () => () => void, label?: string) => void
   webServer: { register(route: FakeRoute): () => void }
   tools: { register(tool: FakeTool): () => void }
@@ -64,7 +75,7 @@ function jobOf(body: unknown): { phase?: unknown } | null {
 /** 装进组合根：cordis 的 `Context` 是宿主的完整面，假面按位置顶替（窄镜像口径，同 ADR-0020） */
 function mount(ctx: FakeCtx, config?: NovelConfig): void { apply(ctx as never, config) }
 
-function fakeCtx() {
+function fakeCtx(options: { connection?: FakeConnection } = {}) {
   const calls: Recorded[] = []
   const logs: Array<{ name: string; level: string; args: unknown[] }> = []
   /** 宿主日志服务面（官方 Context 成员，入口不再窄镜像它）：`ctx.logger(name)` 返回按级别的
@@ -81,6 +92,9 @@ function fakeCtx() {
   const handlers: Array<{ event: string; listener: (...args: unknown[]) => void }> = []
   const ctx: FakeCtx = {
     logger: namedLogger,
+    // 宿主服务读取口（cordis 的 `ctx.get`）：准入面按用时重查，`options` 由用例持有——用例中途接上
+    // 或摘掉 connection，就是在验「在场按凭据判」与「缺席只留 fence」两条腿。
+    get: (service: string) => (service === 'connection' ? options.connection : undefined),
     on: (event: string, listener: (...args: unknown[]) => void) => {
       const entry = { event, listener }
       handlers.push(entry)
@@ -187,7 +201,7 @@ describe('Cordis 插件入口', () => {
       const routes = calls.filter(isRoute)
       expect(routes).toHaveLength(1)
       const route = mustAt(routes, 0)
-      expect(route.route).toMatchObject({ kind: 'prefix', path: '/novel-api' })
+      expect(route.route).toMatchObject({ kind: 'prefix', path: '/novel-api', auth: 'anonymous' })
       expect(typeof route.route.handler).toBe('function')
       await waitFor(() => calls.filter((c) => c.kind === 'tool').length === 6)
       expect(calls.filter((c) => c.kind === 'tool')).toHaveLength(6)
@@ -536,6 +550,110 @@ describe('Cordis 插件入口', () => {
 
       expect(calls.filter(isJobStart).map((c) => c.route.kind))
         .toEqual(['novel-import', 'novel-probe', 'novel-search'])
+    } finally {
+      if (server !== null) {
+        const srv = server
+        await new Promise<void>((r) => { srv.close(() => r()) })
+      }
+      disposeAll()
+    }
+  })
+
+  it('/novel-api 身份门：无凭据与 owner 放行，非 owner 403，准入面故障 503', async () => {
+    const dir = await makeTempDir('novel-entry-identity-')
+    // options 由用例持有：准入面可以中途接上/摘掉，验「缺席只留 fence」与「在场按凭据判」两条腿。
+    const options: { connection?: FakeConnection } = {}
+    let admission: unknown = { rejection: 401 }
+    let broken = false
+    const seenRequests: Array<{ headers: IncomingMessage['headers']; url?: string }> = []
+    const connection: FakeConnection = {
+      admit: (request) => {
+        seenRequests.push(request)
+        if (broken) throw new Error('准入面坏了')
+        return admission
+      },
+    }
+    const { ctx, calls, logs, disposeAll } = fakeCtx(options)
+    let server: http.Server | null = null
+    try {
+      mount(ctx, { dataDir: dir })
+      await waitFor(() => calls.some((c) => c.kind === 'route'))
+      const route = must(calls.find(isRoute), '/novel-api 路由注册').route
+      // 声明面：本仓自己准入；宿主若替我们挡匿名请求，curl 与健康检查就不再是契约里的形状。
+      expect(route).toMatchObject({ kind: 'prefix', path: '/novel-api', auth: 'anonymous' })
+      const srv = http.createServer((req, res) => {
+        void Promise.resolve(route.handler(req, res)).catch(() => { /* handler 内部已兜底 */ })
+      })
+      server = srv
+      await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r))
+      const address = srv.address()
+      if (address === null || typeof address === 'string') throw new Error('测试服务器没有取到监听地址')
+      const url = `http://127.0.0.1:${address.port}/novel-api`
+
+      // 准入面缺席（老宿主 / 没挂 Connection 的组合）：只按来源 fence，健康检查照旧 200
+      expect((await fetch(url)).status).toBe(200)
+
+      options.connection = connection
+      // 请求头与路径必须完整透传进 admit（宿主可能同时看 cookie / authorization / url）
+      admission = { rejection: 401 }
+      expect((await fetch(`${url}/shelf?probe=1`, {
+        headers: { authorization: 'Bearer test-token', cookie: 'dsh=1' },
+      })).status).toBe(200)
+      expect(seenRequests.at(-1)?.headers.authorization).toBe('Bearer test-token')
+      expect(seenRequests.at(-1)?.headers.cookie).toBe('dsh=1')
+      expect(seenRequests.at(-1)?.url).toContain('/shelf?probe=1')
+
+      // 无凭据 / 凭据无效 / 占位 `{ peer: undefined, rejection }`：当成本机调用放行——来源判据仍是同源 fence 的活
+      admission = { rejection: 403 }
+      expect((await fetch(url)).status).toBe(200)
+      admission = { peer: undefined, rejection: 401 }
+      expect((await fetch(url)).status).toBe(200)
+
+      // 放行后仍要过同源 fence：跨源 Origin 一样拦成 403
+      expect((await fetch(url, { headers: { origin: 'https://evil.example' } })).status).toBe(403)
+
+      // 有凭据：只放 owner（owner 也受同源 fence 约束）
+      admission = { peer: { principal: { kind: 'owner' } } }
+      expect((await fetch(url)).status).toBe(200)
+      expect((await fetch(url, { headers: { origin: 'https://evil.example' } })).status).toBe(403)
+
+      admission = { peer: { principal: { kind: 'share-viewer' } } }
+      const denied = await fetch(url)
+      expect(denied.status).toBe(403)
+      expect(denied.headers.get('cache-control')).toBe('no-store')
+      const deniedBody = (await denied.json()) as { ok: boolean; error: { code: string; message: string } }
+      expect(deniedBody).toMatchObject({ ok: false, error: { code: 'Forbidden' } })
+      expect(deniedBody.error.message).toContain('拥有者')
+
+      // 有对端但读不出身份：不猜，照拒
+      admission = { peer: {} }
+      expect((await fetch(url)).status).toBe(403)
+
+      // 准入面返回未知形状（null / 空对象 / 占位 undefined / Promise）：全部 503 + no-store + error 留痕
+      for (const bad of [null, {}, { rejection: undefined }, Promise.resolve({ peer: { principal: { kind: 'owner' } } })]) {
+        const beforeErrors = logs.filter((entry) => entry.level === 'error').length
+        admission = bad
+        const res = await fetch(url)
+        expect(res.status).toBe(503)
+        expect(res.headers.get('cache-control')).toBe('no-store')
+        const body = (await res.json()) as { ok: boolean; error: { code: string } }
+        expect(body).toMatchObject({ ok: false, error: { code: 'Unavailable' } })
+        expect(logs.filter((entry) => entry.level === 'error').length).toBe(beforeErrors + 1)
+      }
+
+      // 准入面抛错：503 + no-store + error 留痕
+      const beforeThrowErrors = logs.filter((entry) => entry.level === 'error').length
+      broken = true
+      const unavailable = await fetch(url)
+      expect(unavailable.status).toBe(503)
+      expect(unavailable.headers.get('cache-control')).toBe('no-store')
+      const unavailableBody = (await unavailable.json()) as { ok: boolean; error: { code: string } }
+      expect(unavailableBody).toMatchObject({ ok: false, error: { code: 'Unavailable' } })
+      expect(logs.filter((entry) => entry.level === 'error').length).toBe(beforeThrowErrors + 1)
+
+      // 准入面中途卸装：回到仅同源 fence，本机请求恢复 200
+      delete options.connection
+      expect((await fetch(url)).status).toBe(200)
     } finally {
       if (server !== null) {
         const srv = server

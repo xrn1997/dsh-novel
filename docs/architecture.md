@@ -69,7 +69,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 
 - 槽位注册分两处：`src/client/index.tsx` 注册 `sidebar.panellist` 的面板行、`main` 同 id 同 key 的中央面板、`shell.overlay` 的全局状态层与听书迷你条（同一次 inject、两枚条目）；插件配置卡由 `config-page.tsx` 的 `registerConfigPage` 注册 `plugins.bundle.config`。**槽位只挂官方已声明的**；不注册 `conversation.view` 与 `settings.section`。
 - **宿主 DOM 不碰**：样式的作用域只有 `.novel-root` 与 `[data-novel-scope]` 两棵树，不按宿主私有 `data-*` 去藏或改宿主布局；面板与 Conversation 的互斥由 `main` 的 keyed 语义保证。门是 `tests/client/host-dom-guard.test.ts`。
-- **浏览器半没有 served 配置路由、也不需要 API base**：同源根相对 fetch，前缀由 wire 单点持有。运行时读数只有一处例外——听书缺省经宿主设置面读有效值（接入时一次首屏快照；配置页每次读到有效值也推进同一份映射），没有设置面 / 读失败 / 条目缺席都落回 `shared/wire.ts` 的 `TTS_DEFAULTS`。
+- **浏览器半没有 served 配置路由、也不需要 API base**：同源根相对 fetch，前缀由 wire 单点持有。运行时读数只有一处例外——听书缺省经来源链读时求值（`CONTEXT.md`「听书缺省」）：链序即优先级（宿主同步配置的 live ref > 设置面快照 > `shared/wire.ts` 的 `TTS_DEFAULTS`），每格独立取链上第一个读得出的；宿主那两条来源都是可选能力——同步配置逐格接管（缺格不牵连、晚出现下一读即见），设置面快照读一次首屏 + 配置页每次读到有效值补一发，缺席 / 读失败都落下一来源。
 - **可丢弃投影**：书架读取面与落架账住 `src/client/panel-shelf.ts` 的 `panelShelf`（`NovelView` 卸载时清空），搜索轮次是 `src/client/search-job.ts` 的挂载期状态，任务快照住 `src/client/jobs.ts` 的模块级 store；三者都以 Node 半为真相。
 - **模块级现场跨卸载存活**：现场语义住各自模块，订阅骨架住 `store.ts`，latest-wins 是各现场自持的 seq / 代际守卫；具体有哪些现场见 `docs/ui-spec.md` §1。
 - **客户端可见文案单点**：`src/client/copy/` 的命名空间字典，slot 入口经 `inject` 拿 `t`、子树经 `CopyProvider`；宿主 locale 服务可选读，缺席回退中文（`ADR-0038`）。
@@ -146,6 +146,8 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 | 聚合搜索的参与集 | `services/participation.ts` 的 `participates`（界面）、`exploreParticipates`（发现面）、`aiParticipates`（AI 工具面） | 源清单读写、AI 标记写口与呈现 |
 | 写动词的缺席语义（按 key 点的目标不存在：更新动词里是错误、删除动词里是幂等成功） | 更新路径：`services/errors.ts` 的 `BookNotOnShelfError`（`classify` → 400）与 `services/reading.ts` 的三个书架更新动词；删除路径：`services/reading.ts` 的 `removeSource` 与本地删的计数 | HTTP 状态与可行动文案（`api/dispatch.ts` 的 `shelfUpdate` / `NOT_ON_SHELF`）、幂等回执形状、探针 outcome |
 | 错误类目 → HTTP，与同源 fence 的四步判据（远端 → Host → Origin → Referer）及本机 Host 名单 | `services/errors.ts` + `api/wire.ts`；`api/wire.ts` 的 `fenceDenialOf` / `fenceAllowlist` / `LOOPBACK_HOSTNAMES`；追加别名 `config.ts` 的 `apiAllowHosts`；403 措辞 `dispatch.ts` 的 `fenceDenialMessage`（`ADR-0016`） | 路由自检错误、路由身份与 body 形状、错误 → 状态码的两分法、cookie 串解析 |
+| 调用者身份（谁可以调 `/novel-api`：带凭据只放 owner，无凭据按本机调用） | `src/index.ts` 的 `identityVerdict` / `connectionOf`（宿主 `ctx.connection.admit` 的窄镜像，`ADR-0103`） | 来源判据（上一行）、错误 → 状态码的两分法、路由身份与 body 形状 |
+| 听书缺省（四格生效值的来源裁决：链序 = 优先级、读时求值、判读单点、逐格失败半径） | `src/client/tts/tts-defaults.ts` 的 `createTtsDefaults`（判读 `READABLE` 同住，`ADR-0104`）；宿主名字表与两个来源 adapter `src/client/tts/tts-defaults-host.ts` | 播放层回退链的前两环（起播处的 `??` 链）、值域（schema / 播放层 clamp）、草稿（`config-draft`） |
 | cookie 串的 `k=v;` 解析（登录脚本产出与登录面板手工输入同一条语法） | `shared/cookies.ts` 的 `parseCookieString` | 登录态往哪落盘（`reading.ts` 的 `saveAuth` / `login`） |
 | 登录执行（run-login：源存在性、loginUrl 形态判别、脚本执行 → outcome 判别联合） | `services/reading.ts` 的 `login`（`LoginOutcome` 单点；`loginPlan` / `runLogin` 是门内私有构件） | 登录态落盘形状与应用、按钮动作、body 形状、outcome → 状态码与文案的翻译（`dispatch.ts` 的 `authRoute`） |
 | 日志前缀与级别出口 | `services/log.ts` 的 `log` / `setLogSink`（console + `ctx.logger` 双腿）；例外：`engine/rejection-guard.ts` 的 `consoleGuardSink` 自持前缀；未处理 rejection 分档与守卫生命周期同住（`ADR-0059`） | 日志往哪投 |

@@ -8,13 +8,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 /** jsdom 排版下该页最重的交互实测 ~16s（回车跳转那条），超时留一倍余量——不是掩盖变慢。 */
 const SLOW_PAGE = 30_000
 import { apply } from '../../src/client/index.js'
-import { ttsDefaultsFromSettings } from '../../src/client/config-page.js'
 import { enTranslate } from '../../src/client/copy/index.js'
 import { resetTtsPlayerForTests, ttsPlayer } from '../../src/client/tts/player.js'
 import { resetTransient, transientEntries } from '../../src/client/transient.js'
 import { BROWSER_TTS_ENGINE_ID, TTS_DEFAULTS } from '../../src/shared/wire.js'
 import type { Registration } from './fake-host.js'
-import { fakeCtx, fakeHost, fakeRemoteSettings, type FakeRemoteSettings } from './fake-host.js'
+import { fakeCtx, fakeHost, fakeRemoteSettings, fiberCleanupOf, type FakeRemoteSettings } from './fake-host.js'
 import { must } from '../support/fixture.js'
 
 /**
@@ -403,6 +402,55 @@ describe('英文渲染：配置页', { timeout: SLOW_PAGE }, () => {
   })
 })
 
+function makeSyncedConfig(initial: Record<string, unknown>) {
+  let current = { ...initial }
+  const listeners = new Map<string, Set<() => void>>()
+  const refs = new Map<string, {
+    get: () => unknown
+    getSnapshot: () => unknown
+    subscribe: (listener: () => void) => () => void
+  }>()
+  const refOf = (field: string) => {
+    let ref = refs.get(field)
+    if (ref === undefined) {
+      ref = {
+        get: () => current[field],
+        getSnapshot: () => current[field],
+        subscribe: (listener: () => void) => {
+          let set = listeners.get(field)
+          if (set === undefined) {
+            set = new Set()
+            listeners.set(field, set)
+          }
+          set.add(listener)
+          return () => { set.delete(listener) }
+        },
+      }
+      refs.set(field, ref)
+    }
+    return ref
+  }
+  const config = new Proxy({}, {
+    get: (_target, prop) => (typeof prop === 'string' ? refOf(prop) : undefined),
+  })
+  const update = (next: Record<string, unknown>): void => {
+    const prev = current
+    current = { ...next }
+    const changed = new Set([...Object.keys(prev), ...Object.keys(current)])
+    for (const key of changed) {
+      if (prev[key] !== current[key]) {
+        for (const listener of listeners.get(key) ?? []) listener()
+      }
+    }
+  }
+  const listenerCount = (): number => {
+    let total = 0
+    for (const set of listeners.values()) total += set.size
+    return total
+  }
+  return { config, update, listenerCount }
+}
+
 describe('接入层读听书缺省', { timeout: SLOW_PAGE }, () => {
   /** 只走接线这一发：`apply` 注入 `remote.settings` ⇒ describe 一次 ⇒ 播放层回退链换值。 */
   async function applyWithSettings(settings: FakeRemoteSettings): Promise<ReturnType<typeof fakeHost>> {
@@ -430,6 +478,63 @@ describe('接入层读听书缺省', { timeout: SLOW_PAGE }, () => {
     expect(h.registrations.some((r) => r.name === 'main')).toBe(true)
   })
 
+  it('同步配置 ref：逐格胜设置面快照，热更实时推进播放层且卸载后退订', async () => {
+    resetTtsPlayerForTests()
+    const settings = fakeRemoteSettings({ value: { ttsDefaultRate: 0.7 } })
+    const h = fakeHost({ remoteSettings: settings })
+    const ctx = fakeCtx(h)
+    const dispose = fiberCleanupOf(ctx)
+    const synced = makeSyncedConfig({
+      ttsDefaultEngine: BROWSER_TTS_ENGINE_ID,
+      ttsDefaultRate: 1.5,
+      ttsDefaultVolume: 0.4,
+      ttsPrefetchParagraphs: 6,
+    })
+    try {
+      apply(ctx as never, synced.config)
+      await waitFor(() => expect(settings.describeCalls, '设置面快照照旧读一发').toBeGreaterThan(0))
+      // 生效值逐格由链子裁决：live ref 在场的格胜过设置面快照的 0.7
+      expect(ttsPlayer.get()).toMatchObject({
+        engineId: BROWSER_TTS_ENGINE_ID, rate: 1.5, volume: 0.4, mode: 'direct',
+      })
+
+      synced.update({
+        ttsDefaultEngine: 'http:live',
+        ttsDefaultRate: 1.9,
+        ttsDefaultVolume: 0.9,
+        ttsPrefetchParagraphs: 3,
+      })
+      expect(ttsPlayer.get()).toMatchObject({
+        engineId: 'http:live', rate: 1.9, volume: 0.9, mode: 'bytes',
+      })
+    } finally {
+      dispose()
+    }
+    expect(synced.listenerCount(), '卸载后同步配置 ref 监听未退订').toBe(0)
+    const afterDispose = ttsPlayer.get().rate
+    synced.update({ ttsDefaultRate: 0.5 })
+    expect(ttsPlayer.get().rate, '卸载后外部再改同步配置不应再写播放层').toBe(afterDispose)
+  })
+
+  it('同步配置初值为空：回退 remote.settings.describe() 补首屏快照，后续同步热更仍生效', async () => {
+    resetTtsPlayerForTests()
+    const settings = fakeRemoteSettings({ value: { ttsDefaultRate: 1.3, ttsDefaultVolume: 0.5 } })
+    const h = fakeHost({ remoteSettings: settings })
+    const ctx = fakeCtx(h)
+    const dispose = fiberCleanupOf(ctx)
+    const synced = makeSyncedConfig({})
+    try {
+      apply(ctx as never, synced.config)
+      await waitFor(() => expect(settings.describeCalls).toBe(1))
+      await waitFor(() => expect(ttsPlayer.get()).toMatchObject({ rate: 1.3, volume: 0.5 }))
+
+      synced.update({ ttsDefaultRate: 2.1 })
+      expect(ttsPlayer.get().rate).toBe(2.1)
+    } finally {
+      dispose()
+    }
+  })
+
   it('配置页保存后的有效值也推进播放层：下一次起播不必等面板重载', async () => {
     resetTtsPlayerForTests()
     await mountConfigPage(fakeRemoteSettings({ value: { ttsDefaultRate: 1.6 } }))
@@ -439,23 +544,111 @@ describe('接入层读听书缺省', { timeout: SLOW_PAGE }, () => {
     // 保存回包带新的有效值：播放层当场拿到，不靠接入时那一发快照
     await waitFor(() => expect(ttsPlayer.get().rate).toBe(2), { timeout: 5_000 })
   })
-})
 
-describe('设置面读数 → 听书缺省的映射', () => {
-  it('四格都读得出：名字与播放层的字段一一对上', () => {
-    expect(ttsDefaultsFromSettings({
-      ttsDefaultEngine: 'http:mine', ttsDefaultRate: 1.4, ttsDefaultVolume: 0.3, ttsPrefetchParagraphs: 4,
-    })).toEqual({ engineId: 'http:mine', rate: 1.4, volume: 0.3, prefetchParagraphs: 4 })
+  it('半到场同步配置 + 配置页保存另一格 + live ref 热更：配置页保存的格不被盖回旧值', async () => {
+    resetTtsPlayerForTests()
+    const settings = fakeRemoteSettings({ value: { ttsDefaultEngine: TTS_DEFAULTS.engineId, ttsDefaultRate: 1.2 } })
+    const h = fakeHost({ remoteSettings: settings })
+    const ctx = fakeCtx(h)
+    const dispose = fiberCleanupOf(ctx)
+    // 只有 ttsDefaultEngine 到场为同步配置（半到场），rate 归设置面快照管
+    const engineControl = makeSyncedConfig({ ttsDefaultEngine: BROWSER_TTS_ENGINE_ID })
+    const partialSynced: Record<string, unknown> = {
+      ttsDefaultEngine: (engineControl.config as Record<string, unknown>).ttsDefaultEngine,
+      ttsDefaultRate: 'not-a-ref',
+    }
+    try {
+      apply(ctx as never, partialSynced)
+      const reg = registration(h)
+      const props = (reg.options.inject as () => Record<string, unknown>)()
+      render(createElement(reg.component as never, props))
+      await waitFor(() => expect(screen.queryByText('加载中…')).toBeNull())
+      expect(ttsPlayer.get()).toMatchObject({ engineId: BROWSER_TTS_ENGINE_ID, rate: 1.2 })
+
+      // 配置页保存默认语速为 1.9
+      fireEvent.change(screen.getByLabelText('默认语速'), { target: { value: '1.9' } })
+      fireEvent.click(screen.getByRole('button', { name: '保存' }))
+      await waitFor(() => expect(ttsPlayer.get().rate).toBe(1.9), { timeout: 5_000 })
+
+      // 同步配置 live ref 触发热更（换引擎）：刚保存的 rate 仍由设置面快照守住，不被盖回
+      engineControl.update({ ttsDefaultEngine: 'http:live' })
+      expect(ttsPlayer.get()).toMatchObject({ engineId: 'http:live', rate: 1.9, mode: 'bytes' })
+    } finally {
+      dispose()
+    }
   })
 
-  it('读不出的那一格不写：空白引擎 id、非有限数、负预取、类型错、缺席都算没读到', () => {
-    expect(ttsDefaultsFromSettings({})).toEqual({})
-    expect(ttsDefaultsFromSettings({
-      ttsDefaultEngine: '   ', ttsDefaultRate: Number.NaN, ttsDefaultVolume: 'loud', ttsPrefetchParagraphs: -1,
-    })).toEqual({})
-    expect(ttsDefaultsFromSettings({
-      ttsDefaultEngine: null, ttsDefaultRate: 2, ttsDefaultVolume: null, ttsPrefetchParagraphs: 2.5,
-    })).toEqual({ rate: 2 })
+  it('首屏 describe 迟到与卸载后返回：不回滚已保存的新值，卸载后不再写入', async () => {
+    resetTtsPlayerForTests()
+    const inner = fakeRemoteSettings({ value: { ttsDefaultRate: 1.1 } })
+    let releaseFirstDescribe = (): void => { throw new Error('首屏 describe 闸未就绪') }
+    let callIndex = 0
+    const gatedSettings: FakeRemoteSettings = {
+      get describeCalls() { return inner.describeCalls },
+      get mutateCalls() { return inner.mutateCalls },
+      describe: async () => {
+        callIndex += 1
+        const currentCall = callIndex
+        const res = await inner.describe()
+        // 第 1 发来自 pushSettingsSnapshot（首屏快照），挂起让配置页先读并保存
+        if (currentCall === 1) {
+          await new Promise<void>((resolve) => { releaseFirstDescribe = resolve })
+        }
+        return res
+      },
+      mutate: (ns, ops, revision) => inner.mutate(ns, ops, revision),
+    }
+
+    const h = fakeHost({ remoteSettings: gatedSettings })
+    const ctx = fakeCtx(h)
+    const dispose = fiberCleanupOf(ctx)
+    try {
+      apply(ctx as never)
+      const reg = registration(h)
+      const props = (reg.options.inject as () => Record<string, unknown>)()
+      render(createElement(reg.component as never, props))
+      await waitFor(() => expect(screen.queryByText('加载中…')).toBeNull())
+
+      fireEvent.change(screen.getByLabelText('默认语速'), { target: { value: '2.2' } })
+      fireEvent.click(screen.getByRole('button', { name: '保存' }))
+      await waitFor(() => expect(ttsPlayer.get().rate).toBe(2.2), { timeout: 5_000 })
+
+      // 迟到的首屏旧快照（1.1）现在才返回：已被新快照取代，不得把 2.2 盖回 1.1
+      releaseFirstDescribe()
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(ttsPlayer.get().rate).toBe(2.2)
+    } finally {
+      dispose()
+    }
+
+    // 第二段：卸载时首屏 describe 尚未回来，卸载后回来也不写值
+    resetTtsPlayerForTests()
+    let releaseAfterUnmount = (): void => { throw new Error('卸载 describe 闸未就绪') }
+    let describeSettled = false
+    const slowInner = fakeRemoteSettings({ value: { ttsDefaultRate: 1.7 } })
+    const slowSettings: FakeRemoteSettings = {
+      get describeCalls() { return slowInner.describeCalls },
+      get mutateCalls() { return slowInner.mutateCalls },
+      describe: async () => {
+        await new Promise<void>((resolve) => { releaseAfterUnmount = resolve })
+        try {
+          return await slowInner.describe()
+        } finally {
+          describeSettled = true
+        }
+      },
+      mutate: (ns, ops, revision) => slowInner.mutate(ns, ops, revision),
+    }
+    const h2 = fakeHost({ remoteSettings: slowSettings })
+    const ctx2 = fakeCtx(h2)
+    const dispose2 = fiberCleanupOf(ctx2)
+    apply(ctx2 as never)
+    dispose2()
+    releaseAfterUnmount()
+    await waitFor(() => expect(describeSettled).toBe(true))
+    await Promise.resolve()
+    expect(ttsPlayer.get().rate).toBe(TTS_DEFAULTS.rate)
   })
 })
 

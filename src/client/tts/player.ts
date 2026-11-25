@@ -15,8 +15,10 @@ import { ListenSession } from './listen-session.js'
 import { createListenBranches } from './playback-branches.js'
 import { readerPresence } from './reader-presence.js'
 import type {
-  ListenPlatform, StartFromReadingPositionInput, StartListeningInput, TtsDefaults,
+  ListenPlatform, StartFromReadingPositionInput, StartListeningInput,
 } from './listen-session.js'
+import { createTtsDefaults } from './tts-defaults.js'
+import type { TtsDefaultsFace, TtsDefaultsSource } from './tts-defaults.js'
 import type { ReaderRevealTarget } from '../reader-session.js'
 
 /**
@@ -160,6 +162,30 @@ function watchPageHide(cb: () => void): () => void {
 
 let branches: ListenPlatform['branches'] | null = null
 
+// ── 听书缺省来源链（生产单例）────────────────────────────────────────────────
+
+/** 空链 = 纯 wire 缺省；来源顺序 = 优先级（前源胜后源）。投影由链子的订阅驱动。 */
+let ttsDefaults: TtsDefaultsFace = createTtsDefaults([])
+
+function swapTtsDefaults(sources: readonly TtsDefaultsSource[]): TtsDefaultsFace {
+  ttsDefaults.dispose()
+  const next = createTtsDefaults(sources)
+  ttsDefaults = next
+  next.subscribe((value) => { session.applyIdleDefaults(value) })
+  // 挂链时已有生效值就当场投影，不等首个变更信号。
+  session.applyIdleDefaults(next.effective())
+  return next
+}
+
+/** 装配听书缺省来源链（组合根调用；测试从这里喂缺省）：`sources` 的顺序就是优先级。
+ *  返回卸载——仅在当前活链仍为本次所装时断链回纯 wire 缺省并退订投影（幂等）。 */
+export function installTtsDefaults(sources: readonly TtsDefaultsSource[]): () => void {
+  const installed = swapTtsDefaults(sources)
+  return () => {
+    if (ttsDefaults === installed) swapTtsDefaults([])
+  }
+}
+
 const prodListenPlatform: ListenPlatform = {
   fetchChapters: async (sourceId, bookKey) => {
     const nav = await apiGet<BookNavigation>(queries.navigation({ sourceId, url: bookKey }))
@@ -200,6 +226,7 @@ const prodListenPlatform: ListenPlatform = {
   after,
   watchPageHide,
   debounce,
+  defaults: () => ttsDefaults.effective(),
 }
 
 // ── 单例与同名导出外观（视图与既有测试的 import 一行不改）────────────────────
@@ -240,8 +267,6 @@ export function setListenTimer(minutes: number | 'chapter' | null): void {
   session.setListenTimer(minutes)
 }
 
-export function setTtsDefaults(p: Partial<TtsDefaults>): void { session.setTtsDefaults(p) }
-
 export async function playFromReadingPosition(): Promise<void> {
   await session.playFromReadingPosition()
 }
@@ -265,4 +290,7 @@ export function takeReaderRelocation(sourceId: string, bookKey: string): ReaderR
 export function disposeTtsPlayer(): void { session.dispose() }
 
 /** 测试用整份复位；生产只有 `disposeTtsPlayer` 一条终点（`ADR-0092`）。 */
-export function resetTtsPlayerForTests(): void { session.resetForTests() }
+export function resetTtsPlayerForTests(): void {
+  session.resetForTests()
+  swapTtsDefaults([])
+}

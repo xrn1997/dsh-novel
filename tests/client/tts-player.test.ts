@@ -8,6 +8,7 @@ import {
   TTS_MAX_CONSECUTIVE_FAILURES,
   pauseListening,
   playFromReadingPosition,
+  installTtsDefaults,
   resetTtsPlayerForTests,
   resumeListening,
   seekParagraph,
@@ -16,7 +17,6 @@ import {
   setListenTimer,
   setListenVoice,
   setListenVolume,
-  setTtsDefaults,
   skipChapter,
   startFromReadingPosition,
   skipParagraph,
@@ -24,11 +24,16 @@ import {
   stopListening,
   ttsPlayer,
 } from '../../src/client/tts/player.js'
-import type { StartListeningInput } from '../../src/client/tts/player.js'
+import type { StartListeningInput, TtsDefaults } from '../../src/client/tts/player.js'
 import { FakeAudio } from './tts-fakes.js'
 import { readerRouteGet } from './reader-fakes.js'
 import { estimateParagraphIndex, paragraphRatio } from '../../src/client/progress.js'
 import { setReadingProbe } from '../../src/client/tts/reading-position.js'
+
+/** 喂听书缺省：装一条静态来源（读时求值，测试之间由 `resetTtsPlayerForTests` 卸链归 wire）。 */
+function feedDefaults(p: Partial<TtsDefaults>): void {
+  installTtsDefaults([{ read: () => p }])
+}
 
 /**
  * 常驻播放层（字节型）的行为网：真模块 + mock 掉 `/novel-api` 与 `Audio` 构造器。
@@ -231,7 +236,7 @@ describe('常驻播放层：起播与自动推进', () => {
       names: ['第一章', '第二章'],
       texts: [['a。', 'b。', 'c。', 'd。'], ['n0。', 'n1。', 'n2。']],
     }
-    setTtsDefaults({ prefetchParagraphs: 2 })
+    feedDefaults({ prefetchParagraphs: 2 })
     await start({ paragraphIndex: 1 })
     await microtasks(40)
     expect(synthTexts()).toContain('n0。')
@@ -246,7 +251,7 @@ describe('常驻播放层：起播与自动推进', () => {
       names: ['第一章', '第二章', '第三章'],
       texts: [['a。', 'b。'], ['c。', 'd。', 'e。', 'f。'], ['m0。', 'm1。']],
     }
-    setTtsDefaults({ prefetchParagraphs: 2 })
+    feedDefaults({ prefetchParagraphs: 2 })
     let release = (): void => { throw new Error('m0 gate 未就绪') }
     synthGate.set('m0。', new Promise<void>((resolve) => { release = resolve }))
     await start({ chapterIndex: 1, paragraphIndex: 1 })
@@ -657,7 +662,7 @@ describe('常驻播放层：跳章、回退链与从阅读位置起播', () => {
 
   it('回退链三级：广播缺省 < 本书 listen 存档 < 显式传入', async () => {
     // 第三级：活动缺省快照
-    setTtsDefaults({ engineId: 'http:served', rate: 1.25, volume: 0.45 })
+    feedDefaults({ engineId: 'http:served', rate: 1.25, volume: 0.45 })
     await start()
     expect(ttsPlayer.get()).toMatchObject({
       engineId: 'http:served', voice: null, rate: 1.25, volume: 0.45,
@@ -956,5 +961,27 @@ describe('章内位置 codec：uniform adapter', () => {
         expect(estimateParagraphIndex(paragraphRatio(index, count), count)).toBe(index)
       }
     }
+  })
+})
+
+describe('听书缺省卸链身份守卫', () => {
+  it('后一次 installTtsDefaults 换链后，旧 disposer 与重复调用均不拆掉当前活链', () => {
+    const disposeFirst = installTtsDefaults([{ read: () => ({ rate: 1.3 }) }])
+    expect(ttsPlayer.get().rate).toBe(1.3)
+
+    const disposeSecond = installTtsDefaults([{ read: () => ({ rate: 1.8 }) }])
+    expect(ttsPlayer.get().rate).toBe(1.8)
+
+    disposeFirst()
+    expect(ttsPlayer.get().rate, '旧 disposer 不得把新链拆成空链').toBe(1.8)
+
+    disposeSecond()
+    expect(ttsPlayer.get().rate).toBe(TTS_DEFAULTS.rate)
+
+    // 重复调用同一 disposer 幂等（后续再装新链后再次调旧 disposer 也不拆）
+    const disposeThird = installTtsDefaults([{ read: () => ({ rate: 1.6 }) }])
+    disposeSecond()
+    expect(ttsPlayer.get().rate).toBe(1.6)
+    disposeThird()
   })
 })

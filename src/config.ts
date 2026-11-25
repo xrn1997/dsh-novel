@@ -113,7 +113,7 @@ export type VolatileConfigFieldName = { [K in ConfigFieldName]: ConfigTable[K]['
 
 /** volatile 字段的消费桶：service-live = 每次用时读活值；composition-root = 只由组合根读并接线。
  *  键集由 `VolatileConfigFieldName` 钉死——漏归桶编译错，归错桶测试红。听书四格读者在浏览器半
- *  （播放层经宿主设置面取快照）；`ttsCacheMaxBytes` 是例外，容量账在 Node 半。 */
+ *  （播放层经听书缺省来源链读时求值）；`ttsCacheMaxBytes` 是例外，容量账在 Node 半。 */
 export const VOLATILE_CONSUMERS: Record<VolatileConfigFieldName, 'service-live' | 'composition-root'> = {
   searchTimeoutMs: 'service-live',
   searchParallel: 'service-live',

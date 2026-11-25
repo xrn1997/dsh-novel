@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ReactNode } from 'react'
-import { ENTRY_ID, registerConfigPage, ttsDefaultsFromSettings } from './config-page.js'
+import { ENTRY_ID, registerConfigPage } from './config-page.js'
 import type { RemoteResult, SettingsDescribeValue } from './config-settings.js'
 import {
   CopyProvider,
@@ -10,7 +10,9 @@ import {
 } from './copy/index.js'
 import { NOVEL_GLYPH_PATH, NOVEL_GLYPH_VIEWBOX } from './novel-glyph.js'
 import { TtsMiniBar } from './tts/TtsMiniBar.js'
-import { disposeTtsPlayer, setTtsDefaults, watchDirectVoices } from './tts/player.js'
+import { disposeTtsPlayer, installTtsDefaults, watchDirectVoices } from './tts/player.js'
+import { createLiveRefSource, createSettingsSnapshotSource } from './tts/tts-defaults-host.js'
+import type { SettingsSnapshotSource } from './tts/tts-defaults-host.js'
 import { NovelStatusOverlay } from './views/NovelStatusOverlay.js'
 import { NovelView } from './views/NovelView.js'
 
@@ -59,23 +61,46 @@ function NovelPanel({ t = zhTranslate }: { t?: Translate }): ReactNode {
   return <CopyProvider value={t}><NovelView /></CopyProvider>
 }
 
-/** 浏览器半没有 served 配置路由：听书缺省只能经宿主设置面读**有效值**，再推进播放层的回退链。
- *  可选能力——没有设置面 / 读失败 / 条目缺席都保持 `TTS_DEFAULTS`，不阻断面板。宿主设置面没有
- *  变更订阅：接入时这一发是首屏快照；配置页每次读到有效值也把同一份映射推进播放层。 */
-function pushTtsDefaults(ctx: Context): void {
+/**
+ * 浏览器半没有 served 配置路由：听书缺省的生效值经 `tts-defaults.ts` 的来源链读时求值——
+ * 来源顺序 = 优先级（宿主同步配置的 live ref > 设置面快照 > wire 的 `TTS_DEFAULTS`），谁赢由
+ * 链子声明、与到达顺序无关。两条来源都是可选能力：缺席 / 读失败就落下一来源，不阻断面板。
+ * 设置面快照的首屏值从 `describe` 读一发（宿主设置面没有变更订阅）；之后配置页每次读到生效值
+ * （初始 / 保存 / 恢复默认 / 冲突重读）经 `refresh` 推进同一份快照。
+ */
+function pushSettingsSnapshot(ctx: Context, settings: SettingsSnapshotSource): void {
   const remote = (ctx as unknown as {
     remote?: { settings?: { describe(): Promise<RemoteResult<SettingsDescribeValue>> } }
   }).remote?.settings
   if (remote === undefined || typeof remote.describe !== 'function') return
-  void remote.describe().then((result) => {
-    if (!result.ok) return
-    const value = result.value.namespaces.find((ns) => ns.ns === ENTRY_ID)?.value
-    if (value === null || typeof value !== 'object' || Array.isArray(value)) return
-    setTtsDefaults(ttsDefaultsFromSettings(value))
-  }).catch(() => undefined)
+  let cancelled = false
+  let superseded = false
+  let stopWatching = (): void => { /* 尚未挂监听或已摘除 */ }
+  const off = settings.watch?.(() => {
+    superseded = true
+    stopWatching()
+  })
+  stopWatching = () => {
+    off?.()
+    stopWatching = () => { /* 幂等摘除 */ }
+  }
+  ctx.effect(() => () => {
+    cancelled = true
+    stopWatching()
+  }, 'dsh-novel: tts defaults snapshot')
+  try {
+    void remote.describe().then((result) => {
+      if (cancelled || superseded || !result.ok) return
+      const value = result.value.namespaces.find((ns) => ns.ns === ENTRY_ID)?.value
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) return
+      settings.refresh(value)
+    }).catch(() => undefined).finally(stopWatching)
+  } catch {
+    stopWatching()
+  }
 }
 
-export function apply(ctx: Context): void {
+export function apply(ctx: Context, config?: unknown): void {
   const slots = (ctx as unknown as {
     slots: {
       inject(name: string, fn: () => () => void): () => void
@@ -129,10 +154,14 @@ export function apply(ctx: Context): void {
     )
     return () => { disposeStatus(); disposeMini() }
   }), 'dsh-novel: shell overlay layers')
-  // 可选能力：宿主没有设置面时回调不执行；同一回调顺带读一次听书缺省，读失败静默退到 wire 缺省。
+  // 听书缺省来源链：来源顺序 = 优先级（live ref > 设置面快照 > wire 缺省），随插件收口卸链。
+  const settingsSource = createSettingsSnapshotSource()
+  const liveSource = createLiveRefSource(config)
+  const sources = liveSource === null ? [settingsSource] : [liveSource, settingsSource]
+  ctx.effect(() => installTtsDefaults(sources), 'dsh-novel: tts defaults chain')
   ctx.inject(['remote', 'remote.settings'], (child) => {
-    registerConfigPage(child, t)
-    pushTtsDefaults(child)
+    registerConfigPage(child, settingsSource.refresh, t)
+    pushSettingsSnapshot(child, settingsSource)
   })
 }
 
