@@ -35,6 +35,8 @@ import { claimKeyLayer, Dialog } from './dialog.js'
 import { ReaderNavigation } from './ReaderNavigation.js'
 import { ReaderNotes } from './ReaderNotes.js'
 import type { BookNavigation, ChapterContent, LinkRole, LocalImportWarning, ReadingTarget } from './types.js'
+import { MoyuToggle } from './MoyuToggle.js'
+import { MoyuStage } from './MoyuStage.js'
 
 // 以下三件是**兼容既有 import 路径**的再导出（实现住在各自面板文件；tests/client 仍从本模块取件，别当死代码清掉）
 export { ExportPanel } from './ExportPanel.js'
@@ -577,6 +579,8 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
             </svg>
             {t('tts.listen')}
           </button>
+          {/* 摸鱼模式入口：只管开关；舞台与在场位都在别处，本视图零逻辑。 */}
+          <MoyuToggle />
           {sceneState.surface === 'prefs' && <PrefsPanel zIndex={CTRL_Z.panel} />}
         </div>
         {/* 章进度：跨章才动；章内百分比刻意不做——那是每帧量，会让整棵阅读器每帧重渲染。 */}
@@ -718,6 +722,8 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
         <TtsBar darkController={prefs.darkController} apiGet={deps.apiGet} pushError={deps.pushError}
           onLocate={locateListen} rootRef={ttsBarRef} onPanelOpenChange={setTtsSettingsOpen} />
       )}
+      {/* 摸鱼舞台：无条件挂载、传 session 与书名；在场位在 moyu-store，Esc 走模态契约。 */}
+      <MoyuStage session={session} title={title} />
     </div>
   )
 }

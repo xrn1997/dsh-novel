@@ -1,0 +1,36 @@
+/** 摸鱼模式的可见文案（键空间 `reader.moyu.*`）。ZH 是真源；EN 逐键镜像。 */
+export const MOYU_ZH = {
+  'reader.moyu.open': '摸鱼',
+  'reader.moyu.exit': '退出摸鱼',
+  'reader.moyu.thought': '已深度思考',
+  'reader.moyu.thinking': '深度思考中',
+  'reader.moyu.loading': '正在加载章节',
+  'reader.moyu.finished': '已读完本书最新章节',
+  'reader.moyu.toBottom': '回到底部',
+  'reader.moyu.error': '章节读取失败：{detail}',
+  'reader.moyu.retry': '重试',
+  'reader.moyu.explorer': '资源管理器',
+  'reader.moyu.readme': 'README.md',
+  'reader.moyu.readFile': '读取 chapters/{file}',
+  'reader.moyu.doneLine': '本章完成 · {n} 字',
+  'reader.moyu.prev': '上一章',
+  'reader.moyu.next': '下一章',
+} as const
+
+export const MOYU_EN: Record<keyof typeof MOYU_ZH, string> = {
+  'reader.moyu.open': 'Moyu',
+  'reader.moyu.exit': 'Exit moyu',
+  'reader.moyu.thought': 'Deep reasoning complete',
+  'reader.moyu.thinking': 'Thinking',
+  'reader.moyu.loading': 'Loading chapter',
+  'reader.moyu.finished': 'Reached the latest chapter',
+  'reader.moyu.toBottom': 'Back to bottom',
+  'reader.moyu.error': 'Failed to load chapter: {detail}',
+  'reader.moyu.retry': 'Retry',
+  'reader.moyu.explorer': 'EXPLORER',
+  'reader.moyu.readme': 'README.md',
+  'reader.moyu.readFile': 'Read chapters/{file}',
+  'reader.moyu.doneLine': 'Chapter done · {n} chars',
+  'reader.moyu.prev': 'Previous chapter',
+  'reader.moyu.next': 'Next chapter',
+}

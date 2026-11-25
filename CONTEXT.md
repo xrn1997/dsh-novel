@@ -286,6 +286,10 @@ _唯一实现_: `shared/wire.ts` 的 `ShelfProgress`；`client/reader-session.ts
 阅读器此刻看得见的位置：会话内存里的章 + 章内比例，以及从 DOM 几何量出的探针读数（章 + 段号）。它是**实时读数，不是落盘游标**：滚动 / 导航 / 存档恢复只修正它，提交时按 cause 决定写不写消费位置；听书起播从它换算起播段，换算不写盘。精确段落落位也读它，但走 `ReaderSession.reveal` 的段号 target，落点统一对齐到顶条下方的带顶（`ADR-0096`）。
 _唯一实现_: `client/reader-session.ts` 的 `position` / `commit` / `reveal` / `settleReveal`；`client/tts/reading-position.ts` 的 `ReadingProbe` / `readingPositionAt` / `setReadingProbe`；`client/progress.ts` 的 `estimateParagraphIndex`；`client/reader-paragraph.ts` 的 `paragraphSlotOf` / `listenParagraphElement`。 _Avoid_: 消费位置、视口位置、听书段号。
 
+**摸鱼模式（moyu mode）**:
+盖在阅读器上的整屏只读投影：把已载章节伪装成宿主的对话流——每章一条「已深度思考」收起行（思考泡图标 + 章名摘要，流式章带 shimmer）、一条「读取 chapters/…」工具行与一段节奏分派的 assistant 正文（每 4 行的第 1 行为正常行——内容字号、主色、无标记；跟 3 行为小字行——小一号、浅色、行首带动作标记 ▸ » ⇣ ✎ 确定性轮换），流式截断段带左到右扫光；历史章全量留在流里，章揭示完成出「本章完成」行与「上一章 / 下一章」翻页行。它**不写消费位置、不碰阅读位置**，退出即回原现场；排版、配色与滚动方向复刻宿主对话轴（字号随宿主内容字号变量），亮暗随宿主主题。滚动权全在用户——不自动贴尾、不自动连播，跳章只经右侧栏文件或翻页行（跳后一次性回底）；右侧栏是资源管理器样式的章文件清单（书名根目录 / `README.md` / 章文件，当前章高亮、到过的章带修改点）。空章恒停加载态不连跳。Esc 走模态契约关浮层并还焦。
+_唯一实现_: `client/moyu-store.ts` 的 `moyuStore` / `openMoyu` / `closeMoyu` / `toggleMoyu`；节奏纯函数 `client/moyu-stream.ts` 的 `projectLines` / `nextPhase` / `isPinnedToTail` / `isMainLine` / `actionMarkFor` / `chapterFileName`；舞台 `client/views/MoyuStage.tsx`；入口 `client/views/MoyuToggle.tsx`；样式 `client/styles/moyu.ts`。 _Avoid_: 阅读器状态（会话不动它、它也不动会话的写口）、翻页阅读（同为阅读方式但互不相交）、TTS 跟随（贴尾是 DOM 滚动跟随，不是播放跟随）。
+
 **翻页阅读（paged reading）**:
 阅读器的整章多栏切页模式：窄屏单页、宽屏双页，点击 / 键盘 / 滚轮 / 触摸翻页，跨章落位与按页位写进度（`ADR-0101`）。正文一次进多栏轨道、不复制 DOM；章内锚点不精确落位。 _唯一实现_: `client/reader-pagination.ts` 的 `computeSpreadLayout` / `computePageCount` / `spreadForRatio` / `ratioForSpread` / `classifyClickZone` / `firstParagraphInSpread`；舞台 `client/views/BookStage.tsx`；会话 `client/reader-session.ts` 的 `setPaged` / `reportPosition` / `prefetchChapter` / `scrollToSavedPosition`；视图 `client/views/ReaderView.tsx` 的 `isPaged` / `takeOverReading`。 _Avoid_: 分页器、PDF / 固定版式阅读（不接）。
 
