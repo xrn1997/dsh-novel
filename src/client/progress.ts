@@ -21,6 +21,13 @@ export function locateChapter(anchors: ChapterAnchor[], scrollTop: number): { ch
   // 没有锚点 = 还没量到任何章：章号与比例都留在基线 0（不是"取位失败"，这里就没有取位这回事）
   const a = at === -1 ? undefined : anchors[at]
   if (a === undefined) return { chapterIndex: 0, offsetRatio: 0 }
+  // 章块之间的页边距不属于任何锚点（块高不含章间 margin），而浏览器给 scrollTop 赋值会取整：
+  // 落位差出的亚像素会落进这条缝。缝里的 scrollTop 归**下一章的开篇留白**（ratio 0），否则
+  // 取整误差把位置回读成上一章 ratio 1，下一帧 commit 就造成跳章回弹。块底正常阅读不受影响（严格 >）。
+  const next = anchors[at + 1]
+  if (next !== undefined && scrollTop > a.start + a.height && scrollTop < next.start) {
+    return { chapterIndex: next.index, offsetRatio: 0 }
+  }
   return { chapterIndex: a.index, offsetRatio: ratioWithin(a, scrollTop) }
 }
 
