@@ -27,13 +27,74 @@ function firstActive(items: NavigationItem[], activeId: string | null): Navigati
   return null
 }
 
-export function ReaderNavigation({ items, activeId, onNavigate }: {
+/** 计算一条导航项最终展示到屏幕上的文案（与渲染严格同源，供目录搜索匹配复用）。 */
+function itemLabelOf(item: NavigationItem, t: Translate, inheritedLabel: string | null): string {
+  const trimmed = item.label.trim()
+  const target = item.target
+  if (target !== null && target.kind === 'chapter') {
+    return displayChapterTitle(item.label, target.index, t)
+  }
+  if (trimmed !== '') return trimmed
+  return target === null ? '' : (inheritedLabel ?? t('reader.notes'))
+}
+
+function countLeaves(items: NavigationItem[]): number {
+  let total = 0
+  for (const item of items) {
+    if (item.target !== null) total += 1
+    if (item.children.length > 0) total += countLeaves(item.children)
+  }
+  return total
+}
+
+/** 按关键词过滤目录树：保留命中章/补充文档及所需的祖先分组；空关键词原样返回并给出总条目数。 */
+export function filterNavigationItems(
+  items: NavigationItem[],
+  query: string,
+  t: Translate,
+): { items: NavigationItem[]; matchedLeaves: number; totalLeaves: number } {
+  const totalLeaves = countLeaves(items)
+  const q = query.trim().toLowerCase()
+  if (q === '') return { items, matchedLeaves: totalLeaves, totalLeaves }
+
+  let matchedLeaves = 0
+  const filterList = (list: NavigationItem[], inheritedLabel: string | null): NavigationItem[] => {
+    const out: NavigationItem[] = []
+    for (const item of list) {
+      const label = itemLabelOf(item, t, inheritedLabel)
+      const nextInherited = item.label.trim() !== '' ? item.label.trim() : inheritedLabel
+      const selfMatches = label !== '' && label.toLowerCase().includes(q)
+      if (item.target === null && selfMatches) {
+        const leaves = countLeaves(item.children)
+        if (leaves > 0) {
+          matchedLeaves += leaves
+          out.push(item)
+        }
+        continue
+      }
+      const filteredChildren = item.children.length > 0 ? filterList(item.children, nextInherited) : []
+      if (item.target !== null && selfMatches) matchedLeaves += 1
+      if ((item.target !== null && selfMatches) || filteredChildren.length > 0) {
+        out.push({ ...item, children: filteredChildren })
+      }
+    }
+    return out
+  }
+
+  const filtered = filterList(items, null)
+  return { items: filtered, matchedLeaves, totalLeaves }
+}
+
+export function ReaderNavigation({ items, activeId, onNavigate, emptyText }: {
   items: NavigationItem[]
   activeId: string | null
   onNavigate: (target: ReadingTarget) => void
+  emptyText?: string | undefined
 }): ReactNode {
   const t = useCopy()
-  if (items.length === 0) return null
+  if (items.length === 0) {
+    return emptyText === undefined ? null : <div className="novel-toc-empty">{emptyText}</div>
+  }
   const current = firstActive(items, activeId)
   return <NavList items={items} current={current} onNavigate={onNavigate} t={t} inheritedLabel={null} />
 }
@@ -66,11 +127,7 @@ function NavItem({ item, current, onNavigate, t, inheritedLabel }: {
 }): ReactNode {
   const target = item.target
   const trimmed = item.label.trim()
-  // 章级叶项空标题统一回退到「第 N 章」：否则空串会把按钮压成 12px 空白条（白屏目录）。
-  // 补充文档叶项没有章号可回退：改用最近一层分组标题；顶层也没有时回退到「注释」，仍不渲染空白按钮。
-  const leafLabel = target !== null && target.kind === 'chapter'
-    ? displayChapterTitle(item.label, target.index, t)
-    : trimmed !== '' ? trimmed : inheritedLabel ?? t('reader.notes')
+  const leafLabel = itemLabelOf(item, t, inheritedLabel)
   // 叶项复用抽屉既有按钮类：高亮、焦点环、省略号截断与目录同一个源
   const leaf = target === null ? null : (
     <button

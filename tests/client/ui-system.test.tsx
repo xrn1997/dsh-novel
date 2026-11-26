@@ -155,10 +155,10 @@ describe('z 序单表（控制器层 CTRL_Z 与样式层浮层只从这一张表
 })
 
 describe('布局单位与视口约束（阅读器不能被正文高度绑架）', () => {
-  it('正文栏宽随字号走：值槽 --novel-measure 以 em 计，不钉死像素列', () => {
+  it('正文栏宽与字号解耦：值槽 --novel-measure 以固定 px 计，不随字号伸缩', () => {
     const body = ruleBody('.novel-rdr-body')
     expect(body, '.novel-rdr-body 的 max-width 必须走 --novel-measure').toMatch(/max-width:\s*var\(--novel-measure\)/)
-    expect(NOVEL_CSS, '值槽要有 em 缺省（随字号缩放），且必须在词表里在册').toMatch(/--novel-measure:\s*\d+(\.\d+)?em/)
+    expect(NOVEL_CSS, '值槽要有 px 缺省（与字号解耦），且必须在词表里在册').toMatch(/--novel-measure:\s*\d+px/)
     expect(strip(NOVEL_CSS), '栏宽只走值槽，不钉死成固定列').not.toContain('calc(50%')
   })
 
@@ -504,5 +504,33 @@ describe('借折叠的形状，不借折叠的红与灰（按源那一档与书�
     expect(fold, '这一条只回正线条与底色：疑似行的灰是刻意降级，不许连带请回').not.toMatch(/(^|[^-])color:/)
     expect(ruleBody('.novel-city-fail'), '真失败的红不许被连带改掉：危险信号只属于未响应那一条')
       .toMatch(/border:\s*1px solid var\(--novel-err-line\)/)
+  })
+})
+
+describe('原生下拉与强制深色浮层配色（悬停实底 + option 自足 + color-scheme）', () => {
+  it('select 悬停不用半透 --novel-hover，且 option 与 .novel-dark 各自带实底与配色声明', () => {
+    const hover = ruleBody('.novel-tts-select:hover')
+    expect(hover, 'select 悬停不得使用半透 --novel-hover（原生弹层会把半透底合到白底上）')
+      .not.toMatch(/var\(--novel-hover\)/)
+    expect(hover).toMatch(/background-color:\s*var\(--novel-layer-3\)/)
+    for (const sel of ['.novel-tts-select option', 'select.novel-input option']) {
+      const body = ruleBody(sel)
+      expect(body, `${sel} 必须显式给不透明背景色`).toMatch(/background-color:\s*var\(--novel-layer-2\)/)
+      expect(body, `${sel} 必须显式给前景色`).toMatch(/color:\s*var\(--novel-text\)/)
+    }
+    const dark = ruleBody('.novel-dark')
+    expect(dark, '.novel-dark 必须声明 color-scheme: dark 让原生下拉跟暗色').toMatch(/color-scheme:\s*dark/)
+    expect(dark, '.novel-dark 必须重钉 --novel-layer-3').toMatch(/--novel-layer-3:/)
+    expect(dark, '.novel-dark 开关/强调色不得硬写白字色 #f9fafb（白底白钮）').not.toMatch(/--novel-brand:\s*#f9fafb/)
+    expect(ruleBody('.novel-rdr-seg-thumb')).toMatch(/background:\s*var\(--novel-float\)/)
+    for (const sel of ['.novel-prefs', '.novel-drawer', '.novel-notes', '.novel-modal']) {
+      expect(ruleBody(sel), `${sel} 必须显式重钉 color: var(--novel-text)，避免从阅读器条继承 --novel-paper-ink`)
+        .toMatch(/color:\s*var\(--novel-text\)/)
+    }
+    const exportPrimary = ruleBody('.novel-export-actions > .novel-btn.primary')
+    expect(exportPrimary).toMatch(/background:\s*var\(--novel-accent\)/)
+    expect(exportPrimary).toMatch(/color:\s*var\(--novel-on-solid\)/)
+    expect(ruleBody('.novel-rdr-switch-input:checked + .novel-rdr-switch-track'))
+      .toMatch(/background:\s*var\(--novel-accent\)/)
   })
 })

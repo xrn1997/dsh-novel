@@ -6,7 +6,7 @@ import { plural, useCopy } from '../copy/index.js'
 import { prodReaderDeps } from '../deps.js'
 import { markPanelShelfLanded, readPanelShelf } from '../panel-shelf.js'
 import type { ReaderDeps } from '../deps.js'
-import { applyPreset, createExportRun, draftOf, IDLE_EXPORT, validRangeOf } from '../export-run.js'
+import { applyPreset, createExportRun, draftOf, IDLE_EXPORT, matchPreset, validRangeOf } from '../export-run.js'
 import type { ExportDraft, ExportRunState } from '../export-run.js'
 import { navigate, prefsStore, useStore } from '../store.js'
 import { ReaderScene } from '../reader-scene.js'
@@ -19,11 +19,13 @@ import { pauseListening, resumeListening, startFromReadingPosition, takeReaderRe
 import { enterReader } from '../tts/reader-presence.js'
 import { createFollowController } from '../tts/follow-controller.js'
 import type { FollowController } from '../tts/follow-controller.js'
-import { setReadingProbe } from '../tts/reading-position.js'
+import { setReadingProbe, readingPositionAt } from '../tts/reading-position.js'
+import { portViewTop } from '../scrollport.js'
+import { clampTopInset } from '../viewport-top.js'
 import { useListenScope } from '../tts/use-listen-scope.js'
 import { TtsBar } from '../tts/TtsBar.js'
 import { ttsErrorMessage } from '../tts/tts-error.js'
-import { chapterBodyProjection, displayChapterTitle, paperInk, paperLiveInk, centerInScroller } from '../util.js'
+import { chapterBodyProjection, displayChapterTitle, isDarkPaper, paperInk, paperLiveInk, centerInScroller } from '../util.js'
 import { ErrorBanner } from './bits.js'
 import { BookStage } from './BookStage.js'
 import { ChapterBody } from './ChapterBody.js'
@@ -32,7 +34,7 @@ import { ImportNotesPanel } from './ImportNotesPanel.js'
 import { PrefsPanel } from './PrefsPanel.js'
 import { useListenFromSelection } from './listen-from-selection.js'
 import { claimKeyLayer, Dialog } from './dialog.js'
-import { ReaderNavigation } from './ReaderNavigation.js'
+import { filterNavigationItems, ReaderNavigation } from './ReaderNavigation.js'
 import { ReaderNotes } from './ReaderNotes.js'
 import type { BookNavigation, ChapterContent, LinkRole, LocalImportWarning, ReadingTarget } from './types.js'
 
@@ -98,6 +100,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   /** 排版三量的指纹：模式切换也会让 effect 重跑，但模式切换不归 `applyTypesetRelocation`。 */
   const typesetKey = `${prefs.fontSize}:${prefs.lineHeight}:${prefs.measure}`
   const typesetKeyRef = useRef(typesetKey)
+  const prevIsPagedForTypesetRef = useRef(isPaged)
   /** 听书范围按原语窄订阅一次算完（`tts/use-listen-scope`）：整店订阅会让每段推进都重渲顶层。
    *  `showing` = 本书就是正在听的会话——听书条挂载条件，也是「从阅读位置起播」的闸门。 */
   const listen = useListenScope(bookKey)
@@ -125,10 +128,14 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   const listenFromClearRef = useRef<(() => void) | null>(null)
   /** 上一帧是否翻页模式：从翻页切回滚动时，绑定首帧喂视口前先把页内比例摆成滚动位。 */
   const wasPagedRef = useRef(isPaged)
+  /** 模式切换瞬间的段落锚点（同步在 prefs 通知里采自切走前的活 DOM）：滚动 ⇄ 翻页来回切不依赖粗比例互换。 */
+  const prevReadingModeRef = useRef(prefs.readingMode)
+  const modeAnchorRef = useRef<{ chapterIndex: number; paragraphIndex: number } | null>(null)
   /** 用户把视口带走：跟随即让位，挂起的自动定位与在途落位一并作废。
    *  翻页模式的让位由 `pagedFollowYielded` 自己管；`follow.onUserIntent` 会走
    *  `session.cancelJump()` 按滚动锚点重记位置，那里没有翻页视口可读。 */
   const takeOverReading = useCallback((): void => {
+    modeAnchorRef.current = null
     setPagedFollowYielded(true)
     listenFromClearRef.current?.()
     if (!isPagedRef.current) followControllerRef.current?.onUserIntent()
@@ -282,9 +289,22 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     [scene, takeOverOnReturn])
   /** 持久导入说明（本地书专属）：null = 还没问到 / 没有。入口只在**真有告警**时出现。 */
   const [importNotes, setImportNotes] = useState<LocalImportWarning[] | null>(null)
+  const [tocQuery, setTocQuery] = useState('')
+  const [tocLocateTick, setTocLocateTick] = useState(0)
   const drawerRef = useRef<HTMLDivElement | null>(null)
   /** 目录当前项：会话按「当前章内最近的已登记导航锚点」裁决，视图只负责在被问到时取一次 */
   const [navActive, setNavActive] = useState<string | null>(null)
+  useEffect(() => {
+    if (sceneState.surface !== 'toc') setTocQuery('')
+  }, [sceneState.surface])
+  const filteredNav = useMemo(
+    () => filterNavigationItems(navigation ?? [], tocQuery, t),
+    [navigation, tocQuery, t],
+  )
+  const locateCurrentInToc = useCallback((): void => {
+    setTocQuery('')
+    setTocLocateTick((n) => n + 1)
+  }, [])
   // 浮层共用一条 Esc：归属读场景的 `escOwner` 投影（模态在场时这条监听不装，Esc 归 dialog 的模态
   // 契约）。`escOwner` 必须在依赖里，否则模态上场时这条监听撤不下来。装监听时认领一层键盘现场：
   // 全局听书浮窗的设置卡是同场另一层，一次 Esc 只该收最上面那一层。
@@ -304,12 +324,13 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   useEffect(() => {
     recomputeNavActive()
   }, [recomputeNavActive, currentChapter, navigation])
-  /** 打开抽屉即把当前项摆到视野中间——**只滚抽屉自己**，不借 `scrollIntoView`（见 util.ts）。 */
+  /** 打开抽屉或点「定位当前章」即把当前项摆到视野中间（扣除吸顶头高度）——**只滚抽屉自己**，不借 `scrollIntoView`（见 util.ts）。 */
   useEffect(() => {
     const drawerEl = drawerRef.current
     if (sceneState.surface !== 'toc' || drawerEl === null) return
-    centerInScroller(drawerEl, drawerEl.querySelector('[aria-current="true"]'))
-  }, [sceneState.surface, navActive])
+    const headerHeight = drawerEl.querySelector('.novel-drawer-top')?.getBoundingClientRect().height ?? 0
+    centerInScroller(drawerEl, drawerEl.querySelector('[aria-current="true"]'), headerHeight)
+  }, [sceneState.surface, navActive, tocLocateTick])
   // 范围导出：编排归 export-run.ts（start/cancel/三态 + 卸载 abort，可单测）；本视图只接线：
   // ⤓ 钮开范围面板、面板确认才 start。导出失败单独一条（会话 error 归阅读链路）。
   const [exportState, setExportState] = useState<ExportRunState>(IDLE_EXPORT)
@@ -342,6 +363,26 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   }, [deps, sourceId, bookKey])
   const hasImportNotes = importNotes !== null && importNotes.length > 0
 
+  // 模式切换同步采点：必须在 React 卸载旧模式 DOM 前（prefsStore 同步通知栈里）取到当下段号。
+  useEffect(() => prefsStore.subscribe(() => {
+    const nextMode = prefsStore.get().readingMode
+    if (nextMode === prevReadingModeRef.current) return
+    const prevMode = prevReadingModeRef.current
+    prevReadingModeRef.current = nextMode
+    if (nextMode === 'page' && prevMode === 'scroll') {
+      const pos = readingPositionAt(
+        chapterRefs.current,
+        portViewTop(binding.scrollport()) + clampTopInset(topInset()),
+      )
+      modeAnchorRef.current = pos === null ? null : { chapterIndex: pos.chapterIndex, paragraphIndex: pos.paragraphIndex }
+    } else if (nextMode === 'scroll' && prevMode === 'page') {
+      modeAnchorRef.current = {
+        chapterIndex: session.currentPosition.chapterIndex,
+        paragraphIndex: pagedProbeParagraphRef.current?.() ?? 0,
+      }
+    }
+  }), [binding, session, topInset])
+
   // 模式开关先于开会话：翻页模式没有滚动视口，会话里的恢复/跳章/预取必须走无 pendingJump 的路径。
   // effect 声明次序即执行次序（这个在下面 open 之前），首帧也不会让 open 走错模式。
   useEffect(() => {
@@ -352,6 +393,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   // 章号先按不写进度的恢复路径站定，精确段由随后的 `session.reveal` 落位（write:false）。
   useEffect(() => {
     chapterRefs.current = []
+    modeAnchorRef.current = null
     const held = relocationRef.current
     const target = held !== null && held.sourceId === sourceId && held.bookKey === bookKey
       ? held.target
@@ -378,11 +420,16 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
       })
       return () => { setReadingProbe(null) }
     }
-    // 切回滚动：滚动 DOM 刚提交，先把会话里的页内比例摆成 scrollTop，再让绑定喂首帧；
-    // 否则首帧会把「正文从章首开始」当成读者位置写回去。
-    if (wasPagedRef.current) session.scrollToSavedPosition()
+    // 切回滚动：滚动 DOM 刚提交，先由 binding.mount 刷新真实滚动容器再落位到保存/锚点位置；
+    // 否则首帧 portEl 仍为 null，会把滚动位写到 window 上、.novel-main 留在 0 导致章号倒退。
+    const shouldRestore = wasPagedRef.current
     wasPagedRef.current = false
-    binding.mount(session)
+    const anchor = shouldRestore ? modeAnchorRef.current : null
+    modeAnchorRef.current = null
+    binding.mount(
+      session,
+      shouldRestore ? { beforeFeed: () => { session.scrollToSavedPosition(anchor) } } : undefined,
+    )
     return () => { binding.unmount() }
   }, [binding, session, isPaged])
 
@@ -451,9 +498,11 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   /** 字号/行距/栏宽变化 → 排版复位：触发归视图（提交后的 effect 知道新排版落定），采点、复位算式
    *  与 miss/重采分支归会话的 `applyTypesetRelocation`。effect 只依赖三个排版量、不写 prefs。 */
   useEffect(() => {
-    // 模式切换不是排版变化：翻页期间记下指纹但不走滚动复位；切回滚动的位置由
-    // `scrollToSavedPosition` 负责，避免两套落位互相拉扯。
-    if (isPaged) { typesetKeyRef.current = typesetKey; return }
+    const wasPaged = prevIsPagedForTypesetRef.current
+    prevIsPagedForTypesetRef.current = isPaged
+    // 模式切换不是排版变化：翻页期间与刚切回滚动的那一拍只同步指纹、不走滚动复位；
+    // 切回滚动的位置由 `scrollToSavedPosition` 负责，避免两套落位互相拉扯。
+    if (isPaged || wasPaged) { typesetKeyRef.current = typesetKey; return }
     if (typesetKeyRef.current === typesetKey) return
     typesetKeyRef.current = typesetKey
     session.applyTypesetRelocation()
@@ -467,6 +516,10 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     session.reportPosition(currentChapter, ratio)
   }, [session, currentChapter])
 
+  const onConsumeModeAnchor = useCallback((): void => {
+    modeAnchorRef.current = null
+  }, [])
+
   const shownError = error ?? exportState.error
   /** 纸与墨：条底、控件、进度槽、跟读高亮都由这几个值槽派生（规则住样式层，行内只给值）。
    *  写在 .novel-rdr 根上而非 main 上——条是 main 的兄弟，写在 main 里条够不着。
@@ -477,7 +530,15 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     '--novel-live-ink': paperLiveInk(prefs.paperColor),
   } as CSSProperties), [prefs.paperColor])
   return (
-    <div data-novel-view="reader" className={isPaged ? 'novel-rdr is-paged' : 'novel-rdr'} style={paper}>
+    <div
+      data-novel-view="reader"
+      className={[
+        'novel-rdr',
+        isPaged ? 'is-paged' : '',
+        isPaged && listen.showing ? 'is-tts-open' : '',
+      ].filter(Boolean).join(' ')}
+      style={paper}
+    >
       {/* 偏好/导出面板遮罩：挂 reader 根容器盖满阅读区；遮罩在不在场读阅读场景的 `mask` 投影。 */}
       {sceneState.mask && (
         <div data-novel-ctrl-mask onClick={closeCurrent}
@@ -486,38 +547,49 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
       {/* 控制器层 sticky：滚动容器是 .novel-main，不 sticky 会随正文滚走；布局与配色归 .novel-rdr-bar，行内只留 sticky 与 z。 */}
       <div ref={barRef} className={prefs.darkController ? 'novel-dark novel-rdr-bar' : 'novel-rdr-bar'}
         style={{ position: 'sticky', top: 0, zIndex: CTRL_Z.toolbar }}>
-        <button className="novel-rdr-ctl" onClick={() => { scene.exitToShelf() }}>
-          <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M10 3 5 8l5 5" /></svg>{t('reader.shelf')}
-        </button>
-        {/* 正文内链的返回入口：**一次返回一条**；没押返回项时不渲染——不给点了没反应的按钮。 */}
-        {returnDepth > 0 && (
-          <button className="novel-rdr-ctl" onClick={() => { takeOverReading(); session.goBack() }}
-            title={t('reader.backToOriginTitle')}>{t('reader.backToOrigin')}</button>
-        )}
-        <span className="novel-rdr-sep" aria-hidden="true" />
-        {/* 读数：当前章在主位，书名退副位；目录未到时唯一诚实的话是「目录加载中」。 */}
-        <div className="novel-rdr-title">
-          {toc === null ? <span className="novel-rdr-chap">{t('reader.tocLoading')}</span> : (
-            <>
-              <span className="novel-rdr-chap">
-                {toc[currentChapter] === undefined ? '' : displayChapterTitle(toc[currentChapter].name, currentChapter, t)}
-              </span>
-              <span className="novel-rdr-pos">{currentChapter + 1} / {toc.length}</span>
-            </>
+        <div className="novel-rdr-left">
+          <button type="button" className="novel-rdr-ctl" aria-label={t('reader.shelf')} onClick={() => { scene.exitToShelf() }}>
+            <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M10 3 5 8l5 5" /></svg>
+            <span className="novel-rdr-back-label">{t('reader.shelf')}</span>
+          </button>
+          {/* 正文内链的返回入口：**一次返回一条**；没押返回项时不渲染——不给点了没反应的按钮。 */}
+          {returnDepth > 0 && (
+            <button type="button" className="novel-rdr-ctl novel-rdr-back-origin" onClick={() => { takeOverReading(); session.goBack() }}
+              title={t('reader.backToOriginTitle')}>{t('reader.backToOrigin')}</button>
           )}
-          <span className="novel-rdr-book">{title}</span>
         </div>
+        {/* 读数居中：书名副位、章名与 N/M 主位；点击直接开合目录。 */}
+        <button
+          type="button"
+          className="novel-rdr-context novel-rdr-title"
+          title={t('reader.openContents')}
+          aria-expanded={sceneState.surface === 'toc'}
+          onClick={() => { scene.toggle('toc') }}
+        >
+          <span className="novel-rdr-book">{title}</span>
+          <span className="novel-rdr-chap-row">
+            {toc === null ? <span className="novel-rdr-chap">{t('reader.tocLoading')}</span> : (
+              <>
+                <span className="novel-rdr-chap">
+                  {toc[currentChapter] === undefined ? '' : displayChapterTitle(toc[currentChapter].name, currentChapter, t)}
+                </span>
+                <span className="novel-rdr-pos">{currentChapter + 1} / {toc.length}</span>
+              </>
+            )}
+          </span>
+        </button>
         <div className="novel-rdr-acts">
           {/* 导入说明入口：**只在真有持久告警的本地书上出现**；面板只读，不重复取数、不写进度。 */}
           {hasImportNotes && (
-            <button className="novel-rdr-ctl" aria-expanded={sceneState.surface === 'importNotes'} aria-label={t('reader.importNotes')}
+            <button type="button" className="novel-rdr-ctl" aria-expanded={sceneState.surface === 'importNotes'} aria-label={t('reader.importNotes')}
               onClick={() => { scene.toggle('importNotes') }}
               title={plural(t, importNotes.length, 'reader.importNotesTitle.one', 'reader.importNotesTitle.other')}>
               {t('reader.importNotes')}
             </button>
           )}
           <button
-            className="novel-rdr-ctl"
+            type="button"
+            className={exportState.running ? 'novel-rdr-ctl is-running' : 'novel-rdr-ctl'}
             onClick={() => { if (exportState.running) exportRun.cancel(); else openExport() }}
             title={exportState.running
               ? (exportState.range === null
@@ -536,6 +608,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
           {sceneState.surface === 'export' && (
             <ExportPanel
               draft={expDraft}
+              activePreset={matchPreset(expDraft, currentChapter, expTotal)}
               // 章数是活的：每次调用现给，草稿里不存副本——目录迟到时预设与校验一起自愈
               valid={validRangeOf(expDraft, expTotal)}
               total={expTotal}
@@ -557,15 +630,17 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
             />
           )}
           {/* 互斥与「再点同一颗就收场」判据在 `reader-surfaces`；工具栏在遮罩之上，各面自己的钮负责收场。 */}
-          <button className="novel-rdr-ctl" aria-expanded={sceneState.surface === 'prefs'} aria-label={t('reader.settings')}
+          <button type="button" className="novel-rdr-ctl novel-rdr-ctl-aa" aria-expanded={sceneState.surface === 'prefs'} aria-label={t('reader.settings')}
             onClick={() => { scene.toggle('prefs') }} title={t('reader.settings')}>Aa</button>
-          <button className="novel-rdr-ctl" aria-expanded={sceneState.surface === 'toc'} aria-label={t('reader.contents')}
+          <button type="button" className="novel-rdr-ctl" aria-expanded={sceneState.surface === 'toc'} aria-label={t('reader.contents')}
             onClick={() => { scene.toggle('toc') }}
             title={toc === null ? t('reader.contents') : t('reader.contentsWithCount', { n: toc.length })}>
             {t('reader.contents')}
           </button>
+          <span className="novel-rdr-sep" aria-hidden="true" />
           {/* 听书 pill：起播入口与本书播放中的暂停/继续；选中态才用 brand。 */}
           <button
+            type="button"
             className={listen.showing ? 'novel-rdr-ctl novel-tts-on' : 'novel-rdr-ctl'}
             aria-pressed={listen.showing} aria-label={t('tts.listen')} title={t('tts.listen')}
             onClick={onListenPill}
@@ -577,11 +652,15 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
             </svg>
             {t('tts.listen')}
           </button>
-          {sceneState.surface === 'prefs' && <PrefsPanel zIndex={CTRL_Z.panel} />}
+          {sceneState.surface === 'prefs' && <PrefsPanel zIndex={CTRL_Z.panel} onClose={closeCurrent} />}
         </div>
         {/* 章进度：跨章才动；章内百分比刻意不做——那是每帧量，会让整棵阅读器每帧重渲染。 */}
         <i className="novel-rdr-trail" aria-hidden="true"
-          style={{ '--novel-pct': String(toc === null ? 0 : (currentChapter + 1) / toc.length) } as CSSProperties} />
+          style={{
+            '--novel-pct': String(
+              toc === null || toc.length === 0 ? 0 : Math.min(1, Math.max(0, (currentChapter + 1) / toc.length)),
+            ),
+          } as CSSProperties} />
       </div>
       {/* 错误重试要真的重拉：会话错误走 session.retry，导出错误才复位导出态。 */}
       {shownError !== null && (
@@ -619,11 +698,15 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
             fontSize={prefs.fontSize}
             lineHeight={prefs.lineHeight}
             measure={prefs.measure}
+            columnMode={prefs.pageColumns}
             animation={prefs.pageAnimation}
             initialRatio={session.currentPosition.chapterIndex === currentChapter ? session.currentPosition.offsetRatio : 0}
+            initialParagraph={modeAnchorRef.current?.chapterIndex === currentChapter ? modeAnchorRef.current.paragraphIndex : null}
+            onConsumeInitialParagraph={onConsumeModeAnchor}
             listenParagraph={listen.chapterIndex === currentChapter ? listen.paragraphIndex : null}
             listenFollowing={listen.showing && !pagedFollowYielded}
             locateTick={pagedLocateTick}
+            paperDark={isDarkPaper(prefs.paperColor)}
             keyboardBlocked={sceneState.surface !== null || sceneState.askShelf || (listen.showing && ttsSettingsOpen)}
             onNavigate={onBodyNavigate}
             onChangeChapter={onPagedChangeChapter}
@@ -640,7 +723,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
             className="novel-rdr-body"
             style={{
               fontSize: prefs.fontSize, lineHeight: prefs.lineHeight,
-              '--novel-measure': `${prefs.measure}em`,
+              '--novel-measure': `${prefs.measure}px`,
             } as CSSProperties}
           >
             {toc === null && <div className="novel-rdr-loading">{t('reader.tocLoading')}</div>}
@@ -670,20 +753,93 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
         )}
         {/* 抽屉：0 宽 sticky 槽 + absolute 本体（锚视口、不切走正文宽度）。 */}
         {sceneState.surface === 'toc' && (
-          <div className="novel-drawer-slot">
+          <div className={prefs.darkController ? 'novel-drawer-slot novel-dark' : 'novel-drawer-slot'}>
             <div ref={drawerRef} className="novel-drawer" role="dialog" aria-label={t('reader.contents')}>
+              <div className="novel-drawer-top">
+                <div className="novel-panel-head">
+                  <span className="novel-panel-head-title">
+                    {t('reader.contents')}
+                    {toc !== null && (
+                      <span className="novel-panel-head-sub">
+                        {plural(t, toc.length, 'reader.export.chapterCount.one', 'reader.export.chapterCount.other', { total: toc.length })}
+                      </span>
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    className="novel-panel-close"
+                    aria-label={t('common.close')}
+                    title={t('common.close')}
+                    onClick={closeCurrent}
+                  >
+                    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                  </button>
+                </div>
+                <div className="novel-toc-toolbar">
+                  <div className="novel-toc-search">
+                    <svg className="novel-toc-search-ic" viewBox="0 0 16 16" aria-hidden="true">
+                      <circle cx="7.2" cy="7.2" r="4.5" />
+                      <path d="m13.5 13.5-3-3" />
+                    </svg>
+                    <input
+                      type="search"
+                      value={tocQuery}
+                      placeholder={t('reader.tocSearchPlaceholder')}
+                      aria-label={t('reader.tocSearchPlaceholder')}
+                      onChange={(e) => setTocQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape' && tocQuery !== '') {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          e.nativeEvent.stopPropagation()
+                          setTocQuery('')
+                        }
+                      }}
+                    />
+                    {tocQuery !== '' && (
+                      <button
+                        type="button"
+                        className="novel-toc-clear"
+                        aria-label={t('reader.tocSearchClear')}
+                        title={t('reader.tocSearchClear')}
+                        onClick={() => setTocQuery('')}
+                      >
+                        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                      </button>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="novel-toc-locate"
+                    aria-label={t('reader.tocLocateCurrent')}
+                    title={t('reader.tocLocateCurrent')}
+                    onClick={locateCurrentInToc}
+                  >
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <circle cx="8" cy="8" r="2.6" />
+                      <path d="M8 1.5v2.2M8 12.3v2.2M1.5 8h2.2M12.3 8h2.2" />
+                    </svg>
+                  </button>
+                </div>
+                {tocQuery.trim() !== '' && (
+                  <div className="novel-toc-count">
+                    {t('reader.tocMatchCount', { n: filteredNav.matchedLeaves, total: filteredNav.totalLeaves })}
+                  </div>
+                )}
+              </div>
               <ReaderNavigation
-                items={navigation ?? []}
+                items={filteredNav.items}
                 activeId={navActive}
                 // 目录点击是纯导航：先收抽屉，再由场景分流目标
                 onNavigate={(target) => { takeOverReading(); scene.close(); scene.openTarget(target) }}
+                emptyText={tocQuery.trim() !== '' ? t('reader.tocNoMatch') : undefined}
               />
             </div>
           </div>
         )}
         {/* 导入说明面板（本地书持久告警）：与注释面板同几何、同 z、互斥——只读，不写任何进度 */}
         {sceneState.surface === 'importNotes' && hasImportNotes && (
-          <ImportNotesPanel warnings={importNotes} onClose={closeCurrent} />
+          <ImportNotesPanel warnings={importNotes} onClose={closeCurrent} darkController={prefs.darkController} />
         )}
         {/* 注释面板（脚注/附录）：面板是浮层，主阅读位置不受它影响；内链打开的关闭即回引用处 */}
         {sceneState.surface === 'supplement' && sceneState.note !== null && (
@@ -694,6 +850,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
             deps={deps}
             onNavigate={(target, role) => { takeOverReading(); scene.panelLink(target, role) }}
             onClose={closeSurface}
+            darkController={prefs.darkController}
           />
         )}
       </div>

@@ -1,9 +1,10 @@
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { useEffect, useId, useMemo, useRef } from 'react'
 import type { TtsSourceInfo } from '../../shared/wire.js'
 import { TTS_RATE, TTS_VOLUME } from '../../shared/wire.js'
 import { useCopy } from '../copy/index.js'
 import { useStore } from '../store.js'
+import { rangePercent } from '../util.js'
 import {
   SIZE_PRESETS, miniBarStore, resetMiniBarSize, setMiniBarSize,
 } from './mini-bar-state.js'
@@ -83,10 +84,38 @@ export function useDirectVoices(): DirectVoice[] {
   return list
 }
 
+/** 原生 `<select>` 弹出列表会按全表最宽 `<option>` 撑开，CSS 裁不到原生菜单；按半角单位收敛单条展示宽度，完整文本留给 `title`。 */
+export const SELECT_OPTION_MAX_UNITS = 34
+
+function visualUnits(text: string): number {
+  let units = 0
+  for (const ch of text) {
+    const code = ch.codePointAt(0) ?? 0
+    units += code >= 0x1100 ? 2 : 1
+  }
+  return units
+}
+
+/** 将下拉选项标签归一化为单行并按视觉半角宽度截断：短文本原样保留，超宽按码点边界收尾 `…`。 */
+export function clampSelectOptionLabel(text: string, maxUnits = SELECT_OPTION_MAX_UNITS): string {
+  const clean = text.replace(/\s+/g, ' ').trim()
+  if (visualUnits(clean) <= maxUnits) return clean
+  const limit = Math.max(2, maxUnits - 2)
+  let used = 0
+  let out = ''
+  for (const ch of clean) {
+    const w = (ch.codePointAt(0) ?? 0) >= 0x1100 ? 2 : 1
+    if (used + w > limit) break
+    out += ch
+    used += w
+  }
+  return `${out.trimEnd()}…`
+}
+
 /** 音色行的读面：平台表带语区，订阅与宿主源的音色表只有名字——同一张 select 吃两种来源。 */
 type VoiceRow = { id: string; name: string; lang?: string }
 
-/** 六行设置（语速 / 音色 / 音量 / 定时 / 引擎 / 起播章）。音色行按「不可用入口不渲染」与「有这项
+/** 六行设置（语速 / 音量 / 音色 / 定时 / 引擎 / 起播章）。音色行按「不可用入口不渲染」与「有这项
  *  能力但当前没有音色」两案分开。引擎清单未到 / 现值不在清单里时仍摆出现值，不静默换源。 */
 export function TtsSettingsRows({ sources, surface }: {
   sources: TtsSourceInfo[] | null
@@ -111,14 +140,23 @@ export function TtsSettingsRows({ sources, surface }: {
 
   const engineIds = sources?.map((source) => source.id) ?? []
   const engineOptions = sources ?? []
+  const chapterFullTitle = (index: number): string => {
+    const prefix = t('tts.mini.chapter', { n: index + 1 })
+    const cleanName = (st.chapterNames[index] ?? '').replace(/\s+/g, ' ').trim()
+    return cleanName === '' ? prefix : `${prefix} ${cleanName}`
+  }
+  const currentChapterTitle = st.chapterIndex >= 0 && st.chapterIndex < st.chapterNames.length
+    ? chapterFullTitle(st.chapterIndex)
+    : undefined
   // 全书章名一次铺成 option：元素数组按章名清单 memo，段间推进时 React 拿到同一批引用即可跳过协调。
   const chapterOptions = useMemo(
     () => st.chapterNames.map((name, index) => {
       const prefix = t('tts.mini.chapter', { n: index + 1 })
-      const trimmed = name.trim()
+      const cleanName = name.replace(/\s+/g, ' ').trim()
+      const full = cleanName === '' ? prefix : `${prefix} ${cleanName}`
       return (
-        <option key={index} value={index}>
-          {trimmed === '' ? prefix : `${prefix} ${trimmed}`}
+        <option key={index} value={index} title={full}>
+          {clampSelectOptionLabel(full)}
         </option>
       )
     }),
@@ -127,124 +165,153 @@ export function TtsSettingsRows({ sources, surface }: {
 
   return (
     <>
-      <div className="novel-tts-row">
-        <span className="novel-tts-label">{t('tts.rate')}</span>
-        <input
-          className="novel-tts-range" type="range"
-          min={RATE.min} max={RATE.max} step={RATE.step}
-          aria-label={t('tts.rate')} value={st.rate}
-          onChange={(event) => { setListenRate(Number(event.target.value)) }}
-        />
-        <span className="novel-tts-val">{rateLabel(st, t)}</span>
-      </div>
-      {voices !== null && (
+      <div className="novel-tts-group">
         <div className="novel-tts-row">
-          <span className="novel-tts-label">{t('tts.voice')}</span>
-          <select
-            className="novel-tts-select" aria-label={t('tts.voice')} value={voiceValue}
-            onChange={(event) => { setListenVoice(event.target.value === '' ? null : event.target.value) }}
-          >
-            <option value="">{t('tts.voiceDefault')}</option>
-            {/* 平台音色带语区（见 `browserTtsVoices`）：几十支跨语种的音色只给名字就是让用户盲选。
-                订阅 / 宿主源的音色表没有这一格（源自己报名字），缺席就只显示名字。 */}
-            {voices.map((voice) => {
-              const lang = voice.lang ?? ''
-              return (
-                <option key={voice.id} value={voice.id}>
-                  {lang ? t('tts.voiceOption', { name: voice.name, lang }) : voice.name}
-                </option>
-              )
-            })}
-          </select>
+          <span className="novel-tts-label">{t('tts.rate')}</span>
+          <input
+            className="novel-tts-range" type="range"
+            min={RATE.min} max={RATE.max} step={RATE.step}
+            aria-label={t('tts.rate')} value={st.rate}
+            style={{ '--novel-range-fill': rangePercent(st.rate, RATE.min, RATE.max) } as CSSProperties}
+            onChange={(event) => { setListenRate(Number(event.target.value)) }}
+          />
+          <span className="novel-tts-val">{rateLabel(st, t)}</span>
         </div>
-      )}
-      <div className="novel-tts-row">
-        <span className="novel-tts-label">{t('tts.volume')}</span>
-        <input
-          className="novel-tts-range" type="range"
-          min={TTS_VOLUME.min} max={TTS_VOLUME.max} step={TTS_VOLUME.step}
-          aria-label={t('tts.volume')} value={st.volume}
-          onChange={(event) => { setListenVolume(Number(event.target.value)) }}
-        />
-        <span className="novel-tts-val">{t('tts.volumeValue', { percent: Math.round(st.volume * 100) })}</span>
-      </div>
-      <div className="novel-tts-row">
-        <span className="novel-tts-label">{t('tts.timer')}</span>
-        <div className="novel-chips">
-          {TIMER_SEQUENCE.map((choice) => (
-            <button key={choice === null ? 'off' : choice} type="button"
-              className={timerChoice === choice ? 'novel-chip on' : 'novel-chip'}
-              aria-pressed={timerChoice === choice} onClick={() => { setTimer(choice) }}>
-              {timerChoiceLabel(choice, t)}
-            </button>
-          ))}
+        <div className="novel-tts-row">
+          <span className="novel-tts-label">{t('tts.volume')}</span>
+          <input
+            className="novel-tts-range" type="range"
+            min={TTS_VOLUME.min} max={TTS_VOLUME.max} step={TTS_VOLUME.step}
+            aria-label={t('tts.volume')} value={st.volume}
+            style={{ '--novel-range-fill': rangePercent(st.volume, TTS_VOLUME.min, TTS_VOLUME.max) } as CSSProperties}
+            onChange={(event) => { setListenVolume(Number(event.target.value)) }}
+          />
+          <span className="novel-tts-val">{t('tts.volumeValue', { percent: Math.round(st.volume * 100) })}</span>
         </div>
-      </div>
-      <div className="novel-tts-row">
-        <span className="novel-tts-label">{t('tts.engine')}</span>
-        <select
-          className="novel-tts-select" aria-label={t('tts.engine')} value={st.engineId}
-          onChange={(event) => {
-            // 换到直出源要先等语音表（等待与判据都在 `setListenEngine`）；失败时 DOM 的受控值必须写回
-            // 实际生效值：只 pushError 不重渲，下拉会停在那个没生效的选项上。
-            const select = event.currentTarget
-            void setListenEngine(select.value).catch((error: unknown) => {
-              select.value = ttsPlayer.get().engineId
-              pushError(ttsErrorMessage(t, error))
-            })
-          }}
-        >
-          {/* 清单未到 / 当前引擎已不在清单里：仍把现值摆出来（选中态不说谎），不静默换成别的引擎。
-              显示名走 `engineLabelOf` 的同一份 kind 判据——自有的内置 / 浏览器 / cordis 源取词，
-              只有订阅 id 才回落原始 id，不把 `builtin:baidu` 这类机器串上屏。 */}
-          {(sources === null || !engineIds.includes(st.engineId)) && (
-            <option value={st.engineId}>{engineLabelOf(t, st.engineId)}</option>
-          )}
-          {engineOptions.map((source) => (
-            <option key={source.id} value={source.id}>{sourceLabel(t, source)}</option>
-          ))}
-        </select>
-      </div>
-      <div className="novel-tts-row">
-        <span className="novel-tts-label">{t('tts.startChapter')}</span>
-        <select
-          className="novel-tts-select" aria-label={t('tts.startChapter')} value={st.chapterIndex}
-          onChange={(event) => {
-            // 与引擎下拉同一条：跳章失败时选中的章没有生效，受控值写回实际会话的章号。
-            const select = event.currentTarget
-            void jumpToChapter(Number(select.value)).catch((error: unknown) => {
-              select.value = String(ttsPlayer.get().chapterIndex)
-              pushError(ttsErrorMessage(t, error))
-            })
-          }}
-        >
-          {chapterOptions}
-        </select>
-      </div>
-      {surface === 'float'
-        ? (
+        {voices !== null && (
           <div className="novel-tts-row">
-            <span className="novel-tts-label">{t('tts.floatSize')}</span>
-            {SIZE_PRESETS.map((preset) => {
-              const on = presetOn(preset.width, preset.height, mini.w, mini.h)
-              return (
-                <button
-                  key={preset.id}
-                  type="button"
-                  className={on ? 'novel-tts-chip on' : 'novel-tts-chip'}
-                  aria-pressed={on}
-                  onClick={() => { setMiniBarSize(preset.width, preset.height) }}
-                >
-                  {t(`tts.floatSize.${preset.id}`)}
-                </button>
-              )
-            })}
-            <button type="button" className="novel-tts-chip" onClick={resetMiniBarSize}>
-              {t('tts.floatSizeReset')}
-            </button>
+            <span className="novel-tts-label">{t('tts.voice')}</span>
+            <span className="novel-select-wrap">
+              <select
+                className="novel-tts-select" aria-label={t('tts.voice')} value={voiceValue}
+                onChange={(event) => { setListenVoice(event.target.value === '' ? null : event.target.value) }}
+              >
+                <option value="">{t('tts.voiceDefault')}</option>
+                {/* 平台音色带语区（见 `browserTtsVoices`）：几十支跨语种的音色只给名字就是让用户盲选。 */}
+                {voices.map((voice) => {
+                  const lang = voice.lang ?? ''
+                  const full = lang ? t('tts.voiceOption', { name: voice.name, lang }) : voice.name
+                  const display = (() => {
+                    if (!lang) return clampSelectOptionLabel(voice.name)
+                    const cleanFull = full.replace(/\s+/g, ' ').trim()
+                    if (visualUnits(cleanFull) <= SELECT_OPTION_MAX_UNITS) return cleanFull
+                    const suffixUnits = visualUnits(t('tts.voiceOption', { name: '', lang }))
+                    const nameBudget = Math.max(8, SELECT_OPTION_MAX_UNITS - suffixUnits)
+                    return t('tts.voiceOption', { name: clampSelectOptionLabel(voice.name, nameBudget), lang })
+                  })()
+                  return (
+                    <option key={voice.id} value={voice.id} title={full}>
+                      {display}
+                    </option>
+                  )
+                })}
+              </select>
+              <svg className="novel-select-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
+            </span>
           </div>
-        )
-        : null}
+        )}
+      </div>
+
+      <div className="novel-tts-group">
+        <div className="novel-tts-row">
+          <span className="novel-tts-label">{t('tts.timer')}</span>
+          <div className="novel-tts-timer-grid">
+            {TIMER_SEQUENCE.map((choice) => (
+              <button key={choice === null ? 'off' : choice} type="button"
+                className={timerChoice === choice ? 'novel-chip on' : 'novel-chip'}
+                aria-pressed={timerChoice === choice} onClick={() => { setTimer(choice) }}>
+                {timerChoiceLabel(choice, t)}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="novel-tts-group">
+        <div className="novel-tts-row">
+          <span className="novel-tts-label">{t('tts.engine')}</span>
+          <span className="novel-select-wrap">
+            <select
+              className="novel-tts-select" aria-label={t('tts.engine')} value={st.engineId}
+              onChange={(event) => {
+                // 换到直出源要先等语音表（等待与判据都在 `setListenEngine`）；失败时 DOM 的受控值必须写回实际生效值。
+                const select = event.currentTarget
+                void setListenEngine(select.value).catch((error: unknown) => {
+                  select.value = ttsPlayer.get().engineId
+                  pushError(ttsErrorMessage(t, error))
+                })
+              }}
+            >
+              {/* 清单未到 / 当前引擎已不在清单里：仍把现值摆出来（选中态不说谎），不静默换成别的引擎。 */}
+              {(sources === null || !engineIds.includes(st.engineId)) && (() => {
+                const label = engineLabelOf(t, st.engineId)
+                return <option value={st.engineId} title={label}>{clampSelectOptionLabel(label)}</option>
+              })()}
+              {engineOptions.map((source) => {
+                const label = sourceLabel(t, source)
+                return <option key={source.id} value={source.id} title={label}>{clampSelectOptionLabel(label)}</option>
+              })}
+            </select>
+            <svg className="novel-select-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
+          </span>
+        </div>
+        <div className="novel-tts-row">
+          <span className="novel-tts-label">{t('tts.startChapter')}</span>
+          <span className="novel-select-wrap">
+            <select
+              className="novel-tts-select" aria-label={t('tts.startChapter')}
+              title={currentChapterTitle} value={st.chapterIndex}
+              onChange={(event) => {
+                // 与引擎下拉同一条：跳章失败时选中的章没有生效，受控值写回实际会话的章号。
+                const select = event.currentTarget
+                void jumpToChapter(Number(select.value)).catch((error: unknown) => {
+                  select.value = String(ttsPlayer.get().chapterIndex)
+                  pushError(ttsErrorMessage(t, error))
+                })
+              }}
+            >
+              {chapterOptions}
+            </select>
+            <svg className="novel-select-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
+          </span>
+        </div>
+        {surface === 'float'
+          ? (
+            <div className="novel-tts-row">
+              <span className="novel-tts-label">{t('tts.floatSize')}</span>
+              <div className="novel-tts-float-sizes">
+                {SIZE_PRESETS.map((preset) => {
+                  const on = presetOn(preset.width, preset.height, mini.w, mini.h)
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      className={on ? 'novel-tts-chip on' : 'novel-tts-chip'}
+                      aria-pressed={on}
+                      onClick={() => { setMiniBarSize(preset.width, preset.height) }}
+                    >
+                      {t(`tts.floatSize.${preset.id}`)}
+                    </button>
+                  )
+                })}
+                <button type="button" className="novel-tts-chip" onClick={resetMiniBarSize}>
+                  {t('tts.floatSizeReset')}
+                </button>
+              </div>
+            </div>
+          )
+          : null}
+      </div>
     </>
   )
 }

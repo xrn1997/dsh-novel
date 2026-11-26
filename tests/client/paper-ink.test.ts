@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { paperInk } from '../../src/client/util.js'
+import {
+  hexToHsl, hslToHex, isDarkPaper, normalizeHex, paperContrastRatio, paperInk,
+} from '../../src/client/util.js'
 
 /**
  * 正文层字色择选：纸张色由 prefs 固定、永不接宿主 token，故字色必须**由纸张色算**
@@ -40,5 +42,17 @@ describe('paperInk：纸张色 → 字色（感知亮度）', () => {
   it('大小写与首尾空白容错', () => {
     expect(paperInk('  #FFF  ')).toBe('#222')
     expect(paperInk('#F7F3E8')).toBe('#222')
+  })
+
+  it('深纸判别、对比度计算与 HEX/HSL 转换', () => {
+    expect(isDarkPaper('#111315')).toBe(true)
+    expect(isDarkPaper('#f7f3e8')).toBe(false)
+    expect(paperContrastRatio('#ffffff')).toBeGreaterThan(15)
+    expect(paperContrastRatio('#111315')).toBeGreaterThan(14)
+    expect(normalizeHex(' #abc ')).toBe('#aabbcc')
+    expect(normalizeHex('invalid')).toBeNull()
+    expect(hexToHsl('#ffffff')).toEqual([0, 0, 100])
+    expect(hslToHex(0, 0, 100)).toBe('#ffffff')
+    expect(hslToHex(210, 20, 10)).toMatch(/^#[0-9a-f]{6}$/)
   })
 })

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { applyPreset, createExportRun, draftOf, parseRange, validRangeOf } from '../../src/client/export-run.js'
+import { applyPreset, createExportRun, draftOf, matchPreset, parseRange, validRangeOf } from '../../src/client/export-run.js'
 import type { ExportRunDeps, ExportRunState } from '../../src/client/export-run.js'
 import { ApiClientError } from '../../src/client/api.js'
 import { enTranslate, zhTranslate } from '../../src/client/copy/index.js'
@@ -166,10 +166,12 @@ describe('export draft', () => {
   it('draftOf 给全本缺省', () => {
     expect(draftOf(12)).toEqual({ from: '1', to: '12' })
   })
-  it('preset all 回到全本；preset rest 从下一章起', () => {
+  it('preset all 回到全本；preset rest 从当前章起；preset current 仅当前章', () => {
     // 档位不收草稿：两格全由 kind / currentChapter / total 派生，面板里用户改到哪都不影响这一步
     expect(applyPreset('all', 4, 12)).toEqual({ from: '1', to: '12' })
     expect(applyPreset('rest', 4, 12)).toEqual({ from: '5', to: '12' })
+    expect(applyPreset('current', 4, 12)).toEqual({ from: '5', to: '5' })
+    expect(applyPreset('current', 0, 0)).toEqual({ from: '1', to: '0' })
   })
   it('rest 在最后一章（0 基下标 = total - 1）= 只剩当章', () => {
     // 章下标 0 基：total 12 的最后一章是 11，rest 从 12 起、to 也是 12。
@@ -195,5 +197,13 @@ describe('export draft', () => {
     // 「不收草稿」是签名级的关闭（`applyPreset` 没有草稿形参，tsc 挡加宽对象透传），
     // 这里只钉 rest 分支在 0 位上的形状；applyPreset 不得以草稿为底回写，本用例不替那条作证。
     expect(applyPreset('rest', 0, 12)).toEqual({ from: '1', to: '12' })
+  })
+  it('matchPreset 按活目录总章数纯派生当前高亮预设（total=0 / 自定义范围返回 null）', () => {
+    expect(matchPreset({ from: '1', to: '0' }, 0, 0)).toBeNull()
+    expect(matchPreset({ from: '1', to: '12' }, 4, 12)).toBe('all')
+    expect(matchPreset({ from: '5', to: '12' }, 4, 12)).toBe('rest')
+    expect(matchPreset({ from: '5', to: '5' }, 4, 12)).toBe('current')
+    expect(matchPreset({ from: '2', to: '8' }, 4, 12)).toBeNull()
+    expect(matchPreset({ from: '12', to: '12' }, 11, 12)).toBe('rest')
   })
 })

@@ -119,6 +119,55 @@ describe('createReaderGeometry（ReaderPort 的纯几何实现）', () => {
     expect(textOnly.currentNode()).toBeNull()
   })
 
+  it('纯文本章（仅有 data-pidx、无 data-novel-node）也能采点与反查偏移，支撑文字章排版复位', () => {
+    const pidxNode = (pidx: number, top: number, height = 20): FakeNode => ({
+      attrs: { 'data-pidx': String(pidx) }, top, height,
+      getAttribute(name) { return this.attrs[name] ?? null },
+      getBoundingClientRect() { return { top: this.top, height: this.height } as DOMRect },
+    })
+    const c0 = block(100, 300, [pidxNode(0, 70), pidxNode(1, 130), pidxNode(2, 220)])
+    const g = geometryOf({ port: port(100, 50), chapters: [c0] })
+    const cur = g.currentNode()
+    expect(cur).toEqual({ index: 0, nodeId: 'pidx:0', offsetWithinNode: 30 })
+    expect(g.targetOffset(0, cur?.nodeId ?? null)).toBe(-30)
+    expect(g.targetOffsets(0, [null, 'pidx:0', 'pidx:2', 'pidx:bad'])).toEqual([0, -30, 120, null])
+  })
+
+  it('纯文本章视口顶落在章标题上（首段之前）时以 pidx:head 为锚，不回退到上一章末段', () => {
+    const pidxNode = (pidx: number, top: number, height = 20): FakeNode => ({
+      attrs: { 'data-pidx': String(pidx) }, top, height,
+      getAttribute(name) { return this.attrs[name] ?? null },
+      getBoundingClientRect() { return { top: this.top, height: this.height } as DOMRect },
+    })
+    const headingNode = (top: number, height = 40): FakeNode => ({
+      attrs: { class: 'novel-rdr-mark' }, top, height,
+      getAttribute(name) { return this.attrs[name] ?? null },
+      getBoundingClientRect() { return { top: this.top, height: this.height } as DOMRect },
+    })
+    const c0 = block(0, 200, [pidxNode(0, 20), pidxNode(1, 120)])
+    const c1 = block(220, 300, [headingNode(220, 40), pidxNode(0, 280), pidxNode(1, 340)])
+    const g = geometryOf({ port: port(240, 240), chapters: [c0, c1] })
+    const cur = g.currentNode()
+    expect(cur).toEqual({ index: 1, nodeId: 'pidx:head', offsetWithinNode: 20 })
+    expect(g.targetOffset(1, 'pidx:head')).toBe(-20)
+    expect(g.targetOffsets(1, [null, 'pidx:head', 'pidx:0'])).toEqual([-20, -20, 40])
+  })
+
+  it('纯文本章含空行/纯标点行与正文共享同一 data-pidx 时，采点与反查统一命中最后一个正文块', () => {
+    const pidxNode = (pidx: number, top: number, height = 20): FakeNode => ({
+      attrs: { 'data-pidx': String(pidx) }, top, height,
+      getAttribute(name) { return this.attrs[name] ?? null },
+      getBoundingClientRect() { return { top: this.top, height: this.height } as DOMRect },
+    })
+    // 模拟第 0 行是空行/纯标点（top=60）与第 1 行真实正文（top=120）共享 data-pidx="0"
+    const c0 = block(50, 300, [pidxNode(0, 60), pidxNode(0, 120), pidxNode(1, 200)])
+    const g = geometryOf({ port: port(150, 50), chapters: [c0] })
+    const cur = g.currentNode()
+    expect(cur).toEqual({ index: 0, nodeId: 'pidx:0', offsetWithinNode: 30 })
+    expect(g.targetOffset(0, 'pidx:0')).toBe(-30)
+    expect(g.targetOffsets(0, ['pidx:0', 'pidx:1'])).toEqual([-30, 50])
+  })
+
   it('章块未渲染（null 洞）跳过，不改变章号', () => {
     const g = geometryOf({ port: port(0, 0), chapters: [null, block(100, 50)] })
     expect(g.measureAnchors()).toEqual([{ index: 1, start: 100, height: 50 }])

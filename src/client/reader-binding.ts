@@ -205,12 +205,14 @@ export class ReaderBinding {
     this.scheduleMeasure()
   }
 
-  /** 装监听、注册探针、首帧喂视口，并排下挂载后的第一拍（DOM 已提交，端口可能刚出现） */
-  mount(target: ReaderDomTarget): void {
+  /** 装监听、注册探针、首帧喂视口，并排下挂载后的第一拍（DOM 已提交，端口可能刚出现）。
+   *  `beforeFeed` 在首帧喂视口前运行（此刻滚动端口已刷新），供模式切回滚动时先把 scrollTop 摆到保存位置。 */
+  mount(target: ReaderDomTarget, opts?: { beforeFeed?: () => void }): void {
     this.target = target
     this.mounted = true
     this.measuredRevision = -1
     this.refreshPort()
+    opts?.beforeFeed?.()
     this.unlisten = this.host.listenViewport({
       scroll: () => { this.target?.feedViewport(false) },
       layout: () => { this.target?.feedViewport(true) },

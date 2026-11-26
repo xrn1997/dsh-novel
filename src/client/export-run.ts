@@ -71,15 +71,36 @@ export function draftOf(total: number): ExportDraft {
   return { from: '1', to: String(total) }
 }
 
-/** 档位：all = 全本；rest = 当前章的下一章起。total 由调用方按当下目录现给（不进草稿）；
+export type ExportPreset = 'all' | 'rest' | 'current'
+
+/** 档位：all = 全本；rest = 当前章起；current = 仅当前章。total 由调用方按当下目录现给（不进草稿）；
  *  rest 在最后一章时钳到 total——from 越过 to 会让确认钮凭空禁用。不收草稿入参：两格全由
  *  kind / currentChapter / total 决定，收进来只为凑签名就会逼出空底。 */
 export function applyPreset(
-  kind: 'all' | 'rest', currentChapter: number, total: number,
+  kind: ExportPreset, currentChapter: number, total: number,
 ): ExportDraft {
   if (kind === 'all') return draftOf(total)
+  if (kind === 'current') {
+    if (total < 1) return draftOf(total)
+    const at = Math.min(Math.max(1, currentChapter + 1), total)
+    return { from: String(at), to: String(at) }
+  }
   const from = Math.min(currentChapter + 1, total)
   return { from: String(from), to: String(total) }
+}
+
+/** 推算当前草稿匹配哪一档预设（由草稿与活目录总章数纯派生，不在 UI 另存状态副本）。 */
+export function matchPreset(
+  draft: ExportDraft, currentChapter: number, total: number,
+): ExportPreset | null {
+  if (!Number.isInteger(total) || total < 1) return null
+  const from = draft.from.trim()
+  const to = draft.to.trim()
+  for (const kind of ['all', 'rest', 'current'] as const) {
+    const target = applyPreset(kind, currentChapter, total)
+    if (target.from === from && target.to === to) return kind
+  }
+  return null
 }
 
 /** 确认钮的唯一判据（视图只渲染 reason，不自己判）；章数按调用方现给的活值。 */

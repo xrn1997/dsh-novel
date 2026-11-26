@@ -1563,4 +1563,135 @@ describe('ReaderSession 翻页模式（无滚动视口）', () => {
     expect(h.session.currentPosition).toEqual({ chapterIndex: 1, offsetRatio: 0 })
     expect(h.session.state.error).not.toBeNull()
   })
+
+  it('切回滚动时优先按段落锚点落位，并锁定首帧合成视口不让亚像素/短章夹取把章号往回写', async () => {
+    const h = makeSession({
+      shelf: [shelfBook({ chapterIndex: 2, offsetRatio: 0.4, updatedAt: 0 })],
+      topInset: () => 48,
+    })
+    h.port.scrollH = 3000
+    h.port.height = 1000
+    h.port.anchors = [
+      { index: 0, start: 0, height: 1000 },
+      { index: 1, start: 1000, height: 1500 },
+      { index: 2, start: 2500, height: 500 },
+    ]
+    // 1) 同章段落锚点：按真实段坐标对齐（并向上取整避开亚像素落回上一章）
+    h.port.top = 0
+    h.port.paragraphOffs.set('2:3', { top: 2680.4, height: 40 })
+    h.session.setPaged(true)
+    await h.session.open('src', 'https://s.com/book/1')
+    h.session.setPaged(false)
+    h.session.scrollToSavedPosition({ chapterIndex: 2, paragraphIndex: 3 })
+    // 2680.4 - 48 = 2632.4 → ceil = 2633 → 夹在 maxScroll (2000) 内，首帧 feedViewport 锁住不倒退到第 1 章
+    expect(h.port.top).toBe(2000)
+    h.session.feedViewport()
+    expect(h.session.currentPosition.chapterIndex).toBe(2)
+
+    // 2) 用户真滚到第 1 章区域后，锁定解除并立即正常跟踪章号
+    h.port.top = 1200
+    h.session.feedViewport()
+    expect(h.session.currentPosition.chapterIndex).toBe(1)
+
+    // 3) 跨章/小章首对齐：paragraphIndex=0 且 offsetRatio=0 时向上取整，保证 contentTop >= a.start 不掉章
+    h.port.scrollH = 5000
+    h.port.anchors = [
+      { index: 0, start: 0, height: 1000 },
+      { index: 1, start: 1000.6, height: 1200 },
+    ]
+    h.session.setPaged(true)
+    h.session.requestJump(2)
+    await new Promise((r) => setTimeout(r, 0))
+    h.session.requestJump(1)
+    await new Promise((r) => setTimeout(r, 0))
+    h.session.setPaged(false)
+    h.session.scrollToSavedPosition(null)
+    // raw=1000.6 - topInset=48 = 952.6 → ceil = 953，953 + 48 = 1001 >= 1000.6，首帧保持第 1 章
+    expect(h.port.top).toBe(953)
+    h.session.feedViewport()
+    expect(h.session.currentPosition.chapterIndex).toBe(1)
+  })
+
+  it('恢复与目录跳章按小数块高向上取整 scrollTop：整数截断与回溯前插不倒退上一章', async () => {
+    const h = makeSession({
+      shelf: [shelfBook({ chapterIndex: 2, offsetRatio: 0, updatedAt: 0 })],
+      topInset: () => 48,
+    })
+    const origSet = h.port.setScrollTop.bind(h.port)
+    // 模拟真实 Chromium 对小数 scrollTop 向下截断为整数的行为
+    h.port.setScrollTop = (px: number) => { origSet(Math.floor(px)) }
+    h.port.scrollH = 6000
+    h.port.height = 800
+    h.port.anchors = [{ index: 2, start: 88.390625, height: 1974.390625 }]
+
+    await h.session.open('src', 'https://s.com/book/1')
+    expect(h.port.top).toBe(41)
+    expect(h.session.state.currentChapter).toBe(2)
+
+    // 视口首次测量触发第 1 章回溯前插，待章块提交 DOM 后再运行 afterRender 补偿 scrollTop
+    h.session.afterRender()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(h.fetched).toContain(1)
+    h.port.anchors = [
+      { index: 1, start: 88.390625, height: 1974.390625 },
+      { index: 2, start: 2110.78125, height: 1974.390625 },
+    ]
+    h.session.afterRender()
+    h.session.feedViewport()
+    expect(h.port.top).toBe(2064)
+    expect(h.session.state.currentChapter).toBe(2)
+
+    // 目录直达前跳到已载窗口外/边缘章节，小数偏移同样向上取整，不掉回前一章
+    h.port.anchors = [
+      { index: 0, start: 88.390625, height: 1974.390625 },
+      { index: 1, start: 2110.78125, height: 1974.390625 },
+      { index: 2, start: 4133.171875, height: 1974.390625 },
+    ]
+    h.port.top = 0
+    h.port.chapterOff = 4133.171875
+    h.session.requestJump(2)
+    await new Promise((r) => setTimeout(r, 0))
+    h.session.afterRender()
+    h.session.feedViewport()
+    expect(h.port.top).toBe(4086)
+    expect(h.session.state.currentChapter).toBe(2)
+  })
+
+  it('翻页态跳过排版前采点，applyTypesetRelocation 与 settleReveal 按小数偏移向上取整', async () => {
+    const h = makeSession({ topInset: () => 48 })
+    h.port.height = 800
+    h.port.scrollH = 5000
+    h.port.anchors = [{ index: 0, start: 0, height: 2000 }]
+    h.port.node = { index: 0, nodeId: 'pidx:0', offsetWithinNode: 0 }
+    h.port.targetOffs.set('pidx:0', 100.2)
+
+    // 1) 翻页模式下 setPref 不采纵向 DOM 节点
+    h.session.setPaged(true)
+    await h.session.open('src', 'https://s.com/book/1')
+    const readsBefore = h.port.nodeReads
+    try {
+      setPref({ fontSize: 20 })
+      expect(h.port.nodeReads).toBe(readsBefore)
+    } finally {
+      setPref({ ...DEFAULT_PREFS })
+    }
+
+    // 2) 滚动模式下 applyTypesetRelocation 向上取整（且不低于 0）
+    h.session.setPaged(false)
+    h.port.top = 0
+    try {
+      setPref({ fontSize: 22 })
+      h.session.applyTypesetRelocation()
+      expect(h.port.top).toBe(53) // Math.ceil(0 + 100.2 + 0 - 48) = 53
+    } finally {
+      setPref({ ...DEFAULT_PREFS })
+    }
+
+    // 3) settleReveal 小数偏移向上取整
+    h.port.top = 100
+    h.port.paragraphOffs.set('0:1', { top: 200.2, height: 40 })
+    h.session.reveal({ index: 0, paragraphIndex: 1 }, { mode: 'locate', write: false, bottomInset: 0 })
+    h.session.afterRender()
+    expect(h.port.top).toBe(253) // Math.ceil(100 + (200.2 - 48)) = 253
+  })
 })

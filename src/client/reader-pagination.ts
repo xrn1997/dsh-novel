@@ -1,9 +1,12 @@
+import type { PageColumns } from './store.js'
+
 /**
  * 翻页模式纯几何与页码计算：零 DOM、零 React，方便单测钉死所有边界。
  *
- * 布局规则（自适应单/双页）：
- * - 容器可用宽度 ≥ DOUBLE_PAGE_MIN_WIDTH（860px）→ 双页摊开（2 栏 + 书脊中缝）
- * - 容器可用宽度 < 860px → 单页翻页（1 栏）
+ * 布局规则（自适应 / 单页 / 双页）：
+ * - columnMode='single' → 单页（1 栏），栏宽与滚动阅读的 measure 一致
+ * - columnMode='double' → 可用宽度 ≥ DOUBLE_PAGE_FORCE_MIN_WIDTH（560px）时双页摊开（2 栏），否则单页
+ * - columnMode='auto'   → 可用宽度 ≥ DOUBLE_PAGE_MIN_WIDTH（860px）时双页摊开（2 栏），否则单页
  *
  * CSS multi-column 坐标系：
  * - 单栏宽 `columnWidth`，栏间距 `columnGap`，每栏步进 `columnStep = columnWidth + columnGap`
@@ -12,8 +15,10 @@
  */
 
 export const DOUBLE_PAGE_MIN_WIDTH = 860
+export const DOUBLE_PAGE_FORCE_MIN_WIDTH = 560
 export const SINGLE_PAGE_GAP = 32
 export const DOUBLE_PAGE_GAP = 64
+export const DOUBLE_PAGE_COLUMN_SCALE = 0.8
 
 export interface SpreadLayout {
   columnsPerSpread: 1 | 2
@@ -36,16 +41,21 @@ export interface ParagraphHorizontalSpan {
   right: number
 }
 
-/** 按当前舞台可用宽度与排版参数（栏宽 em、字号 px）计算单/双页几何。 */
-export function computeSpreadLayout(stageWidth: number, measureEm: number, fontSize: number): SpreadLayout {
+/** 按当前舞台可用宽度、固定栏宽（px）与分栏模式计算单/双页几何（与字号解耦）。 */
+export function computeSpreadLayout(
+  stageWidth: number,
+  measurePx: number,
+  columnMode: PageColumns = 'auto',
+): SpreadLayout {
   const safeStage = Math.max(240, Math.floor(stageWidth))
-  const safeEm = Math.max(16, measureEm)
-  const safeFont = Math.max(10, fontSize)
-  const isDouble = safeStage >= DOUBLE_PAGE_MIN_WIDTH
+  const safeMeasure = Math.max(320, Math.round(measurePx))
+  const isDouble = columnMode === 'double'
+    ? safeStage >= DOUBLE_PAGE_FORCE_MIN_WIDTH
+    : columnMode === 'auto' && safeStage >= DOUBLE_PAGE_MIN_WIDTH
   if (isDouble) {
     const columnGap = DOUBLE_PAGE_GAP
-    // 双页上限按「两栏 measure + 书脊中缝」收住，避免超宽屏把行拉得过长
-    const maxBookWidth = Math.round(safeEm * safeFont * 2 + columnGap)
+    const doubleColMax = Math.max(240, Math.round(safeMeasure * DOUBLE_PAGE_COLUMN_SCALE))
+    const maxBookWidth = doubleColMax * 2 + columnGap
     const contentWidth = Math.max(480, Math.min(safeStage, maxBookWidth))
     const columnWidth = Math.max(200, Math.floor((contentWidth - columnGap) / 2))
     const alignedContent = columnWidth * 2 + columnGap
@@ -53,8 +63,7 @@ export function computeSpreadLayout(stageWidth: number, measureEm: number, fontS
     return { columnsPerSpread: 2, columnWidth, columnGap, contentWidth: alignedContent, stride }
   }
   const columnGap = SINGLE_PAGE_GAP
-  const maxSingleWidth = Math.round(safeEm * safeFont)
-  const contentWidth = Math.max(240, Math.min(safeStage, maxSingleWidth))
+  const contentWidth = Math.max(240, Math.min(safeStage, safeMeasure))
   const columnWidth = contentWidth
   const stride = columnWidth + columnGap
   return { columnsPerSpread: 1, columnWidth, columnGap, contentWidth, stride }
@@ -81,7 +90,7 @@ export function computePageCount(
 export function spreadForRatio(ratio: number, totalSpreads: number): number {
   if (totalSpreads <= 1 || !Number.isFinite(ratio)) return 0
   const clamped = Math.max(0, Math.min(0.999999, ratio))
-  return Math.min(totalSpreads - 1, Math.floor(clamped * totalSpreads))
+  return Math.min(totalSpreads - 1, Math.floor(clamped * totalSpreads + 1e-6))
 }
 
 /** 把当前屏号折算回章内比例（0..1，严格 < 1，与服务端 progress 口径兼容）。 */

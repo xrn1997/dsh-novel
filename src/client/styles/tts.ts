@@ -3,78 +3,124 @@
  *  token（暗底浮层），**不跟纸走**。 */
 export const TTS_CSS = `
 /* ── 听书条（阅读器内嵌）────────────────────────────────────────────────── */
-/* 贴视口底：滚动容器在阅读器之外，sticky 让条在整段阅读里停在下沿。 */
+/* 贴视口底：滚动模式随 .novel-main 滚动吸底（sticky）；翻页模式出流成底部浮岛（不挤占书页舞台高）。 */
 .novel-tts-bar {
-  position: sticky; bottom: 0; z-index: 1;
-  display: flex; align-items: center; flex-wrap: wrap; gap: var(--novel-sp-2);
-  padding: var(--novel-sp-2) var(--novel-sp-4);
+  position: sticky; bottom: 0; z-index: var(--novel-z-status);
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px;
+  padding: 8px var(--novel-sp-5);
   border-top: 1px solid color-mix(in srgb, var(--novel-paper-ink) 12%, transparent);
+  box-shadow: 0 -6px 20px color-mix(in srgb, var(--novel-paper-ink) 6%, transparent);
   color: var(--novel-paper-ink);
+}
+.novel-rdr.is-paged .novel-tts-bar {
+  position: absolute; left: var(--novel-sp-5); right: var(--novel-sp-5); bottom: var(--novel-sp-1);
+  max-width: 780px; margin-inline: auto; padding: 3px 10px 4px; gap: 2px 6px;
+  border-radius: var(--novel-r-lg);
+  border: 1px solid color-mix(in srgb, var(--novel-paper-ink) 14%, transparent);
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--novel-paper-ink) 14%, transparent);
+}
+.novel-rdr.is-paged .novel-tts-bar.novel-dark {
+  border-color: var(--novel-border); box-shadow: var(--novel-shadow-2);
+}
+.novel-rdr.is-paged .novel-tts-play { width: 28px; height: 28px; }
+.novel-rdr.is-paged .novel-tts-bar .novel-rdr-ctl { min-height: 26px; padding: 2px 6px; }
+.novel-rdr.is-paged .novel-tts-now { flex-direction: row; align-items: center; gap: 6px; }
+.novel-rdr.is-paged .novel-tts-preview { display: none; }
+.novel-rdr.is-paged .novel-tts-chapter-seek .novel-tts-range { height: 12px; }
+.novel-rdr.is-paged .novel-tts-fail {
+  font-size: 11px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+@container novel-reader (max-width: 520px) {
+  .novel-rdr.is-paged .novel-tts-bar {
+    left: var(--novel-sp-2); right: var(--novel-sp-2);
+    padding: 3px 8px 4px; gap: 2px 4px;
+  }
+  .novel-rdr.is-paged .novel-tts-bar:not([data-empty-chapter="true"]) .novel-tts-now { display: none; }
 }
 /* 控制器层强制深色：整条让回宿主暗底（与 .novel-rdr-bar.novel-dark 同一档） */
 .novel-tts-bar.novel-dark {
   background: var(--novel-bg); color: var(--novel-text);
   border-top-color: var(--novel-border);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, .24);
 }
-.novel-tts-nav { display: flex; align-items: center; gap: var(--novel-sp-1); flex: none; }
-/* 播放/暂停是条上唯一的主按钮：圆底、略大，与两侧跳段 pill 分主次 */
+.novel-tts-nav { display: flex; align-items: center; gap: 2px; flex: none; }
+/* 播放/暂停是条上唯一的主按钮：圆实心按钮，与两侧跳段分主次 */
 .novel-tts-play {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 30px; height: 30px; padding: 0; cursor: pointer;
-  border: none; border-radius: 999px; background: none; color: inherit;
-  transition: background var(--novel-dur) var(--novel-ease);
+  width: 36px; height: 36px; padding: 0; cursor: pointer;
+  border: none; border-radius: 999px;
+  background: var(--novel-live-ink); color: var(--novel-paper);
+  transition: filter var(--novel-dur-fast) ease, transform var(--novel-dur-fast) ease;
 }
-.novel-tts-play:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+.novel-tts-play:hover { filter: brightness(1.08); }
+.novel-tts-play:active:not(:disabled) { transform: scale(.96); }
+.novel-tts-bar.novel-dark .novel-tts-play { background: var(--novel-primary-fill); color: var(--novel-fg); }
 .novel-tts-play svg {
-  width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8;
+  width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9;
   stroke-linecap: round; stroke-linejoin: round;
 }
 /* 段读数与预览：读数是听书自己的位置（与顶条的章进度互不相干），预览只露一行 */
-.novel-tts-now { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.novel-tts-now { flex: 1 1 120px; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .novel-tts-seg { font-size: var(--novel-fs-xs); opacity: .62; font-variant-numeric: tabular-nums; }
 .novel-tts-preview {
   font-size: var(--novel-fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.novel-tts-chips { display: flex; align-items: center; gap: var(--novel-sp-1); flex: none; }
+.novel-tts-chips { display: flex; align-items: center; gap: 2px; flex: none; }
 /* 听书选中态 / 设置开关的回显色跟纸走（跟读字色，ReaderView 现算）；brand 只在强制深色那一档回退。 */
 .novel-rdr-ctl.novel-tts-on { color: var(--novel-live-ink); opacity: 1; }
 .novel-rdr-bar.novel-dark .novel-rdr-ctl.novel-tts-on,
 .novel-tts-bar.novel-dark .novel-rdr-ctl.novel-tts-on { color: var(--novel-brand); }
 /* 浮窗边栏同一判据：设置弹层开着，设置钮才亮 brand——开关要有回显 */
 .novel-tts-mini-dock .novel-tts-ictl.novel-tts-on { color: var(--novel-brand); }
-/* ── 设置面板（浮在条上方；与 Aa 面板同族卡片，不自造第二套浮层几何）──────── */
+/* ── 设置面板（浮在条上方；毛玻璃卡片 + 三段式分组）──────────────────────── */
 /* max-height 收两档：60vh 与现量余量（miniBarPopoverRoom）；后者是次要浮层的高度上界。 */
+@keyframes novel-tts-pop {
+  from { opacity: 0; transform: translate3d(0, 8px, 0) scale(.96); }
+  to { opacity: 1; transform: none; }
+}
 .novel-tts-panel {
   position: absolute; right: var(--novel-sp-3); bottom: calc(100% + var(--novel-sp-2));
   z-index: var(--novel-z-panel);
-  display: flex; flex-direction: column; gap: var(--novel-sp-4);
-  width: min(380px, calc(100vw - 48px)); max-height: min(60vh, var(--novel-tts-popover-room)); overflow-y: auto; overscroll-behavior: contain;
+  display: flex; flex-direction: column; gap: 0;
+  width: min(388px, calc(100vw - 32px)); max-height: min(60vh, var(--novel-tts-popover-room)); overflow-y: auto; overscroll-behavior: contain;
   /* 弹层自己可滚：外层浮窗是拖面（touch-action: none），这一层必须把触屏滚动还回来，
      否则设置卡在触屏上滑不动。 */
   touch-action: auto;
-  padding: var(--novel-sp-5);
-  background: var(--novel-layer-2); color: var(--novel-text);
-  border: 1px solid var(--novel-border); border-radius: var(--novel-r-md);
-  box-shadow: var(--novel-shadow-2);
+  padding: 14px 16px;
+  background: color-mix(in srgb, var(--novel-layer-2) 94%, transparent);
+  backdrop-filter: blur(18px) saturate(1.15); -webkit-backdrop-filter: blur(18px) saturate(1.15);
+  color: var(--novel-text);
+  border: 1px solid var(--novel-border); border-radius: 13px;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #ffffff 12%, transparent), var(--novel-shadow-2);
+  transform-origin: bottom right;
+  animation: novel-tts-pop var(--novel-dur-mid) var(--novel-ease-out);
 }
-.novel-tts-row { display: flex; align-items: center; gap: var(--novel-sp-3); min-width: 0; }
-/* 卡片首行只有一颗中性关闭钮：非模态卡的可见出口，也是浮层契约给入场焦点的落点
-   （第一颗钮若是定时档的「关闭」chip，定时在走时按 Enter 会静默取消定时）。 */
+.novel-tts-group {
+  display: flex; flex-direction: column; gap: 9px; padding: 10px 0;
+  border-bottom: 1px solid var(--novel-border-faint);
+}
+.novel-tts-group:last-of-type { border-bottom: 0; padding-bottom: 6px; }
+.novel-tts-row {
+  display: grid; grid-template-columns: minmax(3.6em, auto) minmax(0, 1fr) auto;
+  align-items: center; gap: 8px; min-width: 0;
+}
+/* 卡片首行只有一颗中性关闭钮：非模态卡的可见出口，也是浮层契约给入场焦点的落点 */
 .novel-tts-panel-head {
   display: flex; align-items: center; justify-content: space-between;
-  gap: var(--novel-sp-2); min-height: 24px;
+  gap: var(--novel-sp-2); min-height: 28px; padding-bottom: 8px;
+  border-bottom: 1px solid var(--novel-border-faint);
 }
-/* 卡名占住头行左侧：右上角孤零零一颗关闭钮会让整块看着像少了标题 */
+/* 卡名占住头行左侧 */
 .novel-tts-panel-title {
   flex: 1 1 auto; min-width: 0;
-  font-size: var(--novel-fs-sm); font-weight: 600; color: var(--novel-text-2);
+  font-size: var(--novel-fs-md); font-weight: 600; color: var(--novel-text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .novel-tts-panel-close {
   display: inline-flex; align-items: center; justify-content: center; flex: none;
-  width: 24px; height: 24px; padding: 0; border: none; border-radius: var(--novel-r-sm);
+  width: 26px; height: 26px; padding: 0; border: none; border-radius: var(--novel-r-sm);
   background: none; color: var(--novel-text-3); cursor: pointer;
-  transition: background var(--novel-dur) var(--novel-ease), color var(--novel-dur) var(--novel-ease);
+  transition: background var(--novel-dur-fast) ease, color var(--novel-dur-fast) ease;
 }
 .novel-tts-panel-close:hover { background: var(--novel-hover); color: var(--novel-text); }
 .novel-tts-panel-close:focus-visible { outline: 2px solid var(--novel-ring); outline-offset: 2px; }
@@ -82,16 +128,71 @@ export const TTS_CSS = `
   width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.8;
   stroke-linecap: round; stroke-linejoin: round;
 }
-.novel-tts-label { flex: none; width: 3.2em; font-size: var(--novel-fs-xs); color: var(--novel-text-3); }
-.novel-tts-range { flex: 1 1 auto; min-width: 0; accent-color: var(--novel-brand); }
-.novel-tts-val { flex: none; font-size: var(--novel-fs-xs); color: var(--novel-text-3); font-variant-numeric: tabular-nums; }
-.novel-tts-select {
-  flex: 1 1 auto; min-width: 0; font: inherit; font-size: var(--novel-fs-sm);
-  color: var(--novel-text); background: var(--novel-layer-1);
-  border: 1px solid var(--novel-border); border-radius: var(--novel-r-xs); padding: var(--novel-sp-1) var(--novel-sp-2);
+.novel-tts-label { font-size: var(--novel-fs-xs); color: var(--novel-text-3); white-space: nowrap; }
+.novel-tts-range {
+  appearance: none; -webkit-appearance: none;
+  width: 100%; min-width: 0; height: 24px; margin: 0; padding: 0;
+  background: transparent; cursor: pointer;
 }
-.novel-tts-actions { flex-wrap: wrap; }
-.novel-tts-note { font-size: var(--novel-fs-xs); color: var(--novel-text-3); }
+.novel-tts-range::-webkit-slider-runnable-track {
+  height: 5px; border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    var(--novel-accent) 0%,
+    var(--novel-accent) var(--novel-range-fill),
+    var(--novel-border-strong) var(--novel-range-fill),
+    var(--novel-border-strong) 100%
+  );
+}
+.novel-tts-range::-webkit-slider-thumb {
+  appearance: none; -webkit-appearance: none;
+  width: 15px; height: 15px; margin-top: -5px;
+  border: 2px solid var(--novel-layer-2); border-radius: 50%;
+  background: var(--novel-accent); box-shadow: 0 1px 4px rgba(0, 0, 0, .25);
+  transition: transform var(--novel-dur-fast) var(--novel-ease-spring);
+}
+.novel-tts-range:hover::-webkit-slider-thumb { transform: scale(1.14); }
+.novel-tts-range::-moz-range-track { height: 5px; border-radius: 999px; background: var(--novel-border-strong); }
+.novel-tts-range::-moz-range-progress { height: 5px; border-radius: 999px; background: var(--novel-accent); }
+.novel-tts-range::-moz-range-thumb {
+  width: 15px; height: 15px; border: 2px solid var(--novel-layer-2); border-radius: 50%;
+  background: var(--novel-accent); box-shadow: 0 1px 4px rgba(0, 0, 0, .25);
+}
+.novel-tts-val {
+  min-width: 3.2em; text-align: right;
+  font-size: var(--novel-fs-xs); color: var(--novel-text-2); font-variant-numeric: tabular-nums;
+}
+.novel-select-wrap { position: relative; grid-column: 2 / -1; min-width: 0; max-width: 100%; display: block; }
+/* select 悬停底与 option/optgroup 必须是不透明层板色：Chromium 打开原生下拉弹层时会把控件当下的背景合成到白底上，
+   用半透的 --novel-hover 会把弹层底洗亮成白底浅字。 */
+.novel-tts-select {
+  appearance: none; -webkit-appearance: none;
+  width: 100%; min-width: 0; max-width: 100%; height: 32px; padding: 0 26px 0 10px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: inherit; font-size: var(--novel-fs-sm);
+  color: var(--novel-text); background-color: var(--novel-layer-1);
+  border: 1px solid var(--novel-border); border-radius: var(--novel-r-md); cursor: pointer;
+  transition: border-color var(--novel-dur-fast) ease, background-color var(--novel-dur-fast) ease;
+}
+.novel-tts-select:hover { border-color: var(--novel-border-strong); background-color: var(--novel-layer-3); }
+.novel-tts-select option, .novel-tts-select optgroup {
+  background-color: var(--novel-layer-2); color: var(--novel-text);
+}
+.novel-select-chevron {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  width: 13px; height: 13px; color: var(--novel-text-3); pointer-events: none;
+  fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
+.novel-tts-timer-grid {
+  grid-column: 2 / -1; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px;
+}
+.novel-tts-timer-grid .novel-chip {
+  min-height: 30px; padding: 0 4px; border-radius: 7px; justify-content: center;
+  font-size: 11px; white-space: nowrap;
+}
+.novel-tts-actions { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 8px; }
+.novel-tts-float-sizes { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+.novel-tts-note { font-size: var(--novel-fs-xs); color: var(--novel-text-3); line-height: 1.5; padding-top: 6px; }
 /* 连败暂停的提示（两个表面同一句读数）：用错误色——它是「为什么停了」，不是装饰。 */
 .novel-tts-fail { font-size: var(--novel-fs-xs); color: var(--novel-err); line-height: 1.5; }
 .novel-tts-bar > .novel-tts-fail { flex-basis: 100%; }
@@ -100,7 +201,71 @@ export const TTS_CSS = `
 /* 章内段滑杆独占一整行（flex-basis 100% 换行）：拖到任意段即起播。 */
 .novel-tts-chapter-seek { flex-basis: 100%; display: flex; align-items: center; min-width: 0; }
 .novel-tts-chapter-seek .novel-tts-range {
-  flex: 1 1 auto; min-width: 0; height: 12px; accent-color: currentColor; opacity: .8;
+  flex: 1 1 auto; width: 100%; min-width: 0; height: 16px;
+}
+.novel-tts-chapter-seek .novel-tts-range::-webkit-slider-runnable-track {
+  height: 3.5px;
+  background: linear-gradient(
+    90deg,
+    var(--novel-live-ink) 0%,
+    var(--novel-live-ink) var(--novel-range-fill),
+    color-mix(in srgb, var(--novel-paper-ink) 18%, transparent) var(--novel-range-fill),
+    color-mix(in srgb, var(--novel-paper-ink) 18%, transparent) 100%
+  );
+}
+.novel-tts-bar.novel-dark .novel-tts-chapter-seek .novel-tts-range::-webkit-slider-runnable-track {
+  background: linear-gradient(
+    90deg,
+    var(--novel-brand) 0%,
+    var(--novel-brand) var(--novel-range-fill),
+    var(--novel-border-strong) var(--novel-range-fill),
+    var(--novel-border-strong) 100%
+  );
+}
+.novel-tts-chapter-seek .novel-tts-range::-webkit-slider-thumb {
+  width: 10px; height: 10px; margin-top: -3.25px;
+  border: 1.5px solid var(--novel-paper); background: var(--novel-live-ink);
+}
+.novel-tts-bar.novel-dark .novel-tts-chapter-seek .novel-tts-range::-webkit-slider-thumb {
+  border-color: var(--novel-bg); background: var(--novel-brand);
+}
+.novel-tts-chapter-seek:hover .novel-tts-range::-webkit-slider-runnable-track,
+.novel-tts-chapter-seek .novel-tts-range:focus-visible::-webkit-slider-runnable-track { height: 5px; }
+.novel-tts-chapter-seek:hover .novel-tts-range::-webkit-slider-thumb,
+.novel-tts-chapter-seek .novel-tts-range:focus-visible::-webkit-slider-thumb {
+  width: 14px; height: 14px; margin-top: -4.5px;
+}
+.novel-tts-chapter-seek .novel-tts-range::-moz-range-track {
+  height: 3.5px; border: none; border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    var(--novel-live-ink) 0%,
+    var(--novel-live-ink) var(--novel-range-fill),
+    color-mix(in srgb, var(--novel-paper-ink) 18%, transparent) var(--novel-range-fill),
+    color-mix(in srgb, var(--novel-paper-ink) 18%, transparent) 100%
+  );
+}
+.novel-tts-bar.novel-dark .novel-tts-chapter-seek .novel-tts-range::-moz-range-track {
+  background: linear-gradient(
+    90deg,
+    var(--novel-brand) 0%,
+    var(--novel-brand) var(--novel-range-fill),
+    var(--novel-border-strong) var(--novel-range-fill),
+    var(--novel-border-strong) 100%
+  );
+}
+.novel-tts-chapter-seek .novel-tts-range::-moz-range-thumb {
+  width: 10px; height: 10px; border-radius: 50%;
+  border: 1.5px solid var(--novel-paper); background: var(--novel-live-ink);
+}
+.novel-tts-bar.novel-dark .novel-tts-chapter-seek .novel-tts-range::-moz-range-thumb {
+  border-color: var(--novel-bg); background: var(--novel-brand);
+}
+.novel-tts-chapter-seek:hover .novel-tts-range::-moz-range-track,
+.novel-tts-chapter-seek .novel-tts-range:focus-visible::-moz-range-track { height: 5px; }
+.novel-tts-chapter-seek:hover .novel-tts-range::-moz-range-thumb,
+.novel-tts-chapter-seek .novel-tts-range:focus-visible::-moz-range-thumb {
+  width: 14px; height: 14px;
 }
 /* ── 选区起播（「从本段听」）────────────────────────────────────────────── */
 /* 浮在选区下方：反色是唯一能同时压住任意纸色与深浅控制器层的取法（纸墨互换）。 */
@@ -444,4 +609,8 @@ export const TTS_CSS = `
   margin-left: auto; font-size: var(--novel-fs-xs); font-weight: 400; color: var(--novel-text-3);
 }
 .novel-tts-edit-group-body { display: flex; flex-direction: column; gap: var(--novel-sp-2); }
+@media (prefers-reduced-motion: reduce) {
+  .novel-tts-panel { animation: none; }
+  .novel-tts-play, .novel-tts-range::-webkit-slider-thumb, .novel-tts-select { transition: none; }
+}
 `

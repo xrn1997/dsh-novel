@@ -124,7 +124,7 @@ const HEX_ALLOWED: Record<string, string[] | '*'> = {
   'styles/overlays.ts': '*',                                        // 浮层投影的 token 派生色
   'styles/tts.ts': '*',                                             // 听书条的纸墨派生色与品牌选中态
   'util.ts': ['#222', '#e8e8ea'],                                   // paperInk 深/浅字（正文层）
-  'prefs-ui.ts': ['#f7f3e8', '#ffffff', '#e8f0e8', '#f0e8e8'],      // 四款纸张预设（正文层）
+  'prefs-ui.ts': ['#f7f3e8', '#ffffff', '#e8f0e8', '#f0e8e8', '#111315'], // 五款纸张预设（含夜间深色纸）
   'store.ts': ['#f7f3e8'],                                          // DEFAULT_PREFS.paperColor（正文层）
 }
 

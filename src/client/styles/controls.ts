@@ -4,12 +4,18 @@ export const CONTROLS_CSS = `
 /* ── 焦点环：一套覆盖所有交互件（brand 环 + 2px 偏移，压在深浅两种底上都找得着）──
    .novel-btn.primary 另有环色换色规则（brand 压 brand 等于没有）。
    .novel-section-* 系列规则不在这里——没有对应组件，死代码不留。 */
-.novel-btn:focus-visible, .novel-rdr-ctl:focus-visible,
+.novel-btn:focus-visible, .novel-rdr-ctl:focus-visible, .novel-rdr-context:focus-visible,
 .novel-input:focus-visible, .novel-textarea:focus-visible, .novel-chip:focus-visible,
-.novel-seg button:focus-visible, .novel-tabs button:focus-visible, .novel-menu button:focus-visible,
+.novel-seg button:focus-visible, .novel-rdr-seg button:focus-visible, .novel-rdr-pill:focus-visible,
+.novel-tabs button:focus-visible, .novel-menu button:focus-visible,
 .novel-card:focus-visible, .novel-row-main:focus-visible,
 .novel-city-source:focus-visible, .novel-city-kind:focus-visible, .novel-city-card:focus-visible,
 .novel-drawer-item:focus-visible, .novel-switch:focus-visible, .novel-ai-input:focus-visible, .novel-searchbox:focus-within,
+.novel-rdr-range:focus-visible, .novel-color-slider:focus-visible, .novel-rdr-swatch:focus-visible, .novel-rdr-custom-swatch:focus-visible,
+.novel-rdr-switch-input:focus-visible + .novel-rdr-switch-track, .novel-stepper button:focus-visible,
+.novel-panel-close:focus-visible, .novel-toc-clear:focus-visible, .novel-toc-locate:focus-visible,
+.novel-prefs-reset:focus-visible, .novel-custom-done:focus-visible, .novel-book-nav:focus-visible,
+.novel-tts-play:focus-visible, .novel-tts-select:focus-visible, .novel-tts-range:focus-visible,
 .novel-ref:focus-visible {
   outline: 2px solid var(--novel-ring); outline-offset: 2px;
 }
@@ -19,6 +25,10 @@ export const CONTROLS_CSS = `
   border-radius: var(--novel-r-sm); border: 1px solid var(--novel-border-strong);
   color: inherit; background: var(--novel-layer-3);
   outline-offset: 2px;
+}
+select.novel-input { color: var(--novel-text); }
+select.novel-input option, select.novel-input optgroup {
+  background-color: var(--novel-layer-2); color: var(--novel-text);
 }
 .novel-input::placeholder, .novel-textarea::placeholder { color: var(--novel-text-3); }
 .novel-textarea { width: 100%; font-family: ui-monospace, Consolas, monospace; }

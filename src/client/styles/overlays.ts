@@ -9,7 +9,7 @@ export const OVERLAYS_CSS = `
   animation: novel-fade var(--novel-dur) var(--novel-ease);
 }
 .novel-modal {
-  width: min(400px, calc(100vw - 48px)); background: var(--novel-layer-2);
+  width: min(400px, calc(100vw - 48px)); background: var(--novel-layer-2); color: var(--novel-text);
   border: 1px solid var(--novel-border); border-radius: var(--novel-r-lg);
   padding: var(--novel-sp-5) var(--novel-sp-6);
   box-shadow: var(--novel-shadow-pop);

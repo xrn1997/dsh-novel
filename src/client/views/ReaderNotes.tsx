@@ -38,7 +38,7 @@ function asErrorLike(e: unknown, t: Translate = zhTranslate): { code?: string; m
 /** 注释面板的依赖面：读一份文档 + 失败上报。不写进度、不观察任务，故不声明整个阅读区束。 */
 type NotesDeps = Pick<ClientCoreDeps, 'apiGet' | 'pushError'>
 
-export function ReaderNotes({ bookKey, target, requestSeq, deps, onNavigate, onClose }: {
+export function ReaderNotes({ bookKey, target, requestSeq, deps, onNavigate, onClose, darkController = false }: {
   bookKey: string
   /** 用户点的那条脚注（supplement 分支）：面板打开即从它开始 */
   target: SupplementTarget
@@ -49,6 +49,7 @@ export function ReaderNotes({ bookKey, target, requestSeq, deps, onNavigate, onC
    *  这条跳转是「从正文链接出发」（押返回项）还是「返回链接本身」（消费掉返回项）。 */
   onNavigate: (target: ReadingTarget, role: LinkRole) => void
   onClose: () => void
+  darkController?: boolean
 }): ReactNode {
   const t = useCopy()
   const [stack, setStack] = useState<SupplementTarget[]>(() => [target])
@@ -107,7 +108,7 @@ export function ReaderNotes({ bookKey, target, requestSeq, deps, onNavigate, onC
   const retry = (): void => { setNonce((n) => n + 1) }
 
   return (
-    <div className="novel-notes-slot">
+    <div className={darkController ? 'novel-notes-slot novel-dark' : 'novel-notes-slot'}>
       <div className="novel-notes" role="dialog" aria-label={t('reader.notes')}>
         <div className="novel-toolbar novel-notes-head">
           {stack.length > 1 && <button type="button" className="novel-btn sm" onClick={back}>{t('reader.notesBack')}</button>}

@@ -34,13 +34,15 @@ export function findNovelNode(root: Element | null | undefined, nodeId: string |
  * 为什么不用 `scrollIntoView`：它会一路滚每个可滚祖先，「打开只读浮层」于是改写主阅读位置；
  * 顶对齐不是边角：脚注锚点常是装着好几段的容器，内容比视口长时只有顶对齐答得对。
  */
-export function centerInScroller(scroller: Element, target: Element | null): void {
+export function centerInScroller(scroller: Element, target: Element | null, topInset = 0): void {
   if (target === null) return
   const box = scroller.getBoundingClientRect()
   const at = target.getBoundingClientRect()
-  const delta = at.height > box.height
-    ? at.top - box.top                                   // 目标装不下：露头，不露腹
-    : (at.top + at.height / 2) - (box.top + box.height / 2)
+  const visibleTop = box.top + Math.max(0, topInset)
+  const visibleHeight = Math.max(0, box.bottom - visibleTop)
+  const delta = at.height > visibleHeight
+    ? at.top - visibleTop                                // 目标装不下：露头，不露腹
+    : (at.top + at.height / 2) - (visibleTop + visibleHeight / 2)
   if (delta !== 0) scroller.scrollTop += delta
 }
 
@@ -189,6 +191,65 @@ export function paperInk(paper: string): string {
   const rgb = rgbOf(paper)
   if (rgb === null) return '#222'                       // 非 hex（color input 也可能给 rgb()）：退回原行为
   return luminanceOf(rgb) > 0.35 ? '#222' : '#e8e8ea'
+}
+
+/** 当前纸张是否落在深色一侧（与 `paperInk` 同一亮度阈值 0.35）。 */
+export function isDarkPaper(paper: string): boolean {
+  const rgb = rgbOf(paper)
+  return rgb !== null && luminanceOf(rgb) <= 0.35
+}
+
+/** 纸张色与自动正文墨色之间的 WCAG 对比度（保留 1 位小数）。 */
+export function paperContrastRatio(paper: string): number {
+  const rgb = rgbOf(paper) ?? DEFAULT_PAPER
+  const paperY = luminanceOf(rgb)
+  const ink = paperY > 0.35 ? DARK_INK : LIGHT_INK
+  return Math.round(contrastOf(paperY, luminanceOf(ink)) * 10) / 10
+}
+
+/** 合法 3/6 位 hex（可省略前导 `#`）转标准 `#rrggbb` 小写；非法返回 null。 */
+export function normalizeHex(raw: string): string | null {
+  const trimmed = raw.trim()
+  const prefixed = trimmed.startsWith('#') ? trimmed : `#${trimmed}`
+  const rgb = rgbOf(prefixed)
+  return rgb === null ? null : rgbHex(rgb)
+}
+
+/** 合法 hex 转 `[H(0..360), S(0..100), L(0..100)]` 整数三元组；非法返回 null。 */
+export function hexToHsl(paper: string): [number, number, number] | null {
+  const rgb = rgbOf(paper)
+  if (rgb === null) return null
+  const r = rgb[0] / 255
+  const g = rgb[1] / 255
+  const b = rgb[2] / 255
+  const max = Math.max(r, g, b)
+  const min = Math.min(r, g, b)
+  const l = (max + min) / 2
+  const d = max - min
+  if (d === 0) return [0, 0, Math.round(l * 100)]
+  const s = d / (1 - Math.abs(2 * l - 1))
+  let h: number
+  if (max === r) h = ((g - b) / d) % 6
+  else if (max === g) h = (b - r) / d + 2
+  else h = (r - g) / d + 4
+  h = Math.round(h * 60)
+  if (h < 0) h += 360
+  return [h, Math.round(s * 100), Math.round(l * 100)]
+}
+
+/** `H(0..360), S(0..100), L(0..100)` 转标准 `#rrggbb` 串。 */
+export function hslToHex(h: number, s: number, l: number): string {
+  const hue = ((h % 360) + 360) % 360
+  const sat = Math.max(0, Math.min(100, s)) / 100
+  const light = Math.max(0, Math.min(100, l)) / 100
+  return rgbHex(hslToRgb(hue, sat, light))
+}
+
+/** 滑杆数值映射为百分比字符串（供 CSS `--novel-range-fill` 进度底填充）。 */
+export function rangePercent(value: number, min: number, max: number): string {
+  if (max <= min || !Number.isFinite(value)) return '0%'
+  const pct = Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100))
+  return `${Math.round(pct * 10) / 10}%`
 }
 
 /** 跟读高亮的暖赭带（色相 / 饱和度）与可读下限：色相与正文墨色同属一页纸，不借宿主 brand */

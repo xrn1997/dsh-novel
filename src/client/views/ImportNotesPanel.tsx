@@ -12,13 +12,14 @@ import type { LocalImportWarning } from './types.js'
  * 刻意不随每次取章重复携带），这里是重看入口而不是第二次读盘。它**不碰主阅读进度**：
  * 没有一处 apiSend，与脚注面板同一条纪律。
  */
-export function ImportNotesPanel({ warnings, onClose }: {
+export function ImportNotesPanel({ warnings, onClose, darkController = false }: {
   warnings: LocalImportWarning[]
   onClose: () => void
+  darkController?: boolean
 }): ReactNode {
   const t = useCopy()
   return (
-    <div className="novel-notes-slot">
+    <div className={darkController ? 'novel-notes-slot novel-dark' : 'novel-notes-slot'}>
       <div className="novel-notes" role="dialog" aria-label={t('reader.importNotes')}>
         <div className="novel-toolbar novel-notes-head">
           <span className="novel-notes-title">

@@ -40,30 +40,37 @@ export const SHELL_CSS = `
    novel-dark 挂在阅读器控制器条根，整个控制器层（条 / Aa 面板 / 导出面板 / 抽屉）同底。
    条自己那一档另见 .novel-rdr-bar.novel-dark：它**默认跟纸色**，勾上才让回这里的 --novel-bg。 */
 .novel-dark {
-  --novel-layer-1: #1b1b1d;
-  --novel-layer-2: #232325;
-  --novel-border: #ffffff1f;
-  --novel-border-strong: #fff3;
-  --novel-hover: #ffffff14;
-  --novel-active: #ffffff24;
-  --novel-text: #f9fafb;
-  --novel-text-2: #cfd3d6;
-  --novel-text-3: #adb2b8;
-  --novel-fg: #0f1115;
-  --novel-brand: #f9fafb;
-  --novel-primary-fill: #f9fafb;
-  --novel-primary-hover: #e5e5e5;
+  color-scheme: dark;
+  --novel-bg: #17191d;
+  --novel-layer-1: #15171b;
+  --novel-layer-2: #1f2228;
+  --novel-layer-3: #2a2e36;
+  --novel-float: #2f343e;
+  --novel-border: rgba(255, 255, 255, .10);
+  --novel-border-strong: rgba(255, 255, 255, .18);
+  --novel-border-faint: rgba(255, 255, 255, .06);
+  --novel-hover: rgba(255, 255, 255, .07);
+  --novel-active: rgba(255, 255, 255, .13);
+  --novel-text: #eef0f4;
+  --novel-text-2: #b4bcc8;
+  --novel-text-3: #838c99;
+  --novel-fg: #ffffff;
+  --novel-brand: #5b93f5;
+  --novel-primary-fill: #3b76e8;
+  --novel-primary-hover: #4d85f0;
   /* 派生色在此层必须重钉：自定义属性在声明处算完就继承下去，暗层换 --novel-brand 不会回填上层派生值
      --novel-ring 同理（它按 var(--novel-brand) 在 token 层算完即继承）——不重钉则暗层焦点环仍是亮蓝 */
-  --novel-brand-soft: color-mix(in srgb, #f9fafb 8%, transparent);
-  --novel-brand-tint: color-mix(in srgb, #f9fafb 12%, transparent);
-  --novel-brand-line: color-mix(in srgb, #f9fafb 27%, transparent);
-  --novel-brand-strong: #f9fafb;
-  --novel-ring: #f9fafb;
-  --novel-skeleton: #ffffff14;
-  /* 控制器层强制暗：阅读器条在 .novel-rdr-bar.novel-dark 里读它（条默认跟纸色，勾上才让回暗底），
-     浮层底那几条也读它——不重钉就是「暗面板 + 亮工具栏」 */
-  --novel-bg: #1b1b1d;
+  --novel-brand-soft: color-mix(in srgb, #5b93f5 11%, transparent);
+  --novel-brand-tint: color-mix(in srgb, #5b93f5 18%, transparent);
+  --novel-brand-line: color-mix(in srgb, #5b93f5 38%, transparent);
+  --novel-brand-strong: #8ab4f8;
+  --novel-accent: #3b76e8;
+  --novel-accent-hover: #4d85f0;
+  --novel-accent-soft: color-mix(in srgb, #5b93f5 18%, transparent);
+  --novel-accent-line: color-mix(in srgb, #5b93f5 40%, transparent);
+  --novel-ring: #5b93f5;
+  --novel-skeleton: rgba(255, 255, 255, .08);
+  --novel-shadow-2: 0 14px 38px rgba(0, 0, 0, .48), 0 2px 10px rgba(0, 0, 0, .28);
   color: var(--novel-text);
 }
 [data-novel] { font-size: var(--novel-fs-base); }

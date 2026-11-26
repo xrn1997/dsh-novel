@@ -12,6 +12,45 @@ import { clampTopInset, crossedIndex } from './viewport-top.js'
  * 有两套坐标系与一条读取顺序；放在视图闭包里时唯一能证它的方式是整页渲染并改写原型方法，
  * 而它一旦错，症状是进度静默错位。几何因此可在假元素上直接测，视图只剩 ref 接线。
  */
+const PIDX_ANCHOR_PREFIX = 'pidx:'
+const HEAD_ANCHOR = 'pidx:head'
+
+function chapterHeadingElement(block: Element): Element | null {
+  for (const el of block.querySelectorAll('h2.novel-rdr-mark')) {
+    if (el.getAttribute('class')?.split(/\s+/).includes('novel-rdr-mark') === true) return el
+  }
+  return null
+}
+
+function parsePidxAnchor(anchorId: string): { raw: string; pidx: number } | null {
+  if (!anchorId.startsWith(PIDX_ANCHOR_PREFIX)) return null
+  const raw = anchorId.slice(PIDX_ANCHOR_PREFIX.length)
+  const pidx = Number(raw)
+  if (raw === '' || !Number.isInteger(pidx)) return null
+  return { raw, pidx }
+}
+
+function pidxElementsOf(block: Element): Map<string, Element> {
+  const byPidx = new Map<string, Element>()
+  for (const el of block.querySelectorAll('[data-pidx]')) {
+    const raw = el.getAttribute('data-pidx')?.trim()
+    if (raw === undefined || raw === '' || !Number.isInteger(Number(raw))) continue
+    // 空行/纯标点行与后续正文共享同一 data-pidx：后出现覆盖先出现，与 listenParagraphElement 同口径命中真实正文块。
+    byPidx.set(raw, el)
+  }
+  return byPidx
+}
+
+function findAnchorElement(block: Element, anchorId: string | null): Element | null {
+  if (anchorId === null) return block
+  if (anchorId === HEAD_ANCHOR) return chapterHeadingElement(block)
+  const parsed = parsePidxAnchor(anchorId)
+  if (parsed !== null) {
+    return pidxElementsOf(block).get(parsed.raw) ?? listenParagraphElement(block, parsed.pidx)
+  }
+  return findNovelNode(block, anchorId)
+}
+
 export interface ReaderGeometrySource {
   /** 真实滚动容器（`findScrollport` 的产物）；null = 文档自身在滚 */
   port(): HTMLElement | null
@@ -54,7 +93,7 @@ export function createReaderGeometry(source: ReaderGeometrySource): ReaderPort {
     targetOffset: (index, anchorId) => {
       const block = source.chapters()[index]
       if (block === null || block === undefined) return null
-      const target = anchorId === null ? block : findNovelNode(block, anchorId)
+      const target = findAnchorElement(block, anchorId)
       if (target === null) return null
       return target.getBoundingClientRect().top - portViewTop(source.port())
     },
@@ -67,8 +106,20 @@ export function createReaderGeometry(source: ReaderGeometrySource): ReaderPort {
         const id = el.getAttribute(NOVEL_NODE_ATTR)
         if (id !== null && !byId.has(id)) byId.set(id, el)
       }
+      const needsPidx = anchorIds.some((id) => id !== null && id.startsWith(PIDX_ANCHOR_PREFIX))
+      const byPidx = needsPidx ? pidxElementsOf(block) : null
       return anchorIds.map((anchorId) => {
-        const target = anchorId === null ? block : byId.get(anchorId)
+        if (anchorId === null) return block.getBoundingClientRect().top - viewTop
+        if (anchorId === HEAD_ANCHOR) {
+          const target = chapterHeadingElement(block)
+          return target === null ? null : target.getBoundingClientRect().top - viewTop
+        }
+        const parsed = parsePidxAnchor(anchorId)
+        if (parsed !== null) {
+          const target = byPidx?.get(parsed.raw) ?? listenParagraphElement(block, parsed.pidx)
+          return target === null ? null : target.getBoundingClientRect().top - viewTop
+        }
+        const target = byId.get(anchorId)
         return target === undefined ? null : target.getBoundingClientRect().top - viewTop
       })
     },
@@ -88,16 +139,29 @@ export function createReaderGeometry(source: ReaderGeometrySource): ReaderPort {
 }
 
 /** 视口顶所在的正文节点：判据吃 `client/viewport-top.ts` 的 `crossedIndex`（与进度锚点、听书探针同一条
- *  规则）；本函数只负责把**节点矩形**这条数据路喂进去。文字章 → null。 */
+ *  规则）；本函数只负责把**节点矩形**这条数据路喂进去。图文章按 `data-novel-node`，文字章按章标题与 `data-pidx`
+ *  （带 `pidx:` 前缀）；两者都没有 → null。 */
 export function currentNodeOf(
   blocks: ReadonlyArray<HTMLElement | null>, viewTop: number,
 ): VisibleNode | null {
   const nodes: Array<{ index: number; nodeId: string; top: number }> = []
   blocks.forEach((block, index) => {
+    if (block === null) return
+    let hasRich = false
     for (const el of novelNodes(block)) {
-      const nodeId = el.getAttribute('data-novel-node')
+      const nodeId = el.getAttribute(NOVEL_NODE_ATTR)
       if (nodeId === null) continue
+      hasRich = true
       nodes.push({ index, nodeId, top: el.getBoundingClientRect().top - viewTop })
+    }
+    if (!hasRich) {
+      const heading = chapterHeadingElement(block)
+      if (heading !== null) {
+        nodes.push({ index, nodeId: HEAD_ANCHOR, top: heading.getBoundingClientRect().top - viewTop })
+      }
+      for (const [raw, el] of pidxElementsOf(block)) {
+        nodes.push({ index, nodeId: `${PIDX_ANCHOR_PREFIX}${raw}`, top: el.getBoundingClientRect().top - viewTop })
+      }
     }
   })
   const at = crossedIndex(nodes, (cand) => cand.top)

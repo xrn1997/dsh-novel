@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import { MEASURES } from '../../src/client/prefs-ui.js'
 import {
   classifyClickZone,
   computePageCount,
   computeSpreadLayout,
+  DOUBLE_PAGE_COLUMN_SCALE,
+  DOUBLE_PAGE_FORCE_MIN_WIDTH,
   DOUBLE_PAGE_GAP,
   DOUBLE_PAGE_MIN_WIDTH,
   firstParagraphInSpread,
@@ -15,16 +18,39 @@ import {
 
 describe('reader-pagination', () => {
   it('switches between single-page and double-page spread at DOUBLE_PAGE_MIN_WIDTH', () => {
-    const narrow = computeSpreadLayout(DOUBLE_PAGE_MIN_WIDTH - 1, 36, 18)
+    const narrow = computeSpreadLayout(DOUBLE_PAGE_MIN_WIDTH - 1, 680)
     expect(narrow.columnsPerSpread).toBe(1)
     expect(narrow.columnGap).toBe(SINGLE_PAGE_GAP)
     expect(narrow.stride).toBe(narrow.columnWidth + narrow.columnGap)
 
-    const wide = computeSpreadLayout(DOUBLE_PAGE_MIN_WIDTH + 200, 36, 18)
+    const wide = computeSpreadLayout(DOUBLE_PAGE_MIN_WIDTH + 200, 680)
     expect(wide.columnsPerSpread).toBe(2)
     expect(wide.columnGap).toBe(DOUBLE_PAGE_GAP)
     expect(wide.contentWidth).toBe(wide.columnWidth * 2 + wide.columnGap)
     expect(wide.stride).toBe((wide.columnWidth + wide.columnGap) * 2)
+  })
+
+  it('supports explicit single and double columnMode preferences with fixed pixel measures', () => {
+    const forcedSingle = computeSpreadLayout(DOUBLE_PAGE_MIN_WIDTH + 300, 680, 'single')
+    expect(forcedSingle.columnsPerSpread).toBe(1)
+    expect(forcedSingle.columnWidth).toBe(680)
+
+    const forcedDouble = computeSpreadLayout(DOUBLE_PAGE_FORCE_MIN_WIDTH + 40, 680, 'double')
+    expect(forcedDouble.columnsPerSpread).toBe(2)
+
+    const tooNarrowForDouble = computeSpreadLayout(DOUBLE_PAGE_FORCE_MIN_WIDTH - 10, 680, 'double')
+    expect(tooNarrowForDouble.columnsPerSpread).toBe(1)
+  })
+
+  it('keeps all MEASURES tiers strictly increasing and decoupled from font size in single and double modes', () => {
+    const singleWidths = MEASURES.map((m) => computeSpreadLayout(1600, m.px, 'single').columnWidth)
+    expect(singleWidths).toEqual(MEASURES.map((m) => m.px))
+
+    const doubleWidths = MEASURES.map((m) => computeSpreadLayout(1600, m.px, 'double').columnWidth)
+    expect(doubleWidths).toEqual(MEASURES.map((m) => Math.round(m.px * DOUBLE_PAGE_COLUMN_SCALE)))
+    for (let i = 1; i < doubleWidths.length; i++) {
+      expect(doubleWidths[i]).toBeGreaterThan(doubleWidths[i - 1] ?? 0)
+    }
   })
 
   it('computes column and spread counts accurately for single and double spreads', () => {

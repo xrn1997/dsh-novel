@@ -184,6 +184,9 @@ export class ReaderSession {
   private restoring = false
   /** 翻页阅读模式：没有滚动视口，跳章/恢复/预取不走 pendingJump / settleJump / 回补那条时序。 */
   private paged = false
+  /** 翻页 → 滚动刚复位时的锁定滚动位：切回滚动的首帧 `feedViewport()` 禁止因亚像素误差或短章底部夹取把位置往回写，
+   *  直到用户/视口真正滚动离开该像素或发起导航。 */
+  private modeSwitchScrollLock: number | null = null
   /** 视口顶的固定遮挡高度（顶条）：见 `ReaderSessionDeps.topInset`。每次现量（条高随排版变），
    *  非负夹取的判据住 `client/viewport-top.ts` 的 `clampTopInset`（`ADR-0089`）。 */
   private get topInset(): number {
@@ -249,23 +252,48 @@ export class ReaderSession {
     if (this.paged === paged) return
     this.paged = paged
     this.pendingScrollFixes = []
+    this.lastVisibleBeforePrefs = null
     if (!paged) return
     this.pendingJumpNow = null
     this.pendingReveal = null
     this.holdViewport = false
     this.restoring = false
+    this.modeSwitchScrollLock = null
   }
 
-  /** 翻页 → 滚动：按会话里的页内比例把滚动容器摆到对应行；只摆视口，不写进度。 */
-  scrollToSavedPosition(): void {
+  /** 翻页 → 滚动：优先按同章段落锚点，否则按会话页内比例把滚动容器摆到对应行；只摆视口，不写进度。 */
+  scrollToSavedPosition(anchor?: { chapterIndex: number; paragraphIndex: number } | null): void {
     const { chapterIndex, offsetRatio } = this.position
     if (!this.mounted(chapterIndex)) return
     this.recalcAnchors()
     if (this.anchorsNow.length === 0) return
-    const at = anchorTop(this.anchorsNow, chapterIndex, offsetRatio,
-      this.port.scrollHeight(), this.port.viewHeight())
-    this.port.setScrollTop(Math.max(0, at - this.topInset))
+    const a = this.anchorsNow.find((x) => x.index === chapterIndex)
+    if (a === undefined) return
+    const maxScroll = Math.max(0, this.port.scrollHeight() - this.port.viewHeight())
+    let desired: number | null = null
+    if (anchor !== null && anchor !== undefined && anchor.chapterIndex === chapterIndex
+      && anchor.paragraphIndex >= 0 && a.height > 0) {
+      const geo = this.port.targetOffsetOfParagraph?.(chapterIndex, anchor.paragraphIndex) ?? null
+      if (geo !== null) {
+        const paraContentTop = this.port.scrollTop() + geo.top
+        if (paraContentTop >= a.start - 1 && paraContentTop <= a.start + a.height + 1) {
+          desired = Math.ceil(Math.max(0, paraContentTop - this.topInset))
+        }
+      }
+    }
+    if (desired === null) {
+      const raw = a.start + Math.min(1, Math.max(0, offsetRatio)) * a.height
+      desired = Math.ceil(Math.max(0, raw - this.topInset))
+    }
+    const targetTop = Math.min(maxScroll, desired)
+    this.holdViewport = true
+    try {
+      this.port.setScrollTop(targetTop)
+    } finally {
+      this.holdViewport = false
+    }
     this.viewportSeen = true
+    this.modeSwitchScrollLock = this.port.scrollTop()
   }
 
   /** 进入一本书：目录 → 存档恢复；无存档/书架拉不到 → 从头。`relocation` = 「回阅读器」的
@@ -295,6 +323,7 @@ export class ReaderSession {
     this.holdViewport = false
     this.viewportSeen = false
     this.restoring = false
+    this.modeSwitchScrollLock = null
     this.backfillBudget = BACKFILL_MAX_CHAPTERS
     this.onShelfNow = 'unknown'                           // 换书即重问：上一本的在架状态不带到这一本
     this.save.cancel()
@@ -401,7 +430,8 @@ export class ReaderSession {
             const at = anchorTop(this.anchorsNow, index, restoreRatio,
               this.port.scrollHeight(), this.port.viewHeight())
             // 让出顶条：恢复点落在**看得见**的顶，而不是被顶条盖住的那一行（听书写的 progress 是段首）。
-            this.port.setScrollTop(Math.max(0, at - this.topInset))
+            // 向上取整防 Chromium 对小数 scrollTop 向下截断后，contentTop 落在章前 <1px 处引发跨章倒退。
+            this.port.setScrollTop(Math.ceil(Math.max(0, at - this.topInset)))
             // 落位帧之后 scrollTop 才是真实视口：从这里开始才允许预取/位置/补载读它
             this.restoring = false
             this.viewportSeen = true
@@ -585,6 +615,10 @@ export class ReaderSession {
     if (this.anchorsNow.length === 0) return               // 还没有可读的视口证据（首帧/正文未到）
     this.viewportSeen = true
     if (this.pendingJumpNow !== null || this.pendingReveal !== null) return
+    if (this.modeSwitchScrollLock !== null) {
+      if (Math.abs(this.port.scrollTop() - this.modeSwitchScrollLock) <= 1) return
+      this.modeSwitchScrollLock = null
+    }
     const { chapterIndex, offsetRatio } = locateChapter(this.anchorsNow, this.contentTop())
     const crossing = chapterIndex !== this.position.chapterIndex
     this.commit(crossing ? 'cross' : 'scroll', chapterIndex, offsetRatio)
@@ -611,6 +645,7 @@ export class ReaderSession {
       return
     }
     // 定位/跟随是比目录跳章更晚的显式动作：旧导航目标作废，避免两套落位互相拉扯。
+    this.modeSwitchScrollLock = null
     this.pendingJumpNow = null
     this.pendingReveal = {
       ...target,
@@ -634,6 +669,7 @@ export class ReaderSession {
   /** 撤销在途跳章（读者接管视口）：清 pending，并按当前视口重记消费位置。
    *  `requestJump` 已按目标章写过一笔，不重记会把读者留在一条他没看见的章上。 */
   cancelJump(): void {
+    this.modeSwitchScrollLock = null
     const hadJump = this.pendingJumpNow !== null
     this.pendingJumpNow = null
     this.pendingReveal = null
@@ -726,6 +762,7 @@ export class ReaderSession {
   /** 翻页模式跳章：不挂 `pendingJump` / `pendingReveal`，也没有滚动补偿；同章目标不动，
    *  否则写 0 会把读者正在看的页在存档里改成章首。 */
   private pagedJumpTo(index: number, write: boolean): void {
+    this.modeSwitchScrollLock = null
     this.pendingJumpNow = null
     this.pendingReveal = null
     if (index === this.position.chapterIndex) return
@@ -736,6 +773,7 @@ export class ReaderSession {
   private jumpTo(target: JumpTarget): void {
     // 越界目标什么都不做：写进去等于把「读到第 N 章」落成不存在的章，pendingJump 也再也等不到挂载。
     if (!this.inRange(target.index)) return
+    this.modeSwitchScrollLock = null
     this.pendingScrollFixes = []                         // 导航落位归 settleJump，旧补偿作废
     this.pendingReveal = null                            // 导航是更晚的显式动作：挂起的听书落位作废
     this.backfillBudget = BACKFILL_MAX_CHAPTERS          // 跳章 = 新 episode
@@ -795,7 +833,8 @@ export class ReaderSession {
     if (snap === null) return
     const off = this.port.targetOffset(snap.index, snap.nodeId)
     if (off === null) return
-    this.port.setScrollTop(this.port.scrollTop() + off + snap.offsetWithinNode - this.topInset)
+    const next = Math.ceil(this.port.scrollTop() + off + snap.offsetWithinNode - this.topInset)
+    this.port.setScrollTop(next === 0 ? 0 : next)
     this.sampleVisibleBeforePrefsChange()            // 复位后重采：连调两次排版也各有正确锚
     this.handleViewportChange({ layoutChanged: true })
   }
@@ -842,7 +881,8 @@ export class ReaderSession {
     // 同步滚动事件若在 setScrollTop 里到达，由 holdViewport 挡住；异步事件由幽灵写闸兜住。
     this.holdViewport = true
     try {
-      this.port.setScrollTop(this.port.scrollTop() + delta)
+      const next = Math.ceil(this.port.scrollTop() + delta)
+      this.port.setScrollTop(next === 0 ? 0 : next)
     } finally {
       this.holdViewport = false
     }
@@ -866,8 +906,8 @@ export class ReaderSession {
       offsetWithinNode = 0
     }
     if (off === null) return
-    // 让出顶条：目标落在看得见的顶（与恢复同一条口径），不藏在条后
-    this.port.setScrollTop(this.port.scrollTop() + off + offsetWithinNode - this.topInset)
+    // 让出顶条：目标落在看得见的顶（与恢复同一条口径），不藏在条后；向上取整避开亚像素截断退章。
+    this.port.setScrollTop(Math.ceil(Math.max(0, this.port.scrollTop() + off + offsetWithinNode - this.topInset)))
     this.pendingJumpNow = null                        // 清目标不推进 DOM 版本：这是测量自己的产物
     this.recalcAnchors()
     const a = this.anchorsNow.find((x) => x.index === jump.index)
@@ -918,20 +958,24 @@ export class ReaderSession {
     for (const fix of fixes) {
       const delta = this.anchorDelta(fix.keep)
       if (delta !== null) {
-        this.port.setScrollTop(this.port.scrollTop() + delta)
+        this.port.setScrollTop(Math.ceil(Math.max(0, this.port.scrollTop() + delta)))
         continue
       }
       if (fix.kind === 'drop') {
-        this.port.setScrollTop(this.port.scrollTop() - fix.px)
+        this.port.setScrollTop(Math.ceil(Math.max(0, this.port.scrollTop() - fix.px)))
         continue
       }
       const a = this.anchorsNow.find((x) => x.index === fix.index)
-      if (a !== undefined) this.port.setScrollTop(this.port.scrollTop() + a.height)
+      if (a !== undefined) this.port.setScrollTop(Math.ceil(Math.max(0, this.port.scrollTop() + a.height)))
     }
   }
 
   /** 采点：在 `setPref` 的同步调用栈里执行——那一刻 React 还没重渲染、DOM 还是旧排版，是唯一拿得到「变化前位置」的时刻。 */
   private sampleVisibleBeforePrefsChange(): void {
+    if (this.paged) {
+      this.lastVisibleBeforePrefs = null
+      return
+    }
     this.lastVisibleBeforePrefs = this.port.currentNode()
   }
 

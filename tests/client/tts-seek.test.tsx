@@ -17,6 +17,7 @@ import {
 import { listenParagraphElement, paragraphSlotOf } from '../../src/client/tts/reading-position.js'
 import { TtsBar } from '../../src/client/tts/TtsBar.js'
 import { TtsMiniBar } from '../../src/client/tts/TtsMiniBar.js'
+import { clampSelectOptionLabel, SELECT_OPTION_MAX_UNITS } from '../../src/client/tts/TtsSettings.js'
 import { NOVEL_CSS } from '../../src/client/styles.js'
 import { ReaderView } from '../../src/client/views/ReaderView.js'
 import { makeReaderDeps } from './fake-deps.js'
@@ -359,6 +360,28 @@ describe('听书条与迷你条的进度面', () => {
       .toEqual(['第 1 章 第一章', '第 2 章 第二章', '第 3 章 第三章'])
     await act(async () => { fireEvent.change(select, { target: { value: '1' } }) })
     expect(ttsPlayer.get()).toMatchObject({ chapterIndex: 1, paragraphIndex: 0 })
+  })
+
+  it('起播章下拉遇到超长或含换行标题时收敛展示宽度并保留完整 title（不撑破原生菜单）', async () => {
+    const dirtyLong = '超级无敌非常非常长\n  的小说章节标题包含很多副标题说明内容以及额外描述文字'
+    chapterNames = ['短标题', dirtyLong]
+    const deps = readerDeps()
+    const { container } = renderReader(deps)
+    await waitFor(() => expect(container.querySelector('[data-chapter="0"]')).not.toBeNull())
+    await act(async () => {
+      await startListening({ sourceId: 's1', bookKey: 'k1', title: '书一', chapterIndex: 1, paragraphIndex: 0 })
+    })
+    fireEvent.click(screen.getByRole('button', { name: '听书设置' }))
+    const select = must(screen.getByLabelText<HTMLSelectElement>('起播章'), '起播章下拉')
+    const options = [...select.querySelectorAll('option')]
+    expect(options[0]?.textContent).toBe('第 1 章 短标题')
+    const truncated = options[1]?.textContent ?? ''
+    expect(truncated.endsWith('…')).toBe(true)
+    expect(truncated.length).toBeLessThan(dirtyLong.length)
+    expect(options[1]?.getAttribute('title')).toBe('第 2 章 超级无敌非常非常长 的小说章节标题包含很多副标题说明内容以及额外描述文字')
+    expect(select.getAttribute('title')).toBe(options[1]?.getAttribute('title'))
+    expect(clampSelectOptionLabel('😀'.repeat(20), SELECT_OPTION_MAX_UNITS).endsWith('…')).toBe(true)
+    expect(clampSelectOptionLabel('   普通   标题  ')).toBe('普通 标题')
   })
 
   it('迷你条只有章内进度条：拖动即跳段，本段时间滑杆不再出现', async () => {

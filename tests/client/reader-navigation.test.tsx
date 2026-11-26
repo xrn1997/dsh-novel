@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { zhTranslate } from '../../src/client/copy/index.js'
 import { CopyProvider, enTranslate } from '../../src/client/copy/index.js'
-import { ReaderNavigation } from '../../src/client/views/ReaderNavigation.js'
+import { filterNavigationItems, ReaderNavigation } from '../../src/client/views/ReaderNavigation.js'
 import type { NavigationItem } from '../../src/client/views/types.js'
 import { pick } from '../support/fixture.js'
 
@@ -158,5 +159,29 @@ describe('空标题兜底（书源或本地目录产空串时目录仍可读可�
     )
     expect(screen.getByRole('button', { name: 'Chapter 1' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Chapter 2' })).toBeTruthy()
+  })
+
+  it('目录搜索过滤保留命中的祖先分组，并统计匹配数与空态', () => {
+    const res = filterNavigationItems(items, '第二节', zhTranslate)
+    expect(res.totalLeaves).toBe(4)
+    expect(res.matchedLeaves).toBe(1)
+    expect(res.items[0]?.label).toBe('卷一 风起')
+    expect(res.items[0]?.children[0]?.children[0]?.label).toBe('第二节')
+
+    const empty = filterNavigationItems(items, '不存在的章', zhTranslate)
+    expect(empty.matchedLeaves).toBe(0)
+    expect(empty.items).toEqual([])
+    render(<ReaderNavigation items={empty.items} activeId={null} onNavigate={() => {}} emptyText="未找到匹配章节" />)
+    expect(screen.getByText('未找到匹配章节')).toBeTruthy()
+  })
+
+  it('空分组自命中关键词时不留下零叶项的孤立组头', () => {
+    const withEmptyGroup: NavigationItem[] = [
+      { id: 'empty-g', label: '空卷 风起', target: null, children: [] },
+      ...items,
+    ]
+    const res = filterNavigationItems(withEmptyGroup, '空卷', zhTranslate)
+    expect(res.matchedLeaves).toBe(0)
+    expect(res.items).toEqual([])
   })
 })

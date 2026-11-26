@@ -136,6 +136,4 @@ export const SEARCH_CSS = `
 }
 .novel-chip:hover { background: var(--novel-hover); color: var(--novel-text); }
 .novel-chip.on { color: var(--novel-brand-strong); border-color: var(--novel-brand); background: var(--novel-brand-tint); }
-.novel-paper-swatch { width: 24px; height: 18px; padding: 0; border-radius: var(--novel-r-xs); }
-.novel-paper-swatch.on { outline: 2px solid var(--novel-brand); outline-offset: 1px; }
 `

@@ -1,7 +1,8 @@
-import type { ReactNode, Ref } from 'react'
+import type { CSSProperties, ReactNode, Ref } from 'react'
 import { useEffect, useState } from 'react'
 import { useCopy } from '../copy/index.js'
 import { useStore } from '../store.js'
+import { rangePercent } from '../util.js'
 import { TTS_RATE } from '../../shared/wire.js'
 import {
   chapterProgressOf, lineOf, listenFaceOf, rateLabel, segmentLabel, timerChoiceLabel,
@@ -76,18 +77,24 @@ export function TtsBar({ darkController, apiGet, pushError, onLocate, rootRef, o
   const run = (pending: Promise<void>): void => { void pending.catch(report) }
 
   return (
-    <div ref={rootRef} className={darkController ? 'novel-dark novel-tts-bar' : 'novel-tts-bar'}>
+    <div
+      ref={rootRef}
+      data-empty-chapter={!face.hasSegments ? 'true' : undefined}
+      className={darkController ? 'novel-dark novel-tts-bar' : 'novel-tts-bar'}
+    >
       {panelOpen && (
         <TtsSettingsPanel label={t('tts.settings')} onClose={() => { setPanelOpen(false) }}>
           <TtsSettingsRows sources={sources} surface="bar" />
-          <div className="novel-tts-row novel-tts-actions">
-            <button className="novel-chip" onClick={() => { run(playFromReadingPosition()) }}>
-              {t('tts.fromReading')}
-            </button>
-            <button className="novel-chip" onClick={() => { run(skipChapter(-1)) }}>{t('tts.prevChapter')}</button>
-            <button className="novel-chip" onClick={() => { run(skipChapter(1)) }}>{t('tts.nextChapter')}</button>
+          <div className="novel-tts-group">
+            <div className="novel-tts-actions">
+              <button type="button" className="novel-chip" onClick={() => { run(playFromReadingPosition()) }}>
+                {t('tts.fromReading')}
+              </button>
+              <button type="button" className="novel-chip" onClick={() => { run(skipChapter(-1)) }}>{t('tts.prevChapter')}</button>
+              <button type="button" className="novel-chip" onClick={() => { run(skipChapter(1)) }}>{t('tts.nextChapter')}</button>
+            </div>
+            <TtsSettingsNote />
           </div>
-          <TtsSettingsNote />
         </TtsSettingsPanel>
       )}
       <div className="novel-tts-nav">
@@ -171,6 +178,9 @@ function ChapterSeekRow({ st, hasSegments }: { st: TtsPlayerState; hasSegments: 
         aria-label={t('tts.seekChapter')} value={value}
         aria-valuetext={chapter.readout}
         title={chapter.readout}
+        style={{
+          '--novel-range-fill': chapter.count <= 1 ? '100%' : rangePercent(value, 0, chapter.count - 1),
+        } as CSSProperties}
         onChange={(event) => { seekParagraph(Number(event.target.value)) }}
       />
     </div>

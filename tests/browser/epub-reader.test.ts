@@ -255,7 +255,7 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       })
       expect(dom.mainWidth, '宿主面板宽度要真的给到阅读区（挂载点是 flex 容器时会退化成 327px 的假窄屏）')
         .toBeGreaterThan(900)
-      expect(dom.bodyWidth, '正文列按 --novel-measure 收窄（36em ≈ 648px）').toBeGreaterThan(600)
+      expect(dom.bodyWidth, '正文列按 --novel-measure 收窄（默认 680px）').toBeGreaterThan(600)
       expect(dom.strong).toBe('粗')
       expect(dom.em).toBe('斜')
       // 白名单把 tr 直接建在 table 下（React 的 createElement 不走 HTML 解析，浏览器不会补 tbody）：
@@ -667,10 +667,11 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
         return { w: el.getBoundingClientRect().width, font: getComputedStyle(el).fontSize }
       })
       expect(boxAfter.font, '字号真的变了（否则这条断言什么都没证明）').not.toBe(boxBefore.font)
+      expect(Math.abs(boxAfter.w - boxBefore.w), '改字号不得连带拉伸正文栏宽').toBeLessThanOrEqual(1)
       expect(afterFont.node, '重排后视口顶仍停在同一个节点').toBe(before.node)
       expect(Math.abs((afterFont.offset ?? 99) - (before.offset ?? 0)), '同一节点的视口相对偏移保持 ±4px').toBeLessThanOrEqual(4)
 
-      // 栏宽：改到最窄一档（em 随字号缩放，正文列因此真的变窄）
+      // 栏宽：改到最窄一档（固定像素档位，正文列因此真的变窄）
       await s.page.evaluate(() => {
         const buttons = [...document.querySelectorAll('[data-novel-ctrl] button')]
         const target = buttons.find((b) => b.textContent === '窄')

@@ -38,6 +38,11 @@ export const TOKENS_CSS = `
   --novel-brand-tint: color-mix(in srgb, var(--novel-brand) 12%, transparent);  /* 选中 chip / 编辑态底 */
   --novel-brand-line: color-mix(in srgb, var(--novel-brand) 27%, transparent);  /* 运行卡 / 选中条描边 */
   --novel-brand-strong: var(--dsw-alias-label-primary-bluish, #79a8ff);         /* 亮蓝强调字 */
+  /* 阅读器子菜单彩色强调色：在深浅宿主下始终保持 DeepSeek 品牌蓝，避免宿主黑白反色主色在深色模式下与白字/白圆点撞色。 */
+  --novel-accent: var(--dsw-static-deepseek-500, #3b76e8);
+  --novel-accent-hover: var(--dsw-static-deepseek-600, #2f65d4);
+  --novel-accent-soft: color-mix(in srgb, var(--novel-accent) 14%, transparent);
+  --novel-accent-line: color-mix(in srgb, var(--novel-accent) 38%, transparent);
   --novel-skeleton: var(--dsw-alias-bg-skeleton, #ffffff14);
   /* 浮层底：迷你条读宿主**浮动钮**语义（与宿主自己的浮动按钮同底同源），不是面板层板。 */
   --novel-float: var(--dsw-alias-button-floating-fill, #2b2b2e);
@@ -74,10 +79,23 @@ export const TOKENS_CSS = `
   --novel-shadow-2: 0 6px 16px rgba(0, 0, 0, .16);     /* 卡片浮起 / 状态条浮层 */
   --novel-shadow-pop: 0 18px 48px rgba(0, 0, 0, .35);  /* 模态 */
   --novel-dur: .15s; --novel-ease: cubic-bezier(.2, 0, 0, 1);
+  --novel-ease-out: cubic-bezier(.22, 1, .36, 1);
+  --novel-ease-spring: cubic-bezier(.34, 1.35, .64, 1);
+  --novel-dur-fast: 140ms; --novel-dur-mid: 220ms;
+  --novel-font-serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", STSong, SimSun, serif;
   /* 值槽（唯一由行内写入的动态量，规则都住本层）。 */
   --novel-pct: 0;
-  --novel-measure: 36em;
+  --novel-measure: 680px;
   --novel-book-page-h: 520px;
+  --novel-range-fill: 50%;
+  --novel-picker-h: 44;
+  --novel-picker-s: 52%;
+  --novel-picker-l: 94%;
+  --novel-picker-color: #f7f3e8;
+  --novel-picker-ink: #222;
+  --novel-picker-live: #855532;
+  --novel-seg-count: 2;
+  --novel-seg-index: 0;
   /* 听书浮窗展开态尺寸（ADR-0080）：由 miniBarLayout 行内写入解析后的呈现尺寸，样式层只读变量。 */
   --novel-tts-panel-w: 320px;
   --novel-tts-panel-h: 200px;

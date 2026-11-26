@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiClientError } from '../../src/client/api.js'
 import { CopyProvider, enTranslate } from '../../src/client/copy/index.js'
 import { loadPanelShelf, panelShelf } from '../../src/client/panel-shelf.js'
-import { navigate, setPref } from '../../src/client/store.js'
+import { DEFAULT_PREFS, navigate, setPref } from '../../src/client/store.js'
 import { NovelView } from '../../src/client/views/NovelView.js'
 import { ReaderView } from '../../src/client/views/ReaderView.js'
 import type {
@@ -16,6 +16,7 @@ import { must, pick } from '../support/fixture.js'
 import { makeReaderDeps } from './fake-deps.js'
 import type { DepsOverrides, FakeReaderDeps } from './fake-deps.js'
 import { readerRouteGetMock } from './reader-fakes.js'
+import { rect } from './scroll-stub.js'
 import { installWiringLifecycle, sentCalls } from './wiring-harness.js'
 
 /**
@@ -25,11 +26,12 @@ import { installWiringLifecycle, sentCalls } from './wiring-harness.js'
 
 installWiringLifecycle()
 
-describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run）', () => {
-  const readerDeps = (over: DepsOverrides = {}, shelf: unknown[] = []): FakeReaderDeps => makeReaderDeps(over, shelf)
+const readerDeps = (over: DepsOverrides = {}, shelf: unknown[] = []): FakeReaderDeps => makeReaderDeps(over, shelf)
 
-  const reader = (deps: FakeReaderDeps): ReturnType<typeof createElement> =>
-    createElement(ReaderView, { sourceId: 's1', bookKey: 'k1', title: '斗罗', deps })
+const reader = (deps: FakeReaderDeps): ReturnType<typeof createElement> =>
+  createElement(ReaderView, { sourceId: 's1', bookKey: 'k1', title: '斗罗', deps })
+
+describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run）', () => {
 
   it('英文：阅读器控制条与设置入口', async () => {
     const deps = readerDeps()
@@ -142,6 +144,76 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
       await waitFor(() => expect(container.querySelector('.novel-rdr-body')).not.toBeNull())
       expect(container.querySelector('[data-chapter="1"]')).not.toBeNull()
     } finally {
+      setPref({ readingMode: 'scroll', pageAnimation: 'flip' })
+    }
+  })
+
+  it('滚动与翻页模式反复来回切换：真实滚动容器拿得到 scrollTop 且章号不向回漂移', async () => {
+    const chapters: ChapterEntry[] = [
+      { name: '第一章', url: 'u1' },
+      { name: '第二章', url: 'u2' },
+      { name: '第三章', url: 'u3' },
+    ]
+    const deps = readerDeps({
+      apiGet: readerRouteGetMock({
+        chapters: () => chapters,
+        chapter: (i) => ({ kind: 'text', text: `第${i + 1}章正文` }),
+        shelf: () => [{
+          sourceId: 's1', bookKey: 'k1', title: '斗罗', sourceName: null,
+          progress: { chapterIndex: 2, offsetRatio: 0.4, updatedAt: 10 }, addedAt: 1,
+        }],
+      }),
+    })
+    const scrollContainer = document.createElement('div')
+    scrollContainer.className = 'novel-main'
+    scrollContainer.style.overflowY = 'auto'
+    document.body.appendChild(scrollContainer)
+    let portTop = 0
+    Object.defineProperties(scrollContainer, {
+      scrollHeight: { configurable: true, get: () => 3000 },
+      clientHeight: { configurable: true, get: () => 800 },
+      scrollTop: { configurable: true, get: () => portTop, set: (v: number) => { portTop = v } },
+    })
+    scrollContainer.getBoundingClientRect = () => rect(0, 800)
+    const winScroll = vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+    const rectSpy = vi.spyOn(Element.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: Element): DOMRect {
+        if (this === scrollContainer) return rect(0, 800)
+        const ch = this.getAttribute('data-chapter')
+        if (ch !== null) return rect(Number(ch) * 1000 - portTop, 1000)
+        return rect(0, 0)
+      })
+    try {
+      const { unmount } = render(reader(deps), { container: scrollContainer })
+      await waitFor(() => expect(scrollContainer.querySelector('[data-chapter="2"]')).not.toBeNull())
+      // 加载第 0/1 章进 DOM（模拟前方章已挂载时来回切最容易向回漂移的现场）
+      fireEvent.click(screen.getByRole('button', { name: '目录' }))
+      fireEvent.click(screen.getByRole('button', { name: '第一章' }))
+      await waitFor(() => expect(scrollContainer.querySelector('[data-chapter="0"]')).not.toBeNull())
+      await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
+      fireEvent.click(screen.getByRole('button', { name: '目录' }))
+      fireEvent.click(screen.getByRole('button', { name: '第三章' }))
+      await waitFor(() => expect(screen.getByTitle('打开目录').textContent).toContain('第三章'))
+      await act(async () => { await new Promise((r) => setTimeout(r, 40)) })
+
+      winScroll.mockClear()
+      for (let i = 0; i < 3; i++) {
+        act(() => { setPref({ readingMode: 'page' }) })
+        await waitFor(() => expect(scrollContainer.querySelector('.novel-book-stage')).not.toBeNull())
+        expect(screen.getByTitle('打开目录').textContent).toContain('3 / 3')
+
+        act(() => { setPref({ readingMode: 'scroll' }) })
+        await waitFor(() => expect(scrollContainer.querySelector('.novel-rdr-body')).not.toBeNull())
+        await act(async () => { await new Promise((r) => setTimeout(r, 30)) })
+        expect(portTop).toBeGreaterThanOrEqual(2000)
+        expect(screen.getByTitle('打开目录').textContent).toContain('3 / 3')
+      }
+      expect(winScroll).not.toHaveBeenCalled()
+      unmount()
+    } finally {
+      rectSpy.mockRestore()
+      winScroll.mockRestore()
+      scrollContainer.remove()
       setPref({ readingMode: 'scroll', pageAnimation: 'flip' })
     }
   })
@@ -736,5 +808,120 @@ describe('NovelView 顶部 tab 导航（书架|书城|书源管理 并列；不�
     // 回书架：首页内容回来
     fireEvent.click(tabs().getByRole('button', { name: '书架' }))
     await waitFor(() => expect(screen.getByPlaceholderText(/搜书名/)).toBeTruthy())
+  })
+})
+
+describe('ReaderView 复核回归：翻页复位默认不覆盖滚动位置 & 目录搜索 Esc/定位', () => {
+  it('翻页模式下修改字号后点「恢复默认设置」，切回滚动保持在原章而不被假偏移拉走', async () => {
+    const chapters: ChapterEntry[] = [
+      { name: '第一章', url: 'u1' },
+      { name: '第二章', url: 'u2' },
+      { name: '第三章', url: 'u3' },
+    ]
+    const deps = readerDeps({
+      apiGet: readerRouteGetMock({
+        chapters: () => chapters,
+        chapter: (i) => ({ kind: 'text', text: `第${i + 1}章正文` }),
+        shelf: () => [{
+          sourceId: 's1', bookKey: 'k1', title: '斗罗', sourceName: null,
+          progress: { chapterIndex: 2, offsetRatio: 0.4, updatedAt: 10 }, addedAt: 1,
+        }],
+      }),
+    })
+    const scrollContainer = document.createElement('div')
+    scrollContainer.className = 'novel-main'
+    scrollContainer.style.overflowY = 'auto'
+    document.body.appendChild(scrollContainer)
+    let portTop = 0
+    Object.defineProperties(scrollContainer, {
+      scrollHeight: { configurable: true, get: () => 3000 },
+      clientHeight: { configurable: true, get: () => 800 },
+      scrollTop: { configurable: true, get: () => portTop, set: (v: number) => { portTop = v } },
+    })
+    scrollContainer.getBoundingClientRect = () => rect(0, 800)
+    const rectSpy = vi.spyOn(Element.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: Element): DOMRect {
+        if (this === scrollContainer) return rect(0, 800)
+        const ch = this.getAttribute('data-chapter')
+        if (ch !== null) return rect(Number(ch) * 1000 - portTop, 1000)
+        return rect(0, 0)
+      })
+    try {
+      act(() => { setPref({ readingMode: 'page', fontSize: 24 }) })
+      const { unmount } = render(reader(deps), { container: scrollContainer })
+      await waitFor(() => expect(scrollContainer.querySelector('.novel-book-stage')).not.toBeNull())
+      await waitFor(() => expect(screen.getByTitle('打开目录').textContent).toContain('第三章'))
+
+      fireEvent.click(screen.getByRole('button', { name: '阅读设置' }))
+      fireEvent.click(screen.getByRole('button', { name: '恢复默认设置' }))
+      await waitFor(() => expect(scrollContainer.querySelector('.novel-rdr-body')).not.toBeNull())
+      await act(async () => { await new Promise((r) => setTimeout(r, 30)) })
+      expect(portTop).toBeGreaterThanOrEqual(2000)
+      expect(screen.getByTitle('打开目录').textContent).toContain('第三章')
+      unmount()
+    } finally {
+      rectSpy.mockRestore()
+      scrollContainer.remove()
+      setPref({ ...DEFAULT_PREFS })
+    }
+  })
+
+  it('目录搜索框有词时按 Escape 先清词不关抽屉，再按一次才关；定位当前章会扣除吸顶头高', async () => {
+    const chapters: ChapterEntry[] = [
+      { name: '第一章', url: 'u1' },
+      { name: '第二章', url: 'u2' },
+      { name: '第三章', url: 'u3' },
+    ]
+    const deps = readerDeps({
+      apiGet: readerRouteGetMock({
+        chapters: () => chapters,
+        chapter: (i) => ({ kind: 'text', text: `第${i + 1}章正文` }),
+        shelf: () => [{
+          sourceId: 's1', bookKey: 'k1', title: '斗罗', sourceName: null,
+          progress: { chapterIndex: 1, offsetRatio: 0, updatedAt: 10 }, addedAt: 1,
+        }],
+      }),
+    })
+    let drawerTop = 0
+    const rectSpy = vi.spyOn(Element.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: Element): DOMRect {
+        if (this.classList.contains('novel-drawer')) return rect(0, 400)
+        if (this.classList.contains('novel-drawer-top')) return rect(0, 100)
+        if (this.getAttribute('aria-current') === 'true') return rect(360 - drawerTop, 20)
+        return rect(0, 0)
+      })
+    try {
+      const { container } = render(reader(deps))
+      await waitFor(() => expect(container.querySelector('[data-chapter="1"]')).not.toBeNull())
+      fireEvent.click(screen.getByRole('button', { name: '目录' }))
+      const drawer = await screen.findByRole('dialog', { name: '目录' })
+      Object.defineProperty(drawer, 'scrollTop', {
+        configurable: true,
+        get: () => drawerTop,
+        set: (v: number) => { drawerTop = v },
+      })
+
+      const searchInput = screen.getByPlaceholderText<HTMLInputElement>('搜索章节…')
+      fireEvent.change(searchInput, { target: { value: '第三' } })
+      expect(searchInput.value).toBe('第三')
+
+      // 第一次 Escape 清空搜索词，抽屉仍保留
+      fireEvent.keyDown(searchInput, { key: 'Escape' })
+      expect(searchInput.value).toBe('')
+      expect(screen.getByRole('dialog', { name: '目录' })).toBeTruthy()
+
+      // 搜索后点击「定位当前章」，清词并在提交后居中到扣除 100px 吸顶头后的可见区（中心 100 + 300/2 = 250）
+      fireEvent.change(searchInput, { target: { value: '第三' } })
+      drawerTop = 0
+      fireEvent.click(screen.getByRole('button', { name: '定位当前章' }))
+      await waitFor(() => expect(searchInput.value).toBe(''))
+      await waitFor(() => expect(drawerTop).toBe(120)) // (360 + 10) - (100 + 150) = 120
+
+      // 清空态按 Escape 关闭目录抽屉
+      fireEvent.keyDown(document, { key: 'Escape' })
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: '目录' })).toBeNull())
+    } finally {
+      rectSpy.mockRestore()
+    }
   })
 })
