@@ -125,7 +125,7 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-novel
 | `dshnovel_source` | 书源管理：`list` / `probe`（真实搜索请求 + 失败定位）/ `enable`·`disable` / `ai-enable`·`ai-disable`（加入 / 移出 AI 搜索）/ `remove` |
 | `dshnovel_import_source` | 导入 legado 书源 JSON 文本（内容可为对象或数组）；只做规范化 + 落盘不探针，逐条结果在 `outcomes[]`（含 `ok` / `missing` / `dupSkipped`） |
 
-六个工具与 UI、探针共用同一个 service 层，不存在第二套实现。工具名全部锁 `dshnovel_` 前缀——宿主对工具重名直接抛错，插件专属前缀是与生态其他插件的硬边界（名字集合由 `tests/tools/tools.test.ts` 钉住）。
+六个工具与 UI、探针共用同一个 service 层，不存在第二套实现。工具名全部锁 `dshnovel_` 前缀；命名硬边界的成因见 `ADR-0020`，规则与名字集合的钉法见根 `AGENTS.md`。
 
 ## 配置
 

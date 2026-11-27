@@ -11,6 +11,10 @@ import { ApiError, fenceAllowlist, fenceDenialOf, readCappedBody, readJsonBody, 
 import type { FenceDenial } from './wire.js'
 import { BODY, NOVEL_API_PREFIX, PARAMS, readBodies } from '../shared/wire.js'
 import { BodyShapeError } from '../shared/wire.js'
+import type {
+  AiSearchReceipt, AuthSavedReceipt, BatchRemoved, BatchUpdated, EnabledReceipt, ExploreSnapshot,
+  HealthReport, JobEnvelope, JobState, RemoveReceipt, RunLoginReceipt, SearchJobSnapshot,
+} from '../shared/wire.js'
 import { matchRoute } from './routes.js'
 import type { ParamRouteName, RouteName } from './routes.js'
 
@@ -38,15 +42,15 @@ const SSE_HEADERS = {
 /** 作业观察流机械（搜索与发现共用）：写头 → 变化补帧 → 终态自动退订关流 → 断连退订。
  *  取哪份快照、到没到终态交给 `frame`（游标等副作用留调用方）；两条纪律各写一遍就会漏改，表现为连接不放。
  */
-function openJobStream(res: ServerResponse, subscribe: (notify: () => void) => () => void,
-  frame: () => { job: unknown; done: boolean },
+function openJobStream<Job>(res: ServerResponse, subscribe: (notify: () => void) => () => void,
+  frame: () => JobEnvelope<Job> & { done: boolean },
 ): void {
   res.writeHead(200, SSE_HEADERS)
   let off: (() => void) | null = null
   const pump = (): void => {
     if (res.writableEnded || res.destroyed) return
     const f = frame()
-    res.write(`data: ${JSON.stringify({ job: f.job })}\n\n`)
+    res.write(`data: ${JSON.stringify({ job: f.job } satisfies JobEnvelope<Job>)}\n\n`)
     // `?.` 承重：`subscribe(pump)` 可能在返回退订函数前同步调一次 pump，那时 `off` 还没赋值。
     if (f.done) { off?.(); res.end() }
   }
@@ -117,7 +121,7 @@ type HandlerCtx = {
  *  臂体只留分流与错误落点。臂体可回 Promise，分派点一律 await。 */
 const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } = {
   health: ({ res }) => {
-    writeOk(res, { name: 'dsh-novel', apiVersion: 1 })
+    writeOk(res, { name: 'dsh-novel', apiVersion: 1 } satisfies HealthReport)
   },
   sources: ({ res, service }) => {
     // 导入只走 sources/import 后台任务，本路由是 GET 列表（错方法由匹配器落 405）
@@ -130,7 +134,7 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } 
   },
   sourcesJobStatus: ({ res, service }) => {
     // 任务结束后结果保留到下一个任务开始——关设置/刷新页面后重挂载即可恢复展示
-    writeOk(res, { job: service.jobStatus() })
+    writeOk(res, { job: service.jobStatus() } satisfies JobEnvelope<JobState>)
   },
   sourcesBatchProbe: async ({ req, res, service }) => {
     const body = await readJsonBody<Record<string, unknown> | null>(req, null)
@@ -141,19 +145,19 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } 
     const { ids, enabled } = readBodies.batchEnabled(body)
     // 未知 id 静默跳过、重复 id 幂等；一次 edit 一次合并落盘——配方知识归门面动词
     const updated = await service.setEnabledMany(ids, enabled)
-    writeOk(res, { updated })
+    writeOk(res, { updated } satisfies BatchUpdated)
   },
   sourcesBatchAiSearch: async ({ req, res, service }) => {
     const body = await readJsonBody<Record<string, unknown> | null>(req, null)
     const { ids, aiSearch } = readBodies.batchAiSearch(body)
     const updated = await service.setAiSearchMany(ids, aiSearch)
-    writeOk(res, { updated })
+    writeOk(res, { updated } satisfies BatchUpdated)
   },
   sourcesBatchDelete: async ({ req, res, service }) => {
     // 批量删除：门面动词（一次 edit 合并落盘），替代逐删逐写的 N 次全量重写
     const body = await readJsonBody<Record<string, unknown> | null>(req, null)
     const removed = await service.removeSources(readBodies.ids(body))
-    writeOk(res, { removed })
+    writeOk(res, { removed } satisfies BatchRemoved)
   },
   search: async ({ url, res, service }) => {
     // 「关键词去空白后非空」两条入口同一把尺：body 侧 `readBodies.searchJob`，query 侧 `requireQuery`（措辞唯一家）。
@@ -182,7 +186,7 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } 
     const raw = Number(url.searchParams.get(PARAMS.since) ?? '0')
     let cursor = Number.isInteger(raw) && raw > 0 ? raw : 0
     // 游标只在这一面推进：它是 `frame` 闭包私有状态，机械不认识。
-    openJobStream(res, (notify) => service.subscribeSearchJob(notify), () => {
+    openJobStream<SearchJobSnapshot>(res, (notify) => service.subscribeSearchJob(notify), () => {
       const job = service.searchJobSnapshot(cursor)
       if (job !== null) cursor = job.next
       return { job, done: job !== null && job.phase !== 'running' }
@@ -190,7 +194,7 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } 
   },
   searchJobStatus: ({ url, res, service }) => {
     const since = Number(url.searchParams.get(PARAMS.since) ?? '0')
-    writeOk(res, { job: service.searchJobSnapshot(Number.isInteger(since) && since > 0 ? since : 0) })
+    writeOk(res, { job: service.searchJobSnapshot(Number.isInteger(since) && since > 0 ? since : 0) } satisfies JobEnvelope<SearchJobSnapshot>)
   },
   // ── 书城发现面（按源列出的分类入口：清单 / 分类书单）──────────────────
   exploreKinds: ({ res, service }) => {
@@ -213,11 +217,11 @@ const HANDLERS: { [K in RouteName]: (ctx: HandlerCtx) => void | Promise<void> } 
   },
   exploreListStatus: ({ res, service }) => {
     // 全量快照（跨页累积住服务端，整帧替换才读得出「这一轮到此刻」）
-    writeOk(res, { job: service.exploreJobSnapshot() })
+    writeOk(res, { job: service.exploreJobSnapshot() } satisfies JobEnvelope<ExploreSnapshot>)
   },
   exploreListStream: ({ res, service }) => {
     // 与 search 流同形：每帧同一份快照，终态关流；但发现面整帧替换、不认帧的 id，search 面才按 id 验身份。
-    openJobStream(res, (notify) => service.subscribeExploreJob(notify), () => {
+    openJobStream<ExploreSnapshot>(res, (notify) => service.subscribeExploreJob(notify), () => {
       const job = service.exploreJobSnapshot()
       return { job, done: job !== null && job.phase !== 'running' }
     })
@@ -393,21 +397,21 @@ const PARAM_HANDLERS: { [K in ParamRouteName]: (ctx: HandlerCtx) => void | Promi
     const enabled = readBodies.enabled(body)
     // 未知 id 由门面抛 SourceNotFoundError，经 classify 投影成 404；路由不自带第二份判据。
     await service.setEnabled(paramOf(params), enabled)
-    writeOk(res, { enabled })
+    writeOk(res, { enabled } satisfies EnabledReceipt)
   },
   sourceAiSearch: async ({ req, res, service, params }) => {
     // 单源 AI 搜索标记：只影响 AI 工具面的参与集（界面搜索仍看启停）
     const body = await readJsonBody<Record<string, unknown> | null>(req, null)
     const aiSearch = readBodies.aiSearch(body)
     await service.setAiSearch(paramOf(params), aiSearch)
-    writeOk(res, { aiSearch })
+    writeOk(res, { aiSearch } satisfies AiSearchReceipt)
   },
   sourceAuth: async ({ req, res, service, params }) => {
     await authRoute(service, paramOf(params), req, res)
   },
   sourceDelete: async ({ res, service, params }) => {
     const removed = await service.removeSource(paramOf(params))
-    writeOk(res, { removed })
+    writeOk(res, { removed } satisfies RemoveReceipt)
   },
   shelfPut: async ({ req, res, service, params }) => {
     await shelfPut(service, decodeSegKey(paramOf(params)), req, res)
@@ -550,12 +554,12 @@ async function authRoute(service: ReadingService, id: string, req: IncomingMessa
     const out = await service.login(id)   // 源不存在 → SourceNotFoundError（writeError 经 classify 映射 404）
     if (out.kind === 'manual') {
       // URL 形态：不执行，回传给 UI 开新 tab + cookie 录入（不注入 WebView）
-      writeOk(res, { mode: 'manual', loginUrl: out.loginUrl })
+      writeOk(res, { mode: 'manual', loginUrl: out.loginUrl } satisfies RunLoginReceipt)
       return
     }
     if (out.kind === 'no-login-url') throw new ApiError('该源未声明 loginUrl', 400, 'BadRequest')
     if (out.kind === 'empty-output') throw new ApiError('loginUrl 未产出 cookie（脚本未 return 或为空）——登录未生效，未写入登录态', 422, 'LoginFailed')
-    writeOk(res, { auth: true })   // authed：JS 执行且产出登录态（已落盘）
+    writeOk(res, { auth: true } satisfies AuthSavedReceipt)   // authed：JS 执行且产出登录态（已落盘）
     return
   }
 
@@ -566,13 +570,13 @@ async function authRoute(service: ReadingService, id: string, req: IncomingMessa
 
   if (want.mode === 'login-info') {
     await service.saveLoginInfo(id, want.loginInfo)
-    writeOk(res, { auth: true })
+    writeOk(res, { auth: true } satisfies AuthSavedReceipt)
     return
   }
 
   // cookie 录入归门面动词（acquiredAt 盖章在门面——dispatch 不再手拼 SourceAuth）
   await service.saveAuth(id, want.cookies, want.headers, want.loginInfo)
-  writeOk(res, { auth: true })
+  writeOk(res, { auth: true } satisfies AuthSavedReceipt)
 }
 
 /** 405 唯一措辞：路径认得、方法不对。路径拼上前缀，调用方拿到可直接照改的完整路径

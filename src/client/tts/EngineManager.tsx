@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 import { ROUTES, paramOps } from '../../shared/wire.js'
-import type { TtsEnginePublic, TtsEngineRemoveReceipt, TtsSourcesView } from '../../shared/wire.js'
+import type { RemoveReceipt, TtsEnginePublic, TtsSourcesView } from '../../shared/wire.js'
 import { apiGet, apiSend, describeError } from '../api.js'
 import { plural, useCopy } from '../copy/index.js'
 import { Dialog } from '../views/dialog.js'
@@ -91,7 +91,7 @@ export function EngineManager({ writable }: { writable: boolean }): ReactNode {
     const target = pendingDelete
     setDeleting(true)
     setDeleteError(null)
-    void apiSend<TtsEngineRemoveReceipt>(paramOps.ttsEngineDelete.at(target.id)).then(
+    void apiSend<RemoveReceipt>(paramOps.ttsEngineDelete.at(target.id)).then(
       (result) => {
         setDeleting(false)
         setPendingDelete(null)

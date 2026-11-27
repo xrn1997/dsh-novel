@@ -57,7 +57,7 @@
 - **ADR**：编号只追加、不复用；每篇紧跟标题写 `Status: accepted` 或 `Status: superseded by NNNN`；每篇在 `docs/adr/README.md` 恰好出现一次；正文只写当前真相，日期留在 git；整篇翻案新写一篇并标旧篇，事实漂移就地改。
 - **当前事实源**（`AGENTS.md`、`README.md`、`CONTEXT.md`、`docs/architecture.md`、`docs/ui-spec.md`、`docs/development.md`）：语义、界面、词汇、操作或常驻规则变化时同批更新；不写历史。像素、断点、文案键的唯一定义在 `src/client/` 与 `tests/client/`。
 - **AGENTS.md**：门清单、硬约束或先读表变化时同批更新；它是入口不是手册，预算由文档门核。
-- **README**：用户可见事实变化时更新；宿主 peer 区间与真机名单的事实源是 `package.json`，README 与徽章是投影，名单与徽章由文档门核对，peer 区间由 `tests/packaging.test.ts` 把。
+- **README**：用户可见事实变化时更新；兼容性事实的单源与投影规则只住根 `AGENTS.md`。
 - **详情页短文档**（`docs/DETAIL.md`、`docs/DETAIL.zh.md`，每语言一份）：宿主插件详情页按 `locale` 的 `meta.detail` 点名渲染它，不点名就回退整篇 README；文档与它的插图都要由 `package.json` 的 `files` 精确点名，判据住 `tests/packaging.test.ts`。README 的用户可见事实变化时同批看一眼插图与说明文字是否还成立。
 - **CONTRIBUTING**：提交信息、PR/Issue 约定、提交前门或发版边界变化时同批更新；构建步骤仍住 `docs/development.md`。
 - **CHANGELOG**：只在发版时追加已发布版本；每个版本用四个固定小节——新增 / 变更 / 修复 / 升级注意，没有内容的小节省略；写用户可见变化与升级注意，未发布改动不预写；历史版本按当时体例保留，不回溯改写（已废称呼与不可回查的批次号按文档门清理）；逐提交明细留 git。

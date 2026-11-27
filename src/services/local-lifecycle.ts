@@ -1,5 +1,5 @@
 import { LOCAL_SOURCE_ID } from '../shared/wire.js'
-import type { ChapterContent, LocalImportResponse, LocalImportWarning, ShelfBook, ShelfMetaPatch } from '../shared/wire.js'
+import type { BatchRemoved, ChapterContent, LocalImportResponse, LocalImportWarning, RemoveReceipt, ShelfBook, ShelfMetaPatch } from '../shared/wire.js'
 import { LocalNotMountedError } from './errors.js'
 import { isLocalBookKey } from './localbooks.js'
 import type { LocalImportResult, LocalResource } from './localbooks.js'
@@ -89,18 +89,18 @@ export class LocalLifecycle {
   }
 
   /** 删一本：先副本、后架位（口径②）。本地键即使不在架也不去动磁盘——幽灵键不该删别人的文件。 */
-  async removeBook(bookKey: string): Promise<{ removed: boolean }> {
+  async removeBook(bookKey: string): Promise<RemoveReceipt> {
     return { removed: await this.removeShelfAndCopies(bookKey, false) }
   }
 
   /** 批量删：与单删同一条顺序；副本删失败即抛出、架位整批保留可重试，未知键静默跳过。 */
-  async removeBooks(bookKeys: readonly string[]): Promise<{ removed: number }> {
+  async removeBooks(bookKeys: readonly string[]): Promise<BatchRemoved> {
     await this.removeCopies(bookKeys, false)
     return { removed: this.parts.shelf.removeMany(bookKeys).length }
   }
 
   /** 删本地书：点名的是磁盘上的本地书，**即使不在架也要清副本**；架位有就一并移走。 */
-  async removeLocalBook(bookKey: string): Promise<{ removed: boolean }> {
+  async removeLocalBook(bookKey: string): Promise<RemoveReceipt> {
     this.requireCopies()
     return { removed: await this.removeShelfAndCopies(bookKey, true) }
   }

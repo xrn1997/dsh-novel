@@ -43,7 +43,7 @@ pnpm lint          # 类型感知 ESLint：显式 any、any 扩散（no-unsafe-*
 
 `tsconfig.json` 在 `strict` 之上开着 `noUncheckedIndexedAccess`、`exactOptionalPropertyTypes`、`erasableSyntaxOnly`、`noFallthroughCasesInSwitch`、`noImplicitOverride`、`verbatimModuleSyntax`、`noUnusedLocals`、`noUnusedParameters`；判据与弃选项住 `ADR-0053`。三条纪律单列：
 
-- **取值不折叠**：取位失败 → Miss、解析到空集合 → 空 List，不许用 `?? []` / `?? ''` 把它们折成同一种结局；服务层对合法缺省的 `??` 收口不在禁令内。测试夹具的位置取位走 `tests/support/fixture.ts` 的 `pick` / `last`，需要断言存在性的查找走 `must`。
+- **取值不折叠**（判据句只住根 `AGENTS.md` 的「硬约束」）：不许用 `?? []` / `?? ''` 兜空；服务层对合法缺省的 `??` 收口不在禁令内。测试夹具的位置取位走 `tests/support/fixture.ts` 的 `pick` / `last`，需要断言存在性的查找走 `must`。
 - **`no-unnecessary-condition` 的命中分两类**：真死代码删；「本地窄镜像钉死 ≠ 运行时必有」与「TS 看不见闭包写入」的判空保留，并在注释里写清为什么。
 - **新增的 `eslint-disable` 只用于确证误报，每处带理由**；`src/client` 里那批无理由的 `react-hooks/exhaustive-deps` 是存量豁免清单，不属本门覆盖面。`require-await` 在 `tests/**` 关闭。
 

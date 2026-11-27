@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { Fragment, useEffect, useRef, useState } from 'react'
-import { bodies, paramOps, ROUTES } from '../../shared/wire.js'
+import { bodies, paramOps, ROUTES, type BatchRemoved, type BatchUpdated } from '../../shared/wire.js'
 import { describeError } from '../api.js'
 import { plural, useCopy, type CopyKey } from '../copy/index.js'
 import { prodDeps } from '../deps.js'
@@ -52,7 +52,7 @@ type BatchCommand = {
 
 const BATCH_COMMANDS = {
   enabled: {
-    send: (deps, ids, on) => deps.apiSend<{ updated: number }>(
+    send: (deps, ids, on) => deps.apiSend<BatchUpdated>(
       ROUTES.sourcesBatchEnabled, bodies.batchEnabled(ids, on)).then((r) => r.updated),
     okKeys: (on) => (on
       ? ['sources.batch.enabled.one', 'sources.batch.enabled.other']
@@ -60,7 +60,7 @@ const BATCH_COMMANDS = {
     failKey: 'sources.batch.failed',
   },
   aiSearch: {
-    send: (deps, ids, on) => deps.apiSend<{ updated: number }>(
+    send: (deps, ids, on) => deps.apiSend<BatchUpdated>(
       ROUTES.sourcesBatchAiSearch, bodies.batchAiSearch(ids, on)).then((r) => r.updated),
     okKeys: (on) => (on
       ? ['sources.batch.aiEnabled.one', 'sources.batch.aiEnabled.other']
@@ -68,7 +68,7 @@ const BATCH_COMMANDS = {
     failKey: 'sources.batch.failed',
   },
   delete: {
-    send: (deps, ids) => deps.apiSend<{ removed: number }>(
+    send: (deps, ids) => deps.apiSend<BatchRemoved>(
       ROUTES.sourcesBatchDelete, bodies.ids(ids)).then((r) => r.removed),
     okKeys: () => ['sources.delete.removed.one', 'sources.delete.removed.other'],
     failKey: 'sources.delete.failed',

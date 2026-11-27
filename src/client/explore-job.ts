@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { bodies, ROUTES } from '../shared/wire.js'
-import type { ExploreBook, ExploreSnapshot } from '../shared/wire.js'
+import type { ExploreBook, ExploreSnapshot, JobEnvelope, JobStarted } from '../shared/wire.js'
 import { ApiClientError, describeError } from './api.js'
 import { zhTranslate } from './copy/index.js'
 import type { Translate } from './copy/index.js'
@@ -88,7 +88,7 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
 
   /** 状态读面：通道的地基读与挂载恢复是同一发请求，URL 与空值口径只此一处。 */
   const readStatus = async (): Promise<ExploreSnapshot | null> =>
-    (await deps.apiGet<{ job: ExploreSnapshot | null }>(ROUTES.exploreListStatus.path)).job ?? null
+    (await deps.apiGet<JobEnvelope<ExploreSnapshot>>(ROUTES.exploreListStatus.path)).job ?? null
 
 /** 通道：timer / SSE 回落 / 撤通道 / 代际归 `job-channel.ts`；本模块只交三件策略。spec 锚定
  *  首次渲染的闭包；`t` 每次调用现读当前 locale（政策见 `copy/index.tsx`）。 */
@@ -116,7 +116,7 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
     if (s === '' || k === '') return
     void (async () => {
       try {
-        const { jobId } = await deps.apiSend<{ jobId: string }>(ROUTES.exploreList, bodies.exploreList(s, k))
+        const { jobId } = await deps.apiSend<JobStarted>(ROUTES.exploreList, bodies.exploreList(s, k))
         if (!aliveNow()) return
         submitted.current = true             // 新轮出生：此后的挂载恢复（读的是上一轮）一律让位
         // 提交返回的 id 就是本轮身份：先落一帧空态再盯。源名留空是诚实的——它住在服务端那一帧里。
@@ -140,7 +140,7 @@ export function useExploreJob(deps: JobWatchDeps, t: Translate = zhTranslate): E
     setRound((r) => (r === null ? null : { ...r, running: true }))
     void (async () => {
       try {
-        await deps.apiSend<{ jobId: string }>(ROUTES.exploreListMore)
+        await deps.apiSend<JobStarted>(ROUTES.exploreListMore)
         if (!aliveNow()) return
         setError(null)
         watch()

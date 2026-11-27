@@ -1,7 +1,8 @@
 /**
  * client 侧 API 值形状：全部来自 wire 契约（src/shared/wire.ts）——与 Node 半共用同一份定义，
  * 漂移即编译错误。
- * 本文件只是再导出桶：保持既有 `import … from './views/types.js'` 路径可用；改形状去 shared，别在这里加第二份。
+ * **旧路径兼容桶，不是 client 值形状的入口**：只为既有 `import … from './views/types.js'` 继续可用，
+ * 清单不承诺完备；新代码要值形状直接 import `../../shared/wire.js`，别在这里登记，更别在这里加第二份。
  * type-only：纯度门不涉（且 shared 本身零依赖，可安全 inline 进 client bundle）。 */
 export type {
   // 枚举与状态

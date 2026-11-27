@@ -391,11 +391,6 @@ export interface TtsEngineImportReceipt {
   failed: { index: number; message: string }[]
 }
 
-/** 删引擎回执：未知 id 静默 `removed:false`（与删源同口径）；值形状住 wire。 */
-export interface TtsEngineRemoveReceipt {
-  removed: boolean
-}
-
 // ── 听书面（段合成与引擎源清单）──────────────────────────────────────────
 // 一段正文 → 音频字节的合成请求/回执与引擎源清单行形状：路由面与浏览器播放层共用；全部是类型（零运行时依赖）。
 
@@ -559,6 +554,55 @@ export type LocalImportResponse = ShelfBook & {
   encoding: string | null
   warnings: LocalImportWarning[]
 }
+
+// ── 回执与读面信封（跨面的响应 value）──────────────────────────────────
+// 这里只收**跨面**的响应形状，命名族 = `Job*` / `*Receipt` / `*Envelope` / `*Report`：起任务回执
+// （`JobStarted`）、任务 / 搜索 / 发现状态读面与 health 读面（`JobEnvelope` / `HealthReport`）、
+// 写回执（`BatchUpdated` / `BatchRemoved` / `RemoveReceipt` / `CancelReceipt` / `EnabledReceipt` /
+// `AiSearchReceipt`）、登录面结局投影（`AuthSavedReceipt` / `RunLoginReceipt` / `LoginActionReceipt`）。
+// 两半与服务层只准消费这里的定义，谁手抄一份谁就是第二主人（改名两半编译全绿、回执悄悄变哑的事故
+// 就出在这层）。边界：具名实体值与**随面走的面内回执**不进这里——`SourcePublic[]` / `ProbeResult` /
+// `ShelfEntry` 等实体各住自己那一面，`TtsEngineImportReceipt` / `SynthesisReceipt` 这类面内回执也随面住。
+
+/** 起任务回执：五条起任务路由（sources/import、sources/batch-probe、search/job、explore/list、
+ *  explore/list/more）同一个形状——回执只带任务号，读面另走状态读口。 */
+export interface JobStarted { jobId: string }
+
+/** 状态读面信封：三条状态读口与两条 SSE 流的帧体同形（`{ job }` 信封）。`job: null` = 服务端说
+ *  「此刻没有这一轮」，与「读失败」不是一件事。 */
+export interface JobEnvelope<T> { job: T | null }
+
+/** 批写回执：这次批写落到几行（sources/batch-enabled、sources/batch-ai-search；未知 id 不计）。 */
+export interface BatchUpdated { updated: number }
+
+/** 批删回执：这趟删掉几行（sources/batch-delete 与 shelf 批删同形）。 */
+export interface BatchRemoved { removed: number }
+
+/** 单删回执：删到一行才 `true`（删源 / 删书 / 删本地书 / 删引擎同形同口径：未知 id 静默 `false`）。 */
+export interface RemoveReceipt { removed: boolean }
+
+/** 停止回执：这次停止有没有落到运行中的搜索任务上（没任务可停 = `false`，不是故障）。 */
+export interface CancelReceipt { cancelled: boolean }
+
+/** 单源启停写回执：原样回显写入的目标状态。 */
+export interface EnabledReceipt { enabled: boolean }
+
+/** 单源 AI 标记写回执：原样回显写入的目标状态。 */
+export interface AiSearchReceipt { aiSearch: boolean }
+
+/** health 读面：`name` 是客户端认插件的身份（固定 `dsh-novel`，改名是破坏性契约变更）；
+ *  `apiVersion` 是响应形状的代数，形状不兼容变化才 +1。 */
+export interface HealthReport { name: 'dsh-novel'; apiVersion: number }
+
+/** 登录态已落盘回执（run-login 的 JS 形态、loginInfo 录入、cookie 录入三处同值）。 */
+export interface AuthSavedReceipt { auth: true }
+
+/** run-login 结局投影（服务层 `LoginOutcome` 翻上 wire 的那一面）：URL 形态回传地址给 UI 开新页，
+ *  JS 形态已落盘。`no-login-url` / `empty-output` 不是值——路由翻 400 / 422。 */
+export type RunLoginReceipt = { mode: 'manual'; loginUrl: string } | AuthSavedReceipt
+
+/** login-action 结局投影：外链动作回传地址（UI 开新页），脚本动作已执行完。 */
+export type LoginActionReceipt = { mode: 'external'; url: string } | { mode: 'script' }
 
 // ── 信封与错误 ──────────────────────────────────────────────────────────
 

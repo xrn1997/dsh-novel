@@ -81,6 +81,7 @@ index.ts 组合根：配置解析（config.ts）→ 部件装配 → 三条注�
 
 | 语义 | 唯一主人 | 它不回答什么 |
 | --- | --- | --- |
+| 常驻约束（判据句的落笔处：取值规约、失败半径、兼容性事实单源、纯度门等；门清单同住） | 根 `AGENTS.md` 的「必须过的门」与「硬约束」 | 判据的实现符号（本表逐行给）、判据的论证与被否决方案（`docs/adr/`） |
 | 路由身份（method + path）/ 值形状 / body 形状（`Route` / `ROUTES` / `paramOps` / `bodies` + `readBodies` / `queries`；api 侧匹配器由表派生，参数路由的 `:id` 模板仍在 `api/routes.ts` 的 `PARAM_PATTERN_PATHS` 手写、漂移由 `tests/api/routes.test.ts` 现形，`ADR-0051`） | `shared/wire.ts` | 业务判据 |
 | 书目元数据字段集 | `shared/wire.ts` 的 `SHELF_META` + `pickShelfMeta` | 读取面投影（`sourceName` 刻意不进表）、数值位归一化（归 `Shelf`） |
 | 架位（书架上的一条记录，凭 `bookKey` 认） | `services/shelf.ts` 的 `Shelf`；客户端算式 `client/search-view-model.ts` 的 `shelfSeats` / `isSeatLanded` / `newlyLandedSeats` / `addAllReceipt` | 逐源行怎么认（那是 `rowId`）、元数据字段集（`SHELF_META`） |

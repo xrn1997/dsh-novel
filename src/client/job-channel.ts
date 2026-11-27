@@ -11,8 +11,11 @@
  * 不许报。与 `store.ts` 的分工：它管跨卸载现场，本模块管挂载期仪式。本模块不认识 React。
  */
 
-/** 一帧快照的读面值：`null` = 服务端说这一轮不存在（与「读失败」不是一件事）。 */
-export type JobFrame<Job> = Job | null
+import type { JobEnvelope } from '../shared/wire.js'
+
+/** 一帧快照的读面值：`null` = 服务端说这一轮不存在（与「读失败」不是一件事）。帧体形状归 wire——
+ *  它就是 `JobEnvelope` 的 `job` 槽，别在这层再定义第二份帧形状。 */
+export type JobFrame<Job> = JobEnvelope<Job>['job']
 
 /** 推送读面：订阅本轮的通知流（帧体形状归 wire；连接结束 / 断线 / abort 即 settle）。 */
 export type JobSubscribe<Round> =
@@ -42,12 +45,13 @@ export interface JobChannel<Round> {
   stop: () => void
 }
 
-/** 事件流帧体 → 快照：两条流的帧都是 `{ job }` 信封。`undefined` = 坏帧（跳过）；`null` = 服务端说没有这一轮。 */
+/** 事件流帧体 → 快照：两条流的帧都是 `{ job }` 信封（wire 的 `JobEnvelope`）。`undefined` = 坏帧（跳过）；
+ *  `null` = 服务端说没有这一轮。 */
 function frameOf<Job>(data: string): JobFrame<Job> | undefined {
   let parsed: unknown
   try { parsed = JSON.parse(data) } catch { return undefined }
   if (typeof parsed !== 'object' || parsed === null || !('job' in parsed)) return undefined
-  const job = (parsed as { job?: JobFrame<Job> }).job
+  const job = (parsed as Partial<JobEnvelope<Job>>).job
   return job ?? null
 }
 

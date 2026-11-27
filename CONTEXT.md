@@ -109,7 +109,7 @@ _Avoid_: 场景、模式；也别与「影响面」（`EpochImpact`）混称。
 取值链的一段。失败定位以「面 + 段序 + 段原文」表达，即段级定位。 _唯一实现_: `engine/types.ts` 的 `Segment` 与 `SegmentLoc`。 _Avoid_: 步骤。
 
 **取值规约（reduction）**:
-链上空态的裁决口径，两种值绝不折叠：**取位失败 → Miss；解析到空集合 → 空 List**。
+链上空态的裁决口径（判据句只住根 `AGENTS.md` 的「硬约束」，此处不抄第二份）。
 _唯一实现_: `engine/select.ts` 的 `reducePicked`（选择段与取值段共用）；JSONPath 侧 `engine/jsonpath.ts` 同口径。 _Avoid_: 空结果（太泛）。
 
 **过线原值（wire value）**:

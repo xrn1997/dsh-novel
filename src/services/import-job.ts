@@ -14,7 +14,7 @@ import type { NovelSource } from './types.js'
  */
 /** JobState/JobIssue 定义在 wire 契约（src/shared/wire.ts）；此处 re-export 保持 import 路径可用 */
 export type { JobState, JobIssue } from '../shared/wire.js'
-import type { JobIssue, JobState } from '../shared/wire.js'
+import type { JobIssue, JobStarted, JobState } from '../shared/wire.js'
 
 export type JobKind = JobState['kind']
 export type ImportFile = { name: string; text: string }
@@ -59,7 +59,7 @@ export class SourceJobs {
 
   status(): JobState | null { return this.current }
 
-  startImport(files: ImportFile[]): { jobId: string } {
+  startImport(files: ImportFile[]): JobStarted {
     const state = this.begin('import', `导入书源 ${files.length} 个文件`)
     void this.runImport(state, files).catch((e: unknown) => {
       this.fail(state, e instanceof Error ? e.message : String(e))
@@ -67,7 +67,7 @@ export class SourceJobs {
     return { jobId: state.id }
   }
 
-  startBatchProbe(ids: string[]): { jobId: string } {
+  startBatchProbe(ids: string[]): JobStarted {
     const state = this.begin('batch-probe', `批量验证书源 ${ids.length} 家`)
     state.total = ids.length
     void this.runBatchProbe(state, ids).catch((e: unknown) => {

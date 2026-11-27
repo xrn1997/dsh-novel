@@ -2,8 +2,7 @@ import { useEffect, useRef } from 'react'
 import { apiGet, apiSend, describeError } from './api.js'
 import { zhTranslate, type CopyKey, type Translate } from './copy/index.js'
 import { createStore, useStore } from './store.js'
-import { bodies, ROUTES } from '../shared/wire.js'
-import type { JobIssue, JobState } from './views/types.js'
+import { bodies, ROUTES, type JobEnvelope, type JobIssue, type JobStarted, type JobState } from '../shared/wire.js'
 import { createJobChannel } from './job-channel.js'
 import { STATUS_POLL_MS } from './util.js'
 
@@ -14,18 +13,18 @@ import { STATUS_POLL_MS } from './util.js'
  * **没有身份、没有终态即停**：读面抖动只如实置 `stale`，不把「这一拍没读到」当成任务结束了。
  */
 
-export async function startImportJob(files: Array<{ name: string; text: string }>): Promise<{ jobId: string }> {
-  return apiSend<{ jobId: string }>(ROUTES.sourcesImport, bodies.import(files))
+export async function startImportJob(files: Array<{ name: string; text: string }>): Promise<JobStarted> {
+  return apiSend<JobStarted>(ROUTES.sourcesImport, bodies.import(files))
 }
 
-export async function startBatchProbeJob(ids: string[]): Promise<{ jobId: string }> {
-  return apiSend<{ jobId: string }>(ROUTES.sourcesBatchProbe, bodies.ids(ids))
+export async function startBatchProbeJob(ids: string[]): Promise<JobStarted> {
+  return apiSend<JobStarted>(ROUTES.sourcesBatchProbe, bodies.ids(ids))
 }
 
 /** 书源验证提交的依赖面（窄接口：三入口的 SettingsDeps 都结构满足；测试注入假实现） */
 export interface VerifyDeps {
   /** 提交一轮验证任务（wire 口） */
-  startBatchProbeJob: (ids: string[]) => Promise<{ jobId: string }>
+  startBatchProbeJob: (ids: string[]) => Promise<JobStarted>
   /** 失败反馈（瞬态层） */
   pushError: (msg: string) => void
   /** 催任务读面；缺省 = `refreshJob`（常驻轮询立刻重拉一次，不等下一个 1s 拍） */
@@ -47,7 +46,7 @@ export async function startSourceVerification(
 }
 
 export async function fetchJobStatus(): Promise<JobState | null> {
-  return (await apiGet<{ job: JobState | null }>(ROUTES.sourcesJobStatus.path)).job
+  return (await apiGet<JobEnvelope<JobState>>(ROUTES.sourcesJobStatus.path)).job
 }
 
 /** 最近一次导入任务的模块级缓存：服务端单任务槽被 probe 覆盖后，导入汇总条仍要可看；设置区卸载也不丢。 */

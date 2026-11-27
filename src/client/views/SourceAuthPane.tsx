@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { useState } from 'react'
 import { parseCookieString } from '../../shared/cookies.js'
-import { bodies, paramOps } from '../../shared/wire.js'
+import { bodies, paramOps, type LoginActionReceipt, type RunLoginReceipt } from '../../shared/wire.js'
 import { describeError } from '../api.js'
 import { useCopy } from '../copy/index.js'
 import { prodDeps } from '../deps.js'
@@ -33,8 +33,8 @@ export function SourceAuthPane({ source, anchor, onDone, deps = prodDeps }: {
       window.open(source.baseUrl, '_blank', 'noopener,noreferrer')
       return
     }
-    void deps.apiSend<{ mode?: string; loginUrl?: string }>(paramOps.sourceAuth.at(source.id), bodies.runLogin()).then((r) => {
-      if (r.mode === 'manual' && typeof r.loginUrl === 'string' && r.loginUrl !== '') {
+    void deps.apiSend<RunLoginReceipt>(paramOps.sourceAuth.at(source.id), bodies.runLogin()).then((r) => {
+      if ('mode' in r && r.loginUrl !== '') {
         window.open(r.loginUrl, '_blank', 'noopener,noreferrer')
         return
       }
@@ -65,10 +65,10 @@ export function SourceAuthPane({ source, anchor, onDone, deps = prodDeps }: {
       if ((source.loginUi ?? []).some((f) => f.type !== 'button')) {
         await deps.apiSend(paramOps.sourceAuth.at(source.id), bodies.authLoginInfo(loginInfo))
       }
-      const r = await deps.apiSend<{ mode?: string; url?: string }>(
+      const r = await deps.apiSend<LoginActionReceipt>(
         paramOps.sourceAuth.at(source.id), bodies.loginAction(name),
       )
-      if (r.mode === 'external' && typeof r.url === 'string') {
+      if (r.mode === 'external') {
         window.open(r.url, '_blank', 'noopener,noreferrer')
         return
       }

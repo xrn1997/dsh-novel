@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { bodies, queries, ROUTES } from '../shared/wire.js'
-import type { SearchGroup, SearchJobSnapshot } from '../shared/wire.js'
+import type { JobEnvelope, JobStarted, SearchGroup, SearchJobSnapshot } from '../shared/wire.js'
 import { describeError } from './api.js'
 import { zhTranslate } from './copy/index.js'
 import type { Translate } from './copy/index.js'
@@ -144,7 +144,7 @@ export function useSearchJob(
   const rebaseline = async (stale: Acc): Promise<Acc | null> => {
     let job: SearchJobSnapshot | null
     try {
-      job = (await deps.apiGet<{ job: SearchJobSnapshot | null }>(queries.searchJobStatus(0))).job
+      job = (await deps.apiGet<JobEnvelope<SearchJobSnapshot>>(queries.searchJobStatus(0))).job
     } catch (e) {
       if (acc.current !== stale || !aliveNow()) return null
       setError(t('search.job.readFailed', { detail: describeError(e, t) }))
@@ -169,7 +169,7 @@ export function useSearchJob(
    *  首次渲染的闭包（运行中的一轮不随重渲染换代）；`t` 每次调用现读当前 locale。 */
   const [channel] = useState(() => createJobChannel<SearchJobSnapshot, Acc>(
     {
-      read: async (a) => (await deps.apiGet<{ job: SearchJobSnapshot | null }>(queries.searchJobStatus(a.since))).job,
+      read: async (a) => (await deps.apiGet<JobEnvelope<SearchJobSnapshot>>(queries.searchJobStatus(a.since))).job,
       subscribe: (a, onFrame, signal) => deps.apiEventStream(queries.searchJobStream(a.since), onFrame, signal),
       apply: (a, job) => apply(a, job),
       sameRound: (a, job) => job.id === a.id,
@@ -201,7 +201,7 @@ export function useSearchJob(
     const mine = ++submitSeq.current
     return (async () => {
       try {
-        const { jobId } = await deps.apiSend<{ jobId: string }>(ROUTES.searchJob, bodies.searchJob(kw))
+        const { jobId } = await deps.apiSend<JobStarted>(ROUTES.searchJob, bodies.searchJob(kw))
         if (mine !== submitSeq.current) return null   // 迟到回包：后一次提交已起跑，旧回包不许倒回观察者
         // 提交在飞时挂载恢复也可能已经落地——POST 的结果说了算（新一轮替换上一轮）。
         begin({ id: jobId, keyword: kw, total: 0, cancelled: false, since: 0, groups: [] })
@@ -220,7 +220,7 @@ export function useSearchJob(
       // 挂载即恢复：本轮结果住在服务端，切走再切回来不该重打一遍
       let job: SearchJobSnapshot | null
       try {
-        job = (await deps.apiGet<{ job: SearchJobSnapshot | null }>(queries.searchJobStatus(0))).job
+        job = (await deps.apiGet<JobEnvelope<SearchJobSnapshot>>(queries.searchJobStatus(0))).job
       } catch { return }                               // 首屏读不到就是没有：静默（真去搜时会再报错）
       if (!aliveNow() || job === null || acc.current !== null) return   // 提交先回来 → 不覆盖新一轮
       begin({ id: job.id, keyword: job.keyword, total: job.total, cancelled: job.cancelled, since: job.next, groups: [...job.added] },

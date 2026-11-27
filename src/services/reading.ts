@@ -55,9 +55,10 @@ export type { SearchHit, SearchGroup, ChapterEntry, BookDetail, SearchJobSnapsho
 export type { LocalResource } from './localbooks.js'
 import { parseCookieString } from '../shared/cookies.js'
 import type {
-  BookDetail, BookNavigation, ChapterContent, ExploreSources, ExploreSnapshot, TtsEngineImportReceipt, TtsEngineRemoveReceipt, ListenState, LocalImportResponse, LocalImportWarning,
+  BookDetail, BookNavigation, ChapterContent, ExploreSources, ExploreSnapshot, TtsEngineImportReceipt, RemoveReceipt, ListenState, LocalImportResponse, LocalImportWarning,
   SearchGroup, SearchHit, SearchPlan, SearchJobSnapshot, ChapterEntry, ShelfBook, ShelfEntry, ShelfMetaPatch, SourcePublic,
   SynthesisReceipt, SynthesisRequest, TtsEngineInput, TtsEnginePublic, TtsSourcesView,
+  BatchRemoved, CancelReceipt, JobStarted, LoginActionReceipt,
 } from '../shared/wire.js'
 
 export interface ReadingServiceOptions {
@@ -511,7 +512,7 @@ export class ReadingService {
 
   /** `loginUi` 行的按钮动作：绝对 URL 回传给 UI 打开；其余把 loginUrl 脚本拼在 action 前执行，
    *  `result` 绑定当前 loginInfo 的 Map。按钮按名字查服务端源数据，客户端不持脚本。 */
-  async runLoginAction(id: string, name: string): Promise<{ mode: 'external'; url: string } | { mode: 'script' }> {
+  async runLoginAction(id: string, name: string): Promise<LoginActionReceipt> {
     const s = this.requireSource(id)
     const row = (loginUiOf(s.raw) ?? []).find((r) => r.type === 'button' && r.name === name)
     if (row === undefined || row.type !== 'button') {
@@ -633,24 +634,24 @@ export class ReadingService {
   }
 
   /** 删书：副本连删与「先副本、后架位」的顺序归本地书生命周期，门面只委托——三条删入口共用同一条顺序。 */
-  async removeBook(bookKey: string): Promise<{ removed: boolean }> {
+  async removeBook(bookKey: string): Promise<RemoveReceipt> {
     return this.localBooks.removeBook(bookKey)
   }
 
   /** 批量删书：与单删同一条顺序（副本先删、失败则整批架位保留可重试），未知键静默跳过、返回实际删除数。 */
-  async removeBooks(bookKeys: readonly string[]): Promise<{ removed: number }> {
+  async removeBooks(bookKeys: readonly string[]): Promise<BatchRemoved> {
     return this.localBooks.removeBooks(bookKeys)
   }
 
   // ── 任务动词 ──
 
   /** 提交导入任务（运行中互斥由单任务槽裁决——JobRunningError 上抛，路由映射 409） */
-  startImportJob(files: ImportFile[]): { jobId: string } {
+  startImportJob(files: ImportFile[]): JobStarted {
     return this.jobs.startImport(files)
   }
 
   /** 提交批量验证任务 */
-  startBatchProbeJob(ids: string[]): { jobId: string } {
+  startBatchProbeJob(ids: string[]): JobStarted {
     return this.jobs.startBatchProbe(ids)
   }
 
@@ -683,7 +684,7 @@ export class ReadingService {
   }
 
   /** 删本地书：文件 + 书架条目一并删（任一命中即 removed；与单删同一条「先副本、后架位」顺序） */
-  async removeLocalBook(id: string): Promise<{ removed: boolean }> {
+  async removeLocalBook(id: string): Promise<RemoveReceipt> {
     return this.localBooks.removeLocalBook(id)
   }
 
@@ -753,7 +754,7 @@ export class ReadingService {
   }
 
   /** 删引擎：未知 id 静默 `removed:false`（与删源同口径，不把「没有这条」报成错误） */
-  ttsEngineRemove(id: string): TtsEngineRemoveReceipt {
+  ttsEngineRemove(id: string): RemoveReceipt {
     return { removed: this.requireEngines().remove(id) }
   }
 
@@ -843,7 +844,7 @@ export class ReadingService {
 
   /** 提交一轮**后台**搜索：参与集判定与 `total` 同源；运行体是**同一份** `searchProgressive`，只是换个消费方。
    *  结果由 `SearchJobs` 持有，切界面 / 切 tab 都不影响它跑完。 */
-  startSearchJob(keyword: string, opts?: { sourceIds?: string[] }): { jobId: string } {
+  startSearchJob(keyword: string, opts?: { sourceIds?: string[] }): JobStarted {
     const want = opts?.sourceIds
     const plan = this.searchPlan().sourceIds                 // 参与集单主人：启停 invariant 不在此抄第二份
     const ids = want === undefined || want.length === 0 ? plan : plan.filter((id) => want.includes(id))
@@ -857,7 +858,7 @@ export class ReadingService {
 
   /** 停止本轮搜索：只停「还要去搜的源」，已搜出的命中留在读面；在途的最多 `searchParallel` 条不撤回，回来照旧计入。
    *  返回 false = 本轮早已收尾（不是错误）。 */
-  cancelSearchJob(): { cancelled: boolean } { return { cancelled: this.searchJobs.cancel('用户停止了搜索') } }
+  cancelSearchJob(): CancelReceipt { return { cancelled: this.searchJobs.cancel('用户停止了搜索') } }
 
   /** 搜索任务读面：`since` = 客户端已收到的组数（完成序游标）；null = 无任务或已过保留期 */
   searchJobSnapshot(since = 0): SearchJobSnapshot | null { return this.searchJobs.snapshot(since) }
@@ -877,7 +878,7 @@ export class ReadingService {
   /** 提交一轮分类浏览：**一个源、一个类、从第 1 页起**。点名不在可选集里的源一律抛错而不是给空轮次
    *  （空轮次会被读成「这一类没有书」）。抛 `InvalidRequestError`：值域判据归门面，HTTP 面经
    *  `errors.classify` 映射成 400。命中进程内快照即零请求。 */
-  startExploreJob(sourceId: string, kind: string): { jobId: string } {
+  startExploreJob(sourceId: string, kind: string): JobStarted {
     const entry = this.pickEntry(sourceId, kind)
     if (entry === null) throw new InvalidRequestError(`该源没有可用的分类入口：${sourceId} · ${kind}`)
     return this.exploreJobs.start(sourceId, kind, (emit, _shouldStop, page) => this.runExplorePage(entry, page, emit))
@@ -888,7 +889,7 @@ export class ReadingService {
    *  判据只有 `hasMore` 一条（在途时它自己就是 false），再判一次就是给同一条读数立第二个主人。
    *  **入口解析不出（源刚被删 / 类改名）也按「没得发」走 null**，不跟 `startExploreJob` 共用抛错：
    *  那是用户点名点不到，这里是轮次仍在界面上的下一页——拿注册表变动算用户操作失误，还会让红错误盖掉已有书单。 */
-  loadMoreExploreJob(): { jobId: string } | null {
+  loadMoreExploreJob(): JobStarted | null {
     const snap = this.exploreJobs.snapshot()
     if (snap === null || !snap.hasMore) return null
     const entry = this.pickEntry(snap.sourceId, snap.kind)

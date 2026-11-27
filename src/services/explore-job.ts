@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { ExploreBook, ExploreSnapshot, SearchGroup, SearchHit } from '../shared/wire.js'
+import type { ExploreBook, ExploreSnapshot, JobStarted, SearchGroup, SearchHit } from '../shared/wire.js'
 import { ChangeSignal, expiredAfter, HostTie, settleTerminal } from './job-holder.js'
 import type { JobHost, JobOutcome } from './job-holder.js'
 import { DEFAULT_JOB_OUTPUT_BYTES, JobTail } from './job-tail.js'
@@ -130,7 +130,7 @@ export class ExploreJobs {
 
   /** 提交一轮分类浏览：**一个源、一个类、从第 1 页起**。**只留最近一轮**：新提交即替换上一轮（在跑的协作式
    *  收手），读面立刻指向新一轮。换源与换类都走这一条：新一轮是**另一个对象**，旧批写的东西读面再也看不到。 */
-  start(sourceId: string, kind: string, run: ExploreJobRun): { jobId: string } {
+  start(sourceId: string, kind: string, run: ExploreJobRun): JobStarted {
     const prev = this.current
     if (prev !== null && prev.phase === 'running') {
       this.end(prev, 'killed', '已被新一次分类浏览替换', '任务已被新一次分类浏览替换')
@@ -151,7 +151,7 @@ export class ExploreJobs {
    *  同时写同一份累积得不偿失，而旧批的收尾会把刚点亮的新批一并结算。
    *  守卫看**在途标记**而不是 `phase`：`cancel` 会让 `phase` 先行落终态，拿它当判据就会误放行。
    *  取消是**收回了在途那一批的所有权**，因此取消后还能再点一次续页；被收回的那批由代际点穴。 */
-  advance(kind: string, run: ExploreJobRun): { jobId: string } {
+  advance(kind: string, run: ExploreJobRun): JobStarted {
     const h = this.current
     if (h === null) throw new Error('没有可续页的分类轮次')
     if (h.kind !== kind) throw new Error(`轮次分类不符：当前「${h.kind}」，请求「${kind}」`)
@@ -169,7 +169,7 @@ export class ExploreJobs {
   /** 起跑一段（`start` 首批与 `advance` 每批共用）：宿主登记 + 变了就 `notify` + 同步起跑 + 终态单点收口。
    *  一批起跑即领一代：交给运行器的 `emit` / `shouldStop` 与这批的收尾都认这一代；代际被盖过后旧批三件事同时
    *  失效——不再吐组、不再接着跑、收尾不结算。少了任何一件，旧批都能伸手改一轮它已经不再拥有的轮次。 */
-  private launch(h: Held, run: ExploreJobRun): { jobId: string } {
+  private launch(h: Held, run: ExploreJobRun): JobStarted {
     const gen = ++h.generation
     h.inflight = true
     const host = this.deps.host

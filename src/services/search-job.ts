@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { SEARCH_HITS_CAP_PER_SOURCE, SEARCH_JOB_RETENTION_MS } from '../shared/wire.js'
-import type { SearchGroup, SearchJobSnapshot } from '../shared/wire.js'
+import type { JobStarted, SearchGroup, SearchJobSnapshot } from '../shared/wire.js'
 import { ChangeSignal, expiredAfter, HostTie, settleTerminal } from './job-holder.js'
 import type { JobHost, JobOutcome } from './job-holder.js'
 
@@ -67,7 +67,7 @@ export class SearchJobs {
   }
 
   /** 提交一轮搜索。**只留最近一轮**：新提交即替换上一轮（在跑的协作式收手），读面立刻指向新一轮，避免两真相同时在场。 */
-  start(keyword: string, total: number, run: SearchJobRun): { jobId: string } {
+  start(keyword: string, total: number, run: SearchJobRun): JobStarted {
     const prev = this.current
     if (prev !== null && prev.phase === 'running') {
       this.end(prev, 'killed', '已被新一轮搜索替换', '任务已被新一轮搜索替换')
