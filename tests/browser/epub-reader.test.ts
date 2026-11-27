@@ -12,7 +12,8 @@ import type { Browser } from 'playwright'
 import iconv from 'iconv-lite'
 import type { BookNavigation, ChapterContent, ContentNode, ShelfEntry } from '../../src/shared/wire.js'
 import { LOCAL_SOURCE_ID, queries } from '../../src/shared/wire.js'
-import { crossedIndex } from '../../src/client/viewport-top.js'
+import { isFlowNovelNode } from '../../src/client/reader-geometry.js'
+import { crossedIndex, spanRelativeTo } from '../../src/client/viewport-top.js'
 import { must, pick } from '../support/fixture.js'
 import { BROWSER_GATE_ENABLED } from '../support/browser-gate.js'
 import {
@@ -111,10 +112,10 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
   const SUBPIXEL = 0.5
 
   /**
-   * 视口顶所在的章与节点（视口顶 = .novel-main 的 rect.top）。**判据吃产品同一份**
-   * （`client/viewport-top.ts` 的 `crossedIndex`，也就是 `reader-geometry.currentNodeOf` 用的那条）：
-   * 视口顶已越过的最靠后那个；都没越过 → 文档顺序第一个；跳过空洞。本门只从真 DOM 收起点读数，
-   * 不再手抄第四份——上一版注释点名的符号（`ReaderView.currentNodeOf`）早已搬进 geometry。
+   * 视口顶所在的章与节点（视口顶 = .novel-main 的 rect.top）。判据与过滤符号吃产品同一份
+   * （`client/viewport-top.ts` 的 `crossedIndex`、`client/reader-geometry.ts` 的 `isFlowNovelNode`）；
+   * 本门只从真 DOM 收区间与节点元数据，「先定章、再过滤、空则保留原候选」的组合按同一口径重写；
+   * 只复用判据与过滤符号，不复用 `currentNodeOf` 的整条组合——组合喂产品，门就会与实现一起错。
    */
   const probe = async (s: PageSession): Promise<{
     chapter: string | null; node: string | null; offset: number | null; scrollTop: number
@@ -126,22 +127,38 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
       const bar = document.querySelector<HTMLElement>('.novel-rdr-bar')
       const viewTop = main.getBoundingClientRect().top + (bar === null ? 0 : bar.getBoundingClientRect().height)
       return {
-        blocks: [...document.querySelectorAll('[data-chapter]')].map((b) => ({
-          chapter: b.getAttribute('data-chapter'),
-          top: b.getBoundingClientRect().top - viewTop,
-        })),
-        nodes: [...document.querySelectorAll('[data-chapter] [data-novel-node]')].map((el) => ({
-          id: el.getAttribute('data-novel-node') as string,
-          top: el.getBoundingClientRect().top - viewTop,
-        })),
+        blocks: [...document.querySelectorAll('[data-chapter]')].map((b) => {
+          const br = b.getBoundingClientRect()
+          return {
+            chapter: b.getAttribute('data-chapter'),
+            top: br.top - viewTop,
+            bottom: br.bottom - viewTop,
+            nodes: [...b.querySelectorAll('[data-novel-node]')].map((el) => {
+              const nr = el.getBoundingClientRect()
+              return {
+                id: el.getAttribute('data-novel-node') ?? '',
+                tag: el.tagName,
+                cls: el.getAttribute('class'),
+                inCell: el.closest('td, th') !== null,
+                top: nr.top - viewTop,
+                bottom: nr.bottom - viewTop,
+              }
+            }),
+          }
+        }),
         scrollTop: Math.round(main.scrollTop),
       }
     })
-    const chapterAt = crossedIndex(raw.blocks, (b) => b.top - SUBPIXEL)
-    const nodeAt = crossedIndex(raw.nodes, (n) => n.top - SUBPIXEL)
-    const hit = nodeAt === -1 ? undefined : raw.nodes[nodeAt]
+    const chapterAt = crossedIndex(raw.blocks, (b) => spanRelativeTo(b.top, b.bottom, SUBPIXEL))
+    const block = chapterAt === -1 ? undefined : raw.blocks[chapterAt]
+    const flowNodes = block === undefined
+      ? []
+      : block.nodes.filter((n) => isFlowNovelNode({ tagName: n.tag, className: n.cls, inTableCell: n.inCell }))
+    const candidates = flowNodes.length > 0 ? flowNodes : (block?.nodes ?? [])
+    const nodeAt = crossedIndex(candidates, (n) => spanRelativeTo(n.top, n.bottom, SUBPIXEL))
+    const hit = nodeAt === -1 ? undefined : candidates[nodeAt]
     return {
-      chapter: chapterAt === -1 ? null : (raw.blocks[chapterAt]?.chapter ?? null),
+      chapter: block?.chapter ?? null,
       node: hit?.id ?? null,
       offset: hit?.top ?? null,
       scrollTop: raw.scrollTop,
@@ -643,6 +660,9 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
     })
   }, 180_000)
 
+  // 面板按钮一律**页内 click()**（与下方栏宽档同口径）：Playwright 的 selector click 会先
+  // scrollIntoViewIfNeeded 把 main 滚过去——那是自动化工具注入的位移，不是用户动作；采点若建在
+  // 被工具挪过的视口上，这条「改字号不动位」的门就只能红。真用户点屏上按钮不产生这种滚动。
   it('EPUB3：字号与栏宽变化后，同一节点的视口相对偏移保持（±4px）', async () => {
     await withHost(async (s) => {
       await uploadFixture(s, 'epub3-rich', '图文样本.epub')
@@ -657,9 +677,9 @@ describe.skipIf(!ENABLED)('浏览器验收：EPUB 图文阅读（真服务 / 真
         return { w: el.getBoundingClientRect().width, font: getComputedStyle(el).fontSize }
       })
 
-      await s.page.click('button[aria-label="阅读设置"]')
+      await s.page.evaluate(() => { (document.querySelector('button[aria-label="阅读设置"]') as HTMLButtonElement).click() })
       await s.page.waitForSelector('[data-novel-ctrl]', { timeout: 8_000 })
-      await s.page.click('button[aria-label="增大字号"]')
+      await s.page.evaluate(() => { (document.querySelector('button[aria-label="增大字号"]') as HTMLButtonElement).click() })
       await settle(900)
       const afterFont = await probe(s)
       const boxAfter = await s.page.evaluate(() => {

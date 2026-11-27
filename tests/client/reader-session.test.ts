@@ -425,7 +425,7 @@ describe('ReaderSession 进度落盘策略', () => {
     expect(h.saves).toEqual([])
   })
 
-  it('滚动只量一次锚点；布局变化才重测', async () => {
+  it('同章滚动只量一次锚点；布局变化重测', async () => {
     const h = makeSession({ debounceMs: 5000 })
     const measure = vi.spyOn(h.port, 'measureAnchors')
     await h.session.open('src', 'https://s.com/book/1')
@@ -1242,7 +1242,7 @@ describe('ReaderSession 视口喂入（合帧）', () => {
     h.session.dispose()
   })
 
-  it('无布局标记且已载表未换版本 → 帧内不重测锚点（纯滚动只读缓存）', async () => {
+  it('无布局标记且未跨章 → 帧内不重测锚点（同章滚动只读缓存）', async () => {
     const pump = makeFramePump()
     const h = makeSession({ viewport: pump.feed })
     await h.session.open('src', 'https://s.com/book/1')
@@ -1465,6 +1465,15 @@ describe('ReaderSession.reveal（按听书段精确落位）', () => {
     h.session.reveal({ index: 0, paragraphIndex: 1 }, { mode: 'locate', write: true, bottomInset: 100 })
     expect(h.port.top).toBe(260)                        // 300 - 40
     expect(h.saves).toEqual([[0, 0.3]])
+  })
+
+  it('段落落位算式低于 0 时钳底到 +0（与恢复 / 跳章 / 排版复位同口径）', async () => {
+    const h = await opened(40)
+    place(h, 20)                                        // delta = 20 - 40 = -20
+    h.session.reveal({ index: 0, paragraphIndex: 1 }, { mode: 'locate', write: true, bottomInset: 100 })
+    expect(Object.is(h.port.top, 0)).toBe(true)
+    expect(h.saves).toEqual([[0, 0.04]])                // contentTop = 0 + 40
+    h.session.dispose()
   })
 
   it('回阅读器 write:false：顶对齐到精确段但不写 progress', async () => {

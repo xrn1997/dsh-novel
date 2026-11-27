@@ -473,8 +473,10 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
   let rectSpy: ReturnType<typeof vi.spyOn>
   beforeEach(() => {
     rectSpy = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element): DOMRect {
-      const top = this.getAttribute('data-novel-node') === 'p1' ? -50 : 400
-      return { top, bottom: top, left: 0, right: 0, width: 0, height: 0, x: 0, y: top, toJSON: () => ({}) }
+      const node = this.getAttribute('data-novel-node')
+      const top = node === 'p1' ? -50 : 400
+      const height = node === 'p1' ? 200 : 0
+      return { top, bottom: top + height, left: 0, right: 0, width: 0, height, x: 0, y: top, toJSON: () => ({}) }
     })
   })
   afterEach(() => { rectSpy.mockRestore() })
@@ -659,10 +661,20 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
     const original = proto.getBoundingClientRect
     let readingChapter2 = false
     proto.getBoundingClientRect = function (this: Element): DOMRect {
+      const ch = this.getAttribute('data-chapter')
       const node = this.getAttribute('data-novel-node')
       const vis = readingChapter2 ? 'q1' : 'p1'
-      const top = node === vis ? -50 : 400
-      return { top, bottom: top, left: 0, right: 0, width: 0, height: 0, x: 0, y: top, toJSON: () => ({}) }
+      let top = 400
+      let height = 20
+      if (ch !== null) {
+        const target = readingChapter2 ? '1' : '0'
+        top = ch === target ? -50 : Number(ch) < Number(target) ? -500 : 400
+        height = 300
+      } else if (node === vis) {
+        top = -50
+        height = 200
+      }
+      return { top, bottom: top + height, left: 0, right: 0, width: 0, height, x: 0, y: top, toJSON: () => ({}) }
     }
     try {
       const deps = richDeps()
@@ -719,10 +731,19 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
     const original = proto.getBoundingClientRect
     let p1Reads = 0
     proto.getBoundingClientRect = function (this: Element): DOMRect {
+      const ch = this.getAttribute('data-chapter')
       const node = this.getAttribute('data-novel-node')
-      // 只有 p1/p2 给出有意义的 top；其余（链接等）排在视口之下就不会被当成「可见节点」
-      const top = node === 'p1' ? (++p1Reads === 1 ? -50 : -70) : node === 'p2' ? 300 : 400
-      return { top, bottom: top, left: 0, right: 0, width: 0, height: 0, x: 0, y: top, toJSON: () => ({}) }
+      if (ch !== null) {
+        const top = ch === '0' ? -50 : 400
+        const height = ch === '0' ? 600 : 300
+        return { top, bottom: top + height, height, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) }
+      }
+      // 只有 p1/p2 给出有意义的矩形；其余（链接等）排在视口之下就不会被当成「可见节点」。
+      // p1 必须带真实块高（判据线落在矩形内 = 首行被顶条切着、下面还有可见行）：零高假矩形按
+      // 空档判据「整条离线」会翻给下一项——那是 viewport-top 自己的事（`ADR-0106`），本页钉的是接线。
+      const top = node === 'p1' ? (++p1Reads === 1 ? -50 : -20) : node === 'p2' ? 300 : 400
+      const height = node === 'p1' ? 200 : 20
+      return { top, bottom: top + height, height, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) }
     }
     try {
       const deps = richDeps()
@@ -731,7 +752,7 @@ describe('ReaderView 图文接线（目录树 / 正文内链返回 / 注释面�
       scrollTo.mockClear()
       setPref({ fontSize: 22 })                                              // 采点在 setPref 的同步栈里发生
       await waitFor(() => expect(scrollTo).toHaveBeenCalledTimes(1))          // 重排后的复位
-      expect(pick(pick(scrollTo.mock.calls, 0), 1)).toBe(-70 + 50)           // 重排后 -70，采点时为 -50
+      expect(pick(pick(scrollTo.mock.calls, 0), 1)).toBe(-20 + 50)           // 重排后 -20，采点时为 -50
       setPref({ fontSize: 22 })                                              // 同值再设一次：不重排、不定位
       await new Promise((r) => setTimeout(r, 20))
       expect(scrollTo).toHaveBeenCalledTimes(1)

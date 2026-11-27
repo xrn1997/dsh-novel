@@ -50,12 +50,12 @@ const IMMEDIATE_VIEWPORT_FEED: ReaderViewportFeed = {
   refreshPort: () => {},
 }
 
-/** 当前位置锚：视口顶所在的正文节点（章 + 节点 + 节点内偏移）。正文链接返回采点与排版复位
- *  共用它；只活在窗口内，绝不落盘。 */
+/** 当前位置锚：视口顶所在的正文节点（章 + 节点 + 节点内偏移；判据线落进节点上方空档时归下一节点，
+ *  偏移相应为负——见 `ADR-0106`）。正文链接返回采点与排版复位共用它；只活在窗口内，绝不落盘。 */
 export interface VisibleNode { index: number; nodeId: string; offsetWithinNode: number }
 
-/** 待定位目标：章号 + 可空章内锚点 + 锚点内像素偏移。章首直达恒 offsetWithinNode: 0，
- *  只有「回到链接来源」带非零偏移（落在同一节点内的同一处，而不是节点顶）。 */
+/** 待定位目标：章号 + 可空章内锚点 + 锚点内像素偏移（可为负 = 线在锚点上方的空档里）。章首直达恒 offsetWithinNode: 0，
+ *  只有「回到链接来源」带非零偏移（落回采点时的同一相对处，而不是节点顶）。 */
 export interface JumpTarget { index: number; anchorId: string | null; offsetWithinNode: number }
 
 /** 开书恢复目标：章号 + 章内比例。存档 progress 与「回阅读器」的章级站定共用形状，
@@ -603,15 +603,20 @@ export class ReaderSession {
   }
 
   /** 视口变化：预取 + 位置修正（跨章是导航事件，同章滚动是连续量）。纯滚动只读锚点缓存；
-   *  `layoutChanged` 或已载表换了版本才重测。目录跳章在途期间**不采信读数**：视口还是旧位置，
-   *  采信等于用旧证据推翻用户刚下的导航命令；落地由 `settleJump` 收口。 */
+   *  `layoutChanged` 或已载表换了版本才在本帧重测。**跨章提交前**若本帧还没量过，再量一次——
+   *  块高是空档判据的一半，过期几何不许把章内读数判成空档而翻章。目录跳章在途期间**不采信
+   *  读数**：视口还是旧位置，采信等于用旧证据推翻用户刚下的导航命令；落地由 `settleJump` 收口。 */
   private handleViewportChange(opts?: { layoutChanged?: boolean }): void {
     // 存档恢复落位前的读数属于「进入前的旧视口」：预取、位置提交与补载都不许据此做决定
     if (this.restoring) return
     // 程序化 reveal 写入 scrollTop 的同拍里滚动事件可能同步到达：这一格由 reveal 自己收口
     if (this.holdViewport) return
     this.checkPreload()
-    if (opts?.layoutChanged === true || this.anchorsFrom !== this.chaptersNow) this.recalcAnchors()
+    let measured = false
+    if (opts?.layoutChanged === true || this.anchorsFrom !== this.chaptersNow) {
+      this.recalcAnchors()
+      measured = true
+    }
     if (this.anchorsNow.length === 0) return               // 还没有可读的视口证据（首帧/正文未到）
     this.viewportSeen = true
     if (this.pendingJumpNow !== null || this.pendingReveal !== null) return
@@ -619,9 +624,14 @@ export class ReaderSession {
       if (Math.abs(this.port.scrollTop() - this.modeSwitchScrollLock) <= 1) return
       this.modeSwitchScrollLock = null
     }
-    const { chapterIndex, offsetRatio } = locateChapter(this.anchorsNow, this.contentTop())
-    const crossing = chapterIndex !== this.position.chapterIndex
-    this.commit(crossing ? 'cross' : 'scroll', chapterIndex, offsetRatio)
+    let at = locateChapter(this.anchorsNow, this.contentTop())
+    if (at.chapterIndex !== this.position.chapterIndex && !measured) {
+      this.recalcAnchors()                                 // 跨章是低频导航事件：提交前用当前布局重测
+      if (this.anchorsNow.length === 0) return
+      at = locateChapter(this.anchorsNow, this.contentTop())
+    }
+    const crossing = at.chapterIndex !== this.position.chapterIndex
+    this.commit(crossing ? 'cross' : 'scroll', at.chapterIndex, at.offsetRatio)
     if (crossing) this.backfillBudget = BACKFILL_MAX_CHAPTERS   // 用户跨章 = 新 episode
     this.checkBackfill()                            // 滚到窗口顶 → 补回上一章（裁章后的回溯路径）
   }
@@ -833,8 +843,7 @@ export class ReaderSession {
     if (snap === null) return
     const off = this.port.targetOffset(snap.index, snap.nodeId)
     if (off === null) return
-    const next = Math.ceil(this.port.scrollTop() + off + snap.offsetWithinNode - this.topInset)
-    this.port.setScrollTop(next === 0 ? 0 : next)
+    this.port.setScrollTop(Math.ceil(Math.max(0, this.port.scrollTop() + off + snap.offsetWithinNode - this.topInset)))
     this.sampleVisibleBeforePrefsChange()            // 复位后重采：连调两次排版也各有正确锚
     this.handleViewportChange({ layoutChanged: true })
   }
@@ -881,8 +890,7 @@ export class ReaderSession {
     // 同步滚动事件若在 setScrollTop 里到达，由 holdViewport 挡住；异步事件由幽灵写闸兜住。
     this.holdViewport = true
     try {
-      const next = Math.ceil(this.port.scrollTop() + delta)
-      this.port.setScrollTop(next === 0 ? 0 : next)
+      this.port.setScrollTop(Math.ceil(Math.max(0, this.port.scrollTop() + delta)))
     } finally {
       this.holdViewport = false
     }

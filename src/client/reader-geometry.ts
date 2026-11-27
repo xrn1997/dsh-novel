@@ -4,8 +4,10 @@ import { listenParagraphElement } from './reader-paragraph.js'
 import {
   contentOriginTop, portScrollHeight, portScrollTop, portViewHeight, portViewTop, setPortScrollTop,
 } from './scrollport.js'
+import { PHRASING_TAGS } from '../shared/content-tags.js'
 import { findNovelNode, novelNodes, NOVEL_NODE_ATTR } from './util.js'
-import { clampTopInset, crossedIndex } from './viewport-top.js'
+import { clampTopInset, crossedIndex, spanRelativeTo } from './viewport-top.js'
+import type { ItemSpan } from './viewport-top.js'
 
 /**
  * 阅读器几何：把 DOM 测量实现成一个 `ReaderPort`，视图只提供最小元素源。从视图搬出来是因为这套测量
@@ -138,33 +140,75 @@ export function createReaderGeometry(source: ReaderGeometrySource): ReaderPort {
   }
 }
 
-/** 视口顶所在的正文节点：判据吃 `client/viewport-top.ts` 的 `crossedIndex`（与进度锚点、听书探针同一条
- *  规则）；本函数只负责把**节点矩形**这条数据路喂进去。图文章按 `data-novel-node`，文字章按章标题与 `data-pidx`
- *  （带 `pidx:` 前缀）；两者都没有 → null。 */
+const PHRASING_DOM_TAGS: ReadonlySet<string> = new Set([...PHRASING_TAGS].map((tag) => tag.toUpperCase()))
+
+/** 节点形状：几何过滤只认这三个读数，浏览器门把同一形状从页内序列化后复用同一判据。 */
+interface NovelNodeShape {
+  tagName: string
+  className: string | null
+  /** 是否落在表格单元格内（单元格自己也算）：由调用方按 `closest('td, th')` 填 */
+  inTableCell: boolean
+}
+
+/** 节点是否占一条独立纵向块带：排除段落内短语子元素与并排表格单元格（它们滚出后会让父段误判进空档）。
+ *  短语词表与渲染降级共用 `shared/content-tags.ts` 的 `PHRASING_TAGS`，不在这里另抄一份；
+ *  `.novel-fig` 与 `.novel-ref-part` 虽渲染成 span 却占独立块带，`.novel-ref-block` 是块级链接，三者保留。 */
+export function isFlowNovelNode({ tagName, className, inTableCell }: NovelNodeShape): boolean {
+  if (inTableCell) return false
+  const tag = tagName.toUpperCase()
+  const classes = className === null ? null : className.trim().split(/\s+/)
+  if (tag === 'SPAN') {
+    return classes !== null && (classes.includes('novel-fig') || classes.includes('novel-ref-part'))
+  }
+  if (tag === 'BUTTON') {
+    return classes !== null && classes.includes('novel-ref-block')
+  }
+  return tag !== 'BR' && !PHRASING_DOM_TAGS.has(tag)
+}
+
+/** 视口顶所在的正文节点：先按章块过 `crossedIndex` 判章，再在同一章内判节点（与进度锚点、听书探针
+ *  同口径，含空档归下一项，`ADR-0106`）；图文章按 `data-novel-node` 并过滤短语与单元格子元素，
+ *  文字章按章标题与 `data-pidx`（带 `pidx:` 前缀）；两者都没有 → null。 */
 export function currentNodeOf(
   blocks: ReadonlyArray<HTMLElement | null>, viewTop: number,
 ): VisibleNode | null {
-  const nodes: Array<{ index: number; nodeId: string; top: number }> = []
-  blocks.forEach((block, index) => {
-    if (block === null) return
-    let hasRich = false
-    for (const el of novelNodes(block)) {
+  const chapterIndex = crossedIndex(blocks, (block) => {
+    const rect = block.getBoundingClientRect()
+    return spanRelativeTo(rect.top, rect.bottom, viewTop)
+  })
+  if (chapterIndex === -1) return null
+  const block = blocks[chapterIndex]
+  if (block === null || block === undefined) return null
+
+  const nodes: Array<{ nodeId: string } & ItemSpan> = []
+  const richNodes = novelNodes(block)
+  if (richNodes.length > 0) {
+    const flowNodes = richNodes.filter((el) => isFlowNovelNode({
+      tagName: el.tagName,
+      className: el.getAttribute('class'),
+      inTableCell: el.closest('td, th') !== null,
+    }))
+    // 整章只剩行内节点时保留原候选：宁可把行内节点当锚点，也不让采点整章丢失。
+    // 这条兜底只管「丢不丢锚点」，不参与空档归项——别把它读成缝归例外。
+    const candidates = flowNodes.length > 0 ? flowNodes : richNodes
+    for (const el of candidates) {
       const nodeId = el.getAttribute(NOVEL_NODE_ATTR)
       if (nodeId === null) continue
-      hasRich = true
-      nodes.push({ index, nodeId, top: el.getBoundingClientRect().top - viewTop })
+      const rect = el.getBoundingClientRect()
+      nodes.push({ nodeId, ...spanRelativeTo(rect.top, rect.bottom, viewTop) })
     }
-    if (!hasRich) {
-      const heading = chapterHeadingElement(block)
-      if (heading !== null) {
-        nodes.push({ index, nodeId: HEAD_ANCHOR, top: heading.getBoundingClientRect().top - viewTop })
-      }
-      for (const [raw, el] of pidxElementsOf(block)) {
-        nodes.push({ index, nodeId: `${PIDX_ANCHOR_PREFIX}${raw}`, top: el.getBoundingClientRect().top - viewTop })
-      }
+  } else {
+    const heading = chapterHeadingElement(block)
+    if (heading !== null) {
+      const rect = heading.getBoundingClientRect()
+      nodes.push({ nodeId: HEAD_ANCHOR, ...spanRelativeTo(rect.top, rect.bottom, viewTop) })
     }
-  })
-  const at = crossedIndex(nodes, (cand) => cand.top)
+    for (const [raw, el] of pidxElementsOf(block)) {
+      const rect = el.getBoundingClientRect()
+      nodes.push({ nodeId: `${PIDX_ANCHOR_PREFIX}${raw}`, ...spanRelativeTo(rect.top, rect.bottom, viewTop) })
+    }
+  }
+  const at = crossedIndex(nodes, (cand) => cand)
   const hit = at === -1 ? undefined : nodes[at]
-  return hit === undefined ? null : { index: hit.index, nodeId: hit.nodeId, offsetWithinNode: -hit.top }
+  return hit === undefined ? null : { index: chapterIndex, nodeId: hit.nodeId, offsetWithinNode: -hit.start }
 }

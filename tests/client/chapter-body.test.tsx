@@ -282,7 +282,10 @@ describe('段号与播放单元同一口径（富文本行清单）', () => {
     // 否则 jsdom 的默认 0 会被当成「视口顶已越过」。
     vi.spyOn(must(container.querySelector<HTMLElement>('[data-novel-node="h1"]'), 'h1'), 'getBoundingClientRect')
       .mockReturnValue(rect(-120, 20))
-    vi.spyOn(first, 'getBoundingClientRect').mockReturnValue(rect(-40, 20))
+    // 首段跨线（起点在上、块尾在下）：它既是最后一条已越过项，又占着判据线，所以段号 1 就是
+    // 「顶条下方第一段」。线若整段落进段间空档（本段块尾严格在上线之上），判据归下一段——
+    // 那半格口径钉在 `tests/client/viewport-top.test.ts` / `tests/client/reader-boundary-gap.test.ts`。
+    vi.spyOn(first, 'getBoundingClientRect').mockReturnValue(rect(-40, 60))
     vi.spyOn(second, 'getBoundingClientRect').mockReturnValue(rect(40, 20))
     vi.spyOn(must(container.querySelector<HTMLElement>('[data-novel-node="li1"]'), 'li1'), 'getBoundingClientRect')
       .mockReturnValue(rect(80, 20))

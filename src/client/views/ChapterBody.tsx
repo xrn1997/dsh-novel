@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { Fragment, createElement, useMemo, useState } from 'react'
 import { chapterContentLines, playUnitStarts, playUnitStartsByNode } from '../../shared/chapter-text.js'
+import { PHRASING_TAGS } from '../../shared/content-tags.js'
 import { resourceUrl } from '../../shared/wire.js'
 import { useCopy } from '../copy/index.js'
 import { paragraphSlotOf } from '../tts/reading-position.js'
@@ -42,10 +43,6 @@ interface Ctx {
   liveNode: string | null
 }
 
-/** `<button>` 允许直接容纳的白名单标签（短语级）。集合外的都是流级元素：XHTML 的 `<a>` 允许它们
- *  做子节点，HTML 不允许——浏览器会替我们重排 DOM。链接上下文里降级成 span，块状观感由 CSS 拿回。 */
-const PHRASING_TAGS: ReadonlySet<ContentTag> = new Set(['span', 'strong', 'em', 'code', 'sup', 'sub'])
-
 /** 正文节点的 DOM id = 书身份 + 文档 ID + 节点 ID：宿主 DOM 里也常有自己的 id，只写裸锚点会撞。
  *  **查找不靠这个 id**，`data-novel-node` 才是钩子。非 [A-Za-z0-9_-] 一律折成 -（id 里空白非法）。 */
 function domNodeId(ctx: Ctx, nodeId: string): string {
@@ -55,9 +52,11 @@ function domNodeId(ctx: Ctx, nodeId: string): string {
 /** 节点 key：文本节点按序号（它们没有 id），其余按节点 id——同一批兄弟里两类前缀不同，不会撞 */
 const keyOf = (node: ContentNode, index: number): string => (node.kind === 'text' ? `t${index}` : `#${node.id}`)
 
-/** 链接内容里有块级内容吗（插图 / 分隔线 / 非短语级元素）。有的话链接自己必须是**块级容器**：
- *  `<button>` 缺省按内容收缩包裹，里面 `width: 100%` 的插图框会解析成 auto，图未解码时框塌成 0、
- *  到手后后文位移（钉子见 `tests/client/chapter-body.test.tsx`）。 */
+/** 链接内容里有块级内容吗（插图 / 分隔线 / 非短语级元素）。短语级词表住 `shared/content-tags.ts`：
+ *  `<button>` 只收短语级内容，集合外的都是流级——XHTML 的 `<a>` 允许它们做子节点，HTML 不允许，
+ *  浏览器会替我们重排 DOM；链接上下文里因此降级成 span，块状观感由 CSS 拿回。
+ *  有块级内容时链接自己必须是**块级容器**：`<button>` 缺省按内容收缩包裹，里面 `width: 100%` 的
+ *  插图框会解析成 auto，图未解码时框塌成 0、到手后后文位移（钉子见 `tests/client/chapter-body.test.tsx`）。 */
 function hasBlockChild(children: readonly ContentNode[]): boolean {
   return children.some((n) => n.kind === 'image' || n.kind === 'rule'
     || (n.kind === 'element' && !PHRASING_TAGS.has(n.tag)))

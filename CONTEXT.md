@@ -294,10 +294,13 @@ _唯一实现_: `client/reader-session.ts` 的 `position` / `commit` / `reveal` 
 
 **阅读器几何（reader geometry）**:
 `ReaderPort` 的纯几何实现：从滚动容器、章块与哨兵读出锚点、视口偏移、目标偏移与当前节点；两套坐标系（内容原点 / 视口顶）只在这里换算。视图只交 ref 读数，会话只读 port。
-_唯一实现_: `client/reader-geometry.ts` 的 `createReaderGeometry` / `currentNodeOf`（底层坐标换算 `client/scrollport.ts`）。 _Avoid_: 阅读时序、滚动容器探测。
+_唯一实现_: `client/reader-geometry.ts` 的 `createReaderGeometry` / `currentNodeOf` / `isFlowNovelNode`（底层坐标换算 `client/scrollport.ts`）。 _Avoid_: 阅读时序、滚动容器探测。
+
+**独立块带（flow band）**:
+正文节点是否占一条独立纵向块带：段落内的短语级子元素（成员集住 `PHRASING_TAGS`）与 `br`、并排表格单元格不算独立块带——它们滚出视口后不得让父段被空档判据误翻；插图、链接内降级的块片段与块级链接仍占带（判据见 `isFlowNovelNode`）。短语词表与渲染降级共用同一份，几何采点与浏览器门同吃。 _唯一实现_: `client/reader-geometry.ts` 的 `isFlowNovelNode`（短语标签词表 `shared/content-tags.ts` 的 `PHRASING_TAGS`）。 _Avoid_: 行内元素过滤、可见节点、空档判据。
 
 **视口顶判据（viewport-top）**:
-给定一组按文档序非降排列的起点与「视口顶」读数，判当前项：取**最后一条已越过视口顶**的起点（边界 `<=`）；一条都没越过 → 文档序第一个非空项；没有可判项 → `-1`；空洞跳过。阅读侧三条数据路各自采集读数，判据只有这一份。 _唯一实现_: `client/viewport-top.ts` 的 `crossedIndex`。 _Avoid_: 当前节点 / 当前章。
+给定一组按文档序排列的项区间（起点 / 块尾）与「视口顶」读数，判当前项：取**最后一条起点已越过判据线**的项（边界 `<=`；输入允许非单调，判据仍按文档序）；已越过项里只要还有块尾仍压线或跨线的（`>= 0`），线就被内容占着，不算空档——最后一条已越过项离线而更早的覆盖项还在时，完整落在覆盖项跨度内的子块缝归下一子项，覆盖项自己的尾巴归覆盖项；只有所有已越过项都整条离线（`< 0`）且其后又有未越过的项时，线才落在块间**空档**（无内容带：章间 / 段间 margin），归下一项。一条都没越过 → 文档序第一个非空项；没有可判项 → `-1`；空洞跳过。阅读侧三条数据路各自采集读数，判据只有这一份（`ADR-0106`）。 _唯一实现_: `client/viewport-top.ts` 的 `crossedIndex`。 _Avoid_: 当前节点 / 当前章、落项规则、缝归例外。
 
 **顶条遮挡（top inset）**:
 sticky 顶条盖住视口最上那一条的实测高；「看得见的顶」= 端口顶（或滚动位）加这份夹成非负的遮挡。存、取、落位、导航高亮与「从阅读位置起播」探针共吃同一个口径。 _唯一实现_: `client/viewport-top.ts` 的 `clampTopInset`（这把尺的两个进料口：阅读器顶条 = `client/views/ReaderView.tsx` 的 `topInset`，每次现量；宿主窗控带 = 见「窗控带与安全顶」，随窗口读数取）。 _Avoid_: 视口顶判据、顶条样式与高度常量。

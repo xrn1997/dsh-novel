@@ -4,7 +4,7 @@
  * - **uniform（段数）**：把段数当等距，只在没有几何时用；它与像素口径**不是同一个数**。
  * 两个 adapter 不互相冒充：阅读器在场时 progress 归阅读会话（ADR-0093）；回阅读器按段号精确落位（ADR-0094）。
  */
-import { crossedIndex } from './viewport-top.js'
+import { crossedIndex, spanRelativeTo } from './viewport-top.js'
 
 export interface ChapterAnchor { index: number; start: number; height: number }
 
@@ -14,10 +14,13 @@ export function ratioWithin(a: ChapterAnchor, scrollTop: number): number {
   return a.height > 0 ? Math.min(1, Math.max(0, (scrollTop - a.start) / a.height)) : 0
 }
 
-/** 定位当前章与章内比例：锚点按内容坐标升序，**当前项判据吃 `viewport-top` 那一份**；比例 = 章内已滚过
- *  的高度占比。这条数据路只读锚点缓存、不做每帧 rect 读取——判据共用，数据流不合并。 */
+/** 定位当前章与章内比例：锚点按内容坐标升序，**当前项判据吃 `viewport-top` 那一份**——块区间喂进去，
+ *  判据线落在章间空档时归下一章，比例由 `ratioWithin` 天然钳 0（落项规则住在 `crossedIndex`，别在这里
+ *  抄第二遍）；比例 = 章内已滚过的高度占比。这条数据路只读锚点缓存、不做每帧 rect 读取——判据共用，
+ *  数据流不合并。**锚点必须与当前布局同版**：块高是空档判据的一半，布局变化、跨章提交前与渲染后
+ *  拍点都由会话先重测再判（`feedViewport` / `afterRender`）。 */
 export function locateChapter(anchors: ChapterAnchor[], scrollTop: number): { chapterIndex: number; offsetRatio: number } {
-  const at = crossedIndex(anchors, (a) => a.start - scrollTop)
+  const at = crossedIndex(anchors, (a) => spanRelativeTo(a.start, a.start + a.height, scrollTop))
   // 没有锚点 = 还没量到任何章：章号与比例都留在基线 0（不是"取位失败"，这里就没有取位这回事）
   const a = at === -1 ? undefined : anchors[at]
   if (a === undefined) return { chapterIndex: 0, offsetRatio: 0 }
