@@ -259,4 +259,33 @@ describe('依赖边界：宿主语音服务的类型只借不依赖', () => {
     const dev = recordAt(pkg, 'devDependencies')
     expect(typeof dev['dsh-xiaomi-tts']).toBe('string')
   })
+
+  it('宿主契约包只以 type-only import 出现，且留在 devDependencies（ADR-0108 类型只借不依赖）', () => {
+    // 真任务服务层只借宿主契约类型（ISessions / IConversation / IWorkspaces / …）：
+    // 值 import 会让构建产物依赖一个没进 dependencies 的包，纯度门（tsdown）也会直接拦。
+    // devDeps 版本与编译所依的 dsh-tools 同号同理：按已声明兼容的最新宿主类型面编译。
+    const hostTypePackages = [
+      '@deepseek-ai/dsh-api-session-controller',
+      '@deepseek-ai/dsh-api-workspace-controller',
+      '@deepseek-ai/dsh-client-ui-conversation',
+      '@deepseek-ai/dsh-client-ui-plugin-manager',
+      '@deepseek-ai/dsh-client-ui-workspace',
+    ]
+    const dev = recordAt(pkg, 'devDependencies')
+    const dshTools = textAt(pkg, 'devDependencies', '@deepseek-ai/dsh-tools')
+    for (const name of hostTypePackages) {
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      // 三类值依赖都要拦：具名/默认 import、动态 import()、**裸副作用 import**（无 from）。
+      const valueImport = new RegExp(
+        `(?:^|\\n)\\s*(?:import|export)\\s+(?!type\\b)[^\\n]*?from\\s+['"]${escaped}(?:\\/[^'"]*)?['"]`
+        + `|import\\s*\\(\\s*['"]${escaped}`
+        + `|(?:^|\\n)\\s*import\\s+['"]${escaped}(?:\\/[^'"]*)?['"]`,
+      )
+      const offenders = sourceFiles('src').filter((file) => valueImport.test(readFileSync(file, 'utf8')))
+      expect(offenders, `以下源文件把 ${name} 当运行时依赖引入了`).toEqual([])
+      expect(recordAt(pkg, 'dependencies')[name]).toBeUndefined()
+      expect(typeof dev[name]).toBe('string')
+      expect(dev[name], `${name} 应与 dsh-tools 同号（同一代宿主类型面）`).toBe(dshTools)
+    }
+  })
 })

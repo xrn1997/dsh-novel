@@ -27,6 +27,7 @@ export function ExportPanel(props: {
   onClose: () => void
   onCancel: () => void
   darkController: boolean
+  hostThemed?: boolean
   zIndex: number
 }): ReactNode {
   const t = useCopy()
@@ -39,8 +40,17 @@ export function ExportPanel(props: {
       data-novel-ctrl
       role="dialog"
       aria-label={t('reader.export.range')}
-      className={props.darkController ? 'novel-dark novel-prefs' : 'novel-prefs'}
-      style={{ position: 'absolute', right: 12, top: 52, zIndex: props.zIndex }}
+      className={[
+        props.hostThemed ? 'novel-prefs-host' : '',
+        !props.hostThemed && props.darkController ? 'novel-dark' : '',
+        'novel-prefs',
+      ].filter(Boolean).join(' ')}
+      style={{
+        position: 'absolute',
+        right: props.hostThemed ? 20 : 12,
+        top: props.hostThemed ? 64 : 52,
+        zIndex: props.zIndex,
+      }}
     >
       <div className="novel-panel-head">
         <span className="novel-panel-head-title">

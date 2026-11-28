@@ -11,23 +11,30 @@ export const SHELL_CSS = `
    进度落盘/预取/回跳一并死）。 */
 .novel-root { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 .novel-main { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-/* 滚动面的滚动条跟宿主滚动条语义（轨 / thumb / hover 三 token）：浏览器默认灰条是光暗两态里
-   唯一不跟主题的一块。实测 scrollbar-width 不向子元素继承（根上 thin、滚动容器自己仍 auto），
-   故显式盖到两棵树的每个后代；webkit 伪元素用后代选择器盖到每个滚动面。
-   选择器带作用域前缀，不与任何单类规则撞名（ui-system 按名取规则块）。宿主 DOM 一律不碰。 */
-.novel-root, .novel-root *, [data-novel-scope], [data-novel-scope] * {
-  scrollbar-width: thin;
-  scrollbar-color: var(--novel-scrollbar) var(--novel-scrollbar-track);
+/* 滚动面的滚动条跟宿主滚动条语义：轨透明、宽 5px、thumb 按表面高度
+   取档（基面 l1 对；菜单面/输入卡等抬升面在自己的容器上重绑 --novel-scrollbar{,-hover} 到
+   l2 对）。两条路径**互斥**：标准属性（scrollbar-width/scrollbar-color）一旦非 auto，
+   Chromium/Safari 就丢掉该元素的 ::-webkit-scrollbar* 规则，所以标准路径关进
+   @supports not selector(::-webkit-scrollbar)（Firefox 走标准路、WebKit 走伪元素路）。
+   选择器带作用域前缀，不与任何单类规则撞名。宿主 DOM 一律不碰。 */
+@supports not selector(::-webkit-scrollbar) {
+  .novel-root, .novel-root *, [data-novel-scope], [data-novel-scope] * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--novel-scrollbar) transparent;
+  }
 }
-.novel-root ::-webkit-scrollbar, [data-novel-scope] ::-webkit-scrollbar { width: 8px; height: 8px; }
+.novel-root ::-webkit-scrollbar, [data-novel-scope] ::-webkit-scrollbar { width: 5px; height: 5px; }
 .novel-root ::-webkit-scrollbar-track, [data-novel-scope] ::-webkit-scrollbar-track {
   background: var(--novel-scrollbar-track);
 }
 .novel-root ::-webkit-scrollbar-thumb, [data-novel-scope] ::-webkit-scrollbar-thumb {
-  background: var(--novel-scrollbar); border-radius: 999px;
+  background: var(--novel-scrollbar); border-radius: 999px; corner-shape: round;
 }
 .novel-root ::-webkit-scrollbar-thumb:hover, [data-novel-scope] ::-webkit-scrollbar-thumb:hover {
   background: var(--novel-scrollbar-hover);
+}
+.novel-root ::-webkit-scrollbar-corner, [data-novel-scope] ::-webkit-scrollbar-corner {
+  background: transparent;
 }
 /* 这里**故意没有**「藏宿主 composer / 列宽把手」的规则：main 是 keyed 槽，宿主按选中面板的 id
    只渲染一个占用者（entryKey 命中谁就渲染谁），切到小说面板时整个 Conversation 卸载，composer
@@ -58,8 +65,8 @@ export const SHELL_CSS = `
   --novel-brand: #5b93f5;
   --novel-primary-fill: #3b76e8;
   --novel-primary-hover: #4d85f0;
-  /* 派生色在此层必须重钉：自定义属性在声明处算完就继承下去，暗层换 --novel-brand 不会回填上层派生值
-     --novel-ring 同理（它按 var(--novel-brand) 在 token 层算完即继承）——不重钉则暗层焦点环仍是亮蓝 */
+  /* 派生色在此层必须重钉：自定义属性在声明处算完就继承下去，暗层换 --novel-brand 不会回填上层派生值。
+     --novel-ring 不属此列：它直接读宿主 focus 语义 token（两态同名），暗层不重钉。 */
   --novel-brand-soft: color-mix(in srgb, #5b93f5 11%, transparent);
   --novel-brand-tint: color-mix(in srgb, #5b93f5 18%, transparent);
   --novel-brand-line: color-mix(in srgb, #5b93f5 38%, transparent);
@@ -68,7 +75,6 @@ export const SHELL_CSS = `
   --novel-accent-hover: #4d85f0;
   --novel-accent-soft: color-mix(in srgb, #5b93f5 18%, transparent);
   --novel-accent-line: color-mix(in srgb, #5b93f5 40%, transparent);
-  --novel-ring: #5b93f5;
   --novel-skeleton: rgba(255, 255, 255, .08);
   --novel-shadow-2: 0 14px 38px rgba(0, 0, 0, .48), 0 2px 10px rgba(0, 0, 0, .28);
   color: var(--novel-text);

@@ -289,6 +289,34 @@ _唯一实现_: `client/reader-session.ts` 的 `position` / `commit` / `reveal` 
 **翻页阅读（paged reading）**:
 阅读器的整章多栏切页模式：窄屏单页、宽屏双页，点击 / 键盘 / 滚轮 / 触摸翻页，跨章落位与按页位写进度（`ADR-0101`）。正文一次进多栏轨道、不复制 DOM；章内锚点不精确落位。 _唯一实现_: `client/reader-pagination.ts` 的 `computeSpreadLayout` / `computePageCount` / `spreadForRatio` / `ratioForSpread` / `classifyClickZone` / `firstParagraphInSpread`；舞台 `client/views/BookStage.tsx`；会话 `client/reader-session.ts` 的 `setPaged` / `reportPosition` / `prefetchChapter` / `scrollToSavedPosition`；视图 `client/views/ReaderView.tsx` 的 `isPaged` / `takeOverReading`。 _Avoid_: 分页器、PDF / 固定版式阅读（不接）。
 
+**摸鱼模式（moyu mode）**:
+阅读器的第三种正式阅读方式：用宿主色「对话流 + 文件侧栏」舞台呈现正文，视觉模式与底层会话推进方式分开。`scroll` 挂滚动绑定；`page` 与 `moyu` 都让 `ReaderSession.setPaged(true)`，但只有 `page` 挂 `BookStage`。摸鱼舞台内部的流式揭示与滚动不改消费位置，切章一律走 `requestJump` 落盘——翻章入口是输入框提交（Enter / 发送）、`/` 指令菜单与 `@` 章节引用；文件行点击开的是文档预览 tab、不切章。输入框只做阅读动作：有草稿＝草稿落成本轮用户气泡再进章、空草稿＝模板气泡进章；工作区 chip 是**入口**——在选定工作区开/切一个宿主会话并带到前台，此后由用户在宿主界面里使用（见「工作区入口」）。`lastNormalMode` 记录进入前的常规方式，`Alt+M` 与最底层 `Esc` 往返。舞台只覆盖插件主内容区，不绘制或修改宿主左栏；阅读浮层仍归 `ReaderScene`，由 `ReaderView` 唯一渲染。
+_唯一实现_: `client/store.ts` 的 `ReadingMode` / `Prefs.lastNormalMode` / `moyuStyle` / `moyuReveal`；`client/moyu-stream.ts`；`client/views/MoyuStage.tsx` 的 `submitComposer`；`client/views/ReaderView.tsx` 的 `isScrollView` / `isPaged` / `isMoyu` / `sessionPaged`。 _Avoid_: 独立于阅读方式的伪装开关、第二套进度通道、宿主左侧栏仿制品。
+
+**文档预览 tab（moyu document preview tab）**:
+摸鱼文件坞的文档面：README.md 与章节文件各开一枚预览 tab，chip 照宿主标签条的 chip 形制（min/max 80/170、超长渐隐、每枚自带 ×）；README 走真 Markdown 渲染、章节显示真章文本（正文 markdown 渲染不在此列）。预览内「在阅读器打开」＝在正常阅读视图打开该章（离开摸鱼台）。关闭语义：预览 tab 的 ×＝关该 tab（激活回「文件」tab），「文件」tab 的 ×＝收起文件坞，坞条「＋」＝新开 README 预览（已开则聚焦）。对话流读取行的 fileLink 落点也开预览 tab。
+_唯一实现_: `client/views/moyu-preview.tsx` 的 `MoyuPreviewPane` / `MoyuMarkdownView`；`client/moyu-markdown.ts` 的 `parseMoyuMarkdown` / `moyuReadmeMarkdown`；`client/views/MoyuStage.tsx` 的 `PreviewTab` / `openPreviewTab` / `closePreviewTab`。 _Avoid_: 居中模态 README 卡回流、预览即切章、第二套 chip 宽度标度。
+
+**轨迹台账（moyu trajectory ledger）**:
+摸鱼「轨迹」视图的事件表：工具栏（展开/收起所有轮次 + 搜索轨迹按章名真过滤）+ sticky 轮次头（轮号 + 输入/输出/思考/时间四列指标头）+ 事件行（类型标签 + 序号 + 摘要 + 四列指标，30px 表格行 + 发丝 + hover/选中）；点行选中出「事件详情」浮层（本章统计＝段数/字数/揭示耗时/~tok +「在阅读器打开」）。四列指标＝真阅读数据映射：字数→输入/输出列、段数→思考列、揭示耗时→时间列；字符数不再单列成指标列，只留在事件详情的「字数」统计。时间线与拖选不做。
+_唯一实现_: `client/views/moyu-trajectory.tsx` 的 `MoyuTrajectory` / `MoyuTrajectoryDetail`；`client/moyu-metrics.ts`。 _Avoid_: 时间线泳道、字符数度量、台账与对话流两份计时口径。
+
+**摸鱼假时钟（moyu fake clock）**:
+摸鱼台上一切**假数据**时刻读数的唯一来源：首轮落在当天 09:30、每轮＝上轮时刻＋真实阅读间隔、跨日才带日期——绝不用系统真钟直出时刻（防「凌晨摸鱼」从时间戳泄底）。轮尾尾注是消息时刻（提示 + 揭示耗时），用户行时刻常显；系统时钟只在取锚日时读一次。唯一例外是「真轮次镜像」的镜像轮：真值轮走宿主真时刻，不进这条假时间线。
+_唯一实现_: `client/moyu-clock.ts` 的 `MoyuClock` / `MOYU_CLOCK_ANCHOR_MINUTES` / `formatMessageClock`。 _Avoid_: 屏幕上出现墙钟直出的时刻、第二条假时间线。
+
+**摸鱼统计读数（moyu stats readings）**:
+统计坞与轨迹指标的折算口径（估算、带波浪号、随阅读量走、不随墙钟走）：tok＝中文字数×~0.65、缓存命中按章序 45%→75% 小步增长、吞吐＝tok÷本章揭示真实耗时、错误码按真实错误原因映射成五档芯片；换算只住一处，表面只取成品。
+_唯一实现_: `client/moyu-metrics.ts` 的 `tokOf` / `cacheHitPercentOf` / `tokensPerSecondOf` / `errorCodeOf`。 _Avoid_: 各表面自己折算、把估算摆成精确读数。
+
+**工作区入口（workspace entry）**:
+摸鱼输入控制行左侧的「选择工作区」座位（宿主 `.select` 形态）：数据面是宿主工作区枚举面（显工作区标题），缺省文案「选择工作区」，选择持久化到 localStorage。点一个工作区＝**在宿主里开/切会话并带到前台**（`uiWorkspace.openWorkspace`，会话身份从它的 `beforeOpen` 回执取），不是投递点：插件不代发、不排队、不撤销任何一轮，输入框的 Enter 恒为进章。工作区面或打开面缺席＝整枚隐藏。
+_唯一实现_: `client/moyu-host.ts` 的 `moyuWorkspaceStore` / `bindMoyuWorkspace` / `refreshMoyuWorkspaces` / `openMoyuWorkspaceSession`；座位在 `client/views/MoyuStage.tsx` 输入控制行（`.novel-moyu-select-seat`）的 `openWorkspaceSession`。 _Avoid_: 把 chip 当投递开关、第二套工作区选择器、把绑定状态写进伪装数据。
+
+**真轮次镜像（real-turn mirror）**:
+宿主真会话的轮次渲染进摸鱼舞台对话流：入口会话先长持 `retain`（来源标签 `moyuStage`），再按 `target('chat')` 订阅 ChatSnapshot，把节点投影成舞台**已有形态**——用户气泡（真 prompt）/ 思考行（真 reasoning）/ 工具行（真工具名 · 摘要）/ 助手正文（真文本）/ 轮尾（真时刻 + 真用量，不走假时钟、不折算 ~tok）/ 错误行（真失败消息 + 错误码芯片）。镜像轮与章轮次（假数据）按**真实进入时刻**交错共存于同一条流、共用同一套舞台组件、不加「这是真的」标记。**只读**：不投递、不改写、不撤销，只覆盖宿主已加载的历史窗。降级三档：未映射的节点种类＝中性占位行（宁降勿猜）；认识但形状不对＝该轮降级（失败半径＝那一轮，不炸整条流）；`uiConversation` 缺席＝不镜像。
+_唯一实现_: `client/moyu-mirror.ts` 的 `projectMoyuMirrorTurns` / `moyuMirrorStore` / `replaceMoyuMirrorTurns`；订阅与长持 `client/moyu-host.ts` 的 `openMoyuWorkspaceSession` / `conversationBindingOf`；渲染 `client/views/MoyuStage.tsx` 的 `renderMirrorTurn`。 _Avoid_: 第二套轮次装配、给镜像轮加「真」标记、替宿主节点种类编舞台语义。
+
 **页位比例（page-position ratio）**:
 翻页模式写进 `progress.offsetRatio` 的章内进度：当前屏在整章多栏轨道中的位置比例；与滚动模式共用同一个字段，但口径是页位而非文本比例，切模式时只做近似换算。 _唯一实现_: `client/reader-pagination.ts` 的 `ratioForSpread` / `spreadForRatio`；`client/views/ReaderView.tsx` 的 `onPagedReportRatio`。 _Avoid_: 阅读位置、文本进度；共用 `offsetRatio` 时要先说清是哪一种口径。
 

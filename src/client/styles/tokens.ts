@@ -23,13 +23,36 @@ export const TOKENS_CSS = `
   --novel-border: var(--dsw-alias-border-l2, #ffffff1f);
   --novel-border-strong: var(--dsw-alias-border-l4, #fff3);
   --novel-border-faint: var(--dsw-alias-border-l1, #ffffff0f);
+  /* elevation 发丝描边的间接色（宿主 body 默认 l4；菜单面重绑 l1、输入卡重绑 l2） */
+  --novel-elevation-stroke-color: var(--dsw-alias-border-l4, #fff3);
   /* 交互与文字 */
   --novel-hover: var(--dsw-alias-interactive-bg-hover, #ffffff14);
   --novel-active: var(--dsw-alias-interactive-bg-active, #ffffff24);
   --novel-text: var(--dsw-alias-label-primary, #f9fafb);
   --novel-text-2: var(--dsw-alias-label-secondary, #cfd3d6);
   --novel-text-3: var(--dsw-alias-label-tertiary, #adb2b8);
+  /* 宿主会话面：摸鱼舞台按宿主的「对话流」真名取色。比通用层多出的这族只服务对话外观
+     （气泡 / 输入卡 / 选底 / 业务蓝 / 代码块 / 次要说明 / 发丝边），不往别处扩散。 */
+  --novel-caption: var(--dsw-alias-label-caption, #81858c);
+  --novel-bubble: var(--dsw-specific-bubble, #2c2c2e);
+  --novel-input-fill: var(--dsw-specific-input-major, #2c2c2e);
+  --novel-selector-fill: var(--dsw-specific-selector, #353638);
+  --novel-business: var(--dsw-alias-state-business-primary, #7aaaff);
+  --novel-info-fill: var(--dsw-alias-button-info-fill, #7aaaff);
+  --novel-info-hover: var(--dsw-alias-button-info-hover, #4176e6);
+  --novel-code-bg: var(--dsw-alias-markdown-code-block, #1b1b1c);
+  --novel-inline-code: var(--dsw-alias-markdown-inline-code, #292929);
+  --novel-hover-solid: var(--dsw-alias-interactive-bg-hover-solid, #353638);
+  --novel-border-mid: var(--dsw-alias-border-l3, #ffffff29);
+  /* 宿主里另有 label-deep-diving / label-shimmer 两族：本仓词表未收（theme-tokens 守卫的冻结
+     快照），派生色只准住本层，所以按宿主公式在 token 层混出来。 */
+  --novel-deep-diving: color-mix(in srgb, var(--novel-business) 55%, var(--novel-text-3));
+  --novel-shimmer: color-mix(in srgb, var(--novel-text) 45%, transparent);
   --novel-fg: var(--dsw-alias-label-primary-foreground, #0f1115);
+  /* 压在实心按钮上的字色：宿主真名 label-on-color（两态同名）。 */
+  --novel-on-solid: var(--dsw-alias-label-on-color, #fff);
+  /* 内链色：宿主真名 alias-link（两态自动跟随）。 */
+  --novel-link: var(--dsw-alias-link, #3b76e8);
   --novel-brand: var(--dsw-alias-brand-primary, #2f6feb);
   --novel-primary-fill: var(--dsw-alias-button-primary-fill, #2f6feb);
   --novel-primary-hover: var(--dsw-alias-button-primary-hover, #3b7bf0);
@@ -46,12 +69,36 @@ export const TOKENS_CSS = `
   --novel-skeleton: var(--dsw-alias-bg-skeleton, #ffffff14);
   /* 浮层底：迷你条读宿主**浮动钮**语义（与宿主自己的浮动按钮同底同源），不是面板层板。 */
   --novel-float: var(--dsw-alias-button-floating-fill, #2b2b2e);
-  /* 滚动条三件套（轨 / thumb / hover）：插件自己的滚动面跟宿主滚动条语义，不留浏览器默认灰条 */
-  --novel-scrollbar-track: var(--dsw-alias-scrollbar-bg-l1, #ffffff0f);
-  --novel-scrollbar: var(--dsw-alias-scrollbar-bg-l2, #ffffff2e);
-  --novel-scrollbar-hover: var(--dsw-alias-scrollbar-hover-l2, #ffffff47);
+  /* 滚动条三件套（宿主滚动条口径）：轨透明、thumb 按表面高度取档——基面 l1 对，
+     抬升面（菜单面 / 输入卡）重绑 l2 对；hover 用同档 hover 值。 */
+  --novel-scrollbar-track: transparent;
+  --novel-scrollbar: var(--dsw-alias-scrollbar-bg-l1, #ffffff0f);
+  --novel-scrollbar-hover: var(--dsw-alias-scrollbar-hover-l1, #ffffff2e);
+  --novel-scrollbar-elevated: var(--dsw-alias-scrollbar-bg-l2, #ffffff2e);
+  --novel-scrollbar-elevated-hover: var(--dsw-alias-scrollbar-hover-l2, #ffffff47);
   /* 模态遮罩：宿主语义层真名 bg-mask-1（词表在 theme-tokens 守卫内）——视觉规则只读本局部变量 */
   --novel-mask: var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, .45));
+  /* 菜单面材质 / tab 激活底 / chip 悬停底 / Toast 底 / Tooltip 三色（宿主真名，见 theme-tokens 词表）。 */
+  --novel-menu-fill: var(--dsw-menu-surface-fill, var(--novel-layer-2));
+  --novel-menu-blur: var(--dsw-menu-backdrop-filter, blur(40px) saturate(150%));
+  --novel-tab-active: var(--dsw-alias-markdown-tag, var(--novel-active));
+  --novel-chip-hover: var(--dsw-alias-state-business-tertiary, color-mix(in srgb, var(--novel-business) 18%, transparent));
+  --novel-toast-bg: var(--dsw-alias-toast-bg, var(--novel-layer-2));
+  /* 文件牌琥珀（FileTypeIcon folder 色相，宿主静态 amber-400）。 */
+  --novel-file-folder: var(--dsw-static-amber-400, #f7ad31);
+  /* 轨迹轮次头的满幅浅底（宿主 TrajectoryTurnHeader 的 ghost-active-fill）与事件类型标签三对
+     （宿主 TrajectoryCell tagSystem/tagUser/tagMessage/tagTool 的取色；消息对是 brand-new×
+     error-secondary 的混色，按宿主公式在本层混出）。 */
+  --novel-ghost-fill: var(--dsw-alias-button-ghost-active-fill, #ffffff14);
+  --novel-tag-user-fg: var(--dsw-alias-state-success-primary, #3fb950);
+  --novel-tag-user-bg: var(--dsw-alias-state-success-tertiary, #2ea04326);
+  --novel-tag-tool-fg: var(--dsw-alias-state-warn-label, #d29922);
+  --novel-tag-tool-bg: var(--dsw-alias-state-warn-tertiary, #d2992226);
+  --novel-tag-msg-fg: color-mix(in srgb, var(--dsw-alias-brand-primary-new-colorprimary-new-color) 60%, var(--novel-err));
+  --novel-tag-msg-bg: color-mix(in srgb, color-mix(in srgb, var(--dsw-alias-brand-primary-new-colorprimary-new-color) 55%, var(--novel-err)) 15%, var(--novel-layer-1));
+  --novel-tooltip-bg: var(--dsw-alias-tooltip-bg, var(--novel-layer-3));
+  --novel-tooltip-label: var(--dsw-alias-tooltip-label, var(--novel-text));
+  --novel-tooltip-key-bg: var(--dsw-alias-tooltip-key-bg, color-mix(in srgb, var(--novel-tooltip-bg), white 18%));
   /* 状态：成功/错误/警告 + 其弱底（错误底用宿主 interactive-*-danger 而非自调 alpha） */
   --novel-ok: var(--dsw-alias-state-success-primary, #3fb950);
   --novel-err: var(--dsw-alias-state-error-primary, #f85149);
@@ -62,11 +109,9 @@ export const TOKENS_CSS = `
   --novel-status-verified: var(--dsw-alias-state-success-primary, #3fb950);
   --novel-status-broken: var(--dsw-alias-state-error-primary, #f85149);
   --novel-status-unverified: var(--dsw-alias-label-tertiary, #8b949e);
-  /* 字面量（无宿主对应）：纯白字压在主按钮/错误徽标上 */
-  --novel-on-solid: #fff;
-  /* 焦点环：走 brand（宿主主色）+ 2px 外偏移——不要借 label-secondary 与正文同色系，
-     在密集列表里几乎找不着环；primary 钮上另换 --novel-text（brand 压 brand 等于没有）。 */
-  --novel-ring: var(--novel-brand);
+  /* 焦点环：宿主焦点环的真口径——business 蓝（brand-primary 在宿主词表里是黑白反色主色，
+     不是环色）+ 标准 2px 宽；宽度/颜色如宿主可被 --dsw-focus-ring-* 覆写。 */
+  --novel-ring: var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary, #7aaaff));
   /* 配置页保存条吸附偏移：JS 吸住时按宿主滚动区底留白写成负值；缺省 0 = 普通 sticky */
   --novel-cfg-pin: 0px;
   /* ── 标度：间距 / 字阶 / 圆角 / 阴影 / 层级 / 动效 ── */
@@ -74,15 +119,26 @@ export const TOKENS_CSS = `
   --novel-sp-4: 12px; --novel-sp-5: 16px; --novel-sp-6: 24px; --novel-sp-7: 32px;
   --novel-fs-xs: 11px; --novel-fs-sm: 12px; --novel-fs-md: 13px;
   --novel-fs-base: 14px; --novel-fs-lg: 16px; --novel-fs-xl: 19px;
-  --novel-r-xs: 4px; --novel-r-sm: 6px; --novel-r-md: 8px; --novel-r-lg: 12px;
-  --novel-shadow-1: 0 1px 4px rgba(0, 0, 0, .18);      /* 封面贴页 */
-  --novel-shadow-2: 0 6px 16px rgba(0, 0, 0, .16);     /* 卡片浮起 / 状态条浮层 */
-  --novel-shadow-pop: 0 18px 48px rgba(0, 0, 0, .35);  /* 模态 */
+  /* 圆角标度逐档贴宿主 radius 标度（xs 4 / sm 8 / md 12 / lg 16 / xl 20 / panel 28），
+     名字同序对齐——宿主换档时只动这里的 fallback。 */
+  --novel-r-xs: var(--dsw-radius-xs, 4px); --novel-r-sm: var(--dsw-radius-sm, 8px);
+  --novel-r-md: var(--dsw-radius-md, 12px); --novel-r-lg: var(--dsw-radius-lg, 16px);
+  --novel-r-xl: var(--dsw-radius-xl, 20px); --novel-r-panel: var(--dsw-radius-panel, 28px);
+  /* 阴影走宿主阴影词表：lv1 贴页 / lv2 卡片浮起 / 模态走
+     elevation-prominent（0.5px 发丝描边 + 2–5% 柔光）。 */
+  --novel-shadow-1: var(--dsw-shadow-lv1, 0 2px 4px 0 rgba(0, 0, 0, .05));
+  --novel-shadow-2: var(--dsw-shadow-lv2, 0 4px 12px 0 rgba(0, 0, 0, .02), 0 2px 8px 0 rgba(0, 0, 0, .04));
+  --novel-shadow-pop: var(--dsw-elevation-prominent, 0 0 0 0.5px var(--novel-border-strong), 0 3px 8px 0 rgba(0, 0, 0, .04), 0 0 20px 0 rgba(0, 0, 0, .05));
   --novel-dur: .15s; --novel-ease: cubic-bezier(.2, 0, 0, 1);
   --novel-ease-out: cubic-bezier(.22, 1, .36, 1);
   --novel-ease-spring: cubic-bezier(.34, 1.35, .64, 1);
   --novel-dur-fast: 140ms; --novel-dur-mid: 220ms;
   --novel-font-serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", STSong, SimSun, serif;
+  /* 宿主代码字族（宿主平台缺省栈，故意不带裸 monospace 尾——Windows 中文会掉宋体）：
+     文件路径、时长读数与代码标记共用；用户字体表在宿主 body 上重绑 --ds-font-family-code。 */
+  --novel-font-mono: var(--ds-font-family-code, 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas, 'Liberation Mono', Menlo, Courier, 'PingFang SC', 'Microsoft YaHei');
+  /* 宿主正文字族：--dsw-font-family 在宿主 body 上被用户字体表前置，跟随「字体」设置。 */
+  --novel-font-text: var(--dsw-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif);
   /* 值槽（唯一由行内写入的动态量，规则都住本层）。 */
   --novel-pct: 0;
   --novel-measure: 680px;
@@ -121,6 +177,16 @@ export const TOKENS_CSS = `
   --novel-cover-3: #4d3a3a;
   --novel-cover-4: #443a4d;
   color: var(--novel-text);
+}
+/* Elevation 三件套（宿主 elevation 的同款口径）：0.5px 发丝描边画在
+   box-shadow 里（组件配 border: 0 不占布局）+ 两层极淡柔光。**逐元素声明**而非继承：
+   继承传下来的是在声明处已替换完 var() 的值，组件重绑 --novel-elevation-stroke-color
+   进不了已替换的派生值；逐元素声明让每个元素按自己看到的描边色重新替换。 */
+.novel-root, .novel-root *, [data-novel-scope], [data-novel-scope] * {
+  --novel-elevation-stroke: 0 0 0 0.5px var(--novel-elevation-stroke-color);
+  --novel-elevation-panel: var(--novel-elevation-stroke), 0 3px 8px 0 rgba(0, 0, 0, .03), 0 0 16px 0 rgba(0, 0, 0, .02);
+  --novel-elevation-prominent: var(--novel-elevation-stroke), 0 3px 8px 0 rgba(0, 0, 0, .04), 0 0 20px 0 rgba(0, 0, 0, .05);
+  --novel-elevation-soft: var(--novel-elevation-stroke), 0 4px 16px 0 rgba(0, 0, 0, .03), 0 0 24px 0 rgba(0, 0, 0, .03);
 }
 /* 控制器条底：纸往墨压一档（6%），阅读器顶条与听书条共用；直接写在条元素的 background 上。 */
 .novel-rdr-bar, .novel-tts-bar {

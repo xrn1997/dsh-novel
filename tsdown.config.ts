@@ -5,9 +5,9 @@ import { defineConfig } from 'tsdown'
  *  client bundle 一律留给注入的 require，不得 inline）。
  *  **收录判据是「我们声明兼容的每一代宿主都答得上」（交集）**，且**只收产物真的 require 到的**：
  *  - `react` / `react/jsx-runtime`：视图与 JSX 运行时，跨代都在。
- *  - **宿主 client 包一条都不收**：配置页的值与写协议走 `ctx.remote.settings`（编目契约
- *    `settingsController` 的 `describe` / `mutate`），页面/面板零宿主包 import（页面校验清单，
- *    `ADR-0067`）。原语只当它是「服务之上的表单模型」，本页自己持有草稿与保存态。
+ *  - **宿主 client 包一条值都不收**：配置页的值与写协议走 `ctx.remote.settings`（编目契约
+ *    `settingsController` 的 `describe` / `mutate`），页面/面板零宿主包**值** import（页面校验清单，
+ *    `ADR-0067`）；契约类型只许 `import type` 借（devDependencies，`ADR-0109`）。原语只当它是「服务之上的表单模型」，本页自己持有草稿与保存态。
  *  - 也不收 `react-dom` / `react-dom/client` / `@deepseek-ai/cordis` / `@deepseek-ai/dsh-client-store`
  *    / `@deepseek-ai/dsh-client-ui-slots` / `@deepseek-ai/dsh-client-ui-primitives`：产物一条都没
  *    require（store 自持见 `ADR-0055`；cordis 全为 type-only import，编译期已擦除）。

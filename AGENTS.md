@@ -35,7 +35,7 @@ DeepSeek Harness（DSH）的「小说」插件：导入 legado 书源 → 聚合
 - **宁炸不猜**：认不出的规则语法在**解析期**抛 `UnsupportedRuleError`，带段级定位；空结果冒充失败是本仓定的最高罪。判「不适用」而不写理由，等于把裁决写成遗忘：理由写进矩阵那一行的 `note`。
 - **失败半径等于判据的主语**：一份文档 / 一条声明 / 一处资源读不出，后果只能作用在那一格（留空页、剪那一条、该处不留），**每格都留痕**；半径与后果的判据只住一张表（`services/epub/findings.ts` 的 `FINDING_RADII`）：`item` 级剪除由 `services/epub/package.ts` 的 `parseSpine` / `pruneDeadTargets` 执行，其余后果由 `services/epub/import.ts` 执行；痕按名字发、调用点填不了。整本拒收只留给书级事实（容器与包文档读不出、主序列一份可读的都没有、声明了封面却读不出等，清单见 `ADR-0061`），且只经 `services/epub/errors.ts` 的 `rejectBook` / `bookError` 两个具名出口出来；名册按文件记这两个出口符号的处数、只减不增，净增一处整本拒收要写 ADR（`ADR-0061` 判据、`ADR-0063` 携带机制；门 `tests/services/epub-failure-radius.test.ts`）。
 - **取值规约**：取位失败 → Miss、解析到空集合 → 空 List，两种值绝不折叠；唯一实现 `src/engine/select.ts` 的 `reducePicked`。
-- **纯度门**：`src/client/**` 的运行时 import 只能来自平台模块表；`src/shared/wire.ts` 保持零运行时依赖（它被 inline 进 client bundle）。构建成败由 `tsdown.config.ts` 的 `dsh-novel-bundle-purity` 把住，改平台模块表要对着宿主发布物重读，别凭记忆。
+- **纯度门**：`src/client/**` 的运行时 import 只能来自平台模块表；宿主契约类型只许 `import type` 借（devDependencies 与 `dsh-tools` 同号，`ADR-0109`）；读宿主可选服务只经 `ctx.get(名字)`——`ctx.<service>` 对未 inject 的服务会抛并带走整个 client fiber。`src/shared/wire.ts` 保持零运行时依赖（它被 inline 进 client bundle）。构建成败由 `tsdown.config.ts` 的 `dsh-novel-bundle-purity` 把住，改平台模块表要对着宿主发布物重读，别凭记忆。
 - **兼容性事实单源**：宿主 peer 区间与实测名单的事实源是 `package.json`；README 与徽章是投影，名单与徽章由文档门核对，peer 区间由 `tests/packaging.test.ts` 把。
 - **客户端文案单点**：`src/client/**` 的可见文案（中文原文与英文译文；单位、格式名、错误码、装饰字形与插件卡片元信息除外）只住 `src/client/copy/**`，组件经 `useCopy()`、非 React 函数经 `Translate` 参数取词；宿主 locale 服务可选读（`ctx.get('locale')`），缺席回退中文。机器面是 `tests/client/copy-guard.test.ts`，白名单只许收不上屏的数据/注释，或与语言无关的装饰字形、模板，且每条带理由。
 

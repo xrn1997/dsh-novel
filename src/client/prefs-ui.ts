@@ -1,5 +1,5 @@
 import type { CopyKey } from './copy/index.js'
-import type { PageAnimation, PageColumns, ReadingMode } from './store.js'
+import type { MoyuReveal, MoyuStyle, PageAnimation, PageColumns, ReadingMode } from './store.js'
 
 /** 阅读偏好档位常量：ReaderView 控制器与 Aa 面板的档位单点 */
 export const FONT_STEPS = [12, 14, 16, 18, 20, 22, 24, 26, 28]
@@ -7,6 +7,16 @@ export const LINE_HEIGHT_RANGE = { min: 1.4, max: 2.2, step: 0.1 } as const
 export const READING_MODES: Array<{ value: ReadingMode; labelKey: CopyKey }> = [
   { value: 'scroll', labelKey: 'prefs.readingMode.scroll' },
   { value: 'page', labelKey: 'prefs.readingMode.page' },
+  { value: 'moyu', labelKey: 'prefs.readingMode.moyu' },
+]
+export const MOYU_STYLES: Array<{ value: MoyuStyle; labelKey: CopyKey }> = [
+  { value: 'dsh', labelKey: 'prefs.moyuStyle.dsh' },
+  { value: 'compact', labelKey: 'prefs.moyuStyle.compact' },
+  { value: 'clean', labelKey: 'prefs.moyuStyle.clean' },
+]
+export const MOYU_REVEALS: Array<{ value: MoyuReveal; labelKey: CopyKey }> = [
+  { value: 'stream', labelKey: 'prefs.moyuReveal.stream' },
+  { value: 'instant', labelKey: 'prefs.moyuReveal.instant' },
 ]
 export const PAGE_COLUMNS: Array<{ value: PageColumns; labelKey: CopyKey }> = [
   { value: 'auto', labelKey: 'prefs.pageColumns.auto' },

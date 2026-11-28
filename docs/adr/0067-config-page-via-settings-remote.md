@@ -1,8 +1,8 @@
-# 配置页走宿主设置面（`remote.settings`），不引宿主 client 包
+# 配置页走宿主设置面（`remote.settings`），不引宿主 client 包的值
 
 Status: accepted
 
-插件页的「运行参数」保留，但读写改走宿主编目的设置服务（`settingsController` 的 `describe` / `mutate`，客户端面是 `ctx.remote.settings`）；页面自己持有草稿与保存态，不再 import 任何宿主 client 包——页面/面板的校验清单明确禁止后者。背景：配置页原先靠宿主表单原语的 `SettingsForm` / `SettingsFormModel`，整个浏览器半在 factory 求值期就 require 了它；模块一旦缺席或改名，侧栏、主面板、常驻状态层会一起装不上。
+插件页的「运行参数」保留，但读写改走宿主编目的设置服务（`settingsController` 的 `describe` / `mutate`，客户端面是 `ctx.remote.settings`）；页面自己持有草稿与保存态，不再 import 任何宿主 client 包的值——页面/面板的校验清单明确禁止后者（契约类型只借见 `ADR-0109`）。背景：配置页原先靠宿主表单原语的 `SettingsForm` / `SettingsFormModel`，整个浏览器半在 factory 求值期就 require 了它；模块一旦缺席或改名，侧栏、主面板、常驻状态层会一起装不上。
 
 ## 决定
 

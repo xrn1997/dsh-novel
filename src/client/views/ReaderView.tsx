@@ -8,7 +8,7 @@ import { markPanelShelfLanded, readPanelShelf } from '../panel-shelf.js'
 import type { ReaderDeps } from '../deps.js'
 import { applyPreset, createExportRun, draftOf, IDLE_EXPORT, matchPreset, validRangeOf } from '../export-run.js'
 import type { ExportDraft, ExportRunState } from '../export-run.js'
-import { navigate, prefsStore, useStore } from '../store.js'
+import { navigate, prefsStore, setPref, useStore } from '../store.js'
 import { ReaderScene } from '../reader-scene.js'
 import { ReaderSession } from '../reader-session.js'
 import type { ReaderRevealTarget } from '../reader-session.js'
@@ -31,6 +31,7 @@ import { BookStage } from './BookStage.js'
 import { ChapterBody } from './ChapterBody.js'
 import { ExportPanel } from './ExportPanel.js'
 import { ImportNotesPanel } from './ImportNotesPanel.js'
+import { MoyuOverlayLayer, MoyuStage } from './MoyuStage.js'
 import { PrefsPanel } from './PrefsPanel.js'
 import { useListenFromSelection } from './listen-from-selection.js'
 import { claimKeyLayer, Dialog } from './dialog.js'
@@ -92,15 +93,17 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
 }): ReactNode {
   const t = useCopy()
   const prefs = useStore(prefsStore)
+  const isScrollView = prefs.readingMode === 'scroll'
   const isPaged = prefs.readingMode === 'page'
-  /** 回调里读模式但保持回调身份稳定：`takeOverReading` 进 binding 的依赖，身份一变就会重建
-   *  binding → 会话 → 重开书；模式切换只能走 ref。 */
-  const isPagedRef = useRef(isPaged)
-  isPagedRef.current = isPaged
+  const isMoyu = prefs.readingMode === 'moyu'
+  const sessionPaged = !isScrollView
+  /** 回调里读滚动模式但保持回调身份稳定：模式切换只能走 ref。 */
+  const isScrollViewRef = useRef(isScrollView)
+  isScrollViewRef.current = isScrollView
   /** 排版三量的指纹：模式切换也会让 effect 重跑，但模式切换不归 `applyTypesetRelocation`。 */
   const typesetKey = `${prefs.fontSize}:${prefs.lineHeight}:${prefs.measure}`
   const typesetKeyRef = useRef(typesetKey)
-  const prevIsPagedForTypesetRef = useRef(isPaged)
+  const prevSessionPagedForTypesetRef = useRef(sessionPaged)
   /** 听书范围按原语窄订阅一次算完（`tts/use-listen-scope`）：整店订阅会让每段推进都重渲顶层。
    *  `showing` = 本书就是正在听的会话——听书条挂载条件，也是「从阅读位置起播」的闸门。 */
   const listen = useListenScope(bookKey)
@@ -127,7 +130,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   /** 选区「从本段听」浮钮收起句柄：翻页模式靠 transform 切页不触发 scroll，翻页/跳章时一起收起。 */
   const listenFromClearRef = useRef<(() => void) | null>(null)
   /** 上一帧是否翻页模式：从翻页切回滚动时，绑定首帧喂视口前先把页内比例摆成滚动位。 */
-  const wasPagedRef = useRef(isPaged)
+  const wasPagedRef = useRef(sessionPaged)
   /** 模式切换瞬间的段落锚点（同步在 prefs 通知里采自切走前的活 DOM）：滚动 ⇄ 翻页来回切不依赖粗比例互换。 */
   const prevReadingModeRef = useRef(prefs.readingMode)
   const modeAnchorRef = useRef<{ chapterIndex: number; paragraphIndex: number } | null>(null)
@@ -138,7 +141,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     modeAnchorRef.current = null
     setPagedFollowYielded(true)
     listenFromClearRef.current?.()
-    if (!isPagedRef.current) followControllerRef.current?.onUserIntent()
+    if (!isScrollViewRef.current) followControllerRef.current?.onUserIntent()
   }, [])
   /** 顶条（sticky）：它的高度就是滚动视口顶的固定遮挡，阅读位置一律按「条下方第一行」算。 */
   const barRef = useRef<HTMLDivElement | null>(null)
@@ -232,7 +235,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     setPagedFollowYielded(false)
     setPagedLocateTick((n) => n + 1)
     const live = ttsPlayer.get()
-    if (isPaged) {
+    if (sessionPaged) {
       if (live.active && live.bookKey === bookKey && live.chapterIndex !== currentChapter) {
         session.requestJump(live.chapterIndex)
       }
@@ -244,7 +247,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
       chapterIndex: live.chapterIndex,
       paragraphIndex: live.paragraphIndex,
     }, followBottomInset())
-  }, [isPaged, bookKey, currentChapter, session, follow, followBottomInset])
+  }, [sessionPaged, bookKey, currentChapter, session, follow, followBottomInset])
   /** 听书会话开始 / 结束 / 换书：跟随回到默认开启；会话不在时清掉残留的重定位待办。 */
   useEffect(() => {
     setPagedFollowYielded(false)
@@ -315,6 +318,16 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     document.addEventListener('keydown', onKey)
     return () => { document.removeEventListener('keydown', onKey); layer.release() }
   }, [dismissSurface, sceneState.escOwner])
+  useEffect(() => {
+    const onModeKey = (event: KeyboardEvent): void => {
+      if (!event.altKey || (event.key !== 'm' && event.key !== 'M')) return
+      event.preventDefault()
+      event.stopPropagation()
+      setPref({ readingMode: prefs.readingMode === 'moyu' ? prefs.lastNormalMode : 'moyu' })
+    }
+    document.addEventListener('keydown', onModeKey)
+    return () => { document.removeEventListener('keydown', onModeKey) }
+  }, [prefs.readingMode, prefs.lastNormalMode])
   /** 目录高亮取一次读数（一次 DOM 测量，不在滚动路径上）：只在抽屉开着时调；**章块逐章到货**时
    *  由拍点后回调调——必须排在绑定测量与 `settleJump` 落位之后，否则量到落位前的几何。 */
   const recomputeNavActive = useCallback((): void => {
@@ -344,6 +357,9 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     setExpDraft(draftOf(expTotal))
     scene.toggle('export')
   }
+  const closeMoyu = useCallback((): void => {
+    setPref({ readingMode: prefs.lastNormalMode })
+  }, [prefs.lastNormalMode])
 
   /** 持久导入说明：**只有本地书有这份东西**，按书取一次。取不到就不出入口（不拿未知当「有」），
    *  但**不静默**：入口不出现是降级，失败仍上报。 */
@@ -369,13 +385,13 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     if (nextMode === prevReadingModeRef.current) return
     const prevMode = prevReadingModeRef.current
     prevReadingModeRef.current = nextMode
-    if (nextMode === 'page' && prevMode === 'scroll') {
+    if (prevMode === 'scroll' && nextMode !== 'scroll') {
       const pos = readingPositionAt(
         chapterRefs.current,
         portViewTop(binding.scrollport()) + clampTopInset(topInset()),
       )
       modeAnchorRef.current = pos === null ? null : { chapterIndex: pos.chapterIndex, paragraphIndex: pos.paragraphIndex }
-    } else if (nextMode === 'scroll' && prevMode === 'page') {
+    } else if (prevMode === 'page' && nextMode !== 'page') {
       modeAnchorRef.current = {
         chapterIndex: session.currentPosition.chapterIndex,
         paragraphIndex: pagedProbeParagraphRef.current?.() ?? 0,
@@ -386,8 +402,8 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   // 模式开关先于开会话：翻页模式没有滚动视口，会话里的恢复/跳章/预取必须走无 pendingJump 的路径。
   // effect 声明次序即执行次序（这个在下面 open 之前），首帧也不会让 open 走错模式。
   useEffect(() => {
-    session.setPaged(isPaged)
-  }, [session, isPaged])
+    session.setPaged(sessionPaged)
+  }, [session, sessionPaged])
 
   // 进入：开会话；卸载：关会话。「回阅读器」的一次性重定位在这里**按书键**取走（消费即摘）：
   // 章号先按不写进度的恢复路径站定，精确段由随后的 `session.reveal` 落位（write:false）。
@@ -408,17 +424,21 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   /** DOM 侧接线：滚动模式下由 binding 接管监听、探针与帧拍点；翻页模式下由 BookStage 接管进度与
    *  当前页段号探针（被「听书 / 从阅读位置起播」消费时同时恢复自动跟翻）。 */
   useEffect(() => {
-    if (isPaged) {
+    if (!isScrollView) {
       wasPagedRef.current = true
-      setReadingProbe(() => {
-        setPagedFollowYielded(false)
-        setPagedLocateTick((n) => n + 1)
-        return {
-          chapterIndex: session.currentPosition.chapterIndex,
-          paragraphIndex: pagedProbeParagraphRef.current?.() ?? 0,
-        }
-      })
-      return () => { setReadingProbe(null) }
+      if (isPaged) {
+        setReadingProbe(() => {
+          setPagedFollowYielded(false)
+          setPagedLocateTick((n) => n + 1)
+          return {
+            chapterIndex: session.currentPosition.chapterIndex,
+            paragraphIndex: pagedProbeParagraphRef.current?.() ?? 0,
+          }
+        })
+        return () => { setReadingProbe(null) }
+      }
+      setReadingProbe(null)
+      return
     }
     // 切回滚动：滚动 DOM 刚提交，先由 binding.mount 刷新真实滚动容器再落位到保存/锚点位置；
     // 否则首帧 portEl 仍为 null，会把滚动位写到 window 上、.novel-main 留在 0 导致章号倒退。
@@ -431,7 +451,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
       shouldRestore ? { beforeFeed: () => { session.scrollToSavedPosition(anchor) } } : undefined,
     )
     return () => { binding.unmount() }
-  }, [binding, session, isPaged])
+  }, [binding, session, isScrollView, isPaged])
 
   /** 翻页模式预取下一章：本章正文到位后静默拉取下一章，末页翻章无等待。 */
   const currentChapterContent = chapters[currentChapter] ?? null
@@ -474,7 +494,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   /** 播放推进时自动跟随。滚动模式由 follow-controller 驱动 session.reveal；翻页模式由上方跨章 effect +
    *  BookStage 页内同步接管，避免在会话里留下挂起的纵向 pendingReveal。 */
   useEffect(() => {
-    if (isPaged) return
+    if (!isScrollView) return
     const live = ttsPlayer.get()
     follow.onPlayback({
       active: live.active,
@@ -482,7 +502,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
       chapterIndex: live.chapterIndex,
       paragraphIndex: live.paragraphIndex,
     }, followBottomInset())
-  }, [isPaged, follow, listen.showing, listen.chapterIndex, listen.paragraphIndex, followBottomInset])
+  }, [isScrollView, follow, listen.showing, listen.chapterIndex, listen.paragraphIndex, followBottomInset])
 
   /** 拍点后回调：目录高亮重算（章块到货后 DOM 才可测）；精确落位归会话的 `afterRender`，视图不另记账。 */
   const afterBeat = (): void => {
@@ -491,22 +511,22 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
   /** 每次渲染后的**唯一一道门**（无条件调用）：这一帧要不要测量由绑定按会话的 DOM 版本裁，
    *  「只改了 currentChapter」这类渲染自然不拍，新加影响布局的来源也不用回来改视图。 */
   useEffect(() => {
-    if (isPaged) return
+    if (!isScrollView) return
     binding.rendered(st.domRevision, afterBeat)
   })
 
   /** 字号/行距/栏宽变化 → 排版复位：触发归视图（提交后的 effect 知道新排版落定），采点、复位算式
    *  与 miss/重采分支归会话的 `applyTypesetRelocation`。effect 只依赖三个排版量、不写 prefs。 */
   useEffect(() => {
-    const wasPaged = prevIsPagedForTypesetRef.current
-    prevIsPagedForTypesetRef.current = isPaged
-    // 模式切换不是排版变化：翻页期间与刚切回滚动的那一拍只同步指纹、不走滚动复位；
+    const wasPaged = prevSessionPagedForTypesetRef.current
+    prevSessionPagedForTypesetRef.current = sessionPaged
+    // 模式切换不是排版变化：非滚动期间与刚切回滚动的那一拍只同步指纹、不走滚动复位；
     // 切回滚动的位置由 `scrollToSavedPosition` 负责，避免两套落位互相拉扯。
-    if (isPaged || wasPaged) { typesetKeyRef.current = typesetKey; return }
+    if (sessionPaged || wasPaged) { typesetKeyRef.current = typesetKey; return }
     if (typesetKeyRef.current === typesetKey) return
     typesetKeyRef.current = typesetKey
     session.applyTypesetRelocation()
-  }, [isPaged, typesetKey, session])
+  }, [sessionPaged, typesetKey, session])
 
   const onPagedChangeChapter = useCallback((nextChapter: number): void => {
     session.requestJump(nextChapter)
@@ -529,6 +549,58 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
     '--novel-paper-ink': paperInk(prefs.paperColor),
     '--novel-live-ink': paperLiveInk(prefs.paperColor),
   } as CSSProperties), [prefs.paperColor])
+  const exportPanel = sceneState.surface === 'export' ? (
+    <ExportPanel
+      draft={expDraft}
+      activePreset={matchPreset(expDraft, currentChapter, expTotal)}
+      valid={validRangeOf(expDraft, expTotal)}
+      total={expTotal}
+      running={exportState.running}
+      kb={exportState.kb}
+      totalChapters={exportState.total}
+      onFrom={(v) => setExpDraft((d) => ({ ...d, from: v }))}
+      onTo={(v) => setExpDraft((d) => ({ ...d, to: v }))}
+      onPreset={(kind) => setExpDraft(applyPreset(kind, currentChapter, expTotal))}
+      onConfirm={() => {
+        const v = validRangeOf(expDraft, expTotal)
+        if (!v.ok) return
+        exportRun.start({ from: v.from, to: v.to, total: expTotal })
+      }}
+      onClose={closeCurrent}
+      onCancel={() => exportRun.cancel()}
+      darkController={prefs.darkController}
+      hostThemed={isMoyu}
+      zIndex={CTRL_Z.panel}
+    />
+  ) : null
+  const prefsPanel = sceneState.surface === 'prefs'
+    ? <PrefsPanel zIndex={CTRL_Z.panel} onClose={closeCurrent} hostThemed={isMoyu} />
+    : null
+  const importNotesPanel = sceneState.surface === 'importNotes' && hasImportNotes
+    ? <ImportNotesPanel warnings={importNotes} onClose={closeCurrent} darkController={prefs.darkController} hostThemed={isMoyu} />
+    : null
+  const supplementPanel = sceneState.surface === 'supplement' && sceneState.note !== null
+    ? (
+      <ReaderNotes
+        bookKey={bookKey}
+        target={sceneState.note.target}
+        requestSeq={sceneState.note.seq}
+        deps={deps}
+        onNavigate={(target, role) => { takeOverReading(); scene.panelLink(target, role) }}
+        onClose={closeSurface}
+        darkController={prefs.darkController}
+      />
+    )
+    : null
+  const moyuOverlays = isMoyu ? (
+    <>
+      {sceneState.mask && <div data-novel-ctrl-mask className="novel-moyu-overlay-mask" onClick={closeCurrent} />}
+      {exportPanel !== null && <MoyuOverlayLayer onClose={closeCurrent}>{exportPanel}</MoyuOverlayLayer>}
+      {prefsPanel !== null && <MoyuOverlayLayer onClose={closeCurrent}>{prefsPanel}</MoyuOverlayLayer>}
+      {importNotesPanel !== null && <MoyuOverlayLayer onClose={closeCurrent}>{importNotesPanel}</MoyuOverlayLayer>}
+      {supplementPanel !== null && <MoyuOverlayLayer onClose={closeSurface}>{supplementPanel}</MoyuOverlayLayer>}
+    </>
+  ) : null
   return (
     <div
       data-novel-view="reader"
@@ -539,8 +611,29 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
       ].filter(Boolean).join(' ')}
       style={paper}
     >
+      {isMoyu && (
+        <MoyuStage
+          session={session}
+          sourceId={sourceId}
+          bookKey={bookKey}
+          title={title}
+          state={st}
+          prefs={prefs}
+          scene={scene}
+          sceneState={sceneState}
+          listen={listen}
+          importNotesCount={importNotes?.length ?? 0}
+          onOpenExport={openExport}
+          onListen={onListenPill}
+          onClose={closeMoyu}
+          onNavigate={onBodyNavigate}
+          onTtsError={(cause) => deps.pushError(ttsErrorMessage(t, cause))}
+          apiGet={deps.apiGet}
+          overlays={moyuOverlays}
+        />
+      )}
       {/* 偏好/导出面板遮罩：挂 reader 根容器盖满阅读区；遮罩在不在场读阅读场景的 `mask` 投影。 */}
-      {sceneState.mask && (
+      {!isMoyu && sceneState.mask && (
         <div data-novel-ctrl-mask onClick={closeCurrent}
           style={{ position: 'absolute', inset: 0, zIndex: CTRL_Z.mask }} />
       )}
@@ -605,30 +698,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
               : <><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 2.5v8m0 0L5 7.5M8 10.5l3-3M3 13h10" /></svg>{t('reader.download')}</>}
           </button>
           {/* 导出面板与 Aa／目录／注释／导入说明永不同场：互斥判据在 `reader-surfaces`，这里只摆当场面 */}
-          {sceneState.surface === 'export' && (
-            <ExportPanel
-              draft={expDraft}
-              activePreset={matchPreset(expDraft, currentChapter, expTotal)}
-              // 章数是活的：每次调用现给，草稿里不存副本——目录迟到时预设与校验一起自愈
-              valid={validRangeOf(expDraft, expTotal)}
-              total={expTotal}
-              running={exportState.running}
-              kb={exportState.kb}
-              totalChapters={exportState.total}
-              onFrom={(v) => setExpDraft((d) => ({ ...d, from: v }))}
-              onTo={(v) => setExpDraft((d) => ({ ...d, to: v }))}
-              onPreset={(kind) => setExpDraft(applyPreset(kind, currentChapter, expTotal))}
-              onConfirm={() => {
-                const v = validRangeOf(expDraft, expTotal)
-                if (!v.ok) return                                    // 校验单点：倒置/越界不发废包
-                exportRun.start({ from: v.from, to: v.to, total: expTotal })
-              }}
-              onClose={closeCurrent}
-              onCancel={() => exportRun.cancel()}
-              darkController={prefs.darkController}
-              zIndex={CTRL_Z.panel}
-            />
-          )}
+          {!isMoyu && exportPanel}
           {/* 互斥与「再点同一颗就收场」判据在 `reader-surfaces`；工具栏在遮罩之上，各面自己的钮负责收场。 */}
           <button type="button" className="novel-rdr-ctl novel-rdr-ctl-aa" aria-expanded={sceneState.surface === 'prefs'} aria-label={t('reader.settings')}
             onClick={() => { scene.toggle('prefs') }} title={t('reader.settings')}>Aa</button>
@@ -652,7 +722,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
             </svg>
             {t('tts.listen')}
           </button>
-          {sceneState.surface === 'prefs' && <PrefsPanel zIndex={CTRL_Z.panel} onClose={closeCurrent} />}
+          {!isMoyu && prefsPanel}
         </div>
         {/* 章进度：跨章才动；章内百分比刻意不做——那是每帧量，会让整棵阅读器每帧重渲染。 */}
         <i className="novel-rdr-trail" aria-hidden="true"
@@ -716,7 +786,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
             bodyRef={bodyRef}
             probeParagraphRef={pagedProbeParagraphRef}
           />
-        ) : (
+        ) : isMoyu ? null : (
           /* 正文层：字号/行距/栏宽由 prefs 行内固定——永不接宿主 token；字色走 --novel-paper-ink */
           <div
             ref={bodyRef}
@@ -752,7 +822,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
           </div>
         )}
         {/* 抽屉：0 宽 sticky 槽 + absolute 本体（锚视口、不切走正文宽度）。 */}
-        {sceneState.surface === 'toc' && (
+        {!isMoyu && sceneState.surface === 'toc' && (
           <div className={prefs.darkController ? 'novel-drawer-slot novel-dark' : 'novel-drawer-slot'}>
             <div ref={drawerRef} className="novel-drawer" role="dialog" aria-label={t('reader.contents')}>
               <div className="novel-drawer-top">
@@ -838,24 +908,12 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
           </div>
         )}
         {/* 导入说明面板（本地书持久告警）：与注释面板同几何、同 z、互斥——只读，不写任何进度 */}
-        {sceneState.surface === 'importNotes' && hasImportNotes && (
-          <ImportNotesPanel warnings={importNotes} onClose={closeCurrent} darkController={prefs.darkController} />
-        )}
+        {!isMoyu && importNotesPanel}
         {/* 注释面板（脚注/附录）：面板是浮层，主阅读位置不受它影响；内链打开的关闭即回引用处 */}
-        {sceneState.surface === 'supplement' && sceneState.note !== null && (
-          <ReaderNotes
-            bookKey={bookKey}
-            target={sceneState.note.target}
-            requestSeq={sceneState.note.seq}
-            deps={deps}
-            onNavigate={(target, role) => { takeOverReading(); scene.panelLink(target, role) }}
-            onClose={closeSurface}
-            darkController={prefs.darkController}
-          />
-        )}
+        {!isMoyu && supplementPanel}
       </div>
       {/* 「从本段听」浮钮：选区归属由阅读器一处判定；按下时不撤选区（撤了按钮来不及响应就失去上下文）。 */}
-      {listenFrom.at !== null && (
+      {!isMoyu && listenFrom.at !== null && (
         <button
           type="button"
           className="novel-tts-from-here"
@@ -871,7 +929,7 @@ export function ReaderView({ sourceId, bookKey, title, deps = prodReaderDeps }: 
         </button>
       )}
       {/* 听书条：**只在本会话是这本书时挂载**——它也是「从阅读位置起播」的闸门。 */}
-      {listen.showing && (
+      {!isMoyu && listen.showing && (
         <TtsBar darkController={prefs.darkController} apiGet={deps.apiGet} pushError={deps.pushError}
           onLocate={locateListen} rootRef={ttsBarRef} onPanelOpenChange={setTtsSettingsOpen} />
       )}

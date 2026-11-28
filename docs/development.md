@@ -99,7 +99,7 @@ $env:DSH_WEBVIEW='1'; pnpm vitest run tests/services/webview.test.ts
 $env:DSH_BROWSER_GATE='1'; pnpm vitest run tests/browser/epub-reader.test.ts
 # 同一枚闸下的几何门（不起服务、不读站点），按文件跑：
 #   city-sheet-layout / config-page-layout / tts-layout / tts-engine-edit-layout /
-#   shelf-nowplaying-layout / source-list-layout / book-stage-layout（都在 tests/browser/ 下）
+#   shelf-nowplaying-layout / source-list-layout / book-stage-layout / moyu-stage-layout（都在 tests/browser/ 下）
 # 读数与断言住对应测试文件；jsdom 量不到排版，所以几何必须进真浏览器。
 $env:DSH_BROWSER_GATE='1'; pnpm vitest run tests/browser/<文件>.test.tsx
 
@@ -173,7 +173,7 @@ npm 与 GitHub Release 是两条渠道，靠同一个 tag 对齐；发版后核�
 
 安装许可由 `package.json` 的 `peerDependencies` 决定，实测记录写在 `dsh.compatibility.dshReleases`，只列真跑过的宿主版本（两层的关系见 `README.md` 与 `ADR-0020`）。两层由 `tests/packaging.test.ts` 同时看住：编译期 devDependency 必须被 peer 区间放行，且必须出现在实测声明里。
 
-宿主发新版分两种：**线内**（当前 peer 区间内的 rc / patch）不要求本插件跟版；要声称实测兼容时，升级编译所依、重读新宿主的浏览器模块表（`staticModules()`）并对齐 `PLATFORM_MODULES`、真机确认后加实测条目。**跨线**必须先真机验，再把 peer 上界开到下一条线。平台模块表只剩 `react` 两条：客户端页面/面板不得 import 任何宿主 client 包（`ADR-0067`）。
+宿主发新版分两种：**线内**（当前 peer 区间内的 rc / patch）不要求本插件跟版；要声称实测兼容时，升级编译所依、重读新宿主的浏览器模块表（`staticModules()`）并对齐 `PLATFORM_MODULES`、真机确认后加实测条目。**跨线**必须先真机验，再把 peer 上界开到下一条线。平台模块表只剩 `react` 两条：客户端页面/面板不得 import 任何宿主 client 包的**值**；契约类型只许 `import type` 借（devDependencies 与 `dsh-tools` 同号，`ADR-0109`）。
 
 宿主依赖包的**发布冷却闸**（pnpm 的 `minimumReleaseAge`）对 `@deepseek-ai/dsh-*` 整 scope 放行，写死在 `pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude`（`ADR-0026`）。
 

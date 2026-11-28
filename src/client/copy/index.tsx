@@ -8,6 +8,7 @@ import { READER_EN, READER_ZH } from './reader.js'
 import { SOURCES_EN, SOURCES_ZH } from './sources.js'
 import { SETTINGS_EN, SETTINGS_ZH } from './settings.js'
 import { TTS_EN, TTS_ZH } from './tts.js'
+import { MOYU_EN, MOYU_ZH } from './moyu.js'
 
 /** 第三方命名空间必须带插件前缀；官方占用 `common` / `settings` / `sidebar`。 */
 export const COPY_NS = 'xrn1997-dsh-novel'
@@ -15,13 +16,13 @@ export const COPY_NS = 'xrn1997-dsh-novel'
 /** ZH 是真源；EN 用 Record<CopyKey, string> 逐键镜像（漏键编译不过）。 */
 export const ZH = {
   ...COMMON_ZH, ...NAVIGATION_ZH, ...SHELF_ZH, ...CITY_ZH,
-  ...SEARCH_ZH, ...READER_ZH, ...SOURCES_ZH, ...SETTINGS_ZH, ...TTS_ZH,
+  ...SEARCH_ZH, ...READER_ZH, ...SOURCES_ZH, ...SETTINGS_ZH, ...TTS_ZH, ...MOYU_ZH,
 } as const
 
 export type CopyKey = keyof typeof ZH
 export const EN: Record<CopyKey, string> = {
   ...COMMON_EN, ...NAVIGATION_EN, ...SHELF_EN, ...CITY_EN,
-  ...SEARCH_EN, ...READER_EN, ...SOURCES_EN, ...SETTINGS_EN, ...TTS_EN,
+  ...SEARCH_EN, ...READER_EN, ...SOURCES_EN, ...SETTINGS_EN, ...TTS_EN, ...MOYU_EN,
 }
 
 export type CopyParams = Readonly<Record<string, string | number>>

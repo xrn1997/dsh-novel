@@ -46,6 +46,22 @@ describe('PrefsPanel reading mode & page animation', () => {
     expect(prefsStore.get().pageAnimation).toBe('none')
   })
 
+  it('exposes Moyu as the third mode with its own presentation controls', () => {
+    const onClose = vi.fn()
+    setPref({ readingMode: 'page' })
+    const view = render(<PrefsPanel zIndex={11} onClose={onClose} />)
+    fireEvent.click(view.getByText('摸鱼模式'))
+    expect(prefsStore.get()).toMatchObject({ readingMode: 'moyu', lastNormalMode: 'page' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(view.getByText('呈现风格')).toBeTruthy()
+    expect(view.getByText('输出节奏')).toBeTruthy()
+    fireEvent.click(view.getByText('紧凑日志流'))
+    fireEvent.click(view.getByText('即时直出'))
+    expect(prefsStore.get()).toMatchObject({ moyuStyle: 'compact', moyuReveal: 'instant' })
+    const modeGroup = view.getByRole('group', { name: '阅读方式' })
+    expect(modeGroup.style.getPropertyValue('--novel-seg-index')).toBe('2')
+  })
+
   it('supports Night paper swatch, collapsible custom HSL/Hex picker, and Reset Defaults', () => {
     const view = render(<PrefsPanel zIndex={11} />)
     fireEvent.click(view.getByRole('button', { name: '夜间' }))

@@ -2,7 +2,7 @@ import type { CSSProperties, ReactNode } from 'react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { useCopy } from '../copy/index.js'
 import {
-  FONT_STEPS, LINE_HEIGHT_RANGE, MEASURES, PAGE_ANIMATIONS, PAGE_COLUMNS, PAPER_PRESETS, READING_MODES,
+  FONT_STEPS, LINE_HEIGHT_RANGE, MEASURES, MOYU_REVEALS, MOYU_STYLES, PAGE_ANIMATIONS, PAGE_COLUMNS, PAPER_PRESETS, READING_MODES,
 } from '../prefs-ui.js'
 import { DEFAULT_PREFS, prefsStore, setPref, useStore } from '../store.js'
 import {
@@ -27,7 +27,11 @@ function CloseGlyph(): ReactNode {
 
 /** 阅读控制器面板：挂工具栏内（z 序由视图按控制器层单表传入），分组呈现排版 / 纸色外观 / 阅读方式与复位；
  *  自定义取色器的实时配色走 CSS 变量，避免 TSX 内出现颜色字面量。 */
-export function PrefsPanel({ zIndex, onClose }: { zIndex: number; onClose?: () => void }): ReactNode {
+export function PrefsPanel({ zIndex, onClose, hostThemed = false }: {
+  zIndex: number
+  onClose?: () => void
+  hostThemed?: boolean
+}): ReactNode {
   const t = useCopy()
   const prefs = useStore(prefsStore)
   const lhId = useId()
@@ -103,7 +107,8 @@ export function PrefsPanel({ zIndex, onClose }: { zIndex: number; onClose?: () =
   }
 
   const measureIdxRaw = MEASURES.findIndex((m) => m.px === prefs.measure)
-  const modeIdx = prefs.readingMode === 'page' ? 1 : 0
+  const modeIdx = READING_MODES.findIndex((mode) => mode.value === prefs.readingMode)
+  const revealIdx = MOYU_REVEALS.findIndex((reveal) => reveal.value === prefs.moyuReveal)
   const contrast = paperContrastRatio(prefs.paperColor)
 
   const pickerVars: CSSProperties = {
@@ -114,6 +119,93 @@ export function PrefsPanel({ zIndex, onClose }: { zIndex: number; onClose?: () =
     '--novel-picker-ink': paperInk(prefs.paperColor),
     '--novel-picker-live': paperLiveInk(prefs.paperColor),
   } as CSSProperties
+
+  /** 摸鱼模式里的 Aa 是「伪装的宿主浮层」：只留三组与呈现直接相关的偏好（阅读方式 /
+   *  呈现风格 / 输出节奏），容器走宿主 popover 面（316px、面板层 2 底、12px 圆角）。
+   *  纸色 / 字号那组是纸面阅读的语言，不在这个浮层里出现——与宿主里那枚「⋯」菜单同形。 */
+  if (hostThemed) {
+    const segStyle = (count: number, index: number): CSSProperties => ({
+      '--novel-seg-count': String(count),
+      '--novel-seg-index': String(index),
+    } as CSSProperties)
+    return (
+      <div
+        data-novel-ctrl
+        role="dialog"
+        aria-label={t('reader.settings')}
+        className="novel-prefs novel-prefs-host"
+        style={{ zIndex }}
+      >
+        <div className="novel-panel-head">
+          <span className="novel-panel-head-title">{t('reader.moyu.prefsTitle')}</span>
+          {onClose !== undefined && (
+            <button type="button" className="novel-panel-close" aria-label={t('common.close')} title={t('common.close')} onClick={onClose}>
+              <CloseGlyph />
+            </button>
+          )}
+        </div>
+        <div className="novel-prefs-body">
+          <section className="novel-setting-section">
+            <div className="novel-setting-title">{t('reader.readingMode')}</div>
+            <div className="novel-rdr-seg" role="group" aria-label={t('reader.readingMode')} style={segStyle(READING_MODES.length, modeIdx)}>
+              {READING_MODES.map((mode) => (
+                <button
+                  key={mode.value}
+                  type="button"
+                  className={prefs.readingMode === mode.value ? 'on' : undefined}
+                  aria-pressed={prefs.readingMode === mode.value}
+                  onClick={() => {
+                    setPref({ readingMode: mode.value })
+                    onClose?.()
+                  }}
+                >
+                  {t(mode.labelKey)}
+                </button>
+              ))}
+            </div>
+          </section>
+          <section className="novel-setting-section">
+            <div className="novel-setting-title">{t('prefs.moyuStyle.label')}</div>
+            <div
+              className="novel-rdr-seg"
+              role="group"
+              aria-label={t('prefs.moyuStyle.label')}
+              style={segStyle(MOYU_STYLES.length, MOYU_STYLES.findIndex((style) => style.value === prefs.moyuStyle))}
+            >
+              {MOYU_STYLES.map((style) => (
+                <button
+                  key={style.value}
+                  type="button"
+                  className={prefs.moyuStyle === style.value ? 'on' : undefined}
+                  aria-pressed={prefs.moyuStyle === style.value}
+                  onClick={() => setPref({ moyuStyle: style.value })}
+                >
+                  {t(style.labelKey)}
+                </button>
+              ))}
+            </div>
+          </section>
+          <section className="novel-setting-section">
+            <div className="novel-setting-title">{t('prefs.moyuReveal.label')}</div>
+            <div className="novel-rdr-seg" role="group" aria-label={t('prefs.moyuReveal.label')} style={segStyle(MOYU_REVEALS.length, revealIdx)}>
+              {MOYU_REVEALS.map((reveal) => (
+                <button
+                  key={reveal.value}
+                  type="button"
+                  className={prefs.moyuReveal === reveal.value ? 'on' : undefined}
+                  aria-pressed={prefs.moyuReveal === reveal.value}
+                  onClick={() => setPref({ moyuReveal: reveal.value })}
+                >
+                  {t(reveal.labelKey)}
+                </button>
+              ))}
+            </div>
+          </section>
+          <div className="novel-note-sm">{t('prefs.moyu.shortcut')}</div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div
@@ -374,7 +466,10 @@ export function PrefsPanel({ zIndex, onClose }: { zIndex: number; onClose?: () =
                 type="button"
                 className={prefs.readingMode === mode.value ? 'on' : undefined}
                 aria-pressed={prefs.readingMode === mode.value}
-                onClick={() => setPref({ readingMode: mode.value })}
+                onClick={() => {
+                  setPref({ readingMode: mode.value })
+                  if (mode.value === 'moyu') onClose?.()
+                }}
               >
                 {t(mode.labelKey)}
               </button>
@@ -411,6 +506,40 @@ export function PrefsPanel({ zIndex, onClose }: { zIndex: number; onClose?: () =
                   </button>
                 ))}
               </div>
+            </div>
+          )}
+
+          {prefs.readingMode === 'moyu' && (
+            <div className="novel-reveal-down">
+              <div className="novel-setting-sublabel">{t('prefs.moyuStyle.label')}</div>
+              <div className="novel-rdr-pills" role="group" aria-label={t('prefs.moyuStyle.label')}>
+                {MOYU_STYLES.map((style) => (
+                  <button
+                    key={style.value}
+                    type="button"
+                    className={prefs.moyuStyle === style.value ? 'novel-rdr-pill on' : 'novel-rdr-pill'}
+                    aria-pressed={prefs.moyuStyle === style.value}
+                    onClick={() => setPref({ moyuStyle: style.value })}
+                  >
+                    {t(style.labelKey)}
+                  </button>
+                ))}
+              </div>
+              <div className="novel-setting-sublabel">{t('prefs.moyuReveal.label')}</div>
+              <div className="novel-rdr-pills" role="group" aria-label={t('prefs.moyuReveal.label')}>
+                {MOYU_REVEALS.map((reveal) => (
+                  <button
+                    key={reveal.value}
+                    type="button"
+                    className={prefs.moyuReveal === reveal.value ? 'novel-rdr-pill on' : 'novel-rdr-pill'}
+                    aria-pressed={prefs.moyuReveal === reveal.value}
+                    onClick={() => setPref({ moyuReveal: reveal.value })}
+                  >
+                    {t(reveal.labelKey)}
+                  </button>
+                ))}
+              </div>
+              <div className="novel-note-sm">{t('prefs.moyu.shortcut')}</div>
             </div>
           )}
         </section>

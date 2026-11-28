@@ -54,7 +54,9 @@ export function navigate(route: ViewRoute): void { routeStore.set({ route }) }
 
 // ── 阅读偏好（localStorage 持久；进度不进 prefs——进度归服务端 shelf）──────
 
-export type ReadingMode = 'scroll' | 'page'
+export type ReadingMode = 'scroll' | 'page' | 'moyu'
+export type MoyuStyle = 'dsh' | 'compact' | 'clean'
+export type MoyuReveal = 'stream' | 'instant'
 export type PageAnimation = 'flip' | 'slide' | 'none'
 export type PageColumns = 'auto' | 'single' | 'double'
 
@@ -66,6 +68,9 @@ export interface Prefs {
   customPaperColor: string | null
   darkController: boolean
   readingMode: ReadingMode
+  lastNormalMode: 'scroll' | 'page'
+  moyuStyle: MoyuStyle
+  moyuReveal: MoyuReveal
   pageAnimation: PageAnimation
   pageColumns: PageColumns
 }
@@ -78,6 +83,9 @@ export const DEFAULT_PREFS: Prefs = {
   customPaperColor: null,
   darkController: false,
   readingMode: 'scroll',
+  lastNormalMode: 'scroll',
+  moyuStyle: 'dsh',
+  moyuReveal: 'stream',
   pageAnimation: 'flip',
   pageColumns: 'auto',
 }
@@ -103,7 +111,19 @@ export function normalizeMeasure(v: unknown): number {
 }
 
 function isReadingMode(v: unknown): v is ReadingMode {
+  return v === 'scroll' || v === 'page' || v === 'moyu'
+}
+
+function isNormalMode(v: unknown): v is 'scroll' | 'page' {
   return v === 'scroll' || v === 'page'
+}
+
+function isMoyuStyle(v: unknown): v is MoyuStyle {
+  return v === 'dsh' || v === 'compact' || v === 'clean'
+}
+
+function isMoyuReveal(v: unknown): v is MoyuReveal {
+  return v === 'stream' || v === 'instant'
 }
 
 function isPageAnimation(v: unknown): v is PageAnimation {
@@ -123,12 +143,19 @@ function loadPrefs(): Prefs {
     const raw = ls.getItem(PREFS_KEY)
     if (raw === null) return DEFAULT_PREFS
     const parsed = JSON.parse(raw) as Partial<Prefs>
+    const readingMode = isReadingMode(parsed.readingMode) ? parsed.readingMode : DEFAULT_PREFS.readingMode
+    const lastNormalMode = readingMode === 'moyu'
+      ? (isNormalMode(parsed.lastNormalMode) ? parsed.lastNormalMode : DEFAULT_PREFS.lastNormalMode)
+      : readingMode
     return {
       ...DEFAULT_PREFS,
       ...parsed,
       measure: normalizeMeasure(parsed.measure),
       customPaperColor: parseCustomPaperColor(parsed.customPaperColor),
-      readingMode: isReadingMode(parsed.readingMode) ? parsed.readingMode : DEFAULT_PREFS.readingMode,
+      readingMode,
+      lastNormalMode,
+      moyuStyle: isMoyuStyle(parsed.moyuStyle) ? parsed.moyuStyle : DEFAULT_PREFS.moyuStyle,
+      moyuReveal: isMoyuReveal(parsed.moyuReveal) ? parsed.moyuReveal : DEFAULT_PREFS.moyuReveal,
       pageAnimation: isPageAnimation(parsed.pageAnimation) ? parsed.pageAnimation : DEFAULT_PREFS.pageAnimation,
       pageColumns: isPageColumns(parsed.pageColumns) ? parsed.pageColumns : DEFAULT_PREFS.pageColumns,
     }
@@ -139,7 +166,10 @@ function loadPrefs(): Prefs {
 
 export const prefsStore = createStore<Prefs>(loadPrefs())
 export function setPref(patch: Partial<Prefs>): void {
-  const next = { ...prefsStore.get(), ...patch }
+  const current = prefsStore.get()
+  const next = { ...current, ...patch }
+  if (patch.readingMode === 'scroll' || patch.readingMode === 'page') next.lastNormalMode = patch.readingMode
+  if (patch.readingMode === 'moyu') next.lastNormalMode = current.lastNormalMode
   prefsStore.set(next)
   ls.setItem(PREFS_KEY, JSON.stringify(next))
 }

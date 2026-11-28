@@ -9,6 +9,7 @@ import {
   type Translate,
 } from './copy/index.js'
 import { NOVEL_GLYPH_PATH, NOVEL_GLYPH_VIEWBOX } from './novel-glyph.js'
+import { attachMoyuHost, moyuHostPortOf, restoreMoyuWorkspaceBinding } from './moyu-host.js'
 import { TtsMiniBar } from './tts/TtsMiniBar.js'
 import { disposeTtsPlayer, installTtsDefaults, watchDirectVoices } from './tts/player.js'
 import { createLiveRefSource, createSettingsSnapshotSource } from './tts/tts-defaults-host.js'
@@ -154,6 +155,16 @@ export function apply(ctx: Context, config?: unknown): void {
     )
     return () => { disposeStatus(); disposeMini() }
   }), 'dsh-novel: shell overlay layers')
+  // 摸鱼真任务的服务层：宿主公开面的可选注入（缺席＝真任务功能隐藏，不炸面板）；随插件收口。
+  // 失败半径＝摸鱼真任务这一格（根 AGENTS.md 硬约束）：这一段任何抛都只降级真任务面、留痕后
+  // 继续注册——不许再出现「服务层一次越权把侧栏/面板注册整锅带走」的回归
+  // （钉在 tests/client/host-inject-guard.test.ts）。
+  try {
+    restoreMoyuWorkspaceBinding()
+    ctx.effect(() => attachMoyuHost(moyuHostPortOf(ctx)), 'dsh-novel: moyu host services')
+  } catch (e) {
+    console.error('[dsh-novel] moyu host attach failed; real-task features degraded', e)
+  }
   // 听书缺省来源链：来源顺序 = 优先级（live ref > 设置面快照 > wire 缺省），随插件收口卸链。
   const settingsSource = createSettingsSnapshotSource()
   const liveSource = createLiveRefSource(config)

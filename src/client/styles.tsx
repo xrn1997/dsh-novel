@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { TOKENS_CSS } from './styles/tokens.js'
 import { SHELL_CSS } from './styles/shell.js'
 import { CONTROLS_CSS } from './styles/controls.js'
+import { MOYU_CSS } from './styles/moyu.js'
 import { SOURCES_CSS } from './styles/sources.js'
 import { SEARCH_CSS } from './styles/search.js'
 import { READER_CSS } from './styles/reader.js'
@@ -16,7 +17,7 @@ import { TTS_CSS } from './styles/tts.js'
  *  **次序即原单串的字符次序**——CSS 在同等特异度下由先后定胜负，按视图重排就是行为变化；
  *  块间只许有换行与空行，不许增删规则。 */
 export const NOVEL_CSS = [
-  TOKENS_CSS, SHELL_CSS, CONTROLS_CSS, SOURCES_CSS, SEARCH_CSS,
+  TOKENS_CSS, SHELL_CSS, CONTROLS_CSS, MOYU_CSS, SOURCES_CSS, SEARCH_CSS,
   READER_CSS, SHELF_CSS, OVERLAYS_CSS, CITY_CSS, CONFIG_PAGE_CSS, TTS_CSS,
 ].join('\n')
 

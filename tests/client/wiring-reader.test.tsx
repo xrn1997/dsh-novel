@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiClientError } from '../../src/client/api.js'
 import { CopyProvider, enTranslate } from '../../src/client/copy/index.js'
 import { loadPanelShelf, panelShelf } from '../../src/client/panel-shelf.js'
-import { DEFAULT_PREFS, navigate, setPref } from '../../src/client/store.js'
+import { DEFAULT_PREFS, navigate, prefsStore, setPref } from '../../src/client/store.js'
 import { NovelView } from '../../src/client/views/NovelView.js'
 import { ReaderView } from '../../src/client/views/ReaderView.js'
 import type {
@@ -15,6 +15,8 @@ import { LOCAL_SOURCE_ID, ROUTES } from '../../src/shared/wire.js'
 import { must, pick } from '../support/fixture.js'
 import { makeReaderDeps } from './fake-deps.js'
 import type { DepsOverrides, FakeReaderDeps } from './fake-deps.js'
+import { attachMoyuHost, refreshMoyuWorkspaces, resetMoyuHostForTests } from '../../src/client/moyu-host.js'
+import { makeFakeMoyuHost } from './fake-moyu-host.js'
 import { readerRouteGetMock } from './reader-fakes.js'
 import { rect } from './scroll-stub.js'
 import { installWiringLifecycle, sentCalls } from './wiring-harness.js'
@@ -114,6 +116,72 @@ describe('ReaderView 接线（ReaderDeps 注入 + 范围导出流经 export-run�
       await waitFor(() => expect(container.querySelector('.novel-rdr-body')).not.toBeNull())
       expect(container.querySelector('[data-novel-book-stage]')).toBeNull()
     } finally {
+      setPref({ readingMode: 'scroll', pageAnimation: 'flip' })
+    }
+  })
+
+  it('摸鱼模式：复用按章推进会话，只挂伪装舞台，不挂翻页器/滚动正文/常规听书条', async () => {
+    const chapters: ChapterEntry[] = [
+      { name: '第一章', url: 'u1' },
+      { name: '第二章', url: 'u2' },
+    ]
+    const deps = readerDeps({
+      apiGet: readerRouteGetMock({
+        chapters: () => chapters,
+        chapter: (i) => ({ kind: 'text', text: `第${i + 1}章正文` }),
+        shelf: () => [],
+      }),
+    })
+    setPref({ readingMode: 'page' })
+    try {
+      const { container } = render(reader(deps))
+      await waitFor(() => expect(container.querySelector('[data-novel-book-stage]')).not.toBeNull())
+
+      fireEvent.keyDown(document, { key: 'm', altKey: true })
+      await waitFor(() => expect(container.querySelector('.novel-moyu-stage')).not.toBeNull())
+      expect(container.querySelector('[data-novel-book-stage]')).toBeNull()
+      expect(container.querySelector('.novel-rdr-body')).toBeNull()
+      expect(container.querySelector('.novel-tts-bar')).toBeNull()
+
+      fireEvent.keyDown(document, { key: 'm', altKey: true })
+      await waitFor(() => expect(container.querySelector('[data-novel-book-stage]')).not.toBeNull())
+      expect(container.querySelector('.novel-moyu-stage')).toBeNull()
+      expect(prefsStore.get().readingMode).toBe('page')
+    } finally {
+      setPref({ readingMode: 'scroll', pageAnimation: 'flip' })
+    }
+  })
+
+  it('摸鱼工作区入口接线：点工作区＝在宿主打开会话；输入框 Enter 仍只进章', async () => {
+    const chapters: ChapterEntry[] = [
+      { name: '第一章', url: 'u1' },
+      { name: '第二章', url: 'u2' },
+    ]
+    const deps = readerDeps({
+      apiGet: readerRouteGetMock({
+        chapters: () => chapters,
+        chapter: (i) => ({ kind: 'text', text: `第${i + 1}章正文` }),
+        shelf: () => [],
+      }),
+    })
+    const host = makeFakeMoyuHost()
+    const stop = attachMoyuHost(host.port)
+    refreshMoyuWorkspaces(host.port)
+    host.workspaces.setItems([{ workspaceId: 'w-1', title: '工作区一' }])
+    setPref({ readingMode: 'moyu', moyuReveal: 'instant' })
+    try {
+      const { container } = render(reader(deps))
+      await waitFor(() => expect(container.querySelector('.novel-moyu-stage')).not.toBeNull())
+      fireEvent.click(screen.getByRole('button', { name: '选择工作区' }))
+      fireEvent.click(screen.getByRole('menuitem', { name: '在「工作区一」打开宿主会话' }))
+      await waitFor(() => expect(host.openCalls).toEqual([{ workspaceId: 'w-1', sessionId: 's-1' }]))
+      // 插件不代发：有草稿的 Enter 仍走阅读动作，不再产生第二枚宿主入口调用。
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: '帮我整理这一章。' } })
+      fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
+      await waitFor(() => expect(host.openCalls).toHaveLength(1))
+    } finally {
+      stop()
+      resetMoyuHostForTests()
       setPref({ readingMode: 'scroll', pageAnimation: 'flip' })
     }
   })

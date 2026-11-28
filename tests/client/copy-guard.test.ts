@@ -32,6 +32,7 @@ const FILE_ALLOW = new Map<string, string>([
   ['styles/tokens.ts', 'CSS 模板串里的中文全是注释，模板本身不上屏'],
   ['styles/shell.ts', 'CSS 模板串里的中文全是注释，模板本身不上屏'],
   ['styles/controls.ts', 'CSS 模板串里的中文全是注释，模板本身不上屏'],
+  ['styles/moyu.ts', 'CSS 模板串里的中文全是注释，模板本身不上屏'],
   ['styles/sources.ts', 'CSS 模板串里的中文全是注释，模板本身不上屏'],
   ['styles/search.ts', 'CSS 模板串里的中文全是注释，模板本身不上屏'],
   ['styles/reader.ts', 'CSS 模板串里的中文全是注释，模板本身不上屏'],

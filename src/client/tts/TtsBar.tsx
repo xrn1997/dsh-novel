@@ -30,6 +30,9 @@ function cycleRate(rate: number): number {
   return RATE_STEPS[0]
 }
 
+/** 语速单击循环的唯一实现（摸鱼听书条同用一份档表与走法，别在表面各抄一遍）。 */
+export { cycleRate }
+
 /**
  * 阅读器内嵌听书条：本书是正在听的会话时才由 ReaderView 挂载。条底跟纸走；设置面板复用共享件
  * （`TtsSettings.tsx`，与全局迷你条同一份行清单与浮层契约）。条上只管当前段与常用动作——

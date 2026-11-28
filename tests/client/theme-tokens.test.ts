@@ -11,6 +11,7 @@ import { clientSources } from '../support/source-scan.js'
  * 随发布物更新本词表——那是契约变了的信号。光/暗两套同名，故一份名单够用。
  * 收录口径是宿主**主题样式表**里的真名；宿主检查器给出的 token 目录是公开子集，不能当全集用
  * （拿子集当分母会把真 token 全判成违规），所以词表比那份目录宽是正常的。
+ * 新增 token 前先在宿主发布物里核实真名（核实经过不入库，词表本身就是结论）。
  */
 const HOST_TOKENS = new Set<string>([
   "--dsw-alias-bg-base", "--dsw-alias-bg-layer-1", "--dsw-alias-bg-layer-2",
@@ -28,9 +29,9 @@ const HOST_TOKENS = new Set<string>([
   "--dsw-alias-button-tool-bar-fill", "--dsw-alias-button-tool-bar-fill-invisible", "--dsw-alias-button-tool-bar-hover",
   "--dsw-alias-interactive-bg-active", "--dsw-alias-interactive-bg-hover", "--dsw-alias-interactive-bg-hover-accent",
   "--dsw-alias-interactive-bg-hover-danger", "--dsw-alias-interactive-bg-hover-solid", "--dsw-alias-label-caption",
-  "--dsw-alias-label-dimmed", "--dsw-alias-label-primary", "--dsw-alias-label-primary-bluish",
-  "--dsw-alias-label-primary-dimmed", "--dsw-alias-label-primary-foreground", "--dsw-alias-label-primary-inverted",
-  "--dsw-alias-label-secondary", "--dsw-alias-label-tertiary", "--dsw-alias-link",
+  "--dsw-alias-label-dimmed", "--dsw-alias-label-on-color", "--dsw-alias-label-primary",
+  "--dsw-alias-label-primary-bluish", "--dsw-alias-label-primary-dimmed", "--dsw-alias-label-primary-foreground",
+  "--dsw-alias-label-primary-inverted", "--dsw-alias-label-secondary", "--dsw-alias-label-tertiary", "--dsw-alias-link",
   "--dsw-alias-markdown-citation", "--dsw-alias-markdown-code-block", "--dsw-alias-markdown-code-block-banner",
   "--dsw-alias-markdown-code-segment-selected", "--dsw-alias-markdown-code-segment-unselected", "--dsw-alias-markdown-inline-code",
   "--dsw-alias-markdown-placeholder", "--dsw-alias-markdown-tag", "--dsw-alias-scrollbar-bg-l1",
@@ -39,10 +40,18 @@ const HOST_TOKENS = new Set<string>([
   "--dsw-alias-state-error-secondary", "--dsw-alias-state-success-primary", "--dsw-alias-state-success-secondary",
   "--dsw-alias-state-success-tertiary", "--dsw-alias-state-warn-label", "--dsw-alias-state-warn-primary",
   "--dsw-alias-state-warn-secondary", "--dsw-alias-state-warn-tertiary", "--dsw-alias-toast-bg",
-  "--dsw-alias-tooltip-bg", "--dsw-specific-bubble", "--dsw-specific-bubble-highlight",
+  "--dsw-alias-tooltip-bg", "--dsw-alias-tooltip-key-bg", "--dsw-alias-tooltip-label",
+  "--dsw-specific-bubble", "--dsw-specific-bubble-highlight",
   "--dsw-specific-input-major", "--dsw-specific-login-input", "--dsw-specific-menu",
   "--dsw-specific-selector", "--dsw-specific-sidebar-fill", "--dsw-specific-sidebar-nav-item-active",
   "--dsw-specific-sidebar-nav-item-active-accent", "--dsw-specific-sidebar-nav-item-hover", "--dsw-specific-tip",
+  "--dsw-elevation-panel", "--dsw-elevation-prominent", "--dsw-elevation-soft",
+  "--dsw-elevation-stroke", "--dsw-elevation-stroke-color",
+  "--dsw-focus-ring-color", "--dsw-focus-ring-width", "--dsw-font-family",
+  "--dsw-menu-backdrop-filter", "--dsw-menu-surface-fill",
+  "--dsw-radius-xs", "--dsw-radius-sm", "--dsw-radius-md", "--dsw-radius-lg",
+  "--dsw-radius-xl", "--dsw-radius-panel",
+  "--dsw-shadow-lv1", "--dsw-shadow-lv2", "--dsw-shadow-lv3",
   "--dsw-static-amber-100", "--dsw-static-amber-400", "--dsw-static-amber-500",
   "--dsw-static-amber-600", "--dsw-static-amber-900", "--dsw-static-blue-100",
   "--dsw-static-blue-300", "--dsw-static-blue-400", "--dsw-static-blue-450",
@@ -72,6 +81,10 @@ const HOST_TOKENS = new Set<string>([
 
 describe('宿主 token 词表守卫（--dsw-* 必须是宿主真名）', () => {
   const sources = clientSources()
+
+  it('Moyu 舞台样式已组装进全局样式串', () => {
+    expect(NOVEL_CSS).toContain('.novel-moyu-stage')
+  })
 
   it('扫到源码（守卫本身别空转）', () => {
     expect(sources.length).toBeGreaterThan(5)
@@ -123,6 +136,7 @@ const HEX_ALLOWED: Record<string, string[] | '*'> = {
   'styles/shelf.ts': '*',                                           // 卡片描边与投影的 token 派生色
   'styles/overlays.ts': '*',                                        // 浮层投影的 token 派生色
   'styles/tts.ts': '*',                                             // 听书条的纸墨派生色与品牌选中态
+  'styles/moyu.ts': '*',                                           // 摸鱼舞台只引用宿主/小说 token，不在视图内联色
   'util.ts': ['#222', '#e8e8ea'],                                   // paperInk 深/浅字（正文层）
   'prefs-ui.ts': ['#f7f3e8', '#ffffff', '#e8f0e8', '#f0e8e8', '#111315'], // 五款纸张预设（含夜间深色纸）
   'store.ts': ['#f7f3e8'],                                          // DEFAULT_PREFS.paperColor（正文层）
